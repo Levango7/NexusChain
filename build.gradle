@@ -1,0 +1,104 @@
+// NexusChain 统一构建系统 - 根级构建配置
+// 管理所有 Java/Gradle 子模块的共享依赖和构建规则
+// 兼容 Gradle 7.x+
+
+allprojects {
+    group = 'org.nexus'
+    version = '0.1.0-alpha'
+
+    repositories {
+        mavenCentral()
+        maven { url 'https://repo.spring.io/plugins-release' }
+        maven { url 'https://maven.aliyun.com/nexus/content/groups/public/' }
+    }
+}
+
+subprojects {
+    apply plugin: 'java'
+
+    // B1 baseline (2026-08-03): Java level is declared EXPLICITLY per module
+    // (gateway/bridge via java toolchain 17; core 17; consortium/sdk/
+    // exchange-wallet 1.8). The previous global `sourceCompatibility = 17`
+    // here was overridden by every module and masked the real Java tiering —
+    // removed to make the two-tier Java strategy honest and single-sourced.
+
+    tasks.withType(JavaCompile) {
+        options.encoding = 'UTF-8'
+        options.warnings = false
+    }
+
+    test {
+        useJUnitPlatform()
+        testLogging {
+            events "failed"
+            exceptionFormat "short"
+        }
+        systemProperty "file.encoding", "UTF-8"
+    }
+
+    ext {
+
+        slf4jVersion = '1.7.36'
+        logbackVersion = '1.2.11'
+        postgresqlVersion = '42.5.4'
+        leveldbVersion = '0.7'
+        hibernateValidatorVersion = '6.2.5.Final'
+        bouncycastleVersion = '1.70'
+        jargon2Version = '1.1.1'
+        nettyVersion = '4.1.90.Final'
+        grpcVersion = '1.54.0'
+        httpClientVersion = '4.5.14'
+        protobufVersion = '3.22.2'
+        jacksonVersion = '2.14.2'
+        gsonVersion = '2.10.1'
+        guavaVersion = '31.1-jre'
+        commonsCodecVersion = '1.15'
+        commonsIoVersion = '2.11.0'
+        commonsLang3Version = '3.12.0'
+        commonsCollections4Version = '4.4'
+        commonsCliVersion = '1.5.0'
+        jcommanderVersion = '1.82'
+        jjwtVersion = '0.11.5'
+        quartzVersion = '2.3.2'
+        junitVersion = '4.13.2'
+        junitJupiterVersion = '5.10.2'
+        mockitoVersion = '4.11.0'
+
+        nexusVersion = '0.1.0-alpha'
+    }
+
+    // B1 baseline (2026-08-03): NO global forced test deps.
+    // Historically this block injected `junit:junit:4.13.2` and
+    // `spring-boot-starter-test:2.7.18` into EVERY subproject, which silently
+    // clashed with the Boot 3.2.5 gateway/bridge (a Boot 2.7 test BOM on a
+    // Boot 3.2 app) and masked the real per-module test setup. Each module now
+    // declares its OWN test dependencies (Boot apps via their boot plugin's
+    // dependency-management; nexus-core keeps explicit JUnit 4 + starter-test
+    // 2.7.18; sdk/consortium declare their own). Only mockito is shared.
+    dependencies {
+        testImplementation "org.mockito:mockito-core:${mockitoVersion}"
+    }
+
+    javadoc {
+        options.encoding = "UTF-8"
+        options.author = true
+        options.header = project.name
+        options.addStringOption('-quiet')
+    }
+}
+
+// === 顶层聚合任务 ===
+task buildAll {
+    description = '构建所有 Java 子模块'
+    dependsOn subprojects.findAll { it.plugins.hasPlugin('java') }.collect { it.tasks.getByName('build') }
+}
+
+task testAll {
+    description = '运行所有 Java 子模块的测试'
+    dependsOn subprojects.findAll { it.plugins.hasPlugin('java') }.collect { it.tasks.getByName('test') }
+}
+
+task cleanAll {
+    description = '清理所有子模块的构建产物'
+    dependsOn subprojects.findAll { it.plugins.hasPlugin('java') }.collect { it.tasks.getByName('clean') }
+}

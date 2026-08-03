@@ -1,0 +1,36 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Design tokens (P0: no hardcoded hex except #fff/#000, no purple-pink gradient).
+   Components should prefer these semantic variables / the mapped Tailwind
+   colors (bg, surface, border, fg, accent, success, warn, danger) over raw
+   palette utilities. */
+:root {
+  --bg: #0A0C10;
+  --surface: #111418;
+  --surface-2: #161A20;
+  --border: #232830;
+  --fg: #E6E9EF;
+  --fg-2: #AEB4C0;
+  --muted: #8B93A1;
+  --accent: #5B6CF0;
+  --accent-on: #ffffff;
+  --accent-soft: rgba(91, 108, 240, 0.12);
+  --success: #34D399;
+  --warn: #FBBF24;
+  --danger: #F87171;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--bg);
+  color: var(--fg);
+  font-family: Inter, "Noto Sans SC", system-ui, -apple-system, sans-serif;
+}

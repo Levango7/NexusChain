@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "chainId": "nexus-mainnet",
+  "timestamp": 1700000000,
+  "difficulty": 1,
+  "blockInterval": 10,
+  "maxBlockSize": 2097152,
+  "initialAllocations": [
+    {"address": "1GenesisFundAddress000000000000000", "amount": 100000000000000},
+    {"address": "1ValidatorReserve000000000000000000", "amount": 50000000000000}
+  ],
+  "consensus": {
+    "type": "pow+vrf",
+    "minValidators": 3,
+    "maxValidators": 21,
+    "epochLength": 100,
+    "vrfSeed": "nexus-genesis-seed-v1"
+  },
+  "paymentExtensions": {
+    "channelEnabled": true,
+    "stableCoinEnabled": true,
+    "bridgeEnabled": true,
+    "subscriptionEnabled": true,
+    "minCollateralRatio": 150
+  }
+}

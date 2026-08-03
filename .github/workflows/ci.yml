@@ -1,0 +1,127 @@
+name: NexusChain CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository }}
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: "temurin"
+          cache: gradle
+
+      # --- Modules under the main composite build (or standalone builds) ---
+      - name: Build & Test Gateway
+        working-directory: nexus-gateway
+        run: |
+          chmod +x gradlew
+          ./gradlew compileJava test jacocoTestReport --no-daemon
+
+      - name: Build & Test Bridge
+        working-directory: nexus-bridge
+        run: |
+          chmod +x gradlew
+          ./gradlew compileJava test --no-daemon
+
+      # Previously only compileJava ran for core (no test execution). Now run tests.
+      - name: Build & Test Core
+        working-directory: nexus-core
+        run: |
+          chmod +x gradlew
+          ./gradlew :nexus-core:test --no-daemon
+
+      # --- Separate Gradle builds (were absent from CI / W4 gap) ---
+      # These require their gradle wrapper jars to be committed (B4 wrapper work)
+      # and offline dependency resolution on the runner. Verify locally before
+      # relying on them in protected branches.
+      - name: Build & Test Consortium
+        working-directory: nexus-consortium
+        run: |
+          chmod +x gradlew
+          ./gradlew test --no-daemon
+
+      - name: Build & Test Exchange Wallet
+        working-directory: nexus-exchange-wallet
+        run: |
+          chmod +x gradlew
+          ./gradlew test --no-daemon
+
+      - name: Build & Test SDK (Java)
+        working-directory: nexus-sdk/java
+        run: |
+          chmod +x gradlew
+          ./gradlew test --no-daemon
+
+      - name: Upload Gateway JaCoCo report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gateway-jacoco
+          path: nexus-gateway/build/reports/jacoco/test/html
+
+  security-scan:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Trivy image scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL,HIGH,MEDIUM
+          exit-code: 1
+
+  docker-build:
+    needs: [build-and-test, security-scan]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        module: [nexus-gateway, nexus-bridge]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: ./${{ matrix.module }}
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.module }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.module }}:${{ github.sha }}
+
+  deploy:
+    needs: docker-build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy to production
+        run: |
+          echo "Deploying with docker-compose (blue-green)..."
+          # In production: kubectl apply or docker-compose pull + up
+          echo "Deployment complete"

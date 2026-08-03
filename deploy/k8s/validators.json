@@ -1,0 +1,9 @@
+{
+  "validators": [
+    {"id": "nexus-core-0", "pubkey": "validator0_pubkey_placeholder", "weight": 1},
+    {"id": "nexus-core-1", "pubkey": "validator1_pubkey_placeholder", "weight": 1},
+    {"id": "nexus-core-2", "pubkey": "validator2_pubkey_placeholder", "weight": 1},
+    {"id": "nexus-core-3", "pubkey": "validator3_pubkey_placeholder", "weight": 1}
+  ],
+  "threshold": 3
+}

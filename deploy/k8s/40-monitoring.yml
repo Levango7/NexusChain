@@ -1,0 +1,242 @@
+# ============================================================================
+# NexusChain 监控层
+# 依赖：kube-prometheus-stack（Prometheus Operator + ServiceMonitor CRD）
+# 作用：为 gateway / postgres / redis 建立抓取，core 需应用侧补 metrics 端点
+# ============================================================================
+---
+# --- PostgreSQL Exporter（独立 sidecar 式 Deployment）---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres-exporter
+  namespace: nexus
+  labels:
+    app: postgres-exporter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres-exporter
+  template:
+    metadata:
+      labels:
+        app: postgres-exporter
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres-exporter
+          image: prometheuscommunity/postgres-exporter:v0.15.0
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            seccompProfile:
+              type: RuntimeDefault
+          ports:
+            - containerPort: 9187
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: nexus-secrets
+                  key: NEX_DB_USERNAME
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: nexus-secrets
+                  key: NEX_DB_PASSWORD
+            - name: DATA_SOURCE_NAME
+              value: "postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@postgres:5432/nexus_gateway?sslmode=disable"
+          resources:
+            requests: { memory: "64Mi", cpu: "50m" }
+            limits:   { memory: "128Mi", cpu: "200m" }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-exporter
+  namespace: nexus
+  labels:
+    app: postgres-exporter
+spec:
+  selector:
+    app: postgres-exporter
+  ports:
+    - port: 9187
+      targetPort: 9187
+---
+# --- Redis Exporter ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis-exporter
+  namespace: nexus
+  labels:
+    app: redis-exporter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis-exporter
+  template:
+    metadata:
+      labels:
+        app: redis-exporter
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: redis-exporter
+          image: prometheuscommunity/redis-exporter:v1.55.0
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            seccompProfile:
+              type: RuntimeDefault
+          ports:
+            - containerPort: 9121
+          env:
+            - name: REDIS_ADDR
+              value: "redis://redis:6379"
+          resources:
+            requests: { memory: "64Mi", cpu: "50m" }
+            limits:   { memory: "128Mi", cpu: "200m" }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-exporter
+  namespace: nexus
+  labels:
+    app: redis-exporter
+spec:
+  selector:
+    app: redis-exporter
+  ports:
+    - port: 9121
+      targetPort: 9121
+---
+# --- ServiceMonitor：Gateway ---
+# ⚠️ 前置（应用侧）：nexus-gateway 需启用
+#   management.endpoints.web.exposure.include=prometheus
+#   + 引入 io.micrometer:micrometer-registry-prometheus
+#   否则 8080/actuator/prometheus 不存在，该 ServiceMonitor 无活跃 target
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: nexus-gateway
+  namespace: nexus
+  labels:
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app: nexus-gateway
+  endpoints:
+    - port: http
+      path: /actuator/prometheus
+      interval: 30s
+---
+# --- ServiceMonitor：PostgreSQL（经 exporter）---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: nexus-postgres
+  namespace: nexus
+  labels:
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app: postgres-exporter
+  endpoints:
+    - port: "9187"
+      path: /metrics
+      interval: 30s
+---
+# --- ServiceMonitor：Redis（经 exporter）---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: nexus-redis
+  namespace: nexus
+  labels:
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app: redis-exporter
+  endpoints:
+    - port: "9121"
+      path: /metrics
+      interval: 30s
+---
+# --- ServiceMonitor：Core（桩）---
+# ⚠️ core 当前未暴露 metrics 端点（仅 REST /height 等）。
+# 需在应用侧补一个 Prometheus 指标端点（如 /actuator/prometheus 或自定义 /metrics）
+# 后，本 ServiceMonitor 才会产生活跃 target。先就位，避免后续遗漏。
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: nexus-core
+  namespace: nexus
+  labels:
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app: nexus-core
+  endpoints:
+    - port: rpc
+      path: /metrics
+      interval: 30s
+---
+# --- 告警规则 ---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: nexus-alerts
+  namespace: nexus
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: nexus.core
+      rules:
+        - alert: NexusPodDown
+          expr: |
+            kube_pod_status_ready{condition="false", namespace="nexus"}
+            == 1
+            and on(pod) kube_pod_status_phase{namespace="nexus"} != "Running"
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Nexus Pod 不可用: {{ $labels.pod }}"
+            description: "Pod {{ $labels.pod }} 在 nexus 命名空间持续 5 分钟未就绪。"
+        - alert: NexusPodCrashLooping
+          expr: |
+            increase(kube_pod_container_status_restarts_total{namespace="nexus"}[10m]) > 5
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Nexus Pod 频繁重启: {{ $labels.pod }}"
+            description: "Pod {{ $labels.pod }} 10 分钟内重启超过 5 次。"
+        - alert: NexusCoreRpcDown
+          expr: |
+            probe_success{job="nexus-core"} == 0
+          for: 3m
+          labels:
+            severity: critical
+          annotations:
+            summary: "nexus-core RPC 不可达"
+            description: "nexus-core 的 rpc 端口探针连续 3 分钟失败。"

@@ -1,0 +1,139 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: nexus-core
+  namespace: nexus
+spec:
+  serviceName: nexus-core
+  replicas: 4
+  selector:
+    matchLabels:
+      app: nexus-core
+  template:
+    metadata:
+      labels:
+        app: nexus-core
+    spec:
+      # core 不调用 K8s API（共识/P2P 走 grpc），禁用 SA token
+      automountServiceAccountToken: false
+      # Pod 级安全上下文
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        # 初始化容器需 root 拷贝 genesis（busybox）；仅做文件复制，
+        # 仍收紧提权与 capabilities，不做非root约束（否则无法写 PVC）
+        - name: init-genesis
+          image: busybox:1.36
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          command: ["sh", "-c", "cp /genesis/* /data/ 2>/dev/null || true"]
+          volumeMounts:
+            - name: genesis-config
+              mountPath: /genesis
+            - name: core-data
+              mountPath: /data
+      containers:
+        - name: core
+          # TODO: 固定为不可变 tag（semver 或 sha256 digest）
+          image: ghcr.io/nexus/nexus-core:1.0.0
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false   # 链数据写在挂载的 core-data PVC；/tmp 需可写
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          ports:
+            - containerPort: 19585
+              name: rpc
+            - containerPort: 9585
+              name: p2p
+          env:
+            - name: NODE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: DATA_SOURCE_URL
+              value: "jdbc:postgresql://postgres:5432/nexus_core"
+            - name: DB_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: nexus-secrets
+                  key: NEX_DB_USERNAME
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: nexus-secrets
+                  key: NEX_DB_PASSWORD
+            - name: P2P_MODE
+              value: "grpc"
+            - name: ENABLE_MINING
+              value: "true"
+            - name: ENABLE_DISCOVERY
+              value: "true"
+            - name: BOOTSTRAPS
+              value: "nexus://nexus-core-0.nexus-core:9585,nexus://nexus-core-1.nexus-core:9585"
+            - name: GENESIS_FILE
+              value: "/data/nexus-genesis-generator.json"
+            - name: VALIDATORS
+              value: "/data/validators.json"
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "500m"
+            limits:
+              memory: "2Gi"
+              cpu: "2000m"
+          volumeMounts:
+            - name: core-data
+              mountPath: /data
+          livenessProbe:
+            httpGet:
+              path: /height
+              port: 19585
+            initialDelaySeconds: 60
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /height
+              port: 19585
+            initialDelaySeconds: 30
+            periodSeconds: 10
+      volumes:
+        - name: genesis-config
+          configMap:
+            name: nexus-genesis
+  volumeClaimTemplates:
+    - metadata:
+        name: core-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 50Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nexus-core
+  namespace: nexus
+spec:
+  clusterIP: None
+  selector:
+    app: nexus-core
+  ports:
+    - name: rpc
+      port: 19585
+    - name: p2p
+      port: 9585

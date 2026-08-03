@@ -1,0 +1,188 @@
+plugins {
+    id 'application'
+}
+
+// Docker build tasks have been removed; container images are now built via
+// the Dockerfiles located under src/main/docker/ (see build-docker.sh scripts).
+
+processResources {
+    exclude('genesis/nexus-genesis-generator.json')
+}
+
+sourceCompatibility = 17
+targetCompatibility = 17
+
+mainClassName = 'org.nexus.Start'
+applicationDefaultJvmArgs = ["-server", "-Xss2m", "-Xmx2G", "-XX:-OmitStackTraceInFastThrow"]
+
+if (project.hasProperty('jvmArgs')) {
+    applicationDefaultJvmArgs = applicationDefaultJvmArgs + project.jvmArgs.split('\\s+').toList()
+}
+if (project.hasProperty("mainClass")) {
+    mainClassName = mainClass
+}
+
+ext.generatedSrcDir = file('src/gen/java')
+
+sourceSets.main.java.srcDirs += generatedSrcDir
+
+tasks.withType(JavaCompile) {
+    options.encoding = 'UTF-8'
+    options.warnings = false
+}
+
+task runKeyStoreTool(type: JavaExec) {
+    mainClass = "org.nexus.tools.KeyStoreTool"
+    classpath = sourceSets.main.runtimeClasspath
+    standardInput = System.in
+    if (project.hasProperty("appArgs")) {
+        args appArgs.split(" ")
+    }
+}
+
+task runTransactionTestTool(type: JavaExec) {
+    mainClass = "org.nexus.tools.TransactionTestTool"
+    classpath = sourceSets.main.runtimeClasspath
+    if (project.hasProperty("appArgs")) {
+        args appArgs.split(" ")
+    }
+}
+
+/**
+ * Runs all tests
+ */
+test {
+    useJUnit()
+
+    beforeTest { descriptor ->
+        logger.lifecycle("Running test: ${descriptor}")
+    }
+
+    jvmArgs = ["-Xss8m", "-Xmx3G"]
+
+    testLogging {
+        events "failed"
+        exceptionFormat "short"
+    }
+
+    systemProperties System.properties
+    systemProperty "user.dir", workingDir
+    systemProperty "file.encoding", "UTF-8"
+}
+
+ext {
+    slf4jVersion = '1.7.36'
+    leveldbVersion = '0.12'
+    scastleVersion = '1.58.0.0'
+    hibernateValidatorVersion = '8.0.1.Final'
+    junitVersion = '4.13.2'
+    bouncyCastleVersion = '1.70'
+    nettyVersion = '4.1.90.Final'
+    grpcVersion = '1.54.0'
+    protobufVersion = '3.22.2'
+    jacksonVersion = '2.14.2'
+    guavaVersion = '31.1-jre'
+    postgresqlVersion = '42.5.4'
+    mockitoVersion = '4.11.0'
+}
+
+dependencies {
+    implementation 'jakarta.servlet:jakarta.servlet-api:6.0.0'
+    implementation 'jakarta.annotation:jakarta.annotation-api:2.1.1'
+    implementation 'jakarta.xml.bind:jakarta.xml.bind-api:4.0.2'
+    implementation 'org.glassfish.jaxb:jaxb-runtime:4.0.5'
+    implementation 'jakarta.validation:jakarta.validation-api:3.0.2'
+    implementation 'org.hibernate.validator:hibernate-validator:8.0.1.Final'
+    implementation "com.google.guava:guava:${guavaVersion}"
+    implementation "org.slf4j:slf4j-api:${slf4jVersion}"
+    implementation "com.fasterxml.jackson.core:jackson-databind:${jacksonVersion}"
+    implementation "org.apache.commons:commons-collections4:4.4"
+    implementation "org.apache.commons:commons-lang3:3.12.0"
+    implementation 'org.apache.commons:commons-math3:3.6.1'
+    implementation "commons-codec:commons-codec:1.15"
+    implementation "org.springframework:spring-context:6.1.6"
+    implementation "com.typesafe:config:1.4.2"
+    implementation("com.googlecode.json-simple:json-simple:1.1.1") {
+        exclude group: 'junit', module: 'junit'
+    }
+
+    // used to hide spring initialization logs messages in samples
+    compileOnly "org.slf4j:jcl-over-slf4j:${slf4jVersion}"
+
+    implementation "junit:junit:${junitVersion}"
+    implementation "org.springframework:spring-test:6.1.6"
+    testImplementation "org.mockito:mockito-core:${mockitoVersion}"
+    testImplementation "com.github.briandilley.jsonrpc4j:jsonrpc4j:1.6"
+
+    implementation "org.springframework.boot:spring-boot-starter-web:3.2.5"
+
+    implementation group: 'com.google.code.gson', name: 'gson', version: '2.10.1'
+    implementation group: 'org.bouncycastle', name: 'bcprov-jdk15on', version: "${bouncyCastleVersion}"
+    implementation group: 'com.kosprov.jargon2', name: 'jargon2-api', version: '1.1.1'
+    implementation group: 'com.kosprov.jargon2', name: 'jargon2-native-ri-backend', version: '1.1.1'
+    implementation group: 'com.google.protobuf', name: 'protobuf-java', version: "${protobufVersion}"
+    implementation('net.sf.json-lib:json-lib:2.4:jdk15')
+    testImplementation "org.springframework.boot:spring-boot-starter-test:3.2.5"
+
+    implementation group: 'org.postgresql', name: 'postgresql', version: "${postgresqlVersion}"
+    implementation group: 'com.googlecode.concurrentlinkedhashmap', name: 'concurrentlinkedhashmap-lru', version: '1.4.2'
+    implementation group: 'jakarta.validation', name: 'jakarta.validation-api', version: '3.0.2'
+    implementation group: 'commons-io', name: 'commons-io', version: '2.11.0'
+    implementation "org.springframework.boot:spring-boot-starter-jdbc:3.2.5"
+    implementation "org.springframework.boot:spring-boot-starter-logging:3.2.5"
+    implementation group: 'org.apache.commons', name: 'commons-dbcp2', version: '2.9.0'
+    implementation group: 'org.hibernate.validator', name: 'hibernate-validator', version: "${hibernateValidatorVersion}"
+    implementation group: 'org.apache.httpcomponents', name: 'httpclient', version: '4.5.14'
+
+    implementation group: 'io.netty', name: 'netty-all', version: "${nettyVersion}"
+    implementation "io.grpc:grpc-netty-shaded:${grpcVersion}"
+    implementation "io.grpc:grpc-protobuf:${grpcVersion}"
+    implementation "io.grpc:grpc-stub:${grpcVersion}"
+    implementation group: 'org.iq80.leveldb', name: 'leveldb', version: "${leveldbVersion}"
+    implementation group: 'org.iq80.leveldb', name: 'leveldb-api', version: "${leveldbVersion}"
+
+    implementation group: 'org.quartz-scheduler', name: 'quartz', version: '2.3.2'
+    implementation group: 'commons-cli', name: 'commons-cli', version: '1.5.0'
+    implementation group: 'com.beust', name: 'jcommander', version: '1.82'
+    implementation group: 'io.jsonwebtoken', name: 'jjwt-api', version: '0.11.5'
+    implementation group: 'io.jsonwebtoken', name: 'jjwt-impl', version: '0.11.5'
+    implementation group: 'io.jsonwebtoken', name: 'jjwt-jackson', version: '0.11.5'
+
+    implementation fileTree(dir: 'libs', include: ['*.jar'])
+}
+
+
+javadoc {
+    options.author = true
+    options.header = project.name
+    options.addStringOption('-quiet')
+    options.encoding = "UTF-8"
+    options.links(
+            "https://docs.oracle.com/javase/11/docs/api/",
+            "https://netty.io/4.1/api/"
+    )
+}
+
+
+task copyDependencies(type: Copy) {
+    from configurations.runtimeClasspath
+    destinationDir = file('build/libs/lib')
+}
+
+jar {
+    manifest {
+        attributes 'Main-Class': mainClassName
+        attributes 'Class-Path': '. ' + configurations.runtimeClasspath.collect { 'lib/' + it.getName() }.join(' ')
+    }
+}
+
+// create a single Jar with all dependencies
+task fatJar(type: Jar) {
+    archiveClassifier = 'all'
+    manifest {
+        attributes 'Main-Class': mainClassName
+        attributes 'Class-Path': configurations.runtimeClasspath.collect { 'lib/' + it.getName() }.join(' ')
+    }
+    from { configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) } }
+    with jar
+}

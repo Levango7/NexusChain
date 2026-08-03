@@ -1,0 +1,101 @@
+# ============================================================================
+# NexusChain 数据备份层
+# 作用：每日对 PostgreSQL 做逻辑备份（pg_dump），保留 7 天，存入独立 PVC。
+#       另附「按需恢复 Job」模板（默认注释，手动启用）。
+# 注意：此为逻辑备份，非 PITR；如需时间点恢复请额外配置 WAL 归档。
+# ============================================================================
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nexus-pg-backup
+  namespace: nexus
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 50Gi
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: nexus-pg-backup
+  namespace: nexus
+spec:
+  schedule: "0 2 * * *"          # 每日 02:00
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: nexus-pg-backup
+        spec:
+          automountServiceAccountToken: false
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: backup
+              image: postgres:15-alpine
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: [ALL]
+                seccompProfile:
+                  type: RuntimeDefault
+              env:
+                - name: PGHOST
+                  value: "postgres"
+                - name: PGPORT
+                  value: "5432"
+                - name: PGUSER
+                  valueFrom:
+                    secretKeyRef:
+                      name: nexus-secrets
+                      key: NEX_DB_USERNAME
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: nexus-secrets
+                      key: NEX_DB_PASSWORD
+              volumeMounts:
+                - name: backup
+                  mountPath: /backup
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -e
+                  DATE=$(date +%Y%m%d-%H%M%S)
+                  echo ">>> [${DATE}] 开始备份 nexus_gateway / nexus_core / nexus_bridge"
+                  for DB in nexus_gateway nexus_core nexus_bridge; do
+                    pg_dump --format=custom --no-owner "dbname=${DB}" \
+                      | gzip > "/backup/${DB}-${DATE}.sql.gz"
+                    echo "    ${DB} -> /backup/${DB}-${DATE}.sql.gz"
+                  done
+                  echo ">>> 清理 7 天前的备份"
+                  find /backup -name '*.sql.gz' -mtime +7 -delete
+                  echo ">>> 备份完成，当前留存："
+                  ls -lh /backup
+              resources:
+                requests: { memory: "128Mi", cpu: "100m" }
+                limits:   { memory: "512Mi", cpu: "500m" }
+          volumes:
+            - name: backup
+              persistentVolumeClaim:
+                claimName: nexus-pg-backup
+---
+# ============================================================================
+# 按需恢复 Job 模板（默认不启用）
+# 用法：把上方 CronJob 这段复制出来改成 Job，并把 RESTORE_FILE 指向具体备份文件，
+#       或将 SCHEDULE 去掉、把 kind 改为 Job 后 kubectl apply。
+# 示例（手动恢复 nexus_core）：
+#   kubectl create job --from=cronjob/nexus-pg-backup nexus-pg-restore -n nexus
+#   然后进容器执行：
+#   gunzip -c /backup/nexus_core-YYYYMMDD-HHMMSS.sql.gz | pg_restore -d nexus_core --clean --if-exists
+# ============================================================================

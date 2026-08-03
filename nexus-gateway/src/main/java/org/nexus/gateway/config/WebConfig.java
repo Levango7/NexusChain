@@ -1,0 +1,107 @@
+package org.nexus.gateway.config;
+
+import org.nexus.gateway.interceptor.ApiKeyInterceptor;
+import org.nexus.gateway.config.ApiVersionInterceptor;
+import org.nexus.gateway.ratelimit.RateLimiter;
+import org.nexus.gateway.security.RequestSignatureInterceptor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.web.servlet.config.annotation.CorsRegistry;
+import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
+import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
+
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+
+/**
+ * Web MVC configuration: CORS, API key authentication interceptor, rate limiting.
+ */
+@Configuration
+public class WebConfig implements WebMvcConfigurer {
+
+    private static final Logger log = LoggerFactory.getLogger(WebConfig.class);
+
+    private final ApiKeyInterceptor apiKeyInterceptor;
+    private final RateLimiter rateLimiter;
+    private final ApiVersionInterceptor apiVersionInterceptor;
+    private final RequestSignatureInterceptor requestSignatureInterceptor;
+
+    // RateLimiter (Redis-backed, prod profile) is optional: when no profile supplies one
+    // (e.g. plain dev run without Redis), rate limiting is disabled rather than failing
+    // startup. TODO: ensure the Redis-backed rate limiter is wired in every profile that
+    // needs throttling.
+    public WebConfig(ApiKeyInterceptor apiKeyInterceptor, RateLimiter rateLimiter,
+                     ApiVersionInterceptor apiVersionInterceptor, RequestSignatureInterceptor requestSignatureInterceptor) {
+        this.apiKeyInterceptor = apiKeyInterceptor;
+        this.rateLimiter = rateLimiter;
+        this.apiVersionInterceptor = apiVersionInterceptor;
+        this.requestSignatureInterceptor = requestSignatureInterceptor;
+        if (rateLimiter == null) {
+            log.warn("No RateLimiter bean present - API rate limiting is DISABLED. "
+                    + "Wire the Redis-backed RateLimiter (prod profile) to enable throttling.");
+        }
+    }
+
+    @Override
+    public void addCorsMappings(CorsRegistry registry) {
+        registry.addMapping("/api/**")
+                .allowedOrigins("*")
+                .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
+                .allowedHeaders("*");
+    }
+
+    @Override
+    public void addInterceptors(InterceptorRegistry registry) {
+        // API version negotiation (first in chain)
+        registry.addInterceptor(apiVersionInterceptor)
+                .addPathPatterns("/api/**");
+
+        // Rate limiting applies to all API paths. Backed by the Redis RateLimiter
+        // (the single rate-limiting implementation); falls through when absent.
+        if (rateLimiter != null) {
+            registry.addInterceptor(new RateLimitAdapter(rateLimiter))
+                    .addPathPatterns("/api/v1/**");
+        }
+
+        registry.addInterceptor(apiKeyInterceptor)
+                .addPathPatterns("/api/v1/**")
+                // Public paths: no auth required
+                .excludePathPatterns(
+                        "/api/v1/checkout/**",       // Cashier page APIs (payer-facing)
+                        "/api/v1/webhooks/**",       // Chain event callbacks (signature-verified)
+                        "/api/v1/merchants/**"       // Merchant mgmt (admin-auth in production)
+                );
+
+        // A2: payment orchestration now requires BOTH merchant API-key auth (above)
+        // and a valid HMAC-SHA256 request signature (below).
+        registry.addInterceptor(requestSignatureInterceptor)
+                .addPathPatterns("/api/v1/payments/**");
+    }
+
+    /**
+     * Adapter that routes the Spring interceptor contract to the RateLimiter interface.
+     */
+    private static class RateLimitAdapter implements org.springframework.web.servlet.HandlerInterceptor {
+        private final RateLimiter rateLimiter;
+
+        RateLimitAdapter(RateLimiter rateLimiter) {
+            this.rateLimiter = rateLimiter;
+        }
+
+        @Override
+        public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
+            String key = request.getHeader("X-NexusChain-ApiKey");
+            if (key == null || key.isEmpty()) {
+                key = request.getRemoteAddr();
+            }
+            if (!rateLimiter.tryAcquire(key)) {
+                response.setStatus(429);
+                response.setContentType("application/json;charset=UTF-8");
+                response.getWriter().write("{\"code\":42900,\"message\":\"Rate limit exceeded\",\"data\":null}");
+                return false;
+            }
+            return true;
+        }
+    }
+}

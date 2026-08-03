@@ -1,0 +1,11 @@
+ext {
+    bouncycastleVersion = '1.70'
+    commonsCodecVersion = '1.13'
+    jargon2Version = '1.1.1'
+    guavaVersion = '31.1-jre'
+    lombokVersion = '1.18.32'
+    jacksonVersion = '2.14.2'
+    commonsCliVersion = '1.4'
+    gRPCVersion = '1.54.0'
+    webSocketVersion = '1.4.0'
+}

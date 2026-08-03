@@ -1,0 +1,175 @@
+syntax = "proto3";
+option java_package = "org.conpay.p2p";
+
+import "google/protobuf/timestamp.proto";
+
+service ConPay {
+    rpc Entry (Message) returns (Message) {
+    }
+}
+
+enum Code {
+    NOTHING = 0;
+    PING = 1;
+    PONG = 2;
+    LOOK_UP = 3;
+    PEERS = 4;
+    GET_STATUS = 5;
+    STATUS = 6;
+    GET_BLOCKS = 7;
+    BLOCKS = 8;
+
+    // 以下需要中继支持
+    PROPOSAL = 9;
+    TRANSACTIONS = 10;
+    // 以下新增
+    GET_MERKELE_TRANSACTIONS=11; // 请求获取Merket事物
+    MERKLE_TRANSACTIONS = 12; // 接受Merket事务
+    GET_TREE_NODES=13; // 请求获取Tree_Nodes
+    TREE_NODES=14; // 接受TREE_NODES
+}
+
+enum ClipDirection {
+    CLIP_TAIL = 0;
+    CLIP_INITIAL = 1;
+}
+
+
+message Message {
+    // conpay 协议头
+    Code code = 1;
+    google.protobuf.Timestamp created_at = 2;
+    string remote_peer = 3;
+    uint64 ttl = 4; // avoid flood attack
+    uint64 nonce = 5; // avoid collision
+    bytes signature = 6;
+
+    // conpay 消息体
+    bytes body = 7;
+
+}
+
+message Ping {
+}
+
+message Pong {
+}
+
+message Lookup {
+
+}
+
+// 验证者节点会定时把自己节点信息加在 validators 里面广播出去
+message Peers {
+    repeated string peers = 1;
+}
+
+message GetStatus {
+
+}
+
+message Status {
+    uint64 current_height = 1;
+    bytes best_block_hash = 2;
+    bytes genesis_hash = 3;
+}
+
+message GetBlocks {
+    uint64 start_height = 1;
+    uint64 stop_height = 2;
+    ClipDirection clip_direction = 3;
+}
+
+message Blocks {
+    repeated Block blocks = 1;
+}
+
+message Proposal {
+    Block block = 1;
+}
+
+message Nothing {
+}
+
+enum TransactionType {
+    COINBASE = 0;
+    TRANSFER = 1;
+    VOTE = 2;
+    DEPOSIT = 3;
+    TRANSFER_MULTISIG_MULTISIG = 4;
+    TRANSFER_MULTISIG_NORMAL = 5;
+    TRANSFER_NORMAL_MULTISIG = 6;
+    ASSET_DEFINE = 7;
+    ATOMIC_EXCHANGE = 8;
+    INCUBATE = 9;
+    EXTRACT_INTEREST = 10;
+    EXTRACT_SHARING_PROFIT = 11;
+    EXTRACT_COST = 12;
+    EXIT_VOTE = 13;
+    PLEDGE = 14;
+    EXIT_PLEDGE = 15;
+}
+
+message Transactions {
+    repeated Transaction transactions = 1;
+}
+
+message Transaction {
+    int32 version = 1;
+    TransactionType transaction_type = 2;
+    uint64 nonce = 3;
+    bytes from = 4;
+    uint64 gas_price = 5;
+    uint64 amount = 6;
+    bytes signature = 7;
+    bytes to = 8;
+    bytes payload = 9;
+}
+
+message Block {
+    uint32 version = 1;
+    bytes hash_prev_block = 2;
+    bytes hash_merkle_root = 3;
+    bytes hash_merkle_state = 4;
+    bytes hash_merkle_incubate = 5;
+    uint32 height = 6;
+    uint32 created_at = 7;
+    bytes n_bits = 8;
+    bytes nonce = 9;
+    repeated Transaction body = 10;
+}
+
+message GetMerkleTransactions{
+    bytes block_hash = 1;
+    repeated TreeNode tree_nodes = 2; // 认定有问题的TreeNodes集合
+}
+
+message MerkleTransactions{
+    bytes block_hash = 1;
+    repeated TreeNode tree_nodes = 2; // 认定有问题的TreeNodes集合
+    repeated MerkleTransaction merket_trans = 3;
+}
+
+message MerkleTransaction{
+    Transaction transaction = 1;
+    int32 index = 2; // 事务在区块中的位置
+}
+
+message GetTreeNodes{
+    bytes block_hash = 1;
+    repeated TreeNode parent_nodes = 2; // 获取parent_nodes的子节点集合
+}
+
+message TreeNodes {
+    bytes block_hash = 1;
+    repeated TreeNode tree_nodes = 2;
+    repeated TreeNode parent_nodes = 3; // 返回请求的parent_nodes
+}
+
+message TreeNode {
+    string hash = 1;
+    int32 level = 2;
+    string name = 3;
+    string data = 4; // 当level=1时，data是tx_hash
+    int32 index = 5; // 每一层的index都不会重复
+}

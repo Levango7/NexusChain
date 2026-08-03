@@ -1,0 +1,31 @@
+plugins {
+    id 'java-library'
+}
+
+group = 'org.nexus'
+version = '0.1.0-alpha'
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // Jackson (replaces fastjson in the rewritten wallet utilities)
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.14.2'
+    implementation 'org.apache.httpcomponents:httpclient:4.5.14'
+    implementation 'org.bouncycastle:bcprov-jdk18on:1.78'
+    // Reuse nexus-core keystore/crypto/util classes (org.nexus.keystore.*)
+    implementation project(':nexus-core:nexus-core')
+
+    // Protobuf (TxUtils uses com.google.protobuf.ByteString; matches nexus-core 3.22.2)
+    implementation 'com.google.protobuf:protobuf-java:3.22.2'
+    // Guava (WalletUtils uses com.google.common.primitives.Bytes; matches nexus-core 31.1-jre)
+    implementation 'com.google.guava:guava:31.1-jre'
+
+    testImplementation 'junit:junit:4.13.2'
+}

@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  nexus-gateway:
+    build: ./nexus-gateway
+    ports:
+      - '127.0.0.1:8080:8080'
+    environment:
+      - SPRING_PROFILES_ACTIVE=prod
+    depends_on:
+      nexus-core:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:8080/actuator/health']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  nexus-core:
+    build: ./nexus-core
+    ports:
+      - '127.0.0.1:19585:19585'
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:19585/height']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  nexus-bridge:
+    build: ./nexus-bridge
+    ports:
+      - '127.0.0.1:8082:8082'
+    environment:
+      - SPRING_PROFILES_ACTIVE=prod
+    depends_on:
+      nexus-core:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:8082/api/v1/bridge/status']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s

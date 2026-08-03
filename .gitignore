@@ -1,0 +1,52 @@
+# Build artifacts
+build/
+out/
+target/
+*.class
+*.jar
+*.war
+
+# Gradle
+.gradle/
+gradle-app.setting
+!gradle-wrapper.jar
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.project
+.classpath
+.factorypath
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Bundled JDK (use Gradle toolchain auto-provisioning instead)
+jdk17/
+jdk17.zip
+*.zip
+
+# Logs
+*.log
+logs/
+
+# Local env
+local.env
+.env
+
+# LevelDB data
+leveldb/
+
+# Runtime data
+*.pid

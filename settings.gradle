@@ -1,0 +1,26 @@
+rootProject.name = 'nexus'
+
+// NexusChain 统一构建系统
+// 按依赖顺序包含所有子模块
+
+// === 基础协议层 ===
+include 'nexus-rpc-doc'
+
+// === 核心层 ===
+include ':nexus-core:nexus-core'
+
+// === SDK 层 ===
+
+include 'nexus-sdk:java'
+
+// === 服务层 ===
+include 'nexus-exchange-wallet'
+// nexus-consortium 作为 composite build 收编进统一构建（保留其独立 settings.gradle / Java8 / Spring Boot 2.2 结构，不强制迁移）。
+// 定位：与 nexus-core 并列的「联盟链 / 侧链」。双链设计为既定方案，详见 ARCHITECTURE.md。
+includeBuild 'nexus-consortium'
+include 'nexus-gateway'
+include 'nexus-bridge'
+
+// === 工具层 ===
+// nexus-explorer (Node.js/React, 不纳入 Gradle)
+// nexus-devtools (Node.js/TypeScript, 不纳入 Gradle)

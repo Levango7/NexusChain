@@ -1,0 +1,23 @@
+{
+  "name": "@nexus/explorer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "NexusChain 区块浏览器 monorepo 根配置",
+  "workspaces": [
+    "frontend",
+    "backend"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "dev:frontend": "npm run dev --workspace @nexus/explorer-frontend",
+    "dev:backend": "npm run dev --workspace @nexus/explorer-backend",
+    "build:frontend": "npm run build --workspace @nexus/explorer-frontend",
+    "build:backend": "npm run build --workspace @nexus/explorer-backend"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "license": "MIT"
+}

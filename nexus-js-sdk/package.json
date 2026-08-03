@@ -1,0 +1,53 @@
+{
+  "_from": "keystore_nexus",
+  "_id": "keystore_nexus@0.1.1",
+  "_inBundle": false,
+  "_integrity": "sha512-/X8vzH12FkNbectb/EjOUsA/vaPeO0cEC/yWFqY5gLBKtgbL/OrOUY4/ERvOzFSw1JGOSjGSNBWSm30a8O8F2A==",
+  "_location": "/keystore_nexus",
+  "_phantomChildren": {},
+  "_requested": {
+    "type": "tag",
+    "registry": true,
+    "raw": "keystore_nexus",
+    "name": "keystore_nexus",
+    "escapedName": "keystore_nexus",
+    "rawSpec": "",
+    "saveSpec": null,
+    "fetchSpec": "latest"
+  },
+  "_requiredBy": [
+    "#USER",
+    "/"
+  ],
+  "_resolved": "https://registry.npmjs.org/keystore_nexus/-/keystore_nexus-0.1.1.tgz",
+  "_shasum": "cc3491a85ea3bac54482520cc91059d9e911ff12",
+  "_spec": "keystore_nexus",
+  "_where": "/home/zhangtong/nexus sdk/sdk npm",
+  "author": "",
+  "bundleDependencies": false,
+  "dependencies": {
+    "argon2": "^0.19.3",
+    "bn": "^1.0.3",
+    "bn.js": "^5.0.0",
+    "int64-buffer": "^0.99.1007",
+    "jquery": "^3.4.1",
+    "request": "^2.88.0",
+    "uint32": "^0.2.1",
+    "uuid": "^3.3.3"
+  },
+  "deprecated": false,
+  "keywords": [
+    "nexus",
+    "nexus",
+    "rpc",
+    "blockchain"
+  ],
+  "license": "ISC",
+  "main": "keystore.js",
+  "rpc": "rpc-client.js",
+  "name": "keystore_nexus",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "version": "0.1.1"
+}

@@ -1,0 +1,29 @@
+server:
+  port: 8082
+
+spring:
+  application:
+    name: nexus-bridge
+  datasource:
+    url: jdbc:mysql://localhost:3306/nexus_bridge?useSSL=false&serverTimezone=UTC
+    username: nexus
+    password: nexus_secret
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQL8Dialect
+
+# Bridge configuration
+nexus:
+  bridge:
+    signature-threshold: 2
+    timelock-period-seconds: 3600
+    max-amount-per-tx: 50000000000
+    daily-limit: 100000000000
+    large-amount-threshold: 10000000000
+    source-chain-id: nexus
+    target-chain-id: ethereum
