@@ -1,12 +1,14 @@
 package org.nexus.sdk;
 
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.nexus.sdk.wallet.WalletUtils;
+
 import java.math.BigInteger;
+import java.security.SecureRandom;
+import java.util.HexFormat;
 
 /**
- * 钱包管理接口。
- *
- * <p>提供钱包创建、导入、余额查询等能力。
- * 所有代币余额以最小单位（wei）表示，NEX 为原生代币。</p>
+ * Wallet management backed by nexus-core keystore utilities.
  */
 public class Wallet {
 
@@ -19,96 +21,65 @@ public class Wallet {
     }
 
     /**
-     * 创建新钱包，生成新的密钥对。
-     *
-     * @return 新创建的 WalletInfo
+     * Create a new wallet with a random password.
+     * Uses WalletUtils.fromPassword() to generate a keystore with Ed25519 key pair.
      */
     public WalletInfo create() {
-        // TODO: 生成 ECDSA 密钥对
-        throw new UnsupportedOperationException("Not yet implemented");
+        byte[] pwBytes = new byte[16];
+        new SecureRandom().nextBytes(pwBytes);
+        String password = HexFormat.of().formatHex(pwBytes);
+        ObjectNode node = WalletUtils.fromPassword(password);
+        if (node == null || node.isEmpty()) throw new RuntimeException("Wallet generation failed");
+        String keystoreJson = node.toString();
+        String address = node.has("address") ? node.get("address").asText() : "";
+        String privateKey = WalletUtils.obtainPrikey(keystoreJson, password);
+        String publicKey = WalletUtils.prikeyToPubkey(privateKey);
+        return new WalletInfo(address, privateKey, publicKey);
     }
 
     /**
-     * 从私钥导入钱包。
-     *
-     * @param privateKey 十六进制私钥
-     * @return 导入的 WalletInfo
+     * Import a wallet from a private key hex string.
      */
     public WalletInfo fromPrivateKey(String privateKey) {
-        // TODO: 从私钥推导公钥和地址
-        throw new UnsupportedOperationException("Not yet implemented");
+        String publicKey = WalletUtils.prikeyToPubkey(privateKey);
+        if (publicKey == null || publicKey.isEmpty())
+            throw new IllegalArgumentException("Invalid private key");
+        String pubkeyHash = WalletUtils.pubkeyStrToPubkeyHashStr(publicKey);
+        String address = WalletUtils.pubkeyHashToAddress(pubkeyHash);
+        return new WalletInfo(address, privateKey, publicKey);
     }
 
-    /**
-     * 从助记词导入钱包。
-     *
-     * @param mnemonic BIP-39 助记词
-     * @param path     派生路径（如 "m/44'/60'/0'/0/0"）
-     * @return 导入的 WalletInfo
-     */
     public WalletInfo fromMnemonic(String mnemonic, String path) {
-        // TODO: 从助记词派生密钥对
-        throw new UnsupportedOperationException("Not yet implemented");
+        throw new UnsupportedOperationException("Mnemonic import not yet implemented");
     }
 
-    /**
-     * 查询地址的 NEX 余额。
-     *
-     * @param address 钱包地址
-     * @return 余额（最小单位 wei）
-     */
     public BigInteger getBalance(String address) {
-        // TODO: 调用 RPC 查询余额
-        throw new UnsupportedOperationException("Not yet implemented");
+        Object result = rpcClient.call("nexus_getBalance", new Object[]{address});
+        if (result == null) return BigInteger.ZERO;
+        if (result instanceof Number) return BigInteger.valueOf(((Number) result).longValue());
+        return new BigInteger(result.toString());
     }
 
-    /**
-     * 查询地址的指定代币余额。
-     *
-     * @param address  钱包地址
-     * @param tokenContract 代币合约地址
-     * @return 代币余额（最小单位）
-     */
     public BigInteger getTokenBalance(String address, String tokenContract) {
-        // TODO: 调用合约查询代币余额
-        throw new UnsupportedOperationException("Not yet implemented");
+        Object result = rpcClient.call("nexus_getTokenBalance", new Object[]{address, tokenContract});
+        if (result == null) return BigInteger.ZERO;
+        if (result instanceof Number) return BigInteger.valueOf(((Number) result).longValue());
+        return new BigInteger(result.toString());
     }
 
-    /**
-     * 验证地址格式是否合法。
-     *
-     * @param address 待验证地址
-     * @return 是否合法
-     */
     public boolean validateAddress(String address) {
-        // TODO: 地址格式校验
-        throw new UnsupportedOperationException("Not yet implemented");
+        if (address == null) return false;
+        int result = WalletUtils.verifyAddress(address);
+        return result == 0;
     }
 
-    /**
-     * 钱包信息封装类。
-     */
+    public String getNetwork() { return network; }
+
     public static class WalletInfo {
-        private final String address;
-        private final String privateKey;
-        private final String publicKey;
-
-        public WalletInfo(String address, String privateKey, String publicKey) {
-            this.address = address;
-            this.privateKey = privateKey;
-            this.publicKey = publicKey;
-        }
-
-        public String getAddress() {
-            return address;
-        }
-
-        public String getPrivateKey() {
-            return privateKey;
-        }
-
-        public String getPublicKey() {
-            return publicKey;
-        }
+        private final String address, privateKey, publicKey;
+        public WalletInfo(String a, String pk, String pub) { address = a; privateKey = pk; publicKey = pub; }
+        public String getAddress() { return address; }
+        public String getPrivateKey() { return privateKey; }
+        public String getPublicKey() { return publicKey; }
     }
 }

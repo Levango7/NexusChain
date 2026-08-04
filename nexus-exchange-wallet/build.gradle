@@ -31,6 +31,10 @@ dependencies {
     // Spring Boot 3.2.5 (managed by Boot plugin BOM, no explicit version)
     implementation 'org.springframework.boot:spring-boot-starter-web'
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    // H2 in-memory database for tests (transitive jdbc starter from nexus-core needs a DataSource)
+    testRuntimeOnly 'com.h2database:h2'
+    // JUnit 4 vintage bridge — wallet tests still use @Test/@RunWith (pre-migration)
+    testImplementation 'org.junit.vintage:junit-vintage-engine'
 
     // Gson — still used by org.nexus.wallet.util.JsonUtil and JsonObject in controllers
     implementation 'com.google.code.gson:gson:2.10.1'

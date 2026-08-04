@@ -1,13 +1,12 @@
 package org.nexus.sdk;
 
+import org.nexus.sdk.wallet.TxUtils;
+
+import java.math.BigDecimal;
 import java.math.BigInteger;
-import java.util.List;
 
 /**
- * 交易构造器。
- *
- * <p>提供交易构建、签名、序列化和广播能力。
- * 支持 NEX 原生转账及合约调用。</p>
+ * Transaction builder backed by nexus-core TxUtils.
  */
 public class TransactionBuilder {
 
@@ -19,142 +18,86 @@ public class TransactionBuilder {
         this.network = network;
     }
 
-    /**
-     * 构建 NEX 原生转账交易。
-     *
-     * @param from   发送方地址
-     * @param to     接收方地址
-     * @param amount 转账金额（最小单位 wei）
-     * @param token  代币符号（NEX 或合约地址）
-     * @return 未签名的交易对象
-     */
     public Transaction buildTransfer(String from, String to, BigInteger amount, String token) {
-        // TODO: 构建交易结构
-        throw new UnsupportedOperationException("Not yet implemented");
+        if (amount.signum() <= 0) throw new IllegalArgumentException("Amount must be positive");
+        if (from == null || to == null) throw new IllegalArgumentException("From/to addresses required");
+        Transaction tx = new Transaction();
+        tx.setFrom(from); tx.setTo(to); tx.setValue(amount); tx.setToken(token);
+        return tx;
+    }
+
+    public Transaction buildContractCall(String from, String contractAddress, String data, BigInteger value) {
+        Transaction tx = new Transaction();
+        tx.setFrom(from); tx.setTo(contractAddress); tx.setData(data); tx.setValue(value);
+        return tx;
     }
 
     /**
-     * 构建合约调用交易。
-     *
-     * @param from       发送方地址
-     * @param contractAddress 合约地址
-     * @param data       调用数据（ABI 编码）
-     * @param value      附带的 NEX 金额
-     * @return 未签名的交易对象
-     */
-    public Transaction buildContractCall(String from, String contractAddress,
-                                         String data, BigInteger value) {
-        // TODO: 构建合约调用交易
-        throw new UnsupportedOperationException("Not yet implemented");
-    }
-
-    /**
-     * 对交易进行签名。
-     *
-     * @param tx         交易对象
-     * @param privateKey 签名私钥（十六进制）
-     * @return 已签名的交易序列化字符串
+     * Sign a transaction using the legacy Ed25519 signature path via TxUtils.
+     * Constructs the raw hex transaction, then signs with the private key.
      */
     public String sign(Transaction tx, String privateKey) {
-        // TODO: 使用私钥签名交易
-        throw new UnsupportedOperationException("Not yet implemented");
+        BigDecimal amount = new BigDecimal(tx.getValue());
+        long nonce = tx.getNonce() != null ? tx.getNonce().longValue() : 0L;
+        String rawHex = TxUtils.CreateRawTransaction(tx.getFrom(), tx.getTo(), amount, nonce);
+        if (rawHex == null || rawHex.isEmpty())
+            throw new RuntimeException("Failed to create raw transaction");
+        return TxUtils.signRawBasicTransaction(rawHex, privateKey);
     }
 
-    /**
-     * 广播已签名的交易到网络。
-     *
-     * @param signedTx 已签名的交易序列化字符串
-     * @return 交易哈希
-     */
     public String broadcast(String signedTx) {
-        // TODO: 调用 RPC 广播交易
-        throw new UnsupportedOperationException("Not yet implemented");
+        Object result = rpcClient.call("nexus_sendRawTransaction", new Object[]{signedTx});
+        return result != null ? result.toString() : null;
     }
 
-    /**
-     * 查询交易状态。
-     *
-     * @param txHash 交易哈希
-     * @return 交易回执
-     */
     public TransactionReceipt getTransactionReceipt(String txHash) {
-        // TODO: 调用 RPC 查询交易回执
-        throw new UnsupportedOperationException("Not yet implemented");
+        Object result = rpcClient.call("nexus_getTransactionReceipt", new Object[]{txHash});
+        if (result == null) return null;
+        try {
+            return rpcClient.call("nexus_getTransactionReceipt", new Object[]{txHash}, TransactionReceipt.class);
+        } catch (Exception e) {
+            TransactionReceipt r = new TransactionReceipt();
+            r.setTransactionHash(txHash);
+            r.setStatus("UNKNOWN");
+            return r;
+        }
     }
 
-    /**
-     * 估算交易所需的 Gas。
-     *
-     * @param tx 交易对象
-     * @return Gas 估算值
-     */
     public BigInteger estimateGas(Transaction tx) {
-        // TODO: 调用 RPC 估算 Gas
-        throw new UnsupportedOperationException("Not yet implemented");
+        Object result = rpcClient.call("nexus_estimateGas", new Object[]{tx});
+        if (result instanceof Number) return BigInteger.valueOf(((Number) result).longValue());
+        return new BigInteger(result.toString());
     }
 
-    /**
-     * 获取当前 Gas 价格。
-     *
-     * @return Gas 价格（wei）
-     */
     public BigInteger getGasPrice() {
-        // TODO: 调用 RPC 查询 Gas 价格
-        throw new UnsupportedOperationException("Not yet implemented");
+        Object result = rpcClient.call("nexus_gasPrice");
+        if (result instanceof Number) return BigInteger.valueOf(((Number) result).longValue());
+        return new BigInteger(result.toString());
     }
 
-    /**
-     * 交易对象。
-     */
+    // --- POJOs ---
+
     public static class Transaction {
-        private String from;
-        private String to;
-        private BigInteger value;
-        private BigInteger gasLimit;
-        private BigInteger gasPrice;
-        private BigInteger nonce;
-        private String data;
-        private String token;
-
-        // Getters and Setters
-        public String getFrom() { return from; }
-        public void setFrom(String from) { this.from = from; }
-        public String getTo() { return to; }
-        public void setTo(String to) { this.to = to; }
-        public BigInteger getValue() { return value; }
-        public void setValue(BigInteger value) { this.value = value; }
-        public BigInteger getGasLimit() { return gasLimit; }
-        public void setGasLimit(BigInteger gasLimit) { this.gasLimit = gasLimit; }
-        public BigInteger getGasPrice() { return gasPrice; }
-        public void setGasPrice(BigInteger gasPrice) { this.gasPrice = gasPrice; }
-        public BigInteger getNonce() { return nonce; }
-        public void setNonce(BigInteger nonce) { this.nonce = nonce; }
-        public String getData() { return data; }
-        public void setData(String data) { this.data = data; }
-        public String getToken() { return token; }
-        public void setToken(String token) { this.token = token; }
+        private String from, to, data, token;
+        private BigInteger value, gasLimit, gasPrice, nonce;
+        public String getFrom() { return from; } public void setFrom(String s) { from = s; }
+        public String getTo() { return to; } public void setTo(String s) { to = s; }
+        public BigInteger getValue() { return value; } public void setValue(BigInteger v) { value = v; }
+        public BigInteger getGasLimit() { return gasLimit; } public void setGasLimit(BigInteger v) { gasLimit = v; }
+        public BigInteger getGasPrice() { return gasPrice; } public void setGasPrice(BigInteger v) { gasPrice = v; }
+        public BigInteger getNonce() { return nonce; } public void setNonce(BigInteger v) { nonce = v; }
+        public String getData() { return data; } public void setData(String s) { data = s; }
+        public String getToken() { return token; } public void setToken(String s) { token = s; }
     }
 
-    /**
-     * 交易回执。
-     */
     public static class TransactionReceipt {
-        private String transactionHash;
-        private String blockHash;
+        private String transactionHash, blockHash, status;
         private long blockNumber;
-        private String status;
         private BigInteger gasUsed;
-
-        // Getters and Setters
-        public String getTransactionHash() { return transactionHash; }
-        public void setTransactionHash(String hash) { this.transactionHash = hash; }
-        public String getBlockHash() { return blockHash; }
-        public void setBlockHash(String hash) { this.blockHash = hash; }
-        public long getBlockNumber() { return blockNumber; }
-        public void setBlockNumber(long number) { this.blockNumber = number; }
-        public String getStatus() { return status; }
-        public void setStatus(String status) { this.status = status; }
-        public BigInteger getGasUsed() { return gasUsed; }
-        public void setGasUsed(BigInteger gas) { this.gasUsed = gas; }
+        public String getTransactionHash() { return transactionHash; } public void setTransactionHash(String s) { transactionHash = s; }
+        public String getBlockHash() { return blockHash; } public void setBlockHash(String s) { blockHash = s; }
+        public long getBlockNumber() { return blockNumber; } public void setBlockNumber(long n) { blockNumber = n; }
+        public String getStatus() { return status; } public void setStatus(String s) { status = s; }
+        public BigInteger getGasUsed() { return gasUsed; } public void setGasUsed(BigInteger v) { gasUsed = v; }
     }
 }

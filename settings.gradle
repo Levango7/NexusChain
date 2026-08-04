@@ -21,6 +21,12 @@ includeBuild 'nexus-consortium'
 include 'nexus-gateway'
 include 'nexus-bridge'
 
+// === 中间服务层（新增骨架） ===
+includeBuild 'nexus-settlement'
+includeBuild 'nexus-compliance'
+includeBuild 'nexus-analytics'
+includeBuild 'nexus-oracle'
+
 // === 工具层 ===
 // nexus-explorer (Node.js/React, 不纳入 Gradle)
 // nexus-devtools (Node.js/TypeScript, 不纳入 Gradle)
