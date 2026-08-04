@@ -39,7 +39,7 @@ public class JSONEncodeDecoderTest {
 
     @Test
     public void testHeaderDecodeJson() throws Exception{
-        Resource resource = new ClassPathResource("genesis/nexus-encoding-test-header.json");
+        Resource resource = new ClassPathResource("genesis/NexusChain-encoding-test-header.json");
         Block header = encodeDecoder.decodeBlock(IOUtils.toByteArray(resource.getInputStream()));
         assert header.nVersion == 4294967295L;
         assert header.nHeight == 4294967295L;
@@ -61,7 +61,7 @@ public class JSONEncodeDecoderTest {
 
     @Test
     public void testBlockDecodeJson() throws Exception{
-        Resource resource = new ClassPathResource("genesis/nexus-encoding-test-block.json");
+        Resource resource = new ClassPathResource("genesis/NexusChain-encoding-test-block.json");
         Block  header = encodeDecoder.decodeBlock(IOUtils.toByteArray(resource.getInputStream()));
         assert header.nHeight  == 0;
         System.out.println(

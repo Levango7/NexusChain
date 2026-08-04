@@ -36,8 +36,8 @@ dependencies {
     implementation 'com.google.code.gson:gson:2.10.1'
 
     // LevelDB
-    implementation 'org.iq80.leveldb:leveldb:0.7'
-    implementation 'org.iq80.leveldb:leveldb-api:0.7'
+    implementation 'org.iq80.leveldb:leveldb:0.12'
+    implementation 'org.iq80.leveldb:leveldb-api:0.12'
 
     // Rewritten wallet utilities (Jackson-based, replaces wcli.jar / nexus-java-sdk entirely).
     // Provides org.nexus.sdk.wallet.WalletUtils / TxUtils.

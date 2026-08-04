@@ -1,9 +1,12 @@
 package org.nexus.gateway.orchestration;
 
 import org.junit.jupiter.api.*;
+import org.nexus.gateway.interceptor.ApiKeyInterceptor;
+import org.nexus.gateway.security.RequestSignatureInterceptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
@@ -12,10 +15,18 @@ import org.springframework.test.web.servlet.MvcResult;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
 
 /**
  * E2E integration tests for the Payment Orchestration Engine.
  * Tests the full lifecycle: create → route → connector → confirm → query.
+ *
+ * <p>The orchestration API ({@code /api/v1/payments/**}) is protected by both
+ * {@link ApiKeyInterceptor} (merchant API-key auth) and
+ * {@link RequestSignatureInterceptor} (HMAC request signing). These E2E tests
+ * exercise the orchestration engine itself, not the auth perimeter, so both
+ * interceptors are replaced with mocks that always pass through.</p>
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -26,7 +37,25 @@ class OrchestrationE2ETest {
     @Autowired
     private MockMvc mockMvc;
 
+    // Replace the auth interceptors with no-op mocks so the E2E tests can drive
+    // the orchestration engine directly. WebConfig registers these interceptor
+    // beans into the Spring MVC interceptor chain; by substituting Mockito mocks
+    // whose preHandle() returns true, every /api/v1/payments/** request passes
+    // through unauthenticated. This scope is limited to this test class only —
+    // other integration tests keep the real interceptors.
+    @MockBean
+    private ApiKeyInterceptor apiKeyInterceptor;
+
+    @MockBean
+    private RequestSignatureInterceptor requestSignatureInterceptor;
+
     private static String paymentId;
+
+    @BeforeEach
+    void stubAuthInterceptors() throws Exception {
+        when(apiKeyInterceptor.preHandle(any(), any(), any())).thenReturn(true);
+        when(requestSignatureInterceptor.preHandle(any(), any(), any())).thenReturn(true);
+    }
 
     // === Connector Discovery ===
 

@@ -38,6 +38,9 @@ public class BatchTransferPayloadTest {
      * @return 总金额
      */
     private long getTotalAmount(List<TransferItem> items) {
+        if (items == null) {
+            return 0;
+        }
         long total = 0;
         for (TransferItem item : items) {
             total += item.getAmount();

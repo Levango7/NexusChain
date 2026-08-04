@@ -425,18 +425,19 @@ public class PaymentChannelTest {
     // ==================== State 枚举测试 ====================
 
     /**
-     * 测试 State 枚举包含所有 5 种状态
+     * 测试 State 枚举包含所有 6 种状态
      */
     @Test
     public void testStateEnumValues() {
         State[] states = State.values();
-        assertEquals(5, states.length);
+        assertEquals(6, states.length);
         // 验证状态存在
         assertNotNull(State.valueOf("OPEN"));
         assertNotNull(State.valueOf("UPDATING"));
         assertNotNull(State.valueOf("CLOSING"));
         assertNotNull(State.valueOf("CLOSED"));
         assertNotNull(State.valueOf("DISPUTED"));
+        assertNotNull(State.valueOf("EXPIRED"));
     }
 
     /**

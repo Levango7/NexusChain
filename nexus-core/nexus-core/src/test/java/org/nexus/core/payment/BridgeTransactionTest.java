@@ -626,17 +626,20 @@ public class BridgeTransactionTest {
     // ==================== State 枚举测试 ====================
 
     /**
-     * 测试 State 枚举包含所有 5 种状态
+     * 测试 State 枚举包含所有 8 种状态
      */
     @Test
     public void testStateEnumValues() {
         State[] states = State.values();
-        assertEquals(5, states.length);
+        assertEquals(8, states.length);
+        assertNotNull(State.valueOf("PENDING"));
         assertNotNull(State.valueOf("LOCKED"));
+        assertNotNull(State.valueOf("VALIDATING"));
         assertNotNull(State.valueOf("MINTED"));
         assertNotNull(State.valueOf("BURNED"));
         assertNotNull(State.valueOf("UNLOCKED"));
         assertNotNull(State.valueOf("FAILED"));
+        assertNotNull(State.valueOf("EXPIRED"));
     }
 
     // ==================== Transaction 类型关联测试 ====================

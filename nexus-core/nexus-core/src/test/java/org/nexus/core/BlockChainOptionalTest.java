@@ -4,8 +4,8 @@ import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.ApplicationContext;
+import org.springframework.test.context.ContextConfiguration;
 import org.springframework.test.context.junit4.SpringRunner;
 import org.nexus.config.TestConfig;
 import org.nexus.core.account.Transaction;
@@ -15,7 +15,7 @@ import org.nexus.util.Arrays;
 import java.util.*;
 
 @RunWith(SpringRunner.class)
-@SpringBootTest(classes = {TestConfig.class})
+@ContextConfiguration(classes = {TestConfig.class})
 public class BlockChainOptionalTest {
     private static final byte[] HASH_1 = HashUtil.keccak256("def".getBytes());
     private static final byte[] HASH_2 = HashUtil.keccak256("abc".getBytes());

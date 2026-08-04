@@ -19,14 +19,17 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.nexus.core.RDBMSBlockChainImpl;
 
 public class TestConfig {
-    private static String testDBURL = "jdbc:postgresql://localhost:5432/postgres";
+    // H2 内存数据库，启用 PostgreSQL 兼容模式以支持 bytea/int4/int8/smallint/ON CONFLICT 等语法
+    private static String testDBURL = "jdbc:h2:mem:testdb;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE";
 
 
     @Bean
     public BasicDataSource basicDataSource() {
         BasicDataSource ds = new BasicDataSource();
         ds.setUrl(testDBURL);
-        ds.setDriverClassName("org.postgresql.Driver");
+        ds.setDriverClassName("org.h2.Driver");
+        ds.setUsername("sa");
+        ds.setPassword("");
         ds.setInitialSize(1);
         ds.setMaxTotal(100);
         ds.setMaxIdle(5);
@@ -53,7 +56,7 @@ public class TestConfig {
     @Bean
     @Scope("prototype")
     public Block getGenesis() throws Exception {
-        Resource resource = new ClassPathResource("genesis/nexus-test-genesis.json");
+        Resource resource = new ClassPathResource("genesis/NexusChain-test-genesis.json");
         return encodeDecoder().decodeBlock(IOUtils.toByteArray(resource.getInputStream()));
     }
 
@@ -65,11 +68,12 @@ public class TestConfig {
     }
 
     protected void clearData(JdbcTemplate jdbcTemplate) {
-        jdbcTemplate.batchUpdate("delete  from header where 1 = 1",
-                "delete from transaction where 1 = 1",
-                "delete from transaction_index where 1 = 1",
-                "delete from account where 1 = 1",
-                "delete from incubator_state where 1 = 1");
+        // 使用 drop table if exists 而非 delete from，避免表不存在时报错（H2 内存库初始无表）
+        jdbcTemplate.batchUpdate("drop table if exists header",
+                "drop table if exists transaction",
+                "drop table if exists transaction_index",
+                "drop table if exists account",
+                "drop table if exists incubator_state");
     }
 
     @Bean

@@ -132,7 +132,7 @@ public class RDBMSBlockChainImpl implements NexusChainBlockChain {
                 header.getHash(), header.nVersion, header.hashPrevBlock,
                 header.hashMerkleRoot, header.hashMerkleState, header.hashMerkleIncubate, header.nHeight,
                 header.nTime, header.nNonce, header.nBits,
-                header.blockNotice, true, header.nHeight);
+                header.blockNotice, true, header.totalWeight);
     }
 
     private void writeBody(Block block) {
@@ -151,10 +151,11 @@ public class RDBMSBlockChainImpl implements NexusChainBlockChain {
         }
 
         // 写入 transaction 表
+        // 使用 "on conflict do nothing"（不指定列）以同时兼容 PostgreSQL 和 H2
         tmpl.batchUpdate("insert into transaction (" +
                 "version, tx_hash, type, nonce, " +
                 "\"from\", gas_price, amount, " +
-                "payload, signature, \"to\") VALUES (?, ?,?,?,?,?,?,?,?,?) on conflict(tx_hash) do nothing", args0);
+                "payload, signature, \"to\") VALUES (?, ?,?,?,?,?,?,?,?,?) on conflict do nothing", args0);
 
         List<Object[]> args = new ArrayList<>();
         for (int i = 0; i < block.body.size(); i++) {
@@ -293,12 +294,12 @@ public class RDBMSBlockChainImpl implements NexusChainBlockChain {
 
     @Override
     public Block getCanonicalHeader(long num) {
-        return getOne(tmpl.query("select * from header where height = ?", new Object[]{num}, new BlockMapper()));
+        return getOne(tmpl.query("select * from header where height = ? order by total_weight desc limit 1", new Object[]{num}, new BlockMapper()));
     }
 
     @Override
     public List<Block> getCanonicalHeaders(long start, int size) {
-        return tmpl.query("select * from header where height < ? and height >= ? order by height", new Object[]{start + size, start}, new BlockMapper());
+        return tmpl.query("select * from (select h.*, ROW_NUMBER() OVER (PARTITION BY h.height ORDER BY h.total_weight DESC) as _rn from header h where h.height < ? and h.height >= ?) t where t._rn = 1 order by t.height", new Object[]{start + size, start}, new BlockMapper());
     }
 
     @Override

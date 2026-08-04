@@ -14,6 +14,7 @@ import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
 import org.apache.http.impl.conn.PoolingHttpClientConnectionManager;
 import org.apache.http.util.EntityUtils;
+import org.junit.Assume;
 import org.junit.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -34,6 +35,15 @@ public class RPCTest {
     private static final int HTTP_TIMEOUT = 5000;
     private static final Logger logger = LoggerFactory.getLogger(RPCTest.class);
     private static final JSONEncodeDecoder codec = new JSONEncodeDecoder();
+
+    /**
+     * 检查 RPC 测试所需的环境变量是否已设置。
+     * 这些测试需要运行的节点（HOST/PORT）和私钥（PRIVATE_KEY），
+     * 未设置时跳过测试而非抛出 NPE。
+     */
+    private void assumeRpcEnvAvailable() {
+        Assume.assumeNotNull(System.getenv("PRIVATE_KEY"), System.getenv("HOST"), System.getenv("PORT"));
+    }
 
     private static class Response {
         public int code;
@@ -90,6 +100,7 @@ public class RPCTest {
 
     @Test
     public void getTransactionsInMemoryPool() throws Exception {
+        assumeRpcEnvAvailable();
         Ed25519PrivateKey privateKey = new Ed25519PrivateKey(Hex.decodeHex(System.getenv("PRIVATE_KEY")));
         try {
             String address = Address.publicKeyToAddress(privateKey.generatePublicKey().getEncoded());
@@ -115,6 +126,7 @@ public class RPCTest {
     //
     @Test // 测试发送事务 采用环境变量配置
     public void postTransaction() throws Exception {
+        assumeRpcEnvAvailable();
         Ed25519PrivateKey privateKey = new Ed25519PrivateKey(Hex.decodeHex(System.getenv("PRIVATE_KEY")));
         Transaction tx = new Transaction();
         tx.version = Transaction.DEFAULT_TRANSACTION_VERSION;
@@ -172,6 +184,7 @@ public class RPCTest {
 
     @Test
     public void testGetNonce() throws Exception {
+        assumeRpcEnvAvailable();
         Ed25519PrivateKey privateKey = new Ed25519PrivateKey(Hex.decodeHex(System.getenv("PRIVATE_KEY")));
         String publicKeyHash = Hex.encodeHexString(Address.publicKeyToHash(privateKey.generatePublicKey().getEncoded()));
         getNonce(publicKeyHash)

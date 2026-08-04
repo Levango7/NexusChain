@@ -186,7 +186,7 @@ public class BlockChainOptional {
 
     public Optional<Block> getCanonicalHeader(long num) {
         try {
-            return getOne(tmpl.query("select * from header where height = ? and is_canonical = true", new Object[]{num}, new BlockMapper()));
+            return getOne(tmpl.query("select * from header where height = ? and is_canonical = true order by total_weight desc limit 1", new Object[]{num}, new BlockMapper()));
         } catch (Exception e) {
             return Optional.empty();
         }
@@ -194,7 +194,7 @@ public class BlockChainOptional {
 
     public Optional<List<Block>> getCanonicalHeaders(long start, int size) {
         try {
-            return Optional.of(tmpl.query("select * from header where height < ? and height >= ? and is_canonical = true order by height", new Object[]{start + size, start}, new BlockMapper()));
+            return Optional.of(tmpl.query("select * from (select h.*, ROW_NUMBER() OVER (PARTITION BY h.height ORDER BY h.total_weight DESC) as _rn from header h where h.height < ? and h.height >= ? and h.is_canonical = true) t where t._rn = 1 order by t.height", new Object[]{start + size, start}, new BlockMapper()));
         } catch (Exception e) {
             return Optional.empty();
         }

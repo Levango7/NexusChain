@@ -124,8 +124,8 @@ public class StableCoinPositionTest {
                     "REDEEM_STABLECOIN: 赎回金额 " + redeemAmount
                             + " 超过已铸造金额 " + position.getMintedAmount());
         }
-        // 按比例返还抵押物
-        double ratio = position.getCollateralRatio();
+        // 按比例返还抵押物（getCollateralRatio 返回百分比整数，需除以 100.0 转回小数）
+        double ratio = position.getCollateralRatio() / 100.0;
         long returnCollateral = (long) (redeemAmount * ratio);
         long newCollateral = position.getCollateralAmount() - returnCollateral;
         long newMinted = position.getMintedAmount() - redeemAmount;
@@ -152,7 +152,8 @@ public class StableCoinPositionTest {
      * @param position 仓位对象
      */
     private void checkHealth(StableCoinPosition position) {
-        State newState = classifyHealth(position.getCollateralRatio());
+        // getCollateralRatio 返回百分比整数，需除以 100.0 转回小数进行分级
+        State newState = classifyHealth(position.getCollateralRatio() / 100.0);
         position.setState(newState);
     }
 
@@ -163,7 +164,7 @@ public class StableCoinPositionTest {
      * @return 如果在水下返回 true
      */
     private boolean isUnderwater(StableCoinPosition position) {
-        return position.getCollateralRatio() < LIQUIDATION_RATIO;
+        return position.getCollateralRatio() / 100.0 < LIQUIDATION_RATIO;
     }
 
     /**
@@ -203,7 +204,7 @@ public class StableCoinPositionTest {
 
         assertEquals(3000000L, position.getCollateralAmount());
         assertEquals(1000000L, position.getMintedAmount());
-        assertEquals(3.0, position.getCollateralRatio(), 0.001);
+        assertEquals(3.0, position.getCollateralRatio() / 100.0, 0.001);
         assertEquals(State.HEALTHY, position.getState());
     }
 
@@ -220,7 +221,7 @@ public class StableCoinPositionTest {
 
         mint(position, 1500000L, 1000000L);
 
-        assertEquals(1.5, position.getCollateralRatio(), 0.001);
+        assertEquals(1.5, position.getCollateralRatio() / 100.0, 0.001);
         assertEquals(State.HEALTHY, position.getState());
     }
 
@@ -410,7 +411,7 @@ public class StableCoinPositionTest {
         // 清算后仓位清空
         assertEquals(0L, position.getCollateralAmount());
         assertEquals(0L, position.getMintedAmount());
-        assertEquals(0.0, position.getCollateralRatio(), 0.001);
+        assertEquals(0.0, position.getCollateralRatio() / 100.0, 0.001);
         assertEquals(0L, position.getLiquidationPrice());
     }
 
@@ -488,7 +489,7 @@ public class StableCoinPositionTest {
         assertEquals("nexus-owner-002", position.getOwner());
         assertEquals(2000000L, position.getCollateralAmount());
         assertEquals(1000000L, position.getMintedAmount());
-        assertEquals(2.0, position.getCollateralRatio(), 0.001);
+        assertEquals(2.0, position.getCollateralRatio() / 100.0, 0.001);
         assertEquals(1818181L, position.getLiquidationPrice());
         assertEquals(State.HEALTHY, position.getState());
     }
@@ -510,7 +511,7 @@ public class StableCoinPositionTest {
         assertEquals("nexus-owner-003", position.getOwner());
         assertEquals(5000000L, position.getCollateralAmount());
         assertEquals(2000000L, position.getMintedAmount());
-        assertEquals(2.5, position.getCollateralRatio(), 0.001);
+        assertEquals(2.5, position.getCollateralRatio() / 100.0, 0.001);
         assertEquals(2272727L, position.getLiquidationPrice());
         assertEquals(State.HEALTHY, position.getState());
     }

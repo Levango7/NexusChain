@@ -40,12 +40,21 @@ public class ContractRegistryTest {
 
     @After
     public void tearDown() throws Exception {
+        // 先关闭 LevelDB 释放 Windows 文件锁，再删除临时目录
+        if (leveldb != null) {
+            try {
+                leveldb.destroy();
+            } catch (Exception ignored) {
+            }
+        }
         if (tempDir != null && Files.exists(tempDir)) {
             deleteRecursively(tempDir);
         }
     }
 
     private ContractRegistry newRegistry(int maxListSize) throws Exception {
+        // 反射注入不会触发 @PostConstruct，需手动打开 LevelDB
+        leveldb.init();
         ContractRegistry r = new ContractRegistry();
         setField(r, "leveldb", leveldb);
         setField(r, "codec", codec);
@@ -232,7 +241,8 @@ public class ContractRegistryTest {
                 "0xdead", "0x0061736d01", "0x9f8e", 42L, 2000L, 1, ContractStatus.ACTIVE));
         assertEquals("r1 注册 2 个", 2, r1.size());
 
-        // 模拟重启：新建 ContractRegistry 实例，复用同一 Leveldb（同目录），clearCache=false 保留数据
+        // 模拟重启：先关闭旧 Leveldb 实例（释放 Windows 文件锁），再新建复用同一目录
+        leveldb.destroy();
         leveldb = new Leveldb(tempDir.toString(), false);
         ContractRegistry r2 = newRegistry(100);
 
@@ -269,7 +279,9 @@ public class ContractRegistryTest {
         assertEquals(1, r1.size());
 
         // 重启但 enabled=false，应跳过加载
+        leveldb.destroy();
         leveldb = new Leveldb(tempDir.toString(), false);
+        leveldb.init();
         ContractRegistry r2 = new ContractRegistry();
         setField(r2, "leveldb", leveldb);
         setField(r2, "codec", codec);

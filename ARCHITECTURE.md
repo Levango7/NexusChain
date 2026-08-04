@@ -33,10 +33,18 @@ Blockchain is the foundational settlement layer — not the product itself. On t
 | nexus-java-sdk | Legacy Java SDK (migrated to nexus-sdk) | Deprecated |
 | nexus-js-sdk | Legacy JS SDK (migrated to nexus-sdk) | Deprecated |
 
+## Consensus
+
+- **nexus-core**: DPoS (Delegated Proof of Stake) — validators are elected by stake-weighted voting (`ProposersState`). Block proposers rotate via time-window scheduling; lightweight hash verification substitutes for traditional PoW.
+  - Minimum proposer mortgage: 100,000 NEX
+  - Maximum active proposers: 15
+  - Vote decay: 10% per 2,160 eras
+- **nexus-consortium**: PoA (Proof of Authority) — permissioned validator set, proposer round-robin (`PoAMiner`), 国密 SM2/3/4 crypto stack.
+
 ## Technology Stack
 
 - **Language**: Java 17
-- **Framework**: Spring Boot — root build pins `2.7.18`, `nexus-gateway` uses `3.2.5` (version drift under reconciliation; see audit report B1)
+- **Framework**: Spring Boot — unified to `3.2.5` across all modules (managed via Spring Boot BOM and io.spring.dependency-management plugin)
 - **Build**: Gradle 7.6+ with toolchain auto-provisioning
 - **Database**: PostgreSQL (production), H2 (dev/sandbox)
 - **P2P**: gRPC + Protobuf

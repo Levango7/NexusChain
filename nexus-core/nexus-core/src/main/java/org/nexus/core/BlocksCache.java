@@ -126,7 +126,7 @@ public class BlocksCache {
         List<List<Block>> res = new ArrayList<>();
         for (String k : getLeavesHash()) {
             List<Block> chain = getAncestors(k);
-            chain.add(blocks.get(k));
+
             res.add(chain);
         }
         if (res.size() > 1) {
