@@ -67,6 +67,14 @@ public class StableCoinService {
     @Value("${nexus.stablecoin.min-ratio:150}")
     private int minCollateralRatio;
 
+    /** 稳定币锚定价格（如 USDT 锚定 USD 为 1.00）。 */
+    @Value("${nexus.stablecoin.peg-price:1.00}")
+    private String pegPrice;
+
+    /** 价格来源标识（如 PEG / oracle / exchange）。 */
+    @Value("${nexus.stablecoin.price-source:PEG}")
+    private String priceSource;
+
     @Autowired
     private TransactionPool txPool;
 
@@ -261,7 +269,11 @@ public class StableCoinService {
     /**
      * 查询稳定币当前价格。
      *
-     * <p>骨架实现：返回固定价格 1.00。后续可接入价格预言机获取最新价格。</p>
+     * <p>返回锚定价格（peg price）。稳定币以抵押机制锚定法币价值，
+     * 价格由 {@code nexus.stablecoin.peg-price} 配置决定（默认 1.00）；
+     * 来源标识由 {@code nexus.stablecoin.price-source} 配置决定（默认 PEG）。
+     * 若需接入实时价格预言机，将 price-source 配置为 oracle 并由外部
+     * 喂价任务更新 peg-price 即可。</p>
      *
      * @return 统一响应结果，data 中包含价格信息
      */
@@ -269,8 +281,8 @@ public class StableCoinService {
         try {
             Map<String, Object> priceInfo = new LinkedHashMap<>();
             priceInfo.put("symbol", symbol);
-            priceInfo.put("price", "1.00");
-            priceInfo.put("source", "oracle");
+            priceInfo.put("price", pegPrice);
+            priceInfo.put("source", priceSource);
             priceInfo.put("timestamp", System.currentTimeMillis() / 1000);
 
             return APIResult.newSuccess(priceInfo);

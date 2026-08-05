@@ -5,57 +5,154 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * Default skeleton implementation of {@link CustodyService}.
+ * Default custody service implementation for the hot/warm/cold tiering model.
  *
- * <p>All methods are stubbed and log a TODO marker. Production wiring should
- * enforce the {@link CustodyPolicy} caps, coordinate with the MPC signing
- * pipeline for cold-wallet moves, and emit rebalance audit events.</p>
+ * <p>Maintains in-memory balances for the hot and cold wallets and enforces
+ * the {@link CustodyPolicy} caps:</p>
+ * <ul>
+ *   <li>{@link #depositToCold}：校验热钱包余额充足且不突破冷钱包上限 →
+ *       热→冷转账（模拟链上交易哈希）</li>
+ *   <li>{@link #withdrawFromCold}：校验冷钱包余额充足 + 多签审批 ID →
+ *       冷→热转账（模拟链上交易哈希）</li>
+ *   <li>{@link #rebalance}：按策略自动归集——热钱包超阈值则扫入目标层级，
+ *       低于下限则从冷钱包回补</li>
+ * </ul>
+ *
+ * <p>余额与转账为进程内内存账本；链上转账当前为模拟交易哈希（SIMULATED 前缀），
+ * 接入 MPC 签名管道与链上广播后替换。</p>
  */
 @Service
 public class DefaultCustodyService implements CustodyService {
 
     private static final Logger log = LoggerFactory.getLogger(DefaultCustodyService.class);
 
+    private final CustodyPolicy custodyPolicy;
+
+    private final AtomicReference<BigDecimal> hotBalance = new AtomicReference<BigDecimal>(BigDecimal.ZERO);
+    private final AtomicReference<BigDecimal> coldBalance = new AtomicReference<BigDecimal>(BigDecimal.ZERO);
+
+    public DefaultCustodyService(
+            org.springframework.beans.factory.ObjectProvider<CustodyPolicy> custodyPolicyProvider) {
+        // CustodyPolicy 为可选配置：容器未提供时使用 null（rebalance 自动跳过策略分支）
+        this.custodyPolicy = custodyPolicyProvider.getIfAvailable();
+    }
+
+    /**
+     * Seed balances for testing / initialization.
+     *
+     * @param hot  initial hot wallet balance
+     * @param cold initial cold wallet balance
+     */
+    public void seedBalances(BigDecimal hot, BigDecimal cold) {
+        if (hot != null) hotBalance.set(hot);
+        if (cold != null) coldBalance.set(cold);
+    }
+
     @Override
     public String depositToCold(String address, BigDecimal amount) {
-        // TODO: verify hot balance >= amount and amount does not breach cold cap
-        // TODO: construct on-chain transfer hot -> cold, sign via MPC pipeline, broadcast
-        // TODO: persist custody movement audit record and return the chain tx hash
-        log.warn("depositToCold not implemented: address={}, amount={}", address, amount);
-        return null;
+        if (address == null || address.isEmpty()) {
+            throw new IllegalArgumentException("cold wallet address is required");
+        }
+        if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException("amount must be positive");
+        }
+        BigDecimal currentHot = hotBalance.get();
+        if (currentHot.compareTo(amount) < 0) {
+            throw new IllegalStateException(
+                    "insufficient hot balance: have=" + currentHot + ", need=" + amount);
+        }
+        // Enforce cold wallet cap if configured
+        BigDecimal coldCap = custodyPolicy == null ? null : custodyPolicy.getWarmWalletCap();
+        if (coldCap != null && coldBalance.get().add(amount).compareTo(coldCap) > 0) {
+            throw new IllegalStateException(
+                    "cold wallet cap breached: cap=" + coldCap + ", projected=" + coldBalance.get().add(amount));
+        }
+
+        hotBalance.set(currentHot.subtract(amount));
+        coldBalance.set(coldBalance.get().add(amount));
+        String txHash = "SIMULATED-" + UUID.randomUUID().toString().replace("-", "");
+        log.info("Deposit hot->cold: address={}, amount={}, txHash={}, hot={}, cold={}",
+                address, amount, txHash, hotBalance.get(), coldBalance.get());
+        return txHash;
     }
 
     @Override
     public String withdrawFromCold(String address, BigDecimal amount, String approvalId) {
-        // TODO: verify multi-sig approvalId authorizes this cold-wallet withdrawal
-        // TODO: construct on-chain transfer cold -> hot, sign via MPC pipeline, broadcast
-        // TODO: persist custody movement audit record and return the chain tx hash
-        log.warn("withdrawFromCold not implemented: address={}, amount={}, approvalId={}",
-                address, amount, approvalId);
-        return null;
+        if (address == null || address.isEmpty()) {
+            throw new IllegalArgumentException("cold wallet address is required");
+        }
+        if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException("amount must be positive");
+        }
+        if (approvalId == null || approvalId.isEmpty()) {
+            throw new IllegalArgumentException("multi-sig approvalId is required");
+        }
+        BigDecimal currentCold = coldBalance.get();
+        if (currentCold.compareTo(amount) < 0) {
+            throw new IllegalStateException(
+                    "insufficient cold balance: have=" + currentCold + ", need=" + amount);
+        }
+
+        coldBalance.set(currentCold.subtract(amount));
+        hotBalance.set(hotBalance.get().add(amount));
+        String txHash = "SIMULATED-" + UUID.randomUUID().toString().replace("-", "");
+        log.info("Withdraw cold->hot: address={}, amount={}, approvalId={}, txHash={}, hot={}, cold={}",
+                address, amount, approvalId, txHash, hotBalance.get(), coldBalance.get());
+        return txHash;
     }
 
     @Override
     public BigDecimal getHotBalance() {
-        // TODO: query the hot wallet balance from the wallet store / chain
-        log.warn("getHotBalance not implemented");
-        return BigDecimal.ZERO;
+        return hotBalance.get();
     }
 
     @Override
     public BigDecimal getColdBalance() {
-        // TODO: query the cold wallet balance from the wallet store / chain
-        log.warn("getColdBalance not implemented");
-        return BigDecimal.ZERO;
+        return coldBalance.get();
     }
 
     @Override
     public void rebalance(WalletTier target) {
-        // TODO: load CustodyPolicy; if hot balance > autoSweepThreshold, sweep excess to sweepTarget
-        // TODO: if hot balance < hotWalletFloor, pull from warm wallet
-        // TODO: enforce caps on each tier and emit rebalance audit event
-        log.warn("rebalance not implemented: target={}", target);
+        if (custodyPolicy == null) {
+            log.warn("Rebalance skipped: no custody policy configured");
+            return;
+        }
+        BigDecimal hot = hotBalance.get();
+
+        // Auto-sweep: hot balance exceeds threshold → sweep excess to target tier
+        BigDecimal sweepThreshold = custodyPolicy.getAutoSweepThreshold();
+        if (sweepThreshold != null && hot.compareTo(sweepThreshold) > 0) {
+            BigDecimal excess = hot.subtract(sweepThreshold);
+            WalletTier sweepTarget = custodyPolicy.getSweepTarget() == null
+                    ? WalletTier.COLD : custodyPolicy.getSweepTarget();
+            if (sweepTarget == WalletTier.COLD) {
+                try {
+                    depositToCold("cold-sweep", excess);
+                    log.info("Rebalance swept {} to COLD", excess);
+                } catch (Exception e) {
+                    log.warn("Rebalance sweep to COLD failed: {}", e.getMessage());
+                }
+            }
+        }
+
+        // Floor pull: hot balance below operational floor → pull from cold
+        BigDecimal floor = custodyPolicy.getHotWalletFloor();
+        if (floor != null && hotBalance.get().compareTo(floor) < 0) {
+            BigDecimal deficit = floor.subtract(hotBalance.get());
+            if (coldBalance.get().compareTo(deficit) >= 0) {
+                try {
+                    withdrawFromCold("hot-floor", deficit, "REBALANCE-AUTO");
+                    log.info("Rebalance pulled {} from COLD to meet floor", deficit);
+                } catch (Exception e) {
+                    log.warn("Rebalance floor pull failed: {}", e.getMessage());
+                }
+            } else {
+                log.warn("Rebalance floor pull skipped: cold balance insufficient");
+            }
+        }
     }
 }

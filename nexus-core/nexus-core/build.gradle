@@ -118,6 +118,10 @@ dependencies {
 
     implementation "org.springframework.boot:spring-boot-starter-web:3.2.5"
 
+    // Chicory: pure-Java WASM interpreter for native contract execution (no native deps)
+    implementation group: 'com.dylibso.chicory', name: 'wasm', version: '0.0.12'
+    implementation group: 'com.dylibso.chicory', name: 'runtime', version: '0.0.12'
+
     implementation group: 'com.google.code.gson', name: 'gson', version: '2.10.1'
     implementation group: 'org.bouncycastle', name: 'bcprov-jdk15on', version: "${bouncyCastleVersion}"
     implementation group: 'com.kosprov.jargon2', name: 'jargon2-api', version: '1.1.1'

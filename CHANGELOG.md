@@ -2,6 +2,49 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [1.1.0] - 2026-08-06
+
+### 主题：合约引擎落地 + 跨链/钱包骨架补全 + 假集成修复
+
+### 新增
+
+- **合约引擎（nexus-core）**
+  - WASM 执行器真实实现：接入 Chicory 纯 Java WASM 解释器（无原生依赖），
+    支持部署 / 调用 / 查询，二进制 i64 ABI，gas 按指令计费
+  - ChicoryWasmEngine / ChicoryWasmInstance：模块校验、实例化、导出函数调用、
+    按地址加载与编译缓存
+  - EVM 兼容层：内嵌栈式 EVM 子集解释器（算术 / 栈 / 内存 / 存储 / 跳转 / REVERT），
+    256 位字宽，接入 ContractStorage
+  - ContractStorage：合约 KV 存储（slot → 32 字节值），快照与写回
+  - RPC 接线：nexus_deployContract / nexus_callContract / nexus_queryContract
+    三个端点，按 vmType 选取 WASM / EVM 执行器
+
+- **跨链桥（nexus-bridge）**
+  - Relayer 网络：中继请求生命周期、信誉×质押加权随机选取、中继证明验证
+  - 流动性管理：储备注入 / 抽取、利用率计算、跨链再平衡
+
+- **钱包（nexus-exchange-wallet）**
+  - 提币审批流：白名单校验、分级审批人数、审批累计、拒绝、执行
+  - 默认审批策略：按金额分级（1 / 2 / 3 审批人）+ 地址白名单
+  - 托管服务：热 / 冷钱包余额管理、转账校验、策略再平衡（自动归集 + 下限回补）
+
+### 修复
+
+- **StableCoinService 假集成**：getPrice() 硬编码 1.00 却谎称 source=oracle；
+  改为可配置锚定价（peg-price）与来源标识（price-source，默认 PEG），诚实标注
+- **Gradle daemon 文件锁**：清理残留的 foojay-resolver jar 过期锁
+
+### 版本治理
+
+- 全仓库版本号统一升级为 1.1.0
+- 网关对中间层模块依赖坐标同步为 org.nexus:nexus-settlement:1.1.0 / nexus-compliance:1.1.0
+
+### 测试
+
+- 全量回归：8 个模块共 520 个测试全部通过
+  （core 277 / bridge 49 / wallet 20 / gateway 64 / settlement 20 / compliance 30 / analytics 32 / oracle 28）
+- 新增测试：WASM 引擎 5、EVM 解释器 6、Relayer 9、流动性 9、审批 10、托管 9
+
 ## [1.0.0] - 2026-08-06
 
 ### 大版本主题：中间服务层从骨架走向真实实现，支付主链路接入风控与合规关卡

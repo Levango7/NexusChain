@@ -36,6 +36,8 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.apache.commons.codec.DecoderException;
 import org.apache.commons.codec.binary.Hex;
+import org.nexus.contract.engine.ContractExecutor;
+import org.nexus.contract.engine.ExecutionResult;
 import org.nexus.core.NexusChainBlockChain;
 import org.nexus.core.Block;
 import org.nexus.core.account.AccountDB;
@@ -88,6 +90,13 @@ public class JsonRpcController {
     // 合约注册表（@Autowired(required=false) 兼容 registry-enabled=false 或 Spring 排除场景）
     @Autowired(required = false)
     ContractRegistry contractRegistry;
+
+    // 合约执行器（WASM 原生 / EVM 兼容），required=false 兼容无执行器装配场景
+    @Autowired(required = false)
+    ContractExecutor wasmExecutor;
+
+    @Autowired(required = false)
+    ContractExecutor evmExecutor;
 
     // 链 ID 外部化配置（core application.yml 可设 nexus.chain-id，默认 0 待真机填真实值）
     @Value("${nexus.chain-id:0}")
@@ -156,6 +165,13 @@ public class JsonRpcController {
                     return doGetContract(params);
                 case "nexus_registerContract":
                     return doRegisterContract(params);
+                // —— 合约执行：部署 / 调用 / 查询（WASM 原生 + EVM 兼容）——
+                case "nexus_deployContract":
+                    return doDeployContract(params);
+                case "nexus_callContract":
+                    return doInvokeContract(params, true);
+                case "nexus_queryContract":
+                    return doInvokeContract(params, false);
                 default:
                     return error(CODE_METHOD_NOT_FOUND, "method not found: " + method, 0);
             }
@@ -502,6 +518,109 @@ public class JsonRpcController {
         m.put("address", address);
         m.put("registered", true);
         return m;
+    }
+
+    // ✅ 合约部署：params: [codeHex, abi, vmType("wasm"|"evm"，默认 wasm)]
+    //    校验字节码 → 交由对应执行器部署（计算地址、注册到 ContractRegistry）
+    private Object doDeployContract(ArrayNode params) {
+        ContractExecutor executor = resolveExecutor(params);
+        if (executor == null) {
+            return error(CODE_INTERNAL, "contract executor unavailable", 0);
+        }
+        if (params.size() < 1 || params.get(0).isNull()) {
+            return error(CODE_CONTRACT_INVALID, "missing param: code", 0);
+        }
+        String codeHex = params.get(0).asText();
+        String cleanHex = codeHex.startsWith("0x") || codeHex.startsWith("0X")
+                ? codeHex.substring(2) : codeHex;
+        byte[] code;
+        try {
+            code = Hex.decodeHex(cleanHex.toCharArray());
+        } catch (DecoderException e) {
+            return error(CODE_CONTRACT_INVALID, "invalid hex code: " + e.getMessage(), 0);
+        }
+        if (code.length == 0) {
+            return error(CODE_CONTRACT_INVALID, "empty bytecode", 0);
+        }
+        String abi = (params.size() > 1 && !params.get(1).isNull())
+                ? (params.get(1).isTextual() ? params.get(1).asText() : params.get(1).toString())
+                : "[]";
+        try {
+            String address = executor.deploy(code, abi);
+            Map<String, Object> m = new HashMap<>();
+            m.put("address", address);
+            m.put("deployed", true);
+            return m;
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            return error(CODE_CONTRACT_INVALID, e.getMessage(), 0);
+        }
+    }
+
+    // ✅ 合约调用/查询：params: [address, method, args(数组), vmType("wasm"|"evm"，默认 wasm)]
+    //    mutating=true 走 call（写状态），false 走 query（只读）
+    private Object doInvokeContract(ArrayNode params, boolean mutating) {
+        ContractExecutor executor = resolveExecutor(params);
+        if (executor == null) {
+            return error(CODE_INTERNAL, "contract executor unavailable", 0);
+        }
+        if (params.size() < 2) {
+            return error(CODE_CONTRACT_INVALID,
+                    "missing params: expected [address, method, args?, vmType?]", 0);
+        }
+        String address = params.get(0).asText();
+        if (!isValidAddress(address)) {
+            return error(CODE_CONTRACT_INVALID, "invalid address: " + address, 0);
+        }
+        String method = params.get(1).asText();
+        List<Object> args = new ArrayList<>();
+        if (params.size() > 2 && params.get(2).isArray()) {
+            for (JsonNode arg : params.get(2)) {
+                if (arg.isNumber()) {
+                    args.add(arg.numberValue());
+                } else if (arg.isBoolean()) {
+                    args.add(arg.booleanValue());
+                } else {
+                    args.add(arg.asText());
+                }
+            }
+        }
+        ExecutionResult result = mutating
+                ? executor.call(address, method, args)
+                : executor.query(address, method, args);
+
+        ObjectNode n = MAPPER.createObjectNode();
+        n.put("success", result.isSuccess());
+        n.put("gasUsed", result.getGasUsed());
+        if (result.isSuccess()) {
+            if (result.getReturnValue() == null) {
+                n.putNull("returnValue");
+            } else if (result.getReturnValue() instanceof Number) {
+                n.put("returnValue", result.getReturnValue().toString());
+            } else {
+                n.put("returnValue", String.valueOf(result.getReturnValue()));
+            }
+            ArrayNode logs = n.putArray("logs");
+            if (result.getLogs() != null) {
+                for (String l : result.getLogs()) {
+                    logs.add(l);
+                }
+            }
+        } else {
+            n.put("error", result.getErrorMessage() == null ? "unknown" : result.getErrorMessage());
+        }
+        return n;
+    }
+
+    // 按 vmType 参数（第 4 参，默认 wasm）选取执行器
+    private ContractExecutor resolveExecutor(ArrayNode params) {
+        String vmType = "wasm";
+        if (params.size() > 3 && !params.get(3).isNull()) {
+            vmType = params.get(3).asText("wasm").toLowerCase(java.util.Locale.ROOT);
+        }
+        if ("evm".equals(vmType)) {
+            return evmExecutor;
+        }
+        return wasmExecutor;
     }
 
     // ---- RegisteredContract → RpcContract 列表项（精简形状，无 wasmCode/abi）----
