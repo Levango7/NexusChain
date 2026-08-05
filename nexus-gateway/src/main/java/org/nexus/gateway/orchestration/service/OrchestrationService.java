@@ -5,6 +5,9 @@ import org.nexus.gateway.orchestration.model.OrchPaymentStatus;
 import org.nexus.gateway.orchestration.model.OrchestratedPayment;
 import org.nexus.gateway.orchestration.repository.OrchestratedPaymentRepository;
 import org.nexus.gateway.orchestration.routing.RoutingEngine;
+import org.nexus.gateway.risk.PaymentRequest;
+import org.nexus.gateway.risk.PaymentRiskService;
+import org.nexus.gateway.risk.RiskDecision;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
@@ -13,6 +16,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -30,17 +34,20 @@ public class OrchestrationService {
     private final ConnectorRegistry connectorRegistry;
     private final OrchestrationIdempotencyStore idempotencyStore;
     private final OrchestrationWebhookDispatcher webhookDispatcher;
+    private final PaymentRiskService riskService;
 
     public OrchestrationService(OrchestratedPaymentRepository repo,
                                 RoutingEngine routingEngine,
                                 ConnectorRegistry connectorRegistry,
                                 OrchestrationIdempotencyStore idempotencyStore,
-                                OrchestrationWebhookDispatcher webhookDispatcher) {
+                                OrchestrationWebhookDispatcher webhookDispatcher,
+                                PaymentRiskService riskService) {
         this.repo = repo;
         this.routingEngine = routingEngine;
         this.connectorRegistry = connectorRegistry;
         this.idempotencyStore = idempotencyStore;
         this.webhookDispatcher = webhookDispatcher;
+        this.riskService = riskService;
     }
 
     @Transactional
@@ -63,6 +70,12 @@ public class OrchestrationService {
 
         String paymentId = "pay_" + UUID.randomUUID().toString().replace("-", "");
 
+        // Risk gate: evaluate before routing to connectors. REJECTED/FROZEN -> FAILED immediately.
+        PaymentRequest riskRequest = new PaymentRequest(
+                merchantId, null, BigDecimal.valueOf(amount), currency);
+        riskRequest.setIdempotencyKey(requestId);
+        RiskDecision riskDecision = riskService.evaluatePayment(riskRequest);
+
         OrchestratedPayment payment = new OrchestratedPayment();
         payment.setId(paymentId);
         payment.setMerchantId(merchantId);
@@ -72,8 +85,21 @@ public class OrchestrationService {
         payment.setNotifyUrl(notifyUrl);
         payment.setMetadata(metadata);
         payment.setRequestId(requestId);
-        payment.setStatus(OrchPaymentStatus.CREATED);
         payment.setRoutingStrategy(preferredConnector != null ? "explicit" : "priority");
+
+        if (riskDecision == RiskDecision.REJECTED || riskDecision == RiskDecision.FROZEN) {
+            payment.setStatus(OrchPaymentStatus.FAILED);
+            persist(requestId, payment);
+            log.warn("Orchestrated payment rejected by risk control: paymentId={}, merchantId={}, decision={}",
+                    paymentId, merchantId, riskDecision);
+            return payment;
+        }
+        if (riskDecision == RiskDecision.PENDING_REVIEW) {
+            log.info("Orchestrated payment flagged for manual risk review: paymentId={}, merchantId={}",
+                    paymentId, merchantId);
+        }
+
+        payment.setStatus(OrchPaymentStatus.CREATED);
 
         // Route to connectors
         List<PaymentConnector> connectors = routingEngine.resolve(currency, amount, preferredConnector);

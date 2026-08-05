@@ -6,7 +6,7 @@ plugins {
 }
 
 group = 'org.nexus'
-version = '1.0.0-SNAPSHOT'
+version = '1.0.0'
 
 java {
     toolchain {
@@ -46,6 +46,10 @@ dependencies {
     // Utilities
     implementation 'com.fasterxml.jackson.core:jackson-databind'
     implementation 'org.apache.commons:commons-lang3'
+
+    // 中间服务层（composite build 依赖替换，见根 settings.gradle 的 includeBuild）
+    implementation 'org.nexus:nexus-settlement:1.0.0'
+    implementation 'org.nexus:nexus-compliance:1.0.0'
 
     // Testing
     testImplementation 'org.springframework.boot:spring-boot-starter-test'

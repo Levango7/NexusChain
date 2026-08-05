@@ -27,6 +27,13 @@ nexus:
     skip-confirmation: true
   exchange-wallet:
     base-url: http://localhost:8081
+  # Risk rule overrides for sandbox: integration tests use amounts up to 500000
+  # and the concurrency stress test bursts >10 orders/merchant within 60s, so the
+  # production defaults would falsely reject them.
+  settlement:
+    risk:
+      amount-threshold: 1000000000
+      velocity-max-count: 10000
 
 logging:
   level:

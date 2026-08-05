@@ -3,12 +3,19 @@ package org.nexus.gateway.service;
 import org.nexus.gateway.PaymentService;
 import org.nexus.gateway.client.ChainRpcClient;
 import org.nexus.gateway.client.ExchangeWalletClient;
+import org.nexus.gateway.compliance.AmlResult;
+import org.nexus.gateway.compliance.ComplianceService;
+import org.nexus.gateway.compliance.KycStatus;
 import org.nexus.gateway.config.GatewayConfig;
 import org.nexus.gateway.dto.PaymentResult;
 import org.nexus.gateway.model.PaymentOrder;
 import org.nexus.gateway.model.Refund;
 import org.nexus.gateway.repository.PaymentOrderRepository;
 import org.nexus.gateway.repository.RefundRepository;
+import org.nexus.gateway.risk.PaymentRequest;
+import org.nexus.gateway.risk.PaymentRiskService;
+import org.nexus.gateway.risk.RefundRequest;
+import org.nexus.gateway.risk.RiskDecision;
 import org.springframework.context.ApplicationEventPublisher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -35,6 +42,8 @@ public class PaymentServiceImpl implements PaymentService {
     private final ExchangeWalletClient walletClient;
     private final ApplicationEventPublisher eventPublisher;
     private final KeyManager keyManager;
+    private final PaymentRiskService riskService;
+    private final ComplianceService complianceService;
 
     public PaymentServiceImpl(PaymentOrderRepository orderRepository,
                               RefundRepository refundRepository,
@@ -42,7 +51,9 @@ public class PaymentServiceImpl implements PaymentService {
                               ChainRpcClient chainRpcClient,
                               ExchangeWalletClient walletClient,
                               ApplicationEventPublisher eventPublisher,
-                              KeyManager keyManager) {
+                              KeyManager keyManager,
+                              PaymentRiskService riskService,
+                              ComplianceService complianceService) {
         this.orderRepository = orderRepository;
         this.refundRepository = refundRepository;
         this.gatewayConfig = gatewayConfig;
@@ -50,6 +61,8 @@ public class PaymentServiceImpl implements PaymentService {
         this.walletClient = walletClient;
         this.eventPublisher = eventPublisher;
         this.keyManager = keyManager;
+        this.riskService = riskService;
+        this.complianceService = complianceService;
     }
 
     @Override
@@ -67,6 +80,28 @@ public class PaymentServiceImpl implements PaymentService {
             orderRepository.save(order);
             return PaymentResult.failed(order.getOrderNo(), "Order has expired");
         }
+
+        // Risk gate: evaluate before entering PAYING. REJECTED/FROZEN -> FAILED (terminal for this attempt);
+        // PENDING_REVIEW is logged and allowed through until a review queue exists.
+        PaymentRequest riskRequest = new PaymentRequest(
+                order.getMerchantId(), payerAddress, order.getAmount(), order.getTokenSymbol());
+        riskRequest.setIdempotencyKey(order.getOrderNo());
+        RiskDecision riskDecision = riskService.evaluatePayment(riskRequest);
+        if (riskDecision == RiskDecision.REJECTED || riskDecision == RiskDecision.FROZEN) {
+            OrderStateMachine.transition(order, PaymentOrder.OrderStatus.FAILED);
+            orderRepository.save(order);
+            log.warn("Payment rejected by risk control: orderNo={}, merchantId={}, decision={}",
+                    order.getOrderNo(), order.getMerchantId(), riskDecision);
+            return PaymentResult.failed(order.getOrderNo(), "Payment rejected by risk control (" + riskDecision + ")");
+        }
+        if (riskDecision == RiskDecision.PENDING_REVIEW) {
+            log.info("Payment flagged for manual risk review: orderNo={}, merchantId={}",
+                    order.getOrderNo(), order.getMerchantId());
+        }
+
+        // KYC observability: record payer verification level (non-blocking until KYC data exists)
+        KycStatus kycStatus = complianceService.checkKyc(payerAddress);
+        log.info("Payer KYC status: payer={}, status={}", payerAddress, kycStatus);
 
         order.setPayerAddress(payerAddress);
         OrderStateMachine.transition(order, PaymentOrder.OrderStatus.PAYING);
@@ -97,6 +132,32 @@ public class PaymentServiceImpl implements PaymentService {
             return PaymentResult.failed(order.getOrderNo(), "Transaction not yet confirmed on chain");
         }
 
+        // AML gate: screen the confirmed transaction before marking it PAID.
+        // High-risk hits (score >= 90 or manual review required) block the payment
+        // and file a Suspicious Activity Report; lower scores pass with a warning log.
+        org.nexus.gateway.compliance.Transaction amlTx = new org.nexus.gateway.compliance.Transaction(
+                order.getOrderNo(), order.getAmount(), order.getTokenSymbol());
+        amlTx.setMerchantId(order.getMerchantId());
+        amlTx.setFromAddress(order.getPayerAddress());
+        amlTx.setToAddress(order.getPayeeAddress());
+        amlTx.setChainTxHash(chainTxHash);
+
+        AmlResult amlResult = complianceService.screenAml(amlTx);
+        boolean amlBlock = amlResult != null
+                && (Boolean.TRUE.equals(amlResult.getNeedsManualReview())
+                    || (amlResult.getRiskScore() != null && amlResult.getRiskScore() >= 90));
+        if (amlBlock) {
+            complianceService.reportSuspicious(amlTx,
+                    "AML screening block: score=" + amlResult.getRiskScore()
+                            + ", hits=" + amlResult.getHitLists());
+            OrderStateMachine.transition(order, PaymentOrder.OrderStatus.FAILED);
+            order.setChainTxHash(chainTxHash);
+            orderRepository.save(order);
+            log.warn("Payment blocked by AML screening: orderNo={}, txHash={}, score={}",
+                    order.getOrderNo(), chainTxHash, amlResult.getRiskScore());
+            return PaymentResult.failed(order.getOrderNo(), "Payment blocked by compliance screening");
+        }
+
         order.setChainTxHash(chainTxHash);
         OrderStateMachine.transition(order, PaymentOrder.OrderStatus.PAID);
         order.setPaidAt(LocalDateTime.now());
@@ -124,6 +185,16 @@ public class PaymentServiceImpl implements PaymentService {
 
         if (amount.compareTo(order.getAmount()) > 0) {
             throw new IllegalArgumentException("Refund amount exceeds order amount");
+        }
+
+        // Risk gate: evaluate refund before executing the transfer.
+        RefundRequest riskRequest = new RefundRequest(orderId, order.getMerchantId(), amount, reason);
+        riskRequest.setReceiverAddress(order.getPayerAddress());
+        RiskDecision refundDecision = riskService.evaluateRefund(riskRequest);
+        if (refundDecision == RiskDecision.REJECTED || refundDecision == RiskDecision.FROZEN) {
+            log.warn("Refund rejected by risk control: orderId={}, merchantId={}, decision={}",
+                    orderId, order.getMerchantId(), refundDecision);
+            throw new IllegalStateException("Refund rejected by risk control (" + refundDecision + ")");
         }
 
         Refund refund = new Refund();

@@ -5,7 +5,7 @@ plugins {
 }
 
 group = 'org.nexus'
-version = '0.0.4-SNAPSHOT'
+version = '1.0.0'
 
 java {
     sourceCompatibility = 17
@@ -21,6 +21,7 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     implementation 'com.fasterxml.jackson.core:jackson-databind:2.15.4'
+    implementation 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.15.4'
     compileOnly 'org.projectlombok:lombok:1.18.32'
     annotationProcessor 'org.projectlombok:lombok:1.18.32'
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
@@ -29,4 +30,15 @@ dependencies {
 
 test {
     useJUnitPlatform()
+}
+
+// 本模块是供其他应用消费的库（无 main class），不产出 Spring Boot fat jar：
+// 关闭 bootJar、启用普通 jar，否则消费方无法解析编译类路径。
+bootJar {
+    enabled = false
+}
+
+jar {
+    enabled = true
+    archiveClassifier = ''
 }

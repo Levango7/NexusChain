@@ -18,7 +18,7 @@ public class OpenApiConfig {
                 .info(new Info()
                         .title("NexusChain Gateway API")
                         .description("NexusChain merchant payment gateway - order, payment, subscription, and webhook APIs")
-                        .version("0.1.0-alpha")
+                        .version("1.0.0")
                         .contact(new Contact().name("NexusChain Team")))
                 .addSecurityItem(new SecurityRequirement().addList("ApiKeyAuth"))
                 .components(new Components()

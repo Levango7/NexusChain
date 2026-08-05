@@ -2,12 +2,16 @@ package org.nexus.gateway;
 
 import org.nexus.gateway.client.ChainRpcClient;
 import org.nexus.gateway.client.ExchangeWalletClient;
+import org.nexus.gateway.compliance.ComplianceService;
+import org.nexus.gateway.compliance.KycStatus;
 import org.nexus.gateway.config.GatewayConfig;
 import org.nexus.gateway.dto.PaymentResult;
 import org.nexus.gateway.event.PaymentConfirmedEvent;
 import org.nexus.gateway.model.PaymentOrder;
 import org.nexus.gateway.repository.PaymentOrderRepository;
 import org.nexus.gateway.repository.RefundRepository;
+import org.nexus.gateway.risk.PaymentRiskService;
+import org.nexus.gateway.risk.RiskDecision;
 import org.nexus.gateway.security.KeyManager;
 import org.nexus.gateway.service.PaymentServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
@@ -41,6 +45,8 @@ class PaymentServiceTest {
     @Mock private ExchangeWalletClient walletClient;
     @Mock private ApplicationEventPublisher eventPublisher;
     @Mock private KeyManager keyManager;
+    @Mock private PaymentRiskService riskService;
+    @Mock private ComplianceService complianceService;
 
     private GatewayConfig gatewayConfig;
     private PaymentServiceImpl paymentService;
@@ -53,7 +59,15 @@ class PaymentServiceTest {
         gatewayConfig.getCheckout().setBaseUrl("http://localhost:8080/api/v1/checkout");
         paymentService = new PaymentServiceImpl(
                 orderRepository, refundRepository, gatewayConfig,
-                chainRpcClient, walletClient, eventPublisher, keyManager);
+                chainRpcClient, walletClient, eventPublisher, keyManager,
+                riskService, complianceService);
+
+        // Default risk/compliance stance for these unit tests: approve everything.
+        // Individual tests override these mocks to verify rejection paths.
+        // lenient(): not every test path reaches risk/compliance evaluation.
+        lenient().when(riskService.evaluatePayment(any())).thenReturn(RiskDecision.APPROVED);
+        lenient().when(riskService.evaluateRefund(any())).thenReturn(RiskDecision.APPROVED);
+        lenient().when(complianceService.checkKyc(any())).thenReturn(KycStatus.NONE);
 
         sampleOrder = new PaymentOrder();
         sampleOrder.setId(1L);
@@ -197,5 +211,48 @@ class PaymentServiceTest {
 
         assertThrows(IllegalArgumentException.class,
                 () -> paymentService.refund(1L, new BigDecimal("2000000"), "reason"));
+    }
+
+    // --- Risk / compliance gate tests ---
+
+    @Test
+    @DisplayName("initiatePayment: risk REJECTED transitions order to FAILED and returns failed")
+    void initiatePayment_riskRejected_transitionsToFailed() {
+        when(orderRepository.findById(1L)).thenReturn(Optional.of(sampleOrder));
+        when(orderRepository.save(any())).thenReturn(sampleOrder);
+        when(riskService.evaluatePayment(any())).thenReturn(RiskDecision.REJECTED);
+
+        PaymentResult result = paymentService.initiatePayment(1L, "0xPayerAddress");
+
+        assertEquals("FAILED", result.getStatus());
+        assertEquals(PaymentOrder.OrderStatus.FAILED, sampleOrder.getStatus());
+        assertTrue(result.getMessage().contains("risk control"));
+        verify(orderRepository).save(sampleOrder);
+    }
+
+    @Test
+    @DisplayName("initiatePayment: risk FROZEN also transitions order to FAILED")
+    void initiatePayment_riskFrozen_transitionsToFailed() {
+        when(orderRepository.findById(1L)).thenReturn(Optional.of(sampleOrder));
+        when(orderRepository.save(any())).thenReturn(sampleOrder);
+        when(riskService.evaluatePayment(any())).thenReturn(RiskDecision.FROZEN);
+
+        PaymentResult result = paymentService.initiatePayment(1L, "0xPayerAddress");
+
+        assertEquals("FAILED", result.getStatus());
+        assertEquals(PaymentOrder.OrderStatus.FAILED, sampleOrder.getStatus());
+    }
+
+    @Test
+    @DisplayName("refund: risk REJECTED throws IllegalStateException before transfer")
+    void refund_riskRejected_throws() {
+        sampleOrder.setStatus(PaymentOrder.OrderStatus.PAID);
+        when(orderRepository.findById(1L)).thenReturn(Optional.of(sampleOrder));
+        when(riskService.evaluateRefund(any())).thenReturn(RiskDecision.REJECTED);
+
+        IllegalStateException ex = assertThrows(IllegalStateException.class,
+                () -> paymentService.refund(1L, new BigDecimal("100"), "reason"));
+        assertTrue(ex.getMessage().contains("risk control"));
+        verify(refundRepository, never()).save(any());
     }
 }

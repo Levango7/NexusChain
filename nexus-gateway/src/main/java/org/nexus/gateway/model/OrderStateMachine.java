@@ -6,7 +6,7 @@ import java.util.*;
  * Explicit order state machine with guarded transitions.
  *
  * Valid transitions:
- *   PENDING  -> PAYING, EXPIRED
+ *   PENDING  -> PAYING, EXPIRED, FAILED (risk/compliance rejection)
  *   PAYING   -> PAID, FAILED, EXPIRED
  *   PAID     -> REFUNDED
  *   EXPIRED  -> (terminal)
@@ -21,7 +21,8 @@ public final class OrderStateMachine {
         Map<PaymentOrder.OrderStatus, Set<PaymentOrder.OrderStatus>> map = new EnumMap<>(PaymentOrder.OrderStatus.class);
         map.put(PaymentOrder.OrderStatus.PENDING, EnumSet.of(
                 PaymentOrder.OrderStatus.PAYING,
-                PaymentOrder.OrderStatus.EXPIRED
+                PaymentOrder.OrderStatus.EXPIRED,
+                PaymentOrder.OrderStatus.FAILED
         ));
         map.put(PaymentOrder.OrderStatus.PAYING, EnumSet.of(
                 PaymentOrder.OrderStatus.PAID,
