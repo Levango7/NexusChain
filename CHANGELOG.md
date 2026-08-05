@@ -2,6 +2,36 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [1.2.0] - 2026-08-06
+
+### 主题：第一类纯逻辑骨架补全（白名单 / 货币转换 / 退款审批 / SDK 客户端）
+
+### 新增
+
+- **钱包地址白名单（nexus-exchange-wallet）**
+  - 白名单增删查、按商户过滤、首次提币延迟检查（可配置小时数）
+  - 地址格式校验、软删除
+- **网关货币转换（nexus-gateway）**
+  - USD 基准表交叉汇率、可配置点差（spread-bps）、币种子集管理
+  - 恒等短路、汇率缺失保护
+- **网关退款审批流（nexus-gateway）**
+  - 退款请求 / 审批 / 拒绝 / 执行完整工作流（refund_requests 表 V6）
+  - RefundPolicy：可退性校验、最大退款额、退款窗口（可配置天数）
+- **SDK 客户端封装（nexus-sdk）**
+  - BridgeClient：锁定 / 解锁 / 状态查询 / 支持链 / 手续费
+  - PaymentChannelClient：开启 / 关闭 / 状态更新 / 查询 / 争议
+  - StableCoinClient：铸造 / 销毁 / 转账 / 抵押率 / 价格 / 总供应量
+
+### 修复
+
+- **Wallet.create 密码超长 bug**：随机密码 16 字节→32 位 hex 恒超 fromPassword 的 8-20 长度上限，改为 8 字节→16 位 hex
+- **陈旧 SDK 单元测试**：SdkUnitTest 断言骨架行为（抛 UnsupportedOperationException），SDK 实现后回归失败，按真实行为更新断言
+
+### 测试
+
+- 全量回归：9 个模块共 593 个测试全部通过
+  （core 277 / bridge 49 / wallet 31 / gateway 89 / settlement 20 / compliance 30 / analytics 32 / oracle 28 / sdk 37）
+
 ## [1.1.0] - 2026-08-06
 
 ### 主题：合约引擎落地 + 跨链/钱包骨架补全 + 假集成修复

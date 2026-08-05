@@ -13,7 +13,7 @@ const state = {
   transactions: [],
   accounts: {},
   peers: 4,
-  version: '1.1.0',
+  version: '1.2.0',
   network: 'sandbox',
   startTime: Date.now(),
 };

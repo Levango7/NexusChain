@@ -25,7 +25,8 @@ public class Wallet {
      * Uses WalletUtils.fromPassword() to generate a keystore with Ed25519 key pair.
      */
     public WalletInfo create() {
-        byte[] pwBytes = new byte[16];
+        // fromPassword enforces password length 8-20 chars; 8 random bytes → 16 hex chars.
+        byte[] pwBytes = new byte[8];
         new SecureRandom().nextBytes(pwBytes);
         String password = HexFormat.of().formatHex(pwBytes);
         ObjectNode node = WalletUtils.fromPassword(password);
