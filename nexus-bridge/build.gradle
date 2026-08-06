@@ -23,6 +23,12 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     implementation 'org.springframework.boot:spring-boot-starter-validation'
+    // Web3j: 用于与 EVM 兼容链（Ethereum / BSC / Polygon）进行 JSON-RPC 交互
+    // 排除 jc-kzg-4844（EIP-4844 blob 交易支持），桥合约调用不需要且该依赖在
+    // 当前仓库配置下不可解析（tech.pegasys:jc-kzg-4844:0.8.0 仅存在于特定仓库）
+    implementation('org.web3j:core:4.11.0') {
+        exclude group: 'tech.pegasys', module: 'jc-kzg-4844'
+    }
     runtimeOnly 'com.h2database:h2'
     runtimeOnly 'com.mysql:mysql-connector-j'
     testImplementation 'org.springframework.boot:spring-boot-starter-test'

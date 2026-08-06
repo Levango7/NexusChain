@@ -1,5 +1,6 @@
 package org.nexus.gateway.orchestration.routing;
 
+import org.nexus.gateway.config.GatewayConfig;
 import org.nexus.gateway.orchestration.connector.PaymentConnector;
 import org.nexus.gateway.orchestration.connector.ConnectorRegistry;
 import org.slf4j.Logger;
@@ -12,23 +13,83 @@ import java.util.concurrent.ThreadLocalRandom;
 /**
  * Routing Engine - selects which connector(s) to use for a payment.
  * Supports: priority (failover), weight (A/B), cost (cheapest), explicit (merchant choice).
+ *
+ * <p><b>Dual-chain routing</b>: when {@code nexus.routing.dual-chain.enabled=true},
+ * two additional rules are registered with priority above the default NEX/fallback
+ * rules but below any merchant-supplied rule (priority 50):
+ * <ul>
+ *   <li>small-amount (amount &lt; threshold) → consortium first, chain as failover</li>
+ *   <li>large-amount (amount &ge; threshold) → chain first, consortium as failover</li>
+ * </ul>
+ * This keeps the consortium sidechain (PoA, low latency) for small/ high-frequency
+ * payments and the public core mainnet (PoW, final settlement) for large payments.
+ * Failover stays within the same preferred group. Existing strategies
+ * (priority/weight/cost/explicit) and the default NEX→chain rule are preserved
+ * when dual-chain is disabled or no dual-chain rule matches.</p>
  */
 @Component
 public class RoutingEngine {
 
     private static final Logger log = LoggerFactory.getLogger(RoutingEngine.class);
 
+    /** Priority reserved for dual-chain rules (above default rules, below merchant rules). */
+    private static final int DUAL_CHAIN_PRIORITY = 50;
+
     private final ConnectorRegistry registry;
+    private final GatewayConfig gatewayConfig;
     private final List<RoutingRule> rules = Collections.synchronizedList(new ArrayList<>());
 
-    public RoutingEngine(ConnectorRegistry registry) {
+    public RoutingEngine(ConnectorRegistry registry, GatewayConfig gatewayConfig) {
         this.registry = registry;
+        this.gatewayConfig = gatewayConfig;
+
+        // Dual-chain routing rules (registered first so merchant-added rules at
+        // priority > 50 still win; the default NEX/fallback rules below at
+        // priority 10/0 only apply when no dual-chain rule matches).
+        registerDualChainRulesIfEnabled();
+
         // Default rule: route NEX to chain, everything else to mock
         rules.add(new RoutingRule("default-nex", "NEX payments go to chain",
                 Map.of("currency", "NEX"), RoutingStrategy.PRIORITY, List.of("chain", "mock"), 10));
         rules.add(new RoutingRule("default-fallback", "All other payments use mock",
                 Map.of(), RoutingStrategy.PRIORITY, List.of("mock", "chain"), 0));
-        log.info("RoutingEngine initialized with {} default rules", rules.size());
+        log.info("RoutingEngine initialized with {} rules", rules.size());
+    }
+
+    /**
+     * Register dual-chain routing rules when the policy is enabled.
+     *
+     * <p>Small-amount rule: {@code amount < threshold} → [consortium, chain].
+     * Large-amount rule: {@code amount >= threshold} → [chain, consortium].
+     * Both use {@link RoutingStrategy#PRIORITY} so the connector list is tried
+     * in order with in-group failover.</p>
+     */
+    private void registerDualChainRulesIfEnabled() {
+        GatewayConfig.RoutingConfig routing = gatewayConfig.getRouting();
+        if (routing == null) return;
+        GatewayConfig.DualChainConfig dualChain = routing.getDualChain();
+        if (dualChain == null || !dualChain.isEnabled()) return;
+
+        long threshold = dualChain.getSmallAmountThreshold();
+        List<String> smallConnectors = dualChain.getSmall();
+        List<String> largeConnectors = dualChain.getLarge();
+
+        // amount_lte = threshold - 1  <=>  amount < threshold
+        rules.add(new RoutingRule("dual-chain-small",
+                "Small-amount payments go to consortium first (low latency)",
+                Map.of("amount_lte", String.valueOf(Math.max(0, threshold - 1))),
+                RoutingStrategy.PRIORITY,
+                smallConnectors,
+                DUAL_CHAIN_PRIORITY));
+        // amount_gte = threshold  <=>  amount >= threshold
+        rules.add(new RoutingRule("dual-chain-large",
+                "Large-amount payments go to core first (public settlement)",
+                Map.of("amount_gte", String.valueOf(threshold)),
+                RoutingStrategy.PRIORITY,
+                largeConnectors,
+                DUAL_CHAIN_PRIORITY));
+        log.info("Dual-chain routing enabled: threshold={}, small={}, large={}",
+                threshold, smallConnectors, largeConnectors);
     }
 
     /**

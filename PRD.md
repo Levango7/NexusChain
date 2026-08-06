@@ -24,8 +24,14 @@ Mid-size e-commerce / SaaS developers (team 5-20, monthly volume $10K-$1M) who n
 | F8 | Webhook notifications (async, retry) | P0 | gateway (exists) |
 | F9 | Payment status query + list | P0 | gateway |
 | F10 | Connector health check + auto-failover | P1 | gateway |
-| F11 | Explorer: payment dashboard view | P1 | explorer |
+| F11 | Explorer: blockchain explorer + payment orchestration dashboard (HMAC auth) | P1 | explorer |
 | F12 | Java SDK: PaymentClient | P1 | sdk |
+| F13 | Cross-chain Bridge (lock/mint/burn/unlock) | Delivered | bridge |
+| F14 | Settlement & Risk Engine | Delivered | settlement |
+| F15 | Compliance (KYC/AML/DID) | Delivered | compliance |
+| F16 | Analytics (Transaction Graph/BI) | Experimental | analytics |
+| F17 | Price Oracle (Aggregated Feed) | Experimental | oracle |
+| F18 | Consortium Connector (dual-chain routing) | Delivered | gateway |
 
 ## 4. Core API Definition
 
@@ -161,8 +167,7 @@ Rule model:
 ## 9. Out of Scope (MVP)
 
 - No-code workflow builder
-- Cross-chain bridge execution
-- Stablecoin mint/burn
 - IoT device payments
-- Consortium governance
 - 300+ PSP connectors (only 2-3 to prove architecture)
+- MPC multi-sig protocol (GG18/GG20) — in progress
+- PoS consensus / L2 Rollup — in progress

@@ -57,6 +57,14 @@ nexus:
     chain-id: 1
     confirmations: 12
 
+  # Consortium (PoA sidechain) node configuration.
+  # Consortium node listens on 8080 by default (nexus-consortium application.yml:
+  # server.port: '8080'). Override via NEX_CONSORTIUM_RPC_URL.
+  consortium:
+    rpc-url: ${NEX_CONSORTIUM_RPC_URL:http://localhost:8080}
+    chain-id: 2
+    confirmations: 3
+
   # nexus-exchange-wallet service endpoint (for transfer construction & signing)
   exchange-wallet:
     base-url: http://localhost:8081
@@ -89,6 +97,21 @@ nexus:
     # Retry interval in minutes
     retry-interval-minutes: 60
 
+  # Routing configuration
+  routing:
+    # Dual-chain routing: split traffic between core mainnet (large/ final
+    # settlement) and consortium sidechain (small/ high-frequency, low latency).
+    dual-chain:
+      enabled: true
+      # Payments with amount < threshold go to consortium first.
+      small-amount-threshold: 1000000
+      # High-frequency window (reserved for future frequency-based routing).
+      high-frequency-window: 60s
+      # Preferred connectors per bucket (in failover order).
+      preferred-connectors:
+        small: ["consortium", "chain"]
+        large: ["chain", "consortium"]
+
 logging:
   level:
     org.nexus: INFO
@@ -104,6 +127,11 @@ resilience4j:
         wait-duration-in-open-state: 30s
         sliding-window-size: 10
         minimum-number-of-calls: 5
+      consortiumNode:
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 30s
+        sliding-window-size: 10
+        minimum-number-of-calls: 5
       walletService:
         failure-rate-threshold: 50
         wait-duration-in-open-state: 30s
@@ -112,6 +140,9 @@ resilience4j:
   retry:
     instances:
       chainNode:
+        max-attempts: 3
+        wait-duration: 1s
+      consortiumNode:
         max-attempts: 3
         wait-duration: 1s
       walletService:

@@ -34,3 +34,14 @@ nexus:
     # 生产环境必须由治理层下发真实公钥，例如：
     # validator-public-keys:
     #   - 302a300506032b6570032100xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+    # EVM 兼容链 RPC 端点配置（Web3j HttpService 连接地址）
+    # 生产环境应通过环境变量 / 配置中心注入，避免硬编码
+    ethereum:
+      rpc-endpoint: https://mainnet.infura.io/v3/YOUR_PROJECT_ID
+      chain-id: "0x1"
+    bsc:
+      rpc-endpoint: https://bsc-dataseed.binance.org
+      chain-id: "0x38"
+    polygon:
+      rpc-endpoint: https://polygon-rpc.com
+      chain-id: "0x89"

@@ -28,6 +28,10 @@ Blockchain is the foundational settlement layer — not the product itself. On t
 | nexus-sdk | Multi-language SDK (Java, JS) | Active |
 | nexus-consortium | Consortium / sidechain — complete PoA chain (consensus, gRPC/WS P2P, 国密 SM2/3/4) | Active — complete chain |
 | nexus-exchange-wallet | Exchange/custodial wallet | Active |
+| nexus-settlement | 清结算与风控（复式记账、对账、资金归集、风控规则链） | Active — 库（gateway 进程内消费） |
+| nexus-compliance | 合规与身份（KYC/AML/DID/信誉评分） | Active — 库（gateway 进程内消费） |
+| nexus-analytics | 数据智能（交易图谱、链上监控、告警、BI、导出） | Active — 库（gateway 进程内消费，事件驱动） |
+| nexus-oracle | 预言机与治理（价格聚合、VRF、提案、国库） | Active — 库（gateway 进程内消费，ChainConnector 喂价） |
 | nexus-devtools | Developer tools (CLI, testnet faucet) | Skeleton |
 | nexus-rpc-doc | RPC API documentation | Reference |
 | nexus-java-sdk | Legacy Java SDK (migrated to nexus-sdk) | Deprecated |
@@ -48,7 +52,7 @@ Blockchain is the foundational settlement layer — not the product itself. On t
 - **Build**: Gradle 7.6+ with toolchain auto-provisioning
 - **Database**: PostgreSQL (production), H2 (dev/sandbox)
 - **P2P**: gRPC + Protobuf
-- **Smart Contracts**: WASM (Wasmer runtime)
+- **Smart Contracts**: WASM (Chicory 纯 Java 解释器) + EVM 子集解释器
 - **Frontend**: React + TypeScript + Tailwind CSS
 - **Observability**: Micrometer + Prometheus + structured logging
 - **Resilience**: Resilience4j (circuit breaker, retry, rate limiter)
@@ -56,29 +60,60 @@ Blockchain is the foundational settlement layer — not the product itself. On t
 ## Architecture Layers
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                  Application Layer                    │
-│  nexus-explorer │ nexus-devtools │ Merchant Portal   │
-├─────────────────────────────────────────────────────┤
-│                  Service Layer                        │
-│  nexus-gateway │ nexus-bridge │ nexus-exchange-wallet│
-├─────────────────────────────────────────────────────┤
-│                  SDK / Integration                    │
-│  nexus-sdk (Java/JS) │ nexus-rpc-doc                │
-├─────────────────────────────────────────────────────┤
-│                  Infrastructure Layer                 │
-│  nexus-core (consensus, P2P, storage, VM)           │
-│  nexus-consortium (governance, permissioning)        │
-└─────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                       Application Layer                          │
+│   nexus-explorer │ nexus-devtools │ Merchant Portal             │
+├─────────────────────────────────────────────────────────────────┤
+│                       Service Layer                              │
+│   nexus-gateway │ nexus-bridge │ nexus-exchange-wallet          │
+├─────────────────────────────────────────────────────────────────┤
+│              Mid-Service Layer (编排支撑，进程内库)               │
+│   nexus-settlement │ nexus-compliance │ nexus-analytics │ nexus-oracle │
+├─────────────────────────────────────────────────────────────────┤
+│                       SDK / Integration                          │
+│   nexus-sdk (Java/JS) │ nexus-rpc-doc                            │
+├─────────────────────────────────────────────────────────────────┤
+│                    Infrastructure Layer                          │
+│   nexus-core (consensus, P2P, storage, VM)                       │
+│   nexus-consortium (governance, permissioning)                   │
+└─────────────────────────────────────────────────────────────────┘
 ```
+
+### 集成方式
+
+- `nexus-gateway` ← `nexus-settlement` / `nexus-compliance` / `nexus-analytics` / `nexus-oracle`：**进程内 composite build**（Gradle `includeBuild`，gateway 直接消费库的 Service Bean，无 HTTP 开销）
+- `nexus-gateway` → `nexus-core` / `nexus-consortium`：**HTTP RPC**（独立进程，链节点远程调用）
+- `nexus-gateway` → `nexus-exchange-wallet`：**HTTP REST**（独立服务，钱包托管/兑换接口）
+- `nexus-bridge`：**独立 Spring Boot 应用**（链上执行，Web3j 适配多链）
 
 ## Payment Orchestration Roadmap
 
-1. **Phase 1** (current): Dual-chain acquiring — Gateway routes to `nexus-core` (settlement mainnet) and `nexus-consortium` (consortium sidechain)
-2. **Phase 2**: Multi-channel routing (chain + traditional PSPs)
-3. **Phase 3**: Smart split settlement (分账)
-4. **Phase 4**: IoT micropayments (device-to-device)
-5. **Phase 5**: Full orchestration engine (rule-based routing, fallback, retry)
+### 已交付（Delivered）
+
+- 双链 acquiring：gateway 路由至 `nexus-core`（公链结算主网）与 `nexus-consortium`（联盟侧链）
+- 多通道路由（5 connector）：core / consortium / exchange-wallet / bridge / on-chain execution
+- 合约引擎：WASM（Chicory 纯 Java 解释器）+ EVM 子集解释器
+- 跨链桥（链上执行）：Web3j 3 链适配器，lock/mint/burn/unlock + EmergencyPause/InsuranceFund
+- 清结算 + 风控：复式记账、对账、资金归集、风控规则链（`nexus-settlement`）
+- 合规（KYC/AML/DID）：身份认证、反洗钱、去中心化身份、信誉评分（`nexus-compliance`）
+- 数据智能：交易图谱、链上监控、告警、BI、导出（`nexus-analytics`）
+- 预言机：价格聚合喂价 ChainConnector（`nexus-oracle`）
+- 前端认证：OrchestrationDashboard HMAC-SHA256 签名
+- SDK：4 语言（Java/JS/Python/Go）
+
+### 进行中（In Progress）
+
+- PoS 共识（替换/增强现有 DPoS）
+- L2 Rollup（扩容方案）
+- 链上治理执行（提案 → 国库 → 链上动作）
+- MPC 多签协议（GG18/GG20 阈值签名）
+
+### 规划中（Planned）
+
+- IoT 微支付（device-to-device，智慧城市场景）
+- 多 PSP 生产接入（300+ connector 路线）
+- A/B testing 路由（实验驱动编排策略）
+- 微服务化（SCA 路线，按需拆分 gateway）
 
 ## Key Design Decisions
 

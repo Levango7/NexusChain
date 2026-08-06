@@ -9,11 +9,16 @@ import org.nexus.bridge.UnlockRequest;
 import org.nexus.bridge.model.BridgeTransaction;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.web3j.protocol.Web3j;
+import org.web3j.protocol.http.HttpService;
+
+import java.util.Arrays;
+import java.util.List;
 
 /**
  * BSC 桥处理器，实现 BNB Smart Chain (BSC) 网络上的跨链操作。
  *
- * <p>本处理器通过 nexus-core 的 RPC 客户端与 BSC 节点通信，
+ * <p>本处理器通过 Web3j 与 BSC 节点通信，
  * 调用部署在 BSC 上的 NexusChain 桥合约完成锁定、铸造、销毁、解锁操作。</p>
  *
  * <h2>合约交互</h2>
@@ -51,6 +56,9 @@ public class BSCBridgeHandler extends AbstractBridgeHandler {
     /** BSC 推荐确认数。 */
     private static final int RECOMMENDED_CONFIRMATIONS = 12;
 
+    /** Web3j 客户端实例（懒加载）。 */
+    private volatile Web3j web3j;
+
     /**
      * 构造 BSC 桥处理器。
      *
@@ -85,11 +93,15 @@ public class BSCBridgeHandler extends AbstractBridgeHandler {
     protected String submitLockTransaction(LockRequest request) throws BridgeException {
         log.info("Submitting lock transaction on BSC: amount={}, user={}",
                 request.getAmount(), request.getUserAddress());
-        // TODO: 通过 Web3j 调用 BSC 桥合约的 lock 方法
-        // 1. 构建 lock 交易调用
-        // 2. 通过 nexus-core 密钥服务签名
-        // 3. 提交交易并等待交易哈希
-        throw new UnsupportedOperationException("BSC lock transaction not yet implemented");
+        ensureWeb3j();
+        // lock(address user, address target, uint256 amount)
+        List<org.web3j.abi.datatypes.Type> params = Arrays.asList(
+                toAddress(request.getUserAddress()),
+                toAddress(request.getTargetAddress()),
+                toUint(request.getAmount())
+        );
+        String encoded = encodeFunctionCall("lock", params);
+        return submitContractCall(web3j, contractAddress, encoded, CHAIN_ID);
     }
 
     @Override
@@ -97,19 +109,31 @@ public class BSCBridgeHandler extends AbstractBridgeHandler {
                                             BridgeTransaction lockTx) throws BridgeException {
         log.info("Submitting mint transaction on BSC: lockTxId={}, minter={}",
                 request.getLockTxId(), request.getMinterAddress());
-        // TODO: 通过 Web3j 调用 BSC 桥合约的 mint 方法
-        // 1. 验证多签签名
-        // 2. 构建 mint 交易调用
-        // 3. 提交交易并等待交易哈希
-        throw new UnsupportedOperationException("BSC mint transaction not yet implemented");
+        ensureWeb3j();
+        // mint(bytes32 lockTxId, address user, uint256 amount, address target)
+        List<org.web3j.abi.datatypes.Type> params = Arrays.asList(
+                toBytes32(request.getLockTxId()),
+                toAddress(lockTx.getUserAddress()),
+                toUint(lockTx.getAmount()),
+                toAddress(lockTx.getTargetAddress())
+        );
+        String encoded = encodeFunctionCall("mint", params);
+        return submitContractCall(web3j, contractAddress, encoded, CHAIN_ID);
     }
 
     @Override
     protected String submitBurnTransaction(BurnRequest request) throws BridgeException {
         log.info("Submitting burn transaction on BSC: amount={}, user={}",
                 request.getAmount(), request.getUserAddress());
-        // TODO: 通过 Web3j 调用 BSC 桥合约的 burn 方法
-        throw new UnsupportedOperationException("BSC burn transaction not yet implemented");
+        ensureWeb3j();
+        // burn(address user, address target, uint256 amount)
+        List<org.web3j.abi.datatypes.Type> params = Arrays.asList(
+                toAddress(request.getUserAddress()),
+                toAddress(request.getTargetAddress()),
+                toUint(request.getAmount())
+        );
+        String encoded = encodeFunctionCall("burn", params);
+        return submitContractCall(web3j, contractAddress, encoded, CHAIN_ID);
     }
 
     @Override
@@ -117,16 +141,37 @@ public class BSCBridgeHandler extends AbstractBridgeHandler {
                                               BridgeTransaction burnTx) throws BridgeException {
         log.info("Submitting unlock transaction on BSC: burnTxId={}, unlocker={}",
                 request.getBurnTxId(), request.getUnlockerAddress());
-        // TODO: 通过 Web3j 调用 BSC 桥合约的 unlock 方法
-        throw new UnsupportedOperationException("BSC unlock transaction not yet implemented");
+        ensureWeb3j();
+        // unlock(bytes32 burnTxId, address user, uint256 amount, address target)
+        List<org.web3j.abi.datatypes.Type> params = Arrays.asList(
+                toBytes32(request.getBurnTxId()),
+                toAddress(burnTx.getUserAddress()),
+                toUint(burnTx.getAmount()),
+                toAddress(burnTx.getTargetAddress())
+        );
+        String encoded = encodeFunctionCall("unlock", params);
+        return submitContractCall(web3j, contractAddress, encoded, CHAIN_ID);
     }
 
     @Override
     public int queryTransactionStatus(String txHash) {
         log.debug("Querying transaction status on BSC: txHash={}", txHash);
-        // TODO: 通过 Web3j 查询 BSC 交易确认数
+        ensureWeb3j();
         // BSC 出块快，推荐确认数为 12
-        return -1;
+        return queryConfirmations(web3j, txHash);
+    }
+
+    /**
+     * 等待交易达到 BSC 推荐确认数（12）。
+     *
+     * @param txHash 交易哈希
+     * @return 达到确认数返回 true；超时或失败返回 false
+     */
+    public boolean awaitConfirmations(String txHash) {
+        ensureWeb3j();
+        // BSC 出块快，轮询 1.5 秒，超时 10 分钟
+        return waitForConfirmations(web3j, txHash, RECOMMENDED_CONFIRMATIONS,
+                1_500L, 10 * 60_000L);
     }
 
     /**
@@ -136,6 +181,27 @@ public class BSCBridgeHandler extends AbstractBridgeHandler {
      */
     public int getRecommendedConfirmations() {
         return RECOMMENDED_CONFIRMATIONS;
+    }
+
+    /**
+     * 懒加载 Web3j 客户端。
+     *
+     * @throws BridgeException 如果 RPC 端点未配置
+     */
+    private void ensureWeb3j() throws BridgeException {
+        if (web3j != null) {
+            return;
+        }
+        if (rpcEndpoint == null || rpcEndpoint.isEmpty()) {
+            throw new BridgeException("RPC_NOT_CONFIGURED",
+                    "BSC RPC endpoint is not configured");
+        }
+        synchronized (this) {
+            if (web3j == null) {
+                web3j = Web3j.build(new HttpService(rpcEndpoint));
+                log.info("Initialized Web3j client for BSC: {}", rpcEndpoint);
+            }
+        }
     }
 
     // ==================== Getter / Setter ====================
@@ -162,5 +228,6 @@ public class BSCBridgeHandler extends AbstractBridgeHandler {
 
     public void setRpcEndpoint(String rpcEndpoint) {
         this.rpcEndpoint = rpcEndpoint;
+        this.web3j = null;
     }
 }

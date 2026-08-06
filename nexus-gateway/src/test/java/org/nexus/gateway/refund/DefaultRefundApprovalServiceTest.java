@@ -7,6 +7,9 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.nexus.gateway.model.PaymentOrder;
 import org.nexus.gateway.repository.PaymentOrderRepository;
+import org.nexus.settlement.execution.OnChainExecutionChannel;
+import org.nexus.settlement.execution.TransactionRequest;
+import org.nexus.settlement.execution.TransactionResult;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -25,6 +28,7 @@ class DefaultRefundApprovalServiceTest {
 
     @Mock private RefundRequestRepository refundRequestRepository;
     @Mock private PaymentOrderRepository paymentOrderRepository;
+    @Mock private OnChainExecutionChannel executionChannel;
 
     private DefaultRefundPolicy policy;
     private DefaultRefundApprovalService service;
@@ -35,7 +39,8 @@ class DefaultRefundApprovalServiceTest {
     void setUp() throws Exception {
         policy = new DefaultRefundPolicy();
         setField(policy, "refundWindowDays", 7L);
-        service = new DefaultRefundApprovalService(refundRequestRepository, paymentOrderRepository, policy);
+        service = new DefaultRefundApprovalService(refundRequestRepository, paymentOrderRepository,
+                policy, executionChannel, "PLATFORM_HOT_WALLET");
 
         paidOrder = new PaymentOrder();
         paidOrder.setId(1L);
@@ -161,21 +166,38 @@ class DefaultRefundApprovalServiceTest {
     // --- executeRefund ---
 
     @Test
-    void executeRefund_onChainNotImplementedMarksFailed() {
+    void executeRefund_onChainSuccessMarksExecuted() {
         RefundRequest approved = newPendingRequest();
         approved.setStatus(RefundRequest.RefundStatus.APPROVED);
         when(refundRequestRepository.findById(10L)).thenReturn(Optional.of(approved));
         when(refundRequestRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(executionChannel.execute(any(TransactionRequest.class)))
+                .thenReturn(TransactionResult.success("TX-ABC-123", 12, false));
 
         RefundRequest result = service.executeRefund(10L);
 
-        // 链上退款执行未接入：请求必须置 FAILED 且不产生任何模拟哈希，
-        // 绝不能以伪造交易哈希标记 EXECUTED。
+        // 链上退款执行成功：请求置 EXECUTED 并记录真实交易哈希
+        assertEquals(RefundRequest.RefundStatus.EXECUTED, result.getStatus());
+        assertEquals("TX-ABC-123", result.getChainTxHash());
+        assertNotNull(result.getExecutedAt());
+    }
+
+    @Test
+    void executeRefund_onChainFailureMarksFailed() {
+        RefundRequest approved = newPendingRequest();
+        approved.setStatus(RefundRequest.RefundStatus.APPROVED);
+        when(refundRequestRepository.findById(10L)).thenReturn(Optional.of(approved));
+        when(refundRequestRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(executionChannel.execute(any(TransactionRequest.class)))
+                .thenReturn(TransactionResult.failure("broadcast rejected", false));
+
+        RefundRequest result = service.executeRefund(10L);
+
+        // 链上退款执行失败：请求置 FAILED 且不产生交易哈希
         assertEquals(RefundRequest.RefundStatus.FAILED, result.getStatus());
         assertNull(result.getChainTxHash());
-        assertNull(result.getExecutedAt());
         assertNotNull(result.getRejectionReason());
-        assertTrue(result.getRejectionReason().contains("not integrated"));
+        assertTrue(result.getRejectionReason().contains("broadcast rejected"));
     }
 
     @Test

@@ -29,6 +29,7 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
@@ -145,9 +146,11 @@ class PaymentServiceTest {
         assertEquals(PaymentOrder.OrderStatus.PAID, sampleOrder.getStatus());
         assertEquals("0xTxHash", sampleOrder.getChainTxHash());
 
-        ArgumentCaptor<PaymentConfirmedEvent> captor = ArgumentCaptor.forClass(PaymentConfirmedEvent.class);
-        verify(eventPublisher).publishEvent(captor.capture());
-        assertEquals("0xTxHash", captor.getValue().getChainTxHash());
+        // 支付确认后发布两个事件：PaymentConfirmedEvent（webhook）+ PaymentCompletedEvent（analytics 采集）
+        verify(eventPublisher, times(2)).publishEvent(any());
+        verify(eventPublisher, times(1)).publishEvent(argThat(
+                e -> e instanceof PaymentConfirmedEvent
+                        && "0xTxHash".equals(((PaymentConfirmedEvent) e).getChainTxHash())));
     }
 
     @Test

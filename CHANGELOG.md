@@ -2,6 +2,20 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## v1.2.2 (2026-08-06)
+
+### P0 改进 — 模块通电与集成修复
+
+- analytics/oracle 接入 gateway：支付事件采集 + 价格喂入 ChainConnector
+- 前端认证接通：OrchestrationDashboard HMAC-SHA256 签名，移除静默吞错
+- 跨链桥链上执行：Web3j 3 链适配器 + lock/mint/burn/unlock + EmergencyPause/InsuranceFund
+
+### P1 改进 — 架构补全
+
+- ConsortiumConnector：双链编排层落地，RoutingEngine 支持小额→consortium/大额→core
+- OnChainExecutionChannel：统一链上执行通道，settlement/gateway/wallet 链上转账闭环
+- 文档对齐：ARCHITECTURE.md 5 层架构 + Module Map 补全，PRD Out of Scope 更新
+
 ## [1.2.0] - 2026-08-06
 
 ### 主题：第一类纯逻辑骨架补全（白名单 / 货币转换 / 退款审批 / SDK 客户端）

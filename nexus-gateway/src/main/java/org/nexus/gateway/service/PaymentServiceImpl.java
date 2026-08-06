@@ -26,7 +26,9 @@ import org.nexus.gateway.event.PaymentConfirmedEvent;
 import org.nexus.gateway.security.KeyManager;
 import org.nexus.gateway.event.RefundCompletedEvent;
 import org.nexus.gateway.model.OrderStateMachine;
+import org.nexus.analytics.event.PaymentCompletedEvent;
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.UUID;
 
@@ -169,6 +171,21 @@ public class PaymentServiceImpl implements PaymentService {
         eventPublisher.publishEvent(new PaymentConfirmedEvent(
                 this, order.getId(), order.getOrderNo(), order.getMerchantId(),
                 chainTxHash, order.getPayerAddress(), order.getAmount().toPlainString()));
+
+        // Publish PaymentCompletedEvent for nexus-analytics collection.
+        // currency is filled with the order token symbol (chain-side unit);
+        // connector identifies the on-chain settlement channel (NexusChain core node).
+        eventPublisher.publishEvent(new PaymentCompletedEvent(
+                this,
+                order.getId(),
+                order.getAmount(),
+                order.getTokenSymbol(),
+                "NEXUS-CORE",
+                order.getMerchantId(),
+                chainTxHash,
+                order.getPayerAddress(),
+                order.getPayeeAddress(),
+                Instant.now()));
 
         return PaymentResult.success(order.getOrderNo(), chainTxHash, order.getPaidAt());
     }

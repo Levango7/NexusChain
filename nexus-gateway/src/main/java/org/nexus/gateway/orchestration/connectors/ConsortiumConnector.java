@@ -1,6 +1,6 @@
 package org.nexus.gateway.orchestration.connectors;
 
-import org.nexus.gateway.client.ChainRpcClient;
+import org.nexus.gateway.client.ConsortiumRpcClient;
 import org.nexus.gateway.client.ExchangeWalletClient;
 import org.nexus.gateway.config.GatewayConfig;
 import org.nexus.gateway.orchestration.connector.*;
@@ -16,33 +16,33 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Chain Connector - settles payments on the NexusChain blockchain.
+ * Consortium Connector - settles payments on the NexusChain consortium sidechain.
+ *
+ * <p>Mirrors {@link ChainConnector} but targets the PoA permissioned consortium
+ * chain ({@code nexus-consortium}) instead of the public core mainnet. The
+ * consortium chain is preferred for small-amount / high-frequency payments due
+ * to its faster finality (PoA block interval ~30s vs PoW + 12 confirmations
+ * on core).</p>
  *
  * <p>Per the documented architecture ("Gateway 不直接构造链上交易，而是复用
- * nexus-exchange-wallet 模块的转账构造与签名链路"), this connector does NOT build
- * or sign transactions itself. It delegates settlement to exchange-wallet's
- * signing endpoint (default {@code /api/v1/transfers/sign}), which constructs,
- * signs (with its own server-side keystore) and broadcasts the transaction. The
- * gateway only polls confirmation via the core RPC client.</p>
+ * nexus-exchange-wallet 模块的转账构造与签名链路"), this connector does NOT
+ * build or sign transactions itself. It delegates settlement to exchange-wallet's
+ * signing endpoint, which constructs, signs (with its own server-side keystore)
+ * and broadcasts the transaction. The gateway only polls confirmation via the
+ * consortium RPC client.</p>
  *
- * <p>This replaces the previous implementation that emitted an unsigned, fake
- * pipe-format hex directly to core's {@code /sendTransaction}. That hex was
- * rejected by core's {@code verifyTransfer}/{@code SignatureRule} and never
- * landed on-chain. See NexusChain 全维度审计与改进路线图 (v2) for the residual.</p>
- *
- * <p>Price oracle integration: when an {@link OraclePriceAdapter} is available
- * (nexus-oracle assembled into the container), the fiat amount from the payment
- * request is converted to the on-chain token amount via the oracle price
- * ({@code chainAmount = fiatAmount / oraclePrice}). If the oracle is absent or
- * the conversion fails, the original request amount is used — preserving the
- * legacy behavior and not breaking existing tests.</p>
+ * <p>Price oracle integration: when an {@link OraclePriceAdapter} is available,
+ * the fiat amount from the payment request is converted to the on-chain token
+ * amount via the oracle price. If the oracle is absent or the conversion fails,
+ * the original request amount is used — preserving the legacy behaviour and not
+ * breaking existing tests.</p>
  */
 @Component
-public class ChainConnector implements PaymentConnector {
+public class ConsortiumConnector implements PaymentConnector {
 
-    private static final Logger log = LoggerFactory.getLogger(ChainConnector.class);
+    private static final Logger log = LoggerFactory.getLogger(ConsortiumConnector.class);
 
-    private final ChainRpcClient chainRpc;
+    private final ConsortiumRpcClient consortiumRpc;
     private final ExchangeWalletClient walletClient;
     private final GatewayConfig gatewayConfig;
 
@@ -59,16 +59,16 @@ public class ChainConnector implements PaymentConnector {
     /**
      * 主构造函数：Spring 装配时使用，注入可选的 {@link OraclePriceAdapter}。
      *
-     * @param chainRpc           链 RPC 客户端
+     * @param consortiumRpc      consortium 链 RPC 客户端
      * @param walletClient       exchange-wallet 客户端
      * @param gatewayConfig      网关配置
      * @param oraclePriceAdapter 价格预言机适配器（可选，可为 null）
      */
     @Autowired
-    public ChainConnector(ChainRpcClient chainRpc, ExchangeWalletClient walletClient,
-                          GatewayConfig gatewayConfig,
-                          @Autowired(required = false) OraclePriceAdapter oraclePriceAdapter) {
-        this.chainRpc = chainRpc;
+    public ConsortiumConnector(ConsortiumRpcClient consortiumRpc, ExchangeWalletClient walletClient,
+                               GatewayConfig gatewayConfig,
+                               @Autowired(required = false) OraclePriceAdapter oraclePriceAdapter) {
+        this.consortiumRpc = consortiumRpc;
         this.walletClient = walletClient;
         this.gatewayConfig = gatewayConfig;
         this.oraclePriceAdapter = oraclePriceAdapter;
@@ -77,18 +77,19 @@ public class ChainConnector implements PaymentConnector {
     /**
      * 兼容构造函数：无价格预言机，保留以兼容既有单元测试（3 参数构造）。
      */
-    public ChainConnector(ChainRpcClient chainRpc, ExchangeWalletClient walletClient, GatewayConfig gatewayConfig) {
-        this(chainRpc, walletClient, gatewayConfig, null);
+    public ConsortiumConnector(ConsortiumRpcClient consortiumRpc, ExchangeWalletClient walletClient,
+                               GatewayConfig gatewayConfig) {
+        this(consortiumRpc, walletClient, gatewayConfig, null);
     }
 
     @Override
-    public String getId() { return "chain"; }
+    public String getId() { return "consortium"; }
 
     @Override
-    public String getType() { return "chain"; }
+    public String getType() { return "consortium"; }
 
     @Override
-    public String getDisplayName() { return "NexusChain On-Chain Settlement"; }
+    public String getDisplayName() { return "NexusChain Consortium Sidechain Settlement"; }
 
     @Override
     public boolean isActive() { return true; }
@@ -118,7 +119,7 @@ public class ChainConnector implements PaymentConnector {
                 return ConnectorPaymentResult.fail("exchange-wallet signing failed");
             }
 
-            String connectorId = "chain_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+            String connectorId = "consortium_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
             pendingPayments.put(connectorId, PaymentStatus.PROCESSING);
             payeeHashMap.put(connectorId, toPubkeyHash);
             String payerHash = walletClient.addressToPubkeyHash(request.getPayerAddress());
@@ -126,11 +127,11 @@ public class ChainConnector implements PaymentConnector {
                 payerHashMap.put(connectorId, payerHash);
             }
             txHashMap.put(connectorId, txHash);
-            log.info("Chain payment submitted (delegated to exchange-wallet): {} -> txHash={}", connectorId, txHash);
+            log.info("Consortium payment submitted (delegated to exchange-wallet): {} -> txHash={}", connectorId, txHash);
             return ConnectorPaymentResult.ok(connectorId, PaymentStatus.PROCESSING, txHash);
         } catch (Exception e) {
-            log.error("Chain payment failed: {}", e.getMessage());
-            return ConnectorPaymentResult.fail("Chain settlement error: " + e.getMessage());
+            log.error("Consortium payment failed: {}", e.getMessage());
+            return ConnectorPaymentResult.fail("Consortium settlement error: " + e.getMessage());
         }
     }
 
@@ -138,7 +139,7 @@ public class ChainConnector implements PaymentConnector {
      * 解析链上币结算金额。
      *
      * <p>当 {@link OraclePriceAdapter} 可用且请求币种非链上本币（NEX）时，
-     * 用法币金额÷oracle 价格换算链上币金额；否则回退到请求原始金额。
+     * 用法币金额÷oracle 价格换算链上币金额；否则回退到请求原始金额。</p>
      *
      * @param request 支付请求
      * @return 链上币结算金额（始终非 null）
@@ -151,7 +152,7 @@ public class ChainConnector implements PaymentConnector {
                 && !"NEX".equalsIgnoreCase(currency)) {
             BigDecimal converted = oraclePriceAdapter.convertToChainAmount(fiatAmount, "NEX");
             if (converted != null && converted.compareTo(BigDecimal.ZERO) > 0) {
-                log.info("Fiat->chain amount converted via oracle: fiat={} {} -> chain={} NEX",
+                log.info("Fiat->chain amount converted via oracle (consortium): fiat={} {} -> chain={} NEX",
                         fiatAmount, currency, converted);
                 return converted;
             }
@@ -166,18 +167,18 @@ public class ChainConnector implements PaymentConnector {
         if (cached == null) return PaymentStatus.FAILED;
         if (cached != PaymentStatus.PROCESSING) return cached;
 
-        // Poll chain for confirmation
+        // Poll consortium chain for confirmation
         String txHash = txHashMap.get(connectorPaymentId);
         if (txHash != null) {
             try {
-                boolean confirmed = chainRpc.isTransactionConfirmed(txHash);
+                boolean confirmed = consortiumRpc.isTransactionConfirmed(txHash);
                 if (confirmed) {
                     pendingPayments.put(connectorPaymentId, PaymentStatus.SUCCEEDED);
-                    log.info("Chain payment confirmed: {}", connectorPaymentId);
+                    log.info("Consortium payment confirmed: {}", connectorPaymentId);
                     return PaymentStatus.SUCCEEDED;
                 }
             } catch (Exception e) {
-                log.warn("Failed to query chain confirmation: {}", e.getMessage());
+                log.warn("Failed to query consortium confirmation: {}", e.getMessage());
             }
         }
         return PaymentStatus.PROCESSING;
@@ -204,9 +205,9 @@ public class ChainConnector implements PaymentConnector {
                 return ConnectorRefundResult.fail("exchange-wallet refund signing failed");
             }
             pendingPayments.put(connectorPaymentId, PaymentStatus.REFUNDED);
-            return ConnectorRefundResult.ok("chain_refund_" + connectorPaymentId);
+            return ConnectorRefundResult.ok("consortium_refund_" + connectorPaymentId);
         } catch (Exception e) {
-            return ConnectorRefundResult.fail("Chain refund failed: " + e.getMessage());
+            return ConnectorRefundResult.fail("Consortium refund failed: " + e.getMessage());
         }
     }
 
@@ -214,12 +215,12 @@ public class ChainConnector implements PaymentConnector {
     public ConnectorHealth healthCheck() {
         long start = System.currentTimeMillis();
         try {
-            long height = chainRpc.getBlockHeight();
+            long height = consortiumRpc.getBlockHeight();
             long latency = System.currentTimeMillis() - start;
             if (height > 0) {
                 return ConnectorHealth.up(getId(), latency);
             }
-            return ConnectorHealth.down(getId(), "Chain height is " + height);
+            return ConnectorHealth.down(getId(), "Consortium height is " + height);
         } catch (Exception e) {
             return ConnectorHealth.down(getId(), "RPC unreachable: " + e.getMessage());
         }
@@ -229,5 +230,5 @@ public class ChainConnector implements PaymentConnector {
     public Set<String> supportedCurrencies() { return Set.of("NEX"); }
 
     @Override
-    public int feeBasisPoints() { return 5; }
+    public int feeBasisPoints() { return 2; }
 }

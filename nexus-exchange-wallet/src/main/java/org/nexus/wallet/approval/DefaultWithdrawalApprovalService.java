@@ -1,7 +1,13 @@
 package org.nexus.wallet.approval;
 
+import org.nexus.wallet.execution.HttpOnChainExecutionClient;
+import org.nexus.wallet.execution.OnChainExecutionClient;
+import org.nexus.wallet.execution.WalletTransactionRequest;
+import org.nexus.wallet.execution.WalletTransactionResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -19,25 +25,42 @@ import java.util.concurrent.ConcurrentHashMap;
  *       确定所需审批人数 → 请求置 PENDING</li>
  *   <li>{@link #approve}：累计审批（防重复审批人）→ 达到阈值置 APPROVED</li>
  *   <li>{@link #reject}：置 REJECTED 并记录原因</li>
- *   <li>{@link #executeApprovedWithdrawal}：校验 APPROVED 状态 → 生成模拟链上交易
- *       哈希置 EXECUTED（链上广播接入后替换此步）</li>
+ *   <li>{@link #executeApprovedWithdrawal}：校验 APPROVED 状态 → 通过
+ *       {@link OnChainExecutionClient} 调用 gateway 链上执行通道发起提币转账
+ *       → 成功置 EXECUTED 带交易哈希，失败置 FAILED</li>
  * </ul>
  *
- * <p>请求存储为进程内内存表；生产环境需替换为持久化存储。链上执行当前为
- * 模拟交易哈希（标记 SIMULATED），接入钱包签名管道后替换。</p>
+ * <p>请求存储为进程内内存表；生产环境需替换为持久化存储。链上执行通过
+ * HTTP 调用 gateway 的 {@code /api/v1/execution/execute} 端点完成；
+ * gateway 不可达时由 {@link HttpOnChainExecutionClient} 降级为 sandbox 模式。</p>
  */
 @Service
 public class DefaultWithdrawalApprovalService implements WithdrawalApprovalService {
 
     private static final Logger log = LoggerFactory.getLogger(DefaultWithdrawalApprovalService.class);
 
+    /** 平台热钱包地址默认值 */
+    private static final String DEFAULT_PLATFORM_WALLET_ADDRESS = "PLATFORM_HOT_WALLET";
+
     private final ApprovalPolicy approvalPolicy;
+    private final OnChainExecutionClient executionClient;
+    private final String platformWalletAddress;
 
     /** Withdrawal request store: requestId → request. */
     private final Map<String, WithdrawalRequest> requests = new ConcurrentHashMap<String, WithdrawalRequest>();
 
     public DefaultWithdrawalApprovalService(ApprovalPolicy approvalPolicy) {
+        this(approvalPolicy, null, DEFAULT_PLATFORM_WALLET_ADDRESS);
+    }
+
+    @Autowired
+    public DefaultWithdrawalApprovalService(ApprovalPolicy approvalPolicy,
+                                             OnChainExecutionClient executionClient,
+                                             @Value("${nexus.wallet.platform-address:PLATFORM_HOT_WALLET}") String platformWalletAddress) {
         this.approvalPolicy = approvalPolicy;
+        this.executionClient = executionClient;
+        this.platformWalletAddress = platformWalletAddress != null && !platformWalletAddress.isEmpty()
+                ? platformWalletAddress : DEFAULT_PLATFORM_WALLET_ADDRESS;
     }
 
     @Override
@@ -135,13 +158,36 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
         }
 
         try {
-            // TODO: construct on-chain withdrawal tx, sign via MPC pipeline, broadcast.
-            // Simulated tx hash until the wallet signing pipeline is wired.
-            String txHash = "SIMULATED-" + UUID.randomUUID().toString().replace("-", "");
+            String txHash;
+            if (executionClient != null) {
+                // 通过 HTTP 调用 gateway 的链上执行通道
+                WalletTransactionRequest txReq = new WalletTransactionRequest(
+                        WalletTransactionRequest.Type.WITHDRAWAL,
+                        platformWalletAddress,
+                        request.getToAddress(),
+                        request.getAmount(),
+                        request.getCurrency(),
+                        "withdrawal:" + request.getRequestId(),
+                        request.getRequestId());
+                WalletTransactionResult result = executionClient.execute(txReq);
+                if (result == null || !result.isSuccess() || result.getTxHash() == null) {
+                    String err = result != null ? result.getError() : "execution client returned null";
+                    request.setStatus(WithdrawalRequest.WithdrawalStatus.FAILED);
+                    request.setRejectionReason("on-chain execution failed: " + err);
+                    log.error("Withdrawal execution failed: requestId={}, error={}", approvalId, err);
+                    return request;
+                }
+                txHash = result.getTxHash();
+                log.info("Withdrawal executed via gateway: requestId={}, txHash={}, simulated={}",
+                        approvalId, txHash, result.isSimulated());
+            } else {
+                // fallback：执行客户端未注入，使用模拟 txHash（向后兼容）
+                txHash = "SIMULATED-" + UUID.randomUUID().toString().replace("-", "");
+                log.warn("Withdrawal executed with fallback SIMULATED tx (no execution client): requestId={}", approvalId);
+            }
             request.setChainTxHash(txHash);
             request.setStatus(WithdrawalRequest.WithdrawalStatus.EXECUTED);
             request.setExecutedAt(LocalDateTime.now());
-            log.info("Withdrawal executed: requestId={}, txHash={}", approvalId, txHash);
         } catch (Exception e) {
             request.setStatus(WithdrawalRequest.WithdrawalStatus.FAILED);
             request.setRejectionReason("execution failed: " + e.getMessage());

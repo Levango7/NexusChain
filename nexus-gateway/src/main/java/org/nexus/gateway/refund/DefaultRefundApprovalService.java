@@ -2,8 +2,13 @@ package org.nexus.gateway.refund;
 
 import org.nexus.gateway.model.PaymentOrder;
 import org.nexus.gateway.repository.PaymentOrderRepository;
+import org.nexus.settlement.execution.OnChainExecutionChannel;
+import org.nexus.settlement.execution.TransactionRequest;
+import org.nexus.settlement.execution.TransactionResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -24,26 +29,43 @@ import java.util.UUID;
  *       带交易哈希，失败置 FAILED</li>
  * </ul>
  *
- * <p><b>链上退款执行尚未接入：</b>{@link #executeOnChain} 在真实链上执行通道
- * （nexus-exchange-wallet 签名与广播管道）可用之前抛出
- * {@link UnsupportedOperationException}，绝不返回模拟交易哈希。调用方
- * {@link #executeRefund} 会将请求置为 FAILED 并记录失败原因。</p>
+ * <p><b>链上退款执行已接入：</b>{@link #executeOnChain} 通过
+ * {@link OnChainExecutionChannel} 发起链上退款转账，返回真实交易哈希
+ * （sandbox 模式下返回 "SIMULATED-..." 前缀的模拟哈希）。</p>
  */
 @Service
 public class DefaultRefundApprovalService implements RefundApprovalService {
 
     private static final Logger log = LoggerFactory.getLogger(DefaultRefundApprovalService.class);
 
+    /** 平台退款热钱包地址默认值 */
+    private static final String DEFAULT_PLATFORM_REFUND_ADDRESS = "PLATFORM_HOT_WALLET";
+
     private final RefundRequestRepository refundRequestRepository;
     private final PaymentOrderRepository paymentOrderRepository;
     private final RefundPolicy refundPolicy;
+    private final OnChainExecutionChannel executionChannel;
+    private final String platformRefundAddress;
 
     public DefaultRefundApprovalService(RefundRequestRepository refundRequestRepository,
                                         PaymentOrderRepository paymentOrderRepository,
                                         RefundPolicy refundPolicy) {
+        this(refundRequestRepository, paymentOrderRepository, refundPolicy, null,
+                DEFAULT_PLATFORM_REFUND_ADDRESS);
+    }
+
+    @Autowired
+    public DefaultRefundApprovalService(RefundRequestRepository refundRequestRepository,
+                                        PaymentOrderRepository paymentOrderRepository,
+                                        RefundPolicy refundPolicy,
+                                        OnChainExecutionChannel executionChannel,
+                                        @Value("${nexus.gateway.refund.platform-address:PLATFORM_HOT_WALLET}") String platformRefundAddress) {
         this.refundRequestRepository = refundRequestRepository;
         this.paymentOrderRepository = paymentOrderRepository;
         this.refundPolicy = refundPolicy;
+        this.executionChannel = executionChannel;
+        this.platformRefundAddress = platformRefundAddress != null && !platformRefundAddress.isEmpty()
+                ? platformRefundAddress : DEFAULT_PLATFORM_REFUND_ADDRESS;
     }
 
     @Override
@@ -156,19 +178,35 @@ public class DefaultRefundApprovalService implements RefundApprovalService {
     }
 
     /**
-     * Trigger the on-chain refund transfer.
+     * Trigger the on-chain refund transfer via {@link OnChainExecutionChannel}.
      *
-     * <p>链上退款执行尚未接入：真实链上执行需要 nexus-exchange-wallet 的签名与广播
-     * 管道，当前未集成，因此本方法明确抛出 {@link UnsupportedOperationException}，
-     * 绝不返回模拟/占位交易哈希。接入真实执行通道后，应返回链上交易哈希并补充
-     * 异步确认逻辑。</p>
+     * <p>构造 {@link TransactionRequest}（type=REFUND）并调用统一链上执行通道。
+     * sandbox 模式下返回 "SIMULATED-..." 前缀的模拟交易哈希；
+     * 生产模式下返回真实链上交易哈希。</p>
      *
      * @param request the approved refund request to execute
-     * @return the real on-chain transaction hash once the execution channel is integrated
-     * @throws UnsupportedOperationException 链上退款执行未接入，无法产生真实交易哈希
+     * @return the on-chain transaction hash (real or simulated)
+     * @throws IllegalStateException if the execution channel is not injected or execution fails
      */
     private String executeOnChain(RefundRequest request) {
-        throw new UnsupportedOperationException(
-                "on-chain refund execution is not integrated yet: no real tx hash can be produced");
+        if (executionChannel == null) {
+            throw new IllegalStateException("OnChainExecutionChannel is not injected");
+        }
+        TransactionRequest txReq = new TransactionRequest(
+                TransactionRequest.Type.REFUND,
+                platformRefundAddress,
+                "REFUND:" + request.getRefundNo(),
+                request.getAmount(),
+                "NEX",
+                "refund:" + request.getRefundNo(),
+                "refund:" + request.getId());
+        TransactionResult result = executionChannel.execute(txReq);
+        if (result == null || !result.isSuccess() || result.getTxHash() == null) {
+            String err = result != null ? result.getError() : "execution channel returned null";
+            throw new IllegalStateException("on-chain refund execution failed: " + err);
+        }
+        log.info("refund on-chain executed: refundId={}, txHash={}, simulated={}",
+                request.getId(), result.getTxHash(), result.isSimulated());
+        return result.getTxHash();
     }
 }

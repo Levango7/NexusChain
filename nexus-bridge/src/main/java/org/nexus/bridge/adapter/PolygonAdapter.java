@@ -1,44 +1,34 @@
 package org.nexus.bridge.adapter;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 /**
- * Polygon 链适配器骨架实现。
+ * Polygon 链适配器，基于 Web3j 实现真实 JSON-RPC 调用。
  *
- * <p>需后续接入 Web3j 兼容 RPC 实现真实调用。</p>
+ * <p>Polygon 兼容 EVM，复用 {@link AbstractEvmChainAdapter} 通用逻辑，
+ * 仅指定 Polygon 主网链 ID（{@code 0x89}）与 RPC 端点。</p>
+ *
+ * <h2>配置项</h2>
+ * <ul>
+ *   <li>{@code nexus.bridge.polygon.rpc-endpoint} — Polygon RPC 端点 URL</li>
+ *   <li>{@code nexus.bridge.polygon.chain-id} — 链 ID（默认 {@code 0x89}）</li>
+ * </ul>
  *
  * @since 1.2
  */
 @Component
-public class PolygonAdapter implements ChainAdapter {
+public class PolygonAdapter extends AbstractEvmChainAdapter {
 
-    @Override
-    public String getChainId() {
-        // TODO: Polygon 主网 chainId = 137
-        return "0x89";
-    }
-
-    @Override
-    public long getBlockHeight() {
-        // TODO: 通过 Polygon RPC eth_blockNumber 获取最新高度
-        return 0L;
-    }
-
-    @Override
-    public String sendTransaction(byte[] tx) {
-        // TODO: 通过 Polygon RPC eth_sendRawTransaction 发送交易
-        throw new UnsupportedOperationException("PolygonAdapter.sendTransaction: not yet implemented");
-    }
-
-    @Override
-    public Object getTransactionReceipt(String hash) {
-        // TODO: 通过 Polygon RPC eth_getTransactionReceipt 查询回执
-        return null;
-    }
-
-    @Override
-    public String callContract(String address, String data) {
-        // TODO: 通过 Polygon RPC eth_call 只读调用合约
-        return null;
+    /**
+     * 构造 Polygon 适配器。
+     *
+     * @param rpcEndpoint RPC 端点 URL，取自配置 {@code nexus.bridge.polygon.rpc-endpoint}
+     * @param chainId     链 ID，取自配置 {@code nexus.bridge.polygon.chain-id}，默认 {@code 0x89}
+     */
+    public PolygonAdapter(
+            @Value("${nexus.bridge.polygon.rpc-endpoint:https://polygon-rpc.com}") String rpcEndpoint,
+            @Value("${nexus.bridge.polygon.chain-id:0x89}") String chainId) {
+        super(chainId, rpcEndpoint);
     }
 }

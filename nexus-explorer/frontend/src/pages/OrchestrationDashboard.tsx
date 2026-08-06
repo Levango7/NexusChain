@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
-
-const API_BASE = import.meta.env.VITE_GATEWAY_BASE ?? "http://localhost:8080";
+import { useAuth } from "../auth/useAuth";
+import { authenticatedRequest, ApiError } from "../api/client";
 
 interface Payment {
   id: string;
@@ -11,6 +11,10 @@ interface Payment {
   transaction_hash: string | null;
   created_at: string;
   confirmed_at: string | null;
+}
+
+interface PaymentListResponse {
+  data: Payment[];
 }
 
 interface Connector {
@@ -30,27 +34,91 @@ interface RoutingRule {
   priority: number;
 }
 
+type ErrorKind = "auth" | "network" | null;
+
+interface ErrorState {
+  kind: ErrorKind;
+  message: string;
+}
+
 const OrchestrationDashboard: React.FC = () => {
+  const { apiKey, apiSecret, isAuthenticated } = useAuth();
+
   const [payments, setPayments] = useState<Payment[]>([]);
   const [connectors, setConnectors] = useState<Connector[]>([]);
   const [rules, setRules] = useState<RoutingRule[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<ErrorState>({ kind: null, message: "" });
   const [tab, setTab] = useState<"payments" | "connectors" | "rules">("payments");
 
   const fetchData = useCallback(async () => {
+    // Fail fast with an explicit auth prompt instead of attempting requests
+    // that are guaranteed to 401. This replaces the previous silent swallow.
+    if (!isAuthenticated) {
+      setLoading(false);
+      setError({
+        kind: "auth",
+        message: "需要商户认证 — 请在设置中配置 API Key",
+      });
+      setPayments([]);
+      setConnectors([]);
+      setRules([]);
+      return;
+    }
+
+    setLoading(true);
+    setError({ kind: null, message: "" });
+
     try {
-      const [pRes, cRes, rRes] = await Promise.all([
-        fetch(`${API_BASE}/api/v1/payments?merchantId=1&limit=20`).then(r => r.json()).catch(() => ({ data: [] })),
-        fetch(`${API_BASE}/api/v1/payments/connectors`).then(r => r.json()).catch(() => []),
-        fetch(`${API_BASE}/api/v1/payments/routing-rules`).then(r => r.json()).catch(() => []),
-      ]);
-      setPayments(pRes.data || []);
+      // Sequential awaits so the first 401 short-circuits the rest instead
+      // of being masked by Promise.all's allSettled-like error semantics.
+      const pRes = await authenticatedRequest<PaymentListResponse>(
+        "/api/v1/payments?merchantId=1&limit=20",
+        { method: "GET", apiKey, apiSecret },
+      );
+      const cRes = await authenticatedRequest<Connector[]>(
+        "/api/v1/payments/connectors",
+        { method: "GET", apiKey, apiSecret },
+      );
+      const rRes = await authenticatedRequest<RoutingRule[]>(
+        "/api/v1/payments/routing-rules",
+        { method: "GET", apiKey, apiSecret },
+      );
+
+      setPayments(pRes?.data ?? []);
       setConnectors(Array.isArray(cRes) ? cRes : []);
       setRules(Array.isArray(rRes) ? rRes : []);
-    } catch { /* ignore */ } finally { setLoading(false); }
-  }, []);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        setError({
+          kind: "auth",
+          message: "需要商户认证 — 请在设置中配置 API Key",
+        });
+      } else if (err instanceof ApiError) {
+        setError({
+          kind: "network",
+          message: `请求失败 (${err.status}): ${err.message}`,
+        });
+      } else {
+        setError({
+          kind: "network",
+          message: err instanceof Error ? err.message : "未知错误",
+        });
+      }
+      // Clear stale data so the UI does not show pre-error snapshots.
+      setPayments([]);
+      setConnectors([]);
+      setRules([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [apiKey, apiSecret, isAuthenticated]);
 
-  useEffect(() => { fetchData(); const iv = setInterval(fetchData, 8000); return () => clearInterval(iv); }, [fetchData]);
+  useEffect(() => {
+    fetchData();
+    const iv = setInterval(fetchData, 8000);
+    return () => clearInterval(iv);
+  }, [fetchData]);
 
   const statusColor = (s: string) => {
     switch (s) {
@@ -81,6 +149,23 @@ const OrchestrationDashboard: React.FC = () => {
       </header>
 
       <main className="max-w-6xl mx-auto px-4 py-6">
+        {/* Explicit auth-required banner (replaces silent .catch(() => ({ data: [] }))). */}
+        {error.kind === "auth" && (
+          <div className="mb-6 px-4 py-3 rounded-lg border border-amber-700/60 bg-amber-900/30 text-amber-200 text-sm flex items-center justify-between">
+            <span>⚠ {error.message}</span>
+            <span className="text-xs text-amber-400/80 font-mono">
+              {isAuthenticated ? "凭证被拒绝" : "未配置"}
+            </span>
+          </div>
+        )}
+
+        {/* Generic network/transport error banner. */}
+        {error.kind === "network" && (
+          <div className="mb-6 px-4 py-3 rounded-lg border border-red-700/60 bg-red-900/30 text-red-200 text-sm">
+            ⚠ {error.message}
+          </div>
+        )}
+
         {loading && <div className="text-gray-500 text-center py-12">Loading...</div>}
 
         {!loading && tab === "payments" && (
