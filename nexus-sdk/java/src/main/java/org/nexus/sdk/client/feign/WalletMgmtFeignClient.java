@@ -1,5 +1,6 @@
 package org.nexus.sdk.client.feign;
 
+import org.nexus.sdk.client.feign.fallback.WalletMgmtFallbackFactory;
 import org.nexus.sdk.wallet.WithdrawalRequest;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -20,7 +21,8 @@ import java.math.BigDecimal;
  * <ul>
  *   <li>{@code name} 占位为 {@code nexus-wallet-service}，实际服务名由
  *       Nacos 注册决定，消费方模块通过 {@code @EnableFeignClients} 扫描装配</li>
- *   <li>{@code fallback} 未指定，Phase 2 #61 任务补全 Sentinel 降级类</li>
+ *   <li>{@code fallbackFactory} 指向 {@link WalletMgmtFallbackFactory}（Phase 3 绑定），
+ *       实现类由各消费方模块提供（gateway 定制降级语义）</li>
  *   <li>方法签名对应 wallet-service 迁移后的 RESTful 端点（/api/v1/wallet/**）</li>
  * </ul></p>
  *
@@ -31,7 +33,8 @@ import java.math.BigDecimal;
 @FeignClient(
         name = "nexus-wallet-service",
         path = "/api/v1/wallet",
-        contextId = "walletMgmtFeignClient"
+        contextId = "walletMgmtFeignClient",
+        fallbackFactory = WalletMgmtFallbackFactory.class
 )
 public interface WalletMgmtFeignClient {
 

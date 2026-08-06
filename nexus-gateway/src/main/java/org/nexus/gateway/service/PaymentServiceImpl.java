@@ -20,6 +20,7 @@ import org.nexus.sdk.client.feign.WalletMgmtFeignClient;
 import org.springframework.context.ApplicationEventPublisher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import io.seata.spring.annotation.GlobalTransactional;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -198,6 +199,7 @@ public class PaymentServiceImpl implements PaymentService {
 
     @Override
     @Transactional
+    @GlobalTransactional(timeoutMills = 120000)
     public Refund refund(Long orderId, BigDecimal amount, String reason) {
         PaymentOrder order = orderRepository.findById(orderId)
                 .orElseThrow(() -> new IllegalArgumentException("Order not found: " + orderId));

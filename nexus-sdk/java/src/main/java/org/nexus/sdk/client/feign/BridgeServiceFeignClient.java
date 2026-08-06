@@ -1,5 +1,6 @@
 package org.nexus.sdk.client.feign;
 
+import org.nexus.sdk.client.feign.fallback.BridgeServiceFallbackFactory;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -19,7 +20,8 @@ import java.util.Map;
  * <ul>
  *   <li>{@code name} 占位为 {@code nexus-bridge}，实际服务名由
  *       Nacos 注册决定，消费方模块通过 {@code @EnableFeignClients} 扫描装配</li>
- *   <li>{@code fallback} 未指定，Phase 2 #61 任务补全 Sentinel 降级类</li>
+ *   <li>{@code fallbackFactory} 指向 {@link BridgeServiceFallbackFactory}（Phase 3 绑定），
+ *       实现类由各消费方模块提供（gateway 定制降级语义）</li>
  *   <li>请求/响应体暂用 {@code Map<String, Object>} 占位，Phase 2 #60
  *       任务将替换为 nexus-sdk 内定义的跨链桥 DTO（LockRequest/MintRequest 等）</li>
  * </ul></p>
@@ -27,7 +29,8 @@ import java.util.Map;
 @FeignClient(
         name = "nexus-bridge",
         path = "/api/v1/bridge",
-        contextId = "bridgeServiceFeignClient"
+        contextId = "bridgeServiceFeignClient",
+        fallbackFactory = BridgeServiceFallbackFactory.class
 )
 public interface BridgeServiceFeignClient {
 

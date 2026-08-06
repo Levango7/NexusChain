@@ -2,6 +2,37 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [1.5.0] - 2026-08-07 - Phase 3 微服务化：分布式事务+链路追踪+容错
+
+### 新增
+- **Seata 分布式事务**：接入 Seata 2.0.0，AT+TCC 混合模式
+  - gateway 侧 AT 模式：PaymentServiceImpl.refund + SubscriptionServiceImpl.charge 标注 @GlobalTransactional，undo_log 表自动回滚
+  - signing-service 侧 TCC 模式：SigningTccAction（Try 预锁定 nonce → Confirm 签名广播 → Cancel 释放 nonce）
+  - Seata Server 独立部署（Nacos 注册/配置，DB 存储事务日志）
+- **链路追踪增强**：Micrometer Tracing 1.2.5 + Zipkin Server 3.4
+  - 4 服务全部接入自动 traceId 传播（W3C Baggage + B3）
+  - 替换手动 TracingConfig filter 为 Spring Boot 自动配置
+  - Zipkin UI 可查看跨服务调用链
+- **Feign fallback 绑定**：3 个 FallbackFactory 占位接口 + 4 个实现
+  - nexus-sdk 定义占位接口（不改 Feign 接口签名）
+  - gateway 实现 SigningService/WalletMgmt/BridgeService 3 个 fallback
+  - wallet-service 实现 SigningService 1 个 fallback
+- **健康检查**：SigningServiceHealthIndicator + WalletServiceHealthIndicator（用 FeignClient 探测）
+- **wallet-service 单元测试**：106 个测试用例（WithdrawalApproval 37 + Custody 38 + Whitelist 31）
+
+### 变更
+- 4 服务 build.gradle 添加 Seata + Micrometer Tracing + Zipkin 依赖
+- 4 服务 application.yml 添加 Seata + tracing/zipkin + 优雅停机配置
+- docker-compose.yml 添加 Seata Server + Zipkin + signing/wallet 服务条目
+- nacos-config 新增 seata-server.properties + nexus-seata.yaml + seata-server-db.sql
+- NoncePool 改造支持预锁定（lockNonce/confirmNonce/cancelNonce）
+
+### 验证
+- `gradlew.bat build -x test` BUILD SUCCESSFUL
+- SigningTccActionTest 11 个用例通过
+- wallet-service 106 个测试用例通过
+- TxControllerTest 回归通过
+
 ## v1.4.0 - Phase 1 + Phase 2 微服务化（2026-08-07）
 
 ### Phase 1：签名服务独立部署 + Nacos + Sentinel

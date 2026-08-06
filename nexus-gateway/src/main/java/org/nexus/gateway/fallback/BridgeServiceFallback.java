@@ -27,8 +27,10 @@ import java.util.Map;
  * <p>设计原则 D10：返回 null/错误 Map，不抛异常，调用方无需额外 try-catch。
  * 跨链操作涉及资产锁定/铸造，降级时必须明确失败，避免重复锁定或资产丢失。</p>
  *
- * <p>本类通过 {@code @FeignClient(fallback = ...)} 关联，需注册为 Spring Bean。
- * SCA Sentinel-Feign 集成后，Sentinel 熔断/限流同样路由到本类。</p>
+ * <p>本类保留 {@code @Component} 注解作为 Spring Bean，但 Phase 3 fallback 绑定后
+ * 通过 {@code GatewayBridgeServiceFallbackFactory.create(Throwable)} 实例化，
+ * 不再由 Spring 容器直接注入到 Feign 调用链。SCA Sentinel-Feign 集成后，
+ * Sentinel 熔断/限流同样路由到本类（经 FallbackFactory 包装）。</p>
  */
 @Component
 public class BridgeServiceFallback implements BridgeServiceFeignClient {

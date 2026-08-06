@@ -35,8 +35,10 @@ import java.math.BigDecimal;
  * 涉及资金安全的查询一律 fail-closed（返回 false/null），避免服务降级时
  * 误放行敏感操作。</p>
  *
- * <p>本类通过 {@code @FeignClient(fallback = ...)} 关联，需注册为 Spring Bean。
- * SCA Sentinel-Feign 集成后，Sentinel 熔断/限流同样路由到本类。</p>
+ * <p>本类保留 {@code @Component} 注解作为 Spring Bean，但 Phase 3 fallback 绑定后
+ * 通过 {@code GatewayWalletMgmtFallbackFactory.create(Throwable)} 实例化，
+ * 不再由 Spring 容器直接注入到 Feign 调用链。SCA Sentinel-Feign 集成后，
+ * Sentinel 熔断/限流同样路由到本类（经 FallbackFactory 包装）。</p>
  */
 @Component
 public class WalletMgmtFallback implements WalletMgmtFeignClient {

@@ -1,0 +1,4 @@
+// Seata 版本兼容 POC - 独立项目
+// 验证 Seata 2.0.0 (seata-spring-boot-starter) 与 SpringBoot 3.2.5 + SCA 2023.0.1.0 兼容性
+// 设计文档 §4.1 版本对齐矩阵 / 风险 R1
+rootProject.name = 'seata-poc'

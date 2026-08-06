@@ -3,18 +3,20 @@ version: '3.8'
 # NexusChain 开发环境编排
 # 
 # 包含两类服务：
-#   1. 应用服务（nexus-gateway / nexus-core / nexus-bridge）—— 需各模块 Dockerfile 就绪后构建
-#   2. 基础设施（nacos / sentinel-dashboard）—— 开发环境服务发现 + 配置中心 + 熔断限流控制台
+#   1. 应用服务（nexus-gateway / nexus-signing-service / nexus-wallet-service / nexus-core / nexus-bridge）—— 需各模块 Dockerfile 就绪后构建
+#   2. 基础设施（nacos / sentinel-dashboard / seata-server / zipkin）—— 服务发现 + 配置中心 + 熔断限流控制台 + 分布式事务 + 链路追踪
 # 
 # 开发环境仅拉起基础设施：
-#   docker-compose up nacos sentinel-dashboard
+#   docker-compose up nacos sentinel-dashboard seata-server zipkin
 # 全量拉起（含应用）：
 #   docker-compose up
 # 
-# 端口约定（设计文档 §4.2.2）：
+# 端口约定（设计文档 §4.2.2 / §4.6.1 配置一致性修复）：
 #   Nacos    : 8848 (HTTP) / 9848 (gRPC, Nacos 2.x client 必需)
 #   Sentinel : 8858 (Dashboard UI)
-#   gateway  : 8080 / core : 19585 / bridge : 8082
+#   Seata    : 8091 (TC) / 7091 (Web 控制台)
+#   Zipkin   : 9411 (API + UI)
+#   gateway  : 8080 / signing : 8082 / wallet : 8083 / bridge : 8084 / core : 19585
 
 services:
   nexus-gateway:
@@ -46,10 +48,60 @@ services:
       retries: 5
       start_period: 60s
 
+  # === 签名服务（涉及私钥的敏感操作，独立部署单元） ===
+  # 端口 8082，承载 /api/v1/transfers/sign + /signing/capability 端点。
+  # 依赖 Seata Server（TCC 分布式事务）+ Nacos（服务注册 + 配置）。
+  # 设计文档 §4.5.1。
+  nexus-signing-service:
+    build: ./nexus-signing-service
+    ports:
+      - '127.0.0.1:8082:8082'
+    environment:
+      - SPRING_PROFILES_ACTIVE=dev
+      - NEX_NACOS_SERVER=nexus-nacos:8848
+      - NEX_SEATA_SERVER=nexus-seata-server:8091
+      - NEX_ZIPKIN_ENDPOINT=http://nexus-zipkin:9411/api/v2/spans
+    depends_on:
+      nacos:
+        condition: service_healthy
+      nexus-seata-server:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:8082/actuator/health']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # === 钱包管理服务（不涉及私钥的地址工具 + 提现审批 + 托管 + 白名单） ===
+  # 端口 8083，承载 /api/v1/wallet/** 端点。
+  # 依赖 Seata Server（提现审批 TCC）+ Nacos（服务注册 + 配置）。
+  # 设计文档 §4.5.1。
+  nexus-wallet-service:
+    build: ./nexus-wallet-service
+    ports:
+      - '127.0.0.1:8083:8083'
+    environment:
+      - SPRING_PROFILES_ACTIVE=dev
+      - NEX_NACOS_SERVER=nexus-nacos:8848
+      - NEX_SEATA_SERVER=nexus-seata-server:8091
+      - NEX_ZIPKIN_ENDPOINT=http://nexus-zipkin:9411/api/v2/spans
+    depends_on:
+      nacos:
+        condition: service_healthy
+      nexus-seata-server:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:8083/actuator/health']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
   nexus-bridge:
     build: ./nexus-bridge
     ports:
-      - '127.0.0.1:8082:8082'
+      - '127.0.0.1:8084:8084'   # 修正：原 8082 → 8084（与 signing-service 8082 冲突，见 §4.5.1）
     environment:
       - SPRING_PROFILES_ACTIVE=prod
     depends_on:
@@ -58,7 +110,7 @@ services:
       nacos:
         condition: service_healthy
     healthcheck:
-      test: ['CMD', 'curl', '-f', 'http://localhost:8082/api/v1/bridge/status']
+      test: ['CMD', 'curl', '-f', 'http://localhost:8084/api/v1/bridge/status']
       interval: 30s
       timeout: 10s
       retries: 3
@@ -114,6 +166,66 @@ services:
     depends_on:
       nacos:
         condition: service_healthy
+    restart: unless-stopped
+
+  # === 分布式事务协调器 ===
+  # Seata Server 2.0.0，TC（Transaction Coordinator）角色。
+  # 注册到 Nacos（复用 nexus-nacos），配置中心指向 Nacos（namespace=dev, group=SEATA_GROUP）。
+  # 开发环境 STORE_MODE=file（生产环境建议 db 模式 + MySQL 持久化）。
+  # 版本对齐设计文档 §4.2.1：与 SCA 2023.0.1.0 seata-spring-boot-starter 兼容。
+  seata-server:
+    image: seataio/seata-server:2.0.0
+    container_name: nexus-seata-server
+    ports:
+      - '8091:8091'    # Seata Server TC 端口（client 通过此端口注册分支事务）
+      - '7091:7091'    # Seata Server Web 控制台
+    environment:
+      - SEATA_PORT=8091
+      - STORE_MODE=file
+      # 注册到 Nacos（复用 nexus-nacos）
+      - SEATA_REGISTRY_NAME=nacos
+      - SEATA_REGISTRY_NACOS_SERVER_ADDR=nexus-nacos:8848
+      - SEATA_REGISTRY_NACOS_NAMESPACE=dev
+      - SEATA_REGISTRY_NACOS_GROUP=SEATA_GROUP
+      - SEATA_REGISTRY_NACOS_CLUSTER_NAME=default
+      # 配置中心指向 Nacos
+      - SEATA_CONFIG_NAME=nacos
+      - SEATA_CONFIG_NACOS_SERVER_ADDR=nexus-nacos:8848
+      - SEATA_CONFIG_NACOS_NAMESPACE=dev
+      - SEATA_CONFIG_NACOS_GROUP=SEATA_GROUP
+    depends_on:
+      nacos:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:7091/health']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  # === 链路追踪 ===
+  # Zipkin Server 3.4，收集 Micrometer Tracing + Brave 上报的 span。
+  # 开发环境 STORAGE_TYPE=mem（内存存储，重启丢失；生产环境建议 mysql 或 elasticsearch）。
+  # 设计文档 §4.3.4：4 服务通过 zipkin-reporter-brave HTTP POST 上报至 /api/v2/spans。
+  zipkin:
+    image: openzipkin/zipkin:3.4
+    container_name: nexus-zipkin
+    ports:
+      - '9411:9411'    # Zipkin API + UI
+    environment:
+      - STORAGE_TYPE=mem   # 开发：内存存储；生产：mysql 或 elasticsearch
+      # 生产 MySQL 持久化：
+      # - STORAGE_TYPE=mysql
+      # - MYSQL_HOST=zipkin-mysql
+      # - MYSQL_USER=zipkin
+      # - MYSQL_PASS=zipkin
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:9411/health']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
     restart: unless-stopped
 
 volumes:

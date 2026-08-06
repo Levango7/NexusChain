@@ -53,6 +53,13 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
 
+    // === Micrometer Tracing + Zipkin（Phase 3 任务 #61，设计文档 §4.3.1） ===
+    // SpringBoot 3.2.5 BOM 管理版本（micrometer-tracing 1.2.5 + zipkin-reporter-brave 2.16.4）
+    // W3C traceparent 格式跨服务传播，Zipkin 上报，Feign 自动埋点
+    implementation 'io.micrometer:micrometer-tracing-bridge-brave'
+    implementation 'io.zipkin.reporter2:zipkin-reporter-brave'
+    implementation 'io.github.openfeign:feign-micrometer'
+
     // === Spring Cloud BOM（管理 OpenFeign / LoadBalancer 版本） ===
     implementation platform('org.springframework.cloud:spring-cloud-dependencies:2023.0.3')
     // === Spring Cloud Alibaba BOM（管理 Nacos / Sentinel 版本） ===
@@ -64,6 +71,11 @@ dependencies {
 
     // === Sentinel 熔断 / 限流 ===
     implementation 'com.alibaba.cloud:spring-cloud-starter-alibaba-sentinel'
+
+    // === Seata 分布式事务（Phase 3 任务 #61） ===
+    // SCA 2023.0.1.0 BOM 管理 seata-spring-boot-starter 版本（2.0.0），设计文档 §4.1 / §4.2.2
+    // wallet-service 作为 TCC 分支事务参与方（提现执行 DefaultWithdrawalApprovalService）
+    implementation 'com.alibaba.cloud:spring-cloud-starter-alibaba-seata'
 
     // === OpenFeign 声明式调用 + LoadBalancer ===
     // wallet-service 作为 Feign 客户端调 signing-service（SigningServiceFeignClient）

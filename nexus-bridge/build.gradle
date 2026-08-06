@@ -51,6 +51,13 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-validation'
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
 
+    // === Micrometer Tracing + Zipkin（Phase 3 任务 #61，设计文档 §4.3.1） ===
+    // SpringBoot 3.2.5 BOM 管理版本（micrometer-tracing 1.2.5 + zipkin-reporter-brave 2.16.4）
+    // W3C traceparent 格式跨服务传播，Zipkin 上报，Feign 自动埋点
+    implementation 'io.micrometer:micrometer-tracing-bridge-brave'
+    implementation 'io.zipkin.reporter2:zipkin-reporter-brave'
+    implementation 'io.github.openfeign:feign-micrometer'
+
     // Web3j: 用于与 EVM 兼容链（Ethereum / BSC / Polygon）进行 JSON-RPC 交互
     // 排除 jc-kzg-4844（EIP-4844 blob 交易支持），桥合约调用不需要且该依赖在
     // 当前仓库配置下不可解析（tech.pegasys:jc-kzg-4844:0.8.0 仅存在于特定仓库）
@@ -69,6 +76,11 @@ dependencies {
 
     // === Sentinel 熔断 / 限流 ===
     implementation 'com.alibaba.cloud:spring-cloud-starter-alibaba-sentinel'
+
+    // === Seata 分布式事务（Phase 3 任务 #61） ===
+    // SCA 2023.0.1.0 BOM 管理 seata-spring-boot-starter 版本（2.0.0），设计文档 §4.1 / §4.2.2
+    // bridge 当前无跨服务事务需求（设计文档 §2.1.1），但依赖统一接入便于未来扩展
+    implementation 'com.alibaba.cloud:spring-cloud-starter-alibaba-seata'
 
     // === OpenFeign 声明式调用 + LoadBalancer（bridge 作为独立微服务，预留 Feign 调用能力） ===
     implementation 'org.springframework.cloud:spring-cloud-starter-openfeign'

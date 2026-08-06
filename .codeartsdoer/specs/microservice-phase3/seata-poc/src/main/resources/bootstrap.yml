@@ -1,0 +1,14 @@
+# Seata POC bootstrap 配置
+# 仅验证配置解析，不真正连接 Nacos
+spring:
+  application:
+    name: seata-poc
+  cloud:
+    nacos:
+      discovery:
+        server-addr: ${NEX_NACOS_SERVER:127.0.0.1:8848}
+        namespace: dev
+      config:
+        server-addr: ${NEX_NACOS_SERVER:127.0.0.1:8848}
+        namespace: dev
+        group: NEXUS_GROUP

@@ -9,10 +9,15 @@
 
 server:
   port: ${SERVER_PORT:8084}
+  # === Phase 3 任务 #61：优雅停机（设计文档 §4.6.2） ===
+  shutdown: graceful
 
 spring:
   application:
     name: nexus-bridge
+  # === Phase 3 任务 #61：优雅停机等待时长（设计文档 §4.6.2） ===
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
   datasource:
     url: jdbc:mysql://localhost:3306/nexus_bridge?useSSL=false&serverTimezone=UTC
     username: nexus
@@ -106,3 +111,23 @@ management:
   endpoint:
     health:
       show-details: always
+  # === Phase 3 任务 #61：链路追踪（设计文档 §4.3.2） ===
+  # Micrometer Tracing + Brave + Zipkin，W3C traceparent 跨服务传播
+  tracing:
+    sampling:
+      probability: 1.0  # 开发环境 100% 采样，生产环境建议 0.1
+  zipkin:
+    tracing:
+      endpoint: ${NEX_ZIPKIN_ENDPOINT:http://localhost:9411/api/v2/spans}
+
+# === Phase 3 任务 #61：Seata 分布式事务配置（设计文档 §4.2.2） ===
+# SCA 2023.0.1.0 + seata-spring-boot-starter 2.0.0
+# bridge 当前无跨服务事务需求（设计文档 §2.1.1），配置统一接入便于未来扩展
+seata:
+  enabled: true
+  tx-service-group: nexus-tx-group
+  service:
+    vgroup-mapping:
+      nexus-tx-group: default
+    grouplist:
+      default: ${NEX_SEATA_SERVER:localhost:8091}
