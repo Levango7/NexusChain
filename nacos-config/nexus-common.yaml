@@ -1,0 +1,40 @@
+# NexusChain 共享配置（所有微服务共享）
+# 
+# 本文件由 nacos-config/init.sh 发布至 Nacos：
+#   dataId : nexus-common.yaml
+#   group  : NEXUS_GROUP
+#   type   : yaml
+# 
+# 各微服务通过 bootstrap.yml 的 spring.cloud.nacos.config.shared-configs 引入。
+# 设计文档 §4.2.3 配置迁移清单。
+
+# === 链节点 RPC（全局共享）+ 服务网格 ===
+nexus:
+  chain:
+    node-rpc: http://nexus-core:19585
+    rpc-url: http://nexus-core:19585
+  consortium:
+    rpc-url: http://nexus-consortium:8081
+  service-mesh:
+    transport-mode: ${NEX_TRANSPORT_MODE:http}
+    nacos:
+      enabled: true
+
+# === 日志（共享）===
+logging:
+  level:
+    root: INFO
+    org.nexus: DEBUG
+    org.springframework.cloud.openfeign: DEBUG
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+
+# === Actuator ===
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus,sentinel
+  endpoint:
+    health:
+      show-details: always

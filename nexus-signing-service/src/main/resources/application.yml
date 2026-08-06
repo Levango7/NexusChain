@@ -1,0 +1,76 @@
+# nexus-signing-service application 配置
+#
+# Phase 1 任务 #54：签名服务独立部署业务配置。
+# 设计文档 §4.2.3 配置迁移清单。
+#
+# 敏感配置（wallet.keystore.json / wallet.keystore.password）生产环境通过 Nacos
+# nexus-signing-service.yaml 加密下发（设计文档 §7.1 R10 风险缓解），
+# 本地开发可通过环境变量或本文件覆盖。
+
+server:
+  port: ${SERVER_PORT:8082}
+
+spring:
+  # Sentinel 集成（设计文档 §4.3）
+  cloud:
+    sentinel:
+      transport:
+        dashboard: ${NEX_SENTINEL_DASHBOARD:localhost:8858}
+        # 客户端与 Sentinel Dashboard 通信端口（默认 8719，按服务递增）
+        port: ${NEX_SENTINEL_CLIENT_PORT:8719}
+      # 取消懒加载，启动即向 Dashboard 注册
+      eager: true
+      # Sentinel 数据源：从 Nacos 订阅规则（nexus-sentinel-rules.yaml）
+      datasource:
+        ds1:
+          nacos:
+            server-addr: ${NEX_NACOS_SERVER:localhost:8848}
+            namespace: ${NEX_NACOS_NAMESPACE:dev}
+            group-id: NEXUS_GROUP
+            data-id: nexus-sentinel-rules.yaml
+            rule-type: flow
+
+# === 链节点 RPC（从 exchange-wallet application.properties 迁移） ===
+# nodeNet 为 NodeController 使用的链节点 RPC 地址
+nodeNet: ${NEX_NODE_NET:localhost:19585}
+
+# === 平台热钱包 keystore（从 exchange-wallet application.properties 迁移） ===
+# 设置 wallet.keystore.json 为 keystore JSON 内联，或为启动时读取的文件路径。
+# wallet.keystore.password 为 keystore 解密密码。
+# 未设置时，/api/v1/transfers/sign 回退为要求调用方提供 keystore。
+wallet:
+  keystore:
+    json: ${WALLET_KEYSTORE_JSON:}
+    password: ${WALLET_KEYSTORE_PASSWORD:}
+
+# === OpenFeign 配置（设计文档 §4.4.2） ===
+feign:
+  client:
+    config:
+      default:
+        connect-timeout: 3000
+        read-timeout: 10000
+        logger-level: BASIC
+  circuitbreaker:
+    enabled: true
+  compression:
+    request:
+      enabled: true
+    response:
+      enabled: true
+
+# === Spring Cloud LoadBalancer 配置 ===
+spring.cloud.loadbalancer:
+  cache:
+    enabled: true
+    ttl: 30s
+
+# === Actuator 健康检查 ===
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always

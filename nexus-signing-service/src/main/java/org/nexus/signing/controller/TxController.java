@@ -1,67 +1,161 @@
 package org.nexus.signing.controller;
 
+import org.nexus.sdk.wallet.TxUtils;
+import org.nexus.sdk.wallet.WalletUtils;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.google.gson.JsonObject;
+import org.nexus.sdk.common.APIResult;
+import org.nexus.signing.pool.NoncePool;
+import org.nexus.signing.pool.NonceState;
 import org.nexus.signing.keystore.PlatformKeystore;
-import org.nexus.signing.mpc.MpcService;
+import org.nexus.sdk.util.JsonUtil;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestMethod;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.io.IOException;
 import java.math.BigDecimal;
+import java.util.Date;
 import java.util.HashMap;
-import java.util.Map;
+import java.util.TreeMap;
 
 /**
- * 签名服务交易控制器（骨架）。
+ * 签名服务交易控制器。
  *
- * <p>定义签名服务对外暴露的 REST 端点边界。原实现位于
- * {@code org.nexus.wallet.signing.controller.TxController}（exchange-wallet），
- * 提供 {@code /ClientToTransferAccount} 与 {@code /api/v1/transfers/sign} 等端点。</p>
+ * <p>从 {@code org.nexus.wallet.signing.controller.TxController}（exchange-wallet）
+ * 迁入 signing-service，包路径变更为 {@code org.nexus.signing.controller}。</p>
  *
- * <p>PoC 阶段：仅暴露服务健康检查与边界信息端点，实际签名 + 广播逻辑
- * 仍由 exchange-wallet 进程内提供。完整迁移后本控制器将承载：
+ * <p>提供链上转账签名 + 广播 REST 端点：
  * <ul>
- *   <li>{@code POST /api/v1/transfers/sign}：使用平台密钥库签名并广播</li>
- *   <li>{@code POST /api/v1/mpc/sign}：MPC 阈值签名</li>
- *   <li>{@code GET /api/v1/signing/health}：签名服务健康检查</li>
+ *   <li>{@code POST /ClientToTransferAccount}：legacy 签名广播端点</li>
+ *   <li>{@code POST /api/v1/transfers/sign}：合约化签名广播端点</li>
+ *   <li>{@code GET /getNoncePool}：查询 Nonce 池</li>
  * </ul></p>
  */
 @RestController
-@RequestMapping("/api/v1/signing")
 public class TxController {
 
     @Autowired
-    private PlatformKeystore platformKeystore;
+    NoncePool noncePool;
 
     @Autowired
-    private MpcService mpcService;
+    NodeController nodeController;
+
+    @Autowired
+    PlatformKeystore platformKeystore;
 
     /**
-     * 签名服务健康检查端点。
+     * LEGACY transfer endpoint, kept for backward compatibility with existing
+     * form-POST clients.
      *
-     * @return 服务状态信息
+     * <p>SECURITY (P1 fix): the {@code prikey} request parameter has been
+     * REMOVED — caller-supplied plaintext private keys are never accepted.
+     * Signing is performed exclusively with the server-side
+     * {@link PlatformKeystore}, and {@code fromPubkey} must match the platform
+     * keystore public key. Any extra {@code prikey} form field sent by legacy
+     * clients is ignored, and requests whose {@code fromPubkey} does not match
+     * the platform key are rejected. New clients should use
+     * {@code /api/v1/transfers/sign}.</p>
      */
-    @GetMapping("/health")
-    public Map<String, Object> health() {
-        Map<String, Object> status = new HashMap<>();
-        status.put("service", "nexus-signing-service");
-        status.put("keystoreLoaded", platformKeystore.isLoaded());
-        status.put("mpcThreshold", mpcService.getThreshold());
-        status.put("mpcTotal", mpcService.getTotalParticipants());
-        return status;
+    @RequestMapping(value="/ClientToTransferAccount",method = RequestMethod.POST )
+    public Object ClientToTransferAccount(@RequestParam(value = "fromPubkey", required = true) String fromPubkey,
+                                          @RequestParam(value = "toPubkeyHash", required = true) String toPubkeyHash,
+                                          @RequestParam(value = "amount", required = true) BigDecimal amount
+                                          ) throws IOException {
+        return signAndBroadcast(fromPubkey, toPubkeyHash, amount);
     }
 
     /**
-     * 签名能力查询端点（骨架）。
+     * Sign + broadcast a transfer using the SERVER-SIDE platform keystore, so
+     * the caller (e.g. the gateway) never transmits a private key. This is the
+     * endpoint the gateway delegates to (ExchangeWalletClient.signTransfer).
      *
-     * @param amount 提现金额
-     * @return MPC 签名能力
+     * <p>SECURITY (P1 fix): the former {@code keystoreJson}/{@code password}
+     * override has been REMOVED — caller-supplied keystore material is never
+     * accepted over HTTP. Signing uses the platform keystore exclusively, and
+     * {@code fromPubkey} must match the platform keystore public key.</p>
      */
-    @GetMapping("/capability")
-    public Map<String, Object> capability(BigDecimal amount) {
-        Map<String, Object> result = new HashMap<>();
-        result.put("amount", amount);
-        result.put("canSign", mpcService.canSign(amount));
-        return result;
+    @RequestMapping(value="/api/v1/transfers/sign", method = RequestMethod.POST )
+    public Object signTransfer(@RequestParam(value = "fromPubkey", required = true) String fromPubkey,
+                               @RequestParam(value = "toPubkeyHash", required = true) String toPubkeyHash,
+                               @RequestParam(value = "amount", required = true) BigDecimal amount
+    ) throws IOException {
+        return signAndBroadcast(fromPubkey, toPubkeyHash, amount);
     }
+
+    /**
+     * Shared signing pipeline: platform-key-only. Rejects the request unless
+     * the platform keystore is loaded and {@code fromPubkey} matches the
+     * platform keystore public key. No caller-supplied private key material is
+     * ever used.
+     */
+    private Object signAndBroadcast(String fromPubkey, String toPubkeyHash, BigDecimal amount) throws IOException {
+        String prikey = platformKeystore == null ? null : platformKeystore.getPrikey();
+        if (prikey == null || prikey.isBlank()) {
+            return fail("No signing key available: wallet.keystore.json is not configured");
+        }
+        String platformPubkey = platformKeystore.getPubkey();
+        if (platformPubkey == null || platformPubkey.isBlank()
+                || !platformPubkey.equalsIgnoreCase(fromPubkey)) {
+            return fail("fromPubkey does not match the platform keystore public key; "
+                    + "caller-supplied private keys are no longer accepted");
+        }
+
+        long nownonce=0;
+        String frompubhash=WalletUtils.pubkeyStrToPubkeyHashStr(fromPubkey);
+        String address=WalletUtils.pubkeyHashToAddress(frompubhash);
+        if(WalletUtils.verifyAddress(address)!=0){
+            return fail("Address Error");
+        }
+        long maxnonce=noncePool.getMaxNonce(address);
+        if(maxnonce==0){
+            //rpc获取nonce
+            JsonObject getnonoce=nodeController.getNonce(frompubhash);
+            int Code= getnonoce != null && getnonoce.has("code") ? getnonoce.get("code").getAsInt() : 0;
+            if(Code==5000){
+                return fail("Error");
+            }
+            long dbnonce= getnonoce != null && getnonoce.has("data") ? getnonoce.get("data").getAsLong() : 0;
+            nownonce=dbnonce;
+        }else{
+            nownonce=maxnonce;
+        }
+        ObjectNode data = TxUtils.ClientToTransferAccount(fromPubkey,toPubkeyHash,amount,prikey,nownonce);
+        if (data == null || data.isEmpty() || !data.has("data")){
+            return fail("Error");
+        }else {
+            // 直接返回 ObjectNode（Jackson 原生序列化），不再经 Gson 反射转 HashMap——
+            // 旧实现会把 ObjectNode 序列化成 _children/_nodeFactory 内部字段，
+            // 导致响应丢失 data（交易哈希）且 noncePool 记录空哈希。
+            String texhash = data.get("data").asText();
+            data.put("statusCode", 2000);
+            nownonce++;
+            NonceState nonceState=new NonceState(texhash,nownonce,new Date().getTime());
+            noncePool.add(address,nonceState);
+            return data;
+        }
+    }
+
+    /** Build a 5000-status error payload (same shape as the legacy API). */
+    private Object fail(String message) {
+        APIResult result = new APIResult();
+        result.setStatusCode(5000);
+        result.setMessage(message);
+        return JsonUtil.GSON.fromJson(JsonUtil.GSON.toJson(result), HashMap.class);
+    }
+
+    @RequestMapping(value="/getNoncePool",method = RequestMethod.GET )
+    public Object getNoncePool(@RequestParam(value = "address", required = true) String address){
+        if(WalletUtils.verifyAddress(address)!=0){
+            APIResult result = new APIResult();
+            result.setStatusCode(5000);
+            result.setMessage("Address Error");
+            return result;
+        }
+        TreeMap<Long, NonceState> tree=noncePool.getTreemap(address);
+        return APIResult.newFailResult(2000,"SUCCESS",tree);
+    }
+
 }

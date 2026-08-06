@@ -1,36 +1,53 @@
 package org.nexus.walletsvc.whitelist;
 
 /**
- * 地址白名单服务接口（钱包管理服务侧）。
+ * Address whitelist service interface for managing approved withdrawal
+ * addresses and enforcing the first-time withdrawal delay.
  *
- * <p>原实现位于 {@code org.nexus.wallet.wallet.whitelist.AddressWhitelistService}（exchange-wallet），
- * 本接口为独立部署后的服务边界抽象。</p>
+ * <p>Withdrawals to non-whitelisted addresses are blocked or routed through
+ * an enhanced approval flow. Newly added addresses are subject to a
+ * configurable delay before the first withdrawal is permitted.</p>
  *
- * <p>PoC 阶段：仅定义接口边界，实际白名单逻辑仍由 exchange-wallet 进程内提供。</p>
+ * <p>迁移历史：原位于 {@code org.nexus.wallet.wallet.whitelist.AddressWhitelistService}
+ * （nexus-exchange-wallet），在 Phase 2 微服务化中迁移至 nexus-wallet-service
+ * （新包 {@code org.nexus.walletsvc.whitelist}）。</p>
  */
 public interface AddressWhitelistService {
 
     /**
-     * 判断地址是否已加白。
+     * Add an address to the whitelist for the given merchant.
      *
-     * @param address 钱包地址
-     * @return {@code true} 表示已加白
+     * @param address    wallet address to whitelist
+     * @param label      human-readable label
+     * @param merchantId merchant ID
+     * @return the created whitelist entry with firstWithdrawalAvailableAt set
+     */
+    WhitelistEntry addWhitelist(String address, String label, String merchantId);
+
+    /**
+     * Remove an address from the whitelist.
+     *
+     * @param address wallet address to remove
+     */
+    void removeWhitelist(String address);
+
+    /**
+     * Whether the given address is currently on the whitelist and active.
+     *
+     * @param address wallet address
+     * @return {@code true} if the address is whitelisted and active
      */
     boolean isWhitelisted(String address);
 
     /**
-     * 加入白名单。
+     * Whether the address is subject to the first-time withdrawal delay.
      *
-     * @param address 钱包地址
-     * @return 操作是否成功
-     */
-    boolean add(String address);
-
-    /**
-     * 移出白名单。
+     * <p>Returns {@code true} if the address is whitelisted but the
+     * first-time delay has not yet elapsed (i.e. withdrawals should be
+     * blocked or routed through enhanced approval).</p>
      *
-     * @param address 钱包地址
-     * @return 操作是否成功
+     * @param address wallet address
+     * @return {@code true} if the first-time withdrawal delay is still in effect
      */
-    boolean remove(String address);
+    boolean checkFirstTimeWithdrawal(String address);
 }

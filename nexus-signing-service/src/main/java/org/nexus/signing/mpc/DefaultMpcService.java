@@ -1,38 +1,55 @@
 package org.nexus.signing.mpc;
 
-import org.springframework.stereotype.Component;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Service;
 
-import java.math.BigDecimal;
+import java.util.List;
 
 /**
- * {@link MpcService} 的默认骨架实现。
+ * Default skeleton implementation of {@link MpcService}.
  *
- * <p>PoC 阶段：返回固定阈值（3 of 5），所有金额均报告不可签名，
- * 仅用于保证签名服务模块可独立编译与装配。完整迁移后将接入
- * ColdWalletMultiSigService / MpcApprovalPolicy 等真实 MPC 组件。</p>
+ * <p>All methods are stubbed and log a TODO marker. Production wiring must
+ * integrate a proven MPC threshold-signature protocol such as
+ * <strong>GG18</strong> or <strong>GG20</strong> for ECDSA. The implementation
+ * must orchestrate distributed key generation (DKG), distributed signing, and
+ * proactive key refresh across the participant nodes.</p>
+ *
+ * <p><b>TODO:</b> integrate GG18/GG20 protocol library, wire participant
+ * transport (gRPC/TLS), persist wallet metadata and signing sessions, enforce
+ * threshold quorum, and audit all signing rounds.</p>
  */
-@Component
+@Service
 public class DefaultMpcService implements MpcService {
 
-    /** 默认冷钱包 MPC 阈值（与 exchange-wallet MpcApprovalPolicy 保持一致） */
-    private static final int DEFAULT_THRESHOLD = 3;
-
-    /** 默认冷钱包 MPC 总参与者数 */
-    private static final int DEFAULT_TOTAL = 5;
+    private static final Logger log = LoggerFactory.getLogger(DefaultMpcService.class);
 
     @Override
-    public boolean canSign(BigDecimal amount) {
-        // PoC：始终返回 false，实际逻辑待迁移
-        return false;
+    public MpcWallet createMpcWallet(List<String> participants, int threshold) {
+        // TODO: validate 1 < threshold <= participants.size()
+        // TODO: run GG18/GG20 distributed key generation (DKG) across participants
+        // TODO: persist the MpcWallet with the joint public key; private shares never leave their nodes
+        log.warn("createMpcWallet not implemented: participants={}, threshold={}", participants, threshold);
+        MpcWallet stub = new MpcWallet();
+        stub.setParticipants(participants);
+        stub.setThreshold(threshold);
+        return stub;
     }
 
     @Override
-    public int getThreshold() {
-        return DEFAULT_THRESHOLD;
+    public String signTransaction(String walletId, String txData) {
+        // TODO: load MpcWallet, initiate a GG18/GG20 signing round with participants
+        // TODO: collect threshold signature shares, combine into the final ECDSA signature
+        // TODO: persist the MpcSignSession for audit and return the combined signature
+        log.warn("signTransaction not implemented: walletId={}, txData={}", walletId, txData);
+        return null;
     }
 
     @Override
-    public int getTotalParticipants() {
-        return DEFAULT_TOTAL;
+    public MpcWallet rotateKey(String walletId) {
+        // TODO: load MpcWallet, run proactive key refresh (GG18/GG20 refresh phase)
+        // TODO: update lastRotatedAt; the joint public key must remain unchanged
+        log.warn("rotateKey not implemented: walletId={}", walletId);
+        return null;
     }
 }

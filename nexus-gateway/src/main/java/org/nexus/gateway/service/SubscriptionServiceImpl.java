@@ -1,9 +1,10 @@
 package org.nexus.gateway.service;
 
 import org.nexus.gateway.SubscriptionService;
-import org.nexus.gateway.client.ExchangeWalletClient;
 import org.nexus.gateway.model.Subscription;
 import org.nexus.gateway.repository.SubscriptionRepository;
+import org.nexus.sdk.client.feign.SigningServiceFeignClient;
+import org.nexus.sdk.client.feign.WalletMgmtFeignClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -22,12 +23,17 @@ public class SubscriptionServiceImpl implements SubscriptionService {
     private static final Logger log = LoggerFactory.getLogger(SubscriptionServiceImpl.class);
 
     private final SubscriptionRepository subscriptionRepository;
-    private final ExchangeWalletClient walletClient;
+    /** 签名服务 Feign 客户端：legacy 转账（订阅扣款，调用方提供私钥） */
+    private final SigningServiceFeignClient signingServiceClient;
+    /** 钱包管理服务 Feign 客户端：地址转公钥哈希 */
+    private final WalletMgmtFeignClient walletMgmtClient;
 
     public SubscriptionServiceImpl(SubscriptionRepository subscriptionRepository,
-                                   ExchangeWalletClient walletClient) {
+                                   SigningServiceFeignClient signingServiceClient,
+                                   WalletMgmtFeignClient walletMgmtClient) {
         this.subscriptionRepository = subscriptionRepository;
-        this.walletClient = walletClient;
+        this.signingServiceClient = signingServiceClient;
+        this.walletMgmtClient = walletMgmtClient;
     }
 
     @Override
@@ -132,7 +138,7 @@ public class SubscriptionServiceImpl implements SubscriptionService {
      */
     private String executeSubscriptionCharge(Subscription sub) {
         try {
-            String receiverPubkeyHash = walletClient.addressToPubkeyHash(sub.getPayeeAddress());
+            String receiverPubkeyHash = walletMgmtClient.addressToPubkeyHash(sub.getPayeeAddress());
             if (receiverPubkeyHash == null) {
                 log.warn("Cannot resolve payee pubkeyHash (wallet unreachable?), simulating charge for: {}", sub.getSubscriptionNo());
                 return "0x" + UUID.randomUUID().toString().replace("-", "");
@@ -147,7 +153,7 @@ public class SubscriptionServiceImpl implements SubscriptionService {
                 return "0x" + UUID.randomUUID().toString().replace("-", "");
             }
 
-            return walletClient.transfer(payerPubkey, receiverPubkeyHash, sub.getAmount(), payerPrikey);
+            return signingServiceClient.transfer(payerPubkey, receiverPubkeyHash, sub.getAmount(), payerPrikey);
         } catch (Exception e) {
             log.error("Subscription charge exception: {}", e.getMessage());
             return null;

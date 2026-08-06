@@ -32,6 +32,9 @@ import java.util.Map;
  * gateway can drive the consortium chain uniformly. When the consortium node
  * is unreachable and {@code skip-confirmation} is enabled, the client falls
  * back to a dev-mode behaviour that allows local testing.</p>
+ *
+ * <p>Phase 1 任务 #55：Resilience4j {@code @CircuitBreaker}/{@code @Retry} 注解保留
+ * （管理对链节点直接 HTTP 调用的熔断/重试，与 Sentinel 共存）。</p>
  */
 @Component
 public class ConsortiumRpcClient {
@@ -53,6 +56,7 @@ public class ConsortiumRpcClient {
      * @param txHash on-chain transaction hash
      * @return true if the transaction has sufficient confirmations (statusCode 2000)
      */
+
     @CircuitBreaker(name = "consortiumNode", fallbackMethod = "isTransactionConfirmedFallback")
     @Retry(name = "consortiumNode")
     public boolean isTransactionConfirmed(String txHash) {
@@ -91,6 +95,7 @@ public class ConsortiumRpcClient {
      *
      * @return current block height, or -1 on failure
      */
+
     @CircuitBreaker(name = "consortiumNode", fallbackMethod = "getBlockHeightFallback")
     public long getBlockHeight() {
         try {
@@ -152,6 +157,7 @@ public class ConsortiumRpcClient {
      * @param signedTxHex signed transaction hex string
      * @return true if broadcast was accepted
      */
+
     @CircuitBreaker(name = "consortiumNode", fallbackMethod = "broadcastTransactionFallback")
     @Retry(name = "consortiumNode")
     public boolean broadcastTransaction(String signedTxHex) {

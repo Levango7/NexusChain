@@ -27,6 +27,20 @@ dependencies {
     // Guava (WalletUtils uses com.google.common.primitives.Bytes; matches nexus-core 31.1-jre)
     implementation 'com.google.guava:guava:31.1-jre'
 
+    // Gson — shared JsonUtil (org.nexus.sdk.util.JsonUtil) migrated from exchange-wallet in Phase 1.
+    // Version aligned with exchange-wallet (2.10.1) and root build.gradle ext.gsonVersion.
+    implementation 'com.google.code.gson:gson:2.10.1'
+
+    // === Phase 1: Feign 接口骨架（org.nexus.sdk.client.feign.*）所需注解 ===
+    // 仅编译期需要 @FeignClient / @PostMapping 等注解；运行期由各消费方微服务
+    // （gateway / signing-service / wallet-service，均为 Spring Boot 应用）提供实现。
+    // 用 compileOnly + BOM 约束版本，不向消费方传递 Spring 运行期依赖。
+    // 版本矩阵对齐设计文档 §4.1：Spring Boot 3.2.5 / Spring Cloud 2023.0.3 / SCA 2023.0.1.0。
+    compileOnly platform('org.springframework.boot:spring-boot-dependencies:3.2.5')
+    compileOnly platform('org.springframework.cloud:spring-cloud-dependencies:2023.0.3')
+    compileOnly 'org.springframework.cloud:spring-cloud-starter-openfeign'
+    compileOnly 'org.springframework.boot:spring-boot-starter-web'
+
     testImplementation 'junit:junit:4.13.2'
     // JUnit 5 (Jupiter) — SdkUnitTest uses @Nested/@Test/@DisplayName
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'

@@ -1,0 +1,82 @@
+# nexus-wallet-service application 配置
+#
+# Phase 2 任务 #57：钱包管理服务独立部署业务配置。
+# 设计文档 §4.2.3 配置迁移清单。
+#
+# 敏感配置（如平台热钱包地址）生产环境通过 Nacos nexus-wallet-service.yaml 下发，
+# 本地开发可通过环境变量或本文件覆盖。
+
+server:
+  port: ${SERVER_PORT:8083}
+
+spring:
+  # Sentinel 集成（设计文档 §4.3）
+  cloud:
+    sentinel:
+      transport:
+        dashboard: ${NEX_SENTINEL_DASHBOARD:localhost:8858}
+        # 客户端与 Sentinel Dashboard 通信端口（默认 8719，按服务递增；wallet-service 用 8720）
+        port: ${NEX_SENTINEL_CLIENT_PORT:8720}
+      # 取消懒加载，启动即向 Dashboard 注册
+      eager: true
+      # Sentinel 数据源：从 Nacos 订阅规则（nexus-sentinel-rules.yaml）
+      datasource:
+        ds1:
+          nacos:
+            server-addr: ${NEX_NACOS_SERVER:localhost:8848}
+            namespace: ${NEX_NACOS_NAMESPACE:dev}
+            group-id: NEXUS_GROUP
+            data-id: nexus-sentinel-rules.yaml
+            rule-type: flow
+
+# === 钱包管理配置 ===
+nexus:
+  wallet:
+    # 平台热钱包地址（提现发起方），生产环境通过 Nacos / 环境变量下发
+    platform-address: ${NEX_WALLET_PLATFORM_ADDRESS:PLATFORM_HOT_WALLET}
+    # 地址白名单首次提币延迟（小时）
+    whitelist:
+      first-withdrawal-delay-hours: ${NEX_WALLET_WHITELIST_DELAY_HOURS:24}
+    # 链上执行通道（保留兜底，DefaultWithdrawalApprovalService 已改用 SigningServiceFeignClient）
+    execution:
+      sandbox: ${NEX_WALLET_EXECUTION_SANDBOX:false}
+  # gateway 基础 URL（HttpOnChainExecutionClient 兜底用，Feign 调用不依赖此配置）
+  gateway:
+    base-url: ${NEX_GATEWAY_BASE_URL:http://localhost:8080}
+
+# === OpenFeign 配置（设计文档 §4.4.2） ===
+# wallet-service 通过 Feign 调用 signing-service（SigningServiceFeignClient）
+feign:
+  client:
+    config:
+      default:
+        connect-timeout: 3000
+        read-timeout: 10000
+        logger-level: BASIC
+      # 签名服务调用：签名 + 广播，允许较长超时
+      nexus-signing-service:
+        connect-timeout: 2000
+        read-timeout: 8000
+  circuitbreaker:
+    enabled: true
+  compression:
+    request:
+      enabled: true
+    response:
+      enabled: true
+
+# === Spring Cloud LoadBalancer 配置 ===
+spring.cloud.loadbalancer:
+  cache:
+    enabled: true
+    ttl: 30s
+
+# === Actuator 健康检查 ===
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always

@@ -1,35 +1,69 @@
 package org.nexus.signing.keystore;
 
+import org.nexus.sdk.wallet.WalletUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
+
+import jakarta.annotation.PostConstruct;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+
 /**
- * 平台密钥库接口（签名服务侧）。
+ * 服务端平台（热钱包）密钥库。
  *
- * <p>定义签名服务对平台热钱包密钥的访问边界。原实现位于
- * {@code org.nexus.wallet.signing.keystore.PlatformKeystore}（exchange-wallet），
- * 本接口为独立部署后的服务边界抽象，未来完整迁移时由
- * {@code DefaultPlatformKeystore} 实现并从配置加载密钥。</p>
+ * <p>从 {@code org.nexus.wallet.signing.keystore.PlatformKeystore}（exchange-wallet）
+ * 迁入 signing-service，包路径变更为 {@code org.nexus.signing.keystore}。</p>
  *
- * <p>PoC 阶段：仅定义接口边界，实际密钥访问仍由 exchange-wallet 进程内提供。</p>
+ * <p>从配置加载平台私钥，使 gateway 可以请求签名而无需传输私钥。
+ * keystore JSON 可内联提供（{@code wallet.keystore.json}）或作为文件路径
+ * （启动时加载）。未设置时，调用方仍可通过现有 {@code /ClientToTransferAccount}
+ * 端点按请求提供自己的 keystore。</p>
  */
-public interface PlatformKeystore {
+@Component
+public class PlatformKeystore {
 
-    /**
-     * 获取平台私钥（hex）。
-     *
-     * @return 平台私钥 hex 字符串，未加载时返回 {@code null}
-     */
-    String getPrikey();
+    private static final Logger log = LoggerFactory.getLogger(PlatformKeystore.class);
 
-    /**
-     * 获取平台公钥（hex）。
-     *
-     * @return 平台公钥 hex 字符串，未加载时返回 {@code null}
-     */
-    String getPubkey();
+    @Value("${wallet.keystore.json:}")
+    private String keystoreJson;
 
-    /**
-     * 判断密钥库是否已成功加载。
-     *
-     * @return {@code true} 表示私钥与公钥均已就绪
-     */
-    boolean isLoaded();
+    @Value("${wallet.keystore.password:}")
+    private String keystorePassword;
+
+    private String prikey;
+    private String pubkey;
+
+    @PostConstruct
+    public void init() {
+        if (keystoreJson == null || keystoreJson.isBlank()) {
+            log.warn("wallet.keystore.json not configured; /api/v1/transfers/sign requires a server keystore or caller-supplied keystore");
+            return;
+        }
+        String json = keystoreJson;
+        if (looksLikePath(keystoreJson)) {
+            try {
+                json = new String(Files.readAllBytes(Paths.get(keystoreJson)));
+            } catch (Exception e) {
+                log.error("Failed to read platform keystore file: {}", e.getMessage());
+                return;
+            }
+        }
+        try {
+            this.prikey = WalletUtils.obtainPrikey(json, keystorePassword);
+            this.pubkey = WalletUtils.keystoreToPubkey(json, keystorePassword);
+            log.info("Platform keystore loaded; pubkey present={}", pubkey != null);
+        } catch (Exception e) {
+            log.error("Failed to load platform keystore: {}", e.getMessage());
+        }
+    }
+
+    private boolean looksLikePath(String s) {
+        return s.contains("/") || s.contains("\\") || s.toLowerCase().endsWith(".json");
+    }
+
+    public String getPrikey() { return prikey; }
+    public String getPubkey() { return pubkey; }
+    public boolean isLoaded() { return prikey != null && pubkey != null; }
 }

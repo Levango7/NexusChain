@@ -1,56 +1,64 @@
 package org.nexus.walletsvc.approval;
 
+import org.nexus.sdk.signing.ApprovalPolicy;
+import org.nexus.sdk.wallet.WithdrawalRequest;
+
 import java.math.BigDecimal;
 
 /**
- * 提现审批服务接口（钱包管理服务侧）。
+ * Withdrawal approval service interface driving the multi-approver withdrawal
+ * workflow.
  *
- * <p>定义钱包管理服务对提现审批流程的服务边界。原实现位于
- * {@code org.nexus.wallet.wallet.approval.WithdrawalApprovalService}（exchange-wallet），
- * 本接口为独立部署后的服务边界抽象。</p>
+ * <p>Lifecycle: a withdrawal is {@link #requestWithdrawal requested} in
+ * {@link WithdrawalRequest.WithdrawalStatus#PENDING}, then accumulates
+ * {@link #approve approvals} until {@code approvedCount >= requiredApprovers},
+ * at which point it transitions to {@link WithdrawalRequest.WithdrawalStatus#APPROVED}
+ * and can be {@link #executeApprovedWithdrawal executed} on-chain. A request
+ * may also be {@link #reject rejected} before reaching the approval threshold.</p>
  *
- * <p>PoC 阶段：仅定义接口边界，实际审批流程仍由 exchange-wallet 进程内提供。
- * 完整迁移涉及 DefaultWithdrawalApprovalService / WithdrawalRequest 等组件，
- * 见 README.md 迁移计划。所需审批人数由 {@code org.nexus.sdk.signing.ApprovalPolicy}
- * （已迁至 nexus-sdk 共享层）决定。</p>
+ * <p>迁移历史：原位于 {@code org.nexus.wallet.wallet.approval.WithdrawalApprovalService}
+ * （nexus-exchange-wallet），在 Phase 2 微服务化中迁移至 nexus-wallet-service
+ * （新包 {@code org.nexus.walletsvc.approval}）。WithdrawalRequest DTO 已迁至
+ * nexus-sdk 共享层（{@code org.nexus.sdk.wallet.WithdrawalRequest}）。</p>
  */
 public interface WithdrawalApprovalService {
 
     /**
-     * 发起一笔提现申请，进入 PENDING 状态，所需审批人数由
-     * {@link ApprovalPolicy} 决定。
+     * Request a withdrawal to the given address. The request enters PENDING
+     * status with requiredApprovers determined by the {@link ApprovalPolicy}.
      *
-     * @param to       目标钱包地址
-     * @param amount   提现金额
-     * @param currency 币种符号
-     * @return 提现申请句柄
+     * @param to       target wallet address
+     * @param amount   withdrawal amount
+     * @param currency currency symbol
+     * @return the created withdrawal request
      */
     WithdrawalRequest requestWithdrawal(String to, BigDecimal amount, String currency);
 
     /**
-     * 记入一次审批。当审批数达到阈值时，申请转入 APPROVED 状态。
+     * Record an approval from the given approver. When the approval threshold
+     * is reached, the request transitions to APPROVED status.
      *
-     * @param approvalId 提现申请 ID
-     * @param approverId 审批人 ID
-     * @return 更新后的提现申请
+     * @param approvalId withdrawal request ID
+     * @param approverId approver identifier
+     * @return the updated withdrawal request
      */
     WithdrawalRequest approve(String approvalId, String approverId);
 
     /**
-     * 拒绝提现申请。
+     * Reject the withdrawal request.
      *
-     * @param approvalId 提现申请 ID
-     * @param approverId 审批人 ID
-     * @param reason     拒绝原因
-     * @return 更新后的提现申请（REJECTED 状态）
+     * @param approvalId withdrawal request ID
+     * @param approverId approver identifier
+     * @param reason     rejection reason
+     * @return the updated withdrawal request in REJECTED status
      */
     WithdrawalRequest reject(String approvalId, String approverId, String reason);
 
     /**
-     * 执行已审批通过的提现，上链广播。
+     * Execute an approved withdrawal on-chain.
      *
-     * @param approvalId 提现申请 ID
-     * @return 更新后的提现申请（EXECUTED 或 FAILED 状态）
+     * @param approvalId withdrawal request ID
+     * @return the updated withdrawal request in EXECUTED (or FAILED) status
      */
     WithdrawalRequest executeApprovedWithdrawal(String approvalId);
 }

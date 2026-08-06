@@ -17,6 +17,10 @@ import java.util.Map;
 /**
  * HTTP client for NexusChain Core node RPC endpoints.
  * Wraps the node's form-encoded REST API (port 19585 by default).
+ *
+ * <p>Phase 1 任务 #55：Resilience4j {@code @CircuitBreaker}/{@code @Retry} 注解保留
+ * （管理对链节点直接 HTTP 调用的熔断/重试，与 Sentinel 共存：Sentinel 管理 Feign 层
+ * 对 signing/wallet-service 的调用）。</p>
  */
 @Component
 public class ChainRpcClient {
@@ -38,6 +42,7 @@ public class ChainRpcClient {
      * @param txHash on-chain transaction hash
      * @return true if the transaction has sufficient confirmations (statusCode 2100)
      */
+
     @CircuitBreaker(name = "chainNode", fallbackMethod = "isTransactionConfirmedFallback")
     @Retry(name = "chainNode")
     public boolean isTransactionConfirmed(String txHash) {
@@ -74,6 +79,7 @@ public class ChainRpcClient {
      *
      * @return current block height, or -1 on failure
      */
+
     @CircuitBreaker(name = "chainNode", fallbackMethod = "getBlockHeightFallback")
     public long getBlockHeight() {
         try {
@@ -135,6 +141,7 @@ public class ChainRpcClient {
      * @param signedTxHex signed transaction hex string
      * @return true if broadcast was accepted
      */
+
     @CircuitBreaker(name = "chainNode", fallbackMethod = "broadcastTransactionFallback")
     @Retry(name = "chainNode")
     public boolean broadcastTransaction(String signedTxHex) {

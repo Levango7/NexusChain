@@ -1,9 +1,10 @@
 package org.nexus.gateway.orchestration.connectors;
 
 import org.nexus.gateway.client.ConsortiumRpcClient;
-import org.nexus.gateway.client.ExchangeWalletClient;
 import org.nexus.gateway.config.GatewayConfig;
 import org.nexus.gateway.orchestration.connector.*;
+import org.nexus.sdk.client.feign.SigningServiceFeignClient;
+import org.nexus.sdk.client.feign.WalletMgmtFeignClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -26,16 +27,21 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <p>Per the documented architecture ("Gateway 不直接构造链上交易，而是复用
  * nexus-exchange-wallet 模块的转账构造与签名链路"), this connector does NOT
- * build or sign transactions itself. It delegates settlement to exchange-wallet's
- * signing endpoint, which constructs, signs (with its own server-side keystore)
- * and broadcasts the transaction. The gateway only polls confirmation via the
- * consortium RPC client.</p>
+ * build or sign transactions itself. It delegates settlement to the signing
+ * service's signing endpoint (Feign 调用 nexus-signing-service），由签名服务
+ * 构造、签名（使用服务端 keystore）并广播交易。地址转换委托给钱包管理服务
+ * （Feign 调用 nexus-wallet-service）。The gateway only polls confirmation via
+ * the consortium RPC client.</p>
  *
  * <p>Price oracle integration: when an {@link OraclePriceAdapter} is available,
  * the fiat amount from the payment request is converted to the on-chain token
  * amount via the oracle price. If the oracle is absent or the conversion fails,
  * the original request amount is used — preserving the legacy behaviour and not
  * breaking existing tests.</p>
+ *
+ * <p>Phase 1 任务 #55：原注入 {@code ExchangeWalletClient} 兼容委托层，改为直接
+ * 注入 {@link SigningServiceFeignClient}（签名类操作）+ {@link WalletMgmtFeignClient}
+ * （地址类操作），通过 Nacos 服务发现 + OpenFeign 声明式调用独立部署的微服务。</p>
  */
 @Component
 public class ConsortiumConnector implements PaymentConnector {
@@ -43,7 +49,10 @@ public class ConsortiumConnector implements PaymentConnector {
     private static final Logger log = LoggerFactory.getLogger(ConsortiumConnector.class);
 
     private final ConsortiumRpcClient consortiumRpc;
-    private final ExchangeWalletClient walletClient;
+    /** 签名服务 Feign 客户端：签名 + 广播（涉及私钥的操作） */
+    private final SigningServiceFeignClient signingServiceClient;
+    /** 钱包管理服务 Feign 客户端：地址转公钥哈希等（不涉及私钥的操作） */
+    private final WalletMgmtFeignClient walletMgmtClient;
     private final GatewayConfig gatewayConfig;
 
     /** 可选依赖：nexus-oracle 价格适配器，用于法币→链上币换算。未装配时为 null。 */
@@ -59,27 +68,33 @@ public class ConsortiumConnector implements PaymentConnector {
     /**
      * 主构造函数：Spring 装配时使用，注入可选的 {@link OraclePriceAdapter}。
      *
-     * @param consortiumRpc      consortium 链 RPC 客户端
-     * @param walletClient       exchange-wallet 客户端
-     * @param gatewayConfig      网关配置
-     * @param oraclePriceAdapter 价格预言机适配器（可选，可为 null）
+     * @param consortiumRpc         consortium 链 RPC 客户端
+     * @param signingServiceClient  签名服务 Feign 客户端
+     * @param walletMgmtClient      钱包管理服务 Feign 客户端
+     * @param gatewayConfig         网关配置
+     * @param oraclePriceAdapter    价格预言机适配器（可选，可为 null）
      */
     @Autowired
-    public ConsortiumConnector(ConsortiumRpcClient consortiumRpc, ExchangeWalletClient walletClient,
+    public ConsortiumConnector(ConsortiumRpcClient consortiumRpc,
+                               SigningServiceFeignClient signingServiceClient,
+                               WalletMgmtFeignClient walletMgmtClient,
                                GatewayConfig gatewayConfig,
                                @Autowired(required = false) OraclePriceAdapter oraclePriceAdapter) {
         this.consortiumRpc = consortiumRpc;
-        this.walletClient = walletClient;
+        this.signingServiceClient = signingServiceClient;
+        this.walletMgmtClient = walletMgmtClient;
         this.gatewayConfig = gatewayConfig;
         this.oraclePriceAdapter = oraclePriceAdapter;
     }
 
     /**
-     * 兼容构造函数：无价格预言机，保留以兼容既有单元测试（3 参数构造）。
+     * 兼容构造函数：无价格预言机，保留以兼容既有单元测试（4 参数构造）。
      */
-    public ConsortiumConnector(ConsortiumRpcClient consortiumRpc, ExchangeWalletClient walletClient,
+    public ConsortiumConnector(ConsortiumRpcClient consortiumRpc,
+                               SigningServiceFeignClient signingServiceClient,
+                               WalletMgmtFeignClient walletMgmtClient,
                                GatewayConfig gatewayConfig) {
-        this(consortiumRpc, walletClient, gatewayConfig, null);
+        this(consortiumRpc, signingServiceClient, walletMgmtClient, gatewayConfig, null);
     }
 
     @Override
@@ -101,7 +116,7 @@ public class ConsortiumConnector implements PaymentConnector {
             if (platformPubkey == null || platformPubkey.isBlank()) {
                 return ConnectorPaymentResult.fail("exchange-wallet platform pubkey not configured");
             }
-            String toPubkeyHash = walletClient.addressToPubkeyHash(request.getPayeeAddress());
+            String toPubkeyHash = walletMgmtClient.addressToPubkeyHash(request.getPayeeAddress());
             if (toPubkeyHash == null) {
                 return ConnectorPaymentResult.fail("invalid payee address: " + request.getPayeeAddress());
             }
@@ -114,7 +129,7 @@ public class ConsortiumConnector implements PaymentConnector {
 
             // Delegate construction + signing + broadcast to exchange-wallet. The returned
             // txHash is the real on-chain transaction hash (already signed by exchange-wallet).
-            String txHash = walletClient.signTransfer(platformPubkey, toPubkeyHash, settlementAmount);
+            String txHash = signingServiceClient.signTransfer(platformPubkey, toPubkeyHash, settlementAmount);
             if (txHash == null) {
                 return ConnectorPaymentResult.fail("exchange-wallet signing failed");
             }
@@ -122,7 +137,7 @@ public class ConsortiumConnector implements PaymentConnector {
             String connectorId = "consortium_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
             pendingPayments.put(connectorId, PaymentStatus.PROCESSING);
             payeeHashMap.put(connectorId, toPubkeyHash);
-            String payerHash = walletClient.addressToPubkeyHash(request.getPayerAddress());
+            String payerHash = walletMgmtClient.addressToPubkeyHash(request.getPayerAddress());
             if (payerHash != null) {
                 payerHashMap.put(connectorId, payerHash);
             }
@@ -200,7 +215,7 @@ public class ConsortiumConnector implements PaymentConnector {
             if (targetHash == null) {
                 return ConnectorRefundResult.fail("original payment not found: " + connectorPaymentId);
             }
-            String txHash = walletClient.signTransfer(platformPubkey, targetHash, BigDecimal.valueOf(amount));
+            String txHash = signingServiceClient.signTransfer(platformPubkey, targetHash, BigDecimal.valueOf(amount));
             if (txHash == null) {
                 return ConnectorRefundResult.fail("exchange-wallet refund signing failed");
             }

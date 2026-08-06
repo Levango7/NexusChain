@@ -2,6 +2,28 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## v1.4.0 - Phase 1 + Phase 2 微服务化（2026-08-07）
+
+### Phase 1：签名服务独立部署 + Nacos + Sentinel
+- signing-service 全套实现（TxController/PlatformKeystore/mpc/* + NoncePool/NodeController/Leveldb）
+- Nacos 服务发现 + 配置中心接入（docker-compose Nacos 2.3.2）
+- Sentinel 熔断限流接入（Sentinel Dashboard 1.8.8）
+- gateway Feign 改造（5 处调用方 + SigningServiceFeignClient/WalletMgmtFeignClient）
+- ColdWalletMultiSigService 解耦（删 OnChainExecutionClient，改 NodeController 直接广播）
+- exchange-wallet signing/ 子包删除（代码迁入 signing-service）
+
+### Phase 2：钱包服务 + 跨链桥独立部署
+- wallet-service 全套实现（approval/custody/whitelist/execution）
+- DefaultWithdrawalApprovalService 改造（OnChainExecutionClient 改 SigningServiceFeignClient）
+- bridge 独立部署改造（SCA 依赖 + Nacos + Sentinel）
+- exchange-wallet 模块完全移除（代码迁入 signing-service + wallet-service）
+- resilience4j 保留（与 Sentinel 共存：resilience4j 管理链节点直接 HTTP 调用，Sentinel 管理 Feign 调用）
+
+### 技术决策
+- signing-service/wallet-service 从 includeBuild 改为 include 子模块（解决 composite build 依赖替换问题）
+- Feign 接口修正：addressToPubkeyHash/verifyAddress 从 SigningServiceFeignClient 移到 WalletMgmtFeignClient（对齐方案 §4.4.1）
+- fallback 类保留 @Component 注解，不绑定 @FeignClient（编译通过，运行时降级在后续完善）
+
 ## [1.3.0] — 2026-08-06 — C2 改进完成：Bean 冲突修复 + 治理参数化 + L2 欺诈证明 + MPC 网络层 + 治理增强 + L2 增强 + 签名服务 PoC + 紧急回滚 + ZK 骨架
 
 ### P0 — Bean 冲突修复（#45）

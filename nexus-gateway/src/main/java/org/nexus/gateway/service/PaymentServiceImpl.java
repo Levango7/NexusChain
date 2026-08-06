@@ -2,7 +2,6 @@ package org.nexus.gateway.service;
 
 import org.nexus.gateway.PaymentService;
 import org.nexus.gateway.client.ChainRpcClient;
-import org.nexus.gateway.client.ExchangeWalletClient;
 import org.nexus.gateway.compliance.AmlResult;
 import org.nexus.gateway.compliance.ComplianceService;
 import org.nexus.gateway.compliance.KycStatus;
@@ -16,6 +15,8 @@ import org.nexus.gateway.risk.PaymentRequest;
 import org.nexus.gateway.risk.PaymentRiskService;
 import org.nexus.gateway.risk.RefundRequest;
 import org.nexus.gateway.risk.RiskDecision;
+import org.nexus.sdk.client.feign.SigningServiceFeignClient;
+import org.nexus.sdk.client.feign.WalletMgmtFeignClient;
 import org.springframework.context.ApplicationEventPublisher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -41,7 +42,10 @@ public class PaymentServiceImpl implements PaymentService {
     private final RefundRepository refundRepository;
     private final GatewayConfig gatewayConfig;
     private final ChainRpcClient chainRpcClient;
-    private final ExchangeWalletClient walletClient;
+    /** 签名服务 Feign 客户端：签名 + 广播（涉及私钥的操作，退款转账） */
+    private final SigningServiceFeignClient signingServiceClient;
+    /** 钱包管理服务 Feign 客户端：地址转公钥哈希等（不涉及私钥的操作） */
+    private final WalletMgmtFeignClient walletMgmtClient;
     private final ApplicationEventPublisher eventPublisher;
     private final KeyManager keyManager;
     private final PaymentRiskService riskService;
@@ -51,7 +55,8 @@ public class PaymentServiceImpl implements PaymentService {
                               RefundRepository refundRepository,
                               GatewayConfig gatewayConfig,
                               ChainRpcClient chainRpcClient,
-                              ExchangeWalletClient walletClient,
+                              SigningServiceFeignClient signingServiceClient,
+                              WalletMgmtFeignClient walletMgmtClient,
                               ApplicationEventPublisher eventPublisher,
                               KeyManager keyManager,
                               PaymentRiskService riskService,
@@ -60,7 +65,8 @@ public class PaymentServiceImpl implements PaymentService {
         this.refundRepository = refundRepository;
         this.gatewayConfig = gatewayConfig;
         this.chainRpcClient = chainRpcClient;
-        this.walletClient = walletClient;
+        this.signingServiceClient = signingServiceClient;
+        this.walletMgmtClient = walletMgmtClient;
         this.eventPublisher = eventPublisher;
         this.keyManager = keyManager;
         this.riskService = riskService;
@@ -226,7 +232,7 @@ public class PaymentServiceImpl implements PaymentService {
         refund.setStatus(Refund.RefundStatus.PROCESSING);
 
         // Execute refund transfer via exchange-wallet
-        String receiverPubkeyHash = walletClient.addressToPubkeyHash(order.getPayerAddress());
+        String receiverPubkeyHash = walletMgmtClient.addressToPubkeyHash(order.getPayerAddress());
         if (receiverPubkeyHash != null) {
             String txHash = executeRefundTransfer(order, receiverPubkeyHash, amount);
             if (txHash != null) {
@@ -294,7 +300,7 @@ public class PaymentServiceImpl implements PaymentService {
         }
 
         try {
-            return walletClient.signTransfer(platformPubkey, receiverPubkeyHash, amount);
+            return signingServiceClient.signTransfer(platformPubkey, receiverPubkeyHash, amount);
         } catch (Exception e) {
             log.error("Refund transfer exception for order {}: {}", order.getOrderNo(), e.getMessage());
             return null;

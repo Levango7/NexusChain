@@ -1,28 +1,77 @@
 package org.nexus.walletsvc.custody;
 
+import org.nexus.sdk.wallet.WalletTier;
+
+import java.math.BigDecimal;
+
 /**
- * 钱包托管策略接口（钱包管理服务侧）。
+ * Custody service interface for the hot/warm/cold tiering model.
  *
- * <p>原实现位于 {@code org.nexus.wallet.wallet.custody.CustodyService}（exchange-wallet），
- * 本接口为独立部署后的服务边界抽象。</p>
+ * <p>The hot wallet serves immediate withdrawals; the warm wallet holds
+ * semi-online funds requiring limited approval to move; the cold wallet is
+ * air-gapped and requires full multi-sig approval. The service enforces the
+ * {@link CustodyPolicy} caps and performs rebalancing between tiers.</p>
  *
- * <p>PoC 阶段：仅定义接口边界，实际托管逻辑仍由 exchange-wallet 进程内提供。</p>
+ * <p>迁移历史：原位于 {@code org.nexus.wallet.wallet.custody.CustodyService}
+ * （nexus-exchange-wallet），在 Phase 2 微服务化中迁移至 nexus-wallet-service
+ * （新包 {@code org.nexus.walletsvc.custody}）。{@link WalletTier} 已迁至
+ * nexus-sdk 共享层（{@code org.nexus.sdk.wallet.WalletTier}）。</p>
  */
 public interface CustodyService {
 
     /**
-     * 判断指定钱包是否处于冷托管。
+     * Deposit funds from the hot wallet to the cold wallet.
      *
-     * @param walletId 钱包 ID
-     * @return {@code true} 表示冷托管
+     * @param address cold wallet address
+     * @param amount  amount to deposit
+     * @return on-chain transaction hash of the deposit
+     */
+    String depositToCold(String address, BigDecimal amount);
+
+    /**
+     * Withdraw funds from the cold wallet to the hot wallet.
+     *
+     * @param address     cold wallet address
+     * @param amount      amount to withdraw
+     * @param approvalId  multi-sig approval ID authorizing the withdrawal
+     * @return on-chain transaction hash of the withdrawal
+     */
+    String withdrawFromCold(String address, BigDecimal amount, String approvalId);
+
+    /**
+     * Get the current hot wallet balance.
+     *
+     * @return hot wallet balance
+     */
+    BigDecimal getHotBalance();
+
+    /**
+     * Get the current cold wallet balance.
+     *
+     * @return cold wallet balance
+     */
+    BigDecimal getColdBalance();
+
+    /**
+     * Rebalance funds across tiers to comply with the custody policy.
+     *
+     * @param target target tier to rebalance toward (HOT, WARM, or COLD)
+     */
+    void rebalance(WalletTier target);
+
+    /**
+     * Whether the given wallet is under cold custody (air-gapped storage).
+     *
+     * @param walletId wallet ID
+     * @return {@code true} if the wallet is under cold custody
      */
     boolean isColdCustody(String walletId);
 
     /**
-     * 获取指定钱包的托管层级。
+     * Get the custody tier for the given wallet.
      *
-     * @param walletId 钱包 ID
-     * @return 托管层级名称
+     * @param walletId wallet ID
+     * @return custody tier name (e.g. "HOT", "WARM", "COLD")
      */
     String getCustodyTier(String walletId);
 }

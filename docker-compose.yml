@@ -1,5 +1,21 @@
 version: '3.8'
 
+# NexusChain 开发环境编排
+# 
+# 包含两类服务：
+#   1. 应用服务（nexus-gateway / nexus-core / nexus-bridge）—— 需各模块 Dockerfile 就绪后构建
+#   2. 基础设施（nacos / sentinel-dashboard）—— 开发环境服务发现 + 配置中心 + 熔断限流控制台
+# 
+# 开发环境仅拉起基础设施：
+#   docker-compose up nacos sentinel-dashboard
+# 全量拉起（含应用）：
+#   docker-compose up
+# 
+# 端口约定（设计文档 §4.2.2）：
+#   Nacos    : 8848 (HTTP) / 9848 (gRPC, Nacos 2.x client 必需)
+#   Sentinel : 8858 (Dashboard UI)
+#   gateway  : 8080 / core : 19585 / bridge : 8082
+
 services:
   nexus-gateway:
     build: ./nexus-gateway
@@ -9,6 +25,8 @@ services:
       - SPRING_PROFILES_ACTIVE=prod
     depends_on:
       nexus-core:
+        condition: service_healthy
+      nacos:
         condition: service_healthy
     healthcheck:
       test: ['CMD', 'curl', '-f', 'http://localhost:8080/actuator/health']
@@ -37,9 +55,67 @@ services:
     depends_on:
       nexus-core:
         condition: service_healthy
+      nacos:
+        condition: service_healthy
     healthcheck:
       test: ['CMD', 'curl', '-f', 'http://localhost:8082/api/v1/bridge/status']
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 30s
+
+  # === 服务发现 + 配置中心 ===
+  # Nacos 2.3.2 standalone 模式，嵌入式 derby 持久化（开发环境，不依赖外部 MySQL）。
+  # 生产环境请使用 docker-compose.prod.yml 中的 Nacos 集群 + MySQL 持久化方案。
+  # 版本对齐设计文档 §4.1：SCA 2023.0.1.0 内置 Nacos Client 2.3.2。
+  nacos:
+    image: nacos/nacos-server:v2.3.2
+    container_name: nexus-nacos
+    ports:
+      - '8848:8848'    # Nacos HTTP API + 控制台
+      - '9848:9848'    # Nacos 2.x gRPC 端口（客户端必需，client ≥ 2.0 通过 gRPC 注册）
+    environment:
+      - MODE=standalone
+      - PREFER_HOST_MODE=hostname
+      - JVM_XMS=256m
+      - JVM_XMX=512m
+      - JVM_XMN=128m
+      # 嵌入式 derby（开发环境默认）；如需 MySQL 持久化，取消注释以下配置：
+      # - SPRING_DATASOURCE_PLATFORM=mysql
+      # - MYSQL_SERVICE_HOST=nacos-mysql
+      # - MYSQL_SERVICE_PORT=3306
+      # - MYSQL_SERVICE_DB_NAME=nacos_config
+      # - MYSQL_SERVICE_USER=nacos
+      # - MYSQL_SERVICE_PASSWORD=nacos
+    volumes:
+      - nacos-logs:/home/nacos/logs
+      - ./nacos-config/init:/home/nacos/init.d   # 自定义初始化脚本（见 nacos-config/）
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:8848/nacos/v1/console/health/readiness']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  # === 熔断 / 限流控制台 ===
+  # Sentinel Dashboard 1.8.8，用于查看实时监控数据与推送限流规则。
+  # 规则持久化到 Nacos 由各微服务 spring.cloud.sentinel.datasource 配置（见 §4.3.3）。
+  # 版本对齐设计文档 §4.1：SCA 2023.0.1.0 内置 Sentinel 1.8.8。
+  sentinel-dashboard:
+    image: bladex/sentinel-dashboard:1.8.8
+    container_name: nexus-sentinel-dashboard
+    ports:
+      - '8858:8080'    # 对外 8858 → 容器内 Sentinel Dashboard 默认 8080
+    environment:
+      - JAVA_OPTS=-Dserver.port=8080 -Dcsp.sentinel.dashboard.server=localhost:8080 -Dproject.name=nexus-sentinel-dashboard
+    volumes:
+      - sentinel-logs:/root/logs
+    depends_on:
+      nacos:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  nacos-logs:
+  sentinel-logs:

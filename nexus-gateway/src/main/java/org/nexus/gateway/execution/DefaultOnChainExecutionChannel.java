@@ -1,8 +1,9 @@
 package org.nexus.gateway.execution;
 
 import org.nexus.gateway.client.ChainRpcClient;
-import org.nexus.gateway.client.ExchangeWalletClient;
 import org.nexus.gateway.config.GatewayConfig;
+import org.nexus.sdk.client.feign.SigningServiceFeignClient;
+import org.nexus.sdk.client.feign.WalletMgmtFeignClient;
 import org.nexus.settlement.execution.OnChainExecutionChannel;
 import org.nexus.settlement.execution.TransactionRequest;
 import org.nexus.settlement.execution.TransactionResult;
@@ -18,9 +19,10 @@ import java.util.concurrent.ConcurrentMap;
 /**
  * {@link OnChainExecutionChannel} 的默认实现，位于 nexus-gateway。
  * <p>
- * 注入 {@link ChainRpcClient}（广播与确认查询）和 {@link ExchangeWalletClient}
- * （签名 + 广播），打通"构造交易 → 请求签名 → 广播 → 等待确认 → 返回结果"
- * 的完整链上执行管道。
+ * 注入 {@link ChainRpcClient}（广播与确认查询）、{@link SigningServiceFeignClient}
+ * （签名 + 广播，Feign 调用 nexus-signing-service）与 {@link WalletMgmtFeignClient}
+ * （地址转公钥哈希，Feign 调用 nexus-wallet-service），打通"构造交易 → 请求签名 →
+ * 广播 → 等待确认 → 返回结果"的完整链上执行管道。
  * </p>
  *
  * <h3>执行流程</h3>
@@ -30,7 +32,7 @@ import java.util.concurrent.ConcurrentMap;
  *   <li>sandbox / mock 模式判定（platformPubkey 未配置 或 skipConfirmation=true）：
  *       生成模拟 txHash 并直接返回 SUCCESS（标记 simulated=true）</li>
  *   <li>生产模式：将 toAddress 转为 pubkeyHash → 调用
- *       {@link ExchangeWalletClient#signTransfer} 完成签名 + 广播 → 轮询
+ *       {@link SigningServiceFeignClient#signTransfer} 完成签名 + 广播 → 轮询
  *       {@link ChainRpcClient#isTransactionConfirmed} 等待确认</li>
  *   <li>返回 {@link TransactionResult}，缓存结果以保证幂等</li>
  * </ol>
@@ -45,6 +47,9 @@ import java.util.concurrent.ConcurrentMap;
  * <p>基于 {@link TransactionRequest#getRequestId()} 在进程内缓存执行结果；
  * 相同 requestId 的重复 execute 调用直接返回缓存的 txHash，避免重复上链。
  * 生产环境如需跨进程幂等，应在签名服务侧基于 requestId 做去重。</p>
+ *
+ * <p>Phase 1 任务 #55：原注入 {@code ExchangeWalletClient} 兼容委托层，按方案 §5.1
+ * 拆分为 {@code signingServiceClient} + {@code walletMgmtClient} 两个 Feign 客户端。</p>
  */
 @Component
 public class DefaultOnChainExecutionChannel implements OnChainExecutionChannel {
@@ -55,17 +60,22 @@ public class DefaultOnChainExecutionChannel implements OnChainExecutionChannel {
     public static final String SIMULATED_PREFIX = "SIMULATED-";
 
     private final ChainRpcClient chainRpcClient;
-    private final ExchangeWalletClient exchangeWalletClient;
+    /** 签名服务 Feign 客户端：签名 + 广播（涉及私钥的操作） */
+    private final SigningServiceFeignClient signingServiceClient;
+    /** 钱包管理服务 Feign 客户端：地址转公钥哈希等（不涉及私钥的操作） */
+    private final WalletMgmtFeignClient walletMgmtClient;
     private final GatewayConfig gatewayConfig;
 
     /** requestId → 已执行结果，用于幂等控制 */
     private final ConcurrentMap<String, TransactionResult> idempotentCache = new ConcurrentHashMap<>();
 
     public DefaultOnChainExecutionChannel(ChainRpcClient chainRpcClient,
-                                          ExchangeWalletClient exchangeWalletClient,
+                                          SigningServiceFeignClient signingServiceClient,
+                                          WalletMgmtFeignClient walletMgmtClient,
                                           GatewayConfig gatewayConfig) {
         this.chainRpcClient = chainRpcClient;
-        this.exchangeWalletClient = exchangeWalletClient;
+        this.signingServiceClient = signingServiceClient;
+        this.walletMgmtClient = walletMgmtClient;
         this.gatewayConfig = gatewayConfig;
     }
 
@@ -173,7 +183,7 @@ public class DefaultOnChainExecutionChannel implements OnChainExecutionChannel {
         String platformPubkey = gatewayConfig.getExchangeWallet().getPlatformPubkey();
 
         // 1. 将 toAddress 转为 pubkeyHash
-        String toPubkeyHash = exchangeWalletClient.addressToPubkeyHash(request.getToAddress());
+        String toPubkeyHash = walletMgmtClient.addressToPubkeyHash(request.getToAddress());
         if (toPubkeyHash == null || toPubkeyHash.isEmpty()) {
             log.error("executeProduction: addressToPubkeyHash failed for toAddress={}", request.getToAddress());
             return TransactionResult.failure(
@@ -183,7 +193,7 @@ public class DefaultOnChainExecutionChannel implements OnChainExecutionChannel {
         // 2. 调用签名服务完成签名 + 广播，返回 txHash
         String txHash;
         try {
-            txHash = exchangeWalletClient.signTransfer(
+            txHash = signingServiceClient.signTransfer(
                     platformPubkey, toPubkeyHash, request.getAmount());
         } catch (Exception e) {
             log.error("executeProduction: signTransfer threw, requestId={}", request.getRequestId(), e);

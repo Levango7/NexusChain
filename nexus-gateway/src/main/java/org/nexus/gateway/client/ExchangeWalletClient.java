@@ -4,6 +4,7 @@ import org.nexus.sdk.client.SigningServiceClient;
 import org.nexus.sdk.client.WalletMgmtClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -25,9 +26,21 @@ import java.math.BigDecimal;
  * PaymentServiceImpl / ChainConnector / SubscriptionServiceImpl）。
  * 新代码应直接注入 {@link WalletMgmtClient} 或 {@link SigningServiceClient}。</p>
  *
+ * <p>Phase 1 任务 #55：5 处调用方已切换为直接注入 Feign 客户端
+ * （{@code SigningServiceFeignClient} / {@code WalletMgmtFeignClient}），
+ * 本兼容层不再被任何生产代码引用。通过 {@code @ConditionalOnProperty} 开关
+ * 控制装配：默认不装配（{@code nexus.exchange-wallet.enabled} 缺省即 false），
+ * 仅在紧急回滚场景（Feign 调用失败率飙升，需切回 RestTemplate + 硬编码 baseUrl）
+ * 显式置 {@code nexus.exchange-wallet.enabled=true} 时才装配。本类计划在
+ * Phase 2 验收后（任务 T18/#56）彻底删除。</p>
+ *
  * <p>迁移建议：未来完整阶段将调用方逐步切换为直接注入拆分接口，本类最终删除。</p>
  */
 @Component
+@ConditionalOnProperty(
+        name = "nexus.exchange-wallet.enabled",
+        havingValue = "true",
+        matchIfMissing = false)
 public class ExchangeWalletClient {
 
     private static final Logger log = LoggerFactory.getLogger(ExchangeWalletClient.class);

@@ -27,6 +27,10 @@ import java.util.Map;
  *
  * <p>原 {@link ExchangeWalletClient} 中的 {@code addressToPubkeyHash} /
  * {@code verifyAddress} 方法逻辑迁入本类，保持 REST 调用方式不变。</p>
+ *
+ * <p>Phase 1 任务 #55：gateway 已切换为 Feign 调用 nexus-wallet-service
+ * （{@link org.nexus.sdk.client.feign.WalletMgmtFeignClient}）。本 HTTP 实现类
+ * 保留作为 legacy/回滚备用，Resilience4j 注解保留（与 Sentinel 共存）。</p>
  */
 @Component
 public class HttpWalletMgmtClient implements WalletMgmtClient {

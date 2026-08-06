@@ -28,6 +28,11 @@ import java.util.Map;
  *
  * <p>原 {@link ExchangeWalletClient} 中的 {@code transfer} /
  * {@code signTransfer} 方法逻辑迁入本类，保持 REST 调用方式不变。</p>
+ *
+ * <p>Phase 1 任务 #55：gateway 已切换为 Feign 调用 nexus-signing-service
+ * （{@link org.nexus.sdk.client.feign.SigningServiceFeignClient}）。本 HTTP 实现类
+ * 保留作为 legacy/回滚备用，Resilience4j 注解保留（与 Sentinel 共存：
+ * Resilience4j 管理本类对 exchange-wallet 的直接 HTTP 调用，Sentinel 管理 Feign 层）。</p>
  */
 @Component
 public class HttpSigningServiceClient implements SigningServiceClient {
