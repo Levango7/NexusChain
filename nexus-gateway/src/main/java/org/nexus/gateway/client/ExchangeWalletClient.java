@@ -1,215 +1,121 @@
 package org.nexus.gateway.client;
 
-import org.nexus.gateway.config.GatewayConfig;
+import org.nexus.sdk.client.SigningServiceClient;
+import org.nexus.sdk.client.WalletMgmtClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.http.*;
 import org.springframework.stereotype.Component;
-import org.springframework.util.LinkedMultiValueMap;
-import org.springframework.util.MultiValueMap;
-import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
-import io.github.resilience4j.retry.annotation.Retry;
-import org.springframework.web.client.RestTemplate;
-import org.springframework.web.util.UriComponentsBuilder;
 
 import java.math.BigDecimal;
-import java.util.Map;
 
 /**
- * HTTP client for nexus-exchange-wallet service.
- * Handles transfer construction, signing, and broadcast via the wallet service.
+ * exchange-wallet 服务的兼容委托客户端。
  *
- * Exchange-wallet API:
- *   POST /ClientToTransferAccount?fromPubkey=&toPubkeyHash=&amount=&prikey=
- *   GET  /addressToPubkeyHash?address=
- *   GET  /verifyAddress?address=
+ * <p>历史背景：本类原为单一 HTTP 客户端，承担 exchange-wallet 全部端点调用。
+ * 在 P2 方向5「签名服务独立部署 PoC」中，按服务边界拆分为：
+ * <ul>
+ *   <li>{@link WalletMgmtClient} / {@link HttpWalletMgmtClient}：钱包管理操作
+ *       （地址校验、地址转公钥哈希、白名单、托管）</li>
+ *   <li>{@link SigningServiceClient} / {@link HttpSigningServiceClient}：签名操作
+ *       （平台密钥库签名 + 广播、MPC 阈值签名）</li>
+ * </ul></p>
+ *
+ * <p>本类保留作为<strong>兼容委托层</strong>，将原方法委托给拆分后的两个客户端，
+ * 避免破坏现有 5 处调用方（ConsortiumConnector / DefaultOnChainExecutionChannel /
+ * PaymentServiceImpl / ChainConnector / SubscriptionServiceImpl）。
+ * 新代码应直接注入 {@link WalletMgmtClient} 或 {@link SigningServiceClient}。</p>
+ *
+ * <p>迁移建议：未来完整阶段将调用方逐步切换为直接注入拆分接口，本类最终删除。</p>
  */
 @Component
 public class ExchangeWalletClient {
 
     private static final Logger log = LoggerFactory.getLogger(ExchangeWalletClient.class);
 
-    private final RestTemplate restTemplate;
-    private final GatewayConfig gatewayConfig;
+    private final WalletMgmtClient walletMgmtClient;
+    private final SigningServiceClient signingServiceClient;
 
-    public ExchangeWalletClient(GatewayConfig gatewayConfig) {
-        this.gatewayConfig = gatewayConfig;
-        this.restTemplate = new RestTemplate();
+    /**
+     * 构造兼容委托客户端。
+     *
+     * @param walletMgmtClient   钱包管理边界客户端
+     * @param signingServiceClient 签名边界客户端
+     */
+    public ExchangeWalletClient(WalletMgmtClient walletMgmtClient,
+                                SigningServiceClient signingServiceClient) {
+        this.walletMgmtClient = walletMgmtClient;
+        this.signingServiceClient = signingServiceClient;
     }
 
     /**
-     * Execute a NEX transfer via the exchange-wallet service.
-     * The wallet service handles nonce management, tx construction, signing, and broadcast.
+     * 执行 NEX 转账（legacy 兼容端点，调用方提供私钥）。
      *
-     * @param fromPubkey   sender's public key (hex)
-     * @param toPubkeyHash recipient's public key hash (hex)
-     * @param amount       transfer amount in smallest unit
-     * @param privateKey   sender's private key (hex)
-     * @return transaction hash on success, null on failure
+     * <p>委托给 {@link SigningServiceClient#transfer}。
+     * 新代码应使用 {@link #signTransfer} 避免传输私钥。</p>
+     *
+     * @param fromPubkey   发送方公钥 hex
+     * @param toPubkeyHash 收款方公钥哈希 hex
+     * @param amount       转账金额（最小单位）
+     * @param privateKey   发送方私钥 hex
+     * @return 交易哈希，失败返回 {@code null}
      */
-    @CircuitBreaker(name = "walletService", fallbackMethod = "transferFallback")
-    @Retry(name = "walletService")
     public String transfer(String fromPubkey, String toPubkeyHash, BigDecimal amount, String privateKey) {
-        try {
-            String baseUrl = gatewayConfig.getExchangeWallet().getBaseUrl();
-            String url = baseUrl + "/ClientToTransferAccount";
-
-            HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
-
-            MultiValueMap<String, String> params = new LinkedMultiValueMap<>();
-            params.add("fromPubkey", fromPubkey);
-            params.add("toPubkeyHash", toPubkeyHash);
-            params.add("amount", amount.toPlainString());
-            params.add("prikey", privateKey);
-
-            HttpEntity<MultiValueMap<String, String>> request = new HttpEntity<>(params, headers);
-            ResponseEntity<Map> resp = restTemplate.postForEntity(url, request, Map.class);
-
-            if (resp.getBody() == null) {
-                log.error("Exchange-wallet returned empty response");
-                return null;
-            }
-
-            Object statusCode = resp.getBody().get("statusCode");
-            if (statusCode instanceof Number && ((Number) statusCode).intValue() == 2000) {
-                Object data = resp.getBody().get("data");
-                String txHash = data != null ? data.toString() : null;
-                log.info("Transfer successful: txHash={}", txHash);
-                return txHash;
-            } else {
-                log.error("Transfer failed: response={}", resp.getBody());
-                return null;
-            }
-        } catch (Exception e) {
-            log.error("Failed to call exchange-wallet transfer: {}", e.getMessage());
-            return null;
-        }
+        return signingServiceClient.transfer(fromPubkey, toPubkeyHash, amount, privateKey);
     }
 
     /**
-     * Delegate on-chain settlement signing to exchange-wallet's {@code /api/v1/transfers/sign}
-     * endpoint. Unlike {@link #transfer(String, String, BigDecimal, String)}, this method does
-     * NOT pass a private key: exchange-wallet signs with its own server-side keystore, so the
-     * gateway never handles the platform private key.
+     * 委托签名 + 广播（不传私钥，使用服务端平台密钥库）。
      *
-     * @param fromPubkey   platform (hot-wallet) public key (hex)
-     * @param toPubkeyHash recipient's public key hash (hex)
-     * @param amount       transfer amount in smallest unit
-     * @return transaction hash on success, null on failure
+     * <p>委托给 {@link SigningServiceClient#signTransfer}。</p>
+     *
+     * @param fromPubkey   平台（热钱包）公钥 hex
+     * @param toPubkeyHash 收款方公钥哈希 hex
+     * @param amount       转账金额（最小单位）
+     * @return 交易哈希，失败返回 {@code null}
      */
-    @CircuitBreaker(name = "walletService", fallbackMethod = "signTransferFallback")
-    @Retry(name = "walletService")
     public String signTransfer(String fromPubkey, String toPubkeyHash, BigDecimal amount) {
-        try {
-            String baseUrl = gatewayConfig.getExchangeWallet().getBaseUrl();
-            String url = baseUrl + gatewayConfig.getExchangeWallet().getSignPath();
-
-            HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
-
-            MultiValueMap<String, String> params = new LinkedMultiValueMap<>();
-            params.add("fromPubkey", fromPubkey);
-            params.add("toPubkeyHash", toPubkeyHash);
-            params.add("amount", amount.toPlainString());
-
-            HttpEntity<MultiValueMap<String, String>> request = new HttpEntity<>(params, headers);
-            ResponseEntity<Map> resp = restTemplate.postForEntity(url, request, Map.class);
-
-            if (resp.getBody() == null) {
-                log.error("Exchange-wallet sign returned empty response");
-                return null;
-            }
-
-            Object statusCode = resp.getBody().get("statusCode");
-            if (statusCode instanceof Number && ((Number) statusCode).intValue() == 2000) {
-                Object data = resp.getBody().get("data");
-                String txHash = data != null ? data.toString() : null;
-                log.info("Sign+transfer successful: txHash={}", txHash);
-                return txHash;
-            } else {
-                log.error("Sign+transfer failed: response={}", resp.getBody());
-                return null;
-            }
-        } catch (Exception e) {
-            log.error("Failed to call exchange-wallet sign: {}", e.getMessage());
-            return null;
-        }
+        return signingServiceClient.signTransfer(fromPubkey, toPubkeyHash, amount);
     }
 
     /**
-     * Convert a NEX address to its public key hash.
+     * 将 NEX 地址转换为公钥哈希。
      *
-     * @param address NEX address (e.g. "1CRXnUJx9Tq4ZpNkkueeKFxCbYg1E4uTCt")
-     * @return pubkey hash hex string, or null on failure
+     * <p>委托给 {@link WalletMgmtClient#addressToPubkeyHash}。</p>
+     *
+     * @param address NEX 地址
+     * @return 公钥哈希 hex 字符串，失败返回 {@code null}
      */
-    @CircuitBreaker(name = "walletService", fallbackMethod = "addressToPubkeyHashFallback")
     public String addressToPubkeyHash(String address) {
-        try {
-            String baseUrl = gatewayConfig.getExchangeWallet().getBaseUrl();
-            String url = UriComponentsBuilder.fromHttpUrl(baseUrl)
-                    .pathSegment("addressToPubkeyHash")
-                    .queryParam("address", address)
-                    .toUriString();
-            ResponseEntity<Map> resp = restTemplate.getForEntity(url, Map.class);
-
-            if (resp.getBody() == null) return null;
-            Object statusCode = resp.getBody().get("statusCode");
-            if (statusCode instanceof Number && ((Number) statusCode).intValue() == 2000) {
-                Object data = resp.getBody().get("data");
-                return data != null ? data.toString() : null;
-            }
-            return null;
-        } catch (Exception e) {
-            log.warn("Failed to convert address to pubkeyHash: {}", e.getMessage());
-            return null;
-        }
+        return walletMgmtClient.addressToPubkeyHash(address);
     }
 
     /**
-     * Verify whether a NEX address is valid.
+     * 校验 NEX 地址是否合法。
      *
-     * @param address NEX address
-     * @return true if valid
+     * <p>委托给 {@link WalletMgmtClient#verifyAddress}。</p>
+     *
+     * @param address NEX 地址
+     * @return {@code true} 表示合法
      */
-    @CircuitBreaker(name = "walletService", fallbackMethod = "verifyAddressFallback")
     public boolean verifyAddress(String address) {
-        try {
-            String baseUrl = gatewayConfig.getExchangeWallet().getBaseUrl();
-            String url = UriComponentsBuilder.fromHttpUrl(baseUrl)
-                    .pathSegment("verifyAddress")
-                    .queryParam("address", address)
-                    .toUriString();
-            ResponseEntity<Map> resp = restTemplate.getForEntity(url, Map.class);
-
-            if (resp.getBody() == null) return false;
-            Object statusCode = resp.getBody().get("statusCode");
-            return statusCode instanceof Number && ((Number) statusCode).intValue() == 2000;
-        } catch (Exception e) {
-            log.warn("Failed to verify address: {}", e.getMessage());
-            return false;
-        }
+        return walletMgmtClient.verifyAddress(address);
     }
 
-    // --- Circuit breaker fallbacks ---
-
-    private String transferFallback(String fromPubkey, String toPubkeyHash, BigDecimal amount, String privateKey, Throwable t) {
-        log.error("Circuit breaker fallback: transfer failed, cause={}", t.getMessage());
-        return null;
+    /**
+     * 暴露内部钱包管理客户端，供新代码直接使用拆分接口。
+     *
+     * @return 钱包管理边界客户端
+     */
+    public WalletMgmtClient getWalletMgmtClient() {
+        return walletMgmtClient;
     }
 
-    private String signTransferFallback(String fromPubkey, String toPubkeyHash, BigDecimal amount, Throwable t) {
-        log.error("Circuit breaker fallback: sign-transfer failed, cause={}", t.getMessage());
-        return null;
-    }
-
-    private String addressToPubkeyHashFallback(String address, Throwable t) {
-        log.warn("Circuit breaker fallback: addressToPubkeyHash, cause={}", t.getMessage());
-        return null;
-    }
-
-    private boolean verifyAddressFallback(String address, Throwable t) {
-        log.warn("Circuit breaker fallback: verifyAddress, cause={}", t.getMessage());
-        return false;
+    /**
+     * 暴露内部签名客户端，供新代码直接使用拆分接口。
+     *
+     * @return 签名边界客户端
+     */
+    public SigningServiceClient getSigningServiceClient() {
+        return signingServiceClient;
     }
 }

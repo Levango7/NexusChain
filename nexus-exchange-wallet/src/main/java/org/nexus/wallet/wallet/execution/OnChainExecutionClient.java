@@ -1,5 +1,8 @@
 package org.nexus.wallet.wallet.execution;
 
+import org.nexus.sdk.wallet.WalletTransactionRequest;
+import org.nexus.sdk.wallet.WalletTransactionResult;
+
 /**
  * Wallet 端链上执行通道客户端接口。
  * <p>
@@ -9,6 +12,8 @@ package org.nexus.wallet.wallet.execution;
  *
  * <p>本接口与 settlement 中的 {@code OnChainExecutionChannel} 在方法语义上
  * 保持一致，便于未来若 wallet 并入统一构建时直接替换。</p>
+ *
+ * <p>P2 方向5 PoC：方法签名引用的 DTO 已迁移至 {@code org.nexus.sdk.wallet} 共享包。</p>
  */
 public interface OnChainExecutionClient {
 

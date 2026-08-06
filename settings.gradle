@@ -27,6 +27,15 @@ includeBuild 'nexus-compliance'
 includeBuild 'nexus-analytics'
 includeBuild 'nexus-oracle'
 
+// === P2 方向5「签名服务独立部署 PoC」新增服务骨架 ===
+// nexus-signing-service / nexus-wallet-service 为独立 composite build 模块，
+// 当前阶段仅定义服务边界与接口骨架，不迁移实现代码。
+// 实际签名 / 钱包管理逻辑仍由 nexus-exchange-wallet 进程内提供，
+// 通过 SigningServiceClient / WalletMgmtClient 接口（定义于 nexus-sdk）调用。
+// 未来完整阶段切换为 HTTP + Nacos 服务发现，详见各模块 README.md。
+includeBuild 'nexus-signing-service'
+includeBuild 'nexus-wallet-service'
+
 // === 工具层 ===
 // nexus-explorer (Node.js/React, 不纳入 Gradle)
 // nexus-devtools (Node.js/TypeScript, 不纳入 Gradle)

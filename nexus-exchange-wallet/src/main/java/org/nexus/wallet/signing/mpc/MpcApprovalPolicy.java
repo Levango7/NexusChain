@@ -1,6 +1,6 @@
 package org.nexus.wallet.signing.mpc;
 
-import org.nexus.wallet.wallet.approval.ApprovalPolicy;
+import org.nexus.sdk.signing.ApprovalPolicy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;

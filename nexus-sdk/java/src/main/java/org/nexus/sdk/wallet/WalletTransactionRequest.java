@@ -1,4 +1,4 @@
-package org.nexus.wallet.wallet.execution;
+package org.nexus.sdk.wallet;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -7,12 +7,16 @@ import java.math.BigDecimal;
 import java.util.Objects;
 
 /**
- * Wallet 端链上交易请求 DTO。
- * <p>
- * 与 gateway 端 {@code org.nexus.settlement.execution.TransactionRequest}
+ * 钱包端链上交易请求 DTO。
+ *
+ * <p>与 gateway 端 {@code org.nexus.settlement.execution.TransactionRequest}
  * 的 JSON 结构保持一致，通过 HTTP 传输。wallet 不依赖 settlement，因此
- * 本地定义一份结构等价的 DTO。
- * </p>
+ * 本地定义一份结构等价的 DTO。</p>
+ *
+ * <p>迁移历史：原位于 {@code org.nexus.wallet.wallet.execution.WalletTransactionRequest}，
+ * 在 P2 方向5「签名服务独立部署 PoC」中迁移至 nexus-sdk 共享层
+ * （新包 {@code org.nexus.sdk.wallet}），供 signing-service / wallet-service
+ * 共享。JSON 字段名与结构保持不变，仅 Java 包路径变更。</p>
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class WalletTransactionRequest {

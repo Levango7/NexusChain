@@ -1,5 +1,6 @@
 package org.nexus.governance;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 
@@ -38,6 +39,9 @@ public class GovernanceProposal {
 
     /** 提案发起人地址 */
     private String proposer;
+
+    /** 提案保证金金额（提案通过退还，失败/恶意罚没；null 表示无保证金） */
+    private BigDecimal depositAmount;
 
     public GovernanceProposal() {
     }
@@ -112,5 +116,18 @@ public class GovernanceProposal {
 
     public void setProposer(String proposer) {
         this.proposer = proposer;
+    }
+
+    /**
+     * 返回提案保证金金额。
+     *
+     * @return 保证金金额；未设置返回 null
+     */
+    public BigDecimal getDepositAmount() {
+        return depositAmount;
+    }
+
+    public void setDepositAmount(BigDecimal depositAmount) {
+        this.depositAmount = depositAmount;
     }
 }

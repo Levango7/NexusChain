@@ -83,6 +83,43 @@ public class SlashingService {
     }
 
     /**
+     * 对验证人执行指定金额的罚没（用于 L2 欺诈证明等外部场景）。
+     *
+     * <p>按精确金额 unstake，并将验证人置为 SLASHED。
+     * 不会破坏 {@link #slash(String, Offense)} 的现有语义。</p>
+     *
+     * @param validatorAddress 验证人地址
+     * @param slashAmount      罚没金额
+     * @param reason           罚没原因（如 "FRAUD_PROVEN"）
+     * @return 实际罚没金额；参数非法或余额不足返回 0
+     */
+    public BigDecimal slash(String validatorAddress, BigDecimal slashAmount, String reason) {
+        if (validatorAddress == null || slashAmount == null || slashAmount.signum() <= 0) {
+            return BigDecimal.ZERO;
+        }
+        Validator validator = validatorRegistry.getValidator(validatorAddress);
+        if (validator == null) {
+            logger.warn("Cannot slash unknown validator: {} (reason={})", validatorAddress, reason);
+            return BigDecimal.ZERO;
+        }
+        BigDecimal stake = stakingService.getStake(validatorAddress);
+        BigDecimal actual = slashAmount.min(stake);
+        if (actual.signum() <= 0) {
+            logger.warn("Slash skipped for {}: no stake (reason={})", validatorAddress, reason);
+            return BigDecimal.ZERO;
+        }
+        try {
+            stakingService.unstake(validatorAddress, actual);
+        } catch (IllegalArgumentException e) {
+            logger.warn("Slash unstake failed for {}: {} (reason={})", validatorAddress, e.getMessage(), reason);
+            return BigDecimal.ZERO;
+        }
+        validator.setStatus(ValidatorStatus.SLASHED);
+        logger.info("Slashed {} from {} reason={} (actual={})", slashAmount, validatorAddress, reason, actual);
+        return actual;
+    }
+
+    /**
      * 设置违规类型的罚没比例。
      *
      * @param offense 违规类型

@@ -1,5 +1,7 @@
 package org.nexus.wallet.wallet.approval;
 
+import org.nexus.sdk.signing.ApprovalPolicy;
+
 import java.math.BigDecimal;
 
 /**

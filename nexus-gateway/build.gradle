@@ -6,7 +6,7 @@ plugins {
 }
 
 group = 'org.nexus'
-version = '1.2.0'
+version = '1.3.0'
 
 java {
     toolchain {
@@ -48,10 +48,15 @@ dependencies {
     implementation 'org.apache.commons:commons-lang3'
 
     // 中间服务层（composite build 依赖替换，见根 settings.gradle 的 includeBuild）
-    implementation 'org.nexus:nexus-settlement:1.2.0'
-    implementation 'org.nexus:nexus-compliance:1.2.0'
-    implementation 'org.nexus:nexus-analytics:1.2.0'
-    implementation 'org.nexus:nexus-oracle:1.2.0'
+    implementation 'org.nexus:nexus-settlement:1.3.0'
+    implementation 'org.nexus:nexus-compliance:1.3.0'
+    implementation 'org.nexus:nexus-analytics:1.3.0'
+    implementation 'org.nexus:nexus-oracle:1.3.0'
+
+    // P2 方向5「签名服务独立部署 PoC」：gateway 引用 nexus-sdk 中的
+    // WalletMgmtClient / SigningServiceClient 接口与 ServiceDiscovery 骨架。
+    // nexus-sdk:java 是根构建的 include 子模块，直接用 project() 引用。
+    implementation project(':nexus-sdk:java')
 
     // Testing
     testImplementation 'org.springframework.boot:spring-boot-starter-test'

@@ -76,6 +76,40 @@ nexus:
     # keystore and is never transmitted to the gateway. SET THIS PER DEPLOYMENT.
     platform-pubkey: ""
 
+  # P2 方向5「签名服务独立部署 PoC」服务边界拆分配置
+  #
+  # 当前阶段（PoC）：transport-mode=in-process，gateway 通过 composite build
+  # 直连 exchange-wallet 进程内服务，不经过 HTTP / Nacos。
+  #
+  # 未来完整阶段：transport-mode=http，启用下方 nacos 配置，gateway 通过
+  # SigningServiceClient / WalletMgmtClient 的 HTTP 实现 + Nacos 服务发现
+  # 调用独立部署的 nexus-signing-service / nexus-wallet-service。
+  service-mesh:
+    # 跨服务调用传输模式：in-process（当前默认）| http（未来独立部署后启用）
+    transport-mode: in-process
+    # 签名服务名（Nacos 注册名，未来 http 模式下使用）
+    signing-service: nexus-signing-service
+    # 钱包管理服务名（Nacos 注册名，未来 http 模式下使用）
+    wallet-service: nexus-wallet-service
+
+  # Nacos 服务发现配置占位（P2 方向5 PoC）
+  #
+  # 当前阶段：nacos.enabled=false，不引入 Nacos 依赖，不连接 Nacos 服务端。
+  # 下方配置仅作占位，未来独立部署阶段启用时需：
+  #   1. 在 nexus-gateway/build.gradle 添加 spring-cloud-starter-alibaba-nacos-discovery 依赖
+  #   2. 将 nacos.enabled 改为 true
+  #   3. 将 nexus.service-mesh.transport-mode 改为 http
+  #   4. 在 SigningServiceClient / WalletMgmtClient 的 HTTP 实现上启用 @NacosValue 注入
+  nacos:
+    enabled: false
+    # discovery:
+    #   server-addr: ${NEX_NACOS_SERVER:127.0.0.1:8848}
+    #   namespace: ${NEX_NACOS_NAMESPACE:public}
+    #   group: ${NEX_NACOS_GROUP:DEFAULT_GROUP}
+    #   cluster-name: ${NEX_NACOS_CLUSTER:DEFAULT}
+    #   # 签名服务订阅名（与 nexus.service-mesh.signing-service 保持一致）
+    #   # 钱包管理服务订阅名（与 nexus.service-mesh.wallet-service 保持一致）
+
   # Webhook callback configuration
   webhook:
     # Public base URL for chain event callbacks

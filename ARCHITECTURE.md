@@ -28,6 +28,8 @@ Blockchain is the foundational settlement layer — not the product itself. On t
 | nexus-sdk | Multi-language SDK (Java, JS) | Active |
 | nexus-consortium | Consortium / sidechain — complete PoA chain (consensus, gRPC/WS P2P, 国密 SM2/3/4) | Active — complete chain |
 | nexus-exchange-wallet | Exchange/custodial wallet | Active |
+| nexus-signing-service | 签名服务独立部署（PoC，HTTP 调用） | Active — PoC |
+| nexus-wallet-service | 钱包管理服务独立部署（PoC，HTTP 调用） | Active — PoC |
 | nexus-settlement | 清结算与风控（复式记账、对账、资金归集、风控规则链） | Active — 库（gateway 进程内消费） |
 | nexus-compliance | 合规与身份（KYC/AML/DID/信誉评分） | Active — 库（gateway 进程内消费） |
 | nexus-analytics | 数据智能（交易图谱、链上监控、告警、BI、导出） | Active — 库（gateway 进程内消费，事件驱动） |
@@ -43,7 +45,32 @@ Blockchain is the foundational settlement layer — not the product itself. On t
   - Minimum proposer mortgage: 100,000 NEX
   - Maximum active proposers: 15
   - Vote decay: 10% per 2,160 eras
+  - **PoS 共识（自 1.2.3）**：`ValidatorRegistry`/`StakingServiceImpl`/`PosProposer`/`PosRewardDistributor`/`SlashingService`/`PosConsensusEngine`
 - **nexus-consortium**: PoA (Proof of Authority) — permissioned validator set, proposer round-robin (`PoAMiner`), 国密 SM2/3/4 crypto stack.
+
+## On-Chain Governance（自 1.3.0）
+
+- **参数化治理核心**（`governance/`）：12 个可治理参数集中登记，分级 timelock，quorum 双门槛，多版本快照回滚，参数冲突检测
+- **commit-reveal 投票**（`governance/voting/`）：防跟票
+- **委托加权投票**（`governance/delegation/`）：投票权委托与锁定
+- **守护人审核**（`governance/guardian/`）：m-of-n 守护人 veto/approve
+- **提案保证金**（`governance/deposit/`）：通过退还/失败罚没
+- **紧急回滚通道**（`governance/emergency/`）：m-of-n 守护人批准即生效，跳过 timelock，独立审计日志
+- **守护人罢免**（`governance/recall/`）：走正常治理投票流程，通过后移除作恶守护人
+
+## L2 Rollup（自 1.3.0）
+
+- **Optimistic Rollup**（`l2/`）：欺诈证明 + 挑战窗口 + slashing + challenge bond
+  - MPT 状态根（`MerklePatriciaTrie`）+ 单步二分欺诈证明
+  - EIP-4844 blob 承载（`l2/blob/`）降低 L1 caldata 成本
+  - 多挑战者冲突解决（`l2/challenge/`，first-valid-wins）
+  - 排序策略（`l2/sequencer/`，account nonce 升序 + priority fee 降序）
+  - Gas 估算（`l2/gas/`）
+- **ZK Rollup**（`l2/` + `l2/zk/`）：ZK 证明即最终性
+  - `ZkProofSystem` 抽象（setup/prove/verify），支持未来接入 halo2/Plonk/Groth16
+  - `ZkCircuit` 电路抽象 + `RollupStateTransitionCircuit` 状态转换电路骨架
+  - `TrustedSetup` 可信设置多版本管理
+  - 当前为骨架实现，真实 ZK 接入仅需替换 ZkProofSystem 实现
 
 ## Technology Stack
 
@@ -107,6 +134,8 @@ Blockchain is the foundational settlement layer — not the product itself. On t
 - L2 Rollup（扩容方案）
 - 链上治理执行（提案 → 国库 → 链上动作）
 - MPC 多签协议（GG18/GG20 阈值签名）
+- ZK Rollup 真实 ZK 库接入（halo2/Plonk）
+- 签名服务/钱包服务独立部署（PoC → 生产）
 
 ### 规划中（Planned）
 

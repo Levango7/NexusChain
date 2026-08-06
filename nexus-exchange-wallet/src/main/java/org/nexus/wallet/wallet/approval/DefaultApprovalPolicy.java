@@ -1,5 +1,7 @@
 package org.nexus.wallet.wallet.approval;
 
+import org.nexus.sdk.signing.ApprovalPolicy;
+import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -20,6 +22,7 @@ import java.util.concurrent.CopyOnWriteArraySet;
  * are rejected at request time. Production wiring should source the whitelist
  * from a persistent store and load tier thresholds from configuration.</p>
  */
+@Primary
 @Component
 public class DefaultApprovalPolicy implements ApprovalPolicy {
 

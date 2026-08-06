@@ -2,6 +2,93 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [1.3.0] — 2026-08-06 — C2 改进完成：Bean 冲突修复 + 治理参数化 + L2 欺诈证明 + MPC 网络层 + 治理增强 + L2 增强 + 签名服务 PoC + 紧急回滚 + ZK 骨架
+
+### P0 — Bean 冲突修复（#45）
+- 修复 `ApprovalPolicy` Bean 冲突：多个实现类注册同名 Bean 导致 `DefaultWithdrawalApprovalService` 注入失败
+- 引入 `@Primary` 标注 `DefaultApprovalPolicy` 为首选实现，消除歧义
+- 删除冗余 `ApprovalPolicy` 旧实现，统一审批策略入口
+
+### P1 — 治理参数化核心 + L2 欺诈证明核心（#46, #47）
+
+#### 治理参数化核心（#46）
+- `GovernableParameterRegistry`：12 个可治理参数集中登记（类型/范围/默认值/生效策略/敏感度）
+- 分级 timelock：按参数敏感度（HIGH/MEDIUM/LOW）分级延迟，HIGH 参数延迟更长
+- quorum 双门槛：投票率门槛 + 赞成率门槛，需同时满足才通过
+- 多版本快照与回滚：`ConfigSnapshot` 多版本历史，`createVersionedSnapshot`/`restoreVersionedSnapshot` 支持指定版本回滚
+- 参数冲突检测：提交提案时扫描待执行提案，拒绝同参数并发修改
+- 提案仓储抽象：`GovernanceProposalRepository` 接口 + `InMemoryProposalRepository` 默认实现
+
+#### L2 欺诈证明核心（#47）
+- `MerklePatriciaTrie`：MPT 实现，支持 insert/get/getProof/getRoot
+- `MerkleProof`：Merkle 包含证明
+- 单步二分欺诈证明：`FraudProofVerifier` 支持单步状态转换证明，二分定位错误步骤
+- slashing：挑战成功罚没提交者保证金
+- `ChallengeBond`：挑战者保证金机制，防恶意挑战
+
+### P2 — MPC 网络层 + 治理增强 + L2 增强 + 签名服务独立部署 PoC（#48, #49, #50, #51）
+
+#### MPC 网络层（#48）
+- transport：MPC 节点间通信层（消息路由/重试/超时）
+- persistence：MPC 会话与密钥分片持久化
+- security：MPC 通信安全（加密/认证/防重放）
+- barrier：MPC 同步屏障（阶段同步）
+- router：MPC 消息路由策略
+- wal：Write-Ahead Log，MPC 会话崩溃恢复
+
+#### 治理增强（#49）
+- `CommitRevealVotingService`：commit-reveal 投票，防跟票
+- `DelegationService` + `VotingPowerCalculator`：委托加权投票，投票权可委托
+- `GuardianService`：守护人多签 veto，m-of-n 守护人批准放行
+- `ProposalDepositService`：提案保证金，通过退还/失败罚没
+
+#### L2 增强（#50）
+- `Eip4844BlobCarrier`：EIP-4844 blob 数据承载，降低 L1 calldata 成本
+- 多挑战者支持：`ChallengeConflictResolver` first-valid-wins 冲突解决
+- 挑战期延长：`ChallengePeriodPolicy` 可配置挑战窗口
+- 排序策略：`SequencingPolicy` 按 (account nonce 升序, priority fee 降序) 排序
+- Gas 估算：`GasCostEstimator` 批次 gas 成本估算
+
+#### 签名服务独立部署 PoC（#51）
+- `nexus-signing-service`：签名服务独立 Spring Boot 应用骨架
+- `nexus-wallet-service`：钱包管理服务独立应用骨架
+- 共享 DTO 迁移至 `nexus-sdk`：`WalletTransactionRequest`/`WalletTransactionResult` 等共享至 SDK
+- gateway 通过 `HttpSigningServiceClient`/`HttpWalletMgmtClient` HTTP 调用独立服务
+
+### P3 — 紧急回滚通道 + 守护人罢免 + ZK 路线骨架增强（#52）
+
+#### 紧急回滚通道（governance/emergency/）
+- `EmergencyRollbackService`：紧急回滚服务，m-of-n 守护人批准即生效，跳过 timelock
+- `EmergencyRollbackRecord`：审计日志实体（who/when/targetVersion/reason/approvals）
+- 三阶段流程：`initiateEmergencyRollback` → `approveEmergencyRollback` → `executeEmergencyRollback`
+- 一次性便捷接口：`emergencyRollback(targetVersion, approvals, reason)` 链下聚合签名场景
+- 取消机制：`cancelEmergencyRollback` 守护人可取消未执行请求
+
+#### 守护人罢免（governance/recall/）
+- `GuardianRecallService`：守护人罢免服务，走正常治理投票流程
+- `RecallProposal`：罢免提案实体，含目标守护人与关联治理提案
+- `RecallEvidence`：罢免证据（MALICIOUS_VETO/COLLUSION/KEY_COMPROMISE/INACTIVITY/OTHER）
+- `submitRecallProposal` → 治理投票 → `executeRecallIfPassed` 从 GuardianService 移除
+- 幂等执行：重复执行返回已处置状态，不重复移除
+
+#### ZK 路线骨架增强（l2/zk/）
+- `ZkProofSystem`：ZK 证明系统抽象接口（setup/prove/verify），支持未来接入 halo2/Plonk/Groth16
+- `ZkCircuit`：电路定义抽象接口（defineCircuit/synthesize/getPublicInputSchema）
+- `ZkProver`：ZK 证明生成器骨架实现
+- `ZkVerifier`：ZK 证明验证器骨架实现
+- `TrustedSetup`：可信设置多版本管理（MPC ceremony 产物）
+- `ZkProof`/`ZkPublicInput`：证明与公共输入实体
+- `RollupStateTransitionCircuit`：Rollup 状态转换电路骨架
+- 增强 `ZkRollup`：接入 ZkProofSystem，submitBatch 生成 ZK proof，verifyBatch 验证 ZK proof
+- 注释标注骨架，真实 ZK 接入仅需替换 ZkProofSystem 实现，上层无需改动
+
+### 编译验证
+- 全量 `gradle build -x test`：BUILD SUCCESSFUL（34 个任务）
+- 保持向后兼容：所有现有类公共 API 不破坏，新增字段默认值兼容旧调用方
+
+### 版本治理
+- 全仓库版本号统一升级为 1.3.0
+
 ## [1.2.3] — 2026-08-06 — P2 改进：前端设计契约 + PoS/L2/治理 + MPC 多签 + wallet 拆分
 
 ### P2-1 前端设计契约落地

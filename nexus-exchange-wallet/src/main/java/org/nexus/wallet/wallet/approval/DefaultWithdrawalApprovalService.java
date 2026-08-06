@@ -1,9 +1,10 @@
 package org.nexus.wallet.wallet.approval;
 
+import org.nexus.sdk.signing.ApprovalPolicy;
+import org.nexus.sdk.wallet.WalletTransactionRequest;
+import org.nexus.sdk.wallet.WalletTransactionResult;
 import org.nexus.wallet.wallet.execution.HttpOnChainExecutionClient;
 import org.nexus.wallet.wallet.execution.OnChainExecutionClient;
-import org.nexus.wallet.wallet.execution.WalletTransactionRequest;
-import org.nexus.wallet.wallet.execution.WalletTransactionResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;

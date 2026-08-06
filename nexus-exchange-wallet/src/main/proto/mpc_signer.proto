@@ -1,0 +1,102 @@
+syntax = "proto3";
+
+package nexus.mpc.v1;
+
+option java_package = "org.nexus.wallet.signing.mpc.transport.proto";
+option java_multiple_files = true;
+
+// NexusChain MPC 网络层 Protobuf 消息定义
+//
+// 该文件是 GG18/GG20 MPC 协议传输层的规范契约。当前实现使用 Java POJO
+// 模拟（见 transport/KeyGenRoundMessage.java 等），未来切换到真实 gRPC 时
+// 由本文件生成 stub 类。
+//
+// 切换步骤：
+// 1. 在 nexus-exchange-wallet/build.gradle 添加 protobuf / grpc Gradle 插件
+// 2. 将本文件放入 src/main/proto/
+// 3. 实现 GrpcMpcTransportStub 中标注的 TODO
+
+// 通用消息信封（对应 MpcMessage.java）
+message MpcMessageEnvelope {
+  string message_id = 1;            // 全局唯一消息 ID（去重）
+  string session_id = 2;            // 会话 ID
+  int32  round = 3;                 // 轮次号（1-based）
+  MessageType type = 4;             // 消息类型
+  string from_participant_id = 5;   // 发送者 ID
+  string to_participant_id = 6;     // 接收者 ID（空表示广播）
+  bytes  payload = 7;               // 消息体（结构化消息序列化）
+  int64  timestamp = 8;             // 发送时间戳（毫秒 UTC）
+  string nonce = 9;                 // 一次性随机数（防重放）
+  bytes  hmac = 10;                 // HMAC-SHA256 签名
+}
+
+enum MessageType {
+  MESSAGE_TYPE_UNSPECIFIED = 0;
+  KEY_GEN_ROUND = 1;
+  SIGN_ROUND = 2;
+  AGGREGATE_ROUND = 3;
+  CONTROL = 4;
+}
+
+// 分布式密钥生成轮次消息
+message KeyGenRound {
+  int32  round = 1;                 // DKG 轮次 1-4
+  string from_participant_id = 2;
+  string to_participant_id = 3;     // 空表示广播
+  bytes  paillier_n = 4;            // Paillier N（轮次 1 广播）
+  bytes  paillier_g = 5;            // Paillier g（轮次 1 广播）
+  bytes  encrypted_share = 6;       // 加密份额（轮次 2 点对点）
+  bytes  zk_proof = 7;              // ZK 证明（轮次 3 广播）
+  bytes  public_key_share = 8;      // 公钥份额 X_i（轮次 4 广播）
+}
+
+// 分布式签名轮次消息
+message SignRound {
+  int32  round = 1;                 // 签名轮次 1-7
+  string from_participant_id = 2;
+  string to_participant_id = 3;
+  bytes  r_point = 4;               // R_i = k_i * G（轮次 1 广播）
+  bytes  mta_share = 5;             // MtA 份额（轮次 2/3 点对点）
+  bytes  aggregate_r = 6;           // 聚合 R（轮次 4 广播）
+  bytes  r_scalar = 7;              // r = R.x mod n（轮次 4 广播）
+  bytes  zk_proof = 8;              // ZK 证明（轮次 6 广播）
+  bytes  sig_share = 9;             // 签名份额 s_i（轮次 7 广播）
+}
+
+// 聚合轮次消息
+message AggregateRound {
+  string from_participant_id = 1;
+  bytes  sig_share = 2;             // 签名份额 s_i
+  string aggregator_id = 3;         // 聚合者 ID（空表示广播）
+  bool   with_zk_proof = 4;
+  bytes  zk_proof = 5;
+}
+
+// 控制消息（心跳、ACK、重连请求）
+message ControlMessage {
+  ControlType control_type = 1;
+  string from_participant_id = 2;
+  int64  heartbeat_seq = 3;         // 心跳序号
+  string ack_message_id = 4;        // ACK 关联的消息 ID
+}
+
+enum ControlType {
+  CONTROL_TYPE_UNSPECIFIED = 0;
+  HEARTBEAT = 1;
+  ACK = 2;
+  RECONNECT_REQUEST = 3;
+}
+
+// gRPC 服务定义（未来切换时启用）
+service MpcSignerService {
+  // 双向流：客户端与服务端互相发送/接收 MPC 消息
+  rpc RoundStream(stream MpcMessageEnvelope) returns (stream MpcMessageEnvelope);
+
+  // 单次发送（用于无回复的广播）
+  rpc SendRound(MpcMessageEnvelope) returns (SendAck);
+}
+
+message SendAck {
+  bool   accepted = 1;
+  string error = 2;
+}

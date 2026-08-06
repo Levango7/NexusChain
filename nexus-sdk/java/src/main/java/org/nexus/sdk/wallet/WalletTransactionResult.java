@@ -1,4 +1,4 @@
-package org.nexus.wallet.wallet.execution;
+package org.nexus.sdk.wallet;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -6,11 +6,15 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.Objects;
 
 /**
- * Wallet 端链上交易执行结果 DTO。
- * <p>
- * 与 gateway 端 {@code org.nexus.settlement.execution.TransactionResult}
- * 的 JSON 结构保持一致，通过 HTTP 传输。
- * </p>
+ * 钱包端链上交易执行结果 DTO。
+ *
+ * <p>与 gateway 端 {@code org.nexus.settlement.execution.TransactionResult}
+ * 的 JSON 结构保持一致，通过 HTTP 传输。</p>
+ *
+ * <p>迁移历史：原位于 {@code org.nexus.wallet.wallet.execution.WalletTransactionResult}，
+ * 在 P2 方向5「签名服务独立部署 PoC」中迁移至 nexus-sdk 共享层
+ * （新包 {@code org.nexus.sdk.wallet}）。JSON 字段名与结构保持不变，
+ * 仅 Java 包路径变更。</p>
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class WalletTransactionResult {
