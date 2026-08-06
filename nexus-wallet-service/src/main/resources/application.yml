@@ -15,6 +15,41 @@ spring:
   # === Phase 3 任务 #61：优雅停机等待时长（设计文档 §4.6.2） ===
   lifecycle:
     timeout-per-shutdown-phase: 30s
+
+  # === Phase 4 任务 #68：数据库持久化（设计文档 §4.1 / §4.3） ===
+  # 生产数据源：MySQL 8.x，库 nexus_wallet（与 gateway 的 nexus_gateway 库独立）
+  # dev / test profile 通过 application-dev.yml / application-test.yml 覆盖为 H2
+  datasource:
+    url: ${NEX_DB_URL:jdbc:mysql://localhost:3306/nexus_wallet?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=UTC}
+    username: ${NEX_DB_USERNAME:root}
+    password: ${NEX_DB_PASSWORD:root}
+    driver-class-name: ${NEX_DB_DRIVER:com.mysql.cj.jdbc.Driver}
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+
+  # === Phase 4 任务 #68：JPA / Hibernate（设计文档 §4.2） ===
+  jpa:
+    hibernate:
+      # validate：Flyway 管理 schema，Hibernate 仅校验 Entity 与表结构一致
+      ddl-auto: validate
+    show-sql: false
+    open-in-view: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQLDialect
+        format_sql: true
+
+  # === Phase 4 任务 #68：Flyway 迁移（设计文档 §4.3） ===
+  # 版本号从 V1 起独立编号（nexus_wallet 库与 gateway 的 nexus_gateway 库互不干扰）
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+
   # Sentinel 集成（设计文档 §4.3）
   cloud:
     sentinel:

@@ -5,42 +5,64 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
 import org.nexus.sdk.wallet.WalletTier;
 import org.nexus.sdk.wallet.WithdrawalRequest;
 import org.nexus.walletsvc.approval.WithdrawalApprovalService;
+import org.nexus.walletsvc.entity.CustodyBalanceEntity;
+import org.nexus.walletsvc.repository.CustodyBalanceRepository;
 import org.springframework.beans.factory.ObjectProvider;
 
 import java.math.BigDecimal;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * {@link DefaultCustodyService} 单元测试（Phase 3 任务 T13）。
+ * {@link DefaultCustodyService} 单元测试（Phase 3 任务 T13，Phase 4 任务 T9 改造）。
  *
  * <p>验证热/冷钱包余额管理、转账校验（含多签审批闸门）与策略再平衡。
  * {@link WithdrawalApprovalService} 通过 {@link MockitoExtension} Mock，
  * 覆盖正常流程与异常流程（审批服务缺失 / 审批拒绝 / 余额不足 / 冷钱包上限突破）。</p>
  *
+ * <p><strong>Phase 4 任务 T9 改造</strong>（设计文档 §4.6.1）：
+ * 原 {@code seedBalances()} 直接操作 {@code AtomicReference} 内存字段，
+ * 现改为 Mock {@link CustodyBalanceRepository}：
+ * <ul>
+ *   <li>{@code findByTier("HOT"/"COLD")} 返回共享 Entity 对象（模拟内存行为），
+ *       Service 修改 Entity 后 {@code save} 持久化</li>
+ *   <li>{@code save(any())} 返回传入的 Entity（模拟 JPA save 行为）</li>
+ *   <li>使用 {@link Strictness#LENIENT} 避免 UnnecessaryStubbingException
+ *       （部分测试不调用所有 stubbed 方法）</li>
+ * </ul>
+ * 测试断言不变（行为契约保持），仅调整 Arrange 阶段。</p>
+ *
  * <p>设计文档 §3.2：冷钱包出金需多签审批，{@code approvalId} 必须指向已 APPROVED 的
  * 审批记录；审批服务缺失时冷钱包出金整体禁用（fail closed）。</p>
  */
 @ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
 class DefaultCustodyServiceTest {
 
     private static final String COLD_ADDR = "0xcoldwallet1234567890";
 
     @Mock private WithdrawalApprovalService approvalService;
+    @Mock private CustodyBalanceRepository custodyBalanceRepository;
 
     private CustodyPolicy policy;
     private DefaultCustodyService service;
+    private CustodyBalanceEntity hotEntity;
+    private CustodyBalanceEntity coldEntity;
 
     @BeforeEach
     void setUp() {
@@ -50,7 +72,25 @@ class DefaultCustodyServiceTest {
                 new BigDecimal("3000"));  // autoSweepThreshold
         policy.setColdWalletCap(new BigDecimal("20000"));
         policy.setHotWalletFloor(new BigDecimal("500"));
-        service = new DefaultCustodyService(provider(policy), provider(approvalService));
+
+        // 模拟 custody_balances 表中的 HOT / COLD 行（Flyway V2 预置 balance=0）
+        hotEntity = new CustodyBalanceEntity();
+        hotEntity.setTier("HOT");
+        hotEntity.setBalance(BigDecimal.ZERO);
+
+        coldEntity = new CustodyBalanceEntity();
+        coldEntity.setTier("COLD");
+        coldEntity.setBalance(BigDecimal.ZERO);
+
+        // Mock Repository：findByTier 返回共享 Entity（模拟内存行为），
+        // save 返回传入的 Entity（模拟 JPA save 行为）
+        when(custodyBalanceRepository.findByTier("HOT")).thenReturn(Optional.of(hotEntity));
+        when(custodyBalanceRepository.findByTier("COLD")).thenReturn(Optional.of(coldEntity));
+        when(custodyBalanceRepository.save(any(CustodyBalanceEntity.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        service = new DefaultCustodyService(
+                provider(policy), provider(approvalService), custodyBalanceRepository);
     }
 
     /** Wrap a value in an ObjectProvider for constructor injection in tests. */
@@ -169,7 +209,7 @@ class DefaultCustodyServiceTest {
     void depositToCold_noPolicySkipsCapCheck() {
         // 无 custodyPolicy 时冷钱包上限校验跳过
         DefaultCustodyService svc = new DefaultCustodyService(
-                provider(null), provider(approvalService));
+                provider(null), provider(approvalService), custodyBalanceRepository);
         svc.seedBalances(new BigDecimal("1000"), BigDecimal.ZERO);
 
         String txHash = svc.depositToCold(COLD_ADDR, new BigDecimal("1000"));
@@ -241,7 +281,7 @@ class DefaultCustodyServiceTest {
     void withdrawFromCold_noApprovalServiceThrows() {
         // fail closed：审批服务缺失时冷钱包出金整体禁用
         DefaultCustodyService svc = new DefaultCustodyService(
-                provider(policy), provider(null));
+                provider(policy), provider(null), custodyBalanceRepository);
         svc.seedBalances(BigDecimal.ZERO, new BigDecimal("1000"));
 
         IllegalStateException ex = assertThrows(
@@ -317,7 +357,7 @@ class DefaultCustodyServiceTest {
     @Test
     void rebalance_noPolicySkips() {
         DefaultCustodyService svc = new DefaultCustodyService(
-                provider(null), provider(approvalService));
+                provider(null), provider(approvalService), custodyBalanceRepository);
         svc.seedBalances(new BigDecimal("999999"), BigDecimal.ZERO);
 
         // 无策略 → 跳过，余额不变

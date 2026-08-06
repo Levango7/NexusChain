@@ -1,12 +1,11 @@
 package org.nexus.walletsvc.approval;
 
 import org.nexus.sdk.signing.ApprovalPolicy;
+import org.nexus.walletsvc.repository.WhitelistEntryRepository;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
-import java.util.Set;
-import java.util.concurrent.CopyOnWriteArraySet;
 
 /**
  * Default tiered approval policy.
@@ -18,9 +17,13 @@ import java.util.concurrent.CopyOnWriteArraySet;
  *   <li>amount &gt; large threshold: 3 approvers</li>
  * </ul>
  *
- * <p>Maintains an in-memory address whitelist; addresses not on the whitelist
- * are rejected at request time. Production wiring should source the whitelist
- * from a persistent store and load tier thresholds from configuration.</p>
+ * <p>Phase 4 改造（设计文档 §4.4.4）：原进程内并发 Set 白名单存储
+ * 替换为 {@link WhitelistEntryRepository} 查询，与
+ * {@code DefaultAddressWhitelistService.isWhitelisted()} 查询同一物理表
+ * （{@code address_whitelist}），消除 Phase 3 遗留的双重白名单存储问题（§2.2 / FR-P5）。
+ * {@code addToWhitelist()} / {@code removeFromWhitelist()} 标记 {@code @Deprecated}，
+ * 白名单写入统一通过 {@code DefaultAddressWhitelistService}（管理端点）进行；
+ * 本类仅保留查询职责。</p>
  *
  * <p>迁移历史：原位于 {@code org.nexus.wallet.wallet.approval.DefaultApprovalPolicy}
  * （nexus-exchange-wallet），在 Phase 2 微服务化中迁移至 nexus-wallet-service
@@ -37,8 +40,12 @@ public class DefaultApprovalPolicy implements ApprovalPolicy {
     /** Amount at or below this requires two approvers. */
     private static final BigDecimal LARGE_THRESHOLD = new BigDecimal("100000");
 
-    /** In-memory whitelist of permitted withdrawal addresses. */
-    private final Set<String> whitelist = new CopyOnWriteArraySet<String>();
+    /** Persistent whitelist store, shared with {@code DefaultAddressWhitelistService}. */
+    private final WhitelistEntryRepository whitelistEntryRepository;
+
+    public DefaultApprovalPolicy(WhitelistEntryRepository whitelistEntryRepository) {
+        this.whitelistEntryRepository = whitelistEntryRepository;
+    }
 
     @Override
     public int getRequiredApprovers(BigDecimal amount, String currency) {
@@ -56,28 +63,35 @@ public class DefaultApprovalPolicy implements ApprovalPolicy {
 
     @Override
     public boolean isAddressWhitelisted(String address) {
-        return address != null && whitelist.contains(address);
+        if (address == null || address.isEmpty()) {
+            return false;
+        }
+        return whitelistEntryRepository.existsByAddressAndActiveTrue(address);
     }
 
     /**
      * Add an address to the whitelist.
      *
      * @param address wallet address
+     * @deprecated Phase 4 起白名单写入统一通过
+     *             {@code DefaultAddressWhitelistService.addWhitelist()}
+     *             （管理端点）进行；本类仅保留查询职责，此方法为 no-op。
      */
+    @Deprecated
     public void addToWhitelist(String address) {
-        if (address != null && !address.isEmpty()) {
-            whitelist.add(address);
-        }
+        // no-op: 白名单写入统一通过 DefaultAddressWhitelistService 管理（设计文档 §4.4.4）
     }
 
     /**
      * Remove an address from the whitelist.
      *
      * @param address wallet address
+     * @deprecated Phase 4 起白名单移除统一通过
+     *             {@code DefaultAddressWhitelistService.removeWhitelist()}
+     *             （管理端点，软删除）进行；本类仅保留查询职责，此方法为 no-op。
      */
+    @Deprecated
     public void removeFromWhitelist(String address) {
-        if (address != null) {
-            whitelist.remove(address);
-        }
+        // no-op: 白名单移除统一通过 DefaultAddressWhitelistService 管理（设计文档 §4.4.4）
     }
 }

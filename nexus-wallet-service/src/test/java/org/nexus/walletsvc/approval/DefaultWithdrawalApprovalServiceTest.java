@@ -5,11 +5,26 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
 import org.nexus.sdk.client.feign.SigningServiceFeignClient;
-import org.nexus.sdk.signing.ApprovalPolicy;
 import org.nexus.sdk.wallet.WithdrawalRequest;
+import org.nexus.walletsvc.entity.WithdrawalApproverEntity;
+import org.nexus.walletsvc.entity.WithdrawalRequestEntity;
+import org.nexus.walletsvc.repository.WhitelistEntryRepository;
+import org.nexus.walletsvc.repository.WithdrawalApproverRepository;
+import org.nexus.walletsvc.repository.WithdrawalRequestRepository;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -17,23 +32,40 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * {@link DefaultWithdrawalApprovalService} 单元测试（Phase 3 任务 T13）。
+ * {@link DefaultWithdrawalApprovalService} 单元测试（Phase 3 任务 T13，Phase 4 任务 T9 改造）。
  *
  * <p>验证多审批人提现工作流（request → approve → reject → execute），
  * 通过 {@link MockitoExtension} Mock {@link SigningServiceFeignClient}，
  * 覆盖正常流程与异常流程（Feign 调用失败 / 返回 null / 状态机非法迁移）。</p>
+ *
+ * <p><strong>Phase 4 任务 T9 改造</strong>（设计文档 §4.6.1）：
+ * 原直接操作 {@code ConcurrentHashMap} 内存字段 + {@code DefaultApprovalPolicy.addToWhitelist()}
+ * 维护白名单，现改为 Mock 三个 Repository：
+ * <ul>
+ *   <li>{@link WhitelistEntryRepository}：供 {@link DefaultApprovalPolicy} 查询白名单
+ *       （用 Set + Answer 模拟 existsByAddressAndActiveTrue）</li>
+ *   <li>{@link WithdrawalRequestRepository}：用 Map + Answer 模拟
+ *       findByRequestId / save（requestId → entity）</li>
+ *   <li>{@link WithdrawalApproverRepository}：用 Map + Answer 模拟
+ *       findByRequestId / existsByRequestIdAndApproverId / countByRequestId / save</li>
+ * </ul>
+ * 测试断言不变（行为契约保持），仅调整 Arrange 阶段。
+ * {@link DefaultApprovalPolicy} 构造器新增 {@link WhitelistEntryRepository} 参数，
+ * {@code addToWhitelist()} 已标记 {@code @Deprecated} 且为 no-op，白名单通过 Mock 设置。</p>
  *
  * <p>设计文档 §4.4.3：{@code executeApprovedWithdrawal} 通过 Feign 调
  * signing-service 的 {@code /api/v1/transfers/sign} 完成签名广播；
  * FallbackFactory 返回 null 时本服务置 FAILED。</p>
  */
 @ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
 class DefaultWithdrawalApprovalServiceTest {
 
     /** 测试用白名单地址（长度 ≥ 20，满足 DefaultAddressWhitelistService 校验，但本服务不校验地址格式）。 */
@@ -41,16 +73,82 @@ class DefaultWithdrawalApprovalServiceTest {
     private static final String PLATFORM_WALLET = "PLATFORM_HOT_WALLET";
 
     @Mock private SigningServiceFeignClient signingServiceClient;
+    @Mock private WhitelistEntryRepository whitelistEntryRepository;
+    @Mock private WithdrawalRequestRepository withdrawalRequestRepository;
+    @Mock private WithdrawalApproverRepository withdrawalApproverRepository;
+
+    /** 模拟 address_whitelist 表中活跃地址集合（供 DefaultApprovalPolicy 查询）。 */
+    private final Set<String> whitelistStore = new HashSet<>();
+    /** 模拟 withdrawal_requests 表（requestId → entity）。 */
+    private final Map<String, WithdrawalRequestEntity> requestStore = new ConcurrentHashMap<>();
+    /** 模拟 withdrawal_approvers 表（requestId → approvers list）。 */
+    private final Map<String, List<WithdrawalApproverEntity>> approverStore = new ConcurrentHashMap<>();
 
     private DefaultApprovalPolicy approvalPolicy;
     private DefaultWithdrawalApprovalService service;
 
     @BeforeEach
     void setUp() {
-        approvalPolicy = new DefaultApprovalPolicy();
-        approvalPolicy.addToWhitelist(WHITELISTED_ADDR);
+        whitelistStore.clear();
+        requestStore.clear();
+        approverStore.clear();
+
+        // ---- Mock WhitelistEntryRepository（供 DefaultApprovalPolicy 查询白名单）----
+        when(whitelistEntryRepository.existsByAddressAndActiveTrue(anyString())).thenAnswer(inv -> {
+            String addr = inv.getArgument(0);
+            return whitelistStore.contains(addr);
+        });
+
+        // ---- Mock WithdrawalRequestRepository ----
+        when(withdrawalRequestRepository.findByRequestId(anyString())).thenAnswer(inv -> {
+            String requestId = inv.getArgument(0);
+            return Optional.ofNullable(requestStore.get(requestId));
+        });
+        when(withdrawalRequestRepository.save(any(WithdrawalRequestEntity.class))).thenAnswer(inv -> {
+            WithdrawalRequestEntity entity = inv.getArgument(0);
+            // 模拟 @PrePersist：createdAt / updatedAt 由 JPA 自动维护，
+            // 单元测试无 JPA 容器，手动设置以保持 Entity 生命周期语义
+            if (entity.getCreatedAt() == null) {
+                entity.setCreatedAt(LocalDateTime.now());
+            }
+            if (entity.getUpdatedAt() == null) {
+                entity.setUpdatedAt(LocalDateTime.now());
+            }
+            requestStore.put(entity.getRequestId(), entity);
+            return entity;
+        });
+
+        // ---- Mock WithdrawalApproverRepository ----
+        when(withdrawalApproverRepository.findByRequestId(anyString())).thenAnswer(inv -> {
+            String requestId = inv.getArgument(0);
+            return new ArrayList<>(approverStore.getOrDefault(requestId, Collections.emptyList()));
+        });
+        when(withdrawalApproverRepository.existsByRequestIdAndApproverId(anyString(), anyString()))
+                .thenAnswer(inv -> {
+                    String requestId = inv.getArgument(0);
+                    String approverId = inv.getArgument(1);
+                    List<WithdrawalApproverEntity> approvers =
+                            approverStore.getOrDefault(requestId, Collections.emptyList());
+                    return approvers.stream().anyMatch(a -> a.getApproverId().equals(approverId));
+                });
+        when(withdrawalApproverRepository.countByRequestId(anyString())).thenAnswer(inv -> {
+            String requestId = inv.getArgument(0);
+            return (long) approverStore.getOrDefault(requestId, Collections.emptyList()).size();
+        });
+        when(withdrawalApproverRepository.save(any(WithdrawalApproverEntity.class))).thenAnswer(inv -> {
+            WithdrawalApproverEntity approver = inv.getArgument(0);
+            approverStore.computeIfAbsent(approver.getRequestId(), k -> new ArrayList<>()).add(approver);
+            return approver;
+        });
+
+        // ---- 构造 DefaultApprovalPolicy + DefaultWithdrawalApprovalService ----
+        approvalPolicy = new DefaultApprovalPolicy(whitelistEntryRepository);
+        // addToWhitelist 已 @Deprecated 且为 no-op；白名单通过 Mock 设置
+        whitelistStore.add(WHITELISTED_ADDR);
+
         service = new DefaultWithdrawalApprovalService(
-                approvalPolicy, signingServiceClient, PLATFORM_WALLET);
+                approvalPolicy, signingServiceClient, PLATFORM_WALLET,
+                withdrawalRequestRepository, withdrawalApproverRepository);
     }
 
     // ==================== requestWithdrawal ====================
@@ -395,7 +493,9 @@ class DefaultWithdrawalApprovalServiceTest {
     void execute_noSigningClient_usesSimulatedTxHash() {
         // 验证 fallback 路径：signingServiceClient=null 时使用 SIMULATED txHash
         DefaultWithdrawalApprovalService standaloneService =
-                new DefaultWithdrawalApprovalService(approvalPolicy);
+                new DefaultWithdrawalApprovalService(
+                        approvalPolicy, null, PLATFORM_WALLET,
+                        withdrawalRequestRepository, withdrawalApproverRepository);
         WithdrawalRequest request = standaloneService.requestWithdrawal(
                 WHITELISTED_ADDR, new BigDecimal("100"), "NEX");
         standaloneService.approve(request.getRequestId(), "approver-1");
@@ -412,7 +512,8 @@ class DefaultWithdrawalApprovalServiceTest {
     void execute_emptyPlatformWallet_usesDefault() {
         // 验证 @Value 注入空字符串时回退到默认平台钱包地址
         DefaultWithdrawalApprovalService svc = new DefaultWithdrawalApprovalService(
-                approvalPolicy, signingServiceClient, "");
+                approvalPolicy, signingServiceClient, "",
+                withdrawalRequestRepository, withdrawalApproverRepository);
         WithdrawalRequest request = svc.requestWithdrawal(
                 WHITELISTED_ADDR, new BigDecimal("100"), "NEX");
         svc.approve(request.getRequestId(), "approver-1");

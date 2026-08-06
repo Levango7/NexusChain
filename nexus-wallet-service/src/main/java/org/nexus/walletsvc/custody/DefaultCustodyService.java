@@ -2,32 +2,28 @@ package org.nexus.walletsvc.custody;
 
 import org.nexus.sdk.wallet.WalletTier;
 import org.nexus.walletsvc.approval.WithdrawalApprovalService;
+import org.nexus.walletsvc.entity.CustodyBalanceEntity;
+import org.nexus.walletsvc.repository.CustodyBalanceRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Default custody service implementation for the hot/warm/cold tiering model.
  *
- * <p>Maintains in-memory balances for the hot and cold wallets and enforces
- * the {@link CustodyPolicy} caps:</p>
- * <ul>
- *   <li>{@link #depositToCold}：校验热钱包余额充足且不突破冷钱包上限（
- *       {@link CustodyPolicy#getColdWalletCap()}）→ 热→冷转账（模拟链上交易哈希）</li>
- *   <li>{@link #withdrawFromCold}：校验冷钱包余额充足 + 多签审批——approvalId 必须指向
- *       {@link WithdrawalApprovalService} 中一条已 APPROVED 的审批记录，且审批在放行时
- *       被消耗（APPROVED → EXECUTED），防止同一 approvalId 重放多次出金 → 冷→热转账
- *       （模拟链上交易哈希）。审批服务缺失时冷钱包出金整体禁用（fail closed）。</li>
- *   <li>{@link #rebalance}：按策略自动归集——热钱包超阈值则扫入目标层级，
- *       低于下限则从冷钱包回补（内部受控路径，不经过对外审批接口、不伪造审批 ID）</li>
- * </ul>
+ * <p>Phase 4 改造（任务 #70，设计文档 §4.4.1）：原进程内
+ * {@code AtomicReference<BigDecimal>} 内存账本（{@code hotBalance} / {@code coldBalance}）
+ * 已替换为数据库持久化，通过 {@link CustodyBalanceRepository} 查询 / 更新
+ * {@code custody_balances} 表。并发变更由 {@code @Version} 乐观锁保护，
+ * 写操作方法标注 {@link Transactional} 纳入本地分支事务（在全局事务上下文中
+ * 自动注册为 Seata AT 分支）。</p>
  *
- * <p>余额与转账为进程内内存账本；链上转账当前为模拟交易哈希（SIMULATED 前缀），
- * 接入 MPC 签名管道与链上广播后替换。</p>
+ * <p>余额与转账现在持久化到 {@code nexus_wallet} 库；链上转账当前仍为模拟交易哈希
+ * （SIMULATED 前缀），接入 MPC 签名管道与链上广播后替换。</p>
  *
  * <p>迁移历史：原位于 {@code org.nexus.wallet.wallet.custody.DefaultCustodyService}
  * （nexus-exchange-wallet），在 Phase 2 微服务化中迁移至 nexus-wallet-service
@@ -39,35 +35,64 @@ public class DefaultCustodyService implements CustodyService {
 
     private static final Logger log = LoggerFactory.getLogger(DefaultCustodyService.class);
 
+    /** custody_balances 表中热钱包行的 tier 主键。 */
+    private static final String TIER_HOT = "HOT";
+    /** custody_balances 表中冷钱包行的 tier 主键。 */
+    private static final String TIER_COLD = "COLD";
+
     private final CustodyPolicy custodyPolicy;
 
     /** Multi-sig withdrawal approval workflow; cold withdrawals are disabled when absent. */
     private final WithdrawalApprovalService withdrawalApprovalService;
 
-    private final AtomicReference<BigDecimal> hotBalance = new AtomicReference<BigDecimal>(BigDecimal.ZERO);
-    private final AtomicReference<BigDecimal> coldBalance = new AtomicReference<BigDecimal>(BigDecimal.ZERO);
+    /** 托管余额持久化 Repository，替代原 AtomicReference 内存存储。 */
+    private final CustodyBalanceRepository custodyBalanceRepository;
 
     public DefaultCustodyService(
             org.springframework.beans.factory.ObjectProvider<CustodyPolicy> custodyPolicyProvider,
-            org.springframework.beans.factory.ObjectProvider<WithdrawalApprovalService> withdrawalApprovalServiceProvider) {
+            org.springframework.beans.factory.ObjectProvider<WithdrawalApprovalService> withdrawalApprovalServiceProvider,
+            CustodyBalanceRepository custodyBalanceRepository) {
         // CustodyPolicy 为可选配置：容器未提供时使用 null（rebalance 自动跳过策略分支）
         this.custodyPolicy = custodyPolicyProvider.getIfAvailable();
         // 审批服务为可选注入：缺失时冷钱包出金整体拒绝（fail closed），绝不无审批放行
         this.withdrawalApprovalService = withdrawalApprovalServiceProvider.getIfAvailable();
+        this.custodyBalanceRepository = custodyBalanceRepository;
     }
 
     /**
      * Seed balances for testing / initialization.
      *
+     * <p>Phase 4 改造：原直接操作 {@code AtomicReference.set()}，现委托
+     * {@link CustodyBalanceRepository#save(Object)} 持久化到 {@code custody_balances} 表。
+     * 生产环境由 Flyway V2 预置 HOT / COLD 两行（balance=0），无需调用此方法。</p>
+     *
      * @param hot  initial hot wallet balance
      * @param cold initial cold wallet balance
+     * @deprecated Phase 4 后由 Flyway V2 seed data 预置；测试可通过
+     *             {@link CustodyBalanceRepository#save(Object)} 直接初始化余额。
+     *             T9 完成测试改造后在后续清理中删除。
      */
+    @Deprecated
+    @Transactional
     public void seedBalances(BigDecimal hot, BigDecimal cold) {
-        if (hot != null) hotBalance.set(hot);
-        if (cold != null) coldBalance.set(cold);
+        if (hot != null) {
+            CustodyBalanceEntity hotEntity = custodyBalanceRepository.findByTier(TIER_HOT)
+                    .orElseGet(CustodyBalanceEntity::new);
+            hotEntity.setTier(TIER_HOT);
+            hotEntity.setBalance(hot);
+            custodyBalanceRepository.save(hotEntity);
+        }
+        if (cold != null) {
+            CustodyBalanceEntity coldEntity = custodyBalanceRepository.findByTier(TIER_COLD)
+                    .orElseGet(CustodyBalanceEntity::new);
+            coldEntity.setTier(TIER_COLD);
+            coldEntity.setBalance(cold);
+            custodyBalanceRepository.save(coldEntity);
+        }
     }
 
     @Override
+    @Transactional
     public String depositToCold(String address, BigDecimal amount) {
         if (address == null || address.isEmpty()) {
             throw new IllegalArgumentException("cold wallet address is required");
@@ -75,27 +100,36 @@ public class DefaultCustodyService implements CustodyService {
         if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
             throw new IllegalArgumentException("amount must be positive");
         }
-        BigDecimal currentHot = hotBalance.get();
+        CustodyBalanceEntity hotEntity = custodyBalanceRepository.findByTier(TIER_HOT)
+                .orElseThrow(() -> new IllegalStateException("HOT balance row not initialized"));
+        CustodyBalanceEntity coldEntity = custodyBalanceRepository.findByTier(TIER_COLD)
+                .orElseThrow(() -> new IllegalStateException("COLD balance row not initialized"));
+
+        BigDecimal currentHot = hotEntity.getBalance();
         if (currentHot.compareTo(amount) < 0) {
             throw new IllegalStateException(
                     "insufficient hot balance: have=" + currentHot + ", need=" + amount);
         }
         // Enforce cold wallet cap if configured
         BigDecimal coldCap = custodyPolicy == null ? null : custodyPolicy.getColdWalletCap();
-        if (coldCap != null && coldBalance.get().add(amount).compareTo(coldCap) > 0) {
+        if (coldCap != null && coldEntity.getBalance().add(amount).compareTo(coldCap) > 0) {
             throw new IllegalStateException(
-                    "cold wallet cap breached: cap=" + coldCap + ", projected=" + coldBalance.get().add(amount));
+                    "cold wallet cap breached: cap=" + coldCap + ", projected=" + coldEntity.getBalance().add(amount));
         }
 
-        hotBalance.set(currentHot.subtract(amount));
-        coldBalance.set(coldBalance.get().add(amount));
+        hotEntity.setBalance(currentHot.subtract(amount));
+        coldEntity.setBalance(coldEntity.getBalance().add(amount));
+        custodyBalanceRepository.save(hotEntity);
+        custodyBalanceRepository.save(coldEntity);
+
         String txHash = "SIMULATED-" + UUID.randomUUID().toString().replace("-", "");
         log.info("Deposit hot->cold: address={}, amount={}, txHash={}, hot={}, cold={}",
-                address, amount, txHash, hotBalance.get(), coldBalance.get());
+                address, amount, txHash, hotEntity.getBalance(), coldEntity.getBalance());
         return txHash;
     }
 
     @Override
+    @Transactional
     public String withdrawFromCold(String address, BigDecimal amount, String approvalId) {
         if (address == null || address.isEmpty()) {
             throw new IllegalArgumentException("cold wallet address is required");
@@ -110,7 +144,9 @@ public class DefaultCustodyService implements CustodyService {
             throw new IllegalStateException(
                     "no withdrawal approval service configured; cold withdrawals are disabled");
         }
-        BigDecimal currentCold = coldBalance.get();
+        CustodyBalanceEntity coldEntity = custodyBalanceRepository.findByTier(TIER_COLD)
+                .orElseThrow(() -> new IllegalStateException("COLD balance row not initialized"));
+        BigDecimal currentCold = coldEntity.getBalance();
         if (currentCold.compareTo(amount) < 0) {
             throw new IllegalStateException(
                     "insufficient cold balance: have=" + currentCold + ", need=" + amount);
@@ -132,6 +168,9 @@ public class DefaultCustodyService implements CustodyService {
      *
      * <p>仅供 {@link #withdrawFromCold}（已通过审批闸门）与策略自动再平衡
      * （{@link #rebalance}，内部受控路径）调用，禁止作为对外接口暴露。</p>
+     *
+     * <p>事务边界：由 public 调用方（{@code @Transactional}）传播，不单独标注
+     * （Spring {@code @Transactional} 在 private 方法上不生效）。</p>
      */
     private String transferColdToHotInternal(String address, BigDecimal amount) {
         if (address == null || address.isEmpty()) {
@@ -140,37 +179,49 @@ public class DefaultCustodyService implements CustodyService {
         if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
             throw new IllegalArgumentException("amount must be positive");
         }
-        BigDecimal currentCold = coldBalance.get();
+        CustodyBalanceEntity coldEntity = custodyBalanceRepository.findByTier(TIER_COLD)
+                .orElseThrow(() -> new IllegalStateException("COLD balance row not initialized"));
+        CustodyBalanceEntity hotEntity = custodyBalanceRepository.findByTier(TIER_HOT)
+                .orElseThrow(() -> new IllegalStateException("HOT balance row not initialized"));
+        BigDecimal currentCold = coldEntity.getBalance();
         if (currentCold.compareTo(amount) < 0) {
             throw new IllegalStateException(
                     "insufficient cold balance: have=" + currentCold + ", need=" + amount);
         }
 
-        coldBalance.set(currentCold.subtract(amount));
-        hotBalance.set(hotBalance.get().add(amount));
+        coldEntity.setBalance(currentCold.subtract(amount));
+        hotEntity.setBalance(hotEntity.getBalance().add(amount));
+        custodyBalanceRepository.save(coldEntity);
+        custodyBalanceRepository.save(hotEntity);
+
         String txHash = "SIMULATED-" + UUID.randomUUID().toString().replace("-", "");
         log.info("Withdraw cold->hot: address={}, amount={}, txHash={}, hot={}, cold={}",
-                address, amount, txHash, hotBalance.get(), coldBalance.get());
+                address, amount, txHash, hotEntity.getBalance(), coldEntity.getBalance());
         return txHash;
     }
 
     @Override
     public BigDecimal getHotBalance() {
-        return hotBalance.get();
+        return custodyBalanceRepository.findByTier(TIER_HOT)
+                .map(CustodyBalanceEntity::getBalance)
+                .orElse(BigDecimal.ZERO);
     }
 
     @Override
     public BigDecimal getColdBalance() {
-        return coldBalance.get();
+        return custodyBalanceRepository.findByTier(TIER_COLD)
+                .map(CustodyBalanceEntity::getBalance)
+                .orElse(BigDecimal.ZERO);
     }
 
     @Override
+    @Transactional
     public void rebalance(WalletTier target) {
         if (custodyPolicy == null) {
             log.warn("Rebalance skipped: no custody policy configured");
             return;
         }
-        BigDecimal hot = hotBalance.get();
+        BigDecimal hot = getHotBalance();
 
         // Auto-sweep: hot balance exceeds threshold → sweep excess to target tier
         BigDecimal sweepThreshold = custodyPolicy.getAutoSweepThreshold();
@@ -190,9 +241,11 @@ public class DefaultCustodyService implements CustodyService {
 
         // Floor pull: hot balance below operational floor → pull from cold
         BigDecimal floor = custodyPolicy.getHotWalletFloor();
-        if (floor != null && hotBalance.get().compareTo(floor) < 0) {
-            BigDecimal deficit = floor.subtract(hotBalance.get());
-            if (coldBalance.get().compareTo(deficit) >= 0) {
+        BigDecimal hotAfterSweep = getHotBalance();
+        if (floor != null && hotAfterSweep.compareTo(floor) < 0) {
+            BigDecimal deficit = floor.subtract(hotAfterSweep);
+            BigDecimal currentCold = getColdBalance();
+            if (currentCold.compareTo(deficit) >= 0) {
                 try {
                     // 内部受控路径：自动再平衡不伪造审批 ID，也不经过对外审批接口
                     transferColdToHotInternal("hot-floor", deficit);

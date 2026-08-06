@@ -52,6 +52,16 @@ dependencies {
     // === Spring Boot ===
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    // === Phase 4 任务 #68：JPA 持久化（设计文档 §4.2） ===
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+
+    // === Phase 4 任务 #68：数据库迁移 + 驱动（设计文档 §4.3 Flyway） ===
+    // Flyway 9.22.3（Spring Boot 3.2.5 BOM 管理），9.x 无需单独 flyway-mysql 模块
+    implementation 'org.flywaydb:flyway-core'
+    // H2 内存数据库（开发 / 测试 profile）
+    runtimeOnly 'com.h2database:h2'
+    // MySQL 驱动（生产 profile）
+    runtimeOnly 'com.mysql:mysql-connector-j'
 
     // === Micrometer Tracing + Zipkin（Phase 3 任务 #61，设计文档 §4.3.1） ===
     // SpringBoot 3.2.5 BOM 管理版本（micrometer-tracing 1.2.5 + zipkin-reporter-brave 2.16.4）

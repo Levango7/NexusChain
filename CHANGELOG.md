@@ -2,6 +2,45 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [1.6.0] - 2026-08-07 - Phase 4 微服务化：wallet-service 数据库持久化 + Seata AT 接入
+
+### 新增
+- **wallet-service 数据库持久化**：Spring Data JPA + Flyway，替代所有内存存储
+  - 4 张业务表：custody_balances / address_whitelist / withdrawal_requests / withdrawal_approvers
+  - 4 个 Entity + 4 个 Repository + WithdrawalRequestMapper
+  - Flyway migration V1（业务表）+ V2（seed 余额）+ V3（undo_log）
+- **Seata AT 接入**：wallet-service 作为 RM 接入分布式事务
+  - executeApprovedWithdrawal 标注 @GlobalTransactional + @Transactional
+  - undo_log 表自动回滚
+- **集成测试**：Repository IT + Service IT + Seata 回滚测试
+  - RepositoryIntegrationTest：4 个 Repository CRUD + Flyway V2 seed 验证
+  - FlywayMigrationIT：V1/V2/V3 migration 表存在性验证
+  - CustodyServiceIntegrationTest：托管余额完整流程
+  - WhitelistServiceIntegrationTest：白名单 add → check → remove → check
+  - WithdrawalServiceIntegrationTest：提现 request → approve → execute 完整流程
+  - WalletControllerIT：REST 端点 MockMvc 集成测试
+  - WithdrawalRollbackTest：signing-service 失败时状态回滚验证
+  - SeataIntegrationTest：@GlobalTransactional 事务行为验证
+- **DefaultApprovalPolicyTest**：12 个新测试用例
+
+### 变更
+- DefaultCustodyService：AtomicReference → CustodyBalanceRepository + @Transactional
+- DefaultAddressWhitelistService：ConcurrentHashMap → WhitelistEntryRepository + @Transactional
+- DefaultWithdrawalApprovalService：ConcurrentHashMap → WithdrawalRequestRepository + @GlobalTransactional
+- DefaultApprovalPolicy：CopyOnWriteArraySet → WhitelistEntryRepository 查询（消除双存储）
+- 106 个单元测试改造为 Mock Repository
+- build.gradle 添加 JPA/Flyway/H2/MySQL 依赖
+- application.yml 添加 datasource/jpa/flyway 配置
+- application-test.yml 禁用 Nacos/Sentinel/Seata（集成测试 H2 + Flyway）
+
+### 消除
+- 所有 ConcurrentHashMap / AtomicReference / CopyOnWriteArraySet 内存存储（grep 验证 0 匹配）
+
+### 验证
+- `gradlew.bat build -x test` BUILD SUCCESSFUL
+- 118 个单元测试全部通过（原 106 + 新增 12）
+- 集成测试编译通过（H2 + Flyway，seata.enabled=false 退化为本地事务）
+
 ## [1.5.0] - 2026-08-07 - Phase 3 微服务化：分布式事务+链路追踪+容错
 
 ### 新增

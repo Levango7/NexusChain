@@ -2,35 +2,94 @@ package org.nexus.walletsvc.whitelist;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
+import org.nexus.walletsvc.entity.WhitelistEntryEntity;
+import org.nexus.walletsvc.repository.WhitelistEntryRepository;
 
 import java.lang.reflect.Field;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.when;
 
 /**
- * {@link DefaultAddressWhitelistService} 单元测试（Phase 3 任务 T13）。
+ * {@link DefaultAddressWhitelistService} 单元测试（Phase 3 任务 T13，Phase 4 任务 T9 改造）。
  *
  * <p>验证白名单增删查、首次提币延迟检查与按商户过滤。
- * {@link DefaultAddressWhitelistService} 无外部 Feign 依赖，纯内存单元测试；
  * {@code firstWithdrawalDelayHours} 通过反射注入（模拟 {@code @Value} 配置）。</p>
+ *
+ * <p><strong>Phase 4 任务 T9 改造</strong>（设计文档 §4.6.1）：
+ * 原直接操作 {@code ConcurrentHashMap} 内存字段，现改为 Mock
+ * {@link WhitelistEntryRepository}。用内部 {@link ConcurrentHashMap} + Mockito
+ * {@code Answer} 模拟真实 Repository 行为（save → 存入 Map，
+ * existsByAddress / existsByAddressAndActiveTrue / findByAddress → 查 Map），
+ * 使测试断言不变（行为契约保持），仅调整 Arrange 阶段。</p>
  */
+@ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
 class DefaultAddressWhitelistServiceTest {
 
     /** 测试用链上地址（长度 34，满足 20-128 校验区间，无空格）。 */
     private static final String ADDR = "1A2B3C4D5E6F7G8H9J0KLMNOPQRSTUVWXYZ123";
     private static final String ADDR_2 = "1AnotherAddress0000000000000000000000000";
 
+    @Mock private WhitelistEntryRepository whitelistEntryRepository;
+
+    /** 模拟 address_whitelist 表的内存存储（address → entity）。 */
+    private final Map<String, WhitelistEntryEntity> store = new ConcurrentHashMap<>();
+
     private DefaultAddressWhitelistService service;
 
     @BeforeEach
     void setUp() throws Exception {
-        service = new DefaultAddressWhitelistService();
+        store.clear();
+
+        // Mock Repository：用 Answer 委托到内部 Map，模拟真实 JPA Repository 行为
+        when(whitelistEntryRepository.existsByAddress(anyString())).thenAnswer(inv -> {
+            String addr = inv.getArgument(0);
+            return store.containsKey(addr);
+        });
+        when(whitelistEntryRepository.existsByAddressAndActiveTrue(anyString())).thenAnswer(inv -> {
+            String addr = inv.getArgument(0);
+            WhitelistEntryEntity e = store.get(addr);
+            return e != null && Boolean.TRUE.equals(e.getActive());
+        });
+        when(whitelistEntryRepository.findByAddress(anyString())).thenAnswer(inv -> {
+            String addr = inv.getArgument(0);
+            return Optional.ofNullable(store.get(addr));
+        });
+        when(whitelistEntryRepository.findByMerchantIdAndActiveTrue(anyString())).thenAnswer(inv -> {
+            String merchantId = inv.getArgument(0);
+            List<WhitelistEntryEntity> result = new ArrayList<>();
+            for (WhitelistEntryEntity e : store.values()) {
+                if (merchantId.equals(e.getMerchantId()) && Boolean.TRUE.equals(e.getActive())) {
+                    result.add(e);
+                }
+            }
+            return result;
+        });
+        when(whitelistEntryRepository.save(any(WhitelistEntryEntity.class))).thenAnswer(inv -> {
+            WhitelistEntryEntity entity = inv.getArgument(0);
+            store.put(entity.getAddress(), entity);
+            return entity;
+        });
+
+        service = new DefaultAddressWhitelistService(whitelistEntryRepository);
         setField(service, "firstWithdrawalDelayHours", 24L);
     }
 
@@ -192,9 +251,10 @@ class DefaultAddressWhitelistServiceTest {
 
     @Test
     void checkFirstTimeWithdrawal_afterDelayReturnsFalse() {
-        WhitelistEntry entry = service.addWhitelist(ADDR, "label", "merchant-1");
-        // 手动将到期时间改为过去，模拟延迟已过
-        entry.setFirstWithdrawalAvailableAt(LocalDateTime.now().minusMinutes(1));
+        service.addWhitelist(ADDR, "label", "merchant-1");
+        // 手动将到期时间改为过去，模拟延迟已过（操作存储中的 Entity）
+        WhitelistEntryEntity entity = whitelistEntryRepository.findByAddress(ADDR).orElseThrow();
+        entity.setFirstWithdrawalAvailableAt(LocalDateTime.now().minusMinutes(1));
 
         assertFalse(service.checkFirstTimeWithdrawal(ADDR));
     }
@@ -223,9 +283,11 @@ class DefaultAddressWhitelistServiceTest {
     }
 
     @Test
-    void checkFirstTimeWithdrawal_nullAvailableAtReturnsFalse() throws Exception {
-        WhitelistEntry entry = service.addWhitelist(ADDR, "label", "merchant-1");
-        entry.setFirstWithdrawalAvailableAt(null);
+    void checkFirstTimeWithdrawal_nullAvailableAtReturnsFalse() {
+        service.addWhitelist(ADDR, "label", "merchant-1");
+        // 操作存储中的 Entity，将 firstWithdrawalAvailableAt 置 null
+        WhitelistEntryEntity entity = whitelistEntryRepository.findByAddress(ADDR).orElseThrow();
+        entity.setFirstWithdrawalAvailableAt(null);
 
         assertFalse(service.checkFirstTimeWithdrawal(ADDR));
     }
