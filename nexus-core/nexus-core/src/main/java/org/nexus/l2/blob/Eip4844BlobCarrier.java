@@ -163,35 +163,38 @@ public class Eip4844BlobCarrier implements BlobDataCarrier {
     /**
      * 计算 KZG 承诺（模拟实现）。
      *
-     * <p>真实实现：C = Σ blob[i] × sᵢ，其中 sᵢ 为 trusted setup 中 G1 元素。
-     * 模拟实现：C = SHA-256("KZG_COMMIT" ‖ blob)，输出 48 字节 hex（前 48 字节）。</p>
+     * <p>真实实现：C = Σ blob[i] × sᵢ，其中 sᵢ 为 trusted setup 中 G1 元素，输出 48 字节 BLS12-381 G1 点。
+     * 模拟实现：C = SHA-256("KZG_COMMIT" ‖ blob)，输出 32 字节（64 hex 字符）。
+     * 注意：SHA-256 仅产生 32 字节，模拟实现以 32 字节承诺代替真实 48 字节 G1 点，
+     * 语义自洽即可；替换为真实 KZG 时改为 48 字节。</p>
      *
      * @param blob blob 字节数据
-     * @return KZG 承诺 hex 字符串（96 字符 = 48 字节）
+     * @return KZG 承诺 hex 字符串（64 字符 = 32 字节）
      */
     private String kzgCommit(byte[] blob) {
         MessageDigest md = newDigest();
         md.update("KZG_COMMIT".getBytes(StandardCharsets.UTF_8));
         md.update(blob);
-        return bytesToHex(md.digest()).substring(0, 96);
+        return bytesToHex(md.digest());
     }
 
     /**
      * 计算 KZG 证明（模拟实现）。
      *
-     * <p>真实实现：π = (commit(blob) - y) / (X - z)，其中 z 为评估点、y = blob(z)。
-     * 模拟实现：π = SHA-256("KZG_PROOF" ‖ blob ‖ z)，输出 48 字节 hex。</p>
+     * <p>真实实现：π = (commit(blob) - y) / (X - z)，其中 z 为评估点、y = blob(z)，
+     * 输出 48 字节 BLS12-381 G1 点。模拟实现：π = SHA-256("KZG_PROOF" ‖ blob ‖ z)，
+     * 输出 32 字节（64 hex 字符）。</p>
      *
      * @param blob blob 字节数据
      * @param z    评估点
-     * @return KZG 证明 hex 字符串（96 字符 = 48 字节）
+     * @return KZG 证明 hex 字符串（64 字符 = 32 字节）
      */
     private String kzgProof(byte[] blob, byte[] z) {
         MessageDigest md = newDigest();
         md.update("KZG_PROOF".getBytes(StandardCharsets.UTF_8));
         md.update(blob);
         md.update(z);
-        return bytesToHex(md.digest()).substring(0, 96);
+        return bytesToHex(md.digest());
     }
 
     /**

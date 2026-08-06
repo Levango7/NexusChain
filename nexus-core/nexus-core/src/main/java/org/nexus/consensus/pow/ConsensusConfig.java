@@ -39,6 +39,10 @@ import java.util.List;
 public class ConsensusConfig {
     private static Logger logger = LoggerFactory.getLogger(ConsensusConfig.class);
 
+    /** 共识模式：dpos（默认）或 pos */
+    public static final String MODE_DPOS = "dpos";
+    public static final String MODE_POS = "pos";
+
     private List<String> validators;
 
     private List<String> peers;
@@ -50,8 +54,39 @@ public class ConsensusConfig {
     @Value("${nexus.consensus.enable-mining}")
     private volatile boolean enableMining;
 
+    /** 共识模式：dpos（默认）或 pos */
+    @Value("${nexus.consensus.mode:dpos}")
+    private String consensusMode;
+
     public boolean isEnableMining() {
         return enableMining;
+    }
+
+    /**
+     * 获取共识模式。
+     *
+     * @return 共识模式（{@value #MODE_DPOS} 或 {@value #MODE_POS}）
+     */
+    public String getConsensusMode() {
+        return consensusMode == null ? MODE_DPOS : consensusMode.toLowerCase();
+    }
+
+    /**
+     * 是否为 PoS 模式。
+     *
+     * @return PoS 模式返回 true
+     */
+    public boolean isPosMode() {
+        return MODE_POS.equalsIgnoreCase(consensusMode);
+    }
+
+    /**
+     * 是否为 DPoS 模式（默认）。
+     *
+     * @return DPoS 模式返回 true
+     */
+    public boolean isDposMode() {
+        return !isPosMode();
     }
 
     public List<String> getValidators() {

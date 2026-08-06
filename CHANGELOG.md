@@ -2,6 +2,32 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [1.7.0] - 2026-08-07 - 审计报告第一批：L2 测试固化 + PoS 出块接线
+
+### 新增
+- **L2 Rollup 测试补全**（从 0 到 190 个测试）
+  - FraudProofVerifier 单测：Merkle 证明、二分定位、挑战窗口、bond 罚没、first-valid-wins、恶意提交者场景
+  - StateRootManager / RollupSequencer / Eip4844BlobCarrier / MerklePatriciaTrie / OptimisticRollup 单测
+  - 端到端测试：submit→challenge→rollback→finalize 全流程（含挑战失败罚没 bond、多挑战者冲突、动态挑战期）
+- **PoS 共识集成测试**（7 个测试）
+  - propose 产出有效区块（高度、coinbase、签名）
+  - validate 完整校验链（提案者∈验证人、质押门槛、时间窗口、罚没状态）
+  - 共识切换不破坏现有链（dpos|pos 路由）
+  - 连续出块（高度递增、prevHash 匹配）
+
+### 变更
+- **PoS 出块主链路**：PosConsensusEngine.propose 从返回 null 改为真实出块（选取提案者→打包→构造→签名→广播）
+- **PoS validate 完整校验链**：从恒 true 改为 6 步校验（区块完整性→提案者∈验证人→ACTIVE→质押≥门槛→时间窗口→未罚没→签名）
+- **共识切换路由**：ConsensusConfig 增加 nexus.consensus.mode=dpos|pos 配置
+- **@Primary 地雷移除**：PosConsensusEngine 改为 @ConditionalOnProperty 按配置启用，消除静默 null 注入风险
+- **Eip4844BlobCarrier bug 修复**：kzgCommit/kzgProof 的 substring(0,96) 越界改为 substring(0,64)（SHA-256 输出 32 字节）
+
+### 验证
+- `gradlew.bat build -x test` BUILD SUCCESSFUL
+- L2 测试 190 个全部通过（185 单测 + 5 端到端）
+- PoS 集成测试 7 个全部通过
+- 全量 test 无回归
+
 ## [1.6.0] - 2026-08-07 - Phase 4 微服务化：wallet-service 数据库持久化 + Seata AT 接入
 
 ### 新增
