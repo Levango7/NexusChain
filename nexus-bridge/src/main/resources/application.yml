@@ -27,3 +27,10 @@ nexus:
     large-amount-threshold: 10000000000
     source-chain-id: nexus
     target-chain-id: ethereum
+    # 验证者公钥白名单（Ed25519 X.509 DER 十六进制，条目即签名者 ID）。
+    # 2026-08-06 起 MINT/UNLOCK 强制逐签验签：签名者 ID 必须在白名单中，
+    # 且签名必须为该公钥对确定性载荷（chainId|txId|amount|targetAddress|timestamp
+    # 的 SHA-256）的有效 Ed25519 签名。未配置时验签一律 fail-closed（拒绝）。
+    # 生产环境必须由治理层下发真实公钥，例如：
+    # validator-public-keys:
+    #   - 302a300506032b6570032100xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx

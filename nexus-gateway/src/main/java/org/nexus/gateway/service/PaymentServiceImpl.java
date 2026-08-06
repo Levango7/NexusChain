@@ -222,17 +222,17 @@ public class PaymentServiceImpl implements PaymentService {
                 log.error("Refund transfer failed for order: {}", order.getOrderNo());
             }
         } else {
-            // Sandbox/dev fallback: wallet unreachable, simulate successful refund
-            log.warn("Wallet unreachable, simulating refund for order: {}", order.getOrderNo());
-            refund.setChainTxHash("0x" + UUID.randomUUID().toString().replace("-", ""));
-            refund.setStatus(Refund.RefundStatus.COMPLETED);
-            refund.setCompletedAt(LocalDateTime.now());
-            OrderStateMachine.transition(order, PaymentOrder.OrderStatus.REFUNDED);
+            // Wallet unreachable: the on-chain transfer cannot be proven to have happened.
+            // Mark the refund FAILED with no chainTxHash instead of fabricating a success state.
+            log.warn("Wallet unreachable, refund cannot be executed for order: {}", order.getOrderNo());
+            refund.setChainTxHash(null);
+            refund.setStatus(Refund.RefundStatus.FAILED);
         }
 
         orderRepository.save(order);
         Refund saved = refundRepository.save(refund);
-        // Publish event if refund completed
+        // Publish event only for genuinely completed refunds (real on-chain tx hash).
+        // FAILED refunds must never publish RefundCompletedEvent.
         if (saved.getStatus() == Refund.RefundStatus.COMPLETED) {
             eventPublisher.publishEvent(new RefundCompletedEvent(
                     this, order.getId(), order.getOrderNo(), order.getMerchantId(),
@@ -255,24 +255,31 @@ public class PaymentServiceImpl implements PaymentService {
 
     /**
      * Execute a refund transfer via the exchange-wallet service.
-     * In production, merchant key material comes from secure storage (HSM/KMS/Vault).
+     *
+     * <p>In production, merchant key material comes from secure storage (HSM/KMS/Vault).
+     * If the merchant keypair is not configured, the refund cannot be signed and this
+     * method fails loudly with {@link IllegalStateException} — no synthetic hash is ever
+     * produced. If the wallet service is unavailable during the transfer call, null is
+     * returned and the caller marks the refund FAILED.</p>
+     *
+     * @throws IllegalStateException if the merchant keypair is not configured
      */
     private String executeRefundTransfer(PaymentOrder order, String receiverPubkeyHash, BigDecimal amount) {
-        // The exchange-wallet's /ClientToTransferAccount requires fromPubkey and prikey.
-        // In a real deployment, these would be retrieved from a secure key store.
-        // For now, we attempt the call; if the wallet service is unavailable, return null gracefully.
+        // SECURITY FIX: refunds are signed by the PLATFORM hot-wallet key held inside
+        // exchange-wallet's keystore. The gateway never fetches or transmits any
+        // private key (the legacy /ClientToTransferAccount?prikey= path was removed
+        // server-side because it exposed private keys over HTTP).
+        String platformPubkey = gatewayConfig.getExchangeWallet().getPlatformPubkey();
+
+        if (platformPubkey == null || platformPubkey.isBlank()) {
+            throw new IllegalStateException("Exchange-wallet platformPubkey not configured; "
+                    + "refund cannot be signed without the platform hot-wallet key");
+        }
+
         try {
-            String merchantPubkey = keyManager.getPublicKey(order.getMerchantId());
-            String merchantPrikey = keyManager.getPrivateKey(order.getMerchantId());
-
-            if (merchantPubkey == null || merchantPrikey == null) {
-                log.warn("Merchant keypair not configured for id={}, simulating refund", order.getMerchantId());
-                return "0x" + UUID.randomUUID().toString().replace("-", "");
-            }
-
-            return walletClient.transfer(merchantPubkey, receiverPubkeyHash, amount, merchantPrikey);
+            return walletClient.signTransfer(platformPubkey, receiverPubkeyHash, amount);
         } catch (Exception e) {
-            log.error("Refund transfer exception: {}", e.getMessage());
+            log.error("Refund transfer exception for order {}: {}", order.getOrderNo(), e.getMessage());
             return null;
         }
     }

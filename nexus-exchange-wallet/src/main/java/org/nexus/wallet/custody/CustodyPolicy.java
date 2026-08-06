@@ -20,6 +20,9 @@ public class CustodyPolicy {
     /** Maximum balance allowed in the warm wallet. */
     private BigDecimal warmWalletCap;
 
+    /** Maximum balance allowed in the cold wallet. */
+    private BigDecimal coldWalletCap;
+
     /** When hot balance exceeds this threshold, sweep excess to sweepTarget. */
     private BigDecimal autoSweepThreshold;
 
@@ -44,6 +47,9 @@ public class CustodyPolicy {
 
     public BigDecimal getWarmWalletCap() { return warmWalletCap; }
     public void setWarmWalletCap(BigDecimal warmWalletCap) { this.warmWalletCap = warmWalletCap; }
+
+    public BigDecimal getColdWalletCap() { return coldWalletCap; }
+    public void setColdWalletCap(BigDecimal coldWalletCap) { this.coldWalletCap = coldWalletCap; }
 
     public BigDecimal getAutoSweepThreshold() { return autoSweepThreshold; }
     public void setAutoSweepThreshold(BigDecimal autoSweepThreshold) { this.autoSweepThreshold = autoSweepThreshold; }

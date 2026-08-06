@@ -11,3 +11,12 @@ spring:
     properties:
       hibernate:
         dialect: org.hibernate.dialect.H2Dialect
+
+# 测试用验证者公钥白名单（Ed25519 X.509 DER 十六进制）。
+# 签名者 ID 必须与条目完全一致（见 BridgeFullChainIntegrationTest 的 PUB_V1/PUB_V2）。
+# 仅用于测试；生产环境必须由治理层配置真实验证者公钥。
+nexus:
+  bridge:
+    validator-public-keys:
+      - 302a300506032b65700321004d0fe4ccc01fcf50880797f51265c843b096b85e65e2003f6ada9c41f6121f9f
+      - 302a300506032b6570032100cddc01e2bc06777cfabde2409c44a8b1f01396074aed624bada5e235f57e3653

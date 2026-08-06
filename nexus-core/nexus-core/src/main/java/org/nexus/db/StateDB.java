@@ -21,6 +21,7 @@ import org.nexus.core.NexusChainBlockChain;
 import org.nexus.core.account.Account;
 import org.nexus.core.account.AccountDB;
 import org.nexus.core.account.Transaction;
+import org.nexus.core.event.AccountUpdateFailedEvent;
 import org.nexus.core.event.AccountUpdatedEvent;
 import org.nexus.core.event.NewBestBlockEvent;
 import org.nexus.core.event.NewBlockEvent;
@@ -126,7 +127,11 @@ public class StateDB implements ApplicationListener<AccountUpdatedEvent> {
 
     @Override
     public void onApplicationEvent(AccountUpdatedEvent event) {
-        if (Arrays.equals(event.getBlock().getHash(), pendingBlock.getHash())) {
+        // null-guard: pendingBlock may be null if a stale event arrives
+        if (pendingBlock == null || !Arrays.equals(event.getBlock().getHash(), pendingBlock.getHash())) {
+            return;
+        }
+        {
             // 接收到状态更新完成事件后，将这个区块标记为状态已更新完成
             // 清除缓存
             blocksCache.getAll()
@@ -502,8 +507,16 @@ public class StateDB implements ApplicationListener<AccountUpdatedEvent> {
             // 更新到 db
             for (int i = 0; i < confirmedAncestors.size(); ) {
                 Block b = confirmedAncestors.get(i);
-                // CAS 锁，等待上一个区块状态更新成功
+                // CAS 锁，等待上一个区块状态更新成功（带超时，防死锁）
+                long waitDeadline = System.currentTimeMillis() + 60_000L;
                 while (pendingBlock != null) {
+                    if (System.currentTimeMillis() > waitDeadline) {
+                        logger.error("Timed out waiting for pendingBlock state update at height "
+                                + pendingBlock.nHeight + " — clearing to avoid deadlock.");
+                        pendingBlock = null;
+                        break;
+                    }
+                    try { Thread.sleep(100L); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
                     logger.info("wait for account at" + new String(codec.encodeBlock(pendingBlock)) + " updated...");
                 }
                 boolean writeResult = bc.writeBlock(b);
@@ -518,7 +531,15 @@ public class StateDB implements ApplicationListener<AccountUpdatedEvent> {
                 ctx.publishEvent(new NewBestBlockEvent(this, b));
                 i++;
             }
+            long finalWaitDeadline = System.currentTimeMillis() + 60_000L;
             while (pendingBlock != null) {
+                if (System.currentTimeMillis() > finalWaitDeadline) {
+                    logger.error("Timed out waiting for final pendingBlock state update at height "
+                            + pendingBlock.nHeight + " — clearing to avoid deadlock.");
+                    pendingBlock = null;
+                    break;
+                }
+                try { Thread.sleep(100L); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
                 logger.info("wait for account at" + new String(codec.encodeBlock(pendingBlock)) + " updated...");
             }
         } finally {

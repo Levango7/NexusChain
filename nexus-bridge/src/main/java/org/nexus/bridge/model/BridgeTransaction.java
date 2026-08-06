@@ -91,6 +91,10 @@ public class BridgeTransaction {
     @Column(name = "timelock_expires_at")
     private Instant timelockExpiresAt;
 
+    /** 失败原因（状态为 FAILED 时记录，便于审计与恢复决策）。 */
+    @Column(name = "failure_reason", length = 512)
+    private String failureReason;
+
     /** 备注信息。 */
     @Column(name = "memo", length = 512)
     private String memo;
@@ -261,6 +265,14 @@ public class BridgeTransaction {
 
     public void setTimelockExpiresAt(Instant timelockExpiresAt) {
         this.timelockExpiresAt = timelockExpiresAt;
+    }
+
+    public String getFailureReason() {
+        return failureReason;
+    }
+
+    public void setFailureReason(String failureReason) {
+        this.failureReason = failureReason;
     }
 
     public String getMemo() {

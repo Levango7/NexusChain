@@ -161,7 +161,7 @@ class DefaultRefundApprovalServiceTest {
     // --- executeRefund ---
 
     @Test
-    void executeRefund_approvedBecomesExecuted() {
+    void executeRefund_onChainNotImplementedMarksFailed() {
         RefundRequest approved = newPendingRequest();
         approved.setStatus(RefundRequest.RefundStatus.APPROVED);
         when(refundRequestRepository.findById(10L)).thenReturn(Optional.of(approved));
@@ -169,10 +169,13 @@ class DefaultRefundApprovalServiceTest {
 
         RefundRequest result = service.executeRefund(10L);
 
-        assertEquals(RefundRequest.RefundStatus.EXECUTED, result.getStatus());
-        assertNotNull(result.getChainTxHash());
-        assertTrue(result.getChainTxHash().startsWith("SIMULATED-"));
-        assertNotNull(result.getExecutedAt());
+        // 链上退款执行未接入：请求必须置 FAILED 且不产生任何模拟哈希，
+        // 绝不能以伪造交易哈希标记 EXECUTED。
+        assertEquals(RefundRequest.RefundStatus.FAILED, result.getStatus());
+        assertNull(result.getChainTxHash());
+        assertNull(result.getExecutedAt());
+        assertNotNull(result.getRejectionReason());
+        assertTrue(result.getRejectionReason().contains("not integrated"));
     }
 
     @Test

@@ -7,6 +7,10 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.boot.test.mock.mockito.MockBean;
+import org.nexus.gateway.client.ExchangeWalletClient;
+import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.anyString;
 import org.springframework.test.web.servlet.MvcResult;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
@@ -26,6 +30,20 @@ class GatewayCoreIntegrationTest {
 
     @Autowired
     private MockMvc mockMvc;
+
+    @MockBean
+    private ExchangeWalletClient walletClient;
+
+    @BeforeEach
+    void stubWalletSign() {
+        // Refund signing is delegated to exchange-wallet via signTransfer (platform key).
+        // In this gateway-only integration test the wallet service is stubbed to succeed.
+        when(walletClient.signTransfer(anyString(), anyString(), org.mockito.ArgumentMatchers.any(java.math.BigDecimal.class)))
+                .thenReturn("0xRefundTxHash1234567890abcdef1234567890abcdef");
+        // Refund flow first converts the payer address to a pubkey hash via the wallet service.
+        when(walletClient.addressToPubkeyHash(anyString()))
+                .thenReturn("aabbccddeeff00112233445566778899aabbccdd");
+    }
 
     private static String apiKey;
     private static Long merchantId;

@@ -22,6 +22,11 @@ import java.util.stream.Collectors;
  * <p>The gateway owns batch lifecycle (window query, fee computation, batch
  * persistence) and delegates the actual net settlement to the
  * {@code nexus-settlement} {@link ClearingEngine}.</p>
+ *
+ * <p><b>链上结算未接入：</b>当前 {@link ClearingEngine} 仅完成记账（批次聚合、
+ * 净额计算与状态流转），真实的链上转账（exchange-wallet 签名与广播）尚未接入。
+ * 因此在结算执行完成后 {@link SettlementBatch#getChainTxHash()} 保持 {@code null}，
+ * 不得以任何占位串冒充链上交易哈希。接入链上转账后，再用真实交易哈希回填。</p>
  */
 @Service
 public class DefaultSettlementService implements SettlementService {
@@ -87,6 +92,15 @@ public class DefaultSettlementService implements SettlementService {
         return saved;
     }
 
+    /**
+     * Execute the settlement of a batch.
+     *
+     * <p><b>链上结算未接入，settlement 仅记账：</b>本方法驱动批次状态流转并委托
+     * {@link ClearingEngine} 完成净额结算的记账逻辑；真实的链上转账尚未接入，因此
+     * 批次被标记为 COMPLETED 仅代表记账完成，{@link SettlementBatch#getChainTxHash()}
+     * 保持 {@code null}，不做任何占位伪造。待接入 exchange-wallet 链上转账后，
+     * 应用真实交易哈希回填 chainTxHash 并补充异步对账。</p>
+     */
     @Override
     public SettlementBatch executeSettlement(Long batchId) {
         SettlementBatch batch = batchRepository.findById(batchId)
@@ -108,11 +122,13 @@ public class DefaultSettlementService implements SettlementService {
                     && cleared.getStatus() == org.nexus.settlement.clearing.SettlementBatch.BatchStatus.SETTLED;
 
             if (settled) {
+                // 链上结算转账尚未接入：ClearingEngine 仅完成记账。
+                // chainTxHash 保持 null，不得用占位串冒充链上哈希；
+                // 接入 exchange-wallet 真实转账并取得链上交易哈希后再回填。
                 batch.setStatus(SettlementBatch.BatchStatus.COMPLETED);
                 batch.setExecutedAt(LocalDateTime.now());
-                // TODO: on-chain settlement transfer via exchange-wallet; set real chainTxHash.
-                // 链上结算转账尚未接入，暂以本地批次号作为执行凭证占位。
-                batch.setChainTxHash("SETTLE-" + batch.getBatchNo());
+                log.info("Settlement batch {} marked COMPLETED (bookkeeping only): "
+                        + "on-chain transfer NOT executed, chainTxHash stays null", batch.getBatchNo());
             } else {
                 batch.setStatus(SettlementBatch.BatchStatus.FAILED);
             }

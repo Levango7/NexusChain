@@ -21,6 +21,7 @@ package org.nexus.core;
 import org.nexus.core.account.Account;
 import org.nexus.core.account.AccountDB;
 import org.nexus.core.event.NewBestBlockEvent;
+import org.nexus.core.event.AccountUpdateFailedEvent;
 import org.nexus.core.event.AccountUpdatedEvent;
 import org.nexus.core.incubator.Incubator;
 import org.nexus.core.incubator.IncubatorDB;
@@ -81,7 +82,12 @@ public class StatetreeUpdate implements ApplicationListener<NewBestBlockEvent> {
             }
             incubatorDB.insertIncubatorList(incubatorobjct);
         } catch (Exception e) {
+            // CRITICAL FIX: previously returned silently without publishing any event,
+            // causing StateDB.writeBlock's while(pendingBlock != null) to spin forever
+            // holding the global write lock -> node permanently stuck.
             e.printStackTrace();
+            ctx.publishEvent(new AccountUpdateFailedEvent(this, b,
+                    "state tree update failed: " + e.getMessage()));
             return;
         }
         ctx.publishEvent(new AccountUpdatedEvent(this, b));

@@ -27,6 +27,9 @@ nexus:
     skip-confirmation: true
   exchange-wallet:
     base-url: http://localhost:8081
+    # Sandbox-only: fake platform pubkey so refund/settlement signing paths are exercised.
+    # The matching private key lives in exchange-wallet's keystore; never real in sandbox.
+    platform-pubkey: "1SandboxPlatformPubkey0000000000000000000000000"
   # Risk rule overrides for sandbox: integration tests use amounts up to 500000
   # and the concurrency stress test bursts >10 orders/merchant within 60s, so the
   # production defaults would falsely reject them.

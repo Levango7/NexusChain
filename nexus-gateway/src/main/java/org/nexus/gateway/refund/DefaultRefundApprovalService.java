@@ -24,8 +24,10 @@ import java.util.UUID;
  *       带交易哈希，失败置 FAILED</li>
  * </ul>
  *
- * <p>链上退款执行当前为模拟交易哈希（SIMULATED 前缀），接入
- * nexus-exchange-wallet 签名管道后替换 {@link #executeOnChain}。</p>
+ * <p><b>链上退款执行尚未接入：</b>{@link #executeOnChain} 在真实链上执行通道
+ * （nexus-exchange-wallet 签名与广播管道）可用之前抛出
+ * {@link UnsupportedOperationException}，绝不返回模拟交易哈希。调用方
+ * {@link #executeRefund} 会将请求置为 FAILED 并记录失败原因。</p>
  */
 @Service
 public class DefaultRefundApprovalService implements RefundApprovalService {
@@ -118,7 +120,6 @@ public class DefaultRefundApprovalService implements RefundApprovalService {
         }
 
         request.setStatus(RefundRequest.RefundStatus.REJECTED);
-        request.setApproverId(approverId);
         request.setRejectionReason(reason == null ? "rejected by " + approverId : reason);
         request.setApprovedAt(LocalDateTime.now());
 
@@ -157,10 +158,17 @@ public class DefaultRefundApprovalService implements RefundApprovalService {
     /**
      * Trigger the on-chain refund transfer.
      *
-     * <p>TODO: wire to the nexus-exchange-wallet signing pipeline and broadcast
-     * the refund transaction. Currently returns a simulated tx hash.</p>
+     * <p>链上退款执行尚未接入：真实链上执行需要 nexus-exchange-wallet 的签名与广播
+     * 管道，当前未集成，因此本方法明确抛出 {@link UnsupportedOperationException}，
+     * 绝不返回模拟/占位交易哈希。接入真实执行通道后，应返回链上交易哈希并补充
+     * 异步确认逻辑。</p>
+     *
+     * @param request the approved refund request to execute
+     * @return the real on-chain transaction hash once the execution channel is integrated
+     * @throws UnsupportedOperationException 链上退款执行未接入，无法产生真实交易哈希
      */
     private String executeOnChain(RefundRequest request) {
-        return "SIMULATED-" + UUID.randomUUID().toString().replace("-", "");
+        throw new UnsupportedOperationException(
+                "on-chain refund execution is not integrated yet: no real tx hash can be produced");
     }
 }

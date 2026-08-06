@@ -103,7 +103,8 @@ public class PackageMiner {
                             accountStateMap.put(publicKeyHash, accountState);
                         } else if (accountList.containsKey("toaccount")) {
                             toaccountState.setAccount(accountList.get("toaccount"));
-                            accountStateMap.put(tohash, accountState);
+                            // FIX: previously put(accountState) — the FROM account was stored under the TO hash
+                            accountStateMap.put(tohash, toaccountState);
                         }
                         break;
                     case 13://撤回投票
@@ -127,7 +128,8 @@ public class PackageMiner {
                             accountStateMap.put(publicKeyHash, accountState);
                         } else if (cancelaccountList.containsKey("toaccount")) {
                             tovoteaccountState.setAccount(cancelaccountList.get("toaccount"));
-                            accountStateMap.put(Hex.encodeHexString(transaction.to), accountState);
+                            // FIX: previously put(accountState) — the FROM account was stored under the TO hash
+                            accountStateMap.put(Hex.encodeHexString(transaction.to), tovoteaccountState);
                         }
                         break;
                     case 3://存证事务,只需要扣除手续费

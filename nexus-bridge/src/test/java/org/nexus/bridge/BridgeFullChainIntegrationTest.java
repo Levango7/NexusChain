@@ -10,6 +10,11 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
+import java.nio.charset.StandardCharsets;
+import java.security.KeyFactory;
+import java.security.Signature;
+import java.security.spec.PKCS8EncodedKeySpec;
+
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 import static org.junit.jupiter.api.Assertions.*;
@@ -17,6 +22,12 @@ import static org.junit.jupiter.api.Assertions.*;
 /**
  * Bridge full-chain integration test: lock → mint → burn → unlock.
  * Tests the complete cross-chain asset lifecycle via the actual REST API contract.
+ *
+ * <p><b>2026-08-06（P1 多签验签修复）</b>：MINT/UNLOCK 的签名改为真实
+ * Ed25519 签名——测试用固定的测试密钥对签名，载荷与
+ * {@link BridgeValidator#buildPayload} 一致（timestamp 缺省为 0），
+ * 签名者 ID 即白名单中的公钥十六进制（见 application-test.yml 的
+ * {@code nexus.bridge.validator-public-keys}）。</p>
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -30,13 +41,60 @@ class BridgeFullChainIntegrationTest {
     private static String lockTxId;
     private static String burnTxId;
 
+    // ===== 固定测试密钥对（仅测试用；与 application-test.yml 白名单对应） =====
+    private static final String PUB_V1 =
+            "302a300506032b65700321004d0fe4ccc01fcf50880797f51265c843b096b85e65e2003f6ada9c41f6121f9f";
+    private static final String PRIV_V1 =
+            "302e020100300506032b657004220420fd4cbb12bacf85fd823dfac7345bf5136171044213edf0557f7b852e4de03dd0";
+    private static final String PUB_V2 =
+            "302a300506032b6570032100cddc01e2bc06777cfabde2409c44a8b1f01396074aed624bada5e235f57e3653";
+    private static final String PRIV_V2 =
+            "302e020100300506032b6570042204203665e6554a962618bf7fc03a7a5f9407e932a26f29a23a42a9b03ff97bb3f34b";
+
     private static final String LOCK_BODY =
             "{\"sourceChainId\":\"nexus\",\"targetChainId\":\"ethereum\","
                     + "\"amount\":500000,\"userAddress\":\"0xUser\","
                     + "\"targetAddress\":\"0xRecipient\",\"sourceTxHash\":\"0xLockHash\"}";
 
-    private static final String TWO_SIGS =
-            "\"signatures\":{\"validator-1\":\"sig1\",\"validator-2\":\"sig2\"}";
+    /** 为 lockTxId 的 MINT 生成两个验证者的真实签名 JSON 片段。 */
+    private static String twoSigJson(String lockTxId, long amount, String targetAddress) throws Exception {
+        String payload = BridgeValidator.buildPayload("nexus", lockTxId, amount, targetAddress, 0L);
+        return "\"signatures\":{"
+                + "\"" + PUB_V1 + "\":\"" + sign(PRIV_V1, payload) + "\","
+                + "\"" + PUB_V2 + "\":\"" + sign(PRIV_V2, payload) + "\"}";
+    }
+
+    /** 为 burnTxId 的 UNLOCK 生成两个验证者的真实签名 JSON 片段（载荷链为销毁链 ethereum）。 */
+    private static String twoUnlockSigJson(String burnTxId, long amount, String targetAddress) throws Exception {
+        String payload = BridgeValidator.buildPayload("ethereum", burnTxId, amount, targetAddress, 0L);
+        return "\"signatures\":{"
+                + "\"" + PUB_V1 + "\":\"" + sign(PRIV_V1, payload) + "\","
+                + "\"" + PUB_V2 + "\":\"" + sign(PRIV_V2, payload) + "\"}";
+    }
+
+    private static String sign(String privateKeyHex, String payload) throws Exception {
+        byte[] keyBytes = hexToBytes(privateKeyHex);
+        Signature sig = Signature.getInstance("Ed25519");
+        sig.initSign(KeyFactory.getInstance("Ed25519").generatePrivate(new PKCS8EncodedKeySpec(keyBytes)));
+        sig.update(payload.getBytes(StandardCharsets.UTF_8));
+        return bytesToHex(sig.sign());
+    }
+
+    private static String bytesToHex(byte[] bytes) {
+        StringBuilder sb = new StringBuilder(bytes.length * 2);
+        for (byte b : bytes) sb.append(String.format("%02x", b));
+        return sb.toString();
+    }
+
+    private static byte[] hexToBytes(String hex) {
+        int len = hex.length();
+        byte[] out = new byte[len / 2];
+        for (int i = 0; i < len; i += 2) {
+            out[i / 2] = (byte) ((Character.digit(hex.charAt(i), 16) << 4)
+                    + Character.digit(hex.charAt(i + 1), 16));
+        }
+        return out;
+    }
 
     @Test
     @Order(1)
@@ -57,13 +115,13 @@ class BridgeFullChainIntegrationTest {
 
     @Test
     @Order(2)
-    @DisplayName("Mint wrapped assets on target chain with threshold signatures")
+    @DisplayName("Mint wrapped assets on target chain with valid threshold signatures")
     void mintWrapped() throws Exception {
         mockMvc.perform(post("/api/v1/bridge/mint")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"lockTxId\":\"" + lockTxId + "\","
-                                + TWO_SIGS
-                                + ",\"minterAddress\":\"0xMinter\",\"targetChainId\":\"ethereum\"}"))
+                                + twoSigJson(lockTxId, 500000L, "0xRecipient")
+                                + ",\"minterAddress\":\"" + PUB_V1 + "\",\"targetChainId\":\"ethereum\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("MINTED"));
     }
@@ -92,8 +150,8 @@ class BridgeFullChainIntegrationTest {
         mockMvc.perform(post("/api/v1/bridge/unlock")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"burnTxId\":\"" + burnTxId + "\","
-                                + TWO_SIGS
-                                + ",\"unlockerAddress\":\"0xUnlocker\",\"sourceChainId\":\"nexus\"}"))
+                                + twoUnlockSigJson(burnTxId, 500000L, "0xRecipient")
+                                + ",\"unlockerAddress\":\"" + PUB_V1 + "\",\"sourceChainId\":\"nexus\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("UNLOCKED"));
     }
@@ -123,16 +181,54 @@ class BridgeFullChainIntegrationTest {
                 .andReturn();
         String txId = JsonPath.read(lockRes.getResponse().getContentAsString(), "$.txId");
 
+        // 只有 1 个真实有效签名（阈值 2）
+        String payload = BridgeValidator.buildPayload("nexus", txId, 100000L, "0xRecipient2", 0L);
+        String oneSig = "\"signatures\":{\"" + PUB_V1 + "\":\"" + sign(PRIV_V1, payload) + "\"}";
+
         mockMvc.perform(post("/api/v1/bridge/mint")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"lockTxId\":\"" + txId + "\","
-                                + "\"signatures\":{\"validator-1\":\"sig1\"},"
-                                + "\"minterAddress\":\"0xMinter\",\"targetChainId\":\"ethereum\"}"))
+                                + oneSig
+                                + ",\"minterAddress\":\"" + PUB_V1 + "\",\"targetChainId\":\"ethereum\"}"))
                 .andExpect(status().isConflict());
+
+        // 修复点 2：失败的锁定交易应进入 FAILED 终态并记录失败原因
+        mockMvc.perform(get("/api/v1/bridge/tx/" + txId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("FAILED"))
+                .andExpect(jsonPath("$.failureReason").value(org.hamcrest.Matchers.containsString("Insufficient")));
     }
 
     @Test
     @Order(7)
+    @DisplayName("Reject mint with forged signature content even above count threshold (P1 fix)")
+    void rejectMintWithForgedSignatures() throws Exception {
+        MvcResult lockRes = mockMvc.perform(post("/api/v1/bridge/lock")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"sourceChainId\":\"nexus\",\"targetChainId\":\"ethereum\","
+                                + "\"amount\":100000,\"userAddress\":\"0xUser3\","
+                                + "\"targetAddress\":\"0xRecipient3\",\"sourceTxHash\":\"0xLockHash3\"}"))
+                .andExpect(status().isCreated())
+                .andReturn();
+        String txId = JsonPath.read(lockRes.getResponse().getContentAsString(), "$.txId");
+
+        // 数量达到阈值（2 个），但签名内容伪造 —— 修复前会通过
+        String forged = "\"signatures\":{\"" + PUB_V1 + "\":\"deadbeef\",\"" + PUB_V2 + "\":\"cafebabe\"}";
+
+        mockMvc.perform(post("/api/v1/bridge/mint")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"lockTxId\":\"" + txId + "\","
+                                + forged
+                                + ",\"minterAddress\":\"" + PUB_V1 + "\",\"targetChainId\":\"ethereum\"}"))
+                .andExpect(status().isConflict());
+
+        mockMvc.perform(get("/api/v1/bridge/tx/" + txId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("FAILED"));
+    }
+
+    @Test
+    @Order(8)
     @DisplayName("Bridge status reports active state and pending count")
     void bridgeStatus() throws Exception {
         mockMvc.perform(get("/api/v1/bridge/status"))
