@@ -2,6 +2,39 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [1.2.3] — 2026-08-06 — P2 改进：前端设计契约 + PoS/L2/治理 + MPC 多签 + wallet 拆分
+
+### P2-1 前端设计契约落地
+- 修复 87 处设计违规（硬编码颜色/魔法数字/不一致间距）
+- 引入 lucide-react 图标库，替换所有 inline SVG 和 emoji 图标
+- 新增 7 个共享组件（Button/Card/Modal/Table/Loading/ErrorBoundary/Badge）
+- 创建设计令牌文件 src/styles/tokens.ts（颜色/间距/字体/圆角/阴影/动效/z-index 体系）
+- tailwind.config.js 引用 tokens.ts 的 tailwindThemeExtend
+- App.tsx 用 ErrorBoundary 包裹路由树
+- TypeScript 编译零错误
+
+### P2-2 PoS 共识 + L2 Rollup + 链上治理
+- PoS 权益证明共识（6 个类）：ValidatorRegistry/StakingServiceImpl/PosProposer/PosRewardDistributor/SlashingService/PosConsensusEngine
+- L2 Rollup 扩容骨架（6 个类）：RollupBatcher/StateRootManager/FraudProofVerifier/L2BridgeContract/DefaultL2BridgeContract/RollupSequencer
+- 链上治理执行（4 个新类 + 1 个扩展）：GovernanceVotingService/TimelockController/GovernanceExecutor/GovernanceService + GovernanceProposal 扩展执行期字段
+
+### P2-3 MPC GG18/GG20 多签协议
+- MPC 签名协议骨架（org.nexus.wallet.signing.mpc 包）：MpcParticipant/MpcKeyGeneration/MpcSigningSession/MpcSigner/MpcSignatureAggregator/ThresholdPolicy/MpcKeyShare/MpcProtocolException
+- MpcApprovalPolicy 集成到现有 ApprovalPolicy 审批流
+- ColdWalletMultiSigService 冷钱包多签转移通道（发起转移→参与方签名→聚合签名→广播到链上）
+
+### P2-4 exchange-wallet 包级拆分
+- 将 exchange-wallet 双重职责拆分为两个包：
+  - org.nexus.wallet.wallet.* — 钱包管理（custody/approval/whitelist/pool/execution/controller）
+  - org.nexus.wallet.signing.* — 签名服务（keystore/mpc/controller）
+- 依赖方向：signing → wallet（单向），为未来独立部署签名服务打下基础
+- 通用工具（ApiResult/util/Utils/Leveldb）保留原位 org.nexus.wallet.*
+- gateway 的 ExchangeWalletClient 不变（HTTP 调用，包级拆分不影响外部接口）
+
+### 编译验证
+- 全量 gradle build -x test：BUILD SUCCESSFUL（34 个任务全部执行）
+- exchange-wallet 测试：41/42 通过（1 个预存在 bean 冲突 ServerApplicationTests.contextLoads，与本次拆分无关）
+
 ## v1.2.2 (2026-08-06)
 
 ### P0 改进 — 模块通电与集成修复

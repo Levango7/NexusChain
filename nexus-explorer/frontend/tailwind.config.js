@@ -1,26 +1,17 @@
 /** @type {import('tailwindcss').Config} */
+// 引用 tokens.ts 的主题映射，避免在 config 中重复硬编码颜色 / 圆角 / 阴影。
+import { tailwindThemeExtend } from "./src/styles/tokens";
+
 export default {
   darkMode: "class",
   content: ["./index.html", "./src/**/*.{ts,tsx}"],
   theme: {
     extend: {
+      ...tailwindThemeExtend,
+      // 兼容旧引用（warn 别名）
       colors: {
-        bg: "var(--bg)",
-        surface: "var(--surface)",
-        "surface-2": "var(--surface-2)",
-        border: "var(--border)",
-        fg: "var(--fg)",
-        "fg-2": "var(--fg-2)",
-        muted: "var(--muted)",
-        accent: "var(--accent)",
-        "accent-on": "var(--accent-on)",
-        "accent-soft": "var(--accent-soft)",
-        success: "var(--success)",
-        warn: "var(--warn)",
-        danger: "var(--danger)",
-      },
-      fontFamily: {
-        mono: ["JetBrains Mono", "ui-monospace", "SFMono-Regular", "monospace"],
+        ...tailwindThemeExtend.colors,
+        warning: tailwindThemeExtend.colors.warn,
       },
     },
   },

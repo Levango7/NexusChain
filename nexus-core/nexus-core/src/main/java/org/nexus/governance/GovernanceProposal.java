@@ -27,6 +27,12 @@ public class GovernanceProposal {
     /** 投票结束时间 */
     private Instant votingEnd;
 
+    /** 执行开始时间（投票通过后可执行时间） */
+    private Instant executionStart;
+
+    /** 执行截止时间（超期则标记为 EXPIRED） */
+    private Instant executionEnd;
+
     /** 提案状态 */
     private ProposalStatus status;
 
@@ -74,6 +80,22 @@ public class GovernanceProposal {
 
     public void setVotingEnd(Instant votingEnd) {
         this.votingEnd = votingEnd;
+    }
+
+    public Instant getExecutionStart() {
+        return executionStart;
+    }
+
+    public void setExecutionStart(Instant executionStart) {
+        this.executionStart = executionStart;
+    }
+
+    public Instant getExecutionEnd() {
+        return executionEnd;
+    }
+
+    public void setExecutionEnd(Instant executionEnd) {
+        this.executionEnd = executionEnd;
     }
 
     public ProposalStatus getStatus() {

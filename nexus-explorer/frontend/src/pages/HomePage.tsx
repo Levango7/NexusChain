@@ -1,8 +1,20 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
+import { Search } from "lucide-react";
 import { api } from "../api/client";
 import type { BlockInfo, TransactionInfo, ChainStatus } from "../types";
+import { Loading } from "../components/ui";
 
+/**
+ * HomePage — 区块浏览器首页。
+ *
+ * 设计契约修复：
+ *   - 颜色全部走 design tokens（bg / surface / fg / muted / accent / success）
+ *   - 间距统一 max-w-6xl + px-4 + py-* 4 倍数
+ *   - 圆角统一 rounded-md / rounded-lg
+ *   - 内联 SVG 搜索图标替换为 lucide-react <Search />
+ *   - Loading 文案替换为 <Loading /> 组件
+ */
 const HomePage: React.FC = () => {
   const navigate = useNavigate();
   const [blocks, setBlocks] = useState<BlockInfo[]>([]);
@@ -52,8 +64,8 @@ const HomePage: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-950 text-gray-100">
-      <header className="border-b border-gray-800 bg-gray-900/80 backdrop-blur sticky top-0 z-10">
+    <div className="min-h-screen bg-bg text-fg">
+      <header className="border-b border-border bg-surface/80 backdrop-blur sticky top-0 z-sticky">
         <div className="max-w-6xl mx-auto px-4 h-14 flex items-center justify-between">
           <div
             className="flex items-center gap-2 cursor-pointer"
@@ -68,15 +80,22 @@ const HomePage: React.FC = () => {
               }
             }}
           >
-            <span className="text-lg font-bold text-indigo-400">NexusChain</span>
-            <span className="text-xs text-gray-500 font-mono">Explorer</span>
+            <span className="text-lg font-bold text-accent">NexusChain</span>
+            <span className="text-xs text-muted font-mono">Explorer</span>
           </div>
           {status && (
-            <div className="flex items-center gap-4 text-xs text-gray-400">
-              <span>Height: <span className="text-gray-200 font-mono">{status.height.toLocaleString()}</span></span>
-              <span>Peers: <span className="text-gray-200">{status.peers}</span></span>
+            <div className="flex items-center gap-4 text-xs text-fg-2">
+              <span>
+                Height:{" "}
+                <span className="text-fg font-mono">
+                  {status.height.toLocaleString()}
+                </span>
+              </span>
+              <span>
+                Peers: <span className="text-fg">{status.peers}</span>
+              </span>
               <span className="flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse" />
                 Live
               </span>
             </div>
@@ -92,25 +111,29 @@ const HomePage: React.FC = () => {
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search by block height, tx hash, or address..."
             aria-label="搜索区块高度、交易哈希或地址"
-            className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-3 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/30 transition"
+            className="w-full bg-surface border border-border rounded-md px-4 py-3 text-sm text-fg placeholder-muted focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent/30 transition-colors duration-base ease-standard"
           />
           <button
             type="submit"
             aria-label="搜索"
-            className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-indigo-400 transition"
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted hover:text-accent transition-colors duration-base ease-standard focus:outline-none focus-visible:shadow-focus"
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-            </svg>
+            <Search size={20} />
           </button>
         </form>
       </div>
 
       <main className="max-w-6xl mx-auto px-4 py-4 grid grid-cols-1 lg:grid-cols-2 gap-6">
         <section>
-          <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-3">Latest Blocks</h2>
+          <h2 className="text-sm font-semibold text-fg-2 uppercase tracking-wide mb-3">
+            Latest Blocks
+          </h2>
           <div className="space-y-2">
-            {loading && <div className="text-gray-500 text-sm py-8 text-center">Loading...</div>}
+            {loading && (
+              <div className="py-8 flex justify-center">
+                <Loading label="Loading..." />
+              </div>
+            )}
             {blocks.map((block) => (
               <div
                 key={block.height}
@@ -124,15 +147,23 @@ const HomePage: React.FC = () => {
                     navigate(`/block/${block.height}`);
                   }
                 }}
-                className="bg-gray-900 border border-gray-800 rounded-lg px-4 py-3 cursor-pointer hover:border-indigo-500/50 hover:bg-gray-800/50 transition group"
+                className="bg-surface border border-border rounded-lg px-4 py-3 cursor-pointer hover:border-accent hover:bg-surface-2 transition-colors duration-base ease-standard group focus:outline-none focus-visible:shadow-focus"
               >
                 <div className="flex items-center justify-between">
-                  <span className="text-indigo-400 font-mono text-sm group-hover:text-indigo-300">#{block.height}</span>
-                  <span className="text-xs text-gray-500">{formatTime(block.timestamp)}</span>
+                  <span className="text-accent font-mono text-sm group-hover:text-accent-hover">
+                    #{block.height}
+                  </span>
+                  <span className="text-xs text-muted">
+                    {formatTime(block.timestamp)}
+                  </span>
                 </div>
                 <div className="flex items-center justify-between mt-1">
-                  <span className="text-xs text-gray-500 font-mono truncate max-w-[200px]">{block.hash}</span>
-                  <span className="text-xs text-gray-400">{block.txCount} txns</span>
+                  <span className="text-xs text-muted font-mono truncate max-w-[200px]">
+                    {block.hash}
+                  </span>
+                  <span className="text-xs text-fg-2">
+                    {block.txCount} txns
+                  </span>
                 </div>
               </div>
             ))}
@@ -140,9 +171,15 @@ const HomePage: React.FC = () => {
         </section>
 
         <section>
-          <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-3">Latest Transactions</h2>
+          <h2 className="text-sm font-semibold text-fg-2 uppercase tracking-wide mb-3">
+            Latest Transactions
+          </h2>
           <div className="space-y-2">
-            {loading && <div className="text-gray-500 text-sm py-8 text-center">Loading...</div>}
+            {loading && (
+              <div className="py-8 flex justify-center">
+                <Loading label="Loading..." />
+              </div>
+            )}
             {transactions.map((tx) => (
               <div
                 key={tx.txHash}
@@ -156,15 +193,23 @@ const HomePage: React.FC = () => {
                     navigate(`/tx/${tx.txHash}`);
                   }
                 }}
-                className="bg-gray-900 border border-gray-800 rounded-lg px-4 py-3 cursor-pointer hover:border-indigo-500/50 hover:bg-gray-800/50 transition group"
+                className="bg-surface border border-border rounded-lg px-4 py-3 cursor-pointer hover:border-accent hover:bg-surface-2 transition-colors duration-base ease-standard group focus:outline-none focus-visible:shadow-focus"
               >
                 <div className="flex items-center justify-between">
-                  <span className="text-indigo-400 font-mono text-xs group-hover:text-indigo-300 truncate max-w-[180px]">{tx.txHash}</span>
-                  <span className="text-xs text-gray-500">{formatTime(tx.timestamp)}</span>
+                  <span className="text-accent font-mono text-xs group-hover:text-accent-hover truncate max-w-[180px]">
+                    {tx.txHash}
+                  </span>
+                  <span className="text-xs text-muted">
+                    {formatTime(tx.timestamp)}
+                  </span>
                 </div>
                 <div className="flex items-center justify-between mt-1">
-                  <span className="text-xs text-gray-500">{tx.from.slice(0, 8)}... → {tx.to.slice(0, 8)}...</span>
-                  <span className="text-xs font-medium text-emerald-400">{tx.amount} NEX</span>
+                  <span className="text-xs text-muted">
+                    {tx.from.slice(0, 8)}... → {tx.to.slice(0, 8)}...
+                  </span>
+                  <span className="text-xs font-medium text-success">
+                    {tx.amount} NEX
+                  </span>
                 </div>
               </div>
             ))}
@@ -172,8 +217,8 @@ const HomePage: React.FC = () => {
         </section>
       </main>
 
-      <footer className="border-t border-gray-800 mt-8">
-        <div className="max-w-6xl mx-auto px-4 py-6 text-center text-xs text-gray-600">
+      <footer className="border-t border-border mt-8">
+        <div className="max-w-6xl mx-auto px-4 py-6 text-center text-xs text-muted">
           NexusChain Explorer — Blockchain Explorer for NEX Network
         </div>
       </footer>
