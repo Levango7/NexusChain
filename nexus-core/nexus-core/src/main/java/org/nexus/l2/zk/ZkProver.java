@@ -33,6 +33,9 @@ public class ZkProver implements ZkProofSystem {
     @Autowired
     private TrustedSetup trustedSetup;
 
+    @Autowired
+    private ZkVerifier zkVerifier;
+
     @Override
     public int setup(ZkCircuit circuit) {
         if (circuit == null) {
@@ -54,6 +57,7 @@ public class ZkProver implements ZkProofSystem {
         // 骨架实现：综合电路（占位），生成占位证明字节
         byte[] assignment = circuit.synthesize(witness);
         int setupVersion = trustedSetup.getActiveVersion();
+        if (setupVersion < 1) setupVersion = 1;
         // 占位证明：电路 ID + setup 版本 + 公共输入摘要 + assignment 长度
         String placeholder = "PROOF|" + circuit.getCircuitId() + "|v" + setupVersion
                 + "|" + (publicInput == null ? "null" : publicInput.toString())
@@ -68,7 +72,7 @@ public class ZkProver implements ZkProofSystem {
     @Override
     public boolean verify(ZkProof proof, ZkPublicInput publicInput) {
         // 验证逻辑由 ZkVerifier 承担，此处委托
-        return new ZkVerifier().verify(proof, publicInput);
+        return zkVerifier != null ? zkVerifier.verify(proof, publicInput) : false;
     }
 
     @Override

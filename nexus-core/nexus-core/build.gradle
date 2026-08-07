@@ -150,6 +150,15 @@ dependencies {
     implementation group: 'org.quartz-scheduler', name: 'quartz', version: '2.3.2'
     implementation group: 'commons-cli', name: 'commons-cli', version: '1.5.0'
     implementation group: 'com.beust', name: 'jcommander', version: '1.82'
+
+    // Web3j: L2↔L1 桥合约真实交互（任务 #83，审计报告 §3.4）
+    // 用于 L1ContractClient 调用 L1 桥合约 ABI：
+    //   submitStateRoot / markBatchVerified / finalizeWithdraws / challengeBatch
+    // 排除 jc-kzg-4844（EIP-4844 blob 支持），桥合约调用不需要且该依赖在
+    // 当前仓库配置下不可解析（与 nexus-bridge build.gradle 对齐）
+    implementation('org.web3j:core:4.11.0') {
+        exclude group: 'tech.pegasys', module: 'jc-kzg-4844'
+    }
     implementation group: 'io.jsonwebtoken', name: 'jjwt-api', version: '0.11.5'
     implementation group: 'io.jsonwebtoken', name: 'jjwt-impl', version: '0.11.5'
     implementation group: 'io.jsonwebtoken', name: 'jjwt-jackson', version: '0.11.5'

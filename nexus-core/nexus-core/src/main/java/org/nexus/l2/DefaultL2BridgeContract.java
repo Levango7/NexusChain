@@ -123,11 +123,15 @@ public class DefaultL2BridgeContract implements L2BridgeContract {
 
     /**
      * 标记批次为已 VERIFIED（由 FraudProofVerifier.finalizeBatch 调用）。
+     *
+     * <p>同步调用 L1 桥合约 {@code markBatchVerified(uint256 batchId)} 函数。
+     * L1 调用失败时（{@link L1ContractClient} 内部已回退内存模拟）仍标记本地 VERIFIED，
+     * 保证 L2 流程不因 L1 不可用而中断（审计报告 §3.4 / 任务 #83）。</p>
      */
     public void markBatchVerified(long batchId) {
         batchVerified.put(batchId, true);
         if (l1ContractClient != null) {
-            l1ContractClient.finalizeBatchOnL1(batchId);
+            l1ContractClient.markBatchVerifiedOnL1(batchId);
         }
         logger.info("Batch {} marked VERIFIED on bridge", batchId);
     }
@@ -179,10 +183,19 @@ public class DefaultL2BridgeContract implements L2BridgeContract {
     /**
      * 触发批次所有提款的 finalizeWithdraw（由 FraudProofVerifier.finalizeBatch 调用）。
      *
+     * <p>同步调用 L1 桥合约 {@code finalizeWithdraws(uint256 batchId)} 函数触发 L1 侧
+     * 资产释放，并在本地对每笔提款执行 {@link #finalizeWithdraw}（验证 batch VERIFIED +
+     * Merkle 证明 + 释放资金）。L1 调用失败时（{@link L1ContractClient} 内部已回退内存模拟）
+     * 仍执行本地 finalize，保证 L2 流程不因 L1 不可用而中断（审计报告 §3.4 / 任务 #83）。</p>
+     *
      * @param batchId 批次 ID
      * @return 成功 finalize 的提款数量
      */
     public int finalizeWithdrawsForBatch(long batchId) {
+        // 先调用 L1 桥合约 finalizeWithdraws 触发 L1 侧资产释放
+        if (l1ContractClient != null) {
+            l1ContractClient.finalizeWithdrawsOnL1(batchId);
+        }
         List<L2Transaction> txs = batchWithdraws.get(batchId);
         if (txs == null || txs.isEmpty()) {
             logger.debug("No withdraws to finalize for batch {}", batchId);
@@ -196,6 +209,39 @@ public class DefaultL2BridgeContract implements L2BridgeContract {
         }
         logger.info("Finalized {} withdraws for batch {}", count, batchId);
         return count;
+    }
+
+    /**
+     * 在 L1 上挑战批次（提交欺诈证明）。
+     *
+     * <p>调用 L1 桥合约 {@code challengeBatch(uint256 batchId, bytes proofData)} 函数。
+     * 挑战成功后本地标记批次为 CHALLENGED 状态，关联提款标记 REVERTED。
+     * L1 调用失败时（{@link L1ContractClient} 内部已回退内存模拟）仍标记本地 CHALLENGED
+     * （审计报告 §3.4 / 任务 #83）。</p>
+     *
+     * @param batchId   批次 ID
+     * @param proofData 欺诈证明数据（RLP 编码）
+     * @return 挑战成功返回 true；proofData 为空返回 false
+     */
+    public boolean challengeBatch(long batchId, byte[] proofData) {
+        if (proofData == null || proofData.length == 0) {
+            logger.warn("challengeBatch: empty proof data for batch {}", batchId);
+            return false;
+        }
+        boolean l1Ok = true;
+        if (l1ContractClient != null) {
+            l1Ok = l1ContractClient.challengeBatchOnL1(batchId, proofData);
+        }
+        // 本地标记批次 CHALLENGED（即使 L1 失败也标记，因欺诈已确认）
+        batchVerified.put(batchId, false);
+        List<L2Transaction> txs = batchWithdraws.get(batchId);
+        if (txs != null) {
+            for (L2Transaction tx : txs) {
+                tx.setStatus(L2TransactionStatus.REVERTED);
+            }
+        }
+        logger.info("Batch {} challenged on bridge (l1Ok={})", batchId, l1Ok);
+        return l1Ok;
     }
 
     public String getCommittedRoot(long batchId) {

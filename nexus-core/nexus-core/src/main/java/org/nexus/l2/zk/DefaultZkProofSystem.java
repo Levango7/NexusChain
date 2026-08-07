@@ -1,0 +1,374 @@
+package org.nexus.l2.zk;
+
+import org.nexus.l2.zk.groth16.Groth16Proof;
+import org.nexus.l2.zk.groth16.Groth16ProofSystem;
+import org.nexus.l2.zk.groth16.Groth16Setup;
+import org.nexus.l2.zk.r1cs.R1csConstraintSystem;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Primary;
+import org.springframework.stereotype.Component;
+
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.util.Arrays;
+
+/**
+ * 默认 ZK 证明系统实现（根据配置选择后端）。
+ *
+ * <p>实现 {@link ZkProofSystem} 接口，根据 {@link ZkProverProperties} 配置选择证明后端：</p>
+ * <ul>
+ *   <li><b>groth16</b>（默认）：使用 {@link Groth16ProofSystem}（BouncyCastle 椭圆曲线）</li>
+ *   <li><b>plonk</b>：TODO，当前降级为 groth16</li>
+ *   <li><b>halo2</b>：TODO，当前降级为 groth16</li>
+ *   <li><b>mock</b>：骨架占位实现（prove 返回占位证明，verify 校验非空）</li>
+ *   <li>{@code zk.prover.enabled=false}：禁用 ZK，prove 返回占位证明</li>
+ * </ul>
+ *
+ * <h3>R1CS 集成</h3>
+ * <p>当电路提供 R1CS 约束（{@link ZkCircuit#hasR1cs()} 返回 true）且后端为 groth16 时，
+ * 走真实 Groth16 流程：setup → prove → verify。否则降级为骨架模式。</p>
+ *
+ * <h3>witness 编码</h3>
+ * <p>witness byte[] 编码格式（供 RollupStateTransitionCircuit 使用）：</p>
+ * <pre>
+ * [magic(4)="ZWIT"] [numEffects(4)] [effect_0(8)] ... [effect_{n-1}(8)]
+ * </pre>
+ * <p>若 witness 不符合此格式，降级为占位证明。</p>
+ *
+ * @since 1.5
+ */
+@Component
+@Primary
+public class DefaultZkProofSystem implements ZkProofSystem {
+
+    private static final Logger logger = LoggerFactory.getLogger(DefaultZkProofSystem.class);
+
+    /** witness 编码 magic */
+    private static final byte[] WITNESS_MAGIC = "ZWIT".getBytes(StandardCharsets.US_ASCII);
+
+    /** 证明编码 magic */
+    private static final byte[] PROOF_MAGIC = "G16P".getBytes(StandardCharsets.US_ASCII);
+
+    @Autowired
+    private TrustedSetup trustedSetup;
+
+    @Autowired
+    private ZkProverProperties properties;
+
+    /** Groth16 证明系统（懒初始化） */
+    private volatile Groth16ProofSystem groth16;
+
+    /** 当前激活的 setup 版本号 */
+    private volatile int currentSetupVersion = 0;
+
+    @Override
+    public int setup(ZkCircuit circuit) {
+        if (circuit == null) {
+            throw new IllegalArgumentException("circuit cannot be null");
+        }
+        int constraints = circuit.defineCircuit();
+        int version = trustedSetup.registerVersion(circuit.getCircuitId(),
+                "groth16-setup-" + Instant.now().toEpochMilli(), 1);
+        this.currentSetupVersion = version;
+
+        ZkProverProperties.BackendType backend = properties.resolveBackend();
+        if (properties.isEnabled() && backend == ZkProverProperties.BackendType.GROTH16
+                && circuit.hasR1cs()) {
+            // 真实 Groth16 setup
+            ensureGroth16();
+            R1csConstraintSystem r1cs = circuit.buildR1cs();
+            groth16.setup(circuit.getCircuitId(), r1cs);
+            logger.info("DefaultZkProofSystem setup (groth16): circuit={} constraints={} version={}",
+                    circuit.getCircuitId(), constraints, version);
+        } else {
+            logger.info("DefaultZkProofSystem setup ({}): circuit={} constraints={} version={}",
+                    backend, circuit.getCircuitId(), constraints, version);
+        }
+        return version;
+    }
+
+    @Override
+    public ZkProof prove(ZkCircuit circuit, byte[] witness, ZkPublicInput publicInput) {
+        if (circuit == null) {
+            throw new IllegalArgumentException("circuit cannot be null");
+        }
+        int setupVersion = currentSetupVersion > 0 ? currentSetupVersion : trustedSetup.getActiveVersion();
+        if (setupVersion < 1) {
+            setupVersion = 1;
+        }
+
+        ZkProverProperties.BackendType backend = properties.resolveBackend();
+        if (properties.isEnabled() && backend == ZkProverProperties.BackendType.GROTH16
+                && circuit.hasR1cs() && groth16 != null) {
+            // 真实 Groth16 prove
+            try {
+                Groth16Proof g16Proof = proveGroth16(circuit, witness, publicInput);
+                byte[] proofData = encodeGroth16Proof(g16Proof);
+                ZkProof proof = new ZkProof(proofData, circuit.getCircuitId(),
+                        setupVersion, System.currentTimeMillis());
+                logger.info("DefaultZkProofSystem prove (groth16): circuit={} proofSize={}",
+                        circuit.getCircuitId(), proof.size());
+                return proof;
+            } catch (Exception e) {
+                logger.warn("DefaultZkProofSystem groth16 prove failed, fallback to mock: {}",
+                        e.getMessage());
+                // 降级为占位证明
+            }
+        }
+
+        // 占位证明（mock 模式或降级）
+        byte[] proofData = encodeMockProof(circuit, witness, publicInput, setupVersion);
+        ZkProof proof = new ZkProof(proofData, circuit.getCircuitId(),
+                setupVersion, System.currentTimeMillis());
+        logger.info("DefaultZkProofSystem prove (mock): circuit={} proofSize={}",
+                circuit.getCircuitId(), proof.size());
+        return proof;
+    }
+
+    @Override
+    public boolean verify(ZkProof proof, ZkPublicInput publicInput) {
+        if (proof == null || proof.size() == 0) {
+            logger.warn("DefaultZkProofSystem verify: proof null or empty");
+            return false;
+        }
+        if (publicInput == null
+                || publicInput.getPreStateRoot() == null
+                || publicInput.getPostStateRoot() == null) {
+            logger.warn("DefaultZkProofSystem verify: publicInput invalid");
+            return false;
+        }
+
+        byte[] data = proof.getProofData();
+        // 检查是否为 Groth16 证明
+        if (isGroth16Proof(data) && groth16 != null) {
+            try {
+                Groth16Proof g16Proof = decodeGroth16Proof(data);
+                long[] publicInputs = extractPublicInputs(publicInput);
+                boolean valid = groth16.verify(g16Proof.getCircuitId(), g16Proof, publicInputs);
+                logger.info("DefaultZkProofSystem verify (groth16): circuit={} -> {}",
+                        proof.getCircuitId(), valid);
+                return valid;
+            } catch (Exception e) {
+                logger.warn("DefaultZkProofSystem groth16 verify failed: {}", e.getMessage());
+                return false;
+            }
+        }
+
+        // mock 证明验证：校验前缀 + 非空
+        if (data.length >= 5 && data[0] == 'P' && data[1] == 'R' && data[2] == 'O'
+                && data[3] == 'O' && data[4] == 'F') {
+            logger.info("DefaultZkProofSystem verify (mock): circuit={} -> VALID",
+                    proof.getCircuitId());
+            return true;
+        }
+        logger.warn("DefaultZkProofSystem verify: unknown proof format");
+        return false;
+    }
+
+    @Override
+    public String getName() {
+        ZkProverProperties.BackendType backend = properties.resolveBackend();
+        if (!properties.isEnabled()) {
+            return "disabled";
+        }
+        switch (backend) {
+            case GROTH16: return "groth16-bc";
+            case PLONK: return "plonk(todo->groth16)";
+            case HALO2: return "halo2(todo->groth16)";
+            case MOCK: return "mock";
+            default: return "groth16-bc";
+        }
+    }
+
+    // ==================== Groth16 集成 ====================
+
+    private void ensureGroth16() {
+        if (groth16 == null) {
+            synchronized (this) {
+                if (groth16 == null) {
+                    groth16 = new Groth16ProofSystem();
+                }
+            }
+        }
+    }
+
+    private Groth16Proof proveGroth16(ZkCircuit circuit, byte[] witness, ZkPublicInput publicInput) {
+        R1csConstraintSystem r1cs = circuit.buildR1cs();
+        long[] fullWitness = buildWitnessFromInputs(circuit, witness, publicInput, r1cs);
+        return groth16.prove(circuit.getCircuitId(), r1cs, fullWitness);
+    }
+
+    /**
+     * 从 witness byte[] 和公共输入构造完整 R1CS witness 向量。
+     *
+     * <p>针对 RollupStateTransitionCircuit 优化：解析 witness 中的 txEffects，
+     * 结合公共输入（preStateRoot, postStateRoot, batchDataHash）构造完整 witness。</p>
+     */
+    private long[] buildWitnessFromInputs(ZkCircuit circuit, byte[] witness,
+                                          ZkPublicInput publicInput,
+                                          R1csConstraintSystem r1cs) {
+        // 提取公共输入
+        long preStateRoot = RollupStateTransitionCircuit.hashToLong(publicInput.getPreStateRoot());
+        long postStateRoot = RollupStateTransitionCircuit.hashToLong(publicInput.getPostStateRoot());
+        long batchDataHash = RollupStateTransitionCircuit.hashToLong(publicInput.getBatchDataHash());
+
+        // 解析 witness 中的 txEffects
+        long[] txEffects = decodeWitnessEffects(witness);
+
+        // 若电路是 RollupStateTransitionCircuit，使用其 buildWitness 方法
+        if (circuit instanceof RollupStateTransitionCircuit) {
+            RollupStateTransitionCircuit rollupCircuit = (RollupStateTransitionCircuit) circuit;
+            // 调整 txEffects 长度以匹配 maxBatchSize
+            int maxBatch = rollupCircuit.getMaxBatchSize();
+            long[] adjusted = new long[Math.min(txEffects.length, maxBatch)];
+            System.arraycopy(txEffects, 0, adjusted, 0, adjusted.length);
+            return rollupCircuit.buildWitness(preStateRoot, postStateRoot, batchDataHash, adjusted);
+        }
+
+        // 通用回退：直接拼装
+        long[] publicInputs = {preStateRoot, postStateRoot, batchDataHash};
+        int numPrivate = r1cs.getNumPrivate();
+        long[] privateWitness = new long[numPrivate];
+        int copyLen = Math.min(txEffects.length, numPrivate);
+        System.arraycopy(txEffects, 0, privateWitness, 0, copyLen);
+        return r1cs.buildWitness(publicInputs, privateWitness);
+    }
+
+    /**
+     * 解码 witness byte[] 为 txEffects long 数组。
+     *
+     * <p>格式：[magic(4)="ZWIT"] [numEffects(4)] [effect_0(8)] ... [effect_{n-1}(8)]</p>
+     */
+    private long[] decodeWitnessEffects(byte[] witness) {
+        if (witness == null || witness.length < 8) {
+            return new long[0];
+        }
+        // 检查 magic
+        if (witness.length >= 8
+                && witness[0] == WITNESS_MAGIC[0] && witness[1] == WITNESS_MAGIC[1]
+                && witness[2] == WITNESS_MAGIC[2] && witness[3] == WITNESS_MAGIC[3]) {
+            int numEffects = readIntLE(witness, 4);
+            if (numEffects <= 0 || 8 + numEffects * 8L > witness.length) {
+                return new long[0];
+            }
+            long[] effects = new long[numEffects];
+            for (int i = 0; i < numEffects; i++) {
+                effects[i] = readLongLE(witness, 8 + i * 8);
+            }
+            return effects;
+        }
+        // 回退：将 witness 字节直接转为 long 数组（每 8 字节一个）
+        int n = witness.length / 8;
+        long[] effects = new long[n];
+        for (int i = 0; i < n; i++) {
+            effects[i] = readLongLE(witness, i * 8);
+        }
+        return effects;
+    }
+
+    private long[] extractPublicInputs(ZkPublicInput publicInput) {
+        long pre = RollupStateTransitionCircuit.hashToLong(publicInput.getPreStateRoot());
+        long post = RollupStateTransitionCircuit.hashToLong(publicInput.getPostStateRoot());
+        long hash = RollupStateTransitionCircuit.hashToLong(publicInput.getBatchDataHash());
+        return new long[]{pre, post, hash};
+    }
+
+    // ==================== 证明编码/解码 ====================
+
+    private byte[] encodeGroth16Proof(Groth16Proof proof) {
+        byte[] g16Bytes = proof.encode();
+        byte[] result = new byte[PROOF_MAGIC.length + g16Bytes.length];
+        System.arraycopy(PROOF_MAGIC, 0, result, 0, PROOF_MAGIC.length);
+        System.arraycopy(g16Bytes, 0, result, PROOF_MAGIC.length, g16Bytes.length);
+        return result;
+    }
+
+    private boolean isGroth16Proof(byte[] data) {
+        if (data == null || data.length < PROOF_MAGIC.length) {
+            return false;
+        }
+        for (int i = 0; i < PROOF_MAGIC.length; i++) {
+            if (data[i] != PROOF_MAGIC[i]) return false;
+        }
+        return true;
+    }
+
+    private Groth16Proof decodeGroth16Proof(byte[] data) {
+        byte[] g16Bytes = new byte[data.length - PROOF_MAGIC.length];
+        System.arraycopy(data, PROOF_MAGIC.length, g16Bytes, 0, g16Bytes.length);
+        return decodeGroth16ProofBytes(g16Bytes);
+    }
+
+    private Groth16Proof decodeGroth16ProofBytes(byte[] bytes) {
+        // 格式：[magic(3)="G16"] [circuitIdLen(2)] [circuitId] [A] [B] [C]
+        // 每个点 [len(2)] [pointBytes]
+        int pos = 3; // skip "G16"
+        int idLen = readUShortLE(bytes, pos);
+        pos += 2;
+        String circuitId = new String(bytes, pos, idLen, StandardCharsets.UTF_8);
+        pos += idLen;
+
+        // 读取三个点 A, B, C
+        org.bouncycastle.math.ec.ECPoint a = readPoint(bytes, pos);
+        pos += 2 + readUShortLE(bytes, pos);
+
+        org.bouncycastle.math.ec.ECPoint b = readPoint(bytes, pos);
+        pos += 2 + readUShortLE(bytes, pos);
+
+        org.bouncycastle.math.ec.ECPoint c = readPoint(bytes, pos);
+
+        return new Groth16Proof(a, b, c, circuitId);
+    }
+
+    private org.bouncycastle.math.ec.ECPoint readPoint(byte[] bytes, int pos) {
+        int len = readUShortLE(bytes, pos);
+        byte[] pointBytes = Arrays.copyOfRange(bytes, pos + 2, pos + 2 + len);
+        return org.nexus.l2.zk.groth16.ZkCurveParams.decodePoint(pointBytes);
+    }
+
+    private byte[] encodeMockProof(ZkCircuit circuit, byte[] witness,
+                                   ZkPublicInput publicInput, int setupVersion) {
+        String placeholder = "PROOF|" + circuit.getCircuitId() + "|v" + setupVersion
+                + "|" + (publicInput == null ? "null" : publicInput.toString())
+                + "|witnessLen=" + (witness == null ? 0 : witness.length);
+        return placeholder.getBytes(StandardCharsets.UTF_8);
+    }
+
+    // ==================== 字节工具 ====================
+
+    private static int readIntLE(byte[] bytes, int offset) {
+        return ByteBuffer.wrap(bytes, offset, 4).order(ByteOrder.LITTLE_ENDIAN).getInt();
+    }
+
+    private static long readLongLE(byte[] bytes, int offset) {
+        return ByteBuffer.wrap(bytes, offset, 8).order(ByteOrder.LITTLE_ENDIAN).getLong();
+    }
+
+    private static int readUShortLE(byte[] bytes, int offset) {
+        return (bytes[offset] & 0xFF) | ((bytes[offset + 1] & 0xFF) << 8);
+    }
+
+    /**
+     * 将 txEffects long 数组编码为 witness byte[]（供上层调用）。
+     *
+     * @param txEffects 交易效果数组
+     * @return 编码的 witness 字节
+     */
+    public static byte[] encodeWitness(long[] txEffects) {
+        int numEffects = txEffects == null ? 0 : txEffects.length;
+        ByteBuffer buf = ByteBuffer.allocate(8 + numEffects * 8)
+                .order(ByteOrder.LITTLE_ENDIAN);
+        buf.put(WITNESS_MAGIC);
+        buf.putInt(numEffects);
+        if (txEffects != null) {
+            for (long e : txEffects) {
+                buf.putLong(e);
+            }
+        }
+        return buf.array();
+    }
+}

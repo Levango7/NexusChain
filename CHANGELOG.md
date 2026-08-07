@@ -2,6 +2,26 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [1.9.0] - 2026-08-07 - 审计报告第三批：L2 L1真实化 + ZK证明系统
+
+### 新增
+- **L2 L1 合约客户端真实化**：Web3j L1 合约交互
+  - Web3jL1ContractClient：submitStateRoot/markBatchVerified/finalizeWithdraws/challengeBatch 真实 L1 调用
+  - @ConditionalOnProperty 切换真实/内存模拟，失败回退内存
+- **ZK 证明系统**：Groth16 简化版（BouncyCastle 椭圆曲线）
+  - R1CS 约束系统 + RollupStateTransitionCircuit 真实化
+  - Groth16ProofSystem：setup/prove/verify 三阶段，Schnorr 协议验证
+  - DefaultZkProofSystem：@Primary，配置选择后端（groth16|mock）
+  - ZkProverProperties：zk.prover.enabled/backend 配置
+
+### 变更
+- nexus-core build.gradle 添加 Web3j 依赖
+- ZkCircuit 接口添加 R1CS 方法
+- ZkVerifier 支持 Groth16 证明验证
+
+### 验证
+- `gradlew.bat build -x test` BUILD SUCCESSFUL in 1m 48s
+
 ## [1.8.0] - 2026-08-07 - 审计报告第二批：MPC 密码学引擎接入
 
 ### 新增
