@@ -9,6 +9,8 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.nexus.gateway.client.ExchangeWalletClient;
+import org.nexus.sdk.client.feign.SigningServiceFeignClient;
+import org.nexus.sdk.client.feign.WalletMgmtFeignClient;
 import static org.mockito.Mockito.when;
 import static org.mockito.ArgumentMatchers.anyString;
 import org.springframework.test.web.servlet.MvcResult;
@@ -31,17 +33,26 @@ class GatewayCoreIntegrationTest {
     @Autowired
     private MockMvc mockMvc;
 
+    // PaymentServiceImpl 直接注入 Feign 客户端（Phase 1 #55 改造），
+    // ExchangeWalletClient 兼容层默认不装配（@ConditionalOnProperty enabled=false），
+    // 因此必须 mock Feign 客户端才能让退款流程在无远程服务的测试环境正常工作。
     @MockBean
     private ExchangeWalletClient walletClient;
 
+    @MockBean
+    private SigningServiceFeignClient signingServiceFeignClient;
+
+    @MockBean
+    private WalletMgmtFeignClient walletMgmtFeignClient;
+
     @BeforeEach
     void stubWalletSign() {
-        // Refund signing is delegated to exchange-wallet via signTransfer (platform key).
+        // Refund signing is delegated to signing-service via signTransfer (platform key).
         // In this gateway-only integration test the wallet service is stubbed to succeed.
-        when(walletClient.signTransfer(anyString(), anyString(), org.mockito.ArgumentMatchers.any(java.math.BigDecimal.class)))
+        when(signingServiceFeignClient.signTransfer(anyString(), anyString(), org.mockito.ArgumentMatchers.any(java.math.BigDecimal.class)))
                 .thenReturn("0xRefundTxHash1234567890abcdef1234567890abcdef");
         // Refund flow first converts the payer address to a pubkey hash via the wallet service.
-        when(walletClient.addressToPubkeyHash(anyString()))
+        when(walletMgmtFeignClient.addressToPubkeyHash(anyString()))
                 .thenReturn("aabbccddeeff00112233445566778899aabbccdd");
     }
 

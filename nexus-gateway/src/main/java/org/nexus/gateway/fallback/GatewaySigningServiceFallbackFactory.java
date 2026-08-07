@@ -29,7 +29,7 @@ import org.springframework.stereotype.Component;
  * @see SigningServiceFallbackFactory
  */
 @Component
-public class GatewaySigningServiceFallbackFactory implements SigningServiceFallbackFactory {
+public class GatewaySigningServiceFallbackFactory extends SigningServiceFallbackFactory {
 
     private static final Logger log = LoggerFactory.getLogger(GatewaySigningServiceFallbackFactory.class);
 

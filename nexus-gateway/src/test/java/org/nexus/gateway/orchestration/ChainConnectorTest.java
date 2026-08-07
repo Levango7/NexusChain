@@ -4,13 +4,14 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.nexus.gateway.client.ChainRpcClient;
-import org.nexus.gateway.client.ExchangeWalletClient;
 import org.nexus.gateway.config.GatewayConfig;
 import org.nexus.gateway.orchestration.connector.ConnectorHealth;
 import org.nexus.gateway.orchestration.connector.ConnectorPaymentRequest;
 import org.nexus.gateway.orchestration.connector.ConnectorPaymentResult;
 import org.nexus.gateway.orchestration.connector.PaymentStatus;
 import org.nexus.gateway.orchestration.connectors.ChainConnector;
+import org.nexus.sdk.client.feign.SigningServiceFeignClient;
+import org.nexus.sdk.client.feign.WalletMgmtFeignClient;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -24,14 +25,19 @@ import static org.mockito.Mockito.when;
  * Unit tests for {@link ChainConnector}: the delegated settlement path.
  *
  * <p>Since the connector no longer builds/signs transactions itself (it delegates
- * to {@link ExchangeWalletClient}), these tests mock the wallet client and assert
- * the delegation contract: createPayment resolves the payee, delegates signing,
- * and returns the on-chain txHash; queryPayment polls confirmation via the core RPC.</p>
+ * to {@link SigningServiceFeignClient} for signing/broadcast and
+ * {@link WalletMgmtFeignClient} for address resolution), these tests mock the
+ * signing/wallet clients and assert the delegation contract: createPayment resolves
+ * the payee, delegates signing, and returns the on-chain txHash; queryPayment polls
+ * confirmation via the core RPC.</p>
  */
 class ChainConnectorTest {
 
-    private ChainConnector connectorWith(ChainRpcClient rpc, ExchangeWalletClient wallet, GatewayConfig cfg) {
-        return new ChainConnector(rpc, wallet, cfg);
+    private ChainConnector connectorWith(ChainRpcClient rpc,
+                                          SigningServiceFeignClient signing,
+                                          WalletMgmtFeignClient walletMgmt,
+                                          GatewayConfig cfg) {
+        return new ChainConnector(rpc, signing, walletMgmt, cfg);
     }
 
     private GatewayConfig gatewayConfigWith(String platformPubkey) {
@@ -53,11 +59,12 @@ class ChainConnectorTest {
     @DisplayName("createPayment: wallet signs -> PROCESSING with on-chain txHash")
     void createPayment_signed() {
         ChainRpcClient rpc = mock(ChainRpcClient.class);
-        ExchangeWalletClient wallet = mock(ExchangeWalletClient.class);
-        when(wallet.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
-        when(wallet.signTransfer(anyString(), anyString(), Mockito.any())).thenReturn("txHash123");
+        SigningServiceFeignClient signing = mock(SigningServiceFeignClient.class);
+        WalletMgmtFeignClient walletMgmt = mock(WalletMgmtFeignClient.class);
+        when(walletMgmt.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
+        when(signing.signTransfer(anyString(), anyString(), Mockito.any())).thenReturn("txHash123");
 
-        ChainConnector c = connectorWith(rpc, wallet, gatewayConfigWith("platformPk"));
+        ChainConnector c = connectorWith(rpc, signing, walletMgmt, gatewayConfigWith("platformPk"));
         ConnectorPaymentResult r = c.createPayment(sampleRequest());
 
         assertTrue(r.isSuccess());
@@ -69,10 +76,11 @@ class ChainConnectorTest {
     @DisplayName("createPayment: invalid payee address -> FAILED")
     void createPayment_invalidPayee() {
         ChainRpcClient rpc = mock(ChainRpcClient.class);
-        ExchangeWalletClient wallet = mock(ExchangeWalletClient.class);
-        when(wallet.addressToPubkeyHash("0xPayee")).thenReturn(null);
+        SigningServiceFeignClient signing = mock(SigningServiceFeignClient.class);
+        WalletMgmtFeignClient walletMgmt = mock(WalletMgmtFeignClient.class);
+        when(walletMgmt.addressToPubkeyHash("0xPayee")).thenReturn(null);
 
-        ChainConnector c = connectorWith(rpc, wallet, gatewayConfigWith("platformPk"));
+        ChainConnector c = connectorWith(rpc, signing, walletMgmt, gatewayConfigWith("platformPk"));
         ConnectorPaymentResult r = c.createPayment(sampleRequest());
 
         assertFalse(r.isSuccess());
@@ -83,11 +91,12 @@ class ChainConnectorTest {
     @DisplayName("createPayment: wallet signing fails -> FAILED")
     void createPayment_signingFails() {
         ChainRpcClient rpc = mock(ChainRpcClient.class);
-        ExchangeWalletClient wallet = mock(ExchangeWalletClient.class);
-        when(wallet.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
-        when(wallet.signTransfer(anyString(), anyString(), Mockito.any())).thenReturn(null);
+        SigningServiceFeignClient signing = mock(SigningServiceFeignClient.class);
+        WalletMgmtFeignClient walletMgmt = mock(WalletMgmtFeignClient.class);
+        when(walletMgmt.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
+        when(signing.signTransfer(anyString(), anyString(), Mockito.any())).thenReturn(null);
 
-        ChainConnector c = connectorWith(rpc, wallet, gatewayConfigWith("platformPk"));
+        ChainConnector c = connectorWith(rpc, signing, walletMgmt, gatewayConfigWith("platformPk"));
         ConnectorPaymentResult r = c.createPayment(sampleRequest());
 
         assertFalse(r.isSuccess());
@@ -98,9 +107,10 @@ class ChainConnectorTest {
     @DisplayName("createPayment: platform pubkey not configured -> FAILED")
     void createPayment_noPlatformPubkey() {
         ChainRpcClient rpc = mock(ChainRpcClient.class);
-        ExchangeWalletClient wallet = mock(ExchangeWalletClient.class);
+        SigningServiceFeignClient signing = mock(SigningServiceFeignClient.class);
+        WalletMgmtFeignClient walletMgmt = mock(WalletMgmtFeignClient.class);
 
-        ChainConnector c = connectorWith(rpc, wallet, gatewayConfigWith(""));
+        ChainConnector c = connectorWith(rpc, signing, walletMgmt, gatewayConfigWith(""));
         ConnectorPaymentResult r = c.createPayment(sampleRequest());
 
         assertFalse(r.isSuccess());
@@ -111,12 +121,13 @@ class ChainConnectorTest {
     @DisplayName("queryPayment: confirmed on chain -> SUCCEEDED")
     void queryPayment_confirmed() {
         ChainRpcClient rpc = mock(ChainRpcClient.class);
-        ExchangeWalletClient wallet = mock(ExchangeWalletClient.class);
-        when(wallet.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
-        when(wallet.signTransfer(anyString(), anyString(), Mockito.any())).thenReturn("txHash123");
+        SigningServiceFeignClient signing = mock(SigningServiceFeignClient.class);
+        WalletMgmtFeignClient walletMgmt = mock(WalletMgmtFeignClient.class);
+        when(walletMgmt.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
+        when(signing.signTransfer(anyString(), anyString(), Mockito.any())).thenReturn("txHash123");
         when(rpc.isTransactionConfirmed("txHash123")).thenReturn(true);
 
-        ChainConnector c = connectorWith(rpc, wallet, gatewayConfigWith("platformPk"));
+        ChainConnector c = connectorWith(rpc, signing, walletMgmt, gatewayConfigWith("platformPk"));
         ConnectorPaymentResult created = c.createPayment(sampleRequest());
         PaymentStatus s = c.queryPayment(created.getConnectorPaymentId());
 
@@ -127,12 +138,13 @@ class ChainConnectorTest {
     @DisplayName("queryPayment: not yet confirmed -> PROCESSING")
     void queryPayment_unconfirmed() {
         ChainRpcClient rpc = mock(ChainRpcClient.class);
-        ExchangeWalletClient wallet = mock(ExchangeWalletClient.class);
-        when(wallet.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
-        when(wallet.signTransfer(anyString(), anyString(), Mockito.any())).thenReturn("txHash123");
+        SigningServiceFeignClient signing = mock(SigningServiceFeignClient.class);
+        WalletMgmtFeignClient walletMgmt = mock(WalletMgmtFeignClient.class);
+        when(walletMgmt.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
+        when(signing.signTransfer(anyString(), anyString(), Mockito.any())).thenReturn("txHash123");
         when(rpc.isTransactionConfirmed("txHash123")).thenReturn(false);
 
-        ChainConnector c = connectorWith(rpc, wallet, gatewayConfigWith("platformPk"));
+        ChainConnector c = connectorWith(rpc, signing, walletMgmt, gatewayConfigWith("platformPk"));
         ConnectorPaymentResult created = c.createPayment(sampleRequest());
         PaymentStatus s = c.queryPayment(created.getConnectorPaymentId());
 
@@ -145,7 +157,8 @@ class ChainConnectorTest {
         ChainRpcClient rpc = mock(ChainRpcClient.class);
         when(rpc.getBlockHeight()).thenReturn(100L);
 
-        ChainConnector c = connectorWith(rpc, mock(ExchangeWalletClient.class), gatewayConfigWith("platformPk"));
+        ChainConnector c = connectorWith(rpc, mock(SigningServiceFeignClient.class),
+                mock(WalletMgmtFeignClient.class), gatewayConfigWith("platformPk"));
         ConnectorHealth h = c.healthCheck();
         assertTrue(h.isHealthy());
     }
@@ -156,7 +169,8 @@ class ChainConnectorTest {
         ChainRpcClient rpc = mock(ChainRpcClient.class);
         when(rpc.getBlockHeight()).thenThrow(new RuntimeException("rpc down"));
 
-        ChainConnector c = connectorWith(rpc, mock(ExchangeWalletClient.class), gatewayConfigWith("platformPk"));
+        ChainConnector c = connectorWith(rpc, mock(SigningServiceFeignClient.class),
+                mock(WalletMgmtFeignClient.class), gatewayConfigWith("platformPk"));
         ConnectorHealth h = c.healthCheck();
         assertFalse(h.isHealthy());
     }

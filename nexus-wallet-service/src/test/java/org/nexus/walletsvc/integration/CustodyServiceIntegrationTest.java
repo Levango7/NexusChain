@@ -10,6 +10,7 @@ import org.nexus.walletsvc.repository.CustodyBalanceRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 
@@ -36,9 +37,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * <p>注：{@code seedBalances()} 已标注 {@code @Deprecated}（Phase 4 后由 Flyway V2
  * 预置），本测试通过 {@link CustodyBalanceRepository} 直接设置余额。</p>
+ *
+ * <p>类级 {@link Transactional} 使每个测试方法在独立事务中执行并默认回滚，
+ * 避免修改 HOT/COLD 余额后污染共享 H2 数据库状态（如影响 {@code RepositoryIntegrationTest}
+ * 的 Flyway V2 seed 断言）。{@code @BeforeEach resetBalances} 在同一事务内执行，
+ * 保证每个测试方法起始时 HOT/COLD 余额为 0。</p>
  */
 @SpringBootTest
 @ActiveProfiles("test")
+@Transactional
 class CustodyServiceIntegrationTest {
 
     @Autowired

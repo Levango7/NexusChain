@@ -37,7 +37,7 @@ import java.math.BigDecimal;
  * @see SigningServiceFallbackFactory
  */
 @Component
-public class WalletSvcSigningServiceFallbackFactory implements SigningServiceFallbackFactory {
+public class WalletSvcSigningServiceFallbackFactory extends SigningServiceFallbackFactory {
 
     private static final Logger log = LoggerFactory.getLogger(WalletSvcSigningServiceFallbackFactory.class);
 

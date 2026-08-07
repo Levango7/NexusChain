@@ -14,6 +14,7 @@ import org.nexus.walletsvc.repository.WithdrawalRequestRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -40,9 +41,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * <p>Seata / Nacos / Sentinel 在测试 profile 中禁用，Feign 客户端通过
  * {@code @MockBean} 注入（见子类），不依赖外部服务。</p>
+ *
+ * <p>类级 {@link Transactional} 使每个测试方法在独立事务中执行并默认回滚，
+ * 保证测试间数据库状态隔离：例如 {@code custodyBalance_saveAndUpdate} 修改 HOT 余额后
+ * 不会影响 {@code flywayV2_hotBalanceSeeded} 的 balance=0 断言；同时使同一测试内
+ * 多次 {@code save} 调用共享同一持久化上下文，避免 detached entity 触发
+ * {@code StaleObjectStateException}（乐观锁冲突）。</p>
  */
 @SpringBootTest
 @ActiveProfiles("test")
+@Transactional
 class RepositoryIntegrationTest {
 
     @Autowired

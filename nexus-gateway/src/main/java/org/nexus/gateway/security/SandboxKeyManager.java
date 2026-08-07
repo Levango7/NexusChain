@@ -2,6 +2,7 @@ package org.nexus.gateway.security;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.annotation.Primary;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
@@ -15,8 +16,15 @@ import java.util.concurrent.ConcurrentHashMap;
  * Generates deterministic mock keys for reproducible test scenarios.
  *
  * Activated by @Profile("sandbox") - use with --spring.profiles.active=sandbox
+ *
+ * <p>注：@Primary 确保 sandbox profile 激活时本 Bean 优先于 LocalFileKeyManager
+ * （@Profile({"dev","prod"})）。bootstrap.yml 默认激活 dev profile，集成测试
+ * 通过 @ActiveProfiles("sandbox") 追加 sandbox，导致 dev+sandbox 同时激活，
+ * 两个 KeyManager 候选并存。@Primary 让 sandbox 环境正确使用 mock keys。
+ * 生产环境（prod profile）只有 VaultKeyManager，不受影响。</p>
  */
 @Component
+@Primary
 @Profile("sandbox")
 public class SandboxKeyManager implements KeyManager {
 

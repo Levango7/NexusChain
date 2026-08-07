@@ -31,7 +31,7 @@ import org.springframework.stereotype.Component;
  * @see WalletMgmtFallbackFactory
  */
 @Component
-public class GatewayWalletMgmtFallbackFactory implements WalletMgmtFallbackFactory {
+public class GatewayWalletMgmtFallbackFactory extends WalletMgmtFallbackFactory {
 
     private static final Logger log = LoggerFactory.getLogger(GatewayWalletMgmtFallbackFactory.class);
 

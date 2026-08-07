@@ -1,5 +1,9 @@
 # Sandbox profile: full local simulation without external dependencies
 # Usage: --spring.profiles.active=sandbox
+#
+# 注意：sandbox 语义为「无外部依赖的本地模拟」，集成测试（@ActiveProfiles("sandbox")）
+# 在无 Nacos / Sentinel Dashboard / Seata Server 的 CI 环境运行，因此禁用外部中间件
+# 以保证 ApplicationContext 可独立加载（与 nexus-bridge test profile 对齐）。
 spring:
   datasource:
     url: jdbc:h2:mem:nexus_sandbox;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
@@ -20,6 +24,25 @@ spring:
     console:
       enabled: true
       path: /h2-console
+  # === 禁用 Nacos / Sentinel（sandbox 无外部中间件） ===
+  cloud:
+    nacos:
+      discovery:
+        enabled: false
+      config:
+        enabled: false
+    sentinel:
+      enabled: false
+
+# sandbox 禁用 Seata（无 Seata Server，避免 GlobalTransactionScanner 初始化失败）
+seata:
+  enabled: false
+
+# sandbox 禁用 Zipkin 上报（无 Zipkin Server）
+management:
+  tracing:
+    sampling:
+      probability: 0.0
 
 nexus:
   chain:

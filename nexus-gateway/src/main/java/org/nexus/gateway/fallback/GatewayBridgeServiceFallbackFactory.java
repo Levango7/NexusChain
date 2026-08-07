@@ -30,7 +30,7 @@ import org.springframework.stereotype.Component;
  * @see BridgeServiceFallbackFactory
  */
 @Component
-public class GatewayBridgeServiceFallbackFactory implements BridgeServiceFallbackFactory {
+public class GatewayBridgeServiceFallbackFactory extends BridgeServiceFallbackFactory {
 
     private static final Logger log = LoggerFactory.getLogger(GatewayBridgeServiceFallbackFactory.class);
 

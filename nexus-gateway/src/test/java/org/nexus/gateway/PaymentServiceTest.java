@@ -1,7 +1,7 @@
 package org.nexus.gateway;
 
 import org.nexus.gateway.client.ChainRpcClient;
-import org.nexus.gateway.client.ExchangeWalletClient;
+
 import org.nexus.gateway.compliance.ComplianceService;
 import org.nexus.gateway.compliance.KycStatus;
 import org.nexus.gateway.config.GatewayConfig;
@@ -14,6 +14,8 @@ import org.nexus.gateway.risk.PaymentRiskService;
 import org.nexus.gateway.risk.RiskDecision;
 import org.nexus.gateway.security.KeyManager;
 import org.nexus.gateway.service.PaymentServiceImpl;
+import org.nexus.sdk.client.feign.SigningServiceFeignClient;
+import org.nexus.sdk.client.feign.WalletMgmtFeignClient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -43,7 +45,10 @@ class PaymentServiceTest {
     @Mock private PaymentOrderRepository orderRepository;
     @Mock private RefundRepository refundRepository;
     @Mock private ChainRpcClient chainRpcClient;
-    @Mock private ExchangeWalletClient walletClient;
+    /** 签名服务 Feign 客户端 mock（替换原 ExchangeWalletClient，对应 PaymentServiceImpl 新构造器） */
+    @Mock private SigningServiceFeignClient signingServiceClient;
+    /** 钱包管理服务 Feign 客户端 mock（替换原 ExchangeWalletClient，对应 PaymentServiceImpl 新构造器） */
+    @Mock private WalletMgmtFeignClient walletMgmtClient;
     @Mock private ApplicationEventPublisher eventPublisher;
     @Mock private KeyManager keyManager;
     @Mock private PaymentRiskService riskService;
@@ -60,8 +65,8 @@ class PaymentServiceTest {
         gatewayConfig.getCheckout().setBaseUrl("http://localhost:8080/api/v1/checkout");
         paymentService = new PaymentServiceImpl(
                 orderRepository, refundRepository, gatewayConfig,
-                chainRpcClient, walletClient, eventPublisher, keyManager,
-                riskService, complianceService);
+                chainRpcClient, signingServiceClient, walletMgmtClient,
+                eventPublisher, keyManager, riskService, complianceService);
 
         // Default risk/compliance stance for these unit tests: approve everything.
         // Individual tests override these mocks to verify rejection paths.
