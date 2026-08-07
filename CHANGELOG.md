@@ -2,6 +2,26 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [1.9.1] - 2026-08-07 - 全量测试修复：975/975 全绿
+
+### 修复
+- **FallbackFactory 接口→具体类**（根因修复）
+  - SigningServiceFallbackFactory/WalletMgmtFallbackFactory/BridgeServiceFallbackFactory 从接口改为具体类
+  - Spring Cloud OpenFeign 的 @FeignClient(fallbackFactory=...) 要求具体类（验证时 newInstance() + create()）
+  - 4 个消费方实现类 implements→extends
+- **nexus-gateway 34 个测试修复**
+  - application-sandbox.yml 禁用 Nacos/Sentinel/Seata
+  - SandboxKeyManager 加 @Primary（dev+sandbox 双 profile 下 KeyManager Bean 冲突）
+  - GatewayCoreIntegrationTest mock 从 ExchangeWalletClient 改为 SigningServiceFeignClient + WalletMgmtFeignClient
+  - PaymentServiceTest/ChainConnectorTest 构造器 mock 更新
+- **nexus-wallet-service 3 个测试修复**
+  - RepositoryIntegrationTest + CustodyServiceIntegrationTest 加 @Transactional（测试间数据库状态隔离）
+- **nexus-bridge 8 个测试修复**
+  - application-test.yml 禁用 Sentinel/Nacos/Seata
+
+### 验证
+- `gradlew.bat test --continue` BUILD SUCCESSFUL，975 tests, 0 failures, 7 skipped
+
 ## [1.9.0] - 2026-08-07 - 审计报告第三批：L2 L1真实化 + ZK证明系统
 
 ### 新增
