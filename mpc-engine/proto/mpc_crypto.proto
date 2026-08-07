@@ -1,0 +1,94 @@
+syntax = "proto3";
+
+package nexus.mpc.crypto.v1;
+
+option java_package = "org.nexus.signing.mpc.engine.proto";
+option java_multiple_files = true;
+
+// NexusChain MPC 密码学引擎 gRPC 契约。
+//
+// 由 Rust mpc-engine 进程实现（审计报告 §4.1 方案 A），
+// signing-service 通过本地 gRPC（端口 50051）调用本服务完成
+// GG18/GG20 分布式密钥生成、部分签名与签名聚合。
+//
+// 与 nexus-exchange-wallet 的 mpc_signer.proto 互补：
+//   * mpc_signer.proto  —— MPC 网络层传输（参与方之间的轮次消息路由）
+//   * mpc_crypto.proto  —— MPC 密码学引擎 API（编排层 → 密码学核心的单次调用）
+
+service MpcCryptoService {
+  // 分布式密钥生成（GG18/GG20 DKG，4 轮）。
+  rpc Dkg(DkgRequest) returns (DkgResponse);
+
+  // 部分签名（GG18/GG20 Sign，7 轮）。
+  rpc Sign(SignRequest) returns (SignResponse);
+
+  // 签名聚合（合并各方签名份额，输出可验证的最终签名）。
+  rpc Aggregate(AggregateRequest) returns (AggregateResponse);
+
+  // 健康检查 / 版本探测。
+  rpc Ping(PingRequest) returns (PongResponse);
+}
+
+// === DKG ===
+
+message DkgRequest {
+  string session_id = 1;          // 会话 ID（与编排层 RoundBarrier 对齐）
+  int32  threshold = 2;           // t（任意 t 方可签名）
+  int32  party_count = 3;         // n（总参与方数）
+  int32  party_index = 4;         // 本方索引（0-based）
+  string curve = 5;               // 曲线，目前固定 "secp256k1"
+  repeated string party_ids = 6;  // 参与方 ID 列表
+}
+
+message DkgResponse {
+  string session_id = 1;
+  bytes  public_key = 2;                  // 聚合公钥（压缩点，33 字节）
+  bytes  secret_share = 3;                // 本方私钥份额（调用方负责加密落盘）
+  repeated bytes party_public_shares = 4; // 各方公钥份额 X_i
+  string error = 5;                       // 非空表示失败
+}
+
+// === Sign ===
+
+message SignRequest {
+  string session_id = 1;
+  bytes  message_hash = 2;        // 32 字节消息哈希 keccak256
+  bytes  secret_share = 3;        // 本方私钥份额（DKG 输出）
+  bytes  public_key = 4;          // 聚合公钥（DKG 输出）
+  int32  threshold = 5;
+  int32  party_count = 6;
+  int32  party_index = 7;
+}
+
+message SignResponse {
+  string session_id = 1;
+  bytes  r_point = 2;             // R 点（压缩）
+  bytes  sig_share = 3;           // 签名份额 s_i
+  string error = 4;
+}
+
+// === Aggregate ===
+
+message AggregateRequest {
+  string session_id = 1;
+  bytes  message_hash = 2;
+  bytes  r_point = 3;             // R 点（任一签名方输出，各方应一致）
+  repeated bytes sig_shares = 4;  // 各方签名份额 s_i（至少 t+1 个）
+  bytes  public_key = 5;          // 聚合公钥（用于最终验证）
+}
+
+message AggregateResponse {
+  string session_id = 1;
+  bytes  signature = 2;           // 聚合签名 (r || s)，64 字节
+  bool   verified = 3;            // 是否通过 ECDSA 公钥验证
+  string error = 4;
+}
+
+// === Ping ===
+
+message PingRequest {}
+
+message PongResponse {
+  string version = 1;             // 引擎版本（Cargo 包版本）
+  bool   healthy = 2;
+}

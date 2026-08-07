@@ -2,6 +2,28 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [1.8.0] - 2026-08-07 - 审计报告第二批：MPC 密码学引擎接入
+
+### 新增
+- **MpcCryptoEngine SPI**：解耦 Java 编排层与 Rust 密码学引擎
+  - gRPC proto（Dkg/Sign/Aggregate/Ping）+ GrpcMpcCryptoEngine 客户端
+  - 6 个 DTO（DkgRequest/Response, SignRequest/Response, AggregateRequest/Response）
+- **Rust 引擎项目**：mpc-engine/（tonic gRPC 服务端骨架 + Dockerfile + docker-compose）
+  - DKG/Sign/Aggregate 模块骨架（待接入 multi-party-ecdsa/tss-lib）
+- **DefaultMpcService 三方法实现**：从 TODO stub 改为真实编排
+  - generateKeyShare：DKG 编排（创建session→调引擎dkg→存储keyShare）
+  - sign：签名编排（加载keyShare→调引擎sign→广播部分签名→barrier同步）
+  - aggregateSignature：聚合编排（调引擎aggregate→ECDSA验证→广播最终签名）
+- **DefaultMpcServiceTest**：MPC 协议层单元测试
+
+### 变更
+- signing-service build.gradle 添加 gRPC + BouncyCastle 依赖
+- docker-compose.yml 添加 mpc-engine 服务 + nexus-net 网络
+
+### 验证
+- `gradlew.bat build -x test` BUILD SUCCESSFUL
+- DefaultMpcServiceTest 4 个测试全部通过（DKG 成功/失败 + 签名广播 + ECDSA 聚合验证）
+
 ## [1.7.0] - 2026-08-07 - 审计报告第一批：L2 测试固化 + PoS 出块接线
 
 ### 新增

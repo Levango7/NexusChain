@@ -1,0 +1,9 @@
+# 避免将本地 target/ 拷入 Docker 构建上下文
+target/
+**/*.rs.bk
+
+# IDE / 系统文件
+.vscode/
+.idea/
+*.swp
+.DS_Store

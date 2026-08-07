@@ -228,6 +228,31 @@ services:
       start_period: 20s
     restart: unless-stopped
 
+  # === MPC 密码学引擎（Rust 独立进程） ===
+  # 审计报告 §4.1 方案 A：GG18/GG20 密码学核心由 Rust tss-lib / multi-party-ecdsa 实现，
+  # signing-service 通过容器网络 gRPC（mpc-engine:50051）调用。
+  # 端口 50051 仅本机暴露用于调试（grpcurl）；容器间通信走 nexus-net 网络。
+  # 注：signing-service 接入时需同步加入 nexus-net 网络（或改用默认 bridge 与现有服务共用）。
+  mpc-engine:
+    build:
+      context: ./mpc-engine
+      dockerfile: Dockerfile
+    ports:
+      - '127.0.0.1:50051:50051'    # gRPC，仅本机访问（容器间用服务名 mpc-engine:50051）
+    environment:
+      - RUST_LOG=info
+      - MPC_ENGINE_HOST=0.0.0.0
+      - MPC_ENGINE_PORT=50051
+    networks:
+      - nexus-net
+    restart: unless-stopped
+
 volumes:
   nacos-logs:
   sentinel-logs:
+
+networks:
+  # MPC 引擎专用桥接网络。现有 Java 服务未显式声明 networks（使用默认 bridge），
+  # signing-service 接入 mpc-engine 时需将二者置于同一网络（见上方注释）。
+  nexus-net:
+    driver: bridge

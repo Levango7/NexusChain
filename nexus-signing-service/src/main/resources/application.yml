@@ -99,3 +99,20 @@ seata:
       nexus-tx-group: default
     grouplist:
       default: ${NEX_SEATA_SERVER:localhost:8091}
+
+# === Phase 4 任务 #79：MPC 密码学引擎 gRPC 连接配置（审计报告 §4.1 方案 A） ===
+# Rust multi-party-ecdsa 引擎作为独立进程运行，signing-service 通过 gRPC 调用。
+# GrpcMpcCryptoEngine（@Component）从本配置读取引擎地址，实现 MpcCryptoEngine SPI。
+# 编排层（MpcSigner / MpcSignatureAggregator / MpcKeyGeneration）通过 SPI 接口
+# 调用，与传输层解耦。
+mpc:
+  engine:
+    # 引擎 gRPC 主机（独立进程，通常与 signing-service 同 Pod 或同 Node 部署）
+    host: ${NEX_MPC_ENGINE_HOST:localhost}
+    # 引擎 gRPC 端口（Rust tonic server 默认 50051）
+    port: ${NEX_MPC_ENGINE_PORT:50051}
+    # 单次 RPC deadline 超时（毫秒）。DKG/Sign 涉及多轮 P2P 交互，需较长超时。
+    deadline-timeout: ${NEX_MPC_ENGINE_DEADLINE:30000}
+    # 是否使用明文传输。开发环境 true；生产环境必须 false 并配置 mTLS
+    # （设计文档 §7.1 R10 风险缓解，MutualTlsContext）。
+    use-plaintext: ${NEX_MPC_ENGINE_PLAINTEXT:true}
