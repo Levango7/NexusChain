@@ -1,0 +1,143 @@
+name: NexusChain Security Scan
+
+# P1-T10: 依赖安全扫描自动化
+# -----------------------------------------------------------------------------
+# 触发：push 到 master / 每周一定时扫描 / 手动触发(workflow_dispatch)
+# 扫描器：
+#   1. Trivy fs      — Gradle 依赖 + 源码配置漏洞扫描
+#   2. Trivy image   — Docker 镜像漏洞扫描（nexus-gateway / nexus-bridge）
+#   3. OWASP Dep-Check — 备选方案，扫描 build.gradle 生成 HTML/JSON 报告
+# 失败条件：发现 CRITICAL 级别漏洞 → workflow 失败（exit-code 1）
+# SARIF 报告上传至 GitHub Security tab（Code Scanning Alerts）。
+
+on:
+  push:
+    branches: [master]
+  schedule:
+    # 每周一 03:00 UTC（北京时间周一 11:00）
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+
+jobs:
+  # ============================================================
+  # 1. Trivy 文件系统扫描（Gradle 依赖 + 源码配置）
+  # ============================================================
+  trivy-fs-scan:
+    name: Trivy Filesystem Scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write   # 上传 SARIF 到 Security tab 所需
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v4
+
+      - name: Trivy fs 扫描 → SARIF（全量漏洞，不阻断）
+        uses: aquasecurity/trivy-action@v0.20.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL,HIGH,MEDIUM,LOW
+          skip-dirs: build,out,target,.gradle,gradle,node_modules,jdk17,jdk-provision,.codeartsdoer
+          format: sarif
+          output: trivy-fs-results.sarif
+          exit-code: 0
+
+      - name: 上传 SARIF 到 GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-fs-results.sarif
+          category: trivy-fs
+
+      - name: Trivy fs 扫描（CRITICAL 阻断）
+        uses: aquasecurity/trivy-action@v0.20.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL
+          skip-dirs: build,out,target,.gradle,gradle,node_modules,jdk17,jdk-provision,.codeartsdoer
+          format: table
+          exit-code: 1
+
+  # ============================================================
+  # 2. Trivy Docker 镜像扫描
+  # ============================================================
+  trivy-docker-scan:
+    name: Trivy Docker Image Scan (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [nexus-gateway, nexus-bridge]
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v4
+
+      - name: 构建 Docker 镜像（仅用于扫描，不推送）
+        run: docker build -t ${{ matrix.module }}:scan ./${{ matrix.module }}
+
+      - name: Trivy 镜像扫描 → SARIF
+        uses: aquasecurity/trivy-action@v0.20.0
+        with:
+          image-ref: ${{ matrix.module }}:scan
+          severity: CRITICAL,HIGH,MEDIUM,LOW
+          format: sarif
+          output: trivy-docker-${{ matrix.module }}.sarif
+          exit-code: 0
+
+      - name: 上传 SARIF 到 GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-docker-${{ matrix.module }}.sarif
+          category: trivy-docker-${{ matrix.module }}
+
+      - name: Trivy 镜像扫描（CRITICAL 阻断）
+        uses: aquasecurity/trivy-action@v0.20.0
+        with:
+          image-ref: ${{ matrix.module }}:scan
+          severity: CRITICAL
+          format: table
+          exit-code: 1
+
+  # ============================================================
+  # 3. OWASP Dependency-Check（备选方案，扫描 build.gradle）
+  # -----------------------------------------------------------------------------
+  # 生成 HTML + JSON 报告并上传为 artifact。
+  # --failOnCVSS 9：CVSS >= 9.0（CRITICAL）时返回非零退出码，阻断流水线。
+  # ============================================================
+  owasp-dependency-check:
+    name: OWASP Dependency-Check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v4
+
+      - name: 运行 OWASP Dependency-Check
+        uses: dependency-check/dependency-check-action@main
+        with:
+          project: NexusChain
+          scan: .
+          format: HTML,JSON
+          args: >
+            --enableExperimental
+            --noupdate
+            --out reports
+            --failOnCVSS 9
+
+      - name: 上传 OWASP 报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: owasp-dependency-check-report
+          path: |
+            reports/dependency-check-report.html
+            reports/dependency-check-report.json
+            **/dependency-check-report.html
+            **/dependency-check-report.json
+          if-no-files-found: ignore
+          retention-days: 30

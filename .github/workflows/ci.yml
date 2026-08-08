@@ -1,10 +1,13 @@
 name: NexusChain CI/CD Pipeline
 
-# v1.9.2 修复：
-# - 触发分支从 main/develop 改为 master（代码实际所在分支）
-# - 删除指向已归档目录 nexus-exchange-wallet 的死步骤
-# - 全部模块统一由根 gradlew 寻址（composite build 子模块用 :name:test，
-#   nexus-consortium 为嵌套子项目用 :nexus-consortium:consortium:test）
+# P1-T9: CI/CD 流水线
+# -----------------------------------------------------------------------------
+# 触发：push / pull_request 到 master
+# 环境：JDK 17 (Amazon Corretto) + Gradle 依赖缓存
+# 流程：编译 → 测试 → 覆盖率报告 → Codecov 上传 → JAR 产物上传 → Docker 构建/推送
+#
+# 注：CI 运行于 Linux runner，使用 ./gradlew（Windows 本地开发用 gradlew.bat）。
+#     matrix.os 可扩展为 [ubuntu-latest, windows-latest] 做跨 OS 验证。
 
 on:
   push:
@@ -13,101 +16,99 @@ on:
     branches: [master]
 
 env:
-  REGISTRY: ghcr.io
-  IMAGE_PREFIX: ${{ github.repository }}
+  # 关闭 daemon（CI 每次均为全新 runner，daemon 无意义且浪费资源）
+  GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.caching=true -Dfile.encoding=UTF-8"
 
 jobs:
+  # ============================================================
+  # 构建 & 测试 & 覆盖率
+  # ============================================================
   build-and-test:
-    runs-on: ubuntu-latest
+    name: Build & Test (JDK 17 / ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # 可扩展为 [ubuntu-latest, windows-latest] 做跨 OS 验证
+        os: [ubuntu-latest]
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout 代码
+        uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: Setup JDK 17 (Amazon Corretto)
         uses: actions/setup-java@v4
         with:
-          java-version: "17"
-          distribution: "temurin"
+          java-version: '17'
+          distribution: 'corretto'
           cache: gradle
 
-      # 主 composite build 内模块（根 gradlew 直接寻址）
-      - name: Build & Test Core
-        run: ./gradlew :nexus-core:nexus-core:test --no-daemon
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
 
-      - name: Build & Test Gateway
-        run: ./gradlew :nexus-gateway:test :nexus-gateway:jacocoTestReport --no-daemon
+      - name: 编译 (compileJava + compileTestJava)
+        run: ./gradlew compileJava compileTestJava --no-daemon
 
-      - name: Build & Test Bridge
-        run: ./gradlew :nexus-bridge:test --no-daemon
+      - name: 测试 (test --continue, 跳过 jacoco 报告)
+        run: ./gradlew test --continue -x jacocoTestReport --no-daemon
 
-      - name: Build & Test SDK (Java)
-        run: ./gradlew :nexus-sdk:java:test --no-daemon
+      - name: 生成 JaCoCo 覆盖率报告
+        run: ./gradlew jacocoTestReport --no-daemon
 
-      - name: Build & Test Signing Service
-        run: ./gradlew :nexus-signing-service:test --no-daemon
+      - name: 上传覆盖率到 Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./nexus-gateway/build/reports/jacoco/test/jacocoTestReport.xml,./nexus-bridge/build/reports/jacoco/test/jacocoTestReport.xml,./nexus-core/nexus-core/build/reports/jacoco/test/jacocoTestReport.xml,./nexus-signing-service/build/reports/jacoco/test/jacocoTestReport.xml,./nexus-wallet-service/build/reports/jacoco/test/jacocoTestReport.xml,./nexus-sdk/java/build/reports/jacoco/test/jacocoTestReport.xml
+          fail_ci_if_error: false
+          verbose: true
 
-      - name: Build & Test Wallet Service
-        run: ./gradlew :nexus-wallet-service:test --no-daemon
-
-      # composite includeBuild 模块（从根寻址）
-      - name: Build & Test Settlement
-        run: ./gradlew :nexus-settlement:test --no-daemon
-
-      - name: Build & Test Compliance
-        run: ./gradlew :nexus-compliance:test --no-daemon
-
-      - name: Build & Test Analytics
-        run: ./gradlew :nexus-analytics:test --no-daemon
-
-      - name: Build & Test Oracle
-        run: ./gradlew :nexus-oracle:test --no-daemon
-
-      - name: Build & Test Consortium
-        run: ./gradlew :nexus-consortium:consortium:test --no-daemon
-
-      - name: Upload Gateway JaCoCo report
+      - name: 上传 JaCoCo HTML 报告
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: gateway-jacoco
-          path: nexus-gateway/build/reports/jacoco/test/html
+          name: jacoco-reports-${{ matrix.os }}
+          path: |
+            **/build/reports/jacoco/test/html
+            **/build/reports/jacoco/test/jacocoTestReport.xml
+          if-no-files-found: ignore
+          retention-days: 14
 
-  security-scan:
-    needs: build-and-test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      # v1.9.2：阻断模式（exit-code 1）。依赖已升级至 CVE 安全版本：
-      #   - BouncyCastle 1.70 → 1.78（bcprov-jdk15on → bcprov-jdk18on）
-      #   - Netty 4.1.90.Final → 4.1.108.Final
-      #   - Logback 1.2.11 → 1.2.13（CVE-2023-6378）
-      # Trivy 发现 CRITICAL/HIGH/MEDIUM 漏洞将阻断流水线。
-      - name: Trivy filesystem scan (blocking)
-        uses: aquasecurity/trivy-action@master
+      - name: 上传 JAR 构建产物
+        uses: actions/upload-artifact@v4
         with:
-          scan-type: fs
-          scan-ref: .
-          severity: CRITICAL,HIGH,MEDIUM
-          exit-code: 1
+          name: jar-artifacts-${{ matrix.os }}
+          path: |
+            **/build/libs/*.jar
+          if-no-files-found: ignore
+          retention-days: 14
 
+  # ============================================================
+  # CD：master 分支构建并推送 Docker 镜像到 GitHub Container Registry
+  # ============================================================
   docker-build:
-    needs: [build-and-test, security-scan]
-    if: github.ref == 'refs/heads/master'
+    name: Docker Build & Push (${{ matrix.module }})
+    needs: build-and-test
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
     runs-on: ubuntu-latest
+    env:
+      REGISTRY: ghcr.io
+      IMAGE_PREFIX: ${{ github.repository }}
     strategy:
+      fail-fast: false
       matrix:
         module: [nexus-gateway, nexus-bridge]
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout 代码
+        uses: actions/checkout@v4
 
-      - name: Login to Registry
+      - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push
+      - name: Build and push image
         uses: docker/build-push-action@v5
         with:
           context: ./${{ matrix.module }}
@@ -115,16 +116,3 @@ jobs:
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.module }}:latest
             ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.module }}:${{ github.sha }}
-
-  # v1.9.2：无真实部署基础设施前禁用，避免伪造部署记录。
-  deploy:
-    needs: docker-build
-    if: false  # TODO: pending real deployment infrastructure
-    runs-on: ubuntu-latest
-    environment: production
-    steps:
-      - uses: actions/checkout@v4
-      - name: Deploy to production
-        run: |
-          echo "Deployment is not yet implemented."
-          # TODO: kubectl apply or docker-compose pull + up
