@@ -2,9 +2,9 @@ package org.nexus.core.payment;
 
 import org.nexus.core.account.Transaction;
 import org.nexus.core.payment.PaymentChannel.State;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
-import static org.junit.Assert.*;
+import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * 支付通道状态机测试。
@@ -181,7 +181,7 @@ public class PaymentChannelTest {
 
         // 验证余额守恒：更新后总额不变
         long totalAfter = channel.getBalance1() + channel.getBalance2();
-        assertEquals("余额守恒：总额应保持不变", totalBefore, totalAfter);
+        assertEquals(totalBefore, totalAfter, "余额守恒：总额应保持不变");
         // 验证各方余额正确
         assertEquals(INITIAL_BALANCE - transferAmount, channel.getBalance1());
         assertEquals(INITIAL_BALANCE + transferAmount, channel.getBalance2());
@@ -215,21 +215,25 @@ public class PaymentChannelTest {
     /**
      * 测试 update() 余额守恒违反时抛异常
      */
-    @Test(expected = IllegalStateException.class)
+    @Test
     public void testUpdateBalanceConservationViolation() {
-        PaymentChannel channel = createOpenChannel();
-        // 故意制造余额不守恒：总额减少了
-        channelUpdate(channel, 400000L, 500000L);
+        assertThrows(IllegalStateException.class, () -> {
+            PaymentChannel channel = createOpenChannel();
+            // 故意制造余额不守恒：总额减少了
+            channelUpdate(channel, 400000L, 500000L);
+        });
     }
 
     /**
      * 测试 update() 负余额抛异常
      */
-    @Test(expected = IllegalStateException.class)
+    @Test
     public void testUpdateNegativeBalance() {
-        PaymentChannel channel = createOpenChannel();
-        // 余额变为负数
-        channelUpdate(channel, -1000L, 1001000L);
+        assertThrows(IllegalStateException.class, () -> {
+            PaymentChannel channel = createOpenChannel();
+            // 余额变为负数
+            channelUpdate(channel, -1000L, 1001000L);
+        });
     }
 
     /**
@@ -279,7 +283,7 @@ public class PaymentChannelTest {
         PaymentChannel channel = createOpenChannel();
         // lockTime = 1000，当前高度已超过 lockTime
         long currentHeight = 1001L;
-        assertTrue("当前高度应超过锁定期", currentHeight > channel.getLockTime());
+        assertTrue(currentHeight > channel.getLockTime(), "当前高度应超过锁定期");
 
         // 执行到期强制关闭
         channelExpire(channel, currentHeight);
@@ -291,86 +295,102 @@ public class PaymentChannelTest {
     /**
      * 测试已关闭通道不能重新开启
      */
-    @Test(expected = IllegalStateException.class)
+    @Test
     public void testIllegalReopenClosedChannel() {
-        PaymentChannel channel = createOpenChannel();
-        channel.setState(State.CLOSED);
-        // 已关闭的通道不能重新开启
-        channelOpen(channel);
+        assertThrows(IllegalStateException.class, () -> {
+            PaymentChannel channel = createOpenChannel();
+            channel.setState(State.CLOSED);
+            // 已关闭的通道不能重新开启
+            channelOpen(channel);
+        });
     }
 
     /**
      * 测试已关闭通道不能更新
      */
-    @Test(expected = IllegalStateException.class)
+    @Test
     public void testIllegalUpdateOnClosedChannel() {
-        PaymentChannel channel = createOpenChannel();
-        channel.setState(State.CLOSED);
-        // 已关闭的通道不能更新
-        channelUpdate(channel, 400000L, 600000L);
+        assertThrows(IllegalStateException.class, () -> {
+            PaymentChannel channel = createOpenChannel();
+            channel.setState(State.CLOSED);
+            // 已关闭的通道不能更新
+            channelUpdate(channel, 400000L, 600000L);
+        });
     }
 
     /**
      * 测试已关闭通道不能请求关闭
      */
-    @Test(expected = IllegalStateException.class)
+    @Test
     public void testIllegalRequestCloseOnClosedChannel() {
-        PaymentChannel channel = createOpenChannel();
-        channel.setState(State.CLOSED);
-        channelRequestClose(channel);
+        assertThrows(IllegalStateException.class, () -> {
+            PaymentChannel channel = createOpenChannel();
+            channel.setState(State.CLOSED);
+            channelRequestClose(channel);
+        });
     }
 
     /**
      * 测试 OPEN 状态不能直接提交争议
      */
-    @Test(expected = IllegalStateException.class)
+    @Test
     public void testIllegalDisputeFromOpen() {
-        PaymentChannel channel = createOpenChannel();
-        // OPEN 状态不能直接提交争议，须先进入 CLOSING
-        channelDispute(channel);
+        assertThrows(IllegalStateException.class, () -> {
+            PaymentChannel channel = createOpenChannel();
+            // OPEN 状态不能直接提交争议，须先进入 CLOSING
+            channelDispute(channel);
+        });
     }
 
     /**
      * 测试 OPEN 状态不能直接确认关闭
      */
-    @Test(expected = IllegalStateException.class)
+    @Test
     public void testIllegalCloseFromOpen() {
-        PaymentChannel channel = createOpenChannel();
-        // OPEN 状态不能直接确认关闭，须先进入 CLOSING
-        channelClose(channel);
+        assertThrows(IllegalStateException.class, () -> {
+            PaymentChannel channel = createOpenChannel();
+            // OPEN 状态不能直接确认关闭，须先进入 CLOSING
+            channelClose(channel);
+        });
     }
 
     /**
      * 测试 DISPUTED 状态不能请求关闭
      */
-    @Test(expected = IllegalStateException.class)
+    @Test
     public void testIllegalRequestCloseFromDisputed() {
-        PaymentChannel channel = createOpenChannel();
-        channel.setState(State.DISPUTED);
-        // DISPUTED 状态不能请求关闭，只能确认关闭
-        channelRequestClose(channel);
+        assertThrows(IllegalStateException.class, () -> {
+            PaymentChannel channel = createOpenChannel();
+            channel.setState(State.DISPUTED);
+            // DISPUTED 状态不能请求关闭，只能确认关闭
+            channelRequestClose(channel);
+        });
     }
 
     /**
      * 测试锁定期未到期不能强制关闭
      */
-    @Test(expected = IllegalStateException.class)
+    @Test
     public void testExpireBeforeLockTime() {
-        PaymentChannel channel = createOpenChannel();
-        // lockTime = 1000，当前高度未超过 lockTime
-        long currentHeight = 999L;
-        channelExpire(channel, currentHeight);
+        assertThrows(IllegalStateException.class, () -> {
+            PaymentChannel channel = createOpenChannel();
+            // lockTime = 1000，当前高度未超过 lockTime
+            long currentHeight = 999L;
+            channelExpire(channel, currentHeight);
+        });
     }
 
     /**
      * 测试锁定期恰好到期（等于 lockTime）不能强制关闭
      */
-    @Test(expected = IllegalStateException.class)
+    @Test
     public void testExpireAtLockTime() {
-        PaymentChannel channel = createOpenChannel();
-        // 当前高度等于 lockTime，须严格大于
-        long currentHeight = DEFAULT_LOCK_TIME;
-        channelExpire(channel, currentHeight);
+        assertThrows(IllegalStateException.class, () -> {
+            PaymentChannel channel = createOpenChannel();
+            // 当前高度等于 lockTime，须严格大于
+            long currentHeight = DEFAULT_LOCK_TIME;
+            channelExpire(channel, currentHeight);
+        });
     }
 
     // ==================== 全参数构造器测试 ====================
@@ -412,9 +432,9 @@ public class PaymentChannelTest {
         channel.setLockTime(5000);
         channel.setState(State.CLOSING);
 
-        assertEquals("nexus-ch-002", channel.getChannelId());
-        assertEquals("addr-1", channel.getParticipant1());
-        assertEquals("addr-2", channel.getParticipant2());
+        assertEquals(channel.getChannelId(), "nexus-ch-002");
+        assertEquals(channel.getParticipant1(), "addr-1");
+        assertEquals(channel.getParticipant2(), "addr-2");
         assertEquals(100000L, channel.getBalance1());
         assertEquals(200000L, channel.getBalance2());
         assertEquals(10L, channel.getNonce());

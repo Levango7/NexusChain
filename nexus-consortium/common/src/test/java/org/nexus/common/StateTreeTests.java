@@ -2,15 +2,13 @@ package org.nexus.common;
 
 import org.apache.commons.codec.DecoderException;
 import org.apache.commons.codec.binary.Hex;
-import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.junit.runners.JUnit4;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.nexus.exception.StateUpdateException;
 
 import java.util.*;
 import java.util.stream.Collectors;
 
-@RunWith(JUnit4.class)
 public class StateTreeTests {
     private static final HexBytes ADDRESS_A = new HexBytes(new byte[]{0x0a});
     private static final HexBytes ADDRESS_B = new HexBytes(new byte[]{0x0b});

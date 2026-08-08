@@ -2,9 +2,8 @@ package org.nexus.common;
 
 import org.apache.commons.codec.DecoderException;
 import org.apache.commons.codec.binary.Hex;
-import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.junit.runners.JUnit4;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.nexus.exception.StateUpdateException;
 
 import java.util.HashSet;
@@ -12,7 +11,6 @@ import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-@RunWith(JUnit4.class)
 public class StateFactoryTests {
 
     private static class Height implements State<Height> {

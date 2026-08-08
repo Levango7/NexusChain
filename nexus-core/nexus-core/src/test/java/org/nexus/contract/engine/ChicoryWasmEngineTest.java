@@ -1,12 +1,12 @@
 package org.nexus.contract.engine;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.nexus.core.contract.ChicoryWasmEngine;
 import org.nexus.core.contract.GasMeter;
 import org.nexus.core.contract.WasmEngine;
 import org.nexus.core.contract.WasmInstance;
 
-import static org.junit.Assert.*;
+import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * ChicoryWasmEngine 单元测试：验证手工构造的最小 WASM 模块可被解析与执行。
@@ -36,14 +36,14 @@ public class ChicoryWasmEngineTest {
 
     @Test
     public void testValidateAcceptsWellFormedModule() {
-        assertTrue("合法 WASM 模块应通过校验", engine.validate(ADD_MODULE));
+        assertTrue(engine.validate(ADD_MODULE), "合法 WASM 模块应通过校验");
     }
 
     @Test
     public void testValidateRejectsGarbage() {
-        assertFalse("非法字节码应校验失败", engine.validate(new byte[] {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07}));
-        assertFalse("null 应校验失败", engine.validate(null));
-        assertFalse("过短字节码应校验失败", engine.validate(new byte[] {0x00}));
+        assertFalse(engine.validate(new byte[] {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07}), "非法字节码应校验失败");
+        assertFalse(engine.validate(null), "null 应校验失败");
+        assertFalse(engine.validate(new byte[] {0x00}), "过短字节码应校验失败");
     }
 
     @Test
@@ -57,24 +57,28 @@ public class ChicoryWasmEngineTest {
         args[8] = 4;
         byte[] result = instance.call("add", args);
 
-        assertEquals("结果应为 8 字节", 8, result.length);
+        assertEquals(8, result.length, "结果应为 8 字节");
         long sum = 0;
         for (int i = 7; i >= 0; i--) {
             sum = (sum << 8) | (result[i] & 0xff);
         }
-        assertEquals("3 + 4 = 7", 7L, sum);
-        assertTrue("执行应消耗 gas", instance.getGasUsed() > 0);
+        assertEquals(7L, sum, "3 + 4 = 7");
+        assertTrue(instance.getGasUsed() > 0, "执行应消耗 gas");
     }
 
-    @Test(expected = org.nexus.core.contract.WasmExecutionException.class)
+    @Test
     public void testCallMissingExportThrows() {
-        GasMeter meter = new GasMeter(GasMeter.DEFAULT_GAS_CAP);
-        WasmInstance instance = engine.instantiate(ADD_MODULE, meter);
-        instance.call("nonexistent", new byte[0]);
+        assertThrows(org.nexus.core.contract.WasmExecutionException.class, () -> {
+            GasMeter meter = new GasMeter(GasMeter.DEFAULT_GAS_CAP);
+            WasmInstance instance = engine.instantiate(ADD_MODULE, meter);
+            instance.call("nonexistent", new byte[0]);
+        });
     }
 
-    @Test(expected = org.nexus.core.contract.WasmExecutionException.class)
+    @Test
     public void testInstantiateEmptyCodeThrows() {
-        engine.instantiate(new byte[0], new GasMeter());
+        assertThrows(org.nexus.core.contract.WasmExecutionException.class, () -> {
+            engine.instantiate(new byte[0], new GasMeter());
+        });
     }
 }

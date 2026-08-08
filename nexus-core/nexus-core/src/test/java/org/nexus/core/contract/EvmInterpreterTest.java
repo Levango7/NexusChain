@@ -1,12 +1,12 @@
 package org.nexus.core.contract;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
 import java.math.BigInteger;
 import java.util.HashMap;
 import java.util.List;
 
-import static org.junit.Assert.*;
+import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * EvmInterpreter 单元测试：验证内嵌 EVM 子集解释器的算术、栈与存储操作。
@@ -21,9 +21,9 @@ public class EvmInterpreterTest {
         EvmInterpreter interp = new EvmInterpreter(code, meter, new HashMap<>());
         interp.run();
 
-        assertFalse("不应 revert", interp.isReverted());
-        assertEquals("3 + 4 = 7", BigInteger.valueOf(7), interp.getReturnValue());
-        assertTrue("应消耗 gas", interp.getGasUsed() > 0);
+        assertFalse(interp.isReverted(), "不应 revert");
+        assertEquals(BigInteger.valueOf(7), interp.getReturnValue(), "3 + 4 = 7");
+        assertTrue(interp.getGasUsed() > 0, "应消耗 gas");
     }
 
     @Test
@@ -39,8 +39,8 @@ public class EvmInterpreterTest {
         EvmInterpreter interp = new EvmInterpreter(code, meter, storage);
         interp.run();
 
-        assertEquals("slot0 应为 42", BigInteger.valueOf(42), interp.getReturnValue());
-        assertNotNull("存储应有 slot0", storage.get(BigInteger.ZERO));
+        assertEquals(BigInteger.valueOf(42), interp.getReturnValue(), "slot0 应为 42");
+        assertNotNull(storage.get(BigInteger.ZERO), "存储应有 slot0");
     }
 
     @Test
@@ -52,7 +52,7 @@ public class EvmInterpreterTest {
         interp.pushArgs(List.of(99L, 5L)); // 首参 99 应在栈顶
         interp.run();
 
-        assertEquals("首参 99 应位于栈顶并作为返回值", BigInteger.valueOf(99), interp.getReturnValue());
+        assertEquals(BigInteger.valueOf(99), interp.getReturnValue(), "首参 99 应位于栈顶并作为返回值");
     }
 
     @Test
@@ -63,7 +63,7 @@ public class EvmInterpreterTest {
         EvmInterpreter interp = new EvmInterpreter(code, meter, new HashMap<>());
         interp.run();
 
-        assertTrue("应标记 revert", interp.isReverted());
+        assertTrue(interp.isReverted(), "应标记 revert");
     }
 
     @Test
@@ -77,14 +77,16 @@ public class EvmInterpreterTest {
         EvmInterpreter interp = new EvmInterpreter(code, meter, new HashMap<>());
         interp.run();
 
-        assertEquals("跳转后应执行 PUSH1 7", BigInteger.valueOf(7), interp.getReturnValue());
+        assertEquals(BigInteger.valueOf(7), interp.getReturnValue(), "跳转后应执行 PUSH1 7");
     }
 
-    @Test(expected = WasmExecutionException.class)
+    @Test
     public void testUnsupportedOpcodeThrows() {
-        // 0x20 = KECCAK256（未实现的子集外操作码）
-        byte[] code = new byte[] {0x20};
-        GasMeter meter = new GasMeter(GasMeter.DEFAULT_GAS_CAP);
-        new EvmInterpreter(code, meter, new HashMap<>()).run();
+        assertThrows(WasmExecutionException.class, () -> {
+            // 0x20 = KECCAK256（未实现的子集外操作码）
+            byte[] code = new byte[] {0x20};
+            GasMeter meter = new GasMeter(GasMeter.DEFAULT_GAS_CAP);
+            new EvmInterpreter(code, meter, new HashMap<>()).run();
+        });
     }
 }

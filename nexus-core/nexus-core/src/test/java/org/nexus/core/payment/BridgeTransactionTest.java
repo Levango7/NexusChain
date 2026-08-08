@@ -2,13 +2,13 @@ package org.nexus.core.payment;
 
 import org.nexus.core.account.Transaction;
 import org.nexus.core.payment.BridgeTransaction.State;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
-import static org.junit.Assert.*;
+import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * 跨链桥交易验证流测试。
@@ -231,39 +231,47 @@ public class BridgeTransactionTest {
     /**
      * 测试 lock() 金额为零时抛异常
      */
-    @Test(expected = IllegalStateException.class)
+    @Test
     public void testLockZeroAmount() {
-        BridgeTransaction bridgeTx = createBridgeTx(0L, 0L);
-        lock(bridgeTx);
+        assertThrows(IllegalStateException.class, () -> {
+            BridgeTransaction bridgeTx = createBridgeTx(0L, 0L);
+            lock(bridgeTx);
+        });
     }
 
     /**
      * 测试 lock() 金额为负时抛异常
      */
-    @Test(expected = IllegalStateException.class)
+    @Test
     public void testLockNegativeAmount() {
-        BridgeTransaction bridgeTx = createBridgeTx(-1000L, 0L);
-        lock(bridgeTx);
+        assertThrows(IllegalStateException.class, () -> {
+            BridgeTransaction bridgeTx = createBridgeTx(-1000L, 0L);
+            lock(bridgeTx);
+        });
     }
 
     /**
      * 测试 lock() 源链为空时抛异常
      */
-    @Test(expected = IllegalStateException.class)
+    @Test
     public void testLockEmptySourceChain() {
-        BridgeTransaction bridgeTx = createBridgeTx(1000000L, 0L);
-        bridgeTx.setSourceChain("");
-        lock(bridgeTx);
+        assertThrows(IllegalStateException.class, () -> {
+            BridgeTransaction bridgeTx = createBridgeTx(1000000L, 0L);
+            bridgeTx.setSourceChain("");
+            lock(bridgeTx);
+        });
     }
 
     /**
      * 测试 lock() 目标链为空时抛异常
      */
-    @Test(expected = IllegalStateException.class)
+    @Test
     public void testLockEmptyTargetChain() {
-        BridgeTransaction bridgeTx = createBridgeTx(1000000L, 0L);
-        bridgeTx.setTargetChain(null);
-        lock(bridgeTx);
+        assertThrows(IllegalStateException.class, () -> {
+            BridgeTransaction bridgeTx = createBridgeTx(1000000L, 0L);
+            bridgeTx.setTargetChain(null);
+            lock(bridgeTx);
+        });
     }
 
     // ==================== 签名阈值验证测试 ====================
@@ -323,13 +331,15 @@ public class BridgeTransactionTest {
     /**
      * 测试签名不足时 mint() 抛异常
      */
-    @Test(expected = IllegalStateException.class)
+    @Test
     public void testMintWithInsufficientSignatures() {
-        BridgeTransaction bridgeTx = createBridgeTx(1000000L, 0L);
-        bridgeTx.setSignatures(Arrays.asList("sig-1", "sig-2"));
-        lock(bridgeTx);
-        // 时间锁已过期（timelockExpiry = 0），但签名不足
-        mint(bridgeTx, 1L);
+        assertThrows(IllegalStateException.class, () -> {
+            BridgeTransaction bridgeTx = createBridgeTx(1000000L, 0L);
+            bridgeTx.setSignatures(Arrays.asList("sig-1", "sig-2"));
+            lock(bridgeTx);
+            // 时间锁已过期（timelockExpiry = 0），但签名不足
+            mint(bridgeTx, 1L);
+        });
     }
 
     // ==================== mint 条件检查测试 ====================
@@ -350,36 +360,42 @@ public class BridgeTransactionTest {
     /**
      * 测试 mint() 在非 LOCKED 状态时抛异常
      */
-    @Test(expected = IllegalStateException.class)
+    @Test
     public void testMintFromWrongState() {
-        BridgeTransaction bridgeTx = createBridgeTx(1000000L, 0L);
-        // 未先执行 lock，状态为 null
-        mint(bridgeTx, 1L);
+        assertThrows(IllegalStateException.class, () -> {
+            BridgeTransaction bridgeTx = createBridgeTx(1000000L, 0L);
+            // 未先执行 lock，状态为 null
+            mint(bridgeTx, 1L);
+        });
     }
 
     /**
      * 测试 mint() 时间锁未到期时抛异常
      */
-    @Test(expected = IllegalStateException.class)
+    @Test
     public void testMintTimelockNotExpired() {
-        // 时间锁到期时间为未来 1000 秒
-        long futureTimelock = System.currentTimeMillis() / 1000 + 1000;
-        BridgeTransaction bridgeTx = createBridgeTx(1000000L, futureTimelock);
-        lock(bridgeTx);
-
-        long currentTime = System.currentTimeMillis() / 1000;
-        mint(bridgeTx, currentTime);
+        assertThrows(IllegalStateException.class, () -> {
+            // 时间锁到期时间为未来 1000 秒
+            long futureTimelock = System.currentTimeMillis() / 1000 + 1000;
+            BridgeTransaction bridgeTx = createBridgeTx(1000000L, futureTimelock);
+            lock(bridgeTx);
+    
+            long currentTime = System.currentTimeMillis() / 1000;
+            mint(bridgeTx, currentTime);
+        });
     }
 
     /**
      * 测试 mint() 金额为零时抛异常
      */
-    @Test(expected = IllegalStateException.class)
+    @Test
     public void testMintZeroAmount() {
-        BridgeTransaction bridgeTx = createBridgeTx(1000000L, 0L);
-        bridgeTx.setAmount(0L);
-        lock(bridgeTx);
-        mint(bridgeTx, 1L);
+        assertThrows(IllegalStateException.class, () -> {
+            BridgeTransaction bridgeTx = createBridgeTx(1000000L, 0L);
+            bridgeTx.setAmount(0L);
+            lock(bridgeTx);
+            mint(bridgeTx, 1L);
+        });
     }
 
     // ==================== unlock 时间锁测试 ====================
@@ -412,46 +428,52 @@ public class BridgeTransactionTest {
     /**
      * 测试 unlock() 时间锁未到期时抛异常
      */
-    @Test(expected = IllegalStateException.class)
+    @Test
     public void testUnlockTimelockNotExpired() {
-        // 时间锁到期时间为未来
-        long futureTimelock = System.currentTimeMillis() / 1000 + 2000;
-        BridgeTransaction bridgeTx = createBridgeTx(1000000L, futureTimelock);
-
-        lock(bridgeTx);
-        long currentTime = System.currentTimeMillis() / 1000;
-
-        // mint 和 burn 需要时间锁过期，这里跳过直接设置状态
-        bridgeTx.setState(State.MINTED);
-        bridgeTx.setState(State.BURNED);
-
-        // unlock 时时间锁未到期
-        unlock(bridgeTx, currentTime);
+        assertThrows(IllegalStateException.class, () -> {
+            // 时间锁到期时间为未来
+            long futureTimelock = System.currentTimeMillis() / 1000 + 2000;
+            BridgeTransaction bridgeTx = createBridgeTx(1000000L, futureTimelock);
+    
+            lock(bridgeTx);
+            long currentTime = System.currentTimeMillis() / 1000;
+    
+            // mint 和 burn 需要时间锁过期，这里跳过直接设置状态
+            bridgeTx.setState(State.MINTED);
+            bridgeTx.setState(State.BURNED);
+    
+            // unlock 时时间锁未到期
+            unlock(bridgeTx, currentTime);
+        });
     }
 
     /**
      * 测试 unlock() 在非 BURNED 状态时抛异常
      */
-    @Test(expected = IllegalStateException.class)
+    @Test
     public void testUnlockFromWrongState() {
-        BridgeTransaction bridgeTx = createBridgeTx(1000000L, 0L);
-        lock(bridgeTx);
-        // 从 LOCKED 状态直接 unlock，未经 BURNED
-        unlock(bridgeTx, 1L);
+        assertThrows(IllegalStateException.class, () -> {
+            BridgeTransaction bridgeTx = createBridgeTx(1000000L, 0L);
+            lock(bridgeTx);
+            // 从 LOCKED 状态直接 unlock，未经 BURNED
+            unlock(bridgeTx, 1L);
+        });
     }
 
     /**
      * 测试 unlock() 时间锁恰好到期时允许（当前时间须严格大于到期时间）
      */
-    @Test(expected = IllegalStateException.class)
+    @Test
     public void testUnlockTimelockExactlyAtExpiry() {
-        long timelockExpiry = 5000L;
-        BridgeTransaction bridgeTx = createBridgeTx(1000000L, timelockExpiry);
-        lock(bridgeTx);
-        bridgeTx.setState(State.MINTED);
-        bridgeTx.setState(State.BURNED);
-        // 当前时间等于到期时间，须严格大于
-        unlock(bridgeTx, timelockExpiry);
+        assertThrows(IllegalStateException.class, () -> {
+            long timelockExpiry = 5000L;
+            BridgeTransaction bridgeTx = createBridgeTx(1000000L, timelockExpiry);
+            lock(bridgeTx);
+            bridgeTx.setState(State.MINTED);
+            bridgeTx.setState(State.BURNED);
+            // 当前时间等于到期时间，须严格大于
+            unlock(bridgeTx, timelockExpiry);
+        });
     }
 
     // ==================== fail 和 expire 测试 ====================
@@ -486,17 +508,19 @@ public class BridgeTransactionTest {
     /**
      * 测试 fail() 对已完成的交易抛异常
      */
-    @Test(expected = IllegalStateException.class)
+    @Test
     public void testFailOnCompletedTx() {
-        BridgeTransaction bridgeTx = createBridgeTx(1000000L, 0L);
-        lock(bridgeTx);
-        mint(bridgeTx, 1L);
-        burn(bridgeTx, 1L);
-        unlock(bridgeTx, 1L);
-        assertEquals(State.UNLOCKED, bridgeTx.getState());
-
-        // 已完成的交易不能标记为失败
-        fail(bridgeTx);
+        assertThrows(IllegalStateException.class, () -> {
+            BridgeTransaction bridgeTx = createBridgeTx(1000000L, 0L);
+            lock(bridgeTx);
+            mint(bridgeTx, 1L);
+            burn(bridgeTx, 1L);
+            unlock(bridgeTx, 1L);
+            assertEquals(State.UNLOCKED, bridgeTx.getState());
+    
+            // 已完成的交易不能标记为失败
+            fail(bridgeTx);
+        });
     }
 
     /**
@@ -519,51 +543,57 @@ public class BridgeTransactionTest {
     /**
      * 测试 expire() 在交易未超时时抛异常
      */
-    @Test(expected = IllegalStateException.class)
+    @Test
     public void testExpireBeforeTimeout() {
-        long timestamp = 1000L;
-        long maxDuration = 3600L;
-        BridgeTransaction bridgeTx = createBridgeTx(1000000L, 0L);
-        bridgeTx.setTimestamp(timestamp);
-        lock(bridgeTx);
-
-        // 当前时间未超过最大持续时间
-        long currentTime = timestamp + 1000;
-        expire(bridgeTx, currentTime, maxDuration);
+        assertThrows(IllegalStateException.class, () -> {
+            long timestamp = 1000L;
+            long maxDuration = 3600L;
+            BridgeTransaction bridgeTx = createBridgeTx(1000000L, 0L);
+            bridgeTx.setTimestamp(timestamp);
+            lock(bridgeTx);
+    
+            // 当前时间未超过最大持续时间
+            long currentTime = timestamp + 1000;
+            expire(bridgeTx, currentTime, maxDuration);
+        });
     }
 
     /**
      * 测试 expire() 对已完成的交易抛异常
      */
-    @Test(expected = IllegalStateException.class)
+    @Test
     public void testExpireOnCompletedTx() {
-        long timestamp = 1000L;
-        long maxDuration = 3600L;
-        BridgeTransaction bridgeTx = createBridgeTx(1000000L, 0L);
-        bridgeTx.setTimestamp(timestamp);
-        lock(bridgeTx);
-        mint(bridgeTx, timestamp + 1);
-        burn(bridgeTx, timestamp + 2);
-        unlock(bridgeTx, timestamp + 3);
-        assertEquals(State.UNLOCKED, bridgeTx.getState());
-
-        expire(bridgeTx, timestamp + maxDuration + 1, maxDuration);
+        assertThrows(IllegalStateException.class, () -> {
+            long timestamp = 1000L;
+            long maxDuration = 3600L;
+            BridgeTransaction bridgeTx = createBridgeTx(1000000L, 0L);
+            bridgeTx.setTimestamp(timestamp);
+            lock(bridgeTx);
+            mint(bridgeTx, timestamp + 1);
+            burn(bridgeTx, timestamp + 2);
+            unlock(bridgeTx, timestamp + 3);
+            assertEquals(State.UNLOCKED, bridgeTx.getState());
+    
+            expire(bridgeTx, timestamp + maxDuration + 1, maxDuration);
+        });
     }
 
     /**
      * 测试 expire() 对已失败的交易抛异常
      */
-    @Test(expected = IllegalStateException.class)
+    @Test
     public void testExpireOnFailedTx() {
-        long timestamp = 1000L;
-        long maxDuration = 3600L;
-        BridgeTransaction bridgeTx = createBridgeTx(1000000L, 0L);
-        bridgeTx.setTimestamp(timestamp);
-        lock(bridgeTx);
-        fail(bridgeTx);
-        assertEquals(State.FAILED, bridgeTx.getState());
-
-        expire(bridgeTx, timestamp + maxDuration + 1, maxDuration);
+        assertThrows(IllegalStateException.class, () -> {
+            long timestamp = 1000L;
+            long maxDuration = 3600L;
+            BridgeTransaction bridgeTx = createBridgeTx(1000000L, 0L);
+            bridgeTx.setTimestamp(timestamp);
+            lock(bridgeTx);
+            fail(bridgeTx);
+            assertEquals(State.FAILED, bridgeTx.getState());
+    
+            expire(bridgeTx, timestamp + maxDuration + 1, maxDuration);
+        });
     }
 
     // ==================== 全参数构造器和 setter 测试 ====================
@@ -581,7 +611,7 @@ public class BridgeTransactionTest {
                 State.LOCKED, 1000L, 5000L, MIN_VALIDATORS
         );
 
-        assertEquals("bridge-tx-002", bridgeTx.getBridgeTxId());
+        assertEquals(bridgeTx.getBridgeTxId(), "bridge-tx-002");
         assertEquals(SOURCE_CHAIN, bridgeTx.getSourceChain());
         assertEquals(TARGET_CHAIN, bridgeTx.getTargetChain());
         assertEquals(500000L, bridgeTx.getAmount());
@@ -611,11 +641,11 @@ public class BridgeTransactionTest {
         bridgeTx.setTimestamp(2000L);
         bridgeTx.setTimelockExpiry(8000L);
 
-        assertEquals("bridge-tx-003", bridgeTx.getBridgeTxId());
-        assertEquals("chain-A", bridgeTx.getSourceChain());
-        assertEquals("chain-B", bridgeTx.getTargetChain());
+        assertEquals(bridgeTx.getBridgeTxId(), "bridge-tx-003");
+        assertEquals(bridgeTx.getSourceChain(), "chain-A");
+        assertEquals(bridgeTx.getTargetChain(), "chain-B");
         assertEquals(999999L, bridgeTx.getAmount());
-        assertEquals("NEX_recipient_002", bridgeTx.getRecipient());
+        assertEquals(bridgeTx.getRecipient(), "NEX_recipient_002");
         assertEquals(2, bridgeTx.getValidators().size());
         assertEquals(2, bridgeTx.getSignatures().size());
         assertEquals(State.MINTED, bridgeTx.getState());
@@ -653,18 +683,18 @@ public class BridgeTransactionTest {
 
         tx.type = Transaction.Type.BRIDGE_LOCK.ordinal();
         assertEquals(22, tx.type);
-        assertEquals("BRIDGE_LOCK", tx.getTypeName());
+        assertEquals(tx.getTypeName(), "BRIDGE_LOCK");
         assertTrue(tx.isBridgeTransaction());
         assertTrue(tx.isPaymentExtensionType());
 
         tx.type = Transaction.Type.BRIDGE_MINT.ordinal();
         assertEquals(23, tx.type);
-        assertEquals("BRIDGE_MINT", tx.getTypeName());
+        assertEquals(tx.getTypeName(), "BRIDGE_MINT");
         assertTrue(tx.isBridgeTransaction());
 
         tx.type = Transaction.Type.BRIDGE_BURN.ordinal();
         assertEquals(24, tx.type);
-        assertEquals("BRIDGE_BURN", tx.getTypeName());
+        assertEquals(tx.getTypeName(), "BRIDGE_BURN");
         assertTrue(tx.isBridgeTransaction());
 
         // 非桥类型

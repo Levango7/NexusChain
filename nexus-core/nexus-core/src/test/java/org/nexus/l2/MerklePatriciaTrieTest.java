@@ -1,13 +1,13 @@
 package org.nexus.l2;
 
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-import static org.junit.Assert.*;
+import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * {@link MerklePatriciaTrie} 单元测试。
@@ -22,7 +22,7 @@ public class MerklePatriciaTrieTest {
 
     private MerklePatriciaTrie trie;
 
-    @Before
+    @BeforeEach
     public void setUp() {
         trie = new MerklePatriciaTrie();
     }
@@ -40,7 +40,7 @@ public class MerklePatriciaTrieTest {
     @Test
     public void insertAndGet_singleEntry() {
         trie.insert("k1", "v1");
-        assertEquals("v1", trie.get("k1"));
+        assertEquals(trie.get("k1"), "v1");
         assertEquals(1, trie.size());
         assertFalse(trie.isEmpty());
         assertNotEquals(MerklePatriciaTrie.EMPTY_ROOT, trie.getRoot());
@@ -49,12 +49,14 @@ public class MerklePatriciaTrieTest {
     @Test
     public void insert_nullValue_treatedAsEmptyString() {
         trie.insert("k1", null);
-        assertEquals("", trie.get("k1"));
+        assertEquals(trie.get("k1"), "");
     }
 
-    @Test(expected = IllegalArgumentException.class)
+    @Test
     public void insert_nullKey_throws() {
-        trie.insert(null, "v");
+        assertThrows(IllegalArgumentException.class, () -> {
+            trie.insert(null, "v");
+        });
     }
 
     @Test
@@ -62,7 +64,7 @@ public class MerklePatriciaTrieTest {
         trie.insert("k1", "v1");
         String root1 = trie.getRoot();
         trie.insert("k1", "v2");
-        assertEquals("v2", trie.get("k1"));
+        assertEquals(trie.get("k1"), "v2");
         assertEquals(1, trie.size());
         assertNotEquals(root1, trie.getRoot());
     }
@@ -74,9 +76,9 @@ public class MerklePatriciaTrieTest {
         entries.put("b", "2");
         entries.put("c", "3");
         trie.insertAll(entries);
-        assertEquals("1", trie.get("a"));
-        assertEquals("2", trie.get("b"));
-        assertEquals("3", trie.get("c"));
+        assertEquals(trie.get("a"), "1");
+        assertEquals(trie.get("b"), "2");
+        assertEquals(trie.get("c"), "3");
         assertEquals(3, trie.size());
     }
 
@@ -85,7 +87,7 @@ public class MerklePatriciaTrieTest {
         trie.insert("x", "y");
         trie.insertAll(null);
         assertEquals(1, trie.size());
-        assertEquals("y", trie.get("x"));
+        assertEquals(trie.get("x"), "y");
     }
 
     @Test
@@ -101,7 +103,7 @@ public class MerklePatriciaTrieTest {
         String rootBefore = trie.getRoot();
         trie.remove("k1");
         assertNull(trie.get("k1"));
-        assertEquals("v2", trie.get("k2"));
+        assertEquals(trie.get("k2"), "v2");
         assertEquals(1, trie.size());
         assertNotEquals(rootBefore, trie.getRoot());
     }
@@ -169,8 +171,8 @@ public class MerklePatriciaTrieTest {
         trie.insert("k1", "v1");
         MerkleProof proof = trie.getProof("k1");
         assertNotNull(proof);
-        assertEquals("k1", proof.getKey());
-        assertEquals("v1", proof.getValue());
+        assertEquals(proof.getKey(), "k1");
+        assertEquals(proof.getValue(), "v1");
         assertTrue(MerklePatriciaTrie.verifyProof(proof, trie.getRoot()));
     }
 
@@ -183,9 +185,8 @@ public class MerklePatriciaTrieTest {
         String root = trie.getRoot();
         for (String key : new String[]{"a", "b", "c", "d"}) {
             MerkleProof proof = trie.getProof(key);
-            assertNotNull("proof for " + key, proof);
-            assertTrue("verify proof for " + key,
-                    MerklePatriciaTrie.verifyProof(proof, root));
+            assertNotNull(proof, "proof for " + key);
+            assertTrue(MerklePatriciaTrie.verifyProof(proof, root), "verify proof for " + key);
         }
     }
 
@@ -246,7 +247,7 @@ public class MerklePatriciaTrieTest {
         trie.insert("b", "2");
         Map<String, String> snap = trie.snapshot();
         assertEquals(2, snap.size());
-        assertEquals("1", snap.get("a"));
+        assertEquals(snap.get("a"), "1");
         try {
             snap.put("c", "3");
             fail("snapshot should be unmodifiable");
@@ -264,7 +265,7 @@ public class MerklePatriciaTrieTest {
         trie.insert("b", "2");
         assertNotEquals(trie.getRoot(), copy.getRoot());
         assertNull(copy.get("b"));
-        assertEquals("1", copy.get("a"));
+        assertEquals(copy.get("a"), "1");
     }
 
     @Test
@@ -273,8 +274,8 @@ public class MerklePatriciaTrieTest {
         initial.put("x", "10");
         initial.put("y", "20");
         MerklePatriciaTrie t = new MerklePatriciaTrie(initial);
-        assertEquals("10", t.get("x"));
-        assertEquals("20", t.get("y"));
+        assertEquals(t.get("x"), "10");
+        assertEquals(t.get("y"), "20");
         assertEquals(2, t.size());
     }
 
@@ -296,7 +297,7 @@ public class MerklePatriciaTrieTest {
         for (int i = 0; i < 5; i++) {
             MerkleProof proof = trie.getProof("k" + i);
             assertNotNull(proof);
-            assertTrue("proof for k" + i, MerklePatriciaTrie.verifyProof(proof, root));
+            assertTrue(MerklePatriciaTrie.verifyProof(proof, root), "proof for k" + i);
         }
     }
 

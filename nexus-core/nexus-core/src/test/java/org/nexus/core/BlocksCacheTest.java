@@ -1,15 +1,15 @@
 package org.nexus.core;
 
 
-import org.junit.Ignore;
-import org.junit.Test;
-import org.junit.runner.RunWith;
+import org.junit.jupiter.api.Disabled;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Scope;
 import org.springframework.test.context.ContextConfiguration;
-import org.springframework.test.context.junit4.SpringRunner;
+import org.springframework.test.context.junit.jupiter.SpringExtension;
 import org.nexus.config.TestConfig;
 import org.nexus.crypto.HashUtil;
 
@@ -20,7 +20,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
-@RunWith(SpringRunner.class)
+@ExtendWith(SpringExtension.class)
 @ContextConfiguration(classes = BlocksCacheTest.BlocksCacheTestConfig.class)
 public class BlocksCacheTest {
     private List<Block> getHeightN(long endHeight, byte[] merkleRoot) {
@@ -139,7 +139,7 @@ public class BlocksCacheTest {
     }
 
     @Test
-    @Ignore("多线程读写测试含 while(true) 阻塞循环，会导致测试任务挂起；需手动运行验证")
+    @Disabled("多线程读写测试含 while(true) 阻塞循环，会导致测试任务挂起；需手动运行验证")
     public void testMultiThreadReadWrite() {
         BlocksCache cache = new BlocksCache(getBlocks());
 

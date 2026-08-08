@@ -10,7 +10,7 @@ import org.nexus.keystore.crypto.RipemdUtility;
 import org.nexus.keystore.crypto.SHA3Utility;
 import org.nexus.util.ByteUtil;
 import org.nexus.core.account.Transaction;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
 public class TransactionTest {
 

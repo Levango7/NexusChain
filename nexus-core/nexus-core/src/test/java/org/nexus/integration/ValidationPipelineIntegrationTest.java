@@ -4,12 +4,12 @@ import org.nexus.core.Block;
 import org.nexus.core.account.Transaction;
 import org.nexus.core.validate.BasicRule;
 import org.nexus.core.validate.Result;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
 
-import static org.junit.Assert.*;
+import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * 验证管线集成测试。
@@ -63,7 +63,7 @@ public class ValidationPipelineIntegrationTest {
     /**
      * 测试初始化：手动构造 BasicRule。
      */
-    @Before
+    @BeforeEach
     public void setUp() {
         basicRule = new BasicRule(new Block(), "test");
     }
@@ -90,9 +90,8 @@ public class ValidationPipelineIntegrationTest {
 
         // 验证返回 SUCCESS
         Result result = basicRule.validateTransaction(tx);
-        assertTrue("正确的 CHANNEL_OPEN 验证应返回 SUCCESS: "
-                        + (result.getMessage() != null ? result.getMessage() : ""),
-                result.isSuccess());
+        assertTrue(result.isSuccess(), "正确的 CHANNEL_OPEN 验证应返回 SUCCESS: "
+                        + (result.getMessage() != null ? result.getMessage() : ""));
     }
 
     /**
@@ -115,7 +114,7 @@ public class ValidationPipelineIntegrationTest {
 
         // 验证失败
         Result result = basicRule.validateTransaction(tx);
-        assertFalse("无 payload 的 CHANNEL_OPEN 验证应失败", result.isSuccess());
+        assertFalse(result.isSuccess(), "无 payload 的 CHANNEL_OPEN 验证应失败");
     }
 
     /**
@@ -138,7 +137,7 @@ public class ValidationPipelineIntegrationTest {
 
         // 验证失败
         Result result = basicRule.validateTransaction(tx);
-        assertFalse("amount=0 的 CHANNEL_OPEN 验证应失败", result.isSuccess());
+        assertFalse(result.isSuccess(), "amount=0 的 CHANNEL_OPEN 验证应失败");
     }
 
     // ==================== BATCH_TRANSFER 验证 ====================
@@ -163,9 +162,8 @@ public class ValidationPipelineIntegrationTest {
 
         // 验证通过
         Result result = basicRule.validateTransaction(tx);
-        assertTrue("正确的 BATCH_TRANSFER 验证应通过: "
-                        + (result.getMessage() != null ? result.getMessage() : ""),
-                result.isSuccess());
+        assertTrue(result.isSuccess(), "正确的 BATCH_TRANSFER 验证应通过: "
+                        + (result.getMessage() != null ? result.getMessage() : ""));
     }
 
     /**
@@ -188,7 +186,7 @@ public class ValidationPipelineIntegrationTest {
 
         // 验证失败
         Result result = basicRule.validateTransaction(tx);
-        assertFalse("amount!=0 的 BATCH_TRANSFER 验证应失败", result.isSuccess());
+        assertFalse(result.isSuccess(), "amount!=0 的 BATCH_TRANSFER 验证应失败");
     }
 
     // ==================== MINT_STABLECOIN 验证 ====================
@@ -213,9 +211,8 @@ public class ValidationPipelineIntegrationTest {
 
         // 验证通过
         Result result = basicRule.validateTransaction(tx);
-        assertTrue("正确的 MINT_STABLECOIN 验证应通过: "
-                        + (result.getMessage() != null ? result.getMessage() : ""),
-                result.isSuccess());
+        assertTrue(result.isSuccess(), "正确的 MINT_STABLECOIN 验证应通过: "
+                        + (result.getMessage() != null ? result.getMessage() : ""));
     }
 
     /**
@@ -238,7 +235,7 @@ public class ValidationPipelineIntegrationTest {
 
         // 验证失败
         Result result = basicRule.validateTransaction(tx);
-        assertFalse("无 payload 的 MINT_STABLECOIN 验证应失败", result.isSuccess());
+        assertFalse(result.isSuccess(), "无 payload 的 MINT_STABLECOIN 验证应失败");
     }
 
     // ==================== BRIDGE_LOCK 验证 ====================
@@ -263,9 +260,8 @@ public class ValidationPipelineIntegrationTest {
 
         // 验证通过
         Result result = basicRule.validateTransaction(tx);
-        assertTrue("正确的 BRIDGE_LOCK 验证应通过: "
-                        + (result.getMessage() != null ? result.getMessage() : ""),
-                result.isSuccess());
+        assertTrue(result.isSuccess(), "正确的 BRIDGE_LOCK 验证应通过: "
+                        + (result.getMessage() != null ? result.getMessage() : ""));
     }
 
     /**
@@ -288,7 +284,7 @@ public class ValidationPipelineIntegrationTest {
 
         // 验证失败
         Result result = basicRule.validateTransaction(tx);
-        assertFalse("amount=0 的 BRIDGE_LOCK 验证应失败", result.isSuccess());
+        assertFalse(result.isSuccess(), "amount=0 的 BRIDGE_LOCK 验证应失败");
     }
 
     // ==================== SUBSCRIPTION_AUTH 验证 ====================
@@ -313,9 +309,8 @@ public class ValidationPipelineIntegrationTest {
 
         // 验证通过
         Result result = basicRule.validateTransaction(tx);
-        assertTrue("正确的 SUBSCRIPTION_AUTH 验证应通过: "
-                        + (result.getMessage() != null ? result.getMessage() : ""),
-                result.isSuccess());
+        assertTrue(result.isSuccess(), "正确的 SUBSCRIPTION_AUTH 验证应通过: "
+                        + (result.getMessage() != null ? result.getMessage() : ""));
     }
 
     /**
@@ -338,6 +333,6 @@ public class ValidationPipelineIntegrationTest {
 
         // 验证失败
         Result result = basicRule.validateTransaction(tx);
-        assertFalse("无 payload 的 SUBSCRIPTION_AUTH 验证应失败", result.isSuccess());
+        assertFalse(result.isSuccess(), "无 payload 的 SUBSCRIPTION_AUTH 验证应失败");
     }
 }

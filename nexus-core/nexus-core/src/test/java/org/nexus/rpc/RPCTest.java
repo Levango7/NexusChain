@@ -14,8 +14,8 @@ import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
 import org.apache.http.impl.conn.PoolingHttpClientConnectionManager;
 import org.apache.http.util.EntityUtils;
-import org.junit.Assume;
-import org.junit.Test;
+import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.nexus.ApiResult.APIResult;
@@ -42,7 +42,9 @@ public class RPCTest {
      * 未设置时跳过测试而非抛出 NPE。
      */
     private void assumeRpcEnvAvailable() {
-        Assume.assumeNotNull(System.getenv("PRIVATE_KEY"), System.getenv("HOST"), System.getenv("PORT"));
+        Assumptions.assumeTrue(System.getenv("PRIVATE_KEY") != null, "PRIVATE_KEY not set");
+        Assumptions.assumeTrue(System.getenv("HOST") != null, "HOST not set");
+        Assumptions.assumeTrue(System.getenv("PORT") != null, "PORT not set");
     }
 
     private static class Response {

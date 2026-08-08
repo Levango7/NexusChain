@@ -3,7 +3,7 @@ package org.nexus.consensus;
 import org.nexus.crypto.HashUtil;
 import org.nexus.crypto.ed25519.Ed25519;
 import org.nexus.crypto.vrf.VRFPrivateKey;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
 import java.math.BigInteger;
 import java.security.SecureRandom;

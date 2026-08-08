@@ -6,14 +6,14 @@ import org.nexus.core.payment.ChannelUpdate;
 import org.nexus.core.payment.DisputeRecord;
 import org.nexus.core.payment.DisputeResolution;
 import org.nexus.core.payment.DisputeSettlement;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 /**
  * 争议解决流程测试。
@@ -51,7 +51,7 @@ public class DisputeResolutionTest {
     /**
      * 每个测试前创建新的 DisputeResolution 实例。
      */
-    @Before
+    @BeforeEach
     public void setUp() {
         // 直接 new TransactionPool，不依赖 Spring 容器
         disputeResolution = new DisputeResolution(new TransactionPool());
@@ -93,20 +93,19 @@ public class DisputeResolutionTest {
         );
 
         // 验证争议记录创建
-        assertNotNull("争议记录不应为 null", record);
-        assertEquals("channelId 应一致", CHANNEL_ID, record.getChannelId());
-        assertEquals("起始区块应一致", START_BLOCK, record.getStartBlock());
-        assertEquals("结束区块应为 start + disputePeriod",
-                START_BLOCK + DISPUTE_PERIOD, record.getEndBlock());
-        assertEquals("争议状态应为 ACTIVE", DisputeRecord.DisputeState.ACTIVE, record.getState());
-        assertEquals("惩罚金初始应为 0", 0L, record.getPenaltyAmount());
-        assertNotNull("最新 update 不应为 null", record.getLatestUpdate());
-        assertEquals("latestUpdate nonce 应为 1", 1L, record.getLatestUpdate().getNonce());
+        assertNotNull(record, "争议记录不应为 null");
+        assertEquals(CHANNEL_ID, record.getChannelId(), "channelId 应一致");
+        assertEquals(START_BLOCK, record.getStartBlock(), "起始区块应一致");
+        assertEquals(START_BLOCK + DISPUTE_PERIOD, record.getEndBlock(), "结束区块应为 start + disputePeriod");
+        assertEquals(DisputeRecord.DisputeState.ACTIVE, record.getState(), "争议状态应为 ACTIVE");
+        assertEquals(0L, record.getPenaltyAmount(), "惩罚金初始应为 0");
+        assertNotNull(record.getLatestUpdate(), "最新 update 不应为 null");
+        assertEquals(1L, record.getLatestUpdate().getNonce(), "latestUpdate nonce 应为 1");
 
         // 验证争议可查询
         DisputeRecord queried = disputeResolution.getDisputeStatus(CHANNEL_ID);
-        assertNotNull("应能查询到争议记录", queried);
-        assertEquals("查询到的记录 channelId 应一致", CHANNEL_ID, queried.getChannelId());
+        assertNotNull(queried, "应能查询到争议记录");
+        assertEquals(CHANNEL_ID, queried.getChannelId(), "查询到的记录 channelId 应一致");
 
         // 验证重复发起会抛异常
         try {
@@ -117,7 +116,7 @@ public class DisputeResolutionTest {
             );
             fail("重复发起争议应抛出异常");
         } catch (IllegalArgumentException e) {
-            assertTrue("异常消息应包含已存在", e.getMessage().contains("already exists"));
+            assertTrue(e.getMessage().contains("already exists"), "异常消息应包含已存在");
         }
     }
 
@@ -145,11 +144,11 @@ public class DisputeResolutionTest {
         );
 
         // 验证挑战成功
-        assertNotNull("返回的争议记录不应为 null", challenged);
-        assertEquals("争议状态应为 CHALLENGED", DisputeRecord.DisputeState.CHALLENGED, challenged.getState());
-        assertEquals("latestUpdate nonce 应更新为 2", 2L, challenged.getLatestUpdate().getNonce());
-        assertEquals("latestUpdate balance1 应为 700", 700L, challenged.getLatestUpdate().getBalance1());
-        assertTrue("惩罚金应大于 0", challenged.getPenaltyAmount() > 0);
+        assertNotNull(challenged, "返回的争议记录不应为 null");
+        assertEquals(DisputeRecord.DisputeState.CHALLENGED, challenged.getState(), "争议状态应为 CHALLENGED");
+        assertEquals(2L, challenged.getLatestUpdate().getNonce(), "latestUpdate nonce 应更新为 2");
+        assertEquals(700L, challenged.getLatestUpdate().getBalance1(), "latestUpdate balance1 应为 700");
+        assertTrue(challenged.getPenaltyAmount() > 0, "惩罚金应大于 0");
     }
 
     /**
@@ -178,12 +177,12 @@ public class DisputeResolutionTest {
             fail("争议期过后应不能挑战");
         } catch (IllegalArgumentException e) {
             // 期望抛出异常
-            assertTrue("异常消息应包含争议期结束", e.getMessage().contains("Dispute period has ended"));
+            assertTrue(e.getMessage().contains("Dispute period has ended"), "异常消息应包含争议期结束");
         }
 
         // 验证争议记录状态已变为 EXPIRED
         DisputeRecord record = disputeResolution.getDisputeStatus(CHANNEL_ID);
-        assertEquals("争议状态应为 EXPIRED", DisputeRecord.DisputeState.EXPIRED, record.getState());
+        assertEquals(DisputeRecord.DisputeState.EXPIRED, record.getState(), "争议状态应为 EXPIRED");
     }
 
     /**
@@ -204,17 +203,17 @@ public class DisputeResolutionTest {
         DisputeSettlement settlement = disputeResolution.settleDispute(CHANNEL_ID, settleBlock);
 
         // 验证结算结果
-        assertNotNull("结算结果不应为 null", settlement);
-        assertEquals("channelId 应一致", CHANNEL_ID, settlement.getChannelId());
-        assertEquals("最终余额1 应为 800", 800L, settlement.getFinalBalance1());
-        assertEquals("最终余额2 应为 200", 200L, settlement.getFinalBalance2());
-        assertEquals("惩罚金应为 0（无挑战）", 0L, settlement.getPenaltyAmount());
-        assertEquals("获胜方应为平局（无挑战）", DisputeSettlement.WINNER_DRAW, settlement.getWinner());
-        assertEquals("结算区块应一致", settleBlock, settlement.getSettledBlock());
+        assertNotNull(settlement, "结算结果不应为 null");
+        assertEquals(CHANNEL_ID, settlement.getChannelId(), "channelId 应一致");
+        assertEquals(800L, settlement.getFinalBalance1(), "最终余额1 应为 800");
+        assertEquals(200L, settlement.getFinalBalance2(), "最终余额2 应为 200");
+        assertEquals(0L, settlement.getPenaltyAmount(), "惩罚金应为 0（无挑战）");
+        assertEquals(DisputeSettlement.WINNER_DRAW, settlement.getWinner(), "获胜方应为平局（无挑战）");
+        assertEquals(settleBlock, settlement.getSettledBlock(), "结算区块应一致");
 
         // 验证争议状态已变为 SETTLED
         DisputeRecord record = disputeResolution.getDisputeStatus(CHANNEL_ID);
-        assertEquals("争议状态应为 SETTLED", DisputeRecord.DisputeState.SETTLED, record.getState());
+        assertEquals(DisputeRecord.DisputeState.SETTLED, record.getState(), "争议状态应为 SETTLED");
     }
 
     /**
@@ -236,7 +235,7 @@ public class DisputeResolutionTest {
             disputeResolution.settleDispute(CHANNEL_ID, earlyBlock);
             fail("争议期内不应能结算");
         } catch (IllegalArgumentException e) {
-            assertTrue("异常消息应包含争议期未结束", e.getMessage().contains("Dispute period has not ended"));
+            assertTrue(e.getMessage().contains("Dispute period has not ended"), "异常消息应包含争议期未结束");
         }
     }
 
@@ -260,22 +259,22 @@ public class DisputeResolutionTest {
         long penalty = disputeResolution.calculatePenalty(dispute, challengingUpdate);
 
         // 惩罚金应为旧状态发起方余额的 10% = 800 / 10 = 80
-        assertEquals("惩罚金应为发起方余额的 10%", 80L, penalty);
-        assertTrue("惩罚金应大于 0", penalty > 0);
+        assertEquals(80L, penalty, "惩罚金应为发起方余额的 10%");
+        assertTrue(penalty > 0, "惩罚金应大于 0");
 
         // 测试 nonce 不更高时惩罚金为 0
         ChannelUpdate sameNonceUpdate = createFullySignedUpdate(1L, 700L, 300L);
         long zeroPenalty = disputeResolution.calculatePenalty(dispute, sameNonceUpdate);
-        assertEquals("nonce 不更高时惩罚金应为 0", 0L, zeroPenalty);
+        assertEquals(0L, zeroPenalty, "nonce 不更高时惩罚金应为 0");
 
         // 测试更低 nonce 时惩罚金为 0
         ChannelUpdate lowerNonceUpdate = createFullySignedUpdate(0L, 700L, 300L);
         long lowerPenalty = disputeResolution.calculatePenalty(dispute, lowerNonceUpdate);
-        assertEquals("nonce 更低时惩罚金应为 0", 0L, lowerPenalty);
+        assertEquals(0L, lowerPenalty, "nonce 更低时惩罚金应为 0");
 
         // 测试 null 参数返回 0
-        assertEquals("dispute 为 null 时应返回 0", 0L, disputeResolution.calculatePenalty(null, challengingUpdate));
-        assertEquals("challengingUpdate 为 null 时应返回 0", 0L, disputeResolution.calculatePenalty(dispute, null));
+        assertEquals(0L, disputeResolution.calculatePenalty(null, challengingUpdate), "dispute 为 null 时应返回 0");
+        assertEquals(0L, disputeResolution.calculatePenalty(dispute, null), "challengingUpdate 为 null 时应返回 0");
     }
 
     /**
@@ -290,8 +289,8 @@ public class DisputeResolutionTest {
                 dummyPubkey, dummySig,
                 START_BLOCK, DISPUTE_PERIOD
         );
-        assertEquals("初始争议状态应为 ACTIVE", DisputeRecord.DisputeState.ACTIVE, initiated.getState());
-        assertEquals("初始 nonce 应为 1", 1L, initiated.getLatestUpdate().getNonce());
+        assertEquals(DisputeRecord.DisputeState.ACTIVE, initiated.getState(), "初始争议状态应为 ACTIVE");
+        assertEquals(1L, initiated.getLatestUpdate().getNonce(), "初始 nonce 应为 1");
 
         // 步骤2：挑战争议（提交 nonce=2 的新状态，余额 700/300）
         ChannelUpdate newUpdate = createFullySignedUpdate(2L, 700L, 300L);
@@ -301,25 +300,24 @@ public class DisputeResolutionTest {
                 dummyPubkey, dummySig,
                 challengeBlock
         );
-        assertEquals("挑战后状态应为 CHALLENGED", DisputeRecord.DisputeState.CHALLENGED, challenged.getState());
-        assertEquals("挑战后 nonce 应为 2", 2L, challenged.getLatestUpdate().getNonce());
-        assertEquals("挑战后余额1 应为 700", 700L, challenged.getLatestUpdate().getBalance1());
-        assertTrue("挑战后应有惩罚金", challenged.getPenaltyAmount() > 0);
+        assertEquals(DisputeRecord.DisputeState.CHALLENGED, challenged.getState(), "挑战后状态应为 CHALLENGED");
+        assertEquals(2L, challenged.getLatestUpdate().getNonce(), "挑战后 nonce 应为 2");
+        assertEquals(700L, challenged.getLatestUpdate().getBalance1(), "挑战后余额1 应为 700");
+        assertTrue(challenged.getPenaltyAmount() > 0, "挑战后应有惩罚金");
 
         // 步骤3：争议期结束后结算
         long settleBlock = START_BLOCK + DISPUTE_PERIOD + 1;
         DisputeSettlement settlement = disputeResolution.settleDispute(CHANNEL_ID, settleBlock);
 
         // 验证最终结算结果
-        assertNotNull("结算结果不应为 null", settlement);
-        assertEquals("最终余额1 应为 700 减惩罚金",
-                700L - challenged.getPenaltyAmount(), settlement.getFinalBalance1());
-        assertEquals("最终余额2 应为 300", 300L, settlement.getFinalBalance2());
-        assertTrue("惩罚金应大于 0", settlement.getPenaltyAmount() > 0);
-        assertFalse("获胜方不应为平局", DisputeSettlement.WINNER_DRAW.equals(settlement.getWinner()));
+        assertNotNull(settlement, "结算结果不应为 null");
+        assertEquals(700L - challenged.getPenaltyAmount(), settlement.getFinalBalance1(), "最终余额1 应为 700 减惩罚金");
+        assertEquals(300L, settlement.getFinalBalance2(), "最终余额2 应为 300");
+        assertTrue(settlement.getPenaltyAmount() > 0, "惩罚金应大于 0");
+        assertFalse(DisputeSettlement.WINNER_DRAW.equals(settlement.getWinner()), "获胜方不应为平局");
 
         // 验证争议状态已结算
         DisputeRecord finalRecord = disputeResolution.getDisputeStatus(CHANNEL_ID);
-        assertEquals("最终争议状态应为 SETTLED", DisputeRecord.DisputeState.SETTLED, finalRecord.getState());
+        assertEquals(DisputeRecord.DisputeState.SETTLED, finalRecord.getState(), "最终争议状态应为 SETTLED");
     }
 }

@@ -1,7 +1,7 @@
 package org.nexus.l2;
 
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.nexus.l2.blob.BlobCarrierResult;
 import org.nexus.l2.blob.BlobDataCarrier;
@@ -15,7 +15,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
-import static org.junit.Assert.*;
+import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
@@ -43,7 +43,7 @@ public class RollupSequencerTest {
     private StateRootManager stateRootManager;
     private L2BridgeContract bridge;
 
-    @Before
+    @BeforeEach
     public void setUp() {
         sequencer = new RollupSequencer();
         batcher = new RollupBatcher();
@@ -128,13 +128,13 @@ public class RollupSequencerTest {
         List<L2Transaction> txs = batch.getTransactions();
 
         // 期望：alice/0, alice/1, bob/0, bob/1
-        assertEquals("alice", txs.get(0).getSender());
+        assertEquals(txs.get(0).getSender(), "alice");
         assertEquals(0, txs.get(0).getNonce());
-        assertEquals("alice", txs.get(1).getSender());
+        assertEquals(txs.get(1).getSender(), "alice");
         assertEquals(1, txs.get(1).getNonce());
-        assertEquals("bob", txs.get(2).getSender());
+        assertEquals(txs.get(2).getSender(), "bob");
         assertEquals(0, txs.get(2).getNonce());
-        assertEquals("bob", txs.get(3).getSender());
+        assertEquals(txs.get(3).getSender(), "bob");
         assertEquals(1, txs.get(3).getNonce());
     }
 
@@ -152,8 +152,8 @@ public class RollupSequencerTest {
         RollupBatch batch = sequencer.sequenceAndPublish("s");
         List<L2Transaction> txs = batch.getTransactions();
         // alice < bob 字典序，所以 alice 先；此测试验证排序稳定不破坏
-        assertEquals("alice", txs.get(0).getSender());
-        assertEquals("bob", txs.get(1).getSender());
+        assertEquals(txs.get(0).getSender(), "alice");
+        assertEquals(txs.get(1).getSender(), "bob");
     }
 
     @Test

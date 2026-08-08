@@ -1,11 +1,11 @@
 package org.nexus.l2.blob;
 
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
 
-import static org.junit.Assert.*;
+import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * {@link Eip4844BlobCarrier} 单元测试。
@@ -25,7 +25,7 @@ public class Eip4844BlobCarrierTest {
 
     private Eip4844BlobCarrier carrier;
 
-    @Before
+    @BeforeEach
     public void setUp() {
         carrier = new Eip4844BlobCarrier();
     }
@@ -61,7 +61,7 @@ public class Eip4844BlobCarrierTest {
         BlobCarrierResult result = carrier.carryBatchData(1L, data);
         // 版本化哈希首字节 = 0x01（EIP-4844）
         String hash = result.getBlobHash();
-        assertEquals("01", hash.substring(0, 2).toLowerCase());
+        assertEquals(hash.substring(0, 2).toLowerCase(), "01");
     }
 
     @Test

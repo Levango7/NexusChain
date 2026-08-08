@@ -2,12 +2,12 @@ package org.nexus.integration;
 
 import org.nexus.core.account.Transaction;
 import org.nexus.protobuf.tcp.ProtocolModel;
-import org.junit.Assume;
-import org.junit.Test;
+import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
 
-import static org.junit.Assert.*;
+import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * SDK 端到端测试。
@@ -65,17 +65,17 @@ public class SdkEndToEndTest {
         );
 
         // 验证 type 为 CHANNEL_OPEN
-        assertEquals("type 应为 CHANNEL_OPEN",
-                Transaction.Type.CHANNEL_OPEN.ordinal(), tx.type);
+        assertEquals(Transaction.Type.CHANNEL_OPEN.ordinal(), tx.type,
+                "type 应为 CHANNEL_OPEN");
         // 验证 payload 不为空
-        assertNotNull("payload 不应为 null", tx.payload);
-        assertTrue("payload 不应为空", tx.payload.length > 0);
+        assertNotNull(tx.payload, "payload 不应为 null");
+        assertTrue(tx.payload.length > 0, "payload 不应为空");
         // 验证 payload 内容为正确的 JSON
         String payloadStr = new String(tx.payload, StandardCharsets.UTF_8);
-        assertTrue("payload 应包含 channelId", payloadStr.contains("channelId"));
-        assertTrue("payload 应包含 balance1", payloadStr.contains("balance1"));
+        assertTrue(payloadStr.contains("channelId"), "payload 应包含 channelId");
+        assertTrue(payloadStr.contains("balance1"), "payload 应包含 balance1");
         // 验证 amount 为正数
-        assertTrue("amount 应为正数", tx.amount > 0);
+        assertTrue(tx.amount > 0, "amount 应为正数");
     }
 
     /**
@@ -99,19 +99,19 @@ public class SdkEndToEndTest {
         );
 
         // 验证 type=19 (BATCH_TRANSFER)
-        assertEquals("type 应为 19 (BATCH_TRANSFER)", 19, tx.type);
-        assertEquals("Transaction.Type.BATCH_TRANSFER.ordinal() 应为 19",
-                Transaction.Type.BATCH_TRANSFER.ordinal(), tx.type);
+        assertEquals(19, tx.type, "type 应为 19 (BATCH_TRANSFER)");
+        assertEquals(Transaction.Type.BATCH_TRANSFER.ordinal(), tx.type,
+                "Transaction.Type.BATCH_TRANSFER.ordinal() 应为 19");
         // 验证 payload 不为空
-        assertNotNull("payload 不应为 null", tx.payload);
-        assertTrue("payload 不应为空", tx.payload.length > 0);
+        assertNotNull(tx.payload, "payload 不应为 null");
+        assertTrue(tx.payload.length > 0, "payload 不应为空");
         // 验证 payload 含 recipients 信息
         String payloadStr = new String(tx.payload, StandardCharsets.UTF_8);
-        assertTrue("payload 应包含 items", payloadStr.contains("items"));
-        assertTrue("payload 应包含 address", payloadStr.contains("address"));
-        assertTrue("payload 应包含 amount", payloadStr.contains("amount"));
+        assertTrue(payloadStr.contains("items"), "payload 应包含 items");
+        assertTrue(payloadStr.contains("address"), "payload 应包含 address");
+        assertTrue(payloadStr.contains("amount"), "payload 应包含 amount");
         // 验证 amount=0（批量转账金额在 payload 中）
-        assertEquals("amount 应为 0（金额在 payload 中）", 0L, tx.amount);
+        assertEquals(0L, tx.amount, "amount 应为 0（金额在 payload 中）");
     }
 
     // ==================== Java SDK 模拟测试 ====================
@@ -137,23 +137,23 @@ public class SdkEndToEndTest {
         );
 
         // 验证所有字段
-        assertEquals("version 应为 1", 1, tx.version);
-        assertEquals("type 应为 CHANNEL_OPEN",
-                Transaction.Type.CHANNEL_OPEN.ordinal(), tx.type);
-        assertEquals("nonce 应为 10", 10L, tx.nonce);
-        assertEquals("gasPrice 应为 200000", 200000L, tx.gasPrice);
-        assertEquals("amount 应为 1000000", 1000000L, tx.amount);
-        assertNotNull("payload 不应为 null", tx.payload);
-        assertTrue("payload 不应为空", tx.payload.length > 0);
-        assertEquals("from 长度应为 32",
-                Transaction.PUBLIC_KEY_SIZE, tx.from.length);
-        assertEquals("to 长度应为 20",
-                Transaction.PUBLIC_KEY_HASH_SIZE, tx.to.length);
-        assertEquals("signature 长度应为 64",
-                Transaction.SIGNATURE_SIZE, tx.signature.length);
+        assertEquals(1, tx.version, "version 应为 1");
+        assertEquals(Transaction.Type.CHANNEL_OPEN.ordinal(), tx.type,
+                "type 应为 CHANNEL_OPEN");
+        assertEquals(10L, tx.nonce, "nonce 应为 10");
+        assertEquals(200000L, tx.gasPrice, "gasPrice 应为 200000");
+        assertEquals(1000000L, tx.amount, "amount 应为 1000000");
+        assertNotNull(tx.payload, "payload 不应为 null");
+        assertTrue(tx.payload.length > 0, "payload 不应为空");
+        assertEquals(Transaction.PUBLIC_KEY_SIZE, tx.from.length,
+                "from 长度应为 32");
+        assertEquals(Transaction.PUBLIC_KEY_HASH_SIZE, tx.to.length,
+                "to 长度应为 20");
+        assertEquals(Transaction.SIGNATURE_SIZE, tx.signature.length,
+                "signature 长度应为 64");
         // 验证通道交易分类
-        assertTrue("应为通道交易", tx.isChannelTransaction());
-        assertTrue("应为支付扩展类型", tx.isPaymentExtensionType());
+        assertTrue(tx.isChannelTransaction(), "应为通道交易");
+        assertTrue(tx.isPaymentExtensionType(), "应为支付扩展类型");
     }
 
     /**
@@ -177,22 +177,22 @@ public class SdkEndToEndTest {
         );
 
         // 验证所有字段
-        assertEquals("version 应为 1", 1, tx.version);
-        assertEquals("type 应为 BATCH_TRANSFER (19)",
-                19, tx.type);
-        assertEquals("nonce 应为 20", 20L, tx.nonce);
-        assertEquals("gasPrice 应为 200000", 200000L, tx.gasPrice);
-        assertEquals("amount 应为 0", 0L, tx.amount);
-        assertNotNull("payload 不应为 null", tx.payload);
-        assertTrue("payload 不应为空", tx.payload.length > 0);
+        assertEquals(1, tx.version, "version 应为 1");
+        assertEquals(19, tx.type,
+                "type 应为 BATCH_TRANSFER (19)");
+        assertEquals(20L, tx.nonce, "nonce 应为 20");
+        assertEquals(200000L, tx.gasPrice, "gasPrice 应为 200000");
+        assertEquals(0L, tx.amount, "amount 应为 0");
+        assertNotNull(tx.payload, "payload 不应为 null");
+        assertTrue(tx.payload.length > 0, "payload 不应为空");
         // 验证 payload 含 recipients
         String payloadStr = new String(tx.payload, StandardCharsets.UTF_8);
-        assertTrue("payload 应包含 recipients (items)", payloadStr.contains("items"));
+        assertTrue(payloadStr.contains("items"), "payload 应包含 recipients (items)");
         // 验证交易分类
-        assertFalse("不应为通道交易", tx.isChannelTransaction());
-        assertTrue("应为支付扩展类型", tx.isPaymentExtensionType());
-        assertFalse("不应为稳定币交易", tx.isStableCoinTransaction());
-        assertFalse("不应为跨链桥交易", tx.isBridgeTransaction());
+        assertFalse(tx.isChannelTransaction(), "不应为通道交易");
+        assertTrue(tx.isPaymentExtensionType(), "应为支付扩展类型");
+        assertFalse(tx.isStableCoinTransaction(), "不应为稳定币交易");
+        assertFalse(tx.isBridgeTransaction(), "不应为跨链桥交易");
     }
 
     // ==================== 序列化往返测试 ====================
@@ -219,26 +219,26 @@ public class SdkEndToEndTest {
 
         // 序列化为 RPC 字节
         byte[] rpcBytes = original.toRPCBytes();
-        assertNotNull("RPC 字节不应为 null", rpcBytes);
-        assertTrue("RPC 字节长度应大于 0", rpcBytes.length > 0);
+        assertNotNull(rpcBytes, "RPC 字节不应为 null");
+        assertTrue(rpcBytes.length > 0, "RPC 字节长度应大于 0");
 
         // 反序列化
         Transaction restored = Transaction.fromRPCBytes(rpcBytes);
 
         // 验证字段一致
-        assertEquals("version 应一致", original.version, restored.version);
-        assertEquals("type 应一致", original.type, restored.type);
-        assertEquals("nonce 应一致", original.nonce, restored.nonce);
-        assertArrayEquals("from 应一致", original.from, restored.from);
-        assertEquals("gasPrice 应一致", original.gasPrice, restored.gasPrice);
-        assertEquals("amount 应一致", original.amount, restored.amount);
-        assertArrayEquals("signature 应一致", original.signature, restored.signature);
-        assertArrayEquals("to 应一致", original.to, restored.to);
+        assertEquals(original.version, restored.version, "version 应一致");
+        assertEquals(original.type, restored.type, "type 应一致");
+        assertEquals(original.nonce, restored.nonce, "nonce 应一致");
+        assertArrayEquals(original.from, restored.from, "from 应一致");
+        assertEquals(original.gasPrice, restored.gasPrice, "gasPrice 应一致");
+        assertEquals(original.amount, restored.amount, "amount 应一致");
+        assertArrayEquals(original.signature, restored.signature, "signature 应一致");
+        assertArrayEquals(original.to, restored.to, "to 应一致");
         // 验证 payload
-        assertNotNull("restored payload 不应为 null", restored.payload);
-        assertArrayEquals("payload 应一致", original.payload, restored.payload);
+        assertNotNull(restored.payload, "restored payload 不应为 null");
+        assertArrayEquals(original.payload, restored.payload, "payload 应一致");
         // 验证哈希一致
-        assertArrayEquals("哈希应一致", original.getHash(), restored.getHash());
+        assertArrayEquals(original.getHash(), restored.getHash(), "哈希应一致");
     }
 
     /**
@@ -252,9 +252,9 @@ public class SdkEndToEndTest {
         // 不支持 BATCH_TRANSFER(19) 等支付扩展新类型。
         // 当 protobuf 定义未同步更新时，forNumber 返回 null 导致 encode NPE，
         // 此处跳过测试而非报失败。
-        Assume.assumeTrue(
-                "protobuf 尚未定义 BATCH_TRANSFER 类型，跳过 protobuf 编码往返测试",
-                ProtocolModel.Transaction.Type.forNumber(Transaction.Type.BATCH_TRANSFER.ordinal()) != null
+        Assumptions.assumeTrue(
+                ProtocolModel.Transaction.Type.forNumber(Transaction.Type.BATCH_TRANSFER.ordinal()) != null,
+                "protobuf 尚未定义 BATCH_TRANSFER 类型，跳过 protobuf 编码往返测试"
         );
         // 构造新类型交易（BATCH_TRANSFER，含 payload）
         Transaction original = new Transaction(
@@ -271,27 +271,27 @@ public class SdkEndToEndTest {
 
         // protobuf 编码
         ProtocolModel.Transaction protoTx = original.encode();
-        assertNotNull("protobuf 交易不应为 null", protoTx);
+        assertNotNull(protoTx, "protobuf 交易不应为 null");
 
         // 解码
         Transaction restored = Transaction.fromProto(protoTx);
 
         // 验证字段一致
-        assertEquals("version 应一致", original.version, restored.version);
-        assertEquals("type 应一致", original.type, restored.type);
-        assertEquals("nonce 应一致", original.nonce, restored.nonce);
-        assertArrayEquals("from 应一致", original.from, restored.from);
-        assertEquals("gasPrice 应一致", original.gasPrice, restored.gasPrice);
-        assertEquals("amount 应一致", original.amount, restored.amount);
-        assertArrayEquals("to 应一致", original.to, restored.to);
-        assertArrayEquals("signature 应一致", original.signature, restored.signature);
+        assertEquals(original.version, restored.version, "version 应一致");
+        assertEquals(original.type, restored.type, "type 应一致");
+        assertEquals(original.nonce, restored.nonce, "nonce 应一致");
+        assertArrayEquals(original.from, restored.from, "from 应一致");
+        assertEquals(original.gasPrice, restored.gasPrice, "gasPrice 应一致");
+        assertEquals(original.amount, restored.amount, "amount 应一致");
+        assertArrayEquals(original.to, restored.to, "to 应一致");
+        assertArrayEquals(original.signature, restored.signature, "signature 应一致");
         // 验证 payload
-        assertNotNull("restored payload 不应为 null", restored.payload);
-        assertArrayEquals("payload 应一致", original.payload, restored.payload);
+        assertNotNull(restored.payload, "restored payload 不应为 null");
+        assertArrayEquals(original.payload, restored.payload, "payload 应一致");
         // 验证哈希一致
-        assertArrayEquals("哈希应一致", original.getHash(), restored.getHash());
+        assertArrayEquals(original.getHash(), restored.getHash(), "哈希应一致");
         // 验证类型名称
-        assertEquals("类型名称应为 BATCH_TRANSFER",
-                "BATCH_TRANSFER", restored.getTypeName());
+        assertEquals("BATCH_TRANSFER", restored.getTypeName(),
+                "类型名称应为 BATCH_TRANSFER");
     }
 }

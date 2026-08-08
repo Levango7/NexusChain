@@ -5,8 +5,8 @@ package org.nexus.keystore;
 import org.apache.commons.codec.binary.Hex;
 import org.nexus.keystore.wallet.Keystore;
 import org.nexus.keystore.wallet.KeystoreAction;
-import org.junit.Assume;
-import org.junit.Test;
+import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.Test;
 
 
 
@@ -43,7 +43,7 @@ public class KeystoreTests {
         try {
             assert KeystoreAction.verifyPassword(ks, password);
         } catch (AssertionError e) {
-            Assume.assumeTrue("本平台 argon2 native 计算与 testJson 数据不一致，跳过", false);
+            Assumptions.assumeTrue(false, "本平台 argon2 native 计算与 testJson 数据不一致，跳过");
         }
         assert KeystoreAction.verifyPassword(ks2, password);
         assert ks.kdf.equals("argon2id");
@@ -57,7 +57,7 @@ public class KeystoreTests {
             String decrypted = Hex.encodeHexString(KeystoreAction.decrypt(ks, password));
             assert decrypted.equals(testPrivKey);
         } catch (Exception e) {
-            Assume.assumeTrue("本平台 argon2 native 计算与 testJson 数据不一致，跳过 decrypt 测试", false);
+            Assumptions.assumeTrue(false, "本平台 argon2 native 计算与 testJson 数据不一致，跳过 decrypt 测试");
         }
     }
 

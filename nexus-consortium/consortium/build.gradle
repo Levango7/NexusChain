@@ -26,7 +26,7 @@ dependencies {
     implementation 'com.fasterxml.jackson.dataformat:jackson-dataformat-properties'
 
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
-    testImplementation "junit:junit"
+
 
 
     compileOnly "org.projectlombok:lombok:${lombokVersion}"

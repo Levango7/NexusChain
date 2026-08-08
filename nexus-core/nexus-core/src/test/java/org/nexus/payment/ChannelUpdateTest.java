@@ -7,16 +7,16 @@ import org.nexus.crypto.ed25519.Ed25519PrivateKey;
 import org.nexus.crypto.ed25519.Ed25519PublicKey;
 import org.nexus.crypto.HashUtil;
 import org.nexus.encoding.BigEndian;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 
-import static org.junit.Assert.assertArrayEquals;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * 链下状态更新消息测试。
@@ -75,13 +75,13 @@ public class ChannelUpdateTest {
         );
 
         // 验证所有字段正确设置
-        assertEquals("channelId 应与构造参数一致", CHANNEL_ID, update.getChannelId());
-        assertEquals("nonce 应与构造参数一致", nonce, update.getNonce());
-        assertEquals("balance1 应与构造参数一致", balance1, update.getBalance1());
-        assertEquals("balance2 应与构造参数一致", balance2, update.getBalance2());
-        assertEquals("timestamp 应与构造参数一致", timestamp, update.getTimestamp());
-        assertNotNull("signature1 不应为 null", update.getSignature1());
-        assertNotNull("signature2 不应为 null", update.getSignature2());
+        assertEquals(CHANNEL_ID, update.getChannelId(), "channelId 应与构造参数一致");
+        assertEquals(nonce, update.getNonce(), "nonce 应与构造参数一致");
+        assertEquals(balance1, update.getBalance1(), "balance1 应与构造参数一致");
+        assertEquals(balance2, update.getBalance2(), "balance2 应与构造参数一致");
+        assertEquals(timestamp, update.getTimestamp(), "timestamp 应与构造参数一致");
+        assertNotNull(update.getSignature1(), "signature1 不应为 null");
+        assertNotNull(update.getSignature2(), "signature2 不应为 null");
     }
 
     /**
@@ -99,33 +99,33 @@ public class ChannelUpdateTest {
         );
 
         byte[] message = update.getMessageToSign();
-        assertNotNull("签名消息不应为 null", message);
+        assertNotNull(message, "签名消息不应为 null");
 
         // 验证消息长度 = channelId字节 + 8 + 8 + 8
         byte[] channelIdBytes = CHANNEL_ID.getBytes(StandardCharsets.UTF_8);
         int expectedLength = channelIdBytes.length + 8 + 8 + 8;
-        assertEquals("消息长度应为 channelId长度 + 24", expectedLength, message.length);
+        assertEquals(expectedLength, message.length, "消息长度应为 channelId长度 + 24");
 
         // 验证 channelId 部分
         byte[] messageChannelId = Arrays.copyOfRange(message, 0, channelIdBytes.length);
-        assertArrayEquals("消息前缀应为 channelId 的 UTF-8 字节", channelIdBytes, messageChannelId);
+        assertArrayEquals(channelIdBytes, messageChannelId, "消息前缀应为 channelId 的 UTF-8 字节");
 
         // 验证 nonce 部分（8字节大端编码）
         byte[] messageNonce = Arrays.copyOfRange(message, channelIdBytes.length, channelIdBytes.length + 8);
         byte[] expectedNonce = BigEndian.encodeUint64(nonce);
-        assertArrayEquals("nonce 应为 8 字节大端编码", expectedNonce, messageNonce);
+        assertArrayEquals(expectedNonce, messageNonce, "nonce 应为 8 字节大端编码");
 
         // 验证 balance1 部分
         int offset1 = channelIdBytes.length + 8;
         byte[] messageBalance1 = Arrays.copyOfRange(message, offset1, offset1 + 8);
         byte[] expectedBalance1 = BigEndian.encodeUint64(balance1);
-        assertArrayEquals("balance1 应为 8 字节大端编码", expectedBalance1, messageBalance1);
+        assertArrayEquals(expectedBalance1, messageBalance1, "balance1 应为 8 字节大端编码");
 
         // 验证 balance2 部分
         int offset2 = channelIdBytes.length + 16;
         byte[] messageBalance2 = Arrays.copyOfRange(message, offset2, offset2 + 8);
         byte[] expectedBalance2 = BigEndian.encodeUint64(balance2);
-        assertArrayEquals("balance2 应为 8 字节大端编码", expectedBalance2, messageBalance2);
+        assertArrayEquals(expectedBalance2, messageBalance2, "balance2 应为 8 字节大端编码");
     }
 
     /**
@@ -155,11 +155,11 @@ public class ChannelUpdateTest {
         update.setSignature2(sig2);
 
         // 验证签名有效
-        assertTrue("双方签名验证应通过", update.verifySignatures(pubkey1, pubkey2));
+        assertTrue(update.verifySignatures(pubkey1, pubkey2), "双方签名验证应通过");
 
         // 验证错误公钥下签名验证失败
         byte[] wrongPubkey = new byte[32];
-        assertFalse("错误公钥应使签名验证失败", update.verifySignatures(wrongPubkey, pubkey2));
+        assertFalse(update.verifySignatures(wrongPubkey, pubkey2), "错误公钥应使签名验证失败");
     }
 
     /**
@@ -172,35 +172,35 @@ public class ChannelUpdateTest {
                 CHANNEL_ID, 1L, 600L, 400L,
                 null, null, System.currentTimeMillis()
         );
-        assertTrue("余额守恒应返回 true", validUpdate.isBalanceConserved(TOTAL_BALANCE));
+        assertTrue(validUpdate.isBalanceConserved(TOTAL_BALANCE), "余额守恒应返回 true");
 
         // 余额不守恒（总额变化）
         ChannelUpdate unbalancedUpdate = new ChannelUpdate(
                 CHANNEL_ID, 1L, 600L, 500L,
                 null, null, System.currentTimeMillis()
         );
-        assertFalse("余额不守恒应返回 false", unbalancedUpdate.isBalanceConserved(TOTAL_BALANCE));
+        assertFalse(unbalancedUpdate.isBalanceConserved(TOTAL_BALANCE), "余额不守恒应返回 false");
 
         // 负余额
         ChannelUpdate negativeUpdate = new ChannelUpdate(
                 CHANNEL_ID, 1L, -100L, 1100L,
                 null, null, System.currentTimeMillis()
         );
-        assertFalse("负余额应返回 false", negativeUpdate.isBalanceConserved(TOTAL_BALANCE));
+        assertFalse(negativeUpdate.isBalanceConserved(TOTAL_BALANCE), "负余额应返回 false");
 
         // 另一个负余额
         ChannelUpdate negativeUpdate2 = new ChannelUpdate(
                 CHANNEL_ID, 1L, 1100L, -100L,
                 null, null, System.currentTimeMillis()
         );
-        assertFalse("负余额应返回 false", negativeUpdate2.isBalanceConserved(TOTAL_BALANCE));
+        assertFalse(negativeUpdate2.isBalanceConserved(TOTAL_BALANCE), "负余额应返回 false");
 
         // 总额为零的边界情况
         ChannelUpdate zeroUpdate = new ChannelUpdate(
                 CHANNEL_ID, 1L, 0L, 0L,
                 null, null, System.currentTimeMillis()
         );
-        assertFalse("总额为零不等于通道总额应返回 false", zeroUpdate.isBalanceConserved(TOTAL_BALANCE));
+        assertFalse(zeroUpdate.isBalanceConserved(TOTAL_BALANCE), "总额为零不等于通道总额应返回 false");
     }
 
     /**
@@ -215,36 +215,36 @@ public class ChannelUpdateTest {
                 CHANNEL_ID, 1L, 800L, 200L,
                 null, null, System.currentTimeMillis()
         );
-        assertFalse("无签名不应视为已完全签名", unsigned.isFullySigned());
-        assertFalse("signature1 不存在", unsigned.hasSignature1());
-        assertFalse("signature2 不存在", unsigned.hasSignature2());
+        assertFalse(unsigned.isFullySigned(), "无签名不应视为已完全签名");
+        assertFalse(unsigned.hasSignature1(), "signature1 不存在");
+        assertFalse(unsigned.hasSignature2(), "signature2 不存在");
 
         // 仅一方签名
         ChannelUpdate halfSigned = new ChannelUpdate(
                 CHANNEL_ID, 1L, 800L, 200L,
                 validSig, null, System.currentTimeMillis()
         );
-        assertFalse("单方签名不应视为已完全签名", halfSigned.isFullySigned());
-        assertTrue("signature1 应存在", halfSigned.hasSignature1());
-        assertFalse("signature2 不应存在", halfSigned.hasSignature2());
+        assertFalse(halfSigned.isFullySigned(), "单方签名不应视为已完全签名");
+        assertTrue(halfSigned.hasSignature1(), "signature1 应存在");
+        assertFalse(halfSigned.hasSignature2(), "signature2 不应存在");
 
         // 双方都签名
         ChannelUpdate fullySigned = new ChannelUpdate(
                 CHANNEL_ID, 1L, 800L, 200L,
                 validSig, validSig, System.currentTimeMillis()
         );
-        assertTrue("双方签名应视为已完全签名", fullySigned.isFullySigned());
-        assertTrue("signature1 应存在", fullySigned.hasSignature1());
-        assertTrue("signature2 应存在", fullySigned.hasSignature2());
+        assertTrue(fullySigned.isFullySigned(), "双方签名应视为已完全签名");
+        assertTrue(fullySigned.hasSignature1(), "signature1 应存在");
+        assertTrue(fullySigned.hasSignature2(), "signature2 应存在");
 
         // 签名长度不正确
         ChannelUpdate wrongSize = new ChannelUpdate(
                 CHANNEL_ID, 1L, 800L, 200L,
                 new byte[32], new byte[64], System.currentTimeMillis()
         );
-        assertFalse("错误长度的签名不应视为已完全签名", wrongSize.isFullySigned());
-        assertFalse("长度不对的 signature1 不应存在", wrongSize.hasSignature1());
-        assertTrue("长度正确的 signature2 应存在", wrongSize.hasSignature2());
+        assertFalse(wrongSize.isFullySigned(), "错误长度的签名不应视为已完全签名");
+        assertFalse(wrongSize.hasSignature1(), "长度不对的 signature1 不应存在");
+        assertTrue(wrongSize.hasSignature2(), "长度正确的 signature2 应存在");
     }
 
     /**
@@ -269,24 +269,24 @@ public class ChannelUpdateTest {
 
         // 序列化为 JSON
         String json = original.toJson();
-        assertNotNull("JSON 不应为 null", json);
-        assertTrue("JSON 应包含 channelId", json.contains(CHANNEL_ID));
+        assertNotNull(json, "JSON 不应为 null");
+        assertTrue(json.contains(CHANNEL_ID), "JSON 应包含 channelId");
 
         // 反序列化
         ChannelUpdate restored = ChannelUpdate.fromJson(json);
 
         // 验证往返后字段一致
-        assertEquals("channelId 往返一致", original.getChannelId(), restored.getChannelId());
-        assertEquals("nonce 往返一致", original.getNonce(), restored.getNonce());
-        assertEquals("balance1 往返一致", original.getBalance1(), restored.getBalance1());
-        assertEquals("balance2 往返一致", original.getBalance2(), restored.getBalance2());
-        assertEquals("timestamp 往返一致", original.getTimestamp(), restored.getTimestamp());
+        assertEquals(original.getChannelId(), restored.getChannelId(), "channelId 往返一致");
+        assertEquals(original.getNonce(), restored.getNonce(), "nonce 往返一致");
+        assertEquals(original.getBalance1(), restored.getBalance1(), "balance1 往返一致");
+        assertEquals(original.getBalance2(), restored.getBalance2(), "balance2 往返一致");
+        assertEquals(original.getTimestamp(), restored.getTimestamp(), "timestamp 往返一致");
 
         // 验证签名往返一致
-        assertArrayEquals("signature1 往返一致", original.getSignature1(), restored.getSignature1());
-        assertArrayEquals("signature2 往返一致", original.getSignature2(), restored.getSignature2());
+        assertArrayEquals(original.getSignature1(), restored.getSignature1(), "signature1 往返一致");
+        assertArrayEquals(original.getSignature2(), restored.getSignature2(), "signature2 往返一致");
 
         // 验证往返后签名状态正确
-        assertTrue("往返后应仍为已完全签名", restored.isFullySigned());
+        assertTrue(restored.isFullySigned(), "往返后应仍为已完全签名");
     }
 }

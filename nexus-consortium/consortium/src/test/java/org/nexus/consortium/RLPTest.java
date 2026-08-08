@@ -1,7 +1,7 @@
 package org.nexus.consortium;
 
 import org.bouncycastle.util.encoders.Hex;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.nexus.consortium.util.ByteUtil;
 import org.nexus.consortium.util.RLPElement;
 import org.nexus.consortium.util.RLPList;

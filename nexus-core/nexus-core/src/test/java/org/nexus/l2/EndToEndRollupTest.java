@@ -1,7 +1,7 @@
 package org.nexus.l2;
 
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.nexus.l2.challenge.ChallengeConflictResolver;
 import org.nexus.l2.challenge.ChallengePeriodPolicy;
@@ -14,7 +14,7 @@ import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
 
-import static org.junit.Assert.*;
+import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -43,7 +43,7 @@ public class EndToEndRollupTest {
     private OptimisticRollup rollup;
     private L2BridgeContract bridge;
 
-    @Before
+    @BeforeEach
     public void setUp() {
         stateRootManager = new StateRootManager();
         verifier = new FraudProofVerifier(Duration.ofDays(7));
@@ -87,7 +87,7 @@ public class EndToEndRollupTest {
 
         // 2. 等待挑战窗口过期
         Thread.sleep(20);
-        assertTrue("挑战窗口应已过期", shortVerifier.isChallengeWindowOver(batchId));
+        assertTrue(shortVerifier.isChallengeWindowOver(batchId), "挑战窗口应已过期");
 
         // 3. finalizeBatch → 标记 VERIFIED + 触发桥合约
         assertTrue(shortVerifier.finalizeBatch(batchId));
@@ -175,7 +175,7 @@ public class EndToEndRollupTest {
 
         // 4. 挑战失败
         boolean result = rollup.challengeBatch(batchId, proof);
-        assertFalse("无效证明的挑战应失败", result);
+        assertFalse(result, "无效证明的挑战应失败");
 
         // 5. 挑战者 bond 被罚没
         assertEquals(ChallengeBond.Status.SLASHED,
@@ -225,21 +225,20 @@ public class EndToEndRollupTest {
         verifier.stakeChallengeBond("carol", new BigDecimal("500"));
 
         // 3. 挑战者 A 有效证明 → FIRST_VALID
-        assertTrue("A 的有效挑战应被接受", rollup.challengeBatch(batchId, buildValidFraudProof(batchId, 0, "alice")));
+        assertTrue(rollup.challengeBatch(batchId, buildValidFraudProof(batchId, 0, "alice")), "A 的有效挑战应被接受");
         assertEquals(ChallengeBond.Status.RELEASED, verifier.getChallengeBond("alice").getStatus());
         assertEquals(RollupBatchStatus.CHALLENGED, verifier.getBatch(batchId).getStatus());
-        assertEquals("alice", resolver.getFirstValidChallenger(batchId));
+        assertEquals(resolver.getFirstValidChallenger(batchId), "alice");
         assertTrue(resolver.hasValidProof(batchId));
 
         // 4. 挑战者 B 有效证明 → DUPLICATE_AFTER_VALID → bond 退还（不罚没）
-        assertTrue("B 的重复有效挑战应被接受（bond 退还）",
-                rollup.challengeBatch(batchId, buildValidFraudProof(batchId, 0, "bob")));
+        assertTrue(rollup.challengeBatch(batchId, buildValidFraudProof(batchId, 0, "bob")), "B 的重复有效挑战应被接受（bond 退还）");
         assertEquals(ChallengeBond.Status.RELEASED, verifier.getChallengeBond("bob").getStatus());
 
         // 5. 挑战者 C 无效证明 → INVALID_PROOF → bond 罚没
         FraudProof proofC = buildValidFraudProof(batchId, 0, "carol");
         proofC.setPrevRoot("wrongRoot"); // Merkle 验证失败 → proof invalid
-        assertFalse("C 的无效挑战应被拒绝", rollup.challengeBatch(batchId, proofC));
+        assertFalse(rollup.challengeBatch(batchId, proofC), "C 的无效挑战应被拒绝");
         assertEquals(ChallengeBond.Status.SLASHED, verifier.getChallengeBond("carol").getStatus());
 
         // 6. 提交者只被罚没一次（仅在 FIRST_VALID 时触发，DUPLICATE_AFTER_VALID 不重复 slash）
@@ -248,7 +247,7 @@ public class EndToEndRollupTest {
 
         // 7. 验证冲突解决器记录的挑战者顺序
         assertEquals(3, resolver.getAllChallengers(batchId).size());
-        assertEquals("alice", resolver.getFirstValidChallenger(batchId));
+        assertEquals(resolver.getFirstValidChallenger(batchId), "alice");
     }
 
     // ==================== 场景 5: 动态挑战期（高价值批次延长） ====================
@@ -286,16 +285,14 @@ public class EndToEndRollupTest {
         // 3. 验证挑战期计算
         Duration normalPeriod = policy.computeChallengePeriod(normalBatchId, new BigDecimal("100"));
         Duration highValuePeriod = policy.computeChallengePeriod(highValueBatchId, new BigDecimal("10000"));
-        assertEquals("普通批次挑战期应为基础窗口", baseWindow, normalPeriod);
-        assertEquals("高价值批次挑战期应为基础窗口+延长",
-                baseWindow.plus(extensionPerTier), highValuePeriod);
+        assertEquals(baseWindow, normalPeriod, "普通批次挑战期应为基础窗口");
+        assertEquals(baseWindow.plus(extensionPerTier), highValuePeriod, "高价值批次挑战期应为基础窗口+延长");
 
         // 4. 等待 150ms：普通窗口(100ms)已过期，高价值窗口(300ms)仍开放
         Thread.sleep(150);
 
-        assertTrue("普通批次挑战窗口应已过期", verifier.isChallengeWindowOver(normalBatchId));
-        assertFalse("高价值批次挑战窗口应仍开放（动态延长生效）",
-                verifier.isChallengeWindowOver(highValueBatchId));
+        assertTrue(verifier.isChallengeWindowOver(normalBatchId), "普通批次挑战窗口应已过期");
+        assertFalse(verifier.isChallengeWindowOver(highValueBatchId), "高价值批次挑战窗口应仍开放（动态延长生效）");
     }
 
     // ==================== 辅助方法（参考 FraudProofVerifierTest） ====================
@@ -319,9 +316,9 @@ public class EndToEndRollupTest {
      */
     private FraudProof buildValidFraudProof(long batchId, int txIndex, String challenger) {
         StateRootManager.BatchContext ctx = stateRootManager.getBatchContext(batchId);
-        assertNotNull("BatchContext must exist for batch " + batchId, ctx);
+        assertNotNull(ctx, "BatchContext must exist for batch " + batchId);
         MerkleProof mp = stateRootManager.getMerkleProof(batchId, txIndex);
-        assertNotNull("Merkle proof must exist for batch " + batchId + " txIndex " + txIndex, mp);
+        assertNotNull(mp, "Merkle proof must exist for batch " + batchId + " txIndex " + txIndex);
 
         FraudProof proof = new FraudProof();
         proof.setBatchId(batchId);

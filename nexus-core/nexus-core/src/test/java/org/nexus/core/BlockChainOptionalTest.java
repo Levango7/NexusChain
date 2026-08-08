@@ -1,12 +1,12 @@
 package org.nexus.core;
 
-import org.junit.Before;
-import org.junit.Test;
-import org.junit.runner.RunWith;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationContext;
 import org.springframework.test.context.ContextConfiguration;
-import org.springframework.test.context.junit4.SpringRunner;
+import org.springframework.test.context.junit.jupiter.SpringExtension;
 import org.nexus.config.TestConfig;
 import org.nexus.core.account.Transaction;
 import org.nexus.crypto.HashUtil;
@@ -14,7 +14,7 @@ import org.nexus.util.Arrays;
 
 import java.util.*;
 
-@RunWith(SpringRunner.class)
+@ExtendWith(SpringExtension.class)
 @ContextConfiguration(classes = {TestConfig.class})
 public class BlockChainOptionalTest {
     private static final byte[] HASH_1 = HashUtil.keccak256("def".getBytes());
@@ -68,7 +68,7 @@ public class BlockChainOptionalTest {
         return blocks;
     }
 
-    @Before
+    @BeforeEach
     public void testNewBigWeightBlockFork() {
         NexusChainBlockChain bc = getChain();
         List<Block> blocks = getTestBlocks();

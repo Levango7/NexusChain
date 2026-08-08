@@ -1,11 +1,11 @@
 package org.nexus.consortium;
 
-import org.junit.Before;
-import org.junit.Test;
-import org.junit.runner.RunWith;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.test.context.junit4.SpringRunner;
+import org.springframework.test.context.junit.jupiter.SpringExtension;
 import org.nexus.common.Block;
 import org.nexus.common.Header;
 import org.nexus.consortium.service.BlockRepositoryService;
@@ -18,7 +18,7 @@ import java.util.Optional;
 import static org.nexus.consortium.TestUtils.BYTES;
 import static org.nexus.consortium.TestUtils.getBlock;
 
-@RunWith(SpringRunner.class)
+@ExtendWith(SpringExtension.class)
 @SpringBootTest(classes = Start.class)
 // use SPRING_CONFIG_LOCATION environment to locate spring config
 // for example: SPRING_CONFIG_LOCATION=classpath:\application.yml,some-path\custom-config.yml
@@ -46,7 +46,7 @@ public class BlockRepositoryTests {
         assertBody(block);
     }
 
-    @Before
+    @BeforeEach
     public void saveBlocks() {
         if (blockStore.getBlockByHeight(0).isPresent()){
             return;

@@ -2,9 +2,9 @@ package org.nexus.core.payment;
 
 import org.nexus.core.account.Transaction;
 import org.nexus.core.payment.StableCoinPosition.State;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
-import static org.junit.Assert.*;
+import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * 稳定币仓位管理测试。
@@ -228,35 +228,41 @@ public class StableCoinPositionTest {
     /**
      * 测试 mint() 抵押率不足时抛异常
      */
-    @Test(expected = IllegalStateException.class)
+    @Test
     public void testMintWithInsufficientCollateral() {
-        // 抵押 1000000，铸造 1000000，抵押率 = 1.0 < 1.5
-        StableCoinPosition position = new StableCoinPosition();
-        position.setOwner("nexus-owner-001");
-
-        mint(position, 1000000L, 1000000L);
+        assertThrows(IllegalStateException.class, () -> {
+            // 抵押 1000000，铸造 1000000，抵押率 = 1.0 < 1.5
+            StableCoinPosition position = new StableCoinPosition();
+            position.setOwner("nexus-owner-001");
+    
+            mint(position, 1000000L, 1000000L);
+        });
     }
 
     /**
      * 测试 mint() 铸造金额为零时抛异常
      */
-    @Test(expected = IllegalStateException.class)
+    @Test
     public void testMintZeroAmount() {
-        StableCoinPosition position = new StableCoinPosition();
-        position.setOwner("nexus-owner-001");
-
-        mint(position, 1000000L, 0L);
+        assertThrows(IllegalStateException.class, () -> {
+            StableCoinPosition position = new StableCoinPosition();
+            position.setOwner("nexus-owner-001");
+    
+            mint(position, 1000000L, 0L);
+        });
     }
 
     /**
      * 测试 mint() 铸造金额为负时抛异常
      */
-    @Test(expected = IllegalStateException.class)
+    @Test
     public void testMintNegativeAmount() {
-        StableCoinPosition position = new StableCoinPosition();
-        position.setOwner("nexus-owner-001");
-
-        mint(position, 1000000L, -500L);
+        assertThrows(IllegalStateException.class, () -> {
+            StableCoinPosition position = new StableCoinPosition();
+            position.setOwner("nexus-owner-001");
+    
+            mint(position, 1000000L, -500L);
+        });
     }
 
     // ==================== redeem 赎回逻辑测试 ====================
@@ -300,28 +306,34 @@ public class StableCoinPositionTest {
     /**
      * 测试 redeem() 赎回金额超过已铸造金额时抛异常
      */
-    @Test(expected = IllegalStateException.class)
+    @Test
     public void testRedeemExceedsMinted() {
-        StableCoinPosition position = createPosition(3000000L, 1000000L);
-        redeem(position, 2000000L);
+        assertThrows(IllegalStateException.class, () -> {
+            StableCoinPosition position = createPosition(3000000L, 1000000L);
+            redeem(position, 2000000L);
+        });
     }
 
     /**
      * 测试 redeem() 赎回金额为零时抛异常
      */
-    @Test(expected = IllegalStateException.class)
+    @Test
     public void testRedeemZero() {
-        StableCoinPosition position = createPosition(3000000L, 1000000L);
-        redeem(position, 0L);
+        assertThrows(IllegalStateException.class, () -> {
+            StableCoinPosition position = createPosition(3000000L, 1000000L);
+            redeem(position, 0L);
+        });
     }
 
     /**
      * 测试 redeem() 赎回金额为负时抛异常
      */
-    @Test(expected = IllegalStateException.class)
+    @Test
     public void testRedeemNegative() {
-        StableCoinPosition position = createPosition(3000000L, 1000000L);
-        redeem(position, -100L);
+        assertThrows(IllegalStateException.class, () -> {
+            StableCoinPosition position = createPosition(3000000L, 1000000L);
+            redeem(position, -100L);
+        });
     }
 
     // ==================== checkHealth 状态分级测试 ====================
@@ -418,21 +430,25 @@ public class StableCoinPositionTest {
     /**
      * 测试 liquidate() 对健康仓位抛异常
      */
-    @Test(expected = IllegalStateException.class)
+    @Test
     public void testLiquidateHealthyPosition() {
-        StableCoinPosition position = createPosition(3000000L, 1000000L);
-        assertEquals(State.HEALTHY, position.getState());
-        liquidate(position);
+        assertThrows(IllegalStateException.class, () -> {
+            StableCoinPosition position = createPosition(3000000L, 1000000L);
+            assertEquals(State.HEALTHY, position.getState());
+            liquidate(position);
+        });
     }
 
     /**
      * 测试 liquidate() 对警告仓位抛异常
      */
-    @Test(expected = IllegalStateException.class)
+    @Test
     public void testLiquidateWarnPosition() {
-        StableCoinPosition position = createPosition(1200000L, 1000000L);
-        assertEquals(State.WARNING, position.getState());
-        liquidate(position);
+        assertThrows(IllegalStateException.class, () -> {
+            StableCoinPosition position = createPosition(1200000L, 1000000L);
+            assertEquals(State.WARNING, position.getState());
+            liquidate(position);
+        });
     }
 
     // ==================== isUnderwater 判断测试 ====================
@@ -486,7 +502,7 @@ public class StableCoinPositionTest {
                 "pos-002", "nexus-owner-002", 2000000L, 1000000L, 200, 1818181L, State.HEALTHY, 0L, 0L
         );
 
-        assertEquals("nexus-owner-002", position.getOwner());
+        assertEquals(position.getOwner(), "nexus-owner-002");
         assertEquals(2000000L, position.getCollateralAmount());
         assertEquals(1000000L, position.getMintedAmount());
         assertEquals(2.0, position.getCollateralRatio() / 100.0, 0.001);
@@ -508,7 +524,7 @@ public class StableCoinPositionTest {
         position.setLiquidationPrice(2272727L);
         position.setState(State.HEALTHY);
 
-        assertEquals("nexus-owner-003", position.getOwner());
+        assertEquals(position.getOwner(), "nexus-owner-003");
         assertEquals(5000000L, position.getCollateralAmount());
         assertEquals(2000000L, position.getMintedAmount());
         assertEquals(2.5, position.getCollateralRatio() / 100.0, 0.001);
@@ -541,13 +557,13 @@ public class StableCoinPositionTest {
 
         tx.type = Transaction.Type.MINT_STABLECOIN.ordinal();
         assertEquals(20, tx.type);
-        assertEquals("MINT_STABLECOIN", tx.getTypeName());
+        assertEquals(tx.getTypeName(), "MINT_STABLECOIN");
         assertTrue(tx.isStableCoinTransaction());
         assertTrue(tx.isPaymentExtensionType());
 
         tx.type = Transaction.Type.REDEEM_STABLECOIN.ordinal();
         assertEquals(21, tx.type);
-        assertEquals("REDEEM_STABLECOIN", tx.getTypeName());
+        assertEquals(tx.getTypeName(), "REDEEM_STABLECOIN");
         assertTrue(tx.isStableCoinTransaction());
         assertFalse(tx.isChannelTransaction());
         assertFalse(tx.isBridgeTransaction());

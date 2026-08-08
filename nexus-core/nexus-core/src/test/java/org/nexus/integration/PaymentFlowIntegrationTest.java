@@ -8,12 +8,12 @@ import org.nexus.core.account.Transaction;
 import org.nexus.core.payment.PaymentChannel;
 import org.nexus.core.validate.BasicRule;
 import org.nexus.core.validate.Result;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
 
-import static org.junit.Assert.*;
+import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * 端到端支付流程集成测试。
@@ -71,7 +71,7 @@ public class PaymentFlowIntegrationTest {
     /**
      * 测试初始化：手动构造 BasicRule、TransactionPool、PaymentTransactionProcessor。
      */
-    @Before
+    @BeforeEach
     public void setUp() {
         // 手动构造 BasicRule，不通过 Spring 注入
         basicRule = new BasicRule(new Block(), "test");
@@ -103,13 +103,13 @@ public class PaymentFlowIntegrationTest {
 
         // BasicRule 验证通过
         Result result = basicRule.validateTransaction(tx);
-        assertTrue("CHANNEL_OPEN 验证应通过: " + (result.getMessage() != null ? result.getMessage() : ""),
-                result.isSuccess());
+        assertTrue(result.isSuccess(),
+                "CHANNEL_OPEN 验证应通过: " + (result.getMessage() != null ? result.getMessage() : ""));
 
         // 入池
         txPool.add(tx);
         // 验证 txPool.has(txHash)
-        assertTrue("交易池应包含该交易", txPool.has(tx.getHashHexString()));
+        assertTrue(txPool.has(tx.getHashHexString()), "交易池应包含该交易");
     }
 
     /**
@@ -132,12 +132,12 @@ public class PaymentFlowIntegrationTest {
 
         // BasicRule 验证通过
         Result result = basicRule.validateTransaction(tx);
-        assertTrue("CHANNEL_CLOSE 验证应通过: " + (result.getMessage() != null ? result.getMessage() : ""),
-                result.isSuccess());
+        assertTrue(result.isSuccess(),
+                "CHANNEL_CLOSE 验证应通过: " + (result.getMessage() != null ? result.getMessage() : ""));
 
         // 入池
         txPool.add(tx);
-        assertTrue("交易池应包含该交易", txPool.has(tx.getHashHexString()));
+        assertTrue(txPool.has(tx.getHashHexString()), "交易池应包含该交易");
     }
 
     /**
@@ -160,12 +160,12 @@ public class PaymentFlowIntegrationTest {
 
         // BasicRule 验证通过
         Result result = basicRule.validateTransaction(tx);
-        assertTrue("BATCH_TRANSFER 验证应通过: " + (result.getMessage() != null ? result.getMessage() : ""),
-                result.isSuccess());
+        assertTrue(result.isSuccess(),
+                "BATCH_TRANSFER 验证应通过: " + (result.getMessage() != null ? result.getMessage() : ""));
 
         // 入池
         txPool.add(tx);
-        assertTrue("交易池应包含该交易", txPool.has(tx.getHashHexString()));
+        assertTrue(txPool.has(tx.getHashHexString()), "交易池应包含该交易");
     }
 
     /**
@@ -188,12 +188,12 @@ public class PaymentFlowIntegrationTest {
 
         // BasicRule 验证通过
         Result result = basicRule.validateTransaction(tx);
-        assertTrue("MINT_STABLECOIN 验证应通过: " + (result.getMessage() != null ? result.getMessage() : ""),
-                result.isSuccess());
+        assertTrue(result.isSuccess(),
+                "MINT_STABLECOIN 验证应通过: " + (result.getMessage() != null ? result.getMessage() : ""));
 
         // 入池
         txPool.add(tx);
-        assertTrue("交易池应包含该交易", txPool.has(tx.getHashHexString()));
+        assertTrue(txPool.has(tx.getHashHexString()), "交易池应包含该交易");
     }
 
     /**
@@ -216,12 +216,12 @@ public class PaymentFlowIntegrationTest {
 
         // BasicRule 验证通过
         Result result = basicRule.validateTransaction(tx);
-        assertTrue("BRIDGE_LOCK 验证应通过: " + (result.getMessage() != null ? result.getMessage() : ""),
-                result.isSuccess());
+        assertTrue(result.isSuccess(),
+                "BRIDGE_LOCK 验证应通过: " + (result.getMessage() != null ? result.getMessage() : ""));
 
         // 入池
         txPool.add(tx);
-        assertTrue("交易池应包含该交易", txPool.has(tx.getHashHexString()));
+        assertTrue(txPool.has(tx.getHashHexString()), "交易池应包含该交易");
     }
 
     // ==================== 验证拒绝测试 ====================
@@ -246,7 +246,7 @@ public class PaymentFlowIntegrationTest {
 
         // BasicRule 验证应失败
         Result result = basicRule.validateTransaction(tx);
-        assertFalse("amount=0 的 CHANNEL_OPEN 验证应失败", result.isSuccess());
+        assertFalse(result.isSuccess(), "amount=0 的 CHANNEL_OPEN 验证应失败");
     }
 
     /**
@@ -269,7 +269,7 @@ public class PaymentFlowIntegrationTest {
 
         // BasicRule 验证应失败
         Result result = basicRule.validateTransaction(tx);
-        assertFalse("无 payload 的 BATCH_TRANSFER 验证应失败", result.isSuccess());
+        assertFalse(result.isSuccess(), "无 payload 的 BATCH_TRANSFER 验证应失败");
     }
 
     // ==================== 交易池按类型查询测试 ====================
@@ -298,20 +298,24 @@ public class PaymentFlowIntegrationTest {
 
         // 全部入池
         txPool.add(channelOpenTx, batchTransferTx, bridgeLockTx);
-        assertEquals("交易池应有 3 笔交易", 3, txPool.size());
+        assertEquals(3, txPool.size(), "交易池应有 3 笔交易");
 
         // 按类型查询 CHANNEL_OPEN
-        assertEquals("CHANNEL_OPEN 类型交易应有 1 笔", 1,
-                txPool.getTransactionsByType(Transaction.Type.CHANNEL_OPEN.ordinal()).size());
+        assertEquals(1,
+                txPool.getTransactionsByType(Transaction.Type.CHANNEL_OPEN.ordinal()).size(),
+                "CHANNEL_OPEN 类型交易应有 1 笔");
         // 按类型查询 BATCH_TRANSFER
-        assertEquals("BATCH_TRANSFER 类型交易应有 1 笔", 1,
-                txPool.getTransactionsByType(Transaction.Type.BATCH_TRANSFER.ordinal()).size());
+        assertEquals(1,
+                txPool.getTransactionsByType(Transaction.Type.BATCH_TRANSFER.ordinal()).size(),
+                "BATCH_TRANSFER 类型交易应有 1 笔");
         // 按类型查询 BRIDGE_LOCK
-        assertEquals("BRIDGE_LOCK 类型交易应有 1 笔", 1,
-                txPool.getTransactionsByType(Transaction.Type.BRIDGE_LOCK.ordinal()).size());
+        assertEquals(1,
+                txPool.getTransactionsByType(Transaction.Type.BRIDGE_LOCK.ordinal()).size(),
+                "BRIDGE_LOCK 类型交易应有 1 笔");
         // 按类型查询不存在的类型（TRANSFER）
-        assertEquals("TRANSFER 类型交易应有 0 笔", 0,
-                txPool.getTransactionsByType(Transaction.Type.TRANSFER.ordinal()).size());
+        assertEquals(0,
+                txPool.getTransactionsByType(Transaction.Type.TRANSFER.ordinal()).size(),
+                "TRANSFER 类型交易应有 0 笔");
     }
 
     // ==================== PaymentTransactionProcessor 测试 ====================
@@ -342,13 +346,13 @@ public class PaymentFlowIntegrationTest {
         // 验证创建了 PaymentChannel 状态记录
         String channelId = tx.getHashHexString();
         PaymentChannel channel = processor.getChannel(channelId);
-        assertNotNull("应创建 PaymentChannel 状态记录", channel);
+        assertNotNull(channel, "应创建 PaymentChannel 状态记录");
         // 验证通道状态为 OPEN
-        assertEquals("通道状态应为 OPEN", PaymentChannel.State.OPEN, channel.getState());
+        assertEquals(PaymentChannel.State.OPEN, channel.getState(), "通道状态应为 OPEN");
         // 验证通道余额
-        assertEquals("通道余额应为交易金额", amount, channel.getBalance1());
+        assertEquals(amount, channel.getBalance1(), "通道余额应为交易金额");
         // 验证通道 nonce 为 0
-        assertEquals("通道 nonce 应为 0", 0L, channel.getNonce());
+        assertEquals(0L, channel.getNonce(), "通道 nonce 应为 0");
     }
 
     /**
@@ -379,10 +383,10 @@ public class PaymentFlowIntegrationTest {
         // 验证通道已创建且状态为 OPEN
         String channelId = openTx.getHashHexString();
         PaymentChannel channel = processor.getChannel(channelId);
-        assertNotNull("CHANNEL_OPEN 后应创建通道记录", channel);
-        assertEquals("通道状态应为 OPEN", PaymentChannel.State.OPEN, channel.getState());
-        assertEquals("通道余额1应为交易金额", openAmount, channel.getBalance1());
-        assertEquals("通道余额2应为 0", 0L, channel.getBalance2());
+        assertNotNull(channel, "CHANNEL_OPEN 后应创建通道记录");
+        assertEquals(PaymentChannel.State.OPEN, channel.getState(), "通道状态应为 OPEN");
+        assertEquals(openAmount, channel.getBalance1(), "通道余额1应为交易金额");
+        assertEquals(0L, channel.getBalance2(), "通道余额2应为 0");
 
         // === 步骤 2：CHANNEL_CLOSE → processTransaction ===
 
@@ -404,9 +408,9 @@ public class PaymentFlowIntegrationTest {
 
         // 验证原通道记录仍存在（CHANNEL_CLOSE 使用自身哈希查找，不会找到原通道）
         PaymentChannel originalChannel = processor.getChannel(channelId);
-        assertNotNull("原通道记录应仍存在", originalChannel);
+        assertNotNull(originalChannel, "原通道记录应仍存在");
         // 原通道状态应仍为 OPEN（CHANNEL_CLOSE 未找到对应通道）
-        assertEquals("原通道状态应仍为 OPEN", PaymentChannel.State.OPEN, originalChannel.getState());
+        assertEquals(PaymentChannel.State.OPEN, originalChannel.getState(), "原通道状态应仍为 OPEN");
 
         // 验证状态变化：从不存在到 OPEN 是主要的状态变化
         // CHANNEL_CLOSE 交易本身被处理器接收并处理，未抛异常

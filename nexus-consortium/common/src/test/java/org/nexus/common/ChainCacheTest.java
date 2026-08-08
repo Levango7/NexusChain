@@ -1,14 +1,12 @@
 package org.nexus.common;
 
 import org.apache.commons.codec.binary.Hex;
-import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.junit.runners.JUnit4;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 
 import java.util.*;
 import java.util.stream.Collectors;
 
-@RunWith(JUnit4.class)
 // set env WRAPPER=true to test wrapper method
 public class ChainCacheTest {
 

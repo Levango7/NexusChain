@@ -7,13 +7,13 @@ import org.nexus.crypto.HashUtil;
 import org.nexus.crypto.ed25519.Ed25519;
 import org.nexus.crypto.ed25519.Ed25519KeyPair;
 import org.nexus.crypto.ed25519.Ed25519PrivateKey;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 /**
  * 通道管理器完整流程测试。
@@ -88,24 +88,24 @@ public class ChannelManagerTest {
         );
 
         // 验证 channelId 非空
-        assertNotNull("channelId 不应为 null", channel.getChannelId());
-        assertTrue("channelId 应非空字符串", !channel.getChannelId().isEmpty());
+        assertNotNull(channel.getChannelId(), "channelId 不应为 null");
+        assertTrue(!channel.getChannelId().isEmpty(), "channelId 应非空字符串");
 
         // 验证通道状态为 OPEN
-        assertEquals("通道状态应为 OPEN", PaymentChannel.State.OPEN, channel.getState());
+        assertEquals(PaymentChannel.State.OPEN, channel.getState(), "通道状态应为 OPEN");
 
         // 验证通道参数
-        assertEquals("参与方一地址应一致", PARTICIPANT_1, channel.getParticipant1());
-        assertEquals("参与方二地址应一致", PARTICIPANT_2, channel.getParticipant2());
-        assertEquals("参与方一余额应等于初始注资", INITIAL_AMOUNT, channel.getBalance1());
-        assertEquals("参与方二余额应为 0", 0L, channel.getBalance2());
-        assertEquals("初始 nonce 应为 0", 0L, channel.getNonce());
-        assertEquals("lockTime 应一致", LOCK_TIME, channel.getLockTime());
+        assertEquals(PARTICIPANT_1, channel.getParticipant1(), "参与方一地址应一致");
+        assertEquals(PARTICIPANT_2, channel.getParticipant2(), "参与方二地址应一致");
+        assertEquals(INITIAL_AMOUNT, channel.getBalance1(), "参与方一余额应等于初始注资");
+        assertEquals(0L, channel.getBalance2(), "参与方二余额应为 0");
+        assertEquals(0L, channel.getNonce(), "初始 nonce 应为 0");
+        assertEquals(LOCK_TIME, channel.getLockTime(), "lockTime 应一致");
 
         // 验证通道已存储在管理器中
         PaymentChannel stored = manager.getChannel(channel.getChannelId());
-        assertNotNull("管理器应能查到该通道", stored);
-        assertEquals("存储的通道应与返回的一致", channel.getChannelId(), stored.getChannelId());
+        assertNotNull(stored, "管理器应能查到该通道");
+        assertEquals(channel.getChannelId(), stored.getChannelId(), "存储的通道应与返回的一致");
     }
 
     /**
@@ -131,22 +131,22 @@ public class ChannelManagerTest {
         );
 
         // 验证 update 基本信息
-        assertNotNull("返回的 update 不应为 null", update);
-        assertEquals("nonce 应为 1", 1L, update.getNonce());
-        assertEquals("balance1 应减少", INITIAL_AMOUNT - paymentAmount, update.getBalance1());
-        assertEquals("balance2 应增加", 0L + paymentAmount, update.getBalance2());
+        assertNotNull(update, "返回的 update 不应为 null");
+        assertEquals(1L, update.getNonce(), "nonce 应为 1");
+        assertEquals(INITIAL_AMOUNT - paymentAmount, update.getBalance1(), "balance1 应减少");
+        assertEquals(0L + paymentAmount, update.getBalance2(), "balance2 应增加");
 
         // 验证发送方签名存在
-        assertTrue("发送方签名应存在", update.hasSignature1());
+        assertTrue(update.hasSignature1(), "发送方签名应存在");
         // 接收方尚未签名
-        assertFalse("接收方签名应不存在", update.hasSignature2());
-        assertFalse("不应视为已完全签名", update.isFullySigned());
+        assertFalse(update.hasSignature2(), "接收方签名应不存在");
+        assertFalse(update.isFullySigned(), "不应视为已完全签名");
 
         // 验证通道余额尚未更新（initiatePayment 不修改通道余额）
         PaymentChannel currentChannel = manager.getChannel(channel.getChannelId());
-        assertEquals("通道余额1 不应改变", INITIAL_AMOUNT, currentChannel.getBalance1());
-        assertEquals("通道余额2 不应改变", 0L, currentChannel.getBalance2());
-        assertEquals("通道 nonce 不应改变", 0L, currentChannel.getNonce());
+        assertEquals(INITIAL_AMOUNT, currentChannel.getBalance1(), "通道余额1 不应改变");
+        assertEquals(0L, currentChannel.getBalance2(), "通道余额2 不应改变");
+        assertEquals(0L, currentChannel.getNonce(), "通道 nonce 不应改变");
     }
 
     /**
@@ -179,15 +179,15 @@ public class ChannelManagerTest {
         );
 
         // 验证双方签名都存在
-        assertTrue("发送方签名应存在", confirmedUpdate.hasSignature1());
-        assertTrue("接收方签名应存在", confirmedUpdate.hasSignature2());
-        assertTrue("应视为已完全签名", confirmedUpdate.isFullySigned());
+        assertTrue(confirmedUpdate.hasSignature1(), "发送方签名应存在");
+        assertTrue(confirmedUpdate.hasSignature2(), "接收方签名应存在");
+        assertTrue(confirmedUpdate.isFullySigned(), "应视为已完全签名");
 
         // 验证通道余额已更新
         PaymentChannel updatedChannel = manager.getChannel(channel.getChannelId());
-        assertEquals("通道余额1 应更新", INITIAL_AMOUNT - paymentAmount, updatedChannel.getBalance1());
-        assertEquals("通道余额2 应更新", paymentAmount, updatedChannel.getBalance2());
-        assertEquals("通道 nonce 应递增到 1", 1L, updatedChannel.getNonce());
+        assertEquals(INITIAL_AMOUNT - paymentAmount, updatedChannel.getBalance1(), "通道余额1 应更新");
+        assertEquals(paymentAmount, updatedChannel.getBalance2(), "通道余额2 应更新");
+        assertEquals(1L, updatedChannel.getNonce(), "通道 nonce 应递增到 1");
     }
 
     /**
@@ -220,19 +220,19 @@ public class ChannelManagerTest {
         );
 
         // 验证 nonce 递增
-        assertEquals("返回的 update nonce 应为 1", expectedNonce, result.getNonce());
+        assertEquals(expectedNonce, result.getNonce(), "返回的 update nonce 应为 1");
 
         // 验证通道状态已更新
         PaymentChannel updatedChannel = manager.getChannel(channel.getChannelId());
-        assertEquals("通道 nonce 应递增到 1", expectedNonce, updatedChannel.getNonce());
-        assertEquals("通道余额1 应更新", newBalance1, updatedChannel.getBalance1());
-        assertEquals("通道余额2 应更新", newBalance2, updatedChannel.getBalance2());
-        assertEquals("余额守恒：总额不变", INITIAL_AMOUNT, updatedChannel.getTotalBalance());
+        assertEquals(expectedNonce, updatedChannel.getNonce(), "通道 nonce 应递增到 1");
+        assertEquals(newBalance1, updatedChannel.getBalance1(), "通道余额1 应更新");
+        assertEquals(newBalance2, updatedChannel.getBalance2(), "通道余额2 应更新");
+        assertEquals(INITIAL_AMOUNT, updatedChannel.getTotalBalance(), "余额守恒：总额不变");
 
         // 验证最新链下状态已存储
         ChannelUpdate latest = manager.getLatestUpdate(channel.getChannelId());
-        assertNotNull("应有最新 update 记录", latest);
-        assertEquals("最新 update nonce 应为 1", expectedNonce, latest.getNonce());
+        assertNotNull(latest, "应有最新 update 记录");
+        assertEquals(expectedNonce, latest.getNonce(), "最新 update nonce 应为 1");
     }
 
     /**
@@ -274,7 +274,7 @@ public class ChannelManagerTest {
             fail("应拒绝 nonce 不递增的更新");
         } catch (IllegalArgumentException e) {
             // 期望抛出异常
-            assertTrue("异常消息应包含 nonce", e.getMessage().contains("Nonce"));
+            assertTrue(e.getMessage().contains("Nonce"), "异常消息应包含 nonce");
         }
     }
 
@@ -309,13 +309,13 @@ public class ChannelManagerTest {
             fail("应拒绝余额不守恒的更新");
         } catch (IllegalArgumentException e) {
             // 期望抛出异常
-            assertTrue("异常消息应包含余额守恒信息", e.getMessage().contains("Balance"));
+            assertTrue(e.getMessage().contains("Balance"), "异常消息应包含余额守恒信息");
         }
 
         // 验证通道状态未被修改
         PaymentChannel unchanged = manager.getChannel(channel.getChannelId());
-        assertEquals("通道余额1 不应改变", INITIAL_AMOUNT, unchanged.getBalance1());
-        assertEquals("通道 nonce 不应改变", 0L, unchanged.getNonce());
+        assertEquals(INITIAL_AMOUNT, unchanged.getBalance1(), "通道余额1 不应改变");
+        assertEquals(0L, unchanged.getNonce(), "通道 nonce 不应改变");
     }
 
     /**
@@ -344,13 +344,13 @@ public class ChannelManagerTest {
             fail("应拒绝无效签名的更新");
         } catch (IllegalArgumentException e) {
             // 期望抛出异常（签名验证失败）
-            assertTrue("异常消息应包含签名信息", e.getMessage().contains("Signature"));
+            assertTrue(e.getMessage().contains("Signature"), "异常消息应包含签名信息");
         }
 
         // 验证通道状态未被修改
         PaymentChannel unchanged = manager.getChannel(channel.getChannelId());
-        assertEquals("通道余额1 不应改变", INITIAL_AMOUNT, unchanged.getBalance1());
-        assertEquals("通道 nonce 不应改变", 0L, unchanged.getNonce());
+        assertEquals(INITIAL_AMOUNT, unchanged.getBalance1(), "通道余额1 不应改变");
+        assertEquals(0L, unchanged.getNonce(), "通道 nonce 不应改变");
     }
 
     /**
@@ -365,9 +365,9 @@ public class ChannelManagerTest {
         PaymentChannel channel = manager.openChannel(
                 PARTICIPANT_1, PARTICIPANT_2, INITIAL_AMOUNT, LOCK_TIME
         );
-        assertEquals("初始状态应为 OPEN", PaymentChannel.State.OPEN, channel.getState());
-        assertEquals("初始 nonce 应为 0", 0L, channel.getNonce());
-        assertEquals("初始总额应为 1000", INITIAL_AMOUNT, channel.getTotalBalance());
+        assertEquals(PaymentChannel.State.OPEN, channel.getState(), "初始状态应为 OPEN");
+        assertEquals(0L, channel.getNonce(), "初始 nonce 应为 0");
+        assertEquals(INITIAL_AMOUNT, channel.getTotalBalance(), "初始总额应为 1000");
 
         // 步骤2：发起第一次支付 100
         ChannelUpdate update1 = manager.initiatePayment(
@@ -376,18 +376,18 @@ public class ChannelManagerTest {
                 keys[0].getPublicKey().getEncoded(),
                 keys[1].getPublicKey().getEncoded()
         );
-        assertEquals("第一次支付 nonce 应为 1", 1L, update1.getNonce());
-        assertTrue("发送方签名应存在", update1.hasSignature1());
+        assertEquals(1L, update1.getNonce(), "第一次支付 nonce 应为 1");
+        assertTrue(update1.hasSignature1(), "发送方签名应存在");
 
         // 步骤3：确认第一次支付
         manager.confirmPayment(update1,
                 keys[1].getPrivateKey().getEncoded(),
                 keys[1].getPublicKey().getEncoded()
         );
-        assertEquals("确认后 nonce 应为 1", 1L, channel.getNonce());
-        assertEquals("确认后余额1 应为 900", 900L, channel.getBalance1());
-        assertEquals("确认后余额2 应为 100", 100L, channel.getBalance2());
-        assertEquals("余额守恒", INITIAL_AMOUNT, channel.getTotalBalance());
+        assertEquals(1L, channel.getNonce(), "确认后 nonce 应为 1");
+        assertEquals(900L, channel.getBalance1(), "确认后余额1 应为 900");
+        assertEquals(100L, channel.getBalance2(), "确认后余额2 应为 100");
+        assertEquals(INITIAL_AMOUNT, channel.getTotalBalance(), "余额守恒");
 
         // 步骤4：发起第二次支付 50（参与方一向参与方二）
         ChannelUpdate update2 = manager.initiatePayment(
@@ -396,19 +396,19 @@ public class ChannelManagerTest {
                 keys[0].getPublicKey().getEncoded(),
                 keys[1].getPublicKey().getEncoded()
         );
-        assertEquals("第二次支付 nonce 应为 2", 2L, update2.getNonce());
+        assertEquals(2L, update2.getNonce(), "第二次支付 nonce 应为 2");
 
         // 步骤5：确认第二次支付
         manager.confirmPayment(update2,
                 keys[1].getPrivateKey().getEncoded(),
                 keys[1].getPublicKey().getEncoded()
         );
-        assertEquals("第二次确认后 nonce 应为 2", 2L, channel.getNonce());
-        assertEquals("第二次确认后余额1 应为 850", 850L, channel.getBalance1());
-        assertEquals("第二次确认后余额2 应为 150", 150L, channel.getBalance2());
-        assertEquals("余额守恒", INITIAL_AMOUNT, channel.getTotalBalance());
+        assertEquals(2L, channel.getNonce(), "第二次确认后 nonce 应为 2");
+        assertEquals(850L, channel.getBalance1(), "第二次确认后余额1 应为 850");
+        assertEquals(150L, channel.getBalance2(), "第二次确认后余额2 应为 150");
+        assertEquals(INITIAL_AMOUNT, channel.getTotalBalance(), "余额守恒");
 
         // 验证最终状态
-        assertEquals("通道最终状态应为 OPEN", PaymentChannel.State.OPEN, channel.getState());
+        assertEquals(PaymentChannel.State.OPEN, channel.getState(), "通道最终状态应为 OPEN");
     }
 }

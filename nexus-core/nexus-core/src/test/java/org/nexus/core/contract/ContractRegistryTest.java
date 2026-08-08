@@ -2,9 +2,9 @@ package org.nexus.core.contract;
 
 import org.nexus.db.Leveldb;
 import org.nexus.encoding.JSONEncodeDecoder;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Field;
 import java.nio.file.Files;
@@ -13,7 +13,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 
-import static org.junit.Assert.*;
+import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * ContractRegistry 单元测试。
@@ -30,7 +30,7 @@ public class ContractRegistryTest {
     private Leveldb leveldb;
     private JSONEncodeDecoder codec;
 
-    @Before
+    @BeforeEach
     public void setUp() throws Exception {
         tempDir = Files.createTempDirectory("contract-test-");
         // clearCache=true 确保每个测试方法起始为空 DB
@@ -38,7 +38,7 @@ public class ContractRegistryTest {
         codec = new JSONEncodeDecoder();
     }
 
-    @After
+    @AfterEach
     public void tearDown() throws Exception {
         // 先关闭 LevelDB 释放 Windows 文件锁，再删除临时目录
         if (leveldb != null) {
@@ -76,33 +76,33 @@ public class ContractRegistryTest {
     public void testRegisterAndGetByAddress() throws Exception {
         ContractRegistry r = newRegistry(100);
         RegisteredContract rc = sample("0x1a2b", 1000L);
-        assertTrue("首次注册应返回 true", r.register(rc));
-        assertEquals("size 应为 1", 1, r.size());
+        assertTrue(r.register(rc), "首次注册应返回 true");
+        assertEquals(1, r.size(), "size 应为 1");
 
         RegisteredContract got = r.getByAddress("0x1a2b");
-        assertNotNull("已注册地址应能查到", got);
-        assertEquals("address 字段往返一致", "0x1a2b", got.getAddress());
-        assertEquals("name 字段往返一致", "Sample", got.getName());
-        assertEquals("abi 字段往返一致", "[]", got.getAbi());
-        assertEquals("codeHash 字段往返一致", "0xabc", got.getCodeHash());
-        assertEquals("wasmCode 字段往返一致", "0x0061736d", got.getWasmCode());
-        assertEquals("creator 字段往返一致", "0xcreator", got.getCreator());
-        assertEquals("creationBlock 字段往返一致", 1L, got.getCreationBlock());
-        assertEquals("createdAt 字段往返一致", 1000L, got.getCreatedAt());
-        assertEquals("chainId 字段往返一致", 1, got.getChainId());
-        assertEquals("status 字段往返一致", ContractStatus.ACTIVE, got.getStatus());
+        assertNotNull(got, "已注册地址应能查到");
+        assertEquals("0x1a2b", got.getAddress(), "address 字段往返一致");
+        assertEquals("Sample", got.getName(), "name 字段往返一致");
+        assertEquals("[]", got.getAbi(), "abi 字段往返一致");
+        assertEquals("0xabc", got.getCodeHash(), "codeHash 字段往返一致");
+        assertEquals("0x0061736d", got.getWasmCode(), "wasmCode 字段往返一致");
+        assertEquals("0xcreator", got.getCreator(), "creator 字段往返一致");
+        assertEquals(1L, got.getCreationBlock(), "creationBlock 字段往返一致");
+        assertEquals(1000L, got.getCreatedAt(), "createdAt 字段往返一致");
+        assertEquals(1, got.getChainId(), "chainId 字段往返一致");
+        assertEquals(ContractStatus.ACTIVE, got.getStatus(), "status 字段往返一致");
     }
 
     @Test
     public void testGetByAddressNotFound() throws Exception {
         ContractRegistry r = newRegistry(100);
-        assertNull("未注册地址返回 null", r.getByAddress("0xdead"));
+        assertNull(r.getByAddress("0xdead"), "未注册地址返回 null");
     }
 
     @Test
     public void testGetByAddressNull() throws Exception {
         ContractRegistry r = newRegistry(100);
-        assertNull("null 地址返回 null", r.getByAddress(null));
+        assertNull(r.getByAddress(null), "null 地址返回 null");
     }
 
     // ==================== exists ====================
@@ -110,10 +110,10 @@ public class ContractRegistryTest {
     @Test
     public void testExists() throws Exception {
         ContractRegistry r = newRegistry(100);
-        assertFalse("未注册地址 exists=false", r.exists("0x1a2b"));
+        assertFalse(r.exists("0x1a2b"), "未注册地址 exists=false");
         r.register(sample("0x1a2b", 1000L));
-        assertTrue("已注册地址 exists=true", r.exists("0x1a2b"));
-        assertFalse("null 地址 exists=false", r.exists(null));
+        assertTrue(r.exists("0x1a2b"), "已注册地址 exists=true");
+        assertFalse(r.exists(null), "null 地址 exists=false");
     }
 
     // ==================== register 重复/异常 ====================
@@ -122,23 +122,27 @@ public class ContractRegistryTest {
     public void testRegisterDuplicateReturnsFalse() throws Exception {
         ContractRegistry r = newRegistry(100);
         assertTrue(r.register(sample("0x1a2b", 1000L)));
-        assertFalse("重复注册同地址返回 false", r.register(sample("0x1a2b", 2000L)));
-        assertEquals("重复注册不增加条目", 1, r.size());
+        assertFalse(r.register(sample("0x1a2b", 2000L)), "重复注册同地址返回 false");
+        assertEquals(1, r.size(), "重复注册不增加条目");
         // 保留首次注册的记录
-        assertEquals("保留首次注册的 createdAt", 1000L, r.getByAddress("0x1a2b").getCreatedAt());
+        assertEquals(1000L, r.getByAddress("0x1a2b").getCreatedAt(), "保留首次注册的 createdAt");
     }
 
-    @Test(expected = IllegalArgumentException.class)
+    @Test
     public void testRegisterNullContractThrows() throws Exception {
-        ContractRegistry r = newRegistry(100);
-        r.register(null);
+        assertThrows(IllegalArgumentException.class, () -> {
+            ContractRegistry r = newRegistry(100);
+            r.register(null);
+        });
     }
 
-    @Test(expected = IllegalArgumentException.class)
+    @Test
     public void testRegisterNullAddressThrows() throws Exception {
-        ContractRegistry r = newRegistry(100);
-        r.register(new RegisteredContract(
-                null, "n", "[]", "0x", "0x", "0x", 1L, 1L, 1, ContractStatus.ACTIVE));
+        assertThrows(IllegalArgumentException.class, () -> {
+            ContractRegistry r = newRegistry(100);
+            r.register(new RegisteredContract(
+                    null, "n", "[]", "0x", "0x", "0x", 1L, 1L, 1, ContractStatus.ACTIVE));
+        });
     }
 
     // ==================== list 排序 + 分页 ====================
@@ -150,10 +154,10 @@ public class ContractRegistryTest {
         r.register(sample("0xa2", 300L));
         r.register(sample("0xa3", 200L));
         List<RegisteredContract> list = r.list(0, 10);
-        assertEquals("应返回 3 条", 3, list.size());
-        assertEquals("倒序：第一项 createdAt=300", 300L, list.get(0).getCreatedAt());
-        assertEquals("倒序：第二项 createdAt=200", 200L, list.get(1).getCreatedAt());
-        assertEquals("倒序：第三项 createdAt=100", 100L, list.get(2).getCreatedAt());
+        assertEquals(3, list.size(), "应返回 3 条");
+        assertEquals(300L, list.get(0).getCreatedAt(), "倒序：第一项 createdAt=300");
+        assertEquals(200L, list.get(1).getCreatedAt(), "倒序：第二项 createdAt=200");
+        assertEquals(100L, list.get(2).getCreatedAt(), "倒序：第三项 createdAt=100");
     }
 
     @Test
@@ -164,25 +168,25 @@ public class ContractRegistryTest {
         }
         // createdAt: 100,101,102,103,104 → 倒序: 104,103,102,101,100
         List<RegisteredContract> page1 = r.list(0, 2);
-        assertEquals("page1 大小 2", 2, page1.size());
-        assertEquals("page1[0] createdAt=104", 104L, page1.get(0).getCreatedAt());
-        assertEquals("page1[1] createdAt=103", 103L, page1.get(1).getCreatedAt());
+        assertEquals(2, page1.size(), "page1 大小 2");
+        assertEquals(104L, page1.get(0).getCreatedAt(), "page1[0] createdAt=104");
+        assertEquals(103L, page1.get(1).getCreatedAt(), "page1[1] createdAt=103");
 
         List<RegisteredContract> page2 = r.list(2, 2);
-        assertEquals("page2 大小 2", 2, page2.size());
-        assertEquals("page2[0] createdAt=102", 102L, page2.get(0).getCreatedAt());
-        assertEquals("page2[1] createdAt=101", 101L, page2.get(1).getCreatedAt());
+        assertEquals(2, page2.size(), "page2 大小 2");
+        assertEquals(102L, page2.get(0).getCreatedAt(), "page2[0] createdAt=102");
+        assertEquals(101L, page2.get(1).getCreatedAt(), "page2[1] createdAt=101");
 
         List<RegisteredContract> page3 = r.list(4, 2);
-        assertEquals("page3 大小 1（末页不足）", 1, page3.size());
-        assertEquals("page3[0] createdAt=100", 100L, page3.get(0).getCreatedAt());
+        assertEquals(1, page3.size(), "page3 大小 1（末页不足）");
+        assertEquals(100L, page3.get(0).getCreatedAt(), "page3[0] createdAt=100");
     }
 
     @Test
     public void testListOffsetBeyondSizeReturnsEmpty() throws Exception {
         ContractRegistry r = newRegistry(100);
         r.register(sample("0xa1", 100L));
-        assertTrue("offset 超出 size 返回空", r.list(10, 5).isEmpty());
+        assertTrue(r.list(10, 5).isEmpty(), "offset 超出 size 返回空");
     }
 
     @Test
@@ -193,7 +197,7 @@ public class ContractRegistryTest {
         }
         // limit=10 > maxListSize=3 → 夹逼到 3
         List<RegisteredContract> list = r.list(0, 10);
-        assertEquals("limit 超过 maxListSize 时夹逼到 3", 3, list.size());
+        assertEquals(3, list.size(), "limit 超过 maxListSize 时夹逼到 3");
     }
 
     @Test
@@ -202,7 +206,7 @@ public class ContractRegistryTest {
         r.register(sample("0xa1", 100L));
         // limit=0 → 夹逼到 maxListSize=100
         List<RegisteredContract> list = r.list(0, 0);
-        assertEquals("limit<=0 时夹逼到 maxListSize", 1, list.size());
+        assertEquals(1, list.size(), "limit<=0 时夹逼到 maxListSize");
     }
 
     @Test
@@ -210,13 +214,13 @@ public class ContractRegistryTest {
         ContractRegistry r = newRegistry(100);
         r.register(sample("0xa1", 100L));
         List<RegisteredContract> list = r.list(-5, 10);
-        assertEquals("offset<0 视为 0", 1, list.size());
+        assertEquals(1, list.size(), "offset<0 视为 0");
     }
 
     @Test
     public void testListEmptyRegistry() throws Exception {
         ContractRegistry r = newRegistry(100);
-        assertTrue("空注册表 list 返回空", r.list(0, 10).isEmpty());
+        assertTrue(r.list(0, 10).isEmpty(), "空注册表 list 返回空");
     }
 
     @Test
@@ -226,7 +230,7 @@ public class ContractRegistryTest {
         List<RegisteredContract> list = r.list(0, 10);
         // 修改返回的 list 不应影响 registry
         list.clear();
-        assertEquals("修改快照不影响 registry", 1, r.size());
+        assertEquals(1, r.size(), "修改快照不影响 registry");
     }
 
     // ==================== LevelDB 持久化往返（重启加载）====================
@@ -239,34 +243,33 @@ public class ContractRegistryTest {
                 "0x3c4d", "PaymentChannel",
                 "[{\"type\":\"function\",\"name\":\"open\"}]",
                 "0xdead", "0x0061736d01", "0x9f8e", 42L, 2000L, 1, ContractStatus.ACTIVE));
-        assertEquals("r1 注册 2 个", 2, r1.size());
+        assertEquals(2, r1.size(), "r1 注册 2 个");
 
         // 模拟重启：先关闭旧 Leveldb 实例（释放 Windows 文件锁），再新建复用同一目录
         leveldb.destroy();
         leveldb = new Leveldb(tempDir.toString(), false);
         ContractRegistry r2 = newRegistry(100);
 
-        assertEquals("重启后加载到 2 个", 2, r2.size());
+        assertEquals(2, r2.size(), "重启后加载到 2 个");
         RegisteredContract got1 = r2.getByAddress("0x1a2b");
-        assertNotNull("重启后 0x1a2b 命中", got1);
-        assertEquals("重启后 0x1a2b name 一致", "Sample", got1.getName());
-        assertEquals("重启后 0x1a2b createdAt 一致", 1000L, got1.getCreatedAt());
+        assertNotNull(got1, "重启后 0x1a2b 命中");
+        assertEquals("Sample", got1.getName(), "重启后 0x1a2b name 一致");
+        assertEquals(1000L, got1.getCreatedAt(), "重启后 0x1a2b createdAt 一致");
 
         RegisteredContract got2 = r2.getByAddress("0x3c4d");
-        assertNotNull("重启后 0x3c4d 命中", got2);
-        assertEquals("重启后 0x3c4d name 一致", "PaymentChannel", got2.getName());
-        assertEquals("重启后 0x3c4d abi 一致",
-                "[{\"type\":\"function\",\"name\":\"open\"}]", got2.getAbi());
-        assertEquals("重启后 0x3c4d wasmCode 一致", "0x0061736d01", got2.getWasmCode());
-        assertEquals("重启后 0x3c4d creationBlock 一致", 42L, got2.getCreationBlock());
+        assertNotNull(got2, "重启后 0x3c4d 命中");
+        assertEquals("PaymentChannel", got2.getName(), "重启后 0x3c4d name 一致");
+        assertEquals("[{\"type\":\"function\",\"name\":\"open\"}]", got2.getAbi(), "重启后 0x3c4d abi 一致");
+        assertEquals("0x0061736d01", got2.getWasmCode(), "重启后 0x3c4d wasmCode 一致");
+        assertEquals(42L, got2.getCreationBlock(), "重启后 0x3c4d creationBlock 一致");
     }
 
     @Test
     public void testRestartEmptyWhenNoPersistedData() throws Exception {
         // 空 DB 启动加载
         ContractRegistry r = newRegistry(100);
-        assertEquals("空 DB 启动后 size=0", 0, r.size());
-        assertTrue("空 DB 启动后 list 为空", r.list(0, 10).isEmpty());
+        assertEquals(0, r.size(), "空 DB 启动后 size=0");
+        assertTrue(r.list(0, 10).isEmpty(), "空 DB 启动后 list 为空");
     }
 
     // ==================== registry-enabled=false ====================
@@ -288,7 +291,7 @@ public class ContractRegistryTest {
         setField(r2, "enabled", false);
         setField(r2, "maxListSize", 100);
         r2.init();
-        assertEquals("enabled=false 时跳过加载，size=0", 0, r2.size());
+        assertEquals(0, r2.size(), "enabled=false 时跳过加载，size=0");
     }
 
     // ==================== 辅助方法 ====================

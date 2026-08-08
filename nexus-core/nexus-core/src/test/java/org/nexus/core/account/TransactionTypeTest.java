@@ -2,9 +2,9 @@ package org.nexus.core.account;
 
 import org.nexus.core.account.Transaction;
 import org.nexus.core.account.Transaction.Type;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
-import static org.junit.Assert.*;
+import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Transaction.Type 枚举完整性测试。
@@ -169,13 +169,13 @@ public class TransactionTypeTest {
         for (int i = 16; i <= 26; i++) {
             Transaction tx = Transaction.createEmpty();
             tx.type = i;
-            assertTrue("type " + i + " 应为支付扩展类型", tx.isPaymentExtensionType());
+            assertTrue(tx.isPaymentExtensionType(), "type " + i + " 应为支付扩展类型");
         }
         // 旧类型（0-15）应返回 false
         for (int i = 0; i <= 15; i++) {
             Transaction tx = Transaction.createEmpty();
             tx.type = i;
-            assertFalse("type " + i + " 不应为支付扩展类型", tx.isPaymentExtensionType());
+            assertFalse(tx.isPaymentExtensionType(), "type " + i + " 不应为支付扩展类型");
         }
     }
 
@@ -192,14 +192,14 @@ public class TransactionTypeTest {
         for (int t : channelTypes) {
             Transaction tx = Transaction.createEmpty();
             tx.type = t;
-            assertTrue("type " + t + " 应为通道交易", tx.isChannelTransaction());
+            assertTrue(tx.isChannelTransaction(), "type " + t + " 应为通道交易");
         }
         // 非通道类型应为 false
         int[] nonChannelTypes = {0, 1, 15, 19, 20, 21, 22, 25, 26};
         for (int t : nonChannelTypes) {
             Transaction tx = Transaction.createEmpty();
             tx.type = t;
-            assertFalse("type " + t + " 不应为通道交易", tx.isChannelTransaction());
+            assertFalse(tx.isChannelTransaction(), "type " + t + " 不应为通道交易");
         }
     }
 
@@ -216,14 +216,14 @@ public class TransactionTypeTest {
         for (int t : stablecoinTypes) {
             Transaction tx = Transaction.createEmpty();
             tx.type = t;
-            assertTrue("type " + t + " 应为稳定币交易", tx.isStableCoinTransaction());
+            assertTrue(tx.isStableCoinTransaction(), "type " + t + " 应为稳定币交易");
         }
         // 非稳定币类型应为 false
         int[] nonStablecoinTypes = {0, 1, 16, 17, 18, 19, 22, 25, 26};
         for (int t : nonStablecoinTypes) {
             Transaction tx = Transaction.createEmpty();
             tx.type = t;
-            assertFalse("type " + t + " 不应为稳定币交易", tx.isStableCoinTransaction());
+            assertFalse(tx.isStableCoinTransaction(), "type " + t + " 不应为稳定币交易");
         }
     }
 
@@ -240,14 +240,14 @@ public class TransactionTypeTest {
         for (int t : bridgeTypes) {
             Transaction tx = Transaction.createEmpty();
             tx.type = t;
-            assertTrue("type " + t + " 应为跨链桥交易", tx.isBridgeTransaction());
+            assertTrue(tx.isBridgeTransaction(), "type " + t + " 应为跨链桥交易");
         }
         // 非桥类型应为 false
         int[] nonBridgeTypes = {0, 1, 16, 19, 20, 21, 25, 26};
         for (int t : nonBridgeTypes) {
             Transaction tx = Transaction.createEmpty();
             tx.type = t;
-            assertFalse("type " + t + " 不应为跨链桥交易", tx.isBridgeTransaction());
+            assertFalse(tx.isBridgeTransaction(), "type " + t + " 不应为跨链桥交易");
         }
     }
 
@@ -261,37 +261,37 @@ public class TransactionTypeTest {
         Transaction tx = Transaction.createEmpty();
 
         tx.type = 16;
-        assertEquals("CHANNEL_OPEN", tx.getTypeName());
+        assertEquals(tx.getTypeName(), "CHANNEL_OPEN");
 
         tx.type = 17;
-        assertEquals("CHANNEL_UPDATE", tx.getTypeName());
+        assertEquals(tx.getTypeName(), "CHANNEL_UPDATE");
 
         tx.type = 18;
-        assertEquals("CHANNEL_CLOSE", tx.getTypeName());
+        assertEquals(tx.getTypeName(), "CHANNEL_CLOSE");
 
         tx.type = 19;
-        assertEquals("BATCH_TRANSFER", tx.getTypeName());
+        assertEquals(tx.getTypeName(), "BATCH_TRANSFER");
 
         tx.type = 20;
-        assertEquals("MINT_STABLECOIN", tx.getTypeName());
+        assertEquals(tx.getTypeName(), "MINT_STABLECOIN");
 
         tx.type = 21;
-        assertEquals("REDEEM_STABLECOIN", tx.getTypeName());
+        assertEquals(tx.getTypeName(), "REDEEM_STABLECOIN");
 
         tx.type = 22;
-        assertEquals("BRIDGE_LOCK", tx.getTypeName());
+        assertEquals(tx.getTypeName(), "BRIDGE_LOCK");
 
         tx.type = 23;
-        assertEquals("BRIDGE_MINT", tx.getTypeName());
+        assertEquals(tx.getTypeName(), "BRIDGE_MINT");
 
         tx.type = 24;
-        assertEquals("BRIDGE_BURN", tx.getTypeName());
+        assertEquals(tx.getTypeName(), "BRIDGE_BURN");
 
         tx.type = 25;
-        assertEquals("IDENTITY_REGISTER", tx.getTypeName());
+        assertEquals(tx.getTypeName(), "IDENTITY_REGISTER");
 
         tx.type = 26;
-        assertEquals("SUBSCRIPTION_AUTH", tx.getTypeName());
+        assertEquals(tx.getTypeName(), "SUBSCRIPTION_AUTH");
     }
 
     /**
@@ -302,16 +302,16 @@ public class TransactionTypeTest {
         Transaction tx = Transaction.createEmpty();
 
         tx.type = 0;
-        assertEquals("COINBASE", tx.getTypeName());
+        assertEquals(tx.getTypeName(), "COINBASE");
 
         tx.type = 1;
-        assertEquals("TRANSFER", tx.getTypeName());
+        assertEquals(tx.getTypeName(), "TRANSFER");
 
         tx.type = 2;
-        assertEquals("VOTE", tx.getTypeName());
+        assertEquals(tx.getTypeName(), "VOTE");
 
         tx.type = 15;
-        assertEquals("EXIT_MORTGAGE", tx.getTypeName());
+        assertEquals(tx.getTypeName(), "EXIT_MORTGAGE");
     }
 
     /**
@@ -371,8 +371,7 @@ public class TransactionTypeTest {
     @Test
     public void testGasTableAllNonNegative() {
         for (int i = 0; i < Transaction.GAS_TABLE.length; i++) {
-            assertTrue("GAS_TABLE[" + i + "] 应为非负值",
-                    Transaction.GAS_TABLE[i] >= 0);
+            assertTrue(Transaction.GAS_TABLE[i] >= 0, "GAS_TABLE[" + i + "] 应为非负值");
         }
     }
 

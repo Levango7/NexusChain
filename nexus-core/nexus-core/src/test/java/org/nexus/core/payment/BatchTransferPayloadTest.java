@@ -2,13 +2,13 @@ package org.nexus.core.payment;
 
 import org.nexus.core.account.Transaction;
 import org.nexus.core.payment.BatchTransferPayload.TransferItem;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
-import static org.junit.Assert.*;
+import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * 批量转账 payload 编解码测试。
@@ -137,7 +137,7 @@ public class BatchTransferPayloadTest {
         List<TransferItem> parsed = BatchTransferPayload.parse(payload);
 
         assertEquals(1, parsed.size());
-        assertEquals("NEX_single_addr", parsed.get(0).getAddress());
+        assertEquals(parsed.get(0).getAddress(), "NEX_single_addr");
         assertEquals(500000L, parsed.get(0).getAmount());
     }
 
@@ -170,27 +170,33 @@ public class BatchTransferPayloadTest {
     /**
      * 测试 validate() 数量限制：超过上限时抛异常
      */
-    @Test(expected = IllegalArgumentException.class)
+    @Test
     public void testValidateCountExceedsLimit() {
-        // 101 笔，超过上限
-        List<TransferItem> items = createItems(101, 1000L);
-        validate(items);
+        assertThrows(IllegalArgumentException.class, () -> {
+            // 101 笔，超过上限
+            List<TransferItem> items = createItems(101, 1000L);
+            validate(items);
+        });
     }
 
     /**
      * 测试 validate() 数量限制：空列表抛异常
      */
-    @Test(expected = IllegalArgumentException.class)
+    @Test
     public void testValidateEmptyList() {
-        validate(new ArrayList<>());
+        assertThrows(IllegalArgumentException.class, () -> {
+            validate(new ArrayList<>());
+        });
     }
 
     /**
      * 测试 validate() 数量限制：null 列表抛异常
      */
-    @Test(expected = IllegalArgumentException.class)
+    @Test
     public void testValidateNullList() {
-        validate(null);
+        assertThrows(IllegalArgumentException.class, () -> {
+            validate(null);
+        });
     }
 
     // ==================== validate 总金额限制测试 ====================
@@ -208,55 +214,65 @@ public class BatchTransferPayloadTest {
     /**
      * 测试 validate() 总金额限制：超过上限时抛异常
      */
-    @Test(expected = IllegalArgumentException.class)
+    @Test
     public void testValidateTotalAmountExceedsLimit() {
-        // 100 笔，每笔 1000000001，总金额 = 100000000100（超过上限）
-        List<TransferItem> items = createItems(100, 1000000001L);
-        validate(items);
+        assertThrows(IllegalArgumentException.class, () -> {
+            // 100 笔，每笔 1000000001，总金额 = 100000000100（超过上限）
+            List<TransferItem> items = createItems(100, 1000000001L);
+            validate(items);
+        });
     }
 
     /**
      * 测试 validate() 单笔金额为零时抛异常
      */
-    @Test(expected = IllegalArgumentException.class)
+    @Test
     public void testValidateZeroAmount() {
-        List<TransferItem> items = new ArrayList<>();
-        items.add(new TransferItem("NEX_addr_0", 0L));
-        items.add(new TransferItem("NEX_addr_1", 1000L));
-        validate(items);
+        assertThrows(IllegalArgumentException.class, () -> {
+            List<TransferItem> items = new ArrayList<>();
+            items.add(new TransferItem("NEX_addr_0", 0L));
+            items.add(new TransferItem("NEX_addr_1", 1000L));
+            validate(items);
+        });
     }
 
     /**
      * 测试 validate() 单笔金额为负时抛异常
      */
-    @Test(expected = IllegalArgumentException.class)
+    @Test
     public void testValidateNegativeAmount() {
-        List<TransferItem> items = new ArrayList<>();
-        items.add(new TransferItem("NEX_addr_0", -1000L));
-        validate(items);
+        assertThrows(IllegalArgumentException.class, () -> {
+            List<TransferItem> items = new ArrayList<>();
+            items.add(new TransferItem("NEX_addr_0", -1000L));
+            validate(items);
+        });
     }
 
     /**
      * 测试 validate() 地址为空时抛异常
      */
-    @Test(expected = IllegalArgumentException.class)
+    @Test
     public void testValidateEmptyAddress() {
-        List<TransferItem> items = new ArrayList<>();
-        items.add(new TransferItem("", 1000L));
-        validate(items);
+        assertThrows(IllegalArgumentException.class, () -> {
+            List<TransferItem> items = new ArrayList<>();
+            items.add(new TransferItem("", 1000L));
+            validate(items);
+        });
     }
 
     /**
      * 测试 validate() 地址为 null 时抛异常
      */
-    @Test(expected = IllegalArgumentException.class)
+    @Test
     public void testValidateNullAddress() {
-        TransferItem item = new TransferItem();
-        item.setAddress(null);
-        item.setAmount(1000L);
-        List<TransferItem> items = new ArrayList<>();
-        items.add(item);
-        validate(items);
+        assertThrows(IllegalArgumentException.class, () -> {
+            TransferItem item = new TransferItem();
+            item.setAddress(null);
+            item.setAmount(1000L);
+            List<TransferItem> items = new ArrayList<>();
+            items.add(item);
+            validate(items);
+        });
     }
 
     // ==================== getTotalAmount 计算 ====================
@@ -352,7 +368,7 @@ public class BatchTransferPayloadTest {
     @Test
     public void testTransferItemConstructor() {
         TransferItem item = new TransferItem("NEX_test_addr", 50000L);
-        assertEquals("NEX_test_addr", item.getAddress());
+        assertEquals(item.getAddress(), "NEX_test_addr");
         assertEquals(50000L, item.getAmount());
     }
 
@@ -364,7 +380,7 @@ public class BatchTransferPayloadTest {
         TransferItem item = new TransferItem();
         item.setAddress("NEX_set_addr");
         item.setAmount(99999L);
-        assertEquals("NEX_set_addr", item.getAddress());
+        assertEquals(item.getAddress(), "NEX_set_addr");
         assertEquals(99999L, item.getAmount());
     }
 
@@ -378,7 +394,7 @@ public class BatchTransferPayloadTest {
         Transaction tx = Transaction.createEmpty();
         tx.type = Transaction.Type.BATCH_TRANSFER.ordinal();
         assertEquals(19, tx.type);
-        assertEquals("BATCH_TRANSFER", tx.getTypeName());
+        assertEquals(tx.getTypeName(), "BATCH_TRANSFER");
         assertTrue(tx.isPaymentExtensionType());
         assertFalse(tx.isChannelTransaction());
         assertFalse(tx.isStableCoinTransaction());

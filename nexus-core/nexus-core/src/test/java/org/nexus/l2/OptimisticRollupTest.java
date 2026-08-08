@@ -1,7 +1,7 @@
 package org.nexus.l2;
 
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.nexus.l2.challenge.ChallengeConflictResult;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -14,7 +14,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
-import static org.junit.Assert.*;
+import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -41,7 +41,7 @@ public class OptimisticRollupTest {
     private FraudProofVerifier verifier;
     private L2BridgeContract bridge;
 
-    @Before
+    @BeforeEach
     public void setUp() {
         rollup = new OptimisticRollup();
         stateRootManager = new StateRootManager();
@@ -119,7 +119,7 @@ public class OptimisticRollupTest {
         L2Transaction tx = makeTx("h1");
         long id = rollup.submitBatch(42L, Collections.singletonList(tx), "customRoot", "custom-sequencer");
         assertEquals(42L, id);
-        assertEquals("custom-sequencer", verifier.getSubmitter(42L));
+        assertEquals(verifier.getSubmitter(42L), "custom-sequencer");
         Mockito.verify(bridge).submitStateRoot(42L, "customRoot");
     }
 

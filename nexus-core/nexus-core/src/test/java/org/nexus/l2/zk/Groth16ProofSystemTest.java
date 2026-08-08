@@ -1,7 +1,7 @@
 package org.nexus.l2.zk;
 
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.nexus.l2.zk.groth16.Groth16Proof;
 import org.nexus.l2.zk.groth16.Groth16ProofSystem;
 import org.nexus.l2.zk.groth16.Groth16Setup;
@@ -13,7 +13,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import static org.junit.Assert.*;
+import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Groth16 证明系统单元测试。
@@ -27,7 +27,7 @@ public class Groth16ProofSystemTest {
 
     private Groth16ProofSystem proofSystem;
 
-    @Before
+    @BeforeEach
     public void setUp() {
         proofSystem = new Groth16ProofSystem();
     }
@@ -57,7 +57,7 @@ public class Groth16ProofSystemTest {
 
         // prove: x=3, y=4, z=12
         long[] witness = {1, 3, 4, 12};
-        assertTrue("witness should satisfy R1CS", r1cs.isSatisfied(witness));
+        assertTrue(r1cs.isSatisfied(witness), "witness should satisfy R1CS");
 
         Groth16Proof proof = proofSystem.prove("mul-test", r1cs, witness);
         assertNotNull(proof);
@@ -67,7 +67,7 @@ public class Groth16ProofSystemTest {
 
         // verify
         boolean valid = proofSystem.verify("mul-test", proof, new long[0]);
-        assertTrue("proof should verify", valid);
+        assertTrue(valid, "proof should verify");
     }
 
     /**
@@ -76,7 +76,7 @@ public class Groth16ProofSystemTest {
     @Test
     public void testRollupStateTransitionCircuit() {
         RollupStateTransitionCircuit circuit = new RollupStateTransitionCircuit(10);
-        assertTrue("circuit should have R1CS", circuit.hasR1cs());
+        assertTrue(circuit.hasR1cs(), "circuit should have R1CS");
 
         R1csConstraintSystem r1cs = circuit.buildR1cs();
         assertNotNull(r1cs);
@@ -88,7 +88,7 @@ public class Groth16ProofSystemTest {
         // txEffects = [10, 20, 20] (sum=50), postState - preState = 50
         long[] witness = circuit.buildWitness(100, 150, 999, new long[]{10, 20, 20});
         assertEquals(15, witness.length);
-        assertTrue("witness should satisfy R1CS", r1cs.isSatisfied(witness));
+        assertTrue(r1cs.isSatisfied(witness), "witness should satisfy R1CS");
 
         // setup + prove + verify
         proofSystem.setup("rollup-test", r1cs);
@@ -97,7 +97,7 @@ public class Groth16ProofSystemTest {
 
         long[] publicInputs = {100, 150, 999};
         boolean valid = proofSystem.verify("rollup-test", proof, publicInputs);
-        assertTrue("rollup proof should verify", valid);
+        assertTrue(valid, "rollup proof should verify");
     }
 
     /**
@@ -110,7 +110,7 @@ public class Groth16ProofSystemTest {
 
         // 构造非法 witness: preState=100, postState=200, 但 txEffects sum=50 (不匹配)
         long[] witness = circuit.buildWitness(100, 200, 999, new long[]{10, 20, 20});
-        assertFalse("invalid witness should not satisfy R1CS", r1cs.isSatisfied(witness));
+        assertFalse(r1cs.isSatisfied(witness), "invalid witness should not satisfy R1CS");
 
         proofSystem.setup("invalid-test", r1cs);
         try {
@@ -157,7 +157,7 @@ public class Groth16ProofSystemTest {
         long[] txEffects = {10, 20, 30, 40};
         byte[] encoded = DefaultZkProofSystem.encodeWitness(txEffects);
         assertNotNull(encoded);
-        assertTrue("encoded witness should be non-trivial", encoded.length > 8);
+        assertTrue(encoded.length > 8, "encoded witness should be non-trivial");
 
         // 编码应包含 magic "ZWIT"
         assertEquals('Z', encoded[0]);
@@ -174,9 +174,9 @@ public class Groth16ProofSystemTest {
         long h1 = RollupStateTransitionCircuit.hashToLong("abc");
         long h2 = RollupStateTransitionCircuit.hashToLong("abc");
         long h3 = RollupStateTransitionCircuit.hashToLong("xyz");
-        assertEquals("same input should produce same hash", h1, h2);
-        assertNotEquals("different input should produce different hash", h1, h3);
-        assertEquals("null input should return 0", 0, RollupStateTransitionCircuit.hashToLong(null));
-        assertEquals("empty input should return 0", 0, RollupStateTransitionCircuit.hashToLong(""));
+        assertEquals(h1, h2, "same input should produce same hash");
+        assertNotEquals(h1, h3, "different input should produce different hash");
+        assertEquals(0, RollupStateTransitionCircuit.hashToLong(null), "null input should return 0");
+        assertEquals(0, RollupStateTransitionCircuit.hashToLong(""), "empty input should return 0");
     }
 }

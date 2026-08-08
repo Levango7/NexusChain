@@ -1,7 +1,7 @@
 package org.nexus.l2;
 
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.nexus.l2.challenge.ChallengeConflictResolver;
 import org.nexus.l2.challenge.ChallengeConflictResult;
@@ -20,7 +20,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-import static org.junit.Assert.*;
+import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -49,7 +49,7 @@ public class FraudProofVerifierTest {
     private StateRootManager stateRootManager;
     private FraudProofVerifier verifier;
 
-    @Before
+    @BeforeEach
     public void setUp() {
         stateRootManager = new StateRootManager();
         verifier = new FraudProofVerifier();
@@ -75,7 +75,7 @@ public class FraudProofVerifierTest {
         RollupBatch batch = buildBatch(1L, Collections.singletonList(makeTx("h1")));
         verifier.onSubmit(batch, "submitter-A");
         assertEquals(batch, verifier.getBatch(1L));
-        assertEquals("submitter-A", verifier.getSubmitter(1L));
+        assertEquals(verifier.getSubmitter(1L), "submitter-A");
         assertFalse(verifier.isChallengeWindowOver(1L));
     }
 
@@ -257,7 +257,7 @@ public class FraudProofVerifierTest {
         assertNotNull(proof);
         assertEquals(1L, proof.getBatchId());
         assertEquals(1, proof.getTxIndex()); // 二分定位到 step 1
-        assertEquals("challenger-A", proof.getChallenger());
+        assertEquals(proof.getChallenger(), "challenger-A");
         assertNotNull(proof.getMerkleProof());
         assertNotNull(proof.getTx());
         // 生成的证明应通过验证
@@ -432,7 +432,7 @@ public class FraudProofVerifierTest {
         // bob 的 bond 应被退还（RELEASED），而非罚没
         assertEquals(ChallengeBond.Status.RELEASED, verifier.getChallengeBond("bob").getStatus());
         // alice 仍是首个有效挑战者
-        assertEquals("alice", resolver.getFirstValidChallenger(1L));
+        assertEquals(resolver.getFirstValidChallenger(1L), "alice");
     }
 
     // ==================== 恶意提交者场景（审计重点） ====================
@@ -838,7 +838,7 @@ public class FraudProofVerifierTest {
     /** 构造一个针对 batchId 第 txIndex 步的有效欺诈证明（不设 challenger）。 */
     private FraudProof buildValidProofSetup(long batchId, int txIndex) {
         StateRootManager.BatchContext ctx = stateRootManager.getBatchContext(batchId);
-        assertNotNull("BatchContext must exist for batch " + batchId, ctx);
+        assertNotNull(ctx, "BatchContext must exist for batch " + batchId);
         MerkleProof mp = stateRootManager.getMerkleProof(batchId, txIndex);
         assertNotNull(mp);
 

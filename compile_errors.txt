@@ -1,0 +1,565 @@
+﻿
+> Configure project :nexus-core
+Building version: 1.9.2-RELEASE (from branch master)
+
+> Task :nexus-core:nexus-core:compileJava UP-TO-DATE
+> Task :nexus-core:nexus-core:processResources UP-TO-DATE
+> Task :nexus-core:nexus-core:classes UP-TO-DATE
+
+> Task :nexus-core:nexus-core:compileTestJava
+.\gradlew.bat : F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\consensus\pos\PosConsensusIntegration
+Test.java:24: 错误: 找不到符号
+At line:1 char:1
++ .\gradlew.bat :nexus-core:nexus-core:compileTestJava 2>&1 | Out-File  ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (F:\Nexus\NexusC...a:24: 错误: 找不到符号:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+import static org.junit.Assertions.assertArrayEquals;
+                       ^
+  符号:   类 Assertions
+  位置: 程序包 org.junit
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\consensus\pos\PosConsensusIntegrationTest.java:24: 错误
+: 仅从类和接口静态导入
+import static org.junit.Assertions.assertArrayEquals;
+^
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\consensus\pos\PosConsensusIntegrationTest.java:25: 错误
+: 找不到符号
+import static org.junit.Assertions.assertEquals;
+                       ^
+  符号:   类 Assertions
+  位置: 程序包 org.junit
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\consensus\pos\PosConsensusIntegrationTest.java:25: 错误
+: 仅从类和接口静态导入
+import static org.junit.Assertions.assertEquals;
+^
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\consensus\pos\PosConsensusIntegrationTest.java:26: 错误
+: 找不到符号
+import static org.junit.Assertions.assertFalse;
+                       ^
+  符号:   类 Assertions
+  位置: 程序包 org.junit
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\consensus\pos\PosConsensusIntegrationTest.java:26: 错误
+: 仅从类和接口静态导入
+import static org.junit.Assertions.assertFalse;
+^
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\consensus\pos\PosConsensusIntegrationTest.java:27: 错误
+: 找不到符号
+import static org.junit.Assertions.assertNotNull;
+                       ^
+  符号:   类 Assertions
+  位置: 程序包 org.junit
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\consensus\pos\PosConsensusIntegrationTest.java:27: 错误
+: 仅从类和接口静态导入
+import static org.junit.Assertions.assertNotNull;
+^
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\consensus\pos\PosConsensusIntegrationTest.java:28: 错误
+: 找不到符号
+import static org.junit.Assertions.assertNull;
+                       ^
+  符号:   类 Assertions
+  位置: 程序包 org.junit
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\consensus\pos\PosConsensusIntegrationTest.java:28: 错误
+: 仅从类和接口静态导入
+import static org.junit.Assertions.assertNull;
+^
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\consensus\pos\PosConsensusIntegrationTest.java:29: 错误
+: 找不到符号
+import static org.junit.Assertions.assertTrue;
+                       ^
+  符号:   类 Assertions
+  位置: 程序包 org.junit
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\consensus\pos\PosConsensusIntegrationTest.java:29: 错误
+: 仅从类和接口静态导入
+import static org.junit.Assertions.assertTrue;
+^
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\ChannelLifecycleIntegrationTest.java:17: 错误: 
+找不到符号
+import static org.junit.Assertions.assertEquals;
+                       ^
+  符号:   类 Assertions
+  位置: 程序包 org.junit
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\ChannelLifecycleIntegrationTest.java:17: 错误: 
+仅从类和接口静态导入
+import static org.junit.Assertions.assertEquals;
+^
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\ChannelLifecycleIntegrationTest.java:18: 错误: 
+找不到符号
+import static org.junit.Assertions.assertNotNull;
+                       ^
+  符号:   类 Assertions
+  位置: 程序包 org.junit
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\ChannelLifecycleIntegrationTest.java:18: 错误: 
+仅从类和接口静态导入
+import static org.junit.Assertions.assertNotNull;
+^
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\ChannelLifecycleIntegrationTest.java:19: 错误: 
+找不到符号
+import static org.junit.Assertions.assertTrue;
+                       ^
+  符号:   类 Assertions
+  位置: 程序包 org.junit
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\ChannelLifecycleIntegrationTest.java:19: 错误: 
+仅从类和接口静态导入
+import static org.junit.Assertions.assertTrue;
+^
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\ChannelLifecycleIntegrationTest.java:20: 错误: 
+找不到符号
+import static org.junit.Assertions.fail;
+                       ^
+  符号:   类 Assertions
+  位置: 程序包 org.junit
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\ChannelLifecycleIntegrationTest.java:20: 错误: 
+仅从类和接口静态导入
+import static org.junit.Assertions.fail;
+^
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\ChannelManagerTest.java:12: 错误: 找不到符号
+import static org.junit.Assertions.assertEquals;
+                       ^
+  符号:   类 Assertions
+  位置: 程序包 org.junit
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\ChannelManagerTest.java:12: 错误: 仅从类和接口静态导入
+import static org.junit.Assertions.assertEquals;
+^
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\ChannelManagerTest.java:13: 错误: 找不到符号
+import static org.junit.Assertions.assertFalse;
+                       ^
+  符号:   类 Assertions
+  位置: 程序包 org.junit
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\ChannelManagerTest.java:13: 错误: 仅从类和接口静态导入
+import static org.junit.Assertions.assertFalse;
+^
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\ChannelManagerTest.java:14: 错误: 找不到符号
+import static org.junit.Assertions.assertNotNull;
+                       ^
+  符号:   类 Assertions
+  位置: 程序包 org.junit
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\ChannelManagerTest.java:14: 错误: 仅从类和接口静态导入
+import static org.junit.Assertions.assertNotNull;
+^
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\ChannelManagerTest.java:15: 错误: 找不到符号
+import static org.junit.Assertions.assertTrue;
+                       ^
+  符号:   类 Assertions
+  位置: 程序包 org.junit
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\ChannelManagerTest.java:15: 错误: 仅从类和接口静态导入
+import static org.junit.Assertions.assertTrue;
+^
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\ChannelManagerTest.java:16: 错误: 找不到符号
+import static org.junit.Assertions.fail;
+                       ^
+  符号:   类 Assertions
+  位置: 程序包 org.junit
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\ChannelManagerTest.java:16: 错误: 仅从类和接口静态导入
+import static org.junit.Assertions.fail;
+^
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\ChannelUpdateTest.java:15: 错误: 找不到符号
+import static org.junit.Assertions.assertArrayEquals;
+                       ^
+  符号:   类 Assertions
+  位置: 程序包 org.junit
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\ChannelUpdateTest.java:15: 错误: 仅从类和接口静态导入
+import static org.junit.Assertions.assertArrayEquals;
+^
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\ChannelUpdateTest.java:16: 错误: 找不到符号
+import static org.junit.Assertions.assertEquals;
+                       ^
+  符号:   类 Assertions
+  位置: 程序包 org.junit
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\ChannelUpdateTest.java:16: 错误: 仅从类和接口静态导入
+import static org.junit.Assertions.assertEquals;
+^
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\ChannelUpdateTest.java:17: 错误: 找不到符号
+import static org.junit.Assertions.assertFalse;
+                       ^
+  符号:   类 Assertions
+  位置: 程序包 org.junit
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\ChannelUpdateTest.java:17: 错误: 仅从类和接口静态导入
+import static org.junit.Assertions.assertFalse;
+^
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\ChannelUpdateTest.java:18: 错误: 找不到符号
+import static org.junit.Assertions.assertNotNull;
+                       ^
+  符号:   类 Assertions
+  位置: 程序包 org.junit
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\ChannelUpdateTest.java:18: 错误: 仅从类和接口静态导入
+import static org.junit.Assertions.assertNotNull;
+^
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\ChannelUpdateTest.java:19: 错误: 找不到符号
+import static org.junit.Assertions.assertTrue;
+                       ^
+  符号:   类 Assertions
+  位置: 程序包 org.junit
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\ChannelUpdateTest.java:19: 错误: 仅从类和接口静态导入
+import static org.junit.Assertions.assertTrue;
+^
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\DisputeResolutionTest.java:12: 错误: 找不到符号
+import static org.junit.Assertions.assertEquals;
+                       ^
+  符号:   类 Assertions
+  位置: 程序包 org.junit
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\DisputeResolutionTest.java:12: 错误: 仅从类和接口静态导入
+import static org.junit.Assertions.assertEquals;
+^
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\DisputeResolutionTest.java:13: 错误: 找不到符号
+import static org.junit.Assertions.assertFalse;
+                       ^
+  符号:   类 Assertions
+  位置: 程序包 org.junit
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\DisputeResolutionTest.java:13: 错误: 仅从类和接口静态导入
+import static org.junit.Assertions.assertFalse;
+^
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\DisputeResolutionTest.java:14: 错误: 找不到符号
+import static org.junit.Assertions.assertNotNull;
+                       ^
+  符号:   类 Assertions
+  位置: 程序包 org.junit
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\DisputeResolutionTest.java:14: 错误: 仅从类和接口静态导入
+import static org.junit.Assertions.assertNotNull;
+^
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\DisputeResolutionTest.java:15: 错误: 找不到符号
+import static org.junit.Assertions.assertTrue;
+                       ^
+  符号:   类 Assertions
+  位置: 程序包 org.junit
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\DisputeResolutionTest.java:15: 错误: 仅从类和接口静态导入
+import static org.junit.Assertions.assertTrue;
+^
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\DisputeResolutionTest.java:16: 错误: 找不到符号
+import static org.junit.Assertions.fail;
+                       ^
+  符号:   类 Assertions
+  位置: 程序包 org.junit
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\DisputeResolutionTest.java:16: 错误: 仅从类和接口静态导入
+import static org.junit.Assertions.fail;
+^
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\core\BlockChainOptionalTest.java:17: 错误: 找不到符号
+@ExtendWith(SpringExtension.class)
+            ^
+  符号: 类 SpringExtension
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\core\BlocksCacheTest.java:23: 错误: 找不到符号
+@ExtendWith(SpringExtension.class)
+            ^
+  符号: 类 SpringExtension
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\core\NexusChainTest.java:17: 错误: 找不到符号
+@ExtendWith(SpringExtension.class)
+            ^
+  符号: 类 SpringExtension
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\consensus\pos\PosConsensusIntegrationTest.java:227: 错
+误: 找不到符号
+        assertNotNull(block, "propose 应返回非 null 区块");
+        ^
+  符号:   方法 assertNotNull(Block,String)
+  位置: 类 PosConsensusIntegrationTest
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\consensus\pos\PosConsensusIntegrationTest.java:228: 错
+误: 找不到符号
+        assertEquals(101, block.nHeight, "区块高度应为父区块 + 1");
+        ^
+  符号:   方法 assertEquals(int,long,String)
+  位置: 类 PosConsensusIntegrationTest
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\consensus\pos\PosConsensusIntegrationTest.java:229: 错
+误: 找不到符号
+        assertNotNull(block.body, "区块 body 不应为空");
+        ^
+  符号:   方法 assertNotNull(List<Transaction>,String)
+  位置: 类 PosConsensusIntegrationTest
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\consensus\pos\PosConsensusIntegrationTest.java:230: 错
+误: 找不到符号
+        assertFalse(block.body.isEmpty(), "区块 body 应含 coinbase 交易");
+        ^
+  符号:   方法 assertFalse(boolean,String)
+  位置: 类 PosConsensusIntegrationTest
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\consensus\pos\PosConsensusIntegrationTest.java:232: 错
+误: 找不到符号
+        assertNotNull(coinbase.to, "coinbase 收款人不应为空");
+        ^
+  符号:   方法 assertNotNull(byte[],String)
+  位置: 类 PosConsensusIntegrationTest
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\consensus\pos\PosConsensusIntegrationTest.java:233: 错
+误: 找不到符号
+        assertFalse(isAllZeroes(coinbase.to), "coinbase 收款人应非全零（指向提案者 pubkeyHash）");
+        ^
+  符号:   方法 assertFalse(boolean,String)
+  位置: 类 PosConsensusIntegrationTest
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\consensus\pos\PosConsensusIntegrationTest.java:234: 错
+误: 找不到符号
+        assertNotNull(block.nNonce, "nNonce 不应为空");
+        ^
+  符号:   方法 assertNotNull(byte[],String)
+  位置: 类 PosConsensusIntegrationTest
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\consensus\pos\PosConsensusIntegrationTest.java:235: 错
+误: 找不到符号
+        assertFalse(isAllZeroes(block.nNonce), "nNonce 应非零（含 Ed25519 签名 r）");
+        ^
+  符号:   方法 assertFalse(boolean,String)
+  位置: 类 PosConsensusIntegrationTest
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\consensus\pos\PosConsensusIntegrationTest.java:249: 错
+误: 找不到符号
+        assertNotNull(block, "propose 应成功");
+        ^
+  符号:   方法 assertNotNull(Block,String)
+  位置: 类 PosConsensusIntegrationTest
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\consensus\pos\PosConsensusIntegrationTest.java:251: 错
+误: 找不到符号
+        assertTrue(engine.validate(block), "propose 产出的区块应通过 validate（真实验签）");
+        ^
+  符号:   方法 assertTrue(boolean,String)
+  位置: 类 PosConsensusIntegrationTest
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\consensus\pos\PosConsensusIntegrationTest.java:261: 错
+误: 找不到符号
+        assertFalse(engine.validate(block), "提案者不在验证人集合应拒绝");
+        ^
+  符号:   方法 assertFalse(boolean,String)
+  位置: 类 PosConsensusIntegrationTest
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\consensus\pos\PosConsensusIntegrationTest.java:274: 错
+误: 找不到符号
+        assertFalse(engine.validate(block), "质押不足应拒绝");
+        ^
+  符号:   方法 assertFalse(boolean,String)
+  位置: 类 PosConsensusIntegrationTest
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\consensus\pos\PosConsensusIntegrationTest.java:288: 错
+误: 找不到符号
+        assertFalse(engine.validate(block), "已被罚没的提案者应拒绝");
+        ^
+  符号:   方法 assertFalse(boolean,String)
+  位置: 类 PosConsensusIntegrationTest
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\consensus\pos\PosConsensusIntegrationTest.java:302: 错
+误: 找不到符号
+        assertNotNull(block, "propose 应成功");
+        ^
+  符号:   方法 assertNotNull(Block,String)
+  位置: 类 PosConsensusIntegrationTest
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\consensus\pos\PosConsensusIntegrationTest.java:307: 错
+误: 找不到符号
+        assertTrue(engine.validate(block), "PoS 模式下应通过 validate");
+        ^
+  符号:   方法 assertTrue(boolean,String)
+  位置: 类 PosConsensusIntegrationTest
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\consensus\pos\PosConsensusIntegrationTest.java:312: 错
+误: 找不到符号
+        assertTrue(engine.validate(block), "切换到 DPoS 模式后现有区块仍应通过 validate");
+        ^
+  符号:   方法 assertTrue(boolean,String)
+  位置: 类 PosConsensusIntegrationTest
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\consensus\pos\PosConsensusIntegrationTest.java:317: 错
+误: 找不到符号
+        assertTrue(engine.validate(block), "切回 PoS 模式后仍应通过 validate");
+        ^
+  符号:   方法 assertTrue(boolean,String)
+  位置: 类 PosConsensusIntegrationTest
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\consensus\pos\PosConsensusIntegrationTest.java:334: 错
+误: 找不到符号
+            assertNotNull(block, "第 " + i + " 次出块不应为 null");
+            ^
+  符号:   方法 assertNotNull(Block,String)
+  位置: 类 PosConsensusIntegrationTest
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\consensus\pos\PosConsensusIntegrationTest.java:335: 错
+误: 找不到符号
+            assertEquals(100 + i, block.nHeight, "第 " + i + " 块高度应递增");
+            ^
+  符号:   方法 assertEquals(int,long,String)
+  位置: 类 PosConsensusIntegrationTest
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\consensus\pos\PosConsensusIntegrationTest.java:336: 错
+误: 找不到符号
+            assertArrayEquals(prevHash, block.hashPrevBlock, "第 " + i + " 块的 hashPrevBlock 应匹配前一块 hash");
+            ^
+  符号:   方法 assertArrayEquals(byte[],byte[],String)
+  位置: 类 PosConsensusIntegrationTest
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\consensus\pos\PosConsensusIntegrationTest.java:337: 错
+误: 找不到符号
+            assertFalse(isAllZeroes(block.nNonce), "第 " + i + " 块 nNonce 应非零");
+            ^
+  符号:   方法 assertFalse(boolean,String)
+  位置: 类 PosConsensusIntegrationTest
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\consensus\pos\PosConsensusIntegrationTest.java:357: 错
+误: 找不到符号
+        assertNotNull(block, "propose 应成功");
+        ^
+  符号:   方法 assertNotNull(Block,String)
+  位置: 类 PosConsensusIntegrationTest
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\consensus\pos\PosConsensusIntegrationTest.java:362: 错
+误: 找不到符号
+        assertFalse(engine.validate(block), "伪造/被篡改签名的区块应被拒绝（fail-closed）");
+        ^
+  符号:   方法 assertFalse(boolean,String)
+  位置: 类 PosConsensusIntegrationTest
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\consensus\pos\PosConsensusIntegrationTest.java:374: 错
+误: 找不到符号
+        assertNotNull(block, "propose 应成功");
+        ^
+  符号:   方法 assertNotNull(Block,String)
+  位置: 类 PosConsensusIntegrationTest
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\consensus\pos\PosConsensusIntegrationTest.java:380: 错
+误: 找不到符号
+        assertFalse(engine.validate(block), "未签名区块应被拒绝");
+        ^
+  符号:   方法 assertFalse(boolean,String)
+  位置: 类 PosConsensusIntegrationTest
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\consensus\pos\PosConsensusIntegrationTest.java:394: 错
+误: 找不到符号
+        assertFalse(engine.validate(block), "提案者公钥缺失应拒绝（fail-closed，此前降级放行）");
+        ^
+  符号:   方法 assertFalse(boolean,String)
+  位置: 类 PosConsensusIntegrationTest
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\consensus\pos\PosConsensusIntegrationTest.java:408: 错
+误: 找不到符号
+        assertNull(stranger.propose(), "签名密钥未绑定验证人时应拒绝出块（fail-closed）");
+        ^
+  符号:   方法 assertNull(Block,String)
+  位置: 类 PosConsensusIntegrationTest
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\consensus\pos\PosConsensusIntegrationTest.java:424: 错
+误: 找不到符号
+        assertNull(engine.propose(), "非本节点轮次应跳过出块");
+        ^
+  符号:   方法 assertNull(Block,String)
+  位置: 类 PosConsensusIntegrationTest
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\keystore\KeystoreTests.java:46: 错误: 对于assumeTrue(Stri
+ng,boolean), 找不到合适的方法
+            Assumptions.assumeTrue("本平台 argon2 native 计算与 testJson 数据不一致，跳过", false);
+                       ^
+    方法 Assumptions.assumeTrue(BooleanSupplier,String)不适用
+      (参数不匹配; String无法转换为BooleanSupplier)
+    方法 Assumptions.assumeTrue(boolean,Supplier<String>)不适用
+      (参数不匹配; String无法转换为boolean)
+    方法 Assumptions.assumeTrue(boolean,String)不适用
+      (参数不匹配; String无法转换为boolean)
+    方法 Assumptions.assumeTrue(BooleanSupplier,Supplier<String>)不适用
+      (参数不匹配; String无法转换为BooleanSupplier)
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\keystore\KeystoreTests.java:60: 错误: 对于assumeTrue(Stri
+ng,boolean), 找不到合适的方法
+            Assumptions.assumeTrue("本平台 argon2 native 计算与 testJson 数据不一致，跳过 decrypt 测试", false);
+                       ^
+    方法 Assumptions.assumeTrue(BooleanSupplier,String)不适用
+      (参数不匹配; String无法转换为BooleanSupplier)
+    方法 Assumptions.assumeTrue(boolean,Supplier<String>)不适用
+      (参数不匹配; String无法转换为boolean)
+    方法 Assumptions.assumeTrue(boolean,String)不适用
+      (参数不匹配; String无法转换为boolean)
+    方法 Assumptions.assumeTrue(BooleanSupplier,Supplier<String>)不适用
+      (参数不匹配; String无法转换为BooleanSupplier)
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\ChannelLifecycleIntegrationTest.java:143: 错误:
+ 找不到符号
+        assertEquals(PaymentChannel.State.OPEN, channel.getState(), "初始状态应为 OPEN");
+        ^
+  符号:   方法 assertEquals(State,State,String)
+  位置: 类 ChannelLifecycleIntegrationTest
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\ChannelLifecycleIntegrationTest.java:144: 错误:
+ 找不到符号
+        assertEquals(0L, channel.getNonce(), "初始 nonce 应为 0");
+        ^
+  符号:   方法 assertEquals(long,long,String)
+  位置: 类 ChannelLifecycleIntegrationTest
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\ChannelLifecycleIntegrationTest.java:151: 错误:
+ 找不到符号
+        assertEquals(900L, ch1.getBalance1(), "支付1后余额1 应为 900");
+        ^
+  符号:   方法 assertEquals(long,long,String)
+  位置: 类 ChannelLifecycleIntegrationTest
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\ChannelLifecycleIntegrationTest.java:152: 错误:
+ 找不到符号
+        assertEquals(100L, ch1.getBalance2(), "支付1后余额2 应为 100");
+        ^
+  符号:   方法 assertEquals(long,long,String)
+  位置: 类 ChannelLifecycleIntegrationTest
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\ChannelLifecycleIntegrationTest.java:153: 错误:
+ 找不到符号
+        assertEquals(1L, ch1.getNonce(), "支付1后 nonce 应为 1");
+        ^
+  符号:   方法 assertEquals(long,long,String)
+  位置: 类 ChannelLifecycleIntegrationTest
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\ChannelLifecycleIntegrationTest.java:154: 错误:
+ 找不到符号
+        assertEquals(totalBalance, ch1.getTotalBalance(), "余额守恒");
+        ^
+  符号:   方法 assertEquals(long,long,String)
+  位置: 类 ChannelLifecycleIntegrationTest
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\ChannelLifecycleIntegrationTest.java:159: 错误:
+ 找不到符号
+        assertEquals(950L, ch2.getBalance1(), "支付2后余额1 应为 950");
+        ^
+  符号:   方法 assertEquals(long,long,String)
+  位置: 类 ChannelLifecycleIntegrationTest
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\ChannelLifecycleIntegrationTest.java:160: 错误:
+ 找不到符号
+        assertEquals(50L, ch2.getBalance2(), "支付2后余额2 应为 50");
+        ^
+  符号:   方法 assertEquals(long,long,String)
+  位置: 类 ChannelLifecycleIntegrationTest
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\ChannelLifecycleIntegrationTest.java:161: 错误:
+ 找不到符号
+        assertEquals(2L, ch2.getNonce(), "支付2后 nonce 应为 2");
+        ^
+  符号:   方法 assertEquals(long,long,String)
+  位置: 类 ChannelLifecycleIntegrationTest
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\ChannelLifecycleIntegrationTest.java:162: 错误:
+ 找不到符号
+        assertEquals(totalBalance, ch2.getTotalBalance(), "余额守恒");
+        ^
+  符号:   方法 assertEquals(long,long,String)
+  位置: 类 ChannelLifecycleIntegrationTest
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\ChannelLifecycleIntegrationTest.java:167: 错误:
+ 找不到符号
+        assertEquals(750L, ch3.getBalance1(), "支付3后余额1 应为 750");
+        ^
+  符号:   方法 assertEquals(long,long,String)
+  位置: 类 ChannelLifecycleIntegrationTest
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\ChannelLifecycleIntegrationTest.java:168: 错误:
+ 找不到符号
+        assertEquals(250L, ch3.getBalance2(), "支付3后余额2 应为 250");
+        ^
+  符号:   方法 assertEquals(long,long,String)
+  位置: 类 ChannelLifecycleIntegrationTest
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\ChannelLifecycleIntegrationTest.java:169: 错误:
+ 找不到符号
+        assertEquals(3L, ch3.getNonce(), "支付3后 nonce 应为 3");
+        ^
+  符号:   方法 assertEquals(long,long,String)
+  位置: 类 ChannelLifecycleIntegrationTest
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\ChannelLifecycleIntegrationTest.java:170: 错误:
+ 找不到符号
+        assertEquals(totalBalance, ch3.getTotalBalance(), "余额守恒");
+        ^
+  符号:   方法 assertEquals(long,long,String)
+  位置: 类 ChannelLifecycleIntegrationTest
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\ChannelLifecycleIntegrationTest.java:175: 错误:
+ 找不到符号
+        assertEquals(totalBalance, finalBalance1 + finalBalance2, "最终总额应守恒");
+        ^
+  符号:   方法 assertEquals(long,long,String)
+  位置: 类 ChannelLifecycleIntegrationTest
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\ChannelLifecycleIntegrationTest.java:181: 错误:
+ 找不到符号
+        assertEquals(PaymentChannel.State.CLOSING, ch3.getState(), "请求关闭后状态应为 CLOSING");
+        ^
+  符号:   方法 assertEquals(State,State,String)
+  位置: 类 ChannelLifecycleIntegrationTest
+F:\Nexus\NexusChain\nexus-core\nexus-core\src\test\java\org\nexus\payment\ChannelLifecycleIntegrationTest.java:186: 错误:
+ 找不到符号
+        assertEquals(PaymentChannel.State.CLOSED, ch3.getState(), "协作关闭后状态应为 CLOSED");
+        ^
+  符号:   方法 assertEquals(State,State,String)
+  位置: 类 ChannelLifecycleIntegrationTest
+注: 某些消息已经过简化; 请使用 -Xdiags:verbose 重新编译以获得完整输出
+100 个错误
+仅显示前 100 个错误（共 293 个）；若要查看更多错误，请使用 -Xmaxerrs
+
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':nexus-core:nexus-core:compileTestJava'.
+> Compilation failed; see the compiler error output for details.
+
+* Try:
+> Run with --info option to get more log output.
+> Run with --scan to get full insights.
+> Task :nexus-core:nexus-core:compileTestJava FAILED
+
+Deprecated Gradle features were used in this build, making it incompatible with Gradle 9.0.
+
+You can use '--warning-mode all' to show the individual deprecation warnings and determine if they come from your own scripts or plugins.
+
+For more on this, please refer to https://docs.gradle.org/8.5/userguide/command_line_interface.html#sec:command_line_warnings in the Gradle documentation.
+
+BUILD FAILED in 7s
+3 actionable tasks: 1 executed, 2 up-to-date

@@ -12,12 +12,12 @@ import org.nexus.crypto.HashUtil;
 import org.nexus.crypto.ed25519.Ed25519;
 import org.nexus.crypto.ed25519.Ed25519KeyPair;
 import org.nexus.crypto.ed25519.Ed25519PrivateKey;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 /**
  * 端到端通道生命周期集成测试。
@@ -140,54 +140,54 @@ public class ChannelLifecycleIntegrationTest {
         PaymentChannel channel = manager.openChannel(
                 PARTICIPANT_1, PARTICIPANT_2, INITIAL_AMOUNT, LOCK_TIME
         );
-        assertEquals("初始状态应为 OPEN", PaymentChannel.State.OPEN, channel.getState());
-        assertEquals("初始 nonce 应为 0", 0L, channel.getNonce());
+        assertEquals(PaymentChannel.State.OPEN, channel.getState(), "初始状态应为 OPEN");
+        assertEquals(0L, channel.getNonce(), "初始 nonce 应为 0");
         long totalBalance = channel.getTotalBalance();
 
         // 步骤2：多次链下支付
         // 支付1：p1 → p2，金额 100 → 900/100
         performOffChainPayment(manager, channel.getChannelId(), 900L, 100L, keys);
         PaymentChannel ch1 = manager.getChannel(channel.getChannelId());
-        assertEquals("支付1后余额1 应为 900", 900L, ch1.getBalance1());
-        assertEquals("支付1后余额2 应为 100", 100L, ch1.getBalance2());
-        assertEquals("支付1后 nonce 应为 1", 1L, ch1.getNonce());
-        assertEquals("余额守恒", totalBalance, ch1.getTotalBalance());
+        assertEquals(900L, ch1.getBalance1(), "支付1后余额1 应为 900");
+        assertEquals(100L, ch1.getBalance2(), "支付1后余额2 应为 100");
+        assertEquals(1L, ch1.getNonce(), "支付1后 nonce 应为 1");
+        assertEquals(totalBalance, ch1.getTotalBalance(), "余额守恒");
 
         // 支付2：p2 → p1，金额 50 → 950/50
         performOffChainPayment(manager, channel.getChannelId(), 950L, 50L, keys);
         PaymentChannel ch2 = manager.getChannel(channel.getChannelId());
-        assertEquals("支付2后余额1 应为 950", 950L, ch2.getBalance1());
-        assertEquals("支付2后余额2 应为 50", 50L, ch2.getBalance2());
-        assertEquals("支付2后 nonce 应为 2", 2L, ch2.getNonce());
-        assertEquals("余额守恒", totalBalance, ch2.getTotalBalance());
+        assertEquals(950L, ch2.getBalance1(), "支付2后余额1 应为 950");
+        assertEquals(50L, ch2.getBalance2(), "支付2后余额2 应为 50");
+        assertEquals(2L, ch2.getNonce(), "支付2后 nonce 应为 2");
+        assertEquals(totalBalance, ch2.getTotalBalance(), "余额守恒");
 
         // 支付3：p1 → p2，金额 200 → 750/250
         performOffChainPayment(manager, channel.getChannelId(), 750L, 250L, keys);
         PaymentChannel ch3 = manager.getChannel(channel.getChannelId());
-        assertEquals("支付3后余额1 应为 750", 750L, ch3.getBalance1());
-        assertEquals("支付3后余额2 应为 250", 250L, ch3.getBalance2());
-        assertEquals("支付3后 nonce 应为 3", 3L, ch3.getNonce());
-        assertEquals("余额守恒", totalBalance, ch3.getTotalBalance());
+        assertEquals(750L, ch3.getBalance1(), "支付3后余额1 应为 750");
+        assertEquals(250L, ch3.getBalance2(), "支付3后余额2 应为 250");
+        assertEquals(3L, ch3.getNonce(), "支付3后 nonce 应为 3");
+        assertEquals(totalBalance, ch3.getTotalBalance(), "余额守恒");
 
         // 步骤3：获取最终余额
         long finalBalance1 = ch3.getBalance1();
         long finalBalance2 = ch3.getBalance2();
-        assertEquals("最终总额应守恒", totalBalance, finalBalance1 + finalBalance2);
+        assertEquals(totalBalance, finalBalance1 + finalBalance2, "最终总额应守恒");
 
         // 步骤4：协作关闭（模拟 ChannelSettlementService.cooperativeClose）
         // 双方同意关闭，请求关闭通道
         long closeBlockHeight = 500L;
         ch3.requestClose(closeBlockHeight);
-        assertEquals("请求关闭后状态应为 CLOSING", PaymentChannel.State.CLOSING, ch3.getState());
+        assertEquals(PaymentChannel.State.CLOSING, ch3.getState(), "请求关闭后状态应为 CLOSING");
 
         // 等待争议期过后
         long afterDisputeBlock = closeBlockHeight + ch3.getDisputePeriod() + 1;
         ch3.close(afterDisputeBlock);
-        assertEquals("协作关闭后状态应为 CLOSED", PaymentChannel.State.CLOSED, ch3.getState());
+        assertEquals(PaymentChannel.State.CLOSED, ch3.getState(), "协作关闭后状态应为 CLOSED");
 
         // 验证最终余额在关闭后不变
-        assertEquals("关闭后余额1 应不变", finalBalance1, ch3.getBalance1());
-        assertEquals("关闭后余额2 应不变", finalBalance2, ch3.getBalance2());
+        assertEquals(finalBalance1, ch3.getBalance1(), "关闭后余额1 应不变");
+        assertEquals(finalBalance2, ch3.getBalance2(), "关闭后余额2 应不变");
     }
 
     /**
@@ -204,7 +204,7 @@ public class ChannelLifecycleIntegrationTest {
         PaymentChannel channel = manager.openChannel(
                 PARTICIPANT_1, PARTICIPANT_2, INITIAL_AMOUNT, LOCK_TIME
         );
-        assertEquals("初始状态应为 OPEN", PaymentChannel.State.OPEN, channel.getState());
+        assertEquals(PaymentChannel.State.OPEN, channel.getState(), "初始状态应为 OPEN");
 
         // 步骤2：发起多次链下支付
         // 支付1：p1 → p2，金额 100 → 900/100
@@ -213,9 +213,9 @@ public class ChannelLifecycleIntegrationTest {
         performOffChainPayment(manager, channel.getChannelId(), 850L, 150L, keys);
 
         PaymentChannel afterPayments = manager.getChannel(channel.getChannelId());
-        assertEquals("两次支付后 nonce 应为 2", 2L, afterPayments.getNonce());
-        assertEquals("两次支付后余额1 应为 850", 850L, afterPayments.getBalance1());
-        assertEquals("两次支付后余额2 应为 150", 150L, afterPayments.getBalance2());
+        assertEquals(2L, afterPayments.getNonce(), "两次支付后 nonce 应为 2");
+        assertEquals(850L, afterPayments.getBalance1(), "两次支付后余额1 应为 850");
+        assertEquals(150L, afterPayments.getBalance2(), "两次支付后余额2 应为 150");
 
         // 步骤3：发起争议（提交旧状态 nonce=1，余额 900/100）
         // 模拟发起方恶意提交过期状态
@@ -228,9 +228,9 @@ public class ChannelLifecycleIntegrationTest {
                 new byte[PUBKEY_SIZE], new byte[SIG_SIZE],
                 disputeStartBlock, DISPUTE_PERIOD
         );
-        assertNotNull("争议记录应创建", dispute);
-        assertEquals("争议状态应为 ACTIVE", DisputeRecord.DisputeState.ACTIVE, dispute.getState());
-        assertEquals("争议 nonce 应为 1（旧状态）", 1L, dispute.getLatestUpdate().getNonce());
+        assertNotNull(dispute, "争议记录应创建");
+        assertEquals(DisputeRecord.DisputeState.ACTIVE, dispute.getState(), "争议状态应为 ACTIVE");
+        assertEquals(1L, dispute.getLatestUpdate().getNonce(), "争议 nonce 应为 1（旧状态）");
 
         // 步骤4：挑战争议（提交新状态 nonce=2，余额 850/150）
         ChannelUpdate freshUpdate = createDisputeUpdate(
@@ -242,27 +242,27 @@ public class ChannelLifecycleIntegrationTest {
                 new byte[PUBKEY_SIZE], new byte[SIG_SIZE],
                 challengeBlock
         );
-        assertEquals("挑战后状态应为 CHALLENGED", DisputeRecord.DisputeState.CHALLENGED, challenged.getState());
-        assertEquals("挑战后 nonce 应为 2", 2L, challenged.getLatestUpdate().getNonce());
-        assertTrue("应有惩罚金", challenged.getPenaltyAmount() > 0);
+        assertEquals(DisputeRecord.DisputeState.CHALLENGED, challenged.getState(), "挑战后状态应为 CHALLENGED");
+        assertEquals(2L, challenged.getLatestUpdate().getNonce(), "挑战后 nonce 应为 2");
+        assertTrue(challenged.getPenaltyAmount() > 0, "应有惩罚金");
 
         // 步骤5：争议期过后结算
         long settleBlock = disputeStartBlock + DISPUTE_PERIOD + 1;
         DisputeSettlement settlement = disputeResolution.settleDispute(
                 channel.getChannelId(), settleBlock
         );
-        assertNotNull("结算结果不应为 null", settlement);
+        assertNotNull(settlement, "结算结果不应为 null");
 
         // 步骤6：验证最终余额
         // 惩罚金从发起方（参与方一）余额扣除
         long penalty = challenged.getPenaltyAmount();
-        assertEquals("最终余额1 应为 850 减惩罚金", 850L - penalty, settlement.getFinalBalance1());
-        assertEquals("最终余额2 应为 150", 150L, settlement.getFinalBalance2());
-        assertTrue("惩罚金应大于 0", settlement.getPenaltyAmount() > 0);
+        assertEquals(850L - penalty, settlement.getFinalBalance1(), "最终余额1 应为 850 减惩罚金");
+        assertEquals(150L, settlement.getFinalBalance2(), "最终余额2 应为 150");
+        assertTrue(settlement.getPenaltyAmount() > 0, "惩罚金应大于 0");
 
         // 验证争议状态已结算
         DisputeRecord finalRecord = disputeResolution.getDisputeStatus(channel.getChannelId());
-        assertEquals("最终争议状态应为 SETTLED", DisputeRecord.DisputeState.SETTLED, finalRecord.getState());
+        assertEquals(DisputeRecord.DisputeState.SETTLED, finalRecord.getState(), "最终争议状态应为 SETTLED");
     }
 
     /**
@@ -277,8 +277,8 @@ public class ChannelLifecycleIntegrationTest {
         PaymentChannel channel = manager.openChannel(
                 PARTICIPANT_1, PARTICIPANT_2, INITIAL_AMOUNT, lockTime
         );
-        assertEquals("初始状态应为 OPEN", PaymentChannel.State.OPEN, channel.getState());
-        assertEquals("lockTime 应为 500", lockTime, channel.getLockTime());
+        assertEquals(PaymentChannel.State.OPEN, channel.getState(), "初始状态应为 OPEN");
+        assertEquals(lockTime, channel.getLockTime(), "lockTime 应为 500");
 
         // 步骤2：模拟锁定期到期（当前区块高度 >= lockTime）
         long currentBlockHeight = lockTime; // 恰好等于 lockTime
@@ -288,15 +288,15 @@ public class ChannelLifecycleIntegrationTest {
         PaymentChannel.State expiredState = channel.expire(currentBlockHeight);
 
         // 步骤4：验证状态为 EXPIRED
-        assertEquals("过期后状态应为 EXPIRED", PaymentChannel.State.EXPIRED, expiredState);
-        assertEquals("通道状态应为 EXPIRED", PaymentChannel.State.EXPIRED, channel.getState());
+        assertEquals(PaymentChannel.State.EXPIRED, expiredState, "过期后状态应为 EXPIRED");
+        assertEquals(PaymentChannel.State.EXPIRED, channel.getState(), "通道状态应为 EXPIRED");
 
         // 验证过期通道无法再更新
         try {
             channel.update(800L, 200L, 1L);
             fail("过期通道不应能更新");
         } catch (IllegalStateException e) {
-            assertTrue("异常消息应包含状态", e.getMessage().contains("OPEN"));
+            assertTrue(e.getMessage().contains("OPEN"), "异常消息应包含状态");
         }
     }
 
@@ -313,43 +313,43 @@ public class ChannelLifecycleIntegrationTest {
                 PARTICIPANT_1, PARTICIPANT_2, INITIAL_AMOUNT, LOCK_TIME
         );
         long totalBalance = channel.getTotalBalance();
-        assertEquals("通道总余额应为 1000", 1000L, totalBalance);
-        assertEquals("初始 nonce 应为 0", 0L, channel.getNonce());
-        assertEquals("初始余额1 应为 1000", 1000L, channel.getBalance1());
-        assertEquals("初始余额2 应为 0", 0L, channel.getBalance2());
+        assertEquals(1000L, totalBalance, "通道总余额应为 1000");
+        assertEquals(0L, channel.getNonce(), "初始 nonce 应为 0");
+        assertEquals(1000L, channel.getBalance1(), "初始余额1 应为 1000");
+        assertEquals(0L, channel.getBalance2(), "初始余额2 应为 0");
 
         // 支付1：100 from p1 to p2 → 余额 900/100
         performOffChainPayment(manager, channel.getChannelId(), 900L, 100L, keys);
         PaymentChannel after1 = manager.getChannel(channel.getChannelId());
-        assertEquals("支付1后余额1 应为 900", 900L, after1.getBalance1());
-        assertEquals("支付1后余额2 应为 100", 100L, after1.getBalance2());
-        assertEquals("支付1后 nonce 应为 1", 1L, after1.getNonce());
-        assertEquals("支付1后总额应守恒", totalBalance, after1.getTotalBalance());
+        assertEquals(900L, after1.getBalance1(), "支付1后余额1 应为 900");
+        assertEquals(100L, after1.getBalance2(), "支付1后余额2 应为 100");
+        assertEquals(1L, after1.getNonce(), "支付1后 nonce 应为 1");
+        assertEquals(totalBalance, after1.getTotalBalance(), "支付1后总额应守恒");
 
         // 支付2：50 from p2 to p1 → 余额 950/50
         performOffChainPayment(manager, channel.getChannelId(), 950L, 50L, keys);
         PaymentChannel after2 = manager.getChannel(channel.getChannelId());
-        assertEquals("支付2后余额1 应为 950", 950L, after2.getBalance1());
-        assertEquals("支付2后余额2 应为 50", 50L, after2.getBalance2());
-        assertEquals("支付2后 nonce 应为 2", 2L, after2.getNonce());
-        assertEquals("支付2后总额应守恒", totalBalance, after2.getTotalBalance());
+        assertEquals(950L, after2.getBalance1(), "支付2后余额1 应为 950");
+        assertEquals(50L, after2.getBalance2(), "支付2后余额2 应为 50");
+        assertEquals(2L, after2.getNonce(), "支付2后 nonce 应为 2");
+        assertEquals(totalBalance, after2.getTotalBalance(), "支付2后总额应守恒");
 
         // 支付3：200 from p1 to p2 → 余额 750/250
         performOffChainPayment(manager, channel.getChannelId(), 750L, 250L, keys);
         PaymentChannel after3 = manager.getChannel(channel.getChannelId());
-        assertEquals("支付3后余额1 应为 750", 750L, after3.getBalance1());
-        assertEquals("支付3后余额2 应为 250", 250L, after3.getBalance2());
-        assertEquals("支付3后 nonce 应为 3", 3L, after3.getNonce());
-        assertEquals("支付3后总额应守恒", totalBalance, after3.getTotalBalance());
+        assertEquals(750L, after3.getBalance1(), "支付3后余额1 应为 750");
+        assertEquals(250L, after3.getBalance2(), "支付3后余额2 应为 250");
+        assertEquals(3L, after3.getNonce(), "支付3后 nonce 应为 3");
+        assertEquals(totalBalance, after3.getTotalBalance(), "支付3后总额应守恒");
 
         // 步骤5：验证每次支付后总额守恒（1000）
-        assertEquals("最终总额应仍为 1000", 1000L, after3.getTotalBalance());
+        assertEquals(1000L, after3.getTotalBalance(), "最终总额应仍为 1000");
 
         // 步骤6：验证 nonce 递增（0→1→2→3）
-        assertEquals("最终 nonce 应为 3", 3L, after3.getNonce());
+        assertEquals(3L, after3.getNonce(), "最终 nonce 应为 3");
 
         // 验证最终余额正确
-        assertEquals("最终余额1 应为 750", 750L, after3.getBalance1());
-        assertEquals("最终余额2 应为 250", 250L, after3.getBalance2());
+        assertEquals(750L, after3.getBalance1(), "最终余额1 应为 750");
+        assertEquals(250L, after3.getBalance2(), "最终余额2 应为 250");
     }
 }

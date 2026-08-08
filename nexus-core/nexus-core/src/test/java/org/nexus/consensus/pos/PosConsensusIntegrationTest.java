@@ -1,8 +1,8 @@
 package org.nexus.consensus.pos;
 
 import org.apache.commons.codec.binary.Hex;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.nexus.consensus.pow.ConsensusConfig;
 import org.nexus.consensus.pow.EconomicModel;
 import org.nexus.consensus.pow.PackageMiner;
@@ -21,12 +21,12 @@ import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Collections;
 
-import static org.junit.Assert.assertArrayEquals;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.anyLong;
 import static org.mockito.Mockito.doNothing;
@@ -94,7 +94,7 @@ public class PosConsensusIntegrationTest {
     // 被测对象
     private PosConsensusEngine engine;
 
-    @Before
+    @BeforeEach
     public void setUp() throws Exception {
         // 真实组件
         validatorRegistry = new ValidatorRegistry(MIN_STAKE, 100);
@@ -224,15 +224,15 @@ public class PosConsensusIntegrationTest {
 
         Block block = engine.propose();
 
-        assertNotNull("propose 应返回非 null 区块", block);
-        assertEquals("区块高度应为父区块 + 1", 101, block.nHeight);
-        assertNotNull("区块 body 不应为空", block.body);
-        assertFalse("区块 body 应含 coinbase 交易", block.body.isEmpty());
+        assertNotNull(block, "propose 应返回非 null 区块");
+        assertEquals(101, block.nHeight, "区块高度应为父区块 + 1");
+        assertNotNull(block.body, "区块 body 不应为空");
+        assertFalse(block.body.isEmpty(), "区块 body 应含 coinbase 交易");
         Transaction coinbase = block.body.get(0);
-        assertNotNull("coinbase 收款人不应为空", coinbase.to);
-        assertFalse("coinbase 收款人应非全零（指向提案者 pubkeyHash）", isAllZeroes(coinbase.to));
-        assertNotNull("nNonce 不应为空", block.nNonce);
-        assertFalse("nNonce 应非零（含 Ed25519 签名 r）", isAllZeroes(block.nNonce));
+        assertNotNull(coinbase.to, "coinbase 收款人不应为空");
+        assertFalse(isAllZeroes(coinbase.to), "coinbase 收款人应非全零（指向提案者 pubkeyHash）");
+        assertNotNull(block.nNonce, "nNonce 不应为空");
+        assertFalse(isAllZeroes(block.nNonce), "nNonce 应非零（含 Ed25519 签名 r）");
     }
 
     // ==================== 测试场景 2: validate 校验链完整 ====================
@@ -246,9 +246,9 @@ public class PosConsensusIntegrationTest {
         when(stateDB.getBestBlock()).thenReturn(parent);
 
         Block block = engine.propose();
-        assertNotNull("propose 应成功", block);
+        assertNotNull(block, "propose 应成功");
 
-        assertTrue("propose 产出的区块应通过 validate（真实验签）", engine.validate(block));
+        assertTrue(engine.validate(block), "propose 产出的区块应通过 validate（真实验签）");
     }
 
     /**
@@ -258,7 +258,7 @@ public class PosConsensusIntegrationTest {
     public void testValidateRejectsUnknownProposer() {
         Block block = buildBlockWithProposer(UNKNOWN_ADDR, 101);
 
-        assertFalse("提案者不在验证人集合应拒绝", engine.validate(block));
+        assertFalse(engine.validate(block), "提案者不在验证人集合应拒绝");
     }
 
     /**
@@ -271,7 +271,7 @@ public class PosConsensusIntegrationTest {
 
         Block block = buildBlockWithProposer(POOR_ADDR, 101);
 
-        assertFalse("质押不足应拒绝", engine.validate(block));
+        assertFalse(engine.validate(block), "质押不足应拒绝");
     }
 
     /**
@@ -285,7 +285,7 @@ public class PosConsensusIntegrationTest {
 
         Block block = buildBlockWithProposer(NO_KEY_ADDR, 101);
 
-        assertFalse("已被罚没的提案者应拒绝", engine.validate(block));
+        assertFalse(engine.validate(block), "已被罚没的提案者应拒绝");
     }
 
     // ==================== 测试场景 3: 共识切换不破坏现有链 ====================
@@ -299,22 +299,22 @@ public class PosConsensusIntegrationTest {
         when(stateDB.getBestBlock()).thenReturn(parent);
 
         Block block = engine.propose();
-        assertNotNull("propose 应成功", block);
+        assertNotNull(block, "propose 应成功");
 
         // PoS 模式下 validate 通过
         when(consensusConfig.isPosMode()).thenReturn(true);
         when(consensusConfig.getConsensusMode()).thenReturn("pos");
-        assertTrue("PoS 模式下应通过 validate", engine.validate(block));
+        assertTrue(engine.validate(block), "PoS 模式下应通过 validate");
 
         // 切换到 DPoS 模式，现有区块仍应能 validate（engine 的 validate 不依赖 mode）
         when(consensusConfig.isPosMode()).thenReturn(false);
         when(consensusConfig.getConsensusMode()).thenReturn("dpos");
-        assertTrue("切换到 DPoS 模式后现有区块仍应通过 validate", engine.validate(block));
+        assertTrue(engine.validate(block), "切换到 DPoS 模式后现有区块仍应通过 validate");
 
         // 切换回 PoS 模式
         when(consensusConfig.isPosMode()).thenReturn(true);
         when(consensusConfig.getConsensusMode()).thenReturn("pos");
-        assertTrue("切回 PoS 模式后仍应通过 validate", engine.validate(block));
+        assertTrue(engine.validate(block), "切回 PoS 模式后仍应通过 validate");
     }
 
     // ==================== 测试场景 4: 连续出块 ====================
@@ -331,11 +331,10 @@ public class PosConsensusIntegrationTest {
 
         for (int i = 1; i <= 5; i++) {
             Block block = engine.propose();
-            assertNotNull("第 " + i + " 次出块不应为 null", block);
-            assertEquals("第 " + i + " 块高度应递增", 100 + i, block.nHeight);
-            assertArrayEquals("第 " + i + " 块的 hashPrevBlock 应匹配前一块 hash",
-                    prevHash, block.hashPrevBlock);
-            assertFalse("第 " + i + " 块 nNonce 应非零", isAllZeroes(block.nNonce));
+            assertNotNull(block, "第 " + i + " 次出块不应为 null");
+            assertEquals(100 + i, block.nHeight, "第 " + i + " 块高度应递增");
+            assertArrayEquals(prevHash, block.hashPrevBlock, "第 " + i + " 块的 hashPrevBlock 应匹配前一块 hash");
+            assertFalse(isAllZeroes(block.nNonce), "第 " + i + " 块 nNonce 应非零");
 
             prevHash = block.getHash();
             // 更新 stateDB mock，使下一次 propose 以本块为父区块
@@ -355,12 +354,12 @@ public class PosConsensusIntegrationTest {
         when(stateDB.getBestBlock()).thenReturn(parent);
 
         Block block = engine.propose();
-        assertNotNull("propose 应成功", block);
+        assertNotNull(block, "propose 应成功");
 
         // 篡改签名 r 分量
         block.nNonce[0] ^= 0x01;
 
-        assertFalse("伪造/被篡改签名的区块应被拒绝（fail-closed）", engine.validate(block));
+        assertFalse(engine.validate(block), "伪造/被篡改签名的区块应被拒绝（fail-closed）");
     }
 
     /**
@@ -372,13 +371,13 @@ public class PosConsensusIntegrationTest {
         when(stateDB.getBestBlock()).thenReturn(parent);
 
         Block block = engine.propose();
-        assertNotNull("propose 应成功", block);
+        assertNotNull(block, "propose 应成功");
 
         // 抹掉签名
         block.nNonce = new byte[Block.HASH_SIZE];
         block.blockNotice = new byte[Block.MAX_NOTICE_LENGTH];
 
-        assertFalse("未签名区块应被拒绝", engine.validate(block));
+        assertFalse(engine.validate(block), "未签名区块应被拒绝");
     }
 
     /**
@@ -392,7 +391,7 @@ public class PosConsensusIntegrationTest {
 
         Block block = buildBlockWithProposer(NO_KEY_ADDR, 101);
 
-        assertFalse("提案者公钥缺失应拒绝（fail-closed，此前降级放行）", engine.validate(block));
+        assertFalse(engine.validate(block), "提案者公钥缺失应拒绝（fail-closed，此前降级放行）");
     }
 
     // ==================== 测试场景 6: fail-closed 出块（密钥绑定 + 轮次判定） ====================
@@ -406,7 +405,7 @@ public class PosConsensusIntegrationTest {
         PosConsensusEngine stranger = new PosConsensusEngine();
         ReflectionTestUtils.setField(stranger, "validatorRegistry", validatorRegistry);
 
-        assertNull("签名密钥未绑定验证人时应拒绝出块（fail-closed）", stranger.propose());
+        assertNull(stranger.propose(), "签名密钥未绑定验证人时应拒绝出块（fail-closed）");
     }
 
     /**
@@ -422,6 +421,6 @@ public class PosConsensusIntegrationTest {
 
         when(stateDB.getBestBlock()).thenReturn(buildParentBlock(100));
 
-        assertNull("非本节点轮次应跳过出块", engine.propose());
+        assertNull(engine.propose(), "非本节点轮次应跳过出块");
     }
 }

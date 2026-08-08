@@ -2,15 +2,13 @@ package org.nexus.consortium;
 
 import org.apache.commons.codec.DecoderException;
 import org.bouncycastle.util.encoders.Hex;
-import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.junit.runners.JUnit4;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.nexus.common.HexBytes;
 import org.nexus.consortium.account.Utils;
 
 import java.util.Arrays;
 
-@RunWith(JUnit4.class)
 public class AccountUtilTests {
     private static HexBytes PUBLIC_KEY;
     {

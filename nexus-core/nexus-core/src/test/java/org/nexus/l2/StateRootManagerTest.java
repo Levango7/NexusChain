@@ -1,7 +1,7 @@
 package org.nexus.l2;
 
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
 import java.math.BigInteger;
 import java.util.ArrayList;
@@ -9,7 +9,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
-import static org.junit.Assert.*;
+import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * {@link StateRootManager} 单元测试。
@@ -24,7 +24,7 @@ public class StateRootManagerTest {
 
     private StateRootManager manager;
 
-    @Before
+    @BeforeEach
     public void setUp() {
         manager = new StateRootManager();
     }
@@ -35,8 +35,8 @@ public class StateRootManagerTest {
     public void initialState_hasNonEmptyRoots() {
         assertNotNull(manager.getCurrentStateRoot());
         assertNotNull(manager.getCurrentRecursiveRoot());
-        assertNotEquals("", manager.getCurrentStateRoot());
-        assertNotEquals("", manager.getCurrentRecursiveRoot());
+        assertNotEquals(manager.getCurrentStateRoot(), "");
+        assertNotEquals(manager.getCurrentRecursiveRoot(), "");
     }
 
     @Test
@@ -108,8 +108,7 @@ public class StateRootManagerTest {
         // 递归根链：每个 root[i+1] = applyTx(root[i], tx[i])
         for (int i = 0; i < ctx.txs.size(); i++) {
             String expected = StateRootManager.applyTx(ctx.recursiveRoots.get(i), ctx.txs.get(i));
-            assertEquals("recursive root chain break at step " + i,
-                    expected, ctx.recursiveRoots.get(i + 1));
+            assertEquals(expected, ctx.recursiveRoots.get(i + 1), "recursive root chain break at step " + i);
         }
     }
 
@@ -213,9 +212,8 @@ public class StateRootManagerTest {
         StateRootManager.BatchContext ctx = manager.getBatchContext(1L);
         for (int i = 0; i < 3; i++) {
             MerkleProof proof = manager.getMerkleProof(1L, i);
-            assertNotNull("proof for tx " + i, proof);
-            assertTrue("verify proof for tx " + i,
-                    MerklePatriciaTrie.verifyProof(proof, ctx.batchTxRoot));
+            assertNotNull(proof, "proof for tx " + i);
+            assertTrue(MerklePatriciaTrie.verifyProof(proof, ctx.batchTxRoot), "verify proof for tx " + i);
         }
     }
 
