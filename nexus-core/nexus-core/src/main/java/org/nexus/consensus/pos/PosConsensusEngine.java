@@ -55,8 +55,17 @@ import java.util.Map;
  *   <li>质押满足门槛（{@link StakingService}）</li>
  *   <li>时间窗口合法（区块时间在合理范围内）</li>
  *   <li>提案者未被罚没（{@link SlashingService} / {@link ValidatorStatus}）</li>
- *   <li>区块签名验证（Ed25519 公钥验签）</li>
+ *   <li>区块签名验证（Ed25519 公钥验签，<b>fail-closed</b>）：公钥缺失、
+ *       验签失败、验签异常一律拒绝，不存在"降级放行"路径
+ *       （v1.9.3 安全修复：此前任意伪造区块均可通过校验）</li>
  * </ol>
+ *
+ * <h3>密钥绑定（安全约束）</h3>
+ * <p>节点签名密钥必须与某个已注册 Validator 的公钥对应，否则本节点
+ * {@link #propose()} 恒返回 null（拒绝出块），产出的区块也无法通过其他
+ * 节点的 fail-closed 验签。当前无参构造器默认生成随机密钥，生产部署必须
+ * 通过 {@link #PosConsensusEngine(KeyPair, long)} 显式注入与注册验证人对应
+ * 的密钥（keystore 加载接线为后续步骤）。</p>
  *
  * @since 1.2
  */
@@ -128,12 +137,26 @@ public class PosConsensusEngine implements PosConsensus {
     /**
      * 发起新区块提案。
      *
-     * <p>真实出块流程：选取提案者 → 打包交易 → 构造区块 → 签名 → 广播。</p>
+     * <p>真实出块流程：定位本节点验证人身份 → 选取提案者 → 非本节点轮次则跳过 →
+     * 打包交易 → 构造区块 → 签名（失败即放弃）→ 广播。</p>
      *
-     * @return 提案区块；无可用提案者或父区块缺失返回 null
+     * <p>fail-closed 约束：本节点签名密钥未绑定任何已注册验证人时返回 {@code null}；
+     * 本轮被选中的提案者不是本节点时返回 {@code null}（避免用自己的密钥替其他
+     * 验证人签名，产出无法通过验签的区块）。</p>
+     *
+     * @return 提案区块；非本节点轮次、密钥未绑定验证人、无可用提案者、
+     *         父区块缺失或签名失败时返回 null
      */
     @Override
     public Block propose() {
+        // 0. 按签名公钥定位本节点验证人身份（fail-closed：未绑定则拒绝出块）
+        Validator self = findValidatorByPublicKeyHex(
+                Hex.encodeHexString(signingKeyPair.getPublicKey().getBytes()));
+        if (self == null) {
+            logger.warn("Propose rejected: node signing key is not bound to any registered validator");
+            return null;
+        }
+
         // 1. 获取父区块，计算新区块高度
         Block parent = stateDB.getBestBlock();
         if (parent == null) {
@@ -149,23 +172,34 @@ public class PosConsensusEngine implements PosConsensus {
             return null;
         }
 
+        // 3. 轮次判定：仅当被选中的提案者是本节点时才出块（fail-closed）
+        if (!self.getAddress().equals(selected.getAddress())) {
+            logger.debug("Not this node's slot at height {}: selected={}, self={}",
+                    height, selected.getAddress(), self.getAddress());
+            return null;
+        }
+
         logger.info("Proposing block at height {} by proposer {}", height, selected.getAddress());
 
         try {
-            // 3. 构造区块
+            // 4. 构造区块
             Block block = buildBlock(parent, height, selected);
             if (block == null) {
                 logger.warn("Propose failed: block construction failed at height {}", height);
                 return null;
             }
 
-            // 4. 提案者签名（用节点 Ed25519 私钥签名区块头）
-            signBlock(block);
+            // 5. 提案者签名（用节点 Ed25519 私钥签名区块头；失败即放弃，不产出无法验证的区块）
+            if (!signBlock(block)) {
+                logger.error("Propose aborted at height {}: block signing failed (fail-closed, no fallback)",
+                        height);
+                return null;
+            }
 
-            // 5. P2P 广播区块（通过 Spring 事件触发 SyncManager 广播）
+            // 6. P2P 广播区块（通过 Spring 事件触发 SyncManager 广播）
             broadcastBlock(block);
 
-            // 6. 分配出块奖励
+            // 7. 分配出块奖励
             BigDecimal fees = computeBlockFees(block);
             rewardDistributor.distributeBlockReward(selected.getAddress(), fees);
 
@@ -384,8 +418,13 @@ public class PosConsensusEngine implements PosConsensus {
      *
      * <p>签名写入 {@code nNonce}(r, 32 字节) + {@code blockNotice}(s, 32 字节)。
      * 签名消息为"除 nNonce 和 blockNotice 外的区块头"。</p>
+     *
+     * <p>v1.9.3 安全修复：签名失败不再写入哈希指纹 fallback（该 fallback 产出
+     * 永远无法通过真实验签的区块），而是返回 {@code false} 由调用方放弃出块。</p>
+     *
+     * @return 签名成功返回 true；失败返回 false（fail-closed）
      */
-    private void signBlock(Block block) {
+    private boolean signBlock(Block block) {
         try {
             byte[] signingData = getSigningData(block);
             Ed25519DsaSigner signer = new Ed25519DsaSigner(signingKeyPair.getPrivateKey());
@@ -399,11 +438,10 @@ public class PosConsensusEngine implements PosConsensus {
                     block.nHeight,
                     Hex.encodeHexString(block.nNonce),
                     Hex.encodeHexString(block.blockNotice));
+            return true;
         } catch (Exception e) {
             logger.error("Sign block failed at height {}: {}", block.nHeight, e.getMessage(), e);
-            // 签名失败时用哈希指纹作为 fallback，确保 nNonce 非零
-            block.nNonce = HashUtil.keccak256(getSigningData(block));
-            block.blockNotice = new byte[Block.MAX_NOTICE_LENGTH];
+            return false;
         }
     }
 
@@ -424,6 +462,24 @@ public class PosConsensusEngine implements PosConsensus {
     }
 
     // ==================== 校验辅助方法 ====================
+
+    /**
+     * 通过公钥（hex）查找验证人，用于定位本节点的验证人身份。
+     *
+     * @param publicKeyHex 公钥十六进制表示
+     * @return 公钥匹配的验证人；未找到返回 null
+     */
+    private Validator findValidatorByPublicKeyHex(String publicKeyHex) {
+        if (publicKeyHex == null || publicKeyHex.isEmpty()) {
+            return null;
+        }
+        for (Validator v : validatorRegistry.getAllValidators()) {
+            if (publicKeyHex.equalsIgnoreCase(v.getPublicKey())) {
+                return v;
+            }
+        }
+        return null;
+    }
 
     /**
      * 通过 pubkeyHash 查找验证人。
@@ -475,8 +531,9 @@ public class PosConsensusEngine implements PosConsensus {
      * <p>从 nNonce(r) + blockNotice(s) 重构 Signature，
      * 用提案者公钥验签。签名消息为"除 nNonce 和 blockNotice 外的区块头"。</p>
      *
-     * <p>若提案者公钥不可用或验签异常，降级为"nNonce 非零"校验，
-     * 以兼容签名密钥未配置的场景。</p>
+     * <p><b>fail-closed（v1.9.3 安全修复）</b>：提案者公钥缺失、Ed25519 验签失败、
+     * 验签异常三条路径一律返回 {@code false}。此前这三条路径"降级为 nNonce 非零
+     * 校验"并返回 true，导致 PoS 模式下任意伪造区块都能通过共识校验。</p>
      */
     private boolean verifyBlockSignature(Block block, Validator proposerValidator) {
         // nNonce 必须非零
@@ -485,12 +542,12 @@ public class PosConsensusEngine implements PosConsensus {
             return false;
         }
 
-        // 提案者公钥不可用时降级为"nNonce 非零"校验
+        // fail-closed：提案者公钥缺失则无法验签，直接拒绝
         String publicKeyHex = proposerValidator.getPublicKey();
         if (publicKeyHex == null || publicKeyHex.isEmpty()) {
-            logger.debug("Proposer public key not available, downgrade to nNonce-nonzero check at height {}",
+            logger.warn("Signature check failed (fail-closed): proposer public key missing at height {}",
                     block.nHeight);
-            return true;
+            return false;
         }
 
         try {
@@ -511,17 +568,16 @@ public class PosConsensusEngine implements PosConsensus {
             byte[] signingData = getSigningData(block);
             boolean valid = verifier.verify(signingData, signature);
             if (!valid) {
-                // 验签失败：可能是签名密钥与提案者公钥不对应（测试环境），
-                // 降级为"nNonce 非零"校验以保证可用性
-                logger.debug("Ed25519 verify failed at height {}, downgrade to nNonce-nonzero check",
+                // fail-closed：验签失败直接拒绝
+                logger.warn("Signature check failed (fail-closed): Ed25519 verify failed at height {}",
                         block.nHeight);
-                return true;
             }
-            return true;
+            return valid;
         } catch (Exception e) {
-            logger.debug("Signature verification exception at height {}: {}, downgrade to nNonce-nonzero check",
+            // fail-closed：验签异常直接拒绝
+            logger.warn("Signature check failed (fail-closed): verification exception at height {}: {}",
                     block.nHeight, e.getMessage());
-            return true;
+            return false;
         }
     }
 

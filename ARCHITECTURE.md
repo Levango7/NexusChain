@@ -27,9 +27,10 @@ Blockchain is the foundational settlement layer — not the product itself. On t
 | nexus-explorer | Block explorer (React + TypeScript) | Active |
 | nexus-sdk | Multi-language SDK (Java, JS) | Active |
 | nexus-consortium | Consortium / sidechain — complete PoA chain (consensus, gRPC/WS P2P, 国密 SM2/3/4) | Active — complete chain |
-| nexus-exchange-wallet | Exchange/custodial wallet | Active |
+| nexus-exchange-wallet | Exchange/custodial wallet（已归档至 .archived，拆分到 signing/wallet-service） | Archived |
 | nexus-signing-service | 签名服务独立部署（PoC，HTTP 调用） | Active — PoC |
 | nexus-wallet-service | 钱包管理服务独立部署（PoC，HTTP 调用） | Active — PoC |
+| mpc-engine | Rust gRPC MPC 密码学引擎 | **Skeleton — DKG/Sign/Aggregate 未实现，非门限密码学**（见 README 成熟度声明） |
 | nexus-settlement | 清结算与风控（复式记账、对账、资金归集、风控规则链） | Active — 库（gateway 进程内消费） |
 | nexus-compliance | 合规与身份（KYC/AML/DID/信誉评分） | Active — 库（gateway 进程内消费） |
 | nexus-analytics | 数据智能（交易图谱、链上监控、告警、BI、导出） | Active — 库（gateway 进程内消费，事件驱动） |

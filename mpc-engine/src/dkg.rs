@@ -1,47 +1,76 @@
-//! DKG（分布式密钥生成）协议骨架。
+//! DKG（分布式密钥生成）—— 真实 GG20 门限 ECDSA 实现。
 //!
-//! 审计报告 §4.1 方案 A：调用 Rust `tss-lib` / `multi-party-ecdsa` 完成 GG18/GG20 DKG。
-//! 当前为骨架实现，返回未实现错误；正式接入时替换 `run_dkg` 内部逻辑。
+//! 审计报告 §4.1 方案 A：调用 Rust `multi-party-ecdsa`（ZenGo-X/KZen）完成 GG20 DKG。
+//!
+//! 部署模型（诚实声明）：当前为「可信协调器」模型——首次 Dkg RPC 调用在引擎进程内
+//! 一次性运行全部 n 方 GG20 协议（真实 Paillier 密钥生成、Feldman VSS、MtA、ZK 证明），
+//! 会话状态（含各方密钥材料）序列化后缓存于进程内存；后续同 session_id 的调用
+//! （其余参与方）从缓存取回各自份额。
+//!
+//! 门限密码学数学是真实的，产出可被标准 secp256k1 验证的聚合公钥与份额；
+//! 但各方私钥份额暂驻留同一进程内存，尚未分散到互不信任的独立节点。
+//! 完全分散式部署（t-of-n 方被攻破不泄露私钥）为后续演进目标。
 
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+use crate::gg20;
+use crate::gg20::DkgSession;
 use crate::proto::mpc_crypto::{DkgRequest, DkgResponse};
 
-/// 执行 GG18/GG20 分布式密钥生成。
+/// 执行 GG20 分布式密钥生成。
 ///
-/// # 协议轮次（GG20，4 轮）
-/// 1. 各方生成 Paillier 密钥对 (N_i, g_i) 并广播
-/// 2. Feldman VSS 分发私钥份额（点对点，Paillier 同态加密）
-/// 3. 交换并验证 ZK 证明（range proof / MtA 一致性）
-/// 4. 广播公钥份额 X_i，聚合得到组公钥 X = Σ X_i
-///
-/// # 参数
-/// * `threshold` (t)：任意 t+1 方可完成签名
-/// * `party_count` (n)：总参与方数，需 t < n
-///
-/// # 骨架状态
-/// 仅做参数校验，密码学部分返回 `eyre::Result` 未实现错误。
-pub async fn run_dkg(req: DkgRequest) -> eyre::Result<DkgResponse> {
+/// 首次调用（缓存无会话）在进程内执行完整 n 方 DKG 并缓存会话；
+/// 后续调用从缓存返回对应参与方的份额。
+pub fn run_dkg(
+    sessions: &Mutex<HashMap<String, DkgSession>>,
+    req: DkgRequest,
+) -> eyre::Result<DkgResponse> {
     tracing::debug!(
         session_id = %req.session_id,
         threshold = req.threshold,
-        party_count = req.party_count,
+        total_parties = req.total_parties,
         party_index = req.party_index,
         curve = %req.curve,
-        party_ids = ?req.party_ids,
         "dkg: parameters received"
     );
 
     // === 参数校验 ===
     if req.session_id.is_empty() {
-        eyre::bail!("missing session_id");
+        return Ok(DkgResponse {
+            public_key: String::new(),
+            key_share: String::new(),
+            proof: String::new(),
+            success: false,
+            error: "missing session_id".to_string(),
+        });
     }
-    if req.threshold <= 0 || req.party_count <= 0 {
-        eyre::bail!("invalid parameters: threshold and party_count must be positive");
+    if req.threshold <= 0 || req.total_parties <= 0 {
+        return Ok(DkgResponse {
+            public_key: String::new(),
+            key_share: String::new(),
+            proof: String::new(),
+            success: false,
+            error: "threshold and total_parties must be positive".to_string(),
+        });
     }
-    if req.threshold >= req.party_count {
-        eyre::bail!("invalid parameters: threshold must be < party_count");
+    if req.threshold >= req.total_parties {
+        return Ok(DkgResponse {
+            public_key: String::new(),
+            key_share: String::new(),
+            proof: String::new(),
+            success: false,
+            error: "threshold must be < total_parties".to_string(),
+        });
     }
-    if req.party_index < 0 || req.party_index >= req.party_count {
-        eyre::bail!("invalid parameters: party_index out of range [0, party_count)");
+    if req.party_index < 0 || req.party_index >= req.total_parties {
+        return Ok(DkgResponse {
+            public_key: String::new(),
+            key_share: String::new(),
+            proof: String::new(),
+            success: false,
+            error: "party_index out of range [0, total_parties)".to_string(),
+        });
     }
     let curve = if req.curve.is_empty() {
         "secp256k1"
@@ -49,23 +78,60 @@ pub async fn run_dkg(req: DkgRequest) -> eyre::Result<DkgResponse> {
         req.curve.as_str()
     };
     if curve != "secp256k1" {
-        eyre::bail!("unsupported curve: {curve} (only secp256k1 supported)");
-    }
-    if req.party_ids.len() as i32 != req.party_count {
-        eyre::bail!(
-            "invalid parameters: party_ids.len() ({}) != party_count ({})",
-            req.party_ids.len(),
-            req.party_count
-        );
+        return Ok(DkgResponse {
+            public_key: String::new(),
+            key_share: String::new(),
+            proof: String::new(),
+            success: false,
+            error: format!("unsupported curve: {curve} (only secp256k1 supported)"),
+        });
     }
 
-    // TODO(§4.1 方案 A): 接入 tss-lib / multi-party-ecdsa 完成 GG18/GG20 DKG。
-    //     1. 初始化 PartyLocalKey / LocalParty
-    //     2. 执行 4 轮 DKG（Paillier 生成 → Feldman VSS → ZK 证明 → 公钥聚合）
-    //     3. 输出聚合公钥 public_key + 本方私钥份额 secret_share + 各方公钥份额
-    //
-    // 骨架阶段返回未实现错误，由 server.rs 映射为 gRPC UNIMPLEMENTED。
-    eyre::bail!(
-        "dkg not implemented: pending tss-lib / multi-party-ecdsa integration (§4.1 方案 A)"
-    )
+    let party_index = req.party_index as usize;
+    let threshold = req.threshold as u16;
+    let total_parties = req.total_parties as u16;
+
+    // === 取缓存会话，或首次执行完整 GG20 DKG ===
+    let session: DkgSession = {
+        let mut guard = sessions
+            .lock()
+            .map_err(|e| eyre::eyre!("session lock poisoned: {e}"))?;
+        match guard.get(&req.session_id) {
+            Some(existing) => existing.clone(),
+            None => {
+                tracing::info!(
+                    session_id = %req.session_id,
+                    threshold,
+                    total_parties,
+                    "dkg: executing full GG20 keygen (trusted-coordinator, in-process)"
+                );
+                let (_y_sum, _x_shares, session) =
+                    gg20::run_keygen(threshold, total_parties)?;
+                guard.insert(req.session_id.clone(), session.clone());
+                session
+            }
+        }
+    };
+
+    // === 从会话提取本方份额与聚合公钥（hex 编码，Java proto 契约）===
+    let public_key = gg20::hex_point(&session.y_sum);
+    let key_share = gg20::hex_scalar(&session.shared_keys[party_index].x_i);
+    // DKG 正确性 ZK 证明：本方份额的 DLog 证明（serde JSON -> hex）
+    let proof = serde_json::to_vec(&session.dlog_proofs[party_index])
+        .map(hex::encode)
+        .unwrap_or_default();
+
+    tracing::info!(
+        session_id = %req.session_id,
+        party_index,
+        "dkg: session ready (real GG20, trusted-coordinator model)"
+    );
+
+    Ok(DkgResponse {
+        public_key,
+        key_share,
+        proof,
+        success: true,
+        error: String::new(),
+    })
 }

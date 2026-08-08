@@ -13,19 +13,22 @@ eyre = "0.6"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# === 阈值签名密码学库 ===
-# 审计报告 §4.1：GG18/GG20 成熟实现集中在 Rust 生态，Java 生态无成熟实现。
-# 骨架阶段暂不启用重型密码学依赖（避免阻断结构编译验证）；正式接入时取消注释其一。
-#
-# 选项 1（推荐，ECDSA 链）：ZenGo-X/tss-lib —— GG18/GG20 ECDSA 阈值签名
-# tss = { git = "https://github.com/ZenGo-X/tss-lib.git" }
-#
-# 选项 2（BLS 共识）：celo-org/celo-threshold-bls-rs —— BLS 阈值签名
-# threshold-bls = { git = "https://github.com/celo-org/celo-threshold-bls-rs.git" }
-#
-# 注：任务模板原写 `multi-party-ecdsa = { git = "celo-threshold-bls-rs" }`，
-# 但该仓库 crate 名为 threshold-bls 且为 BLS 而非 ECDSA，此处按实际仓库命名修正。
-# 骨架内部用 eyre::Result 返回未实现错误（见 src/dkg.rs / sign.rs / aggregate.rs）。
+# === 阈值签名密码学库（真实 GG18/GG20 门限 ECDSA）===
+# ZenGo-X/KZen multi-party-ecdsa：GG18/GG20 ECDSA 阈值签名的成熟 Rust 实现
+# （真实 Paillier 密钥、Feldman VSS、MtA、ZK 证明，非模拟）。
+# 许可证 GPL-3.0-or-later。mpc-engine 作为独立进程经 gRPC 与外界通信，
+# GPL 传染性限于本二进制，不影响仓库其余 Apache-2.0 组件（进程隔离）。
+# 版本 0.8.1 依赖 curv-kzen 0.9 / kzen-paillier 0.4.2 / sha2 0.9 / secp256k1 0.20，
+# 此处显式声明同版本以让 cargo 统一解析。
+multi-party-ecdsa = "0.8.1"
+curv-kzen = "0.9"
+paillier = { version = "0.4.2", package = "kzen-paillier" }
+zk-paillier = "0.4.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+secp256k1 = { version = "0.20", features = ["global-context"] }
+hex = "0.4"
+sha2 = "0.9"
 
 [build-dependencies]
 tonic-build = "0.12"

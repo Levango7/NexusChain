@@ -1,5 +1,6 @@
 package org.nexus.consensus.pos;
 
+import org.apache.commons.codec.binary.Hex;
 import org.junit.Before;
 import org.junit.Test;
 import org.nexus.consensus.pow.ConsensusConfig;
@@ -10,6 +11,7 @@ import org.nexus.core.NexusChainBlockChain;
 import org.nexus.core.account.Transaction;
 import org.nexus.core.validate.MerkleRule;
 import org.nexus.db.StateDB;
+import org.nexus.keystore.crypto.KeyPair;
 import org.nexus.keystore.wallet.KeystoreAction;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationEvent;
@@ -23,6 +25,7 @@ import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.anyLong;
@@ -38,12 +41,20 @@ import static org.mockito.Mockito.when;
  * PosProposer / SlashingService / PosRewardDistributor，Mock StateDB /
  * PackageMiner / NexusChainBlockChain / ApplicationContext。</p>
  *
+ * <p><b>v1.9.3 fail-closed 改造</b>：测试不再依赖「公钥留空、验签降级为
+ * nNonce 非零」的旧行为。节点签名密钥显式生成并绑定到注册验证人
+ * （公钥 + 由公钥推导的地址），propose/validate 走真实 Ed25519
+ * 签名/验签路径；新增伪造签名、缺失公钥、密钥未绑定、非本节点轮次
+ * 四类拒绝用例。</p>
+ *
  * <h3>测试场景</h3>
  * <ol>
  *   <li>propose 产出有效区块：非null、高度正确、含coinbase、nNonce非零</li>
  *   <li>validate 校验链完整：合法区块通过；提案者不在集合/质押不足/已被罚没 → 拒绝</li>
  *   <li>共识切换不破坏现有链：ConsensusConfig mode=dpos/pos 切换不影响现有区块</li>
  *   <li>连续出块：多次 propose 高度递增、prevHash 匹配</li>
+ *   <li>fail-closed：伪造签名/全零签名/公钥缺失的区块被拒绝</li>
+ *   <li>fail-closed：签名密钥未绑定验证人时拒绝出块；非本节点轮次跳过出块</li>
  * </ol>
  *
  * @since 1.2
@@ -51,10 +62,10 @@ import static org.mockito.Mockito.when;
 public class PosConsensusIntegrationTest {
 
     // 合法 Base58 地址（来自 genesis 配置，可通过 KeystoreAction.addressToPubkeyHash 转换）
-    private static final String VALIDATOR_A_ADDR = "1PpBHEx782C4VrtnQcJRTogn5UYmzCWAPH";
     private static final String VALIDATOR_B_ADDR = "1AMmLXt2Pgwt9nomua8aEYzqre3nxxu2KM";
     private static final String UNKNOWN_ADDR = "1BCaLumRPQwBQEE7oCqdjgtvU4b6sbquYu";
     private static final String POOR_ADDR = "1BGqUxFsBh8bBwgVu5AkHeg1SoBB7nVQfx";
+    private static final String NO_KEY_ADDR = "1PpBHEx782C4VrtnQcJRTogn5UYmzCWAPH";
 
     private static final BigDecimal MIN_STAKE = new BigDecimal("1000");
     private static final BigDecimal STAKE_AMOUNT = new BigDecimal("5000");
@@ -74,6 +85,11 @@ public class PosConsensusIntegrationTest {
     private EconomicModel economicModel;
     private ConsensusConfig consensusConfig;
     private ApplicationContext applicationContext;
+
+    // 节点签名密钥（显式生成，注册为验证人公钥，propose/validate 走真实验签）
+    private KeyPair engineKeyPair;
+    private String enginePubKeyHex;
+    private String selfAddress;
 
     // 被测对象
     private PosConsensusEngine engine;
@@ -104,8 +120,13 @@ public class PosConsensusIntegrationTest {
         ReflectionTestUtils.setField(rewardDistributor, "validatorRegistry", validatorRegistry);
         ReflectionTestUtils.setField(rewardDistributor, "stakingService", stakingService);
 
-        // 构造 engine（默认 Ed25519 签名密钥）
-        engine = new PosConsensusEngine();
+        // 生成节点签名密钥，并由公钥推导本节点地址（与注册验证人绑定）
+        engineKeyPair = KeyPair.generateEd25519KeyPair();
+        enginePubKeyHex = Hex.encodeHexString(engineKeyPair.getPublicKey().getBytes());
+        selfAddress = KeystoreAction.pubkeyToAddress(engineKeyPair.getPublicKey().getBytes(), (byte) 0x01);
+
+        // 构造 engine（显式注入签名密钥）
+        engine = new PosConsensusEngine(engineKeyPair, 30L);
 
         // 注入 engine 依赖
         ReflectionTestUtils.setField(engine, "validatorRegistry", validatorRegistry);
@@ -127,13 +148,13 @@ public class PosConsensusIntegrationTest {
                 .thenReturn(Collections.emptyList());
         doNothing().when(applicationContext).publishEvent(any(ApplicationEvent.class));
 
-        // 注册验证人并质押（publicKey 留空，validate 签名验证降级为 nNonce 非零校验）
-        registerAndStake(VALIDATOR_A_ADDR, STAKE_AMOUNT);
-        registerAndStake(VALIDATOR_B_ADDR, STAKE_AMOUNT);
+        // 注册本节点为验证人：地址由引擎公钥推导，公钥与签名密钥对应，
+        // propose/validate 全程走真实 Ed25519 签名/验签（fail-closed 回归）
+        registerAndStake(selfAddress, enginePubKeyHex, STAKE_AMOUNT);
     }
 
-    private void registerAndStake(String address, BigDecimal stake) {
-        validatorRegistry.register(address, "", stake, 0.1);
+    private void registerAndStake(String address, String publicKeyHex, BigDecimal stake) {
+        validatorRegistry.register(address, publicKeyHex, stake, 0.1);
         stakingService.stake(address, stake);
     }
 
@@ -217,7 +238,7 @@ public class PosConsensusIntegrationTest {
     // ==================== 测试场景 2: validate 校验链完整 ====================
 
     /**
-     * 验证 propose() 产出的区块能通过 validate()。
+     * 验证 propose() 产出的区块能通过 validate()（真实 Ed25519 验签）。
      */
     @Test
     public void testValidateAcceptsProposedBlock() {
@@ -227,7 +248,7 @@ public class PosConsensusIntegrationTest {
         Block block = engine.propose();
         assertNotNull("propose 应成功", block);
 
-        assertTrue("propose 产出的区块应通过 validate", engine.validate(block));
+        assertTrue("propose 产出的区块应通过 validate（真实验签）", engine.validate(block));
     }
 
     /**
@@ -258,10 +279,11 @@ public class PosConsensusIntegrationTest {
      */
     @Test
     public void testValidateRejectsSlashedProposer() {
-        // 对已注册验证人执行罚没（MALICIOUS → 状态置为 SLASHED）
-        slashingService.slash(VALIDATOR_A_ADDR, SlashingService.Offense.MALICIOUS);
+        // 注册并质押一个无公钥验证人，再对其执行罚没（MALICIOUS → 状态置为 SLASHED）
+        registerAndStake(NO_KEY_ADDR, "", STAKE_AMOUNT);
+        slashingService.slash(NO_KEY_ADDR, SlashingService.Offense.MALICIOUS);
 
-        Block block = buildBlockWithProposer(VALIDATOR_A_ADDR, 101);
+        Block block = buildBlockWithProposer(NO_KEY_ADDR, 101);
 
         assertFalse("已被罚没的提案者应拒绝", engine.validate(block));
     }
@@ -319,5 +341,87 @@ public class PosConsensusIntegrationTest {
             // 更新 stateDB mock，使下一次 propose 以本块为父区块
             when(stateDB.getBestBlock()).thenReturn(block);
         }
+    }
+
+    // ==================== 测试场景 5: fail-closed 验签（v1.9.3 安全修复回归） ====================
+
+    /**
+     * 验证篡改签名（nNonce 翻转一位）的区块被 validate 拒绝。
+     * 修复前该区块会走「验签失败降级为 nNonce 非零」路径被放行。
+     */
+    @Test
+    public void testValidateRejectsForgedSignature() {
+        Block parent = buildParentBlock(100);
+        when(stateDB.getBestBlock()).thenReturn(parent);
+
+        Block block = engine.propose();
+        assertNotNull("propose 应成功", block);
+
+        // 篡改签名 r 分量
+        block.nNonce[0] ^= 0x01;
+
+        assertFalse("伪造/被篡改签名的区块应被拒绝（fail-closed）", engine.validate(block));
+    }
+
+    /**
+     * 验证 nNonce 全零（未签名）的区块被 validate 拒绝。
+     */
+    @Test
+    public void testValidateRejectsUnsignedBlock() {
+        Block parent = buildParentBlock(100);
+        when(stateDB.getBestBlock()).thenReturn(parent);
+
+        Block block = engine.propose();
+        assertNotNull("propose 应成功", block);
+
+        // 抹掉签名
+        block.nNonce = new byte[Block.HASH_SIZE];
+        block.blockNotice = new byte[Block.MAX_NOTICE_LENGTH];
+
+        assertFalse("未签名区块应被拒绝", engine.validate(block));
+    }
+
+    /**
+     * 验证提案者公钥缺失时 validate 拒绝（fail-closed）。
+     * 修复前该场景「降级为 nNonce 非零校验」返回 true。
+     */
+    @Test
+    public void testValidateRejectsWhenProposerPublicKeyMissing() {
+        // 注册一个公钥为空的验证人并质押到门槛以上
+        registerAndStake(NO_KEY_ADDR, "", STAKE_AMOUNT);
+
+        Block block = buildBlockWithProposer(NO_KEY_ADDR, 101);
+
+        assertFalse("提案者公钥缺失应拒绝（fail-closed，此前降级放行）", engine.validate(block));
+    }
+
+    // ==================== 测试场景 6: fail-closed 出块（密钥绑定 + 轮次判定） ====================
+
+    /**
+     * 验证签名密钥未绑定任何注册验证人时 propose 拒绝出块（返回 null）。
+     */
+    @Test
+    public void testProposeRejectedWhenSigningKeyNotBound() {
+        // 随机密钥的引擎：公钥与任何已注册验证人都不对应
+        PosConsensusEngine stranger = new PosConsensusEngine();
+        ReflectionTestUtils.setField(stranger, "validatorRegistry", validatorRegistry);
+
+        assertNull("签名密钥未绑定验证人时应拒绝出块（fail-closed）", stranger.propose());
+    }
+
+    /**
+     * 验证本轮被选中的提案者不是本节点时 propose 跳过出块（返回 null），
+     * 不用自己的密钥替其他验证人签名。
+     */
+    @Test
+    public void testProposeSkipsWhenNotOwnSlot() {
+        PosProposer mockedProposer = mock(PosProposer.class);
+        Validator other = new Validator(VALIDATOR_B_ADDR, "ff", STAKE_AMOUNT, 0.1, ValidatorStatus.ACTIVE);
+        when(mockedProposer.selectProposer(anyLong())).thenReturn(other);
+        ReflectionTestUtils.setField(engine, "proposer", mockedProposer);
+
+        when(stateDB.getBestBlock()).thenReturn(buildParentBlock(100));
+
+        assertNull("非本节点轮次应跳过出块", engine.propose());
     }
 }

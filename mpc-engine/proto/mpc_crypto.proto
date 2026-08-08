@@ -1,69 +1,55 @@
+// nexus-signing-service / MPC 密码学引擎 gRPC 接口定义
+//
+// v1.9.2：与 nexus-signing-service 的 src/main/proto/mpc_crypto.proto 完全对齐。
+// Rust mpc-engine（tonic gRPC server）实现本服务；signing-service 的
+// GrpcMpcCryptoEngine 作为 gRPC 客户端调用。字段名、hex 字符串编码、
+// HealthCheck 均与 Java 侧契约一致，保证两端真正互通。
+
 syntax = "proto3";
 
-package nexus.mpc.crypto.v1;
-
-option java_package = "org.nexus.signing.mpc.engine.proto";
-option java_multiple_files = true;
-
-// NexusChain MPC 密码学引擎 gRPC 契约。
-//
-// 由 Rust mpc-engine 进程实现（审计报告 §4.1 方案 A），
-// signing-service 通过本地 gRPC（端口 50051）调用本服务完成
-// GG18/GG20 分布式密钥生成、部分签名与签名聚合。
-//
-// 与 nexus-exchange-wallet 的 mpc_signer.proto 互补：
-//   * mpc_signer.proto  —— MPC 网络层传输（参与方之间的轮次消息路由）
-//   * mpc_crypto.proto  —— MPC 密码学引擎 API（编排层 → 密码学核心的单次调用）
+package nexus.mpc;
 
 service MpcCryptoService {
-  // 分布式密钥生成（GG18/GG20 DKG，4 轮）。
   rpc Dkg(DkgRequest) returns (DkgResponse);
-
-  // 部分签名（GG18/GG20 Sign，7 轮）。
   rpc Sign(SignRequest) returns (SignResponse);
-
-  // 签名聚合（合并各方签名份额，输出可验证的最终签名）。
   rpc Aggregate(AggregateRequest) returns (AggregateResponse);
-
-  // 健康检查 / 版本探测。
-  rpc Ping(PingRequest) returns (PongResponse);
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
 }
 
 // === DKG ===
 
 message DkgRequest {
-  string session_id = 1;          // 会话 ID（与编排层 RoundBarrier 对齐）
-  int32  threshold = 2;           // t（任意 t 方可签名）
-  int32  party_count = 3;         // n（总参与方数）
-  int32  party_index = 4;         // 本方索引（0-based）
-  string curve = 5;               // 曲线，目前固定 "secp256k1"
-  repeated string party_ids = 6;  // 参与方 ID 列表
+  string session_id = 1;
+  int32 threshold = 2;
+  int32 total_parties = 3;
+  int32 party_index = 4;
+  string curve = 5;
+  repeated string peer_endpoints = 6;
 }
 
 message DkgResponse {
-  string session_id = 1;
-  bytes  public_key = 2;                  // 聚合公钥（压缩点，33 字节）
-  bytes  secret_share = 3;                // 本方私钥份额（调用方负责加密落盘）
-  repeated bytes party_public_shares = 4; // 各方公钥份额 X_i
-  string error = 5;                       // 非空表示失败
+  string public_key = 1;   // 聚合公钥（hex 编码曲线点）
+  string key_share = 2;    // 本节点密钥份额（hex）
+  string proof = 3;        // DKG 正确性 ZK 证明（hex）
+  bool success = 4;
+  string error = 5;
 }
 
 // === Sign ===
 
 message SignRequest {
   string session_id = 1;
-  bytes  message_hash = 2;        // 32 字节消息哈希 keccak256
-  bytes  secret_share = 3;        // 本方私钥份额（DKG 输出）
-  bytes  public_key = 4;          // 聚合公钥（DKG 输出）
-  int32  threshold = 5;
-  int32  party_count = 6;
-  int32  party_index = 7;
+  string public_key = 2;      // 聚合公钥（hex）
+  string key_share = 3;       // 本节点密钥份额（hex）
+  string message_hash = 4;    // 消息哈希（hex，32 字节）
+  int32 party_index = 5;
+  repeated string peer_endpoints = 6;
 }
 
 message SignResponse {
-  string session_id = 1;
-  bytes  r_point = 2;             // R 点（压缩）
-  bytes  sig_share = 3;           // 签名份额 s_i
+  string partial_signature = 1;  // 本节点部分签名（hex）
+  string proof = 2;
+  bool success = 3;
   string error = 4;
 }
 
@@ -71,24 +57,27 @@ message SignResponse {
 
 message AggregateRequest {
   string session_id = 1;
-  bytes  message_hash = 2;
-  bytes  r_point = 3;             // R 点（任一签名方输出，各方应一致）
-  repeated bytes sig_shares = 4;  // 各方签名份额 s_i（至少 t+1 个）
-  bytes  public_key = 5;          // 聚合公钥（用于最终验证）
+  string public_key = 2;
+  string message_hash = 3;
+  repeated string partial_signatures = 4;
 }
 
 message AggregateResponse {
-  string session_id = 1;
-  bytes  signature = 2;           // 聚合签名 (r || s)，64 字节
-  bool   verified = 3;            // 是否通过 ECDSA 公钥验证
-  string error = 4;
+  string signature = 1;   // 聚合签名 r||s（hex，64 字节）
+  string r = 2;
+  string s = 3;
+  int32 recovery_id = 4;
+  bool success = 5;
+  string error = 6;
 }
 
-// === Ping ===
+// === HealthCheck ===
 
-message PingRequest {}
+message HealthCheckRequest {
+  string service = 1;
+}
 
-message PongResponse {
-  string version = 1;             // 引擎版本（Cargo 包版本）
-  bool   healthy = 2;
+message HealthCheckResponse {
+  bool healthy = 1;
+  string status = 2;
 }

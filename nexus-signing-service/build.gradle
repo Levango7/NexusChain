@@ -29,7 +29,7 @@ plugins {
 }
 
 group = 'org.nexus'
-version = '1.4.0'
+version = '1.9.2'
 
 java {
     sourceCompatibility = 17

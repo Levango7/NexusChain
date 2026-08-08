@@ -24,6 +24,8 @@
 
 ## [1.9.0] - 2026-08-07 - 审计报告第三批：L2 L1真实化 + ZK证明系统
 
+> ⚠️ **勘误（v1.9.2 补充）**：本条目的"Groth16 简化版"**并非真实 Groth16 零知识证明**。真实 Groth16 需要双线性配对曲线（BN254/BLS12-381），而 secp256k1 不支持配对。实际实现为 **Schnorr + Pedersen 承诺模拟**，不具备零知识证明的安全属性，仅可用于逻辑流程验证。真实 ZK 待接入 halo2 / Plonk / gnark。另，"L1 真实化"的 Web3j 客户端默认未启用（内存模拟为默认），且仓库无 Solidity 合约源码。详见 README「成熟度声明」。
+
 ### 新增
 - **L2 L1 合约客户端真实化**：Web3j L1 合约交互
   - Web3jL1ContractClient：submitStateRoot/markBatchVerified/finalizeWithdraws/challengeBatch 真实 L1 调用
@@ -43,6 +45,8 @@
 - `gradlew.bat build -x test` BUILD SUCCESSFUL in 1m 48s
 
 ## [1.8.0] - 2026-08-07 - 审计报告第二批：MPC 密码学引擎接入
+
+> ⚠️ **勘误（v1.9.2 补充）**：本条目的"MPC 密码学引擎接入"**实际为协议框架占位，非真实门限密码学**。Rust `mpc-engine` 的 DKG/Sign/Aggregate 三个入口函数均直接返回 UNIMPLEMENTED（`Cargo.toml` 中 multi-party-ecdsa/tss-lib 依赖被注释）；Java 侧 gRPC 传输层默认回退内存桩（`realGrpcEnabled=false`）；钱包托管的交易哈希为 SIMULATED-UUID 占位。当前**既非真实门限 ECDSA，也非 n-of-n 多签**。涉及资金签名处的真实 n-of-n ECDSA 多签改造与诚实化见 v1.9.2。详见 README「成熟度声明」。
 
 ### 新增
 - **MpcCryptoEngine SPI**：解耦 Java 编排层与 Rust 密码学引擎

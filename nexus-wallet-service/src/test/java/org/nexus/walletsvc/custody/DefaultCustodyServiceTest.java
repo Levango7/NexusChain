@@ -90,7 +90,7 @@ class DefaultCustodyServiceTest {
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
         service = new DefaultCustodyService(
-                provider(policy), provider(approvalService), custodyBalanceRepository);
+                provider(policy), provider(approvalService), custodyBalanceRepository, provider(null));
     }
 
     /** Wrap a value in an ObjectProvider for constructor injection in tests. */
@@ -209,7 +209,7 @@ class DefaultCustodyServiceTest {
     void depositToCold_noPolicySkipsCapCheck() {
         // 无 custodyPolicy 时冷钱包上限校验跳过
         DefaultCustodyService svc = new DefaultCustodyService(
-                provider(null), provider(approvalService), custodyBalanceRepository);
+                provider(null), provider(approvalService), custodyBalanceRepository, provider(null));
         svc.seedBalances(new BigDecimal("1000"), BigDecimal.ZERO);
 
         String txHash = svc.depositToCold(COLD_ADDR, new BigDecimal("1000"));
@@ -281,7 +281,7 @@ class DefaultCustodyServiceTest {
     void withdrawFromCold_noApprovalServiceThrows() {
         // fail closed：审批服务缺失时冷钱包出金整体禁用
         DefaultCustodyService svc = new DefaultCustodyService(
-                provider(policy), provider(null), custodyBalanceRepository);
+                provider(policy), provider(null), custodyBalanceRepository, provider(null));
         svc.seedBalances(BigDecimal.ZERO, new BigDecimal("1000"));
 
         IllegalStateException ex = assertThrows(
@@ -357,7 +357,7 @@ class DefaultCustodyServiceTest {
     @Test
     void rebalance_noPolicySkips() {
         DefaultCustodyService svc = new DefaultCustodyService(
-                provider(null), provider(approvalService), custodyBalanceRepository);
+                provider(null), provider(approvalService), custodyBalanceRepository, provider(null));
         svc.seedBalances(new BigDecimal("999999"), BigDecimal.ZERO);
 
         // 无策略 → 跳过，余额不变

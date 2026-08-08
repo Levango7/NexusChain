@@ -13,6 +13,7 @@ use tracing_subscriber::EnvFilter;
 
 mod aggregate;
 mod dkg;
+mod gg20;
 mod proto;
 mod server;
 mod sign;

@@ -50,3 +50,9 @@ leveldb/
 
 # Runtime data
 *.pid
+
+# Test dump files (large binary fixtures removed in v1.9.2)
+*.dmp
+
+# AI agent working artifacts (not source)
+.codeartsdoer/

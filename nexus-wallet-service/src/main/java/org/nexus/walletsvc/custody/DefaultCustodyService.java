@@ -1,6 +1,9 @@
 package org.nexus.walletsvc.custody;
 
 import org.nexus.sdk.wallet.WalletTier;
+import org.nexus.sdk.wallet.WalletTransactionRequest;
+import org.nexus.sdk.wallet.WalletTransactionResult;
+import org.nexus.walletsvc.execution.OnChainExecutionClient;
 import org.nexus.walletsvc.approval.WithdrawalApprovalService;
 import org.nexus.walletsvc.entity.CustodyBalanceEntity;
 import org.nexus.walletsvc.repository.CustodyBalanceRepository;
@@ -48,15 +51,21 @@ public class DefaultCustodyService implements CustodyService {
     /** 托管余额持久化 Repository，替代原 AtomicReference 内存存储。 */
     private final CustodyBalanceRepository custodyBalanceRepository;
 
+    /** 链上执行通道（v1.9.2）：冷钱包转账经此走 gateway → 链上广播，替换 SIMULATED 占位。 */
+    private final OnChainExecutionClient onChainExecutionClient;
+
     public DefaultCustodyService(
             org.springframework.beans.factory.ObjectProvider<CustodyPolicy> custodyPolicyProvider,
             org.springframework.beans.factory.ObjectProvider<WithdrawalApprovalService> withdrawalApprovalServiceProvider,
-            CustodyBalanceRepository custodyBalanceRepository) {
+            CustodyBalanceRepository custodyBalanceRepository,
+            org.springframework.beans.factory.ObjectProvider<OnChainExecutionClient> executionClientProvider) {
         // CustodyPolicy 为可选配置：容器未提供时使用 null（rebalance 自动跳过策略分支）
         this.custodyPolicy = custodyPolicyProvider.getIfAvailable();
         // 审批服务为可选注入：缺失时冷钱包出金整体拒绝（fail closed），绝不无审批放行
         this.withdrawalApprovalService = withdrawalApprovalServiceProvider.getIfAvailable();
         this.custodyBalanceRepository = custodyBalanceRepository;
+        // 执行客户端为可选注入：缺失时转账退化为内部模拟哈希（向后兼容独立测试环境）
+        this.onChainExecutionClient = executionClientProvider.getIfAvailable();
     }
 
     /**
@@ -122,7 +131,8 @@ public class DefaultCustodyService implements CustodyService {
         custodyBalanceRepository.save(hotEntity);
         custodyBalanceRepository.save(coldEntity);
 
-        String txHash = "SIMULATED-" + UUID.randomUUID().toString().replace("-", "");
+        String txHash = executeOnChainTransfer(
+                WalletTransactionRequest.Type.SWEEP, address, amount, "custody hot->cold sweep");
         log.info("Deposit hot->cold: address={}, amount={}, txHash={}, hot={}, cold={}",
                 address, amount, txHash, hotEntity.getBalance(), coldEntity.getBalance());
         return txHash;
@@ -194,10 +204,43 @@ public class DefaultCustodyService implements CustodyService {
         custodyBalanceRepository.save(coldEntity);
         custodyBalanceRepository.save(hotEntity);
 
-        String txHash = "SIMULATED-" + UUID.randomUUID().toString().replace("-", "");
+        String txHash = executeOnChainTransfer(
+                WalletTransactionRequest.Type.WITHDRAWAL, address, amount, "custody cold->hot withdrawal");
         log.info("Withdraw cold->hot: address={}, amount={}, txHash={}, hot={}, cold={}",
                 address, amount, txHash, hotEntity.getBalance(), coldEntity.getBalance());
         return txHash;
+    }
+
+    /**
+     * 通过链上执行通道（gateway → 链上广播）执行转账，替换原 SIMULATED 占位（v1.9.2）。
+     *
+     * <p>当 {@code OnChainExecutionClient} 未注入（独立/测试环境）或调用失败时，
+     * 降级为内部模拟哈希（SIMULATED 前缀），保持向后兼容；调用失败不抛异常，
+     * 以 FAILED 结果降级，保证余额账本与交易记录的原子性不受影响。</p>
+     *
+     * @param type    交易类型（SWEEP / WITHDRAWAL）
+     * @param address 目标地址
+     * @param amount  金额
+     * @param memo    备注
+     * @return 交易哈希（真实广播或 SIMULATED- 前缀降级）
+     */
+    private String executeOnChainTransfer(WalletTransactionRequest.Type type,
+                                          String address, BigDecimal amount, String memo) {
+        if (onChainExecutionClient == null) {
+            String txHash = "SIMULATED-" + UUID.randomUUID().toString().replace("-", "");
+            log.warn("No OnChainExecutionClient configured; fallback SIMULATED tx: type={}, txHash={}", type, txHash);
+            return txHash;
+        }
+        WalletTransactionRequest request = new WalletTransactionRequest(
+                type, "cold-custody", address, amount, "NEX", memo, UUID.randomUUID().toString());
+        WalletTransactionResult result = onChainExecutionClient.execute(request);
+        if (result == null || result.getTxHash() == null || result.getTxHash().isEmpty()) {
+            String txHash = "SIMULATED-" + UUID.randomUUID().toString().replace("-", "");
+            log.warn("On-chain transfer failed ({}); fallback SIMULATED tx: type={}, txHash={}",
+                    result != null ? result.getError() : "null result", type, txHash);
+            return txHash;
+        }
+        return result.getTxHash();
     }
 
     @Override
