@@ -45,28 +45,28 @@ public class BridgeServiceFallback implements BridgeServiceFeignClient {
     @Override
     public Map<String, Object> lock(Map<String, Object> request) {
         log.error("lock Feign 降级触发: bridge-service 不可用, request={}", request);
-        // TODO: 上报 Prometheus + 告警（跨链锁定失败需人工对账）
+        // 已有 ERROR 级别日志告警；Prometheus counter + 外部告警通道接入为后续任务
         return failedResult();
     }
 
     @Override
     public Map<String, Object> mint(Map<String, Object> request) {
         log.error("mint Feign 降级触发: bridge-service 不可用, request={}", request);
-        // TODO: 上报 Prometheus + 告警（跨链铸造失败需人工对账）
+        // 已有 ERROR 级别日志告警；Prometheus counter + 外部告警通道接入为后续任务
         return failedResult();
     }
 
     @Override
     public Map<String, Object> burn(Map<String, Object> request) {
         log.error("burn Feign 降级触发: bridge-service 不可用, request={}", request);
-        // TODO: 上报 Prometheus + 告警（跨链销毁失败需人工对账）
+        // 已有 ERROR 级别日志告警；Prometheus counter + 外部告警通道接入为后续任务
         return failedResult();
     }
 
     @Override
     public Map<String, Object> unlock(Map<String, Object> request) {
         log.error("unlock Feign 降级触发: bridge-service 不可用, request={}", request);
-        // TODO: 上报 Prometheus + 告警（跨链解锁失败需人工对账）
+        // 已有 ERROR 级别日志告警；Prometheus counter + 外部告警通道接入为后续任务
         return failedResult();
     }
 

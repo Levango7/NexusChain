@@ -66,7 +66,7 @@ public class WalletMgmtFallback implements WalletMgmtFeignClient {
     public WithdrawalRequest requestWithdrawal(String to, BigDecimal amount, String currency) {
         log.error("requestWithdrawal Feign 降级触发: wallet-service 不可用, to={}, amount={}, currency={}",
                 to, amount, currency);
-        // TODO: 上报 Prometheus + 告警
+        // 已有 ERROR 级别日志告警；Prometheus counter + 外部告警通道接入为后续任务
         return null;
     }
 
@@ -87,7 +87,7 @@ public class WalletMgmtFallback implements WalletMgmtFeignClient {
     @Override
     public WithdrawalRequest executeWithdrawal(String requestId) {
         log.error("executeWithdrawal Feign 降级触发: wallet-service 不可用, requestId={}", requestId);
-        // TODO: 上报 Prometheus + 告警（提现执行失败需人工介入）
+        // 已有 ERROR 级别日志告警；Prometheus counter + 外部告警通道接入为后续任务
         return null;
     }
 
@@ -116,7 +116,7 @@ public class WalletMgmtFallback implements WalletMgmtFeignClient {
     public String withdrawFromCold(String address, BigDecimal amount, String approvalId) {
         log.error("withdrawFromCold Feign 降级触发: wallet-service 不可用, address={}, amount={}, " +
                 "approvalId={}, fail-closed 拒绝提取", address, amount, approvalId);
-        // TODO: 上报 Prometheus + 告警（冷钱包提取失败需人工介入）
+        // 已有 ERROR 级别日志告警；Prometheus counter + 外部告警通道接入为后续任务
         return null;
     }
 

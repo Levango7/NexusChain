@@ -67,7 +67,7 @@ public final class MpcSignFallback {
             }
         }
 
-        // TODO: 上报 Prometheus + 告警
+        // 已有 ERROR 级别日志告警；Prometheus counter + 外部告警通道接入为后续任务
 
         throw new MpcProtocolException(
                 MpcProtocolException.Reason.ILLEGAL_STATE,

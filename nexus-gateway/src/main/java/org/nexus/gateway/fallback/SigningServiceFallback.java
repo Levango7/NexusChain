@@ -40,7 +40,7 @@ public class SigningServiceFallback implements SigningServiceFeignClient {
     public String signTransfer(String fromPubkey, String toPubkeyHash, BigDecimal amount) {
         log.error("signTransfer Feign 降级触发: signing-service 不可用, from={}, to={}, amount={}",
                 fromPubkey, toPubkeyHash, amount);
-        // TODO: 上报 Prometheus + 告警
+        // 已有 ERROR 级别日志告警；Prometheus counter + 外部告警通道接入为后续任务
         return null;
     }
 
@@ -48,7 +48,7 @@ public class SigningServiceFallback implements SigningServiceFeignClient {
     public String transfer(String fromPubkey, String toPubkeyHash, BigDecimal amount, String privateKey) {
         log.error("transfer Feign 降级触发: signing-service 不可用, from={}, to={}, amount={}",
                 fromPubkey, toPubkeyHash, amount);
-        // TODO: 上报 Prometheus + 告警
+        // 已有 ERROR 级别日志告警；Prometheus counter + 外部告警通道接入为后续任务
         return null;
     }
 

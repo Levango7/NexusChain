@@ -51,7 +51,7 @@ public final class SignTransferFallback {
         String reason = classify(ex);
         log.error("signTransfer 降级触发: reason={}, from={}, to={}, amount={}",
                 reason, fromPubkey, toPubkeyHash, amount);
-        // TODO: 上报 Prometheus + 告警
+        // 已有 ERROR 级别日志告警；Prometheus counter + 外部告警通道接入为后续任务
         return null;
     }
 
@@ -72,7 +72,7 @@ public final class SignTransferFallback {
         String reason = classify(ex);
         log.error("transfer 降级触发: reason={}, from={}, to={}, amount={}",
                 reason, fromPubkey, toPubkeyHash, amount);
-        // TODO: 上报 Prometheus + 告警
+        // 已有 ERROR 级别日志告警；Prometheus counter + 外部告警通道接入为后续任务
         return null;
     }
 

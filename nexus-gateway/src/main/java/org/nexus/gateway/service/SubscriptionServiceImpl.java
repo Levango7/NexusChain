@@ -1,6 +1,7 @@
 package org.nexus.gateway.service;
 
 import org.nexus.gateway.SubscriptionService;
+import org.nexus.gateway.config.GatewayConfig;
 import org.nexus.gateway.model.Subscription;
 import org.nexus.gateway.repository.SubscriptionRepository;
 import org.nexus.sdk.client.feign.SigningServiceFeignClient;
@@ -24,17 +25,21 @@ public class SubscriptionServiceImpl implements SubscriptionService {
     private static final Logger log = LoggerFactory.getLogger(SubscriptionServiceImpl.class);
 
     private final SubscriptionRepository subscriptionRepository;
-    /** 签名服务 Feign 客户端：legacy 转账（订阅扣款，调用方提供私钥） */
+    /** 签名服务 Feign 客户端：签名 + 广播（涉及私钥的操作，订阅扣款） */
     private final SigningServiceFeignClient signingServiceClient;
     /** 钱包管理服务 Feign 客户端：地址转公钥哈希 */
     private final WalletMgmtFeignClient walletMgmtClient;
+    /** 网关配置：提供平台热钱包公钥（私钥永不离开签名服务） */
+    private final GatewayConfig gatewayConfig;
 
     public SubscriptionServiceImpl(SubscriptionRepository subscriptionRepository,
                                    SigningServiceFeignClient signingServiceClient,
-                                   WalletMgmtFeignClient walletMgmtClient) {
+                                   WalletMgmtFeignClient walletMgmtClient,
+                                   GatewayConfig gatewayConfig) {
         this.subscriptionRepository = subscriptionRepository;
         this.signingServiceClient = signingServiceClient;
         this.walletMgmtClient = walletMgmtClient;
+        this.gatewayConfig = gatewayConfig;
     }
 
     @Override
@@ -136,26 +141,30 @@ public class SubscriptionServiceImpl implements SubscriptionService {
 
     /**
      * Execute a subscription charge transfer via the exchange-wallet.
-     * In production, merchant key material comes from secure storage.
+     *
+     * <p>P0-3 安全修复：订阅扣款由签名服务使用平台热钱包密钥库完成签名，
+     * 网关永不获取或传输私钥（legacy {@code transfer(..., prikey)} 路径已废弃）。
+     * 钱包不可达或平台公钥未配置时 fail-closed 返回 {@code null}，调用方据此
+     * 标记扣款失败，绝不生成伪交易哈希。</p>
      */
     private String executeSubscriptionCharge(Subscription sub) {
         try {
             String receiverPubkeyHash = walletMgmtClient.addressToPubkeyHash(sub.getPayeeAddress());
             if (receiverPubkeyHash == null) {
-                log.warn("Cannot resolve payee pubkeyHash (wallet unreachable?), simulating charge for: {}", sub.getSubscriptionNo());
-                return "0x" + UUID.randomUUID().toString().replace("-", "");
+                log.error("Cannot resolve payee pubkeyHash (wallet unreachable?), subscription charge failed (fail-closed): {}", sub.getSubscriptionNo());
+                return null;
             }
 
-            // In production, retrieve merchant/payer keypair from secure key store (HSM/KMS/Vault)
-            String payerPubkey = "";  // TODO: from secure key store
-            String payerPrikey = "";  // TODO: from secure key store
+            // P0-3 安全修复：使用 signTransfer（不传私钥），签名服务持钥签名
+            // 平台热钱包公钥从配置获取，私钥永不离开签名服务进程
+            String platformPubkey = gatewayConfig.getExchangeWallet().getPlatformPubkey();
 
-            if (payerPubkey.isEmpty() || payerPrikey.isEmpty()) {
-                log.warn("Payer key material not configured, simulating subscription charge");
-                return "0x" + UUID.randomUUID().toString().replace("-", "");
+            if (platformPubkey == null || platformPubkey.isEmpty()) {
+                log.error("Platform pubkey not configured, subscription charge failed (fail-closed): {}", sub.getSubscriptionNo());
+                return null;
             }
 
-            return signingServiceClient.transfer(payerPubkey, receiverPubkeyHash, sub.getAmount(), payerPrikey);
+            return signingServiceClient.signTransfer(platformPubkey, receiverPubkeyHash, sub.getAmount());
         } catch (Exception e) {
             log.error("Subscription charge exception: {}", e.getMessage());
             return null;

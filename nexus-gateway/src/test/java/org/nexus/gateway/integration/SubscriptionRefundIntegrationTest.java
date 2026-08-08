@@ -4,11 +4,16 @@ import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
+import org.nexus.sdk.client.feign.SigningServiceFeignClient;
+import org.nexus.sdk.client.feign.WalletMgmtFeignClient;
 
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 import static org.junit.jupiter.api.Assertions.*;
@@ -25,6 +30,26 @@ class SubscriptionRefundIntegrationTest {
 
     @Autowired
     private MockMvc mockMvc;
+
+    // SubscriptionServiceImpl 与 PaymentServiceImpl 直接注入 Feign 客户端，
+    // gateway-only 集成测试中签名/钱包服务不可达，需 mock 让订阅扣款与退款
+    // 流程在无远程服务环境下正常工作（与 GatewayCoreIntegrationTest 对齐）。
+    @MockBean
+    private SigningServiceFeignClient signingServiceFeignClient;
+
+    @MockBean
+    private WalletMgmtFeignClient walletMgmtFeignClient;
+
+    @BeforeEach
+    void stubWalletSign() {
+        // 订阅扣款 / 退款签名委托给签名服务（平台热钱包密钥库，不传私钥）。
+        when(signingServiceFeignClient.signTransfer(anyString(), anyString(),
+                org.mockito.ArgumentMatchers.any(java.math.BigDecimal.class)))
+                .thenReturn("0xSubTxHash1234567890abcdef1234567890abcdef");
+        // 扣款 / 退款前需把收款地址转为公钥哈希。
+        when(walletMgmtFeignClient.addressToPubkeyHash(anyString()))
+                .thenReturn("aabbccddeeff00112233445566778899aabbccdd");
+    }
 
     private static String apiKey;
     private static Long merchantId;
