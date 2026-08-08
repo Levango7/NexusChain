@@ -1,7 +1,11 @@
 package org.nexus.consensus.pos;
 
+import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
+import org.nexus.core.persist.StateSnapshotPersister;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -16,12 +20,21 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p>维护验证人集合，提供注册 / 注销、质押门槛校验与
  * 活跃验证人查询能力，是 PoS 共识的参与方管理基础组件。</p>
  *
+ * <h3>持久化</h3>
+ * <ul>
+ *   <li>{@code @PostConstruct}：从 {@code validator-registry-snapshot.json} 加载验证人列表。</li>
+ *   <li>{@code @PreDestroy}：保存全部验证人到同文件。</li>
+ *   <li>加载 / 保存失败均不阻塞启动 / 关闭（告警 + 继续空内存）。</li>
+ * </ul>
+ *
  * @since 1.2
  */
 @Component
 public class ValidatorRegistry {
 
     private static final Logger logger = LoggerFactory.getLogger(ValidatorRegistry.class);
+
+    private static final String SNAPSHOT_FILE = "validator-registry-snapshot.json";
 
     /** 默认最低质押门槛 */
     private static final BigDecimal DEFAULT_MIN_STAKE = new BigDecimal("1000");
@@ -33,6 +46,9 @@ public class ValidatorRegistry {
     private final int maxValidators;
     private final Map<String, Validator> validators = new ConcurrentHashMap<>();
 
+    @Autowired
+    private StateSnapshotPersister persister;
+
     public ValidatorRegistry() {
         this(DEFAULT_MIN_STAKE, DEFAULT_MAX_VALIDATORS);
     }
@@ -40,6 +56,47 @@ public class ValidatorRegistry {
     public ValidatorRegistry(BigDecimal minStakeAmount, int maxValidators) {
         this.minStakeAmount = minStakeAmount;
         this.maxValidators = maxValidators;
+    }
+
+    /**
+     * 启动时从快照恢复验证人集合。
+     *
+     * <p>快照格式：{@code List<Validator>}。文件不存在或解析失败时保持空内存。</p>
+     */
+    @PostConstruct
+    void loadSnapshot() {
+        if (persister == null) {
+            return;
+        }
+        List<Validator> snapshot = persister.load(
+                SNAPSHOT_FILE,
+                new com.fasterxml.jackson.core.type.TypeReference<List<Validator>>() {
+                });
+        if (snapshot == null || snapshot.isEmpty()) {
+            return;
+        }
+        int loaded = 0;
+        for (Validator v : snapshot) {
+            if (v == null || v.getAddress() == null) {
+                continue;
+            }
+            validators.put(v.getAddress(), v);
+            loaded++;
+        }
+        logger.info("Validator registry snapshot loaded: {} validators", loaded);
+    }
+
+    /**
+     * 关闭时保存验证人集合到快照。
+     *
+     * <p>保存失败仅告警，不阻塞关闭。</p>
+     */
+    @PreDestroy
+    void saveSnapshot() {
+        if (persister == null || !persister.isEnabled() || validators.isEmpty()) {
+            return;
+        }
+        persister.save(SNAPSHOT_FILE, new ArrayList<>(validators.values()));
     }
 
     /**
