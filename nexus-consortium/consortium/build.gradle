@@ -33,11 +33,12 @@ dependencies {
     compileOnly 'org.springframework.boot:spring-boot-configuration-processor'
     implementation project(':common')
     implementation project(':crypto')
-    // BouncyCastle 1.70: crypto 模块用 implementation 引入 bcprov/bcpkix 不会传递到本模块，
+    // BouncyCastle 1.78 (jdk18on): crypto 模块用 implementation 引入 bcprov/bcpkix 不会传递到本模块，
     // 而 ByteUtil/RLPUtils 直接使用了 org.bouncycastle.util.encoders.Hex 和
     // org.bouncycastle.util.BigIntegers，因此这里需要显式声明。
-    implementation "org.bouncycastle:bcprov-jdk15on:${bouncycastleVersion}"
-    implementation "org.bouncycastle:bcpkix-jdk15on:${bouncycastleVersion}"
+    // jdk18on 与 signing-service/sdk 统一，修复 bcprov 1.70 的 CVE。
+    implementation "org.bouncycastle:bcprov-jdk18on:${bouncycastleVersion}"
+    implementation "org.bouncycastle:bcpkix-jdk18on:${bouncycastleVersion}"
     annotationProcessor "org.projectlombok:lombok:${lombokVersion}"
     annotationProcessor 'org.springframework.boot:spring-boot-configuration-processor'
     implementation "com.google.guava:guava:${guavaVersion}"

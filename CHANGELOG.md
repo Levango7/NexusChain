@@ -2,6 +2,36 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [1.9.5] - 2026-08-08 - P1 架构缺口修复
+
+### 修复
+- PoS 出块调度器（PosMiningScheduler，@Scheduled + @ConditionalOnProperty）
+- 治理提案执行接线（oracle DefaultGovernanceService 按 type 分发 + GovernableParameterRegistry）
+- 状态持久化（ContractStorage/ValidatorRegistry/StakingServiceImpl JSON 快照）
+- Fee market 基本实现（EIP-1559 风格估算）
+
+## [1.9.4] - 2026-08-08 - P0 安全修复
+
+### 修复
+- 私钥经 HTTP 传输：transfer(含 privateKey) → signTransfer（不传私钥）
+- 模拟路径 fail-open：UUID 伪哈希 → return null（fail-closed）
+- 跨链桥熔断器：trip/Reset 实现基本逻辑 + CircuitBreakerTrippedEvent
+- Fallback 告警确认：9 个 Fallback 类全部已有日志告警
+
+## [1.9.3] - 2026-08-07 - PoS fail-closed 安全加固 + 仓库清理
+
+### 修复
+- PosConsensusEngine 验签 fail-closed（三条路径一律 return false）
+- signBlock 签名失败 return false（不再写入哈希指纹 fallback）
+- 仓库清理 -67520 行（归档目录、测试数据、设计文档）
+
+## [1.9.2] - 2026-08-07 - 诚实化改造
+
+### 变更
+- 文档勘误：对 v1.9.0（ZK 证明）与 v1.8.0（MPC 引擎）的成熟度声明补充勘误标注
+- README「成熟度声明」明确标注 MPC/ZK/L2/PoS 的真实状态
+- 承认"宣称能力 >> 实际能力"的差距，如实标注骨架/模拟/占位实现
+
 ## [1.9.1] - 2026-08-07 - 全量测试修复：975/975 全绿
 
 ### 修复

@@ -61,6 +61,17 @@ docker-compose up -d
 
 上述组件在达到生产级安全属性前，**不应用于承载真实资产**。
 
+## 研究层冻结（ADR-001）
+
+依据 [ADR-001](docs/adr/ADR-001-research-layer-freeze.md)，以下研究层模块**冻结进一步开发**，仅维护诚实声明，工程预算集中到产品层（gateway/settlement/compliance）：
+
+- **mpc-engine**：Rust gRPC MPC 引擎骨架，DKG/Sign/Aggregate 未接入真实密码学库
+- **nexus-core L2 ZK 证明系统**：Groth16 简化版（Schnorr 协议），非完整配对
+- **nexus-core L2 L1 合约交互**：Web3j 实现完成，但未在真实 L1 节点测试
+- **nexus-oracle 治理执行**：PARAMETER_CHANGE 已接线，SOFTWARE_UPGRADE/TREASURY_SPEND 为占位
+
+解冻条件：产品层达到生产可用 + 专门的密码学团队 + 真实 L1 测试环境。
+
 ## 许可证
 
 [Apache License 2.0](LICENSE)
@@ -71,3 +82,4 @@ docker-compose up -d
 - [ARCHITECTURE](ARCHITECTURE.md) — 架构与模块地图
 - [CHANGELOG](CHANGELOG.md) — 版本变更与勘误
 - [docs/decisions/ADR-020-version-strategy.md](docs/decisions/ADR-020-version-strategy.md) — 版本治理策略
+- [docs/adr/ADR-001-research-layer-freeze.md](docs/adr/ADR-001-research-layer-freeze.md) — 研究层冻结决策

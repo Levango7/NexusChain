@@ -4,7 +4,7 @@
 
 allprojects {
     group = 'org.nexus'
-    version = '1.9.2'
+    version = '1.9.5'
 
     repositories {
         mavenCentral()
@@ -15,6 +15,21 @@ allprojects {
 
 subprojects {
     apply plugin: 'java'
+    apply plugin: 'jacoco'
+
+    // JaCoCo 覆盖率报告（统一配置）。nexus-gateway 在自身 build.gradle 中
+    // 覆盖 html.required=true 与 jacocoTestCoverageVerification 门禁，其余模块
+    // 仅生成 xml 报告供聚合。阈值约束为后续任务，当前只启用报告生成。
+    jacoco {
+        toolVersion = "0.8.11"
+    }
+
+    jacocoTestReport {
+        reports {
+            xml.required = true
+            html.required = false
+        }
+    }
 
     // B1 baseline (2026-08-03): Java level is declared EXPLICITLY per module
     // (gateway/bridge via java toolchain 17; core 17; consortium/sdk/
@@ -39,13 +54,13 @@ subprojects {
     ext {
 
         slf4jVersion = '1.7.36'
-        logbackVersion = '1.2.11'
+        logbackVersion = '1.2.13'
         postgresqlVersion = '42.5.4'
         leveldbVersion = '0.7'
         hibernateValidatorVersion = '6.2.5.Final'
-        bouncycastleVersion = '1.70'
+        bouncycastleVersion = '1.78'
         jargon2Version = '1.1.1'
-        nettyVersion = '4.1.90.Final'
+        nettyVersion = '4.1.108.Final'
         grpcVersion = '1.54.0'
         httpClientVersion = '4.5.14'
         protobufVersion = '3.22.2'
@@ -64,7 +79,7 @@ subprojects {
         junitJupiterVersion = '5.10.2'
         mockitoVersion = '4.11.0'
 
-        nexusVersion = '1.9.2'
+        nexusVersion = '1.9.5'
     }
 
     // B1 baseline (2026-08-03): NO global forced test deps.

@@ -77,15 +77,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # v1.9.2：报告模式（exit-code 0）。存量依赖 CVE（如 bcprov 1.70）会阻断强制模式，
-      # 待依赖升级完成后改为 exit-code: 1。
-      - name: Trivy filesystem scan (report-only)
+      # v1.9.2：阻断模式（exit-code 1）。依赖已升级至 CVE 安全版本：
+      #   - BouncyCastle 1.70 → 1.78（bcprov-jdk15on → bcprov-jdk18on）
+      #   - Netty 4.1.90.Final → 4.1.108.Final
+      #   - Logback 1.2.11 → 1.2.13（CVE-2023-6378）
+      # Trivy 发现 CRITICAL/HIGH/MEDIUM 漏洞将阻断流水线。
+      - name: Trivy filesystem scan (blocking)
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: fs
           scan-ref: .
           severity: CRITICAL,HIGH,MEDIUM
-          exit-code: 0
+          exit-code: 1
 
   docker-build:
     needs: [build-and-test, security-scan]

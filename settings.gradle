@@ -16,7 +16,7 @@ include 'nexus-sdk:java'
 // === 服务层 ===
 // nexus-exchange-wallet 已在 v1.4.0 移除：signing/ 子包迁入 nexus-signing-service，
 // wallet/ 子包迁入 nexus-wallet-service。源码归档至 nexus-exchange-wallet.archived/。
-// nexus-consortium 作为 composite build 收编进统一构建（保留其独立 settings.gradle / Java8 / Spring Boot 2.2 结构，不强制迁移）。
+// nexus-consortium 作为 composite build 收编进统一构建（已升级 JDK 17，保留独立 settings.gradle 结构）。
 // 定位：与 nexus-core 并列的「联盟链 / 侧链」。双链设计为既定方案，详见 ARCHITECTURE.md。
 includeBuild 'nexus-consortium'
 include 'nexus-gateway'

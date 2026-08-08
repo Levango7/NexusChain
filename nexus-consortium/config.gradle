@@ -1,5 +1,5 @@
 ext {
-    bouncycastleVersion = '1.70'
+    bouncycastleVersion = '1.78'
     commonsCodecVersion = '1.13'
     jargon2Version = '1.1.1'
     guavaVersion = '31.1-jre'
