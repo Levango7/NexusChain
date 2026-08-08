@@ -6,7 +6,7 @@ plugins {
 }
 
 group = 'org.nexus'
-version = '1.9.2'
+
 
 java {
     toolchain {

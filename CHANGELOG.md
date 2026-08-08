@@ -2,6 +2,16 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [1.9.7] - 2026-08-08
+
+### Changed
+- 统一所有模块版本号到 1.9.7（根 build.gradle、nexus-gateway、4 个 composite build 模块）
+- ADR 文档目录统一到 docs/adr/（ADR-020 从 docs/decisions/ 迁入）
+- README.md ADR-020 引用路径更新
+
+### Added
+- 5 个 composite build 模块（consortium/settlement/compliance/analytics/oracle）添加 JaCoCo 插件和 xml 报告配置
+
 ## [1.9.5] - 2026-08-08 - P1 架构缺口修复
 
 ### 修复

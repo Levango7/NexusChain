@@ -1,11 +1,12 @@
 plugins {
     id 'java'
+    id 'jacoco'
     id 'org.springframework.boot' version '3.2.5'
     id 'io.spring.dependency-management' version '1.1.4'
 }
 
 group = 'org.nexus'
-version = '1.9.2'
+version = '1.9.7'
 
 java {
     sourceCompatibility = 17
@@ -30,6 +31,17 @@ dependencies {
 
 test {
     useJUnitPlatform()
+}
+
+jacoco {
+    toolVersion = "0.8.11"
+}
+
+jacocoTestReport {
+    reports {
+        xml.required = true
+        html.required = false
+    }
 }
 
 // 本模块是供其他应用消费的库（无 main class），不产出 Spring Boot fat jar：

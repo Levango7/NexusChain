@@ -1,1 +1,20 @@
 apply from: 'config.gradle'
+
+subprojects {
+    apply plugin: 'jacoco'
+
+    jacoco {
+        toolVersion = "0.8.11"
+    }
+
+    afterEvaluate {
+        if (plugins.hasPlugin('java')) {
+            jacocoTestReport {
+                reports {
+                    xml.required = true
+                    html.required = false
+                }
+            }
+        }
+    }
+}

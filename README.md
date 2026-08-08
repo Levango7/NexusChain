@@ -81,5 +81,5 @@ docker-compose up -d
 - [PRD](PRD.md) — 产品需求
 - [ARCHITECTURE](ARCHITECTURE.md) — 架构与模块地图
 - [CHANGELOG](CHANGELOG.md) — 版本变更与勘误
-- [docs/decisions/ADR-020-version-strategy.md](docs/decisions/ADR-020-version-strategy.md) — 版本治理策略
+- [docs/adr/ADR-020-version-strategy.md](docs/adr/ADR-020-version-strategy.md) — 版本治理策略
 - [docs/adr/ADR-001-research-layer-freeze.md](docs/adr/ADR-001-research-layer-freeze.md) — 研究层冻结决策
