@@ -51,9 +51,13 @@ task runTransactionTestTool(type: JavaExec) {
 
 /**
  * Runs all tests
+ *
+ * P1-T11: 切换至 JUnit Platform 以支持 ArchUnit (junit5) 架构合规测试。
+ * 现有 JUnit 4 测试（@RunWith(SpringRunner.class) / org.junit.Test）通过
+ * junit-vintage-engine 在 JUnit Platform 上继续运行，无需改写。
  */
 test {
-    useJUnit()
+    useJUnitPlatform()
 
     beforeTest { descriptor ->
         logger.lifecycle("Running test: ${descriptor}")
@@ -110,8 +114,13 @@ dependencies {
     // used to hide spring initialization logs messages in samples
     compileOnly "org.slf4j:jcl-over-slf4j:${slf4jVersion}"
 
-    testImplementation "junit:junit:${junitVersion}"
+    // P1-T11: JUnit Platform 模式下，JUnit 5（junit-jupiter）由 spring-boot-starter-test
+    // 提供，用于运行 ArchUnit 架构合规测试。现有 35 个 JUnit 4 测试（@RunWith(SpringRunner)
+    // + org.junit.Test）通过 junit:junit API + junit-vintage-engine 在 Platform 上继续运行，
+    // 无需改写。vintage-engine 5.10.2 与 spring-boot-starter-test 3.2.5 拉入的 junit-jupiter 对齐。
     implementation "org.springframework:spring-test:6.1.6"
+    testImplementation "junit:junit:${junitVersion}"
+    testImplementation 'org.junit.vintage:junit-vintage-engine:5.10.2'
     testImplementation "org.mockito:mockito-core:${mockitoVersion}"
     testImplementation "com.github.briandilley.jsonrpc4j:jsonrpc4j:1.6"
     testImplementation 'com.h2database:h2:2.2.224'

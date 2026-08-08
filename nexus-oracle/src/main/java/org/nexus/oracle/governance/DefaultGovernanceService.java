@@ -251,7 +251,8 @@ public class DefaultGovernanceService implements GovernanceService {
     private void executeSoftwareUpgrade(String proposalId, Map<String, Object> params) {
         Object targetVersion = params == null ? null : params.get("targetVersion");
         log.warn("Software upgrade proposal {} recorded: targetVersion={}. "
-                        + "Actual node rollout requires DevOps orchestration (TODO: integrate with rollout pipeline).",
+                        + "Actual node rollout requires DevOps orchestration (FROZEN per ADR-001: integrate with rollout pipeline). "
+                        + "解冻条件见 docs/adr/ADR-001-research-layer-freeze.md",
                 proposalId, targetVersion);
     }
 
@@ -268,7 +269,8 @@ public class DefaultGovernanceService implements GovernanceService {
         Object amount = params == null ? null : params.get("amount");
         Object to = params == null ? null : params.get("to");
         log.warn("Treasury spend proposal {} recorded: amount={}, to={}. "
-                        + "Actual transfer requires Treasury.spend() invocation or on-chain treasury contract (TODO).",
+                        + "Actual transfer requires Treasury.spend() invocation or on-chain treasury contract "
+                        + "(FROZEN per ADR-001). 解冻条件见 docs/adr/ADR-001-research-layer-freeze.md",
                 proposalId, amount, to);
     }
 

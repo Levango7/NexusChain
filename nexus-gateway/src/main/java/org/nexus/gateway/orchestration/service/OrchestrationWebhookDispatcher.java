@@ -30,7 +30,7 @@ import java.util.concurrent.LinkedBlockingQueue;
  *
  * <p>Note: the de-dup set and dead-letter queue are in-process. In a multi-instance
  * production deployment these should be backed by Redis (shared dedup key, durable
- * dead-letter store). TODO: swap the local structures for a Redis-backed store.</p>
+ * dead-letter store). TODO(v2.0.0): swap the local structures for a Redis-backed store — tracked in v2.0.0 roadmap</p>
  */
 @Component
 public class OrchestrationWebhookDispatcher {

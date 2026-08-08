@@ -45,7 +45,8 @@ import java.util.concurrent.atomic.AtomicLong;
  * <h3>骨架说明</h3>
  * <p>当前 {@link ZkProofSystem} 为骨架实现（{@link org.nexus.l2.zk.ZkProver}/{@link ZkVerifier}），
  * prove 返回占位证明，verify 校验非空。真实接入 halo2/Plonk 时仅需替换 ZkProofSystem 实现，
- * 本类无需改动。注释中标注 {@code TODO: zk} 处为真实 ZK 接入点。</p>
+ * 本类无需改动。注释中标注 {@code FROZEN per ADR-001: zk} 处为真实 ZK 接入点。
+ * 解冻条件见 docs/adr/ADR-001-research-layer-freeze.md</p>
  *
  * @since 1.2
  */
@@ -104,13 +105,15 @@ public class ZkRollup implements RollupManager {
                 preStateRoot, postStateRoot, batchDataHash, 0L, Collections.emptyList());
 
         // 3. 生成 ZK proof
-        // TODO: zk 真实接入时 witness 应包含每笔 tx 的执行 trace
+        // FROZEN per ADR-001: zk 真实接入时 witness 应包含每笔 tx 的执行 trace
+        // 解冻条件见 docs/adr/ADR-001-research-layer-freeze.md
         byte[] witness = encodeWitness(batch);
         ZkProof proof = zkProofSystem.prove(circuit, witness, publicInput);
 
         // 4. 提交状态根与 proof 到 L1
         bridge.submitStateRoot(batchId, postStateRoot);
-        // TODO: zk 真实接入时 proof 也应提交到 L1 合约（submitProof(batchId, proof)）
+        // FROZEN per ADR-001: zk 真实接入时 proof 也应提交到 L1 合约（submitProof(batchId, proof)）
+        // 解冻条件见 docs/adr/ADR-001-research-layer-freeze.md
 
         // 5. 记录批次上下文
         batches.put(batchId, new ZkBatchContext(batch, proof, publicInput, preStateRoot));
@@ -147,7 +150,8 @@ public class ZkRollup implements RollupManager {
             logger.error("ZkRollup verifyBatch: ZK proof INVALID for batch {}", batchId);
             return false;
         }
-        // TODO: zk 真实接入时还应从 L1 合约读取 proof 并验证（verifyOnL1(batchId)）
+        // FROZEN per ADR-001: zk 真实接入时还应从 L1 合约读取 proof 并验证（verifyOnL1(batchId)）
+        // 解冻条件见 docs/adr/ADR-001-research-layer-freeze.md
         ctx.batch.setStatus(RollupBatchStatus.VERIFIED);
         // 推进交易状态为 CONFIRMED
         if (ctx.batch.getTransactions() != null) {
@@ -243,7 +247,8 @@ public class ZkRollup implements RollupManager {
 
     private byte[] encodeWitness(RollupBatch batch) {
         // 骨架：将批次 tx 哈希列表编码为 witness 字节
-        // TODO: zk 真实接入时 witness 应包含每笔 tx 的完整执行 trace
+        // FROZEN per ADR-001: zk 真实接入时 witness 应包含每笔 tx 的完整执行 trace
+        // 解冻条件见 docs/adr/ADR-001-research-layer-freeze.md
         StringBuilder sb = new StringBuilder();
         sb.append("witness|batch=").append(batch.getBatchId());
         if (batch.getTransactions() != null) {

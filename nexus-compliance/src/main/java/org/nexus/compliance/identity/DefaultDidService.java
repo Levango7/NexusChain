@@ -24,7 +24,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * 能力：
  * <ul>
  *   <li>{@link #createDid}：生成 Ed25519 密钥对，构造符合 W3C 最小结构的 DID 文档并登记</li>
- *   <li>{@link #resolveDid}：从进程内注册表解析 DID 文档（TODO: 替换为链上解析）</li>
+ *   <li>{@link #resolveDid}：从进程内注册表解析 DID 文档（TODO(v2.0.0): 替换为链上解析 — tracked in v2.0.0 roadmap）</li>
  *   <li>{@link #issueCredential}：以本服务权威 DID 签发可验证凭证（对内容做 Ed25519 签名）</li>
  *   <li>{@link #verifyCredential}：解析发行者 DID 文档取公钥，验证签名与有效期</li>
  * </ul>

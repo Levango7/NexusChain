@@ -19,8 +19,8 @@ import org.springframework.stereotype.Component;
  *   <caption>表：ZK 证明后端对照表</caption>
  *   <tr><th>后端</th><th>实现</th><th>状态</th></tr>
  *   <tr><td>groth16</td><td>BouncyCastle 椭圆曲线 Groth16 简化版</td><td>可用</td></tr>
- *   <tr><td>plonk</td><td>Plonk 证明系统</td><td>TODO（降级为 groth16）</td></tr>
- *   <tr><td>halo2</td><td>halo2-jvm 绑定</td><td>TODO（降级为 groth16）</td></tr>
+ *   <tr><td>plonk</td><td>Plonk 证明系统</td><td>FROZEN per ADR-001（降级为 groth16）</td></tr>
+ *   <tr><td>halo2</td><td>halo2-jvm 绑定</td><td>FROZEN per ADR-001（降级为 groth16）</td></tr>
  *   <tr><td>mock</td><td>骨架占位实现</td><td>可用</td></tr>
  * </table>
  *
@@ -90,9 +90,9 @@ public class ZkProverProperties {
     public enum BackendType {
         /** BouncyCastle Groth16 简化版（可用） */
         GROTH16,
-        /** Plonk 证明系统（TODO，降级为 groth16） */
+        /** Plonk 证明系统（FROZEN per ADR-001，降级为 groth16） */
         PLONK,
-        /** halo2-jvm 绑定（TODO，降级为 groth16） */
+        /** halo2-jvm 绑定（FROZEN per ADR-001，降级为 groth16） */
         HALO2,
         /** 骨架占位实现 */
         MOCK

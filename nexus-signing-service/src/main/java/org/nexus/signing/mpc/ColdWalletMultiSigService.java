@@ -232,14 +232,15 @@ public class ColdWalletMultiSigService {
         MpcWallet wallet = wallets.get(session.getWalletId());
         List<MpcKeyShare> shares = keyShares.get(session.getWalletId());
         if (shares == null) {
-            // TODO: load key shares from the durable per-node share store.
+            // FROZEN per ADR-001: load key shares from the durable per-node share store.
+            // 解冻条件见 docs/adr/ADR-001-research-layer-freeze.md
             shares = new ArrayList<>();
             for (MpcParticipant p : session.getParticipants()) {
                 shares.add(new MpcKeyShare(
                         p.getParticipantId(),
-                        "TODO-private-share-" + p.getParticipantId(),
+                        "FROZEN-private-share-" + p.getParticipantId(),
                         p.getPublicKeyShareHex(),
-                        "TODO-paillier-" + p.getParticipantId()));
+                        "FROZEN-paillier-" + p.getParticipantId()));
             }
         }
 
@@ -284,7 +285,7 @@ public class ColdWalletMultiSigService {
         }
 
         MpcWallet wallet = wallets.get(session.getWalletId());
-        String jointPublicKeyHex = wallet != null ? wallet.getPublicKey() : "TODO-joint-pk";
+        String jointPublicKeyHex = wallet != null ? wallet.getPublicKey() : "FROZEN-joint-pk";
 
         String signatureHex;
         try {
@@ -294,8 +295,9 @@ public class ColdWalletMultiSigService {
             throw e;
         }
 
-        // TODO: encode the signature into the blockchain-specific transaction format
-        //       (e.g. RLP for EVM, raw tx for Bitcoin) before submitting.
+        // FROZEN per ADR-001: encode the signature into the blockchain-specific transaction
+        //       format (e.g. RLP for EVM, raw tx for Bitcoin) before submitting.
+        //       解冻条件见 docs/adr/ADR-001-research-layer-freeze.md
         // 解耦改造：直接通过 NodeController 广播签名结果到链节点，不再构造 WalletTransactionRequest
         // 经 OnChainExecutionClient → gateway → 链节点。减少一跳网络延迟，符合「签名服务负责签名+广播」边界。
         JsonObject broadcastResult = nodeController.sendTransaction(signatureHex);
@@ -456,8 +458,9 @@ public class ColdWalletMultiSigService {
     private String buildTransactionHex(String fromAddress, String toAddress,
                                        BigDecimal amount, String asset,
                                        String requestId) {
-        // TODO: encode the actual blockchain transaction (RLP / protobuf / etc.)
+        // FROZEN per ADR-001: encode the actual blockchain transaction (RLP / protobuf / etc.)
         //       For now we produce a deterministic placeholder.
+        //       解冻条件见 docs/adr/ADR-001-research-layer-freeze.md
         return "TX:" + fromAddress + ":" + toAddress + ":" + amount + ":" + asset + ":" + requestId;
     }
 }

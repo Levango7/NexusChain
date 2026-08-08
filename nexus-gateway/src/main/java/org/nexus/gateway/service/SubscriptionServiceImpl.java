@@ -57,7 +57,7 @@ public class SubscriptionServiceImpl implements SubscriptionService {
         sub.setStatus(Subscription.SubscriptionStatus.ACTIVE);
         sub.setNextChargeAt(LocalDateTime.now().plusDays(cycleDays));
 
-        // TODO: submit SUBSCRIPTION_AUTH transaction on-chain via nexus-sdk
+        // TODO(v2.0.0): submit SUBSCRIPTION_AUTH transaction on-chain via nexus-sdk — tracked in v2.0.0 roadmap
         sub.setAuthTxHash("0x" + UUID.randomUUID().toString().replace("-", ""));
 
         Subscription saved = subscriptionRepository.save(sub);

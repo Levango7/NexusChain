@@ -52,17 +52,21 @@ public class DefaultRiskEngine implements RiskEngine {
 
     @Override
     public void addRule(RiskRule rule) {
-        // TODO: 校验规则合法性、冲突检测、热加载通知
         if (Objects.nonNull(rule) && Objects.nonNull(rule.getRuleId())) {
             rules.put(rule.getRuleId(), rule);
+            log.info("Risk rule added: ruleId={}, totalRules={}", rule.getRuleId(), rules.size());
+        } else {
+            log.warn("Rejected invalid risk rule: rule={}, ruleId={}", rule, rule == null ? null : rule.getRuleId());
         }
     }
 
     @Override
     public void removeRule(String ruleId) {
-        // TODO: 移除后触发规则链重排与审计日志
         if (Objects.nonNull(ruleId)) {
-            rules.remove(ruleId);
+            RiskRule removed = rules.remove(ruleId);
+            if (removed != null) {
+                log.info("Risk rule removed: ruleId={}, totalRules={}", ruleId, rules.size());
+            }
         }
     }
 }

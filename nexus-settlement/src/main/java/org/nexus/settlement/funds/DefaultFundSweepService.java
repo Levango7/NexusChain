@@ -161,7 +161,7 @@ public class DefaultFundSweepService implements FundSweepService {
             log.debug("transferToCold skipped: hotBalance={} < threshold={}", hotBalance, coldThreshold);
             return 0;
         }
-        // TODO: 冷钱包转移需多签审批，接入审批流后补充
+        // TODO(v2.0.0): 冷钱包转移需多签审批，接入审批流后补充 — tracked in v2.0.0 roadmap
         ledger.bookTransfer(HOT_WALLET, COLD_WALLET, hotBalance, "COLD_TRANSFER");
         log.info("transferToCold completed: amount={}", hotBalance);
         return 1;

@@ -18,7 +18,7 @@ public class BlacklistRule implements RiskRule {
 
     private static final String RULE_ID = "BLACKLIST";
 
-    /** 黑名单地址集合（TODO: 改为外部数据源加载与热更新） */
+    /** 黑名单地址集合（TODO(v2.0.0): 改为外部数据源加载与热更新 — tracked in v2.0.0 roadmap） */
     private Set<String> blacklist;
 
     @Override

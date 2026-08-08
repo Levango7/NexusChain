@@ -40,7 +40,7 @@ public class DefaultAmlService implements AmlScreeningService {
     /** 制裁名单检查器 */
     private final SanctionListChecker sanctionListChecker;
 
-    /** 已受理的可疑交易报告登记表（TODO: 替换为持久化存储） */
+    /** 已受理的可疑交易报告登记表（TODO(v2.0.0): 替换为持久化存储 — tracked in v2.0.0 roadmap） */
     private final Map<String, SuspiciousTransactionReport> filedReports = new ConcurrentHashMap<>();
 
     public DefaultAmlService(SanctionListChecker sanctionListChecker) {

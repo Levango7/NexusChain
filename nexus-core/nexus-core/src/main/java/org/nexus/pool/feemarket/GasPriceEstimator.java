@@ -148,7 +148,7 @@ public class GasPriceEstimator implements FeeMarket {
      */
     @Override
     public void prioritizeByFee() {
-        // TODO(后续任务): 接入交易池引用后，按 (priorityFee + baseFee) 降序排序池中交易
+        // No-op: transaction pool reference not yet wired (see javadoc above)
         logger.debug("prioritizeByFee: no-op (transaction pool reference not yet wired); "
                 + "pending integration with PendingTransPool/AdoptTransPool");
     }

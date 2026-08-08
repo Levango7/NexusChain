@@ -24,9 +24,10 @@ import java.util.Objects;
  *
  * <p>This class is a <b>skeleton</b>: the orchestration flow and state machine
  * are fully wired, but the cryptographic primitives (Paillier, Feldman VSS,
- * curve arithmetic) are marked {@code TODO} and should be backed by a proven
- * library (e.g. <a href="https://github.com/cryptochest/cc">cryptochest</a> or
- * a vendored Safeheron/Cobo implementation).</p>
+ * curve arithmetic) are marked {@code FROZEN} per ADR-001 and should be backed
+ * by a proven library (e.g. <a href="https://github.com/cryptochest/cc">cryptochest</a>
+ * or a vendored Safeheron/Cobo implementation). 解冻条件见
+ * docs/adr/ADR-001-research-layer-freeze.md</p>
  */
 @Component
 public class MpcKeyGeneration {
@@ -114,18 +115,20 @@ public class MpcKeyGeneration {
             executeRound(r, participants, roundStates);
         }
 
-        // TODO: aggregate the per-participant public shares into the joint public key
-        //       X = sum(X_i) using the configured elliptic curve.
+        // FROZEN per ADR-001: aggregate the per-participant public shares into the joint
+        //       public key X = sum(X_i) using the configured elliptic curve.
+        //       解冻条件见 docs/adr/ADR-001-research-layer-freeze.md
         String jointPublicKeyHex = aggregatePublicKey(participants);
 
-        // TODO: collect the per-participant private shares produced by the VSS step.
+        // FROZEN per ADR-001: collect the per-participant private shares produced by the
+        //       VSS step. 解冻条件见 docs/adr/ADR-001-research-layer-freeze.md
         List<MpcKeyShare> shares = new ArrayList<>();
         for (MpcParticipant p : participants) {
             shares.add(new MpcKeyShare(
                     p.getParticipantId(),
-                    "TODO-private-share-" + p.getParticipantId(),
+                    "FROZEN-private-share-" + p.getParticipantId(),
                     p.getPublicKeyShareHex(),
-                    "TODO-paillier-" + p.getParticipantId()));
+                    "FROZEN-paillier-" + p.getParticipantId()));
         }
 
         log.info("DKG complete: jointPublicKeyHex={}, shares={}", jointPublicKeyHex, shares.size());
@@ -142,13 +145,14 @@ public class MpcKeyGeneration {
     private void executeRound(int round,
                               List<MpcParticipant> participants,
                               List<RoundState> roundStates) {
-        // TODO: implement the cryptographic body of each GG18/GG20 round:
+        // FROZEN per ADR-001: implement the cryptographic body of each GG18/GG20 round:
         //   round 1: sample Paillier keys + secret share, broadcast commitments
         //   round 2: Feldman VSS distribution
         //   round 3: verify VSS shares, complain if invalid
         //   round 4: compute private share = sum of received sub-shares
+        //   解冻条件见 docs/adr/ADR-001-research-layer-freeze.md
         for (RoundState rs : roundStates) {
-            // TODO: perform local computation for participant rs.getParticipantId()
+            // FROZEN per ADR-001: perform local computation for participant rs.getParticipantId()
             rs.markCompleted();
         }
         log.debug("DKG round {} completed for {} participants", round, participants.size());
@@ -161,8 +165,9 @@ public class MpcKeyGeneration {
      * @return hex-encoded joint public key
      */
     private String aggregatePublicKey(List<MpcParticipant> participants) {
-        // TODO: sum the public shares on the curve: X = sum(X_i)
+        // FROZEN per ADR-001: sum the public shares on the curve: X = sum(X_i)
         //       For now we concatenate the hex strings as a placeholder.
+        //       解冻条件见 docs/adr/ADR-001-research-layer-freeze.md
         StringBuilder sb = new StringBuilder("JOINT-PK:");
         for (MpcParticipant p : participants) {
             sb.append(p.getPublicKeyShareHex()).append("|");

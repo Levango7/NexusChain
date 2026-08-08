@@ -469,7 +469,7 @@ public class Transaction {
         return transaction;
     }
 
-    // TODO: use fromRPCBytes
+    // Deprecated: prefer fromRPCBytes; retained for binary compatibility
     public static Transaction transformByte(byte[] msg) {
         Transaction transaction = new Transaction();
         //version

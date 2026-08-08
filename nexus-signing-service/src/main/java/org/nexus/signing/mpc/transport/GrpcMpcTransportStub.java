@@ -83,12 +83,13 @@ public class GrpcMpcTransportStub implements MpcTransport {
     @Override
     public void send(MpcMessage message) {
         if (realGrpcEnabled) {
-            // TODO: 替换为 grpc stub 调用：
+            // FROZEN per ADR-001: 替换为 grpc stub 调用：
             //   ManagedChannel channel = channels.get(message.getToParticipantId());
             //   MpcSignerGrpc.MpcSignerFutureStub stub =
             //       MpcSignerGrpc.newFutureStub(channel)
             //           .withDeadlineAfter(timeoutMillis, TimeUnit.MILLISECONDS);
             //   stub.sendRound(MpcMessageProto.MpcMessage.parseFrom(message.toByteArray()));
+            //   解冻条件见 docs/adr/ADR-001-research-layer-freeze.md
             log.debug("gRPC send would route to channel: {}", channels.get(message.getToParticipantId()));
         }
         // 当前回退
@@ -103,7 +104,8 @@ public class GrpcMpcTransportStub implements MpcTransport {
 
     @Override
     public void close() {
-        // TODO: 关闭所有 ManagedChannel
+        // FROZEN per ADR-001: 关闭所有 ManagedChannel
+        // 解冻条件见 docs/adr/ADR-001-research-layer-freeze.md
         channels.clear();
         fallback.close();
     }

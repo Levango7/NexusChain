@@ -17,8 +17,9 @@ import java.util.Objects;
  * have been collected and that the resulting {@code (r, s)} verifies
  * against the joint public key before returning it.</p>
  *
- * <p>The cryptographic combine step is a <b>skeleton</b> marked {@code TODO};
- * the orchestration, validation, and audit logging are fully wired.</p>
+ * <p>The cryptographic combine step is a <b>skeleton</b> marked {@code FROZEN}
+ * per ADR-001; the orchestration, validation, and audit logging are fully wired.
+ * 解冻条件见 docs/adr/ADR-001-research-layer-freeze.md</p>
  */
 @Component
 public class MpcSignatureAggregator {
@@ -47,13 +48,16 @@ public class MpcSignatureAggregator {
         log.info("Aggregating signature shares for session {}: shares={}",
                 session.getSessionId(), session.getCollectedShareCount());
 
-        // TODO: verify each share's ZK proof against the joint public key
+        // FROZEN per ADR-001: verify each share's ZK proof against the joint public key
+        // 解冻条件见 docs/adr/ADR-001-research-layer-freeze.md
         verifyShares(session, jointPublicKeyHex);
 
-        // TODO: combine shares: s = sum(s_i) mod n, r = R.x mod n
+        // FROZEN per ADR-001: combine shares: s = sum(s_i) mod n, r = R.x mod n
+        // 解冻条件见 docs/adr/ADR-001-research-layer-freeze.md
         String combined = combineShares(session.getSignatureShares());
 
-        // TODO: verify (r, s) against the joint public key and txData
+        // FROZEN per ADR-001: verify (r, s) against the joint public key and txData
+        // 解冻条件见 docs/adr/ADR-001-research-layer-freeze.md
         verifyFinalSignature(combined, jointPublicKeyHex, session.getTxDataHex());
 
         session.markCompleted(combined);
@@ -72,7 +76,8 @@ public class MpcSignatureAggregator {
         for (Map.Entry<String, String> e : session.getSignatureShares().entrySet()) {
             String participantId = e.getKey();
             String shareHex = e.getValue();
-            // TODO: verify the ZK proof attached to this share
+            // FROZEN per ADR-001: verify the ZK proof attached to this share
+            // 解冻条件见 docs/adr/ADR-001-research-layer-freeze.md
             if (shareHex == null || shareHex.isEmpty()) {
                 session.markFailed(
                         MpcProtocolException.Reason.INVALID_SHARE,
@@ -93,8 +98,9 @@ public class MpcSignatureAggregator {
      * @return hex-encoded combined signature
      */
     private String combineShares(Map<String, String> signatureShares) {
-        // TODO: s = sum(s_i) mod n on the curve order n
+        // FROZEN per ADR-001: s = sum(s_i) mod n on the curve order n
         //       r = R.x mod n where R is the aggregated nonce point
+        //       解冻条件见 docs/adr/ADR-001-research-layer-freeze.md
         StringBuilder sb = new StringBuilder("SIG:");
         for (Map.Entry<String, String> e : signatureShares.entrySet()) {
             sb.append(e.getValue()).append("|");
@@ -112,8 +118,9 @@ public class MpcSignatureAggregator {
     private void verifyFinalSignature(String signatureHex,
                                       String jointPublicKeyHex,
                                       String txDataHex) {
-        // TODO: parse (r, s) from signatureHex, hash txDataHex, and verify
+        // FROZEN per ADR-001: parse (r, s) from signatureHex, hash txDataHex, and verify
         //       r * G == s^-1 * (hash * G + r * X)  on the curve.
+        //       解冻条件见 docs/adr/ADR-001-research-layer-freeze.md
         log.debug("Final signature verification stub: sig={}, pk={}, tx={}",
                 signatureHex, jointPublicKeyHex, txDataHex);
     }

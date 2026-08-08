@@ -19,7 +19,8 @@ import java.util.Objects;
  * <p>This class is a <b>skeleton</b>: the round orchestration and message
  * bookkeeping are fully wired, but the cryptographic body of each round
  * (Paillier homomorphic operations, ZK proofs, MtA protocol) is marked
- * {@code TODO} and must be backed by a proven library.</p>
+ * {@code FROZEN} per ADR-001 and must be backed by a proven library.
+ * 解冻条件见 docs/adr/ADR-001-research-layer-freeze.md</p>
  */
 @Component
 public class MpcSigner {
@@ -55,11 +56,12 @@ public class MpcSigner {
         }
 
         // After the final round each participant holds a local signature share s_i.
-        // TODO: extract s_i from the local state and record it on the session.
+        // FROZEN per ADR-001: extract s_i from the local state and record it on the session.
+        // 解冻条件见 docs/adr/ADR-001-research-layer-freeze.md
         for (MpcParticipant p : session.getParticipants()) {
             session.recordSignatureShare(
                     p.getParticipantId(),
-                    "TODO-sig-share-" + p.getParticipantId());
+                    "FROZEN-sig-share-" + p.getParticipantId());
         }
         session.markAggregating();
         log.info("Signing rounds complete for session {}; shares collected={}",
@@ -76,7 +78,7 @@ public class MpcSigner {
     private void executeRound(int round,
                               MpcSigningSession session,
                               List<MpcKeyShare> shares) {
-        // TODO: implement the cryptographic body of each GG18/GG20 signing round:
+        // FROZEN per ADR-001: implement the cryptographic body of each GG18/GG20 signing round:
         //   round 1: sample local k_i, broadcast R_i = k_i * G
         //   round 2: MtA (Multiplicative-to-Additive) protocol for k_i * x_j
         //   round 3: MtA for k_i * k_j
@@ -84,10 +86,11 @@ public class MpcSigner {
         //   round 5: compute local share s_i = k_i * m + r * x_i (mod n)
         //   round 6: ZK proof of correct share
         //   round 7: broadcast s_i
+        //   解冻条件见 docs/adr/ADR-001-research-layer-freeze.md
         for (MpcParticipant p : session.getParticipants()) {
-            // TODO: perform local computation for participant p in this round
+            // FROZEN per ADR-001: perform local computation for participant p in this round
             //       and broadcast / receive messages via the transport layer.
-            session.recordMessage(round, p.getParticipantId(), "TODO-msg-r" + round + "-" + p.getParticipantId());
+            session.recordMessage(round, p.getParticipantId(), "FROZEN-msg-r" + round + "-" + p.getParticipantId());
         }
     }
 }

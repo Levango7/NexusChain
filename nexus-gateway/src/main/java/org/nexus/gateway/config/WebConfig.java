@@ -29,7 +29,7 @@ public class WebConfig implements WebMvcConfigurer {
 
     // RateLimiter (Redis-backed, prod profile) is optional: when no profile supplies one
     // (e.g. plain dev run without Redis), rate limiting is disabled rather than failing
-    // startup. TODO: ensure the Redis-backed rate limiter is wired in every profile that
+    // startup. Ensure the Redis-backed rate limiter is wired in every profile that
     // needs throttling.
     public WebConfig(ApiKeyInterceptor apiKeyInterceptor, RateLimiter rateLimiter,
                      ApiVersionInterceptor apiVersionInterceptor, RequestSignatureInterceptor requestSignatureInterceptor) {

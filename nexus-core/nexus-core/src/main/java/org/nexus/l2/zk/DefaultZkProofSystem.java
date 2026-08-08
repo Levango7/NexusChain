@@ -22,8 +22,8 @@ import java.util.Arrays;
  * <p>实现 {@link ZkProofSystem} 接口，根据 {@link ZkProverProperties} 配置选择证明后端：</p>
  * <ul>
  *   <li><b>groth16</b>（默认）：使用 {@link Groth16ProofSystem}（BouncyCastle 椭圆曲线）</li>
- *   <li><b>plonk</b>：TODO，当前降级为 groth16</li>
- *   <li><b>halo2</b>：TODO，当前降级为 groth16</li>
+ *   <li><b>plonk</b>：FROZEN per ADR-001，当前降级为 groth16</li>
+ *   <li><b>halo2</b>：FROZEN per ADR-001，当前降级为 groth16</li>
  *   <li><b>mock</b>：骨架占位实现（prove 返回占位证明，verify 校验非空）</li>
  *   <li>{@code zk.prover.enabled=false}：禁用 ZK，prove 返回占位证明</li>
  * </ul>
@@ -177,8 +177,8 @@ public class DefaultZkProofSystem implements ZkProofSystem {
         }
         switch (backend) {
             case GROTH16: return "groth16-bc";
-            case PLONK: return "plonk(todo->groth16)";
-            case HALO2: return "halo2(todo->groth16)";
+            case PLONK: return "plonk(frozen->groth16)";
+            case HALO2: return "halo2(frozen->groth16)";
             case MOCK: return "mock";
             default: return "groth16-bc";
         }

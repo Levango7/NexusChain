@@ -35,7 +35,7 @@ public class DefaultSettlementService implements SettlementService {
 
     /**
      * Default settlement fee in basis points (0.5%).
-     * TODO: replace with a per-merchant FeeSchedule once merchant fee config exists.
+     * TODO(v2.0.0): replace with a per-merchant FeeSchedule once merchant fee config exists — tracked in v2.0.0 roadmap.
      */
     private static final int DEFAULT_FEE_BASIS_POINTS = 50;
 

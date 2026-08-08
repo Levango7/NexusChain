@@ -46,7 +46,7 @@ public class Leveldb {
                 try {
                     db.close();
                 } catch (IOException e) {
-                    // TODO Auto-generated catch block
+                    // Best-effort close during error handling; stack trace logged below
                     e.printStackTrace();
                 }
             }
@@ -79,14 +79,14 @@ public class Leveldb {
                 }
             }
         } catch (Exception e) {
-            // TODO Auto-generated catch block
+            // Snapshot read failure; stack trace logged below
             e.printStackTrace();
         } finally {
             if (db != null) {
                 try {
                     db.close();
                 } catch (IOException e) {
-                    // TODO Auto-generated catch block
+                    // Best-effort close during error handling; stack trace logged below
                     e.printStackTrace();
                 }
             }
