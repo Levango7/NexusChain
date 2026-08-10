@@ -10,9 +10,9 @@
 
 ## 1. 概述
 
-NexusChain v2.0.0-rc1 当前共有 **12 个被跳过的测试**，分布在 5 个测试类中。跳过原因集中于两类环境依赖：
+NexusChain v2.0.0-rc1 当前共有 **9 个被跳过的测试**，分布在 4 个测试类中。跳过原因集中于两类环境依赖：
 
-1. **外部工具链不兼容**：Hardhat EDR 与 Node v25 不兼容（5 个）、Rust mpc-engine 缺少 C 编译器未编译（3 个）
+1. **外部工具链不兼容**：Hardhat EDR 与 Node v25 不兼容（5 个）
 2. **跨平台/协议同步问题**：argon2 native 跨平台不一致（2 个）、protobuf 未同步新交易类型（1 个）、多线程阻塞循环（1 个）
 
 所有跳过均通过 JUnit 5 的 `@Disabled` 或 `Assumptions.assumeTrue(false, ...)` 实现，**不会导致构建失败**，仅在测试报告中标记为 skipped/aborted。
@@ -45,20 +45,26 @@ NexusChain v2.0.0-rc1 当前共有 **12 个被跳过的测试**，分布在 5 �
 | 4 | `testChallengeBatch` | 欺诈证明挑战批次 |
 | 5 | `testFraudProofChallenge_InvalidStateRoot_ChallengedAndInvalid` | 无效状态根挑战后标记 ChallengedAndInvalid |
 
-### 2.2 MPC 端到端测试（Rust 引擎未编译）
+### 2.2 MPC 端到端测试（已启用 ✅ — 3/3 通过）
 
 **所在文件**：`nexus-signing-service/src/test/java/org/nexus/signing/mpc/MpcEndToEndTest.java`
-**跳过机制**：每个测试方法调用 `assumeTrue(healthy, "Rust mpc-engine not available at ...")`，引擎健康检查失败时跳过；亦可通过环境变量 `NEX_MPC_ENGINE_SKIP_E2E=true` 强制跳过
-**跳过原因**：Rust `mpc-engine` 依赖 `multi-party-ecdsa` 等 crate，编译需要 C 编译器（gcc/clang/MSVC），当前开发环境缺少 C 编译器导致引擎未编译，gRPC 端口 `localhost:50051` 无服务
-**启用条件**：安装 C 编译器工具链；执行 `cargo build --release`（mpc-engine 目录）编译并启动 Rust 引擎；确认 `GrpcMpcCryptoEngine.healthCheck()` 返回 true
+**状态**：**已启用** — 3 个测试全部通过（2026-08-11 验证）
+**启用方式**：通过 `mpc-engine/start-engine.bat` 启动 Rust 引擎（使用 MSYS2 mingw64 工具链），`GrpcMpcCryptoEngine.healthCheck()` 返回 true
+**启用修复**：
+1. session_id 统一（DKG/Sign/Aggregate 共用同一 session_id）
+2. 阈值参数修正（t=3→t=2，Rust 引擎要求 `threshold < total_parties`）
+3. 签名方数修正（t→t+1，GG20 协议要求 `signer_count > threshold`）
+4. `aggregate.rs` message_bn 一致性（使用 `gg20::message_hash_to_bigint` 与 sign.rs 一致）
+5. Java 端 `verifyEcdsaSignature` 修正（`z=SHA256(hash)` 与 Rust 端一致）
+6. `.cargo/config.toml` GNU linker 持久化配置
 
-表：MpcEndToEndTest 跳过测试方法
+表：MpcEndToEndTest 已启用测试方法
 
-| # | 测试方法 | 验证内容 |
-|---|----------|----------|
-| 6 | `testHealthCheck` | Rust mpc-engine gRPC 健康检查 |
-| 7 | `testThreePartyDkgSignAggregateVerify` | 3-of-3 DKG→Sign→Aggregate→Verify 完整流程 |
-| 8 | `testTwoOfThreeThresholdSignature` | 2-of-3 阈值签名（t<n） |
+| # | 测试方法 | 验证内容 | 状态 |
+|---|----------|----------|------|
+| 6 | `testHealthCheck` | Rust mpc-engine gRPC 健康检查 | ✅ 通过 |
+| 7 | `testThreePartyDkgSignAggregateVerify` | 3-party-2-threshold DKG→Sign→Aggregate→Verify 完整流程 | ✅ 通过 |
+| 8 | `testTwoOfThreeThresholdSignature` | 2-of-3 阈值签名（t<n） | ✅ 通过 |
 
 ### 2.3 区块缓存多线程测试（阻塞循环）
 
@@ -128,10 +134,11 @@ NexusChain v2.0.0-rc1 当前共有 **12 个被跳过的测试**，分布在 5 �
 | 分组 | 跳过数 | 根因 | 启用条件 | 优先级 |
 |------|--------|------|----------|--------|
 | L2 L1 E2E | 5 | Hardhat EDR 与 Node v25 不兼容 | Node 降级至 v20/v22 LTS 或 EDR 升级 | 高（L2 真实化关键） |
-| MPC E2E | 3 | Rust 缺少 C 编译器 | 安装 C 编译器并 `cargo build` mpc-engine | 高（MPC 真实化关键） |
 | Keystore argon2 | 2 | argon2 native 跨平台不一致 | 统一 native 实现或改用纯 Java | 中 |
 | BlocksCache 多线程 | 1 | while(true) 阻塞循环 | 重构为带超时并发测试 | 低 |
 | SDK protobuf | 1 | protobuf 未定义新交易类型 | 更新 .proto 并重新生成代码 | 中 |
+
+> **已启用**：MPC E2E（3 个）已于 2026-08-11 启用并通过，详见 §2.2。
 
 ---
 

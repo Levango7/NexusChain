@@ -124,7 +124,7 @@ public class MpcEndToEndTest {
      * <p>流程：</p>
      * <ol>
      *   <li>3 方 DKG：每方调用 {@link MpcCryptoEngine#dkg}，产出聚合公钥 + 密钥分片</li>
-     *   <li>3 方签名：每方调用 {@link MpcCryptoEngine#sign}，产出部分签名</li>
+     *   <li>t+1 方签名（GG20 要求签名方数 > threshold）：每方调用 {@link MpcCryptoEngine#sign}，产出部分签名</li>
      *   <li>聚合：调用 {@link MpcCryptoEngine#aggregate}，产出最终签名 (r, s)</li>
      *   <li>ECDSA 验签：BouncyCastle 验证 (r, s) 对应 publicKey 和 messageHash</li>
      * </ol>
@@ -132,13 +132,13 @@ public class MpcEndToEndTest {
      * <p>若 Rust 引擎不可用，测试通过 {@link assumeTrue} 跳过。</p>
      */
     @Test
-    @DisplayName("3-of-3 DKG → Sign → Aggregate → ECDSA Verify")
-    void testThreePartyDkgSignAggregateVerify() {
+    @DisplayName("3-party-2-threshold DKG → Sign → Aggregate → ECDSA Verify")
+    void testThreePartyDkgSignAggregateVerify() throws Exception {
         // 前置条件：引擎可用
         assumeEngineAvailable();
 
         int n = 3;  // 总参与方数
-        int t = 3;  // 阈值（3-of-3）
+        int t = 2;  // 阈值（3-party-2-threshold）
         String curve = "secp256k1";
         String dkgSessionId = "e2e-dkg-3of3-" + System.currentTimeMillis();
 
@@ -174,12 +174,12 @@ public class MpcEndToEndTest {
 
         // === Phase 2: Sign ===
         log.info("=== Phase 2: 3-party Sign ===");
-        String signSessionId = "e2e-sign-3of3-" + System.currentTimeMillis();
+        String signSessionId = dkgSessionId;
         // 32 字节消息哈希（hex 64 字符）
         String messageHashHex = "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899";
 
         List<String> partialSignatures = new ArrayList<>();
-        for (int i = 0; i < n; i++) {
+        for (int i = 0; i <= t; i++) {
             SignRequest req = new SignRequest(signSessionId, jointPublicKey,
                     keyShares[i], messageHashHex, i, peerEndpoints);
             SignResponse resp = engine.sign(req);
@@ -191,7 +191,7 @@ public class MpcEndToEndTest {
             log.info("Sign party {} done: partialSig length={}",
                     i, resp.getPartialSignature().length());
         }
-        assertEquals(n, partialSignatures.size(), "should have n partial signatures");
+        assertEquals(t + 1, partialSignatures.size(), "should have t+1 partial signatures");
         log.info("Sign complete: collected {} partial signatures", partialSignatures.size());
 
         // === Phase 3: Aggregate ===
@@ -218,12 +218,12 @@ public class MpcEndToEndTest {
     /**
      * 2-of-3 阈值签名：t&lt;n 场景。
      *
-     * <p>3 方 DKG 生成 2-of-3 阈值密钥，仅需 2 方签名即可聚合。
+     * <p>3 方 DKG 生成 2-of-3 阈值密钥，需 t+1 方签名聚合（GG20 要求签名方数 > threshold）。
      * 验证阈值签名正确性。</p>
      */
     @Test
     @DisplayName("2-of-3 threshold DKG → Sign(t=2) → Aggregate → ECDSA Verify")
-    void testTwoOfThreeThresholdSignature() {
+    void testTwoOfThreeThresholdSignature() throws Exception {
         assumeEngineAvailable();
 
         int n = 3;  // 总参与方数
@@ -253,11 +253,11 @@ public class MpcEndToEndTest {
         log.info("2-of-3 DKG complete");
 
         // Sign: 仅 t=2 方签名（party 0 和 party 1）
-        String signSessionId = "e2e-sign-2of3-" + System.currentTimeMillis();
+        String signSessionId = dkgSessionId;
         String messageHashHex = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
 
         List<String> partialSignatures = new ArrayList<>();
-        for (int i = 0; i < t; i++) {
+        for (int i = 0; i <= t; i++) {
             SignRequest req = new SignRequest(signSessionId, jointPublicKey,
                     keyShares[i], messageHashHex, i, peerEndpoints);
             SignResponse resp = engine.sign(req);
@@ -265,7 +265,7 @@ public class MpcEndToEndTest {
                     "Sign party " + i + " should succeed, error: " + resp.getError());
             partialSignatures.add(resp.getPartialSignature());
         }
-        assertEquals(t, partialSignatures.size(), "should have t partial signatures");
+        assertEquals(t + 1, partialSignatures.size(), "should have t+1 partial signatures");
         log.info("2-of-3 Sign complete: {} partial signatures", partialSignatures.size());
 
         // Aggregate
@@ -311,7 +311,7 @@ public class MpcEndToEndTest {
     private static void verifyEcdsaSignature(String publicKeyHex,
                                               String messageHashHex,
                                               String rHex,
-                                              String sHex) {
+                                              String sHex) throws java.security.NoSuchAlgorithmException {
         X9ECParameters params = ECNamedCurveTable.getByName("secp256k1");
         assertNotNull(params, "secp256k1 curve must be available in BouncyCastle");
 
@@ -324,7 +324,9 @@ public class MpcEndToEndTest {
 
         BigInteger r = new BigInteger(1, HexFormat.of().parseHex(rHex));
         BigInteger s = new BigInteger(1, HexFormat.of().parseHex(sHex));
-        BigInteger z = new BigInteger(1, HexFormat.of().parseHex(messageHashHex));
+        byte[] hashBytes = HexFormat.of().parseHex(messageHashHex);
+        java.security.MessageDigest sha256 = java.security.MessageDigest.getInstance("SHA-256");
+        BigInteger z = new BigInteger(1, sha256.digest(hashBytes));
 
         assertTrue(r.compareTo(BigInteger.ONE) >= 0 && r.compareTo(n) < 0,
                 "r must be in [1, n-1]");

@@ -89,7 +89,7 @@ pub fn run_aggregate(
 
     // === 标准 secp256k1 验证（使用缓存的 r 点与公钥）===
     let public_key = gg20::point_from_hex(&req.public_key)?;
-    let message_bn = curv::BigInt::from_bytes(&message_bytes);
+    let message_bn = gg20::message_hash_to_bigint(&message_bytes);
     let r = cache.signature.r.clone();
     let sig = multi_party_ecdsa::protocols::multi_party_ecdsa::gg_2020::party_i::SignatureRecid {
         r: r.clone(),
