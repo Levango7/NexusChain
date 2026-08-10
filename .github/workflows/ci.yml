@@ -1,0 +1,118 @@
+name: NexusChain CI/CD Pipeline
+
+# P1-T9: CI/CD 流水线
+# -----------------------------------------------------------------------------
+# 触发：push / pull_request 到 master
+# 环境：JDK 17 (Amazon Corretto) + Gradle 依赖缓存
+# 流程：编译 → 测试 → 覆盖率报告 → Codecov 上传 → JAR 产物上传 → Docker 构建/推送
+#
+# 注：CI 运行于 Linux runner，使用 ./gradlew（Windows 本地开发用 gradlew.bat）。
+#     matrix.os 可扩展为 [ubuntu-latest, windows-latest] 做跨 OS 验证。
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+env:
+  # 关闭 daemon（CI 每次均为全新 runner，daemon 无意义且浪费资源）
+  GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.caching=true -Dfile.encoding=UTF-8"
+
+jobs:
+  # ============================================================
+  # 构建 & 测试 & 覆盖率
+  # ============================================================
+  build-and-test:
+    name: Build & Test (JDK 17 / ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # 可扩展为 [ubuntu-latest, windows-latest] 做跨 OS 验证
+        os: [ubuntu-latest]
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v4
+
+      - name: Setup JDK 17 (Amazon Corretto)
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'corretto'
+          cache: gradle
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: 编译 (compileJava + compileTestJava)
+        run: ./gradlew compileJava compileTestJava --no-daemon
+
+      - name: 测试 (test --continue, 跳过 jacoco 报告)
+        run: ./gradlew test --continue -x jacocoTestReport --no-daemon
+
+      - name: 生成 JaCoCo 覆盖率报告
+        run: ./gradlew jacocoTestReport --no-daemon
+
+      - name: 上传覆盖率到 Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./nexus-gateway/build/reports/jacoco/test/jacocoTestReport.xml,./nexus-bridge/build/reports/jacoco/test/jacocoTestReport.xml,./nexus-core/nexus-core/build/reports/jacoco/test/jacocoTestReport.xml,./nexus-signing-service/build/reports/jacoco/test/jacocoTestReport.xml,./nexus-wallet-service/build/reports/jacoco/test/jacocoTestReport.xml,./nexus-sdk/java/build/reports/jacoco/test/jacocoTestReport.xml
+          fail_ci_if_error: false
+          verbose: true
+
+      - name: 上传 JaCoCo HTML 报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-reports-${{ matrix.os }}
+          path: |
+            **/build/reports/jacoco/test/html
+            **/build/reports/jacoco/test/jacocoTestReport.xml
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: 上传 JAR 构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: jar-artifacts-${{ matrix.os }}
+          path: |
+            **/build/libs/*.jar
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # ============================================================
+  # CD：master 分支构建并推送 Docker 镜像到 GitHub Container Registry
+  # ============================================================
+  docker-build:
+    name: Docker Build & Push (${{ matrix.module }})
+    needs: build-and-test
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    env:
+      REGISTRY: ghcr.io
+      IMAGE_PREFIX: ${{ github.repository }}
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [nexus-gateway, nexus-bridge]
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v4
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./${{ matrix.module }}
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.module }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.module }}:${{ github.sha }}

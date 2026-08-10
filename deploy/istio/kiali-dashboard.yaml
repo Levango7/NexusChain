@@ -1,0 +1,194 @@
+# ============================================================================
+# NexusChain - Kiali 可视化配置
+# ============================================================================
+# 用途：
+#   部署 Kiali 服务网格可视化 dashboard，对接 Istio + Prometheus + Jaeger。
+#   - 服务拓扑图：实时展示 mesh 内服务调用关系
+#   - 流量动画：观察金丝雀发布、熔断驱逐实时状态
+#   - 健康概览：服务 / workload / mesh 健康度
+#   - Jaeger 集成：从 Kiali 直接跳转 trace 详情
+#
+# 部署：
+#   helm repo add kiali https://kiali.org/helm-charts
+#   helm upgrade --install kiali-server kiali/kiali-server \
+#     -n istio-system -f deploy/istio/kiali-dashboard.yaml
+#
+# 访问：
+#   kubectl port-forward svc/kiali 20001:20001 -n istio-system
+#   # 浏览器打开 http://localhost:20001
+#
+# 版本基线：Kiali 1.89（兼容 Istio 1.22）
+# ============================================================================
+---
+# ============================================================================
+# 1. Kiali Helm values（values 形式，helm install -f 引用）
+# ============================================================================
+# 注：以下为 Kiali Helm Chart values，非 K8s 原生资源
+#      通过 helm upgrade --install -f kiali-dashboard.yaml 应用
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kiali-helm-values-reference
+  namespace: istio-system
+  labels:
+    app.kubernetes.io/name: kiali
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/component: service-mesh
+  annotations:
+    description: "Kiali Helm values 参考（实际通过 helm -f 应用，此处仅文档化）"
+data:
+  values.yaml: |
+    # -- Kiali 部署规格
+    replicaCount: 2
+
+    # -- 镜像版本（兼容 Istio 1.22）
+    image:
+      repo: quay.io/kiali/kiali
+      tag: v1.89
+      pullPolicy: IfNotPresent
+
+    # -- Kiali 服务配置
+    server:
+      port: 20001
+      metrics_enabled: true
+      # -- Kiali 自身可观测性
+      observability:
+        logging:
+          level: info
+        metrics:
+          enabled: true
+
+    # -- Istio 控制面对接
+    istio:
+      istio_api_enabled: true
+      # -- 控制面命名空间
+      istio_namespace: istio-system
+      # -- 业务命名空间（仅观察 nexus mesh）
+      mesh_view:
+        namespaces:
+          - nexus
+          - istio-system
+      # -- 配置校验
+      config_validation: true
+
+    # -- Prometheus 对接（monitoring 命名空间的 kube-prometheus-stack）
+    external_services:
+      prometheus:
+        url: http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090
+        # -- 仅查询 mesh 相关指标
+        custom_metrics_url: http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090
+
+      # -- Jaeger / Grafana 跳转
+      tracing:
+        enabled: true
+        use_grpc: false
+        in_cluster_url: http://jaeger-query.nexus.svc.cluster.local:16686
+        url: http://jaeger.nexus.local
+        provider: jaeger
+        # -- trace 查询默认服务名前缀
+        namespace_selector: true
+        trace_query_timeout: 10s
+
+      grafana:
+        enabled: true
+        in_cluster_url: http://kube-prometheus-stack-grafana.monitoring.svc.cluster.local:80
+        url: http://grafana.nexus.local
+
+      # -- 自定义 dashboard（业务指标嵌入 Kiali）
+      custom_dashboards:
+        - name: nexus-payment
+          title: "NexusChain 支付指标"
+          items:
+            - chart:
+                name: "支付成功率"
+                unit: "percent"
+                spans: 6
+                metrics:
+                  - prometheus:
+                      query: |
+                        sum(rate(payment_success_total{namespace="nexus"}[5m])) /
+                        sum(rate(payment_attempt_total{namespace="nexus"}[5m]))
+            - chart:
+                name: "支付 P99 延迟"
+                unit: "ms"
+                spans: 6
+                metrics:
+                  - prometheus:
+                      query: |
+                        histogram_quantile(0.99,
+                        sum(rate(payment_duration_ms_bucket{namespace="nexus"}[5m])) by (le))
+
+    # -- Kiali 身份认证
+    auth:
+      strategy: token
+      # -- K8s ServiceAccount token 登录（生产可换 openid / header）
+
+    # -- Kiali 资源限制
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+    # -- Kiali Service 暴露
+    service:
+      type: ClusterIP
+      port: 20001
+
+    # -- Ingress（可选，生产通过 nginx ingress 暴露）
+    ingress:
+      enabled: true
+      className: nginx
+      hosts:
+        - kiali.nexus.local
+      path: /
+      pathType: Prefix
+
+    # -- 命名空间筛选：仅观察 nexus + istio-system
+    deployment:
+      accessible_namespaces:
+        - istio-system
+        - nexus
+      # -- view_only 模式：仅观察不修改（生产推荐）
+      view_only_mode: false
+      # -- 亲和性：与 istiod 同节点减少跨节点查询
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: kiali
+                topologyKey: topology.kubernetes.io/zone
+---
+# ============================================================================
+# 2. Kiali ServiceMonitor（Prometheus 抓取 Kiali 自身指标）
+# ============================================================================
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: kiali
+  namespace: istio-system
+  labels:
+    app.kubernetes.io/name: kiali
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/component: service-mesh
+    # -- kube-prometheus-stack 约定标签
+    release: kube-prometheus-stack
+  annotations:
+    description: "Prometheus 抓取 Kiali 自身指标"
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kiali
+  namespaceSelector:
+    matchNames:
+      - istio-system
+  endpoints:
+    - port: http-metrics
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s

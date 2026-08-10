@@ -1,0 +1,104 @@
+# =============================================================================
+# NexusChain Seata Client 共享配置（gateway / signing-service / wallet-service 共享）
+#
+# 本文件由 nacos-config/init.sh 发布至 Nacos：
+#   dataId : nexus-seata.yaml
+#   group  : NEXUS_GROUP
+#   type   : yaml
+#
+# 各微服务通过 bootstrap.yml 的 spring.cloud.nacos.config.shared-configs 引入：
+#   spring:
+#     cloud:
+#       nacos:
+#         config:
+#           shared-configs:
+#             - dataId: nexus-common.yaml
+#               refresh: true
+#             - dataId: nexus-seata.yaml      # ← Seata 共享配置
+#               refresh: true
+#
+# 设计文档 §4.2.2 Seata Client 接入 / §4.1 版本对齐矩阵
+#
+# 说明：
+#   - data-source-proxy-mode 默认 AT（gateway 本地数据库用 AT 模式，自动 undo_log）
+#   - signing-service 用 TCC 模式，在自己的私有配置中覆盖 data-source-proxy-mode（或不依赖数据源代理）
+#   - wallet-service Phase 3 不接入 Seata（设计文档 D8 决策），不引入本配置
+#   - 环境变量 NEX_SEATA_SERVER / NEX_NACOS_SERVER / NEX_NACOS_NAMESPACE 由 docker-compose 注入
+# =============================================================================
+
+seata:
+  # === 启用开关（紧急降级时设为 false，设计文档 §6.2 应急开关） ===
+  enabled: true
+  application-id: ${spring.application.name}
+  # === 事务组（所有 NexusChain 微服务统一 nexus-tx-group） ===
+  tx-service-group: nexus-tx-group
+
+  service:
+    # === 事务组 → 集群映射（与 Seata Server seataServer.properties 中 service.vgroup-mapping 对齐） ===
+    vgroup-mapping:
+      nexus-tx-group: default
+    # === TC 列表（default 集群对应的 Seata Server 地址） ===
+    grouplist:
+      default: ${NEX_SEATA_SERVER:127.0.0.1:8091}
+
+  # === 注册中心：Nacos（复用 nexus-nacos） ===
+  registry:
+    type: nacos
+    nacos:
+      server-addr: ${NEX_NACOS_SERVER:127.0.0.1:8848}
+      namespace: ${NEX_NACOS_NAMESPACE:dev}
+      group: SEATA_GROUP
+      # application 默认取 seata.application-id，无需显式指定
+      cluster: default
+
+  # === 配置中心：Nacos（Seata Client 从 Nacos 拉取 seataServer.properties） ===
+  config:
+    type: nacos
+    nacos:
+      server-addr: ${NEX_NACOS_SERVER:127.0.0.1:8848}
+      namespace: ${NEX_NACOS_NAMESPACE:dev}
+      group: SEATA_GROUP
+      # dataId 默认为 seataServer.properties（与 Seata Server 配置对齐）
+      data-id: seataServer.properties
+
+  # === 数据源代理模式 ===
+  # AT：自动生成 undo_log（gateway 本地数据库）
+  # signing-service 用 TCC 模式，在自己的私有配置中覆盖为不依赖数据源代理
+  data-source-proxy-mode: AT
+
+  # === Client 参数 ===
+  client:
+    # RM（资源管理器，分支事务侧）
+    rm:
+      report-success-enable: true
+      # AT 模式异步提交（Seata 2.0.0 新增，提升性能）
+      async-commit-buffer-limit: 10000
+      lock:
+        retry-interval: 10
+        retry-times: 30
+    # TM（事务管理器，全局事务发起侧，即 gateway）
+    tm:
+      commit-retry-count: 3
+      rollback-retry-count: 3
+      # 全局事务超时 60s（设计文档 §4.2.3，签名广播可能 > 30s，T4 时可调至 120s）
+      default-global-transaction-timeout: 60000
+    # undo_log 相关（AT 模式）
+    undo:
+      data-validation: true
+      log-serialization: jackson
+      # undo_log 表名（与设计文档 §4.2.5 建表 SQL 一致）
+      log-table: undo_log
+
+  # === 传输配置 ===
+  transport:
+    type: TCP
+    server: NIO
+    heartbeat: true
+    enable-client-batch-send-request: true
+    thread-factory:
+      boss-thread-prefix: NettyBoss
+      worker-thread-prefix: NettyWorker
+      boss-thread-size: 1
+      worker-thread-size: default
+    shutdown:
+      wait: 3

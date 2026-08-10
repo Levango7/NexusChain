@@ -1,0 +1,101 @@
+# NexusChain staging 环境覆盖
+# ============================================================================
+# 用法：helm upgrade --install nexus-chain deploy/helm/ \
+#        -f deploy/helm/values-staging.yaml -n nexus-staging
+# 特征：双副本、中资源、HPA 2-4、镜像 tag=staging、PDB minAvailable=1
+# ============================================================================
+
+global:
+  env: staging
+  namespace: nexus-staging
+  imagePullPolicy: IfNotPresent
+  springProfile: staging
+  serviceMonitor:
+    enabled: true
+  networkPolicy:
+    enabled: true
+
+# -- staging：副本 2、资源 512Mi/1、HPA 2-4、tag=staging
+nexus-gateway:
+  replicaCount: 2
+  image:
+    tag: staging
+  resources:
+    requests:
+      memory: 512Mi
+      cpu: 1000m
+    limits:
+      memory: 1Gi
+      cpu: 2000m
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 4
+    cpuTargetUtilization: 70
+    memoryTargetUtilization: 80
+  pdb:
+    enabled: true
+    minAvailable: 1
+
+nexus-bridge:
+  replicaCount: 2
+  image:
+    tag: staging
+  resources:
+    requests:
+      memory: 512Mi
+      cpu: 1000m
+    limits:
+      memory: 1Gi
+      cpu: 2000m
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 4
+    cpuTargetUtilization: 70
+    memoryTargetUtilization: 80
+  pdb:
+    enabled: true
+    minAvailable: 1
+
+nexus-signing-service:
+  replicaCount: 2
+  image:
+    tag: staging
+  resources:
+    requests:
+      memory: 512Mi
+      cpu: 1000m
+    limits:
+      memory: 1Gi
+      cpu: 2000m
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 4
+    cpuTargetUtilization: 70
+    memoryTargetUtilization: 80
+  pdb:
+    enabled: true
+    minAvailable: 1
+
+nexus-wallet-service:
+  replicaCount: 2
+  image:
+    tag: staging
+  resources:
+    requests:
+      memory: 512Mi
+      cpu: 1000m
+    limits:
+      memory: 1Gi
+      cpu: 2000m
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 4
+    cpuTargetUtilization: 70
+    memoryTargetUtilization: 80
+  pdb:
+    enabled: true
+    minAvailable: 1

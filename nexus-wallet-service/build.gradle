@@ -1,0 +1,153 @@
+// nexus-wallet-service
+//
+// Phase 2 微服务化：钱包管理服务独立部署单元。
+//
+// 定位：从 nexus-exchange-wallet 拆分出的「钱包管理服务」独立 Spring Boot 应用，
+// 承载以下职责：
+//   * 提现审批流程（approval/*：WithdrawalApprovalService /
+//     DefaultWithdrawalApprovalService / WithdrawalRequest / DefaultApprovalPolicy）
+//   * 钱包托管策略（custody/*：CustodyService / DefaultCustodyService /
+//     CustodyPolicy / WalletTier）
+//   * 地址白名单（whitelist/*：AddressWhitelistService /
+//     DefaultAddressWhitelistService / WhitelistEntry）
+//   * 链上执行通道（execution/*：OnChainExecutionClient / HttpOnChainExecutionClient）
+//   * 钱包管理 REST 端点（controller/WalletController）
+//
+// 跨服务调用：
+//   * wallet-service → signing-service：通过 SigningServiceFeignClient（Feign）
+//     调用签名服务的 /api/v1/transfers/sign 完成提现签名广播。
+//     DefaultWithdrawalApprovalService 不再依赖 OnChainExecutionClient，
+//     改为注入 SigningServiceFeignClient。
+//
+// SCA 版本矩阵（设计文档 §4.1）：
+//   Spring Boot 3.2.5 / Spring Cloud 2023.0.3 / SCA 2023.0.1.0
+//   Nacos 2.3.2 / Sentinel 1.8.8 / OpenFeign 4.1.0
+//
+// 详见 .codeartsdoer/specs/microservice-phase1-2/design.md。
+
+plugins {
+    id 'java'
+    id 'org.springframework.boot' version '3.2.5'
+    id 'io.spring.dependency-management' version '1.1.4'
+}
+
+group = 'org.nexus'
+version = '2.1.0'
+
+java {
+    sourceCompatibility = 17
+    targetCompatibility = 17
+}
+
+repositories {
+    maven { url 'https://maven.aliyun.com/nexus/content/groups/public/' }
+    mavenCentral()
+}
+
+tasks.withType(JavaCompile) {
+    options.encoding = "UTF-8"
+}
+
+dependencies {
+    // === Spring Boot ===
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    // === Phase 4 任务 #68：JPA 持久化（设计文档 §4.2） ===
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+
+    // === Phase 4 任务 #68：数据库迁移 + 驱动（设计文档 §4.3 Flyway） ===
+    // Flyway 9.22.3（Spring Boot 3.2.5 BOM 管理），9.x 无需单独 flyway-mysql 模块
+    implementation 'org.flywaydb:flyway-core'
+    // H2 内存数据库（开发 / 测试 profile）
+    runtimeOnly 'com.h2database:h2'
+    // MySQL 驱动（生产 profile）
+    runtimeOnly 'com.mysql:mysql-connector-j'
+    // === P2-T8：PostgreSQL 生产化（设计文档 §4.1） ===
+    // PostgreSQL 16 生产数据源驱动，runtimeOnly 仅运行时加载
+    runtimeOnly 'org.postgresql:postgresql:42.5.4'
+
+    // === Micrometer Tracing + Zipkin（Phase 3 任务 #61，设计文档 §4.3.1） ===
+    // SpringBoot 3.2.5 BOM 管理版本（micrometer-tracing 1.2.5 + zipkin-reporter-brave 2.16.4）
+    // W3C traceparent 格式跨服务传播，Zipkin 上报，Feign 自动埋点
+    implementation 'io.micrometer:micrometer-tracing-bridge-brave'
+    implementation 'io.zipkin.reporter2:zipkin-reporter-brave'
+    implementation 'io.github.openfeign:feign-micrometer'
+
+    // === Spring Cloud BOM（管理 OpenFeign / LoadBalancer 版本） ===
+    implementation platform('org.springframework.cloud:spring-cloud-dependencies:2023.0.3')
+    // === Spring Cloud Alibaba BOM（管理 Nacos / Sentinel 版本） ===
+    implementation platform('com.alibaba.cloud:spring-cloud-alibaba-dependencies:2023.0.1.0')
+
+    // === Nacos 服务发现 + 配置中心 ===
+    implementation 'com.alibaba.cloud:spring-cloud-starter-alibaba-nacos-discovery'
+    implementation 'com.alibaba.cloud:spring-cloud-starter-alibaba-nacos-config'
+
+    // === Sentinel 熔断 / 限流 ===
+    implementation 'com.alibaba.cloud:spring-cloud-starter-alibaba-sentinel'
+
+    // === Seata 分布式事务（Phase 3 任务 #61） ===
+    // SCA 2023.0.1.0 BOM 管理 seata-spring-boot-starter 版本（2.0.0），设计文档 §4.1 / §4.2.2
+    // wallet-service 作为 TCC 分支事务参与方（提现执行 DefaultWithdrawalApprovalService）
+    implementation 'com.alibaba.cloud:spring-cloud-starter-alibaba-seata'
+
+    // === OpenFeign 声明式调用 + LoadBalancer ===
+    // wallet-service 作为 Feign 客户端调 signing-service（SigningServiceFeignClient）
+    implementation 'org.springframework.cloud:spring-cloud-starter-openfeign'
+    implementation 'org.springframework.cloud:spring-cloud-starter-loadbalancer'
+
+    // === bootstrap.yml 支持（Spring Cloud 2023.0.x 需显式引入） ===
+    implementation 'org.springframework.cloud:spring-cloud-starter-bootstrap'
+
+    // === 共享 SDK：钱包服务消费 ApprovalPolicy / WalletTransactionRequest /
+    //     WithdrawalRequest / WalletTier 等 DTO + Feign 接口骨架
+    //     （SigningServiceFeignClient / WalletMgmtFeignClient / BridgeServiceFeignClient）。
+    //     wallet-service 作为根构建 include 子模块，直接用 project() 引用 nexus-sdk:java。 ===
+    implementation project(':nexus-sdk:java')
+
+    // === Gson（共享 JsonUtil + 控制器 Gson 反射用） ===
+    implementation 'com.google.code.gson:gson:2.10.1'
+
+    // === Jackson（WalletUtils / TxUtils 依赖） ===
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.15.4'
+
+    // === Resilience4j（与 Sentinel 共存，迁移期保留） ===
+    implementation 'io.github.resilience4j:resilience4j-spring-boot3:2.2.0'
+
+    // === 测试 ===
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    // JUnit 4 vintage bridge — 迁入的 exchange-wallet 测试仍用 @RunWith/@Test（JUnit 4）
+    testImplementation 'org.junit.vintage:junit-vintage-engine'
+    testImplementation 'org.mockito:mockito-junit-jupiter:4.11.0'
+}
+
+// 钱包服务为独立部署的 Spring Boot 应用，启用 bootJar 产出可执行 fat jar。
+bootJar {
+    enabled = true
+    archiveClassifier = ''
+}
+
+jar {
+    enabled = true
+    archiveClassifier = 'plain'
+}
+
+test {
+    useJUnitPlatform()
+}
+
+// === 覆盖率门禁（与 nexus-gateway 对齐，minimum 0.15） ===
+// BUNDLE 级别指令覆盖率下限 0.15；check 依赖 jacocoTestCoverageVerification 以强制门禁
+jacocoTestCoverageVerification {
+    violationRules {
+        rule {
+            element = 'BUNDLE'
+            limit {
+                counter = 'INSTRUCTION'
+                value = 'COVEREDRATIO'
+                minimum = 0.15
+            }
+        }
+    }
+}
+
+check.dependsOn jacocoTestCoverageVerification

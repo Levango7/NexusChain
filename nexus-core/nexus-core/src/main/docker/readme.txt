@@ -1,0 +1,3 @@
+- Copy cpay.yml to some dir.
+- Change the value of environment CPAY_MINER_COINBASE to your own coinbase in services.cpay_core.environment.
+- Run command: docker -f cpay.yml up -ddocker

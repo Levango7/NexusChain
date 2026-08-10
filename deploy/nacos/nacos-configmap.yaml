@@ -1,0 +1,119 @@
+# Nacos HA 集群 ConfigMap 配置
+#
+# 包含两个关键配置：
+#   1. application.properties — Nacos Server 主配置（外接 PostgreSQL、鉴权、集群模式）
+#   2. cluster.conf           — 集群节点列表（3 节点 Raft 集群发现）
+#
+# 关联文件：
+#   - nacos-ha-statefulset.yaml  挂载本 ConfigMap
+#   - nacos-ha-service.yaml      Headless Service 提供 cluster.conf 中的域名解析
+#
+# 注意：
+#   - 数据库密码不在此处明文，通过 Secret（nexus-secrets）注入
+#   - cluster.conf 中的地址使用 Headless Service 域名，确保 Pod 重建后 IP 变化不影响集群
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nacos-config
+  namespace: nexus
+  labels:
+    app: nacos
+    component: config-center
+  annotations:
+    # 标注配置版本，便于运维追踪
+    nexuschain.io/config-version: "v2.3.2-ha"
+    nexuschain.io/nacos-cluster-size: "3"
+data:
+  # Nacos Server 主配置
+  # 完整配置项参考：https://nacos.io/zh-cn/docs/v2/guide/deployment/
+  application.properties: |
+    #==========================================
+    # Nacos Server 配置（HA 集群模式）
+    #==========================================
+
+    #---------- 服务器基础配置 ----------
+    # 服务端口（HTTP / REST API）
+    server.port=8848
+    # 上下文路径
+    server.servlet.contextPath=/nacos
+    # 关闭默认 Tomcat access log，使用 Nacos 内置日志
+    server.tomcat.accesslog.enabled=false
+
+    #---------- 集群模式 ----------
+    # 启用集群模式（true = HA，false = 单机）
+    nacos.standalone=false
+    # 集群配置文件路径
+    nacos.member.list=/home/nacos/conf/cluster.conf
+
+    #---------- 外接 PostgreSQL 数据源 ----------
+    # 使用 PostgreSQL 作为配置/服务发现的持久化存储
+    # 注意：Nacos 2.3.2 内置 Derby，HA 模式必须外接 DB
+    spring.datasource.platform=postgresql
+    db.num=1
+    db.url.0=jdbc:postgresql://postgres.nexus.svc.cluster.local:5432/nacos_config?connectTimeout=5000&socketTimeout=30000&retries=3
+    db.user.0=${DB_USER}
+    db.password.0=${DB_PASSWORD}
+    # 连接池配置
+    db.pool.config.driverClassName=org.postgresql.Driver
+    db.pool.config.initialSize=10
+    db.pool.config.maxActive=50
+    db.pool.config.minIdle=5
+    db.pool.config.maxWait=10000
+    db.pool.config.connectionTimeout=10000
+    db.pool.config.validationQuery=SELECT 1
+
+    #---------- 鉴权配置 ----------
+    # 启用鉴权（生产环境必须 true）
+    nacos.core.auth.enabled=true
+    # 鉴权类型（默认 token）
+    nacos.core.auth.system.type=nacos
+    # Server identity（防止未授权访问，生产环境应通过 Secret 注入）
+    nacos.core.auth.server.identity.key=${NACOS_AUTH_IDENTITY_KEY:serverIdentity}
+    nacos.core.auth.server.identity.value=${NACOS_AUTH_IDENTITY_VALUE:nexuschain-nacos-2026}
+    # 默认 token（生产环境应通过 Secret 覆盖）
+    nacos.core.auth.plugin.nacos.token.cache.enable=true
+    nacos.core.auth.plugin.nacos.token.expire.seconds=18000
+    nacos.core.auth.plugin.nacos.token.secret.key=${NACOS_AUTH_SECRET_KEY:SecretKey012345678901234567890123456789012345678901234567890123456789}
+
+    #---------- 配置持久化 ----------
+    # 配置变更日志保留天数
+    nacos.config.retention.days=30
+    # 是否开启配置灰度发布
+    nacos.config.gray.enabled=true
+
+    #---------- 服务发现 ----------
+    # 客户端心跳间隔（ms）
+    nacos.naming.client.beat.interval=5000
+    # 服务实例持久化
+    nacos.naming.data.store=db
+
+    #---------- 监控 ----------
+    # 暴露 Prometheus 指标
+    management.endpoints.web.exposure.include=prometheus,health,info
+    management.metrics.export.prometheus.enabled=true
+
+    #---------- 日志 ----------
+    # 日志级别
+    logging.level.root=INFO
+    logging.level.com.alibaba.nacos=INFO
+    # 日志滚动配置
+    logging.file.name=/home/nacos/logs/nacos-server.log
+    logging.logback.rollingpolicy.max-file-size=100MB
+    logging.logback.rollingpolicy.max-history=30
+
+  # 集群节点列表（3 节点 Raft 集群发现）
+  # 格式：IP:port 或 域名:port
+  # 此处使用 Headless Service 域名，确保 Pod 重建后地址稳定
+  # 域名格式：{pod-name}.{headless-service}.{namespace}.svc.cluster.local
+  cluster.conf: |
+    # Nacos HA 集群节点列表（3 节点 Raft）
+    # 注意：节点数必须为奇数（3/5/7），偶数会导致 Raft 选主不稳定
+    # 修改节点数需同步修改 nacos-ha-statefulset.yaml 的 replicas
+    192.168.0.1:9849
+    192.168.0.2:9849
+    192.168.0.3:9849
+    # 上述为占位 IP，实际部署时通过 initContainer 或 entrypoint 脚本
+    # 动态生成以下格式（基于 Headless Service 域名）：
+    # nacos-0.nacos-headless.nexus.svc.cluster.local:9849
+    # nacos-1.nacos-headless.nexus.svc.cluster.local:9849
+    # nacos-2.nacos-headless.nexus.svc.cluster.local:9849

@@ -1,0 +1,132 @@
+# NexusChain prod 环境覆盖
+# ============================================================================
+# 用法：helm upgrade --install nexus-chain deploy/helm/ \
+#        -f deploy/helm/values-prod.yaml -n nexus
+# 特征：三副本、高资源、HPA 3-10、PDB minAvailable=2、固定版本 tag、
+#       多 AZ topologySpreadConstraints、imagePullPolicy=IfNotPresent
+# ============================================================================
+
+global:
+  env: prod
+  namespace: nexus
+  imagePullPolicy: IfNotPresent
+  springProfile: prod
+  serviceMonitor:
+    enabled: true
+  networkPolicy:
+    enabled: true
+
+# -- prod：副本 3、资源 1Gi/2、HPA 3-10、PDB minAvailable=2、固定 tag、多 AZ
+nexus-gateway:
+  replicaCount: 3
+  image:
+    # 固定不可变 tag（semver），禁止 latest
+    tag: 2.0.0
+  resources:
+    requests:
+      memory: 1Gi
+      cpu: 2000m
+    limits:
+      memory: 2Gi
+      cpu: 4000m
+  hpa:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+    cpuTargetUtilization: 70
+    memoryTargetUtilization: 80
+  pdb:
+    enabled: true
+    minAvailable: 2
+  # 多 AZ 反亲和：topologySpreadConstraints 跨 zone 均匀分布
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: DoNotSchedule
+      labelSelector:
+        matchLabels:
+          app.kubernetes.io/name: nexus-gateway
+
+nexus-bridge:
+  replicaCount: 3
+  image:
+    tag: 2.0.0
+  resources:
+    requests:
+      memory: 1Gi
+      cpu: 2000m
+    limits:
+      memory: 2Gi
+      cpu: 4000m
+  hpa:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+    cpuTargetUtilization: 70
+    memoryTargetUtilization: 80
+  pdb:
+    enabled: true
+    minAvailable: 2
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: DoNotSchedule
+      labelSelector:
+        matchLabels:
+          app.kubernetes.io/name: nexus-bridge
+
+nexus-signing-service:
+  replicaCount: 3
+  image:
+    tag: 2.0.0
+  resources:
+    requests:
+      memory: 1Gi
+      cpu: 2000m
+    limits:
+      memory: 2Gi
+      cpu: 4000m
+  hpa:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+    cpuTargetUtilization: 70
+    memoryTargetUtilization: 80
+  pdb:
+    enabled: true
+    minAvailable: 2
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: DoNotSchedule
+      labelSelector:
+        matchLabels:
+          app.kubernetes.io/name: nexus-signing-service
+
+nexus-wallet-service:
+  replicaCount: 3
+  image:
+    tag: 2.0.0
+  resources:
+    requests:
+      memory: 1Gi
+      cpu: 2000m
+    limits:
+      memory: 2Gi
+      cpu: 4000m
+  hpa:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+    cpuTargetUtilization: 70
+    memoryTargetUtilization: 80
+  pdb:
+    enabled: true
+    minAvailable: 2
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: DoNotSchedule
+      labelSelector:
+        matchLabels:
+          app.kubernetes.io/name: nexus-wallet-service

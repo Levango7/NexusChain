@@ -1,0 +1,235 @@
+plugins {
+    id 'io.spring.dependency-management' version '1.1.4'
+    id 'application'
+}
+
+// Docker build tasks have been removed; container images are now built via
+// the Dockerfiles located under src/main/docker/ (see build-docker.sh scripts).
+
+processResources {
+    exclude('genesis/nexus-genesis-generator.json')
+}
+
+// P5-T6: 排除 Hardhat 测试环境的 node_modules / cache / artifacts，
+// 避免数十万文件被复制到 build/resources/test/，显著加速 processTestResources。
+processTestResources {
+    exclude('l1-test/node_modules/**')
+    exclude('l1-test/cache/**')
+    exclude('l1-test/artifacts/**')
+    exclude('l1-test/deployed-address.json')
+}
+
+sourceCompatibility = 17
+targetCompatibility = 17
+
+mainClassName = 'org.nexus.Start'
+applicationDefaultJvmArgs = ["-server", "-Xss2m", "-Xmx2G", "-XX:-OmitStackTraceInFastThrow"]
+
+if (project.hasProperty('jvmArgs')) {
+    applicationDefaultJvmArgs = applicationDefaultJvmArgs + project.jvmArgs.split('\\s+').toList()
+}
+if (project.hasProperty("mainClass")) {
+    mainClassName = mainClass
+}
+
+ext.generatedSrcDir = file('src/gen/java')
+
+sourceSets.main.java.srcDirs += generatedSrcDir
+
+tasks.withType(JavaCompile) {
+    options.encoding = 'UTF-8'
+    options.warnings = false
+}
+
+task runKeyStoreTool(type: JavaExec) {
+    mainClass = "org.nexus.tools.KeyStoreTool"
+    classpath = sourceSets.main.runtimeClasspath
+    standardInput = System.in
+    if (project.hasProperty("appArgs")) {
+        args appArgs.split(" ")
+    }
+}
+
+task runTransactionTestTool(type: JavaExec) {
+    mainClass = "org.nexus.tools.TransactionTestTool"
+    classpath = sourceSets.main.runtimeClasspath
+    if (project.hasProperty("appArgs")) {
+        args appArgs.split(" ")
+    }
+}
+
+/**
+ * Runs all tests
+ *
+ * P1-T11: 切换至 JUnit Platform 以支持 ArchUnit (junit5) 架构合规测试。
+ * 现有 JUnit 4 测试（@RunWith(SpringRunner.class) / org.junit.Test）通过
+ * junit-vintage-engine 在 JUnit Platform 上继续运行，无需改写。
+ */
+test {
+    useJUnitPlatform()
+
+    beforeTest { descriptor ->
+        logger.lifecycle("Running test: ${descriptor}")
+    }
+
+    jvmArgs = ["-Xss8m", "-Xmx3G"]
+
+    testLogging {
+        events "failed"
+        exceptionFormat "short"
+    }
+
+    systemProperties System.properties
+    systemProperty "user.dir", workingDir
+    systemProperty "file.encoding", "UTF-8"
+}
+
+ext {
+    slf4jVersion = '1.7.36'
+    leveldbVersion = '0.12'
+    scastleVersion = '1.58.0.0'
+    hibernateValidatorVersion = '8.0.1.Final'
+    junitVersion = '4.13.2'
+    bouncyCastleVersion = '1.78'
+    nettyVersion = '4.1.108.Final'
+    grpcVersion = '1.54.0'
+    protobufVersion = '3.22.2'
+    // jacksonVersion managed by Spring Boot BOM
+    guavaVersion = '31.1-jre'
+    postgresqlVersion = '42.5.4'
+    mockitoVersion = '4.11.0'
+}
+
+dependencies {
+    implementation 'jakarta.servlet:jakarta.servlet-api:6.0.0'
+    implementation 'jakarta.annotation:jakarta.annotation-api:2.1.1'
+    implementation 'jakarta.xml.bind:jakarta.xml.bind-api:4.0.2'
+    implementation 'org.glassfish.jaxb:jaxb-runtime:4.0.5'
+    implementation 'jakarta.validation:jakarta.validation-api:3.0.2'
+    implementation 'org.hibernate.validator:hibernate-validator:8.0.1.Final'
+    implementation "com.google.guava:guava:${guavaVersion}"
+    implementation "org.slf4j:slf4j-api:${slf4jVersion}"
+    implementation "com.fasterxml.jackson.core:jackson-databind:${jacksonVersion}"
+    implementation "org.apache.commons:commons-collections4:4.4"
+    implementation "org.apache.commons:commons-lang3:3.12.0"
+    implementation 'org.apache.commons:commons-math3:3.6.1'
+    implementation "commons-codec:commons-codec:1.15"
+    implementation "org.springframework:spring-context:6.1.6"
+    implementation "com.typesafe:config:1.4.2"
+    implementation("com.googlecode.json-simple:json-simple:1.1.1") {
+        exclude group: 'junit', module: 'junit'
+    }
+
+    // used to hide spring initialization logs messages in samples
+    compileOnly "org.slf4j:jcl-over-slf4j:${slf4jVersion}"
+
+    // P1-T12: 所有测试已从 JUnit 4 迁移到 JUnit 5 (junit-jupiter)。
+    // junit-jupiter 由 spring-boot-starter-test 3.2.5 提供，无需额外声明。
+    // 移除 junit:junit 和 junit-vintage-engine，因为不再有 JUnit 4 测试。
+    implementation "org.springframework:spring-test:6.1.6"
+    testImplementation "org.mockito:mockito-core:${mockitoVersion}"
+    testImplementation "com.github.briandilley.jsonrpc4j:jsonrpc4j:1.6"
+    testImplementation 'com.h2database:h2:2.2.224'
+
+    implementation "org.springframework.boot:spring-boot-starter-web:3.2.5"
+
+    // Chicory: pure-Java WASM interpreter for native contract execution (no native deps)
+    implementation group: 'com.dylibso.chicory', name: 'wasm', version: '0.0.12'
+    implementation group: 'com.dylibso.chicory', name: 'runtime', version: '0.0.12'
+
+    implementation group: 'com.google.code.gson', name: 'gson', version: '2.10.1'
+    implementation group: 'org.bouncycastle', name: 'bcprov-jdk18on', version: "${bouncyCastleVersion}"
+    implementation group: 'com.kosprov.jargon2', name: 'jargon2-api', version: '1.1.1'
+    implementation group: 'com.kosprov.jargon2', name: 'jargon2-native-ri-backend', version: '1.1.1'
+    implementation group: 'com.google.protobuf', name: 'protobuf-java', version: "${protobufVersion}"
+    implementation('net.sf.json-lib:json-lib:2.4:jdk15')
+    testImplementation "org.springframework.boot:spring-boot-starter-test:3.2.5"
+
+    implementation group: 'org.postgresql', name: 'postgresql', version: "${postgresqlVersion}"
+    implementation group: 'com.googlecode.concurrentlinkedhashmap', name: 'concurrentlinkedhashmap-lru', version: '1.4.2'
+    implementation group: 'jakarta.validation', name: 'jakarta.validation-api', version: '3.0.2'
+    implementation group: 'commons-io', name: 'commons-io', version: '2.11.0'
+    implementation "org.springframework.boot:spring-boot-starter-jdbc:3.2.5"
+    implementation "org.springframework.boot:spring-boot-starter-logging:3.2.5"
+    implementation group: 'org.apache.commons', name: 'commons-dbcp2', version: '2.9.0'
+    implementation group: 'org.hibernate.validator', name: 'hibernate-validator', version: "${hibernateValidatorVersion}"
+    implementation group: 'org.apache.httpcomponents', name: 'httpclient', version: '4.5.14'
+
+    implementation group: 'io.netty', name: 'netty-all', version: "${nettyVersion}"
+    implementation "io.grpc:grpc-netty-shaded:${grpcVersion}"
+    implementation "io.grpc:grpc-protobuf:${grpcVersion}"
+    implementation "io.grpc:grpc-stub:${grpcVersion}"
+    implementation group: 'org.iq80.leveldb', name: 'leveldb', version: "${leveldbVersion}"
+    implementation group: 'org.iq80.leveldb', name: 'leveldb-api', version: "${leveldbVersion}"
+
+    implementation group: 'org.quartz-scheduler', name: 'quartz', version: '2.3.2'
+    implementation group: 'commons-cli', name: 'commons-cli', version: '1.5.0'
+    implementation group: 'com.beust', name: 'jcommander', version: '1.82'
+
+    // Web3j: L2↔L1 桥合约真实交互（任务 #83，审计报告 §3.4）
+    // 用于 L1ContractClient 调用 L1 桥合约 ABI：
+    //   submitStateRoot / markBatchVerified / finalizeWithdraws / challengeBatch
+    // 排除 jc-kzg-4844（EIP-4844 blob 支持），桥合约调用不需要且该依赖在
+    // 当前仓库配置下不可解析（与 nexus-bridge build.gradle 对齐）
+    implementation('org.web3j:core:4.11.0') {
+        exclude group: 'tech.pegasys', module: 'jc-kzg-4844'
+    }
+    implementation group: 'io.jsonwebtoken', name: 'jjwt-api', version: '0.11.5'
+    implementation group: 'io.jsonwebtoken', name: 'jjwt-impl', version: '0.11.5'
+    implementation group: 'io.jsonwebtoken', name: 'jjwt-jackson', version: '0.11.5'
+
+    implementation fileTree(dir: 'libs', include: ['*.jar'])
+}
+
+
+javadoc {
+    options.author = true
+    options.header = project.name
+    options.addStringOption('-quiet')
+    options.encoding = "UTF-8"
+    options.links(
+            "https://docs.oracle.com/javase/11/docs/api/",
+            "https://netty.io/4.1/api/"
+    )
+}
+
+
+task copyDependencies(type: Copy) {
+    from configurations.runtimeClasspath
+    destinationDir = file('build/libs/lib')
+}
+
+jar {
+    manifest {
+        attributes 'Main-Class': mainClassName
+        attributes 'Class-Path': '. ' + configurations.runtimeClasspath.collect { 'lib/' + it.getName() }.join(' ')
+    }
+}
+
+// create a single Jar with all dependencies
+task fatJar(type: Jar) {
+    archiveClassifier = 'all'
+    manifest {
+        attributes 'Main-Class': mainClassName
+        attributes 'Class-Path': configurations.runtimeClasspath.collect { 'lib/' + it.getName() }.join(' ')
+    }
+    from { configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) } }
+    with jar
+}
+
+// === 覆盖率门禁（与 nexus-gateway 对齐，minimum 0.15） ===
+// BUNDLE 级别指令覆盖率下限 0.15；check 依赖 jacocoTestCoverageVerification 以强制门禁
+jacocoTestCoverageVerification {
+    violationRules {
+        rule {
+            element = 'BUNDLE'
+            limit {
+                counter = 'INSTRUCTION'
+                value = 'COVEREDRATIO'
+                minimum = 0.15
+            }
+        }
+    }
+}
+
+check.dependsOn jacocoTestCoverageVerification

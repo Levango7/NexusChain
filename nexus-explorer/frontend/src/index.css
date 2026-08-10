@@ -1,0 +1,20 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* 引入设计令牌（CSS 变量定义来源）。
+ * tokens.ts 同步提供 JS 侧类型安全访问 + Tailwind 主题映射。 */
+@import "./styles/tokens.css";
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-body);
+}

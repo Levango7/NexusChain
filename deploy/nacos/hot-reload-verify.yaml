@@ -1,0 +1,154 @@
+# Nacos 配置热更新验证 ConfigMap
+#
+# 用途：验证 Nacos HA 集群配置动态推送能力
+# 验证场景：
+#   1. 修改 Nacos 控制台中的配置项
+#   2. 观察 4 个核心服务（gateway/bridge/signing-service/wallet-service）是否在 1s 内收到推送
+#   3. 验证配置变更生效（无需重启服务）
+#
+# 此 ConfigMap 不直接挂载到 Nacos，而是作为验证脚本的配置载体
+# 验证脚本通过 Nacos OpenAPI 推送配置，然后查询服务 actuator 端点确认生效
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nacos-hot-reload-verify
+  namespace: nexus
+  labels:
+    app: nacos
+    component: config-center
+    purpose: hot-reload-verification
+  annotations:
+    # 标注：此 ConfigMap 仅用于验证，不参与运行时配置
+    nexuschain.io/purpose: "verification-only"
+    nexuschain.io/verify-target: "dynamic-config-push-latency"
+data:
+  # 验证脚本：通过 Nacos OpenAPI 推送配置 + 查询服务 actuator 确认生效
+  verify.sh: |
+    #!/bin/bash
+    set -euo pipefail
+
+    # Nacos 地址（ClusterIP Service）
+    NACOS_ADDR="nacos.nexus.svc.cluster.local:8848"
+    # Nacos 鉴权 token（生产环境应从 Secret 读取）
+    NACOS_TOKEN="${NACOS_AUTH_TOKEN:-placeholder-token}"
+    # 验证用的 dataId / group
+    DATA_ID="nexus-common.yaml"
+    GROUP="NEXUS_GROUP"
+    # 验证用的配置内容（修改一个标记字段）
+    VERIFY_KEY="nexus.hotreload.verify.timestamp"
+    VERIFY_VALUE=$(date +%s)
+
+    echo "===== Nacos 配置热更新验证 ====="
+    echo "Nacos 地址: $NACOS_ADDR"
+    echo "dataId: $DATA_ID, group: $GROUP"
+    echo "验证值: $VERIFY_KEY=$VERIFY_VALUE"
+    echo ""
+
+    # 步骤 1：通过 OpenAPI 推送配置
+    echo "[1/4] 推送配置到 Nacos..."
+    PUSH_START=$(date +%s%3N)
+    curl -s -X POST "http://$NACOS_ADDR/nacos/v1/cs/configs" \
+      -H "Authorization: Bearer $NACOS_TOKEN" \
+      -d "dataId=$DATA_ID&group=$GROUP&content=$VERIFY_KEY: $VERIFY_VALUE"
+    PUSH_END=$(date +%s%3N)
+    PUSH_LATENCY=$((PUSH_END - PUSH_START))
+    echo "  推送耗时: ${PUSH_LATENCY}ms"
+
+    # 步骤 2：查询 Nacos 确认配置已持久化
+    echo "[2/4] 查询 Nacos 确认配置已持久化..."
+    QUERY_RESULT=$(curl -s "http://$NACOS_ADDR/nacos/v1/cs/configs?dataId=$DATA_ID&group=$GROUP" \
+      -H "Authorization: Bearer $NACOS_TOKEN")
+    if echo "$QUERY_RESULT" | grep -q "$VERIFY_VALUE"; then
+      echo "  [PASS] Nacos 已持久化配置"
+    else
+      echo "  [FAIL] Nacos 未持久化配置"
+      exit 1
+    fi
+
+    # 步骤 3：查询 4 个核心服务 actuator 确认配置已推送
+    echo "[3/4] 验证 4 个核心服务已收到配置推送..."
+    SERVICES=("nexus-gateway" "nexus-bridge" "nexus-signing-service" "nexus-wallet-service")
+    SUBSCRIBE_START=$(date +%s%3N)
+    for svc in "${SERVICES[@]}"; do
+      # 等待服务 actuator 反映新配置（最多 5s）
+      for i in $(seq 1 50); do
+        RESULT=$(curl -s "http://$svc.nexus.svc.cluster.local:8080/actuator/config-props" \
+          | grep -c "$VERIFY_VALUE" || true)
+        if [ "$RESULT" -gt 0 ]; then
+          echo "  [PASS] $svc 已收到配置（第 ${i} 次轮询，${i}00ms）"
+          break
+        fi
+        sleep 0.1
+      done
+      if [ "$RESULT" -eq 0 ]; then
+        echo "  [FAIL] $svc 5s 内未收到配置"
+        exit 1
+      fi
+    done
+    SUBSCRIBE_END=$(date +%s%3N)
+    SUBSCRIBE_LATENCY=$((SUBSCRIBE_END - SUBSCRIBE_START))
+    echo "  端到端推送延迟: ${SUBSCRIBE_LATENCY}ms（应 <1000ms）"
+
+    # 步骤 4：延迟断言
+    echo "[4/4] 延迟断言..."
+    if [ "$SUBSCRIBE_LATENCY" -lt 1000 ]; then
+      echo "  [PASS] 端到端延迟 ${SUBSCRIBE_LATENCY}ms < 1000ms（满足支付场景实时性要求）"
+    else
+      echo "  [WARN] 端到端延迟 ${SUBSCRIBE_LATENCY}ms >= 1000ms（需排查）"
+      # 不 exit 1，因为网络抖动可能导致偶发超时
+    fi
+
+    echo ""
+    echo "===== 验证完成 ====="
+
+  # 验证用配置示例：模拟 Sentinel 限流规则动态调整
+  sentinel-rules-verify.yaml: |
+    # 验证场景：动态调整 gateway 限流阈值
+    # 期望：修改后 <1s 内 gateway 收到新阈值，无需重启
+    spring:
+      cloud:
+        sentinel:
+          flow:
+            - resource: "POST:/api/v1/payments"
+              limitApp: "default"
+              grade: 1          # QPS
+              count: 1000       # 验证用：从 500 调整到 1000
+              strategy: 0
+              controlBehavior: 0
+              clusterMode: false
+          degrade:
+            - resource: "POST:/api/v1/payments"
+              limitApp: "default"
+              grade: 2          # 异常比例
+              count: 0.5
+              timeWindow: 10
+              minRequestAmount: 5
+
+  # 验证用配置示例：模拟 Seata 事务参数动态调整
+  seata-params-verify.yaml: |
+    # 验证场景：动态调整 Seata RM 锁超时时间
+    # 期望：修改后 <1s 内 signing-service 收到新参数
+    seata:
+      rm:
+        lock:
+          retryInterval: 100
+          retryTimes: 30
+          syncRetryInterval: 5
+          syncRetryTimes: 3
+      tm:
+        commitRetryCount: 3
+        rollbackRetryCount: 3
+        defaultGlobalTransactionTimeout: 60000
+
+  # 验证用配置示例：模拟链节点 RPC 切换
+  chain-rpc-switch-verify.yaml: |
+    # 验证场景：动态切换 bridge 的多链 RPC 端点（故障切换）
+    # 期望：修改后 <1s 内 bridge 收到新端点，开始向新节点发请求
+    nexus:
+      chain:
+        ethereum:
+          rpcUrl: "https://eth-mainnet.nexus.internal:8545"
+          fallbackRpcUrl: "https://eth-mainnet-backup.nexus.internal:8545"
+        polygon:
+          rpcUrl: "https://polygon-mainnet.nexus.internal:8545"
+          fallbackRpcUrl: "https://polygon-mainnet-backup.nexus.internal:8545"

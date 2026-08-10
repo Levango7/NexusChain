@@ -1,0 +1,39 @@
+# nexus-oracle application 配置
+#
+# P5-T7: 解冻 oracle 治理执行占位。
+# 本模块作为库被其他应用消费（参见 build.gradle bootJar.enabled=false），
+# 此配置文件提供治理执行相关参数的默认值，消费方可通过自身 application.yml
+# 或 Nacos 配置中心覆盖。
+#
+# 设计依据：ADR-001-research-layer-freeze.md 解冻条件已满足，
+# SOFTWARE_UPGRADE / TREASURY_SPEND 治理执行从占位升级为真实实现。
+#
+# GOV-P0-01 / GOV-P0-02 / GOV-P0-03 安全修复（v2.1.0）：
+#   - 事件源白名单校验
+#   - 审计日志 JPA 持久化 + 哈希链防篡改
+#   - 转账哈希改用 SHA-256
+
+spring:
+  application:
+    name: nexus-oracle
+  # JPA 配置（GOV-P0-02 审计日志持久化）
+  jpa:
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        format_sql: true
+    show-sql: false
+
+# === P5-T7: 治理执行配置 ===
+governance:
+  execution:
+    # 治理执行总开关：false 时 GovernanceExecutionDispatcher 不响应 ProposalStatusChangedEvent
+    enabled: true
+    # 异步执行：true 时 @Async 注解生效，提案执行不阻塞事件发布方
+    async-execution: true
+    # 审计日志保留天数（当前进程内存储不生效，接入持久化审计存储后生效）
+    audit-log-retention-days: 365
+    # GOV-P0-01: 受信任的事件来源白名单（逗号分隔）
+    # 仅处理白名单内来源的 ProposalStatusChangedEvent，非白名单来源记录 WARN 日志并跳过
+    trusted-sources: governance-service

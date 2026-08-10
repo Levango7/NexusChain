@@ -1,0 +1,79 @@
+// nexus-signing-service / MPC P2P 传输层 gRPC 接口定义
+//
+// P5-T3：Java 侧 MPC 传输层真实化。
+//
+// GrpcMpcTransportStub 通过本服务在 Java 参与方之间传递 MpcMessage
+// （KeyGenRound / SignRound / AggregateRound / Control）。
+// 每个 signing-service 实例启动一个 MpcTransportService server，
+// 接收其他参与方发来的消息并存入本地邮箱，供本地 receive() 取出。
+//
+// 与 mpc_crypto.proto 的关系：
+//   * mpc_crypto.proto：signing-service → Rust mpc-engine（DKG/Sign/Aggregate 高层 API）
+//   * mpc_transport.proto：signing-service → signing-service（P2P 消息传递）
+// Rust 引擎内部通过 peer_endpoints 自行建立 P2P 通道，本接口仅用于
+// Java 编排层在参与方之间广播部分签名等编排消息。
+
+syntax = "proto3";
+
+package nexus.mpc.transport;
+
+option java_package = "org.nexus.signing.mpc.transport.grpc";
+// 不使用 java_multiple_files：所有 message 嵌套在 MpcTransportProto 外类中，
+// 避免与同包 DTO 同名冲突。
+option java_outer_classname = "MpcTransportProto";
+
+// MPC P2P 传输服务。
+//
+// 由每个 signing-service 实例实现（gRPC server），
+// 其他 signing-service 实例作为 gRPC 客户端调用。
+service MpcTransportService {
+  // 发送一条 MPC 消息到对端。对端收到后存入本地邮箱，供 receive() 取出。
+  // 幂等：对端根据 message_id 去重，重复消息只存储一次。
+  rpc SendMpcMessage(MpcMessageProto) returns (Ack);
+
+  // 健康检查。
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+}
+
+// MPC 消息（与 org.nexus.signing.mpc.transport.MpcMessage 一一对应）。
+message MpcMessageProto {
+  // 全局唯一消息 ID（用于去重）。
+  string message_id = 1;
+  // 会话 ID。
+  string session_id = 2;
+  // 轮次号（1-based，控制消息可为 0）。
+  int32 round = 3;
+  // 消息类型（KEY_GEN_ROUND / SIGN_ROUND / AGGREGATE_ROUND / CONTROL）。
+  string type = 4;
+  // 发送者参与者 ID。
+  string from_participant_id = 5;
+  // 接收者参与者 ID；空字符串表示广播。
+  string to_participant_id = 6;
+  // 消息体（hex 编码的协议数据）。
+  string payload_hex = 7;
+  // 消息发送时间戳（毫秒，UTC）。
+  int64 timestamp = 8;
+  // 一次性随机数（hex），用于防重放。
+  string nonce = 9;
+  // HMAC-SHA256 签名（hex）；未签名时为空字符串。
+  string hmac_hex = 10;
+}
+
+// 通用确认响应。
+message Ack {
+  // 是否成功。
+  bool success = 1;
+  // 失败时的错误信息。
+  string error = 2;
+}
+
+// 健康检查请求。
+message HealthCheckRequest {
+  string service = 1;
+}
+
+// 健康检查响应。
+message HealthCheckResponse {
+  bool healthy = 1;
+  string status = 2;
+}

@@ -1,0 +1,142 @@
+# ============================================================================
+# NexusChain - Kafka 消费者组配置约定
+# ============================================================================
+# 任务：P3-T4 K8s 部署 Kafka 集群
+# 部署：kubectl apply -f deploy/kafka/kafka-consumer-groups.yaml -n kafka
+#
+# 说明：
+#   Strimzi 不提供消费者组 CRD（消费者组由 Kafka 客户端运行时动态创建）。
+#   本文件以 ConfigMap 形式集中记录 NexusChain 4 个消费者组的配置约定，
+#   供运维查询、Helm values 注入参考、以及消费者组 lag 监控告警使用。
+#   实际 group.id 通过 Spring Boot application.yml / Helm values 注入到各服务。
+# ============================================================================
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nexus-kafka-consumer-groups
+  namespace: kafka
+  labels:
+    app.kubernetes.io/name: nexus-kafka-consumer-groups
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/managed-by: strimzi-operator
+data:
+  # ========================================================================
+  # 消费者组清单（JSON 格式，便于程序化读取）
+  # ========================================================================
+  consumer-groups.json: |
+    {
+      "version": "1",
+      "cluster": "nexus-kafka",
+      "groups": [
+        {
+          "groupId": "nexus-gateway-payment-consumer",
+          "service": "nexus-gateway",
+          "topics": ["payment-events"],
+          "dlq": "payment-events-dlq",
+          "purpose": "支付事件消费 - 网关内部状态更新与事件溯源投影",
+          "parallelism": 12,
+          "autoOffsetReset": "earliest",
+          "enableAutoCommit": false,
+          "maxPollRecords": 100,
+          "retryMaxAttempts": 3,
+          "retryBackoffMs": 1000
+        },
+        {
+          "groupId": "nexus-analytics-payment-consumer",
+          "service": "nexus-analytics",
+          "topics": ["payment-events"],
+          "dlq": "payment-events-dlq",
+          "purpose": "支付事件消费 - 实时分析聚合（成功率、延迟、风控指标）",
+          "parallelism": 6,
+          "autoOffsetReset": "latest",
+          "enableAutoCommit": false,
+          "maxPollRecords": 200,
+          "retryMaxAttempts": 3,
+          "retryBackoffMs": 1000
+        },
+        {
+          "groupId": "nexus-gateway-webhook-consumer",
+          "service": "nexus-gateway",
+          "topics": ["webhook-events"],
+          "dlq": "payment-events-dlq",
+          "purpose": "Webhook 事件消费 - 异步投递商户回调，含指数退避重试",
+          "parallelism": 4,
+          "autoOffsetReset": "earliest",
+          "enableAutoCommit": false,
+          "maxPollRecords": 50,
+          "retryMaxAttempts": 5,
+          "retryBackoffMs": 2000
+        },
+        {
+          "groupId": "nexus-bridge-event-consumer",
+          "service": "nexus-bridge",
+          "topics": ["bridge-events"],
+          "dlq": "bridge-events-dlq",
+          "purpose": "桥事件消费 - 跨链状态机推进与对账",
+          "parallelism": 6,
+          "autoOffsetReset": "earliest",
+          "enableAutoCommit": false,
+          "maxPollRecords": 100,
+          "retryMaxAttempts": 3,
+          "retryBackoffMs": 1000
+        }
+      ]
+    }
+
+  # ========================================================================
+  # 消费者组配置说明（纯文本，便于 kubectl describe 阅读）
+  # ========================================================================
+  README.txt: |
+    NexusChain Kafka 消费者组配置约定
+    ====================================
+
+    1. nexus-gateway-payment-consumer
+       服务：nexus-gateway
+       订阅：payment-events
+       用途：消费支付事件，更新网关内部状态、写入事件溯源投影
+       并行度：12（与 payment-events 分区数对齐，1 消费者/分区）
+       offset 策略：earliest（首次启动从最早消息开始，避免丢事件）
+       auto-commit：false（手动提交，确保处理成功后才提交 offset）
+       max.poll.records：100（单次拉取 100 条，平衡吞吐与内存）
+       重试：3 次，退避 1s；超限后转入 payment-events-dlq
+
+    2. nexus-analytics-payment-consumer
+       服务：nexus-analytics
+       订阅：payment-events
+       用途：实时分析聚合（支付成功率、延迟分布、风控触发率）
+       并行度：6（分析服务实例数 <= 分区数 12）
+       offset 策略：latest（分析服务重启不回放历史，仅处理新事件）
+       auto-commit：false
+       max.poll.records：200（分析批量聚合，拉取更多提升吞吐）
+       重试：3 次，退避 1s；超限后转入 payment-events-dlq
+
+    3. nexus-gateway-webhook-consumer
+       服务：nexus-gateway
+       订阅：webhook-events
+       用途：异步投递商户回调 URL，含指数退避重试
+       并行度：4（与 webhook-events 分区数对齐）
+       offset 策略：earliest（webhook 不可丢，重启从最早未提交开始）
+       auto-commit：false
+       max.poll.records：50（webhook 投递为外部 HTTP 调用，单条耗时高）
+       重试：5 次，退避 2s（webhook 对重试更宽容）
+
+    4. nexus-bridge-event-consumer
+       服务：nexus-bridge
+       订阅：bridge-events
+       用途：消费桥事件，推进跨链状态机、触发对账
+       并行度：6（与 bridge-events 分区数对齐）
+       offset 策略：earliest
+       auto-commit：false
+       max.poll.records：100
+       重试：3 次，退避 1s；超限后转入 bridge-events-dlq
+
+    通用约定
+    --------
+    - 所有消费者 enable.auto.commit=false，使用 Spring Kafka 手动提交
+    - 消费者组名格式：<service>-<domain>-consumer，与 ServiceMonitor 标签对齐
+    - DLQ 命名：<topic>-dlq，死信消费者单独配置（人工或定时重放）
+    - 消费者组 lag 告警见 kafka-monitoring.yaml（KafkaConsumerGroupLagHigh）
+    - 重置 offset 需通过 kafka-consumer-groups.sh --reset-to-offset/--to-datetime
+      禁止直接删除消费者组再重建（会丢失 offset 语义）

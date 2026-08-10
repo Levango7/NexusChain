@@ -1,0 +1,83 @@
+# =============================================================================
+# nexus-gateway 生产环境配置（P2-T8：数据库生产化，H2 → PostgreSQL 16）
+# =============================================================================
+#
+# 激活方式：SPRING_PROFILES_ACTIVE=prod
+#
+# 设计要点：
+#   * 数据源指向 PostgreSQL 16 实例（容器名 postgres，库 nexus_gateway）
+#   * 用户名 / 密码从环境变量读取，禁止硬编码（K8s Secret / docker-compose env 注入）
+#   * HikariCP 连接池参数针对生产负载调优（20 连接上限 + 泄漏检测）
+#   * Flyway 指向 PostgreSQL 专用迁移目录 classpath:db/migration/postgresql
+#     （原 db/migration 保留 MySQL/H2 语法，供 dev profile 使用）
+#   * Hibernate dialect 切换为 PostgreSQLDialect，ddl-auto=validate（Flyway 管 schema）
+#
+# 相关文档：docs/database-production.md
+
+spring:
+  # === PostgreSQL 16 生产数据源 ===
+  # 主机名 postgres 为 docker-compose.prod.yml / K8s Service 名称
+  # 库名 nexus_gateway 与 gateway 服务独立，wallet-service 用 nexus_wallet
+  datasource:
+    url: ${NEX_DB_URL:jdbc:postgresql://postgres:5432/nexus_gateway}
+    username: ${NEX_DB_USERNAME:nexus_gateway}
+    password: ${NEX_DB_PASSWORD:${DB_PASSWORD}}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      # === HikariCP 连接池参数（生产调优） ===
+      # maximum-pool-size=20：单服务最大连接数。PostgreSQL 默认 max_connections=100，
+      #   gateway(20) + wallet-service(20) + 预留(60) 余量充足
+      maximum-pool-size: 20
+      # minimum-idle=5：最小空闲连接，避免冷启动建连开销
+      minimum-idle: 5
+      # connection-timeout=30000ms：获取连接最大等待时间，超时抛 SQLTransientConnectionException
+      connection-timeout: 30000
+      # idle-timeout=600000ms：空闲连接存活时长（10min），超过且池中连接 > minimum-idle 则释放
+      idle-timeout: 600000
+      # max-lifetime=1800000ms：连接最大生命周期（30min），到期强制重建，
+      #   必须小于 PostgreSQL idle_in_transaction_session_timeout / tcp_keepalives_idle
+      max-lifetime: 1800000
+      # leak-detection-threshold=60000ms：连接泄漏检测阈值（60s），
+      #   借出后 60s 未归还则记录 WARNING 日志（生产环境推荐 60s，开发可降至 0 关闭）
+      leak-detection-threshold: 60000
+      # 连接池名称（便于日志 / 监控识别）
+      pool-name: nexus-gateway-hikari
+
+  # === JPA / Hibernate（PostgreSQL 方言） ===
+  jpa:
+    hibernate:
+      # validate：Flyway 管理 schema，Hibernate 仅校验 Entity 与表结构一致
+      # 生产环境禁止 ddl-auto=update / create（防止 Hibernate 自动改表结构）
+      ddl-auto: validate
+    show-sql: false
+    open-in-view: false
+    properties:
+      hibernate:
+        # PostgreSQL 16 方言（Hibernate 6.x 自动检测通常也可，显式声明避免误判）
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: false
+        # 生产环境 JDBC 批处理优化
+        jdbc:
+          batch_size: 50
+          fetch_size: 200
+        order_inserts: true
+        order_updates: true
+
+  # === Flyway 迁移（PostgreSQL 专用脚本目录） ===
+  # locations 指向 db/migration-pg（与 dev profile 的 db/migration 平级隔离，
+  # 避免 Flyway classpath scanner 递归扫描子目录导致版本号冲突）
+  # PostgreSQL 全新部署时从 V1 起执行；已有 MySQL 数据需先迁移数据再切换 locations
+  flyway:
+    enabled: true
+    locations: classpath:db/migration-pg
+    # baseline-on-migrate=true：非空库自动 baseline（兼容已有数据的库切换场景）
+    baseline-on-migrate: true
+    baseline-version: 0
+
+# === 生产环境日志级别 ===
+# SQL 日志降为 WARN（生产不输出 SQL 文本，靠慢查询日志 / APM 追踪）
+logging:
+  level:
+    org.nexus: INFO
+    org.hibernate.SQL: WARN
+    com.zaxxer.hikari: INFO

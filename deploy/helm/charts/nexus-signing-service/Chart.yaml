@@ -1,0 +1,17 @@
+apiVersion: v2
+name: nexus-signing-service
+description: NexusChain 签名服务（Spring Boot）
+type: application
+version: 2.0.0
+appVersion: "2.0.0"
+keywords:
+  - blockchain
+  - signing
+  - cryptography
+  - spring-boot
+home: https://github.com/nexus/NexusChain
+sources:
+  - https://github.com/nexus/NexusChain
+maintainers:
+  - name: NexusChain DevOps
+    email: devops@nexus.network

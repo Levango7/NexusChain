@@ -1,0 +1,156 @@
+package org.nexus.gateway.orchestration.controller;
+
+import org.nexus.gateway.orchestration.connector.ConnectorHealth;
+import org.nexus.gateway.orchestration.connector.ConnectorRegistry;
+import org.nexus.gateway.orchestration.connector.PaymentConnector;
+import org.nexus.gateway.orchestration.model.OrchestratedPayment;
+import org.nexus.gateway.orchestration.routing.RoutingEngine;
+import org.nexus.gateway.orchestration.routing.RoutingRule;
+import org.nexus.gateway.orchestration.service.OrchestrationService;
+import org.springframework.data.domain.Page;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.*;
+import java.util.stream.Collectors;
+
+/**
+ * Unified Payment Orchestration API.
+ * Single entry point for creating, querying, and managing orchestrated payments.
+ */
+@RestController
+@RequestMapping("/api/v1/payments")
+public class PaymentOrchestrationController {
+
+    private final OrchestrationService orchestrationService;
+    private final ConnectorRegistry connectorRegistry;
+    private final RoutingEngine routingEngine;
+
+    public PaymentOrchestrationController(OrchestrationService orchestrationService,
+                                          ConnectorRegistry connectorRegistry,
+                                          RoutingEngine routingEngine) {
+        this.orchestrationService = orchestrationService;
+        this.connectorRegistry = connectorRegistry;
+        this.routingEngine = routingEngine;
+    }
+
+    // === Payment CRUD ===
+
+    @PostMapping
+    public ResponseEntity<Map<String, Object>> createPayment(@RequestBody Map<String, Object> body) {
+        Long merchantId = Long.valueOf(String.valueOf(body.getOrDefault("merchant_id", "1")));
+        long amount = Long.parseLong(String.valueOf(body.get("amount")));
+        String currency = String.valueOf(body.getOrDefault("currency", "NEX"));
+        String description = String.valueOf(body.getOrDefault("description", ""));
+        String notifyUrl = body.containsKey("notify_url") ? String.valueOf(body.get("notify_url")) : null;
+        String metadata = body.containsKey("metadata") ? String.valueOf(body.get("metadata")) : null;
+        String requestId = body.containsKey("request_id") ? String.valueOf(body.get("request_id")) : null;
+
+        String preferredConnector = null;
+        if (body.containsKey("routing")) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> routing = (Map<String, Object>) body.get("routing");
+            preferredConnector = routing.containsKey("preferred_connector")
+                    ? String.valueOf(routing.get("preferred_connector")) : null;
+        }
+
+        OrchestratedPayment payment = orchestrationService.createPayment(
+                merchantId, amount, currency, description, notifyUrl, preferredConnector, metadata, requestId);
+
+        return ResponseEntity.status(HttpStatus.CREATED).body(toResponse(payment));
+    }
+
+    @GetMapping("/{id}")
+    public ResponseEntity<Map<String, Object>> getPayment(@PathVariable String id) {
+        OrchestratedPayment payment = orchestrationService.getPayment(id);
+        if (payment == null) {
+            return ResponseEntity.notFound().build();
+        }
+        return ResponseEntity.ok(toResponse(payment));
+    }
+
+    @GetMapping
+    public ResponseEntity<Map<String, Object>> listPayments(
+            @RequestParam(defaultValue = "1") Long merchantId,
+            @RequestParam(required = false) String status,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int limit) {
+        Page<OrchestratedPayment> payments = orchestrationService.listPayments(merchantId, status, page, limit);
+        Map<String, Object> resp = new LinkedHashMap<>();
+        resp.put("data", payments.getContent().stream().map(this::toResponse).collect(Collectors.toList()));
+        resp.put("total", payments.getTotalElements());
+        resp.put("page", page);
+        resp.put("limit", limit);
+        return ResponseEntity.ok(resp);
+    }
+
+    @PostMapping("/{id}/refresh")
+    public ResponseEntity<Map<String, Object>> refreshStatus(@PathVariable String id) {
+        OrchestratedPayment payment = orchestrationService.refreshStatus(id);
+        if (payment == null) return ResponseEntity.notFound().build();
+        return ResponseEntity.ok(toResponse(payment));
+    }
+
+    // === Connector Management ===
+
+    @GetMapping("/connectors")
+    public ResponseEntity<List<Map<String, Object>>> listConnectors() {
+        List<Map<String, Object>> list = connectorRegistry.getAll().stream().map(c -> {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("id", c.getId());
+            m.put("type", c.getType());
+            m.put("display_name", c.getDisplayName());
+            m.put("active", c.isActive());
+            m.put("fee_bps", c.feeBasisPoints());
+            m.put("currencies", c.supportedCurrencies());
+            return m;
+        }).collect(Collectors.toList());
+        return ResponseEntity.ok(list);
+    }
+
+    @GetMapping("/connectors/{id}/health")
+    public ResponseEntity<ConnectorHealth> connectorHealth(@PathVariable String id) {
+        return connectorRegistry.get(id)
+                .map(c -> ResponseEntity.ok(c.healthCheck()))
+                .orElse(ResponseEntity.notFound().build());
+    }
+
+    // === Routing Rules ===
+
+    @GetMapping("/routing-rules")
+    public ResponseEntity<List<RoutingRule>> listRules() {
+        return ResponseEntity.ok(routingEngine.getRules());
+    }
+
+    @PostMapping("/routing-rules")
+    public ResponseEntity<RoutingRule> addRule(@RequestBody RoutingRule rule) {
+        routingEngine.addRule(rule);
+        return ResponseEntity.status(HttpStatus.CREATED).body(rule);
+    }
+
+    @DeleteMapping("/routing-rules/{id}")
+    public ResponseEntity<Void> deleteRule(@PathVariable String id) {
+        routingEngine.removeRule(id);
+        return ResponseEntity.noContent().build();
+    }
+
+    // === Helpers ===
+
+    private Map<String, Object> toResponse(OrchestratedPayment p) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", p.getId());
+        m.put("status", p.getStatus().name());
+        m.put("amount", p.getAmount());
+        m.put("currency", p.getCurrency());
+        m.put("description", p.getDescription());
+        m.put("connector", p.getConnectorId());
+        m.put("connector_payment_id", p.getConnectorPaymentId());
+        m.put("transaction_hash", p.getTransactionHash());
+        m.put("routing_strategy", p.getRoutingStrategy());
+        m.put("created_at", p.getCreatedAt() != null ? p.getCreatedAt().toString() : null);
+        m.put("confirmed_at", p.getConfirmedAt() != null ? p.getConfirmedAt().toString() : null);
+        m.put("expires_at", p.getExpiresAt() != null ? p.getExpiresAt().toString() : null);
+        return m;
+    }
+}

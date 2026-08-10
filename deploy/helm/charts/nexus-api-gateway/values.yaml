@@ -1,0 +1,288 @@
+# nexus-api-gateway 子 chart 默认 values
+# ============================================================================
+# P3-T2：Spring Cloud Gateway 统一 API 入口
+# 端口 8085，依赖 Nacos + Redis + Zipkin（不依赖 Seata / Sentinel / Postgres）
+# umbrella 层通过 .Values.nexus-api-gateway.* 覆盖，global.* 透传
+# ============================================================================
+
+# -- 是否启用本子 chart
+enabled: true
+
+# -- 副本数（HPA 启用时作为初始值）
+replicaCount: 2
+
+# -- 服务名（K8s Service / Deployment 名）
+nameOverride: ""
+
+image:
+  # -- 镜像 repository（不含 tag）；留空则用 global.imageRegistry/nexus-api-gateway
+  repository: ""
+  # -- 镜像 tag；留空则回退 global.env
+  tag: ""
+  # -- 拉取策略；留空则回退 global.imagePullPolicy
+  pullPolicy: ""
+
+# -- 镜像拉取 Secret 名列表（引用 umbrella 创建的 secret）
+imagePullSecrets: []
+  # - name: ghcr-pull-secret
+
+service:
+  # -- Service 类型
+  type: ClusterIP
+  # -- Service 端口
+  port: 8085
+  # -- 容器端口（targetPort）
+  targetPort: 8085
+  # -- 端口名（ServiceMonitor / probes 引用）
+  name: http
+
+# -- Spring profile 覆盖；留空回退 global.springProfile / global.env
+springProfile: ""
+
+# -- 依赖的基础设施（控制是否注入对应环境变量）
+#   注：API Gateway 不依赖 Seata / Sentinel / Postgres（无业务数据库、无 TCC 事务）
+dependencies:
+  nacos: true
+  seata: false
+  sentinel: false
+  zipkin: true
+  postgres: false
+  redis: true
+
+# -- 额外环境变量（键值对，注入容器 env）
+extraEnv: {}
+  # NEX_AUTH_ENABLED: "true"
+  # NEX_API_KEYS: "merchant-1-key,merchant-2-key"
+
+# -- 资源 requests/limits
+#   API Gateway 为 IO 密集型（WebFlux 非阻塞），内存占用低于业务服务
+resources:
+  requests:
+    memory: 256Mi
+    cpu: 500m
+  limits:
+    memory: 512Mi
+    cpu: 1000m
+
+# -- 探针配置
+probes:
+  liveness:
+    enabled: true
+    httpGet:
+      path: /actuator/health
+      port: http
+    initialDelaySeconds: 30
+    periodSeconds: 30
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readiness:
+    enabled: true
+    httpGet:
+      path: /actuator/health/readiness
+      port: http
+    initialDelaySeconds: 15
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+  startup:
+    enabled: false
+    httpGet:
+      path: /actuator/health
+      port: http
+    initialDelaySeconds: 0
+    periodSeconds: 10
+    failureThreshold: 30
+
+# -- HPA（HorizontalPodAutoscaler）
+hpa:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 8
+  cpuTargetUtilization: 70
+  memoryTargetUtilization: 80
+  # -- scaleTargetRef 由模板自动填充本 Deployment
+
+# -- PDB（PodDisruptionBudget）
+pdb:
+  enabled: true
+  # -- minAvailable 与 maxUnavailable 二选一；优先 minAvailable
+  minAvailable: 1
+  maxUnavailable: ""
+
+# -- ServiceMonitor（Prometheus Operator）
+serviceMonitor:
+  enabled: true
+  # -- 抓取间隔；留空回退 global.serviceMonitor.interval
+  interval: ""
+  # -- 抓取路径
+  path: /actuator/prometheus
+  # -- 端口名（引用 service.name）
+  port: http
+  # -- 额外标签（合并 global.serviceMonitor.labels）
+  labels: {}
+
+# -- ConfigMap：application.yml 覆盖内容（多行字符串）
+#   挂载到 /app/config/application.yml（Spring Boot 自动合并）
+config:
+  applicationYml: |-
+    # 由 Helm 注入的 application.yml 覆盖
+    management:
+      endpoints:
+        web:
+          exposure:
+            include: health,info,prometheus,metrics,gateway
+      endpoint:
+        health:
+          probes:
+            enabled: true
+          show-details: always
+
+# -- Secret：敏感配置（stringData）
+#   ⚠️ 明文仅占位；生产用 sealed-secrets / external-secrets / SOPS 注入
+#   包含：API Keys、HMAC 密钥
+secrets:
+  stringData: {}
+    # NEX_API_KEYS: "merchant-1-key,merchant-2-key"
+    # NEX_HMAC_SECRET: "CHANGE_ME_IN_PRODUCTION"
+
+# -- Pod 注解
+podAnnotations: {}
+  # prometheus.io/scrape: "true"
+  # prometheus.io/port: "8085"
+  # prometheus.io/path: /actuator/prometheus
+
+# -- Pod 标签（额外）
+podLabels: {}
+
+# -- 节点选择器
+nodeSelector: {}
+
+# -- 亲和性
+affinity: {}
+
+# -- 污点容忍
+tolerations: []
+
+# -- topologySpreadConstraints（多 AZ 反亲和，prod 启用）
+topologySpreadConstraints: []
+  # - maxSkew: 1
+  #   topologyKey: topology.kubernetes.io/zone
+  #   whenUnsatisfiable: DoNotSchedule
+  #   labelSelector:
+  #     matchLabels:
+  #       app.kubernetes.io/name: nexus-api-gateway
+
+# -- 额外 volumes
+extraVolumes: []
+
+# -- 额外 volumeMounts
+extraVolumeMounts: []
+
+# -- automountServiceAccountToken
+automountServiceAccountToken: false
+
+# -- 优雅终止宽限期
+terminationGracePeriodSeconds: 30
+
+# -- 更新策略
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 0
+    maxSurge: 1
+
+# -- global 默认值（umbrella 部署时由父 chart 覆盖；独立 lint/部署时使用此默认）
+global:
+  # -- 部署目标环境：dev / staging / prod
+  #   作用于 SPRING_PROFILES_ACTIVE 与镜像 tag 默认值
+  env: staging
+
+  # -- 命名空间（umbrella templates/namespace.yaml 创建）
+  namespace: nexus
+
+  # -- 镜像仓库基址，子 chart 拼接 /<serviceName>:<tag>
+  imageRegistry: ghcr.io/nexus
+
+  # -- 镜像拉取策略
+  imagePullPolicy: IfNotPresent
+
+  # -- 镜像拉取 Secret（私有仓库凭证）；为空则不创建 secret-registry.yaml
+  imagePullSecrets: []
+    # - name: ghcr-pull-secret
+    #   registry: ghcr.io
+    #   username: ""
+    #   password: ""
+    #   email: ""
+
+  # -- Spring profile，注入 SPRING_PROFILES_ACTIVE
+  #   留空则回退到 global.env
+  springProfile: ""
+
+  # -- 服务名标签键，用于 NetworkPolicy / ServiceMonitor selector
+  appLabelKey: app.kubernetes.io/name
+  partOfLabel: nexus
+
+  # -- 基础设施服务地址（K8s Service DNS 名）
+  #   注入到每个 Pod 的环境变量
+  infrastructure:
+    nacos:
+      # -- Nacos HTTP 端口（配置中心 / 控制台）
+      httpPort: 8848
+      # -- Nacos gRPC 端口（服务发现）
+      grpcPort: 9848
+      # -- Nacos 服务 DNS 名（含命名空间后缀，跨 ns 时填全名）
+      host: nacos.nexus.svc.cluster.local
+    sentinel:
+      port: 8858
+      host: sentinel.nexus.svc.cluster.local
+    seata:
+      # -- Seata TC 端口
+      tcPort: 8091
+      # -- Seata Web 控制台端口
+      webPort: 7091
+      host: seata.nexus.svc.cluster.local
+    zipkin:
+      port: 9411
+      host: zipkin.nexus.svc.cluster.local
+    postgres:
+      port: 5432
+      host: postgres.nexus.svc.cluster.local
+    redis:
+      port: 6379
+      host: redis.nexus.svc.cluster.local
+
+  # -- Pod 级安全上下文（distroless nonroot 镜像，UID 65532）
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    fsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+
+  # -- 容器级安全上下文
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: false
+    capabilities:
+      drop:
+        - ALL
+    seccompProfile:
+      type: RuntimeDefault
+
+  # -- ServiceMonitor 标签（kube-prometheus-stack 约定 release=<release-name>）
+  serviceMonitor:
+    enabled: true
+    labels:
+      release: kube-prometheus-stack
+    interval: 30s
+
+  # -- NetworkPolicy 是否启用（零信任东西向）
+  networkPolicy:
+    enabled: true
+
+# ============================================================================
+# 子 chart 覆盖入口
+# 每个子 chart 的完整 values schema 见 charts/<service>/values.yaml
+# 此处仅列出需要从 umbrella 层覆盖的字段；未列出的字段沿用子 chart 默认。
+# ============================================================================

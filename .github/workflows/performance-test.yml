@@ -1,0 +1,191 @@
+name: NexusChain Performance Test
+
+# P2-T6: 性能压测与调优 — CI 集成
+# -----------------------------------------------------------------------------
+# 触发：
+#   1. pull_request 到 master：跑冒烟测试（低负载快速验证），失败阻塞合并
+#   2. workflow_dispatch（手动）：可选跑完整压测（仅 staging）
+#
+# 设计原则：
+#   - PR 仅跑冒烟（5 VU × 30s），不卡 P99，只看连通性 + 错误率 < 5%
+#   - 完整压测需手动触发 + 注入 staging 凭据，避免误压生产
+#   - 结果以 JSON artifact 归档 14 天
+#   - 不修改任何 Java 源代码 / build.gradle / application.yml / deploy/
+
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - "nexus-gateway/**"
+      - "nexus-bridge/**"
+      - "perf/k6/**"
+      - ".github/workflows/performance-test.yml"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "压测模式 (smoke | full)"
+        required: true
+        default: "smoke"
+        type: choice
+        options: [smoke, full]
+      target:
+        description: "目标环境 (local | staging)"
+        required: true
+        default: "staging"
+        type: choice
+        options: [local, staging]
+
+env:
+  SMOKE_VUS: "5"
+  SMOKE_DURATION: "30s"
+  # 凭据从 Secrets 注入；冒烟用专用低权限 key
+  API_KEY: ${{ secrets.PERF_API_KEY }}
+  SIGNING_SECRET: ${{ secrets.PERF_SIGNING_SECRET }}
+
+jobs:
+  # ============================================================
+  # 冒烟测试：PR 触发，本地 docker-compose 起服务后跑 k6
+  # ============================================================
+  smoke-test:
+    name: k6 Smoke Test (PR)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'smoke')
+    timeout-minutes: 15
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v4
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'corretto'
+          cache: gradle
+
+      - name: 安装 k6
+        run: |
+          sudo gpg -k
+          sudo gpg --no-default-keyring --keyring /usr/share/keyrings/k6-archive-keyring.gpg \
+            --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E371532A8AE254D4BBF864CDA6EB11
+          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" \
+            | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update && sudo apt-get install -y k6
+          k6 version
+
+      - name: 启动 NexusChain 服务（docker-compose）
+        run: |
+          docker compose up -d nexus-gateway nexus-bridge
+          # 等待 gateway 就绪（最长 120s）
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:8080/actuator/health | grep -q '"status":"UP"'; then
+              echo "gateway ready"
+              break
+            fi
+            sleep 2
+          done
+          curl -sf http://localhost:8080/actuator/health || (echo "gateway 未就绪" && exit 1)
+
+      - name: 运行 k6 冒烟测试
+        env:
+          BASE_URL_GATEWAY: http://localhost:8080
+          BASE_URL_BRIDGE: http://localhost:8084
+          K6_BIN: k6
+        run: |
+          bash perf/k6/run-smoke.sh
+
+      - name: 上传冒烟结果
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: k6-smoke-results
+          path: perf/k6/results/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: 关停服务
+        if: always()
+        run: docker compose down || true
+
+  # ============================================================
+  # 完整压测：仅手动触发，打 staging
+  # ============================================================
+  full-load-test:
+    name: k6 Full Load Test (staging)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'full'
+    timeout-minutes: 60
+    env:
+      BASE_URL_GATEWAY: ${{ github.event.inputs.target == 'staging' && 'https://staging-gateway.nexuschain.io' || 'http://localhost:8080' }}
+      BASE_URL_BRIDGE: ${{ github.event.inputs.target == 'staging' && 'https://staging-bridge.nexuschain.io' || 'http://localhost:8084' }}
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v4
+
+      - name: 安装 k6
+        run: |
+          sudo gpg -k
+          sudo gpg --no-default-keyring --keyring /usr/share/keyrings/k6-archive-keyring.gpg \
+            --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E371532A8AE254D4BBF864CDA6EB11
+          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" \
+            | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update && sudo apt-get install -y k6
+
+      - name: 校验凭据
+        run: |
+          if [[ -z "$API_KEY" || -z "$SIGNING_SECRET" ]]; then
+            echo "::error::缺少 PERF_API_KEY / PERF_SIGNING_SECRET secrets"
+            exit 1
+          fi
+
+      - name: 场景 1 — payment-create (1000 RPS / P99<500ms)
+        run: |
+          k6 run --out json=perf/k6/results/full-payment-create.json \
+            -e API_KEY="$API_KEY" -e SIGNING_SECRET="$SIGNING_SECRET" \
+            -e BASE_URL_GATEWAY="$BASE_URL_GATEWAY" \
+            perf/k6/payment-create.js
+
+      - name: 场景 2 — payment-query (2000 RPS / P99<200ms)
+        run: |
+          k6 run --out json=perf/k6/results/full-payment-query.json \
+            -e API_KEY="$API_KEY" -e SIGNING_SECRET="$SIGNING_SECRET" \
+            -e BASE_URL_GATEWAY="$BASE_URL_GATEWAY" \
+            -e SEED_POOL_SIZE=500 \
+            perf/k6/payment-query.js
+
+      - name: 场景 3 — bridge-lock (100 RPS / P99<2s)
+        run: |
+          k6 run --out json=perf/k6/results/full-bridge-lock.json \
+            -e API_KEY="$API_KEY" -e SIGNING_SECRET="$SIGNING_SECRET" \
+            -e BASE_URL_BRIDGE="$BASE_URL_BRIDGE" \
+            perf/k6/bridge-lock.js
+
+      - name: 场景 4 — webhook-delivery (500 RPS / P99<1s)
+        run: |
+          k6 run --out json=perf/k6/results/full-webhook-delivery.json \
+            -e API_KEY="$API_KEY" -e SIGNING_SECRET="$SIGNING_SECRET" \
+            -e BASE_URL_GATEWAY="$BASE_URL_GATEWAY" \
+            -e SEED_POOL_SIZE=200 \
+            perf/k6/webhook-delivery.js
+
+      - name: 上传完整压测结果
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: k6-full-results-${{ github.run_id }}
+          path: perf/k6/results/full-*.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: 汇总报告
+        if: always()
+        run: |
+          echo "## k6 完整压测结果" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| 场景 | 目标 RPS | P99 阈值 | 产物 |" >> $GITHUB_STEP_SUMMARY
+          echo "| --- | --- | --- | --- |" >> $GITHUB_STEP_SUMMARY
+          echo "| payment-create | 1000 | <500ms | full-payment-create.json |" >> $GITHUB_STEP_SUMMARY
+          echo "| payment-query | 2000 | <200ms | full-payment-query.json |" >> $GITHUB_STEP_SUMMARY
+          echo "| bridge-lock | 100 | <2s | full-bridge-lock.json |" >> $GITHUB_STEP_SUMMARY
+          echo "| webhook-delivery | 500 | <1s | full-webhook-delivery.json |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "详见 artifact: k6-full-results-${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY

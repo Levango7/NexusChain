@@ -1,0 +1,81 @@
+# NexusChain dev 环境覆盖
+# ============================================================================
+# 用法：helm template deploy/helm/ -f deploy/helm/values-dev.yaml
+#   helm upgrade --install nexus-chain deploy/helm/ -f deploy/helm/values-dev.yaml -n nexus
+# 特征：单副本、低资源、HPA 禁用、镜像 tag=latest、关闭 PDB
+# ============================================================================
+
+global:
+  env: dev
+  namespace: nexus-dev
+  imagePullPolicy: Always
+  springProfile: dev
+  serviceMonitor:
+    enabled: false
+  networkPolicy:
+    enabled: false
+
+# -- dev：副本 1、资源 256Mi/500m、HPA 禁用、tag=latest
+nexus-gateway:
+  replicaCount: 1
+  image:
+    tag: latest
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 500m
+    limits:
+      memory: 512Mi
+      cpu: 1000m
+  hpa:
+    enabled: false
+  pdb:
+    enabled: false
+
+nexus-bridge:
+  replicaCount: 1
+  image:
+    tag: latest
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 500m
+    limits:
+      memory: 512Mi
+      cpu: 1000m
+  hpa:
+    enabled: false
+  pdb:
+    enabled: false
+
+nexus-signing-service:
+  replicaCount: 1
+  image:
+    tag: latest
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 500m
+    limits:
+      memory: 512Mi
+      cpu: 1000m
+  hpa:
+    enabled: false
+  pdb:
+    enabled: false
+
+nexus-wallet-service:
+  replicaCount: 1
+  image:
+    tag: latest
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 500m
+    limits:
+      memory: 512Mi
+      cpu: 1000m
+  hpa:
+    enabled: false
+  pdb:
+    enabled: false

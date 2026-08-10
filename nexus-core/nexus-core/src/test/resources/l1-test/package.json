@@ -1,0 +1,19 @@
+{
+  "name": "nexus-l1-test",
+  "version": "2.0.0",
+  "description": "NexusChain L2↔L1 真实节点测试环境（Hardhat 本地 L1）",
+  "private": true,
+  "scripts": {
+    "node": "hardhat node",
+    "compile": "hardhat compile",
+    "deploy": "hardhat run scripts/deploy.js --network localhost",
+    "test": "hardhat test"
+  },
+  "devDependencies": {
+    "hardhat": "^2.22.0",
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0"
+  },
+  "dependencies": {
+    "ethers": "^6.13.0"
+  }
+}

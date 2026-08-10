@@ -1,0 +1,10 @@
+{
+  "nVersion" : 4294967295,
+  "hashPrevBlock" : "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+  "hashMerkleRoot" : "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+  "hashMerkleState" : "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+  "nHeight" : 4294967295,
+  "nTime" : 4294967295,
+  "nNonce" : "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+  "blockNotice" : "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+}

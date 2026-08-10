@@ -1,0 +1,30 @@
+# Phase 4 任务 #68：开发 profile — H2 内存数据库（设计文档 §4.3 / §4.6.2）
+#
+# 激活方式：spring.profiles.active=dev
+# H2 启用 MODE=MySQL 兼容模式，支持 DECIMAL(36,18) / COMMENT 等 MySQL 语法，
+# 使 Flyway migration 的同一份 SQL 在 H2 和 MySQL 下均可执行。
+# H2 控制台：http://localhost:8083/h2-console
+spring:
+  datasource:
+    url: jdbc:h2:mem:nexus_wallet;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE;MODE=MySQL
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+    open-in-view: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+  h2:
+    console:
+      enabled: true
+      path: /h2-console

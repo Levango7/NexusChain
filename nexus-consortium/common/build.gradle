@@ -1,0 +1,35 @@
+plugins {
+    id 'java'
+}
+
+group 'org.nexus'
+version '1.0-SNAPSHOT'
+
+sourceCompatibility = 17
+
+repositories {
+    maven {
+        url 'https://maven.aliyun.com/nexus/content/groups/public/'
+    }
+    maven {
+        url 'https://maven.aliyun.com/nexus/content/repositories/jcenter'
+    }
+    mavenCentral()
+}
+
+dependencies {
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.10.2'
+// https://mvnrepository.com/artifact/com.fasterxml.jackson.core/jackson-databind
+    testImplementation "com.fasterxml.jackson.core:jackson-databind:${jacksonVersion}"
+    compileOnly "com.fasterxml.jackson.core:jackson-databind:${jacksonVersion}"
+    implementation "com.google.guava:guava:${guavaVersion}"
+
+    implementation "commons-codec:commons-codec:${commonsCodecVersion}"
+    compileOnly "org.projectlombok:lombok:${lombokVersion}"
+    annotationProcessor "org.projectlombok:lombok:${lombokVersion}"
+}
+
+test {
+    useJUnitPlatform()
+}

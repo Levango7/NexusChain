@@ -1,0 +1,99 @@
+# Nacos HA 集群 Service 配置
+#
+# 包含两类 Service：
+#   1. Headless Service（nacos-headless）：StatefulSet 集群发现必需，
+#      为每个 Pod 提供稳定的 DNS 名称（nacos-0.nacos-headless.nexus.svc.cluster.local）
+#   2. ClusterIP Service（nacos）：4 个核心服务通过此 Service 访问 Nacos，
+#      K8s 自动负载均衡到 3 个节点
+#
+# 端口约定（与 nacos-config/README.md 对齐）：
+#   8848 — Nacos HTTP 控制台 + REST API
+#   9848 — Nacos 2.x gRPC 客户端通信（必需）
+#   9849 — Nacos 2.x gRPC 集群内部 Raft 通信
+apiVersion: v1
+kind: Service
+metadata:
+  name: nacos-headless
+  namespace: nexus
+  labels:
+    app: nacos
+    component: config-center
+    service-type: headless
+  annotations:
+    # 标注：Headless Service 用于 StatefulSet 集群发现
+    nexuschain.io/service-purpose: "statefulset-cluster-discovery"
+spec:
+  # clusterIP: None 是 Headless Service 的标志
+  # K8s 不会为该 Service 分配 ClusterIP，DNS 查询会直接返回所有 Pod IP
+  clusterIP: None
+  selector:
+    app: nacos
+  ports:
+    - name: http
+      port: 8848
+      targetPort: 8848
+      protocol: TCP
+    - name: grpc-client
+      port: 9848
+      targetPort: 9848
+      protocol: TCP
+    - name: grpc-raft
+      port: 9849
+      targetPort: 9849
+      protocol: TCP
+---
+# ClusterIP Service：4 个核心服务（gateway/bridge/signing-service/wallet-service）通过此 Service 访问 Nacos
+# K8s 自动负载均衡到 3 个 Nacos 节点
+apiVersion: v1
+kind: Service
+metadata:
+  name: nacos
+  namespace: nexus
+  labels:
+    app: nacos
+    component: config-center
+    service-type: clusterip
+  annotations:
+    # 标注：客户端访问入口
+    nexuschain.io/service-purpose: "client-access"
+    # Istio 注解：明确不注入 Sidecar，Nacos 流量不经过网格
+    # 原因：Nacos gRPC 长连接 + Raft 心跳对延迟敏感，Sidecar 会增加 1-2ms 延迟
+    sidecar.istio.io/inject: "false"
+spec:
+  type: ClusterIP
+  selector:
+    app: nacos
+  ports:
+    - name: http
+      port: 8848
+      targetPort: 8848
+      protocol: TCP
+    - name: grpc-client
+      port: 9848
+      targetPort: 9848
+      protocol: TCP
+    # 注意：gRPC Raft 端口（9849）仅供集群内部通信，不对外暴露
+---
+# 可选：NodePort Service，用于本地开发或运维直连 Nacos 控制台
+# 生产环境建议不启用，通过 Ingress 暴露控制台
+apiVersion: v1
+kind: Service
+metadata:
+  name: nacos-console
+  namespace: nexus
+  labels:
+    app: nacos
+    component: config-center
+    service-type: console
+  annotations:
+    nexuschain.io/service-purpose: "console-access-dev-only"
+spec:
+  type: NodePort
+  selector:
+    app: nacos
+  ports:
+    - name: http
+      port: 8848
+      targetPort: 8848
+      nodePort: 30848
+      protocol: TCP

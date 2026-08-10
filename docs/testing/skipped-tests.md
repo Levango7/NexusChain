@@ -1,0 +1,143 @@
+# NexusChain 跳过测试清单
+
+> **文档版本**：v1.0
+> **生成日期**：2026-08-10
+> **基线版本**：v2.0.0-rc1
+> **关联发现**：P2-9（集成测试启用文档）
+> **维护说明**：本文件随测试跳过状态变化同步更新。新增跳过测试须在此登记，已启用测试须从本文件移除并在 CHANGELOG 记录。
+
+---
+
+## 1. 概述
+
+NexusChain v2.0.0-rc1 当前共有 **12 个被跳过的测试**，分布在 5 个测试类中。跳过原因集中于两类环境依赖：
+
+1. **外部工具链不兼容**：Hardhat EDR 与 Node v25 不兼容（5 个）、Rust mpc-engine 缺少 C 编译器未编译（3 个）
+2. **跨平台/协议同步问题**：argon2 native 跨平台不一致（2 个）、protobuf 未同步新交易类型（1 个）、多线程阻塞循环（1 个）
+
+所有跳过均通过 JUnit 5 的 `@Disabled` 或 `Assumptions.assumeTrue(false, ...)` 实现，**不会导致构建失败**，仅在测试报告中标记为 skipped/aborted。
+
+### 1.1 跳过机制说明
+
+| 机制 | 来源 | 行为 | 适用场景 |
+|------|------|------|----------|
+| `@Disabled("原因")` | JUnit 5 | 测试方法整体不执行，报告中标记 disabled | 永久性跳过（如阻塞循环） |
+| `Assumptions.assumeTrue(false, "原因")` | JUnit 5 Assumptions | 运行时判定不满足前提时中止，报告中标记 aborted | 条件性跳过（如外部依赖不可用） |
+
+---
+
+## 2. 跳过测试清单
+
+### 2.1 L2 L1 端到端测试（Hardhat EDR 不兼容）
+
+**所在文件**：`nexus-core/nexus-core/src/test/java/org/nexus/l2/integration/L2L1EndToEndTest.java`
+**跳过机制**：`@BeforeAll` 中 `assumeTrue(false, "Hardhat not available: ...")`，Hardhat 不可用时整个测试类的全部方法跳过
+**跳过原因**：Hardhat EDR（Ethereum Development Runtime）与 Node.js v25 不兼容，本地环境无法启动 Hardhat 节点完成 L1 合约部署
+**启用条件**：将 Node.js 降级至 v20 LTS 或 v22 LTS；或等待 Hardhat EDR 发布支持 Node v25 的版本；启用后须验证 `L2Bridge.sol` 合约部署与 5 项端到端流程
+
+表：L2L1EndToEndTest 跳过测试方法
+
+| # | 测试方法 | 验证内容 |
+|---|----------|----------|
+| 1 | `testSubmitStateRoot` | L2 状态根提交至 L1 合约 |
+| 2 | `testMarkBatchVerified` | 批次标记为已验证 |
+| 3 | `testFinalizeWithdraws` | 提现 finalize 流程 |
+| 4 | `testChallengeBatch` | 欺诈证明挑战批次 |
+| 5 | `testFraudProofChallenge_InvalidStateRoot_ChallengedAndInvalid` | 无效状态根挑战后标记 ChallengedAndInvalid |
+
+### 2.2 MPC 端到端测试（Rust 引擎未编译）
+
+**所在文件**：`nexus-signing-service/src/test/java/org/nexus/signing/mpc/MpcEndToEndTest.java`
+**跳过机制**：每个测试方法调用 `assumeTrue(healthy, "Rust mpc-engine not available at ...")`，引擎健康检查失败时跳过；亦可通过环境变量 `NEX_MPC_ENGINE_SKIP_E2E=true` 强制跳过
+**跳过原因**：Rust `mpc-engine` 依赖 `multi-party-ecdsa` 等 crate，编译需要 C 编译器（gcc/clang/MSVC），当前开发环境缺少 C 编译器导致引擎未编译，gRPC 端口 `localhost:50051` 无服务
+**启用条件**：安装 C 编译器工具链；执行 `cargo build --release`（mpc-engine 目录）编译并启动 Rust 引擎；确认 `GrpcMpcCryptoEngine.healthCheck()` 返回 true
+
+表：MpcEndToEndTest 跳过测试方法
+
+| # | 测试方法 | 验证内容 |
+|---|----------|----------|
+| 6 | `testHealthCheck` | Rust mpc-engine gRPC 健康检查 |
+| 7 | `testThreePartyDkgSignAggregateVerify` | 3-of-3 DKG→Sign→Aggregate→Verify 完整流程 |
+| 8 | `testTwoOfThreeThresholdSignature` | 2-of-3 阈值签名（t<n） |
+
+### 2.3 区块缓存多线程测试（阻塞循环）
+
+**所在文件**：`nexus-core/nexus-core/src/test/java/org/nexus/core/BlocksCacheTest.java`（第 142 行）
+**跳过机制**：`@Disabled("多线程读写测试含 while(true) 阻塞循环，会导致测试任务挂起；需手动运行验证")`
+**跳过原因**：测试方法含 `while(true)` 阻塞循环，在 CI 中执行会导致测试任务永久挂起
+**启用条件**：重构测试移除 `while(true)` 阻塞，改为带超时（`assertTimeoutPreemptively`）的有限轮次并发测试；或保留为手动验证脚本，不纳入自动化套件
+
+表：BlocksCacheTest 跳过测试方法
+
+| # | 测试方法 | 验证内容 |
+|---|----------|----------|
+| 9 | `testMultiThreadReadWrite` | BlocksCache 多线程并发读写一致性 |
+
+### 2.4 Keystore argon2 跨平台测试
+
+**所在文件**：`nexus-core/nexus-core/src/test/java/org/nexus/keystore/KeystoreTests.java`（第 46、60 行）
+**跳过机制**：`assumeTrue(false, "本平台 argon2 native 计算与 testJson 数据不一致，跳过")`，当本平台 argon2 native 计算结果与测试向量 `testJson` 不一致时跳过该断言
+**跳过原因**：`testJson` 中的 mac 与密文由特定平台的 argon2 native 库生成，跨平台（不同 OS/架构）的 argon2 native 计算可能不一致
+**启用条件**：统一 argon2 native 实现的跨平台行为（固定参数集/版本）；或改用纯 Java argon2 实现（如 BouncyCastle `Argon2BytesGenerator`）消除 native 差异；或按平台生成对应测试向量
+
+表：KeystoreTests 跳过测试方法
+
+| # | 测试方法 | 验证内容 |
+|---|----------|----------|
+| 10 | `verifyPassword` | Keystore 密码验证（argon2id KDF） |
+| 11 | `decrypt` | Keystore 解密出预期私钥 |
+
+### 2.5 SDK 交易编码测试（protobuf 未同步）
+
+**所在文件**：`nexus-core/nexus-core/src/test/java/org/nexus/integration/SdkEndToEndTest.java`（第 255 行）
+**跳过机制**：`assumeTrue(ProtocolModel.Transaction.Type.forNumber(BATCH_TRANSFER.ordinal()) != null, "protobuf 尚未定义 BATCH_TRANSFER 类型，跳过")`
+**跳过原因**：protobuf 定义文件未同步更新支付扩展新交易类型（`BATCH_TRANSFER(19)` 等），`forNumber` 返回 null 导致编码往返测试无法执行
+**启用条件**：更新 protobuf `.proto` 定义文件，添加 `BATCH_TRANSFER` 等新交易类型枚举值；重新生成 Java protobuf 代码；验证编码往返一致
+
+表：SdkEndToEndTest 跳过测试方法
+
+| # | 测试方法 | 验证内容 |
+|---|----------|----------|
+| 12 | `testTransactionEncoding` | 交易 protobuf 编码往返（构造→encode→fromProto→字段一致） |
+
+---
+
+## 3. 环境驱动的条件测试（非永久跳过）
+
+以下测试依赖外部环境变量（真实链节点），未设置时通过 `assumeTrue` 跳过，**不属于上述 12 个永久/兼容性跳过测试**，设置环境后即可运行，故单独列出。
+
+**所在文件**：`nexus-core/nexus-core/src/test/java/org/nexus/rpc/RPCTest.java`
+**跳过机制**：`assumeRpcEnvAvailable()` 检查环境变量 `PRIVATE_KEY` / `HOST` / `PORT`，未设置时跳过
+**运行方式**：`PRIVATE_KEY=0x... HOST=127.0.0.1 PORT=8545 ./gradlew test --tests "*RPCTest*"`
+
+表：RPCTest 环境驱动测试方法
+
+| 测试方法 | 验证内容 | 依赖环境 |
+|----------|----------|----------|
+| `testGetBalance` | 查询账户余额 | HOST/PORT/PRIVATE_KEY |
+| `testTransfer` | 转账交易发送 | HOST/PORT/PRIVATE_KEY |
+| `testSendTransaction` | 发送事务 | HOST/PORT/PRIVATE_KEY |
+| `testGetNonce` | 查询 nonce | HOST/PORT/PRIVATE_KEY |
+
+---
+
+## 4. 启用条件汇总
+
+表：跳过测试启用条件与优先级
+
+| 分组 | 跳过数 | 根因 | 启用条件 | 优先级 |
+|------|--------|------|----------|--------|
+| L2 L1 E2E | 5 | Hardhat EDR 与 Node v25 不兼容 | Node 降级至 v20/v22 LTS 或 EDR 升级 | 高（L2 真实化关键） |
+| MPC E2E | 3 | Rust 缺少 C 编译器 | 安装 C 编译器并 `cargo build` mpc-engine | 高（MPC 真实化关键） |
+| Keystore argon2 | 2 | argon2 native 跨平台不一致 | 统一 native 实现或改用纯 Java | 中 |
+| BlocksCache 多线程 | 1 | while(true) 阻塞循环 | 重构为带超时并发测试 | 低 |
+| SDK protobuf | 1 | protobuf 未定义新交易类型 | 更新 .proto 并重新生成代码 | 中 |
+
+---
+
+## 5. 维护约定
+
+1. **新增跳过测试**：须在本文件对应章节登记测试名称、文件、跳过原因、启用条件
+2. **启用跳过测试**：从本文件移除对应条目，并在 `CHANGELOG.md` 记录"启用 X 测试（修复 Y）"
+3. **跳过原因须诚实**：禁止用 `@Disabled("TODO")` 等无信息原因跳过，须说明具体阻塞点与启用路径
+4. **CI 须报告跳过数**：构建日志须输出 skipped/aborted 计数，跳过数变化须在 PR 中说明

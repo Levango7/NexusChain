@@ -1,0 +1,88 @@
+# ============================================================================
+# RPS 自定义指标 HPA（HorizontalPodAutoscaler）
+# ============================================================================
+# 基于 http_requests_per_second 自定义指标自动扩缩，补充 P2-T2 仅 CPU/内存的 HPA。
+#
+# 依赖：
+#   1. Prometheus Adapter（deploy/monitoring/prometheus-adapter-rules.yaml）
+#      将 Prometheus 的 http_requests_total 计数器转换为 http_requests_per_second
+#      并通过 Custom Metrics API 暴露给 HPA 控制器。
+#   2. 应用暴露 http_requests_total 指标（Micrometer 默认提供
+#      http_server_requests_seconds_count，本规则按命名约定映射）。
+#
+# 扩缩策略：
+#   - 目标：每 Pod 1000 RPS（可通过 values 覆盖）
+#   - stabilizationWindowSeconds：扩容 60s / 缩容 300s（避免抖动）
+#   - selectPolicy：Max（多指标取最大值驱动扩容，与 CPU/内存 HPA 互补）
+#
+# 启用条件：
+#   global.rpsHpa.enabled=true（默认 false，仅 prod 推荐开启）
+#   各服务子 chart 也可通过 .Values.<service>.rpsHpa.enabled 单独控制
+# ============================================================================
+{{- if .Values.global.rpsHpa.enabled }}
+{{- $services := list "nexus-gateway" "nexus-bridge" "nexus-signing-service" "nexus-wallet-service" }}
+{{- range $svc := $services }}
+{{- $svcValues := index $.Values $svc }}
+{{- $rpsHpa := default dict $svcValues.rpsHpa }}
+{{- if (default true $rpsHpa.enabled) }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ $svc }}-rps-hpa
+  namespace: {{ $.Values.global.namespace | default "nexus" }}
+  labels:
+    helm.sh/chart: {{ printf "%s-%s" $.Chart.Name $.Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
+    app.kubernetes.io/name: {{ $svc }}
+    app.kubernetes.io/instance: {{ $.Release.Name }}
+    app.kubernetes.io/version: {{ $.Chart.AppVersion | quote }}
+    app.kubernetes.io/managed-by: {{ $.Release.Service }}
+    app.kubernetes.io/part-of: {{ $.Values.global.partOfLabel | default "nexus" }}
+    nexus.io/hpa-metric: rps
+  annotations:
+    description: "RPS 自定义指标 HPA，目标每 Pod {{ $rpsHpa.targetRPS | default 1000 }} RPS"
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ $svc }}
+  minReplicas: {{ $rpsHpa.minReplicas | default $svcValues.hpa.minReplicas | default 3 }}
+  maxReplicas: {{ $rpsHpa.maxReplicas | default $svcValues.hpa.maxReplicas | default 10 }}
+  metrics:
+    - type: Pods
+      pods:
+        metric:
+          # 通过 Prometheus Adapter 暴露的 custom.metrics.k8s.io 指标
+          name: http_requests_per_second
+          selector:
+            matchLabels:
+              # 仅匹配本服务的 Pod（adapter rules 按 pod label 过滤）
+              app.kubernetes.io/name: {{ $svc }}
+        target:
+          # AverageValue：所有 Pod 的指标平均值达到 target.averageValue 时扩容
+          # 1000 RPS = 1000（K8s Quantity 表示，每秒请求数）
+          type: AverageValue
+          averageValue: {{ printf "%d" (int (default 1000 $rpsHpa.targetRPS)) }}
+  behavior:
+    # 扩容策略：快速响应流量尖峰
+    scaleUp:
+      stabilizationWindowSeconds: {{ $rpsHpa.scaleUpStabilizationSeconds | default 60 }}
+      selectPolicy: Max
+      policies:
+        - type: Pods
+          value: {{ $rpsHpa.scaleUpPodsPerPeriod | default 4 }}
+          periodSeconds: 60
+        - type: Percent
+          value: 100
+          periodSeconds: 60
+    # 缩容策略：缓慢缩容，避免流量二次尖峰时反复扩缩
+    scaleDown:
+      stabilizationWindowSeconds: {{ $rpsHpa.scaleDownStabilizationSeconds | default 300 }}
+      selectPolicy: Min
+      policies:
+        - type: Pods
+          value: {{ $rpsHpa.scaleDownPodsPerPeriod | default 1 }}
+          periodSeconds: 60
+{{- end }}
+{{- end }}
+{{- end }}

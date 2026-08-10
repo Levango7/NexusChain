@@ -1,0 +1,63 @@
+# Phase 4 任务 #68：测试 profile — H2 内存数据库 + Seata/Nacos/Sentinel 禁用（设计文档 §4.6.2）
+#
+# 激活方式：@ActiveProfiles("test")
+# H2 启用 MODE=MySQL 兼容模式，与 application-dev.yml 同构。
+# Seata / Nacos / Sentinel 在集成测试中禁用（测试环境无 Seata Server / Nacos / Sentinel Dashboard）。
+# Feign 客户端通过 @MockBean 注入（SigningServiceFeignClient），不依赖 Nacos 服务发现。
+spring:
+  datasource:
+    url: jdbc:h2:mem:nexus_wallet_test;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE;MODE=MySQL
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+    open-in-view: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+  h2:
+    console:
+      enabled: false
+
+  # === Phase 4 任务 #74：集成测试禁用 Nacos / Sentinel（无外部依赖） ===
+  cloud:
+    nacos:
+      discovery:
+        enabled: false
+      config:
+        enabled: false
+    sentinel:
+      enabled: false
+
+# 测试环境禁用 Seata（无 Seata Server 可连接）
+seata:
+  enabled: false
+  tx-service-group: nexus-tx-group
+  service:
+    vgroup-mapping:
+      nexus-tx-group: default
+    grouplist:
+      default: localhost:8091
+
+# 测试环境禁用 Zipkin 上报（无 Zipkin Server）
+management:
+  tracing:
+    sampling:
+      probability: 0.0
+  zipkin:
+    tracing:
+      endpoint: http://localhost:9411/api/v2/spans
+
+# 测试环境禁用 Feign circuitbreaker（无 Resilience4j 依赖场景）
+feign:
+  circuitbreaker:
+    enabled: false

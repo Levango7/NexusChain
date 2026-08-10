@@ -1,0 +1,44 @@
+# nexus-api-gateway 开发环境配置
+#
+# P3-T2：本地开发 profile，放宽鉴权与限流配置便于联调。
+# 通过 SPRING_PROFILES_ACTIVE=dev 激活（默认）。
+
+spring:
+  data:
+    redis:
+      # 开发环境 Redis：本地默认 6379
+      host: ${NEX_REDIS_HOST:localhost}
+      port: ${NEX_REDIS_PORT:6379}
+
+# 开发环境：放宽鉴权与限流
+nexus:
+  api-gateway:
+    # 开发环境可关闭鉴权便于本地 curl 调试
+    auth:
+      enabled: ${NEX_AUTH_ENABLED:false}
+      # 开发环境单 API Key
+      api-keys: nexus-dev-api-key
+      hmac-secret: nexus-dev-hmac-secret
+    # 开发环境放宽限流：1000 QPS
+    ratelimit:
+      enabled: ${NEX_RATELIMIT_ENABLED:true}
+      capacity: 1000
+      refill-rate: 100
+    # 开发环境允许所有 Origin
+    cors:
+      allowed-origins: "*"
+      allow-credentials: false
+
+# 开发环境：详细日志
+logging:
+  level:
+    org.nexus: DEBUG
+    org.springframework.cloud.gateway: DEBUG
+    org.springframework.web: INFO
+    reactor.netty: INFO
+
+# 开发环境：100% 采样
+management:
+  tracing:
+    sampling:
+      probability: 1.0

@@ -1,0 +1,123 @@
+# NexusChain Helm Umbrella Chart - 全局默认 values
+# ============================================================================
+# 环境覆盖顺序（优先级从低到高）：
+#   values.yaml (本文件，基线)
+#   → values-<env>.yaml (环境覆盖)
+#   → --set / --set-file (命令行覆盖)
+# 默认基线对齐 staging 环境；dev/prod 通过 values-*.yaml 覆盖。
+# ============================================================================
+
+# -- 全局配置，所有子 chart 可通过 .Values.global 引用
+global:
+  # -- 部署目标环境：dev / staging / prod
+  #   作用于 SPRING_PROFILES_ACTIVE 与镜像 tag 默认值
+  env: staging
+
+  # -- 命名空间（umbrella templates/namespace.yaml 创建）
+  namespace: nexus
+
+  # -- 镜像仓库基址，子 chart 拼接 /<serviceName>:<tag>
+  imageRegistry: ghcr.io/nexus
+
+  # -- 镜像拉取策略
+  imagePullPolicy: IfNotPresent
+
+  # -- 镜像拉取 Secret（私有仓库凭证）；为空则不创建 secret-registry.yaml
+  imagePullSecrets: []
+    # - name: ghcr-pull-secret
+    #   registry: ghcr.io
+    #   username: ""
+    #   password: ""
+    #   email: ""
+
+  # -- Spring profile，注入 SPRING_PROFILES_ACTIVE
+  #   留空则回退到 global.env
+  springProfile: ""
+
+  # -- 服务名标签键，用于 NetworkPolicy / ServiceMonitor selector
+  appLabelKey: app.kubernetes.io/name
+  partOfLabel: nexus
+
+  # -- 基础设施服务地址（K8s Service DNS 名）
+  #   注入到每个 Pod 的环境变量
+  infrastructure:
+    nacos:
+      # -- Nacos HTTP 端口（配置中心 / 控制台）
+      httpPort: 8848
+      # -- Nacos gRPC 端口（服务发现）
+      grpcPort: 9848
+      # -- Nacos 服务 DNS 名（含命名空间后缀，跨 ns 时填全名）
+      host: nacos.nexus.svc.cluster.local
+    sentinel:
+      port: 8858
+      host: sentinel.nexus.svc.cluster.local
+    seata:
+      # -- Seata TC 端口
+      tcPort: 8091
+      # -- Seata Web 控制台端口
+      webPort: 7091
+      host: seata.nexus.svc.cluster.local
+    zipkin:
+      port: 9411
+      host: zipkin.nexus.svc.cluster.local
+    postgres:
+      port: 5432
+      host: postgres.nexus.svc.cluster.local
+    redis:
+      port: 6379
+      host: redis.nexus.svc.cluster.local
+
+  # -- Pod 级安全上下文（distroless nonroot 镜像，UID 65532）
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    fsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+
+  # -- 容器级安全上下文
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: false
+    capabilities:
+      drop:
+        - ALL
+    seccompProfile:
+      type: RuntimeDefault
+
+  # -- ServiceMonitor 标签（kube-prometheus-stack 约定 release=<release-name>）
+  serviceMonitor:
+    enabled: true
+    labels:
+      release: kube-prometheus-stack
+    interval: 30s
+
+  # -- NetworkPolicy 是否启用（零信任东西向）
+  networkPolicy:
+    enabled: true
+
+# ============================================================================
+# 子 chart 覆盖入口
+# 每个子 chart 的完整 values schema 见 charts/<service>/values.yaml
+# 此处仅列出需要从 umbrella 层覆盖的字段；未列出的字段沿用子 chart 默认。
+# ============================================================================
+
+nexus-gateway:
+  # 端口 / 副本 / 资源 / HPA / PDB 等见子 chart values.yaml
+  # 此处仅示例性覆盖，实际环境差异在 values-<env>.yaml
+  enabled: true
+
+nexus-bridge:
+  enabled: true
+
+nexus-signing-service:
+  enabled: true
+
+nexus-wallet-service:
+  enabled: true
+
+nexus-api-gateway:
+  # P3-T2：API Gateway 统一入口（Spring Cloud Gateway，端口 8085）
+  # 端口 / 副本 / 资源 / HPA / PDB 等见子 chart values.yaml
+  enabled: true

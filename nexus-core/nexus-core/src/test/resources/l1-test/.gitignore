@@ -1,0 +1,6 @@
+# NexusChain L1 测试环境临时产物
+node_modules/
+cache/
+artifacts/
+deployed-address.json
+*.log

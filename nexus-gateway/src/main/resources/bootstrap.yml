@@ -1,0 +1,40 @@
+# nexus-gateway bootstrap 配置
+#
+# Phase 1 任务 #55：Nacos 服务发现 + 配置中心接入（SCA 依赖已在 build.gradle 装配）。
+#
+# 设计文档 §3.3 / §4.2.2。bootstrap.yml 需 spring-cloud-starter-bootstrap 依赖启用
+# （已在 build.gradle 添加）。端口（8080，见 application.yml）与业务配置在
+# application.yml / Nacos nexus-gateway.yaml 中管理。
+#
+# namespace 默认 dev（开发环境），可通过 NEX_NACOS_NAMESPACE 环境变量覆盖。
+# group=NEXUS_GROUP 与 signing-service / wallet-service / bridge 保持一致，
+# 确保服务发现跨服务互通。shared-configs 拉取公共配置与 Sentinel 规则。
+
+spring:
+  application:
+    name: nexus-gateway
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:dev}
+  cloud:
+    nacos:
+      discovery:
+        server-addr: ${NEX_NACOS_SERVER:localhost:8848}
+        namespace: ${NEX_NACOS_NAMESPACE:dev}
+        group: ${NEX_NACOS_GROUP:NEXUS_GROUP}
+        cluster-name: ${NEX_NACOS_CLUSTER:DEFAULT}
+        metadata:
+          version: ${NEX_SERVICE_VERSION:1.4.0}
+          region: ${NEX_REGION:cn-east-1}
+      config:
+        server-addr: ${NEX_NACOS_SERVER:localhost:8848}
+        namespace: ${NEX_NACOS_NAMESPACE:dev}
+        group: ${NEX_NACOS_GROUP:NEXUS_GROUP}
+        shared-configs:
+          - data-id: nexus-common.yaml
+            group: NEXUS_GROUP
+            refresh: true
+          - data-id: nexus-sentinel-rules.yaml
+            group: NEXUS_GROUP
+            refresh: true
+        file-extension: yaml
+        refresh-enabled: true

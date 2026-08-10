@@ -1,0 +1,46 @@
+version: '3.1'
+
+services:
+
+  nexus_pgsql_v0.0.3:
+    image: nexus/nexus_pgsql
+    container_name: nexus_pgsql_v0.0.3
+    privileged: true
+    volumes:
+      - /opt/nexus_pgsql_v0.0.3:/var/lib/postgresql/data
+    ports:
+      - 127.0.0.1:5433:5432
+    environment:
+      POSTGRES_USER: nexusadmin
+      POSTGRES_PASSWORD: PqR_w9hk6Au-jq5ElsFcEjq!wvULrYXeF3*oDKp5i@A/D5m03VaB1M/hyKY
+      NEX_POSTGRES_USER: replica
+      NEX_POSTGRES_PASSWORD: replica
+
+  nexus_core_v0.0.3:
+    image: nexus/nexus_core:latest
+    container_name: nexus_core_v0.0.3
+    privileged: true
+    volumes:
+      - /opt/nexus_logs:/logs
+      - /opt/nexus_logs_v0.0.3:/logs
+      - ./entry_point.sh:/entry_point.sh
+      - ./version.json:/version.json
+      - /opt/nexus_leveldb:/leveldb
+      - /opt/ipc:/root/ipc
+    entrypoint: /usr/bin/env bash /entry_point.sh -d nexus_pgsql_v0.0.3:5432 -c '/usr/bin/env bash /run_nexus_core.sh';
+    ports:
+      - 19585:19585
+      - 9585:9585
+    environment:
+      DATA_SOURCE_URL: 'jdbc:postgresql://nexus_pgsql_v0.0.3:5432/postgres'
+      DB_USERNAME: 'replica'
+      DB_PASSWORD: 'replica'
+      ENABLE_MINING: 'false'
+      NEX_MINER_COINBASE: '12344'
+      CLEAR_DATA: 'false'
+      # 8.14 2019 增加以下三行
+      P2P_MODE: 'grpc'
+      P2P_ADDRESS: 'nexus://localhost:9585'
+      # 这里建议把自己的 ip 从 BOOTSTRAPS 里面去掉，防止发消息给自己
+      BOOTSTRAPS: 'nexus://47.74.183.249:9585,nexus://47.74.216.251:9585,nexus://7cca852a615c51e823c45aa38d5dfdd89b9772a576b286fb5b70be7986f6ad4a@47.96.67.155:9585,nexus://39fb7d079f7dc2e7a2b53a5ee2a0b81d39500ba959f9f87e0a930fb0cdc46333@47.74.86.106:9585'
+

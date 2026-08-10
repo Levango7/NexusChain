@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <!--
+        P3-T5：trace_id / span_id MDC 注入
+        Micrometer Tracing 自动将 traceId / spanId 写入 SLF4J MDC，
+        日志 pattern 通过 %X{traceId} / %X{spanId} 引用。
+        Loki + Promtail 通过提取 trace_id 标签实现 trace ↔ log 联动。
+    -->
+    <springProfile name="dev | sandbox">
+        <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder>
+                <pattern>%d{HH:mm:ss.SSS} [%thread] [%X{traceId:-},%X{spanId:-}] %-5level %logger{36} - %msg%n</pattern>
+            </encoder>
+        </appender>
+        <root level="INFO">
+            <appender-ref ref="CONSOLE" />
+        </root>
+    </springProfile>
+
+    <springProfile name="prod">
+        <!-- JSON structured output for log aggregation (ELK/Loki) -->
+        <appender name="JSON_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+            <file>/var/log/nexus/gateway.json</file>
+            <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+                <fileNamePattern>/var/log/nexus/gateway.%d{yyyy-MM-dd}.json</fileNamePattern>
+                <maxHistory>30</maxHistory>
+            </rollingPolicy>
+            <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+                <!-- P3-T5：trace_id / span_id MDC 字段包含，供 Loki 提取打标签 -->
+                <includeMdcKeyName>traceId</includeMdcKeyName>
+                <includeMdcKeyName>spanId</includeMdcKeyName>
+                <includeMdcKeyName>merchantId</includeMdcKeyName>
+                <!-- 自定义字段：trace_id / span_id（与 Loki pipeline_stages 对齐） -->
+                <customFields>{"service":"nexus-gateway","namespace":"nexus"}</customFields>
+            </encoder>
+        </appender>
+
+        <!-- Separate audit log (append-only, never deleted) -->
+        <appender name="AUDIT_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+            <file>/var/log/nexus/audit.json</file>
+            <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+                <fileNamePattern>/var/log/nexus/audit.%d{yyyy-MM-dd}.json</fileNamePattern>
+                <maxHistory>365</maxHistory>
+            </rollingPolicy>
+            <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+                <includeMdcKeyName>traceId</includeMdcKeyName>
+                <includeMdcKeyName>spanId</includeMdcKeyName>
+            </encoder>
+        </appender>
+
+        <logger name="AUDIT" level="INFO" additivity="false">
+            <appender-ref ref="AUDIT_FILE" />
+        </logger>
+
+        <root level="INFO">
+            <appender-ref ref="JSON_FILE" />
+        </root>
+    </springProfile>
+</configuration>

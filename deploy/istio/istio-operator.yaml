@@ -1,0 +1,235 @@
+# ============================================================================
+# NexusChain - IstioOperator 自定义资源配置
+# ============================================================================
+# 用途：
+#   定义 NexusChain 生产环境 Istio 服务网格控制面安装参数。
+#   通过 istioctl install -f istio-operator.yaml 应用。
+#
+# 设计要点：
+#   1. profile: production 启用控制面高可用、严格 mTLS、Prometheus/Jaeger 集成
+#   2. istiod 2 副本 + 反亲和，跨 AZ 部署避免单点故障
+#   3. tracing 通过 OTLP 对接 Jaeger Collector（jaeger-collector.nexus.svc.cluster.local:4317）
+#   4. Prometheus 集成复用 monitoring 命名空间的 kube-prometheus-stack
+#   5. sidecar 资源限制避免 Envoy 代理占用过多业务 Pod 资源
+#
+# 安装：
+#   istioctl install -f deploy/istio/istio-operator.yaml --skip-verification
+#
+# 版本基线：Istio 1.22.x（2024 LTS，支持 Telemetry API 与 OTLP tracing）
+# ============================================================================
+apiVersion: install.istio.io/v1alpha1
+kind: IstioOperator
+metadata:
+  name: nexus-istio-controlplane
+  namespace: istio-system
+  labels:
+    app.kubernetes.io/name: istio
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/component: service-mesh
+  annotations:
+    description: "NexusChain 生产环境 Istio 控制面（HA + Jaeger + Prometheus）"
+spec:
+  # -- 生产 profile：默认开启严格 mTLS、控制面 HA、可观测性组件
+  profile: production
+
+  # -- 全局 mesh 配置
+  meshConfig:
+    # -- 默认出站流量策略：ALLOW_ANY 允许访问未注册外部服务
+    outboundTrafficPolicy:
+      mode: ALLOW_ANY
+    # -- 默认入站流量拦截端口（业务端口 8080/8082/8083/8084）
+    defaultConfig:
+      # -- sidecar 与 istiod 心跳间隔
+      holdApplicationUntilProxyStarts: true
+      # -- Envoy 并发 worker 线程数（2 适合 2 CPU Pod）
+      concurrency: 2
+      # -- 优雅关闭等待时间
+      terminationDrainDuration: 30s
+      # -- 限制 sidecar 拦截的端口范围（仅业务 HTTP 端口）
+      inboundTrafficPolicy:
+        mode: ALLOW_ANY
+      proxyMetadata:
+        # -- 标识 mesh 内服务所属命名空间
+        ISTIO_META_CLUSTER_ID: nexus-chain
+    # -- 启用访问日志输出到 stdout（K8s 日志驱动收集）
+    accessLogFile: /dev/stdout
+    # -- 访问日志 JSON 编码（便于 Loki / ELK 解析）
+    accessLogEncoding: JSON
+    # -- 访问日志过滤：排除健康检查路径噪声
+    accessLogFilter:
+      expression: |
+        request.path != "/actuator/health" &&
+        request.path != "/actuator/health/readiness" &&
+        request.path != "/actuator/health/liveness" &&
+        request.path != "/actuator/prometheus"
+
+  # -- 控制面组件配置
+  components:
+    # -- istiod 控制面：2 副本 + 反亲和实现高可用
+    pilot:
+      k8s:
+        replicas: 2
+        # -- 跨 AZ 反亲和
+        affinity:
+          podAntiAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+              - key: kubernetes.io/hostname
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app: istiod
+            preferredDuringSchedulingIgnoredDuringExecution:
+              - weight: 100
+                podAffinityTerm:
+                  labelSelector:
+                    matchLabels:
+                      app: istiod
+                  topologyKey: topology.kubernetes.io/zone
+        # -- 水平 Pod 反亲和保证 istiod 分散到不同节点
+        strategy:
+          rollingUpdate:
+            maxSurge: 1
+            maxUnavailable: 0
+          type: RollingUpdate
+        # -- 控制面资源（中等规格，支撑 ~50 Pod mesh）
+        resources:
+          requests:
+            cpu: 500m
+            memory: 1Gi
+          limits:
+            cpu: 1000m
+            memory: 2Gi
+        # -- PDB 保证控制面至少 1 副本可用
+        hpaSpec:
+          minReplicas: 2
+          maxReplicas: 3
+          scaleTargetRef:
+            apiVersion: apps/v1
+            kind: Deployment
+            name: istiod
+        env:
+          # -- 启用自动 mTLS 协商
+          - name: PILOT_AUTO_MTLS_ENABLED
+            value: "true"
+          # -- 启用基于 Kubernetes Service Account 的信任域
+          - name: PILOT_ENABLE_TRUST_DOMAIN
+            value: "true"
+          # -- 10 分钟平滑推送配置（避免 istiod 重启导致全量下发抖动）
+          - name: PILOT_FILTER_GATEWAY_CLUSTER_CONFIG
+            value: "true"
+
+    # -- Ingress Gateway：2 副本高可用，承接外部 HTTPS 流量
+    ingressGateways:
+      - name: istio-ingressgateway
+        enabled: true
+        k8s:
+          replicas: 2
+          affinity:
+            podAntiAffinity:
+              preferredDuringSchedulingIgnoredDuringExecution:
+                - weight: 100
+                  podAffinityTerm:
+                    labelSelector:
+                      matchLabels:
+                        app: istio-ingressgateway
+                    topologyKey: topology.kubernetes.io/zone
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+          service:
+            type: LoadBalancer
+            ports:
+              - name: status-port
+                port: 15021
+                targetPort: 15021
+              - name: http2
+                port: 80
+                targetPort: 8080
+                protocol: HTTP2
+              - name: https
+                port: 443
+                targetPort: 8443
+                protocol: HTTPS
+              - name: tcp-prometheus
+                port: 15090
+                targetPort: 15090
+                protocol: TCP
+
+    # -- Egress Gateway：2 副本，统一管控出站外部依赖（Nacos/Postgres/Redis/外部链）
+    egressGateways:
+      - name: istio-egressgateway
+        enabled: true
+        k8s:
+          replicas: 2
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+
+  # -- 全局 addon 组件（Prometheus / Jaeger / Kiali 集成）
+  values:
+    # -- 控制面监控指标暴露给 Prometheus
+    telemetry:
+      v2:
+        prometheus:
+          enabled: true
+          # -- 仅暴露控制面 + sidecar 指标，业务指标由 ServiceMonitor 抓取
+          config:
+            disable_host_info_fallback: true
+
+    # -- 复用 monitoring 命名空间的 kube-prometheus-stack 抓取 sidecar
+    prometheus:
+      enabled: false
+      # -- 不在 istio-system 自建 Prometheus，使用 monitoring 命名空间的实例
+      #    ServiceMonitor 由 deploy/istio/kiali-dashboard.yaml 中的 ServiceMonitor 注册
+
+    # -- tracing 通过 OTLP 直接对接 Jaeger Collector
+    #    Jaeger all-in-one 部署在 nexus 命名空间（见 deploy/tracing/jaeger-deployment.yaml）
+    #    OTLP gRPC 端口 4317，与 OpenTelemetry Collector 共用同一 Jaeger 后端
+    tracing:
+      enabled: true
+      provider:
+        name: otel
+        otel:
+          port: 4317
+          service: jaeger-collector.nexus.svc.cluster.local
+      # -- 采样率：1% 生产环境基线（高价值 trace 由 OTEL Collector tail_sampling 兜底）
+      sampling: 1.0
+
+    # -- Kiali 可视化（独立部署，见 deploy/istio/kiali-dashboard.yaml）
+    kiali:
+      enabled: false
+
+    # -- 全局 sidecar 资源限制
+    global:
+      # -- sidecar 默认资源（业务 Pod 内 Envoy 代理）
+      proxy:
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        # -- sidecar 日志级别（生产用 warning，调试改 info/debug）
+        logLevel: warning
+        # -- 与 istiod 失联后的优雅降级时间
+        discoveryAddress: istiod.istio-system.svc.cluster.local:15012
+        # -- 优雅关闭等待业务连接排空
+        envoyAccessLogService:
+          enabled: false
+      # -- 不在 istio-system 自建 Jaeger，使用 nexus 命名空间的现有 Jaeger
+      tracer:
+        zipkin:
+          address: ""
+      # -- 信任域与 Kubernetes Service Account 集成
+      trustDomain: cluster.local
+      trustDomainAliases:
+        - nexus.svc.cluster.local

@@ -1,0 +1,47 @@
+/*
+ * Copyright (c) [2018]
+ * This file is part of the java-nexuscore
+ *
+ * The java-nexuscore is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The java-nexuscore is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the java-nexuscore. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+package org.nexus.keystore.util;
+
+public final class StringUtil {
+
+
+	public static boolean isNullOrWhitespace(final String str) {
+		if (isNullOrEmpty(str)) {
+			return true;
+		}
+
+		for (int i = 0; i < str.length(); i++) {
+			if (!Character.isWhitespace(str.charAt(i))) {
+				return false;
+			}
+		}
+
+		return true;
+	}
+
+	public static boolean isNullOrEmpty(final String str) {
+		return null == str || str.isEmpty();
+	}
+
+
+	public static String replaceVariable(final String string, final String name, final String value) {
+		return string.replace(String.format("${%s}", name), value);
+	}
+
+}

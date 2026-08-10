@@ -1,0 +1,89 @@
+# Sandbox profile: full local simulation without external dependencies
+# Usage: --spring.profiles.active=sandbox
+#
+# 注意：sandbox 语义为「无外部依赖的本地模拟」，集成测试（@ActiveProfiles("sandbox")）
+# 在无 Nacos / Sentinel Dashboard / Seata Server 的 CI 环境运行，因此禁用外部中间件
+# 以保证 ApplicationContext 可独立加载（与 nexus-bridge test profile 对齐）。
+spring:
+  datasource:
+    url: jdbc:h2:mem:nexus_sandbox;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: false
+    open-in-view: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+  flyway:
+    enabled: false
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+  # === 禁用 Nacos / Sentinel（sandbox 无外部中间件） ===
+  cloud:
+    nacos:
+      discovery:
+        enabled: false
+      config:
+        enabled: false
+    sentinel:
+      enabled: false
+  # === P3-T3：sandbox 禁用 Kafka 事件总线（无 Kafka broker，避免 @KafkaListener 启动失败） ===
+  # spring-kafka 自动配置仍生效（KafkaTemplate 可创建），但 @KafkaListener 不自动启动
+  kafka:
+    bootstrap-servers: localhost:9092
+    listener:
+      auto-startup: false
+
+# sandbox 禁用 Seata（无 Seata Server，避免 GlobalTransactionScanner 初始化失败）
+seata:
+  enabled: false
+
+# sandbox 禁用 Zipkin 上报（无 Zipkin Server）
+management:
+  tracing:
+    sampling:
+      probability: 0.0
+
+nexus:
+  chain:
+    rpc-url: http://localhost:3000
+    skip-confirmation: true
+  consortium:
+    rpc-url: http://localhost:8080
+    skip-confirmation: true
+  exchange-wallet:
+    base-url: http://localhost:8081
+    # Sandbox-only: fake platform pubkey so refund/settlement signing paths are exercised.
+    # The matching private key lives in exchange-wallet's keystore; never real in sandbox.
+    platform-pubkey: "1SandboxPlatformPubkey0000000000000000000000000"
+  # Risk rule overrides for sandbox: integration tests use amounts up to 500000
+  # and the concurrency stress test bursts >10 orders/merchant within 60s, so the
+  # production defaults would falsely reject them.
+  settlement:
+    risk:
+      amount-threshold: 1000000000
+      velocity-max-count: 10000
+  # Dual-chain routing disabled in sandbox: the consortium and core nodes are not
+  # running, so the mock connector must remain the default target for E2E tests.
+  routing:
+    dual-chain:
+      enabled: false
+  # === P3-T3：事件溯源配置（sandbox 用内存存储，禁用投影） ===
+  event-sourcing:
+    store: memory
+    projection:
+      enabled: false
+  # === P4-T5：sandbox 使用内存死信队列（无 Kafka broker） ===
+  webhook:
+    dlq:
+      store: memory
+
+logging:
+  level:
+    org.nexus: DEBUG

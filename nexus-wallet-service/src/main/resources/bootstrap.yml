@@ -1,0 +1,40 @@
+# nexus-wallet-service bootstrap 配置
+#
+# Phase 2 任务 #57：Nacos 服务发现 + 配置中心接入。
+# 设计文档 §4.2.2。bootstrap.yml 需 spring-cloud-starter-bootstrap 依赖启用（build.gradle 已添加）。
+# 端口（8083）与业务配置在 application.yml / Nacos nexus-wallet-service.yaml 中管理。
+#
+# namespace 默认 dev（开发环境），可通过环境变量 NEX_NACOS_NAMESPACE 覆盖。
+# group 为 NEXUS_GROUP（所有 NexusChain 微服务统一分组）。
+
+spring:
+  application:
+    name: nexus-wallet-service
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:dev}
+  cloud:
+    nacos:
+      discovery:
+        server-addr: ${NEX_NACOS_SERVER:localhost:8848}
+        namespace: ${NEX_NACOS_NAMESPACE:dev}
+        group: ${NEX_NACOS_GROUP:NEXUS_GROUP}
+        cluster-name: ${NEX_NACOS_CLUSTER:DEFAULT}
+        # 服务元数据：版本、区域，用于灰度发布
+        metadata:
+          version: ${NEX_SERVICE_VERSION:1.4.0}
+          region: ${NEX_REGION:cn-east-1}
+      config:
+        server-addr: ${NEX_NACOS_SERVER:localhost:8848}
+        namespace: ${NEX_NACOS_NAMESPACE:dev}
+        group: ${NEX_NACOS_GROUP:NEXUS_GROUP}
+        # 共享配置（所有微服务共享）：数据源、日志、Sentinel 规则
+        shared-configs:
+          - data-id: nexus-common.yaml
+            group: NEXUS_GROUP
+            refresh: true
+          - data-id: nexus-sentinel-rules.yaml
+            group: NEXUS_GROUP
+            refresh: true
+        # 服务私有配置
+        file-extension: yaml
+        refresh-enabled: true

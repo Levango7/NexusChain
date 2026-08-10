@@ -1,0 +1,80 @@
+# 集成测试 profile — H2 内存数据库 + Nacos / Sentinel / Seata 禁用
+#
+# 激活方式：@ActiveProfiles("test")
+# 集成测试环境无 Nacos / Sentinel Dashboard / Seata Server，禁用外部中间件
+# 以保证 ApplicationContext 可独立加载（与 nexus-bridge / nexus-wallet-service
+# test profile 对齐，参考 nexus-bridge/src/test/resources/application-test.yml）。
+#
+# 注意：
+# 1. build.gradle 引入了 spring-cloud-starter-alibaba-nacos-discovery / -config /
+#    -sentinel / -seata 依赖，主配置 application.yml + bootstrap.yml 会触发
+#    Nacos 连接 / Sentinel Dashboard 心跳 / GlobalTransactionScanner 初始化，
+#    在无外部中间件的测试环境必然失败，因此必须在测试 profile 禁用。
+# 2. 现有集成测试（GatewayCoreIntegrationTest 等）使用 @ActiveProfiles("sandbox")，
+#    sandbox profile 的禁用配置在 main/resources/application-sandbox.yml 中补充。
+#    本文件作为标准 test profile 供新测试使用。
+spring:
+  datasource:
+    url: jdbc:h2:mem:nexus_gateway_test;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: false
+    open-in-view: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+  flyway:
+    enabled: false
+  h2:
+    console:
+      enabled: false
+  # === 集成测试禁用 Nacos / Sentinel（无外部依赖） ===
+  cloud:
+    nacos:
+      discovery:
+        enabled: false
+      config:
+        enabled: false
+    sentinel:
+      enabled: false
+
+# 测试环境禁用 Seata（无 Seata Server 可连接，避免 GlobalTransactionScanner 初始化失败）
+seata:
+  enabled: false
+
+# 测试环境禁用 Zipkin 上报（无 Zipkin Server）
+management:
+  tracing:
+    sampling:
+      probability: 0.0
+  zipkin:
+    tracing:
+      endpoint: http://localhost:9411/api/v2/spans
+
+# Sandbox 风格的业务配置（测试无链节点/钱包服务运行）
+nexus:
+  chain:
+    rpc-url: http://localhost:3000
+    skip-confirmation: true
+  consortium:
+    rpc-url: http://localhost:8080
+    skip-confirmation: true
+  exchange-wallet:
+    base-url: http://localhost:8081
+    platform-pubkey: "1TestPlatformPubkey000000000000000000000000000"
+    enabled: false
+  settlement:
+    risk:
+      amount-threshold: 1000000000
+      velocity-max-count: 10000
+  routing:
+    dual-chain:
+      enabled: false
+
+logging:
+  level:
+    org.nexus: DEBUG

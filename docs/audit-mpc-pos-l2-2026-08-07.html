@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NexusChain 微服务化后现状审计 — MPC / PoS / L2 三项功能评估</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --card:#1c2029; --line:#2a2f3a;
+    --text:#e8eaf0; --muted:#9aa3b2; --accent:#4f8cff; --green:#3ddc84;
+    --yellow:#ffb454; --red:#ff5c5c; --purple:#b48cff;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{background:var(--bg); color:var(--text); font-family:"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; line-height:1.65; padding:32px 20px;}
+  .wrap{max-width:1080px; margin:0 auto;}
+  h1{font-size:26px; margin-bottom:6px;}
+  .sub{color:var(--muted); font-size:14px; margin-bottom:24px;}
+  h2{font-size:20px; margin:36px 0 14px; padding-left:12px; border-left:4px solid var(--accent);}
+  h3{font-size:16px; margin:22px 0 10px; color:var(--accent);}
+  p{margin:8px 0; color:var(--text);}
+  .muted{color:var(--muted); font-size:13px;}
+  table{width:100%; border-collapse:collapse; margin:12px 0 20px; font-size:13.5px;}
+  th{background:var(--panel); color:var(--muted); text-align:left; padding:9px 12px; border-bottom:2px solid var(--line); font-weight:600;}
+  td{padding:9px 12px; border-bottom:1px solid var(--line); vertical-align:top;}
+  tr:hover td{background:rgba(79,140,255,0.05);}
+  .badge{display:inline-block; padding:2px 10px; border-radius:20px; font-size:12px; font-weight:600;}
+  .b-done{background:rgba(61,220,132,0.15); color:var(--green);}
+  .b-part{background:rgba(255,180,84,0.15); color:var(--yellow);}
+  .b-todo{background:rgba(255,92,92,0.15); color:var(--red);}
+  .b-skel{background:rgba(180,140,255,0.15); color:var(--purple);}
+  .card{background:var(--card); border:1px solid var(--line); border-radius:10px; padding:18px 20px; margin:14px 0;}
+  .card-title{font-weight:700; font-size:15px; margin-bottom:10px; display:flex; align-items:center; gap:8px;}
+  .dot{display:inline-block; width:9px; height:9px; border-radius:50%;}
+  .dot-green{background:var(--green);} .dot-yellow{background:var(--yellow);} .dot-red{background:var(--red);} .dot-purple{background:var(--purple);} .dot-blue{background:var(--accent);}
+  .grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:14px; margin:14px 0;}
+  .metric{background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px;}
+  .metric .num{font-size:26px; font-weight:700; color:var(--accent);}
+  .metric .num.g{color:var(--green);} .metric .num.r{color:var(--red);} .metric .num.y{color:var(--yellow);}
+  .metric .lbl{color:var(--muted); font-size:12.5px; margin-top:2px;}
+  .timeline{border-left:2px solid var(--line); margin:14px 0 14px 8px; padding-left:22px;}
+  .step{position:relative; margin-bottom:18px;}
+  .step::before{content:""; position:absolute; left:-29px; top:6px; width:12px; height:12px; border-radius:50%; background:var(--accent); border:2px solid var(--bg);}
+  .step.p0::before{background:var(--red);} .step.p1::before{background:var(--yellow);} .step.p2::before{background:var(--green);} .step.p3::before{background:var(--purple);}
+  .step-title{font-weight:700; font-size:14.5px;}
+  .step-text{color:var(--muted); font-size:13.5px; margin-top:3px;}
+  .tag{display:inline-block; background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:1px 8px; font-size:12px; color:var(--muted); margin-right:6px;}
+  .verdict{background:linear-gradient(135deg,rgba(79,140,255,0.12),rgba(180,140,255,0.10)); border:1px solid rgba(79,140,255,0.35); border-radius:12px; padding:20px 24px; margin:18px 0;}
+  .verdict h3{margin-top:0; color:var(--accent);}
+  code{background:var(--panel); border:1px solid var(--line); border-radius:4px; padding:1px 6px; font-size:12.5px; font-family:Consolas,monospace;}
+  ul,ol{margin:8px 0 8px 22px;}
+  li{margin:5px 0;}
+  .footer{margin-top:40px; color:var(--muted); font-size:12px; border-top:1px solid var(--line); padding-top:14px;}
+  .decision{background:rgba(255,180,84,0.08); border:1px solid rgba(255,180,84,0.4); border-radius:10px; padding:16px 20px; margin:14px 0;}
+  .decision h3{color:var(--yellow); margin-top:0;}
+  .pct{display:inline-block; min-width:52px; font-weight:700;}
+  .bar{display:inline-block; height:8px; border-radius:4px; vertical-align:middle; margin-right:8px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>NexusChain 现状审计：微服务化后三项功能评估</h1>
+<div class="sub">审计日期 2026-08-07 ｜ 基线版本 v1.6.0（Phase 4 微服务化完成） ｜ 范围：MPC 多方签名 / L2 Rollup / PoS 出块（DefaultPosConsensus.propose）</div>
+
+<div class="verdict">
+<h3>核心结论（先读这里）</h3>
+<p><b>三项功能都还需要做，但性质完全不同：</b></p>
+<ul>
+  <li><b style="color:var(--red)">MPC GG18/GG20</b> — 编排层（DKG 轮次、签名会话、消息路由、传输、WAL、加密存储）全部就绪，<b>核心密码学全是 TODO</b>（Paillier / Feldman VSS / MtA / ZK 证明 / 份额合并）。壳已备好，芯是空的。这是工程量最大的一项。</li>
+  <li><b style="color:var(--yellow)">DefaultPosConsensus.propose</b> — 纯占位实现（抛 UnsupportedOperationException）；<code>@Primary</code> 的 <code>PosConsensusEngine.propose()</code> 返回 <code>null</code>、<code>validate()</code> 恒 true。周边设施（质押/验证人/奖励/罚没）已真实，<b>只差出块主链路</b>；且 @Primary 空实现是"静默地雷"。</li>
+  <li><b style="color:var(--purple)">L2 Rollup</b> — Optimistic 协议逻辑<b>真实度 80%</b>（MPT 状态根、单步二分欺诈证明、挑战窗口、bond、first-valid-wins、EIP-4844 blob、gas 估算），<b>但零测试</b>、L1 集成是内存模拟；ZK 是<b>纯骨架</b>（ZkProofSystem 抽象 + 电路壳）。</li>
+</ul>
+<p><b>建议执行顺序：</b>第一批（快赢排雷）：L2 Optimistic 测试补全 + PoS 出块接线；第二批（核心工程）：MPC 密码学引擎；第三批（按需）：L2 L1 真实化 + ZK 证明系统。详见第五节。</p>
+</div>
+
+<h2>一、项目现状确认：微服务化水平</h2>
+<p>v1.4.0 → v1.6.0（2026-08-07）完成 Phase 1-4 微服务化，这是实质性落地，不是目录改名：</p>
+<div class="grid">
+  <div class="metric"><div class="num">5</div><div class="lbl">独立部署应用：gateway(8080) / core(19585) / signing(8082) / wallet(8083) / bridge(8084)</div></div>
+  <div class="metric"><div class="num g">4</div><div class="lbl">基础设施：Nacos 2.3.2 注册配置 / Sentinel 1.8.8 / Seata 2.0 AT+TCC / Zipkin 3.4 链路</div></div>
+  <div class="metric"><div class="num y">106→118</div><div class="lbl">wallet-service 单元测试（Phase 4 内存存储全部替换为 JPA+Flyway，4 张表）</div></div>
+  <div class="metric"><div class="num r">0</div><div class="lbl">l2 包测试用例 —— 已有资产的最大风险点</div></div>
+</div>
+<table>
+  <tr><th>阶段</th><th>内容</th><th>状态</th></tr>
+  <tr><td>Phase 1+2 (v1.4.0)</td><td>signing/wallet/bridge 独立部署 + Nacos + Sentinel + gateway Feign 改造 + exchange-wallet 移除</td><td><span class="badge b-done">已落地</span></td></tr>
+  <tr><td>Phase 3 (v1.5.0)</td><td>Seata 分布式事务（gateway AT + signing TCC）+ Micrometer/Zipkin 链路追踪 + Feign fallback + 健康检查</td><td><span class="badge b-done">已落地</span></td></tr>
+  <tr><td>Phase 4 (v1.6.0)</td><td>wallet-service JPA+Flyway 持久化（4 表）+ Seata AT 回滚 + 118 单测 + 集成测试</td><td><span class="badge b-done">已落地</span></td></tr>
+</table>
+<p class="muted">结论：微服务化工程骨架扎实，处于"PoC → 生产化"的中间态。基础设施编排（docker-compose 含 nacos/sentinel/seata/zipkin）就绪，signing-service 已有 TCC 分支事务（SigningTccAction）和 LevelDB nonce 池。</p>
+
+<h2>二、三项功能审计明细</h2>
+
+<h3>2.1 MPC 多方签名（GG18/GG20 门限 ECDSA）— nexus-signing-service/mpc</h3>
+<table>
+  <tr><th>层</th><th>文件</th><th>完成度</th><th>说明</th></tr>
+  <tr><td>编排</td><td>MpcKeyGeneration / MpcSigner / MpcSigningSession / MpcSignatureAggregator</td><td><span class="pct">40%</span><span class="bar" style="width:120px;background:linear-gradient(90deg,var(--yellow) 40%,var(--line) 40%)"></span><span class="badge b-part">壳</span></td><td>DKG 4 轮 / 签名 7 轮状态机、round barrier、消息记账全部接好；<b>每轮数学全 TODO</b></td></tr>
+  <tr><td>传输</td><td>GrpcMpcTransportStub / InMemoryMpcTransport / MessageRouter / RoundBarrier</td><td><span class="pct">80%</span><span class="bar" style="width:240px;background:linear-gradient(90deg,var(--green) 80%,var(--line) 80%)"></span><span class="badge b-done">基本可用</span></td><td>gRPC 桩 + 内存传输双实现，消息去重、路由齐备</td></tr>
+  <tr><td>安全</td><td>HmacSigner / MpcMessageSecurityService / MutualTlsContext / NonceTracker</td><td><span class="pct">70%</span><span class="bar" style="width:210px;background:linear-gradient(90deg,var(--green) 70%,var(--line) 70%)"></span><span class="badge b-part">部分</span></td><td>消息 HMAC 认证、nonce 复用防护已实现（GG18 安全关键点）</td></tr>
+  <tr><td>持久化</td><td>WriteAheadLog / EncryptedFileKeyShareStore / LevelDB</td><td><span class="pct">70%</span><span class="bar" style="width:210px;background:linear-gradient(90deg,var(--green) 70%,var(--line) 70%)"></span><span class="badge b-part">部分</span></td><td>WAL + 加密文件存储已实现，需按真实协议复核</td></tr>
+  <tr><td>业务</td><td>ColdWalletMultiSigService / DefaultMpcService / MpcApprovalPolicy</td><td><span class="pct">30%</span><span class="bar" style="width:90px;background:linear-gradient(90deg,var(--red) 30%,var(--line) 30%)"></span><span class="badge b-todo">缺口</span></td><td>冷钱包多签流程编排真实（init→sign→aggregate→broadcast）；<b>DefaultMpcService 三方法纯 stub</b></td></tr>
+  <tr><td>密码学</td><td>—</td><td><span class="pct">0%</span><span class="bar" style="width:0px"></span><span class="badge b-todo">全缺</span></td><td>Paillier、Feldman VSS、椭圆曲线份额运算、MtA、ZK 证明（GG18 的 π 协议）、份额合并 s=Σsᵢ mod n —— <b>全部 TODO</b>；signing-service 无任何密码学依赖（BC 只在 nexus-core）</td></tr>
+</table>
+<p><b>测试</b>：MPC 协议层测试 0 个（现有 TxControllerTest / SigningTccActionTest 是 REST/TCC 层）。<b>判定：需要做，核心是密码学引擎接入。</b></p>
+
+<h3>2.2 L2 Rollup — nexus-core/l2</h3>
+<table>
+  <tr><th>子系统</th><th>状态</th><th>证据</th></tr>
+  <tr><td>Optimistic 主流程</td><td><span class="badge b-done">逻辑真实</span></td><td>submitBatch → MPT 状态根 → L1 提交 → 挑战窗口 → finalize 全链路真实（OptimisticRollup 6.7KB）</td></tr>
+  <tr><td>欺诈证明</td><td><span class="badge b-done">逻辑真实</span></td><td>FraudProofVerifier 23KB：Merkle 证明验证 + 单步状态转换重算 + 二分定位出错步 + bond 罚没 + first-valid-wins 冲突解决 + 动态挑战期策略</td></tr>
+  <tr><td>状态根</td><td><span class="badge b-done">真实</span></td><td>MerklePatriciaTrie 7.8KB 真实实现 + StateRootManager 10.2KB</td></tr>
+  <tr><td>L1 集成</td><td><span class="badge b-part">内存模拟</span></td><td>DefaultL2BridgeContract 是内存实现；L1ContractClient 3.3KB 为接口抽象 —— 无真实 L1 合约部署/交互</td></tr>
+  <tr><td>测试</td><td><span class="badge b-todo">0 个</span></td><td>nexus-core test 目录无 l2 包 —— 23KB 欺诈证明验证器零测试，最大风险</td></tr>
+  <tr><td>ZK Rollup</td><td><span class="badge b-skel">纯骨架</span></td><td>ZkProofSystem 抽象（setup/prove/verify）+ RollupStateTransitionCircuit 电路壳 + TrustedSetup 版本管理；无真实证明系统（无 halo2/Plonk/Groth16 库）</td></tr>
+</table>
+<p><b>判定：Optimistic 需要"补测试 + L1 真实化"；ZK 需要"从零到一"接真实证明系统。</b></p>
+
+<h3>2.3 PoS 出块（DefaultPosConsensus.propose）— nexus-core/consensus/pos</h3>
+<table>
+  <tr><th>组件</th><th>状态</th><th>说明</th></tr>
+  <tr><td>ValidatorRegistry / StakingServiceImpl / PosProposer / PosRewardDistributor / SlashingService</td><td><span class="badge b-done">真实</span></td><td>验证人注册、质押、stake-weighted 提案者选取、奖励分配、罚没全真实</td></tr>
+  <tr><td>DefaultPosConsensus</td><td><span class="badge b-todo">占位</span></td><td><code>propose()</code> 抛 UnsupportedOperationException；<code>validate()</code> 返回 false</td></tr>
+  <tr><td>PosConsensusEngine（@Primary）</td><td><span class="badge b-part">半骨架</span></td><td><code>propose()</code> 选出提案者后<b>返回 null</b>（不打包/不构造/不签名/不广播）；<code>validate()</code> 恒 true</td></tr>
+  <tr><td>接线</td><td><span class="badge b-todo">无消费者</span></td><td>全库搜索：PosConsensus 仅 pos 包内部引用 —— 主链出块仍走 DPoS（Miner/MineThread/PackageMiner/ProposersState 真实存在）</td></tr>
+</table>
+<p><b>风险点</b>：PosConsensusEngine 标了 <code>@Primary</code>，任何新代码注入 <code>PosConsensus</code> 都会拿到"返回 null 的引擎"，属于静默地雷。<b>判定：需要做，且建议先消除 @Primary 地雷。</b></p>
+
+<h2>三、需求分析</h2>
+
+<h3>3.1 MPC 多方签名</h3>
+<div class="card">
+<div class="card-title"><span class="dot dot-red"></span>目标</div>
+<p>让 signing-service 的 MPC 从"编排壳"变成可用的门限 ECDSA：t-of-n 参与者分布式生成密钥、分布式签名、产出可在链上验证的标准 ECDSA 签名，私钥份额永不离开参与者节点。</p>
+<div class="card-title"><span class="dot dot-blue"></span>验收标准</div>
+<ul>
+  <li>2-of-3 与 3-of-5 场景 DKG + 签名端到端跑通，签名可被标准 ECDSA 验证器（BouncyCastle/链节点）验证</li>
+  <li>少于 t 个参与者无法完成签名（quorum 强制）</li>
+  <li>份额泄露 < t 份不泄露私钥（协议级安全属性，通过协议向量测试保证）</li>
+  <li>与参考实现互签互通（协议兼容性向量测试）</li>
+  <li>nonce 复用防护生效（GG18 已知攻击面，NonceTracker 已验证）</li>
+  <li>ColdWalletMultiSigService 全流程（initMultiSigTransfer → participantSign → aggregateAndBroadcast）接入真实引擎</li>
+</ul>
+</div>
+
+<h3>3.2 PoS 出块主链路</h3>
+<div class="card">
+<div class="card-title"><span class="dot dot-yellow"></span>目标</div>
+<p>PosConsensusEngine.propose 从返回 null 变为真实出块：选取提案者 → 从交易池打包 → 构造区块 → 提案者签名 → P2P 广播；validate 从恒 true 变为完整校验链。DPoS 保留为默认共识，PoS 通过配置切换（渐进替换，避免一次性切换风险）。</p>
+<div class="card-title"><span class="dot dot-blue"></span>验收标准</div>
+<ul>
+  <li>propose() 产出签名区块：含交易池打包交易、提案者签名、合法时间窗口</li>
+  <li>validate() 校验：区块签名 → 提案者 ∈ 活跃验证人集合 → 质押满足门槛 → 时间窗口 → slash 条件</li>
+  <li>双节点集成测试：PoS 模式下可连续出块并被对端验证</li>
+  <li>ConsensusConfig 支持 dpos|pos 切换，切换不破坏现有链</li>
+  <li>移除或禁用 @Primary 空实现（未完成前防止误注入）</li>
+</ul>
+</div>
+
+<h3>3.3 L2 Rollup</h3>
+<div class="card">
+<div class="card-title"><span class="dot dot-purple"></span>目标</div>
+<p>分两层：<b>Optimistic</b> 先把已写好的协议逻辑用测试固化（当前零测试是最大风险），再决定是否做真实 L1 合约集成；<b>ZK</b> 接入真实证明系统（骨架 → 可用）。</p>
+<div class="card-title"><span class="dot dot-blue"></span>验收标准（Optimistic 优先）</div>
+<ul>
+  <li>FraudProofVerifier：Merkle 证明、二分定位、挑战窗口、bond 罚没、first-valid-wins 全覆盖单测（含恶意提交者场景）</li>
+  <li>StateRootManager / RollupSequencer / Eip4844BlobCarrier 单测</li>
+  <li>端到端：submit → challenge → rollback → finalize 全流程测试（含挑战失败罚没 bond）</li>
+  <li>ZK：ZkProofSystem 接入真实实现（halo2 或 Plonk 系），prove/verify 端到端跑通，电路为 Rollup 状态转换</li>
+</ul>
+</div>
+
+<h2>四、技术方案与关键决策</h2>
+
+<h3>4.1 MPC：集成成熟库，不重造密码学轮子</h3>
+<p>GG18/GG20 的核心（Paillier 同态、Feldman VSS、MtA、ZK 证明）是安全审计密集型工作，自研风险极高。Java 生态无成熟 GG18/GG20 实现，成熟代码集中在 Rust（<code>multi-party-ecdsa</code> / <code>tss-lib</code>）与 C（Zenroom）。</p>
+<table>
+  <tr><th>方案</th><th>路线</th><th>优点</th><th>缺点</th><th>建议</th></tr>
+  <tr><td><b>A（推荐）</b></td><td>密码学引擎独立进程（Rust multi-party-ecdsa / tss-lib），signing-service 通过本地 gRPC/HTTP 调用，现有编排层（RoundBarrier/状态机/传输）继续复用</td><td>协议实现成熟、审计充分；与现有微服务架构一致；编排层零重写</td><td>需引入 Rust 构建/部署链路</td><td><b>首选</b></td></tr>
+  <tr><td>B</td><td>Zenroom 绑定（C 库 JNI）</td><td>单进程、无额外服务</td><td>绑定维护成本；Zenroom 门限签名 API 覆盖需验证</td><td>备选</td></tr>
+  <tr><td>C</td><td>纯 Java 自研（BouncyCastle + 自实现 Paillier/ZKP）</td><td>无外部依赖</td><td>数月工程量 + 安全审计成本，风险高</td><td>不推荐</td></tr>
+</table>
+<p class="muted">关键点：现有 mpc 包已经定义了干净的边界（传输/会话/聚合），密码学引擎作为 SPI（MpcCryptoEngine）替换即可，DKG 轮次、签名轮次、quorum 逻辑可全部保留。</p>
+
+<h3>4.2 PoS：复用 DPoS 出块骨架，共识可切换</h3>
+<ul>
+  <li>区块构造/打包/广播复用现有 <code>PackageMiner</code> / <code>Miner</code> / <code>MineThread</code> 骨架，仅替换"提案者选取"与"区块头签名"为 PoS 语义（PosProposer 已就绪）</li>
+  <li>validate 实现完整校验链，SlashingService 已就绪可直接挂钩</li>
+  <li>ConsensusConfig 增加 consensus.mode=dpos|pos 路由；PoS 未达生产标准前保留 DPoS 默认，同时把 PosConsensusEngine 的 @Primary 去掉（或改为按配置启用），消除静默 null 地雷</li>
+</ul>
+
+<h3>4.3 L2：先测试固化，再真实化</h3>
+<ul>
+  <li>Optimistic：先补单测+端到端（2-3 天工作量，资产已 80%）；L1 合约客户端实现放第二阶段（现有 L1ContractClient 接口 + DefaultL2BridgeContract 内存实现，可先做契约测试锁定行为）</li>
+  <li>ZK：ZkProofSystem 抽象已定义好（setup/prove/verify），选型 halo2（zkSync 同源）或 Plonk 系；与 MPC 相同的"引擎进程"模式接入（Java 无成熟 ZK 库）</li>
+</ul>
+
+<h2>五、任务清单、排序与排期</h2>
+<div class="timeline">
+  <div class="step p0"><div class="step-title">第一批 · 排雷与快赢（约 1 周）</div><div class="step-text">成本最低、风险最高优先：把已有资产固化 + 消除静默地雷</div></div>
+  <div class="step p1"><div class="step-title">第二批 · MPC 核心工程（约 3-4 周）</div><div class="step-text">工程量最大的核心：密码学引擎选型 → DKG → 签名 → 聚合 → 测试</div></div>
+  <div class="step p2"><div class="step-title">第三批 · L2 真实化（按需，约 2 周）</div><div class="step-text">L1 合约客户端 + ZK 证明引擎接入</div></div>
+</div>
+
+<table>
+  <tr><th>#</th><th>任务</th><th>模块</th><th>优先级</th><th>依赖</th><th>预估</th></tr>
+  <tr><td>T1</td><td>L2 Optimistic 单元测试补全（FraudProofVerifier / StateRootManager / Sequencer / Blob）</td><td>nexus-core/l2</td><td><span class="badge b-todo">P0</span></td><td>—</td><td>2 天</td></tr>
+  <tr><td>T2</td><td>L2 端到端测试（submit→challenge→rollback→finalize，含 bond 罚没）</td><td>nexus-core/l2</td><td><span class="badge b-todo">P0</span></td><td>T1</td><td>1-2 天</td></tr>
+  <tr><td>T3</td><td>PoS 出块主链路：propose 打包+构造+签名+广播（复用 PackageMiner/Miner 骨架）</td><td>nexus-core/consensus</td><td><span class="badge b-todo">P0</span></td><td>—</td><td>2-3 天</td></tr>
+  <tr><td>T4</td><td>PoS validate 完整校验链 + slash 挂钩</td><td>nexus-core/consensus</td><td><span class="badge b-todo">P0</span></td><td>T3</td><td>1-2 天</td></tr>
+  <tr><td>T5</td><td>共识切换路由（ConsensusConfig dpos|pos）+ 移除 @Primary 地雷</td><td>nexus-core/consensus</td><td><span class="badge b-todo">P0</span></td><td>T3</td><td>1 天</td></tr>
+  <tr><td>T6</td><td>PoS 双节点集成测试（PoS 模式连续出块 + 对端验证）</td><td>nexus-core</td><td><span class="badge b-todo">P0</span></td><td>T3-T5</td><td>1-2 天</td></tr>
+  <tr><td>T7</td><td>MPC 密码学引擎选型 PoC：multi-party-ecdsa vs tss-lib vs Zenroom，跑通 2-of-3</td><td>signing-service</td><td><span class="badge b-part">P1</span></td><td>—</td><td>3 天</td></tr>
+  <tr><td>T8</td><td>MpcCryptoEngine SPI + 引擎进程桥（本地 gRPC/HTTP）</td><td>signing-service</td><td><span class="badge b-part">P1</span></td><td>T7</td><td>2-3 天</td></tr>
+  <tr><td>T9</td><td>MpcKeyGeneration 接入真实 DKG（替换 4 轮 TODO 数学）</td><td>signing-service</td><td><span class="badge b-part">P1</span></td><td>T8</td><td>2 天</td></tr>
+  <tr><td>T10</td><td>MpcSigner 接入真实签名轮（7 轮 + MtA + ZK）+ MpcSignatureAggregator 真实合并与验证</td><td>signing-service</td><td><span class="badge b-part">P1</span></td><td>T9</td><td>3-4 天</td></tr>
+  <tr><td>T11</td><td>DefaultMpcService 完整接线（createMpcWallet / signTransaction / rotateKey）+ ColdWalletMultiSigService 接入</td><td>signing-service</td><td><span class="badge b-part">P1</span></td><td>T10</td><td>2 天</td></tr>
+  <tr><td>T12</td><td>MPC 测试：协议向量测试（与参考实现互签）、阈值/拜占庭测试、nonce 复用攻击测试</td><td>signing-service</td><td><span class="badge b-part">P1</span></td><td>T10</td><td>3-4 天</td></tr>
+  <tr><td>T13</td><td>密钥份额存储加固评估（EncryptedFileKeyShareStore → KMS/HSM 或引擎侧加密）</td><td>signing-service</td><td><span class="badge b-part">P1</span></td><td>T9</td><td>1 天</td></tr>
+  <tr><td>T14</td><td>L1 合约客户端实现（EVM 合约 submitStateRoot / challenge / finalize）</td><td>nexus-core/l2</td><td><span class="badge b-skel">P2</span></td><td>T2</td><td>3-4 天</td></tr>
+  <tr><td>T15</td><td>ZK 证明引擎选型 PoC + ZkProofSystem 真实实现接入（halo2/Plonk 引擎进程）</td><td>nexus-core/l2</td><td><span class="badge b-skel">P2</span></td><td>T14（可并行）</td><td>1-2 周</td></tr>
+  <tr><td>T16</td><td>RollupStateTransitionCircuit 真实化 + TrustedSetup 流程</td><td>nexus-core/l2</td><td><span class="badge b-skel">P2</span></td><td>T15</td><td>3-5 天</td></tr>
+</table>
+
+<h2>六、风险与依赖</h2>
+<table>
+  <tr><th>风险</th><th>等级</th><th>缓解</th></tr>
+  <tr><td>MPC 引擎进程引入 Rust 构建/部署链路，团队不熟</td><td><span class="badge b-part">中</span></td><td>引擎容器化部署（与现有 docker-compose 一致）；PoC 阶段先本地进程验证</td></tr>
+  <tr><td>GG18 已知攻击面（nonce 复用 / Paillier 参数攻击）</td><td><span class="badge b-todo">高</span></td><td>只用审计充分的成熟库；NonceTracker 已存在继续保留；协议向量测试覆盖</td></tr>
+  <tr><td>L2 欺诈证明逻辑零测试，回归风险</td><td><span class="badge b-todo">高</span></td><td>第一批先补测试（T1/T2），未测试前不继续扩展 L2</td></tr>
+  <tr><td>PosConsensusEngine @Primary 空实现被误注入</td><td><span class="badge b-todo">高</span></td><td>T5 第一批立即处理（配置化启用）</td></tr>
+  <tr><td>ZK 证明系统选型不匹配（Java 生态无成熟库）</td><td><span class="badge b-part">中</span></td><td>与 MPC 同模式引擎进程；ZK 排最后，不影响前两批</td></tr>
+</table>
+
+<h2>七、待决策点（审核项）</h2>
+<div class="decision">
+<h3>请 Owner 审核以下决策</h3>
+<ul>
+  <li><b>D1</b>：MPC 方案 A（Rust 引擎进程）是否接受引入 Rust 技术栈？</li>
+  <li><b>D2</b>：PoS 与 DPoS 的关系 —— 配置化共存（推荐）还是直接替换？</li>
+  <li><b>D3</b>：L2 的 L1 真实化（T14）是否本轮做，还是先只补测试（T1/T2）？</li>
+  <li><b>D4</b>：ZK 真实证明系统（T15/T16）是"必须交付"还是"排期按需"？</li>
+  <li><b>D5</b>：执行方式 —— 确认后由我按 T1→T16 顺序逐项实现并测试，每批完成后汇报？</li>
+</ul>
+</div>
+
+<div class="footer">NexusChain Audit Report ｜ 生成于 2026-08-07 ｜ 基线：git 5cc67ed (v1.6.0) ｜ 审计方法：源码静态审计（未跑构建）</div>
+</div>
+</body>
+</html>

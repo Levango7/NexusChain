@@ -1,0 +1,4 @@
+rootProject.name = 'consortium'
+include 'common'
+include 'consortium'
+include 'crypto'

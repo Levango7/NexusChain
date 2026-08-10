@@ -1,0 +1,41 @@
+# NexusChain Helm Umbrella Chart
+# ============================================================================
+# 聚合 4 个 Spring Boot 服务子 chart：
+#   nexus-gateway / nexus-bridge / nexus-signing-service / nexus-wallet-service
+# 基础设施（Nacos/Sentinel/Seata/Zipkin/Postgres/Redis）由独立 chart 或
+# 运维平台提供，本 chart 仅注入指向它们的服务地址环境变量。
+# ============================================================================
+apiVersion: v2
+name: nexus-chain
+description: NexusChain 区块链支付编排平台 Helm Umbrella Chart
+type: application
+version: 2.0.0
+appVersion: "2.0.0"
+keywords:
+  - blockchain
+  - payment
+  - nexus
+  - orchestration
+  - spring-boot
+home: https://github.com/nexus/NexusChain
+sources:
+  - https://github.com/nexus/NexusChain
+maintainers:
+  - name: NexusChain DevOps
+    email: devops@nexus.network
+dependencies:
+  - name: nexus-gateway
+    version: 2.0.0
+    repository: "file://charts/nexus-gateway"
+  - name: nexus-bridge
+    version: 2.0.0
+    repository: "file://charts/nexus-bridge"
+  - name: nexus-signing-service
+    version: 2.0.0
+    repository: "file://charts/nexus-signing-service"
+  - name: nexus-wallet-service
+    version: 2.0.0
+    repository: "file://charts/nexus-wallet-service"
+  - name: nexus-api-gateway
+    version: 2.0.0
+    repository: "file://charts/nexus-api-gateway"

@@ -1,0 +1,47 @@
+# use SPRING_CONFIG_LOCATION environment to locate your custom spring config
+# for example: SPRING_CONFIG_LOCATION=classpath:\application.yml,some-path\custom-config.yml
+spring:
+  datasource:
+    url: 'jdbc:postgresql://localhost:5432/your-data-base' # SPRING_DATASOURCE_URL
+    username: 'username'
+    password: 'password'
+
+  jpa:
+    hibernate:
+      ddl-auto: create-drop # create, update
+    show-sql: true # enable jpa sql logs
+
+
+
+# consortium configurations
+consortium:
+  consensus:
+    name: 'poa'
+    genesis: 'genesis/nexus-genesis-generator-test.jsonc'
+    block-interval: '30'
+    enable-mining: 'true'
+    miner-coin-base: '1JWhUiZCWps56uZckAvzxy2ex6VGhrMXdD'
+
+  p2p:
+    name: 'gRPC' # choose the only p2p protocol gRPC as default optional: websocket
+    # name: 'websocket'
+    max-peers: '16' # maximum peers
+    address: 'node://localhost:9999'
+    enable-discovery: 'true'
+    bootstraps: # bootstraps nodes
+      - 'node://localhost:9998'
+    trusted: # trusted nodes
+      - 'node://localhost:9999'
+
+
+server:
+  port: '8080'
+
+logging:
+  level:
+    org.hibernate:
+      SQL: 'DEBUG'
+      type.descriptor.sql.BasicBinder: 'TRACE'
+    org.springframework.jdbc.core:
+      JdbcTemplate: 'DEBUG'
+      StatementCreatorUtils: 'TRACE'

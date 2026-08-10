@@ -1,0 +1,804 @@
+# NexusChain API v2 — OpenAPI 3.1 规范（P4-T7）
+#
+# 覆盖 v2 全部端点：订单（游标分页 + 字段筛选）、支付（批量）、商户。
+# v1 端点保持向后兼容，由 ApiVersionFilter 注入 Deprecation/Sunset 头声明弃用。
+#
+# 关联：
+#   - 路线图：docs/v2.0.0-roadmap.md P4-T7
+#   - ADR：docs/adr/ADR-020-version-strategy.md
+#   - 实现：nexus-gateway/src/main/java/org/nexus/gateway/controller/v2/
+openapi: 3.1.0
+info:
+  title: NexusChain Gateway API
+  version: 2.0.0
+  summary: NexusChain 商户支付网关 v2 API
+  description: |
+    v2 API 相比 v1 的增强：
+      - 游标分页（cursor + pageSize）替代 offset/limit
+      - 统一错误码响应格式 {error: {code, message, details, traceId}}
+      - 字段筛选（fields=id,amount,status）
+      - 批量支付创建（POST /api/v2/payments/batch）
+
+    v1 兼容期 6 个月（2026-08-09 起，2027-02-09 Sunset）。
+    v1 端点响应附加 Deprecation 与 Sunset 头声明弃用。
+  contact:
+    name: NexusChain Team
+    url: https://docs.nexus.network/api/v2-migration-guide
+    email: api@nexus.network
+  license:
+    name: Apache 2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+
+servers:
+  - url: https://api.nexus.network
+    description: Production
+  - url: https://api.staging.nexus.network
+    description: Staging
+  - url: http://localhost:8080
+    description: Local development
+
+# === 标签 ===
+tags:
+  - name: Order v2
+    description: v2 订单 API：游标分页、字段筛选、统一错误码
+  - name: Payment v2
+    description: v2 支付 API：批量操作、统一错误码
+  - name: Merchant v2
+    description: v2 商户 API：统一错误码
+  - name: Versioning
+    description: API 版本协商
+
+# === 安全方案 ===
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-NexusChain-ApiKey
+      description: 商户 API Key（注册时生成）
+
+  # === 可复用 schema ===
+  schemas:
+    # --- 通用 ---
+    CursorPageMeta:
+      type: object
+      properties:
+        nextCursor:
+          type: string
+          nullable: true
+          description: 下一页游标（base64 编码）；已到末尾时为 null
+          example: eyJrIjoiMTIzIn0
+        hasMore:
+          type: boolean
+          description: 是否还有更多数据
+        count:
+          type: integer
+          description: 当前页实际返回条数
+        pageSize:
+          type: integer
+          description: 每页条数上限
+      required: [hasMore, count, pageSize]
+
+    ErrorBody:
+      type: object
+      properties:
+        code:
+          type: string
+          description: 稳定错误码（机器可读）
+          example: ORDER_NOT_FOUND
+        message:
+          type: string
+          description: 人类可读的错误描述
+          example: Order with id=123 not found
+        details:
+          type: object
+          nullable: true
+          description: 结构化补充信息
+          additionalProperties: true
+        traceId:
+          type: string
+          description: 分布式追踪 ID（16 字符十六进制）
+          example: a1b2c3d4e5f6a7b8
+      required: [code, message, traceId]
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          $ref: '#/components/schemas/ErrorBody'
+      required: [error]
+
+    # --- 订单 ---
+    PaymentOrder:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        orderNo:
+          type: string
+          maxLength: 64
+        merchantId:
+          type: integer
+          format: int64
+        tokenSymbol:
+          type: string
+          default: NEX
+        amount:
+          type: number
+          description: 最小单位金额
+          example: 500000
+        description:
+          type: string
+          nullable: true
+          maxLength: 256
+        payerAddress:
+          type: string
+          nullable: true
+          maxLength: 66
+        payeeAddress:
+          type: string
+          maxLength: 66
+        chainTxHash:
+          type: string
+          nullable: true
+          maxLength: 128
+        status:
+          type: string
+          enum: [PENDING, PAYING, PAID, EXPIRED, REFUNDED, FAILED]
+        checkoutToken:
+          type: string
+          maxLength: 128
+        expiresAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        paidAt:
+          type: string
+          format: date-time
+          nullable: true
+      required: [id, orderNo, merchantId, amount, status, createdAt, updatedAt]
+
+    CreateOrderRequest:
+      type: object
+      properties:
+        merchantId:
+          type: string
+          description: 商户 ID（字符串形式）
+        amount:
+          type: number
+          minimum: 1
+        tokenSymbol:
+          type: string
+          default: NEX
+        description:
+          type: string
+          maxLength: 256
+        payerAddress:
+          type: string
+          nullable: true
+        notifyUrl:
+          type: string
+          format: uri
+        expiryMinutes:
+          type: integer
+          nullable: true
+        idempotencyKey:
+          type: string
+          nullable: true
+      required: [merchantId, amount, notifyUrl]
+
+    OrderListResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/PaymentOrder'
+        nextCursor:
+          type: string
+          nullable: true
+        hasMore:
+          type: boolean
+        count:
+          type: integer
+        pageSize:
+          type: integer
+      required: [data, hasMore, count, pageSize]
+
+    # --- 支付 ---
+    PaymentResult:
+      type: object
+      properties:
+        orderNo:
+          type: string
+        status:
+          type: string
+        amount:
+          type: number
+        tokenSymbol:
+          type: string
+        chainTxHash:
+          type: string
+          nullable: true
+        checkoutUrl:
+          type: string
+          nullable: true
+        payerAddress:
+          type: string
+          nullable: true
+        payeeAddress:
+          type: string
+          nullable: true
+        paidAt:
+          type: string
+          format: date-time
+          nullable: true
+        message:
+          type: string
+
+    PayRequest:
+      type: object
+      properties:
+        payerAddress:
+          type: string
+          maxLength: 66
+      required: [payerAddress]
+
+    RefundRequest:
+      type: object
+      properties:
+        amount:
+          type: number
+          minimum: 1
+        reason:
+          type: string
+          nullable: true
+      required: [amount]
+
+    # --- 批量支付 ---
+    BatchPaymentItem:
+      type: object
+      properties:
+        merchantId:
+          type: integer
+          format: int64
+          minimum: 1
+        amount:
+          type: number
+          minimum: 1
+        tokenSymbol:
+          type: string
+          default: NEX
+        description:
+          type: string
+          maxLength: 256
+        payerAddress:
+          type: string
+          nullable: true
+        notifyUrl:
+          type: string
+          format: uri
+        idempotencyKey:
+          type: string
+          nullable: true
+      required: [merchantId, amount, notifyUrl]
+
+    BatchPaymentRequest:
+      type: object
+      properties:
+        payments:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/BatchPaymentItem'
+        onFailure:
+          type: string
+          enum: [ALL_OR_NOTHING, PARTIAL]
+          default: ALL_OR_NOTHING
+          description: 失败处理策略
+      required: [payments]
+
+    BatchSucceededItem:
+      type: object
+      properties:
+        index:
+          type: integer
+          description: 在请求 payments 数组中的下标
+        id:
+          type: integer
+          format: int64
+        orderNo:
+          type: string
+        status:
+          type: string
+      required: [index, id, orderNo, status]
+
+    BatchFailedItem:
+      type: object
+      properties:
+        index:
+          type: integer
+        error:
+          $ref: '#/components/schemas/ErrorBody'
+      required: [index, error]
+
+    BatchPaymentResponse:
+      type: object
+      properties:
+        succeeded:
+          type: array
+          items:
+            $ref: '#/components/schemas/BatchSucceededItem'
+        failed:
+          type: array
+          items:
+            $ref: '#/components/schemas/BatchFailedItem'
+        totalCount:
+          type: integer
+        succeededCount:
+          type: integer
+        failedCount:
+          type: integer
+      required: [totalCount, succeededCount, failedCount]
+
+    # --- 商户 ---
+    Merchant:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        merchantCode:
+          type: string
+        merchantName:
+          type: string
+        email:
+          type: string
+          format: email
+        settlementAddress:
+          type: string
+        verificationStatus:
+          type: string
+          enum: [PENDING, VERIFIED, REJECTED]
+        createdAt:
+          type: string
+          format: date-time
+
+    RegisterRequest:
+      type: object
+      properties:
+        merchantName:
+          type: string
+        email:
+          type: string
+          format: email
+        settlementAddress:
+          type: string
+      required: [merchantName, email, settlementAddress]
+
+  # === 可复用响应 ===
+  responses:
+    BadRequest:
+      description: 请求格式错误或参数校验失败
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: 未提供有效的认证凭证
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: 无权访问该资源
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: 资源不存在
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Conflict:
+      description: 资源状态冲突
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    UnprocessableEntity:
+      description: 请求语义错误（如批量回滚）
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    RateLimited:
+      description: 请求频率超限
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    InternalError:
+      description: 服务内部错误
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  # === 参数 ===
+  parameters:
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      schema:
+        type: string
+      description: 游标（首页请求不传；后续页使用上一页响应的 nextCursor）
+      example: eyJrIjoiMTIzIn0
+    PageSize:
+      name: pageSize
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+      description: 每页条数（默认 20，最大 100）
+    Fields:
+      name: fields
+      in: query
+      required: false
+      schema:
+        type: string
+        pattern: '^[a-zA-Z]+(,[a-zA-Z]+)*$'
+      description: 字段筛选（逗号分隔，如 id,amount,status）
+      example: id,amount,status
+    MerchantIdFilter:
+      name: merchantId
+      in: query
+      required: false
+      schema:
+        type: integer
+        format: int64
+      description: 按商户 ID 过滤
+    ApiVersionHeader:
+      name: X-NexusChain-API-Version
+      in: header
+      required: false
+      schema:
+        type: integer
+        enum: [1, 2]
+      description: API 版本协商头（URL 路径版本优先）
+
+# === 路径 ===
+paths:
+  # === 订单 ===
+  /api/v2/orders:
+    get:
+      tags: [Order v2]
+      summary: List orders (cursor pagination + fields selection)
+      description: |
+        按游标分页返回订单列表。游标为上一页最后一项的 id（base64 编码）。
+        支持字段筛选与商户过滤。
+      operationId: listOrdersV2
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Fields'
+        - $ref: '#/components/parameters/MerchantIdFilter'
+        - $ref: '#/components/parameters/ApiVersionHeader'
+      responses:
+        '200':
+          description: 订单列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderListResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+    post:
+      tags: [Order v2]
+      summary: Create order (v2)
+      operationId: createOrderV2
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ApiVersionHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateOrderRequest'
+      responses:
+        '201':
+          description: 订单创建成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentOrder'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/v2/orders/{id}:
+    get:
+      tags: [Order v2]
+      summary: Get order by id (v2, with fields selection)
+      operationId: getOrderV2
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+        - $ref: '#/components/parameters/Fields'
+        - $ref: '#/components/parameters/ApiVersionHeader'
+      responses:
+        '200':
+          description: 订单详情
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentOrder'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v2/orders/{id}/pay:
+    post:
+      tags: [Order v2]
+      summary: Initiate payment (v2)
+      operationId: payV2
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+        - $ref: '#/components/parameters/ApiVersionHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PayRequest'
+      responses:
+        '200':
+          description: 支付发起成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v2/orders/{id}/refund:
+    post:
+      tags: [Order v2]
+      summary: Refund order (v2)
+      operationId: refundV2
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+        - $ref: '#/components/parameters/ApiVersionHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefundRequest'
+      responses:
+        '201':
+          description: 退款创建成功
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  # === 支付（批量） ===
+  /api/v2/payments/batch:
+    post:
+      tags: [Payment v2]
+      summary: Batch create payments (v2)
+      description: |
+        一次提交最多 50 笔支付。
+
+        失败处理策略：
+          - ALL_OR_NOTHING（默认）：任一失败则全部回滚，返回 422
+          - PARTIAL：成功的提交、失败的逐项返回错误，返回 207
+      operationId: batchCreatePaymentsV2
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ApiVersionHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchPaymentRequest'
+      responses:
+        '201':
+          description: 全部成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchPaymentResponse'
+        '207':
+          description: 部分成功（PARTIAL 策略）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchPaymentResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+
+  # === 商户 ===
+  /api/v2/merchants/register:
+    post:
+      tags: [Merchant v2]
+      summary: Register merchant (v2)
+      operationId: registerMerchantV2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: 商户注册成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Merchant'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /api/v2/merchants/{id}:
+    get:
+      tags: [Merchant v2]
+      summary: Get merchant (v2)
+      operationId: getMerchantV2
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: 商户详情
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Merchant'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v2/merchants/{id}/verify:
+    post:
+      tags: [Merchant v2]
+      summary: Verify merchant (v2)
+      operationId: verifyMerchantV2
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: string
+                  enum: [PENDING, VERIFIED, REJECTED]
+              required: [status]
+      responses:
+        '200':
+          description: 验证状态更新成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Merchant'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /api/v2/merchants/{id}/api-keys:
+    post:
+      tags: [Merchant v2]
+      summary: Generate API key (v2)
+      operationId: generateApiKeyV2
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '201':
+          description: API Key 生成成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  apiKey:
+                    type: string
+                  secret:
+                    type: string
+                required: [apiKey, secret]
+    delete:
+      tags: [Merchant v2]
+      summary: Revoke API key (v2)
+      operationId: revokeApiKeyV2
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                apiKey:
+                  type: string
+              required: [apiKey]
+      responses:
+        '204':
+          description: API Key 吊销成功
+
+# === 全局安全 ===
+security:
+  - ApiKeyAuth: []

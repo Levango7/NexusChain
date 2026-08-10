@@ -1,0 +1,339 @@
+# ============================================================================
+# NexusChain - Kafka 监控配置
+# ============================================================================
+# 任务：P3-T4 K8s 部署 Kafka 集群
+# 部署：kubectl apply -f deploy/kafka/kafka-monitoring.yaml -n kafka
+#
+# 包含：
+#   1. ServiceMonitor - Kafka broker JMX 指标（9404 端口）
+#   2. ServiceMonitor - Kafka Exporter 消费者组 lag 指标（9404 端口）
+#   3. ServiceMonitor - ZooKeeper JMX 指标（9404 端口）
+#   4. PrometheusRule - Kafka 告警规则（consumer lag / under-replicated / broker down）
+#   5. ConfigMap - Grafana Kafka 仪表盘（消费者组 lag / 吞吐 / 分区健康）
+#
+# 前置：
+#   - kube-prometheus-stack 已部署，Prometheus serviceMonitorNamespaceSelector
+#     配置为所有命名空间（或至少包含 kafka）
+#   - Kafka 集群 nexus-kafka 已创建并就绪
+#   - kafka-cluster.yaml 中已启用 kafkaExporter 与 metricsConfig
+# ============================================================================
+
+---
+# 1. ServiceMonitor：Kafka broker JMX Exporter 指标（端口 9404）
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: nexus-kafka-broker-monitor
+  namespace: kafka
+  labels:
+    # -- 与 kube-prometheus-stack serviceMonitorSelector 对齐
+    release: kube-prometheus-stack
+    app.kubernetes.io/name: nexus-kafka
+    app.kubernetes.io/part-of: nexus
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nexus-kafka
+      app.kubernetes.io/instance: nexus-kafka
+      strimzi.io/kind: Kafka
+      strimzi.io/name: nexus-kafka
+  namespaceSelector:
+    matchNames:
+      - kafka
+  endpoints:
+    - port: tcp-prometheus
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+      honorLabels: true
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_pod_name]
+          targetLabel: kafka_broker
+        - sourceLabels: [__meta_kubernetes_pod_label_strimzi_io_pod_name]
+          targetLabel: broker_id
+      metricRelabelings:
+        # -- 仅保留 kafka_* 前缀指标，减少存储压力
+        - sourceLabels: [__name__]
+          regex: 'kafka_.*'
+          action: keep
+
+---
+# 2. ServiceMonitor：Kafka Exporter 消费者组 lag 指标
+#    Kafka Exporter 由 kafka-cluster.yaml 中 spec.kafkaExporter 启用
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: nexus-kafka-exporter-monitor
+  namespace: kafka
+  labels:
+    release: kube-prometheus-stack
+    app.kubernetes.io/name: nexus-kafka
+    app.kubernetes.io/part-of: nexus
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nexus-kafka
+      app.kubernetes.io/instance: nexus-kafka
+      strimzi.io/kind: Kafka
+      strimzi.io/name: nexus-kafka-exporter
+  namespaceSelector:
+    matchNames:
+      - kafka
+  endpoints:
+    - port: tcp-prometheus
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+      honorLabels: true
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_pod_name]
+          targetLabel: kafka_exporter_pod
+
+---
+# 3. ServiceMonitor：ZooKeeper JMX Exporter 指标（端口 9404）
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: nexus-kafka-zookeeper-monitor
+  namespace: kafka
+  labels:
+    release: kube-prometheus-stack
+    app.kubernetes.io/name: nexus-kafka
+    app.kubernetes.io/part-of: nexus
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nexus-kafka-zookeeper
+      app.kubernetes.io/instance: nexus-kafka
+      strimzi.io/kind: Kafka
+      strimzi.io/name: nexus-kafka
+  namespaceSelector:
+    matchNames:
+      - kafka
+  endpoints:
+    - port: tcp-prometheus
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+      honorLabels: true
+      metricRelabelings:
+        - sourceLabels: [__name__]
+          regex: 'zookeeper_.*'
+          action: keep
+
+---
+# 4. PrometheusRule：Kafka 告警规则
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: nexus-kafka-alerting-rules
+  namespace: kafka
+  labels:
+    release: kube-prometheus-stack
+    app.kubernetes.io/name: nexus-kafka
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/managed-by: monitoring
+spec:
+  groups:
+    # ----------------------------------------------------------------------
+    # 消费者组 lag 告警（核心：消息积压）
+    # ----------------------------------------------------------------------
+    - name: nexus.kafka.lag
+      interval: 30s
+      rules:
+        # 1. 消费者组 lag > 10000 持续 5m（critical）
+        - alert: KafkaConsumerGroupLagHigh
+          expr: |
+            sum by (consumergroup, topic) (
+              kafka_consumergroup_lag{consumergroup=~"nexus-.*"}
+            ) > 10000
+          for: 5m
+          labels:
+            severity: critical
+            category: kafka
+            impact: backlog
+          annotations:
+            summary: "Kafka 消费者组 {{ $labels.consumergroup }} 在 topic {{ $labels.topic }} 上积压超过 10000"
+            description: "消费者组 {{ $labels.consumergroup }} 消费 topic {{ $labels.topic }} 的 lag 持续 5 分钟超过 10000，存在消息积压。请检查消费者实例健康、处理速率、下游依赖（DB/Redis/RPC）是否正常。"
+            runbook_url: "https://wiki.nexuschain.io/runbooks/kafka-consumer-lag-high"
+
+        # 2. 消费者组 lag 持续增长（warning，趋势告警）
+        - alert: KafkaConsumerGroupLagIncreasing
+          expr: |
+            (
+              sum by (consumergroup) (kafka_consumergroup_lag{consumergroup=~"nexus-.*"})
+              -
+              sum by (consumergroup) (kafka_consumergroup_lag{consumergroup=~"nexus-.*"} offset 10m)
+            ) > 0
+          for: 10m
+          labels:
+            severity: warning
+            category: kafka
+            impact: backlog-trend
+          annotations:
+            summary: "Kafka 消费者组 {{ $labels.consumergroup }} lag 持续 10 分钟增长"
+            description: "消费者组 {{ $labels.consumergroup }} 的 lag 在过去 10 分钟持续增长，消费速率低于生产速率。请检查消费者实例数、处理逻辑、下游瓶颈。"
+            runbook_url: "https://wiki.nexuschain.io/runbooks/kafka-consumer-lag-increasing"
+
+    # ----------------------------------------------------------------------
+    # Kafka 集群健康告警
+    # ----------------------------------------------------------------------
+    - name: nexus.kafka.cluster
+      interval: 30s
+      rules:
+        # 3. Under-replicated partitions > 0 持续 5m（critical）
+        - alert: KafkaUnderReplicatedPartitions
+          expr: |
+            kafka_server_replicamanager_underreplicatedpartitions > 0
+          for: 5m
+          labels:
+            severity: critical
+            category: kafka
+            impact: data-risk
+          annotations:
+            summary: "Kafka 存在未同步分区（{{ $value }} 个）"
+            description: "nexus-kafka 集群存在 {{ $value }} 个 under-replicated partitions 持续 5 分钟。可能有 broker 宕机、磁盘故障或网络分区。请检查 broker Pod 状态与磁盘。"
+            runbook_url: "https://wiki.nexuschain.io/runbooks/kafka-under-replicated-partitions"
+
+        # 4. Under min ISR partitions > 0 持续 5m（critical）
+        - alert: KafkaUnderMinIsrPartitions
+          expr: |
+            kafka_server_replicamanager_underminisrpartitioncount > 0
+          for: 5m
+          labels:
+            severity: critical
+            category: kafka
+            impact: write-block
+          annotations:
+            summary: "Kafka 存在低于 min.insync.replicas 的分区（{{ $value }} 个）"
+            description: "存在 {{ $value }} 个分区的同步副本数低于 min.insync.replicas=2，acks=all 的写入将被阻塞。请立即恢复故障 broker。"
+            runbook_url: "https://wiki.nexuschain.io/runbooks/kafka-under-min-isr"
+
+        # 5. Active Controller 数量异常（critical）
+        - alert: KafkaNoActiveController
+          expr: |
+            sum(kafka_controller_activecontrollercount) == 0
+          for: 2m
+          labels:
+            severity: critical
+            category: kafka
+            impact: outage
+          annotations:
+            summary: "Kafka 集群无 Active Controller"
+            description: "nexus-kafka 集群 2 分钟内无 Active Controller，集群无法进行分区 leader 选举。请检查所有 broker Pod 状态。"
+            runbook_url: "https://wiki.nexuschain.io/runbooks/kafka-no-active-controller"
+
+        # 6. 多 Active Controller（critical，脑裂）
+        - alert: KafkaMultipleActiveControllers
+          expr: |
+            sum(kafka_controller_activecontrollercount) > 1
+          for: 2m
+          labels:
+            severity: critical
+            category: kafka
+            impact: split-brain
+          annotations:
+            summary: "Kafka 集群存在多个 Active Controller（脑裂）"
+            description: "nexus-kafka 集群检测到多个 Active Controller，可能发生脑裂。请立即排查 ZooKeeper 会话与网络分区。"
+            runbook_url: "https://wiki.nexuschain.io/runbooks/kafka-multiple-controllers"
+
+    # ----------------------------------------------------------------------
+    # Kafka broker 可用性告警
+    # ----------------------------------------------------------------------
+    - name: nexus.kafka.broker
+      interval: 30s
+      rules:
+        # 7. broker Pod 不就绪（critical）
+        - alert: KafkaBrokerDown
+          expr: |
+            up{job=~".*nexus-kafka.*", namespace="kafka"} == 0
+          for: 1m
+          labels:
+            severity: critical
+            category: kafka
+            impact: availability
+          annotations:
+            summary: "Kafka broker {{ $labels.instance }} 不可达"
+            description: "Prometheus 抓取 {{ $labels.instance }} 连续 1 分钟失败。broker 可能已崩溃或网络不通。RF=3 + min.insync=2 可容忍 1 broker 故障，但需尽快恢复。"
+            runbook_url: "https://wiki.nexuschain.io/runbooks/kafka-broker-down"
+
+        # 8. ZooKeeper Pod 不就绪（critical）
+        - alert: KafkaZookeeperDown
+          expr: |
+            up{job=~".*nexus-kafka-zookeeper.*", namespace="kafka"} == 0
+          for: 1m
+          labels:
+            severity: critical
+            category: kafka
+            impact: coordination
+          annotations:
+            summary: "ZooKeeper 节点 {{ $labels.instance }} 不可达"
+            description: "ZooKeeper {{ $labels.instance }} 连续 1 分钟不可达。3 节点 ZK 可容忍 1 故障，但 2 故障将导致 Kafka 集群不可用。"
+            runbook_url: "https://wiki.nexuschain.io/runbooks/kafka-zookeeper-down"
+
+---
+# 5. ConfigMap：Grafana Kafka 仪表盘
+#    通过 Grafana sidecar 自动加载（dashboardsProvider 模式）
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-kafka-overview
+  namespace: kafka
+  labels:
+    # -- Grafana dashboard 自动发现标签
+    grafana_dashboard: "1"
+    app.kubernetes.io/name: nexus-kafka
+    app.kubernetes.io/part-of: nexus
+data:
+  kafka-overview.json: |
+    {
+      "annotations": {"list": []},
+      "title": "NexusChain Kafka 概览",
+      "uid": "nexus-kafka-overview",
+      "version": 1,
+      "schemaVersion": 38,
+      "tags": ["nexus", "kafka"],
+      "time": {"from": "now-1h", "to": "now"},
+      "refresh": "30s",
+      "panels": [
+        {
+          "id": 1, "type": "stat", "title": "活跃 Broker 数",
+          "gridPos": {"h": 4, "w": 4, "x": 0, "y": 0},
+          "targets": [{"expr": "count(up{job=~\".*nexus-kafka.*\",namespace=\"kafka\"}==1)", "refId": "A"}],
+          "fieldConfig": {"defaults": {"thresholds": {"steps": [{"color": "red", "value": null}, {"color": "green", "value": 3}]}}}
+        },
+        {
+          "id": 2, "type": "stat", "title": "Under-Replicated 分区数",
+          "gridPos": {"h": 4, "w": 4, "x": 4, "y": 0},
+          "targets": [{"expr": "kafka_server_replicamanager_underreplicatedpartitions", "refId": "A"}],
+          "fieldConfig": {"defaults": {"thresholds": {"steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}}
+        },
+        {
+          "id": 3, "type": "stat", "title": "Active Controller 数",
+          "gridPos": {"h": 4, "w": 4, "x": 8, "y": 0},
+          "targets": [{"expr": "sum(kafka_controller_activecontrollercount)", "refId": "A"}],
+          "fieldConfig": {"defaults": {"thresholds": {"steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}, {"color": "red", "value": 2}]}}}
+        },
+        {
+          "id": 4, "type": "timeseries", "title": "消费者组 Lag（按 group）",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+          "targets": [{"expr": "sum by (consumergroup)(kafka_consumergroup_lag{consumergroup=~\"nexus-.*\"})", "refId": "A", "legendFormat": "{{consumergroup}}"}]
+        },
+        {
+          "id": 5, "type": "timeseries", "title": "消息吞吐（in/out per sec）",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+          "targets": [
+            {"expr": "sum(rate(kafka_server_brokertopicmetrics_messagesinpersec_count[5m]))", "refId": "A", "legendFormat": "Messages In/s"},
+            {"expr": "sum(rate(kafka_server_brokertopicmetrics_bytesoutpersec_count[5m]))", "refId": "B", "legendFormat": "Bytes Out/s"}
+          ]
+        },
+        {
+          "id": 6, "type": "table", "title": "消费者组 Lag 明细",
+          "gridPos": {"h": 8, "w": 24, "x": 0, "y": 12},
+          "targets": [{"expr": "sum by (consumergroup, topic)(kafka_consumergroup_lag{consumergroup=~\"nexus-.*\"})", "refId": "A", "format": "table"}],
+          "transformations": [{"id": "organize", "options": {"excludeByName": {"Time": true, "Value": false}}}]
+        }
+      ],
+      "templating": {"list": []},
+      "style": "light"
+    }

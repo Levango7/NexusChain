@@ -1,0 +1,32 @@
+plugins {
+    id 'java'
+}
+
+
+group 'org.nexus'
+version '1.0-SNAPSHOT'
+
+sourceCompatibility = 17
+
+repositories {
+    maven {
+        url 'https://maven.aliyun.com/nexus/content/groups/public/'
+    }
+    maven {
+        url 'https://maven.aliyun.com/nexus/content/repositories/jcenter'
+    }
+    mavenCentral()
+}
+
+dependencies {
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.10.2'
+    implementation "org.bouncycastle:bcprov-jdk18on:${bouncycastleVersion}"
+    implementation "org.bouncycastle:bcpkix-jdk18on:${bouncycastleVersion}"
+    implementation "commons-codec:commons-codec:${commonsCodecVersion}"
+    implementation "com.kosprov.jargon2:jargon2-api:${jargon2Version}"
+}
+
+test {
+    useJUnitPlatform()
+}
