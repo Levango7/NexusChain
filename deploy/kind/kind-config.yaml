@@ -1,0 +1,95 @@
+# NexusChain kind 集群配置
+# ============================================================================
+# 用途：本地 Kubernetes 集群（CI / 开发联调），3 节点（1 control-plane + 2 worker）
+# 映射端口：
+#   - 8080  nexus-gateway          支付网关
+#   - 8082  nexus-signing-service  签名服务
+#   - 8083  nexus-wallet-service   钱包服务
+#   - 8084  nexus-bridge           跨链桥
+#   - 30000-30010 NodePort 段      供临时调试 / 基础设施控制台暴露
+# 启用 featureGates：
+#   - ServiceAccountIssuerDiscovery（默认开）
+# containerdConfig：注入自定义 registry 配置，把 ghcr.io 重定向到本地 registry:5000
+# ============================================================================
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: nexus-chain
+
+# -- 节点拓扑：1 control-plane + 2 worker
+nodes:
+  - role: control-plane
+    # 控制面映射：基础设施控制台 + 业务服务
+    extraPortMappings:
+      # 业务服务（与 Helm chart service.port 对齐）
+      - containerPort: 8080
+        hostPort: 8080
+        protocol: TCP
+      - containerPort: 8082
+        hostPort: 8082
+        protocol: TCP
+      - containerPort: 8083
+        hostPort: 8083
+        protocol: TCP
+      - containerPort: 8084
+        hostPort: 8084
+        protocol: TCP
+      # NodePort 段（30000-30010）：临时调试 / 基础设施控制台
+      - containerPort: 30000
+        hostPort: 30000
+        protocol: TCP
+      - containerPort: 30001
+        hostPort: 30001
+        protocol: TCP
+      - containerPort: 30002
+        hostPort: 30002
+        protocol: TCP
+      - containerPort: 30003
+        hostPort: 30003
+        protocol: TCP
+      - containerPort: 30004
+        hostPort: 30004
+        protocol: TCP
+      - containerPort: 30005
+        hostPort: 30005
+        protocol: TCP
+      - containerPort: 30006
+        hostPort: 30006
+        protocol: TCP
+      - containerPort: 30007
+        hostPort: 30007
+        protocol: TCP
+      - containerPort: 30008
+        hostPort: 30008
+        protocol: TCP
+      - containerPort: 30009
+        hostPort: 30009
+        protocol: TCP
+      - containerPort: 30010
+        hostPort: 30010
+        protocol: TCP
+    # 控制面额外标签，便于 topologySpreadConstraints 验证
+    labels:
+      topology.kubernetes.io/zone: zone-a
+      nexus-node-role: control-plane
+  - role: worker
+    labels:
+      topology.kubernetes.io/zone: zone-a
+      nexus-node-role: worker
+  - role: worker
+    labels:
+      topology.kubernetes.io/zone: zone-b
+      nexus-node-role: worker
+
+# -- containerd 自定义：把 ghcr.io/nexus 重定向到本地 registry:5000
+#   部署脚本会先启动一个 kind-registry 容器并加载本地镜像
+containerdConfigPatches:
+  - |-
+    [plugins."io.containerd.grpc.v1.cri".registry.mirrors."ghcr.io/nexus"]
+      endpoint = ["http://registry:5000"]
+  - |-
+    [plugins."io.containerd.grpc.v1.cri".registry.mirrors."registry:5000"]
+      endpoint = ["http://registry:5000"]
+
+# -- 启用 featureGates（与生产 K8s 1.27+ 行为对齐）
+featureGates:
+  ServiceAccountIssuerDiscovery: true

@@ -1,0 +1,190 @@
+# ============================================================================
+# NexusChain - Kafka Topic CRD（Strimzi KafkaTopic）
+# ============================================================================
+# 任务：P3-T4 K8s 部署 Kafka 集群
+# CRD: kafka.strimzi.io/v1beta2 / KafkaTopic
+# 部署：kubectl apply -f deploy/kafka/kafka-topics.yaml -n kafka
+#
+# Topic 清单：
+#   payment-events       12 分区  RF=3  保留 7d   支付事件主 topic
+#   bridge-events         6 分区  RF=3  保留 7d   跨链桥事件主 topic
+#   webhook-events        4 分区  RF=3  保留 3d   Webhook 事件
+#   payment-events-dlq    4 分区  RF=3  保留 7d   支付死信队列
+#   bridge-events-dlq     2 分区  RF=3  保留 7d   桥死信队列
+#   webhook-dlq           4 分区  RF=3  保留 7d   Webhook 死信队列（P4-T5）
+#
+# 说明：
+#   - 集群已禁用 auto.create.topics.enable，所有 topic 必须通过 KafkaTopic CRD 创建
+#   - 分区数依据预估吞吐与消费者并行度设定，扩容用 KafkaRebalance CRD 触发再均衡
+#   - 保留时间通过 retention.ms 配置（毫秒）
+#   - RF=3 + min.insync.replicas=2（集群级），acks=all 写入需 2 副本确认
+# ============================================================================
+
+---
+# 1. payment-events — 支付事件主 topic
+#    产出方：nexus-gateway
+#    消费方：nexus-analytics-payment-consumer / nexus-gateway-webhook-consumer
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: payment-events
+  namespace: kafka
+  labels:
+    app.kubernetes.io/name: payment-events
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/managed-by: strimzi-operator
+    nexus.io/topic-type: main
+    nexus.io/event-domain: payment
+spec:
+  topicName: payment-events
+  partitions: 12
+  replicas: 3
+  config:
+    # -- 保留 7 天（毫秒）
+    retention.ms: "604800000"
+    # -- 单条消息最大 10MB（支付事件含完整上下文）
+    max.message.bytes: "10485760"
+    # -- segment 大小 1GB
+    segment.bytes: "1073741824"
+    # -- 清理策略：仅删除（非 compact），事件溯源用独立 compact topic
+    cleanup.policy: "delete"
+    # -- 压缩：生产者端开启，broker 端 producer 透传
+    compression.type: "producer"
+    # -- min.insync.replicas 覆盖（与集群级一致，显式声明）
+    min.insync.replicas: 2
+
+---
+# 2. bridge-events — 跨链桥事件主 topic
+#    产出方：nexus-bridge
+#    消费方：nexus-bridge-event-consumer
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: bridge-events
+  namespace: kafka
+  labels:
+    app.kubernetes.io/name: bridge-events
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/managed-by: strimzi-operator
+    nexus.io/topic-type: main
+    nexus.io/event-domain: bridge
+spec:
+  topicName: bridge-events
+  partitions: 6
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    max.message.bytes: "10485760"
+    segment.bytes: "1073741824"
+    cleanup.policy: "delete"
+    compression.type: "producer"
+    min.insync.replicas: 2
+
+---
+# 3. webhook-events — Webhook 事件 topic
+#    产出方：nexus-gateway（支付成功后产出 webhook 事件）
+#    消费方：nexus-gateway-webhook-consumer（异步投递到商户回调地址）
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: webhook-events
+  namespace: kafka
+  labels:
+    app.kubernetes.io/name: webhook-events
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/managed-by: strimzi-operator
+    nexus.io/topic-type: main
+    nexus.io/event-domain: webhook
+spec:
+  topicName: webhook-events
+  partitions: 4
+  replicas: 3
+  config:
+    # -- 保留 3 天（毫秒）：webhook 重试窗口较短
+    retention.ms: "259200000"
+    max.message.bytes: "1048576"
+    segment.bytes: "1073741824"
+    cleanup.policy: "delete"
+    compression.type: "producer"
+    min.insync.replicas: 2
+
+---
+# 4. payment-events-dlq — 支付死信队列
+#    消费方：nexus-gateway-payment-consumer 消费失败超过重试阈值后转入
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: payment-events-dlq
+  namespace: kafka
+  labels:
+    app.kubernetes.io/name: payment-events-dlq
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/managed-by: strimzi-operator
+    nexus.io/topic-type: dlq
+    nexus.io/event-domain: payment
+spec:
+  topicName: payment-events-dlq
+  partitions: 4
+  replicas: 3
+  config:
+    # -- 死信保留 7 天，便于人工排查
+    retention.ms: "604800000"
+    max.message.bytes: "10485760"
+    segment.bytes: "1073741824"
+    cleanup.policy: "delete"
+    compression.type: "producer"
+    min.insync.replicas: 2
+
+---
+# 5. bridge-events-dlq — 桥死信队列
+#    消费方：nexus-bridge-event-consumer 消费失败超过重试阈值后转入
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: bridge-events-dlq
+  namespace: kafka
+  labels:
+    app.kubernetes.io/name: bridge-events-dlq
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/managed-by: strimzi-operator
+    nexus.io/topic-type: dlq
+    nexus.io/event-domain: bridge
+spec:
+  topicName: bridge-events-dlq
+  partitions: 2
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    max.message.bytes: "10485760"
+    segment.bytes: "1073741824"
+    cleanup.policy: "delete"
+    compression.type: "producer"
+    min.insync.replicas: 2
+
+---
+# 6. webhook-dlq — Webhook 死信队列（P4-T5）
+#    消费方：nexus-gateway WebhookDeliveryService 投递失败超过重试阈值后转入
+#    重投：通过 /api/v1/webhooks/dlq/replay API 手动重投
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: webhook-dlq
+  namespace: kafka
+  labels:
+    app.kubernetes.io/name: webhook-dlq
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/managed-by: strimzi-operator
+    nexus.io/topic-type: dlq
+    nexus.io/event-domain: webhook
+spec:
+  topicName: webhook-dlq
+  partitions: 4
+  replicas: 3
+  config:
+    # -- 死信保留 7 天，便于人工排查与重投
+    retention.ms: "604800000"
+    max.message.bytes: "1048576"
+    segment.bytes: "1073741824"
+    cleanup.policy: "delete"
+    compression.type: "producer"
+    min.insync.replicas: 2

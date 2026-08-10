@@ -1,0 +1,144 @@
+# ============================================================================
+# NexusChain - Spring Boot Tracing 配置片段（P2-T5）
+# ============================================================================
+# 用途：
+#   1. 提供 4 个 Spring Boot 服务统一的 OpenTelemetry / OTLP tracing 配置片段
+#   2. 通过 spring.config.import 机制在运行时合并，不修改现有 application.yml
+#   3. 实际部署通过 Helm values 注入 ConfigMap，挂载至 /app/config/tracing.yml
+#
+# 加载机制：
+#   spring.config.import: optional:file:./config/tracing.yml
+#   - optional: 前缀表示文件不存在时不报错（本地开发 / 测试无 OTel 后端时回退）
+#   - file: 表示从文件系统加载（K8s 中由 ConfigMap 挂载）
+#   - 多文件可逗号分隔：optional:file:./config/tracing.yml,optional:file:./config/override.yml
+#
+# 部署注入路径（Helm）：
+#   deploy/helm/charts/<service>/values.yaml:
+#     config:
+#       tracingYml: |-
+#         {{ include "nexus.tracingSnippet" . | nindent 4 }}
+#   deploy/helm/charts/<service>/templates/configmap.yaml:
+#     {{- if .Values.config.tracingYml }}
+#     tracing.yml: |
+#       {{- .Values.config.tracingYml | nindent 4 }}
+#     {{- end }}
+#   deploy/helm/charts/<service>/templates/deployment.yaml:
+#     volumeMounts 中追加：
+#       - name: config-vol
+#         mountPath: /app/config
+#         readOnly: true
+#
+# 环境变量覆盖（12-factor，优先级高于本文件）：
+#   MANAGEMENT_TRACING_SAMPLING_PROBABILITY    -> management.tracing.sampling.probability
+#   MANAGEMENT_OPENTELEMETRY_EXPORTER_OTLP_ENDPOINT -> management.otlp.tracing.endpoint
+#   MANAGEMENT_OPENTELEMETRY_EXPORTER_OTLP_TIMEOUT  -> management.otlp.tracing.timeout
+# ============================================================================
+
+# -- Spring 配置导入声明
+#   此行需添加到各服务 application.yml 顶部 spring.config.import 段
+#   （或通过 SPRING_CONFIG_IMPORT 环境变量注入，避免修改 application.yml）
+spring:
+  config:
+    import: optional:file:./config/tracing.yml
+
+  # -- 应用名作为 OTel service.name（由各服务 application.yml 已声明，此处仅文档化）
+  # application:
+  #   name: ${SERVICE_NAME:nexus-gateway}
+
+# -- Actuator + Micrometer Tracing 配置
+management:
+  # -- 端点暴露：tracing 端点用于运行时查看当前 trace 上下文
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus,tracing
+
+  # -- Micrometer Tracing 配置
+  tracing:
+    # -- 采样率
+    #    dev: 1.0（100% 采样，全链路可见）
+    #    staging: 0.5（50% 采样）
+    #    prod: 0.1（10% 采样，错误链路由 Collector tail_sampling 兜底 100% 采集）
+    sampling:
+      probability: ${NEXUS_TRACING_SAMPLING_PROBABILITY:1.0}
+
+    # -- 传播格式：W3C Trace Context（traceparent / tracestate）
+    #    Spring Boot 3.2+ 默认 W3C，显式声明以便审计
+    #    跨服务传播通过 HTTP header traceparent 自动注入 / 提取
+    propagation:
+      type: w3c
+
+    # -- Brave bridge 已被 OTel bridge 替代（见 build.gradle 依赖迁移说明）
+    #    切换为 io.micrometer:micrometer-tracing-bridge-otel 后，
+    #    management.tracing.brave.* 配置不再生效
+
+  # -- OpenTelemetry OTLP Exporter 配置（Spring Boot 3.2+ 原生支持）
+  #    依赖 io.opentelemetry:opentelemetry-exporter-otlp
+  opentelemetry:
+    # -- OTLP exporter 全局配置
+    resource:
+      # -- 资源属性：与 OTel Collector resource processor 对齐
+      attributes:
+        service.namespace: nexus
+        deployment.environment: ${NEXUS_ENV:dev}
+
+  # -- OTLP tracing 导出端点
+  #    Spring Boot 3.4+ 使用 management.otlp.tracing.* 命名空间
+  #    Spring Boot 3.2-3.3 使用 management.otlp.metrics.* + opentelemetry.exporter.otlp.*
+  #    本配置兼容 3.2.x（当前 BOM 3.2.5）
+  otlp:
+    tracing:
+      # -- OTLP gRPC 端点（指向 OTel Collector）
+      #    K8s: http://otel-collector.nexus.svc.cluster.local:4317
+      #    本地开发: http://localhost:4317
+      endpoint: ${NEXUS_OTLP_ENDPOINT:http://otel-collector.nexus.svc.cluster.local:4317}
+      # -- 导出超时
+      timeout: 10s
+      # -- 导出间隔（批量发送，降低 Collector 压力）
+      step: 10s
+      # -- gRPC 传输（默认 grpc，可选 http/protobuf）
+      transport: grpc
+
+# ============================================================================
+# 环境差异配置（通过 Helm values-<env>.yaml 覆盖）
+# ============================================================================
+#
+# values-dev.yaml（开发环境）:
+#   env:
+#     NEXUS_TRACING_SAMPLING_PROBABILITY: "1.0"
+#     NEXUS_OTLP_ENDPOINT: "http://otel-collector.nexus.svc.cluster.local:4317"
+#     NEXUS_ENV: "dev"
+#
+# values-staging.yaml（预发环境）:
+#   env:
+#     NEXUS_TRACING_SAMPLING_PROBABILITY: "0.5"
+#     NEXUS_OTLP_ENDPOINT: "http://otel-collector.nexus.svc.cluster.local:4317"
+#     NEXUS_ENV: "staging"
+#
+# values-prod.yaml（生产环境）:
+#   env:
+#     NEXUS_TRACING_SAMPLING_PROBABILITY: "0.1"
+#     NEXUS_OTLP_ENDPOINT: "http://otel-collector.nexus.svc.cluster.local:4317"
+#     NEXUS_ENV: "prod"
+#   # 生产环境 Collector tail_sampling 兜底，确保错误 / 慢链路 100% 采集
+# ============================================================================
+
+# ============================================================================
+# 依赖迁移说明（build.gradle，不在本任务修改，仅文档化）
+# ============================================================================
+#
+# 当前依赖（Zipkin 模式，需移除）:
+#   implementation 'io.micrometer:micrometer-tracing-bridge-brave'
+#   implementation 'io.zipkin.reporter2:zipkin-reporter-brave'
+#
+# 迁移目标依赖（OTel 模式，需添加）:
+#   implementation 'io.micrometer:micrometer-tracing-bridge-otel'
+#   implementation 'io.opentelemetry:opentelemetry-exporter-otlp'
+#
+# Spring Boot 3.2.5 BOM 管理版本：
+#   micrometer-tracing-bridge-otel 1.2.5
+#   opentelemetry-exporter-otlp 1.34.0
+#
+# 迁移后 application.yml 中的 management.zipkin.* 配置段应移除
+# （由 management.otlp.* 替代，本片段已包含）
+# ============================================================================

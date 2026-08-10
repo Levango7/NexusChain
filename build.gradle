@@ -1,0 +1,190 @@
+// NexusChain 统一构建系统 - 根级构建配置
+// 管理所有 Java/Gradle 子模块的共享依赖和构建规则
+// 兼容 Gradle 7.x+
+
+// === SAST: SpotBugs + FindSecBugs（P2-T7） ===
+// 静态应用安全测试（SAST）：检测 Java 代码安全漏洞
+//   - SpotBugs：基于字节码的模式分析（空指针、资源泄漏等）
+//   - FindSecBugs：安全漏洞专用规则集（SQL 注入、XSS、硬编码密码、
+//     不安全的加密、LDAP 注入、XSS、路径遍历等 90+ 规则）
+// 插件：com.github.spotbugs.snom:spotbugs-gradle-plugin:5.1.5
+// 配置：effort=max（最大分析深度），threshold=low（报告 low+ 中危+高危）
+// 报告：HTML（人工审阅）+ XML（CI 解析 / SARIF 转换）
+// 排除：测试代码（spotbugsTest.enabled=false）、protobuf 生成代码
+plugins {
+    id 'com.github.spotbugs' version '5.1.5' apply false
+}
+
+allprojects {
+    group = 'org.nexus'
+    version = '2.1.0'
+
+    repositories {
+        mavenCentral()
+        maven { url 'https://repo.spring.io/plugins-release' }
+        maven { url 'https://maven.aliyun.com/nexus/content/groups/public/' }
+    }
+}
+
+subprojects {
+    apply plugin: 'java'
+    apply plugin: 'jacoco'
+
+    // JaCoCo 覆盖率报告（统一配置）。nexus-gateway 在自身 build.gradle 中
+    // 覆盖 html.required=true 与 jacocoTestCoverageVerification 门禁，其余模块
+    // 仅生成 xml 报告供聚合。阈值约束为后续任务，当前只启用报告生成。
+    jacoco {
+        toolVersion = "0.8.11"
+    }
+
+    jacocoTestReport {
+        reports {
+            xml.required = true
+            html.required = false
+        }
+    }
+
+    // === SAST: SpotBugs + FindSecBugs 配置（P2-T7） ===
+    // 在 java 插件之后应用 spotbugs 插件
+    apply plugin: 'com.github.spotbugs'
+
+    spotbugs {
+        // SpotBugs 引擎版本（4.8.6 兼容 JDK 8-21，支持 FindSecBugs 1.13.0）
+        toolVersion = '4.8.6'
+        // effort=max：最大分析深度，启用所有检测器
+        effort = 'max'
+        // reportLevel=low：报告 low priority 及以上的 bug（threshold=low）
+        // 即输出所有发现（low + medium + high）
+        reportLevel = 'low'
+        // 不因 spotbugs 发现而中断构建（由 CI 门禁单独控制）
+        ignoreFailures = true
+        showProgress = false
+    }
+
+    // FindSecBugs 规则集作为 spotbugs 插件依赖
+    dependencies {
+        spotbugsPlugins 'com.h3xstream.findsecbugs:findsecbugs-plugin:1.13.0'
+    }
+
+    // spotbugsMain：扫描 main source set，产出 HTML + XML 报告
+    spotbugsMain {
+        reports {
+            html {
+                required = true
+                outputLocation = file("$buildDir/reports/spotbugs/main.html")
+            }
+            xml {
+                required = true
+                outputLocation = file("$buildDir/reports/spotbugs/main.xml")
+            }
+        }
+        // 排除 protobuf 生成代码（com.google.protobuf.* 及 *OrBuilder）
+        // 这些由 protoc 自动生成，不符合安全规则也无业务逻辑
+        classes = classes.filter { file ->
+            !file.path.contains('/generated/') &&
+            !file.path.contains('\\generated\\') &&
+            !file.path.replace('\\', '/').contains('/com/google/protobuf/')
+        }
+    }
+
+    // 不扫描测试代码（测试代码不进入生产攻击面）
+    spotbugsTest {
+        enabled = false
+    }
+
+    // B1 baseline (2026-08-03): Java level is declared EXPLICITLY per module
+    // (gateway/bridge via java toolchain 17; core 17; consortium/sdk/
+    // exchange-wallet 1.8). The previous global `sourceCompatibility = 17`
+    // here was overridden by every module and masked the real Java tiering —
+    // removed to make the two-tier Java strategy honest and single-sourced.
+
+    tasks.withType(JavaCompile) {
+        options.encoding = 'UTF-8'
+        options.warnings = false
+    }
+
+    test {
+        useJUnitPlatform()
+        testLogging {
+            events "failed"
+            exceptionFormat "short"
+        }
+        systemProperty "file.encoding", "UTF-8"
+    }
+
+    ext {
+
+        slf4jVersion = '1.7.36'
+        logbackVersion = '1.2.13'
+        postgresqlVersion = '42.5.4'
+        leveldbVersion = '0.7'
+        hibernateValidatorVersion = '6.2.5.Final'
+        bouncycastleVersion = '1.78'
+        jargon2Version = '1.1.1'
+        nettyVersion = '4.1.108.Final'
+        grpcVersion = '1.54.0'
+        httpClientVersion = '4.5.14'
+        protobufVersion = '3.22.2'
+        jacksonVersion = '2.14.2'
+        gsonVersion = '2.10.1'
+        guavaVersion = '31.1-jre'
+        commonsCodecVersion = '1.15'
+        commonsIoVersion = '2.11.0'
+        commonsLang3Version = '3.12.0'
+        commonsCollections4Version = '4.4'
+        commonsCliVersion = '1.5.0'
+        jcommanderVersion = '1.82'
+        jjwtVersion = '0.11.5'
+        quartzVersion = '2.3.2'
+        junitVersion = '4.13.2'
+        junitJupiterVersion = '5.10.2'
+        mockitoVersion = '4.11.0'
+
+        nexusVersion = '1.9.5'
+    }
+
+    // B1 baseline (2026-08-03): NO global forced test deps.
+    // Historically this block injected `junit:junit:4.13.2` and
+    // `spring-boot-starter-test:2.7.18` into EVERY subproject, which silently
+    // clashed with the Boot 3.2.5 gateway/bridge (a Boot 2.7 test BOM on a
+    // Boot 3.2 app) and masked the real per-module test setup. Each module now
+    // declares its OWN test dependencies (Boot apps via their boot plugin's
+    // dependency-management; nexus-core keeps explicit JUnit 4 + starter-test
+    // 2.7.18; sdk/consortium declare their own). Only mockito is shared.
+    dependencies {
+        testImplementation "org.mockito:mockito-core:${mockitoVersion}"
+        // ArchUnit 架构合规测试（P1-T11）：分层依赖、模块边界、命名约定
+        testImplementation 'com.tngtech.archunit:archunit-junit5:1.3.0'
+    }
+
+    javadoc {
+        options.encoding = "UTF-8"
+        options.author = true
+        options.header = project.name
+        options.addStringOption('-quiet')
+    }
+}
+
+// === 顶层聚合任务 ===
+task buildAll {
+    description = '构建所有 Java 子模块'
+    dependsOn subprojects.findAll { it.plugins.hasPlugin('java') }.collect { it.tasks.getByName('build') }
+}
+
+task testAll {
+    description = '运行所有 Java 子模块的测试'
+    dependsOn subprojects.findAll { it.plugins.hasPlugin('java') }.collect { it.tasks.getByName('test') }
+}
+
+task cleanAll {
+    description = '清理所有子模块的构建产物'
+    dependsOn subprojects.findAll { it.plugins.hasPlugin('java') }.collect { it.tasks.getByName('clean') }
+}
+
+// === SAST 聚合任务（P2-T7） ===
+// 运行所有子模块的 spotbugsMain，聚合安全扫描结果
+task spotbugsAll {
+    description = '运行所有 Java 子模块的 SpotBugs + FindSecBugs 静态安全扫描'
+    group = 'verification'
+    dependsOn subprojects.findAll { it.plugins.hasPlugin('java') }.collect { it.tasks.findByName('spotbugsMain') }
+}

@@ -1,0 +1,29 @@
+import React from "react";
+import { BrowserRouter, Routes, Route } from "react-router-dom";
+import OrchestrationDashboard from "./pages/OrchestrationDashboard";
+import HomePage from "./pages/HomePage";
+import BlockDetailPage from "./pages/BlockDetailPage";
+import TxDetailPage from "./pages/TxDetailPage";
+import AddressPage from "./pages/AddressPage";
+import { ErrorBoundary } from "./components/ui";
+
+/**
+ * App — 顶层路由。
+ *
+ * 用 ErrorBoundary 包裹整个路由树，避免任一页面渲染期错误导致白屏。
+ */
+const App: React.FC = () => (
+  <ErrorBoundary>
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={<HomePage />} />
+        <Route path="/orchestration" element={<OrchestrationDashboard />} />
+        <Route path="/block/:height" element={<BlockDetailPage />} />
+        <Route path="/tx/:hash" element={<TxDetailPage />} />
+        <Route path="/address/:addr" element={<AddressPage />} />
+      </Routes>
+    </BrowserRouter>
+  </ErrorBoundary>
+);
+
+export default App;

@@ -1,0 +1,72 @@
+# NexusChain 根级 .dockerignore
+# 适用于所有子模块 Dockerfile（构建上下文 = repo 根目录）
+# 排除构建产物、VCS 元数据、IDE 文件、本地 JDK、日志等，缩小构建上下文体积并改善分层缓存。
+
+# === 构建产物 ===
+**/build/
+**/out/
+**/target/
+**/.gradle/
+*.class
+*.jar
+*.war
+
+# === VCS ===
+.git/
+.gitignore
+
+# === IDE ===
+.idea/
+**/*.iml
+**/*.ipr
+**/*.iws
+.vscode/
+**/.settings/
+**/.project
+**/.classpath
+**/.factorypath
+
+# === OS ===
+.DS_Store
+Thumbs.db
+
+# === 本地 JDK（构建期由 gradle:8.5-jdk17 镜像提供，无需 COPY） ===
+jdk17/
+jdk17.zip
+jdk-provision/
+*.zip
+
+# === 日志 / 运行时数据 ===
+**/logs/
+*.log
+*.pid
+
+# === 本地 env ===
+**/.env
+**/local.env
+**/.env.example
+
+# === LevelDB 运行时数据 ===
+**/leveldb/
+
+# === AI agent 工作产物（非源码） ===
+.codeartsdoer/
+
+# === Node.js 子项目（不纳入 Gradle 构建，无需 COPY） ===
+nexus-explorer/
+nexus-devtools/
+nexus-js-sdk/
+
+
+# === 文档 / 演示（非构建输入） ===
+docs/
+demo/
+*.md
+LICENSE
+CHANGELOG.md
+ARCHITECTURE.md
+PRD.md
+README.md
+
+# === 测试输出 ===
+test-output.log

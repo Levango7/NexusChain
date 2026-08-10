@@ -1,0 +1,163 @@
+# ============================================================================
+# NexusChain - OpenTelemetry Collector 配置
+# ============================================================================
+# 用途：
+#   1. 接收 4 个 Spring Boot 服务通过 OTLP 上报的 trace span
+#   2. 处理（批量、限流、资源增强、属性裁剪）后导出至 Jaeger Collector
+#   3. 替代原 Zipkin Server（端口 9411）作为统一 trace 后端聚合层
+#
+# 架构：
+#   Spring Boot (Micrometer OTel bridge) --OTLP/gRPC:4317-->  OTel Collector
+#   Spring Boot (Micrometer OTel bridge) --OTLP/HTTP:4318-->  OTel Collector
+#   OTel Collector --OTLP/gRPC:4317-->  Jaeger Collector
+#   Jaeger UI :16686
+#
+# 部署：
+#   kubectl create configmap otel-collector-config \
+#     --from-file=otel-collector-config.yaml -n nexus
+#   kubectl apply -f deploy/tracing/jaeger-deployment.yaml -n nexus
+#
+# 版本基线：
+#   otelcol-contrib 0.103.0（2024-08 LTS），与 Jaeger 1.59 OTLP 协议兼容
+#   详见 https://github.com/open-telemetry/opentelemetry-collector-releases
+# ============================================================================
+receivers:
+  # -- OTLP gRPC 接收器：Spring Boot 默认 OTLP exporter 端点
+  #    4 个服务通过 io.opentelemetry:opentelemetry-exporter-otlp 上报
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+        # -- 最大接收消息体 16 MiB（容纳大 span 树，如签名编排 MPC 多轮）
+        max_recv_msg_size_mib: 16
+      http:
+        endpoint: 0.0.0.0:4318
+        # -- HTTP 接收器用于非 gRPC 环境（本地开发 / sidecar 模式）
+        max_request_body_size: 16777216
+
+processors:
+  # -- 内存限流：防止突发流量 OOM
+  #    限制 80% 物理内存（容器 512Mi → 409Mi），spike 20% 突发余量
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 400
+    spike_limit_mib: 80
+
+  # -- 批处理：聚合 span 后批量导出，降低 Jaeger 写入压力
+  #    5s 或 512 条触发一次 flush，二者先到先 flush
+  batch:
+    timeout: 5s
+    send_batch_size: 512
+    send_batch_max_size: 2048
+
+  # -- 资源属性增强：为所有 span 注入集群 / 命名空间元数据
+  #    便于 Jaeger UI 按 service.namespace / deployment.environment 过滤
+  resource:
+    attributes:
+      - key: deployment.environment
+        value: ${env:NEXUS_ENV:staging}
+        action: upsert
+      - key: service.namespace
+        value: nexus
+        action: upsert
+      - key: telemetry.sdk.name
+        value: micrometer
+        action: upsert
+      - key: telemetry.sdk.language
+        value: java
+        action: upsert
+
+  # -- 属性裁剪：移除高基数 / 敏感属性，避免 Jaeger 存储膨胀
+  #    保留业务相关属性（payment.id / bridge.tx_id / signing.round）
+  attributes:
+    actions:
+      # 移除 HTTP header 全量快照（保留 status / method）
+      - key: http.request.header
+        action: delete
+      - key: http.response.header
+        action: delete
+      # 移除 SQL 绑定参数值（防止 PII 泄漏，保留 db.statement 模板）
+      - key: db.bind_var
+        action: delete
+      # 移除异常 stacktrace 中重复的 thread.id（Jaeger UI 不消费）
+      - key: thread.id
+        action: delete
+
+  # -- 采样尾端处理器（tail_sampling）：在 Collector 侧做最终采样决策
+  #    与服务端 sampling.probability 二级采样，保证错误链路必采
+  #    生产环境启用，开发环境（values-dev.yaml）关闭以简化调试
+  tail_sampling:
+    decision_wait: 10s
+    num_traces: 50000
+    expected_new_traces_per_sec: 1000
+    policies:
+      # 错误链路 100% 采样
+      - name: errors-policy
+        type: status_code
+        status_code:
+          status_codes: [ERROR]
+      # 慢链路（> 800ms）100% 采样
+      - name: latency-policy
+        type: latency
+        latency:
+          threshold_ms: 800
+      # 其余按 10% 概率采样
+      - name: probabilistic-policy
+        type: probabilistic
+        probabilistic:
+          sampling_percentage: 10
+
+exporters:
+  # -- OTLP 导出至 Jaeger Collector（OTLP gRPC:4317）
+  #    Jaeger 1.35+ 原生支持 OTLP 协议，无需 jaeger-exporter
+  #    endpoint 指向 K8s Service DNS：jaeger-collector.nexus.svc.cluster.local
+  otlp/jaeger:
+    endpoint: ${env:JAEGER_COLLECTOR_ENDPOINT:jaeger-collector.nexus.svc.cluster.local:4317}
+    tls:
+      insecure: true
+    # -- 发送队列：4 个 worker 并行，队列满时 drop（避免反压拖垮 Collector）
+    sending_queue:
+      enabled: true
+      num_consumers: 4
+      queue_size: 10000
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 30s
+      max_elapsed_time: 300s
+
+  # -- 调试导出：开发环境将 span 打印至 Collector stdout
+  #    生产环境通过 command-line --config 中移除此 exporter
+  debug:
+    verbosity: basic
+    sampling_initial: 2
+    sampling_thereafter: 1
+
+extensions:
+  # -- 健康检查扩展：供 K8s livenessProbe / readinessProbe 使用
+  health_check:
+    endpoint: 0.0.0.0:13133
+  # -- zPages 扩展：运行时自省（采样率 / 处理器统计）
+  zpages:
+    endpoint: 0.0.0.0:55679
+  # -- pprof 扩展：性能剖析（生产关闭，仅故障排查启用）
+  pprof:
+    endpoint: 0.0.0.0:1777
+
+service:
+  # -- 扩展启用顺序：health_check 必须首位
+  extensions: [health_check, zpages, pprof]
+  pipelines:
+    # -- Trace 管道：接收 → 限流 → 资源增强 → 属性裁剪 → 尾端采样 → 批量 → 导出
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resource, attributes, tail_sampling, batch]
+      exporters: [otlp/jaeger, debug]
+  # -- Collector 自身遥测：内部指标暴露至 Prometheus 抓取（:8888）
+  telemetry:
+    logs:
+      level: info
+      encoding: json
+    metrics:
+      address: 0.0.0.0:8888
+      level: detailed

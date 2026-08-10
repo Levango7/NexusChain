@@ -1,0 +1,77 @@
+# =============================================================================
+# nexus-wallet-service 生产环境配置（P2-T8：数据库生产化，H2 → PostgreSQL 16）
+# =============================================================================
+#
+# 激活方式：SPRING_PROFILES_ACTIVE=prod
+#
+# 设计要点：
+#   * 数据源指向 PostgreSQL 16 实例（容器名 postgres，库 nexus_wallet）
+#   * 用户名 / 密码从环境变量读取，禁止硬编码（K8s Secret / docker-compose env 注入）
+#   * HikariCP 连接池参数与 gateway 对齐（20 连接上限 + 泄漏检测）
+#   * Flyway 指向 PostgreSQL 专用迁移目录 classpath:db/migration/postgresql
+#     （原 db/migration 保留 MySQL/H2 语法，供 dev profile 使用）
+#   * Hibernate dialect 切换为 PostgreSQLDialect，ddl-auto=validate（Flyway 管 schema）
+#
+# 相关文档：docs/database-production.md
+
+spring:
+  # === PostgreSQL 16 生产数据源 ===
+  # 库名 nexus_wallet 与 gateway 的 nexus_gateway 库独立（设计文档 §4.1）
+  datasource:
+    url: ${NEX_DB_URL:jdbc:postgresql://postgres:5432/nexus_wallet}
+    username: ${NEX_DB_USERNAME:nexus_wallet}
+    password: ${NEX_DB_PASSWORD:${DB_PASSWORD}}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      # === HikariCP 连接池参数（生产调优，与 gateway 对齐） ===
+      # maximum-pool-size=20：单服务最大连接数。wallet-service 提现审批 QPS 较低，
+      #   20 连接满足峰值需求，PostgreSQL max_connections=100 余量充足
+      maximum-pool-size: 20
+      # minimum-idle=5：最小空闲连接，避免冷启动建连开销
+      minimum-idle: 5
+      # connection-timeout=30000ms：获取连接最大等待时间
+      connection-timeout: 30000
+      # idle-timeout=600000ms：空闲连接存活时长（10min）
+      idle-timeout: 600000
+      # max-lifetime=1800000ms：连接最大生命周期（30min）
+      max-lifetime: 1800000
+      # leak-detection-threshold=60000ms：连接泄漏检测阈值（60s）
+      leak-detection-threshold: 60000
+      # 连接池名称（便于日志 / 监控识别）
+      pool-name: nexus-wallet-hikari
+
+  # === JPA / Hibernate（PostgreSQL 方言） ===
+  jpa:
+    hibernate:
+      # validate：Flyway 管理 schema，Hibernate 仅校验 Entity 与表结构一致
+      ddl-auto: validate
+    show-sql: false
+    open-in-view: false
+    properties:
+      hibernate:
+        # PostgreSQL 16 方言
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: false
+        # 生产环境 JDBC 批处理优化（提现审批批量查询场景）
+        jdbc:
+          batch_size: 50
+          fetch_size: 200
+        order_inserts: true
+        order_updates: true
+
+  # === Flyway 迁移（PostgreSQL 专用脚本目录） ===
+  # locations 指向 db/migration-pg（与 dev profile 的 db/migration 平级隔离，
+  # 避免 Flyway classpath scanner 递归扫描子目录导致版本号冲突）
+  flyway:
+    enabled: true
+    locations: classpath:db/migration-pg
+    # baseline-on-migrate=true：非空库自动 baseline
+    baseline-on-migrate: true
+    baseline-version: 0
+
+# === 生产环境日志级别 ===
+logging:
+  level:
+    org.nexus: INFO
+    org.hibernate.SQL: WARN
+    com.zaxxer.hikari: INFO

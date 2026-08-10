@@ -1,0 +1,444 @@
+﻿# ============================================================================
+# NexusChain - Jaeger all-in-one + OpenTelemetry Collector K8s 部署
+# ============================================================================
+# 用途：
+#   1. 部署 Jaeger all-in-one（Query UI + Collector + Agent 一体镜像）
+#      作为 P2-T5 trace 后端，替代原 Zipkin Server
+#   2. 部署 OpenTelemetry Collector 作为 trace 聚合 / 处理中间层
+#   3. 暴露 Jaeger UI（Ingress 16686）+ OTLP 接收端口（4317 / 4318）
+#
+# 部署：
+#   kubectl apply -f deploy/tracing/jaeger-deployment.yaml -n nexus
+#
+# 镜像版本基线：
+#   jaegertracing/all-in-one:1.59（2024-08，原生 OTLP 支持）
+#   otel/opentelemetry-collector-contrib:0.103.0
+#
+# 注意：
+#   - all-in-one 默认使用 in-memory storage，仅适用 dev / staging
+#   - 生产环境应替换为 Jaeger + Elasticsearch / Cassandra 生产部署
+#     （见 README.md 第6章「生产持久化」）
+# ============================================================================
+---
+# ============================================================================
+# 1. OpenTelemetry Collector ConfigMap
+# ============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+  namespace: nexus
+  labels:
+    app.kubernetes.io/name: otel-collector
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/component: tracing
+  annotations:
+    description: "OpenTelemetry Collector 配置（接收 OTLP -> 处理 -> 导出 Jaeger）"
+data:
+  otel-collector-config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+            max_recv_msg_size_mib: 16
+          http:
+            endpoint: 0.0.0.0:4318
+            max_request_body_size: 16777216
+
+    processors:
+      memory_limiter:
+        check_interval: 1s
+        limit_mib: 400
+        spike_limit_mib: 80
+      batch:
+        timeout: 5s
+        send_batch_size: 512
+        send_batch_max_size: 2048
+      resource:
+        attributes:
+          - key: deployment.environment
+            value: ${env:NEXUS_ENV:staging}
+            action: upsert
+          - key: service.namespace
+            value: nexus
+            action: upsert
+          - key: telemetry.sdk.name
+            value: micrometer
+            action: upsert
+          - key: telemetry.sdk.language
+            value: java
+            action: upsert
+      attributes:
+        actions:
+          - key: http.request.header
+            action: delete
+          - key: http.response.header
+            action: delete
+          - key: db.bind_var
+            action: delete
+          - key: thread.id
+            action: delete
+      tail_sampling:
+        decision_wait: 10s
+        num_traces: 50000
+        expected_new_traces_per_sec: 1000
+        policies:
+          - name: errors-policy
+            type: status_code
+            status_code:
+              status_codes: [ERROR]
+          - name: latency-policy
+            type: latency
+            latency:
+              threshold_ms: 800
+          - name: probabilistic-policy
+            type: probabilistic
+            probabilistic:
+              sampling_percentage: 10
+
+    exporters:
+      otlp/jaeger:
+        endpoint: jaeger-collector.nexus.svc.cluster.local:4317
+        tls:
+          insecure: true
+        sending_queue:
+          enabled: true
+          num_consumers: 4
+          queue_size: 10000
+        retry_on_failure:
+          enabled: true
+          initial_interval: 1s
+          max_interval: 30s
+          max_elapsed_time: 300s
+
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+      zpages:
+        endpoint: 0.0.0.0:55679
+
+    service:
+      extensions: [health_check, zpages]
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, resource, attributes, tail_sampling, batch]
+          exporters: [otlp/jaeger]
+      telemetry:
+        logs:
+          level: info
+          encoding: json
+        metrics:
+          address: 0.0.0.0:8888
+          level: detailed
+
+---
+# ============================================================================
+# 2. OpenTelemetry Collector Deployment
+# ============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+  namespace: nexus
+  labels:
+    app.kubernetes.io/name: otel-collector
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/component: tracing
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: otel-collector
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: otel-collector
+        app.kubernetes.io/part-of: nexus
+        app.kubernetes.io/component: tracing
+    spec:
+      containers:
+        - name: otel-collector
+          image: otel/opentelemetry-collector-contrib:0.103.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - --config=/conf/otel-collector-config.yaml
+          env:
+            - name: NEXUS_ENV
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['deployment.environment']
+            - name: JAEGER_COLLECTOR_ENDPOINT
+              value: "jaeger-collector.nexus.svc.cluster.local:4317"
+          ports:
+            - name: otlp-grpc
+              containerPort: 4317
+              protocol: TCP
+            - name: otlp-http
+              containerPort: 4318
+              protocol: TCP
+            - name: health
+              containerPort: 13133
+              protocol: TCP
+            - name: metrics
+              containerPort: 8888
+              protocol: TCP
+            - name: zpages
+              containerPort: 55679
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          volumeMounts:
+            - name: otel-collector-config-vol
+              mountPath: /conf
+              readOnly: true
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+      volumes:
+        - name: otel-collector-config-vol
+          configMap:
+            name: otel-collector-config
+            items:
+              - key: otel-collector-config.yaml
+                path: otel-collector-config.yaml
+
+---
+# ============================================================================
+# 3. OpenTelemetry Collector Service
+# ============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+  namespace: nexus
+  labels:
+    app.kubernetes.io/name: otel-collector
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/component: tracing
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: otel-collector
+  ports:
+    - name: otlp-grpc
+      port: 4317
+      targetPort: 4317
+      protocol: TCP
+    - name: otlp-http
+      port: 4318
+      targetPort: 4318
+      protocol: TCP
+    - name: metrics
+      port: 8888
+      targetPort: 8888
+      protocol: TCP
+
+---
+# ============================================================================
+# 4. Jaeger all-in-one Deployment
+# ============================================================================
+# all-in-one 镜像包含 Query + Collector + Agent，简化部署
+# 生产环境应拆分为 Jaeger Query + Collector + Storage（ES / Cassandra）
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jaeger
+  namespace: nexus
+  labels:
+    app.kubernetes.io/name: jaeger
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/component: tracing
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: jaeger
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: jaeger
+        app.kubernetes.io/part-of: nexus
+        app.kubernetes.io/component: tracing
+    spec:
+      containers:
+        - name: jaeger
+          image: jaegertracing/all-in-one:1.59
+          imagePullPolicy: IfNotPresent
+          env:
+            # -- 存储后端：mem（dev / staging）/ elasticsearch（prod）
+            - name: SPAN_STORAGE_TYPE
+              value: memory
+            # -- OTLP gRPC / HTTP 接收端口启用（all-in-one 默认开启）
+            - name: COLLECTOR_OTLP_ENABLED
+              value: "true"
+            # -- Query UI 端口
+            - name: QUERY_HTTP_PORT
+              value: "16686"
+            # -- Collector gRPC 端口
+            - name: COLLECTOR_GRPC_SERVER_PORT
+              value: "14250"
+            # -- Collector OTLP gRPC 端口
+            - name: COLLECTOR_OTLP_GRPC_PORT
+              value: "4317"
+            # -- Collector OTLP HTTP 端口
+            - name: COLLECTOR_OTLP_HTTP_PORT
+              value: "4318"
+            # -- 采样策略：const=1 全量采集（Collector 侧）
+            #    生产应改为 remote 或 probabilistic + 限流
+            - name: SAMPLING_STRATEGY_TYPE
+              value: const
+            - name: SAMPLING_STRATEGY_PARAM
+              value: "1"
+            # -- 内存存储上限（避免 OOM）
+            - name: MEMORY_MAX_TRACES
+              value: "50000"
+          ports:
+            - name: ui-http
+              containerPort: 16686
+              protocol: TCP
+            - name: collector-grpc
+              containerPort: 14250
+              protocol: TCP
+            - name: otlp-grpc
+              containerPort: 4317
+              protocol: TCP
+            - name: otlp-http
+              containerPort: 4318
+              protocol: TCP
+            - name: agent-compact
+              containerPort: 6831
+              protocol: UDP
+            - name: agent-binary
+              containerPort: 6832
+              protocol: UDP
+          livenessProbe:
+            httpGet:
+              path: /
+              port: ui-http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /
+              port: ui-http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+
+---
+# ============================================================================
+# 5. Jaeger Service（UI + Collector + Agent）
+# ============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: jaeger-collector
+  namespace: nexus
+  labels:
+    app.kubernetes.io/name: jaeger
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/component: tracing
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: jaeger
+  ports:
+    - name: otlp-grpc
+      port: 4317
+      targetPort: 4317
+      protocol: TCP
+    - name: otlp-http
+      port: 4318
+      targetPort: 4318
+      protocol: TCP
+    - name: collector-grpc
+      port: 14250
+      targetPort: 14250
+      protocol: TCP
+    - name: agent-compact
+      port: 6831
+      targetPort: 6831
+      protocol: UDP
+    - name: agent-binary
+      port: 6832
+      targetPort: 6832
+      protocol: UDP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jaeger-query
+  namespace: nexus
+  labels:
+    app.kubernetes.io/name: jaeger
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/component: tracing
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: jaeger
+  ports:
+    - name: ui-http
+      port: 16686
+      targetPort: 16686
+      protocol: TCP
+
+---
+# ============================================================================
+# 6. Jaeger UI Ingress（可选，通过 Helm values 启用）
+# ============================================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: jaeger-ui
+  namespace: nexus
+  labels:
+    app.kubernetes.io/name: jaeger
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/component: tracing
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: jaeger.nexus.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: jaeger-query
+                port:
+                  number: 16686

@@ -1,0 +1,161 @@
+# ============================================================================
+# NexusChain - Micrometer 指标暴露配置（ConfigMap + Helm 注入说明）
+# ============================================================================
+# 用途：
+#   1. 提供 application.yml 中 management.* 配置的参考 ConfigMap
+#   2. 实际部署通过 Helm values 注入 Pod 环境变量（不修改 application.yml，12-factor）
+#   3. 内嵌 Helm 注入示例 / ServiceMonitor 对照表 / 业务指标命名约定
+#
+# 应用前置依赖（build.gradle，已在子模块引入，无需修改）：
+#   implementation 'org.springframework.boot:spring-boot-starter-actuator'
+#   implementation 'io.micrometer:micrometer-registry-prometheus'
+#
+# 部署：kubectl apply -f deploy/monitoring/micrometer-config.yaml -n nexus
+# ============================================================================
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nexus-micrometer-config
+  namespace: nexus
+  labels:
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/managed-by: monitoring
+  annotations:
+    description: "Micrometer + Prometheus 指标暴露参考配置；生产通过 Helm env 注入"
+data:
+  # -- Actuator 端点暴露：仅健康、指标、Prometheus、Info
+  #    生产环境不暴露 env、heapdump 等敏感端点
+  MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: "health,metrics,prometheus,info"
+
+  # -- 健康探针细化：启用 db、redis、disk-space、ping
+  MANAGEMENT_ENDPOINT_HEALTH_SHOW_DETAILS: "always"
+  MANAGEMENT_HEALTH_DISKSPACE_ENABLED: "true"
+  MANAGEMENT_HEALTH_DB_ENABLED: "true"
+  MANAGEMENT_HEALTH_REDIS_ENABLED: "true"
+
+  # -- Prometheus 指标导出启用
+  MANAGEMENT_METRICS_EXPORT_PROMETHEUS_ENABLED: "true"
+  # -- 指标描述启用（开发可关闭以减少负载，生产保留）
+  MANAGEMENT_METRICS_EXPORT_PROMETHEUS_STEP: "30s"
+
+  # -- 全局通用标签：所有指标自动附加 application / namespace / cluster
+  #    与 Helm Chart 的 app.kubernetes.io/name 对齐，便于跨服务聚合
+  MANAGEMENT_METRICS_TAGS_APPLICATION: "nexus-${SERVICE_NAME}"
+  MANAGEMENT_METRICS_TAGS_NAMESPACE: "nexus"
+  MANAGEMENT_METRICS_TAGS_CLUSTER: "${CLUSTER_NAME:default}"
+
+  # -- Web 指标启用（HTTP 请求时序）
+  MANAGEMENT_METRICS_WEB_SERVER_REQUEST_AUTOTIME_ENABLED: "true"
+  MANAGEMENT_METRICS_WEB_SERVER_REQUEST_AUTOTIME_PERCENTILES: "0.5,0.95,0.99"
+  MANAGEMENT_METRICS_WEB_SERVER_REQUEST_AUTOTIME_PERCENTILES_HISTOGRAM: "true"
+
+  # -- JVM 指标启用（默认启用，显式声明以便审计）
+  MANAGEMENT_METRICS_ENABLE_JVM: "true"
+
+  # -- 分位数直方图（用于 P99 告警与延迟仪表盘）
+  MANAGEMENT_METRICS_DISTRIBUTION_PERCENTILES_HISTOGRAM: "true"
+  MANAGEMENT_METRICS_DISTRIBUTION_SLO: "50ms,100ms,250ms,500ms,1s,2s,5s"
+
+  # -- 指标根路径（默认 /actuator/prometheus，与 ServiceMonitor.path 对齐）
+  MANAGEMENT_ENDPOINT_PROMETHEUS_ENABLED: "true"
+
+  # -- 服务器端口（与各服务 ServiceMonitor.port 对齐）
+  #    nexus-gateway: 8080 / nexus-bridge: 8084
+  #    nexus-signing-service: 8082 / nexus-wallet-service: 8083
+  MANAGEMENT_SERVER_PORT: "${SERVER_PORT:8080}"
+
+  # -- 自定义业务指标命名空间前缀（应用代码用 MeterRegistry 时统一前缀）
+  NEXUS_METRICS_NAMESPACE: "nexus"
+
+  # ========================================================================
+  # 以下为参考文档（作为 ConfigMap data 字段存储，便于 kubectl describe 查看）
+  # ========================================================================
+
+  # -- Helm values 注入示例（推荐方式，不修改 application.yml）
+  helm-injection-example.yaml: |
+    # 在 deploy/helm/charts/<service>/values.yaml 中扩展 env 段：
+    env:
+      - name: MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE
+        value: "health,metrics,prometheus,info"
+      - name: MANAGEMENT_METRICS_EXPORT_PROMETHEUS_ENABLED
+        value: "true"
+      - name: MANAGEMENT_METRICS_TAGS_APPLICATION
+        value: "{{ .Chart.Name }}"
+      - name: MANAGEMENT_METRICS_TAGS_NAMESPACE
+        value: "{{ .Values.global.namespace }}"
+      - name: MANAGEMENT_METRICS_EXPORT_PROMETHEUS_STEP
+        value: "30s"
+      - name: MANAGEMENT_METRICS_DISTRIBUTION_PERCENTILES_HISTOGRAM
+        value: "true"
+      - name: MANAGEMENT_METRICS_DISTRIBUTION_SLO
+        value: "50ms,100ms,250ms,500ms,1s,2s,5s"
+      - name: MANAGEMENT_ENDPOINT_HEALTH_SHOW_DETAILS
+        value: "never"  # 生产环境不暴露健康详情，避免泄漏内部状态
+
+    # 说明：
+    #   1. Spring Boot 2.7+ 支持 RELAXED_BINDING，环境变量 MANAGEMENT_* 自动映射到 management.*
+    #   2. 通过 Helm 注入而非修改 application.yml，保持应用镜像与环境无关（12-factor）
+    #   3. SERVICE_NAME 由 deployment.yaml 中 Downward API 注入 Pod 元数据：
+    #        env:
+    #          - name: SERVICE_NAME
+    #            valueFrom:
+    #              fieldRef:
+    #                fieldPath: metadata.labels['app.kubernetes.io/name']
+    #   4. 各服务端口差异通过子 chart values.yaml 的 service.port 控制，
+    #      MANAGEMENT_SERVER_PORT 默认与 SERVER_PORT 一致，无需重复设置
+
+  # -- ServiceMonitor 抓取路径对照表
+  servicemonitor-mapping.txt: |
+    +-------------------------+----------+------------------------+-----------+
+    | 服务                    | 端口     | 抓取路径               | 间隔      |
+    +-------------------------+----------+------------------------+-----------+
+    | nexus-gateway           | 8080     | /actuator/prometheus   | 30s       |
+    | nexus-bridge            | 8084     | /actuator/prometheus   | 30s       |
+    | nexus-signing-service   | 8082     | /actuator/prometheus   | 30s       |
+    | nexus-wallet-service    | 8083     | /actuator/prometheus   | 30s       |
+    +-------------------------+----------+------------------------+-----------+
+    ServiceMonitor 模板位于 deploy/helm/charts/<service>/templates/servicemonitor.yaml
+    启用条件：global.serviceMonitor.enabled=true AND 子 chart serviceMonitor.enabled=true
+    发现标签：release=kube-prometheus-stack（对齐 kube-prometheus-stack-values.yaml）
+
+  # -- 业务指标命名约定（应用代码使用 MeterRegistry 时遵循）
+  metrics-naming-convention.txt: |
+    支付类：
+      nexus_payment_total{service, error_code}                    -- 计数器
+      nexus_payment_success_total{service}                        -- 计数器
+      nexus_payment_failure_total{service, error_code}            -- 计数器
+      nexus_payment_duration_seconds_bucket{service, le}          -- 直方图
+
+    链上类：
+      nexus_chain_rpc_duration_seconds_bucket{service, chain, rpc_method, le}
+      nexus_chain_block_confirmation_seconds_bucket{service, chain, le}
+      nexus_chain_last_block_timestamp{service, chain}            -- 仪表盘
+
+    桥类：
+      nexus_bridge_lock_total{service, chain, operation}          -- 计数器
+      nexus_bridge_mint_total{service, chain}                     -- 计数器
+      nexus_bridge_burn_total{service, chain}                     -- 计数器
+      nexus_bridge_unlock_total{service, chain}                   -- 计数器
+      nexus_bridge_lock_amount_usd_total{service, chain}          -- 计数器
+      nexus_bridge_unlock_amount_usd_total{service, chain}        -- 计数器
+      nexus_bridge_liquidity_usd{service, chain}                  -- 仪表盘
+      nexus_bridge_pending_total{service, chain}                  -- 仪表盘
+      nexus_bridge_operation_duration_seconds_bucket{service, chain, operation, le}
+
+    风控类：
+      nexus_risk_trigger_total{service, rule_name, action}        -- 计数器
+      nexus_risk_block_total{service, rule_name}                  -- 计数器
+      nexus_risk_false_positive_total{service, rule_name}         -- 计数器
+
+    JVM 类（Micrometer 默认）：
+      jvm_memory_used_bytes{service, area, id}
+      jvm_memory_max_bytes{service, area, id}
+      jvm_memory_committed_bytes{service, area, id}
+      jvm_gc_pause_seconds_sum{service, cause, action}
+      jvm_gc_pause_seconds_count{service, cause, action}
+      jvm_threads_live_threads{service}
+      jvm_threads_daemon_threads{service}
+      jvm_threads_peak_threads{service}
+      process_cpu_usage{service}
+      process_uptime_seconds{service}

@@ -1,0 +1,142 @@
+# nexus-wallet-service application 配置
+#
+# Phase 2 任务 #57：钱包管理服务独立部署业务配置。
+# 设计文档 §4.2.3 配置迁移清单。
+#
+# 敏感配置（如平台热钱包地址）生产环境通过 Nacos nexus-wallet-service.yaml 下发，
+# 本地开发可通过环境变量或本文件覆盖。
+
+server:
+  port: ${SERVER_PORT:8083}
+  # === Phase 3 任务 #61：优雅停机（设计文档 §4.6.2） ===
+  shutdown: graceful
+
+spring:
+  # === Phase 3 任务 #61：优雅停机等待时长（设计文档 §4.6.2） ===
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+
+  # === Phase 4 任务 #68：数据库持久化（设计文档 §4.1 / §4.3） ===
+  # 生产数据源：MySQL 8.x，库 nexus_wallet（与 gateway 的 nexus_gateway 库独立）
+  # dev / test profile 通过 application-dev.yml / application-test.yml 覆盖为 H2
+  datasource:
+    url: ${NEX_DB_URL:jdbc:mysql://localhost:3306/nexus_wallet?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=UTC}
+    username: ${NEX_DB_USERNAME:root}
+    password: ${NEX_DB_PASSWORD:root}
+    driver-class-name: ${NEX_DB_DRIVER:com.mysql.cj.jdbc.Driver}
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+
+  # === Phase 4 任务 #68：JPA / Hibernate（设计文档 §4.2） ===
+  jpa:
+    hibernate:
+      # validate：Flyway 管理 schema，Hibernate 仅校验 Entity 与表结构一致
+      ddl-auto: validate
+    show-sql: false
+    open-in-view: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQLDialect
+        format_sql: true
+
+  # === Phase 4 任务 #68：Flyway 迁移（设计文档 §4.3） ===
+  # 版本号从 V1 起独立编号（nexus_wallet 库与 gateway 的 nexus_gateway 库互不干扰）
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+
+  # Sentinel 集成（设计文档 §4.3）
+  cloud:
+    sentinel:
+      transport:
+        dashboard: ${NEX_SENTINEL_DASHBOARD:localhost:8858}
+        # 客户端与 Sentinel Dashboard 通信端口（默认 8719，按服务递增；wallet-service 用 8720）
+        port: ${NEX_SENTINEL_CLIENT_PORT:8720}
+      # 取消懒加载，启动即向 Dashboard 注册
+      eager: true
+      # Sentinel 数据源：从 Nacos 订阅规则（nexus-sentinel-rules.yaml）
+      datasource:
+        ds1:
+          nacos:
+            server-addr: ${NEX_NACOS_SERVER:localhost:8848}
+            namespace: ${NEX_NACOS_NAMESPACE:dev}
+            group-id: NEXUS_GROUP
+            data-id: nexus-sentinel-rules.yaml
+            rule-type: flow
+
+# === 钱包管理配置 ===
+nexus:
+  wallet:
+    # 平台热钱包地址（提现发起方），生产环境通过 Nacos / 环境变量下发
+    platform-address: ${NEX_WALLET_PLATFORM_ADDRESS:PLATFORM_HOT_WALLET}
+    # 地址白名单首次提币延迟（小时）
+    whitelist:
+      first-withdrawal-delay-hours: ${NEX_WALLET_WHITELIST_DELAY_HOURS:24}
+    # 链上执行通道（保留兜底，DefaultWithdrawalApprovalService 已改用 SigningServiceFeignClient）
+    execution:
+      sandbox: ${NEX_WALLET_EXECUTION_SANDBOX:false}
+  # gateway 基础 URL（HttpOnChainExecutionClient 兜底用，Feign 调用不依赖此配置）
+  gateway:
+    base-url: ${NEX_GATEWAY_BASE_URL:http://localhost:8080}
+
+# === OpenFeign 配置（设计文档 §4.4.2） ===
+# wallet-service 通过 Feign 调用 signing-service（SigningServiceFeignClient）
+feign:
+  client:
+    config:
+      default:
+        connect-timeout: 3000
+        read-timeout: 10000
+        logger-level: BASIC
+      # 签名服务调用：签名 + 广播，允许较长超时
+      nexus-signing-service:
+        connect-timeout: 2000
+        read-timeout: 8000
+  circuitbreaker:
+    enabled: true
+  compression:
+    request:
+      enabled: true
+    response:
+      enabled: true
+
+# === Spring Cloud LoadBalancer 配置 ===
+spring.cloud.loadbalancer:
+  cache:
+    enabled: true
+    ttl: 30s
+
+# === Actuator 健康检查 ===
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
+  # === Phase 3 任务 #61：链路追踪（设计文档 §4.3.2） ===
+  # Micrometer Tracing + Brave + Zipkin，W3C traceparent 跨服务传播
+  tracing:
+    sampling:
+      probability: 1.0  # 开发环境 100% 采样，生产环境建议 0.1
+  zipkin:
+    tracing:
+      endpoint: ${NEX_ZIPKIN_ENDPOINT:http://localhost:9411/api/v2/spans}
+
+# === Phase 3 任务 #61：Seata 分布式事务配置（设计文档 §4.2.2） ===
+# SCA 2023.0.1.0 + seata-spring-boot-starter 2.0.0
+# wallet-service 作为 TCC 分支事务参与方（提现执行 DefaultWithdrawalApprovalService）
+seata:
+  enabled: true
+  tx-service-group: nexus-tx-group
+  service:
+    vgroup-mapping:
+      nexus-tx-group: default
+    grouplist:
+      default: ${NEX_SEATA_SERVER:localhost:8091}

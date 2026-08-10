@@ -1,0 +1,81 @@
+/*
+ * Copyright (c) [2018]
+ * This file is part of the java-nexuscore
+ *
+ * The java-nexuscore is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The java-nexuscore is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the java-nexuscore. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+package org.nexus.core.validate;
+
+import com.google.protobuf.InvalidProtocolBufferException;
+import org.apache.commons.codec.DecoderException;
+import org.apache.commons.codec.binary.Hex;
+import org.nexus.command.IncubatorAddress;
+import org.nexus.keystore.crypto.RipemdUtility;
+import org.nexus.keystore.crypto.SHA3Utility;
+import org.nexus.pool.PeningTransPool;
+import org.nexus.protobuf.tcp.command.HatchModel;
+import org.nexus.core.account.AccountDB;
+import org.nexus.core.account.Transaction;
+import org.nexus.core.incubator.RateTable;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+
+import java.util.*;
+
+// 官方孵化余额校验，需要事务里填充高度
+// 出块时校验，收到块时不校验
+@Component
+public class OfficialIncubateBalanceRule {
+
+    @Autowired
+    AccountDB accountDB;
+
+    @Autowired
+    RateTable rateTable;
+
+    @Autowired
+    PeningTransPool peningTransPool;
+
+    public List<Transaction> validateTransaction(List<Transaction> transaction) throws InvalidProtocolBufferException, DecoderException {
+        List<Transaction> newlsit = new ArrayList<>();
+        long totalincubate = accountDB.getBalance(IncubatorAddress.resultpubhash());
+        IdentityHashMap<String,Long> maps=new IdentityHashMap<>();
+        for (Transaction tx : transaction) {
+            if (tx.type == Transaction.Type.INCUBATE.ordinal()) {
+                long height = tx.height;
+                byte[] playload = tx.payload;
+                HatchModel.Payload payloadproto = HatchModel.Payload.parseFrom(playload);
+                int days = payloadproto.getType();
+                String sharpub = payloadproto.getSharePubkeyHash();
+                long share = 0;
+                if (sharpub != null && sharpub != "") {
+                    share = tx.getShare(height, rateTable, days);
+                }
+                long interest = tx.getInterest(height, rateTable, days);
+                long total = share + interest;
+                if (totalincubate < total) {
+                    String from=Hex.encodeHexString(RipemdUtility.ripemd160(SHA3Utility.keccak256(tx.from)));
+                    maps.put(new String(from),tx.nonce);
+                    continue;
+                }
+                totalincubate -= total;
+            }
+            newlsit.add(tx);
+        }
+        //删除错误的内存池事务
+        peningTransPool.remove(maps);
+        return newlsit;
+    }
+}

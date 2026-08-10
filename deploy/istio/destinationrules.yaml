@@ -1,0 +1,258 @@
+# ============================================================================
+# NexusChain - DestinationRule 配置（4 个业务服务）
+# ============================================================================
+# 用途：
+#   为 4 个业务服务定义 Istio DestinationRule，统一治理东西向连接：
+#   1. 熔断 outlierDetection：连续 5 次 5xx → 驱逐 30s
+#   2. 连接池 trafficPolicy：maxConnections=100, maxPendingRequests=50
+#   3. 负载均衡 LEAST_REQUEST：避免热点 Pod 过载
+#   4. subsets：stable (v1) + canary (v2)，配合 VirtualService 金丝雀发布
+#
+# 应用：
+#   kubectl apply -f deploy/istio/destinationrules.yaml -n nexus
+#
+# 与 Sentinel 的职责划分：
+#   - Istio DestinationRule：基础设施级连接池 / 熔断 / 负载均衡
+#   - Sentinel：业务级熔断（慢调用比例 / 异常比例）+ 限流（QPS）
+#   两者互补：Istio 驱逐故障 Pod，Sentinel 在业务层降级
+# ============================================================================
+---
+# ============================================================================
+# 1. nexus-gateway DestinationRule（支付网关）
+# ============================================================================
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: nexus-gateway
+  namespace: nexus
+  labels:
+    app.kubernetes.io/name: nexus-gateway
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/component: service-mesh
+  annotations:
+    description: "支付网关连接治理：熔断 5xx×5/30s + 连接池 100/50 + LEAST_REQUEST"
+spec:
+  host: nexus-gateway
+  # -- 流量策略：连接池 + 负载均衡 + 熔断
+  trafficPolicy:
+    # -- 连接池限制：保护网关免受突发流量压垮
+    connectionPool:
+      tcp:
+        maxConnections: 100
+        connectTimeout: 1s
+        tcpKeepalive:
+          time: 60s
+          interval: 15s
+          probes: 3
+      http:
+        http1MaxPendingRequests: 50
+        http2MaxRequests: 100
+        maxRequestsPerConnection: 10
+        maxRetries: 3
+        idleTimeout: 30s
+        h2UpgradePolicy: DO_NOT_UPGRADE
+    # -- 负载均衡：LEAST_REQUEST 适合长连接 + 不均匀请求处理时间
+    loadBalancer:
+      simple: LEAST_REQUEST
+    # -- 熔断：连续 5 次 5xx → 驱逐 30s
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 10s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+      minHealthPercent: 30
+      # -- 慢响应熔断：超过 1s 的响应计入慢调用
+      consecutiveLocalOriginFailures: 5
+      splitExternalLocalOriginErrors: true
+    # -- 子集间也启用 mTLS（与 PeerAuthentication STRICT 对齐）
+    tls:
+      mode: ISTIO_MUTUAL
+  # -- 子集：stable (v1) + canary (v2)，配合 VirtualService 90/10 流量分割
+  subsets:
+    - name: stable
+      labels:
+        app.kubernetes.io/version: v1
+      trafficPolicy:
+        loadBalancer:
+          simple: LEAST_REQUEST
+    - name: canary
+      labels:
+        app.kubernetes.io/version: v2
+      trafficPolicy:
+        loadBalancer:
+          simple: LEAST_REQUEST
+---
+# ============================================================================
+# 2. nexus-bridge DestinationRule（跨链桥）
+# ============================================================================
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: nexus-bridge
+  namespace: nexus
+  labels:
+    app.kubernetes.io/name: nexus-bridge
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/component: service-mesh
+  annotations:
+    description: "跨链桥连接治理：熔断 5xx×5/30s + 连接池 100/50 + LEAST_REQUEST"
+spec:
+  host: nexus-bridge
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 100
+        connectTimeout: 1s
+        tcpKeepalive:
+          time: 60s
+          interval: 15s
+          probes: 3
+      http:
+        http1MaxPendingRequests: 50
+        http2MaxRequests: 100
+        maxRequestsPerConnection: 10
+        maxRetries: 3
+        idleTimeout: 30s
+        h2UpgradePolicy: DO_NOT_UPGRADE
+    loadBalancer:
+      simple: LEAST_REQUEST
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 10s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+      minHealthPercent: 30
+      consecutiveLocalOriginFailures: 5
+      splitExternalLocalOriginErrors: true
+    tls:
+      mode: ISTIO_MUTUAL
+  subsets:
+    - name: stable
+      labels:
+        app.kubernetes.io/version: v1
+      trafficPolicy:
+        loadBalancer:
+          simple: LEAST_REQUEST
+    - name: canary
+      labels:
+        app.kubernetes.io/version: v2
+      trafficPolicy:
+        loadBalancer:
+          simple: LEAST_REQUEST
+---
+# ============================================================================
+# 3. nexus-signing-service DestinationRule（签名服务）
+# ============================================================================
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: nexus-signing-service
+  namespace: nexus
+  labels:
+    app.kubernetes.io/name: nexus-signing-service
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/component: service-mesh
+  annotations:
+    description: "签名服务连接治理：熔断 5xx×5/30s + 连接池 100/50 + LEAST_REQUEST"
+spec:
+  host: nexus-signing-service
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 100
+        connectTimeout: 1s
+        tcpKeepalive:
+          time: 60s
+          interval: 15s
+          probes: 3
+      http:
+        http1MaxPendingRequests: 50
+        http2MaxRequests: 100
+        maxRequestsPerConnection: 10
+        maxRetries: 3
+        idleTimeout: 30s
+        h2UpgradePolicy: DO_NOT_UPGRADE
+    loadBalancer:
+      simple: LEAST_REQUEST
+    # -- 签名服务熔断更敏感：3 次 5xx 即驱逐（高安全级别）
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 10s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+      minHealthPercent: 30
+      consecutiveLocalOriginFailures: 5
+      splitExternalLocalOriginErrors: true
+    tls:
+      mode: ISTIO_MUTUAL
+  subsets:
+    - name: stable
+      labels:
+        app.kubernetes.io/version: v1
+      trafficPolicy:
+        loadBalancer:
+          simple: LEAST_REQUEST
+    - name: canary
+      labels:
+        app.kubernetes.io/version: v2
+      trafficPolicy:
+        loadBalancer:
+          simple: LEAST_REQUEST
+---
+# ============================================================================
+# 4. nexus-wallet-service DestinationRule（钱包服务）
+# ============================================================================
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: nexus-wallet-service
+  namespace: nexus
+  labels:
+    app.kubernetes.io/name: nexus-wallet-service
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/component: service-mesh
+  annotations:
+    description: "钱包服务连接治理：熔断 5xx×5/30s + 连接池 100/50 + LEAST_REQUEST"
+spec:
+  host: nexus-wallet-service
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 100
+        connectTimeout: 1s
+        tcpKeepalive:
+          time: 60s
+          interval: 15s
+          probes: 3
+      http:
+        http1MaxPendingRequests: 50
+        http2MaxRequests: 100
+        maxRequestsPerConnection: 10
+        maxRetries: 3
+        idleTimeout: 30s
+        h2UpgradePolicy: DO_NOT_UPGRADE
+    loadBalancer:
+      simple: LEAST_REQUEST
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 10s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+      minHealthPercent: 30
+      consecutiveLocalOriginFailures: 5
+      splitExternalLocalOriginErrors: true
+    tls:
+      mode: ISTIO_MUTUAL
+  subsets:
+    - name: stable
+      labels:
+        app.kubernetes.io/version: v1
+      trafficPolicy:
+        loadBalancer:
+          simple: LEAST_REQUEST
+    - name: canary
+      labels:
+        app.kubernetes.io/version: v2
+      trafficPolicy:
+        loadBalancer:
+          simple: LEAST_REQUEST

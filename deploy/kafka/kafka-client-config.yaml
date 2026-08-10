@@ -1,0 +1,204 @@
+# ============================================================================
+# NexusChain - Spring Boot Kafka 客户端配置片段
+# ============================================================================
+# 任务：P3-T4 K8s 部署 Kafka 集群
+# 部署：本文件为配置参考，不直接 kubectl apply
+#       实际通过 Helm values 注入到各服务的 ConfigMap / env
+#
+# 说明：
+#   - 不修改任何 application.yml，Kafka 配置通过 Helm values 注入
+#   - 不修改 deploy/helm/ 下的 Helm Chart 文件
+#   - 本文件以 ConfigMap 形式提供配置片段模板，供 Helm chart 开发参考
+#   - bootstrap-servers 指向 Strimzi 创建的 K8s Service DNS 名
+# ============================================================================
+
+---
+# ConfigMap：Kafka 客户端配置片段模板
+# 供 Helm chart 开发参考，实际配置通过 values.yaml 注入
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nexus-kafka-client-config-template
+  namespace: kafka
+  labels:
+    app.kubernetes.io/name: nexus-kafka-client-config
+    app.kubernetes.io/part-of: nexus
+data:
+  # ========================================================================
+  # Spring Boot application.yml 片段（参考，不直接使用）
+  # ========================================================================
+  application-snippet.yml: |
+    spring:
+      kafka:
+        # -- Strimzi 创建的 bootstrap Service DNS 名
+        #   plain 监听器 9092：nexus-kafka-kafka-bootstrap.kafka:9092
+        #   tls  监听器 9093：nexus-kafka-kafka-bootstrap.kafka:9093
+        bootstrap-servers: nexus-kafka-kafka-bootstrap.kafka:9092
+
+        # -- 生产者配置
+        producer:
+          # -- acks=all：写入需所有同步副本确认（配合 min.insync.replicas=2）
+          acks: all
+          # -- 重试次数：3（超过后由业务层处理失败）
+          retries: 3
+          # -- 批次大小：32KB（默认 16KB，支付事件较大时调高）
+          batch-size: 32768
+          # -- linger.ms：10ms（等待批次填满，平衡延迟与吞吐）
+          properties:
+            linger.ms: 10
+            # -- 请求超时：30s
+            request.timeout.ms: 30000
+            # -- 交付超时：60s（含重试）
+            delivery.timeout.ms: 60000
+            # -- max.in.flight.requests.per.connection=5（保序前提下提升并发）
+            #   注意：retries>0 时若需保序，应设为 1；NexusChain 用业务 ID 保序
+            max.in.flight.requests.per.connection: 5
+            # -- 启用幂等生产者（Kafka >= 0.11 默认 true，显式声明）
+            enable.idempotence: true
+            # -- 压缩：lz4（低延迟高压缩比）
+            compression.type: lz4
+          # -- Key 序列化：String（事件用 String key 做分区路由）
+          key-serializer: org.apache.kafka.common.serialization.StringSerializer
+          # -- Value 序列化：JSON（事件 payload 为 JSON）
+          value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+
+        # -- 消费者配置
+        consumer:
+          # -- group-id：通过 Helm values 注入，每个服务/消费者组不同
+          #   示例：nexus-gateway-payment-consumer
+          group-id: ${KAFKA_CONSUMER_GROUP_ID:nexus-gateway-payment-consumer}
+          # -- auto-offset-reset：earliest（首次启动从最早未消费开始）
+          #   分析服务用 latest（不回放历史）
+          auto-offset-reset: earliest
+          # -- 手动提交：处理成功后才提交 offset，避免丢消息
+          enable-auto-commit: false
+          # -- 自动提交间隔（enable-auto-commit=false 时无效，保留为 0）
+          auto-commit-interval: 0
+          # -- max.poll.records：100（单次拉取 100 条）
+          max-poll-records: 100
+          # -- fetch.min.bytes：1（立即返回，低延迟场景）
+          properties:
+            fetch.min.bytes: 1
+            fetch.max.wait.ms: 500
+            # -- max.poll.interval.ms：300s（处理超时则被踢出 rebalance）
+            max.poll.interval.ms: 300000
+            # -- session.timeout.ms：30s（心跳超时）
+            session.timeout.ms: 30000
+            # -- heartbeat.interval.ms：10s（session.timeout 的 1/3）
+            heartbeat.interval.ms: 10000
+            # -- partition.assignment.strategy：sticky（减少 rebalance 抖动）
+            partition.assignment.strategy: org.apache.kafka.clients.consumer.StickyAssignor
+          key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+          value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+
+        # -- 监听器配置（Spring Kafka 3.x）
+        listener:
+          # -- 手动提交模式
+          ack-mode: manual_immediate
+          # -- 并发度：等于分区数（1 消费者线程/分区）
+          concurrency: 3
+          # -- 监听类型：批量
+          type: batch
+          # -- 批处理错误处理器：DefaultErrorHandler（含退避重试 + DLT）
+          #   见下方 spring.kafka.listener 配置
+
+      # -- Spring Kafka 重试与 DLT 配置
+      kafka:
+        listener:
+          observation:
+            enable: true
+
+  # ========================================================================
+  # Helm values 注入示例（umbrella chart values.yaml 片段）
+  # ========================================================================
+  helm-values-injection-example.yaml: |
+    # 以下为 deploy/helm/values.yaml 中各子 chart 的 Kafka 配置注入示例
+    # 实际写入 values-<env>.yaml，不修改子 chart 模板
+
+    global:
+      kafka:
+        # -- Kafka bootstrap servers（Strimzi Service DNS）
+        bootstrapServers: "nexus-kafka-kafka-bootstrap.kafka:9092"
+        # -- 是否启用 Kafka（dev 可关闭，回退到同步处理）
+        enabled: true
+
+    # -- nexus-gateway：既是生产者（payment-events）又是消费者（webhook-events）
+    nexus-gateway:
+      env:
+        # -- 注入 bootstrap servers
+        SPRING_KAFKA_BOOTSTRAP_SERVERS: "nexus-kafka-kafka-bootstrap.kafka:9092"
+        # -- 消费者组 ID（webhook 消费者）
+        KAFKA_CONSUMER_GROUP_ID: "nexus-gateway-webhook-consumer"
+        # -- 生产者配置
+        SPRING_KAFKA_PRODUCER_ACKS: "all"
+        SPRING_KAFKA_PRODUCER_RETRIES: "3"
+        SPRING_KAFKA_PRODUCER_BATCH_SIZE: "32768"
+        SPRING_KAFKA_PRODUCER_PROPERTIES_LINGER_MS: "10"
+        SPRING_KAFKA_PRODUCER_PROPERTIES_ENABLE_IDEMPOTENCE: "true"
+        SPRING_KAFKA_PRODUCER_PROPERTIES_COMPRESSION_TYPE: "lz4"
+        # -- 消费者配置
+        SPRING_KAFKA_CONSUMER_AUTO_OFFSET_RESET: "earliest"
+        SPRING_KAFKA_CONSUMER_ENABLE_AUTO_COMMIT: "false"
+        SPRING_KAFKA_CONSUMER_MAX_POLL_RECORDS: "50"
+        SPRING_KAFKA_CONSUMER_PROPERTIES_MAX_POLL_INTERVAL_MS: "300000"
+        SPRING_KAFKA_LISTENER_ACK_MODE: "manual_immediate"
+        SPRING_KAFKA_LISTENER_CONCURRENCY: "4"
+
+    # -- nexus-bridge：既是生产者（bridge-events）又是消费者（bridge-events）
+    nexus-bridge:
+      env:
+        SPRING_KAFKA_BOOTSTRAP_SERVERS: "nexus-kafka-kafka-bootstrap.kafka:9092"
+        KAFKA_CONSUMER_GROUP_ID: "nexus-bridge-event-consumer"
+        SPRING_KAFKA_PRODUCER_ACKS: "all"
+        SPRING_KAFKA_PRODUCER_RETRIES: "3"
+        SPRING_KAFKA_PRODUCER_BATCH_SIZE: "32768"
+        SPRING_KAFKA_PRODUCER_PROPERTIES_LINGER_MS: "10"
+        SPRING_KAFKA_PRODUCER_PROPERTIES_ENABLE_IDEMPOTENCE: "true"
+        SPRING_KAFKA_CONSUMER_AUTO_OFFSET_RESET: "earliest"
+        SPRING_KAFKA_CONSUMER_ENABLE_AUTO_COMMIT: "false"
+        SPRING_KAFKA_CONSUMER_MAX_POLL_RECORDS: "100"
+        SPRING_KAFKA_LISTENER_ACK_MODE: "manual_immediate"
+        SPRING_KAFKA_LISTENER_CONCURRENCY: "6"
+
+    # -- nexus-signing-service：仅消费者（签名请求事件，未来扩展）
+    nexus-signing-service:
+      env:
+        SPRING_KAFKA_BOOTSTRAP_SERVERS: "nexus-kafka-kafka-bootstrap.kafka:9092"
+        KAFKA_CONSUMER_GROUP_ID: "nexus-signing-event-consumer"
+        SPRING_KAFKA_CONSUMER_AUTO_OFFSET_RESET: "earliest"
+        SPRING_KAFKA_CONSUMER_ENABLE_AUTO_COMMIT: "false"
+
+    # -- nexus-wallet-service：仅消费者（钱包状态事件，未来扩展）
+    nexus-wallet-service:
+      env:
+        SPRING_KAFKA_BOOTSTRAP_SERVERS: "nexus-kafka-kafka-bootstrap.kafka:9092"
+        KAFKA_CONSUMER_GROUP_ID: "nexus-wallet-event-consumer"
+        SPRING_KAFKA_CONSUMER_AUTO_OFFSET_RESET: "earliest"
+        SPRING_KAFKA_CONSUMER_ENABLE_AUTO_COMMIT: "false"
+
+  # ========================================================================
+  # TLS 监听器客户端配置示例（签名/钱包等敏感服务用 mTLS）
+  # ========================================================================
+  tls-client-config-example.yaml: |
+    # 使用 tls 监听器（9093）+ KafkaUser mTLS 认证的客户端配置
+    # 需先创建 KafkaUser CRD（见 README 第 6 章）
+    spring:
+      kafka:
+        bootstrap-servers: nexus-kafka-kafka-bootstrap.kafka:9093
+        producer:
+          properties:
+            # -- TLS 配置
+            security.protocol: SSL
+            ssl.truststore.location: /etc/kafka/truststore.p12
+            ssl.truststore.password: ${KAFKA_TRUSTSTORE_PASSWORD}
+            ssl.keystore.location: /etc/kafka/keystore.p12
+            ssl.keystore.password: ${KAFKA_KEYSTORE_PASSWORD}
+            ssl.endpoint.identification.algorithm: ""
+        consumer:
+          properties:
+            security.protocol: SSL
+            ssl.truststore.location: /etc/kafka/truststore.p12
+            ssl.truststore.password: ${KAFKA_TRUSTSTORE_PASSWORD}
+            ssl.keystore.location: /etc/kafka/keystore.p12
+            ssl.keystore.password: ${KAFKA_KEYSTORE_PASSWORD}
+            ssl.endpoint.identification.algorithm: ""

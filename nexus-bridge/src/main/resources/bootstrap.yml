@@ -1,0 +1,42 @@
+# nexus-bridge bootstrap 配置
+#
+# Phase 2 任务 #58：Nacos 服务发现 + 配置中心接入。
+# 设计文档 §3.3 / §4.2.2。bootstrap.yml 需 spring-cloud-starter-bootstrap 依赖启用
+# （已在 build.gradle 添加）。端口（8084，见 application.yml）与业务配置在
+# application.yml / Nacos nexus-bridge.yaml 中管理。
+#
+# namespace 默认 dev（开发环境），可通过 NEX_NACOS_NAMESPACE 环境变量覆盖。
+# group=NEXUS_GROUP 与 signing-service / wallet-service / gateway 保持一致，
+# 确保服务发现跨服务互通。shared-configs 拉取公共配置与 Sentinel 规则。
+
+spring:
+  application:
+    name: nexus-bridge
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:dev}
+  cloud:
+    nacos:
+      discovery:
+        server-addr: ${NEX_NACOS_SERVER:localhost:8848}
+        namespace: ${NEX_NACOS_NAMESPACE:dev}
+        group: ${NEX_NACOS_GROUP:NEXUS_GROUP}
+        cluster-name: ${NEX_NACOS_CLUSTER:DEFAULT}
+        # 服务元数据：版本、区域，用于灰度发布
+        metadata:
+          version: ${NEX_SERVICE_VERSION:1.4.0}
+          region: ${NEX_REGION:cn-east-1}
+      config:
+        server-addr: ${NEX_NACOS_SERVER:localhost:8848}
+        namespace: ${NEX_NACOS_NAMESPACE:dev}
+        group: ${NEX_NACOS_GROUP:NEXUS_GROUP}
+        # 共享配置（所有微服务共享）：数据源、日志、Sentinel 规则
+        shared-configs:
+          - data-id: nexus-common.yaml
+            group: NEXUS_GROUP
+            refresh: true
+          - data-id: nexus-sentinel-rules.yaml
+            group: NEXUS_GROUP
+            refresh: true
+        # 服务私有配置
+        file-extension: yaml
+        refresh-enabled: true

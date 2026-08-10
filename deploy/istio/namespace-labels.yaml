@@ -1,0 +1,51 @@
+# ============================================================================
+# NexusChain - 命名空间 sidecar 注入标签
+# ============================================================================
+# 用途：
+#   为 nexus 业务命名空间打上 istio-injection=enabled 标签，
+#   触发 Istio mutating webhook 自动注入 Envoy sidecar。
+#
+# 应用：
+#   kubectl apply -f deploy/istio/namespace-labels.yaml
+#
+# 验证：
+#   kubectl get namespace nexus --show-labels
+#   # 期望输出包含：istio-injection=enabled
+#
+# 注意：
+#   - 标签变更仅影响新创建的 Pod，存量 Pod 需滚动重启才能注入 sidecar
+#   - 重启命令：kubectl rollout restart deployment -n nexus
+#   - istio-system 命名空间不打注入标签（控制面不应被注入 sidecar）
+# ============================================================================
+---
+# -- nexus 业务命名空间：启用 sidecar 自动注入
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nexus
+  labels:
+    # -- 触发 Istio sidecar 自动注入
+    istio-injection: enabled
+    # -- 复用 Helm Chart 既有的 part-of 标签
+    app.kubernetes.io/part-of: nexus
+    # -- 标识 mesh 成员，便于 Kiali / Prometheus 按命名空间筛选
+    mesh: nexus-chain
+    # -- 共享 mesh 内服务发现
+    shared-mesh: "true"
+  annotations:
+    # -- sidecar 注入版本（与 istioctl version 对齐，便于升级追踪）
+    istio.io/rev: "1-22"
+    # -- 强制注入覆盖（即使命名空间标签被移除也保留注入）
+    #    仅在金丝雀升级 sidecar 版本时启用
+    # inject.istio.io/templates: "sidecar"
+---
+# -- istio-system 命名空间：控制面所在，不打注入标签
+#    此处仅声明，确保命名空间存在；实际由 istioctl install 创建
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: istio-system
+  labels:
+    app.kubernetes.io/name: istio
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/component: service-mesh

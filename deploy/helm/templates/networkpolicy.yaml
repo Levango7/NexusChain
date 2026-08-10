@@ -1,0 +1,70 @@
+{{/*
+NetworkPolicy 基线（零信任东西向流量）
+============================================================================
+默认拒绝命名空间内全部入站，再按需放行：
+  1) 命名空间内互访（gateway/bridge/signing/wallet 互相调用）
+  2) 外部经 ingress-nginx 到 gateway:8080
+说明：仅限制 Ingress；Egress 保持默认放行（镜像拉取 / 出站不受影响）。
+启用条件：.Values.global.networkPolicy.enabled
+*/}}
+{{- if .Values.global.networkPolicy.enabled }}
+---
+# 1) 命名空间级默认拒绝入站
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: {{ include "nexus-chain.namespace" . }}
+  labels:
+    {{- include "nexus-chain.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+# 2) 命名空间内互访放行（gateway/bridge/signing/wallet 互相调用）
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-intra-namespace
+  namespace: {{ include "nexus-chain.namespace" . }}
+  labels:
+    {{- include "nexus-chain.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ include "nexus-chain.namespace" . }}
+---
+# 3) 外部经 ingress-nginx 到 gateway:8080
+# ingress-nginx controller 默认部署在 ingress-nginx 命名空间，
+# pod 标签 app.kubernetes.io/name=ingress-nginx（按实际安装调整）。
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-to-gateway
+  namespace: {{ include "nexus-chain.namespace" . }}
+  labels:
+    {{- include "nexus-chain.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: nexus-gateway
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8080
+{{- end }}

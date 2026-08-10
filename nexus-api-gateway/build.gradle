@@ -1,0 +1,116 @@
+// nexus-api-gateway
+//
+// P3-T2：Spring Cloud Gateway 统一 API 入口。
+//
+// 定位：作为 NexusChain 平台对外唯一的 HTTP 入口，统一鉴权、限流、日志、CORS，
+// 并以路由 DSL 将请求转发至下游 4 个 Spring Boot 服务：
+//   * /api/v1/payments/** → nexus-gateway       (8080，支付网关)
+//   * /api/v1/bridge/**   → nexus-bridge        (8084，跨链桥)
+//   * /api/v1/signing/**  → nexus-signing-service (8082，签名服务)
+//   * /api/v1/wallet/**   → nexus-wallet-service  (8083，钱包服务)
+//
+// 技术栈：
+//   * Spring Boot 3.2.5 / Spring Cloud 2023.0.3 / Spring Cloud Alibaba 2023.0.1.0
+//   * Spring Cloud Gateway（基于 WebFlux + Reactor Netty，非阻塞响应式）
+//   * Nacos 服务发现 + 配置中心（与下游服务同 namespace/group）
+//   * Redis 令牌桶限流（spring-boot-starter-data-redis-reactive）
+//   * Actuator + Micrometer Prometheus 指标暴露
+//
+// 注意：Spring Cloud Gateway 必须运行在 WebFlux 之上，禁止引入 spring-boot-starter-web
+// （Tomcat 阻塞容器与 Reactive 编程模型冲突）。
+//
+// 详见 P3-T2 任务说明 / nexus-api-gateway/README.md。
+
+plugins {
+    id 'java'
+    id 'jacoco'
+    id 'org.springframework.boot' version '3.2.5'
+    id 'io.spring.dependency-management' version '1.1.4'
+}
+
+group = 'org.nexus'
+version = '2.0.0'
+
+java {
+    sourceCompatibility = 17
+    targetCompatibility = 17
+}
+
+repositories {
+    // SCA / Nacos / Sentinel 制品优先走阿里云镜像（与其他服务 build.gradle 对齐）
+    maven { url 'https://maven.aliyun.com/nexus/content/groups/public/' }
+    mavenCentral()
+}
+
+tasks.withType(JavaCompile) {
+    options.encoding = "UTF-8"
+}
+
+dependencies {
+    // === Spring Cloud Gateway（含 WebFlux + Reactor Netty） ===
+    // 引入 spring-cloud-starter-gateway 会传递引入 spring-boot-starter-webflux，
+    // 切勿再引入 spring-boot-starter-web（Tomcat），否则启动失败。
+    implementation 'org.springframework.cloud:spring-cloud-starter-gateway'
+
+    // === Spring Boot Actuator（健康检查 / 指标暴露） ===
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+
+    // === Reactive Redis（限流令牌桶基于 Redis Lua 脚本） ===
+    implementation 'org.springframework.boot:spring-boot-starter-data-redis-reactive'
+
+    // === Micrometer Tracing + Zipkin（与下游服务链路打通） ===
+    implementation 'io.micrometer:micrometer-tracing-bridge-brave'
+    implementation 'io.zipkin.reporter2:zipkin-reporter-brave'
+
+    // === Prometheus 指标暴露 ===
+    implementation 'io.micrometer:micrometer-registry-prometheus'
+
+    // === Spring Cloud BOM（管理 Gateway / LoadBalancer 版本） ===
+    implementation platform('org.springframework.cloud:spring-cloud-dependencies:2023.0.3')
+    // === Spring Cloud Alibaba BOM（管理 Nacos / Sentinel 版本） ===
+    implementation platform('com.alibaba.cloud:spring-cloud-alibaba-dependencies:2023.0.1.0')
+
+    // === Nacos 服务发现 + 配置中心（与下游服务一致） ===
+    implementation 'com.alibaba.cloud:spring-cloud-starter-alibaba-nacos-discovery'
+    implementation 'com.alibaba.cloud:spring-cloud-starter-alibaba-nacos-config'
+
+    // === Spring Cloud LoadBalancer（Gateway 路由 lb:// 协议依赖） ===
+    implementation 'org.springframework.cloud:spring-cloud-starter-loadbalancer'
+
+    // === bootstrap.yml 支持（Spring Cloud 2023.0.x 需显式引入） ===
+    implementation 'org.springframework.cloud:spring-cloud-starter-bootstrap'
+
+    // === 工具库 ===
+    implementation 'org.apache.commons:commons-lang3:3.12.0'
+    // HMAC 签名验证使用 JDK 内置 javax.crypto，无需额外依赖
+
+    // === 测试 ===
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation 'io.projectreactor:reactor-test'
+}
+
+// 独立部署的 Spring Boot 应用，启用 bootJar 产出可执行 fat jar。
+bootJar {
+    enabled = true
+    archiveClassifier = ''
+}
+
+jar {
+    enabled = true
+    archiveClassifier = 'plain'
+}
+
+test {
+    useJUnitPlatform()
+}
+
+jacoco {
+    toolVersion = "0.8.11"
+}
+
+jacocoTestReport {
+    reports {
+        xml.required = true
+        html.required = false
+    }
+}

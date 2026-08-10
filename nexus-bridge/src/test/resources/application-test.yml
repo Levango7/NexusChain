@@ -1,0 +1,49 @@
+# 集成测试 profile — H2 内存数据库 + Nacos / Sentinel / Seata 禁用
+#
+# 激活方式：@ActiveProfiles("test")
+# 集成测试环境无 Nacos / Sentinel Dashboard / Seata Server，禁用外部中间件
+# 以保证 ApplicationContext 可独立加载（与 nexus-wallet-service test profile 对齐）。
+# 注意：build.gradle 未引入 sentinel-datasource-nacos 依赖，主配置 application.yml
+# 的 spring.cloud.sentinel.datasource.ds1.nacos 会触发 NacosDataSource 类加载失败
+# （ClassNotFoundException），因此必须在测试 profile 禁用 Sentinel。
+spring:
+  datasource:
+    url: jdbc:h2:mem:nexus_bridge_test;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+  # === 集成测试禁用 Nacos / Sentinel（无外部依赖） ===
+  cloud:
+    nacos:
+      discovery:
+        enabled: false
+      config:
+        enabled: false
+    sentinel:
+      enabled: false
+
+# 测试环境禁用 Seata（无 Seata Server 可连接）
+seata:
+  enabled: false
+
+# 测试环境禁用 Zipkin 上报（无 Zipkin Server）
+management:
+  tracing:
+    sampling:
+      probability: 0.0
+
+# 测试用验证者公钥白名单（Ed25519 X.509 DER 十六进制）。
+# 签名者 ID 必须与条目完全一致（见 BridgeFullChainIntegrationTest 的 PUB_V1/PUB_V2）。
+# 仅用于测试；生产环境必须由治理层配置真实验证者公钥。
+nexus:
+  bridge:
+    validator-public-keys:
+      - 302a300506032b65700321004d0fe4ccc01fcf50880797f51265c843b096b85e65e2003f6ada9c41f6121f9f
+      - 302a300506032b6570032100cddc01e2bc06777cfabde2409c44a8b1f01396074aed624bada5e235f57e3653

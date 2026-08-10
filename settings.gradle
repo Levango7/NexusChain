@@ -1,0 +1,56 @@
+pluginManagement {
+    repositories {
+        gradlePluginPortal()
+        mavenCentral()
+        maven { url 'https://maven.aliyun.com/nexus/content/groups/public/' }
+    }
+}
+
+rootProject.name = 'nexus'
+
+// NexusChain 统一构建系统
+// 按依赖顺序包含所有子模块
+
+// === 基础协议层 ===
+include 'nexus-rpc-doc'
+
+// === 核心层 ===
+include ':nexus-core:nexus-core'
+
+// === SDK 层 ===
+
+include 'nexus-sdk:java'
+
+// === 服务层 ===
+// nexus-exchange-wallet 已在 v1.4.0 移除：signing/ 子包迁入 nexus-signing-service，
+// wallet/ 子包迁入 nexus-wallet-service。源码归档至 nexus-exchange-wallet.archived/。
+// nexus-consortium 作为 composite build 收编进统一构建（已升级 JDK 17，保留独立 settings.gradle 结构）。
+// 定位：与 nexus-core 并列的「联盟链 / 侧链」。双链设计为既定方案，详见 ARCHITECTURE.md。
+includeBuild 'nexus-consortium'
+include 'nexus-gateway'
+include 'nexus-bridge'
+
+// === 中间服务层（新增骨架） ===
+includeBuild 'nexus-settlement'
+includeBuild 'nexus-compliance'
+includeBuild 'nexus-analytics'
+includeBuild 'nexus-oracle'
+
+// === P2 方向5「签名服务独立部署 PoC」新增服务骨架 ===
+// Phase 1（#54）：signing-service 迁入实现代码，成为独立部署的 Spring Boot 应用。
+// 由于 signing-service 依赖 nexus-sdk:java（共享 DTO + Feign 接口骨架），而
+// nexus-sdk:java 又依赖 nexus-core:nexus-core（均使用 project() 引用根构建子模块），
+// signing-service / wallet-service 需作为根构建 include 子模块才能解析
+// project(':nexus-sdk:java')。bootJar 仍可产出独立部署的 fat jar，不影响独立部署能力。
+// 详见 .codeartsdoer/specs/microservice-phase1-2/design.md §5.5。
+include 'nexus-signing-service'
+include 'nexus-wallet-service'
+
+// === P3-T2：API Gateway 统一入口（Spring Cloud Gateway） ===
+// 作为 composite build 纳新增模块，不依赖 project(':nexus-sdk:java') 等根构建子模块，
+// 仅通过 Nacos 服务发现以 lb:// 协议路由至下游 4 个 Spring Boot 服务。
+includeBuild 'nexus-api-gateway'
+
+// === 工具层 ===
+// nexus-explorer (Node.js/React, 不纳入 Gradle)
+// nexus-devtools (Node.js/TypeScript, 不纳入 Gradle)

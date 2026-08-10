@@ -1,0 +1,109 @@
+syntax = "proto3";
+package org.conpay.protobuf.tcp.command;
+option java_outer_classname = "PaymentModel";
+option optimize_for = SPEED;
+
+// ==============================================
+// ConPay Payment Extension Payload Definitions
+// ==============================================
+
+// 支付通道开启 payload
+message ChannelOpenPayload {
+    bytes channel_id = 1;           // 通道唯一标识（32字节哈希）
+    bytes counterparty = 2;         // 对方公钥哈希（20字节）
+    uint64 funding_amount = 3;      // 总锁定资金
+    uint32 lock_time_blocks = 4;    // 锁定区块数
+    uint64 nonce = 5;               // 通道 nonce
+}
+
+// 支付通道更新 payload（链下状态上链）
+message ChannelUpdatePayload {
+    bytes channel_id = 1;           // 通道标识
+    uint64 balance_1 = 2;           // 参与方1余额
+    uint64 balance_2 = 3;           // 参与方2余额
+    uint64 nonce = 4;               // 通道 nonce
+    bytes signature_1 = 5;          // 参与方1签名
+    bytes signature_2 = 6;          // 参与方2签名
+}
+
+// 支付通道关闭 payload
+message ChannelClosePayload {
+    bytes channel_id = 1;           // 通道标识
+    uint64 final_balance_1 = 2;     // 最终余额1
+    uint64 final_balance_2 = 3;     // 最终余额2
+    bytes signature_1 = 4;          // 参与方1签名
+    bytes signature_2 = 5;          // 参与方2签名
+    bool disputed = 6;             // 是否为争议关闭
+}
+
+// 批量转账 payload
+message BatchTransferPayload {
+    message TransferItem {
+        bytes to_pubkey_hash = 1;   // 收款人公钥哈希（20字节）
+        uint64 amount = 2;          // 转账金额
+    }
+    repeated TransferItem items = 1; // 转账列表
+    uint32 total_count = 2;         // 总数
+    uint64 total_amount = 3;         // 总金额
+}
+
+// 稳定币铸造 payload
+message MintStableCoinPayload {
+    bytes position_id = 1;          // 仓位唯一标识
+    uint64 collateral_amount = 2;   // 抵押 CPAY 数量
+    uint64 minted_amount = 3;       // 铸造稳定币数量
+    uint32 collateral_ratio = 4;    // 当前抵押率（百分比 * 100）
+    bytes price_oracle_sig = 5;     // 预言机价格签名
+}
+
+// 稳定币赎回 payload
+message RedeemStableCoinPayload {
+    bytes position_id = 1;          // 仓位标识
+    uint64 redeem_amount = 2;       // 赎回稳定币数量
+    bytes price_oracle_sig = 3;     // 预言机价格签名
+}
+
+// 跨链桥锁定 payload
+message BridgeLockPayload {
+    string source_chain = 1;       // 源链标识
+    string target_chain = 2;       // 目标链标识
+    bytes recipient = 3;           // 目标链收款地址
+    uint64 amount = 4;             // 锁定金额
+    bytes bridge_tx_id = 5;         // 桥交易唯一标识
+}
+
+// 跨链桥铸造 payload
+message BridgeMintPayload {
+    bytes bridge_tx_id = 1;        // 对应的桥交易标识
+    string source_chain = 2;       // 源链标识
+    bytes recipient = 3;           // 目标链收款地址
+    uint64 amount = 4;              // 铸造金额
+    repeated bytes validator_signatures = 5; // 验证者签名列表
+    repeated bytes validator_pubkeys = 6;    // 验证者公钥列表
+}
+
+// 跨链桥销毁 payload
+message BridgeBurnPayload {
+    bytes bridge_tx_id = 1;        // 桥交易标识
+    string target_chain = 2;       // 目标链标识
+    uint64 amount = 3;              // 销毁金额
+    bytes unlock_recipient = 4;     // 解锁后的收款地址
+}
+
+// DID 身份注册 payload
+message IdentityRegisterPayload {
+    string did = 1;                // 去中心化标识符
+    bytes public_key = 2;          // 公钥
+    map<string, string> attributes = 3; // 自定义属性
+    uint64 expires_at = 4;         // 过期时间戳
+}
+
+// 订阅支付授权 payload
+message SubscriptionAuthPayload {
+    bytes subscription_id = 1;     // 订阅唯一标识
+    bytes merchant_pubkey_hash = 2; // 商户公钥哈希
+    uint64 max_amount = 3;         // 单次最大扣款额
+    uint32 interval_blocks = 4;    // 扣款间隔（区块数）
+    uint32 duration = 5;           // 订阅总时长（区块数）
+    uint64 start_block = 6;        // 开始区块高度
+}

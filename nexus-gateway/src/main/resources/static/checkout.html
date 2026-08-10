@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NexusChain 收银台</title>
+    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .checkout-card {
+            background: #fff;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.15);
+            width: 100%;
+            max-width: 420px;
+            padding: 40px 32px;
+            text-align: center;
+        }
+        .logo { font-size: 24px; font-weight: 700; color: #4f46e5; margin-bottom: 4px; }
+        .logo span { font-size: 12px; color: #9ca3af; font-weight: 400; margin-left: 6px; }
+        .subtitle { color: #6b7280; font-size: 14px; margin-bottom: 28px; }
+        .amount-section { margin-bottom: 24px; }
+        .amount { font-size: 36px; font-weight: 700; color: #111827; }
+        .amount .unit { font-size: 16px; color: #6b7280; margin-left: 4px; }
+        .order-info { font-size: 12px; color: #9ca3af; margin-top: 8px; }
+        .qr-section { margin: 24px 0; }
+        .qr-section canvas { border: 8px solid #f3f4f6; border-radius: 12px; }
+        .address-box {
+            background: #f9fafb;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 12px;
+            margin: 16px 0;
+            word-break: break-all;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            color: #374151;
+        }
+        .address-label { font-size: 12px; color: #6b7280; margin-bottom: 6px; text-align: left; }
+        .input-group { margin: 20px 0; text-align: left; }
+        .input-group label { display: block; font-size: 13px; color: #374151; margin-bottom: 6px; font-weight: 500; }
+        .input-group input {
+            width: 100%;
+            padding: 12px 14px;
+            border: 1px solid #d1d5db;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.2s;
+        }
+        .input-group input:focus { outline: none; border-color: #4f46e5; box-shadow: 0 0 0 3px rgba(79,70,229,0.1); }
+        .btn-pay {
+            width: 100%;
+            padding: 14px;
+            background: #4f46e5;
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+            margin-top: 8px;
+        }
+        .btn-pay:hover { background: #4338ca; }
+        .btn-pay:disabled { background: #9ca3af; cursor: not-allowed; }
+        .status-bar {
+            margin-top: 20px;
+            padding: 12px;
+            border-radius: 8px;
+            font-size: 13px;
+            display: none;
+        }
+        .status-bar.pending { display: block; background: #fef3c7; color: #92400e; }
+        .status-bar.success { display: block; background: #d1fae5; color: #065f46; }
+        .status-bar.error { display: block; background: #fee2e2; color: #991b1b; }
+        .status-bar.info { display: block; background: #dbeafe; color: #1e40af; }
+        .timer { font-size: 12px; color: #9ca3af; margin-top: 16px; }
+        .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #92400e; border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: middle; margin-right: 6px; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+    <div class="checkout-card">
+        <div class="logo">NexusChain<span>CASHIER</span></div>
+        <div class="subtitle">安全、快速的区块链支付</div>
+
+        <!-- Loading state -->
+        <div id="loadingSection">
+            <div class="status-bar info">正在加载订单信息...</div>
+        </div>
+
+        <!-- Main checkout content -->
+        <div id="checkoutSection" class="hidden">
+            <div class="amount-section">
+                <div class="amount"><span id="amountValue">0</span><span class="unit" id="tokenSymbol">NEX</span></div>
+                <div class="order-info">订单号: <span id="orderNo">-</span></div>
+                <div class="order-info" id="descLine"></div>
+            </div>
+
+            <div class="qr-section">
+                <canvas id="qrCanvas"></canvas>
+            </div>
+
+            <div class="address-label">收款地址</div>
+            <div class="address-box" id="payeeAddress">-</div>
+
+            <div class="input-group">
+                <label for="payerInput">您的钱包地址</label>
+                <input type="text" id="payerInput" placeholder="输入您的 NEX 钱包地址">
+            </div>
+
+            <button class="btn-pay" id="payBtn" onclick="confirmPay()">确认支付</button>
+
+            <div class="status-bar" id="statusBar"></div>
+            <div class="timer" id="timerLine"></div>
+        </div>
+
+        <!-- Error state -->
+        <div id="errorSection" class="hidden">
+            <div class="status-bar error" id="errorMsg">订单不存在或已过期</div>
+        </div>
+    </div>
+
+<script>
+const API_BASE = window.location.origin;
+let checkoutToken = null;
+let orderData = null;
+let pollInterval = null;
+let expiryTimer = null;
+
+// Parse token from URL
+(function init() {
+    const params = new URLSearchParams(window.location.search);
+    checkoutToken = params.get('token');
+    if (!checkoutToken) {
+        showError('缺少支付令牌参数');
+        return;
+    }
+    loadOrder();
+})();
+
+async function loadOrder() {
+    try {
+        // Use the checkout token to get order info via a dedicated API
+        const res = await fetch(API_BASE + '/api/v1/checkout/info?token=' + encodeURIComponent(checkoutToken));
+        if (!res.ok) {
+            showError('订单不存在或已过期');
+            return;
+        }
+        orderData = await res.json();
+        renderOrder();
+    } catch (e) {
+        showError('网络错误，请刷新重试');
+    }
+}
+
+function renderOrder() {
+    document.getElementById('loadingSection').classList.add('hidden');
+    document.getElementById('checkoutSection').classList.remove('hidden');
+
+    document.getElementById('amountValue').textContent = orderData.amount;
+    document.getElementById('tokenSymbol').textContent = orderData.tokenSymbol || 'NEX';
+    document.getElementById('orderNo').textContent = orderData.orderNo;
+    document.getElementById('payeeAddress').textContent = orderData.payeeAddress;
+
+    if (orderData.description) {
+        document.getElementById('descLine').textContent = orderData.description;
+    }
+
+    // Generate QR code with payment info
+    const qrData = 'nexus:' + orderData.payeeAddress + '?amount=' + orderData.amount + '&token=' + checkoutToken;
+    QRCode.toCanvas(document.getElementById('qrCanvas'), qrData, { width: 180, margin: 1 }, function(err) {
+        if (err) console.error('QR generation failed:', err);
+    });
+
+    // Start expiry countdown
+    if (orderData.expiresAt) {
+        startCountdown(new Date(orderData.expiresAt));
+    }
+
+    // Start polling payment status
+    startPolling();
+}
+
+function startCountdown(expiresAt) {
+    expiryTimer = setInterval(function() {
+        const remaining = expiresAt - new Date();
+        if (remaining <= 0) {
+            clearInterval(expiryTimer);
+            document.getElementById('timerLine').textContent = '订单已过期';
+            document.getElementById('payBtn').disabled = true;
+            setStatus('error', '订单已过期，请返回商户重新下单');
+            return;
+        }
+        const mins = Math.floor(remaining / 60000);
+        const secs = Math.floor((remaining % 60000) / 1000);
+        document.getElementById('timerLine').textContent = '剩余支付时间: ' + mins + '分' + secs + '秒';
+    }, 1000);
+}
+
+function startPolling() {
+    pollInterval = setInterval(async function() {
+        try {
+            const res = await fetch(API_BASE + '/api/v1/checkout/status?token=' + encodeURIComponent(checkoutToken));
+            if (!res.ok) return;
+            const data = await res.json();
+            if (data.status === 'PAID') {
+                clearInterval(pollInterval);
+                clearInterval(expiryTimer);
+                setStatus('success', '支付成功！交易哈希: ' + (data.chainTxHash || '-'));
+                document.getElementById('payBtn').disabled = true;
+                document.getElementById('payBtn').textContent = '已完成';
+            }
+        } catch (e) { /* ignore polling errors */ }
+    }, 5000);
+}
+
+async function confirmPay() {
+    const payerAddress = document.getElementById('payerInput').value.trim();
+    if (!payerAddress) {
+        setStatus('error', '请输入您的钱包地址');
+        return;
+    }
+
+    const btn = document.getElementById('payBtn');
+    btn.disabled = true;
+    btn.textContent = '处理中...';
+    setStatus('pending', '<span class="spinner"></span>正在提交支付...');
+
+    try {
+        const res = await fetch(API_BASE + '/api/v1/orders/' + orderData.id + '/pay', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ payerAddress: payerAddress })
+        });
+        const result = await res.json();
+
+        if (result.status === 'PENDING' || result.status === 'PAYING') {
+            setStatus('pending', '<span class="spinner"></span>等待链上确认，请向收款地址转账 ' + orderData.amount + ' NEX');
+        } else if (result.status === 'FAILED') {
+            setStatus('error', result.message || '支付失败');
+            btn.disabled = false;
+            btn.textContent = '确认支付';
+        }
+    } catch (e) {
+        setStatus('error', '网络错误，请重试');
+        btn.disabled = false;
+        btn.textContent = '确认支付';
+    }
+}
+
+function setStatus(type, html) {
+    const bar = document.getElementById('statusBar');
+    bar.className = 'status-bar ' + type;
+    bar.innerHTML = html;
+}
+
+function showError(msg) {
+    document.getElementById('loadingSection').classList.add('hidden');
+    document.getElementById('errorSection').classList.remove('hidden');
+    document.getElementById('errorMsg').textContent = msg;
+}
+</script>
+</body>
+</html>

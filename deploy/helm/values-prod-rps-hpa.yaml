@@ -1,0 +1,65 @@
+# NexusChain prod 环境 RPS HPA overlay
+# ============================================================================
+# 用法：helm upgrade --install nexus-chain deploy/helm/ \
+#        -f deploy/helm/values-prod.yaml \
+#        -f deploy/helm/values-prod-rps-hpa.yaml \
+#        -n nexus
+#
+# 作用：在 prod 环境基础上启用基于 RPS 的自定义指标 HPA（与 CPU/内存 HPA 互补）
+# 依赖：Prometheus Adapter 已部署（deploy/monitoring/prometheus-adapter-rules.yaml）
+# ============================================================================
+global:
+  rpsHpa:
+    # -- 启用 RPS 自定义指标 HPA（全局开关）
+    enabled: true
+
+# -- 各服务 RPS HPA 配置（覆盖默认值）
+#    targetRPS：每 Pod 目标 RPS，达到则触发扩容
+#    minReplicas/maxReplicas：与 CPU/内存 HPA 保持一致
+#    scaleUpStabilizationSeconds：扩容稳定窗口（60s 快速响应）
+#    scaleDownStabilizationSeconds：缩容稳定窗口（300s 避免抖动）
+nexus-gateway:
+  rpsHpa:
+    enabled: true
+    targetRPS: 1000
+    minReplicas: 3
+    maxReplicas: 10
+    scaleUpStabilizationSeconds: 60
+    scaleDownStabilizationSeconds: 300
+    scaleUpPodsPerPeriod: 4
+    scaleDownPodsPerPeriod: 1
+
+nexus-bridge:
+  rpsHpa:
+    enabled: true
+    targetRPS: 1000
+    minReplicas: 3
+    maxReplicas: 10
+    scaleUpStabilizationSeconds: 60
+    scaleDownStabilizationSeconds: 300
+    scaleUpPodsPerPeriod: 4
+    scaleDownPodsPerPeriod: 1
+
+nexus-signing-service:
+  rpsHpa:
+    enabled: true
+    # 签名服务 CPU 密集，单 Pod 承载能力较低，目标 RPS 适当降低
+    targetRPS: 500
+    minReplicas: 3
+    maxReplicas: 10
+    scaleUpStabilizationSeconds: 60
+    scaleDownStabilizationSeconds: 300
+    scaleUpPodsPerPeriod: 4
+    scaleDownPodsPerPeriod: 1
+
+nexus-wallet-service:
+  rpsHpa:
+    enabled: true
+    # 钱包服务涉及 I/O 密集（DB/Redis），目标 RPS 适当降低
+    targetRPS: 800
+    minReplicas: 3
+    maxReplicas: 10
+    scaleUpStabilizationSeconds: 60
+    scaleDownStabilizationSeconds: 300
+    scaleUpPodsPerPeriod: 4
+    scaleDownPodsPerPeriod: 1

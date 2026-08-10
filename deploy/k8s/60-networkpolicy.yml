@@ -1,0 +1,80 @@
+# ============================================================================
+# NexusChain 网络策略基线（零信任东西向流量）
+# 默认拒绝命名空间内全部入站，再按需放行：
+#   1) 命名空间内互访（gateway↔core↔postgres↔redis）
+#   2) 外部经 ingress-nginx 到 gateway:8080
+#   3) 外部验证者到 core P2P:9585（按需放开 CIDR）
+# 说明：仅限制 Ingress；Egress 保持默认放行（镜像拉取 / 出站 P2P 不受影响）。
+#       K8s 自 1.21 起为命名空间自动打 label kubernetes.io/metadata.name。
+# ============================================================================
+---
+# 1) 命名空间级默认拒绝入站
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: nexus
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+# 2) 命名空间内互访放行
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-intra-namespace
+  namespace: nexus
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: nexus
+---
+# 3) 外部经 ingress-nginx 到 gateway:8080
+# ingress-nginx controller 默认部署在 ingress-nginx 命名空间，
+# pod 标签为 app.kubernetes.io/name=ingress-nginx（按实际安装调整）。
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-to-gateway
+  namespace: nexus
+spec:
+  podSelector:
+    matchLabels:
+      app: nexus-gateway
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# 4) 外部验证者 → core P2P:9585（按需放开）
+# ⚠️ PoA 验证者为集群外节点，默认拒绝会阻断共识。请按真实验证者 CIDR 收紧，
+#    不要长期 0.0.0.0/0 全开。示例占位，取消注释并替换 CIDR 后生效。
+# apiVersion: networking.k8s.io/v1
+# kind: NetworkPolicy
+# metadata:
+#   name: allow-core-p2p-external
+#   namespace: nexus
+# spec:
+#   podSelector:
+#     matchLabels:
+#       app: nexus-core
+#   policyTypes: [Ingress]
+#   ingress:
+#     - from:
+#         - ipBlock:
+#             cidr: 203.0.113.0/24      # TODO: 替换为真实验证者 CIDR
+#       ports:
+#         - protocol: TCP
+#           port: 9585

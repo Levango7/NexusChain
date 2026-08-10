@@ -1,0 +1,303 @@
+# ============================================================================
+# NexusChain - Kafka 集群 CRD（Strimzi Kafka CRD）
+# ============================================================================
+# 任务：P3-T4 K8s 部署 Kafka 集群
+# CRD: kafka.strimzi.io/v1beta2 / Kafka
+# 部署：kubectl apply -f deploy/kafka/kafka-cluster.yaml -n kafka
+#
+# 拓扑：
+#   Kafka Broker  x3（PVC 100Gi / broker，JVM heap 2Gi）
+#   ZooKeeper     x3（PVC 10Gi / node，JVM heap 1Gi）
+# 监听器：
+#   plain    9092  集群内明文（nexus 业务 Pod 通过此端口访问）
+#   tls      9093  集群内 TLS（KafkaUser mTLS 认证）
+#   external 9094  NodePort 32000（运维/调试，生产建议关闭或加白名单）
+# 关键策略：
+#   - topic 自动创建禁用（auto.create.topics.enable=false），统一用 KafkaTopic CRD 管理
+#   - 机架感知（rackAwareness）开启，broker 跨机架分布
+#   - 滚动更新策略：IfUnhealthy
+# ============================================================================
+
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: Kafka
+metadata:
+  name: nexus-kafka
+  namespace: kafka
+  labels:
+    app.kubernetes.io/name: nexus-kafka
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/managed-by: strimzi-operator
+spec:
+  # -- Kafka 集群版本（Strimzi 0.40 默认 Kafka 3.7.x）
+  kafka:
+    version: 3.7.0
+    # -- 副本数：3 broker，满足 RF=3 的最小法定多数
+    replicas: 3
+    # -- 机架感知：通过节点标签 topology.kubernetes.io/zone 跨机架分布
+    rackConfig:
+      topologyKey: topology.kubernetes.io/zone
+    # -- 监听器配置
+    listeners:
+      # -- 集群内明文监听器（业务服务通过 nexus-kafka-kafka-bootstrap:9092 访问）
+      - name: plain
+        port: 9092
+        type: internal
+        tls: false
+        configuration:
+          useBrokerDnsDomain: true
+      # -- 集群内 TLS 监听器（KafkaUser mTLS，用于签名/钱包等敏感服务）
+      - name: tls
+        port: 9093
+        type: internal
+        tls: true
+        configuration:
+          useBrokerDnsDomain: true
+      # -- 外部 NodePort 监听器（运维/调试，生产建议关闭或加 NetworkPolicy 白名单）
+      - name: external
+        port: 9094
+        type: nodeport
+        tls: false
+        configuration:
+          # -- 固定 NodePort，便于防火墙放行
+          nodePort: 32000
+          # -- 广告地址使用节点主机名（broker 跨节点）
+          preferredNodePortAddressType: InternalDNS
+    # -- 监控：JMX Exporter 暴露 broker 指标到 9404
+    jmxOptions: {}
+    # -- 资源配置：2Gi heap + 容器 4Gi 内存上限
+    resources:
+      requests:
+        cpu: "1"
+        memory: 3Gi
+      limits:
+        cpu: "2"
+        memory: 4Gi
+    # -- JVM 堆内存：2Gi per broker（-Xms=-Xmx=2Gi）
+    jvmOptions:
+      "-Xmx": "2g"
+      "-Xms": "2g"
+      # -- GC：G1GC（Kafka 3.7 默认 G1，显式声明便于调优）
+      "-XX:+UseG1GC": ""
+      "-XX:MaxGCPauseMillis": "100"
+    # -- 持久化存储：每 broker 100Gi PVC，StorageClass fast-ssd
+    storage:
+      type: jbod
+      volumes:
+        - id: 0
+          type: persistent-claim
+          size: 100Gi
+          deleteClaim: false
+          # -- 生产 StorageClass；dev 可覆盖为 standard
+          class: fast-ssd
+    # -- 授权：simple ACL（配合 KafkaUser CRD 授权）
+    authorization:
+      type: simple
+      acls:
+        # -- Topic Operator 自身所需 ACL
+        - resource:
+            type: topic
+            name: "*"
+          operations:
+            - All
+        - resource:
+            type: group
+            name: "*"
+          operations:
+            - All
+    # -- Broker 配置覆盖
+    config:
+      # -- 禁用 topic 自动创建：统一用 KafkaTopic CRD 管理
+      auto.create.topics.enable: "false"
+      # -- 禁用 topic 自动删除：避免误删，用 CRD 显式删除
+      auto.delete.topics.enable: "false"
+      # -- 默认副本因子（仅对未显式指定 RF 的 topic 生效，因自动创建已禁用，此处为防御）
+      default.replication.factor: 3
+      # -- 最小同步副本：写入需至少 2 副本确认（RF=3 时 tolerates 1 故障）
+      min.insync.replicas: 2
+      # -- 副本拉取最大字节：默认 1MB，支付事件 payload 较大时调高
+      replica.fetch.max.bytes: 10485760
+      # -- 日志段大小：1GB（默认 1GB，显式声明）
+      log.segment.bytes: 1073741824
+      # -- 日志保留检查间隔：5 分钟
+      log.retention.check.interval.ms: "300000"
+      # -- offset topic 副本因子
+      offsets.topic.replication.factor: 3
+      # -- transaction state log 副本因子
+      transaction.state.log.replication.factor: 3
+      transaction.state.log.min.isr: 2
+      # -- 分区再均衡默认：禁用自动（用 KafkaRebalance CRD 触发）
+      # -- num.partitions 仅在自动创建开启时生效，此处保留默认 1
+      num.partitions: 1
+      # -- broker 端连接数上限（防过载）
+      queued.max.requests: 500
+      # -- 网络线程数（默认 3，broker CPU >= 2 核时调高）
+      num.network.threads: 5
+      num.io.threads: 8
+    # -- 监控指标暴露
+    metricsConfig:
+      type: jmxPrometheusExporter
+      valueFrom:
+        configMapKeyRef:
+          name: nexus-kafka-metrics
+          key: kafka-metrics-config.yml
+    # -- Pod 模板：安全上下文 + 反亲和
+    template:
+      pod:
+        metadata:
+          labels:
+            app.kubernetes.io/part-of: nexus
+        # -- 优雅停机：等待 consumer rebalance
+        terminationGracePeriodSeconds: 120
+        # -- 安全上下文
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          fsGroup: 1000
+          seccompProfile:
+            type: RuntimeDefault
+        # -- 反亲和：broker 跨节点分布
+        affinity:
+          podAntiAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+              - labelSelector:
+                  matchExpressions:
+                    - key: app.kubernetes.io/name
+                      operator: In
+                      values:
+                        - nexus-kafka
+                topologyKey: kubernetes.io/hostname
+
+  # -- ZooKeeper 集群：3 节点
+  zookeeper:
+    version: 3.8.3
+    replicas: 3
+    resources:
+      requests:
+        cpu: "0.5"
+        memory: 1Gi
+      limits:
+        cpu: "1"
+        memory: 2Gi
+    jvmOptions:
+      "-Xmx": "1g"
+      "-Xms": "1g"
+      "-XX:+UseG1GC": ""
+    # -- ZK 持久化：每节点 10Gi
+    storage:
+      type: persistent-claim
+      size: 10Gi
+      deleteClaim: false
+      class: fast-ssd
+    # -- ZK 指标暴露
+    metricsConfig:
+      type: jmxPrometheusExporter
+      valueFrom:
+        configMapKeyRef:
+          name: nexus-kafka-metrics
+          key: zookeeper-metrics-config.yml
+    template:
+      pod:
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          fsGroup: 1000
+          seccompProfile:
+            type: RuntimeDefault
+        affinity:
+          podAntiAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+              - labelSelector:
+                  matchExpressions:
+                    - key: app.kubernetes.io/name
+                      operator: In
+                      values:
+                        - nexus-kafka-zookeeper
+                topologyKey: kubernetes.io/hostname
+
+  # -- Entity Operator：Topic Operator + User Operator
+  #    Topic Operator 同步 KafkaTopic CRD <-> Kafka 集群内 topic
+  #    User Operator 同步 KafkaUser CRD <-> Kafka ACL
+  entityOperator:
+    topicOperator:
+      topicOperationTimeoutMs: 60000
+      reconciliationIntervalMs: 30000
+      resources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          cpu: 500m
+          memory: 512Mi
+    userOperator:
+      reconciliationIntervalMs: 30000
+      resources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          cpu: 500m
+          memory: 512Mi
+
+  # -- Kafka Exporter：暴露消费者组 lag 指标（见 kafka-monitoring.yaml）
+  kafkaExporter:
+    topicRegex: ".*"
+    groupRegex: ".*"
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+    logging:
+      type: inline
+      loggers:
+        rootLogger.level: INFO
+
+---
+# ConfigMap：Kafka / ZooKeeper JMX Exporter 指标规则
+# Prometheus 通过 ServiceMonitor 抓取 9404 端口
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nexus-kafka-metrics
+  namespace: kafka
+  labels:
+    app.kubernetes.io/name: nexus-kafka
+    app.kubernetes.io/part-of: nexus
+data:
+  kafka-metrics-config.yml: |
+    lowercaseOutputName: true
+    rules:
+      # -- Kafka broker 核心指标
+      - pattern: kafka.server<type=(BrokerTopicMetrics), name=(MessagesInPerSec|BytesInPerSec|BytesOutPerSec)><>(OneMinuteRate|Count)
+        name: kafka_server_brokertopicmetrics_$2_$3
+        type: GAUGE
+        labels:
+          topic: "$1"
+      - pattern: kafka.server<type=(ReplicaManager), name=(UnderReplicatedPartitions|UnderMinIsrPartitionCount)><>Value
+        name: kafka_server_replicamanager_$2
+        type: GAUGE
+      - pattern: kafka.controller<type=(KafkaController), name=(ActiveControllerCount)><>Value
+        name: kafka_controller_activecontrollercount
+        type: GAUGE
+      - pattern: kafka.network<type=(RequestMetrics), name=(RequestsPerSec)><>(OneMinuteRate|Count)
+        name: kafka_network_requestmetrics_requestspersec_$3
+        type: GAUGE
+        labels:
+          request: "$1"
+      # -- 通用兜底
+      - pattern: ".*"
+  zookeeper-metrics-config.yml: |
+    lowercaseOutputName: true
+    rules:
+      - pattern: org.apache.ZooKeeperService<name0=ReplicatedServer_id(\d+)><>(QuorumSize|TickTime)
+        name: zookeeper_$2
+        type: GAUGE
+      - pattern: org.apache.ZooKeeperService<name0=ReplicatedServer_id(\d+), name1=replica.(\d+)><>(PendingRevalidationCount)
+        name: zookeeper_replica_$3
+        type: GAUGE
+      - pattern: ".*"

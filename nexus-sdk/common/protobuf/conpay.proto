@@ -1,0 +1,358 @@
+syntax = "proto3";
+
+package conpay;
+
+option java_package = "org.conpay.sdk.proto";
+option java_multiple_files = true;
+option go_package = "conpay/common/protobuf;conpaypb";
+
+// ConPay SDK 统一协议定义
+// 项目名：ConPay，代币符号：CPAY
+
+// ============================================================
+// 基础类型
+// ============================================================
+
+// 钱包信息
+message WalletInfo {
+  string address = 1;
+  string private_key = 2;
+  string public_key = 3;
+}
+
+// 交易对象
+message Transaction {
+  string from = 1;
+  string to = 2;
+  string value = 3;          // 最小单位 (wei)
+  string token = 4;          // 代币符号，CPAY 或合约地址
+  string gas_limit = 5;
+  string gas_price = 6;
+  string nonce = 7;
+  bytes data = 8;            // 合约调用数据
+}
+
+// 转账参数
+message TransferParams {
+  string from = 1;
+  string to = 2;
+  string amount = 3;
+  string token = 4;
+}
+
+// 交易回执
+message TransactionReceipt {
+  string transaction_hash = 1;
+  string block_hash = 2;
+  int64 block_number = 3;
+  string status = 4;         // "success" | "failed"
+  string gas_used = 5;
+  repeated TransactionLog logs = 6;
+}
+
+// 交易日志
+message TransactionLog {
+  string address = 1;
+  repeated string topics = 2;
+  bytes data = 3;
+  int32 log_index = 4;
+}
+
+// 区块信息
+message Block {
+  int64 number = 1;
+  string hash = 2;
+  string parent_hash = 3;
+  int64 timestamp = 4;
+  repeated string transactions = 5;
+  string gas_used = 6;
+  string gas_limit = 7;
+}
+
+// ============================================================
+// 支付通道
+// ============================================================
+
+// 余额证明
+message BalanceProof {
+  string channel_id = 1;
+  string balance = 2;
+  int64 nonce = 3;
+  string signature = 4;
+}
+
+// 支付通道信息
+message ChannelInfo {
+  string channel_id = 1;
+  string sender = 2;
+  string recipient = 3;
+  string deposit = 4;
+  string status = 5;        // "open" | "closed" | "pending" | "disputed"
+  int64 open_block = 6;
+}
+
+// 开启通道请求
+message OpenChannelRequest {
+  string sender = 1;
+  string recipient = 2;
+  string deposit = 3;
+}
+
+// 开启通道响应
+message OpenChannelResponse {
+  string channel_id = 1;
+  string tx_hash = 2;
+}
+
+// ============================================================
+// 稳定币
+// ============================================================
+
+// 铸造请求
+message MintRequest {
+  string minter = 1;
+  string amount = 2;
+  string collateral = 3;
+}
+
+// 销毁请求
+message BurnRequest {
+  string burner = 1;
+  string amount = 2;
+}
+
+// 稳定币信息
+message StableCoinInfo {
+  string total_supply = 1;
+  string price = 2;         // 以美元计 (乘以 10^18)
+  string collateral_ratio = 3;
+}
+
+// ============================================================
+// 跨链桥
+// ============================================================
+
+// 跨链锁定请求
+message BridgeLockRequest {
+  string from = 1;
+  string token = 2;
+  string amount = 3;
+  string target_chain = 4;
+  string target_address = 5;
+}
+
+// 跨链解锁请求
+message BridgeUnlockRequest {
+  string to = 1;
+  string token = 2;
+  string amount = 3;
+  string source_chain = 4;
+  string proof = 5;
+}
+
+// 跨链交易状态
+message BridgeStatus {
+  string tx_hash = 1;
+  string status = 2;        // "pending" | "confirmed" | "completed" | "failed"
+  string source_chain = 3;
+  string target_chain = 4;
+  int64 confirmations = 5;
+}
+
+// ============================================================
+// 核心服务 - RPC 方法定义
+// ============================================================
+
+// 钱包服务
+service WalletService {
+  // 创建新钱包
+  rpc Create(CreateWalletRequest) returns (WalletInfo);
+  // 从私钥导入钱包
+  rpc ImportFromPrivateKey(ImportRequest) returns (WalletInfo);
+  // 查询余额
+  rpc GetBalance(BalanceRequest) returns (BalanceResponse);
+  // 验证地址
+  rpc ValidateAddress(AddressRequest) returns (ValidateResponse);
+}
+
+// 交易服务
+service TransactionService {
+  // 构建转账交易
+  rpc BuildTransfer(TransferParams) returns (Transaction);
+  // 签名交易
+  rpc SignTransaction(SignRequest) returns (SignResponse);
+  // 广播交易
+  rpc BroadcastTransaction(BroadcastRequest) returns (BroadcastResponse);
+  // 查询交易回执
+  rpc GetTransactionReceipt(ReceiptRequest) returns (TransactionReceipt);
+  // 估算 Gas
+  rpc EstimateGas(Transaction) returns (GasEstimate);
+}
+
+// 支付通道服务
+service PaymentChannelService {
+  // 开启通道
+  rpc OpenChannel(OpenChannelRequest) returns (OpenChannelResponse);
+  // 关闭通道
+  rpc CloseChannel(CloseChannelRequest) returns (CloseChannelResponse);
+  // 更新通道状态
+  rpc UpdateChannelState(UpdateChannelRequest) returns (UpdateChannelResponse);
+  // 查询通道信息
+  rpc GetChannelInfo(ChannelInfoRequest) returns (ChannelInfo);
+  // 发起争议
+  rpc ChallengeChannel(ChallengeRequest) returns (ChallengeResponse);
+}
+
+// 稳定币服务
+service StableCoinService {
+  // 铸造稳定币
+  rpc Mint(MintRequest) returns (MintResponse);
+  // 销毁稳定币
+  rpc Burn(BurnRequest) returns (BurnResponse);
+  // 稳定币转账
+  rpc Transfer(StableCoinTransferRequest) returns (StableCoinTransferResponse);
+  // 查询稳定币信息
+  rpc GetInfo(StableCoinInfoRequest) returns (StableCoinInfo);
+}
+
+// 跨链桥服务
+service BridgeService {
+  // 锁定资产（发起跨链）
+  rpc Lock(BridgeLockRequest) returns (BridgeLockResponse);
+  // 解锁资产（完成跨链接收）
+  rpc Unlock(BridgeUnlockRequest) returns (BridgeUnlockResponse);
+  // 查询跨链状态
+  rpc GetStatus(BridgeStatusRequest) returns (BridgeStatus);
+  // 查询支持的链
+  rpc GetSupportedChains(SupportedChainsRequest) returns (SupportedChainsResponse);
+  // 查询跨链手续费
+  rpc GetFee(BridgeFeeRequest) returns (BridgeFeeResponse);
+}
+
+// ============================================================
+// 请求/响应消息（辅助）
+// ============================================================
+
+message CreateWalletRequest {}
+
+message ImportRequest {
+  string private_key = 1;
+}
+
+message BalanceRequest {
+  string address = 1;
+  string token_contract = 2;  // 可选，为空表示查询 CPAY 余额
+}
+
+message BalanceResponse {
+  string balance = 1;
+}
+
+message AddressRequest {
+  string address = 1;
+}
+
+message ValidateResponse {
+  bool valid = 1;
+}
+
+message SignRequest {
+  Transaction transaction = 1;
+  string private_key = 2;
+}
+
+message SignResponse {
+  string signed_tx = 1;
+}
+
+message BroadcastRequest {
+  string signed_tx = 1;
+}
+
+message BroadcastResponse {
+  string tx_hash = 1;
+}
+
+message ReceiptRequest {
+  string tx_hash = 1;
+}
+
+message GasEstimate {
+  string gas = 1;
+}
+
+message CloseChannelRequest {
+  string channel_id = 1;
+}
+
+message CloseChannelResponse {
+  string tx_hash = 1;
+}
+
+message UpdateChannelRequest {
+  string channel_id = 1;
+  BalanceProof balance_proof = 2;
+}
+
+message UpdateChannelResponse {
+  bool success = 1;
+}
+
+message ChannelInfoRequest {
+  string channel_id = 1;
+}
+
+message ChallengeRequest {
+  string channel_id = 1;
+}
+
+message ChallengeResponse {
+  string tx_hash = 1;
+}
+
+message MintResponse {
+  string tx_hash = 1;
+}
+
+message BurnResponse {
+  string tx_hash = 1;
+}
+
+message StableCoinTransferRequest {
+  string from = 1;
+  string to = 2;
+  string amount = 3;
+}
+
+message StableCoinTransferResponse {
+  string tx_hash = 1;
+}
+
+message StableCoinInfoRequest {}
+
+message BridgeLockResponse {
+  string tx_hash = 1;
+}
+
+message BridgeUnlockResponse {
+  string tx_hash = 1;
+}
+
+message BridgeStatusRequest {
+  string tx_hash = 1;
+}
+
+message SupportedChainsRequest {}
+
+message SupportedChainsResponse {
+  repeated string chains = 1;
+}
+
+message BridgeFeeRequest {
+  string token = 1;
+  string target_chain = 2;
+}
+
+message BridgeFeeResponse {
+  string fee = 1;
+}

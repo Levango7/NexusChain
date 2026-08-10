@@ -1,0 +1,63 @@
+# local credentials
+credentials.properties
+
+# Vim
+*.sw[op]
+
+# Gradle
+.gradle
+build
+
+# IDEA
+.idea
+!.idea/codeStyleSettings.xml
+*.iml
+*.iws
+
+# Eclipse
+.project
+.classpath
+.settings/
+bin
+
+# Maven
+*.log
+log/
+target/
+
+# Output
+database*
+out
+logs
+test_db*
+testnetSampleDb
+sampleDB*
+
+# Mac
+.DS_Store
+
+
+# node
+node_modules
+
+# Local configuration
+**/user.conf
+**/test-user.conf
+**/out.log
+**/user.log4j.properties
+
+# jenv
+.java-version
+
+# db config
+*.env
+
+node_modules
+leveldb
+
+gradle/wrapper/*
+package-lock.json
+# test config
+*-test.json
+
+http-client.env.json

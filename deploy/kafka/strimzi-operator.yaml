@@ -1,0 +1,400 @@
+# ============================================================================
+# NexusChain - Strimzi Kafka Operator 部署清单
+# ============================================================================
+# 任务：P3-T4 K8s 部署 Kafka 集群（Strimzi Operator）
+# Strimzi 版本：0.40.x（Cluster Operator 模式，全命名空间监听）
+# 部署：kubectl apply -f deploy/kafka/strimzi-operator.yaml
+#
+# 说明：
+#   本清单包含 Namespace / ServiceAccount / ClusterRole / ClusterRoleBinding /
+#   ConfigMap / Deployment，构成 Strimzi Cluster Operator 的运行实体。
+#   CRD（Kafka/KafkaTopic/KafkaUser 等）定义体积较大，按 Strimzi 官方推荐
+#   通过下方"CRD 安装"步骤单独应用，避免在本仓库维护数千行 CRD schema。
+#   Operator 镜像固定为 0.40.0，可按需升级（见 README 第 8 章）。
+# ============================================================================
+
+---
+# 1. Namespace：Strimzi Operator 与 Kafka 集群所在命名空间
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kafka
+  labels:
+    app.kubernetes.io/name: strimzi
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/managed-by: strimzi-operator
+    # -- 开启 Pod 安全标准（K8s >= 1.25）
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/audit: baseline
+    pod-security.kubernetes.io/warn: baseline
+
+---
+# 2. ServiceAccount：Cluster Operator 运行身份
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: strimzi-cluster-operator
+  namespace: kafka
+  labels:
+    app.kubernetes.io/name: strimzi
+    app.kubernetes.io/part-of: nexus
+
+---
+# 3. ClusterRole：Cluster Operator 管理 Kafka 相关 CRD 所需权限
+#    覆盖 Strimzi 0.40 全部 CRD：Kafka / KafkaConnect / KafkaConnector /
+#    KafkaMirrorMaker / KafkaMirrorMaker2 / KafkaBridge / KafkaTopic /
+#    KafkaUser / KafkaRebalance / StrimziPodSet / NodePool
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: strimzi-cluster-operator-role
+  labels:
+    app.kubernetes.io/name: strimzi
+    app.kubernetes.io/part-of: nexus
+rules:
+  # -- Strimzi 自有 CRD 的全生命周期管理
+  - apiGroups:
+      - kafka.strimzi.io
+    resources:
+      - kafkas
+      - kafkaconnects
+      - kafkaconnectors
+      - kafkamirrormakers
+      - kafkamirrormaker2s
+      - kafkabridges
+      - kafkatopics
+      - kafkausers
+      - kafkarebalances
+      - strimzipodsets
+      - kafkanodepools
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - patch
+      - update
+      - delete
+  # -- CRD status/finalizers 子资源
+  - apiGroups:
+      - kafka.strimzi.io
+    resources:
+      - kafkas/status
+      - kafkaconnects/status
+      - kafkaconnectors/status
+      - kafkamirrormakers/status
+      - kafkamirrormaker2s/status
+      - kafkabridges/status
+      - kafkatopics/status
+      - kafkausers/status
+      - kafkarebalances/status
+      - strimzipodsets/status
+      - kafkanodepools/status
+      - kafkas/finalizers
+      - kafkaconnects/finalizers
+      - kafkaconnectors/finalizers
+      - kafkamirrormakers/finalizers
+      - kafkamirrormaker2s/finalizers
+      - kafkabridges/finalizers
+      - kafkatopics/finalizers
+      - kafkausers/finalizers
+      - kafkarebalances/finalizers
+      - strimzipodsets/finalizers
+      - kafkanodepools/finalizers
+    verbs:
+      - get
+      - patch
+      - update
+  # -- Pod / StatefulSet / Service / ConfigMap / Secret / PVC 等
+  - apiGroups: [""]
+    resources:
+      - pods
+      - services
+      - endpoints
+      - persistentvolumeclaims
+      - persistentvolumes
+      - secrets
+      - configmaps
+      - serviceaccounts
+      - nodes
+      - events
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - patch
+      - update
+      - delete
+      - deletecollection
+  - apiGroups: [""]
+    resources:
+      - pods/status
+      - pods/finalizers
+      - services/status
+      - endpoints/status
+      - persistentvolumeclaims/status
+    verbs:
+      - get
+      - patch
+      - update
+  # -- apps / batch / policy / networking / rbac 资源
+  - apiGroups: ["apps"]
+    resources:
+      - statefulsets
+      - deployments
+      - daemonsets
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - patch
+      - update
+      - delete
+  - apiGroups: ["apps"]
+    resources:
+      - statefulsets/status
+      - deployments/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups: ["batch"]
+    resources:
+      - jobs
+      - cronjobs
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - patch
+      - update
+      - delete
+  - apiGroups: ["policy"]
+    resources:
+      - poddisruptionbudgets
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - patch
+      - update
+      - delete
+  - apiGroups: ["networking.k8s.io"]
+    resources:
+      - networkpolicies
+      - ingresses
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - patch
+      - update
+      - delete
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources:
+      - rolebindings
+      - roles
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - patch
+      - update
+      - delete
+  # -- PodDisruptionBudget policy 子资源
+  - apiGroups: ["policy"]
+    resources:
+      - poddisruptionbudgets/status
+    verbs:
+      - get
+      - patch
+      - update
+  # -- 自定义 CRD 定义读取（Operator 需读取 CRD 版本信息）
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources:
+      - customresourcedefinitions
+    verbs:
+      - get
+      - list
+      - watch
+  # -- 监控 CRD（ServiceMonitor / PodMonitor，可选）
+  - apiGroups: ["monitoring.coreos.com"]
+    resources:
+      - servicemonitors
+      - podmonitors
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - patch
+      - update
+      - delete
+
+---
+# 4. ClusterRoleBinding：将 ClusterRole 绑定到 Operator ServiceAccount
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: strimzi-cluster-operator-binding
+  labels:
+    app.kubernetes.io/name: strimzi
+    app.kubernetes.io/part-of: nexus
+subjects:
+  - kind: ServiceAccount
+    name: strimzi-cluster-operator
+    namespace: kafka
+roleRef:
+  kind: ClusterRole
+  name: strimzi-cluster-operator-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# 5. ConfigMap：Operator 资源请求/限制与镜像覆盖配置
+#    通过环境变量 STRIMZI_* 注入，可调整 Operator 自身行为
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: strimzi-operator-config
+  namespace: kafka
+  labels:
+    app.kubernetes.io/name: strimzi
+    app.kubernetes.io/part-of: nexus
+data:
+  # -- 全量调谐间隔（毫秒），默认 120s
+  full-reconciliation-interval-ms: "120000"
+  # -- 单次操作超时（毫秒），默认 300s
+  operation-timeout-ms: "300000"
+  # -- 是否启用 ZooKeeper Admin Server
+  zookeeper-admin-server-enabled: "true"
+  # -- 镜像覆盖策略（留空使用 Strimzi 默认镜像）
+  #   生产环境可指向内部镜像仓库，例如：
+  #   kafka.image: "harbor.nexus.io/infra/kafka:3.7.0"
+  #   zookeeper.image: "harbor.nexus.io/infra/zookeeper:3.8.3"
+  kafka.image: ""
+  zookeeper.image: ""
+  topic-operator.image: ""
+  user-operator.image: ""
+
+---
+# 6. Deployment：Strimzi Cluster Operator
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: strimzi-cluster-operator
+  namespace: kafka
+  labels:
+    app.kubernetes.io/name: strimzi
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/managed-by: strimzi-operator
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: strimzi
+      app.kubernetes.io/instance: strimzi-cluster-operator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: strimzi
+        app.kubernetes.io/instance: strimzi-cluster-operator
+        app.kubernetes.io/part-of: nexus
+    spec:
+      serviceAccountName: strimzi-cluster-operator
+      automountServiceAccountToken: true
+      terminationGracePeriodSeconds: 120
+      containers:
+        - name: strimzi-cluster-operator
+          # -- Strimzi 0.40.0；升级时同步修改此处与 CRD 版本
+          image: quay.io/strimzi/operator:0.40.0
+          imagePullPolicy: IfNotPresent
+          env:
+            # -- 监听命名空间（集群模式下 STRIMZI_NAMESPACE 设为 * 通配所有 ns）
+            - name: STRIMZI_NAMESPACE
+              value: "*"
+            - name: STRIMZI_FULL_RECONCILIATION_INTERVAL_MS
+              value: "120000"
+            - name: STRIMZI_OPERATION_TIMEOUT_MS
+              value: "300000"
+            - name: STRIMZI_ZOOKEEPER_ADMIN_SERVER_SERVICE_ENABLED
+              value: "true"
+            # -- Pod 资源请求/限制通过 STRIMZI_* 注入
+            - name: STRIMZI_OPERATOR_RESOURCE_REQUESTS_CPU
+              value: "200m"
+            - name: STRIMZI_OPERATOR_RESOURCE_REQUESTS_MEMORY
+              value: "256Mi"
+            - name: STRIMZI_OPERATOR_RESOURCE_LIMITS_CPU
+              value: "1000m"
+            - name: STRIMZI_OPERATOR_RESOURCE_LIMITS_MEMORY
+              value: "1Gi"
+            # -- 镜像覆盖（与 ConfigMap 对应，留空使用默认）
+            - name: STRIMZI_DEFAULT_KAFKA_IMAGE
+              value: ""
+            - name: STRIMZI_DEFAULT_KAFKA_CONNECT_IMAGE
+              value: ""
+            - name: STRIMZI_DEFAULT_KAFKA_MIRROR_MAKER_2_IMAGE
+              value: ""
+            - name: STRIMZI_DEFAULT_TOPIC_OPERATOR_IMAGE
+              value: ""
+            - name: STRIMZI_DEFAULT_USER_OPERATOR_IMAGE
+              value: ""
+            - name: STRIMZI_DEFAULT_KAFKA_BRIDGE_IMAGE
+              value: ""
+            - name: STRIMZI_DEFAULT_JMX_TRANSITOR_IMAGE
+              value: ""
+            # -- 特性门控（Feature Gates，Strimzi 0.40）
+            - name: STRIMZI_FEATURE_GATES
+              value: "+UseStrimziPodSets,+KafkaNodePools"
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: "1000m"
+              memory: 1Gi
+          livenessProbe:
+            httpGet:
+              path: /healthy
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
+      # -- 调度约束：避免 Operator 与 Kafka broker 共节点（可选）
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app.kubernetes.io/name
+                      operator: In
+                      values:
+                        - kafka
+                topologyKey: kubernetes.io/hostname

@@ -1,0 +1,142 @@
+# Dependabot 配置 — 周期性检查依赖更新（P2-T7 SCA）
+# ============================================================
+# 自动检测过时依赖并创建 PR，配合 Trivy 漏洞扫描形成闭环：
+#   Trivy 发现漏洞 → Dependabot 提供升级 PR → 审查合并 → 漏洞消除
+#
+# 生态系统覆盖：
+#   - gradle   : Java 子模块依赖（build.gradle）
+#   - npm      : Node.js 子模块（nexus-explorer / nexus-devtools）
+#   - docker   : Dockerfile 基础镜像更新
+#   - github-actions : workflow action 版本更新
+#
+# 调度策略：每周一次（周一），与 security-scan.yml 定时扫描错开
+# PR 限额：每生态 10 个 open PR，避免淹没审查队列
+
+version: 2
+
+updates:
+  # === Gradle 依赖（Java 子模块） ===
+  - package-ecosystem: "gradle"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Asia/Shanghai"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "java"
+      - "security-triage"
+    commit-message:
+      prefix: "deps(gradle)"
+      include: "scope"
+    reviewers:
+      - "nexus-chain/maintainers"
+    groups:
+      spring-boot:
+        patterns:
+          - "org.springframework.boot:*"
+          - "org.springframework.cloud:*"
+      security-libs:
+        patterns:
+          - "org.bouncycastle:*"
+          - "io.jsonwebtoken:*"
+          - "com.h3xstream.findsecbugs:*"
+
+  # === nexus-gateway 子模块 Gradle 依赖 ===
+  - package-ecosystem: "gradle"
+    directory: "/nexus-gateway"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Asia/Shanghai"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "java"
+      - "gateway"
+
+  # === nexus-bridge 子模块 Gradle 依赖 ===
+  - package-ecosystem: "gradle"
+    directory: "/nexus-bridge"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Asia/Shanghai"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "java"
+      - "bridge"
+
+  # === npm 依赖（nexus-explorer — Node.js/React） ===
+  - package-ecosystem: "npm"
+    directory: "/nexus-explorer"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+      time: "06:00"
+      timezone: "Asia/Shanghai"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "npm"
+      - "explorer"
+    commit-message:
+      prefix: "deps(npm-explorer)"
+      include: "scope"
+
+  # === npm 依赖（nexus-devtools — Node.js/TypeScript） ===
+  - package-ecosystem: "npm"
+    directory: "/nexus-devtools"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+      time: "06:00"
+      timezone: "Asia/Shanghai"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "npm"
+      - "devtools"
+    commit-message:
+      prefix: "deps(npm-devtools)"
+      include: "scope"
+
+  # === Docker 基础镜像更新 ===
+  - package-ecosystem: "docker"
+    directory: "/nexus-gateway"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "docker"
+      - "gateway"
+
+  - package-ecosystem: "docker"
+    directory: "/nexus-bridge"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "docker"
+      - "bridge"
+
+  # === GitHub Actions 版本更新 ===
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "wednesday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "github-actions"
+    commit-message:
+      prefix: "deps(actions)"
+      include: "scope"

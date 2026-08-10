@@ -1,0 +1,10 @@
+# Namespace：由 umbrella 统一创建，子 chart 不再创建
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ include "nexus-chain.namespace" . }}
+  labels:
+    {{- include "nexus-chain.labels" . | nindent 4 }}
+    app.kubernetes.io/part-of: {{ default "nexus" .Values.global.partOfLabel }}
+    # NetworkPolicy default-deny 依赖此标签（K8s 1.21+ 自动打）
+    kubernetes.io/metadata.name: {{ include "nexus-chain.namespace" . }}

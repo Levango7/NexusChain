@@ -1,0 +1,162 @@
+package org.nexus.signing.mpc;
+
+import org.nexus.signing.tracing.BusinessSpan;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import io.micrometer.tracing.Tracer;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+
+import java.util.Map;
+import java.util.Objects;
+
+/**
+ * Aggregator that combines per-participant signature shares into the final
+ * ECDSA signature.
+ *
+ * <p>Given threshold-many valid shares {@code s_i} and the public nonce
+ * point {@code R}, the combined signature is {@code s = sum(s_i) mod n}
+ * with {@code r = R.x mod n}. The aggregator verifies that enough shares
+ * have been collected and that the resulting {@code (r, s)} verifies
+ * against the joint public key before returning it.</p>
+ *
+ * <p>P3-T5：在阈值聚合链路添加业务 span（signing.threshold.aggregate →
+ * signing.threshold.verify），span 树结构见 docs/tracing-business-span.md。</p>
+ *
+ * <p>The cryptographic combine step is a <b>skeleton</b> marked {@code FROZEN}
+ * per ADR-001; the orchestration, validation, and audit logging are fully wired.
+ * 解冻条件见 docs/adr/ADR-001-research-layer-freeze.md</p>
+ */
+@Component
+public class MpcSignatureAggregator {
+
+    private static final Logger log = LoggerFactory.getLogger(MpcSignatureAggregator.class);
+
+    /** Micrometer Tracer：P3-T5 业务 span 注入。可为 null（测试环境降级 no-op）。 */
+    private final Tracer tracer;
+
+    @Autowired
+    public MpcSignatureAggregator(Tracer tracer) {
+        this.tracer = tracer;
+    }
+
+    /** 测试用兼容构造器：不注入 Tracer，业务 span 降级为 no-op。 */
+    public MpcSignatureAggregator() {
+        this(null);
+    }
+
+    /**
+     * Combine the collected shares into the final signature.
+     *
+     * @param session          signing session with collected shares
+     * @param jointPublicKeyHex joint public key (hex) for verification
+     * @return hex-encoded ECDSA signature {@code (r, s)}
+     * @throws MpcProtocolException if shares are insufficient or invalid
+     */
+    public String aggregate(MpcSigningSession session, String jointPublicKeyHex) {
+        Objects.requireNonNull(session, "session");
+        Objects.requireNonNull(jointPublicKeyHex, "jointPublicKeyHex");
+
+        // P3-T5：阈值聚合主 span（signing.threshold.aggregate）
+        try (BusinessSpan aggSpan = BusinessSpan.start(tracer, "signing.threshold.aggregate")
+                .attr("signing.session.id", session.getSessionId())
+                .attr("signing.shares.collected", session.getCollectedShareCount())
+                .attr("signing.threshold.required", session.getThresholdPolicy().getThreshold())) {
+            try {
+                if (!session.hasSufficientShares()) {
+                    throw new MpcProtocolException(
+                            MpcProtocolException.Reason.QUORUM_NOT_REACHED,
+                            "insufficient shares: have " + session.getCollectedShareCount()
+                                    + ", need " + session.getThresholdPolicy().getThreshold());
+                }
+
+                log.info("Aggregating signature shares for session {}: shares={}",
+                        session.getSessionId(), session.getCollectedShareCount());
+
+                // FROZEN per ADR-001: verify each share's ZK proof against the joint public key
+                // 解冻条件见 docs/adr/ADR-001-research-layer-freeze.md
+                try (BusinessSpan verifySpan = BusinessSpan.start(tracer, "signing.threshold.verify")
+                        .attr("signing.session.id", session.getSessionId())) {
+                    verifyShares(session, jointPublicKeyHex);
+                    verifySpan.success();
+                }
+
+                // FROZEN per ADR-001: combine shares: s = sum(s_i) mod n, r = R.x mod n
+                // 解冻条件见 docs/adr/ADR-001-research-layer-freeze.md
+                String combined = combineShares(session.getSignatureShares());
+
+                // FROZEN per ADR-001: verify (r, s) against the joint public key and txData
+                // 解冻条件见 docs/adr/ADR-001-research-layer-freeze.md
+                verifyFinalSignature(combined, jointPublicKeyHex, session.getTxDataHex());
+
+                session.markCompleted(combined);
+                log.info("Signature aggregation complete for session {}: sig={}",
+                        session.getSessionId(), combined);
+                aggSpan.attr("signing.signature.length", combined.length()).success();
+                return combined;
+            } catch (Exception e) {
+                aggSpan.error(e);
+                throw e;
+            }
+        }
+    }
+
+    /**
+     * Verify each collected share's ZK proof.
+     *
+     * @param session          signing session
+     * @param jointPublicKeyHex joint public key
+     */
+    private void verifyShares(MpcSigningSession session, String jointPublicKeyHex) {
+        for (Map.Entry<String, String> e : session.getSignatureShares().entrySet()) {
+            String participantId = e.getKey();
+            String shareHex = e.getValue();
+            // FROZEN per ADR-001: verify the ZK proof attached to this share
+            // 解冻条件见 docs/adr/ADR-001-research-layer-freeze.md
+            if (shareHex == null || shareHex.isEmpty()) {
+                session.markFailed(
+                        MpcProtocolException.Reason.INVALID_SHARE,
+                        "empty share from " + participantId,
+                        participantId);
+                throw new MpcProtocolException(
+                        MpcProtocolException.Reason.INVALID_SHARE,
+                        "empty share from " + participantId,
+                        participantId);
+            }
+        }
+    }
+
+    /**
+     * Combine the per-participant shares into the final signature.
+     *
+     * @param signatureShares participant ID -> share hex
+     * @return hex-encoded combined signature
+     */
+    private String combineShares(Map<String, String> signatureShares) {
+        // FROZEN per ADR-001: s = sum(s_i) mod n on the curve order n
+        //       r = R.x mod n where R is the aggregated nonce point
+        //       解冻条件见 docs/adr/ADR-001-research-layer-freeze.md
+        StringBuilder sb = new StringBuilder("SIG:");
+        for (Map.Entry<String, String> e : signatureShares.entrySet()) {
+            sb.append(e.getValue()).append("|");
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Verify the final combined signature against the joint public key.
+     *
+     * @param signatureHex     combined signature (hex)
+     * @param jointPublicKeyHex joint public key (hex)
+     * @param txDataHex        transaction data (hex)
+     */
+    private void verifyFinalSignature(String signatureHex,
+                                      String jointPublicKeyHex,
+                                      String txDataHex) {
+        // FROZEN per ADR-001: parse (r, s) from signatureHex, hash txDataHex, and verify
+        //       r * G == s^-1 * (hash * G + r * X)  on the curve.
+        //       解冻条件见 docs/adr/ADR-001-research-layer-freeze.md
+        log.debug("Final signature verification stub: sig={}, pk={}, tx={}",
+                signatureHex, jointPublicKeyHex, txDataHex);
+    }
+}

@@ -1,0 +1,155 @@
+# nexus-signing-service application 配置
+#
+# Phase 1 任务 #54：签名服务独立部署业务配置。
+# 设计文档 §4.2.3 配置迁移清单。
+#
+# 敏感配置（wallet.keystore.json / wallet.keystore.password）生产环境通过 Nacos
+# nexus-signing-service.yaml 加密下发（设计文档 §7.1 R10 风险缓解），
+# 本地开发可通过环境变量或本文件覆盖。
+
+server:
+  port: ${SERVER_PORT:8082}
+  # === Phase 3 任务 #61：优雅停机（设计文档 §4.6.2） ===
+  shutdown: graceful
+
+spring:
+  # === Phase 3 任务 #61：优雅停机等待时长（设计文档 §4.6.2） ===
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+  # Sentinel 集成（设计文档 §4.3）
+  cloud:
+    sentinel:
+      transport:
+        dashboard: ${NEX_SENTINEL_DASHBOARD:localhost:8858}
+        # 客户端与 Sentinel Dashboard 通信端口（默认 8719，按服务递增）
+        port: ${NEX_SENTINEL_CLIENT_PORT:8719}
+      # 取消懒加载，启动即向 Dashboard 注册
+      eager: true
+      # Sentinel 数据源：从 Nacos 订阅规则（nexus-sentinel-rules.yaml）
+      datasource:
+        ds1:
+          nacos:
+            server-addr: ${NEX_NACOS_SERVER:localhost:8848}
+            namespace: ${NEX_NACOS_NAMESPACE:dev}
+            group-id: NEXUS_GROUP
+            data-id: nexus-sentinel-rules.yaml
+            rule-type: flow
+
+# === 链节点 RPC（从 exchange-wallet application.properties 迁移） ===
+# nodeNet 为 NodeController 使用的链节点 RPC 地址
+nodeNet: ${NEX_NODE_NET:localhost:19585}
+
+# === 平台热钱包 keystore（从 exchange-wallet application.properties 迁移） ===
+# 设置 wallet.keystore.json 为 keystore JSON 内联，或为启动时读取的文件路径。
+# wallet.keystore.password 为 keystore 解密密码。
+# 未设置时，/api/v1/transfers/sign 回退为要求调用方提供 keystore。
+wallet:
+  keystore:
+    json: ${WALLET_KEYSTORE_JSON:}
+    password: ${WALLET_KEYSTORE_PASSWORD:}
+
+# === OpenFeign 配置（设计文档 §4.4.2） ===
+feign:
+  client:
+    config:
+      default:
+        connect-timeout: 3000
+        read-timeout: 10000
+        logger-level: BASIC
+  circuitbreaker:
+    enabled: true
+  compression:
+    request:
+      enabled: true
+    response:
+      enabled: true
+
+# === Spring Cloud LoadBalancer 配置 ===
+spring.cloud.loadbalancer:
+  cache:
+    enabled: true
+    ttl: 30s
+
+# === Actuator 健康检查 ===
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
+  # === Phase 3 任务 #61：链路追踪（设计文档 §4.3.2） ===
+  # Micrometer Tracing + Brave + Zipkin，W3C traceparent 跨服务传播
+  tracing:
+    sampling:
+      probability: 1.0  # 开发环境 100% 采样，生产环境建议 0.1
+  zipkin:
+    tracing:
+      endpoint: ${NEX_ZIPKIN_ENDPOINT:http://localhost:9411/api/v2/spans}
+
+# === Phase 3 任务 #61：Seata 分布式事务配置（设计文档 §4.2.2） ===
+# SCA 2023.0.1.0 + seata-spring-boot-starter 2.0.0
+# signing-service 作为 TCC 分支事务参与方（SigningTccAction，设计文档 §4.2.4）
+seata:
+  enabled: true
+  tx-service-group: nexus-tx-group
+  service:
+    vgroup-mapping:
+      nexus-tx-group: default
+    grouplist:
+      default: ${NEX_SEATA_SERVER:localhost:8091}
+
+# === Phase 4 任务 #79：MPC 密码学引擎 gRPC 连接配置（审计报告 §4.1 方案 A） ===
+# Rust multi-party-ecdsa 引擎作为独立进程运行，signing-service 通过 gRPC 调用。
+# GrpcMpcCryptoEngine（@Component）从本配置读取引擎地址，实现 MpcCryptoEngine SPI。
+# 编排层（MpcSigner / MpcSignatureAggregator / MpcKeyGeneration）通过 SPI 接口
+# 调用，与传输层解耦。
+#
+# === MPC-P0-02 修复：mTLS 配置（设计文档 §7.1 R10） ===
+# use-plaintext 默认改为 false（安全）。生产环境必须保持 false 并配置 mTLS。
+# 开发环境可设为 true 跳过 TLS（或保持 false 但不配置 tls.* 路径，会回退到明文并记录警告）。
+mpc:
+  engine:
+    # 引擎 gRPC 主机（独立进程，通常与 signing-service 同 Pod 或同 Node 部署）
+    host: ${NEX_MPC_ENGINE_HOST:localhost}
+    # 引擎 gRPC 端口（Rust tonic server 默认 50051）
+    port: ${NEX_MPC_ENGINE_PORT:50051}
+    # 单次 RPC deadline 超时（毫秒）。DKG/Sign 涉及多轮 P2P 交互，需较长超时。
+    deadline-timeout: ${NEX_MPC_ENGINE_DEADLINE:30000}
+    # 是否使用明文传输。MPC-P0-02: 默认 false（安全）。
+    # 生产环境必须 false 并配置下方 mpc.engine.tls.* 证书路径。
+    # 开发环境可设为 true 跳过 TLS 配置。
+    use-plaintext: ${NEX_MPC_ENGINE_PLAINTEXT:false}
+    # mTLS 配置（use-plaintext=false 时生效）。PEM 格式证书。
+    # 三个路径都配置时启用 mTLS；任一缺失则回退到明文并记录警告。
+    tls:
+      # 信任证书路径（CA 证书或引擎服务端证书），用于验证引擎身份
+      trust-cert-path: ${NEX_MPC_ENGINE_TLS_TRUST_CERT:}
+      # 客户端证书路径，signing-service 向引擎证明身份
+      client-cert-path: ${NEX_MPC_ENGINE_TLS_CLIENT_CERT:}
+      # 客户端私钥路径（PEM，未加密），与 client-cert 配对
+      client-key-path: ${NEX_MPC_ENGINE_TLS_CLIENT_KEY:}
+  # === P5-T3：MPC P2P 传输层配置（Java 参与方之间传递 MpcMessage） ===
+  # GrpcMpcTransportStub 通过 gRPC 在 signing-service 实例之间传递部分签名等编排消息。
+  # MpcTransportGrpcServer 在本节点启动 gRPC server 接收其他参与方的消息。
+  transport:
+    # 是否启用真实 gRPC 传输。默认 false（开发/测试模式，使用 InMemoryMpcTransport）；
+    # 生产环境设为 true 启用 GrpcMpcTransportStub + MpcTransportGrpcServer。
+    real-grpc-enabled: ${NEX_MPC_TRANSPORT_GRPC:false}
+    # gRPC 调用 deadline 超时（毫秒）。SendMpcMessage RPC 的超时。
+    deadline-timeout: ${NEX_MPC_TRANSPORT_DEADLINE:10000}
+    # 是否使用明文传输。MPC-P0-02: 默认 false（安全）。
+    # 生产环境必须 false 并配置下方 mpc.transport.tls.* 证书路径。
+    use-plaintext: ${NEX_MPC_TRANSPORT_PLAINTEXT:false}
+    # 本节点 gRPC server 端口（接收其他参与方消息）。每个 signing-service 实例需不同端口。
+    local-port: ${NEX_MPC_TRANSPORT_PORT:50052}
+    # mTLS 配置（use-plaintext=false 时生效）。PEM 格式证书。
+    # P2P 场景下每个节点既是客户端也是服务端，client-cert/client-key 同时用作服务端证书。
+    tls:
+      # 信任证书路径（CA 证书），用于验证其他参与方身份
+      trust-cert-path: ${NEX_MPC_TRANSPORT_TLS_TRUST_CERT:}
+      # 本节点证书路径（同时作为客户端证书和服务端证书）
+      client-cert-path: ${NEX_MPC_TRANSPORT_TLS_CLIENT_CERT:}
+      # 本节点私钥路径（PEM，未加密），与 client-cert 配对
+      client-key-path: ${NEX_MPC_TRANSPORT_TLS_CLIENT_KEY:}

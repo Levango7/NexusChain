@@ -1,0 +1,38 @@
+/*
+ * Copyright (c) [2018]
+ * This file is part of the java-nexuscore
+ *
+ * The java-nexuscore is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The java-nexuscore is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the java-nexuscore. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+package org.nexus.core.orm;
+
+import org.nexus.core.utxo.InPoint;
+import org.springframework.jdbc.core.RowMapper;
+
+import java.sql.ResultSet;
+import java.sql.SQLException;
+
+public class InPointMapper implements RowMapper<InPoint> {
+    @Override
+    public InPoint mapRow(ResultSet rs, int rowNum) throws SQLException {
+        InPoint inPoint = new InPoint();
+        inPoint.setOutPointIndex(rs.getInt("vout_index"));
+        inPoint.setScript(rs.getBytes("script_sig"));
+        inPoint.setScriptLength(inPoint.getScript().length);
+        inPoint.setPreviousTransactionHash(rs.getBytes("vout_tx_hash"));
+        inPoint.setTransactionHash(rs.getBytes("tx_hash"));
+        return inPoint;
+    }
+}

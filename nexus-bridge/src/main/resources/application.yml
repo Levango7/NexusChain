@@ -1,0 +1,151 @@
+# nexus-bridge application 配置
+#
+# Phase 2 任务 #58：跨链桥服务独立部署业务配置。
+# 设计文档 §3.3 / §4.2.3 配置迁移清单。
+#
+# 敏感配置（validator-public-keys / 链节点 RPC 端点）生产环境通过 Nacos
+# nexus-bridge.yaml 加密下发（设计文档 §7.1 R10 风险缓解），
+# 本地开发可通过环境变量或本文件覆盖。
+
+server:
+  port: ${SERVER_PORT:8084}
+  # === Phase 3 任务 #61：优雅停机（设计文档 §4.6.2） ===
+  shutdown: graceful
+
+spring:
+  application:
+    name: nexus-bridge
+  # === Phase 3 任务 #61：优雅停机等待时长（设计文档 §4.6.2） ===
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+  datasource:
+    url: jdbc:mysql://localhost:3306/nexus_bridge?useSSL=false&serverTimezone=UTC
+    username: nexus
+    password: nexus_secret
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQL8Dialect
+  # === Phase 2 任务 #58：Spring Cloud Alibaba / Sentinel 配置 ===
+  cloud:
+    # Sentinel 控制台地址（规则推送 + 监控），与 docker-compose sentinel-dashboard 对齐
+    sentinel:
+      transport:
+        dashboard: ${NEX_SENTINEL_DASHBOARD:localhost:8858}
+        # 客户端与 Sentinel Dashboard 通信端口（默认 8719，按服务递增；bridge 用 8721）
+        port: ${NEX_SENTINEL_CLIENT_PORT:8721}
+      # 取消懒加载，启动即向 Dashboard 注册
+      eager: true
+      # Sentinel 数据源：从 Nacos 订阅规则（nexus-sentinel-rules.yaml）
+      datasource:
+        ds1:
+          nacos:
+            server-addr: ${NEX_NACOS_SERVER:localhost:8848}
+            namespace: ${NEX_NACOS_NAMESPACE:dev}
+            group-id: NEXUS_GROUP
+            data-id: nexus-sentinel-rules.yaml
+            rule-type: flow
+    # Spring Cloud LoadBalancer 配置（替代已废弃的 Ribbon）
+    loadbalancer:
+      ribbon:
+        enabled: false
+      cache:
+        enabled: true
+        ttl: 30s
+
+# === OpenFeign 配置（设计文档 §4.4.2，预留 bridge 调用其他微服务的能力） ===
+feign:
+  client:
+    config:
+      default:
+        connect-timeout: 3000
+        read-timeout: 10000
+        logger-level: BASIC
+  circuitbreaker:
+    enabled: true
+  compression:
+    request:
+      enabled: true
+    response:
+      enabled: true
+
+# Bridge configuration
+nexus:
+  bridge:
+    signature-threshold: 2
+    timelock-period-seconds: 3600
+    max-amount-per-tx: 50000000000
+    daily-limit: 100000000000
+    large-amount-threshold: 10000000000
+    source-chain-id: nexus
+    target-chain-id: ethereum
+    # 验证者公钥白名单（Ed25519 X.509 DER 十六进制，条目即签名者 ID）。
+    # 2026-08-06 起 MINT/UNLOCK 强制逐签验签：签名者 ID 必须在白名单中，
+    # 且签名必须为该公钥对确定性载荷（chainId|txId|amount|targetAddress|timestamp
+    # 的 SHA-256）的有效 Ed25519 签名。未配置时验签一律 fail-closed（拒绝）。
+    # 生产环境必须由治理层下发真实公钥，例如：
+    # validator-public-keys:
+    #   - 302a300506032b6570032100xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+    # EVM 兼容链 RPC 端点配置（Web3j HttpService 连接地址）
+    # 生产环境应通过环境变量 / 配置中心注入，避免硬编码
+    ethereum:
+      rpc-endpoint: https://mainnet.infura.io/v3/YOUR_PROJECT_ID
+      chain-id: "0x1"
+    bsc:
+      rpc-endpoint: https://bsc-dataseed.binance.org
+      chain-id: "0x38"
+    polygon:
+      rpc-endpoint: https://polygon-rpc.com
+      chain-id: "0x89"
+    # Avalanche C-Chain（EVM 兼容）RPC 端点配置
+    # 主网 Chain ID: 43114 (0xA86A)，Fuji 测试网 Chain ID: 43113 (0xA869)
+    # 主网 RPC: https://api.avax.network/ext/bc/C/rpc
+    # Fuji 测试网 RPC: https://api.avax-test.network/ext/bc/C/rpc
+    avalanche:
+      rpc-endpoint: https://api.avax.network/ext/bc/C/rpc
+      chain-id: "0xA86A"
+    # === P4-T3 跨链消息传递（General Message Passing）配置 ===
+    # 控制消息中继器与执行器的运行参数：
+    #   enabled             — 是否启用跨链消息传递模块
+    #   required-signatures — 多签要求（N-of-M 中的 N）
+    #   message-timeout    — 消息超时窗口（秒），超过则标记 EXPIRED
+    #   max-payload-size   — 单条消息最大负载字节数
+    messaging:
+      enabled: true
+      required-signatures: 2
+      message-timeout: 3600
+      max-payload-size: 32768
+
+# === Actuator 健康检查 ===
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
+  # === Phase 3 任务 #61：链路追踪（设计文档 §4.3.2） ===
+  # Micrometer Tracing + Brave + Zipkin，W3C traceparent 跨服务传播
+  tracing:
+    sampling:
+      probability: 1.0  # 开发环境 100% 采样，生产环境建议 0.1
+  zipkin:
+    tracing:
+      endpoint: ${NEX_ZIPKIN_ENDPOINT:http://localhost:9411/api/v2/spans}
+
+# === Phase 3 任务 #61：Seata 分布式事务配置（设计文档 §4.2.2） ===
+# SCA 2023.0.1.0 + seata-spring-boot-starter 2.0.0
+# bridge 当前无跨服务事务需求（设计文档 §2.1.1），配置统一接入便于未来扩展
+seata:
+  enabled: true
+  tx-service-group: nexus-tx-group
+  service:
+    vgroup-mapping:
+      nexus-tx-group: default
+    grouplist:
+      default: ${NEX_SEATA_SERVER:localhost:8091}

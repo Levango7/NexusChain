@@ -1,0 +1,71 @@
+# ============================================================================
+# NexusChain - PeerAuthentication（mTLS 双向认证）
+# ============================================================================
+# 用途：
+#   在 nexus 命名空间启用 Istio 严格 mTLS，强制所有 mesh 内流量双向认证。
+#   - STRICT 模式：仅接受带有效客户端证书的请求，明文请求被拒绝
+#   - 与 DestinationRule tls.mode: ISTIO_MUTUAL 配合，自动协商 mTLS
+#
+# 应用：
+#   kubectl apply -f deploy/istio/peer-authentication.yaml -n nexus
+#
+# 验证：
+#   istioctl authn tls-check nexus-gateway.nexus.svc.cluster.local
+#   # 期望输出：mTLSMode: strict
+#
+# 安全模型：
+#   - 控制面 istiod 签发证书，每 24h 轮换，工作负载证书每 1h 轮换
+#   - 信任域 cluster.local，与 Kubernetes Service Account 集成
+#   - 外部入口流量在 Ingress Gateway 终止 TLS，内部转 mTLS
+# ============================================================================
+---
+# -- 命名空间级 STRICT mTLS：所有 mesh 内流量必须双向认证
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: nexus
+  labels:
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/component: service-mesh
+  annotations:
+    description: "nexus 命名空间默认 mTLS STRICT 模式：强制双向认证"
+spec:
+  # -- STRICT：仅接受 mTLS 流量，明文请求被拒绝
+  mtls:
+    mode: STRICT
+---
+# -- 端口级例外（可选）：actuator 健康检查端口允许明文
+#    K8s livenessProbe/readinessProbe 由 kubelet 发起，不带 sidecar 证书
+#    但 sidecar 注入后，kubelet 探针经 sidecar 改写为 mTLS，无需例外
+#    此处保留示例，需要时取消注释
+# apiVersion: security.istio.io/v1
+# kind: PeerAuthentication
+# metadata:
+#   name: nexus-gateway-actuator-exception
+#   namespace: nexus
+# spec:
+#   selector:
+#     matchLabels:
+#       app.kubernetes.io/name: nexus-gateway
+#   mtls:
+#     mode: STRICT
+#   portLevelMtls:
+#     8080:
+#       mode: PERMISSIVE
+---
+# -- istio-system 命名空间控制面 mTLS：STRICT 保护 istiod 自身
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: istio-system
+  labels:
+    app.kubernetes.io/name: istio
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/component: service-mesh
+  annotations:
+    description: "istio-system 控制面 mTLS STRICT 模式"
+spec:
+  mtls:
+    mode: STRICT

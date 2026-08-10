@@ -1,0 +1,83 @@
+// nexus-signing-service / MPC 密码学引擎 gRPC 接口定义
+//
+// v1.9.2：与 nexus-signing-service 的 src/main/proto/mpc_crypto.proto 完全对齐。
+// Rust mpc-engine（tonic gRPC server）实现本服务；signing-service 的
+// GrpcMpcCryptoEngine 作为 gRPC 客户端调用。字段名、hex 字符串编码、
+// HealthCheck 均与 Java 侧契约一致，保证两端真正互通。
+
+syntax = "proto3";
+
+package nexus.mpc;
+
+service MpcCryptoService {
+  rpc Dkg(DkgRequest) returns (DkgResponse);
+  rpc Sign(SignRequest) returns (SignResponse);
+  rpc Aggregate(AggregateRequest) returns (AggregateResponse);
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+}
+
+// === DKG ===
+
+message DkgRequest {
+  string session_id = 1;
+  int32 threshold = 2;
+  int32 total_parties = 3;
+  int32 party_index = 4;
+  string curve = 5;
+  repeated string peer_endpoints = 6;
+}
+
+message DkgResponse {
+  string public_key = 1;   // 聚合公钥（hex 编码曲线点）
+  string key_share = 2;    // 本节点密钥份额（hex）
+  string proof = 3;        // DKG 正确性 ZK 证明（hex）
+  bool success = 4;
+  string error = 5;
+}
+
+// === Sign ===
+
+message SignRequest {
+  string session_id = 1;
+  string public_key = 2;      // 聚合公钥（hex）
+  string key_share = 3;       // 本节点密钥份额（hex）
+  string message_hash = 4;    // 消息哈希（hex，32 字节）
+  int32 party_index = 5;
+  repeated string peer_endpoints = 6;
+}
+
+message SignResponse {
+  string partial_signature = 1;  // 本节点部分签名（hex）
+  string proof = 2;
+  bool success = 3;
+  string error = 4;
+}
+
+// === Aggregate ===
+
+message AggregateRequest {
+  string session_id = 1;
+  string public_key = 2;
+  string message_hash = 3;
+  repeated string partial_signatures = 4;
+}
+
+message AggregateResponse {
+  string signature = 1;   // 聚合签名 r||s（hex，64 字节）
+  string r = 2;
+  string s = 3;
+  int32 recovery_id = 4;
+  bool success = 5;
+  string error = 6;
+}
+
+// === HealthCheck ===
+
+message HealthCheckRequest {
+  string service = 1;
+}
+
+message HealthCheckResponse {
+  bool healthy = 1;
+  string status = 2;
+}

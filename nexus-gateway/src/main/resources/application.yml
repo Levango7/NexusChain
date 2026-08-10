@@ -1,0 +1,317 @@
+server:
+  port: 8080
+  servlet:
+    context-path: /
+  # === Phase 3 任务 #61：优雅停机（设计文档 §4.6.2） ===
+  # 等待在途请求处理完成再关闭，签名+广播允许 30s
+  shutdown: graceful
+
+spring:
+  application:
+    name: nexus-gateway
+
+  # === Phase 3 任务 #61：优雅停机等待时长（设计文档 §4.6.2） ===
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+
+  # Database configuration
+  # NOTE: the default here is MySQL for local development. In k8s the datasource is
+  # injected via ConfigMap as NEX_DB_URL pointing at the Postgres instance
+  # (e.g. jdbc:postgresql://nexus-postgres:5432/nexus_gateway). The dialect below must
+  # match the injected engine; for Postgres set spring.jpa.properties.hibernate.dialect
+  # to org.hibernate.dialect.PostgreSQLDialect via the same ConfigMap.
+  datasource:
+    url: ${NEX_DB_URL:jdbc:mysql://localhost:3306/nexus_gateway?useSSL=false&serverTimezone=UTC&characterEncoding=utf-8}
+    username: ${NEX_DB_USERNAME:nexus}
+    password: ${NEX_DB_PASSWORD:nexus_secret}
+    driver-class-name: ${NEX_DB_DRIVER:com.mysql.cj.jdbc.Driver}
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+    open-in-view: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQL8Dialect
+        format_sql: true
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+  jackson:
+    default-property-inclusion: non_null
+    serialization:
+      write-dates-as-timestamps: false
+
+  # === Phase 1 任务 #55：Spring Cloud Alibaba / OpenFeign 配置 ===
+  # Resilience4j 已移除（build.gradle 删除依赖），熔断/限流改由 Sentinel 承担。
+  # Nacos discovery/config 的 server-addr/namespace/group 在 bootstrap.yml 声明；
+  # 此处补充 Sentinel transport（控制台地址）与 OpenFeign 客户端超时/重试配置。
+  cloud:
+    # Sentinel 控制台地址（规则推送 + 监控），与 docker-compose sentinel-dashboard 对齐
+    sentinel:
+      transport:
+        dashboard: ${NEX_SENTINEL_DASHBOARD:localhost:8858}
+        # 客户端与控制台心跳间隔（毫秒），默认 10s
+        heartbeat-interval-ms: 10000
+      # 熔断降级后快速失败，不打印日志风暴
+      log:
+        switch-pattern: false
+    # Spring Cloud LoadBalancer 配置（替代已废弃的 Ribbon）
+    loadbalancer:
+      ribbon:
+        enabled: false
+      cache:
+        enabled: true
+        ttl: 30s
+    # OpenFeign 客户端配置（设计文档 §4.4.2）
+    # 超时按服务敏感度区分：signing-service 5s（签名+广播允许较长）、wallet-service 3s（地址工具轻量）
+    openfeign:
+      client:
+        config:
+          default:
+            connect-timeout: 3000
+            read-timeout: 10000
+            logger-level: BASIC
+          # 签名服务：签名 + 广播，允许较长读超时（5s）
+          nexus-signing-service:
+            connect-timeout: 2000
+            read-timeout: 5000
+          # 钱包管理服务：地址工具/提现审批，轻量调用（3s）
+          nexus-wallet-service:
+            connect-timeout: 2000
+            read-timeout: 3000
+          # 跨链桥：跨链操作允许最长
+          nexus-bridge:
+            connect-timeout: 3000
+            read-timeout: 15000
+      # 启用 Sentinel 作为 Feign 的熔断器（fallback 类 Phase 2 #61 补全）
+      circuitbreaker:
+        enabled: true
+      compression:
+        request:
+          enabled: true
+        response:
+          enabled: true
+
+# NexusChain Gateway configuration
+nexus:
+  # Token symbol used across the platform
+  token-symbol: NEX
+
+  # Chain / RPC node configuration (consumed by nexus-sdk)
+  chain:
+    # Core node listens on 19585 (nexus-core application.properties: server.port=${SERVER_PORT:19585}).
+    # Override per-environment via NEX_CHAIN_RPC_URL (k8s ConfigMap).
+    rpc-url: ${NEX_CHAIN_RPC_URL:http://localhost:19585}
+    chain-id: 1
+    confirmations: 12
+
+  # Consortium (PoA sidechain) node configuration.
+  # Consortium node listens on 8080 by default (nexus-consortium application.yml:
+  # server.port: '8080'). Override via NEX_CONSORTIUM_RPC_URL.
+  consortium:
+    rpc-url: ${NEX_CONSORTIUM_RPC_URL:http://localhost:8080}
+    chain-id: 2
+    confirmations: 3
+
+  # nexus-exchange-wallet service endpoint (for transfer construction & signing)
+  #
+  # Phase 1 任务 #55：gateway 已切换为 Feign 调用 signing-service / wallet-service
+  # （通过 Nacos 服务发现），下方 base-url / transfer-path / sign-path / timeout-ms
+  # 在 Feign 模式下不再使用，仅保留供 HttpSigningServiceClient / HttpWalletMgmtClient
+  # 回退实现（@ConditionalOnProperty 开关启用时）及 WalletServiceHealthIndicator 使用。
+  # platform-pubkey 仍需保留：作为签名服务 signTransfer 的 fromPubkey 参数（平台热钱包公钥）。
+  exchange-wallet:
+    base-url: http://localhost:8081
+    transfer-path: /api/v1/transfers
+    sign-path: /api/v1/transfers/sign
+    timeout-ms: 10000
+    # Platform (hot-wallet) public key used as the on-chain payer when delegating
+    # signing to signing-service. The private key lives ONLY in signing-service's
+    # keystore and is never transmitted to the gateway. SET THIS PER DEPLOYMENT.
+    platform-pubkey: ""
+    # 兼容委托层 ExchangeWalletClient 装配开关（Phase 1 #55 默认禁用，Feign 替代）。
+    # 紧急回滚场景（Feign 调用失败率飙升）可置 true 切回 RestTemplate + 硬编码 baseUrl。
+    enabled: false
+
+  # Phase 1 任务 #55：服务边界拆分 + Feign 传输配置
+  #
+  # transport-mode=feign：gateway 通过 OpenFeign + Nacos 服务发现调用独立部署的
+  # nexus-signing-service / nexus-wallet-service / nexus-bridge。
+  # signing-service / wallet-service 名与各服务 @FeignClient(name=...) 及 Nacos 注册名一致。
+  service-mesh:
+    # 跨服务调用传输模式：feign（当前，Phase 1 启用）| in-process（legacy 进程内）
+    transport-mode: feign
+    # 签名服务名（Nacos 注册名，与 SigningServiceFeignClient @FeignClient(name=...) 一致）
+    signing-service: nexus-signing-service
+    # 钱包管理服务名（Nacos 注册名，与 WalletMgmtFeignClient @FeignClient(name=...) 一致）
+    wallet-service: nexus-wallet-service
+
+  # Nacos 服务发现启用开关（Phase 1 任务 #55）
+  #
+  # nacos.enabled=true：已引入 spring-cloud-starter-alibaba-nacos-discovery / -config 依赖
+  # （见 build.gradle），bootstrap.yml 配置 Nacos server-addr / namespace / group / shared-configs。
+  # gateway 启动时向 Nacos 注册，并订阅 signing-service / wallet-service / bridge 实例。
+  nacos:
+    enabled: true
+
+  # Webhook callback configuration
+  webhook:
+    # Public base URL for chain event callbacks
+    callback-url: http://localhost:8080/api/v1/webhooks/chain-events
+    # Shared secret for verifying callback signatures
+    callback-secret: ${NEX_WEBHOOK_SECRET:nexus_webhook_secret}
+    # === P4-T5：Webhook 重试与死信队列增强 ===
+    # 死信队列存储：kafka（生产，默认）| memory（测试/无 Kafka broker 环境）
+    dlq:
+      store: kafka
+      # 是否等待 Kafka ack 后返回（测试环境可关闭）
+      wait-for-ack: true
+
+  # Checkout (cashier) configuration
+  checkout:
+    # Base URL for cashier redirect pages
+    base-url: http://localhost:8080/api/v1/checkout
+    # Order expiry time in minutes
+    order-expiry-minutes: 30
+
+  # Subscription configuration
+  subscription:
+    # Maximum retry count for failed recurring charges (legacy, used by P1 SubscriptionServiceImpl)
+    max-retry: 3
+    # Retry interval in minutes (legacy, used by P1 SubscriptionServiceImpl)
+    retry-interval-minutes: 60
+
+    # === P4-T8：订阅与循环计费引擎 ===
+    # 周期扣款调度 cron（Spring 6 六字段格式：秒 分 时 日 月 周）
+    # 默认每小时整点扫描到期订阅
+    billing-cycle-cron: "0 0 * * * *"
+    # Dunning 策略：扣款失败时的重试/通知/暂停策略
+    dunning:
+      # 最大重试次数（达到后通知商户，但仍继续重试直到 suspend-after）
+      max-retries: 3
+      # 重试间隔（天），第 1/2/3 次失败后分别间隔 1/3/7 天重试
+      retry-intervals: 1d,3d,7d
+      # 累计失败次数达到此值后暂停订阅
+      suspend-after: 5
+
+  # Routing configuration
+  routing:
+    # Dual-chain routing: split traffic between core mainnet (large/ final
+    # settlement) and consortium sidechain (small/ high-frequency, low latency).
+    dual-chain:
+      enabled: true
+      # Payments with amount < threshold go to consortium first.
+      small-amount-threshold: 1000000
+      # High-frequency window (reserved for future frequency-based routing).
+      high-frequency-window: 60s
+      # Preferred connectors per bucket (in failover order).
+      preferred-connectors:
+        small: ["consortium", "chain"]
+        large: ["chain", "consortium"]
+
+    # === P4-T4：AI 驱动路由引擎 ===
+    # 在规则路由之上增加 AI 路由策略，按历史指标（成功率/延迟/成本）打分排序。
+    # 通过 A/B 测试框架分流对比 AI 组与规则组，模型异常或样本不足时降级到规则路由。
+    ai:
+      enabled: true
+      # 模型类型：heuristic（启发式加权评分，无外部 ML 依赖）
+      model-type: heuristic
+      ab-test:
+        enabled: true
+        # 分配到 AI 路由的流量百分比（0=全规则，100=全AI）
+        ai-traffic-percentage: 10
+      metrics:
+        # 滑动窗口大小（每个 connector 保留的最近事件数）
+        window-size: 1000
+        # 模型推理最小样本数（冷启动保护，低于此值降级到规则路由）
+        min-samples: 10
+
+  # === P4-T6：多租户改造 ===
+  # 启用后 TenantApiKeyInterceptor + TenantRateLimiter 生效，按 X-Tenant-Api-Key 鉴权
+  # 并按 tenantId 隔离数据/限流/计费。关闭时拦截器直接放行（兼容单租户模式）。
+  tenant:
+    enabled: true
+    # 默认限流配额（租户未配置 TenantConfig 时降级使用）
+    default-rate-limit-per-second: 100
+    default-rate-limit-per-minute: 6000
+    # 默认手续费率（基点 bps，100 = 1%）
+    default-fee-rate-bps: 100
+
+logging:
+  level:
+    org.nexus: INFO
+    org.springframework.web: INFO
+    org.hibernate.SQL: WARN
+
+# Resilience4j circuit breaker / retry configuration
+# Phase 1 任务 #55：保留（管理对链节点直接 HTTP 调用的熔断/重试，与 Sentinel 共存。
+# Sentinel 管理 Feign 层对 signing/wallet-service 的调用，不使用此处配置）。
+resilience4j:
+  circuitbreaker:
+    instances:
+      chainNode:
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 30s
+        sliding-window-size: 10
+        minimum-number-of-calls: 5
+      consortiumNode:
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 30s
+        sliding-window-size: 10
+        minimum-number-of-calls: 5
+      walletService:
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 30s
+        sliding-window-size: 10
+        minimum-number-of-calls: 5
+  retry:
+    instances:
+      chainNode:
+        max-attempts: 3
+        wait-duration: 1s
+      consortiumNode:
+        max-attempts: 3
+        wait-duration: 1s
+      walletService:
+        max-attempts: 2
+        wait-duration: 2s
+
+# Actuator health checks
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: when_authorized
+  # === Phase 3 任务 #61：链路追踪（设计文档 §4.3.2） ===
+  # Micrometer Tracing + Brave + Zipkin，W3C traceparent 跨服务传播
+  tracing:
+    sampling:
+      probability: 1.0  # 开发环境 100% 采样，生产环境建议 0.1
+  zipkin:
+    tracing:
+      endpoint: ${NEX_ZIPKIN_ENDPOINT:http://localhost:9411/api/v2/spans}
+
+# === Phase 3 任务 #61：Seata 分布式事务配置（设计文档 §4.2.2） ===
+# SCA 2023.0.1.0 + seata-spring-boot-starter 2.0.0
+# tx-service-group 与 Seata Server 配置的 service.vgroup-mapping 对齐
+seata:
+  enabled: true
+  tx-service-group: nexus-tx-group
+  service:
+    vgroup-mapping:
+      nexus-tx-group: default
+    grouplist:
+      default: ${NEX_SEATA_SERVER:localhost:8091}

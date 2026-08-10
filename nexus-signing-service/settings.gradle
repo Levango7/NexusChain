@@ -1,0 +1,10 @@
+plugins {
+    id 'org.gradle.toolchains.foojay-resolver-convention' version '0.5.0'
+}
+
+rootProject.name = 'nexus-signing-service'
+
+// Phase 1（#54）：signing-service 作为根构建 include 子模块（settings.gradle 中
+// include 'nexus-signing-service'），通过 project(':nexus-sdk:java') 直接引用
+// nexus-sdk:java。本 settings.gradle 在根构建上下文中不生效，仅保留用于
+// signing-service 独立构建（如直接在 nexus-signing-service 目录下运行 gradle）。

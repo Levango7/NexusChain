@@ -1,0 +1,106 @@
+{
+  "_comment": "NexusChain k6 压测配置 — P2-T6 性能压测与调优",
+  "_doc": "所有 URL/密钥通过 k6 -e 环境变量覆盖，此处仅给出默认值；生产压测时务必通过环境变量注入凭据。",
+  "env": {
+    "default": {
+      "BASE_URL_GATEWAY": "http://localhost:8080",
+      "BASE_URL_BRIDGE": "http://localhost:8084",
+      "BASE_URL_SIGNING": "http://localhost:8082",
+      "BASE_URL_WALLET": "http://localhost:8083",
+      "API_KEY": "perf-test-api-key",
+      "SIGNING_SECRET": "perf-test-signing-secret",
+      "MERCHANT_ID": "1"
+    },
+    "staging": {
+      "BASE_URL_GATEWAY": "https://staging-gateway.nexuschain.io",
+      "BASE_URL_BRIDGE": "https://staging-bridge.nexuschain.io",
+      "BASE_URL_SIGNING": "https://staging-signing.nexuschain.io",
+      "BASE_URL_WALLET": "https://staging-wallet.nexuschain.io"
+    }
+  },
+  "scenarios": {
+    "payment-create": {
+      "target_rps": 1000,
+      "target_p99_ms": 500,
+      "endpoint": "POST /api/v1/payments",
+      "thinkTimeMs": { "min": 100, "max": 300 },
+      "stages": [
+        { "duration": "30s", "target": 200 },
+        { "duration": "1m",  "target": 500 },
+        { "duration": "2m",  "target": 1000 },
+        { "duration": "30s", "target": 0 }
+      ],
+      "thresholds": {
+        "http_req_duration": ["p(99)<500"],
+        "http_req_failed": ["rate<0.01"],
+        "checks": ["rate>0.99"]
+      }
+    },
+    "payment-query": {
+      "target_rps": 2000,
+      "target_p99_ms": 200,
+      "endpoint": "GET /api/v1/payments/{id}",
+      "stages": [
+        { "duration": "30s", "target": 500 },
+        { "duration": "1m",  "target": 1000 },
+        { "duration": "2m",  "target": 2000 },
+        { "duration": "30s", "target": 0 }
+      ],
+      "thresholds": {
+        "http_req_duration": ["p(99)<200"],
+        "http_req_failed": ["rate<0.01"],
+        "checks": ["rate>0.99"]
+      }
+    },
+    "bridge-lock": {
+      "target_rps": 100,
+      "target_p99_ms": 2000,
+      "endpoint": "POST /api/v1/bridge/lock",
+      "stages": [
+        { "duration": "30s", "target": 20 },
+        { "duration": "1m",  "target": 50 },
+        { "duration": "2m",  "target": 100 },
+        { "duration": "30s", "target": 0 }
+      ],
+      "thresholds": {
+        "http_req_duration": ["p(99)<2000"],
+        "http_req_failed": ["rate<0.01"],
+        "checks": ["rate>0.99"]
+      }
+    },
+    "webhook-delivery": {
+      "target_rps": 500,
+      "target_p99_ms": 1000,
+      "endpoint": "POST /api/v1/payments/{id}/confirm (模拟回调)",
+      "stages": [
+        { "duration": "30s", "target": 100 },
+        { "duration": "1m",  "target": 300 },
+        { "duration": "2m",  "target": 500 },
+        { "duration": "30s", "target": 0 }
+      ],
+      "thresholds": {
+        "http_req_duration": ["p(99)<1000"],
+        "http_req_failed": ["rate<0.01"],
+        "checks": ["rate>0.99"]
+      }
+    }
+  },
+  "smoke": {
+    "_doc": "冒烟测试：低负载快速验证，用于 CI 流水线 PR 触发",
+    "vus": 5,
+    "duration": "30s",
+    "thresholds": {
+      "http_req_failed": ["rate<0.05"],
+      "checks": ["rate>0.95"]
+    }
+  },
+  "common": {
+    "timeoutMs": 10000,
+    "userAgent": "NexusChain-k6-perf/1.0",
+    "tlsSkipVerify": false,
+    "headers": {
+      "Content-Type": "application/json",
+      "Accept": "application/json"
+    }
+  }
+}

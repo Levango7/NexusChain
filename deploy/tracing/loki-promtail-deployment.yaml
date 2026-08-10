@@ -1,0 +1,340 @@
+﻿# ============================================================================
+# NexusChain - Loki + Promtail K8s 部署（P3-T5：trace_id 日志关联）
+# ============================================================================
+# 用途：
+#   1. 部署 Loki（日志聚合后端，单节点模式，dev/staging 适用）
+#   2. 部署 Promtail（日志采集 agent，DaemonSet 模式，每节点一个）
+#   3. 与 OTel Collector + Jaeger 同命名空间 nexus，统一追踪 + 日志栈
+#
+# 部署：
+#   kubectl apply -f deploy/tracing/loki-promtail-deployment.yaml -n nexus
+#
+# 镜像版本基线：
+#   grafana/loki:2.9.8（2024-08，支持 trace_id 标签 + LogQL）
+#   grafana/promtail:2.9.8
+#
+# 注意：
+#   - 单节点模式（monolithic）仅适用 dev / staging
+#   - 生产环境应使用 Loki Simple Scalable 或 Microservices 模式
+#     （见 https://grafana.com/docs/loki/latest/setup/micro-services-mode/）
+#   - Promtail ConfigMap 由 promtail-config.yaml 单独管理
+# ============================================================================
+---
+# ============================================================================
+# 1. Loki Deployment（单节点，monolithic）
+# ============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: loki
+  namespace: nexus
+  labels:
+    app.kubernetes.io/name: loki
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/component: tracing
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: loki
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: loki
+        app.kubernetes.io/part-of: nexus
+        app.kubernetes.io/component: tracing
+    spec:
+      containers:
+        - name: loki
+          image: grafana/loki:2.9.8
+          imagePullPolicy: IfNotPresent
+          args:
+            - -config.file=/etc/loki/loki.yaml
+          env:
+            - name: GOGC
+              value: "100"
+          ports:
+            - name: http-metrics
+              containerPort: 3100
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /ready
+              port: http-metrics
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http-metrics
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          volumeMounts:
+            - name: loki-config-vol
+              mountPath: /etc/loki
+              readOnly: true
+            - name: loki-storage-vol
+              mountPath: /loki
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 2Gi
+      volumes:
+        - name: loki-config-vol
+          configMap:
+            name: loki-config
+        - name: loki-storage-vol
+          emptyDir: {}
+
+---
+# ============================================================================
+# 2. Loki ConfigMap
+# ============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loki-config
+  namespace: nexus
+  labels:
+    app.kubernetes.io/name: loki
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/component: tracing
+data:
+  loki.yaml: |
+    auth_enabled: false
+
+    server:
+      http_listen_port: 3100
+      grpc_listen_port: 9096
+      log_level: info
+
+    common:
+      path_prefix: /loki
+      storage:
+        filesystem:
+          chunks_directory: /loki/chunks
+          rules_directory: /loki/rules
+      replication_factor: 1
+      ring:
+        kvstore:
+          store: inmemory
+
+    schema_config:
+      configs:
+        - from: 2024-01-01
+          store: tsdb
+          object_store: filesystem
+          schema: v13
+          index:
+            prefix: index_
+            period: 24h
+
+    limits_config:
+      # -- 允许 trace_id / span_id 作为标签（高基数，生产需评估）
+      allow_structured_metadata: true
+      # -- 单租户日志速率限制（默认 10MB/s）
+      per_stream_rate_limit: 10MB
+      per_stream_rate_limit_burst: 20MB
+      # -- 标签值长度限制（trace_id 32 字符，span_id 16 字符）
+      max_label_value_length: 64
+      # -- 拒绝过期日志（超过 24h 的日志不接收）
+      reject_old_samples: true
+      reject_old_samples_max_age: 24h
+
+    compactor:
+      working_directory: /loki/compactor
+      compaction_interval: 10m
+      retention_enabled: true
+      retention_delete_delay: 2h
+      retention_delete_worker_count: 150
+      delete_request_store: filesystem
+
+    ruler:
+      storage:
+        type: local
+        local:
+          directory: /loki/rules
+      rule_path: /loki/rules-temp
+      alertmanager_url: ""
+      ring:
+        kvstore:
+          store: inmemory
+      enable_api: true
+
+---
+# ============================================================================
+# 3. Loki Service
+# ============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: loki
+  namespace: nexus
+  labels:
+    app.kubernetes.io/name: loki
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/component: tracing
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: loki
+  ports:
+    - name: http-metrics
+      port: 3100
+      targetPort: 3100
+      protocol: TCP
+    - name: grpc
+      port: 9096
+      targetPort: 9096
+      protocol: TCP
+
+---
+# ============================================================================
+# 4. Promtail DaemonSet（每节点一个，采集 Pod 日志）
+# ============================================================================
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: promtail
+  namespace: nexus
+  labels:
+    app.kubernetes.io/name: promtail
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/component: tracing
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: promtail
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: promtail
+        app.kubernetes.io/part-of: nexus
+        app.kubernetes.io/component: tracing
+    spec:
+      serviceAccountName: promtail
+      containers:
+        - name: promtail
+          image: grafana/promtail:2.9.8
+          imagePullPolicy: IfNotPresent
+          args:
+            - -config.file=/etc/promtail/promtail.yaml
+            - -config.expand-env=true
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          ports:
+            - name: http-metrics
+              containerPort: 9080
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /ready
+              port: http-metrics
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http-metrics
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - name: promtail-config-vol
+              mountPath: /etc/promtail
+              readOnly: true
+            - name: pods-logs-vol
+              mountPath: /var/log/pods
+              readOnly: true
+            - name: positions-vol
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: promtail-config-vol
+          configMap:
+            name: promtail-config
+        - name: pods-logs-vol
+          hostPath:
+            path: /var/log/pods
+            type: Directory
+        - name: positions-vol
+          emptyDir: {}
+
+---
+# ============================================================================
+# 5. Promtail ServiceAccount + RBAC（读取 Pod 元数据）
+# ============================================================================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: promtail
+  namespace: nexus
+  labels:
+    app.kubernetes.io/name: promtail
+    app.kubernetes.io/part-of: nexus
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: promtail
+  labels:
+    app.kubernetes.io/name: promtail
+    app.kubernetes.io/part-of: nexus
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "namespaces", "nodes"]
+    verbs: ["get", "list", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: promtail
+  labels:
+    app.kubernetes.io/name: promtail
+    app.kubernetes.io/part-of: nexus
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: promtail
+subjects:
+  - kind: ServiceAccount
+    name: promtail
+    namespace: nexus
+
+---
+# ============================================================================
+# 6. Promtail Service（暴露 metrics 供 Prometheus 抓取）
+# ============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: promtail
+  namespace: nexus
+  labels:
+    app.kubernetes.io/name: promtail
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/component: tracing
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: promtail
+  ports:
+    - name: http-metrics
+      port: 9080
+      targetPort: 9080
+      protocol: TCP

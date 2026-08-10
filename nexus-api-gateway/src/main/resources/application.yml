@@ -1,0 +1,136 @@
+# nexus-api-gateway application 配置
+#
+# P3-T2：Spring Cloud Gateway 统一 API 入口业务配置。
+# 设计文档 §3.3 / §4.2.2。端口 8085（与下游 4 个服务 8080/8082/8083/8084 错开）。
+#
+# 敏感配置（auth.hmac-secret / auth.api-keys）生产环境通过 Nacos
+# nexus-api-gateway.yaml 加密下发，本地开发可通过环境变量或本文件覆盖。
+
+server:
+  port: ${SERVER_PORT:8085}
+  # === Phase 3 任务 #61：优雅停机（设计文档 §4.6.2） ===
+  shutdown: graceful
+
+spring:
+  application:
+    name: nexus-api-gateway
+
+  # === Phase 3 任务 #61：优雅停机等待时长（设计文档 §4.6.2） ===
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+
+  # === Reactive Redis（限流令牌桶） ===
+  data:
+    redis:
+      host: ${NEX_REDIS_HOST:localhost}
+      port: ${NEX_REDIS_PORT:6379}
+      password: ${NEX_REDIS_PASSWORD:}
+      database: ${NEX_REDIS_DATABASE:0}
+      timeout: 3000ms
+      lettuce:
+        pool:
+          max-active: 16
+          max-idle: 8
+          min-idle: 2
+          max-wait: 1000ms
+
+  # === Spring Cloud Gateway 配置 ===
+  cloud:
+    gateway:
+      # 服务发现路由：禁用默认路由（仅使用 Java DSL 显式声明的路由）
+      discovery:
+        locator:
+          enabled: false
+      # 跨域配置：由 CorsFilter 全局过滤器统一处理，此处不重复声明
+      # default-filters：所有路由共享的过滤器（按需追加，当前为空）
+      default-filters: []
+      # HTTP 客户端（转发至下游）配置
+      httpclient:
+        # 连接超时（毫秒）
+        connect-timeout: 3000
+        # 响应超时（毫秒），跨链桥等长耗时操作由路由级超时覆盖
+        response-timeout: 30s
+        # 连接池
+        pool:
+          type: elastic
+          max-connections: 200
+          acquire-timeout: 5000ms
+      # 跨服务调用熔断（依赖 Sentinel，本网关层不引入 Resilience4j）
+      circuitbreaker:
+        enabled: false
+
+    # Spring Cloud LoadBalancer 配置（替代已废弃的 Ribbon）
+    loadbalancer:
+      ribbon:
+        enabled: false
+      cache:
+        enabled: true
+        ttl: 30s
+
+# === NexusChain API Gateway 业务配置 ===
+nexus:
+  api-gateway:
+    # === 鉴权配置（AuthenticationFilter） ===
+    auth:
+      # 鉴权总开关（本地调试可关）
+      enabled: ${NEX_AUTH_ENABLED:true}
+      # 合法 API Key 列表（逗号分隔）。生产环境通过 Nacos 下发，禁止入仓
+      api-keys: ${NEX_API_KEYS:nexus-internal-api-key}
+      # HMAC 共享密钥。生产环境通过 Nacos 加密下发
+      hmac-secret: ${NEX_HMAC_SECRET:nexus-hmac-secret}
+      # 时间戳偏差上限（秒），超过则拒绝（防重放）
+      max-timestamp-skew-seconds: 300
+
+    # === 限流配置（RateLimitFilter） ===
+    ratelimit:
+      # 限流总开关
+      enabled: ${NEX_RATELIMIT_ENABLED:true}
+      # 令牌桶容量（突发上限）
+      capacity: 100
+      # 令牌补充速率（令牌/秒，稳态 QPS）
+      refill-rate: 10
+      # Redis 不可用时是否拒绝（fail-closed）。默认 false（fail-open 放行）
+      fail-closed: false
+
+    # === CORS 配置（CorsFilter） ===
+    cors:
+      # 允许的 Origin 列表（逗号分隔）。开发环境 *，生产环境显式列出商户域名
+      allowed-origins: ${NEX_CORS_ORIGINS:*}
+      # 允许的 HTTP 方法
+      allowed-methods: GET,POST,PUT,DELETE,PATCH,OPTIONS
+      # 允许的请求头
+      allowed-headers: "*"
+      # 暴露给浏览器的响应头
+      exposed-headers: X-Request-Id,X-RateLimit-Limit,X-RateLimit-Remaining
+      # 是否允许携带凭证
+      allow-credentials: false
+      # 预检缓存时长（秒）
+      max-age: 3600
+
+# === Actuator 健康检查 ===
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus,gateway
+  endpoint:
+    health:
+      show-details: when_authorized
+  # === Phase 3 任务 #61：链路追踪（设计文档 §4.3.2） ===
+  # Micrometer Tracing + Brave + Zipkin，W3C traceparent 跨服务传播
+  tracing:
+    sampling:
+      probability: 1.0  # 开发环境 100% 采样，生产环境建议 0.1
+  zipkin:
+    tracing:
+      endpoint: ${NEX_ZIPKIN_ENDPOINT:http://localhost:9411/api/v2/spans}
+
+# === 日志 ===
+logging:
+  level:
+    org.nexus: INFO
+    org.springframework.cloud.gateway: INFO
+    org.springframework.web: INFO
+    reactor.netty: WARN
+  pattern:
+    level: "%5p [${spring.application.name:},%X{traceId:-},%X{spanId:-}]"

@@ -1,0 +1,317 @@
+name: NexusChain Security Scan
+
+# P2-T7: 安全扫描自动化深化（SAST + DAST + SCA）
+# -----------------------------------------------------------------------------
+# 触发：push 到 master / 每周一定时扫描 / 手动触发(workflow_dispatch)
+# 扫描器：
+#   1. Trivy fs      — Gradle 依赖 + 源码配置漏洞扫描 + CycloneDX SBOM 产出
+#   2. Trivy image   — Docker 镜像漏洞扫描（nexus-gateway / nexus-bridge）
+#   3. OWASP Dep-Check — 备选方案，扫描 build.gradle 生成 HTML/JSON 报告
+#   4. SpotBugs + FindSecBugs（SAST）— Java 静态安全扫描，产出 HTML/XML 报告
+#   5. OWASP ZAP 基线扫描（DAST）— nexus-gateway API 动态扫描
+#   6. 安全发现分诊 — 高危漏洞自动创建 GitHub Issue（遵循 SLA）
+# 失败条件：发现 CRITICAL 级别漏洞 → workflow 失败（exit-code 1）
+# SARIF 报告上传至 GitHub Security tab（Code Scanning Alerts）。
+# SLA：P0 24h / P1 7d / P2 30d（见 docs/security-sla.md）
+
+on:
+  push:
+    branches: [master]
+  schedule:
+    # 每周一 03:00 UTC（北京时间周一 11:00）
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+
+jobs:
+  # ============================================================
+  # 1. Trivy 文件系统扫描（Gradle 依赖 + 源码配置）+ CycloneDX SBOM
+  # ============================================================
+  trivy-fs-scan:
+    name: Trivy Filesystem Scan + SBOM
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write   # 上传 SARIF 到 Security tab 所需
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v4
+
+      - name: Trivy fs 扫描 → SARIF（全量漏洞，不阻断）
+        uses: aquasecurity/trivy-action@v0.20.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL,HIGH,MEDIUM,LOW
+          skip-dirs: build,out,target,.gradle,gradle,node_modules,jdk17,jdk-provision,.codeartsdoer
+          format: sarif
+          output: trivy-fs-results.sarif
+          exit-code: 0
+
+      - name: 上传 SARIF 到 GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-fs-results.sarif
+          category: trivy-fs
+
+      - name: Trivy fs 扫描 → JSON（用于 issue 分诊）
+        uses: aquasecurity/trivy-action@v0.20.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL,HIGH,MEDIUM,LOW
+          skip-dirs: build,out,target,.gradle,gradle,node_modules,jdk17,jdk-provision,.codeartsdoer
+          format: json
+          output: trivy-fs-results.json
+          exit-code: 0
+
+      # === SCA: CycloneDX SBOM 产出（P2-T7） ===
+      # 生成 CycloneDX 格式的软件物料清单（SBOM），用于依赖合规审计与漏洞追踪
+      - name: Trivy 生成 CycloneDX SBOM
+        uses: aquasecurity/trivy-action@v0.20.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          skip-dirs: build,out,target,.gradle,gradle,node_modules,jdk17,jdk-provision,.codeartsdoer
+          format: cyclonedx
+          output: sbom-cyclonedx.json
+          exit-code: 0
+
+      - name: 上传 Trivy JSON + SBOM 报告
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-fs-reports
+          path: |
+            trivy-fs-results.json
+            sbom-cyclonedx.json
+          retention-days: 30
+
+      - name: Trivy fs 扫描（CRITICAL 阻断）
+        uses: aquasecurity/trivy-action@v0.20.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL
+          skip-dirs: build,out,target,.gradle,gradle,node_modules,jdk17,jdk-provision,.codeartsdoer
+          format: table
+          exit-code: 1
+
+  # ============================================================
+  # 2. Trivy Docker 镜像扫描
+  # ============================================================
+  trivy-docker-scan:
+    name: Trivy Docker Image Scan (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [nexus-gateway, nexus-bridge]
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v4
+
+      - name: 构建 Docker 镜像（仅用于扫描，不推送）
+        run: docker build -t ${{ matrix.module }}:scan ./${{ matrix.module }}
+
+      - name: Trivy 镜像扫描 → SARIF
+        uses: aquasecurity/trivy-action@v0.20.0
+        with:
+          image-ref: ${{ matrix.module }}:scan
+          severity: CRITICAL,HIGH,MEDIUM,LOW
+          format: sarif
+          output: trivy-docker-${{ matrix.module }}.sarif
+          exit-code: 0
+
+      - name: 上传 SARIF 到 GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-docker-${{ matrix.module }}.sarif
+          category: trivy-docker-${{ matrix.module }}
+
+      - name: Trivy 镜像扫描（CRITICAL 阻断）
+        uses: aquasecurity/trivy-action@v0.20.0
+        with:
+          image-ref: ${{ matrix.module }}:scan
+          severity: CRITICAL
+          format: table
+          exit-code: 1
+
+  # ============================================================
+  # 3. OWASP Dependency-Check（备选方案，扫描 build.gradle）
+  # -----------------------------------------------------------------------------
+  # 生成 HTML + JSON 报告并上传为 artifact。
+  # --failOnCVSS 9：CVSS >= 9.0（CRITICAL）时返回非零退出码，阻断流水线。
+  # ============================================================
+  owasp-dependency-check:
+    name: OWASP Dependency-Check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v4
+
+      - name: 运行 OWASP Dependency-Check
+        uses: dependency-check/dependency-check-action@main
+        with:
+          project: NexusChain
+          scan: .
+          format: HTML,JSON
+          args: >
+            --enableExperimental
+            --noupdate
+            --out reports
+            --failOnCVSS 9
+
+      - name: 上传 OWASP 报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: owasp-dependency-check-report
+          path: |
+            reports/dependency-check-report.html
+            reports/dependency-check-report.json
+            **/dependency-check-report.html
+            **/dependency-check-report.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+  # ============================================================
+  # 4. SAST: SpotBugs + FindSecBugs 静态安全扫描（P2-T7）
+  # -----------------------------------------------------------------------------
+  # 在根 build.gradle 中已配置 spotbugs-gradle-plugin:5.1.5 + findsecbugs:1.13.0
+  # effort=max, reportLevel=low（threshold=low），产出 HTML + XML 报告
+  # 排除测试代码（spotbugsTest.enabled=false）和 protobuf 生成代码
+  # ============================================================
+  sast-spotbugs:
+    name: SAST - SpotBugs + FindSecBugs
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v4
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: 缓存 Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-sast-${{ hashFiles('**/*.gradle*', 'gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: ${{ runner.os }}-gradle-sast-
+
+      - name: 运行 SpotBugs + FindSecBugs（spotbugsAll 聚合任务）
+        run: ./gradlew spotbugsAll --no-daemon
+
+      - name: 收集 SpotBugs HTML 报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spotbugs-html-reports
+          path: '**/build/reports/spotbugs/main.html'
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: 收集 SpotBugs XML 报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spotbugs-xml-reports
+          path: '**/build/reports/spotbugs/main.xml'
+          if-no-files-found: ignore
+          retention-days: 30
+
+  # ============================================================
+  # 5. DAST: OWASP ZAP 基线扫描 nexus-gateway API（P2-T7）
+  # -----------------------------------------------------------------------------
+  # 通过 docker-compose 启动 nexus-gateway + 依赖，等待健康检查通过后
+  # 运行 ZAP 基线扫描（被动扫描，不发起攻击 payload）
+  # 目标：http://localhost:8080（nexus-gateway API 端点）
+  # 产出：HTML + XML + JSON 报告
+  # continue-on-error: DAST 不阻断流水线（gateway 依赖可能无法在 CI 完整启动）
+  # ============================================================
+  dast-zap-baseline:
+    name: DAST - OWASP ZAP Baseline (gateway)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    continue-on-error: true
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v4
+
+      - name: 启动 nexus-gateway + 依赖
+        run: |
+          docker compose up -d nexus-gateway
+          echo "等待 gateway 健康检查通过（最长 180s）..."
+          timeout 180 bash -c 'until curl -sf http://localhost:8080/actuator/health > /dev/null 2>&1; do echo "等待中..."; sleep 3; done' && echo "gateway 已就绪" || { echo "gateway 启动超时，跳过 DAST"; exit 1; }
+
+      - name: OWASP ZAP 基线扫描
+        run: |
+          mkdir -p reports/zap
+          docker run --rm -t --network=host \
+            -v $(pwd)/reports/zap:/zap/reports:rw \
+            owasp/zap2docker-stable zap-baseline.py \
+            -t http://localhost:8080 \
+            -r zap-report.html \
+            -x zap-report.xml \
+            -J zap-report.json \
+            -I \
+            --base-line-url http://localhost:8080/actuator/health
+
+      - name: 上传 ZAP 报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-baseline-report
+          path: reports/zap/
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: 关闭服务
+        if: always()
+        run: docker compose down || true
+
+  # ============================================================
+  # 6. 安全发现分诊：高危漏洞自动创建 GitHub Issue（P2-T7）
+  # -----------------------------------------------------------------------------
+  # 解析 Trivy JSON 报告，对 CRITICAL/HIGH 漏洞自动创建 GitHub Issue
+  # 去重：通过 label "security-triage" + 漏洞指纹（CVE+包名）避免重复创建
+  # SLA：P0(CRITICAL) 24h / P1(HIGH) 7d / P2(MEDIUM) 30d（见 docs/security-sla.md）
+  # ============================================================
+  security-issue-triage:
+    name: Security Issue Triage
+    runs-on: ubuntu-latest
+    needs: [trivy-fs-scan]
+    if: always() && needs.trivy-fs-scan.result == 'success'
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v4
+
+      - name: 下载 Trivy 报告
+        uses: actions/download-artifact@v4
+        with:
+          name: trivy-fs-reports
+
+      - name: 高危漏洞自动创建 GitHub Issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          python3 scripts/security/trivy-to-issues.py \
+            --report trivy-fs-results.json \
+            --repo "$REPO" \
+            --min-severity HIGH \
+            --label security-triage

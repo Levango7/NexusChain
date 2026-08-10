@@ -1,0 +1,355 @@
+# ============================================================================
+# NexusChain - VirtualService 配置（4 个业务服务）
+# ============================================================================
+# 用途：
+#   为 nexus-gateway / nexus-bridge / nexus-signing-service / nexus-wallet-service
+#   定义 Istio VirtualService，统一治理东西向流量。
+#
+# 设计要点（所有服务一致）：
+#   1. 超时 3s：与 Sentinel 配置对齐，超过即返回 504
+#   2. 重试 3 次：仅对 5xx / connect-failure / refused-stream 重试，避免幂等性陷阱
+#   3. 金丝雀发布：v1 (stable) 90% + v2 (canary) 10% 流量分割
+#   4. 路由匹配按 HTTP 路径前缀，避免 catch-all 误匹配
+#
+# 应用：
+#   kubectl apply -f deploy/istio/virtualservices.yaml -n nexus
+#
+# 与 Sentinel 的职责划分：
+#   - Istio VirtualService：基础设施级超时 / 重试 / 金丝雀流量分割
+#   - Sentinel：业务级限流（QPS）+ 熔断（慢调用比例）+ 热点参数
+# ============================================================================
+---
+# ============================================================================
+# 1. nexus-gateway VirtualService（支付网关，端口 8080）
+# ============================================================================
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: nexus-gateway
+  namespace: nexus
+  labels:
+    app.kubernetes.io/name: nexus-gateway
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/component: service-mesh
+  annotations:
+    description: "支付网关流量治理：3s 超时 + 3 次重试 + 90/10 金丝雀"
+spec:
+  hosts:
+    - nexus-gateway
+  http:
+    # -- 支付核心 API：严格超时 + 重试（幂等性由 idempotency-key 保证）
+    - name: payment-api
+      match:
+        - uri:
+            prefix: /api/v1/payments
+        - uri:
+            prefix: /api/v1/refunds
+      route:
+        - destination:
+            host: nexus-gateway
+            subset: stable
+            port:
+              number: 8080
+          weight: 90
+        - destination:
+            host: nexus-gateway
+            subset: canary
+            port:
+              number: 8080
+          weight: 10
+      timeout: 3s
+      retries:
+        attempts: 3
+        perTryTimeout: 1s
+        retryOn: 5xx,connect-failure,refused-stream,reset
+        retryRemoteLocalities: false
+    # -- 健康检查 / actuator：不重试，避免探针抖动放大
+    - name: health-and-actuator
+      match:
+        - uri:
+            prefix: /actuator
+      route:
+        - destination:
+            host: nexus-gateway
+            subset: stable
+            port:
+              number: 8080
+          weight: 100
+      timeout: 2s
+      retries:
+        attempts: 1
+    # -- 默认路由：兜底
+    - name: default
+      route:
+        - destination:
+            host: nexus-gateway
+            subset: stable
+            port:
+              number: 8080
+          weight: 90
+        - destination:
+            host: nexus-gateway
+            subset: canary
+            port:
+              number: 8080
+          weight: 10
+      timeout: 3s
+      retries:
+        attempts: 3
+        perTryTimeout: 1s
+        retryOn: 5xx,connect-failure,refused-stream,reset
+---
+# ============================================================================
+# 2. nexus-bridge VirtualService（跨链桥，端口 8084）
+# ============================================================================
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: nexus-bridge
+  namespace: nexus
+  labels:
+    app.kubernetes.io/name: nexus-bridge
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/component: service-mesh
+  annotations:
+    description: "跨链桥流量治理：3s 超时 + 3 次重试 + 90/10 金丝雀"
+spec:
+  hosts:
+    - nexus-bridge
+  http:
+    # -- 桥操作 API：锁定 / 解锁 / 转账状态查询
+    - name: bridge-api
+      match:
+        - uri:
+            prefix: /api/v1/bridge
+      route:
+        - destination:
+            host: nexus-bridge
+            subset: stable
+            port:
+              number: 8084
+          weight: 90
+        - destination:
+            host: nexus-bridge
+            subset: canary
+            port:
+              number: 8084
+          weight: 10
+      timeout: 3s
+      retries:
+        attempts: 3
+        perTryTimeout: 1s
+        retryOn: 5xx,connect-failure,refused-stream,reset
+    - name: health-and-actuator
+      match:
+        - uri:
+            prefix: /actuator
+      route:
+        - destination:
+            host: nexus-bridge
+            subset: stable
+            port:
+              number: 8084
+          weight: 100
+      timeout: 2s
+      retries:
+        attempts: 1
+    - name: default
+      route:
+        - destination:
+            host: nexus-bridge
+            subset: stable
+            port:
+              number: 8084
+          weight: 90
+        - destination:
+            host: nexus-bridge
+            subset: canary
+            port:
+              number: 8084
+          weight: 10
+      timeout: 3s
+      retries:
+        attempts: 3
+        perTryTimeout: 1s
+        retryOn: 5xx,connect-failure,refused-stream,reset
+---
+# ============================================================================
+# 3. nexus-signing-service VirtualService（签名服务，端口 8082）
+# ============================================================================
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: nexus-signing-service
+  namespace: nexus
+  labels:
+    app.kubernetes.io/name: nexus-signing-service
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/component: service-mesh
+  annotations:
+    description: "签名服务流量治理：3s 超时 + 3 次重试 + 90/10 金丝雀"
+spec:
+  hosts:
+    - nexus-signing-service
+  http:
+    # -- 签名 API：高安全级别，重试需谨慎（避免重复签名）
+    #    仅对 connect-failure 重试，不对 5xx 重试（5xx 可能是签名已执行）
+    - name: signing-api
+      match:
+        - uri:
+            prefix: /api/v1/signing
+      route:
+        - destination:
+            host: nexus-signing-service
+            subset: stable
+            port:
+              number: 8082
+          weight: 90
+        - destination:
+            host: nexus-signing-service
+            subset: canary
+            port:
+              number: 8082
+          weight: 10
+      timeout: 3s
+      retries:
+        attempts: 3
+        perTryTimeout: 1s
+        retryOn: connect-failure,refused-stream,reset
+    - name: health-and-actuator
+      match:
+        - uri:
+            prefix: /actuator
+      route:
+        - destination:
+            host: nexus-signing-service
+            subset: stable
+            port:
+              number: 8082
+          weight: 100
+      timeout: 2s
+      retries:
+        attempts: 1
+    - name: default
+      route:
+        - destination:
+            host: nexus-signing-service
+            subset: stable
+            port:
+              number: 8082
+          weight: 90
+        - destination:
+            host: nexus-signing-service
+            subset: canary
+            port:
+              number: 8082
+          weight: 10
+      timeout: 3s
+      retries:
+        attempts: 3
+        perTryTimeout: 1s
+        retryOn: connect-failure,refused-stream,reset
+---
+# ============================================================================
+# 4. nexus-wallet-service VirtualService（钱包服务，端口 8083）
+# ============================================================================
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: nexus-wallet-service
+  namespace: nexus
+  labels:
+    app.kubernetes.io/name: nexus-wallet-service
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/component: service-mesh
+  annotations:
+    description: "钱包服务流量治理：3s 超时 + 3 次重试 + 90/10 金丝雀"
+spec:
+  hosts:
+    - nexus-wallet-service
+  http:
+    # -- 钱包 API：余额查询可重试，转账/提现仅 connect-failure 重试
+    - name: wallet-query
+      match:
+        - uri:
+            prefix: /api/v1/wallet/balance
+        - uri:
+            prefix: /api/v1/wallet/transactions
+      route:
+        - destination:
+            host: nexus-wallet-service
+            subset: stable
+            port:
+              number: 8083
+          weight: 90
+        - destination:
+            host: nexus-wallet-service
+            subset: canary
+            port:
+              number: 8083
+          weight: 10
+      timeout: 3s
+      retries:
+        attempts: 3
+        perTryTimeout: 1s
+        retryOn: 5xx,connect-failure,refused-stream,reset
+    # -- 钱包写操作：仅 connect-failure 重试（避免重复扣款）
+    - name: wallet-mutation
+      match:
+        - uri:
+            prefix: /api/v1/wallet/transfer
+        - uri:
+            prefix: /api/v1/wallet/withdraw
+        - uri:
+            prefix: /api/v1/wallet/deposit
+      route:
+        - destination:
+            host: nexus-wallet-service
+            subset: stable
+            port:
+              number: 8083
+          weight: 90
+        - destination:
+            host: nexus-wallet-service
+            subset: canary
+            port:
+              number: 8083
+          weight: 10
+      timeout: 3s
+      retries:
+        attempts: 3
+        perTryTimeout: 1s
+        retryOn: connect-failure,refused-stream,reset
+    - name: health-and-actuator
+      match:
+        - uri:
+            prefix: /actuator
+      route:
+        - destination:
+            host: nexus-wallet-service
+            subset: stable
+            port:
+              number: 8083
+          weight: 100
+      timeout: 2s
+      retries:
+        attempts: 1
+    - name: default
+      route:
+        - destination:
+            host: nexus-wallet-service
+            subset: stable
+            port:
+              number: 8083
+          weight: 90
+        - destination:
+            host: nexus-wallet-service
+            subset: canary
+            port:
+              number: 8083
+          weight: 10
+      timeout: 3s
+      retries:
+        attempts: 3
+        perTryTimeout: 1s
+        retryOn: connect-failure,refused-stream,reset

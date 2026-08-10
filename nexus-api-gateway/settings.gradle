@@ -1,0 +1,10 @@
+plugins {
+    id 'org.gradle.toolchains.foojay-resolver-convention' version '0.5.0'
+}
+
+rootProject.name = 'nexus-api-gateway'
+
+// P3-T2：nexus-api-gateway 作为 composite build（includeBuild）纳入根构建。
+// 本 settings.gradle 在根构建上下文中不生效，仅保留用于 nexus-api-gateway
+// 独立构建（如直接在本目录下运行 gradle bootJar）。
+// 根构建通过 settings.gradle 的 includeBuild 'nexus-api-gateway' 引入。

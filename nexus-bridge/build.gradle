@@ -1,0 +1,127 @@
+// nexus-bridge
+//
+// Phase 2 微服务化（任务 #58）：跨链桥服务独立部署单元。
+//
+// 定位：跨链桥服务（lock/mint/burn/unlock）独立 Spring Boot 应用，
+// 承载以下职责：
+//   * 跨链资产锁定 / 铸造 / 销毁 / 解锁（BridgeController：/api/v1/bridge/**）
+//   * EVM 兼容链适配器（adapter/*：Ethereum / BSC / Polygon）
+//   * 跨链桥接 handler（handler/*：EthereumBridgeHandler / BSCBridgeHandler）
+//   * 流动性管理（liquidity/*：LiquidityManager / LiquidityPool）
+//   * 密钥保管（keyvault/*：FileKeyVault）
+//   * Ed25519 验签白名单（BridgeValidator，2026-08-06 起 MINT/UNLOCK 强制逐签验签）
+//
+// SCA 版本矩阵（设计文档 §4.1）：
+//   Spring Boot 3.2.5 / Spring Cloud 2023.0.3 / SCA 2023.0.1.0
+//   Nacos 2.3.2 / Sentinel 1.8.8 / OpenFeign 4.1.0
+//
+// 详见 .codeartsdoer/specs/microservice-phase1-2/design.md §3.3 / §4.1。
+
+plugins {
+    id 'org.springframework.boot' version '3.2.5'
+    id 'io.spring.dependency-management' version '1.1.4'
+    id 'java'
+}
+
+group = 'org.nexus'
+version = '2.1.0'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+}
+
+sourceCompatibility = 17
+
+repositories {
+    // SCA / Nacos / Sentinel 制品优先走阿里云镜像（与 signing-service / gateway build.gradle 对齐）
+    maven { url 'https://maven.aliyun.com/nexus/content/groups/public/' }
+    mavenCentral()
+}
+
+tasks.withType(JavaCompile) {
+    options.encoding = "UTF-8"
+}
+
+dependencies {
+    // === Spring Boot ===
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    implementation 'org.springframework.boot:spring-boot-starter-validation'
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+
+    // === Micrometer Tracing + Zipkin（Phase 3 任务 #61，设计文档 §4.3.1） ===
+    // SpringBoot 3.2.5 BOM 管理版本（micrometer-tracing 1.2.5 + zipkin-reporter-brave 2.16.4）
+    // W3C traceparent 格式跨服务传播，Zipkin 上报，Feign 自动埋点
+    implementation 'io.micrometer:micrometer-tracing-bridge-brave'
+    implementation 'io.zipkin.reporter2:zipkin-reporter-brave'
+    implementation 'io.github.openfeign:feign-micrometer'
+
+    // Web3j: 用于与 EVM 兼容链（Ethereum / BSC / Polygon）进行 JSON-RPC 交互
+    // 排除 jc-kzg-4844（EIP-4844 blob 交易支持），桥合约调用不需要且该依赖在
+    // 当前仓库配置下不可解析（tech.pegasys:jc-kzg-4844:0.8.0 仅存在于特定仓库）
+    implementation('org.web3j:core:4.11.0') {
+        exclude group: 'tech.pegasys', module: 'jc-kzg-4844'
+    }
+
+    // === Spring Cloud BOM（管理 OpenFeign / LoadBalancer 版本，设计文档 §4.1） ===
+    implementation platform('org.springframework.cloud:spring-cloud-dependencies:2023.0.3')
+    // === Spring Cloud Alibaba BOM（管理 Nacos / Sentinel 版本） ===
+    implementation platform('com.alibaba.cloud:spring-cloud-alibaba-dependencies:2023.0.1.0')
+
+    // === Nacos 服务发现 + 配置中心（Phase 2 任务 #58） ===
+    implementation 'com.alibaba.cloud:spring-cloud-starter-alibaba-nacos-discovery'
+    implementation 'com.alibaba.cloud:spring-cloud-starter-alibaba-nacos-config'
+
+    // === Sentinel 熔断 / 限流 ===
+    implementation 'com.alibaba.cloud:spring-cloud-starter-alibaba-sentinel'
+
+    // === Seata 分布式事务（Phase 3 任务 #61） ===
+    // SCA 2023.0.1.0 BOM 管理 seata-spring-boot-starter 版本（2.0.0），设计文档 §4.1 / §4.2.2
+    // bridge 当前无跨服务事务需求（设计文档 §2.1.1），但依赖统一接入便于未来扩展
+    implementation 'com.alibaba.cloud:spring-cloud-starter-alibaba-seata'
+
+    // === OpenFeign 声明式调用 + LoadBalancer（bridge 作为独立微服务，预留 Feign 调用能力） ===
+    implementation 'org.springframework.cloud:spring-cloud-starter-openfeign'
+    implementation 'org.springframework.cloud:spring-cloud-starter-loadbalancer'
+
+    // === bootstrap.yml 支持（Spring Cloud 2023.0.x 需显式引入） ===
+    implementation 'org.springframework.cloud:spring-cloud-starter-bootstrap'
+
+    runtimeOnly 'com.h2database:h2'
+    runtimeOnly 'com.mysql:mysql-connector-j'
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+}
+
+// 跨链桥服务为独立部署的 Spring Boot 应用，启用 bootJar 产出可执行 fat jar。
+bootJar {
+    enabled = true
+    archiveClassifier = ''
+}
+
+jar {
+    enabled = true
+    archiveClassifier = 'plain'
+}
+
+test {
+    useJUnitPlatform()
+}
+
+// === 覆盖率门禁（与 nexus-gateway 对齐，minimum 0.15） ===
+// BUNDLE 级别指令覆盖率下限 0.15；check 依赖 jacocoTestCoverageVerification 以强制门禁
+jacocoTestCoverageVerification {
+    violationRules {
+        rule {
+            element = 'BUNDLE'
+            limit {
+                counter = 'INSTRUCTION'
+                value = 'COVEREDRATIO'
+                minimum = 0.15
+            }
+        }
+    }
+}
+
+check.dependsOn jacocoTestCoverageVerification

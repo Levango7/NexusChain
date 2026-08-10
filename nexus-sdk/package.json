@@ -1,0 +1,19 @@
+{
+  "name": "@nexus/sdk-root",
+  "version": "1.0.0",
+  "private": true,
+  "description": "NexusChain unified multi-language SDK (NEX) - npm workspace root",
+  "license": "MIT",
+  "workspaces": [
+    "typescript"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "build:ts": "npm run build --workspace @nexus/sdk",
+    "clean": "npm run clean --workspaces",
+    "lint": "npm run lint --workspaces"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}

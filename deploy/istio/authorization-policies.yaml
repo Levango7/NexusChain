@@ -1,0 +1,250 @@
+# ============================================================================
+# NexusChain - AuthorizationPolicy（零信任授权策略）
+# ============================================================================
+# 用途：
+#   基于 Istio 零信任模型，显式声明 mesh 内服务间允许的调用关系。
+#   默认拒绝（DENY-ALL）+ 显式允许（ALLOW）实现最小权限。
+#
+# 调用拓扑：
+#   外部 → Ingress Gateway → nexus-gateway
+#   nexus-gateway → nexus-signing-service（仅签名请求）
+#   nexus-gateway → nexus-wallet-service（仅钱包请求）
+#   nexus-gateway → nexus-bridge（仅桥操作）
+#   nexus-gateway → nexus-gateway（自身 actuator，探针）
+#
+# 应用：
+#   kubectl apply -f deploy/istio/authorization-policies.yaml -n nexus
+#
+# 验证：
+#   kubectl exec -n nexus deploy/nexus-gateway -- curl nexus-signing-service:8082/api/v1/signing/health
+#   # 期望：200（允许的签名健康检查）
+#   kubectl exec -n nexus deploy/nexus-gateway -- curl nexus-signing-service:8082/api/v1/wallet/balance
+#   # 期望：403（签名服务不允许钱包路径）
+# ============================================================================
+---
+# ============================================================================
+# 0. 默认拒绝：nexus 命名空间所有流量默认拒绝，需显式 ALLOW 才放行
+# ============================================================================
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: deny-all-by-default
+  namespace: nexus
+  labels:
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/component: service-mesh
+  annotations:
+    description: "默认拒绝所有入站流量，强制显式授权"
+spec:
+  # -- 空 selector + ALLOW 空 rules = 拒绝全部
+  #    Istio 语义：当存在任何 ALLOW 策略时，未匹配的请求默认拒绝
+  #    此处显式声明 DENY-ALL 作为文档化基线
+  action: DENY
+  rules:
+    - from:
+        - source:
+            notNamespaces:
+              - nexus
+---
+# ============================================================================
+# 1. nexus-gateway → nexus-signing-service：仅允许签名请求
+# ============================================================================
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: gateway-to-signing
+  namespace: nexus
+  labels:
+    app.kubernetes.io/name: nexus-signing-service
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/component: service-mesh
+  annotations:
+    description: "仅允许 nexus-gateway 调用 nexus-signing-service 的签名 API"
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nexus-signing-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/nexus/sa/nexus-gateway-sa
+      to:
+        - operation:
+            methods:
+              - POST
+              - GET
+            paths:
+              - /api/v1/signing/*
+              - /actuator/health
+              - /actuator/health/readiness
+              - /actuator/health/liveness
+---
+# ============================================================================
+# 2. nexus-gateway → nexus-wallet-service：仅允许钱包请求
+# ============================================================================
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: gateway-to-wallet
+  namespace: nexus
+  labels:
+    app.kubernetes.io/name: nexus-wallet-service
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/component: service-mesh
+  annotations:
+    description: "仅允许 nexus-gateway 调用 nexus-wallet-service 的钱包 API"
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nexus-wallet-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/nexus/sa/nexus-gateway-sa
+      to:
+        - operation:
+            methods:
+              - GET
+              - POST
+              - PUT
+            paths:
+              - /api/v1/wallet/*
+              - /actuator/health
+              - /actuator/health/readiness
+              - /actuator/health/liveness
+---
+# ============================================================================
+# 3. nexus-gateway → nexus-bridge：仅允许桥操作
+# ============================================================================
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: gateway-to-bridge
+  namespace: nexus
+  labels:
+    app.kubernetes.io/name: nexus-bridge
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/component: service-mesh
+  annotations:
+    description: "仅允许 nexus-gateway 调用 nexus-bridge 的桥操作 API"
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nexus-bridge
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/nexus/sa/nexus-gateway-sa
+      to:
+        - operation:
+            methods:
+              - POST
+              - GET
+            paths:
+              - /api/v1/bridge/*
+              - /actuator/health
+              - /actuator/health/readiness
+              - /actuator/health/liveness
+---
+# ============================================================================
+# 4. 外部 → Ingress Gateway → nexus-gateway：仅允许 API 端点
+# ============================================================================
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: ingress-to-gateway
+  namespace: nexus
+  labels:
+    app.kubernetes.io/name: nexus-gateway
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/component: service-mesh
+  annotations:
+    description: "允许 Ingress Gateway 调用 nexus-gateway 的对外 API 端点"
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nexus-gateway
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/istio-system/sa/istio-ingressgateway-service-account
+      to:
+        - operation:
+            methods:
+              - GET
+              - POST
+              - PUT
+              - DELETE
+            paths:
+              - /api/v1/payments/*
+              - /api/v1/refunds/*
+              - /api/v1/wallet/*
+              - /api/v1/bridge/*
+              - /api/v1/signing/*
+              - /actuator/health
+              - /actuator/health/readiness
+              - /actuator/health/liveness
+---
+# ============================================================================
+# 5. K8s 探针 → 各服务 actuator：允许 kubelet 健康检查
+# ============================================================================
+#    kubelet 发起的 livenessProbe/readinessProbe 不带 ServiceAccount，
+#    通过 namespace: nexus + 路径限定放行
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: kubelet-probes
+  namespace: nexus
+  labels:
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/component: service-mesh
+  annotations:
+    description: "允许 K8s kubelet 探针访问 actuator/health 端点"
+spec:
+  # -- 不指定 selector，对所有服务生效
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            namespaces:
+              - nexus
+      to:
+        - operation:
+            paths:
+              - /actuator/health
+              - /actuator/health/readiness
+              - /actuator/health/liveness
+---
+# ============================================================================
+# 6. Prometheus → 各服务 actuator/prometheus：允许指标抓取
+# ============================================================================
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: prometheus-scrape
+  namespace: nexus
+  labels:
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/component: service-mesh
+  annotations:
+    description: "允许 monitoring 命名空间 Prometheus 抓取业务指标"
+spec:
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            namespaces:
+              - monitoring
+      to:
+        - operation:
+            paths:
+              - /actuator/prometheus
+              - /actuator/metrics

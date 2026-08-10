@@ -1,0 +1,89 @@
+plugins {
+    id 'java-library'
+    id 'maven-publish'
+    // signing 插件用于 GPG 签名（发布到 Maven Central 需要）
+    // 但不强制配置签名——仅在 gradle.properties 中有 signing.keyId 时才激活
+}
+
+group = 'org.nexus'
+version = '2.1.0'
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // Jackson (replaces fastjson in the rewritten wallet utilities)
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.14.2'
+    implementation 'org.apache.httpcomponents:httpclient:4.5.14'
+    implementation 'org.bouncycastle:bcprov-jdk18on:1.78'
+    // Reuse nexus-core keystore/crypto/util classes (org.nexus.keystore.*)
+    implementation project(':nexus-core:nexus-core')
+
+    // Protobuf (TxUtils uses com.google.protobuf.ByteString; matches nexus-core 3.22.2)
+    implementation 'com.google.protobuf:protobuf-java:3.22.2'
+    // Guava (WalletUtils uses com.google.common.primitives.Bytes; matches nexus-core 31.1-jre)
+    implementation 'com.google.guava:guava:31.1-jre'
+
+    // Gson — shared JsonUtil (org.nexus.sdk.util.JsonUtil) migrated from exchange-wallet in Phase 1.
+    // Version aligned with exchange-wallet (2.10.1) and root build.gradle ext.gsonVersion.
+    implementation 'com.google.code.gson:gson:2.10.1'
+
+    // === Phase 1: Feign 接口骨架（org.nexus.sdk.client.feign.*）所需注解 ===
+    // 仅编译期需要 @FeignClient / @PostMapping 等注解；运行期由各消费方微服务
+    // （gateway / signing-service / wallet-service，均为 Spring Boot 应用）提供实现。
+    // 用 compileOnly + BOM 约束版本，不向消费方传递 Spring 运行期依赖。
+    // 版本矩阵对齐设计文档 §4.1：Spring Boot 3.2.5 / Spring Cloud 2023.0.3 / SCA 2023.0.1.0。
+    compileOnly platform('org.springframework.boot:spring-boot-dependencies:3.2.5')
+    compileOnly platform('org.springframework.cloud:spring-cloud-dependencies:2023.0.3')
+    compileOnly 'org.springframework.cloud:spring-cloud-starter-openfeign'
+    compileOnly 'org.springframework.boot:spring-boot-starter-web'
+
+    // JUnit 5 (Jupiter) — SdkUnitTest uses @Nested/@Test/@DisplayName
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    // JUnit 5 platform launcher (required for gradle to discover Jupiter tests)
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+test {
+    useJUnitPlatform()
+}
+
+// === Maven Central 发布配置（P4-T9）===
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            from components.java
+            groupId = 'org.nexus'
+            artifactId = 'nexus-sdk-java'
+            version = '2.1.0'
+
+            pom {
+                name = 'NexusChain SDK for Java'
+                description = 'NexusChain blockchain payment orchestration SDK - v2.1.0'
+                url = 'https://github.com/Levango7/NexusChain'
+                licenses {
+                    license {
+                        name = 'Apache License, Version 2.0'
+                        url = 'https://www.apache.org/licenses/LICENSE-2.0'
+                    }
+                }
+                developers {
+                    developer {
+                        id = 'nexus'
+                        name = 'NexusChain Team'
+                    }
+                }
+                scm {
+                    url = 'https://github.com/Levango7/NexusChain'
+                    connection = 'scm:git:https://github.com/Levango7/NexusChain.git'
+                }
+            }
+        }
+    }
+}

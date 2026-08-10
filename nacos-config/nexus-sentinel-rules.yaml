@@ -1,0 +1,234 @@
+# NexusChain Sentinel 规则配置（共享）
+# 
+# 本文件由 nacos-config/init.sh 发布至 Nacos：
+#   dataId : nexus-sentinel-rules.yaml
+#   group  : NEXUS_GROUP
+#   type   : yaml
+# 
+# 各微服务通过 spring.cloud.sentinel.datasource.nacos 引入，规则变更实时生效。
+# 设计文档 §4.3.1 Sentinel 规则清单。
+# 
+# 规则格式遵循 Sentinel Nacos 数据源约定（flow/degrade/param-flow）。
+#
+# Phase 1 任务 #56 补充：
+#   - gateway 对下游服务（signing-service / wallet-service / bridge）的 Feign 调用熔断规则
+#     （资源名采用 HTTP-method + 路径形式，与 SCA Sentinel-Feign 自动资源命名对齐）
+#   - signing-service 内部 MPC 签名慢调用熔断（MpcSigner.runSigningRounds）
+
+# === 限流规则 ===
+flow:
+  - resource: "POST:/api/v1/transfers/sign"
+    limitApp: default
+    grade: 1          # QPS
+    count: 100
+    strategy: 0
+    controlBehavior: 0
+    clusterMode: false
+  - resource: "POST:/ClientToTransferAccount"
+    limitApp: default
+    grade: 1
+    count: 10
+    strategy: 0
+    controlBehavior: 0
+    clusterMode: false
+  - resource: "POST:/api/v1/wallet/withdrawal/request"
+    limitApp: default
+    grade: 1
+    count: 50
+    strategy: 0
+    controlBehavior: 0
+    clusterMode: false
+  - resource: "POST:/api/v1/wallet/withdrawal/approve"
+    limitApp: default
+    grade: 1
+    count: 20
+    strategy: 0
+    controlBehavior: 0
+    clusterMode: false
+  - resource: "POST:/api/v1/bridge/lock"
+    limitApp: default
+    grade: 1
+    count: 30
+    strategy: 0
+    controlBehavior: 0
+    clusterMode: false
+  - resource: "POST:/api/v1/bridge/mint"
+    limitApp: default
+    grade: 1
+    count: 30
+    strategy: 0
+    controlBehavior: 0
+    clusterMode: false
+  - resource: "POST:/api/v1/payments"
+    limitApp: default
+    grade: 1
+    count: 500
+    strategy: 0
+    controlBehavior: 0
+    clusterMode: true   # 集群限流
+  # === gateway → signing-service Feign 调用限流 ===
+  - resource: "GET:/api/v1/signing/capability"
+    limitApp: default
+    grade: 1
+    count: 200
+    strategy: 0
+    controlBehavior: 0
+    clusterMode: false
+  - resource: "GET:/getNoncePool"
+    limitApp: default
+    grade: 1
+    count: 100
+    strategy: 0
+    controlBehavior: 0
+    clusterMode: false
+  # === gateway → wallet-service Feign 调用限流 ===
+  - resource: "GET:/api/v1/wallet/addressToPubkeyHash"
+    limitApp: default
+    grade: 1
+    count: 200
+    strategy: 0
+    controlBehavior: 0
+    clusterMode: false
+  - resource: "GET:/api/v1/wallet/verifyAddress"
+    limitApp: default
+    grade: 1
+    count: 300
+    strategy: 0
+    controlBehavior: 0
+    clusterMode: false
+  - resource: "GET:/api/v1/wallet/custody/tier"
+    limitApp: default
+    grade: 1
+    count: 100
+    strategy: 0
+    controlBehavior: 0
+    clusterMode: false
+  - resource: "GET:/api/v1/wallet/whitelist/check"
+    limitApp: default
+    grade: 1
+    count: 200
+    strategy: 0
+    controlBehavior: 0
+    clusterMode: false
+  - resource: "POST:/api/v1/wallet/custody/withdraw-from-cold"
+    limitApp: default
+    grade: 1
+    count: 10
+    strategy: 0
+    controlBehavior: 0
+    clusterMode: false
+
+# === 熔断规则 ===
+degrade:
+  - resource: "POST:/api/v1/transfers/sign"
+    grade: 1          # 异常比例
+    count: 0.5        # 50%
+    timeWindow: 10
+    minRequestAmount: 5
+    statIntervalMs: 10000
+  - resource: "MpcSigner.runSigningRounds"
+    grade: 0          # 慢调用比例
+    count: 30000      # RT > 30s
+    slowRatioThreshold: 0.5
+    timeWindow: 10
+    statIntervalMs: 10000
+  - resource: "DefaultCustodyService.withdrawFromCold"
+    grade: 1
+    count: 0.3        # 30%
+    timeWindow: 20
+    minRequestAmount: 5
+    statIntervalMs: 20000
+  - resource: "ChainConnector.createPayment"
+    grade: 1
+    count: 0.5
+    timeWindow: 30
+    minRequestAmount: 5
+    statIntervalMs: 30000
+  - resource: "ConsortiumConnector.createPayment"
+    grade: 1
+    count: 0.5
+    timeWindow: 30
+    minRequestAmount: 5
+    statIntervalMs: 30000
+  # === gateway → signing-service Feign 调用熔断（下游服务不可用兜底） ===
+  - resource: "POST:/api/v1/transfers"
+    grade: 1          # 异常比例
+    count: 0.5        # 50%
+    timeWindow: 10
+    minRequestAmount: 5
+    statIntervalMs: 10000
+  - resource: "GET:/api/v1/signing/capability"
+    grade: 1
+    count: 0.5
+    timeWindow: 10
+    minRequestAmount: 5
+    statIntervalMs: 10000
+  - resource: "GET:/getNoncePool"
+    grade: 1
+    count: 0.5
+    timeWindow: 10
+    minRequestAmount: 5
+    statIntervalMs: 10000
+  # === gateway → wallet-service Feign 调用熔断 ===
+  - resource: "GET:/api/v1/wallet/addressToPubkeyHash"
+    grade: 1
+    count: 0.5
+    timeWindow: 10
+    minRequestAmount: 5
+    statIntervalMs: 10000
+  - resource: "GET:/api/v1/wallet/verifyAddress"
+    grade: 1
+    count: 0.5
+    timeWindow: 10
+    minRequestAmount: 5
+    statIntervalMs: 10000
+  - resource: "POST:/api/v1/wallet/withdrawal/request"
+    grade: 1
+    count: 0.5
+    timeWindow: 10
+    minRequestAmount: 5
+    statIntervalMs: 10000
+  - resource: "POST:/api/v1/wallet/withdrawal/approve"
+    grade: 1
+    count: 0.5
+    timeWindow: 10
+    minRequestAmount: 5
+    statIntervalMs: 10000
+  - resource: "POST:/api/v1/wallet/custody/withdraw-from-cold"
+    grade: 1
+    count: 0.3        # 冷钱包提取更敏感，30% 即熔断
+    timeWindow: 20
+    minRequestAmount: 3
+    statIntervalMs: 20000
+  - resource: "GET:/api/v1/wallet/whitelist/check"
+    grade: 1
+    count: 0.5
+    timeWindow: 10
+    minRequestAmount: 5
+    statIntervalMs: 10000
+  # === gateway → bridge Feign 调用熔断 ===
+  - resource: "POST:/api/v1/bridge/lock"
+    grade: 1
+    count: 0.5
+    timeWindow: 30
+    minRequestAmount: 5
+    statIntervalMs: 30000
+  - resource: "POST:/api/v1/bridge/mint"
+    grade: 1
+    count: 0.5
+    timeWindow: 30
+    minRequestAmount: 5
+    statIntervalMs: 30000
+
+# === 热点参数限流规则 ===
+param-flow:
+  - resource: "POST:/api/v1/transfers/sign"
+    grade: 1
+    paramIdx: 0       # fromPubkey 维度
+    count: 30         # 单 fromPubkey 30 QPS
+    limitApp: default
+  - resource: "POST:/api/v1/wallet/withdrawal/request"
+    grade: 1
+    paramIdx: 0       # to 维度
+    count: 10         # 单目标地址 10 QPS
+    limitApp: default

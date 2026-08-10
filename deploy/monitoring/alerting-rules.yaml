@@ -1,0 +1,382 @@
+# ============================================================================
+# NexusChain - PrometheusRule 告警规则
+# ============================================================================
+# CRD: monitoring.coreos.com/v1 / PrometheusRule
+# 部署：kubectl apply -f deploy/monitoring/alerting-rules.yaml -n nexus
+# 发现：kube-prometheus-stack 通过 ruleSelector.matchLabels.release=kube-prometheus-stack 自动发现
+#
+# 告警清单（共 17 条）：
+#   nexus.payment    : PaymentFailureRateHigh / PaymentP99LatencyHigh / PaymentThroughputDrop
+#   nexus.bridge     : BridgeOperationStuck / BridgeLiquidityLow
+#   nexus.chain      : ChainRpcLatencyHigh / ChainBlockConfirmationStale
+#   nexus.jvm        : JvmGcTimeHigh / JvmHeapUsageHigh
+#   nexus.resource   : PodCpuUsageHigh / PodMemoryUsageHigh
+#   nexus.infra      : ServiceDown / SeataTcDown
+#   nexus.tracing    : SpanErrorRateHigh / SpanP99LatencyHigh / SpanDropRateHigh (P3-T5)
+# ============================================================================
+
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: nexus-alerting-rules
+  namespace: nexus
+  labels:
+    # -- 与 kube-prometheus-stack ruleSelector 对齐
+    release: kube-prometheus-stack
+    app.kubernetes.io/part-of: nexus
+    app.kubernetes.io/managed-by: monitoring
+spec:
+  groups:
+    # ----------------------------------------------------------------------
+    # 支付业务告警
+    # ----------------------------------------------------------------------
+    - name: nexus.payment
+      interval: 30s
+      rules:
+        # 1. 支付失败率 > 5% 持续 5m（critical）
+        - alert: PaymentFailureRateHigh
+          expr: |
+            (
+              sum(rate(nexus_payment_failure_total{service=~"nexus-.*"}[5m]))
+              /
+              clamp_min(sum(rate(nexus_payment_total{service=~"nexus-.*"}[5m])), 1)
+            ) > 0.05
+          for: 5m
+          labels:
+            severity: critical
+            category: payment
+            impact: customer-facing
+          annotations:
+            summary: "支付失败率高于 5%（当前 {{ $value | humanizePercentage }}）"
+            description: "近 5 分钟支付失败率持续超过 5% 阈值，可能影响用户支付体验。请检查风控规则、链上 RPC、Seata 事务状态。"
+            runbook_url: "https://wiki.nexuschain.io/runbooks/payment-failure-rate-high"
+
+        # 2. 支付 P99 延迟 > 500ms 持续 5m（warning）
+        - alert: PaymentP99LatencyHigh
+          expr: |
+            histogram_quantile(
+              0.99,
+              sum(rate(nexus_payment_duration_seconds_bucket{service=~"nexus-.*"}[5m])) by (le)
+            ) > 0.5
+          for: 5m
+          labels:
+            severity: warning
+            category: payment
+            impact: latency
+          annotations:
+            summary: "支付 P99 延迟高于 500ms（当前 {{ $value | humanizeDuration }}）"
+            description: "近 5 分钟支付 P99 延迟持续超过 500ms。可能原因：DB 慢查询、Redis 延迟、链上 RPC 慢、GC 暂停过长。"
+            runbook_url: "https://wiki.nexuschain.io/runbooks/payment-p99-latency-high"
+
+        # 3. 支付吞吐量骤降 > 50% 持续 10m（warning，附加）
+        - alert: PaymentThroughputDrop
+          expr: |
+            (
+              sum(rate(nexus_payment_total{service=~"nexus-.*"}[10m]))
+              <
+              0.5 * sum(rate(nexus_payment_total{service=~"nexus-.*"}[10m] offset 1h))
+            )
+            and
+            sum(rate(nexus_payment_total{service=~"nexus-.*"}[10m] offset 1h)) > 1
+          for: 10m
+          labels:
+            severity: warning
+            category: payment
+            impact: traffic
+          annotations:
+            summary: "支付吞吐量较 1 小时前下降超过 50%"
+            description: "支付创建速率较 1 小时前同时段下降超过 50%，可能因上游流量下降或网关异常。请检查入口流量与网关健康。"
+            runbook_url: "https://wiki.nexuschain.io/runbooks/payment-throughput-drop"
+
+    # ----------------------------------------------------------------------
+    # 跨链桥告警
+    # ----------------------------------------------------------------------
+    - name: nexus.bridge
+      interval: 30s
+      rules:
+        # 4. 桥操作无进展 30m（critical）
+        - alert: BridgeOperationStuck
+          expr: |
+            sum(increase(nexus_bridge_lock_total{service="nexus-bridge"}[30m])) == 0
+            and
+            sum(increase(nexus_bridge_lock_total{service="nexus-bridge"}[30m] offset 1h)) > 0
+          for: 30m
+          labels:
+            severity: critical
+            category: bridge
+            impact: cross-chain
+          annotations:
+            summary: "跨链桥操作 30 分钟无进展"
+            description: "nexus-bridge 近 30 分钟无锁定操作，而 1 小时前同时段有操作。可能因链上 RPC 不可达、签名服务异常或桥合约事件未消费。"
+            runbook_url: "https://wiki.nexuschain.io/runbooks/bridge-operation-stuck"
+
+        # 5. 桥流动性低于阈值（critical，附加）
+        - alert: BridgeLiquidityLow
+          expr: |
+            nexus_bridge_liquidity_usd{service="nexus-bridge"} < 100000
+          for: 15m
+          labels:
+            severity: critical
+            category: bridge
+            impact: liquidity
+          annotations:
+            summary: "桥 {{ $labels.chain }} 流动性低于 10 万 USD"
+            description: "桥流动性低于 10 万 USD 阈值，可能影响大额跨链支付。请触发流动性补充流程。"
+            runbook_url: "https://wiki.nexuschain.io/runbooks/bridge-liquidity-low"
+
+    # ----------------------------------------------------------------------
+    # 链上 RPC 告警
+    # ----------------------------------------------------------------------
+    - name: nexus.chain
+      interval: 30s
+      rules:
+        # 6. 链 RPC 延迟 > 2s 持续 5m（warning）
+        - alert: ChainRpcLatencyHigh
+          expr: |
+            histogram_quantile(
+              0.95,
+              sum(rate(nexus_chain_rpc_duration_seconds_bucket{service=~"nexus-.*"}[5m])) by (le, chain)
+            ) > 2
+          for: 5m
+          labels:
+            severity: warning
+            category: chain
+            impact: latency
+          annotations:
+            summary: "链 {{ $labels.chain }} RPC P95 延迟高于 2s"
+            description: "链 {{ $labels.chain }} 的 RPC P95 延迟持续超过 2 秒。可能因 RPC 节点负载高、网络抖动或限流。"
+            runbook_url: "https://wiki.nexuschain.io/runbooks/chain-rpc-latency-high"
+
+        # 7. 区块确认停滞（warning，附加）
+        - alert: ChainBlockConfirmationStale
+          expr: |
+            time() - nexus_chain_last_block_timestamp{service=~"nexus-.*"} > 120
+          for: 5m
+          labels:
+            severity: warning
+            category: chain
+            impact: stale
+          annotations:
+            summary: "链 {{ $labels.chain }} 区块确认停滞超过 2 分钟"
+            description: "链 {{ $labels.chain }} 最近区块时间戳落后超过 2 分钟。可能因链出块异常或 RPC 同步滞后。"
+            runbook_url: "https://wiki.nexuschain.io/runbooks/chain-block-confirmation-stale"
+
+    # ----------------------------------------------------------------------
+    # JVM 健康告警
+    # ----------------------------------------------------------------------
+    - name: nexus.jvm
+      interval: 30s
+      rules:
+        # 8. GC 时间占比 > 20% 持续 5m（warning）
+        - alert: JvmGcTimeHigh
+          expr: |
+            (
+              sum(rate(jvm_gc_pause_seconds_sum{service=~"nexus-.*"}[5m])) by (service, instance)
+              /
+              clamp_min(sum(rate(process_uptime_seconds{service=~"nexus-.*"}[5m])) by (service, instance), 1)
+            ) > 0.20
+          for: 5m
+          labels:
+            severity: warning
+            category: jvm
+            impact: latency
+          annotations:
+            summary: "{{ $labels.service }} GC 时间占比高于 20%"
+            description: "{{ $labels.service }} ({{ $labels.instance }}) GC 时间占运行时间比例持续超过 20%，存在内存压力或频繁 Full GC。"
+            runbook_url: "https://wiki.nexuschain.io/runbooks/jvm-gc-time-high"
+
+        # 9. 堆内存使用 > 85% 持续 5m（warning）
+        - alert: JvmHeapUsageHigh
+          expr: |
+            (
+              sum(jvm_memory_used_bytes{service=~"nexus-.*", area="heap"}) by (service, instance)
+              /
+              clamp_min(sum(jvm_memory_max_bytes{service=~"nexus-.*", area="heap"}) by (service, instance), 1)
+            ) > 0.85
+          for: 5m
+          labels:
+            severity: warning
+            category: jvm
+            impact: oom-risk
+          annotations:
+            summary: "{{ $labels.service }} 堆内存使用率高于 85%"
+            description: "{{ $labels.service }} ({{ $labels.instance }}) 堆内存使用率持续超过 85%，OOM 风险升高。请检查内存泄漏或扩容。"
+            runbook_url: "https://wiki.nexuschain.io/runbooks/jvm-heap-usage-high"
+
+    # ----------------------------------------------------------------------
+    # Pod 资源告警
+    # ----------------------------------------------------------------------
+    - name: nexus.resource
+      interval: 30s
+      rules:
+        # 10. Pod CPU > 80% 持续 10m（warning）
+        - alert: PodCpuUsageHigh
+          expr: |
+            (
+              sum(rate(container_cpu_usage_seconds_total{namespace="nexus", container!="", container!="POD"}[5m])) by (pod, container)
+              /
+              clamp_min(kube_pod_container_resource_limits{namespace="nexus", resource="cpu"}, 1)
+            ) > 0.80
+          for: 10m
+          labels:
+            severity: warning
+            category: resource
+            impact: saturation
+          annotations:
+            summary: "Pod {{ $labels.pod }} CPU 使用率高于 80%"
+            description: "容器 {{ $labels.container }} CPU 使用率持续超过 limit 的 80%，可能触发 CPU 节流（throttling）影响延迟。"
+            runbook_url: "https://wiki.nexuschain.io/runbooks/pod-cpu-usage-high"
+
+        # 11. Pod 内存 > 90% 持续 10m（warning）
+        - alert: PodMemoryUsageHigh
+          expr: |
+            (
+              container_memory_working_set_bytes{namespace="nexus", container!="", container!="POD"}
+              /
+              clamp_min(kube_pod_container_resource_limits{namespace="nexus", resource="memory"}, 1)
+            ) > 0.90
+          for: 10m
+          labels:
+            severity: warning
+            category: resource
+            impact: oom-kill
+          annotations:
+            summary: "Pod {{ $labels.pod }} 内存使用率高于 90%"
+            description: "容器 {{ $labels.container }} 内存使用率持续超过 limit 的 90%，OOMKilled 风险高。请扩容或排查内存泄漏。"
+            runbook_url: "https://wiki.nexuschain.io/runbooks/pod-memory-usage-high"
+
+    # ----------------------------------------------------------------------
+    # 基础设施可达性告警
+    # ----------------------------------------------------------------------
+    - name: nexus.infra
+      interval: 30s
+      rules:
+        # 12. 服务不可达 1m（critical）
+        - alert: ServiceDown
+          expr: |
+            up{job=~"nexus-.*", namespace="nexus"} == 0
+          for: 1m
+          labels:
+            severity: critical
+            category: infra
+            impact: outage
+          annotations:
+            summary: "服务 {{ $labels.job }} 不可达"
+            description: "Prometheus 抓取 {{ $labels.job }} ({{ $labels.instance }}) 连续 1 分钟失败。可能因 Pod 崩溃、Service 端口错误或 NetworkPolicy 阻断。"
+            runbook_url: "https://wiki.nexuschain.io/runbooks/service-down"
+
+        # 13. Seata TC 不可达 1m（critical）
+        - alert: SeataTcDown
+          expr: |
+            up{job="seata-tc", namespace="nexus"} == 0
+            or
+            (absent(up{job="seata-tc", namespace="nexus"}) == 1)
+          for: 1m
+          labels:
+            severity: critical
+            category: infra
+            impact: transaction
+          annotations:
+            summary: "Seata TC 事务协调器不可达"
+            description: "Seata TC Server 连续 1 分钟不可达，分布式事务无法提交/回滚，可能造成支付与桥操作挂起。请优先恢复 Seata TC。"
+            runbook_url: "https://wiki.nexuschain.io/runbooks/seata-tc-down"
+
+    # ----------------------------------------------------------------------
+    # 分布式追踪 span 告警（P3-T5：异常 span 自动告警）
+    # ----------------------------------------------------------------------
+    # 指标来源：
+    #   - OTel Collector 自身指标（:8888/metrics）：traces_spans_total 等
+    #   - Spring Boot Micrometer：http_server_requests_seconds_bucket（HTTP span）
+    #   - 业务 span 通过 BusinessSpan 工具类记录，error 标记通过 span.error() 写入
+    #
+    # span_error_rate 定义：
+    #   错误 span 数 / 总 span 数，错误 span 包括：
+    #     1. HTTP 5xx 响应（http_server_requests_seconds_count{status=~"5.."}）
+    #     2. 业务 span 标记 error（通过 BusinessSpan.error(Throwable)）
+    #     3. OTel Collector 收到的 ERROR 级别 span
+    #
+    # span_p99_latency 定义：
+    #   HTTP 服务端请求 P99 延迟（http_server_requests_seconds_bucket），
+    #   覆盖所有业务 span 的根入口（payment.create / bridge.lock / signing.broadcast）
+    # ----------------------------------------------------------------------
+    - name: nexus.tracing
+      interval: 30s
+      rules:
+        # 14. span 错误率 > 5% 持续 5m（critical）
+        #     错误 span = HTTP 5xx + 业务异常 span
+        - alert: SpanErrorRateHigh
+          expr: |
+            (
+              (
+                sum(rate(http_server_requests_seconds_count{service=~"nexus-.*", status=~"5.."}[5m]))
+                +
+                sum(rate(nexus_span_error_total{service=~"nexus-.*"}[5m]))
+              )
+              /
+              clamp_min(sum(rate(http_server_requests_seconds_count{service=~"nexus-.*"}[5m])), 1)
+            ) > 0.05
+          for: 5m
+          labels:
+            severity: critical
+            category: tracing
+            impact: customer-facing
+          annotations:
+            summary: "span 错误率高于 5%（当前 {{ $value | humanizePercentage }}）"
+            description: "近 5 分钟业务 span 错误率持续超过 5% 阈值。错误 span 包括 HTTP 5xx 响应和业务异常 span（通过 BusinessSpan.error 标记）。请在 Jaeger UI 按 service=nexus-* + status=ERROR 查看错误链路，在 Loki 按 trace_id 查看关联日志。"
+            runbook_url: "https://wiki.nexuschain.io/runbooks/span-error-rate-high"
+
+        # 15. span P99 延迟 > 2s 持续 5m（warning）
+        #     覆盖所有业务 span 的根入口（HTTP 服务端请求）
+        - alert: SpanP99LatencyHigh
+          expr: |
+            histogram_quantile(
+              0.99,
+              sum(rate(http_server_requests_seconds_bucket{service=~"nexus-.*"}[5m])) by (le, service)
+            ) > 2
+          for: 5m
+          labels:
+            severity: warning
+            category: tracing
+            impact: latency
+          annotations:
+            summary: "{{ $labels.service }} span P99 延迟高于 2s（当前 {{ $value | humanizeDuration }}）"
+            description: "近 5 分钟 {{ $labels.service }} 的 span P99 延迟持续超过 2 秒。可能原因：DB 慢查询、链上 RPC 慢、MPC 多轮签名耗时、GC 暂停过长。请在 Jaeger UI 按 service={{ $labels.service }} 查看慢 span，在 Loki 按 trace_id 查看关联日志。"
+            runbook_url: "https://wiki.nexuschain.io/runbooks/span-p99-latency-high"
+
+        # 16. OTel Collector span 丢弃率高（warning）
+        #     Collector 因限流 / 队列满丢弃 span，影响追踪完整性
+        - alert: SpanDropRateHigh
+          expr: |
+            (
+              sum(rate(otelcol_processor_refused_spans{processor="memory_limiter"}[5m]))
+              +
+              sum(rate(otelcol_exporter_send_failed_spans{exporter="otlp/jaeger"}[5m]))
+            )
+            /
+            clamp_min(sum(rate(otelcol_receiver_accepted_spans{receiver="otlp"}[5m])), 1)
+            > 0.01
+          for: 5m
+          labels:
+            severity: warning
+            category: tracing
+            impact: observability
+          annotations:
+            summary: "OTel Collector span 丢弃率高于 1%（当前 {{ $value | humanizePercentage }}）"
+            description: "OTel Collector 因内存限流或 Jaeger 导出失败丢弃 span，影响追踪完整性。可能原因：突发流量超限、Jaeger 不可达、Collector 内存不足。请检查 Collector 指标 :8888/metrics 和 Jaeger 健康状态。"
+            runbook_url: "https://wiki.nexuschain.io/runbooks/span-drop-rate-high"
+
+        # 17. 业务 span 缺失告警（warning）
+        #     若 nexus_span_total 指标消失，说明业务 span 注入失败
+        - alert: BusinessSpanMissing
+          expr: |
+            absent_over_time(nexus_span_total{service=~"nexus-.*"}[10m]) == 1
+          for: 10m
+          labels:
+            severity: warning
+            category: tracing
+            impact: observability
+          annotations:
+            summary: "业务 span 指标缺失超过 10 分钟"
+            description: "nexus_span_total 指标连续 10 分钟未上报，业务 span 注入可能失败。请检查 BusinessSpan 工具类是否正确注入 Tracer，以及 Micrometer Tracing 配置是否生效。"
+            runbook_url: "https://wiki.nexuschain.io/runbooks/business-span-missing"

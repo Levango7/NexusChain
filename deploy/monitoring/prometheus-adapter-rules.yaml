@@ -1,0 +1,153 @@
+# ============================================================================
+# NexusChain - Prometheus Adapter 自定义指标规则
+# ============================================================================
+# 用途：将 Prometheus 采集的 http_requests_total 计数器转换为
+#       http_requests_per_second 自定义指标，通过 Custom Metrics API
+#       暴露给 HPA 控制器，实现基于 RPS 的自动扩缩。
+#
+# 部署：
+#   1. 安装 prometheus-adapter Helm Chart：
+#      helm upgrade --install prometheus-adapter prometheus-community/prometheus-adapter \
+#        -n monitoring --create-namespace \
+#        -f deploy/monitoring/prometheus-adapter-rules.yaml
+#
+#   2. 验证 Custom Metrics API 可用：
+#      kubectl get --raw "/apis/custom.metrics.k8s.io/v1beta1" | jq .
+#
+#   3. 验证指标可查询：
+#      kubectl get --raw "/apis/custom.metrics.k8s.io/v1beta1/namespaces/nexus/pods/*/http_requests_per_second"
+#
+# 前置依赖：
+#   - kube-prometheus-stack 已部署（deploy/monitoring/kube-prometheus-stack-values.yaml）
+#   - 各服务 ServiceMonitor 已创建（Helm Chart templates/servicemonitor.yaml）
+#   - 应用暴露 http_server_requests_seconds_count 指标（Micrometer 默认）
+#
+# 指标映射说明：
+#   Micrometer 默认暴露 http_server_requests_seconds_count（计数器，单位：次）
+#   本规则通过 rate() 函数计算每秒速率，并映射为 http_requests_per_second
+#   供 HPA 的 type: Pods / metric.name: http_requests_per_second 使用
+# ============================================================================
+
+# -- Prometheus Adapter Helm Chart values
+#    Chart: https://github.com/kubernetes-sigs/prometheus-adapter
+image:
+  repository: registry.k8s.io/prometheus-adapter-amd64
+  tag: v0.11.2
+  pullPolicy: IfNotPresent
+
+# -- Prometheus 服务地址（kube-prometheus-stack 部署在 monitoring 命名空间）
+prometheus:
+  url: http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local
+  port: 9090
+  path: ""
+
+# -- Adapter 监听端口
+listenAddress: ":6443"
+
+# -- 资源限制
+resources:
+  requests:
+    memory: 128Mi
+    cpu: 100m
+  limits:
+    memory: 512Mi
+    cpu: 500m
+
+# -- 副本数（高可用）
+replicas: 2
+
+# -- Pod 安全上下文
+podSecurityContext:
+  runAsUser: 1001
+  runAsGroup: 1001
+  fsGroup: 1001
+
+# -- 日志级别
+logLevel: 4
+
+# -- metricsRelabelings 用于过滤无效指标
+metricsRelabelings: []
+
+# -- 规则发现（discovery）+ 查询规则（rules）
+#    discovery：按 series name 正则匹配候选指标
+#    rules：将匹配的指标转换为 Custom Metrics API 指标
+rules:
+  # ==========================================================================
+  # 规则 1：http_requests_per_second（Pod 级自定义指标）
+  # ==========================================================================
+  # 将 Micrometer 的 http_server_requests_seconds_count 计数器转换为
+  # http_requests_per_second 速率指标，供 HPA type: Pods 使用
+  - seriesQuery: 'http_server_requests_seconds_count{namespace!="",pod!=""}'
+    resources:
+      # 从 Prometheus 标签映射到 K8s 资源（namespace/pod）
+      overrides:
+        namespace:
+          resource: namespace
+        pod:
+          resource: pod
+    name:
+      # 输出指标名：http_requests_per_second
+      matches: '^(http_server_requests_seconds_count)$'
+      as: 'http_requests_per_second'
+    metricsQuery: |
+      # rate() 计算每秒速率（30s 窗口，与 Prometheus scrapeInterval 对齐）
+      # sum by (<<.GroupBy>>) (rate(<<.Series>>{<<.LabelMatchers>>}[30s]))
+
+      # 过滤掉 actuator/health 等内部请求，仅统计业务请求
+      # Micrometer http_server_requests_seconds_count 标签：
+      #   uri, method, status, exception, outcome, pod, namespace, application
+      sum by (<<.GroupBy>>) (
+        rate(
+          http_server_requests_seconds_count{
+            <<.LabelMatchers>>,
+            uri!~"/actuator.*|/health.*|/info"
+          }[30s]
+        )
+      )
+
+  # ==========================================================================
+  # 规则 2：http_requests_per_second（Deployment 级自定义指标，可选）
+  # ==========================================================================
+  # 聚合 Deployment 维度的 RPS（所有 Pod 之和），供 HPA type: Object 使用
+  # 当前 RPS HPA 使用 type: Pods，此规则作为补充
+  - seriesQuery: 'http_server_requests_seconds_count{namespace!=""}'
+    resources:
+      overrides:
+        namespace:
+          resource: namespace
+        deployment:
+          resource: deployment
+    name:
+      matches: '^(http_server_requests_seconds_count)$'
+      as: 'http_requests_per_second'
+    metricsQuery: |
+      sum by (<<.GroupBy>>) (
+        rate(
+          http_server_requests_seconds_count{
+            <<.LabelMatchers>>,
+            uri!~"/actuator.*|/health.*|/info"
+          }[30s]
+        )
+      )
+
+# ============================================================================
+# 验证清单（部署后执行）
+# ============================================================================
+# 1. Custom Metrics API 注册成功：
+#    kubectl get apiservice v1beta1.custom.metrics.k8s.io -o jsonpath='{.status.conditions[?(@.type=="Available")].status}'
+#    期望输出：True
+#
+# 2. 指标可查询（Pod 级）：
+#    kubectl get --raw \
+#      "/apis/custom.metrics.k8s.io/v1beta1/namespaces/nexus/pods/*/http_requests_per_second"
+#    期望输出：包含各 Pod 的 RPS 值（JSON 格式）
+#
+# 3. HPA 能读取自定义指标：
+#    kubectl get hpa nexus-gateway-rps-hpa -n nexus -o jsonpath='{.status.currentMetrics}'
+#    期望输出：包含 http_requests_per_second 指标值
+#
+# 4. 故障排查：
+#    - apiservice False：检查 adapter Pod 日志 kubectl logs -n monitoring -l app.kubernetes.io/name=prometheus-adapter
+#    - 指标无数据：确认 Prometheus 中有 http_server_requests_seconds_count series
+#    - HPA Unable to read metrics：确认 selector.matchLabels 与 Pod 标签匹配
+# ============================================================================

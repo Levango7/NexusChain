@@ -1,0 +1,35 @@
+version: '3.1'
+
+services:
+
+  nexus_pgsql:
+    image: nexus/nexus_pgsql
+    restart: always
+    container_name: nexus_pgsql
+    privileged: true
+    volumes:
+      - /Users/sal/nexus_pgsql:/var/lib/postgresql/data
+    ports:
+      - 127.0.0.1:5433:5432
+    environment:
+      POSTGRES_USER: nexusadmin
+      POSTGRES_PASSWORD: PqR_w9hk6Au-jq5ElsFcEjq!wvULrYXeF3*oDKp5i@A/D5m03VaB1M/hyKY
+      NEX_POSTGRES_USER: replica
+      NEX_POSTGRES_PASSWORD: replica
+
+  nexus_core:
+    image: nexus/nexus_core:v0.0.3
+    restart: always
+    container_name: nexus_core
+    privileged: true
+    volumes:
+      - /Users/sal/nexus_logs:/logs
+    ports:
+      - 9585:9585
+      - 19585:19585
+    environment:
+      DATA_SOURCE_URL: 'jdbc:postgresql://nexus_pgsql:5432/postgres'
+      DB_USERNAME: 'replica'
+      DB_PASSWORD: 'replica'
+      ENABLE_MINING: 'false'
+      NEX_MINER_COINBASE: '1317J5fZb8kVrACnfi3PXN1T21573hYata'

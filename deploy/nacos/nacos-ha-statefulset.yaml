@@ -1,0 +1,279 @@
+# Nacos HA 集群 StatefulSet 部署配置
+#
+# 部署模式：3 节点 HA 集群（Raft 协议选主）
+# 后端存储：外接 PostgreSQL（复用 deploy/k8s/30-infrastructure.yml 中的 postgres）
+# 持久化：每节点 PVC 20Gi（数据）+ 5Gi（日志）
+# 资源配置：每节点 2 GiB memory + 1 CPU
+#
+# 关联文件：
+#   - nacos-ha-service.yaml     Headless + ClusterIP Service
+#   - nacos-configmap.yaml      Nacos 配置 ConfigMap
+#
+# 部署顺序：
+#   1. kubectl apply -f nacos-configmap.yaml
+#   2. kubectl apply -f nacos-ha-service.yaml
+#   3. kubectl apply -f nacos-ha-statefulset.yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: nacos
+  namespace: nexus
+  labels:
+    app: nacos
+    component: config-center
+    tier: infrastructure
+  annotations:
+    # 标注 HA 部署模式，便于运维识别
+    nexuschain.io/ha-mode: "raft-3nodes"
+    nexuschain.io/storage-backend: "postgresql"
+spec:
+  serviceName: nacos-headless
+  replicas: 3
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app: nacos
+  template:
+    metadata:
+      labels:
+        app: nacos
+        component: config-center
+        tier: infrastructure
+      annotations:
+        # Istio 注入：Nacos 集群内部通信不走 Sidecar，避免网格化延迟
+        sidecar.istio.io/inject: "false"
+        # Prometheus 抓取注解
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8848"
+        prometheus.io/path: "/nacos/actuator/prometheus"
+    spec:
+      # K8s API 调用：Nacos 不需要访问 K8s API，关闭以降低攻击面
+      automountServiceAccountToken: false
+      # Pod 反亲和：3 节点强制分散到不同 Node，防止单 Node 故障导致集群不可用
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                      - nacos
+              topologyKey: kubernetes.io/hostname
+      # 优雅终止：给 Nacos 时间让 Raft 重新选主
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        # nacos/nacos-server:v2.3.2 镜像默认以 UID 1000 运行（non-root）
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        # 初始化容器：等待 PostgreSQL 就绪后再启动 Nacos
+        - name: wait-for-postgres
+          image: busybox:1.36
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          command:
+            - sh
+            - -c
+            - |
+              echo "等待 PostgreSQL 就绪..."
+              until nc -z postgres 5432; do
+                echo "PostgreSQL 未就绪，5s 后重试..."
+                sleep 5
+              done
+              echo "PostgreSQL 已就绪，启动 Nacos..."
+          resources:
+            requests:
+              memory: "32Mi"
+              cpu: "50m"
+            limits:
+              memory: "64Mi"
+      containers:
+        - name: nacos
+          image: nacos/nacos-server:v2.3.2
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          ports:
+            - name: http
+              containerPort: 8848
+              protocol: TCP
+            - name: grpc-client
+              containerPort: 9848
+              protocol: TCP
+            - name: grpc-raft
+              containerPort: 9849
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: nacos-config
+          env:
+            # StatefulSet Pod 序号（0/1/2），用于生成集群节点 ID
+            - name: POD_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            # 集群节点地址：通过 Headless Service 解析自身 Pod 域名
+            - name: NACOS_SERVER_ADDR
+              value: "$(POD_ID).nacos-headless.nexus.svc.cluster.local"
+            # 外接 PostgreSQL 数据源
+            - name: SPRING_DATASOURCE_PLATFORM
+              value: "postgresql"
+            - name: NACOS_AUTH_ENABLE
+              value: "true"
+            # 数据库连接（从 Secret 读取，避免明文）
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: nexus-secrets
+                  key: NEX_DB_USERNAME
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: nexus-secrets
+                  key: NEX_DB_PASSWORD
+          resources:
+            requests:
+              memory: "2Gi"
+              cpu: "1000m"
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
+          volumeMounts:
+            - name: nacos-config-volume
+              mountPath: /home/nacos/conf/application.properties
+              subPath: application.properties
+              readOnly: true
+            - name: nacos-cluster-conf
+              mountPath: /home/nacos/conf/cluster.conf
+              subPath: cluster.conf
+              readOnly: true
+            - name: nacos-log
+              mountPath: /home/nacos/logs
+            - name: nacos-data
+              mountPath: /home/nacos/data
+          # 启动探针：Nacos 启动较慢，给 180s 缓冲
+          startupProbe:
+            httpGet:
+              path: /nacos/v1/console/health/liveness
+              port: 8848
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 18
+          # 存活探针：Raft 选主失败会触发重启
+          livenessProbe:
+            httpGet:
+              path: /nacos/v1/console/health/liveness
+              port: 8848
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # 就绪探针：仅当节点可读写时才接流量
+          readinessProbe:
+            httpGet:
+              path: /nacos/v1/console/health/readiness
+              port: 8848
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 5
+      volumes:
+        - name: nacos-config-volume
+          configMap:
+            name: nacos-config
+            items:
+              - key: application.properties
+                path: application.properties
+        - name: nacos-cluster-conf
+          configMap:
+            name: nacos-config
+            items:
+              - key: cluster.conf
+                path: cluster.conf
+  # 持久化卷模板：每节点独立 PVC
+  volumeClaimTemplates:
+    # Nacos 日志卷
+    - metadata:
+        name: nacos-log
+        labels:
+          app: nacos
+          volume-type: log
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: standard
+        resources:
+          requests:
+            storage: 5Gi
+    # Nacos 数据卷（本地缓存 + Derby 兜底）
+    - metadata:
+        name: nacos-data
+        labels:
+          app: nacos
+          volume-type: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: standard
+        resources:
+          requests:
+            storage: 20Gi
+---
+# PodDisruptionBudget：确保维护时至少 2 节点可用（Raft 多数派）
+# 防止 K8s 维护（drain）时把 3 节点同时下线导致集群不可用
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: nacos-pdb
+  namespace: nexus
+  labels:
+    app: nacos
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: nacos
+---
+# HorizontalPodAutoscaler：Nacos 集群节点数固定 3，不自动伸缩
+# Raft 协议要求节点数固定（奇数），自动伸缩会破坏集群稳定性
+# 此处仅作资源占位，确保未来可扩展（如升级到 5 节点时调整 maxReplicas）
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: nacos-hpa
+  namespace: nexus
+  labels:
+    app: nacos
+  annotations:
+    # 标注：HA 集群不自动伸缩，仅占位
+    nexuschain.io/scaling-policy: "fixed-3-nodes"
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: StatefulSet
+    name: nacos
+  minReplicas: 3
+  maxReplicas: 3
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 80
