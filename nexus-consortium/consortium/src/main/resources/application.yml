@@ -4,7 +4,7 @@ spring:
   datasource:
     url: 'jdbc:postgresql://localhost:5432/your-data-base' # SPRING_DATASOURCE_URL
     username: 'username'
-    password: 'password'
+    password: ${NEX_DB_PASSWORD}
 
   jpa:
     hibernate:

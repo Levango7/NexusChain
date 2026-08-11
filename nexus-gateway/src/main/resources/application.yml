@@ -23,7 +23,7 @@ spring:
   datasource:
     url: ${NEX_DB_URL:jdbc:mysql://localhost:3306/nexus_gateway?useSSL=false&serverTimezone=UTC&characterEncoding=utf-8}
     username: ${NEX_DB_USERNAME:nexus}
-    password: ${NEX_DB_PASSWORD:nexus_secret}
+    password: ${NEX_DB_PASSWORD}
     driver-class-name: ${NEX_DB_DRIVER:com.mysql.cj.jdbc.Driver}
     hikari:
       maximum-pool-size: 20
@@ -169,7 +169,7 @@ nexus:
     # Public base URL for chain event callbacks
     callback-url: http://localhost:8080/api/v1/webhooks/chain-events
     # Shared secret for verifying callback signatures
-    callback-secret: ${NEX_WEBHOOK_SECRET:nexus_webhook_secret}
+    callback-secret: ${NEX_WEBHOOK_SECRET}
     # === P4-T5：Webhook 重试与死信队列增强 ===
     # 死信队列存储：kafka（生产，默认）| memory（测试/无 Kafka broker 环境）
     dlq:

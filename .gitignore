@@ -65,3 +65,30 @@ nexus-sdk/java/Keystore/
 *.p12
 *.pem
 *.key
+
+# 证书文件
+*.crt
+*.csr
+*.der
+*.cert
+*.pfx
+
+# SSH 私钥
+id_rsa
+id_ed25519
+id_ecdsa
+
+# 云凭证
+credentials.json
+*.kdbx
+
+# 环境变量
+.env.local
+.env.*.local
+
+# 临时文件
+*.swp
+*~
+*.tmp
+*.bak
+*.rs.bk
