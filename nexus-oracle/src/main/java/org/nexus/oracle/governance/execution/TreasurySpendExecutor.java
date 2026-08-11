@@ -8,6 +8,7 @@ import org.nexus.oracle.governance.event.GovernanceExecutionCompletedEvent;
 import org.nexus.oracle.governance.event.TreasurySpendEvent;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
@@ -94,6 +95,7 @@ public class TreasurySpendExecutor {
      * @param proposal 已通过的国库支出提案
      * @return 执行结果对象（包含 success、txHash、errorMessage 等字段）
      */
+    @Transactional
     public ExecutionResult execute(Proposal proposal) {
         if (proposal == null) {
             return ExecutionResult.failure("Proposal must not be null");

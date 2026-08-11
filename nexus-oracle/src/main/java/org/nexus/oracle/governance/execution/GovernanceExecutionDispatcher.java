@@ -12,7 +12,6 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -95,8 +94,13 @@ public class GovernanceExecutionDispatcher {
     /**
      * 监听提案状态变更事件，当状态变为 PASSED 时分发执行。
      *
-     * <p>使用 {@code @Async} 异步执行，避免阻塞事件发布方。
-     * 通过 {@code @Transactional} 保证提案状态回写的事务一致性。
+     * <p>仅使用 {@code @Async} 异步执行，避免阻塞事件发布方。
+     * <b>不在本方法标注 {@code @Transactional}</b>：{@code @Async} 与
+     * {@code @Transactional} 组合在同一 Bean 方法上会因双代理叠加导致事务边界
+     * 不可靠（异步线程事务上下文错位），国库转账异常可能无法按预期回滚。
+     * 事务粒度已下放到各执行器的 {@code execute(...)} 方法
+     * （{@link SoftwareUpgradeExecutor#execute} / {@link TreasurySpendExecutor#execute}
+     * 的 {@code @Transactional}），实现真正可靠的事务边界。
      *
      * <p><b>GOV-P0-01</b>：校验事件来源是否在白名单内，非白名单来源记录 WARN 日志并跳过。
      *
@@ -107,7 +111,6 @@ public class GovernanceExecutionDispatcher {
      */
     @Async
     @EventListener
-    @Transactional
     public void onProposalStatusChanged(ProposalStatusChangedEvent event) {
         try {
             if (!enabled) {
