@@ -172,6 +172,31 @@ public class ChainRpcClient {
 
     // --- Circuit breaker fallbacks ---
 
+    /**
+     * 查询链上交易的详细确认状态（含确认数与高度），供最终性推导使用。
+     * 调用 core: GET /rpc/v1/transaction/{txHash}/status
+     *
+     * @param txHash 链上交易哈希
+     * @return 返回 {status, confirmations, block_height}；链不可达或交易未找到返回 null
+     */
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> getTransactionStatus(String txHash) {
+        if (txHash == null || txHash.isEmpty()) return null;
+        try {
+            String url = gatewayConfig.getChain().getRpcUrl() + "/rpc/v1/transaction/" + txHash + "/status";
+            ResponseEntity<Map> resp = restTemplate.getForEntity(url, Map.class);
+            if (resp.getBody() == null) return null;
+            Object data = resp.getBody().get("data");
+            if (data instanceof Map) {
+                return (Map<String, Object>) data;
+            }
+            return null;
+        } catch (Exception e) {
+            log.warn("Failed to get transaction status for txHash={}: {}", txHash, e.getMessage());
+            return null;
+        }
+    }
+
     private boolean isTransactionConfirmedFallback(String txHash, Throwable t) {
         log.warn("Circuit breaker fallback: isTransactionConfirmed, cause={}", t.getMessage());
         if (gatewayConfig.getChain().isSkipConfirmation()) {

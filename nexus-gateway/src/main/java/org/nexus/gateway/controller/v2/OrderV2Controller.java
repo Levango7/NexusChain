@@ -14,6 +14,8 @@ import org.nexus.gateway.apiversion.V2ErrorResponse;
 import org.nexus.gateway.dto.CreateOrderRequest;
 import org.nexus.gateway.dto.PaymentResult;
 import org.nexus.gateway.model.PaymentOrder;
+import org.nexus.gateway.orchestration.settlement.FinalityService;
+import org.nexus.gateway.orchestration.settlement.FinalityStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -48,16 +50,20 @@ public class OrderV2Controller {
     private static final Set<String> ORDER_ALLOWED_FIELDS = Set.of(
             "id", "orderno", "merchantid", "tokensymbol", "amount",
             "description", "payeraddress", "payeeaddress", "chaintxhash",
-            "status", "checkouttoken", "expiresat", "createdat", "updatedat", "paidat"
+            "status", "checkouttoken", "expiresat", "createdat", "updatedat", "paidat",
+            "finality"  // 支付最终性状态（叠加字段，由 FinalityService 推导得出
     );
 
     private final OrderService orderService;
     private final PaymentService paymentService;
+    private final FinalityService finalityService;
 
     public OrderV2Controller(OrderService orderService,
-                             PaymentService paymentService) {
+                             PaymentService paymentService,
+                             FinalityService finalityService) {
         this.orderService = orderService;
         this.paymentService = paymentService;
+        this.finalityService = finalityService;
     }
 
     /**
@@ -104,7 +110,68 @@ public class OrderV2Controller {
         }
         Object filtered = FieldsFilter.apply(opt.get(), selected);
 
+        // 若客户端请求了 finality 字段（或不过滤字段时默认叠加），
+        // 则查询链上最终性状态并合并到响应中（不影响现有字段筛选逻辑）
+        if (selected == null || selected.isEmpty() || selected.contains("finality")) {
+            PaymentOrder order = opt.get();
+            if (order != null && order.getChainTxHash() != null
+                    && !order.getChainTxHash().isEmpty()) {
+                FinalityService.FinalityInfo fi = finalityService.getFinality(order.getChainTxHash());
+                Map<String, Object> meta = new LinkedHashMap<>();
+                meta.put("finality_status", fi.status());
+                meta.put("confirmations", fi.confirmations());
+                meta.put("threshold", fi.threshold());
+                meta.put("progress_percent", fi.progressPercent());
+
+                // 如果 filtered 是 Map，直接叠加；否则单独构建包装
+                if (filtered instanceof Map) {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> enriched = new LinkedHashMap<>((Map<String, Object>) filtered);
+                    enriched.put("finality", meta);
+                    filtered = enriched;
+                }
+            }
+        }
+
         return ResponseEntity.ok(filtered);
+    }
+
+    /**
+     * 获取指定订单的支付最终性状态（NexFinality 网关原型）。
+     *
+     * <p>返回三层最终化状态：OPTIMISTIC / FINALIZING / FINALIZED，
+     * 供商户侧根据结算金额选择是否立即发货或等待最终性保证。</p>
+     */
+    @Operation(summary = "Get order finality status (NexFinality v2 prototype)")
+    @GetMapping("/{id}/finality")
+    public ResponseEntity<Object> getOrderFinality(@PathVariable Long id) {
+        Optional<PaymentOrder> opt = orderService.findById(id);
+        if (opt.isEmpty()) {
+            Map<String, Object> details = new HashMap<>();
+            details.put("orderId", id);
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(V2ErrorResponse.of(V2ErrorCode.ORDER_NOT_FOUND.getCode(),
+                            "Order with id=" + id + " not found", details));
+        }
+        PaymentOrder order = opt.get();
+        if (order.getChainTxHash() == null || order.getChainTxHash().isEmpty()) {
+            Map<String, Object> details = new HashMap<>();
+            details.put("order_id", id);
+            details.put("reason", "on-chain transaction hash not yet assigned");
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(V2ErrorResponse.of("FINALITY_NOT_READY",
+                            "On-chain tx hash not assigned to order yet", details));
+        }
+        FinalityService.FinalityInfo fi = finalityService.getFinality(order.getChainTxHash());
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("order_id", id);
+        body.put("chain_tx_hash", order.getChainTxHash());
+        body.put("finality_status", fi.status());
+        body.put("confirmations", fi.confirmations());
+        body.put("threshold", fi.threshold());
+        body.put("progress_percent", fi.progressPercent());
+        body.put("note", fi.note());
+        return ResponseEntity.ok(body);
     }
 
     /**
