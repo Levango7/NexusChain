@@ -11,6 +11,14 @@
   - `HttpOnChainExecutionClient`：非沙箱模式 gateway 不可达返回 `FAILED`，不再静默降级为沙箱假哈希；沙箱降级仅限 `nexus.wallet.execution.sandbox=true`
 - 测试：wallet-service 全量 185 测试通过；新增 fail-closed 专项断言，集成测试 `application-test.yml` 显式开 sandbox
 
+### Changed
+- refactor(oracle): 治理执行 `@Async`+`@Transactional` 混用改为细粒度事务（032a404）
+  - 移除 `GovernanceExecutionDispatcher` 方法级 `@Transactional`（异步线程事务上下文错位，国库转账异常可能无法回滚）
+  - `SoftwareUpgradeExecutor.execute` / `TreasurySpendExecutor.execute` 加 `@Transactional`，执行期真正持事务边界
+- refactor(tracing): 三份逐字节一致的 `BusinessSpan` 合并到新建 `nexus-common` 共享模块
+  - 包名统一 `org.nexus.common.tracing`，gateway/bridge/signing-service 7 处 import 迁移
+  - 消除跨模块拷贝漂移风险；gateway 709 + bridge 525 + signing 467 测试全绿
+
 ## [2.1.0] - 2026-08-10
 
 ### Security
