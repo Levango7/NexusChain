@@ -92,3 +92,9 @@ credentials.json
 *.tmp
 *.bak
 *.rs.bk
+
+# Runtime artifacts (mpc-engine 等长驻进程)
+*.log
+*.pid
+nexus-local.env
+local.env

@@ -182,8 +182,9 @@ In the Linux system, the program deployed by docker can use the IPC client
 
 ### 5.2 Execution Statement
 
-```
-python2 ./ipc_client.py
+```bash
+# IPC 配套脚本已归档至 scripts/legacy/nexus-core/ipc_client.py
+python2 ../../scripts/legacy/nexus-core/ipc_client.py
 ```
 
 ## 6. Run in command line
@@ -247,6 +248,7 @@ ENABLE_CODE_ASSERTION=true # enable code assertion for easy debug
 
 ### Run start script
 
-```shell script
-python start.py --env=local.env
+```bash
+# 一键启动脚本已归档至 scripts/legacy/nexus-core/start.py
+python ../../scripts/legacy/nexus-core/start.py --env=local.env
 ```
