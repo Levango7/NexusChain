@@ -125,8 +125,7 @@ dependencies {
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     // JUnit 5 (Jupiter) — 主测试框架
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
-    // JUnit 4 vintage bridge — 兼容层，允许 JUnit 4 测试在 JUnit 5 平台运行
-    testImplementation 'org.junit.vintage:junit-vintage-engine:5.10.2'
+
     testImplementation 'org.mockito:mockito-junit-jupiter:4.11.0'
 }
 

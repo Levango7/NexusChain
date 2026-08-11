@@ -19,6 +19,19 @@
 - CQRS 降级表述为事件溯源+投影读写分离
 - 添加跳过测试文档
 
+### v2.1.0 — MPC 端到端测试启用 + 文档更新
+- MPC E2E 测试：3/3 通过（DKG→Sign→Aggregate→ECDSA Verify）
+- Rust mpc-engine 编译验证成功（rustc 1.97.1 + gcc 16.1.0 MinGW64）
+- 修复 session_id 不一致（DKG/Sign/Aggregate 共用同一 session_id）
+- 修复阈值参数（t=3→t=2，Rust 引擎要求 threshold < total_parties）
+- 修复签名方数（t→t+1，GG20 协议要求 signer_count > threshold）
+- 修复 aggregate.rs message_bn 一致性（使用 message_hash_to_bigint）
+- 修复 Java 端 verifyEcdsaSignature（z=SHA256(hash) 与 Rust 端一致）
+- 添加 .cargo/config.toml（GNU linker 持久化配置）
+- 添加 start-engine.bat（后台启动脚本）
+- 更新 skipped-tests.md（MPC 测试已启用，跳过数 12→9）
+- Keystore 钱包文件从 git 历史中完全移除（仓库重建）
+
 ## [2.0.0-rc1] - 2026-08-10 - Phase 5 真实化改造 + 安全审计
 
 > **候选版本**：v2.0.0-rc1（Release Candidate 1）。Phase 5 完成研究层（MPC/ZK/L2/治理）真实化改造与安全审计，ADR-001 状态更新为 Resolved。当前存在 8 项 P0 级安全缺陷（详见 [安全审计报告](docs/audit/v2.0.0-rc1-security-audit.md)），均未修复但已诚实声明，建议以候选版本发布，P0 修复后发布 v2.1.0。

@@ -110,7 +110,7 @@ NexusChain v2.0.0-rc1 当前共有 **9 个被跳过的测试**，分布在 4 个
 
 ## 3. 环境驱动的条件测试（非永久跳过）
 
-以下测试依赖外部环境变量（真实链节点），未设置时通过 `assumeTrue` 跳过，**不属于上述 12 个永久/兼容性跳过测试**，设置环境后即可运行，故单独列出。
+以下测试依赖外部环境变量（真实链节点），未设置时通过 `assumeTrue` 跳过，**不属于上述 9 个永久/兼容性跳过测试**，设置环境后即可运行，故单独列出。
 
 **所在文件**：`nexus-core/nexus-core/src/test/java/org/nexus/rpc/RPCTest.java`
 **跳过机制**：`assumeRpcEnvAvailable()` 检查环境变量 `PRIVATE_KEY` / `HOST` / `PORT`，未设置时跳过
