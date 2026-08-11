@@ -1,0 +1,23 @@
+plugins {
+    id 'java-library'
+}
+
+group = 'org.nexus'
+version = '2.1.0'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // 仅编译期需要 Micrometer Tracing API；运行时由各消费模块（Spring Boot 3.2.5 BOM 提供 1.2.5）。
+    // 本模块未引入 Spring Boot BOM，无法自动推导版本，故显式锁定与 BOM 一致的 1.2.5。
+    compileOnlyApi 'io.micrometer:micrometer-tracing:1.2.5'
+    testCompileOnly 'io.micrometer:micrometer-tracing:1.2.5'
+}

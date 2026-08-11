@@ -1,6 +1,6 @@
 package org.nexus.signing.mpc;
 
-import org.nexus.signing.tracing.BusinessSpan;
+import org.nexus.common.tracing.BusinessSpan;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import io.micrometer.tracing.Tracer;

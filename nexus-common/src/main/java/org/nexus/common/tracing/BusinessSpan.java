@@ -1,4 +1,4 @@
-package org.nexus.gateway.tracing;
+package org.nexus.common.tracing;
 
 import io.micrometer.tracing.Span;
 import io.micrometer.tracing.Tracer;
@@ -10,8 +10,13 @@ import java.util.Objects;
  *
  * <p>封装 {@link Tracer#nextSpan()} 手动 span 创建，支持 try-with-resources
  * 模式，避免依赖 {@code @WithSpan} 注解所需的
- * {@code micrometer-tracing-annotation} + AOP 额外依赖（任务约束：
- * 不修改 nexus-gateway/build.gradle 依赖）。</p>
+ * {@code micrometer-tracing-annotation} + AOP 额外依赖。</p>
+ *
+ * <p>本类是跨模块共享实现（{@code nexus-common:tracing}），由
+ * {@code nexus-gateway} / {@code nexus-bridge} / {@code nexus-signing-service}
+ * 原先三份逐字节一致的拷贝合并而来，包名统一为 {@code org.nexus.common.tracing}。
+ * 各消费模块通过 {@code implementation project(':nexus-common')} 引用，
+ * 旧的模块内副本（{@code org.nexus.<module>.tracing.BusinessSpan}）已删除。</p>
  *
  * <p>使用示例：</p>
  * <pre>{@code

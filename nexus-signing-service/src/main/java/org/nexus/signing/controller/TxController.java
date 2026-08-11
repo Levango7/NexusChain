@@ -2,7 +2,7 @@ package org.nexus.signing.controller;
 
 import org.nexus.sdk.wallet.TxUtils;
 import org.nexus.sdk.wallet.WalletUtils;
-import org.nexus.signing.tracing.BusinessSpan;
+import org.nexus.common.tracing.BusinessSpan;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.google.gson.JsonObject;
 import org.nexus.sdk.common.APIResult;
