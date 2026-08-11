@@ -91,6 +91,7 @@ ext {
     hibernateValidatorVersion = '8.0.1.Final'
     junitVersion = '4.13.2'
     bouncyCastleVersion = '1.78'
+    blstVersion = '0.3.11'
     nettyVersion = '4.1.108.Final'
     grpcVersion = '1.54.0'
     protobufVersion = '3.22.2'
@@ -139,6 +140,11 @@ dependencies {
 
     implementation group: 'com.google.code.gson', name: 'gson', version: '2.10.1'
     implementation group: 'org.bouncycastle', name: 'bcprov-jdk18on', version: "${bouncyCastleVersion}"
+    // NexFinality ADR-030 M0: BLS12-381 聚合签名
+    // 已选用 supranational/blst，jblst Java 绑定发布至 Maven Central
+    // 启用条件：引入 BlstBlsSigner 实现时取消注释并运行 :nexus-core:blsContractTest 验证
+    // implementation "supranational:blst:${blstVersion}"
+
     implementation group: 'com.kosprov.jargon2', name: 'jargon2-api', version: '1.1.1'
     implementation group: 'com.kosprov.jargon2', name: 'jargon2-native-ri-backend', version: '1.1.1'
     implementation group: 'com.google.protobuf', name: 'protobuf-java', version: "${protobufVersion}"
