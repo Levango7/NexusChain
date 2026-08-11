@@ -29,7 +29,7 @@ plugins {
 }
 
 group = 'org.nexus'
-version = '2.0.0'
+version = '2.1.0'
 
 java {
     sourceCompatibility = 17
@@ -114,3 +114,20 @@ jacocoTestReport {
         html.required = false
     }
 }
+
+// === 覆盖率门禁（与 nexus-bridge / nexus-gateway 对齐，minimum 0.15） ===
+// BUNDLE 级别指令覆盖率下限 0.15；check 依赖 jacocoTestCoverageVerification 以强制门禁
+jacocoTestCoverageVerification {
+    violationRules {
+        rule {
+            limit {
+                element = 'BUNDLE'
+                counter = 'INSTRUCTION'
+                value = 'COVEREDRATIO'
+                minimum = 0.15
+            }
+        }
+    }
+}
+
+check.dependsOn jacocoTestCoverageVerification

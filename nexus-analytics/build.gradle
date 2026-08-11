@@ -6,7 +6,7 @@ plugins {
 }
 
 group = 'org.nexus'
-version = '1.9.7'
+version = '2.1.0'
 
 java {
     sourceCompatibility = 17
@@ -47,6 +47,23 @@ jacocoTestReport {
         html.required = false
     }
 }
+
+// === 覆盖率门禁（与 nexus-bridge / nexus-gateway 对齐，minimum 0.15） ===
+// BUNDLE 级别指令覆盖率下限 0.15；check 依赖 jacocoTestCoverageVerification 以强制门禁
+jacocoTestCoverageVerification {
+    violationRules {
+        rule {
+            limit {
+                element = 'BUNDLE'
+                counter = 'INSTRUCTION'
+                value = 'COVEREDRATIO'
+                minimum = 0.15
+            }
+        }
+    }
+}
+
+check.dependsOn jacocoTestCoverageVerification
 
 // 本模块是供其他应用消费的库（无 main class），不产出 Spring Boot fat jar：
 // 关闭 bootJar、启用普通 jar，否则消费方无法解析编译类路径。
