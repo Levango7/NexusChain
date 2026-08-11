@@ -13,6 +13,9 @@ use crate::gg20;
 use crate::gg20::SignCache;
 use crate::proto::mpc_crypto::{AggregateRequest, AggregateResponse};
 use std::collections::HashMap;
+// std::sync::Mutex safe: lock not held across .await point.
+// run_aggregate 为同步函数（pub fn，非 async fn），sign_runs.lock() 在同步代码块
+// 内获取释放，无 .await 调用，不会死锁 tokio 运行时。
 use std::sync::Mutex;
 
 /// 聚合各方签名份额，输出最终签名并验证。

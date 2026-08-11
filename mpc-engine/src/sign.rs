@@ -10,6 +10,9 @@
 //! `partial_signature` 返回本方部分签名 s_i（hex），聚合由 Aggregate RPC 完成。
 
 use std::collections::HashMap;
+// std::sync::Mutex safe: lock not held across .await point.
+// run_sign 为同步函数（pub fn，非 async fn），sign_runs.lock() 与 sessions.lock()
+// 均在同步代码块内获取释放，无 .await 调用，不会死锁 tokio 运行时。
 use std::sync::Mutex;
 
 use crate::gg20;

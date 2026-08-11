@@ -11,6 +11,12 @@
 //!
 //! 当两个环境变量都存在时，启用 TLS；否则记录警告并使用明文（开发模式）。
 //!
+//! **TLS 强制策略**（`MPC_REQUIRE_TLS`）：
+//!   * `MPC_REQUIRE_TLS=true`：当未配置 TLS 证书/私钥时，**拒绝启动**（返回错误），
+//!     不降级到明文。适用于生产环境，防止误配置导致明文 gRPC 暴露。
+//!   * `MPC_REQUIRE_TLS` 未设置或为 `false`：保持当前行为（降级到明文并记录警告），
+//!     适用于开发环境。
+//!
 //! **启用 TLS 编译**：tonic 的 `tls` feature 默认未启用。要启用 TLS 支持，
 //! 在 `Cargo.toml` 中添加：
 //! ```toml
@@ -70,12 +76,32 @@ async fn main() -> eyre::Result<()> {
     // === TLS 配置读取（MPC-P0-01） ===
     let tls_config = read_tls_env();
 
+    // === MPC_REQUIRE_TLS 强制策略 ===
+    // 当 MPC_REQUIRE_TLS=true 且未配置 TLS 证书/私钥时，拒绝启动（不降级到明文）。
+    // 当 MPC_REQUIRE_TLS 未设置或为 false 时，保持当前行为（降级到明文并记录警告）。
+    let require_tls = std::env::var("MPC_REQUIRE_TLS")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.eq_ignore_ascii_case("true") || s == "1")
+        .unwrap_or(false);
+
     tracing::info!(
         %bind,
         tls_enabled = tls_config.is_some(),
+        require_tls,
         version = env!("CARGO_PKG_VERSION"),
-        "starting mpc-engine gRPC server (§4.1 方案 A, MPC-P0-01 TLS 修复)"
+        "starting mpc-engine gRPC server (§4.1 方案 A, MPC-P0-01 TLS 修复, MPC_REQUIRE_TLS 策略)"
     );
+
+    // MPC_REQUIRE_TLS=true 但未配置 TLS：拒绝启动
+    if require_tls && tls_config.is_none() {
+        return Err(eyre::eyre!(
+            "MPC_REQUIRE_TLS=true but MPC_TLS_CERT_PATH/MPC_TLS_KEY_PATH not set. \
+             Refusing to start with plaintext gRPC. \
+             Set both TLS env vars and enable tls feature to start securely \
+             (design §7.1 R10, MPC-P0-01)"
+        ));
+    }
 
     // === 启动 gRPC 服务端 ===
     let svc = MpcCryptoServiceImpl::default();
@@ -110,6 +136,16 @@ async fn main() -> eyre::Result<()> {
     // 明文模式（开发）或 TLS feature 未启用
     #[cfg(not(feature = "tls"))]
     {
+        // MPC_REQUIRE_TLS=true 但 tls feature 未启用：拒绝启动
+        // （即使配置了证书路径，feature 未启用也无法使用 TLS，会降级到明文）
+        if require_tls {
+            return Err(eyre::eyre!(
+                "MPC_REQUIRE_TLS=true but tonic 'tls' feature is not enabled at compile time. \
+                 Refusing to start with plaintext gRPC. \
+                 Rebuild with --features tls (add [features] tls = [\"tonic/tls\"] to Cargo.toml) \
+                 (design §7.1 R10, MPC-P0-01)"
+            ));
+        }
         if tls_config.is_some() {
             tracing::warn!(
                 "MPC_TLS_CERT_PATH and MPC_TLS_KEY_PATH are set but tonic 'tls' feature \
@@ -129,6 +165,8 @@ async fn main() -> eyre::Result<()> {
     #[cfg(feature = "tls")]
     {
         if tls_config.is_none() {
+            // 此分支仅在 require_tls=false 时可达（require_tls=true 且 tls_config.is_none()
+            // 已在上方提前返回错误）
             tracing::warn!(
                 "MPC_TLS_CERT_PATH or MPC_TLS_KEY_PATH not set — using PLAINTEXT gRPC. \
                  NOT for production; set both env vars to enable TLS \

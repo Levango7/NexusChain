@@ -11,6 +11,9 @@
 //! 完全分散式部署为后续演进目标。
 
 use std::collections::HashMap;
+// std::sync::Mutex safe: lock not held across .await point.
+// run_dkg/run_sign/run_aggregate 均为同步函数（pub fn，非 async fn），
+// 在 async RPC 方法中同步调用，锁的获取与释放在同步代码段内完成，不跨 .await。
 use std::sync::Mutex;
 
 use tonic::{Request, Response, Status};
