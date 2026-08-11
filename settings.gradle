@@ -20,6 +20,7 @@ include ':nexus-core:nexus-core'
 // === SDK 层 ===
 
 include 'nexus-sdk:java'
+include 'nexus-common'
 
 // === 服务层 ===
 // nexus-exchange-wallet 已在 v1.4.0 移除：signing/ 子包迁入 nexus-signing-service，

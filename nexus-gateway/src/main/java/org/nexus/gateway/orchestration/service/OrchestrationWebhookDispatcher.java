@@ -2,7 +2,7 @@ package org.nexus.gateway.orchestration.service;
 
 import org.nexus.gateway.orchestration.model.OrchestratedPayment;
 import org.nexus.gateway.orchestration.webhook.WebhookDeliveryService;
-import org.nexus.gateway.tracing.BusinessSpan;
+import org.nexus.common.tracing.BusinessSpan;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;

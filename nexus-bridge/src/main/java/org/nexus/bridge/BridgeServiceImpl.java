@@ -5,7 +5,7 @@ import org.nexus.bridge.model.BridgeTransaction;
 import org.nexus.bridge.model.BridgeTransaction.BridgeOperationType;
 import org.nexus.bridge.model.BridgeTransaction.BridgeTxStatus;
 import org.nexus.bridge.repository.BridgeTransactionRepository;
-import org.nexus.bridge.tracing.BusinessSpan;
+import org.nexus.common.tracing.BusinessSpan;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;

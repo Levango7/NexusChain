@@ -8,7 +8,7 @@ import org.nexus.gateway.orchestration.routing.RoutingEngine;
 import org.nexus.gateway.risk.PaymentRequest;
 import org.nexus.gateway.risk.PaymentRiskService;
 import org.nexus.gateway.risk.RiskDecision;
-import org.nexus.gateway.tracing.BusinessSpan;
+import org.nexus.common.tracing.BusinessSpan;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;

@@ -15,7 +15,7 @@ import org.nexus.gateway.risk.PaymentRequest;
 import org.nexus.gateway.risk.PaymentRiskService;
 import org.nexus.gateway.risk.RefundRequest;
 import org.nexus.gateway.risk.RiskDecision;
-import org.nexus.gateway.tracing.BusinessSpan;
+import org.nexus.common.tracing.BusinessSpan;
 import org.nexus.sdk.client.feign.SigningServiceFeignClient;
 import org.nexus.sdk.client.feign.WalletMgmtFeignClient;
 import org.springframework.context.ApplicationEventPublisher;

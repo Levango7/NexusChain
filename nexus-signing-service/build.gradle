@@ -53,6 +53,8 @@ tasks.withType(JavaCompile) {
 }
 
 dependencies {
+    // 共享通用库（tracing 等，合并自原模块内逐字节一致的拷贝）
+    implementation project(':nexus-common')
     // === Spring Boot ===
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
