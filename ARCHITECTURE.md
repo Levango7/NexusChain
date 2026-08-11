@@ -30,7 +30,7 @@ Blockchain is the foundational settlement layer — not the product itself. On t
 | nexus-exchange-wallet | Exchange/custodial wallet（已归档至 .archived，拆分到 signing/wallet-service） | Archived |
 | nexus-signing-service | 签名服务独立部署（PoC，HTTP 调用） | Active — PoC |
 | nexus-wallet-service | 钱包管理服务独立部署（PoC，HTTP 调用） | Active — PoC |
-| mpc-engine | Rust gRPC MPC 密码学引擎 | **Skeleton — DKG/Sign/Aggregate 未实现，非门限密码学**（见 README 成熟度声明） |
+| mpc-engine | Rust gRPC MPC 密码学引擎 | **已实现 — GG20 门限 ECDSA（DKG/Sign/Aggregate/Verify），3/3 E2E 测试通过**（见 README 成熟度声明） |
 | nexus-settlement | 清结算与风控（复式记账、对账、资金归集、风控规则链） | Active — 库（gateway 进程内消费） |
 | nexus-compliance | 合规与身份（KYC/AML/DID/信誉评分） | Active — 库（gateway 进程内消费） |
 | nexus-analytics | 数据智能（交易图谱、链上监控、告警、BI、导出） | Active — 库（gateway 进程内消费，事件驱动） |
@@ -111,7 +111,7 @@ Blockchain is the foundational settlement layer — not the product itself. On t
 
 - `nexus-gateway` ← `nexus-settlement` / `nexus-compliance` / `nexus-analytics` / `nexus-oracle`：**进程内 composite build**（Gradle `includeBuild`，gateway 直接消费库的 Service Bean，无 HTTP 开销）
 - `nexus-gateway` → `nexus-core` / `nexus-consortium`：**HTTP RPC**（独立进程，链节点远程调用）
-- `nexus-gateway` → `nexus-exchange-wallet`：**HTTP REST**（独立服务，钱包托管/兑换接口）
+- `nexus-gateway` → `nexus-exchange-wallet`：**HTTP REST**（独立服务，钱包托管/兑换接口）— **已归档**：拆分到 `nexus-signing-service` / `nexus-wallet-service`
 - `nexus-bridge`：**独立 Spring Boot 应用**（链上执行，Web3j 适配多链）
 
 ## Payment Orchestration Roadmap
@@ -134,7 +134,7 @@ Blockchain is the foundational settlement layer — not the product itself. On t
 - PoS 共识（替换/增强现有 DPoS）
 - L2 Rollup（扩容方案）
 - 链上治理执行（提案 → 国库 → 链上动作）
-- MPC 多签协议（GG18/GG20 阈值签名）
+- MPC 多签协议（GG18/GG20 阈值签名）— **已完成 — GG20 可信协调器模型**
 - ZK Rollup 真实 ZK 库接入（halo2/Plonk）
 - 签名服务/钱包服务独立部署（PoC → 生产）
 

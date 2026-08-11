@@ -117,15 +117,15 @@ subprojects {
         slf4jVersion = '1.7.36'
         logbackVersion = '1.2.13'
         postgresqlVersion = '42.5.4'
-        leveldbVersion = '0.7'
-        hibernateValidatorVersion = '6.2.5.Final'
+        leveldbVersion = '0.12'
+        hibernateValidatorVersion = '8.0.1.Final'
         bouncycastleVersion = '1.78'
         jargon2Version = '1.1.1'
         nettyVersion = '4.1.108.Final'
         grpcVersion = '1.54.0'
         httpClientVersion = '4.5.14'
         protobufVersion = '3.22.2'
-        jacksonVersion = '2.14.2'
+        jacksonVersion = '2.15.4'
         gsonVersion = '2.10.1'
         guavaVersion = '31.1-jre'
         commonsCodecVersion = '1.15'
@@ -140,7 +140,7 @@ subprojects {
         junitJupiterVersion = '5.10.2'
         mockitoVersion = '4.11.0'
 
-        nexusVersion = '1.9.5'
+        nexusVersion = '2.1.0'
     }
 
     // B1 baseline (2026-08-03): NO global forced test deps.
