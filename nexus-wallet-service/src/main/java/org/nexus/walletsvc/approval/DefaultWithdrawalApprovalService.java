@@ -254,10 +254,15 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
                 log.info("Withdrawal executed via signing-service: requestId={}, txHash={}",
                         approvalId, txHash);
             } else {
-                // fallback：签名服务客户端未注入，使用模拟 txHash（向后兼容，测试 / 独立运行场景）
-                txHash = "SIMULATED-" + UUID.randomUUID().toString().replace("-", "");
-                log.warn("Withdrawal executed with fallback SIMULATED tx (no signing service client): requestId={}",
-                        approvalId);
+                // Fail-closed（资金安全）：签名服务客户端未注入时不伪造 SIMULATED 哈希。
+                // 提币涉及真实资金，缺失签名通道必须标记 FAILED 并拒绝放行，
+                // 由上层按 FAILED 状态告警 / 人工介入，绝不把未上链的提币记为 EXECUTED。
+                entity.setStatus(WithdrawalRequest.WithdrawalStatus.FAILED);
+                entity.setRejectionReason("signing service client not configured; withdrawal aborted (fail-closed)");
+                withdrawalRequestRepository.save(entity);
+                log.error("Withdrawal aborted (fail-closed): no signing service client, requestId={}", approvalId);
+                return WithdrawalRequestMapper.toDto(entity,
+                        withdrawalApproverRepository.findByRequestId(approvalId));
             }
             entity.setChainTxHash(txHash);
             entity.setStatus(WithdrawalRequest.WithdrawalStatus.EXECUTED);

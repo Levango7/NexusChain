@@ -61,3 +61,11 @@ management:
 feign:
   circuitbreaker:
     enabled: false
+
+# 集成测试使用 sandbox 链上执行通道（无 gateway 可调用，显式产出 simulated 标记哈希）。
+# 资金安全 fail-closed 语义见 DefaultCustodyService.executeOnChainTransfer ——
+# 生产（sandbox=false）下链上失败会抛异常回滚，绝不伪造 SIMULATED- 哈希。
+nexus:
+  wallet:
+    execution:
+      sandbox: true
