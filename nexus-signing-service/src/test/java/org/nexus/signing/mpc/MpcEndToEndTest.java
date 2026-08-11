@@ -55,6 +55,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * <ul>
  *   <li>{@link #testThreePartyDkgSignAggregateVerify} — 3-of-3 完整流程</li>
  *   <li>{@link #testTwoOfThreeThresholdSignature} — 2-of-3 阈值签名（t&lt;n）</li>
+ *   <li>{@link #testTwoOfTwoThresholdSignature} — 2-of-2 阈值签名（t=1, n=2）</li>
  *   <li>{@link #testHealthCheck} — 引擎健康检查</li>
  * </ul>
  *
@@ -279,6 +280,75 @@ public class MpcEndToEndTest {
         // ECDSA Verify
         verifyEcdsaSignature(jointPublicKey, messageHashHex, aggResp.getR(), aggResp.getS());
         log.info("2-of-3 ECDSA verification PASSED!");
+    }
+
+    /**
+     * 2-of-2 阈值签名：t=1, n=2 场景（t&lt;n）。
+     *
+     * <p>2 方 DKG 生成 2-of-2 阈值密钥，需 t+1=2 方签名聚合（GG20 要求签名方数 &gt; threshold）。
+     * 验证阈值签名正确性。注意 Rust 引擎要求 t &lt; n，此处 t=1, n=2 满足约束；
+     * signer_count = t+1 = 2 &gt; t = 1 满足 GG20 协议要求。</p>
+     */
+    @Test
+    @DisplayName("2-of-2 threshold DKG → Sign(t=1) → Aggregate → ECDSA Verify")
+    void testTwoOfTwoThresholdSignature() throws Exception {
+        assumeEngineAvailable();
+
+        int n = 2;  // 总参与方数
+        int t = 1;  // 阈值（2-of-2，t < n）
+        String curve = "secp256k1";
+        String dkgSessionId = "e2e-dkg-2of2-" + System.currentTimeMillis();
+
+        // 2 个参与方的 gRPC 端点（端口与其它测试隔离避免冲突）
+        List<String> peerEndpoints = Arrays.asList(
+                "localhost:50081", "localhost:50082");
+
+        log.info("=== 2-of-2 Threshold: DKG (session={}) ===", dkgSessionId);
+
+        // DKG: 2 方参与
+        String[] keyShares = new String[n];
+        String jointPublicKey = null;
+        for (int i = 0; i < n; i++) {
+            DkgRequest req = new DkgRequest(dkgSessionId, t, n, i, curve, peerEndpoints);
+            DkgResponse resp = engine.dkg(req);
+            assertTrue(resp.isSuccess(),
+                    "DKG party " + i + " should succeed, error: " + resp.getError());
+            keyShares[i] = resp.getKeyShare();
+            if (jointPublicKey == null) {
+                jointPublicKey = resp.getPublicKey();
+            }
+        }
+        assertNotNull(jointPublicKey, "joint public key should be produced");
+        log.info("2-of-2 DKG complete");
+
+        // Sign: t+1=2 方签名（party 0 和 party 1，signer_count > t）
+        // session_id 与 DKG 保持一致（GG20 协议要求）
+        String signSessionId = dkgSessionId;
+        String messageHashHex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+        List<String> partialSignatures = new ArrayList<>();
+        for (int i = 0; i <= t; i++) {
+            SignRequest req = new SignRequest(signSessionId, jointPublicKey,
+                    keyShares[i], messageHashHex, i, peerEndpoints);
+            SignResponse resp = engine.sign(req);
+            assertTrue(resp.isSuccess(),
+                    "Sign party " + i + " should succeed, error: " + resp.getError());
+            partialSignatures.add(resp.getPartialSignature());
+        }
+        assertEquals(t + 1, partialSignatures.size(), "should have t+1 partial signatures");
+        log.info("2-of-2 Sign complete: {} partial signatures", partialSignatures.size());
+
+        // Aggregate
+        AggregateRequest aggReq = new AggregateRequest(signSessionId, jointPublicKey,
+                messageHashHex, partialSignatures);
+        AggregateResponse aggResp = engine.aggregate(aggReq);
+        assertTrue(aggResp.isSuccess(),
+                "Aggregate should succeed, error: " + aggResp.getError());
+        log.info("2-of-2 Aggregate complete: recoveryId={}", aggResp.getRecoveryId());
+
+        // ECDSA Verify
+        verifyEcdsaSignature(jointPublicKey, messageHashHex, aggResp.getR(), aggResp.getS());
+        log.info("2-of-2 ECDSA verification PASSED!");
     }
 
     // =========================================================================

@@ -12,6 +12,9 @@
 //! 完全分散式部署（t-of-n 方被攻破不泄露私钥）为后续演进目标。
 
 use std::collections::HashMap;
+// std::sync::Mutex safe: lock not held across .await point.
+// run_dkg 为同步函数（pub fn，非 async fn），sessions.lock() 在同步代码块内
+// 获取释放，无 .await 调用，不会死锁 tokio 运行时。
 use std::sync::Mutex;
 
 use crate::gg20;

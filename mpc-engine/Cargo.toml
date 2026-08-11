@@ -26,6 +26,14 @@ paillier = { version = "0.4.2", package = "kzen-paillier" }
 zk-paillier = "0.4.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+# secp256k1 版本锁定 0.20：multi-party-ecdsa 0.8.1 / curv-kzen 0.9 依赖
+# secp256k1 0.20 的 API。曾尝试升级至 0.29，但 0.29 存在 breaking API 变更：
+#   1) `secp256k1::Signature` 不再从 crate 根导出（需改用 `secp256k1::ecdsa::Signature`）；
+#   2) `Secp256k1::verify()` 被移除，替换为 `verify_ecdsa()`；
+#   3) `Message::from_slice` 被弃用（改用 `from_digest_slice`）。
+# 升级 0.29 需同步重写 gg20.rs 的 secp256k1 调用，且 multi-party-ecdsa 0.8.1
+# 内部仍绑定 0.20 API，会导致版本分裂。故在 multi-party-ecdsa 升级至支持
+# secp256k1 0.29+ 的版本之前，此处保持 0.20 不变。
 secp256k1 = { version = "0.20", features = ["global-context"] }
 hex = "0.4"
 sha2 = "0.9"
