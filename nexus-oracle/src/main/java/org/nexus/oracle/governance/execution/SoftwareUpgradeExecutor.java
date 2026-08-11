@@ -8,6 +8,7 @@ import org.nexus.oracle.governance.event.SoftwareUpgradeEvent;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -105,6 +106,7 @@ public class SoftwareUpgradeExecutor {
      * @param proposal 已通过的软件升级提案
      * @return 执行结果对象（包含 success、target、version、errorMessage 等字段）
      */
+    @Transactional
     public ExecutionResult execute(Proposal proposal) {
         if (proposal == null) {
             return ExecutionResult.failure("Proposal must not be null");

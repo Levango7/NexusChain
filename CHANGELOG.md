@@ -2,6 +2,15 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [Unreleased]
+
+### Security
+- P0(wallet-service): 资金路径 fail-closed —— 消除伪造 `SIMULATED-` 交易哈希（59cb5e1）
+  - `DefaultCustodyService.executeOnChainTransfer`：链上执行通道缺失/失败时抛异常触发事务回滚，余额不落库，杜绝"账上有、链上无"
+  - `DefaultWithdrawalApprovalService`：签名服务客户端缺失时提币标记 `FAILED`（fail-closed），不把未上链提币记为 `EXECUTED`
+  - `HttpOnChainExecutionClient`：非沙箱模式 gateway 不可达返回 `FAILED`，不再静默降级为沙箱假哈希；沙箱降级仅限 `nexus.wallet.execution.sandbox=true`
+- 测试：wallet-service 全量 185 测试通过；新增 fail-closed 专项断言，集成测试 `application-test.yml` 显式开 sandbox
+
 ## [2.1.0] - 2026-08-10
 
 ### Security
