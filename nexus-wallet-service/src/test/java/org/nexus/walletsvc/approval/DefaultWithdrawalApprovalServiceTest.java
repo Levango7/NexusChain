@@ -490,8 +490,9 @@ class DefaultWithdrawalApprovalServiceTest {
     }
 
     @Test
-    void execute_noSigningClient_usesSimulatedTxHash() {
-        // 验证 fallback 路径：signingServiceClient=null 时使用 SIMULATED txHash
+    void execute_noSigningClient_failsClosed() {
+        // Fail-closed（资金安全）：签名服务客户端未注入时不再伪造 SIMULATED txHash，
+        // 提币必须标记 FAILED，绝不把未上链的提币记为 EXECUTED。
         DefaultWithdrawalApprovalService standaloneService =
                 new DefaultWithdrawalApprovalService(
                         approvalPolicy, null, PLATFORM_WALLET,
@@ -502,10 +503,11 @@ class DefaultWithdrawalApprovalServiceTest {
 
         WithdrawalRequest executed = standaloneService.executeApprovedWithdrawal(request.getRequestId());
 
-        assertEquals(WithdrawalRequest.WithdrawalStatus.EXECUTED, executed.getStatus());
-        assertNotNull(executed.getChainTxHash());
-        assertTrue(executed.getChainTxHash().startsWith("SIMULATED-"));
-        assertNotNull(executed.getExecutedAt());
+        assertEquals(WithdrawalRequest.WithdrawalStatus.FAILED, executed.getStatus());
+        assertNull(executed.getChainTxHash());
+        assertNotNull(executed.getRejectionReason());
+        assertTrue(executed.getRejectionReason().contains("fail-closed"));
+        assertNull(executed.getExecutedAt());
     }
 
     @Test

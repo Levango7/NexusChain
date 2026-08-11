@@ -73,8 +73,18 @@ public class HttpOnChainExecutionClient implements OnChainExecutionClient {
             }
             return failure("gateway returned empty body");
         } catch (Exception e) {
-            log.warn("execute via gateway failed, falling back to sandbox: {}", e.getMessage());
-            return sandboxResult(request);
+            // Fail-closed（资金安全）：非沙箱模式下 gateway 不可达属于真实失败，
+            // 绝不能静默降级为伪造的沙箱哈希（SIMULATED-）冒充已上链成功，
+            // 否则上游（托管账本）会误以为转账成功而记账，造成账实不符。
+            if (sandboxMode) {
+                log.warn("sandbox mode: gateway call failed, returning sandbox result: {}", e.getMessage());
+                return sandboxResult(request);
+            }
+            log.error("execute via gateway failed (non-sandbox, fail-closed): type={}, requestId={}, error={}",
+                    request != null ? request.getType() : null,
+                    request != null ? request.getRequestId() : null,
+                    e.getMessage());
+            return failure("gateway unreachable (non-sandbox): " + e.getMessage());
         }
     }
 

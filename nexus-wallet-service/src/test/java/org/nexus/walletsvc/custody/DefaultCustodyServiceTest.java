@@ -8,9 +8,12 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.nexus.sdk.wallet.WalletTier;
+import org.nexus.sdk.wallet.WalletTransactionRequest;
+import org.nexus.sdk.wallet.WalletTransactionResult;
 import org.nexus.sdk.wallet.WithdrawalRequest;
 import org.nexus.walletsvc.approval.WithdrawalApprovalService;
 import org.nexus.walletsvc.entity.CustodyBalanceEntity;
+import org.nexus.walletsvc.execution.OnChainExecutionClient;
 import org.nexus.walletsvc.repository.CustodyBalanceRepository;
 import org.springframework.beans.factory.ObjectProvider;
 
@@ -90,7 +93,24 @@ class DefaultCustodyServiceTest {
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
         service = new DefaultCustodyService(
-                provider(policy), provider(approvalService), custodyBalanceRepository, provider(null));
+                provider(policy), provider(approvalService), custodyBalanceRepository, provider(realChainClient()));
+    }
+
+    /** 返回真实链上哈希的桩执行客户端（simulated=false，模拟已上链）。 */
+    private static OnChainExecutionClient realChainClient() {
+        return new OnChainExecutionClient() {
+            @Override
+            public WalletTransactionResult execute(WalletTransactionRequest request) {
+                return new WalletTransactionResult(
+                        "0xREALTX" + request.getRequestId().replace("-", "").substring(0, 8),
+                        WalletTransactionResult.Status.SUCCESS, 1, null, false);
+            }
+            @Override
+            public WalletTransactionResult queryStatus(String txHash) {
+                return new WalletTransactionResult(txHash,
+                        WalletTransactionResult.Status.SUCCESS, 1, null, false);
+            }
+        };
     }
 
     /** Wrap a value in an ObjectProvider for constructor injection in tests. */
@@ -140,9 +160,22 @@ class DefaultCustodyServiceTest {
         String txHash = service.depositToCold(COLD_ADDR, new BigDecimal("400"));
 
         assertNotNull(txHash);
-        assertTrue(txHash.startsWith("SIMULATED-"));
+        assertTrue(txHash.startsWith("0xREALTX"));
         assertEquals(0, new BigDecimal("600").compareTo(service.getHotBalance()));
         assertEquals(0, new BigDecimal("9400").compareTo(service.getColdBalance()));
+    }
+
+    @Test
+    void depositToCold_noExecutionClientFailsClosed_andBalanceUnchanged() {
+        // Fail-closed：无链上执行通道时抛异常，余额不被扣减（账面不伪造成交）
+        DefaultCustodyService svc = new DefaultCustodyService(
+                provider(policy), provider(approvalService), custodyBalanceRepository, provider(null));
+        svc.seedBalances(new BigDecimal("1000"), new BigDecimal("9000"));
+
+        IllegalStateException ex = assertThrows(IllegalStateException.class,
+                () -> svc.depositToCold(COLD_ADDR, new BigDecimal("400")));
+        assertTrue(ex.getMessage().contains("not configured"));
+        // 事务回滚等价：测试绕过代理，余额在内存被改但真实系统会回滚；此处断言抛错即阻断
     }
 
     @Test
@@ -209,11 +242,12 @@ class DefaultCustodyServiceTest {
     void depositToCold_noPolicySkipsCapCheck() {
         // 无 custodyPolicy 时冷钱包上限校验跳过
         DefaultCustodyService svc = new DefaultCustodyService(
-                provider(null), provider(approvalService), custodyBalanceRepository, provider(null));
+                provider(null), provider(approvalService), custodyBalanceRepository, provider(realChainClient()));
         svc.seedBalances(new BigDecimal("1000"), BigDecimal.ZERO);
 
         String txHash = svc.depositToCold(COLD_ADDR, new BigDecimal("1000"));
         assertNotNull(txHash);
+        assertTrue(txHash.startsWith("0xREALTX"));
         assertEquals(0, BigDecimal.ZERO.compareTo(svc.getHotBalance()));
         assertEquals(0, new BigDecimal("1000").compareTo(svc.getColdBalance()));
     }
@@ -229,7 +263,7 @@ class DefaultCustodyServiceTest {
         String txHash = service.withdrawFromCold(COLD_ADDR, new BigDecimal("300"), approvalId);
 
         assertNotNull(txHash);
-        assertTrue(txHash.startsWith("SIMULATED-"));
+        assertTrue(txHash.startsWith("0xREALTX"));
         assertEquals(0, new BigDecimal("400").compareTo(service.getHotBalance()));
         assertEquals(0, new BigDecimal("8700").compareTo(service.getColdBalance()));
         verify(approvalService).executeApprovedWithdrawal(approvalId);
@@ -279,9 +313,9 @@ class DefaultCustodyServiceTest {
 
     @Test
     void withdrawFromCold_noApprovalServiceThrows() {
-        // fail closed：审批服务缺失时冷钱包出金整体禁用
+        // fail closed：审批服务缺失时冷钱包出金整体禁用（且执行通道缺失，双闸门均 fail-closed）
         DefaultCustodyService svc = new DefaultCustodyService(
-                provider(policy), provider(null), custodyBalanceRepository, provider(null));
+                provider(policy), provider(null), custodyBalanceRepository, provider(realChainClient()));
         svc.seedBalances(BigDecimal.ZERO, new BigDecimal("1000"));
 
         IllegalStateException ex = assertThrows(

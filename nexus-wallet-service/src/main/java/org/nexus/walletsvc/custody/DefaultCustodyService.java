@@ -212,33 +212,42 @@ public class DefaultCustodyService implements CustodyService {
     }
 
     /**
-     * 通过链上执行通道（gateway → 链上广播）执行转账，替换原 SIMULATED 占位（v1.9.2）。
+     * 通过链上执行通道（gateway → 链上广播）执行转账。
      *
-     * <p>当 {@code OnChainExecutionClient} 未注入（独立/测试环境）或调用失败时，
-     * 降级为内部模拟哈希（SIMULATED 前缀），保持向后兼容；调用失败不抛异常，
-     * 以 FAILED 结果降级，保证余额账本与交易记录的原子性不受影响。</p>
+     * <p><b>fail-closed（资金安全）</b>：当 {@code OnChainExecutionClient} 未注入或
+     * 链上调用失败 / 返回空哈希时，<b>抛异常而非返回伪造的 {@code SIMULATED-} 哈希</b>。
+     * 本方法在调用方（{@code depositToCold} / {@code transferColdToHotInternal}）的
+     * {@code @Transactional} 事务内执行，抛异常将触发回滚，已扣减的冷热余额随之撤销，
+     * 保证账本绝不会出现「账上有、链上无」的对账缺口。</p>
+     *
+     * <p>沙箱 / 本地联调请改用 {@code nexus.wallet.execution.sandbox=true} 的
+     * {@link org.nexus.walletsvc.execution.HttpOnChainExecutionClient} 沙箱通道，
+     * 由该通道显式产出带 {@code simulated=true} 标记的响应，而非在生产资金路径上伪造哈希。</p>
      *
      * @param type    交易类型（SWEEP / WITHDRAWAL）
      * @param address 目标地址
      * @param amount  金额
      * @param memo    备注
-     * @return 交易哈希（真实广播或 SIMULATED- 前缀降级）
+     * @return 链上真实交易哈希（永不为 {@code SIMULATED-} 前缀）
+     * @throws IllegalStateException 执行通道缺失或链上执行失败（触发事务回滚）
      */
     private String executeOnChainTransfer(WalletTransactionRequest.Type type,
                                           String address, BigDecimal amount, String memo) {
         if (onChainExecutionClient == null) {
-            String txHash = "SIMULATED-" + UUID.randomUUID().toString().replace("-", "");
-            log.warn("No OnChainExecutionClient configured; fallback SIMULATED tx: type={}, txHash={}", type, txHash);
-            return txHash;
+            log.error("Fail-closed: no OnChainExecutionClient configured; aborting custodial transfer type={}, address={}, amount={}",
+                    type, address, amount);
+            throw new IllegalStateException(
+                    "on-chain execution channel not configured; custodial transfer aborted (rollback)");
         }
         WalletTransactionRequest request = new WalletTransactionRequest(
                 type, "cold-custody", address, amount, "NEX", memo, UUID.randomUUID().toString());
         WalletTransactionResult result = onChainExecutionClient.execute(request);
         if (result == null || result.getTxHash() == null || result.getTxHash().isEmpty()) {
-            String txHash = "SIMULATED-" + UUID.randomUUID().toString().replace("-", "");
-            log.warn("On-chain transfer failed ({}); fallback SIMULATED tx: type={}, txHash={}",
-                    result != null ? result.getError() : "null result", type, txHash);
-            return txHash;
+            String error = result != null ? result.getError() : "null result";
+            log.error("Fail-closed: on-chain transfer failed ({}); aborting custodial transfer type={}, address={}, amount={}",
+                    error, type, address, amount);
+            throw new IllegalStateException(
+                    "on-chain transfer failed: " + error + " (rollback)");
         }
         return result.getTxHash();
     }
