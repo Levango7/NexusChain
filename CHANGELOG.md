@@ -18,6 +18,15 @@
 - refactor(tracing): 三份逐字节一致的 `BusinessSpan` 合并到新建 `nexus-common` 共享模块
   - 包名统一 `org.nexus.common.tracing`，gateway/bridge/signing-service 7 处 import 迁移
   - 消除跨模块拷贝漂移风险；gateway 709 + bridge 525 + signing 467 测试全绿
+- feat(gateway): 支付最终性三层状态模型（NexFinality 网关侧原型）
+  - `FinalityStatus`（OPTIMISTIC/FINALIZING/FINALIZED/UNKNOWN）+ `FinalityService`（确认数→最终化推导，阈值 `nexus.finality.blocks-to-finalize` 可配，默认 12）
+  - `OrderV2Controller` 新增 `GET /{id}/finality` 端点 + 查询响应默认叠加 `finality` 字段（含 progress_percent 实时进度）
+  - 8 个 `FinalityServiceTest` 用例全绿（阈值边界/链不可达/未入块/自定义阈值）
+- feat(oracle): 治理执行 `@Async`+`@Transactional` 混用改为细粒度事务
+
+### Documentation
+- ADR-029：PoS 共识现状审计基线（实证出块/验签/罚没/同步已闭环，纠正 README 过时表述）
+- ADR-030：NexFinality 创意共识规格（BFT 投票 + BLS 聚合 + 双层确认 + 三条连接轴，零自研密码学纪律）
 
 ## [2.1.0] - 2026-08-10
 
