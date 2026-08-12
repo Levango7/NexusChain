@@ -173,6 +173,35 @@ public class ChainRpcClient {
     // --- Circuit breaker fallbacks ---
 
     /**
+     * 查询指定 epoch 的最终性进度（BFT 质押权重驱动，NexFinality）。
+     * 调用 core: GET /rpc/v1/finality/epoch/{epoch}
+     *
+     * @param epoch 共识 epoch 编号
+     * @return 返回 {finality_status, voted_weight, total_weight, progress_percent}；
+     *         链不可达或最终性层未启用返回 null
+     */
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> getEpochFinality(long epoch) {
+        try {
+            String url = gatewayConfig.getChain().getRpcUrl() + "/rpc/v1/finality/epoch/" + epoch;
+            ResponseEntity<Map> resp = restTemplate.getForEntity(url, Map.class);
+            if (resp.getBody() == null) return null;
+            Object data = resp.getBody().get("data");
+            if (data instanceof Map) {
+                Map<String, Object> d = (Map<String, Object>) data;
+                if ("NOT_ACTIVE".equals(String.valueOf(d.get("finality_status")))) {
+                    return null;  // 最终性层未启用 → 上层降级 confirmations 驱动
+                }
+                return d;
+            }
+            return null;
+        } catch (Exception e) {
+            log.warn("Failed to get epoch finality for epoch={}: {}", epoch, e.getMessage());
+            return null;
+        }
+    }
+
+    /**
      * 查询链上交易的详细确认状态（含确认数与高度），供最终性推导使用。
      * 调用 core: GET /rpc/v1/transaction/{txHash}/status
      *

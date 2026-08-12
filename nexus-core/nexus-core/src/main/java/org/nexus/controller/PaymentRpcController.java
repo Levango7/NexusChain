@@ -150,4 +150,52 @@ public class PaymentRpcController {
         result.put("data", data);
         return result;
     }
+
+    /**
+     * NexFinality 最终性层装配（可选）。
+     * 最终性层启用时（nexus.finality 相关组件装配）查询 BFT 投票权重进度；
+     * 未装配时返回 FINALITY_NOT_ACTIVE，gateway 应降级为确认数驱动。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private org.nexus.consensus.finality.FinalityGadget finalityGadget;
+
+    /**
+     * GET /rpc/v1/finality/epoch/{epoch}
+     * 查询指定 epoch 的最终性进度（BFT 质押权重驱动）。
+     *
+     * <p>返回：</p>
+     * <pre>
+     * { "finality_status": "FINALIZED|FINALIZING|OPTIMISTIC|UNKNOWN",
+     *   "voted_weight": 900, "total_weight": 900, "progress_percent": 100 }
+     * </pre>
+     */
+    @GetMapping("/finality/epoch/{epoch}")
+    public Map<String, Object> getEpochFinality(@PathVariable long epoch) {
+        if (finalityGadget == null) {
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("finality_status", "NOT_ACTIVE");
+            return rpcResult(2000, "finality layer not active", data);
+        }
+        try {
+            org.nexus.consensus.finality.FinalityRecord rec = finalityGadget.getEpochProgress(epoch);
+            Map<String, Object> data = new LinkedHashMap<>();
+            if (rec == null) {
+                data.put("epoch", epoch);
+                data.put("finality_status", "UNKNOWN");
+                data.put("voted_weight", 0);
+                data.put("total_weight", rec == null ? 0 : rec.getTotalWeight().longValue());
+                data.put("progress_percent", 0);
+            } else {
+                data.put("epoch", epoch);
+                data.put("finality_status", rec.isFinalized() ? "FINALIZED"
+                        : rec.progressPercent() >= 50 ? "FINALIZING" : "OPTIMISTIC");
+                data.put("voted_weight", rec.getVotedWeight().longValue());
+                data.put("total_weight", rec.getTotalWeight().longValue());
+                data.put("progress_percent", rec.progressPercent());
+            }
+            return rpcResult(2000, "success", data);
+        } catch (Exception e) {
+            return rpcResult(5001, "finality query error: " + e.getMessage(), null);
+        }
+    }
 }
