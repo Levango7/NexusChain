@@ -62,6 +62,13 @@ public class SyncManager implements Plugin, ApplicationListener<NewBlockMinedEve
     @Value("${nexus.consensus.blocks-per-era}")
     private int blocksPerEra;
 
+    /**
+     * 最终性投票广播器（ADR-030 M_net 挂接点）。
+     * 可选注入：未装配时投票消息仅记录日志，不进入 FinalityGadget。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private org.nexus.consensus.finality.net.FinalityVoteBroadcaster finalityVoteBroadcaster;
+
     @Autowired
     private CheckPointRule checkPointRule;
 
@@ -83,6 +90,9 @@ public class SyncManager implements Plugin, ApplicationListener<NewBlockMinedEve
                 return;
             case BLOCKS:
                 onBlocks(context, server);
+                return;
+            case TRANSACTIONS:
+                onTransactions(context, server);
                 return;
             case PROPOSAL:
                 onProposal(context, server);
@@ -147,6 +157,30 @@ public class SyncManager implements Plugin, ApplicationListener<NewBlockMinedEve
     private void onBlocks(Context context, PeerServer server) {
         NexusChainOuterClass.Blocks blocksMessage = context.getPayload().getBlocks();
         receiveBlocks(Utils.parseBlocks(blocksMessage.getBlocksList()));
+    }
+
+    /**
+     * 处理收到的单条交易（TRANSACTIONS code）。
+     *
+     * <p>NexFinality M_net：筛出 {@code transaction_type == VOTE} 且 payload 带投票魔数的交易，
+     * 解码后注入 {@link org.nexus.consensus.finality.net.FinalityVoteBroadcaster}；
+     * 其余交易交由原有交易流程（此处暂不接管既有管道）。</p>
+     */
+    private void onTransactions(Context context, PeerServer server) {
+        if (finalityVoteBroadcaster == null) {
+            return;
+        }
+        NexusChainOuterClass.Transaction tx = context.getPayload().getTransaction();
+        if (tx == null) {
+            return;
+        }
+        if (tx.getTransactionType() != NexusChainOuterClass.TransactionType.VOTE) {
+            return;
+        }
+        byte[] payload = tx.getPayload().toByteArray();
+        if (org.nexus.consensus.finality.net.FinalityVoteP2PCodec.isVotePayload(payload)) {
+            finalityVoteBroadcaster.onVoteReceived(payload);
+        }
     }
 
     private void onProposal(Context context, PeerServer server) {
