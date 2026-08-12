@@ -157,4 +157,37 @@ class FinalityGadgetTest {
         assertEquals(0, staking.getStake("v1").compareTo(java.math.BigDecimal.ZERO));
         assertEquals(ValidatorStatus.SLASHED, registry.getValidator("v1").getStatus());
     }
+
+    @Test
+    void aggregateVerificationPassed_thenFinalized() {
+        // M3 挂接：聚合验签通过（默认收集式降级）→ 正常最终化
+        FinalityRecord r1 = gadget.submitVote(vote("v1", 1, CP1));
+        FinalityRecord r2 = gadget.submitVote(vote("v2", 1, CP1));
+        assertTrue(r2.isFinalized());
+        assertTrue(gadget.isFinalized(1, CP1));
+    }
+
+    @Test
+    void aggregateVerificationFailed_failClosedNotFinalized() {
+        // M3 挂接：注入一个永远验签失败的聚合器 → 即使权重达阈值也不最终化（fail-closed）
+        FinalityGadget g = new FinalityGadget(registry, staking);
+        g.setSignatureAggregator(new SignatureAggregator() {
+            @Override
+            public AggregatedSignature aggregate(java.util.List<Vote> votes) {
+                return new AggregatedSignature() {
+                    @Override public byte[] compressed() { return new byte[0]; }
+                    @Override public int signerCount() { return votes.size(); }
+                };
+            }
+            @Override
+            public boolean verifyAggregate(java.util.List<Vote> votes, AggregatedSignature aggregated) {
+                return false; // 模拟验签失败
+            }
+        });
+        g.submitVote(vote("v1", 1, CP1));
+        FinalityRecord r = g.submitVote(vote("v2", 1, CP1));
+        assertFalse(r.isFinalized());
+        assertFalse(g.isFinalized(1, CP1));
+        assertEquals(67, r.progressPercent()); // 权重仍累积，但最终化被验签失败否决
+    }
 }
