@@ -6,6 +6,7 @@ import org.nexus.consensus.pos.Validator;
 import org.nexus.consensus.pos.ValidatorRegistry;
 import org.nexus.consensus.pos.ValidatorStatus;
 import org.nexus.consensus.finality.SignatureAggregator.AggregatedSignature;
+import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.util.*;
@@ -25,6 +26,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p>M1 阶段不验签（签名验证明智至 M3 BLS 集成时统一接入，
  * 当前仅按提交者身份累积权重，便于单节点测试）。</p>
  */
+@Component
 public class FinalityGadget {
 
     private final ValidatorRegistry validatorRegistry;
@@ -151,6 +153,32 @@ public class FinalityGadget {
      */
     public List<EquivocationEvidence> getDetectedEquivocations() {
         return Collections.unmodifiableList(detectedEquivocations);
+    }
+
+    /**
+     * 查询某 epoch 的最终性进度（供 RPC 对外暴露权重进度）。
+     *
+     * <p>返回该 epoch 内已收票检查点中投票权重最大的记录——
+     * 若该 epoch 已最终化（任一检查点达 2/3），则 {@link FinalityRecord#isFinalized()} 为 true。</p>
+     *
+     * @return 该 epoch 的权重进度；无任何投票时返回 null
+     */
+    public FinalityRecord getEpochProgress(long epoch) {
+        BigDecimal total = epochTotalWeight.getOrDefault(String.valueOf(epoch), BigDecimal.ZERO);
+        FinalityRecord best = null;
+        for (Map.Entry<String, BigDecimal> e : epochCheckpointWeights.entrySet()) {
+            String[] parts = e.getKey().split("\\|", 2);
+            if (parts.length != 2 || !parts[0].equals(String.valueOf(epoch))) {
+                continue;
+            }
+            byte[] checkpoint = parseCheckpoint(parts[1]);
+            FinalityRecord rec = new FinalityRecord(epoch, checkpoint, e.getValue(), total,
+                    finalizedCheckpoints.contains(e.getKey()));
+            if (best == null || rec.getVotedWeight().compareTo(best.getVotedWeight()) > 0) {
+                best = rec;
+            }
+        }
+        return best;
     }
 
     private FinalityRecord record(long epoch, byte[] checkpointHash, BigDecimal total) {
