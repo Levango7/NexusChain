@@ -152,15 +152,18 @@ record EquivocationEvidence(
 
 ## 9. 实施里程碑（与协议无关的提前工作）
 
-| 里程碑 | 内容 | 周期 | 依赖 |
+| 里程碑 | 内容 | 状态 | 交付 |
 |---|---|---|---|
-| M0 | BLS blst 依赖引入 + Java 构建配置 | 1-2 周 | 无 |
-| M1 | `Vote`/`FinalityRecord`/`EquivocationEvidence` 核心类型 | 1 周 | M0 |
-| M2 | BFT 投票子协议（无聚合，先跑通单签收集） | 2-3 周 | M1 |
-| M3 | BLS 聚合签名集成 + 阈值验算优化 | 2-3 周 | M2 |
-| M4 | 双签证据 → slashing 联动 | 1-2 周 | M2 |
-| M5 | `ContractContext.isFinalized()` + 结算合约改造 | 1 周 | M2 |
-| M6 | TLA+ 形式化规格（核心不变式验证） | 持续 | M1 后启动 |
+| M0 | BLS blst 依赖引入 + Java 构建配置 | ⏳ 待网络环境 | build.gradle 锚点已预置 |
+| M1 | `Vote`/`FinalityRecord`/`EquivocationEvidence` 核心类型 | ✅ 完成 | `consensus/finality/` |
+| M2 | BFT 投票子协议（权重累积 + 2/3 判定） | ✅ 完成 | `FinalityGadget`（9 用例） |
+| M-net | 投票广播 codec + 事件总线（P2P gossip 预留接口） | ✅ 完成 | `FinalityVoteCodec`/`FinalityVoteBroadcaster`（5 用例） |
+| M-coord | epoch 边界自动投票协调器 | ✅ 完成 | `FinalityCoordinator`（6 用例） |
+| M-gov | 治理→验证者集轴（VALIDATOR_SET_CHANGE 提案） | ✅ 完成 | `ValidatorSetExecutor` + dispatcher 路由 |
+| M3 | BLS 聚合签名集成 + 阈值验算优化 | ⏳ 待 blst | `BlsSigner` 接口骨架就位 |
+| M4 | 双签证据 → slashing 联动 | ✅ 完成 | `FinalityGadget.setSlashingService` |
+| M5 | `ContractContext.isFinalized()` + 结算合约改造 | ✅ 完成 | `FinalityOracle` 端口（3 用例） |
+| M6 | TLA+ 形式化规格（核心不变式验证） | ⏳ 研究性 | 持续 |
 
 ## 10. 风险与未决问题
 
