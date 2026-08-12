@@ -87,9 +87,9 @@ public class FinalityCoordinator {
         }
 
         long epoch = epochOf(height);
-        byte[] checkpointHash = block.getHashHexString() != null
-                ? block.getHashHexString().getBytes()
-                : new byte[0];
+        // 检查点哈希直接使用 Block 原始哈希字节（避免 hex 字符串二次编码造成的口径不一致）
+        byte[] blockHash = block.getHash();
+        byte[] checkpointHash = blockHash != null ? blockHash : new byte[0];
 
         // M1/M2：签名以 Ed25519 占位字节承载；M3 集成 BLS 后替换
         byte[] sig = ("finality-vote:" + epoch).getBytes();
