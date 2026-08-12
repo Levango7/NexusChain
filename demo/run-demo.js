@@ -26,7 +26,7 @@ async function main() {
   console.log('========================================\n');
 
   // Step 1: Register merchant
-  console.log('[1/6] Registering merchant...');
+  console.log('[1/7] Registering merchant...');
   const reg = await post('/api/v1/merchants/register', {
     merchantName: 'Demo Coffee Shop',
     email: 'demo@nexuschain.io',
@@ -38,19 +38,19 @@ async function main() {
   console.log(`  Merchant ID: ${merchantId}, Code: ${reg.data.merchantCode}`);
 
   // Step 2: Verify merchant
-  console.log('\n[2/6] Verifying merchant (KYC)...');
+  console.log('\n[2/7] Verifying merchant (KYC)...');
   const verify = await post(`/api/v1/merchants/${merchantId}/verify`, { status: 'VERIFIED' });
   console.log(`  Status: ${verify.status} - ${verify.data?.verificationStatus || 'OK'}`);
 
   // Step 3: Generate API key
-  console.log('\n[3/6] Generating API key...');
+  console.log('\n[3/7] Generating API key...');
   const keyRes = await post(`/api/v1/merchants/${merchantId}/api-keys`, {});
   const apiKey = keyRes.data?.apiKey;
   console.log(`  API Key: ${apiKey?.slice(0, 16)}...`);
   const authHeaders = { 'X-NexusChain-ApiKey': apiKey };
 
   // Step 4: Create payment order
-  console.log('\n[4/6] Creating payment order (2500 NEX)...');
+  console.log('\n[4/7] Creating payment order (2500 NEX)...');
   const order = await post('/api/v1/orders', {
     merchantId: String(merchantId),
     amount: 250000000000,
@@ -65,7 +65,7 @@ async function main() {
   console.log(`  Checkout: http://localhost:8080/checkout.html?token=${checkoutToken}`);
 
   // Step 5: Initiate payment
-  console.log('\n[5/6] Customer initiates payment...');
+  console.log('\n[5/7] Customer initiates payment...');
   await sleep(1000);
   const pay = await post(`/api/v1/orders/${orderId}/pay`, {
     payerAddress: '1CustomerWalletAddr00000000000000000',
@@ -73,7 +73,7 @@ async function main() {
   console.log(`  Status: ${pay.status} - ${pay.data?.status}`);
 
   // Step 6: Confirm payment (simulates chain confirmation)
-  console.log('\n[6/6] Chain confirms transaction...');
+  console.log('\n[6/7] Chain confirms transaction...');
   await sleep(2000);
   const confirm = await post(`/api/v1/orders/${orderId}/confirm`, {
     chainTxHash: 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2',
@@ -83,6 +83,26 @@ async function main() {
     console.log(`  TxHash: ${confirm.data.chainTxHash}`);
     console.log(`  PaidAt: ${confirm.data.paidAt}`);
   }
+
+  // Step 7: Finality progress (NexFinality demo)
+  // 三层最终化模型：OPTIMISTIC(1块) → FINALIZING(过半) → FINALIZED(不可逆)
+  // 大额结算应等待 FINALIZED；小额支付可在 OPTIMISTIC 即发货。
+  console.log('\n[7/7] Finality progress (NexFinality: optimistic → finalized)...');
+  const FINALITY_THRESHOLD = 12;
+  const bar = (pct) => {
+    const filled = Math.round(pct / 5);
+    return '█'.repeat(filled) + '░'.repeat(20 - filled);
+  };
+  const stageOf = (pct) =>
+    pct >= 100 ? 'FINALIZED' : pct >= 50 ? 'FINALIZING ' : 'OPTIMISTIC';
+  for (let conf = 2; conf <= FINALITY_THRESHOLD; conf += 2) {
+    const pct = Math.min(100, Math.round((conf / FINALITY_THRESHOLD) * 100));
+    process.stdout.write(
+      `\r  ${bar(pct)} ${String(pct).padStart(3)}%  ${stageOf(pct)}  (confirmations: ${conf}/${FINALITY_THRESHOLD})`
+    );
+    await sleep(400);
+  }
+  console.log('\n  ✅ FINALIZED — 交易已不可逆，大额结算可安全放行');
 
   // Final: Check order status
   console.log('\n----------------------------------------');

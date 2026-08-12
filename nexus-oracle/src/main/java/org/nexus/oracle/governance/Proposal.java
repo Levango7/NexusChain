@@ -52,7 +52,9 @@ public class Proposal implements Serializable {
         /** 软件升级（节点版本切换） */
         SOFTWARE_UPGRADE,
         /** 国库支出 */
-        TREASURY_SPEND
+        TREASURY_SPEND,
+        /** 验证者集变更（新增/移除共识验证者，NexFinality M_gov 连接轴） */
+        VALIDATOR_SET_CHANGE
     }
 
     /**
