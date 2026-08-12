@@ -56,6 +56,7 @@ public class GovernanceExecutionDispatcher {
     private final GovernanceService governanceService;
     private final SoftwareUpgradeExecutor softwareUpgradeExecutor;
     private final TreasurySpendExecutor treasurySpendExecutor;
+    private final ValidatorSetExecutor validatorSetExecutor;
     private final ApplicationEventPublisher eventPublisher;
     private final GovernanceAuditLog auditLog;
 
@@ -78,15 +79,18 @@ public class GovernanceExecutionDispatcher {
      */
     @Autowired
     public GovernanceExecutionDispatcher(GovernanceService governanceService,
-                                         SoftwareUpgradeExecutor softwareUpgradeExecutor,
-                                         TreasurySpendExecutor treasurySpendExecutor,
-                                         ApplicationEventPublisher eventPublisher,
-                                         GovernanceAuditLog auditLog) {
+                                          SoftwareUpgradeExecutor softwareUpgradeExecutor,
+                                          TreasurySpendExecutor treasurySpendExecutor,
+                                          ValidatorSetExecutor validatorSetExecutor,
+                                          ApplicationEventPublisher eventPublisher,
+                                          GovernanceAuditLog auditLog) {
         this.governanceService = Objects.requireNonNull(governanceService, "governanceService must not be null");
         this.softwareUpgradeExecutor = Objects.requireNonNull(softwareUpgradeExecutor,
                 "softwareUpgradeExecutor must not be null");
         this.treasurySpendExecutor = Objects.requireNonNull(treasurySpendExecutor,
                 "treasurySpendExecutor must not be null");
+        this.validatorSetExecutor = Objects.requireNonNull(validatorSetExecutor,
+                "validatorSetExecutor must not be null");
         this.eventPublisher = Objects.requireNonNull(eventPublisher, "eventPublisher must not be null");
         this.auditLog = Objects.requireNonNull(auditLog, "auditLog must not be null");
     }
@@ -228,6 +232,11 @@ public class GovernanceExecutionDispatcher {
                     TreasurySpendExecutor.ExecutionResult spendResult =
                             treasurySpendExecutor.execute(proposal);
                     return spendResult.isSuccess();
+
+                case VALIDATOR_SET_CHANGE:
+                    ValidatorSetExecutor.ExecutionResult validatorSetResult =
+                            validatorSetExecutor.execute(proposal);
+                    return validatorSetResult.isSuccess();
 
                 case PARAMETER_CHANGE:
                     // PARAMETER_CHANGE 由 GovernanceService.executeProposal 内联处理，不在此分发

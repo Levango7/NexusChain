@@ -107,6 +107,20 @@ public class NexusChainV2Client {
     }
 
     /**
+     * 查询订单的支付最终性状态（NexFinality 网关侧原型）。
+     *
+     * <p>商户用于按结算金额决定发货时机：大额等 {@code FINALIZED}（不可逆），
+     * 小额可在 {@code OPTIMISTIC}（已入块）即发货。</p>
+     *
+     * @param orderId 订单 ID
+     * @return 最终性信息 JSON（含 finality_status/confirmations/threshold/progress_percent）
+     */
+    public JsonNode getOrderFinality(long orderId) {
+        HttpResponse<String> resp = get("/api/v2/orders/" + orderId + "/finality");
+        return parseJson(resp.body());
+    }
+
+    /**
      * 创建订单。
      *
      * @param request 订单创建请求（Map 形式，键名与 OpenAPI schema 一致）

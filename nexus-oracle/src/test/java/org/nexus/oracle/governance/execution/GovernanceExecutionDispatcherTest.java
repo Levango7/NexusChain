@@ -41,6 +41,7 @@ class GovernanceExecutionDispatcherTest {
     private GovernanceService governanceService;
     private SoftwareUpgradeExecutor softwareUpgradeExecutor;
     private TreasurySpendExecutor treasurySpendExecutor;
+    private ValidatorSetExecutor validatorSetExecutor;
     private ApplicationEventPublisher eventPublisher;
     private GovernanceAuditLog auditLog;
     private GovernanceExecutionDispatcher dispatcher;
@@ -50,11 +51,12 @@ class GovernanceExecutionDispatcherTest {
         governanceService = mock(GovernanceService.class);
         softwareUpgradeExecutor = mock(SoftwareUpgradeExecutor.class);
         treasurySpendExecutor = mock(TreasurySpendExecutor.class);
+        validatorSetExecutor = mock(ValidatorSetExecutor.class);
         eventPublisher = mock(ApplicationEventPublisher.class);
         auditLog = new GovernanceAuditLog();
         dispatcher = new GovernanceExecutionDispatcher(
                 governanceService, softwareUpgradeExecutor, treasurySpendExecutor,
-                eventPublisher, auditLog);
+                validatorSetExecutor, eventPublisher, auditLog);
         dispatcher.setEnabled(true);
         // 默认白名单：governance-service（与 ProposalStatusChangedEvent.DEFAULT_SOURCE 一致）
         dispatcher.setTrustedSourcesConfig("governance-service");
