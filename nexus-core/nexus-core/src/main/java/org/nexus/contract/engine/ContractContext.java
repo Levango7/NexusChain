@@ -27,6 +27,44 @@ public class ContractContext {
     /** 本次调用 gas 上限 */
     private long gasLimit;
 
+    /**
+     * 最终性查询端口（ADR-030 M5 连接轴）。
+     *
+     * <p>合约通过它判断某高度的检查点是否已被 NexFinality 最终化，
+     * 实现「结算合约必须等终局才放款」的语义。由共识层在执行前注入；
+     * 未注入时 {@link #isFinalized(long)} 返回 {@code false}（fail-closed）。</p>
+     */
+    private FinalityOracle finalityOracle;
+
+    /**
+     * 区块最终性查询函数接口。
+     */
+    @FunctionalInterface
+    public interface FinalityOracle {
+        /**
+         * @param checkpointHeight 检查点高度
+         * @return 该高度是否已最终化（≥2/3 质押权重投票通过）
+         */
+        boolean isFinalized(long checkpointHeight);
+    }
+
+    /**
+     * 判断指定高度的检查点是否已最终化。
+     *
+     * <p>fail-closed：未注入 {@link FinalityOracle}（如最终性层未启用）时返回 {@code false}，
+     * 合约不应把"无法确认"当作"已最终化"处理。</p>
+     *
+     * @param checkpointHeight 检查点高度
+     * @return 已最终化返回 true
+     */
+    public boolean isFinalized(long checkpointHeight) {
+        return finalityOracle != null && finalityOracle.isFinalized(checkpointHeight);
+    }
+
+    public void setFinalityOracle(FinalityOracle finalityOracle) {
+        this.finalityOracle = finalityOracle;
+    }
+
     public ContractContext() {
     }
 

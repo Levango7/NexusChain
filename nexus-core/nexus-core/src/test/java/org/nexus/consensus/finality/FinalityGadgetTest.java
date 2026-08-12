@@ -106,4 +106,55 @@ class FinalityGadgetTest {
         assertTrue(gadget.isFinalized(1, CP1));
         assertFalse(gadget.isFinalized(2, CP1));
     }
+
+    @Test
+    void equivocationTriggersSlashing_whenSlashingServiceInjected() {
+        // M4 连接轴：注入 SlashingService 后，双签证据自动没收质押
+        org.nexus.consensus.pos.SlashingService slashingService = new org.nexus.consensus.pos.SlashingService();
+        try {
+            var f1 = org.nexus.consensus.pos.SlashingService.class.getDeclaredField("validatorRegistry");
+            f1.setAccessible(true);
+            f1.set(slashingService, registry);
+            var f2 = org.nexus.consensus.pos.SlashingService.class.getDeclaredField("stakingService");
+            f2.setAccessible(true);
+            f2.set(slashingService, staking);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+        gadget.setSlashingService(slashingService);
+
+        gadget.submitVote(vote("v1", 1, CP1));
+        gadget.submitVote(vote("v1", 1, CP2));  // 双签
+
+        assertEquals(1, gadget.getDetectedEquivocations().size());
+        // v1 质押被全额没收(DOUBLE_SIGN=100%)，且验证人状态置为 SLASHED
+        assertEquals(0, staking.getStake("v1").compareTo(java.math.BigDecimal.ZERO));
+        assertEquals(ValidatorStatus.SLASHED, registry.getValidator("v1").getStatus());
+    }
+
+    @Test
+    void equivocationNotSlashedTwice() {
+        // M4 幂等：同一作恶者重复双签不重复罚没（质押已归零，二次 slash 不应改变状态/报警）
+        org.nexus.consensus.pos.SlashingService slashingService = new org.nexus.consensus.pos.SlashingService();
+        try {
+            var f1 = org.nexus.consensus.pos.SlashingService.class.getDeclaredField("validatorRegistry");
+            f1.setAccessible(true);
+            f1.set(slashingService, registry);
+            var f2 = org.nexus.consensus.pos.SlashingService.class.getDeclaredField("stakingService");
+            f2.setAccessible(true);
+            f2.set(slashingService, staking);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+        gadget.setSlashingService(slashingService);
+
+        gadget.submitVote(vote("v1", 1, CP1));
+        gadget.submitVote(vote("v1", 1, CP2));
+        gadget.submitVote(vote("v1", 2, CP1));  // 不同 epoch，不构成新证据
+        gadget.submitVote(vote("v1", 2, CP2));
+
+        // 注入罚没服务后，v1 在第一次双签后已被 SLASHED，后续投票因状态非 ACTIVE 不再累积权重
+        assertEquals(0, staking.getStake("v1").compareTo(java.math.BigDecimal.ZERO));
+        assertEquals(ValidatorStatus.SLASHED, registry.getValidator("v1").getStatus());
+    }
 }

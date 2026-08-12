@@ -1,5 +1,6 @@
 package org.nexus.consensus.finality;
 
+import org.nexus.consensus.pos.SlashingService;
 import org.nexus.consensus.pos.StakingService;
 import org.nexus.consensus.pos.Validator;
 import org.nexus.consensus.pos.ValidatorRegistry;
@@ -33,10 +34,23 @@ public class FinalityGadget {
     private final Map<String, BigDecimal> epochTotalWeight = new ConcurrentHashMap<>();
     private final Set<String> finalizedCheckpoints = ConcurrentHashMap.newKeySet();
     private final List<EquivocationEvidence> detectedEquivocations = new ArrayList<>();
+    /** 已执行罚没的作恶者（地址），防止同一证据重复 slash 造成过度惩罚。 */
+    private final Set<String> slashedOffenders = ConcurrentHashMap.newKeySet();
+
+    /** 可选：罚没联动（ADR-030 M4 连接轴）。未注入时仅记录证据，不执行罚没。 */
+    private SlashingService slashingService;
 
     public FinalityGadget(ValidatorRegistry registry, StakingService stakingService) {
         this.validatorRegistry = registry;
         this.stakingService = stakingService;
+    }
+
+    /**
+     * 注入罚没服务（M4 连接轴）。注入后，检测到双签证据将自动执行
+     * {@link SlashingService#slash(String, SlashingService.Offense)}（DOUBLE_SIGN，没收全部质押并置 SLASHED）。
+     */
+    public void setSlashingService(SlashingService slashingService) {
+        this.slashingService = slashingService;
     }
 
     /**
@@ -65,8 +79,13 @@ public class FinalityGadget {
             if (parts.length == 2 && parts[0].equals(String.valueOf(epoch))
                     && !parts[1].equals(Arrays.toString(vote.getCheckpointHash()))
                     && e.getValue().contains(vote.getValidatorAddress())) {
-                detectedEquivocations.add(new EquivocationEvidence(
-                        vote, new Vote(epoch, parseCheckpoint(parts[1]), vote.getValidatorAddress(), new byte[0])));
+                EquivocationEvidence ev = new EquivocationEvidence(
+                        vote, new Vote(epoch, parseCheckpoint(parts[1]), vote.getValidatorAddress(), new byte[0]));
+                detectedEquivocations.add(ev);
+                // M4 连接轴：注入罚没服务时，双签证据即时触发 slash（幂等，防止重复罚没）
+                if (slashingService != null && slashedOffenders.add(vote.getValidatorAddress())) {
+                    slashingService.slash(vote.getValidatorAddress(), SlashingService.Offense.DOUBLE_SIGN);
+                }
             }
         }
 
