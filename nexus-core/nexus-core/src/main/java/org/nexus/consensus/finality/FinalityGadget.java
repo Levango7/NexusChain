@@ -33,11 +33,11 @@ public class FinalityGadget {
     private final StakingService stakingService;
 
     private final Map<String, Set<String>> epochCheckpointVoters = new ConcurrentHashMap<>();
-    private final Map<String, List<Vote>> epochCheckpointVotes = new ConcurrentHashMap<>(); // M3: 投票对象存档，供聚合验签
+    private final Map<String, List<Vote>> epochCheckpointVotes = new ConcurrentHashMap<>(); // M3: 投票对象存档，供聚合验签（并发安全：CopyOnWriteArrayList）
     private final Map<String, BigDecimal> epochCheckpointWeights = new ConcurrentHashMap<>();
     private final Map<String, BigDecimal> epochTotalWeight = new ConcurrentHashMap<>();
     private final Set<String> finalizedCheckpoints = ConcurrentHashMap.newKeySet();
-    private final List<EquivocationEvidence> detectedEquivocations = new ArrayList<>();
+    private final List<EquivocationEvidence> detectedEquivocations = new java.util.concurrent.CopyOnWriteArrayList<>();  // P0-3: 并发安全
     /** 已执行罚没的作恶者（地址），防止同一证据重复 slash 造成过度惩罚。 */
     private final Set<String> slashedOffenders = ConcurrentHashMap.newKeySet();
 
@@ -156,7 +156,7 @@ public class FinalityGadget {
         }
         BigDecimal weight = stakingService.getStake(vote.getValidatorAddress());
         epochCheckpointWeights.merge(checkpointKey, weight, BigDecimal::add);
-        epochCheckpointVotes.computeIfAbsent(checkpointKey, k -> new ArrayList<>()).add(vote);
+        epochCheckpointVotes.computeIfAbsent(checkpointKey, k -> new java.util.concurrent.CopyOnWriteArrayList<>()).add(vote);
 
         BigDecimal voted = epochCheckpointWeights.get(checkpointKey);
         boolean finalized = voted.multiply(BigDecimal.valueOf(3))
