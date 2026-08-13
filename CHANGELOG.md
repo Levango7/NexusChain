@@ -12,6 +12,14 @@
 - 测试：wallet-service 全量 185 测试通过；新增 fail-closed 专项断言，集成测试 `application-test.yml` 显式开 sandbox
 
 ### Changed
+- fix(core): P2P wire 枚举同步支付扩展类型 —— `NexusChainOuterClass.TransactionType` 补齐 16-26
+  - 手工提交的生成类仅含 0-15；P2P 同步路径 `sync/Utils` 以 `forNumber(tx.type)` 映射域 ordinal，
+    缺失导致批量转账/支付通道/稳定币/跨链桥等交易在同步序列化时 `forNumber` 返回 null
+  - 新增：CHANNEL_OPEN=16 / CHANNEL_UPDATE=17 / CHANNEL_CLOSE=18 / BATCH_TRANSFER=19 /
+    MINT_STABLECOIN=20 / REDEEM_STABLECOIN=21 / BRIDGE_LOCK=22 / BRIDGE_MINT=23 /
+    BRIDGE_BURN=24 / IDENTITY_REGISTER=25 / SUBSCRIPTION_AUTH=26（与 `Transaction.Type` ordinal 对齐）
+  - 注：`ProtocolModel.Transaction.Type`（TCP legacy 路径）是协议消息类型枚举（仅 5 值），非交易分类枚举，
+    不参与同步；其 `encode()` 直接 `forNumber(域 ordinal)` 属遗留怪癖（仅 0-4 可往返），不在本次范围
 - refactor(oracle): 治理执行 `@Async`+`@Transactional` 混用改为细粒度事务（032a404）
   - 移除 `GovernanceExecutionDispatcher` 方法级 `@Transactional`（异步线程事务上下文错位，国库转账异常可能无法回滚）
   - `SoftwareUpgradeExecutor.execute` / `TreasurySpendExecutor.execute` 加 `@Transactional`，执行期真正持事务边界
@@ -24,9 +32,28 @@
   - 8 个 `FinalityServiceTest` 用例全绿（阈值边界/链不可达/未入块/自定义阈值）
 - feat(oracle): 治理执行 `@Async`+`@Transactional` 混用改为细粒度事务
 
+### Dev（真机联调基础设施）
+- `docker-compose.yml` 新增 `nexus-pgsql` 服务：postgres:16-alpine，127.0.0.1:55432→5432（仅回环），
+  nexus/nexus123/nexuschain，命名卷 `pg-dev-data`（与 prod 的 `pgdata` 隔离），pg_isready healthcheck
+  - 解决：core 持久化层绑定 Postgres 方言，但 dev compose 原先无 pg 服务，真机联调只能手工
+    `docker run` 起库（无 healthcheck、匿名卷、绑 0.0.0.0）
+- 新增 `scripts/dev-pg-up.ps1`（Windows）/ `scripts/dev-pg-up.sh`（Linux/CI）：幂等保证 55432 上有健康 PG
+  - Docker 引擎不可达时自动拉起 Docker Desktop 并轮询就绪（最长 180s）
+  - 已有健康 PG 容器则复用（不破坏现场），端口空闲才经 compose 创建 `nexus-pgsql`
+  - `-StartCore` / `START_CORE=1`：PG 就绪后前台起 core（`--spring.profiles.active=local`）
+- 新增 `scripts/dev-pg-down.ps1`：仅停 compose 管理的 `nexus-pgsql`，数据卷保留；不触碰手工容器
+- `nexus-core/nexus-core/src/main/resources/application-local.properties` 入库并更新头部说明（指向脚本与 compose 服务）
+
 ### Documentation
 - ADR-029：PoS 共识现状审计基线（实证出块/验签/罚没/同步已闭环，纠正 README 过时表述）
 - ADR-030：NexFinality 创意共识规格（BFT 投票 + BLS 聚合 + 双层确认 + 三条连接轴，零自研密码学纪律）
+- README 一致性修正：模块表 nexus-core（PoS 基础层已闭环，最终性层在研）/ nexus-bridge（Solana、Avalanche 适配器已交付）
+  PoS 节改写为 ADR-029 结论；新增「本地联调（容器化 Postgres + 原生 core）」小节
+- docs/v2.0.0-roadmap.md §7.2 诚实化：v2.0.0 GA 从未发布（rc1 → v2.1.0），清单为历史快照；
+  「Phase 1-5 退出条件全部满足」「SDK v2 发布 Maven Central」勾选与事实不符，改为未勾选并注明
+- docs/真机构建联调清单.md 第 4 章补充双姿态说明（全容器联调 vs 容器 PG + 原生 core）
+- 仓库卫生：清理 nexus-core-local.mv.db / .trace.db（H2 残留，回收站）、根目录 core-start.log / testall-bg.log；
+  .gitignore 增补 `*.mv.db` / `*.trace.db` / `.inscode/`；移除未被引用的 nexus-sdk/ts/ 残留骨架（回收站 + git rm --cached，typescript/ 为正式目录）
 
 ## [2.1.0] - 2026-08-10
 

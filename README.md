@@ -34,13 +34,32 @@ docker-compose up -d
 
 启动网关 + 链节点 + 签名服务 + 钱包服务 + 桥，以及 Nacos / Sentinel / Seata / Zipkin 基础设施。
 
+### 本地联调（容器化 Postgres + 原生 core）
+
+core 的持久化层绑定 Postgres 方言，真机联调的正确姿势是 **Docker 起 Postgres、core 走 local profile 原生运行**。一键脚本会自检 Docker 引擎（未启动时自动拉起 Docker Desktop）并幂等保证 `127.0.0.1:55432` 上有健康的 PG（已有健康容器则复用，不重复创建）：
+
+```powershell
+# Windows
+powershell -ExecutionPolicy Bypass -File scripts\dev-pg-up.ps1        # 仅确保 PG 就绪
+powershell -ExecutionPolicy Bypass -File scripts\dev-pg-up.ps1 -StartCore   # PG 就绪后前台起 core
+
+# Linux / CI（原生 Docker daemon）
+./scripts/dev-pg-up.sh
+START_CORE=1 ./scripts/dev-pg-up.sh
+
+# 停掉 compose 管理的 PG（数据卷保留）
+powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
+```
+
+等价的手动流程：`docker compose up -d nexus-pgsql` 起库，再 `gradlew :nexus-core:nexus-core:run --args="--spring.profiles.active=local"` 跑 core（凭据与端口见 `nexus-core/nexus-core/src/main/resources/application-local.properties`，与 `docker-compose.yml` 的 `nexus-pgsql` 服务严格一致）。
+
 ## 模块清单
 
 | 模块 | 职责 | 成熟度 |
 |------|------|--------|
-| `nexus-core` | 结算链节点：共识（DPoS 默认 / PoS 可选）、P2P、存储、RPC、合约引擎 | 较完整（PoS 调度器待补） |
+| `nexus-core` | 结算链节点：共识（DPoS 默认 / PoS 可选）、P2P、存储、RPC、合约引擎 | 较完整（PoS 基础层已闭环，最终性层 NexFinality 在研） |
 | `nexus-gateway` | 商户支付网关：订单、路由、Webhook、清结算/风控/合规关卡接入 | 较完整 |
-| `nexus-bridge` | 跨链桥：锁定/铸造/销毁/解锁状态机、Relayer 网络、流动性管理 | 核心完整，外部链适配器为骨架 |
+| `nexus-bridge` | 跨链桥：锁定/铸造/销毁/解锁状态机、Relayer 网络、流动性管理 | 核心完整，Solana/Avalanche 适配器已交付（含测试），其余外部链为骨架 |
 | `nexus-consortium` | 联盟链/侧链：完整 PoA 链、国密 SM2/3/4 | 完整 |
 | `nexus-settlement` | 清结算：复式账本、对账、风控规则、资金归集 | 完整 |
 | `nexus-compliance` | 合规：KYC、AML 筛查、DID、信誉评分 | 完整 |
@@ -86,7 +105,8 @@ docker-compose up -d
 
 ### PoS 共识
 
-- `propose()` 权益加权出块逻辑已实现，但运行时调度器与真实 Ed25519 验签待补全（默认共识仍为 DPoS）。
+- 基础层已闭环（ADR-029 审计基线）：权益加权出块提案、区块 8 步校验（含真实 Ed25519 验签 `Ed25519DsaSigner.verify()`）、质押管理、罚没、验证者注册、出块奖励、P2P 同步，`PosMiningScheduler` 调度器已实现（默认共识仍为 DPoS）。
+- 已知缺口为**最终性层**（NexFinality，ADR-030 在研）：无 BFT 投票、无双签证据惩罚链、共识→合约层断开、验证者集变更不走治理、无 BLS 签名聚合。
 
 ### 资产承载限制
 

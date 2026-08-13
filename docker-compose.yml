@@ -2,12 +2,16 @@ version: '3.8'
 
 # NexusChain 开发环境编排
 # 
-# 包含两类服务：
+# 包含三类服务：
 #   1. 应用服务（nexus-gateway / nexus-signing-service / nexus-wallet-service / nexus-core / nexus-bridge）—— 需各模块 Dockerfile 就绪后构建
 #   2. 基础设施（nacos / sentinel-dashboard / seata-server / zipkin）—— 服务发现 + 配置中心 + 熔断限流控制台 + 分布式事务 + 链路追踪
+#   3. nexus-pgsql（真机联调数据库）—— core 以 local profile 原生运行时使用的容器化 Postgres（见 nexus-core/nexus-core/src/main/resources/application-local.properties）
+#      注：dev 用 postgres:16-alpine，prod compose（docker-compose.prod.yml）用 postgres:15-alpine —— 版本差异按需对齐
 # 
 # 开发环境仅拉起基础设施：
 #   docker-compose up nacos sentinel-dashboard seata-server zipkin
+# 真机联调（容器 PG + 原生 core，推荐走 scripts/dev-pg-up.ps1 / dev-pg-up.sh 自动拉起）：
+#   docker-compose up -d nexus-pgsql
 # 全量拉起（含应用）：
 #   docker-compose up
 # 
@@ -16,6 +20,7 @@ version: '3.8'
 #   Sentinel : 8858 (Dashboard UI)
 #   Seata    : 8091 (TC) / 7091 (Web 控制台)
 #   Zipkin   : 9411 (API + UI)
+#   Postgres : 55432 (localhost 映射；与 application-local.properties 的 DATA_SOURCE_URL 对齐)
 #   gateway  : 8080 / signing : 8082 / wallet : 8083 / bridge : 8084 / core : 19585
 
 services:
@@ -64,7 +69,7 @@ services:
     depends_on:
       nacos:
         condition: service_healthy
-      nexus-seata-server:
+      seata-server:
         condition: service_healthy
     healthcheck:
       test: ['CMD', 'curl', '-f', 'http://localhost:8082/actuator/health']
@@ -89,7 +94,7 @@ services:
     depends_on:
       nacos:
         condition: service_healthy
-      nexus-seata-server:
+      seata-server:
         condition: service_healthy
     healthcheck:
       test: ['CMD', 'curl', '-f', 'http://localhost:8083/actuator/health']
@@ -247,9 +252,35 @@ services:
       - nexus-net
     restart: unless-stopped
 
+  # === 真机联调数据库 ===
+  # 用途：core 以 local profile 原生运行时（gradlew :nexus-core:nexus-core:run --args="--spring.profiles.active=local"）
+  #       的容器化 Postgres。凭据与 application-local.properties 严格一致（nexus/nexus123/nexuschain）。
+  #       端口 55432 仅绑定回环地址（与 nexus-core/README.md §2.3 安全建议一致）；
+  #       幂等拉起见 scripts/dev-pg-up.ps1 / dev-pg-up.sh（已有健康 PG 时自动复用，不重复创建）。
+  #       数据落在命名卷 pg-dev-data（与 prod compose 的 pgdata 隔离）；docker compose down 不删卷。
+  nexus-pgsql:
+    image: postgres:16-alpine
+    container_name: nexus-pgsql
+    ports:
+      - '127.0.0.1:55432:5432'
+    environment:
+      - POSTGRES_DB=nexuschain
+      - POSTGRES_USER=nexus
+      - POSTGRES_PASSWORD=nexus123
+    volumes:
+      - pg-dev-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U nexus -d nexuschain']
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
 volumes:
   nacos-logs:
   sentinel-logs:
+  pg-dev-data:
 
 networks:
   # MPC 引擎专用桥接网络。现有 Java 服务未显式声明 networks（使用默认 bridge），
