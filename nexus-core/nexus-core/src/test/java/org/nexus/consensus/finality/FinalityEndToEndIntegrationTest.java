@@ -75,7 +75,7 @@ class FinalityEndToEndIntegrationTest {
 
         publisher = new TestPublisher();
         gadget = new FinalityGadget(validatorRegistry, stakingService);
-        coordinator = new FinalityCoordinator(gadget, validatorRegistry, EPOCH_LENGTH, null);
+        coordinator = new FinalityCoordinator(gadget, validatorRegistry, EPOCH_LENGTH);
         broadcaster = new FinalityVoteBroadcaster(gadget, publisher);
 
         // 注入 slash 联动（M4：双签检测后自动罚没）
@@ -103,7 +103,8 @@ class FinalityEndToEndIntegrationTest {
 
     /** 让 v1 作为本节点（由 coordinator 驱动）产生一次投票 */
     private void makeCoordinator(String selfAddr) {
-        coordinator = new FinalityCoordinator(gadget, validatorRegistry, EPOCH_LENGTH, selfAddr);
+        coordinator = new FinalityCoordinator(gadget, validatorRegistry, EPOCH_LENGTH);
+        coordinator.setSelfValidatorAddress(selfAddr);
     }
 
     /** 驱动一块出块事件（进入 coordinator 判断逻辑） */

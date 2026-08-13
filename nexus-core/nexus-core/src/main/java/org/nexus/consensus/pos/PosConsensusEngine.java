@@ -199,6 +199,17 @@ public class PosConsensusEngine implements PosConsensus {
             // 6. P2P 广播区块（通过 Spring 事件触发 SyncManager 广播）
             broadcastBlock(block);
 
+            // 6.1 本地采纳（单节点/自产自收闭环）：写回链推进高度，
+            //     否则 stateDB.getBestBlock() 恒为 genesis、高度永不递增，
+            //     epoch 边界（finality 投票）永不触发（ADR-031 决策 8 补充修复）
+            try {
+                if (stateDB != null && block.nHeight > 0) {
+                    stateDB.writeBlock(block);
+                }
+            } catch (Exception e) {
+                logger.warn("Local adoption failed at height {}: {}", height, e.getMessage());
+            }
+
             // 7. 分配出块奖励
             BigDecimal fees = computeBlockFees(block);
             rewardDistributor.distributeBlockReward(selected.getAddress(), fees);
