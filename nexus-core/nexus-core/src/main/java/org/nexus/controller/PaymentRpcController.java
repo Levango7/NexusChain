@@ -170,7 +170,7 @@ public class PaymentRpcController {
      * </pre>
      */
     @GetMapping("/finality/epoch/{epoch}")
-    public Map<String, Object> getEpochFinality(@PathVariable long epoch) {
+    public Map<String, Object> getEpochFinality(@PathVariable("epoch") long epoch) {
         if (finalityGadget == null) {
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("finality_status", "NOT_ACTIVE");

@@ -64,6 +64,7 @@ public class FinalityGadget {
      */
     private volatile int validatorSetFingerprint = Integer.MIN_VALUE;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public FinalityGadget(ValidatorRegistry registry, StakingService stakingService) {
         this(registry, stakingService,
                 new org.nexus.consensus.finality.persistence.InMemoryFinalityStateStore());
