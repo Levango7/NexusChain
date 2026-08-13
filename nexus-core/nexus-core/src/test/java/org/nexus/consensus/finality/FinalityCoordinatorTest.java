@@ -34,7 +34,8 @@ class FinalityCoordinatorTest {
         registry.getValidator("v3").setStatus(ValidatorStatus.ACTIVE);
 
         gadget = new FinalityGadget(registry, staking);
-        coordinator = new FinalityCoordinator(gadget, registry, EPOCH, "v1");
+        coordinator = new FinalityCoordinator(gadget, registry, EPOCH);
+        coordinator.setSelfValidatorAddress("v1");
     }
 
     private StakingServiceImpl newStaking(ValidatorRegistry reg) {
@@ -83,7 +84,8 @@ class FinalityCoordinatorTest {
     @Test
     void inactiveValidatorSkipsVote() {
         // 未注册地址：协调器 fail-closed 不投票
-        FinalityCoordinator bystander = new FinalityCoordinator(gadget, registry, EPOCH, "not-a-validator");
+        FinalityCoordinator bystander = new FinalityCoordinator(gadget, registry, EPOCH);
+        bystander.setSelfValidatorAddress("not-a-validator");
         assertNull(bystander.onBlock(mockBlock(4)));
         // 且无任何投票被记录（epoch 1 无权重）
         FinalityRecord anyRecord = gadget.getFinality(1, new byte[0]);
@@ -92,7 +94,7 @@ class FinalityCoordinatorTest {
 
     @Test
     void nullSelfAddressNeverVotes() {
-        FinalityCoordinator none = new FinalityCoordinator(gadget, registry, EPOCH, null);
+        FinalityCoordinator none = new FinalityCoordinator(gadget, registry, EPOCH);
         assertNull(none.onBlock(mockBlock(4)));
         FinalityRecord anyRecord = gadget.getFinality(1, new byte[0]);
         assertEquals(0, anyRecord.getVotedWeight().compareTo(BigDecimal.ZERO));

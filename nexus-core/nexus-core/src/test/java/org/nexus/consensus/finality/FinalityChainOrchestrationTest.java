@@ -119,7 +119,8 @@ class FinalityChainOrchestrationTest {
 
         // 最终性层
         gadget = new FinalityGadget(validatorRegistry, stakingService);
-        coordinator = new FinalityCoordinator(gadget, validatorRegistry, EPOCH_LENGTH, selfAddress);
+        coordinator = new FinalityCoordinator(gadget, validatorRegistry, EPOCH_LENGTH);
+        coordinator.setSelfValidatorAddress(selfAddress);
     }
 
     private Block buildInitialParent(long height) {

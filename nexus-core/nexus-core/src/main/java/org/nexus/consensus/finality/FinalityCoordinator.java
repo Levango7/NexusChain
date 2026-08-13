@@ -7,7 +7,10 @@ import org.nexus.core.Block;
 import org.nexus.core.event.NewBlockMinedEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.event.EventListener;
+import org.springframework.stereotype.Component;
 
 import java.util.Objects;
 
@@ -26,8 +29,13 @@ import java.util.Objects;
  *   <li>幂等：同节点同 epoch 同检查点只投一次（由 FinalityGadget 防重）</li>
  *   <li>fail-closed：非活跃验证人不投票；gadget 未装配时不动作</li>
  *   <li>epoch 长度可配，默认 32（与 ADR-030 一致）</li>
+ *   <li><b>Spring 装配</b>（ADR-031 决策 8 补充）：无 @Component 时新块事件无监听
+ *       → 投票永不触发；本类现为 @Component + @EventListener，selfAddress 由
+ *       {@link ValidatorNodeBootstrapper} 注册验证人后经 {@link #setSelfValidatorAddress} 注入</li>
  * </ul>
  */
+@Component
+@ConditionalOnProperty(name = "nexus.consensus.mode", havingValue = "pos")
 public class FinalityCoordinator {
 
     private static final Logger log = LoggerFactory.getLogger(FinalityCoordinator.class);
@@ -35,21 +43,27 @@ public class FinalityCoordinator {
     private final FinalityGadget gadget;
     private final ValidatorRegistry validatorRegistry;
     private final long epochLength;
-    private final String selfValidatorAddress;
+    private String selfValidatorAddress;
 
     /**
      * @param gadget               最终性投票收集器
      * @param validatorRegistry    验证人注册表（判定本节点是否活跃验证人）
      * @param epochLength          epoch 长度（每多少个块一个检查点）
-     * @param selfValidatorAddress 本节点验证人地址；非验证人传 null（协调器空转）
      */
+    @Autowired
     public FinalityCoordinator(FinalityGadget gadget,
                                ValidatorRegistry validatorRegistry,
-                               long epochLength,
-                               String selfValidatorAddress) {
+                               @org.springframework.beans.factory.annotation.Value("${nexus.finality.epoch-length:32}") long epochLength) {
         this.gadget = Objects.requireNonNull(gadget, "gadget must not be null");
         this.validatorRegistry = Objects.requireNonNull(validatorRegistry, "validatorRegistry must not be null");
         this.epochLength = epochLength <= 0 ? 32 : epochLength;
+    }
+
+    /**
+     * 注入本节点验证人地址（由 {@link ValidatorNodeBootstrapper} 自举注册后调用）。
+     * 非验证人节点（bootstrapper 未启用）保持 null → 协调器空转不投票。
+     */
+    public void setSelfValidatorAddress(String selfValidatorAddress) {
         this.selfValidatorAddress = selfValidatorAddress;
     }
 
