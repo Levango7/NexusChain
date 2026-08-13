@@ -225,7 +225,8 @@ public class FinalityGadget {
      * @return 该 epoch 的权重进度；无任何投票时返回 null
      */
     public FinalityRecord getEpochProgress(long epoch) {
-        BigDecimal total = epochTotalWeight.getOrDefault(String.valueOf(epoch), BigDecimal.ZERO);
+        // 快照被指纹失效清空时（治理变更），回退按当前验证者集重算总权重，而非返回 0
+        BigDecimal total = epochTotalWeight.getOrDefault(String.valueOf(epoch), computeTotalWeight());
         FinalityRecord best = null;
         for (Map.Entry<String, BigDecimal> e : epochCheckpointWeights.entrySet()) {
             String[] parts = e.getKey().split("\\|", 2);
