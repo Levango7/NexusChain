@@ -153,6 +153,47 @@ mock：StateDB / NexusChainBlockChain / PackageMiner（仅存储层）
    导致出块高度停滞（expected 3 but was 2），改为 `lastParent` 引用 +
    高度→区块历史 Map。
 
+## 决策 8：真机联调——core 在 Spring Boot 3 + Postgres 完整启动的障碍链
+
+### 背景
+
+NexFinality 的最终性 RPC 已建但从未在真机验证：core 的 `Start.java` 是 Spring Boot 3
+应用，但**长期无法在 SB3 容器启动**（此前环境仅有 mock 单测）。2026-08-13 以
+Docker Postgres 16 + `application-local.properties`（`pos` 模式）推进会话逐个排除障碍。
+
+### 排除的障碍链（5 个真实启动缺陷）
+
+| # | 缺陷 | 症状 | 修复 |
+|---|---|---|---|
+| 1 | slf4j 1.7.36 硬编码 | `LoggerFactory is not a Logback LoggerContext` 启动即崩 | `slf4jVersion 1.7→2.0.13`（49d59c7） |
+| 2 | `PosConsensus` 双实现歧义 | `PosMiningScheduler` 注入 "2 beans found" | `DefaultPosConsensus` 加 `@Primary` |
+| 3 | `@PathVariable` 无显式名 | finality RPC 500 `Name for argument of type [long] not specified`（编译未开 `-parameters`） | 显式 `@PathVariable("epoch")` |
+| 4 | `FinalityGadget` 多构造器 | `No default constructor found` | `@Autowired` 标注双参构造器 |
+| 5 | H2 兼容 Postgres 方言 | `ALTER TABLE ... OWNER TO` 等 H2 不支持 | **放弃 H2 兼容，用 Docker Postgres**（真机正解） |
+
+### 真机验证结果（2026-08-13）
+
+```
+core   : Started Start in ~21s（Docker PG + pos + local profile），/rpc/v1/height 200
+gateway: Started GatewayApplication（sandbox + --nexus.chain.rpc-url=http://localhost:19585）
+链路   : 注册商户 → 建单 → pay → confirm(PAID) → GET /api/v2/orders/{id}/finality 200
+         echo "{\"finality_status\":\"UNKNOWN\",...note:\"chain unreachable or tx not found\"}"
+验证   : gateway→FinalityService→ChainRpcClient→core /rpc/v1/transaction/{hash}/status
+         真实 HTTP 往返；core 返回 NOT_FOUND → 网关正确降级 UNKNOWN。
+         GET /rpc/v1/finality/epoch/1 直连 core：BFT 权重路径 2000 正常。
+```
+
+### 关键教训
+
+1. **BouncyCastle 无 bls 后 H2 兼容是打地鼠**：`RDBMSBlockChainImpl` 硬编码
+   Postgres `OWNER TO` 语法，H2 兼容需改生产代码——**无 Postgres 时放弃 H2、
+   用 Docker PG 是正解**（H2 曾试 `DATABASE_TO_LOWER`/`CASE_INSENSITIVE_IDENTIFIERS`
+   两方案均撞墙后止损）。
+2. **Windows Git Bash 后台进程会被回收**：跨 tool 调用的 `&` 子进程在 bash
+   退出后消失，真机联调必须在**单 bash 调用内**完成 启动→等待→curl→kill。
+3. **core 从「无法在 SB3 启动」到「完整启动 + RPC 工作」** 是五个独立缺陷的
+   串联排除，此前任何单测都无法暴露（单测 mock 存储/上下文）。
+
 ## 与环境约束并列的既有问题记录
 
 - `L2L1EndToEndTest`（Hardhat EDR 兼容性）：**基线既有失败**，与本次改动无关。
@@ -164,13 +205,15 @@ mock：StateDB / NexusChainBlockChain / PackageMiner（仅存储层）
 
 | 模块 | 决策 |
 |---|---|
-| nexus-core | 1（P2P 复用 TRANSACTIONS）/ 2（BLS 抽象）/ 3（@Component）/ 4（hash 口径）/ 7（编排集成测试） |
-| nexus-gateway | 5（BFT 优先降级） |
+| nexus-core | 1（P2P 复用 TRANSACTIONS）/ 2（BLS 抽象）/ 3（@Component）/ 4（hash 口径）/ 7（编排集成测试）/ 8（真机启动障碍链） |
+| nexus-gateway | 5（BFT 优先降级）/ 8（真机联调验证） |
 | nexus-oracle | 6（端口防循环） |
 
 ## 结论
 
 ADR-030 的协议语义与 ADR-031 的工程决策共同构成 NexFinality 的可验证实现基线。
 除 M0/M3（BLS 物理绑定）与 L2 环境问题外，其余里程碑已闭环并通过测试：
-最终性层 30+ 用例（含出块→检查点→最终化整链编排）、网关 13 用例、全量 1081 通过
+最终性层 45+ 用例（含出块→检查点→最终化整链编排、持久化恢复、并发安全、
+治理权重刷新）、网关 13 用例；core 已在 Docker Postgres 真机启动并完成
+gateway→core 最终性 RPC 真实往返验证（决策 8），全量 1081 通过
 （唯一失败 L2L1EndToEndTest 为基线 Hardhat 环境问题）。
