@@ -57,6 +57,13 @@ public class FinalityGadget {
      */
     private final org.nexus.consensus.finality.persistence.FinalityStateStore stateStore;
 
+    /**
+     * 验证者集指纹（P0-② 治理关联）：活跃验证人地址+质押的规范化指纹。
+     * 治理（ValidatorRegistry.register/unregister 或 stake 变更）后指纹变化，
+     * 触发 {@link #epochTotalWeight} 快照失效——新验证人权重计入后续判定。
+     */
+    private volatile int validatorSetFingerprint = Integer.MIN_VALUE;
+
     public FinalityGadget(ValidatorRegistry registry, StakingService stakingService) {
         this(registry, stakingService,
                 new org.nexus.consensus.finality.persistence.InMemoryFinalityStateStore());
@@ -121,7 +128,17 @@ public class FinalityGadget {
         long epoch = vote.getEpoch();
         String checkpointKey = epochKey(epoch, vote.getCheckpointHash());
 
-        // 总权重按 epoch 快照（首次投票时取活跃验证者权重并锁定）
+        // 治理变更检测：验证者集（活跃地址+质押）变化 → 失效总权重快照，
+        // 使新增/移除验证人的权重在下一票起生效（P0-② 治理关联）
+        int fp = computeValidatorSetFingerprint();
+        if (fp != validatorSetFingerprint) {
+            validatorSetFingerprint = fp;
+            epochTotalWeight.clear();
+            org.slf4j.LoggerFactory.getLogger(FinalityGadget.class)
+                    .info("FinalityGadget: validator set changed (fingerprint {}); weight snapshots invalidated", fp);
+        }
+
+        // 总权重按 epoch 快照（快照失效时自动按最新验证者集重算）
         epochTotalWeight.computeIfAbsent(String.valueOf(epoch), k -> computeTotalWeight());
         BigDecimal total = epochTotalWeight.get(String.valueOf(epoch));
 
@@ -238,6 +255,27 @@ public class FinalityGadget {
             }
         }
         return total;
+    }
+
+    /**
+     * 计算验证者集规范化指纹（地址+质押），用于检测治理变更。
+     * 地址排序后逐个累加，保证顺序无关的稳定指纹。
+     */
+    private int computeValidatorSetFingerprint() {
+        List<String> addrs = new ArrayList<>();
+        for (Validator v : validatorRegistry.getActiveValidators()) {
+            if (v.getStatus() == ValidatorStatus.ACTIVE) {
+                addrs.add(v.getAddress());
+            }
+        }
+        Collections.sort(addrs);
+        int fp = 17;
+        for (String a : addrs) {
+            fp = 31 * fp + a.hashCode();
+            BigDecimal s = stakingService.getStake(a);
+            fp = 31 * fp + (s == null ? 0 : s.hashCode());
+        }
+        return fp;
     }
 
     private String epochKey(long epoch, byte[] checkpointHash) {
