@@ -5,6 +5,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -21,6 +22,7 @@ import java.math.BigDecimal;
  * @since 1.2
  */
 @Component
+@Primary
 @ConditionalOnProperty(name = "nexus.consensus.mode", havingValue = "pos")
 public class DefaultPosConsensus implements PosConsensus {
 
