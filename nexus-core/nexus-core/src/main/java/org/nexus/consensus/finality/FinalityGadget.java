@@ -51,9 +51,48 @@ public class FinalityGadget {
      */
     private SignatureAggregator signatureAggregator = new SignatureAggregator.CollectingAggregator();
 
+    /**
+     * 最终性状态持久化（ADR-030 P0-1：节点重启不丢失已最终化检查点）。
+     * 默认内存版（测试/单机）；生产注入 {@link JdbcFinalityStateStore}。
+     */
+    private final org.nexus.consensus.finality.persistence.FinalityStateStore stateStore;
+
     public FinalityGadget(ValidatorRegistry registry, StakingService stakingService) {
+        this(registry, stakingService,
+                new org.nexus.consensus.finality.persistence.InMemoryFinalityStateStore());
+    }
+
+    public FinalityGadget(ValidatorRegistry registry, StakingService stakingService,
+                          org.nexus.consensus.finality.persistence.FinalityStateStore stateStore) {
         this.validatorRegistry = registry;
         this.stakingService = stakingService;
+        this.stateStore = stateStore;
+        restoreFromStore();
+    }
+
+    /** 启动恢复：从持久化层重建已最终化检查点、投票者缓存与投票权重。 */
+    private void restoreFromStore() {
+        stateStore.loadAllFinalized().keySet().forEach(finalizedCheckpoints::add);
+        stateStore.loadAllVotes().forEach((key, voters) -> {
+            // 恢复投票者集合，并按当前质押重建投票权重（权重为衍生值，不持久化）
+            Set<String> restored = ConcurrentHashMap.newKeySet();
+            restored.addAll(voters);
+            epochCheckpointVoters.put(key, restored);
+            BigDecimal sum = BigDecimal.ZERO;
+            for (String addr : voters) {
+                Validator v = validatorRegistry == null ? null : validatorRegistry.getValidator(addr);
+                if (v != null && v.getStatus() == ValidatorStatus.ACTIVE) {
+                    sum = sum.add(stakingService == null
+                            ? BigDecimal.ZERO : stakingService.getStake(addr));
+                }
+            }
+            epochCheckpointWeights.put(key, sum);
+        });
+        if (!finalizedCheckpoints.isEmpty() || !epochCheckpointVoters.isEmpty()) {
+            org.slf4j.LoggerFactory.getLogger(FinalityGadget.class)
+                    .info("FinalityGadget: restored {} finalized checkpoints, {} vote records",
+                            finalizedCheckpoints.size(), epochCheckpointVoters.size());
+        }
     }
 
     /**
@@ -91,6 +130,8 @@ public class FinalityGadget {
         if (!voters.add(vote.getValidatorAddress())) {
             return record(epoch, vote.getCheckpointHash(), total);
         }
+        // 持久化投票（P0-1：节点重启后可恢复投票者集合）
+        stateStore.recordVote(epoch, vote.getCheckpointHash(), vote.getValidatorAddress());
 
         // 双签检测：同 epoch 不同检查点
         for (Map.Entry<String, Set<String>> e : epochCheckpointVoters.entrySet()) {
@@ -128,6 +169,8 @@ public class FinalityGadget {
                 finalized = false;
             } else {
                 finalizedCheckpoints.add(checkpointKey);
+                // 持久化最终化标记（P0-1：节点重启不丢失已确认的不可逆结算）
+                stateStore.markFinalized(epoch, vote.getCheckpointHash());
             }
         }
         return new FinalityRecord(epoch, vote.getCheckpointHash(), voted, total, finalized);
