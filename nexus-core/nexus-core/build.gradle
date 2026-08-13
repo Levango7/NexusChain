@@ -85,7 +85,9 @@ test {
 }
 
 ext {
-    slf4jVersion = '1.7.36'
+    // slf4j 2.0.x 与 Spring Boot 3.2.x 对齐（1.7 与 logback 2.x 冲突导致
+    // Spring Boot 3 容器无法启动，见 docs/adr/ADR-031 环境约束）
+    slf4jVersion = '2.0.13'
     leveldbVersion = '0.12'
     scastleVersion = '1.58.0.0'
     hibernateValidatorVersion = '8.0.1.Final'
@@ -131,6 +133,8 @@ dependencies {
     testImplementation "org.mockito:mockito-core:${mockitoVersion}"
     testImplementation "com.github.briandilley.jsonrpc4j:jsonrpc4j:1.6"
     testImplementation 'com.h2database:h2:2.2.224'
+    // 本地联调（无 Postgres 环境）：H2 文件库。生产仍走 postgresql 驱动。
+    runtimeOnly 'com.h2database:h2:2.2.224'
 
     implementation "org.springframework.boot:spring-boot-starter-web:3.2.5"
 
