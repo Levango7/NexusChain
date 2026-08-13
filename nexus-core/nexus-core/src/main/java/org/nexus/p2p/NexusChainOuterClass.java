@@ -436,6 +436,56 @@ public final class NexusChainOuterClass {
      * <code>EXIT_PLEDGE = 15;</code>
      */
     EXIT_PLEDGE(15),
+    /**
+     * <code>CHANNEL_OPEN = 16;</code>
+     *
+     * <p>2026-08-13 手工同步：与 org.nexus.core.account.Transaction.Type ordinal 对齐
+     * （wire 枚举原为手工提交的生成类，仅含 0-15；P2P 同步路径 sync/Utils 以
+     * forNumber(tx.type) 映射，缺 16-26 会导致批量转账/支付通道等交易序列化 NPE）。
+     * 注：14/15 处 wire 名为 PLEDGE/EXIT_PLEDGE，域枚举为 MORTGAGE/EXIT_MORTGAGE，
+     * 属既有命名偏差，按数字映射不受影响，此处不改名。</p>
+     */
+    CHANNEL_OPEN(16),
+    /**
+     * <code>CHANNEL_UPDATE = 17;</code>
+     */
+    CHANNEL_UPDATE(17),
+    /**
+     * <code>CHANNEL_CLOSE = 18;</code>
+     */
+    CHANNEL_CLOSE(18),
+    /**
+     * <code>BATCH_TRANSFER = 19;</code>
+     */
+    BATCH_TRANSFER(19),
+    /**
+     * <code>MINT_STABLECOIN = 20;</code>
+     */
+    MINT_STABLECOIN(20),
+    /**
+     * <code>REDEEM_STABLECOIN = 21;</code>
+     */
+    REDEEM_STABLECOIN(21),
+    /**
+     * <code>BRIDGE_LOCK = 22;</code>
+     */
+    BRIDGE_LOCK(22),
+    /**
+     * <code>BRIDGE_MINT = 23;</code>
+     */
+    BRIDGE_MINT(23),
+    /**
+     * <code>BRIDGE_BURN = 24;</code>
+     */
+    BRIDGE_BURN(24),
+    /**
+     * <code>IDENTITY_REGISTER = 25;</code>
+     */
+    IDENTITY_REGISTER(25),
+    /**
+     * <code>SUBSCRIPTION_AUTH = 26;</code>
+     */
+    SUBSCRIPTION_AUTH(26),
     UNRECOGNIZED(-1),
     ;
 
@@ -503,6 +553,50 @@ public final class NexusChainOuterClass {
      * <code>EXIT_PLEDGE = 15;</code>
      */
     public static final int EXIT_PLEDGE_VALUE = 15;
+    /**
+     * <code>CHANNEL_OPEN = 16;</code>
+     */
+    public static final int CHANNEL_OPEN_VALUE = 16;
+    /**
+     * <code>CHANNEL_UPDATE = 17;</code>
+     */
+    public static final int CHANNEL_UPDATE_VALUE = 17;
+    /**
+     * <code>CHANNEL_CLOSE = 18;</code>
+     */
+    public static final int CHANNEL_CLOSE_VALUE = 18;
+    /**
+     * <code>BATCH_TRANSFER = 19;</code>
+     */
+    public static final int BATCH_TRANSFER_VALUE = 19;
+    /**
+     * <code>MINT_STABLECOIN = 20;</code>
+     */
+    public static final int MINT_STABLECOIN_VALUE = 20;
+    /**
+     * <code>REDEEM_STABLECOIN = 21;</code>
+     */
+    public static final int REDEEM_STABLECOIN_VALUE = 21;
+    /**
+     * <code>BRIDGE_LOCK = 22;</code>
+     */
+    public static final int BRIDGE_LOCK_VALUE = 22;
+    /**
+     * <code>BRIDGE_MINT = 23;</code>
+     */
+    public static final int BRIDGE_MINT_VALUE = 23;
+    /**
+     * <code>BRIDGE_BURN = 24;</code>
+     */
+    public static final int BRIDGE_BURN_VALUE = 24;
+    /**
+     * <code>IDENTITY_REGISTER = 25;</code>
+     */
+    public static final int IDENTITY_REGISTER_VALUE = 25;
+    /**
+     * <code>SUBSCRIPTION_AUTH = 26;</code>
+     */
+    public static final int SUBSCRIPTION_AUTH_VALUE = 26;
 
 
     public final int getNumber() {
@@ -539,6 +633,17 @@ public final class NexusChainOuterClass {
         case 13: return EXIT_VOTE;
         case 14: return PLEDGE;
         case 15: return EXIT_PLEDGE;
+        case 16: return CHANNEL_OPEN;
+        case 17: return CHANNEL_UPDATE;
+        case 18: return CHANNEL_CLOSE;
+        case 19: return BATCH_TRANSFER;
+        case 20: return MINT_STABLECOIN;
+        case 21: return REDEEM_STABLECOIN;
+        case 22: return BRIDGE_LOCK;
+        case 23: return BRIDGE_MINT;
+        case 24: return BRIDGE_BURN;
+        case 25: return IDENTITY_REGISTER;
+        case 26: return SUBSCRIPTION_AUTH;
         default: return null;
       }
     }

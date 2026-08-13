@@ -98,3 +98,10 @@ credentials.json
 *.pid
 nexus-local.env
 local.env
+
+# H2 embedded database files (local-dev fallback; see nexus-core build.gradle)
+*.mv.db
+*.trace.db
+
+# AI agent working artifacts
+.inscode/
