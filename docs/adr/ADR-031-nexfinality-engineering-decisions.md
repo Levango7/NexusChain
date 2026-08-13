@@ -122,6 +122,37 @@ checkpoint 标识（hex 字符串再转字节 = 双重编码），导致
 通过**端口接口**注入实现，杜绝 `nexus-oracle → nexus-core` 反向依赖（两者构成 composite build，
 反向依赖会成环）。具体实例化由宿主（gateway）在装配层完成。
 
+## 决策 7：全链路验证采用"编排集成测试"，真实组件 + 存储层 mock
+
+### 背景
+
+分点单测（Coordinator 投票 / Gadget 阈值 / P2P 编解码）各自通过，但缺
+"真实出块 → 检查点 → 自动投票 → 最终化"的整链证据。`Leveldb` 为文件存储
+（`factory.open(file)`），真机跑需完整基础设施（种子 DataBase/Miner 配置等），
+交付前无法在无 Postgres/LevelDB 环境验证全链路。
+
+### 决策
+
+新增 `FinalityChainOrchestrationTest`（a3457a7）：
+
+```
+真实：PosConsensusEngine（Ed25519 签名）→ 唯一验证人注册 →
+      FinalityCoordinator（epoch 边界自动投票）→ FinalityGadget（2/3 权重判定）
+mock：StateDB / NexusChainBlockChain / PackageMiner（仅存储层）
+```
+
+验证目标：单验证人每 epoch 检查点 100% 权重立即 FINALIZED；
+跨 epoch 隔离（未投下 epoch 前不误判）；高度单调递增。
+
+### 关键教训
+
+1. **验证人公钥必须与引擎签名密钥一致**：`propose()` 按引擎公钥
+   `findValidatorByPublicKeyHex` 查找本节点验证人，注册地址与签名密钥
+   不一致会导致 proposer 命中失败（返回 null）——曾用旧模式先踩此坑。
+2. **父块引用用递增引用而非队列 `peek()`**：队列 `peek()` 恒返回队头
+   导致出块高度停滞（expected 3 but was 2），改为 `lastParent` 引用 +
+   高度→区块历史 Map。
+
 ## 与环境约束并列的既有问题记录
 
 - `L2L1EndToEndTest`（Hardhat EDR 兼容性）：**基线既有失败**，与本次改动无关。
@@ -133,11 +164,13 @@ checkpoint 标识（hex 字符串再转字节 = 双重编码），导致
 
 | 模块 | 决策 |
 |---|---|
-| nexus-core | 1（P2P 复用 TRANSACTIONS）/ 2（BLS 抽象）/ 3（@Component）/ 4（hash 口径） |
+| nexus-core | 1（P2P 复用 TRANSACTIONS）/ 2（BLS 抽象）/ 3（@Component）/ 4（hash 口径）/ 7（编排集成测试） |
 | nexus-gateway | 5（BFT 优先降级） |
 | nexus-oracle | 6（端口防循环） |
 
 ## 结论
 
 ADR-030 的协议语义与 ADR-031 的工程决策共同构成 NexFinality 的可验证实现基线。
-除 M0/M3（BLS 物理绑定）与 L2 环境问题外，其余里程碑已闭环并通过测试（最终性层 30+ 用例、网关 13 用例、全量 1081 通过）。
+除 M0/M3（BLS 物理绑定）与 L2 环境问题外，其余里程碑已闭环并通过测试：
+最终性层 30+ 用例（含出块→检查点→最终化整链编排）、网关 13 用例、全量 1081 通过
+（唯一失败 L2L1EndToEndTest 为基线 Hardhat 环境问题）。
