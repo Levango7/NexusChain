@@ -95,12 +95,18 @@ public class PendingBlocksManager {
                     // 同步路径 merkle 状态校验失败不阻塞写链——明确日志后
                     // 继续完整写链（stateDB.writeBlock），B 的 best 更新、
                     // 高度认知恢复；状态一致性由 MerkleHandler 对账协议
-                    // （GET_TREE_NODES/TREE_NODES，writeBlockToCache 触发事件）
-                    // 异步对账，不一致时回滚（复用 ReorgManager）。
+                    // （GET_TREE_NODES/TREE_NODES）异步对账。
                     logger.warn("merkle state validate deferred (sync path, A-2): height={}, reason={} "
                             + "→ full chain write, MerkleHandler will reconcile",
                             b.nHeight, result.getMessage());
-                    // 不 continue——落到下方完整写链
+                    b.weight = 1;
+                    stateDB.writeBlock(b);
+                    // 对账触发点（补）：写链后调用 writeBlockToCache 发布
+                    // MerkleMessageEvent → MerkleHandler.getRootTreeNodes →
+                    // GET_TREE_NODES 对账（此前该分支 continue 跳过了触发，
+                    // 导致状态树从未同步、hashMerkleState 全零）
+                    merkleTreeManager.writeBlockToCache(b);
+                    continue;
                 }
                 b.weight = 1;
                 stateDB.writeBlock(b);
