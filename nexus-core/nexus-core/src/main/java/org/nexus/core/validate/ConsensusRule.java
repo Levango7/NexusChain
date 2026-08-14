@@ -51,6 +51,18 @@ public class ConsensusRule implements BlockRule {
         this.targetStateFactory = stateDB.getTargetStateFactory();
     }
 
+    /**
+     * 共识模式（PLAN-002）：pow/dpos 走 DPoS proposer 时间表 + 难度校验；
+     * pos 模式跳过（PoS 区块由引擎 Ed25519 验签，无 proposer 时间表/nBits）。
+     */
+    @org.springframework.beans.factory.annotation.Value("${nexus.consensus.mode:pow}")
+    private String consensusMode;
+
+    /** 是否为 PoS 共识模式。 */
+    private boolean isPosMode() {
+        return "pos".equalsIgnoreCase(consensusMode);
+    }
+
     @Override
     public Result validateBlock(Block block) {
         Block parent = stateDB.getBlock(block.hashPrevBlock);
@@ -61,6 +73,12 @@ public class ConsensusRule implements BlockRule {
         // 父区块高度增1
         if (parent.nHeight + 1 != block.nHeight) {
             return Result.Error("block height invalid");
+        }
+        // PLAN-002 适配：PoS 模式跳过 DPoS proposer 时间表与难度值校验
+        // （PoS 区块无 proposer 时间表/nBits 难度，由 PosConsensusEngine.validate
+        //  做 Ed25519 签名校验；本规则链仅保留结构校验）
+        if (isPosMode()) {
+            return Result.SUCCESS;
         }
         // 出块在是否在合理时间内出块
         Optional<Proposer> p = stateDB.getProposersFactory().getProposer(parent, block.nTime);
