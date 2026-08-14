@@ -148,3 +148,27 @@ round-robin 索引按最新集合计算（与指纹失效机制兼容）。
 4. **共享 PG 表隔离**：验证人广播消息是否需要持久化（重启后重放）？
 
 请审核并给出决策，通过后按第四节清单执行。
+
+---
+
+## 实施结果（2026-08-14，已提交）
+
+| 步骤 | 状态 | 提交/实证 |
+|---|---|---|
+| 1. ValidatorSetCodec + 广播 | ✅ | `ValidatorSetCodecTest` 4 用例全绿 |
+| 2. SyncManager.handleValidatorSet | ✅ | A 收到 B 广播注册成功（P2P） |
+| 3. Bootstrapper 自举广播（含延迟重发） | ✅ | broadcast 186 bytes ×2 |
+| 4. proposer-strategy round-robin | ✅ | B 日志 "round robin index=0" |
+| 5. ValidatorSetPersistence 落库重放 | ✅ | 共享表 validators_synced + 启动 replay |
+| 缺口 B：BasicRule PoW 校验适配 | ✅ | pow validate fail 归零 |
+
+**2 节点真机实证**：验证人同步闭环 ✅ / round-robin 生效 ✅ / PoW 校验适配 ✅ /
+区块传播通（B 收到 A blocks 1-33）✅
+
+## 遗留：PLAN-002（高度收敛）
+
+- **现象**：A=34 vs B=18，双节点各自本地出块，高度未收敛
+- **根因**：同步层 `SyncManager.getStatus` 高度对比 / `receiveBlocks` 写链确认
+  未形成"收到更长链→切换→停止本地出块"的完整闭环（B 收到 A 的链但继续本地出块）
+- **范围**：core 区块同步策略（最长链切换 + 孤儿管理 + 本地出块抑制）
+- **状态**：待规划（PLAN-002）
