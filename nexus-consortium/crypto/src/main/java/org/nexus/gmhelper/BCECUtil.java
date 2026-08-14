@@ -32,7 +32,7 @@ import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.bouncycastle.jce.spec.ECNamedCurveSpec;
 import org.bouncycastle.jce.spec.ECParameterSpec;
 import org.bouncycastle.math.ec.ECCurve;
-import org.bouncycastle.pqc.math.linearalgebra.ByteUtils;
+import org.bouncycastle.pqc.legacy.math.linearalgebra.ByteUtils;
 import org.bouncycastle.util.io.pem.PemObject;
 import org.bouncycastle.util.io.pem.PemReader;
 import org.bouncycastle.util.io.pem.PemWriter;
