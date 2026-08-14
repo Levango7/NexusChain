@@ -1,0 +1,36 @@
+# consortium 测试环境配置（覆盖 application.yml 的 Postgres 占位）
+# 注意：Spring Boot 测试只加载 classpath:application.yml 一个，
+# 测试文件完全替代 main 配置——必须保留 consortium 段（PoA 需要 genesis 等）
+spring:
+  datasource:
+    url: 'jdbc:h2:mem:consortium-test;MODE=PostgreSQL;DB_CLOSE_DELAY=-1'
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: false
+  main:
+    allow-bean-definition-overriding: true
+
+# 保留 main 配置的 consortium 段（测试替代配置时必须复制）
+consortium:
+  consensus:
+    name: 'poa'
+    genesis: 'genesis/conpay-genesis-generator-test.jsonc'
+    block-interval: '30'
+    enable-mining: 'true'
+    miner-coin-base: '1JWhUiZCWps56uZckAvzxy2ex6VGhrMXdD'
+  p2p:
+    name: 'gRPC'
+    max-peers: '16'
+    address: 'node://localhost:9999'
+    enable-discovery: 'true'
+    bootstraps:
+      - 'node://localhost:9998'
+    trusted:
+      - 'node://localhost:9999'
+
+server:
+  port: '0'
