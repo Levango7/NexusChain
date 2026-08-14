@@ -242,13 +242,16 @@ public class MerkleHandler implements Plugin, ApplicationListener<MerkleMessageE
 
     private void getRootTreeNodes(Block block) {
         if (server == null) {
+            logger.warn("[merkle-debug] getRootTreeNodes: server is null");
             return;
         }
         List<Peer> ps = server.getPeers();
         if (ps == null || ps.size() == 0) {
+            logger.warn("[merkle-debug] getRootTreeNodes: no peers (size={})", ps == null ? -1 : ps.size());
             return;
         }
         if (block == null) {
+            logger.warn("[merkle-debug] getRootTreeNodes: block is null");
             return;
         }
         List<Transaction> txs = block.body;
@@ -259,6 +262,8 @@ public class MerkleHandler implements Plugin, ApplicationListener<MerkleMessageE
                 .setBlockHash(ByteString.copyFrom(block.getHash()))
                 .addAllParentNodes(Utils.encodeTreeNodes(parentTreeNodes))
                 .build();
+        logger.info("[merkle-debug] getRootTreeNodes: blockHeight={}, peers={}, dialing index={}",
+                block.nHeight, ps.size(), index);
         server.dial(ps.get(index), getTreeNodes);
     }
 
