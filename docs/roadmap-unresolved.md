@@ -72,3 +72,14 @@
 | 日期 | 动作 | 提交/证据 |
 |---|---|---|
 | 2026-08-14 | 建立基线 + 逐项代码核实 | 核实 5 项"已修复文档过时" |
+
+## PLAN-007（单 proposer 协调）
+
+**✅ 已解决（主体）**：round-robin 按地址排序保证全网确定性（同高度唯一 proposer），
+`PosProposerRoundRobinTest` 3 用例全绿（不同注册顺序→同高度同 proposer）。
+
+**遗留（PLAN-008 候选）**：真机验证人广播 registered=false——
+bootstrapper 广播地址异常（A、B 同地址 mRFqUXd），疑点：
+引擎 `loadConfiguredOrRandomKeyPair` 用 `System.getProperty` 读
+`validator-private-key`，但真机传 Spring 参数 `--nexus.consensus.validator-private-key=`
+读不到 → 引擎随机密钥；广播地址来源需核查（self vs genesis 验证人）。
