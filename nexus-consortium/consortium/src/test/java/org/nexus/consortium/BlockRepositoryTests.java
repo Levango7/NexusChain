@@ -53,7 +53,9 @@ public class BlockRepositoryTests {
 
     @BeforeEach
     public void saveBlocks() {
-        if (blockStore.getBlockByHeight(0).isPresent()){
+        // 修复：guard 哨兵用测试数据高度 9——genesis(高度 0) 由上下文 saveGenesis
+        // 总是存在，原 guard(getBlockByHeight(0)) 误判跳过保存，表仅剩 genesis
+        if (blockStore.getBlockByHeight(9).isPresent()){
             return;
         }
         for (int i = 0; i < 10; i++) {
