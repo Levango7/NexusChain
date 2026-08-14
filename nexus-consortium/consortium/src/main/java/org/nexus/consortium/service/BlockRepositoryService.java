@@ -86,7 +86,9 @@ public class BlockRepositoryService implements BlockRepository {
 
     @Override
     public Header getBestHeader() {
-        return Mapping.getFromHeaderEntity(headerDao.findTopByOrderByHeightDesc().get());
+        List<org.nexus.consortium.entity.Header> best = headerDao.findBestByExplicitOrder(
+                org.springframework.data.domain.PageRequest.of(0, 1));
+        return best.isEmpty() ? null : Mapping.getFromHeaderEntity(best.get(0));
     }
 
     @Override
