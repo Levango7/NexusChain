@@ -158,6 +158,41 @@ public class StateDB implements ApplicationListener<AccountUpdatedEvent> {
         transactionIndex.remove(b.getHashHexString());
     }
 
+    /**
+     * 分叉回滚（PLAN-003）：从本地最佳块沿父链回滚到目标高度（含），
+     * 清理 blocksCache 与全部索引。回滚后 best 回到分叉点。
+     *
+     * <p>仅回滚内存缓存层（LevelDB/PG 持久化的 header 记录由链切换
+     * 写入长链时以最新为准覆盖）；供 {@code ReorgManager} 在采纳更长分叉链前调用。</p>
+     *
+     * @param targetHeight 回滚目标高度（低于该高度的块保留）
+     * @return 实际回滚的区块数
+     */
+    public int rollbackTo(long targetHeight) {
+        this.readWriteLock.writeLock().lock();
+        try {
+            int rolledBack = 0;
+            Block cur = getBestBlock();
+            while (cur != null && cur.nHeight > targetHeight) {
+                Block parent = getBlock(cur.hashPrevBlock);
+                deleteCache(cur);
+                cur = parent;
+                rolledBack++;
+            }
+            if (rolledBack > 0) {
+                // best 引用回退到分叉点（或 genesis）
+                if (cur != null) {
+                    latestConfirmed = cur;
+                }
+                logger.info("rollbackTo({}): rolled back {} blocks, best now height {}",
+                        targetHeight, rolledBack, cur == null ? 0 : cur.nHeight);
+            }
+            return rolledBack;
+        } finally {
+            this.readWriteLock.writeLock().unlock();
+        }
+    }
+
     public StateDB(
             @Value("${nexus.consensus.blocks-per-era}") int blocksPerEra,
             @Value("${nexus.allow-miner-joins-era}") int allowMinersJoinEra,
