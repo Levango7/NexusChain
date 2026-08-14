@@ -73,13 +73,19 @@ public class ValidatorSetPersistence {
         }
     }
 
-    /** 写库（本节点自举注册 / 收到广播时调用；幂等 MERGE）。 */
+    /** 写库（本节点自举注册 / 收到广播时调用；幂等 upsert）。 */
     public void upsert(String address, String publicKey, BigDecimal stakeAmount) {
         if (jdbc == null || address == null || publicKey == null || stakeAmount == null) {
             return;
         }
         try {
-            jdbc.update("MERGE INTO validators_synced KEY(address) VALUES(?,?,?,?)",
+            // Postgres 幂等 upsert（MERGE 是 H2 语法，PG 报 bad SQL grammar——真机实证）
+            jdbc.update(
+                    "INSERT INTO validators_synced(address, public_key, stake_amount, updated_at) "
+                    + "VALUES(?,?,?,?) "
+                    + "ON CONFLICT(address) DO UPDATE SET "
+                    + "public_key=EXCLUDED.public_key, stake_amount=EXCLUDED.stake_amount, "
+                    + "updated_at=EXCLUDED.updated_at",
                     address, publicKey, stakeAmount.toPlainString(), System.currentTimeMillis());
         } catch (Exception e) {
             log.warn("Validator upsert failed: address={}, error={}", address, e.getMessage());
