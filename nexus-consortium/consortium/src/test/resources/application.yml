@@ -15,9 +15,11 @@ spring:
     allow-bean-definition-overriding: true
 
 # 保留 main 配置的 consortium 段（测试替代配置时必须复制）
+# 注意：consensus.name='none'（官方测试模式）——不触发 saveGenesis 写 genesis，
+# 避免与测试数据高度 0 冲突（BlockRepositoryTests 注释明确要求）
 consortium:
   consensus:
-    name: 'poa'
+    name: 'none'
     genesis: 'genesis/conpay-genesis-generator-test.jsonc'
     block-interval: '30'
     enable-mining: 'true'
