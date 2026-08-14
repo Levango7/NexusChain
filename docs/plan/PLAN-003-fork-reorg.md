@@ -152,3 +152,13 @@ PendingBlocksManager：父块缺失时若 b.nHeight 显著高于本地 best
 **遗留（PLAN-005）**：B 启动未从共享 PG 加载 A 已写的链 → 分叉点在各自 genesis 后
 （父链不同，非真分叉），无法重组。ReorgManager 逻辑正确（单测 4 用例），
 真机收敛需先解决"共享链启动加载"（节点启动继承 PG 已有链）。
+
+## PLAN-006 补充（2026-08-14）
+
+**已实证**：节点单独启动成功继承共享 PG 链（B 从 PG 45 继续出块到 54，落库正常）——
+PLAN-005 leastConfirms 修复后区块落库 + 启动加载生效。
+
+**遗留（多节点单 proposer 协调）**：双节点同时 enable-mining 时各自出块竞争
+（A=81, B=76，B 判 A 高块 orphan 且落库 0 次）——需"同一时刻仅一个 proposer
+出块"的协调（round-robin 严格轮换 + 对端更高链时抑制+跟随），
+recorded as PLAN-007。
