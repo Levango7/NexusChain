@@ -111,14 +111,19 @@ public class ValidatorNodeBootstrapper implements ApplicationListener<Applicatio
         byte[] msg = org.nexus.consensus.finality.net.ValidatorSetCodec.encodeAdd(
                 address, pubHex, selfStake.toPlainString());
         broadcastValidatorSet(msg);
-        // 延迟重发：对端可能尚未启动/未完成握手（P2P 广播在连接建立前静默丢弃）
-        new Thread(() -> {
-            try {
-                Thread.sleep(10_000);
-            } catch (InterruptedException ignored) {
-            }
-            broadcastValidatorSet(msg);
-        }, "validator-set-rebroadcast").start();
+        // 多次延迟重发（PLAN-009）：对端可能后启动/握手未完成，广播在连接建立前
+        // 静默丢弃——单次 10s 重发不足（真机观察 B 未收 A 广播）。
+        // 10s/30s/60s 三次覆盖不同启动时序的握手窗口。
+        for (long delay : new long[]{10_000, 30_000, 60_000}) {
+            long d = delay;
+            new Thread(() -> {
+                try {
+                    Thread.sleep(d);
+                } catch (InterruptedException ignored) {
+                }
+                broadcastValidatorSet(msg);
+            }, "validator-set-rebroadcast-" + d).start();
+        }
 
         log.info("✅ Self-registered as validator: address={} pub={} stake={} (finality coordinator armed, validator-set broadcast)",
                 address, pubHex, selfStake);
