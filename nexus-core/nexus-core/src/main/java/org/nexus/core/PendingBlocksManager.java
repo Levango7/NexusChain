@@ -46,6 +46,10 @@ public class PendingBlocksManager {
     @Autowired
     private MerkleRule merkleRule;
 
+    /** PLAN-003：分叉重组管理器（父块缺失 → 尝试切换更长链）。 */
+    @Autowired(required = false)
+    private ReorgManager reorgManager;
+
     private Logger logger = LoggerFactory.getLogger(PendingBlocksManager.class);
 
     @Autowired
@@ -71,6 +75,17 @@ public class PendingBlocksManager {
                 }
                 Result res = rule.validateBlock(b);
                 if (!res.isSuccess()) {
+                    // PLAN-003：父块缺失 → 可能是更长分叉链，交 ReorgManager 处理
+                    if (res.getMessage() != null
+                            && (res.getMessage().contains("failed to find parent")
+                                || res.getMessage().contains("cannot find parent"))
+                            && reorgManager != null) {
+                        boolean switched = reorgManager.handlePotentialFork(b);
+                        if (switched) {
+                            logger.info("PendingBlocks: fork switch executed for block height={}", b.nHeight);
+                            continue;
+                        }
+                    }
                     logger.error("validate the block fail error = " + res.getMessage());
                     return;
                 }
