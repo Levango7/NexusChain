@@ -172,16 +172,19 @@ public class SyncManager implements Plugin, ApplicationListener<NewBlockMinedEve
         if (finalityVoteBroadcaster == null) {
             return;
         }
-        NexusChainOuterClass.Transaction tx = context.getPayload().getTransaction();
-        if (tx == null) {
+        // 广播容器为 Transactions（复数），遍历其中 VOTE 类型交易
+        NexusChainOuterClass.Transactions txs = context.getPayload().getTransactions();
+        if (txs == null) {
             return;
         }
-        if (tx.getTransactionType() != NexusChainOuterClass.TransactionType.VOTE) {
-            return;
-        }
-        byte[] payload = tx.getPayload().toByteArray();
-        if (org.nexus.consensus.finality.net.FinalityVoteP2PCodec.isVotePayload(payload)) {
-            finalityVoteBroadcaster.onVoteReceived(payload);
+        for (NexusChainOuterClass.Transaction tx : txs.getTransactionsList()) {
+            if (tx.getTransactionType() != NexusChainOuterClass.TransactionType.VOTE) {
+                continue;
+            }
+            byte[] payload = tx.getPayload().toByteArray();
+            if (org.nexus.consensus.finality.net.FinalityVoteP2PCodec.isVotePayload(payload)) {
+                finalityVoteBroadcaster.onVoteReceived(payload);
+            }
         }
     }
 
