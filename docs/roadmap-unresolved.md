@@ -53,8 +53,8 @@
 
 | # | 位置 | 内容 |
 |---|---|---|
-| 18 | ChainConnector/ConsortiumConnector:210 | 退款方向策略未定 |
-| 19 | DefaultSettlementService:38 | 商户费率（per-merchant FeeSchedule）未实现 |
+| ~~18~~ | ~~ChainConnector/ConsortiumConnector~~ | ✅ **已解决**：退款方向策略确认默认（优先原付款人、未知退收款人），`nexus.refund.direction` 可覆盖 |
+| ~~19~~ | ~~DefaultSettlementService~~ | ✅ **已解决**：per-merchant FeeSchedule 落地——Merchant.feeBasisPoints 配置优先，未配置回退默认 50bp（2 专项测试） |
 | ~~20~~ | ~~ValidatorNodeBootstrapper~~ | ✅ **已解决**：引擎支持 `nexus.consensus.validator-private-key` 配置固定密钥（`PosConsensusEngineKeyTest` 3 用例） |
 
 ## 🔵 测试/验证缺口

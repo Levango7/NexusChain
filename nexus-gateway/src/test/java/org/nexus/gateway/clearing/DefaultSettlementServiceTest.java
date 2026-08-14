@@ -29,12 +29,13 @@ class DefaultSettlementServiceTest {
     @Mock private SettlementBatchRepository batchRepository;
     @Mock private PaymentOrderRepository orderRepository;
     @Mock private ClearingEngine clearingEngine;
+    @Mock private org.nexus.gateway.service.MerchantServiceImpl merchantService;
 
     private DefaultSettlementService service;
 
     @BeforeEach
     void setUp() {
-        service = new DefaultSettlementService(batchRepository, orderRepository, clearingEngine);
+        service = new DefaultSettlementService(batchRepository, orderRepository, clearingEngine, merchantService);
     }
 
     // === createSettlementBatch ===
@@ -212,6 +213,47 @@ class DefaultSettlementServiceTest {
         when(batchRepository.findByMerchantId(100L))
                 .thenReturn(List.of(newBatch(1L, SettlementBatch.BatchStatus.COMPLETED)));
         assertEquals(1, service.generateSettlementReport(100L, null).size());
+    }
+
+    @Test
+    @DisplayName("createSettlementBatch: #19 商户费率配置优先于默认 50bp")
+    void create_merchantFeeSchedulePreferred() {
+        // 商户配置 200bp（2%）
+        PaymentOrder o1 = new PaymentOrder();
+        o1.setId(1L);
+        o1.setAmount(new BigDecimal("10000"));
+        when(orderRepository.findByMerchantIdAndStatusAndPaidAtBetween(
+                eq(100L), any(), any(), any())).thenReturn(List.of(o1));
+        when(batchRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        org.nexus.gateway.model.Merchant merchant = new org.nexus.gateway.model.Merchant();
+        merchant.setId(100L);
+        merchant.setFeeBasisPoints(200);
+        when(merchantService.findById(100L)).thenReturn(java.util.Optional.of(merchant));
+
+        SettlementBatch batch = service.createSettlementBatch(100L, SettlementPeriod.T0);
+        // gross=10000, fee=10000*200/10000=200（商户费率 2%），net=9800
+        assertEquals(0, new BigDecimal("200").compareTo(batch.getFeeAmount()),
+                "商户配置 200bp 时应按 200 计费而非默认 50");
+        assertEquals(0, new BigDecimal("9800").compareTo(batch.getNetAmount()));
+    }
+
+    @Test
+    @DisplayName("createSettlementBatch: 商户费率未配置回退默认 50bp")
+    void create_fallbackDefaultFeeWhenNoMerchantConfig() {
+        PaymentOrder o1 = new PaymentOrder();
+        o1.setId(1L);
+        o1.setAmount(new BigDecimal("10000"));
+        when(orderRepository.findByMerchantIdAndStatusAndPaidAtBetween(
+                eq(100L), any(), any(), any())).thenReturn(List.of(o1));
+        when(batchRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(merchantService.findById(100L)).thenReturn(java.util.Optional.empty());
+
+        SettlementBatch batch = service.createSettlementBatch(100L, SettlementPeriod.T0);
+        // 默认 50bp → fee=10000*50/10000=50
+        assertEquals(0, new BigDecimal("50").compareTo(batch.getFeeAmount()),
+                "商户未配置时应回退默认 50bp");
+        assertEquals(0, new BigDecimal("9950").compareTo(batch.getNetAmount()));
     }
 
     private SettlementBatch newBatch(Long id, SettlementBatch.BatchStatus status) {

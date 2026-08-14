@@ -35,20 +35,46 @@ public class DefaultSettlementService implements SettlementService {
 
     /**
      * Default settlement fee in basis points (0.5%).
-     * TODO(v2.0.0): replace with a per-merchant FeeSchedule once merchant fee config exists — tracked in v2.0.0 roadmap.
+     * #19: per-merchant FeeSchedule 已落地——商户 {@code feeBasisPoints} 配置优先，
+     * 未配置时回退此默认值。
      */
     private static final int DEFAULT_FEE_BASIS_POINTS = 50;
 
     private final SettlementBatchRepository batchRepository;
+    private final org.nexus.gateway.service.MerchantServiceImpl merchantService;
     private final PaymentOrderRepository orderRepository;
     private final ClearingEngine clearingEngine;
 
     public DefaultSettlementService(SettlementBatchRepository batchRepository,
                                     PaymentOrderRepository orderRepository,
-                                    ClearingEngine clearingEngine) {
+                                    ClearingEngine clearingEngine,
+                                    org.nexus.gateway.service.MerchantServiceImpl merchantService) {
         this.batchRepository = batchRepository;
         this.orderRepository = orderRepository;
         this.clearingEngine = clearingEngine;
+        this.merchantService = merchantService;
+    }
+
+    /**
+     * 解析商户结算费率（#19 per-merchant FeeSchedule）：
+     * 商户 {@code feeBasisPoints} 配置优先（>0），未配置/无效回退默认 50bp。
+     */
+    private int resolveMerchantFeeBasisPoints(Long merchantId) {
+        try {
+            if (merchantId != null && merchantService != null) {
+                var merchantOpt = merchantService.findById(merchantId);
+                if (merchantOpt.isPresent()) {
+                    Integer fee = merchantOpt.get().getFeeBasisPoints();
+                    if (fee != null && fee > 0) {
+                        return fee;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("resolveMerchantFeeBasisPoints failed for merchant={}, fallback default: {}",
+                    merchantId, e.getMessage());
+        }
+        return DEFAULT_FEE_BASIS_POINTS;
     }
 
     @Override
@@ -75,7 +101,9 @@ public class DefaultSettlementService implements SettlementService {
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
         // Fee = gross * feeBps / 10000, rounded half-up; net = gross - fee
-        BigDecimal fee = gross.multiply(BigDecimal.valueOf(DEFAULT_FEE_BASIS_POINTS))
+        // #19: 商户费率优先（per-merchant FeeSchedule），未配置回退默认 50bp
+        int feeBps = resolveMerchantFeeBasisPoints(merchantId);
+        BigDecimal fee = gross.multiply(BigDecimal.valueOf(feeBps))
                 .divide(BigDecimal.valueOf(10000), 0, RoundingMode.HALF_UP);
 
         batch.setTotalAmount(gross);
