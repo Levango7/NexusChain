@@ -124,39 +124,43 @@ public class PosConsensusEngine implements PosConsensus {
     @org.springframework.beans.factory.annotation.Value("${nexus.consensus.proposer-strategy:random}")
     private String proposerStrategy;
 
-    /** 节点签名密钥对（Ed25519），用于对区块头签名 */
-    private final KeyPair signingKeyPair;
+    /** 节点签名密钥对（Ed25519），用于对区块头签名（非 final 以便 @PostConstruct 用配置密钥替换）。 */
+    private KeyPair signingKeyPair;
+
+    /**
+     * 节点签名密钥配置（PLAN-008 修复：原 System.getProperty 读不到 Spring 参数
+     * `--nexus.consensus.validator-private-key=` → 引擎总是随机密钥，
+     * 多节点无法预注册验证人）。现由 Spring 注入，与 bootstrapper 共用。
+     */
+    @org.springframework.beans.factory.annotation.Value("${nexus.consensus.validator-private-key:}")
+    private String configuredValidatorPrivateKeyHex;
 
     /** 出块时间窗口（秒） */
     private final long blockIntervalSeconds;
 
     public PosConsensusEngine() {
-        this(loadConfiguredOrRandomKeyPair(), DEFAULT_BLOCK_INTERVAL_SECONDS);
+        this(KeyPair.generateEd25519KeyPair(), DEFAULT_BLOCK_INTERVAL_SECONDS);
     }
 
     /**
-     * 从配置加载或生成节点签名密钥（#20：生产固定密钥，多节点可预生成验证人）。
-     *
-     * <p>配置项 {@code nexus.consensus.validator-private-key}（Ed25519 私钥 hex，
-     * 32 字节）——提供时用配置密钥（节点重启后地址稳定，可预先注册验证人并
-     * 加入多节点拓扑）；未配置时随机生成（开发/测试默认行为）。</p>
+     * Spring 装配后：若配置了 {@code nexus.consensus.validator-private-key}，
+     * 用配置密钥替换随机密钥（节点重启后验证人地址稳定）。
      */
-    private static KeyPair loadConfiguredOrRandomKeyPair() {
-        String configured = System.getProperty("nexus.consensus.validator-private-key");
-        if (configured == null || configured.isEmpty()) {
-            return KeyPair.generateEd25519KeyPair();
+    @jakarta.annotation.PostConstruct
+    public void applyConfiguredKey() {
+        if (configuredValidatorPrivateKeyHex == null || configuredValidatorPrivateKeyHex.isEmpty()) {
+            return;
         }
         try {
-            byte[] privateKey = org.apache.commons.codec.binary.Hex.decodeHex(configured);
-            // Ed25519 公钥 = 私钥标量 × 基点（BC Ed25519PrivateKeyParameters.generatePublicKey）
+            byte[] privateKey = org.apache.commons.codec.binary.Hex.decodeHex(configuredValidatorPrivateKeyHex);
             org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters bcPriv =
                     new org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters(privateKey, 0);
             byte[] publicKey = bcPriv.generatePublicKey().getEncoded();
-            return new KeyPair(publicKey, privateKey);
+            this.signingKeyPair = new KeyPair(publicKey, privateKey);
+            logger.info("PosConsensusEngine: applied configured validator key (public={})",
+                    Hex.encodeHexString(publicKey));
         } catch (Exception e) {
-            org.slf4j.LoggerFactory.getLogger(PosConsensusEngine.class)
-                    .warn("validator-private-key parse failed, falling back to random: {}", e.getMessage());
-            return KeyPair.generateEd25519KeyPair();
+            logger.warn("validator-private-key parse failed, keeping random key: {}", e.getMessage());
         }
     }
 
