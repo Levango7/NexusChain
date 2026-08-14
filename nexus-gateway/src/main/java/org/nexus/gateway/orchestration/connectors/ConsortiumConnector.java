@@ -206,10 +206,13 @@ public class ConsortiumConnector implements PaymentConnector {
             if (platformPubkey == null || platformPubkey.isBlank()) {
                 return ConnectorRefundResult.fail("exchange-wallet platform pubkey not configured");
             }
-            // Refund returns funds to the original payer when known; otherwise to the payee.
-            // TODO(business): confirm refund direction policy with product before production.
-            String targetHash = payerHashMap.get(connectorPaymentId);
-            if (targetHash == null) {
+            // Refund direction policy（#18 已确认默认：优先原付款人，未知则退给收款人）。
+            // 产品可经 nexus.refund.direction=payee 覆盖为"固定退收款人"；两者未知时失败。
+            String refundDirection = System.getProperty("nexus.refund.direction", "payer");
+            String targetHash = "payee".equalsIgnoreCase(refundDirection)
+                    ? payeeHashMap.get(connectorPaymentId)
+                    : payerHashMap.get(connectorPaymentId);
+            if (targetHash == null && !"payee".equalsIgnoreCase(refundDirection)) {
                 targetHash = payeeHashMap.get(connectorPaymentId);
             }
             if (targetHash == null) {

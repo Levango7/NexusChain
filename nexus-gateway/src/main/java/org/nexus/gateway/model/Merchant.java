@@ -52,6 +52,18 @@ public class Merchant {
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;
 
+    /**
+     * 商户结算费率（基点，10000 = 100%）。#19 per-merchant FeeSchedule：
+     * 未配置时默认 50bp（0.5%），与 {@code DefaultSettlementService} 默认一致。
+     */
+    @Column(name = "fee_basis_points", nullable = false)
+    private Integer feeBasisPoints = 50;
+
+    public Integer getFeeBasisPoints() { return feeBasisPoints; }
+    public void setFeeBasisPoints(Integer feeBasisPoints) {
+        this.feeBasisPoints = (feeBasisPoints == null || feeBasisPoints < 0) ? 50 : feeBasisPoints;
+    }
+
     @PrePersist
     protected void onCreate() {
         LocalDateTime now = LocalDateTime.now();
