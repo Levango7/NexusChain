@@ -7,6 +7,7 @@ import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.security.SecureRandom;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -80,9 +81,15 @@ public class PosProposer {
             logger.warn("No active validators to propose at height {}", height);
             return null;
         }
-        int index = (int) (Math.abs(height) % active.size());
-        Validator selected = active.get(index);
-        logger.info("Selected proposer {} at height {} (round robin index={})", selected.getAddress(), height, index);
+        // PLAN-007 单 proposer 协调：按地址排序保证全网确定性顺序。
+        // getActiveValidators() 遍历 HashMap（validators.values()）顺序不保证，
+        // 两节点注册顺序不同 → 列表顺序不同 → 同一高度选出不同 proposer → 竞争出块。
+        List<Validator> ordered = new ArrayList<>(active);
+        ordered.sort(java.util.Comparator.comparing(Validator::getAddress));
+        int index = (int) (Math.abs(height) % ordered.size());
+        Validator selected = ordered.get(index);
+        logger.info("Selected proposer {} at height {} (round robin index={}, ordered set size={})",
+                selected.getAddress(), height, index, ordered.size());
         return selected;
     }
 }
