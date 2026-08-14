@@ -85,6 +85,17 @@ public class SyncManager implements Plugin, ApplicationListener<NewBlockMinedEve
     @org.springframework.context.annotation.Lazy
     private org.nexus.consensus.finality.persistence.ValidatorSetPersistence validatorSetPersistence;
 
+    /** 已知对端最高区块高度（PLAN-002：本地出块抑制依据，volatile 跨线程可见）。 */
+    private volatile long knownMaxPeerHeight = 0;
+
+    /**
+     * 已知对端最高高度。供 PosMiningScheduler 在出块前比较：
+     * 若本节点落后于对端，应抑制本地出块以跟随更长链（避免分叉持续）。
+     */
+    public long getKnownMaxPeerHeight() {
+        return knownMaxPeerHeight;
+    }
+
     @Autowired
     private CheckPointRule checkPointRule;
 
@@ -265,6 +276,12 @@ public class SyncManager implements Plugin, ApplicationListener<NewBlockMinedEve
     private void onStatus(Context context, PeerServer server) {
         NexusChainOuterClass.Status status = context.getPayload().getStatus();
         Block best = stateDB.getBestBlock();
+
+        // PLAN-002：记录已知对端最高高度（本地出块抑制依据）
+        long peerHeight = status.getCurrentHeight();
+        if (peerHeight > knownMaxPeerHeight) {
+            knownMaxPeerHeight = peerHeight;
+        }
 
         // 拉黑创世区块不相同的节点
         if (!Arrays.equals(genesis.getHash(), status.getGenesisHash().toByteArray())) {
