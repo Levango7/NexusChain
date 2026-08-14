@@ -39,12 +39,32 @@ public class CustodyPolicy {
     /** Minimum operational floor for the hot wallet (triggers pull from warm). */
     private BigDecimal hotWalletFloor;
 
+    /** Cold tier wallet ID 前缀（#17 真实化：替代硬编码 "cold" 前缀猜测）。 */
+    private String coldWalletPrefix = "cold";
+
+    /** Warm tier wallet ID 前缀（替代硬编码 "warm" 前缀猜测）。 */
+    private String warmWalletPrefix = "warm";
+
     public CustodyPolicy() {}
 
     public CustodyPolicy(BigDecimal hotWalletCap, BigDecimal warmWalletCap, BigDecimal autoSweepThreshold) {
         this.hotWalletCap = hotWalletCap;
         this.warmWalletCap = warmWalletCap;
         this.autoSweepThreshold = autoSweepThreshold;
+    }
+
+    public String getColdWalletPrefix() { return coldWalletPrefix; }
+    public void setColdWalletPrefix(String coldWalletPrefix) {
+        if (coldWalletPrefix != null && !coldWalletPrefix.isEmpty()) {
+            this.coldWalletPrefix = coldWalletPrefix.toLowerCase();
+        }
+    }
+
+    public String getWarmWalletPrefix() { return warmWalletPrefix; }
+    public void setWarmWalletPrefix(String warmWalletPrefix) {
+        if (warmWalletPrefix != null && !warmWalletPrefix.isEmpty()) {
+            this.warmWalletPrefix = warmWalletPrefix.toLowerCase();
+        }
     }
 
     // --- Getters and Setters ---

@@ -25,8 +25,9 @@ import java.util.UUID;
  * 写操作方法标注 {@link Transactional} 纳入本地分支事务（在全局事务上下文中
  * 自动注册为 Seata AT 分支）。</p>
  *
- * <p>余额与转账现在持久化到 {@code nexus_wallet} 库；链上转账当前仍为模拟交易哈希
- * （SIMULATED 前缀），接入 MPC 签名管道与链上广播后替换。</p>
+ * <p>余额与转账已持久化到 {@code nexus_wallet} 库；链上转账经
+ * {@link org.nexus.walletsvc.execution.OnChainExecutionClient}（gateway → 链上广播）
+ * 执行，fail-closed：通道缺失/失败即抛异常回滚，绝不伪造交易哈希（v1.9.2 起）。</p>
  *
  * <p>迁移历史：原位于 {@code org.nexus.wallet.wallet.custody.DefaultCustodyService}
  * （nexus-exchange-wallet），在 Phase 2 微服务化中迁移至 nexus-wallet-service
@@ -314,8 +315,8 @@ public class DefaultCustodyService implements CustodyService {
     /**
      * 判断指定钱包是否为冷托管。
      *
-     * <p>骨架实现：默认返回 {@code false}（非冷托管）。完整迁移后应根据
-     * 钱包元数据 / 配置中心查询实际托管层级。</p>
+     * <p>#17 真实化：基于 {@link CustodyPolicy#getColdWalletPrefix()} 配置前缀判定
+     * （替代迁移期硬编码 "cold" 前缀猜测），前缀可经策略配置调整。</p>
      *
      * @param walletId 钱包 ID
      * @return 是否为冷托管
@@ -325,15 +326,16 @@ public class DefaultCustodyService implements CustodyService {
         if (walletId == null || walletId.isEmpty()) {
             return false;
         }
-        // 骨架实现：以 "cold" 前缀判断（迁移期占位逻辑）
-        return walletId.toLowerCase().startsWith("cold");
+        String prefix = custodyPolicy != null && custodyPolicy.getColdWalletPrefix() != null
+                ? custodyPolicy.getColdWalletPrefix() : "cold";
+        return walletId.toLowerCase().startsWith(prefix);
     }
 
     /**
      * 查询指定钱包的托管层级。
      *
-     * <p>骨架实现：根据钱包 ID 前缀返回层级名称。完整迁移后应根据
-     * 钱包元数据 / 配置中心查询实际托管层级。</p>
+     * <p>#17 真实化：前缀由 {@link CustodyPolicy} 配置驱动（默认 cold/warm），
+     * 消除硬编码猜测；未匹配任何配置前缀时默认 HOT。</p>
      *
      * @param walletId 钱包 ID
      * @return 托管层级名称（HOT / WARM / COLD）
@@ -344,9 +346,13 @@ public class DefaultCustodyService implements CustodyService {
             return WalletTier.HOT.name();
         }
         String lower = walletId.toLowerCase();
-        if (lower.startsWith("cold")) {
+        String coldPrefix = custodyPolicy != null && custodyPolicy.getColdWalletPrefix() != null
+                ? custodyPolicy.getColdWalletPrefix() : "cold";
+        String warmPrefix = custodyPolicy != null && custodyPolicy.getWarmWalletPrefix() != null
+                ? custodyPolicy.getWarmWalletPrefix() : "warm";
+        if (lower.startsWith(coldPrefix)) {
             return WalletTier.COLD.name();
-        } else if (lower.startsWith("warm")) {
+        } else if (lower.startsWith(warmPrefix)) {
             return WalletTier.WARM.name();
         }
         return WalletTier.HOT.name();
