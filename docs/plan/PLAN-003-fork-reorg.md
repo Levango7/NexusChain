@@ -162,3 +162,18 @@ PLAN-005 leastConfirms 修复后区块落库 + 启动加载生效。
 （A=81, B=76，B 判 A 高块 orphan 且落库 0 次）——需"同一时刻仅一个 proposer
 出块"的协调（round-robin 严格轮换 + 对端更高链时抑制+跟随），
 recorded as PLAN-007。
+
+## PLAN-008 验证人广播地址（2026-08-14，✅ 已解决）
+
+**根因**：引擎用 System.getProperty 读 validator-private-key，真机传 Spring 参数
+读不到 → 引擎随机密钥 → bootstrapper 广播地址不可预知（A/B 同地址异常）。
+
+**修复**：signingKeyPair 改非 final + @Value 注入 + @PostConstruct 配置密钥替换
+（PosConsensusEngine 32adca1）。
+
+**真机实证**：
+- A/B 引擎密钥配置生效（不同公钥 e734ea/7d59c5，地址 nv3gC5m/aKURTTs）
+- A 收到 B 广播 registered=TRUE（跨节点验证人同步打通，此前 registered=false）
+
+**遗留（收敛时序）**：双节点非同步启动时验证人广播晚到（先启动节点短暂
+单验证人出块），完全收敛需同步启动或等待同步窗口——机制已就绪。
