@@ -40,15 +40,63 @@ public class PosMiningScheduler {
     private final ConsensusConfig consensusConfig;
 
     /**
+     * 对端高度来源（PLAN-002 本地出块抑制）。@Lazy 打破与 SyncManager 的循环依赖。
+     */
+    private final org.springframework.beans.factory.ObjectProvider<org.nexus.sync.SyncManager> syncManagerProvider;
+
+    /** 本节点状态库（获取本地最佳高度，PLAN-002 抑制比较）。 */
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.nexus.db.StateDB stateDB;
+
+    /**
      * 构造函数注入。
      *
-     * @param posConsensus    PoS 共识门面（实际为 {@link DefaultPosConsensus}，委托至 {@link PosConsensusEngine}）
-     * @param consensusConfig 共识配置
+     * @param posConsensus         PoS 共识门面（实际为 {@link DefaultPosConsensus}，委托至 {@link PosConsensusEngine}）
+     * @param consensusConfig      共识配置
+     * @param syncManagerProvider  对端高度来源（可选，单节点/无 P2P 为 empty）
      */
-    public PosMiningScheduler(PosConsensus posConsensus, ConsensusConfig consensusConfig) {
+    public PosMiningScheduler(PosConsensus posConsensus, ConsensusConfig consensusConfig,
+                              @org.springframework.beans.factory.annotation.Autowired(required = false)
+                              org.springframework.beans.factory.ObjectProvider<org.nexus.sync.SyncManager> syncManagerProvider) {
         this.posConsensus = posConsensus;
         this.consensusConfig = consensusConfig;
+        this.syncManagerProvider = syncManagerProvider;
         logger.info("PosMiningScheduler initialized; will propose every 1s when enabled");
+    }
+
+    /**
+     * PLAN-002 本地出块抑制：若已知对端链高度显著高于本节点（落后于更长链），
+     * 暂停本地出块让更长链先传播收敛，避免双链分叉持续。
+     * 单节点/无对端（provider 无值）时不抑制。
+     */
+    private boolean isBehindPeerChain() {
+        org.nexus.sync.SyncManager sm = syncManagerProvider == null ? null : syncManagerProvider.getIfAvailable();
+        if (sm == null) {
+            return false;
+        }
+        long peerHeight = sm.getKnownMaxPeerHeight();
+        if (peerHeight <= 0) {
+            return false;
+        }
+        long localHeight = localBestHeight();
+        // 对端显著领先（≥ 阈值）才抑制，避免瞬时抖动误停出块
+        return peerHeight > localHeight + BEHIND_THRESHOLD;
+    }
+
+    /** 对端领先多少块才抑制本地出块（防瞬时抖动）。 */
+    private static final long BEHIND_THRESHOLD = 2;
+
+    /** 本节点当前最佳高度（stateDB.getBestBlock）。 */
+    private long localBestHeight() {
+        try {
+            if (stateDB != null) {
+                org.nexus.core.Block best = stateDB.getBestBlock();
+                return best == null ? 0 : best.nHeight;
+            }
+        } catch (Exception e) {
+            logger.debug("localBestHeight unavailable: {}", e.getMessage());
+        }
+        return 0;
     }
 
     /**
@@ -65,6 +113,11 @@ public class PosMiningScheduler {
             return;
         }
         if (!consensusConfig.isEnableMining()) {
+            return;
+        }
+        // PLAN-002 本地出块抑制：若已知对端链更长（本节点落后），暂停本地出块，
+        // 让更长链先传播收敛（避免双链分叉持续）；跟随由同步层（receiveBlocks）完成。
+        if (isBehindPeerChain()) {
             return;
         }
         try {

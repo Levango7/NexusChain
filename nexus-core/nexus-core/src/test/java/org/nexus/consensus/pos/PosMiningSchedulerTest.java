@@ -4,6 +4,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.nexus.consensus.pow.ConsensusConfig;
 import org.nexus.core.Block;
+import org.nexus.db.StateDB;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -21,7 +22,21 @@ public class PosMiningSchedulerTest {
     public void setUp() {
         posConsensus = mock(PosConsensus.class);
         consensusConfig = mock(ConsensusConfig.class);
-        scheduler = new PosMiningScheduler(posConsensus, consensusConfig);
+        scheduler = new PosMiningScheduler(posConsensus, consensusConfig,
+                new org.springframework.beans.factory.ObjectProvider<>() {
+                    @Override public org.nexus.sync.SyncManager getObject(Object... args) { return null; }
+                    @Override public org.nexus.sync.SyncManager getObject() { return null; }
+                    @Override public org.nexus.sync.SyncManager getIfAvailable() { return null; }
+                    @Override public org.nexus.sync.SyncManager getIfUnique() { return null; }
+                });
+        // 注入 mock StateDB（构造签名变更后字段注入）
+        try {
+            java.lang.reflect.Field f = PosMiningScheduler.class.getDeclaredField("stateDB");
+            f.setAccessible(true);
+            f.set(scheduler, mock(StateDB.class));
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 
     @Test
