@@ -33,6 +33,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -209,19 +210,47 @@ public class BridgeService {
                                 " < " + minValidators);
             }
 
-            // 构造铸造 payload（包含验证人签名）
-            Map<String, Object> payloadMap = new LinkedHashMap<>();
-            payloadMap.put("bridgeTxId", bridgeTxId);
-            payloadMap.put("sourceChain", sourceChain);
-            payloadMap.put("recipient", recipient);
-            payloadMap.put("amount", amount);
-            payloadMap.put("validatorSignatures", new ArrayList<>(validatorSignatures));
-            payloadMap.put("action", "MINT");
-            byte[] payload = JsonUtils.toJson(payloadMap).getBytes(StandardCharsets.UTF_8);
+            // PLAN-004 修复：payload 改为二进制格式（对齐 BridgeRule 解析约定）：
+            //   前 8 字节 = timelock 到期时间戳（big-endian long）
+            //   第 9 字节 = 签名数量 N
+            //   后续 N × 64 字节 = 验证人签名（Ed25519）
+            // 原 JSON payload（JsonUtils.toJson）与 BridgeRule 二进制解析不匹配，
+            // 导致链上校验必失败（"timelock has not expired"/解析错乱）。
+            long timelockExpiry = System.currentTimeMillis() / 1000 + timelockDuration;
+            ByteBuffer payloadBuf = ByteBuffer.allocate(
+                    8 + 1 + validatorSignatures.size() * Transaction.SIGNATURE_SIZE);
+            payloadBuf.putLong(timelockExpiry);
+            payloadBuf.put((byte) validatorSignatures.size());
+            for (String sigHex : validatorSignatures) {
+                byte[] sig = Hex.decodeHex(sigHex.toCharArray());
+                if (sig.length != Transaction.SIGNATURE_SIZE) {
+                    return APIResult.newFailResult(APIResult.FAIL,
+                            "invalid validator signature length: " + sig.length
+                                    + " expected " + Transaction.SIGNATURE_SIZE);
+                }
+                payloadBuf.put(sig);
+            }
+            byte[] payload = payloadBuf.array();
 
-            // BRIDGE_MINT 交易的 from/to 为占位，实际由验证人共识填充
+            // PLAN-004 修复：tx.to 填充真实 recipient（processBridgeMint 用
+            // pubKeyHashToHex(tx.to) 作为收款人；原 placeholder 导致收款人丢失）
             byte[] placeholderFrom = new byte[Transaction.PUBLIC_KEY_SIZE];
-            byte[] placeholderTo = new byte[Transaction.PUBLIC_KEY_HASH_SIZE];
+            byte[] recipientHash = new byte[Transaction.PUBLIC_KEY_HASH_SIZE];
+            try {
+                byte[] recipientBytes = Hex.decodeHex(recipient.toCharArray());
+                // recipient 可能是完整 pubkey（64 hex=32B）或 pubkeyHash（40 hex=20B）
+                if (recipientBytes.length == Transaction.PUBLIC_KEY_SIZE) {
+                    recipientHash = RipemdUtility.ripemd160(SHA3Utility.keccak256(recipientBytes));
+                } else if (recipientBytes.length == Transaction.PUBLIC_KEY_HASH_SIZE) {
+                    recipientHash = recipientBytes;
+                } else {
+                    return APIResult.newFailResult(APIResult.FAIL,
+                            "recipient must be pubkey (64 hex) or pubkeyHash (40 hex), got "
+                                    + recipientBytes.length + " bytes");
+                }
+            } catch (Exception e) {
+                return APIResult.newFailResult(APIResult.FAIL, "invalid recipient hex: " + e.getMessage());
+            }
             byte[] emptySig = new byte[Transaction.SIGNATURE_SIZE];
 
             Transaction tx = new Transaction(
@@ -232,7 +261,7 @@ public class BridgeService {
                     DEFAULT_GAS_PRICE,
                     amount,
                     payload,
-                    placeholderTo,
+                    recipientHash,
                     emptySig
             );
 
