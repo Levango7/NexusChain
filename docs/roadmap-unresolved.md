@@ -43,10 +43,10 @@
 
 | # | 位置 | 内容 | 建议 |
 |---|---|---|---|
-| 12 | DefaultOnChainExecutionChannel | sandbox SIMULATED- 假哈希 | 沙箱语义，生产禁用需文档化 |
-| 13 | DefaultRefundApprovalService | 退款 sandbox 假哈希 | 已 fail-closed 正确，sandbox 模拟可接受 |
-| 14 | Adyen/StripeConnector | 无 key dry-run 模拟 | 需真实 key 验收 |
-| 16 | BridgeService/Channel/PaymentChannel placeholder 零字节地址 | **设计确认 + 半成品**：注释为"验证人共识/签名层填充"，但 Transaction 无 setter、签名层不填充 → 填充闭环未实现。改动风险高（无测试基准），建议后续专项（跨链/通道交易签名链路） |
+| ~~12~~ | ~~DefaultOnChainExecutionChannel~~ | ✅ **已文档化**：`docs/ops/sandbox-semantics.md` 明确 SIMULATED- 触发条件、标记与生产红线（skip-confirmation 必须 false） |
+| ~~13~~ | ~~DefaultRefundApprovalService~~ | ✅ **已文档化**：同上（依赖 #12 skip-confirmation=false，生产未上链退款走 FAILED） |
+| ~~14~~ | ~~Adyen/StripeConnector~~ | ✅ **已文档化**：`pi_dryrun_`/`adyen_dryrun_` 标记 + 生产必须真实 key（无 key 时 query 返回 FAILED 的行为差异已记录） |
+| 16 | BridgeService/Channel/PaymentChannel placeholder 零字节地址 | **设计确认**：BRIDGE_MINT from 占位是协议语义（MINT 无源地址），BridgeRule 已实现多签/时间锁/to 非空校验闭环。<br>⚠️ **新发现真实缺陷**：payload 格式不一致——BridgeService 构造 JSON payload（`JsonUtils.toJson`），BridgeRule 按二进制解析（前 8 字节时间戳+第 9 字节签名数），校验必失败。需专门修复（两边对齐 + 往返测试），记为 PLAN-004 |
 | ~~17~~ | ~~wallet-service 托管~~ | ✅ **已解决**：托管层级前缀由 CustodyPolicy 配置驱动（替代硬编码 "cold"/"warm" 骨架），类级过时注释清理；`DefaultCustodyServiceTest` 新增 2 用例 |
 
 ## 🟢 产品/工程待办
