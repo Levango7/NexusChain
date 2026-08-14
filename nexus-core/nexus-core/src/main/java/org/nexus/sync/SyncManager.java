@@ -65,8 +65,10 @@ public class SyncManager implements Plugin, ApplicationListener<NewBlockMinedEve
     /**
      * 最终性投票广播器（ADR-030 M_net 挂接点）。
      * 可选注入：未装配时投票消息仅记录日志，不进入 FinalityGadget。
+     * @Lazy 打破循环依赖（FinalityCoordinator→Broadcaster→PeerServer→SyncManager→Broadcaster）
      */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
     private org.nexus.consensus.finality.net.FinalityVoteBroadcaster finalityVoteBroadcaster;
 
     @Autowired
