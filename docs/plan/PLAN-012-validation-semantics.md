@@ -113,3 +113,22 @@ merkle 失败分支加明确日志 + 写入缓存（不再静默），
 4. **失败处理**：状态校验失败回滚拉黑（推荐）vs 告警继续？
 
 请审核并给出决策，通过后按第六节实施。
+
+---
+
+## 实施记录（2026-08-14）
+
+**A-1 止血（已提交 5a6e7fa）**：
+- merkle 状态校验失败明确 WARN 日志（不再静默吞没）
+- 真机实证：B 日志出现 "merkle state validate deferred (sync path): height=1"
+
+**A-1 局限（诚实）**：merkle 失败走 writeBlockToCache（仅 merkle 缓存），
+未走 stateDB.writeBlock 完整写链 → B 的 best 不更新 → 高度认知死锁仍在。
+真正闭环需 A-2 状态重放：PaymentTransactionProcessor.processTransaction
+**无外部调用者**（交易处理链路触发点缺失）——需补"写链→重放交易→更新
+账户状态→merkle 重建校验"完整链路，属 core 状态执行引擎专项改造
+（约 3-4 天），后续实施。
+
+**多节点验证最终结论**：机制层（PLAN-001~010）全部闭环；
+区块状态执行链路（PLAN-011/012）为共识安全核心，需完整实施 A-2 后
+才能真机完全收敛。
