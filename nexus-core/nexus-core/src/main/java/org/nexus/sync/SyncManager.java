@@ -71,6 +71,20 @@ public class SyncManager implements Plugin, ApplicationListener<NewBlockMinedEve
     @org.springframework.context.annotation.Lazy
     private org.nexus.consensus.finality.net.FinalityVoteBroadcaster finalityVoteBroadcaster;
 
+    /**
+     * 验证人注册表（PLAN-001 步骤 2：跨节点验证人同步的落点）。
+     * 收到 validator-set 广播消息时幂等注册对端验证人。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private org.nexus.consensus.pos.ValidatorRegistry validatorRegistry;
+
+    /**
+     * 验证人集合持久化（PLAN-001 步骤 5：广播收到的验证人写共享表）。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private org.nexus.consensus.finality.persistence.ValidatorSetPersistence validatorSetPersistence;
+
     @Autowired
     private CheckPointRule checkPointRule;
 
@@ -178,13 +192,59 @@ public class SyncManager implements Plugin, ApplicationListener<NewBlockMinedEve
             return;
         }
         for (NexusChainOuterClass.Transaction tx : txs.getTransactionsList()) {
+            byte[] payload = tx.getPayload().toByteArray();
+            // PLAN-001：验证人集合广播消息（魔数 0x56）优先分流
+            if (org.nexus.consensus.finality.net.ValidatorSetCodec.isValidatorSetPayload(payload)) {
+                handleValidatorSet(payload);
+                continue;
+            }
             if (tx.getTransactionType() != NexusChainOuterClass.TransactionType.VOTE) {
                 continue;
             }
-            byte[] payload = tx.getPayload().toByteArray();
             if (org.nexus.consensus.finality.net.FinalityVoteP2PCodec.isVotePayload(payload)) {
                 finalityVoteBroadcaster.onVoteReceived(payload);
             }
+        }
+    }
+
+    /**
+     * 处理验证人集合广播（PLAN-001 步骤 2）：幂等注册对端验证人。
+     * 非活跃注册表未装配时跳过（单测/无共识节点）。
+     */
+    private void handleValidatorSet(byte[] payload) {
+        org.nexus.consensus.finality.net.ValidatorSetCodec.ValidatorSetMessage msg =
+                org.nexus.consensus.finality.net.ValidatorSetCodec.decode(payload);
+        if (msg == null || msg.address() == null || msg.address().isEmpty()) {
+            logger.warn("Malformed validator-set message (dropped)");
+            return;
+        }
+        if (validatorRegistry == null) {
+            return;
+        }
+        try {
+            if (msg.isAdd()) {
+                if (msg.publicKey() == null || msg.stakeAmount() == null) {
+                    logger.warn("Validator-set add missing pubkey/stake (dropped): {}", msg.address());
+                    return;
+                }
+                boolean ok = validatorRegistry.register(
+                        msg.address(), msg.publicKey(),
+                        new java.math.BigDecimal(msg.stakeAmount()), 0.1);
+                // PLAN-001 步骤 5：广播收到的验证人也写共享表（落库重放）
+                if (validatorSetPersistence != null) {
+                    validatorSetPersistence.upsert(msg.address(), msg.publicKey(),
+                            new java.math.BigDecimal(msg.stakeAmount()));
+                }
+                logger.info("Validator-set add: address={} registered={} (via P2P)", msg.address(), ok);
+            } else {
+                boolean ok = validatorRegistry.unregister(msg.address());
+                if (validatorSetPersistence != null) {
+                    validatorSetPersistence.remove(msg.address());
+                }
+                logger.info("Validator-set remove: address={} removed={} (via P2P)", msg.address(), ok);
+            }
+        } catch (Exception e) {
+            logger.error("Validator-set apply failed: address={}, error={}", msg.address(), e.getMessage());
         }
     }
 

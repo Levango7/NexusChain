@@ -191,8 +191,8 @@ public class PosConsensusEngine implements PosConsensus {
         }
         long height = parent.nHeight + 1;
 
-        // 2. 选取当前提案者（stake-weighted）
-        Validator selected = proposer.selectProposer(height);
+        // 2. 选取当前提案者（stake-weighted random 或 round-robin，PLAN-001 步骤 4）
+        Validator selected = selectProposerWithStrategy(height);
         if (selected == null) {
             logger.warn("Propose failed: no proposer selected at height {}", height);
             return null;
@@ -359,6 +359,28 @@ public class PosConsensusEngine implements PosConsensus {
      * @return 提案者验证人
      */
     public Validator selectProposer(long height) {
+        return proposer.selectProposer(height);
+    }
+
+    /**
+     * 按配置选择提案者（PLAN-001 步骤 4）：
+     * {@code nexus.consensus.proposer-strategy}：
+     * <ul>
+     *   <li>{@code random}（默认）：权益加权随机——单节点/测试语义</li>
+     *   <li>{@code round-robin}：{@code height % 活跃验证人数} 确定性轮换——
+     *       多节点共享验证人集合时全网对同一高度得出同一 proposer，
+     *       避免多节点同时出块冲突</li>
+     * </ul>
+     */
+    private Validator selectProposerWithStrategy(long height) {
+        String strategy = System.getProperty("nexus.consensus.proposer-strategy", "random");
+        if ("round-robin".equalsIgnoreCase(strategy)) {
+            Validator v = proposer.selectRoundRobinProposer(height);
+            if (v != null) {
+                logger.debug("Round-robin proposer at height {}: {}", height, v.getAddress());
+            }
+            return v;
+        }
         return proposer.selectProposer(height);
     }
 
