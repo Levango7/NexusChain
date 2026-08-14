@@ -171,6 +171,13 @@ public class PeerServer extends NexusChainGrpc.NexusChainImplBase {
             }
             Context ctx = new Context();
             ctx.payload = payload;
+            // P2P 修复（ADR-031 决策 8 附录）：入站合法消息默认登记对端，
+            // 否则单向连接（B bootstrap→A）中 A 不记住 B，broadcast 无对端可发，
+            // 跨节点投票/区块广播无法传播。PING/PONG 等 keep 语义保持不变。
+            Peer inbound = payload.getRemote();
+            if (inbound != null && !peersCache.getBlocked().contains(inbound)) {
+                peersCache.keepPeer(inbound);
+            }
             for (Plugin p : pluginList) {
                 p.onMessage(ctx, this);
                 if (ctx.broken) {
