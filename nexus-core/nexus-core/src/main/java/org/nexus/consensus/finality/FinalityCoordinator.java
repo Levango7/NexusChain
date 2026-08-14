@@ -1,5 +1,6 @@
 package org.nexus.consensus.finality;
 
+import org.nexus.consensus.finality.net.FinalityVoteBroadcaster;
 import org.nexus.consensus.pos.Validator;
 import org.nexus.consensus.pos.ValidatorRegistry;
 import org.nexus.consensus.pos.ValidatorStatus;
@@ -43,6 +44,7 @@ public class FinalityCoordinator {
     private final FinalityGadget gadget;
     private final ValidatorRegistry validatorRegistry;
     private final long epochLength;
+    private final FinalityVoteBroadcaster broadcaster;
     private String selfValidatorAddress;
 
     /**
@@ -53,10 +55,21 @@ public class FinalityCoordinator {
     @Autowired
     public FinalityCoordinator(FinalityGadget gadget,
                                ValidatorRegistry validatorRegistry,
-                               @org.springframework.beans.factory.annotation.Value("${nexus.finality.epoch-length:32}") long epochLength) {
+                               @org.springframework.beans.factory.annotation.Value("${nexus.finality.epoch-length:32}") long epochLength,
+                               @Autowired(required = false) FinalityVoteBroadcaster broadcaster) {
         this.gadget = Objects.requireNonNull(gadget, "gadget must not be null");
         this.validatorRegistry = Objects.requireNonNull(validatorRegistry, "validatorRegistry must not be null");
         this.epochLength = epochLength <= 0 ? 32 : epochLength;
+        this.broadcaster = broadcaster;
+    }
+
+    /**
+     * 兼容构造器（单进程/测试场景：无 P2P 广播器）。
+     */
+    public FinalityCoordinator(FinalityGadget gadget,
+                               ValidatorRegistry validatorRegistry,
+                               long epochLength) {
+        this(gadget, validatorRegistry, epochLength, null);
     }
 
     /**
@@ -112,6 +125,10 @@ public class FinalityCoordinator {
         FinalityRecord record = gadget.submitVote(vote);
         log.info("Finality vote submitted: epoch={}, height={}, validator={}, finalized={}, progress={}%",
                 epoch, height, selfValidatorAddress, record.isFinalized(), record.progressPercent());
+        // 广播投票至 P2P 网络（跨节点汇聚发送侧接线）
+        if (broadcaster != null) {
+            broadcaster.broadcast(vote);
+        }
         return record;
     }
 

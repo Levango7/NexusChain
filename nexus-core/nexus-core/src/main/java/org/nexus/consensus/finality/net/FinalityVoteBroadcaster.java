@@ -1,12 +1,18 @@
 package org.nexus.consensus.finality.net;
 
+import com.google.protobuf.ByteString;
 import org.nexus.consensus.finality.FinalityGadget;
 import org.nexus.consensus.finality.Vote;
+import org.nexus.p2p.NexusChainOuterClass;
+import org.nexus.p2p.PeerServer;
+import org.nexus.sync.Utils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.ApplicationEvent;
 import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.context.event.EventListener;
+import org.springframework.stereotype.Component;
 
 import java.util.List;
 import java.util.Objects;
@@ -27,17 +33,28 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * 见 {@code docs/adr/ADR-031-finality-p2p-integration.md}（下一步 ADR）。
  * 语义已冻结：载荷格式一致，后续仅替换投递机制。</p>
  */
+@Component
+@ConditionalOnProperty(name = "nexus.consensus.mode", havingValue = "pos")
 public class FinalityVoteBroadcaster {
 
     private static final Logger log = LoggerFactory.getLogger(FinalityVoteBroadcaster.class);
 
     private final FinalityGadget gadget;
     private final ApplicationEventPublisher eventPublisher;
+    private final PeerServer peerServer;  // P2P 发送侧（可选；单进程/测试为 null）
     private final List<VoteListener> externalListeners = new CopyOnWriteArrayList<>();
 
     public FinalityVoteBroadcaster(FinalityGadget gadget, ApplicationEventPublisher eventPublisher) {
+        this(gadget, eventPublisher, null);
+    }
+
+    @Autowired
+    public FinalityVoteBroadcaster(FinalityGadget gadget,
+                                   ApplicationEventPublisher eventPublisher,
+                                   @Autowired(required = false) PeerServer peerServer) {
         this.gadget = Objects.requireNonNull(gadget, "gadget must not be null");
         this.eventPublisher = Objects.requireNonNull(eventPublisher, "eventPublisher must not be null");
+        this.peerServer = peerServer;
     }
 
     /**
@@ -49,13 +66,39 @@ public class FinalityVoteBroadcaster {
                 vote.getEpoch(), vote.getValidatorAddress(), payload.length);
         // 事件发布（节点内订阅者可收到）
         eventPublisher.publishEvent(new FinalityVoteBroadcastEvent(vote, payload));
-        // 外部监听者（未来将桥接到 P2P 发送侧）
+        // P2P 发送侧：构造 TRANSACTIONS 消息（VOTE 交易 + 载荷）广播给对端
+        sendOverP2P(vote, payload);
+        // 外部监听者
         for (VoteListener l : externalListeners) {
             try {
                 l.onOutgoingVote(vote, payload);
             } catch (Exception e) {
                 log.warn("Vote listener failed during broadcast: {}", e.getMessage());
             }
+        }
+    }
+
+    /**
+     * P2P 发送侧（跨节点汇聚关键件）：把投票封装为 {@code TransactionType.VOTE}
+     * 交易 + payload 载荷，经 {@link PeerServer#broadcast} 广播给对端节点。
+     */
+    private void sendOverP2P(Vote vote, byte[] payload) {
+        if (peerServer == null) {
+            return;  // 单进程/测试：无 P2P，静默跳过
+        }
+        try {
+            NexusChainOuterClass.Transaction tx = NexusChainOuterClass.Transaction.newBuilder()
+                    .setTransactionType(NexusChainOuterClass.TransactionType.VOTE)
+                    .setPayload(ByteString.copyFrom(payload))
+                    .build();
+            NexusChainOuterClass.Transactions msg = NexusChainOuterClass.Transactions.newBuilder()
+                    .addTransactions(tx)
+                    .build();
+            peerServer.broadcast(msg);
+            log.info("Finality vote broadcast over P2P: epoch={}, validator={}",
+                    vote.getEpoch(), vote.getValidatorAddress());
+        } catch (Exception e) {
+            log.warn("P2P vote broadcast failed: {}", e.getMessage());
         }
     }
 

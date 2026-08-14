@@ -126,6 +126,15 @@ public class Payload {
         return (NexusChainOuterClass.Transaction) body;
     }
 
+    /**
+     * 获取复数交易容器（TRANSACTIONS code 解析产物）。
+     * 与 {@link #getTransaction()}（单数）区分——SyncManager.onTransactions
+     * 处理广播容器时需用本方法，避免 ClassCastException（ADR-031 决策 8 附录）。
+     */
+    public NexusChainOuterClass.Transactions getTransactions() {
+        return (NexusChainOuterClass.Transactions) body;
+    }
+
     public NexusChainOuterClass.TreeNodes getTreeNodes() {
         return (NexusChainOuterClass.TreeNodes) body;
     }
