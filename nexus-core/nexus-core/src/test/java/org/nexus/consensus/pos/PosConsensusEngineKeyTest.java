@@ -7,9 +7,9 @@ import org.nexus.keystore.crypto.KeyPair;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * #20 专项：验证人固定密钥（nexus.consensus.validator-private-key）。
+ * #20/PLAN-008 专项：验证人固定密钥（nexus.consensus.validator-private-key）。
  *
- * <p>验证：配置私钥后引擎地址稳定（重启不变），可预生成验证人加入多节点拓扑；
+ * <p>验证：Spring 注入配置私钥后引擎地址稳定（重启不变），可预生成验证人加入多节点拓扑；
  * 未配置时回退随机生成（默认行为）。</p>
  */
 class PosConsensusEngineKeyTest {
@@ -22,12 +22,20 @@ class PosConsensusEngineKeyTest {
         System.clearProperty("nexus.consensus.validator-private-key");
     }
 
-    @Test
-    void configuredPrivateKeyYieldsStablePublicKey() {
-        System.setProperty("nexus.consensus.validator-private-key", FIXED_PRIV_HEX);
+    /** 通过反射注入配置密钥字段（模拟 Spring @Value 注入）。 */
+    private void injectConfiguredKey(PosConsensusEngine engine, String hex) throws Exception {
+        java.lang.reflect.Field f = PosConsensusEngine.class.getDeclaredField("configuredValidatorPrivateKeyHex");
+        f.setAccessible(true);
+        f.set(engine, hex);
+        engine.applyConfiguredKey();  // 触发 @PostConstruct 等价逻辑
+    }
 
+    @Test
+    void configuredPrivateKeyYieldsStablePublicKey() throws Exception {
         PosConsensusEngine e1 = new PosConsensusEngine();
         PosConsensusEngine e2 = new PosConsensusEngine();  // 模拟重启
+        injectConfiguredKey(e1, FIXED_PRIV_HEX);
+        injectConfiguredKey(e2, FIXED_PRIV_HEX);
 
         KeyPair k1 = e1.getSigningKeyPair();
         KeyPair k2 = e2.getSigningKeyPair();
@@ -38,9 +46,7 @@ class PosConsensusEngineKeyTest {
     }
 
     @Test
-    void noConfiguredKeyFallsBackToRandom() {
-        System.clearProperty("nexus.consensus.validator-private-key");
-
+    void noConfiguredKeyFallsBackToRandom() throws Exception {
         PosConsensusEngine e1 = new PosConsensusEngine();
         PosConsensusEngine e2 = new PosConsensusEngine();
 
@@ -52,10 +58,9 @@ class PosConsensusEngineKeyTest {
     }
 
     @Test
-    void invalidConfiguredKeyFallsBackToRandom() {
-        System.setProperty("nexus.consensus.validator-private-key", "zz-not-hex");
-
+    void invalidConfiguredKeyFallsBackToRandom() throws Exception {
         PosConsensusEngine e = new PosConsensusEngine();
-        assertNotNull(e.getSigningKeyPair(), "非法 hex → 回退随机，不崩溃");
+        injectConfiguredKey(e, "zz-not-hex");  // 非法 hex → 保持随机，不崩溃
+        assertNotNull(e.getSigningKeyPair());
     }
 }
