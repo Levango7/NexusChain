@@ -8,6 +8,9 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.junit.jupiter.SpringExtension;
 import org.nexus.common.Block;
 import org.nexus.common.Header;
+
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import org.nexus.consortium.service.BlockRepositoryService;
 import org.nexus.util.BigEndian;
 
@@ -28,11 +31,13 @@ public class BlockRepositoryTests {
     private BlockRepositoryService blockStore;
 
     private void assertHeader(Header header) {
-        assert header.getVersion() == 1;
-        assert Arrays.equals(header.getHash().getBytes(), BigEndian.encodeInt64(header.getHeight()));
-        assert Arrays.equals(header.getHashPrev().getBytes(), header.getHeight() == 0 ? BYTES : BigEndian.encodeInt64(header.getHeight() - 1));
-        assert Arrays.equals(header.getMerkleRoot().getBytes(), BYTES);
-        assert Arrays.equals(header.getPayload().getBytes(), BYTES);
+        // assert → JUnit assertEquals：默认 assert 无详情且依赖 -ea，改进为可诊断断言
+        assertEquals(1, header.getVersion());
+        assertArrayEquals(BigEndian.encodeInt64(header.getHeight()), header.getHash().getBytes());
+        assertArrayEquals(header.getHeight() == 0 ? BYTES : BigEndian.encodeInt64(header.getHeight() - 1),
+                header.getHashPrev().getBytes());
+        assertArrayEquals(BYTES, header.getMerkleRoot().getBytes());
+        assertArrayEquals(BYTES, header.getPayload().getBytes());
     }
 
     private void assertBody(Block block) {
@@ -68,7 +73,7 @@ public class BlockRepositoryTests {
     @Test
     public void testGetBestHeader() {
         Header best = blockStore.getBestHeader();
-        assert best.getHeight() == 9L;
+        assertEquals(9L, best.getHeight());
         assertHeader(best);
     }
 
