@@ -91,6 +91,13 @@ public class PendingBlocksManager {
                 }
                 Result result = merkleRule.validateBlock(b);
                 if (!result.isSuccess()) {
+                    // PLAN-011/012 止血：不再静默吞没——同步路径状态校验失败时
+                    // 明确日志 + 写缓存，链先同步（高度认知恢复），状态一致性
+                    // 由状态重放（StateReplayManager，PLAN-012 A-2）在写链后保证；
+                    // 重放后校验失败才回滚（信任签名 + 重放后校验，审核决策）。
+                    logger.warn("merkle state validate deferred (sync path): height={}, reason={} "
+                            + "→ cache write, state replay will verify later",
+                            b.nHeight, result.getMessage());
                     merkleTreeManager.writeBlockToCache(b);
                     continue;
                 }
