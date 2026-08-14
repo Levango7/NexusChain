@@ -86,6 +86,29 @@ public class PosMiningScheduler {
     /** 对端领先多少块才抑制本地出块（防瞬时抖动）。 */
     private static final long BEHIND_THRESHOLD = 2;
 
+    /**
+     * 开始出块所需的最小活跃验证人数（PLAN-010）。
+     * 默认 1（单节点不受影响）；多节点集群显式设 2，
+     * 等待验证人广播互达后再出块，消除同步窗口单验证人历史块残留。
+     */
+    @org.springframework.beans.factory.annotation.Value("${nexus.consensus.min-validators-to-mine:1}")
+    private int minValidatorsToMine;
+
+    /** 当前活跃验证人数量（ValidatorRegistry，可选注入）。 */
+    private int activeValidatorCount() {
+        if (validatorRegistry == null) return 1;  // 无注册表（非 PoS 装配）→ 视为满足
+        try {
+            var vals = validatorRegistry.getActiveValidators();
+            return vals == null ? 0 : vals.size();
+        } catch (Exception e) {
+            return 1;
+        }
+    }
+
+    /** 验证人注册表（PLAN-010 活跃验证人数来源）。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private org.nexus.consensus.pos.ValidatorRegistry validatorRegistry;
+
     /** 本节点当前最佳高度（stateDB.getBestBlock）。 */
     private long localBestHeight() {
         try {
@@ -118,6 +141,15 @@ public class PosMiningScheduler {
         // PLAN-002 本地出块抑制：若已知对端链更长（本节点落后），暂停本地出块，
         // 让更长链先传播收敛（避免双链分叉持续）；跟随由同步层（receiveBlocks）完成。
         if (isBehindPeerChain()) {
+            return;
+        }
+        // PLAN-010 最小验证人集合门槛：活跃验证人未达配置下限时不出块。
+        // 多节点集群：A/B 验证人广播互达（集合 ≥ min-validators-to-mine=2）前
+        // 双方都暂停出块 → 避免同步窗口前的单验证人历史块残留（真机实证
+        // 高度 16/17 双块竞态根因）。单节点场景默认 min=1 不受影响。
+        if (activeValidatorCount() < minValidatorsToMine) {
+            logger.debug("Mining paused: active validators {} < required {}",
+                    activeValidatorCount(), minValidatorsToMine);
             return;
         }
         try {
