@@ -46,7 +46,7 @@
 | 12 | DefaultOnChainExecutionChannel | sandbox SIMULATED- 假哈希 | 沙箱语义，生产禁用需文档化 |
 | 13 | DefaultRefundApprovalService | 退款 sandbox 假哈希 | 已 fail-closed 正确，sandbox 模拟可接受 |
 | 14 | Adyen/StripeConnector | 无 key dry-run 模拟 | 需真实 key 验收 |
-| 16 | BridgeService/Channel/PaymentChannel | placeholder 零字节地址 | 需真实签名路径接入 |
+| 16 | BridgeService/Channel/PaymentChannel placeholder 零字节地址 | **设计确认 + 半成品**：注释为"验证人共识/签名层填充"，但 Transaction 无 setter、签名层不填充 → 填充闭环未实现。改动风险高（无测试基准），建议后续专项（跨链/通道交易签名链路） |
 | ~~17~~ | ~~wallet-service 托管~~ | ✅ **已解决**：托管层级前缀由 CustodyPolicy 配置驱动（替代硬编码 "cold"/"warm" 骨架），类级过时注释清理；`DefaultCustodyServiceTest` 新增 2 用例 |
 
 ## 🟢 产品/工程待办
