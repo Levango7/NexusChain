@@ -93,6 +93,18 @@ public class StateDB implements ApplicationListener<AccountUpdatedEvent> {
     @Autowired
     private Block genesis;
 
+    /**
+     * 共识模式（PLAN-005）：pos 模式下 leastConfirms 按活跃验证人数计算，
+     * 而非 DPoS proposer 时间表（后者在 PoS 自举单验证人场景导致 confirms
+     * 永不达标 → 区块不落 PG → 多节点无法共享链状态）。
+     */
+    @org.springframework.beans.factory.annotation.Value("${nexus.consensus.mode:pow}")
+    private String consensusMode;
+
+    /** 验证人注册表（PoS leastConfirms 计算来源；可选注入，单测/无共识节点为 null）。 */
+    @Autowired(required = false)
+    private org.nexus.consensus.pos.ValidatorRegistry validatorRegistry;
+
     public ValidatorStateFactory getValidatorStateFactory() {
         return validatorStateFactory;
     }
@@ -468,6 +480,29 @@ public class StateDB implements ApplicationListener<AccountUpdatedEvent> {
         return hasPayloadUnsafe(b.hashPrevBlock, type, payload);
     }
 
+    /**
+     * 计算区块确认所需的最小确认数（PLAN-005）：
+     * <ul>
+     *   <li><b>pos 模式</b>：按活跃验证人数 × 2/3，至少 1——自举单验证人即可确认，
+     *       解决 PoS 下区块永不落 PG（共享链状态失效）问题</li>
+     *   <li><b>pow/dpos 模式</b>：按 DPoS proposer 时间表（原语义）</li>
+     * </ul>
+     */
+    private int computeLeastConfirms(Block block) {
+        if ("pos".equalsIgnoreCase(consensusMode)) {
+            int active = 0;
+            if (validatorRegistry != null) {
+                java.util.List<org.nexus.consensus.pos.Validator> vals = validatorRegistry.getActiveValidators();
+                if (vals != null) {
+                    active = vals.size();
+                }
+            }
+            return Math.max(1, (int) Math.ceil(active * 2.0 / 3));
+        }
+        return (int) Math.ceil(
+                proposersFactory.getProposers(getBlock(block.hashPrevBlock)).size() * 2.0 / 3);
+    }
+
     public Block getLastConfirmed() {
         return latestConfirmed;
     }
@@ -500,12 +535,7 @@ public class StateDB implements ApplicationListener<AccountUpdatedEvent> {
                 transactionIndex.get(block.getHashHexString()).add(t.getHashHexString());
             });
 
-            leastConfirms.put(block.getHashHexString(),
-                    (int) Math.ceil(
-                            proposersFactory.getProposers(getBlock(block.hashPrevBlock)).size()
-                                    * 2.0 / 3
-                    )
-            );
+            leastConfirms.put(block.getHashHexString(), computeLeastConfirms(block));
             List<Block> ancestors = blocksCache.getAncestors(block);
             for (Block b : ancestors) {
                 if (!confirms.containsKey(b.getHashHexString())) {
