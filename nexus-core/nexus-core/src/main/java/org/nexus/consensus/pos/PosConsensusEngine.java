@@ -117,6 +117,13 @@ public class PosConsensusEngine implements PosConsensus {
     @Autowired
     private ApplicationContext applicationContext;
 
+    /**
+     * 提案者选择策略（PLAN-001 步骤 4）：{@code random}（默认）或 {@code round-robin}。
+     * Spring 配置优先；兼容 `-Dnexus.consensus.proposer-strategy` JVM 参数（真机传递）。
+     */
+    @org.springframework.beans.factory.annotation.Value("${nexus.consensus.proposer-strategy:random}")
+    private String proposerStrategy;
+
     /** 节点签名密钥对（Ed25519），用于对区块头签名 */
     private final KeyPair signingKeyPair;
 
@@ -373,7 +380,10 @@ public class PosConsensusEngine implements PosConsensus {
      * </ul>
      */
     private Validator selectProposerWithStrategy(long height) {
-        String strategy = System.getProperty("nexus.consensus.proposer-strategy", "random");
+        // Spring 配置优先，-D JVM 参数兜底（真机 `-Dnexus.consensus.proposer-strategy=` 传递）
+        String strategy = proposerStrategy != null && !proposerStrategy.isBlank()
+                ? proposerStrategy
+                : System.getProperty("nexus.consensus.proposer-strategy", "random");
         if ("round-robin".equalsIgnoreCase(strategy)) {
             Validator v = proposer.selectRoundRobinProposer(height);
             if (v != null) {

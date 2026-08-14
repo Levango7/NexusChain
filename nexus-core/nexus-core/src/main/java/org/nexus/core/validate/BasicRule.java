@@ -64,6 +64,18 @@ public class BasicRule implements BlockRule, TransactionRule {
     @Value("${p2p.max-blocks-per-transfer}")
     private int orphanHeightsRange;
 
+    /**
+     * 共识模式（PLAN-001 缺口 B）：pow/dpos 走 PoW 难度校验；
+     * pos 模式跳过（PoS 区块由引擎 Ed25519 验签，无 nBits 难度）。
+     */
+    @Value("${nexus.consensus.mode:pow}")
+    private String consensusMode;
+
+    /** 是否为 PoS 共识模式。 */
+    private boolean isPosMode() {
+        return "pos".equalsIgnoreCase(consensusMode);
+    }
+
     @Override
     public Result validateBlock(Block block) {
         Block best = stateDB.getBestBlock();
@@ -97,8 +109,10 @@ public class BasicRule implements BlockRule, TransactionRule {
         if (block.nVersion != genesis.nVersion) {
             return Result.Error("version check fail");
         }
-        // pow 校验
-        if (BigEndian.compareUint256(Block.calculatePOWHash(block), block.nBits) >= 0) {
+        // PoW 难度校验（PLAN-001 缺口 B 适配：仅 pow/pow 模式执行；
+        // PoS 区块由 PosConsensusEngine.validate 做 Ed25519 签名校验，
+        // 无 nBits 难度值，此处跳过避免误拒跨节点传播的合法 PoS 块）
+        if (!isPosMode() && BigEndian.compareUint256(Block.calculatePOWHash(block), block.nBits) >= 0) {
             return Result.Error("pow validate fail");
         }
         for (Transaction tx : block.body) {
