@@ -47,7 +47,7 @@
 | 13 | DefaultRefundApprovalService | 退款 sandbox 假哈希 | 已 fail-closed 正确，sandbox 模拟可接受 |
 | 14 | Adyen/StripeConnector | 无 key dry-run 模拟 | 需真实 key 验收 |
 | 16 | BridgeService/Channel/PaymentChannel | placeholder 零字节地址 | 需真实签名路径接入 |
-| 17 | wallet-service 托管 | 冷热托管模拟 + rebalance 假哈希 4 处 | 已 fail-closed，托管真实化待做 |
+| ~~17~~ | ~~wallet-service 托管~~ | ✅ **已解决**：托管层级前缀由 CustodyPolicy 配置驱动（替代硬编码 "cold"/"warm" 骨架），类级过时注释清理；`DefaultCustodyServiceTest` 新增 2 用例 |
 
 ## 🟢 产品/工程待办
 

@@ -482,6 +482,31 @@ class DefaultCustodyServiceTest {
     }
 
     @Test
+    void custoryTier_configuredPrefixOverridesDefault() {
+        // #17 真实化：前缀由 CustodyPolicy 配置驱动（替代硬编码 "cold"/"warm"）
+        policy.setColdWalletPrefix("vault-cold");
+        policy.setWarmWalletPrefix("vault-warm");
+
+        assertEquals(WalletTier.COLD.name(), service.getCustodyTier("vault-cold-1"));
+        assertEquals(WalletTier.WARM.name(), service.getCustodyTier("vault-warm-1"));
+        // 旧前缀不再命中
+        assertEquals(WalletTier.HOT.name(), service.getCustodyTier("cold-wallet-1"));
+        assertEquals(WalletTier.HOT.name(), service.getCustodyTier("warm-vault-1"));
+        // isColdCustody 同步配置驱动
+        assertTrue(service.isColdCustody("vault-cold-xyz"));
+        assertFalse(service.isColdCustody("cold-wallet-1"));
+    }
+
+    @Test
+    void custoryTier_nullPolicyKeepsDefaults() {
+        // 未注入 CustodyPolicy（null）时回退默认 cold/warm 前缀
+        DefaultCustodyService svc = new DefaultCustodyService(
+                provider(null), provider(approvalService), custodyBalanceRepository, provider(realChainClient()));
+        assertEquals(WalletTier.COLD.name(), svc.getCustodyTier("cold-wallet-1"));
+        assertTrue(svc.isColdCustody("COLD-STORAGE"));
+    }
+
+    @Test
     void getCustodyTier_nullReturnsHot() {
         assertEquals(WalletTier.HOT.name(), service.getCustodyTier(null));
     }
