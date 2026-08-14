@@ -124,7 +124,33 @@ public class PosConsensusEngine implements PosConsensus {
     private final long blockIntervalSeconds;
 
     public PosConsensusEngine() {
-        this(KeyPair.generateEd25519KeyPair(), DEFAULT_BLOCK_INTERVAL_SECONDS);
+        this(loadConfiguredOrRandomKeyPair(), DEFAULT_BLOCK_INTERVAL_SECONDS);
+    }
+
+    /**
+     * 从配置加载或生成节点签名密钥（#20：生产固定密钥，多节点可预生成验证人）。
+     *
+     * <p>配置项 {@code nexus.consensus.validator-private-key}（Ed25519 私钥 hex，
+     * 32 字节）——提供时用配置密钥（节点重启后地址稳定，可预先注册验证人并
+     * 加入多节点拓扑）；未配置时随机生成（开发/测试默认行为）。</p>
+     */
+    private static KeyPair loadConfiguredOrRandomKeyPair() {
+        String configured = System.getProperty("nexus.consensus.validator-private-key");
+        if (configured == null || configured.isEmpty()) {
+            return KeyPair.generateEd25519KeyPair();
+        }
+        try {
+            byte[] privateKey = org.apache.commons.codec.binary.Hex.decodeHex(configured);
+            // Ed25519 公钥 = 私钥标量 × 基点（BC Ed25519PrivateKeyParameters.generatePublicKey）
+            org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters bcPriv =
+                    new org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters(privateKey, 0);
+            byte[] publicKey = bcPriv.generatePublicKey().getEncoded();
+            return new KeyPair(publicKey, privateKey);
+        } catch (Exception e) {
+            org.slf4j.LoggerFactory.getLogger(PosConsensusEngine.class)
+                    .warn("validator-private-key parse failed, falling back to random: {}", e.getMessage());
+            return KeyPair.generateEd25519KeyPair();
+        }
     }
 
     public PosConsensusEngine(KeyPair signingKeyPair, long blockIntervalSeconds) {
