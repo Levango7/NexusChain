@@ -103,10 +103,12 @@ class ProposalAndVoteEntityTest {
 
     @Test
     void proposal_typeEnum_shouldContainAllVariants() {
-        assertEquals(3, Proposal.Type.values().length);
+        // PLAN-001 治理轴：新增 VALIDATOR_SET_CHANGE，共 4 个变体
+        assertEquals(4, Proposal.Type.values().length);
         assertEquals(Proposal.Type.PARAMETER_CHANGE, Proposal.Type.valueOf("PARAMETER_CHANGE"));
         assertEquals(Proposal.Type.SOFTWARE_UPGRADE, Proposal.Type.valueOf("SOFTWARE_UPGRADE"));
         assertEquals(Proposal.Type.TREASURY_SPEND, Proposal.Type.valueOf("TREASURY_SPEND"));
+        assertEquals(Proposal.Type.VALIDATOR_SET_CHANGE, Proposal.Type.valueOf("VALIDATOR_SET_CHANGE"));
     }
 
     @Test
