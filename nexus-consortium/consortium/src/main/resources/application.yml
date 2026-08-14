@@ -17,7 +17,7 @@ spring:
 consortium:
   consensus:
     name: 'poa'
-    genesis: 'genesis/nexus-genesis-generator-test.jsonc'
+    genesis: 'genesis/conpay-genesis-generator-test.jsonc'
     block-interval: '30'
     enable-mining: 'true'
     miner-coin-base: '1JWhUiZCWps56uZckAvzxy2ex6VGhrMXdD'

@@ -26,6 +26,9 @@ dependencies {
     implementation 'com.fasterxml.jackson.dataformat:jackson-dataformat-properties'
 
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    // 测试环境用 H2 内存库（生产走 Postgres；占位 datasource 导致 JPA 无法确定 Dialect，
+    // 测试上下文加载失败——基线环境问题修复）
+    testImplementation 'com.h2database:h2'
 
 
 
