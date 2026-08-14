@@ -55,7 +55,7 @@
 |---|---|---|
 | 18 | ChainConnector/ConsortiumConnector:210 | 退款方向策略未定 |
 | 19 | DefaultSettlementService:38 | 商户费率（per-merchant FeeSchedule）未实现 |
-| 20 | ValidatorNodeBootstrapper | 引擎密钥仍随机（生产需 keystore 加载） |
+| ~~20~~ | ~~ValidatorNodeBootstrapper~~ | ✅ **已解决**：引擎支持 `nexus.consensus.validator-private-key` 配置固定密钥（`PosConsensusEngineKeyTest` 3 用例） |
 
 ## 🔵 测试/验证缺口
 
