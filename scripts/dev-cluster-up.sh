@@ -21,7 +21,7 @@ docker exec nexus-pg psql -U nexus -d nexuschain -c \
 
 echo "[2/3] 启动 node-A (19585)..."
 "$GRADLE_BIN" :nexus-core:nexus-core:run \
-  --args="--spring.profiles.active=local --server.port=19585 --p2p.address=nexus://localhost:9235 --p2p.enable-discovery=true --nexus.cache-dir=./data-a --nexus.consensus.proposer-strategy=round-robin --nexus.consensus.validator-private-key=$PRIVA" \
+  --args="--spring.profiles.active=local --server.port=19585 --p2p.address=nexus://localhost:9235 --p2p.enable-discovery=true --nexus.cache-dir=./data-a --nexus.consensus.proposer-strategy=round-robin --nexus.consensus.validator-private-key=$PRIVA --nexus.consensus.min-validators-to-mine=2" \
   --console=plain > "$LOG_DIR/nodeA.log" 2>&1 &
 
 echo "[2/3] 启动 node-B (19586, bootstrap→A)..."
@@ -35,7 +35,7 @@ if [ -z "$PEER_A" ]; then echo "❌ node-A P2P 地址未就绪"; exit 1; fi
 echo "   PEER_A=nexus://$PEER_A"
 
 "$GRADLE_BIN" :nexus-core:nexus-core:run \
-  --args="--spring.profiles.active=local --server.port=19586 --p2p.address=nexus://localhost:9236 --p2p.bootstraps=nexus://$PEER_A --p2p.enable-discovery=true --nexus.cache-dir=./data-b --nexus.consensus.proposer-strategy=round-robin --nexus.consensus.validator-private-key=$PRIVB" \
+  --args="--spring.profiles.active=local --server.port=19586 --p2p.address=nexus://localhost:9236 --p2p.bootstraps=nexus://$PEER_A --p2p.enable-discovery=true --nexus.cache-dir=./data-b --nexus.consensus.proposer-strategy=round-robin --nexus.consensus.validator-private-key=$PRIVB --nexus.consensus.min-validators-to-mine=2" \
   --console=plain > "$LOG_DIR/nodeB.log" 2>&1 &
 
 echo "[3/3] 等待双节点就绪..."
