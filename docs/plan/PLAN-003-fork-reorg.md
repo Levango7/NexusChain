@@ -194,3 +194,22 @@ recorded as PLAN-007。
 **多节点共识机制层全部闭环**：验证人同步(001) → 出块抑制(002) →
 分叉重组(003) → bridge(004) → 落库(005) → 启动继承(006) →
 单proposer(007) → 密钥注入(008) → 广播重发+PG兼容(009)。
+
+## PLAN-011 区块采纳高度同步（2026-08-14，根因定位）
+
+**现象**：B 收到 A 的块 1（blocks received 1→1）写链**静默失败**
+（无 success 无 error 日志），getBestBlock 停 genesis → 高度认知不一致死锁。
+
+**根因**（代码定位）：PendingBlocksManager 对接收块做完整状态 merkle 校验
+（merkleRule.validateBlock → validateMerkle 基于本地账户状态）——B 状态是
+genesis 初始态、未执行 A 链交易 → merkle state 不一致 → 静默
+writeBlockToCache + continue（**该分支无日志，掩盖失败**）。
+
+**本质**：区块验证语义架构问题——
+- 验证者（出块方）：完整状态校验 ✓
+- 同步者（接收方）：应轻校验（结构/签名）→ 写链 → 状态重放后再校验
+当前同步路径复用完整校验 → 跨节点同步必失败。
+
+**修复方向（PLAN-012 架构级）**：PendingBlocksManager 接收路径拆分为
+"轻校验（BasicRule/ConsensusRule）+ 写链 + 状态重放"，merkle 状态校验
+移至链确认后执行；或同步节点跳过状态校验（信任对端签名+后续状态校验）。
