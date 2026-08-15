@@ -1,4 +1,5 @@
-// ZK Groth16 真实验证服务（方案 C：全链路真实，Rust arkworks + tonic gRPC）
+// ZK Groth16 真实验证服务（方案 C：全链路真实，Rust arkworks）
+// gRPC (50061) + HTTP JSON (50062, Java 桥接无 protoc 环境)
 mod proto {
     tonic::include_proto!("zk_groth16");
 }
@@ -13,7 +14,7 @@ use ark_std::rand::{rngs::StdRng, SeedableRng};
 use std::str::FromStr;
 use tonic::{transport::Server, Request, Response, Status};
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct VerifierImpl;
 
 #[tonic::async_trait]
@@ -67,17 +68,68 @@ impl ConstraintSynthesizer<Fr> for DemoCircuit {
     }
 }
 
+// ===== HTTP JSON 验证端点（Java 桥接：无 protoc 环境，HttpClient 直调）=====
+use std::collections::HashMap;
+use axum::{routing::post, Json, Router, extract::State};
+
+#[derive(serde::Deserialize)]
+struct HttpVerifyRequest {
+    circuit_id: Option<String>,
+    public_inputs_hex: Vec<String>,
+}
+
+#[derive(serde::Serialize)]
+struct HttpVerifyResponse {
+    valid: bool,
+    error: String,
+}
+
+async fn http_verify(State(_): State<VerifierImpl>, Json(req): Json<HttpVerifyRequest>) -> Json<HttpVerifyResponse> {
+    match demo_verify(&req.public_inputs_hex) {
+        Ok(valid) => Json(HttpVerifyResponse { valid, error: String::new() }),
+        Err(e) => Json(HttpVerifyResponse { valid: false, error: format!("{e}") }),
+    }
+}
+
+async fn http_health() -> Json<HashMap<String, String>> {
+    let mut m = HashMap::new();
+    m.insert("status".into(), "ok".into());
+    m.insert("engine".into(), "arkworks-groth16".into());
+    m.insert("curve".into(), "bn254".into());
+    Json(m)
+}
+
+async fn serve_http() -> eyre::Result<()> {
+    let port: u16 = std::env::var("ZK_HTTP_PORT").unwrap_or_else(|_| "50062".to_string()).parse()?;
+    let app = Router::new()
+        .route("/v1/verify", post(http_verify))
+        .route("/health", axum::routing::get(http_health))
+        .with_state(VerifierImpl::default());
+    let addr = format!("0.0.0.0:{port}");
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    tracing::info!("zk-groth16-service HTTP endpoint on {addr} (/v1/verify, /health)");
+    axum::serve(listener, app).await?;
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     let host = std::env::var("ZK_SERVICE_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
     let port: u16 = std::env::var("ZK_SERVICE_PORT").unwrap_or_else(|_| "50061".to_string()).parse()?;
     let addr = format!("{host}:{port}").parse()?;
     tracing_subscriber::fmt().with_env_filter("info").init();
-    tracing::info!("zk-groth16-service starting on {addr} (真实 BN254 Groth16 验证)");
-    Server::builder()
-        .add_service(Groth16VerifierServiceServer::new(VerifierImpl::default()))
-        .serve(addr)
-        .await?;
+    tracing::info!("zk-groth16-service starting gRPC {addr} + HTTP 50062 (真实 BN254 Groth16 验证)");
+    let grpc = async {
+        Server::builder()
+            .add_service(Groth16VerifierServiceServer::new(VerifierImpl::default()))
+            .serve(addr)
+            .await
+            .map_err(|e| eyre::eyre!("grpc serve: {e}"))
+    };
+    tokio::select! {
+        r = grpc => r?,
+        _ = serve_http() => {},
+    }
     Ok(())
 }
 
@@ -93,7 +145,6 @@ mod tests {
 
     #[test]
     fn real_groth16_verify_wrong_input_false() {
-        // 错误公共输入（非 35）→ 验证失败
         let ok = demo_verify(&["23".to_string()]).expect("demo verify");
         assert!(!ok, "错误输入应验证失败");
     }

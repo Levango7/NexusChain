@@ -121,6 +121,69 @@ public class Groth16ProofSystem {
     }
 
     /**
+     * 远程真实验证（ZK 方案 C 集成：Rust arkworks BN254 配对验证，替代本类 Schnorr 降级）。
+     *
+     * <p>通过 HTTP JSON 调用 zk-groth16-service 的 {@code /v1/verify}（无 protoc 环境
+     * 的桥接方式）。演示电路（x^3+x+5=35）阶段：公共输入为空时由服务端内置电路验证；
+     * 正式电路桥接后传真实公共输入。</p>
+     *
+     * @param remoteUrl   服务地址（如 http://localhost:50062/v1/verify）
+     * @param publicInputs 公共输入（当前演示电路固定 35；空则服务端用内置电路）
+     * @return 验证结果；服务不可用或异常返回 false（fail-closed，不降级到 Schnorr）
+     */
+    public boolean verifyRemote(String remoteUrl, long[] publicInputs) {
+        try {
+            java.net.URI uri = java.net.URI.create(remoteUrl);
+            java.net.http.HttpClient client = java.net.http.HttpClient.newBuilder()
+                    .connectTimeout(java.time.Duration.ofSeconds(5))
+                    .build();
+            java.util.List<String> inputs = new java.util.ArrayList<>();
+            if (publicInputs != null) {
+                for (long v : publicInputs) {
+                    // ark Fr::from_str 解析十进制（非 hex）——直接十进制传输
+                    inputs.add(java.math.BigInteger.valueOf(v).toString());
+                }
+            }
+            String body = "{\"public_inputs_hex\":" + toJsonArray(inputs) + "}";
+            java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder(uri)
+                    .header("Content-Type", "application/json")
+                    .timeout(java.time.Duration.ofSeconds(10))
+                    .POST(java.net.http.HttpRequest.BodyPublishers.ofString(body))
+                    .build();
+            java.net.http.HttpResponse<String> resp = client.send(req,
+                    java.net.http.HttpResponse.BodyHandlers.ofString());
+            if (resp.statusCode() != 200) {
+                logger.warn("Groth16 verifyRemote: HTTP {} from {}", resp.statusCode(), remoteUrl);
+                return false;
+            }
+            String json = resp.body();
+            int validIdx = json.indexOf("\"valid\"");
+            if (validIdx < 0) {
+                logger.warn("Groth16 verifyRemote: unexpected response: {}", json);
+                return false;
+            }
+            String after = json.substring(validIdx);
+            int colon = after.indexOf(':');
+            int valStart = after.indexOf("true", colon);
+            boolean valid = valStart >= 0 && valStart < after.indexOf('}');
+            logger.info("Groth16 verifyRemote (真实 BN254 配对): {} -> {}", remoteUrl, valid);
+            return valid;
+        } catch (Exception e) {
+            logger.warn("Groth16 verifyRemote FAILED (fail-closed): {}: {}", remoteUrl, e.getMessage());
+            return false;
+        }
+    }
+
+    private static String toJsonArray(java.util.List<String> items) {
+        StringBuilder sb = new StringBuilder("[");
+        for (int i = 0; i < items.size(); i++) {
+            if (i > 0) sb.append(',');
+            sb.append('"').append(items.get(i)).append('"');
+        }
+        return sb.append(']').toString();
+    }
+
+    /**
      * 为 R1CS 约束系统执行 Groth16 可信设置。
      *
      * <p><b>ZK-P0-02 修复</b>：setup 完成后立即销毁 toxic waste（α, β, γ, δ 标量），
