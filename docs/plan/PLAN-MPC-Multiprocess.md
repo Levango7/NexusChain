@@ -108,3 +108,21 @@
 | 方案选型 | **A. 多进程单机**（1 协调者 + N 参与者独立 JVM，份额只在参与者进程） |
 | 协调者无份额 | 签名编排时协调者不接触份额（门限理论模型） |
 | 验证规模 | **3 参与者 + t=2 门限**起步 |
+
+## 实施进展（2026-08-15，架构基础确认 + 引擎进程化验证）
+
+**重大发现**：方案 A 架构基础**已存在**（审核前未识别）：
+- Rust mpc-engine（刚编译成功）实现 MpcCryptoService gRPC 服务端（Dkg/Sign/Aggregate，
+  GG20 门限 ECDSA，t=1/n=3 端到端测试通过）
+- Java GrpcMpcCryptoEngine：mTLS 客户端（host/port/TLS 证书配置完整）
+- proto 双侧对齐（注释明确"方案 A：Rust 引擎独立进程"）
+- DefaultMpcService 编排（participants 列表 + DkgRequest/SignRequest）
+
+**引擎进程化验证（✅）**：Docker 内运行 mpc-engine 二进制
+（`starting mpc-engine gRPC server bind=0.0.0.0:50051`），端口可达。
+
+**剩余缺口（诚实）**：
+1. 引擎无份额持久化（dkg 后份额内存持有，重启丢失）——需份额落盘/恢复
+2. 多引擎实例（N 参与者 = N 引擎进程）部署拓扑 + 协调者编排多引擎
+3. Java↔引擎 gRPC 端到端签名验证（引擎进程 + signing-service 联调）
+4. 3 参与者 t=2 验收（引擎测试现为 t=1/n=3）
