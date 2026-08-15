@@ -37,7 +37,7 @@
 | 6 | ZK 证明非真实 Groth16 + MOCK 占位 | 研究层冻结，诚实声明（README 已标注）——长期项 |
 | 7 | MPC 可信协调器模型 | ⚠️ 架构限制（缓解层完整：加密存储 + ThresholdPolicy + 启动门限校验 `9bb5b40`）；多进程/多主机分布为长期改造 |
 | 10 | L2-L1 真实节点验证缺失 | ✅ **已解决**（`bc9eb22`）：Hardhat 并行冲突修复，testAll 首次全绿 |
-| 11 | Rust mpc-engine 未编译验证 | 环境问题（缺 C 编译器）——长期项 |
+| 11 | ~~Rust mpc-engine 未编译验证~~ | ✅ **已解决**（Docker 编译）：`scripts/build-mpc-engine.sh` 固化流程；编译成功（Linux ELF）+ GG20 真实门限 ECDSA 端到端测试通过 |
 | 21 | P2P 消息复用 TRANSACTIONS 通道 | 架构权衡，已有 codec 隔离（protoc 工具链缺位）——长期项 |
 
 ## 🟡 生产代码模拟/占位（需逐项决策）
