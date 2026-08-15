@@ -233,10 +233,10 @@ public class SoftwareUpgradeExecutor {
                 break;
 
             case NACOS:
-                // GOV-P2-03: Nacos 配置更新占位
-                // 实际实现需注入 NacosConfigService，此处仅日志警告
-                log.warn("Config update mode NACOS: not yet implemented (target={}, version={}). "
-                        + "Please integrate Nacos client or use EVENT mode with external listener.", target, version);
+                // GOV-P2-03 修复：Nacos 配置发布（Open API，Java HttpClient 无外部客户端依赖）。
+                // 发布 dataId=nexus-<target>.yaml 到配置中心；Nacos 不可达时告警但不中断升级
+                // （配置更新失败记录审计，版本升级主流程不受影响）。
+                publishToNacos(target, version, config);
                 break;
 
             case FILE:
@@ -282,6 +282,56 @@ public class SoftwareUpgradeExecutor {
      * @param version 目标版本
      * @param config  附带配置
      */
+    /**
+     * Nacos 配置中心地址（Open API 发布配置；未配置时 NACOS 模式仅告警）。
+     */
+    @Value("${governance.execution.upgrade.nacos-server:http://localhost:8848}")
+    private String nacosServer;
+
+    /**
+     * 通过 Nacos Open API 发布版本配置（GOV-P2-03 实现，免 Nacos 客户端依赖）。
+     *
+     * <p>Nacos 2.x Open API：{@code POST /nacos/v1/cs/configs}，
+     * 表单参数 dataId/group/content/type。dataId = {@code nexus-<target>.yaml}，
+     * content 为 YAML 风格的版本信息。</p>
+     */
+    private void publishToNacos(String target, String version, Map<String, Object> config) {
+        try {
+            java.net.URI uri = java.net.URI.create(
+                    nacosServer + "/nacos/v1/cs/configs");
+            java.net.http.HttpClient client = java.net.http.HttpClient.newBuilder()
+                    .connectTimeout(java.time.Duration.ofSeconds(5))
+                    .build();
+            StringBuilder content = new StringBuilder(256);
+            content.append("target: ").append(target).append('\n');
+            content.append("version: ").append(version).append('\n');
+            content.append("updatedAt: ").append(java.time.Instant.now()).append('\n');
+            if (config != null) {
+                for (Map.Entry<String, Object> entry : config.entrySet()) {
+                    content.append("config.").append(entry.getKey()).append(": ")
+                            .append(entry.getValue() == null ? "" : entry.getValue()).append('\n');
+                }
+            }
+            String body = "dataId=nexus-" + target + ".yaml"
+                    + "&group=DEFAULT_GROUP"
+                    + "&type=yaml"
+                    + "&content=" + java.net.URLEncoder.encode(content.toString(),
+                            java.nio.charset.StandardCharsets.UTF_8);
+            java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder(uri)
+                    .header("Content-Type", "application/x-www-form-urlencoded")
+                    .timeout(java.time.Duration.ofSeconds(10))
+                    .POST(java.net.http.HttpRequest.BodyPublishers.ofString(body))
+                    .build();
+            java.net.http.HttpResponse<String> resp = client.send(req,
+                    java.net.http.HttpResponse.BodyHandlers.ofString());
+            log.info("Nacos config published: dataId=nexus-{}.yaml HTTP={} resp={}",
+                    target, resp.statusCode(), resp.body());
+        } catch (Exception e) {
+            log.warn("Nacos config publish FAILED (config update skipped, upgrade continues): "
+                    + "target={}, error={}", target, e.getMessage());
+        }
+    }
+
     private void writeConfigToFile(String target, String version, Map<String, Object> config) {
         Path dir = Paths.get(configDir);
         Path file = dir.resolve(target + "-version.properties");
