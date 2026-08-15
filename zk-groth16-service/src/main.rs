@@ -117,6 +117,7 @@ async fn serve_http() -> eyre::Result<()> {
     let app = Router::new()
         .route("/v1/verify", post(http_verify))
         .route("/v1/setup", post(http_setup))
+        .route("/v1/setup-external", post(http_setup_external))
         .route("/v1/prove", post(http_prove))
         .route("/v1/verify-sep", post(http_verify_sep))
         .route("/health", axum::routing::get(http_health))
@@ -222,5 +223,29 @@ async fn http_verify_sep(Json(req): Json<VerifySepRequest>) -> Json<VerifySepRes
     match bridge::verify_with_proof(&req.circuit_json.to_string(), &req.proof_hex) {
         Ok(valid) => Json(VerifySepResponse { valid, error: String::new() }),
         Err(e) => Json(VerifySepResponse { valid: false, error: format!("{e}") }),
+    }
+}
+
+// ===== 可信设置仪式导入端点（外部 setup 注入）=====
+
+#[derive(serde::Deserialize)]
+struct SetupExternalRequest {
+    circuit_json: serde_json::Value,
+    pk_hex: String,
+    vk_hex: String,
+}
+
+#[derive(serde::Serialize)]
+struct SetupExternalResponse {
+    fingerprint: String,
+    imported: bool,
+    error: String,
+}
+
+async fn http_setup_external(Json(req): Json<SetupExternalRequest>) -> Json<SetupExternalResponse> {
+    let fp = crate::setup_store::circuit_fingerprint(&req.circuit_json.to_string());
+    match crate::setup_store::import_external_setup(&fp, &req.pk_hex, &req.vk_hex) {
+        Ok(()) => Json(SetupExternalResponse { fingerprint: fp, imported: true, error: String::new() }),
+        Err(e) => Json(SetupExternalResponse { fingerprint: fp, imported: false, error: format!("{e}") }),
     }
 }
