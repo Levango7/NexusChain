@@ -68,6 +68,10 @@ task runTransactionTestTool(type: JavaExec) {
 test {
     useJUnitPlatform()
 
+    // L2L1EndToEndTest 启动 Hardhat 本地节点（单节点 localhost:8545），
+    // 并行 fork 会端口/资源冲突（testAll 全量时 5 用例失败，单独跑通过）
+    maxParallelForks = 1
+
     beforeTest { descriptor ->
         logger.lifecycle("Running test: ${descriptor}")
     }
