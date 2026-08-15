@@ -1,5 +1,8 @@
 // ZK Groth16 真实验证服务（方案 C：全链路真实，Rust arkworks）
 // gRPC (50061) + HTTP JSON (50062, Java 桥接无 protoc 环境)
+#[cfg(test)]
+mod probe_test;
+mod bridge;
 mod proto {
     tonic::include_proto!("zk_groth16");
 }
@@ -75,7 +78,10 @@ use axum::{routing::post, Json, Router, extract::State};
 #[derive(serde::Deserialize)]
 struct HttpVerifyRequest {
     circuit_id: Option<String>,
+    #[serde(default)]
     public_inputs_hex: Vec<String>,
+    /// 电路 JSON（Java R1csToJsonBridge 产出）——正式电路桥接载荷
+    circuit_json: Option<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -85,6 +91,14 @@ struct HttpVerifyResponse {
 }
 
 async fn http_verify(State(_): State<VerifierImpl>, Json(req): Json<HttpVerifyRequest>) -> Json<HttpVerifyResponse> {
+    // 正式电路桥接：Java R1CS JSON → 动态 arkworks 电路 → 真实 Groth16 验证
+    if let Some(json) = &req.circuit_json {
+        return match bridge::bridge_verify(json) {
+            Ok(valid) => Json(HttpVerifyResponse { valid, error: String::new() }),
+            Err(e) => Json(HttpVerifyResponse { valid: false, error: format!("{e}") }),
+        };
+    }
+    // 演示电路（x^3+x+5=35）
     match demo_verify(&req.public_inputs_hex) {
         Ok(valid) => Json(HttpVerifyResponse { valid, error: String::new() }),
         Err(e) => Json(HttpVerifyResponse { valid: false, error: format!("{e}") }),
