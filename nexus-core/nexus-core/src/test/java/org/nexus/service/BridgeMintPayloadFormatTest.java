@@ -80,9 +80,9 @@ class BridgeMintPayloadFormatTest {
         // 1. payload 二进制格式：8 字节时间戳 + 1 字节签名数 + 3×64 签名
         byte[] payload = tx.payload;
         assertEquals(8 + 1 + 3 * 64, payload.length, "payload 长度 = 8+1+3×64");
-        // 前 8 字节 = 到期时间戳（>= 当前秒；timelockDuration=0 时等于当前秒）
+        // 前 8 字节 = 到期时间戳（>= 当前秒 - 1，容忍构造/断言跨秒边界）
         long timelock = ByteBuffer.wrap(payload, 0, 8).getLong();
-        assertTrue(timelock >= System.currentTimeMillis() / 1000, "时间戳应为到期时间（>= 当前秒）");
+        assertTrue(timelock >= System.currentTimeMillis() / 1000 - 1, "时间戳应为到期时间（>= 当前秒-1）");
         // 第 9 字节 = 签名数 3
         assertEquals(3, payload[8] & 0xFF, "第 9 字节应为签名数");
         // 后续签名应等于传入签名
