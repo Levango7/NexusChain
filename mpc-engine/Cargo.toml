@@ -40,3 +40,6 @@ sha2 = "0.9"
 
 [build-dependencies]
 tonic-build = "0.12"
+
+[features]
+tls = ["tonic/tls"]
