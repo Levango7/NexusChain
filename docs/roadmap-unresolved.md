@@ -111,3 +111,14 @@ bootstrapper 广播地址异常（A、B 同地址 mRFqUXd），疑点：
 README 自述"软件升级配置写入为占位（未接入 Nacos）"——**已解决**（GOV-P2-03 修复）：
 NACOS 模式改 Nacos Open API 发布配置（Java HttpClient 免客户端依赖，fail-safe）。
 其余 README P0 项（事件源认证/审计持久化/哈希）此前已核实为已修复（文档过时）。
+
+## 占位核实终局（2026-08-15，收尾）
+
+**BRIDGE_LOCK 缺口修复**：注释承诺"须包含目标链和收款人"但仅校验非空——
+补 JSON 解析校验 targetChain/recipient（BridgeLockValidationTest 4 用例）。
+
+**占位核实（全部设计语义，非缺陷）**：
+- BatchTransferService emptySig 占位 → 后续真实 Ed25519 签名（privateKey.sign）
+- ChannelSettlementService/PaymentChannelService from/to 占位 → 校验器不要求非空
+  （payload 承载数据，与 #16 同类已确认）
+- 其余占位（BRIDGE_MINT from/BridgeService 等）此前 PLAN-004/#16 已确认设计语义
