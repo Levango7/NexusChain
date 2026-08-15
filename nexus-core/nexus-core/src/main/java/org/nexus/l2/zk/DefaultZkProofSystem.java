@@ -81,6 +81,14 @@ public class DefaultZkProofSystem implements ZkProofSystem {
     @Autowired
     private ZkProverProperties properties;
 
+    /**
+     * ZK 方案 C 集成：真实 Groth16 远程验证服务地址（zk-groth16-service）。
+     * 非空时 verify 优先走真实 BN254 配对（Rust arkworks），替代本地 Schnorr 降级；
+     * 服务不可用则 fail-closed（返回 false，不降级到 Schnorr/mock）。
+     */
+    @org.springframework.beans.factory.annotation.Value("${zk.prover.remote-verify-url:}")
+    private String remoteVerifyUrl;
+
     /** Groth16 证明系统（懒初始化） */
     private volatile Groth16ProofSystem groth16;
 
@@ -170,6 +178,13 @@ public class DefaultZkProofSystem implements ZkProofSystem {
             try {
                 Groth16Proof g16Proof = decodeGroth16Proof(data);
                 long[] publicInputs = extractPublicInputs(publicInput);
+                // ZK 方案 C：配置了真实远程验证服务时优先走 BN254 配对（fail-closed）
+                if (remoteVerifyUrl != null && !remoteVerifyUrl.isBlank()) {
+                    boolean remoteValid = groth16.verifyRemote(remoteVerifyUrl, publicInputs);
+                    logger.info("DefaultZkProofSystem verify (groth16 REMOTE REAL): circuit={} -> {}",
+                            proof.getCircuitId(), remoteValid);
+                    return remoteValid;
+                }
                 boolean valid = groth16.verify(g16Proof.getCircuitId(), g16Proof, publicInputs);
                 logger.info("DefaultZkProofSystem verify (groth16): circuit={} -> {}",
                         proof.getCircuitId(), valid);
