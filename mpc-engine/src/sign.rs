@@ -70,20 +70,29 @@ pub fn run_sign(
             }
             existing.clone()
         } else {
-            // 取 DKG 会话
+            // 取 DKG 会话（方案 A 缺口 1：内存缺失时从盘恢复——引擎重启后 Sign 可继续）
             let session: DkgSession = {
                 let s_guard = sessions
                     .lock()
                     .map_err(|e| eyre::eyre!("session lock poisoned: {e}"))?;
-                s_guard
-                    .get(&req.session_id)
-                    .cloned()
-                    .ok_or_else(|| {
-                        eyre::eyre!(
-                            "no DKG session found for session_id {} (run Dkg first)",
-                            req.session_id
-                        )
-                    })?
+                match s_guard.get(&req.session_id).cloned() {
+                    Some(s) => s,
+                    None => match crate::persistence::load_session(&req.session_id) {
+                        Ok(Some(s)) => s,
+                        Ok(None) => {
+                            return Err(eyre::eyre!(
+                                "no DKG session found for session_id {} (run Dkg first)",
+                                req.session_id
+                            ))
+                        }
+                        Err(e) => {
+                            return Err(eyre::eyre!(
+                                "session {} restore failed: {e}",
+                                req.session_id
+                            ))
+                        }
+                    },
+                }
             };
 
             let threshold = session.params.threshold as usize;

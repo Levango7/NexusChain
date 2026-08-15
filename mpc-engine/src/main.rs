@@ -35,6 +35,7 @@ use tracing_subscriber::EnvFilter;
 mod aggregate;
 mod dkg;
 mod gg20;
+mod persistence;
 mod proto;
 mod server;
 mod sign;
