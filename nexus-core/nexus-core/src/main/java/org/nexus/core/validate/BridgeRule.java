@@ -215,10 +215,11 @@ public class BridgeRule implements TransactionRule {
         // 解析签名数量（第 9 字节）
         int sigCount = tx.payload[8] & 0xFF;
 
-        // 多签验证
-        if (sigCount < minValidators) {
-            return Result.Error("BRIDGE_BURN: signature count " + sigCount
-                    + " is below minimum " + minValidators);
+        // 语义修正（PLAN-004 同类）：BRIDGE_BURN 为单用户自签销毁（tx.signature
+        // 由 Ed25519 验签），非验证人多签——不要求 sigCount >= minValidators。
+        // （BRIDGE_MINT 的多签要求仅适用于验证人共识铸造。）
+        if (sigCount < 0) {
+            return Result.Error("BRIDGE_BURN: invalid signature count");
         }
 
         return Result.SUCCESS;
