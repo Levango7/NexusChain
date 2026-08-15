@@ -211,6 +211,21 @@ public class PeerServer extends NexusChainGrpc.NexusChainImplBase {
 
     @Override
     public void entry(NexusChainOuterClass.Message request, StreamObserver<NexusChainOuterClass.Message> responseObserver) {
+        // 入站连接登记（广播互达最后一环修复）：收到对端消息时把发送者登记为已知 peer，
+        // 否则本节点 peers 为空 → 广播无人接收（真机实证：A 收 B 广播但 A 的 peers
+        // 空、不转发，B/C 收 0）。
+        try {
+            String remotePeer = request.getRemotePeer();
+            if (remotePeer != null && !remotePeer.isEmpty()) {
+                Peer remote = Peer.parse(remotePeer);
+                if (!remote.equals(peersCache.getSelf())) {
+                    peersCache.keepPeer(remote);
+                    logger.debug("P2P inbound peer registered: {}:{}", remote.host, remote.port);
+                }
+            }
+        } catch (Exception e) {
+            logger.debug("P2P inbound peer register skipped: {}", e.getMessage());
+        }
         NexusChainOuterClass.Message resp = onMessage(request);
         responseObserver.onNext(resp);
         responseObserver.onCompleted();
