@@ -358,3 +358,46 @@ mod persist_tests2 {
         }
     }
 }
+
+#[cfg(test)]
+mod ceremony_tests {
+    use super::*;
+
+    fn demo_json() -> String {
+        r#"{
+          "num_public": 1,
+          "num_private": 3,
+          "witness": [1, 35, 3, 9, 27],
+          "constraints": [
+            {"a": {"2": 1}, "b": {"2": 1}, "c": {"3": 1}},
+            {"a": {"3": 1}, "b": {"2": 1}, "c": {"4": 1}},
+            {"a": {"4": 1, "2": 1, "0": 5}, "b": {"0": 1}, "c": {"1": 1}}
+          ]
+        }"#.to_string()
+    }
+
+    #[test]
+    fn external_setup_import_then_prove_verify() {
+        // 仪式模拟：确定性生成 pk/vk 作为"仪式产出" → 导出 → 导入 → 分离验证
+        let circuit = DynamicCircuit::from_json(&demo_json()).unwrap();
+        let (pk, vk) = crate::setup_store::load_or_setup::<ark_bn254::Bn254>(
+            &demo_json(), circuit).expect("setup");
+        let pk_hex = crate::setup_store::export_pk_hex(&pk).expect("export pk");
+        let mut vk_buf = Vec::new();
+        ark_serialize::CanonicalSerialize::serialize_uncompressed(&vk, &mut vk_buf).unwrap();
+        let vk_hex = hex::encode(vk_buf);
+
+        let fp = crate::setup_store::circuit_fingerprint(&demo_json());
+        // 导入（模拟仪式产出经 API 上传）
+        crate::setup_store::import_external_setup(&fp, &pk_hex, &vk_hex).expect("import");
+
+        // 导入后 prove → verify 闭环（外部 pk 可用）
+        let (_fp2, proof_hex) = prove_real(&demo_json()).expect("prove with external pk");
+        let ok = verify_with_proof(&demo_json(), &proof_hex).expect("verify");
+        assert!(ok, "外部 setup 导入后 prove→verify 应闭环通过");
+
+        // vk 与仪式产出一致（非确定性 seed 生成）
+        let vk2_hex = setup_public(&demo_json()).expect("setup public").1;
+        assert_eq!(vk_hex, vk2_hex, "导入后 vk 应与仪式产出一致");
+    }
+}

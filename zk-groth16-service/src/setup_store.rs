@@ -49,6 +49,10 @@ where
     E::ScalarField: ark_ff::PrimeField,
 {
     let fp = circuit_fingerprint(circuit_json);
+    // 可信设置仪式优先：外部目录存在 pk/vk → 加载（跳过确定性生成）
+    if let Some((ext_pk, ext_vk)) = load_external::<E>(&fp)? {
+        return Ok((ext_pk, ext_vk));
+    }
     let dir = fingerprint_dir(&fp);
     fs::create_dir_all(&dir).map_err(|e| eyre::eyre!("cannot create setup dir: {e}"))?;
     // 0700：pk 含 toxic waste
@@ -110,4 +114,65 @@ pub fn parse_proof_hex(hex_str: &str) -> eyre::Result<ark_groth16::Proof<ark_bn2
 pub fn parse_vk_hex(hex_str: &str) -> eyre::Result<VerifyingKey<ark_bn254::Bn254>> {
     let bytes = hex::decode(hex_str).map_err(|e| eyre::eyre!("bad vk hex: {e}"))?;
     Ok(<VerifyingKey<ark_bn254::Bn254> as ark_serialize::CanonicalDeserialize>::deserialize_uncompressed(&bytes[..])?)
+}
+
+// ===== 可信设置仪式（外部 setup 注入，替换确定性 seed）=====
+
+/// 外部（仪式）setup 目录环境变量：产出 pk/vk 二进制，格式同内部
+/// `<fp>/pk.bin, vk.bin`。配置后 load_or_setup 优先从外部加载（跳过确定性生成）。
+const EXTERNAL_SETUP_DIR_ENV: &str = "GROTH16_EXTERNAL_SETUP_DIR";
+
+pub fn external_setup_dir() -> Option<PathBuf> {
+    std::env::var(EXTERNAL_SETUP_DIR_ENV).ok().map(PathBuf::from)
+}
+
+fn external_pk_path(fp: &str) -> Option<PathBuf> {
+    external_setup_dir().map(|d| d.join(fp).join("pk.bin"))
+}
+
+fn external_vk_path(fp: &str) -> Option<PathBuf> {
+    external_setup_dir().map(|d| d.join(fp).join("vk.bin"))
+}
+
+/// 从外部仪式目录加载 pk/vk（存在则加载）。
+fn load_external<E: Pairing>(fp: &str) -> eyre::Result<Option<(ProvingKey<E>, VerifyingKey<E>)>>
+where
+    E::ScalarField: ark_ff::PrimeField,
+{
+    let (Some(pk_file), Some(vk_file)) = (external_pk_path(fp), external_vk_path(fp)) else {
+        return Ok(None);
+    };
+    if !pk_file.exists() || !vk_file.exists() {
+        return Ok(None);
+    }
+    tracing::info!(fingerprint = %fp, "external ceremony setup loaded from {:?}", pk_file);
+    let pk = ProvingKey::<E>::deserialize_uncompressed(&fs::read(pk_file)?[..])?;
+    let vk = VerifyingKey::<E>::deserialize_uncompressed(&fs::read(vk_file)?[..])?;
+    Ok(Some((pk, vk)))
+}
+
+/// 导入外部 setup（仪式产出经 API 上传）：pk/vk 二进制 hex → 落盘到内部目录。
+pub fn import_external_setup(fp: &str, pk_hex: &str, vk_hex: &str) -> eyre::Result<()> {
+    let dir = fingerprint_dir(fp);
+    fs::create_dir_all(&dir)?;
+    let _ = fs::set_permissions(&dir, fs::Permissions::from_mode(0o700));
+    let pk_bytes = hex::decode(pk_hex).map_err(|e| eyre::eyre!("bad pk hex: {e}"))?;
+    let vk_bytes = hex::decode(vk_hex).map_err(|e| eyre::eyre!("bad vk hex: {e}"))?;
+    fs::write(pk_path(fp), &pk_bytes)?;
+    fs::write(vk_path(fp), &vk_bytes)?;
+    let _ = fs::set_permissions(&pk_path(fp), fs::Permissions::from_mode(0o600));
+    let _ = fs::set_permissions(&vk_path(fp), fs::Permissions::from_mode(0o644));
+    tracing::info!(fingerprint = %fp, "external ceremony setup imported ({} bytes pk, {} bytes vk)",
+        pk_bytes.len(), vk_bytes.len());
+    Ok(())
+}
+
+/// 序列化 pk 为 hex（供仪式导出/备份）。
+pub fn export_pk_hex<E: Pairing>(pk: &ProvingKey<E>) -> eyre::Result<String>
+where
+    E::ScalarField: ark_ff::PrimeField,
+{
+    let mut buf = Vec::new();
+    ark_serialize::CanonicalSerialize::serialize_uncompressed(pk, &mut buf)?;
+    Ok(hex::encode(buf))
 }
