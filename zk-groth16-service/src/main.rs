@@ -1,7 +1,5 @@
 // ZK Groth16 真实验证服务（方案 C：全链路真实，Rust arkworks）
 // gRPC (50061) + HTTP JSON (50062, Java 桥接无 protoc 环境)
-#[cfg(test)]
-mod probe_test;
 mod bridge;
 mod proto {
     tonic::include_proto!("zk_groth16");
