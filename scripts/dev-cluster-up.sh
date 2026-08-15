@@ -27,7 +27,7 @@ echo "[2/3] 启动 node-A (19585)..."
 echo "[2/3] 启动 node-B (19586, bootstrap→A)..."
 # 等待 A 的 P2P 地址就绪
 for i in $(seq 1 40); do
-  PEER_A=$(grep -oE "provide address to your peers to connect nexus://[0-9a-f]+@localhost:9235" "$LOG_DIR/nodeA.log" 2>/dev/null | head -1 | sed 's/.*connect nexus:\/\///')
+  PEER_A=$(grep -oE "listening on nexus://[0-9a-f]+" "$LOG_DIR/nodeA.log" 2>/dev/null | head -1 | sed 's/.*nexus:\/\///')
   [ -n "$PEER_A" ] && break
   sleep 2
 done
