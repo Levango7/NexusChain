@@ -159,3 +159,18 @@ B 未持续同步 A 的更高块（高度认知同步，与 PLAN-011 同源）�
 "持续同步+确认"为同步层最后专项（PLAN-013 候选）。
 
 **环境备注**：Docker Desktop 空闲退出需手动恢复（nexus-pg 重建）。
+
+## 剩余项处理（2026-08-15）
+
+**✅ NPE 竞态修复（已提交）**：FinalityGadget.submitVote 的
+`computeIfAbsent + get` 与 `epochTotalWeight.clear()`（validator set changed
+并发）竞态 → total null → NPE（真机实证 onVoteReceived NPE，RPC 空）。
+改 `compute` 原子返回，finality 45 测试全绿。
+
+**✅ A 侧无投票 = 设计正确（非 bug）**：FinalityCoordinator 只在本地出块时
+投票；A 出奇数块、epoch 边界（epoch-length=4）高度为偶数（B 轮次）→
+天然由 B 投票。单 proposer 协调的正确行为。
+
+**⏳ RPC 最终验证**：受 Docker 重启后 P2P 连接时序问题阻塞（B 未连上 A，
+bootstraps 未生效）——环境问题，非代码（此前轮次同一代码双向同步成功）。
+待环境稳定后验证：A 收 B 投票记录 + RPC finality 返回。
