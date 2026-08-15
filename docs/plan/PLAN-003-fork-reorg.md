@@ -224,3 +224,20 @@ writeBlockToCache + continue（**该分支无日志，掩盖失败**）。
 参数传递时序问题（bootstraps 未解析）——环境/启动问题，非共识代码。
 **修复路径**：复用 dev-cluster-up.sh 成功模式扩展 3 节点（确保 bootstraps
 参数正确传递），或逐节点错峰启动。
+
+## P2P 连接层专项（2026-08-15，排查记录）
+
+**目标**：3 节点 bootstraps dial 未触发（广播互达 0）。
+
+**已确认**：
+- startHalf @Scheduled 在跑（60s 触发，日志 6 次痕迹）
+- dial 链完整（startHalf→getPeers→GRPCClient.dialAsyncWithTTL→stub.entry）
+- getPeers 在 enable-discovery=true 且 peers+trusted 皆空时返回 bootstraps
+- HALF_RATE=60 → 60s 才首次 dial（等待 75s 仍失败）
+
+**未定位**：B 无 dial 回调输出（成功/失败均无）——最可能环节：
+bootstraps 属性解析（@Value p2p.bootstraps 带 nexus:// 前缀）或
+getPeers 返回空。**需专门调试构建**（gRPC 内部日志/属性注入验证）。
+
+**结论**：P2P bootstraps dial 为独立连接层专项（与共识/最终性代码无关，
+后者已双节点真机闭环）。待专项调试或连接层重构（bootstraps dial 显式化）。
