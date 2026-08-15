@@ -121,6 +121,7 @@ async fn serve_http() -> eyre::Result<()> {
         .route("/v1/prove", post(http_prove))
         .route("/v1/verify-sep", post(http_verify_sep))
         .route("/health", axum::routing::get(http_health))
+        .route("/v1/bench", axum::routing::get(http_bench))
         .with_state(VerifierImpl::default());
     let addr = format!("0.0.0.0:{port}");
     let listener = tokio::net::TcpListener::bind(&addr).await?;
@@ -248,4 +249,53 @@ async fn http_setup_external(Json(req): Json<SetupExternalRequest>) -> Json<Setu
         Ok(()) => Json(SetupExternalResponse { fingerprint: fp, imported: true, error: String::new() }),
         Err(e) => Json(SetupExternalResponse { fingerprint: fp, imported: false, error: format!("{e}") }),
     }
+}
+
+// ===== 性能基准端点（证明/验证耗时测量）=====
+
+#[derive(serde::Serialize)]
+struct BenchResponse {
+    iterations: usize,
+    prove_avg_ms: f64,
+    verify_avg_ms: f64,
+    error: String,
+}
+
+async fn http_bench() -> Json<BenchResponse> {
+    const ITERS: usize = 10;
+    let mut rng = ark_std::rand::rngs::StdRng::seed_from_u64(42);
+    let circuit = bridge::DynamicCircuit::from_json(
+        "{\"num_public\":1,\"num_private\":3,\"witness\":[1,35,3,9,27],\
+         \"constraints\":[{\"a\":{\"2\":1},\"b\":{\"2\":1},\"c\":{\"3\":1}},\
+         {\"a\":{\"3\":1},\"b\":{\"2\":1},\"c\":{\"4\":1}},\
+         {\"a\":{\"4\":1,\"2\":1,\"0\":5},\"b\":{\"0\":1},\"c\":{\"1\":1}}]}")
+        .unwrap();
+    let pk = match ark_groth16::Groth16::<ark_bn254::Bn254>::generate_random_parameters_with_reduction(
+        circuit.clone(), &mut rng) {
+        Ok(pk) => pk,
+        Err(e) => return Json(BenchResponse { iterations: 0, prove_avg_ms: 0.0, verify_avg_ms: 0.0, error: format!("setup: {e}") }),
+    };
+    let vk = pk.vk.clone();
+
+    let mut prove_total = 0.0;
+    let mut verify_total = 0.0;
+    let mut proof = None;
+    for _ in 0..ITERS {
+        let t0 = std::time::Instant::now();
+        let p = match ark_groth16::Groth16::<ark_bn254::Bn254>::prove(&pk, circuit.clone(), &mut rng) {
+            Ok(p) => p,
+            Err(e) => return Json(BenchResponse { iterations: 0, prove_avg_ms: 0.0, verify_avg_ms: 0.0, error: format!("prove: {e}") }),
+        };
+        prove_total += t0.elapsed().as_secs_f64() * 1000.0;
+        let t1 = std::time::Instant::now();
+        let _ = ark_groth16::Groth16::<ark_bn254::Bn254>::verify(&vk, &[ark_bn254::Fr::from(35u64)], &p);
+        verify_total += t1.elapsed().as_secs_f64() * 1000.0;
+        proof = Some(p);
+    }
+    Json(BenchResponse {
+        iterations: ITERS,
+        prove_avg_ms: prove_total / ITERS as f64,
+        verify_avg_ms: verify_total / ITERS as f64,
+        error: String::new(),
+    })
 }
