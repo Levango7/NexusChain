@@ -157,3 +157,16 @@ gRPC 编排 + Dkg→Sign 真实签名。剩余：多引擎实例拓扑（N 进�
 
 **结论**：MPC 多主机分布（B 方案）真机验证达成。
 环境要点：WSL2 localhost 自动转发 + 显式 127.0.0.1（避免 ::1 解析差异）。
+
+## B 方案 mTLS 传输加密（2026-08-15，✅ 达成）
+
+**依赖冲突解决**：`cargo update -p subtle → 2.6.1`——rustls 0.23 需 subtle ^2.5，
+multi-party-ecdsa 0.8.1 约束 ^2（2.6.1 兼容）。引擎 `--features tls` 编译成功。
+
+**mTLS 三节点验证**（MpcMultiHostTlsTest）：
+- 三主机 tls_enabled=true require_tls=true（Docker 50051/50052 + WSL 50053）
+- Java 客户端 mTLS 双向认证（trust=CA + 客户端证书）
+- 三主机各自 Dkg→Sign + 3 互异公钥
+
+**MPC 多主机部署完整形态达成**：网络隔离（命名空间）+ mTLS 传输加密 +
+跨主机 gRPC 认证——B 方案全链路真机验证闭环。
