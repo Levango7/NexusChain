@@ -140,8 +140,10 @@ public class FinalityGadget {
         }
 
         // 总权重按 epoch 快照（快照失效时自动按最新验证者集重算）
-        epochTotalWeight.computeIfAbsent(String.valueOf(epoch), k -> computeTotalWeight());
-        BigDecimal total = epochTotalWeight.get(String.valueOf(epoch));
+        // 修复（PLAN-013b）：computeIfAbsent 后 get 与 clear()（validator set changed
+        // 并发）竞态返回 null → NPE。compute 原子返回最终值，无竞态窗口。
+        BigDecimal total = epochTotalWeight.compute(String.valueOf(epoch),
+                (k, v) -> v == null ? computeTotalWeight() : v);
 
         // 同验证者重复投票同检查点：幂等拒绝
         Set<String> voters = epochCheckpointVoters.computeIfAbsent(checkpointKey, k -> ConcurrentHashMap.newKeySet());
