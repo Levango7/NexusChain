@@ -103,3 +103,14 @@ seed = SHA-256(指纹) 截断 → StdRng 确定性 → 同一电路任何节点�
 - 验证：Rust 7 测试全绿 + HTTP 端到端（setup 幂等 vk 一致 / prove→verify-sep 闭环 / 篡改拒绝）
 
 **ZK 长期项全部完成**：可行性 → 服务 → 桥接 → 生产电路 → setup 持久化 + 分离证明模式。
+
+## 可信设置仪式（2026-08-15，✅ 落地）
+
+确定性 seed（开发/演示）之上新增**外部 setup 注入**（替换确定性 seed 的生产路径）：
+- `GROTH16_EXTERNAL_SETUP_DIR`：仪式产出目录（load_or_setup 优先加载，跳过确定性生成）
+- `/v1/setup-external`：仪式产出（pk/vk hex）经 API 导入（0700/0600 权限）
+- `import_external_setup` / `export_pk_hex`：导入/导出工具
+- 验证：Rust 8 测试全绿（外部导入→prove→verify 分离闭环，vk 与仪式产出一致）
+
+**生产路径**：仪式产出 pk/vk → 部署到外部目录或 API 导入 → 服务用外部可信 SRS。
+完整多方仪式（MPC ceremony 协议）为独立工程，接口已就绪。
