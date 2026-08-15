@@ -61,9 +61,9 @@
 
 | # | 缺口 |
 |---|---|
-| 22 | L2L1EndToEndTest 5 用例失败（Hardhat EDR） |
+| 22 | ~~L2L1EndToEndTest 5 用例失败（Hardhat EDR）~~ | ✅ **已解决**（`bc9eb22`）：根因是 nexus-core 测试并行 fork 与 Hardhat 单节点（8545）端口冲突——`maxParallelForks=1` 后 **testAll 首次全绿**（3m12s）。历次误判为 Hardhat EDR 基线环境问题 |
 | 23 | 9 个跳过测试（环境依赖） |
-| 24 | gateway 全量回归未在本轮改动后复验 |
+| 24 | ~~gateway 全量回归未复验~~ | ✅ 已复验（全量 testAll BUILD SUCCESSFUL，3m12s） |
 
 ---
 
