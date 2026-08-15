@@ -105,3 +105,9 @@ bootstrapper 广播地址异常（A、B 同地址 mRFqUXd），疑点：
 - 至此 #7 缓解层完整：份额加密存储（AES-GCM+KEK）+ 门限签名校验
   （ThresholdPolicy）+ 启动完整性校验（新增）
 - 彻底解决（多进程/多主机份额分布）仍为长期架构改造，已声明
+
+## README:104 自述 P0 补核（2026-08-15）
+
+README 自述"软件升级配置写入为占位（未接入 Nacos）"——**已解决**（GOV-P2-03 修复）：
+NACOS 模式改 Nacos Open API 发布配置（Java HttpClient 免客户端依赖，fail-safe）。
+其余 README P0 项（事件源认证/审计持久化/哈希）此前已核实为已修复（文档过时）。
