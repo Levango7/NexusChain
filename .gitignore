@@ -108,3 +108,4 @@ local.env
 
 # MPC mTLS 证书（含私钥，不入库）
 mpc-certs/
+mpc-engine/mpc-sessions/
