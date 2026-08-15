@@ -313,13 +313,13 @@ public class BridgeService {
             }
             byte[] toBytes = RipemdUtility.ripemd160(SHA3Utility.keccak256(fromBytes));
 
-            // 构造销毁 payload
-            Map<String, Object> payloadMap = new LinkedHashMap<>();
-            payloadMap.put("from", fromPubkey);
-            payloadMap.put("targetChain", targetChain != null ? targetChain : "NEX");
-            payloadMap.put("amount", amount);
-            payloadMap.put("action", "BURN");
-            byte[] payload = JsonUtils.toJson(payloadMap).getBytes(StandardCharsets.UTF_8);
+            // PLAN-004 同类修复：burn payload 改二进制格式（对齐 BridgeRule 解析约定）：
+            // 前 8 字节 = 时间戳，第 9 字节 = 签名数。burn 为单用户自签（tx.signature
+            // 由 Ed25519 验签），非验证人多签——签名数填 0，BridgeRule 不再要求多签。
+            ByteBuffer payloadBuf = ByteBuffer.allocate(8 + 1);
+            payloadBuf.putLong(System.currentTimeMillis() / 1000);
+            payloadBuf.put((byte) 0);
+            byte[] payload = payloadBuf.array();
 
             byte[] emptySig = new byte[Transaction.SIGNATURE_SIZE];
 
