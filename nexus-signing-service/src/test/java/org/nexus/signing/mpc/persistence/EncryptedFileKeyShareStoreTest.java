@@ -29,7 +29,7 @@ public class EncryptedFileKeyShareStoreTest {
     public void setUp() throws Exception {
         storageDir = Files.createTempDirectory("mpc-keyshare-test");
         String kek = Base64.getEncoder().encodeToString(new byte[32]);
-        store = new EncryptedFileKeyShareStore(storageDir.toString(), kek);
+        store = new EncryptedFileKeyShareStore(storageDir.toString(), kek, 0);
     }
 
     @AfterEach
@@ -110,7 +110,7 @@ public class EncryptedFileKeyShareStoreTest {
     @Test
     public void testNullKekAndNoEnvThrows() { assertThrows(IllegalStateException.class, () -> {
         if (System.getenv("NEXUS_MPC_KEK") == null) {
-            new EncryptedFileKeyShareStore(storageDir.toString(), null);
+            new EncryptedFileKeyShareStore(storageDir.toString(), null, 0);
         } else {
             throw new IllegalStateException("test skipped: env NEXUS_MPC_KEK set");
         }
@@ -120,7 +120,34 @@ public class EncryptedFileKeyShareStoreTest {
     @Test
     public void testShortKekThrows() { assertThrows(IllegalStateException.class, () -> {
         String shortKek = Base64.getEncoder().encodeToString(new byte[16]);
-        new EncryptedFileKeyShareStore(storageDir.toString(), shortKek);
+        new EncryptedFileKeyShareStore(storageDir.toString(), shortKek, 0);
         });
+    }
+
+    @Test
+    public void testMinSharesCheckFailsClosedWhenInsufficient() throws Exception {
+        // #7 缓解：份额不足 → 拒绝启动（fail-closed）
+        store.save(newShare("p1"));
+        store.save(newShare("p2"));
+        EncryptedFileKeyShareStore strict = new EncryptedFileKeyShareStore(storageDir.toString(), kek(), 3);
+        assertThrows(IllegalStateException.class, strict::verifyMinShares,
+                "2 份额 < 要求 3 → 必须拒绝启动");
+    }
+
+    @Test
+    public void testMinSharesCheckPassesWhenSufficient() throws Exception {
+        store.save(newShare("p1"));
+        store.save(newShare("p2"));
+        store.save(newShare("p3"));
+        EncryptedFileKeyShareStore strict = new EncryptedFileKeyShareStore(storageDir.toString(), kek(), 3);
+        strict.verifyMinShares();  // 3 >= 3 → 不抛
+    }
+
+    private MpcKeyShare newShare(String id) {
+        return new MpcKeyShare(id, "priv-" + id, "pub-" + id, "paillier-" + id);
+    }
+
+    private String kek() {
+        return Base64.getEncoder().encodeToString(new byte[32]);
     }
 }

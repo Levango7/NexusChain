@@ -76,9 +76,11 @@ public class EncryptedFileKeyShareStore implements MpcKeyShareStore {
      */
     public EncryptedFileKeyShareStore(
             @Value("${nexus.mpc.keyshare.dir:./mpc-keyshares}") String storageDirPath,
-            @Value("${nexus.mpc.keyshare.kek:#{null}}") String kekBase64) {
+            @Value("${nexus.mpc.keyshare.kek:#{null}}") String kekBase64,
+            @Value("${nexus.mpc.keyshare.min-shares:0}") int minShares) {
         this.kek = loadKek(kekBase64);
         this.storageDir = Paths.get(storageDirPath);
+        this.minShares = minShares;
         try {
             Files.createDirectories(storageDir);
         } catch (IOException e) {
@@ -86,6 +88,31 @@ public class EncryptedFileKeyShareStore implements MpcKeyShareStore {
         }
         log.info("EncryptedFileKeyShareStore initialized: dir={}", storageDir.toAbsolutePath());
     }
+
+    /**
+     * 启动级份额门限校验（#7 MPC 架构限制缓解，fail-closed）：
+     * 份额集中单进程是已知设计限制；本校验确保门限份额**完整存在**才启动
+     * 签名服务——份额文件缺失/不足（如存储丢失、备份不完整）时拒绝启动，
+     * 绝不带病运行产生不完整签名。
+     *
+     * <p>配置 {@code nexus.mpc.keyshare.min-shares}（默认 0 = 不校验，向后兼容）。</p>
+     */
+    @jakarta.annotation.PostConstruct
+    public void verifyMinShares() {
+        if (minShares <= 0) {
+            return;
+        }
+        int actual = listParticipantIds().size();
+        if (actual < minShares) {
+            throw new IllegalStateException(
+                    "MPC keyshare check FAILED (fail-closed): found " + actual
+                            + " shares, required >= " + minShares
+                            + " — refusing to start signing service with incomplete shares");
+        }
+        log.info("MPC keyshare check passed: {} shares >= required {}", actual, minShares);
+    }
+
+    private final int minShares;
 
     private SecretKey loadKek(String kekBase64) {
         if (kekBase64 == null || kekBase64.isEmpty()) {
