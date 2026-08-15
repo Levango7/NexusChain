@@ -89,3 +89,19 @@ ZkCurveParams: BN254 曲线参数定义
 | 方案选型 | **C. 全链路真实 Groth16**（setup→prove→verify 全链路） |
 | MOCK 行为 | **默认拒绝 + 开发开关**（allow-mock-verify 默认 false，生产 fail-closed） |
 | 落地路径 | Rust 侧（arkworks groth16）经 Docker 容器编译（复用 mpc-engine 方案）→ Java 验证侧真实化 |
+
+## 可行性验证（2026-08-15，✅ 通过）
+
+**arkworks Groth16 全链路真实验证成功**（Docker 容器，复用 nexus-rust-build 镜像）：
+```
+最小电路: x^3 + x + 5 = 35 (x=3)
+- R1CS 约束构建 ✅
+- 真实 Groth16 setup（随机参数生成，proving key 含 vk）✅
+- 真实 prove（witness 生成 + 证明构造）✅
+- 真实 verify（BN254 配对乘积等式）✅
+输出: GROTH16_VERIFY=true
+```
+
+**结论**：方案 C（全链路真实）可行。落地路径：
+Rust 侧（arkworks）生成真实证明 → Java 侧 Groth16Verifier（BN254 配对）验证。
+正式集成（电路库对应 R1CS + 证明服务 + Java 验证器）为下一阶段工程。
