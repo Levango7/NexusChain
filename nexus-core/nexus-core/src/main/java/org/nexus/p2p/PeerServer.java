@@ -222,6 +222,9 @@ public class PeerServer extends NexusChainGrpc.NexusChainImplBase {
                 onMessage(m);
 //                return;
             }
+            if (e != null) {
+                logger.warn("P2P dial failed to {}:{} error={}", peer.host, peer.port, e.getMessage());
+            }
 //            e.printStackTrace();
 //            logger.error("cannot connect to " + peer.toString());
 //            if (!enableDiscovery) {
