@@ -57,7 +57,7 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
 
 | 模块 | 职责 | 成熟度 |
 |------|------|--------|
-| `nexus-core` | 结算链节点：共识（DPoS 默认 / PoS 可选）、P2P、存储、RPC、合约引擎 | 较完整（PoS 基础层已闭环，最终性层 NexFinality 在研） |
+| `nexus-core` | 结算链节点：共识（DPoS 默认 / PoS 可选）、P2P、存储、RPC、合约引擎 | 较完整（PoS 基础层 + NexFinality 最终性层已闭环，多节点共识 2026-08 真机验证） |
 | `nexus-gateway` | 商户支付网关：订单、路由、Webhook、清结算/风控/合规关卡接入 | 较完整 |
 | `nexus-bridge` | 跨链桥：锁定/铸造/销毁/解锁状态机、Relayer 网络、流动性管理 | 核心完整，Solana/Avalanche 适配器已交付（含测试），其余外部链为骨架 |
 | `nexus-consortium` | 联盟链/侧链：完整 PoA 链、国密 SM2/3/4 | 完整 |
@@ -97,16 +97,22 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
 - **ZK 路线**：依赖上述 Schnorr 证明系统，不具备 ZK 安全属性。
 - **L2-L1 真实化**：Hardhat L1 测试环境 + `L2Bridge.sol` Solidity 合约已就绪，但端到端测试因 Hardhat EDR 不兼容跳过（未完成真实 L1 节点验证）。
 
-### 治理执行（v2.0.0-rc1 真实化）
+### 治理执行（真实化完成，2026-08）
 
-- **`GovernanceExecutionDispatcher`**：监听 `ProposalStatusChangedEvent`，按提案类型分发到 `SoftwareUpgradeExecutor` / `TreasurySpendExecutor`。
-- **执行流程真实**：解析 payload → 校验 → 执行 → 审计日志 → 发布事件 → 状态回写。
-- **安全限制（P0）**：事件源无认证、审计日志无持久化、转账哈希用 `hashCode()` 生成。软件升级配置写入为占位（未接入 Nacos）。
+- **`GovernanceExecutionDispatcher`**：监听 `ProposalStatusChangedEvent`，按提案类型分发（软件升级/资金支出/验证者集变更）。
+- **执行流程真实**：解析 payload → 校验 → 执行 → 审计日志（JPA 持久化）→ 发布事件 → 状态回写。
+- **安全已补**：事件源白名单认证、审计日志持久化、软件升级 Nacos 配置发布（Open API）、转账哈希真实计算（fail-closed，无 `hashCode()` 占位）。
 
-### PoS 共识
+### PoS 共识（NexFinality 最终性已闭环，2026-08）
 
-- 基础层已闭环（ADR-029 审计基线）：权益加权出块提案、区块 8 步校验（含真实 Ed25519 验签 `Ed25519DsaSigner.verify()`）、质押管理、罚没、验证者注册、出块奖励、P2P 同步，`PosMiningScheduler` 调度器已实现（默认共识仍为 DPoS）。
-- 已知缺口为**最终性层**（NexFinality，ADR-030 在研）：无 BFT 投票、无双签证据惩罚链、共识→合约层断开、验证者集变更不走治理、无 BLS 签名聚合。
+- 基础层闭环（ADR-029 审计基线）：权益加权出块提案、区块 8 步校验（真实 Ed25519 验签）、质押管理、罚没、验证者注册、出块奖励、P2P 同步。
+- **NexFinality 最终性层（ADR-030/031）已实现并真机闭环**：BFT 双轮投票、2/3 质押权重判定、双签证据惩罚链、验证者集变更走治理（VALIDATOR_SET_CHANGE）、BLS 接口层（M3 阻塞项：blst 库绑定待环境解锁）。
+- **多节点共识全链路**（PLAN-001~013b）：验证人 P2P 同步、单 proposer 轮换、共享链幂等写、分叉重组——双节点真机 51/52 交替出块 + epoch 最终化 100%。
+
+### L2 Rollup（ZK 真实化进展，2026-08）
+
+- **ZK 真实 Groth16 全链路**（方案 C）：zk-groth16-service（Rust arkworks，BN254 配对验证）+ Java 对接（fail-closed）+ Rollup 状态转换电路桥接 + setup 持久化/可信设置仪式外部注入 + MOCK 证明默认拒绝。
+- **L2-L1 端到端**：Hardhat 并行冲突已修复（testAll 首次全绿）。
 
 ### 资产承载限制
 
