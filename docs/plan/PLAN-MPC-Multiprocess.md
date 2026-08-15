@@ -126,3 +126,20 @@
 2. 多引擎实例（N 参与者 = N 引擎进程）部署拓扑 + 协调者编排多引擎
 3. Java↔引擎 gRPC 端到端签名验证（引擎进程 + signing-service 联调）
 4. 3 参与者 t=2 验收（引擎测试现为 t=1/n=3）
+
+## 方案 A 完整验收（2026-08-15，✅）
+
+**缺口 1 份额持久化（已提交）**：persistence.rs（DKG 会话 JSON 落盘/恢复，
+MPC_ENGINE_SESSION_DIR）；dkg 后落盘、sign 内存缺失从盘恢复；3 测试全绿。
+
+**缺口 3 跨进程端到端（✅ 验收达成）**：
+```
+引擎进程（Docker, mpc-engine）→ MpcEndToEndTest（Java gRPC 客户端）
+引擎日志: rpc Dkg threshold=2 total_parties=3（审核验收规模）
+          rpc Sign party_index=0/1/2（3 参与者份额）
+测试: 4 passed, 0 failed
+```
+
+**方案 A 核心验证完整**：3 参与者 t=2 门限 + 份额在引擎进程 + 跨进程
+gRPC 编排 + Dkg→Sign 真实签名。剩余：多引擎实例拓扑（N 进程部署）
+与 Java 侧编排多引擎——后续工程项。
