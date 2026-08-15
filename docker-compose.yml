@@ -252,6 +252,26 @@ services:
       - nexus-net
     restart: unless-stopped
 
+  # === ZK Groth16 真实验证服务（Rust arkworks，BN254 配对）===
+  # gRPC 50061 + HTTP 50062（Java 桥接 /v1/verify）。setup 持久化到命名卷
+  # （可信设置仪式产出经 GROTH16_EXTERNAL_SETUP_DIR 挂载或 /v1/setup-external 导入）。
+  zk-groth16-service:
+    build:
+      context: ./zk-groth16-service
+      dockerfile: Dockerfile
+    ports:
+      - '127.0.0.1:50061:50061'    # gRPC
+      - '127.0.0.1:50062:50062'    # HTTP JSON（Java HttpClient 桥接）
+    environment:
+      - ZK_SERVICE_PORT=50061
+      - ZK_HTTP_PORT=50062
+      - GROTH16_SETUP_DIR=/setup
+    volumes:
+      - zk-groth16-setup:/setup
+    networks:
+      - nexus-net
+    restart: unless-stopped
+
   # === 真机联调数据库 ===
   # 用途：core 以 local profile 原生运行时（gradlew :nexus-core:nexus-core:run --args="--spring.profiles.active=local"）
   #       的容器化 Postgres。凭据与 application-local.properties 严格一致（nexus/nexus123/nexuschain）。
@@ -281,6 +301,7 @@ volumes:
   nacos-logs:
   sentinel-logs:
   pg-dev-data:
+  zk-groth16-setup:
 
 networks:
   # MPC 引擎专用桥接网络。现有 Java 服务未显式声明 networks（使用默认 bridge），
