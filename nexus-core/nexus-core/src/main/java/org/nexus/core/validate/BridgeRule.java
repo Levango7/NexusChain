@@ -119,6 +119,23 @@ public class BridgeRule implements TransactionRule {
         if (tx.payload == null || tx.payload.length == 0) {
             return Result.Error("BRIDGE_LOCK: payload must contain target chain and recipient info");
         }
+        // 真实内容校验（注释承诺"须包含目标链和收款人"——此前仅校验非空）：
+        // BRIDGE_LOCK payload 为 BridgeTransaction JSON，解析后校验 targetChain/recipient 非空。
+        try {
+            com.fasterxml.jackson.databind.JsonNode node =
+                    new com.fasterxml.jackson.databind.ObjectMapper()
+                            .readTree(new String(tx.payload, java.nio.charset.StandardCharsets.UTF_8));
+            String targetChain = node.path("targetChain").asText(null);
+            String recipient = node.path("recipient").asText(null);
+            if (targetChain == null || targetChain.isEmpty()) {
+                return Result.Error("BRIDGE_LOCK: targetChain must not be empty in payload");
+            }
+            if (recipient == null || recipient.isEmpty()) {
+                return Result.Error("BRIDGE_LOCK: recipient must not be empty in payload");
+            }
+        } catch (Exception e) {
+            return Result.Error("BRIDGE_LOCK: payload is not valid JSON bridge transaction");
+        }
         return Result.SUCCESS;
     }
 
