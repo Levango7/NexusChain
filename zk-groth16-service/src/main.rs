@@ -78,8 +78,8 @@ struct HttpVerifyRequest {
     circuit_id: Option<String>,
     #[serde(default)]
     public_inputs_hex: Vec<String>,
-    /// 电路 JSON（Java R1csToJsonBridge 产出）——正式电路桥接载荷
-    circuit_json: Option<String>,
+    /// 电路 JSON（Java R1csToJsonBridge 产出）——正式电路桥接载荷（对象，非字符串）
+    circuit_json: Option<serde_json::Value>,
 }
 
 #[derive(serde::Serialize)]
@@ -91,7 +91,7 @@ struct HttpVerifyResponse {
 async fn http_verify(State(_): State<VerifierImpl>, Json(req): Json<HttpVerifyRequest>) -> Json<HttpVerifyResponse> {
     // 正式电路桥接：Java R1CS JSON → 动态 arkworks 电路 → 真实 Groth16 验证
     if let Some(json) = &req.circuit_json {
-        return match bridge::bridge_verify(json) {
+        return match bridge::bridge_verify(&json.to_string()) {
             Ok(valid) => Json(HttpVerifyResponse { valid, error: String::new() }),
             Err(e) => Json(HttpVerifyResponse { valid: false, error: format!("{e}") }),
         };
