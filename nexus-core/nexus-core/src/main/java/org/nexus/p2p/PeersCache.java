@@ -45,6 +45,7 @@ public class PeersCache {
     }
 
     private void initBootstraps(String bootstraps){
+        logger.info("[p2p-debug] initBootstraps input: '{}'", bootstraps == null ? "<null>" : bootstraps);
         if(bootstraps == null || bootstraps.equals("")){
             return;
         }
@@ -53,10 +54,13 @@ public class PeersCache {
             try {
                 Peer peer = Peer.parse(addr);
                 this.bootstraps.add(peer);
+                logger.info("[p2p-debug] bootstraps parsed: {}:{} (peer)", peer.host, peer.port);
             } catch (Exception e) {
                 unparsed.add(addr);
+                logger.warn("[p2p-debug] bootstraps parse failed for '{}': {}", addr, e.getMessage());
             }
         }
+        logger.info("[p2p-debug] bootstraps resolved: {} parsed, {} unparsed", this.bootstraps.size(), unparsed.size());
         for(String link: unparsed){
             try {
                 URI u = new URI(link);
