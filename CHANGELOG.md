@@ -701,3 +701,37 @@
 ### 测试
 
 - 全量回归：5 个模块共 174 个测试全部通过（gateway 64 / settlement 20 / compliance 30 / analytics 32 / oracle 28）
+
+## [Unreleased]
+
+### Consensus（多节点共识攻坚：PLAN-001 ~ PLAN-013b 全链路）
+
+- **多节点共享单链 + NexFinality 最终性全链路真机闭环**
+  - PLAN-001 验证人同步（P2P 广播 + 落库重放 + 多次重发）
+  - PLAN-002 出块抑制（落后对端停出）+ PLAN-003 分叉重组（ReorgManager + 最终化护栏）
+  - PLAN-005 区块落 PG（leastConfirms PoS 适配）+ PLAN-006 启动继承共享链
+  - PLAN-007 单 proposer 协调（round-robin 地址排序确定性）
+  - PLAN-008 引擎密钥 Spring 注入 + PLAN-010 最小验证人集合门槛
+  - **PLAN-013b 共享 PG 幂等写（ON CONFLICT）——双节点交替出块 51/52 + epoch 最终化 100%**
+  - 真机验证：A 奇数块/B 偶数块交替、区块双向传播、状态对账（MerkleHandler）
+- 回退修复：`ON CONFLICT DO NOTHING` 无列名（H2/PG 方言兼容，收尾回归捕获）
+
+### MPC 多进程分布（长期项 #7）
+
+- mpc-engine Rust 编译验证（Docker 方案，GG20 门限 ECDSA 端到端通过）
+- 引擎份额持久化（DKG 会话 JSON 落盘/恢复）
+- 跨进程端到端验收：3 参与者 t=2 门限签名（Java gRPC ↔ Rust 引擎）
+- 多引擎 HA 部署脚本 + 启动级份额门限校验（fail-closed）
+
+### ZK 真实 Groth16（长期项，方案 C 全链路）
+
+- zk-groth16-service：Rust arkworks 真实 BN254 配对验证服务（gRPC + HTTP）
+- Java 对接：Groth16ProofSystem.verifyRemote（fail-closed）+ R1csToJsonBridge
+- 生产电路接入：Rollup 状态转换电路（真实约束 C1-C5）端到端真实验证
+- **setup 持久化**：电路指纹确定性 setup + 幂等 + 0700 权限 + prove/verify 分离模式
+
+### 基础设施
+
+- testAll 首次全绿（L2 Hardhat 并行冲突修复 maxParallelForks=1）
+- consortium 测试环境修复（H2 内存库 + consensus=none + BC 1.78 兼容）
+- 新增脚本：build-mpc-engine.sh / deploy-mpc-engine.sh / dev-cluster-up.sh / dev-cluster-verify.sh
