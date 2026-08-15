@@ -94,6 +94,49 @@ public class OrchestrationWebhookDispatcher {
     // Dead-letter: deliveries that exhausted all retries.
     private final BlockingQueue<DeadLetter> deadLetterQueue = new LinkedBlockingQueue<>();
 
+    /**
+     * Redis 支持（TODO v2.0.0 落地）：多实例共享 dedup + 持久化 DLQ。
+     * 可选注入——无 Redis/测试环境回退本地结构（向后兼容）。
+     */
+    private org.springframework.data.redis.core.StringRedisTemplate redisTemplate;
+
+    private static final String REDIS_DEDUP_PREFIX = "nexus:webhook:dedup:";
+    private static final String REDIS_DLQ_KEY = "nexus:webhook:dead-letter";
+
+    /** 注入 Redis（多实例生产部署用；测试/无 Redis 不注入即回退本地）。 */
+    public void setRedisTemplate(org.springframework.data.redis.core.StringRedisTemplate redisTemplate) {
+        this.redisTemplate = redisTemplate;
+    }
+
+    /** Redis dedup：SETNX + TTL（多实例共享去重）。 */
+    private boolean tryDedup(String dedupKey) {
+        if (redisTemplate != null) {
+            try {
+                Boolean first = redisTemplate.opsForValue().setIfAbsent(
+                        REDIS_DEDUP_PREFIX + dedupKey, Instant.now().toString(),
+                        java.time.Duration.ofHours(24));
+                return Boolean.TRUE.equals(first);
+            } catch (Exception e) {
+                log.warn("Redis dedup unavailable, fallback local: {}", e.getMessage());
+            }
+        }
+        return dispatchedEvents.putIfAbsent(dedupKey, Instant.now()) == null;
+    }
+
+    /** 记录死信：Redis List（持久化）或本地队列（回退）。 */
+    private void recordDeadLetter(DeadLetter dl) {
+        if (redisTemplate != null) {
+            try {
+                redisTemplate.opsForList().leftPush(REDIS_DLQ_KEY,
+                        dl.paymentId + "|" + dl.status + "|" + dl.url + "|" + dl.failedAt);
+                return;
+            } catch (Exception e) {
+                log.warn("Redis DLQ unavailable, fallback local: {}", e.getMessage());
+            }
+        }
+        deadLetterQueue.offer(dl);
+    }
+
     @Async
     public void dispatch(OrchestratedPayment payment) {
         if (payment.getNotifyUrl() == null || payment.getNotifyUrl().isBlank()) return;
@@ -111,7 +154,7 @@ public class OrchestrationWebhookDispatcher {
                 .attr("payment.status", payment.getStatus().name())) {
 
             String dedupKey = payment.getId() + ":" + payment.getStatus().name();
-            if (dispatchedEvents.putIfAbsent(dedupKey, Instant.now()) != null) {
+            if (!tryDedup(dedupKey)) {
                 log.debug("Webhook dedup: already dispatched paymentId={} status={}",
                         payment.getId(), payment.getStatus().name());
                 webhookSpan.attr("webhook.dedup", true);
@@ -151,7 +194,7 @@ public class OrchestrationWebhookDispatcher {
             }
             log.error("Webhook delivery exhausted all retries: paymentId={} url={}", payment.getId(), payment.getNotifyUrl());
             webhookSpan.attr("webhook.dead.letter", true).error(null);
-            deadLetterQueue.offer(new DeadLetter(payment.getId(), payment.getStatus().name(),
+            recordDeadLetter(new DeadLetter(payment.getId(), payment.getStatus().name(),
                     payment.getNotifyUrl(), payload, Instant.now()));
         }
     }
