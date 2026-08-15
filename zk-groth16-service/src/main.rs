@@ -1,6 +1,7 @@
 // ZK Groth16 真实验证服务（方案 C：全链路真实，Rust arkworks）
 // gRPC (50061) + HTTP JSON (50062, Java 桥接无 protoc 环境)
 mod bridge;
+mod setup_store;
 mod proto {
     tonic::include_proto!("zk_groth16");
 }
@@ -115,6 +116,9 @@ async fn serve_http() -> eyre::Result<()> {
     let port: u16 = std::env::var("ZK_HTTP_PORT").unwrap_or_else(|_| "50062".to_string()).parse()?;
     let app = Router::new()
         .route("/v1/verify", post(http_verify))
+        .route("/v1/setup", post(http_setup))
+        .route("/v1/prove", post(http_prove))
+        .route("/v1/verify-sep", post(http_verify_sep))
         .route("/health", axum::routing::get(http_health))
         .with_state(VerifierImpl::default());
     let addr = format!("0.0.0.0:{port}");
@@ -159,5 +163,64 @@ mod tests {
     fn real_groth16_verify_wrong_input_false() {
         let ok = demo_verify(&["23".to_string()]).expect("demo verify");
         assert!(!ok, "错误输入应验证失败");
+    }
+}
+
+// ===== 持久化 setup / 分离证明模式端点（PLAN-ZK-setup-persist）=====
+
+#[derive(serde::Deserialize)]
+struct SetupRequest {
+    circuit_json: serde_json::Value,
+}
+
+#[derive(serde::Serialize)]
+struct SetupResponse {
+    fingerprint: String,
+    vk_hex: String,
+    error: String,
+}
+
+async fn http_setup(Json(req): Json<SetupRequest>) -> Json<SetupResponse> {
+    match bridge::setup_public(&req.circuit_json.to_string()) {
+        Ok((fp, vk_hex)) => Json(SetupResponse { fingerprint: fp, vk_hex, error: String::new() }),
+        Err(e) => Json(SetupResponse { fingerprint: String::new(), vk_hex: String::new(), error: format!("{e}") }),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct ProveRequest {
+    circuit_json: serde_json::Value,
+}
+
+#[derive(serde::Serialize)]
+struct ProveResponse {
+    fingerprint: String,
+    proof_hex: String,
+    error: String,
+}
+
+async fn http_prove(Json(req): Json<ProveRequest>) -> Json<ProveResponse> {
+    match bridge::prove_real(&req.circuit_json.to_string()) {
+        Ok((fp, proof_hex)) => Json(ProveResponse { fingerprint: fp, proof_hex, error: String::new() }),
+        Err(e) => Json(ProveResponse { fingerprint: String::new(), proof_hex: String::new(), error: format!("{e}") }),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct VerifySepRequest {
+    circuit_json: serde_json::Value,
+    proof_hex: String,
+}
+
+#[derive(serde::Serialize)]
+struct VerifySepResponse {
+    valid: bool,
+    error: String,
+}
+
+async fn http_verify_sep(Json(req): Json<VerifySepRequest>) -> Json<VerifySepResponse> {
+    match bridge::verify_with_proof(&req.circuit_json.to_string(), &req.proof_hex) {
+        Ok(valid) => Json(VerifySepResponse { valid, error: String::new() }),
+        Err(e) => Json(VerifySepResponse { valid: false, error: format!("{e}") }),
     }
 }

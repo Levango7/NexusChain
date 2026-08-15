@@ -4,6 +4,7 @@ use ark_bn254::Fr;
 use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef, LinearCombination, SynthesisError, Variable};
 use ark_std::rand::{rngs::StdRng, SeedableRng};
 use ark_snark::SNARK;
+use ark_serialize::{CanonicalDeserialize as _, CanonicalSerialize as _};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
@@ -251,5 +252,109 @@ mod tests2 {
         eprintln!("[flow] gamma_abc fixed: {:?}", vk.gamma_abc_g1);
         eprintln!("[flow] gamma_abc dynamic: {:?}", vk2.gamma_abc_g1);
         eprintln!("[flow] dynamic verify: {}", Groth16::<Bn254>::verify(&vk2, &[Fr::from(35u64)], &proof2).unwrap());
+    }
+}
+
+/// 生成证明（用持久化 pk；返回指纹 + 证明 hex）。
+pub fn prove_real(json: &str) -> eyre::Result<(String, String)> {
+    let circuit = DynamicCircuit::from_json(json)?;
+    let fp = crate::setup_store::circuit_fingerprint(json);
+    let (pk, _vk) = crate::setup_store::load_or_setup::<ark_bn254::Bn254>(json, circuit.clone())?;
+    let mut rng = ark_std::rand::rngs::StdRng::seed_from_u64(1);
+    let proof = ark_groth16::Groth16::<ark_bn254::Bn254>::prove(&pk, circuit, &mut rng)?;
+    let proof_hex = crate::setup_store::persist_proof(&fp, &proof)?;
+    Ok((fp, proof_hex))
+}
+
+/// 用外部证明 + 持久化 vk + 公共输入验证（非自证明）。
+pub fn verify_with_proof(json: &str, proof_hex: &str) -> eyre::Result<bool> {
+    let fp = crate::setup_store::circuit_fingerprint(json);
+    let vk_bytes = crate::setup_store::load_vk_bytes(&fp)?;
+    let vk = <ark_groth16::VerifyingKey<ark_bn254::Bn254> as ark_serialize::CanonicalDeserialize>::deserialize_uncompressed(&vk_bytes[..])?;
+    let proof = crate::setup_store::parse_proof_hex(proof_hex)?;
+    let v: Value = serde_json::from_str(json)?;
+    let num_public = v["num_public"].as_u64().unwrap_or(0) as usize;
+    let witness: Vec<u64> = v["witness"].as_array()
+        .map(|a| a.iter().map(|x| x.as_u64().unwrap_or(0)).collect()).unwrap_or_default();
+    let public: Vec<Fr> = witness.iter().skip(1).take(num_public).map(|w| Fr::from(*w)).collect();
+    let ok = ark_groth16::Groth16::<ark_bn254::Bn254>::verify(&vk, &public, &proof)?;
+    Ok(ok)
+}
+
+/// 幂等 setup：返回指纹 + vk hex（公开验证密钥）。
+pub fn setup_public(json: &str) -> eyre::Result<(String, String)> {
+    let circuit = DynamicCircuit::from_json(json)?;
+    let fp = crate::setup_store::circuit_fingerprint(json);
+    let (_pk, vk) = crate::setup_store::load_or_setup::<ark_bn254::Bn254>(json, circuit)?;
+    let mut buf = Vec::new();
+    ark_serialize::CanonicalSerialize::serialize_uncompressed(&vk, &mut buf)?;
+    Ok((fp, hex::encode(buf)))
+}
+
+#[cfg(test)]
+mod persist_tests {
+    use super::*;
+
+    fn demo_json() -> String {
+        r#"{
+          "num_public": 1,
+          "num_private": 3,
+          "witness": [1, 35, 3, 9, 27],
+          "constraints": [
+            {"a": {"2": 1}, "b": {"2": 1}, "c": {"3": 1}},
+            {"a": {"3": 1}, "b": {"2": 1}, "c": {"4": 1}},
+            {"a": {"4": 1, "2": 1, "0": 5}, "b": {"0": 1}, "c": {"1": 1}}
+          ]
+        }"#.to_string()
+    }
+
+    #[test]
+    fn setup_is_deterministic_and_idempotent() {
+        // 同电路两次 setup → vk 一致（确定性）+ 幂等（磁盘复用）
+        let (fp1, vk1) = setup_public(&demo_json()).expect("setup 1");
+        let (fp2, vk2) = setup_public(&demo_json()).expect("setup 2");
+        assert_eq!(fp1, fp2, "同电路 → 同指纹");
+        assert_eq!(vk1, vk2, "同电路 → 同 vk（确定性 setup 实证）");
+    }
+
+    #[test]
+    fn prove_then_separate_verify() {
+        // 分离模式：prove 产出证明 → verify_with_proof 用持久化 vk 独立验证
+        let (fp, proof_hex) = prove_real(&demo_json()).expect("prove");
+        assert!(!proof_hex.is_empty());
+        let ok = verify_with_proof(&demo_json(), &proof_hex).expect("verify");
+        assert!(ok, "prove→verify 分离闭环应通过");
+        let _ = fp;
+    }
+}
+
+#[cfg(test)]
+mod persist_tests2 {
+    use super::*;
+
+    fn demo_json() -> String {
+        r#"{
+          "num_public": 1,
+          "num_private": 3,
+          "witness": [1, 35, 3, 9, 27],
+          "constraints": [
+            {"a": {"2": 1}, "b": {"2": 1}, "c": {"3": 1}},
+            {"a": {"3": 1}, "b": {"2": 1}, "c": {"4": 1}},
+            {"a": {"4": 1, "2": 1, "0": 5}, "b": {"0": 1}, "c": {"1": 1}}
+          ]
+        }"#.to_string()
+    }
+
+    #[test]
+    fn tampered_proof_rejected_robust() {
+        let (_fp, proof_hex) = prove_real(&demo_json()).expect("prove");
+        let mut bytes = hex::decode(&proof_hex).expect("hex");
+        bytes[0] ^= 0xFF;
+        let tampered = hex::encode(bytes);
+        // Err（反序列化失败）或 Ok(false)（配对失败）都算拒绝
+        match verify_with_proof(&demo_json(), &tampered) {
+            Ok(ok) => assert!(!ok, "篡改证明配对必须失败"),
+            Err(_) => {}  // 反序列化拒绝同样安全
+        }
     }
 }
