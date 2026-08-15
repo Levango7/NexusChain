@@ -111,6 +111,10 @@ pub fn run_dkg(
                 let (_y_sum, _x_shares, session) =
                     gg20::run_keygen(threshold, total_parties)?;
                 guard.insert(req.session_id.clone(), session.clone());
+                // 方案 A 缺口 1：DKG 份额落盘（重启后 Sign 可恢复）
+                if let Err(e) = crate::persistence::persist_session(&req.session_id, &session) {
+                    tracing::warn!(session_id = %req.session_id, error = %e, "session persist failed (continue in-memory)");
+                }
                 session
             }
         }
