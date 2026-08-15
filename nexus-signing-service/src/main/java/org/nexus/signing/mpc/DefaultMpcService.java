@@ -576,9 +576,47 @@ public class DefaultMpcService implements MpcService {
     @Override
     @Deprecated
     public String signTransaction(String walletId, String txData) {
-        log.warn("signTransaction legacy stub — use sign + aggregateSignature for real MPC; "
-                        + "walletId={}", walletId);
-        return null;
+        // legacy stub 真实化：查钱包 → 本节点 sign → aggregateSignature（真实 MPC 编排）
+        try {
+            if (walletId == null || walletId.isEmpty() || txData == null || txData.isEmpty()) {
+                log.warn("signTransaction: walletId/txData required (walletId={})", walletId);
+                return null;
+            }
+            var walletOpt = walletRepository.findById(walletId);
+            if (walletOpt.isEmpty()) {
+                log.warn("signTransaction: wallet {} not found", walletId);
+                return null;
+            }
+            MpcWallet wallet = walletOpt.get();
+            String publicKey = wallet.getPublicKey();
+            if (publicKey == null || publicKey.isEmpty()) {
+                log.warn("signTransaction: wallet {} has no public key", walletId);
+                return null;
+            }
+            // 签名编排：本节点份额 sign → 聚合（单节点协调器模型下聚合即最终签名）
+            String sessionId = "tx-" + walletId + "-" + System.currentTimeMillis();
+            // sign 所需参数：从钱包参与者推断（简化：本节点为 party 0）
+            String participantId = wallet.getParticipants().isEmpty()
+                    ? "local" : wallet.getParticipants().get(0);
+            List<MpcParticipant> participants = new java.util.ArrayList<>();
+            participants.add(new MpcParticipant(participantId, "localhost", "", true));
+            String partial = sign(sessionId, walletId, publicKey, txData,
+                    0, participantId, participants,
+                    wallet.getThreshold() == null ? 1 : wallet.getThreshold(), 30_000L);
+            if (partial == null) {
+                log.warn("signTransaction: sign produced null for wallet={}", walletId);
+                return null;
+            }
+            AggregateResponse agg = aggregateSignature(sessionId, walletId, publicKey,
+                    txData, java.util.List.of(partial));
+            String signature = agg.getSignature() == null ? null : agg.getSignature();
+            log.info("signTransaction (real MPC): wallet={} signed={}",
+                    walletId, signature != null);
+            return signature;
+        } catch (Exception e) {
+            log.error("signTransaction failed for wallet={}: {}", walletId, e.getMessage());
+            return null;
+        }
     }
 
     /**
