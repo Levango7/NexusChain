@@ -1,0 +1,20 @@
+syntax = "proto3";
+package zk_groth16;
+
+// ZK Groth16 验证服务（真实 BN254 配对验证，arkworks 实现）
+service Groth16VerifierService {
+  // 验证 Groth16 证明（JSON 载荷：vk + proof + public_inputs）
+  rpc Verify(VerifyRequest) returns (VerifyResponse);
+}
+
+message VerifyRequest {
+  string verifying_key_json = 1;  // Groth16 vk（arkworks 序列化，hex）
+  string proof_json = 2;          // Groth16 proof（arkworks 序列化，hex）
+  repeated string public_inputs_hex = 3;  // 公共输入（BN254 标量 hex）
+  string curve = 4;               // "bn254"（当前支持）
+}
+
+message VerifyResponse {
+  bool valid = 1;
+  string error = 2;
+}
