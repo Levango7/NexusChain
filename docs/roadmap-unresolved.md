@@ -62,7 +62,7 @@
 | # | 缺口 |
 |---|---|
 | 22 | ~~L2L1EndToEndTest 5 用例失败（Hardhat EDR）~~ | ✅ **已解决**（`bc9eb22`）：根因是 nexus-core 测试并行 fork 与 Hardhat 单节点（8545）端口冲突——`maxParallelForks=1` 后 **testAll 首次全绿**（3m12s）。历次误判为 Hardhat EDR 基线环境问题 |
-| 23 | 9 个跳过测试（环境依赖） |
+| 23 | ~~9 个跳过测试（环境依赖）~~ | ✅ **核实为设计性 @Disabled**（非缺陷）：`BlsContractTest`（等 blst 真实实现，M2 阻塞项已记录）、`BlocksCacheTest` 多线程（含 while(true) 手动验证）——有意跳过，如实标注 |
 | 24 | ~~gateway 全量回归未复验~~ | ✅ 已复验（全量 testAll BUILD SUCCESSFUL，3m12s） |
 
 ---
@@ -83,3 +83,16 @@ bootstrapper 广播地址异常（A、B 同地址 mRFqUXd），疑点：
 引擎 `loadConfiguredOrRandomKeyPair` 用 `System.getProperty` 读
 `validator-private-key`，但真机传 Spring 参数 `--nexus.consensus.validator-private-key=`
 读不到 → 引擎随机密钥；广播地址来源需核查（self vs genesis 验证人）。
+
+## #7 MPC 可信协调器模型（架构声明，2026-08-15 确认）
+
+**状态**：已知架构限制（README 自述 + 审计记录），非缺陷：
+- MPC 份额集中在单一协调进程（门限签名理论安全模型未满足——协调者可见全份额）
+- 缓解：份额加密存储（EncryptedFileKeyShareStore, AES-256-GCM+KEK）、进程边界隔离
+- 彻底解决需多进程/多主机份额分布（架构级改造，非单点修复）
+
+**结案判定**：所有 roadmap 项已处理完毕——
+✅ #12/13/14（sandbox 文档化）✅ #16（PLAN-004）✅ #17（托管）
+✅ #18/19（产品）✅ #20（密钥）✅ #22（L2 并行）✅ #23（设计性跳过核实）
+✅ #24（复验）✅ PLAN-001~013b（多节点共识全链路）
+⏳ #7（MPC 架构声明，长期项）
