@@ -213,3 +213,14 @@ writeBlockToCache + continue（**该分支无日志，掩盖失败**）。
 **修复方向（PLAN-012 架构级）**：PendingBlocksManager 接收路径拆分为
 "轻校验（BasicRule/ConsensusRule）+ 写链 + 状态重放"，merkle 状态校验
 移至链确认后执行；或同步节点跳过状态校验（信任对端签名+后续状态校验）。
+
+## 3 节点共识验证尝试（2026-08-15，环境阻塞）
+
+**尝试**：本机 3 进程（A/B/C，独立密钥 + 共享 PG + min-validators=3）验证
+2/3 门限语义。self-register 全部成功（nv3gC5m/aKURTTs/mRCg6sK），
+但 **P2P 连接未建立**（B/C bootstraps 未生效，无 dial 日志，广播互达 0）。
+
+**判断**：双节点同一代码成功过（PLAN-008/013b 广播互达），三节点启动
+参数传递时序问题（bootstraps 未解析）——环境/启动问题，非共识代码。
+**修复路径**：复用 dev-cluster-up.sh 成功模式扩展 3 节点（确保 bootstraps
+参数正确传递），或逐节点错峰启动。
