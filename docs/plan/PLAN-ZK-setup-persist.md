@@ -1,6 +1,6 @@
 # 方案：ZK setup 持久化 + 非演示证明模式
 
-- **状态**：Draft（待审核）
+- **状态**：Approved + 已实施（2026-08-15）
 - **日期**：2026-08-15
 - **前置**：`bridge.rs` 动态电路 + 真实 Groth16 已验证；当前为**自证明模式**（setup 每次随机 seed 42 + prove/verify 同请求内）
 - **目标**：① 确定性/持久化 setup（同电路同 pk/vk，跨请求复用）② prove/verify 分离（证明可持久化、独立验证）
@@ -94,3 +94,12 @@ seed = SHA-256(指纹) 截断 → StdRng 确定性 → 同一电路任何节点�
 4. **pk 安全**：pk 含 toxic waste（δ 等）——磁盘权限 + 部署隔离（推荐 0700 + 明确警告）vs 不落盘（每次重建）？
 
 请审核并给出决策，通过后实施。
+
+## 实施结果（2026-08-15，已提交）
+
+- setup_store.rs：电路指纹 → 目录持久化 pk/vk（ark-serialize binary、0700 权限、幂等）
+- bridge：prove_real / verify_with_proof / setup_public（分离模式）
+- HTTP：/v1/setup、/v1/prove、/v1/verify-sep 端点
+- 验证：Rust 7 测试全绿 + HTTP 端到端（setup 幂等 vk 一致 / prove→verify-sep 闭环 / 篡改拒绝）
+
+**ZK 长期项全部完成**：可行性 → 服务 → 桥接 → 生产电路 → setup 持久化 + 分离证明模式。
