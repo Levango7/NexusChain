@@ -132,7 +132,7 @@ public class RDBMSBlockChainImpl implements NexusChainBlockChain {
                         "hash_merkle_root, hash_merkle_state, hash_merkle_incubate," +
                         "height, created_at, nonce, nBits," +
                         "block_notice, is_canonical, total_weight) values (?,?,?,?,?,?,?,?,?,?,?,?,?) " +
-                        "ON CONFLICT (block_hash) DO NOTHING",
+                        "ON CONFLICT DO NOTHING",
                 header.getHash(), header.nVersion, header.hashPrevBlock,
                 header.hashMerkleRoot, header.hashMerkleState, header.hashMerkleIncubate, header.nHeight,
                 header.nTime, header.nNonce, header.nBits,
