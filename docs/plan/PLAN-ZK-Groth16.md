@@ -1,6 +1,6 @@
 # 方案：ZK 真实 Groth16（研究层解冻）
 
-- **状态**：Draft（待审核）
+- **状态**：Approved（2026-08-15 审核通过）
 - **日期**：2026-08-15
 - **前置**：现有 `l2/zk/groth16/` 包（Groth16Proof/ProvingKey/VerifyingKey/Setup 定义）+ `DefaultZkProofSystem`（MOCK 占位，诚实标记 `MOCK|` 前缀）
 - **目标**：把研究层冻结的 MOCK 证明替换为**真实 Groth16**（BN254 曲线 + R1CS 约束系统）
@@ -81,3 +81,11 @@ ZkCurveParams: BN254 曲线参数定义
 4. **验收**：真实证明构造→验证通过；MOCK→拒绝
 
 请审核并给出决策，通过后实施。
+
+## 审核决策（2026-08-15）
+
+| 决策点 | 结论 |
+|---|---|
+| 方案选型 | **C. 全链路真实 Groth16**（setup→prove→verify 全链路） |
+| MOCK 行为 | **默认拒绝 + 开发开关**（allow-mock-verify 默认 false，生产 fail-closed） |
+| 落地路径 | Rust 侧（arkworks groth16）经 Docker 容器编译（复用 mpc-engine 方案）→ Java 验证侧真实化 |
