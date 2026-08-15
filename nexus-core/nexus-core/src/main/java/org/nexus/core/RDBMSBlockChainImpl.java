@@ -124,11 +124,15 @@ public class RDBMSBlockChainImpl implements NexusChainBlockChain {
 
     // write header with total weight
     private void writeHeader(Block header) {
+        // PLAN-013b：共享 PG 幂等写——多节点共享链状态时，B 写 A 已落库的块
+        // （同 block_hash）会主键冲突（真机实证 duplicate key violates unique
+        // constraint → propose 中断）。ON CONFLICT DO NOTHING 幂等跳过。
         tmpl.update("insert into header " +
                         "(block_hash, version, hash_prev_block, " +
                         "hash_merkle_root, hash_merkle_state, hash_merkle_incubate," +
                         "height, created_at, nonce, nBits," +
-                        "block_notice, is_canonical, total_weight) values (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "block_notice, is_canonical, total_weight) values (?,?,?,?,?,?,?,?,?,?,?,?,?) " +
+                        "ON CONFLICT (block_hash) DO NOTHING",
                 header.getHash(), header.nVersion, header.hashPrevBlock,
                 header.hashMerkleRoot, header.hashMerkleState, header.hashMerkleIncubate, header.nHeight,
                 header.nTime, header.nNonce, header.nBits,
@@ -165,8 +169,10 @@ public class RDBMSBlockChainImpl implements NexusChainBlockChain {
             });
         }
 
-        // 写入 transaction_index 表
-        tmpl.batchUpdate("insert into transaction_index (block_hash, tx_hash, tx_index) values (?,?,?)", args);
+        // 写入 transaction_index 表（PLAN-013b 幂等：共享 PG 下 B 写 A 已落库块的索引
+        // 会主键冲突——真机实证 duplicate key on transaction_index_pk）
+        tmpl.batchUpdate("insert into transaction_index (block_hash, tx_hash, tx_index) values (?,?,?) "
+                + "on conflict do nothing", args);
     }
 
 
