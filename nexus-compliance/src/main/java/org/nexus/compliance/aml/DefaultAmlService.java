@@ -34,14 +34,65 @@ public class DefaultAmlService implements AmlScreeningService {
 
     private static final Logger log = LoggerFactory.getLogger(DefaultAmlService.class);
 
+    /** STR JSON 序列化（jackson-databind，compliance 已依赖）。 */
+    private static final com.fasterxml.jackson.databind.ObjectMapper STR_MAPPER =
+            new com.fasterxml.jackson.databind.ObjectMapper()
+                    .registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule());
+
     /** 大额交易阈值（超过则至少 MEDIUM） */
     private static final BigDecimal LARGE_AMOUNT_THRESHOLD = new BigDecimal("100000");
 
     /** 制裁名单检查器 */
     private final SanctionListChecker sanctionListChecker;
 
-    /** 已受理的可疑交易报告登记表（TODO(v2.0.0): 替换为持久化存储 — tracked in v2.0.0 roadmap） */
+    /** 已受理的可疑交易报告登记表（内存索引 + JSONL 文件持久化——TODO(v2.0.0) 落地） */
     private final Map<String, SuspiciousTransactionReport> filedReports = new ConcurrentHashMap<>();
+
+    /**
+     * STR 持久化目录（JSONL 追加，合规审计重启可恢复）。
+     * 配置: compliance.aml.str-dir，默认 ./nexus-compliance-str
+     */
+    @org.springframework.beans.factory.annotation.Value("${compliance.aml.str-dir:./nexus-compliance-str}")
+    private String strDir;
+
+    private java.nio.file.Path strFile() {
+        return java.nio.file.Path.of(strDir, "suspicious-transaction-reports.jsonl");
+    }
+
+    @jakarta.annotation.PostConstruct
+    public void initStrStore() {
+        try {
+            java.nio.file.Files.createDirectories(java.nio.file.Path.of(strDir));
+            if (java.nio.file.Files.exists(strFile())) {
+                // 启动加载已有 STR（重启恢复）
+                for (String line : java.nio.file.Files.readAllLines(strFile())) {
+                    try {
+                        SuspiciousTransactionReport r = STR_MAPPER.readValue(line, SuspiciousTransactionReport.class);
+                        if (r != null && r.getReportId() != null) {
+                            filedReports.put(r.getReportId(), r);
+                        }
+                    } catch (Exception ignored) {
+                        // 单行损坏跳过（审计日志文件容错）
+                    }
+                }
+                log.info("DefaultAmlService: loaded {} STR from {}", filedReports.size(), strFile());
+            }
+        } catch (Exception e) {
+            log.warn("DefaultAmlService: STR store init failed (in-memory only): {}", e.getMessage());
+        }
+    }
+
+    /** 追加 STR 到 JSONL 文件（合规审计持久化）。 */
+    private void persistReport(SuspiciousTransactionReport report) {
+        try {
+            java.nio.file.Files.createDirectories(java.nio.file.Path.of(strDir));
+            java.nio.file.Files.writeString(strFile(),
+                    STR_MAPPER.writeValueAsString(report) + System.lineSeparator(),
+                    java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.APPEND);
+        } catch (Exception e) {
+            log.warn("DefaultAmlService: STR persist failed (in-memory only): {}", e.getMessage());
+        }
+    }
 
     public DefaultAmlService(SanctionListChecker sanctionListChecker) {
         this.sanctionListChecker = sanctionListChecker;
@@ -118,6 +169,7 @@ public class DefaultAmlService implements AmlScreeningService {
         report.setReportStatus(SuspiciousTransactionReport.ReportStatus.SUBMITTED);
         report.setReportedAt(Instant.now());
         filedReports.put(report.getReportId(), report);
+        persistReport(report);  // TODO(v2.0.0) 落地：STR 持久化（JSONL 追加）
         log.warn("Suspicious transaction report filed: reportId={}, reason={}",
                 report.getReportId(), report.getSuspiciousReason());
         return report;
