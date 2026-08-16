@@ -26,11 +26,23 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+# === REQ-20 安全加固：容器非 root 运行 ===
+# 创建非特权用户 mpc (UID 1000, GID 1000)，避免容器内进程以 root 身份运行
+RUN groupadd -r -g 1000 mpc \
+    && useradd -r -u 1000 -g mpc -m -d /home/mpc mpc
+
 COPY --from=builder /app/target/release/mpc-engine /usr/local/bin/mpc-engine
+
+# 工作目录归属非 root 用户，确保运行时可写日志/临时文件
+WORKDIR /home/mpc
+RUN chown -R mpc:mpc /home/mpc
 
 EXPOSE 50051
 ENV RUST_LOG=info \
     MPC_ENGINE_HOST=0.0.0.0 \
     MPC_ENGINE_PORT=50051
+
+# 切换到非 root 用户运行主进程
+USER mpc
 
 CMD ["mpc-engine"]

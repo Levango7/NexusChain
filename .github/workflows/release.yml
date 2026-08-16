@@ -1,0 +1,194 @@
+name: NexusChain Release & Deploy
+
+# ============================================================================
+# REQ-03 / T03：tag-based 发布与部署 workflow
+# 触发：推送 v*.*.* 格式的 git tag
+# 流程：build-images → github-release → helm-publish → deploy-staging → deploy-prod
+# prod 部署需 GitHub environment protection（required reviewers ≥ 2 人 approval）
+# ============================================================================
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository }}
+
+permissions:
+  contents: write      # github-release job 创建 Release
+  packages: write      # build-images / helm-publish 推送 GHCR
+
+jobs:
+  # ============================================================
+  # 1. 构建并推送全部 12 个 Docker 镜像（tag = git tag 版本号）
+  # ============================================================
+  build-images:
+    name: Build Images (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: ${{ matrix.timeout-minutes || 10 }}
+    env:
+      REGISTRY: ghcr.io
+      IMAGE_PREFIX: ${{ github.repository }}
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        module:
+          - nexus-core
+          - nexus-gateway
+          - nexus-bridge
+          - nexus-signing-service
+          - nexus-wallet-service
+          - nexus-api-gateway
+          - nexus-settlement
+          - nexus-compliance
+          - nexus-analytics
+          - nexus-oracle
+          - mpc-engine
+          - zk-groth16-service
+        include:
+          - module: mpc-engine
+            timeout-minutes: 15
+          - module: zk-groth16-service
+            timeout-minutes: 15
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v4
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image（tag = git tag 版本号）
+        uses: docker/build-push-action@v5
+        with:
+          context: ./${{ matrix.module }}
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.module }}:${{ github.ref_name }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.module }}:latest
+
+  # ============================================================
+  # 2. 创建 GitHub Release（从 CHANGELOG.md 提取对应版本段落）
+  # ============================================================
+  github-release:
+    name: GitHub Release
+    needs: build-images
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          generate_release_notes: true
+          body_path: CHANGELOG.md
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') }}
+
+  # ============================================================
+  # 3. 打包并推送 Helm Chart 至 GHCR OCI Registry
+  # ============================================================
+  helm-publish:
+    name: Helm Chart Publish
+    needs: build-images
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v4
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: 'v3.14.0'
+
+      - name: Login to GHCR OCI Registry
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ${{ env.REGISTRY }} --username ${{ github.actor }} --password-stdin
+
+      - name: Package and push Helm Chart
+        run: |
+          CHART_VERSION="${{ github.ref_name }}"
+          # helm package：版本号去掉 v 前缀（Chart version 不含 v 前缀）
+          CHART_VERSION_NUM="${CHART_VERSION#v}"
+          helm package deploy/helm/ --version "${CHART_VERSION_NUM}" --app-version "${CHART_VERSION_NUM}" --destination ./chart-package
+          helm push "./chart-package/nexuschain-${CHART_VERSION_NUM}.tgz" "oci://${{ env.REGISTRY }}/${{ github.repository }}/charts"
+
+  # ============================================================
+  # 4. 自动部署至 staging 环境
+  # ============================================================
+  deploy-staging:
+    name: Deploy to Staging
+    needs: [github-release, helm-publish]
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v4
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: 'v3.14.0'
+
+      - name: Configure kubeconfig
+        run: |
+          mkdir -p $HOME/.kube
+          echo "${{ secrets.KUBE_CONFIG_STAGING }}" | base64 -d > $HOME/.kube/config
+
+      - name: Helm upgrade --install（staging）
+        run: |
+          CHART_VERSION="${{ github.ref_name }}"
+          CHART_VERSION_NUM="${CHART_VERSION#v}"
+          helm upgrade --install nexuschain deploy/helm/ \
+            --namespace nexus-staging \
+            --create-namespace \
+            --version "${CHART_VERSION_NUM}" \
+            -f deploy/helm/values-staging.yaml \
+            --wait --timeout 10m
+
+  # ============================================================
+  # 5. 部署至 prod 环境（需 GitHub environment protection approval）
+  # ============================================================
+  deploy-prod:
+    name: Deploy to Production
+    needs: deploy-staging
+    runs-on: ubuntu-latest
+    # environment: production 触发 GitHub environment protection
+    # required reviewers ≥ 2 人 approval（在仓库 Settings → Environments 配置）
+    environment: production
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v4
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: 'v3.14.0'
+
+      - name: Configure kubeconfig
+        run: |
+          mkdir -p $HOME/.kube
+          echo "${{ secrets.KUBE_CONFIG_PROD }}" | base64 -d > $HOME/.kube/config
+
+      - name: Helm upgrade --install（prod）
+        run: |
+          CHART_VERSION="${{ github.ref_name }}"
+          CHART_VERSION_NUM="${CHART_VERSION#v}"
+          helm upgrade --install nexuschain deploy/helm/ \
+            --namespace nexus-prod \
+            --create-namespace \
+            --version "${CHART_VERSION_NUM}" \
+            -f deploy/helm/values-prod.yaml \
+            --wait --timeout 15m

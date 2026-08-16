@@ -90,7 +90,7 @@ helm uninstall nexus-chain -n nexus
 | 资源 limits | 512Mi / 1 | 1Gi / 2 | 2Gi / 4 |
 | HPA | 禁用 | 2-4 | 3-10 |
 | PDB | 禁用 | minAvailable=1 | minAvailable=2 |
-| 镜像 tag | latest | staging | 2.0.0（固定） |
+| 镜像 tag | latest | staging | 2.1.0（固定） |
 | imagePullPolicy | Always | IfNotPresent | IfNotPresent |
 | ServiceMonitor | 关闭 | 开启 | 开启 |
 | NetworkPolicy | 关闭 | 开启 | 开启 |

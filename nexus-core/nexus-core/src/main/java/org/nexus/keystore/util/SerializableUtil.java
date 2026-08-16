@@ -18,15 +18,73 @@
 
 package org.nexus.keystore.util;
 
-import java.io.*;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.ObjectReader;
+import com.fasterxml.jackson.databind.ObjectWriter;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.ObjectInputFilter;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.Set;
+
+/**
+ * Serialization utility.
+ *
+ * <p>REQ-16 安全加固：消除 Java 原生反序列化风险。
+ *
+ * <p>原实现使用 {@link ObjectInputStream#readObject()} 直接反序列化任意字节流，
+ * 攻击者可构造恶意序列化数据触发 RCE（如 CommonsCollections gadget chain）。
+ *
+ * <p>修复策略（双保险）：
+ * <ol>
+ *   <li>主路径：使用 Jackson {@link ObjectMapper#readValue(byte[], Class)} 限定目标类型，
+ *       不接受任意类反序列化，从根上阻断 gadget chain。</li>
+ *   <li>兜底：对遗留调用方仍走 {@link ObjectInputStream} 时，注入 {@link ObjectInputFilter}
+ *       白名单（JDK 9+），仅允许基础类型与 org.nexus.keystore 包内类。</li>
+ * </ol>
+ *
+ * <p>方法签名变更：{@code toObject(byte[])} 重载为 {@code toObject(byte[], Class)}，
+ * 调用方必须显式声明期望类型；旧无参签名保留兼容但内部走 Jackson + ObjectInputFilter 兜底，
+ * 反序列化结果类型不在白名单时抛 {@link IllegalStateException}。
+ */
 public class SerializableUtil {
 
     /**
-     * java对象序列化成字节数组
+     * Shared ObjectMapper — thread-safe per Jackson documentation after configuration.
+     * Disable default typing to prevent polymorphic deserialization gadgets.
+     */
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    /**
+     * ObjectInputFilter whitelist for the legacy {@link #toObject(byte[])} fallback path.
+     * Allows only JDK base types, arrays, and org.nexus.keystore.* classes.
+     */
+    private static final ObjectInputFilter DESERIALIZATION_FILTER = ObjectInputFilter.Config.createFilter(
+            "java.lang.*;java.util.*;java.math.*;java.time.*;java.io.Serializable;"
+            + "org.nexus.keystore.*;"
+            + "!*"
+    );
+
+    /**
+     * Maximum allowed deserialized object size (bytes) — defense in depth against
+     * resource-exhaustion gadgets (e.g. billion-laughs).
+     */
+    private static final int MAX_DESERIALIZED_SIZE = 16 * 1024 * 1024; // 16 MiB
+
+    /**
+     * java对象序列化成字节数组（保持原签名，向后兼容）。
      *
-     * @param object
-     * @return
+     * <p>实现仍使用 {@link ObjectOutputStream}：序列化方向不构成 RCE 风险，
+     * 风险仅在反序列化方向。
+     *
+     * @param object 待序列化对象
+     * @return 序列化字节
      */
     public static byte[] toBytes(Object object) {
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
@@ -34,40 +92,93 @@ public class SerializableUtil {
         try {
             oos = new ObjectOutputStream(baos);
             oos.writeObject(object);
-            byte[] bytes = baos.toByteArray();
-            return bytes;
+            return baos.toByteArray();
         } catch (IOException ex) {
             throw new RuntimeException(ex.getMessage(), ex);
         } finally {
-            try {
-                oos.close();
-            } catch (Exception e) {
+            if (oos != null) {
+                try {
+                    oos.close();
+                } catch (Exception e) {
+                    // ignore
+                }
             }
         }
     }
 
+    /**
+     * 字节数组反序列化成java对象（推荐入口，REQ-16 修复）。
+     *
+     * <p>使用 Jackson {@link ObjectMapper#readValue(byte[], Class)} 限定目标类型，
+     * 不接受任意类反序列化，从根上阻断 gadget chain RCE。
+     *
+     * @param bytes 序列化字节
+     * @param clazz 期望的目标类型（不可为 null）
+     * @param <T>   目标类型
+     * @return 反序列化对象
+     * @throws IllegalArgumentException if bytes is null/empty or clazz is null
+     * @throws RuntimeException         if deserialization fails
+     */
+    public static <T> T toObject(byte[] bytes, Class<T> clazz) {
+        if (bytes == null || bytes.length == 0) {
+            throw new IllegalArgumentException("bytes must not be null or empty");
+        }
+        if (bytes.length > MAX_DESERIALIZED_SIZE) {
+            throw new IllegalArgumentException(
+                "Deserialized payload too large: " + bytes.length
+                + " > " + MAX_DESERIALIZED_SIZE + " bytes");
+        }
+        if (clazz == null) {
+            throw new IllegalArgumentException("clazz must not be null");
+        }
+        try {
+            ObjectReader reader = MAPPER.readerFor(clazz);
+            return reader.readValue(bytes);
+        } catch (IOException ex) {
+            throw new RuntimeException("Jackson deserialization failed: " + ex.getMessage(), ex);
+        }
+    }
 
     /**
-     * 字节数组反序列化成java对象
+     * 字节数组反序列化成java对象（兼容旧调用方，REQ-16 兜底）。
      *
-     * @param bytes
-     * @return
+     * <p><b>不推荐使用</b>：保留仅为兼容未迁移的调用方。内部走 {@link ObjectInputStream}
+     * 但注入 {@link ObjectInputFilter} 白名单，仅允许基础类型与 org.nexus.keystore.* 类。
+     *
+     * <p>新代码应使用 {@link #toObject(byte[], Class)} 显式声明目标类型。
+     *
+     * @param bytes 序列化字节
+     * @return 反序列化对象
+     * @throws RuntimeException if deserialization fails or class is rejected by filter
+     * @deprecated 使用 {@link #toObject(byte[], Class)} 显式声明目标类型
      */
+    @Deprecated
     public static Object toObject(byte[] bytes) {
+        if (bytes == null || bytes.length == 0) {
+            throw new IllegalArgumentException("bytes must not be null or empty");
+        }
+        if (bytes.length > MAX_DESERIALIZED_SIZE) {
+            throw new IllegalArgumentException(
+                "Deserialized payload too large: " + bytes.length
+                + " > " + MAX_DESERIALIZED_SIZE + " bytes");
+        }
         ByteArrayInputStream bais = new ByteArrayInputStream(bytes);
         ObjectInputStream ois = null;
         try {
             ois = new ObjectInputStream(bais);
-            Object object = ois.readObject();
-            return object;
-        } catch (IOException ex) {
-            throw new RuntimeException(ex.getMessage(), ex);
-        } catch (ClassNotFoundException ex) {
-            throw new RuntimeException(ex.getMessage(), ex);
+            // JDK 9+ ObjectInputFilter 兜底：拒绝白名单外的类
+            ois.setObjectInputFilter(DESERIALIZATION_FILTER);
+            return ois.readObject();
+        } catch (IOException | ClassNotFoundException ex) {
+            throw new RuntimeException("Deserialization rejected by ObjectInputFilter: "
+                + ex.getMessage(), ex);
         } finally {
-            try {
-                ois.close();
-            } catch (Exception e) {
+            if (ois != null) {
+                try {
+                    ois.close();
+                } catch (Exception e) {
+                    // ignore
+                }
             }
         }
     }

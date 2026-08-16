@@ -1,0 +1,83 @@
+﻿# ============================================================================
+# REQ-37 / T37: nexus-api-gateway Deployment + Service
+# 端口 8085（与 application.yml server.port 对齐，Spring Cloud Gateway 统一入口）
+# 参照 10-gateway.yml 模式
+# ============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nexus-api-gateway
+  namespace: nexus
+  labels:
+    app: nexus-api-gateway
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nexus-api-gateway
+  template:
+    metadata:
+      labels:
+        app: nexus-api-gateway
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api-gateway
+          image: ghcr.io/nexus/nexus-api-gateway:2.1.0
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          ports:
+            - containerPort: 8085
+          env:
+            - name: SPRING_PROFILES_ACTIVE
+              value: prod
+          envFrom:
+            - configMapRef:
+                name: nexus-config
+            - secretRef:
+                name: nexus-secrets
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "1000m"
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8085
+            initialDelaySeconds: 40
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8085
+            initialDelaySeconds: 20
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nexus-api-gateway
+  namespace: nexus
+spec:
+  type: ClusterIP
+  selector:
+    app: nexus-api-gateway
+  ports:
+    - port: 8085
+      targetPort: 8085

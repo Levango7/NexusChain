@@ -1,0 +1,83 @@
+﻿# ============================================================================
+# REQ-37 / T37: nexus-bridge Deployment + Service
+# 端口 8084（与 application.yml server.port 对齐，REQ-29 修正）
+# 参照 10-gateway.yml 模式
+# ============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nexus-bridge
+  namespace: nexus
+  labels:
+    app: nexus-bridge
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nexus-bridge
+  template:
+    metadata:
+      labels:
+        app: nexus-bridge
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: bridge
+          image: ghcr.io/nexus/nexus-bridge:2.1.0
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          ports:
+            - containerPort: 8084
+          env:
+            - name: SPRING_PROFILES_ACTIVE
+              value: prod
+          envFrom:
+            - configMapRef:
+                name: nexus-config
+            - secretRef:
+                name: nexus-secrets
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "1000m"
+          livenessProbe:
+            httpGet:
+              path: /api/v1/bridge/status
+              port: 8084
+            initialDelaySeconds: 40
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /api/v1/bridge/status
+              port: 8084
+            initialDelaySeconds: 20
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nexus-bridge
+  namespace: nexus
+spec:
+  type: ClusterIP
+  selector:
+    app: nexus-bridge
+  ports:
+    - port: 8084
+      targetPort: 8084

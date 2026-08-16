@@ -8,9 +8,14 @@
 #
 # 用法: bash scripts/build-mpc-engine.sh
 # 产物: mpc-engine/target/release/mpc-engine（Linux ELF）
+#
+# 可覆盖环境变量：
+#   MPC_ENGINE_DIR - mpc-engine 源码目录（默认: 项目根目录下的 mpc-engine）
 # ============================================================
 set -e
 cd "$(dirname "$0")/.."
+
+MPC_ENGINE_DIR="${MPC_ENGINE_DIR:-$(pwd)/mpc-engine}"
 
 echo "[1/2] 构建带 protoc 的 rust 编译镜像（缓存，仅首次慢）..."
 docker build -t nexus-rust-build -f - . <<'DOCKERFILE'
@@ -20,7 +25,7 @@ DOCKERFILE
 
 echo "[2/2] 编译 mpc-engine（release）..."
 rm -f mpc-engine/target/*.lock mpc-engine/target/release/.cargo-lock 2>/dev/null || true
-docker run --rm -v "F:/Nexus/NexusChain/mpc-engine:/src" -w //src nexus-rust-build \
+docker run --rm -v "${MPC_ENGINE_DIR}:/src" -w //src nexus-rust-build \
   cargo build --release
 
 echo "✅ 编译完成: mpc-engine/target/release/mpc-engine"

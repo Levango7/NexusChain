@@ -1,0 +1,6 @@
+# nexus-gateway bootstrap-dev 配置
+# === REQ-18 安全加固：dev profile 覆盖 Nacos 为 HTTP（本地开发降级） ===
+nacos:
+  tls:
+    enabled: false
+    protocol: http

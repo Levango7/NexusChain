@@ -2,6 +2,11 @@ package org.nexus.p2p;
 
 import com.google.protobuf.AbstractMessage;
 import io.grpc.*;
+import io.grpc.netty.shaded.io.grpc.netty.GrpcSslContexts;
+import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
+import io.grpc.netty.shaded.io.netty.handler.ssl.SslContext;
+import io.grpc.netty.shaded.io.netty.handler.ssl.SslContextBuilder;
+import io.grpc.netty.shaded.io.netty.handler.ssl.ClientAuth;
 import io.grpc.stub.StreamObserver;
 import org.apache.commons.codec.binary.Hex;
 import org.slf4j.Logger;
@@ -16,6 +21,7 @@ import org.nexus.sync.SyncManager;
 import org.nexus.sync.TransactionHandler;
 
 import jakarta.annotation.PostConstruct;
+import java.io.File;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.util.*;
@@ -74,6 +80,20 @@ public class PeerServer extends NexusChainGrpc.NexusChainImplBase {
     @Value("${p2p.enable-discovery}")
     private boolean enableDiscovery;
 
+    // === REQ-19 安全加固：P2P gRPC TLS 配置 ===
+    // 证书通过环境变量注入（节点本地证书+定期轮换脚本，非 Nacos 管理）
+    @Value("${p2p.tls.enabled:${GRPC_TLS_ENABLED:false}}")
+    private boolean tlsEnabled;
+
+    @Value("${p2p.tls.cert-chain-path:${GRPC_TLS_CERT_CHAIN:}}")
+    private String tlsCertChainPath;
+
+    @Value("${p2p.tls.private-key-path:${GRPC_TLS_PRIVATE_KEY:}}")
+    private String tlsPrivateKeyPath;
+
+    @Value("${p2p.tls.trust-store-path:${GRPC_TLS_TRUST_STORE:}}")
+    private String tlsTrustStorePath;
+
     public PeerServer(
     ) throws Exception {
         pluginList = new ArrayList<>();
@@ -114,7 +134,36 @@ public class PeerServer extends NexusChainGrpc.NexusChainImplBase {
         if(!enableMessageLog){
             java.util.logging.Logger.getLogger("io.grpc").setLevel(Level.OFF);
         }
-        this.server = ServerBuilder.forPort(peersCache.getSelf().port).addService(this).build().start();
+        // === REQ-19 安全加固：P2P gRPC Server 启用 TLS（mTLS 双向认证） ===
+        int port = peersCache.getSelf().port;
+        if (tlsEnabled) {
+            // 启用 TLS：加载证书链与私钥，要求客户端证书（mTLS）
+            if (tlsCertChainPath == null || tlsCertChainPath.isEmpty()
+                    || tlsPrivateKeyPath == null || tlsPrivateKeyPath.isEmpty()) {
+                throw new IllegalStateException(
+                    "P2P TLS enabled but cert-chain-path or private-key-path is empty. "
+                    + "Set GRPC_TLS_CERT_CHAIN and GRPC_TLS_PRIVATE_KEY environment variables.");
+            }
+            SslContextBuilder sslContextBuilder = SslContextBuilder.forServer(
+                    new File(tlsCertChainPath), new File(tlsPrivateKeyPath));
+            // 信任库配置（mTLS：验证客户端证书）
+            if (tlsTrustStorePath != null && !tlsTrustStorePath.isEmpty()) {
+                sslContextBuilder.trustManager(new File(tlsTrustStorePath));
+                sslContextBuilder.clientAuth(ClientAuth.REQUIRE);
+            }
+            SslContext sslContext = GrpcSslContexts.configure(sslContextBuilder).build();
+            this.server = NettyServerBuilder.forPort(port)
+                    .sslContext(sslContext)
+                    .addService(this)
+                    .build()
+                    .start();
+            logger.info("P2P gRPC server started with TLS (mTLS) on port {}", port);
+        } else {
+            // 兼容模式：未启用 TLS 时使用明文（仅 dev/test 环境）
+            this.server = ServerBuilder.forPort(port).addService(this).build().start();
+            logger.warn("P2P gRPC server started WITHOUT TLS on port {} — "
+                    + "this is insecure; enable p2p.tls.enabled in production", port);
+        }
     }
 
     @Scheduled(fixedRate = HALF_RATE * 1000)

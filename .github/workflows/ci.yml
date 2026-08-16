@@ -90,13 +90,38 @@ jobs:
     needs: build-and-test
     if: github.ref == 'refs/heads/master' && github.event_name == 'push'
     runs-on: ubuntu-latest
+    # REQ-02: 单模块构建失败不阻断其他模块（continue-on-error + fail-fast: false）
+    continue-on-error: true
+    # Rust 模块（mpc-engine / zk-groth16-service）构建耗时较长，通过 matrix.include 放宽至 15min
+    timeout-minutes: ${{ matrix.timeout-minutes || 10 }}
     env:
       REGISTRY: ghcr.io
       IMAGE_PREFIX: ${{ github.repository }}
     strategy:
       fail-fast: false
+      # max-parallel: 4 控制并发，避免触发 GitHub Actions 并发限额
+      max-parallel: 4
       matrix:
-        module: [nexus-gateway, nexus-bridge]
+        # REQ-02: 全部 12 个含 Dockerfile 的模块
+        module:
+          - nexus-core
+          - nexus-gateway
+          - nexus-bridge
+          - nexus-signing-service
+          - nexus-wallet-service
+          - nexus-api-gateway
+          - nexus-settlement
+          - nexus-compliance
+          - nexus-analytics
+          - nexus-oracle
+          - mpc-engine
+          - zk-groth16-service
+        # Rust 多阶段构建耗时较长，单独放宽 timeout
+        include:
+          - module: mpc-engine
+            timeout-minutes: 15
+          - module: zk-groth16-service
+            timeout-minutes: 15
     steps:
       - name: Checkout 代码
         uses: actions/checkout@v4

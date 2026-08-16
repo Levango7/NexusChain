@@ -3,14 +3,25 @@
 # NexFinality 双节点集群启动脚本（PLAN-007/008 收敛验证）
 # 用法: bash scripts/dev-cluster-up.sh
 # 前提: Docker Postgres @55432（nexuschain 库）已就绪
+#
+# 可覆盖环境变量：
+#   GRADLE_BIN  - gradle 可执行文件路径（默认: ./gradlew，回退: $(which gradle)）
+#   LOG_DIR     - 日志输出目录（默认: 项目根目录 $(pwd)）
 # ============================================================
 set -e
 cd "$(dirname "$0")/.."
 
-GRADLE_BIN="C:/Users/winge/.gradle/wrapper/dists/gradle-8.5-bin/5t9huq95ubn472n8rpzujfbqh/gradle-8.5/bin/gradle.bat"
+# 默认优先使用项目自带的 gradlew，其次系统 gradle
+if [ -z "${GRADLE_BIN:-}" ]; then
+  if [ -x "./gradlew" ]; then
+    GRADLE_BIN="./gradlew"
+  else
+    GRADLE_BIN="$(command -v gradle || echo gradle)"
+  fi
+fi
+LOG_DIR="${LOG_DIR:-$(pwd)}"
 PRIVA="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 PRIVB="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-LOG_DIR="F:/Nexus/NexusChain"
 
 echo "[1/3] 清理旧状态..."
 pkill -f "org.nexus.Start" 2>/dev/null || true

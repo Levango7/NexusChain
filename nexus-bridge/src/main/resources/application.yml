@@ -18,11 +18,22 @@ spring:
   # === Phase 3 任务 #61：优雅停机等待时长（设计文档 §4.6.2） ===
   lifecycle:
     timeout-per-shutdown-phase: 30s
+  # === REQ-13 安全加固：数据库连接启用 TLS ===
+  # 默认启用 useSSL=true&requireSSL=true&verifyServerCertificate=true，信任库通过环境变量注入。
+  # dev profile 通过 application-dev.yml 覆盖为 H2 内存库（无需 TLS）。
   datasource:
-    url: jdbc:mysql://localhost:3306/nexus_bridge?useSSL=false&serverTimezone=UTC
-    username: nexus
+    url: ${NEX_DB_URL:jdbc:mysql://localhost:3306/nexus_bridge?useSSL=true&requireSSL=true&verifyServerCertificate=true&trustCertificateKeyStoreUrl=file:${DB_TRUSTSTORE_PATH:classpath:keystore/mysql-truststore.jks}&trustCertificateKeyStorePassword=${DB_TRUSTSTORE_PASSWORD:changeit}&serverTimezone=UTC}
+    username: ${NEX_DB_USERNAME:nexus}
     password: ${NEX_DB_PASSWORD}
-    driver-class-name: com.mysql.cj.jdbc.Driver
+    driver-class-name: ${NEX_DB_DRIVER:com.mysql.cj.jdbc.Driver}
+    hikari:
+      # 显式数据源属性，确保 TLS 握手参数传递到 MySQL driver
+      data-source-properties:
+        ssl: true
+        requireSSL: true
+        verifyServerCertificate: true
+        trustCertificateKeyStoreUrl: file:${DB_TRUSTSTORE_PATH:classpath:keystore/mysql-truststore.jks}
+        trustCertificateKeyStorePassword: ${DB_TRUSTSTORE_PASSWORD:changeit}
   jpa:
     hibernate:
       ddl-auto: update
@@ -72,6 +83,14 @@ feign:
       enabled: true
     response:
       enabled: true
+  # === REQ-14 安全加固：Feign 服务间调用启用 TLS（mTLS） ===
+  # 证书路径通过环境变量注入，dev profile 通过 application-dev.yml 关闭。
+  tls:
+    enabled: ${FEIGN_TLS_ENABLED:true}
+    key-store-path: ${FEIGN_KEYSTORE_PATH:classpath:keystore/feign-keystore.jks}
+    key-store-password: ${FEIGN_KEYSTORE_PASSWORD:changeit}
+    trust-store-path: ${FEIGN_TRUSTSTORE_PATH:classpath:keystore/feign-truststore.jks}
+    trust-store-password: ${FEIGN_TRUSTSTORE_PASSWORD:changeit}
 
 # Bridge configuration
 nexus:

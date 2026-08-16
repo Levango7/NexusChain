@@ -1,0 +1,83 @@
+﻿# ============================================================================
+# REQ-37 / T37: nexus-signing-service Deployment + Service
+# 端口 8082（与 application.yml server.port 对齐）
+# 涉及私钥的敏感操作，独立部署单元
+# ============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nexus-signing-service
+  namespace: nexus
+  labels:
+    app: nexus-signing-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nexus-signing-service
+  template:
+    metadata:
+      labels:
+        app: nexus-signing-service
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: signing-service
+          image: ghcr.io/nexus/nexus-signing-service:2.1.0
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          ports:
+            - containerPort: 8082
+          env:
+            - name: SPRING_PROFILES_ACTIVE
+              value: prod
+          envFrom:
+            - configMapRef:
+                name: nexus-config
+            - secretRef:
+                name: nexus-secrets
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "1000m"
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8082
+            initialDelaySeconds: 40
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8082
+            initialDelaySeconds: 20
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nexus-signing-service
+  namespace: nexus
+spec:
+  type: ClusterIP
+  selector:
+    app: nexus-signing-service
+  ports:
+    - port: 8082
+      targetPort: 8082

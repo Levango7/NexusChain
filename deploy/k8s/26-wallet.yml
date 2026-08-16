@@ -1,0 +1,83 @@
+﻿# ============================================================================
+# REQ-37 / T37: nexus-wallet-service Deployment + Service
+# 端口 8083（与 application.yml server.port 对齐）
+# 提现审批 TCC + 托管 + 白名单
+# ============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nexus-wallet-service
+  namespace: nexus
+  labels:
+    app: nexus-wallet-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nexus-wallet-service
+  template:
+    metadata:
+      labels:
+        app: nexus-wallet-service
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: wallet-service
+          image: ghcr.io/nexus/nexus-wallet-service:2.1.0
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          ports:
+            - containerPort: 8083
+          env:
+            - name: SPRING_PROFILES_ACTIVE
+              value: prod
+          envFrom:
+            - configMapRef:
+                name: nexus-config
+            - secretRef:
+                name: nexus-secrets
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "1000m"
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8083
+            initialDelaySeconds: 40
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8083
+            initialDelaySeconds: 20
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nexus-wallet-service
+  namespace: nexus
+spec:
+  type: ClusterIP
+  selector:
+    app: nexus-wallet-service
+  ports:
+    - port: 8083
+      targetPort: 8083

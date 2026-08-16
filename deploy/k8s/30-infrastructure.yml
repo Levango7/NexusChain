@@ -17,14 +17,14 @@ spec:
       # 数据库不调用 K8s API
       automountServiceAccountToken: false
       securityContext:
-        # postgres:15-alpine 镜像默认以 UID 70 运行（已是 non-root），
+        # postgres:16-alpine 镜像默认以 UID 70 运行（已是 non-root），
         # 不设 runAsUser 以保留镜像内置用户，仅强制非root + 收紧 capabilities
         runAsNonRoot: true
         seccompProfile:
           type: RuntimeDefault
       containers:
         - name: postgres
-          image: postgres:15-alpine
+          image: postgres:16-alpine
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:

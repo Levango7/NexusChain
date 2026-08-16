@@ -4,7 +4,7 @@
 >
 > P3-T5：分布式追踪深化 — 业务 span + trace_id 日志关联（Loki + Promtail）+ 异常 span 告警
 >
-> 适用范围：NexusChain v2.0.0 Phase 2 / Phase 3 生产就绪
+> 适用范围：NexusChain v2.1.0 Phase 2 / Phase 3 生产就绪
 >
 > 追踪栈：OpenTelemetry Collector（OTLP 接收 + 处理 + 导出）+ Jaeger all-in-one（Query UI + Collector + Agent）+ Loki（日志聚合）+ Promtail（日志采集）
 

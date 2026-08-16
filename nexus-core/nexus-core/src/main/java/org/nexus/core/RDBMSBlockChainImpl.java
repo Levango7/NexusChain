@@ -219,6 +219,14 @@ public class RDBMSBlockChainImpl implements NexusChainBlockChain {
         createTableAndIndices(basicDataSource);
         //增加account vote字段
         if (databaseUserName != null && !databaseUserName.equals("")) {
+            // === REQ-17 安全加固：SQL 注入修复 ===
+            // 白名单校验：仅允许字母、数字、下划线（PostgreSQL 标识符安全字符集）
+            // 双保险：白名单 + 严格格式校验，杜绝任意字符拼接导致 SQL 注入
+            if (!databaseUserName.matches("^[a-zA-Z0-9_]+$")) {
+                throw new IllegalArgumentException(
+                    "Invalid database user name: must match ^[a-zA-Z0-9_]+$. Got: '"
+                    + databaseUserName + "'");
+            }
             String sql = "ALTER TABLE account OWNER TO " + databaseUserName;
             tmpl.execute(sql);//更换属主
         }

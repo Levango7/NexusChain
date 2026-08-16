@@ -9,15 +9,26 @@
 #
 # 用法: bash scripts/dev-cluster-3nodes.sh
 # 前置: Docker PG @55432 就绪
+#
+# 可覆盖环境变量：
+#   GRADLE_BIN  - gradle 可执行文件路径（默认: ./gradlew，回退: $(which gradle)）
+#   LOG_DIR     - 日志输出目录（默认: 项目根目录 $(pwd)）
 # ============================================================
 set -e
 cd "$(dirname "$0")/.."
 
-GRADLE_BIN="C:/Users/winge/.gradle/wrapper/dists/gradle-8.5-bin/5t9huq95ubn472n8rpzujfbqh/gradle-8.5/bin/gradle.bat"
+# 默认优先使用项目自带的 gradlew，其次系统 gradle
+if [ -z "${GRADLE_BIN:-}" ]; then
+  if [ -x "./gradlew" ]; then
+    GRADLE_BIN="./gradlew"
+  else
+    GRADLE_BIN="$(command -v gradle || echo gradle)"
+  fi
+fi
+LOG_DIR="${LOG_DIR:-$(pwd)}"
 PRIVA="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 PRIVB="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 PRIVC="cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-LOG_DIR="F:/Nexus/NexusChain"
 
 echo "[1/4] 清理旧状态..."
 pkill -f "org.nexus.Start" 2>/dev/null || true

@@ -20,8 +20,11 @@ spring:
   # (e.g. jdbc:postgresql://nexus-postgres:5432/nexus_gateway). The dialect below must
   # match the injected engine; for Postgres set spring.jpa.properties.hibernate.dialect
   # to org.hibernate.dialect.PostgreSQLDialect via the same ConfigMap.
+  # === REQ-13 安全加固：数据库连接启用 TLS ===
+  # 默认启用 useSSL=true&requireSSL=true&verifyServerCertificate=true，信任库通过环境变量注入。
+  # dev profile 通过 application-dev.yml 覆盖为 H2 内存库（无需 TLS）。
   datasource:
-    url: ${NEX_DB_URL:jdbc:mysql://localhost:3306/nexus_gateway?useSSL=false&serverTimezone=UTC&characterEncoding=utf-8}
+    url: ${NEX_DB_URL:jdbc:mysql://localhost:3306/nexus_gateway?useUnicode=true&characterEncoding=utf-8&useSSL=true&requireSSL=true&verifyServerCertificate=true&trustCertificateKeyStoreUrl=file:${DB_TRUSTSTORE_PATH:classpath:keystore/mysql-truststore.jks}&trustCertificateKeyStorePassword=${DB_TRUSTSTORE_PASSWORD:changeit}&serverTimezone=UTC}
     username: ${NEX_DB_USERNAME:nexus}
     password: ${NEX_DB_PASSWORD}
     driver-class-name: ${NEX_DB_DRIVER:com.mysql.cj.jdbc.Driver}
@@ -31,6 +34,13 @@ spring:
       connection-timeout: 30000
       idle-timeout: 600000
       max-lifetime: 1800000
+      # 显式数据源属性，确保 TLS 握手参数传递到 MySQL driver
+      data-source-properties:
+        ssl: true
+        requireSSL: true
+        verifyServerCertificate: true
+        trustCertificateKeyStoreUrl: file:${DB_TRUSTSTORE_PATH:classpath:keystore/mysql-truststore.jks}
+        trustCertificateKeyStorePassword: ${DB_TRUSTSTORE_PASSWORD:changeit}
 
   jpa:
     hibernate:
@@ -102,10 +112,30 @@ spring:
         response:
           enabled: true
 
+# === REQ-14 安全加固：Feign 服务间调用启用 TLS（mTLS） ===
+# 通过 JDK 系统属性注入信任库与密钥库，所有 Feign 调用（OkHttp/ClientHttpRequestFactory）
+# 复用 JVM 全局 SSLContext，实现服务间 mTLS 双向认证。
+# 证书路径通过环境变量注入：FEIGN_KEYSTORE_PATH / FEIGN_TRUSTSTORE_PATH
+# dev profile 通过 application-dev.yml 关闭（本地开发降级）。
+feign:
+  tls:
+    enabled: ${FEIGN_TLS_ENABLED:true}
+    key-store-path: ${FEIGN_KEYSTORE_PATH:classpath:keystore/feign-keystore.jks}
+    key-store-password: ${FEIGN_KEYSTORE_PASSWORD:changeit}
+    trust-store-path: ${FEIGN_TRUSTSTORE_PATH:classpath:keystore/feign-truststore.jks}
+    trust-store-password: ${FEIGN_TRUSTSTORE_PASSWORD:changeit}
+
 # NexusChain Gateway configuration
 nexus:
   # Token symbol used across the platform
   token-symbol: NEX
+
+  # === REQ-15 安全加固：CORS allowedOrigins 外部化 ===
+  # 禁止硬编码 "*"，避免任意跨域请求。逗号分隔的 origin 列表。
+  # 默认值为生产 explorer 域名，确保未注入时也不会开放给任意站点。
+  # 通过环境变量 CORS_ALLOWED_ORIGINS 覆盖；dev profile 覆盖为 localhost。
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:https://explorer.nexuschain.io}
 
   # Chain / RPC node configuration (consumed by nexus-sdk)
   chain:

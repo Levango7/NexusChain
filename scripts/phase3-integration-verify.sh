@@ -9,15 +9,26 @@
 #   1. Seata Server 健康检查（http://localhost:7091/health）
 #   2. Zipkin Server 健康检查（http://localhost:9411/api/v2/services）
 #   3. Nacos 服务注册检查（gateway/signing-service/wallet-service/bridge）
-#   4. gateway 启动检查（http://localhost:8080/actuator/health）
-#   5. signing-service 启动检查（http://localhost:8081/actuator/health）
-#   6. wallet-service 启动检查（http://localhost:8082/actuator/health）
-#   7. bridge 启动检查（http://localhost:8083/actuator/health）
+#   4. gateway 启动检查（http://localhost:${GATEWAY_PORT}/actuator/health）
+#   5. signing-service 启动检查（http://localhost:${SIGNING_PORT}/actuator/health）
+#   6. wallet-service 启动检查（http://localhost:${WALLET_PORT}/actuator/health）
+#   7. bridge 启动检查（http://localhost:${BRIDGE_PORT}/actuator/health）
 #   8. 跨服务 Feign 调用检查（gateway 健康指标含 signing/wallet 探测结果）
 #   9. 链路追踪检查（Zipkin 已收集到跨服务 trace）
 #
+# 端口约定（与各服务 application.yml server.port 对齐，REQ-04 修正）：
+#   gateway  : 8080 / signing : 8082 / wallet : 8083 / bridge : 8084
+#
+# 可覆盖环境变量：
+#   GATEWAY_PORT  — gateway 端口（默认 8080）
+#   SIGNING_PORT  — signing-service 端口（默认 8082）
+#   WALLET_PORT   — wallet-service 端口（默认 8083）
+#   BRIDGE_PORT   — bridge 端口（默认 8084）
+#   CURL_TIMEOUT  — 单次 HTTP 探测超时秒数（默认 8）
+#
 # 用法：
 #   bash scripts/phase3-integration-verify.sh
+#   SIGNING_PORT=18082 WALLET_PORT=18083 BRIDGE_PORT=18084 bash scripts/phase3-integration-verify.sh
 #
 # 退出码：
 #   0 — 全部 PASS
@@ -26,21 +37,28 @@
 set -uo pipefail
 
 # ---------- 配置 ----------
+# REQ-04: 端口从环境变量读取（默认值与各服务 application.yml server.port 对齐）
+#   gateway  : 8080 / signing : 8082 / wallet : 8083 / bridge : 8084
+GATEWAY_PORT="${GATEWAY_PORT:-8080}"
+SIGNING_PORT="${SIGNING_PORT:-8082}"
+WALLET_PORT="${WALLET_PORT:-8083}"
+BRIDGE_PORT="${BRIDGE_PORT:-8084}"
+
 SEATA_HEALTH_URL="http://localhost:7091/health"
 ZIPKIN_SERVICES_URL="http://localhost:9411/api/v2/services"
 ZIPKIN_TRACE_URL="http://localhost:9411/api/v2/trace?limit=1"
 NACOS_INSTANCE_URL="http://localhost:8848/nacos/v1/ns/instance/list"
 
-GATEWAY_HEALTH_URL="http://localhost:8080/actuator/health"
-SIGNING_HEALTH_URL="http://localhost:8081/actuator/health"
-WALLET_HEALTH_URL="http://localhost:8082/actuator/health"
-BRIDGE_HEALTH_URL="http://localhost:8083/actuator/health"
+GATEWAY_HEALTH_URL="http://localhost:${GATEWAY_PORT}/actuator/health"
+SIGNING_HEALTH_URL="http://localhost:${SIGNING_PORT}/actuator/health"
+WALLET_HEALTH_URL="http://localhost:${WALLET_PORT}/actuator/health"
+BRIDGE_HEALTH_URL="http://localhost:${BRIDGE_PORT}/actuator/health"
 
 # Nacos 中应注册的服务名（namespace=dev）
 NACOS_SERVICES=("gateway" "signing-service" "wallet-service" "bridge")
 
 # 单次 HTTP 探测超时（秒）
-CURL_TIMEOUT=8
+CURL_TIMEOUT="${CURL_TIMEOUT:-8}"
 
 # ---------- 颜色 ----------
 if [[ -t 1 ]]; then
