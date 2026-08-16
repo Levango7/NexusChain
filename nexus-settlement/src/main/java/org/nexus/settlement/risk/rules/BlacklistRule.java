@@ -18,8 +18,35 @@ public class BlacklistRule implements RiskRule {
 
     private static final String RULE_ID = "BLACKLIST";
 
-    /** 黑名单地址集合（TODO(v2.0.0): 改为外部数据源加载与热更新 — tracked in v2.0.0 roadmap） */
-    private Set<String> blacklist;
+    private static final org.slf4j.Logger log =
+            org.slf4j.LoggerFactory.getLogger(BlacklistRule.class);
+
+    /** 黑名单地址集合（从配置加载，@PostConstruct 初始化——此前无数据源注入，规则空转不生效） */
+    private Set<String> blacklist = new java.util.HashSet<>();
+
+    /**
+     * 黑名单配置（逗号分隔地址，支持环境变量覆盖）。
+     * 例: settlement.risk.blacklist=0xabc123,0xdef456
+     */
+    @org.springframework.beans.factory.annotation.Value("${settlement.risk.blacklist:}")
+    private String blacklistConfig;
+
+    @jakarta.annotation.PostConstruct
+    public void loadBlacklist() {
+        if (blacklistConfig == null || blacklistConfig.isBlank()) {
+            log.warn("BlacklistRule: settlement.risk.blacklist 未配置——规则不生效（空黑名单）");
+            return;
+        }
+        Set<String> loaded = new java.util.HashSet<>();
+        for (String addr : blacklistConfig.split(",")) {
+            String a = addr.trim();
+            if (!a.isEmpty()) {
+                loaded.add(a);
+            }
+        }
+        this.blacklist = loaded;
+        log.info("BlacklistRule: loaded {} blacklisted addresses from config", loaded.size());
+    }
 
     @Override
     public String getRuleId() {
