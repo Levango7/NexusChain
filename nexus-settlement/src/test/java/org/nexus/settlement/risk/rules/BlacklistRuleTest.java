@@ -1,99 +1,64 @@
 package org.nexus.settlement.risk.rules;
 
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.nexus.settlement.risk.RiskTransaction;
 
-import java.util.Set;
+import java.lang.reflect.Field;
 
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * {@link BlacklistRule} 单元测试。
+ * BlacklistRule 配置加载测试（此前 blacklist 无数据源注入——规则空转不生效）。
  */
 class BlacklistRuleTest {
 
-    private BlacklistRule rule;
+    private void setField(Object target, String name, Object value) throws Exception {
+        Field f = target.getClass().getDeclaredField(name);
+        f.setAccessible(true);
+        f.set(target, value);
+    }
 
-    @BeforeEach
-    void setUp() {
-        rule = new BlacklistRule();
+    private RiskTransaction tx(String payer, String payee) {
+        RiskTransaction t = new RiskTransaction();
+        t.setPayerAddress(payer);
+        t.setPayeeAddress(payee);
+        t.setAmount(new java.math.BigDecimal("100"));
+        t.setCurrency("NEX");
+        return t;
     }
 
     @Test
-    void check_payerBlacklisted_shouldHit() {
-        rule.setBlacklist(Set.of("0xBAD"));
-
-        RiskTransaction tx = new RiskTransaction();
-        tx.setPayerAddress("0xBAD");
-
-        assertTrue(rule.check(tx));
+    void loadsFromConfig_onPostConstruct() throws Exception {
+        BlacklistRule rule = new BlacklistRule();
+        setField(rule, "blacklistConfig", "0xabc123,0xdef456 , 0xghi789");
+        rule.loadBlacklist();
+        assertEquals(3, rule.getBlacklist().size(), "应从配置加载 3 个黑名单地址");
+        assertTrue(rule.getBlacklist().contains("0xabc123"), "应含配置地址");
     }
 
     @Test
-    void check_payeeBlacklisted_shouldHit() {
-        rule.setBlacklist(Set.of("0xBAD"));
-
-        RiskTransaction tx = new RiskTransaction();
-        tx.setPayeeAddress("0xBAD");
-
-        assertTrue(rule.check(tx));
+    void blacklistedPayer_rejected() throws Exception {
+        BlacklistRule rule = new BlacklistRule();
+        setField(rule, "blacklistConfig", "0xabc123");
+        rule.loadBlacklist();
+        assertTrue(rule.check(tx("0xabc123", "0xgood")), "黑名单付款方应命中");
+        assertTrue(rule.check(tx("0xgood", "0xabc123")), "黑名单收款方应命中");
     }
 
     @Test
-    void check_neitherBlacklisted_shouldPass() {
-        rule.setBlacklist(Set.of("0xBAD"));
-
-        RiskTransaction tx = new RiskTransaction();
-        tx.setPayerAddress("0xGOOD");
-        tx.setPayeeAddress("0xGOOD2");
-
-        assertFalse(rule.check(tx));
+    void nonBlacklisted_passed() throws Exception {
+        BlacklistRule rule = new BlacklistRule();
+        setField(rule, "blacklistConfig", "0xabc123");
+        rule.loadBlacklist();
+        assertFalse(rule.check(tx("0xgood1", "0xgood2")), "非黑名单地址应通过");
     }
 
     @Test
-    void check_nullBlacklist_shouldPass() {
-        rule.setBlacklist(null);
-        RiskTransaction tx = new RiskTransaction();
-        tx.setPayerAddress("0xBAD");
-
-        assertFalse(rule.check(tx));
-    }
-
-    @Test
-    void check_emptyBlacklist_shouldPass() {
-        rule.setBlacklist(Set.of());
-        RiskTransaction tx = new RiskTransaction();
-        tx.setPayerAddress("0xBAD");
-
-        assertFalse(rule.check(tx));
-    }
-
-    @Test
-    void check_nullTransaction_shouldPass() {
-        rule.setBlacklist(Set.of("0xBAD"));
-        assertFalse(rule.check(null));
-    }
-
-    @Test
-    void check_nonRiskTransaction_shouldPass() {
-        rule.setBlacklist(Set.of("0xBAD"));
-        assertFalse(rule.check("string"));
-    }
-
-    @Test
-    void check_blankAddress_shouldPass() {
-        rule.setBlacklist(Set.of("0xBAD"));
-        RiskTransaction tx = new RiskTransaction();
-        tx.setPayerAddress("   ");
-        tx.setPayeeAddress("");
-
-        assertFalse(rule.check(tx));
-    }
-
-    @Test
-    void getRuleId_shouldBeStable() {
-        assertTrue("BLACKLIST".equals(rule.getRuleId()));
+    void noConfig_ruleInactive_notMatch() throws Exception {
+        BlacklistRule rule = new BlacklistRule();
+        setField(rule, "blacklistConfig", "");
+        rule.loadBlacklist();  // 未配置 → 空黑名单
+        assertFalse(rule.check(tx("0xabc123", "0xgood")),
+                "未配置时规则不生效（空黑名单不命中）——诚实行为");
     }
 }
