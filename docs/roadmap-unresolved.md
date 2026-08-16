@@ -122,3 +122,15 @@ NACOS 模式改 Nacos Open API 发布配置（Java HttpClient 免客户端依赖
 - ChannelSettlementService/PaymentChannelService from/to 占位 → 校验器不要求非空
   （payload 承载数据，与 #16 同类已确认）
 - 其余占位（BRIDGE_MINT from/BridgeService 等）此前 PLAN-004/#16 已确认设计语义
+
+## v2.0.0 TODO 治理记录（2026-08-15）
+
+**已解决**：
+- BlacklistRule 配置加载激活（此前无数据源空转）✅
+- STR 可疑交易报告 JSONL 持久化（重启恢复）✅
+- Webhook dead-letter Redis 化 ✅
+
+**待办（已核实，非紧急）**：
+- [ ] SubscriptionServiceImpl 订阅授权链上交易（authTxHash 现为占位 UUID，无下游消费无资金风险；真实提交待签名服务）
+- [ ] DidService DID 链上解析（现进程内注册表；依赖链上 DID 合约）
+- [ ] FundSweep 冷钱包转移多签审批（现直接转移；待审批流接入）
