@@ -45,7 +45,7 @@ spec:
       containers:
         - name: core
           # TODO: 固定为不可变 tag（semver 或 sha256 digest）
-          image: ghcr.io/nexus/nexus-core:1.0.0
+          image: ghcr.io/nexus/nexus-core:2.1.0
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: false   # 链数据写在挂载的 core-data PVC；/tmp 需可写
@@ -83,7 +83,7 @@ spec:
             - name: ENABLE_DISCOVERY
               value: "true"
             - name: BOOTSTRAPS
-              value: "nexus://nexus-core-0.nexus-core:9585,nexus://nexus-core-1.nexus-core:9585"
+              value: "nexus://nexus-core-0.nexus-core:9585,nexus://nexus-core-1.nexus-core:9585,nexus://nexus-core-2.nexus-core:9585,nexus://nexus-core-3.nexus-core:9585"
             - name: GENESIS_FILE
               value: "/data/nexus-genesis-generator.json"
             - name: VALIDATORS

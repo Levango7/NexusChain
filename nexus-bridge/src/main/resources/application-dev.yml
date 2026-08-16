@@ -14,3 +14,8 @@ spring:
   h2:
     console:
       enabled: true
+
+# === REQ-14 安全加固：dev profile 关闭 Feign TLS（本地开发降级） ===
+feign:
+  tls:
+    enabled: false

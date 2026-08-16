@@ -2,7 +2,7 @@
 
 > P3-T4：K8s 部署 Kafka 集群（Strimzi Operator 0.40+）
 >
-> 适用范围：NexusChain v2.0.0 Phase 3 架构演进
+> 适用范围：NexusChain v2.1.0 Phase 3 架构演进
 >
 > 部署栈：Strimzi Kafka Operator 0.40.x + Kafka 3.7.0 + ZooKeeper 3.8.3
 >

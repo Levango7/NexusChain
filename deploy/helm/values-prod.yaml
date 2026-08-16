@@ -21,7 +21,7 @@ nexus-gateway:
   replicaCount: 3
   image:
     # 固定不可变 tag（semver），禁止 latest
-    tag: 2.0.0
+    tag: 2.1.0
   resources:
     requests:
       memory: 1Gi
@@ -50,7 +50,7 @@ nexus-gateway:
 nexus-bridge:
   replicaCount: 3
   image:
-    tag: 2.0.0
+    tag: 2.1.0
   resources:
     requests:
       memory: 1Gi
@@ -78,7 +78,7 @@ nexus-bridge:
 nexus-signing-service:
   replicaCount: 3
   image:
-    tag: 2.0.0
+    tag: 2.1.0
   resources:
     requests:
       memory: 1Gi
@@ -106,7 +106,7 @@ nexus-signing-service:
 nexus-wallet-service:
   replicaCount: 3
   image:
-    tag: 2.0.0
+    tag: 2.1.0
   resources:
     requests:
       memory: 1Gi

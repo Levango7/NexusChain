@@ -97,6 +97,14 @@ global:
   networkPolicy:
     enabled: true
 
+  # -- RPS 自定义指标 HPA（基于 http_requests_per_second 自动扩缩）
+  #   依赖 Prometheus Adapter 将 Prometheus 指标转换为 Custom Metrics API。
+  #   默认 false，仅 prod 推荐开启（见 templates/rps-hpa.yaml）。
+  #   REQ-38: 显式定义默认值，避免 Helm 渲染时 .Values.global.rpsHpa.enabled nil pointer。
+  #   模板层同时用 (default false ...) 兜底，双保险。
+  rpsHpa:
+    enabled: false
+
 # ============================================================================
 # 子 chart 覆盖入口
 # 每个子 chart 的完整 values schema 见 charts/<service>/values.yaml

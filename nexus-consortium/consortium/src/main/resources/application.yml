@@ -8,8 +8,21 @@ spring:
 
   jpa:
     hibernate:
-      ddl-auto: create-drop # create, update
+      # === REQ-21 安全加固：ddl-auto 修正 ===
+      # 原值 create-drop 会在停机时清空数据库，生产环境不可接受。
+      # 默认值改为 validate（仅校验 schema 不修改），生产环境强制 validate。
+      # 开发环境通过 application-dev.yml 覆盖为 update（如需自动建表）。
+      ddl-auto: validate
     show-sql: true # enable jpa sql logs
+
+  # === REQ-21：引入 Flyway 数据库迁移管理 ===
+  # 替代 Hibernate ddl-auto 进行 schema 演进管理，确保生产环境 schema 受控、可审计、可回滚。
+  # baselineOnMigrate=true：对已存在 schema 的数据库建立 baseline，避免与既有 schema 冲突。
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+    baseline-version: 0
 
 
 

@@ -2,7 +2,7 @@
 
 > P2-T4：部署 Prometheus + Grafana + AlertManager 监控告警体系
 >
-> 适用范围：NexusChain v2.0.0 Phase 2 生产就绪
+> 适用范围：NexusChain v2.1.0 Phase 2 生产就绪
 >
 > 监控栈：kube-prometheus-stack（Prometheus Operator + Alertmanager + Grafana）+ PrometheusRule CRD + Grafana Dashboard ConfigMap
 

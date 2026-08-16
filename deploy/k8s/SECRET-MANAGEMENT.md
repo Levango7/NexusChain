@@ -1,4 +1,4 @@
-# Kubernetes Secret 管理指南（v1.9.2）
+# Kubernetes Secret 管理指南（v2.1.0）
 
 本目录的 `00-namespace-config.yml` 中定义了一个 `nexus-secrets` Secret，
 其中 `stringData` 字段的值（`CHANGE_ME_IN_PRODUCTION`、`BASE64_ENCODED_32_BYTE_AES_KEY_HERE` 等）

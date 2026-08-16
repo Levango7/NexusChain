@@ -2,8 +2,8 @@ apiVersion: v2
 name: nexus-api-gateway
 description: NexusChain API Gateway 统一入口（Spring Cloud Gateway）
 type: application
-version: 2.0.0
-appVersion: "2.0.0"
+version: 2.1.0
+appVersion: "2.1.0"
 keywords:
   - blockchain
   - payment

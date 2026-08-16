@@ -19,8 +19,11 @@ spring:
   # === Phase 4 任务 #68：数据库持久化（设计文档 §4.1 / §4.3） ===
   # 生产数据源：MySQL 8.x，库 nexus_wallet（与 gateway 的 nexus_gateway 库独立）
   # dev / test profile 通过 application-dev.yml / application-test.yml 覆盖为 H2
+  # === REQ-13 安全加固：数据库连接启用 TLS ===
+  # 默认启用 useSSL=true&requireSSL=true&verifyServerCertificate=true，信任库通过环境变量注入。
+  # dev profile 通过 application-dev.yml 覆盖为 H2 内存库（无需 TLS）。
   datasource:
-    url: ${NEX_DB_URL:jdbc:mysql://localhost:3306/nexus_wallet?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=UTC}
+    url: ${NEX_DB_URL:jdbc:mysql://localhost:3306/nexus_wallet?useUnicode=true&characterEncoding=utf-8&useSSL=true&requireSSL=true&verifyServerCertificate=true&trustCertificateKeyStoreUrl=file:${DB_TRUSTSTORE_PATH:classpath:keystore/mysql-truststore.jks}&trustCertificateKeyStorePassword=${DB_TRUSTSTORE_PASSWORD:changeit}&serverTimezone=UTC}
     username: ${NEX_DB_USERNAME:root}
     password: ${NEX_DB_PASSWORD}
     driver-class-name: ${NEX_DB_DRIVER:com.mysql.cj.jdbc.Driver}
@@ -30,6 +33,13 @@ spring:
       connection-timeout: 30000
       idle-timeout: 600000
       max-lifetime: 1800000
+      # 显式数据源属性，确保 TLS 握手参数传递到 MySQL driver
+      data-source-properties:
+        ssl: true
+        requireSSL: true
+        verifyServerCertificate: true
+        trustCertificateKeyStoreUrl: file:${DB_TRUSTSTORE_PATH:classpath:keystore/mysql-truststore.jks}
+        trustCertificateKeyStorePassword: ${DB_TRUSTSTORE_PASSWORD:changeit}
 
   # === Phase 4 任务 #68：JPA / Hibernate（设计文档 §4.2） ===
   jpa:
@@ -104,6 +114,14 @@ feign:
       enabled: true
     response:
       enabled: true
+  # === REQ-14 安全加固：Feign 服务间调用启用 TLS（mTLS） ===
+  # 证书路径通过环境变量注入，dev profile 通过 application-dev.yml 关闭。
+  tls:
+    enabled: ${FEIGN_TLS_ENABLED:true}
+    key-store-path: ${FEIGN_KEYSTORE_PATH:classpath:keystore/feign-keystore.jks}
+    key-store-password: ${FEIGN_KEYSTORE_PASSWORD:changeit}
+    trust-store-path: ${FEIGN_TRUSTSTORE_PATH:classpath:keystore/feign-truststore.jks}
+    trust-store-password: ${FEIGN_TRUSTSTORE_PASSWORD:changeit}
 
 # === Spring Cloud LoadBalancer 配置 ===
 spring.cloud.loadbalancer:

@@ -8,6 +8,7 @@ import org.nexus.gateway.tenant.TenantApiKeyInterceptor;
 import org.nexus.gateway.tenant.TenantRateLimiter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
@@ -30,6 +31,15 @@ public class WebConfig implements WebMvcConfigurer {
     private final RequestSignatureInterceptor requestSignatureInterceptor;
     private final TenantApiKeyInterceptor tenantApiKeyInterceptor;
     private final TenantRateLimiter tenantRateLimiter;
+
+    /**
+     * CORS allowed origins, externalized via {@code nexus.cors.allowed-origins} property
+     * (REQ-15 安全加固：禁止硬编码 "*"，避免任意跨域请求)。
+     * Comma-separated list of origins; default to the production explorer domain so
+     * that an unset property does not silently open CORS to everyone.
+     */
+    @Value("${nexus.cors.allowed-origins:https://explorer.nexuschain.io}")
+    private String[] corsAllowedOrigins;
 
     // RateLimiter (Redis-backed, prod profile) is optional: when no profile supplies one
     // (e.g. plain dev run without Redis), rate limiting is disabled rather than failing
@@ -55,7 +65,7 @@ public class WebConfig implements WebMvcConfigurer {
     @Override
     public void addCorsMappings(CorsRegistry registry) {
         registry.addMapping("/api/**")
-                .allowedOrigins("*")
+                .allowedOrigins(corsAllowedOrigins)
                 .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
                 .allowedHeaders("*");
     }

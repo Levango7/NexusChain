@@ -153,8 +153,13 @@ jobs:
       - name: Checkout 代码
         uses: actions/checkout@v4
 
+      # OWASP Dependency-Check Action 钉版本 sha（供应链安全）
+      # 版本：1.1.0（最新稳定 release，2021-04-28 发布）
+      # commit sha：75ba02d6183445fe0761d26e836bde58b1560600
+      # 更新策略：季度更新，需安全负责人审批（见 docs/dependency-check-update-policy.md）
+      # 切勿改用 @main 或 @latest——存在供应链攻击风险
       - name: 运行 OWASP Dependency-Check
-        uses: dependency-check/dependency-check-action@main
+        uses: dependency-check/Dependency-Check_Action@75ba02d6183445fe0761d26e836bde58b1560600
         with:
           project: NexusChain
           scan: .

@@ -1,0 +1,47 @@
+# NexusChain nexus-core Docker 构建上下文忽略清单
+# ============================================================================
+# 减小构建上下文体积，加速 docker build；排除产物、缓存、日志、IDE 文件。
+# ============================================================================
+
+# Gradle 构建产物与缓存
+build/
+.gradle/
+nexus-core/build/
+nexus-core/.gradle/
+
+# 日志
+*.log
+**/*.log
+
+# IDE 与编辑器
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+.project
+.classpath
+.settings/
+
+# Git
+.git/
+.gitignore
+
+# 操作系统杂项
+.DS_Store
+Thumbs.db
+
+# 测试与覆盖率报告
+**/test-results/
+**/jacoco/
+
+# 本地配置（含敏感凭据，禁止入镜像）
+local.env
+local.env.example
+*.local.properties
+
+# 文档与示例（不需要入镜像）
+README.md
+LICENSE
+*.jsonc
+.coveralls.yml

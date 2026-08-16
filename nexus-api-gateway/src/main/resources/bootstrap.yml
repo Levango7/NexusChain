@@ -17,12 +17,13 @@ spring:
   cloud:
     nacos:
       discovery:
+        # === REQ-18 安全加固：Nacos 连接启用 TLS（生产默认 HTTPS） ===
         server-addr: ${NEX_NACOS_SERVER:localhost:8848}
         namespace: ${NEX_NACOS_NAMESPACE:dev}
         group: ${NEX_NACOS_GROUP:NEXUS_GROUP}
         cluster-name: ${NEX_NACOS_CLUSTER:DEFAULT}
         metadata:
-          version: ${NEX_SERVICE_VERSION:2.0.0}
+          version: ${NEX_SERVICE_VERSION:2.1.0}
           region: ${NEX_REGION:cn-east-1}
       config:
         server-addr: ${NEX_NACOS_SERVER:localhost:8848}
@@ -35,3 +36,12 @@ spring:
         # 服务私有配置
         file-extension: yaml
         refresh-enabled: true
+
+# === REQ-18 安全加固：Nacos TLS 信任库配置 ===
+# 证书路径环境变量化，dev profile 通过 bootstrap-dev.yml 覆盖为 http 协议。
+nacos:
+  tls:
+    enabled: ${NACOS_TLS_ENABLED:true}
+    protocol: ${NEX_NACOS_PROTOCOL:https}
+    trust-store-path: ${NACOS_TRUSTSTORE_PATH:classpath:keystore/nacos-truststore.jks}
+    trust-store-password: ${NACOS_TRUSTSTORE_PASSWORD:changeit}

@@ -25,6 +25,11 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     implementation 'com.fasterxml.jackson.dataformat:jackson-dataformat-properties'
 
+    // === REQ-21 安全加固：引入 Flyway 数据库迁移管理 ===
+    // 替代 Hibernate ddl-auto 进行 schema 演进管理，确保生产环境 schema 受控、可审计、可回滚。
+    // Spring Boot starter 自动配置 Flyway，在 JPA 初始化前执行迁移脚本。
+    implementation 'org.flywaydb:flyway-core'
+
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     // 测试环境用 H2 内存库（生产走 Postgres；占位 datasource 导致 JPA 无法确定 Dialect，
     // 测试上下文加载失败——基线环境问题修复）

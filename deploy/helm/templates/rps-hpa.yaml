@@ -19,7 +19,7 @@
 #   global.rpsHpa.enabled=true（默认 false，仅 prod 推荐开启）
 #   各服务子 chart 也可通过 .Values.<service>.rpsHpa.enabled 单独控制
 # ============================================================================
-{{- if .Values.global.rpsHpa.enabled }}
+{{- if (default false .Values.global.rpsHpa.enabled) }}
 {{- $services := list "nexus-gateway" "nexus-bridge" "nexus-signing-service" "nexus-wallet-service" }}
 {{- range $svc := $services }}
 {{- $svcValues := index $.Values $svc }}
