@@ -1,8 +1,14 @@
 # ADR-020: 版本治理策略 — 双轨制（Two-Tier Version Strategy）
 
-- **状态**：Accepted（2026-08-03）
+- **状态**：Superseded by ADR-032（2026-08-18）
 - **决策人**：项目总监（大湾区靓仔）/ 高见远（架构师），依据阶段 0 用户授权「自行决策并执行」
 - **关联**：审计阻断项 **B1**（双 Spring 生态并存 + 版本伪统一）；本报告 §4 阶段 0 / §6.5
+- **被替代**：ADR-032-spring-boot-unification（所有 Java 微服务统一 Spring Boot 3.2.5）
+
+> **替代说明（2026-08-18）**：本 ADR 制定的双轨策略（Tier-1 Boot 3.x / Tier-2 Boot 2.x）
+> 基于 javax→jakarta 迁移成本过高的假设。Phase 2 已完成全部 Tier-2 模块的
+> javax→jakarta 迁移，所有 Java 微服务统一到 Spring Boot 3.2.5。
+> 双轨策略不再适用，由 ADR-032 取代。本文档保留作为历史决策记录。
 
 ---
 

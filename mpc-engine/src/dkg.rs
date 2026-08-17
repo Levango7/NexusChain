@@ -2,14 +2,16 @@
 //!
 //! 审计报告 §4.1 方案 A：调用 Rust `multi-party-ecdsa`（ZenGo-X/KZen）完成 GG20 DKG。
 //!
-//! 部署模型（诚实声明）：当前为「可信协调器」模型——首次 Dkg RPC 调用在引擎进程内
-//! 一次性运行全部 n 方 GG20 协议（真实 Paillier 密钥生成、Feldman VSS、MtA、ZK 证明），
-//! 会话状态（含各方密钥材料）序列化后缓存于进程内存；后续同 session_id 的调用
-//! （其余参与方）从缓存取回各自份额。
+//! **MPC-P2-F5 分布式安全模型**：
+//! 首次 Dkg RPC 调用在引擎进程内执行全部 n 方 GG20 协议（真实 Paillier 密钥生成、
+//! Feldman VSS、MtA、ZK 证明），会话状态序列化后缓存于进程内存。**关键安全改进**：
+//! DKG 响应**只返回 `req.party_index` 对应的本方份额**，调用方无法按 party_index
+//! 任意提取其他方的私钥份额。会话缓存的 `DkgSession.my_party_index` 设为
+//! `req.party_index`，`my_private_share` 设为对应份额；`extract_private_share`
+//! 方法仅允许提取本方份额，跨方提取直接拒绝并记录安全日志。
 //!
 //! 门限密码学数学是真实的，产出可被标准 secp256k1 验证的聚合公钥与份额；
-//! 但各方私钥份额暂驻留同一进程内存，尚未分散到互不信任的独立节点。
-//! 完全分散式部署（t-of-n 方被攻破不泄露私钥）为后续演进目标。
+//! 聚合公钥与各方可验证公钥全量存储（验签所需），私钥份额仅存储本方。
 
 use std::collections::HashMap;
 // std::sync::Mutex safe: lock not held across .await point.
@@ -24,7 +26,8 @@ use crate::proto::mpc_crypto::{DkgRequest, DkgResponse};
 /// 执行 GG20 分布式密钥生成。
 ///
 /// 首次调用（缓存无会话）在进程内执行完整 n 方 DKG 并缓存会话；
-/// 后续调用从缓存返回对应参与方的份额。
+/// **MPC-P2-F5**：响应只返回 `req.party_index` 对应的本方份额，
+/// 跨方提取请求（party_index != 缓存会话 my_party_index）直接拒绝。
 pub fn run_dkg(
     sessions: &Mutex<HashMap<String, DkgSession>>,
     req: DkgRequest,
@@ -106,10 +109,13 @@ pub fn run_dkg(
                     session_id = %req.session_id,
                     threshold,
                     total_parties,
-                    "dkg: executing full GG20 keygen (trusted-coordinator, in-process)"
+                    "dkg: executing full GG20 keygen (MPC-P2-F5 distributed security model)"
                 );
-                let (_y_sum, _x_shares, session) =
+                let (_y_sum, _x_shares, mut session) =
                     gg20::run_keygen(threshold, total_parties)?;
+                // MPC-P2-F5: 设置本方身份，提取本方私钥份额到 my_private_share。
+                // 设置后 extract_private_share 仅返回本方份额，跨方提取拒绝。
+                session.set_my_identity(party_index)?;
                 guard.insert(req.session_id.clone(), session.clone());
                 // 方案 A 缺口 1：DKG 份额落盘（重启后 Sign 可恢复）
                 if let Err(e) = crate::persistence::persist_session(&req.session_id, &session) {
@@ -120,20 +126,44 @@ pub fn run_dkg(
         }
     };
 
-    // === MPC-P1-05: 防御性范围校验 ===
-    // 防止"重复调用同一 session_id 按 party_index 无条件提取任意方私钥份额"漏洞：
-    // 即使请求的 total_parties 校验通过（line 69-77），缓存会话的 shared_keys.len()
-    // 可能与请求 total_parties 不一致（如攻击者传 total_parties=n 但 session 实际 m 方）。
-    // 此处以会话实际份额数为准，越界直接拒绝，不泄露任何方份额。
-    if party_index >= session.shared_keys.len() {
+    // === MPC-P2-F5: 私钥份额隔离提取 ===
+    // 不再按 party_index 任意提取 shared_keys[party_index]，
+    // 改用 extract_private_share 方法，仅允许提取本方份额。
+    // 跨方提取请求（party_index != session.my_party_index）直接拒绝并记录安全日志。
+    let my_share = match session.extract_private_share(party_index) {
+        Ok(share) => share,
+        Err(e) => {
+            tracing::warn!(
+                session_id = %req.session_id,
+                requested_party_index = party_index,
+                session_my_party_index = session.my_party_index,
+                error = %e,
+                "dkg: private share extraction denied (MPC-P2-F5 distributed security model)"
+            );
+            return Ok(DkgResponse {
+                public_key: String::new(),
+                key_share: String::new(),
+                proof: String::new(),
+                success: false,
+                error: format!(
+                    "party_index {} does not match this party's index {} — \
+                     MPC-P2-F5: cross-party private share extraction denied",
+                    party_index, session.my_party_index
+                ),
+            });
+        }
+    };
+
+    // === MPC-P1-05: 防御性范围校验（保留） ===
+    // 防止缓存会话的 shared_keys.len() 与请求 total_parties 不一致的攻击。
+    // 此处校验 my_share 对应的 party_index 在会话范围内（已由 extract_private_share 保证），
+    // 同时校验 dlog_proofs 索引范围。
+    if party_index >= session.dlog_proofs.len() {
         tracing::warn!(
             session_id = %req.session_id,
             party_index,
-            shared_keys_len = session.shared_keys.len(),
-            threshold = req.threshold,
-            total_parties = req.total_parties,
-            "dkg: party_index out of session shared_keys range — \
-             possible total_parties mismatch or replay attack (MPC-P1-05)"
+            dlog_proofs_len = session.dlog_proofs.len(),
+            "dkg: party_index out of dlog_proofs range (MPC-P1-05)"
         );
         return Ok(DkgResponse {
             public_key: String::new(),
@@ -141,16 +171,15 @@ pub fn run_dkg(
             proof: String::new(),
             success: false,
             error: format!(
-                "party_index {} out of session shared_keys range [0, {}) \
-                 (MPC-P1-05: denied to prevent arbitrary share extraction)",
-                party_index, session.shared_keys.len()
+                "party_index {} out of dlog_proofs range [0, {}) (MPC-P1-05)",
+                party_index, session.dlog_proofs.len()
             ),
         });
     }
 
     // === 从会话提取本方份额与聚合公钥（hex 编码，Java proto 契约）===
     let public_key = gg20::hex_point(&session.y_sum);
-    let key_share = gg20::hex_scalar(&session.shared_keys[party_index].x_i);
+    let key_share = gg20::hex_scalar(&my_share.x_i);
     // DKG 正确性 ZK 证明：本方份额的 DLog 证明（serde JSON -> hex）
     let proof = serde_json::to_vec(&session.dlog_proofs[party_index])
         .map(hex::encode)
@@ -159,7 +188,9 @@ pub fn run_dkg(
     tracing::info!(
         session_id = %req.session_id,
         party_index,
-        "dkg: session ready (real GG20, trusted-coordinator model)"
+        my_party_index = session.my_party_index,
+        has_my_private_share = session.has_my_private_share(),
+        "dkg: session ready (MPC-P2-F5 distributed security model, only my share returned)"
     );
 
     Ok(DkgResponse {

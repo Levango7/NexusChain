@@ -32,6 +32,13 @@ jobs:
         with:
           version: 'v3.14.0'
 
+      # P2-C3: yq 用于解析 YAML 的 kind/metadata.name/image 字段以做精确匹配与 diff
+      - name: Install yq
+        run: |
+          curl -sSL -o /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          chmod +x /usr/local/bin/yq
+          yq --version
+
       - name: Install kubeconform
         run: |
           curl -sSL -o kubeconform https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64
@@ -49,35 +56,108 @@ jobs:
             helm lint "$chart"
           done
 
+      # P2-C3: helm dependency build 确保 Chart.yaml 中 dependencies 已下载到 charts/，
+      # 否则 helm template 会因缺子 chart 而失败或渲染不完整。
+      - name: Helm dependency build
+        run: |
+          set -e
+          echo ">>> helm dependency build deploy/helm"
+          helm dependency build deploy/helm
+          # 子 chart 同样 build（如有 dependencies）
+          find deploy/helm/charts -name Chart.yaml -exec dirname {} \; | while read chart; do
+            echo ">>> helm dependency build $chart"
+            helm dependency build "$chart" || echo "[warn] $chart 无 dependencies 或 build 失败，忽略"
+          done
+
       - name: kubeconform 校验静态清单
         run: |
           set -e
           echo ">>> kubeconform 校验 deploy/k8s/"
+          # -strict 严格模式：未知字段报错（捕获 Helm 与静态清单字段漂移）
           # -kubernetes-version 指定目标集群版本
           # -ignore-missing-schemas 容忍 CRD（如 SealedSecret）未在本地定义
           kubeconform -strict -kubernetes-version 1.28.0 -ignore-missing-schemas deploy/k8s/*.yml
 
-      - name: 渲染 Helm 模板并对比静态清单
+      # P2-C3: 用 diff -u 做 Helm 渲染产物与静态清单的实际 YAML 对比。
+      # 策略：
+      #   1. helm template 渲染全部资源到 /tmp/helm-rendered/（含 --set 参数验证）
+      #   2. 对每个 deploy/k8s/*.yml，按 (kind, metadata.name) 在渲染产物中查找匹配文件
+      #   3. 对匹配文件做 `diff -u` 完整对比，差异写入 /tmp/k8s-drift-report.txt
+      #   4. 关键属性（image/replicas）单独严格校验，不一致立即 exit 1
+      #   5. 任何 diff 差异均使 CI 变红（exit 1），强制 PR 修复漂移
+      # 注：CI 无真实 k8s 集群，无法 `kubectl get -o yaml`，故与静态清单对比而非集群状态。
+      - name: 渲染 Helm 模板并 diff 对比静态清单
         run: |
           set -e
           echo ">>> 渲染 Helm 模板到 /tmp/helm-rendered/"
+          rm -rf /tmp/helm-rendered
           mkdir -p /tmp/helm-rendered
+          # --set 参数验证：覆盖 image.tag / image.registry，确保 values 可注入
           helm template nexus deploy/helm \
             --set global.image.tag=2.1.0 \
             --set global.image.registry=ghcr.io/nexus \
+            --include-crds \
             --output-dir /tmp/helm-rendered/
 
-          echo ">>> 对比 deploy/k8s/ 与 Helm 渲染产物"
-          # 提取关键资源（Deployment/StatefulSet/Service）的 image tag 进行对比
-          # 此处仅做关键属性对比，完整 YAML diff 需人工 review
+          DRIFT_REPORT=/tmp/k8s-drift-report.txt
+          : > "$DRIFT_REPORT"
+          DRIFT_FOUND=0
+
+          echo ">>> 按 (kind, name) 匹配静态清单与 Helm 渲染产物并 diff -u 对比"
           for f in deploy/k8s/*.yml; do
-            echo "--- 静态清单: $f ---"
-            grep -E 'kind:|name:|image:|replicas:' "$f" || true
+            # 跳过非资源文件（namespace-config 仅含 Namespace + ConfigMap）
+            # 提取每个静态清单中的 (kind, name) 对
+            # 简单解析：取首个文档的 kind 与 metadata.name
+            kind=$(yq e '.kind // ""' "$f" 2>/dev/null || true)
+            name=$(yq e '.metadata.name // ""' "$f" 2>/dev/null || true)
+            if [ -z "$kind" ] || [ -z "$name" ]; then
+              echo "[skip] $f 无法解析 kind/name（可能为多文档 YAML 或非资源），仅做 kubeconform 校验"
+              continue
+            fi
+            # 在 helm 渲染产物中查找同 kind+name 的文件
+            matched=""
+            while read hf; do
+              hkind=$(yq e '.kind // ""' "$hf" 2>/dev/null || true)
+              hname=$(yq e '.metadata.name // ""' "$hf" 2>/dev/null || true)
+              if [ "$hkind" = "$kind" ] && [ "$hname" = "$name" ]; then
+                matched="$hf"
+                break
+              fi
+            done < <(find /tmp/helm-rendered -name '*.yaml' -type f)
+
+            if [ -z "$matched" ]; then
+              echo "[drift] $f ($kind/$name) 在 Helm 渲染产物中无对应资源" | tee -a "$DRIFT_REPORT"
+              DRIFT_FOUND=1
+              continue
+            fi
+
+            echo "--- diff -u $matched vs $f ---"
+            # 完整 YAML diff（含 helm 注释行），差异写入报告
+            if ! diff -u "$matched" "$f" > /tmp/diff-out.txt 2>&1; then
+              echo "[drift] $kind/$name 存在差异：" | tee -a "$DRIFT_REPORT"
+              cat /tmp/diff-out.txt | tee -a "$DRIFT_REPORT"
+              DRIFT_FOUND=1
+            fi
+
+            # 关键属性严格校验：image 与 replicas 必须一致
+            static_images=$(yq e '.. | .image? // empty | select(. != null)' "$f" 2>/dev/null | sort || true)
+            helm_images=$(yq e '.. | .image? // empty | select(. != null)' "$matched" 2>/dev/null | sort || true)
+            if [ "$static_images" != "$helm_images" ]; then
+              echo "[drift-CRITICAL] $kind/$name image 不一致：" | tee -a "$DRIFT_REPORT"
+              diff -u <(echo "$helm_images") <(echo "$static_images") | tee -a "$DRIFT_REPORT"
+              DRIFT_FOUND=1
+            fi
           done
 
           echo ""
-          echo "--- Helm 渲染产物关键属性 ---"
-          find /tmp/helm-rendered -name '*.yaml' -exec grep -H -E 'kind:|name:|image:|replicas:' {} \; || true
+          echo "========== K8s Manifest Drift Summary =========="
+          cat "$DRIFT_REPORT"
+          echo "================================================="
+          if [ "$DRIFT_FOUND" -ne 0 ]; then
+            echo ">>> 检测到 Helm Chart 与 deploy/k8s/ 静态清单漂移，CI 失败"
+            exit 1
+          fi
+          echo ">>> 无漂移，Helm Chart 与静态清单一致"
 
       - name: 上传对比报告
         if: always()
@@ -86,5 +166,6 @@ jobs:
           name: k8s-sync-report
           path: |
             /tmp/helm-rendered/
+            /tmp/k8s-drift-report.txt
           if-no-files-found: ignore
           retention-days: 14

@@ -34,6 +34,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -429,8 +430,11 @@ class DefaultWithdrawalApprovalServiceTest {
         RuntimeException ex = assertThrows(RuntimeException.class,
                 () -> service.executeApprovedWithdrawal(request.getRequestId()));
         assertTrue(ex.getMessage().contains("signing-service unavailable"));
-        // FAILED 状态已落库供后续排查
-        verify(withdrawalRequestRepository).save(any(WithdrawalRequestEntity.class));
+        // FAILED 状态已落库供后续排查：save 至少被调用 1 次（含 requestWithdrawal/approve/catch 块）
+        verify(withdrawalRequestRepository, atLeast(1)).save(any(WithdrawalRequestEntity.class));
+        // 验证最终实体状态为 FAILED
+        WithdrawalRequestEntity finalEntity = requestStore.get(request.getRequestId());
+        assertEquals(WithdrawalRequest.WithdrawalStatus.FAILED, finalEntity.getStatus());
     }
 
     @Test
@@ -448,7 +452,10 @@ class DefaultWithdrawalApprovalServiceTest {
         RuntimeException ex = assertThrows(RuntimeException.class,
                 () -> service.executeApprovedWithdrawal(request.getRequestId()));
         assertTrue(ex.getMessage().contains("signing-service 500"));
-        verify(withdrawalRequestRepository).save(any(WithdrawalRequestEntity.class));
+        // FAILED 状态已落库供后续排查
+        verify(withdrawalRequestRepository, atLeast(1)).save(any(WithdrawalRequestEntity.class));
+        WithdrawalRequestEntity finalEntity = requestStore.get(request.getRequestId());
+        assertEquals(WithdrawalRequest.WithdrawalStatus.FAILED, finalEntity.getStatus());
     }
 
     @Test

@@ -90,32 +90,52 @@ export class RpcClient {
   /**
    * 查询当前区块高度。
    *
+   * 兼容实现：nexus-core 未提供 nexus_blockNumber，改为调用
+   * nexus_getLatestBlocks 取最新区块列表中的第一个区块高度。
+   *
    * @returns 区块高度
    */
   async getBlockNumber(): Promise<number> {
-    const result = await this.call('nexus_blockNumber', []);
+    const result = (await this.call('nexus_getLatestBlocks', [1])) as unknown;
+    if (Array.isArray(result)) {
+      if (result.length === 0) return 0;
+      const first = result[0] as Record<string, unknown> | string;
+      if (typeof first === 'object' && first !== null) {
+        const h = (first as Record<string, unknown>).height ?? (first as Record<string, unknown>).number;
+        return typeof h === 'string' ? parseInt(h as string, 16) : Number(h);
+      }
+      return typeof first === 'string' ? parseInt(first, 16) : Number(first);
+    }
     return parseInt(result as string, 16);
   }
 
   /**
    * 根据 hash 获取区块信息。
    *
+   * 注意：nexus-core 当前未提供 nexus_getBlockByHash，保留接口以兼容旧 SDK 用户。
+   * 实际应通过 nexus_getBlockByHeight 配合索引服务使用。
+   *
    * @param blockHash 区块哈希
    * @returns 区块信息
    */
   async getBlockByHash(blockHash: string): Promise<Block | null> {
-    return (await this.call('nexus_getBlockByHash', [blockHash, true])) as Block | null;
+    void blockHash;
+    throw new Error(
+      'nexus_getBlockByHash not supported by nexus-core; use getBlockByNumber instead',
+    );
   }
 
   /**
    * 根据区块号获取区块信息。
    *
+   * 对齐 nexus-core：nexus_getBlockByNumber → nexus_getBlockByHeight。
+   *
    * @param blockNumber 区块号
    * @returns 区块信息
    */
   async getBlockByNumber(blockNumber: number): Promise<Block | null> {
-    return (await this.call('nexus_getBlockByNumber', [
-      '0x' + blockNumber.toString(16),
+    return (await this.call('nexus_getBlockByHeight', [
+      blockNumber,
       true,
     ])) as Block | null;
   }
@@ -123,11 +143,41 @@ export class RpcClient {
   /**
    * 获取网络链 ID。
    *
+   * 兼容实现：nexus-core 未提供 nexus_chainId，改为调用
+   * nexus_getNodeStatus 从节点状态中获取 chainId 字段。
+   *
    * @returns 链 ID
    */
   async getChainId(): Promise<number> {
-    const result = await this.call('nexus_chainId', []);
+    const result = (await this.call('nexus_getNodeStatus', [])) as unknown;
+    if (typeof result === 'object' && result !== null) {
+      const obj = result as Record<string, unknown>;
+      const cid = obj.chainId ?? obj.chain_id;
+      if (cid !== undefined) {
+        return typeof cid === 'string' ? parseInt(cid, 16) : Number(cid);
+      }
+    }
     return parseInt(result as string, 16);
+  }
+
+  /**
+   * 获取当前 Gas 价格。
+   *
+   * 兼容实现：nexus-core 未提供 nexus_gasPrice，改为调用
+   * nexus_getNodeStatus 从节点状态中获取 gasPrice 字段；若不存在则返回默认值 1 gwei。
+   *
+   * @returns Gas 价格（wei，十六进制）
+   */
+  async getGasPrice(): Promise<string> {
+    const result = (await this.call('nexus_getNodeStatus', [])) as unknown;
+    if (typeof result === 'object' && result !== null) {
+      const obj = result as Record<string, unknown>;
+      if (obj.gasPrice !== undefined) {
+        return obj.gasPrice as string;
+      }
+    }
+    // 默认 1 gwei
+    return '0x3b9aca00';
   }
 
   /**

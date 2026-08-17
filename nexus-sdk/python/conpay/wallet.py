@@ -75,9 +75,16 @@ class Wallet:
         Returns:
             余额（最小单位 wei）
         """
-        result = self._client.rpc_call("conpay_getBalance", [address, "latest"])
+        result = self._client.rpc_call("nexus_getBalance", [address, "latest"])
+        # nexus_getBalance 返回 {"balance": "<decimal>"} 信封，需解包
+        if isinstance(result, dict):
+            balance = result.get("balance")
+            if balance is not None:
+                if isinstance(balance, str):
+                    return int(balance, 16) if balance.startswith("0x") else int(balance)
+                return int(balance)
         if isinstance(result, str):
-            return int(result, 16)
+            return int(result, 16) if result.startswith("0x") else int(result)
         return int(result)
 
     def get_token_balance(self, address: str, token_contract: str) -> int:

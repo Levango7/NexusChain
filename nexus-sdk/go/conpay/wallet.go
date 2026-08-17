@@ -37,11 +37,21 @@ func (w *WalletManager) FromMnemonic(mnemonic, path string) (*WalletInfo, error)
 
 // GetBalance queries the CPAY balance of an address (in wei).
 func (w *WalletManager) GetBalance(address string) (*big.Int, error) {
-	result, err := w.client.RPCCall("conpay_getBalance", address, "latest")
+	result, err := w.client.RPCCall("nexus_getBalance", address, "latest")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get balance: %w", err)
 	}
 
+	// nexus_getBalance 返回 {"balance": "<decimal>"} 信封，需解包
+	if m, ok := result.(map[string]interface{}); ok {
+		if b, ok := m["balance"]; ok {
+			balance, ok := new(big.Int).SetString(toString(b), 0)
+			if !ok {
+				return nil, fmt.Errorf("failed to parse balance value: %v", b)
+			}
+			return balance, nil
+		}
+	}
 	balance, ok := new(big.Int).SetString(toString(result), 0)
 	if !ok {
 		return nil, fmt.Errorf("failed to parse balance value: %v", result)

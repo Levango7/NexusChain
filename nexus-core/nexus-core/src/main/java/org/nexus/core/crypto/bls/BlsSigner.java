@@ -33,6 +33,8 @@ public interface BlsSigner {
      * @return 新的签名者实例
      */
     static BlsSigner generate() {
-        throw new UnsupportedOperationException("BLS signer generation requires concrete implementation");
+        // NOTE: 纯Java环境使用secp256k1 EC点实现BLS-like签名验证。
+        // 生产环境应接入blst原生库做完整BLS12-381配对验签。
+        return Secp256k1BlsSigner.generate();
     }
 }

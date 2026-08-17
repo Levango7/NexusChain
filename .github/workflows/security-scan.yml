@@ -85,12 +85,14 @@ jobs:
             sbom-cyclonedx.json
           retention-days: 30
 
-      - name: Trivy fs 扫描（CRITICAL 阻断）
+      - name: Trivy fs 扫描（CRITICAL,HIGH 阻断）
         uses: aquasecurity/trivy-action@v0.20.0
         with:
           scan-type: fs
           scan-ref: .
-          severity: CRITICAL
+          # P2-C7: 阻断门槛从 CRITICAL 提升至 CRITICAL,HIGH
+          # 原 CRITICAL-only 会放过 HIGH 漏洞，不符合 P1 SLA（HIGH 7d 修复）
+          severity: CRITICAL,HIGH
           skip-dirs: build,out,target,.gradle,gradle,node_modules,jdk17,jdk-provision,.codeartsdoer
           format: table
           exit-code: 1
@@ -130,11 +132,12 @@ jobs:
           sarif_file: trivy-docker-${{ matrix.module }}.sarif
           category: trivy-docker-${{ matrix.module }}
 
-      - name: Trivy 镜像扫描（CRITICAL 阻断）
+      - name: Trivy 镜像扫描（CRITICAL,HIGH 阻断）
         uses: aquasecurity/trivy-action@v0.20.0
         with:
           image-ref: ${{ matrix.module }}:scan
-          severity: CRITICAL
+          # P2-C7: 镜像扫描同步提升至 CRITICAL,HIGH 阻断
+          severity: CRITICAL,HIGH
           format: table
           exit-code: 1
 
@@ -217,6 +220,28 @@ jobs:
       - name: 运行 SpotBugs + FindSecBugs（spotbugsAll 聚合任务）
         run: ./gradlew spotbugsAll --no-daemon
 
+      # P2-C7: SpotBugs CI 门禁
+      # 根 build.gradle 中 SpotBugs 可能配置 ignoreFailures=true（避免 Gradle 直接失败），
+      # 此处独立解析 XML 报告，发现任何 <Bug> 即 exit 1，强制 SAST 门禁。
+      # 覆盖所有模块的 build/reports/spotbugs/main.xml。
+      - name: SpotBugs gate（解析 XML 报告，有 finding 则 fail）
+        run: |
+          set -e
+          total_bugs=0
+          while IFS= read -r report; do
+            count=$(grep -c "<Bug" "$report" 2>/dev/null || echo 0)
+            if [ "$count" -gt 0 ]; then
+              echo "[SpotBugs] $report: $count findings"
+              total_bugs=$((total_bugs + count))
+            fi
+          done < <(find . -path "*/build/reports/spotbugs/main.xml" -type f 2>/dev/null)
+          echo ">>> SpotBugs total findings: $total_bugs"
+          if [ "$total_bugs" -gt 0 ]; then
+            echo ">>> SpotBugs findings detected, failing build"
+            exit 1
+          fi
+          echo ">>> SpotBugs gate passed (0 findings)"
+
       - name: 收集 SpotBugs HTML 报告
         if: always()
         uses: actions/upload-artifact@v4
@@ -234,6 +259,56 @@ jobs:
           path: '**/build/reports/spotbugs/main.xml'
           if-no-files-found: ignore
           retention-days: 30
+
+  # ============================================================
+  # 4.5 Rust 依赖安全扫描：cargo audit（P2-C7）
+  # -----------------------------------------------------------------------------
+  # cargo audit 检查 mpc-engine Cargo.lock 中依赖是否有已知漏洞（RustSec advisory DB）
+  # continue-on-error: Rust 工具链可能未预装，不阻断 Java/Gradle 安全扫描
+  # ============================================================
+  cargo-audit:
+    name: Cargo Audit (Rust deps)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    continue-on-error: true
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo audit
+        working-directory: mpc-engine
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit
+
+  # ============================================================
+  # 4.6 密钥泄漏扫描：gitleaks（P2-C7）
+  # -----------------------------------------------------------------------------
+  # gitleaks 扫描全仓库历史 commit 中的密钥/凭证泄漏（API key、private key、token 等）
+  # 失败即阻断流水线（exit-code 1），防止密钥泄漏合入 master
+  # ============================================================
+  gitleaks-scan:
+    name: Gitleaks Secret Scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v4
+        with:
+          # 拉取完整历史以扫描所有 commit
+          fetch-depth: 0
+
+      - name: Gitleaks scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
 
   # ============================================================
   # 5. DAST: OWASP ZAP 基线扫描 nexus-gateway API（P2-T7）

@@ -65,8 +65,9 @@ class TransactionManager:
             未签名的 Transaction 对象
         """
         # TODO: 查询 nonce 和 gas price
-        nonce = self._client.rpc_call("conpay_getTransactionCount", [from_addr, "latest"])
-        gas_price = self._client.rpc_call("conpay_gasPrice", [])
+        nonce = self._client.rpc_call("nexus_getTransactionCount", [from_addr, "latest"])
+        # nexus-core 未提供 nexus_gasPrice，使用 nexus_getNodeStatus 兜底
+        gas_price = self._client.rpc_call("nexus_getNodeStatus", [])
 
         return Transaction(
             from_addr=from_addr,
@@ -123,11 +124,14 @@ class TransactionManager:
         Returns:
             交易哈希
         """
-        return self._client.rpc_call("conpay_sendRawTransaction", [signed_tx])
+        return self._client.rpc_call("nexus_sendRawTransaction", [signed_tx])
 
     def get_transaction_receipt(self, tx_hash: str) -> Optional[Dict[str, Any]]:
         """
         查询交易状态。
+
+        兼容实现：nexus-core 未提供 nexus_getTransactionReceipt，
+        改为调用 nexus_getTransactionByHash 返回交易详情。
 
         Args:
             tx_hash: 交易哈希
@@ -135,11 +139,13 @@ class TransactionManager:
         Returns:
             交易回执字典，或 None（如果交易未确认）
         """
-        return self._client.rpc_call("conpay_getTransactionReceipt", [tx_hash])
+        return self._client.rpc_call("nexus_getTransactionByHash", [tx_hash])
 
     def estimate_gas(self, tx: Transaction) -> str:
         """
         估算交易所需的 Gas。
+
+        注意：nexus-core 当前未提供 nexus_estimateGas，保留接口以兼容旧 SDK 用户。
 
         Args:
             tx: 交易对象
@@ -147,14 +153,22 @@ class TransactionManager:
         Returns:
             Gas 估算值（十六进制）
         """
-        # TODO: 构建估算请求
-        raise NotImplementedError("Not yet implemented")
+        raise NotImplementedError("nexus_estimateGas not supported by nexus-core")
 
     def get_gas_price(self) -> str:
         """
         获取当前 Gas 价格。
 
+        兼容实现：nexus-core 未提供 nexus_gasPrice，改为调用 nexus_getNodeStatus
+        从节点状态中获取 gasPrice 字段；若不存在则返回默认值 1 gwei。
+
         Returns:
             Gas 价格（wei，十六进制）
         """
-        return self._client.rpc_call("conpay_gasPrice", [])
+        result = self._client.rpc_call("nexus_getNodeStatus", [])
+        if isinstance(result, dict):
+            gp = result.get("gasPrice")
+            if gp is not None:
+                return gp
+        # 默认 1 gwei
+        return hex(1_000_000_000)

@@ -83,7 +83,24 @@ public class Refund {
     // --- Enumerations ---
 
     public enum RefundStatus {
-        PENDING, PROCESSING, COMPLETED, FAILED
+        /**
+         * 已落库 PENDING，链上执行尚未完成（三阶段模式阶段1 后的状态）。
+         * <p>P2-F3：阶段1 落库后的初始状态，等待阶段2 链上执行 + 阶段3 状态更新。
+         * 超时未变为 COMPLETED/FAILED 的记录由 {@code CompensationService} 处理。</p>
+         */
+        PENDING,
+        /** 处理中（兼容旧代码，等同 PENDING 的中间态） */
+        PROCESSING,
+        /** 已完成（链上已确认） */
+        COMPLETED,
+        /** 已失败（链上执行失败或对账发现未上链） */
+        FAILED,
+        /**
+         * P2-F3：需要人工对账。
+         * <p>数据库标记 COMPLETED 但链上未确认，或链上已确认但数据库未同步，
+         * 由 {@code ReconciliationTask} 标记后等待人工介入。</p>
+         */
+        RECONCILIATION_NEEDED
     }
 
     // --- Getters and Setters ---

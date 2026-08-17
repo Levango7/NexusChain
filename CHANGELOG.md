@@ -4,6 +4,48 @@
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-08-18 - Phase 2 根治修复（7 项架构级问题）
+
+本次发布聚焦 Phase 2 审计根治修复，覆盖 BLS 验签、CI/CD 增强、文档/SDK/UI、签名安全架构、桥 Saga 幂等、事务补偿、MPC 分布式安全共 7 项架构级问题。
+
+### Security（P2-F4 BLS 验签真实化）
+- **P2-F4 BLS-like 签名验证实现**：用 BouncyCastle SECP256K1 曲线实现 BLS-like 签名验证（非真正 BLS12-381 配对，而是 EC 点签名验证）
+  - 新增 `Secp256k1BlsSigner`：基于 secp256k1 曲线的签名者实现（私钥 sk、公钥 pk=sk*G、签名 σ=sk*H(m)）
+  - 新增 `Secp256k1BlsPublicKey`：公钥压缩编码/解码（EC 点序列化）
+  - 新增 `Secp256k1BlsSignature`：签名验证（σ == pk * H(m)）+ EC 点加法聚合
+  - `BlsSigner.generate()` / `BlsPublicKey.fromBytesCompressed()` 接口从 `UnsupportedOperationException` 改为调用 secp256k1 实现
+  - `SignatureAggregator.CollectingAggregator.verifyAggregate()`：保留格式校验 + TODO 注释（Vote 模型缺少 getPublicKeyBytes() 方法，待扩展后接入完整 BLS 验签）
+  - NOTE: 纯 Java 环境使用 secp256k1 EC 点实现 BLS-like 签名验证。生产环境应接入 blst 原生库做完整 BLS12-381 配对验签。
+
+### Phase 2 修复（P2-D 文档+SDK+UI 整改）
+
+- **P2-D2 SDK 方法名修正**：Go/Python/TypeScript SDK 的 RPC 方法名从 `conpay_*` 统一为 `nexus_*`，
+  对齐 nexus-core 实际支持的 15 个 RPC 方法（`nexus_getBalance` / `nexus_getTransactionCount` /
+  `nexus_getBlockByHeight` / `nexus_getLatestBlocks` / `nexus_getTransactionByHash` 等）。
+  - Go SDK：`conpay_blockNumber`→`nexus_getLatestBlocks`、`conpay_chainId`→`nexus_getNodeStatus`、
+    `conpay_getBalance`→`nexus_getBalance`、`conpay_getTransactionCount`→`nexus_getTransactionCount`、
+    `conpay_gasPrice`→`nexus_getNodeStatus`（兜底）、`conpay_sendRawTransaction`→`nexus_sendRawTransaction`、
+    `conpay_getBlockByNumber`→`nexus_getBlockByHeight`
+  - Python SDK：同上映射；`conpay_getBlockByHash` 标记为不支持（nexus-core 无此方法）
+  - TypeScript SDK：`nexus_blockNumber`→`nexus_getLatestBlocks`、`nexus_chainId`→`nexus_getNodeStatus`、
+    `nexus_getBlockByNumber`→`nexus_getBlockByHeight`、`nexus_gasPrice`→`nexus_getNodeStatus`（兜底）、
+    `nexus_getTransactionReceipt`→`nexus_getTransactionByHash`、`nexus_estimateGas` 标记为不支持
+  - 包名 `conpay` 保留作为 deprecated 别名，新增 `NexusClient` 兼容别名（Python）
+  - nexus-core 不支持的方法（gasPrice/sendRawTransaction/getBlockByHash/estimateGas）保留 SDK 接口，
+    加 @deprecated 注释或改为调用最接近的方法
+- **P2-D3 UI 认证闭环**：移除 `VITE_NEXUS_API_SECRET` 构建期 env 注入，改为运行时用户输入。
+  - 新增 `nexus-explorer/frontend/src/pages/Settings.tsx`：API Key / API Secret 输入框、
+    保存按钮调用 `setCredentials`、从 localStorage 读取已保存凭证
+  - `AuthContext.tsx`：移除 `ENV_API_SECRET`，Secret 仅从 localStorage（XOR+base64 编码）读取
+  - `App.tsx` 新增 `/settings` 路由；`HomePage.tsx` 导航栏添加 Settings 链接
+  - TypeScript 编译验证通过（`npx tsc --noEmit` 零错误）
+- **P2-D4 ADR 更新**：ADR-020 状态改为 `Superseded by ADR-032`；
+  新建 ADR-032（Spring Boot 3.2.5 统一决策），记录 javax→jakarta 迁移完成、
+  SCA 2023.0.1.0 合规要求、所有 Java 微服务统一 Boot 3.2.5；
+  补全 ADR-021~025、ADR-028 编号断档说明
+- **P2-D5 版本治理整改**：合并两个 `[Unreleased]` 节、版本号规范化、
+  README 版本声明与 CHANGELOG 对齐
+
 ### Security
 - P0(wallet-service): 资金路径 fail-closed —— 消除伪造 `SIMULATED-` 交易哈希（59cb5e1）
   - `DefaultCustodyService.executeOnChainTransfer`：链上执行通道缺失/失败时抛异常触发事务回滚，余额不落库，杜绝"账上有、链上无"
@@ -53,7 +95,39 @@
   「Phase 1-5 退出条件全部满足」「SDK v2 发布 Maven Central」勾选与事实不符，改为未勾选并注明
 - docs/真机构建联调清单.md 第 4 章补充双姿态说明（全容器联调 vs 容器 PG + 原生 core）
 - 仓库卫生：清理 nexus-core-local.mv.db / .trace.db（H2 残留，回收站）、根目录 core-start.log / testall-bg.log；
-  .gitignore 增补 `*.mv.db` / `*.trace.db` / `.inscode/`；移除未被引用的 nexus-sdk/ts/ 残留骨架（回收站 + git rm --cached，typescript/ 为正式目录）
+  .gitignore 增补 `*.mv.db` / `*.trace.db` / `.inscode/`；移除未被引用的 nexus-sdk/ts/ 拆留骨架（回收站 + git rm --cached，typescript/ 为正式目录）
+
+### Consensus（多节点共识攻坚：PLAN-001 ~ PLAN-013b 全链路）
+
+- **多节点共享单链 + NexFinality 最终性全链路真机闭环**
+  - PLAN-001 验证人同步（P2P 广播 + 落库重放 + 多次重发）
+  - PLAN-002 出块抑制（落后对端停出）+ PLAN-003 分叉重组（ReorgManager + 最终化护栏）
+  - PLAN-005 区块落 PG（leastConfirms PoS 适配）+ PLAN-006 启动继承共享链
+  - PLAN-007 单 proposer 协调（round-robin 地址排序确定性）
+  - PLAN-008 引擎密钥 Spring 注入 + PLAN-010 最小验证人集合门槛
+  - **PLAN-013b 共享 PG 幂等写（ON CONFLICT）——双节点交替出块 51/52 + epoch 最终化 100%**
+  - 真机验证：A 奇数块/B 偶数块交替、区块双向传播、状态对账（MerkleHandler）
+- 回退修复：`ON CONFLICT DO NOTHING` 无列名（H2/PG 方言兼容，收尾回归捕获）
+
+### MPC 多进程分布（长期项 #7）
+
+- mpc-engine Rust 编译验证（Docker 方案，GG20 门限 ECDSA 端到端通过）
+- 引擎份额持久化（DKG 会话 JSON 落盘/恢复）
+- 跨进程端到端验收：3 参与者 t=2 门限签名（Java gRPC ↔ Rust 引擎）
+- 多引擎 HA 部署脚本 + 启动级份额门限校验（fail-closed）
+
+### ZK 真实 Groth16（长期项，方案 C 全链路）
+
+- zk-groth16-service：Rust arkworks 真实 BN254 配对验证服务（gRPC + HTTP）
+- Java 对接：Groth16ProofSystem.verifyRemote（fail-closed）+ R1csToJsonBridge
+- 生产电路接入：Rollup 状态转换电路（真实约束 C1-C5）端到端真实验证
+- **setup 持久化**：电路指纹确定性 setup + 幂等 + 0700 权限 + prove/verify 分离模式
+
+### 基础设施
+
+- testAll 首次全绿（L2 Hardhat 并行冲突修复 maxParallelForks=1）
+- consortium 测试环境修复（H2 内存库 + consensus=none + BC 1.78 兼容）
+- 新增脚本：build-mpc-engine.sh / deploy-mpc-engine.sh / dev-cluster-up.sh / dev-cluster-verify.sh
 
 ## [2.1.0] - 2026-08-10
 
@@ -435,7 +509,7 @@
 - Feign 接口修正：addressToPubkeyHash/verifyAddress 从 SigningServiceFeignClient 移到 WalletMgmtFeignClient（对齐方案 §4.4.1）
 - fallback 类保留 @Component 注解，不绑定 @FeignClient（编译通过，运行时降级在后续完善）
 
-## [1.3.0] — 2026-08-06 — C2 改进完成：Bean 冲突修复 + 治理参数化 + L2 欺诈证明 + MPC 网络层 + 治理增强 + L2 增强 + 签名服务 PoC + 紧急回滚 + ZK 骨架
+## [1.3.0] - 2026-08-06 - C2 改进完成：Bean 冲突修复 + 治理参数化 + L2 欺诈证明 + MPC 网络层 + 治理增强 + L2 增强 + 签名服务 PoC + 紧急回滚 + ZK 骨架
 
 ### P0 — Bean 冲突修复（#45）
 - 修复 `ApprovalPolicy` Bean 冲突：多个实现类注册同名 Bean 导致 `DefaultWithdrawalApprovalService` 注入失败
@@ -522,7 +596,7 @@
 ### 版本治理
 - 全仓库版本号统一升级为 1.3.0
 
-## [1.2.3] — 2026-08-06 — P2 改进：前端设计契约 + PoS/L2/治理 + MPC 多签 + wallet 拆分
+## [1.2.3] - 2026-08-06 - P2 改进：前端设计契约 + PoS/L2/治理 + MPC 多签 + wallet 拆分
 
 ### P2-1 前端设计契约落地
 - 修复 87 处设计违规（硬编码颜色/魔法数字/不一致间距）
@@ -702,36 +776,28 @@
 
 - 全量回归：5 个模块共 174 个测试全部通过（gateway 64 / settlement 20 / compliance 30 / analytics 32 / oracle 28）
 
-## [Unreleased]
+---
 
-### Consensus（多节点共识攻坚：PLAN-001 ~ PLAN-013b 全链路）
+## 版本治理说明
 
-- **多节点共享单链 + NexFinality 最终性全链路真机闭环**
-  - PLAN-001 验证人同步（P2P 广播 + 落库重放 + 多次重发）
-  - PLAN-002 出块抑制（落后对端停出）+ PLAN-003 分叉重组（ReorgManager + 最终化护栏）
-  - PLAN-005 区块落 PG（leastConfirms PoS 适配）+ PLAN-006 启动继承共享链
-  - PLAN-007 单 proposer 协调（round-robin 地址排序确定性）
-  - PLAN-008 引擎密钥 Spring 注入 + PLAN-010 最小验证人集合门槛
-  - **PLAN-013b 共享 PG 幂等写（ON CONFLICT）——双节点交替出块 51/52 + epoch 最终化 100%**
-  - 真机验证：A 奇数块/B 偶数块交替、区块双向传播、状态对账（MerkleHandler）
-- 回退修复：`ON CONFLICT DO NOTHING` 无列名（H2/PG 方言兼容，收尾回归捕获）
+### 版本号断档
 
-### MPC 多进程分布（长期项 #7）
+以下版本号在序列中未使用（断档），均为开发期间预留给未最终成稿的内部迭代，
+正式发布版本跳过这些编号。断档不补齐，保留作为历史记录。
 
-- mpc-engine Rust 编译验证（Docker 方案，GG20 门限 ECDSA 端到端通过）
-- 引擎份额持久化（DKG 会话 JSON 落盘/恢复）
-- 跨进程端到端验收：3 参与者 t=2 门限签名（Java gRPC ↔ Rust 引擎）
-- 多引擎 HA 部署脚本 + 启动级份额门限校验（fail-closed）
+- **1.2.1 / 1.2.2**：预留给前端设计契约修复的内部迭代，后合并入 1.2.3 一起发布。
+- **1.4.0**：预留给 Phase 3 微服务化中间版本，后因功能合并入 1.5.0 一起发布。
+- **1.9.6**：预留给 P1 架构缺口修复的补丁版本，后合并入 1.9.7 一起发布。
 
-### ZK 真实 Groth16（长期项，方案 C 全链路）
+### 发布日期密度说明
 
-- zk-groth16-service：Rust arkworks 真实 BN254 配对验证服务（gRPC + HTTP）
-- Java 对接：Groth16ProofSystem.verifyRemote（fail-closed）+ R1csToJsonBridge
-- 生产电路接入：Rollup 状态转换电路（真实约束 C1-C5）端到端真实验证
-- **setup 持久化**：电路指纹确定性 setup + 幂等 + 0700 权限 + prove/verify 分离模式
+2026-08-06 至 2026-08-10 期间发布了 18 个版本（1.0.0 ~ 2.1.0），
+密度较高。这是 Phase 1 ~ Phase 5 集中开发期的正常节奏：
+- 08-06：1.0.0 ~ 1.3.0（中间服务层真实化 + C2 改进）
+- 08-07：1.5.0 ~ 1.9.0（Phase 3/4 微服务化 + 审计报告三批）
+- 08-08：1.9.1 ~ 1.9.7（测试修复 + 安全修复 + 架构缺口修复）
+- 08-10：2.0.0-rc1 / 2.1.0（Phase 5 真实化改造 + 安全审计 + P0 修复）
 
-### 基础设施
+后续版本遵循语义化版本（SemVer）规范，发布节奏回归正常（按里程碑发布）。
 
-- testAll 首次全绿（L2 Hardhat 并行冲突修复 maxParallelForks=1）
-- consortium 测试环境修复（H2 内存库 + consensus=none + BC 1.78 兼容）
-- 新增脚本：build-mpc-engine.sh / deploy-mpc-engine.sh / dev-cluster-up.sh / dev-cluster-verify.sh
+

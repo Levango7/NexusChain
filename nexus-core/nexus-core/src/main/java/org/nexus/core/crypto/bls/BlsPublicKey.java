@@ -27,6 +27,8 @@ public interface BlsPublicKey {
      * @throws IllegalArgumentException 若字节不合法
      */
     static BlsPublicKey fromBytesCompressed(byte[] compressed) {
-        throw new UnsupportedOperationException("BLS public key deserialization not yet implemented");
+        // NOTE: 纯Java环境使用secp256k1 EC点实现BLS-like签名验证。
+        // 生产环境应接入blst原生库做完整BLS12-381配对验签。
+        return Secp256k1BlsPublicKey.fromBytesCompressed(compressed);
     }
 }

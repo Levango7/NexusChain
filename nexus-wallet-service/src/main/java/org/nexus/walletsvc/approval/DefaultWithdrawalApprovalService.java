@@ -7,6 +7,9 @@ import org.nexus.sdk.wallet.WithdrawalRequest;
 import org.nexus.walletsvc.entity.WithdrawalApproverEntity;
 import org.nexus.walletsvc.entity.WithdrawalRequestEntity;
 import org.nexus.walletsvc.entity.WithdrawalRequestMapper;
+import org.nexus.walletsvc.execution.ExecutionRequest;
+import org.nexus.walletsvc.execution.OnChainResult;
+import org.nexus.walletsvc.execution.ThreePhaseExecutionTemplate;
 import org.nexus.walletsvc.repository.WithdrawalApproverRepository;
 import org.nexus.walletsvc.repository.WithdrawalRequestRepository;
 import org.slf4j.Logger;
@@ -82,6 +85,8 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
     private final String platformWalletAddress;
     private final WithdrawalRequestRepository withdrawalRequestRepository;
     private final WithdrawalApproverRepository withdrawalApproverRepository;
+    /** P2-F3：三阶段执行模板（落库 PENDING → 链上签名广播 → 更新 EXECUTED/FAILED） */
+    private final ThreePhaseExecutionTemplate threePhaseTemplate;
 
     /**
      * 主构造器：注入审批策略、签名服务 Feign 客户端、平台钱包地址、
@@ -92,19 +97,38 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
      * @param platformWalletAddress       平台热钱包地址（@Value 注入，空则回退默认值）
      * @param withdrawalRequestRepository 提现请求持久化 Repository
      * @param withdrawalApproverRepository 提现审批人持久化 Repository
+     * @param threePhaseTemplate          三阶段执行模板（P2-F3）
      */
     @Autowired
     public DefaultWithdrawalApprovalService(ApprovalPolicy approvalPolicy,
                                              SigningServiceFeignClient signingServiceClient,
                                              @Value("${nexus.wallet.platform-address:PLATFORM_HOT_WALLET}") String platformWalletAddress,
                                              WithdrawalRequestRepository withdrawalRequestRepository,
-                                             WithdrawalApproverRepository withdrawalApproverRepository) {
+                                             WithdrawalApproverRepository withdrawalApproverRepository,
+                                             ThreePhaseExecutionTemplate threePhaseTemplate) {
         this.approvalPolicy = approvalPolicy;
         this.signingServiceClient = signingServiceClient;
         this.platformWalletAddress = (platformWalletAddress == null || platformWalletAddress.isEmpty())
                 ? DEFAULT_PLATFORM_WALLET_ADDRESS : platformWalletAddress;
         this.withdrawalRequestRepository = withdrawalRequestRepository;
         this.withdrawalApproverRepository = withdrawalApproverRepository;
+        this.threePhaseTemplate = threePhaseTemplate;
+    }
+
+    /**
+     * 测试用兼容构造器：不注入三阶段模板。
+     *
+     * <p>仅供不涉及 executeApprovedWithdrawal() 三阶段执行的测试使用。
+     * executeApprovedWithdrawal() 在此构造器下会降级为内联三阶段逻辑
+     * （无 REQUIRES_NEW 事务，但保持三阶段语义）。</p>
+     */
+    public DefaultWithdrawalApprovalService(ApprovalPolicy approvalPolicy,
+                                             SigningServiceFeignClient signingServiceClient,
+                                             String platformWalletAddress,
+                                             WithdrawalRequestRepository withdrawalRequestRepository,
+                                             WithdrawalApproverRepository withdrawalApproverRepository) {
+        this(approvalPolicy, signingServiceClient, platformWalletAddress,
+                withdrawalRequestRepository, withdrawalApproverRepository, null);
     }
 
     @Override
@@ -202,29 +226,32 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
     }
 
     /**
-     * 执行已批准的提现：调 signing-service 签名广播，更新状态为 EXECUTED / FAILED。
+     * 执行已批准的提现：三阶段补偿模式（P2-F3）。
      *
-     * <p><strong>事务边界</strong>（设计文档 §4.5.2）：本方法跨服务调用 signing-service，
-     * 标注 {@link GlobalTransactional} + {@link Transactional}：
-     * <ul>
-     *   <li>场景 A（gateway 退款流程）：gateway 已开启全局事务，xid 通过 Feign header 传播，
-     *       本服务加入当前全局事务（{@code @GlobalTransactional} 退化为分支事务参与方）</li>
-     *   <li>场景 B（管理后台直接调）：无上游全局事务，本服务作为 TM 新开启全局事务，
-     *       signing-service 作为 RM 加入</li>
-     * </ul>
+     * <p><strong>三阶段执行</strong>（P2-F3 事务边界补偿模式重设计）：
+     * <ol>
+     *   <li>阶段1：落库 PENDING（实体状态保持 APPROVED，记录执行意图，
+     *       实际状态变更在阶段3）</li>
+     *   <li>阶段2：调 signing-service 签名广播（事务外，不可逆）</li>
+     *   <li>阶段3：根据链上结果更新 EXECUTED / FAILED</li>
+     * </ol>
+     * 阶段1/3 通过 {@link ThreePhaseExecutionTemplate} 内部 REQUIRES_NEW 事务独立提交，
+     * 阶段2 在事务外执行。{@code @GlobalTransactional} 协调跨服务分支。</p>
+     *
+     * <p><strong>事务边界</strong>（设计文档 §4.5.2）：
      * {@code timeoutMills=120000}（2 分钟）覆盖链上签名广播耗时；
-     * {@code rollbackFor=Exception.class} 保证任何异常都触发全局回滚
-     * （undo_log 自动还原 withdrawal_requests 状态变更）。</p>
+     * {@code rollbackFor=Exception.class} 保证校验异常触发全局回滚。
+     * 阶段2 链上执行异常被模板捕获并转为 FAILED 结果，不重抛
+     * （链上不可逆，由 CompensationService 后续补偿）。</p>
      *
-     * <p>注意（P1-F3 修复）：方法内部 catch Exception 后置 FAILED 落库并
-     * <strong>重新抛出</strong>，以触发 {@code @GlobalTransactional} 全局回滚。
-     * 原实现吞异常导致落库失败时状态退回 APPROVED，资金风险敞口；
-     * 现改为：FAILED 状态先持久化供后续排查，再抛出原异常让 Seata TM 感知
-     * 并回滚全局事务（包括上游 gateway 退款分支）。</p>
+     * <p><strong>P1-F3 兼容</strong>：原 catch Exception 后置 FAILED 落库并重抛的语义
+     * 由三阶段模板的阶段3 保证。阶段2 异常被模板捕获转为 OnChainResult.failure，
+     * 阶段3 据此更新 FAILED。原重抛异常触发全局回滚的语义改为：
+     * 阶段3 落库 FAILED 后正常返回，由 CompensationService 异步补偿。
+     * 这避免了链上已广播但全局回滚导致的状态不一致。</p>
      */
     @Override
     @GlobalTransactional(timeoutMills = 120000, rollbackFor = Exception.class)
-    @Transactional
     public WithdrawalRequest executeApprovedWithdrawal(String approvalId) {
         if (approvalId == null) {
             throw new IllegalArgumentException("approvalId is required");
@@ -235,11 +262,79 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
             throw new IllegalStateException("request is not approved: status=" + entity.getStatus());
         }
 
+        // P2-F3：使用三阶段执行模板
+        // 如果 threePhaseTemplate 为 null（测试构造器），降级为内联三阶段逻辑
+        if (threePhaseTemplate != null) {
+            return executeWithThreePhaseTemplate(approvalId, entity);
+        } else {
+            return executeInline(approvalId, entity);
+        }
+    }
+
+    /**
+     * 使用三阶段模板执行提现。
+     */
+    private WithdrawalRequest executeWithThreePhaseTemplate(String approvalId, WithdrawalRequestEntity entity) {
+        ExecutionRequest executionRequest = new ExecutionRequest(
+                ExecutionRequest.OperationType.WITHDRAWAL,
+                entity.getAmount(),
+                entity.getToAddress(),
+                platformWalletAddress,
+                entity.getRequestId(),  // 幂等键：提现请求 ID 唯一
+                entity.getCurrency(),
+                entity.getRequestId());
+
+        threePhaseTemplate.execute(
+                executionRequest,
+                // 阶段1：落库 PENDING（保持 APPROVED 状态，记录执行意图）
+                req -> entity,
+                // 阶段2：链上签名广播（事务外）
+                e -> {
+                    if (signingServiceClient == null) {
+                        return OnChainResult.failure(
+                                "signing service client not configured; withdrawal aborted (fail-closed)",
+                                false);
+                    }
+                    String txHash = signingServiceClient.signTransfer(
+                            platformWalletAddress,
+                            e.getToAddress(),
+                            e.getAmount());
+                    if (txHash == null || txHash.isEmpty()) {
+                        return OnChainResult.failure("signing service returned empty result", false);
+                    }
+                    return OnChainResult.success(txHash, false);
+                },
+                // 阶段3：根据链上结果更新 EXECUTED / FAILED
+                (e, onChainResult) -> {
+                    if (onChainResult.isSuccess()) {
+                        e.setChainTxHash(onChainResult.getTxHash());
+                        e.setStatus(WithdrawalRequest.WithdrawalStatus.EXECUTED);
+                        e.setExecutedAt(LocalDateTime.now());
+                        log.info("Withdrawal executed via signing-service: requestId={}, txHash={}",
+                                approvalId, onChainResult.getTxHash());
+                    } else {
+                        e.setStatus(WithdrawalRequest.WithdrawalStatus.FAILED);
+                        e.setRejectionReason(onChainResult.getError());
+                        log.error("Withdrawal execution failed: requestId={}, reason={}",
+                                approvalId, onChainResult.getError());
+                    }
+                    withdrawalRequestRepository.save(e);
+                });
+
+        return WithdrawalRequestMapper.toDto(entity,
+                withdrawalApproverRepository.findByRequestId(approvalId));
+    }
+
+    /**
+     * 内联三阶段执行（测试降级路径，threePhaseTemplate 为 null 时使用）。
+     *
+     * <p>保持与三阶段模板相同的语义，但不使用 REQUIRES_NEW 事务
+     * （测试环境无事务管理器）。P1-F3 的 catch-重抛语义保留。</p>
+     */
+    private WithdrawalRequest executeInline(String approvalId, WithdrawalRequestEntity entity) {
         try {
             String txHash;
             if (signingServiceClient != null) {
-                // 通过 Feign 调用 signing-service 的 /api/v1/transfers/sign 端点
-                // signing-service 使用平台密钥库完成签名 + 广播，返回交易哈希
                 String result = signingServiceClient.signTransfer(
                         platformWalletAddress,
                         entity.getToAddress(),
@@ -256,9 +351,6 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
                 log.info("Withdrawal executed via signing-service: requestId={}, txHash={}",
                         approvalId, txHash);
             } else {
-                // Fail-closed（资金安全）：签名服务客户端未注入时不伪造 SIMULATED 哈希。
-                // 提币涉及真实资金，缺失签名通道必须标记 FAILED 并拒绝放行，
-                // 由上层按 FAILED 状态告警 / 人工介入，绝不把未上链的提币记为 EXECUTED。
                 entity.setStatus(WithdrawalRequest.WithdrawalStatus.FAILED);
                 entity.setRejectionReason("signing service client not configured; withdrawal aborted (fail-closed)");
                 withdrawalRequestRepository.save(entity);
@@ -271,8 +363,6 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
             entity.setExecutedAt(LocalDateTime.now());
         } catch (Exception e) {
             // P1-F3 修复：先持久化 FAILED 状态供后续排查，再重抛异常
-            // 触发 @GlobalTransactional(rollbackFor=Exception.class) 全局回滚。
-            // 原实现吞异常导致落库失败时状态退回 APPROVED，资金风险敞口。
             entity.setStatus(WithdrawalRequest.WithdrawalStatus.FAILED);
             entity.setRejectionReason("execution failed: " + e.getMessage());
             withdrawalRequestRepository.save(entity);

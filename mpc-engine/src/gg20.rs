@@ -4,12 +4,14 @@
 //!   * DKG：4 轮（Paillier 密钥生成 → Feldman VSS → ZK 证明 → 公钥聚合）
 //!   * Sign：7 轮（R_i 广播 → MtA → R 聚合 → ZK 证明 → s_i 计算 → 聚合）
 //!
-//! 部署模型说明（诚实声明）：本模块在单一进程内模拟全部 n 个参与方运行 GG20
-//! 协议，属于「可信协调器」模型——门限密码学的数学是真实的（真实 Paillier、
-//! Feldman VSS、MtA、ZK 证明，产出可被标准 secp256k1 验证的签名），但各方
-//! 私钥份额暂驻留同一进程，而非分散在互不信任的独立节点上。要达到完全的
-//! 门限安全（t-of-n 方被攻破不泄露私钥），需将各方协议执行拆分到独立节点
-//! 并经 mpc_signer.proto 传输层路由消息（见 README 的演进路线）。
+//! 部署模型说明（MPC-P2-F5 分布式安全模型）：本模块的 `run_keygen`/`run_sign`
+//! 仍在进程内模拟全部 n 方运行 GG20 协议（门限密码学数学真实，产出可被标准
+//! secp256k1 验证）。但 `DkgSession` 现携带 `my_party_index` 与 `my_private_share`
+//! 字段，标识本方身份与本方私钥份额；`extract_private_share(party_index)` 方法
+//! 仅允许提取 `my_party_index` 对应的份额，跨方提取直接拒绝并记录安全日志。
+//! 持久化层（`persistence.rs`）只加密存储本方份额，聚合公钥与可验证公钥明文存储。
+//! 完全分散式 DKG/Sign（各方独立进程经 mpc_signer.proto 交换消息）为后续演进目标，
+//! 当前保留进程内全量协议执行能力以兼容 signing-service GrpcMpcCryptoEngine 客户端。
 
 use serde::{Deserialize, Serialize};
 
@@ -32,6 +34,15 @@ use zk_paillier::zkproofs::DLogStatement;
 /// DKG 完成后的完整会话状态（签名阶段所需的全部材料）。
 ///
 /// 序列化存储，供 Sign 阶段重建。
+///
+/// **MPC-P2-F5 分布式安全模型**：
+///   * `my_party_index`：本方索引（0..n），标识当前进程代表的参与方。
+///   * `my_private_share`：本方私钥份额（`Option`，分布式模式必填）。
+///   * `shared_keys`：全量份额（可信协调器兼容模式保留；分布式模式可为空）。
+///   * `extract_private_share(party_index)`：仅允许提取 `my_party_index` 的份额。
+///
+/// 聚合公钥 `y_sum`、各方可验证公钥 `pk_vec`、VSS 方案 `vss_scheme`、
+/// DLog 证明 `dlog_proofs` 全量存储（验签所需，非私钥材料）。
 #[derive(Clone, Serialize, Deserialize)]
 pub struct DkgSession {
     pub params: Parameters,
@@ -44,6 +55,88 @@ pub struct DkgSession {
     pub dlog_statement_vec: Vec<DLogStatement>,
     /// 各方份额的 DLog 证明（DKG 第 3 轮产出），供 DKG 响应携带真实 ZK 证明。
     pub dlog_proofs: Vec<DLogProof<Secp256k1, Sha256>>,
+    /// **MPC-P2-F5**：本方索引（0..n），标识当前进程代表的参与方。
+    /// 默认 0（可信协调器兼容模式）；分布式模式由 DKG RPC 按 `req.party_index` 设置。
+    #[serde(default)]
+    pub my_party_index: usize,
+    /// **MPC-P2-F5**：本方私钥份额（分布式模式必填）。
+    /// 设置后 `extract_private_share` 优先返回此字段；持久化层只加密存储此字段。
+    /// `None` 表示未设置（可信协调器兼容模式，从 `shared_keys` 取用）。
+    #[serde(default)]
+    pub my_private_share: Option<SharedKeysSerde>,
+}
+
+impl DkgSession {
+    /// **MPC-P2-F5**：提取指定方的私钥份额。
+    ///
+    /// **安全策略**：仅允许提取 `my_party_index` 对应的份额（本方份额）。
+    /// 跨方提取请求（`party_index != my_party_index`）直接拒绝并记录安全日志，
+    /// 不泄露任何方私钥份额。
+    ///
+    /// 返回顺序：
+    ///   1. 若 `party_index != my_party_index` → 拒绝（安全日志 + 错误）。
+    ///   2. 若 `my_private_share` 已设置 → 返回本方份额（分布式模式）。
+    ///   3. 否则从 `shared_keys[party_index]` 取（可信协调器兼容模式）。
+    pub fn extract_private_share(&self, party_index: usize) -> eyre::Result<&SharedKeysSerde> {
+        if party_index != self.my_party_index {
+            tracing::warn!(
+                requested_party_index = party_index,
+                my_party_index = self.my_party_index,
+                "MPC-P2-F5: cross-party private share extraction DENIED — \
+                 requested index does not match this party's index"
+            );
+            return Err(eyre::eyre!(
+                "MPC-P2-F5: cannot extract other party's private share \
+                 (requested {}, this party is {}) — cross-party extraction denied",
+                party_index,
+                self.my_party_index
+            ));
+        }
+        // 优先返回 my_private_share（分布式模式），否则从 shared_keys 取（兼容模式）
+        if let Some(my_share) = &self.my_private_share {
+            return Ok(my_share);
+        }
+        self.shared_keys.get(party_index).ok_or_else(|| {
+            eyre::eyre!(
+                "MPC-P2-F5: no private share available for party {} \
+                 (my_private_share unset and shared_keys[{}] out of range)",
+                party_index,
+                party_index
+            )
+        })
+    }
+
+    /// **MPC-P2-F5**：设置本方身份与本方私钥份额（分布式模式）。
+    ///
+    /// 由 DKG RPC 在缓存会话前调用，将 `my_party_index` 设为 `req.party_index`，
+    /// 并从 `shared_keys[party_index]` 提取本方份额到 `my_private_share`。
+    /// 设置后 `extract_private_share` 仅返回本方份额，跨方提取拒绝。
+    pub fn set_my_identity(&mut self, party_index: usize) -> eyre::Result<()> {
+        if party_index >= self.shared_keys.len() && self.my_private_share.is_none() {
+            return Err(eyre::eyre!(
+                "MPC-P2-F5: cannot set identity to party {} — shared_keys has {} entries \
+                 and my_private_share is unset",
+                party_index,
+                self.shared_keys.len()
+            ));
+        }
+        self.my_party_index = party_index;
+        // 若 my_private_share 未设置且 shared_keys 有对应条目，则提取本方份额
+        if self.my_private_share.is_none() && party_index < self.shared_keys.len() {
+            self.my_private_share = Some(self.shared_keys[party_index].clone());
+        }
+        tracing::info!(
+            my_party_index = self.my_party_index,
+            has_my_private_share = self.my_private_share.is_some(),
+            "MPC-P2-F5: party identity set (distributed security model)"
+        );
+        Ok(())
+    }
+
+    /// **MPC-P2-F5**：是否已配置本方私钥份额（分布式模式）。
+    pub fn has_my_private_share(&self) -> bool {
+        self.my_private_share.is_some()
+    }
 }
 
 /// SharedKeys 的 serde 包装（原类型无 Serialize）。
@@ -160,6 +253,11 @@ pub fn run_keygen(t: u16, n: u16) -> eyre::Result<(Point<Secp256k1>, Vec<Scalar<
         ek_vec: e_vec,
         dlog_statement_vec: h1_h2_n_tilde_vec,
         dlog_proofs: dlog_proof_vec.clone(),
+        // MPC-P2-F5: 默认 my_party_index=0（可信协调器兼容模式），
+        // my_private_share=None（未设置，从 shared_keys 取用）。
+        // DKG RPC 在缓存会话前调用 set_my_identity 设置本方身份。
+        my_party_index: 0,
+        my_private_share: None,
     };
 
     Ok((y_sum, x_shares, session))

@@ -31,6 +31,9 @@ import org.nexus.gateway.event.PaymentConfirmedEvent;
 import org.nexus.gateway.security.KeyManager;
 import org.nexus.gateway.event.RefundCompletedEvent;
 import org.nexus.gateway.model.OrderStateMachine;
+import org.nexus.gateway.execution.ExecutionRequest;
+import org.nexus.gateway.execution.OnChainResult;
+import org.nexus.gateway.execution.ThreePhaseExecutionTemplate;
 import org.nexus.analytics.event.PaymentCompletedEvent;
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -63,6 +66,8 @@ public class PaymentServiceImpl implements PaymentService {
     private final ComplianceService complianceService;
     /** Micrometer Tracer：P3-T5 业务 span 注入。可为 null（测试环境降级 no-op）。 */
     private final Tracer tracer;
+    /** P2-F3：三阶段执行模板（落库 PENDING → 链上执行 → 更新 CONFIRMED/FAILED） */
+    private final ThreePhaseExecutionTemplate threePhaseTemplate;
 
     @Autowired
     public PaymentServiceImpl(PaymentOrderRepository orderRepository,
@@ -75,7 +80,8 @@ public class PaymentServiceImpl implements PaymentService {
                               KeyManager keyManager,
                               PaymentRiskService riskService,
                               ComplianceService complianceService,
-                              Tracer tracer) {
+                              Tracer tracer,
+                              ThreePhaseExecutionTemplate threePhaseTemplate) {
         this.orderRepository = orderRepository;
         this.refundRepository = refundRepository;
         this.gatewayConfig = gatewayConfig;
@@ -87,10 +93,16 @@ public class PaymentServiceImpl implements PaymentService {
         this.riskService = riskService;
         this.complianceService = complianceService;
         this.tracer = tracer;
+        this.threePhaseTemplate = threePhaseTemplate;
     }
 
     /**
-     * 测试用兼容构造器：不注入 Tracer，业务 span 降级为 no-op。
+     * 测试用兼容构造器：不注入 Tracer 与三阶段模板，业务 span 降级为 no-op。
+     *
+     * <p>注意：此构造器不注入 {@link ThreePhaseExecutionTemplate}，
+     * 仅供不涉及 refund() 三阶段执行的测试使用。refund() 在此构造器下会抛出
+     * {@code IllegalStateException}（threePhaseTemplate 为 null）。
+     * 涉及 refund() 的测试应使用注入三阶段模板的构造器。</p>
      */
     public PaymentServiceImpl(PaymentOrderRepository orderRepository,
                               RefundRepository refundRepository,
@@ -104,7 +116,26 @@ public class PaymentServiceImpl implements PaymentService {
                               ComplianceService complianceService) {
         this(orderRepository, refundRepository, gatewayConfig, chainRpcClient,
                 signingServiceClient, walletMgmtClient, eventPublisher, keyManager,
-                riskService, complianceService, null);
+                riskService, complianceService, null, null);
+    }
+
+    /**
+     * 测试用兼容构造器：注入 Tracer 但不注入三阶段模板。
+     */
+    public PaymentServiceImpl(PaymentOrderRepository orderRepository,
+                              RefundRepository refundRepository,
+                              GatewayConfig gatewayConfig,
+                              ChainRpcClient chainRpcClient,
+                              SigningServiceFeignClient signingServiceClient,
+                              WalletMgmtFeignClient walletMgmtClient,
+                              ApplicationEventPublisher eventPublisher,
+                              KeyManager keyManager,
+                              PaymentRiskService riskService,
+                              ComplianceService complianceService,
+                              Tracer tracer) {
+        this(orderRepository, refundRepository, gatewayConfig, chainRpcClient,
+                signingServiceClient, walletMgmtClient, eventPublisher, keyManager,
+                riskService, complianceService, tracer, null);
     }
 
     @Override
@@ -259,7 +290,6 @@ public class PaymentServiceImpl implements PaymentService {
     }
 
     @Override
-    @Transactional
     @GlobalTransactional(timeoutMills = 120000)
     public Refund refund(Long orderId, BigDecimal amount, String reason) {
         // P3-T5：退款主 span（payment.refund）
@@ -291,71 +321,94 @@ public class PaymentServiceImpl implements PaymentService {
                 throw new IllegalStateException("Refund rejected by risk control (" + refundDecision + ")");
             }
 
-            Refund refund = new Refund();
-            refund.setRefundNo("RF" + System.currentTimeMillis() + UUID.randomUUID().toString().substring(0, 4).toUpperCase());
-            refund.setOrderId(orderId);
-            refund.setMerchantId(order.getMerchantId());
-            refund.setAmount(amount);
-            refund.setTokenSymbol(order.getTokenSymbol());
-            refund.setReceiverAddress(order.getPayerAddress());
-            refund.setSenderAddress(order.getPayeeAddress());
-            refund.setReason(reason);
-            refund.setStatus(Refund.RefundStatus.PROCESSING);
-
-            refundSpan.attr("payment.refund.no", refund.getRefundNo());
-
-            // P1-F3 事务边界修复：先落库 PENDING 再链上执行再更新 CONFIRMED。
-            // 原顺序（链上转账 → save）在 save 失败时，Seata 仅能回滚数据库分支，
-            // 无法回滚已上链的不可逆交易。改为先持久化 REFUND_PENDING 占位，
-            // 链上转账成功后更新为 REFUNDED；失败则回滚订单状态到 PAID 允许重试。
-            OrderStateMachine.transition(order, PaymentOrder.OrderStatus.REFUND_PENDING);
-            orderRepository.save(order);
-            Refund saved = refundRepository.save(refund);
-
-            // Execute refund transfer via exchange-wallet
-            String receiverPubkeyHash = walletMgmtClient.addressToPubkeyHash(order.getPayerAddress());
-            if (receiverPubkeyHash != null) {
-                String txHash = executeRefundTransfer(order, receiverPubkeyHash, amount);
-                if (txHash != null) {
-                    refund.setChainTxHash(txHash);
-                    refund.setStatus(Refund.RefundStatus.COMPLETED);
-                    refund.setCompletedAt(LocalDateTime.now());
-                    OrderStateMachine.transition(order, PaymentOrder.OrderStatus.REFUNDED);
-                    refundSpan.attr("payment.refund.tx.hash", txHash)
-                            .attr("payment.refund.status", "COMPLETED");
-                } else {
-                    refund.setStatus(Refund.RefundStatus.FAILED);
-                    // 链上转账失败：回滚订单状态到 PAID，允许后续重试退款
-                    OrderStateMachine.transition(order, PaymentOrder.OrderStatus.PAID);
-                    refundSpan.attr("payment.refund.status", "FAILED").error(null);
-                    log.error("Refund transfer failed for order: {}", order.getOrderNo());
-                }
-            } else {
-                // Wallet unreachable: the on-chain transfer cannot be proven to have happened.
-                // Mark the refund FAILED with no chainTxHash instead of fabricating a success state.
-                log.warn("Wallet unreachable, refund cannot be executed for order: {}", order.getOrderNo());
-                refund.setChainTxHash(null);
-                refund.setStatus(Refund.RefundStatus.FAILED);
-                // 回滚订单状态到 PAID，允许后续重试
-                OrderStateMachine.transition(order, PaymentOrder.OrderStatus.PAID);
-                refundSpan.attr("payment.refund.status", "FAILED")
-                        .attr("wallet.unreachable", true)
-                        .error(null);
+            // P2-F3：三阶段补偿模式（落库 PENDING → 链上执行 → 更新 CONFIRMED/FAILED）
+            // 替代 P1-F3 的内联实现，标准化事务边界与补偿语义。
+            // @GlobalTransactional 协调跨服务分支（walletMgmtClient），
+            // 阶段1/3 通过 ThreePhaseExecutionTemplate 内部 REQUIRES_NEW 独立提交，
+            // 确保 PENDING 落库不被全局回滚，可被 CompensationService 扫描补偿。
+            if (threePhaseTemplate == null) {
+                throw new IllegalStateException(
+                        "ThreePhaseExecutionTemplate not injected; refund() requires three-phase mode");
             }
 
-            // 链上结果落地：更新订单最终状态 + refund 最终状态
-            orderRepository.save(order);
-            saved = refundRepository.save(refund);
-            // Publish event only for genuinely completed refunds (real on-chain tx hash).
-            // FAILED refunds must never publish RefundCompletedEvent.
-            if (saved.getStatus() == Refund.RefundStatus.COMPLETED) {
-                eventPublisher.publishEvent(new RefundCompletedEvent(
-                        this, order.getId(), order.getOrderNo(), order.getMerchantId(),
-                        saved.getRefundNo(), amount.toPlainString(), saved.getChainTxHash()));
-            }
+            String refundNo = "RF" + System.currentTimeMillis()
+                    + UUID.randomUUID().toString().substring(0, 4).toUpperCase();
+            refundSpan.attr("payment.refund.no", refundNo);
 
-            log.info("Refund processed: refundNo={}, orderId={}, status={}", saved.getRefundNo(), orderId, saved.getStatus());
-            return saved;
+            // 构造三阶段执行请求（操作意图快照）
+            ExecutionRequest executionRequest = new ExecutionRequest(
+                    ExecutionRequest.OperationType.REFUND,
+                    amount,
+                    order.getPayerAddress(),
+                    order.getPayeeAddress(),
+                    refundNo,  // 幂等键：退款单号唯一
+                    order.getTokenSymbol(),
+                    String.valueOf(orderId));
+
+            // 三阶段执行：阶段1 落库 PENDING → 阶段2 链上转账 → 阶段3 更新 CONFIRMED/FAILED
+            Refund result = threePhaseTemplate.execute(
+                    executionRequest,
+                    // 阶段1：落库 PENDING（Refund + 订单状态 REFUND_PENDING）
+                    req -> {
+                        Refund refund = new Refund();
+                        refund.setRefundNo(refundNo);
+                        refund.setOrderId(orderId);
+                        refund.setMerchantId(order.getMerchantId());
+                        refund.setAmount(amount);
+                        refund.setTokenSymbol(order.getTokenSymbol());
+                        refund.setReceiverAddress(order.getPayerAddress());
+                        refund.setSenderAddress(order.getPayeeAddress());
+                        refund.setReason(reason);
+                        refund.setStatus(Refund.RefundStatus.PENDING);
+
+                        OrderStateMachine.transition(order, PaymentOrder.OrderStatus.REFUND_PENDING);
+                        orderRepository.save(order);
+                        return refundRepository.save(refund);
+                    },
+                    // 阶段2：链上执行（事务外，不可逆）
+                    refund -> {
+                        String receiverPubkeyHash = walletMgmtClient.addressToPubkeyHash(order.getPayerAddress());
+                        if (receiverPubkeyHash == null) {
+                            return OnChainResult.failure("wallet unreachable", false);
+                        }
+                        String txHash = executeRefundTransfer(order, receiverPubkeyHash, amount);
+                        if (txHash == null) {
+                            return OnChainResult.failure("refund transfer failed", false);
+                        }
+                        return OnChainResult.success(txHash, false);
+                    },
+                    // 阶段3：根据链上结果更新 CONFIRMED/FAILED
+                    (refund, onChainResult) -> {
+                        if (onChainResult.isSuccess()) {
+                            refund.setChainTxHash(onChainResult.getTxHash());
+                            refund.setStatus(Refund.RefundStatus.COMPLETED);
+                            refund.setCompletedAt(LocalDateTime.now());
+                            OrderStateMachine.transition(order, PaymentOrder.OrderStatus.REFUNDED);
+                            refundSpan.attr("payment.refund.tx.hash", onChainResult.getTxHash())
+                                    .attr("payment.refund.status", "COMPLETED");
+                        } else {
+                            refund.setStatus(Refund.RefundStatus.FAILED);
+                            // 链上转账失败：回滚订单状态到 PAID，允许后续重试退款
+                            // refund 失败 → 资金未转出，无需链上补偿
+                            OrderStateMachine.transition(order, PaymentOrder.OrderStatus.PAID);
+                            refundSpan.attr("payment.refund.status", "FAILED").error(null);
+                            log.error("Refund transfer failed for order: {}, reason: {}",
+                                    order.getOrderNo(), onChainResult.getError());
+                        }
+                        orderRepository.save(order);
+                        Refund saved = refundRepository.save(refund);
+
+                        // Publish event only for genuinely completed refunds
+                        if (saved.getStatus() == Refund.RefundStatus.COMPLETED) {
+                            eventPublisher.publishEvent(new RefundCompletedEvent(
+                                    this, order.getId(), order.getOrderNo(), order.getMerchantId(),
+                                    saved.getRefundNo(), amount.toPlainString(), saved.getChainTxHash()));
+                        }
+                    });
+
+            log.info("Refund processed: refundNo={}, orderId={}, status={}",
+                    result.getRefundNo(), orderId, result.getStatus());
+            return result;
         }
     }
 
