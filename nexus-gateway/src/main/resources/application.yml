@@ -61,6 +61,7 @@ spring:
     serialization:
       write-dates-as-timestamps: false
 
+
   # === Phase 1 任务 #55：Spring Cloud Alibaba / OpenFeign 配置 ===
   # Resilience4j 已移除（build.gradle 删除依赖），熔断/限流改由 Sentinel 承担。
   # Nacos discovery/config 的 server-addr/namespace/group 在 bootstrap.yml 声明；
@@ -124,6 +125,15 @@ feign:
     key-store-password: ${FEIGN_KEYSTORE_PASSWORD:changeit}
     trust-store-path: ${FEIGN_TRUSTSTORE_PATH:classpath:keystore/feign-truststore.jks}
     trust-store-password: ${FEIGN_TRUSTSTORE_PASSWORD:changeit}
+
+# === 项10：ShedLock 分布式锁默认参数（ReconciliationTask 多实例去重） ===
+# @EnableSchedulerLocks(defaultLockAtMostFor) 作为未在 @SchedulerLock 显式声明
+# lockAtMostFor 时的兜底值。ReconciliationTask 已显式声明 PT4M/PT1M，
+# 此处仅作为其他未来调度任务的默认上限，避免遗漏 lockAtMostFor 导致锁永久持有。
+# 注：ShedLock 注解属性不直接绑定此 yml，仅作部署文档化与运维参考。
+shedlock:
+  lock-at-most-for: PT4M
+  lock-at-least-for: PT1M
 
 # NexusChain Gateway configuration
 nexus:

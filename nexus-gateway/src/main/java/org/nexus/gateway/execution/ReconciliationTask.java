@@ -1,5 +1,6 @@
 package org.nexus.gateway.execution;
 
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.nexus.gateway.client.ChainRpcClient;
 import org.nexus.gateway.model.PaymentOrder;
 import org.nexus.gateway.model.Refund;
@@ -46,6 +47,13 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <h3>幂等性</h3>
  * <p>对账任务可重复执行：状态修正前再次校验当前状态，
  * 已被其他线程/实例处理的记录直接跳过。</p>
+ *
+ * <h3>分布式锁（项10）</h3>
+ * <p>通过 ShedLock {@code @SchedulerLock} 保证多实例部署时同一时刻仅一个实例执行对账。
+ * 锁最多持有 4 分钟（{@code lockAtMostFor=PT4M}）防止实例崩溃后锁不释放；
+ * 锁至少持有 1 分钟（{@code lockAtLeastFor=PT1M}）防止实例快速重启导致相邻节点重复执行。
+ * 锁状态持久化到 {@code shedlock} 表（V11 migration），由 {@link org.nexus.gateway.config.ShedLockConfig}
+ * 提供的 {@code JdbcTemplateLockProvider} 管理。</p>
  */
 @Component
 public class ReconciliationTask {
@@ -75,8 +83,21 @@ public class ReconciliationTask {
      *
      * <p>cron 表达式由 {@link ExecutionConfig#getReconciliationCron()} 提供，
      * 默认为每 5 分钟执行一次（Spring 6 六字段格式：秒 分 时 日 月 周）。</p>
+     *
+     * <p>分布式锁（项10）：{@code @SchedulerLock} 通过 ShedLock 保证多实例部署时
+     * 同一时刻仅一个实例执行对账任务。
+     * <ul>
+     *   <li>{@code lockAtMostFor=PT4M}：锁最多持有 4 分钟，超过此时间 ShedLock 自动释放，
+     *       防止实例崩溃或网络分区后锁永久不释放导致对账停摆。</li>
+     *   <li>{@code lockAtLeastFor=PT1M}：锁至少持有 1 分钟，即使对账在 1 分钟内完成，
+     *       锁也不会立即释放，防止实例快速重启或调度抖动导致相邻节点重复执行。</li>
+     * </ul>
+     * 锁名 {@code reconciliationTask} 在 {@code shedlock} 表中作为主键，
+     * 由 {@link org.nexus.gateway.config.ShedLockConfig} 提供的
+     * {@code JdbcTemplateLockProvider} 持久化管理。</p>
      */
     @Scheduled(cron = "${nexus.gatewayservice.execution.reconciliation-cron:0 */5 * * * *}")
+    @SchedulerLock(name = "reconciliationTask", lockAtMostFor = "PT4M", lockAtLeastFor = "PT1M")
     public void reconcile() {
         if (!executionConfig.isEnabled()) {
             log.debug("Reconciliation disabled, skip");

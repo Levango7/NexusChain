@@ -83,6 +83,26 @@ nexus:
     ttl-seconds: ${NEX_APPROVAL_TTL:3600}
     # 审批所需审批人数下限。实际所需人数取 max(此值, MpcApprovalPolicy.getRequiredApprovers)。
     min-required-approvers: ${NEX_APPROVAL_MIN_APPROVERS:2}
+    # === 项2：审批人白名单（逗号分隔的审批人地址列表） ===
+    # 空字符串表示不限制（任何持有 SIGNER 角色的调用方均可审批）；
+    # 非空时仅允许列表中的地址提交 approve/reject 决策，不在白名单的审批人决策被拒绝并记录审计日志。
+    # 生产环境应配置专用审批人集合，限制大额签名操作的审批权限。
+    # 示例：approver-whitelist=alice@nexus,bob@nexus,carol@nexus
+    approver-whitelist: ${NEX_APPROVAL_WHITELIST:}
+    # === 项3：多实例部署 DB 持久化开关 ===
+    # false（默认）：使用内存 ConcurrentHashMap 存储，适合单实例部署。
+    # true：应使用 DB 共享存储（多实例部署审批状态共享）。
+    # 当前 true 时记录 WARN 日志并回退到内存存储（P3 阶段引入 JPA Repository 后完整实现）。
+    use-database: ${NEX_APPROVAL_USE_DATABASE:false}
+    # === 项1：过期清理定时任务配置 ===
+    # 清理任务执行间隔（毫秒），默认 60000（1 分钟）。
+    # cleanupExpiredRequests @Scheduled 方法按此间隔扫描 requestStore：
+    #   1. PENDING+过期 → 标记 EXPIRED（保留实例供查询/审计）
+    #   2. 终态（EXPIRED/REJECTED/EXECUTED）且超过保留期 → 从内存移除
+    cleanup-interval-ms: ${NEX_APPROVAL_CLEANUP_INTERVAL:60000}
+    # 终态请求清理保留期（秒），默认 3600（1 小时）。
+    # 终态请求在 deadline 过期超过此保留期后才从内存移除，保留期内可供审计查询。
+    cleanup-retention-seconds: ${NEX_APPROVAL_CLEANUP_RETENTION:3600}
 
 # === OpenFeign 配置（设计文档 §4.4.2） ===
 feign:

@@ -1,6 +1,7 @@
 package org.nexus.core.crypto.bls;
 
 import java.math.BigInteger;
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
@@ -22,12 +23,22 @@ public class Secp256k1BlsSigner implements BlsSigner {
     private static final ECPoint G = CURVE_PARAMS.getG();
     private static final BigInteger N = CURVE_PARAMS.getN();
 
+    /** 域分离因子，防止不同用途的哈希碰撞。 */
+    private static final String DST = "NEXUS_BLS_V1";
+
     private final BigInteger privateKey;
     private final Secp256k1BlsPublicKey publicKey;
 
     public Secp256k1BlsSigner(BigInteger privateKey) {
-        this.privateKey = privateKey.mod(N);
-        this.publicKey = new Secp256k1BlsPublicKey(G.multiply(privateKey).normalize());
+        if (privateKey == null || privateKey.equals(BigInteger.ZERO)) {
+            throw new IllegalArgumentException("Private key must be non-zero");
+        }
+        BigInteger sk = privateKey.mod(N);
+        if (sk.equals(BigInteger.ZERO)) {
+            throw new IllegalArgumentException("Private key must not be a multiple of N");
+        }
+        this.privateKey = sk;
+        this.publicKey = new Secp256k1BlsPublicKey(G.multiply(this.privateKey).normalize());
     }
 
     @Override
@@ -44,6 +55,9 @@ public class Secp256k1BlsSigner implements BlsSigner {
     private static BigInteger hashToScalar(byte[] message) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            // 域分离因子前缀，防止不同用途的哈希碰撞
+            digest.update(DST.getBytes(StandardCharsets.UTF_8));
+            digest.update((byte) 0); // DST 与 message 之间的分隔符
             byte[] hash = digest.digest(message);
             return new BigInteger(1, hash).mod(N);
         } catch (NoSuchAlgorithmException e) {

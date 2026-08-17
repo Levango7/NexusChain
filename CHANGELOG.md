@@ -4,6 +4,24 @@
 
 ## [Unreleased]
 
+## [2.2.2] - 2026-08-18
+
+### Security
+- BLS签名rogue-key attack防护：新增aggregateWithCoefficients方法，基于coefficients-based aggregation
+- BLS hashToScalar添加域分离因子(DST)："NEXUS_BLS_V1"前缀防止哈希碰撞
+- BLS Secp256k1BlsSigner构造函数校验privateKey ∈ [1, N-1]，拒绝零私钥
+
+### Fixed
+- Java SDK RpcClient方法名同步：nexus_blockNumber→nexus_getLatestBlocks, nexus_getBlockByNumber→nexus_getBlockByHeight, nexus_chainId→nexus_getNodeStatus
+- Java SDK TransactionBuilder.getGasPrice使用nexus_getNodeStatus兜底+默认1gwei
+- CompensationService WITHDRAWAL/SETTLEMENT补偿实现：通过Feign调用wallet-service补偿端点 + settlement batch状态回滚
+
+### Improved
+- SigningApprovalService过期清理：@Scheduled两阶段清理（标记EXPIRED+释放内存）
+- SigningApprovalService审批人白名单：nexus.approval.approver-whitelist配置
+- SigningApprovalService多实例支持预留：nexus.approval.use-database开关
+- ReconciliationTask分布式锁：ShedLock 5.10.0，防止多实例重复执行对账任务
+
 ## [2.2.1] - 2026-08-18
 
 ### Fixed

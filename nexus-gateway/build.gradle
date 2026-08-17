@@ -40,6 +40,15 @@ dependencies {
     // PostgreSQL 16 生产数据源驱动，runtimeOnly 仅运行时加载
     runtimeOnly 'org.postgresql:postgresql:42.5.4'
 
+    // === 项10：ShedLock 分布式锁（ReconciliationTask 多实例去重） ===
+    // ShedLock 5.10.0 兼容 Spring Boot 3.2.x，使用 JDBC provider
+    // （复用 gateway 已有 MySQL/PostgreSQL 数据源，无需额外引入 Redis）。
+    // shedlock-spring：核心注解 @SchedulerLock + @EnableSchedulerLock
+    // shedlock-provider-jdbc-template：基于 JdbcTemplate 的 JdbcTemplateLockProvider，
+    //   支持 builder + usingDbTime()（使用 DB 服务器时间避免多实例 JVM 时钟漂移）
+    implementation 'net.javacrumbs.shedlock:shedlock-spring:5.10.0'
+    implementation 'net.javacrumbs.shedlock:shedlock-provider-jdbc-template:5.10.0'
+
     // Observability
     implementation 'io.micrometer:micrometer-registry-prometheus'
     implementation 'net.logstash.logback:logstash-logback-encoder:7.4'

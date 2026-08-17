@@ -79,6 +79,11 @@ public class WalletMgmtFallbackFactory implements FallbackFactory<WalletMgmtFeig
             }
 
             @Override
+            public WithdrawalRequest compensateWithdrawal(String requestId) {
+                return null;
+            }
+
+            @Override
             public String getCustodyTier(String walletId) {
                 return null;
             }

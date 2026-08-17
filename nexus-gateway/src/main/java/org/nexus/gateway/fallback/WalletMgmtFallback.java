@@ -97,6 +97,14 @@ public class WalletMgmtFallback implements WalletMgmtFeignClient {
         return null;
     }
 
+    @Override
+    public WithdrawalRequest compensateWithdrawal(String requestId) {
+        log.error("compensateWithdrawal Feign 降级触发: wallet-service 不可用, requestId={}, " +
+                "补偿失败（等待下次对账重试）", requestId);
+        // 已有 ERROR 级别日志告警；Prometheus counter + 外部告警通道接入为后续任务
+        return null;
+    }
+
     // === 托管 ===
 
     @Override

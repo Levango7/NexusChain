@@ -105,24 +105,87 @@ public class RpcClient {
         }
     }
 
+    /**
+     * 查询当前区块高度。
+     *
+     * 兼容实现：nexus-core 未提供 nexus_blockNumber，改为调用 nexus_getLatestBlocks
+     * 取最新区块列表中的第一个区块高度。对齐 Go/TypeScript SDK。
+     */
     public long getBlockNumber() {
-        Object result = call("nexus_blockNumber");
+        Object result = call("nexus_getLatestBlocks", 1);
+        if (result instanceof JsonNode) {
+            JsonNode node = (JsonNode) result;
+            if (node.isArray()) {
+                if (node.isEmpty()) return 0L;
+                JsonNode first = node.get(0);
+                if (first.isObject()) {
+                    if (first.has("height")) return parseLong(first.get("height"));
+                    if (first.has("number")) return parseLong(first.get("number"));
+                }
+                return parseLong(first);
+            }
+            return parseLong(node);
+        }
         return result instanceof Number ? ((Number) result).longValue() : Long.parseLong(result.toString());
     }
 
-    @SuppressWarnings("unchecked")
+    /**
+     * 根据 hash 获取区块信息。
+     *
+     * 注意：nexus-core 当前未提供 nexus_getBlockByHash，保留接口以兼容旧 SDK 用户。
+     * 实际应通过 nexus_getBlockByHeight 配合索引服务使用。
+     *
+     * @param blockHash 区块哈希
+     * @deprecated nexus-core 不支持按 hash 查询区块，请使用 {@link #getBlockByNumber(long)} 代替
+     */
+    @Deprecated
     public Map<String, Object> getBlockByHash(String blockHash) {
-        return call("nexus_getBlockByHash", new Object[]{blockHash}, Map.class);
+        throw new UnsupportedOperationException(
+                "nexus_getBlockByHash not supported by nexus-core; use getBlockByNumber instead");
     }
 
+    /**
+     * 根据区块号获取区块信息。
+     *
+     * 对齐 nexus-core：nexus_getBlockByNumber → nexus_getBlockByHeight。
+     *
+     * @param blockNumber 区块号
+     */
     @SuppressWarnings("unchecked")
     public Map<String, Object> getBlockByNumber(long blockNumber) {
-        return call("nexus_getBlockByNumber", new Object[]{String.valueOf(blockNumber)}, Map.class);
+        return call("nexus_getBlockByHeight", new Object[]{String.valueOf(blockNumber)}, Map.class);
     }
 
+    /**
+     * 获取网络链 ID。
+     *
+     * 兼容实现：nexus-core 未提供 nexus_chainId，改为调用 nexus_getNodeStatus
+     * 从节点状态中获取 chainId 字段。对齐 Go/TypeScript SDK。
+     */
     public long getChainId() {
-        Object result = call("nexus_chainId");
+        Object result = call("nexus_getNodeStatus");
+        if (result instanceof JsonNode) {
+            JsonNode node = (JsonNode) result;
+            if (node.isObject()) {
+                if (node.has("chainId")) return parseLong(node.get("chainId"));
+                if (node.has("chain_id")) return parseLong(node.get("chain_id"));
+            }
+            return parseLong(node);
+        }
         return result instanceof Number ? ((Number) result).longValue() : Long.parseLong(result.toString());
+    }
+
+    /**
+     * 解析 JsonNode 为 long，兼容十进制、0x 前缀十六进制字符串、数字三种形式。
+     */
+    private static long parseLong(JsonNode node) {
+        if (node == null || node.isNull()) return 0L;
+        if (node.isNumber()) return node.asLong();
+        String s = node.asText();
+        if (s.startsWith("0x") || s.startsWith("0X")) {
+            return Long.parseLong(s.substring(2), 16);
+        }
+        return Long.parseLong(s);
     }
 
     public void close() throws IOException { http.close(); }
