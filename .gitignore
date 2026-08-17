@@ -57,7 +57,12 @@ leveldb/
 *.dmp
 
 # AI agent working artifacts (not source)
-.codeartsdoer/
+.codeartsdoer/*
+!.codeartsdoer/specs/
+.codeartsdoer/specs/*
+!.codeartsdoer/specs/audit-remediation-v2/
+.codeartsdoer/specs/audit-remediation-v2/*
+!.codeartsdoer/specs/audit-remediation-v2/optional-improvements.md
 
 # Keystore / wallet files — NEVER commit private key material
 nexus-sdk/java/Keystore/
