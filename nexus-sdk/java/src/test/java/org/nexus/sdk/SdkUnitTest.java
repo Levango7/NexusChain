@@ -39,8 +39,9 @@ class SdkUnitTest {
         @DisplayName("call() throws RpcException when no node reachable")
         void callThrowsRpcException() {
             RpcClient client = new RpcClient("http://localhost:8080", 500, null);
+            // 对齐 nexus-core：nexus_blockNumber → nexus_getLatestBlocks
             assertThrows(RpcClient.RpcException.class, () ->
-                client.call("nexus_blockNumber"));
+                client.call("nexus_getLatestBlocks"));
         }
 
         @Test
@@ -247,8 +248,9 @@ class SdkUnitTest {
         @DisplayName("Constructor stores fields")
         void constructorStoresFields() {
             Object[] params = { "0xabc", true };
-            RpcClient.RpcRequest req = new RpcClient.RpcRequest("nexus_getBlockByHash", params, 1);
-            assertEquals("nexus_getBlockByHash", req.getMethod());
+            // 对齐 nexus-core：nexus_getBlockByHash 未实现，改用 nexus_getBlockByHeight
+            RpcClient.RpcRequest req = new RpcClient.RpcRequest("nexus_getBlockByHeight", params, 1);
+            assertEquals("nexus_getBlockByHeight", req.getMethod());
             assertArrayEquals(params, req.getParams());
             assertEquals(1, req.getId());
         }

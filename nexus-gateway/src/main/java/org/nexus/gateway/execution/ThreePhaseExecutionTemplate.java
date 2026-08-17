@@ -2,11 +2,16 @@ package org.nexus.gateway.execution;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
 
@@ -71,6 +76,20 @@ public class ThreePhaseExecutionTemplate {
     private static final Logger log = LoggerFactory.getLogger(ThreePhaseExecutionTemplate.class);
 
     /**
+     * 低5 改进：阶段2（链上执行）超时时间（秒）。
+     *
+     * <p>阶段2 为链上副作用操作（广播交易 + 等待确认），可能因链节点不可达、
+     * 交易池拥堵、RPC 调用挂起等原因无限等待。通过 {@link CompletableFuture#get(long, TimeUnit)}
+     * 设置硬超时，超时后标记 FAILED 触发补偿，避免调度线程被长期阻塞。</p>
+     *
+     * <p>默认 30 秒，通过 {@code nexus.gatewayservice.execution.phase2-timeout-seconds} 配置覆盖。
+     * 30 秒覆盖正常链上广播 + 1~2 个区块确认（以太坊 ~12s/块，3 个确认 ~36s，
+     * 但阶段2 仅负责广播 + 入池，确认由 ReconciliationTask 异步对账）。</p>
+     */
+    @Value("${nexus.gatewayservice.execution.phase2-timeout-seconds:30}")
+    private long phase2TimeoutSeconds;
+
+    /**
      * 执行三阶段链上副作用操作。
      *
      * <p><strong>事务边界</strong>：本方法本身不标注 {@code @GlobalTransactional}，
@@ -104,12 +123,34 @@ public class ThreePhaseExecutionTemplate {
         log.debug("Phase 1 (dbPersist) completed: idempotencyKey={}", request.getIdempotencyKey());
 
         // 阶段2：链上执行（事务外，不可逆）
+        // 低5 改进：添加超时机制，避免链节点不可达 / RPC 挂起导致无限等待
         OnChainResult result;
         try {
-            result = onChainExecute.apply(record);
-            if (result == null) {
-                result = OnChainResult.failure("onChainExecute returned null", false);
-            }
+            CompletableFuture<OnChainResult> phase2Future = CompletableFuture.supplyAsync(
+                    () -> {
+                        OnChainResult r = onChainExecute.apply(record);
+                        return r != null ? r : OnChainResult.failure("onChainExecute returned null", false);
+                    });
+            result = phase2Future.get(phase2TimeoutSeconds, TimeUnit.SECONDS);
+        } catch (TimeoutException te) {
+            // 超时：链上执行未在阈值内完成，标记 FAILED 触发补偿
+            log.error("Phase 2 (onChainExecute) timeout after {}s: idempotencyKey={}, " +
+                    "triggering compensation via phase 3",
+                    phase2TimeoutSeconds, request.getIdempotencyKey());
+            result = OnChainResult.failure(
+                    "on-chain execution timeout after " + phase2TimeoutSeconds + "s", false);
+        } catch (ExecutionException ee) {
+            // supplyAsync 内部异常（onChainExecute 抛出），解包记录
+            Throwable cause = ee.getCause() != null ? ee.getCause() : ee;
+            log.error("Phase 2 (onChainExecute) exception: idempotencyKey={}, error={}",
+                    request.getIdempotencyKey(), cause.getMessage(), cause);
+            result = OnChainResult.failure("on-chain execution exception: " + cause.getMessage(), false);
+        } catch (InterruptedException ie) {
+            // 调度线程被中断（如优雅停机），恢复中断状态并标记 FAILED
+            Thread.currentThread().interrupt();
+            log.warn("Phase 2 (onChainExecute) interrupted: idempotencyKey={}",
+                    request.getIdempotencyKey());
+            result = OnChainResult.failure("on-chain execution interrupted", false);
         } catch (Exception e) {
             log.error("Phase 2 (onChainExecute) exception: idempotencyKey={}, error={}",
                     request.getIdempotencyKey(), e.getMessage(), e);

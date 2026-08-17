@@ -21,6 +21,22 @@ public class Secp256k1BlsSignature implements BlsSignature {
     /** 域分离因子，防止不同用途的哈希碰撞。 */
     private static final String DST = "NEXUS_BLS_V1";
 
+    /** 聚合签名列表大小上限，防止 DoS 攻击。 */
+    private static final int MAX_AGGREGATE_SIZE = 1024;
+
+    /**
+     * ThreadLocal 缓存的 SHA-256 MessageDigest，避免每次哈希都做 Provider 查找。
+     *
+     * <p>MessageDigest 非线程安全，故用 ThreadLocal 隔离；使用前需 {@code reset()}。</p>
+     */
+    private static final ThreadLocal<MessageDigest> SHA256_DIGEST = ThreadLocal.withInitial(() -> {
+        try {
+            return MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException e) {
+            throw new RuntimeException("SHA-256 not available", e);
+        }
+    });
+
     private final ECPoint signaturePoint;
 
     public Secp256k1BlsSignature(ECPoint signaturePoint) {
@@ -39,6 +55,9 @@ public class Secp256k1BlsSignature implements BlsSignature {
 
     @Override
     public boolean verify(byte[] message, BlsPublicKey publicKey) {
+        if (message == null || message.length == 0) {
+            return false;
+        }
         if (publicKey == null || !(publicKey instanceof Secp256k1BlsPublicKey)) {
             return false;
         }
@@ -50,7 +69,7 @@ public class Secp256k1BlsSignature implements BlsSignature {
         // 在secp256k1下简化为：σ == pk * H(m)
         try {
             BigInteger h = hashToScalar(message);
-            ECPoint expected = ((Secp256k1BlsPublicKey) publicKey).getPoint().multiply(h).normalize();
+            ECPoint expected = ((Secp256k1BlsPublicKey) publicKey).multiply(h);
             return signaturePoint.equals(expected);
         } catch (Exception e) {
             return false;
@@ -67,11 +86,14 @@ public class Secp256k1BlsSignature implements BlsSignature {
         if (signatures == null || signatures.isEmpty()) {
             throw new IllegalArgumentException("Cannot aggregate empty signature list");
         }
+        if (signatures.size() > MAX_AGGREGATE_SIZE) {
+            throw new IllegalArgumentException("Signature list too large (max " + MAX_AGGREGATE_SIZE + ")");
+        }
         ECPoint aggregated = signatures.get(0).signaturePoint;
         for (int i = 1; i < signatures.size(); i++) {
-            aggregated = aggregated.add(signatures.get(i).signaturePoint).normalize();
+            aggregated = aggregated.add(signatures.get(i).signaturePoint);
         }
-        return new Secp256k1BlsSignature(aggregated);
+        return new Secp256k1BlsSignature(aggregated.normalize());
     }
 
     /**
@@ -96,6 +118,9 @@ public class Secp256k1BlsSignature implements BlsSignature {
             throw new IllegalArgumentException(
                     "Signatures and public keys must be non-empty and same size");
         }
+        if (signatures.size() > MAX_AGGREGATE_SIZE) {
+            throw new IllegalArgumentException("Signature list too large (max " + MAX_AGGREGATE_SIZE + ")");
+        }
         // 排序所有公钥的字节表示，确保系数计算确定性
         List<byte[]> sortedPkBytes = publicKeys.stream()
                 .map(Secp256k1BlsPublicKey::toBytesCompressed)
@@ -106,38 +131,32 @@ public class Secp256k1BlsSignature implements BlsSignature {
         for (int i = 0; i < signatures.size(); i++) {
             BigInteger coeff = computeCoefficient(
                     publicKeys.get(i).toBytesCompressed(), sortedPkBytes);
-            ECPoint weightedSig = signatures.get(i).signaturePoint.multiply(coeff).normalize();
-            aggregated = (aggregated == null) ? weightedSig : aggregated.add(weightedSig).normalize();
+            ECPoint weightedSig = signatures.get(i).signaturePoint.multiply(coeff);
+            aggregated = (aggregated == null) ? weightedSig : aggregated.add(weightedSig);
         }
-        return new Secp256k1BlsSignature(aggregated);
+        return new Secp256k1BlsSignature(aggregated.normalize());
     }
 
     /**
      * 计算 rogue-key 防护系数：{@code hash(pk_i || all_pks_sorted)}。
      */
     private static BigInteger computeCoefficient(byte[] pkBytes, List<byte[]> sortedPkBytes) {
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            digest.update(pkBytes);
-            for (byte[] pk : sortedPkBytes) {
-                digest.update(pk);
-            }
-            return new BigInteger(1, digest.digest()).mod(Secp256k1BlsSigner.getN());
-        } catch (NoSuchAlgorithmException e) {
-            throw new RuntimeException("SHA-256 not available", e);
+        MessageDigest digest = SHA256_DIGEST.get();
+        digest.reset();
+        digest.update(pkBytes);
+        for (byte[] pk : sortedPkBytes) {
+            digest.update(pk);
         }
+        return new BigInteger(1, digest.digest()).mod(Secp256k1BlsSigner.getN());
     }
 
     private static BigInteger hashToScalar(byte[] message) {
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            // 域分离因子前缀，防止不同用途的哈希碰撞
-            digest.update(DST.getBytes(StandardCharsets.UTF_8));
-            digest.update((byte) 0); // DST 与 message 之间的分隔符
-            byte[] hash = digest.digest(message);
-            return new BigInteger(1, hash).mod(Secp256k1BlsSigner.getN());
-        } catch (NoSuchAlgorithmException e) {
-            throw new RuntimeException("SHA-256 not available", e);
-        }
+        MessageDigest digest = SHA256_DIGEST.get();
+        digest.reset();
+        // 域分离因子前缀，防止不同用途的哈希碰撞
+        digest.update(DST.getBytes(StandardCharsets.UTF_8));
+        digest.update((byte) 0); // DST 与 message 之间的分隔符
+        byte[] hash = digest.digest(message);
+        return new BigInteger(1, hash).mod(Secp256k1BlsSigner.getN());
     }
 }

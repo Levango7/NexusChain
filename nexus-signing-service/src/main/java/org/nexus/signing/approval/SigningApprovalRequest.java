@@ -113,10 +113,20 @@ public final class SigningApprovalRequest {
      *
      * <p>若审批人数达到 {@code requiredApprovers}，新实例状态变为 {@link Status#APPROVED}。</p>
      *
+     * <p><b>低8 approver 白名单校验</b>：本方法为不可变值对象的纯函数式变更操作，
+     * 不执行业务级白名单校验（白名单校验需要访问配置，与值对象职责不符）。
+     * 审批人白名单校验在 {@link org.nexus.signing.approval.SigningApprovalService#updateRequest}
+     * 中完成（v2.2.2 已实现，调用 {@code isApproverAllowed} 校验
+     * {@code nexus.approval.approver-whitelist}），不在白名单的审批人决策被拒绝并记录审计日志，
+     * 不会调用本方法。本方法仅做基础防御：{@code null} 或空白 approver 视为无效输入，
+     * 返回当前实例（不修改状态），保证值对象的健壮性。</p>
+     *
      * @param approver 审批人标识
-     * @return 新的请求实例
+     * @return 新的请求实例；approver 为 null 或空白时返回当前实例（不修改状态）
      */
     public SigningApprovalRequest withApproval(String approver) {
+        // 基础防御：null / 空白 approver 视为无效输入，返回当前实例。
+        // 业务级白名单校验由 SigningApprovalService.updateRequest 在调用本方法前完成。
         if (approver == null || approver.isBlank()) {
             return this;
         }

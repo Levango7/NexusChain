@@ -26,7 +26,20 @@ public class Secp256k1BlsSigner implements BlsSigner {
     /** 域分离因子，防止不同用途的哈希碰撞。 */
     private static final String DST = "NEXUS_BLS_V1";
 
-    private final BigInteger privateKey;
+    /**
+     * ThreadLocal 缓存的 SHA-256 MessageDigest，避免每次哈希都做 Provider 查找。
+     *
+     * <p>MessageDigest 非线程安全，故用 ThreadLocal 隔离；使用前需 {@code reset()}。</p>
+     */
+    private static final ThreadLocal<MessageDigest> SHA256_DIGEST = ThreadLocal.withInitial(() -> {
+        try {
+            return MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException e) {
+            throw new RuntimeException("SHA-256 not available", e);
+        }
+    });
+
+    private final transient BigInteger privateKey;
     private final Secp256k1BlsPublicKey publicKey;
 
     public Secp256k1BlsSigner(BigInteger privateKey) {
@@ -53,16 +66,13 @@ public class Secp256k1BlsSigner implements BlsSigner {
     }
 
     private static BigInteger hashToScalar(byte[] message) {
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            // 域分离因子前缀，防止不同用途的哈希碰撞
-            digest.update(DST.getBytes(StandardCharsets.UTF_8));
-            digest.update((byte) 0); // DST 与 message 之间的分隔符
-            byte[] hash = digest.digest(message);
-            return new BigInteger(1, hash).mod(N);
-        } catch (NoSuchAlgorithmException e) {
-            throw new RuntimeException("SHA-256 not available", e);
-        }
+        MessageDigest digest = SHA256_DIGEST.get();
+        digest.reset();
+        // 域分离因子前缀，防止不同用途的哈希碰撞
+        digest.update(DST.getBytes(StandardCharsets.UTF_8));
+        digest.update((byte) 0); // DST 与 message 之间的分隔符
+        byte[] hash = digest.digest(message);
+        return new BigInteger(1, hash).mod(N);
     }
 
     /**

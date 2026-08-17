@@ -7,6 +7,7 @@ import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Lob;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 
 import java.time.Instant;
 import java.util.Objects;
@@ -38,6 +39,18 @@ public class SagaInstance {
     @Id
     @Column(name = "id", length = 64)
     private String id;
+
+    /**
+     * 乐观锁版本号（中5 改进）。
+     *
+     * <p>并发更新同一 Saga 实例时，JPA 通过 {@code @Version} 字段检测冲突：
+     * 读取时记录 version，更新时 {@code UPDATE ... WHERE version = ?}，
+     * 若行已被其他事务修改则影响行数为 0，抛出 {@code OptimisticLockException}，
+     * 调用方捕获后重试或放弃，避免并发更新覆盖彼此的修改。</p>
+     */
+    @Version
+    @Column(name = "version")
+    private Long version;
 
     /** Saga 类型（LOCK_MINT / BURN_UNLOCK）。 */
     @Column(name = "saga_type", nullable = false, length = 32)
@@ -112,6 +125,14 @@ public class SagaInstance {
 
     public void setId(String id) {
         this.id = id;
+    }
+
+    public Long getVersion() {
+        return version;
+    }
+
+    public void setVersion(Long version) {
+        this.version = version;
     }
 
     public String getSagaType() {
@@ -197,10 +218,12 @@ public class SagaInstance {
     /**
      * 是否处于终态。
      *
-     * @return COMPLETED 或 FAILED 返回 {@code true}
+     * @return COMPLETED、FAILED 或 CANCELLED 返回 {@code true}
      */
     public boolean isTerminal() {
-        return state == SagaState.COMPLETED || state == SagaState.FAILED;
+        return state == SagaState.COMPLETED
+                || state == SagaState.FAILED
+                || state == SagaState.CANCELLED;
     }
 
     /**

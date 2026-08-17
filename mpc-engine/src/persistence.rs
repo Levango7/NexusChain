@@ -32,11 +32,30 @@ const SESSION_DIR_ENV: &str = "MPC_ENGINE_SESSION_DIR";
 /// AES-256-GCM 密钥环境变量名（MPC-P1-05）。
 const STORAGE_KEY_ENV: &str = "MPC_STORAGE_KEY";
 
+/// 中12: 当前密钥版本号环境变量名。
+///
+/// 由 `PartyConfig::apply_storage_key_to_env` 从配置文件同步到环境变量，
+/// persistence 模块加密新文件时读取此版本号写入文件头。
+/// 未设置时默认为 `DEFAULT_KEY_VERSION`(1)（向后兼容）。
+const STORAGE_KEY_VERSION_ENV: &str = "MPC_STORAGE_KEY_VERSION";
+
 /// GCM nonce 长度（字节）。
 const NONCE_LEN: usize = 12;
 
 /// AES-256 密钥长度（字节）。
 const KEY_LEN: usize = 32;
+
+/// 中12: 密钥版本号文件头魔数（"NXC1" = NexusChain v1 格式）。
+///
+/// 加密文件新格式：`MAGIC(4B) || version(4B LE) || nonce(12B) || ciphertext`。
+/// 旧格式（无版本号）：`nonce(12B) || ciphertext`，解密时检测无 MAGIC 前缀则视为版本 1。
+const KEY_VERSION_MAGIC: &[u8; 4] = b"NXC1";
+
+/// 中12: 密钥版本号文件头长度（MAGIC 4B + version 4B LE）。
+const KEY_VERSION_HEADER_LEN: usize = 8;
+
+/// 中12: 默认密钥版本号（旧文件无版本头时视为此版本）。
+const DEFAULT_KEY_VERSION: u32 = 1;
 
 /// 获取会话目录（可配置，默认 ./mpc-sessions）。
 pub fn session_dir() -> PathBuf {
@@ -52,6 +71,36 @@ fn session_path(session_id: &str) -> PathBuf {
 /// MPC-P2-F5: 本方份额持久化文件路径（与全量会话文件分离）。
 fn my_share_path(session_id: &str) -> PathBuf {
     session_dir().join(format!("my-share-{}.json", session_id))
+}
+
+/// 低9: 设置文件权限为 0600（仅所有者可读写），Unix 特有。
+///
+/// Windows 上此函数为空操作（`#[cfg(not(unix))]`），因 Unix 权限模型不适用。
+/// Windows 上文件权限通过 ACL 管理，应由部署环境（如 NTFS ACL）单独配置。
+///
+/// # 安全
+/// 0600 = rw-------（所有者读写，组与其他无任何权限）。
+/// 防止其他用户/进程读取加密文件（虽然文件已加密，但权限收紧是纵深防御）。
+#[cfg(unix)]
+fn set_secure_permissions(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    if let Err(e) = fs::set_permissions(path, fs::Permissions::from_mode(0o600)) {
+        tracing::warn!(
+            path = %path.display(),
+            error = %e,
+            "低9: failed to set 0600 permissions on session file (best-effort)"
+        );
+    }
+}
+
+/// 低9: 非 Unix 平台（如 Windows）的空操作。
+#[cfg(not(unix))]
+fn set_secure_permissions(_path: &Path) {
+    // Windows 上文件权限通过 ACL 管理，此处空操作。
+    // 部署时应通过 NTFS ACL 限制 session 目录访问（如仅 mpc-engine 服务账户可访问）。
+    tracing::debug!(
+        "低9: set_secure_permissions is no-op on non-Unix (use NTFS ACL for access control)"
+    );
 }
 
 /// 从环境变量 `MPC_STORAGE_KEY` 加载 AES-256 密钥（hex 编码的 32 字节）。
@@ -113,6 +162,84 @@ fn aes_decrypt(data: &[u8], key: &[u8; KEY_LEN]) -> eyre::Result<Vec<u8>> {
         .map_err(|e| eyre!("AES-256-GCM decrypt failed (wrong key or tampered?): {e}"))
 }
 
+/// 中12: AES-256-GCM 加密（带密钥版本号文件头）。
+///
+/// 输出格式：`MAGIC(4B "NXC1") || version(4B LE) || nonce(12B) || ciphertext`。
+/// 解密时 `aes_decrypt_with_version` 根据 MAGIC 前缀识别新格式并读取版本号，
+/// 选择对应版本的密钥解密（完整多密钥支持见 `load_storage_key_for_version`，TODO）。
+///
+/// `version` 为密钥版本号，用于密钥轮换：新文件用当前版本加密，
+/// 旧文件由解密方根据版本号选择对应密钥。
+fn aes_encrypt_with_version(
+    plaintext: &[u8],
+    key: &[u8; KEY_LEN],
+    version: u32,
+) -> eyre::Result<Vec<u8>> {
+    let mut out = Vec::with_capacity(KEY_VERSION_HEADER_LEN + NONCE_LEN + plaintext.len() + 16);
+    out.extend_from_slice(KEY_VERSION_MAGIC);
+    out.extend_from_slice(&version.to_le_bytes());
+    // 复用 aes_encrypt 生成 nonce || ciphertext，再拼接到头之后
+    let enc = aes_encrypt(plaintext, key)?;
+    out.extend_from_slice(&enc);
+    Ok(out)
+}
+
+/// 中12: AES-256-GCM 解密（带密钥版本号文件头）。
+///
+/// 输入格式：
+///   * 新格式：`MAGIC(4B "NXC1") || version(4B LE) || nonce(12B) || ciphertext`
+///   * 旧格式（无版本号）：`nonce(12B) || ciphertext`，视为版本 `DEFAULT_KEY_VERSION`(1)
+///
+/// 返回 `(version, plaintext)`。调用方根据 version 选择对应密钥
+/// （当前实现仍用单一 `MPC_STORAGE_KEY`，完整多密钥支持标注 TODO）。
+fn aes_decrypt_with_version(data: &[u8], key: &[u8; KEY_LEN]) -> eyre::Result<(u32, Vec<u8>)> {
+    // 检测新格式：以 MAGIC 前缀开头
+    if data.len() >= KEY_VERSION_HEADER_LEN && &data[0..4] == KEY_VERSION_MAGIC {
+        let version = u32::from_le_bytes([
+            data[4], data[5], data[6], data[7],
+        ]);
+        let payload = &data[KEY_VERSION_HEADER_LEN..];
+        let plaintext = aes_decrypt(payload, key)?;
+        Ok((version, plaintext))
+    } else {
+        // 旧格式（无版本头）：视为版本 1，直接解密
+        let plaintext = aes_decrypt(data, key)?;
+        Ok((DEFAULT_KEY_VERSION, plaintext))
+    }
+}
+
+/// 中12: 从环境变量加载指定版本的 AES-256 密钥。
+///
+/// 当前实现：所有版本都使用 `MPC_STORAGE_KEY`（单密钥模式）。
+/// 完整多密钥支持（从 `PartyConfig.storage_keys` 映射按版本号选择密钥）标注 TODO，
+/// 因 persistence 模块不持有 `PartyConfig` 引用，需通过环境变量
+/// `MPC_STORAGE_KEY_V{version}` 或全局单例传递，待后续重构。
+///
+/// `version` 参数仅用于日志记录，实际密钥仍从 `MPC_STORAGE_KEY` 读取。
+fn load_storage_key_for_version(version: u32) -> eyre::Result<[u8; KEY_LEN]> {
+    let key = load_storage_key()?;
+    if version != DEFAULT_KEY_VERSION {
+        tracing::debug!(
+            version,
+            "中12: load_storage_key_for_version — using single MPC_STORAGE_KEY for all versions \
+             (multi-key support TODO)"
+        );
+    }
+    Ok(key)
+}
+
+/// 中12: 读取当前密钥版本号（从 `MPC_STORAGE_KEY_VERSION` 环境变量）。
+///
+/// 未设置时返回 `DEFAULT_KEY_VERSION`(1)（向后兼容）。
+/// 由 `PartyConfig::apply_storage_key_to_env` 在启动时设置。
+fn current_storage_key_version() -> u32 {
+    std::env::var(STORAGE_KEY_VERSION_ENV)
+        .ok()
+        .and_then(|s| s.parse::<u32>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(DEFAULT_KEY_VERSION)
+}
+
 /// 持久化 DKG 会话（份额材料落盘，重启可恢复）。
 ///
 /// **MPC-P1-05**：落盘前用 AES-256-GCM 加密，密钥从 `MPC_STORAGE_KEY` 读取。
@@ -127,16 +254,22 @@ pub fn persist_session(session_id: &str, session: &DkgSession) -> eyre::Result<(
     let json = serde_json::to_vec_pretty(session)
         .map_err(|e| eyre!("session serialize failed: {e}"))?;
     // MPC-P1-05: AES-256-GCM 加密后落盘（防明文份额泄露）
+    // 中12: 加密时在文件头写入当前密钥版本号，支持密钥轮换
     let key = load_storage_key()?;
-    let encrypted = aes_encrypt(&json, &key)?;
+    let version = current_storage_key_version();
+    let encrypted = aes_encrypt_with_version(&json, &key, version)?;
     let path = session_path(session_id);
     fs::write(&path, encrypted)
         .map_err(|e| eyre!("cannot write session {}: {e}", path.display()))?;
+    // 低9: 设置 0600 权限（仅所有者可读写，Unix 特有，Windows 空操作）
+    set_secure_permissions(&path);
     tracing::info!(
         session_id = %session_id,
         path = %path.display(),
         encrypted_bytes = json.len(),
-        "dkg session persisted (AES-256-GCM encrypted, MPC-P1-05)"
+        key_version = version,
+        "dkg session persisted (AES-256-GCM encrypted, MPC-P1-05, 中12: key version {} in file header)",
+        version
     );
 
     // MPC-P2-F5: 同时持久化本方份额隔离记录（只含本方私钥份额 + 公钥材料明文）
@@ -163,11 +296,17 @@ pub fn load_session(session_id: &str) -> eyre::Result<Option<DkgSession>> {
     let bytes = fs::read(&path)
         .map_err(|e| eyre!("cannot read session {}: {e}", path.display()))?;
     // MPC-P1-05: AES-256-GCM 解密
+    // 中12: 从文件头读取密钥版本号，按版本号选择密钥（当前单密钥，多密钥 TODO）
     let key = load_storage_key()?;
-    let plaintext = aes_decrypt(&bytes, &key)?;
+    let (version, plaintext) = aes_decrypt_with_version(&bytes, &key)?;
     let session: DkgSession = serde_json::from_slice(&plaintext)
         .map_err(|e| eyre!("session deserialize failed: {e}"))?;
-    tracing::info!(session_id = %session_id, "dkg session restored from disk (decrypted, MPC-P1-05)");
+    tracing::info!(
+        session_id = %session_id,
+        key_version = version,
+        "dkg session restored from disk (decrypted, MPC-P1-05, 中12: key version {} from file header)",
+        version
+    );
     Ok(Some(session))
 }
 
@@ -236,10 +375,12 @@ pub fn persist_my_share(session_id: &str, session: &DkgSession) -> eyre::Result<
     })?;
 
     // 加密本方私钥份额
+    // 中12: 加密时在文件头写入当前密钥版本号
     let key = load_storage_key()?;
+    let version = current_storage_key_version();
     let share_json = serde_json::to_vec_pretty(my_share)
         .map_err(|e| eyre!("my_private_share serialize failed: {e}"))?;
-    let encrypted_share = aes_encrypt(&share_json, &key)?;
+    let encrypted_share = aes_encrypt_with_version(&share_json, &key, version)?;
 
     // 公钥材料明文（hex 编码）
     let aggregate_public_key = crate::gg20::hex_point(&session.y_sum);
@@ -264,14 +405,18 @@ pub fn persist_my_share(session_id: &str, session: &DkgSession) -> eyre::Result<
     let path = my_share_path(session_id);
     fs::write(&path, json)
         .map_err(|e| eyre!("cannot write my-share {}: {e}", path.display()))?;
+    // 低9: 设置 0600 权限（仅所有者可读写，Unix 特有，Windows 空操作）
+    set_secure_permissions(&path);
 
     tracing::info!(
         session_id = %session_id,
         path = %path.display(),
         my_party_index = record.my_party_index,
         party_public_keys_count = record.party_public_keys.len(),
-        "MPC-P2-F5: my private share persisted (AES-256-GCM encrypted), \
-         public keys stored in plaintext (for verification)"
+        key_version = version,
+        "MPC-P2-F5: my private share persisted (AES-256-GCM encrypted, 中12: key version {}), \
+         public keys stored in plaintext (for verification)",
+        version
     );
     Ok(())
 }
@@ -300,13 +445,19 @@ pub fn load_my_share(session_id: &str) -> eyre::Result<Option<MyShareRecord>> {
 /// MPC-P2-F5: 解密本方私钥份额。
 ///
 /// 从 `MyShareRecord.encrypted_private_share` 解密出 `SharedKeysSerde`。
+/// 中12: 从密文头读取密钥版本号，按版本号选择密钥（当前单密钥，多密钥 TODO）。
 pub fn decrypt_my_share(
     record: &MyShareRecord,
 ) -> eyre::Result<crate::gg20::SharedKeysSerde> {
     let key = load_storage_key()?;
-    let plaintext = aes_decrypt(&record.encrypted_private_share, &key)?;
+    let (version, plaintext) = aes_decrypt_with_version(&record.encrypted_private_share, &key)?;
     let share: crate::gg20::SharedKeysSerde = serde_json::from_slice(&plaintext)
         .map_err(|e| eyre!("my_private_share deserialize failed: {e}"))?;
+    tracing::debug!(
+        key_version = version,
+        "中12: my-share decrypted with key version {} (from ciphertext header)",
+        version
+    );
     Ok(share)
 }
 
@@ -356,19 +507,26 @@ mod tests {
     #[test]
     fn encrypted_file_is_not_plaintext() {
         ensure_test_key();
-        // 验证落盘文件不是明文 JSON（应含 nonce 前缀 + 密文）
+        // 验证落盘文件不是明文 JSON（应含版本号头 + nonce 前缀 + 密文）
         let (_, _, session) = crate::gg20::run_keygen(1, 2)
             .expect("GG20 DKG failed");
         let id = "persist-enc-test-1";
         persist_session(id, &session).expect("persist");
         let path = session_path(id);
         let raw = std::fs::read(&path).expect("read raw");
-        // 文件不应以 JSON 明文标志 "{" 开头，应以 nonce（12 字节随机）开头
+        // 文件不应以 JSON 明文标志 "{" 开头，应以 MAGIC "NXC1" 开头（中12 版本号头）
         assert!(
             !raw.starts_with(b"{"),
             "session file should be encrypted, not plaintext JSON (MPC-P1-05)"
         );
-        assert!(raw.len() > NONCE_LEN, "encrypted file should be longer than nonce");
+        assert!(
+            raw.starts_with(KEY_VERSION_MAGIC),
+            "中12: session file should start with version header magic 'NXC1'"
+        );
+        assert!(
+            raw.len() > KEY_VERSION_HEADER_LEN + NONCE_LEN,
+            "encrypted file should be longer than header + nonce"
+        );
         remove_session(id);
     }
 
@@ -380,11 +538,127 @@ mod tests {
         let id = "persist-wrong-key-test-1";
         persist_session(id, &session).expect("persist");
         // 用错误密钥解密应失败（GCM 完整性校验）
+        // 中12: 文件现在有版本号头，用 aes_decrypt_with_version 解密
         let wrong_key = [0xAAu8; KEY_LEN];
         let raw = std::fs::read(session_path(id)).expect("read raw");
-        let result = aes_decrypt(&raw, &wrong_key);
+        let result = aes_decrypt_with_version(&raw, &wrong_key);
         assert!(result.is_err(), "decrypt with wrong key should fail (GCM integrity)");
         remove_session(id);
+    }
+
+    // ===== 中12: 密钥版本号文件头 =====
+
+    #[test]
+    fn encrypted_file_has_version_header_magic() {
+        ensure_test_key();
+        let (_, _, session) = crate::gg20::run_keygen(1, 2)
+            .expect("GG20 DKG failed");
+        let id = "persist-version-header-test";
+        persist_session(id, &session).expect("persist");
+        let raw = std::fs::read(session_path(id)).expect("read raw");
+        // 新格式应以 MAGIC "NXC1" 开头
+        assert!(
+            raw.starts_with(KEY_VERSION_MAGIC),
+            "中12: encrypted file should start with magic 'NXC1', got: {:?}",
+            &raw[..4.min(raw.len())]
+        );
+        assert!(raw.len() > KEY_VERSION_HEADER_LEN + NONCE_LEN);
+        remove_session(id);
+    }
+
+    #[test]
+    fn version_header_records_current_version() {
+        ensure_test_key();
+        // 设置版本号为 7
+        // SAFETY: 测试单线程，Once 保护
+        unsafe {
+            std::env::set_var(STORAGE_KEY_VERSION_ENV, "7");
+        }
+        let (_, _, session) = crate::gg20::run_keygen(1, 2)
+            .expect("GG20 DKG failed");
+        let id = "persist-version-7-test";
+        persist_session(id, &session).expect("persist");
+        let raw = std::fs::read(session_path(id)).expect("read raw");
+        // 读取文件头版本号
+        let version = u32::from_le_bytes([raw[4], raw[5], raw[6], raw[7]]);
+        assert_eq!(version, 7, "中12: file header should record version 7");
+        // load_session 应能解密并返回版本号
+        let restored = load_session(id).expect("load").expect("some");
+        assert_eq!(restored.params.threshold, session.params.threshold);
+        remove_session(id);
+        // 清理版本号环境变量
+        unsafe {
+            std::env::remove_var(STORAGE_KEY_VERSION_ENV);
+        }
+    }
+
+    #[test]
+    fn aes_decrypt_with_version_handles_old_format() {
+        ensure_test_key();
+        // 旧格式：nonce(12B) || ciphertext（无 MAGIC 头）
+        let plaintext = b"hello world";
+        let key = load_storage_key().expect("key");
+        let old_format_enc = aes_encrypt(plaintext, &key).expect("encrypt");
+        // 解密旧格式应返回 DEFAULT_KEY_VERSION
+        let (version, decrypted) = aes_decrypt_with_version(&old_format_enc, &key).expect("decrypt");
+        assert_eq!(version, DEFAULT_KEY_VERSION);
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn aes_encrypt_decrypt_with_version_round_trip() {
+        ensure_test_key();
+        let plaintext = b"test plaintext for version round trip";
+        let key = load_storage_key().expect("key");
+        for version in [1u32, 2, 100, u32::MAX] {
+            let enc = aes_encrypt_with_version(plaintext, &key, version).expect("encrypt");
+            let (dec_version, dec) = aes_decrypt_with_version(&enc, &key).expect("decrypt");
+            assert_eq!(dec_version, version, "version should round-trip");
+            assert_eq!(dec, plaintext, "plaintext should round-trip");
+        }
+    }
+
+    #[test]
+    fn current_storage_key_version_defaults_to_1() {
+        ensure_test_key();
+        // 清理版本号环境变量
+        unsafe {
+            std::env::remove_var(STORAGE_KEY_VERSION_ENV);
+        }
+        assert_eq!(current_storage_key_version(), DEFAULT_KEY_VERSION);
+        assert_eq!(current_storage_key_version(), 1);
+    }
+
+    #[test]
+    fn current_storage_key_version_reads_env() {
+        ensure_test_key();
+        unsafe {
+            std::env::set_var(STORAGE_KEY_VERSION_ENV, "42");
+        }
+        assert_eq!(current_storage_key_version(), 42);
+        unsafe {
+            std::env::remove_var(STORAGE_KEY_VERSION_ENV);
+        }
+    }
+
+    #[test]
+    fn current_storage_key_version_ignores_invalid_env() {
+        ensure_test_key();
+        unsafe {
+            std::env::set_var(STORAGE_KEY_VERSION_ENV, "not-a-number");
+        }
+        assert_eq!(current_storage_key_version(), DEFAULT_KEY_VERSION);
+        unsafe {
+            std::env::set_var(STORAGE_KEY_VERSION_ENV, "0");
+        }
+        assert_eq!(
+            current_storage_key_version(),
+            DEFAULT_KEY_VERSION,
+            "version 0 should be rejected (reserved/invalid)"
+        );
+        unsafe {
+            std::env::remove_var(STORAGE_KEY_VERSION_ENV);
+        }
     }
 
     #[test]

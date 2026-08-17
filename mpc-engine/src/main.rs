@@ -96,7 +96,7 @@ async fn main() -> eyre::Result<()> {
                     "MPC-P2-F5: distributed security model enabled (per-party config loaded)"
                 );
                 // 将 storage_key 同步到环境变量（供 persistence 模块读取）
-                cfg.apply_storage_key_to_env();
+                cfg.apply_storage_key_to_env()?;
                 Some(cfg)
             }
             Err(e) => {

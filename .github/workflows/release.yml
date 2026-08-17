@@ -89,12 +89,30 @@ jobs:
         with:
           fetch-depth: 0
 
+      # 从 CHANGELOG.md 提取当前 tag 对应版本段落，避免 Release body 包含全量历史。
+      # CHANGELOG.md 格式：## [2.2.2] - 2026-08-18
+      # awk 逻辑：匹配 ## [${VERSION#v}] 时开始打印，遇到下一个 ## [ 时退出。
+      - name: Extract version changelog
+        run: |
+          VERSION="${{ github.ref_name }}"
+          # 去掉 v 前缀（tag 形如 v2.2.2，CHANGELOG 中为 2.2.2）
+          VERSION_NUM="${VERSION#v}"
+          echo ">>> Extracting changelog for version ${VERSION_NUM}"
+          awk "/## \[${VERSION_NUM}\]/{flag=1} /## \[/{if(flag)exit} flag" CHANGELOG.md > version_changelog.md
+          echo ">>> Extracted changelog (head):"
+          head -20 version_changelog.md
+          # 兜底：若未提取到内容（版本号不匹配），使用全量 CHANGELOG 并告警
+          if [ ! -s version_changelog.md ]; then
+            echo "::warning::Version section ${VERSION_NUM} not found in CHANGELOG.md, falling back to full changelog"
+            cp CHANGELOG.md version_changelog.md
+          fi
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: Release ${{ github.ref_name }}
-          body_path: CHANGELOG.md
+          body_path: version_changelog.md
           draft: false
           prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') }}
 

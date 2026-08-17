@@ -4,6 +4,39 @@
 
 ## [Unreleased]
 
+## [2.2.3] - 2026-08-18
+
+### Performance
+- BLS aggregate性能优化：循环内不再重复normalize，仅最后做一次
+- BLS hashToScalar用ThreadLocal缓存MessageDigest
+
+### Security
+- BLS verify校验message null/空
+- BLS aggregate限制签名列表大小(max 1024)
+- BLS privateKey字段加transient防序列化泄露
+- BLS getPoint改private，新增multiply方法封装
+- AuditLogService链式哈希防篡改
+- AuditLogService X-Forwarded-For仅信任可信代理IP
+- 鉴权失败日志防用户枚举
+- MPC SessionManager过期清理+数量上限
+- MPC storage_key密钥轮换(版本号)+KMS/环境变量支持
+- MPC AuthInterceptor token常量时间比较
+- MPC persistence.rs session文件0600权限
+
+### Improved
+- SagaInstance加@Version乐观锁
+- BridgeSaga recoverIncompleteSagas加ShedLock分布式锁
+- BridgeSaga retryFailedSagas指数退避
+- SagaState加CANCELLED终态
+- IdempotencyKey.result改@Lob
+- ThreePhaseExecutionTemplate阶段2超时机制
+- CompensationService.handlePendingRefunds加batchSize
+- CI ci.yml Rust tests移除continue-on-error+Gradle wrapper校验
+- CI security-scan.yml扩展镜像扫描+Trivy action钉sha
+- CI release.yml提取对应版本段落
+- SDK Go/Python/TypeScript Wallet.Create等标注未实现
+- SDK API.md文档更新+Java测试用例修正
+
 ## [2.2.2] - 2026-08-18
 
 ### Security

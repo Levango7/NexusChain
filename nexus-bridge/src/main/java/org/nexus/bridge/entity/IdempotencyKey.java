@@ -3,6 +3,7 @@ package org.nexus.bridge.entity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
+import jakarta.persistence.Lob;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 
@@ -52,8 +53,16 @@ public class IdempotencyKey {
     @Column(name = "operation", nullable = false, length = 32)
     private String operation;
 
-    /** 操作结果（JSON 序列化）。 */
-    @Column(name = "result", nullable = false, length = 4096)
+    /**
+     * 操作结果（JSON 序列化）。
+     *
+     * <p>低4 改进：使用 {@code @Lob} 替代固定长度 {@code @Column(length = 4096)}，
+     * 因为大型 BridgeTransaction JSON（含跨链元数据、签名列表、事件日志）可能超过 4096 字符。
+     * {@code @Lob} 在 MySQL 映射为 TEXT/LONGTEXT，在 PostgreSQL 映射为 TEXT，
+     * 消除长度截断风险。</p>
+     */
+    @Lob
+    @Column(name = "result", nullable = false)
     private String result;
 
     /** 创建时间。 */

@@ -19,15 +19,24 @@ on:
       - 'deploy/k8s/**'
       - 'deploy/helm/**'
 
+# 最小权限原则：本 workflow 仅读取仓库代码并产出 artifact，无需写权限。
+# actions/upload-artifact@v4 在限制范围内可正常上传（其使用 actions 内部 token）。
+permissions:
+  contents: read
+
 jobs:
   helm-lint-and-sync:
     name: Helm Lint + K8s Sync Check
     runs-on: ubuntu-latest
     steps:
       - name: Checkout 代码
+        # GitHub 官方 action，使用主版本标签 v4（官方供应链可信）
+        # 如需进一步钉 sha：actions/checkout@v4 → 查询对应 commit sha
         uses: actions/checkout@v4
 
       - name: Setup Helm
+        # azure/setup-helm 使用主版本标签 v4
+        # TODO: 如需供应链强一致，可钉到具体 commit sha
         uses: azure/setup-helm@v4
         with:
           version: 'v3.14.0'
@@ -161,6 +170,7 @@ jobs:
 
       - name: 上传对比报告
         if: always()
+        # GitHub 官方 action，使用主版本标签 v4
         uses: actions/upload-artifact@v4
         with:
           name: k8s-sync-report

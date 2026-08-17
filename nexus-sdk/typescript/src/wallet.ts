@@ -21,11 +21,17 @@ export class WalletManager {
   /**
    * 创建新钱包，生成新的密钥对。
    *
+   * Not implemented: wallet key generation must be performed by the wallet-service
+   * (nexus-wallet-service) which enforces KMS, key rotation, and audit policies.
+   *
    * @returns 新创建的 WalletInfo
+   * @throws  Error — 本方法未实现，应调用 wallet-service API。
    */
   async create(): Promise<WalletInfo> {
-    // TODO: 生成 ECDSA 密钥对
-    throw new Error('Not yet implemented');
+    throw new Error(
+      'WalletManager.create not implemented: use wallet-service API instead. ' +
+        'See nexus-wallet-service OpenAPI docs for the /api/v1/wallets endpoint.'
+    );
   }
 
   /**
@@ -33,10 +39,13 @@ export class WalletManager {
    *
    * @param privateKey 十六进制私钥
    * @returns 导入的 WalletInfo
+   * @throws  Error — 本方法未实现，应调用 wallet-service API。
    */
   async fromPrivateKey(privateKey: string): Promise<WalletInfo> {
-    // TODO: 从私钥推导公钥和地址
-    throw new Error('Not yet implemented');
+    throw new Error(
+      'WalletManager.fromPrivateKey not implemented: use wallet-service API instead. ' +
+        'See nexus-wallet-service OpenAPI docs for the /api/v1/wallets/import endpoint.'
+    );
   }
 
   /**
@@ -45,10 +54,13 @@ export class WalletManager {
    * @param mnemonic BIP-39 助记词
    * @param path      派生路径（如 "m/44'/60'/0'/0/0"）
    * @returns 导入的 WalletInfo
+   * @throws  Error — 本方法未实现，应调用 wallet-service API。
    */
   async fromMnemonic(mnemonic: string, path?: string): Promise<WalletInfo> {
-    // TODO: 从助记词派生密钥对
-    throw new Error('Not yet implemented');
+    throw new Error(
+      'WalletManager.fromMnemonic not implemented: use wallet-service API instead. ' +
+        'See nexus-wallet-service OpenAPI docs for the /api/v1/wallets/import-mnemonic endpoint.'
+    );
   }
 
   /**
@@ -76,10 +88,13 @@ export class WalletManager {
    * @param address       钱包地址
    * @param tokenContract 代币合约地址
    * @returns 代币余额（最小单位）
+   * @throws  Error — 本方法未实现，应调用 wallet-service API 或直接调用合约。
    */
   async getTokenBalance(address: string, tokenContract: string): Promise<string> {
-    // TODO: 调用合约 balanceOf 方法
-    throw new Error('Not yet implemented');
+    throw new Error(
+      'WalletManager.getTokenBalance not implemented: use wallet-service API or call contract balanceOf directly. ' +
+        'See nexus-wallet-service OpenAPI docs for the /api/v1/wallets/balance endpoint.'
+    );
   }
 
   /**
@@ -87,9 +102,12 @@ export class WalletManager {
    *
    * @param address 待验证地址
    * @returns 是否合法
+   * @throws  Error — 本方法未实现，应调用 wallet-service API 或本地校验。
    */
   validateAddress(address: string): boolean {
-    // TODO: 地址格式校验
-    throw new Error('Not yet implemented');
+    throw new Error(
+      'WalletManager.validateAddress not implemented: use wallet-service API or validate locally. ' +
+        'See nexus-wallet-service OpenAPI docs for the /api/v1/wallets/validate-address endpoint.'
+    );
   }
 }

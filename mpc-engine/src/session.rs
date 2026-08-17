@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// Session 状态机。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -41,6 +41,17 @@ pub struct SessionInfo {
     pub state: SessionState,
 }
 
+/// Session 默认过期阈值（30 分钟无活动）。
+///
+/// 超过此时长未活动的 session 在 `cleanup_expired_sessions` 中被回收。
+/// 同时回收 `SessionState::Closed` 状态的 session。
+pub const DEFAULT_SESSION_TIMEOUT: Duration = Duration::from_secs(1800);
+
+/// Session 数量默认上限（防 DoS）。
+///
+/// `create_session` 在 `sessions.len() >= max_sessions` 时拒绝创建新 session。
+pub const DEFAULT_MAX_SESSIONS: usize = 100;
+
 /// Session 管理器（MPC-P2-F5 身份绑定）。
 ///
 /// 持有 `session_id -> SessionInfo` 映射，提供：
@@ -48,10 +59,19 @@ pub struct SessionInfo {
 ///   * `verify_caller`：校验调用方身份与 session 绑定身份一致。
 ///   * `transition`：状态转换（DkgReady → SignReady → Aggregated）。
 ///   * `get`/`remove`：查询与销毁。
+///   * `cleanup_expired_sessions`：回收 Closed 或超时无活动的 session（中10）。
 ///
 /// 线程安全：内部 `Mutex<HashMap>`，锁在同步代码块内获取释放，不跨 .await。
+///
+/// # DoS 防护（中11）
+/// `max_sessions` 限制同时存在的 session 数量，默认 `DEFAULT_MAX_SESSIONS`(100)。
+/// `create_session` 在达到上限时返回错误，防止攻击者无限制创建 session 耗尽内存。
 pub struct SessionManager {
     sessions: Mutex<HashMap<String, SessionInfo>>,
+    /// Session 过期阈值（无活动超过此时长则回收）。
+    session_timeout: Duration,
+    /// Session 数量上限（防 DoS）。
+    max_sessions: usize,
 }
 
 impl Default for SessionManager {
@@ -64,13 +84,41 @@ impl SessionManager {
     pub fn new() -> Self {
         Self {
             sessions: Mutex::new(HashMap::new()),
+            session_timeout: DEFAULT_SESSION_TIMEOUT,
+            max_sessions: DEFAULT_MAX_SESSIONS,
         }
+    }
+
+    /// 创建带自定义过期阈值与 session 数量上限的管理器。
+    ///
+    /// * `session_timeout`：无活动超过此阈值的 session 在 `cleanup_expired_sessions` 中被回收。
+    /// * `max_sessions`：同时存在的 session 数量上限（防 DoS）。
+    pub fn with_limits(session_timeout: Duration, max_sessions: usize) -> Self {
+        Self {
+            sessions: Mutex::new(HashMap::new()),
+            session_timeout,
+            max_sessions: max_sessions.max(1),
+        }
+    }
+
+    /// 当前配置的 session 过期阈值。
+    pub fn session_timeout(&self) -> Duration {
+        self.session_timeout
+    }
+
+    /// 当前配置的 session 数量上限。
+    pub fn max_sessions(&self) -> usize {
+        self.max_sessions
     }
 
     /// 创建 session 并绑定调用方身份。
     ///
     /// 若 session_id 已存在且绑定身份不同，返回错误（防止跨方冒用 session_id）。
     /// 若 session_id 已存在且绑定身份相同，返回已有 session（幂等）。
+    ///
+    /// # DoS 防护（中11）
+    /// 若当前 session 数量已达 `max_sessions` 上限且 session_id 不存在（非幂等创建），
+    /// 返回错误，防止攻击者无限制创建 session 耗尽内存。
     pub fn create_session(
         &self,
         session_id: &str,
@@ -103,7 +151,27 @@ impl SessionManager {
                     party_index
                 ));
             }
+            // 幂等创建：刷新 updated_at（视为一次活动）
+            if let Some(info) = guard.get_mut(session_id) {
+                info.updated_at = Instant::now();
+            }
             return Ok(existing.clone());
+        }
+
+        // 中11: session 数量上限检查（防 DoS）
+        if guard.len() >= self.max_sessions {
+            tracing::warn!(
+                session_id = %session_id,
+                current_count = guard.len(),
+                max_sessions = self.max_sessions,
+                "中11: session count reached max_sessions limit — refusing new session (DoS protection)"
+            );
+            return Err(eyre::eyre!(
+                "中11: max sessions limit ({}) reached — refusing to create new session '{}' \
+                 (DoS protection; raise max_sessions via SessionManager::with_limits if needed)",
+                self.max_sessions,
+                session_id
+            ));
         }
 
         let now = Instant::now();
@@ -120,6 +188,8 @@ impl SessionManager {
             session_id = %session_id,
             party_id = %party_id,
             party_index,
+            current_count = guard.len(),
+            max_sessions = self.max_sessions,
             "MPC-P2-F5: session created and bound to caller identity"
         );
         Ok(info)
@@ -228,6 +298,69 @@ impl SessionManager {
         }
     }
 
+    /// 中10: 回收过期 session（Closed 状态或超过 timeout 无活动）。
+    ///
+    /// 遍历 `sessions` HashMap，移除满足以下任一条件的 session：
+    ///   * 状态为 `SessionState::Closed`（已显式销毁或过期）
+    ///   * `now - updated_at >= session_timeout`（超过过期阈值未活动）
+    ///
+    /// `updated_at` 在 `create_session`（含幂等创建）、`transition` 时刷新，
+    /// 视为该 session 的"最后活动时间"。
+    ///
+    /// 返回被回收的 session 数量。建议在 server.rs 的定时任务或每次 RPC 调用时触发。
+    /// 使用 `HashMap::retain` 原地过滤，避免二次分配。
+    pub fn cleanup_expired_sessions(&self) -> usize {
+        let mut guard = match self.sessions.lock() {
+            Ok(g) => g,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "中10: session manager lock poisoned — skip cleanup"
+                );
+                return 0;
+            }
+        };
+        let now = Instant::now();
+        let timeout = self.session_timeout;
+        let before = guard.len();
+        guard.retain(|session_id, session| {
+            // 已 Closed：回收
+            if session.state == SessionState::Closed {
+                tracing::info!(
+                    session_id = %session_id,
+                    state = ?session.state,
+                    "中10: session reaped (Closed state)"
+                );
+                return false;
+            }
+            // 超时无活动：回收
+            // elapsed 失败（时钟回退，理论上 Instant 单调不会发生）时保留 session，避免误杀
+            let elapsed = now.duration_since(session.updated_at);
+            if elapsed >= timeout {
+                tracing::info!(
+                    session_id = %session_id,
+                    state = ?session.state,
+                    elapsed_secs = elapsed.as_secs(),
+                    timeout_secs = timeout.as_secs(),
+                    "中10: session reaped (inactivity timeout exceeded)"
+                );
+                return false;
+            }
+            true
+        });
+        let reaped = before - guard.len();
+        if reaped > 0 {
+            tracing::info!(
+                before,
+                after = guard.len(),
+                reaped,
+                timeout_secs = timeout.as_secs(),
+                "中10: expired sessions cleanup completed"
+            );
+        }
+        reaped
+    }
+
     /// 当前 session 数量。
     pub fn len(&self) -> usize {
         self.sessions.lock().map(|g| g.len()).unwrap_or(0)
@@ -308,5 +441,90 @@ mod tests {
             .verify_caller("no-such", "party-0", 0)
             .unwrap_err();
         assert!(err.to_string().contains("not found"));
+    }
+
+    // ===== 中10: SessionManager 过期清理 =====
+
+    #[test]
+    fn cleanup_removes_closed_sessions() {
+        let mgr = SessionManager::new();
+        mgr.create_session("s-closed", "party-0", 0).expect("create");
+        mgr.create_session("s-active", "party-0", 0).expect("create");
+        // 关闭一个
+        mgr.transition("s-closed", SessionState::Closed).expect("close");
+        let reaped = mgr.cleanup_expired_sessions();
+        assert_eq!(reaped, 1, "Closed session should be reaped");
+        assert!(mgr.get("s-closed").is_none());
+        assert!(mgr.get("s-active").is_some(), "active session should remain");
+    }
+
+    #[test]
+    fn cleanup_keeps_active_sessions() {
+        let mgr = SessionManager::new();
+        mgr.create_session("s1", "party-0", 0).expect("create");
+        mgr.create_session("s2", "party-0", 0).expect("create");
+        let reaped = mgr.cleanup_expired_sessions();
+        assert_eq!(reaped, 0, "no sessions should be reaped");
+        assert_eq!(mgr.len(), 2);
+    }
+
+    #[test]
+    fn cleanup_with_short_timeout_reaps_inactive() {
+        // 1ns 超时：任何已创建 session 都视为过期
+        let mgr = SessionManager::with_limits(Duration::from_nanos(1), 100);
+        mgr.create_session("s-old", "party-0", 0).expect("create");
+        // 让时间推进（Instant::now + 1ns 不可直接构造，但 cleanup 内部 now > updated_at）
+        std::thread::sleep(Duration::from_millis(2));
+        let reaped = mgr.cleanup_expired_sessions();
+        assert_eq!(reaped, 1, "inactive session should be reaped with 1ns timeout");
+        assert!(mgr.get("s-old").is_none());
+    }
+
+    #[test]
+    fn cleanup_returns_zero_on_empty() {
+        let mgr = SessionManager::new();
+        assert_eq!(mgr.cleanup_expired_sessions(), 0);
+    }
+
+    // ===== 中11: session 数量上限 =====
+
+    #[test]
+    fn max_sessions_limit_enforced() {
+        let mgr = SessionManager::with_limits(DEFAULT_SESSION_TIMEOUT, 2);
+        mgr.create_session("s1", "party-0", 0).expect("create 1");
+        mgr.create_session("s2", "party-0", 0).expect("create 2");
+        // 第三个应失败
+        let err = mgr.create_session("s3", "party-0", 0).unwrap_err();
+        assert!(
+            err.to_string().contains("max sessions limit"),
+            "err: {err}"
+        );
+        assert_eq!(mgr.len(), 2);
+    }
+
+    #[test]
+    fn max_sessions_idempotent_create_does_not_count() {
+        // 幂等创建（同 session_id 同身份）不应被 max_sessions 拒绝
+        let mgr = SessionManager::with_limits(DEFAULT_SESSION_TIMEOUT, 1);
+        mgr.create_session("s1", "party-0", 0).expect("create 1");
+        // 重复创建同 session_id：幂等，应成功
+        mgr.create_session("s1", "party-0", 0).expect("idempotent");
+        assert_eq!(mgr.len(), 1);
+        // 不同 session_id：应失败
+        let err = mgr.create_session("s2", "party-0", 0).unwrap_err();
+        assert!(err.to_string().contains("max sessions limit"));
+    }
+
+    #[test]
+    fn default_max_sessions_is_100() {
+        let mgr = SessionManager::new();
+        assert_eq!(mgr.max_sessions(), DEFAULT_MAX_SESSIONS);
+        assert_eq!(mgr.max_sessions(), 100);
+    }
+
+    #[test]
+    fn with_limits_clamps_max_sessions_to_at_least_1() {
+        let mgr = SessionManager::with_limits(DEFAULT_SESSION_TIMEOUT, 0);
+        assert_eq!(mgr.max_sessions(), 1, "max_sessions=0 should clamp to 1");
     }
 }
