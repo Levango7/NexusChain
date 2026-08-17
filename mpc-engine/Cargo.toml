@@ -40,6 +40,15 @@ secp256k1 = { version = "0.20", features = ["global-context"] }
 hex = "0.4"
 sha2 = "0.9"
 
+# === MPC-P1-05 安全止血：会话落盘 AES-256-GCM 加密 ===
+# aes-gcm 0.10：AES-256-GCM AEAD（认证加密），用于加密 DKG 会话快照
+# （含全部 n 方私钥份额，明文落盘可被任意提取）。密钥从 MPC_STORAGE_KEY 环境变量读取。
+# rand 0.7：生成 GCM nonce（12 字节密码学随机数）。
+# 版本 0.7 与 curv-kzen 0.9 / multi-party-ecdsa 0.8.1 依赖一致，避免引入
+# rand 0.8（其 getrandom 0.2 + windows-sys 0.61 在 Windows GNU 工具链需 dlltool）。
+aes-gcm = "0.10"
+rand = "0.7"
+
 [build-dependencies]
 tonic-build = "0.12"
 

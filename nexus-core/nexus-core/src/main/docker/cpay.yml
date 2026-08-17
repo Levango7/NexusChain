@@ -16,10 +16,10 @@ services:
     ports:
       - 127.0.0.1:5433:5432
     environment:
-      POSTGRES_USER: nexusadmin
-      POSTGRES_PASSWORD: PqR_w9hk6Au-jq5ElsFcEjq!wvULrYXeF3*oDKp5i@A/D5m03VaB1M/hyKY
-      NEX_POSTGRES_USER: replica
-      NEX_POSTGRES_PASSWORD: replica
+      POSTGRES_USER: ${POSTGRES_USER:-nexusadmin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-CHANGE_ME}
+      NEX_POSTGRES_USER: ${NEX_POSTGRES_USER:-replica}
+      NEX_POSTGRES_PASSWORD: ${NEX_POSTGRES_PASSWORD:-CHANGE_ME}
 
   nexus_core_v0.0.3:
     image: nexus/nexus_core:latest
@@ -38,8 +38,8 @@ services:
       - 9585:9585
     environment:
       DATA_SOURCE_URL: 'jdbc:postgresql://nexus_pgsql_v0.0.3:5432/postgres'
-      DB_USERNAME: 'replica'
-      DB_PASSWORD: 'replica'
+      DB_USERNAME: ${DB_USERNAME:-replica}
+      DB_PASSWORD: ${DB_PASSWORD:-CHANGE_ME}
       ENABLE_MINING: 'false'
       NEX_MINER_COINBASE: '12344'
       CLEAR_DATA: 'false'
@@ -47,5 +47,6 @@ services:
       P2P_MODE: 'grpc'
       P2P_ADDRESS: 'nexus://localhost:9585'
       # 这里建议把自己的 ip 从 BOOTSTRAPS 里面去掉，防止发消息给自己
-      BOOTSTRAPS: 'nexus://47.74.183.249:9585,nexus://47.74.216.251:9585,nexus://7cca852a615c51e823c45aa38d5dfdd89b9772a576b286fb5b70be7986f6ad4a@47.96.67.155:9585,nexus://39fb7d079f7dc2e7a2b53a5ee2a0b81d39500ba959f9f87e0a930fb0cdc46333@47.74.86.106:9585'
+      # P1-D6 安全加固：P2P 引导节点 IP 外部化注入，避免硬编码生产节点暴露
+      BOOTSTRAPS: ${P2P_BOOTSTRAPS:-nexus://CHANGE_ME_BOOTSTRAP1:9585,nexus://CHANGE_ME_BOOTSTRAP2:9585}
 

@@ -68,11 +68,13 @@ jobs:
       - name: Build and push image（tag = git tag 版本号）
         uses: docker/build-push-action@v5
         with:
-          context: ./${{ matrix.module }}
+          context: .
+          file: ./${{ matrix.module }}/Dockerfile
           push: true
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.module }}:${{ github.ref_name }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.module }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.module }}:staging
 
   # ============================================================
   # 2. 创建 GitHub Release（从 CHANGELOG.md 提取对应版本段落）
@@ -92,7 +94,6 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           name: Release ${{ github.ref_name }}
-          generate_release_notes: true
           body_path: CHANGELOG.md
           draft: false
           prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') }}
@@ -123,7 +124,7 @@ jobs:
           # helm package：版本号去掉 v 前缀（Chart version 不含 v 前缀）
           CHART_VERSION_NUM="${CHART_VERSION#v}"
           helm package deploy/helm/ --version "${CHART_VERSION_NUM}" --app-version "${CHART_VERSION_NUM}" --destination ./chart-package
-          helm push "./chart-package/nexuschain-${CHART_VERSION_NUM}.tgz" "oci://${{ env.REGISTRY }}/${{ github.repository }}/charts"
+          helm push "./chart-package/nexus-chain-${CHART_VERSION_NUM}.tgz" "oci://${{ env.REGISTRY }}/${{ github.repository }}/charts"
 
   # ============================================================
   # 4. 自动部署至 staging 环境

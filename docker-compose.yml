@@ -67,6 +67,8 @@ services:
       - NEX_NACOS_SERVER=nexus-nacos:8848
       - NEX_SEATA_SERVER=nexus-seata-server:8091
       - NEX_ZIPKIN_ENDPOINT=http://nexus-zipkin:9411/api/v2/spans
+      # MPC-P1-05: 向 mpc-engine 发起 gRPC 调用的 Bearer token，须与 mpc-engine 的 MPC_AUTH_TOKEN 一致
+      - NEX_MPC_ENGINE_AUTH_TOKEN=dev-mpc-engine-token-change-in-prod
     depends_on:
       nacos:
         condition: service_healthy
@@ -254,6 +256,12 @@ services:
       - RUST_LOG=info
       - MPC_ENGINE_HOST=0.0.0.0
       - MPC_ENGINE_PORT=50051
+      # MPC-P1-05 安全止血：会话落盘 AES-256-GCM 加密密钥（hex 编码 32 字节 = 64 hex chars）
+      # 生产环境应通过 Docker secrets / KMS 注入，勿硬编码。此处为开发占位密钥。
+      - MPC_STORAGE_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      # MPC-P1-05: gRPC Bearer token 认证。生产环境应通过 secrets 注入。
+      - MPC_AUTH_TOKEN=dev-mpc-engine-token-change-in-prod
+      - MPC_REQUIRE_AUTH=true
     networks:
       - nexus-net
     restart: unless-stopped

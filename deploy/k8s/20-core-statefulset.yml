@@ -53,7 +53,7 @@ spec:
       containers:
         - name: core
           # TODO: 固定为不可变 tag（semver 或 sha256 digest）
-          image: ghcr.io/nexus/nexus-core:2.1.0
+          image: ghcr.io/levango7/nexuschain/nexus-core:2.1.0
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: false   # 链数据写在挂载的 core-data PVC；/tmp 需可写

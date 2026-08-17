@@ -112,3 +112,16 @@ local.env
 mpc-certs/
 mpc-engine/mpc-sessions/
 nexus-core/nexus-core/data-*/
+
+# P1-D6 安全加固：本地敏感配置覆盖文件（含明文凭据，禁止入库）
+# 开发者本地通过这些文件覆盖 ${VAR:-CHANGE_ME} 占位符，必须保留在本地
+docker-compose.override.yml
+docker-compose.override.*.yml
+*.local.yml
+*.local.properties
+deploy/config/redis.local.conf
+deploy/config/seata.local.properties
+# 生产环境变量文件（含真实凭据，仅部署机本地存在）
+.env.prod
+.env.prod.local
+.env.secrets

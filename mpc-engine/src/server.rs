@@ -49,12 +49,19 @@ impl Default for MpcCryptoServiceImpl {
 impl mpc_crypto_service_server::MpcCryptoService for MpcCryptoServiceImpl {
     /// 分布式密钥生成。
     async fn dkg(&self, req: Request<DkgRequest>) -> Result<Response<DkgResponse>, Status> {
+        // MPC-P1-05: 记录调用方身份（peer_addr），便于审计追溯
+        let peer = req
+            .peer_addr()
+            .map(|a| a.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
         let req = req.into_inner();
         tracing::info!(
             session_id = %req.session_id,
             threshold = req.threshold,
             total_parties = req.total_parties,
-            "rpc Dkg"
+            party_index = req.party_index,
+            peer = %peer,
+            "rpc Dkg (MPC-P1-05: caller identity logged)"
         );
         let resp = dkg::run_dkg(&self.sessions, req)
             .map_err(|e| Status::internal(format!("dkg: {e}")))?;
@@ -63,11 +70,17 @@ impl mpc_crypto_service_server::MpcCryptoService for MpcCryptoServiceImpl {
 
     /// 部分签名。
     async fn sign(&self, req: Request<SignRequest>) -> Result<Response<SignResponse>, Status> {
+        // MPC-P1-05: 记录调用方身份
+        let peer = req
+            .peer_addr()
+            .map(|a| a.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
         let req = req.into_inner();
         tracing::info!(
             session_id = %req.session_id,
             party_index = req.party_index,
-            "rpc Sign"
+            peer = %peer,
+            "rpc Sign (MPC-P1-05: caller identity logged)"
         );
         let resp = sign::run_sign(&self.sessions, &self.sign_runs, req)
             .map_err(|e| Status::internal(format!("sign: {e}")))?;
@@ -79,11 +92,17 @@ impl mpc_crypto_service_server::MpcCryptoService for MpcCryptoServiceImpl {
         &self,
         req: Request<AggregateRequest>,
     ) -> Result<Response<AggregateResponse>, Status> {
+        // MPC-P1-05: 记录调用方身份
+        let peer = req
+            .peer_addr()
+            .map(|a| a.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
         let req = req.into_inner();
         tracing::info!(
             session_id = %req.session_id,
             shares = req.partial_signatures.len(),
-            "rpc Aggregate"
+            peer = %peer,
+            "rpc Aggregate (MPC-P1-05: caller identity logged)"
         );
         let resp = aggregate::run_aggregate(&self.sign_runs, req)
             .map_err(|e| Status::internal(format!("aggregate: {e}")))?;
@@ -99,5 +118,88 @@ impl mpc_crypto_service_server::MpcCryptoService for MpcCryptoServiceImpl {
             healthy: true,
             status: format!("mpc-engine {}", env!("CARGO_PKG_VERSION")),
         }))
+    }
+}
+
+// =========================================================================
+// MPC-P1-05: gRPC 应用层认证拦截器
+// =========================================================================
+// 参考 nexus-signing-service 的 AuthTokenServerInterceptor 模式
+// （MpcTransportGrpcServer.AuthTokenServerInterceptor）。
+// 校验每个 RPC 请求的 `Authorization: Bearer <token>` 头：
+//   * 缺失 / 非 Bearer 格式 / token 不匹配 → 返回 UNAUTHENTICATED 拒绝
+//   * expected_token 为空 → 跳过校验（开发模式，记录警告于启动时）
+// token 比较使用普通 ==（非常量时间）：Bearer token 非密码，失败立即拒绝，
+// 时序攻击收益有限；生产环境应配合 mTLS 使用。
+
+/// `Authorization` metadata 头名。
+const AUTHORIZATION_HEADER: &str = "authorization";
+
+/// Bearer 前缀（RFC 6750）。
+const BEARER_PREFIX: &str = "Bearer ";
+
+/// gRPC 认证拦截器（MPC-P1-05）。
+///
+/// 实现 `tonic::service::Interceptor`，校验每个 RPC 请求的
+/// `Authorization: Bearer <token>` 头。`expected_token` 为空时跳过校验
+/// （开发模式）；非空时严格校验，失败返回 `Status::unauthenticated`。
+#[derive(Clone)]
+pub struct AuthInterceptor {
+    /// 期望的 Bearer token 值（不含 "Bearer " 前缀）。空表示跳过校验。
+    expected_token: String,
+}
+
+impl AuthInterceptor {
+    /// 创建认证拦截器。
+    ///
+    /// `expected_token` 为空时，拦截器跳过所有校验（开发模式）。
+    pub fn new(expected_token: String) -> Self {
+        Self { expected_token }
+    }
+
+    /// 是否启用认证（expected_token 非空）。
+    pub fn is_enabled(&self) -> bool {
+        !self.expected_token.is_empty()
+    }
+}
+
+impl tonic::service::Interceptor for AuthInterceptor {
+    fn call(&mut self, req: &Request<()>) -> Result<Request<()>, Status> {
+        // 空 token：跳过校验（开发模式）
+        if self.expected_token.is_empty() {
+            return Ok(req.clone());
+        }
+
+        // 从 metadata 读取 Authorization 头
+        let auth_header = req
+            .metadata()
+            .get(AUTHORIZATION_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .ok_or_else(|| {
+                tracing::warn!(
+                    "MPC-P1-05: gRPC request rejected — missing Authorization header"
+                );
+                Status::unauthenticated("Missing Authorization header")
+            })?;
+
+        // 校验 Bearer 前缀
+        if !auth_header.starts_with(BEARER_PREFIX) {
+            tracing::warn!(
+                "MPC-P1-05: gRPC request rejected — Authorization header not Bearer format"
+            );
+            return Err(Status::unauthenticated(
+                "Authorization header must be Bearer format",
+            ));
+        }
+
+        // 提取并校验 token（不记录实际 token 值）
+        let provided_token = &auth_header[BEARER_PREFIX.len()..];
+        if provided_token != self.expected_token {
+            tracing::warn!("MPC-P1-05: gRPC request rejected — auth token mismatch");
+            return Err(Status::unauthenticated("Invalid auth token"));
+        }
+
+        tracing::debug!("MPC-P1-05: gRPC request authorized");
+        Ok(req.clone())
     }
 }

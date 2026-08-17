@@ -59,6 +59,17 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
 
+    // === P1-F1 安全加固：Spring Security + JWT 鉴权 ===
+    // 引入 spring-boot-starter-security 启用方法级鉴权（@PreAuthorize），
+    // 配合自定义 JwtAuthenticationFilter 解析 Bearer token 并填充 SecurityContext。
+    // 不引入 spring-security-oauth2-resource-server，避免 Nimbus 依赖膨胀；
+    // 直接使用 jjwt 0.12.x（与 nexus-core JWTUtil 对齐）做 HS256 自对称签名/校验。
+    // jjwt 版本与根 build.gradle subprojects.ext.jjwtVersion 对齐。
+    implementation 'org.springframework.boot:spring-boot-starter-security'
+    implementation 'io.jsonwebtoken:jjwt-api:0.12.6'
+    runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.12.6'
+    runtimeOnly 'io.jsonwebtoken:jjwt-jackson:0.12.6'
+
     // === Micrometer Tracing + Zipkin（Phase 3 任务 #61，设计文档 §4.3.1） ===
     // SpringBoot 3.2.5 BOM 管理版本（micrometer-tracing 1.2.5 + zipkin-reporter-brave 2.16.4）
     // W3C traceparent 格式跨服务传播，Zipkin 上报，Feign 自动埋点
@@ -112,6 +123,7 @@ dependencies {
     implementation "io.grpc:grpc-netty-shaded:${grpcVersion}"
     implementation "io.grpc:grpc-protobuf:${grpcVersion}"
     implementation "io.grpc:grpc-stub:${grpcVersion}"
+    implementation "io.grpc:grpc-api:${grpcVersion}"
     implementation "com.google.protobuf:protobuf-java:${protobufVersion}"
     // gRPC protoc-gen-grpc-java 1.54.0 生成的 stub 用 @javax.annotation.Generated 注解
     // （非 jakarta.annotation）。Spring Boot 3.x 不传递引入 javax.annotation-api，需显式添加。

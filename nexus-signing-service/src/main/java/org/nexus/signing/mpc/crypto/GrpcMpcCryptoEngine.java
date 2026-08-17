@@ -1,7 +1,14 @@
 package org.nexus.signing.mpc.crypto;
 
+import io.grpc.CallOptions;
+import io.grpc.Channel;
+import io.grpc.ClientCall;
+import io.grpc.ClientInterceptor;
+import io.grpc.ForwardingClientCall;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
+import io.grpc.Metadata;
+import io.grpc.MethodDescriptor;
 import io.grpc.StatusRuntimeException;
 import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
 import io.grpc.netty.shaded.io.netty.handler.ssl.SslContext;
@@ -115,6 +122,20 @@ public class GrpcMpcCryptoEngine implements MpcCryptoEngine {
      */
     private static final int MAX_SESSION_ID_LENGTH = 128;
 
+    /**
+     * gRPC metadata 中的 Authorization 头键（MPC-P1-05）。
+     *
+     * <p>与 mpc-engine 的 {@code AuthInterceptor} 保持一致，
+     * 客户端发送、服务端校验使用相同的 key。</p>
+     */
+    private static final Metadata.Key<String> AUTHORIZATION_METADATA_KEY =
+            Metadata.Key.of("authorization", Metadata.ASCII_STRING_MARSHALLER);
+
+    /**
+     * Authorization 头的 Bearer 前缀（MPC-P1-05，RFC 6750）。
+     */
+    private static final String BEARER_PREFIX = "Bearer ";
+
     /** 引擎 gRPC 主机。 */
     @Value("${mpc.engine.host:localhost}")
     private String host;
@@ -147,6 +168,18 @@ public class GrpcMpcCryptoEngine implements MpcCryptoEngine {
     /** mTLS 客户端私钥路径（PEM，未加密）。use-plaintext=false 时生效。 */
     @Value("${mpc.engine.tls.client-key-path:}")
     private String tlsClientKeyPath;
+
+    /**
+     * gRPC 应用层认证 token（MPC-P1-05）。
+     *
+     * <p>非空时，客户端在 gRPC metadata 中添加 {@code Authorization: Bearer <token>} 头，
+     * 供 mpc-engine 的 {@code AuthInterceptor} 校验。为空时跳过（开发模式，
+     * mpc-engine 也需未设置 MPC_AUTH_TOKEN 才能联调）。</p>
+     *
+     * <p>生产环境必须设置，且与 mpc-engine 的 {@code MPC_AUTH_TOKEN} 一致。</p>
+     */
+    @Value("${mpc.engine.auth-token:}")
+    private String authToken;
 
     /** gRPC channel，由 {@link PostConstruct} 初始化。 */
     private ManagedChannel channel;
@@ -197,11 +230,43 @@ public class GrpcMpcCryptoEngine implements MpcCryptoEngine {
                 }
             }
             this.channel = builder.build();
-            this.blockingStub = MpcCryptoServiceGrpc.newBlockingStub(channel);
-            log.info("GrpcMpcCryptoEngine initialized: {}:{}, deadline={}ms, plaintext={}, tls={}",
+            MpcCryptoServiceGrpc.MpcCryptoServiceBlockingStub baseStub =
+                    MpcCryptoServiceGrpc.newBlockingStub(channel);
+            // MPC-P1-05: 若 authToken 非空，附加 Authorization: Bearer <token> metadata
+            // 供 mpc-engine 的 AuthInterceptor 校验。与 MpcTransportGrpcServer 模式一致。
+            if (authToken != null && !authToken.isEmpty()) {
+                Metadata authMetadata = new Metadata();
+                authMetadata.put(AUTHORIZATION_METADATA_KEY, BEARER_PREFIX + authToken);
+                // MPC-P1-05: 内联 ClientInterceptor 注入 Authorization metadata，
+                // 替代 grpc-api 1.54.0 已移除的 MetadataUtils.newAttachHeadersInterceptor。
+                ClientInterceptor authInterceptor = new ClientInterceptor() {
+                    @Override
+                    public <ReqT, RespT> ClientCall<ReqT, RespT> interceptCall(
+                            MethodDescriptor<ReqT, RespT> method,
+                            CallOptions callOptions,
+                            Channel next) {
+                        return new ForwardingClientCall.SimpleForwardingClientCall<ReqT, RespT>(
+                                next.newCall(method, callOptions)) {
+                            @Override
+                            public void start(Listener<RespT> responseListener, Metadata headers) {
+                                headers.merge(authMetadata);
+                                super.start(responseListener, headers);
+                            }
+                        };
+                    }
+                };
+                this.blockingStub = baseStub.withInterceptors(authInterceptor);
+                log.info("GrpcMpcCryptoEngine: gRPC auth token enabled (Bearer, MPC-P1-05)");
+            } else {
+                this.blockingStub = baseStub;
+                log.warn("GrpcMpcCryptoEngine: auth token empty — gRPC calls unauthenticated. "
+                        + "NOT for production; set mpc.engine.auth-token (MPC-P1-05)");
+            }
+            log.info("GrpcMpcCryptoEngine initialized: {}:{}, deadline={}ms, plaintext={}, tls={}, auth={}",
                     host, port, deadlineTimeoutMillis, usePlaintext,
                     !usePlaintext && GrpcTlsContextFactory.isTlsConfigComplete(
-                            tlsTrustCertPath, tlsClientCertPath, tlsClientKeyPath));
+                            tlsTrustCertPath, tlsClientCertPath, tlsClientKeyPath),
+                    authToken != null && !authToken.isEmpty());
         } catch (Exception e) {
             log.error("GrpcMpcCryptoEngine init failed: {}:{} — engine calls will fail",
                     host, port, e);

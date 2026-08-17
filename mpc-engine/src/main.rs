@@ -43,7 +43,7 @@ mod sign;
 #[cfg(feature = "tls")]
 use tonic::transport::ServerTlsConfig;
 
-use server::MpcCryptoServiceImpl;
+use server::{AuthInterceptor, MpcCryptoServiceImpl};
 
 /// 读取 TLS 证书与私钥路径环境变量。
 ///
@@ -104,9 +104,41 @@ async fn main() -> eyre::Result<()> {
         ));
     }
 
+    // === MPC-P1-05: gRPC 应用层认证拦截器 ===
+    // 读取 MPC_AUTH_TOKEN 环境变量。设置时启用 Bearer token 认证；
+    // 未设置时跳过校验（开发模式），但 MPC_REQUIRE_AUTH=true 时拒绝启动。
+    let auth_token = std::env::var("MPC_AUTH_TOKEN")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_default();
+    let auth_enabled = !auth_token.is_empty();
+    let require_auth = std::env::var("MPC_REQUIRE_AUTH")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.eq_ignore_ascii_case("true") || s == "1")
+        .unwrap_or(false);
+
+    if require_auth && !auth_enabled {
+        return Err(eyre::eyre!(
+            "MPC_REQUIRE_AUTH=true but MPC_AUTH_TOKEN not set. \
+             Refusing to start without gRPC auth. \
+             Set MPC_AUTH_TOKEN to a non-empty Bearer token value (MPC-P1-05)"
+        ));
+    }
+
+    if auth_enabled {
+        tracing::info!("MPC-P1-05: gRPC auth interceptor enabled (Bearer token)");
+    } else {
+        tracing::warn!(
+            "MPC_AUTH_TOKEN not set — gRPC auth DISABLED (development mode). \
+             NOT for production; set MPC_AUTH_TOKEN to enable auth (MPC-P1-05)"
+        );
+    }
+
     // === 启动 gRPC 服务端 ===
     let svc = MpcCryptoServiceImpl::default();
-    let server = proto::mpc_crypto::mpc_crypto_service_server::MpcCryptoServiceServer::new(svc);
+    let server = proto::mpc_crypto::mpc_crypto_service_server::MpcCryptoServiceServer::new(svc)
+        .interceptor(AuthInterceptor::new(auth_token));
 
     // MPC-P0-01: TLS 配置
     // 当 MPC_TLS_CERT_PATH 与 MPC_TLS_KEY_PATH 都存在时启用 TLS；

@@ -23,7 +23,12 @@ import java.util.Set;
  * @since 1.0.0
  */
 @Entity
-@Table(name = "bridge_transactions")
+@Table(name = "bridge_transactions", uniqueConstraints = {
+        // P1-F2：sourceTxHash 唯一约束，DB 层硬性防止重放同一笔源链交易。
+        // source_tx_hash 可空（mint/unlock 阶段不设置），多数数据库（含 MySQL/H2）
+        // 唯一索引允许多个 NULL 共存，不影响无源链哈希的记录。
+        @UniqueConstraint(name = "uk_bridge_tx_source_hash", columnNames = {"source_tx_hash"})
+})
 public class BridgeTransaction {
 
     /** 桥交易唯一 ID。 */

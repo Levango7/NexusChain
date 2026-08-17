@@ -71,6 +71,7 @@ spring:
 nexus:
   api-gateway:
     # === 鉴权配置（AuthenticationFilter） ===
+    # P1-D1：统一鉴权协议，与 nexus-gateway 对齐 X-NexusChain-* 头
     auth:
       # 鉴权总开关（本地调试可关）
       enabled: ${NEX_AUTH_ENABLED:true}
@@ -78,8 +79,12 @@ nexus:
       api-keys: ${NEX_API_KEYS:nexus-internal-api-key}
       # HMAC 共享密钥。生产环境通过 Nacos 加密下发
       hmac-secret: ${NEX_HMAC_SECRET}
-      # 时间戳偏差上限（秒），超过则拒绝（防重放）
+      # 时间戳偏差上限（秒），超过则拒绝（防重放第一道）
       max-timestamp-skew-seconds: 300
+      # Nonce 防重放窗口（毫秒），窗口内重复 nonce 拒绝
+      replay-window-ms: 300000
+      # 兼容期：是否接受旧 X-Nexus-* 头（deprecated）。迁移完成后置 false
+      legacy-headers-enabled: ${NEX_AUTH_LEGACY_HEADERS:true}
 
     # === 限流配置（RateLimitFilter） ===
     ratelimit:

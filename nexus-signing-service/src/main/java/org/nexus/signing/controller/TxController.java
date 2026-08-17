@@ -12,6 +12,7 @@ import org.nexus.signing.keystore.PlatformKeystore;
 import org.nexus.sdk.util.JsonUtil;
 import org.springframework.beans.factory.annotation.Autowired;
 import io.micrometer.tracing.Tracer;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -67,7 +68,12 @@ public class TxController {
      * clients is ignored, and requests whose {@code fromPubkey} does not match
      * the platform key are rejected. New clients should use
      * {@code /api/v1/transfers/sign}.</p>
+     *
+     * <p>SECURITY (P1-F1): 端点强制 {@code ROLE_SIGNING_SERVICE} 鉴权，
+     * 仅允许持有合法 JWT 且 roles 含 {@code SIGNING_SERVICE} 的调用方
+     * （即 gateway 通过 Feign 注入服务间 token）访问。</p>
      */
+    @PreAuthorize("hasRole('SIGNING_SERVICE')")
     @RequestMapping(value="/ClientToTransferAccount",method = RequestMethod.POST )
     public Object ClientToTransferAccount(@RequestParam(value = "fromPubkey", required = true) String fromPubkey,
                                           @RequestParam(value = "toPubkeyHash", required = true) String toPubkeyHash,
@@ -85,7 +91,13 @@ public class TxController {
      * override has been REMOVED — caller-supplied keystore material is never
      * accepted over HTTP. Signing uses the platform keystore exclusively, and
      * {@code fromPubkey} must match the platform keystore public key.</p>
+     *
+     * <p>SECURITY (P1-F1): 端点强制 {@code ROLE_SIGNING_SERVICE} 鉴权。
+     * gateway 通过 {@code FeignJwtRequestInterceptor} 在 Feign 调用前
+     * 注入 {@code Authorization: Bearer <jwt>}，token 由共享
+     * {@code JWT_SECRET} 签发，roles 含 {@code SIGNING_SERVICE}。</p>
      */
+    @PreAuthorize("hasRole('SIGNING_SERVICE')")
     @RequestMapping(value="/api/v1/transfers/sign", method = RequestMethod.POST )
     public Object signTransfer(@RequestParam(value = "fromPubkey", required = true) String fromPubkey,
                                @RequestParam(value = "toPubkeyHash", required = true) String toPubkeyHash,
@@ -169,6 +181,13 @@ public class TxController {
         return JsonUtil.GSON.fromJson(JsonUtil.GSON.toJson(result), HashMap.class);
     }
 
+    /**
+     * 查询指定地址的 Nonce 池快照。
+     *
+     * <p>SECURITY (P1-F1): 端点强制 {@code ROLE_SIGNING_SERVICE} 鉴权，
+     * 与签名端点同权限级别（Nonce 池暴露可辅助构造交易）。</p>
+     */
+    @PreAuthorize("hasRole('SIGNING_SERVICE')")
     @RequestMapping(value="/getNoncePool",method = RequestMethod.GET )
     public Object getNoncePool(@RequestParam(value = "address", required = true) String address){
         if(WalletUtils.verifyAddress(address)!=0){

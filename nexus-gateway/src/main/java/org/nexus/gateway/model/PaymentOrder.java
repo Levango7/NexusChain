@@ -103,7 +103,7 @@ public class PaymentOrder {
     // --- Enumerations ---
 
     public enum OrderStatus {
-        PENDING, PAYING, PAID, EXPIRED, REFUNDED, FAILED
+        PENDING, PAYING, PAID, EXPIRED, REFUNDED, FAILED, REFUND_PENDING
     }
 
     // --- Getters and Setters ---

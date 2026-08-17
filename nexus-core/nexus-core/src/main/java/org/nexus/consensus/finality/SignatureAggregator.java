@@ -2,6 +2,9 @@ package org.nexus.consensus.finality;
 
 import java.util.List;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 /**
  * 签名聚合器抽象（ADR-030 M3 架构层）。
  *
@@ -54,6 +57,11 @@ public interface SignatureAggregator {
      */
     final class CollectingAggregator implements SignatureAggregator {
 
+        private static final Logger log = LoggerFactory.getLogger(CollectingAggregator.class);
+
+        /** BLS 签名压缩格式最小长度（G1 点 48 字节，Ed25519 64 字节，下限取 32 字节做格式护栏）。 */
+        private static final int MIN_SIGNATURE_BYTES = 32;
+
         @Override
         public AggregatedSignature aggregate(List<Vote> votes) {
             if (votes == null || votes.isEmpty()) {
@@ -81,7 +89,24 @@ public interface SignatureAggregator {
         @Override
         public boolean verifyAggregate(List<Vote> votes, AggregatedSignature aggregated) {
             // 收集式聚合：无法比逐一验证更优，诚实返回"需要上层走逐签验证"
-            return aggregated != null && votes != null && aggregated.signerCount() == votes.size();
+            if (aggregated == null || votes == null || aggregated.signerCount() != votes.size()) {
+                return false;
+            }
+            // 格式校验：拒绝无签名/空签名/异常短签名的投票，防止冒充验证人零成本触发 finalized
+            // TODO: Phase2 - 接入 blst 做完整 BLS 验签（替换格式校验为密码学验签）
+            for (Vote vote : votes) {
+                byte[] sig = vote.getSignature();
+                if (sig == null || sig.length == 0) {
+                    log.warn("Vote from {} has null/empty signature, rejecting", vote.getValidatorAddress());
+                    return false;
+                }
+                if (sig.length < MIN_SIGNATURE_BYTES) {
+                    log.warn("Vote from {} has suspiciously short signature: {} bytes",
+                            vote.getValidatorAddress(), sig.length);
+                    return false;
+                }
+            }
+            return true;
         }
     }
 }

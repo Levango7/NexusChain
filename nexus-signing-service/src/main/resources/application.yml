@@ -48,6 +48,19 @@ wallet:
     json: ${WALLET_KEYSTORE_JSON:}
     password: ${WALLET_KEYSTORE_PASSWORD:}
 
+# === P1-F1 安全加固：JWT 鉴权配置 ===
+# signing-service 启用 Spring Security + JWT 后，所有 /api/** 端点强制
+# ROLE_SIGNING_SERVICE 鉴权，/obtainPrikey 等敏感端点强制 ROLE_ADMIN。
+# gateway 通过 Feign 调用时由 FeignJwtRequestInterceptor 自动注入 Bearer token，
+# token 用下方 secret 签发（HS256），需与 gateway 共享同一密钥。
+# 生产环境通过 JWT_SECRET 环境变量注入，禁止硬编码到本文件。
+nexus:
+  security:
+    jwt:
+      # HS256 共享密钥（≥32 字节）。生产环境必须通过 JWT_SECRET 环境变量注入。
+      # 未配置时 SecurityConfig 会以 fail-closed 模式启动（所有 /api/** 端点拒绝请求）。
+      secret: ${JWT_SECRET:}
+
 # === OpenFeign 配置（设计文档 §4.4.2） ===
 feign:
   client:
@@ -131,6 +144,10 @@ mpc:
       client-cert-path: ${NEX_MPC_ENGINE_TLS_CLIENT_CERT:}
       # 客户端私钥路径（PEM，未加密），与 client-cert 配对
       client-key-path: ${NEX_MPC_ENGINE_TLS_CLIENT_KEY:}
+    # MPC-P1-05: gRPC Bearer token 认证。非空时客户端在 metadata 添加
+    # Authorization: Bearer <token> 头，供 mpc-engine 的 AuthInterceptor 校验。
+    # 生产环境必须设置，且与 mpc-engine 的 MPC_AUTH_TOKEN 环境变量一致。
+    auth-token: ${NEX_MPC_ENGINE_AUTH_TOKEN:}
   # === P5-T3：MPC P2P 传输层配置（Java 参与方之间传递 MpcMessage） ===
   # GrpcMpcTransportStub 通过 gRPC 在 signing-service 实例之间传递部分签名等编排消息。
   # MpcTransportGrpcServer 在本节点启动 gRPC server 接收其他参与方的消息。
