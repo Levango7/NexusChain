@@ -42,8 +42,10 @@ jobs:
           distribution: 'corretto'
           cache: gradle
 
-      - name: Grant execute permission for gradlew
-        run: chmod +x gradlew
+      - name: Ensure gradlew is LF
+        run: |
+          sed -i 's/\r$//' gradlew
+          chmod +x gradlew
 
       - name: 编译 (compileJava + compileTestJava)
         run: ./gradlew compileJava compileTestJava --no-daemon
@@ -136,7 +138,11 @@ jobs:
       - name: Build and push image
         uses: docker/build-push-action@v5
         with:
-          context: ./${{ matrix.module }}
+          # 所有模块 Dockerfile 均从 repo 根目录 COPY（gradlew/build.gradle/
+          # settings.gradle/gradle/ 及 project() 依赖模块），故 context 必须为根。
+          # file 字段指定各模块 Dockerfile 路径。
+          context: .
+          file: ./${{ matrix.module }}/Dockerfile
           push: true
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.module }}:latest
