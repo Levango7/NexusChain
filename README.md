@@ -15,6 +15,21 @@ NexusChain 是一个**基于自研区块链的支付编排平台（Payment Orche
 - 可选：Docker + docker-compose（一键起全栈）
 - 可选：Rust toolchain（编译 mpc-engine，需 C 编译器）
 
+### 构建环境要求（Rust / mpc-engine）
+
+`mpc-engine` 为 Rust gRPC MPC 密码学引擎，`cargo check` / `cargo build` 需要以下环境之一：
+
+- **MinGW 工具链（Windows 默认 GNU）**：安装 MinGW-w64，确保 `gcc.exe` 与 `dlltool.exe` 在 `PATH` 中。Rust 默认 `x86_64-pc-windows-gnu` target 依赖二者。
+- **MSVC 工具链（推荐 Windows 生产环境）**：安装 Visual Studio Build Tools（含 C++ 桌面工作负载），并切换 Rust 默认 target：
+  ```bash
+  rustup target add x86_64-pc-windows-msvc
+  rustup default stable-x86_64-pc-windows-msvc
+  ```
+  此路径不依赖 `gcc` / `dlltool`，与 NexusChain Java 侧同享 MSVC ABI。
+- **Linux / macOS**：系统 `gcc` / `clang` 即可，无需额外配置。
+
+> 若仅构建 Java 侧（`gradle build`），无需 Rust 环境。Rust 仅 `mpc-engine` 模块需要。
+
 ### 本地构建与测试
 
 ```bash

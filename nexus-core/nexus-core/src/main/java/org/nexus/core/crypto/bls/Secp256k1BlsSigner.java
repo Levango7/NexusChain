@@ -67,6 +67,16 @@ public class Secp256k1BlsSigner implements BlsSigner {
         return CURVE.decodePoint(encoded);
     }
 
+    /**
+     * 从压缩字节解码曲线点（供外部包构造签名/公钥对象）。
+     *
+     * <p>暴露此方法以支持 {@code Secp256k1BlsSignature} 从字节恢复，
+     * 与 {@link Secp256k1BlsPublicKey#fromBytesCompressed} 对称。</p>
+     */
+    public static ECPoint decodePointPublic(byte[] encoded) {
+        return decodePoint(encoded);
+    }
+
     static ECPoint getG() {
         return G;
     }

@@ -235,7 +235,10 @@ task fatJar(type: Jar) {
 
 // === 覆盖率门禁（与 nexus-gateway 对齐，minimum 0.15） ===
 // BUNDLE 级别指令覆盖率下限 0.15；check 依赖 jacocoTestCoverageVerification 以强制门禁
+// P2-F4 修复：仅在实际执行 test 任务时才运行覆盖率验证，避免 `build -x test` 因
+// 无测试执行数据（覆盖率默认 0% < 门槛 15%）而失败。
 jacocoTestCoverageVerification {
+    onlyIf { gradle.taskGraph.hasTask(test) }
     violationRules {
         rule {
             element = 'BUNDLE'

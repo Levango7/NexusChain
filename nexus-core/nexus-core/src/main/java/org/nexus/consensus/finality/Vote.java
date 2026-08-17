@@ -13,18 +13,37 @@ public final class Vote {
     private final byte[] checkpointHash;
     private final String validatorAddress;
     private final byte[] signature;
+    /**
+     * 验证者 BLS 公钥（压缩字节）。
+     *
+     * <p>M3 阶段引入：聚合器在 {@code verifyAggregate} 中通过此公钥做完整 BLS 验签。
+     * 可为 {@code null}（M1/M2 兼容路径，仅做格式校验）。</p>
+     */
+    private final byte[] validatorPublicKey;
 
     public Vote(long epoch, byte[] checkpointHash, String validatorAddress, byte[] signature) {
+        this(epoch, checkpointHash, validatorAddress, signature, null);
+    }
+
+    public Vote(long epoch, byte[] checkpointHash, String validatorAddress, byte[] signature, byte[] validatorPublicKey) {
         this.epoch = epoch;
         this.checkpointHash = checkpointHash;
         this.validatorAddress = validatorAddress;
         this.signature = signature;
+        this.validatorPublicKey = validatorPublicKey;
     }
 
     public long getEpoch() { return epoch; }
     public byte[] getCheckpointHash() { return checkpointHash; }
     public String getValidatorAddress() { return validatorAddress; }
     public byte[] getSignature() { return signature; }
+
+    /**
+     * 返回验证者 BLS 公钥压缩字节，未携带时返回 {@code null}。
+     *
+     * <p>聚合器据此判断是否走完整 BLS 验签路径；为 {@code null} 时回退到格式校验。</p>
+     */
+    public byte[] getPublicKeyBytes() { return validatorPublicKey; }
 
     /**
      * 投票签名内容（供验签与双签比对）。

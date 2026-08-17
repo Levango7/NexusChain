@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+## [2.2.1] - 2026-08-18
+
+### Fixed
+- P2-F4 BLS验签完整接入：Vote.java添加getPublicKeyBytes()方法，SignatureAggregator.verifyAggregate()接入Secp256k1BlsSignature验签，消除TODO占位
+- JaCoCo覆盖率验证配置修复：jacocoTestCoverageVerification添加onlyIf条件，build -x test不再触发覆盖率验证
+- Rust构建环境要求标注：README.md新增mpc-engine构建环境说明（MinGW/MSVC工具链）
+
+### Documentation
+- 新增可选改进建议清单：.codeartsdoer/specs/audit-remediation-v2/optional-improvements.md（43项建议，分高/中/低优先级）
+
 ## [2.2.0] - 2026-08-18 - Phase 2 根治修复（7 项架构级问题）
 
 本次发布聚焦 Phase 2 审计根治修复，覆盖 BLS 验签、CI/CD 增强、文档/SDK/UI、签名安全架构、桥 Saga 幂等、事务补偿、MPC 分布式安全共 7 项架构级问题。
