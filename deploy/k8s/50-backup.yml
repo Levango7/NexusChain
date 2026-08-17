@@ -72,8 +72,10 @@ spec:
                 - |
                   set -e
                   DATE=$(date +%Y%m%d-%H%M%S)
-                  echo ">>> [${DATE}] 开始备份 nexus_gateway / nexus_core / nexus_bridge"
-                  for DB in nexus_gateway nexus_core nexus_bridge; do
+                  # REQ-30/P2: 数据库列表与 deploy/scripts/backup-postgres.sh 保持一致
+                  # 共享配置：deploy/config/backup-databases.txt
+                  echo ">>> [${DATE}] 开始备份 nexus_gateway / nexus_core / nexus_bridge / nexus_wallet"
+                  for DB in nexus_gateway nexus_core nexus_bridge nexus_wallet; do
                     pg_dump --format=custom --no-owner "dbname=${DB}" \
                       | gzip > "/backup/${DB}-${DATE}.sql.gz"
                     echo "    ${DB} -> /backup/${DB}-${DATE}.sql.gz"

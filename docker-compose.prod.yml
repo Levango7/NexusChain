@@ -290,12 +290,23 @@ services:
     restart: always
 
   # === 缓存（Redis 7） ===
+  # P2 加固：Redis 密码改为配置文件方式（--include /etc/redis/redis.conf）
+  # 而非命令行 --requirepass，避免密码出现在进程参数（ps/inspect 可见）
   redis:
     image: redis:7-alpine
     expose: ['6379']
-    command: ['redis-server', '--requirepass', '${REDIS_PASSWORD:-CHANGE_ME_REDIS_PASS}']
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-CHANGE_ME_REDIS_PASS}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        sed 's/__REDIS_PASSWORD_PLACEHOLDER__/'"$${REDIS_PASSWORD}"'/' /etc/redis/redis.conf.template > /tmp/redis.conf && \
+        redis-server /tmp/redis.conf
+    volumes:
+      - ./deploy/config/redis.conf:/etc/redis/redis.conf.template:ro
     healthcheck:
-      test: ['CMD', 'redis-cli', '-a', '${REDIS_PASSWORD:-CHANGE_ME_REDIS_PASS}', 'ping']
+      test: ['CMD-SHELL', 'redis-cli -a "$${REDIS_PASSWORD}" ping | grep PONG']
       interval: 10s
       timeout: 5s
       retries: 3

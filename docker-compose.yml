@@ -29,7 +29,8 @@ services:
     ports:
       - '127.0.0.1:8080:8080'
     environment:
-      - SPRING_PROFILES_ACTIVE=prod
+      # REQ-33/P2: dev compose 应使用 dev profile，prod profile 留给 docker-compose.prod.yml
+      - SPRING_PROFILES_ACTIVE=dev
     depends_on:
       nexus-core:
         condition: service_healthy
@@ -71,6 +72,10 @@ services:
         condition: service_healthy
       seata-server:
         condition: service_healthy
+    # REQ-34/P2: signing-service 加入 nexus-net 网络以访问 mpc-engine
+    networks:
+      - default
+      - nexus-net
     healthcheck:
       test: ['CMD', 'curl', '-f', 'http://localhost:8082/actuator/health']
       interval: 30s
@@ -108,7 +113,8 @@ services:
     ports:
       - '127.0.0.1:8084:8084'   # 修正：原 8082 → 8084（与 signing-service 8082 冲突，见 §4.5.1）
     environment:
-      - SPRING_PROFILES_ACTIVE=prod
+      # REQ-33/P2: dev compose 应使用 dev profile，prod profile 留给 docker-compose.prod.yml
+      - SPRING_PROFILES_ACTIVE=dev
     depends_on:
       nexus-core:
         condition: service_healthy

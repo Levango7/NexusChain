@@ -3,7 +3,7 @@
 # Rust 密码学引擎独立进程，gRPC 端口 50051。
 
 # === 构建阶段 ===
-FROM rust:1.80 AS builder
+FROM rust:1.85 AS builder
 
 # tonic-build 生成 gRPC stub 需要 protoc；
 # pkg-config + libssl-dev 为部分密码学库的可选系统依赖（按需启用）。

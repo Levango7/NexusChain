@@ -188,9 +188,10 @@ dependencies {
     implementation('org.web3j:core:4.11.0') {
         exclude group: 'tech.pegasys', module: 'jc-kzg-4844'
     }
-    implementation group: 'io.jsonwebtoken', name: 'jjwt-api', version: '0.11.5'
-    implementation group: 'io.jsonwebtoken', name: 'jjwt-impl', version: '0.11.5'
-    implementation group: 'io.jsonwebtoken', name: 'jjwt-jackson', version: '0.11.5'
+    // REQ-11/P2: jjwt 升级到 0.12.x 获取安全修复
+    implementation group: 'io.jsonwebtoken', name: 'jjwt-api', version: '0.12.6'
+    implementation group: 'io.jsonwebtoken', name: 'jjwt-impl', version: '0.12.6'
+    implementation group: 'io.jsonwebtoken', name: 'jjwt-jackson', version: '0.12.6'
 
     implementation fileTree(dir: 'libs', include: ['*.jar'])
 }
@@ -223,6 +224,7 @@ jar {
 // create a single Jar with all dependencies
 task fatJar(type: Jar) {
     archiveClassifier = 'all'
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
     manifest {
         attributes 'Main-Class': mainClassName
         attributes 'Class-Path': configurations.runtimeClasspath.collect { 'lib/' + it.getName() }.join(' ')

@@ -44,6 +44,8 @@ logs/
 # Local env
 local.env
 .env
+.env.test
+.env.test.local
 
 # LevelDB data
 leveldb/

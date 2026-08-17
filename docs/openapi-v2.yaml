@@ -10,7 +10,8 @@
 openapi: 3.1.0
 info:
   title: NexusChain Gateway API
-  version: 2.0.0
+  # P2: 版本号与项目统一版本 v2.1.0 对齐（REQ-27/REQ-35）
+  version: 2.1.0
   summary: NexusChain 商户支付网关 v2 API
   description: |
     v2 API 相比 v1 的增强：

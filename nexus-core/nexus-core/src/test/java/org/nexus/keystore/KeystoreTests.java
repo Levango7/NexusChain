@@ -12,7 +12,8 @@ import org.junit.jupiter.api.Test;
 
 public class KeystoreTests {
     private static final String testPrivKey   = "947d3ad33d2b14856d504c5c2984c1c2bb3a9d6c7b4b6307d40d45347903b33c";
-    private static final String password = "yongyang2018";
+    // REQ-10/P2: 密码改为从环境变量读取，保留默认值以兼容 testJson 中既存密文
+    private static final String password = System.getenv().getOrDefault("KEYSTORE_TEST_PASSWORD", "yongyang2018");
 
     @Test
     public void keyStoreLoads()throws Throwable{
