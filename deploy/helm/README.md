@@ -1,6 +1,6 @@
 # NexusChain Helm Chart
 
-NexusChain 区块链支付编排平台 Helm Umbrella Chart，聚合 4 个 Spring Boot 服务子 chart。
+NexusChain 区块链支付编排平台 Helm Umbrella Chart，聚合 5 个 Spring Boot 服务子 chart。
 
 ## 目录结构
 
@@ -20,7 +20,8 @@ deploy/helm/
 │   ├── nexus-gateway/            # 支付网关 :8080
 │   ├── nexus-bridge/             # 跨链桥 :8084
 │   ├── nexus-signing-service/    # 签名服务 :8082
-│   └── nexus-wallet-service/     # 钱包服务 :8083
+│   ├── nexus-wallet-service/     # 钱包服务 :8083
+│   └── nexus-api-gateway/        # API 统一入口 :8085（Spring Cloud Gateway）
 └── README.md
 ```
 
@@ -34,6 +35,7 @@ deploy/helm/
 | nexus-bridge | 8084 | nacos + zipkin | 跨链桥，不参与 Seata 事务 |
 | nexus-signing-service | 8082 | nacos + seata + zipkin | 签名服务 |
 | nexus-wallet-service | 8083 | nacos + seata + zipkin | 钱包服务 |
+| nexus-api-gateway | 8085 | nacos + zipkin + redis | API 统一入口（Spring Cloud Gateway，WebFlux 非阻塞） |
 
 基础设施（Nacos/Sentinel/Seata/Zipkin/Postgres/Redis）由独立 chart 或运维平台提供，本 chart 仅注入指向它们的服务地址环境变量。
 
@@ -219,3 +221,57 @@ nexus-gateway:
 本 Helm Chart 替代 `deploy/k8s/` 下的静态 YAML（10-gateway.yml 等），提供参数化、多环境、版本化的部署能力。旧 YAML 保留作为参考，不再用于部署。
 
 基础设施层（Nacos/Seata/Zipkin/Postgres/Redis，对应 30-infrastructure.yml）不在本 chart 范围内，由独立 chart 或运维平台管理。
+## nexus-api-gateway 子 chart 说明（REQ-41/P2）
+
+`charts/nexus-api-gateway/` 是 Spring Cloud Gateway 统一 API 入口子 chart，聚合下游 nexus-gateway / nexus-bridge 的路由与限流。
+
+### 关键 values
+
+| 路径 | 默认值 | 说明 |
+|------|--------|------|
+| `enabled` | `true` | 是否启用本子 chart |
+| `replicaCount` | `2` | 副本数（HPA 启用时作为初始值） |
+| `image.repository` | `""` | 镜像 repository（留空回退 `global.imageRegistry/nexus-api-gateway`） |
+| `image.tag` | `""` | 镜像 tag（留空回退 `global.env`） |
+| `service.port` | `8085` | Service 端口 |
+| `service.targetPort` | `8085` | 容器端口 |
+| `springProfile` | `""` | Spring profile 覆盖（留空回退 `global.springProfile` / `global.env`） |
+| `dependencies.nacos` | `true` | 注入 `NEX_NACOS_SERVER` / `NEX_NACOS_GRPC_SERVER` |
+| `dependencies.seata` | `false` | API Gateway 不参与 TCC 事务 |
+| `dependencies.sentinel` | `false` | 不依赖 Sentinel |
+| `dependencies.zipkin` | `true` | 注入 `NEX_ZIPKIN_ENDPOINT` |
+| `dependencies.postgres` | `false` | 无业务数据库 |
+| `dependencies.redis` | `true` | 注入 `SPRING_REDIS_HOST/PORT`（限流用） |
+| `extraEnv` | `{}` | 额外环境变量（如 `NEX_AUTH_ENABLED`、`NEX_API_KEYS`） |
+| `resources.requests` | `256Mi / 250m` | 资源 requests（WebFlux IO 密集，内存占用低） |
+| `resources.limits` | `512Mi / 1000m` | 资源 limits |
+| `hpa.enabled` | `false` | HPA 开关（默认随 `global.hpaEnabled`） |
+| `pdb.enabled` | `true` | PDB 开关（`minAvailable: 1`） |
+| `serviceMonitor.enabled` | `true` | ServiceMonitor 开关（Prometheus 抓取 `/actuator/prometheus`） |
+| `topologySpreadConstraints` | `[]` | 跨 AZ 打散（prod values 中开启） |
+| `routes` | 见下 | Spring Cloud Gateway 路由配置 |
+
+### 路由配置示例
+
+`yaml
+nexus-api-gateway:
+  routes:
+    - id: gateway
+      uri: lb://nexus-gateway
+      predicates:
+        - Path=/api/v1/**
+      filters:
+        - StripPrefix=0
+        - name: RequestRateLimiter
+          args:
+            redis-rate-limiter.replenishRate: 100
+            redis-rate-limiter.burstCapacity: 200
+    - id: bridge
+      uri: lb://nexus-bridge
+      predicates:
+        - Path=/api/v1/bridge/**
+`
+
+### 与 umbrella values 的关系
+
+本子 chart 的 values 通过 umbrella `.Values.nexus-api-gateway.*` 覆盖，`global.*` 透传。详见 `charts/nexus-api-gateway/values.yaml` 注释。

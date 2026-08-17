@@ -71,14 +71,15 @@ spring.cloud.loadbalancer:
     ttl: 30s
 
 # === Actuator 健康检查 ===
+# REQ-09/P2: 端点暴露收敛，仅暴露 health,info,prometheus；show-details 收敛为 when_authorized
 management:
   endpoints:
     web:
       exposure:
-        include: health,info,metrics,prometheus
+        include: health,info,prometheus
   endpoint:
     health:
-      show-details: always
+      show-details: when_authorized
   # === Phase 3 任务 #61：链路追踪（设计文档 §4.3.2） ===
   # Micrometer Tracing + Brave + Zipkin，W3C traceparent 跨服务传播
   tracing:

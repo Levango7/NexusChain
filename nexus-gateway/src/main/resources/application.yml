@@ -317,11 +317,12 @@ resilience4j:
         wait-duration: 2s
 
 # Actuator health checks
+# REQ-09/P2: 端点暴露收敛，仅暴露 health,info,prometheus
 management:
   endpoints:
     web:
       exposure:
-        include: health,info,metrics
+        include: health,info,prometheus
   endpoint:
     health:
       show-details: when_authorized

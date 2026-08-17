@@ -38,7 +38,14 @@ S3_BUCKET="${S3_BUCKET:-nexus-backups}"
 S3_PREFIX="${S3_PREFIX:-pg}"
 AWS_REGION="${AWS_REGION:-us-east-1}"
 BACKUP_RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-30}"
-DATABASES=("nexus_gateway" "nexus_wallet")
+# REQ-30/P2: 数据库列表统一，与 deploy/k8s/50-backup.yml 保持一致
+# 共享配置文件：deploy/config/backup-databases.txt
+DATABASES=("nexus_gateway" "nexus_core" "nexus_bridge" "nexus_wallet")
+# 若存在共享配置文件则覆盖默认列表（每行一个库名，# 开头为注释）
+BACKUP_DB_CONFIG="${BACKUP_DB_CONFIG:-$(dirname "$0")/../config/backup-databases.txt}"
+if [[ -f "$BACKUP_DB_CONFIG" ]]; then
+    DATABASES=($(grep -vE '^\s*(#|$)' "$BACKUP_DB_CONFIG"))
+fi
 METRICS_FILE="${METRICS_FILE:-/var/lib/nexus/backup-metrics}"
 
 # === 参数解析 ===

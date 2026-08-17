@@ -63,10 +63,28 @@ public class SerializableUtil {
 
     /**
      * ObjectInputFilter whitelist for the legacy {@link #toObject(byte[])} fallback path.
-     * Allows only JDK base types, arrays, and org.nexus.keystore.* classes.
+     * Allows only JDK base types, concrete collections, and org.nexus.keystore.* classes.
+     * <p>P2 加固：将 {@code java.util.*} 收窄为实际使用的具体集合类（HashMap/ArrayList/Arrays$ArrayList/
+     * HashSet/LinkedList/TreeMap/TreeSet/LinkedHashMap/LinkedHashSet/Collections$Unmodifiable*），
+     * 阻断攻击者利用其他 java.util 内部类（如 java.util.Comparator 等）构造 gadget chain。
      */
     private static final ObjectInputFilter DESERIALIZATION_FILTER = ObjectInputFilter.Config.createFilter(
-            "java.lang.*;java.util.*;java.math.*;java.time.*;java.io.Serializable;"
+            "java.lang.*;java.lang.reflect.Proxy;"
+            + "java.util.HashMap;java.util.ArrayList;java.util.Arrays$ArrayList;"
+            + "java.util.HashSet;java.util.LinkedList;"
+            + "java.util.TreeMap;java.util.TreeSet;"
+            + "java.util.LinkedHashMap;java.util.LinkedHashSet;"
+            + "java.util.Collections$UnmodifiableRandomAccessList;"
+            + "java.util.Collections$UnmodifiableCollection;"
+            + "java.util.Collections$UnmodifiableSet;"
+            + "java.util.Collections$UnmodifiableMap;"
+            + "java.util.Collections$EmptyList;"
+            + "java.util.Collections$EmptySet;"
+            + "java.util.Collections$EmptyMap;"
+            + "java.util.Collections$SingletonList;"
+            + "java.util.Collections$SingletonSet;"
+            + "java.util.Collections$SingletonMap;"
+            + "java.math.*;java.time.*;java.io.Serializable;"
             + "org.nexus.keystore.*;"
             + "!*"
     );

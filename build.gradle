@@ -134,7 +134,7 @@ subprojects {
         commonsCollections4Version = '4.4'
         commonsCliVersion = '1.5.0'
         jcommanderVersion = '1.82'
-        jjwtVersion = '0.11.5'
+        jjwtVersion = '0.12.6'
         quartzVersion = '2.3.2'
         junitVersion = '4.13.2'
         junitJupiterVersion = '5.10.2'

@@ -21,6 +21,14 @@ spec:
         app: nexus-signing-service
     spec:
       automountServiceAccountToken: false
+      # REQ-40/P2: 跨可用区打散 Pod
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: nexus-signing-service
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -28,12 +36,19 @@ spec:
         fsGroup: 1000
         seccompProfile:
           type: RuntimeDefault
+      # P2 加固：readOnlyRootFilesystem 配套 emptyDir 卷
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: spring-tmp
+          emptyDir: {}
       containers:
         - name: signing-service
           image: ghcr.io/nexus/nexus-signing-service:2.1.0
           securityContext:
             allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: false
+            # P2 加固：readOnlyRootFilesystem + emptyDir 挂载 /tmp
+            readOnlyRootFilesystem: true
             capabilities:
               drop:
                 - ALL
@@ -44,11 +59,19 @@ spec:
           env:
             - name: SPRING_PROFILES_ACTIVE
               value: prod
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Djava.io.tmpdir=/tmp"
           envFrom:
             - configMapRef:
                 name: nexus-config
             - secretRef:
                 name: nexus-secrets
+          # P2 加固：可写临时目录挂载为 emptyDir
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: spring-tmp
+              mountPath: /app/tmp
           resources:
             requests:
               memory: "256Mi"
