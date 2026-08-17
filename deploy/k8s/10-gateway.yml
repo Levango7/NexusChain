@@ -36,7 +36,7 @@ spec:
       containers:
         - name: gateway
           # TODO: 固定为不可变 tag（semver 或 sha256 digest）；:latest 不可重现、易漂移
-          image: ghcr.io/nexus/nexus-gateway:2.1.0
+          image: ghcr.io/levango7/nexuschain/nexus-gateway:2.1.0
           # 容器级安全上下文：丢弃全部 Linux capabilities、禁止提权
           securityContext:
             allowPrivilegeEscalation: false

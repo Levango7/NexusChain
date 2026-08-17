@@ -216,9 +216,11 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
      * {@code rollbackFor=Exception.class} 保证任何异常都触发全局回滚
      * （undo_log 自动还原 withdrawal_requests 状态变更）。</p>
      *
-     * <p>注意：方法内部 catch Exception 后置 FAILED 并返回（不重新抛出），
-     * 此路径下事务正常提交（FAILED 状态持久化）。仅当方法抛出未捕获异常时才触发回滚。
-     * 这是有意设计——签名失败时保留 FAILED 记录供后续排查，而非回滚到 APPROVED。</p>
+     * <p>注意（P1-F3 修复）：方法内部 catch Exception 后置 FAILED 落库并
+     * <strong>重新抛出</strong>，以触发 {@code @GlobalTransactional} 全局回滚。
+     * 原实现吞异常导致落库失败时状态退回 APPROVED，资金风险敞口；
+     * 现改为：FAILED 状态先持久化供后续排查，再抛出原异常让 Seata TM 感知
+     * 并回滚全局事务（包括上游 gateway 退款分支）。</p>
      */
     @Override
     @GlobalTransactional(timeoutMills = 120000, rollbackFor = Exception.class)
@@ -268,9 +270,14 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
             entity.setStatus(WithdrawalRequest.WithdrawalStatus.EXECUTED);
             entity.setExecutedAt(LocalDateTime.now());
         } catch (Exception e) {
+            // P1-F3 修复：先持久化 FAILED 状态供后续排查，再重抛异常
+            // 触发 @GlobalTransactional(rollbackFor=Exception.class) 全局回滚。
+            // 原实现吞异常导致落库失败时状态退回 APPROVED，资金风险敞口。
             entity.setStatus(WithdrawalRequest.WithdrawalStatus.FAILED);
             entity.setRejectionReason("execution failed: " + e.getMessage());
+            withdrawalRequestRepository.save(entity);
             log.error("Withdrawal execution failed: requestId={}", approvalId, e);
+            throw e;
         }
         WithdrawalRequestEntity saved = withdrawalRequestRepository.save(entity);
         return WithdrawalRequestMapper.toDto(saved, withdrawalApproverRepository.findByRequestId(approvalId));

@@ -417,7 +417,8 @@ class DefaultWithdrawalApprovalServiceTest {
     }
 
     @Test
-    void execute_feignThrowsException_setsFailed() {
+    void execute_feignThrowsException_rethrowsAfterMarkingFailed() {
+        // P1-F3 修复：catch 块先持久化 FAILED 再重抛异常，触发 @GlobalTransactional 全局回滚。
         WithdrawalRequest request = service.requestWithdrawal(
                 WHITELISTED_ADDR, new BigDecimal("100"), "NEX");
         service.approve(request.getRequestId(), "approver-1");
@@ -425,18 +426,18 @@ class DefaultWithdrawalApprovalServiceTest {
         when(signingServiceClient.signTransfer(any(), any(), any()))
                 .thenThrow(new RuntimeException("signing-service unavailable"));
 
-        WithdrawalRequest executed = service.executeApprovedWithdrawal(request.getRequestId());
-
-        assertEquals(WithdrawalRequest.WithdrawalStatus.FAILED, executed.getStatus());
-        assertNotNull(executed.getRejectionReason());
-        assertTrue(executed.getRejectionReason().contains("execution failed"));
-        assertTrue(executed.getRejectionReason().contains("signing-service unavailable"));
+        RuntimeException ex = assertThrows(RuntimeException.class,
+                () -> service.executeApprovedWithdrawal(request.getRequestId()));
+        assertTrue(ex.getMessage().contains("signing-service unavailable"));
+        // FAILED 状态已落库供后续排查
+        verify(withdrawalRequestRepository).save(any(WithdrawalRequestEntity.class));
     }
 
     @Test
-    void execute_feignThrowsFeignLikeException_setsFailed() {
+    void execute_feignThrowsFeignLikeException_rethrowsAfterMarkingFailed() {
         // 模拟 Feign 降级场景：签名服务返回 5xx，Feign 抛异常透传到本服务
         // （用 RuntimeException 模拟 FeignException 以避免跨 feign 版本构造签名差异）
+        // P1-F3 修复：catch 块重抛异常触发全局回滚，避免落库失败状态退回 APPROVED。
         WithdrawalRequest request = service.requestWithdrawal(
                 WHITELISTED_ADDR, new BigDecimal("100"), "NEX");
         service.approve(request.getRequestId(), "approver-1");
@@ -444,11 +445,10 @@ class DefaultWithdrawalApprovalServiceTest {
         when(signingServiceClient.signTransfer(any(), any(), any()))
                 .thenThrow(new RuntimeException("feign.FeignException: signing-service 500"));
 
-        WithdrawalRequest executed = service.executeApprovedWithdrawal(request.getRequestId());
-
-        assertEquals(WithdrawalRequest.WithdrawalStatus.FAILED, executed.getStatus());
-        assertNotNull(executed.getRejectionReason());
-        assertTrue(executed.getRejectionReason().contains("signing-service 500"));
+        RuntimeException ex = assertThrows(RuntimeException.class,
+                () -> service.executeApprovedWithdrawal(request.getRequestId()));
+        assertTrue(ex.getMessage().contains("signing-service 500"));
+        verify(withdrawalRequestRepository).save(any(WithdrawalRequestEntity.class));
     }
 
     @Test

@@ -120,6 +120,34 @@ pub fn run_dkg(
         }
     };
 
+    // === MPC-P1-05: 防御性范围校验 ===
+    // 防止"重复调用同一 session_id 按 party_index 无条件提取任意方私钥份额"漏洞：
+    // 即使请求的 total_parties 校验通过（line 69-77），缓存会话的 shared_keys.len()
+    // 可能与请求 total_parties 不一致（如攻击者传 total_parties=n 但 session 实际 m 方）。
+    // 此处以会话实际份额数为准，越界直接拒绝，不泄露任何方份额。
+    if party_index >= session.shared_keys.len() {
+        tracing::warn!(
+            session_id = %req.session_id,
+            party_index,
+            shared_keys_len = session.shared_keys.len(),
+            threshold = req.threshold,
+            total_parties = req.total_parties,
+            "dkg: party_index out of session shared_keys range — \
+             possible total_parties mismatch or replay attack (MPC-P1-05)"
+        );
+        return Ok(DkgResponse {
+            public_key: String::new(),
+            key_share: String::new(),
+            proof: String::new(),
+            success: false,
+            error: format!(
+                "party_index {} out of session shared_keys range [0, {}) \
+                 (MPC-P1-05: denied to prevent arbitrary share extraction)",
+                party_index, session.shared_keys.len()
+            ),
+        });
+    }
+
     // === 从会话提取本方份额与聚合公钥（hex 编码，Java proto 契约）===
     let public_key = gg20::hex_point(&session.y_sum);
     let key_share = gg20::hex_scalar(&session.shared_keys[party_index].x_i);

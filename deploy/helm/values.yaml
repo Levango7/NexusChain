@@ -17,7 +17,7 @@ global:
   namespace: nexus
 
   # -- 镜像仓库基址，子 chart 拼接 /<serviceName>:<tag>
-  imageRegistry: ghcr.io/nexus
+  imageRegistry: ghcr.io/levango7/nexuschain
 
   # -- 镜像拉取策略
   imagePullPolicy: IfNotPresent

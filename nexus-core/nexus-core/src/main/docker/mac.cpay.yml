@@ -17,10 +17,10 @@ services:
     ports:
       - 127.0.0.1:5433:5432
     environment:
-      POSTGRES_USER: nexusadmin
-      POSTGRES_PASSWORD: PqR_w9hk6Au-jq5ElsFcEjq!wvULrYXeF3*oDKp5i@A/D5m03VaB1M/hyKY
-      NEX_POSTGRES_USER: replica
-      NEX_POSTGRES_PASSWORD: replica
+      POSTGRES_USER: ${POSTGRES_USER:-nexusadmin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-CHANGE_ME}
+      NEX_POSTGRES_USER: ${NEX_POSTGRES_USER:-replica}
+      NEX_POSTGRES_PASSWORD: ${NEX_POSTGRES_PASSWORD:-CHANGE_ME}
 
   nexus_core:
     image: nexus/nexus_core:v0.0.3
@@ -34,7 +34,7 @@ services:
       - 19585:19585
     environment:
       DATA_SOURCE_URL: 'jdbc:postgresql://nexus_pgsql:5432/postgres'
-      DB_USERNAME: 'replica'
-      DB_PASSWORD: 'replica'
+      DB_USERNAME: ${DB_USERNAME:-replica}
+      DB_PASSWORD: ${DB_PASSWORD:-CHANGE_ME}
       ENABLE_MINING: 'false'
-      NEX_MINER_COINBASE: '1317J5fZb8kVrACnfi3PXN1T21573hYata'
+      NEX_MINER_COINBASE: ${NEX_MINER_COINBASE:-CHANGE_ME_COINBASE}

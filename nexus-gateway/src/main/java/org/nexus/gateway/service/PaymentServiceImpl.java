@@ -304,6 +304,14 @@ public class PaymentServiceImpl implements PaymentService {
 
             refundSpan.attr("payment.refund.no", refund.getRefundNo());
 
+            // P1-F3 事务边界修复：先落库 PENDING 再链上执行再更新 CONFIRMED。
+            // 原顺序（链上转账 → save）在 save 失败时，Seata 仅能回滚数据库分支，
+            // 无法回滚已上链的不可逆交易。改为先持久化 REFUND_PENDING 占位，
+            // 链上转账成功后更新为 REFUNDED；失败则回滚订单状态到 PAID 允许重试。
+            OrderStateMachine.transition(order, PaymentOrder.OrderStatus.REFUND_PENDING);
+            orderRepository.save(order);
+            Refund saved = refundRepository.save(refund);
+
             // Execute refund transfer via exchange-wallet
             String receiverPubkeyHash = walletMgmtClient.addressToPubkeyHash(order.getPayerAddress());
             if (receiverPubkeyHash != null) {
@@ -317,6 +325,8 @@ public class PaymentServiceImpl implements PaymentService {
                             .attr("payment.refund.status", "COMPLETED");
                 } else {
                     refund.setStatus(Refund.RefundStatus.FAILED);
+                    // 链上转账失败：回滚订单状态到 PAID，允许后续重试退款
+                    OrderStateMachine.transition(order, PaymentOrder.OrderStatus.PAID);
                     refundSpan.attr("payment.refund.status", "FAILED").error(null);
                     log.error("Refund transfer failed for order: {}", order.getOrderNo());
                 }
@@ -326,13 +336,16 @@ public class PaymentServiceImpl implements PaymentService {
                 log.warn("Wallet unreachable, refund cannot be executed for order: {}", order.getOrderNo());
                 refund.setChainTxHash(null);
                 refund.setStatus(Refund.RefundStatus.FAILED);
+                // 回滚订单状态到 PAID，允许后续重试
+                OrderStateMachine.transition(order, PaymentOrder.OrderStatus.PAID);
                 refundSpan.attr("payment.refund.status", "FAILED")
                         .attr("wallet.unreachable", true)
                         .error(null);
             }
 
+            // 链上结果落地：更新订单最终状态 + refund 最终状态
             orderRepository.save(order);
-            Refund saved = refundRepository.save(refund);
+            saved = refundRepository.save(refund);
             // Publish event only for genuinely completed refunds (real on-chain tx hash).
             // FAILED refunds must never publish RefundCompletedEvent.
             if (saved.getStatus() == Refund.RefundStatus.COMPLETED) {

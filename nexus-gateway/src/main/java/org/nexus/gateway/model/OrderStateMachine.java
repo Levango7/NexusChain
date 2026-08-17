@@ -6,12 +6,14 @@ import java.util.*;
  * Explicit order state machine with guarded transitions.
  *
  * Valid transitions:
- *   PENDING  -> PAYING, EXPIRED, FAILED (risk/compliance rejection)
- *   PAYING   -> PAID, FAILED, EXPIRED
- *   PAID     -> REFUNDED
- *   EXPIRED  -> (terminal)
- *   REFUNDED -> (terminal)
- *   FAILED   -> PENDING (retry)
+ *   PENDING        -> PAYING, EXPIRED, FAILED (risk/compliance rejection)
+ *   PAYING         -> PAID, FAILED, EXPIRED
+ *   PAID           -> REFUND_PENDING, REFUNDED
+ *   REFUND_PENDING -> REFUNDED (chain transfer succeeded)
+ *   REFUND_PENDING -> PAID (chain transfer failed, allow retry)
+ *   EXPIRED        -> (terminal)
+ *   REFUNDED       -> (terminal)
+ *   FAILED         -> PENDING (retry)
  */
 public final class OrderStateMachine {
 
@@ -30,7 +32,12 @@ public final class OrderStateMachine {
                 PaymentOrder.OrderStatus.EXPIRED
         ));
         map.put(PaymentOrder.OrderStatus.PAID, EnumSet.of(
+                PaymentOrder.OrderStatus.REFUND_PENDING,
                 PaymentOrder.OrderStatus.REFUNDED
+        ));
+        map.put(PaymentOrder.OrderStatus.REFUND_PENDING, EnumSet.of(
+                PaymentOrder.OrderStatus.REFUNDED,
+                PaymentOrder.OrderStatus.PAID
         ));
         map.put(PaymentOrder.OrderStatus.FAILED, EnumSet.of(
                 PaymentOrder.OrderStatus.PENDING

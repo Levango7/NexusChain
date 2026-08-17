@@ -44,7 +44,7 @@ spec:
           emptyDir: {}
       containers:
         - name: wallet-service
-          image: ghcr.io/nexus/nexus-wallet-service:2.1.0
+          image: ghcr.io/levango7/nexuschain/nexus-wallet-service:2.1.0
           securityContext:
             allowPrivilegeEscalation: false
             # P2 加固：readOnlyRootFilesystem + emptyDir 挂载 /tmp

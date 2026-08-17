@@ -12,7 +12,7 @@ echo "Applying manifests in order..."
 
 # 1. Namespace + Config + Secrets
 kubectl apply -f "$DIR/00-namespace-config.yml"
-echo "[1/5] Namespace + ConfigMap + Secret"
+echo "[1/12] Namespace + ConfigMap + Secret"
 
 # 2. Create genesis ConfigMap from JSON files
 kubectl create configmap nexus-genesis \
@@ -20,11 +20,11 @@ kubectl create configmap nexus-genesis \
   --from-file=validators.json="$DIR/validators.json" \
   --namespace=nexus \
   --dry-run=client -o yaml | kubectl apply -f -
-echo "[2/5] Genesis ConfigMap"
+echo "[2/12] Genesis ConfigMap"
 
 # 3. Infrastructure (PostgreSQL + Redis)
 kubectl apply -f "$DIR/30-infrastructure.yml"
-echo "[3/7] Infrastructure (PostgreSQL + Redis)"
+echo "[3/12] Infrastructure (PostgreSQL + Redis)"
 
 # Wait for infra to be ready
 echo "Waiting for PostgreSQL..."
@@ -34,23 +34,39 @@ kubectl wait --for=condition=ready pod -l app=redis -n nexus --timeout=60s 2>/de
 
 # 4. Core chain nodes (StatefulSet)
 kubectl apply -f "$DIR/20-core-statefulset.yml"
-echo "[4/7] Core StatefulSet (4 nodes)"
+echo "[4/12] Core StatefulSet (4 nodes)"
 
 # 5. Gateway (Deployment + HPA + Ingress)
 kubectl apply -f "$DIR/10-gateway.yml"
-echo "[5/7] Gateway (Deployment + HPA + Ingress)"
+echo "[5/12] Gateway (Deployment + HPA + Ingress)"
 
-# 6. Monitoring (exporters + ServiceMonitors + alerts)
+# 6. Bridge (Deployment + HPA)
+kubectl apply -f "$DIR/15-bridge.yml"
+echo "[6/12] Bridge (Deployment + HPA)"
+
+# 7. Signing Service (Deployment + HPA)
+kubectl apply -f "$DIR/25-signing.yml"
+echo "[7/12] Signing Service (Deployment + HPA)"
+
+# 8. Wallet Service (Deployment + HPA)
+kubectl apply -f "$DIR/26-wallet.yml"
+echo "[8/12] Wallet Service (Deployment + HPA)"
+
+# 9. API Gateway (Deployment + HPA + Ingress)
+kubectl apply -f "$DIR/27-api-gateway.yml"
+echo "[9/12] API Gateway (Deployment + HPA + Ingress)"
+
+# 10. Monitoring (exporters + ServiceMonitors + alerts)
 kubectl apply -f "$DIR/40-monitoring.yml"
-echo "[6/7] Monitoring (PostgreSQL/Redis exporters + ServiceMonitors + PrometheusRule)"
+echo "[10/12] Monitoring (PostgreSQL/Redis exporters + ServiceMonitors + PrometheusRule)"
 
-# 7. Backup (PostgreSQL CronJob + PVC)
+# 11. Backup (PostgreSQL CronJob + PVC)
 kubectl apply -f "$DIR/50-backup.yml"
-echo "[7/7] Backup (PostgreSQL CronJob + PVC)"
+echo "[11/12] Backup (PostgreSQL CronJob + PVC)"
 
-# 8. NetworkPolicy baseline (default-deny + selective allow)
+# 12. NetworkPolicy baseline (default-deny + selective allow)
 kubectl apply -f "$DIR/60-networkpolicy.yml"
-echo "[8/8] NetworkPolicy baseline"
+echo "[12/12] NetworkPolicy baseline"
 
 echo ""
 echo "=== Deploy Complete ==="

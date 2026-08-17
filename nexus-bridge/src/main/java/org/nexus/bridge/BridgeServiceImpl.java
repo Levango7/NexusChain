@@ -101,6 +101,13 @@ public class BridgeServiceImpl implements BridgeService {
                 requireState(BridgeState.ACTIVE, "LOCK requires ACTIVE bridge");
                 validateAmount(request.getAmount());
 
+                // P1-F2：sourceTxHash 去重，防止中继者重放同一笔源链 lock 导致双倍 mint
+                if (txRepository.findBySourceTxHash(request.getSourceTxHash()).isPresent()) {
+                    log.warn("Duplicate source tx hash on LOCK: {}, skipping", request.getSourceTxHash());
+                    throw new DuplicateTransactionException(
+                            "Source tx already processed: " + request.getSourceTxHash());
+                }
+
                 BridgeTransaction tx = new BridgeTransaction();
                 tx.setTxId(UUID.randomUUID().toString());
                 tx.setOperationType(BridgeOperationType.BRIDGE_LOCK);
@@ -206,6 +213,13 @@ public class BridgeServiceImpl implements BridgeService {
                 if (bridgeState.get() == BridgeState.EMERGENCY_STOP)
                     throw new BridgeException("Bridge is EMERGENCY_STOP, all operations forbidden");
                 validateAmount(request.getAmount());
+
+                // P1-F2：sourceTxHash 去重，防止中继者重放同一笔源链 burn 导致双倍 unlock
+                if (txRepository.findBySourceTxHash(request.getSourceTxHash()).isPresent()) {
+                    log.warn("Duplicate source tx hash on BURN: {}, skipping", request.getSourceTxHash());
+                    throw new DuplicateTransactionException(
+                            "Source tx already processed: " + request.getSourceTxHash());
+                }
 
                 BridgeTransaction tx = new BridgeTransaction();
                 tx.setTxId(UUID.randomUUID().toString());
