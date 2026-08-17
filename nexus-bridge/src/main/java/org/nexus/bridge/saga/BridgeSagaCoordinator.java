@@ -15,6 +15,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -71,6 +73,28 @@ public class BridgeSagaCoordinator {
 
     /** 默认最大重试次数。 */
     private static final int DEFAULT_MAX_RETRIES = 3;
+
+    /**
+     * 中7 改进：指数退避基准延迟（毫秒）。
+     *
+     * <p>第 n 次重试延迟 = {@code BASE_RETRY_DELAY_MS * 2^n}：
+     * <ul>
+     *   <li>第 0 次（首次重试）：1000ms = 1s</li>
+     *   <li>第 1 次：2000ms = 2s</li>
+     *   <li>第 2 次：4000ms = 4s</li>
+     *   <li>第 3 次：8000ms = 8s</li>
+     * </ul>
+     * 避免立即重试加重链上压力。</p>
+     */
+    private static final long BASE_RETRY_DELAY_MS = 1000L;
+
+    /**
+     * 中7 改进：指数退避上限阈值（毫秒，5 分钟）。
+     *
+     * <p>当计算出的退避延迟超过此阈值时，跳过本次重试等待下次调度，
+     * 避免单次重试等待时间过长阻塞调度线程。</p>
+     */
+    private static final long MAX_RETRY_DELAY_MS = 300_000L;
 
     private final BridgeService bridgeService;
     private final SagaInstanceRepository sagaRepository;
@@ -312,23 +336,45 @@ public class BridgeSagaCoordinator {
      * <p>由定时任务或运维接口调用。每次重试递增 retryCount，
      * 超过 maxRetries 后不再自动重试，需人工介入。</p>
      *
+     * <p>中7 改进：指数退避策略。第 n 次重试前计算延迟
+     * {@code delayMs = 1000 * 2^retryCount}，若 delayMs 超过
+     * {@link #MAX_RETRY_DELAY_MS}（5 分钟）则跳过本次重试等待下次调度，
+     * 避免立即重试加重链上压力（如链上拥堵时频繁重试会加剧拥堵）。</p>
+     *
      * @return 实际重试的 Saga 数量
      */
     @Transactional
     public int retryFailedSagas() {
         List<SagaInstance> failed = sagaRepository.findByState(SagaState.FAILED);
         int retried = 0;
+        int skipped = 0;
         for (SagaInstance saga : failed) {
             if (!saga.canRetry()) {
                 continue;
             }
+
+            // 中7 改进：指数退避检查
+            long delayMs = (long) (BASE_RETRY_DELAY_MS * Math.pow(2, saga.getRetryCount()));
+            if (delayMs > MAX_RETRY_DELAY_MS) {
+                log.info("Saga {} retry skipped: exponential backoff delay {}ms exceeds threshold {}ms " +
+                                "(retryCount={}, will retry on next scheduled cycle)",
+                        saga.getId(), delayMs, MAX_RETRY_DELAY_MS, saga.getRetryCount());
+                skipped++;
+                continue;
+            }
+
             try {
+                log.info("Saga {} retry attempt {}/{} with exponential backoff delay {}ms",
+                        saga.getId(), saga.getRetryCount() + 1, saga.getMaxRetries(), delayMs);
                 retryOne(saga);
                 retried++;
             } catch (Exception e) {
                 log.warn("Retry saga {} failed (attempt {}/{}): {}",
                         saga.getId(), saga.getRetryCount() + 1, saga.getMaxRetries(), e.getMessage());
             }
+        }
+        if (skipped > 0) {
+            log.info("Retry cycle summary: retried={}, skipped due to backoff={}", retried, skipped);
         }
         return retried;
     }
@@ -358,9 +404,15 @@ public class BridgeSagaCoordinator {
      * <p>由应用启动事件或定时任务调用。EXECUTING / COMPENSATING
      * 状态的 Saga 视为崩溃残留，标记为 FAILED 等待人工处理。</p>
      *
+     * <p>中6 改进：通过 {@code @SchedulerLock} 分布式锁保证多实例部署时
+     * 同一时刻仅一个实例执行恢复，避免重复扫描与重复处理。
+     * 锁最多持有 4 分钟（覆盖单次恢复的最大耗时），至少持有 1 分钟
+     * （避免瞬时完成导致其他实例立即重复触发）。</p>
+     *
      * @return 恢复处理的 Saga 数量
      */
     @Transactional
+    @SchedulerLock(name = "recoverIncompleteSagas", lockAtMostFor = "PT4M", lockAtLeastFor = "PT1M")
     public int recoverIncompleteSagas() {
         List<SagaState> nonTerminal = new ArrayList<>();
         nonTerminal.add(SagaState.PENDING);

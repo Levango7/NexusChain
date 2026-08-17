@@ -34,9 +34,15 @@ class Wallet:
 
         Returns:
             新创建的 WalletInfo
+
+        Raises:
+            NotImplementedError: 本方法未实现，应使用 wallet-service API。
+                wallet-service（nexus-wallet-service）负责 KMS、密钥轮换与审计策略，
+                SDK 不应直接生成密钥对。
         """
-        # TODO: 生成 ECDSA 密钥对
-        raise NotImplementedError("Not yet implemented")
+        raise NotImplementedError(
+            "Wallet.create not implemented: use wallet-service API instead"
+        )
 
     def from_private_key(self, private_key: str) -> WalletInfo:
         """
@@ -47,9 +53,13 @@ class Wallet:
 
         Returns:
             导入的 WalletInfo
+
+        Raises:
+            NotImplementedError: 本方法未实现，应使用 wallet-service API。
         """
-        # TODO: 从私钥推导公钥和地址
-        raise NotImplementedError("Not yet implemented")
+        raise NotImplementedError(
+            "Wallet.from_private_key not implemented: use wallet-service API instead"
+        )
 
     def from_mnemonic(self, mnemonic: str, path: str = "m/44'/60'/0'/0/0") -> WalletInfo:
         """
@@ -61,9 +71,13 @@ class Wallet:
 
         Returns:
             导入的 WalletInfo
+
+        Raises:
+            NotImplementedError: 本方法未实现，应使用 wallet-service API。
         """
-        # TODO: 从助记词派生密钥对
-        raise NotImplementedError("Not yet implemented")
+        raise NotImplementedError(
+            "Wallet.from_mnemonic not implemented: use wallet-service API instead"
+        )
 
     def get_balance(self, address: str) -> int:
         """
@@ -97,9 +111,13 @@ class Wallet:
 
         Returns:
             代币余额（最小单位）
+
+        Raises:
+            NotImplementedError: 本方法未实现，应使用 wallet-service API 或直接调用合约。
         """
-        # TODO: 调用合约 balanceOf 方法
-        raise NotImplementedError("Not yet implemented")
+        raise NotImplementedError(
+            "Wallet.get_token_balance not implemented: use wallet-service API or call contract directly"
+        )
 
     def validate_address(self, address: str) -> bool:
         """
@@ -110,6 +128,10 @@ class Wallet:
 
         Returns:
             是否合法
+
+        Raises:
+            NotImplementedError: 本方法未实现，应使用 wallet-service API 或本地校验。
         """
-        # TODO: 地址格式校验
-        raise NotImplementedError("Not yet implemented")
+        raise NotImplementedError(
+            "Wallet.validate_address not implemented: use wallet-service API or validate locally"
+        )

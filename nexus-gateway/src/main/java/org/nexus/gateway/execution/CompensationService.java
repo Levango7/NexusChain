@@ -12,6 +12,8 @@ import org.nexus.sdk.client.feign.WalletMgmtFeignClient;
 import org.nexus.sdk.wallet.WithdrawalRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -73,6 +75,19 @@ public class CompensationService {
 
     private static final Logger log = LoggerFactory.getLogger(CompensationService.class);
 
+    /**
+     * 低6 改进：单次 handlePendingRefunds 处理的记录数上限。
+     *
+     * <p>PENDING 积压过多时（如链节点长时间不可达后恢复），一次查询全部记录
+     * 会导致：数据库连接池耗尽、单次对账耗时过长阻塞调度线程、
+     * 链上 RPC 批量调用打满链节点。通过 batchSize 限制单次处理量，
+     * 剩余记录由下次对账周期处理（最终一致）。</p>
+     *
+     * <p>默认 100，通过 {@code nexus.compensation.batch-size} 配置覆盖。</p>
+     */
+    @Value("${nexus.compensation.batch-size:100}")
+    private int batchSize;
+
     private final RefundRepository refundRepository;
     private final PaymentOrderRepository paymentOrderRepository;
     private final ChainRpcClient chainRpcClient;
@@ -97,18 +112,25 @@ public class CompensationService {
      * <p>由 {@link ReconciliationTask} 定时调用，扫描创建时间早于 {@code cutoff}
      * 且状态为 PENDING 的退款记录，逐条处理。</p>
      *
+     * <p>低6 改进：通过 {@code batchSize}（从 {@code nexus.compensation.batch-size} 读取，默认 100）
+     * 限制单次查询返回的记录数，避免 PENDING 积压过多时一次处理大批量记录
+     * 占用数据库连接池、阻塞调度线程。剩余记录由下次对账周期处理（最终一致）。</p>
+     *
      * @param cutoff 时间阈值（处理 createdAt < cutoff 的记录）
      * @return 处理的记录数量（含状态修正与补偿）
      */
     public int handlePendingRefunds(LocalDateTime cutoff) {
         Objects.requireNonNull(cutoff, "cutoff");
+        // 低6 改进：使用 Pageable 限制单次查询记录数，避免积压时一次处理过多
+        int effectiveBatchSize = batchSize > 0 ? batchSize : 100;
         List<Refund> pendingRefunds = refundRepository.findByStatusAndCreatedAtBefore(
-                Refund.RefundStatus.PENDING, cutoff);
+                Refund.RefundStatus.PENDING, cutoff, PageRequest.of(0, effectiveBatchSize));
         if (pendingRefunds.isEmpty()) {
             log.debug("No pending refunds to compensate before cutoff={}", cutoff);
             return 0;
         }
-        log.info("Compensating {} pending refunds created before {}", pendingRefunds.size(), cutoff);
+        log.info("Compensating {} pending refunds created before {} (batchSize={})",
+                pendingRefunds.size(), cutoff, effectiveBatchSize);
 
         int processed = 0;
         for (Refund refund : pendingRefunds) {
@@ -120,8 +142,8 @@ public class CompensationService {
                 log.error("Compensation failed for refund {}: {}", refund.getRefundNo(), e.getMessage(), e);
             }
         }
-        log.info("Compensation completed: processed={}/{}, cutoff={}",
-                processed, pendingRefunds.size(), cutoff);
+        log.info("Compensation completed: processed={}/{}, cutoff={}, batchSize={}",
+                processed, pendingRefunds.size(), cutoff, effectiveBatchSize);
         return processed;
     }
 

@@ -47,6 +47,14 @@ jobs:
           sed -i 's/\r$//' gradlew
           chmod +x gradlew
 
+      # P2-C6: Gradle wrapper 完整性校验
+      # 重新生成 wrapper 并与仓库版本对比，确保 gradle/wrapper/ 下文件未被篡改、版本一致。
+      # 若 runner 上 wrapper 与仓库不一致（例如被 PR 修改但未同步），git diff --exit-code 会非零退出。
+      - name: Validate Gradle wrapper
+        run: |
+          ./gradlew wrapper --gradle-version 8.5
+          git diff --exit-code gradle/wrapper/
+
       - name: 编译 (compileJava + compileTestJava)
         run: ./gradlew compileJava compileTestJava --no-daemon
 
@@ -78,18 +86,15 @@ jobs:
             --no-daemon --continue
 
       # P2-C6: Rust 测试（mpc-engine）
-      # continue-on-error: CI runner 可能未预装 Rust 工具链，避免阻断 Java 流水线。
-      # 若需强制门禁，可后续在 runner 预装 Rust 并移除 continue-on-error。
+      # 通过 dtolnay/rust-toolchain@stable 显式安装 Rust 工具链，作为强制门禁。
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           working-directory: mpc-engine
-        continue-on-error: true
 
       - name: Rust tests (mpc-engine)
         working-directory: mpc-engine
         run: cargo test --no-fail-fast
-        continue-on-error: true  # Rust 环境可能不可用，不阻断 Java CI
 
       - name: 生成 JaCoCo 覆盖率报告
         run: ./gradlew jacocoTestReport --no-daemon

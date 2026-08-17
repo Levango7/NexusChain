@@ -1,5 +1,7 @@
 package org.nexus.core.crypto.bls;
 
+import java.math.BigInteger;
+
 import org.bouncycastle.math.ec.ECPoint;
 
 /**
@@ -20,8 +22,25 @@ public class Secp256k1BlsPublicKey implements BlsPublicKey {
         return publicKeyPoint.getEncoded(true);
     }
 
-    ECPoint getPoint() {
+    /**
+     * 返回内部 ECPoint，仅供本包内部使用。
+     *
+     * <p>NOTE: 暴露内部点会破坏封装，调用方不应修改返回对象。</p>
+     */
+    private ECPoint getPoint() {
         return publicKeyPoint;
+    }
+
+    /**
+     * 计算公钥点乘以标量后的归一化点，供验签使用。
+     *
+     * <p>封装 {@code getPoint().multiply(scalar).normalize()}，避免暴露内部 ECPoint。</p>
+     *
+     * @param scalar 标量系数
+     * @return 归一化后的 ECPoint
+     */
+    ECPoint multiply(BigInteger scalar) {
+        return getPoint().multiply(scalar).normalize();
     }
 
     /**

@@ -106,6 +106,17 @@ impl mpc_crypto_service_server::MpcCryptoService for MpcCryptoServiceImpl {
             "rpc Dkg (MPC-P1-05: caller identity logged, MPC-P2-F5: distributed security)"
         );
 
+        // 中10: 在 DKG（创建新 session 的入口）触发过期清理，回收 Closed/超时 session。
+        // 选择在 DKG 触发而非 Sign/Aggregate：DKG 是 session 生命周期的起点，
+        // 在此处清理可避免创建新 session 时被过期 session 占用配额（与中11 max_sessions 协同）。
+        let reaped = self.session_mgr.cleanup_expired_sessions();
+        if reaped > 0 {
+            tracing::info!(
+                reaped,
+                "中10: expired sessions reaped before creating new session"
+            );
+        }
+
         // MPC-P2-F5: 创建 session 并绑定调用方身份（my_party_id 非空时）
         if !self.my_party_id.is_empty() && !req.session_id.is_empty() && req.party_index >= 0 {
             self.session_mgr
@@ -282,8 +293,9 @@ impl MtlsConfig {
 // 校验每个 RPC 请求的 `Authorization: Bearer <token>` 头：
 //   * 缺失 / 非 Bearer 格式 / token 不匹配 → 返回 UNAUTHENTICATED 拒绝
 //   * expected_token 为空 → 跳过校验（开发模式，记录警告于启动时）
-// token 比较使用普通 ==（非常量时间）：Bearer token 非密码，失败立即拒绝，
-// 时序攻击收益有限；生产环境应配合 mTLS 使用。
+// 中13: token 比较使用常量时间比较（constant_time_compare），防止时序攻击
+// 泄露 token 字节信息。虽然 Bearer token 失败立即拒绝，但攻击者可通过精细计时
+// 测量比较耗时逐字节猜测 token；常量时间比较消除此侧信道。
 
 /// `Authorization` metadata 头名。
 const AUTHORIZATION_HEADER: &str = "authorization";
@@ -291,11 +303,36 @@ const AUTHORIZATION_HEADER: &str = "authorization";
 /// Bearer 前缀（RFC 6750）。
 const BEARER_PREFIX: &str = "Bearer ";
 
+/// 中13: 常量时间字节比较（防时序攻击）。
+///
+/// 无论 `a` 与 `b` 在何处出现首个差异，此函数都遍历到末尾，耗时仅取决于长度，
+/// 不泄露任何字节位置信息。长度不同时直接返回 `false`（长度本身非敏感信息）。
+///
+/// # 算法
+/// 1. 长度不同 → `false`（长度是公开信息，不构成时序侧信道）
+/// 2. 累积所有对应字节的 XOR，若全相同则结果为 0
+///
+/// # 替代实现
+/// 生产环境可使用 `subtle::ConstantTimeEq`（`subtle` crate）替代此手写实现，
+/// 此处为避免新增依赖采用手写版本，逻辑等价。
+fn constant_time_compare(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut result = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        result |= x ^ y;
+    }
+    result == 0
+}
+
 /// gRPC 认证拦截器（MPC-P1-05）。
 ///
 /// 实现 `tonic::service::Interceptor`，校验每个 RPC 请求的
 /// `Authorization: Bearer <token>` 头。`expected_token` 为空时跳过校验
 /// （开发模式）；非空时严格校验，失败返回 `Status::unauthenticated`。
+///
+/// 中13: token 比较使用 `constant_time_compare`（常量时间），防时序攻击。
 #[derive(Clone)]
 pub struct AuthInterceptor {
     /// 期望的 Bearer token 值（不含 "Bearer " 前缀）。空表示跳过校验。
@@ -346,13 +383,72 @@ impl tonic::service::Interceptor for AuthInterceptor {
         }
 
         // 提取并校验 token（不记录实际 token 值）
+        // 中13: 使用常量时间比较替代普通 !=，防时序攻击
         let provided_token = &auth_header[BEARER_PREFIX.len()..];
-        if provided_token != self.expected_token {
-            tracing::warn!("MPC-P1-05: gRPC request rejected — auth token mismatch");
+        if !constant_time_compare(provided_token.as_bytes(), self.expected_token.as_bytes()) {
+            tracing::warn!("MPC-P1-05: gRPC request rejected — auth token mismatch (constant-time compare, 中13)");
             return Err(Status::unauthenticated("Invalid auth token"));
         }
 
         tracing::debug!("MPC-P1-05: gRPC request authorized");
         Ok(req.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ===== 中13: constant_time_compare 单元测试 =====
+
+    #[test]
+    fn constant_time_compare_equal_slices() {
+        assert!(constant_time_compare(b"abc", b"abc"));
+        assert!(constant_time_compare(b"", b""));
+        assert!(constant_time_compare(b"Bearer xyz123", b"Bearer xyz123"));
+    }
+
+    #[test]
+    fn constant_time_compare_different_slices() {
+        assert!(!constant_time_compare(b"abc", b"abd"));
+        assert!(!constant_time_compare(b"abc", b"xbc"));
+        assert!(!constant_time_compare(b"abc", b"abC"));
+    }
+
+    #[test]
+    fn constant_time_compare_different_lengths() {
+        assert!(!constant_time_compare(b"abc", b"ab"));
+        assert!(!constant_time_compare(b"abc", b"abcd"));
+        assert!(!constant_time_compare(b"", b"a"));
+    }
+
+    #[test]
+    fn auth_interceptor_accepts_correct_token() {
+        let mut interceptor = AuthInterceptor::new("secret-token".to_string());
+        let mut req = Request::new(());
+        req.metadata_mut().insert(
+            AUTHORIZATION_HEADER,
+            "Bearer secret-token".parse().unwrap(),
+        );
+        assert!(interceptor.call(&req).is_ok());
+    }
+
+    #[test]
+    fn auth_interceptor_rejects_wrong_token() {
+        let mut interceptor = AuthInterceptor::new("secret-token".to_string());
+        let mut req = Request::new(());
+        req.metadata_mut().insert(
+            AUTHORIZATION_HEADER,
+            "Bearer wrong-token".parse().unwrap(),
+        );
+        let err = interceptor.call(&req).unwrap_err();
+        assert_eq!(err.code(), tonic::Code::Unauthenticated);
+    }
+
+    #[test]
+    fn auth_interceptor_skips_when_token_empty() {
+        let mut interceptor = AuthInterceptor::new(String::new());
+        let req = Request::new(());
+        assert!(interceptor.call(&req).is_ok(), "empty token should skip auth");
     }
 }

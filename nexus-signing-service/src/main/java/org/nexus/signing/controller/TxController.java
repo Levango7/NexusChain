@@ -152,7 +152,11 @@ public class TxController {
                                     BigDecimal amount, HttpServletRequest request) throws IOException {
         // P2-F1：提取调用方信息用于审计
         String actor = AuditLogService.resolveActor("anonymous");
-        String sourceIp = AuditLogService.resolveSourceIp(request);
+        // 中9：使用实例方法 extractClientIp，仅信任可信代理的 X-Forwarded-For。
+        // auditLogService 为 null（测试环境）时回退到 RemoteAddr（最安全，不信任 XFF）。
+        String sourceIp = auditLogService != null
+                ? auditLogService.extractClientIp(request)
+                : request.getRemoteAddr();
 
         // P2-F1：大额签名触发多签审批（简化版：记录审批请求，不阻断签名）
         if (signingApprovalService != null

@@ -317,6 +317,21 @@ nexus:
       reconciliation-batch-size: 100
       # 是否启用定时对账（测试环境可关闭）
       enabled: true
+      # 低5 改进：阶段2（链上执行）超时时间（秒）
+      # 链上广播 + 入池通常 <10s，30s 留充足余量。超时后标记 FAILED 触发补偿。
+      phase2-timeout-seconds: 30
+
+  # 低5/低6 改进：执行补偿模式参数
+  # 独立配置命名空间，与 gatewayservice.execution 互补，供 ThreePhaseExecutionTemplate
+  # 与 CompensationService 读取（也通过 @Value 默认值兜底，未配置时使用 30s / 100）。
+  execution:
+    # 阶段2 链上执行超时（秒），与 gatewayservice.execution.phase2-timeout-seconds 同义
+    phase2-timeout-seconds: 30
+
+  # 低6 改进：补偿服务批量处理参数
+  compensation:
+    # 单次 handlePendingRefunds 处理的记录数上限（避免一次处理过多记录占用连接池）
+    batch-size: 100
 
 logging:
   level:

@@ -22,14 +22,19 @@
 
 ### 1. 钱包管理 (Wallet)
 
-| 方法 | 参数 | 返回值 | 说明 |
-|------|------|--------|------|
-| create() | - | WalletInfo | 创建新钱包 |
-| fromPrivateKey(pk) | privateKey: string | WalletInfo | 从私钥导入 |
-| fromMnemonic(mnemonic, path) | mnemonic, path | WalletInfo | 从助记词导入 |
-| getBalance(address) | address: string | string/int | 查询 NEX 余额 |
-| getTokenBalance(addr, contract) | address, tokenContract | string/int | 查询代币余额 |
-| validateAddress(address) | address: string | boolean | 验证地址 |
+> **Not Implemented** 标注的方法在 SDK 中仅保留接口签名，调用时会返回明确的 error / NotImplementedError。
+> 这些方法涉及密钥材料生成/导入，必须由 **nexus-wallet-service**（独立微服务）执行，
+> 该服务负责 KMS 集成、密钥轮换与审计策略。SDK 不应直接处理密钥。
+> 已实现的方法（getBalance）通过 RPC 与节点交互，不接触密钥材料。
+
+| 方法 | 参数 | 返回值 | 状态 | 说明 |
+|------|------|--------|------|------|
+| create() | - | WalletInfo | **Not Implemented** | 创建新钱包，请改用 wallet-service API |
+| fromPrivateKey(pk) | privateKey: string | WalletInfo | **Not Implemented** | 从私钥导入，请改用 wallet-service API |
+| fromMnemonic(mnemonic, path) | mnemonic, path | WalletInfo | **Not Implemented** | 从助记词导入，请改用 wallet-service API |
+| getBalance(address) | address: string | string/int | Implemented | 查询 NEX 余额（通过 nexus_getBalance RPC） |
+| getTokenBalance(addr, contract) | address, tokenContract | string/int | **Not Implemented** | 查询代币余额，请改用 wallet-service API 或直接调用合约 |
+| validateAddress(address) | address: string | boolean | **Not Implemented** | 验证地址，请改用 wallet-service API 或本地校验 |
 
 ### 2. 交易管理 (Transaction)
 
@@ -45,14 +50,14 @@
 
 ### 3. RPC 客户端
 
-| 方法 | 参数 | 返回值 | 说明 |
-|------|------|--------|------|
-| call(method, params) | method, params | any | 通用 RPC 调用 |
-| batchCall(requests) | RpcRequest[] | RpcResponse[] | 批量请求 |
-| getBlockNumber() | - | number | 当前区块高度 |
-| getBlockByHash(hash) | string | Block | 按哈希查区块 |
-| getBlockByNumber(num) | number | Block | 按高度查区块 |
-| getChainId() | - | number | 链 ID |
+| 方法 | 参数 | 返回值 | 状态 | 说明 |
+|------|------|--------|------|------|
+| call(method, params) | method, params | any | Implemented | 通用 RPC 调用 |
+| batchCall(requests) | RpcRequest[] | RpcResponse[] | Implemented | 批量请求 |
+| getBlockNumber() | - | number | Implemented | 当前区块高度（内部调用 nexus_getLatestBlocks） |
+| getBlockByHash(hash) | string | Block | **Not Implemented** (nexus-core) | 按哈希查区块，SDK 保留接口但抛错，建议改用 getBlockByNumber |
+| getBlockByNumber(num) | number | Block | Implemented | 按高度查区块（内部调用 nexus_getBlockByHeight） |
+| getChainId() | - | number | Implemented | 链 ID（内部调用 nexus_getNodeStatus 解析 chainId 字段） |
 
 ### 4. 支付通道 (PaymentChannel)
 
@@ -87,20 +92,32 @@
 
 ## RPC 方法列表
 
-NexusChain 节点支持的 JSON-RPC 方法：
+NexusChain 节点支持的 JSON-RPC 方法（nexus_ 前缀）。
 
-| 方法 | 说明 |
-|------|------|
-| nexus_blockNumber | 获取当前区块高度 |
-| nexus_getBlockByHash | 按哈希获取区块 |
-| nexus_getBlockByNumber | 按高度获取区块 |
-| nexus_chainId | 获取链 ID |
-| nexus_getBalance | 获取账户余额 |
-| nexus_getTransactionCount | 获取交易计数（nonce） |
-| nexus_gasPrice | 获取当前 Gas 价格 |
-| nexus_estimateGas | 估算交易 Gas |
-| nexus_sendRawTransaction | 广播已签名交易 |
-| nexus_getTransactionReceipt | 获取交易回执 |
+> **注意**：早期 SDK 文档中出现的 `nexus_blockNumber` / `nexus_getBlockByNumber` /
+> `nexus_chainId` / `nexus_gasPrice` 在 nexus-core 当前版本中**未实现**。
+> SDK 已通过下表中的兼容方法兜底，详见各语言 RpcClient 实现。
+
+| 方法 | 状态 | 说明 | SDK 兼容策略 |
+|------|------|------|--------------|
+| nexus_getLatestBlocks | Implemented | 获取最新区块列表（取首个区块高度即 blockNumber） | SDK getBlockNumber() 调用此方法取 list[0].number |
+| nexus_getBlockByHeight | Implemented | 按高度获取区块 | SDK getBlockByNumber() 调用此方法 |
+| nexus_getBlockByHash | **Not Implemented** (nexus-core) | 按哈希获取区块 | SDK 保留接口但抛错，建议改用 getBlockByHeight |
+| nexus_getNodeStatus | Implemented | 获取节点状态（含 chainId、gasPrice 等） | SDK getChainId()/getGasPrice() 从此方法解析对应字段 |
+| nexus_getBalance | Implemented | 获取账户余额 | 直接调用 |
+| nexus_getTransactionCount | Implemented | 获取交易计数（nonce） | 直接调用 |
+| nexus_estimateGas | Implemented | 估算交易 Gas | 直接调用 |
+| nexus_sendRawTransaction | Implemented | 广播已签名交易 | 直接调用 |
+| nexus_getTransactionReceipt | Implemented | 获取交易回执 | 直接调用 |
+
+### 已弃用 / 未实现的 RPC 方法
+
+| 旧方法名 | 替代方法 | 说明 |
+|----------|----------|------|
+| nexus_blockNumber | nexus_getLatestBlocks | nexus-core 未提供，SDK 已切换 |
+| nexus_getBlockByNumber | nexus_getBlockByHeight | nexus-core 未提供，SDK 已切换 |
+| nexus_chainId | nexus_getNodeStatus | nexus-core 未提供，SDK 从节点状态解析 |
+| nexus_gasPrice | nexus_getNodeStatus | nexus-core 未提供，SDK 从节点状态解析 gasPrice 字段，缺省返回 1 gwei |
 
 ## Protobuf 协议
 

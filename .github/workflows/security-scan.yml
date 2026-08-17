@@ -37,7 +37,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Trivy fs 扫描 → SARIF（全量漏洞，不阻断）
-        uses: aquasecurity/trivy-action@v0.20.0
+        # 钉 commit sha 提升供应链安全（v0.20.0 → b2933f565dbc598b29947660e66259e3c7bc8561）
+        # 更新策略：随依赖升级一并更新，需安全负责人审批
+        uses: aquasecurity/trivy-action@b2933f565dbc598b29947660e66259e3c7bc8561  # v0.20.0
         with:
           scan-type: fs
           scan-ref: .
@@ -54,7 +56,9 @@ jobs:
           category: trivy-fs
 
       - name: Trivy fs 扫描 → JSON（用于 issue 分诊）
-        uses: aquasecurity/trivy-action@v0.20.0
+        # 钉 commit sha 提升供应链安全（v0.20.0 → b2933f565dbc598b29947660e66259e3c7bc8561）
+        # 更新策略：随依赖升级一并更新，需安全负责人审批
+        uses: aquasecurity/trivy-action@b2933f565dbc598b29947660e66259e3c7bc8561  # v0.20.0
         with:
           scan-type: fs
           scan-ref: .
@@ -67,7 +71,9 @@ jobs:
       # === SCA: CycloneDX SBOM 产出（P2-T7） ===
       # 生成 CycloneDX 格式的软件物料清单（SBOM），用于依赖合规审计与漏洞追踪
       - name: Trivy 生成 CycloneDX SBOM
-        uses: aquasecurity/trivy-action@v0.20.0
+        # 钉 commit sha 提升供应链安全（v0.20.0 → b2933f565dbc598b29947660e66259e3c7bc8561）
+        # 更新策略：随依赖升级一并更新，需安全负责人审批
+        uses: aquasecurity/trivy-action@b2933f565dbc598b29947660e66259e3c7bc8561  # v0.20.0
         with:
           scan-type: fs
           scan-ref: .
@@ -86,7 +92,9 @@ jobs:
           retention-days: 30
 
       - name: Trivy fs 扫描（CRITICAL,HIGH 阻断）
-        uses: aquasecurity/trivy-action@v0.20.0
+        # 钉 commit sha 提升供应链安全（v0.20.0 → b2933f565dbc598b29947660e66259e3c7bc8561）
+        # 更新策略：随依赖升级一并更新，需安全负责人审批
+        uses: aquasecurity/trivy-action@b2933f565dbc598b29947660e66259e3c7bc8561  # v0.20.0
         with:
           scan-type: fs
           scan-ref: .
@@ -109,7 +117,20 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        module: [nexus-gateway, nexus-bridge]
+        # P2-C7: 扩展至全部含 Dockerfile 的模块（与 ci.yml docker-build job 保持一致）
+        module:
+          - nexus-core
+          - nexus-gateway
+          - nexus-bridge
+          - nexus-signing-service
+          - nexus-wallet-service
+          - nexus-api-gateway
+          - nexus-settlement
+          - nexus-compliance
+          - nexus-analytics
+          - nexus-oracle
+          - mpc-engine
+          - zk-groth16-service
     steps:
       - name: Checkout 代码
         uses: actions/checkout@v4
@@ -118,7 +139,9 @@ jobs:
         run: docker build -t ${{ matrix.module }}:scan ./${{ matrix.module }}
 
       - name: Trivy 镜像扫描 → SARIF
-        uses: aquasecurity/trivy-action@v0.20.0
+        # 钉 commit sha 提升供应链安全（v0.20.0 → b2933f565dbc598b29947660e66259e3c7bc8561）
+        # 更新策略：随依赖升级一并更新，需安全负责人审批
+        uses: aquasecurity/trivy-action@b2933f565dbc598b29947660e66259e3c7bc8561  # v0.20.0
         with:
           image-ref: ${{ matrix.module }}:scan
           severity: CRITICAL,HIGH,MEDIUM,LOW
@@ -133,7 +156,9 @@ jobs:
           category: trivy-docker-${{ matrix.module }}
 
       - name: Trivy 镜像扫描（CRITICAL,HIGH 阻断）
-        uses: aquasecurity/trivy-action@v0.20.0
+        # 钉 commit sha 提升供应链安全（v0.20.0 → b2933f565dbc598b29947660e66259e3c7bc8561）
+        # 更新策略：随依赖升级一并更新，需安全负责人审批
+        uses: aquasecurity/trivy-action@b2933f565dbc598b29947660e66259e3c7bc8561  # v0.20.0
         with:
           image-ref: ${{ matrix.module }}:scan
           # P2-C7: 镜像扫描同步提升至 CRITICAL,HIGH 阻断

@@ -72,6 +72,12 @@ nexus:
     # 是否记录鉴权失败事件（401/403）。高频鉴权失败可能产生大量日志，
     # 可在 Prometheus 告警已覆盖时关闭以减少日志量。
     log-auth-failure: ${NEX_AUDIT_LOG_AUTH_FAILURE:true}
+    # === 中9：可信代理 IP 列表（逗号分隔），用于审计日志提取客户端真实 IP ===
+    # 仅当请求的直接来源 IP（RemoteAddr）在此列表中时，才信任 X-Forwarded-For 头。
+    # 空字符串表示不信任任何代理，始终使用 RemoteAddr（最安全，gateway 直连场景除外）。
+    # 生产环境应配置 gateway / nginx / SLB 的内网 IP，防止客户端伪造 X-Forwarded-For。
+    # 示例：trusted-proxy-ips=10.0.0.1,10.0.0.2,172.16.0.0/12（暂不支持 CIDR，仅精确 IP）
+    trusted-proxy-ips: ${NEX_AUDIT_TRUSTED_PROXY_IPS:}
   # === P2-F1：多签审批配置 ===
   # SigningApprovalService 对大额签名操作要求多签审批：
   # 金额 ≥ large-amount-threshold 时创建审批请求，收集足够审批签名后才执行签名。
