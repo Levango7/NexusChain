@@ -1,8 +1,13 @@
 package org.nexus.core.crypto.bls;
 
 import java.math.BigInteger;
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.Arrays;
+import java.util.Comparator;
+import java.util.List;
+import java.util.stream.Collectors;
 
 import org.bouncycastle.math.ec.ECPoint;
 
@@ -13,6 +18,9 @@ import org.bouncycastle.math.ec.ECPoint;
  * 生产环境应接入blst原生库做完整BLS12-381配对验签。</p>
  */
 public class Secp256k1BlsSignature implements BlsSignature {
+    /** 域分离因子，防止不同用途的哈希碰撞。 */
+    private static final String DST = "NEXUS_BLS_V1";
+
     private final ECPoint signaturePoint;
 
     public Secp256k1BlsSignature(ECPoint signaturePoint) {
@@ -51,6 +59,9 @@ public class Secp256k1BlsSignature implements BlsSignature {
 
     /**
      * 聚合多个签名（EC点加法）。
+     *
+     * <p>NOTE: 此方法不包含 rogue-key attack 防护，仅适用于所有签名方可信的场景。
+     * 对于不可信/公开聚合场景，应使用 {@link #aggregateWithCoefficients}。</p>
      */
     public static Secp256k1BlsSignature aggregate(java.util.List<Secp256k1BlsSignature> signatures) {
         if (signatures == null || signatures.isEmpty()) {
@@ -63,9 +74,66 @@ public class Secp256k1BlsSignature implements BlsSignature {
         return new Secp256k1BlsSignature(aggregated);
     }
 
+    /**
+     * 带rogue-key防护的聚合签名。
+     *
+     * <p>每个签名用系数 {@code coeff_i = hash(pk_i || all_pks_sorted)} 加权，
+     * 实现 coefficients-based aggregation（基于 proof-of-possession 思想），
+     * 防止恶意验证者构造 {@code pk' = pk - sk'*G} 后用 sk' 单独签名伪造聚合签名。</p>
+     *
+     * <p>聚合签名 = Σ coeff_i * σ_i；验签时聚合公钥 = Σ coeff_i * pk_i。</p>
+     *
+     * @param signatures 待聚合的签名列表
+     * @param publicKeys 对应公钥列表，长度必须与 signatures 一致
+     * @return 加权聚合后的签名
+     * @throws IllegalArgumentException 若入参为空或长度不一致
+     */
+    public static Secp256k1BlsSignature aggregateWithCoefficients(
+            List<Secp256k1BlsSignature> signatures,
+            List<Secp256k1BlsPublicKey> publicKeys) {
+        if (signatures == null || signatures.isEmpty()
+                || publicKeys == null || publicKeys.size() != signatures.size()) {
+            throw new IllegalArgumentException(
+                    "Signatures and public keys must be non-empty and same size");
+        }
+        // 排序所有公钥的字节表示，确保系数计算确定性
+        List<byte[]> sortedPkBytes = publicKeys.stream()
+                .map(Secp256k1BlsPublicKey::toBytesCompressed)
+                .sorted(Comparator.comparingInt(Arrays::hashCode))
+                .collect(Collectors.toList());
+
+        ECPoint aggregated = null;
+        for (int i = 0; i < signatures.size(); i++) {
+            BigInteger coeff = computeCoefficient(
+                    publicKeys.get(i).toBytesCompressed(), sortedPkBytes);
+            ECPoint weightedSig = signatures.get(i).signaturePoint.multiply(coeff).normalize();
+            aggregated = (aggregated == null) ? weightedSig : aggregated.add(weightedSig).normalize();
+        }
+        return new Secp256k1BlsSignature(aggregated);
+    }
+
+    /**
+     * 计算 rogue-key 防护系数：{@code hash(pk_i || all_pks_sorted)}。
+     */
+    private static BigInteger computeCoefficient(byte[] pkBytes, List<byte[]> sortedPkBytes) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            digest.update(pkBytes);
+            for (byte[] pk : sortedPkBytes) {
+                digest.update(pk);
+            }
+            return new BigInteger(1, digest.digest()).mod(Secp256k1BlsSigner.getN());
+        } catch (NoSuchAlgorithmException e) {
+            throw new RuntimeException("SHA-256 not available", e);
+        }
+    }
+
     private static BigInteger hashToScalar(byte[] message) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            // 域分离因子前缀，防止不同用途的哈希碰撞
+            digest.update(DST.getBytes(StandardCharsets.UTF_8));
+            digest.update((byte) 0); // DST 与 message 之间的分隔符
             byte[] hash = digest.digest(message);
             return new BigInteger(1, hash).mod(Secp256k1BlsSigner.getN());
         } catch (NoSuchAlgorithmException e) {

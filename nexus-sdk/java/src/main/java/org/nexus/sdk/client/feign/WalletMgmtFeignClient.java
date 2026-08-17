@@ -111,6 +111,24 @@ public interface WalletMgmtFeignClient {
     @GetMapping("/withdrawal/{requestId}")
     WithdrawalRequest getWithdrawal(@PathVariable("requestId") String requestId);
 
+    /**
+     * 补偿提现：释放冻结余额并回滚提现请求状态。
+     *
+     * <p>对应 {@code POST /api/v1/wallet/withdrawal/{requestId}/compensate}。
+     * 由 gateway 的 {@code CompensationService} 在三阶段执行模式中检测到
+     * 提现 PENDING 超时且未上链时调用，触发 wallet-service 释放冻结余额
+     * 并将提现请求标记为 FAILED/COMPENSATED。</p>
+     *
+     * <p><strong>幂等性</strong>：wallet-service 端必须保证幂等——若该 requestId
+     * 已补偿则直接返回当前状态，不重复释放余额。Feign fallback 返回 {@code null}，
+     * 调用方按补偿失败处理（等待下次对账重试）。</p>
+     *
+     * @param requestId 提现请求 ID
+     * @return 补偿后的提现请求状态；失败/fallback 返回 {@code null}
+     */
+    @PostMapping("/withdrawal/{requestId}/compensate")
+    WithdrawalRequest compensateWithdrawal(@PathVariable("requestId") String requestId);
+
     // === 托管 ===
 
     /**

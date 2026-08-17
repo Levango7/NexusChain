@@ -1,10 +1,15 @@
 package org.nexus.gateway.execution;
 
 import org.nexus.gateway.client.ChainRpcClient;
+import org.nexus.gateway.clearing.SettlementBatch;
+import org.nexus.gateway.clearing.SettlementBatchRepository;
+
 import org.nexus.gateway.model.PaymentOrder;
 import org.nexus.gateway.model.Refund;
 import org.nexus.gateway.repository.PaymentOrderRepository;
 import org.nexus.gateway.repository.RefundRepository;
+import org.nexus.sdk.client.feign.WalletMgmtFeignClient;
+import org.nexus.sdk.wallet.WithdrawalRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -40,8 +45,10 @@ import java.util.Objects;
  *   <li><strong>补偿操作</strong>：根据操作类型执行反向操作
  *       <ul>
  *         <li>refund 失败 → 无需补偿（资金未转出，仅需回滚订单状态到 PAID 允许重试）</li>
- *         <li>withdrawal 失败 → 释放冻结余额（通过 Feign 调用 wallet-service）</li>
- *         <li>settlement 失败 → 回滚清算状态（通过 Feign 调用 settlement-service）</li>
+ *         <li>withdrawal 失败 → 释放冻结余额（通过 Feign 调用 wallet-service
+ *             {@code POST /api/v1/wallet/withdrawal/{requestId}/compensate}）</li>
+ *         <li>settlement 失败 → 回滚清算状态（进程内调用 SettlementBatchRepository，
+ *             将批次状态从 EXECUTING/FAILED 回滚到 OPEN 允许重试）</li>
  *       </ul>
  *   </li>
  * </ol>
@@ -69,13 +76,19 @@ public class CompensationService {
     private final RefundRepository refundRepository;
     private final PaymentOrderRepository paymentOrderRepository;
     private final ChainRpcClient chainRpcClient;
+    private final WalletMgmtFeignClient walletMgmtFeignClient;
+    private final SettlementBatchRepository settlementBatchRepository;
 
     public CompensationService(RefundRepository refundRepository,
                                PaymentOrderRepository paymentOrderRepository,
-                               ChainRpcClient chainRpcClient) {
+                               ChainRpcClient chainRpcClient,
+                               WalletMgmtFeignClient walletMgmtFeignClient,
+                               SettlementBatchRepository settlementBatchRepository) {
         this.refundRepository = refundRepository;
         this.paymentOrderRepository = paymentOrderRepository;
         this.chainRpcClient = chainRpcClient;
+        this.walletMgmtFeignClient = walletMgmtFeignClient;
+        this.settlementBatchRepository = settlementBatchRepository;
     }
 
     /**
@@ -219,17 +232,33 @@ public class CompensationService {
     }
 
     /**
-     * 通用补偿入口（供未来扩展支持 withdrawal / settlement）。
+     * 通用补偿入口（支持 REFUND / WITHDRAWAL / SETTLEMENT 三类操作）。
      *
-     * <p>当前实现仅处理 REFUND。WITHDRAWAL 与 SETTLEMENT 的补偿需跨服务调用：
+     * <p>补偿策略按操作类型分发：
      * <ul>
-     *   <li>WITHDRAWAL 失败 → 释放冻结余额（通过 Feign 调用 wallet-service 补偿端点）</li>
-     *   <li>SETTLEMENT 失败 → 回滚清算状态（通过 Feign 调用 settlement-service 补偿端点）</li>
+     *   <li><strong>REFUND</strong>：由 {@link #handlePendingRefunds} 处理，此处无需额外操作
+     *       （refund 失败资金未转出，仅需回滚订单状态到 PAID）</li>
+     *   <li><strong>WITHDRAWAL</strong>：通过 Feign 调用 wallet-service 补偿端点
+     *       {@code POST /api/v1/wallet/withdrawal/{requestId}/compensate} 释放冻结余额。
+     *       Feign fallback 返回 {@code null}，调用方按补偿失败处理（等待下次对账重试）</li>
+     *   <li><strong>SETTLEMENT</strong>：settlement 为 composite build 依赖（进程内调用），
+     *       直接通过 {@link SettlementBatchRepository} 回滚批次状态到 OPEN 允许重试。
+     *       若批次已 COMPLETED 则跳过（幂等），若批次不存在则记录告警</li>
      * </ul>
-     * 这两个策略将在后续迭代中通过 Feign 客户端接入，本方法保留扩展点。</p>
+     * </p>
      *
-     * @param operationType 操作类型
-     * @param recordId      记录 ID
+     * <p><strong>容错语义</strong>：单条记录补偿失败不抛异常，仅记录 ERROR 日志，
+     * 由 {@code ReconciliationTask} 下次对账周期重试，确保不阻塞其他记录处理。</p>
+     *
+     * <p><strong>幂等性</strong>：所有补偿操作必须幂等：
+     * <ul>
+     *   <li>WITHDRAWAL：wallet-service 端保证幂等（已补偿则直接返回当前状态）</li>
+     *   <li>SETTLEMENT：本方法在回滚前校验批次状态，仅 EXECUTING/FAILED 才回滚到 OPEN</li>
+     * </ul>
+     * </p>
+     *
+     * @param operationType  操作类型
+     * @param recordId       记录 ID（withdrawal 的 requestId / settlement 的 batchId）
      * @param idempotencyKey 幂等键
      */
     public void compensate(ExecutionRequest.OperationType operationType,
@@ -243,15 +272,96 @@ public class CompensationService {
                 log.debug("Refund compensation handled by handlePendingRefunds");
                 break;
             case WITHDRAWAL:
-                // TODO: 通过 Feign 调用 wallet-service 补偿端点释放冻结余额
-                log.warn("Withdrawal compensation not yet implemented (requires wallet-service Feign call)");
+                compensateWithdrawal(recordId);
                 break;
             case SETTLEMENT:
-                // TODO: 通过 Feign 调用 settlement-service 补偿端点回滚清算状态
-                log.warn("Settlement compensation not yet implemented (requires settlement-service Feign call)");
+                compensateSettlement(recordId);
                 break;
             default:
                 log.warn("Unknown operation type for compensation: {}", operationType);
+        }
+    }
+
+    /**
+     * 提现补偿：通过 Feign 调用 wallet-service 补偿端点释放冻结余额。
+     *
+     * <p>对应 wallet-service {@code POST /api/v1/wallet/withdrawal/{requestId}/compensate}。
+     * Feign 调用失败时由 {@link org.nexus.sdk.client.feign.fallback.WalletMgmtFallbackFactory}
+     * 路由到 {@link org.nexus.gateway.fallback.WalletMgmtFallback#compensateWithdrawal(String)}
+     * 返回 {@code null}，本方法据此记录补偿失败日志，等待下次对账重试。</p>
+     *
+     * <p>容错：不抛异常，让对账任务继续处理其他记录。</p>
+     *
+     * @param recordId 提现记录 ID（转换为 String 作为 requestId 调用 Feign）
+     */
+    private void compensateWithdrawal(Long recordId) {
+        if (recordId == null) {
+            log.warn("Withdrawal compensation skipped: recordId is null");
+            return;
+        }
+        String requestId = String.valueOf(recordId);
+        try {
+            WithdrawalRequest result = walletMgmtFeignClient.compensateWithdrawal(requestId);
+            if (result != null) {
+                log.info("Withdrawal {} compensated successfully: status={}",
+                        requestId, result.getStatus());
+            } else {
+                // Feign fallback 触发（wallet-service 不可用 / 熔断 / 限流）
+                log.error("Withdrawal {} compensation failed: Feign fallback returned null " +
+                        "(wallet-service unavailable), will retry on next reconciliation", requestId);
+            }
+        } catch (Exception e) {
+            log.error("Failed to compensate withdrawal {}: {}", requestId, e.getMessage(), e);
+            // 不抛异常，让对账任务继续处理其他记录
+        }
+    }
+
+    /**
+     * 结算补偿：回滚 settlement batch 状态到 OPEN 允许重试。
+     *
+     * <p>settlement 为 composite build 依赖（进程内调用 {@code ClearingEngine}），
+     * 无需 Feign 跨服务调用，直接通过 {@link SettlementBatchRepository} 操作批次状态。</p>
+     *
+     * <p>补偿策略：
+     * <ul>
+     *   <li>批次状态为 EXECUTING 或 FAILED → 回滚到 OPEN，允许 {@code DefaultSettlementService.executeSettlement} 重试</li>
+     *   <li>批次状态为 COMPLETED → 跳过（幂等，避免重复回滚已完成的结算）</li>
+     *   <li>批次状态为 OPEN → 跳过（无需补偿）</li>
+     *   <li>批次不存在 → 记录告警，等待人工介入</li>
+     * </ul>
+     * </p>
+     *
+     * <p>容错：不抛异常，让对账任务继续处理其他记录。</p>
+     *
+     * @param recordId settlement batch ID
+     */
+    private void compensateSettlement(Long recordId) {
+        if (recordId == null) {
+            log.warn("Settlement compensation skipped: recordId is null");
+            return;
+        }
+        try {
+            SettlementBatch batch = settlementBatchRepository.findById(recordId).orElse(null);
+            if (batch == null) {
+                log.warn("Settlement compensation skipped: batch {} not found, " +
+                        "may require manual intervention", recordId);
+                return;
+            }
+            SettlementBatch.BatchStatus currentStatus = batch.getStatus();
+            if (currentStatus == SettlementBatch.BatchStatus.EXECUTING
+                    || currentStatus == SettlementBatch.BatchStatus.FAILED) {
+                batch.setStatus(SettlementBatch.BatchStatus.OPEN);
+                settlementBatchRepository.save(batch);
+                log.info("Settlement {} compensation: batchNo={} status rolled back from {} to OPEN " +
+                        "(allow retry)", recordId, batch.getBatchNo(), currentStatus);
+            } else {
+                log.debug("Settlement {} compensation skipped: batchNo={} status is {} " +
+                        "(not EXECUTING/FAILED, idempotent skip)",
+                        recordId, batch.getBatchNo(), currentStatus);
+            }
+        } catch (Exception e) {
+            log.error("Failed to compensate settlement {}: {}", recordId, e.getMessage(), e);
+            // 不抛异常，让对账任务继续处理其他记录
         }
     }
 }

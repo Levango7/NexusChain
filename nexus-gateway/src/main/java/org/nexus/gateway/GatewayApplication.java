@@ -1,5 +1,6 @@
 package org.nexus.gateway;
 
+import net.javacrumbs.shedlock.spring.annotation.EnableSchedulerLock;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.cloud.openfeign.EnableFeignClients;
@@ -18,6 +19,12 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  * （{@code org.nexus.sdk.client.feign} 包下 SigningServiceFeignClient /
  * WalletMgmtFeignClient / BridgeServiceFeignClient）。实际服务实例由 Nacos 服务发现
  * 解析，Sentinel 提供熔断降级（Phase 2 #61 补全 fallback 类）。</p>
+ *
+ * <p>项10：启用 ShedLock 分布式锁（{@link EnableSchedulerLock}），AOP 代理拦截
+ * {@code @SchedulerLock} 注解的调度方法（如 ReconciliationTask.reconcile()），
+ * 通过 JdbcTemplateLockProvider + shedlock 表保证多实例部署时同一时刻仅一个实例执行。
+ * {@code defaultLockAtMostFor=PT4M} 作为未显式声明 lockAtMostFor 时的兜底上限，
+ * 防止实例崩溃后锁永久持有。</p>
  */
 @SpringBootApplication(scanBasePackages = {
         "org.nexus.gateway",
@@ -29,6 +36,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @EnableFeignClients(basePackages = "org.nexus.sdk.client.feign")
 @EnableScheduling
 @EnableAsync
+@EnableSchedulerLock(defaultLockAtMostFor = "PT4M")
 public class GatewayApplication {
 
     public static void main(String[] args) {

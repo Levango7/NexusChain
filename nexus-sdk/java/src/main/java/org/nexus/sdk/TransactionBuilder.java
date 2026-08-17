@@ -1,5 +1,6 @@
 package org.nexus.sdk;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import org.nexus.sdk.wallet.TxUtils;
 
 import java.math.BigDecimal;
@@ -69,10 +70,27 @@ public class TransactionBuilder {
         return new BigInteger(result.toString());
     }
 
+    /**
+     * 获取当前 Gas 价格。
+     *
+     * 兼容实现：nexus-core 未提供 nexus_gasPrice，改为调用 nexus_getNodeStatus
+     * 从节点状态中获取 gasPrice 字段；若不存在或调用失败则返回默认值 1 gwei。
+     * 对齐 TypeScript/Go SDK。
+     */
     public BigInteger getGasPrice() {
-        Object result = rpcClient.call("nexus_gasPrice");
-        if (result instanceof Number) return BigInteger.valueOf(((Number) result).longValue());
-        return new BigInteger(result.toString());
+        BigInteger defaultGasPrice = BigInteger.valueOf(1_000_000_000L); // 1 gwei
+        try {
+            Object result = rpcClient.call("nexus_getNodeStatus");
+            if (result instanceof JsonNode) {
+                JsonNode nodeStatus = (JsonNode) result;
+                if (nodeStatus.has("gasPrice") && !nodeStatus.get("gasPrice").isNull()) {
+                    return new BigInteger(nodeStatus.get("gasPrice").asText());
+                }
+            }
+            return defaultGasPrice;
+        } catch (Exception e) {
+            return defaultGasPrice;
+        }
     }
 
     // --- POJOs ---
