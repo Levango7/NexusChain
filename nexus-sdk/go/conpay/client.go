@@ -1,13 +1,15 @@
-// Package conpay provides the ConPay SDK for Go.
+// Package conpay provides the NexusChain SDK for Go.
 //
-// 统一多语言 SDK 的 Go 实现，为 ConPay 区块链支付网络提供全栈访问能力。
-// 代币符号：CPAY。
+// 统一多语言 SDK 的 Go 实现，为 NexusChain 区块链支付网络提供全栈访问能力。
+// 代币符号：NEX。
+//
+// 包名 conpay 保留作为 deprecated 别名，新代码请使用 nexus 包（待发布）。
 //
 // Usage:
 //
 //	client := conpay.NewClient(&conpay.Config{
 //	    Network: "mainnet",
-//	    RPCUrl:  "https://rpc.conpay.network",
+//	    RPCUrl:  "https://rpc.nexus.network",
 //	})
 //	wallet := client.Wallet().Create()
 //	balance, _ := client.Wallet().GetBalance(wallet.Address)
@@ -136,19 +138,50 @@ func (c *Client) RPCCall(method string, params ...interface{}) (interface{}, err
 }
 
 // GetBlockNumber queries the current block height.
+//
+// 兼容实现：nexus-core 未提供 nexus_blockNumber，改为调用 nexus_getLatestBlocks
+// 取最新区块列表中的第一个区块高度。
 func (c *Client) GetBlockNumber() (int64, error) {
-	result, err := c.RPCCall("conpay_blockNumber")
+	result, err := c.RPCCall("nexus_getLatestBlocks", 1)
 	if err != nil {
 		return 0, err
 	}
-	return parseHexInt(result)
+	// result 通常是数组，取第一个元素的 height 字段
+	switch v := result.(type) {
+	case []interface{}:
+		if len(v) == 0 {
+			return 0, nil
+		}
+		if m, ok := v[0].(map[string]interface{}); ok {
+			if h, ok := m["height"]; ok {
+				return parseHexInt(h)
+			}
+			if h, ok := m["number"]; ok {
+				return parseHexInt(h)
+			}
+		}
+		return parseHexInt(v[0])
+	default:
+		return parseHexInt(v)
+	}
 }
 
 // GetChainID returns the network chain ID.
+//
+// 兼容实现：nexus-core 未提供 nexus_chainId，改为调用 nexus_getNodeStatus
+// 从节点状态中获取 chainId 字段。
 func (c *Client) GetChainID() (int64, error) {
-	result, err := c.RPCCall("conpay_chainId")
+	result, err := c.RPCCall("nexus_getNodeStatus")
 	if err != nil {
 		return 0, err
+	}
+	if m, ok := result.(map[string]interface{}); ok {
+		if cid, ok := m["chainId"]; ok {
+			return parseHexInt(cid)
+		}
+		if cid, ok := m["chain_id"]; ok {
+			return parseHexInt(cid)
+		}
 	}
 	return parseHexInt(result)
 }

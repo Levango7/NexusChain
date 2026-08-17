@@ -54,11 +54,19 @@ export class WalletManager {
   /**
    * 查询地址的 NEX 余额。
    *
+   * 对齐 nexus-core：nexus_getBalance 返回 {"balance": "<decimal>"} 信封，需解包。
+   *
    * @param address 钱包地址
    * @returns 余额（最小单位 wei）
    */
   async getBalance(address: string): Promise<string> {
-    const result = await this.rpcClient.call('nexus_getBalance', [address, 'latest']);
+    const result = (await this.rpcClient.call('nexus_getBalance', [address, 'latest'])) as unknown;
+    if (typeof result === 'object' && result !== null) {
+      const obj = result as Record<string, unknown>;
+      if (obj.balance !== undefined) {
+        return obj.balance as string;
+      }
+    }
     return result as string;
   }
 

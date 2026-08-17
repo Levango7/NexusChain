@@ -1,10 +1,13 @@
 package org.nexus.bridge;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.nexus.bridge.entity.IdempotencyKey;
 import org.nexus.bridge.model.BridgeEvent;
 import org.nexus.bridge.model.BridgeTransaction;
 import org.nexus.bridge.model.BridgeTransaction.BridgeOperationType;
 import org.nexus.bridge.model.BridgeTransaction.BridgeTxStatus;
 import org.nexus.bridge.repository.BridgeTransactionRepository;
+import org.nexus.bridge.repository.IdempotencyKeyRepository;
 import org.nexus.common.tracing.BusinessSpan;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -24,6 +27,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
@@ -49,6 +53,24 @@ public class BridgeServiceImpl implements BridgeService {
     private final AtomicReference<BridgeState> bridgeState = new AtomicReference<>(BridgeState.ACTIVE);
     private final AtomicLong dailyUsed = new AtomicLong(0);
     private volatile long dailyResetTime = System.currentTimeMillis();
+
+    // === P2-F2 幂等性 ===
+    /** 幂等键 Repository（可为 null，测试环境降级跳过幂等检查）。 */
+    @Autowired(required = false)
+    private IdempotencyKeyRepository idempotencyKeyRepository;
+
+    /** JSON 序列化器（可为 null，测试环境降级跳过幂等检查）。 */
+    @Autowired(required = false)
+    private ObjectMapper objectMapper;
+
+    /** 幂等键有效期：24 小时。 */
+    private static final long IDEMPOTENCY_TTL_SECONDS = 86_400L;
+
+    /** 幂等操作类型常量。 */
+    private static final String OP_LOCK = "LOCK";
+    private static final String OP_MINT = "MINT";
+    private static final String OP_BURN = "BURN";
+    private static final String OP_UNLOCK = "UNLOCK";
 
     /**
      * 供单元测试使用的简化构造器（不注入事件发布器与事务管理器）。
@@ -98,6 +120,16 @@ public class BridgeServiceImpl implements BridgeService {
                 .attr("bridge.lock.amount", request.getAmount())
                 .attr("bridge.user.address", request.getUserAddress())) {
             try {
+                // P2-F2：幂等检查（在状态校验前短路返回之前结果）
+                String idempotencyKey = request.getSourceTxHash();
+                Optional<BridgeTransaction> existing = checkIdempotency(idempotencyKey, OP_LOCK);
+                if (existing.isPresent()) {
+                    span.attr("bridge.idempotent", true)
+                            .attr("bridge.tx.id", existing.get().getTxId());
+                    span.success();
+                    return existing.get();
+                }
+
                 requireState(BridgeState.ACTIVE, "LOCK requires ACTIVE bridge");
                 validateAmount(request.getAmount());
 
@@ -135,6 +167,8 @@ public class BridgeServiceImpl implements BridgeService {
 
                 BridgeTransaction saved = txRepository.save(tx);
                 publishTxEvent(saved, BridgeEvent.EventType.LOCK_CONFIRMED, "Lock confirmed");
+                // P2-F2：保存幂等键
+                saveIdempotencyKey(idempotencyKey, OP_LOCK, saved);
                 span.success();
                 return saved;
             } catch (Exception e) {
@@ -152,6 +186,15 @@ public class BridgeServiceImpl implements BridgeService {
                 .attr("bridge.lock.tx.id", request.getLockTxId())
                 .attr("bridge.signatures.count", request.getSignatures() != null ? request.getSignatures().size() : 0)) {
             try {
+                // P2-F2：幂等检查（以 lockTxId 为幂等键）
+                Optional<BridgeTransaction> existing = checkIdempotency(request.getLockTxId(), OP_MINT);
+                if (existing.isPresent()) {
+                    span.attr("bridge.idempotent", true)
+                            .attr("bridge.tx.id", existing.get().getTxId());
+                    span.success();
+                    return existing.get();
+                }
+
                 requireState(BridgeState.ACTIVE, "MINT requires ACTIVE bridge");
 
                 BridgeTransaction lockTx = txRepository.findById(request.getLockTxId())
@@ -191,6 +234,8 @@ public class BridgeServiceImpl implements BridgeService {
                 lockTx.setUpdatedAt(Instant.now());
                 BridgeTransaction saved = txRepository.save(lockTx);
                 publishTxEvent(saved, BridgeEvent.EventType.MINT_CONFIRMED, "Mint confirmed");
+                // P2-F2：保存幂等键
+                saveIdempotencyKey(request.getLockTxId(), OP_MINT, saved);
                 span.attr("bridge.status", "MINTED").success();
                 return saved;
             } catch (Exception e) {
@@ -210,6 +255,16 @@ public class BridgeServiceImpl implements BridgeService {
                 .attr("bridge.burn.amount", request.getAmount())
                 .attr("bridge.user.address", request.getUserAddress())) {
             try {
+                // P2-F2：幂等检查
+                String idempotencyKey = request.getSourceTxHash();
+                Optional<BridgeTransaction> existing = checkIdempotency(idempotencyKey, OP_BURN);
+                if (existing.isPresent()) {
+                    span.attr("bridge.idempotent", true)
+                            .attr("bridge.tx.id", existing.get().getTxId());
+                    span.success();
+                    return existing.get();
+                }
+
                 if (bridgeState.get() == BridgeState.EMERGENCY_STOP)
                     throw new BridgeException("Bridge is EMERGENCY_STOP, all operations forbidden");
                 validateAmount(request.getAmount());
@@ -238,6 +293,8 @@ public class BridgeServiceImpl implements BridgeService {
                         .attr("bridge.status", "BURNED");
                 BridgeTransaction saved = txRepository.save(tx);
                 publishTxEvent(saved, BridgeEvent.EventType.BURN_CONFIRMED, "Burn confirmed");
+                // P2-F2：保存幂等键
+                saveIdempotencyKey(idempotencyKey, OP_BURN, saved);
                 span.success();
                 return saved;
             } catch (Exception e) {
@@ -255,6 +312,15 @@ public class BridgeServiceImpl implements BridgeService {
                 .attr("bridge.burn.tx.id", request.getBurnTxId())
                 .attr("bridge.signatures.count", request.getSignatures() != null ? request.getSignatures().size() : 0)) {
             try {
+                // P2-F2：幂等检查（以 burnTxId 为幂等键）
+                Optional<BridgeTransaction> existing = checkIdempotency(request.getBurnTxId(), OP_UNLOCK);
+                if (existing.isPresent()) {
+                    span.attr("bridge.idempotent", true)
+                            .attr("bridge.tx.id", existing.get().getTxId());
+                    span.success();
+                    return existing.get();
+                }
+
                 if (bridgeState.get() == BridgeState.EMERGENCY_STOP)
                     throw new BridgeException("Bridge is EMERGENCY_STOP, all operations forbidden");
 
@@ -291,6 +357,8 @@ public class BridgeServiceImpl implements BridgeService {
                 burnTx.setUpdatedAt(Instant.now());
                 BridgeTransaction saved = txRepository.save(burnTx);
                 publishTxEvent(saved, BridgeEvent.EventType.UNLOCK_CONFIRMED, "Unlock confirmed");
+                // P2-F2：保存幂等键
+                saveIdempotencyKey(request.getBurnTxId(), OP_UNLOCK, saved);
                 span.attr("bridge.status", "UNLOCKED").success();
                 return saved;
             } catch (Exception e) {
@@ -452,6 +520,62 @@ public class BridgeServiceImpl implements BridgeService {
 
     private void requireState(BridgeState required, String msg) {
         if (bridgeState.get() != required) throw new BridgeException(msg + " (current: " + bridgeState.get() + ")");
+    }
+
+    // ==================== P2-F2 幂等性辅助 ====================
+
+    /**
+     * 幂等检查：按 (key, operation) 查询已存在的有效记录。
+     *
+     * <p>命中且未过期 → 反序列化返回之前结果；命中但已过期 → 视为未命中；
+     * 未注入 Repository（测试环境）→ 视为未命中。</p>
+     *
+     * @param key       幂等键（可为 null，此时直接返回 empty）
+     * @param operation 操作类型
+     * @return 命中返回之前的结果，未命中返回 empty
+     */
+    private Optional<BridgeTransaction> checkIdempotency(String key, String operation) {
+        if (idempotencyKeyRepository == null || objectMapper == null || key == null || key.isEmpty()) {
+            return Optional.empty();
+        }
+        try {
+            Optional<IdempotencyKey> existing = idempotencyKeyRepository.findByKeyAndOperation(key, operation);
+            if (existing.isEmpty() || existing.get().isExpired()) {
+                return Optional.empty();
+            }
+            BridgeTransaction prior = objectMapper.readValue(existing.get().getResult(),
+                    BridgeTransaction.class);
+            log.info("Idempotent hit: key={}, operation={}, txId={}", key, operation, prior.getTxId());
+            return Optional.of(prior);
+        } catch (Exception e) {
+            log.warn("Idempotency check failed (degrading to non-idempotent path): {}", e.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * 保存幂等键（操作成功后调用）。
+     *
+     * <p>失败仅记录日志，不影响主流程结果（幂等键是优化项，非正确性项）。</p>
+     *
+     * @param key       幂等键
+     * @param operation 操作类型
+     * @param result    操作结果
+     */
+    private void saveIdempotencyKey(String key, String operation, BridgeTransaction result) {
+        if (idempotencyKeyRepository == null || objectMapper == null || key == null || key.isEmpty()) {
+            return;
+        }
+        try {
+            String json = objectMapper.writeValueAsString(result);
+            Instant now = Instant.now();
+            IdempotencyKey record = new IdempotencyKey(key, operation, json,
+                    now.plusSeconds(IDEMPOTENCY_TTL_SECONDS));
+            idempotencyKeyRepository.save(record);
+        } catch (Exception e) {
+            log.warn("Failed to persist idempotency key (key={}, op={}): {}",
+                    key, operation, e.getMessage());
+        }
     }
 
     /**

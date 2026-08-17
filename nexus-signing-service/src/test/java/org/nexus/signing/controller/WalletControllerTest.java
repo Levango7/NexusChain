@@ -30,7 +30,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *   <li>POST /keystoreToAddress — keystore → address</li>
  *   <li>POST /keystoreToPubkey — keystore → pubkey</li>
  *   <li>POST /keystoreToPubkeyHash — keystore → pubkeyHash</li>
- *   <li>POST /obtainPrikey — keystore → prikey</li>
+ *   <li>POST /obtainPrikey — P2-F1 已下线，验证返回 404</li>
  *   <li>POST /prikeyToPubkey — prikey → pubkey</li>
  *   <li>POST /pubkeyStrToPubkeyHashStr — pubkey → pubkeyHash</li>
  * </ul></p>
@@ -143,7 +143,9 @@ public class WalletControllerTest {
     }
 
     @Test
-    public void testObtainPrikey_validKeystore_returnsSuccess() throws Exception {
+    public void testObtainPrikey_endpointRemoved_returnsNotFound() throws Exception {
+        // P2-F1: /obtainPrikey 端点已彻底下线（移除 @RequestMapping），
+        // 不再暴露为 REST 端点，HTTP 请求返回 404
         String password = "password123";
         String keystoreJson = WalletUtils.fromPassword(password).toString();
 
@@ -151,8 +153,7 @@ public class WalletControllerTest {
                         .contentType(MediaType.APPLICATION_FORM_URLENCODED)
                         .param("keystoreJson", keystoreJson)
                         .param("password", password))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.statusCode").value(2000));
+                .andExpect(status().isNotFound());
     }
 
     @Test

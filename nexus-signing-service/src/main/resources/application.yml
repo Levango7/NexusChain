@@ -50,7 +50,7 @@ wallet:
 
 # === P1-F1 安全加固：JWT 鉴权配置 ===
 # signing-service 启用 Spring Security + JWT 后，所有 /api/** 端点强制
-# ROLE_SIGNING_SERVICE 鉴权，/obtainPrikey 等敏感端点强制 ROLE_ADMIN。
+# ROLE_SIGNER 鉴权，/obtainPrikey 等敏感端点强制 ROLE_ADMIN。
 # gateway 通过 Feign 调用时由 FeignJwtRequestInterceptor 自动注入 Bearer token，
 # token 用下方 secret 签发（HS256），需与 gateway 共享同一密钥。
 # 生产环境通过 JWT_SECRET 环境变量注入，禁止硬编码到本文件。
@@ -60,6 +60,29 @@ nexus:
       # HS256 共享密钥（≥32 字节）。生产环境必须通过 JWT_SECRET 环境变量注入。
       # 未配置时 SecurityConfig 会以 fail-closed 模式启动（所有 /api/** 端点拒绝请求）。
       secret: ${JWT_SECRET:}
+  # === P2-F1：私钥操作审计日志配置 ===
+  # AuditLogService 将所有涉及私钥访问、签名、MPC 操作的安全事件
+  # 写入专用 logger nexus.audit（logback-spring.xml 配置独立 appender
+  # 输出到 /var/log/nexus/signing-audit.json）。
+  # 审计日志严格禁止记录私钥明文、签名内容、keystore JSON、解密密码，
+  # 仅记录操作元数据（who / what / when / where / outcome）。
+  audit:
+    # 是否启用审计日志。测试环境可设为 false 避免污染日志文件。
+    enabled: ${NEX_AUDIT_ENABLED:true}
+    # 是否记录鉴权失败事件（401/403）。高频鉴权失败可能产生大量日志，
+    # 可在 Prometheus 告警已覆盖时关闭以减少日志量。
+    log-auth-failure: ${NEX_AUDIT_LOG_AUTH_FAILURE:true}
+  # === P2-F1：多签审批配置 ===
+  # SigningApprovalService 对大额签名操作要求多签审批：
+  # 金额 ≥ large-amount-threshold 时创建审批请求，收集足够审批签名后才执行签名。
+  # 所需审批人数复用 MpcApprovalPolicy.getRequiredApprovers（与 MPC 阈值对齐）。
+  approval:
+    # 大额阈值：金额 ≥ 此值时触发多签审批。默认 10000 USDT。
+    large-amount-threshold: ${NEX_APPROVAL_LARGE_AMOUNT:10000}
+    # 审批请求有效期（秒）。超过此时间未收集足够审批的请求自动标记为 EXPIRED。
+    ttl-seconds: ${NEX_APPROVAL_TTL:3600}
+    # 审批所需审批人数下限。实际所需人数取 max(此值, MpcApprovalPolicy.getRequiredApprovers)。
+    min-required-approvers: ${NEX_APPROVAL_MIN_APPROVERS:2}
 
 # === OpenFeign 配置（设计文档 §4.4.2） ===
 feign:

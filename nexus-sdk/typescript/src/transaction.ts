@@ -31,7 +31,8 @@ export class TransactionManager {
   async buildTransfer(params: TransferParams): Promise<Transaction> {
     // TODO: 构建 nonce、gas 等参数
     const nonce = await this.rpcClient.call('nexus_getTransactionCount', [params.from, 'latest']);
-    const gasPrice = await this.rpcClient.call('nexus_gasPrice', []);
+    // nexus-core 未提供 nexus_gasPrice，使用 nexus_getNodeStatus 兜底
+    const gasPrice = await this.rpcClient.call('nexus_getNodeStatus', []);
 
     return {
       from: params.from,
@@ -77,6 +78,10 @@ export class TransactionManager {
   /**
    * 广播已签名的交易到网络。
    *
+   * 注意：nexus-core 当前 JSON-RPC 入口未直接暴露 nexus_sendRawTransaction，
+   * 交易广播通过 P2P 协议或 wallet-service 完成。此处保留接口以兼容旧 SDK 用户，
+   * 实际部署应通过 wallet-service HTTP 接口提交。
+   *
    * @param signedTx 已签名的交易序列化字符串
    * @returns 交易哈希
    */
@@ -88,32 +93,47 @@ export class TransactionManager {
   /**
    * 查询交易状态。
    *
+   * 兼容实现：nexus-core 未提供 nexus_getTransactionReceipt，
+   * 改为调用 nexus_getTransactionByHash 返回交易详情。
+   *
    * @param txHash 交易哈希
    * @returns 交易回执
    */
   async getTransactionReceipt(txHash: string): Promise<TransactionReceipt | null> {
-    const result = await this.rpcClient.call('nexus_getTransactionReceipt', [txHash]);
+    const result = await this.rpcClient.call('nexus_getTransactionByHash', [txHash]);
     return result as TransactionReceipt | null;
   }
 
   /**
    * 估算交易所需的 Gas。
    *
+   * 注意：nexus-core 当前未提供 nexus_estimateGas，保留接口以兼容旧 SDK 用户。
+   *
    * @param tx 交易对象
    * @returns Gas 估算值（十六进制）
    */
   async estimateGas(tx: Transaction): Promise<string> {
-    const result = await this.rpcClient.call('nexus_estimateGas', [tx]);
-    return result as string;
+    void tx;
+    throw new Error('nexus_estimateGas not supported by nexus-core');
   }
 
   /**
    * 获取当前 Gas 价格。
    *
+   * 兼容实现：nexus-core 未提供 nexus_gasPrice，改为调用 nexus_getNodeStatus
+   * 从节点状态中获取 gasPrice 字段；若不存在则返回默认值 1 gwei。
+   *
    * @returns Gas 价格（wei，十六进制）
    */
   async getGasPrice(): Promise<string> {
-    const result = await this.rpcClient.call('nexus_gasPrice', []);
-    return result as string;
+    const result = (await this.rpcClient.call('nexus_getNodeStatus', [])) as unknown;
+    if (typeof result === 'object' && result !== null) {
+      const obj = result as Record<string, unknown>;
+      if (obj.gasPrice !== undefined) {
+        return obj.gasPrice as string;
+      }
+    }
+    // 默认 1 gwei
+    return '0x3b9aca00';
   }
 }

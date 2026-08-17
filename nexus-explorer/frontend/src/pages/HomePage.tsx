@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
-import { Search } from "lucide-react";
+import { useNavigate, Link } from "react-router-dom";
+import { Search, Settings as SettingsIcon } from "lucide-react";
 import { api } from "../api/client";
 import type { BlockInfo, TransactionInfo, ChainStatus } from "../types";
 import { Loading } from "../components/ui";
@@ -83,23 +83,33 @@ const HomePage: React.FC = () => {
             <span className="text-lg font-bold text-accent">NexusChain</span>
             <span className="text-xs text-muted font-mono">Explorer</span>
           </div>
-          {status && (
-            <div className="flex items-center gap-4 text-xs text-fg-2">
-              <span>
-                Height:{" "}
-                <span className="text-fg font-mono">
-                  {status.height.toLocaleString()}
+          <div className="flex items-center gap-4">
+            {status && (
+              <div className="flex items-center gap-4 text-xs text-fg-2">
+                <span>
+                  Height:{" "}
+                  <span className="text-fg font-mono">
+                    {status.height.toLocaleString()}
+                  </span>
                 </span>
-              </span>
-              <span>
-                Peers: <span className="text-fg">{status.peers}</span>
-              </span>
-              <span className="flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse" />
-                Live
-              </span>
-            </div>
-          )}
+                <span>
+                  Peers: <span className="text-fg">{status.peers}</span>
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse" />
+                  Live
+                </span>
+              </div>
+            )}
+            <Link
+              to="/settings"
+              aria-label="设置"
+              className="flex items-center gap-1 text-muted hover:text-accent text-xs transition-colors duration-base ease-standard focus:outline-none focus-visible:shadow-focus"
+            >
+              <SettingsIcon size={16} />
+              <span className="hidden sm:inline">Settings</span>
+            </Link>
+          </div>
         </div>
       </header>
 

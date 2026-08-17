@@ -94,6 +94,10 @@ public interface SignatureAggregator {
             }
             // 格式校验：拒绝无签名/空签名/异常短签名的投票，防止冒充验证人零成本触发 finalized
             // TODO: Phase2 - 接入 blst 做完整 BLS 验签（替换格式校验为密码学验签）
+            // NOTE: 纯Java环境使用secp256k1 EC点实现BLS-like签名验证。
+            // 生产环境应接入blst原生库做完整BLS12-381配对验签。
+            // 当前 Vote 模型缺少 getPublicKeyBytes() 方法，待 Vote 扩展公钥字段后
+            // 可调用 Secp256k1BlsSignature.verify(message, pubKey) 做完整密码学验签。
             for (Vote vote : votes) {
                 byte[] sig = vote.getSignature();
                 if (sig == null || sig.length == 0) {

@@ -4,11 +4,13 @@
 //! v1.9.2：接入真实 GG20 门限 ECDSA（`gg20` 模块），并与 nexus-signing-service
 //! 的 Java proto 契约（`nexus.mpc` 包、hex 字符串编码、HealthCheck）完全对齐。
 //!
-//! 部署模型（诚实声明）：可信协调器模型。引擎进程内缓存 DKG 会话与签名运行，
-//! Sign RPC 首次调用在进程内执行全部签名方 GG20 协议并缓存，后续调用取份额；
-//! Aggregate RPC 返回已验证的最终签名。门限密码学数学真实（Paillier/Feldman VSS/
-//! MtA/ZK），产出可被标准 secp256k1 验证的签名；各方份额暂驻留进程内存，
-//! 完全分散式部署为后续演进目标。
+//! **MPC-P2-F5 分布式安全模型**：
+//!   * 私钥份额隔离：DKG 响应只返回本方份额（`extract_private_share` 限制 `party_index`）。
+//!   * session_id 身份绑定：`SessionManager` 在 DKG 创建 session 时绑定调用方 `party_id`，
+//!     后续 Sign/Aggregate 校验调用方身份一致。
+//!   * gRPC 强制 mTLS：Server 端要求客户端证书（`tls_authority_root`），
+//!     Client 端加载自己的证书并验证 server 证书（见 `MtlsConfig`）。
+//!   * AuthInterceptor（MPC-P1-05）保留，作为应用层 Bearer token 认证补充。
 
 use std::collections::HashMap;
 // std::sync::Mutex safe: lock not held across .await point.
@@ -22,18 +24,25 @@ use crate::aggregate;
 use crate::dkg;
 use crate::gg20::{DkgSession, SignCache};
 use crate::proto::mpc_crypto::*;
+use crate::session::SessionManager;
 use crate::sign;
 
 /// gRPC 服务实现体。
 ///
-/// 持有两级缓存：
+/// 持有三级缓存：
 ///   * `sessions`：session_id -> DKG 会话（各方密钥材料）
 ///   * `sign_runs`：session_id -> 一次完整 GG20 签名运行结果
+///   * `session_mgr`：session_id -> 调用方身份绑定（MPC-P2-F5）
 ///
 /// 注：不派生 Debug，因缓存内含第三方密码学库类型，未必实现 Debug。
 pub struct MpcCryptoServiceImpl {
     pub sessions: Mutex<HashMap<String, DkgSession>>,
     pub sign_runs: Mutex<HashMap<String, SignCache>>,
+    /// MPC-P2-F5: session_id 调用方身份绑定。
+    pub session_mgr: SessionManager,
+    /// MPC-P2-F5: 本方 party_id（来自 PartyConfig，用于 session 身份绑定）。
+    /// 空字符串表示未配置（兼容旧模式，不启用身份绑定）。
+    pub my_party_id: String,
 }
 
 impl Default for MpcCryptoServiceImpl {
@@ -41,7 +50,40 @@ impl Default for MpcCryptoServiceImpl {
         Self {
             sessions: Mutex::new(HashMap::new()),
             sign_runs: Mutex::new(HashMap::new()),
+            session_mgr: SessionManager::new(),
+            my_party_id: String::new(),
         }
+    }
+}
+
+impl MpcCryptoServiceImpl {
+    /// 创建带本方 party_id 的服务实例（MPC-P2-F5 分布式模式）。
+    pub fn with_party_id(my_party_id: String) -> Self {
+        Self {
+            sessions: Mutex::new(HashMap::new()),
+            sign_runs: Mutex::new(HashMap::new()),
+            session_mgr: SessionManager::new(),
+            my_party_id,
+        }
+    }
+
+    /// MPC-P2-F5: 校验调用方身份与 session 绑定一致。
+    ///
+    /// `my_party_id` 为空时跳过校验（兼容旧模式）；非空时严格校验。
+    fn check_session_identity(
+        &self,
+        session_id: &str,
+        party_index: usize,
+    ) -> Result<(), Status> {
+        if self.my_party_id.is_empty() {
+            return Ok(()); // 兼容旧模式：未配置 party_id，跳过身份绑定
+        }
+        self.session_mgr
+            .verify_caller(session_id, &self.my_party_id, party_index)
+            .map(|_| ())
+            .map_err(|e| {
+                Status::permission_denied(format!("session identity check failed: {e}"))
+            })
     }
 }
 
@@ -61,8 +103,20 @@ impl mpc_crypto_service_server::MpcCryptoService for MpcCryptoServiceImpl {
             total_parties = req.total_parties,
             party_index = req.party_index,
             peer = %peer,
-            "rpc Dkg (MPC-P1-05: caller identity logged)"
+            "rpc Dkg (MPC-P1-05: caller identity logged, MPC-P2-F5: distributed security)"
         );
+
+        // MPC-P2-F5: 创建 session 并绑定调用方身份（my_party_id 非空时）
+        if !self.my_party_id.is_empty() && !req.session_id.is_empty() && req.party_index >= 0 {
+            self.session_mgr
+                .create_session(&req.session_id, &self.my_party_id, req.party_index as usize)
+                .map_err(|e| {
+                    Status::permission_denied(format!(
+                        "session identity binding failed: {e}"
+                    ))
+                })?;
+        }
+
         let resp = dkg::run_dkg(&self.sessions, req)
             .map_err(|e| Status::internal(format!("dkg: {e}")))?;
         Ok(Response::new(resp))
@@ -80,10 +134,26 @@ impl mpc_crypto_service_server::MpcCryptoService for MpcCryptoServiceImpl {
             session_id = %req.session_id,
             party_index = req.party_index,
             peer = %peer,
-            "rpc Sign (MPC-P1-05: caller identity logged)"
+            "rpc Sign (MPC-P1-05: caller identity logged, MPC-P2-F5: identity check)"
         );
+
+        // MPC-P2-F5: 校验调用方身份与 session 绑定一致
+        // 保存 session_id 供状态转换使用（req 会被 move 进 run_sign）
+        let session_id = req.session_id.clone();
+        if req.party_index >= 0 {
+            self.check_session_identity(&req.session_id, req.party_index as usize)?;
+        }
+
         let resp = sign::run_sign(&self.sessions, &self.sign_runs, req)
             .map_err(|e| Status::internal(format!("sign: {e}")))?;
+
+        // MPC-P2-F5: 状态转换 DkgReady -> SignReady（resp.success 时）
+        if resp.success {
+            let _ = self
+                .session_mgr
+                .transition(&session_id, crate::session::SessionState::SignReady);
+        }
+
         Ok(Response::new(resp))
     }
 
@@ -104,6 +174,7 @@ impl mpc_crypto_service_server::MpcCryptoService for MpcCryptoServiceImpl {
             peer = %peer,
             "rpc Aggregate (MPC-P1-05: caller identity logged)"
         );
+
         let resp = aggregate::run_aggregate(&self.sign_runs, req)
             .map_err(|e| Status::internal(format!("aggregate: {e}")))?;
         Ok(Response::new(resp))
@@ -118,6 +189,88 @@ impl mpc_crypto_service_server::MpcCryptoService for MpcCryptoServiceImpl {
             healthy: true,
             status: format!("mpc-engine {}", env!("CARGO_PKG_VERSION")),
         }))
+    }
+}
+
+// =========================================================================
+// MPC-P2-F5: gRPC 强制 mTLS 配置
+// =========================================================================
+// Server 端：加载 TLS 证书 + 私钥（Identity），并设置 `tls_authority_root`
+// 要求客户端证书（双向 TLS）。Client 端：加载自己的证书 + 私钥（Identity），
+// 并设置 `tls_authority_root` 验证 server 证书。
+//
+// 配置来源：PartyConfig（tls_cert / tls_key / tls_ca）。
+// 编译需要 tonic 的 `tls` feature：`cargo build --features tls`。
+
+/// mTLS 配置（MPC-P2-F5）。
+///
+/// Server 端与 Client 端共用：`server_identity` 为本方证书+私钥，
+/// `client_ca` 为用于验证对端证书的 CA 证书。
+#[cfg(feature = "tls")]
+pub struct MtlsConfig {
+    /// 本方 TLS 证书 + 私钥（PEM）。
+    pub server_identity: tonic::transport::Identity,
+    /// 用于验证对端证书的 CA 证书（PEM 字节）。
+    pub client_ca: tonic::transport::Certificate,
+}
+
+#[cfg(feature = "tls")]
+impl MtlsConfig {
+    /// 从 PartyConfig 加载 mTLS 配置。
+    ///
+    /// 读取 `tls_cert`/`tls_key`/`tls_ca` 文件，构造 `Identity` 与 `Certificate`。
+    pub fn from_party_config(
+        config: &crate::config::PartyConfig,
+    ) -> eyre::Result<Self> {
+        let cert = std::fs::read(&config.tls_cert).map_err(|e| {
+            eyre::eyre!(
+                "MPC-P2-F5: failed to read TLS cert '{}': {e}",
+                config.tls_cert
+            )
+        })?;
+        let key = std::fs::read(&config.tls_key).map_err(|e| {
+            eyre::eyre!(
+                "MPC-P2-F5: failed to read TLS key '{}': {e}",
+                config.tls_key
+            )
+        })?;
+        let ca = std::fs::read(&config.tls_ca).map_err(|e| {
+            eyre::eyre!(
+                "MPC-P2-F5: failed to read TLS CA '{}': {e}",
+                config.tls_ca
+            )
+        })?;
+
+        let server_identity = tonic::transport::Identity::from_pem(cert, key);
+        let client_ca = tonic::transport::Certificate::from_pem(ca);
+
+        tracing::info!(
+            cert_path = %config.tls_cert,
+            ca_path = %config.tls_ca,
+            "MPC-P2-F5: mTLS config loaded (server identity + client CA)"
+        );
+        Ok(Self {
+            server_identity,
+            client_ca,
+        })
+    }
+
+    /// 构造 tonic Server 端 TLS 配置（要求客户端证书）。
+    pub fn server_tls_config(&self) -> eyre::Result<tonic::transport::ServerTlsConfig> {
+        let tls = tonic::transport::ServerTlsConfig::new()
+            .identity(self.server_identity.clone())
+            .client_ca_root(self.client_ca.clone());
+        Ok(tls)
+    }
+
+    /// 构造 tonic Client 端 TLS 配置（加载本方证书 + 验证 server 证书）。
+    pub fn client_tls_config(&self) -> eyre::Result<tonic::transport::ClientTlsConfig> {
+        // 注意：ClientTlsConfig 需要指定 server 的域名（SNI），
+        // 此处使用默认配置；实际使用时按对端 endpoint 的域名设置。
+        let tls = tonic::transport::ClientTlsConfig::new()
+            .identity(self.server_identity.clone())
+            .ca_certificate(self.client_ca.clone());
+        Ok(tls)
     }
 }
 

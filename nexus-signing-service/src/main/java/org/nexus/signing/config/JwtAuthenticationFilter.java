@@ -16,6 +16,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.stream.Collectors;
 
 /**
  * JWT Bearer token 鉴权过滤器。
@@ -57,7 +58,13 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 Claims claims = tokenProvider.parseClaims(token);
                 String subject = claims.getSubject();
                 List<String> roles = JwtTokenProvider.extractRoles(claims);
-                var authorities = roles.stream()
+                // P2-F1：归一化遗留角色 SIGNING_SERVICE → SIGNER，保持与 gateway
+                // FeignJwtRequestInterceptor 已签发 token 的向后兼容
+                List<String> normalized = roles.stream()
+                        .map(JwtAuthenticationFilter::normalizeLegacyRole)
+                        .distinct()
+                        .collect(Collectors.toList());
+                var authorities = normalized.stream()
                         .map(r -> new SimpleGrantedAuthority("ROLE_" + r))
                         .toList();
                 var authentication = new UsernamePasswordAuthenticationToken(
@@ -71,6 +78,24 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             }
         }
         filterChain.doFilter(request, response);
+    }
+
+    /**
+     * 将遗留角色名 {@code SIGNING_SERVICE} 归一化为 {@code SIGNER}，
+     * 其余角色名原样返回。
+     *
+     * <p>P2-F1 兼容性处理：P1-F1 阶段 gateway 签发的服务间 token 使用
+     * {@code SIGNING_SERVICE} 作为统一角色，P2-F1 细化为 {@code SIGNER}。
+     * 此映射确保旧 token 仍可访问 {@code @PreAuthorize("hasRole('SIGNER')")}
+     * 保护的端点，无需 gateway 同步升级。</p>
+     */
+    private static String normalizeLegacyRole(String role) {
+        if (role == null) {
+            return null;
+        }
+        return SecurityRoles.SIGNING_SERVICE_LEGACY.equals(role)
+                ? SecurityRoles.SIGNER
+                : role;
     }
 
     /**

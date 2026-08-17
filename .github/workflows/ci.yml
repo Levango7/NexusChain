@@ -53,6 +53,44 @@ jobs:
       - name: 测试 (test --continue, 跳过 jacoco 报告)
         run: ./gradlew test --continue -x jacocoTestReport --no-daemon
 
+      # P2-C6: composite build 模块测试门禁
+      # settings.gradle 中 includeBuild 的模块（nexus-settlement/compliance/analytics/oracle）
+      # 不被根 `./gradlew test` 覆盖，需单独执行其 test 任务。
+      # 这些模块自带 settings.gradle，通过 includeBuild 纳入统一构建，
+      # 可通过根 gradlew 以 `:nexus-settlement:test` 形式调用（Gradle 8.x composite build 支持）。
+      - name: Test composite build modules
+        run: |
+          ./gradlew :nexus-settlement:test :nexus-compliance:test :nexus-analytics:test :nexus-oracle:test --no-daemon --continue
+
+      # P2-C6: 三个关键回归测试门禁（双花防御 / 桥资金守恒 / 门限签名）
+      # 这些测试覆盖核心安全不变量，单独显式执行以确保被运行（即使其他测试被 skip）。
+      # - ReplayProtectionTest：跨链消息重放保护（双花防御核心）
+      # - DefaultInsuranceFundTest：保险基金账本守恒（桥资金守恒）
+      # - MpcEndToEndTest：MPC 门限签名端到端（t-of-n 阈值签名正确性）
+      - name: 关键回归测试（双花防御 / 桥资金守恒 / 门限签名）
+        run: |
+          ./gradlew :nexus-bridge:test \
+            --tests "org.nexus.bridge.security.ReplayProtectionTest" \
+            --tests "org.nexus.bridge.safety.DefaultInsuranceFundTest" \
+            --no-daemon --continue
+          ./gradlew :nexus-signing-service:test \
+            --tests "org.nexus.signing.mpc.MpcEndToEndTest" \
+            --no-daemon --continue
+
+      # P2-C6: Rust 测试（mpc-engine）
+      # continue-on-error: CI runner 可能未预装 Rust 工具链，避免阻断 Java 流水线。
+      # 若需强制门禁，可后续在 runner 预装 Rust 并移除 continue-on-error。
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          working-directory: mpc-engine
+        continue-on-error: true
+
+      - name: Rust tests (mpc-engine)
+        working-directory: mpc-engine
+        run: cargo test --no-fail-fast
+        continue-on-error: true  # Rust 环境可能不可用，不阻断 Java CI
+
       - name: 生成 JaCoCo 覆盖率报告
         run: ./gradlew jacocoTestReport --no-daemon
 

@@ -293,6 +293,21 @@ nexus:
     # 默认手续费率（基点 bps，100 = 1%）
     default-fee-rate-bps: 100
 
+  # === P2-F3：三阶段执行补偿模式 ===
+  # 事务边界补偿模式重设计：所有链上副作用操作统一为三阶段
+  # （落库 PENDING → 链上执行 → 更新 CONFIRMED/FAILED），
+  # 配合 CompensationService 处理 PENDING 超时记录，ReconciliationTask 定时对账。
+  gatewayservice:
+    execution:
+      # PENDING 状态超时阈值（分钟）：超过此值仍为 PENDING 的记录由 CompensationService 处理
+      pending-timeout-minutes: 30
+      # 对账任务 cron 表达式（Spring 6 六字段格式：秒 分 时 日 月 周），默认每 5 分钟
+      reconciliation-cron: "0 */5 * * * *"
+      # 单次对账处理的记录数上限（避免大批量对账占用数据库连接）
+      reconciliation-batch-size: 100
+      # 是否启用定时对账（测试环境可关闭）
+      enabled: true
+
 logging:
   level:
     org.nexus: INFO
