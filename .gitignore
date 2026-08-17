@@ -32,6 +32,13 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
 # Bundled JDK (use Gradle toolchain auto-provisioning instead)
 jdk17/
 jdk17.zip
