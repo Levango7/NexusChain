@@ -2,12 +2,12 @@
 # ============================================================================
 # REQ-01 / T01：多阶段构建（Gradle + JDK 17 → distroless java17 nonroot）
 #
-# nexus-core 为嵌套 Gradle 结构（nexus-core/nexus-core/ 子模块，application 插件），
-# 构建上下文为 ./nexus-core，独立 settings.gradle（rootProject.name = java-nexuscore），
-# 不依赖根项目其他模块，可独立构建。
-#   docker build -t nexus-core:2.1.0 ./nexus-core
+# nexus-core 为嵌套 Gradle 结构（nexus-core/nexus-core/ 子模块，application 插件）。
+# 构建上下文为 repo 根目录，使用根 settings.gradle（include ':nexus-core:nexus-core'），
+# 嵌套项目路径为 :nexus-core:nexus-core，fatJar 任务路径为 :nexus-core:nexus-core:fatJar。
+#   docker build -t nexus-core:2.1.0 -f nexus-core/Dockerfile .
 #
-# Stage 1 (builder): gradle:8.5-jdk17，编译产出 fat jar（:nexus-core:fatJar 任务）
+# Stage 1 (builder): gradle:8.5-jdk17，编译产出 fat jar（:nexus-core:nexus-core:fatJar 任务）
 # Stage 2 (runtime): gcr.io/distroless/java17-debian12:nonroot (UID=65532, 非 root)
 #
 # 镜像体积估算：distroless base ~180MB + fat jar ~80-100MB ≈ 260-280MB
@@ -19,20 +19,23 @@ FROM gradle:8.5-jdk17 AS builder
 USER root
 WORKDIR /workspace
 
-# 分层缓存优化：先 COPY Gradle wrapper 与根构建配置（变更频率低，命中缓存）
+# 分层缓存优化：先 COPY 根 Gradle wrapper 与根构建配置（变更频率低，命中缓存）
+# 构建上下文为 repo 根目录，COPY 路径相对于根
 COPY gradlew gradlew.bat build.gradle settings.gradle ./
 COPY gradle ./gradle
 
-# COPY 子模块源码（变更频率高，放最后，最大化分层缓存命中）
+# COPY nexus-core 嵌套模块源码（含 nexus-core/nexus-core/ 子模块，变更频率高，放最后）
 COPY nexus-core ./nexus-core
 
-# 构建 fat jar：application 插件 + 自定义 fatJar 任务（archiveClassifier=all）
+# 构建 fat jar：根 settings.gradle include ':nexus-core:nexus-core'，
+# 故 fatJar 任务路径为 :nexus-core:nexus-core:fatJar（嵌套项目）。
 # 跳过测试与 jacoco 报告，加速构建
 # TRAVIS_BRANCH=master 让 build.gradle 的 gitCurBranch() 不调用 git（gradle 镜像无 git）
-RUN TRAVIS_BRANCH=master ./gradlew :nexus-core:fatJar --no-daemon -x test -x jacocoTestReport
+RUN TRAVIS_BRANCH=master ./gradlew :nexus-core:nexus-core:fatJar --no-daemon -x test -x jacocoTestReport
 
 # 提取 fat jar（*-all.jar）并重命名为 app.jar
-RUN find /workspace/nexus-core/build/libs -name '*-all.jar' \
+# 嵌套项目 build 目录：nexus-core/nexus-core/build/libs/
+RUN find /workspace/nexus-core/nexus-core/build/libs -name '*-all.jar' \
     -exec cp {} /workspace/app.jar \;
 
 # === Stage 2: runtime (distroless nonroot) ===
