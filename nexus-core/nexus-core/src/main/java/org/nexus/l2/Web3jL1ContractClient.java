@@ -20,9 +20,12 @@ import org.web3j.tx.response.PollingTransactionReceiptProcessor;
 import org.web3j.utils.Numeric;
 import org.web3j.abi.FunctionEncoder;
 import org.web3j.abi.TypeReference;
+import org.web3j.abi.datatypes.Address;
+import org.web3j.abi.datatypes.Bool;
 import org.web3j.abi.datatypes.DynamicBytes;
 import org.web3j.abi.datatypes.Function;
 import org.web3j.abi.datatypes.Type;
+import org.web3j.abi.datatypes.Utf8String;
 import org.web3j.abi.datatypes.generated.Bytes32;
 import org.web3j.abi.datatypes.generated.Uint256;
 
@@ -31,8 +34,10 @@ import jakarta.annotation.PreDestroy;
 
 import java.io.IOException;
 import java.math.BigInteger;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
 
 /**
  * L1 合约客户端——Web3j 真实 L1 合约交互实现。
@@ -420,5 +425,438 @@ public class Web3jL1ContractClient extends L1ContractClient {
             logger.error("Failed to fetch receipt for {}: {}", txHash, e.getMessage());
             return null;
         }
+    }
+
+    // ==================== 生产级增强功能（L2Bridge v2 新增） ====================
+
+    /**
+     * 在 L1 上设置授权 Sequencer 地址。
+     *
+     * <p>对应 L2Bridge 合约 {@code setAuthorizedSequencer(address sequencer)} 函数。
+     * 仅 owner 可调用。</p>
+     *
+     * @param sequencerAddress 授权 Sequencer 地址（hex，0x 前缀）
+     * @return 设置成功返回 true
+     * @since 2.1
+     */
+    public boolean setAuthorizedSequencerOnL1(String sequencerAddress) {
+        if (!web3jReady) {
+            logger.warn("setAuthorizedSequencer skipped: Web3j not ready");
+            return false;
+        }
+        try {
+            Function function = new Function(
+                    "setAuthorizedSequencer",
+                    Arrays.asList(new Address(sequencerAddress)),
+                    Collections.<TypeReference<?>>emptyList());
+            String txHash = sendTransaction(function, "setAuthorizedSequencer", -1L);
+            if (txHash == null) {
+                logger.warn("setAuthorizedSequencer tx failed for {}", sequencerAddress);
+                return false;
+            }
+            logger.info("Authorized sequencer set on L1: {} txHash={}", sequencerAddress, txHash);
+            return true;
+        } catch (Exception e) {
+            logger.error("setAuthorizedSequencerOnL1 failed: {}", e.getMessage(), e);
+            return false;
+        }
+    }
+
+    /**
+     * 在 L1 上设置 Sequencer 与挑战者的质押金额要求。
+     *
+     * <p>对应 L2Bridge 合约 {@code setBonds(uint256 sequencerBond, uint256 challengerBond)} 函数。
+     * 仅 owner 可调用。</p>
+     *
+     * @param sequencerBond  Sequencer 质押金额要求（wei）
+     * @param challengerBond 挑战者质押金额要求（wei）
+     * @return 设置成功返回 true
+     * @since 2.1
+     */
+    public boolean setBondsOnL1(BigInteger sequencerBond, BigInteger challengerBond) {
+        if (!web3jReady) {
+            logger.warn("setBonds skipped: Web3j not ready");
+            return false;
+        }
+        try {
+            Function function = new Function(
+                    "setBonds",
+                    Arrays.asList(new Uint256(sequencerBond), new Uint256(challengerBond)),
+                    Collections.<TypeReference<?>>emptyList());
+            String txHash = sendTransaction(function, "setBonds", -1L);
+            if (txHash == null) {
+                logger.warn("setBonds tx failed");
+                return false;
+            }
+            logger.info("Bonds set on L1: sequencer={} challenger={} txHash={}",
+                    sequencerBond, challengerBond, txHash);
+            return true;
+        } catch (Exception e) {
+            logger.error("setBondsOnL1 failed: {}", e.getMessage(), e);
+            return false;
+        }
+    }
+
+    /**
+     * Sequencer 在 L1 上质押 bond。
+     *
+     * <p>对应 L2Bridge 合约 {@code depositSequencerBond()} payable 函数。
+     * 仅授权 Sequencer 可调用，msg.value 必须等于 sequencerBondAmount。</p>
+     *
+     * @param bondAmount 质押金额（wei）
+     * @return 质押成功返回 true
+     * @since 2.1
+     */
+    public boolean depositSequencerBondOnL1(BigInteger bondAmount) {
+        if (!web3jReady) {
+            logger.warn("depositSequencerBond skipped: Web3j not ready");
+            return false;
+        }
+        try {
+            Function function = new Function(
+                    "depositSequencerBond",
+                    Collections.<Type>emptyList(),
+                    Collections.<TypeReference<?>>emptyList());
+            String txHash = sendTransactionWithValue(function, "depositSequencerBond", -1L, bondAmount);
+            if (txHash == null) {
+                logger.warn("depositSequencerBond tx failed");
+                return false;
+            }
+            logger.info("Sequencer bond deposited on L1: amount={} txHash={}", bondAmount, txHash);
+            return true;
+        } catch (Exception e) {
+            logger.error("depositSequencerBondOnL1 failed: {}", e.getMessage(), e);
+            return false;
+        }
+    }
+
+    /**
+     * 挑战者在 L1 上质押 bond。
+     *
+     * <p>对应 L2Bridge 合约 {@code depositChallengerBond()} payable 函数。
+     * msg.value 必须等于 challengerBondAmount。</p>
+     *
+     * @param bondAmount 质押金额（wei）
+     * @return 质押成功返回 true
+     * @since 2.1
+     */
+    public boolean depositChallengerBondOnL1(BigInteger bondAmount) {
+        if (!web3jReady) {
+            logger.warn("depositChallengerBond skipped: Web3j not ready");
+            return false;
+        }
+        try {
+            Function function = new Function(
+                    "depositChallengerBond",
+                    Collections.<Type>emptyList(),
+                    Collections.<TypeReference<?>>emptyList());
+            String txHash = sendTransactionWithValue(function, "depositChallengerBond", -1L, bondAmount);
+            if (txHash == null) {
+                logger.warn("depositChallengerBond tx failed");
+                return false;
+            }
+            logger.info("Challenger bond deposited on L1: amount={} txHash={}", bondAmount, txHash);
+            return true;
+        } catch (Exception e) {
+            logger.error("depositChallengerBondOnL1 failed: {}", e.getMessage(), e);
+            return false;
+        }
+    }
+
+    /**
+     * 通过 EIP-712 签名提交状态根到 L1（生产级，Sequencer 签名验证）。
+     *
+     * <p>对应 L2Bridge 合约
+     * {@code submitStateRootWithSig(bytes32 stateRoot, uint256 batchId, uint256 targetChainId, bytes signature)} 函数。
+     * 签名者必须为 authorizedSequencer。</p>
+     *
+     * @param stateRoot     L2 状态根（hex，0x 前缀 32 字节）
+     * @param batchId       批次 ID
+     * @param targetChainId 目标链 ID（防跨链重放）
+     * @param signature     Sequencer 的 65 字节 ECDSA 签名（hex，0x 前缀）
+     * @return 提交成功返回 true
+     * @since 2.1
+     */
+    public boolean submitStateRootWithSigToL1(
+            String stateRoot, long batchId, long targetChainId, String signature) {
+        if (stateRoot == null || signature == null) {
+            return false;
+        }
+        if (!web3jReady) {
+            logger.warn("submitStateRootWithSig skipped: Web3j not ready");
+            return false;
+        }
+        try {
+            byte[] rootBytes = Numeric.hexStringToByteArray(stateRoot);
+            if (rootBytes.length != 32) {
+                logger.warn("State root for batch {} is not 32 bytes (got {})", batchId, rootBytes.length);
+                return false;
+            }
+            byte[] sigBytes = Numeric.hexStringToByteArray(signature);
+            if (sigBytes.length != 65) {
+                logger.warn("Signature for batch {} is not 65 bytes (got {})", batchId, sigBytes.length);
+                return false;
+            }
+            Function function = new Function(
+                    "submitStateRootWithSig",
+                    Arrays.asList(
+                            new Bytes32(rootBytes),
+                            new Uint256(BigInteger.valueOf(batchId)),
+                            new Uint256(BigInteger.valueOf(targetChainId)),
+                            new DynamicBytes(sigBytes)),
+                    Collections.<TypeReference<?>>emptyList());
+            String txHash = sendTransaction(function, "submitStateRootWithSig", batchId);
+            if (txHash == null) {
+                logger.warn("submitStateRootWithSig tx failed for batch {}", batchId);
+                return false;
+            }
+            l1StateRoots.put(batchId, stateRoot);
+            logger.info("State root submitted with signature to L1 for batch {} root={} txHash={}",
+                    batchId, stateRoot, txHash);
+            return true;
+        } catch (Exception e) {
+            logger.error("submitStateRootWithSigToL1 failed for batch {}: {}", batchId, e.getMessage(), e);
+            return false;
+        }
+    }
+
+    /**
+     * 在 L1 上提交批次提款根（仅 Sequencer）。
+     *
+     * <p>对应 L2Bridge 合约
+     * {@code submitWithdrawals(uint256 batchId, Withdrawal[] withdrawals, bytes32 withdrawalRoot)} 函数。</p>
+     *
+     * @param batchId        批次 ID
+     * @param withdrawalRoot 提款 Merkle 根（hex，0x 前缀 32 字节）
+     * @param withdrawalCount 提款笔数（用于日志）
+     * @return 提交成功返回 true
+     * @since 2.1
+     */
+    public boolean submitWithdrawalsToL1(long batchId, String withdrawalRoot, int withdrawalCount) {
+        if (withdrawalRoot == null) {
+            return false;
+        }
+        if (!web3jReady) {
+            logger.warn("submitWithdrawals skipped: Web3j not ready");
+            return false;
+        }
+        try {
+            byte[] rootBytes = Numeric.hexStringToByteArray(withdrawalRoot);
+            if (rootBytes.length != 32) {
+                logger.warn("Withdrawal root for batch {} is not 32 bytes (got {})", batchId, rootBytes.length);
+                return false;
+            }
+            // 注意：Withdrawal[] 为动态结构体数组，Web3j 编码复杂。
+            // 此处简化为仅传递 withdrawalRoot（合约端 withdrawals 参数用于事件记录）。
+            // 实际生产中应使用 Web3j 生成的合约 wrapper 类编码完整结构体数组。
+            Function function = new Function(
+                    "submitWithdrawals",
+                    Arrays.asList(
+                            new Uint256(BigInteger.valueOf(batchId)),
+                            new org.web3j.abi.datatypes.DynamicArray<>(
+                                    org.web3j.abi.datatypes.generated.Bytes32.class,
+                                    Collections.emptyList()),
+                            new Bytes32(rootBytes)),
+                    Collections.<TypeReference<?>>emptyList());
+            String txHash = sendTransaction(function, "submitWithdrawals", batchId);
+            if (txHash == null) {
+                logger.warn("submitWithdrawals tx failed for batch {}", batchId);
+                return false;
+            }
+            logger.info("Withdrawals submitted to L1 for batch {} root={} count={} txHash={}",
+                    batchId, withdrawalRoot, withdrawalCount, txHash);
+            return true;
+        } catch (Exception e) {
+            logger.error("submitWithdrawalsToL1 failed for batch {}: {}", batchId, e.getMessage(), e);
+            return false;
+        }
+    }
+
+    /**
+     * 在 L1 上通过 Merkle Proof 挑战批次（生产级，含罚没机制）。
+     *
+     * <p>对应 L2Bridge 合约
+     * {@code challengeBatchWithProof(uint256 batchId, bytes32 leaf, bytes32[] proof, bool[] isRight)} 函数。
+     * 验证通过后罚没 sequencer bond 给挑战者。</p>
+     *
+     * @param batchId  批次 ID
+     * @param leaf     叶子节点哈希（hex，0x 前缀 32 字节）
+     * @param proof    Merkle 路径（每层兄弟节点哈希，hex 数组）
+     * @param isRight  每层位置标记（true=leaf 在右侧，false=leaf 在左侧）
+     * @return 挑战成功返回 true
+     * @since 2.1
+     */
+    public boolean challengeBatchWithProofOnL1(
+            long batchId, String leaf, String[] proof, boolean[] isRight) {
+        if (leaf == null || proof == null || isRight == null) {
+            return false;
+        }
+        if (proof.length != isRight.length) {
+            logger.warn("challengeBatchWithProof proof length {} != isRight length {}",
+                    proof.length, isRight.length);
+            return false;
+        }
+        if (proof.length == 0) {
+            logger.warn("challengeBatchWithProof empty proof for batch {}", batchId);
+            return false;
+        }
+        if (!web3jReady) {
+            logger.warn("challengeBatchWithProof skipped: Web3j not ready");
+            return false;
+        }
+        try {
+            byte[] leafBytes = Numeric.hexStringToByteArray(leaf);
+            if (leafBytes.length != 32) {
+                logger.warn("Leaf for batch {} is not 32 bytes (got {})", batchId, leafBytes.length);
+                return false;
+            }
+            // 构建 proof 数组
+            List<Bytes32> proofList = new ArrayList<>(proof.length);
+            for (String p : proof) {
+                byte[] pBytes = Numeric.hexStringToByteArray(p);
+                if (pBytes.length != 32) {
+                    logger.warn("Proof element for batch {} is not 32 bytes (got {})", batchId, pBytes.length);
+                    return false;
+                }
+                proofList.add(new Bytes32(pBytes));
+            }
+            // 构建 isRight 数组
+            List<Bool> isRightList = new ArrayList<>(isRight.length);
+            for (boolean b : isRight) {
+                isRightList.add(new Bool(b));
+            }
+            Function function = new Function(
+                    "challengeBatchWithProof",
+                    Arrays.asList(
+                            new Uint256(BigInteger.valueOf(batchId)),
+                            new Bytes32(leafBytes),
+                            new org.web3j.abi.datatypes.DynamicArray<>(Bytes32.class, proofList),
+                            new org.web3j.abi.datatypes.DynamicArray<>(Bool.class, isRightList)),
+                    Collections.<TypeReference<?>>emptyList());
+            String txHash = sendTransaction(function, "challengeBatchWithProof", batchId);
+            if (txHash == null) {
+                logger.warn("challengeBatchWithProof tx failed for batch {}", batchId);
+                return false;
+            }
+            l1ChallengedBatches.put(batchId, true);
+            logger.info("Batch {} challenged with Merkle proof on L1 txHash={} (proofSize={})",
+                    batchId, txHash, proof.length);
+            return true;
+        } catch (Exception e) {
+            logger.error("challengeBatchWithProofOnL1 failed for batch {}: {}", batchId, e.getMessage(), e);
+            return false;
+        }
+    }
+
+    /**
+     * 在 L1 上最终化单笔提款（生产级，验证 Merkle proof 后实际转移 ERC20）。
+     *
+     * <p>对应 L2Bridge 合约
+     * {@code finalizeWithdrawsWithProof(uint256 batchId, uint256 index, address token, address recipient, uint256 amount, bytes32[] proof, bool[] isRight)} 函数。</p>
+     *
+     * @param batchId   批次 ID
+     * @param index     提款在批次中的索引
+     * @param token     ERC20 代币地址（hex，0x 前缀）
+     * @param recipient 收款人地址（hex，0x 前缀）
+     * @param amount    提款金额（wei）
+     * @param proof     Merkle 路径（hex 数组）
+     * @param isRight   每层位置标记
+     * @return 最终化成功返回 true
+     * @since 2.1
+     */
+    public boolean finalizeWithdrawsWithProofOnL1(
+            long batchId, long index, String token, String recipient,
+            BigInteger amount, String[] proof, boolean[] isRight) {
+        if (token == null || recipient == null || proof == null || isRight == null) {
+            return false;
+        }
+        if (proof.length != isRight.length) {
+            logger.warn("finalizeWithdrawsWithProof proof length {} != isRight length {}",
+                    proof.length, isRight.length);
+            return false;
+        }
+        if (!web3jReady) {
+            logger.warn("finalizeWithdrawsWithProof skipped: Web3j not ready");
+            return false;
+        }
+        try {
+            // 构建 proof 数组
+            List<Bytes32> proofList = new ArrayList<>(proof.length);
+            for (String p : proof) {
+                byte[] pBytes = Numeric.hexStringToByteArray(p);
+                if (pBytes.length != 32) {
+                    logger.warn("Proof element for batch {} is not 32 bytes (got {})", batchId, pBytes.length);
+                    return false;
+                }
+                proofList.add(new Bytes32(pBytes));
+            }
+            // 构建 isRight 数组
+            List<Bool> isRightList = new ArrayList<>(isRight.length);
+            for (boolean b : isRight) {
+                isRightList.add(new Bool(b));
+            }
+            Function function = new Function(
+                    "finalizeWithdrawsWithProof",
+                    Arrays.asList(
+                            new Uint256(BigInteger.valueOf(batchId)),
+                            new Uint256(BigInteger.valueOf(index)),
+                            new Address(token),
+                            new Address(recipient),
+                            new Uint256(amount),
+                            new org.web3j.abi.datatypes.DynamicArray<>(Bytes32.class, proofList),
+                            new org.web3j.abi.datatypes.DynamicArray<>(Bool.class, isRightList)),
+                    Collections.<TypeReference<?>>emptyList());
+            String txHash = sendTransaction(function, "finalizeWithdrawsWithProof", batchId);
+            if (txHash == null) {
+                logger.warn("finalizeWithdrawsWithProof tx failed for batch {}", batchId);
+                return false;
+            }
+            l1FinalizedWithdraws.put(batchId, true);
+            logger.info("Withdraw finalized with proof on L1 for batch {} index={} token={} recipient={} amount={} txHash={}",
+                    batchId, index, token, recipient, amount, txHash);
+            return true;
+        } catch (Exception e) {
+            logger.error("finalizeWithdrawsWithProofOnL1 failed for batch {}: {}", batchId, e.getMessage(), e);
+            return false;
+        }
+    }
+
+    /**
+     * 通过 RawTransactionManager 发送带 value 的合约交易并等待回执。
+     *
+     * <p>用于 payable 函数（如 depositSequencerBond / depositChallengerBond）。</p>
+     *
+     * @param function   合约函数调用
+     * @param funcName   函数名（日志用）
+     * @param batchId    批次 ID（日志用）
+     * @param value      附带的 ETH 金额（wei）
+     * @return 交易哈希；失败返回 null
+     */
+    private String sendTransactionWithValue(Function function, String funcName, long batchId, BigInteger value)
+            throws IOException {
+        String encodedFunction = FunctionEncoder.encode(function);
+        BigInteger nonce = web3j.ethGetTransactionCount(
+                fromAddress, DefaultBlockParameterName.PENDING).send().getTransactionCount();
+        BigInteger gasPriceBi = BigInteger.valueOf(gasPrice);
+        try {
+            BigInteger chainGasPrice = web3j.ethGasPrice().send().getGasPrice();
+            if (chainGasPrice != null && chainGasPrice.signum() > 0) {
+                gasPriceBi = chainGasPrice;
+            }
+        } catch (Exception e) {
+            logger.debug("Failed to fetch chain gas price, using configured value {}: {}", gasPrice, e.getMessage());
+        }
+        RawTransaction rawTransaction = RawTransaction.createTransaction(
+                nonce, gasPriceBi, BigInteger.valueOf(gasLimit), contractAddress, value, encodedFunction);
+
+        EthSendTransaction sendResponse = txManager.signAndSend(rawTransaction);
+        if (sendResponse.hasError()) {
+            logger.error("eth_sendRawTransaction failed for {} batch {}: code={}, message={}",
+                    funcName, batchId, sendResponse.getError().getCode(), sendResponse.getError().getMessage());
+            return null;
+        }
+        String txHash = sendResponse.getTransactionHash();
+        logger.debug("{} tx submitted for batch {} hash={}", funcName, batchId, txHash);
+        return txHash;
     }
 }

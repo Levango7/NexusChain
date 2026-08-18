@@ -4,6 +4,41 @@
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-08-18
+
+### 弥补4个差距领域
+
+#### 跨链桥链上合约
+- 新增 BridgeSource.sol：源链lock/unlock+ERC20+签名验证+幂等
+- 新增 BridgeTarget.sol：目标链mint/burn+ERC20+签名验证+幂等
+- 新增 ERC20Mock.sol：测试用ERC20
+- 新增 deploy-bridge.js：部署脚本
+- 新增 bridge.test.js：22个测试全通过
+
+#### L2合约增强
+- 增强 L2Bridge.sol为生产级：Merkle验证+挑战期时间锁+Sequencer签名验证(EIP-712)+ERC20提款+罚没机制
+- 更新 l2bridge.test.js：41个测试全通过（向后兼容）
+
+#### MPC实战验证
+- 新增 start-mpc-cluster.sh：3节点启动脚本
+- 新增 generate-certs.sh：mTLS证书生成脚本
+- 新增 integration_test.rs：5个集成测试（标注需Linux环境）
+- 新增 node1/2/3.toml：节点配置模板
+- 新增 tests/README.md：运行说明
+
+#### 治理链上合约
+- 新增 NexusGovernor.sol：提案/投票/执行/quorum/timelock
+- 新增 TimelockController.sol：延迟执行+紧急回滚
+- 新增 GovernanceTargetMock.sol：测试目标合约
+- 新增 deploy-governance.js：部署脚本
+- 新增 governance.test.js：27个测试全通过
+- 新增 OnChainGovernanceClient.java：Java侧链上治理客户端
+- 提取合约ABI到Java资源目录
+
+### 验证结果
+- Hardhat合约测试：90个通过，0失败
+- Java全量编译：BUILD SUCCESSFUL
+
 ## [2.2.3] - 2026-08-18
 
 ### Performance

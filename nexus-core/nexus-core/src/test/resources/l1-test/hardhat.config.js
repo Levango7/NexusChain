@@ -19,7 +19,9 @@ module.exports = {
       optimizer: {
         enabled: true,
         runs: 200
-      }
+      },
+      // 启用 IR 优化器，避免治理合约返回多字段时 stack-too-deep
+      viaIR: true
     }
   },
   networks: {
@@ -31,8 +33,7 @@ module.exports = {
     // 默认 Hardhat in-process 网络（用于 `hardhat test`）
     hardhat: {
       chainId: 31337,
-      // 提高默认 gas 上限以容纳挑战批次等复杂调用
-      gas: 30000000,
+
       // 10000 ETH 预置账户
       accounts: {
         accountsBalance: "10000000000000000000000"

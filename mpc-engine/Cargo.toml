@@ -54,3 +54,9 @@ tonic-build = "0.12"
 
 [features]
 tls = ["tonic/tls"]
+
+# === 集成测试依赖（tests/integration_test.rs）===
+# nix：Unix 信号（SIGTERM）+ unistd::Pid，用于 test_node_recovery 停止 node3 子进程
+# 仅 Linux/WSL 可用，Windows 上 test_node_recovery 会被 #[cfg(not(unix))] panic
+[dev-dependencies]
+nix = { version = "0.27", features = ["signal", "process"] }
