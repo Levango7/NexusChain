@@ -60,10 +60,22 @@ services:
       - NEX_NACOS_SERVER=nacos:8848
       - NEX_SEATA_SERVER=seata:8091
       - NEX_ZIPKIN_ENDPOINT=http://zipkin:9411/api/v2/spans
+      # P0-1 Task 239: MPC 多端点路由（逗号分隔的 host:port 列表）
+      - NEX_MPC_ENGINE_ENDPOINTS=mpc-engine-0:50051,mpc-engine-1:50051,mpc-engine-2:50051
+      # mTLS 证书路径（生产通过 Secret / 挂载卷注入）
+      - NEX_MPC_ENGINE_TLS_TRUST_CERT=/etc/mpc/certs/ca/CA.pem
+      - NEX_MPC_ENGINE_TLS_CLIENT_CERT=/etc/mpc/certs/node-A/cert.pem
+      - NEX_MPC_ENGINE_TLS_CLIENT_KEY=/etc/mpc/certs/node-A/key.pem
+    volumes:
+      - mpc-certs:/etc/mpc/certs:ro
     depends_on:
       nexus-core:
         condition: service_healthy
-      mpc-engine:
+      mpc-engine-0:
+        condition: service_started
+      mpc-engine-1:
+        condition: service_started
+      mpc-engine-2:
         condition: service_started
       postgres:
         condition: service_healthy
@@ -150,14 +162,70 @@ services:
     restart: always
 
   # ==================== 密码学服务 ====================
-  # === MPC 引擎（Rust，gRPC 50051） ===
-  mpc-engine:
+  # === MPC 引擎（Rust，gRPC 50051，3 节点分散式部署） ===
+  # P0-1 Task 239：从单节点升级为 3 节点分散式（2-of-3 阈值签名）
+  #   mpc-engine-0 → party_index=0, 证书 node-A
+  #   mpc-engine-1 → party_index=1, 证书 node-B
+  #   mpc-engine-2 → party_index=2, 证书 node-C
+  # 三节点共享 nexus-net 网络，通过服务名互连
+  mpc-engine-0:
     build: ./mpc-engine
     expose: ['50051']
     environment:
       - RUST_LOG=info
       - MPC_ENGINE_HOST=0.0.0.0
       - MPC_ENGINE_PORT=50051
+      - MPC_PARTY_INDEX=0
+      - MPC_PARTY_ID=party-0
+      - MPC_PEERS=party-1@mpc-engine-1:50051,party-2@mpc-engine-2:50051
+      - MPC_STORAGE_KEY=${MPC_STORAGE_KEY:-CHANGE_ME_MPC_STORAGE_KEY}
+      - MPC_AUTH_TOKEN=${MPC_AUTH_TOKEN:-CHANGE_ME_MPC_AUTH_TOKEN}
+      - MPC_REQUIRE_AUTH=true
+    volumes:
+      - mpc-certs:/etc/mpc/certs:ro
+      - mpc-engine-0-data:/app/data
+    depends_on:
+      nexus-core:
+        condition: service_healthy
+    restart: always
+
+  mpc-engine-1:
+    build: ./mpc-engine
+    expose: ['50051']
+    environment:
+      - RUST_LOG=info
+      - MPC_ENGINE_HOST=0.0.0.0
+      - MPC_ENGINE_PORT=50051
+      - MPC_PARTY_INDEX=1
+      - MPC_PARTY_ID=party-1
+      - MPC_PEERS=party-0@mpc-engine-0:50051,party-2@mpc-engine-2:50051
+      - MPC_STORAGE_KEY=${MPC_STORAGE_KEY:-CHANGE_ME_MPC_STORAGE_KEY}
+      - MPC_AUTH_TOKEN=${MPC_AUTH_TOKEN:-CHANGE_ME_MPC_AUTH_TOKEN}
+      - MPC_REQUIRE_AUTH=true
+    volumes:
+      - mpc-certs:/etc/mpc/certs:ro
+      - mpc-engine-1-data:/app/data
+    depends_on:
+      nexus-core:
+        condition: service_healthy
+    restart: always
+
+  mpc-engine-2:
+    build: ./mpc-engine
+    expose: ['50051']
+    environment:
+      - RUST_LOG=info
+      - MPC_ENGINE_HOST=0.0.0.0
+      - MPC_ENGINE_PORT=50051
+      - MPC_PARTY_INDEX=2
+      - MPC_PARTY_ID=party-2
+      - MPC_PEERS=party-0@mpc-engine-0:50051,party-1@mpc-engine-1:50051
+      - MPC_STORAGE_KEY=${MPC_STORAGE_KEY:-CHANGE_ME_MPC_STORAGE_KEY}
+      - MPC_AUTH_TOKEN=${MPC_AUTH_TOKEN:-CHANGE_ME_MPC_AUTH_TOKEN}
+      - MPC_REQUIRE_AUTH=true
+    volumes:
+      - mpc-certs:/etc/mpc/certs:ro
+      - mpc-engine-2-data:/app/data
     depends_on:
       nexus-core:
         condition: service_healthy
@@ -174,7 +242,11 @@ services:
     volumes:
       - zk-groth16-setup:/setup
     depends_on:
-      mpc-engine:
+      mpc-engine-0:
+        condition: service_started
+      mpc-engine-1:
+        condition: service_started
+      mpc-engine-2:
         condition: service_started
     restart: always
 
@@ -339,3 +411,8 @@ volumes:
   zk-groth16-setup:
   prometheus-data:
   grafana-data:
+  # P0-1 Task 239: MPC 3 节点独立数据卷 + 共享证书卷
+  mpc-engine-0-data:
+  mpc-engine-1-data:
+  mpc-engine-2-data:
+  mpc-certs:

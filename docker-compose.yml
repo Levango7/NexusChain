@@ -69,15 +69,32 @@ services:
       - NEX_ZIPKIN_ENDPOINT=http://nexus-zipkin:9411/api/v2/spans
       # MPC-P1-05: 向 mpc-engine 发起 gRPC 调用的 Bearer token，须与 mpc-engine 的 MPC_AUTH_TOKEN 一致
       - NEX_MPC_ENGINE_AUTH_TOKEN=dev-mpc-engine-token-change-in-prod
+      # P0-1 MPC 分散式部署：多端点路由（Task 239）
+      # 逗号分隔的 host:port 列表，MpcEngineRouter 按 partyIndex 路由到对应节点
+      # 单端点配置时向后兼容（行为等价于原 mpc.engine.host:port）
+      - NEX_MPC_ENGINE_ENDPOINTS=mpc-engine-0:50051,mpc-engine-1:50051,mpc-engine-2:50051
+      # mTLS 证书路径（3 节点共用 CA，客户端证书用 node-A 签发的 signing-service 证书）
+      - NEX_MPC_ENGINE_TLS_TRUST_CERT=/etc/mpc/certs/ca/CA.pem
+      - NEX_MPC_ENGINE_TLS_CLIENT_CERT=/etc/mpc/certs/node-A/cert.pem
+      - NEX_MPC_ENGINE_TLS_CLIENT_KEY=/etc/mpc/certs/node-A/key.pem
     depends_on:
       nacos:
         condition: service_healthy
       seata-server:
         condition: service_healthy
+      mpc-engine-0:
+        condition: service_started
+      mpc-engine-1:
+        condition: service_started
+      mpc-engine-2:
+        condition: service_started
     # REQ-34/P2: signing-service 加入 nexus-net 网络以访问 mpc-engine
     networks:
       - default
       - nexus-net
+    volumes:
+      # 挂载 mpc-certs 供 mTLS 客户端证书
+      - ./mpc-certs:/etc/mpc/certs:ro
     healthcheck:
       test: ['CMD', 'curl', '-f', 'http://localhost:8082/actuator/health']
       interval: 30s
@@ -241,27 +258,95 @@ services:
       start_period: 20s
     restart: unless-stopped
 
-  # === MPC 密码学引擎（Rust 独立进程） ===
+  # === MPC 密码学引擎（Rust 独立进程，3 节点分散式部署） ===
   # 审计报告 §4.1 方案 A：GG18/GG20 密码学核心由 Rust tss-lib / multi-party-ecdsa 实现，
-  # signing-service 通过容器网络 gRPC（mpc-engine:50051）调用。
-  # 端口 50051 仅本机暴露用于调试（grpcurl）；容器间通信走 nexus-net 网络。
-  # 注：signing-service 接入时需同步加入 nexus-net 网络（或改用默认 bridge 与现有服务共用）。
-  mpc-engine:
+  # signing-service 通过容器网络 gRPC 调用。
+  #
+  # P0-1 Task 239：从单节点升级为 3 节点分散式部署（2-of-3 阈值签名）
+  #   mpc-engine-0 → party_index=0, 端口 50051, 证书 node-A
+  #   mpc-engine-1 → party_index=1, 端口 50052, 证书 node-B
+  #   mpc-engine-2 → party_index=2, 端口 50053, 证书 node-C
+  # 三节点共享 nexus-net 网络，通过服务名互连（mpc-engine-0:50051 等）
+  # signing-service 通过 NEX_MPC_ENGINE_ENDPOINTS 多端点路由（MpcEngineRouter）
+  #
+  # 注：端口 50051/50052/50053 仅本机暴露用于调试（grpcurl）；
+  #     容器间通信走 nexus-net 网络的 50051 端口（每容器内部均监听 50051）。
+  mpc-engine-0:
     build:
       context: ./mpc-engine
       dockerfile: Dockerfile
+    container_name: nexus-mpc-engine-0
     ports:
-      - '127.0.0.1:50051:50051'    # gRPC，仅本机访问（容器间用服务名 mpc-engine:50051）
+      - '127.0.0.1:50051:50051'    # gRPC，仅本机访问（容器间用服务名 mpc-engine-0:50051）
     environment:
       - RUST_LOG=info
       - MPC_ENGINE_HOST=0.0.0.0
       - MPC_ENGINE_PORT=50051
-      # MPC-P1-05 安全止血：会话落盘 AES-256-GCM 加密密钥（hex 编码 32 字节 = 64 hex chars）
-      # 生产环境应通过 Docker secrets / KMS 注入，勿硬编码。此处为开发占位密钥。
+      # P0-1: party_index 通过环境变量注入（0/1/2 对应 3 副本 ordinal）
+      - MPC_PARTY_INDEX=0
+      - MPC_PARTY_ID=party-0
+      # P0-1: peers 列表（排除本节点的其他参与方端点）
+      - MPC_PEERS=party-1@mpc-engine-1:50051,party-2@mpc-engine-2:50051
+      # MPC-P1-05 安全止血：会话落盘 AES-256-GCM 加密密钥
       - MPC_STORAGE_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-      # MPC-P1-05: gRPC Bearer token 认证。生产环境应通过 secrets 注入。
+      # MPC-P1-05: gRPC Bearer token 认证
       - MPC_AUTH_TOKEN=dev-mpc-engine-token-change-in-prod
       - MPC_REQUIRE_AUTH=true
+    volumes:
+      # 每节点挂载独立证书（node-A/B/C）+ 共享 CA
+      - ./mpc-certs/ca:/etc/mpc/tls/ca:ro
+      - ./mpc-certs/node-A:/etc/mpc/tls/node:ro
+      - mpc-engine-0-data:/app/data
+    networks:
+      - nexus-net
+    restart: unless-stopped
+
+  mpc-engine-1:
+    build:
+      context: ./mpc-engine
+      dockerfile: Dockerfile
+    container_name: nexus-mpc-engine-1
+    ports:
+      - '127.0.0.1:50052:50051'    # 宿主机 50052 → 容器内 50051
+    environment:
+      - RUST_LOG=info
+      - MPC_ENGINE_HOST=0.0.0.0
+      - MPC_ENGINE_PORT=50051
+      - MPC_PARTY_INDEX=1
+      - MPC_PARTY_ID=party-1
+      - MPC_PEERS=party-0@mpc-engine-0:50051,party-2@mpc-engine-2:50051
+      - MPC_STORAGE_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      - MPC_AUTH_TOKEN=dev-mpc-engine-token-change-in-prod
+      - MPC_REQUIRE_AUTH=true
+    volumes:
+      - ./mpc-certs/ca:/etc/mpc/tls/ca:ro
+      - ./mpc-certs/node-B:/etc/mpc/tls/node:ro
+      - mpc-engine-1-data:/app/data
+    networks:
+      - nexus-net
+    restart: unless-stopped
+
+  mpc-engine-2:
+    build:
+      context: ./mpc-engine
+      dockerfile: Dockerfile
+    container_name: nexus-mpc-engine-2
+    ports:
+      - '127.0.0.1:50053:50051'    # 宿主机 50053 → 容器内 50051
+    environment:
+      - RUST_LOG=info
+      - MPC_ENGINE_HOST=0.0.0.0
+      - MPC_ENGINE_PORT=50051
+      - MPC_PARTY_INDEX=2
+      - MPC_PARTY_ID=party-2
+      - MPC_PEERS=party-0@mpc-engine-0:50051,party-1@mpc-engine-1:50051
+      - MPC_STORAGE_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      - MPC_AUTH_TOKEN=dev-mpc-engine-token-change-in-prod
+      - MPC_REQUIRE_AUTH=true
+    volumes:
+      - ./mpc-certs/ca:/etc/mpc/tls/ca:ro
+      - ./mpc-certs/node-C:/etc/mpc/tls/node:ro
+      - mpc-engine-2-data:/app/data
     networks:
       - nexus-net
     restart: unless-stopped
@@ -316,6 +401,10 @@ volumes:
   sentinel-logs:
   pg-dev-data:
   zk-groth16-setup:
+  # P0-1 Task 239: MPC 3 节点独立数据卷（会话快照、WAL 持久化）
+  mpc-engine-0-data:
+  mpc-engine-1-data:
+  mpc-engine-2-data:
 
 networks:
   # MPC 引擎专用桥接网络。现有 Java 服务未显式声明 networks（使用默认 bridge），

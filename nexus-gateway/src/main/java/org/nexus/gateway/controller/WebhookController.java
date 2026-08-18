@@ -1,26 +1,40 @@
 package org.nexus.gateway.controller;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import org.nexus.gateway.PaymentService;
 import org.nexus.gateway.config.GatewayConfig;
+import org.nexus.gateway.webhook.AdyenWebhookVerifier;
+import org.nexus.gateway.webhook.StripeWebhookVerifier;
+import org.nexus.gateway.webhook.WebhookVerifyResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.SerializationFeature;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 
 /**
- * Webhook controller for receiving chain event callbacks.
+ * Webhook controller for receiving chain event callbacks and PSP notifications.
  *
  * <p>The chain listener (via nexus-sdk) posts events here when a payment
  * transaction reaches sufficient confirmations. The controller verifies the
  * callback signature, then delegates to {@link PaymentService} for confirmation.</p>
+ *
+ * <h2>Endpoints</h2>
+ * <ul>
+ *   <li>{@code POST /api/v1/webhooks/chain-events} — NexusChain 内部链事件回调（HMAC-SHA256 over canonical JSON）</li>
+ *   <li>{@code POST /api/v1/webhooks/stripe} — Stripe webhook（{@code Stripe-Signature} 头验签）</li>
+ *   <li>{@code POST /api/v1/webhooks/adyen} — Adyen webhook（{@code additionalData.hmacSignature} 验签）</li>
+ * </ul>
+ *
+ * <p>PSP webhook 验签后仅记录事件并返回 200（实际订单状态由后续异步对账任务推进）。
+ * 这样设计避免 webhook 处理逻辑与 PSP 内部状态机耦合，且符合 PSP 官方建议：
+ * "respond 200 fast, process asynchronously"。</p>
  */
 @RestController
 @RequestMapping("/api/v1/webhooks")
@@ -30,14 +44,21 @@ public class WebhookController {
 
     private final PaymentService paymentService;
     private final GatewayConfig gatewayConfig;
+    private final StripeWebhookVerifier stripeVerifier;
+    private final AdyenWebhookVerifier adyenVerifier;
 
     /** Deterministic (sorted-key) JSON mapper for stable webhook signatures. */
     private static final ObjectMapper CANONICAL_MAPPER = new ObjectMapper()
             .configure(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS, true);
 
-    public WebhookController(PaymentService paymentService, GatewayConfig gatewayConfig) {
+    public WebhookController(PaymentService paymentService,
+                             GatewayConfig gatewayConfig,
+                             StripeWebhookVerifier stripeVerifier,
+                             AdyenWebhookVerifier adyenVerifier) {
         this.paymentService = paymentService;
         this.gatewayConfig = gatewayConfig;
+        this.stripeVerifier = stripeVerifier;
+        this.adyenVerifier = adyenVerifier;
     }
 
     /**
@@ -98,6 +119,78 @@ public class WebhookController {
 
         log.info("Unhandled chain event type: {}", eventType);
         return ResponseEntity.ok("Ignored");
+    }
+
+    /**
+     * Stripe webhook 接收端点 — 验证 {@code Stripe-Signature} 头后记录事件。
+     *
+     * <p>Stripe 要求验签必须使用 raw request body（不能反序列化后再序列化），
+     * 因此本方法接收 {@code byte[]} 而非 {@code Map}。验签通过后，body
+     * 才会被解析为 Map 供后续处理。</p>
+     *
+     * @param rawBody       原始请求体字节
+     * @param stripeSignature {@code Stripe-Signature} 头值
+     * @return 200 验签通过；401 验签失败
+     */
+    @PostMapping(value = "/stripe", consumes = "application/json")
+    public ResponseEntity<String> handleStripeWebhook(
+            @RequestBody byte[] rawBody,
+            @RequestHeader(value = "Stripe-Signature", required = false) String stripeSignature) {
+
+        WebhookVerifyResult result = stripeVerifier.verify(rawBody, stripeSignature);
+        if (!result.isValid()) {
+            log.warn("Stripe webhook rejected: {}", result.getReason());
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(result.getReason());
+        }
+
+        // 验签通过：解析并记录事件。后续异步对账任务会查询 Stripe API 推进订单状态。
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> event = new ObjectMapper().readValue(rawBody, Map.class);
+            String type = String.valueOf(event.getOrDefault("type", "unknown"));
+            String eventId = String.valueOf(event.getOrDefault("id", "unknown"));
+            log.info("Stripe webhook accepted: type={} id={}", type, eventId);
+        } catch (Exception e) {
+            // 验签已通过，body 解析失败不影响 200 响应（Stripe 会重试，但已确认是 Stripe 发出）
+            log.warn("Stripe webhook body parse error (signature was valid): {}", e.getMessage());
+        }
+        return ResponseEntity.ok("OK");
+    }
+
+    /**
+     * Adyen webhook 接收端点 — 验证 {@code additionalData.hmacSignature} 后记录事件。
+     *
+     * @param rawBody 原始请求体字节
+     * @return 200 验签通过；401 验签失败
+     */
+    @PostMapping(value = "/adyen", consumes = "application/json")
+    public ResponseEntity<String> handleAdyenWebhook(@RequestBody byte[] rawBody) {
+
+        // Adyen 把签名放在 body.additionalData.hmacSignature，先解析 body 提取签名
+        String hmacSignature = null;
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> event = new ObjectMapper().readValue(rawBody, Map.class);
+            Object additionalData = event.get("additionalData");
+            if (additionalData instanceof Map) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> ad = (Map<String, Object>) additionalData;
+                Object sig = ad.get("hmacSignature");
+                if (sig != null) hmacSignature = String.valueOf(sig);
+            }
+        } catch (Exception e) {
+            log.warn("Adyen webhook body parse error: {}", e.getMessage());
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("Malformed body");
+        }
+
+        WebhookVerifyResult result = adyenVerifier.verify(rawBody, hmacSignature);
+        if (!result.isValid()) {
+            log.warn("Adyen webhook rejected: {}", result.getReason());
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(result.getReason());
+        }
+
+        log.info("Adyen webhook accepted");
+        return ResponseEntity.ok("OK");
     }
 
     /**

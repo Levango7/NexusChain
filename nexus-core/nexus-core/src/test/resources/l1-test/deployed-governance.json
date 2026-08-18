@@ -5,11 +5,11 @@
     "GovernanceTargetMock": "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0"
   },
   "deployer": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
-  "network": "hardhat",
+  "network": "localhost",
   "params": {
     "minDelay": 3600,
     "votingPeriodBlocks": 100,
     "quorumThreshold": "5000000000000000000000"
   },
-  "deployedAt": "2026-08-17T23:51:46.437Z"
+  "deployedAt": "2026-08-18T18:43:01.228Z"
 }

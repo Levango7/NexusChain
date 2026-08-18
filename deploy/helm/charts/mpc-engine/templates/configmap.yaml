@@ -1,0 +1,49 @@
+# ConfigMap：node.json 配置模板 + peers 列表
+# ============================================================================
+# 每个 Pod 通过 initContainer 读取 node-json-template，替换占位符后
+# 写入 /app/config/node.json。party_index = POD_ORDINAL（0/1/2），
+# 自动与 StatefulSet ordinal 对齐，无需手动分配。
+# ============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ printf "%s-config" .Chart.Name }}
+  namespace: {{ .Values.global.namespace | default "nexus" }}
+  labels:
+    helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
+    app.kubernetes.io/name: {{ .Chart.Name }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/part-of: {{ .Values.global.partOfLabel | default "nexus" }}
+    app.kubernetes.io/component: mpc-engine
+data:
+  # node.json 模板，含占位符（POD_ORDINAL / PEERS_JSON / STORAGE_KEY）
+  # 由 initContainer envsubst 替换后写入 /app/config/node.json
+  node-json-template: |-
+{{ .Values.config.nodeJsonTemplate | indent 4 }}
+  # peers 列表生成脚本：根据 replicaCount 生成 peers JSON 数组
+  # 排除本节点（POD_ORDINAL），其余节点用 Headless Service Pod DNS 名
+  # 格式：[{"party_index":1,"party_id":"party-1","endpoint":"https://mpc-engine-1.mpc-engine-headless:50051"}, ...]
+  gen-peers-sh: |-
+    #!/usr/bin/env sh
+    set -eu
+    ORDINAL="${POD_ORDINAL:-0}"
+    REPLICAS="{{ .Values.replicaCount }}"
+    HEADLESS="{{ printf "%s-headless" .Chart.Name }}"
+    PORT="{{ .Values.service.port }}"
+    PEERS="["
+    FIRST=1
+    I=0
+    while [ "${I}" -lt "${REPLICAS}" ]; do
+      if [ "${I}" -ne "${ORDINAL}" ]; then
+        if [ "${FIRST}" -eq 0 ]; then
+          PEERS="${PEERS},"
+        fi
+        FIRST=0
+        PEERS="${PEERS}{\"party_index\":${I},\"party_id\":\"party-${I}\",\"endpoint\":\"https://${HEADLESS}-${I}.${HEADLESS}:${PORT}\"}"
+      fi
+      I=$((I + 1))
+    done
+    PEERS="${PEERS}]"
+    printf '%s' "${PEERS}"

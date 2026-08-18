@@ -4,6 +4,51 @@
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-08-19
+
+### 第2轮 L2 端到端集成测试 Bug 修复
+
+本次发布修复 L2→L1 端到端集成测试（`L2L1EndToEndTest`）中发现的 5 个 Bug，使全部 6 个 L2 集成测试通过。所有改动均通过全量编译验证（BUILD SUCCESSFUL）。
+
+#### Fixed（Bug 修复）
+
+##### Bug 1：Web3jL1ContractClient.submitStateRootToL1 参数顺序错误
+- **问题**：Java 侧编码顺序为 `(uint256 batchId, bytes32 stateRoot)`，但 `L2Bridge.sol` 合约定义为 `submitStateRoot(bytes32 stateRoot, uint256 batchId)`，参数顺序相反导致 function selector 不匹配
+- **修复**：调换 `Bytes32` 与 `Uint256` 的顺序，与合约保持一致
+
+##### Bug 2：Web3jL1ContractClient.challengeBatchOnL1 参数类型错误
+- **问题**：Java 侧使用 `DynamicBytes(proofData)`（对应 Solidity `bytes`），但 `L2Bridge.sol` 的 `challengeBatch` 参数为 `bytes32[] calldata proof`，导致 function selector 不匹配
+- **修复**：将 `byte[]` 按 32 字节分块转换为 `DynamicArray<Bytes32>`，每 32 字节为一个 `Bytes32` 元素，不足 32 字节右侧零填充
+
+##### Bug 3：L2L1EndToEndTest 布尔返回值解析错误
+- **问题**：`callIsBatchVerified` / `callIsBatchChallenged` / `callIsWithdrawsFinalized` / `callIsWithdrawalFinalized` 方法直接检查 eth_call 返回值是否等于 `"0x1"`，但 eth_call 返回 32 字节 ABI 编码的 bool（如 `0x000...001` 表示 true），导致总是返回 false
+- **修复**：新增 `decodeBoolResult` 方法，提取 32 字节返回值的最后一位 hex 字符判断真假
+
+##### Bug 4：L2L1EndToEndTest 事件过滤器 topic padding 错误
+- **问题**：`findEventInRecentBlocks` 方法传入 indexed topic 时未进行 32 字节 padding（如 `"0x3e9"`），但 `EthFilter` 需要 32 字节对齐（`"0x000...3e9"`），导致事件无法匹配
+- **修复**：新增 `padTopicTo32Bytes` 方法，将 topic 左侧补零到 64 hex 字符（32 字节）
+
+##### Bug 5：MerkleProofBuilder.hashLeaf ABI 编码不一致
+- **问题**：Java 侧使用 `FunctionEncoder.encode` 编码 `(token, recipient, amount, index)` 后去掉 selector 作为 ABI 编码，但与 Solidity `abi.encode(token, recipient, amount, index)` 存在微妙差异，导致 Merkle proof 验证失败（合约 revert "L2Bridge: invalid withdrawal proof"）
+- **修复**：改为手动构造 128 字节 ABI 编码（address 右对齐到 32 字节 + uint256 大端 32 字节），新增 `bigIntegerTo32Bytes` 辅助方法，确保与 Solidity `abi.encode` 完全一致
+
+#### Tests（测试验证）
+
+- L2 集成测试：6 / 6 全部通过（此前 5 通过 1 失败）
+  - `testSubmitStateRoot` ✅
+  - `testMarkBatchVerified` ✅
+  - `testFinalizeWithdraws` ✅
+  - `testChallengeBatch` ✅
+  - `testFraudProofChallenge_InvalidStateRoot_ChallengedAndInvalid` ✅
+  - `testSubmitWithdrawalsAndFinalizeWithProof` ✅（本次修复）
+- 全量编译：BUILD SUCCESSFUL（10 个模块）
+
+#### Changed（修改文件）
+
+- `nexus-core/nexus-core/src/main/java/org/nexus/l2/Web3jL1ContractClient.java`：修复 `submitStateRootToL1` 参数顺序 + `challengeBatchOnL1` 参数类型
+- `nexus-core/nexus-core/src/test/java/org/nexus/l2/integration/L2L1EndToEndTest.java`：修复布尔返回值解析 + 事件 topic padding + 重构为基于 `AbstractHardhatIntegrationTest`
+- `nexus-core/nexus-core/src/test/java/org/nexus/l2/integration/MerkleProofBuilder.java`：`hashLeaf` 改用手动 ABI 编码
+
 ## [2.4.0] - 2026-08-18
 
 ### 第1轮生产就绪改造（v2.3.0 遗留集成 + 覆盖率提升）

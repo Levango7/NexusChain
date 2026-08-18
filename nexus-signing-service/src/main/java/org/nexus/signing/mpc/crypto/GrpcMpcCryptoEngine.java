@@ -19,6 +19,7 @@ import org.nexus.signing.mpc.transport.GrpcTlsContextFactory;
 import org.nexus.signing.mpc.util.ZeroizingByteArray;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -169,23 +170,39 @@ public class GrpcMpcCryptoEngine implements MpcCryptoEngine {
     @Value("${mpc.engine.tls.client-key-path:}")
     private String tlsClientKeyPath;
 
-    /**
-     * gRPC 应用层认证 token（MPC-P1-05）。
-     *
-     * <p>非空时，客户端在 gRPC metadata 中添加 {@code Authorization: Bearer <token>} 头，
-     * 供 mpc-engine 的 {@code AuthInterceptor} 校验。为空时跳过（开发模式，
-     * mpc-engine 也需未设置 MPC_AUTH_TOKEN 才能联调）。</p>
-     *
-     * <p>生产环境必须设置，且与 mpc-engine 的 {@code MPC_AUTH_TOKEN} 一致。</p>
-     */
+    /** gRPC 应用层认证 token（MPC-P1-05）。 */
     @Value("${mpc.engine.auth-token:}")
     private String authToken;
 
-    /** gRPC channel，由 {@link PostConstruct} 初始化。 */
+    /**
+     * 多端点配置（P0-1 Task 239：分散式部署）。
+     *
+     * <p>逗号分隔的 host:port 列表，优先于 {@link #host}/{@link #port}。
+     * 为空时回退到单端点模式（向后兼容）。</p>
+     */
+    @Value("${mpc.engine.endpoints:}")
+    private String endpoints;
+
+    /**
+     * MPC 引擎多端点路由器（P0-1 Task 239）。
+     *
+     * <p>当 {@link #endpoints} 配置多端点时，通过路由器按 partyIndex 选择 channel。
+     * 单端点模式下不使用路由器（向后兼容）。</p>
+     */
+    @Autowired
+    private MpcEngineRouter mpcEngineRouter;
+
+    /** gRPC channel，由 {@link PostConstruct} 初始化（单端点模式）。 */
     private ManagedChannel channel;
 
-    /** gRPC blocking stub，由 {@link PostConstruct} 初始化。 */
+    /** gRPC blocking stub，由 {@link PostConstruct} 初始化（单端点模式）。 */
     private MpcCryptoServiceGrpc.MpcCryptoServiceBlockingStub blockingStub;
+
+    /** 是否多端点模式（endpoints 配置了多个端点）。 */
+    private boolean multiEndpointMode = false;
+
+    /** Bearer token 认证 interceptor（多端点模式下所有 stub 共享）。 */
+    private ClientInterceptor authInterceptor;
 
     /**
      * 初始化 gRPC channel 与 stub。
@@ -199,6 +216,40 @@ public class GrpcMpcCryptoEngine implements MpcCryptoEngine {
      */
     @PostConstruct
     public void init() {
+        // P0-1 Task 239: 判断是否多端点模式
+        if (endpoints != null && !endpoints.trim().isEmpty()) {
+            multiEndpointMode = true;
+            initMultiEndpoint();
+            return;
+        }
+        initSingleEndpoint();
+    }
+
+    /**
+     * 多端点模式初始化（P0-1 Task 239）。
+     *
+     * <p>委托 {@link MpcEngineRouter} 管理多个 channel，本类仅构建
+     * Bearer token interceptor 供每次调用时创建 party 专属 stub。</p>
+     */
+    private void initMultiEndpoint() {
+        log.info("GrpcMpcCryptoEngine: multi-endpoint mode, endpoints={}", endpoints);
+        // MpcEngineRouter 已在 @PostConstruct 中初始化所有 channel
+        // 本类仅需准备 auth interceptor 供每次调用使用
+        this.authInterceptor = buildAuthInterceptorOrNull();
+        if (mpcEngineRouter == null || !mpcEngineRouter.isReady()) {
+            log.error("GrpcMpcCryptoEngine: MpcEngineRouter not ready — engine calls will fail");
+        } else {
+            log.info("GrpcMpcCryptoEngine initialized (multi-endpoint): {} endpoint(s), "
+                    + "deadline={}ms, auth={}",
+                    mpcEngineRouter.getEndpointCount(), deadlineTimeoutMillis,
+                    authToken != null && !authToken.isEmpty());
+        }
+    }
+
+    /**
+     * 单端点模式初始化（向后兼容，原 init() 逻辑）。
+     */
+    private void initSingleEndpoint() {
         try {
             NettyChannelBuilder builder = NettyChannelBuilder
                     .forAddress(host, port)
@@ -282,6 +333,13 @@ public class GrpcMpcCryptoEngine implements MpcCryptoEngine {
      */
     @PreDestroy
     public void shutdown() {
+        // P0-1 Task 239: 多端点模式下由 MpcEngineRouter 管理 channel 生命周期
+        if (multiEndpointMode) {
+            // MpcEngineRouter 有自己的 @PreDestroy，此处不重复关闭
+            log.info("GrpcMpcCryptoEngine shutdown (multi-endpoint, channels managed by MpcEngineRouter)");
+            return;
+        }
+        // 单端点模式
         if (channel != null && !channel.isShutdown()) {
             try {
                 channel.shutdown().awaitTermination(5, TimeUnit.SECONDS);
@@ -300,7 +358,7 @@ public class GrpcMpcCryptoEngine implements MpcCryptoEngine {
         // MPC-P2-05: party_index 范围校验
         validatePartyIndex(request.getPartyIndex(), "DKG");
 
-        MpcCryptoServiceGrpc.MpcCryptoServiceBlockingStub stub = requireStub();
+        MpcCryptoServiceGrpc.MpcCryptoServiceBlockingStub stub = requireStubForParty(request.getPartyIndex());
         try {
             MpcCryptoProto.DkgRequest proto = toProto(request);
             MpcCryptoProto.DkgResponse resp = stub
@@ -308,8 +366,8 @@ public class GrpcMpcCryptoEngine implements MpcCryptoEngine {
                     .dkg(proto);
             return fromProtoWithZeroization(resp);
         } catch (StatusRuntimeException e) {
-            log.error("DKG gRPC call failed: session={}, status={}",
-                    request.getSessionId(), e.getStatus(), e);
+            log.error("DKG gRPC call failed: session={}, party={}, status={}",
+                    request.getSessionId(), request.getPartyIndex(), e.getStatus(), e);
             return new DkgResponse(null, null, null, false,
                     "gRPC DKG failed: " + e.getStatus());
         }
@@ -322,7 +380,7 @@ public class GrpcMpcCryptoEngine implements MpcCryptoEngine {
         // MPC-P2-05: party_index 范围校验
         validatePartyIndex(request.getPartyIndex(), "Sign");
 
-        MpcCryptoServiceGrpc.MpcCryptoServiceBlockingStub stub = requireStub();
+        MpcCryptoServiceGrpc.MpcCryptoServiceBlockingStub stub = requireStubForParty(request.getPartyIndex());
         try {
             MpcCryptoProto.SignRequest proto = toProto(request);
             MpcCryptoProto.SignResponse resp = stub
@@ -332,8 +390,8 @@ public class GrpcMpcCryptoEngine implements MpcCryptoEngine {
             // 此处不缓存响应，复合键设计供上层编排使用；本方法仅记录键设计意图
             return fromProtoWithZeroization(resp);
         } catch (StatusRuntimeException e) {
-            log.error("Sign gRPC call failed: session={}, status={}",
-                    request.getSessionId(), e.getStatus(), e);
+            log.error("Sign gRPC call failed: session={}, party={}, status={}",
+                    request.getSessionId(), request.getPartyIndex(), e.getStatus(), e);
             return new SignResponse(null, null, false,
                     "gRPC Sign failed: " + e.getStatus());
         }
@@ -344,7 +402,8 @@ public class GrpcMpcCryptoEngine implements MpcCryptoEngine {
         // MPC-P2-04: session_id 格式校验
         validateSessionId(request.getSessionId());
 
-        MpcCryptoServiceGrpc.MpcCryptoServiceBlockingStub stub = requireStub();
+        // P0-1 Task 239: aggregate 由协调方执行，路由到 endpoint 0
+        MpcCryptoServiceGrpc.MpcCryptoServiceBlockingStub stub = requireStubForParty(0);
         try {
             MpcCryptoProto.AggregateRequest proto = toProto(request);
             MpcCryptoProto.AggregateResponse resp = stub
@@ -361,6 +420,28 @@ public class GrpcMpcCryptoEngine implements MpcCryptoEngine {
 
     @Override
     public boolean healthCheck() {
+        // P0-1 Task 239: 多端点模式下检查路由器是否就绪
+        if (multiEndpointMode) {
+            if (mpcEngineRouter == null || !mpcEngineRouter.isReady()) {
+                return false;
+            }
+            // 对 endpoint 0 执行健康检查（代表集群健康）
+            MpcCryptoServiceGrpc.MpcCryptoServiceBlockingStub stub = requireStubForParty(0);
+            if (stub == null) {
+                return false;
+            }
+            try {
+                MpcCryptoProto.HealthCheckResponse resp = stub
+                        .withDeadlineAfter(3, TimeUnit.SECONDS)
+                        .healthCheck(MpcCryptoProto.HealthCheckRequest.newBuilder()
+                                .setService("default").build());
+                return resp.getHealthy();
+            } catch (StatusRuntimeException e) {
+                log.debug("MPC engine healthCheck failed (multi-endpoint): status={}", e.getStatus());
+                return false;
+            }
+        }
+        // 单端点模式（向后兼容）
         if (channel == null || blockingStub == null || channel.isShutdown()) {
             return false;
         }
@@ -679,6 +760,8 @@ public class GrpcMpcCryptoEngine implements MpcCryptoEngine {
     /**
      * 获取已初始化的 blocking stub，未初始化时抛异常。
      *
+     * <p>单端点模式专用。多端点模式使用 {@link #requireStubForParty(int)}。</p>
+     *
      * @return blocking stub
      * @throws IllegalStateException 若 channel 未初始化（引擎不可达时 init 失败）
      */
@@ -689,5 +772,75 @@ public class GrpcMpcCryptoEngine implements MpcCryptoEngine {
                             + " is unreachable; check mpc.engine.* config and engine process");
         }
         return blockingStub;
+    }
+
+    /**
+     * 获取指定 partyIndex 对应的 blocking stub（P0-1 Task 239：多端点路由）。
+     *
+     * <p>多端点模式下，通过 {@link MpcEngineRouter} 获取对应 partyIndex 的 channel，
+     * 并附加 Bearer token interceptor 后返回 stub。单端点模式下回退到 {@link #requireStub()}。</p>
+     *
+     * @param partyIndex MPC 参与方索引（0-based）
+     * @return 对应 partyIndex 的 blocking stub
+     * @throws IllegalStateException 若 channel 未初始化或路由器不可用
+     */
+    private MpcCryptoServiceGrpc.MpcCryptoServiceBlockingStub requireStubForParty(int partyIndex) {
+        if (!multiEndpointMode) {
+            return requireStub();
+        }
+        // 多端点模式：从路由器获取 channel
+        if (mpcEngineRouter == null || !mpcEngineRouter.isReady()) {
+            throw new IllegalStateException(
+                    "GrpcMpcCryptoEngine (multi-endpoint) not initialized — MpcEngineRouter is null or not ready; "
+                            + "check mpc.engine.endpoints config and engine processes");
+        }
+        ManagedChannel partyChannel = mpcEngineRouter.getChannel(partyIndex);
+        if (partyChannel == null || partyChannel.isShutdown()) {
+            throw new IllegalStateException(
+                    "GrpcMpcCryptoEngine: no channel for partyIndex=" + partyIndex
+                            + " (endpoint=" + mpcEngineRouter.getEndpointDescription(partyIndex)
+                            + "); check mpc-engine-" + partyIndex + " process");
+        }
+        // 为该 channel 创建 stub，附加 auth interceptor
+        MpcCryptoServiceGrpc.MpcCryptoServiceBlockingStub baseStub =
+                MpcCryptoServiceGrpc.newBlockingStub(partyChannel);
+        if (authInterceptor != null) {
+            return baseStub.withInterceptors(authInterceptor);
+        }
+        return baseStub;
+    }
+
+    /**
+     * 构建 Bearer token 认证 interceptor（MPC-P1-05）。
+     *
+     * <p>多端点模式下所有 stub 共享同一 interceptor（同一 auth_token）。
+     * authToken 为空时返回 null（无认证）。</p>
+     *
+     * @return ClientInterceptor 或 null（无 auth token）
+     */
+    private ClientInterceptor buildAuthInterceptorOrNull() {
+        if (authToken == null || authToken.isEmpty()) {
+            log.warn("GrpcMpcCryptoEngine: auth token empty — gRPC calls unauthenticated. "
+                    + "NOT for production; set mpc.engine.auth-token (MPC-P1-05)");
+            return null;
+        }
+        Metadata authMetadata = new Metadata();
+        authMetadata.put(AUTHORIZATION_METADATA_KEY, BEARER_PREFIX + authToken);
+        return new ClientInterceptor() {
+            @Override
+            public <ReqT, RespT> ClientCall<ReqT, RespT> interceptCall(
+                    MethodDescriptor<ReqT, RespT> method,
+                    CallOptions callOptions,
+                    Channel next) {
+                return new ForwardingClientCall.SimpleForwardingClientCall<ReqT, RespT>(
+                        next.newCall(method, callOptions)) {
+                    @Override
+                    public void start(Listener<RespT> responseListener, Metadata headers) {
+                        headers.merge(authMetadata);
+                        super.start(responseListener, headers);
+                    }
+                };
+            }
+        };
     }
 }

@@ -174,7 +174,12 @@ seata:
 # 开发环境可设为 true 跳过 TLS（或保持 false 但不配置 tls.* 路径，会回退到明文并记录警告）。
 mpc:
   engine:
-    # 引擎 gRPC 主机（独立进程，通常与 signing-service 同 Pod 或同 Node 部署）
+    # === P0-1 Task 239: 多端点配置（分散式部署） ===
+    # 逗号分隔的 host:port 列表，按 partyIndex 路由到对应节点。
+    # 优先于 host:port；为空时回退到单端点模式（向后兼容）。
+    # 示例：mpc-engine-0:50051,mpc-engine-1:50051,mpc-engine-2:50051
+    endpoints: ${NEX_MPC_ENGINE_ENDPOINTS:}
+    # 引擎 gRPC 主机（单端点模式，endpoints 为空时使用，向后兼容）
     host: ${NEX_MPC_ENGINE_HOST:localhost}
     # 引擎 gRPC 端口（Rust tonic server 默认 50051）
     port: ${NEX_MPC_ENGINE_PORT:50051}

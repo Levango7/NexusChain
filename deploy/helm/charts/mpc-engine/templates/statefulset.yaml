@@ -1,0 +1,238 @@
+# StatefulSet：MPC 引擎 3 副本分散式部署
+# ============================================================================
+# 每副本通过 pod ordinal 自动分配 party_index（0/1/2）：
+#   mpc-engine-0 -> party_index=0
+#   mpc-engine-1 -> party_index=1
+#   mpc-engine-2 -> party_index=2
+#
+# initContainer 职责：
+#   1. 从 pod 名解析 ordinal（mpc-engine-N -> N）
+#   2. 调用 gen-peers-sh 生成 peers JSON（排除本节点的其他参与方端点）
+#   3. envsubst 替换 node-json-template 占位符 -> /app/config/node.json
+#
+# Pod 间通过 Headless Service DNS 名互连：
+#   mpc-engine-0.mpc-engine-headless.nexus.svc.cluster.local:50051
+#   mpc-engine-1.mpc-engine-headless.nexus.svc.cluster.local:50051
+#   mpc-engine-2.mpc-engine-headless.nexus.svc.cluster.local:50051
+# ============================================================================
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ .Chart.Name }}
+  namespace: {{ .Values.global.namespace | default "nexus" }}
+  labels:
+    helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
+    app.kubernetes.io/name: {{ .Chart.Name }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/part-of: {{ .Values.global.partOfLabel | default "nexus" }}
+    app.kubernetes.io/component: mpc-engine
+spec:
+  serviceName: {{ printf "%s-headless" .Chart.Name }}
+  replicas: {{ .Values.replicaCount }}
+  podManagementPolicy: Parallel
+  updateStrategy:
+    {{- toYaml .Values.updateStrategy | nindent 4 }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Chart.Name }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ .Chart.Name }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/part-of: {{ .Values.global.partOfLabel | default "nexus" }}
+        app.kubernetes.io/component: mpc-engine
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/config: {{ .Values.config.nodeJsonTemplate | sha256sum | quote }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      automountServiceAccountToken: {{ .Values.automountServiceAccountToken }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.global.securityContext | nindent 8 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.podAntiAffinity.enabled }}
+      affinity:
+        podAntiAffinity:
+          {{- if eq .Values.podAntiAffinity.mode "hard" }}
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: {{ .Chart.Name }}
+                  app.kubernetes.io/instance: {{ .Release.Name }}
+              topologyKey: kubernetes.io/hostname
+          {{- else }}
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: {{ .Chart.Name }}
+                    app.kubernetes.io/instance: {{ .Release.Name }}
+                topologyKey: kubernetes.io/hostname
+          {{- end }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        - name: init-config
+          image: busybox:1.36
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              # 从 pod 名解析 ordinal：mpc-engine-N -> N
+              POD_NAME="${POD_NAME}"
+              ORDINAL="${POD_NAME##*-}"
+              echo "[init-config] POD_NAME=${POD_NAME} ORDINAL=${ORDINAL}"
+              # 生成 peers JSON（排除本节点的其他参与方端点）
+              PEERS_JSON="$(sh /etc/mpc-config/gen-peers-sh)"
+              echo "[init-config] PEERS_JSON=${PEERS_JSON}"
+              # 读取 storage_key（从 Secret 注入的环境变量）
+              STORAGE_KEY_VAL="${STORAGE_KEY:-}"
+              if [ -z "${STORAGE_KEY_VAL}" ]; then
+                echo "[init-config] WARNING: STORAGE_KEY empty, mpc-engine will fail to decrypt sessions"
+                STORAGE_KEY_VAL="0000000000000000000000000000000000000000000000000000000000000000"
+              fi
+              # envsubst 替换占位符 -> /app/config/node.json
+              export POD_ORDINAL="${ORDINAL}"
+              export PEERS_JSON="${PEERS_JSON}"
+              export STORAGE_KEY="${STORAGE_KEY_VAL}"
+              envsubst < /etc/mpc-config/node-json-template > /app/config/node.json
+              echo "[init-config] node.json generated:"
+              cat /app/config/node.json
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: STORAGE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ printf "%s-secret" .Chart.Name }}
+                  key: storage-key
+                  optional: true
+          volumeMounts:
+            - name: mpc-config-template
+              mountPath: /etc/mpc-config
+              readOnly: true
+            - name: mpc-config
+              mountPath: /app/config
+      containers:
+        - name: {{ .Chart.Name }}
+          image: {{ .Values.image.repository | default (printf "%s/%s" .Values.global.imageRegistry .Chart.Name) }}:{{ .Values.image.tag | default .Values.global.env | default "latest" }}
+          imagePullPolicy: {{ .Values.image.pullPolicy | default .Values.global.imagePullPolicy | default "IfNotPresent" }}
+          securityContext:
+            {{- toYaml .Values.global.containerSecurityContext | nindent 12 }}
+          ports:
+            - name: {{ .Values.service.name }}
+              containerPort: {{ .Values.service.targetPort }}
+              protocol: TCP
+          env:
+            - name: RUST_LOG
+              value: {{ .Values.rustLog | quote }}
+            - name: MPC_ENGINE_HOST
+              value: "0.0.0.0"
+            - name: MPC_ENGINE_PORT
+              value: {{ .Values.service.targetPort | quote }}
+            - name: MPC_CONFIG_PATH
+              value: /app/config/node.json
+            - name: MPC_REQUIRE_TLS
+              value: {{ (not .Values.usePlaintext) | quote }}
+            {{- if .Values.authToken }}
+            - name: MPC_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ printf "%s-secret" .Chart.Name }}
+                  key: auth-token
+            {{- end }}
+            - name: MPC_STORAGE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ printf "%s-secret" .Chart.Name }}
+                  key: storage-key
+                  optional: true
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          {{- if .Values.probes.liveness.enabled }}
+          livenessProbe:
+            grpc:
+              port: {{ .Values.probes.liveness.grpc.port }}
+              service: {{ .Values.probes.liveness.grpc.service | quote }}
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          {{- end }}
+          {{- if .Values.probes.readiness.enabled }}
+          readinessProbe:
+            grpc:
+              port: {{ .Values.probes.readiness.grpc.port }}
+              service: {{ .Values.probes.readiness.grpc.service | quote }}
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          {{- end }}
+          {{- if .Values.probes.startup.enabled }}
+          startupProbe:
+            grpc:
+              port: {{ .Values.probes.startup.grpc.port }}
+              service: {{ .Values.probes.startup.grpc.service | quote }}
+            initialDelaySeconds: {{ .Values.probes.startup.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+          {{- end }}
+          volumeMounts:
+            - name: mpc-config
+              mountPath: /app/config
+              readOnly: true
+            - name: mpc-tls
+              mountPath: /etc/mpc/tls
+              readOnly: true
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        - name: mpc-config-template
+          configMap:
+            name: {{ printf "%s-config" .Chart.Name }}
+            defaultMode: 0755
+        - name: mpc-tls
+          secret:
+            secretName: {{ printf "%s-tls" .Chart.Name }}
+            defaultMode: 0400
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+  # 每副本独立 PVC（会话快照、WAL 持久化）
+  volumeClaimTemplates:
+    - metadata:
+        name: mpc-config
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 100Mi

@@ -1,0 +1,19 @@
+apiVersion: v2
+name: mpc-engine
+description: NexusChain MPC 密码学引擎（Rust，分散式 3 节点 StatefulSet）
+type: application
+version: 2.2.0
+appVersion: "2.2.0"
+keywords:
+  - blockchain
+  - mpc
+  - tss
+  - ecdsa
+  - rust
+  - distributed
+home: https://github.com/nexus/NexusChain
+sources:
+  - https://github.com/nexus/NexusChain
+maintainers:
+  - name: NexusChain DevOps
+    email: devops@nexus.network
