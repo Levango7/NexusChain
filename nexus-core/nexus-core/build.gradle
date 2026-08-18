@@ -251,4 +251,18 @@ jacocoTestCoverageVerification {
     }
 }
 
+// Task 234: JaCoCo 报告排除 protobuf/gRPC 生成代码，避免分母膨胀压低包级覆盖率。
+// NexusChainOuterClass (~15910 行) 与 NexusChainGrpc (~242 行) 均为 protoc 生成，
+// 行业惯例不计入覆盖率统计。
+jacocoTestReport {
+    afterEvaluate {
+        classDirectories.setFrom(files(classDirectories.files.collect {
+            fileTree(dir: it, exclude: [
+                    'org/nexus/p2p/NexusChainOuterClass*.class',
+                    'org/nexus/p2p/NexusChainGrpc*.class'
+            ])
+        }))
+    }
+}
+
 check.dependsOn jacocoTestCoverageVerification

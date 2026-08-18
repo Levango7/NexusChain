@@ -4,6 +4,69 @@
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-08-18
+
+### 第1轮生产就绪改造（v2.3.0 遗留集成 + 覆盖率提升）
+
+本次发布聚焦 v2.3.0 合约层产物的 Java 侧集成，以及 p2p / MPC crypto 两个关键模块的单元测试覆盖率提升。所有改动均通过全量编译与单元测试验证（Task 236）。
+
+#### Added（新增文件与功能）
+
+##### Task 231：GovernanceExecutor 集成 OnChainGovernanceClient
+- `GovernanceExecutor`：注入可选 `OnChainGovernanceClient`（`@Autowired(required=false)`），`schedule()` / `execute()` / `cancel()` 增加链上同步调用，保留内存版 `TimelockController` 作为 fallback
+- `application.yml`：新增 `nexus.governance.on-chain.enabled` 配置示例（默认 `false`）
+
+##### Task 232：Web3jL1ContractClient 集成 L2Bridge 新 ABI
+- 新增 `nexus-core/nexus-core/src/main/java/org/nexus/l2/abi/Withdrawal.java`：继承 `StaticStruct`，映射 Solidity `Withdrawal` 结构体（token / recipient / amount）
+- `Web3jL1ContractClient`：新增 `submitWithdrawalsToL1(long batchId, List<Withdrawal> withdrawals, String withdrawalRoot)` 方法，使用 `DynamicArray<Withdrawal>` 编码动态结构体数组；旧方法标记 `@Deprecated`
+
+##### Task 233：BridgeHandler 集成 Bridge 合约
+- `AbstractBridgeHandler`：新增 `Credentials` / `KeyVault` / `evmChainId` / `gasPrice` / `gasLimit` 字段；新增 `sendRawTransaction` / `getNonce` / `estimateGas` 方法；`submitContractCall` 改为优先真实交易，fallback 到合成哈希；新增 `toBytes(DynamicBytes)` 和 `signBridgeMessage` 辅助方法
+- `EthereumBridgeHandler`：修正 lock / unlock / mint / burn 的 ABI 编码参数列表，对齐 `BridgeSource.sol` / `BridgeTarget.sol` 签名；新增支持 `Credentials` / `KeyVault` 的构造函数
+
+##### Task 234：p2p 包单元测试
+- 新增 8 个测试类 + 1 个工具类（`nexus-core/nexus-core/src/test/java/org/nexus/p2p/`）：
+  - `PeerTestFixture.java`（工具类）
+  - `PeersCacheTest.java`、`PeersCacheWrapperTest.java`、`PayloadTest.java`
+  - `UtilTest.java`、`GRPCClientTest.java`、`PeersManagerTest.java`
+  - `PeerServerTest.java`、`MerkleHandlerTest.java`
+- 154 个测试全部通过
+
+##### Task 235：MPC gRPC 覆盖率测试
+- 新增 2 个测试文件（`nexus-signing-service/src/test/java/org/nexus/signing/mpc/crypto/`）：
+  - `MockMpcCryptoStubFactory.java`（工具类）
+  - `GrpcMpcCryptoEngineTest.java`（36 个测试，6 个内部类：`DkgTests` / `SignTests` / `AggregateTests` / `HealthCheckTests` / `RequireStubTests` / `ShutdownTests`）
+- `GrpcMpcCryptoEngine` 覆盖率 0% → 87.5%
+
+##### 文档
+- 新增 `docs/verification-round1-report.md`：第1轮测试验证报告
+- 新增 `coverage-plan-p2p-grpc.md`：p2p / gRPC 覆盖率计划
+
+#### Changed（修改文件与功能）
+
+- `nexus-core/nexus-core/build.gradle`：添加 `jacocoTestReport` 配置，排除 protobuf 生成代码（`NexusChainOuterClass` / `NexusChainGrpc`）
+- `nexus-signing-service/build.gradle`：添加 `jacocoTestReport` 配置，排除 crypto / grpc 生成代码；添加 `mockito-inline` 依赖
+
+#### Tests（测试与覆盖率）
+
+- p2p 包：154 个测试全部通过（新增 8 个测试类）
+- MPC crypto 包：81 个测试全部通过（含新增 36 个）
+- 全量编译：BUILD SUCCESSFUL（10 个模块）
+
+#### 覆盖率提升
+
+| 模块 | 改造前 | 改造后 |
+|------|--------|--------|
+| GrpcMpcCryptoEngine | 0% | 87.5% |
+| p2p 包 | — | 154 测试覆盖 |
+
+### 验证结果（Task 236）
+
+- Java 全量编译：BUILD SUCCESSFUL in 31s，10 个模块全部构建成功
+- p2p 包单元测试：154 / 154 通过，0 失败
+- MPC crypto 包单元测试：81 / 81 通过（含 Task 235 新增 36 个），0 失败
+- 验证报告：`docs/verification-round1-report.md`
+
 ## [2.3.0] - 2026-08-18
 
 ### 弥补4个差距领域

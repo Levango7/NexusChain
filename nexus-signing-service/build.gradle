@@ -141,6 +141,9 @@ dependencies {
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
 
     testImplementation 'org.mockito:mockito-junit-jupiter:4.11.0'
+    // === Phase 4 任务 #235：mockito-inline 启用 inline mock maker，
+    //     支持 mock final 类（gRPC 生成的 MpcCryptoServiceBlockingStub 为 final）。 ===
+    testImplementation 'org.mockito:mockito-inline:4.11.0'
 }
 
 // 签名服务为独立部署的 Spring Boot 应用，启用 bootJar 产出可执行 fat jar。
@@ -182,6 +185,29 @@ protobuf {
 
 // === 覆盖率门禁（与 nexus-gateway 对齐，minimum 0.15） ===
 // BUNDLE 级别指令覆盖率下限 0.15；check 依赖 jacocoTestCoverageVerification 以强制门禁
+//
+// === Phase 4 任务 #235：JaCoCo 排除 protobuf/gRPC 生成代码 ===
+// protoc + protoc-gen-grpc-java 生成的类（MpcCryptoProto ~8410 行、
+// MpcCryptoServiceGrpc ~566 行、MpcTransportProto、MpcTransportServiceGrpc）
+// 由上游工具链保证质量，行业惯例不纳入业务覆盖率统计。排除后包级覆盖率
+// 反映手写代码（GrpcMpcCryptoEngine + DTO）的真实覆盖情况。
+// 详见 coverage-plan-p2p-grpc.md §4.1。
+jacocoTestReport {
+    dependsOn test
+    afterEvaluate {
+        classDirectories.setFrom(files(classDirectories.files.collect {
+            fileTree(dir: it, exclude: [
+                    // MPC 加密层 protobuf 生成代码（message + gRPC stub）
+                    'org/nexus/signing/mpc/crypto/grpc/MpcCryptoProto*',
+                    'org/nexus/signing/mpc/crypto/grpc/MpcCryptoServiceGrpc*',
+                    // MPC 传输层 protobuf 生成代码（message + gRPC stub）
+                    'org/nexus/signing/mpc/transport/grpc/MpcTransportProto*',
+                    'org/nexus/signing/mpc/transport/grpc/MpcTransportServiceGrpc*'
+            ])
+        }))
+    }
+}
+
 jacocoTestCoverageVerification {
     violationRules {
         rule {

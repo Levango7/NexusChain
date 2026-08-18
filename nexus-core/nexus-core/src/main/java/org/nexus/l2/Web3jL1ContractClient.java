@@ -22,12 +22,15 @@ import org.web3j.abi.FunctionEncoder;
 import org.web3j.abi.TypeReference;
 import org.web3j.abi.datatypes.Address;
 import org.web3j.abi.datatypes.Bool;
+import org.web3j.abi.datatypes.DynamicArray;
 import org.web3j.abi.datatypes.DynamicBytes;
 import org.web3j.abi.datatypes.Function;
 import org.web3j.abi.datatypes.Type;
 import org.web3j.abi.datatypes.Utf8String;
 import org.web3j.abi.datatypes.generated.Bytes32;
 import org.web3j.abi.datatypes.generated.Uint256;
+
+import org.nexus.l2.abi.Withdrawal;
 
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
@@ -621,19 +624,28 @@ public class Web3jL1ContractClient extends L1ContractClient {
     }
 
     /**
-     * 在 L1 上提交批次提款根（仅 Sequencer）。
+     * 在 L1 上提交批次提款根（仅 Sequencer，完整 Withdrawal[] 编码）。
      *
      * <p>对应 L2Bridge 合约
      * {@code submitWithdrawals(uint256 batchId, Withdrawal[] withdrawals, bytes32 withdrawalRoot)} 函数。</p>
      *
+     * <p>本方法使用 {@link Withdrawal}（继承 {@code StaticStruct}）封装 Solidity
+     * {@code struct Withdrawal { address token; address recipient; uint256 amount; }}，
+     * 通过 {@link DynamicArray}&lt;Withdrawal&gt; 编码动态结构体数组，与 Solidity ABI
+     * 规范一致（head/tail 编码）。</p>
+     *
      * @param batchId        批次 ID
+     * @param withdrawals    提款列表（{@link Withdrawal} 结构体列表，非空）
      * @param withdrawalRoot 提款 Merkle 根（hex，0x 前缀 32 字节）
-     * @param withdrawalCount 提款笔数（用于日志）
      * @return 提交成功返回 true
-     * @since 2.1
+     * @since 2.3
      */
-    public boolean submitWithdrawalsToL1(long batchId, String withdrawalRoot, int withdrawalCount) {
+    public boolean submitWithdrawalsToL1(long batchId, List<Withdrawal> withdrawals, String withdrawalRoot) {
         if (withdrawalRoot == null) {
+            return false;
+        }
+        if (withdrawals == null || withdrawals.isEmpty()) {
+            logger.warn("submitWithdrawals skipped: empty withdrawals for batch {}", batchId);
             return false;
         }
         if (!web3jReady) {
@@ -646,16 +658,14 @@ public class Web3jL1ContractClient extends L1ContractClient {
                 logger.warn("Withdrawal root for batch {} is not 32 bytes (got {})", batchId, rootBytes.length);
                 return false;
             }
-            // 注意：Withdrawal[] 为动态结构体数组，Web3j 编码复杂。
-            // 此处简化为仅传递 withdrawalRoot（合约端 withdrawals 参数用于事件记录）。
-            // 实际生产中应使用 Web3j 生成的合约 wrapper 类编码完整结构体数组。
+            // 编码 Withdrawal[] 动态结构体数组：DynamicArray<Withdrawal>
+            // Web3j 4.11.0 的 TypeEncoder.encodeDynamicArray 支持结构体数组的 head/tail 编码
+            DynamicArray<Withdrawal> withdrawalArray = new DynamicArray<>(Withdrawal.class, withdrawals);
             Function function = new Function(
                     "submitWithdrawals",
                     Arrays.asList(
                             new Uint256(BigInteger.valueOf(batchId)),
-                            new org.web3j.abi.datatypes.DynamicArray<>(
-                                    org.web3j.abi.datatypes.generated.Bytes32.class,
-                                    Collections.emptyList()),
+                            withdrawalArray,
                             new Bytes32(rootBytes)),
                     Collections.<TypeReference<?>>emptyList());
             String txHash = sendTransaction(function, "submitWithdrawals", batchId);
@@ -664,12 +674,45 @@ public class Web3jL1ContractClient extends L1ContractClient {
                 return false;
             }
             logger.info("Withdrawals submitted to L1 for batch {} root={} count={} txHash={}",
-                    batchId, withdrawalRoot, withdrawalCount, txHash);
+                    batchId, withdrawalRoot, withdrawals.size(), txHash);
             return true;
         } catch (Exception e) {
             logger.error("submitWithdrawalsToL1 failed for batch {}: {}", batchId, e.getMessage(), e);
             return false;
         }
+    }
+
+    /**
+     * 在 L1 上提交批次提款根（仅 Sequencer，向后兼容版本）。
+     *
+     * <p>对应 L2Bridge 合约
+     * {@code submitWithdrawals(uint256 batchId, Withdrawal[] withdrawals, bytes32 withdrawalRoot)} 函数。</p>
+     *
+     * <p>本方法为向后兼容保留，不传递完整 Withdrawal[] 结构体数组（调用方仅有 withdrawalRoot
+     * 时使用）。注意：L2Bridge 合约要求 {@code withdrawals.length > 0}，因此本方法
+     * 实际无法通过合约校验，仅用于日志记录场景。生产环境应使用
+     * {@link #submitWithdrawalsToL1(long, List, String)} 传递完整提款列表。</p>
+     *
+     * @param batchId        批次 ID
+     * @param withdrawalRoot 提款 Merkle 根（hex，0x 前缀 32 字节）
+     * @param withdrawalCount 提款笔数（用于日志）
+     * @return 提交成功返回 true；由于空数组会被合约拒绝，实际总返回 false
+     * @since 2.1
+     * @deprecated 使用 {@link #submitWithdrawalsToL1(long, List, String)} 传递完整 Withdrawal 列表
+     */
+    @Deprecated
+    public boolean submitWithdrawalsToL1(long batchId, String withdrawalRoot, int withdrawalCount) {
+        if (withdrawalRoot == null) {
+            return false;
+        }
+        if (!web3jReady) {
+            logger.warn("submitWithdrawals skipped: Web3j not ready");
+            return false;
+        }
+        logger.warn("submitWithdrawalsToL1(batchId, root, count) is deprecated and cannot pass contract validation "
+                + "(empty withdrawals array rejected by L2Bridge). "
+                + "Use submitWithdrawalsToL1(batchId, List<Withdrawal>, root) instead. batch={}", batchId);
+        return false;
     }
 
     /**

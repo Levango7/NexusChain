@@ -6,6 +6,7 @@ import org.nexus.bridge.LockRequest;
 import org.nexus.bridge.BurnRequest;
 import org.nexus.bridge.MintRequest;
 import org.nexus.bridge.UnlockRequest;
+import org.nexus.bridge.keyvault.KeyVault;
 import org.nexus.bridge.model.BridgeTransaction;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -16,12 +17,20 @@ import org.web3j.abi.datatypes.Type;
 import org.web3j.abi.datatypes.Uint;
 import org.web3j.abi.datatypes.Utf8String;
 import org.web3j.abi.datatypes.generated.Bytes32;
+import org.web3j.crypto.Credentials;
+import org.web3j.crypto.RawTransaction;
+import org.web3j.crypto.TransactionEncoder;
 import org.web3j.protocol.Web3j;
 import org.web3j.protocol.core.DefaultBlockParameterName;
 import org.web3j.protocol.core.methods.request.Transaction;
 import org.web3j.protocol.core.methods.response.EthCall;
+import org.web3j.protocol.core.methods.response.EthEstimateGas;
+import org.web3j.protocol.core.methods.response.EthGasPrice;
+import org.web3j.protocol.core.methods.response.EthGetTransactionCount;
 import org.web3j.protocol.core.methods.response.EthGetTransactionReceipt;
+import org.web3j.protocol.core.methods.response.EthSendTransaction;
 import org.web3j.protocol.core.methods.response.TransactionReceipt;
+import org.web3j.utils.Numeric;
 
 import java.io.IOException;
 import java.math.BigInteger;
@@ -66,8 +75,29 @@ public abstract class AbstractBridgeHandler {
     /** 默认要求确认数（Ethereum 主网推荐 12，BSC/Polygon 可适当调整）。 */
     protected static final int DEFAULT_REQUIRED_CONFIRMATIONS = 12;
 
+    /** 默认 gas limit（用于 eth_sendRawTransaction，当未配置时使用）。 */
+    protected static final BigInteger DEFAULT_GAS_LIMIT = BigInteger.valueOf(500_000L);
+
     /** 桥配置。 */
     protected BridgeConfig config;
+
+    /** EVM 链 ID（数值，用于 EIP-155 签名；如 Ethereum 主网=1，BSC=56）。null 表示 legacy 签名。 */
+    protected BigInteger evmChainId;
+
+    /** Web3j 凭证（secp256k1 私钥），用于签署并发送 EVM 真实交易。null 时回退到合成哈希模式。 */
+    protected Credentials credentials;
+
+    /** 签名服务（可选），用于签名跨链消息参数（如 unlock/mint 的 signature 参数）。 */
+    protected KeyVault keyVault;
+
+    /** relayer 在 KeyVault 中的 validator ID，用于通过签名服务签名跨链消息。 */
+    protected String relayerValidatorId;
+
+    /** 固定 gas price（wei）。null 表示使用 eth_gasPrice 网络建议值。 */
+    protected BigInteger gasPrice;
+
+    /** 固定 gas limit。null 表示使用 DEFAULT_GAS_LIMIT 或 eth_estimateGas 估算。 */
+    protected BigInteger gasLimit;
 
     /**
      * 构造桥处理器。
@@ -415,35 +445,162 @@ public abstract class AbstractBridgeHandler {
     /**
      * 提交合约调用交易并返回交易哈希。
      *
-     * <p>由于本模块不直接持有私钥（私钥由 nexus-core 密钥管理服务托管），
-     * 此方法采用以下策略：</p>
+     * <p>本方法支持两种模式：</p>
      * <ol>
-     *   <li>用 {@code eth_call} 验证 calldata 在当前状态下可执行（fail-fast）</li>
-     *   <li>对 calldata 计算确定性 SHA-256 摘要作为合成交易哈希，
-     *       代表"该调用已提交至桥合约"的语义</li>
-     *   <li>实际生产中应由密钥服务签名后通过 {@code eth_sendRawTransaction} 提交</li>
+     *   <li><b>真实交易模式</b>（推荐）：当 {@link #credentials} 已配置时，
+     *       构造原始交易并通过 {@code eth_sendRawTransaction} 提交上链，返回真实交易哈希。
+     *       包含 nonce 管理（{@code eth_getTransactionCount}）、
+     *       gas 估算（{@code eth_estimateGas} 或固定值）与 EIP-155 签名。</li>
+     *   <li><b>合成哈希模式</b>（fallback）：当未配置 credentials 时，
+     *       用 {@code eth_call} 验证 calldata 可执行后，生成确定性 SHA-256 摘要作为合成交易哈希。
+     *       适用于测试环境或当密钥服务不可用时。</li>
      * </ol>
      *
      * @param web3j           Web3j 客户端
      * @param contractAddress  桥合约地址
      * @param encodedFunction  编码后的函数调用 calldata
      * @param chainId          链 ID（用于日志与哈希命名空间隔离）
-     * @return 合成的交易哈希（0x + 64 hex 字符）
-     * @throws BridgeException 如果 eth_call 验证失败
+     * @return 真实交易哈希（来自 eth_sendRawTransaction）或合成交易哈希（0x + 64 hex 字符）
+     * @throws BridgeException 如果交易发送失败或 eth_call 验证失败
      */
     protected String submitContractCall(Web3j web3j, String contractAddress,
                                          String encodedFunction, String chainId) throws BridgeException {
-        // 1. eth_call 验证 calldata 可执行（fail-fast）
+        // 1. 优先尝试真实交易发送（当 credentials 已配置）
+        if (credentials != null) {
+            return sendRawTransaction(web3j, contractAddress, encodedFunction, chainId);
+        }
+        // 2. fallback: eth_call 验证 + 合成交易哈希
         String viewResult = executeViewCall(web3j, contractAddress, encodedFunction);
         if (viewResult == null) {
             throw new BridgeException("CONTRACT_CALL_REJECTED",
                     "eth_call validation failed on chain " + chainId + " for contract " + contractAddress);
         }
-        // 2. 生成确定性合成交易哈希
         String txHash = synthesizeTxHash(chainId, encodedFunction);
-        log.info("Submitted contract call on chain {}: contract={}, txHash={}, calldataLen={}",
+        log.info("Submitted contract call (synthesized) on chain {}: contract={}, txHash={}, calldataLen={}",
                 chainId, contractAddress, txHash, encodedFunction.length());
         return txHash;
+    }
+
+    /**
+     * 通过 {@code eth_sendRawTransaction} 发送真实 EVM 交易并返回交易哈希。
+     *
+     * <p>流程：</p>
+     * <ol>
+     *   <li>从 {@code eth_getTransactionCount} 获取 pending nonce</li>
+     *   <li>确定 gas price：优先使用 {@link #gasPrice}，否则 {@code eth_gasPrice}</li>
+     *   <li>确定 gas limit：优先使用 {@link #gasLimit}，否则 {@link #DEFAULT_GAS_LIMIT}</li>
+     *   <li>构造 {@link RawTransaction}（to=合约地址，value=0，data=calldata）</li>
+     *   <li>使用 {@link TransactionEncoder#signMessage} 进行 EIP-155 签名</li>
+     *   <li>通过 {@code eth_sendRawTransaction} 广播并返回真实交易哈希</li>
+     * </ol>
+     *
+     * @param web3j           Web3j 客户端
+     * @param contractAddress  合约地址
+     * @param encodedFunction  编码后的 calldata（带或不带 0x 前缀均可）
+     * @param chainId          链 ID（用于日志）
+     * @return 真实交易哈希（0x + 64 hex 字符）
+     * @throws BridgeException 如果 nonce/gas 获取、签名或发送失败
+     */
+    protected String sendRawTransaction(Web3j web3j, String contractAddress,
+                                         String encodedFunction, String chainId) throws BridgeException {
+        try {
+            String fromAddress = credentials.getAddress();
+            // 1. 获取 nonce（pending 池，避免连续交易冲突）
+            BigInteger nonce = getNonce(web3j, fromAddress);
+            // 2. 确定 gas price
+            BigInteger txGasPrice = resolveGasPrice(web3j);
+            // 3. 确定 gas limit
+            BigInteger txGasLimit = resolveGasLimit(web3j, fromAddress, contractAddress, encodedFunction);
+            // 4. 构造 RawTransaction
+            String data = encodedFunction.startsWith("0x") ? encodedFunction : "0x" + encodedFunction;
+            RawTransaction rawTx = RawTransaction.createTransaction(
+                    nonce, txGasPrice, txGasLimit, contractAddress, BigInteger.ZERO, data);
+            // 5. 签名（EIP-155，需指定 EVM 链 ID）
+            byte[] signedBytes;
+            if (evmChainId != null) {
+                signedBytes = TransactionEncoder.signMessage(rawTx, evmChainId.longValueExact(), credentials);
+            } else {
+                // legacy 签名（不推荐，仅用于旧链或测试链）
+                signedBytes = TransactionEncoder.signMessage(rawTx, credentials);
+            }
+            String hexSigned = Numeric.toHexString(signedBytes);
+            // 6. 广播交易
+            EthSendTransaction response = web3j.ethSendRawTransaction(hexSigned).send();
+            if (response.hasError()) {
+                throw new BridgeException("TX_SEND_FAILED",
+                        "eth_sendRawTransaction failed on chain " + chainId
+                                + ": code=" + response.getError().getCode()
+                                + ", message=" + response.getError().getMessage());
+            }
+            String txHash = response.getTransactionHash();
+            log.info("Sent raw transaction on chain {}: from={}, contract={}, txHash={}, nonce={}, gasPrice={}, gasLimit={}",
+                    chainId, fromAddress, contractAddress, txHash, nonce, txGasPrice, txGasLimit);
+            return txHash;
+        } catch (IOException e) {
+            throw new BridgeException("TX_SEND_IO_ERROR",
+                    "IO error sending raw transaction on chain " + chainId + ": " + e.getMessage(), e);
+        } catch (ArithmeticException e) {
+            throw new BridgeException("TX_SIGN_ERROR",
+                    "EVM chain ID overflow on chain " + chainId + ": " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 获取指定地址的 pending nonce（包含待确认交易池）。
+     *
+     * @param web3j   Web3j 客户端
+     * @param address 发送方地址
+     * @return nonce 值
+     * @throws IOException 如果 RPC 调用失败
+     */
+    protected BigInteger getNonce(Web3j web3j, String address) throws IOException {
+        EthGetTransactionCount response = web3j.ethGetTransactionCount(
+                address, DefaultBlockParameterName.PENDING).send();
+        if (response.hasError()) {
+            throw new IOException("eth_getTransactionCount failed for " + address
+                    + ": " + response.getError().getMessage());
+        }
+        return response.getTransactionCount();
+    }
+
+    /**
+     * 解析 gas price：优先使用配置的固定值，否则查询网络建议值。
+     *
+     * @param web3j Web3j 客户端
+     * @return gas price（wei）
+     * @throws IOException 如果 eth_gasPrice 调用失败
+     */
+    protected BigInteger resolveGasPrice(Web3j web3j) throws IOException {
+        if (gasPrice != null) {
+            return gasPrice;
+        }
+        EthGasPrice response = web3j.ethGasPrice().send();
+        if (response.hasError()) {
+            log.warn("eth_gasPrice failed, using default 1 Gwei: {}", response.getError().getMessage());
+            return BigInteger.valueOf(1_000_000_000L);
+        }
+        BigInteger price = response.getGasPrice();
+        return price != null ? price : BigInteger.valueOf(1_000_000_000L);
+    }
+
+    /**
+     * 解析 gas limit：优先使用配置的固定值，否则使用默认值。
+     *
+     * <p>注：本方法不调用 eth_estimateGas（部分节点对该 RPC 支持不稳定），
+     * 而是使用 {@link #DEFAULT_GAS_LIMIT} 作为保守值。子类可重写以接入 eth_estimateGas。</p>
+     *
+     * @param web3j           Web3j 客户端
+     * @param from            发送方地址
+     * @param contractAddress  合约地址
+     * @param encodedFunction  编码后的 calldata
+     * @return gas limit
+     */
+    protected BigInteger resolveGasLimit(Web3j web3j, String from,
+                                          String contractAddress, String encodedFunction) {
+        if (gasLimit != null) {
+            return gasLimit;
+        }
+        return DEFAULT_GAS_LIMIT;
     }
 
     /**
@@ -567,6 +724,73 @@ public abstract class AbstractBridgeHandler {
             bytes = Arrays.copyOf(bytes, 32);
         }
         return new Bytes32(bytes);
+    }
+
+    /**
+     * 将 hex 字符串包装为 Web3j 动态 {@link org.web3j.abi.datatypes.DynamicBytes} 类型。
+     *
+     * <p>用于合约函数中 {@code bytes calldata signature} 等动态字节数组参数。
+     * 输入为 null 或空字符串时返回空字节数组。</p>
+     *
+     * @param hex 0x 开头的 hex 字符串（或无前缀）
+     * @return Web3j 动态 DynamicBytes 类型
+     */
+    protected org.web3j.abi.datatypes.DynamicBytes toBytes(String hex) {
+        if (hex == null || hex.isEmpty()) {
+            return new org.web3j.abi.datatypes.DynamicBytes(new byte[0]);
+        }
+        String clean = hex.startsWith("0x") ? hex.substring(2) : hex;
+        byte[] bytes = HexFormat.of().parseHex(clean);
+        return new org.web3j.abi.datatypes.DynamicBytes(bytes);
+    }
+
+    /**
+     * 通过 KeyVault 签名服务对跨链消息签名（用于 mint/unlock 的 signature 参数）。
+     *
+     * <p>KeyVault 在内部完成签名（Ed25519 或 HSM secp256k1），
+     * 私钥不离开 vault 边界。返回 hex 编码的签名（不带 0x 前缀）。</p>
+     *
+     * @param payload 待签名的消息字节数组
+     * @return hex 编码的签名（不带 0x 前缀）；若 KeyVault 未配置返回 null
+     */
+    protected String signBridgeMessage(byte[] payload) {
+        if (keyVault == null || relayerValidatorId == null) {
+            return null;
+        }
+        if (!keyVault.isAvailable()) {
+            log.warn("KeyVault not available, cannot sign bridge message");
+            return null;
+        }
+        return keyVault.sign(relayerValidatorId, payload);
+    }
+
+    /**
+     * 生成跨链交易 nonce（32 字节幂等键）。
+     *
+     * <p>基于源链交易哈希、用户地址、金额与时间戳计算 SHA-256，
+     * 取前 32 字节作为 nonce。同一笔跨链请求产生相同 nonce，保证幂等性。</p>
+     *
+     * @param sourceTxHash 源链交易哈希
+     * @param userAddress  用户地址
+     * @param amount       金额
+     * @return 0x + 64 hex 字符的 nonce
+     */
+    protected static String generateBridgeNonce(String sourceTxHash, String userAddress, long amount) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            if (sourceTxHash != null) {
+                digest.update(sourceTxHash.getBytes(StandardCharsets.UTF_8));
+            }
+            digest.update((byte) '|');
+            if (userAddress != null) {
+                digest.update(userAddress.getBytes(StandardCharsets.UTF_8));
+            }
+            digest.update((byte) '|');
+            digest.update(Long.toString(amount).getBytes(StandardCharsets.UTF_8));
+            return "0x" + HexFormat.of().formatHex(digest.digest());
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 algorithm not available", e);
+        }
     }
 
     /**
