@@ -20,13 +20,20 @@ import java.util.concurrent.ConcurrentHashMap;
 public class StripeConnector implements PaymentConnector {
 
     private static final Logger log = LoggerFactory.getLogger(StripeConnector.class);
-    private static final String STRIPE_API_BASE = "https://api.stripe.com/v1";
+    private static final String DEFAULT_STRIPE_API_BASE = "https://api.stripe.com/v1";
 
     @Value("${nexus.connectors.stripe.api-key:}")
     private String apiKey;
 
     @Value("${nexus.connectors.stripe.enabled:false}")
     private boolean enabled;
+
+    /**
+     * Stripe API base URL — 默认 {@code https://api.stripe.com/v1}，可通过
+     * {@code nexus.connectors.stripe.api-base-url} 覆盖（测试用 WireMock 指向本地端口）。
+     */
+    @Value("${nexus.connectors.stripe.api-base-url:https://api.stripe.com/v1}")
+    private String apiBase = DEFAULT_STRIPE_API_BASE;
 
     private final RestTemplate restTemplate = new RestTemplate();
     private final Map<String, PaymentStatus> localState = new ConcurrentHashMap<>();
@@ -62,7 +69,7 @@ public class StripeConnector implements PaymentConnector {
                     request.getAmount(), request.getCurrency().toLowerCase(), request.getDescription() != null ? request.getDescription() : "");
 
             HttpEntity<String> entity = new HttpEntity<>(body, headers);
-            ResponseEntity<Map> resp = restTemplate.postForEntity(STRIPE_API_BASE + "/payment_intents", entity, Map.class);
+            ResponseEntity<Map> resp = restTemplate.postForEntity(apiBase + "/payment_intents", entity, Map.class);
 
             if (resp.getBody() != null) {
                 String piId = String.valueOf(resp.getBody().get("id"));
@@ -89,7 +96,7 @@ public class StripeConnector implements PaymentConnector {
             headers.setBearerAuth(apiKey);
             HttpEntity<Void> entity = new HttpEntity<>(headers);
             ResponseEntity<Map> resp = restTemplate.exchange(
-                    STRIPE_API_BASE + "/payment_intents/" + connectorPaymentId, HttpMethod.GET, entity, Map.class);
+                    apiBase + "/payment_intents/" + connectorPaymentId, HttpMethod.GET, entity, Map.class);
             if (resp.getBody() != null) {
                 PaymentStatus s = mapStripeStatus(String.valueOf(resp.getBody().get("status")));
                 localState.put(connectorPaymentId, s);
@@ -113,7 +120,7 @@ public class StripeConnector implements PaymentConnector {
             headers.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
             String body = "payment_intent=" + connectorPaymentId + "&amount=" + amount;
             HttpEntity<String> entity = new HttpEntity<>(body, headers);
-            ResponseEntity<Map> resp = restTemplate.postForEntity(STRIPE_API_BASE + "/refunds", entity, Map.class);
+            ResponseEntity<Map> resp = restTemplate.postForEntity(apiBase + "/refunds", entity, Map.class);
             if (resp.getBody() != null) {
                 localState.put(connectorPaymentId, PaymentStatus.REFUNDED);
                 return ConnectorRefundResult.ok(String.valueOf(resp.getBody().get("id")));
@@ -133,7 +140,7 @@ public class StripeConnector implements PaymentConnector {
             HttpHeaders headers = new HttpHeaders();
             headers.setBearerAuth(apiKey);
             HttpEntity<Void> entity = new HttpEntity<>(headers);
-            restTemplate.exchange(STRIPE_API_BASE + "/account", HttpMethod.GET, entity, Map.class);
+            restTemplate.exchange(apiBase + "/account", HttpMethod.GET, entity, Map.class);
             return ConnectorHealth.up(getId(), System.currentTimeMillis() - start);
         } catch (Exception e) {
             return ConnectorHealth.down(getId(), e.getMessage());

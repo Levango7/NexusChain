@@ -1,0 +1,220 @@
+# mpc-engine 子 chart 默认 values
+# ============================================================================
+# MPC 密码学引擎（Rust tss-lib / multi-party-ecdsa）分散式部署
+#   - StatefulSet 3 副本，每副本通过 pod ordinal 自动分配 party_index
+#   - Headless Service 供 Pod 间 gRPC + mTLS 互连
+#   - ConfigMap 注入 node.json 配置模板（每副本读取自己的 party 配置）
+#   - Secret 注入 TLS 证书 / storage_key / auth_token（引用 mpc-certs/）
+# 阈值签名：2-of-3（threshold=2, total_parties=3）
+# ============================================================================
+
+enabled: true
+
+# -- StatefulSet 副本数（MPC 参与方数 n，2-of-3 部署 replicas=3）
+replicaCount: 3
+
+# -- 阈值 t（t-of-n 签名所需最少参与方数）
+threshold: 2
+
+nameOverride: ""
+
+image:
+  repository: ""
+  tag: ""
+  pullPolicy: ""
+
+imagePullSecrets: []
+
+# -- gRPC 端口（容器内监听，每个 Pod 相同；Headless Service 通过 Pod 名路由）
+service:
+  type: ClusterIP
+  # -- Headless Service（clusterIP: None）供 Pod 间互连 + StatefulSet DNS 解析
+  headless: true
+  port: 50051
+  targetPort: 50051
+  name: grpc
+
+# -- 是否使用明文 gRPC（仅开发环境；生产必须 false 并配置 mTLS）
+usePlaintext: false
+
+# -- gRPC 应用层 Bearer token 认证（MPC-P1-05）
+#   非空时 mpc-engine AuthInterceptor 校验 Authorization: Bearer <token>
+#   生产环境通过 Secret 注入，禁止明文入仓
+authToken: ""
+
+# -- 会话落盘 AES-256-GCM 加密密钥（hex 编码 32 字节 = 64 hex chars，MPC-P1-05）
+#   生产环境通过 Secret / KMS 注入
+storageKey: ""
+
+# -- Rust 日志级别
+rustLog: info
+
+# -- Spring profile（仅用于 umbrella 部署时统一注入环境标签）
+springProfile: ""
+
+resources:
+  requests:
+    memory: 256Mi
+    cpu: 500m
+  limits:
+    memory: 512Mi
+    cpu: 1000m
+
+# -- Pod 间反亲和（强制 3 副本调度到不同 Node，避免单 Node 故障丢多方）
+podAntiAffinity:
+  enabled: true
+  # -- hard=requiredDuringScheduling，soft=preferredDuringScheduling
+  mode: hard
+
+probes:
+  liveness:
+    enabled: true
+    # gRPC health probe（需 grpc-health-probe 二进制；K8s 1.24+ 原生支持 grpc probe）
+    grpc:
+      port: 50051
+      service: default
+    initialDelaySeconds: 20
+    periodSeconds: 30
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readiness:
+    enabled: true
+    grpc:
+      port: 50051
+      service: default
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+  startup:
+    enabled: true
+    grpc:
+      port: 50051
+      service: default
+    initialDelaySeconds: 0
+    periodSeconds: 10
+    failureThreshold: 30
+
+# -- PodDisruptionBudget（保证滚动维护时至少 2 副本可用，满足 t=2 阈值）
+pdb:
+  enabled: true
+  minAvailable: 2
+
+serviceMonitor:
+  enabled: true
+  interval: ""
+  path: /metrics
+  port: grpc
+  labels: {}
+
+# -- node.json 配置模板（ConfigMap 注入到 /app/config/node.json）
+#   占位符 ${POD_ORDINAL} / ${POD_NAME} / ${HEADLESS_SERVICE} 由 initContainer 替换
+#   party_index = POD_ORDINAL（0/1/2），自动与 StatefulSet ordinal 对齐
+config:
+  nodeJsonTemplate: |-
+    {
+      "party_index": ${POD_ORDINAL},
+      "party_id": "party-${POD_ORDINAL}",
+      "listen_addr": "0.0.0.0:50051",
+      "peers": ${PEERS_JSON},
+      "storage_key": "${STORAGE_KEY}",
+      "storage_key_version": 1,
+      "storage_key_source": "secret",
+      "tls_cert": "/etc/mpc/tls/tls.crt",
+      "tls_key": "/etc/mpc/tls/tls.key",
+      "tls_ca": "/etc/mpc/tls/ca.crt"
+    }
+
+# -- Secret 敏感数据（stringData）
+#   生产用 sealed-secrets / external-secrets / SOPS 注入，避免明文入仓
+secrets:
+  stringData: {}
+  # -- TLS 证书文件内容（PEM，base64 编码由 Helm 自动处理）
+  #   每副本通过 Secret 卷挂载自己的证书（subPath: tls.crt/tls.key/ca.crt）
+  tlsCerts: {}
+    # node-0:
+    #   tls.crt: |-
+    #     -----BEGIN CERTIFICATE-----
+    #     ...
+    #   tls.key: |-
+    #     -----BEGIN PRIVATE KEY-----
+    #     ...
+    # node-1: ...
+    # node-2: ...
+    # ca.crt: |-
+    #   -----BEGIN CERTIFICATE-----
+    #   ...
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+topologySpreadConstraints: []
+extraVolumes: []
+extraVolumeMounts: []
+automountServiceAccountToken: false
+terminationGracePeriodSeconds: 30
+
+# -- StatefulSet 更新策略
+updateStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    partition: 0
+
+# -- global 默认值（umbrella 部署时由父 chart 覆盖；独立 lint/部署时使用此默认）
+global:
+  # -- 部署目标环境：dev / staging / prod
+  env: staging
+
+  # -- 命名空间
+  namespace: nexus
+
+  # -- 镜像仓库基址
+  imageRegistry: ghcr.io/nexus
+
+  # -- 镜像拉取策略
+  imagePullPolicy: IfNotPresent
+
+  # -- 镜像拉取 Secret
+  imagePullSecrets: []
+
+  # -- Spring profile（仅占位，mpc-engine 不使用 Spring）
+  springProfile: ""
+
+  # -- 服务名标签键
+  appLabelKey: app.kubernetes.io/name
+  partOfLabel: nexus
+
+  # -- Pod 级安全上下文（mpc-engine 容器以 UID 1000 运行，见 Dockerfile）
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+
+  # -- 容器级安全上下文
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: false
+    capabilities:
+      drop:
+        - ALL
+    seccompProfile:
+      type: RuntimeDefault
+
+  # -- ServiceMonitor 标签
+  serviceMonitor:
+    enabled: true
+    labels:
+      release: kube-prometheus-stack
+    interval: 30s
+
+  # -- NetworkPolicy 是否启用（零信任东西向，限制只有 signing-service 可访问 mpc-engine）
+  networkPolicy:
+    enabled: true
+
+# ============================================================================
+# 子 chart 覆盖入口
+# ============================================================================

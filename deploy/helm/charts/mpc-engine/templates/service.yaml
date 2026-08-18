@@ -1,0 +1,63 @@
+# Headless Service：供 StatefulSet Pod 间 gRPC + mTLS 互连
+# ============================================================================
+# clusterIP: None -> Headless Service，DNS 解析返回所有 Pod IP
+# Pod DNS 名：mpc-engine-0.mpc-engine-headless.nexus.svc.cluster.local
+#             mpc-engine-1.mpc-engine-headless.nexus.svc.cluster.local
+#             mpc-engine-2.mpc-engine-headless.nexus.svc.cluster.local
+# Pod 间通过 Pod DNS 名建立 mTLS gRPC 通道（peerEndpoints 使用 Pod DNS 名）
+# ============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ printf "%s-headless" .Chart.Name }}
+  namespace: {{ .Values.global.namespace | default "nexus" }}
+  labels:
+    helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
+    app.kubernetes.io/name: {{ .Chart.Name }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/part-of: {{ .Values.global.partOfLabel | default "nexus" }}
+    app.kubernetes.io/component: mpc-engine
+    {{- with .Values.podLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/name: {{ .Chart.Name }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: {{ .Values.service.name }}
+      port: {{ .Values.service.port }}
+      targetPort: {{ .Values.service.targetPort }}
+      protocol: TCP
+---
+# Client Service：供 signing-service 通过稳定 DNS 名访问集群（round-robin）
+# signing-service 通过 MpcEngineRouter 显式路由到 mpc-engine-0/1/2.headless
+# 此 Client Service 仅用于健康检查 / 调试，签名流量走 Headless + Pod DNS
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Chart.Name }}
+  namespace: {{ .Values.global.namespace | default "nexus" }}
+  labels:
+    helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
+    app.kubernetes.io/name: {{ .Chart.Name }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/part-of: {{ .Values.global.partOfLabel | default "nexus" }}
+    app.kubernetes.io/component: mpc-engine
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    app.kubernetes.io/name: {{ .Chart.Name }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: {{ .Values.service.name }}
+      port: {{ .Values.service.port }}
+      targetPort: {{ .Values.service.targetPort }}
+      protocol: TCP

@@ -220,6 +220,27 @@ nexus:
       # token TTL（毫秒），默认 5 分钟；短期 token 降低泄露风险
       ttl-millis: ${JWT_TTL_MILLIS:300000}
 
+  # === P0-3a：PSP 真实 API 配置（Stripe / Adyen） ===
+  # 默认 enabled=false 保持向后兼容：未注入 apiKey 时各 Connector 自动走 dry-run。
+  # 生产环境通过环境变量 / Nacos 注入 apiKey / webhookSecret / hmacKey，不落明文配置。
+  connectors:
+    stripe:
+      # 启用开关：false 时 ConnectorRegistry 不路由流量到 Stripe
+      enabled: ${NEX_PSP_STRIPE_ENABLED:false}
+      # Stripe Secret API Key（sk_live_xxx / sk_test_xxx），通过环境变量注入
+      api-key: ${NEX_PSP_STRIPE_API_KEY:}
+      # Webhook 签名密钥（whsec_xxx），用于 StripeWebhookVerifier 验证 Stripe-Signature 头
+      webhook-secret: ${NEX_PSP_STRIPE_WEBHOOK_SECRET:}
+    adyen:
+      # 启用开关：false 时 ConnectorRegistry 不路由流量到 Adyen
+      enabled: ${NEX_PSP_ADYEN_ENABLED:false}
+      # Adyen Checkout API Key（X-API-Key 头），通过环境变量注入
+      api-key: ${NEX_PSP_ADYEN_API_KEY:}
+      # Adyen Merchant Account Code（请求体 merchantAccount 字段）
+      merchant-account: ${NEX_PSP_ADYEN_MERCHANT_ACCOUNT:}
+      # Adyen Webhook HMAC Key，用于 AdyenWebhookVerifier 验证 AdditionalData.hmacSignature
+      hmac-key: ${NEX_PSP_ADYEN_HMAC_KEY:}
+
   # Webhook callback configuration
   webhook:
     # Public base URL for chain event callbacks
@@ -232,6 +253,9 @@ nexus:
       store: kafka
       # 是否等待 Kafka ack 后返回（测试环境可关闭）
       wait-for-ack: true
+    # === P0-3a：PSP Webhook 验签容差 ===
+    # Stripe 重放攻击防护：timestamp 与服务器时间差超过此阈值（秒）则拒绝
+    replay-tolerance-seconds: 300
 
   # Checkout (cashier) configuration
   checkout:

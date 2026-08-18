@@ -245,11 +245,12 @@ public class Web3jL1ContractClient extends L1ContractClient {
                 logger.warn("State root for batch {} is not 32 bytes (got {}), fallback to in-memory", batchId, rootBytes.length);
                 return super.submitStateRootToL1(batchId, root);
             }
+            // 参数顺序与 L2Bridge.sol 的 submitStateRoot(bytes32 stateRoot, uint256 batchId) 一致
             Function function = new Function(
                     "submitStateRoot",
                     Arrays.asList(
-                            new Uint256(BigInteger.valueOf(batchId)),
-                            new Bytes32(rootBytes)),
+                            new Bytes32(rootBytes),
+                            new Uint256(BigInteger.valueOf(batchId))),
                     Collections.<TypeReference<?>>emptyList());
 
             String txHash = sendTransaction(function, "submitStateRoot", batchId);
@@ -327,11 +328,22 @@ public class Web3jL1ContractClient extends L1ContractClient {
             return super.challengeBatchOnL1(batchId, proofData);
         }
         try {
+            // L2Bridge.sol 的 challengeBatch(uint256 batchId, bytes32[] calldata proof)
+            // 将 byte[] 转换为 bytes32[]：每 32 字节为一个元素，不足 32 字节右侧零填充
+            int numElements = (proofData.length + 31) / 32;
+            List<Bytes32> proofList = new ArrayList<>(numElements);
+            for (int i = 0; i < numElements; i++) {
+                byte[] element = new byte[32];
+                int offset = i * 32;
+                int length = Math.min(32, proofData.length - offset);
+                System.arraycopy(proofData, offset, element, 0, length);
+                proofList.add(new Bytes32(element));
+            }
             Function function = new Function(
                     "challengeBatch",
                     Arrays.asList(
                             new Uint256(BigInteger.valueOf(batchId)),
-                            new DynamicBytes(proofData)),
+                            new org.web3j.abi.datatypes.DynamicArray<>(Bytes32.class, proofList)),
                     Collections.<TypeReference<?>>emptyList());
 
             String txHash = sendTransaction(function, "challengeBatch", batchId);
