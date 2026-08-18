@@ -39,7 +39,8 @@ mod config;
 mod dkg;
 mod gg20;
 mod persistence;
-mod proto;
+/// 暴露 proto 模块供 tests/integration_test.rs 集成测试使用（gRPC client stub）。
+pub mod proto;
 mod server;
 mod session;
 mod sign;

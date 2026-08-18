@@ -1,0 +1,64 @@
+# =============================================================================
+# NexusChain MPC 节点配置 — node1
+# =============================================================================
+# 本文件为人类可读的 TOML 配置模板。
+#
+# 注意：mpc-engine 当前实现（src/config.rs PartyConfig）使用 serde_json
+#       反序列化 JSON 格式配置。运行时由 start-mpc-cluster.sh 自动生成
+#       对应的 node1.json（与本 TOML 字段等价），或可手动转换为 JSON。
+#
+# 字段说明见各字段注释；与 PartyConfig 结构对齐。
+# =============================================================================
+
+# ---------- 节点身份 ----------
+# node_id：人类可读的节点编号（1-based，用于日志/监控）
+node_id = 1
+# party_index：MPC 协议参与方索引（0-based，对应 DKG/Sign RPC 的 party_index）
+party_index = 0
+# party_id：参与方唯一标识（用于 session_id 身份绑定与安全日志）
+party_id = "party-0"
+
+# ---------- 监听地址 ----------
+# 本节点 gRPC 监听地址（host:port）
+listen_addr = "127.0.0.1:50051"
+
+# ---------- 阈值签名参数 ----------
+# threshold：签名所需最少参与方数（2-of-3 中 threshold=2）
+threshold = 2
+# total_parties：总参与方数
+total_parties = 3
+
+# ---------- 日志 ----------
+# log_level：RUST_LOG 环境变量值（info/debug/trace/warn/error）
+log_level = "info"
+
+# ---------- 对端节点（peers） ----------
+# 不含本节点的其他参与方列表
+[[peers]]
+party_index = 1
+party_id    = "party-1"
+endpoint    = "https://127.0.0.1:50052"
+
+[[peers]]
+party_index = 2
+party_id    = "party-2"
+endpoint    = "https://127.0.0.1:50053"
+
+# ---------- mTLS 证书 ----------
+# 注：路径相对于 mpc-engine/ 目录；由 generate-certs.sh 生成
+[tls]
+cert_path    = "certs/node1.crt"   # 本节点证书（PEM）
+key_path     = "certs/node1.key"   # 本节点私钥（PEM）
+ca_cert_path = "certs/ca.crt"      # CA 证书（用于验证对端）
+
+# ---------- 本地存储 ----------
+[storage]
+# data_dir：本节点数据目录（会话快照、WAL 等）
+data_dir = "data/node1"
+# storage_key：AES-256-GCM 加密密钥（hex 编码 32 字节 = 64 字符）
+# 生产环境应从 KMS / 环境变量读取，此处为本地验证用测试密钥
+storage_key = "4242424242424242424242424242424242424242424242424242424242424242"
+# storage_key_version：密钥版本号（密钥轮换用，默认 1）
+storage_key_version = 1
+# storage_key_source：密钥来源（plain / env / kms）
+storage_key_source = "plain"
