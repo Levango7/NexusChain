@@ -4,6 +4,52 @@
 
 ## [Unreleased]
 
+## [2.13.0] - 2026-08-20
+
+### 第13轮：订阅计费链上化 + k6性能测试运行
+
+本次发布完成最后两个真实缺口：订阅计费授权交易链上化（替换UUID伪造的authTxHash为真实链上交易哈希）和k6性能测试脚本运行验证（4个场景全部通过inspect+smoke test执行）。
+
+#### Fixed（修复）
+
+##### 订阅计费链上化（nexus-gateway）
+- `SubscriptionServiceImpl.createSubscription`：移除 `TODO(v2.0.0)` UUID伪造的authTxHash，改为通过 `signingServiceClient.signTransfer` 提交链上授权交易（0金额授权标记交易）
+- 新增 `submitOnChainAuth` 私有方法：使用平台热钱包向payee发送0金额授权标记交易，记录真实链上txHash
+- fail-closed策略：签名服务/钱包不可达或平台公钥未配置时，authTxHash设为null（不生成伪哈希），订阅仍创建但标记未链上授权
+
+#### Added（新增测试+工具）
+
+##### 订阅链上授权测试（nexus-gateway）
+- `SubscriptionServiceImplTest` 新增4用例（共16用例，全部通过）：
+  1. 链上授权成功→authTxHash为真实txHash
+  2. 钱包不可达→authTxHash=null（fail-closed）
+  3. 平台公钥未配置→authTxHash=null（fail-closed）
+  4. 签名服务异常→authTxHash=null（fail-closed）
+
+##### k6性能测试运行验证（perf/k6）
+- k6 v0.54.0 安装到 `.tools/k6/`（Windows amd64二进制）
+- 4个k6脚本全部通过 `k6 inspect` 语法验证：
+  - `payment-create.js`：POST /api/v1/payments，P99<500ms @1000 RPS
+  - `payment-query.js`：GET /api/v1/payments/{id}，P99<200ms @2000 RPS
+  - `bridge-lock.js`：POST /api/v1/bridge/lock，P99<2000ms @100 RPS
+  - `webhook-delivery.js`：POST /api/v1/payments/{id}/confirm，P99<1000ms @500 RPS
+- 4个脚本全部成功执行smoke test（1次迭代，setup→default→teardown完整流程）
+- 新增 `mock_server.py`：Python mock服务器模拟API端点用于本地k6测试
+- 新增 `run-k6-smoke.ps1`：k6 smoke test一键运行脚本
+
+#### Changed（修改文件）
+
+- `nexus-gateway/src/main/java/org/nexus/gateway/service/SubscriptionServiceImpl.java`：createSubscription链上化+新增submitOnChainAuth
+- `nexus-gateway/src/test/java/org/nexus/gateway/service/SubscriptionServiceImplTest.java`：新增4个链上授权测试用例
+- `perf/k6/mock_server.py`：新增mock服务器
+- `perf/k6/run-k6-smoke.ps1`：新增smoke test运行脚本
+
+#### 编译验证
+
+- nexus-gateway编译+测试：BUILD SUCCESSFUL（SubscriptionServiceImplTest 16/16通过）
+- k6 inspect：4/4脚本语法验证通过
+- k6 smoke test：4/4脚本执行成功（payment-create 1 HTTP请求、bridge-lock 1 HTTP请求）
+
 ## [2.12.0] - 2026-08-20
 
 ### 第10-12轮：链上DID增强 + 多签资金归集 + ZK多方设置仪式

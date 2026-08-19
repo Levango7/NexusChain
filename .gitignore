@@ -137,3 +137,6 @@ deploy/config/seata.local.properties
 .env.prod
 .env.prod.local
 .env.secrets
+
+# k6 二进制工具（本地安装，不提交）
+.tools/
