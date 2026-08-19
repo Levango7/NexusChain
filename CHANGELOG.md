@@ -4,6 +4,42 @@
 
 ## [Unreleased]
 
+## [2.11.0] - 2026-08-20
+
+### 第8+9轮：3节点共识收敛 + MPC多主机份额分布
+
+本次发布完成两个🟡依赖环境项的纯Java沙箱验证：3节点独立实例共识收敛（多节点投票+状态收敛）和MPC多主机份额分布（3节点份额分布正确性）。不需要Docker/虚拟机，纯Java多线程模拟。
+
+#### Added（新增测试）
+
+##### 3节点共识收敛（nexus-core）
+- `MultiNodeConsensusConvergenceTest` 5用例：
+  1. 3节点对同一检查点投票→所有节点finalized（共识收敛）
+  2. 1节点延迟→其他2节点先finalized→延迟节点追上后也finalized
+  3. 并发投票→所有节点收敛到同一状态
+  4. 不同epoch独立finalized→互不干扰
+  5. 1节点宕机→其他2节点仍能共识（2/3 quorum）→恢复后重新共识
+
+##### MPC多主机份额分布（nexus-signing-service）
+- `MpcShareDistributionTest` 7用例：
+  1. 3节点各持不同份额（participantId唯一+私钥份额各异）
+  2. 联合公钥一致（所有节点共享相同联合公钥）
+  3. 私钥份额不泄露（toString不含私钥材料）
+  4. 阈值签名：任意2/3份额可签名，1份额不可
+  5. 节点故障→其份额不影响其他节点→剩余份额仍可签名
+  6. 份额轮换→份额更新但联合公钥不变
+  7. 钱包状态管理：ACTIVE→FROZEN→DECOMMISSIONED
+
+#### Changed（修改文件）
+
+- `nexus-core/nexus-core/src/test/java/org/nexus/consensus/MultiNodeConsensusConvergenceTest.java`：新增
+- `nexus-signing-service/src/test/java/org/nexus/signing/mpc/MpcShareDistributionTest.java`：新增
+
+#### 编译验证
+
+- 全量编译：BUILD SUCCESSFUL（10个模块）
+- 测试运行：12/12 通过（共识收敛5 + 份额分布7）
+
 ## [2.10.0] - 2026-08-20
 
 ### 第7轮RPC文档一致性：openapi-v2.yaml vs v2 Controller 端点比对
