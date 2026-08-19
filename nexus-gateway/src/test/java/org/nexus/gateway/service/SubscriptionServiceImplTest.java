@@ -44,9 +44,12 @@ class SubscriptionServiceImplTest {
     }
 
     @Test
-    @DisplayName("createSubscription: 落库 ACTIVE 状态并生成 subNo/authTxHash")
-    void createSubscription_persistsActive() {
+    @DisplayName("createSubscription: 链上授权成功→落库 ACTIVE+真实authTxHash")
+    void createSubscription_onChainAuthSuccess() {
         when(subscriptionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(walletMgmtClient.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
+        when(signingServiceClient.signTransfer("platform-pubkey", "payeeHash", BigDecimal.ZERO))
+                .thenReturn("0xAuthTxHash");
 
         Subscription result = service.createSubscription(100L, "0xPayer", "0xPayee",
                 new BigDecimal("1000"), 30);
@@ -55,8 +58,48 @@ class SubscriptionServiceImplTest {
         assertEquals(Subscription.SubscriptionStatus.ACTIVE, result.getStatus());
         assertEquals(0, result.getChargedCount());
         assertNotNull(result.getSubscriptionNo());
-        assertNotNull(result.getAuthTxHash());
+        assertEquals("0xAuthTxHash", result.getAuthTxHash(), "authTxHash应为链上真实交易哈希");
         assertNotNull(result.getNextChargeAt());
+    }
+
+    @Test
+    @DisplayName("createSubscription: 钱包不可达→authTxHash=null（fail-closed）")
+    void createSubscription_walletUnreachable() {
+        when(subscriptionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(walletMgmtClient.addressToPubkeyHash("0xPayee")).thenReturn(null);
+
+        Subscription result = service.createSubscription(100L, "0xPayer", "0xPayee",
+                new BigDecimal("1000"), 30);
+
+        assertNull(result.getAuthTxHash(), "钱包不可达时authTxHash应为null");
+        assertEquals(Subscription.SubscriptionStatus.ACTIVE, result.getStatus(), "订阅仍应创建");
+    }
+
+    @Test
+    @DisplayName("createSubscription: 平台公钥未配置→authTxHash=null（fail-closed）")
+    void createSubscription_noPlatformPubkey() {
+        cfg.getExchangeWallet().setPlatformPubkey("");
+        when(subscriptionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(walletMgmtClient.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
+
+        Subscription result = service.createSubscription(100L, "0xPayer", "0xPayee",
+                new BigDecimal("1000"), 30);
+
+        assertNull(result.getAuthTxHash(), "平台公钥未配置时authTxHash应为null");
+    }
+
+    @Test
+    @DisplayName("createSubscription: 签名服务异常→authTxHash=null（fail-closed）")
+    void createSubscription_signingException() {
+        when(subscriptionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(walletMgmtClient.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
+        when(signingServiceClient.signTransfer(any(), any(), any())).thenThrow(new RuntimeException("sign err"));
+
+        Subscription result = service.createSubscription(100L, "0xPayer", "0xPayee",
+                new BigDecimal("1000"), 30);
+
+        assertNull(result.getAuthTxHash(), "签名服务异常时authTxHash应为null");
+        assertEquals(Subscription.SubscriptionStatus.ACTIVE, result.getStatus(), "订阅仍应创建");
     }
 
     @Test

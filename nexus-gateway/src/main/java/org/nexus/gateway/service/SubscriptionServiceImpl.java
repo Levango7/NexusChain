@@ -57,13 +57,57 @@ public class SubscriptionServiceImpl implements SubscriptionService {
         sub.setStatus(Subscription.SubscriptionStatus.ACTIVE);
         sub.setNextChargeAt(LocalDateTime.now().plusDays(cycleDays));
 
-        // TODO(v2.0.0): submit SUBSCRIPTION_AUTH transaction on-chain via nexus-sdk — tracked in v2.0.0 roadmap
-        sub.setAuthTxHash("0x" + UUID.randomUUID().toString().replace("-", ""));
+        // 链上授权交易：通过签名服务提交 SUBSCRIPTION_AUTH 交易上链
+        // 使用平台热钱包向 payee 发送 0 金额授权标记交易，记录真实 txHash
+        String authTxHash = submitOnChainAuth(sub);
+        sub.setAuthTxHash(authTxHash);
 
         Subscription saved = subscriptionRepository.save(sub);
-        log.info("Subscription created: subNo={}, merchant={}, amount={}, cycleDays={}",
-                saved.getSubscriptionNo(), merchantId, amount, cycleDays);
+        log.info("Subscription created: subNo={}, merchant={}, amount={}, cycleDays={}, authTxHash={}",
+                saved.getSubscriptionNo(), merchantId, amount, cycleDays, authTxHash);
         return saved;
+    }
+
+    /**
+     * 提交链上订阅授权交易。
+     *
+     * <p>通过签名服务使用平台热钱包向 payee 发送一笔 0 金额的授权标记交易，
+     * 将订阅授权记录上链。返回真实链上 txHash。</p>
+     *
+     * <p>fail-closed 策略：如果签名服务/钱包不可达或平台公钥未配置，
+     * 返回 {@code null}（authTxHash 为 null 表示未链上授权），订阅仍创建
+     * 但需后续补偿授权。绝不生成伪交易哈希。</p>
+     *
+     * @param sub 订阅实体（需已设置 payeeAddress）
+     * @return 链上交易哈希，或 null（签名服务不可达时）
+     */
+    private String submitOnChainAuth(Subscription sub) {
+        try {
+            String payeePubkeyHash = walletMgmtClient.addressToPubkeyHash(sub.getPayeeAddress());
+            if (payeePubkeyHash == null) {
+                log.warn("Cannot resolve payee pubkeyHash for on-chain auth (wallet unreachable?), " +
+                        "subscription created without on-chain auth: {}", sub.getSubscriptionNo());
+                return null;
+            }
+
+            String platformPubkey = gatewayConfig.getExchangeWallet().getPlatformPubkey();
+            if (platformPubkey == null || platformPubkey.isEmpty()) {
+                log.warn("Platform pubkey not configured, subscription created without on-chain auth: {}",
+                        sub.getSubscriptionNo());
+                return null;
+            }
+
+            // 提交 0 金额授权标记交易（SUBSCRIPTION_AUTH），签名服务签名+广播
+            String txHash = signingServiceClient.signTransfer(
+                    platformPubkey, payeePubkeyHash, BigDecimal.ZERO);
+            log.info("On-chain subscription auth submitted: subNo={}, txHash={}",
+                    sub.getSubscriptionNo(), txHash);
+            return txHash;
+        } catch (Exception e) {
+            log.warn("On-chain subscription auth failed (fail-closed, subscription created without auth): " +
+                    "subNo={}, error={}", sub.getSubscriptionNo(), e.getMessage());
+            return null;
+        }
     }
 
     @Override
