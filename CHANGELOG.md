@@ -4,6 +4,40 @@
 
 ## [Unreleased]
 
+## [2.9.0] - 2026-08-20
+
+### 第6轮混沌测试：支付链路+共识链路故障注入与恢复
+
+本次发布完成混沌测试覆盖：支付链路（签名/钱包/链上RPC）故障注入+恢复断言，共识链路（验证人宕机+Finality quorum容错）故障注入+恢复断言。纯 Java 沙箱，不启动 Spring 容器。
+
+#### Added（新增测试）
+
+##### 支付链路混沌（nexus-gateway）
+- `PaymentChaosTest` 5用例：
+  1. 链上节点宕机→支付创建成功→查询降级PROCESSING→节点恢复→查询SUCCEEDED
+  2. 签名服务间歇性故障→最终成功
+  3. 钱包服务宕机→地址解析失败→恢复→成功
+  4. 级联故障（签名+链上同时宕机）→不崩溃→恢复→正常
+  5. 签名服务超时→支付失败→恢复→成功
+
+##### 共识链路混沌（nexus-core）
+- `ConsensusChaosTest` 5用例：
+  1. 验证人宕机→活跃数减少→恢复→重新加入
+  2. 多验证人部分宕机→活跃数量正确
+  3. 1/3验证人宕机→剩余2/3达quorum→finality确认
+  4. 验证人宕机后恢复→能继续投票
+  5. 全部宕机→无法finalized→恢复→能finalized
+
+#### Changed（修改文件）
+
+- `nexus-gateway/src/test/java/org/nexus/gateway/orchestration/PaymentChaosTest.java`：新增
+- `nexus-core/nexus-core/src/test/java/org/nexus/consensus/ConsensusChaosTest.java`：新增
+
+#### 编译验证
+
+- 全量编译：BUILD SUCCESSFUL（10个模块）
+- 测试运行：10/10 通过（PaymentChaosTest 5 + ConsensusChaosTest 5）
+
 ## [2.8.0] - 2026-08-20
 
 ### 第5轮支付→签名→链上端到端集成测试：产品主链路最后验证
