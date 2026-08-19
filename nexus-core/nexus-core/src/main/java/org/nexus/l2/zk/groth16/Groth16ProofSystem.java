@@ -121,6 +121,103 @@ public class Groth16ProofSystem {
     }
 
     /**
+     * 幂等 setup：调用 Rust 服务生成/获取持久化 proving key + verifying key。
+     *
+     * <p>通过 HTTP JSON 调用 zk-groth16-service 的 {@code /v1/setup}。
+     * 同电路指纹 → 同 vk（确定性 setup）。</p>
+     *
+     * @param remoteUrl   服务地址（如 http://localhost:50062/v1/setup）
+     * @param circuitJson 电路 JSON（R1csToJsonBridge.toJson() 产出）
+     * @return (fingerprint, vkHex) 元组
+     * @throws IllegalStateException 服务不可用或响应异常
+     */
+    public static String[] setupRemote(String remoteUrl, String circuitJson) {
+        try {
+            java.net.URI uri = java.net.URI.create(remoteUrl);
+            java.net.http.HttpClient client = java.net.http.HttpClient.newBuilder()
+                    .connectTimeout(java.time.Duration.ofSeconds(5))
+                    .build();
+            String body = "{\"circuit_json\":" + circuitJson + "}";
+            java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder(uri)
+                    .header("Content-Type", "application/json")
+                    .timeout(java.time.Duration.ofSeconds(10))
+                    .POST(java.net.http.HttpRequest.BodyPublishers.ofString(body))
+                    .build();
+            java.net.http.HttpResponse<String> resp = client.send(req,
+                    java.net.http.HttpResponse.BodyHandlers.ofString());
+            if (resp.statusCode() != 200) {
+                throw new IllegalStateException("Groth16 setupRemote: HTTP " + resp.statusCode() + " from " + remoteUrl);
+            }
+            String json = resp.body();
+            int fpIdx = json.indexOf("\"fingerprint\"");
+            int vkIdx = json.indexOf("\"vk_hex\"");
+            if (fpIdx < 0 || vkIdx < 0) {
+                throw new IllegalStateException("Groth16 setupRemote: unexpected response: " + json);
+            }
+            String fingerprint = extractJsonString(json, fpIdx);
+            String vkHex = extractJsonString(json, vkIdx);
+            logger.info("Groth16 setupRemote: fingerprint={} vkHexLen={}", fingerprint, vkHex.length());
+            return new String[]{fingerprint, vkHex};
+        } catch (IllegalStateException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException("Groth16 setupRemote FAILED: " + remoteUrl + ": " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 远程 prove：调用 Rust 服务生成真实 Groth16 证明。
+     *
+     * <p>通过 HTTP JSON 调用 zk-groth16-service 的 {@code /v1/prove}。
+     * 用持久化 pk + 电路 witness 生成证明。</p>
+     *
+     * @param remoteUrl   服务地址（如 http://localhost:50062/v1/prove）
+     * @param circuitJson 电路 JSON（R1csToJsonBridge.toJson() 产出）
+     * @return (fingerprint, proofHex) 元组
+     * @throws IllegalStateException 服务不可用或响应异常
+     */
+    public static String[] proveRemote(String remoteUrl, String circuitJson) {
+        try {
+            java.net.URI uri = java.net.URI.create(remoteUrl);
+            java.net.http.HttpClient client = java.net.http.HttpClient.newBuilder()
+                    .connectTimeout(java.time.Duration.ofSeconds(5))
+                    .build();
+            String body = "{\"circuit_json\":" + circuitJson + "}";
+            java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder(uri)
+                    .header("Content-Type", "application/json")
+                    .timeout(java.time.Duration.ofSeconds(10))
+                    .POST(java.net.http.HttpRequest.BodyPublishers.ofString(body))
+                    .build();
+            java.net.http.HttpResponse<String> resp = client.send(req,
+                    java.net.http.HttpResponse.BodyHandlers.ofString());
+            if (resp.statusCode() != 200) {
+                throw new IllegalStateException("Groth16 proveRemote: HTTP " + resp.statusCode() + " from " + remoteUrl);
+            }
+            String json = resp.body();
+            int fpIdx = json.indexOf("\"fingerprint\"");
+            int prIdx = json.indexOf("\"proof_hex\"");
+            if (fpIdx < 0 || prIdx < 0) {
+                throw new IllegalStateException("Groth16 proveRemote: unexpected response: " + json);
+            }
+            String fingerprint = extractJsonString(json, fpIdx);
+            String proofHex = extractJsonString(json, prIdx);
+            logger.info("Groth16 proveRemote: fingerprint={} proofHexLen={}", fingerprint, proofHex.length());
+            return new String[]{fingerprint, proofHex};
+        } catch (IllegalStateException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException("Groth16 proveRemote FAILED: " + remoteUrl + ": " + e.getMessage(), e);
+        }
+    }
+
+    private static String extractJsonString(String json, int keyIdx) {
+        int colon = json.indexOf(':', keyIdx);
+        int quote = json.indexOf('"', colon);
+        int endQuote = json.indexOf('"', quote + 1);
+        return json.substring(quote + 1, endQuote);
+    }
+
+    /**
      * 远程真实验证（ZK 方案 C 集成：Rust arkworks BN254 配对验证，替代本类 Schnorr 降级）。
      *
      * <p>通过 HTTP JSON 调用 zk-groth16-service 的 {@code /v1/verify}（无 protoc 环境

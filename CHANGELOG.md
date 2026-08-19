@@ -4,6 +4,55 @@
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-08-19
+
+### 第3轮生产就绪改造：ZK证明真实化
+
+本次发布完成 P1-4 ZK证明真实化：Java ↔ Rust zk-groth16-service 全链路集成（setup → prove → verify），真实 BN254 配对验证替代本地 Schnorr 降级。所有改动均通过全量编译验证（BUILD SUCCESSFUL）。
+
+#### Added（新增功能）
+
+##### Groth16ProofSystem 远程 prove + setup
+- **`setupRemote(String remoteUrl, String circuitJson)`**：幂等 setup，调用 Rust 服务生成/获取持久化 proving key + verifying key，同电路指纹 → 同 vk（确定性 setup）
+- **`proveRemote(String remoteUrl, String circuitJson)`**：远程 prove，调用 Rust 服务生成真实 Groth16 证明，用持久化 pk + 电路 witness 生成证明
+- 超时配置：连接 5s + 请求 10s
+- fail-closed：服务不可用抛出 `IllegalStateException`，不降级到 Schnorr/mock
+
+##### DefaultZkProofSystem 远程 prove 集成
+- **`prove()` 方法优先走远程 prove**：配置 `zk.prover.remote-prove-url` 后，prove 优先走真实 BN254 配对
+- 新增 `remoteProveUrl` 配置字段
+- 新增 `encodeRemoteGroth16Proof()` 编码方法
+
+##### ZkGroth16RemoteIntegrationTest 端到端集成测试
+- `remoteSetup_returnsDeterministicVk`：同电路 → 同 vk
+- `remoteProve_generatesValidProof`：生成真实证明
+- `remoteProve_thenVerifyEndToEnd`：prove → verify 闭环
+- `remoteVerify_rejectsWrongInput`：错误输入验证失败
+- `remoteProve_serviceDownFailsClosed`：服务不可用 fail-closed
+- `defaultZkProofSystem_remoteProveIntegration`：DefaultZkProofSystem 集成
+
+#### Tests（测试验证）
+
+- **Groth16ProofSystemTest**：21 / 21 全部通过 ✅
+- **Groth16RemoteVerifyIntegrationTest**：3 / 3 全部通过 ✅
+- **ZkGroth16RemoteIntegrationTest**：6 / 6 全部通过 ✅（需 Rust zk-groth16-service 运行）
+- 全量编译：BUILD SUCCESSFUL（10 个模块）
+
+#### Changed（修改文件）
+
+- `nexus-core/nexus-core/src/main/java/org/nexus/l2/zk/groth16/Groth16ProofSystem.java`：新增 `setupRemote()` + `proveRemote()` 方法
+- `nexus-core/nexus-core/src/main/java/org/nexus/l2/zk/DefaultZkProofSystem.java`：`prove()` 优先走远程 prove + 新增 `remoteProveUrl` 配置 + `encodeRemoteGroth16Proof()` 方法
+- `nexus-core/nexus-core/src/test/java/org/nexus/l2/zk/groth16/ZkGroth16RemoteIntegrationTest.java`：新增端到端集成测试
+
+#### 配置说明
+
+```yaml
+zk:
+  prover:
+    remote-prove-url: http://localhost:50062/v1/prove   # 远程 prove 服务
+    remote-verify-url: http://localhost:50062/v1/verify # 远程 verify 服务
+```
+
 ## [2.5.0] - 2026-08-19
 
 ### 第2轮 L2 端到端集成测试 Bug 修复
