@@ -4,6 +4,37 @@
 
 ## [Unreleased]
 
+## [2.7.0] - 2026-08-20
+
+### 第4轮E2E测试扩展：支付全流程+退款审批+MPC多节点+治理参数化
+
+本次发布围绕E2E测试覆盖扩展，新增4个测试文件共24个测试用例，覆盖支付全流程、退款多级审批、MPC多方签名和治理参数化场景。
+
+#### Added（新增测试）
+
+##### 支付全流程E2E（nexus-gateway）
+- `PaymentE2EIntegrationTest` 6用例：商户注册→创建支付→多通道路由→大额支付→超时处理→幂等去重
+
+##### 退款多级审批E2E（nexus-gateway）  
+- `RefundApprovalE2ETest` 6用例：退款请求→L1审批→L2终审→审批拒绝→超时自动退款→部分退款
+
+##### MPC多节点签名E2E（nexus-signing-service）
+- `MultiNodeMpcE2ETest` 6用例：密钥生成→多节点签名轮次→签名聚合→节点路由→传输健康→节点故障隔离
+
+##### 治理参数化E2E（nexus-core）
+- `ParameterGovernanceE2ETest` 6用例：参数提案→投票→quorum检查→提案通过→timelock→紧急提案
+
+#### Changed（修改文件）
+
+- `nexus-gateway/src/test/java/org/nexus/gateway/integration/PaymentE2EIntegrationTest.java`：新增
+- `nexus-gateway/src/test/java/org/nexus/gateway/integration/RefundApprovalE2ETest.java`：新增
+- `nexus-signing-service/src/test/java/org/nexus/signing/mpc/MultiNodeMpcE2ETest.java`：新增
+- `nexus-core/nexus-core/src/test/java/org/nexus/governance/ParameterGovernanceE2ETest.java`：新增
+
+#### 编译验证
+
+- 全量编译：BUILD SUCCESSFUL（10个模块）
+
 ## [2.6.0] - 2026-08-19
 
 ### 第3轮生产就绪改造：ZK证明真实化
