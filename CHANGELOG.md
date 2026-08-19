@@ -4,6 +4,67 @@
 
 ## [Unreleased]
 
+## [2.12.0] - 2026-08-20
+
+### 第10-12轮：链上DID增强 + 多签资金归集 + ZK多方设置仪式
+
+本次发布完成三个🔴大工程项的纯Java沙箱验证：DidService链上DID增强（链上DID创建/解析/吊销/更新/凭证验证）、FundSweep多签审批（部分审批→足够审批→执行、拒绝、幂等）、ZK多方设置仪式（Groth16 Powers of Tau多方贡献、toxic waste销毁、安全性验证）。不需要外部服务，纯Java模拟实现。
+
+#### Added（新增生产代码+测试）
+
+##### 第10轮：DidService链上DID增强（nexus-compliance）
+- `ChainDidStore`接口：链上DID存储抽象（create/resolve/revoke/update/listDids）
+- `InMemoryChainDidStore`实现：进程内链上DID存储模拟
+- `ChainDidService`：链上DID服务（创建+解析+吊销+更新+凭证签发+凭证验证+过期检查）
+- `ChainDidServiceTest` 7用例：
+  1. 创建DID→解析→属性一致
+  2. 吊销DID→解析返回已吊销状态
+  3. 更新DID属性→解析返回新属性
+  4. 签发凭证→验证通过
+  5. 过期凭证→验证失败
+  6. 多DID独立→互不干扰
+  7. 吊销后不可签发新凭证
+
+##### 第11轮：FundSweep多签审批（nexus-settlement）
+- `MultiSigApprovalService`：多签审批服务（发起审批+审批+拒绝+检查阈值+执行）
+- `MultiSigApprovalServiceTest` 7用例：
+  1. 部分审批→未达阈值→不可执行
+  2. 足够审批→达阈值→可执行
+  3. 拒绝→审批失败
+  4. 幂等审批→重复审批不增加计数
+  5. 未授权者审批→拒绝
+  6. 多审批独立→互不干扰
+  7. 拒绝后不可再审批
+
+##### 第12轮：ZK多方设置仪式（nexus-core）
+- `ZkTrustedSetupCeremony`：Groth16 Powers of Tau多方设置仪式模拟（多方贡献随机性、toxic waste销毁、仪式完成生成proving/verifying key）
+- `ZkTrustedSetupCeremonyTest` 7用例：
+  1. 多方设置仪式→3参与者贡献→生成非平凡参数
+  2. 单方设置vs多方设置→参数不同
+  3. 参与者贡献随机性→参数更新
+  4. 仪式安全性→至少一个销毁toxic waste→安全
+  5. 参与者故障→仪式可继续（跳过故障参与者）
+  6. 零随机性→拒绝
+  7. 仪式结果可验证→proving key和verifying key一致
+
+#### Changed（修改文件）
+
+- `nexus-compliance/src/main/java/org/nexus/compliance/identity/ChainDidStore.java`：新增接口
+- `nexus-compliance/src/main/java/org/nexus/compliance/identity/InMemoryChainDidStore.java`：新增实现
+- `nexus-compliance/src/main/java/org/nexus/compliance/identity/ChainDidService.java`：新增链上DID服务
+- `nexus-compliance/src/test/java/org/nexus/compliance/identity/ChainDidServiceTest.java`：新增测试7用例
+- `nexus-settlement/src/main/java/org/nexus/settlement/funds/MultiSigApprovalService.java`：新增多签审批服务
+- `nexus-settlement/src/test/java/org/nexus/settlement/funds/MultiSigApprovalServiceTest.java`：新增测试7用例
+- `nexus-core/nexus-core/src/main/java/org/nexus/l2/zk/groth16/ZkTrustedSetupCeremony.java`：新增ZK多方设置仪式
+- `nexus-core/nexus-core/src/test/java/org/nexus/l2/zk/groth16/ZkTrustedSetupCeremonyTest.java`：新增测试7用例
+
+#### 编译验证
+
+- nexus-core编译+测试：BUILD SUCCESSFUL（ZkTrustedSetupCeremonyTest 7/7通过）
+- nexus-compliance编译+测试：BUILD SUCCESSFUL（ChainDidServiceTest 7/7通过）
+- nexus-settlement编译+测试：BUILD SUCCESSFUL（MultiSigApprovalServiceTest 7/7通过）
+- 测试运行：21/21 通过（链上DID 7 + 多签审批 7 + ZK仪式 7）
+
 ## [2.11.0] - 2026-08-20
 
 ### 第8+9轮：3节点共识收敛 + MPC多主机份额分布
