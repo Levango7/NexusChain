@@ -633,6 +633,57 @@ paths:
         '409':
           $ref: '#/components/responses/Conflict'
 
+  /api/v2/orders/{id}/finality:
+    get:
+      tags: [Order v2]
+      summary: Get order finality status (NexFinality v2 prototype)
+      description: |
+        返回三层最终化状态：OPTIMISTIC / FINALIZING / FINALIZED，
+        供商户侧根据结算金额选择是否立即发货或等待最终性保证。
+      operationId: getOrderFinalityV2
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+        - $ref: '#/components/parameters/ApiVersionHeader'
+      responses:
+        '200':
+          description: 最终性状态详情
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  order_id:
+                    type: integer
+                    format: int64
+                  chain_tx_hash:
+                    type: string
+                  finality_status:
+                    type: string
+                    enum: [OPTIMISTIC, FINALIZING, FINALIZED]
+                  confirmations:
+                    type: integer
+                  threshold:
+                    type: integer
+                  progress_percent:
+                    type: integer
+                  note:
+                    type: string
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: 链上交易哈希尚未分配
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorResponse'
+
   # === 支付（批量） ===
   /api/v2/payments/batch:
     post:

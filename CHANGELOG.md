@@ -4,6 +4,51 @@
 
 ## [Unreleased]
 
+## [2.10.0] - 2026-08-20
+
+### 第7轮RPC文档一致性：openapi-v2.yaml vs v2 Controller 端点比对
+
+本次发布完成 RPC 文档与实际代码端点的一致性验证。发现并修复1个文档缺失端点，新增一致性测试3用例，确保文档与代码同步。
+
+#### Fixed（修复）
+
+- `docs/openapi-v2.yaml`：补充缺失端点 `GET /api/v2/orders/{id}/finality`（订单最终性状态查询，OrderV2Controller.getOrderFinality 已实现但文档未定义）
+
+#### Added（新增测试）
+
+##### RPC文档一致性（nexus-gateway）
+- `OpenApiV2ConsistencyTest` 3用例：
+  1. 代码端点全部在文档中定义（无未文档化端点）
+  2. 文档端点全部在代码中实现（无未实现端点）
+  3. 端点总数一致（文档12个 = 代码12个）
+
+#### 比对结果
+
+| 端点 | 文档 | 代码 | 状态 |
+|------|------|------|------|
+| GET /api/v2/orders | ✅ | ✅ | 一致 |
+| POST /api/v2/orders | ✅ | ✅ | 一致 |
+| GET /api/v2/orders/{id} | ✅ | ✅ | 一致 |
+| GET /api/v2/orders/{id}/finality | ✅(修复) | ✅ | 已修复 |
+| POST /api/v2/orders/{id}/pay | ✅ | ✅ | 一致 |
+| POST /api/v2/orders/{id}/refund | ✅ | ✅ | 一致 |
+| POST /api/v2/payments/batch | ✅ | ✅ | 一致 |
+| POST /api/v2/merchants/register | ✅ | ✅ | 一致 |
+| GET /api/v2/merchants/{id} | ✅ | ✅ | 一致 |
+| POST /api/v2/merchants/{id}/verify | ✅ | ✅ | 一致 |
+| POST /api/v2/merchants/{id}/api-keys | ✅ | ✅ | 一致 |
+| DELETE /api/v2/merchants/{id}/api-keys | ✅ | ✅ | 一致 |
+
+#### Changed（修改文件）
+
+- `docs/openapi-v2.yaml`：补充 `GET /api/v2/orders/{id}/finality` 端点定义
+- `nexus-gateway/src/test/java/org/nexus/gateway/apiversion/OpenApiV2ConsistencyTest.java`：新增
+
+#### 编译验证
+
+- 全量编译：BUILD SUCCESSFUL（10个模块）
+- 测试运行：3/3 通过
+
 ## [2.9.0] - 2026-08-20
 
 ### 第6轮混沌测试：支付链路+共识链路故障注入与恢复
