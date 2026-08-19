@@ -4,6 +4,39 @@
 
 ## [Unreleased]
 
+## [2.8.0] - 2026-08-20
+
+### 第5轮支付→签名→链上端到端集成测试：产品主链路最后验证
+
+本次发布完成产品主链路最后验证：`ChainConnector` 真实运行（不 mock 整个 connector），仅 mock 最底层依赖（SigningServiceFeignClient / WalletMgmtFeignClient / ChainRpcClient），验证完整支付编排链路：支付请求 → 地址解析 → MPC签名+广播 → 链上确认 → 退款。纯 Java 沙箱，不启动 Spring 容器。
+
+#### Added（新增测试）
+
+##### 支付→签名→链上端到端（nexus-gateway）
+- `PaymentSigningChainE2ETest` 9用例：
+  1. 完整支付生命周期：create→query(PROCESSING)→query(SUCCEEDED)→refund(REFUNDED)
+  2. 签名服务返回真实 txHash 格式验证（0x + 64 hex）
+  3. 收款地址解析失败 → 支付 FAILED，不调用签名服务
+  4. 签名服务故障 → FAILED；恢复后重试 → 成功
+  5. 链上确认轮询：未确认→确认状态转换 + 确认后缓存
+  6. 退款方向策略：默认退 payer，payer 未知 fallback 退 payee
+  7. 并发支付：10 笔并发，每笔独立 txHash
+  8. 链上 RPC 故障 → queryPayment 降级返回 PROCESSING 不崩溃
+  9. healthCheck：节点健康/故障
+
+#### 与第4轮的区别
+
+第4轮 `PaymentE2EIntegrationTest` 用 `@MockBean ChainConnector` mock 了整个连接器，只验证 HTTP 层；本测试让 ChainConnector 真实执行，验证地址解析→签名→链上确认的完整委托链路。
+
+#### Changed（修改文件）
+
+- `nexus-gateway/src/test/java/org/nexus/gateway/orchestration/PaymentSigningChainE2ETest.java`：新增
+
+#### 编译验证
+
+- 全量编译：BUILD SUCCESSFUL（10个模块）
+- 测试运行：9/9 通过
+
 ## [2.7.0] - 2026-08-20
 
 ### 第4轮E2E测试扩展：支付全流程+退款审批+MPC多节点+治理参数化
