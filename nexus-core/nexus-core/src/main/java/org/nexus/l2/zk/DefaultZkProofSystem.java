@@ -4,6 +4,8 @@ import org.nexus.l2.zk.groth16.Groth16Proof;
 import org.nexus.l2.zk.groth16.Groth16ProofSystem;
 import org.nexus.l2.zk.groth16.Groth16Setup;
 import org.nexus.l2.zk.r1cs.R1csConstraintSystem;
+import org.nexus.l2.zk.r1cs.R1csToJsonBridge;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -89,6 +91,14 @@ public class DefaultZkProofSystem implements ZkProofSystem {
     @org.springframework.beans.factory.annotation.Value("${zk.prover.remote-verify-url:}")
     private String remoteVerifyUrl;
 
+    /**
+     * ZK 方案 C 集成：真实 Groth16 远程 prove 服务地址（zk-groth16-service）。
+     * 非空时 prove 优先走远程真实证明生成，替代本地 Schnorr 降级；
+     * 服务不可用则 fail-closed（抛出异常，不降级到 mock）。
+     */
+    @org.springframework.beans.factory.annotation.Value("${zk.prover.remote-prove-url:}")
+    private String remoteProveUrl;
+
     /** Groth16 证明系统（懒初始化） */
     private volatile Groth16ProofSystem groth16;
 
@@ -132,9 +142,28 @@ public class DefaultZkProofSystem implements ZkProofSystem {
         }
 
         ZkProverProperties.BackendType backend = properties.resolveBackend();
+
+        // ZK 方案 C：配置了远程 prove 服务时优先走真实 BN254 配对（fail-closed）
+        if (remoteProveUrl != null && !remoteProveUrl.isBlank()) {
+            try {
+                String circuitJson = R1csToJsonBridge.toJson(circuit.buildR1cs(),
+                        buildWitnessFromInputs(circuit, witness, publicInput, circuit.buildR1cs()));
+                String[] result = Groth16ProofSystem.proveRemote(remoteProveUrl, circuitJson);
+                byte[] proofData = encodeRemoteGroth16Proof(result[0], result[1]);
+                ZkProof proof = new ZkProof(proofData, circuit.getCircuitId(),
+                        setupVersion, System.currentTimeMillis());
+                logger.info("DefaultZkProofSystem prove (REMOTE REAL): circuit={} fingerprint={} proofSize={}",
+                        circuit.getCircuitId(), result[0], proof.size());
+                return proof;
+            } catch (Exception e) {
+                logger.error("DefaultZkProofSystem prove REMOTE FAILED (fail-closed): {}", e.getMessage());
+                throw new IllegalStateException("ZK remote prove failed: " + e.getMessage(), e);
+            }
+        }
+
         if (properties.isEnabled() && backend == ZkProverProperties.BackendType.GROTH16
                 && circuit.hasR1cs() && groth16 != null) {
-            // 真实 Groth16 prove
+            // 真实 Groth16 prove（本地 Schnorr 降级）
             try {
                 Groth16Proof g16Proof = proveGroth16(circuit, witness, publicInput);
                 byte[] proofData = encodeGroth16Proof(g16Proof);
@@ -348,6 +377,39 @@ public class DefaultZkProofSystem implements ZkProofSystem {
         System.arraycopy(PROOF_MAGIC, 0, result, 0, PROOF_MAGIC.length);
         System.arraycopy(g16Bytes, 0, result, PROOF_MAGIC.length, g16Bytes.length);
         return result;
+    }
+
+    /**
+     * 编码远程真实 Groth16 证明（ZK 方案 C：Rust 服务产出）。
+     *
+     * <p>格式："G16P" + fingerprint(32字节) + proof_hex 字节</p>
+     */
+    private byte[] encodeRemoteGroth16Proof(String fingerprint, String proofHex) {
+        byte[] proofBytes = hexStringToByteArray(proofHex);
+        byte[] result = new byte[PROOF_MAGIC.length + proofBytes.length];
+        System.arraycopy(PROOF_MAGIC, 0, result, 0, PROOF_MAGIC.length);
+        System.arraycopy(proofBytes, 0, result, PROOF_MAGIC.length, proofBytes.length);
+        return result;
+    }
+
+    /**
+     * Hex 字符串转字节数组（替代 web3j Numeric.hexStringToByteArray）。
+     */
+    private static byte[] hexStringToByteArray(String hex) {
+        if (hex == null || hex.isEmpty()) {
+            return new byte[0];
+        }
+        // 移除 0x 前缀
+        if (hex.startsWith("0x") || hex.startsWith("0X")) {
+            hex = hex.substring(2);
+        }
+        int len = hex.length();
+        byte[] data = new byte[len / 2];
+        for (int i = 0; i < len; i += 2) {
+            data[i / 2] = (byte) ((Character.digit(hex.charAt(i), 16) << 4)
+                    + Character.digit(hex.charAt(i + 1), 16));
+        }
+        return data;
     }
 
     private boolean isGroth16Proof(byte[] data) {
