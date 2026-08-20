@@ -64,6 +64,10 @@ subprojects {
     // FindSecBugs 规则集作为 spotbugs 插件依赖
     dependencies {
         spotbugsPlugins 'com.h3xstream.findsecbugs:findsecbugs-plugin:1.13.0'
+        // spotbugs-annotations 提供 @SuppressFBWarnings 注解，供源码中
+        // 精确抑制已缓解的 FindSecBugs/SpotBugs 告警（如 CIPHER_INTEGRITY
+        // 已由上层 MAC 保护、OBJECT_DESERIALIZATION 已由 ObjectInputFilter 缓解）
+        compileOnly 'com.github.spotbugs:spotbugs-annotations:4.8.6'
     }
 
     // spotbugsMain：扫描 main source set，产出 HTML + XML 报告

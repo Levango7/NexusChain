@@ -86,7 +86,11 @@ public class FeignJwtRequestInterceptor implements RequestInterceptor {
         if (secret == null || secret.isBlank()) {
             log.warn("nexus.security.jwt.secret 未配置，Feign JWT 拦截器将签发无效 token；"
                     + "signing-service 鉴权会拒绝请求。生产环境必须通过 JWT_SECRET 环境变量注入");
-            secret = "nexus-gateway-dev-placeholder-secret-32bytes";
+            // 安全兜底：使用 SecureRandom 生成一次性随机密钥（仅用于启动，
+            // 每次进程不同且不可预测），避免硬编码可预测密钥的安全风险。
+            byte[] randomKey = new byte[32];
+            new java.security.SecureRandom().nextBytes(randomKey);
+            secret = new String(java.util.Base64.getEncoder().encode(randomKey), StandardCharsets.UTF_8);
         }
         byte[] keyBytes = secret.getBytes(StandardCharsets.UTF_8);
         if (keyBytes.length < 32) {

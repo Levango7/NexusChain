@@ -20,11 +20,11 @@ import java.util.concurrent.ConcurrentSkipListSet;
  *
  * <p><b>实现</b>：</p>
  * <ul>
- *   <li>每个发送者维护一个 {@link ConcurrentSkipListSet} 存储已见 nonce，
- *       定期清理过期条目（基于时间戳）。</li>
- *   <li>线程安全：所有操作通过 ConcurrentHashMap + ConcurrentSkipListSet 实现。</li>
+ *   <li>每个发送者维护一个 {@link ConcurrentHashMap} 存储已见 nonce → 过期时间戳。</li>
+ *   <li>线程安全：通过 ConcurrentHashMap 原子操作（{@code computeIfAbsent} +
+ *       {@code putIfAbsent}）实现无锁并发，无需方法级 {@code synchronized}。</li>
  *   <li>内存有界：每个发送者最多保留 {@code maxNoncesPerSender} 个 nonce，
- *       超出时清理最旧条目（实际实现为整批清理过期，简单但有效）。</li>
+ *       超出时清理过期条目（{@code removeIf} 幂等，并发下可能多次触发但安全）。</li>
  * </ul>
  *
  * <p>注意：在多节点部署中，nonce 检查需要共享存储（如 Redis）才能跨节点
@@ -70,31 +70,37 @@ public class NonceTracker {
     /**
      * 检查并记录一条消息的 nonce/timestamp。
      *
+     * <p><b>并发优化</b>：移除方法级 {@code synchronized}，改用
+     * {@link ConcurrentHashMap#putIfAbsent} 原子操作判断 nonce 唯一性。
+     * 时间戳窗口检查为纯读操作无需同步；容量清理为幂等 {@code removeIf}，
+     * 并发下可能多次触发但结果一致。这把临界区从整个方法缩小到单个
+     * ConcurrentHashMap 原子操作，显著降低高并发签名场景下的争用。</p>
+     *
      * @param senderId  发送者 ID
      * @param nonce     消息 nonce
      * @param timestamp 消息时间戳（毫秒 UTC）
      * @return {@code true} iff 通过检查（应接受该消息）
      */
-    public synchronized boolean checkAndRecord(String senderId, String nonce, long timestamp) {
+    public boolean checkAndRecord(String senderId, String nonce, long timestamp) {
         long now = Instant.now().toEpochMilli();
-        // 1. 时间戳窗口
+        // 1. 时间戳窗口（纯读，无需同步）
         if (Math.abs(now - timestamp) > windowMillis) {
             log.warn("Replay check failed: timestamp out of window: sender={}, ts={}, now={}, window={}",
                     senderId, timestamp, now, windowMillis);
             return false;
         }
-        // 2. Nonce 唯一性
+        // 2. Nonce 唯一性：putIfAbsent 原子操作，返回 null 表示首次插入
         ConcurrentHashMap<String, Long> senderNonces =
                 seenNonces.computeIfAbsent(senderId, k -> new ConcurrentHashMap<>());
-        if (senderNonces.containsKey(nonce)) {
+        Long existing = senderNonces.putIfAbsent(nonce, timestamp + windowMillis);
+        if (existing != null) {
             log.warn("Replay detected: duplicate nonce: sender={}, nonce={}", senderId, nonce);
             return false;
         }
-        // 3. 容量清理
+        // 3. 容量清理（幂等 removeIf，并发下可能多次触发但安全）
         if (senderNonces.size() >= maxNoncesPerSender) {
             cleanupExpired(senderNonces, now);
         }
-        senderNonces.put(nonce, timestamp + windowMillis);
         return true;
     }
 

@@ -52,6 +52,12 @@ tasks.withType(JavaCompile) {
     options.encoding = "UTF-8"
 }
 
+// === SAST: SpotBugs 排除过滤器 ===
+// 抑制已人工审计并确认已缓解的 FindSecBugs 告警（详见 spotbugs-exclude-filter.xml）
+spotbugsMain {
+    excludeFilter = file("${projectDir}/spotbugs-exclude-filter.xml")
+}
+
 dependencies {
     // 共享通用库（tracing 等，合并自原模块内逐字节一致的拷贝）
     implementation project(':nexus-common')

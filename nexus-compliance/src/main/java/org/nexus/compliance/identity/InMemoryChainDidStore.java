@@ -1,5 +1,7 @@
 package org.nexus.compliance.identity;
 
+import org.springframework.stereotype.Component;
+
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -8,8 +10,12 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p>用 {@link ConcurrentHashMap} 模拟链上存储，验证 ChainDidService 的
  * 链上注册/解析/更新/吊销逻辑。生产环境替换为真实链上合约实现。
  *
+ * <p>使用 {@code @Component} 让 Spring 容器自动装配，使 {@link ChainDidService}
+ * 的构造参数能找到唯一的 {@link ChainDidStore} 候选 Bean。
+ *
  * @since 2.12.0
  */
+@Component
 public class InMemoryChainDidStore implements ChainDidStore {
 
     private final ConcurrentHashMap<String, DidDocument> documents = new ConcurrentHashMap<>();

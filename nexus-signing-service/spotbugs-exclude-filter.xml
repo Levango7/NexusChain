@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SpotBugs / FindSecBugs 排除过滤器（nexus-signing-service）
+
+  仅抑制已人工审计并确认已缓解的告警，每条 Match 必须附 justification 注释。
+-->
+<FindBugsFilter xmlns="https://github.com/spotbugs/filter/3.0.0"
+                xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                xsi:schemaLocation="https://github.com/spotbugs/filter/3.0.0 https://raw.githubusercontent.com/spotbugs/spotbugs/3.2.0/spotbugs/etc/findbugsfilter.xsd">
+
+    <!--
+      SPRING_CSRF_PROTECTION_DISABLED @ SecurityConfig.securityFilterChain
+      原因：signing-service 是无状态 REST API，使用 JWT Bearer token（Authorization 头），
+      不使用 cookie 会话，CSRF 攻击向量不适用。sessionCreationPolicy=STATELESS 进一步
+      确保不创建 HTTP Session。@SuppressFBWarnings 注解因 lambda 表达式上下文无法关联，
+      故在此 filter 中抑制。
+    -->
+    <Match>
+        <Class name="org.nexus.signing.config.SecurityConfig"/>
+        <Method name="securityFilterChain"/>
+        <Bug pattern="SPRING_CSRF_PROTECTION_DISABLED"/>
+    </Match>
+
+</FindBugsFilter>

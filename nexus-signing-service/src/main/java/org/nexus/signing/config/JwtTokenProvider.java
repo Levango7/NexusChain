@@ -60,8 +60,12 @@ public class JwtTokenProvider {
             // SecurityConfig 在 JWT 模式下会显式校验并 fail-fast。
             log.warn("nexus.security.jwt.secret 未配置，JWT 鉴权将不可用；"
                     + "生产环境必须通过 JWT_SECRET 环境变量注入");
-            // 兜底：派生一个仅用于启动的占位密钥（实际请求会被拒绝）
-            secret = "nexus-signing-service-dev-placeholder-secret-32bytes";
+            // 安全兜底：使用 SecureRandom 生成一次性随机密钥（仅用于启动，
+            // 每次进程不同且不可预测），避免硬编码可预测密钥的安全风险。
+            // 实际请求会被 SecurityConfig 的 fail-closed 逻辑拒绝。
+            byte[] randomKey = new byte[32];
+            new java.security.SecureRandom().nextBytes(randomKey);
+            secret = new String(java.util.Base64.getEncoder().encode(randomKey), StandardCharsets.UTF_8);
         }
         byte[] keyBytes = secret.getBytes(StandardCharsets.UTF_8);
         // HS256 要求 ≥32 字节；不足则零填充到 32 字节
