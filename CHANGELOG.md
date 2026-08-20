@@ -4,6 +4,52 @@
 
 ## [Unreleased]
 
+## [2.15.0] - 2026-08-20
+
+### 第15轮：签名审批完整化（审批人通知+DB持久化）
+
+本次发布解决签名审批服务的最后一个真实缺口：审批人通知（审批创建时通知审批人）和审批记录持久化（文件系统JSON Lines存储，重启不丢失）。双人审批安全闭环正式完成。
+
+#### Added（新增生产代码）
+
+##### 审批人通知（nexus-signing-service）
+- `ApprovalNotifier`接口：审批人通知抽象（`notifyApprovalCreated`）
+- `LoggingApprovalNotifier`实现：日志通知（WARN级别，运维通过日志监控）
+- 在 `SigningApprovalService.createApprovalRequest` 中调用通知，异常不影响审批流程
+
+##### 审批记录持久化（nexus-signing-service）
+- `ApprovalStore`接口：审批记录存储抽象
+- `MapApprovalStore`：内存ConcurrentHashMap存储（单实例默认）
+- `FileBasedApprovalStore`：文件JSON Lines持久化（`data/approval-records.jsonl`，重启恢复）
+- `ApprovalRecordDto`：审批记录序列化DTO
+- 通过 `nexus.approval.use-database=true` 切换为文件持久化（默认false=内存）
+- 原有 `ConcurrentHashMap` 存储已迁移为 `ApprovalStore` 接口（无破坏性变更）
+
+#### Added（新增测试）
+- `SigningApprovalServiceEnhancedTest` 7用例：
+  1. 创建审批→通知审批人→通知器被调用
+  2. 通知异常→不影响审批流程
+  3. 文件持久化→存后重启可恢复
+  4. 审批流程完整→approve+reject+markExecuted
+  5. 拒绝流程→拒绝后状态REJECTED
+  6. 内存存储→默认ConcurrentHashMap实现
+  7. 小金额不触发审批→returns null
+
+#### Changed（修改文件）
+
+- `nexus-signing-service/src/main/java/org/nexus/signing/approval/SigningApprovalService.java`：集成通知+持久化+@Value默认值回退
+- `nexus-signing-service/src/main/java/org/nexus/signing/approval/ApprovalNotifier.java`：新增接口
+- `nexus-signing-service/src/main/java/org/nexus/signing/approval/LoggingApprovalNotifier.java`：新增实现
+- `nexus-signing-service/src/main/java/org/nexus/signing/approval/ApprovalStore.java`：新增接口
+- `nexus-signing-service/src/main/java/org/nexus/signing/approval/MapApprovalStore.java`：新增实现
+- `nexus-signing-service/src/main/java/org/nexus/signing/approval/FileBasedApprovalStore.java`：新增实现
+- `nexus-signing-service/src/main/java/org/nexus/signing/approval/ApprovalRecordDto.java`：新增DTO
+- `nexus-signing-service/src/test/java/org/nexus/signing/approval/SigningApprovalServiceEnhancedTest.java`：新增测试
+
+#### 编译验证
+
+- nexus-signing-service编译+测试：BUILD SUCCESSFUL（SigningApprovalServiceEnhancedTest 7/7通过）
+
 ## [2.14.0] - 2026-08-20
 
 ### 第14轮：环境依赖项全部验证（MPC多主机+真实PSP+真实L1+冷热托管）
