@@ -379,29 +379,37 @@ public class PaymentServiceImpl implements PaymentService {
                     },
                     // 阶段3：根据链上结果更新 CONFIRMED/FAILED
                     (refund, onChainResult) -> {
+                        // 重新加载 order 以获取最新的乐观锁版本号。
+                        // 阶段1 在 REQUIRES_NEW 独立事务中已提交并递增了 version，
+                        // 但 JPA merge 不会回写原始 detached order 对象的 version，
+                        // 直接复用会导致阶段3 的 save 触发 ObjectOptimisticLockingFailureException。
+                        PaymentOrder latestOrder = orderRepository.findById(orderId)
+                                .orElseThrow(() -> new IllegalStateException(
+                                        "Order not found after refund phase 1: " + orderId));
                         if (onChainResult.isSuccess()) {
                             refund.setChainTxHash(onChainResult.getTxHash());
                             refund.setStatus(Refund.RefundStatus.COMPLETED);
                             refund.setCompletedAt(LocalDateTime.now());
-                            OrderStateMachine.transition(order, PaymentOrder.OrderStatus.REFUNDED);
+                            OrderStateMachine.transition(latestOrder, PaymentOrder.OrderStatus.REFUNDED);
                             refundSpan.attr("payment.refund.tx.hash", onChainResult.getTxHash())
                                     .attr("payment.refund.status", "COMPLETED");
                         } else {
                             refund.setStatus(Refund.RefundStatus.FAILED);
                             // 链上转账失败：回滚订单状态到 PAID，允许后续重试退款
                             // refund 失败 → 资金未转出，无需链上补偿
-                            OrderStateMachine.transition(order, PaymentOrder.OrderStatus.PAID);
+                            OrderStateMachine.transition(latestOrder, PaymentOrder.OrderStatus.PAID);
                             refundSpan.attr("payment.refund.status", "FAILED").error(null);
                             log.error("Refund transfer failed for order: {}, reason: {}",
-                                    order.getOrderNo(), onChainResult.getError());
+                                    latestOrder.getOrderNo(), onChainResult.getError());
                         }
-                        orderRepository.save(order);
+                        orderRepository.save(latestOrder);
                         Refund saved = refundRepository.save(refund);
 
                         // Publish event only for genuinely completed refunds
                         if (saved.getStatus() == Refund.RefundStatus.COMPLETED) {
                             eventPublisher.publishEvent(new RefundCompletedEvent(
-                                    this, order.getId(), order.getOrderNo(), order.getMerchantId(),
+                                    this, latestOrder.getId(), latestOrder.getOrderNo(),
+                                    latestOrder.getMerchantId(),
                                     saved.getRefundNo(), amount.toPlainString(), saved.getChainTxHash()));
                         }
                     });
