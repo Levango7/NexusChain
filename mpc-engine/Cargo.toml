@@ -49,6 +49,16 @@ sha2 = "0.9"
 aes-gcm = "0.10"
 rand = "0.7"
 
+# === 密钥材料安全擦除（zeroize）===
+# zeroize 1.8：提供 Zeroize trait 与派生宏，用于在密钥材料（私钥份额、
+# 加密密钥、签名份额等）离开作用域前将其内存清零，防止残余密钥被
+# 内存转储/冷启动攻击提取。启用 derive feature 以支持 #[derive(Zeroize)]。
+# 关键结构体（SharedKeysSerde、MyShareRecord、PeerConfig、PartyConfig 等）
+# 派生 Zeroize；含第三方密码学类型（curv-kzen Scalar/Point、
+# multi-party-ecdsa Keys/SignatureRecid）的结构体（DkgSession、
+# Gg20SignOutput、SignCache）手动实现 best-effort zeroize。
+zeroize = { version = "1.8", features = ["derive"] }
+
 [build-dependencies]
 tonic-build = "0.12"
 

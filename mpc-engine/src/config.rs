@@ -24,9 +24,15 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+// zeroize：密钥材料安全擦除。PartyConfig.storage_key（AES-256-GCM 密钥 hex）
+// 与 storage_keys（多密钥映射）派生 Zeroize，在配置离开作用域前擦除密钥材料内存。
+use zeroize::Zeroize;
 
 /// 对端参与方配置。
-#[derive(Clone, Debug, Serialize, Deserialize)]
+///
+/// **密钥材料安全擦除**：派生 `Zeroize`。字段（`usize`、`String`）均实现
+/// `Zeroize`，派生后调用 `zeroize()` 将 `party_id`、`endpoint` 等内存清零。
+#[derive(Clone, Debug, Serialize, Deserialize, Zeroize)]
 pub struct PeerConfig {
     /// 对端方索引（0..n）。
     pub party_index: usize,
@@ -52,7 +58,13 @@ pub struct PeerConfig {
 ///   * `"plain"`（默认）：从配置文件 `storage_key` 字段读取（向后兼容）
 ///   * `"env"`：从环境变量 `NEXUS_MPC_STORAGE_KEY` 读取
 ///   * `"kms"`：调用 KMS API 解密（TODO，依赖部署环境）
-#[derive(Clone, Debug, Serialize, Deserialize)]
+///
+/// **密钥材料安全擦除**：派生 `Zeroize`。所有字段（`String`、`Vec<PeerConfig>`、
+/// `HashMap<u32, String>`、`usize`、`u32`）均实现 `Zeroize`，派生后调用
+/// `zeroize()` 将 `storage_key`（AES-256-GCM 密钥 hex）、`storage_keys`
+///（多密钥映射）、`tls_key`（mTLS 私钥路径）等敏感材料内存清零。
+/// 未派生 `ZeroizeOnDrop` 以避免改变现有 Drop 语义，调用方需显式调用 `zeroize()`。
+#[derive(Clone, Debug, Serialize, Deserialize, Zeroize)]
 pub struct PartyConfig {
     /// 本方索引（0..n），对应 DKG/Sign RPC 的 `party_index`。
     pub party_index: usize,

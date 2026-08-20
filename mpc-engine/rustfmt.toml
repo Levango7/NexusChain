@@ -1,0 +1,53 @@
+# Rust 代码格式化配置（rustfmt）。
+# =============================================================================
+# 本文件由 CI 流水线 `cargo fmt --all -- --check` 步骤读取，作为格式门禁。
+# 开发者本地运行 `cargo fmt` 会按此配置自动格式化代码。
+# 配置项选择遵循 Rust 社区惯例，与 edition 2021 对齐。
+#
+# 注：仅作用于 mpc-engine crate（含 src/ 与 tests/）。
+
+# Rust edition（与 Cargo.toml 的 edition 字段对齐）。
+edition = "2021"
+
+# 单行最大宽度（社区默认 100，平衡可读性与紧凑度）。
+max_width = 100
+
+# 函数参数/数组元素等在换行时的缩进宽度。
+tab_spaces = 4
+
+# 使用空格而非制表符缩进（与项目现有代码风格一致）。
+hard_tabs = false
+
+# 导入语句（use）按 std → 外部 crate → 本地 crate 分组排序。
+# 提升导入可读性，避免随意顺序。
+reorder_imports = true
+
+# 按字母序重排模块内项（struct/enum/fn 等）。
+reorder_modules = true
+
+# 将 `#[derive(...)]` 属性合并为单行（若不超 max_width）。
+merge_derives = true
+
+# 末尾换行符（文件以单换行结尾，POSIX 兼容）。
+newline_style = "Unix"
+
+# 链式方法调用换行风格：每个方法独占一行（提升可读性）。
+chain_width = 60
+
+# 数组/切片字面量换行阈值。
+array_width = 60
+
+# 属性（#[...]）换行阈值。
+attr_fn_like_width = 70
+
+# 单行 if-let 匹配等结构的宽度阈值。
+fn_call_width = 60
+
+# 单行函数定义参数列表宽度阈值。
+fn_args_layout = "Tall"
+
+# 结构体字面量字段换行阈值。
+struct_lit_width = 18
+
+# 结构体表达式（含泛型）宽度阈值。
+struct_expr_width = 35

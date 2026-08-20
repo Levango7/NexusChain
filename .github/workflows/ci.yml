@@ -91,6 +91,24 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           working-directory: mpc-engine
+          # 显式安装 rustfmt 与 clippy 组件，供下方格式检查与 lint 门禁使用。
+          components: rustfmt,clippy
+
+      # Rust 代码格式检查（rustfmt 门禁）。
+      # `cargo fmt --all -- --check` 不修改文件，仅检查是否符合 rustfmt.toml 规则；
+      # 不符合则非零退出，阻断 CI。开发者本地运行 `cargo fmt` 自动格式化。
+      # rustfmt.toml 位于 mpc-engine/ 目录，配置 edition=2021、max_width=100 等。
+      - name: Rust format check (cargo fmt)
+        working-directory: mpc-engine
+        run: cargo fmt --all -- --check
+
+      # Rust lint 检查（clippy 门禁）。
+      # `cargo clippy --all-targets` 检查 src/ 与 tests/ 的所有代码（含测试）；
+      # `-D warnings` 将所有 warning 视为 error，强制零 warning 门禁，阻断 CI。
+      # 常见 clippy 修正：冗余 clone、不必要的 mut、风格统一等。
+      - name: Rust lint check (cargo clippy)
+        working-directory: mpc-engine
+        run: cargo clippy --all-targets -- -D warnings
 
       - name: Rust tests (mpc-engine)
         working-directory: mpc-engine
