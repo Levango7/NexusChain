@@ -133,16 +133,37 @@ public class SigningApprovalService {
     @Value("${nexus.approval.cleanup-retention-seconds:3600}")
     private long cleanupRetentionSeconds;
 
+    /**
+     * 审批记录文件持久化路径（use-database=true 时生效）。
+     * 默认 data/approval-records.jsonl（相对于工作目录）。
+     */
+    @Value("${nexus.approval.persistence.file-path:data/approval-records.jsonl}")
+    private String approvalDataFilePath;
+
     private final MpcApprovalPolicy mpcApprovalPolicy;
     private final AuditLogService auditLogService;
 
     /**
-     * 审批请求存储：requestId → 请求实例。
-     * <p>单实例部署使用内存 ConcurrentHashMap；多实例部署应设
-     * {@code nexus.approval.use-database=true} 并替换为 DB 共享存储
-     * （待 P3 阶段引入 JPA Repository 后实现）。</p>
+
+     * 审批请求存储。
+     *
+     * <p>根据 {@code nexus.approval.use-database} 配置选择实现：
+     * <ul>
+     *   <li>{@code false}（默认）：使用内存 {@link ConcurrentHashMap}，适合单实例部署</li>
+     *   <li>{@code true}：使用 {@link FileBasedApprovalStore} 文件持久化，
+     *       审批记录存于 {@code data/approval-records.jsonl}，重启不丢失</li>
+     * </ul>
      */
-    private final Map<String, SigningApprovalRequest> requestStore = new ConcurrentHashMap<>();
+    private final ApprovalStore requestStore;
+
+    /**
+     * 审批人通知器。
+     *
+     * <p>审批请求创建时通过此通知器通知审批人有待审批项。
+     * 默认使用 {@link LoggingApprovalNotifier}（记录 WARN 日志），
+     * 可通过实现 {@link ApprovalNotifier} 接口并注册为 Spring Bean 自定义。
+     */
+    private final ApprovalNotifier approvalNotifier;
 
     /**
      * 构造函数。
@@ -152,16 +173,51 @@ public class SigningApprovalService {
      */
     public SigningApprovalService(MpcApprovalPolicy mpcApprovalPolicy,
                                   AuditLogService auditLogService) {
+        this(mpcApprovalPolicy, auditLogService, null, null);
+    }
+
+    /**
+     * 完整构造函数（支持注入自定义存储和通知器）。
+     *
+     * @param mpcApprovalPolicy MPC 审批策略
+     * @param auditLogService   审计日志服务
+     * @param customStore       自定义审批存储（null 时自动选择）
+     * @param customNotifier    自定义通知器（null 时使用日志通知器）
+     */
+    public SigningApprovalService(MpcApprovalPolicy mpcApprovalPolicy,
+                                  AuditLogService auditLogService,
+                                  ApprovalStore customStore,
+                                  ApprovalNotifier customNotifier) {
         this.mpcApprovalPolicy = Objects.requireNonNull(mpcApprovalPolicy, "mpcApprovalPolicy");
         this.auditLogService = Objects.requireNonNull(auditLogService, "auditLogService");
-        if (useDatabase) {
-            // 项3扩展点：use-database=true 时应注入 Repository 并替换 requestStore。
-            // 当前实现未引入 JPA 依赖，记录 WARN 并回退到内存存储，避免破坏现有功能。
-            log.warn("nexus.approval.use-database=true 但 DB 持久化尚未实现（P3 阶段），"
-                    + "审批请求仍使用内存 ConcurrentHashMap 存储，多实例部署状态不共享");
+
+        // 审批存储选择
+        if (customStore != null) {
+            this.requestStore = customStore;
+            log.info("使用自定义审批存储: {}", customStore.getClass().getSimpleName());
+        } else if (useDatabase) {
+            this.requestStore = new FileBasedApprovalStore(
+                    approvalDataFilePath);
+            log.info("使用文件持久化审批存储: path={}", approvalDataFilePath);
+        } else {
+            this.requestStore = new MapApprovalStore(new ConcurrentHashMap<>());
+            log.info("使用内存审批存储（单实例部署）");
         }
-        log.info("SigningApprovalService 初始化: useDatabase={}, cleanupIntervalMs={}, retentionSeconds={}, "
-                + "whitelistConfigured={}", useDatabase, cleanupIntervalMs, cleanupRetentionSeconds,
+
+        // 通知器选择
+        this.approvalNotifier = customNotifier != null ? customNotifier : new LoggingApprovalNotifier();
+
+        // 确保 @Value 字段有默认值（单元测试手动构造时 Spring 不注入）
+        if (this.largeAmountThreshold == null) this.largeAmountThreshold = new BigDecimal("10000");
+        if (this.ttlSeconds == 0) this.ttlSeconds = 3600;
+        if (this.cleanupIntervalMs == 0) this.cleanupIntervalMs = 60000;
+        if (this.cleanupRetentionSeconds == 0) this.cleanupRetentionSeconds = 3600;
+
+        log.info("SigningApprovalService 初始化完成: useDatabase={}, storeType={}, notifierType={}, "
+                + "cleanupIntervalMs={}, retentionSeconds={}, whitelistConfigured={}",
+                useDatabase, requestStore.getClass().getSimpleName(),
+                approvalNotifier.getClass().getSimpleName(),
+                cleanupIntervalMs, cleanupRetentionSeconds,
                 approverWhitelist != null && !approverWhitelist.trim().isEmpty());
     }
 
@@ -205,6 +261,14 @@ public class SigningApprovalService {
                 fromPubkey, toPubkeyHash, amount, currency,
                 required, ttlSeconds, initiator);
         requestStore.put(request.getRequestId(), request);
+
+        // 通知审批人
+        try {
+            approvalNotifier.notifyApprovalCreated(request);
+        } catch (Exception e) {
+            log.warn("审批通知失败（不影响审批流程）: requestId={}, error={}",
+                    request.getRequestId(), e.getMessage());
+        }
 
         log.info("创建多签审批请求: requestId={}, amount={} {}, required={}, initiator={}",
                 request.getRequestId(), amount, currency, required, initiator);
@@ -289,34 +353,36 @@ public class SigningApprovalService {
             return requestStore.get(requestId);
         }
         final SigningApprovalRequest[] result = new SigningApprovalRequest[1];
-        requestStore.computeIfPresent(requestId, (id, req) -> {
-            if (req.getStatus() != SigningApprovalRequest.Status.PENDING) {
-                log.warn("审批请求状态非 PENDING，忽略决策: requestId={}, status={}, actor={}",
-                        requestId, req.getStatus(), actor);
-                result[0] = req;
-                return req;
-            }
-            SigningApprovalRequest updated = approve
-                    ? req.withApproval(actor)
-                    : req.withRejection(actor);
-            result[0] = updated;
+        SigningApprovalRequest existing = requestStore.get(requestId);
+        if (existing == null) {
+            return null;
+        }
+        if (existing.getStatus() != SigningApprovalRequest.Status.PENDING) {
+            log.warn("审批请求状态非 PENDING，忽略决策: requestId={}, status={}, actor={}",
+                    requestId, existing.getStatus(), actor);
+            result[0] = existing;
+            return existing;
+        }
+        SigningApprovalRequest updated = approve
+                ? existing.withApproval(actor)
+                : existing.withRejection(actor);
+        requestStore.save(requestId, updated);
+        result[0] = updated;
 
-            log.info("审批决策: requestId={}, actor={}, decision={}, newStatus={}",
-                    requestId, actor, approve ? "APPROVE" : "REJECT", updated.getStatus());
+        log.info("审批决策: requestId={}, actor={}, decision={}, newStatus={}",
+                requestId, actor, approve ? "APPROVE" : "REJECT", updated.getStatus());
 
-            auditLogService.log(AuditEvent.builder(AuditEvent.Type.APPROVAL_DECISION,
-                            approve ? AuditEvent.Outcome.SUCCESS : AuditEvent.Outcome.DENIED, actor)
-                    .sourceIp(sourceIp)
-                    .target(requestId)
-                    .detail("decision", approve ? "APPROVE" : "REJECT")
-                    .detail("new_status", updated.getStatus().name())
-                    .detail("approvals_count", updated.getApprovals().size())
-                    .detail("required", updated.getRequiredApprovers())
-                    .build());
+        auditLogService.log(AuditEvent.builder(AuditEvent.Type.APPROVAL_DECISION,
+                        approve ? AuditEvent.Outcome.SUCCESS : AuditEvent.Outcome.DENIED, actor)
+                .sourceIp(sourceIp)
+                .target(requestId)
+                .detail("decision", approve ? "APPROVE" : "REJECT")
+                .detail("new_status", updated.getStatus().name())
+                .detail("approvals_count", updated.getApprovals().size())
+                .detail("required", updated.getRequiredApprovers())
+                .build());
 
-            return updated;
-        });
-        return result[0];
+        return updated;
     }
 
     /**
@@ -333,7 +399,7 @@ public class SigningApprovalService {
         if (req != null && req.isExpired() && req.getStatus() == SigningApprovalRequest.Status.PENDING) {
             // 惰性过期：查询时发现已过期则更新状态
             SigningApprovalRequest expired = req.withStatus(SigningApprovalRequest.Status.EXPIRED);
-            requestStore.put(requestId, expired);
+            requestStore.save(requestId, expired);
             return expired;
         }
         return req;
@@ -349,20 +415,19 @@ public class SigningApprovalService {
         if (requestId == null) {
             return null;
         }
-        final SigningApprovalRequest[] result = new SigningApprovalRequest[1];
-        requestStore.computeIfPresent(requestId, (id, req) -> {
-            if (req.getStatus() != SigningApprovalRequest.Status.APPROVED) {
-                log.warn("审批请求状态非 APPROVED，无法标记 EXECUTED: requestId={}, status={}",
-                        requestId, req.getStatus());
-                result[0] = req;
-                return req;
-            }
-            SigningApprovalRequest executed = req.withStatus(SigningApprovalRequest.Status.EXECUTED);
-            result[0] = executed;
-            log.info("审批请求标记已执行: requestId={}", requestId);
-            return executed;
-        });
-        return result[0];
+        SigningApprovalRequest existing = requestStore.get(requestId);
+        if (existing == null) {
+            return null;
+        }
+        if (existing.getStatus() != SigningApprovalRequest.Status.APPROVED) {
+            log.warn("审批请求状态非 APPROVED，无法标记 EXECUTED: requestId={}, status={}",
+                    requestId, existing.getStatus());
+            return existing;
+        }
+        SigningApprovalRequest executed = existing.withStatus(SigningApprovalRequest.Status.EXECUTED);
+        requestStore.save(requestId, executed);
+        log.info("审批请求标记已执行: requestId={}", requestId);
+        return executed;
     }
 
     /**
@@ -394,7 +459,7 @@ public class SigningApprovalService {
             if (req.getStatus() == SigningApprovalRequest.Status.PENDING
                     && req.getDeadline().isBefore(now)) {
                 SigningApprovalRequest expired = req.withStatus(SigningApprovalRequest.Status.EXPIRED);
-                requestStore.put(entry.getKey(), expired);
+                requestStore.save(entry.getKey(), expired);
                 markedExpired++;
                 log.info("审批请求过期标记: requestId={}, deadline={}", entry.getKey(), req.getDeadline());
                 auditLogService.log(AuditEvent.builder(AuditEvent.Type.APPROVAL_DECISION,
@@ -407,7 +472,7 @@ public class SigningApprovalService {
             }
         }
 
-        // 阶段2：清理终态且超过保留期的请求（释放内存）
+        // 阶段2：清理终态且超过保留期的请求
         int removed = 0;
         Iterator<Map.Entry<String, SigningApprovalRequest>> it = requestStore.entrySet().iterator();
         while (it.hasNext()) {
@@ -418,7 +483,7 @@ public class SigningApprovalService {
                     || status == SigningApprovalRequest.Status.REJECTED
                     || status == SigningApprovalRequest.Status.EXECUTED)
                     && req.getDeadline().isBefore(retentionCutoff)) {
-                it.remove();
+                requestStore.remove(entry.getKey());
                 removed++;
             }
         }
@@ -430,11 +495,15 @@ public class SigningApprovalService {
     }
 
     /**
-     * 获取所有待审批请求（运维查询用）。
+     * 获取所有审批请求（运维查询用）。
      *
-     * @return 不可修改的待审批请求集合
+     * @return 不可修改的审批请求快照（按 requestId 索引）
      */
     public Map<String, SigningApprovalRequest> getPendingRequests() {
-        return Collections.unmodifiableMap(requestStore);
+        Map<String, SigningApprovalRequest> snapshot = new java.util.LinkedHashMap<>();
+        for (Map.Entry<String, SigningApprovalRequest> entry : requestStore.entrySet()) {
+            snapshot.put(entry.getKey(), entry.getValue());
+        }
+        return Collections.unmodifiableMap(snapshot);
     }
 }
