@@ -21,6 +21,7 @@ package org.nexus.keystore.util;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.ObjectReader;
 import com.fasterxml.jackson.databind.ObjectWriter;
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -171,6 +172,12 @@ public class SerializableUtil {
      * @deprecated 使用 {@link #toObject(byte[], Class)} 显式声明目标类型
      */
     @Deprecated
+    @SuppressFBWarnings(
+        value = "OBJECT_DESERIALIZATION",
+        justification = "已通过 ObjectInputFilter 白名单（DESERIALIZATION_FILTER）缓解："
+            + "仅允许 java.lang.* / java.math.* / java.time.* / 具体集合类 / org.nexus.keystore.* "
+            + "并设置 16MiB 大小上限。新代码应使用 toObject(byte[], Class) 走 Jackson 类型限定路径。"
+    )
     public static Object toObject(byte[] bytes) {
         if (bytes == null || bytes.length == 0) {
             throw new IllegalArgumentException("bytes must not be null or empty");

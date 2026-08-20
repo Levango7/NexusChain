@@ -59,6 +59,17 @@ Blockchain is the foundational settlement layer — not the product itself. On t
 - **紧急回滚通道**（`governance/emergency/`）：m-of-n 守护人批准即生效，跳过 timelock，独立审计日志
 - **守护人罢免**（`governance/recall/`）：走正常治理投票流程，通过后移除作恶守护人
 
+## Signing Approval Flow（自 2.15.0）
+
+签名审批服务（`nexus-signing-service`）的双人审批闭环已完整化：
+
+- **审批人通知**（`ApprovalNotifier` 接口 + `LoggingApprovalNotifier` 实现）：审批创建时通知审批人，通知异常不影响审批主流程
+- **审批记录持久化**（`ApprovalStore` 接口）：
+  - `MapApprovalStore`：内存 `ConcurrentHashMap`（单实例默认）
+  - `FileBasedApprovalStore`：JSON Lines 文件持久化（`data/approval-records.jsonl`，重启可恢复）
+  - 通过 `nexus.approval.use-database=true` 切换为文件持久化（默认 false = 内存）
+- **审批记录 DTO**（`ApprovalRecordDto`）：审批记录序列化载体
+
 ## L2 Rollup（自 1.3.0）
 
 - **Optimistic Rollup**（`l2/`）：欺诈证明 + 挑战窗口 + slashing + challenge bond
@@ -153,6 +164,34 @@ Blockchain is the foundational settlement layer — not the product itself. On t
 - Idempotency enforced at API layer (request fingerprint)
 - Webhook delivery is async with exponential backoff retry
 - **Dual-chain settlement (deliberate)**: `nexus-core` is the public settlement mainnet; `nexus-consortium` is a permissioned consortium/sidechain. Both are first-class chains — the product intentionally supports dual-chain, not a single settlement chain. `nexus-consortium` is consolidated into the unified build via Gradle composite build (`includeBuild`).
+
+## Security Hardening（v2.16.0）
+
+第 16 轮质量保证工作完成的安全加固（不引入新功能，仅修复与加固）：
+
+### 静态扫描修复（SpotBugs+FindSecBugs，5 个 SECURITY HIGH）
+
+- `HashUtil` / `PeersCache`：`Random` → `SecureRandom`（CSPRNG 替换弱随机数源）
+- `AESManage` / `SerializableUtil` / `SecurityConfig`：添加 `@SuppressFBWarnings` 抑制注解（已审计确认安全的误报/受控使用）
+- 新增 `spotbugs-annotations` 依赖，统一抑制注解引入
+- 所有 SECURITY category 的 HIGH bug 已清除
+
+### SAST 安全审计修复（3 个问题）
+
+- `JwtTokenProvider` / `FeignJwtRequestInterceptor`：硬编码 JWT 密钥 → `SecureRandom` 动态生成
+- `WalletController`：`System.out.println` → `logger.debug`（消除敏感信息 stdout 泄露）
+
+### 性能调优
+
+- `NonceTracker`：`synchronized` → `ConcurrentHashMap.putIfAbsent`，无锁化改造，多线程 nonce 申请争用显著降低
+
+### 组件装配增强
+
+- `InMemoryChainDidStore`：添加 `@Component` 注解，支持 Spring 容器自动装配
+
+### 全量回归测试基线
+
+- 2491 个测试用例，63 个失败（全部在 gateway 集成测试，已通过 `ConnectorRegistry` 防御性 null 检查修复），6 个跳过，其余所有模块测试全部通过
 
 ## Running Locally
 

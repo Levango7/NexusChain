@@ -1,5 +1,6 @@
 package org.nexus.signing.config;
 
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -78,6 +79,12 @@ public class SecurityConfig {
     }
 
     @Bean
+    @SuppressFBWarnings(
+        value = "SPRING_CSRF_PROTECTION_DISABLED",
+        justification = "signing-service 是无状态 REST API：使用 JWT Bearer token 鉴权"
+            + "（Authorization 头），不使用 cookie 会话，CSRF 攻击向量不适用。"
+            + "sessionCreationPolicy=STATELESS 进一步确保不创建 HTTP Session。"
+    )
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         if (jwtSecret == null || jwtSecret.isBlank()) {
             log.error("nexus.security.jwt.secret 未配置，signing-service 将以 fail-closed 模式启动："

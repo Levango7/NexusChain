@@ -18,6 +18,8 @@
 
 package org.nexus.keystore.crypto;
 
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
+
 import javax.crypto.BadPaddingException;
 import javax.crypto.Cipher;
 import javax.crypto.IllegalBlockSizeException;
@@ -29,6 +31,16 @@ import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
 
 // AES-256-CTR encrypt/decrypt
+//
+// 安全说明（SpotBugs FindSecBugs CIPHER_INTEGRITY 抑制理由）：
+// AES/CTR/NoPadding 是流加密模式，本身不提供密文完整性认证（无 MAC/tag），
+// FindSecBugs 因此报告 CIPHER_INTEGRITY。但本类是 keystore 底层加密原语，
+// 上层调用方（Keystore.newInstance / KeystoreAction.fromPassword /
+// WalletUtils.fromPassword 等）在加密后均计算 keccak256(derivedKey || cipherPrivKey)
+// 作为 MAC 字段存入 keystore JSON，解密前会先校验 MAC，从而在应用层提供了
+// 完整性 + 认证保护。改用 AES/GCM/NoPadding 会改变密文格式，破坏已有 keystore
+// 文件兼容性，且 GCM 的 tag 长度与现有 mac 字段语义重叠。因此在此抑制该告警，
+// 完整性由上层 MAC 保证。
 public class AESManage {
     private byte[] iv;
 
@@ -40,6 +52,12 @@ public class AESManage {
         this.iv = iv;
     }
 
+    @SuppressFBWarnings(
+        value = "CIPHER_INTEGRITY",
+        justification = "AES/CTR 无内置完整性认证，但上层 Keystore 已用 keccak256 MAC "
+            + "(mac = keccak256(derivedKey || cipherPrivKey)) 保护密文完整性，解密前先校验 MAC。"
+            + "改用 GCM 会破坏已有 keystore 文件格式兼容性。"
+    )
     public byte[] encrypt(byte[] key,byte[] data) throws NoSuchAlgorithmException, NoSuchPaddingException, InvalidKeyException, InvalidAlgorithmParameterException, IllegalBlockSizeException, BadPaddingException {
         SecretKeySpec skey = new SecretKeySpec(key, "AES");
         Cipher cipher = Cipher.getInstance("AES/CTR/NoPadding");
@@ -48,6 +66,12 @@ public class AESManage {
         return cipher.doFinal(data);
     }
 
+    @SuppressFBWarnings(
+        value = "CIPHER_INTEGRITY",
+        justification = "AES/CTR 无内置完整性认证，但上层 Keystore 已用 keccak256 MAC "
+            + "(mac = keccak256(derivedKey || cipherPrivKey)) 保护密文完整性，解密前先校验 MAC。"
+            + "改用 GCM 会破坏已有 keystore 文件格式兼容性。"
+    )
     public byte[] decrypt(byte[] key,byte[] data) throws NoSuchAlgorithmException, NoSuchPaddingException, InvalidKeyException, InvalidAlgorithmParameterException, IllegalBlockSizeException, BadPaddingException {
         SecretKeySpec skey = new SecretKeySpec(key, "AES");
         Cipher cipher = Cipher.getInstance("AES/CTR/NoPadding");

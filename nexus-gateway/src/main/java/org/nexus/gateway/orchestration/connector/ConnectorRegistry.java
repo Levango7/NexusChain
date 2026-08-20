@@ -19,8 +19,13 @@ public class ConnectorRegistry {
 
     public ConnectorRegistry(List<PaymentConnector> connectorList) {
         for (PaymentConnector c : connectorList) {
-            connectors.put(c.getId(), c);
-            log.info("Registered payment connector: {} (type={}, active={})", c.getId(), c.getType(), c.isActive());
+            String id = c.getId();
+            if (id == null) {
+                log.warn("Skipping payment connector with null id (class={})", c.getClass().getName());
+                continue;
+            }
+            connectors.put(id, c);
+            log.info("Registered payment connector: {} (type={}, active={})", id, c.getType(), c.isActive());
         }
         log.info("ConnectorRegistry initialized with {} connectors", connectors.size());
     }

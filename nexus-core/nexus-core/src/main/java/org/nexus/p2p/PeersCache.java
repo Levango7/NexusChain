@@ -4,6 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.net.URI;
+import java.security.SecureRandom;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -221,11 +222,15 @@ public class PeersCache {
     }
 
     // get limit peers randomly
+    // 安全加固（SpotBugs DMI_RANDOM_USED_ONLY_ONCE / RV_ABSOLUTE_VALUE_OF_RANDOM_INT）：
+    // P2P 节点选择使用 SecureRandom 替代 java.util.Random，防止攻击者通过预测随机数
+    // 序列来操纵节点选择（如 eclipse attack）。同时修复 Math.abs(rand.nextInt()) 在
+    // Integer.MIN_VALUE 时返回负数的缺陷，改用无符号取模 rand.nextInt(bound)。
     public List<Peer> getPeers(int limit){
         List<Peer> res = getPeers();
-        Random rand = new Random();
+        SecureRandom rand = new SecureRandom();
         while(res.size() > 0 && res.size() > limit){
-            int idx = Math.abs(rand.nextInt()) % res.size();
+            int idx = rand.nextInt(res.size());
             res.remove(idx);
         }
         return res;

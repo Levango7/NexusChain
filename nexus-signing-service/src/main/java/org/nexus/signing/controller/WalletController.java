@@ -7,6 +7,8 @@ import org.nexus.sdk.wallet.WalletUtils;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.nexus.sdk.common.APIResult;
 import org.nexus.signing.config.SecurityRoles;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
@@ -41,6 +43,7 @@ import java.math.BigDecimal;
  */
 @RestController
 public class WalletController {
+    private static final Logger log = LoggerFactory.getLogger(WalletController.class);
     /**
      * SECURITY (P2-F1): keystore+password 解密类操作，强制 {@code ROLE_ADMIN}。
      */
@@ -86,8 +89,7 @@ public class WalletController {
     @RequestMapping(value="/verifyAddress",method = RequestMethod.GET )
     public Object verifyAddress(@RequestParam(value = "address", required = true) String address) {
         int code = WalletUtils.verifyAddress(address);
-        System.out.println(address);
-        System.out.println(code);
+        log.debug("verifyAddress: address length={}, result code={}", address.length(), code);
         APIResult result = new APIResult();
         if (code == 0){
             result.setStatusCode(2000);

@@ -28,8 +28,8 @@ import org.nexus.util.ByteUtil;
 import java.math.BigInteger;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
 import java.security.Security;
-import java.util.Random;
 
 import static java.util.Arrays.copyOfRange;
 
@@ -190,11 +190,16 @@ public class HashUtil {
 
     /**
      * @return - generate random 32 byte hash
+     *
+     * <p>安全加固（SpotBugs DMI_RANDOM_USED_ONLY_ONCE / RV_ABSOLUTE_VALUE_OF_RANDOM_INT）：
+     * 原实现使用 {@link java.util.Random}，其输出可预测（基于种子），在安全敏感场景
+     * （如生成 nonce / 临时密钥材料）下可被攻击者推断。改用 {@link SecureRandom}，
+     * 其使用操作系统熵源（/dev/urandom 或 Windows CryptGenRandom），不可预测。
      */
     public static byte[] randomHash() {
 
         byte[] randomHash = new byte[32];
-        Random random = new Random();
+        SecureRandom random = new SecureRandom();
         random.nextBytes(randomHash);
         return randomHash;
     }
