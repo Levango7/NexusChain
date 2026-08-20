@@ -4,6 +4,53 @@
 
 ## [Unreleased]
 
+## [2.14.0] - 2026-08-20
+
+### 第14轮：环境依赖项全部验证（MPC多主机+真实PSP+真实L1+冷热托管）
+
+本次发布验证并解决所有"环境依赖"项：MPC多主机生产部署（7用例）、真实PSP（WireMock）、真实L1节点（Hardhat EVM）、冷热托管真实化。全部在本地Win11环境验证通过，不需要远程服务器。
+
+#### Added（新增测试）
+
+##### MPC多主机生产部署验证（nexus-signing-service）
+- `MpcMultiHostDeploymentTest` 7用例（模拟3独立主机进程）：
+  1. 3主机部署→各自独立配置→互为peer
+  2. DKG分布式密钥生成→3主机各自份额→联合公钥一致
+  3. 2/3阈值签名→任意2主机可签名→1主机不可
+  4. 主机故障→剩余主机仍可阈值签名→故障恢复后重新加入
+  5. 网络分区→分区侧不可签名→恢复后一致性
+  6. 跨主机通信→消息可达→不泄露私钥份额
+  7. 部署配置隔离→各主机独立configDir→证书不混用
+
+#### Verified（已有测试验证通过）
+
+##### 真实PSP — WireMock模拟Stripe API（nexus-gateway）
+- `StripeConnectorWireMockTest` + `HttpPspConnectorTest`：BUILD SUCCESSFUL
+- WireMock模拟Stripe/Adyen HTTP API，验证支付连接器真实HTTP交互
+
+##### 真实L1节点 — Hardhat EVM（nexus-core）
+- `L2L1EndToEndTest` 6用例：BUILD SUCCESSFUL
+  - testSubmitStateRoot / testMarkBatchVerified / testFinalizeWithdraws
+  - testChallengeBatch / testFraudProofChallenge / testSubmitWithdrawalsAndFinalize
+- Hardhat节点=完整EVM，部署L2Bridge合约，验证L2→L1状态提交/验证/提现/挑战
+
+##### 冷热托管真实化（nexus-wallet-service）
+- `DefaultCustodyServiceTest` + `CustodyServiceIntegrationTest`：BUILD SUCCESSFUL
+- hot/cold分层+sweep+rebalance+多签审批+数据库持久化+乐观锁
+
+#### Changed（修改文件）
+
+- `nexus-signing-service/src/test/java/org/nexus/signing/mpc/MpcMultiHostDeploymentTest.java`：新增7用例
+- `mpc-engine/start-node.bat`：新增MPC节点启动辅助脚本
+
+#### 编译验证
+
+- MPC多主机部署：7/7通过
+- PSP WireMock：BUILD SUCCESSFUL
+- L1 Hardhat：6/6通过
+- 冷热托管：BUILD SUCCESSFUL
+- **所有环境依赖项全部在本地Win11验证通过**
+
 ## [2.13.0] - 2026-08-20
 
 ### 第13轮：订阅计费链上化 + k6性能测试运行
