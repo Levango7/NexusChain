@@ -23,6 +23,9 @@ use eyre::eyre;
 use rand::rngs::OsRng;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
+// zeroize：密钥材料安全擦除。MyShareRecord 派生 Zeroize，
+// 在加密的私钥份额密文与公钥材料 hex 离开作用域前擦除内存。
+use zeroize::Zeroize;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -336,7 +339,12 @@ pub fn remove_session(session_id: &str) {
 ///   * `aggregate_public_key`：聚合公钥（hex）
 ///   * `party_public_keys`：各方可验证公钥（hex）
 ///   * `vss_scheme`、`dlog_proofs`：VSS 方案与 DLog 证明（验签用）
-#[derive(Clone, Serialize, Deserialize)]
+///
+/// **密钥材料安全擦除**：派生 `Zeroize`。所有字段（`Vec<u8>`、`String`、`usize`、
+/// `u16`）均实现 `Zeroize`，派生后调用 `zeroize()` 将加密的私钥份额密文、
+/// 聚合公钥 hex、各方可验证公钥 hex 等内存清零。调用方可显式调用 `zeroize()`
+/// 或派生 `ZeroizeOnDrop` 在离开作用域时自动擦除。
+#[derive(Clone, Serialize, Deserialize, Zeroize)]
 pub struct MyShareRecord {
     /// 本方索引。
     pub my_party_index: usize,

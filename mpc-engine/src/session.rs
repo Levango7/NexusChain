@@ -25,6 +25,13 @@ pub enum SessionState {
 }
 
 /// 单个 session 的元数据与状态。
+///
+/// **密钥材料安全擦除说明**：`SessionInfo` 仅持有 session 元数据
+///（session_id、party_id、party_index、时间戳、状态），**不含私钥份额
+/// 或其他密钥材料**，故未实现 `Zeroize`。此外 `created_at` / `updated_at`
+/// 为 `std::time::Instant`，该类型未实现 `Zeroize`，阻碍派生。
+/// 实际密钥材料（私钥份额、签名份额）存储于 `DkgSession` / `SignCache`
+///（见 gg20.rs），已实现 `Zeroize`。
 #[derive(Clone, Debug)]
 pub struct SessionInfo {
     /// session_id（全局唯一，由调用方传入）。

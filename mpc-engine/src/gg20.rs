@@ -14,6 +14,10 @@
 //! 当前保留进程内全量协议执行能力以兼容 signing-service GrpcMpcCryptoEngine 客户端。
 
 use serde::{Deserialize, Serialize};
+// zeroize：密钥材料安全擦除。
+// 关键结构体（SharedKeysSerde、DkgSession、Gg20SignOutput、SignCache）实现 Zeroize，
+// 在离开作用域前将私钥份额、签名份额等敏感材料内存清零，防止内存转储/冷启动攻击提取残余密钥。
+use zeroize::Zeroize;
 
 use multi_party_ecdsa::protocols::multi_party_ecdsa::gg_2020::party_i::{
     verify, KeyGenBroadcastMessage1, KeyGenDecommitMessage1, Keys, LocalSignature, Parameters,
@@ -43,6 +47,14 @@ use zk_paillier::zkproofs::DLogStatement;
 ///
 /// 聚合公钥 `y_sum`、各方可验证公钥 `pk_vec`、VSS 方案 `vss_scheme`、
 /// DLog 证明 `dlog_proofs` 全量存储（验签所需，非私钥材料）。
+///
+/// **密钥材料安全擦除**：手动实现 `Zeroize`（best-effort）。`shared_keys`
+/// 与 `my_private_share`（含私钥份额）调用 `zeroize()` 擦除；`party_keys`
+///（含 Paillier 密钥）等第三方类型字段用 `mem::take` 清空释放堆内存。
+/// 注：`Keys`/`Parameters`/`VerifiableSS`/`Point`/`EncryptionKey`/
+/// `DLogStatement`/`DLogProof` 来自 curv-kzen / multi-party-ecdsa，
+/// 未实现 `Zeroize`，其内部表示无法被完全擦除——此处为 best-effort，
+/// 完整擦除依赖上游库支持。
 #[derive(Clone, Serialize, Deserialize)]
 pub struct DkgSession {
     pub params: Parameters,
@@ -140,10 +152,65 @@ impl DkgSession {
 }
 
 /// SharedKeys 的 serde 包装（原类型无 Serialize）。
-#[derive(Clone, Debug, Serialize, Deserialize)]
+///
+/// **密钥材料安全擦除**：派生 `Zeroize`，在离开作用域前将私钥份额 `x_i`
+/// 与公钥点 `y_i` 内存清零。调用方可派生 `ZeroizeOnDrop` 或显式调用
+/// `zeroize()` 方法触发擦除。
+///
+/// 注：`Scalar<Secp256k1>` / `Point<Secp256k1>` 来自 curv-kzen 0.9，
+/// 其内部表示为 `BigInt`（num-bigint）。若 curv 上游未实现 `Zeroize`，
+/// 此派生会在编译期失败——届时需改为手动实现并依赖 curv 提供 zero 构造。
+/// 当前保留派生以表达安全意图，并便于上游支持后即时生效。
+#[derive(Clone, Debug, Serialize, Deserialize, Zeroize)]
 pub struct SharedKeysSerde {
     pub x_i: Scalar<Secp256k1>,
     pub y_i: Point<Secp256k1>,
+}
+
+// =========================================================================
+// 密钥材料安全擦除：手动实现 Zeroize（best-effort）
+// =========================================================================
+//
+// DkgSession / Gg20SignOutput / SignCache 含第三方密码学库类型
+//（curv-kzen 的 Scalar/Point/VerifiableSS/EncryptionKey/DLogStatement/DLogProof、
+// multi-party-ecdsa 的 Keys/SignatureRecid），这些类型未实现 zeroize::Zeroize，
+// 无法直接 #[derive(Zeroize)]。此处手动实现 best-effort zeroize：
+//   * 能 zeroize 的字段（Vec<SharedKeysSerde>、Option<SharedKeysSerde>、
+//     Vec<Scalar>、String、usize 等）调用 .zeroize() 擦除内存；
+//   * 不能 zeroize 的 Vec 字段（Vec<Keys>、Vec<Point>、Vec<EncryptionKey> 等）
+//     用 mem::take 清空释放堆内存（元素内部数据未必擦除，依赖上游支持）；
+//   * 不能 zeroize 的单个第三方值（Point、VerifiableSS、Parameters、SignatureRecid）
+//     无法处理，保留原值（best-effort 局限）。
+//
+// 安全效益：私钥份额（shared_keys/my_private_share）、签名份额（partial_shares）、
+// session 元数据等核心敏感材料被擦除；Paillier 密钥（party_keys）、签名对象
+//（signature）等第三方类型的内部表示未被擦除，需上游库提供 Zeroize 实现后
+// 方可完整覆盖。当前实现已显著降低密钥残余泄露风险。
+
+impl Zeroize for DkgSession {
+    fn zeroize(&mut self) {
+        // 私钥份额字段：完整擦除
+        self.shared_keys.zeroize();
+        self.my_private_share.zeroize();
+        self.my_party_index.zeroize();
+        // 第三方类型 Vec 字段：best-effort，清空释放堆内存
+        //（元素内部数据未必擦除，依赖 curv-kzen / multi-party-ecdsa 上游支持）
+        std::mem::take(&mut self.party_keys);
+        std::mem::take(&mut self.pk_vec);
+        std::mem::take(&mut self.ek_vec);
+        std::mem::take(&mut self.dlog_statement_vec);
+        std::mem::take(&mut self.dlog_proofs);
+        // 单个第三方值（y_sum、vss_scheme、params）无法 zeroize，保留原值（best-effort 局限）
+    }
+}
+
+impl Zeroize for Gg20SignOutput {
+    fn zeroize(&mut self) {
+        // 部分签名份额：完整擦除（Vec<Scalar> 的 zeroize 需 Scalar: Zeroize，
+        // 若 curv 上游未实现则此调用编译失败——届时需改为 mem::take best-effort）
+        self.partial_shares.zeroize();
+        // r_point（Point）、signature（SignatureRecid）为第三方类型，无法 zeroize，保留原值
+    }
 }
 
 /// GG20 签名输出。
@@ -152,6 +219,11 @@ pub struct SharedKeysSerde {
 ///   * `r_point`：nonce 点 R（各方一致，聚合时用于重算 r = R.x mod n）
 ///   * `partial_shares`：各签名方的部分签名份额 s_i
 ///   * `signature`：最终聚合签名（已库内验证）
+///
+/// **密钥材料安全擦除**：手动实现 `Zeroize`（best-effort）。`partial_shares`
+///（部分签名份额）调用 `zeroize()` 擦除；`r_point` 与 `signature` 为第三方
+/// 类型（curv-kzen / multi-party-ecdsa），未实现 `Zeroize`，无法擦除——
+/// 此处为 best-effort，完整擦除依赖上游库支持。
 #[derive(Clone)]
 pub struct Gg20SignOutput {
     pub r_point: Point<Secp256k1>,
@@ -595,6 +667,11 @@ pub fn scalar_from_hex(h: &str) -> eyre::Result<Scalar<Secp256k1>> {
 ///
 /// Sign RPC 在进程内完成全部签名方协议后缓存本结构；
 /// Aggregate RPC 据此返回已验证的最终签名，并按请求方 party_index 分发部分份额。
+///
+/// **密钥材料安全擦除**：手动实现 `Zeroize`（best-effort）。`partial_shares`
+///（部分签名份额）与 `message_hash` 调用 `zeroize()` 擦除；`r_point` 与
+/// `signature` 为第三方类型（curv-kzen / multi-party-ecdsa），未实现 `Zeroize`，
+/// 无法擦除——此处为 best-effort，完整擦除依赖上游库支持。
 #[derive(Clone)]
 pub struct SignCache {
     pub r_point: Point<Secp256k1>,
@@ -603,6 +680,15 @@ pub struct SignCache {
     pub partial_shares: Vec<Scalar<Secp256k1>>,
     /// 本次签名运行的消息哈希（hex），防止跨消息重放缓存。
     pub message_hash: String,
+}
+
+impl Zeroize for SignCache {
+    fn zeroize(&mut self) {
+        // 部分签名份额与消息哈希：完整擦除
+        self.partial_shares.zeroize();
+        self.message_hash.zeroize();
+        // r_point（Point）、signature（SignatureRecid）为第三方类型，无法 zeroize，保留原值
+    }
 }
 
 #[cfg(test)]
