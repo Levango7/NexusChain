@@ -4,10 +4,12 @@ import org.nexus.gateway.model.PaymentOrder;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import jakarta.persistence.LockModeType;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -111,4 +113,18 @@ public interface PaymentOrderRepository extends JpaRepository<PaymentOrder, Long
 
     /** 游标分页：按租户查询 id 大于 afterId 的订单。 */
     Page<PaymentOrder> findByTenantIdAndIdGreaterThan(String tenantId, Long afterId, Pageable pageable);
+
+    /**
+     * 悲观写锁查询订单（P0-2 修复：防止并发双花）。
+     *
+     * <p>使用 {@code SELECT FOR UPDATE} 锁定订单行，保证同一时刻只有一个事务
+     * 能读取并修改该订单的退款状态。在退款请求场景下，两个并发 requestRefund
+     * 调用会被串行化，第二个事务等待第一个提交后才能读取到最新的退款总和。</p>
+     *
+     * @param id 订单 ID
+     * @return 锁定后的订单（可能为空）
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT o FROM PaymentOrder o WHERE o.id = :id")
+    Optional<PaymentOrder> findByIdForUpdate(@Param("id") Long id);
 }

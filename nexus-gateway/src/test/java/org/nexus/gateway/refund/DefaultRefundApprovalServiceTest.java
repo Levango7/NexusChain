@@ -85,7 +85,8 @@ class DefaultRefundApprovalServiceTest {
 
     @Test
     void requestRefund_validCreatesPending() {
-        when(paymentOrderRepository.findById(1L)).thenReturn(Optional.of(paidOrder));
+        when(paymentOrderRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(paidOrder));
+        when(refundRequestRepository.sumPendingRefundsByOrderId(1L)).thenReturn(BigDecimal.ZERO);
         when(refundRequestRepository.save(any())).thenAnswer(inv -> {
             RefundRequest r = inv.getArgument(0);
             r.setId(10L);
@@ -102,7 +103,7 @@ class DefaultRefundApprovalServiceTest {
 
     @Test
     void requestRefund_amountExceedsMaxThrows() {
-        when(paymentOrderRepository.findById(1L)).thenReturn(Optional.of(paidOrder));
+        when(paymentOrderRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(paidOrder));
         assertThrows(IllegalArgumentException.class,
                 () -> service.requestRefund(1L, new BigDecimal("2000000"), "too much"));
     }
@@ -112,7 +113,7 @@ class DefaultRefundApprovalServiceTest {
         PaymentOrder pending = new PaymentOrder();
         pending.setId(2L);
         pending.setStatus(PaymentOrder.OrderStatus.PENDING);
-        when(paymentOrderRepository.findById(2L)).thenReturn(Optional.of(pending));
+        when(paymentOrderRepository.findByIdForUpdate(2L)).thenReturn(Optional.of(pending));
 
         assertThrows(IllegalStateException.class,
                 () -> service.requestRefund(2L, new BigDecimal("100"), "x"));
@@ -121,7 +122,8 @@ class DefaultRefundApprovalServiceTest {
     @Test
     void requestRefund_windowExpiredThrows() {
         paidOrder.setPaidAt(LocalDateTime.now().minusDays(30));
-        when(paymentOrderRepository.findById(1L)).thenReturn(Optional.of(paidOrder));
+        when(paymentOrderRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(paidOrder));
+        when(refundRequestRepository.sumPendingRefundsByOrderId(1L)).thenReturn(BigDecimal.ZERO);
 
         assertThrows(IllegalStateException.class,
                 () -> service.requestRefund(1L, new BigDecimal("100"), "late"));

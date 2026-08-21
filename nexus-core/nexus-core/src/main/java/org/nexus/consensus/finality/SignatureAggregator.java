@@ -125,8 +125,9 @@ public interface SignatureAggregator {
                     }
                 }
             } catch (Exception e) {
-                log.debug("BLS verification skipped (signature format not EC point compatible): {}", e.getMessage());
-                // 如果签名不是EC点格式，回退到格式校验已通过
+                // P0-6 修复：fail-closed — 任何验签异常都应视为验签失败
+                log.error("BLS signature verification failed: {}", e.getMessage());
+                return false;
             }
             return true;
         }
