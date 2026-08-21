@@ -4,6 +4,37 @@
 
 ## [Unreleased]
 
+## [2.19.0] - 2026-08-21
+
+### 第19轮：退款审批API实现（RefundController）
+
+本次发布实现了独立的退款审批API端点，将之前@Disabled的RefundApprovalE2ETest全部启用。gateway全量测试806用例全部通过（0失败，0跳过）。
+
+#### Added（新增）
+
+##### RefundController — 退款审批REST API
+- `POST /api/v1/refunds`：发起退款请求，调用 `RefundApprovalService.requestRefund`，返回 201 CREATED
+- `POST /api/v1/refunds/approve`：审批/拒绝退款，调用 `approveRefund` 或 `rejectRefund`，返回 200 OK
+- `POST /api/v1/refunds/{id}/execute`：执行已审批的退款，调用 `executeRefund`，返回 200 OK
+- 请求体字段灵活解析：`paymentId`/`orderId`（String→Long容错）、`refundId`（String→Long容错）、`amount`（String→BigDecimal）
+
+#### Fixed（修复）
+
+##### RefundApprovalE2ETest 全部启用
+- 移除 `@Disabled` 注解，6个测试全部通过
+- 添加 `@MockBean RefundApprovalService`，stub服务方法返回预设 `RefundRequest`
+- 调整请求体使用数字ID（orderId=1, refundId=1）
+- 退款请求期望 201 CREATED，审批请求期望 200 OK
+
+#### Test Results（测试结果）
+- gateway 全量测试：806 用例，806 通过，0 失败，0 跳过，0 错误
+- `RefundApprovalE2ETest`：6/6 通过（之前6/6跳过）
+- `PaymentE2EIntegrationTest`：6/6 通过
+
+#### Changed（修改文件）
+- `nexus-gateway/.../controller/RefundController.java`：新增退款审批控制器
+- `nexus-gateway/.../integration/RefundApprovalE2ETest.java`：移除@Disabled + mock服务层
+
 ## [2.18.0] - 2026-08-21
 
 ### 第18轮：安全和测试完善（修复12个gateway测试失败）
