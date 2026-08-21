@@ -78,7 +78,8 @@ public class DefaultRefundApprovalService implements RefundApprovalService {
             throw new IllegalArgumentException("amount must be positive");
         }
 
-        PaymentOrder order = paymentOrderRepository.findById(orderId)
+        // P0-2 修复：使用悲观锁查询订单，防止并发双花
+        PaymentOrder order = paymentOrderRepository.findByIdForUpdate(orderId)
                 .orElseThrow(() -> new IllegalArgumentException("order not found: " + orderId));
 
         if (!refundPolicy.canRefund(order)) {
@@ -88,6 +89,14 @@ public class DefaultRefundApprovalService implements RefundApprovalService {
         if (amount.compareTo(maxRefund) > 0) {
             throw new IllegalArgumentException(
                     "refund amount exceeds maximum: " + amount + " > " + maxRefund);
+        }
+        // P0-1 修复：检查已有退款总和，防止超额退款
+        BigDecimal pendingSum = refundRequestRepository.sumPendingRefundsByOrderId(orderId);
+        BigDecimal availableAmount = order.getAmount().subtract(pendingSum);
+        if (amount.compareTo(availableAmount) > 0) {
+            throw new IllegalArgumentException(
+                    "refund exceeds available: requested=" + amount + ", available=" + availableAmount
+                            + " (order amount=" + order.getAmount() + ", pending refunds=" + pendingSum + ")");
         }
         if (refundPolicy.getRefundWindow(order).isZero()) {
             throw new IllegalStateException("refund window has expired for order: " + orderId);

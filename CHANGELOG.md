@@ -4,6 +4,45 @@
 
 ## [Unreleased]
 
+## [2.20.0] - 2026-08-21
+
+### 第20轮：P0安全漏洞修复（超额退款+双花+ID回退+BLS验签+审批人自报）
+
+本次发布修复漏洞扫描报告中的5个P0级严重安全漏洞，涵盖资金安全、共识层安全和认证安全。gateway全量测试806用例全部通过。
+
+#### Security（安全修复）
+
+##### P0-3: RefundController ID回退导致误退款
+- `RefundController.java`：移除 `DEFAULT_ID_FALLBACK = 1L` 静默回退逻辑
+- `parseLongId()` 解析失败时返回 `null`，由调用方返回 400 Bad Request
+- `requestRefund()` 和 `approveRefund()` 在 ID 为 null 时返回 400
+
+##### P0-1: 超额退款漏洞
+- `RefundRequestRepository.java`：新增 `sumPendingRefundsByOrderId()` 查询同一订单 PENDING+APPROVED 退款总和
+- `DefaultRefundApprovalService.requestRefund()`：新增超额退款检查，`availableAmount = order.amount - pendingSum`
+
+##### P0-2: 并发双花漏洞
+- `PaymentOrderRepository.java`：新增 `findByIdForUpdate()` 悲观写锁查询（`@Lock(PESSIMISTIC_WRITE)`）
+- `DefaultRefundApprovalService.requestRefund()`：使用 `findByIdForUpdate` 替代 `findById`，串行化并发退款请求
+
+##### P0-6: BLS验签 fail-open → fail-closed
+- `SignatureAggregator.java`：catch 异常时 `return false`（原为 `return true`），`log.debug` 改为 `log.error`
+
+##### P0-7: 退款审批人身份由调用方自报
+- `RefundController.approveRefund()`：从 `HttpServletRequest` attribute `nexus.merchantId` 获取认证商户ID
+- 忽略请求体中的 `approver` 字段（测试环境回退到请求体）
+
+#### Test Results
+- gateway 全量测试：806 用例，806 通过，0 失败
+
+#### Changed（修改文件）
+- `nexus-gateway/.../controller/RefundController.java`：P0-3 + P0-7
+- `nexus-gateway/.../refund/DefaultRefundApprovalService.java`：P0-1 + P0-2
+- `nexus-gateway/.../refund/RefundRequestRepository.java`：P0-1 新增查询
+- `nexus-gateway/.../repository/PaymentOrderRepository.java`：P0-2 悲观锁
+- `nexus-gateway/.../refund/DefaultRefundApprovalServiceTest.java`：测试mock适配
+- `nexus-core/.../consensus/finality/SignatureAggregator.java`：P0-6 fail-closed
+
 ## [2.19.0] - 2026-08-21
 
 ### 第19轮：退款审批API实现（RefundController）
