@@ -17,7 +17,7 @@ plugins {
 
 allprojects {
     group = 'org.nexus'
-    version = '2.24.0'
+    version = '2.26.0'
 
     repositories {
         mavenCentral()
@@ -156,7 +156,7 @@ subprojects {
         junitJupiterVersion = '5.10.2'
         mockitoVersion = '4.11.0'
 
-        nexusVersion = '2.24.0'
+        nexusVersion = '2.26.0'
     }
 
     // B1 baseline (2026-08-03): NO global forced test deps.

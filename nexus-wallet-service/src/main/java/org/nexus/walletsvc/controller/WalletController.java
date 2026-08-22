@@ -3,10 +3,13 @@ package org.nexus.walletsvc.controller;
 import org.nexus.sdk.wallet.WalletTier;
 import org.nexus.sdk.wallet.WithdrawalRequest;
 import org.nexus.walletsvc.approval.WithdrawalApprovalService;
+import org.nexus.walletsvc.config.SecurityRoles;
 import org.nexus.walletsvc.custody.CustodyService;
 import org.nexus.walletsvc.whitelist.AddressWhitelistService;
 import org.nexus.walletsvc.whitelist.WhitelistEntry;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -69,9 +72,13 @@ public class WalletController {
     /**
      * 地址白名单查询端点。
      *
+     * <p>SECURITY (P0-3): 端点强制 {@code ROLE_OPERATOR} 鉴权。
+     * 白名单查询属于运维只读操作，不应公开访问。</p>
+     *
      * @param address 钱包地址
      * @return 是否加白 + 是否处于首次提币延迟期
      */
+    @PreAuthorize("hasRole('" + SecurityRoles.OPERATOR + "')")
     @GetMapping("/whitelist/check")
     public Map<String, Object> checkWhitelist(@RequestParam("address") String address) {
         Map<String, Object> result = new HashMap<>();
@@ -84,11 +91,16 @@ public class WalletController {
     /**
      * 加入白名单端点。
      *
+     * <p>SECURITY (P0-3): 端点强制 {@code ROLE_ADMIN} 鉴权。
+     * 白名单管理（增删）属于高权限管理操作，仅 ADMIN 角色可执行，
+     * 防止运维人员误操作或被钓鱼后向白名单注入恶意地址。</p>
+     *
      * @param address    钱包地址
      * @param label      地址标签
      * @param merchantId 商户 ID
      * @return 创建的白名单条目
      */
+    @PreAuthorize("hasRole('" + SecurityRoles.ADMIN + "')")
     @PostMapping("/whitelist/add")
     public WhitelistEntry addWhitelist(@RequestParam("address") String address,
                                        @RequestParam(value = "label", required = false) String label,
@@ -99,9 +111,13 @@ public class WalletController {
     /**
      * 移出白名单端点。
      *
+     * <p>SECURITY (P0-3): 端点强制 {@code ROLE_ADMIN} 鉴权。
+     * 白名单管理（增删）属于高权限管理操作，仅 ADMIN 角色可执行。</p>
+     *
      * @param address 钱包地址
      * @return 操作结果
      */
+    @PreAuthorize("hasRole('" + SecurityRoles.ADMIN + "')")
     @PostMapping("/whitelist/remove")
     public Map<String, Object> removeWhitelist(@RequestParam("address") String address) {
         addressWhitelistService.removeWhitelist(address);
@@ -116,11 +132,15 @@ public class WalletController {
     /**
      * 发起提现申请端点。
      *
+     * <p>SECURITY (P0-3): 端点强制 {@code ROLE_OPERATOR} 鉴权。
+     * 提现申请属于运维操作，需认证后执行。</p>
+     *
      * @param to       目标钱包地址
      * @param amount   提现金额
      * @param currency 币种
      * @return 提现申请
      */
+    @PreAuthorize("hasRole('" + SecurityRoles.OPERATOR + "')")
     @PostMapping("/withdrawal/request")
     public WithdrawalRequest requestWithdrawal(@RequestParam("to") String to,
                                                @RequestParam("amount") BigDecimal amount,
@@ -131,37 +151,52 @@ public class WalletController {
     /**
      * 审批提现端点。
      *
+     * <p>SECURITY (P0-3): 端点强制 {@code ROLE_APPROVER} 鉴权，
+     * 且 {@code approverId} 不再从请求参数获取（避免审批人自报身份的安全风险），
+     * 改从 {@link SecurityContextHolder} 认证上下文获取 JWT subject 作为审批人 ID。
+     * 这样审批人身份由网关签发的 JWT 强制保证，无法被调用方伪造。</p>
+     *
      * @param approvalId 提现申请 ID
-     * @param approverId 审批人 ID
      * @return 更新后的提现申请
      */
+    @PreAuthorize("hasRole('" + SecurityRoles.APPROVER + "')")
     @PostMapping("/withdrawal/approve")
-    public WithdrawalRequest approveWithdrawal(@RequestParam("approvalId") String approvalId,
-                                               @RequestParam("approverId") String approverId) {
+    public WithdrawalRequest approveWithdrawal(@RequestParam("approvalId") String approvalId) {
+        // P0-3：approverId 从认证上下文获取，而非请求参数，避免审批人自报身份
+        String approverId = SecurityContextHolder.getContext().getAuthentication().getName();
         return withdrawalApprovalService.approve(approvalId, approverId);
     }
 
     /**
      * 拒绝提现端点。
      *
+     * <p>SECURITY (P0-3): 端点强制 {@code ROLE_APPROVER} 鉴权，
+     * 且 {@code approverId} 从 {@link SecurityContextHolder} 认证上下文获取
+     * （与 {@link #approveWithdrawal} 一致，避免审批人自报身份）。</p>
+     *
      * @param approvalId 提现申请 ID
-     * @param approverId 审批人 ID
      * @param reason     拒绝原因
      * @return 更新后的提现申请
      */
+    @PreAuthorize("hasRole('" + SecurityRoles.APPROVER + "')")
     @PostMapping("/withdrawal/reject")
     public WithdrawalRequest rejectWithdrawal(@RequestParam("approvalId") String approvalId,
-                                              @RequestParam("approverId") String approverId,
                                               @RequestParam(value = "reason", required = false) String reason) {
+        // P0-3：approverId 从认证上下文获取，而非请求参数，避免审批人自报身份
+        String approverId = SecurityContextHolder.getContext().getAuthentication().getName();
         return withdrawalApprovalService.reject(approvalId, approverId, reason);
     }
 
     /**
      * 执行已审批提现端点。
      *
+     * <p>SECURITY (P0-3): 端点强制 {@code ROLE_OPERATOR} 鉴权。
+     * 提现执行属于运维操作，需认证后执行。</p>
+     *
      * @param approvalId 提现申请 ID
      * @return 更新后的提现申请（EXECUTED 或 FAILED）
      */
+    @PreAuthorize("hasRole('" + SecurityRoles.OPERATOR + "')")
     @PostMapping("/withdrawal/execute")
     public WithdrawalRequest executeWithdrawal(@RequestParam("approvalId") String approvalId) {
         return withdrawalApprovalService.executeApprovedWithdrawal(approvalId);
@@ -172,8 +207,12 @@ public class WalletController {
     /**
      * 托管余额查询端点。
      *
+     * <p>SECURITY (P0-3): 端点强制 {@code ROLE_OPERATOR} 鉴权。
+     * 托管余额属于运维只读信息，需认证后查询。</p>
+     *
      * @return 热钱包 / 冷钱包余额
      */
+    @PreAuthorize("hasRole('" + SecurityRoles.OPERATOR + "')")
     @GetMapping("/custody/balance")
     public Map<String, Object> custodyBalance() {
         Map<String, Object> result = new HashMap<>();
@@ -185,9 +224,14 @@ public class WalletController {
     /**
      * 触发再平衡端点。
      *
+     * <p>SECURITY (P0-3): 端点强制 {@code ROLE_ADMIN} 鉴权。
+     * 托管再平衡属于高权限管理操作（涉及冷热钱包资金调拨），
+     * 仅 ADMIN 角色可执行，防止运维人员误触发资金迁移。</p>
+     *
      * @param target 目标层级（HOT / WARM / COLD）
      * @return 操作结果
      */
+    @PreAuthorize("hasRole('" + SecurityRoles.ADMIN + "')")
     @PostMapping("/custody/rebalance")
     public Map<String, Object> rebalance(@RequestParam("target") WalletTier target) {
         custodyService.rebalance(target);

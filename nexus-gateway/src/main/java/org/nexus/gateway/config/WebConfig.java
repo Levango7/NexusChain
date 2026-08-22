@@ -87,17 +87,19 @@ public class WebConfig implements WebMvcConfigurer {
         registry.addInterceptor(apiKeyInterceptor)
                 .addPathPatterns("/api/v1/**", "/api/v2/**")
                 // Public paths: no auth required
+                // P0-1 安全加固：移除 /api/v{1,2}/merchants/** 排除，商户管理端点
+                // 必须受 API key 拦截器保护；写端点另加 @PreAuthorize("hasRole('ADMIN')")
                 .excludePathPatterns(
                         "/api/v1/checkout/**",       // Cashier page APIs (payer-facing)
-                        "/api/v1/webhooks/**",       // Chain event callbacks (signature-verified)
-                        "/api/v1/merchants/**",      // Merchant mgmt (admin-auth in production)
-                        "/api/v2/merchants/**"       // v2 Merchant mgmt (admin-auth in production)
+                        "/api/v1/webhooks/**"        // Chain event callbacks (signature-verified)
                 );
 
         // A2: payment orchestration now requires BOTH merchant API-key auth (above)
         // and a valid HMAC-SHA256 request signature (below).
+        // P1-3 安全加固：HMAC 签名拦截器扩展到退款与订单确认端点，防止未签名请求
+        // 篡改退款审批或订单状态。
         registry.addInterceptor(requestSignatureInterceptor)
-                .addPathPatterns("/api/v1/payments/**");
+                .addPathPatterns("/api/v1/payments/**", "/api/v1/refunds/**", "/api/v1/orders/**");
 
         // === P4-T6 多租户改造：租户 API Key 鉴权 + 租户级限流 ===
         // 顺序：先鉴权（填充 TenantContext），再限流（按租户配额判定）

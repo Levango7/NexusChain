@@ -243,7 +243,7 @@ public class RefundController {
 
     private boolean asBoolean(Object value) {
         if (value == null) {
-            return true; // 默认批准
+            return false; // P0-5 安全加固：fail-closed，必须显式传 approved=true 才批准
         }
         if (value instanceof Boolean) {
             return (Boolean) value;
