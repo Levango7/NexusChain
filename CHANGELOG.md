@@ -4,6 +4,35 @@
 
 ## [Unreleased]
 
+## [2.21.0] - 2026-08-22
+
+### 第21轮：P0-5 最终性测试修复（安全加固后签名长度对齐）
+
+本次发布修复漏洞扫描报告中 P0-5 — 安全加固（签名长度 ≥32 字节护栏）引入后，
+NexFinality 最终性测试大面积失败（14 个）的问题。修复后 finality 全部 49 个测试通过。
+
+#### Fixed（修复）
+
+##### P0-5: 最终性测试签名长度不足被护栏拒绝
+- 4 个测试文件的 `vote()` 辅助方法签名由 `new byte[]{0x01}`（1 字节）改为 `new byte[32]`，
+  满足 `CollectingAggregator.verifyAggregate()` 的 32 字节格式护栏：
+  - `FinalityGadgetTest.java`
+  - `FinalityGadgetConcurrencyTest.java`
+  - `FinalityStatePersistenceTest.java`
+  - `GovernanceWeightRefreshTest.java`
+- `FinalityCoordinator.onBlock()`：占位签名填充至 32 字节，
+  使协调器驱动的路径同样通过签名格式护栏
+
+#### Test Results
+- finality 全量测试：49 用例，49 通过，0 失败，0 错误，0 跳过
+
+#### Changed（修改文件）
+- `nexus-core/.../consensus/finality/FinalityCoordinator.java`：签名填充 32 字节
+- `nexus-core/.../consensus/finality/FinalityGadgetTest.java`：签名护栏对齐
+- `nexus-core/.../consensus/finality/FinalityGadgetConcurrencyTest.java`：签名护栏对齐
+- `nexus-core/.../consensus/finality/FinalityStatePersistenceTest.java`：签名护栏对齐
+- `nexus-core/.../consensus/finality/GovernanceWeightRefreshTest.java`：签名护栏对齐
+
 ## [2.20.0] - 2026-08-21
 
 ### 第20轮：P0安全漏洞修复（超额退款+双花+ID回退+BLS验签+审批人自报）

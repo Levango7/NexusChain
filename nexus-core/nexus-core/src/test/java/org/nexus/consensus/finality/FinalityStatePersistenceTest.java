@@ -56,7 +56,7 @@ class FinalityStatePersistenceTest {
     }
 
     private Vote vote(String validator, long epoch, byte[] cp) {
-        return new Vote(epoch, cp, validator, new byte[]{0x01});
+        return new Vote(epoch, cp, validator, new byte[32]);
     }
 
     @Test
