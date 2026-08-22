@@ -2,6 +2,7 @@ package org.nexus.gateway.service;
 
 import org.nexus.gateway.PaymentService;
 import org.nexus.gateway.client.ChainRpcClient;
+import org.nexus.gateway.client.OnChainTransaction;
 import org.nexus.gateway.compliance.AmlResult;
 import org.nexus.gateway.compliance.ComplianceService;
 import org.nexus.gateway.compliance.KycStatus;
@@ -222,14 +223,10 @@ public class PaymentServiceImpl implements PaymentService {
             // P0-4 安全加固：交易-订单绑定校验
             // 防止攻击者通过虚假 txHash 绕过链上确认（尤其是 skip-confirmation=true 时
             // 任何 >=16 字符字符串都被当作已确认的 fallback 逻辑）。
-            // TODO: 后续接入完整的链上交易详情查询。当前 ChainRpcClient 仅提供
-            //     isTransactionConfirmed / getTransactionStatus，不含交易金额与收款人字段。
-            //     需扩展 ChainRpcClient.getTransaction(txHash) 返回
-            //     {amount, recipient, sender, ...}，并在此校验：
-            //       - tx.amount.compareTo(order.getAmount()) == 0
-            //       - tx.recipient.equals(order.getPayeeAddress())  (商户结算地址)
-            //     临时校验：chainTxHash 非空且长度合理（>=16 且 <=128），
-            //     并对 skip-confirmation fallback 发出警告以阻止生产环境误用。
+            // P0-5 修复（v2.27.0 完整版）：已接入链上交易详情查询（ChainRpcClient.getTransaction），
+            // 在下方校验交易金额与收款人一致性。链节点不支持返回交易详情时降级为仅长度+唯一性校验。
+            // 临时校验：chainTxHash 非空且长度合理（>=16 且 <=128），
+            // 并对 skip-confirmation fallback 发出警告以阻止生产环境误用。
             if (chainTxHash == null || chainTxHash.length() < 16 || chainTxHash.length() > 128) {
                 log.warn("Transaction-Order binding check failed: invalid chainTxHash length for orderNo={}, txHash={}",
                         order.getOrderNo(), chainTxHash);
@@ -269,6 +266,42 @@ public class PaymentServiceImpl implements PaymentService {
                         .error(null);
                 return PaymentResult.failed(order.getOrderNo(),
                         "Transaction hash already bound to another order");
+            }
+
+            // P0-5 修复（v2.27.0 完整版）：链上交易详情校验——金额与收款人必须与订单一致。
+            // 从链节点查询交易详情，校验 tx.amount == order.amount 且 tx.recipient == order.payeeAddress。
+            // 链节点不支持返回交易详情时（getTransaction 返回 null），降级为仅长度校验并记录安全告警。
+            OnChainTransaction onChainTx = chainRpcClient.getTransaction(chainTxHash);
+            if (onChainTx != null) {
+                if (onChainTx.amount() != null && onChainTx.amount().compareTo(order.getAmount()) != 0) {
+                    log.warn("SECURITY: transaction amount mismatch: txHash={}, txAmount={}, orderAmount={}, orderNo={}",
+                            chainTxHash, onChainTx.amount(), order.getAmount(), order.getOrderNo());
+                    OrderStateMachine.transition(order, PaymentOrder.OrderStatus.FAILED);
+                    order.setChainTxHash(chainTxHash);
+                    orderRepository.save(order);
+                    confirmSpan.attr("payment.status", "FAILED")
+                            .attr("tx.binding.check", "AMOUNT_MISMATCH")
+                            .error(null);
+                    return PaymentResult.failed(order.getOrderNo(),
+                            "Transaction amount does not match order");
+                }
+                if (onChainTx.recipient() != null && !onChainTx.recipient().equals(order.getPayeeAddress())) {
+                    log.warn("SECURITY: transaction recipient mismatch: txHash={}, txRecipient={}, orderPayee={}, orderNo={}",
+                            chainTxHash, onChainTx.recipient(), order.getPayeeAddress(), order.getOrderNo());
+                    OrderStateMachine.transition(order, PaymentOrder.OrderStatus.FAILED);
+                    order.setChainTxHash(chainTxHash);
+                    orderRepository.save(order);
+                    confirmSpan.attr("payment.status", "FAILED")
+                            .attr("tx.binding.check", "RECIPIENT_MISMATCH")
+                            .error(null);
+                    return PaymentResult.failed(order.getOrderNo(),
+                            "Transaction recipient does not match order payee");
+                }
+            } else {
+                // 链节点不支持返回交易详情，降级为仅长度+唯一性校验
+                log.warn("SECURITY: unable to fetch on-chain transaction details for full binding check; "
+                        + "falling back to length+uniqueness check only. orderNo={}, txHash={}",
+                        order.getOrderNo(), chainTxHash);
             }
 
             // AML gate: screen the confirmed transaction before marking it PAID.

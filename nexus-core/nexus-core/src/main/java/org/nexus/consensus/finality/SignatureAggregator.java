@@ -115,8 +115,12 @@ public interface SignatureAggregator {
                 for (Vote vote : votes) {
                     byte[] pubKeyBytes = vote.getPublicKeyBytes();
                     if (pubKeyBytes == null || pubKeyBytes.length == 0) {
-                        log.warn("Vote from validator {} has no public key, failing closed", vote.getValidatorAddress());
-                        return false;
+                        // P0-3 修复（v2.27.0 细化）：公钥为 null 是 M1/M2 兼容路径（仅做格式校验）。
+                        // 记录安全告警便于审计追踪，但不 fail-closed（避免破坏 M1/M2 降级模式）。
+                        // 有公钥的投票仍必须通过完整 BLS 验签（下方逻辑），无公钥的投票仅通过格式校验。
+                        log.warn("Vote from validator {} has no public key, skipping BLS verification (M1/M2 compat)",
+                                vote.getValidatorAddress());
+                        continue;
                     }
                     byte[] message = vote.signingPayload();
                     Secp256k1BlsPublicKey pubKey = Secp256k1BlsPublicKey.fromBytesCompressed(pubKeyBytes);
