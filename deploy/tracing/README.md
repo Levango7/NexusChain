@@ -6,6 +6,8 @@
 >
 > 适用范围：NexusChain v2.1.0 Phase 2 / Phase 3 生产就绪
 >
+> 说明：此处 v2.1.0 为历史架构阶段标记（Phase 2 / Phase 3 追踪深化期），非当前发布版本；当前版本请见根 README.md。
+>
 > 追踪栈：OpenTelemetry Collector（OTLP 接收 + 处理 + 导出）+ Jaeger all-in-one（Query UI + Collector + Agent）+ Loki（日志聚合）+ Promtail（日志采集）
 
 ## 第1章 文件清单

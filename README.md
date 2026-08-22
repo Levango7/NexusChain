@@ -4,7 +4,7 @@ NexusChain 是一个**基于自研区块链的支付编排平台（Payment Orche
 
 > **定位**：区块链是底层结算基础设施，不是产品本身。产品价值在于统一支付 API、启发式路由与清结算。
 
-**当前版本**：v2.22.0（2026-08-22，最新稳定版；P0 漏洞修复全部完成，P1 修复进行中）
+**当前版本**：v2.24.0（2026-08-22，最新稳定版；P0/P1/P2 漏洞修复全部完成）
 
 ## 快速开始
 
@@ -145,7 +145,7 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
 
 ADR-001 状态：**Resolved**（2026-08-10）。
 
-## 最新改动摘要（v2.22.0，P0 漏洞修复 + P1 高危修复）
+## 最新改动摘要（v2.24.0，P0+P1+P2 漏洞修复）
 
 本次发布对前 15 轮改造后的代码基线进行系统化质量保证，不引入新功能，仅修复与加固：
 
@@ -157,7 +157,7 @@ ADR-001 状态：**Resolved**（2026-08-10）。
 | 性能调优 | NonceTracker 无锁化 | `synchronized` → `ConcurrentHashMap.putIfAbsent`，多线程争用显著降低；另给出 10 项后续优化建议 |
 | 组件装配 | `InMemoryChainDidStore` | 添加 `@Component` 注解，支持 Spring 自动装配 |
 
-详细变更见 [CHANGELOG](CHANGELOG.md) v2.22.0 节。
+详细变更见 [CHANGELOG](CHANGELOG.md) v2.24.0 节。
 
 ## 安全审计
 

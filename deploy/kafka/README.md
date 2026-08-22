@@ -4,6 +4,8 @@
 >
 > 适用范围：NexusChain v2.1.0 Phase 3 架构演进
 >
+> 说明：此处 v2.1.0 为历史架构阶段标记（Phase 3 引入期），非当前发布版本；当前版本请见根 README.md。
+>
 > 部署栈：Strimzi Kafka Operator 0.40.x + Kafka 3.7.0 + ZooKeeper 3.8.3
 >
 > 本目录为 NexusChain 引入 Kafka 事件总线，为事件溯源（P3-T3）与异步 Webhook 提供基础设施。

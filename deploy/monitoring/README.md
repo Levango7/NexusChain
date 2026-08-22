@@ -4,6 +4,8 @@
 >
 > 适用范围：NexusChain v2.1.0 Phase 2 生产就绪
 >
+> 说明：此处 v2.1.0 为历史架构阶段标记（Phase 2 生产就绪期），非当前发布版本；当前版本请见根 README.md。
+>
 > 监控栈：kube-prometheus-stack（Prometheus Operator + Alertmanager + Grafana）+ PrometheusRule CRD + Grafana Dashboard ConfigMap
 
 ## 第1章 文件清单
