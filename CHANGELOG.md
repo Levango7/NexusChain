@@ -4,6 +4,52 @@
 
 ## [Unreleased]
 
+## [2.28.0] - 2026-08-23
+
+### 代码质量改进（依赖升级 + 异常处理规范化 + 测试覆盖提升 + CI/CD补全 + 文档修正）
+
+本次发布聚焦全面代码质量改进，不引入新功能，仅提升依赖安全性、代码规范性和工程化水平。
+
+#### Security（安全）
+
+- **docker-compose.yml 密钥外化**：第71行 `NEX_MPC_ENGINE_AUTH_TOKEN` 从硬编码 `dev-mpc-engine-token-change-in-prod` 改为环境变量引用 `${MPC_AUTH_TOKEN:-dev-mpc-engine-token-change-in-prod}`，与第294/321/347行的 `MPC_AUTH_TOKEN` 模式保持一致。生产环境必须通过 `MPC_AUTH_TOKEN` 环境变量覆盖。
+
+#### Changed（依赖升级）
+
+- **slf4j 1.7.36 → 2.0.16**：升级到 slf4j 2.0.x（ServiceLoader 机制替代 StaticLoggerBinder），全量编译通过。
+- **logback 1.2.13 → 1.5.18**：升级到 logback 1.5.x（需 slf4j 2.0.x），全量编译通过。
+- **guava 31.1-jre → 33.4.8-jre**：升级到最新稳定版，全量编译通过。
+- **nexus-gateway 覆盖率门禁 0.15 → 0.20**：保守提升覆盖率门禁，后续逐步提高至 0.30。
+
+#### Fixed（代码质量修复）
+
+- **异常处理规范化（92处）**：nexus-gateway 模块 92 处 `catch (Exception e)` 通配异常捕获替换为具类型捕获：
+  - HTTP 客户端代码 → `catch (RuntimeException e)`（RestTemplate 不抛 checked 异常）
+  - HMAC/加密代码 → `catch (GeneralSecurityException e)`
+  - JSON 解析代码 → `catch (JsonProcessingException e)` 或 `catch (RuntimeException | IOException e)`
+  - Kafka future.get() → `catch (ExecutionException e)`（InterruptedException 已单独处理）
+  - 保留 3 处框架入口点的 `catch (Exception e)`（@Scheduled、@PostMapping）
+- **LocalFileKeyManager 静默吞异常修复**：2 处 `catch (Exception e)` 后仅 log.warn 继续执行的问题修复。
+- **DeadLetterQueueService.get() 修复**：`kafkaTemplate.send(...).get()` 的异常处理改为 `catch (ExecutionException e)` + `catch (RuntimeException e)`。
+
+#### Added（新增测试）
+
+- **SecurityConfigTest**：3 个测试（securityFilterChainPermitsAllRequests、csrfDisabledAllowsPostWithoutToken、securityFilterChainBeanCreated），验证 v2.27.0 新建的 SecurityConfig 配置正确。
+- **HashUtilTest**：22 个测试，覆盖 sha256/keccak256/sha3/sha512/ripemd160/sha3omit12/doubleDigest/randomHash/shortHash/calcSaltAddr 等方法，验证 P2-11 fail-fast 回归（null 输入抛 IllegalStateException 不再返回 null）。
+
+#### CI/CD（持续集成/部署）
+
+- **Flyway 迁移预检 job**：在 ci.yml 新增 `flyway-migration-check` job，使用 MySQL 8.0 service container 对 4 个含 `db/migration` 的模块（nexus-gateway、nexus-wallet-service、nexus-bridge、consortium）逐一执行 `flyway migrate` 验证，与 build-and-test 并行运行。
+- **Release 回滚 job**：在 release.yml 新增 `workflow_dispatch` 触发器和 `rollback` job，支持手动触发回滚到指定版本（staging/production），包含 helm rollback 步骤和回滚后状态核对。现有 5 个发布 job 添加 `if: github.event_name == 'push'` 条件隔离。
+
+#### Documentation（文档）
+
+- **PRD.md API 路径差异说明**：在 `## 4. Core API Definition` 章节添加实现说明，解释 PRD 定义的编排 API `POST /api/v1/payments`（`PaymentOrchestrationController`）与生产主链路订单 API `POST /api/v1/orders`（`PaymentController`）的关系与差异，指引对接方以 `nexus-gateway/README.md` 为准。
+- **PRD.md F16/F17 标记更新**：F16 Analytics、F17 Price Oracle 由 `Experimental` 更新为 `Delivered`。依据 `ARCHITECTURE.md` 中 `nexus-analytics` / `nexus-oracle` 已标记为 `Active — 库（gateway 进程内消费）`，两模块已正式实现并接入 gateway 事件驱动链路。
+- **ARCHITECTURE.md 版本号核对**：确认 `## Security Hardening（v2.27.0）` 章节已存在（第三轮安全审计，10 个漏洞修复）。`## Security Hardening（v2.26.0）` 为历史章节（第 16 轮质量保证工作，内容与 v2.27.0 完全不同），保留作为历史记录。
+- **数据库迁移指南**：新建 `docs/migration-guide.md`，包含 v2.27.0 迁移步骤、V12 migration（`payment_orders.chain_tx_hash` 唯一约束 `uk_payment_orders_chain_tx_hash`）说明、迁移前预检 SQL、回滚步骤及全量迁移脚本清单（V1–V12）。
+- **settings.gradle 废弃 SDK 注释**：在 SDK 层添加注释，明确 `nexus-java-sdk`（已迁移至 `nexus-sdk`，目录已移除）与 `nexus-js-sdk`（已迁移至 `nexus-sdk/typescript`，目录保留且 README 已标记 DEPRECATED）均已废弃并排除出构建。
+
 ## [2.27.0] - 2026-08-22
 
 ### 第三轮安全审计 P0+P1+P2 修复（退款安全 + IDOR防护 + 审批原子性 + 网关加固）

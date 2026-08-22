@@ -116,7 +116,7 @@ public class OrchestrationWebhookDispatcher {
                         REDIS_DEDUP_PREFIX + dedupKey, Instant.now().toString(),
                         java.time.Duration.ofHours(24));
                 return Boolean.TRUE.equals(first);
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 log.warn("Redis dedup unavailable, fallback local: {}", e.getMessage());
             }
         }
@@ -130,7 +130,7 @@ public class OrchestrationWebhookDispatcher {
                 redisTemplate.opsForList().leftPush(REDIS_DLQ_KEY,
                         dl.paymentId + "|" + dl.status + "|" + dl.url + "|" + dl.failedAt);
                 return;
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 log.warn("Redis DLQ unavailable, fallback local: {}", e.getMessage());
             }
         }
@@ -183,7 +183,7 @@ public class OrchestrationWebhookDispatcher {
                     }
                     log.warn("Webhook non-2xx: paymentId={} status={}", payment.getId(), resp.getStatusCode());
                     webhookSpan.attr("webhook.status", resp.getStatusCode().value());
-                } catch (Exception e) {
+                } catch (RuntimeException e) {
                     log.warn("Webhook attempt {} failed for paymentId={}: {}", attempt + 1, payment.getId(), e.getMessage());
                     webhookSpan.attr("webhook.attempt.error", e.getMessage());
                 }
@@ -223,7 +223,7 @@ public class OrchestrationWebhookDispatcher {
                         webhookSpan.error(null);
                     }
                 }
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 log.error("Webhook delivery via WebhookDeliveryService failed: paymentId={}, error={}",
                         payment.getId(), e.getMessage(), e);
                 webhookSpan.attr("webhook.error", e.getMessage()).error(e);

@@ -188,7 +188,7 @@ public class DefaultRefundApprovalService implements RefundApprovalService {
             paymentOrderRepository.save(order);
 
             log.info("Refund executed: refundId={}, txHash={}", refundId, txHash);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             request.setStatus(RefundRequest.RefundStatus.FAILED);
             request.setRejectionReason("execution failed: " + e.getMessage());
             log.error("Refund execution failed: refundId={}", refundId, e);

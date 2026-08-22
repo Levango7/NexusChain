@@ -76,7 +76,7 @@ public class ConsortiumRpcClient {
                 return ((Number) data).intValue() == 2000;
             }
             return false;
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.warn("Failed to query consortium confirmation for txHash={}: {}", txHash, e.getMessage());
             // Dev-mode fallback: if consortium node is unreachable and
             // skip-confirmation is enabled, treat any well-formed txHash as
@@ -107,7 +107,7 @@ public class ConsortiumRpcClient {
                 return ((Number) data).longValue();
             }
             return -1;
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.warn("Failed to get consortium block height: {}", e.getMessage());
             return -1;
         }
@@ -144,7 +144,7 @@ public class ConsortiumRpcClient {
                 return ((Number) nonce).longValue();
             }
             return -1;
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.warn("Failed to get consortium nonce for pubkeyHash={}: {}", pubkeyHash, e.getMessage());
             return -1;
         }
@@ -180,7 +180,7 @@ public class ConsortiumRpcClient {
                 return ((Number) code).intValue() == 2000;
             }
             return false;
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.warn("Failed to broadcast consortium transaction: {}", e.getMessage());
             return false;
         }

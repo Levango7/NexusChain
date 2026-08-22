@@ -80,7 +80,7 @@ public class StripeConnector implements PaymentConnector {
                 return ConnectorPaymentResult.ok(piId, mapped);
             }
             return ConnectorPaymentResult.fail("Stripe returned empty response");
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.error("[Stripe] createPayment failed: {}", e.getMessage());
             return ConnectorPaymentResult.fail("Stripe error: " + e.getMessage());
         }
@@ -102,7 +102,7 @@ public class StripeConnector implements PaymentConnector {
                 localState.put(connectorPaymentId, s);
                 return s;
             }
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.warn("[Stripe] query failed for {}: {}", connectorPaymentId, e.getMessage());
         }
         return localState.getOrDefault(connectorPaymentId, PaymentStatus.FAILED);
@@ -126,7 +126,7 @@ public class StripeConnector implements PaymentConnector {
                 return ConnectorRefundResult.ok(String.valueOf(resp.getBody().get("id")));
             }
             return ConnectorRefundResult.fail("Stripe refund returned empty");
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return ConnectorRefundResult.fail("Stripe refund error: " + e.getMessage());
         }
     }
@@ -142,7 +142,7 @@ public class StripeConnector implements PaymentConnector {
             HttpEntity<Void> entity = new HttpEntity<>(headers);
             restTemplate.exchange(apiBase + "/account", HttpMethod.GET, entity, Map.class);
             return ConnectorHealth.up(getId(), System.currentTimeMillis() - start);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return ConnectorHealth.down(getId(), e.getMessage());
         }
     }

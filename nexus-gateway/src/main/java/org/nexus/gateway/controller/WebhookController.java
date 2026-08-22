@@ -150,7 +150,7 @@ public class WebhookController {
             String type = String.valueOf(event.getOrDefault("type", "unknown"));
             String eventId = String.valueOf(event.getOrDefault("id", "unknown"));
             log.info("Stripe webhook accepted: type={} id={}", type, eventId);
-        } catch (Exception e) {
+        } catch (RuntimeException | java.io.IOException e) {
             // 验签已通过，body 解析失败不影响 200 响应（Stripe 会重试，但已确认是 Stripe 发出）
             log.warn("Stripe webhook body parse error (signature was valid): {}", e.getMessage());
         }
@@ -178,7 +178,7 @@ public class WebhookController {
                 Object sig = ad.get("hmacSignature");
                 if (sig != null) hmacSignature = String.valueOf(sig);
             }
-        } catch (Exception e) {
+        } catch (RuntimeException | java.io.IOException e) {
             log.warn("Adyen webhook body parse error: {}", e.getMessage());
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("Malformed body");
         }
@@ -206,7 +206,7 @@ public class WebhookController {
                 sb.append(String.format("%02x", b));
             }
             return sb.toString();
-        } catch (Exception e) {
+        } catch (java.security.GeneralSecurityException e) {
             throw new RuntimeException("Failed to compute webhook signature", e);
         }
     }
@@ -218,7 +218,7 @@ public class WebhookController {
     private String canonicalize(Map<String, Object> payload) {
         try {
             return CANONICAL_MAPPER.writeValueAsString(payload);
-        } catch (Exception e) {
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
             throw new RuntimeException("Failed to canonicalize webhook payload", e);
         }
     }

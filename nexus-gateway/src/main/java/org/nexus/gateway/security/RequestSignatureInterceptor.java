@@ -185,7 +185,7 @@ public class RequestSignatureInterceptor implements HandlerInterceptor {
             StringBuilder sb = new StringBuilder();
             for (byte b : hash) sb.append(String.format("%02x", b));
             return sb.toString();
-        } catch (Exception e) {
+        } catch (java.security.GeneralSecurityException e) {
             throw new RuntimeException("Signature computation failed", e);
         }
     }

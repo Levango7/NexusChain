@@ -76,7 +76,7 @@ public class AdyenConnector implements PaymentConnector {
                 return ConnectorPaymentResult.ok(pspRef, mapped);
             }
             return ConnectorPaymentResult.fail("Adyen returned empty response");
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.error("[Adyen] createPayment failed: {}", e.getMessage());
             return ConnectorPaymentResult.fail("Adyen error: " + e.getMessage());
         }
@@ -107,7 +107,7 @@ public class AdyenConnector implements PaymentConnector {
                 return ConnectorRefundResult.ok(String.valueOf(resp.getBody().getOrDefault("pspReference", connectorPaymentId)));
             }
             return ConnectorRefundResult.fail("Adyen refund empty response");
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return ConnectorRefundResult.fail("Adyen refund error: " + e.getMessage());
         }
     }
@@ -124,7 +124,7 @@ public class AdyenConnector implements PaymentConnector {
             restTemplate.exchange(ADYEN_API_BASE + "/paymentMethods", HttpMethod.POST,
                 new HttpEntity<>("{\"merchantAccount\":\"" + merchantAccount + "\"}", headers), Map.class);
             return ConnectorHealth.up(getId(), System.currentTimeMillis() - start);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return ConnectorHealth.down(getId(), e.getMessage());
         }
     }

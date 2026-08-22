@@ -146,6 +146,85 @@ jobs:
           retention-days: 14
 
   # ============================================================
+  # Flyway 数据库迁移预检（Task 284）
+  # ------------------------------------------------------------
+  # 目的：在 CI 阶段验证各模块的 Flyway 迁移脚本可顺序应用、无语法/冲突错误，
+  #       避免迁移缺陷流入 staging/prod。
+  # 实现：启动 MySQL 8.0 service container，对每个含 db/migration 的模块
+  #       使用 Flyway 9 官方镜像执行 migrate（每模块独立 schema，互不干扰）。
+  # 触发：与 build-and-test 并行，仅依赖源码中的迁移脚本，不依赖编译产物。
+  # ============================================================
+  flyway-migration-check:
+    name: Flyway 迁移预检
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: nexus_ci
+          MYSQL_DATABASE: nexus_ci
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pnexus_ci"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v4
+
+      - name: 等待 MySQL 就绪
+        run: |
+          for i in $(seq 1 30); do
+            if mysqladmin ping -h 127.0.0.1 -P 3306 -uroot -pnexus_ci --silent; then
+              echo "MySQL is ready"
+              exit 0
+            fi
+            echo "Waiting for MySQL... ($i)"
+            sleep 2
+          done
+          echo "MySQL did not become ready in time"
+          exit 1
+
+      # 对所有含 db/migration 的模块逐一执行 flyway migrate。
+      # 每模块使用独立 schema（ci_<module>），避免不同模块 V1__init_schema.sql 等同版本号冲突。
+      # 通过 --add-host=host.docker.internal:host-gateway 让 flyway 容器访问
+      # service container 暴露在 host 127.0.0.1:3306 的 MySQL。
+      - name: Flyway migrate 验证（所有含迁移脚本的模块）
+        run: |
+          set -euo pipefail
+          # Flyway 9.x 官方镜像（与项目 flyway-core 9.22.3 大版本对齐，9.x 内置 MySQL 驱动）
+          FLYWAY_IMG="flyway/flyway:9"
+          # 含 db/migration 的模块列表（模块逻辑名 : 迁移脚本目录）
+          declare -a MODULES=(
+            "nexus-gateway:nexus-gateway/src/main/resources/db/migration"
+            "nexus-wallet-service:nexus-wallet-service/src/main/resources/db/migration"
+            "nexus-bridge:nexus-bridge/src/main/resources/db/migration"
+            "nexus-consortium:consortium/consortium/src/main/resources/db/migration"
+          )
+          for ENTRY in "${MODULES[@]}"; do
+            MODULE_NAME="${ENTRY%%:*}"
+            MIG_PATH="${ENTRY#*:}"
+            echo "::group::Flyway migrate for ${MODULE_NAME} (${MIG_PATH})"
+            DB_NAME="ci_$(echo "${MODULE_NAME}" | tr '-' '_')"
+            mysql -h 127.0.0.1 -P 3306 -uroot -pnexus_ci -e "CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\`;"
+            docker run --rm \
+              --add-host=host.docker.internal:host-gateway \
+              -v "${PWD}/${MIG_PATH}:/flyway/sql:ro" \
+              "${FLYWAY_IMG}" \
+              -url="jdbc:mysql://host.docker.internal:3306/${DB_NAME}?allowPublicKeyRetrieval=true&useSSL=false" \
+              -user=root \
+              -password=nexus_ci \
+              -locations=filesystem:/flyway/sql \
+              -baselineOnMigrate=true \
+              -connectRetries=10 \
+              migrate
+            echo ">>> ${MODULE_NAME} migration OK"
+            echo "::endgroup::"
+          done
+
+  # ============================================================
   # CD：master 分支构建并推送 Docker 镜像到 GitHub Container Registry
   # ============================================================
   docker-build:

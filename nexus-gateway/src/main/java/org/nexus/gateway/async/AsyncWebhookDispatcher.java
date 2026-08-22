@@ -34,7 +34,7 @@ public class AsyncWebhookDispatcher {
         try {
             // Simulate HTTP delivery (in production, use RestTemplate/WebClient)
             log.info("Webhook delivered: url={}, attempt={}", url, attempt);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             if (attempt >= MAX_RETRIES) {
                 log.error("Webhook permanently failed after {} retries: url={}", MAX_RETRIES, url);
                 deadLetterQueue.offer(new WebhookTask(url, payload, signature));

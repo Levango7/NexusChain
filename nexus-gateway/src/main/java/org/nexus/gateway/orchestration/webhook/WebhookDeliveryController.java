@@ -170,7 +170,7 @@ public class WebhookDeliveryController {
                     try {
                         deliveryService.replay(msg);
                         replayed++;
-                    } catch (Exception e) {
+                    } catch (RuntimeException e) {
                         log.error("Replay failed: deliveryId={}, error={}", msg.getDeliveryId(), e.getMessage());
                         failed++;
                     }

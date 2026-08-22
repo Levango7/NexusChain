@@ -68,7 +68,8 @@ services:
       - NEX_SEATA_SERVER=nexus-seata-server:8091
       - NEX_ZIPKIN_ENDPOINT=http://nexus-zipkin:9411/api/v2/spans
       # MPC-P1-05: 向 mpc-engine 发起 gRPC 调用的 Bearer token，须与 mpc-engine 的 MPC_AUTH_TOKEN 一致
-      - NEX_MPC_ENGINE_AUTH_TOKEN=dev-mpc-engine-token-change-in-prod
+      # P0-8 加固：开发默认值内联，生产必须通过环境变量 MPC_AUTH_TOKEN 覆盖（与 mpc-engine 各节点保持一致）
+      - NEX_MPC_ENGINE_AUTH_TOKEN=${MPC_AUTH_TOKEN:-dev-mpc-engine-token-change-in-prod}
       # P0-1 MPC 分散式部署：多端点路由（Task 239）
       # 逗号分隔的 host:port 列表，MpcEngineRouter 按 partyIndex 路由到对应节点
       # 单端点配置时向后兼容（行为等价于原 mpc.engine.host:port）

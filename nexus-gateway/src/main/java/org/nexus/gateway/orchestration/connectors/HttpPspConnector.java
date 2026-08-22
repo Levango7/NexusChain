@@ -121,7 +121,7 @@ public class HttpPspConnector implements PaymentConnector {
         } catch (RestClientException e) {
             log.error("HTTP PSP [{}] createPayment failed: {}", id, e.getMessage());
             return ConnectorPaymentResult.fail("PSP error: " + e.getMessage());
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.error("HTTP PSP [{}] createPayment unexpected error: {}", id, e.getMessage());
             return ConnectorPaymentResult.fail("PSP error: " + e.getMessage());
         }
@@ -144,7 +144,7 @@ public class HttpPspConnector implements PaymentConnector {
             }
         } catch (RestClientException e) {
             log.warn("HTTP PSP [{}] query failed for {}: {}", id, connectorPaymentId, e.getMessage());
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.warn("HTTP PSP [{}] query unexpected error for {}: {}", id, connectorPaymentId, e.getMessage());
         }
         return payments.getOrDefault(connectorPaymentId, PaymentStatus.FAILED);
@@ -173,7 +173,7 @@ public class HttpPspConnector implements PaymentConnector {
             return ConnectorRefundResult.fail("PSP [" + id + "] refund returned empty response");
         } catch (RestClientException e) {
             return ConnectorRefundResult.fail("PSP refund error: " + e.getMessage());
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return ConnectorRefundResult.fail("PSP refund error: " + e.getMessage());
         }
     }
@@ -190,7 +190,7 @@ public class HttpPspConnector implements PaymentConnector {
             HttpEntity<Void> entity = new HttpEntity<>(headers);
             restTemplate.exchange(baseUrl + "/health", HttpMethod.GET, entity, Map.class);
             return ConnectorHealth.up(id, System.currentTimeMillis() - start);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return ConnectorHealth.down(id, e.getMessage());
         }
     }

@@ -144,7 +144,7 @@ public class ConsortiumConnector implements PaymentConnector {
             txHashMap.put(connectorId, txHash);
             log.info("Consortium payment submitted (delegated to exchange-wallet): {} -> txHash={}", connectorId, txHash);
             return ConnectorPaymentResult.ok(connectorId, PaymentStatus.PROCESSING, txHash);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.error("Consortium payment failed: {}", e.getMessage());
             return ConnectorPaymentResult.fail("Consortium settlement error: " + e.getMessage());
         }
@@ -192,7 +192,7 @@ public class ConsortiumConnector implements PaymentConnector {
                     log.info("Consortium payment confirmed: {}", connectorPaymentId);
                     return PaymentStatus.SUCCEEDED;
                 }
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 log.warn("Failed to query consortium confirmation: {}", e.getMessage());
             }
         }
@@ -224,7 +224,7 @@ public class ConsortiumConnector implements PaymentConnector {
             }
             pendingPayments.put(connectorPaymentId, PaymentStatus.REFUNDED);
             return ConnectorRefundResult.ok("consortium_refund_" + connectorPaymentId);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return ConnectorRefundResult.fail("Consortium refund failed: " + e.getMessage());
         }
     }
@@ -239,7 +239,7 @@ public class ConsortiumConnector implements PaymentConnector {
                 return ConnectorHealth.up(getId(), latency);
             }
             return ConnectorHealth.down(getId(), "Consortium height is " + height);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return ConnectorHealth.down(getId(), "RPC unreachable: " + e.getMessage());
         }
     }

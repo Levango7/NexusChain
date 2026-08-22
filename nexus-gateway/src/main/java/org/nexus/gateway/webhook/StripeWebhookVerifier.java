@@ -113,7 +113,7 @@ public class StripeWebhookVerifier {
         String expected;
         try {
             expected = hmacSha256Hex(webhookSecret, signedPayload);
-        } catch (Exception e) {
+        } catch (java.security.GeneralSecurityException e) {
             log.error("HMAC computation failed: {}", e.getMessage());
             return WebhookVerifyResult.fail("HMAC computation error");
         }
@@ -129,7 +129,7 @@ public class StripeWebhookVerifier {
     }
 
     /** 计算 HMAC-SHA256 并返回小写十六进制字符串。 */
-    private static String hmacSha256Hex(String secret, String data) throws Exception {
+    private static String hmacSha256Hex(String secret, String data) throws java.security.GeneralSecurityException {
         Mac mac = Mac.getInstance("HmacSHA256");
         mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
         byte[] hash = mac.doFinal(data.getBytes(StandardCharsets.UTF_8));
@@ -174,7 +174,7 @@ public class StripeWebhookVerifier {
      * Test-only: 用当前实例配置生成一个合法的 Stripe-Signature 头值。
      * 测试用此方法构造 expected 签名，再交给 {@link #verify} 验证。
      */
-    String signForTest(long timestamp, byte[] payload) throws Exception {
+    String signForTest(long timestamp, byte[] payload) throws java.security.GeneralSecurityException {
         String signedPayload = timestamp + "." + new String(payload, StandardCharsets.UTF_8);
         return "t=" + timestamp + ",v1=" + hmacSha256Hex(webhookSecret, signedPayload);
     }

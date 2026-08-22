@@ -62,7 +62,7 @@ public class ChainRpcClient {
                 return ((Number) data).intValue() == 2000;
             }
             return false;
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.warn("Failed to query chain confirmation for txHash={}: {}", txHash, e.getMessage());
             // Dev-mode fallback: if chain node is unreachable and skip-confirmation is enabled,
             // treat any well-formed txHash as confirmed to allow local testing.
@@ -92,7 +92,7 @@ public class ChainRpcClient {
                 return ((Number) data).longValue();
             }
             return -1;
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.warn("Failed to get block height: {}", e.getMessage());
             return -1;
         }
@@ -129,7 +129,7 @@ public class ChainRpcClient {
                 return ((Number) nonce).longValue();
             }
             return -1;
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.warn("Failed to get nonce for pubkeyHash={}: {}", pubkeyHash, e.getMessage());
             return -1;
         }
@@ -165,7 +165,7 @@ public class ChainRpcClient {
                 return ((Number) code).intValue() == 2000;
             }
             return false;
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.warn("Failed to broadcast transaction: {}", e.getMessage());
             return false;
         }
@@ -207,7 +207,7 @@ public class ChainRpcClient {
             Long blockHeight = d.get("block_height") instanceof Number ? ((Number) d.get("block_height")).longValue() : null;
 
             return new OnChainTransaction(txHash, amount, tokenSymbol, sender, recipient, confirmed, blockHeight);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.warn("Failed to get transaction details for txHash={}: {}", txHash, e.getMessage());
             return null;
         }
@@ -238,7 +238,7 @@ public class ChainRpcClient {
                 return d;
             }
             return null;
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.warn("Failed to get epoch finality for epoch={}: {}", epoch, e.getMessage());
             return null;
         }
@@ -263,7 +263,7 @@ public class ChainRpcClient {
                 return (Map<String, Object>) data;
             }
             return null;
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.warn("Failed to get transaction status for txHash={}: {}", txHash, e.getMessage());
             return null;
         }

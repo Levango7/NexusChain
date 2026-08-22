@@ -151,7 +151,7 @@ public class ThreePhaseExecutionTemplate {
             log.warn("Phase 2 (onChainExecute) interrupted: idempotencyKey={}",
                     request.getIdempotencyKey());
             result = OnChainResult.failure("on-chain execution interrupted", false);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.error("Phase 2 (onChainExecute) exception: idempotencyKey={}, error={}",
                     request.getIdempotencyKey(), e.getMessage(), e);
             result = OnChainResult.failure("on-chain execution exception: " + e.getMessage(), false);

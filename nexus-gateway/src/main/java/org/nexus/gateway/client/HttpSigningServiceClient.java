@@ -81,7 +81,7 @@ public class HttpSigningServiceClient implements SigningServiceClient {
                 log.error("Sign+transfer failed: response={}", resp.getBody());
                 return null;
             }
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.error("Failed to call exchange-wallet sign: {}", e.getMessage());
             return null;
         }
@@ -122,7 +122,7 @@ public class HttpSigningServiceClient implements SigningServiceClient {
                 log.error("Transfer failed: response={}", resp.getBody());
                 return null;
             }
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.error("Failed to call exchange-wallet transfer: {}", e.getMessage());
             return null;
         }

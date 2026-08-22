@@ -16,6 +16,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.LinkedBlockingQueue;
 
 /**
@@ -88,7 +89,13 @@ public class DeadLetterQueueService implements DeadLetterSender {
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Interrupted while sending dead letter to Kafka", ie);
-        } catch (Exception e) {
+        } catch (ExecutionException ee) {
+            // kafkaTemplate.send(...).get() 的 ExecutionException：解包 cause 记录并抛出
+            Throwable cause = ee.getCause() != null ? ee.getCause() : ee;
+            log.error("Failed to send dead letter to Kafka: deliveryId={}, paymentId={}, error={}",
+                    message.getDeliveryId(), message.getPaymentId(), cause.getMessage(), cause);
+            throw new IllegalStateException("Failed to send dead letter to Kafka: " + cause.getMessage(), cause);
+        } catch (RuntimeException e) {
             log.error("Failed to send dead letter to Kafka: deliveryId={}, paymentId={}, error={}",
                     message.getDeliveryId(), message.getPaymentId(), e.getMessage(), e);
             throw new IllegalStateException("Failed to send dead letter to Kafka: " + e.getMessage(), e);

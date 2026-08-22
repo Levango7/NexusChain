@@ -62,7 +62,12 @@ public class LocalFileKeyManager implements KeyManager {
                 if (parts.length == 2) { cache.put(Long.parseLong(key), parts); }
             }
             log.info("Loaded {} keypairs from {}", cache.size(), keyStorePath);
-        } catch (Exception e) { log.warn("Failed to load keystore: {}", e.getMessage()); }
+        } catch (IOException | RuntimeException e) {
+            // 静默吞异常修复：加载失败会导致 cache 为空，后续 getPublicKey/getPrivateKey 返回 null，
+            // 商户签名失败但原因难以诊断。提高日志级别并抛出 IllegalStateException，让构造失败暴露问题。
+            log.error("Failed to load keystore from {}: {}", keyStorePath, e.getMessage(), e);
+            throw new IllegalStateException("Failed to load keystore from " + keyStorePath, e);
+        }
     }
 
     private synchronized void persistToFile() {
@@ -72,6 +77,11 @@ public class LocalFileKeyManager implements KeyManager {
             try (OutputStream os = Files.newOutputStream(keyStorePath, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)) {
                 props.store(os, "NexusChain Dev Keystore");
             }
-        } catch (Exception e) { log.error("Failed to persist keystore: {}", e.getMessage()); }
+        } catch (IOException | RuntimeException e) {
+            // 静默吞异常修复：持久化失败时 cache 已更新但文件未写入，重启后数据丢失。
+            // 抛出 IllegalStateException 让调用方 storeKeypair 感知失败，避免静默数据丢失。
+            log.error("Failed to persist keystore to {}: {}", keyStorePath, e.getMessage(), e);
+            throw new IllegalStateException("Failed to persist keystore to " + keyStorePath, e);
+        }
     }
 }

@@ -63,7 +63,7 @@ public class HttpWalletMgmtClient implements WalletMgmtClient {
                 return data != null ? data.toString() : null;
             }
             return null;
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.warn("Failed to convert address to pubkeyHash: {}", e.getMessage());
             return null;
         }
@@ -83,7 +83,7 @@ public class HttpWalletMgmtClient implements WalletMgmtClient {
             if (resp.getBody() == null) return false;
             Object statusCode = resp.getBody().get("statusCode");
             return statusCode instanceof Number && ((Number) statusCode).intValue() == 2000;
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.warn("Failed to verify address: {}", e.getMessage());
             return false;
         }

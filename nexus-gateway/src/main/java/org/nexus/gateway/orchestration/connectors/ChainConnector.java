@@ -144,7 +144,7 @@ public class ChainConnector implements PaymentConnector {
             txHashMap.put(connectorId, txHash);
             log.info("Chain payment submitted (delegated to exchange-wallet): {} -> txHash={}", connectorId, txHash);
             return ConnectorPaymentResult.ok(connectorId, PaymentStatus.PROCESSING, txHash);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.error("Chain payment failed: {}", e.getMessage());
             return ConnectorPaymentResult.fail("Chain settlement error: " + e.getMessage());
         }
@@ -192,7 +192,7 @@ public class ChainConnector implements PaymentConnector {
                     log.info("Chain payment confirmed: {}", connectorPaymentId);
                     return PaymentStatus.SUCCEEDED;
                 }
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 log.warn("Failed to query chain confirmation: {}", e.getMessage());
             }
         }
@@ -224,7 +224,7 @@ public class ChainConnector implements PaymentConnector {
             }
             pendingPayments.put(connectorPaymentId, PaymentStatus.REFUNDED);
             return ConnectorRefundResult.ok("chain_refund_" + connectorPaymentId);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return ConnectorRefundResult.fail("Chain refund failed: " + e.getMessage());
         }
     }
@@ -239,7 +239,7 @@ public class ChainConnector implements PaymentConnector {
                 return ConnectorHealth.up(getId(), latency);
             }
             return ConnectorHealth.down(getId(), "Chain height is " + height);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return ConnectorHealth.down(getId(), "RPC unreachable: " + e.getMessage());
         }
     }

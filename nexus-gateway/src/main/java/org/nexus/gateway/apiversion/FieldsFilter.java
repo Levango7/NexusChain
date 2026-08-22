@@ -73,7 +73,7 @@ public final class FieldsFilter {
             // 删除不在白名单内的字段
             map.keySet().removeIf(key -> !selectedFields.contains(key.toLowerCase()));
             return map;
-        } catch (Exception e) {
+        } catch (RuntimeException | java.io.IOException e) {
             // 字段筛选失败时降级返回原对象（不阻断请求）
 
             log.warn("Fields filter failed for {}: {}", obj.getClass().getName(), e.getMessage());

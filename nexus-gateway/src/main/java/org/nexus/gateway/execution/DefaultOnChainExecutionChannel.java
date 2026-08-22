@@ -122,7 +122,7 @@ public class DefaultOnChainExecutionChannel implements OnChainExecutionChannel {
                 return TransactionResult.success(txHash, gatewayConfig.getChain().getConfirmations(), false);
             }
             return TransactionResult.pending(txHash, 0, false);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.warn("queryStatus failed: txHash={}, error={}", txHash, e.getMessage());
             return TransactionResult.failure("query failed: " + e.getMessage(), false);
         }
@@ -195,7 +195,7 @@ public class DefaultOnChainExecutionChannel implements OnChainExecutionChannel {
         try {
             txHash = signingServiceClient.signTransfer(
                     platformPubkey, toPubkeyHash, request.getAmount());
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.error("executeProduction: signTransfer threw, requestId={}", request.getRequestId(), e);
             return TransactionResult.failure("signTransfer failed: " + e.getMessage(), false);
         }
@@ -210,7 +210,7 @@ public class DefaultOnChainExecutionChannel implements OnChainExecutionChannel {
         boolean confirmed = false;
         try {
             confirmed = chainRpcClient.isTransactionConfirmed(txHash);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.warn("executeProduction: isTransactionConfirmed threw, txHash={}: {}", txHash, e.getMessage());
         }
 
