@@ -123,7 +123,7 @@ public class PoAMiner implements Miner {
                 OffsetDateTime.now().toEpochSecond()
         ).filter(p -> p.getAddress().equals(coinBase));
         if (!o.isPresent()) return;
-        log.info("try to mining at height " + (best.getHeight() + 1));
+        log.info("try to mining at height {}", (best.getHeight() + 1));
         try {
             Block b = createBlock(blockRepository.getBestBlock());
             log.info("mining success");

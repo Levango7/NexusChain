@@ -11,6 +11,12 @@ server:
   port: ${SERVER_PORT:8082}
   # === Phase 3 任务 #61：优雅停机（设计文档 §4.6.2） ===
   shutdown: graceful
+  # === P2-5: 会话超时配置（30 分钟，安全加固） ===
+  # signing-service 基于 spring-boot-starter-web（servlet 容器），启用 session 超时
+  # 防止会话长期挂起；超时不超过 60m（OWASP 建议）
+  servlet:
+    session:
+      timeout: 30m
 
 spring:
   # === Phase 3 任务 #61：优雅停机等待时长（设计文档 §4.6.2） ===

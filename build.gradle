@@ -32,7 +32,7 @@ subprojects {
 
     // JaCoCo 覆盖率报告（统一配置）。nexus-gateway 在自身 build.gradle 中
     // 覆盖 html.required=true 与 jacocoTestCoverageVerification 门禁，其余模块
-    // 仅生成 xml 报告供聚合。阈值约束为后续任务，当前只启用报告生成。
+    // 仅生成 xml 报告供聚合。P2-10: 覆盖率门禁 30% 起步，渐进提升。
     jacoco {
         toolVersion = "0.8.11"
     }
@@ -41,6 +41,18 @@ subprojects {
         reports {
             xml.required = true
             html.required = false
+        }
+    }
+
+    // P2-10: JaCoCo 覆盖率门禁（30% 行覆盖起步，渐进提升）
+    // 当前项目覆盖率不高，先设低门槛，后续随测试补全逐步上调
+    jacocoTestCoverageVerification {
+        violationRules {
+            rule {
+                limit {
+                    minimum = 0.30  // 30% 行覆盖起步门禁（当前覆盖率渐进提升）
+                }
+            }
         }
     }
 

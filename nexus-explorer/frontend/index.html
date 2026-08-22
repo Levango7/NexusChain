@@ -3,6 +3,10 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <!-- P2-8: Content-Security-Policy 安全头（防 XSS / 数据外泄 / 点击劫持） -->
+  <!-- 前端为纯 vite + react 开发环境（无 nginx 生产部署配置），通过 meta 标签注入 CSP -->
+  <!-- 生产部署时应改由 nginx/CDN 在 HTTP 响应头下发，并收紧 'unsafe-inline' -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https:; font-src 'self' data:">
   <title>NexusChain Explorer</title>
 </head>
 <body class="dark">
