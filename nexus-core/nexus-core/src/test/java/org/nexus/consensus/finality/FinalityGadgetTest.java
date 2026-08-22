@@ -47,7 +47,7 @@ class FinalityGadgetTest {
     }
 
     private Vote vote(String validator, long epoch, byte[] checkpoint) {
-        return new Vote(epoch, checkpoint, validator, new byte[]{0x01});
+        return new Vote(epoch, checkpoint, validator, new byte[32]);
     }
 
     @Test

@@ -119,7 +119,10 @@ public class FinalityCoordinator {
         byte[] checkpointHash = blockHash != null ? blockHash : new byte[0];
 
         // M1/M2：签名以 Ed25519 占位字节承载；M3 集成 BLS 后替换
-        byte[] sig = ("finality-vote:" + epoch).getBytes();
+        // 签名长度填充至 32 字节以上，满足 CollectingAggregator.verifyAggregate() 的格式护栏
+        byte[] rawSig = ("finality-vote:" + epoch).getBytes();
+        byte[] sig = new byte[32];
+        System.arraycopy(rawSig, 0, sig, 0, Math.min(rawSig.length, sig.length));
         Vote vote = new Vote(epoch, checkpointHash, selfValidatorAddress, sig);
 
         FinalityRecord record = gadget.submitVote(vote);
