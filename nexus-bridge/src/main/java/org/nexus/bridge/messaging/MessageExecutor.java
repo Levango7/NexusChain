@@ -179,7 +179,7 @@ public class MessageExecutor {
         String txHash;
         try {
             txHash = adapter.sendTransaction(calldata);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             message.setStatus(MessageStatus.FAILED);
             log.error("Failed to submit execution tx for message {} on chain {}: {}",
                     message.getMessageId(), message.getTargetChain(), e.getMessage());

@@ -11,6 +11,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 
@@ -164,7 +165,7 @@ public class SolanaAdapter implements ChainAdapter {
                 }
             }
             return objectMapper.writeValueAsString(node);
-        } catch (Exception e) {
+        } catch (RuntimeException | IOException e) {
             log.error("Failed to serialize simulation result: {}", e.getMessage());
             return null;
         }
@@ -222,7 +223,7 @@ public class SolanaAdapter implements ChainAdapter {
                 }
             }
             return total;
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.error("getAddressBalance failed for owner={}, mint={}: {}",
                     ownerPubkey, mintPubkey, e.getMessage());
             return -1L;
@@ -313,7 +314,7 @@ public class SolanaAdapter implements ChainAdapter {
             }
             String amountStr = info.path("tokenAmount").path("amount").asText("0");
             return Long.parseLong(amountStr);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.debug("Failed to parse token amount: {}", e.getMessage());
             return 0L;
         }

@@ -135,7 +135,7 @@ public class SolanaRpcClient {
                 return -1L;
             }
             return result.get("value").asLong(-1L);
-        } catch (Exception e) {
+        } catch (RuntimeException | IOException | InterruptedException e) {
             log.error("getBalance failed for {}: {}", pubkey, e.getMessage());
             return -1L;
         }
@@ -156,7 +156,7 @@ public class SolanaRpcClient {
             String blockhash = value.path("blockhash").asText(null);
             long lastValidBlockHeight = value.path("lastValidBlockHeight").asLong(-1L);
             return new Blockhash(blockhash, lastValidBlockHeight);
-        } catch (Exception e) {
+        } catch (RuntimeException | IOException | InterruptedException e) {
             log.error("getLatestBlockhash failed: {}", e.getMessage());
             return null;
         }
@@ -188,7 +188,7 @@ public class SolanaRpcClient {
             return signature;
         } catch (SolanaRpcException e) {
             throw e;
-        } catch (Exception e) {
+        } catch (RuntimeException | IOException | InterruptedException e) {
             log.error("sendTransaction failed: {}", e.getMessage());
             throw new SolanaRpcException("SEND_TX_IO_ERROR",
                     "IO error sending transaction: " + e.getMessage(), e);
@@ -222,7 +222,7 @@ public class SolanaRpcClient {
                 return fail;
             }
             return parseSimulationResult(result.get("value"));
-        } catch (Exception e) {
+        } catch (RuntimeException | IOException | InterruptedException e) {
             log.error("simulateTransaction failed: {}", e.getMessage());
             SimulationResult fail = new SimulationResult();
             fail.err = e.getMessage();
@@ -252,7 +252,7 @@ public class SolanaRpcClient {
             }
             // result 直接是交易对象（可为 null 表示未确认）
             return result;
-        } catch (Exception e) {
+        } catch (RuntimeException | IOException | InterruptedException e) {
             log.error("getTransaction failed for {}: {}", signature, e.getMessage());
             return null;
         }
@@ -270,7 +270,7 @@ public class SolanaRpcClient {
                 return -1L;
             }
             return result.asLong(-1L);
-        } catch (Exception e) {
+        } catch (RuntimeException | IOException | InterruptedException e) {
             log.error("getSlot failed: {}", e.getMessage());
             return -1L;
         }
@@ -288,7 +288,7 @@ public class SolanaRpcClient {
                 return -1L;
             }
             return result.asLong(-1L);
-        } catch (Exception e) {
+        } catch (RuntimeException | IOException | InterruptedException e) {
             log.error("getBlockHeight failed: {}", e.getMessage());
             return -1L;
         }
@@ -306,7 +306,7 @@ public class SolanaRpcClient {
     public JsonNode getTokenAccountsByOwner(JsonNode params) {
         try {
             return invoke("getTokenAccountsByOwner", params);
-        } catch (Exception e) {
+        } catch (RuntimeException | IOException | InterruptedException e) {
             log.error("getTokenAccountsByOwner failed: {}", e.getMessage());
             return null;
         }

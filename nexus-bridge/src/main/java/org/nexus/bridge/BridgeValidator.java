@@ -1,6 +1,7 @@
 package org.nexus.bridge;
 
 import java.nio.charset.StandardCharsets;
+import java.security.GeneralSecurityException;
 import java.security.KeyFactory;
 import java.security.MessageDigest;
 import java.security.PublicKey;
@@ -182,7 +183,7 @@ public interface BridgeValidator {
             verifier.initVerify(publicKey);
             verifier.update(payload.getBytes(StandardCharsets.UTF_8));
             return verifier.verify(hexToBytes(signatureHex));
-        } catch (Exception e) {
+        } catch (RuntimeException | GeneralSecurityException e) {
             return false; // fail-closed：任何解码/验签异常均视为无效
         }
     }
@@ -230,7 +231,7 @@ public interface BridgeValidator {
         try {
             MessageDigest md = MessageDigest.getInstance("SHA-256");
             return bytesToHex(md.digest(input.getBytes(StandardCharsets.UTF_8)));
-        } catch (Exception e) {
+        } catch (RuntimeException | GeneralSecurityException e) {
             throw new IllegalStateException("SHA-256 unavailable", e);
         }
     }

@@ -1,0 +1,33 @@
+{
+  "common": {
+    "loading": "加载中...",
+    "error": "错误",
+    "retry": "重试",
+    "confirm": "确认",
+    "cancel": "取消",
+    "close": "关闭",
+    "submit": "提交",
+    "search": "搜索",
+    "refresh": "刷新"
+  },
+  "nav": {
+    "home": "首页",
+    "blocks": "区块",
+    "transactions": "交易",
+    "addresses": "地址",
+    "orchestration": "支付编排",
+    "settings": "设置"
+  },
+  "home": {
+    "title": "NexusChain 区块浏览器",
+    "subtitle": "实时监控区块链状态",
+    "latestBlocks": "最新区块",
+    "latestTransactions": "最新交易"
+  },
+  "settings": {
+    "title": "设置",
+    "language": "语言",
+    "apiKey": "API 密钥",
+    "theme": "主题"
+  }
+}

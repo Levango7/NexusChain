@@ -115,7 +115,7 @@ public class FundConservationChecker {
                 log.info("Fund conservation check passed: {} chains verified, maxDelta={}",
                         result.getChainCount(), result.getMaxAbsDelta());
             }
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.error("Fund conservation check failed: {}", e.getMessage(), e);
         }
     }
@@ -212,7 +212,7 @@ public class FundConservationChecker {
                     "FundConservationChecker");
             log.warn("Bridge {} emergency-paused due to fund conservation violation: {}",
                     bridgeId, reason);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.error("Failed to trigger emergency pause for chain {}: {}", chainId, e.getMessage(), e);
         }
     }

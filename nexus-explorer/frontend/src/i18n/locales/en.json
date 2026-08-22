@@ -1,0 +1,33 @@
+{
+  "common": {
+    "loading": "Loading...",
+    "error": "Error",
+    "retry": "Retry",
+    "confirm": "Confirm",
+    "cancel": "Cancel",
+    "close": "Close",
+    "submit": "Submit",
+    "search": "Search",
+    "refresh": "Refresh"
+  },
+  "nav": {
+    "home": "Home",
+    "blocks": "Blocks",
+    "transactions": "Transactions",
+    "addresses": "Addresses",
+    "orchestration": "Orchestration",
+    "settings": "Settings"
+  },
+  "home": {
+    "title": "NexusChain Explorer",
+    "subtitle": "Real-time blockchain monitoring",
+    "latestBlocks": "Latest Blocks",
+    "latestTransactions": "Latest Transactions"
+  },
+  "settings": {
+    "title": "Settings",
+    "language": "Language",
+    "apiKey": "API Key",
+    "theme": "Theme"
+  }
+}

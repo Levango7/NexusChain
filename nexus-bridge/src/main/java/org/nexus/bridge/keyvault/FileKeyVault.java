@@ -49,7 +49,7 @@ public class FileKeyVault implements KeyVault {
             MessageDigest md = MessageDigest.getInstance("SHA-256");
             byte[] keyBytes = md.digest(password.getBytes(StandardCharsets.UTF_8));
             this.masterKey = new SecretKeySpec(keyBytes, "AES");
-        } catch (Exception e) {
+        } catch (GeneralSecurityException e) {
             throw new RuntimeException("Failed to derive master key", e);
         }
     }
@@ -83,7 +83,7 @@ public class FileKeyVault implements KeyVault {
             sig.initSign(priv);
             sig.update(payload);
             return bytesToHex(sig.sign());
-        } catch (Exception e) {
+        } catch (GeneralSecurityException e) {
             log.error("Signing failed for validator={}", validatorId, e);
             throw new RuntimeException("Sign error: " + validatorId, e);
         }

@@ -76,7 +76,7 @@ public abstract class AbstractEvmChainAdapter implements ChainAdapter {
         } catch (IOException e) {
             log.error("Failed to fetch block height on chain {}: {}", chainId, e.getMessage());
             return -1L;
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.error("Unexpected error fetching block height on chain {}: {}", chainId, e.getMessage());
             return -1L;
         }

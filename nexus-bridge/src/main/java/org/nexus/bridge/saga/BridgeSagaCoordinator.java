@@ -155,7 +155,7 @@ public class BridgeSagaCoordinator {
                 log.info("Saga {} (LOCK_MINT) completed: lockTx={}, mintStatus={}",
                         saga.getId(), lockTx.getTxId(), mintTx.getStatus());
                 return lockTx;
-            } catch (Exception mintEx) {
+            } catch (RuntimeException mintEx) {
                 // mint 失败 → 补偿：unlock 源链资产
                 log.warn("Saga {} (LOCK_MINT) mint failed, compensating: {}",
                         saga.getId(), mintEx.getMessage());
@@ -175,7 +175,7 @@ public class BridgeSagaCoordinator {
             }
         } catch (BridgeException e) {
             throw e;
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             markFailed(saga, e);
             throw new BridgeException("BRIDGE_SAGA_FAILED",
                     "Lock-Mint saga failed: " + e.getMessage(), e);
@@ -216,7 +216,7 @@ public class BridgeSagaCoordinator {
             sagaRepository.save(saga);
             log.info("Saga {} compensation recorded: lockTx={} will be unlocked by reconciliation",
                     saga.getId(), lockTx.getTxId());
-        } catch (Exception e) {
+        } catch (RuntimeException | JsonProcessingException e) {
             log.error("Saga {} failed to persist compensation: {}", saga.getId(), e.getMessage(), e);
             // 补偿记录失败不应吞掉原始失败原因，仅记录
         }
@@ -262,7 +262,7 @@ public class BridgeSagaCoordinator {
                 log.info("Saga {} (BURN_UNLOCK) completed: burnTx={}, unlockStatus={}",
                         saga.getId(), burnTx.getTxId(), unlockTx.getStatus());
                 return burnTx;
-            } catch (Exception unlockEx) {
+            } catch (RuntimeException unlockEx) {
                 // unlock 失败 → 记录待处理 + 重试（不可自动回退 burn）
                 log.warn("Saga {} (BURN_UNLOCK) unlock failed, recording for retry: {}",
                         saga.getId(), unlockEx.getMessage());
@@ -283,7 +283,7 @@ public class BridgeSagaCoordinator {
             }
         } catch (BridgeException e) {
             throw e;
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             markFailed(saga, e);
             throw new BridgeException("BRIDGE_SAGA_FAILED",
                     "Burn-Unlock saga failed: " + e.getMessage(), e);
@@ -323,7 +323,7 @@ public class BridgeSagaCoordinator {
             sagaRepository.save(saga);
             log.info("Saga {} compensation recorded: burnTx={} will be retried by reconciliation",
                     saga.getId(), burnTx.getTxId());
-        } catch (Exception e) {
+        } catch (RuntimeException | JsonProcessingException e) {
             log.error("Saga {} failed to persist compensation: {}", saga.getId(), e.getMessage(), e);
         }
     }
@@ -368,7 +368,7 @@ public class BridgeSagaCoordinator {
                         saga.getId(), saga.getRetryCount() + 1, saga.getMaxRetries(), delayMs);
                 retryOne(saga);
                 retried++;
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 log.warn("Retry saga {} failed (attempt {}/{}): {}",
                         saga.getId(), saga.getRetryCount() + 1, saga.getMaxRetries(), e.getMessage());
             }

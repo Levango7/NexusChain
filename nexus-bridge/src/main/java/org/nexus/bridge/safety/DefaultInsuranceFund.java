@@ -75,7 +75,7 @@ public class DefaultInsuranceFund implements InsuranceFund {
             }
             balance.set(restored);
             log.info("Restored insurance fund balance from {} ledger entries: {}", allEntries.size(), restored);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.warn("Failed to restore insurance fund balance (DB may not be ready): {}", e.getMessage());
         }
     }

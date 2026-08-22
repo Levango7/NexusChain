@@ -114,7 +114,7 @@ public class DefaultCircuitBreaker implements CircuitBreaker {
         if (eventPublisher != null) {
             try {
                 eventPublisher.publishEvent(new CircuitBreakerTrippedEvent(this, reason, Instant.now()));
-            } catch (Exception ex) {
+            } catch (RuntimeException ex) {
                 // 事件发布失败不应影响熔断状态切换本身，仅记录告警
                 log.warn("熔断事件发布失败（不影响熔断语义）: reason={}, error={}", reason, ex.getMessage());
             }

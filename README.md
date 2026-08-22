@@ -4,7 +4,7 @@ NexusChain 是一个**基于自研区块链的支付编排平台（Payment Orche
 
 > **定位**：区块链是底层结算基础设施，不是产品本身。产品价值在于统一支付 API、启发式路由与清结算。
 
-**当前版本**：v2.28.0（2026-08-23，代码质量改进版；依赖升级+异常处理规范化+测试覆盖提升+CI/CD补全+文档修正）
+**当前版本**：v2.29.0（2026-08-23，覆盖率门禁提升+bridge异常处理规范化+前端测试框架与i18n国际化）
 
 ## 快速开始
 
@@ -145,19 +145,18 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
 
 ADR-001 状态：**Resolved**（2026-08-10）。
 
-## 最新改动摘要（v2.28.0，代码质量改进）
+## 最新改动摘要（v2.29.0，覆盖率+异常处理+前端基础设施）
 
-本次发布聚焦全面代码质量改进，涵盖依赖升级、异常处理规范化、测试覆盖提升、CI/CD补全和文档修正：
+本次发布聚焦覆盖率门禁提升、nexus-bridge 异常处理规范化和前端测试框架与 i18n 国际化基础设施：
 
 | 改进项 | 范围 | 结果 |
 |--------|------|------|
-| 依赖版本升级 | 3项 | slf4j 1.7.36→2.0.16、logback 1.2.13→1.5.18、guava 31.1-jre→33.4.8-jre |
-| 异常处理规范化 | 92处 | catch(Exception e)替换为具类型捕获（RuntimeException/GeneralSecurityException/JsonProcessingException/ExecutionException等） |
-| 测试覆盖提升 | 2文件 | SecurityConfigTest（3测试）+ HashUtilTest（22测试），覆盖率门禁15%→20% |
-| CI/CD补全 | 3文件 | docker-compose密钥外化、Flyway迁移预检job、release回滚job |
-| 文档修正 | 4文件 | PRD API路径说明+F16/F17标记更新、数据库迁移指南、CHANGELOG更新、settings.gradle废弃SDK注释 |
+| 覆盖率门禁提升 | nexus-gateway | JaCoCo minimum 0.20→0.25 |
+| bridge异常处理规范化 | 12文件/30+处 | catch(Exception e)替换为具类型捕获（RuntimeException/IOException/JsonProcessingException/GeneralSecurityException/InterruptedException等），编译通过 |
+| 前端测试框架 | nexus-explorer/frontend | Vitest+jsdom+@testing-library/react 安装配置，7个测试通过 |
+| 前端i18n国际化 | nexus-explorer/frontend | react-i18next+i18next 集成，中英双语翻译文件，i18n测试通过 |
 
-详细变更见 [CHANGELOG](CHANGELOG.md) v2.28.0 节。
+详细变更见 [CHANGELOG](CHANGELOG.md) v2.29.0 节。
 
 ## 安全审计
 

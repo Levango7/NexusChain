@@ -1,5 +1,6 @@
 package org.nexus.bridge;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.nexus.bridge.entity.IdempotencyKey;
 import org.nexus.bridge.model.BridgeEvent;
@@ -171,7 +172,7 @@ public class BridgeServiceImpl implements BridgeService {
                 saveIdempotencyKey(idempotencyKey, OP_LOCK, saved);
                 span.success();
                 return saved;
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 span.error(e);
                 throw e;
             }
@@ -238,7 +239,7 @@ public class BridgeServiceImpl implements BridgeService {
                 saveIdempotencyKey(request.getLockTxId(), OP_MINT, saved);
                 span.attr("bridge.status", "MINTED").success();
                 return saved;
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 span.error(e);
                 throw e;
             }
@@ -297,7 +298,7 @@ public class BridgeServiceImpl implements BridgeService {
                 saveIdempotencyKey(idempotencyKey, OP_BURN, saved);
                 span.success();
                 return saved;
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 span.error(e);
                 throw e;
             }
@@ -361,7 +362,7 @@ public class BridgeServiceImpl implements BridgeService {
                 saveIdempotencyKey(request.getBurnTxId(), OP_UNLOCK, saved);
                 span.attr("bridge.status", "UNLOCKED").success();
                 return saved;
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 span.error(e);
                 throw e;
             }
@@ -451,7 +452,7 @@ public class BridgeServiceImpl implements BridgeService {
                 publishTxEvent(saved, BridgeEvent.EventType.TRANSACTION_FAILED, reason);
                 return saved;
             });
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             // 独立事务失败不应吞掉原始业务异常；记录后返回原对象
             log.warn("Failed to persist FAILED status for tx {}: {}", txId, e.getMessage());
             tx.setStatus(BridgeTxStatus.FAILED);
@@ -547,7 +548,7 @@ public class BridgeServiceImpl implements BridgeService {
                     BridgeTransaction.class);
             log.info("Idempotent hit: key={}, operation={}, txId={}", key, operation, prior.getTxId());
             return Optional.of(prior);
-        } catch (Exception e) {
+        } catch (RuntimeException | JsonProcessingException e) {
             log.warn("Idempotency check failed (degrading to non-idempotent path): {}", e.getMessage());
             return Optional.empty();
         }
@@ -572,7 +573,7 @@ public class BridgeServiceImpl implements BridgeService {
             IdempotencyKey record = new IdempotencyKey(key, operation, json,
                     now.plusSeconds(IDEMPOTENCY_TTL_SECONDS));
             idempotencyKeyRepository.save(record);
-        } catch (Exception e) {
+        } catch (RuntimeException | JsonProcessingException e) {
             log.warn("Failed to persist idempotency key (key={}, op={}): {}",
                     key, operation, e.getMessage());
         }

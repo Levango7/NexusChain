@@ -4,6 +4,34 @@
 
 ## [Unreleased]
 
+## [2.29.0] - 2026-08-23
+
+### 覆盖率门禁提升 + bridge异常处理规范化 + 前端测试框架与i18n国际化
+
+本次发布聚焦覆盖率门禁提升、nexus-bridge 异常处理规范化和前端测试框架与 i18n 国际化基础设施。
+
+#### Changed（覆盖率门禁提升）
+
+- **nexus-gateway JaCoCo 覆盖率门禁 0.20 → 0.25**：保守提升覆盖率门禁，后续逐步提高至 0.30。
+
+#### Fixed（异常处理规范化）
+
+- **nexus-bridge 异常处理规范化（12文件/30+处）**：将 `catch (Exception e)` 通配异常捕获替换为具类型捕获：
+  - `BridgeSagaCoordinator`（7处）、`BridgeServiceImpl`（7处）、`SolanaRpcClient`（8处）等 12 个文件
+  - Jackson `readValue`/`writeValueAsString` → `catch (RuntimeException | JsonProcessingException e)`
+  - `SolanaRpcClient.invoke()` 抛出 `IOException/InterruptedException` → `catch (RuntimeException | IOException | InterruptedException e)`
+  - `BridgeValidator` 加密验签 → `catch (RuntimeException | GeneralSecurityException e)`
+  - `MessageRelayer` 签名/验签 → `catch (RuntimeException | GeneralSecurityException e)`，`bytesToPrivateKey`/`bytesToPublicKey` 方法签名 `throws Exception` → `throws GeneralSecurityException`
+  - 保留 `ShedLockConfig`（@Scheduled 入口点）和 `FileKeyVault`（加密代码 `throws Exception`）不变
+  - 全量编译验证通过
+
+#### Added（前端测试框架与i18n国际化）
+
+- **Vitest 测试框架**：nexus-explorer/frontend 安装 Vitest + jsdom + @testing-library/react + @testing-library/jest-dom + @testing-library/user-event，创建 vitest.config.ts 配置文件。
+- **前端测试示例**：创建 `src/__tests__/example.test.ts`（4个基础断言测试）和 `src/__tests__/i18n.test.ts`（3个i18n测试），全部 7 个测试通过。
+- **react-i18next 国际化**：安装 i18next + react-i18next，创建 `src/i18n/index.ts` 初始化配置和 `src/i18n/locales/zh.json`/`en.json` 中英双语翻译文件，在 `main.tsx` 中集成 i18n。
+- **前端构建验证**：`tsc && vite build` 通过，TypeScript 编译无错误。
+
 ## [2.28.0] - 2026-08-23
 
 ### 代码质量改进（依赖升级 + 异常处理规范化 + 测试覆盖提升 + CI/CD补全 + 文档修正）

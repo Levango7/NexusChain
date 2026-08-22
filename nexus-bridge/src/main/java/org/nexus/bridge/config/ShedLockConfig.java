@@ -83,7 +83,7 @@ public class ShedLockConfig {
         try {
             jdbcTemplate.execute(CREATE_SHEDLOCK_TABLE_SQL);
             log.info("ShedLock table ensured (CREATE TABLE IF NOT EXISTS shedlock)");
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.warn("Failed to create shedlock table (ShedLock will be disabled): {}", e.getMessage());
         }
     }

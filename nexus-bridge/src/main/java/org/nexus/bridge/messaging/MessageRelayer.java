@@ -4,6 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.nio.charset.StandardCharsets;
+import java.security.GeneralSecurityException;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.MessageDigest;
@@ -251,7 +252,7 @@ public class MessageRelayer {
             return HEX.formatHex(signatureBytes);
         } catch (SignatureException e) {
             throw new RuntimeException("Signature operation failed", e);
-        } catch (Exception e) {
+        } catch (RuntimeException | GeneralSecurityException e) {
             throw new RuntimeException("Failed to sign message with Ed25519", e);
         }
     }
@@ -282,7 +283,7 @@ public class MessageRelayer {
                 if (sig.verify(sigBytes)) {
                     return true;
                 }
-            } catch (Exception e) {
+            } catch (RuntimeException | GeneralSecurityException e) {
                 log.debug("Verify failed for one validator: {}", e.getMessage());
             }
         }
@@ -295,7 +296,7 @@ public class MessageRelayer {
      * <p>JDK 17 的 SunEC 提供者不直接支持从原始字节构造 Ed25519 私钥，
      * 此处通过 PKCS#8 编码包装（Ed25519 私钥 PKCS#8 = 固定前缀 + 32 字节私钥）。</p>
      */
-    private static java.security.PrivateKey bytesToPrivateKey(byte[] rawBytes) throws Exception {
+    private static java.security.PrivateKey bytesToPrivateKey(byte[] rawBytes) throws GeneralSecurityException {
         if (rawBytes.length != 32) {
             throw new IllegalArgumentException("Ed25519 private key must be 32 bytes, got " + rawBytes.length);
         }
@@ -314,7 +315,7 @@ public class MessageRelayer {
     /**
      * 将 32 字节 Ed25519 公钥转换为 {@link PublicKey}。
      */
-    private static PublicKey bytesToPublicKey(byte[] rawBytes) throws Exception {
+    private static PublicKey bytesToPublicKey(byte[] rawBytes) throws GeneralSecurityException {
         if (rawBytes.length != 32) {
             throw new IllegalArgumentException("Ed25519 public key must be 32 bytes, got " + rawBytes.length);
         }
@@ -347,7 +348,7 @@ public class MessageRelayer {
                 byte[] addr = new byte[20];
                 System.arraycopy(hash, 0, addr, 0, 20);
                 return "0x" + HEX.formatHex(addr);
-            } catch (Exception e) {
+            } catch (RuntimeException | GeneralSecurityException e) {
                 return "0x0000000000000000000000000000000000000000";
             }
         });

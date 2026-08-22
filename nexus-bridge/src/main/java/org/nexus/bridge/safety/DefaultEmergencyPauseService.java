@@ -74,7 +74,7 @@ public class DefaultEmergencyPauseService implements EmergencyPauseService {
                 }
             }
             log.info("Loaded {} bridge pause records from DB", stateCache.size());
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.warn("Failed to preload bridge pause records (DB may not be ready): {}", e.getMessage());
         }
     }
