@@ -24,7 +24,7 @@ plugins {
 }
 
 group = 'org.nexus'
-version = '2.24.0'
+version = '2.26.0'
 
 java {
     toolchain {
@@ -52,6 +52,15 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     implementation 'org.springframework.boot:spring-boot-starter-validation'
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
+
+    // === P0-6 安全加固：Spring Security 方法级鉴权 ===
+    // 引入 spring-boot-starter-security 启用 @PreAuthorize 方法级鉴权，
+    // 配合 SecurityConfig(@EnableMethodSecurity) 对 BridgeController 危险端点
+    // （lock/mint/burn/unlock/pause/resume）强制角色控制。
+    // bridge 为独立部署的 Spring Boot 应用（buildJar 产出 fat jar，直接暴露 HTTP 端点），
+    // 故鉴权在本服务内实现，而非 gateway FeignClient 层。
+    // 参考 nexus-signing-service/build.gradle 的安全依赖配置方式。
+    implementation 'org.springframework.boot:spring-boot-starter-security'
 
     // === Micrometer Tracing + Zipkin（Phase 3 任务 #61，设计文档 §4.3.1） ===
     // SpringBoot 3.2.5 BOM 管理版本（micrometer-tracing 1.2.5 + zipkin-reporter-brave 2.16.4）

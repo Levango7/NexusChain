@@ -57,6 +57,10 @@ management:
 
 # Sandbox 风格的业务配置（测试无链节点/钱包服务运行）
 nexus:
+  # P1-4: 请求签名密钥（HMAC-SHA256）。测试环境使用固定密钥，
+  # 供 RequestSignatureInterceptor 验证签名。生产环境必须通过 Vault/KMS 注入。
+  security:
+    requestSigningSecret: test-signing-secret-do-not-use-in-prod
   chain:
     rpc-url: http://localhost:3000
     skip-confirmation: true

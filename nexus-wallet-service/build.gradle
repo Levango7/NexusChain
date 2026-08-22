@@ -32,7 +32,7 @@ plugins {
 }
 
 group = 'org.nexus'
-version = '2.24.0'
+version = '2.26.0'
 
 java {
     sourceCompatibility = 17
@@ -54,6 +54,16 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
     // === Phase 4 任务 #68：JPA 持久化（设计文档 §4.2） ===
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+
+    // === P0-3 安全加固：Spring Security + JWT 鉴权（参考 signing-service 模式） ===
+    // 引入 spring-boot-starter-security 启用方法级鉴权（@PreAuthorize），
+    // 配合自定义 JwtAuthenticationFilter 解析 Bearer token 并填充 SecurityContext。
+    // 不引入 spring-security-oauth2-resource-server，避免 Nimbus 依赖膨胀；
+    // 直接使用 jjwt 0.12.x（与 nexus-core JWTUtil / signing-service 对齐）做 HS256 自对称签名/校验。
+    implementation 'org.springframework.boot:spring-boot-starter-security'
+    implementation 'io.jsonwebtoken:jjwt-api:0.12.6'
+    runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.12.6'
+    runtimeOnly 'io.jsonwebtoken:jjwt-jackson:0.12.6'
 
     // === Phase 4 任务 #68：数据库迁移 + 驱动（设计文档 §4.3 Flyway） ===
     // Flyway 9.22.3（Spring Boot 3.2.5 BOM 管理），9.x 无需单独 flyway-mysql 模块

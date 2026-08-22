@@ -10,8 +10,14 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.test.context.ActiveProfiles;
+
 import org.springframework.test.web.servlet.MockMvc;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -27,12 +33,37 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * （商户 API Key 鉴权）和 {@link RequestSignatureInterceptor}（HMAC 请求签名）保护。
  * 本测试聚焦支付编排链路本身而非鉴权边界，因此将两个拦截器均替换为 no-op mock，
  * 使所有请求直接放行。此模式与 {@code OrchestrationE2ETest} 对齐。</p>
+ *
+ * <p>P1-4 修复：项目引入了 {@code spring-boot-starter-security} 但未自定义 SecurityConfig，
+ * Spring Security 默认配置启用 CSRF 保护并拒绝所有无认证请求（返回 403）。
+ * Spring Security 在 Servlet Filter 链中执行，先于 Spring MVC Interceptor 链，
+ * 因此 mock 拦截器无法绕过 Security。本测试通过 {@link TestSecurityConfig} 显式
+ * 放行所有请求并禁用 CSRF，使 mock 拦截器 stub 能有效放行请求。</p>
  */
 @SpringBootTest
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
+@Import(PaymentE2EIntegrationTest.TestSecurityConfig.class)
 class PaymentE2EIntegrationTest {
+
+    /**
+     * 测试专用 Spring Security 配置：放行所有请求并禁用 CSRF。
+     *
+     * <p>原因：build.gradle 引入了 spring-boot-starter-security 但主代码未提供
+     * SecurityConfig，Spring Security 默认配置会启用 CSRF 并要求认证，导致所有
+     * MockMvc 请求返回 403。此配置仅在测试 profile 下生效，不影响生产安全。</p>
+     */
+    @EnableWebSecurity
+    static class TestSecurityConfig {
+        @Bean
+        SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+            http
+                .csrf(csrf -> csrf.disable())
+                .authorizeHttpRequests(auth -> auth.anyRequest().permitAll());
+            return http.build();
+        }
+    }
 
     @Autowired private MockMvc mockMvc;
     @Autowired private ObjectMapper objectMapper;
@@ -43,6 +74,13 @@ class PaymentE2EIntegrationTest {
     // WebConfig 将这两个 bean 注册到 Spring MVC 拦截器链；用 Mockito mock 替换后，
     // preHandle() 默认返回 false 会拒绝所有请求，因此必须在 setup 中 stub 为 true。
     // 作用域仅限本测试类，其他集成测试仍使用真实拦截器。
+    // P1-4: 保留 @MockBean 而非改为真实鉴权，因为：
+    //   1) /api/v1/merchants/register 受 ApiKeyInterceptor 保护（P0-1 安全加固移除了
+    //      商户端点排除），存在鸡生蛋问题——注册首个商户需要已有 API key；
+    //   2) 每个支付请求需计算 HMAC-SHA256(timestamp+nonce+method+path+body) 签名，
+    //      且时间戳必须在 5 分钟窗口内，测试维护成本高；
+    //   3) 本测试聚焦编排链路而非鉴权边界，鉴权边界由 ApiKeyInterceptorTest /
+    //      RequestSignatureInterceptorTest 单元测试覆盖。
     @MockBean private ApiKeyInterceptor apiKeyInterceptor;
     @MockBean private RequestSignatureInterceptor requestSignatureInterceptor;
 

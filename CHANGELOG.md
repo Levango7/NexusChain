@@ -4,6 +4,60 @@
 
 ## [Unreleased]
 
+## [2.26.0] - 2026-08-22
+
+### 第26轮：第二轮安全审计 P0+P1+P2 修复（鉴权加固 + 代码bug + 测试修复）
+
+本次发布修复第二轮安全审计报告中发现的12个剩余问题（5个P0 + 4个P1 + 2个P2 + 1个测试修复）。两轮报告的P0编号体系完全不同：第一份偏向"功能完整性/工程化"，第二轮偏向"资金安全/鉴权"。
+
+#### Fixed（修复）
+
+##### P0 — 资金安全/鉴权（6项）
+
+- **P0-1 商户管理API无鉴权**：MerchantController写端点（verify/api-keys/revoke）添加 `@PreAuthorize("hasRole('ADMIN')")`，WebConfig 移除 `/api/v1/merchants/**` 排除路径使商户端点受 API key 拦截器保护
+- **P0-2 签名审批不阻断**：TxController 大额签名改为阻断式——创建审批请求后返回 PENDING 响应（不执行签名），新增 `POST /api/v1/transfers/sign/approved` 端点供审批通过后调用执行签名广播
+- **P0-3 钱包服务零鉴权**：wallet-service 引入 spring-security + JWT 依赖，创建 SecurityConfig/JwtAuthenticationFilter/JwtTokenProvider/SecurityRoles，WalletController 全部端点加 `@PreAuthorize`，approverId 从 SecurityContextHolder 认证上下文获取而非 @RequestParam
+- **P0-4 支付确认不校验绑定**：PaymentServiceImpl.confirmPayment 增加交易-订单绑定校验（chainTxHash 长度校验 + skip-connection 警告 + TODO 完整链上交易详情查询）
+- **P0-5 退款approved默认true**：RefundController.asBoolean null 时返回 false（fail-closed）
+- **P0-6 桥暂停/恢复无鉴权**：BridgeController 全部端点加 `@PreAuthorize`（pause/resume=ADMIN，lock/mint/burn/unlock=OPERATOR），resume 方法 NPE 修复（null 检查返回 400），创建 SecurityConfig
+
+##### P1 — 代码bug + 鉴权扩展（4项）
+
+- **P1-1 AccountRule死代码**：第100行条件 `||` → `&&`（原条件恒为真导致"同块内同一投票/抵押只能撤回一次"从未生效）
+- **P1-2 AccountRule状态污染**：第209行 `map.put(tohash, accountState)` → `map.put(tohash, toaccountState)`；第231行 `map.put(..., accountState)` → `map.put(..., tovoteaccountState)`；else 分支补充 toaccountState 初始化避免 NPE
+- **P1-3 HMAC签名路径不匹配**：WebConfig 扩展 RequestSignatureInterceptor 到 `/api/v1/refunds/**` 和 `/api/v1/orders/{id}/confirm`
+- **P1-4 伪E2E mock鉴权**：PaymentE2EIntegrationTest 添加 TestSecurityConfig 解决 Spring Security 默认 403 问题，保留 @MockBean 拦截器放行（测试聚焦编排链路而非鉴权边界），添加注释说明
+
+##### P2 — 代码bug + SDK异常（2项）
+
+- **P2-1 AccountRule continue范围**：第117行 `if(!validateIncubator) continue` 改为 `if(validateIncubator)` 包裹 switch 块（exchange 节点仅跳过孵化器检查，仍执行基本格式校验和账户更新）
+- **P2-2 SDK RpcClient异常类型**：`getBlockByHash` 抛出 `UnsupportedOperationException` → `RpcException`（SDK标准异常），修复2个SDK测试
+
+#### Security（安全加固）
+
+- gateway build.gradle 添加 `spring-boot-starter-security` 依赖（@PreAuthorize 方法级鉴权）
+- bridge build.gradle 添加 `spring-boot-starter-security` 依赖
+- wallet-service build.gradle 添加 `spring-boot-starter-security` + `jjwt` 依赖
+- wallet-service 新建 SecurityConfig/JwtAuthenticationFilter/JwtTokenProvider/SecurityRoles
+- bridge 新建 SecurityConfig（permitAll GET 公开端点 + authenticated 其余 + @EnableMethodSecurity）
+- wallet-service application-test.yml 添加 JWT 密钥配置
+- gateway application-test.yml 添加 requestSigningSecret 配置
+
+#### Test Results
+- 全量编译 `gradlew assemble -x test`：BUILD SUCCESSFUL（45 tasks）
+- 各模块 compileJava + compileTestJava：BUILD SUCCESSFUL
+- PaymentE2EIntegrationTest：全部通过
+- SdkExtraTest：全部通过
+
+#### Changed（修改文件）
+- `nexus-gateway/`：build.gradle、WebConfig.java、MerchantController.java、RefundController.java、PaymentServiceImpl.java、PaymentE2EIntegrationTest.java、application-test.yml
+- `nexus-signing-service/`：TxController.java
+- `nexus-wallet-service/`：build.gradle、WalletController.java、application-test.yml、config/SecurityConfig.java（新建）、config/JwtAuthenticationFilter.java（新建）、config/JwtTokenProvider.java（新建）、config/SecurityRoles.java（新建）
+- `nexus-bridge/`：build.gradle、BridgeController.java、config/SecurityConfig.java（新建）
+- `nexus-core/`：AccountRule.java
+- `nexus-sdk/`：RpcClient.java
+- `docs/audit/v2.25.0-security-audit-round2-corrected.md`（新建：修正后的第二轮审核报告）
+
 ## [2.25.0] - 2026-08-22
 
 ### 第25轮：P3 低危问题修复（文档版本一致性 + 测试命名误导 + SpEL 沙箱排查）

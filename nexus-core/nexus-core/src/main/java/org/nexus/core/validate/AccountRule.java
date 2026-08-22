@@ -97,7 +97,7 @@ public class AccountRule implements BlockRule {
         // 一个区块内同一个投票或者抵押只能被撤回一次
         for (Transaction t : block.body) {
             if (
-                    t.type != EXIT_VOTE.ordinal() ||
+                    t.type != EXIT_VOTE.ordinal() &&
                             t.type != Transaction.Type.EXIT_MORTGAGE.ordinal() || t.payload == null
             ) {
                 continue;
@@ -114,35 +114,36 @@ public class AccountRule implements BlockRule {
                 if (whitelistTransaction.IsUnchecked(tx.getHashHexString())) {
                     continue;
                 }
-                if (!validateIncubator) {
-                    continue;
-                }
                 byte[] pubkeyhash = RipemdUtility.ripemd160(SHA3Utility.keccak256(tx.from));
                 String publichash = Hex.encodeHexString(pubkeyhash);
-                switch (Transaction.Type.values()[tx.type]) {
-                    case EXIT_VOTE: {
-                        // 投票没有撤回过
-                        if (stateDB.hasPayload(block.hashPrevBlock, EXIT_VOTE.ordinal(), tx.payload)) {
-                            peningTransPool.removeOne(publichash, tx.nonce);
-                            return Result.Error("the vote transaction " + Hex.encodeHexString(tx.payload) + " had been exited");
+                // exchange 节点(validateIncubator=false)跳过孵化器交易撤回检查，
+                // 但仍执行后续基本格式校验和账户更新，避免跳过全部验证
+                if (validateIncubator) {
+                    switch (Transaction.Type.values()[tx.type]) {
+                        case EXIT_VOTE: {
+                            // 投票没有撤回过
+                            if (stateDB.hasPayload(block.hashPrevBlock, EXIT_VOTE.ordinal(), tx.payload)) {
+                                peningTransPool.removeOne(publichash, tx.nonce);
+                                return Result.Error("the vote transaction " + Hex.encodeHexString(tx.payload) + " had been exited");
+                            }
+                            break;
                         }
-                        break;
-                    }
-                    case EXIT_MORTGAGE: {
-                        // 抵押没有撤回过
-                        if (stateDB.hasPayload(block.hashPrevBlock, EXIT_MORTGAGE.ordinal(), tx.payload)) {
-                            peningTransPool.removeOne(publichash, tx.nonce);
-                            return Result.Error("the mortgage transaction " + Hex.encodeHexString(tx.payload) + " had been exited");
+                        case EXIT_MORTGAGE: {
+                            // 抵押没有撤回过
+                            if (stateDB.hasPayload(block.hashPrevBlock, EXIT_MORTGAGE.ordinal(), tx.payload)) {
+                                peningTransPool.removeOne(publichash, tx.nonce);
+                                return Result.Error("the mortgage transaction " + Hex.encodeHexString(tx.payload) + " had been exited");
+                            }
+                            break;
                         }
-                        break;
-                    }
-                    case EXTRACT_COST: {
-                        //本金没有被撤回过
-                        if (stateDB.hasPayload(block.hashPrevBlock, Transaction.Type.EXTRACT_COST.ordinal(), tx.payload)) {
-                            peningTransPool.removeOne(publichash, tx.nonce);
-                            return Result.Error("the incubate transaction " + Hex.encodeHexString(tx.payload) + " had been exited");
+                        case EXTRACT_COST: {
+                            //本金没有被撤回过
+                            if (stateDB.hasPayload(block.hashPrevBlock, Transaction.Type.EXTRACT_COST.ordinal(), tx.payload)) {
+                                peningTransPool.removeOne(publichash, tx.nonce);
+                                return Result.Error("the incubate transaction " + Hex.encodeHexString(tx.payload) + " had been exited");
+                            }
+                            break;
                         }
-                        break;
                     }
                 }
                 // 校验事务
@@ -188,6 +189,7 @@ public class AccountRule implements BlockRule {
                             toaccount = toaccountState.getAccount();
                         } else {
                             toaccount = new Account(0, tx.to, 0, 0, 0, 0, 0);
+                            toaccountState = new AccountState(toaccount, new HashMap<>(), new HashMap<>());
                         }
                         Map<String, Account> mapaccount = null;
                         if (tx.type == 1) {
@@ -206,7 +208,7 @@ public class AccountRule implements BlockRule {
                             map.put(publichash, accountState);
                         } else if (mapaccount.containsKey("toaccount")) {
                             toaccountState.setAccount(mapaccount.get("toaccount"));
-                            map.put(tohash, accountState);
+                            map.put(tohash, toaccountState);
                         }
                     } else if (tx.type == EXIT_VOTE.ordinal()) {//撤回投票
                         Account votetoaccount;
@@ -228,7 +230,7 @@ public class AccountRule implements BlockRule {
                             map.put(publichash, accountState);
                         } else if (cancelaccountList.containsKey("toaccount")) {
                             tovoteaccountState.setAccount(cancelaccountList.get("toaccount"));
-                            map.put(Hex.encodeHexString(tx.to), accountState);
+                            map.put(Hex.encodeHexString(tx.to), tovoteaccountState);
                         }
                     } else if (tx.type == Transaction.Type.EXIT_MORTGAGE.ordinal()) {//撤回抵押
                         Map<String, Account> cancelAccountList = packageMiner.UpdateCancelMortgage(account, tx);

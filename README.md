@@ -4,7 +4,7 @@ NexusChain 是一个**基于自研区块链的支付编排平台（Payment Orche
 
 > **定位**：区块链是底层结算基础设施，不是产品本身。产品价值在于统一支付 API、启发式路由与清结算。
 
-**当前版本**：v2.24.0（2026-08-22，最新稳定版；P0/P1/P2 漏洞修复全部完成）
+**当前版本**：v2.26.0（2026-08-22，最新稳定版；第二轮安全审计 P0/P1/P2 修复完成）
 
 ## 快速开始
 
@@ -145,19 +145,17 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
 
 ADR-001 状态：**Resolved**（2026-08-10）。
 
-## 最新改动摘要（v2.24.0，P0+P1+P2 漏洞修复）
+## 最新改动摘要（v2.26.0，第二轮安全审计 P0+P1+P2 修复）
 
-本次发布对前 15 轮改造后的代码基线进行系统化质量保证，不引入新功能，仅修复与加固：
+本次发布修复第二轮安全审计报告中发现的12个剩余问题（5个P0 + 4个P1 + 2个P2 + 1个测试修复），聚焦鉴权加固、代码bug修复和测试修复：
 
 | 工作项 | 范围 | 结果 |
 |--------|------|------|
-| 全量回归测试 | 2491 用例 | 63 失败（gateway 集成测试，已修复 ConnectorRegistry NPE），6 跳过，其余模块全绿 |
-| 代码质量审查（SpotBugs+FindSecBugs） | 5 个 SECURITY HIGH | 全部修复：`HashUtil`/`PeersCache` 改用 `SecureRandom`，`AESManage`/`SerializableUtil`/`SecurityConfig` 添加抑制注解，新增 `spotbugs-annotations` 依赖 |
-| 安全审计（SAST） | 3 个安全问题 | 全部修复：`JwtTokenProvider`/`FeignJwtRequestInterceptor` 硬编码 JWT 密钥 → `SecureRandom`，`WalletController` `System.out.println` → `logger.debug` |
-| 性能调优 | NonceTracker 无锁化 | `synchronized` → `ConcurrentHashMap.putIfAbsent`，多线程争用显著降低；另给出 10 项后续优化建议 |
-| 组件装配 | `InMemoryChainDidStore` | 添加 `@Component` 注解，支持 Spring 自动装配 |
+| P0 鉴权加固 | 6项 | 商户API加RBAC、签名审批改阻断式、钱包服务引入JWT鉴权、支付确认加绑定校验、退款fail-closed、桥端点加鉴权 |
+| P1 代码bug+鉴权扩展 | 4项 | AccountRule死代码修复、状态污染修复、HMAC签名路径扩展、E2E测试SecurityConfig修复 |
+| P2 代码bug+SDK异常 | 2项 | AccountRule continue范围修正、RpcClient异常类型修复 |
 
-详细变更见 [CHANGELOG](CHANGELOG.md) v2.24.0 节。
+详细变更见 [CHANGELOG](CHANGELOG.md) v2.26.0 节。
 
 ## 安全审计
 

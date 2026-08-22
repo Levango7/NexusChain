@@ -31,6 +31,10 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-validation'
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
     implementation 'org.springframework.boot:spring-boot-starter-data-redis'
+    // === P0-1 安全加固：引入 Spring Security，启用 @PreAuthorize 方法级鉴权 ===
+    // 商户管理写端点（verify / api-keys / revoke）要求 hasRole('ADMIN')。
+    // 方法级鉴权需配合 @EnableMethodSecurity（见 SecurityConfig）。
+    implementation 'org.springframework.boot:spring-boot-starter-security'
 
     // Database
     implementation 'org.flywaydb:flyway-core'

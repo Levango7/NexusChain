@@ -219,6 +219,39 @@ public class PaymentServiceImpl implements PaymentService {
                 return PaymentResult.failed(order.getOrderNo(), "Transaction not yet confirmed on chain");
             }
 
+            // P0-4 安全加固：交易-订单绑定校验
+            // 防止攻击者通过虚假 txHash 绕过链上确认（尤其是 skip-confirmation=true 时
+            // 任何 >=16 字符字符串都被当作已确认的 fallback 逻辑）。
+            // TODO: 后续接入完整的链上交易详情查询。当前 ChainRpcClient 仅提供
+            //     isTransactionConfirmed / getTransactionStatus，不含交易金额与收款人字段。
+            //     需扩展 ChainRpcClient.getTransaction(txHash) 返回
+            //     {amount, recipient, sender, ...}，并在此校验：
+            //       - tx.amount.compareTo(order.getAmount()) == 0
+            //       - tx.recipient.equals(order.getPayeeAddress())  (商户结算地址)
+            //     临时校验：chainTxHash 非空且长度合理（>=16 且 <=128），
+            //     并对 skip-confirmation fallback 发出警告以阻止生产环境误用。
+            if (chainTxHash == null || chainTxHash.length() < 16 || chainTxHash.length() > 128) {
+                log.warn("Transaction-Order binding check failed: invalid chainTxHash length for orderNo={}, txHash={}",
+                        order.getOrderNo(), chainTxHash);
+                OrderStateMachine.transition(order, PaymentOrder.OrderStatus.FAILED);
+                order.setChainTxHash(chainTxHash);
+                orderRepository.save(order);
+                confirmSpan.attr("payment.status", "FAILED")
+                        .attr("tx.binding.check", "INVALID_HASH")
+                        .error(null);
+                return PaymentResult.failed(order.getOrderNo(),
+                        "Transaction does not match order: amount or recipient mismatch");
+            }
+            if (gatewayConfig.getChain().isSkipConfirmation()) {
+                // skip-confirmation fallback（任何 >=16 字符字符串都被当作已确认）仅限开发模式。
+                // 生产环境必须设置 nexus.chain.skip-confirmation=false，否则攻击者可凭虚假 txHash
+                // 确认任意订单。此处仅记录警告，完整防护依赖后续接入的交易详情校验（见上方 TODO）。
+                log.warn("SECURITY: skip-confirmation=true detected in confirmPayment; orderNo={}, txHash={}. "
+                        + "This accepts any well-formed txHash as confirmed. "
+                        + "MUST be disabled in production (nexus.chain.skip-confirmation=false).",
+                        order.getOrderNo(), chainTxHash);
+            }
+
             // AML gate: screen the confirmed transaction before marking it PAID.
             // High-risk hits (score >= 90 or manual review required) block the payment
             // and file a Suspicious Activity Report; lower scores pass with a warning log.

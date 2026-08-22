@@ -4,6 +4,7 @@ import org.nexus.gateway.MerchantService;
 import org.nexus.gateway.model.Merchant;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import jakarta.validation.constraints.NotBlank;
@@ -47,6 +48,7 @@ public class MerchantController {
      * @return updated merchant entity
      */
     @PostMapping("/{id}/verify")
+    @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<Merchant> verify(@PathVariable Long id, @RequestBody VerifyRequest request) {
         Merchant.VerificationStatus status = Merchant.VerificationStatus.valueOf(request.getStatus().toUpperCase());
         Merchant merchant = merchantService.verify(id, status);
@@ -60,6 +62,7 @@ public class MerchantController {
      * @return API key and secret (shown once)
      */
     @PostMapping("/{id}/api-keys")
+    @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<Map<String, String>> generateApiKey(@PathVariable Long id) {
         MerchantService.ApiKeyPair pair = merchantService.generateApiKey(id);
         Map<String, String> result = new HashMap<>();
@@ -77,6 +80,7 @@ public class MerchantController {
      */
     @DeleteMapping("/{id}/api-keys")
     @ResponseStatus(HttpStatus.NO_CONTENT)
+    @PreAuthorize("hasRole('ADMIN')")
     public void revokeApiKey(@PathVariable Long id, @RequestBody RevokeRequest request) {
         merchantService.revokeApiKey(id, request.getApiKey());
     }

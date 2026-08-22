@@ -140,7 +140,7 @@ public class RpcClient {
      */
     @Deprecated
     public Map<String, Object> getBlockByHash(String blockHash) {
-        throw new UnsupportedOperationException(
+        throw new RpcException(
                 "nexus_getBlockByHash not supported by nexus-core; use getBlockByNumber instead");
     }
 

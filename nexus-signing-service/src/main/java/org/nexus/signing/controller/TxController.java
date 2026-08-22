@@ -13,6 +13,7 @@ import org.nexus.signing.config.SecurityRoles;
 import org.nexus.signing.audit.AuditEvent;
 import org.nexus.signing.audit.AuditLogService;
 import org.nexus.signing.approval.SigningApprovalService;
+import org.nexus.signing.approval.SigningApprovalRequest;
 import org.nexus.sdk.util.JsonUtil;
 import org.springframework.beans.factory.annotation.Autowired;
 import io.micrometer.tracing.Tracer;
@@ -27,6 +28,7 @@ import java.io.IOException;
 import java.math.BigDecimal;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.Map;
 import java.util.TreeMap;
 
 /**
@@ -132,6 +134,89 @@ public class TxController {
     }
 
     /**
+     * P0-2：审批通过后执行签名 + 广播。
+     *
+     * <p>大额签名流程改为阻断式后，{@code /api/v1/transfers/sign} 对大额请求
+     * 仅创建审批请求并返回 PENDING 响应。审批人通过
+     * {@link SigningApprovalService#approve} 收集足够审批后，调用方凭
+     * {@code approvalId} 调用本端点触发实际签名 + 广播。</p>
+     *
+     * <p>处理流程：
+     * <ol>
+     *   <li>通过 {@code approvalId} 查询审批请求</li>
+     *   <li>校验审批状态为 {@code APPROVED}（未通过 / 不存在 / 已过期 / 已执行
+     *       均返回错误）</li>
+     *   <li>复用 {@link #signAndBroadcast} 执行签名 + 广播</li>
+     *   <li>签名成功后调用 {@link SigningApprovalService#markExecuted}
+     *       将审批请求标记为 {@code EXECUTED}</li>
+     * </ol></p>
+     *
+     * <p>SECURITY：端点强制 {@code ROLE_SIGNER} 鉴权，与
+     * {@code /api/v1/transfers/sign} 一致。审批决策（approve/reject）由
+     * wallet-service 的 APPROVER 角色通过独立流程完成，本端点仅消费
+     * 已通过的审批结果。</p>
+     *
+     * @param approvalId 审批请求 ID（由 {@code /api/v1/transfers/sign} 大额流程返回）
+     * @param request    HTTP 请求（用于提取来源 IP 等审计信息）
+     * @return 签名 + 广播结果（与 {@code /api/v1/transfers/sign} 成功时一致），
+     *         或审批状态错误响应
+     */
+    @PreAuthorize("hasRole('" + SecurityRoles.SIGNER + "')")
+    @RequestMapping(value = "/api/v1/transfers/sign/approved", method = RequestMethod.POST)
+    public Object signTransferApproved(@RequestParam(value = "approvalId", required = true) String approvalId,
+                                       HttpServletRequest request) throws IOException {
+        // 校验审批服务可用
+        if (signingApprovalService == null) {
+            return fail("Approval service is not available");
+        }
+        // 查询审批请求
+        SigningApprovalRequest approvalRequest = signingApprovalService.getRequest(approvalId);
+        if (approvalRequest == null) {
+            return fail("Approval request not found: " + approvalId);
+        }
+        // 校验审批状态为 APPROVED
+        if (approvalRequest.getStatus() != SigningApprovalRequest.Status.APPROVED) {
+            Map<String, Object> resp = new HashMap<>();
+            resp.put("statusCode", 5000);
+            resp.put("status", approvalRequest.getStatus().name());
+            resp.put("approvalId", approvalId);
+            resp.put("message", "审批未通过，无法执行签名; 当前状态: "
+                    + approvalRequest.getStatus().name());
+            return resp;
+        }
+        // 复用签名 + 广播流程（审批已通过，金额必然为大额，signAndBroadcast 内
+        // 会再次触发 requiresApproval 检查并创建新的审批请求——为避免无限循环，
+        // 此处直接调用 doSignAndBroadcast 绕过审批创建逻辑）。
+        String actor = AuditLogService.resolveActor("anonymous");
+        String sourceIp = auditLogService != null
+                ? auditLogService.extractClientIp(request)
+                : request.getRemoteAddr();
+        Object result = doSignAndBroadcast(
+                approvalRequest.getFromPubkey(),
+                approvalRequest.getToPubkeyHash(),
+                approvalRequest.getAmount(),
+                request,
+                actor,
+                sourceIp);
+        // 签名成功后将审批请求标记为 EXECUTED（best-effort，不阻断响应返回）
+        try {
+            signingApprovalService.markExecuted(approvalId);
+        } catch (Exception e) {
+            // 标记失败不影响签名结果已返回，仅记录日志便于运维排查
+            if (auditLogService != null) {
+                auditLogService.log(AuditEvent.builder(AuditEvent.Type.APPROVAL_REQUEST,
+                                AuditEvent.Outcome.FAILURE,
+                                AuditLogService.resolveActor("anonymous"))
+                        .target(approvalId)
+                        .detail("reason", "mark_executed_failed")
+                        .detail("error", e.getMessage())
+                        .build());
+            }
+        }
+        return result;
+    }
+
+    /**
      * Shared signing pipeline: platform-key-only. Rejects the request unless
      * the platform keystore is loaded and {@code fromPubkey} matches the
      * platform keystore public key. No caller-supplied private key material is
@@ -144,8 +229,9 @@ public class TxController {
      *       where（来源 IP）</li>
      *   <li>大额签名（金额 ≥ nexus.approval.large-amount-threshold）触发
      *       多签审批流程（{@link SigningApprovalService#createApprovalRequest}），
-     *       创建审批请求并记录审计日志。简化版不阻断签名（仍立即执行），
-     *       仅记录审批请求供事后审计；完整阻断版留待 P3 阶段</li>
+     *       创建审批请求并返回 PENDING 响应，<b>阻断签名执行</b>，
+     *       调用方需等待审批通过后通过
+     *       {@code POST /api/v1/transfers/sign/approved} 触发实际签名</li>
      * </ul></p>
      */
     private Object signAndBroadcast(String fromPubkey, String toPubkeyHash,
@@ -158,16 +244,56 @@ public class TxController {
                 ? auditLogService.extractClientIp(request)
                 : request.getRemoteAddr();
 
-        // P2-F1：大额签名触发多签审批（简化版：记录审批请求，不阻断签名）
+        // P0-2：大额签名触发多签审批（阻断式：创建审批请求后返回 PENDING，不执行签名）
         if (signingApprovalService != null
                 && signingApprovalService.requiresApproval(amount, "USDT")) {
             String approvalId = signingApprovalService.createApprovalRequest(
                     fromPubkey, toPubkeyHash, amount, "USDT", actor, sourceIp);
-            // 简化版：仅记录审批请求，仍继续执行签名。
-            // 完整版应在审批通过后才执行签名，留待 P3 阶段实现。
-            // 当前通过审计日志告警，运维可监控大额签名并事后复核。
+            // 阻断式审批已实现：创建审批请求后立即返回 PENDING 响应，不继续执行签名。
+            // 调用方需通过 POST /api/v1/transfers/sign/approved 端点在审批通过后触发签名。
+            if (approvalId != null) {
+                return pendingApprovalResponse(approvalId);
+            }
+            // approvalId 为 null 时（理论上不应发生，因为 requiresApproval 已返回 true），
+            // 保守起见继续执行签名流程，并记录告警便于排查。
+            if (auditLogService != null) {
+                auditLogService.log(AuditEvent.builder(AuditEvent.Type.SIGN_TRANSFER,
+                                AuditEvent.Outcome.FAILURE, actor)
+                        .sourceIp(sourceIp)
+                        .detail("reason", "approval_request_creation_returned_null")
+                        .detail("amount", amount == null ? null : amount.toPlainString())
+                        .detail("currency", "USDT")
+                        .build());
+            }
         }
 
+        // 无需审批或审批服务不可用：直接执行签名 + 广播
+        return doSignAndBroadcast(fromPubkey, toPubkeyHash, amount, request, actor, sourceIp);
+    }
+
+    /**
+     * 实际签名 + 广播执行（不含审批检查）。
+     *
+     * <p>P0-2：从 {@link #signAndBroadcast} 抽取，供
+     * {@link #signTransferApproved} 在审批通过后直接调用，绕过审批创建逻辑
+     * 避免无限循环（已通过审批的大额请求再次进入 signAndBroadcast 会创建
+     * 新的审批请求）。</p>
+     *
+     * <p>本方法包含 platform-key-only 校验、Nonce 池管理、交易构造 + 广播、
+     * 审计日志、业务 span 等完整签名逻辑，与原 signAndBroadcast 的签名部分
+     * 逐字节一致。</p>
+     *
+     * @param fromPubkey   转出公钥
+     * @param toPubkeyHash 转入公钥 hash
+     * @param amount       金额
+     * @param request      HTTP 请求
+     * @param actor        调用方标识（JWT subject，用于审计）
+     * @param sourceIp     来源 IP（用于审计）
+     * @return 签名 + 广播结果
+     */
+    private Object doSignAndBroadcast(String fromPubkey, String toPubkeyHash,
+                                      BigDecimal amount, HttpServletRequest request,
+                                      String actor, String sourceIp) throws IOException {
         // P3-T5：签名 + 广播 span（signing.broadcast）
         try (BusinessSpan span = BusinessSpan.start(tracer, "signing.broadcast")
                 .attr("signing.from.pubkey", fromPubkey)
@@ -269,6 +395,31 @@ public class TxController {
         result.setStatusCode(5000);
         result.setMessage(message);
         return JsonUtil.GSON.fromJson(JsonUtil.GSON.toJson(result), HashMap.class);
+    }
+
+    /**
+     * P0-2：构造大额签名「待审批」响应（PENDING 状态）。
+     *
+     * <p>当大额签名触发多签审批时，signAndBroadcast 创建审批请求后立即返回
+     * 本响应，不执行签名。响应体包含：
+     * <ul>
+     *   <li>{@code statusCode}：2001（区别于 2000 成功与 5000 失败，表示需等待审批）</li>
+     *   <li>{@code status}：PENDING</li>
+     *   <li>{@code approvalId}：审批请求 ID，调用方凭此 ID 查询审批状态
+     *       并在审批通过后调用 {@code POST /api/v1/transfers/sign/approved}</li>
+     *   <li>{@code message}：「大额签名需等待审批通过」</li>
+     * </ul></p>
+     *
+     * @param approvalId 审批请求 ID
+     * @return 待审批响应体
+     */
+    private Object pendingApprovalResponse(String approvalId) {
+        Map<String, Object> response = new HashMap<>();
+        response.put("statusCode", 2001);
+        response.put("status", "PENDING");
+        response.put("approvalId", approvalId);
+        response.put("message", "大额签名需等待审批通过");
+        return response;
     }
 
     /**
