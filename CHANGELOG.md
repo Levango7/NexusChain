@@ -4,6 +4,34 @@
 
 ## [Unreleased]
 
+## [2.22.0] - 2026-08-22
+
+### 第22轮：P0-8 开发 compose 密钥加固 + P0 剩余三项核对结论
+
+本次发布完成漏洞扫描报告中 P0-8（MPC 密钥硬编码）的最小加固，并完成 P0-4/P0-8/P0-9 三项核对结论。
+
+#### Fixed（修复）
+
+##### P0-8: 开发 compose 密钥改为环境变量可覆盖模式
+- `docker-compose.yml` 三处 `MPC_STORAGE_KEY` 硬编码改为 `${MPC_STORAGE_KEY:-<dev-default>}` 模式
+- `docker-compose.yml` 三处 `MPC_AUTH_TOKEN` 硬编码改为 `${MPC_AUTH_TOKEN:-<dev-default>}` 模式
+- 开发默认值保留不变（零摩擦），生产可通过环境变量覆盖或使用 `docker-compose.prod.yml`
+- `docker-compose.prod.yml` 已使用 `${MPC_STORAGE_KEY:-CHANGE_ME_MPC_STORAGE_KEY}` 占位符，
+  非法默认值触发 `config.rs` 启动校验失败（fail-closed），行为正确
+
+#### Verified（核对结论，无需修改）
+
+##### P0-9: gRPC 明文传输 — 已在之前改造中修复（报告基线过时）
+- Java 客户端 `GrpcMpcCryptoEngine`：`use-plaintext` 默认 `false`，mTLS 证书配齐时建立 mTLS channel
+- Java 服务端 `GrpcTlsContextFactory`：`ClientAuth.REQUIRE` 强制客户端证书认证
+- Rust 引擎 `mpc-engine/main.rs`：分布式模式强制 `require_tls=true`，未配证书拒绝启动（fail-closed）
+
+##### P0-4: E2E 测试 mock 鉴权 — 设计决策而非漏洞
+- mock 拦截器用于隔离测试业务流程，测试代码注释已明确说明，属正确的测试隔离实践
+
+#### Changed（修改文件）
+- `docker-compose.yml`：3 处 MPC_STORAGE_KEY + 3 处 MPC_AUTH_TOKEN 改为环境变量可覆盖模式
+
 ## [2.21.0] - 2026-08-22
 
 ### 第21轮：P0-5 最终性测试修复（安全加固后签名长度对齐）
