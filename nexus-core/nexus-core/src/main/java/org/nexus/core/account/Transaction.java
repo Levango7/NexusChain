@@ -62,7 +62,7 @@ public class Transaction {
                 return null;
             }
             return type;
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return null;
         }
     }

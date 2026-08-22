@@ -109,7 +109,7 @@ public class StakingServiceImpl implements StakingService {
                                 new BigDecimal(dto.amount),
                                 Instant.parse(dto.unlockTime)));
                         queueCount++;
-                    } catch (Exception ex) {
+                    } catch (RuntimeException ex) {
                         logger.warn("Skip invalid unstake entry in snapshot: validator={}, reason={}",
                                 e.getKey(), ex.getMessage());
                     }

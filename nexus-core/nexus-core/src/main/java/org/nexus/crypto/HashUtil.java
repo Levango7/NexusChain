@@ -54,7 +54,7 @@ public class HashUtil {
         try{
             MessageDigest digest = MessageDigest.getInstance(algorithm, "BC");
             return digest.digest(in);
-        }catch (Exception e){
+        }catch (java.security.GeneralSecurityException e){
             throw new IllegalStateException("Hash computation failed for algorithm: " + algorithm, e);
         }
     }

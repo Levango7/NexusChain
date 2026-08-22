@@ -221,7 +221,7 @@ public class GovernanceExecutor {
             executeOnChainIfEnabled(proposal);
 
             return true;
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             logger.error("Failed to execute proposal {}, rolling back config", proposalId, e);
             rollbackConfig(proposalId, snapshot);
             proposal.setStatus(ProposalStatus.FAILED);
@@ -414,7 +414,7 @@ public class GovernanceExecutor {
                 logger.warn("On-chain queue returned false for proposal {} (onChainId={}); "
                         + "in-memory schedule remains active as fallback", localId, onChainId);
             }
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             logger.warn("On-chain queue failed for proposal {} (onChainId={}): {}; "
                     + "in-memory schedule remains active as fallback", localId, onChainId, e.getMessage(), e);
         }
@@ -447,7 +447,7 @@ public class GovernanceExecutor {
                         + "in-memory execution already committed, manual reconciliation may be needed",
                         localId, onChainId);
             }
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             logger.warn("On-chain execute failed for proposal {} (onChainId={}): {}; "
                     + "in-memory execution already committed, manual reconciliation may be needed",
                     localId, onChainId, e.getMessage(), e);
@@ -481,7 +481,7 @@ public class GovernanceExecutor {
                         + "in-memory cancel already done, manual reconciliation may be needed",
                         localId, onChainId);
             }
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             logger.warn("On-chain cancel failed for proposal {} (onChainId={}): {}; "
                     + "in-memory cancel already done, manual reconciliation may be needed",
                     localId, onChainId, e.getMessage(), e);

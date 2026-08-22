@@ -254,7 +254,7 @@ public class SyncManager implements Plugin, ApplicationListener<NewBlockMinedEve
                 }
                 logger.info("Validator-set remove: address={} removed={} (via P2P)", msg.address(), ok);
             }
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             logger.error("Validator-set apply failed: address={}, error={}", msg.address(), e.getMessage());
         }
     }

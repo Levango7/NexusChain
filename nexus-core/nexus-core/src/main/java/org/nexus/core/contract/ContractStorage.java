@@ -77,7 +77,7 @@ public class ContractStorage {
                     byte[] value = Base64.getDecoder().decode(slotEntry.getValue());
                     slots.put(slot, value);
                     slotCount++;
-                } catch (Exception e) {
+                } catch (RuntimeException e) {
                     logger.warn("Skip invalid slot entry in snapshot: address={}, slot={}, reason={}",
                             address, slotEntry.getKey(), e.getMessage());
                 }

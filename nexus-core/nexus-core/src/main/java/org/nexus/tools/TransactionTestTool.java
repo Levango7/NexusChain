@@ -77,7 +77,7 @@ public class TransactionTestTool {
                 if (publicKeyHash.length == Transaction.PUBLIC_KEY_SIZE) {
                     publicKeyHash = Address.publicKeyToHash(publicKeyHash);
                 }
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 publicKeyHash = Address.addressToPublicKeyHash(encoded);
             }
             if (publicKeyHash == null) {
@@ -142,7 +142,7 @@ public class TransactionTestTool {
             try {
                 int type = Integer.parseInt(encoded);
                 return new TransactionType(type);
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 throw new TransactionTypeDeserializeException("invalid type: " + encoded);
             }
         }
@@ -179,13 +179,13 @@ public class TransactionTestTool {
             if (encoded.startsWith("0x")) {
                 try {
                     return new Payload(Hex.decodeHex(encoded.substring(2)));
-                } catch (Exception e) {
+                } catch (RuntimeException e) {
                     throw new PayloadDeserializeException(e.getMessage());
                 }
             }
             try {
                 return new Payload(Hex.decodeHex(encoded));
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 return new Payload(encoded.getBytes(StandardCharsets.UTF_8));
             }
         }
@@ -208,7 +208,7 @@ public class TransactionTestTool {
             String encoded = node.asText();
             try {
                 return Integer.parseInt(encoded);
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 throw new HatchTypeDeserializerException("hatch type must be 365 or 120");
             }
         }

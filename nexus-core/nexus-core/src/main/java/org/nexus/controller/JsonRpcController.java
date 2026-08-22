@@ -129,7 +129,7 @@ public class JsonRpcController {
             } else {
                 response.set("result", MAPPER.valueToTree(result));
             }
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             logger.warn("JSON-RPC dispatch failed: {}", e.getMessage());
             response.put("id", id);
             response.set("error", error(CODE_INVALID_REQUEST, "malformed JSON-RPC request: " + e.getMessage(), id));
@@ -177,7 +177,7 @@ public class JsonRpcController {
             }
         } catch (IllegalArgumentException e) {
             return error(CODE_INVALID_PARAMS, e.getMessage(), 0);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             logger.warn("RPC method {} failed: {}", method, e.getMessage());
             return error(CODE_INTERNAL, method + " internal error: " + e.getMessage(), 0);
         }
@@ -416,7 +416,7 @@ public class JsonRpcController {
                     status = "confirmed";
                 }
                 if (p.has("timestamp")) ts = p.get("timestamp").asLong(ts);
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 // payload 解析失败则回退到交易本身字段（使用上面默认值）
                 logger.debug("crosschain payload parse failed for {}: {}",
                         tx.getHashHexString(), e.getMessage());
@@ -644,7 +644,7 @@ public class JsonRpcController {
         if (rc.getAbi() != null && !rc.getAbi().isEmpty()) {
             try {
                 n.set("abi", MAPPER.readTree(rc.getAbi()));
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 // abi 非合法 JSON 则回退为字符串输出
                 n.put("abi", rc.getAbi());
             }
@@ -726,7 +726,7 @@ public class JsonRpcController {
         }
         try {
             return params.get(idx).asLong();
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return def;
         }
     }

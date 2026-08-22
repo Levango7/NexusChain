@@ -137,7 +137,7 @@ public class ExecutorPipeline <In, Out>{
     public void shutdown() {
         try {
             exec.shutdown();
-        } catch (Exception e) {}
+        } catch (RuntimeException e) {}
         if (next != null) {
             exec.shutdown();
         }

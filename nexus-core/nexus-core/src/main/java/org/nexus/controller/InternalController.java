@@ -46,7 +46,7 @@ public class InternalController {
             if (tx != null) {
                 return codec.encodeTransaction(tx);
             }
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return "invalid transaction hash hex string " + hash;
         }
         return "the transaction " + hash + " not exists";
@@ -61,7 +61,7 @@ public class InternalController {
             if (tx != null) {
                 return codec.encodeTransaction(tx);
             }
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return "invalid transaction hash hex string " + hash;
         }
         return "the transaction " + hash + " not exists";
@@ -85,7 +85,7 @@ public class InternalController {
         try {
             byte[] hash = Hex.decodeHex(blockInfo);
             return stateDB.getBlock(hash);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return getBlocksByHeight(blockInfo);
         }
     }
@@ -94,7 +94,7 @@ public class InternalController {
         try {
             long h = Long.parseLong(height);
             return codec.encodeBlocks(stateDB.getBlocks(h, h, Integer.MAX_VALUE, false));
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return "invalid block path variable " + height;
         }
     }
@@ -126,7 +126,7 @@ public class InternalController {
             byte[] publicKey;
             try {
                 publicKey = Hex.decodeHex(from);
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 return e.getMessage();
             }
             if (typeParsed == null) {
@@ -142,7 +142,7 @@ public class InternalController {
             byte[] publicKey;
             try {
                 publicKey = Hex.decodeHex(from);
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 return e.getMessage();
             }
             if (typeParsed == null) {

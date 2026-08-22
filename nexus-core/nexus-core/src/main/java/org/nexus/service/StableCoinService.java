@@ -157,7 +157,7 @@ public class StableCoinService {
             return APIResult.newFailResult(APIResult.FAIL, "Mint validation failed: " + e.getMessage());
         } catch (CryptoException e) {
             return APIResult.newFailResult(APIResult.FAIL, "Signing failed: " + e.getMessage());
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return APIResult.newFailResult(APIResult.FAIL, "Failed to mint stablecoin: " + e.getMessage());
         }
     }
@@ -232,7 +232,7 @@ public class StableCoinService {
             return APIResult.newFailResult(APIResult.FAIL, "Invalid hex format: " + e.getMessage());
         } catch (CryptoException e) {
             return APIResult.newFailResult(APIResult.FAIL, "Signing failed: " + e.getMessage());
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return APIResult.newFailResult(APIResult.FAIL, "Failed to redeem stablecoin: " + e.getMessage());
         }
     }
@@ -261,7 +261,7 @@ public class StableCoinService {
             position.setState(StableCoinPosition.State.HEALTHY);
 
             return APIResult.newSuccess(position);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return APIResult.newFailResult(APIResult.FAIL, "Failed to query collateral: " + e.getMessage());
         }
     }
@@ -286,7 +286,7 @@ public class StableCoinService {
             priceInfo.put("timestamp", System.currentTimeMillis() / 1000);
 
             return APIResult.newSuccess(priceInfo);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return APIResult.newFailResult(APIResult.FAIL, "Failed to query price: " + e.getMessage());
         }
     }

@@ -28,7 +28,7 @@ public class TestController {
                 }
             }
             return strings;
-        }catch (Exception e){
+        }catch (RuntimeException | org.apache.commons.codec.DecoderException e){
             e.printStackTrace();
             return "Exception";
         }

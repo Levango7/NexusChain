@@ -78,7 +78,7 @@ public class PaymentRpcController {
             return rpcResult(result.getCode(), "transaction rejected: " + result.getMessage(), null);
         } catch (DecoderException e) {
             return rpcResult(4002, "invalid hex encoding: " + e.getMessage(), null);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.error("Broadcast failed: {}", e.getMessage());
             return rpcResult(5001, "broadcast error: " + e.getMessage(), null);
         }
@@ -115,7 +115,7 @@ public class PaymentRpcController {
             return rpcResult(2000, "success", data);
         } catch (DecoderException e) {
             return rpcResult(4002, "invalid tx hash hex", null);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return rpcResult(5001, "query error: " + e.getMessage(), null);
         }
     }
@@ -136,7 +136,7 @@ public class PaymentRpcController {
             return rpcResult(2000, "success", data);
         } catch (DecoderException e) {
             return rpcResult(4002, "invalid pubKeyHash hex", null);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return rpcResult(5001, "nonce query error: " + e.getMessage(), null);
         }
     }
@@ -194,7 +194,7 @@ public class PaymentRpcController {
                 data.put("progress_percent", rec.progressPercent());
             }
             return rpcResult(2000, "success", data);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return rpcResult(5001, "finality query error: " + e.getMessage(), null);
         }
     }

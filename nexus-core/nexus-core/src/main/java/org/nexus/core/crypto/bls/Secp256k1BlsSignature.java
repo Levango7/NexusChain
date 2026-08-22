@@ -71,7 +71,7 @@ public class Secp256k1BlsSignature implements BlsSignature {
             BigInteger h = hashToScalar(message);
             ECPoint expected = ((Secp256k1BlsPublicKey) publicKey).multiply(h);
             return signaturePoint.equals(expected);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return false;
         }
     }

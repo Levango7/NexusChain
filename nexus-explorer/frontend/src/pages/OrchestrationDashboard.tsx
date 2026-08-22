@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { AlertTriangle, ShieldAlert } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { useAuth } from "../auth/useAuth";
 import { authenticatedRequest, ApiError } from "../api/client";
 import { Loading } from "../components/ui";
@@ -55,6 +56,7 @@ interface ErrorState {
  *   - 间距 / 圆角 / 字体统一 token
  */
 const OrchestrationDashboard: React.FC = () => {
+  const { t } = useTranslation();
   const { apiKey, apiSecret, isAuthenticated } = useAuth();
 
   const [payments, setPayments] = useState<Payment[]>([]);
@@ -73,7 +75,7 @@ const OrchestrationDashboard: React.FC = () => {
       setLoading(false);
       setError({
         kind: "auth",
-        message: "需要商户认证 — 请在设置中配置 API Key",
+        message: t("orchestration.authRequired"),
       });
       setPayments([]);
       setConnectors([]);
@@ -107,17 +109,17 @@ const OrchestrationDashboard: React.FC = () => {
       if (err instanceof ApiError && err.status === 401) {
         setError({
           kind: "auth",
-          message: "需要商户认证 — 请在设置中配置 API Key",
+          message: t("orchestration.authRequired"),
         });
       } else if (err instanceof ApiError) {
         setError({
           kind: "network",
-          message: `请求失败 (${err.status}): ${err.message}`,
+          message: t("orchestration.requestFailed", { status: err.status, message: err.message }),
         });
       } else {
         setError({
           kind: "network",
-          message: err instanceof Error ? err.message : "未知错误",
+          message: err instanceof Error ? err.message : t("orchestration.unknownError"),
         });
       }
       // Clear stale data so the UI does not show pre-error snapshots.
@@ -127,7 +129,7 @@ const OrchestrationDashboard: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [apiKey, apiSecret, isAuthenticated]);
+  }, [apiKey, apiSecret, isAuthenticated, t]);
 
   useEffect(() => {
     fetchData();
@@ -156,7 +158,7 @@ const OrchestrationDashboard: React.FC = () => {
           <div className="flex items-center gap-2">
             <span className="text-lg font-bold text-accent">NexusChain</span>
             <span className="text-xs text-muted font-mono">
-              Payment Orchestration
+              {t("orchestration.title")}
             </span>
           </div>
           <div className="flex gap-1">
@@ -186,7 +188,7 @@ const OrchestrationDashboard: React.FC = () => {
               {error.message}
             </span>
             <span className="text-xs text-warn/80 font-mono">
-              {isAuthenticated ? "凭证被拒绝" : "未配置"}
+              {isAuthenticated ? t("orchestration.credentialRejected") : t("orchestration.notConfigured")}
             </span>
           </div>
         )}
@@ -201,17 +203,17 @@ const OrchestrationDashboard: React.FC = () => {
 
         {loading && (
           <div className="py-12 flex justify-center">
-            <Loading label="Loading..." />
+            <Loading label={t("common.loading")} />
           </div>
         )}
 
         {!loading && tab === "payments" && (
           <div className="space-y-2">
             <h2 className="text-sm font-semibold text-fg-2 uppercase tracking-wide mb-3">
-              Recent Payments
+              {t("orchestration.recentPayments")}
             </h2>
             {payments.length === 0 && (
-              <p className="text-muted text-sm">No payments yet.</p>
+              <p className="text-muted text-sm">{t("orchestration.noPayments")}</p>
             )}
             {payments.map((p) => (
               <div
@@ -240,7 +242,7 @@ const OrchestrationDashboard: React.FC = () => {
         {!loading && tab === "connectors" && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <h2 className="text-sm font-semibold text-fg-2 uppercase tracking-wide col-span-full mb-1">
-              Payment Connectors
+              {t("orchestration.connectors")}
             </h2>
             {connectors.map((c) => (
               <div
@@ -273,7 +275,7 @@ const OrchestrationDashboard: React.FC = () => {
         {!loading && tab === "rules" && (
           <div className="space-y-2">
             <h2 className="text-sm font-semibold text-fg-2 uppercase tracking-wide mb-3">
-              Routing Rules
+              {t("orchestration.routingRules")}
             </h2>
             {rules.map((r) => (
               <div

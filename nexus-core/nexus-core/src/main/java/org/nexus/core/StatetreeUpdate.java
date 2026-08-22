@@ -81,7 +81,7 @@ public class StatetreeUpdate implements ApplicationListener<NewBestBlockEvent> {
                 });
             }
             incubatorDB.insertIncubatorList(incubatorobjct);
-        } catch (Exception e) {
+        } catch (RuntimeException | java.io.IOException | org.apache.commons.codec.DecoderException e) {
             // CRITICAL FIX: previously returned silently without publishing any event,
             // causing StateDB.writeBlock's while(pendingBlock != null) to spin forever
             // holding the global write lock -> node permanently stuck.

@@ -100,7 +100,7 @@ public class PosMiningScheduler {
         try {
             var vals = validatorRegistry.getActiveValidators();
             return vals == null ? 0 : vals.size();
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return 1;
         }
     }
@@ -116,7 +116,7 @@ public class PosMiningScheduler {
                 org.nexus.core.Block best = stateDB.getBestBlock();
                 return best == null ? 0 : best.nHeight;
             }
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             logger.debug("localBestHeight unavailable: {}", e.getMessage());
         }
         return 0;

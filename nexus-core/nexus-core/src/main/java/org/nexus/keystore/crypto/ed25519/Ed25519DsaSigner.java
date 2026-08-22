@@ -64,7 +64,7 @@ public class Ed25519DsaSigner implements DsaSigner {
             signer.init(true, this.prk);
             signer.update(data, 0, data.length);
             return new Signature(signer.generateSignature());
-        }catch (Exception e){
+        }catch (RuntimeException | org.bouncycastle.crypto.CryptoException e){
             throw new CryptoException("failed to sign data");
         }
     }
@@ -86,7 +86,7 @@ public class Ed25519DsaSigner implements DsaSigner {
             verifier.init(false, this.puk);
             verifier.update(data, 0, data.length);
             return verifier.verifySignature(signature.getBytes());
-        }catch (Exception e){
+        }catch (RuntimeException e){
             throw new CryptoException("failed to verify data");
         }
     }

@@ -92,7 +92,7 @@ public class MerkleRule implements BlockRule {
             if (!org.bouncycastle.util.Arrays.areEqual(block.hashMerkleIncubate, Block.calculateMerkleIncubate(incubatorList))) {
                 return Result.Error("merkle incubate validate fail " + new String(codec.encodeBlock(block)) + " " + Hex.encodeHexString(block.hashMerkleIncubate) + " " + Hex.encodeHexString(Block.calculateMerkleIncubate(incubatorList)));
             }
-        } catch (Exception e) {
+        } catch (RuntimeException | java.io.IOException | DecoderException e) {
             return Result.Error("error occurs when validate merle hash");
         }
         return Result.SUCCESS;

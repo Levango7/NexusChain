@@ -49,7 +49,7 @@ public class ValidatorSetPersistence {
                 + "updated_at BIGINT NOT NULL)");
             log.info("ValidatorSetPersistence: schema initialized");
             replay();
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.error("ValidatorSetPersistence init failed: {}", e.getMessage());
         }
     }
@@ -68,7 +68,7 @@ public class ValidatorSetPersistence {
                     }
                 }
             });
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.error("ValidatorSetPersistence replay failed: {}", e.getMessage());
         }
     }
@@ -87,7 +87,7 @@ public class ValidatorSetPersistence {
                     + "public_key=EXCLUDED.public_key, stake_amount=EXCLUDED.stake_amount, "
                     + "updated_at=EXCLUDED.updated_at",
                     address, publicKey, stakeAmount.toPlainString(), System.currentTimeMillis());
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.warn("Validator upsert failed: address={}, error={}", address, e.getMessage());
         }
     }
@@ -97,7 +97,7 @@ public class ValidatorSetPersistence {
         if (jdbc == null || address == null) return;
         try {
             jdbc.update("DELETE FROM validators_synced WHERE address=?", address);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.warn("Validator remove failed: address={}, error={}", address, e.getMessage());
         }
     }

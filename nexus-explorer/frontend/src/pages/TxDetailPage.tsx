@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useParams, Link } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { api } from "../api/client";
 import type { TransactionInfo } from "../types";
 import { Loading, Badge, type BadgeTone } from "../components/ui";
@@ -15,6 +16,7 @@ import { Loading, Badge, type BadgeTone } from "../components/ui";
  *   - Loading 文案替换为 <Loading /> 组件
  */
 const TxDetailPage: React.FC = () => {
+  const { t } = useTranslation();
   const { hash } = useParams<{ hash: string }>();
   const [tx, setTx] = useState<TransactionInfo | null>(null);
   const [loading, setLoading] = useState(true);
@@ -26,17 +28,17 @@ const TxDetailPage: React.FC = () => {
         const data = await api.getTransaction(hash!);
         setTx(data);
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Transaction not found");
+        setError(err instanceof Error ? err.message : t("tx.notFound"));
       } finally {
         setLoading(false);
       }
     })();
-  }, [hash]);
+  }, [hash, t]);
 
   if (loading)
     return (
       <div className="min-h-screen bg-bg flex items-center justify-center">
-        <Loading label="Loading transaction..." />
+        <Loading label={t("tx.loading")} />
       </div>
     );
   if (error)
@@ -55,15 +57,15 @@ const TxDetailPage: React.FC = () => {
         : "warning";
 
   const rows: [string, React.ReactNode][] = [
-    ["Tx Hash", <code className="break-all text-xs text-fg">{tx.txHash}</code>],
+    [t("tx.txHash"), <code className="break-all text-xs text-fg">{tx.txHash}</code>],
     [
-      "Status",
+      t("tx.status"),
       <Badge tone={statusTone} solid>
         {tx.status.toUpperCase()}
       </Badge>,
     ],
     [
-      "Block",
+      t("tx.block"),
       <Link
         to={`/block/${tx.blockHeight}`}
         className="text-accent hover:text-accent-hover hover:underline font-mono"
@@ -72,11 +74,11 @@ const TxDetailPage: React.FC = () => {
       </Link>,
     ],
     [
-      "Type",
-      <span className="text-fg-2">{tx.typeName || `Type ${tx.type}`}</span>,
+      t("tx.type"),
+      <span className="text-fg-2">{tx.typeName || t("tx.typeFallback", { type: tx.type })}</span>,
     ],
     [
-      "From",
+      t("tx.from"),
       <Link
         to={`/address/${tx.from}`}
         className="text-accent hover:text-accent-hover hover:underline break-all text-xs"
@@ -85,7 +87,7 @@ const TxDetailPage: React.FC = () => {
       </Link>,
     ],
     [
-      "To",
+      t("tx.to"),
       <Link
         to={`/address/${tx.to}`}
         className="text-accent hover:text-accent-hover hover:underline break-all text-xs"
@@ -94,12 +96,12 @@ const TxDetailPage: React.FC = () => {
       </Link>,
     ],
     [
-      "Amount",
+      t("tx.amount"),
       <span className="text-success font-medium">{tx.amount} NEX</span>,
     ],
-    ["Fee", <span className="text-fg-2">{tx.fee} NEX</span>],
-    ["Nonce", <span className="font-mono text-fg-2">{tx.nonce}</span>],
-    ["Timestamp", new Date(tx.timestamp * 1000).toLocaleString()],
+    [t("tx.fee"), <span className="text-fg-2">{tx.fee} NEX</span>],
+    [t("tx.nonce"), <span className="font-mono text-fg-2">{tx.nonce}</span>],
+    [t("tx.timestamp"), new Date(tx.timestamp * 1000).toLocaleString()],
   ];
 
   return (
@@ -111,10 +113,10 @@ const TxDetailPage: React.FC = () => {
             className="flex items-center gap-1 text-accent hover:text-accent-hover text-sm transition-colors duration-base ease-standard focus:outline-none focus-visible:shadow-focus"
           >
             <ArrowLeft size={14} />
-            Back
+            {t("tx.back")}
           </Link>
           <h1 className="text-sm font-semibold text-fg-2">
-            Transaction Detail
+            {t("tx.title")}
           </h1>
         </div>
       </header>

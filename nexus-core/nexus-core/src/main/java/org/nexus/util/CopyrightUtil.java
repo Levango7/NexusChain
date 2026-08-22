@@ -115,7 +115,7 @@ public class CopyrightUtil {
                             writer.write(text);
                         }
                     }
-                    catch (Exception ex) {
+                    catch (RuntimeException | java.io.IOException ex) {
                         fail.add(path.getAbsolutePath());
                     }
                 }

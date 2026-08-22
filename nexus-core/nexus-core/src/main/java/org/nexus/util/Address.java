@@ -57,7 +57,7 @@ public class Address {
             if (publicKeyHash.length == Transaction.PUBLIC_KEY_SIZE) {
                 publicKeyHash = Address.publicKeyToHash(publicKeyHash);
             }
-        } catch (Exception e) {
+        } catch (RuntimeException | org.apache.commons.codec.DecoderException e) {
             publicKeyHash = Address.addressToPublicKeyHash(input);
         }
         return publicKeyHash;

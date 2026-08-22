@@ -47,7 +47,7 @@ public class BlockChainOptional {
         try {
             return Optional.ofNullable(header).map(Block::getHash).flatMap(hash -> Optional.of(tmpl.query("select tx.*, ti.block_hash, h.height from transaction as tx inner join transaction_index as ti " +
                     "on tx.tx_hash = ti.tx_hash inner join header as h on ti.block_hash = h.block_hash where ti.block_hash = ? order by ti.tx_index", new Object[]{hash}, new TransactionMapper())));
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return Optional.empty();
         }
     }
@@ -110,7 +110,7 @@ public class BlockChainOptional {
         return Optional.ofNullable(hash).flatMap(h -> {
             try {
                 return Optional.ofNullable(tmpl.queryForObject("select count(*) from header where block_hash = ? limit 1", new Object[]{h}, Integer.class)).map(x -> x > 0);
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 return Optional.empty();
             }
         });
@@ -125,7 +125,7 @@ public class BlockChainOptional {
     public Optional<Block> currentHeader() {
         try {
             return getOne(tmpl.query("select * from header where is_canonical = true order by total_weight desc limit 1", new BlockMapper()));
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return Optional.empty();
         }
     }
@@ -145,7 +145,7 @@ public class BlockChainOptional {
     public Optional<List<Block>> getHeaders(long startHeight, int headersCount) {
         try {
             return Optional.of(tmpl.query("select * from header where height >= ? and height <= ? order by height limit ?", new Object[]{startHeight, startHeight + headersCount - 1, headersCount}, new BlockMapper()));
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return Optional.empty();
         }
     }
@@ -157,7 +157,7 @@ public class BlockChainOptional {
     public Optional<List<Block>> getBlocks(long startHeight, long stopHeight) {
         try {
             return Optional.of(tmpl.query("select * from header where height >= ? and height <= ? order by height", new Object[]{startHeight, stopHeight}, new BlockMapper())).flatMap(this::getBlocksFromHeaders);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return Optional.empty();
         }
     }
@@ -165,7 +165,7 @@ public class BlockChainOptional {
     public Optional<List<Block>> getBlocks(long startHeight, long stopHeight, int sizeLimit) {
         try {
             return Optional.of(tmpl.query("select * from header where height >= ? and height <= ? order by height limit ?", new Object[]{startHeight, stopHeight, sizeLimit}, new BlockMapper())).flatMap(this::getBlocksFromHeaders);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return Optional.empty();
         }
     }
@@ -178,7 +178,7 @@ public class BlockChainOptional {
             Optional<List<Block>> res = Optional.of(tmpl.query("select * from header where height >= ? and height <= ? order by height desc limit ?", new Object[]{startHeight, stopHeight, sizeLimit}, new BlockMapper())).flatMap(this::getBlocksFromHeaders);
             res.ifPresent(Collections::reverse);
             return res;
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return Optional.empty();
         }
     }
@@ -187,7 +187,7 @@ public class BlockChainOptional {
     public Optional<Block> getCanonicalHeader(long num) {
         try {
             return getOne(tmpl.query("select * from header where height = ? and is_canonical = true order by total_weight desc limit 1", new Object[]{num}, new BlockMapper()));
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return Optional.empty();
         }
     }
@@ -195,7 +195,7 @@ public class BlockChainOptional {
     public Optional<List<Block>> getCanonicalHeaders(long start, int size) {
         try {
             return Optional.of(tmpl.query("select * from (select h.*, ROW_NUMBER() OVER (PARTITION BY h.height ORDER BY h.total_weight DESC) as _rn from header h where h.height < ? and h.height >= ? and h.is_canonical = true) t where t._rn = 1 order by t.height", new Object[]{start + size, start}, new BlockMapper()));
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return Optional.empty();
         }
     }
@@ -216,7 +216,7 @@ public class BlockChainOptional {
         return Optional.ofNullable(hash).flatMap(h -> {
             try {
                 return Optional.ofNullable(tmpl.queryForObject("select is_canonical from header where block_hash = ?", new Object[]{h}, Boolean.class));
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 return Optional.empty();
             }
         });
@@ -257,7 +257,7 @@ public class BlockChainOptional {
     public Optional<Long> getCurrentTotalWeight() {
         try {
             return Optional.ofNullable(tmpl.queryForObject("select max(total_weight) from header", Long.class));
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return Optional.empty();
         }
     }
@@ -270,7 +270,7 @@ public class BlockChainOptional {
                         "inner join header as h on ti.block_hash = h.block_hash " +
                         "where tx.tx_hash = ? and h.is_canonical = true limit 1", new Object[]{h}, Integer.class))
                         .map(x -> x > 0);
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 return Optional.empty();
             }
         });
@@ -284,7 +284,7 @@ public class BlockChainOptional {
                                 "inner join transaction_index as ti on tx.tx_hash = ti.tx_hash " +
                                 "inner join header as h on ti.block_hash = h.block_hash" +
                                 " where tx.tx_hash = ? and h.is_canonical = true", new Object[]{h}, new TransactionMapper()));
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 return Optional.empty();
             }
         });
@@ -293,7 +293,7 @@ public class BlockChainOptional {
     public Optional<Boolean> hasBlock(long number) {
         try {
             return Optional.ofNullable(tmpl.queryForObject("select count(*) from header where height = ? limit 1", new Object[]{number}, Integer.class)).map(x -> x > 0);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return Optional.empty();
         }
     }
@@ -303,7 +303,7 @@ public class BlockChainOptional {
             return Optional.ofNullable(tmpl.queryForObject("select total_weight from header where block_hash = ?", new Object[]{
                     hash
             }, Long.class));
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return Optional.empty();
         }
     }

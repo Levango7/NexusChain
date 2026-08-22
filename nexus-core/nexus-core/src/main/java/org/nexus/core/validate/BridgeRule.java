@@ -133,7 +133,7 @@ public class BridgeRule implements TransactionRule {
             if (recipient == null || recipient.isEmpty()) {
                 return Result.Error("BRIDGE_LOCK: recipient must not be empty in payload");
             }
-        } catch (Exception e) {
+        } catch (RuntimeException | com.fasterxml.jackson.core.JsonProcessingException e) {
             return Result.Error("BRIDGE_LOCK: payload is not valid JSON bridge transaction");
         }
         return Result.SUCCESS;

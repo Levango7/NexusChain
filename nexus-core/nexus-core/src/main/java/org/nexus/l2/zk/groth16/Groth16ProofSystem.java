@@ -160,7 +160,7 @@ public class Groth16ProofSystem {
             return new String[]{fingerprint, vkHex};
         } catch (IllegalStateException e) {
             throw e;
-        } catch (Exception e) {
+        } catch (RuntimeException | java.io.IOException | InterruptedException e) {
             throw new IllegalStateException("Groth16 setupRemote FAILED: " + remoteUrl + ": " + e.getMessage(), e);
         }
     }
@@ -205,7 +205,7 @@ public class Groth16ProofSystem {
             return new String[]{fingerprint, proofHex};
         } catch (IllegalStateException e) {
             throw e;
-        } catch (Exception e) {
+        } catch (RuntimeException | java.io.IOException | InterruptedException e) {
             throw new IllegalStateException("Groth16 proveRemote FAILED: " + remoteUrl + ": " + e.getMessage(), e);
         }
     }
@@ -265,7 +265,7 @@ public class Groth16ProofSystem {
             boolean valid = valStart >= 0 && valStart < after.indexOf('}');
             logger.info("Groth16 verifyRemote (真实 BN254 配对): {} -> {}", remoteUrl, valid);
             return valid;
-        } catch (Exception e) {
+        } catch (RuntimeException | java.io.IOException | InterruptedException e) {
             logger.warn("Groth16 verifyRemote FAILED (fail-closed): {}: {}", remoteUrl, e.getMessage());
             return false;
         }

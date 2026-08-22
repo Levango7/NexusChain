@@ -171,7 +171,7 @@ public class EvmExecutor implements ContractExecutor {
         } catch (GasMeter.OutOfGasException e) {
             logger.warn("EVM out of gas: address={}", address);
             return ExecutionResult.failure("out of gas: " + e.getMessage(), meter.getGasUsed());
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             logger.error("EVM execution error: address={}", address, e);
             return ExecutionResult.failure("execution error: " + e.getMessage(), meter.getGasUsed());
         }

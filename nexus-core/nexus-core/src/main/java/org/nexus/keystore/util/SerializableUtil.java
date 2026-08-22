@@ -118,7 +118,7 @@ public class SerializableUtil {
             if (oos != null) {
                 try {
                     oos.close();
-                } catch (Exception e) {
+                } catch (RuntimeException | java.io.IOException e) {
                     // ignore
                 }
             }
@@ -201,7 +201,7 @@ public class SerializableUtil {
             if (ois != null) {
                 try {
                     ois.close();
-                } catch (Exception e) {
+                } catch (RuntimeException | java.io.IOException e) {
                     // ignore
                 }
             }

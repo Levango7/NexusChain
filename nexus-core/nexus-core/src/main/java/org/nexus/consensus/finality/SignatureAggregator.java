@@ -130,7 +130,7 @@ public interface SignatureAggregator {
                         return false;
                     }
                 }
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 // P0-6 修复：fail-closed — 任何验签异常都应视为验签失败
                 log.error("BLS signature verification failed: {}", e.getMessage());
                 return false;

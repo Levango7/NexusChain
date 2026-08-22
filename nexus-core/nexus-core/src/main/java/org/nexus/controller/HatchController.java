@@ -42,7 +42,7 @@ public class HatchController {
             byte[] pubhash=KeystoreAction.addressToPubkeyHash(address);
             String pubkeyhash= Hex.encodeHexString(pubhash);
             return hatchService.getBalance(pubkeyhash);
-        }catch (Exception e){
+        }catch (RuntimeException e){
             return APIResult.newFailResult(5000,"ERROR");
         }
 

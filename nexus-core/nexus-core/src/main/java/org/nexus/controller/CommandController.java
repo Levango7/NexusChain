@@ -109,7 +109,7 @@ public class CommandController {
                 int types = Integer.valueOf(type);
                 return commandService.getTransactionList(height, types);
             }
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             APIResult apiResult = new APIResult();
             apiResult.setCode(5000);
             apiResult.setMessage("Error");
@@ -153,7 +153,7 @@ public class CommandController {
                 b = b.toHeader();
             }
             return encodeDecoder.encode(b);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return handleGetBlockByHash(id);
         }
     }
@@ -166,7 +166,7 @@ public class CommandController {
                 return encodeDecoder.encodeBlock(b);
             }
             return ConsensusResult.ERROR("cannot find transaction where hash = " + hash);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return ConsensusResult.ERROR("invalid hex " + hash);
         }
     }
@@ -179,7 +179,7 @@ public class CommandController {
             if (tx != null) {
                 return encodeDecoder.encodeTransaction(tx);
             }
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return ConsensusResult.ERROR("invalid transaction hash hex string " + hash);
         }
         return ConsensusResult.ERROR("the transaction " + hash + " not exists");
@@ -193,7 +193,7 @@ public class CommandController {
             if (tx != null) {
                 return encodeDecoder.encodeTransaction(tx);
             }
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return ConsensusResult.ERROR("invalid pubkey hex string " + hash);
         }
         return ConsensusResult.ERROR("the transaction where to = " + hash + " not exists");
@@ -215,7 +215,7 @@ public class CommandController {
                 res = CONFIRMED;
             }
             return APIResult.newFailResult(2000, "success", res);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return APIResult.newFailResult(5000, "fail");
         }
     }
@@ -228,7 +228,7 @@ public class CommandController {
             res.put("blockHash", Hex.encodeHexString(tx.blockHash));
             res.put("height", tx.height);
             return APIResult.newFailResult(2000, "success", res);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return APIResult.newFailResult(5000, "fail");
         }
     }

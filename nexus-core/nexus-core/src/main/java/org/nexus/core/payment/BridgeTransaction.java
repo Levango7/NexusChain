@@ -265,7 +265,7 @@ public class BridgeTransaction {
                     this.signaturesVerified = false;
                     return false;
                 }
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 this.signaturesVerified = false;
                 return false;
             }

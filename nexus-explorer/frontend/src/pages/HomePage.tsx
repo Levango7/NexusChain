@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { Search, Settings as SettingsIcon } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { api } from "../api/client";
 import type { BlockInfo, TransactionInfo, ChainStatus } from "../types";
 import { Loading } from "../components/ui";
@@ -16,6 +17,7 @@ import { Loading } from "../components/ui";
  *   - Loading 文案替换为 <Loading /> 组件
  */
 const HomePage: React.FC = () => {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const [blocks, setBlocks] = useState<BlockInfo[]>([]);
   const [transactions, setTransactions] = useState<TransactionInfo[]>([]);
@@ -71,7 +73,7 @@ const HomePage: React.FC = () => {
             className="flex items-center gap-2 cursor-pointer"
             role="button"
             tabIndex={0}
-            aria-label="返回首页"
+            aria-label={t("home.backHome")}
             onClick={() => navigate("/")}
             onKeyDown={(e) => {
               if (e.key === "Enter" || e.key === " ") {
@@ -87,27 +89,27 @@ const HomePage: React.FC = () => {
             {status && (
               <div className="flex items-center gap-4 text-xs text-fg-2">
                 <span>
-                  Height:{" "}
+                  {t("home.height")}:{" "}
                   <span className="text-fg font-mono">
                     {status.height.toLocaleString()}
                   </span>
                 </span>
                 <span>
-                  Peers: <span className="text-fg">{status.peers}</span>
+                  {t("home.peers")}: <span className="text-fg">{status.peers}</span>
                 </span>
                 <span className="flex items-center gap-1">
                   <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse" />
-                  Live
+                  {t("home.live")}
                 </span>
               </div>
             )}
             <Link
               to="/settings"
-              aria-label="设置"
+              aria-label={t("home.settings")}
               className="flex items-center gap-1 text-muted hover:text-accent text-xs transition-colors duration-base ease-standard focus:outline-none focus-visible:shadow-focus"
             >
               <SettingsIcon size={16} />
-              <span className="hidden sm:inline">Settings</span>
+              <span className="hidden sm:inline">{t("nav.settings")}</span>
             </Link>
           </div>
         </div>
@@ -119,13 +121,13 @@ const HomePage: React.FC = () => {
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search by block height, tx hash, or address..."
-            aria-label="搜索区块高度、交易哈希或地址"
+            placeholder={t("home.searchPlaceholder")}
+            aria-label={t("home.searchAriaLabel")}
             className="w-full bg-surface border border-border rounded-md px-4 py-3 text-sm text-fg placeholder-muted focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent/30 transition-colors duration-base ease-standard"
           />
           <button
             type="submit"
-            aria-label="搜索"
+            aria-label={t("common.search")}
             className="absolute right-3 top-1/2 -translate-y-1/2 text-muted hover:text-accent transition-colors duration-base ease-standard focus:outline-none focus-visible:shadow-focus"
           >
             <Search size={20} />
@@ -136,12 +138,12 @@ const HomePage: React.FC = () => {
       <main className="max-w-6xl mx-auto px-4 py-4 grid grid-cols-1 lg:grid-cols-2 gap-6">
         <section>
           <h2 className="text-sm font-semibold text-fg-2 uppercase tracking-wide mb-3">
-            Latest Blocks
+            {t("home.latestBlocks")}
           </h2>
           <div className="space-y-2">
             {loading && (
               <div className="py-8 flex justify-center">
-                <Loading label="Loading..." />
+                <Loading label={t("common.loading")} />
               </div>
             )}
             {blocks.map((block) => (
@@ -149,7 +151,7 @@ const HomePage: React.FC = () => {
                 key={block.height}
                 role="button"
                 tabIndex={0}
-                aria-label={`查看区块 #${block.height}`}
+                aria-label={t("home.viewBlock", { height: block.height })}
                 onClick={() => navigate(`/block/${block.height}`)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" || e.key === " ") {
@@ -172,7 +174,7 @@ const HomePage: React.FC = () => {
                     {block.hash}
                   </span>
                   <span className="text-xs text-fg-2">
-                    {block.txCount} txns
+                    {block.txCount} {t("home.txns")}
                   </span>
                 </div>
               </div>
@@ -182,12 +184,12 @@ const HomePage: React.FC = () => {
 
         <section>
           <h2 className="text-sm font-semibold text-fg-2 uppercase tracking-wide mb-3">
-            Latest Transactions
+            {t("home.latestTransactions")}
           </h2>
           <div className="space-y-2">
             {loading && (
               <div className="py-8 flex justify-center">
-                <Loading label="Loading..." />
+                <Loading label={t("common.loading")} />
               </div>
             )}
             {transactions.map((tx) => (
@@ -195,7 +197,7 @@ const HomePage: React.FC = () => {
                 key={tx.txHash}
                 role="button"
                 tabIndex={0}
-                aria-label={`查看交易 ${tx.txHash}`}
+                aria-label={t("home.viewTx", { hash: tx.txHash })}
                 onClick={() => navigate(`/tx/${tx.txHash}`)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" || e.key === " ") {
@@ -229,7 +231,7 @@ const HomePage: React.FC = () => {
 
       <footer className="border-t border-border mt-8">
         <div className="max-w-6xl mx-auto px-4 py-6 text-center text-xs text-muted">
-          NexusChain Explorer — Blockchain Explorer for NEX Network
+          {t("home.footer")}
         </div>
       </footer>
     </div>

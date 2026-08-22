@@ -140,7 +140,7 @@ public class PaymentChannelService {
             return APIResult.newSuccess(data);
         } catch (IllegalStateException | IllegalArgumentException e) {
             return APIResult.newFailResult(APIResult.FAIL, "Failed to open channel: " + e.getMessage());
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return APIResult.newFailResult(APIResult.FAIL, "Failed to open channel: " + e.getMessage());
         }
     }
@@ -200,7 +200,7 @@ public class PaymentChannelService {
             data.put("txHash", tx.getHashHexString());
 
             return APIResult.newSuccess(data);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return APIResult.newFailResult(APIResult.FAIL, "Failed to close channel: " + e.getMessage());
         }
     }
@@ -230,7 +230,7 @@ public class PaymentChannelService {
             channel.setOpenBlockHeight(safeBestHeight());
 
             return APIResult.newSuccess(channel);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return APIResult.newFailResult(APIResult.FAIL, "Failed to query channel state: " + e.getMessage());
         }
     }
@@ -253,7 +253,7 @@ public class PaymentChannelService {
             // 骨架：返回空列表
             List<PaymentChannel> channels = new ArrayList<>();
             return APIResult.newSuccess(channels);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return APIResult.newFailResult(APIResult.FAIL, "Failed to list channels: " + e.getMessage());
         }
     }
@@ -272,7 +272,7 @@ public class PaymentChannelService {
             }
             Block best = stateDB.getBestBlock();
             return best != null ? best.getnHeight() : 0L;
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return 0L;
         }
     }

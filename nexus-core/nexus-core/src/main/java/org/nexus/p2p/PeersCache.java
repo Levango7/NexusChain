@@ -66,7 +66,7 @@ public class PeersCache {
             try {
                 URI u = new URI(link);
                 this.unresolved.add(new HostPort(u.getHost(), u.getPort()));
-            } catch (Exception e) {
+            } catch (RuntimeException | java.net.URISyntaxException e) {
                 logger.error("invalid url");
             }
         }

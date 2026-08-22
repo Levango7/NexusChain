@@ -152,7 +152,7 @@ public class WasmExecutor implements ContractExecutor {
             logger.warn("Contract execution failed: address={}, method={}: {}",
                     address, method, e.getMessage());
             return ExecutionResult.failure(e.getMessage(), meter.getGasUsed());
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             logger.error("Contract execution error: address={}, method={}", address, method, e);
             return ExecutionResult.failure("execution error: " + e.getMessage(), meter.getGasUsed());
         }

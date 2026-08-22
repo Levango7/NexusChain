@@ -96,7 +96,7 @@ public class ContractRegistry {
                 }
             }
             logger.info("ContractRegistry init: loaded {} contracts from LevelDB", loaded);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             logger.warn("ContractRegistry init failed: {}", e.getMessage(), e);
         }
     }
@@ -130,7 +130,7 @@ public class ContractRegistry {
         try {
             persistOne(contract);
             persistIndex();
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             logger.warn("ContractRegistry register: persist failed for {} (in-memory still visible): {}",
                     addr, e.getMessage(), e);
         }

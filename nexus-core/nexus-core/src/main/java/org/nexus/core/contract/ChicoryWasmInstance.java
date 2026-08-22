@@ -70,7 +70,7 @@ public class ChicoryWasmInstance implements WasmInstance {
             throw e;
         } catch (GasMeter.OutOfGasException e) {
             throw new WasmExecutionException("out of gas: " + e.getMessage(), e);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             throw new WasmExecutionException("wasm call failed: " + methodName + ": " + e.getMessage(), e);
         }
     }

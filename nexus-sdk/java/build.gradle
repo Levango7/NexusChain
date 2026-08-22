@@ -6,7 +6,7 @@ plugins {
 }
 
 group = 'org.nexus'
-version = '2.29.0'
+version = '2.30.0'
 
 java {
     sourceCompatibility = JavaVersion.VERSION_17
@@ -79,11 +79,11 @@ publishing {
             from components.java
             groupId = 'org.nexus'
             artifactId = 'nexus-sdk-java'
-            version = '2.29.0'
+            version = '2.30.0'
 
             pom {
                 name = 'NexusChain SDK for Java'
-                description = 'NexusChain blockchain payment orchestration SDK - v2.29.0'
+                description = 'NexusChain blockchain payment orchestration SDK - v2.30.0'
                 url = 'https://github.com/Levango7/NexusChain'
                 licenses {
                     license {

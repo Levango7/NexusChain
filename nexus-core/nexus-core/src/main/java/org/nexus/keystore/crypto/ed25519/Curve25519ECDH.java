@@ -51,7 +51,7 @@ public class Curve25519ECDH implements ECDH{
             kpgen.initialize(ecSpec);
             this.keyPair = kpgen.generateKeyPair();
 
-        }catch (Exception e){
+        }catch (RuntimeException | java.security.GeneralSecurityException e){
             throw new CryptoException("failed to generate ecdh instance");
         }
 
@@ -69,7 +69,7 @@ public class Curve25519ECDH implements ECDH{
             keyAgreement.init(this.keyPair.getPrivate());
             keyAgreement.doPhase(publicKey, true);
             return keyAgreement.generateSecret();
-        }catch (Exception e){
+        }catch (RuntimeException | java.security.GeneralSecurityException e){
             throw new CryptoException("failed to generate secret key");
         }
     }

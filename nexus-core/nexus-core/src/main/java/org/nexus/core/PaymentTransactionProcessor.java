@@ -85,7 +85,7 @@ public class PaymentTransactionProcessor {
                 logger.debug("Transaction type {} processed (no payment extension handler) at height={}, tx={}",
                         tx.getTypeName(), blockHeight, tx.getHashHexString());
             }
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             logger.error("Failed to process transaction type={} tx={} at height={}: {}",
                     tx.getTypeName(), tx.getHashHexString(), blockHeight, e.getMessage(), e);
         }
@@ -149,7 +149,7 @@ public class PaymentTransactionProcessor {
             channel.update(balance1, balance2, newNonce);
             logger.info("CHANNEL_UPDATE: updated channel={} balance1={} balance2={} nonce={} at height={}",
                     channelId, balance1, balance2, newNonce, blockHeight);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             logger.warn("CHANNEL_UPDATE: failed to update channel={}: {}", channelId, e.getMessage());
         }
     }
@@ -176,7 +176,7 @@ public class PaymentTransactionProcessor {
             }
             channel.close(blockHeight);
             logger.info("CHANNEL_CLOSE: settled channel={} at height={}", channelId, blockHeight);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             logger.warn("CHANNEL_CLOSE: failed to close channel={}: {}", channelId, e.getMessage());
         }
     }
@@ -240,7 +240,7 @@ public class PaymentTransactionProcessor {
             position.setLastUpdateBlock(blockHeight);
             logger.info("MINT_STABLECOIN: minted {} with collateral {} at height={}, position={}",
                     tx.amount, collateral, blockHeight, positionId);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             logger.warn("MINT_STABLECOIN: failed to mint position={}: {}", positionId, e.getMessage());
         }
     }
@@ -264,7 +264,7 @@ public class PaymentTransactionProcessor {
             position.setLastUpdateBlock(blockHeight);
             logger.info("REDEEM_STABLECOIN: redeemed {} at height={}, position={}",
                     tx.amount, blockHeight, positionId);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             logger.warn("REDEEM_STABLECOIN: failed to redeem position={}: {}", positionId, e.getMessage());
         }
     }
@@ -296,7 +296,7 @@ public class PaymentTransactionProcessor {
             stateStore.putBridgeTx(bridgeTxId, bridgeTx);
             logger.info("BRIDGE_LOCK: locked {} to {} recipient={} at height={}, bridgeTx={}",
                     tx.amount, targetChain, recipient, blockHeight, bridgeTxId);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             logger.warn("BRIDGE_LOCK: failed to lock bridgeTx={}: {}", bridgeTxId, e.getMessage());
         }
     }
@@ -342,7 +342,7 @@ public class PaymentTransactionProcessor {
             }
             logger.info("BRIDGE_BURN: burned {} at height={}, bridgeTx={}",
                     tx.amount, blockHeight, bridgeTxId);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             logger.warn("BRIDGE_BURN: failed to burn bridgeTx={}: {}", bridgeTxId, e.getMessage());
         }
     }

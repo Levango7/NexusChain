@@ -49,7 +49,7 @@ public class Ed25519PrivateKey implements PrivateKey {
             signer.init(true, privateKey);
             signer.update(msg, 0, msg.length);
             return signer.generateSignature();
-        }catch (Exception e){
+        }catch (RuntimeException | org.bouncycastle.crypto.CryptoException e){
             throw new CryptoException();
         }
     }

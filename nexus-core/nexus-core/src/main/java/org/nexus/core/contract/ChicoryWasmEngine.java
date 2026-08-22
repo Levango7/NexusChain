@@ -55,7 +55,7 @@ public class ChicoryWasmEngine implements WasmEngine {
             return new ChicoryWasmInstance(instance, gasMeter);
         } catch (WasmExecutionException e) {
             throw e;
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             throw new WasmExecutionException("wasm instantiation failed: " + e.getMessage(), e);
         }
     }
@@ -102,7 +102,7 @@ public class ChicoryWasmEngine implements WasmEngine {
                         .withTypeValidation(true)
                         .withUnsafeExecutionListener(ChicoryWasmInstance.gasListener(gasMeter))
                         .build();
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 throw new WasmExecutionException(
                         "wasm compile failed for " + addr + ": " + e.getMessage(), e);
             }
@@ -113,7 +113,7 @@ public class ChicoryWasmEngine implements WasmEngine {
             return new ChicoryWasmInstance(instance, gasMeter);
         } catch (WasmExecutionException e) {
             throw e;
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             throw new WasmExecutionException(
                     "wasm instantiate failed for " + contractAddress + ": " + e.getMessage(), e);
         }
@@ -141,7 +141,7 @@ public class ChicoryWasmEngine implements WasmEngine {
                     .withTypeValidation(true)
                     .build();
             return true;
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             logger.debug("wasm structural validation failed: {}", e.getMessage());
             return false;
         }

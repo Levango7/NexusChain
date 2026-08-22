@@ -70,7 +70,7 @@ public class ExplorerController {
             long lastConfirmedHeight=nexusBlockChain.getCurrentTotalWeight();
             long bestHeight=stateDB.getBestBlock().nHeight;
             return APIResult.newFailResult(2000,"SUCCESS",new ExploreResult(blocksCount,target,avgInterval,averageFee,pengcount,adoptcount,lastConfirmedHeight,bestHeight));
-        }catch (Exception e){
+        }catch (RuntimeException e){
             return APIResult.newFailResult(5000, "Exception error");
         }
     }

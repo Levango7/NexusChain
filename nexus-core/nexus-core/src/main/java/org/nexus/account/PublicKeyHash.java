@@ -22,7 +22,7 @@ public class PublicKeyHash {
             if (publicKeyHash.length == Transaction.PUBLIC_KEY_SIZE) {
                 return Optional.of(fromPublicKey(publicKeyHash));
             }
-        } catch (Exception e) {
+        } catch (RuntimeException | org.apache.commons.codec.DecoderException e) {
             publicKeyHash = Address.addressToPublicKeyHash(hex);
         }
         if (publicKeyHash == null) {

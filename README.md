@@ -4,7 +4,7 @@ NexusChain 是一个**基于自研区块链的支付编排平台（Payment Orche
 
 > **定位**：区块链是底层结算基础设施，不是产品本身。产品价值在于统一支付 API、启发式路由与清结算。
 
-**当前版本**：v2.29.0（2026-08-23，覆盖率门禁提升+bridge异常处理规范化+前端测试框架与i18n国际化）
+**当前版本**：v2.30.0（2026-08-23，前端i18n文本替换+组件测试+覆盖率门禁提升+nexus-core异常处理规范化）
 
 ## 快速开始
 
@@ -145,18 +145,18 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
 
 ADR-001 状态：**Resolved**（2026-08-10）。
 
-## 最新改动摘要（v2.29.0，覆盖率+异常处理+前端基础设施）
+## 最新改动摘要（v2.30.0，前端i18n+组件测试+覆盖率门禁+nexus-core异常处理）
 
-本次发布聚焦覆盖率门禁提升、nexus-bridge 异常处理规范化和前端测试框架与 i18n 国际化基础设施：
+本次发布聚焦前端 i18n 文本替换、前端组件测试、覆盖率门禁提升和 nexus-core 异常处理规范化：
 
 | 改进项 | 范围 | 结果 |
 |--------|------|------|
-| 覆盖率门禁提升 | nexus-gateway | JaCoCo minimum 0.20→0.25 |
-| bridge异常处理规范化 | 12文件/30+处 | catch(Exception e)替换为具类型捕获（RuntimeException/IOException/JsonProcessingException/GeneralSecurityException/InterruptedException等），编译通过 |
-| 前端测试框架 | nexus-explorer/frontend | Vitest+jsdom+@testing-library/react 安装配置，7个测试通过 |
-| 前端i18n国际化 | nexus-explorer/frontend | react-i18next+i18next 集成，中英双语翻译文件，i18n测试通过 |
+| 前端i18n文本替换 | 7个页面 | HomePage/Settings/OrchestrationDashboard/BlockDetailPage/TxDetailPage/AddressPage 硬编码中文替换为 useTranslation() 调用 |
+| 前端组件测试 | 4个组件/57用例 | Button(15)+Card(14)+Modal(13)+Badge(15) 组件测试，总计63个测试全部通过 |
+| 覆盖率门禁提升 | nexus-gateway | JaCoCo minimum 0.25→0.30，当前覆盖率0.6528远超门禁 |
+| nexus-core异常处理规范化 | 约60文件/143处 | catch(Exception e)替换为具类型捕获（RuntimeException/IOException/JsonProcessingException/DecoderException/GeneralSecurityException/CryptoException等），编译通过 |
 
-详细变更见 [CHANGELOG](CHANGELOG.md) v2.29.0 节。
+详细变更见 [CHANGELOG](CHANGELOG.md) v2.30.0 节。
 
 ## 安全审计
 

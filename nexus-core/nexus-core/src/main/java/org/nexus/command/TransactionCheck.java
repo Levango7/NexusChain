@@ -194,7 +194,7 @@ public class TransactionCheck {
             Transaction transaction = Transaction.fromRPCBytes(transfer);
             apiResult.setData(transaction);
             return apiResult;
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             apiResult.setCode(5000);
             apiResult.setMessage("Exception error");
             return apiResult;
@@ -263,7 +263,7 @@ public class TransactionCheck {
             if (payload != null) {
                 return PayloadCheck(payload, type, transaction.amount, frompubhash, transaction.to, incubator);
             }
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             apiResult.setCode(5000);
             apiResult.setMessage("Exception error");
             return apiResult;
@@ -348,7 +348,7 @@ public class TransactionCheck {
                 apiResult.setMessage("The incubation amount is paid out");
                 return apiResult;
             }
-        } catch (Exception e) {
+        } catch (RuntimeException | java.io.IOException | org.apache.commons.codec.DecoderException e) {
             apiResult.setCode(5000);
             apiResult.setMessage("Exception error");
             return apiResult;
@@ -476,7 +476,7 @@ public class TransactionCheck {
                     return apiResult;
                 }
             }
-        } catch (Exception e) {
+        } catch (RuntimeException | java.io.IOException e) {
             apiResult.setCode(5000);
             apiResult.setMessage("Exception error");
             return apiResult;
@@ -576,11 +576,7 @@ public class TransactionCheck {
             apiResult.setCode(5000);
             apiResult.setMessage("Unable to withdraw");
             return apiResult;
-        }
-        if (account.getVote() < 0 || account.getVote() < amount) {
-            apiResult.setCode(5000);
-            apiResult.setMessage("The withdrawal amount is incorrect");
-            return apiResult;
+
         }
         apiResult.setCode(2000);
         apiResult.setMessage("SUCCESS");

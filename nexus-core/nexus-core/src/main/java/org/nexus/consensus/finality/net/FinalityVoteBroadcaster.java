@@ -72,7 +72,7 @@ public class FinalityVoteBroadcaster {
         for (VoteListener l : externalListeners) {
             try {
                 l.onOutgoingVote(vote, payload);
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 log.warn("Vote listener failed during broadcast: {}", e.getMessage());
             }
         }
@@ -97,7 +97,7 @@ public class FinalityVoteBroadcaster {
             peerServer.broadcast(msg);
             log.info("Finality vote broadcast over P2P: epoch={}, validator={}",
                     vote.getEpoch(), vote.getValidatorAddress());
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.warn("P2P vote broadcast failed: {}", e.getMessage());
         }
     }

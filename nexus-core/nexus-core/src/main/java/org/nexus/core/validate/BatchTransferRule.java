@@ -54,7 +54,7 @@ public class BatchTransferRule implements TransactionRule {
         List<TransferItem> items;
         try {
             items = BatchTransferPayload.parse(transaction.payload);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return Result.Error("BATCH_TRANSFER: failed to parse payload: " + e.getMessage());
         }
 

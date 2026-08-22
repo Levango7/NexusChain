@@ -100,7 +100,7 @@ public class StateSnapshotPersister {
             T result = mapper.readValue(json, typeRef);
             logger.info("Snapshot loaded: {}", path);
             return result;
-        } catch (Exception e) {
+        } catch (RuntimeException | java.io.IOException e) {
             logger.warn("Failed to load snapshot from {}, starting empty: {}", path, e.getMessage());
             return null;
         }
@@ -135,14 +135,14 @@ public class StateSnapshotPersister {
                 Files.move(tmp, path, StandardCopyOption.REPLACE_EXISTING);
             }
             logger.info("Snapshot saved: {}", path);
-        } catch (Exception e) {
+        } catch (RuntimeException | java.io.IOException e) {
             logger.warn("Failed to save snapshot to {}: {}", path, e.getMessage());
             // 清理可能残留的临时文件
             try {
                 if (Files.exists(tmp)) {
                     Files.deleteIfExists(tmp);
                 }
-            } catch (Exception ignored) {
+            } catch (RuntimeException | java.io.IOException ignored) {
                 // best-effort cleanup
             }
         }

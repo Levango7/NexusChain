@@ -148,7 +148,7 @@ public class BatchTransferService {
             return APIResult.newFailResult(APIResult.FAIL, "Validation failed: " + e.getMessage());
         } catch (CryptoException e) {
             return APIResult.newFailResult(APIResult.FAIL, "Signing failed: " + e.getMessage());
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return APIResult.newFailResult(APIResult.FAIL, "Failed to submit batch transfer: " + e.getMessage());
         }
     }
@@ -180,7 +180,7 @@ public class BatchTransferService {
             }
 
             return APIResult.newSuccess(statusInfo);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return APIResult.newFailResult(APIResult.FAIL, "Failed to query batch transfer status: " + e.getMessage());
         }
     }

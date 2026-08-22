@@ -328,7 +328,7 @@ public class PeerServer extends NexusChainGrpc.NexusChainImplBase {
             }
             try {
                 dialWithTTL(p, payload.getTtl() - 1, payload.getBody());
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 logger.error("parse body fail");
             }
         }

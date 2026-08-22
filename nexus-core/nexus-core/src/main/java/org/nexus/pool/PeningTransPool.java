@@ -46,7 +46,7 @@ public class PeningTransPool {
                 });
                 add(transPoolList);
             }
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             ptpool = new ConcurrentHashMap<>();
             ptnonce = new ConcurrentHashMap<>();
         }

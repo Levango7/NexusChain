@@ -130,7 +130,7 @@ public class ChannelUpdate {
             boolean valid1 = pk1.verify(messageHash, signature1);
             boolean valid2 = pk2.verify(messageHash, signature2);
             return valid1 && valid2;
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return false;
         }
     }

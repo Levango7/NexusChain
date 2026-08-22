@@ -119,7 +119,7 @@ public class Block {
         }
         try {
             return Hex.decodeHex(new MerkleTree(hashes).getRoot().getHash().toCharArray());
-        } catch (Exception e) {
+        } catch (RuntimeException | org.apache.commons.codec.DecoderException e) {
             logger.error("error occured when calculate merkle root");
         }
         return new byte[32];
@@ -133,7 +133,7 @@ public class Block {
         if (hashes.size() > 0) {
             try {
                 return Hex.decodeHex(new MerkleTree(hashes).getRoot().getHash().toCharArray());
-            } catch (Exception e) {
+            } catch (RuntimeException | org.apache.commons.codec.DecoderException e) {
                 logger.error("error occured when calculate merkle state");
             }
         }
@@ -148,7 +148,7 @@ public class Block {
         if (hashes.size() > 0) {
             try {
                 return Hex.decodeHex(new MerkleTree(hashes).getRoot().getHash().toCharArray());
-            } catch (Exception e) {
+            } catch (RuntimeException | org.apache.commons.codec.DecoderException e) {
                 logger.error("error occured when calculate merkle incubate");
             }
         }

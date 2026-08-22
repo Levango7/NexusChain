@@ -37,7 +37,7 @@ public class AdoptTransPool {
                 });
                 add(list);
             }
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             atpool = new ConcurrentHashMap<>();
         }
     }

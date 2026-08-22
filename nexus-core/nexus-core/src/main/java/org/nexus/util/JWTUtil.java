@@ -75,7 +75,7 @@ public class JWTUtil {
 //            System.out.println("Subject: " + claims.getSubject());
 //            System.out.println("Issuer: " + claims.getIssuer());
 //            System.out.println("Expiration: " + claims.getExpiration());
-        }catch (Exception e){
+        }catch (RuntimeException e){
             return false;
         }
         return true;

@@ -63,7 +63,7 @@ public class ProposalDepositService {
         }
         try {
             stakingService.unstake(proposer, amount);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             logger.warn("Lock deposit rejected: unstake failed for proposer {}", proposer, e);
             return false;
         }
@@ -87,7 +87,7 @@ public class ProposalDepositService {
         }
         try {
             stakingService.stake(record.proposer, record.amount);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             logger.warn("Refund failed: stake failed for proposer {}", record.proposer, e);
             return false;
         }

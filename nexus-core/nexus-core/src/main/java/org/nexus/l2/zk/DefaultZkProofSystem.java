@@ -155,7 +155,7 @@ public class DefaultZkProofSystem implements ZkProofSystem {
                 logger.info("DefaultZkProofSystem prove (REMOTE REAL): circuit={} fingerprint={} proofSize={}",
                         circuit.getCircuitId(), result[0], proof.size());
                 return proof;
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 logger.error("DefaultZkProofSystem prove REMOTE FAILED (fail-closed): {}", e.getMessage());
                 throw new IllegalStateException("ZK remote prove failed: " + e.getMessage(), e);
             }
@@ -172,7 +172,7 @@ public class DefaultZkProofSystem implements ZkProofSystem {
                 logger.info("DefaultZkProofSystem prove (groth16): circuit={} proofSize={}",
                         circuit.getCircuitId(), proof.size());
                 return proof;
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 logger.warn("DefaultZkProofSystem groth16 prove failed, fallback to mock: {}",
                         e.getMessage());
                 // 降级为占位证明
@@ -218,7 +218,7 @@ public class DefaultZkProofSystem implements ZkProofSystem {
                 logger.info("DefaultZkProofSystem verify (groth16): circuit={} -> {}",
                         proof.getCircuitId(), valid);
                 return valid;
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 logger.warn("DefaultZkProofSystem groth16 verify failed: {}", e.getMessage());
                 return false;
             }

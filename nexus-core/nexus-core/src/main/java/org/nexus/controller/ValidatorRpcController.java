@@ -49,7 +49,7 @@ public class ValidatorRpcController {
             return ok
                     ? result(2000, "validator registered", data)
                     : result(4002, "register failed (invalid stake / full set / duplicate)", data);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.error("Validator register failed: address={}, error={}",
                     req == null ? null : req.address(), e.getMessage(), e);
             return result(5001, "register error: " + e.getMessage(), null);
@@ -73,7 +73,7 @@ public class ValidatorRpcController {
             return ok
                     ? result(2000, "validator unregistered", data)
                     : result(4002, "validator not found", data);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.error("Validator unregister failed: address={}, error={}",
                     req == null ? null : req.address(), e.getMessage(), e);
             return result(5001, "unregister error: " + e.getMessage(), null);

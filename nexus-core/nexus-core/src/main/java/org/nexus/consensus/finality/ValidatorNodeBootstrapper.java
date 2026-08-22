@@ -145,7 +145,7 @@ public class ValidatorNodeBootstrapper implements ApplicationListener<Applicatio
                     .build();
             peerServer.broadcast(msg);
             log.info("Validator-set broadcast sent: {} bytes", payload.length);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.warn("Validator-set broadcast failed: {}", e.getMessage());
         }
     }

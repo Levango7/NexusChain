@@ -172,7 +172,7 @@ public class BridgeService {
             return APIResult.newFailResult(APIResult.FAIL, "Lock validation failed: " + e.getMessage());
         } catch (CryptoException e) {
             return APIResult.newFailResult(APIResult.FAIL, "Signing failed: " + e.getMessage());
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return APIResult.newFailResult(APIResult.FAIL, "Failed to lock assets: " + e.getMessage());
         }
     }
@@ -248,7 +248,7 @@ public class BridgeService {
                             "recipient must be pubkey (64 hex) or pubkeyHash (40 hex), got "
                                     + recipientBytes.length + " bytes");
                 }
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 return APIResult.newFailResult(APIResult.FAIL, "invalid recipient hex: " + e.getMessage());
             }
             byte[] emptySig = new byte[Transaction.SIGNATURE_SIZE];
@@ -275,7 +275,7 @@ public class BridgeService {
             data.put("txHash", tx.getHashHexString());
 
             return APIResult.newSuccess(data);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return APIResult.newFailResult(APIResult.FAIL, "Failed to mint bridge assets: " + e.getMessage());
         }
     }
@@ -354,7 +354,7 @@ public class BridgeService {
             return APIResult.newFailResult(APIResult.FAIL, "Invalid hex format: " + e.getMessage());
         } catch (CryptoException e) {
             return APIResult.newFailResult(APIResult.FAIL, "Signing failed: " + e.getMessage());
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return APIResult.newFailResult(APIResult.FAIL, "Failed to burn bridge assets: " + e.getMessage());
         }
     }
@@ -380,7 +380,7 @@ public class BridgeService {
             bridgeTx.setState(BridgeTransaction.State.LOCKED);
 
             return APIResult.newSuccess(bridgeTx);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return APIResult.newFailResult(APIResult.FAIL, "Failed to query bridge status: " + e.getMessage());
         }
     }
@@ -405,7 +405,7 @@ public class BridgeService {
             limitInfo.put("dailyRemaining", dailyLimit);
 
             return APIResult.newSuccess(limitInfo);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return APIResult.newFailResult(APIResult.FAIL, "Failed to query bridge limits: " + e.getMessage());
         }
     }

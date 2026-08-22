@@ -69,7 +69,7 @@ public class MineThread {
             if (block.nTime <= parentBlockTimeStamp) {
                 try {
                     Thread.sleep(1000);
-                } catch (Exception e) {
+                } catch (InterruptedException e) {
 
                 }
                 continue;

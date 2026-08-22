@@ -159,7 +159,7 @@ public class PosConsensusEngine implements PosConsensus {
             this.signingKeyPair = new KeyPair(publicKey, privateKey);
             logger.info("PosConsensusEngine: applied configured validator key (public={})",
                     Hex.encodeHexString(publicKey));
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             logger.warn("validator-private-key parse failed, keeping random key: {}", e.getMessage());
         }
     }
@@ -243,7 +243,7 @@ public class PosConsensusEngine implements PosConsensus {
                 if (stateDB != null && block.nHeight > 0) {
                     stateDB.writeBlock(block);
                 }
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 logger.warn("Local adoption failed at height {}: {}", height, e.getMessage());
             }
 
@@ -254,7 +254,7 @@ public class PosConsensusEngine implements PosConsensus {
             logger.info("Block proposed at height {} hash={} by proposer {}",
                     height, block.getHashHexString(), selected.getAddress());
             return block;
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             logger.error("Propose failed at height {}: {}", height, e.getMessage(), e);
             return null;
         }
@@ -433,7 +433,7 @@ public class PosConsensusEngine implements PosConsensus {
         List<Transaction> packed;
         try {
             packed = packageMiner.TransferCheck(parent.getHash(), height, block);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             logger.warn("PackageMiner.TransferCheck failed at height {}: {}", height, e.getMessage());
             packed = new ArrayList<>();
         }
@@ -464,7 +464,7 @@ public class PosConsensusEngine implements PosConsensus {
         // 提案者 address → pubkeyHash
         try {
             tx.to = org.nexus.keystore.wallet.KeystoreAction.addressToPubkeyHash(proposer.getAddress());
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             logger.warn("Failed to convert proposer address to pubkeyHash: {}", e.getMessage());
             tx.to = new byte[Transaction.PUBLIC_KEY_HASH_SIZE];
         }
@@ -512,7 +512,7 @@ public class PosConsensusEngine implements PosConsensus {
                     Hex.encodeHexString(block.nNonce),
                     Hex.encodeHexString(block.blockNotice));
             return true;
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             logger.error("Sign block failed at height {}: {}", block.nHeight, e.getMessage(), e);
             return false;
         }
@@ -529,7 +529,7 @@ public class PosConsensusEngine implements PosConsensus {
         try {
             applicationContext.publishEvent(new NewBlockMinedEvent(this, block));
             logger.debug("Block broadcast event published at height {}", block.nHeight);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             logger.error("Broadcast block failed at height {}: {}", block.nHeight, e.getMessage(), e);
         }
     }
@@ -567,7 +567,7 @@ public class PosConsensusEngine implements PosConsensus {
                 if (pubKeyHashHex.equals(Hex.encodeHexString(vPubKeyHash))) {
                     return v;
                 }
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 // ignore conversion errors
             }
         }
@@ -646,7 +646,7 @@ public class PosConsensusEngine implements PosConsensus {
                         block.nHeight);
             }
             return valid;
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             // fail-closed：验签异常直接拒绝
             logger.warn("Signature check failed (fail-closed): verification exception at height {}: {}",
                     block.nHeight, e.getMessage());

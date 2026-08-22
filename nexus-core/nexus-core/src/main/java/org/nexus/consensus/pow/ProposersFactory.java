@@ -82,7 +82,7 @@ public class ProposersFactory extends EraLinkedStateFactory<ProposersState> {
             try {
                 URI uri = new URI(v);
                 return Hex.encodeHexString(KeystoreAction.addressToPubkeyHash(uri.getRawUserInfo()));
-            } catch (Exception e) {
+            } catch (RuntimeException | java.net.URISyntaxException e) {
                 e.printStackTrace();
             }
             return null;

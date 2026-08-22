@@ -310,7 +310,7 @@ public class Fifo implements ApplicationRunner, ApplicationListener<Fifo.FifoMes
             if (tx != null) {
                 return new String(encodeDecoder.encodeTransaction(tx));
             }
-        } catch (Exception e) {
+        } catch (RuntimeException | org.apache.commons.codec.DecoderException e) {
             return InvalidParams;
         }
         return "";
@@ -338,7 +338,7 @@ public class Fifo implements ApplicationRunner, ApplicationListener<Fifo.FifoMes
                 jsonObject.put("message", "confirmed");
             }
             return jsonObject.toString();
-        } catch (Exception e) {
+        } catch (RuntimeException | org.apache.commons.codec.DecoderException e) {
             return InvalidParams;
         }
     }
@@ -351,7 +351,7 @@ public class Fifo implements ApplicationRunner, ApplicationListener<Fifo.FifoMes
             jsonObject.put("blockHash", Hex.encodeHexString(tx.blockHash));
             jsonObject.put("height", tx.height);
             return jsonObject.toString();
-        } catch (Exception e) {
+        } catch (RuntimeException | org.apache.commons.codec.DecoderException e) {
             return InvalidParams;
         }
     }

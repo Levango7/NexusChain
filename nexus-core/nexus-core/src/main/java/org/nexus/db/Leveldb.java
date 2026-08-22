@@ -98,7 +98,7 @@ public final class Leveldb {
         lock.writeLock().lock();
         try {
             current.put(key, value);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.error("LevelDB write failed", e);
             throw new RuntimeException("LevelDB write error", e);
         } finally {
@@ -114,7 +114,7 @@ public final class Leveldb {
         lock.readLock().lock();
         try {
             return current.get(key);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.error("LevelDB read failed", e);
             throw new RuntimeException("LevelDB read error", e);
         } finally {

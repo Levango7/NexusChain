@@ -53,7 +53,7 @@ public class Secp256k1BlsPublicKey implements BlsPublicKey {
         try {
             ECPoint point = Secp256k1BlsSigner.decodePoint(compressed);
             return new Secp256k1BlsPublicKey(point);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             throw new IllegalArgumentException("Invalid public key bytes", e);
         }
     }

@@ -98,7 +98,7 @@ public class GRPCClient {
                         .sslContext(sslContext)
                         .negotiationType(NegotiationType.TLS)
                         .build();
-            } catch (Exception e) {
+            } catch (RuntimeException | java.io.IOException e) {
                 throw new RuntimeException("Failed to build gRPC TLS channel: " + e.getMessage(), e);
             }
         } else {
@@ -190,7 +190,7 @@ public class GRPCClient {
                 .supplyAsync(() -> {
                     try{
                         return stub.entry(msg);
-                    }catch (Exception e){
+                    }catch (RuntimeException e){
                         throw new RuntimeException(e.getMessage());
                     } finally {
                         ch.shutdown();

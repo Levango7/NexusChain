@@ -144,7 +144,7 @@ public class TimelockController {
             queue.remove(txId);
             logger.info("Timelock executed {}", txId);
             return true;
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             logger.error("Timelock execution failed for {}", txId, e);
             return false;
         }

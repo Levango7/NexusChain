@@ -55,7 +55,7 @@ public final class JsonUtils {
     public static String toJson(Object value) {
         try {
             return MAPPER.writeValueAsString(value);
-        } catch (Exception e) {
+        } catch (RuntimeException | com.fasterxml.jackson.core.JsonProcessingException e) {
             logger.error("Failed to serialize object to JSON", e);
             throw new RuntimeException("JSON serialization failed", e);
         }
@@ -64,7 +64,7 @@ public final class JsonUtils {
     public static String toJsonPretty(Object value) {
         try {
             return MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(value);
-        } catch (Exception e) {
+        } catch (RuntimeException | com.fasterxml.jackson.core.JsonProcessingException e) {
             logger.error("Failed to serialize object to pretty JSON", e);
             throw new RuntimeException("JSON serialization failed", e);
         }
@@ -73,7 +73,7 @@ public final class JsonUtils {
     public static <T> T fromJson(String json, Class<T> type) {
         try {
             return MAPPER.readValue(json, type);
-        } catch (Exception e) {
+        } catch (RuntimeException | com.fasterxml.jackson.core.JsonProcessingException e) {
             logger.error("Failed to deserialize JSON to {}", type.getName(), e);
             throw new RuntimeException("JSON deserialization failed", e);
         }
@@ -82,7 +82,7 @@ public final class JsonUtils {
     public static <T> T fromJson(String json, TypeReference<T> typeRef) {
         try {
             return MAPPER.readValue(json, typeRef);
-        } catch (Exception e) {
+        } catch (RuntimeException | com.fasterxml.jackson.core.JsonProcessingException e) {
             logger.error("Failed to deserialize JSON", e);
             throw new RuntimeException("JSON deserialization failed", e);
         }
@@ -92,7 +92,7 @@ public final class JsonUtils {
         try {
             return MAPPER.readValue(json,
                     MAPPER.getTypeFactory().constructCollectionType(List.class, elementType));
-        } catch (Exception e) {
+        } catch (RuntimeException | com.fasterxml.jackson.core.JsonProcessingException e) {
             logger.error("Failed to deserialize JSON array to {}", elementType.getName(), e);
             throw new RuntimeException("JSON deserialization failed", e);
         }
@@ -101,7 +101,7 @@ public final class JsonUtils {
     public static JsonNode readTree(String json) {
         try {
             return MAPPER.readTree(json);
-        } catch (Exception e) {
+        } catch (RuntimeException | com.fasterxml.jackson.core.JsonProcessingException e) {
             logger.error("Failed to parse JSON tree", e);
             throw new RuntimeException("JSON parse failed", e);
         }

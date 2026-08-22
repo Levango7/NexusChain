@@ -195,7 +195,7 @@ public class PoolController {
             byte[] pubkeyhash=KeystoreAction.addressToPubkeyHash(address);
             PendingNonce pendingNonce=peningTransPool.findptnonce(Hex.encodeHexString(pubkeyhash));
             return APIResult.newFailResult(2000,"SUCCESS",pendingNonce);
-        }catch (Exception e){
+        }catch (RuntimeException e){
             return APIResult.newFailResult(5000,"Address error");
         }
     }
@@ -238,7 +238,7 @@ public class PoolController {
             PendingNonce pendingNonce=new PendingNonce(nonce,state);
             peningTransPool.updatePtNone(Hex.encodeHexString(pubkeyhash),pendingNonce);
             return APIResult.newFailResult(2000,"SUCCESS");
-        }catch (Exception e){
+        }catch (RuntimeException | org.apache.commons.codec.DecoderException e){
             return APIResult.newFailResult(5000,"Address error");
         }
     }

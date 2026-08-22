@@ -4,6 +4,51 @@
 
 ## [Unreleased]
 
+## [2.30.0] - 2026-08-23
+
+### 前端i18n文本替换 + 组件测试 + 覆盖率门禁提升 + nexus-core异常处理规范化
+
+本次发布聚焦前端 i18n 文本替换、前端组件测试、覆盖率门禁提升和 nexus-core 异常处理规范化。
+
+#### Changed（前端i18n文本替换）
+
+- **7个页面硬编码中文替换为 useTranslation() 调用**：
+  - `HomePage.tsx`、`Settings.tsx`、`OrchestrationDashboard.tsx`、`BlockDetailPage.tsx`、`TxDetailPage.tsx`、`AddressPage.tsx`
+  - 所有硬编码中文字符串替换为 `t('namespace.key')` 调用
+  - `zh.json`/`en.json` 翻译文件大幅扩展，覆盖 common/home/settings/orchestration/block/tx/address 命名空间
+  - 前端 TypeScript 编译通过，vite build 成功
+
+#### Added（前端组件测试）
+
+- **4个UI组件测试创建**：
+  - `Button.test.tsx`（15用例）：渲染/props/点击事件/禁用状态/加载状态/变体样式
+  - `Card.test.tsx`（14用例）：渲染/标题/内容/子组件/样式类名
+  - `Modal.test.tsx`（13用例）：渲染/打开关闭/点击遮罩/ESC键/内容显示
+  - `Badge.test.tsx`（15用例）：渲染/文本/颜色变体/大小/自定义样式
+- **test-utils.tsx**：封装 render/screen/cleanup 测试工具
+- **总计63个测试全部通过**（6个测试文件）
+
+#### Changed（覆盖率门禁提升）
+
+- **nexus-gateway JaCoCo 覆盖率门禁 0.25 → 0.30**：当前 BUNDLE 级别 INSTRUCTION 覆盖率 = 0.6528，远高于 0.30 门禁，jacocoTestCoverageVerification 验证通过。
+
+#### Fixed（nexus-core异常处理规范化）
+
+- **nexus-core 异常处理规范化（约60文件/143处）**：将 `catch (Exception e)` 通配异常捕获替换为具类型捕获：
+  - `AccountDB.java`（24处）→ `catch (RuntimeException e)`
+  - `IncubatorDB.java`（7处）→ `catch (RuntimeException e)`
+  - `Address.java`/`Block.java` → `catch (RuntimeException | DecoderException e)`（Hex.decodeHex 抛出 DecoderException）
+  - `TransactionCheck.java`（4处）→ 含 IOException/DecoderException multi-catch
+  - `JSONEncodeDecoder.java`（4处）→ 含 JsonProcessingException/DecoderException
+  - `Groth16ProofSystem.java`（3处）→ `catch (RuntimeException | IOException | InterruptedException e)`
+  - `StateSnapshotPersister.java`（3处）→ `catch (RuntimeException | IOException e)`
+  - `Ed25519PrivateKey.java`（1处）→ `catch (RuntimeException | GeneralSecurityException | CryptoException e)`
+  - `Curve25519ECDH.java`（2处）→ `catch (RuntimeException | GeneralSecurityException e)`
+  - `SerializableUtil.java`（2处）→ `catch (RuntimeException | IOException e)`
+  - `PaymentRpcController.java`（4处）、`StableCoinService.java`（4处）、`GovernanceExecutor.java`（4处）、`ChicoryWasmEngine.java`（4处）等约35个其他文件
+  - **保留 catch(Exception e) 的文件**：`OnChainGovernanceClient.java`（13处）、`Web3jL1ContractClient.java`（15处）、`Monad.java`（7处，函数式接口 throws Exception）、`KeystoreAction.java`（2处，decrypt 声明 throws Exception）、`PeersManager.java`/`GRPCTestTool.java`（Peer.parse 声明 throws Exception）、`PosMiningScheduler.java`（@Scheduled 入口点）、`StateDB.java`（applyTransaction 声明 throws Exception）
+  - 全量编译验证通过
+
 ## [2.29.0] - 2026-08-23
 
 ### 覆盖率门禁提升 + bridge异常处理规范化 + 前端测试框架与i18n国际化

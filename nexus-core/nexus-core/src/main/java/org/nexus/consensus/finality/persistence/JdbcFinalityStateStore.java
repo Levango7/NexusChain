@@ -66,7 +66,7 @@ public class JdbcFinalityStateStore implements FinalityStateStore {
             });
             log.info("JdbcFinalityStateStore: reloaded {} vote records, {} finalized checkpoints",
                     voteCache.size(), finalizedCache.size());
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.error("JdbcFinalityStateStore.reload failed: {}", e.getMessage());
         }
     }

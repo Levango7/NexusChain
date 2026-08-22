@@ -72,7 +72,7 @@ public class JSONEncodeDecoder implements CoreTypesEncoder, CoreTypesDecoder {
             }
             try {
                 return Hex.decodeHex(encoded.toCharArray());
-            } catch (Exception e) {
+            } catch (RuntimeException | org.apache.commons.codec.DecoderException e) {
                 throw new IOException("invalid hex encoding");
             }
         }
@@ -85,7 +85,7 @@ public class JSONEncodeDecoder implements CoreTypesEncoder, CoreTypesDecoder {
             module.addSerializer(byte[].class, new BytesSerializer());
             mapper.registerModule(module);
             return mapper.writeValueAsBytes(object);
-        } catch (Exception e) {
+        } catch (RuntimeException | com.fasterxml.jackson.core.JsonProcessingException e) {
             e.printStackTrace();
         }
         return null;
@@ -102,7 +102,7 @@ public class JSONEncodeDecoder implements CoreTypesEncoder, CoreTypesDecoder {
             mapper.registerModule(module);
             mapper.enable(JsonParser.Feature.ALLOW_COMMENTS);
             return mapper.readValue(encoded, valueType);
-        } catch (Exception e) {
+        } catch (RuntimeException | java.io.IOException e) {
             e.printStackTrace();
             return null;
         }
@@ -158,7 +158,7 @@ public class JSONEncodeDecoder implements CoreTypesEncoder, CoreTypesDecoder {
             for (String s : tmp) {
                 res.add(Hex.decodeHex(s.toCharArray()));
             }
-        } catch (Exception e) {
+        } catch (RuntimeException | org.apache.commons.codec.DecoderException e) {
             e.printStackTrace();
         }
         return res;

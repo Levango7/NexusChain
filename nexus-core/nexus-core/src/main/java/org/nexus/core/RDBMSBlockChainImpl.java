@@ -69,7 +69,7 @@ public class RDBMSBlockChainImpl implements NexusChainBlockChain {
         Resource resource;
         try {
             resource = new ClassPathResource(ddl);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             resource = new FileSystemResource(ddl);
         }
         assert resource.exists();
@@ -352,7 +352,7 @@ public class RDBMSBlockChainImpl implements NexusChainBlockChain {
             try {
                 writeHeader(block);
                 writeBody(block);
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 e.printStackTrace();
                 status.setRollbackOnly();
                 e.printStackTrace();
@@ -430,7 +430,7 @@ public class RDBMSBlockChainImpl implements NexusChainBlockChain {
                 return null;
             }
             return getCanonicalBlock(height);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return genesis;
         }
     }

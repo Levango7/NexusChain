@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { ArrowLeft, ChevronLeft, ChevronRight } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { api } from "../api/client";
 import type { BlockInfo } from "../types";
 import { Loading } from "../components/ui";
@@ -15,6 +16,7 @@ import { Loading } from "../components/ui";
  *   - 间距 / 圆角 / 字体统一 token
  */
 const BlockDetailPage: React.FC = () => {
+  const { t } = useTranslation();
   const { height } = useParams<{ height: string }>();
   const navigate = useNavigate();
   const [block, setBlock] = useState<BlockInfo | null>(null);
@@ -27,17 +29,17 @@ const BlockDetailPage: React.FC = () => {
         const data = await api.getBlock(Number(height));
         setBlock(data);
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Block not found");
+        setError(err instanceof Error ? err.message : t("block.notFound"));
       } finally {
         setLoading(false);
       }
     })();
-  }, [height]);
+  }, [height, t]);
 
   if (loading)
     return (
       <div className="min-h-screen bg-bg flex items-center justify-center">
-        <Loading label={`Loading block #${height}...`} />
+        <Loading label={t("block.loadingBlock", { height })} />
       </div>
     );
   if (error)
@@ -50,19 +52,19 @@ const BlockDetailPage: React.FC = () => {
 
   const rows: [string, React.ReactNode][] = [
     [
-      "Height",
+      t("block.height"),
       <span className="font-mono text-accent">{block.height}</span>,
     ],
-    ["Hash", <code className="break-all text-xs text-fg">{block.hash}</code>],
+    [t("block.hash"), <code className="break-all text-xs text-fg">{block.hash}</code>],
     [
-      "Parent Hash",
+      t("block.parentHash"),
       <code className="break-all text-xs text-muted">{block.parentHash}</code>,
     ],
-    ["Proposer", <code className="text-xs text-fg">{block.proposer}</code>],
-    ["Timestamp", new Date(block.timestamp * 1000).toLocaleString()],
-    ["Transactions", `${block.txCount}`],
-    ["Size", `${block.size} bytes`],
-    ["Difficulty", `${block.difficulty}`],
+    [t("block.proposer"), <code className="text-xs text-fg">{block.proposer}</code>],
+    [t("block.timestamp"), new Date(block.timestamp * 1000).toLocaleString()],
+    [t("block.transactions"), `${block.txCount}`],
+    [t("block.size"), `${block.size} ${t("block.bytes")}`],
+    [t("block.difficulty"), `${block.difficulty}`],
   ];
 
   return (
@@ -74,10 +76,10 @@ const BlockDetailPage: React.FC = () => {
             className="flex items-center gap-1 text-accent hover:text-accent-hover text-sm transition-colors duration-base ease-standard focus:outline-none focus-visible:shadow-focus"
           >
             <ArrowLeft size={14} />
-            Back
+            {t("block.back")}
           </Link>
           <h1 className="text-sm font-semibold text-fg-2">
-            Block <span className="text-accent font-mono">#{block.height}</span>
+            {t("block.title")} <span className="text-accent font-mono">#{block.height}</span>
           </h1>
         </div>
       </header>
@@ -96,18 +98,18 @@ const BlockDetailPage: React.FC = () => {
         <div className="mt-4 flex gap-2">
           <button
             onClick={() => navigate(`/block/${block.height - 1}`)}
-            aria-label="上一个区块"
+            aria-label={t("block.prevBlock")}
             className="inline-flex items-center gap-1 text-xs px-3 py-1.5 bg-surface-2 border border-border rounded-sm text-fg-2 hover:border-accent hover:text-accent transition-colors duration-base ease-standard focus:outline-none focus-visible:shadow-focus"
           >
             <ChevronLeft size={14} />
-            Prev
+            {t("block.prev")}
           </button>
           <button
             onClick={() => navigate(`/block/${block.height + 1}`)}
-            aria-label="下一个区块"
+            aria-label={t("block.nextBlock")}
             className="inline-flex items-center gap-1 text-xs px-3 py-1.5 bg-surface-2 border border-border rounded-sm text-fg-2 hover:border-accent hover:text-accent transition-colors duration-base ease-standard focus:outline-none focus-visible:shadow-focus"
           >
-            Next
+            {t("block.next")}
             <ChevronRight size={14} />
           </button>
         </div>

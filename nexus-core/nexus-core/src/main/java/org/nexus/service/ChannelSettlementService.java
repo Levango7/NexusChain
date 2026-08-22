@@ -215,7 +215,7 @@ public class ChannelSettlementService {
         } catch (IllegalArgumentException | IllegalStateException e) {
             return APIResult.newFailResult(APIResult.FAIL,
                     "Failed to cooperative close: " + e.getMessage());
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return APIResult.newFailResult(APIResult.FAIL,
                     "Failed to cooperative close: " + e.getMessage());
         }
@@ -304,7 +304,7 @@ public class ChannelSettlementService {
         } catch (IllegalArgumentException | IllegalStateException e) {
             return APIResult.newFailResult(APIResult.FAIL,
                     "Failed to unilateral close: " + e.getMessage());
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return APIResult.newFailResult(APIResult.FAIL,
                     "Failed to unilateral close: " + e.getMessage());
         }
@@ -375,7 +375,7 @@ public class ChannelSettlementService {
         } catch (IllegalArgumentException | IllegalStateException e) {
             return APIResult.newFailResult(APIResult.FAIL,
                     "Failed to settle channel: " + e.getMessage());
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return APIResult.newFailResult(APIResult.FAIL,
                     "Failed to settle channel: " + e.getMessage());
         }
@@ -514,7 +514,7 @@ public class ChannelSettlementService {
             }
 
             return APIResult.newSuccess(data);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return APIResult.newFailResult(APIResult.FAIL,
                     "Failed to query settlement status: " + e.getMessage());
         }
@@ -586,7 +586,7 @@ public class ChannelSettlementService {
         } catch (IllegalArgumentException | IllegalStateException e) {
             return APIResult.newFailResult(APIResult.FAIL,
                     "Failed to force expire channel: " + e.getMessage());
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return APIResult.newFailResult(APIResult.FAIL,
                     "Failed to force expire channel: " + e.getMessage());
         }
@@ -608,7 +608,7 @@ public class ChannelSettlementService {
             }
             Block best = stateDB.getBestBlock();
             return best != null ? best.getnHeight() : 0L;
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return 0L;
         }
     }

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { ArrowLeft, Eye, EyeOff, CheckCircle2, AlertCircle, Trash2 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { useAuth } from "../auth/useAuth";
 import { Button, Card } from "../components/ui";
 
@@ -23,6 +24,7 @@ import { Button, Card } from "../components/ui";
  *   - 图标统一 lucide-react
  */
 const Settings: React.FC = () => {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const { apiKey, apiSecret, isAuthenticated, setCredentials, clearCredentials } = useAuth();
 
@@ -51,19 +53,19 @@ const Settings: React.FC = () => {
       const finalSecret = isPlaceholder ? apiSecret : secretInput.trim();
 
       if (!trimmedKey) {
-        setError("API Key 不能为空");
+        setError(t("settings.errKeyEmpty"));
         return;
       }
       if (!finalSecret) {
-        setError("API Secret 不能为空");
+        setError(t("settings.errSecretEmpty"));
         return;
       }
       if (trimmedKey.length < 8) {
-        setError("API Key 长度至少 8 字符");
+        setError(t("settings.errKeyLength"));
         return;
       }
       if (finalSecret.length < 16) {
-        setError("API Secret 长度至少 16 字符（HMAC-SHA256 安全要求）");
+        setError(t("settings.errSecretLength"));
         return;
       }
 
@@ -73,7 +75,7 @@ const Settings: React.FC = () => {
         // 3 秒后清除成功提示
         window.setTimeout(() => setSaved(false), 3000);
       } catch (err) {
-        setError(err instanceof Error ? err.message : "保存凭证失败");
+        setError(err instanceof Error ? err.message : t("settings.errSaveFailed"));
       }
     },
     [keyInput, secretInput, apiSecret, setCredentials],
@@ -103,9 +105,9 @@ const Settings: React.FC = () => {
             className="flex items-center gap-1 text-accent hover:text-accent-hover text-sm transition-colors duration-base ease-standard focus:outline-none focus-visible:shadow-focus"
           >
             <ArrowLeft size={14} />
-            Back
+            {t("settings.back")}
           </Link>
-          <h1 className="text-sm font-semibold text-fg-2">Settings</h1>
+          <h1 className="text-sm font-semibold text-fg-2">{t("settings.title")}</h1>
         </div>
       </header>
 
@@ -114,28 +116,28 @@ const Settings: React.FC = () => {
         <Card>
           <div className="flex items-center justify-between">
             <div>
-              <h2 className="text-base font-semibold text-fg">认证状态</h2>
+              <h2 className="text-base font-semibold text-fg">{t("settings.authStatus")}</h2>
               <p className="text-xs text-muted mt-1">
                 {isAuthenticated
-                  ? "已配置 API 凭证，可访问需认证接口"
-                  : "未配置 API 凭证，仅可访问公开浏览器接口"}
+                  ? t("settings.authConfigured")
+                  : t("settings.authNotConfigured")}
               </p>
             </div>
             {isAuthenticated ? (
               <span className="flex items-center gap-1.5 text-success text-sm">
                 <CheckCircle2 size={16} />
-                已认证
+                {t("settings.authenticated")}
               </span>
             ) : (
               <span className="flex items-center gap-1.5 text-muted text-sm">
                 <AlertCircle size={16} />
-                未认证
+                {t("settings.notAuthenticated")}
               </span>
             )}
           </div>
           {apiKey && (
             <div className="mt-4 pt-4 border-t border-border-soft">
-              <div className="text-xs text-muted">当前 API Key</div>
+              <div className="text-xs text-muted">{t("settings.currentApiKey")}</div>
               <code className="text-sm text-fg font-mono break-all">{apiKey}</code>
             </div>
           )}
@@ -143,9 +145,9 @@ const Settings: React.FC = () => {
 
         {/* 凭证输入表单 */}
         <Card>
-          <h2 className="text-base font-semibold text-fg mb-1">API 凭证配置</h2>
+          <h2 className="text-base font-semibold text-fg mb-1">{t("settings.credentialConfig")}</h2>
           <p className="text-xs text-muted mb-4">
-            凭证将持久化到浏览器 localStorage（Secret 经编码存储），仅用于 HMAC-SHA256 请求签名。
+            {t("settings.credentialHint")}
           </p>
 
           <form onSubmit={handleSave} className="space-y-4">
@@ -155,20 +157,20 @@ const Settings: React.FC = () => {
                 htmlFor="api-key"
                 className="block text-xs font-medium text-fg-2 mb-1.5"
               >
-                API Key
+                {t("settings.apiKeyLabel")}
               </label>
               <input
                 id="api-key"
                 type="text"
                 value={keyInput}
                 onChange={(e) => setKeyInput(e.target.value)}
-                placeholder="请输入商户 API Key"
+                placeholder={t("settings.apiKeyPlaceholder")}
                 autoComplete="off"
                 spellCheck={false}
                 className="w-full bg-surface border border-border rounded-md px-3 py-2 text-sm text-fg placeholder-muted focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent/30 transition-colors duration-base ease-standard font-mono"
               />
               <p className="text-xs text-muted mt-1">
-                对应 HTTP 头 <code className="text-fg-2">X-NexusChain-ApiKey</code>
+                {t("settings.apiKeyHeader")}
               </p>
             </div>
 
@@ -178,7 +180,7 @@ const Settings: React.FC = () => {
                 htmlFor="api-secret"
                 className="block text-xs font-medium text-fg-2 mb-1.5"
               >
-                API Secret
+                {t("settings.apiSecretLabel")}
               </label>
               <div className="relative">
                 <input
@@ -187,7 +189,7 @@ const Settings: React.FC = () => {
                   value={secretInput}
                   onChange={(e) => setSecretInput(e.target.value)}
                   onFocus={handleSecretFocus}
-                  placeholder="请输入商户 API Secret（HMAC 签名密钥）"
+                  placeholder={t("settings.apiSecretPlaceholder")}
                   autoComplete="off"
                   spellCheck={false}
                   className="w-full bg-surface border border-border rounded-md px-3 py-2 pr-10 text-sm text-fg placeholder-muted focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent/30 transition-colors duration-base ease-standard font-mono"
@@ -195,14 +197,14 @@ const Settings: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setShowSecret((v) => !v)}
-                  aria-label={showSecret ? "隐藏 secret" : "显示 secret"}
+                  aria-label={showSecret ? t("settings.hideSecret") : t("settings.showSecret")}
                   className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted hover:text-accent transition-colors duration-base ease-standard focus:outline-none focus-visible:shadow-focus"
                 >
                   {showSecret ? <EyeOff size={16} /> : <Eye size={16} />}
                 </button>
               </div>
               <p className="text-xs text-muted mt-1">
-                用于 HMAC-SHA256 请求签名，<strong className="text-fg-2">不会</strong>以明文传输。
+                {t("settings.secretHint")}
               </p>
             </div>
 
@@ -224,14 +226,14 @@ const Settings: React.FC = () => {
                 className="flex items-center gap-2 text-sm text-success bg-surface-2 border border-success/30 rounded-md px-3 py-2"
               >
                 <CheckCircle2 size={16} />
-                凭证已保存
+                {t("settings.credentialSaved")}
               </div>
             )}
 
             {/* 操作按钮 */}
             <div className="flex items-center gap-3 pt-2">
               <Button type="submit" variant="primary" size="md">
-                保存凭证
+                {t("settings.save")}
               </Button>
               <Button
                 type="button"
@@ -241,7 +243,7 @@ const Settings: React.FC = () => {
                 disabled={!isAuthenticated && !keyInput && !secretInput}
                 leadingIcon={<Trash2 size={14} />}
               >
-                清除凭证
+                {t("settings.clear")}
               </Button>
             </div>
           </form>
@@ -249,13 +251,13 @@ const Settings: React.FC = () => {
 
         {/* 安全说明 */}
         <Card>
-          <h2 className="text-base font-semibold text-fg mb-2">安全说明</h2>
+          <h2 className="text-base font-semibold text-fg mb-2">{t("settings.securityTitle")}</h2>
           <ul className="text-xs text-fg-2 space-y-1.5 list-disc pl-4">
-            <li>API Secret 仅在浏览器内存中持有，用于计算 HMAC-SHA256 签名。</li>
-            <li>localStorage 中 Secret 经 XOR + base64 编码存储，避免明文肉眼可见。</li>
-            <li>凭证不会随请求体发送，仅生成签名头 <code className="text-fg">X-NexusChain-Signature</code>。</li>
-            <li>清除浏览器数据或点击「清除凭证」可立即移除本地存储。</li>
-            <li>请勿在公共设备上保存凭证。</li>
+            <li>{t("settings.security1")}</li>
+            <li>{t("settings.security2")}</li>
+            <li>{t("settings.security3")}</li>
+            <li>{t("settings.security4")}</li>
+            <li>{t("settings.security5")}</li>
           </ul>
         </Card>
       </main>
