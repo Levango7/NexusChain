@@ -13,6 +13,8 @@ import org.nexus.keystore.util.JsonUtils;
 import org.nexus.protobuf.tcp.ProtocolModel;
 import org.nexus.protobuf.tcp.command.HatchModel;
 import org.nexus.util.ByteUtil;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.*;
 import java.math.BigDecimal;
@@ -33,6 +35,7 @@ import java.util.concurrent.*;
  * dependency entirely.</p>
  */
 public class TxUtils extends Thread {
+    private static final Logger log = LoggerFactory.getLogger(TxUtils.class);
     private static final Long rate = 100000000L;
     private static final Long serviceCharge = 200000L;
 
@@ -756,7 +759,7 @@ public class TxUtils extends Thread {
             InputStream is = conn.getInputStream();
             BufferedReader br = new BufferedReader(new InputStreamReader(is));
             while ((str = br.readLine()) != null) {
-                System.out.println(str);
+                log.debug("{}", str);
             }
             is.close();
             conn.disconnect();
@@ -1042,7 +1045,7 @@ public class TxUtils extends Thread {
                 try (BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream()))) {
                     String res;
                     while ((res = br.readLine()) != null) {
-                        System.out.println(res);
+                        log.debug("{}", res);
                     }
                 }
             }
@@ -1072,10 +1075,9 @@ public class TxUtils extends Thread {
         InputStream is = conn.getInputStream();
         BufferedReader br = new BufferedReader(new InputStreamReader(is));
         while ((str = br.readLine()) != null) {
-            System.out.println("1111");
-            System.out.println(str);
+            log.debug("{}", str);
             Long timeConsuming = Duration.between(beginTime, LocalDateTime.now()).toMillis();
-            System.out.println(timeConsuming);
+            log.debug("{}", timeConsuming);
         }
         is.close();
         conn.disconnect();

@@ -24,6 +24,11 @@ updates:
       time: "06:00"
       timezone: "Asia/Shanghai"
     open-pull-requests-limit: 10
+    # P2-9: auto-merge 仅对 patch 版本自动合并（降低审查负担，patch 风险最低）
+    # minor/major 仍需人工审查合并
+    auto-merge:
+      - dependency-type: "all"
+        update-type: "semver:patch"
     labels:
       - "dependencies"
       - "java"

@@ -4,6 +4,50 @@
 
 ## [Unreleased]
 
+## [2.24.0] - 2026-08-22
+
+### 第24轮：P2 中危问题修复（6项完成，4项已修复/已配置）
+
+本次发布修复漏洞扫描报告中的 P2 级中危问题。经分析 10 项 P2 中，4 项已在之前版本修复（P2-3 actuator 已配置、P2-4 web3j CVE 已升级、P2-6 HikariCP 已配置、P2-7 MPC 密钥已在 P0-8 处理），本次修复剩余 6 项。
+
+#### Fixed（修复）
+
+##### 组D — 代码修复（P2-1/P2-2）
+- **P2-1**: TxUtils.java 5 处 `System.out.println` 改为 `log.debug`（含 1 处调试残留 `"1111"` 直接删除），新增 slf4j Logger 导入和字段
+- **P2-2**: consortium net 包 11 处日志字符串拼接改为 SLF4J 参数化（MessageFilter 3处、GRpcDebugTool 4处、AbstractPeerServer 3处、PoAMiner 1处），防止日志注入
+
+##### 组E — 配置加固（P2-5/P2-8/P2-9/P2-10）
+- **P2-5**: signing-service 和 wallet-service 添加 `server.servlet.session.timeout: 30m` 会话超时配置
+- **P2-8**: 前端 index.html 添加 CSP meta 标签（Content-Security-Policy），限制 script/style/img/connect 来源
+- **P2-9**: dependabot.yml 第一个 gradle 块添加 `auto-merge`，仅对 `semver:patch` 自动合并（minor/major 仍需人工审查）
+- **P2-10**: build.gradle 添加 `jacocoTestCoverageVerification` 门禁（30% 起步，渐进提升），更新注释
+
+#### Already Fixed（已在之前版本修复）
+- **P2-3**: Spring Boot Actuator 端点已收敛（health,info,prometheus）— v2.20.0
+- **P2-4**: web3j 已升级到 4.11.0（CVE 修复）— v2.20.0
+- **P2-6**: HikariCP 连接池已配置 maximum-pool-size:20 — v2.20.0
+- **P2-7**: MPC 存储密钥已环境变量化 — v2.22.0（P0-8）
+
+#### Test Results
+- nexus-consortium 编译：通过
+- nexus-sdk:java 编译：通过
+- nexus-signing-service 编译：通过
+- nexus-wallet-service 编译：通过
+- build.gradle Gradle 语法验证：通过（gradle help 成功）
+- YAML 语法验证：dependabot.yml + 两个 application.yml 全部通过
+
+#### Changed（修改文件）
+- `nexus-sdk/java/.../wallet/TxUtils.java`：println → log.debug + Logger 导入
+- `nexus-consortium/.../net/MessageFilter.java`：日志参数化（3处）
+- `nexus-consortium/.../net/GRpcDebugTool.java`：日志参数化（4处）
+- `nexus-consortium/.../net/AbstractPeerServer.java`：日志参数化（3处）
+- `nexus-consortium/.../consensus/poa/PoAMiner.java`：日志参数化（1处）
+- `.github/dependabot.yml`：auto-merge 配置
+- `build.gradle`：JaCoCo 覆盖率门禁 30%
+- `nexus-signing-service/.../application.yml`：会话超时 30m
+- `nexus-wallet-service/.../application.yml`：会话超时 30m
+- `nexus-explorer/frontend/index.html`：CSP meta 标签
+
 ## [2.23.0] - 2026-08-22
 
 ### 第23轮：P1 高危问题修复（12项全部完成）

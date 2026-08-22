@@ -58,7 +58,7 @@ public class GRpcDebugTool {
             public void onMessage(Context context, PeerServer server) {
                 String m = new String(context.getMessage(), StandardCharsets.UTF_8).trim();
                 if(m.equals("disconnect")){
-                    log.info("disconnect to remote " + context.getRemote());
+                    log.info("disconnect to remote {}", context.getRemote());
                     context.disconnect();
                 }
                 if(m.equals("block")){
@@ -70,7 +70,7 @@ public class GRpcDebugTool {
                 if(m.startsWith("relay")){
                     context.relay();
                 }
-                log.info("remote = " + context.getRemote() + " message = " + m);
+                log.info("remote = {} message = {}", context.getRemote(), m);
             }
 
             @Override
@@ -80,12 +80,12 @@ public class GRpcDebugTool {
 
             @Override
             public void onNewPeer(Peer peer, PeerServer server) {
-                log.info("connected to " + peer + " success");
+                log.info("connected to {} success", peer);
             }
 
             @Override
             public void onDisconnect(Peer peer, PeerServer server) {
-                log.info("channel to " + peer + " closed");
+                log.info("channel to {} closed", peer);
             }
         });
         server.start();

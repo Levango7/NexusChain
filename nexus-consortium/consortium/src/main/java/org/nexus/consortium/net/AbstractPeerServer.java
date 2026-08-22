@@ -62,9 +62,8 @@ public abstract class AbstractPeerServer implements Channel.ChannelListener, Pro
         plugins.forEach(l -> l.onStart(this));
         startListening();
         resolveHost();
-        log.info("peer server is listening on " +
-                self.encodeURI());
-        log.info("your p2p secret address is " +
+        log.info("peer server is listening on {}", self.encodeURI());
+        log.info("your p2p secret address is {}",
                 String.format("%s://%s@%s:%d",
                         self.getProtocol(),
                         new HexBytes(
@@ -198,7 +197,7 @@ public abstract class AbstractPeerServer implements Channel.ChannelListener, Pro
             log.error("cannot get external ip, fall back to bind ip");
         }
         if (externalIP != null && Util.ping(externalIP, self.getPort())){
-            log.info("ping " + externalIP + " success, set as your host");
+            log.info("ping {} success, set as your host", externalIP);
             self.setHost(externalIP);
             return;
         }

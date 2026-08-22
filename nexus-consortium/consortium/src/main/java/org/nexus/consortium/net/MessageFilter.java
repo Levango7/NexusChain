@@ -21,13 +21,13 @@ public class MessageFilter implements Plugin {
         if (!new Ed25519PublicKey(context.getRemote().getID().getBytes()).verify(
                 Util.getRawForSign(context.message), context.message.getSignature().toByteArray()
         )) {
-            log.error("invalid signature received from " + context.remote);
+            log.error("invalid signature received from {}", context.remote);
             context.exit();
             return;
         }
         // reject blocked peer
         if (server.getClient().peersCache.hasBlocked(context.remote)){
-            log.error("the peer " + context.remote + " has been blocked");
+            log.error("the peer {} has been blocked", context.remote);
             context.disconnect();
             return;
         }
@@ -48,9 +48,9 @@ public class MessageFilter implements Plugin {
         if (cache.asMap().containsKey(k)) {
             context.exit();
         }
-        log.info("receive " + context.message.getCode()
-                + " from " +
-                context.remote.getHost() + ":" + context.remote.getPort()
+        log.info("receive {} from {}:{}",
+                context.message.getCode(),
+                context.remote.getHost(), context.remote.getPort()
         );
         cache.put(k, true);
     }
