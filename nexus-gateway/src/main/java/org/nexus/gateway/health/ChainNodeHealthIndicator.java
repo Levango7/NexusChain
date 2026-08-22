@@ -25,7 +25,7 @@ public class ChainNodeHealthIndicator implements HealthIndicator {
             String url = config.getChain().getRpcUrl() + "/height";
             restTemplate.getForEntity(url, String.class);
             return Health.up().withDetail("rpcUrl", config.getChain().getRpcUrl()).build();
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return Health.down().withDetail("rpcUrl", config.getChain().getRpcUrl())
                     .withDetail("error", e.getMessage()).build();
         }

@@ -136,7 +136,7 @@ public final class CursorPagination {
             String json = new String(bytes, StandardCharsets.UTF_8);
             CursorPayload payload = MAPPER.readValue(json, CursorPayload.class);
             return payload.k;
-        } catch (Exception e) {
+        } catch (RuntimeException | java.io.IOException e) {
             throw new IllegalArgumentException("Invalid cursor: " + e.getMessage(), e);
         }
     }

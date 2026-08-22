@@ -113,7 +113,7 @@ public class MerchantServiceImpl implements MerchantService {
                 sb.append(String.format("%02x", b));
             }
             return sb.toString();
-        } catch (Exception e) {
+        } catch (java.security.GeneralSecurityException | java.io.UnsupportedEncodingException e) {
             throw new RuntimeException("Failed to hash secret", e);
         }
     }

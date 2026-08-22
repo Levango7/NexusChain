@@ -70,7 +70,7 @@ public class DefaultSettlementService implements SettlementService {
                     }
                 }
             }
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.warn("resolveMerchantFeeBasisPoints failed for merchant={}, fallback default: {}",
                     merchantId, e.getMessage());
         }
@@ -160,7 +160,7 @@ public class DefaultSettlementService implements SettlementService {
             } else {
                 batch.setStatus(SettlementBatch.BatchStatus.FAILED);
             }
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.error("Settlement execution failed for batch {}: {}", batch.getBatchNo(), e.getMessage());
             batch.setStatus(SettlementBatch.BatchStatus.FAILED);
         }

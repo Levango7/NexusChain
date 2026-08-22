@@ -4,7 +4,7 @@ NexusChain 是一个**基于自研区块链的支付编排平台（Payment Orche
 
 > **定位**：区块链是底层结算基础设施，不是产品本身。产品价值在于统一支付 API、启发式路由与清结算。
 
-**当前版本**：v2.27.0（2026-08-22，最新稳定版；第三轮安全审计 P0/P1/P2 修复完成）
+**当前版本**：v2.28.0（2026-08-23，代码质量改进版；依赖升级+异常处理规范化+测试覆盖提升+CI/CD补全+文档修正）
 
 ## 快速开始
 
@@ -145,17 +145,19 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
 
 ADR-001 状态：**Resolved**（2026-08-10）。
 
-## 最新改动摘要（v2.27.0，第三轮安全审计 P0+P1+P2 修复）
+## 最新改动摘要（v2.28.0，代码质量改进）
 
-本次发布修复第三轮安全审计报告中发现的10个问题（5个P0 + 3个P1 + 2个P2），聚焦退款安全、IDOR防护、交易绑定唯一性、审批原子性和网关安全配置：
+本次发布聚焦全面代码质量改进，涵盖依赖升级、异常处理规范化、测试覆盖提升、CI/CD补全和文档修正：
 
-| 工作项 | 范围 | 结果 |
+| 改进项 | 范围 | 结果 |
 |--------|------|------|
-| P0 退款与交易安全 | 5项 | 退款无限次重复放款修复、退款收款方改为付款人地址、最终性投票fail-closed、订单端点IDOR防护、支付确认交易绑定唯一性 |
-| P1 网关与签名安全 | 3项 | 网关SecurityConfig回归修复、Webhook日志不再回显期望签名、签名审批CAS原子性 |
-| P2 工具与路由 | 2项 | HashUtil失败抛异常不再返回null、API网关路由补全 |
+| 依赖版本升级 | 3项 | slf4j 1.7.36→2.0.16、logback 1.2.13→1.5.18、guava 31.1-jre→33.4.8-jre |
+| 异常处理规范化 | 92处 | catch(Exception e)替换为具类型捕获（RuntimeException/GeneralSecurityException/JsonProcessingException/ExecutionException等） |
+| 测试覆盖提升 | 2文件 | SecurityConfigTest（3测试）+ HashUtilTest（22测试），覆盖率门禁15%→20% |
+| CI/CD补全 | 3文件 | docker-compose密钥外化、Flyway迁移预检job、release回滚job |
+| 文档修正 | 4文件 | PRD API路径说明+F16/F17标记更新、数据库迁移指南、CHANGELOG更新、settings.gradle废弃SDK注释 |
 
-详细变更见 [CHANGELOG](CHANGELOG.md) v2.27.0 节。
+详细变更见 [CHANGELOG](CHANGELOG.md) v2.28.0 节。
 
 ## 安全审计
 

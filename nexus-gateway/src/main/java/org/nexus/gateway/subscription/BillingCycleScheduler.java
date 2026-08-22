@@ -83,7 +83,7 @@ public class BillingCycleScheduler {
                 if (subscriptionService.convertTrialToActive(sub.getSubscriptionId())) {
                     converted++;
                 }
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 log.error("Trial conversion failed: subId={}, error={}",
                         sub.getSubscriptionId(), e.getMessage());
             }
@@ -105,7 +105,7 @@ public class BillingCycleScheduler {
             try {
                 subscriptionService.processBillingCycle(sub.getSubscriptionId());
                 processed++;
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 log.error("Billing cycle failed: subId={}, error={}",
                         sub.getSubscriptionId(), e.getMessage());
             }

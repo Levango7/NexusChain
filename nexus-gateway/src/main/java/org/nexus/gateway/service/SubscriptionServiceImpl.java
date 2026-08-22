@@ -103,7 +103,7 @@ public class SubscriptionServiceImpl implements SubscriptionService {
             log.info("On-chain subscription auth submitted: subNo={}, txHash={}",
                     sub.getSubscriptionNo(), txHash);
             return txHash;
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.warn("On-chain subscription auth failed (fail-closed, subscription created without auth): " +
                     "subNo={}, error={}", sub.getSubscriptionNo(), e.getMessage());
             return null;
@@ -209,7 +209,7 @@ public class SubscriptionServiceImpl implements SubscriptionService {
             }
 
             return signingServiceClient.signTransfer(platformPubkey, receiverPubkeyHash, sub.getAmount());
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.error("Subscription charge exception: {}", e.getMessage());
             return null;
         }

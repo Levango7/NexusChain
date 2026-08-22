@@ -73,7 +73,7 @@ public class OraclePriceAdapter {
             log.debug("Fiat->chain conversion: fiat={}, asset={}, price={}, chainAmount={}",
                     fiatAmount, chainAsset, entry.getPrice(), chainAmount);
             return chainAmount;
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.warn("Oracle price conversion failed: asset={}, error={}", chainAsset, e.getMessage());
             return null;
         }

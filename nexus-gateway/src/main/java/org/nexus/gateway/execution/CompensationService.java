@@ -137,7 +137,7 @@ public class CompensationService {
             try {
                 handleOneRefund(refund);
                 processed++;
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 // 单条记录处理失败不影响其他记录，记录日志后继续
                 log.error("Compensation failed for refund {}: {}", refund.getRefundNo(), e.getMessage(), e);
             }
@@ -246,7 +246,7 @@ public class CompensationService {
     private boolean queryChainConfirmation(String chainTxHash) {
         try {
             return chainRpcClient.isTransactionConfirmed(chainTxHash);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.warn("Chain confirmation query failed for txHash={}: {}",
                     chainTxHash, e.getMessage());
             return false;
@@ -332,7 +332,7 @@ public class CompensationService {
                 log.error("Withdrawal {} compensation failed: Feign fallback returned null " +
                         "(wallet-service unavailable), will retry on next reconciliation", requestId);
             }
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.error("Failed to compensate withdrawal {}: {}", requestId, e.getMessage(), e);
             // 不抛异常，让对账任务继续处理其他记录
         }
@@ -381,7 +381,7 @@ public class CompensationService {
                         "(not EXECUTING/FAILED, idempotent skip)",
                         recordId, batch.getBatchNo(), currentStatus);
             }
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.error("Failed to compensate settlement {}: {}", recordId, e.getMessage(), e);
             // 不抛异常，让对账任务继续处理其他记录
         }

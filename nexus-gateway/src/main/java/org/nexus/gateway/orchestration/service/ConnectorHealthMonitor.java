@@ -53,7 +53,7 @@ public class ConnectorHealthMonitor {
                         log.error("Connector {} disabled after {} consecutive failures", connector.getId(), failures);
                     }
                 }
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 int failures = failureCounts.merge(connector.getId(), 1, Integer::sum);
                 lastHealth.put(connector.getId(), ConnectorHealth.down(connector.getId(), e.getMessage()));
                 log.error("Connector {} health check threw exception (failure #{}): {}", connector.getId(), failures, e.getMessage());

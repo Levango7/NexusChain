@@ -100,7 +100,7 @@ public class PaymentEventListener {
 
             log.info("Webhook sent: merchant={}, event={}, status={}",
                     merchantId, payload.get("eventType"), resp.getStatusCodeValue());
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.error("Webhook delivery failed: merchant={}, error={}", merchantId, e.getMessage());
             retryWebhook(callbackUrl, payload, secret, 1);
         }
@@ -127,7 +127,7 @@ public class PaymentEventListener {
             log.info("Webhook retry succeeded on attempt {}", attempt);
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.warn("Webhook retry attempt {} failed: {}", attempt, e.getMessage());
             retryWebhook(url, payload, secret, attempt + 1);
         }
@@ -142,7 +142,7 @@ public class PaymentEventListener {
                 sb.append(String.format("%02x", b));
             }
             return sb.toString();
-        } catch (Exception e) {
+        } catch (java.security.GeneralSecurityException e) {
             throw new RuntimeException("Failed to compute webhook signature", e);
         }
     }
@@ -154,7 +154,7 @@ public class PaymentEventListener {
     private String canonicalize(Map<String, Object> payload) {
         try {
             return CANONICAL_MAPPER.writeValueAsString(payload);
-        } catch (Exception e) {
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
             throw new RuntimeException("Failed to canonicalize webhook payload", e);
         }
     }

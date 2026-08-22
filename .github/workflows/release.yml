@@ -11,6 +11,25 @@ on:
   push:
     tags:
       - 'v*.*.*'
+  # Task 284：手动触发回滚流程（不触发正常发布 jobs，由各 job 的 if 条件隔离）
+  workflow_dispatch:
+    inputs:
+      target_version:
+        description: '回滚目标版本号（git tag，如 v2.2.1）'
+        required: true
+        type: string
+      environment:
+        description: '回滚目标环境'
+        required: true
+        type: choice
+        default: 'production'
+        options:
+          - staging
+          - production
+      reason:
+        description: '回滚原因（将记录到回滚日志）'
+        required: true
+        type: string
 
 env:
   REGISTRY: ghcr.io
@@ -26,6 +45,7 @@ jobs:
   # ============================================================
   build-images:
     name: Build Images (${{ matrix.module }})
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     continue-on-error: true
     timeout-minutes: ${{ matrix.timeout-minutes || 10 }}
@@ -81,6 +101,7 @@ jobs:
   # ============================================================
   github-release:
     name: GitHub Release
+    if: github.event_name == 'push'
     needs: build-images
     runs-on: ubuntu-latest
     steps:
@@ -121,6 +142,7 @@ jobs:
   # ============================================================
   helm-publish:
     name: Helm Chart Publish
+    if: github.event_name == 'push'
     needs: build-images
     runs-on: ubuntu-latest
     steps:
@@ -149,6 +171,7 @@ jobs:
   # ============================================================
   deploy-staging:
     name: Deploy to Staging
+    if: github.event_name == 'push'
     needs: [github-release, helm-publish]
     runs-on: ubuntu-latest
     environment: staging
@@ -182,6 +205,7 @@ jobs:
   # ============================================================
   deploy-prod:
     name: Deploy to Production
+    if: github.event_name == 'push'
     needs: deploy-staging
     runs-on: ubuntu-latest
     # environment: production 触发 GitHub environment protection
@@ -211,3 +235,92 @@ jobs:
             --version "${CHART_VERSION_NUM}" \
             -f deploy/helm/values-prod.yaml \
             --wait --timeout 15m
+
+  # ============================================================
+  # 6. 回滚流程（Task 284）—— 仅 workflow_dispatch 手动触发
+  # ============================================================
+  # 回滚策略说明（文档）：
+  # ---------------------------------------------------------------------------
+  # 本 job 仅在通过 Actions 页面 "Run workflow" 手动触发时执行
+  # （inputs: target_version / environment / reason）。
+  # 回滚采用 "以旧 chart 版本号重新 helm upgrade --install" 的方式，步骤如下：
+  #   1) 配置目标环境的 kubeconfig（staging / production 对应不同 secret）。
+  #   2) 列出当前 Helm release history，辅助人工确认当前部署 revision。
+  #   3) 执行 helm upgrade --install 指定旧 chart 版本号重新安装，将镜像 tag
+  #      锁定到 target_version（比 helm rollback <REVISION> 更可靠，直接锁定版本）。
+  #   4) 回滚后人工核对：kubectl rollout status、关键业务接口健康检查、
+  #      Flyway 迁移状态兼容性。
+  # 备选方案（相邻 revision 回退）：
+  #   helm rollback nexuschain <REVISION> --namespace <ns>
+  # 重要约束：数据库迁移不可自动回滚——Flyway migrate 是单向的。回滚前务必确认
+  #           目标版本的应用镜像与当前 DB schema 兼容（向后兼容假设）；
+  #           如需回退 schema 须由 DBA 介入执行 flyway undo 或手动恢复，并评估数据兼容性。
+  # ---------------------------------------------------------------------------
+  rollback:
+    name: Rollback (${{ github.event.inputs.environment }})
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    # environment 用动态值：production 回滚会触发 environment protection（required reviewers approval）
+    environment: ${{ github.event.inputs.environment }}
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: 'v3.14.0'
+
+      - name: 解析回滚参数
+        id: params
+        run: |
+          TARGET_VERSION="${{ github.event.inputs.target_version }}"
+          ENV="${{ github.event.inputs.environment }}"
+          REASON="${{ github.event.inputs.reason }}"
+          echo "target_version=${TARGET_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "environment=${ENV}" >> "$GITHUB_OUTPUT"
+          echo ">>> Rollback requested: version=${TARGET_VERSION}, env=${ENV}"
+          echo ">>> Reason: ${REASON}"
+
+      - name: Configure kubeconfig（${{ steps.params.outputs.environment }}）
+        run: |
+          ENV="${{ steps.params.outputs.environment }}"
+          mkdir -p "$HOME/.kube"
+          if [ "$ENV" = "production" ]; then
+            echo "${{ secrets.KUBE_CONFIG_PROD }}" | base64 -d > "$HOME/.kube/config"
+            echo "namespace=nexus-prod" >> "$GITHUB_ENV"
+            echo "values=values-prod.yaml" >> "$GITHUB_ENV"
+          else
+            echo "${{ secrets.KUBE_CONFIG_STAGING }}" | base64 -d > "$HOME/.kube/config"
+            echo "namespace=nexus-staging" >> "$GITHUB_ENV"
+            echo "values=values-staging.yaml" >> "$GITHUB_ENV"
+          fi
+
+      # 列出 Helm release history，辅助定位当前 revision（人工确认）。
+      - name: 列出 Helm release history
+        run: |
+          echo ">>> Helm history for nexuschain in ${namespace}:"
+          helm history nexuschain --namespace "${namespace}" --max 10 || \
+            echo "::warning::Helm release 'nexuschain' not found in namespace ${namespace}; 可能尚未部署过"
+
+      # 回滚到目标 chart 版本：使用 helm upgrade --install 指定旧版本号重新安装，
+      # 直接锁定镜像 tag = target_version。
+      - name: Helm upgrade 回退到目标版本
+        run: |
+          TARGET_VERSION="${{ steps.params.outputs.target_version }}"
+          CHART_VERSION_NUM="${TARGET_VERSION#v}"
+          echo ">>> Rolling back to chart version ${CHART_VERSION_NUM} in ${namespace}"
+          helm upgrade --install nexuschain deploy/helm/ \
+            --namespace "${namespace}" \
+            --create-namespace \
+            --version "${CHART_VERSION_NUM}" \
+            -f "deploy/helm/${values}" \
+            --wait --timeout 15m
+
+      - name: 回滚后状态核对
+        run: |
+          echo ">>> Post-rollback status for ${namespace}:"
+          helm status nexuschain --namespace "${namespace}"
+          echo ">>> 请人工确认：kubectl rollout status、业务接口健康检查、Flyway 迁移兼容性"

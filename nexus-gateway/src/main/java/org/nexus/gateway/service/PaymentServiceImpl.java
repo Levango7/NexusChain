@@ -540,7 +540,7 @@ public class PaymentServiceImpl implements PaymentService {
 
         try {
             return signingServiceClient.signTransfer(platformPubkey, receiverPubkeyHash, amount);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.error("Refund transfer exception for order {}: {}", order.getOrderNo(), e.getMessage());
             return null;
         }

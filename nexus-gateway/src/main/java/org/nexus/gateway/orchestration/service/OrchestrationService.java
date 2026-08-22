@@ -188,7 +188,7 @@ public class OrchestrationService {
                         }
                         log.warn("Connector {} rejected payment {}: {}", connector.getId(), paymentId, result.getErrorMessage());
                         connSpan.attr("payment.connector.error", result.getErrorMessage());
-                    } catch (Exception e) {
+                    } catch (RuntimeException e) {
                         log.error("Connector {} threw exception for payment {}: {}", connector.getId(), paymentId, e.getMessage());
                         connSpan.error(e);
                     }

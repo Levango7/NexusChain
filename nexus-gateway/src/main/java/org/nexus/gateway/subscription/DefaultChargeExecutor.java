@@ -70,7 +70,7 @@ public class DefaultChargeExecutor implements ChargeExecutor {
                 lastError = result.getErrorMessage();
                 log.warn("Subscription charge failed on connector {}: sub={}, error={}",
                         connector.getId(), subscription.getSubscriptionId(), lastError);
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 lastError = e.getMessage();
                 log.warn("Subscription charge exception on connector {}: sub={}, error={}",
                         connector.getId(), subscription.getSubscriptionId(), lastError);

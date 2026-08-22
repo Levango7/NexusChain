@@ -14,6 +14,7 @@ import org.springframework.stereotype.Component;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 
 /**
  * 基于 Kafka 的事件存储实现。
@@ -83,7 +84,11 @@ public class KafkaEventStore implements EventStore {
             } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
                 throw new EventStoreException("Interrupted while appending event to Kafka", ie);
-            } catch (Exception e) {
+            } catch (ExecutionException ee) {
+                // future.get() 的 ExecutionException：解包 cause 抛出
+                Throwable cause = ee.getCause() != null ? ee.getCause() : ee;
+                throw new EventStoreException("Failed to append event to Kafka: " + cause.getMessage(), cause);
+            } catch (RuntimeException e) {
                 throw new EventStoreException("Failed to append event to Kafka: " + e.getMessage(), e);
             }
         } else {

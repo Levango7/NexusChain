@@ -137,7 +137,7 @@ public class WebhookSignatureService {
                 sb.append(String.format("%02x", b));
             }
             return sb.toString();
-        } catch (Exception e) {
+        } catch (java.security.GeneralSecurityException e) {
             throw new IllegalStateException("Failed to compute HMAC-SHA256 signature", e);
         }
     }
@@ -148,7 +148,7 @@ public class WebhookSignatureService {
     private String canonicalize(Map<String, Object> payload) {
         try {
             return CANONICAL_MAPPER.writeValueAsString(payload);
-        } catch (Exception e) {
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
             throw new IllegalStateException("Failed to canonicalize webhook payload", e);
         }
     }

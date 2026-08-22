@@ -29,11 +29,21 @@ Mid-size e-commerce / SaaS developers (team 5-20, monthly volume $10K-$1M) who n
 | F13 | Cross-chain Bridge (lock/mint/burn/unlock) | Delivered | bridge |
 | F14 | Settlement & Risk Engine | Delivered | settlement |
 | F15 | Compliance (KYC/AML/DID) | Delivered | compliance |
-| F16 | Analytics (Transaction Graph/BI) | Experimental | analytics |
-| F17 | Price Oracle (Aggregated Feed) | Experimental | oracle |
+| F16 | Analytics (Transaction Graph/BI) | Delivered | analytics |
+| F17 | Price Oracle (Aggregated Feed) | Delivered | oracle |
 | F18 | Consortium Connector (dual-chain routing) | Delivered | gateway |
 
 ## 4. Core API Definition
+
+> **实现说明（API 路径差异）**：本节定义的编排 API `POST /api/v1/payments` 由
+> `PaymentOrchestrationController` 提供，作为统一编排入口实际存在并可用。
+> 与此同时，生产主链路采用订单模型 API `POST /api/v1/orders`（由
+> `nexus-gateway` 的 `PaymentController` 提供，字段语义与编排 API 一致，
+> 详见 `PaymentV2Controller` 注释）。两者关系：
+> - `/api/v1/orders`：订单生命周期 API（创建→支付→确认→退款），为当前生产主接口；
+> - `/api/v1/payments`：编排 API（含 connector/routing-rules 管理），面向编排场景。
+> 下文示例沿用 PRD 原始定义的 `/api/v1/payments` 路径，实际对接请以
+> `nexus-gateway/README.md` 的 API 概览为准。
 
 ### 4.1 Create Payment
 

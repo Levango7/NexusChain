@@ -62,7 +62,7 @@ public class AdyenWebhookVerifier {
         String expected;
         try {
             expected = hmacSha256Base64(hmacKey, payload);
-        } catch (Exception e) {
+        } catch (java.security.GeneralSecurityException e) {
             log.error("HMAC computation failed: {}", e.getMessage());
             return WebhookVerifyResult.fail("HMAC computation error");
         }
@@ -75,7 +75,7 @@ public class AdyenWebhookVerifier {
     }
 
     /** 计算 HMAC-SHA256 并返回 Base64 字符串（与 Adyen 签名编码一致）。 */
-    private static String hmacSha256Base64(String secret, byte[] data) throws Exception {
+    private static String hmacSha256Base64(String secret, byte[] data) throws java.security.GeneralSecurityException {
         Mac mac = Mac.getInstance("HmacSHA256");
         mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
         byte[] hash = mac.doFinal(data);
@@ -107,7 +107,7 @@ public class AdyenWebhookVerifier {
         this.hmacKey = key;
     }
 
-    String signForTest(byte[] payload) throws Exception {
+    String signForTest(byte[] payload) throws java.security.GeneralSecurityException {
         return hmacSha256Base64(hmacKey, payload);
     }
 }

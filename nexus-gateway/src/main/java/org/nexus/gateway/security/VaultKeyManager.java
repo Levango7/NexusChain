@@ -84,7 +84,7 @@ public class VaultKeyManager implements KeyManager {
             System.arraycopy(iv, 0, combined, 0, iv.length);
             System.arraycopy(ciphertext, 0, combined, iv.length, ciphertext.length);
             return Base64.getEncoder().encodeToString(combined);
-        } catch (Exception e) {
+        } catch (java.security.GeneralSecurityException e) {
             throw new RuntimeException("Encryption failed", e);
         }
     }
@@ -99,7 +99,7 @@ public class VaultKeyManager implements KeyManager {
             Cipher cipher = Cipher.getInstance(ALGORITHM);
             cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(masterKey, "AES"), new GCMParameterSpec(GCM_TAG_LENGTH, iv));
             return new String(cipher.doFinal(ciphertext), StandardCharsets.UTF_8);
-        } catch (Exception e) {
+        } catch (java.security.GeneralSecurityException e) {
             throw new RuntimeException("Decryption failed", e);
         }
     }

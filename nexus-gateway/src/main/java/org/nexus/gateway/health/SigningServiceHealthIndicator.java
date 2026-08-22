@@ -34,7 +34,7 @@ public class SigningServiceHealthIndicator implements HealthIndicator {
             // 用 canSignViaMpc 轻量探测（不触发签名）
             signingServiceClient.canSignViaMpc(BigDecimal.ONE);
             return Health.up().withDetail("service", "nexus-signing-service").build();
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return Health.down().withDetail("service", "nexus-signing-service")
                     .withDetail("error", e.getMessage()).build();
         }

@@ -34,7 +34,7 @@ public class WalletServiceHealthIndicator implements HealthIndicator {
             // 用 verifyAddress 轻量探测（无状态、不涉及私钥）
             walletMgmtClient.verifyAddress(PROBE_ADDRESS);
             return Health.up().withDetail("service", "nexus-wallet-service").build();
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return Health.down().withDetail("service", "nexus-wallet-service")
                     .withDetail("error", e.getMessage()).build();
         }

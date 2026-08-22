@@ -18,7 +18,10 @@ include 'nexus-rpc-doc'
 include ':nexus-core:nexus-core'
 
 // === SDK 层 ===
-
+// 已废弃（Deprecated，已从构建中排除）：
+//   - nexus-java-sdk：Legacy Java SDK，已迁移至 nexus-sdk（目录已移除）
+//   - nexus-js-sdk：Legacy JS SDK，已迁移至 nexus-sdk/typescript（目录保留，README 已标记 DEPRECATED）
+// 统一 SDK 请使用 nexus-sdk（Java/JS/Python/Go 多语言）。
 include 'nexus-sdk:java'
 include 'nexus-common'
 

@@ -85,7 +85,7 @@ public class AbTestRouter {
         List<PaymentConnector> aiResult;
         try {
             aiResult = aiStrategy.resolve(aiCandidates, amount, currency);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.warn("AI routing threw exception, degrading to rule: {}", e.getMessage());
             aiResult = List.of();
         }

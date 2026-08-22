@@ -154,7 +154,7 @@ public class ReconciliationTask {
             Refund refund = completedRefunds.get(i);
             try {
                 verifyCompletedRefund(refund, report);
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 log.error("Reconcile completed refund {} failed: {}",
                         refund.getRefundNo(), e.getMessage());
                 report.errors++;
@@ -204,7 +204,7 @@ public class ReconciliationTask {
             Refund refund = pendingRefunds.get(i);
             try {
                 verifyPendingRefund(refund, report);
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 log.error("Reconcile pending refund {} failed: {}",
                         refund.getRefundNo(), e.getMessage());
                 report.errors++;
@@ -248,7 +248,7 @@ public class ReconciliationTask {
     private boolean queryChainConfirmation(String chainTxHash) {
         try {
             return chainRpcClient.isTransactionConfirmed(chainTxHash);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.warn("Chain confirmation query failed for txHash={}: {}",
                     chainTxHash, e.getMessage());
             return false;

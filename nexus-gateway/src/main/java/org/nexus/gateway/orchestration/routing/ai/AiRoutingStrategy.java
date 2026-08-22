@@ -92,7 +92,7 @@ public class AiRoutingStrategy {
         List<String> ordered;
         try {
             ordered = model.predict(features);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.warn("AI routing model predict failed, degrading: {}", e.getMessage());
             return List.of();
         }

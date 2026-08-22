@@ -223,7 +223,7 @@ public class WebhookDeliveryService {
                 lastError = "HTTP " + resp.getStatusCode().value();
                 log.warn("Webhook non-2xx: deliveryId={}, status={}, attempt={}",
                         record.getDeliveryId(), resp.getStatusCode(), attempt + 1);
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 lastError = truncate(e.getMessage(), 1024);
                 log.warn("Webhook attempt {} failed: deliveryId={}, error={}",
                         attempt + 1, record.getDeliveryId(), e.getMessage());
@@ -254,7 +254,7 @@ public class WebhookDeliveryService {
         DeadLetterMessage dlqMessage = DeadLetterMessage.fromRecord(record, lastError);
         try {
             deadLetterSender.sendToDeadLetter(dlqMessage);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.error("Failed to send to DLQ: deliveryId={}, error={}",
                     record.getDeliveryId(), e.getMessage(), e);
         }
