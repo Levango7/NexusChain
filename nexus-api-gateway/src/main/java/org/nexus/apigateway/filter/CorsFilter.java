@@ -55,7 +55,7 @@ public class CorsFilter implements GlobalFilter, Ordered {
     private static final long DEFAULT_MAX_AGE = 3600L;
 
     /** 允许的 Origin 列表（逗号分隔）。 */
-    @Value("${nexus.api-gateway.cors.allowed-origins:*}")
+    @Value("${nexus.api-gateway.cors.allowed-origins:}")
     private String allowedOriginsConfig;
 
     /** 允许的 HTTP 方法（逗号分隔）。 */

@@ -17,7 +17,7 @@ nexus:
     auth:
       enabled: ${NEX_AUTH_ENABLED:false}
       # 开发环境单 API Key
-      api-keys: nexus-dev-api-key
+      api-keys: nexus-internal-api-key
       hmac-secret: nexus-dev-hmac-secret
       # P1-D1：兼容期默认开启旧头接受，便于灰度迁移
       legacy-headers-enabled: ${NEX_AUTH_LEGACY_HEADERS:true}

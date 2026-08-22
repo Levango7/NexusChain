@@ -118,7 +118,7 @@ public class AuthenticationFilter implements GlobalFilter, Ordered {
     private boolean authEnabled;
 
     /** 合法 API Key 列表（逗号分隔）。 */
-    @Value("${nexus.api-gateway.auth.api-keys:nexus-internal-api-key}")
+    @Value("${nexus.api-gateway.auth.api-keys}")
     private String apiKeysConfig;
 
     /** HMAC 共享密钥。 */

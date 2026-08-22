@@ -54,6 +54,11 @@ dependencies {
     implementation "io.grpc:grpc-all:${gRPCVersion}"
     implementation "org.java-websocket:Java-WebSocket:${webSocketVersion}"
 
+    // === P1-9：LevelDB 持久化存储实现 ===
+    // 替换 Start.store() 中的 no-op 实现，使区块数据真正落盘。
+    // 使用纯 Java 实现 org.iq80.leveldb:leveldb:0.12，避免 JNI 平台依赖。
+    implementation 'org.iq80.leveldb:leveldb:0.12'
+
 }
 
 task runTestCommunicationTool(type: JavaExec){

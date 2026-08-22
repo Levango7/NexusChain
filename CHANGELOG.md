@@ -4,6 +4,52 @@
 
 ## [Unreleased]
 
+## [2.23.0] - 2026-08-22
+
+### 第23轮：P1 高危问题修复（12项全部完成）
+
+本次发布修复漏洞扫描报告中的全部 12 个 P1 级高危问题，涵盖 API Gateway 安全、CI 流水线、部署配置、共识存储与 P2P 通信。受影响模块测试全部通过。
+
+#### Fixed（修复）
+
+##### 组A — nexus-api-gateway 安全加固（P1-3/4/5/6）
+- **P1-3**: 移除 `api-keys` 弱默认值 `nexus-internal-api-key`，生产缺失即启动失败；开发默认值下沉至 `application-dev.yml`
+- **P1-4**: CorsFilter 默认 `allowed-origins` 从 `*` 改为空，强制生产显式配置；开发环境 `*` 保留在 dev profile
+- **P1-5**: RateLimitFilter 头名 `X-Nexus-Api-Key` → `X-NexusChain-ApiKey`，与 AuthenticationFilter 统一
+- **P1-6**: 新增 `trusted-proxy` 配置开关（默认 false），仅可信代理场景才使用 X-Forwarded-For，防止 IP 伪造绕过限流
+
+##### 组B — CI/部署/文档（P1-1/2/7/8）
+- **P1-1**: README 版本从 v2.16.0 更新至 v2.22.0，如实记录 NexFinality 测试状态和 gRPC mTLS 修复
+- **P1-2**: ci.yml 移除所有 `--continue` 标志，测试失败时 CI 阻断合入
+- **P1-7**: Seata 生产存储模式 `file` → `db`，增加 PostgreSQL DB 配置和 seata 数据库初始化说明
+- **P1-8**: Nacos 集群配置模板注释（3节点集群 + MySQL 后端存储示例）
+
+##### 组C — nexus-consortium 共识修复（P1-9/10/11/12）
+- **P1-9**: 实现 LevelDB 存储替换 no-op store()，区块数据持久化落盘（新增 LevelDbStore.java）
+- **P1-10**: 实现 PoA.onMessage，验证收到区块的合法性（高度连续性、hashPrev、proposer、签名）并写入存储
+- **P1-11**: PoAUtils.merkleHash 升级为真正的 Merkle 树计算（叶子层交易 hash → 逐层两两配对 → 根），createBlock 显式设置 merkleRoot
+- **P1-12**: Header 新增 proposer 字段，PoAMiner.getProposer 改用区块头 proposer 而非交易体，消除空 body 僵死风险
+
+#### Test Results
+- nexus-api-gateway 测试：全部通过
+- nexus-consortium 测试：全部通过（LevelDbStore 正常初始化和关闭）
+
+#### Changed（修改文件）
+- `nexus-api-gateway/.../filter/AuthenticationFilter.java`：移除 api-keys 默认值
+- `nexus-api-gateway/.../filter/CorsFilter.java`：CORS 默认 origins 改为空
+- `nexus-api-gateway/.../filter/RateLimitFilter.java`：头名对齐 + trusted-proxy 开关
+- `nexus-api-gateway/.../application.yml`、`application-dev.yml`：密钥和 CORS 配置
+- `README.md`：版本和测试状态更新
+- `.github/workflows/ci.yml`：移除 --continue
+- `docker-compose.prod.yml`：Seata DB 模式 + Nacos 集群模板
+- `nexus-consortium/.../storage/LevelDbStore.java`：新建 LevelDB 存储实现
+- `nexus-consortium/.../Start.java`：store() Bean 改用 LevelDbStore
+- `nexus-consortium/.../poa/PoA.java`：实现 onMessage
+- `nexus-consortium/.../poa/PoAMiner.java`：getProposer 用 header.proposer + createBlock 计算 merkleRoot
+- `nexus-consortium/.../poa/PoAUtils.java`：merkleHash 升级为 Merkle 树
+- `nexus-consortium/common/.../Header.java`：新增 proposer 字段
+- `nexus-consortium/consortium/build.gradle`：添加 LevelDB 依赖
+
 ## [2.22.0] - 2026-08-22
 
 ### 第22轮：P0-8 开发 compose 密钥加固 + P0 剩余三项核对结论

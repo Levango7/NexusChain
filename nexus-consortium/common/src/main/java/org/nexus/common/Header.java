@@ -31,12 +31,16 @@ public class Header implements Cloneable<Header>, Chained {
 
     private HexBytes hash;
 
+    // P1-12: 出块者地址，用于 PoA 共识从区块头直接获取上一轮 proposer，
+    // 避免依赖 body.get(0).getTo()（body 可能为空导致 getProposer 返回 empty）。
+    private String proposer;
+
     @Override
     public Header clone() {
         return builder().version(version)
                 .hashPrev(hashPrev).merkleRoot(merkleRoot)
                 .height(height).createdAt(createdAt)
-                .payload(payload).build();
+                .payload(payload).proposer(proposer).build();
     }
 
     @JsonProperty(access = JsonProperty.Access.READ_ONLY)

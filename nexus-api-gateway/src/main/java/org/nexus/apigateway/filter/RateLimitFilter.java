@@ -24,7 +24,7 @@ import java.util.List;
  * 采用 Redis Lua 脚本实现原子令牌桶，确保多实例 Gateway 限流计数一致。</p>
  *
  * <h2>限流维度</h2>
- * <p>按 API Key 限流（{@code X-Nexus-Api-Key} 头），未携带 API Key 时按客户端 IP 兜底。
+ * <p>按 API Key 限流（{@code X-NexusChain-ApiKey} 头），未携带 API Key 时按客户端 IP 兜底。
  * 同一 API Key 的所有请求共享一个令牌桶。</p>
  *
  * <h2>令牌桶参数</h2>
@@ -64,7 +64,7 @@ public class RateLimitFilter implements GlobalFilter, Ordered {
     private static final Logger log = LoggerFactory.getLogger(RateLimitFilter.class);
 
     /** API Key 请求头名（与 AuthenticationFilter 一致）。 */
-    private static final String HEADER_API_KEY = "X-Nexus-Api-Key";
+    private static final String HEADER_API_KEY = "X-NexusChain-ApiKey";
     /** 限流 key 前缀。 */
     private static final String KEY_PREFIX = "ratelimit:apikey:";
     /** Redis hash field：当前令牌数。 */
@@ -123,6 +123,10 @@ public class RateLimitFilter implements GlobalFilter, Ordered {
     /** 限流开关。 */
     @Value("${nexus.api-gateway.ratelimit.enabled:true}")
     private boolean enabled;
+
+    /** 是否信任代理转发的 X-Forwarded-For（仅可信 LB/CDN 置 true，防客户端伪造）。 */
+    @Value("${nexus.api-gateway.ratelimit.trusted-proxy:false}")
+    private boolean trustedProxy;
 
     public RateLimitFilter(ReactiveStringRedisTemplate redisTemplate) {
         this.redisTemplate = redisTemplate;
@@ -192,10 +196,13 @@ public class RateLimitFilter implements GlobalFilter, Ordered {
         if (apiKey != null && !apiKey.isEmpty()) {
             return "apikey:" + apiKey;
         }
-        // 客户端 IP：优先 X-Forwarded-For（经 LB / CDN），否则取 remoteAddress
-        String xff = request.getHeaders().getFirst("X-Forwarded-For");
-        if (xff != null && !xff.isEmpty()) {
-            return "ip:" + xff.split(",")[0].trim();
+        // 客户端 IP：仅当 trustedProxy=true 时信任 X-Forwarded-For（经可信 LB / CDN），
+        // 否则直接使用 remoteAddress，防止客户端伪造 X-Forwarded-For 绕过限流
+        if (trustedProxy) {
+            String xff = request.getHeaders().getFirst("X-Forwarded-For");
+            if (xff != null && !xff.isEmpty()) {
+                return "ip:" + xff.split(",")[0].trim();
+            }
         }
         return request.getRemoteAddress() != null
                 ? "ip:" + request.getRemoteAddress().getAddress().getHostAddress()

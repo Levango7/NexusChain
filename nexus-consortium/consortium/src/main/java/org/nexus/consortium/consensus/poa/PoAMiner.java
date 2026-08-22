@@ -67,11 +67,10 @@ public class PoAMiner implements Miner {
         if (parent.getHeight() == 0) {
             return Optional.of(new Proposer(genesis.miners.get(0).address, 0, Long.MAX_VALUE));
         }
-        if (parent.getBody() == null ||
-                parent.getBody().size() == 0 ||
-                parent.getBody().get(0).getTo() == null
-        ) return Optional.empty();
-        String prev = new PublicKeyHash(parent.getBody().get(0).getTo().getBytes()).getAddress();
+        // P1-12: 改用区块头 proposer 字段获取上一轮 proposer，
+        // 避免依赖 parent.getBody().get(0).getTo()（body 可能为空导致返回 empty）。
+        String prev = parent.getHeader().getProposer();
+        if (prev == null || prev.isEmpty()) return Optional.empty();
         int prevIndex = genesis.miners.stream().map(x -> x.address).collect(Collectors.toList()).indexOf(prev);
         if (prevIndex < 0) {
             return Optional.empty();
@@ -158,10 +157,17 @@ public class PoAMiner implements Miner {
                 .height(parent.getHeight() + 1)
                 .createdAt(System.currentTimeMillis() / 1000)
                 .payload(PoAConstants.ZERO_BYTES)
-                .hash(new HexBytes(BigEndian.encodeInt64(parent.getHeight() + 1))).build();
+                .hash(new HexBytes(BigEndian.encodeInt64(parent.getHeight() + 1)))
+                // P1-12: 在 header 中记录本轮出块者地址，供下一轮 getProposer 使用
+                .proposer(poAConfig.getMinerCoinBase())
+                .build();
         Block b = new Block(header);
         b.getBody().add(createCoinBase(parent.getHeight() + 1));
-        b.setHash(HASH_POLICY.getHash(b));
+        // P1-11: 计算 body 中所有交易的 Merkle 树根，并更新 header.merkleRoot（在 setHash 之前）。
+        byte[] merkleRoot = PoAUtils.merkleHash(b.getBody());
+        b.setMerkleRoot(new HexBytes(merkleRoot));
+        // 用 header 计算 hash，避免 getHash(Block) 覆盖已设置的 merkleRoot
+        b.setHash(HASH_POLICY.getHash(b.getHeader()));
         return b;
     }
 
