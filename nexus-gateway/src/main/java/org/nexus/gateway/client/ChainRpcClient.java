@@ -12,6 +12,7 @@ import io.github.resilience4j.retry.annotation.Retry;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.util.UriComponentsBuilder;
 
+import java.math.BigDecimal;
 import java.util.Map;
 
 /**
@@ -167,6 +168,48 @@ public class ChainRpcClient {
         } catch (Exception e) {
             log.warn("Failed to broadcast transaction: {}", e.getMessage());
             return false;
+        }
+    }
+
+    /**
+     * 查询链上交易的完整详情（P0-5 修复，v2.27.0）。
+     *
+     * <p>调用 core: GET /rpc/v1/transaction/{txHash}，返回交易金额、收款人、发送方等完整信息。
+     * 用于支付确认时校验交易-订单绑定（金额一致 + 收款人为商户结算地址）。
+     * 链节点不支持此端点或交易不存在时返回 null，调用方应做 null 检查并降级处理。</p>
+     *
+     * @param txHash 链上交易哈希
+     * @return 交易详情；链不可达或交易未找到返回 null
+     */
+    @SuppressWarnings("unchecked")
+    public OnChainTransaction getTransaction(String txHash) {
+        if (txHash == null || txHash.isEmpty()) return null;
+        try {
+            String url = gatewayConfig.getChain().getRpcUrl() + "/rpc/v1/transaction/" + txHash;
+            ResponseEntity<Map> resp = restTemplate.getForEntity(url, Map.class);
+            if (resp.getBody() == null) return null;
+            Object data = resp.getBody().get("data");
+            if (!(data instanceof Map)) return null;
+            Map<String, Object> d = (Map<String, Object>) data;
+
+            BigDecimal amount = null;
+            Object amountObj = d.get("amount");
+            if (amountObj instanceof Number) {
+                amount = new BigDecimal(amountObj.toString());
+            } else if (amountObj instanceof String) {
+                amount = new BigDecimal((String) amountObj);
+            }
+
+            String tokenSymbol = d.get("token_symbol") != null ? String.valueOf(d.get("token_symbol")) : null;
+            String sender = d.get("sender") != null ? String.valueOf(d.get("sender")) : null;
+            String recipient = d.get("recipient") != null ? String.valueOf(d.get("recipient")) : null;
+            Boolean confirmed = d.get("confirmed") instanceof Boolean ? (Boolean) d.get("confirmed") : null;
+            Long blockHeight = d.get("block_height") instanceof Number ? ((Number) d.get("block_height")).longValue() : null;
+
+            return new OnChainTransaction(txHash, amount, tokenSymbol, sender, recipient, confirmed, blockHeight);
+        } catch (Exception e) {
+            log.warn("Failed to get transaction details for txHash={}: {}", txHash, e.getMessage());
+            return null;
         }
     }
 

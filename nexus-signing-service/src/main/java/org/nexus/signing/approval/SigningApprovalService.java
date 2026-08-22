@@ -497,6 +497,9 @@ public class SigningApprovalService {
      * <ol>
      *   <li><b>标记过期</b>：扫描 PENDING 且 {@code deadline < now} 的请求，状态转换为 EXPIRED，
      *       记录审计日志。保留请求实例供调用方查询与审计追溯。</li>
+     *   <li><b>EXECUTING 卡死恢复</b>（P1-8 修复，v2.27.0）：扫描 EXECUTING 且
+     *       {@code deadline < now} 的请求（签名服务崩溃导致卡死），回退到 APPROVED 允许重试，
+     *       记录审计日志。</li>
      *   <li><b>释放内存</b>：清理终态（EXPIRED / REJECTED / EXECUTED）且
      *       {@code deadline < now - cleanupRetentionSeconds} 的请求，从 {@link #requestStore} 移除。
      *       保留期内（默认 1 小时）的终态请求保留以供审计查询。
@@ -531,6 +534,27 @@ public class SigningApprovalService {
             }
         }
 
+        // P1-8 修复（v2.27.0）：EXECUTING 卡死恢复——签名服务崩溃后 EXECUTING 状态的请求
+        // 超过 deadline 仍未完成，回退到 APPROVED 允许后续重试。
+        int revertedExecuting = 0;
+        for (Map.Entry<String, SigningApprovalRequest> entry : requestStore.entrySet()) {
+            SigningApprovalRequest req = entry.getValue();
+            if (req.getStatus() == SigningApprovalRequest.Status.EXECUTING
+                    && req.getDeadline().isBefore(now)) {
+                SigningApprovalRequest reverted = req.withStatus(SigningApprovalRequest.Status.APPROVED);
+                requestStore.save(entry.getKey(), reverted);
+                revertedExecuting++;
+                log.warn("EXECUTING 请求卡死恢复 (EXECUTING→APPROVED): requestId={}, deadline={}",
+                        entry.getKey(), req.getDeadline());
+                auditLogService.log(AuditEvent.builder(AuditEvent.Type.APPROVAL_REQUEST,
+                                AuditEvent.Outcome.FAILURE, req.getInitiator())
+                        .target(entry.getKey())
+                        .detail("reason", "executing_stuck_recovery")
+                        .detail("new_status", "APPROVED")
+                        .build());
+            }
+        }
+
         // 阶段2：清理终态且超过保留期的请求
         int removed = 0;
         Iterator<Map.Entry<String, SigningApprovalRequest>> it = requestStore.entrySet().iterator();
@@ -547,9 +571,9 @@ public class SigningApprovalService {
             }
         }
 
-        if (markedExpired > 0 || removed > 0) {
-            log.info("审批请求清理完成: markedExpired={}, removedTerminal={}, remaining={}",
-                    markedExpired, removed, requestStore.size());
+        if (markedExpired > 0 || revertedExecuting > 0 || removed > 0) {
+            log.info("审批请求清理完成: markedExpired={}, revertedExecuting={}, removedTerminal={}, remaining={}",
+                    markedExpired, revertedExecuting, removed, requestStore.size());
         }
     }
 
