@@ -1,5 +1,7 @@
 # Kubernetes Secret 管理指南（v2.1.0）
 
+<!-- 说明：标题中 v2.1.0 为历史架构阶段标记，非当前发布版本；当前版本请见根 README.md。本指南内容仍适用于当前部署。 -->
+
 本目录的 `00-namespace-config.yml` 中定义了一个 `nexus-secrets` Secret，
 其中 `stringData` 字段的值（`CHANGE_ME_IN_PRODUCTION`、`BASE64_ENCODED_32_BYTE_AES_KEY_HERE` 等）
 **仅为仓库内的占位模板**，不代表可直接部署的配置。本文档说明生产环境的正确做法。

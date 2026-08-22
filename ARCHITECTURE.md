@@ -165,7 +165,7 @@ Blockchain is the foundational settlement layer — not the product itself. On t
 - Webhook delivery is async with exponential backoff retry
 - **Dual-chain settlement (deliberate)**: `nexus-core` is the public settlement mainnet; `nexus-consortium` is a permissioned consortium/sidechain. Both are first-class chains — the product intentionally supports dual-chain, not a single settlement chain. `nexus-consortium` is consolidated into the unified build via Gradle composite build (`includeBuild`).
 
-## Security Hardening（v2.16.0）
+## Security Hardening（v2.24.0）
 
 第 16 轮质量保证工作完成的安全加固（不引入新功能，仅修复与加固）：
 

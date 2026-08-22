@@ -8,22 +8,30 @@ import org.springframework.test.context.ActiveProfiles;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * 治理参数化 E2E 测试。覆盖参数治理提案生命周期 + 紧急提案。
+ * 治理参数化 Mock 测试（原 ParameterGovernanceE2ETest 重命名）。
+ *
+ * <p><b>命名诚实性说明</b>：本测试使用 {@code @MockBean} 替换
+ * {@link GovernanceService}，仅验证 {@link GovernanceProposal}
+ * 模型对象的字段设置与状态枚举，不涉及真实治理服务调用或链上提案流程，
+ * 因此从 "E2E" 重命名为 "Mock" 以准确反映测试性质。</p>
+ *
+ * <p>真实治理端到端验证见 {@link OnChainGovernanceIntegrationTest}
+ * 与 {@link GovernanceExecutorOnChainIntegrationTest}（需 Hardhat 节点）。</p>
  */
 @SpringBootTest
 @ActiveProfiles("test")
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
-class ParameterGovernanceE2ETest {
+class ParameterGovernanceMockTest {
 
     @MockBean private GovernanceService governanceService;
 
     @Test @Order(1)
-    void governanceServiceAvailable() {
-        assertNotNull(governanceService, "governanceService应已注入");
+    void governanceServiceMockBeanAvailable() {
+        assertNotNull(governanceService, "governanceService mock 应已注入");
     }
 
     @Test @Order(2)
-    void createSimpleProposal() {
+    void proposalModelSetsIdField() {
         GovernanceProposal proposal = new GovernanceProposal();
         proposal.setProposalId("proposal_001");
         assertNotNull(proposal);
@@ -31,7 +39,7 @@ class ParameterGovernanceE2ETest {
     }
 
     @Test @Order(3)
-    void proposalVotingPhase() {
+    void proposalModelSetsVotingStatus() {
         GovernanceProposal proposal = new GovernanceProposal();
         proposal.setProposalId("proposal_002");
         proposal.setStatus(ProposalStatus.VOTING);
@@ -39,7 +47,7 @@ class ParameterGovernanceE2ETest {
     }
 
     @Test @Order(4)
-    void proposalPassed() {
+    void proposalModelSetsPassedStatus() {
         GovernanceProposal proposal = new GovernanceProposal();
         proposal.setProposalId("proposal_003");
         proposal.setStatus(ProposalStatus.PASSED);
@@ -47,7 +55,7 @@ class ParameterGovernanceE2ETest {
     }
 
     @Test @Order(5)
-    void proposalTimelockByType() {
+    void proposalModelSetsParameterChangeType() {
         GovernanceProposal low = new GovernanceProposal();
         low.setProposalId("low_001");
         low.setType(ProposalType.PARAMETER_CHANGE);
@@ -55,7 +63,7 @@ class ParameterGovernanceE2ETest {
     }
 
     @Test @Order(6)
-    void emergencyProposal() {
+    void proposalModelEmergencyFieldsSettable() {
         GovernanceProposal emergency = new GovernanceProposal();
         emergency.setProposalId("emergency_001");
 

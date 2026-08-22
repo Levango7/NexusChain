@@ -4,6 +4,45 @@
 
 ## [Unreleased]
 
+## [2.25.0] - 2026-08-22
+
+### 第25轮：P3 低危问题修复（文档版本一致性 + 测试命名误导 + SpEL 沙箱排查）
+
+本次发布修复漏洞扫描报告中的 P3 级低危问题。报告提及 3 类问题（文档版本不一致、测试命名误导、Spel 表达式未沙箱），共 10 项。经全面排查，修复文档版本不一致和测试命名误导，SpEL 排查未发现未沙箱化表达式。
+
+#### Fixed（修复）
+
+##### 组F — 文档版本一致性（P3-文档版本）
+- **README.md**：当前版本 v2.22.0 → v2.24.0，更新改动摘要和 CHANGELOG 引用
+- **build.gradle 版本统一**：根 build.gradle + 12 个模块 build.gradle 的 `version = '2.1.0'` → `'2.24.0'`（共 13 处），nexusVersion 变量同步更新
+- **version.properties**：nexus-core 版本号 versionNumber 2.1.0 → 2.24.0
+- **application.properties**：nexus.version 运行时版本 v2.1.0 → v2.24.0
+- **ARCHITECTURE.md**：Security Hardening 版本 v2.16.0 → v2.24.0
+- **docs/audit/project-assessment-report.md**：添加历史快照注释（v2.16.0 基线，不反映当前版本）
+- **deploy/ 4 个文件**：kafka/monitoring/tracing README + k8s SECRET-MANAGEMENT 添加历史架构阶段标记注释
+
+##### 组G — 测试命名误导修复（P3-测试命名）
+- **MultiNodeMpcE2ETest → MultiNodeMpcMockTest**：类名含"E2E"但全部使用 @MockBean，重命名为 Mock 并更新方法名和 javadoc
+- **ParameterGovernanceE2ETest → ParameterGovernanceMockTest**：类名含"E2E"但仅测试模型字段 set/get，重命名为 Mock 并更新方法名和 javadoc
+
+#### Investigated（排查未发现问题）
+- **SpEL 表达式未沙箱**：全面搜索 @Value #{...}、SpelExpressionParser、StandardEvaluationContext、@ConditionalOnExpression、@PreAuthorize、@PostFilter/@PreFilter，仅发现 1 处安全的 `#{null}` 默认值表达式和 13 处 `hasRole()` @PreAuthorize，**未发现未沙箱化的 SpEL 表达式**
+- **其他测试命名**：约 4648 个 @Test 方法逐一排查含 Real/Actual/Integration/E2E/EndToEnd 关键词的测试，均确认命名诚实
+
+#### Test Results
+- gradlew help：BUILD SUCCESSFUL（版本号 2.24.0 生效）
+- nexus-signing-service compileTestJava：BUILD SUCCESSFUL
+- nexus-core compileTestJava：BUILD SUCCESSFUL
+
+#### Changed（修改文件）
+- `README.md`、`ARCHITECTURE.md`：版本更新
+- `build.gradle` + 12 个模块 `build.gradle`：version 统一为 2.24.0
+- `nexus-core/.../version.properties`、`application.properties`：版本号更新
+- `docs/audit/project-assessment-report.md`：历史快照注释
+- `deploy/kafka/README.md`、`deploy/monitoring/README.md`、`deploy/tracing/README.md`、`deploy/k8s/SECRET-MANAGEMENT.md`：历史阶段标记
+- `MultiNodeMpcE2ETest.java` → `MultiNodeMpcMockTest.java`：重命名（删除旧文件 + 新建）
+- `ParameterGovernanceE2ETest.java` → `ParameterGovernanceMockTest.java`：重命名（删除旧文件 + 新建）
+
 ## [2.24.0] - 2026-08-22
 
 ### 第24轮：P2 中危问题修复（6项完成，4项已修复/已配置）
