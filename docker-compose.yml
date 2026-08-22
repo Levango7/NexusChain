@@ -288,9 +288,10 @@ services:
       # P0-1: peers 列表（排除本节点的其他参与方端点）
       - MPC_PEERS=party-1@mpc-engine-1:50051,party-2@mpc-engine-2:50051
       # MPC-P1-05 安全止血：会话落盘 AES-256-GCM 加密密钥
-      - MPC_STORAGE_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      # P0-8 加固：开发默认值内联，生产必须通过环境变量覆盖或使用 docker-compose.prod.yml
+      - MPC_STORAGE_KEY=${MPC_STORAGE_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
       # MPC-P1-05: gRPC Bearer token 认证
-      - MPC_AUTH_TOKEN=dev-mpc-engine-token-change-in-prod
+      - MPC_AUTH_TOKEN=${MPC_AUTH_TOKEN:-dev-mpc-engine-token-change-in-prod}  # P0-8: dev default; override in prod
       - MPC_REQUIRE_AUTH=true
     volumes:
       # 每节点挂载独立证书（node-A/B/C）+ 共享 CA
@@ -315,8 +316,9 @@ services:
       - MPC_PARTY_INDEX=1
       - MPC_PARTY_ID=party-1
       - MPC_PEERS=party-0@mpc-engine-0:50051,party-2@mpc-engine-2:50051
-      - MPC_STORAGE_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-      - MPC_AUTH_TOKEN=dev-mpc-engine-token-change-in-prod
+      # P0-8 加固：开发默认值内联，生产必须通过环境变量覆盖或使用 docker-compose.prod.yml
+      - MPC_STORAGE_KEY=${MPC_STORAGE_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+      - MPC_AUTH_TOKEN=${MPC_AUTH_TOKEN:-dev-mpc-engine-token-change-in-prod}  # P0-8: dev default; override in prod
       - MPC_REQUIRE_AUTH=true
     volumes:
       - ./mpc-certs/ca:/etc/mpc/tls/ca:ro
@@ -340,8 +342,9 @@ services:
       - MPC_PARTY_INDEX=2
       - MPC_PARTY_ID=party-2
       - MPC_PEERS=party-0@mpc-engine-0:50051,party-1@mpc-engine-1:50051
-      - MPC_STORAGE_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-      - MPC_AUTH_TOKEN=dev-mpc-engine-token-change-in-prod
+      # P0-8 加固：开发默认值内联，生产必须通过环境变量覆盖或使用 docker-compose.prod.yml
+      - MPC_STORAGE_KEY=${MPC_STORAGE_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+      - MPC_AUTH_TOKEN=${MPC_AUTH_TOKEN:-dev-mpc-engine-token-change-in-prod}  # P0-8: dev default; override in prod
       - MPC_REQUIRE_AUTH=true
     volumes:
       - ./mpc-certs/ca:/etc/mpc/tls/ca:ro
