@@ -76,7 +76,7 @@ nexus:
       # 鉴权总开关（本地调试可关）
       enabled: ${NEX_AUTH_ENABLED:true}
       # 合法 API Key 列表（逗号分隔）。生产环境通过 Nacos 下发，禁止入仓
-      api-keys: ${NEX_API_KEYS:nexus-internal-api-key}
+      api-keys: ${NEX_API_KEYS}
       # HMAC 共享密钥。生产环境通过 Nacos 加密下发
       hmac-secret: ${NEX_HMAC_SECRET}
       # 时间戳偏差上限（秒），超过则拒绝（防重放第一道）

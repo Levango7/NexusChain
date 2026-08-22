@@ -58,8 +58,8 @@ jobs:
       - name: 编译 (compileJava + compileTestJava)
         run: ./gradlew compileJava compileTestJava --no-daemon
 
-      - name: 测试 (test --continue, 跳过 jacoco 报告)
-        run: ./gradlew test --continue -x jacocoTestReport --no-daemon
+      - name: 测试 (test, 跳过 jacoco 报告)
+        run: ./gradlew test -x jacocoTestReport --no-daemon
 
       # P2-C6: composite build 模块测试门禁
       # settings.gradle 中 includeBuild 的模块（nexus-settlement/compliance/analytics/oracle）
@@ -68,7 +68,7 @@ jobs:
       # 可通过根 gradlew 以 `:nexus-settlement:test` 形式调用（Gradle 8.x composite build 支持）。
       - name: Test composite build modules
         run: |
-          ./gradlew :nexus-settlement:test :nexus-compliance:test :nexus-analytics:test :nexus-oracle:test --no-daemon --continue
+          ./gradlew :nexus-settlement:test :nexus-compliance:test :nexus-analytics:test :nexus-oracle:test --no-daemon
 
       # P2-C6: 三个关键回归测试门禁（双花防御 / 桥资金守恒 / 门限签名）
       # 这些测试覆盖核心安全不变量，单独显式执行以确保被运行（即使其他测试被 skip）。
@@ -80,10 +80,10 @@ jobs:
           ./gradlew :nexus-bridge:test \
             --tests "org.nexus.bridge.security.ReplayProtectionTest" \
             --tests "org.nexus.bridge.safety.DefaultInsuranceFundTest" \
-            --no-daemon --continue
+            --no-daemon
           ./gradlew :nexus-signing-service:test \
             --tests "org.nexus.signing.mpc.MpcEndToEndTest" \
-            --no-daemon --continue
+            --no-daemon
 
       # P2-C6: Rust 测试（mpc-engine）
       # 通过 dtolnay/rust-toolchain@stable 显式安装 Rust 工具链，作为强制门禁。

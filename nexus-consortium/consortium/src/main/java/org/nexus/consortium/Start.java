@@ -16,6 +16,7 @@ import org.nexus.consortium.consensus.None;
 import org.nexus.consortium.consensus.poa.PoA;
 import org.nexus.consortium.net.GRpcPeerServer;
 import org.nexus.consortium.net.WebSocketPeerServer;
+import org.nexus.consortium.storage.LevelDbStore;
 
 import java.util.Map;
 import java.util.Optional;
@@ -67,7 +68,7 @@ public class Start {
     public PendingTransactionValidator transactionValidator(ConsensusEngine engine){return engine.validator();}
 
     @Bean
-    public ConsensusEngine consensusEngine(ConsensusProperties consensusProperties, ConsortiumRepository consortiumRepository) throws Exception {
+    public ConsensusEngine consensusEngine(ConsensusProperties consensusProperties, ConsortiumRepository consortiumRepository, BatchAbleStore store) throws Exception {
         String name = consensusProperties.getProperty(ConsensusProperties.CONSENSUS_NAME);
         name = name == null ? "" : name;
         final ConsensusEngine engine;
@@ -87,6 +88,10 @@ public class Start {
                                 " please provide available consensus engine");
                 log.error("roll back to poa consensus");
                 engine = new PoA();
+        }
+        // P1-10: 向 PoA 注入持久化存储，供 onMessage 收到合法区块后落盘
+        if (engine instanceof PoA) {
+            ((PoA) engine).setStore(store);
         }
         engine.load(consensusProperties, consortiumRepository);
         consortiumRepository.setProvider(engine.provider());
@@ -138,33 +143,13 @@ public class Start {
     }
 
     // create leveldb/rocksdb here
+    // P1-9: 替换 no-op 实现，使用 LevelDB 持久化存储使区块数据真正落盘。
+    // 数据目录通过配置项 consortium.data-dir 指定，默认 ./data/leveldb。
     @Bean
-    public BatchAbleStore store(){
-        return new BatchAbleStore() {
-            @Override
-            public void updateBatch(Map rows) {
-
-            }
-
-            @Override
-            public Optional get(Object o) {
-                return Optional.empty();
-            }
-
-            @Override
-            public void put(Object o, Object o2) {
-
-            }
-
-            @Override
-            public void putIfAbsent(Object o, Object o2) {
-
-            }
-
-            @Override
-            public void remove(Object o) {
-
-            }
-        };
+    public BatchAbleStore store(GlobalConfig globalConfig){
+        Object dataDirObj = globalConfig.get("data-dir");
+        String dataDir = dataDirObj == null ? "./data/leveldb" : String.valueOf(dataDirObj);
+        log.info("init LevelDbStore at {}", dataDir);
+        return new LevelDbStore(dataDir);
     }
 }

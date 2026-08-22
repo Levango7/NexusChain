@@ -4,7 +4,7 @@ NexusChain 是一个**基于自研区块链的支付编排平台（Payment Orche
 
 > **定位**：区块链是底层结算基础设施，不是产品本身。产品价值在于统一支付 API、启发式路由与清结算。
 
-**当前版本**：v2.16.0（2026-08-20，最新稳定版；前 15 轮功能改造 + 第 16 轮质量保证工作已完成）
+**当前版本**：v2.22.0（2026-08-22，最新稳定版；P0 漏洞修复全部完成，P1 修复进行中）
 
 ## 快速开始
 
@@ -72,7 +72,7 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
 
 | 模块 | 职责 | 成熟度 |
 |------|------|--------|
-| `nexus-core` | 结算链节点：共识（DPoS 默认 / PoS 可选）、P2P、存储、RPC、合约引擎 | 较完整（PoS 基础层 + NexFinality 最终性层已闭环，多节点共识 2026-08 真机验证） |
+| `nexus-core` | 结算链节点：共识（DPoS 默认 / PoS 可选）、P2P、存储、RPC、合约引擎 | 较完整（PoS 基础层 + NexFinality 最终性层已实现（v2.21.0 修复测试签名长度问题，49 个测试全部通过），多节点共识 2026-08 真机验证） |
 | `nexus-gateway` | 商户支付网关：订单、路由、Webhook、清结算/风控/合规关卡接入 | 较完整 |
 | `nexus-bridge` | 跨链桥：锁定/铸造/销毁/解锁状态机、Relayer 网络、流动性管理 | 核心完整，Solana/Avalanche 适配器已交付（含测试），其余外部链为骨架 |
 | `nexus-consortium` | 联盟链/侧链：完整 PoA 链、国密 SM2/3/4 | 完整 |
@@ -97,7 +97,7 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
 - **Java MPC 传输层**：`GrpcMpcTransportStub` + `MpcTransportGrpcServer` 实现**真实 gRPC over HTTP/2** 传输，支持 P2P 消息路由。
 - **部署模型限制（诚实声明）**：当前为「可信协调器」模型——全部 n 方私钥份额驻留同一进程内存，**门限容错属性失效**（进程被攻破即等价单点签名）。完全分散式部署（t-of-n 方被攻破不泄露私钥）为 v2.2.0 演进目标。
 - **编译状态**：代码完成但**未编译验证**（开发环境缺少 C 编译器）。
-- **传输安全**：gRPC 默认明文，无 mTLS 实现代码（P0，v2.1.0 修复）。
+- **传输安全**：gRPC mTLS 已实现（MPC-P0-02 修复，use-plaintext 默认 false）。
 
 ### ZK 证明（v2.0.0-rc1 真实化）
 
@@ -118,7 +118,7 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
 - **执行流程真实**：解析 payload → 校验 → 执行 → 审计日志（JPA 持久化）→ 发布事件 → 状态回写。
 - **安全已补**：事件源白名单认证、审计日志持久化、软件升级 Nacos 配置发布（Open API）、转账哈希真实计算（fail-closed，无 `hashCode()` 占位）。
 
-### PoS 共识（NexFinality 最终性已闭环，2026-08）
+### PoS 共识（NexFinality 最终性已实现（v2.21.0 测试修复后全部通过），2026-08）
 
 - 基础层闭环（ADR-029 审计基线）：权益加权出块提案、区块 8 步校验（真实 Ed25519 验签）、质押管理、罚没、验证者注册、出块奖励、P2P 同步。
 - **NexFinality 最终性层（ADR-030/031）已实现并真机闭环**：BFT 双轮投票、2/3 质押权重判定、双签证据惩罚链、验证者集变更走治理（VALIDATOR_SET_CHANGE）、BLS 接口层（M3 阻塞项：blst 库绑定待环境解锁）。
@@ -145,7 +145,7 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
 
 ADR-001 状态：**Resolved**（2026-08-10）。
 
-## 最新改动摘要（v2.16.0，第 16 轮质量保证）
+## 最新改动摘要（v2.22.0，P0 漏洞修复 + P1 高危修复）
 
 本次发布对前 15 轮改造后的代码基线进行系统化质量保证，不引入新功能，仅修复与加固：
 
@@ -157,7 +157,7 @@ ADR-001 状态：**Resolved**（2026-08-10）。
 | 性能调优 | NonceTracker 无锁化 | `synchronized` → `ConcurrentHashMap.putIfAbsent`，多线程争用显著降低；另给出 10 项后续优化建议 |
 | 组件装配 | `InMemoryChainDidStore` | 添加 `@Component` 注解，支持 Spring 自动装配 |
 
-详细变更见 [CHANGELOG](CHANGELOG.md) v2.16.0 节。
+详细变更见 [CHANGELOG](CHANGELOG.md) v2.22.0 节。
 
 ## 安全审计
 
