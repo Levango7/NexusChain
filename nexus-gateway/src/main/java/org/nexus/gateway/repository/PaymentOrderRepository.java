@@ -22,6 +22,17 @@ public interface PaymentOrderRepository extends JpaRepository<PaymentOrder, Long
 
     Optional<PaymentOrder> findByCheckoutToken(String checkoutToken);
 
+    /**
+     * 按链上交易哈希查询订单（P0-5 修复，v2.27.0）。
+     *
+     * <p>用于支付确认时校验交易-订单绑定唯一性：同一 txHash 不得绑定到多个订单。
+     * 配合 DB 层唯一约束 {@code uk_payment_orders_chain_tx_hash}（V12 migration）双重防护。</p>
+     *
+     * @param chainTxHash 链上交易哈希
+     * @return 已绑定该 txHash 的订单（可能为空）
+     */
+    Optional<PaymentOrder> findByChainTxHash(String chainTxHash);
+
     List<PaymentOrder> findByMerchantIdAndStatus(Long merchantId, PaymentOrder.OrderStatus status);
 
     List<PaymentOrder> findByMerchantId(Long merchantId);

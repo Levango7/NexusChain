@@ -40,6 +40,8 @@ public final class SigningApprovalRequest {
         APPROVED,
         /** 已拒绝：任一审批人拒绝。 */
         REJECTED,
+        /** 执行中：签名正在广播（P1-8 修复，v2.27.0）。CAS 中间态，防止并发重复执行。 */
+        EXECUTING,
         /** 已执行：签名已广播。 */
         EXECUTED,
         /** 已过期：超时未收集足够审批。 */

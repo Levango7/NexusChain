@@ -408,6 +408,9 @@ public class SigningApprovalService {
     /**
      * 标记审批请求已执行（签名已广播）。
      *
+     * <p>v2.27.0 P1-8 修复：支持从 {@code EXECUTING} 状态迁移到 {@code EXECUTED}
+     * （正常流程），同时保留从 {@code APPROVED} 直接迁移的向后兼容路径。</p>
+     *
      * @param requestId 审批请求 ID
      * @return 更新后的审批请求；requestId 不存在时返回 null
      */
@@ -419,8 +422,9 @@ public class SigningApprovalService {
         if (existing == null) {
             return null;
         }
-        if (existing.getStatus() != SigningApprovalRequest.Status.APPROVED) {
-            log.warn("审批请求状态非 APPROVED，无法标记 EXECUTED: requestId={}, status={}",
+        if (existing.getStatus() != SigningApprovalRequest.Status.APPROVED
+                && existing.getStatus() != SigningApprovalRequest.Status.EXECUTING) {
+            log.warn("审批请求状态非 APPROVED/EXECUTING，无法标记 EXECUTED: requestId={}, status={}",
                     requestId, existing.getStatus());
             return existing;
         }
@@ -428,6 +432,61 @@ public class SigningApprovalService {
         requestStore.save(requestId, executed);
         log.info("审批请求标记已执行: requestId={}", requestId);
         return executed;
+    }
+
+    /**
+     * P1-8 修复（v2.27.0）：原子地将审批请求从 APPROVED 标记为 EXECUTING（CAS 中间态）。
+     *
+     * <p>在执行签名前调用此方法，确保同一审批请求不会被并发重复执行。
+     * 若当前状态不是 APPROVED（例如已被另一个线程标记为 EXECUTING/EXECUTED），
+     * 返回 false 表示 CAS 失败，调用方应中止签名执行。</p>
+     *
+     * @param requestId 审批请求 ID
+     * @return true 表示成功迁移到 EXECUTING；false 表示状态不匹配或请求不存在
+     */
+    public boolean tryMarkExecuting(String requestId) {
+        if (requestId == null) {
+            return false;
+        }
+        SigningApprovalRequest existing = requestStore.get(requestId);
+        if (existing == null) {
+            return false;
+        }
+        if (existing.getStatus() != SigningApprovalRequest.Status.APPROVED) {
+            log.warn("CAS 失败：审批请求状态非 APPROVED，无法标记 EXECUTING: requestId={}, status={}",
+                    requestId, existing.getStatus());
+            return false;
+        }
+        SigningApprovalRequest executing = existing.withStatus(SigningApprovalRequest.Status.EXECUTING);
+        requestStore.save(requestId, executing);
+        log.info("审批请求标记执行中 (CAS APPROVED→EXECUTING): requestId={}", requestId);
+        return true;
+    }
+
+    /**
+     * P1-8 修复（v2.27.0）：将审批请求从 EXECUTING 回退到 APPROVED（签名执行失败时调用）。
+     *
+     * <p>当签名执行失败后，调用此方法将审批请求恢复到 APPROVED 状态，
+     * 允许后续重试。若当前状态不是 EXECUTING，则不执行任何操作（防止误回退）。</p>
+     *
+     * @param requestId 审批请求 ID
+     */
+    public void revertExecuting(String requestId) {
+        if (requestId == null) {
+            return;
+        }
+        SigningApprovalRequest existing = requestStore.get(requestId);
+        if (existing == null) {
+            return;
+        }
+        if (existing.getStatus() != SigningApprovalRequest.Status.EXECUTING) {
+            log.warn("无法回退：审批请求状态非 EXECUTING: requestId={}, status={}",
+                    requestId, existing.getStatus());
+            return;
+        }
+        SigningApprovalRequest reverted = existing.withStatus(SigningApprovalRequest.Status.APPROVED);
+        requestStore.save(requestId, reverted);
+        log.info("审批请求回退 (EXECUTING→APPROVED): requestId={}", requestId);
     }
 
     /**

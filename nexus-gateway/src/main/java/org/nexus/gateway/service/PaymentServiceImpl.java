@@ -252,6 +252,25 @@ public class PaymentServiceImpl implements PaymentService {
                         order.getOrderNo(), chainTxHash);
             }
 
+            // P0-5 修复（v2.27.0）：交易-订单绑定唯一性校验。
+            // 同一 chainTxHash 不得绑定到多个订单，防止攻击者复用合法 txHash 确认多笔订单。
+            // DB 层有唯一约束 uk_payment_orders_chain_tx_hash（V12 migration）兜底，
+            // 此处提前检查以提供友好的错误信息而非 DB 异常。
+            PaymentOrder existingOrder = orderRepository.findByChainTxHash(chainTxHash).orElse(null);
+            if (existingOrder != null && !existingOrder.getId().equals(order.getId())) {
+                log.warn("SECURITY: chainTxHash already bound to another order: txHash={}, "
+                        + "existingOrderNo={}, currentOrderNo={}",
+                        chainTxHash, existingOrder.getOrderNo(), order.getOrderNo());
+                OrderStateMachine.transition(order, PaymentOrder.OrderStatus.FAILED);
+                order.setChainTxHash(chainTxHash);
+                orderRepository.save(order);
+                confirmSpan.attr("payment.status", "FAILED")
+                        .attr("tx.binding.check", "DUPLICATE_TX_HASH")
+                        .error(null);
+                return PaymentResult.failed(order.getOrderNo(),
+                        "Transaction hash already bound to another order");
+            }
+
             // AML gate: screen the confirmed transaction before marking it PAID.
             // High-risk hits (score >= 90 or manual review required) block the payment
             // and file a Suspicious Activity Report; lower scores pass with a warning log.

@@ -55,9 +55,8 @@ public class HashUtil {
             MessageDigest digest = MessageDigest.getInstance(algorithm, "BC");
             return digest.digest(in);
         }catch (Exception e){
-            e.printStackTrace();
+            throw new IllegalStateException("Hash computation failed for algorithm: " + algorithm, e);
         }
-        return null;
     }
 
     /**

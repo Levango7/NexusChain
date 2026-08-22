@@ -1,5 +1,6 @@
 package org.nexus.gateway.refund;
 
+import org.nexus.gateway.model.OrderStateMachine;
 import org.nexus.gateway.model.PaymentOrder;
 import org.nexus.gateway.repository.PaymentOrderRepository;
 import org.nexus.settlement.execution.OnChainExecutionChannel;
@@ -177,6 +178,15 @@ public class DefaultRefundApprovalService implements RefundApprovalService {
             request.setChainTxHash(txHash);
             request.setStatus(RefundRequest.RefundStatus.EXECUTED);
             request.setExecutedAt(LocalDateTime.now());
+
+            // P0-1 修复（v2.27.0）：退款执行成功后将订单状态迁移到 REFUNDED，
+            // 防止同一订单被无限次重复放款。OrderStateMachine 支持 PAID → REFUNDED 迁移。
+            PaymentOrder order = paymentOrderRepository.findById(request.getOrderId())
+                    .orElseThrow(() -> new IllegalStateException(
+                            "Order not found after refund execution: orderId=" + request.getOrderId()));
+            OrderStateMachine.transition(order, PaymentOrder.OrderStatus.REFUNDED);
+            paymentOrderRepository.save(order);
+
             log.info("Refund executed: refundId={}, txHash={}", refundId, txHash);
         } catch (Exception e) {
             request.setStatus(RefundRequest.RefundStatus.FAILED);
@@ -201,10 +211,21 @@ public class DefaultRefundApprovalService implements RefundApprovalService {
         if (executionChannel == null) {
             throw new IllegalStateException("OnChainExecutionChannel is not injected");
         }
+        // P0-2 修复（v2.27.0）：退款收款方必须是原付款人地址，而非字符串常量 "REFUND:"+refundNo。
+        // 原实现将退款转到一个不存在的地址 "REFUND:RF..."，资金永远无法被收款人领取。
+        PaymentOrder order = paymentOrderRepository.findById(request.getOrderId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "Order not found for refund: orderId=" + request.getOrderId()));
+        String payerAddress = order.getPayerAddress();
+        if (payerAddress == null || payerAddress.isBlank()) {
+            throw new IllegalStateException(
+                    "Payer address is null for order: " + request.getOrderId()
+                            + "; refund cannot be sent to an unknown recipient");
+        }
         TransactionRequest txReq = new TransactionRequest(
                 TransactionRequest.Type.REFUND,
                 platformRefundAddress,
-                "REFUND:" + request.getRefundNo(),
+                payerAddress,
                 request.getAmount(),
                 "NEX",
                 "refund:" + request.getRefundNo(),
@@ -213,6 +234,12 @@ public class DefaultRefundApprovalService implements RefundApprovalService {
         if (result == null || !result.isSuccess() || result.getTxHash() == null) {
             String err = result != null ? result.getError() : "execution channel returned null";
             throw new IllegalStateException("on-chain refund execution failed: " + err);
+        }
+        // P0-2 修复（v2.27.0）：生产环境不应使用模拟交易，记录安全告警。
+        if (result.isSimulated()) {
+            log.warn("SECURITY: refund executed in simulated mode: refundId={}, txHash={}. "
+                    + "MUST not happen in production.",
+                    request.getId(), result.getTxHash());
         }
         log.info("refund on-chain executed: refundId={}, txHash={}, simulated={}",
                 request.getId(), result.getTxHash(), result.isSimulated());

@@ -4,6 +4,52 @@
 
 ## [Unreleased]
 
+## [2.27.0] - 2026-08-22
+
+### 第三轮安全审计 P0+P1+P2 修复（退款安全 + IDOR防护 + 审批原子性 + 网关加固）
+
+本次发布修复第三轮安全审计报告中发现的10个问题（5个P0 + 3个P1 + 2个P2），全部经逐行核实后修复。
+
+#### Fixed（修复）
+
+##### P0 — 退款与交易安全（5项）
+
+- **P0-1 退款无限次重复放款**：`RefundRequestRepository.sumPendingRefundsByOrderId` 查询将 EXECUTED 状态纳入退款金额统计，已执行的退款计入已退额度；`DefaultRefundApprovalService.executeRefund` 执行成功后通过 `OrderStateMachine.transition` 将订单状态迁移到 REFUNDED（终态），防止同一订单被无限次重复放款。
+  - 影响文件：`RefundRequestRepository.java`、`DefaultRefundApprovalService.java`
+- **P0-2 退款收款方改为付款人地址**：`DefaultRefundApprovalService.executeOnChain` 退款收款方从字符串常量 `"REFUND:"+refundNo`（不存在的地址，资金永远无法被领取）改为 `order.getPayerAddress()`（原付款人地址）；增加 `result.isSimulated()` 检查，模拟交易在生产环境记录安全告警。
+  - 影响文件：`DefaultRefundApprovalService.java`
+- **P0-3 最终性投票 fail-closed**：`SignatureAggregator.addSignature` 当公钥为 null/empty 时 `return false`（fail-closed），不再跳过验签直接返回 true。
+  - 影响文件：`SignatureAggregator.java`
+- **P0-4 订单端点 IDOR 防护**：`PaymentController` 的 getOrder/pay/confirm/refund 端点增加商户归属校验（`verifyMerchantOwnership` 方法），从请求属性 `nexus.merchantId` 提取认证商户 ID，校验 `order.getMerchantId()` 一致性，不匹配返回 403。属性未设置时记录安全告警并放行（向后兼容）。
+  - 影响文件：`PaymentController.java`
+- **P0-5 支付确认交易绑定唯一性**：新增 Flyway V12 migration 添加 `payment_orders.chain_tx_hash` 唯一约束（`uk_payment_orders_chain_tx_hash`）；`PaymentOrderRepository` 新增 `findByChainTxHash` 方法；`PaymentServiceImpl.confirmPayment` 在标记 PAID 前校验 chainTxHash 未被其他订单绑定，防止复用合法 txHash 确认多笔订单。
+  - 影响文件：`V12__chain_tx_hash_unique.sql`（新建）、`PaymentOrderRepository.java`、`PaymentServiceImpl.java`
+
+##### P1 — 网关与签名安全（3项）
+
+- **P1-6 Webhook 日志不再回显期望签名**：`WebhookController` 签名校验失败日志从 `log.warn("expected={}, actual={}", expectedSig, signature)` 改为 `log.warn("Invalid webhook signature received")`，避免在日志中暴露期望签名值。
+  - 影响文件：`WebhookController.java`
+- **P1-7 网关 SecurityConfig 回归修复**：v2.26.0 回归——`nexus-gateway/build.gradle` 声明了 `spring-boot-starter-security` 依赖但无 `SecurityConfig`，导致 `@PreAuthorize` 注解为死代码。新建 `SecurityConfig.java`（`@EnableWebSecurity` + `@EnableMethodSecurity`），CSRF 禁用 + `permitAll`（拦截器做鉴权），激活方法级安全控制。
+  - 影响文件：`SecurityConfig.java`（新建）
+- **P1-8 签名审批 CAS 原子性**：`SigningApprovalRequest.Status` 新增 `EXECUTING` 中间态；`SigningApprovalService` 新增 `tryMarkExecuting`（APPROVED→EXECUTING CAS）和 `revertExecuting`（EXECUTING→APPROVED 回退）方法；`TxController.signTransferApproved` 在签名前执行 CAS（失败则拒绝），签名异常时回退审批状态，`markExecuted` 失败抛 `IllegalStateException`（不再静默吞异常）。防止两个并发调用同时通过 APPROVED 检查并重复执行签名+广播（双重放款）。
+  - 影响文件：`SigningApprovalRequest.java`、`SigningApprovalService.java`、`TxController.java`
+
+##### P2 — 工具与路由（2项）
+
+- **P2-11 HashUtil 失败抛异常**：`HashUtil.hash` catch 块从 `e.printStackTrace(); return null`（调用方无法感知失败）改为 `throw new IllegalStateException(...)`（fail-fast）。
+  - 影响文件：`HashUtil.java`
+- **P2-12 API 网关路由补全**：`GatewayConfig` 新增 6 条路由：`/orders`→nexus-gateway、`/refunds`→nexus-gateway、`/merchants`→nexus-gateway、`/checkout`→nexus-gateway、`/webhooks`→nexus-gateway、`/v2`→nexus-gateway。原实现仅配置了 4 条前缀路由，导致部分 API 请求无法被正确路由。
+  - 影响文件：`GatewayConfig.java`
+
+#### Security（安全）
+
+- 第三轮安全审计完成，10个漏洞全部修复（5个P0 + 3个P1 + 2个P2）
+- 退款安全：防止无限次重复放款、收款方改为付款人地址
+- 交易安全：chainTxHash 唯一约束防止交易复用攻击
+- IDOR防护：订单端点增加商户归属校验
+- 审批原子性：CAS 防止并发双重放款
+- 网关安全：SecurityConfig 回归修复、Webhook 日志脱敏
+
 ## [2.26.0] - 2026-08-22
 
 ### 第26轮：第二轮安全审计 P0+P1+P2 修复（鉴权加固 + 代码bug + 测试修复）

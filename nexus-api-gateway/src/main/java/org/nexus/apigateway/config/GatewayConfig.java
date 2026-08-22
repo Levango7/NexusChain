@@ -85,6 +85,42 @@ public class GatewayConfig {
                         .filters(f -> f.stripPrefix(0))
                         .uri("lb://" + SVC_WALLET))
 
+                // 5. 订单 API：/api/v1/orders/** → nexus-gateway
+                .route("orders-route", r -> r
+                        .path("/api/v1/orders/**")
+                        .filters(f -> f.stripPrefix(0))
+                        .uri("lb://" + SVC_GATEWAY))
+
+                // 6. 退款 API：/api/v1/refunds/** → nexus-gateway
+                .route("refunds-route", r -> r
+                        .path("/api/v1/refunds/**")
+                        .filters(f -> f.stripPrefix(0))
+                        .uri("lb://" + SVC_GATEWAY))
+
+                // 7. 商户管理 API：/api/v1/merchants/** → nexus-gateway
+                .route("merchants-route", r -> r
+                        .path("/api/v1/merchants/**")
+                        .filters(f -> f.stripPrefix(0))
+                        .uri("lb://" + SVC_GATEWAY))
+
+                // 8. 收银台 API：/api/v1/checkout/** → nexus-gateway
+                .route("checkout-route", r -> r
+                        .path("/api/v1/checkout/**")
+                        .filters(f -> f.stripPrefix(0))
+                        .uri("lb://" + SVC_GATEWAY))
+
+                // 9. Webhook 回调：/api/v1/webhooks/** → nexus-gateway
+                .route("webhooks-route", r -> r
+                        .path("/api/v1/webhooks/**")
+                        .filters(f -> f.stripPrefix(0))
+                        .uri("lb://" + SVC_GATEWAY))
+
+                // 10. V2 API：/api/v2/** → nexus-gateway
+                .route("v2-route", r -> r
+                        .path("/api/v2/**")
+                        .filters(f -> f.stripPrefix(0))
+                        .uri("lb://" + SVC_GATEWAY))
+
                 .build();
     }
 }

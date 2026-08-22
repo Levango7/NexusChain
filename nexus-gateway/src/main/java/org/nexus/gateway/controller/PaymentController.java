@@ -11,13 +11,17 @@ import org.springframework.http.ResponseEntity;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.web.bind.annotation.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * REST API for order creation, payment, refund, and the cashier (checkout) redirect flow.
@@ -26,6 +30,8 @@ import java.util.Map;
 @RequestMapping("/api/v1")
 @Tag(name = "Payment", description = "Order creation, payment, refund, and checkout")
 public class PaymentController {
+
+    private static final Logger log = LoggerFactory.getLogger(PaymentController.class);
 
     private final OrderService orderService;
     private final PaymentService paymentService;
@@ -56,10 +62,18 @@ public class PaymentController {
      */
     @Operation(summary = "Query an order by ID")
     @GetMapping("/orders/{id}")
-    public ResponseEntity<PaymentOrder> getOrder(@PathVariable Long id) {
-        return orderService.findById(id)
-                .map(ResponseEntity::ok)
-                .orElse(ResponseEntity.notFound().build());
+    public ResponseEntity<PaymentOrder> getOrder(@PathVariable Long id, HttpServletRequest httpRequest) {
+        Optional<PaymentOrder> opt = orderService.findById(id);
+        if (opt.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+        PaymentOrder order = opt.get();
+        // P0-4 修复（v2.27.0）：商户归属校验，防止 IDOR
+        ResponseEntity<PaymentOrder> denial = verifyMerchantOwnership(order, httpRequest);
+        if (denial != null) {
+            return denial;
+        }
+        return ResponseEntity.ok(order);
     }
 
     /**
@@ -71,7 +85,17 @@ public class PaymentController {
      */
     @Operation(summary = "Initiate payment for an order")
     @PostMapping("/orders/{id}/pay")
-    public ResponseEntity<PaymentResult> pay(@PathVariable Long id, @RequestBody PayRequest request) {
+    public ResponseEntity<PaymentResult> pay(@PathVariable Long id, @RequestBody PayRequest request,
+                                             HttpServletRequest httpRequest) {
+        // P0-4 修复（v2.27.0）：商户归属校验，防止 IDOR
+        Optional<PaymentOrder> opt = orderService.findById(id);
+        if (opt.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+        ResponseEntity<PaymentResult> denial = verifyMerchantOwnership(opt.get(), httpRequest);
+        if (denial != null) {
+            return denial;
+        }
         PaymentResult result = paymentService.initiatePayment(id, request.getPayerAddress());
         return ResponseEntity.ok(result);
     }
@@ -85,7 +109,17 @@ public class PaymentController {
      */
     @Operation(summary = "Confirm payment after chain event")
     @PostMapping("/orders/{id}/confirm")
-    public ResponseEntity<PaymentResult> confirm(@PathVariable Long id, @RequestBody ConfirmRequest request) {
+    public ResponseEntity<PaymentResult> confirm(@PathVariable Long id, @RequestBody ConfirmRequest request,
+                                                 HttpServletRequest httpRequest) {
+        // P0-4 修复（v2.27.0）：商户归属校验，防止 IDOR
+        Optional<PaymentOrder> opt = orderService.findById(id);
+        if (opt.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+        ResponseEntity<PaymentResult> denial = verifyMerchantOwnership(opt.get(), httpRequest);
+        if (denial != null) {
+            return denial;
+        }
         PaymentResult result = paymentService.confirmPayment(id, request.getChainTxHash());
         return ResponseEntity.ok(result);
     }
@@ -99,7 +133,17 @@ public class PaymentController {
      */
     @Operation(summary = "Initiate a refund")
     @PostMapping("/orders/{id}/refund")
-    public ResponseEntity<Refund> refund(@PathVariable Long id, @RequestBody RefundRequest request) {
+    public ResponseEntity<Refund> refund(@PathVariable Long id, @RequestBody RefundRequest request,
+                                         HttpServletRequest httpRequest) {
+        // P0-4 修复（v2.27.0）：商户归属校验，防止 IDOR
+        Optional<PaymentOrder> opt = orderService.findById(id);
+        if (opt.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+        ResponseEntity<Refund> denial = verifyMerchantOwnership(opt.get(), httpRequest);
+        if (denial != null) {
+            return denial;
+        }
         Refund refund = paymentService.refund(id, request.getAmount(), request.getReason());
         return ResponseEntity.status(HttpStatus.CREATED).body(refund);
     }
@@ -122,6 +166,44 @@ public class PaymentController {
         } else {
             response.sendError(HttpServletResponse.SC_NOT_FOUND, "Invalid or expired checkout token");
         }
+    }
+
+    /**
+     * P0-4 修复（v2.27.0）：商户归属校验，防止 IDOR（Insecure Direct Object Reference）。
+     *
+     * <p>从 HTTP 请求属性 {@code nexus.merchantId} 提取当前认证商户 ID（由鉴权拦截器设置），
+     * 校验订单的 {@code merchantId} 与之一致。若请求属性未设置（无鉴权拦截器或匿名访问），
+     * 记录安全告警并放行（向后兼容；部署鉴权拦截器后自动启用 IDOR 防护）。</p>
+     *
+     * @param order       待校验的订单
+     * @param httpRequest HTTP 请求
+     * @param <T>         响应体类型
+     * @return 校验失败时返回 403 响应；通过时返回 {@code null}（调用方继续正常流程）
+     */
+    private <T> ResponseEntity<T> verifyMerchantOwnership(PaymentOrder order, HttpServletRequest httpRequest) {
+        Object merchantIdAttr = httpRequest.getAttribute("nexus.merchantId");
+        if (merchantIdAttr == null) {
+            // 无鉴权拦截器设置商户 ID，记录告警并放行（向后兼容）
+            log.warn("SECURITY: nexus.merchantId attribute not set on request; "
+                    + "IDOR protection is inactive for orderNo={}, orderId={}. "
+                    + "Deploy an auth filter that sets this attribute to enable protection.",
+                    order.getOrderNo(), order.getId());
+            return null;
+        }
+        Long requestMerchantId;
+        try {
+            requestMerchantId = Long.valueOf(merchantIdAttr.toString());
+        } catch (NumberFormatException e) {
+            log.error("Invalid nexus.merchantId attribute value: {}", merchantIdAttr);
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
+        if (!order.getMerchantId().equals(requestMerchantId)) {
+            log.warn("SECURITY: IDOR attempt blocked: requested orderId={}, orderMerchantId={}, "
+                    + "authenticatedMerchantId={}",
+                    order.getId(), order.getMerchantId(), requestMerchantId);
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
+        return null;
     }
 
     // --- Request DTOs ---
