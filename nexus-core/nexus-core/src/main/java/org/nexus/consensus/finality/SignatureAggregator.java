@@ -114,14 +114,16 @@ public interface SignatureAggregator {
             try {
                 for (Vote vote : votes) {
                     byte[] pubKeyBytes = vote.getPublicKeyBytes();
-                    if (pubKeyBytes != null && pubKeyBytes.length > 0) {
-                        byte[] message = vote.signingPayload();
-                        Secp256k1BlsPublicKey pubKey = Secp256k1BlsPublicKey.fromBytesCompressed(pubKeyBytes);
-                        Secp256k1BlsSignature signature = new Secp256k1BlsSignature(Secp256k1BlsSigner.decodePointPublic(vote.getSignature()));
-                        if (!signature.verify(message, pubKey)) {
-                            log.warn("BLS signature verification failed for validator {}", vote.getValidatorAddress());
-                            return false;
-                        }
+                    if (pubKeyBytes == null || pubKeyBytes.length == 0) {
+                        log.warn("Vote from validator {} has no public key, failing closed", vote.getValidatorAddress());
+                        return false;
+                    }
+                    byte[] message = vote.signingPayload();
+                    Secp256k1BlsPublicKey pubKey = Secp256k1BlsPublicKey.fromBytesCompressed(pubKeyBytes);
+                    Secp256k1BlsSignature signature = new Secp256k1BlsSignature(Secp256k1BlsSigner.decodePointPublic(vote.getSignature()));
+                    if (!signature.verify(message, pubKey)) {
+                        log.warn("BLS signature verification failed for validator {}", vote.getValidatorAddress());
+                        return false;
                     }
                 }
             } catch (Exception e) {

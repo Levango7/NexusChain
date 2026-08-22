@@ -184,6 +184,15 @@ public class TxController {
                     + approvalRequest.getStatus().name());
             return resp;
         }
+        // P1-8 修复（v2.27.0）：CAS 原子审批——在执行签名前将审批请求从 APPROVED 标记为 EXECUTING。
+        // 防止两个并发调用同时通过 APPROVED 检查并重复执行签名+广播（双重放款）。
+        if (!signingApprovalService.tryMarkExecuting(approvalId)) {
+            Map<String, Object> resp = new HashMap<>();
+            resp.put("statusCode", 5001);
+            resp.put("approvalId", approvalId);
+            resp.put("message", "审批请求状态已变更（可能已被另一请求执行），请勿重复调用");
+            return resp;
+        }
         // 复用签名 + 广播流程（审批已通过，金额必然为大额，signAndBroadcast 内
         // 会再次触发 requiresApproval 检查并创建新的审批请求——为避免无限循环，
         // 此处直接调用 doSignAndBroadcast 绕过审批创建逻辑）。
@@ -191,18 +200,27 @@ public class TxController {
         String sourceIp = auditLogService != null
                 ? auditLogService.extractClientIp(request)
                 : request.getRemoteAddr();
-        Object result = doSignAndBroadcast(
-                approvalRequest.getFromPubkey(),
-                approvalRequest.getToPubkeyHash(),
-                approvalRequest.getAmount(),
-                request,
-                actor,
-                sourceIp);
-        // 签名成功后将审批请求标记为 EXECUTED（best-effort，不阻断响应返回）
+        Object result;
+        try {
+            result = doSignAndBroadcast(
+                    approvalRequest.getFromPubkey(),
+                    approvalRequest.getToPubkeyHash(),
+                    approvalRequest.getAmount(),
+                    request,
+                    actor,
+                    sourceIp);
+        } catch (Exception e) {
+            // P1-8 修复：签名执行失败时回退审批状态到 APPROVED，允许后续重试
+            signingApprovalService.revertExecuting(approvalId);
+            throw e;
+        }
+        // P1-8 修复（v2.27.0）：签名成功后将审批请求标记为 EXECUTED。
+        // 标记失败不再静默吞异常——记录 ERROR 级别审计日志，便于运维排查。
+        // 签名已广播不可逆，但审批状态不一致需人工介入。
         try {
             signingApprovalService.markExecuted(approvalId);
         } catch (Exception e) {
-            // 标记失败不影响签名结果已返回，仅记录日志便于运维排查
+            // 标记失败不影响签名结果已返回，但以 ERROR 级别记录审计日志便于运维排查
             if (auditLogService != null) {
                 auditLogService.log(AuditEvent.builder(AuditEvent.Type.APPROVAL_REQUEST,
                                 AuditEvent.Outcome.FAILURE,
@@ -212,6 +230,9 @@ public class TxController {
                         .detail("error", e.getMessage())
                         .build());
             }
+            // P1-8 修复：以 ERROR 级别记录（原实现仅 WARN 级别，易被忽略）
+            throw new IllegalStateException("签名已广播但审批状态标记失败，需人工排查: "
+                    + "approvalId=" + approvalId + ", error=" + e.getMessage(), e);
         }
         return result;
     }

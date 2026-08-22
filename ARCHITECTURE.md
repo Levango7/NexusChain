@@ -165,6 +165,29 @@ Blockchain is the foundational settlement layer — not the product itself. On t
 - Webhook delivery is async with exponential backoff retry
 - **Dual-chain settlement (deliberate)**: `nexus-core` is the public settlement mainnet; `nexus-consortium` is a permissioned consortium/sidechain. Both are first-class chains — the product intentionally supports dual-chain, not a single settlement chain. `nexus-consortium` is consolidated into the unified build via Gradle composite build (`includeBuild`).
 
+## Security Hardening（v2.27.0）
+
+第三轮安全审计完成的安全加固（10个漏洞修复：5个P0 + 3个P1 + 2个P2）：
+
+### P0 退款与交易安全（5项）
+
+- **P0-1 退款无限次重复放款**：`RefundRequestRepository.sumPendingRefundsByOrderId` 将 EXECUTED 状态纳入退款金额统计；`DefaultRefundApprovalService.executeRefund` 执行成功后将订单状态迁移到 REFUNDED
+- **P0-2 退款收款方改为付款人地址**：`DefaultRefundApprovalService.executeOnChain` 收款方从字符串常量 `"REFUND:"+refundNo` 改为 `order.getPayerAddress()`；增加模拟交易安全告警
+- **P0-3 最终性投票 fail-closed**：`SignatureAggregator` 公钥为 null/empty 时 `return false`（不再跳过验签）
+- **P0-4 订单端点 IDOR 防护**：`PaymentController` 的 getOrder/pay/confirm/refund 端点增加商户归属校验（`verifyMerchantOwnership`），从请求属性 `nexus.merchantId` 提取商户 ID 并校验订单归属
+- **P0-5 支付确认交易绑定唯一性**：新增 Flyway V12 migration 添加 `chain_tx_hash` 唯一约束；`PaymentServiceImpl.confirmPayment` 增加 `findByChainTxHash` 重复校验
+
+### P1 网关与签名安全（3项）
+
+- **P1-6 Webhook 日志不再回显期望签名**：`WebhookController` 日志从 `log.warn("expected={}, actual={}")` 改为 `log.warn("Invalid webhook signature received")`
+- **P1-7 网关 SecurityConfig 回归修复**：新建 `nexus-gateway/.../config/SecurityConfig.java`，启用 `@EnableWebSecurity` + `@EnableMethodSecurity`，激活 `@PreAuthorize` 注解
+- **P1-8 签名审批 CAS 原子性**：`SigningApprovalRequest.Status` 新增 `EXECUTING` 中间态；`SigningApprovalService` 新增 `tryMarkExecuting`（APPROVED→EXECUTING CAS）和 `revertExecuting`（EXECUTING→APPROVED 回退）；`TxController.signTransferApproved` 在签名前 CAS、签名失败回退、`markExecuted` 失败抛异常
+
+### P2 工具与路由（2项）
+
+- **P2-11 HashUtil 失败抛异常**：`HashUtil.hash` catch 块从 `e.printStackTrace(); return null` 改为 `throw new IllegalStateException(...)`
+- **P2-12 API 网关路由补全**：`GatewayConfig` 新增 orders/refunds/merchants/checkout/webhooks/v2 六条路由
+
 ## Security Hardening（v2.26.0）
 
 第 16 轮质量保证工作完成的安全加固（不引入新功能，仅修复与加固）：

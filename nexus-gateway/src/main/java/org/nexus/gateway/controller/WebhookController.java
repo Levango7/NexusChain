@@ -98,7 +98,7 @@ public class WebhookController {
         }
         String expectedSig = computeSignature(canonicalize(payload), secret);
         if (!constantTimeEquals(expectedSig, signature)) {
-            log.warn("Invalid webhook signature, expected={}, actual={}", expectedSig, signature);
+            log.warn("Invalid webhook signature received");
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Invalid signature");
         }
 
