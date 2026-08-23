@@ -46,6 +46,9 @@ public class PaymentOrchestrationController {
         String notifyUrl = body.containsKey("notify_url") ? String.valueOf(body.get("notify_url")) : null;
         String metadata = body.containsKey("metadata") ? String.valueOf(body.get("metadata")) : null;
         String requestId = body.containsKey("request_id") ? String.valueOf(body.get("request_id")) : null;
+        // P0 安全修复：解析付款人/收款人链上地址并透传到编排服务，避免空地址转账。
+        String payeeAddress = body.containsKey("payee_address") ? String.valueOf(body.get("payee_address")) : null;
+        String payerAddress = body.containsKey("payer_address") ? String.valueOf(body.get("payer_address")) : null;
 
         String preferredConnector = null;
         if (body.containsKey("routing")) {
@@ -56,7 +59,8 @@ public class PaymentOrchestrationController {
         }
 
         OrchestratedPayment payment = orchestrationService.createPayment(
-                merchantId, amount, currency, description, notifyUrl, preferredConnector, metadata, requestId);
+                merchantId, amount, currency, description, notifyUrl,
+                preferredConnector, metadata, requestId, payeeAddress, payerAddress);
 
         return ResponseEntity.status(HttpStatus.CREATED).body(toResponse(payment));
     }

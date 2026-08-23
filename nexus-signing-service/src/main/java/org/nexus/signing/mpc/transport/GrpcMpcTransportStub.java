@@ -89,7 +89,8 @@ import java.util.concurrent.locks.ReentrantLock;
  * <ul>
  *   <li>{@code usePlaintext=true}：使用明文 gRPC（仅开发环境，记录警告）</li>
  *   <li>{@code usePlaintext=false}（默认）+ TLS 配置完整：使用 mTLS（双向认证）</li>
- *   <li>{@code usePlaintext=false} + TLS 配置不完整：记录错误并回退到明文（容错启动）</li>
+ *   <li>{@code usePlaintext=false} + TLS 配置不完整：抛出 {@link IllegalStateException}
+ *       拒绝启动（fail-closed，MPC-P0 修复：防止攻击者通过配置缺失降级明文绕过 mTLS）</li>
  * </ul>
  *
  * @see MpcTransport
@@ -287,8 +288,14 @@ public class GrpcMpcTransportStub implements MpcTransport {
                     sslContext = GrpcTlsContextFactory.buildClientSslContext(
                             tlsTrustCertPath, tlsClientCertPath, tlsClientKeyPath);
                 } else {
-                    log.error("GrpcMpcTransportStub: use-plaintext=false but TLS config "
-                            + "incomplete — falling back to PLAINTEXT (MPC-P0-02 security risk)");
+                    // MPC-P0 修复：TLS 配置不完整时 fail-closed（拒绝启动），不再回退明文。
+                    // 原 fail-open 行为允许攻击者通过配置缺失降级为明文连接，绕过 mTLS。
+                    // 保留 use-plaintext=true 作为显式开发模式开关；默认必须 fail-closed。
+                    throw new IllegalStateException("MPC transport TLS config incomplete. "
+                            + "Set mpc.transport.use-plaintext=true explicitly for development only. "
+                            + "Production deployment requires complete TLS configuration "
+                            + "(mpc.transport.tls.trust-cert-path / client-cert-path / client-key-path). "
+                            + "(MPC-P0 fail-closed)");
                 }
             }
 

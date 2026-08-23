@@ -492,6 +492,14 @@ public class DefaultMpcService implements MpcService {
             // 解析公钥点
             byte[] pubBytes = HexFormat.of().parseHex(publicKeyHex);
             ECPoint Q = params.getCurve().decodePoint(pubBytes);
+            // MPC-P0 修复：decodePoint 后必须校验点在曲线上，防止 Invalid Curve Attack。
+            // 攻击者可构造不在 secp256k1 上的点绕过签名验证；isValid() 内部检查 y² = x³ + ax + b。
+            if (!Q.isValid()) {
+                throw new MpcProtocolException(
+                        MpcProtocolException.Reason.SHARE_VERIFICATION_FAILED,
+                        "ECDSA verify failed: public key point is not on the curve "
+                                + "(Invalid Curve Attack defense, MPC-P0)");
+            }
             if (Q.isInfinity()) {
                 throw new MpcProtocolException(
                         MpcProtocolException.Reason.SHARE_VERIFICATION_FAILED,

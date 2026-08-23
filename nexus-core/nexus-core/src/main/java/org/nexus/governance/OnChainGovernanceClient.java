@@ -116,7 +116,10 @@ public class OnChainGovernanceClient {
     @Value("${nexus.governance.from-address:}")
     private String fromAddress;
 
-    @Value("${nexus.governance.private-key:}")
+    // P0/密钥管理修复：默认值改为 #{null}（而非空字符串），配置缺失时为 null，
+    // 由 init() fail-closed 校验。环境变量 NEXUS_GOVERNANCE_PRIVATE_KEY 可通过
+    // application.yml 中 ${NEXUS_GOVERNANCE_PRIVATE_KEY:} 占位符覆盖。
+    @Value("${nexus.governance.private-key:#{null}}")
     private String privateKey;
 
     @Value("${nexus.governance.chain-id:31337}")
@@ -145,8 +148,14 @@ public class OnChainGovernanceClient {
     /**
      * 初始化 Web3j 客户端与交易管理器。
      *
-     * <p>校验 rpcEndpoint / governorAddress / privateKey 非空，任一缺失则
-     * 标记 {@code ready=false}，后续调用直接返回 false。</p>
+     * <p>校验 rpcEndpoint / governorAddress 非空，缺失则标记
+     * {@code ready=false}，后续调用直接返回 false。</p>
+     *
+     * <p><b>fail-closed（P0/密钥管理修复）</b>：本 Bean 仅在
+     * {@code nexus.governance.on-chain-enabled=true} 时创建（见类级
+     * {@code @ConditionalOnProperty}）。既然用户已显式启用链上治理，
+     * {@code privateKey} 为 null 或空视为配置错误，直接抛出
+     * {@link IllegalStateException} 拒绝启动，避免无密钥的"伪启用"状态。</p>
      */
     @PostConstruct
     public void init() {
@@ -158,9 +167,12 @@ public class OnChainGovernanceClient {
             logger.warn("On-chain governance disabled: governor-address not configured");
             return;
         }
+        // fail-closed: on-chain-enabled=true 但 privateKey 缺失 → 拒绝启动
         if (privateKey == null || privateKey.isEmpty()) {
-            logger.warn("On-chain governance disabled: private-key not configured");
-            return;
+            throw new IllegalStateException(
+                    "OnChainGovernanceClient init failed: nexus.governance.on-chain-enabled=true but "
+                            + "nexus.governance.private-key is not configured. "
+                            + "Set NEXUS_GOVERNANCE_PRIVATE_KEY environment variable or nexus.governance.private-key property.");
         }
         try {
             this.web3j = Web3j.build(new HttpService(rpcEndpoint));

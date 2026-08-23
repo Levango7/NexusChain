@@ -600,6 +600,45 @@ public class PosConsensusEngine implements PosConsensus {
     }
 
     /**
+     * 验证区块签名（对外暴露的 public 入口，供共识校验规则链调用）。
+     *
+     * <p>从 coinbase 交易提取提案者 pubkeyHash → 查找提案者验证人 →
+     * Ed25519 公钥验签。fail-closed：区块为空、coinbase 缺失、
+     * 提案者未注册、验签失败/异常一律返回 {@code false}。</p>
+     *
+     * <p>本方法仅做签名验证，不重复提案者状态/质押/时间窗口校验
+     *（那些由 {@link #validate(Block)} 完整校验链负责），
+     * 供 {@link org.nexus.core.validate.ConsensusRule} 在 PoS 模式下
+     * 接入区块接收路径的签名校验（v1.9.4 安全修复：此前
+     * SyncManager.onProposal → receiveBlocks → BasicRule.validateBlock
+     * 路径不校验 PoS 区块头签名）。</p>
+     *
+     * @param block 待验证区块
+     * @return 签名验证通过返回 true；任一环节失败返回 false
+     * @since 1.9.4
+     */
+    public boolean verifyBlockSignature(Block block) {
+        if (block == null || block.body == null || block.body.isEmpty()) {
+            logger.debug("Signature check failed: block or body empty");
+            return false;
+        }
+        Transaction coinbase = block.body.get(0);
+        if (coinbase == null || coinbase.to == null) {
+            logger.debug("Signature check failed: coinbase or recipient missing at height {}",
+                    block.nHeight);
+            return false;
+        }
+        String proposerPubKeyHash = Hex.encodeHexString(coinbase.to);
+        Validator proposerValidator = findValidatorByPubKeyHash(proposerPubKeyHash);
+        if (proposerValidator == null) {
+            logger.warn("Signature check failed: proposer {} not in validator registry at height {}",
+                    proposerPubKeyHash, block.nHeight);
+            return false;
+        }
+        return verifyBlockSignature(block, proposerValidator);
+    }
+
+    /**
      * 验证区块签名。
      *
      * <p>从 nNonce(r) + blockNotice(s) 重构 Signature，

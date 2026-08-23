@@ -31,4 +31,26 @@ public class RedisIdempotencyStore implements IdempotencyStore {
     public void put(String idempotencyKey, String value) {
         redisTemplate.opsForValue().set(PREFIX + idempotencyKey, value, TTL_HOURS, TimeUnit.HOURS);
     }
+
+    /**
+     * 原子预留：Redis SETNX（setIfAbsent）+ 24h TTL。
+     *
+     * <p>P0 安全修复（幂等 TOCTOU）：用 SETNX 替代非原子的 get+set，
+     * 保证并发下只有一个请求能预留成功。预留时即写入 value 并设置 TTL，
+     * 避免预留后未 record 导致键泄漏。</p>
+     */
+    @Override
+    public boolean tryReserve(String idempotencyKey, String value) {
+        Boolean success = redisTemplate.opsForValue()
+                .setIfAbsent(PREFIX + idempotencyKey, value, TTL_HOURS, TimeUnit.HOURS);
+        return Boolean.TRUE.equals(success);
+    }
+
+    /**
+     * 释放预留：删除 Redis 键。用于业务执行失败时回滚，允许重试。
+     */
+    @Override
+    public void release(String idempotencyKey) {
+        redisTemplate.delete(PREFIX + idempotencyKey);
+    }
 }

@@ -140,3 +140,17 @@ deploy/config/seata.local.properties
 
 # k6 二进制工具（本地安装，不提交）
 .tools/
+
+# ==================== P0/密钥管理修复：保护生产配置 ====================
+# Security: protect production configs
+# 防止含明文凭据的 application.yml / application-prod.yml 被误提交。
+# 注意：.gitignore 只对未跟踪的新文件生效。以下文件已被 git 跟踪，
+# 若要让 .gitignore 规则生效，需手动执行：
+#   git rm --cached <file>
+# 当前 application.yml 已改为环境变量占位符（${NEXUS_*:}），不含明文密钥，
+# 但仍建议各服务停止跟踪以防止未来硬编码敏感值回退。
+**/src/main/resources/application-prod.yml
+**/src/main/resources/application.yml
+# 例外：开发/测试 profile 配置可入库（不含生产凭据）
+!**/src/main/resources/application-dev.yml
+!**/src/main/resources/application-test.yml

@@ -80,6 +80,30 @@ public class OrchestrationService {
                                               String description, String notifyUrl,
                                               String preferredConnector, String metadata,
                                               String requestId) {
+        return createPayment(merchantId, amount, currency, description, notifyUrl,
+                preferredConnector, metadata, requestId, null, null);
+    }
+
+    /**
+     * 支付创建主入口（带付款人/收款人链上地址）。
+     *
+     * <p>P0 安全修复（空地址转账）：新增 {@code payeeAddress}/{@code payerAddress} 参数
+     * 并透传到 {@link ConnectorPaymentRequest}，使链上连接器（ChainConnector /
+     * ConsortiumConnector）能正确解析收款人公钥哈希，避免因 payeeAddress 缺失
+     * 导致 {@code WalletUtils.addressToPubkeyHash(null)} 返回空串绕过校验。</p>
+     *
+     * <p>P0 安全修复（幂等 TOCTOU）：用原子 {@code tryReserve} 替代非原子的
+     * {@code checkDuplicate}+{@code record}，消除 check 与 record 之间的竞态窗口。
+     * 预留成功后业务若抛异常，则 {@code release} 回滚预留允许重试。</p>
+     *
+     * @param payeeAddress 收款人链上地址（可为 null，由连接器校验拒绝）
+     * @param payerAddress 付款人链上地址（可为 null，用于退款回退到付款人）
+     */
+    @Transactional
+    public OrchestratedPayment createPayment(Long merchantId, long amount, String currency,
+                                              String description, String notifyUrl,
+                                              String preferredConnector, String metadata,
+                                              String requestId, String payeeAddress, String payerAddress) {
         // P3-T5：支付创建主 span（payment.create），覆盖整个支付全链路
         try (BusinessSpan rootSpan = BusinessSpan.start(tracer, "payment.create")
                 .attr("payment.merchant.id", merchantId)
@@ -87,120 +111,154 @@ public class OrchestrationService {
                 .attr("payment.currency", currency)
                 .attr("payment.request.id", requestId)) {
 
-            // Idempotency: replay an already-processed request_id instead of creating a new payment.
-            if (requestId != null && !requestId.isBlank()) {
-                String existingPaymentId = idempotencyStore.checkDuplicate(requestId);
-                if (existingPaymentId != null) {
-                    OrchestratedPayment existing = repo.findById(existingPaymentId).orElse(null);
-                    if (existing != null) {
-                        log.info("Idempotent replay: requestId={} -> existing paymentId={}",
-                                requestId, existingPaymentId);
-                        rootSpan.attr("payment.id", existingPaymentId)
-                                .attr("payment.idempotent", true);
-                        return existing;
-                    }
-                }
-            }
-
             String paymentId = "pay_" + UUID.randomUUID().toString().replace("-", "");
             rootSpan.attr("payment.id", paymentId);
 
-            // Risk gate: evaluate before routing to connectors. REJECTED/FROZEN -> FAILED immediately.
-            PaymentRequest riskRequest = new PaymentRequest(
-                    merchantId, null, BigDecimal.valueOf(amount), currency);
-            riskRequest.setIdempotencyKey(requestId);
-            RiskDecision riskDecision = riskService.evaluatePayment(riskRequest);
-
-            OrchestratedPayment payment = new OrchestratedPayment();
-            payment.setId(paymentId);
-            payment.setMerchantId(merchantId);
-            payment.setAmount(amount);
-            payment.setCurrency(currency);
-            payment.setDescription(description);
-            payment.setNotifyUrl(notifyUrl);
-            payment.setMetadata(metadata);
-            payment.setRequestId(requestId);
-            payment.setRoutingStrategy(preferredConnector != null ? "explicit" : "priority");
-
-            if (riskDecision == RiskDecision.REJECTED || riskDecision == RiskDecision.FROZEN) {
-                payment.setStatus(OrchPaymentStatus.FAILED);
-                persist(requestId, payment);
-                log.warn("Orchestrated payment rejected by risk control: paymentId={}, merchantId={}, decision={}",
-                        paymentId, merchantId, riskDecision);
-                rootSpan.attr("payment.status", "FAILED")
-                        .attr("payment.risk.decision", riskDecision.name())
-                        .error(null);
-                return payment;
-            }
-            if (riskDecision == RiskDecision.PENDING_REVIEW) {
-                log.info("Orchestrated payment flagged for manual risk review: paymentId={}, merchantId={}",
-                        paymentId, merchantId);
-                rootSpan.attr("payment.risk.decision", "PENDING_REVIEW");
-            }
-
-            payment.setStatus(OrchPaymentStatus.CREATED);
-
-            // P3-T5：路由决策 span（payment.route）
-            List<PaymentConnector> connectors;
-            try (BusinessSpan routeSpan = BusinessSpan.start(tracer, "payment.route")
-                    .attr("payment.id", paymentId)
-                    .attr("payment.currency", currency)
-                    .attr("payment.amount", amount)) {
-                connectors = routingEngine.resolve(currency, amount, preferredConnector);
-                routeSpan.attr("payment.route.strategy", payment.getRoutingStrategy())
-                        .attr("payment.route.connectors", connectors.stream()
-                                .map(PaymentConnector::getId).toList().toString());
-            }
-
-            if (connectors.isEmpty()) {
-                payment.setStatus(OrchPaymentStatus.FAILED);
-                persist(requestId, payment);
-                log.warn("No connectors available for payment {}", paymentId);
-                rootSpan.attr("payment.status", "FAILED").error(null);
-                return payment;
-            }
-
-            // Try connectors in order (failover)
-            ConnectorPaymentRequest req = new ConnectorPaymentRequest(paymentId, amount, currency, description);
-            for (PaymentConnector connector : connectors) {
-                // P3-T5：连接器提交 span（payment.connector.submit）
-                try (BusinessSpan connSpan = BusinessSpan.start(tracer, "payment.connector.submit")
-                        .attr("payment.id", paymentId)
-                        .attr("payment.connector.id", connector.getId())) {
-                    try {
-                        ConnectorPaymentResult result = connector.createPayment(req);
-                        if (result.isSuccess()) {
-                            payment.setConnectorId(connector.getId());
-                            payment.setConnectorPaymentId(result.getConnectorPaymentId());
-                            payment.setTransactionHash(result.getTransactionHash());
-                            payment.setStatus(mapStatus(result.getStatus()));
-                            if (result.getStatus() == PaymentStatus.SUCCEEDED) {
-                                payment.setConfirmedAt(Instant.now());
-                            }
-                            persist(requestId, payment);
-                            log.info("Payment {} routed to connector {} -> status={}", paymentId, connector.getId(), result.getStatus());
-                            rootSpan.attr("payment.connector.id", connector.getId())
-                                    .attr("payment.status", payment.getStatus().name());
-                            if (result.getTransactionHash() != null) {
-                                rootSpan.attr("payment.tx.hash", result.getTransactionHash());
-                            }
-                            return payment;
+            // P0 安全修复（幂等 TOCTOU）：原子预留幂等键，替代非原子的 checkDuplicate+record。
+            // tryReserve 在单个原子操作内完成"键不存在则写入、键已存在则拒绝"，
+            // 消除原 check 与 record 之间的竞态窗口，防止并发重复创建支付。
+            boolean idempotencyReserved = false;
+            if (requestId != null && !requestId.isBlank()) {
+                idempotencyReserved = idempotencyStore.tryReserve(requestId, paymentId);
+                if (!idempotencyReserved) {
+                    // 键已存在，返回已关联的支付（幂等重放）
+                    String existingPaymentId = idempotencyStore.checkDuplicate(requestId);
+                    if (existingPaymentId != null) {
+                        OrchestratedPayment existing = repo.findById(existingPaymentId).orElse(null);
+                        if (existing != null) {
+                            log.info("Idempotent replay: requestId={} -> existing paymentId={}",
+                                    requestId, existingPaymentId);
+                            rootSpan.attr("payment.id", existingPaymentId)
+                                    .attr("payment.idempotent", true);
+                            return existing;
                         }
-                        log.warn("Connector {} rejected payment {}: {}", connector.getId(), paymentId, result.getErrorMessage());
-                        connSpan.attr("payment.connector.error", result.getErrorMessage());
-                    } catch (RuntimeException e) {
-                        log.error("Connector {} threw exception for payment {}: {}", connector.getId(), paymentId, e.getMessage());
-                        connSpan.error(e);
                     }
+                    // 并发竞争窗口：预留被占但记录尚未写入（另一线程在 tryReserve 后、record 前），
+                    // fail-closed 拒绝重复创建，防止双花。
+                    log.warn("Idempotency reserve failed (concurrent) for requestId={}", requestId);
+                    OrchestratedPayment concurrent = new OrchestratedPayment();
+                    concurrent.setId(paymentId);
+                    concurrent.setMerchantId(merchantId);
+                    concurrent.setAmount(amount);
+                    concurrent.setCurrency(currency);
+                    concurrent.setRequestId(requestId);
+                    concurrent.setStatus(OrchPaymentStatus.FAILED);
+                    rootSpan.attr("payment.status", "FAILED")
+                            .attr("payment.idempotent", true)
+                            .error(null);
+                    return concurrent;
                 }
             }
 
-            // All connectors failed
-            payment.setStatus(OrchPaymentStatus.FAILED);
-            persist(requestId, payment);
-            log.error("All connectors failed for payment {}", paymentId);
-            rootSpan.attr("payment.status", "FAILED").error(null);
-            return payment;
+            try {
+                // Risk gate: evaluate before routing to connectors. REJECTED/FROZEN -> FAILED immediately.
+                PaymentRequest riskRequest = new PaymentRequest(
+                        merchantId, null, BigDecimal.valueOf(amount), currency);
+                riskRequest.setIdempotencyKey(requestId);
+                RiskDecision riskDecision = riskService.evaluatePayment(riskRequest);
+
+                OrchestratedPayment payment = new OrchestratedPayment();
+                payment.setId(paymentId);
+                payment.setMerchantId(merchantId);
+                payment.setAmount(amount);
+                payment.setCurrency(currency);
+                payment.setDescription(description);
+                payment.setNotifyUrl(notifyUrl);
+                payment.setMetadata(metadata);
+                payment.setRequestId(requestId);
+                payment.setRoutingStrategy(preferredConnector != null ? "explicit" : "priority");
+
+                if (riskDecision == RiskDecision.REJECTED || riskDecision == RiskDecision.FROZEN) {
+                    payment.setStatus(OrchPaymentStatus.FAILED);
+                    persist(requestId, payment);
+                    log.warn("Orchestrated payment rejected by risk control: paymentId={}, merchantId={}, decision={}",
+                            paymentId, merchantId, riskDecision);
+                    rootSpan.attr("payment.status", "FAILED")
+                            .attr("payment.risk.decision", riskDecision.name())
+                            .error(null);
+                    return payment;
+                }
+                if (riskDecision == RiskDecision.PENDING_REVIEW) {
+                    log.info("Orchestrated payment flagged for manual risk review: paymentId={}, merchantId={}",
+                            paymentId, merchantId);
+                    rootSpan.attr("payment.risk.decision", "PENDING_REVIEW");
+                }
+
+                payment.setStatus(OrchPaymentStatus.CREATED);
+
+                // P3-T5：路由决策 span（payment.route）
+                List<PaymentConnector> connectors;
+                try (BusinessSpan routeSpan = BusinessSpan.start(tracer, "payment.route")
+                        .attr("payment.id", paymentId)
+                        .attr("payment.currency", currency)
+                        .attr("payment.amount", amount)) {
+                    connectors = routingEngine.resolve(currency, amount, preferredConnector);
+                    routeSpan.attr("payment.route.strategy", payment.getRoutingStrategy())
+                            .attr("payment.route.connectors", connectors.stream()
+                                    .map(PaymentConnector::getId).toList().toString());
+                }
+
+                if (connectors.isEmpty()) {
+                    payment.setStatus(OrchPaymentStatus.FAILED);
+                    persist(requestId, payment);
+                    log.warn("No connectors available for payment {}", paymentId);
+                    rootSpan.attr("payment.status", "FAILED").error(null);
+                    return payment;
+                }
+
+                // Try connectors in order (failover)
+                ConnectorPaymentRequest req = new ConnectorPaymentRequest(paymentId, amount, currency, description);
+                // P0 安全修复：透传付款人/收款人地址到连接器，避免空地址转账。
+                req.setPayeeAddress(payeeAddress);
+                req.setPayerAddress(payerAddress);
+                for (PaymentConnector connector : connectors) {
+                    // P3-T5：连接器提交 span（payment.connector.submit）
+                    try (BusinessSpan connSpan = BusinessSpan.start(tracer, "payment.connector.submit")
+                            .attr("payment.id", paymentId)
+                            .attr("payment.connector.id", connector.getId())) {
+                        try {
+                            ConnectorPaymentResult result = connector.createPayment(req);
+                            if (result.isSuccess()) {
+                                payment.setConnectorId(connector.getId());
+                                payment.setConnectorPaymentId(result.getConnectorPaymentId());
+                                payment.setTransactionHash(result.getTransactionHash());
+                                payment.setStatus(mapStatus(result.getStatus()));
+                                if (result.getStatus() == PaymentStatus.SUCCEEDED) {
+                                    payment.setConfirmedAt(Instant.now());
+                                }
+                                persist(requestId, payment);
+                                log.info("Payment {} routed to connector {} -> status={}", paymentId, connector.getId(), result.getStatus());
+                                rootSpan.attr("payment.connector.id", connector.getId())
+                                        .attr("payment.status", payment.getStatus().name());
+                                if (result.getTransactionHash() != null) {
+                                    rootSpan.attr("payment.tx.hash", result.getTransactionHash());
+                                }
+                                return payment;
+                            }
+                            log.warn("Connector {} rejected payment {}: {}", connector.getId(), paymentId, result.getErrorMessage());
+                            connSpan.attr("payment.connector.error", result.getErrorMessage());
+                        } catch (RuntimeException e) {
+                            log.error("Connector {} threw exception for payment {}: {}", connector.getId(), paymentId, e.getMessage());
+                            connSpan.error(e);
+                        }
+                    }
+                }
+
+                // All connectors failed
+                payment.setStatus(OrchPaymentStatus.FAILED);
+                persist(requestId, payment);
+                log.error("All connectors failed for payment {}", paymentId);
+                rootSpan.attr("payment.status", "FAILED").error(null);
+                return payment;
+            } catch (RuntimeException e) {
+                // 业务执行异常：释放幂等预留，允许相同 requestId 重试。
+                // DB 已由 @Transactional 回滚，但幂等键在 Redis/内存中（不在事务内），
+                // 须显式释放，否则 requestId 将被永久占用。
+                if (idempotencyReserved) {
+                    idempotencyStore.release(requestId);
+                }
+                throw e;
+            }
         }
     }
 

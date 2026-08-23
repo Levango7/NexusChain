@@ -118,7 +118,9 @@ public class ConsortiumConnector implements PaymentConnector {
                 return ConnectorPaymentResult.fail("exchange-wallet platform pubkey not configured");
             }
             String toPubkeyHash = WalletUtils.addressToPubkeyHash(request.getPayeeAddress());
-            if (toPubkeyHash == null) {
+            // P0 安全修复：addressToPubkeyHash 异常时返回 null，同时拒绝空字符串，
+            // 防止 null/空地址绕过校验触发空 pubkeyHash 转账。
+            if (toPubkeyHash == null || toPubkeyHash.isEmpty()) {
                 return ConnectorPaymentResult.fail("invalid payee address: " + request.getPayeeAddress());
             }
 
@@ -207,6 +209,18 @@ public class ConsortiumConnector implements PaymentConnector {
             if (platformPubkey == null || platformPubkey.isBlank()) {
                 return ConnectorRefundResult.fail("exchange-wallet platform pubkey not configured");
             }
+            // P0 安全修复：校验原支付状态，拒绝重复退款与非可退款状态。
+            // 只有 SUCCEEDED 或 PROCESSING 状态的支付才允许退款，已退款拒绝重复退款。
+            PaymentStatus currentStatus = pendingPayments.get(connectorPaymentId);
+            if (currentStatus == null) {
+                return ConnectorRefundResult.fail("original payment not found: " + connectorPaymentId);
+            }
+            if (currentStatus == PaymentStatus.REFUNDED) {
+                return ConnectorRefundResult.fail("payment already refunded: " + connectorPaymentId);
+            }
+            if (currentStatus != PaymentStatus.SUCCEEDED && currentStatus != PaymentStatus.PROCESSING) {
+                return ConnectorRefundResult.fail("payment not in refundable status: " + currentStatus);
+            }
             // Refund direction policy（#18 已确认默认：优先原付款人，未知则退给收款人）。
             // 产品可经 nexus.refund.direction=payee 覆盖为"固定退收款人"；两者未知时失败。
             String refundDirection = System.getProperty("nexus.refund.direction", "payer");
@@ -217,12 +231,13 @@ public class ConsortiumConnector implements PaymentConnector {
                 targetHash = payeeHashMap.get(connectorPaymentId);
             }
             if (targetHash == null) {
-                return ConnectorRefundResult.fail("original payment not found: " + connectorPaymentId);
+                return ConnectorRefundResult.fail("refund target address not found for payment: " + connectorPaymentId);
             }
             String txHash = signingServiceClient.signTransfer(platformPubkey, targetHash, BigDecimal.valueOf(amount));
             if (txHash == null) {
                 return ConnectorRefundResult.fail("exchange-wallet refund signing failed");
             }
+            // 状态更新在 signTransfer 成功后，确保退款交易已上链才标记 REFUNDED。
             pendingPayments.put(connectorPaymentId, PaymentStatus.REFUNDED);
             return ConnectorRefundResult.ok("consortium_refund_" + connectorPaymentId);
         } catch (RuntimeException e) {

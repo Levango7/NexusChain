@@ -229,7 +229,9 @@ public class WalletUtils {
             byte[] r1 = ByteUtil.bytearraycopy(r2, 1, 20);
             return Hex.encodeHexString(r1);
         } catch (Exception e) {
-            return "";
+            // P0 安全修复：异常时返回 null 而非空字符串，使调用方的 null 校验生效，
+            // 避免空地址/非法地址被误判为有效并触发空 pubkeyHash 转账。
+            return null;
         }
     }
 

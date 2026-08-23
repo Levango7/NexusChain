@@ -65,10 +65,10 @@ class OrchestrationServiceTest {
     }
 
     @Test
-    @DisplayName("createPayment: 幂等命中但 repo 无记录则继续新建流程")
+    @DisplayName("createPayment: tryReserve 成功（新键）-> 继续新建流程")
     void createPayment_idempotentHitButMissing() {
-        when(idempotencyStore.checkDuplicate("req-2")).thenReturn("pay_ghost");
-        when(repo.findById("pay_ghost")).thenReturn(Optional.empty());
+        // tryReserve 原子预留成功（键此前不存在），继续执行新建支付流程
+        when(idempotencyStore.tryReserve(eq("req-2"), anyString())).thenReturn(true);
         when(riskService.evaluatePayment(any())).thenReturn(RiskDecision.APPROVED);
         PaymentConnector connector = mock(PaymentConnector.class);
         when(connector.getId()).thenReturn("chain");
@@ -147,6 +147,8 @@ class OrchestrationServiceTest {
     @Test
     @DisplayName("createPayment: 首个连接器返回 SUCCEEDED -> SUCCEEDED + confirmedAt")
     void createPayment_firstConnectorSucceeded() {
+        // tryReserve 成功（预留新键 req-3），允许继续新建流程
+        when(idempotencyStore.tryReserve(eq("req-3"), anyString())).thenReturn(true);
         when(riskService.evaluatePayment(any())).thenReturn(RiskDecision.APPROVED);
         PaymentConnector connector = mock(PaymentConnector.class);
         when(connector.getId()).thenReturn("chain");

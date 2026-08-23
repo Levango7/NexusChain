@@ -75,6 +75,14 @@ public class Transaction {
 
     public static final int PUBLIC_KEY_HASH_SIZE = 20;
 
+    /**
+     * payload 最大长度（10MB）。
+     * <p>v1.9.4 安全修复：fromRPCBytes/transformByte/changeProtobuf 反序列化时
+     * payloadLength 从流读取后无上限校验，攻击者可构造小 transfer 但 payloadLength
+     * 字段声称很大导致 OOM。现统一限制为 10MB，超出抛出 IllegalArgumentException。</p>
+     */
+    public static final int MAX_PAYLOAD_LENGTH = 10 * 1024 * 1024;
+
     public static final long[] GAS_TABLE = new long[]{
             0, 50000, 20000,                           // COINBASE, TRANSFER, VOTE
             100000, 50000, 50000,                       // DEPOSIT, MULTISIG_MULTISIG, MULTISIG_NORMAL
@@ -459,6 +467,11 @@ public class Transaction {
         // payload
 //        int type = transaction.type;
         long payloadLength = BigEndian.decodeUint32(reader.read(4));
+        // v1.9.4 安全修复：payloadLength 上限校验，防止攻击者构造小 transfer 但
+        // payloadLength 字段声称很大导致 OOM（fail-closed：超出上限直接抛异常拒绝）
+        if (payloadLength < 0 || payloadLength > MAX_PAYLOAD_LENGTH) {
+            throw new IllegalArgumentException("payload length exceeds maximum: " + payloadLength);
+        }
         if (payloadLength == 0) {
             return transaction;
         }
@@ -510,6 +523,10 @@ public class Transaction {
         //payloadlen
         byte[] payloadlen = ByteUtil.bytearraycopy(msg, 0, 4);
         int payloadLength = ByteUtil.byteArrayToInt(payloadlen);
+        // v1.9.4 安全修复：payloadLength 上限校验，防止 OOM（fail-closed）
+        if (payloadLength < 0 || payloadLength > MAX_PAYLOAD_LENGTH) {
+            throw new IllegalArgumentException("payload length exceeds maximum: " + payloadLength);
+        }
         if (payloadLength > 0) {
             msg = ByteUtil.bytearraycopy(msg, 4, msg.length - 4);
             byte[] payload = ByteUtil.bytearraycopy(msg, 0, payloadLength);
@@ -560,6 +577,10 @@ public class Transaction {
         byte[] payloadlen = ByteUtil.bytearraycopy(msg, 0, 4);
         tran.setPayloadlen(ByteUtil.byteArrayToInt(payloadlen));
         int payloadLength = ByteUtil.byteArrayToInt(payloadlen);
+        // v1.9.4 安全修复：payloadLength 上限校验，防止 OOM（fail-closed）
+        if (payloadLength < 0 || payloadLength > MAX_PAYLOAD_LENGTH) {
+            throw new IllegalArgumentException("payload length exceeds maximum: " + payloadLength);
+        }
         if (payloadLength > 0) {
             msg = ByteUtil.bytearraycopy(msg, 4, msg.length - 4);
             byte[] payload = ByteUtil.bytearraycopy(msg, 0, payloadLength);

@@ -26,6 +26,7 @@ import org.nexus.core.state.EraLinkedStateFactory;
 import org.nexus.db.StateDB;
 import org.nexus.encoding.BigEndian;
 import org.nexus.core.Block;
+import org.nexus.consensus.pos.PosConsensusEngine;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
@@ -42,6 +43,17 @@ public class ConsensusRule implements BlockRule {
 
     @Autowired
     ConsensusConfig consensusConfig;
+
+    /**
+     * PoS 共识引擎（仅当 nexus.consensus.mode=pos 时注入）。
+     * <p>用于在区块接收路径上校验 PoS 区块头签名（v1.9.4 安全修复：
+     * 此前 SyncManager.onProposal → receiveBlocks → BasicRule.validateBlock
+     * 路径不校验 PoS 区块头签名，PosConsensusEngine.validate 仅在出块路径调用）。</p>
+     * <p>required=false：PoW/DPoS 模式下本引擎不会被注入（避免破坏现有 PoW 逻辑）；
+     * PoS 模式下若为 null 则 fail-closed 拒绝区块。</p>
+     */
+    @Autowired(required = false)
+    private PosConsensusEngine posConsensusEngine;
 
     private StateDB stateDB;
 
@@ -78,6 +90,16 @@ public class ConsensusRule implements BlockRule {
         // （PoS 区块无 proposer 时间表/nBits 难度，由 PosConsensusEngine.validate
         //  做 Ed25519 签名校验；本规则链仅保留结构校验）
         if (isPosMode()) {
+            // v1.9.4 安全修复：PoS 模式下必须校验区块头签名。
+            // 此前本分支直接返回 SUCCESS，导致 SyncManager.onProposal → receiveBlocks
+            // → BasicRule.validateBlock 路径不校验 PoS 区块头签名，任意伪造区块均可通过。
+            // fail-closed：引擎不可用或验签失败一律拒绝区块（不降级放行）。
+            if (posConsensusEngine == null) {
+                return Result.Error("PoS consensus engine not available");
+            }
+            if (!posConsensusEngine.verifyBlockSignature(block)) {
+                return Result.Error("PoS block signature verification failed at height " + block.nHeight);
+            }
             return Result.SUCCESS;
         }
         // 出块在是否在合理时间内出块

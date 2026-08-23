@@ -72,7 +72,8 @@ import java.util.concurrent.TimeUnit;
  * <ul>
  *   <li>{@code use-plaintext=true}：使用明文 gRPC（仅开发环境，记录警告）</li>
  *   <li>{@code use-plaintext=false}（默认）+ TLS 配置完整：使用 mTLS（双向认证）</li>
- *   <li>{@code use-plaintext=false} + TLS 配置不完整：记录错误并回退到明文（容错启动）</li>
+ *   <li>{@code use-plaintext=false} + TLS 配置不完整：抛出 {@link IllegalStateException}
+ *       拒绝启动（fail-closed，MPC-P0 修复：防止攻击者通过配置缺失降级明文绕过 mTLS）</li>
  * </ul>
  *
  * <h2>安全修复（v2.1.0）</h2>
@@ -211,8 +212,9 @@ public class GrpcMpcCryptoEngine implements MpcCryptoEngine {
      * 允许 signing-service 在引擎不可达时仍能启动（healthCheck 会返回 false）。</p>
      *
      * <p>MPC-P0-02 修复：当 {@code usePlaintext=false}（默认）时，尝试加载 mTLS
-     * 证书并配置 {@link SslContext}。若 TLS 配置不完整，记录错误并回退到明文
-     * （容错启动，避免阻塞开发环境）。</p>
+     * 证书并配置 {@link SslContext}。若 TLS 配置不完整，抛出
+     * {@link IllegalStateException} 拒绝启动（fail-closed，防止降级明文攻击）。
+     * 开发环境须显式设置 {@code mpc.engine.use-plaintext=true}。</p>
      */
     @PostConstruct
     public void init() {
@@ -271,13 +273,14 @@ public class GrpcMpcCryptoEngine implements MpcCryptoEngine {
                             + "(trustCert={}, clientCert={})",
                             host, port, tlsTrustCertPath, tlsClientCertPath);
                 } else {
-                    // TLS 配置不完整：记录错误并回退到明文（容错启动）
-                    log.error("GrpcMpcCryptoEngine: use-plaintext=false but TLS config "
-                            + "incomplete (trust-cert-path/client-cert-path/client-key-path "
-                            + "all required) — falling back to PLAINTEXT to {}:{} "
-                            + "(MPC-P0-02: this is a security risk, fix TLS config)",
-                            host, port);
-                    builder.usePlaintext();
+                    // MPC-P0 修复：TLS 配置不完整时 fail-closed（拒绝启动），不再回退明文。
+                    // 原 fail-open 行为允许攻击者通过配置缺失降级为明文连接，绕过 mTLS。
+                    // 保留 use-plaintext=true 作为显式开发模式开关；默认必须 fail-closed。
+                    throw new IllegalStateException("MPC crypto engine TLS config incomplete. "
+                            + "Set mpc.engine.use-plaintext=true explicitly for development only. "
+                            + "Production deployment requires complete TLS configuration "
+                            + "(mpc.engine.tls.trust-cert-path / client-cert-path / client-key-path). "
+                            + "(MPC-P0 fail-closed, host=" + host + ":" + port + ")");
                 }
             }
             this.channel = builder.build();

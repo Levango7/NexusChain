@@ -9,6 +9,7 @@ import org.nexus.gateway.apiversion.V2ErrorResponse;
 import org.nexus.gateway.model.Merchant;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
@@ -44,6 +45,7 @@ public class MerchantV2Controller {
 
     @Operation(summary = "Verify merchant (v2)")
     @PostMapping("/{id}/verify")
+    @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<Object> verify(@PathVariable Long id, @RequestBody VerifyRequest request) {
         try {
             Merchant.VerificationStatus status =
@@ -62,6 +64,7 @@ public class MerchantV2Controller {
 
     @Operation(summary = "Generate API key (v2)")
     @PostMapping("/{id}/api-keys")
+    @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<Map<String, String>> generateApiKey(@PathVariable Long id) {
         MerchantService.ApiKeyPair pair = merchantService.generateApiKey(id);
         Map<String, String> result = new HashMap<>();
@@ -73,6 +76,7 @@ public class MerchantV2Controller {
     @Operation(summary = "Revoke API key (v2)")
     @DeleteMapping("/{id}/api-keys")
     @ResponseStatus(HttpStatus.NO_CONTENT)
+    @PreAuthorize("hasRole('ADMIN')")
     public void revokeApiKey(@PathVariable Long id, @RequestBody RevokeRequest request) {
         merchantService.revokeApiKey(id, request.getApiKey());
     }

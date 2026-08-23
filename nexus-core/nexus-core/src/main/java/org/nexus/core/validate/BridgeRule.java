@@ -3,6 +3,7 @@ package org.nexus.core.validate;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.nexus.core.account.Transaction;
+import org.nexus.crypto.ed25519.Ed25519PublicKey;
 
 import java.util.Arrays;
 
@@ -147,10 +148,18 @@ public class BridgeRule implements TransactionRule {
      *   <li>payload 非空，须包含验证人签名列表和时间锁信息</li>
      *   <li>多签验证：签名数量须不低于 {@code minValidators}</li>
      *   <li>时间锁检查：当前时间须大于时间锁到期时间</li>
+     *   <li>签名真实性验证：每个签名须由对应验证人公钥 Ed25519 验签通过
+     *       （v1.9.4 安全修复：此前仅校验签名数量，不验真实性）</li>
      * </ol></p>
      *
-     * <p>payload 格式约定：前 8 字节为时间锁到期时间戳（big-endian long），
-     * 第 9 字节为签名数量 N，后续 N 个 64 字节为签名数据。</p>
+     * <p>payload 格式约定：
+     * <ul>
+     *   <li>字节 0-7：时间锁到期时间戳（big-endian long），8 字节</li>
+     *   <li>字节 8：签名数量 N，1 字节</li>
+     *   <li>字节 9-40：消息哈希（验证人签名的内容），32 字节</li>
+     *   <li>字节 41+：N 个 (32 字节验证人公钥 + 64 字节签名) 对，共 N * 96 字节</li>
+     * </ul>
+     * 总长度 = 41 + N * 96 字节。</p>
      *
      * @param tx 待验证的交易
      * @return 验证结果
@@ -186,6 +195,46 @@ public class BridgeRule implements TransactionRule {
         if (sigCount < minValidators) {
             return Result.Error("BRIDGE_MINT: signature count " + sigCount
                     + " is below minimum " + minValidators);
+        }
+
+        // v1.9.4 安全修复：签名真实性验证。
+        // 此前仅校验签名数量 >= minValidators，不验证签名是否真实有效，
+        // 攻击者可构造任意 payload 声称有足够签名数即通过校验。
+        // payload 格式：[8B timelock][1B sigCount][32B messageHash][N*(32B pubkey + 64B sig)]
+        // fail-closed：payload 长度不足、验签失败/异常一律拒绝交易。
+        final int MSG_HASH_OFFSET = 9;
+        final int MSG_HASH_LENGTH = 32;
+        final int PUBKEY_LENGTH = 32;
+        final int SIG_LENGTH = 64;
+        final int SIG_ENTRY_LENGTH = PUBKEY_LENGTH + SIG_LENGTH;
+        int sigBlockOffset = MSG_HASH_OFFSET + MSG_HASH_LENGTH;
+        int requiredLength = sigBlockOffset + sigCount * SIG_ENTRY_LENGTH;
+        if (tx.payload.length < requiredLength) {
+            return Result.Error("BRIDGE_MINT: payload too short for " + sigCount
+                    + " signatures, required " + requiredLength + " bytes, got " + tx.payload.length);
+        }
+
+        // 提取消息哈希（验证人签名的内容）
+        byte[] messageHash = Arrays.copyOfRange(tx.payload, MSG_HASH_OFFSET, sigBlockOffset);
+
+        // 遍历每个签名，用对应验证人公钥验签
+        for (int i = 0; i < sigCount; i++) {
+            int entryOffset = sigBlockOffset + i * SIG_ENTRY_LENGTH;
+            byte[] validatorPubkey = Arrays.copyOfRange(
+                    tx.payload, entryOffset, entryOffset + PUBKEY_LENGTH);
+            byte[] signature = Arrays.copyOfRange(
+                    tx.payload, entryOffset + PUBKEY_LENGTH, entryOffset + SIG_ENTRY_LENGTH);
+
+            try {
+                boolean valid = new Ed25519PublicKey(validatorPubkey).verify(messageHash, signature);
+                if (!valid) {
+                    return Result.Error("BRIDGE_MINT: invalid bridge validator signature at index " + i);
+                }
+            } catch (RuntimeException e) {
+                // fail-closed：验签异常直接拒绝（公钥格式错误、解码失败等）
+                return Result.Error("BRIDGE_MINT: signature verification error at index " + i
+                        + ": " + e.getMessage());
+            }
         }
 
         return Result.SUCCESS;

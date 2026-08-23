@@ -258,6 +258,9 @@ contract L2Bridge {
     /// @notice 批次 ID -> 提款索引 -> 是否已最终化
     mapping(uint256 => mapping(uint256 => bool)) public withdrawalFinalized;
 
+    /// @notice 重入锁状态（防止 ERC20 transfer / 罚没转账钩子重入）
+    bool private _locked;
+
     // ---- EIP-712 域分离常量 ----
 
     /// @notice EIP-712 Domain typeHash
@@ -269,6 +272,16 @@ contract L2Bridge {
         keccak256("Submit(bytes32 stateRoot,uint256 batchId,uint256 targetChainId)");
 
     // ==================== 修饰符 ====================
+
+    /// @dev 重入保护（参考 BridgeSource.sol 实现）
+    /// @notice 防止 challengeBatchWithProof 的 msg.sender.call 与
+    ///   finalizeWithdrawsWithProof 的 ERC20.transfer 钩子重入
+    modifier nonReentrant() {
+        require(!_locked, "L2Bridge: reentrant call");
+        _locked = true;
+        _;
+        _locked = false;
+    }
 
     modifier onlyExistingBatch(uint256 batchId) {
         require(
@@ -512,7 +525,7 @@ contract L2Bridge {
         bytes32 leaf,
         bytes32[] calldata proof,
         bool[] calldata isRight
-    ) external onlyExistingBatch(batchId) {
+    ) external nonReentrant onlyExistingBatch(batchId) {
         require(
             batchStatus[batchId] == BatchStatus.SUBMITTED,
             "L2Bridge: batch not in SUBMITTED state"
@@ -607,7 +620,7 @@ contract L2Bridge {
         uint256 amount,
         bytes32[] calldata proof,
         bool[] calldata isRight
-    ) external onlyExistingBatch(batchId) {
+    ) external nonReentrant onlyExistingBatch(batchId) {
         require(
             batchStatus[batchId] == BatchStatus.VERIFIED ||
                 batchStatus[batchId] == BatchStatus.FINALIZED,
@@ -632,18 +645,20 @@ contract L2Bridge {
         );
         require(valid, "L2Bridge: invalid withdrawal proof");
 
+        // ==== Effects（在 Interactions 之前，遵循 CEI 模式） ====
         withdrawalFinalized[batchId][index] = true;
+        if (batchStatus[batchId] == BatchStatus.VERIFIED) {
+            batchStatus[batchId] = BatchStatus.FINALIZED;
+        }
 
+        // ==== Interactions ====
         // 实际转移 ERC20
         require(
             IERC20(token).transfer(recipient, amount),
             "L2Bridge: ERC20 transfer failed"
         );
 
-        if (batchStatus[batchId] == BatchStatus.VERIFIED) {
-            batchStatus[batchId] = BatchStatus.FINALIZED;
-        }
-
+        // ==== Emit event ====
         emit WithdrawFinalizedDetailed(batchId, index, recipient, token, amount);
         emit WithdrawFinalized(batchId, msg.sender);
     }
