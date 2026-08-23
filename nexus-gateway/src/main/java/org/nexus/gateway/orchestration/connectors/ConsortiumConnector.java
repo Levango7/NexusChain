@@ -5,6 +5,7 @@ import org.nexus.gateway.config.GatewayConfig;
 import org.nexus.gateway.orchestration.connector.*;
 import org.nexus.sdk.client.feign.SigningServiceFeignClient;
 import org.nexus.sdk.client.feign.WalletMgmtFeignClient;
+import org.nexus.sdk.wallet.WalletUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -116,7 +117,7 @@ public class ConsortiumConnector implements PaymentConnector {
             if (platformPubkey == null || platformPubkey.isBlank()) {
                 return ConnectorPaymentResult.fail("exchange-wallet platform pubkey not configured");
             }
-            String toPubkeyHash = walletMgmtClient.addressToPubkeyHash(request.getPayeeAddress());
+            String toPubkeyHash = WalletUtils.addressToPubkeyHash(request.getPayeeAddress());
             if (toPubkeyHash == null) {
                 return ConnectorPaymentResult.fail("invalid payee address: " + request.getPayeeAddress());
             }
@@ -137,7 +138,7 @@ public class ConsortiumConnector implements PaymentConnector {
             String connectorId = "consortium_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
             pendingPayments.put(connectorId, PaymentStatus.PROCESSING);
             payeeHashMap.put(connectorId, toPubkeyHash);
-            String payerHash = walletMgmtClient.addressToPubkeyHash(request.getPayerAddress());
+            String payerHash = WalletUtils.addressToPubkeyHash(request.getPayerAddress());
             if (payerHash != null) {
                 payerHashMap.put(connectorId, payerHash);
             }

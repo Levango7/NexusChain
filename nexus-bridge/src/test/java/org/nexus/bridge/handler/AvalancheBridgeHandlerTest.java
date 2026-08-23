@@ -70,6 +70,9 @@ class AvalancheBridgeHandlerTest {
     @BeforeEach
     void setUp() {
         config = new BridgeConfig();
+        // 启用 mock 模式：测试无真实链凭证（credentials == null），
+        // submitContractCall 在 mockMode=true 时合成交易哈希而非抛 CHAIN_EXECUTION_UNAVAILABLE。
+        config.setMockMode(true);
         config.setSignatureThreshold(2);
         config.setMaxAmountPerTx(10_000_000_000L);
         config.setDailyLimit(100_000_000_000L);

@@ -2,6 +2,7 @@ package org.nexus.gateway.orchestration.connectors;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.nexus.gateway.client.ConsortiumRpcClient;
 import org.nexus.gateway.config.GatewayConfig;
@@ -11,6 +12,7 @@ import org.nexus.gateway.orchestration.connector.ConnectorPaymentResult;
 import org.nexus.gateway.orchestration.connector.PaymentStatus;
 import org.nexus.sdk.client.feign.SigningServiceFeignClient;
 import org.nexus.sdk.client.feign.WalletMgmtFeignClient;
+import org.nexus.sdk.wallet.WalletUtils;
 
 import java.math.BigDecimal;
 
@@ -66,15 +68,17 @@ class ConsortiumConnectorTest {
         ConsortiumRpcClient rpc = mock(ConsortiumRpcClient.class);
         SigningServiceFeignClient signing = mock(SigningServiceFeignClient.class);
         WalletMgmtFeignClient walletMgmt = mock(WalletMgmtFeignClient.class);
-        when(walletMgmt.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
-        when(signing.signTransfer(anyString(), anyString(), Mockito.any())).thenReturn("txHash123");
+        try (MockedStatic<WalletUtils> mockedWalletUtils = Mockito.mockStatic(WalletUtils.class)) {
+            mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
+            when(signing.signTransfer(anyString(), anyString(), Mockito.any())).thenReturn("txHash123");
 
-        ConsortiumConnector c = connectorWith(rpc, signing, walletMgmt, gatewayConfigWith("platformPk"));
-        ConnectorPaymentResult r = c.createPayment(sampleRequest());
+            ConsortiumConnector c = connectorWith(rpc, signing, walletMgmt, gatewayConfigWith("platformPk"));
+            ConnectorPaymentResult r = c.createPayment(sampleRequest());
 
-        assertTrue(r.isSuccess());
-        assertEquals(PaymentStatus.PROCESSING, r.getStatus());
-        assertEquals("txHash123", r.getTransactionHash());
+            assertTrue(r.isSuccess());
+            assertEquals(PaymentStatus.PROCESSING, r.getStatus());
+            assertEquals("txHash123", r.getTransactionHash());
+        }
     }
 
     @Test
@@ -83,12 +87,14 @@ class ConsortiumConnectorTest {
         ConsortiumRpcClient rpc = mock(ConsortiumRpcClient.class);
         SigningServiceFeignClient signing = mock(SigningServiceFeignClient.class);
         WalletMgmtFeignClient walletMgmt = mock(WalletMgmtFeignClient.class);
-        when(walletMgmt.addressToPubkeyHash("0xPayee")).thenReturn(null);
+        try (MockedStatic<WalletUtils> mockedWalletUtils = Mockito.mockStatic(WalletUtils.class)) {
+            mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("0xPayee")).thenReturn(null);
 
-        ConsortiumConnector c = connectorWith(rpc, signing, walletMgmt, gatewayConfigWith("platformPk"));
-        ConnectorPaymentResult r = c.createPayment(sampleRequest());
+            ConsortiumConnector c = connectorWith(rpc, signing, walletMgmt, gatewayConfigWith("platformPk"));
+            ConnectorPaymentResult r = c.createPayment(sampleRequest());
 
-        assertFalse(r.isSuccess());
+            assertFalse(r.isSuccess());
+        }
     }
 
     @Test
@@ -97,13 +103,15 @@ class ConsortiumConnectorTest {
         ConsortiumRpcClient rpc = mock(ConsortiumRpcClient.class);
         SigningServiceFeignClient signing = mock(SigningServiceFeignClient.class);
         WalletMgmtFeignClient walletMgmt = mock(WalletMgmtFeignClient.class);
-        when(walletMgmt.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
-        when(signing.signTransfer(anyString(), anyString(), Mockito.any())).thenReturn(null);
+        try (MockedStatic<WalletUtils> mockedWalletUtils = Mockito.mockStatic(WalletUtils.class)) {
+            mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
+            when(signing.signTransfer(anyString(), anyString(), Mockito.any())).thenReturn(null);
 
-        ConsortiumConnector c = connectorWith(rpc, signing, walletMgmt, gatewayConfigWith("platformPk"));
-        ConnectorPaymentResult r = c.createPayment(sampleRequest());
+            ConsortiumConnector c = connectorWith(rpc, signing, walletMgmt, gatewayConfigWith("platformPk"));
+            ConnectorPaymentResult r = c.createPayment(sampleRequest());
 
-        assertFalse(r.isSuccess());
+            assertFalse(r.isSuccess());
+        }
     }
 
     @Test
@@ -121,13 +129,15 @@ class ConsortiumConnectorTest {
     void createPayment_exception() {
         SigningServiceFeignClient signing = mock(SigningServiceFeignClient.class);
         WalletMgmtFeignClient walletMgmt = mock(WalletMgmtFeignClient.class);
-        when(walletMgmt.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
-        when(signing.signTransfer(anyString(), anyString(), Mockito.any())).thenThrow(new RuntimeException("sign err"));
+        try (MockedStatic<WalletUtils> mockedWalletUtils = Mockito.mockStatic(WalletUtils.class)) {
+            mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
+            when(signing.signTransfer(anyString(), anyString(), Mockito.any())).thenThrow(new RuntimeException("sign err"));
 
-        ConsortiumConnector c = connectorWith(mock(ConsortiumRpcClient.class), signing, walletMgmt,
-                gatewayConfigWith("platformPk"));
-        ConnectorPaymentResult r = c.createPayment(sampleRequest());
-        assertFalse(r.isSuccess());
+            ConsortiumConnector c = connectorWith(mock(ConsortiumRpcClient.class), signing, walletMgmt,
+                    gatewayConfigWith("platformPk"));
+            ConnectorPaymentResult r = c.createPayment(sampleRequest());
+            assertFalse(r.isSuccess());
+        }
     }
 
     @Test
@@ -136,13 +146,15 @@ class ConsortiumConnectorTest {
         ConsortiumRpcClient rpc = mock(ConsortiumRpcClient.class);
         SigningServiceFeignClient signing = mock(SigningServiceFeignClient.class);
         WalletMgmtFeignClient walletMgmt = mock(WalletMgmtFeignClient.class);
-        when(walletMgmt.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
-        when(signing.signTransfer(anyString(), anyString(), Mockito.any())).thenReturn("txHash123");
-        when(rpc.isTransactionConfirmed("txHash123")).thenReturn(true);
+        try (MockedStatic<WalletUtils> mockedWalletUtils = Mockito.mockStatic(WalletUtils.class)) {
+            mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
+            when(signing.signTransfer(anyString(), anyString(), Mockito.any())).thenReturn("txHash123");
+            when(rpc.isTransactionConfirmed("txHash123")).thenReturn(true);
 
-        ConsortiumConnector c = connectorWith(rpc, signing, walletMgmt, gatewayConfigWith("platformPk"));
-        ConnectorPaymentResult created = c.createPayment(sampleRequest());
-        assertEquals(PaymentStatus.SUCCEEDED, c.queryPayment(created.getConnectorPaymentId()));
+            ConsortiumConnector c = connectorWith(rpc, signing, walletMgmt, gatewayConfigWith("platformPk"));
+            ConnectorPaymentResult created = c.createPayment(sampleRequest());
+            assertEquals(PaymentStatus.SUCCEEDED, c.queryPayment(created.getConnectorPaymentId()));
+        }
     }
 
     @Test
@@ -151,13 +163,15 @@ class ConsortiumConnectorTest {
         ConsortiumRpcClient rpc = mock(ConsortiumRpcClient.class);
         SigningServiceFeignClient signing = mock(SigningServiceFeignClient.class);
         WalletMgmtFeignClient walletMgmt = mock(WalletMgmtFeignClient.class);
-        when(walletMgmt.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
-        when(signing.signTransfer(anyString(), anyString(), Mockito.any())).thenReturn("txHash123");
-        when(rpc.isTransactionConfirmed("txHash123")).thenReturn(false);
+        try (MockedStatic<WalletUtils> mockedWalletUtils = Mockito.mockStatic(WalletUtils.class)) {
+            mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
+            when(signing.signTransfer(anyString(), anyString(), Mockito.any())).thenReturn("txHash123");
+            when(rpc.isTransactionConfirmed("txHash123")).thenReturn(false);
 
-        ConsortiumConnector c = connectorWith(rpc, signing, walletMgmt, gatewayConfigWith("platformPk"));
-        ConnectorPaymentResult created = c.createPayment(sampleRequest());
-        assertEquals(PaymentStatus.PROCESSING, c.queryPayment(created.getConnectorPaymentId()));
+            ConsortiumConnector c = connectorWith(rpc, signing, walletMgmt, gatewayConfigWith("platformPk"));
+            ConnectorPaymentResult created = c.createPayment(sampleRequest());
+            assertEquals(PaymentStatus.PROCESSING, c.queryPayment(created.getConnectorPaymentId()));
+        }
     }
 
     @Test
@@ -175,13 +189,15 @@ class ConsortiumConnectorTest {
         ConsortiumRpcClient rpc = mock(ConsortiumRpcClient.class);
         SigningServiceFeignClient signing = mock(SigningServiceFeignClient.class);
         WalletMgmtFeignClient walletMgmt = mock(WalletMgmtFeignClient.class);
-        when(walletMgmt.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
-        when(signing.signTransfer(anyString(), anyString(), Mockito.any())).thenReturn("txHash123");
-        when(rpc.isTransactionConfirmed("txHash123")).thenThrow(new RuntimeException("rpc err"));
+        try (MockedStatic<WalletUtils> mockedWalletUtils = Mockito.mockStatic(WalletUtils.class)) {
+            mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
+            when(signing.signTransfer(anyString(), anyString(), Mockito.any())).thenReturn("txHash123");
+            when(rpc.isTransactionConfirmed("txHash123")).thenThrow(new RuntimeException("rpc err"));
 
-        ConsortiumConnector c = connectorWith(rpc, signing, walletMgmt, gatewayConfigWith("platformPk"));
-        ConnectorPaymentResult created = c.createPayment(sampleRequest());
-        assertEquals(PaymentStatus.PROCESSING, c.queryPayment(created.getConnectorPaymentId()));
+            ConsortiumConnector c = connectorWith(rpc, signing, walletMgmt, gatewayConfigWith("platformPk"));
+            ConnectorPaymentResult created = c.createPayment(sampleRequest());
+            assertEquals(PaymentStatus.PROCESSING, c.queryPayment(created.getConnectorPaymentId()));
+        }
     }
 
     @Test
@@ -190,14 +206,16 @@ class ConsortiumConnectorTest {
         ConsortiumRpcClient rpc = mock(ConsortiumRpcClient.class);
         SigningServiceFeignClient signing = mock(SigningServiceFeignClient.class);
         WalletMgmtFeignClient walletMgmt = mock(WalletMgmtFeignClient.class);
-        when(walletMgmt.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
-        when(walletMgmt.addressToPubkeyHash("0xPayer")).thenReturn("payerHash");
-        when(signing.signTransfer(anyString(), anyString(), Mockito.any())).thenReturn("txHash123");
+        try (MockedStatic<WalletUtils> mockedWalletUtils = Mockito.mockStatic(WalletUtils.class)) {
+            mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
+            mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("0xPayer")).thenReturn("payerHash");
+            when(signing.signTransfer(anyString(), anyString(), Mockito.any())).thenReturn("txHash123");
 
-        ConsortiumConnector c = connectorWith(rpc, signing, walletMgmt, gatewayConfigWith("platformPk"));
-        ConnectorPaymentResult created = c.createPayment(sampleRequest());
-        var refund = c.refund(created.getConnectorPaymentId(), 1000L);
-        assertTrue(refund.isSuccess());
+            ConsortiumConnector c = connectorWith(rpc, signing, walletMgmt, gatewayConfigWith("platformPk"));
+            ConnectorPaymentResult created = c.createPayment(sampleRequest());
+            var refund = c.refund(created.getConnectorPaymentId(), 1000L);
+            assertTrue(refund.isSuccess());
+        }
     }
 
     @Test
@@ -226,14 +244,16 @@ class ConsortiumConnectorTest {
         ConsortiumRpcClient rpc = mock(ConsortiumRpcClient.class);
         SigningServiceFeignClient signing = mock(SigningServiceFeignClient.class);
         WalletMgmtFeignClient walletMgmt = mock(WalletMgmtFeignClient.class);
-        when(walletMgmt.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
-        when(walletMgmt.addressToPubkeyHash("0xPayer")).thenReturn("payerHash");
-        when(signing.signTransfer(anyString(), anyString(), Mockito.any())).thenReturn(null);
+        try (MockedStatic<WalletUtils> mockedWalletUtils = Mockito.mockStatic(WalletUtils.class)) {
+            mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
+            mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("0xPayer")).thenReturn("payerHash");
+            when(signing.signTransfer(anyString(), anyString(), Mockito.any())).thenReturn(null);
 
-        ConsortiumConnector c = connectorWith(rpc, signing, walletMgmt, gatewayConfigWith("platformPk"));
-        ConnectorPaymentResult created = c.createPayment(sampleRequest());
-        var refund = c.refund(created.getConnectorPaymentId(), 1000L);
-        assertFalse(refund.isSuccess());
+            ConsortiumConnector c = connectorWith(rpc, signing, walletMgmt, gatewayConfigWith("platformPk"));
+            ConnectorPaymentResult created = c.createPayment(sampleRequest());
+            var refund = c.refund(created.getConnectorPaymentId(), 1000L);
+            assertFalse(refund.isSuccess());
+        }
     }
 
     @Test
@@ -279,22 +299,24 @@ class ConsortiumConnectorTest {
         SigningServiceFeignClient signing = mock(SigningServiceFeignClient.class);
         WalletMgmtFeignClient walletMgmt = mock(WalletMgmtFeignClient.class);
         OraclePriceAdapter oracle = mock(OraclePriceAdapter.class);
-        when(walletMgmt.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
-        when(oracle.convertToChainAmount(BigDecimal.valueOf(50000), "NEX"))
-                .thenReturn(new BigDecimal("12500"));
-        when(signing.signTransfer(anyString(), anyString(), Mockito.any())).thenReturn("txHash");
+        try (MockedStatic<WalletUtils> mockedWalletUtils = Mockito.mockStatic(WalletUtils.class)) {
+            mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
+            when(oracle.convertToChainAmount(BigDecimal.valueOf(50000), "NEX"))
+                    .thenReturn(new BigDecimal("12500"));
+            when(signing.signTransfer(anyString(), anyString(), Mockito.any())).thenReturn("txHash");
 
-        GatewayConfig cfg = gatewayConfigWith("platformPk");
-        ConsortiumConnector c = new ConsortiumConnector(rpc, signing, walletMgmt, cfg, oracle);
+            GatewayConfig cfg = gatewayConfigWith("platformPk");
+            ConsortiumConnector c = new ConsortiumConnector(rpc, signing, walletMgmt, cfg, oracle);
 
-        ConnectorPaymentRequest req = new ConnectorPaymentRequest("pay_1", 50000L, "USD", "test");
-        req.setPayerAddress("0xPayer");
-        req.setPayeeAddress("0xPayee");
-        ConnectorPaymentResult r = c.createPayment(req);
+            ConnectorPaymentRequest req = new ConnectorPaymentRequest("pay_1", 50000L, "USD", "test");
+            req.setPayerAddress("0xPayer");
+            req.setPayeeAddress("0xPayee");
+            ConnectorPaymentResult r = c.createPayment(req);
 
-        assertTrue(r.isSuccess());
-        // 验证 signTransfer 收到换算后的金额（12500）
-        org.mockito.Mockito.verify(signing).signTransfer(anyString(), anyString(), eq(new BigDecimal("12500")));
+            assertTrue(r.isSuccess());
+            // 验证 signTransfer 收到换算后的金额（12500）
+            org.mockito.Mockito.verify(signing).signTransfer(anyString(), anyString(), eq(new BigDecimal("12500")));
+        }
     }
 
     @Test
@@ -304,19 +326,21 @@ class ConsortiumConnectorTest {
         SigningServiceFeignClient signing = mock(SigningServiceFeignClient.class);
         WalletMgmtFeignClient walletMgmt = mock(WalletMgmtFeignClient.class);
         OraclePriceAdapter oracle = mock(OraclePriceAdapter.class);
-        when(walletMgmt.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
-        when(oracle.convertToChainAmount(BigDecimal.valueOf(50000), "NEX")).thenReturn(null);
-        when(signing.signTransfer(anyString(), anyString(), Mockito.any())).thenReturn("txHash");
+        try (MockedStatic<WalletUtils> mockedWalletUtils = Mockito.mockStatic(WalletUtils.class)) {
+            mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
+            when(oracle.convertToChainAmount(BigDecimal.valueOf(50000), "NEX")).thenReturn(null);
+            when(signing.signTransfer(anyString(), anyString(), Mockito.any())).thenReturn("txHash");
 
-        GatewayConfig cfg = gatewayConfigWith("platformPk");
-        ConsortiumConnector c = new ConsortiumConnector(rpc, signing, walletMgmt, cfg, oracle);
+            GatewayConfig cfg = gatewayConfigWith("platformPk");
+            ConsortiumConnector c = new ConsortiumConnector(rpc, signing, walletMgmt, cfg, oracle);
 
-        ConnectorPaymentRequest req = new ConnectorPaymentRequest("pay_1", 50000L, "USD", "test");
-        req.setPayerAddress("0xPayer");
-        req.setPayeeAddress("0xPayee");
-        ConnectorPaymentResult r = c.createPayment(req);
+            ConnectorPaymentRequest req = new ConnectorPaymentRequest("pay_1", 50000L, "USD", "test");
+            req.setPayerAddress("0xPayer");
+            req.setPayeeAddress("0xPayee");
+            ConnectorPaymentResult r = c.createPayment(req);
 
-        assertTrue(r.isSuccess());
-        org.mockito.Mockito.verify(signing).signTransfer(anyString(), anyString(), eq(BigDecimal.valueOf(50000)));
+            assertTrue(r.isSuccess());
+            org.mockito.Mockito.verify(signing).signTransfer(anyString(), anyString(), eq(BigDecimal.valueOf(50000)));
+        }
     }
 }

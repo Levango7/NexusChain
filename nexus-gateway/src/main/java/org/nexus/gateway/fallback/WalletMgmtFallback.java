@@ -17,16 +17,8 @@ import java.math.BigDecimal;
  *
  * <p>降级策略：
  * <ul>
- *   <li>地址工具（{@code addressToPubkeyHash}）：返回 {@code null}，调用方
- *       拒绝该地址相关请求（fail-closed）</li>
- *   <li>地址校验（{@code verifyAddress}）：fail-closed 返回 {@code false}，
- *       即地址不合法，拒绝请求</li>
  *   <li>提现审批（{@code requestWithdrawal} 等）：返回 {@code null}，调用方
  *       标记提现失败并告警</li>
- *   <li>托管查询（{@code getCustodyTier}）：返回 {@code null}，调用方按
- *       未知层级处理（保守策略）</li>
- *   <li>冷钱包提取（{@code withdrawFromCold}）：返回 {@code null}，fail-closed，
- *       拒绝提取请求</li>
  *   <li>白名单查询（{@code isAddressWhitelisted}）：fail-closed 返回 {@code false}，
  *       即不在白名单，拒绝提现</li>
  * </ul></p>
@@ -39,26 +31,18 @@ import java.math.BigDecimal;
  * 通过 {@code GatewayWalletMgmtFallbackFactory.create(Throwable)} 实例化，
  * 不再由 Spring 容器直接注入到 Feign 调用链。SCA Sentinel-Feign 集成后，
  * Sentinel 熔断/限流同样路由到本类（经 FallbackFactory 包装）。</p>
+ *
+ * <p>端点对齐修复（任务 #317）：移除 {@code addressToPubkeyHash} / {@code verifyAddress} /
+ * {@code getWithdrawal} / {@code compensateWithdrawal} / {@code getCustodyTier} /
+ * {@code depositToCold} / {@code withdrawFromCold} 的 fallback 实现；
+ * 修正 {@code approveWithdrawal} / {@code rejectWithdrawal} / {@code executeWithdrawal}
+ * 方法签名（移除 {@code approverId} 参数，{@code requestId} 改为 {@code approvalId}），
+ * 与 WalletMgmtFeignClient 接口对齐。</p>
  */
 @Component
 public class WalletMgmtFallback implements WalletMgmtFeignClient {
 
     private static final Logger log = LoggerFactory.getLogger(WalletMgmtFallback.class);
-
-    // === 地址工具 ===
-
-    @Override
-    public String addressToPubkeyHash(String address) {
-        log.error("addressToPubkeyHash Feign 降级触发: wallet-service 不可用, address={}", address);
-        return null;
-    }
-
-    @Override
-    public boolean verifyAddress(String address) {
-        log.warn("verifyAddress Feign 降级触发: wallet-service 不可用, address={}, fail-closed 返回 false",
-                address);
-        return false;
-    }
 
     // === 提现审批 ===
 
@@ -71,59 +55,21 @@ public class WalletMgmtFallback implements WalletMgmtFeignClient {
     }
 
     @Override
-    public WithdrawalRequest approveWithdrawal(String requestId, String approverId) {
-        log.error("approveWithdrawal Feign 降级触发: wallet-service 不可用, requestId={}, approverId={}",
-                requestId, approverId);
+    public WithdrawalRequest approveWithdrawal(String approvalId) {
+        log.error("approveWithdrawal Feign 降级触发: wallet-service 不可用, approvalId={}", approvalId);
         return null;
     }
 
     @Override
-    public WithdrawalRequest rejectWithdrawal(String requestId, String approverId, String reason) {
-        log.error("rejectWithdrawal Feign 降级触发: wallet-service 不可用, requestId={}, approverId={}",
-                requestId, approverId);
+    public WithdrawalRequest rejectWithdrawal(String approvalId, String reason) {
+        log.error("rejectWithdrawal Feign 降级触发: wallet-service 不可用, approvalId={}, reason={}",
+                approvalId, reason);
         return null;
     }
 
     @Override
-    public WithdrawalRequest executeWithdrawal(String requestId) {
-        log.error("executeWithdrawal Feign 降级触发: wallet-service 不可用, requestId={}", requestId);
-        // 已有 ERROR 级别日志告警；Prometheus counter + 外部告警通道接入为后续任务
-        return null;
-    }
-
-    @Override
-    public WithdrawalRequest getWithdrawal(String requestId) {
-        log.warn("getWithdrawal Feign 降级触发: wallet-service 不可用, requestId={}", requestId);
-        return null;
-    }
-
-    @Override
-    public WithdrawalRequest compensateWithdrawal(String requestId) {
-        log.error("compensateWithdrawal Feign 降级触发: wallet-service 不可用, requestId={}, " +
-                "补偿失败（等待下次对账重试）", requestId);
-        // 已有 ERROR 级别日志告警；Prometheus counter + 外部告警通道接入为后续任务
-        return null;
-    }
-
-    // === 托管 ===
-
-    @Override
-    public String getCustodyTier(String walletId) {
-        log.warn("getCustodyTier Feign 降级触发: wallet-service 不可用, walletId={}", walletId);
-        return null;
-    }
-
-    @Override
-    public String depositToCold(String address, BigDecimal amount) {
-        log.error("depositToCold Feign 降级触发: wallet-service 不可用, address={}, amount={}",
-                address, amount);
-        return null;
-    }
-
-    @Override
-    public String withdrawFromCold(String address, BigDecimal amount, String approvalId) {
-        log.error("withdrawFromCold Feign 降级触发: wallet-service 不可用, address={}, amount={}, " +
-                "approvalId={}, fail-closed 拒绝提取", address, amount, approvalId);
+    public WithdrawalRequest executeWithdrawal(String approvalId) {
+        log.error("executeWithdrawal Feign 降级触发: wallet-service 不可用, approvalId={}", approvalId);
         // 已有 ERROR 级别日志告警；Prometheus counter + 外部告警通道接入为后续任务
         return null;
     }

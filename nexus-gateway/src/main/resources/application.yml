@@ -220,6 +220,12 @@ nexus:
       # token TTL（毫秒），默认 5 分钟；短期 token 降低泄露风险
       ttl-millis: ${JWT_TTL_MILLIS:300000}
 
+    # === P1 认证链路密钥一致：请求签名验证密钥 ===
+    # 前端用 apiSecret 对请求签名，gateway 用 requestSigningSecret 验签。
+    # 生产环境通过 NEXUS_REQUEST_SIGNING_SECRET 环境变量注入（sandbox/test profile 已配置）。
+    # 占位符默认空串：未注入时验签失败由调用方显式感知，避免静默放行。
+    request-signing-secret: ${NEXUS_REQUEST_SIGNING_SECRET:}
+
   # === P0-3a：PSP 真实 API 配置（Stripe / Adyen） ===
   # 默认 enabled=false 保持向后兼容：未注入 apiKey 时各 Connector 自动走 dry-run。
   # 生产环境通过环境变量 / Nacos 注入 apiKey / webhookSecret / hmacKey，不落明文配置。

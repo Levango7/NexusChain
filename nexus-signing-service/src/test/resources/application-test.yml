@@ -1,0 +1,30 @@
+# 测试环境配置（@ActiveProfiles("test") 使用）
+# 提供 MultiNodeMpcMockTest 等 @SpringBootTest 测试所需的最小配置
+
+spring:
+  main:
+    allow-bean-definition-overriding: true
+  # 测试中不连接 Nacos / Seata 等外部服务
+  cloud:
+    nacos:
+      discovery:
+        enabled: false
+      config:
+        enabled: false
+  autoconfigure:
+    exclude:
+      - com.alibaba.cloud.nacos.NacosDiscoveryAutoConfiguration
+      - com.alibaba.cloud.nacos.NacosConfigAutoConfiguration
+
+# MPC 密钥份额存储 KEK（base64 编码的 32 字节全零密钥，仅测试用）
+nexus:
+  mpc:
+    keyshare:
+      kek: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+      min-shares: 0
+  keystore:
+    encryption-key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+
+# Seata 测试环境禁用
+seata:
+  enabled: false

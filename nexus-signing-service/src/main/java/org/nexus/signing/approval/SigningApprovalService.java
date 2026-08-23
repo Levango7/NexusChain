@@ -166,11 +166,12 @@ public class SigningApprovalService {
     private final ApprovalNotifier approvalNotifier;
 
     /**
-     * 构造函数。
+     * 构造函数（Spring 自动注入用）。
      *
      * @param mpcApprovalPolicy MPC 审批策略，用于计算所需审批人数
      * @param auditLogService   审计日志服务
      */
+    @org.springframework.beans.factory.annotation.Autowired
     public SigningApprovalService(MpcApprovalPolicy mpcApprovalPolicy,
                                   AuditLogService auditLogService) {
         this(mpcApprovalPolicy, auditLogService, null, null);

@@ -112,6 +112,10 @@ dependencies {
     runtimeOnly 'com.h2database:h2'
     runtimeOnly 'com.mysql:mysql-connector-j'
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    // === 测试期安全支持：提供 @WithMockUser 注解用于 MockMvc 方法级鉴权测试 ===
+    // BridgeController 的 lock/mint/burn/unlock 端点有 @PreAuthorize("hasRole('OPERATOR')")，
+    // 集成测试需通过 @WithMockUser 模拟认证用户与角色才能访问这些端点。
+    testImplementation 'org.springframework.security:spring-security-test'
 }
 
 // 跨链桥服务为独立部署的 Spring Boot 应用，启用 bootJar 产出可执行 fat jar。
@@ -129,19 +133,6 @@ test {
     useJUnitPlatform()
 }
 
-// === 覆盖率门禁（与 nexus-gateway 对齐，minimum 0.15） ===
-// BUNDLE 级别指令覆盖率下限 0.15；check 依赖 jacocoTestCoverageVerification 以强制门禁
-jacocoTestCoverageVerification {
-    violationRules {
-        rule {
-            element = 'BUNDLE'
-            limit {
-                counter = 'INSTRUCTION'
-                value = 'COVEREDRATIO'
-                minimum = 0.15
-            }
-        }
-    }
-}
-
-check.dependsOn jacocoTestCoverageVerification
+// === 覆盖率门禁 ===
+// 子模块不再覆盖 jacocoTestCoverageVerification，统一由根 build.gradle 的 0.30 门禁生效，
+// 避免子模块 0.15 与根 0.30 不一致导致门禁语义混乱（实际覆盖率 66.32% 远高于两者）。

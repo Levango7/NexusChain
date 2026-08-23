@@ -31,7 +31,7 @@ const HomePage: React.FC = () => {
       const [b, t, s] = await Promise.all([
         api.getBlocks(10),
         api.getTransactions(10),
-        api.getStatus().catch(() => null),
+        api.getStatus().catch(err => { console.error('API请求失败:', err); return null; }),
       ]);
       setBlocks(b);
       setTransactions(t);

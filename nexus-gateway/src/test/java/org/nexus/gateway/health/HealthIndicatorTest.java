@@ -59,10 +59,10 @@ class HealthIndicatorTest {
     // === SigningServiceHealthIndicator ===
 
     @Test
-    @DisplayName("SigningServiceHealthIndicator: canSignViaMpc 不抛异常返回 UP")
+    @DisplayName("SigningServiceHealthIndicator: signTransfer 不抛异常返回 UP")
     void signingService_up() {
         SigningServiceFeignClient client = mock(SigningServiceFeignClient.class);
-        when(client.canSignViaMpc(any(BigDecimal.class))).thenReturn(true);
+        when(client.signTransfer(any(), any(), any())).thenReturn("ok");
 
         SigningServiceHealthIndicator indicator = new SigningServiceHealthIndicator(client);
         Health h = indicator.health();
@@ -74,7 +74,7 @@ class HealthIndicatorTest {
     @DisplayName("SigningServiceHealthIndicator: 抛异常返回 DOWN")
     void signingService_down() {
         SigningServiceFeignClient client = mock(SigningServiceFeignClient.class);
-        when(client.canSignViaMpc(any(BigDecimal.class))).thenThrow(new RuntimeException("unreachable"));
+        when(client.signTransfer(any(), any(), any())).thenThrow(new RuntimeException("unreachable"));
 
         SigningServiceHealthIndicator indicator = new SigningServiceHealthIndicator(client);
         Health h = indicator.health();
@@ -85,10 +85,10 @@ class HealthIndicatorTest {
     // === WalletServiceHealthIndicator ===
 
     @Test
-    @DisplayName("WalletServiceHealthIndicator: verifyAddress 不抛异常返回 UP")
+    @DisplayName("WalletServiceHealthIndicator: isAddressWhitelisted 不抛异常返回 UP")
     void walletService_up() {
         WalletMgmtFeignClient client = mock(WalletMgmtFeignClient.class);
-        when(client.verifyAddress(anyString())).thenReturn(true);
+        when(client.isAddressWhitelisted(anyString())).thenReturn(true);
 
         WalletServiceHealthIndicator indicator = new WalletServiceHealthIndicator(client);
         Health h = indicator.health();
@@ -100,7 +100,7 @@ class HealthIndicatorTest {
     @DisplayName("WalletServiceHealthIndicator: 抛异常返回 DOWN")
     void walletService_down() {
         WalletMgmtFeignClient client = mock(WalletMgmtFeignClient.class);
-        when(client.verifyAddress(anyString())).thenThrow(new RuntimeException("unreachable"));
+        when(client.isAddressWhitelisted(anyString())).thenThrow(new RuntimeException("unreachable"));
 
         WalletServiceHealthIndicator indicator = new WalletServiceHealthIndicator(client);
         Health h = indicator.health();

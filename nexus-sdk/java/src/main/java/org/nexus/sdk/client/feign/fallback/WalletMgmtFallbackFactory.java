@@ -27,13 +27,19 @@ import java.math.BigDecimal;
  *       {@code create(Throwable cause)} 中获取触发降级的异常，区分限流/熔断/服务不可用</li>
  * </ul></p>
  *
+ * <p>端点对齐修复（任务 #317）：移除 {@code addressToPubkeyHash} / {@code verifyAddress} /
+ * {@code getWithdrawal} / {@code compensateWithdrawal} / {@code getCustodyTier} /
+ * {@code depositToCold} / {@code withdrawFromCold} 的默认 fallback 实现；
+ * 修正 {@code approveWithdrawal} / {@code rejectWithdrawal} / {@code executeWithdrawal}
+ * 方法签名，与 WalletMgmtFeignClient 接口对齐。</p>
+ *
  * @see WalletMgmtFeignClient
  * @see org.springframework.cloud.openfeign.FallbackFactory
  */
 public class WalletMgmtFallbackFactory implements FallbackFactory<WalletMgmtFeignClient> {
 
     /**
-     * 默认 fail-closed 降级实现：地址校验返回 false、查询返回 null，调用方按失败处理。
+     * 默认 fail-closed 降级实现：查询返回 null/false，调用方按失败处理。
      *
      * <p>消费方应覆盖本方法以注入定制降级逻辑（如记录日志、区分异常类型）。</p>
      *
@@ -44,57 +50,22 @@ public class WalletMgmtFallbackFactory implements FallbackFactory<WalletMgmtFeig
     public WalletMgmtFeignClient create(Throwable cause) {
         return new WalletMgmtFeignClient() {
             @Override
-            public String addressToPubkeyHash(String address) {
-                return null;
-            }
-
-            @Override
-            public boolean verifyAddress(String address) {
-                return false;
-            }
-
-            @Override
             public WithdrawalRequest requestWithdrawal(String to, BigDecimal amount, String currency) {
                 return null;
             }
 
             @Override
-            public WithdrawalRequest approveWithdrawal(String requestId, String approverId) {
+            public WithdrawalRequest approveWithdrawal(String approvalId) {
                 return null;
             }
 
             @Override
-            public WithdrawalRequest rejectWithdrawal(String requestId, String approverId, String reason) {
+            public WithdrawalRequest rejectWithdrawal(String approvalId, String reason) {
                 return null;
             }
 
             @Override
-            public WithdrawalRequest executeWithdrawal(String requestId) {
-                return null;
-            }
-
-            @Override
-            public WithdrawalRequest getWithdrawal(String requestId) {
-                return null;
-            }
-
-            @Override
-            public WithdrawalRequest compensateWithdrawal(String requestId) {
-                return null;
-            }
-
-            @Override
-            public String getCustodyTier(String walletId) {
-                return null;
-            }
-
-            @Override
-            public String depositToCold(String address, BigDecimal amount) {
-                return null;
-            }
-
-            @Override
-            public String withdrawFromCold(String address, BigDecimal amount, String approvalId) {
+            public WithdrawalRequest executeWithdrawal(String approvalId) {
                 return null;
             }
 

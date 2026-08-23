@@ -6,6 +6,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
 import org.nexus.gateway.model.MerchantKeypairEntry;
 import org.nexus.gateway.repository.MerchantKeypairRepository;
 
@@ -25,10 +27,14 @@ import static org.mockito.Mockito.when;
  * 本测试使用 Mockito Mock 该依赖。</p>
  */
 @ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
 class KeyManagerTest {
 
     @Mock
     private MerchantKeypairRepository keypairRepository;
+
+    /** LocalFileKeyManager 构造函数要求的 Base64 编码 32 字节 AES-256 加密密钥 */
+    private static final String VALID_ENC_KEY = Base64.getEncoder().encodeToString(new byte[32]);
 
     // === SandboxKeyManager ===
 
@@ -73,7 +79,7 @@ class KeyManagerTest {
     @DisplayName("LocalFileKeyManager: store/get/has 基本契约（@TempDir 持久化）")
     void localFile_storeAndGet(@TempDir Path dir) throws Exception {
         Path keyFile = dir.resolve("keystore.properties");
-        LocalFileKeyManager km = new LocalFileKeyManager(keyFile.toString());
+        LocalFileKeyManager km = new LocalFileKeyManager(keyFile.toString(), VALID_ENC_KEY);
 
         assertFalse(km.hasKeypair(1L));
         km.storeKeypair(1L, "pub-1", "priv-1");
@@ -82,7 +88,7 @@ class KeyManagerTest {
         assertEquals("priv-1", km.getPrivateKey(1L));
 
         // 重新加载应能从文件恢复
-        LocalFileKeyManager km2 = new LocalFileKeyManager(keyFile.toString());
+        LocalFileKeyManager km2 = new LocalFileKeyManager(keyFile.toString(), VALID_ENC_KEY);
         assertTrue(km2.hasKeypair(1L));
         assertEquals("pub-1", km2.getPublicKey(1L));
     }
@@ -90,7 +96,7 @@ class KeyManagerTest {
     @Test
     @DisplayName("LocalFileKeyManager: 默认路径（空字符串）使用 tmpdir")
     void localFile_defaultPath() {
-        LocalFileKeyManager km = new LocalFileKeyManager("");
+        LocalFileKeyManager km = new LocalFileKeyManager("", VALID_ENC_KEY);
         assertNotNull(km);
         // 不抛异常即可
         km.hasKeypair(99L);
@@ -99,7 +105,7 @@ class KeyManagerTest {
     @Test
     @DisplayName("LocalFileKeyManager: 未存储的 merchantId 返回 null")
     void localFile_unknownMerchant() {
-        LocalFileKeyManager km = new LocalFileKeyManager("");
+        LocalFileKeyManager km = new LocalFileKeyManager("", VALID_ENC_KEY);
         assertNull(km.getPublicKey(99999L));
         assertNull(km.getPrivateKey(99999L));
     }

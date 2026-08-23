@@ -79,6 +79,13 @@ public class GatewayConfig {
                         .filters(f -> f.stripPrefix(0))
                         .uri("lb://" + SVC_SIGNING))
 
+                // 3.1 转账/签名 API：/api/v1/transfers/** → nexus-signing-service
+                // TxController 端点为 /api/v1/transfers/sign 等，需独立路由到 signing-service
+                .route("transfers-route", r -> r
+                        .path("/api/v1/transfers/**")
+                        .filters(f -> f.stripPrefix(0))
+                        .uri("lb://" + SVC_SIGNING))
+
                 // 4. 钱包服务 API：/api/v1/wallet/** → nexus-wallet-service
                 .route("wallet-route", r -> r
                         .path("/api/v1/wallet/**")

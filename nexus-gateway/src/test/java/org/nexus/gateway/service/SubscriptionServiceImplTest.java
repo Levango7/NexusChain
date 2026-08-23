@@ -5,12 +5,14 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
+import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.nexus.gateway.config.GatewayConfig;
 import org.nexus.gateway.model.Subscription;
 import org.nexus.gateway.repository.SubscriptionRepository;
 import org.nexus.sdk.client.feign.SigningServiceFeignClient;
 import org.nexus.sdk.client.feign.WalletMgmtFeignClient;
+import org.nexus.sdk.wallet.WalletUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -47,32 +49,36 @@ class SubscriptionServiceImplTest {
     @DisplayName("createSubscription: 链上授权成功→落库 ACTIVE+真实authTxHash")
     void createSubscription_onChainAuthSuccess() {
         when(subscriptionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(walletMgmtClient.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
-        when(signingServiceClient.signTransfer("platform-pubkey", "payeeHash", BigDecimal.ZERO))
-                .thenReturn("0xAuthTxHash");
+        try (MockedStatic<WalletUtils> mockedWalletUtils = mockStatic(WalletUtils.class)) {
+            mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
+            when(signingServiceClient.signTransfer("platform-pubkey", "payeeHash", BigDecimal.ZERO))
+                    .thenReturn("0xAuthTxHash");
 
-        Subscription result = service.createSubscription(100L, "0xPayer", "0xPayee",
-                new BigDecimal("1000"), 30);
+            Subscription result = service.createSubscription(100L, "0xPayer", "0xPayee",
+                    new BigDecimal("1000"), 30);
 
-        assertEquals(100L, result.getMerchantId());
-        assertEquals(Subscription.SubscriptionStatus.ACTIVE, result.getStatus());
-        assertEquals(0, result.getChargedCount());
-        assertNotNull(result.getSubscriptionNo());
-        assertEquals("0xAuthTxHash", result.getAuthTxHash(), "authTxHash应为链上真实交易哈希");
-        assertNotNull(result.getNextChargeAt());
+            assertEquals(100L, result.getMerchantId());
+            assertEquals(Subscription.SubscriptionStatus.ACTIVE, result.getStatus());
+            assertEquals(0, result.getChargedCount());
+            assertNotNull(result.getSubscriptionNo());
+            assertEquals("0xAuthTxHash", result.getAuthTxHash(), "authTxHash应为链上真实交易哈希");
+            assertNotNull(result.getNextChargeAt());
+        }
     }
 
     @Test
     @DisplayName("createSubscription: 钱包不可达→authTxHash=null（fail-closed）")
     void createSubscription_walletUnreachable() {
         when(subscriptionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(walletMgmtClient.addressToPubkeyHash("0xPayee")).thenReturn(null);
+        try (MockedStatic<WalletUtils> mockedWalletUtils = mockStatic(WalletUtils.class)) {
+            mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("0xPayee")).thenReturn(null);
 
-        Subscription result = service.createSubscription(100L, "0xPayer", "0xPayee",
-                new BigDecimal("1000"), 30);
+            Subscription result = service.createSubscription(100L, "0xPayer", "0xPayee",
+                    new BigDecimal("1000"), 30);
 
-        assertNull(result.getAuthTxHash(), "钱包不可达时authTxHash应为null");
-        assertEquals(Subscription.SubscriptionStatus.ACTIVE, result.getStatus(), "订阅仍应创建");
+            assertNull(result.getAuthTxHash(), "钱包不可达时authTxHash应为null");
+            assertEquals(Subscription.SubscriptionStatus.ACTIVE, result.getStatus(), "订阅仍应创建");
+        }
     }
 
     @Test
@@ -80,26 +86,30 @@ class SubscriptionServiceImplTest {
     void createSubscription_noPlatformPubkey() {
         cfg.getExchangeWallet().setPlatformPubkey("");
         when(subscriptionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(walletMgmtClient.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
+        try (MockedStatic<WalletUtils> mockedWalletUtils = mockStatic(WalletUtils.class)) {
+            mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
 
-        Subscription result = service.createSubscription(100L, "0xPayer", "0xPayee",
-                new BigDecimal("1000"), 30);
+            Subscription result = service.createSubscription(100L, "0xPayer", "0xPayee",
+                    new BigDecimal("1000"), 30);
 
-        assertNull(result.getAuthTxHash(), "平台公钥未配置时authTxHash应为null");
+            assertNull(result.getAuthTxHash(), "平台公钥未配置时authTxHash应为null");
+        }
     }
 
     @Test
     @DisplayName("createSubscription: 签名服务异常→authTxHash=null（fail-closed）")
     void createSubscription_signingException() {
         when(subscriptionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(walletMgmtClient.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
-        when(signingServiceClient.signTransfer(any(), any(), any())).thenThrow(new RuntimeException("sign err"));
+        try (MockedStatic<WalletUtils> mockedWalletUtils = mockStatic(WalletUtils.class)) {
+            mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
+            when(signingServiceClient.signTransfer(any(), any(), any())).thenThrow(new RuntimeException("sign err"));
 
-        Subscription result = service.createSubscription(100L, "0xPayer", "0xPayee",
-                new BigDecimal("1000"), 30);
+            Subscription result = service.createSubscription(100L, "0xPayer", "0xPayee",
+                    new BigDecimal("1000"), 30);
 
-        assertNull(result.getAuthTxHash(), "签名服务异常时authTxHash应为null");
-        assertEquals(Subscription.SubscriptionStatus.ACTIVE, result.getStatus(), "订阅仍应创建");
+            assertNull(result.getAuthTxHash(), "签名服务异常时authTxHash应为null");
+            assertEquals(Subscription.SubscriptionStatus.ACTIVE, result.getStatus(), "订阅仍应创建");
+        }
     }
 
     @Test
@@ -119,16 +129,18 @@ class SubscriptionServiceImplTest {
     void charge_success() {
         Subscription sub = activeSubscription(1L);
         when(subscriptionRepository.findById(1L)).thenReturn(Optional.of(sub));
-        when(walletMgmtClient.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
-        when(signingServiceClient.signTransfer("platform-pubkey", "payeeHash", new BigDecimal("1000")))
-                .thenReturn("0xTxHash");
         when(subscriptionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        try (MockedStatic<WalletUtils> mockedWalletUtils = mockStatic(WalletUtils.class)) {
+            mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
+            when(signingServiceClient.signTransfer("platform-pubkey", "payeeHash", new BigDecimal("1000")))
+                    .thenReturn("0xTxHash");
 
-        String txHash = service.charge(1L);
+            String txHash = service.charge(1L);
 
-        assertEquals("0xTxHash", txHash);
-        assertEquals(1, sub.getChargedCount());
-        assertNotNull(sub.getNextChargeAt());
+            assertEquals("0xTxHash", txHash);
+            assertEquals(1, sub.getChargedCount());
+            assertNotNull(sub.getNextChargeAt());
+        }
     }
 
     @Test
@@ -153,9 +165,11 @@ class SubscriptionServiceImplTest {
     void charge_walletUnreachable() {
         Subscription sub = activeSubscription(1L);
         when(subscriptionRepository.findById(1L)).thenReturn(Optional.of(sub));
-        when(walletMgmtClient.addressToPubkeyHash("0xPayee")).thenReturn(null);
+        try (MockedStatic<WalletUtils> mockedWalletUtils = mockStatic(WalletUtils.class)) {
+            mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("0xPayee")).thenReturn(null);
 
-        assertNull(service.charge(1L));
+            assertNull(service.charge(1L));
+        }
     }
 
     @Test
@@ -164,9 +178,11 @@ class SubscriptionServiceImplTest {
         cfg.getExchangeWallet().setPlatformPubkey("");
         Subscription sub = activeSubscription(1L);
         when(subscriptionRepository.findById(1L)).thenReturn(Optional.of(sub));
-        when(walletMgmtClient.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
+        try (MockedStatic<WalletUtils> mockedWalletUtils = mockStatic(WalletUtils.class)) {
+            mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
 
-        assertNull(service.charge(1L));
+            assertNull(service.charge(1L));
+        }
     }
 
     @Test
@@ -174,10 +190,12 @@ class SubscriptionServiceImplTest {
     void charge_signingException() {
         Subscription sub = activeSubscription(1L);
         when(subscriptionRepository.findById(1L)).thenReturn(Optional.of(sub));
-        when(walletMgmtClient.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
-        when(signingServiceClient.signTransfer(any(), any(), any())).thenThrow(new RuntimeException("sign err"));
+        try (MockedStatic<WalletUtils> mockedWalletUtils = mockStatic(WalletUtils.class)) {
+            mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
+            when(signingServiceClient.signTransfer(any(), any(), any())).thenThrow(new RuntimeException("sign err"));
 
-        assertNull(service.charge(1L));
+            assertNull(service.charge(1L));
+        }
     }
 
     @Test
@@ -209,12 +227,14 @@ class SubscriptionServiceImplTest {
                 .thenReturn(List.of(s1, s2));
         when(subscriptionRepository.findById(1L)).thenReturn(Optional.of(s1));
         when(subscriptionRepository.findById(2L)).thenReturn(Optional.of(s2));
-        when(walletMgmtClient.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
-        when(signingServiceClient.signTransfer(any(), any(), any())).thenReturn("0xTx");
         when(subscriptionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        try (MockedStatic<WalletUtils> mockedWalletUtils = mockStatic(WalletUtils.class)) {
+            mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
+            when(signingServiceClient.signTransfer(any(), any(), any())).thenReturn("0xTx");
 
-        int count = service.processDueSubscriptions();
-        assertEquals(2, count);
+            int count = service.processDueSubscriptions();
+            assertEquals(2, count);
+        }
     }
 
     @Test

@@ -27,7 +27,7 @@ const AddressPage: React.FC = () => {
     if (!addr) return;
     (async () => {
       try {
-        const acc = await api.getAccount(addr).catch(() => null);
+        const acc = await api.getAccount(addr).catch(err => { console.error('API请求失败:', err); return null; });
         setAccount(acc);
         if (!acc) setError(t("address.notFound"));
       } catch (err) {

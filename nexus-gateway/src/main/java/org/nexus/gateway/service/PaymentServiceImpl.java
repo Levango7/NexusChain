@@ -19,6 +19,7 @@ import org.nexus.gateway.risk.RiskDecision;
 import org.nexus.common.tracing.BusinessSpan;
 import org.nexus.sdk.client.feign.SigningServiceFeignClient;
 import org.nexus.sdk.client.feign.WalletMgmtFeignClient;
+import org.nexus.sdk.wallet.WalletUtils;
 import org.springframework.context.ApplicationEventPublisher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -453,7 +454,7 @@ public class PaymentServiceImpl implements PaymentService {
                     },
                     // 阶段2：链上执行（事务外，不可逆）
                     refund -> {
-                        String receiverPubkeyHash = walletMgmtClient.addressToPubkeyHash(order.getPayerAddress());
+                        String receiverPubkeyHash = WalletUtils.addressToPubkeyHash(order.getPayerAddress());
                         if (receiverPubkeyHash == null) {
                             return OnChainResult.failure("wallet unreachable", false);
                         }

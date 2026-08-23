@@ -1,6 +1,8 @@
 package org.nexus.signing.mpc;
 
 import org.junit.jupiter.api.*;
+import org.nexus.signing.approval.SigningApprovalService;
+import org.nexus.signing.audit.AuditLogService;
 import org.nexus.signing.mpc.crypto.GrpcMpcCryptoEngine;
 import org.nexus.signing.mpc.crypto.MpcEngineRouter;
 import org.nexus.signing.mpc.transport.MpcTransport;
@@ -34,6 +36,10 @@ class MultiNodeMpcMockTest {
 
     @MockBean private GrpcMpcCryptoEngine cryptoEngine;
     @MockBean private MpcEngineRouter engineRouter;
+    // SigningApprovalService 通过构造函数注入 MpcApprovalPolicy 和 AuditLogService，
+    // 需 mock 这两个 bean 否则 Spring 上下文无法加载（NoSuchMethodException: <init>()）。
+    @MockBean private MpcApprovalPolicy mpcApprovalPolicy;
+    @MockBean private AuditLogService auditLogService;
 
     @Test @Order(1)
     void cryptoEngineMockBeanAvailable() {

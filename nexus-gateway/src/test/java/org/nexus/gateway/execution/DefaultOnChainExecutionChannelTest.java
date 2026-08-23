@@ -5,11 +5,13 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
+import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.nexus.gateway.client.ChainRpcClient;
 import org.nexus.gateway.config.GatewayConfig;
 import org.nexus.sdk.client.feign.SigningServiceFeignClient;
 import org.nexus.sdk.client.feign.WalletMgmtFeignClient;
+import org.nexus.sdk.wallet.WalletUtils;
 import org.nexus.settlement.execution.TransactionRequest;
 import org.nexus.settlement.execution.TransactionResult;
 
@@ -142,74 +144,86 @@ class DefaultOnChainExecutionChannelTest {
     @DisplayName("execute: 生产模式 + 签名成功 + 链确认 -> SUCCESS")
     void execute_production_confirmed() {
         cfg.getExchangeWallet().setPlatformPubkey("platform-pk");
-        when(walletMgmtClient.addressToPubkeyHash("to-addr")).thenReturn("to-hash");
-        when(signingServiceClient.signTransfer("platform-pk", "to-hash", new BigDecimal("100")))
-                .thenReturn("0xTxHash");
-        when(chainRpcClient.isTransactionConfirmed("0xTxHash")).thenReturn(true);
+        try (MockedStatic<WalletUtils> mockedWalletUtils = mockStatic(WalletUtils.class)) {
+            mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("to-addr")).thenReturn("to-hash");
+            when(signingServiceClient.signTransfer("platform-pk", "to-hash", new BigDecimal("100")))
+                    .thenReturn("0xTxHash");
+            when(chainRpcClient.isTransactionConfirmed("0xTxHash")).thenReturn(true);
 
-        TransactionResult result = newChannel().execute(validRequest("r-7"));
-        assertTrue(result.isSuccess());
-        assertFalse(result.isSimulated());
-        assertEquals("0xTxHash", result.getTxHash());
+            TransactionResult result = newChannel().execute(validRequest("r-7"));
+            assertTrue(result.isSuccess());
+            assertFalse(result.isSimulated());
+            assertEquals("0xTxHash", result.getTxHash());
+        }
     }
 
     @Test
     @DisplayName("execute: 生产模式 + 签名成功 + 链未确认 -> PENDING")
     void execute_production_pending() {
         cfg.getExchangeWallet().setPlatformPubkey("platform-pk");
-        when(walletMgmtClient.addressToPubkeyHash("to-addr")).thenReturn("to-hash");
-        when(signingServiceClient.signTransfer("platform-pk", "to-hash", new BigDecimal("100")))
-                .thenReturn("0xTxHash");
-        when(chainRpcClient.isTransactionConfirmed("0xTxHash")).thenReturn(false);
+        try (MockedStatic<WalletUtils> mockedWalletUtils = mockStatic(WalletUtils.class)) {
+            mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("to-addr")).thenReturn("to-hash");
+            when(signingServiceClient.signTransfer("platform-pk", "to-hash", new BigDecimal("100")))
+                    .thenReturn("0xTxHash");
+            when(chainRpcClient.isTransactionConfirmed("0xTxHash")).thenReturn(false);
 
-        TransactionResult result = newChannel().execute(validRequest("r-8"));
-        assertFalse(result.isSuccess());
-        assertEquals("0xTxHash", result.getTxHash());
+            TransactionResult result = newChannel().execute(validRequest("r-8"));
+            assertFalse(result.isSuccess());
+            assertEquals("0xTxHash", result.getTxHash());
+        }
     }
 
     @Test
     @DisplayName("execute: 生产模式 + addressToPubkeyHash 返回 null -> FAILED")
     void execute_production_addrNull() {
         cfg.getExchangeWallet().setPlatformPubkey("platform-pk");
-        when(walletMgmtClient.addressToPubkeyHash("to-addr")).thenReturn(null);
+        try (MockedStatic<WalletUtils> mockedWalletUtils = mockStatic(WalletUtils.class)) {
+            mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("to-addr")).thenReturn(null);
 
-        TransactionResult result = newChannel().execute(validRequest("r-9"));
-        assertFalse(result.isSuccess());
+            TransactionResult result = newChannel().execute(validRequest("r-9"));
+            assertFalse(result.isSuccess());
+        }
     }
 
     @Test
     @DisplayName("execute: 生产模式 + signTransfer 抛异常 -> FAILED")
     void execute_production_signException() {
         cfg.getExchangeWallet().setPlatformPubkey("platform-pk");
-        when(walletMgmtClient.addressToPubkeyHash("to-addr")).thenReturn("to-hash");
-        when(signingServiceClient.signTransfer(any(), any(), any())).thenThrow(new RuntimeException("sign err"));
+        try (MockedStatic<WalletUtils> mockedWalletUtils = mockStatic(WalletUtils.class)) {
+            mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("to-addr")).thenReturn("to-hash");
+            when(signingServiceClient.signTransfer(any(), any(), any())).thenThrow(new RuntimeException("sign err"));
 
-        TransactionResult result = newChannel().execute(validRequest("r-10"));
-        assertFalse(result.isSuccess());
+            TransactionResult result = newChannel().execute(validRequest("r-10"));
+            assertFalse(result.isSuccess());
+        }
     }
 
     @Test
     @DisplayName("execute: 生产模式 + signTransfer 返回 null -> FAILED")
     void execute_production_signNull() {
         cfg.getExchangeWallet().setPlatformPubkey("platform-pk");
-        when(walletMgmtClient.addressToPubkeyHash("to-addr")).thenReturn("to-hash");
-        when(signingServiceClient.signTransfer(any(), any(), any())).thenReturn(null);
+        try (MockedStatic<WalletUtils> mockedWalletUtils = mockStatic(WalletUtils.class)) {
+            mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("to-addr")).thenReturn("to-hash");
+            when(signingServiceClient.signTransfer(any(), any(), any())).thenReturn(null);
 
-        TransactionResult result = newChannel().execute(validRequest("r-11"));
-        assertFalse(result.isSuccess());
+            TransactionResult result = newChannel().execute(validRequest("r-11"));
+            assertFalse(result.isSuccess());
+        }
     }
 
     @Test
     @DisplayName("execute: 生产模式 + 链确认查询抛异常 -> PENDING")
     void execute_production_confirmException() {
         cfg.getExchangeWallet().setPlatformPubkey("platform-pk");
-        when(walletMgmtClient.addressToPubkeyHash("to-addr")).thenReturn("to-hash");
-        when(signingServiceClient.signTransfer(any(), any(), any())).thenReturn("0xTxHash");
-        when(chainRpcClient.isTransactionConfirmed("0xTxHash")).thenThrow(new RuntimeException("rpc err"));
+        try (MockedStatic<WalletUtils> mockedWalletUtils = mockStatic(WalletUtils.class)) {
+            mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("to-addr")).thenReturn("to-hash");
+            when(signingServiceClient.signTransfer(any(), any(), any())).thenReturn("0xTxHash");
+            when(chainRpcClient.isTransactionConfirmed("0xTxHash")).thenThrow(new RuntimeException("rpc err"));
 
-        TransactionResult result = newChannel().execute(validRequest("r-12"));
-        assertFalse(result.isSuccess());
-        assertEquals("0xTxHash", result.getTxHash());
+            TransactionResult result = newChannel().execute(validRequest("r-12"));
+            assertFalse(result.isSuccess());
+            assertEquals("0xTxHash", result.getTxHash());
+        }
     }
 
     // === queryStatus ===

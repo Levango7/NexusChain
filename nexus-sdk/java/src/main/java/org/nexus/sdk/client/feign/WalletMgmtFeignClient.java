@@ -4,7 +4,6 @@ import org.nexus.sdk.client.feign.fallback.WalletMgmtFallbackFactory;
 import org.nexus.sdk.wallet.WithdrawalRequest;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 
@@ -14,8 +13,8 @@ import java.math.BigDecimal;
  * 钱包管理服务 Feign 客户端契约（gateway → nexus-wallet-service）。
  *
  * <p>定义调用方对「钱包管理服务」REST 端点的声明式访问契约，覆盖
- * 地址工具（addressToPubkeyHash/verifyAddress）、提现审批（withdrawal approval）、
- * 托管（custody）、白名单（whitelist）四类「不涉及私钥」的钱包管理操作。</p>
+ * 提现审批（withdrawal approval）、白名单（whitelist）两类「不涉及私钥」的
+ * 钱包管理操作。</p>
  *
  * <p>本接口为 Phase 1 Feign 骨架：
  * <ul>
@@ -29,6 +28,21 @@ import java.math.BigDecimal;
  * <p>与 {@link org.nexus.sdk.client.WalletMgmtClient}（业务边界纯接口）
  * 区分：本接口带 Spring Web 注解，供 Feign 声明式调用；前者供进程内
  * InProcess/Http 实现复用。</p>
+ *
+ * <p>端点对齐修复（任务 #317）：移除/修正 WalletController 中不存在或路径不匹配的端点：
+ * <ul>
+ *   <li>移除 {@code addressToPubkeyHash} / {@code verifyAddress} ——
+ *       WalletController 中无此端点；gateway 调用方改用
+ *       {@link org.nexus.sdk.wallet.WalletUtils} 静态方法本地计算</li>
+ *   <li>修正 {@code approveWithdrawal} / {@code rejectWithdrawal} / {@code executeWithdrawal} ——
+ *       路径从 {@code /withdrawal/{requestId}/approve} 改为 {@code /withdrawal/approve}，
+ *       参数从 {@code @PathVariable} 改为 {@code @RequestParam("approvalId")}，
+ *       移除 {@code approverId} 参数（Controller 从认证上下文获取）</li>
+ *   <li>移除 {@code getWithdrawal} / {@code compensateWithdrawal} ——
+ *       WalletController 中无此端点</li>
+ *   <li>移除 {@code getCustodyTier} / {@code depositToCold} / {@code withdrawFromCold} ——
+ *       WalletController 中无此端点</li>
+ * </ul></p>
  */
 @FeignClient(
         name = "nexus-wallet-service",
@@ -37,32 +51,6 @@ import java.math.BigDecimal;
         fallbackFactory = WalletMgmtFallbackFactory.class
 )
 public interface WalletMgmtFeignClient {
-
-    // === 地址工具（无状态，不涉及私钥） ===
-
-    /**
-     * 将 NEX 地址转换为公钥哈希。
-     *
-     * <p>对应 {@code GET /api/v1/wallet/addressToPubkeyHash}。原 exchange-wallet
-     * 的无状态钱包工具，按方案 §4.4.1 迁入钱包管理服务（与地址校验同属
-     * 「不涉及私钥」的地址类操作）。</p>
-     *
-     * @param address NEX 地址
-     * @return 公钥哈希 hex 字符串，失败返回 {@code null}
-     */
-    @GetMapping("/addressToPubkeyHash")
-    String addressToPubkeyHash(@RequestParam("address") String address);
-
-    /**
-     * 校验 NEX 地址合法性。
-     *
-     * <p>对应 {@code GET /api/v1/wallet/verifyAddress}。</p>
-     *
-     * @param address NEX 地址
-     * @return {@code true} 表示合法
-     */
-    @GetMapping("/verifyAddress")
-    boolean verifyAddress(@RequestParam("address") String address);
 
     // === 提现审批 ===
 
@@ -79,84 +67,40 @@ public interface WalletMgmtFeignClient {
     /**
      * 对提现请求追加一次审批。
      *
-     * <p>对应 {@code POST /api/v1/wallet/withdrawal/{requestId}/approve}。</p>
+     * <p>对应 {@code POST /api/v1/wallet/withdrawal/approve}。
+     * 审批人 ID（{@code approverId}）由 wallet-service 从认证上下文
+     * （JWT subject）获取，调用方无需传递。</p>
+     *
+     * @param approvalId 提现申请 ID
+     * @return 更新后的提现申请
      */
-    @PostMapping("/withdrawal/{requestId}/approve")
-    WithdrawalRequest approveWithdrawal(@PathVariable("requestId") String requestId,
-                                        @RequestParam("approverId") String approverId);
+    @PostMapping("/withdrawal/approve")
+    WithdrawalRequest approveWithdrawal(@RequestParam("approvalId") String approvalId);
 
     /**
      * 拒绝提现请求。
      *
-     * <p>对应 {@code POST /api/v1/wallet/withdrawal/{requestId}/reject}。</p>
+     * <p>对应 {@code POST /api/v1/wallet/withdrawal/reject}。
+     * 审批人 ID 由 wallet-service 从认证上下文获取。</p>
+     *
+     * @param approvalId 提现申请 ID
+     * @param reason     拒绝原因（可选）
+     * @return 更新后的提现申请
      */
-    @PostMapping("/withdrawal/{requestId}/reject")
-    WithdrawalRequest rejectWithdrawal(@PathVariable("requestId") String requestId,
-                                       @RequestParam("approverId") String approverId,
-                                       @RequestParam("reason") String reason);
+    @PostMapping("/withdrawal/reject")
+    WithdrawalRequest rejectWithdrawal(@RequestParam("approvalId") String approvalId,
+                                       @RequestParam(value = "reason", required = false) String reason);
 
     /**
      * 执行已批准的提现（触发签名服务签名 + 广播）。
      *
-     * <p>对应 {@code POST /api/v1/wallet/withdrawal/{requestId}/execute}。</p>
+     * <p>对应 {@code POST /api/v1/wallet/withdrawal/execute}。</p>
+     *
+     * @param approvalId 提现申请 ID
+     * @return 更新后的提现申请（EXECUTED 或 FAILED）
      */
-    @PostMapping("/withdrawal/{requestId}/execute")
-    WithdrawalRequest executeWithdrawal(@PathVariable("requestId") String requestId);
-
-    /**
-     * 查询提现请求详情。
-     *
-     * <p>对应 {@code GET /api/v1/wallet/withdrawal/{requestId}}。</p>
-     */
-    @GetMapping("/withdrawal/{requestId}")
-    WithdrawalRequest getWithdrawal(@PathVariable("requestId") String requestId);
-
-    /**
-     * 补偿提现：释放冻结余额并回滚提现请求状态。
-     *
-     * <p>对应 {@code POST /api/v1/wallet/withdrawal/{requestId}/compensate}。
-     * 由 gateway 的 {@code CompensationService} 在三阶段执行模式中检测到
-     * 提现 PENDING 超时且未上链时调用，触发 wallet-service 释放冻结余额
-     * 并将提现请求标记为 FAILED/COMPENSATED。</p>
-     *
-     * <p><strong>幂等性</strong>：wallet-service 端必须保证幂等——若该 requestId
-     * 已补偿则直接返回当前状态，不重复释放余额。Feign fallback 返回 {@code null}，
-     * 调用方按补偿失败处理（等待下次对账重试）。</p>
-     *
-     * @param requestId 提现请求 ID
-     * @return 补偿后的提现请求状态；失败/fallback 返回 {@code null}
-     */
-    @PostMapping("/withdrawal/{requestId}/compensate")
-    WithdrawalRequest compensateWithdrawal(@PathVariable("requestId") String requestId);
-
-    // === 托管 ===
-
-    /**
-     * 查询指定钱包的托管层级。
-     *
-     * <p>对应 {@code GET /api/v1/wallet/custody/tier}。返回 HOT/WARM/COLD。</p>
-     */
-    @GetMapping("/custody/tier")
-    String getCustodyTier(@RequestParam("walletId") String walletId);
-
-    /**
-     * 热钱包向冷钱包归集。
-     *
-     * <p>对应 {@code POST /api/v1/wallet/custody/deposit-to-cold}。</p>
-     */
-    @PostMapping("/custody/deposit-to-cold")
-    String depositToCold(@RequestParam("address") String address,
-                         @RequestParam("amount") BigDecimal amount);
-
-    /**
-     * 冷钱包向热钱包提取（需多签审批）。
-     *
-     * <p>对应 {@code POST /api/v1/wallet/custody/withdraw-from-cold}。</p>
-     */
-    @PostMapping("/custody/withdraw-from-cold")
-    String withdrawFromCold(@RequestParam("address") String address,
-                            @RequestParam("amount") BigDecimal amount,
-                            @RequestParam("approvalId") String approvalId);
+    @PostMapping("/withdrawal/execute")
+    WithdrawalRequest executeWithdrawal(@RequestParam("approvalId") String approvalId);
 
     // === 白名单 ===
 

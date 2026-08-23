@@ -6,6 +6,7 @@ import org.nexus.gateway.model.Subscription;
 import org.nexus.gateway.repository.SubscriptionRepository;
 import org.nexus.sdk.client.feign.SigningServiceFeignClient;
 import org.nexus.sdk.client.feign.WalletMgmtFeignClient;
+import org.nexus.sdk.wallet.WalletUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import io.seata.spring.annotation.GlobalTransactional;
@@ -83,7 +84,7 @@ public class SubscriptionServiceImpl implements SubscriptionService {
      */
     private String submitOnChainAuth(Subscription sub) {
         try {
-            String payeePubkeyHash = walletMgmtClient.addressToPubkeyHash(sub.getPayeeAddress());
+            String payeePubkeyHash = WalletUtils.addressToPubkeyHash(sub.getPayeeAddress());
             if (payeePubkeyHash == null) {
                 log.warn("Cannot resolve payee pubkeyHash for on-chain auth (wallet unreachable?), " +
                         "subscription created without on-chain auth: {}", sub.getSubscriptionNo());
@@ -193,7 +194,7 @@ public class SubscriptionServiceImpl implements SubscriptionService {
      */
     private String executeSubscriptionCharge(Subscription sub) {
         try {
-            String receiverPubkeyHash = walletMgmtClient.addressToPubkeyHash(sub.getPayeeAddress());
+            String receiverPubkeyHash = WalletUtils.addressToPubkeyHash(sub.getPayeeAddress());
             if (receiverPubkeyHash == null) {
                 log.error("Cannot resolve payee pubkeyHash (wallet unreachable?), subscription charge failed (fail-closed): {}", sub.getSubscriptionNo());
                 return null;

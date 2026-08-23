@@ -45,23 +45,18 @@ class FallbackTest {
     // === SigningServiceFallback ===
 
     @Test
-    @DisplayName("SigningServiceFallback: signTransfer/transfer 返回 null，canSignViaMpc 返回 false")
+    @DisplayName("SigningServiceFallback: signTransfer 返回 null")
     void signingFallback_failClosed() {
         SigningServiceFallback fb = new SigningServiceFallback();
         assertNull(fb.signTransfer("from", "to", BigDecimal.ONE));
-        assertNull(fb.transfer("from", "to", BigDecimal.ONE, "priv"));
-        assertFalse(fb.canSignViaMpc(BigDecimal.ONE));
-        assertNull(fb.getNoncePool("addr"));
     }
 
     // === WalletMgmtFallback ===
 
     @Test
-    @DisplayName("WalletMgmtFallback: 地址工具 fail-closed")
+    @DisplayName("WalletMgmtFallback: 白名单查询 fail-closed")
     void walletMgmtFallback_failClosed() {
         WalletMgmtFallback fb = new WalletMgmtFallback();
-        assertNull(fb.addressToPubkeyHash("NEX-ADDR"));
-        assertFalse(fb.verifyAddress("NEX-ADDR"));
         assertFalse(fb.isAddressWhitelisted("NEX-ADDR"));
     }
 
@@ -70,19 +65,15 @@ class FallbackTest {
     void walletMgmtFallback_withdrawals_returnNull() {
         WalletMgmtFallback fb = new WalletMgmtFallback();
         assertNull(fb.requestWithdrawal("to", BigDecimal.ONE, "NEX"));
-        assertNull(fb.approveWithdrawal("req-1", "approver"));
-        assertNull(fb.rejectWithdrawal("req-1", "approver", "fraud"));
+        assertNull(fb.approveWithdrawal("req-1"));
+        assertNull(fb.rejectWithdrawal("req-1", "fraud"));
         assertNull(fb.executeWithdrawal("req-1"));
-        assertNull(fb.getWithdrawal("req-1"));
     }
 
     @Test
-    @DisplayName("WalletMgmtFallback: 托管/冷钱包/白名单返回 null/false")
+    @DisplayName("WalletMgmtFallback: 白名单新增返回 null")
     void walletMgmtFallback_custodyAndCold_returnNull() {
         WalletMgmtFallback fb = new WalletMgmtFallback();
-        assertNull(fb.getCustodyTier("wallet-1"));
-        assertNull(fb.depositToCold("addr", BigDecimal.ONE));
-        assertNull(fb.withdrawFromCold("addr", BigDecimal.ONE, "approval-1"));
         assertNull(fb.addWhitelist("addr", "label", "merchant-1"));
     }
 
@@ -112,6 +103,6 @@ class FallbackTest {
         GatewayWalletMgmtFallbackFactory factory = new GatewayWalletMgmtFallbackFactory();
         var fb = factory.create(new RuntimeException("service down"));
         assertNotNull(fb);
-        assertNull(fb.addressToPubkeyHash("addr"));
+        assertFalse(fb.isAddressWhitelisted("addr"));
     }
 }

@@ -4,6 +4,7 @@ import org.nexus.gateway.client.ChainRpcClient;
 import org.nexus.gateway.config.GatewayConfig;
 import org.nexus.sdk.client.feign.SigningServiceFeignClient;
 import org.nexus.sdk.client.feign.WalletMgmtFeignClient;
+import org.nexus.sdk.wallet.WalletUtils;
 import org.nexus.settlement.execution.OnChainExecutionChannel;
 import org.nexus.settlement.execution.TransactionRequest;
 import org.nexus.settlement.execution.TransactionResult;
@@ -183,7 +184,7 @@ public class DefaultOnChainExecutionChannel implements OnChainExecutionChannel {
         String platformPubkey = gatewayConfig.getExchangeWallet().getPlatformPubkey();
 
         // 1. 将 toAddress 转为 pubkeyHash
-        String toPubkeyHash = walletMgmtClient.addressToPubkeyHash(request.getToAddress());
+        String toPubkeyHash = WalletUtils.addressToPubkeyHash(request.getToAddress());
         if (toPubkeyHash == null || toPubkeyHash.isEmpty()) {
             log.error("executeProduction: addressToPubkeyHash failed for toAddress={}", request.getToAddress());
             return TransactionResult.failure(

@@ -5,12 +5,16 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
+import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.nexus.gateway.client.ExchangeWalletClient;
 import org.nexus.sdk.client.feign.SigningServiceFeignClient;
 import org.nexus.sdk.client.feign.WalletMgmtFeignClient;
+import org.nexus.sdk.wallet.WalletUtils;
+import org.mockito.MockedStatic;
+import org.mockito.Mockito;
 import static org.mockito.Mockito.when;
 import static org.mockito.ArgumentMatchers.anyString;
 import org.springframework.test.web.servlet.MvcResult;
@@ -28,6 +32,7 @@ import static org.junit.jupiter.api.Assertions.*;
 @AutoConfigureMockMvc
 @ActiveProfiles("sandbox")
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
+@WithMockUser(username = "admin", roles = {"ADMIN", "OPERATOR"})
 class GatewayCoreIntegrationTest {
 
     @Autowired
@@ -45,15 +50,30 @@ class GatewayCoreIntegrationTest {
     @MockBean
     private WalletMgmtFeignClient walletMgmtFeignClient;
 
+    /** WalletUtils.addressToPubkeyHash 静态方法 mock（替代原 walletMgmtFeignClient.addressToPubkeyHash） */
+    private static MockedStatic<WalletUtils> mockedWalletUtils;
+
+    @BeforeAll
+    static void initWalletUtilsMock() {
+        mockedWalletUtils = Mockito.mockStatic(WalletUtils.class);
+        mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash(anyString()))
+                .thenReturn("aabbccddeeff00112233445566778899aabbccdd");
+    }
+
+    @AfterAll
+    static void closeWalletUtilsMock() {
+        if (mockedWalletUtils != null) {
+            mockedWalletUtils.close();
+        }
+    }
+
     @BeforeEach
     void stubWalletSign() {
         // Refund signing is delegated to signing-service via signTransfer (platform key).
         // In this gateway-only integration test the wallet service is stubbed to succeed.
         when(signingServiceFeignClient.signTransfer(anyString(), anyString(), org.mockito.ArgumentMatchers.any(java.math.BigDecimal.class)))
                 .thenReturn("0xRefundTxHash1234567890abcdef1234567890abcdef");
-        // Refund flow first converts the payer address to a pubkey hash via the wallet service.
-        when(walletMgmtFeignClient.addressToPubkeyHash(anyString()))
-                .thenReturn("aabbccddeeff00112233445566778899aabbccdd");
+        // Refund flow first converts the payer address to a pubkey hash via WalletUtils (static, mocked in @BeforeAll).
     }
 
     private static String apiKey;

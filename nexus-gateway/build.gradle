@@ -126,6 +126,14 @@ dependencies {
 
     // Testing
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    // === 测试期安全支持：提供 @WithMockUser 注解用于 MockMvc 方法级鉴权测试 ===
+    // 集成测试中 verify / generateApiKey / revokeApiKey 端点要求 hasRole('ADMIN')，
+    // 需通过 @WithMockUser 模拟认证用户与角色才能访问这些端点。
+    testImplementation 'org.springframework.security:spring-security-test'
+    // === Mockito inline mock maker：支持 mockStatic 静态方法 mock ===
+    // Spring Boot 3.2.5 BOM 管理 Mockito 5.2.0 版本，mockito-inline 需显式指定版本对齐。
+    // 修复 MockitoException: SubclassByteBuddyMockMaker does not support static mocks
+    testImplementation 'org.mockito:mockito-inline:5.2.0'
     // === P0-3a：PSP 集成测试 — WireMock 模拟 Stripe / Adyen HTTP API ===
     // WireMock 3.x standalone（含 Jetty）兼容 JUnit 5 + Spring Boot 3.2
     testImplementation 'org.wiremock:wiremock-standalone:3.5.2'

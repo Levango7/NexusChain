@@ -28,6 +28,9 @@ import java.math.BigDecimal;
  *       {@code create(Throwable cause)} 中获取触发降级的异常，区分限流/熔断/服务不可用</li>
  * </ul></p>
  *
+ * <p>端点对齐修复（任务 #317）：移除 {@code transfer} / {@code canSignViaMpc} /
+ * {@code getNoncePool} 的默认 fallback 实现，与 SigningServiceFeignClient 接口对齐。</p>
+ *
  * @see SigningServiceFeignClient
  * @see org.springframework.cloud.openfeign.FallbackFactory
  */
@@ -46,21 +49,6 @@ public class SigningServiceFallbackFactory implements FallbackFactory<SigningSer
         return new SigningServiceFeignClient() {
             @Override
             public String signTransfer(String fromPubkey, String toPubkeyHash, BigDecimal amount) {
-                return null;
-            }
-
-            @Override
-            public String transfer(String fromPubkey, String toPubkeyHash, BigDecimal amount, String privateKey) {
-                return null;
-            }
-
-            @Override
-            public boolean canSignViaMpc(BigDecimal amount) {
-                return false;
-            }
-
-            @Override
-            public Object getNoncePool(String address) {
                 return null;
             }
         };

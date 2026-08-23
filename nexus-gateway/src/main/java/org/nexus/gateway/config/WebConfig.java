@@ -90,12 +90,17 @@ public class WebConfig implements WebMvcConfigurer {
                 // P0-1 安全加固：移除 /api/v{1,2}/merchants/** 排除，商户管理端点
                 // 必须受 API key 拦截器保护；写端点另加 @PreAuthorize("hasRole('ADMIN')")
                 // 例外：register 是入驻入口，保留公开（否则首个商户无法引导）；
-                // verify / api-keys 等管理端点仍需鉴权。
+                // verify / api-keys 等管理端点由 @PreAuthorize("hasRole('ADMIN')") 鉴权，
+                // 不应受商户 API Key 拦截器保护（管理员无商户 API Key）。
                 .excludePathPatterns(
                         "/api/v1/checkout/**",       // Cashier page APIs (payer-facing)
                         "/api/v1/webhooks/**",       // Chain event callbacks (signature-verified)
                         "/api/v1/merchants/register",// Merchant onboarding (public)
-                        "/api/v2/merchants/register" // Merchant onboarding (public, v2)
+                        "/api/v2/merchants/register",// Merchant onboarding (public, v2)
+                        "/api/v1/merchants/*/verify",   // Admin-only: @PreAuthorize("hasRole('ADMIN')")
+                        "/api/v1/merchants/*/api-keys", // Admin-only: @PreAuthorize("hasRole('ADMIN')")
+                        "/api/v2/merchants/*/verify",   // Admin-only: @PreAuthorize("hasRole('ADMIN')")
+                        "/api/v2/merchants/*/api-keys"  // Admin-only: @PreAuthorize("hasRole('ADMIN')")
                 );
 
         // A2: payment orchestration now requires BOTH merchant API-key auth (above)

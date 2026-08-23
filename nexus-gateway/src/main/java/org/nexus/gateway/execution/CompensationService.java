@@ -8,8 +8,7 @@ import org.nexus.gateway.model.PaymentOrder;
 import org.nexus.gateway.model.Refund;
 import org.nexus.gateway.repository.PaymentOrderRepository;
 import org.nexus.gateway.repository.RefundRepository;
-import org.nexus.sdk.client.feign.WalletMgmtFeignClient;
-import org.nexus.sdk.wallet.WithdrawalRequest;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -47,8 +46,8 @@ import java.util.Objects;
  *   <li><strong>补偿操作</strong>：根据操作类型执行反向操作
  *       <ul>
  *         <li>refund 失败 → 无需补偿（资金未转出，仅需回滚订单状态到 PAID 允许重试）</li>
- *         <li>withdrawal 失败 → 释放冻结余额（通过 Feign 调用 wallet-service
- *             {@code POST /api/v1/wallet/withdrawal/{requestId}/compensate}）</li>
+ *         <li>withdrawal 失败 → 释放冻结余额（wallet-service compensate 端点
+ *             待实现，当前记录日志等待后续版本补充）</li>
  *         <li>settlement 失败 → 回滚清算状态（进程内调用 SettlementBatchRepository，
  *             将批次状态从 EXECUTING/FAILED 回滚到 OPEN 允许重试）</li>
  *       </ul>
@@ -91,18 +90,15 @@ public class CompensationService {
     private final RefundRepository refundRepository;
     private final PaymentOrderRepository paymentOrderRepository;
     private final ChainRpcClient chainRpcClient;
-    private final WalletMgmtFeignClient walletMgmtFeignClient;
     private final SettlementBatchRepository settlementBatchRepository;
 
     public CompensationService(RefundRepository refundRepository,
                                PaymentOrderRepository paymentOrderRepository,
                                ChainRpcClient chainRpcClient,
-                               WalletMgmtFeignClient walletMgmtFeignClient,
                                SettlementBatchRepository settlementBatchRepository) {
         this.refundRepository = refundRepository;
         this.paymentOrderRepository = paymentOrderRepository;
         this.chainRpcClient = chainRpcClient;
-        this.walletMgmtFeignClient = walletMgmtFeignClient;
         this.settlementBatchRepository = settlementBatchRepository;
     }
 
@@ -305,37 +301,26 @@ public class CompensationService {
     }
 
     /**
-     * 提现补偿：通过 Feign 调用 wallet-service 补偿端点释放冻结余额。
+     * 提现补偿：释放冻结余额并回滚提现请求状态。
      *
      * <p>对应 wallet-service {@code POST /api/v1/wallet/withdrawal/{requestId}/compensate}。
-     * Feign 调用失败时由 {@link org.nexus.sdk.client.feign.fallback.WalletMgmtFallbackFactory}
-     * 路由到 {@link org.nexus.gateway.fallback.WalletMgmtFallback#compensateWithdrawal(String)}
-     * 返回 {@code null}，本方法据此记录补偿失败日志，等待下次对账重试。</p>
+     * 当前 wallet-service 未实现该端点（WalletController 中无 compensate 端点），
+     * 本方法记录 WARN 日志说明补偿未实现，等待后续版本补充端点后恢复 Feign 调用。</p>
      *
      * <p>容错：不抛异常，让对账任务继续处理其他记录。</p>
      *
-     * @param recordId 提现记录 ID（转换为 String 作为 requestId 调用 Feign）
+     * <p>端点对齐修复（任务 #317）：移除 {@code WalletMgmtFeignClient.compensateWithdrawal}
+     * 调用（WalletController 中无此端点），改为日志记录。</p>
+     *
+     * @param recordId 提现记录 ID
      */
     private void compensateWithdrawal(Long recordId) {
         if (recordId == null) {
             log.warn("Withdrawal compensation skipped: recordId is null");
             return;
         }
-        String requestId = String.valueOf(recordId);
-        try {
-            WithdrawalRequest result = walletMgmtFeignClient.compensateWithdrawal(requestId);
-            if (result != null) {
-                log.info("Withdrawal {} compensated successfully: status={}",
-                        requestId, result.getStatus());
-            } else {
-                // Feign fallback 触发（wallet-service 不可用 / 熔断 / 限流）
-                log.error("Withdrawal {} compensation failed: Feign fallback returned null " +
-                        "(wallet-service unavailable), will retry on next reconciliation", requestId);
-            }
-        } catch (RuntimeException e) {
-            log.error("Failed to compensate withdrawal {}: {}", requestId, e.getMessage(), e);
-            // 不抛异常，让对账任务继续处理其他记录
-        }
+        log.warn("Withdrawal {} compensation skipped: wallet-service compensate endpoint not implemented, " +
+                "will retry on next reconciliation", recordId);
     }
 
     /**

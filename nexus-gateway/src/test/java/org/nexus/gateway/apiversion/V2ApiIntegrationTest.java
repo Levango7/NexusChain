@@ -5,6 +5,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
+import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
@@ -30,6 +31,7 @@ import static org.junit.jupiter.api.Assertions.*;
 @AutoConfigureMockMvc
 @ActiveProfiles("sandbox")
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
+@WithMockUser(username = "admin", roles = {"ADMIN", "OPERATOR"})
 @DisplayName("v2 API 集成测试")
 class V2ApiIntegrationTest {
 
@@ -257,6 +259,7 @@ class V2ApiIntegrationTest {
     void v2HeaderVersionNegotiation() throws Exception {
         // 即使路径是 /api/v2/*，显式发送 Header 也应一致
         mockMvc.perform(get("/api/v2/merchants/" + merchantId)
+                        .header("X-NexusChain-ApiKey", apiKey)
                         .header("X-NexusChain-API-Version", "2"))
                 .andExpect(status().isOk())
                 .andExpect(header().string("X-NexusChain-API-Version", "2"));

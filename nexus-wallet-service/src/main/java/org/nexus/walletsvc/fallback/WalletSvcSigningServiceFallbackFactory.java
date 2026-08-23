@@ -20,10 +20,6 @@ import java.math.BigDecimal;
  * <ul>
  *   <li>{@code signTransfer}：返回 {@code null}，{@code DefaultWithdrawalApprovalService}
  *       收到 null 标记提现 FAILED（提现执行失败需人工介入）</li>
- *   <li>{@code transfer}：返回 {@code null}，legacy 端点同样标记失败</li>
- *   <li>{@code canSignViaMpc}：fail-closed 返回 {@code false}，不尝试 MPC 流程，
- *       退化为平台密钥库签名或直接失败</li>
- *   <li>{@code getNoncePool}：返回 {@code null}，调用方回退到链节点 RPC 查询当前 nonce</li>
  * </ul></p>
  *
  * <p>设计原则 D10：返回 null/false，不抛异常，调用方无需额外 try-catch。
@@ -33,6 +29,9 @@ import java.math.BigDecimal;
  * {@code org.nexus.gateway.fallback.GatewaySigningServiceFallbackFactory} 同实现
  * {@link SigningServiceFallbackFactory}，但二者位于不同 Spring 容器（wallet-service
  * 与 gateway 独立部署），运行时各自只扫描本模块的 Bean，不会冲突。</p>
+ *
+ * <p>端点对齐修复（任务 #317）：移除 {@code transfer} / {@code canSignViaMpc} /
+ * {@code getNoncePool} 的 fallback 实现，与 SigningServiceFeignClient 接口对齐。</p>
  *
  * @see SigningServiceFallbackFactory
  */
@@ -51,27 +50,6 @@ public class WalletSvcSigningServiceFallbackFactory extends SigningServiceFallba
                 log.error("提现签名降级: signing-service 不可用, from={}, to={}, amount={}",
                         fromPubkey, toPubkeyHash, amount);
                 // DefaultWithdrawalApprovalService 收到 null 标记提现 FAILED
-                return null;
-            }
-
-            @Override
-            public String transfer(String fromPubkey, String toPubkeyHash, BigDecimal amount, String privateKey) {
-                log.error("提现签名降级(legacy): signing-service 不可用, from={}, to={}, amount={}",
-                        fromPubkey, toPubkeyHash, amount);
-                return null;
-            }
-
-            @Override
-            public boolean canSignViaMpc(BigDecimal amount) {
-                log.warn("canSignViaMpc 降级: signing-service 不可用, amount={}, fail-closed 返回 false",
-                        amount);
-                return false;
-            }
-
-            @Override
-            public Object getNoncePool(String address) {
-                log.warn("getNoncePool 降级: signing-service 不可用, address={}, 调用方应回退到 RPC 查询",
-                        address);
                 return null;
             }
         };
