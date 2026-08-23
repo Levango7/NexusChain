@@ -16,6 +16,8 @@ import org.nexus.gateway.dto.PaymentResult;
 import org.nexus.gateway.model.PaymentOrder;
 import org.nexus.gateway.orchestration.settlement.FinalityService;
 import org.nexus.gateway.orchestration.settlement.FinalityStatus;
+import org.nexus.gateway.security.MerchantOwnershipException;
+import org.nexus.gateway.security.MerchantOwnershipGuard;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -57,13 +59,16 @@ public class OrderV2Controller {
     private final OrderService orderService;
     private final PaymentService paymentService;
     private final FinalityService finalityService;
+    private final MerchantOwnershipGuard ownershipGuard;
 
     public OrderV2Controller(OrderService orderService,
                              PaymentService paymentService,
-                             FinalityService finalityService) {
+                             FinalityService finalityService,
+                             MerchantOwnershipGuard ownershipGuard) {
         this.orderService = orderService;
         this.paymentService = paymentService;
         this.finalityService = finalityService;
+        this.ownershipGuard = ownershipGuard;
     }
 
     /**
@@ -73,7 +78,11 @@ public class OrderV2Controller {
      */
     @Operation(summary = "Create order (v2)")
     @PostMapping
-    public ResponseEntity<PaymentOrder> createOrder(@RequestBody CreateOrderRequest request) {
+    public ResponseEntity<PaymentOrder> createOrder(@RequestBody CreateOrderRequest request,
+                                                    HttpServletRequest httpRequest) {
+        // P0-4：订单归属以认证上下文为准，不信任请求体中的 merchantId
+        Long callerMerchantId = ownershipGuard.requireMerchantId(httpRequest);
+        request.setMerchantId(String.valueOf(callerMerchantId));
         PaymentOrder order = orderService.createOrder(request);
         return ResponseEntity.status(HttpStatus.CREATED).body(order);
     }
@@ -87,7 +96,8 @@ public class OrderV2Controller {
     @Operation(summary = "Get order by id (v2, with fields selection)")
     @GetMapping("/{id}")
     public ResponseEntity<Object> getOrder(@PathVariable Long id,
-                                            @RequestParam(value = "fields", required = false) String fields) {
+                                            @RequestParam(value = "fields", required = false) String fields,
+                                            HttpServletRequest request) {
         Set<String> selected = FieldsFilter.parse(fields);
         // 字段校验
         Set<String> invalid = FieldsFilter.validateFields(selected, ORDER_ALLOWED_FIELDS);
@@ -100,6 +110,7 @@ public class OrderV2Controller {
                             "Unknown fields: " + invalid, details));
         }
 
+        Long callerMerchantId = ownershipGuard.requireMerchantId(request);
         Optional<PaymentOrder> opt = orderService.findById(id);
         if (opt.isEmpty()) {
             Map<String, Object> details = new HashMap<>();
@@ -108,6 +119,7 @@ public class OrderV2Controller {
                     .body(V2ErrorResponse.of(V2ErrorCode.ORDER_NOT_FOUND.getCode(),
                             "Order with id=" + id + " not found", details));
         }
+        ownershipGuard.requireOwned(callerMerchantId, opt.get().getMerchantId(), "order", id);
         Object filtered = FieldsFilter.apply(opt.get(), selected);
 
         // 若客户端请求了 finality 字段（或不过滤字段时默认叠加），
@@ -144,7 +156,9 @@ public class OrderV2Controller {
      */
     @Operation(summary = "Get order finality status (NexFinality v2 prototype)")
     @GetMapping("/{id}/finality")
-    public ResponseEntity<Object> getOrderFinality(@PathVariable Long id) {
+    public ResponseEntity<Object> getOrderFinality(@PathVariable Long id,
+                                                   HttpServletRequest request) {
+        Long callerMerchantId = ownershipGuard.requireMerchantId(request);
         Optional<PaymentOrder> opt = orderService.findById(id);
         if (opt.isEmpty()) {
             Map<String, Object> details = new HashMap<>();
@@ -153,6 +167,7 @@ public class OrderV2Controller {
                     .body(V2ErrorResponse.of(V2ErrorCode.ORDER_NOT_FOUND.getCode(),
                             "Order with id=" + id + " not found", details));
         }
+        ownershipGuard.requireOwned(callerMerchantId, opt.get().getMerchantId(), "order", id);
         PaymentOrder order = opt.get();
         if (order.getChainTxHash() == null || order.getChainTxHash().isEmpty()) {
             Map<String, Object> details = new HashMap<>();
@@ -192,6 +207,15 @@ public class OrderV2Controller {
             @RequestParam(value = "fields", required = false) String fields,
             @RequestParam(value = "merchantId", required = false) Long merchantId,
             HttpServletRequest request) {
+
+        // P0-4：列表必须限定在认证商户范围内；请求参数与认证身份不一致时拒绝，
+        // 不传参数时默认过滤为调用方自己的订单，杜绝跨商户枚举。
+        Long callerMerchantId = ownershipGuard.requireMerchantId(request);
+        if (merchantId != null && !merchantId.equals(callerMerchantId)) {
+            throw new MerchantOwnershipException(
+                    "Access denied: merchantId filter does not match the authenticated merchant");
+        }
+        merchantId = callerMerchantId;
 
         CursorPageRequest pageReq;
         try {
@@ -248,7 +272,10 @@ public class OrderV2Controller {
     @Operation(summary = "Initiate payment (v2)")
     @PostMapping("/{id}/pay")
     public ResponseEntity<Object> pay(@PathVariable Long id,
-                                       @RequestBody PayRequest request) {
+                                       @RequestBody PayRequest request,
+                                       HttpServletRequest httpRequest) {
+        ownershipGuard.requireMerchantId(httpRequest);
+        requireOrderOwnership(id, httpRequest);
         if (request.getPayerAddress() == null || request.getPayerAddress().isEmpty()) {
             Map<String, Object> details = new HashMap<>();
             details.put("field", "payerAddress");
@@ -274,7 +301,9 @@ public class OrderV2Controller {
     @Operation(summary = "Refund order (v2)")
     @PostMapping("/{id}/refund")
     public ResponseEntity<Object> refund(@PathVariable Long id,
-                                          @RequestBody RefundRequest request) {
+                                          @RequestBody RefundRequest request,
+                                          HttpServletRequest httpRequest) {
+        requireOrderOwnership(id, httpRequest);
         try {
             var refund = paymentService.refund(id, request.getAmount(), request.getReason());
             return ResponseEntity.status(HttpStatus.CREATED).body(refund);
@@ -293,6 +322,20 @@ public class OrderV2Controller {
         }
     }
 
+
+    // --- 归属校验 ---
+
+    /**
+     * P0-4 修复：订单归属校验（fail-closed）。属性缺失、无法解析或不一致均抛出
+     * {@link org.nexus.gateway.security.MerchantOwnershipException}（由
+     * V2ExceptionHandler 映射为 403）。
+     */
+    private void requireOrderOwnership(Long orderId, HttpServletRequest httpRequest) {
+        Long callerMerchantId = ownershipGuard.requireMerchantId(httpRequest);
+        PaymentOrder order = orderService.findById(orderId)
+                .orElseThrow(() -> new IllegalArgumentException("Order not found: " + orderId));
+        ownershipGuard.requireOwned(callerMerchantId, order.getMerchantId(), "order", orderId);
+    }
 
     // --- 内嵌 DTO ---
 

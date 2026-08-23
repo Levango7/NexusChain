@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { useNavigate, Link } from "react-router-dom";
-import { Search, Settings as SettingsIcon } from "lucide-react";
+import { Search, Settings as SettingsIcon, AlertCircle } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api/client";
 import type { BlockInfo, TransactionInfo, ChainStatus } from "../types";
@@ -23,6 +23,7 @@ const HomePage: React.FC = () => {
   const [transactions, setTransactions] = useState<TransactionInfo[]>([]);
   const [status, setStatus] = useState<ChainStatus | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
 
   const fetchData = useCallback(async () => {
@@ -35,12 +36,17 @@ const HomePage: React.FC = () => {
       setBlocks(b);
       setTransactions(t);
       if (s) setStatus(s);
-    } catch {
+      // 成功后清除之前的错误提示
+      setError(null);
+    } catch (err) {
       setBlocks([]);
       setTransactions([]);
+      // 旧实现静默吞掉错误，用户看不到任何反馈；现在显式设置错误状态供 UI 展示
+      setError(err instanceof Error ? err.message : t("common.unknownError"));
     } finally {
       setLoading(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -134,6 +140,17 @@ const HomePage: React.FC = () => {
           </button>
         </form>
       </div>
+
+      {/* 错误提示 banner：旧实现 catch 块静默吞掉错误，用户无感知；现在显式展示 */}
+      {error && !loading && (
+        <div
+          role="alert"
+          className="max-w-6xl mx-auto px-4 mb-4 flex items-center gap-2 text-sm text-danger bg-surface-2 border border-danger/30 rounded-md py-3"
+        >
+          <AlertCircle size={16} />
+          <span>{error}</span>
+        </div>
+      )}
 
       <main className="max-w-6xl mx-auto px-4 py-4 grid grid-cols-1 lg:grid-cols-2 gap-6">
         <section>

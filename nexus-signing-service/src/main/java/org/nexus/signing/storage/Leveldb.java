@@ -2,6 +2,8 @@ package org.nexus.signing.storage;
 
 import org.iq80.leveldb.*;
 import org.iq80.leveldb.impl.Iq80DBFactory;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import jakarta.annotation.PostConstruct;
@@ -23,6 +25,8 @@ import java.util.Optional;
 @Component
 public class Leveldb {
 
+    private static final Logger log = LoggerFactory.getLogger(Leveldb.class);
+
     private DB db = null;
     private static final Charset CHARSET = Charset.forName("utf-8");
     private static final String path = System.getProperty("user.dir")+File.separator+"leveldb";
@@ -40,14 +44,14 @@ public class Leveldb {
             // 会写入磁盘中
             this.db.put(keyByte, noncepoolval.getBytes(CHARSET));
         }catch (Exception e){
-            e.printStackTrace();
+            log.error("Failed to write nonce pool to LevelDB", e);
+            throw new IOException("Failed to write nonce pool to LevelDB", e);
         }finally {
             if (db != null) {
                 try {
                     db.close();
                 } catch (IOException e) {
-                    // Best-effort close during error handling; stack trace logged below
-                    e.printStackTrace();
+                    log.warn("Failed to close LevelDB after addPoolDb", e);
                 }
             }
         }
@@ -58,9 +62,11 @@ public class Leveldb {
         options.createIfMissing(true);
         this.db = factory.open(file, options);
         String noncepool = "";
+        Snapshot snapshot = null;
+        DBIterator it = null;
         try {
             // 读取当前快照，重启服务仍能读取，说明快照持久化至磁盘，
-            Snapshot snapshot = this.db.getSnapshot();
+            snapshot = this.db.getSnapshot();
             // 读取操作
             ReadOptions readOptions = new ReadOptions();
             // 遍历中swap出来的数据，不应该保存在memtable中。
@@ -68,7 +74,7 @@ public class Leveldb {
             // 默认snapshot为当前
             readOptions.snapshot(snapshot);
 
-            DBIterator it = db.iterator(readOptions);
+            it = db.iterator(readOptions);
             while (it.hasNext()) {
                 Map.Entry<byte[], byte[]> entry = (Map.Entry<byte[], byte[]>) it
                         .next();
@@ -79,15 +85,28 @@ public class Leveldb {
                 }
             }
         } catch (Exception e) {
-            // Snapshot read failure; stack trace logged below
-            e.printStackTrace();
+            log.error("Failed to read nonce pool snapshot from LevelDB", e);
         } finally {
+            // 关闭迭代器与快照，避免资源泄漏
+            if (it != null) {
+                try {
+                    it.close();
+                } catch (IOException e) {
+                    log.warn("Failed to close LevelDB iterator", e);
+                }
+            }
+            if (snapshot != null) {
+                try {
+                    snapshot.close();
+                } catch (Exception e) {
+                    log.warn("Failed to close LevelDB snapshot", e);
+                }
+            }
             if (db != null) {
                 try {
                     db.close();
                 } catch (IOException e) {
-                    // Best-effort close during error handling; stack trace logged below
-                    e.printStackTrace();
+                    log.warn("Failed to close LevelDB after readFromSnapshot", e);
                 }
             }
         }

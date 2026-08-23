@@ -1,19 +1,20 @@
 import React, { useState, useEffect } from "react";
-import { useParams, useNavigate, Link } from "react-router-dom";
-import { ArrowLeft, ChevronLeft, ChevronRight } from "lucide-react";
+import { useParams, useNavigate } from "react-router-dom";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api/client";
 import type { BlockInfo } from "../types";
-import { Loading } from "../components/ui";
+import { DetailPageLayout } from "../components/ui";
 
 /**
  * BlockDetailPage — 区块详情页。
  *
  * 设计契约修复：
  *   - 颜色全部走 design tokens
- *   - 内联 &larr; / &rarr; 字符替换为 lucide-react <ArrowLeft / ChevronLeft / ChevronRight />
- *   - Loading 文案替换为 <Loading /> 组件
+ *   - 内联 &larr; / &rarr; 字符替换为 lucide-react <ChevronLeft / ChevronRight />
+ *   - Loading 文案替换为 <Loading /> 组件（经 DetailPageLayout 统一）
  *   - 间距 / 圆角 / 字体统一 token
+ *   - P1: 复用 DetailPageLayout 提取的 header + loading + error 骨架
  */
 const BlockDetailPage: React.FC = () => {
   const { t } = useTranslation();
@@ -24,6 +25,8 @@ const BlockDetailPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    // height 为 undefined 时 Number(undefined) === NaN，会请求 /api/blocks/NaN
+    if (!height) return;
     (async () => {
       try {
         const data = await api.getBlock(Number(height));
@@ -34,21 +37,27 @@ const BlockDetailPage: React.FC = () => {
         setLoading(false);
       }
     })();
-  }, [height, t]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [height]);
 
-  if (loading)
+  if (loading || error || !block) {
     return (
-      <div className="min-h-screen bg-bg flex items-center justify-center">
-        <Loading label={t("block.loadingBlock", { height })} />
-      </div>
+      <DetailPageLayout
+        loading={loading}
+        loadingLabel={t("block.loadingBlock", { height })}
+        error={error}
+        title={
+          block ? (
+            <>
+              {t("block.title")}{" "}
+              <span className="text-accent font-mono">#{block.height}</span>
+            </>
+          ) : undefined
+        }
+        backLabel={t("block.back")}
+      />
     );
-  if (error)
-    return (
-      <div className="min-h-screen bg-bg flex items-center justify-center text-danger">
-        {error}
-      </div>
-    );
-  if (!block) return null;
+  }
 
   const rows: [string, React.ReactNode][] = [
     [
@@ -68,53 +77,46 @@ const BlockDetailPage: React.FC = () => {
   ];
 
   return (
-    <div className="min-h-screen bg-bg text-fg">
-      <header className="border-b border-border bg-surface/80 backdrop-blur sticky top-0 z-sticky">
-        <div className="max-w-4xl mx-auto px-4 h-14 flex items-center gap-4">
-          <Link
-            to="/"
-            className="flex items-center gap-1 text-accent hover:text-accent-hover text-sm transition-colors duration-base ease-standard focus:outline-none focus-visible:shadow-focus"
+    <DetailPageLayout
+      title={
+        <>
+          {t("block.title")}{" "}
+          <span className="text-accent font-mono">#{block.height}</span>
+        </>
+      }
+      backLabel={t("block.back")}
+    >
+      <div className="bg-surface border border-border rounded-lg divide-y divide-border-soft">
+        {rows.map(([label, value]) => (
+          <div
+            key={label}
+            className="px-5 py-3 grid grid-cols-4 gap-2 text-sm"
           >
-            <ArrowLeft size={14} />
-            {t("block.back")}
-          </Link>
-          <h1 className="text-sm font-semibold text-fg-2">
-            {t("block.title")} <span className="text-accent font-mono">#{block.height}</span>
-          </h1>
-        </div>
-      </header>
-      <main className="max-w-4xl mx-auto px-4 py-6">
-        <div className="bg-surface border border-border rounded-lg divide-y divide-border-soft">
-          {rows.map(([label, value]) => (
-            <div
-              key={label}
-              className="px-5 py-3 grid grid-cols-4 gap-2 text-sm"
-            >
-              <span className="text-muted">{label}</span>
-              <span className="col-span-3 text-fg">{value}</span>
-            </div>
-          ))}
-        </div>
-        <div className="mt-4 flex gap-2">
-          <button
-            onClick={() => navigate(`/block/${block.height - 1}`)}
-            aria-label={t("block.prevBlock")}
-            className="inline-flex items-center gap-1 text-xs px-3 py-1.5 bg-surface-2 border border-border rounded-sm text-fg-2 hover:border-accent hover:text-accent transition-colors duration-base ease-standard focus:outline-none focus-visible:shadow-focus"
-          >
-            <ChevronLeft size={14} />
-            {t("block.prev")}
-          </button>
-          <button
-            onClick={() => navigate(`/block/${block.height + 1}`)}
-            aria-label={t("block.nextBlock")}
-            className="inline-flex items-center gap-1 text-xs px-3 py-1.5 bg-surface-2 border border-border rounded-sm text-fg-2 hover:border-accent hover:text-accent transition-colors duration-base ease-standard focus:outline-none focus-visible:shadow-focus"
-          >
-            {t("block.next")}
-            <ChevronRight size={14} />
-          </button>
-        </div>
-      </main>
-    </div>
+            <span className="text-muted">{label}</span>
+            <span className="col-span-3 text-fg">{value}</span>
+          </div>
+        ))}
+      </div>
+      <div className="mt-4 flex gap-2">
+        <button
+          onClick={() => navigate(`/block/${block.height - 1}`)}
+          aria-label={t("block.prevBlock")}
+          disabled={block.height <= 0}
+          className="inline-flex items-center gap-1 text-xs px-3 py-1.5 bg-surface-2 border border-border rounded-sm text-fg-2 hover:border-accent hover:text-accent transition-colors duration-base ease-standard focus:outline-none focus-visible:shadow-focus disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-border disabled:hover:text-fg-2"
+        >
+          <ChevronLeft size={14} />
+          {t("block.prev")}
+        </button>
+        <button
+          onClick={() => navigate(`/block/${block.height + 1}`)}
+          aria-label={t("block.nextBlock")}
+          className="inline-flex items-center gap-1 text-xs px-3 py-1.5 bg-surface-2 border border-border rounded-sm text-fg-2 hover:border-accent hover:text-accent transition-colors duration-base ease-standard focus:outline-none focus-visible:shadow-focus"
+        >
+          {t("block.next")}
+          <ChevronRight size={14} />
+        </button>
+      </div>
+    </DetailPageLayout>
   );
 };
 

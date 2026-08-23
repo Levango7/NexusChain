@@ -2,6 +2,7 @@ package org.nexus.gateway.config;
 
 import org.nexus.gateway.dto.ApiResponse;
 import org.nexus.gateway.dto.ErrorCode;
+import org.nexus.gateway.security.MerchantOwnershipException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -25,6 +26,14 @@ public class GlobalExceptionHandler {
         log.warn("State conflict: {}", e.getMessage());
         return ResponseEntity.status(HttpStatus.CONFLICT)
                 .body(ApiResponse.error(ErrorCode.ILLEGAL_STATE_TRANSITION.getCode(), e.getMessage()));
+    }
+
+    @ExceptionHandler(MerchantOwnershipException.class)
+    public ResponseEntity<ApiResponse<Void>> handleOwnership(MerchantOwnershipException e) {
+        log.warn("Ownership violation: {}", e.getMessage());
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(ApiResponse.error(ErrorCode.RESOURCE_NOT_OWNED.getCode(),
+                        ErrorCode.RESOURCE_NOT_OWNED.getMessage()));
     }
 
     @ExceptionHandler(Exception.class)

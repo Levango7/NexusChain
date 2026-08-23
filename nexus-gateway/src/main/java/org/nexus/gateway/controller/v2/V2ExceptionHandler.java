@@ -2,6 +2,7 @@ package org.nexus.gateway.controller.v2;
 
 import org.nexus.gateway.apiversion.V2ErrorCode;
 import org.nexus.gateway.apiversion.V2ErrorResponse;
+import org.nexus.gateway.security.MerchantOwnershipException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.Ordered;
@@ -82,6 +83,14 @@ public class V2ExceptionHandler {
         return ResponseEntity.status(HttpStatus.CONFLICT)
                 .body(V2ErrorResponse.of(V2ErrorCode.ILLEGAL_STATE_TRANSITION.getCode(),
                         e.getMessage()));
+    }
+
+    @ExceptionHandler(MerchantOwnershipException.class)
+    public ResponseEntity<V2ErrorResponse> handleOwnership(MerchantOwnershipException e) {
+        log.warn("v2 ownership violation: {}", e.getMessage());
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(V2ErrorResponse.of(V2ErrorCode.FORBIDDEN.getCode(),
+                        V2ErrorCode.FORBIDDEN.getDefaultMessage()));
     }
 
     @ExceptionHandler(PaymentV2Controller.BatchFailedException.class)

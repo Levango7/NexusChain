@@ -7,7 +7,9 @@ import org.slf4j.LoggerFactory;
 
 import javax.crypto.Cipher;
 import javax.crypto.SecretKey;
+import javax.crypto.SecretKeyFactory;
 import javax.crypto.spec.GCMParameterSpec;
+import javax.crypto.spec.PBEKeySpec;
 import javax.crypto.spec.SecretKeySpec;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
@@ -30,7 +32,17 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <p>The master password is read from the environment variable
  * {@code NEX_BRIDGE_KEY_PASSWORD}. The AES key is derived via
- * SHA-256(password).</p>
+ * <b>PBKDF2WithHmacSHA256</b>（B-25 修复：原 SHA-256(password) 直接派生不安全）。</p>
+ *
+ * <p>B-25 修复：密钥派生参数：
+ * <ul>
+ *   <li>算法：PBKDF2WithHmacSHA256</li>
+ *   <li>迭代次数：{@value #PBKDF2_ITERATIONS}（≥ 100000，抵抗离线暴力破解）</li>
+ *   <li>盐值：16 字节，存储在 {@code {basePath}/master.salt} 文件中</li>
+ *   <li>密钥长度：256 位</li>
+ * </ul>
+ * salt 在首次 init 时随机生成并持久化，后续启动复用，保证同一 password 派生同一 masterKey。
+ * 若 salt 文件已存在则读取，避免重新派生导致历史加密文件无法解密。</p>
  */
 public class FileKeyVault implements KeyVault {
 
@@ -38,31 +50,96 @@ public class FileKeyVault implements KeyVault {
     private static final int GCM_NONCE_LEN = 12;
     private static final int GCM_TAG_LEN   = 128;
 
+    /** PBKDF2 迭代次数，≥ 100000 满足 B-25 要求。150000 留安全余量。 */
+    private static final int PBKDF2_ITERATIONS = 150000;
+    /** salt 长度（字节），16 字节（128 位）是 NIST SP 800-132 推荐的最小长度。 */
+    private static final int SALT_LENGTH = 16;
+    /** 派生密钥长度（位），256 位 = AES-256。 */
+    private static final int DERIVED_KEY_LENGTH_BITS = 256;
+    /** salt 持久化文件名，相对 basePath。 */
+    private static final String SALT_FILENAME = "master.salt";
+
     private final Path basePath;
-    private final SecretKey masterKey;
+    private final String password;
+    /** 派生出的 master key，在 {@link #init()} 中赋值。volatile 保证可见性。 */
+    private volatile SecretKey masterKey;
     private final Map<String, byte[]> publicKeys = new ConcurrentHashMap<>();
     private volatile boolean available;
 
     public FileKeyVault(String basePath, String password) {
         this.basePath = Paths.get(basePath);
-        try {
-            MessageDigest md = MessageDigest.getInstance("SHA-256");
-            byte[] keyBytes = md.digest(password.getBytes(StandardCharsets.UTF_8));
-            this.masterKey = new SecretKeySpec(keyBytes, "AES");
-        } catch (GeneralSecurityException e) {
-            throw new RuntimeException("Failed to derive master key", e);
-        }
+        this.password = password;
     }
 
     @PostConstruct
     public void init() {
         try {
             Files.createDirectories(basePath);
+            // B-25：先加载/生成 salt，再派生 masterKey，保证重启后同一 password 派生同一 key。
+            byte[] salt = loadOrCreateSalt();
+            this.masterKey = deriveMasterKey(password, salt);
             available = true;
-            log.info("FileKeyVault initialised: basePath={}", basePath.toAbsolutePath());
+            log.info("FileKeyVault initialised: basePath={}, key derived via PBKDF2WithHmacSHA256 (iterations={})",
+                    basePath.toAbsolutePath(), PBKDF2_ITERATIONS);
         } catch (IOException e) {
             available = false;
             log.error("Cannot create vault directory: {}", basePath, e);
+        } catch (GeneralSecurityException e) {
+            available = false;
+            log.error("Cannot derive master key via PBKDF2: {}", e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 加载 salt 文件；不存在则随机生成 16 字节 salt 并持久化。
+     *
+     * <p>salt 文件独立于各 validator 的 {@code .key.enc} 文件，全局共享。
+     * 这样同一 password 重启后派生同一 masterKey，历史加密文件可正常解密。
+     * salt 不需要保密（PBKDF2 的安全性来自迭代次数 + password 熵），但需保证
+     * 不被攻击者篡改；文件权限由操作系统保障。</p>
+     */
+    private byte[] loadOrCreateSalt() throws IOException {
+        Path saltFile = basePath.resolve(SALT_FILENAME);
+        if (Files.exists(saltFile)) {
+            byte[] salt = Files.readAllBytes(saltFile);
+            if (salt.length != SALT_LENGTH) {
+                throw new IOException(
+                        "Corrupted salt file " + saltFile + ": expected " + SALT_LENGTH
+                        + " bytes, got " + salt.length);
+            }
+            log.debug("Loaded existing salt from {}", saltFile);
+            return salt;
+        }
+        byte[] salt = new byte[SALT_LENGTH];
+        new SecureRandom().nextBytes(salt);
+        // CREATE + TRUNCATE_EXISTING + WRITE：新建 salt 文件，原子写入避免部分写。
+        Files.write(saltFile, salt,
+                java.nio.file.StandardOpenOption.CREATE,
+                java.nio.file.StandardOpenOption.TRUNCATE_EXISTING,
+                java.nio.file.StandardOpenOption.WRITE);
+        log.info("Generated new salt ({} bytes) and persisted to {}", SALT_LENGTH, saltFile);
+        return salt;
+    }
+
+    /**
+     * 用 PBKDF2WithHmacSHA256 从 password + salt 派生 AES-256 master key。
+     *
+     * <p>替换原 {@code MessageDigest.getInstance("SHA-256").digest(password)} 方案：
+     * SHA-256 是快速哈希，攻击者可每秒尝试数亿次 password；PBKDF2 通过
+     * {@value #PBKDF2_ITERATIONS} 次 HMAC 迭代显著提高单次尝试成本，
+     * 配合 16 字节随机 salt 防止彩虹表攻击。</p>
+     */
+    private SecretKey deriveMasterKey(String password, byte[] salt) throws GeneralSecurityException {
+        if (password == null || password.isEmpty()) {
+            throw new IllegalArgumentException("FileKeyVault password must not be empty");
+        }
+        PBEKeySpec spec = new PBEKeySpec(password.toCharArray(), salt, PBKDF2_ITERATIONS, DERIVED_KEY_LENGTH_BITS);
+        try {
+            SecretKeyFactory factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256");
+            byte[] keyBytes = factory.generateSecret(spec).getEncoded();
+            return new SecretKeySpec(keyBytes, "AES");
+        } finally {
+            spec.clearPassword();
         }
     }
 

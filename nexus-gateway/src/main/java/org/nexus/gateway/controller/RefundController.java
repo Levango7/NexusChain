@@ -3,8 +3,12 @@ package org.nexus.gateway.controller;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
+import org.nexus.gateway.OrderService;
+import org.nexus.gateway.model.PaymentOrder;
 import org.nexus.gateway.refund.RefundApprovalService;
 import org.nexus.gateway.refund.RefundRequest;
+import org.nexus.gateway.security.MerchantOwnershipException;
+import org.nexus.gateway.security.MerchantOwnershipGuard;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -44,9 +48,15 @@ public class RefundController {
     private static final String MERCHANT_ID_ATTR = "nexus.merchantId";
 
     private final RefundApprovalService refundApprovalService;
+    private final OrderService orderService;
+    private final MerchantOwnershipGuard ownershipGuard;
 
-    public RefundController(RefundApprovalService refundApprovalService) {
+    public RefundController(RefundApprovalService refundApprovalService,
+                            OrderService orderService,
+                            MerchantOwnershipGuard ownershipGuard) {
         this.refundApprovalService = refundApprovalService;
+        this.orderService = orderService;
+        this.ownershipGuard = ownershipGuard;
     }
 
     /**
@@ -64,11 +74,18 @@ public class RefundController {
      */
     @Operation(summary = "发起退款请求")
     @PostMapping
-    public ResponseEntity<?> requestRefund(@RequestBody Map<String, Object> body) {
+    public ResponseEntity<?> requestRefund(@RequestBody Map<String, Object> body,
+                                           HttpServletRequest request) {
+        // P0-4：目标订单必须属于认证商户
+        Long callerMerchantId = ownershipGuard.requireMerchantId(request);
         Long orderId = resolveOrderId(body);
         if (orderId == null) {
             return ResponseEntity.badRequest().body(Map.of("error", "orderId or paymentId is required and must be valid"));
         }
+        PaymentOrder order = orderService.findById(orderId)
+                .orElseThrow(() -> new IllegalArgumentException("Order not found: " + orderId));
+        ownershipGuard.requireOwned(callerMerchantId, order.getMerchantId(), "order", orderId);
+
         BigDecimal amount = parseAmount(body.get("amount"));
         String reason = asString(body.get("reason"));
 
@@ -105,6 +122,9 @@ public class RefundController {
 
         // P0-7 修复：审批人身份从认证上下文获取，不信任请求体
         String approver = resolveApprover(request, body);
+        // P0-4：退款单必须属于认证商户（fail-closed）
+        Long callerMerchantId = ownershipGuard.requireMerchantId(request);
+        requireRefundOwnership(callerMerchantId, refundId);
         boolean approved = asBoolean(body.get("approved"));
         String reason = asString(body.get("reason"));
 
@@ -127,13 +147,30 @@ public class RefundController {
      */
     @Operation(summary = "执行已审批的退款")
     @PostMapping("/{id}/execute")
-    public ResponseEntity<RefundRequest> executeRefund(@PathVariable Long id) {
+    public ResponseEntity<RefundRequest> executeRefund(@PathVariable Long id,
+                                                       HttpServletRequest request) {
+        // P0-4：退款单必须属于认证商户（fail-closed）
+        Long callerMerchantId = ownershipGuard.requireMerchantId(request);
+        requireRefundOwnership(callerMerchantId, id);
         log.info("Refund execute: refundId={}", id);
         RefundRequest result = refundApprovalService.executeRefund(id);
         return ResponseEntity.ok(result);
     }
 
     // --- 内部工具方法 ---
+
+    /**
+     * P0-4：校验退款单归属。加载退款请求并比对 merchantId，
+     * 不存在抛 400 语义的 IllegalArgumentException，不属于调用方抛
+     * {@link MerchantOwnershipException}（映射 403）。
+     */
+    private void requireRefundOwnership(Long callerMerchantId, Long refundId) {
+        RefundRequest refund = refundApprovalService.getRefund(refundId);
+        if (refund == null) {
+            throw new IllegalArgumentException("refund request not found: " + refundId);
+        }
+        ownershipGuard.requireOwned(callerMerchantId, refund.getMerchantId(), "refund", refundId);
+    }
 
     /**
      * 从认证上下文获取审批人身份。

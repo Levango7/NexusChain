@@ -1,5 +1,22 @@
 # NexusChain Payment Orchestration - MVP PRD
 
+## Table of Contents
+
+- [1. Product Summary](#1-product-summary)
+- [2. Target User (MVP)](#2-target-user-mvp)
+- [3. MVP Feature List](#3-mvp-feature-list)
+- [4. Core API Definition](#4-core-api-definition)
+  - [4.1 Create Payment](#41-create-payment)
+  - [4.2 Query Payment](#42-query-payment)
+  - [4.3 List Payments](#43-list-payments)
+  - [4.4 Connector Management (Admin)](#44-connector-management-admin)
+  - [4.5 Routing Rules (Admin)](#45-routing-rules-admin)
+- [5. Payment Status Lifecycle](#5-payment-status-lifecycle)
+- [6. PaymentConnector SPI](#6-paymentconnector-spi)
+- [7. Routing Engine](#7-routing-engine)
+- [8. Non-functional Requirements](#8-non-functional-requirements)
+- [9. Out of Scope (MVP)](#9-out-of-scope-mvp)
+
 ## 1. Product Summary
 
 NexusChain MVP delivers a **self-hosted, open-source payment orchestration engine** that routes payments across multiple channels (blockchain + traditional PSPs) through a single unified API.
@@ -20,12 +37,12 @@ Mid-size e-commerce / SaaS developers (team 5-20, monthly volume $10K-$1M) who n
 | F4 | ChainConnector (NEX on-chain settlement via Core RPC) | P0 | gateway+core |
 | F5 | MockConnector (sandbox testing) | P0 | gateway |
 | F6 | HttpPspConnector (generic REST PSP adapter) | P1 | gateway |
-| F7 | Merchant management + API Key auth | P0 | gateway (exists) |
-| F8 | Webhook notifications (async, retry) | P0 | gateway (exists) |
+| F7 | Merchant management + API Key auth | P0 (exists) | gateway |
+| F8 | Webhook notifications (async, retry) | P0 (exists) | gateway |
 | F9 | Payment status query + list | P0 | gateway |
 | F10 | Connector health check + auto-failover | P1 | gateway |
 | F11 | Explorer: blockchain explorer + payment orchestration dashboard (HMAC auth) | P1 | explorer |
-| F12 | Java SDK: PaymentClient | P1 | sdk |
+| F12 | Multi-language SDK: PaymentClient (Java/JS/Python/Go) | P1 | sdk |
 | F13 | Cross-chain Bridge (lock/mint/burn/unlock) | Delivered | bridge |
 | F14 | Settlement & Risk Engine | Delivered | settlement |
 | F15 | Compliance (KYC/AML/DID) | Delivered | compliance |
@@ -47,7 +64,7 @@ Mid-size e-commerce / SaaS developers (team 5-20, monthly volume $10K-$1M) who n
 
 ### 4.1 Create Payment
 
-```
+```http
 POST /api/v1/payments
 Authorization: Bearer {api_key}
 Content-Type: application/json
@@ -79,7 +96,7 @@ Response 201:
 
 ### 4.2 Query Payment
 
-```
+```http
 GET /api/v1/payments/{id}
 Authorization: Bearer {api_key}
 
@@ -99,32 +116,32 @@ Response 200:
 
 ### 4.3 List Payments
 
-```
+```http
 GET /api/v1/payments?status=SUCCEEDED&limit=20&cursor=xxx
 Authorization: Bearer {api_key}
 ```
 
 ### 4.4 Connector Management (Admin)
 
-```
-GET    /api/v1/connectors              - List registered connectors
-POST   /api/v1/connectors              - Register new connector config
-GET    /api/v1/connectors/{id}/health  - Health check
-DELETE /api/v1/connectors/{id}         - Remove connector
+```text
+GET    /api/v1/payments/connectors              - List registered connectors
+POST   /api/v1/payments/connectors              - Register new connector config（待实现）
+GET    /api/v1/payments/connectors/{id}/health  - Health check
+DELETE /api/v1/payments/connectors/{id}         - Remove connector（待实现）
 ```
 
 ### 4.5 Routing Rules (Admin)
 
-```
-GET    /api/v1/routing-rules           - List rules
-POST   /api/v1/routing-rules           - Create rule
-PUT    /api/v1/routing-rules/{id}      - Update rule
-DELETE /api/v1/routing-rules/{id}      - Delete rule
+```text
+GET    /api/v1/payments/routing-rules           - List rules
+POST   /api/v1/payments/routing-rules           - Create rule
+PUT    /api/v1/payments/routing-rules/{id}      - Update rule（待实现）
+DELETE /api/v1/payments/routing-rules/{id}      - Delete rule
 ```
 
 ## 5. Payment Status Lifecycle
 
-```
+```text
 CREATED → PROCESSING → SUCCEEDED
                     → FAILED
                     → EXPIRED
@@ -137,12 +154,17 @@ CREATED → PROCESSING → SUCCEEDED
 public interface PaymentConnector {
     String getId();
     String getType();  // "chain", "http_psp", "mock"
-    ConnectorStatus getStatus();
+    String getDisplayName();
+    boolean isActive();
     
-    PaymentResult createPayment(PaymentRequest request);
+    ConnectorPaymentResult createPayment(ConnectorPaymentRequest request);
     PaymentStatus queryPayment(String connectorPaymentId);
-    RefundResult refund(String connectorPaymentId, long amount);
-    HealthCheck healthCheck();
+    ConnectorRefundResult refund(String connectorPaymentId, long amount);
+    ConnectorHealth healthCheck();
+    
+    // 路由辅助（默认实现）
+    default Set<String> supportedCurrencies() { return Set.of(); }
+    default int feeBasisPoints() { return 0; }
 }
 ```
 
@@ -179,5 +201,5 @@ Rule model:
 - No-code workflow builder
 - IoT device payments
 - 300+ PSP connectors (only 2-3 to prove architecture)
-- MPC multi-sig protocol (GG18/GG20) — in progress
-- PoS consensus / L2 Rollup — in progress
+- MPC multi-sig protocol (GG18/GG20) — Delivered (v2.0.0-rc1, 可信协调器模型)
+- PoS consensus / L2 Rollup — Delivered (PoS 自 v1.2.3 / L2 自 v1.3.0 引入，v2.0.0-rc1 条件解冻)

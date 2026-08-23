@@ -83,6 +83,11 @@ nexus:
   webhook:
     dlq:
       store: memory
+  # === P1-3：HMAC 请求签名。拦截器已覆盖 /api/v1/orders|refunds|payments/**，
+  # 未配置密钥时 fail-closed 全拒；sandbox 提供固定测试密钥供本地联调与集成测试签名。
+  # 仅限沙箱，禁止用于生产。
+  security:
+    requestSigningSecret: "sandbox-signing-secret-do-not-use-in-prod"
 
 logging:
   level:

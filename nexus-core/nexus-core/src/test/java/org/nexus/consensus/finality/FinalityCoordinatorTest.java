@@ -6,6 +6,7 @@ import org.nexus.consensus.pos.StakingServiceImpl;
 import org.nexus.consensus.pos.ValidatorRegistry;
 import org.nexus.consensus.pos.ValidatorStatus;
 import org.nexus.core.Block;
+import org.nexus.core.crypto.bls.BlsSigner;
 
 import java.math.BigDecimal;
 
@@ -34,7 +35,9 @@ class FinalityCoordinatorTest {
         registry.getValidator("v3").setStatus(ValidatorStatus.ACTIVE);
 
         gadget = new FinalityGadget(registry, staking);
-        coordinator = new FinalityCoordinator(gadget, registry, EPOCH);
+        // B-17 修复后：必须注入 BlsSigner 才能投票（fail-closed 防伪造）
+        BlsSigner signer = BlsSigner.generate();
+        coordinator = new FinalityCoordinator(gadget, registry, EPOCH, null, signer);
         coordinator.setSelfValidatorAddress("v1");
     }
 

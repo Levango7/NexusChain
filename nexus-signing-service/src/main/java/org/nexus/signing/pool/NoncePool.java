@@ -71,6 +71,7 @@ public class NoncePool {
                 }
             }
         }catch (Exception e){
+            log.warn("Failed to load nonce pool from LevelDB, falling back to empty pool", e);
             this.noncepool = new ConcurrentHashMap<>();
         }
     }

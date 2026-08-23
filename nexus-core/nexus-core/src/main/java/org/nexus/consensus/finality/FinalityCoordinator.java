@@ -5,6 +5,8 @@ import org.nexus.consensus.pos.Validator;
 import org.nexus.consensus.pos.ValidatorRegistry;
 import org.nexus.consensus.pos.ValidatorStatus;
 import org.nexus.core.Block;
+import org.nexus.core.crypto.bls.BlsSigner;
+import org.nexus.core.crypto.bls.BlsSignature;
 import org.nexus.core.event.NewBlockMinedEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,7 +24,8 @@ import java.util.Objects;
  * <ul>
  *   <li>监听 {@link NewBlockMinedEvent}，识别 epoch 边界检查点</li>
  *   <li>若本节点是活跃验证人，自动为该检查点产出 {@link Vote} 并提交至 {@link FinalityGadget}</li>
- *   <li>投票签名当前用 Ed25519 占位字节承载（M3 BLS 集成就位后替换）</li>
+ *   <li>投票签名使用注入的 {@link BlsSigner} 产生真实 BLS 签名（B-17 修复）；
+ *       未注入签名者时 fail-closed 拒绝投票，不再使用占位签名</li>
  * </ul>
  *
  * <p>设计约束：</p>
@@ -45,31 +48,57 @@ public class FinalityCoordinator {
     private final ValidatorRegistry validatorRegistry;
     private final long epochLength;
     private final FinalityVoteBroadcaster broadcaster;
+    /**
+     * BLS 签名者（B-17 修复）：用于对最终性投票产生真实签名。
+     *
+     * <p>通过 {@code required = false} 注入：未配置签名基础设施时为 {@code null}，
+     * 此时 {@link #onBlock(Block)} 会 fail-closed 拒绝投票并记录 warn 日志，
+     * 不再退化为占位签名（防止任何节点伪造投票）。</p>
+     */
+    private final BlsSigner blsSigner;
     private String selfValidatorAddress;
 
     /**
      * @param gadget               最终性投票收集器
      * @param validatorRegistry    验证人注册表（判定本节点是否活跃验证人）
      * @param epochLength          epoch 长度（每多少个块一个检查点）
+     * @param broadcaster          P2P 投票广播器（可为 null）
+     * @param blsSigner            BLS 签名者（可为 null，此时 fail-closed 不投票）
      */
     @Autowired
     public FinalityCoordinator(FinalityGadget gadget,
                                ValidatorRegistry validatorRegistry,
                                @org.springframework.beans.factory.annotation.Value("${nexus.finality.epoch-length:32}") long epochLength,
-                               @Autowired(required = false) FinalityVoteBroadcaster broadcaster) {
+                               @Autowired(required = false) FinalityVoteBroadcaster broadcaster,
+                               @Autowired(required = false) BlsSigner blsSigner) {
         this.gadget = Objects.requireNonNull(gadget, "gadget must not be null");
         this.validatorRegistry = Objects.requireNonNull(validatorRegistry, "validatorRegistry must not be null");
         this.epochLength = epochLength <= 0 ? 32 : epochLength;
         this.broadcaster = broadcaster;
+        this.blsSigner = blsSigner;
     }
 
     /**
-     * 兼容构造器（单进程/测试场景：无 P2P 广播器）。
+     * 兼容构造器（单进程/测试场景：无 P2P 广播器、无 BLS 签名者）。
+     *
+     * <p><b>注意</b>：使用此构造器时 blsSigner 为 null，
+     * {@link #onBlock(Block)} 将 fail-closed 不投票。测试需要真实投票时应使用
+     * {@link #FinalityCoordinator(FinalityGadget, ValidatorRegistry, long, FinalityVoteBroadcaster, BlsSigner)}。</p>
      */
     public FinalityCoordinator(FinalityGadget gadget,
                                ValidatorRegistry validatorRegistry,
                                long epochLength) {
-        this(gadget, validatorRegistry, epochLength, null);
+        this(gadget, validatorRegistry, epochLength, null, null);
+    }
+
+    /**
+     * 兼容构造器（带广播器但无 BLS 签名者）。
+     */
+    public FinalityCoordinator(FinalityGadget gadget,
+                               ValidatorRegistry validatorRegistry,
+                               long epochLength,
+                               FinalityVoteBroadcaster broadcaster) {
+        this(gadget, validatorRegistry, epochLength, broadcaster, null);
     }
 
     /**
@@ -118,12 +147,36 @@ public class FinalityCoordinator {
         byte[] blockHash = block.getHash();
         byte[] checkpointHash = blockHash != null ? blockHash : new byte[0];
 
-        // M1/M2：签名以 Ed25519 占位字节承载；M3 集成 BLS 后替换
-        // 签名长度填充至 32 字节以上，满足 CollectingAggregator.verifyAggregate() 的格式护栏
-        byte[] rawSig = ("finality-vote:" + epoch).getBytes();
-        byte[] sig = new byte[32];
-        System.arraycopy(rawSig, 0, sig, 0, Math.min(rawSig.length, sig.length));
-        Vote vote = new Vote(epoch, checkpointHash, selfValidatorAddress, sig);
+        // B-17 修复：使用真实 BLS 签名，不再使用占位字节
+        // fail-closed：未注入 BlsSigner 时拒绝投票，防止任何节点伪造投票
+        if (blsSigner == null) {
+            log.warn("Skip finality vote at epoch={}: no BlsSigner injected, fail-closed to prevent forgery", epoch);
+            return null;
+        }
+
+        // 构造投票载荷并产生真实 BLS 签名
+        // 载荷格式与 Vote.signingPayload() 保持一致：epoch || checkpointHash
+        byte[] signingPayload = buildSigningPayload(epoch, checkpointHash);
+        BlsSignature blsSignature;
+        byte[] sigBytes;
+        byte[] publicKeyBytes;
+        try {
+            blsSignature = blsSigner.sign(signingPayload);
+            sigBytes = blsSignature.toBytesCompressed();
+            // 从签名者提取公钥（Secp256k1BlsSigner 提供 getPublicKey()）
+            publicKeyBytes = extractPublicKeyBytes(blsSigner);
+        } catch (RuntimeException e) {
+            log.error("Failed to sign finality vote at epoch={}: {}", epoch, e.getMessage());
+            return null;
+        }
+
+        // 签名长度护栏：确保签名满足聚合器最小长度要求
+        if (sigBytes == null || sigBytes.length < 32) {
+            log.error("BLS signature too short ({} bytes) at epoch={}, fail-closed", sigBytes == null ? 0 : sigBytes.length, epoch);
+            return null;
+        }
+
+        Vote vote = new Vote(epoch, checkpointHash, selfValidatorAddress, sigBytes, publicKeyBytes);
 
         FinalityRecord record = gadget.submitVote(vote);
         log.info("Finality vote submitted: epoch={}, height={}, validator={}, finalized={}, progress={}%",
@@ -151,5 +204,43 @@ public class FinalityCoordinator {
 
     public long getEpochLength() {
         return epochLength;
+    }
+
+    /**
+     * 构造投票签名载荷（与 {@link Vote#signingPayload()} 格式一致）。
+     *
+     * <p>载荷 = epoch（8 字节大端） || checkpointHash。</p>
+     *
+     * @param epoch          epoch 编号
+     * @param checkpointHash 检查点哈希
+     * @return 签名载荷字节
+     */
+    private static byte[] buildSigningPayload(long epoch, byte[] checkpointHash) {
+        byte[] payload = new byte[8 + checkpointHash.length];
+        for (int i = 0; i < 8; i++) {
+            payload[i] = (byte) (epoch >>> (56 - 8 * i));
+        }
+        System.arraycopy(checkpointHash, 0, payload, 8, checkpointHash.length);
+        return payload;
+    }
+
+    /**
+     * 从 BlsSigner 提取公钥压缩字节（供验签方使用）。
+     *
+     * <p>当前仅支持 {@link org.nexus.core.crypto.bls.Secp256k1BlsSigner}；
+     * 其他实现返回 null（验签方将走格式校验降级路径）。</p>
+     *
+     * @param signer BLS 签名者
+     * @return 公钥压缩字节；无法提取时返回 null
+     */
+    private static byte[] extractPublicKeyBytes(BlsSigner signer) {
+        if (signer instanceof org.nexus.core.crypto.bls.Secp256k1BlsSigner) {
+            try {
+                return ((org.nexus.core.crypto.bls.Secp256k1BlsSigner) signer).getPublicKey().toBytesCompressed();
+            } catch (RuntimeException e) {
+                return null;
+            }
+        }
+        return null;
     }
 }

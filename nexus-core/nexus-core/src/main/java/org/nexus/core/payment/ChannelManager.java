@@ -11,6 +11,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * 支付通道管理器。
@@ -48,6 +49,13 @@ public class ChannelManager {
 
     /** 待确认的链下更新（channelId -> 最新 ChannelUpdate）。 */
     private final ConcurrentHashMap<String, ChannelUpdate> pendingUpdates;
+
+    /**
+     * B-10/B-11 修复：全局锁，保护 submitUpdate / initiatePayment / confirmPayment 中的
+     * "余额检查 + 扣减 + 通道状态更新"复合操作的原子性，
+     * 防止并发导致通道状态不一致与链下余额双花。
+     */
+    private final ReentrantLock channelLock = new ReentrantLock();
 
     /**
      * 默认构造函数，初始化内部存储。
@@ -131,50 +139,57 @@ public class ChannelManager {
     public ChannelUpdate submitUpdate(String channelId, long balance1, long balance2,
                                       byte[] sig1, byte[] sig2,
                                       byte[] pubkey1, byte[] pubkey2) {
-        PaymentChannel channel = getChannel(channelId);
-        if (channel == null) {
-            throw new IllegalArgumentException("Channel not found: " + channelId);
+        // B-10 修复：使用锁将"验证 + 通道状态更新 + pendingUpdate 存储"包装为原子操作，
+        // 防止并发导致通道状态不一致。
+        channelLock.lock();
+        try {
+            PaymentChannel channel = getChannel(channelId);
+            if (channel == null) {
+                throw new IllegalArgumentException("Channel not found: " + channelId);
+            }
+            if (channel.getState() != PaymentChannel.State.OPEN) {
+                throw new IllegalArgumentException(
+                        "Channel is not OPEN: " + channel.getState());
+            }
+
+            // 获取当前 nonce，新 update 的 nonce 应为当前 nonce + 1
+            long newNonce = channel.getNonce() + 1;
+
+            ChannelUpdate update = new ChannelUpdate(
+                    channelId, newNonce, balance1, balance2, sig1, sig2,
+                    System.currentTimeMillis()
+            );
+
+            // 验证 nonce 递增
+            if (newNonce <= channel.getNonce()) {
+                throw new IllegalArgumentException(
+                        "Nonce must increase: newNonce=" + newNonce + ", current=" + channel.getNonce());
+            }
+
+            // 验证余额守恒
+            if (!update.isBalanceConserved(channel.getTotalBalance())) {
+                throw new IllegalArgumentException(
+                        "Balance conservation violated: totalExpected=" + channel.getTotalBalance()
+                                + ", actualTotal=" + (balance1 + balance2));
+            }
+
+            // 验证双方签名
+            if (!update.verifySignatures(pubkey1, pubkey2)) {
+                throw new IllegalArgumentException("Signature verification failed");
+            }
+
+            // 更新通道余额和 nonce（通过 PaymentChannel.update 方法）
+            channel.update(balance1, balance2, newNonce);
+
+            // 存储为最新链下状态
+            pendingUpdates.put(channelId, update);
+
+            LOG.info("Submitted channel update: channelId={}, nonce={}, balance1={}, balance2={}",
+                    channelId, newNonce, balance1, balance2);
+            return update;
+        } finally {
+            channelLock.unlock();
         }
-        if (channel.getState() != PaymentChannel.State.OPEN) {
-            throw new IllegalArgumentException(
-                    "Channel is not OPEN: " + channel.getState());
-        }
-
-        // 获取当前 nonce，新 update 的 nonce 应为当前 nonce + 1
-        long newNonce = channel.getNonce() + 1;
-
-        ChannelUpdate update = new ChannelUpdate(
-                channelId, newNonce, balance1, balance2, sig1, sig2,
-                System.currentTimeMillis()
-        );
-
-        // 验证 nonce 递增
-        if (newNonce <= channel.getNonce()) {
-            throw new IllegalArgumentException(
-                    "Nonce must increase: newNonce=" + newNonce + ", current=" + channel.getNonce());
-        }
-
-        // 验证余额守恒
-        if (!update.isBalanceConserved(channel.getTotalBalance())) {
-            throw new IllegalArgumentException(
-                    "Balance conservation violated: totalExpected=" + channel.getTotalBalance()
-                            + ", actualTotal=" + (balance1 + balance2));
-        }
-
-        // 验证双方签名
-        if (!update.verifySignatures(pubkey1, pubkey2)) {
-            throw new IllegalArgumentException("Signature verification failed");
-        }
-
-        // 更新通道余额和 nonce（通过 PaymentChannel.update 方法）
-        channel.update(balance1, balance2, newNonce);
-
-        // 存储为最新链下状态
-        pendingUpdates.put(channelId, update);
-
-        LOG.info("Submitted channel update: channelId={}, nonce={}, balance1={}, balance2={}",
-                channelId, newNonce, balance1, balance2);
-        return update;
     }
 
     // ==================== Off-chain Payment Flow ====================
@@ -206,49 +221,56 @@ public class ChannelManager {
     public ChannelUpdate initiatePayment(String channelId, long amountFrom1To2,
                                          byte[] senderPrikey, byte[] senderPubkey,
                                          byte[] receiverPubkey) {
-        PaymentChannel channel = getChannel(channelId);
-        if (channel == null) {
-            throw new IllegalArgumentException("Channel not found: " + channelId);
+        // B-11 修复：使用锁将"余额检查 + 扣减计算 + pendingUpdate 存储"包装为原子操作，
+        // 防止并发下两个 initiatePayment 基于相同的 currentBalance1 计算，导致链下余额双花。
+        channelLock.lock();
+        try {
+            PaymentChannel channel = getChannel(channelId);
+            if (channel == null) {
+                throw new IllegalArgumentException("Channel not found: " + channelId);
+            }
+            if (channel.getState() != PaymentChannel.State.OPEN) {
+                throw new IllegalArgumentException(
+                        "Channel is not OPEN: " + channel.getState());
+            }
+            if (amountFrom1To2 <= 0) {
+                throw new IllegalArgumentException("Payment amount must be positive: " + amountFrom1To2);
+            }
+
+            long currentBalance1 = channel.getBalance1();
+            long currentBalance2 = channel.getBalance2();
+
+            // 计算新余额
+            long newBalance1 = currentBalance1 - amountFrom1To2;
+            long newBalance2 = currentBalance2 + amountFrom1To2;
+
+            if (newBalance1 < 0) {
+                throw new IllegalArgumentException(
+                        "Insufficient balance: currentBalance1=" + currentBalance1
+                                + ", payment=" + amountFrom1To2);
+            }
+
+            long newNonce = channel.getNonce() + 1;
+            ChannelUpdate update = new ChannelUpdate(
+                    channelId, newNonce, newBalance1, newBalance2,
+                    null, null, System.currentTimeMillis()
+            );
+
+            // 发送方签名
+            byte[] messageHash = HashUtil.keccak256(update.getMessageToSign());
+            Ed25519PrivateKey privateKey = new Ed25519PrivateKey(senderPrikey);
+            byte[] signature = privateKey.sign(messageHash);
+            update.setSignature1(signature);
+
+            // 存储 pendingUpdate（尚未完全确认）
+            pendingUpdates.put(channelId, update);
+
+            LOG.info("Initiated payment: channelId={}, amount={}, newNonce={}, balance1={}, balance2={}",
+                    channelId, amountFrom1To2, newNonce, newBalance1, newBalance2);
+            return update;
+        } finally {
+            channelLock.unlock();
         }
-        if (channel.getState() != PaymentChannel.State.OPEN) {
-            throw new IllegalArgumentException(
-                    "Channel is not OPEN: " + channel.getState());
-        }
-        if (amountFrom1To2 <= 0) {
-            throw new IllegalArgumentException("Payment amount must be positive: " + amountFrom1To2);
-        }
-
-        long currentBalance1 = channel.getBalance1();
-        long currentBalance2 = channel.getBalance2();
-
-        // 计算新余额
-        long newBalance1 = currentBalance1 - amountFrom1To2;
-        long newBalance2 = currentBalance2 + amountFrom1To2;
-
-        if (newBalance1 < 0) {
-            throw new IllegalArgumentException(
-                    "Insufficient balance: currentBalance1=" + currentBalance1
-                            + ", payment=" + amountFrom1To2);
-        }
-
-        long newNonce = channel.getNonce() + 1;
-        ChannelUpdate update = new ChannelUpdate(
-                channelId, newNonce, newBalance1, newBalance2,
-                null, null, System.currentTimeMillis()
-        );
-
-        // 发送方签名
-        byte[] messageHash = HashUtil.keccak256(update.getMessageToSign());
-        Ed25519PrivateKey privateKey = new Ed25519PrivateKey(senderPrikey);
-        byte[] signature = privateKey.sign(messageHash);
-        update.setSignature1(signature);
-
-        // 存储 pendingUpdate（尚未完全确认）
-        pendingUpdates.put(channelId, update);
-
-        LOG.info("Initiated payment: channelId={}, amount={}, newNonce={}, balance1={}, balance2={}",
-                channelId, amountFrom1To2, newNonce, newBalance1, newBalance2);
-        return update;
     }
 
     /**
@@ -280,45 +302,52 @@ public class ChannelManager {
             throw new IllegalArgumentException("Update must have signature1 from sender");
         }
 
-        PaymentChannel channel = getChannel(update.getChannelId());
-        if (channel == null) {
-            throw new IllegalArgumentException("Channel not found: " + update.getChannelId());
+        // B-10 修复：使用锁将"验证 + 通道状态更新 + pendingUpdate 存储"包装为原子操作，
+        // 防止并发导致通道状态不一致。
+        channelLock.lock();
+        try {
+            PaymentChannel channel = getChannel(update.getChannelId());
+            if (channel == null) {
+                throw new IllegalArgumentException("Channel not found: " + update.getChannelId());
+            }
+            if (channel.getState() != PaymentChannel.State.OPEN) {
+                throw new IllegalArgumentException(
+                        "Channel is not OPEN: " + channel.getState());
+            }
+
+            // 验证余额守恒
+            if (!update.isBalanceConserved(channel.getTotalBalance())) {
+                throw new IllegalArgumentException(
+                        "Balance conservation violated: totalExpected=" + channel.getTotalBalance()
+                                + ", actualTotal=" + (update.getBalance1() + update.getBalance2()));
+            }
+
+            // 验证 nonce 递增
+            if (update.getNonce() <= channel.getNonce()) {
+                throw new IllegalArgumentException(
+                        "Nonce must increase: updateNonce=" + update.getNonce()
+                                + ", current=" + channel.getNonce());
+            }
+
+            // 接收方签名
+            byte[] messageHash = HashUtil.keccak256(update.getMessageToSign());
+            Ed25519PrivateKey privateKey = new Ed25519PrivateKey(receiverPrikey);
+            byte[] signature2 = privateKey.sign(messageHash);
+            update.setSignature2(signature2);
+
+            // 提交到通道（更新通道状态）
+            channel.update(update.getBalance1(), update.getBalance2(), update.getNonce());
+
+            // 存储为最新已确认的链下状态
+            pendingUpdates.put(update.getChannelId(), update);
+
+            LOG.info("Confirmed payment: channelId={}, nonce={}, balance1={}, balance2={}",
+                    update.getChannelId(), update.getNonce(),
+                    update.getBalance1(), update.getBalance2());
+            return update;
+        } finally {
+            channelLock.unlock();
         }
-        if (channel.getState() != PaymentChannel.State.OPEN) {
-            throw new IllegalArgumentException(
-                    "Channel is not OPEN: " + channel.getState());
-        }
-
-        // 验证余额守恒
-        if (!update.isBalanceConserved(channel.getTotalBalance())) {
-            throw new IllegalArgumentException(
-                    "Balance conservation violated: totalExpected=" + channel.getTotalBalance()
-                            + ", actualTotal=" + (update.getBalance1() + update.getBalance2()));
-        }
-
-        // 验证 nonce 递增
-        if (update.getNonce() <= channel.getNonce()) {
-            throw new IllegalArgumentException(
-                    "Nonce must increase: updateNonce=" + update.getNonce()
-                            + ", current=" + channel.getNonce());
-        }
-
-        // 接收方签名
-        byte[] messageHash = HashUtil.keccak256(update.getMessageToSign());
-        Ed25519PrivateKey privateKey = new Ed25519PrivateKey(receiverPrikey);
-        byte[] signature2 = privateKey.sign(messageHash);
-        update.setSignature2(signature2);
-
-        // 提交到通道（更新通道状态）
-        channel.update(update.getBalance1(), update.getBalance2(), update.getNonce());
-
-        // 存储为最新已确认的链下状态
-        pendingUpdates.put(update.getChannelId(), update);
-
-        LOG.info("Confirmed payment: channelId={}, nonce={}, balance1={}, balance2={}",
-                update.getChannelId(), update.getNonce(),
-                update.getBalance1(), update.getBalance2());
-        return update;
     }
 
     // ==================== Query Methods ====================

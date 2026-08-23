@@ -58,7 +58,11 @@ public class DefaultInsuranceFund implements InsuranceFund {
      *
      * <p>启动时从数据库重放所有流水恢复内存余额。</p>
      *
+     * <p>B-03 修复：恢复失败时拒绝启动（抛出异常），而不是默认 balance=0。
+     * 若默认 balance=0，所有桥交易将无保障，可能导致资金损失。</p>
+     *
      * @param ledgerRepository 流水 Repository
+     * @throws IllegalStateException 如果从 DB 恢复余额失败
      */
     @Autowired
     public DefaultInsuranceFund(InsuranceFundLedgerRepository ledgerRepository) {
@@ -76,7 +80,12 @@ public class DefaultInsuranceFund implements InsuranceFund {
             balance.set(restored);
             log.info("Restored insurance fund balance from {} ledger entries: {}", allEntries.size(), restored);
         } catch (RuntimeException e) {
-            log.warn("Failed to restore insurance fund balance (DB may not be ready): {}", e.getMessage());
+            // B-03 修复：恢复失败时拒绝启动，而不是默认 balance=0。
+            // 若默认 balance=0，所有桥交易将无保障，可能导致资金损失。
+            log.error("Failed to restore insurance fund balance from DB; refusing to start "
+                    + "to avoid operating with zero balance (all bridge txs would be unprotected): {}", e.getMessage(), e);
+            throw new IllegalStateException("Insurance fund balance restoration failed; "
+                    + "refusing to start with default zero balance to prevent fund safety risk", e);
         }
     }
 
@@ -87,9 +96,13 @@ public class DefaultInsuranceFund implements InsuranceFund {
         if (amount.signum() <= 0) {
             throw new IllegalArgumentException("deposit amount must be positive: " + amount);
         }
-        BigDecimal newBalance = updateBalanceAtomically(current -> current.add(amount));
+        // B-04 修复：先写入 DB，再更新内存，确保内存与 DB 一致。
+        // 如果 DB 写入失败（异常抛出），内存不会被更新，避免重启后状态丢失。
+        BigDecimal snapshotBalance = balance.get();
         ledgerRepository.save(new InsuranceFundLedgerEntry(
-                TYPE_DEPOSIT, amount, newBalance, null, "insurance fund deposit"));
+                TYPE_DEPOSIT, amount, snapshotBalance.add(amount), null, "insurance fund deposit"));
+        // DB 写入成功后再原子更新内存
+        BigDecimal newBalance = updateBalanceAtomically(current -> current.add(amount));
         log.info("Deposited {} to insurance fund, new balance: {}", amount, newBalance);
     }
 
@@ -104,7 +117,16 @@ public class DefaultInsuranceFund implements InsuranceFund {
         if (amount.signum() <= 0) {
             throw new IllegalArgumentException("compensate amount must be positive: " + amount);
         }
-        // 检查余额充足（在事务内做乐观重试）
+        // B-04 修复：先写入 DB，再更新内存，确保内存与 DB 一致。
+        // 如果 DB 写入失败（异常抛出），内存不会被更新，避免重启后状态丢失。
+        BigDecimal snapshotBalance = balance.get();
+        if (snapshotBalance.compareTo(amount) < 0) {
+            throw new IllegalStateException("insufficient insurance fund balance: "
+                    + "current=" + snapshotBalance + ", required=" + amount);
+        }
+        ledgerRepository.save(new InsuranceFundLedgerEntry(
+                TYPE_COMPENSATE, amount, snapshotBalance.subtract(amount), victimId, reason));
+        // DB 写入成功后再原子更新内存（含余额检查，防止并发超额补偿）
         BigDecimal newBalance = updateBalanceAtomically(current -> {
             if (current.compareTo(amount) < 0) {
                 throw new IllegalStateException("insufficient insurance fund balance: "
@@ -112,8 +134,6 @@ public class DefaultInsuranceFund implements InsuranceFund {
             }
             return current.subtract(amount);
         });
-        ledgerRepository.save(new InsuranceFundLedgerEntry(
-                TYPE_COMPENSATE, amount, newBalance, victimId, reason));
         log.info("Compensated victim {} with {} (reason: {}), new balance: {}",
                 victimId, amount, reason, newBalance);
     }
@@ -142,6 +162,16 @@ public class DefaultInsuranceFund implements InsuranceFund {
         if (amount.signum() <= 0) {
             throw new IllegalArgumentException("withdraw amount must be positive: " + amount);
         }
+        // B-04 修复：先写入 DB，再更新内存，确保内存与 DB 一致。
+        // 如果 DB 写入失败（异常抛出），内存不会被更新，避免重启后状态丢失。
+        BigDecimal snapshotBalance = balance.get();
+        if (snapshotBalance.compareTo(amount) < 0) {
+            throw new IllegalStateException("insufficient insurance fund balance for withdraw: "
+                    + "current=" + snapshotBalance + ", required=" + amount);
+        }
+        ledgerRepository.save(new InsuranceFundLedgerEntry(
+                "WITHDRAW", amount, snapshotBalance.subtract(amount), approver, reason));
+        // DB 写入成功后再原子更新内存（含余额检查，防止并发超额提现）
         BigDecimal newBalance = updateBalanceAtomically(current -> {
             if (current.compareTo(amount) < 0) {
                 throw new IllegalStateException("insufficient insurance fund balance for withdraw: "
@@ -149,8 +179,6 @@ public class DefaultInsuranceFund implements InsuranceFund {
             }
             return current.subtract(amount);
         });
-        ledgerRepository.save(new InsuranceFundLedgerEntry(
-                "WITHDRAW", amount, newBalance, approver, reason));
         log.warn("Withdrew {} from insurance fund by approver {} (reason: {}), new balance: {}",
                 amount, approver, reason, newBalance);
     }

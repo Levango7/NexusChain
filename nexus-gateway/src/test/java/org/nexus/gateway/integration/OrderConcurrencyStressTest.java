@@ -79,6 +79,7 @@ class OrderConcurrencyStressTest {
                             mId, 1000 + i, threadId, i);
                         MvcResult r = mockMvc.perform(post("/api/v1/orders")
                                 .header("X-NexusChain-ApiKey", key)
+                                .with(SignedRequests.sandbox())
                                 .contentType(MediaType.APPLICATION_JSON).content(body)).andReturn();
                         int status = r.getResponse().getStatus();
                         if (status == 201) created.incrementAndGet();

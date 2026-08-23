@@ -63,9 +63,9 @@ public class InitializeAccount {
                         initilize.setInitialize(false);
                         String s = JsonUtils.toJson(initilize);
                         byte[] b = s.getBytes();
-                        OutputStream os = new FileOutputStream(file);
-                        os.write(b);
-                        os.close();
+                        try (OutputStream os = new FileOutputStream(file)) {
+                            os.write(b);
+                        }
                     }
                 }
             }else{
@@ -79,9 +79,9 @@ public class InitializeAccount {
                         initilize.setInitialize(false);
                         String s = JsonUtils.toJson(initilize);
                         byte[] b = s.getBytes();
-                        OutputStream os = new FileOutputStream(file);
-                        os.write(b);
-                        os.close();
+                        try (OutputStream os = new FileOutputStream(file)) {
+                            os.write(b);
+                        }
                     }
                 }
             }

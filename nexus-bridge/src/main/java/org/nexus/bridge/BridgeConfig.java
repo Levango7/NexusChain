@@ -50,6 +50,17 @@ public class BridgeConfig {
     private String targetChainId;
 
     /**
+     * Mock 模式标志（B-20 修复）。
+     *
+     * <p>当 {@code true} 时，桥处理器在缺乏链上签名能力（credentials 为 null）时
+     * 允许使用合成交易哈希并记录 warn 日志；当 {@code false}（默认）时，
+     * 抛出 {@link BridgeException} 拒绝返回未真正上链的假哈希。</p>
+     *
+     * <p>仅用于本地开发/测试环境，生产环境必须为 {@code false}。</p>
+     */
+    private boolean mockMode = false;
+
+    /**
      * 默认构造函数。
      */
     public BridgeConfig() {
@@ -228,5 +239,23 @@ public class BridgeConfig {
      */
     public boolean exceedsDailyLimit(long amount, long dailyUsedToday) {
         return dailyUsedToday + amount > dailyLimit;
+    }
+
+    /**
+     * 查询桥是否处于 mock 模式（B-20 修复）。
+     *
+     * @return mock 模式返回 {@code true}，否则 {@code false}
+     */
+    public boolean isMockMode() {
+        return mockMode;
+    }
+
+    /**
+     * 设置 mock 模式标志。
+     *
+     * @param mockMode {@code true} 允许合成交易哈希（仅开发/测试）；{@code false} 抛异常
+     */
+    public void setMockMode(boolean mockMode) {
+        this.mockMode = mockMode;
     }
 }

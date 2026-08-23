@@ -48,6 +48,8 @@ public class KeystoreAction {
     private static final int saltLength = 32;
     private static final int ivLength = 16;
     private static final String defaultVersion = "1";
+    /** 读取 keystore 文件时的缓冲区大小（字节）。 */
+    private static final int KEYSTORE_READ_BUFFER_SIZE = 1024;
     private SecureRandom random;
 
 
@@ -141,70 +143,49 @@ public class KeystoreAction {
         cryptojson.put("cipherparams",cipherparamsjson.toString());
         ksjson.put("crypto", cryptojson.toString());
         String str = ksjson.toString();
-        FileWriter fw = new FileWriter(file.getAbsoluteFile());
-        BufferedWriter bw = new BufferedWriter(fw);
-        bw.write(str);
-        bw.close();
+        try (FileWriter fw = new FileWriter(file.getAbsoluteFile());
+             BufferedWriter bw = new BufferedWriter(fw)) {
+            bw.write(str);
+        }
     }
 
     /**
      * read Keystore By FileName
      */
     public static String readKeystoreByFileName(String password,String FileName) throws Exception{
-        Keystore ks = new Keystore();
-        String privateKey;
-        try{
-            String folderPath = System.getProperty("user.dir")+File.separator+"Keystore"+File.separator+FileName;
-            FileInputStream  file = null;
-            file= new FileInputStream(folderPath);
-            byte[] data = new byte[1024]; //数据存储的数组
-            int i = file.read(data);//对比上面代码中的 int n = fis.read();读取第一个字节的数据返回到n中
-
-            //解析数据
-            String str = new String(data,0,i);
-
-            JSONArray jsonarry = new JSONArray();
-             ks = KeystoreAction.unmarshal(str);
-
-            file.close();
-            privateKey =  Hex.encodeHexString(KeystoreAction.decrypt(ks,password));
-            }catch (FileNotFoundException e){
-                e.printStackTrace();
-                return "";
-            }catch (Exception e){
-                e.printStackTrace();
-                return "";
-            }
-            return privateKey;
+        String folderPath = System.getProperty("user.dir")+File.separator+"Keystore"+File.separator+FileName;
+        try (FileInputStream file = new FileInputStream(folderPath)) {
+            byte[] data = new byte[KEYSTORE_READ_BUFFER_SIZE];
+            int i = file.read(data);
+            String str = new String(data, 0, i);
+            Keystore ks = KeystoreAction.unmarshal(str);
+            return Hex.encodeHexString(KeystoreAction.decrypt(ks, password));
+        } catch (FileNotFoundException e) {
+            e.printStackTrace();
+            return "";
+        } catch (Exception e) {
+            e.printStackTrace();
+            return "";
+        }
     }
 
     /**
      * read Keystore By Path
      */
     public static String readKeystoreByPath(String password,String path){
-        Keystore ks = new Keystore();
-        String privateKey;
-        try {
-            String folderPath = path;
-            FileInputStream  file = null;
-            file= new FileInputStream(folderPath);
-            byte[] data = new byte[1024]; //数据存储的数组
-            int i = file.read(data);//对比上面代码中的 int n = fis.read();读取第一个字节的数据返回到n中
-
-            //解析数据
-            String str = new String(data,0,i);
-            ks = KeystoreAction.unmarshal(str);
-
-            file.close();
-            privateKey =  Hex.encodeHexString(KeystoreAction.decrypt(ks,password));
-        }catch (FileNotFoundException e){
+        try (FileInputStream file = new FileInputStream(path)) {
+            byte[] data = new byte[KEYSTORE_READ_BUFFER_SIZE];
+            int i = file.read(data);
+            String str = new String(data, 0, i);
+            Keystore ks = KeystoreAction.unmarshal(str);
+            return Hex.encodeHexString(KeystoreAction.decrypt(ks, password));
+        } catch (FileNotFoundException e) {
             e.printStackTrace();
             return "";
-        }catch (Exception e){
+        } catch (Exception e) {
             e.printStackTrace();
             return "";
         }
-        return privateKey;
     }
 
     public static boolean isAddress(String address){

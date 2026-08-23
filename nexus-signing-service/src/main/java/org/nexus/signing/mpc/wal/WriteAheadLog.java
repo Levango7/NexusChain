@@ -184,6 +184,7 @@ public class WriteAheadLog {
             byte[] bytes = java.util.Base64.getDecoder().decode(parts[3]);
             return new WalEntry(ts, messageId, committed, bytes);
         } catch (Exception e) {
+            log.warn("Failed to parse WAL entry: {}", java.util.Arrays.toString(parts), e);
             return null;
         }
     }

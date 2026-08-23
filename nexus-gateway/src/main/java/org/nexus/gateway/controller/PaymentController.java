@@ -11,8 +11,6 @@ import org.springframework.http.ResponseEntity;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.web.bind.annotation.*;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -23,6 +21,9 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 
+import org.nexus.gateway.security.MerchantOwnershipException;
+import org.nexus.gateway.security.MerchantOwnershipGuard;
+
 /**
  * REST API for order creation, payment, refund, and the cashier (checkout) redirect flow.
  */
@@ -31,25 +32,32 @@ import java.util.Optional;
 @Tag(name = "Payment", description = "Order creation, payment, refund, and checkout")
 public class PaymentController {
 
-    private static final Logger log = LoggerFactory.getLogger(PaymentController.class);
-
     private final OrderService orderService;
     private final PaymentService paymentService;
+    private final MerchantOwnershipGuard ownershipGuard;
 
-    public PaymentController(OrderService orderService, PaymentService paymentService) {
+    public PaymentController(OrderService orderService, PaymentService paymentService,
+                             MerchantOwnershipGuard ownershipGuard) {
         this.orderService = orderService;
         this.paymentService = paymentService;
+        this.ownershipGuard = ownershipGuard;
     }
 
     /**
      * Create a new payment order.
+     *
+     * <p>P0-4：订单归属以认证上下文为准，请求体中的 merchantId 被忽略并覆盖，
+     * 防止商户伪造他人身份创建订单。</p>
      *
      * @param request order creation request
      * @return created order entity (201)
      */
     @Operation(summary = "Create a new payment order")
     @PostMapping("/orders")
-    public ResponseEntity<PaymentOrder> createOrder(@Valid @RequestBody CreateOrderRequest request) {
+    public ResponseEntity<PaymentOrder> createOrder(@Valid @RequestBody CreateOrderRequest request,
+                                                    HttpServletRequest httpRequest) {
+        Long callerMerchantId = ownershipGuard.requireMerchantId(httpRequest);
+        request.setMerchantId(String.valueOf(callerMerchantId));
         PaymentOrder order = orderService.createOrder(request);
         return ResponseEntity.status(HttpStatus.CREATED).body(order);
     }
@@ -63,17 +71,10 @@ public class PaymentController {
     @Operation(summary = "Query an order by ID")
     @GetMapping("/orders/{id}")
     public ResponseEntity<PaymentOrder> getOrder(@PathVariable Long id, HttpServletRequest httpRequest) {
-        Optional<PaymentOrder> opt = orderService.findById(id);
-        if (opt.isEmpty()) {
-            return ResponseEntity.notFound().build();
-        }
-        PaymentOrder order = opt.get();
-        // P0-4 修复（v2.27.0）：商户归属校验，防止 IDOR
-        ResponseEntity<PaymentOrder> denial = verifyMerchantOwnership(order, httpRequest);
-        if (denial != null) {
-            return denial;
-        }
-        return ResponseEntity.ok(order);
+        requireOrderOwnership(id, httpRequest);
+        return orderService.findById(id)
+                .map(ResponseEntity::ok)
+                .orElse(ResponseEntity.notFound().build());
     }
 
     /**
@@ -87,15 +88,7 @@ public class PaymentController {
     @PostMapping("/orders/{id}/pay")
     public ResponseEntity<PaymentResult> pay(@PathVariable Long id, @RequestBody PayRequest request,
                                              HttpServletRequest httpRequest) {
-        // P0-4 修复（v2.27.0）：商户归属校验，防止 IDOR
-        Optional<PaymentOrder> opt = orderService.findById(id);
-        if (opt.isEmpty()) {
-            return ResponseEntity.notFound().build();
-        }
-        ResponseEntity<PaymentResult> denial = verifyMerchantOwnership(opt.get(), httpRequest);
-        if (denial != null) {
-            return denial;
-        }
+        requireOrderOwnership(id, httpRequest);
         PaymentResult result = paymentService.initiatePayment(id, request.getPayerAddress());
         return ResponseEntity.ok(result);
     }
@@ -111,15 +104,7 @@ public class PaymentController {
     @PostMapping("/orders/{id}/confirm")
     public ResponseEntity<PaymentResult> confirm(@PathVariable Long id, @RequestBody ConfirmRequest request,
                                                  HttpServletRequest httpRequest) {
-        // P0-4 修复（v2.27.0）：商户归属校验，防止 IDOR
-        Optional<PaymentOrder> opt = orderService.findById(id);
-        if (opt.isEmpty()) {
-            return ResponseEntity.notFound().build();
-        }
-        ResponseEntity<PaymentResult> denial = verifyMerchantOwnership(opt.get(), httpRequest);
-        if (denial != null) {
-            return denial;
-        }
+        requireOrderOwnership(id, httpRequest);
         PaymentResult result = paymentService.confirmPayment(id, request.getChainTxHash());
         return ResponseEntity.ok(result);
     }
@@ -135,15 +120,7 @@ public class PaymentController {
     @PostMapping("/orders/{id}/refund")
     public ResponseEntity<Refund> refund(@PathVariable Long id, @RequestBody RefundRequest request,
                                          HttpServletRequest httpRequest) {
-        // P0-4 修复（v2.27.0）：商户归属校验，防止 IDOR
-        Optional<PaymentOrder> opt = orderService.findById(id);
-        if (opt.isEmpty()) {
-            return ResponseEntity.notFound().build();
-        }
-        ResponseEntity<Refund> denial = verifyMerchantOwnership(opt.get(), httpRequest);
-        if (denial != null) {
-            return denial;
-        }
+        requireOrderOwnership(id, httpRequest);
         Refund refund = paymentService.refund(id, request.getAmount(), request.getReason());
         return ResponseEntity.status(HttpStatus.CREATED).body(refund);
     }
@@ -169,41 +146,21 @@ public class PaymentController {
     }
 
     /**
-     * P0-4 修复（v2.27.0）：商户归属校验，防止 IDOR（Insecure Direct Object Reference）。
+     * P0-4 修复：商户归属校验（fail-closed）。
      *
-     * <p>从 HTTP 请求属性 {@code nexus.merchantId} 提取当前认证商户 ID（由鉴权拦截器设置），
-     * 校验订单的 {@code merchantId} 与之一致。若请求属性未设置（无鉴权拦截器或匿名访问），
-     * 记录安全告警并放行（向后兼容；部署鉴权拦截器后自动启用 IDOR 防护）。</p>
+     * <p>从请求属性 {@code nexus.merchantId}（由 ApiKeyInterceptor 鉴权后设置）
+     * 取认证商户，校验订单归属。属性缺失、无法解析或不一致均拒绝访问——
+     * 不存在"无鉴权上下文则放行"的降级路径。校验失败抛出
+     * {@link MerchantOwnershipException}，由 GlobalExceptionHandler 映射为 403。</p>
      *
-     * @param order       待校验的订单
+     * @param orderId      目标订单 ID
      * @param httpRequest HTTP 请求
-     * @param <T>         响应体类型
-     * @return 校验失败时返回 403 响应；通过时返回 {@code null}（调用方继续正常流程）
      */
-    private <T> ResponseEntity<T> verifyMerchantOwnership(PaymentOrder order, HttpServletRequest httpRequest) {
-        Object merchantIdAttr = httpRequest.getAttribute("nexus.merchantId");
-        if (merchantIdAttr == null) {
-            // 无鉴权拦截器设置商户 ID，记录告警并放行（向后兼容）
-            log.warn("SECURITY: nexus.merchantId attribute not set on request; "
-                    + "IDOR protection is inactive for orderNo={}, orderId={}. "
-                    + "Deploy an auth filter that sets this attribute to enable protection.",
-                    order.getOrderNo(), order.getId());
-            return null;
-        }
-        Long requestMerchantId;
-        try {
-            requestMerchantId = Long.valueOf(merchantIdAttr.toString());
-        } catch (NumberFormatException e) {
-            log.error("Invalid nexus.merchantId attribute value: {}", merchantIdAttr);
-            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
-        }
-        if (!order.getMerchantId().equals(requestMerchantId)) {
-            log.warn("SECURITY: IDOR attempt blocked: requested orderId={}, orderMerchantId={}, "
-                    + "authenticatedMerchantId={}",
-                    order.getId(), order.getMerchantId(), requestMerchantId);
-            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
-        }
-        return null;
+    private void requireOrderOwnership(Long orderId, HttpServletRequest httpRequest) {
+        Long callerMerchantId = ownershipGuard.requireMerchantId(httpRequest);
+        PaymentOrder order = orderService.findById(orderId)
+                .orElseThrow(() -> new IllegalArgumentException("Order not found: " + orderId));
+        ownershipGuard.requireOwned(callerMerchantId, order.getMerchantId(), "order", orderId);
     }
 
     // --- Request DTOs ---

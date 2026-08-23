@@ -119,6 +119,10 @@ public class RequestSignatureInterceptor implements HandlerInterceptor {
     }
 
     private String readBody(HttpServletRequest request) throws IOException {
+        if (request instanceof RepeatableReadRequestWrapper w) {
+            // Body buffered up-front by CachedBodyFilter; re-readable by @RequestBody.
+            return w.getCachedBodyAsString();
+        }
         if (request instanceof ContentCachingRequestWrapper w) {
             // Reading the stream populates the wrapper's cache so the controller's
             // @RequestBody can still deserialize the same bytes afterwards.

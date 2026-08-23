@@ -14,6 +14,7 @@ import org.nexus.consensus.pow.EconomicModel;
 import org.nexus.consensus.pow.PackageMiner;
 import org.nexus.core.Block;
 import org.nexus.core.account.Transaction;
+import org.nexus.core.crypto.bls.BlsSigner;
 import org.nexus.core.NexusChainBlockChain;
 import org.nexus.core.validate.MerkleRule;
 import org.nexus.db.StateDB;
@@ -119,7 +120,8 @@ class FinalityChainOrchestrationTest {
 
         // 最终性层
         gadget = new FinalityGadget(validatorRegistry, stakingService);
-        coordinator = new FinalityCoordinator(gadget, validatorRegistry, EPOCH_LENGTH);
+        // B-17 修复后：注入 BlsSigner 才能投票
+        coordinator = new FinalityCoordinator(gadget, validatorRegistry, EPOCH_LENGTH, null, BlsSigner.generate());
         coordinator.setSelfValidatorAddress(selfAddress);
     }
 

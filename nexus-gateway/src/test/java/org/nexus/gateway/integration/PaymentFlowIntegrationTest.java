@@ -69,6 +69,7 @@ class PaymentFlowIntegrationTest {
         String body = "{\"merchantId\":\"" + merchantId + "\",\"amount\":500000,\"description\":\"Flow test order\",\"notifyUrl\":\"http://cb.test\"}";
         MvcResult result = mockMvc.perform(post("/api/v1/orders")
                 .header("X-NexusChain-ApiKey", apiKey)
+                .with(SignedRequests.sandbox())
                 .contentType(MediaType.APPLICATION_JSON).content(body))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.orderNo").exists())
@@ -96,6 +97,7 @@ class PaymentFlowIntegrationTest {
     void initiatePayment() throws Exception {
         mockMvc.perform(post("/api/v1/orders/" + orderId + "/pay")
                 .header("X-NexusChain-ApiKey", apiKey)
+                .with(SignedRequests.sandbox())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"payerAddress\":\"1PayerAddr000000000000000000000000000\"}"))
                 .andExpect(status().isOk())
@@ -108,6 +110,7 @@ class PaymentFlowIntegrationTest {
     void confirmPayment() throws Exception {
         mockMvc.perform(post("/api/v1/orders/" + orderId + "/confirm")
                 .header("X-NexusChain-ApiKey", apiKey)
+                .with(SignedRequests.sandbox())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"chainTxHash\":\"a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2\"}"))
                 .andExpect(status().isOk())

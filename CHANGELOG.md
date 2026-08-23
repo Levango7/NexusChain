@@ -119,7 +119,7 @@
 
 - **PRD.md API 路径差异说明**：在 `## 4. Core API Definition` 章节添加实现说明，解释 PRD 定义的编排 API `POST /api/v1/payments`（`PaymentOrchestrationController`）与生产主链路订单 API `POST /api/v1/orders`（`PaymentController`）的关系与差异，指引对接方以 `nexus-gateway/README.md` 为准。
 - **PRD.md F16/F17 标记更新**：F16 Analytics、F17 Price Oracle 由 `Experimental` 更新为 `Delivered`。依据 `ARCHITECTURE.md` 中 `nexus-analytics` / `nexus-oracle` 已标记为 `Active — 库（gateway 进程内消费）`，两模块已正式实现并接入 gateway 事件驱动链路。
-- **ARCHITECTURE.md 版本号核对**：确认 `## Security Hardening（v2.27.0）` 章节已存在（第三轮安全审计，10 个漏洞修复）。`## Security Hardening（v2.26.0）` 为历史章节（第 16 轮质量保证工作，内容与 v2.27.0 完全不同），保留作为历史记录。
+- **ARCHITECTURE.md 版本号核对**：确认 `## Security Hardening（v2.27.0）` 章节已存在（第三轮安全审计，10 个漏洞修复）。`## Security Hardening（v2.26.0）` 为历史章节（第 26 轮安全审计工作，内容与 v2.27.0 完全不同），保留作为历史记录。
 - **数据库迁移指南**：新建 `docs/migration-guide.md`，包含 v2.27.0 迁移步骤、V12 migration（`payment_orders.chain_tx_hash` 唯一约束 `uk_payment_orders_chain_tx_hash`）说明、迁移前预检 SQL、回滚步骤及全量迁移脚本清单（V1–V12）。
 - **settings.gradle 废弃 SDK 注释**：在 SDK 层添加注释，明确 `nexus-java-sdk`（已迁移至 `nexus-sdk`，目录已移除）与 `nexus-js-sdk`（已迁移至 `nexus-sdk/typescript`，目录保留且 README 已标记 DEPRECATED）均已废弃并排除出构建。
 

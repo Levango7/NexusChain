@@ -23,3 +23,6 @@ export type { ErrorBoundaryProps } from "./ErrorBoundary";
 
 export { Badge } from "./Badge";
 export type { BadgeProps, BadgeTone } from "./Badge";
+
+export { DetailPageLayout } from "./DetailPageLayout";
+export type { DetailPageLayoutProps } from "./DetailPageLayout";

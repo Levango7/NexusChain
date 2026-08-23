@@ -10,6 +10,7 @@ import org.nexus.consensus.pos.Validator;
 import org.nexus.consensus.pos.ValidatorRegistry;
 import org.nexus.consensus.pos.ValidatorStatus;
 import org.nexus.core.Block;
+import org.nexus.core.crypto.bls.BlsSigner;
 import org.nexus.core.event.NewBlockMinedEvent;
 import org.springframework.context.ApplicationEvent;
 import org.springframework.context.ApplicationEventPublisher;
@@ -75,7 +76,8 @@ class FinalityEndToEndIntegrationTest {
 
         publisher = new TestPublisher();
         gadget = new FinalityGadget(validatorRegistry, stakingService);
-        coordinator = new FinalityCoordinator(gadget, validatorRegistry, EPOCH_LENGTH);
+        // B-17 修复后：注入 BlsSigner 才能投票
+        coordinator = new FinalityCoordinator(gadget, validatorRegistry, EPOCH_LENGTH, null, BlsSigner.generate());
         broadcaster = new FinalityVoteBroadcaster(gadget, publisher);
 
         // 注入 slash 联动（M4：双签检测后自动罚没）
@@ -103,7 +105,7 @@ class FinalityEndToEndIntegrationTest {
 
     /** 让 v1 作为本节点（由 coordinator 驱动）产生一次投票 */
     private void makeCoordinator(String selfAddr) {
-        coordinator = new FinalityCoordinator(gadget, validatorRegistry, EPOCH_LENGTH);
+        coordinator = new FinalityCoordinator(gadget, validatorRegistry, EPOCH_LENGTH, null, BlsSigner.generate());
         coordinator.setSelfValidatorAddress(selfAddr);
     }
 

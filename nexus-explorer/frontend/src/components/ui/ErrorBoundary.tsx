@@ -1,11 +1,16 @@
 import React from "react";
 import { AlertTriangle, RefreshCw } from "lucide-react";
+import i18n from "../../i18n";
 
 /**
  * ErrorBoundary — React 错误边界。
  *
  * 捕获子树渲染期 / 生命周期内的同步错误，展示统一 fallback UI，
  * 避免整页白屏。异步错误（fetch / event handler）需调用方自行 try/catch。
+ *
+ * P2: 硬编码中文文案提取到 i18n（common.pageError / common.unknownError / common.retry）。
+ *     ErrorBoundary 是 class component，无法使用 useTranslation hook，
+ *     改用 i18n.t 直接读取当前语言文案。
  */
 export interface ErrorBoundaryProps {
   children?: React.ReactNode;
@@ -55,17 +60,20 @@ export class ErrorBoundary extends React.Component<
           strokeWidth={1.5}
           className="mb-3 text-warn opacity-80"
         />
-        <p className="text-sm font-medium text-fg mb-1">页面渲染出错</p>
+        <p className="text-sm font-medium text-fg mb-1">
+          {i18n.t("common.pageError")}
+        </p>
         <p className="text-xs text-muted mb-4 max-w-md break-all">
-          {error.message || "未知错误"}
+          {error.message || i18n.t("common.unknownError")}
         </p>
         <button
           type="button"
           onClick={this.reset}
+          aria-label={i18n.t("common.retry")}
           className="inline-flex items-center gap-1.5 h-8 px-3 text-xs font-medium bg-surface border border-border rounded-md text-fg-2 hover:border-accent hover:text-accent transition-colors duration-base ease-standard focus:outline-none focus-visible:shadow-focus"
         >
           <RefreshCw size={14} />
-          重试
+          {i18n.t("common.retry")}
         </button>
       </div>
     );

@@ -614,7 +614,7 @@ public class DefaultMpcService implements MpcService {
                     walletId, signature != null);
             return signature;
         } catch (Exception e) {
-            log.error("signTransaction failed for wallet={}: {}", walletId, e.getMessage());
+            log.error("signTransaction failed for wallet={}: {}", walletId, e.getMessage(), e);
             return null;
         }
     }

@@ -252,8 +252,7 @@ public class PeerServer extends NexusChainGrpc.NexusChainImplBase {
                 return gRPCClient.buildMessage(1, ctx.response);
             }
         } catch (Exception e) {
-            e.printStackTrace();
-            logger.error("fail to parse message");
+            logger.error("fail to parse message", e);
         }
         return gRPCClient.buildMessage(1, NOTHING);
     }

@@ -150,7 +150,11 @@ public class PaymentTransactionProcessor {
             logger.info("CHANNEL_UPDATE: updated channel={} balance1={} balance2={} nonce={} at height={}",
                     channelId, balance1, balance2, newNonce, blockHeight);
         } catch (RuntimeException e) {
-            logger.warn("CHANNEL_UPDATE: failed to update channel={}: {}", channelId, e.getMessage());
+            // B-02 修复：不再吞掉异常静默继续；记录 error 日志并将异常向上抛出，
+            // 由 processTransaction 主 catch 统一标记交易处理失败。
+            logger.error("CHANNEL_UPDATE: failed to update channel={} at height={}: {}",
+                    channelId, blockHeight, e.getMessage(), e);
+            throw e;
         }
     }
 
@@ -177,7 +181,11 @@ public class PaymentTransactionProcessor {
             channel.close(blockHeight);
             logger.info("CHANNEL_CLOSE: settled channel={} at height={}", channelId, blockHeight);
         } catch (RuntimeException e) {
-            logger.warn("CHANNEL_CLOSE: failed to close channel={}: {}", channelId, e.getMessage());
+            // B-02 修复：不再吞掉异常静默继续；记录 error 日志并将异常向上抛出，
+            // 由 processTransaction 主 catch 统一标记交易处理失败。
+            logger.error("CHANNEL_CLOSE: failed to close channel={} at height={}: {}",
+                    channelId, blockHeight, e.getMessage(), e);
+            throw e;
         }
     }
 
@@ -241,7 +249,11 @@ public class PaymentTransactionProcessor {
             logger.info("MINT_STABLECOIN: minted {} with collateral {} at height={}, position={}",
                     tx.amount, collateral, blockHeight, positionId);
         } catch (RuntimeException e) {
-            logger.warn("MINT_STABLECOIN: failed to mint position={}: {}", positionId, e.getMessage());
+            // B-02 修复：不再吞掉异常静默继续；记录 error 日志并将异常向上抛出，
+            // 由 processTransaction 主 catch 统一标记交易处理失败。
+            logger.error("MINT_STABLECOIN: failed to mint position={} at height={}: {}",
+                    positionId, blockHeight, e.getMessage(), e);
+            throw e;
         }
     }
 
@@ -265,7 +277,11 @@ public class PaymentTransactionProcessor {
             logger.info("REDEEM_STABLECOIN: redeemed {} at height={}, position={}",
                     tx.amount, blockHeight, positionId);
         } catch (RuntimeException e) {
-            logger.warn("REDEEM_STABLECOIN: failed to redeem position={}: {}", positionId, e.getMessage());
+            // B-02 修复：不再吞掉异常静默继续；记录 error 日志并将异常向上抛出，
+            // 由 processTransaction 主 catch 统一标记交易处理失败。
+            logger.error("REDEEM_STABLECOIN: failed to redeem position={} at height={}: {}",
+                    positionId, blockHeight, e.getMessage(), e);
+            throw e;
         }
     }
 
@@ -297,7 +313,12 @@ public class PaymentTransactionProcessor {
             logger.info("BRIDGE_LOCK: locked {} to {} recipient={} at height={}, bridgeTx={}",
                     tx.amount, targetChain, recipient, blockHeight, bridgeTxId);
         } catch (RuntimeException e) {
-            logger.warn("BRIDGE_LOCK: failed to lock bridgeTx={}: {}", bridgeTxId, e.getMessage());
+            // B-02 修复：不再吞掉异常静默继续；记录 error 日志，
+            // 将桥交易标记为 FAILED 并持久化，避免区块状态与桥交易状态不一致。
+            logger.error("BRIDGE_LOCK: failed to lock bridgeTx={} at height={}: {}",
+                    bridgeTxId, blockHeight, e.getMessage(), e);
+            bridgeTx.setState(BridgeTransaction.State.FAILED);
+            stateStore.putBridgeTx(bridgeTxId, bridgeTx);
         }
     }
 
@@ -343,7 +364,12 @@ public class PaymentTransactionProcessor {
             logger.info("BRIDGE_BURN: burned {} at height={}, bridgeTx={}",
                     tx.amount, blockHeight, bridgeTxId);
         } catch (RuntimeException e) {
-            logger.warn("BRIDGE_BURN: failed to burn bridgeTx={}: {}", bridgeTxId, e.getMessage());
+            // B-02 修复：不再吞掉异常静默继续；记录 error 日志，
+            // 将桥交易标记为 FAILED 并持久化，避免区块状态与桥交易状态不一致。
+            logger.error("BRIDGE_BURN: failed to burn bridgeTx={} at height={}: {}",
+                    bridgeTxId, blockHeight, e.getMessage(), e);
+            bridgeTx.setState(BridgeTransaction.State.FAILED);
+            stateStore.putBridgeTx(bridgeTxId, bridgeTx);
         }
     }
 

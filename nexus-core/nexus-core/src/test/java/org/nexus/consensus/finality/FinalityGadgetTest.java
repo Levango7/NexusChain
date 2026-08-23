@@ -37,6 +37,22 @@ class FinalityGadgetTest {
         addValidator("v2", 300);
         addValidator("v3", 300);
         gadget = new FinalityGadget(registry, staking);
+        // B-18 修复后：默认 CollectingAggregator 对无公钥投票 fail-closed。
+        // 本测试套件聚焦权重累积/最终化/双签逻辑，注入恒通过聚合器隔离签名验证。
+        gadget.setSignatureAggregator(new SignatureAggregator() {
+            @Override
+            public AggregatedSignature aggregate(java.util.List<Vote> votes) {
+                final int count = votes == null ? 0 : votes.size();
+                return new AggregatedSignature() {
+                    @Override public byte[] compressed() { return new byte[0]; }
+                    @Override public int signerCount() { return count; }
+                };
+            }
+            @Override
+            public boolean verifyAggregate(java.util.List<Vote> votes, AggregatedSignature aggregated) {
+                return true; // 权重逻辑测试：恒通过验签
+            }
+        });
     }
 
     private void addValidator(String addr, int stake) {

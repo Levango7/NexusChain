@@ -26,8 +26,9 @@ import java.util.UUID;
  *       → 退款窗口未过期 → 落库 PENDING</li>
  *   <li>{@link #approveRefund}：校验 PENDING → 置 APPROVED 并记录审批人与时间</li>
  *   <li>{@link #rejectRefund}：校验 PENDING → 置 REJECTED 并记录拒绝原因</li>
- *   <li>{@link #executeRefund}：校验 APPROVED → 触发链上退款 → 成功置 EXECUTED
- *       带交易哈希，失败置 FAILED</li>
+ *   <li>{@link #executeRefund}：CAS 认领 APPROVED → EXECUTING（防并发重复打款）→
+ *       触发链上退款 → 成功置 EXECUTED 带交易哈希并将订单迁移至 REFUNDED，
+ *       失败置 FAILED</li>
  * </ul>
  *
  * <p><b>链上退款执行已接入：</b>{@link #executeOnChain} 通过
@@ -167,11 +168,17 @@ public class DefaultRefundApprovalService implements RefundApprovalService {
         if (refundId == null) {
             throw new IllegalArgumentException("refundId is required");
         }
-        RefundRequest request = refundRequestRepository.findById(refundId)
-                .orElseThrow(() -> new IllegalArgumentException("refund request not found: " + refundId));
-        if (request.getStatus() != RefundRequest.RefundStatus.APPROVED) {
-            throw new IllegalStateException("refund is not approved: status=" + request.getStatus());
+        // P0 修复：CAS 认领执行权。仅当退款单仍为 APPROVED 时原子置为 EXECUTING；
+        // 并发调用或重复执行在此处被拒绝，不会再触发第二次不可逆的链上打款。
+        int claimed = refundRequestRepository.claimForExecution(refundId, LocalDateTime.now());
+        if (claimed == 0) {
+            throw new IllegalStateException(
+                    "refund is not claimable for execution (not approved or already executing/executed): id="
+                            + refundId);
         }
+        RefundRequest request = refundRequestRepository.findById(refundId)
+                .orElseThrow(() -> new IllegalStateException(
+                        "refund request disappeared after claim: " + refundId));
 
         try {
             String txHash = executeOnChain(request);
@@ -194,6 +201,14 @@ public class DefaultRefundApprovalService implements RefundApprovalService {
             log.error("Refund execution failed: refundId={}", refundId, e);
         }
         return refundRequestRepository.save(request);
+    }
+
+    @Override
+    public RefundRequest getRefund(Long refundId) {
+        if (refundId == null) {
+            throw new IllegalArgumentException("refundId is required");
+        }
+        return refundRequestRepository.findById(refundId).orElse(null);
     }
 
     /**

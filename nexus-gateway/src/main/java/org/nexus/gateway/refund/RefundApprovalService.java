@@ -48,4 +48,12 @@ public interface RefundApprovalService {
      * @return the updated refund request in EXECUTED (or FAILED) status
      */
     RefundRequest executeRefund(Long refundId);
+
+    /**
+     * Look up a refund request by id (read-only; used for ownership checks).
+     *
+     * @param refundId refund request ID
+     * @return the refund request if found
+     */
+    RefundRequest getRefund(Long refundId);
 }

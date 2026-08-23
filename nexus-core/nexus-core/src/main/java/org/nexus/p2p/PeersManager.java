@@ -66,7 +66,7 @@ public class PeersManager implements Plugin {
                 server.pend(pr);
             }
         } catch (Exception e) {
-            logger.error("parse peer fail");
+            logger.error("parse peer fail", e);
         }
     }
 

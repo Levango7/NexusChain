@@ -217,8 +217,14 @@ public class BridgeSagaCoordinator {
             log.info("Saga {} compensation recorded: lockTx={} will be unlocked by reconciliation",
                     saga.getId(), lockTx.getTxId());
         } catch (RuntimeException | JsonProcessingException e) {
-            log.error("Saga {} failed to persist compensation: {}", saga.getId(), e.getMessage(), e);
-            // 补偿记录失败不应吞掉原始失败原因，仅记录
+            // B-06 修复：补偿记录失败时不再吞掉异常，而是标记 saga 为 FAILED（需人工介入）。
+            // 若吞掉异常，补偿记录丢失，lockTx 将永久锁定，用户资金无法恢复。
+            log.error("Saga {} failed to persist compensation, marking as FAILED for manual intervention: {}",
+                    saga.getId(), e.getMessage(), e);
+            saga.setState(SagaState.FAILED);
+            saga.setLastError(truncate("Compensation persistence failed: " + e.getMessage()));
+            saga.setUpdatedAt(Instant.now());
+            sagaRepository.save(saga);
         }
     }
 
@@ -324,7 +330,14 @@ public class BridgeSagaCoordinator {
             log.info("Saga {} compensation recorded: burnTx={} will be retried by reconciliation",
                     saga.getId(), burnTx.getTxId());
         } catch (RuntimeException | JsonProcessingException e) {
-            log.error("Saga {} failed to persist compensation: {}", saga.getId(), e.getMessage(), e);
+            // B-06 修复：补偿记录失败时不再吞掉异常，而是标记 saga 为 FAILED（需人工介入）。
+            // 若吞掉异常，补偿记录丢失，unlock 重试上下文丢失，用户资金永久锁定。
+            log.error("Saga {} failed to persist compensation, marking as FAILED for manual intervention: {}",
+                    saga.getId(), e.getMessage(), e);
+            saga.setState(SagaState.FAILED);
+            saga.setLastError(truncate("Compensation persistence failed: " + e.getMessage()));
+            saga.setUpdatedAt(Instant.now());
+            sagaRepository.save(saga);
         }
     }
 
@@ -382,6 +395,9 @@ public class BridgeSagaCoordinator {
     /**
      * 重试单个 Saga（仅 BURN_UNLOCK 的 unlock 步骤可重试）。
      *
+     * <p>B-05 修复：实际重新执行失败的 unlock 操作，而不是仅记录重试次数。
+     * 若不真正重试，用户资金将永久锁定在 burn 状态。</p>
+     *
      * @param saga 待重试 Saga
      */
     private void retryOne(SagaInstance saga) {
@@ -390,12 +406,68 @@ public class BridgeSagaCoordinator {
         sagaRepository.save(saga);
 
         if (SAGA_BURN_UNLOCK.equals(saga.getSagaType())) {
-            // 解析 payload 中的 compensation，重新构造 unlockRequest
-            // 简化实现：仅记录重试次数，实际 unlock 由人工 / 外部对账执行
-            log.info("Saga {} retry attempt {}/{} (BURN_UNLOCK unlock pending)",
-                    saga.getId(), saga.getRetryCount(), saga.getMaxRetries());
+            // B-05 修复：从 payload 解析 compensation 上下文，重新构造 unlockRequest
+            // 并实际调用 bridgeService.unlock()，而不是仅记录日志。
+            retryBurnUnlock(saga);
         }
-        // LOCK_MINT 的补偿是记录式，无需自动重试
+        // LOCK_MINT 的补偿是记录式（unlock 需要人工对账），无需自动重试
+    }
+
+    /**
+     * 重试 BURN_UNLOCK saga 的 unlock 步骤。
+     *
+     * <p>从 Saga payload 中解析补偿上下文（burnTxId / unlockerAddress / sourceChainId），
+     * 重新构造 {@link UnlockRequest} 并调用 {@link BridgeService#unlock(UnlockRequest)}。
+     * 若 unlock 成功，Saga 标记为 COMPLETED；若失败，异常向上抛出由 {@link #retryFailedSagas()}
+     * 的 catch 统一处理。</p>
+     *
+     * @param saga 待重试的 BURN_UNLOCK Saga
+     */
+    private void retryBurnUnlock(SagaInstance saga) {
+        String payloadJson = saga.getPayload();
+        if (payloadJson == null || payloadJson.isEmpty()) {
+            log.warn("Saga {} retry: no payload to reconstruct unlock request", saga.getId());
+            return;
+        }
+        try {
+            Map<String, Object> payload = objectMapper.readValue(payloadJson,
+                    new TypeReference<Map<String, Object>>() {});
+            Object compObj = payload.get("compensation");
+            if (!(compObj instanceof Map)) {
+                log.warn("Saga {} retry: no compensation in payload", saga.getId());
+                return;
+            }
+            @SuppressWarnings("unchecked")
+            Map<String, Object> compensation = (Map<String, Object>) compObj;
+            String burnTxId = (String) compensation.get("burnTxId");
+            String unlockerAddress = (String) compensation.get("unlockerAddress");
+            String sourceChainId = (String) compensation.get("sourceChainId");
+
+            UnlockRequest unlockRequest = new UnlockRequest();
+            unlockRequest.setBurnTxId(burnTxId);
+            unlockRequest.setUnlockerAddress(unlockerAddress);
+            unlockRequest.setSourceChainId(sourceChainId);
+            unlockRequest.setTimestamp(System.currentTimeMillis());
+
+            log.info("Saga {} retry attempt {}/{}: re-executing unlock for burnTx={}",
+                    saga.getId(), saga.getRetryCount(), saga.getMaxRetries(), burnTxId);
+            BridgeTransaction unlockTx = bridgeService.unlock(unlockRequest);
+
+            // unlock 成功，标记 saga 为 COMPLETED
+            saga.setState(SagaState.COMPLETED);
+            saga.setUpdatedAt(Instant.now());
+            sagaRepository.save(saga);
+            log.info("Saga {} retry succeeded: unlockTx={}, status={}",
+                    saga.getId(), unlockTx.getTxId(), unlockTx.getStatus());
+        } catch (JsonProcessingException e) {
+            log.warn("Saga {} retry attempt {}/{} failed to parse payload: {}",
+                    saga.getId(), saga.getRetryCount(), saga.getMaxRetries(), e.getMessage(), e);
+            saga.setLastError(truncate("Payload parse failed: " + e.getMessage()));
+            saga.setUpdatedAt(Instant.now());
+            sagaRepository.save(saga);
+            throw new RuntimeException("Failed to retry saga " + saga.getId(), e);
+        }
+        // RuntimeException 由 retryFailedSagas 的 catch 统一处理
     }
 
     /**

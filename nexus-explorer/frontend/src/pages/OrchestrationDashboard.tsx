@@ -162,17 +162,17 @@ const OrchestrationDashboard: React.FC = () => {
             </span>
           </div>
           <div className="flex gap-1">
-            {(["payments", "connectors", "rules"] as const).map((t) => (
+            {(["payments", "connectors", "rules"] as const).map((tabName) => (
               <button
-                key={t}
-                onClick={() => setTab(t)}
+                key={tabName}
+                onClick={() => setTab(tabName)}
                 className={`px-3 py-1.5 rounded-sm text-xs font-medium transition-colors duration-base ease-standard focus:outline-none focus-visible:shadow-focus ${
-                  tab === t
+                  tab === tabName
                     ? "bg-accent text-accent-on"
                     : "text-fg-2 hover:text-fg hover:bg-accent-soft"
                 }`}
               >
-                {t.charAt(0).toUpperCase() + t.slice(1)}
+                {tabName.charAt(0).toUpperCase() + tabName.slice(1)}
               </button>
             ))}
           </div>

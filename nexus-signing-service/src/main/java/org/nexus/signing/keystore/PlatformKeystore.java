@@ -46,7 +46,7 @@ public class PlatformKeystore {
             try {
                 json = new String(Files.readAllBytes(Paths.get(keystoreJson)));
             } catch (Exception e) {
-                log.error("Failed to read platform keystore file: {}", e.getMessage());
+                log.error("Failed to read platform keystore file: {}", e.getMessage(), e);
                 return;
             }
         }
@@ -55,7 +55,7 @@ public class PlatformKeystore {
             this.pubkey = WalletUtils.keystoreToPubkey(json, keystorePassword);
             log.info("Platform keystore loaded; pubkey present={}", pubkey != null);
         } catch (Exception e) {
-            log.error("Failed to load platform keystore: {}", e.getMessage());
+            log.error("Failed to load platform keystore: {}", e.getMessage(), e);
         }
     }
 

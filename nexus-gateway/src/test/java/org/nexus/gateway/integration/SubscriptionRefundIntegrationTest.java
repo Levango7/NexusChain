@@ -129,6 +129,7 @@ class SubscriptionRefundIntegrationTest {
         // Create order
         MvcResult orderRes = mockMvc.perform(post("/api/v1/orders")
                 .header("X-NexusChain-ApiKey", apiKey)
+                .with(SignedRequests.sandbox())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"merchantId\":\"" + merchantId + "\",\"amount\":50000,\"description\":\"Refund test order\",\"notifyUrl\":\"http://localhost:9999/cb\"}"))
                 .andExpect(status().isCreated())
@@ -138,6 +139,7 @@ class SubscriptionRefundIntegrationTest {
         // Pay the order
         mockMvc.perform(post("/api/v1/orders/" + orderId + "/pay")
                 .header("X-NexusChain-ApiKey", apiKey)
+                .with(SignedRequests.sandbox())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"payerAddress\":\"1PayerAddr000000000000000000000000000\"}"))
                 .andExpect(status().isOk());
@@ -145,6 +147,7 @@ class SubscriptionRefundIntegrationTest {
         // Confirm payment
         mockMvc.perform(post("/api/v1/orders/" + orderId + "/confirm")
                 .header("X-NexusChain-ApiKey", apiKey)
+                .with(SignedRequests.sandbox())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"chainTxHash\":\"abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890\"}"))
                 .andExpect(status().isOk())
@@ -153,6 +156,7 @@ class SubscriptionRefundIntegrationTest {
         // Refund
         mockMvc.perform(post("/api/v1/orders/" + orderId + "/refund")
                 .header("X-NexusChain-ApiKey", apiKey)
+                .with(SignedRequests.sandbox())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"amount\":50000,\"reason\":\"Customer request\"}"))
                 .andExpect(status().isCreated());

@@ -1,9 +1,16 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { ArrowLeft, Eye, EyeOff, CheckCircle2, AlertCircle, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useAuth } from "../auth/useAuth";
 import { Button, Card } from "../components/ui";
+
+/**
+ * Secret 视觉掩码：仅用于在输入框中遮蔽已存在的 secret，不参与逻辑判断。
+ * 是否为占位符状态由独立的 boolean state `secretIsPlaceholder` 跟踪，
+ * 避免旧实现中用户输入相同字符串 "••••••••••••••••" 被误判为占位符的碰撞问题。
+ */
+const SECRET_MASK = "••••••••••••••••";
 
 /**
  * Settings — 用户凭证配置页面（P2-D3 UI 认证闭环）。
@@ -25,11 +32,13 @@ import { Button, Card } from "../components/ui";
  */
 const Settings: React.FC = () => {
   const { t } = useTranslation();
-  const navigate = useNavigate();
+
   const { apiKey, apiSecret, isAuthenticated, setCredentials, clearCredentials } = useAuth();
 
   const [keyInput, setKeyInput] = useState<string>("");
   const [secretInput, setSecretInput] = useState<string>("");
+  // 独立跟踪 secret 输入框当前是否为占位符状态，避免字符串碰撞
+  const [secretIsPlaceholder, setSecretIsPlaceholder] = useState<boolean>(false);
   const [showSecret, setShowSecret] = useState<boolean>(false);
   const [saved, setSaved] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
@@ -37,8 +46,9 @@ const Settings: React.FC = () => {
   // 初始化输入框：显示当前已存储的凭证（apiKey 明文，secret 用占位符）
   useEffect(() => {
     setKeyInput(apiKey);
-    // 已认证时 secret 用占位符，避免明文显示；用户重新输入才会更新
-    setSecretInput(apiSecret ? "••••••••••••••••" : "");
+    // 已认证时 secret 用掩码占位，避免明文显示；用户重新输入才会更新
+    setSecretInput(apiSecret ? SECRET_MASK : "");
+    setSecretIsPlaceholder(!!apiSecret);
   }, [apiKey, apiSecret]);
 
   const handleSave = useCallback(
@@ -48,9 +58,8 @@ const Settings: React.FC = () => {
       setSaved(false);
 
       const trimmedKey = keyInput.trim();
-      // secret 若仍是占位符，则保留原值
-      const isPlaceholder = secretInput === "••••••••••••••••";
-      const finalSecret = isPlaceholder ? apiSecret : secretInput.trim();
+      // secret 若仍是占位符状态，则保留原值；否则取用户输入
+      const finalSecret = secretIsPlaceholder ? apiSecret : secretInput.trim();
 
       if (!trimmedKey) {
         setError(t("settings.errKeyEmpty"));
@@ -78,23 +87,25 @@ const Settings: React.FC = () => {
         setError(err instanceof Error ? err.message : t("settings.errSaveFailed"));
       }
     },
-    [keyInput, secretInput, apiSecret, setCredentials],
+    [keyInput, secretInput, secretIsPlaceholder, apiSecret, setCredentials, t],
   );
 
   const handleClear = useCallback(() => {
     clearCredentials();
     setKeyInput("");
     setSecretInput("");
+    setSecretIsPlaceholder(false);
     setSaved(false);
     setError(null);
   }, [clearCredentials]);
 
   const handleSecretFocus = useCallback(() => {
-    // 用户聚焦 secret 输入框时，若是占位符则清空等待重新输入
-    if (secretInput === "••••••••••••••••") {
+    // 用户聚焦 secret 输入框时，若处于占位符状态则清空等待重新输入
+    if (secretIsPlaceholder) {
       setSecretInput("");
+      setSecretIsPlaceholder(false);
     }
-  }, [secretInput]);
+  }, [secretIsPlaceholder]);
 
   return (
     <div className="min-h-screen bg-bg text-fg">
@@ -187,7 +198,11 @@ const Settings: React.FC = () => {
                   id="api-secret"
                   type={showSecret ? "text" : "password"}
                   value={secretInput}
-                  onChange={(e) => setSecretInput(e.target.value)}
+                  onChange={(e) => {
+                    setSecretInput(e.target.value);
+                    // 用户手动输入后，不再处于占位符状态
+                    setSecretIsPlaceholder(false);
+                  }}
                   onFocus={handleSecretFocus}
                   placeholder={t("settings.apiSecretPlaceholder")}
                   autoComplete="off"

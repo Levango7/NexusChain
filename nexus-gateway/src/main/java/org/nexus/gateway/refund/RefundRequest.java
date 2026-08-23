@@ -90,7 +90,10 @@ public class RefundRequest {
     // --- Enumerations ---
 
     public enum RefundStatus {
-        PENDING, APPROVED, REJECTED, EXECUTED, FAILED
+        PENDING, APPROVED, REJECTED,
+        /** 已原子认领、链上执行中（CAS 防并发重复打款，见 DefaultRefundApprovalService#executeRefund） */
+        EXECUTING,
+        EXECUTED, FAILED
     }
 
     // --- Getters and Setters ---

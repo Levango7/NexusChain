@@ -22,6 +22,7 @@ import org.nexus.core.account.Transaction;
 import org.springframework.stereotype.Component;
 
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
@@ -30,7 +31,9 @@ public class TransactionPool {
     public static class TransactionComparator implements Comparator<Transaction> {
         @Override
         public int compare(Transaction o1, Transaction o2) {
-            return (int) (o2.getFee() - o1.getFee());
+            // B-12 修复：使用 Long.compare 替代 (int)(long - long) 强转，
+            // 避免高并发下 fee 差值超过 Integer.MAX_VALUE 时的 int 溢出导致排序错乱。
+            return Long.compare(o2.getFee(), o1.getFee());
         }
     }
 
@@ -42,7 +45,9 @@ public class TransactionPool {
 
     public TransactionPool() {
         this.pq = new PriorityQueue<>(1000, new TransactionComparator());
-        this.indices = new HashSet<>();
+        // B-13 修复：使用 ConcurrentHashMap.newKeySet() 替代 HashSet，
+        // 保证 has() 等无锁读操作在并发访问下的线程安全。
+        this.indices = ConcurrentHashMap.newKeySet();
         this.lock = new ReentrantReadWriteLock();
     }
 

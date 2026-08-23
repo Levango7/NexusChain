@@ -179,7 +179,7 @@ public class Fifo implements ApplicationRunner, ApplicationListener<Fifo.FifoMes
             writer.write(result);
             writer.flush();
         } catch (Exception e) {
-            e.printStackTrace();
+            logger.error("Failed to handle fifo message: {}", event.message, e);
         }
     }
 

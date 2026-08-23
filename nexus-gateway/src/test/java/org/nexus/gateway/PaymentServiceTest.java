@@ -142,20 +142,24 @@ class PaymentServiceTest {
         sampleOrder.setStatus(PaymentOrder.OrderStatus.PAYING);
         when(orderRepository.findById(1L)).thenReturn(Optional.of(sampleOrder));
         when(orderRepository.save(any())).thenReturn(sampleOrder);
-        when(chainRpcClient.isTransactionConfirmed("0xTxHash")).thenReturn(true);
+        // P0-5 绑定校验要求哈希长度 >=16；链节点不返回交易详情时降级为长度+唯一性校验
+        String txHash = "0xTxHash000000000000000000000000000000000000000000000000";
+        when(chainRpcClient.isTransactionConfirmed(txHash)).thenReturn(true);
+        when(orderRepository.findByChainTxHash(txHash)).thenReturn(Optional.empty());
+        when(chainRpcClient.getTransaction(txHash)).thenReturn(null);
 
-        PaymentResult result = paymentService.confirmPayment(1L, "0xTxHash");
+        PaymentResult result = paymentService.confirmPayment(1L, txHash);
 
         assertEquals("PAID", result.getStatus());
-        assertEquals("0xTxHash", result.getChainTxHash());
+        assertEquals(txHash, result.getChainTxHash());
         assertEquals(PaymentOrder.OrderStatus.PAID, sampleOrder.getStatus());
-        assertEquals("0xTxHash", sampleOrder.getChainTxHash());
+        assertEquals(txHash, sampleOrder.getChainTxHash());
 
         // 支付确认后发布两个事件：PaymentConfirmedEvent（webhook）+ PaymentCompletedEvent（analytics 采集）
         verify(eventPublisher, times(2)).publishEvent(any());
         verify(eventPublisher, times(1)).publishEvent(argThat(
                 e -> e instanceof PaymentConfirmedEvent
-                        && "0xTxHash".equals(((PaymentConfirmedEvent) e).getChainTxHash())));
+                        && txHash.equals(((PaymentConfirmedEvent) e).getChainTxHash())));
     }
 
     @Test

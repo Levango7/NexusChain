@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useMemo, useState } from "react";
+import React, { createContext, useCallback, useMemo, useRef, useState } from "react";
 
 /**
  * localStorage keys persisting the merchant API credentials.
@@ -48,9 +48,12 @@ function obfuscate(value: string): string {
       value.charCodeAt(i) ^ OBFUSCATION_KEY.charCodeAt(i % OBFUSCATION_KEY.length),
     );
   }
-  // btoa 在浏览器环境可用；SSR/测试环境降级为原值
+  // btoa 仅支持 Latin1 范围字符；XOR 后可能产生非 ASCII 字符，直接 btoa 会抛
+  // "InvalidCharacterError: The string to be encoded contains characters outside of the Latin1 range."
+  // 使用 unescape(encodeURIComponent(...)) 将 UTF-8 字节序列转为 Latin1 字符串后再 base64。
+  // SSR/测试环境无 btoa 时降级为原值。
   try {
-    return btoa(out);
+    return btoa(unescape(encodeURIComponent(out)));
   } catch {
     return out;
   }
@@ -60,9 +63,9 @@ function deobfuscate(stored: string): string {
   if (!stored) return "";
   let raw = stored;
   try {
-    raw = atob(stored);
+    raw = decodeURIComponent(escape(atob(stored)));
   } catch {
-    // 非 base64，按原值处理（兼容旧明文存储）
+    // 非 base64 或解码失败，按原值处理（兼容旧明文/旧编码存储）
     raw = stored;
   }
   let out = "";
@@ -113,9 +116,14 @@ export interface AuthProviderProps {
 }
 
 export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
-  const initial = resolveInitialCredentials();
-  const [apiKey, setApiKey] = useState<string>(initial.apiKey);
-  const [apiSecret, setApiSecret] = useState<string>(initial.apiSecret);
+  // 使用 useRef + useState lazy initializer，确保 resolveInitialCredentials() 仅在首次挂载时
+  // 执行一次，避免每次渲染都调用 localStorage.getItem（旧实现在函数体中直接调用）。
+  const initialRef = useRef<{ apiKey: string; apiSecret: string } | null>(null);
+  if (initialRef.current === null) {
+    initialRef.current = resolveInitialCredentials();
+  }
+  const [apiKey, setApiKey] = useState<string>(initialRef.current.apiKey);
+  const [apiSecret, setApiSecret] = useState<string>(initialRef.current.apiSecret);
 
   const setCredentials = useCallback((nextKey: string, nextSecret: string) => {
     const key = nextKey ?? "";

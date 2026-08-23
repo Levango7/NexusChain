@@ -64,7 +64,7 @@ public class FileBasedApprovalStore implements ApprovalStore {
                 }
             }
         } catch (IOException e) {
-            log.error("读取审批记录文件失败: {}", e.getMessage());
+            log.error("读取审批记录文件失败: {}", e.getMessage(), e);
         }
         log.info("审批记录恢复完成: loaded={}, skipped={}, file={}", loaded, skipped, filePath);
     }

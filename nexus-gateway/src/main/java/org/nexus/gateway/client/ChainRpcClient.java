@@ -66,9 +66,16 @@ public class ChainRpcClient {
             log.warn("Failed to query chain confirmation for txHash={}: {}", txHash, e.getMessage());
             // Dev-mode fallback: if chain node is unreachable and skip-confirmation is enabled,
             // treat any well-formed txHash as confirmed to allow local testing.
+            // B-19 修复：即使 skip-confirmation 也必须验证 txHash 格式（非空、长度合理），
+            // 并记录 warn 日志明确说明跳过了链上确认，避免接受任意 txHash。
             if (gatewayConfig.getChain().isSkipConfirmation()) {
-                log.info("DEV MODE: chain node unreachable, skip-confirmation=true, accepting txHash={}", txHash);
-                return txHash != null && txHash.length() >= 16;
+                if (isValidTxHashFormat(txHash)) {
+                    log.warn("SKIP-CONFIRMATION: chain node unreachable, accepting txHash={} without on-chain verification (dev mode only)",
+                            txHash);
+                    return true;
+                }
+                log.warn("SKIP-CONFIRMATION: txHash={} rejected due to invalid format (non-empty, length >= 16 required)", txHash);
+                return false;
             }
             return false;
         }
@@ -271,10 +278,30 @@ public class ChainRpcClient {
 
     private boolean isTransactionConfirmedFallback(String txHash, Throwable t) {
         log.warn("Circuit breaker fallback: isTransactionConfirmed, cause={}", t.getMessage());
+        // B-19 修复：fallback 路径同样需要验证 txHash 格式并记录 warn 日志
         if (gatewayConfig.getChain().isSkipConfirmation()) {
-            return txHash != null && txHash.length() >= 16;
+            if (isValidTxHashFormat(txHash)) {
+                log.warn("SKIP-CONFIRMATION fallback: accepting txHash={} without on-chain verification (dev mode only)",
+                        txHash);
+                return true;
+            }
+            log.warn("SKIP-CONFIRMATION fallback: txHash={} rejected due to invalid format", txHash);
+            return false;
         }
         return false;
+    }
+
+    /**
+     * 校验交易哈希格式（B-19 修复）。
+     *
+     * <p>skip-confirmation 模式下仍需验证 txHash 格式，防止接受任意字符串。
+     * 格式要求：非空、长度 >= 16（链上交易哈希通常为 64 hex 字符，16 为保守下限）。</p>
+     *
+     * @param txHash 待校验的交易哈希
+     * @return 格式合法返回 true
+     */
+    private static boolean isValidTxHashFormat(String txHash) {
+        return txHash != null && txHash.length() >= 16;
     }
 
     private long getBlockHeightFallback(Throwable t) {

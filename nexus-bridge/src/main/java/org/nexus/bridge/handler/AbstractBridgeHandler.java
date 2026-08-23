@@ -469,14 +469,22 @@ public abstract class AbstractBridgeHandler {
         if (credentials != null) {
             return sendRawTransaction(web3j, contractAddress, encodedFunction, chainId);
         }
-        // 2. fallback: eth_call 验证 + 合成交易哈希
+        // 2. B-20 修复：credentials 未配置时，链上执行不可用
+        //    - mock 模式（config.isMockMode()=true）：eth_call 验证 + 合成哈希 + warn 日志
+        //    - 非 mock 模式（默认）：抛异常，拒绝返回未真正上链的假哈希
+        if (config == null || !config.isMockMode()) {
+            throw new BridgeException("CHAIN_EXECUTION_UNAVAILABLE",
+                    "Cannot submit contract call on chain " + chainId + ": credentials not configured"
+                            + " and mock mode is disabled. Set bridge.mock-mode=true for dev/test only.");
+        }
+        // mock 模式：eth_call 验证 + 合成交易哈希（明确 warn 标记）
         String viewResult = executeViewCall(web3j, contractAddress, encodedFunction);
         if (viewResult == null) {
             throw new BridgeException("CONTRACT_CALL_REJECTED",
                     "eth_call validation failed on chain " + chainId + " for contract " + contractAddress);
         }
         String txHash = synthesizeTxHash(chainId, encodedFunction);
-        log.info("Submitted contract call (synthesized) on chain {}: contract={}, txHash={}, calldataLen={}",
+        log.warn("MOCK MODE: synthesized txHash on chain {} (NOT actually broadcast to chain): contract={}, txHash={}, calldataLen={}",
                 chainId, contractAddress, txHash, encodedFunction.length());
         return txHash;
     }

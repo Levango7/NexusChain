@@ -16,6 +16,8 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * 质押服务默认实现。
@@ -61,6 +63,12 @@ public class StakingServiceImpl implements StakingService {
     /** 验证人地址 -> 待提取队列 */
     private final Map<String, List<UnstakeEntry>> unstakingQueue = new ConcurrentHashMap<>();
 
+    /**
+     * B-07/B-09 修复：全局锁，保护 stake/unstake/withdraw/distributeRewards 中的
+     * "检查+执行"复合操作与 Validator 更新的原子性，防止 TOCTOU 超额提取与状态不一致。
+     */
+    private final ReentrantLock stakingLock = new ReentrantLock();
+
     public StakingServiceImpl() {
         this(DEFAULT_LOCK_PERIOD_SECONDS, DEFAULT_ANNUAL_REWARD_RATE);
     }
@@ -102,7 +110,7 @@ public class StakingServiceImpl implements StakingService {
                 if (e.getKey() == null || e.getValue() == null) {
                     continue;
                 }
-                List<UnstakeEntry> queue = new ArrayList<>();
+                List<UnstakeEntry> queue = new CopyOnWriteArrayList<>();
                 for (UnstakeEntryDto dto : e.getValue()) {
                     try {
                         queue.add(new UnstakeEntry(
@@ -155,10 +163,17 @@ public class StakingServiceImpl implements StakingService {
         if (validator == null || amount == null || amount.signum() <= 0) {
             throw new IllegalArgumentException("Invalid stake request: validator=" + validator + ", amount=" + amount);
         }
-        stakes.merge(validator, amount, BigDecimal::add);
-        Validator v = validatorRegistry.getValidator(validator);
-        if (v != null) {
-            v.setStakeAmount(v.getStakeAmount().add(amount));
+        // B-09 修复：使用锁将 stakes 更新与 Validator 更新包装为原子操作，
+        // 防止并发下 Validator 状态与 stakes 不一致。
+        stakingLock.lock();
+        try {
+            stakes.merge(validator, amount, BigDecimal::add);
+            Validator v = validatorRegistry.getValidator(validator);
+            if (v != null) {
+                v.setStakeAmount(v.getStakeAmount().add(amount));
+            }
+        } finally {
+            stakingLock.unlock();
         }
         logger.info("Staked {} to {}", amount, validator);
     }
@@ -168,18 +183,28 @@ public class StakingServiceImpl implements StakingService {
         if (validator == null || amount == null || amount.signum() <= 0) {
             throw new IllegalArgumentException("Invalid unstake request");
         }
-        BigDecimal current = stakes.getOrDefault(validator, BigDecimal.ZERO);
-        if (amount.compareTo(current) > 0) {
-            throw new IllegalArgumentException("Unstake amount " + amount + " exceeds current stake " + current);
+        // B-07 修复：使用锁将"检查余额 + 执行提取"包装为原子操作，
+        // 防止 TOCTOU（Time-of-Check to Time-of-Use）并发超额提取。
+        // B-09 修复：同时保护 Validator 更新的原子性。
+        stakingLock.lock();
+        try {
+            BigDecimal current = stakes.getOrDefault(validator, BigDecimal.ZERO);
+            if (amount.compareTo(current) > 0) {
+                throw new IllegalArgumentException("Unstake amount " + amount + " exceeds current stake " + current);
+            }
+            stakes.merge(validator, amount.negate(), BigDecimal::add);
+            Instant unlockTime = Instant.now().plusSeconds(lockPeriodSeconds);
+            // B-08 修复：使用 CopyOnWriteArrayList 替代 ArrayList，保证多线程并发修改安全。
+            unstakingQueue.computeIfAbsent(validator, k -> new CopyOnWriteArrayList<>())
+                    .add(new UnstakeEntry(amount, unlockTime));
+            Validator v = validatorRegistry.getValidator(validator);
+            if (v != null) {
+                v.setStakeAmount(v.getStakeAmount().subtract(amount));
+            }
+            logger.info("Unstaked {} from {}, unlock at {}", amount, validator, unlockTime);
+        } finally {
+            stakingLock.unlock();
         }
-        stakes.merge(validator, amount.negate(), BigDecimal::add);
-        Instant unlockTime = Instant.now().plusSeconds(lockPeriodSeconds);
-        unstakingQueue.computeIfAbsent(validator, k -> new ArrayList<>()).add(new UnstakeEntry(amount, unlockTime));
-        Validator v = validatorRegistry.getValidator(validator);
-        if (v != null) {
-            v.setStakeAmount(v.getStakeAmount().subtract(amount));
-        }
-        logger.info("Unstaked {} from {}, unlock at {}", amount, validator, unlockTime);
     }
 
     /**
@@ -189,24 +214,30 @@ public class StakingServiceImpl implements StakingService {
      * @return 实际提取金额（未到期部分不可提取）
      */
     public BigDecimal withdraw(String validator) {
-        List<UnstakeEntry> queue = unstakingQueue.get(validator);
-        if (queue == null || queue.isEmpty()) {
-            return BigDecimal.ZERO;
-        }
-        Instant now = Instant.now();
-        BigDecimal withdrawable = BigDecimal.ZERO;
-        Iterator<UnstakeEntry> it = queue.iterator();
-        while (it.hasNext()) {
-            UnstakeEntry entry = it.next();
-            if (now.isAfter(entry.unlockTime)) {
-                withdrawable = withdrawable.add(entry.amount);
-                it.remove();
+        // B-07 修复：使用锁保护"遍历 + 移除"复合操作的原子性，防止并发下数据损坏。
+        stakingLock.lock();
+        try {
+            List<UnstakeEntry> queue = unstakingQueue.get(validator);
+            if (queue == null || queue.isEmpty()) {
+                return BigDecimal.ZERO;
             }
+            Instant now = Instant.now();
+            BigDecimal withdrawable = BigDecimal.ZERO;
+            for (UnstakeEntry entry : queue) {
+                if (now.isAfter(entry.unlockTime)) {
+                    withdrawable = withdrawable.add(entry.amount);
+                }
+            }
+            if (withdrawable.signum() > 0) {
+                // B-08 修复：CopyOnWriteArrayList 迭代器不支持 remove()，
+                // 使用 removeIf 批量移除已到期条目。
+                queue.removeIf(entry -> now.isAfter(entry.unlockTime));
+                logger.info("Withdrew {} from {}", withdrawable, validator);
+            }
+            return withdrawable;
+        } finally {
+            stakingLock.unlock();
         }
-        if (withdrawable.signum() > 0) {
-            logger.info("Withdrew {} from {}", withdrawable, validator);
-        }
-        return withdrawable;
     }
 
     @Override
@@ -216,14 +247,20 @@ public class StakingServiceImpl implements StakingService {
 
     @Override
     public void distributeRewards() {
-        List<Validator> active = validatorRegistry.getActiveValidators();
-        for (Validator v : active) {
-            BigDecimal reward = v.getStakeAmount().multiply(annualRewardRate);
-            if (reward.signum() > 0) {
-                stakes.merge(v.getAddress(), reward, BigDecimal::add);
-                v.setStakeAmount(v.getStakeAmount().add(reward));
-                logger.info("Distributed reward {} to {}", reward, v.getAddress());
+        // B-09 修复：使用锁保护奖励分发的原子性，防止并发下 Validator 状态与 stakes 不一致。
+        stakingLock.lock();
+        try {
+            List<Validator> active = validatorRegistry.getActiveValidators();
+            for (Validator v : active) {
+                BigDecimal reward = v.getStakeAmount().multiply(annualRewardRate);
+                if (reward.signum() > 0) {
+                    stakes.merge(v.getAddress(), reward, BigDecimal::add);
+                    v.setStakeAmount(v.getStakeAmount().add(reward));
+                    logger.info("Distributed reward {} to {}", reward, v.getAddress());
+                }
             }
+        } finally {
+            stakingLock.unlock();
         }
     }
 

@@ -1100,6 +1100,7 @@ public class StateDB implements ApplicationListener<AccountUpdatedEvent> {
                 }
                 account = applyTransaction(transaction, account);
             } catch (Exception e) {
+                logger.error("applyTransaction failed, aborting batch", e);
                 return null;
             }
 

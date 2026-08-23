@@ -1,5 +1,6 @@
 import React from "react";
 import { Inbox } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Loading } from "./Loading";
 
 /**
@@ -12,6 +13,9 @@ import { Loading } from "./Loading";
  *   - 加载状态（loading=true 显示 Spinner 覆盖）
  *   - 行点击（onRowClick）
  *   - 颜色 / 间距 / 圆角 / 字体均引用 design tokens
+ *
+ * P2: 默认空状态文案 "暂无数据" 提取到 i18n（common.notFound 兜底 + emptyText 覆盖）。
+ *     当调用方未传 emptyText 时，使用 i18n 的 common.notFound 作为兜底文案。
  */
 export interface Column<T> {
   /** 列标识（取行数据字段名）。 */
@@ -37,7 +41,7 @@ export interface TableProps<T extends TableRow> {
   rowKey?: string;
   /** 加载状态。 */
   loading?: boolean;
-  /** 空状态文案（默认 "暂无数据"）。 */
+  /** 空状态文案（默认使用 i18n common.notFound）。 */
   emptyText?: string;
   /** 自定义空状态节点。 */
   emptyState?: React.ReactNode;
@@ -58,11 +62,13 @@ export function Table<T extends TableRow>({
   data,
   rowKey = "id",
   loading = false,
-  emptyText = "暂无数据",
+  emptyText,
   emptyState,
   onRowClick,
   className = "",
 }: TableProps<T>) {
+  const { t } = useTranslation();
+  const resolvedEmptyText = emptyText ?? t("common.notFound");
   return (
     <div
       className={`relative bg-surface border border-border rounded-lg overflow-hidden ${className}`}
@@ -116,7 +122,7 @@ export function Table<T extends TableRow>({
           {emptyState ?? (
             <>
               <Inbox size={32} strokeWidth={1.5} className="mb-2 opacity-60" />
-              <span className="text-sm">{emptyText}</span>
+              <span className="text-sm">{resolvedEmptyText}</span>
             </>
           )}
         </div>

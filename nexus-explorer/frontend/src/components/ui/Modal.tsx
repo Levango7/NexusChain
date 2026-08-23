@@ -1,5 +1,6 @@
 import React, { useEffect } from "react";
 import { X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 /**
  * Modal — 通用弹窗。
@@ -10,6 +11,8 @@ import { X } from "lucide-react";
  *   - 标题 + 关闭按钮 + 内容 + 底部确认/取消操作区
  *   - body 滚动锁定
  *   - 焦点环 / 阴影 / 圆角引用 design tokens
+ *
+ * P2: 关闭按钮 aria-label 硬编码中文提取到 i18n（common.closeDialog）。
  */
 export interface ModalProps {
   /** 是否打开。 */
@@ -37,6 +40,7 @@ export const Modal: React.FC<ModalProps> = ({
   maxWidth = "max-w-md",
   disableBackdropClose = false,
 }) => {
+  const { t } = useTranslation();
   // ESC 关闭 + body 滚动锁定
   useEffect(() => {
     if (!open) return;
@@ -84,7 +88,7 @@ export const Modal: React.FC<ModalProps> = ({
             <button
               type="button"
               onClick={onClose}
-              aria-label="关闭弹窗"
+              aria-label={t("common.closeDialog")}
               className="ml-auto -mr-1 p-1 text-muted hover:text-fg hover:bg-accent-soft rounded-sm transition-colors duration-base ease-standard focus:outline-none focus-visible:shadow-focus"
             >
               <X size={16} />

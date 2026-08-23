@@ -95,6 +95,7 @@ class GatewayCoreIntegrationTest {
         // Create order
         MvcResult orderRes = mockMvc.perform(post("/api/v1/orders")
                 .header("X-NexusChain-ApiKey", apiKey)
+                .with(SignedRequests.sandbox())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"merchantId\":\"" + merchantId + "\",\"amount\":100000,\"description\":\"Integration test order\",\"notifyUrl\":\"http://localhost:9999/cb\"}"))
                 .andExpect(status().isCreated())
@@ -106,6 +107,7 @@ class GatewayCoreIntegrationTest {
         // Initiate payment
         mockMvc.perform(post("/api/v1/orders/" + orderId + "/pay")
                 .header("X-NexusChain-ApiKey", apiKey)
+                .with(SignedRequests.sandbox())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"payerAddress\":\"1PayerAddr000000000000000000000000000\"}"))
                 .andExpect(status().isOk())
@@ -120,6 +122,7 @@ class GatewayCoreIntegrationTest {
         // which always returns confirmed. This tests the real HTTP call path.
         mockMvc.perform(post("/api/v1/orders/" + orderId + "/confirm")
                 .header("X-NexusChain-ApiKey", apiKey)
+                .with(SignedRequests.sandbox())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"chainTxHash\":\"abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890\"}"))
                 .andExpect(status().isOk())
@@ -133,6 +136,7 @@ class GatewayCoreIntegrationTest {
     void rejectDuplicateConfirm() throws Exception {
         mockMvc.perform(post("/api/v1/orders/" + orderId + "/confirm")
                 .header("X-NexusChain-ApiKey", apiKey)
+                .with(SignedRequests.sandbox())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"chainTxHash\":\"abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890\"}"))
                 .andExpect(status().isOk())
@@ -145,6 +149,7 @@ class GatewayCoreIntegrationTest {
     void refundPaidOrder() throws Exception {
         mockMvc.perform(post("/api/v1/orders/" + orderId + "/refund")
                 .header("X-NexusChain-ApiKey", apiKey)
+                .with(SignedRequests.sandbox())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"amount\":50000,\"reason\":\"Customer request\"}"))
                 .andExpect(status().isCreated())

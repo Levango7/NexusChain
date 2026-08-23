@@ -73,6 +73,7 @@ public class RPCClient {
             HttpEntity entity = response.getEntity();
             return entity != null ? EntityUtils.toByteArray(entity) : null;
         } catch (Exception e) {
+            logger.error("Failed to read HTTP response body", e);
             return null;
         }
     }
@@ -98,12 +99,13 @@ public class RPCClient {
             }
             responseBody.map(cb::call);
         } catch (Exception e) {
-            logger.error("post " + url + " fail");
+            logger.error("post " + url + " fail", e);
         } finally {
             resp.map(x -> {
                 try {
                     x.close();
                 } catch (Exception e) {
+                    logger.warn("Failed to close HTTP response", e);
                     return false;
                 }
                 return true;
@@ -144,12 +146,13 @@ public class RPCClient {
             }
             responseBody.map(cb::call);
         } catch (Exception e) {
-            logger.error("get " + uri + " fail");
+            logger.error("get " + uri + " fail", e);
         } finally {
             resp.map(x -> {
                 try {
                     x.close();
                 } catch (Exception e) {
+                    logger.warn("Failed to close HTTP response", e);
                     return false;
                 }
                 return true;

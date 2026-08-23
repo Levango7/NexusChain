@@ -9,6 +9,7 @@ import org.nexus.bridge.model.BridgeTransaction.BridgeOperationType;
 import org.nexus.bridge.model.BridgeTransaction.BridgeTxStatus;
 import org.nexus.bridge.repository.BridgeTransactionRepository;
 import org.nexus.bridge.repository.IdempotencyKeyRepository;
+import org.nexus.bridge.safety.CircuitBreaker;
 import org.nexus.common.tracing.BusinessSpan;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -64,6 +65,18 @@ public class BridgeServiceImpl implements BridgeService {
     @Autowired(required = false)
     private ObjectMapper objectMapper;
 
+    /**
+     * 熔断器（B-21 修复）：桥操作主流程接入熔断器。
+     *
+     * <p>通过 {@code required = false} 注入：未配置时为 {@code null}，
+     * 桥操作不经过熔断检查（向后兼容）；注入后在 lock/mint/burn/unlock
+     * 入口调用 {@link CircuitBreaker#acquirePermission()}，
+     * 成功调用 {@link CircuitBreaker#recordSuccess()}，
+     * 失败调用 {@link CircuitBreaker#recordFailure(String)}。</p>
+     */
+    @Autowired(required = false)
+    private CircuitBreaker circuitBreaker;
+
     /** 幂等键有效期：24 小时。 */
     private static final long IDEMPOTENCY_TTL_SECONDS = 86_400L;
 
@@ -111,6 +124,7 @@ public class BridgeServiceImpl implements BridgeService {
         this(config, txRepository, eventPublisher, transactionManager, null);
     }
 
+
     @Override
     @Transactional
     public BridgeTransaction lock(LockRequest request) {
@@ -121,6 +135,11 @@ public class BridgeServiceImpl implements BridgeService {
                 .attr("bridge.lock.amount", request.getAmount())
                 .attr("bridge.user.address", request.getUserAddress())) {
             try {
+                // B-21 修复：熔断器许可检查
+                if (!acquireCircuitBreakerPermission("LOCK")) {
+                    throw new BridgeException("Bridge circuit breaker is OPEN, LOCK rejected");
+                }
+
                 // P2-F2：幂等检查（在状态校验前短路返回之前结果）
                 String idempotencyKey = request.getSourceTxHash();
                 Optional<BridgeTransaction> existing = checkIdempotency(idempotencyKey, OP_LOCK);
@@ -128,6 +147,7 @@ public class BridgeServiceImpl implements BridgeService {
                     span.attr("bridge.idempotent", true)
                             .attr("bridge.tx.id", existing.get().getTxId());
                     span.success();
+                    recordCircuitBreakerSuccess();
                     return existing.get();
                 }
 
@@ -171,9 +191,11 @@ public class BridgeServiceImpl implements BridgeService {
                 // P2-F2：保存幂等键
                 saveIdempotencyKey(idempotencyKey, OP_LOCK, saved);
                 span.success();
+                recordCircuitBreakerSuccess();
                 return saved;
             } catch (RuntimeException e) {
                 span.error(e);
+                recordCircuitBreakerFailure("LOCK", e);
                 throw e;
             }
         }
@@ -187,12 +209,18 @@ public class BridgeServiceImpl implements BridgeService {
                 .attr("bridge.lock.tx.id", request.getLockTxId())
                 .attr("bridge.signatures.count", request.getSignatures() != null ? request.getSignatures().size() : 0)) {
             try {
+                // B-21 修复：熔断器许可检查
+                if (!acquireCircuitBreakerPermission("MINT")) {
+                    throw new BridgeException("Bridge circuit breaker is OPEN, MINT rejected");
+                }
+
                 // P2-F2：幂等检查（以 lockTxId 为幂等键）
                 Optional<BridgeTransaction> existing = checkIdempotency(request.getLockTxId(), OP_MINT);
                 if (existing.isPresent()) {
                     span.attr("bridge.idempotent", true)
                             .attr("bridge.tx.id", existing.get().getTxId());
                     span.success();
+                    recordCircuitBreakerSuccess();
                     return existing.get();
                 }
 
@@ -238,9 +266,11 @@ public class BridgeServiceImpl implements BridgeService {
                 // P2-F2：保存幂等键
                 saveIdempotencyKey(request.getLockTxId(), OP_MINT, saved);
                 span.attr("bridge.status", "MINTED").success();
+                recordCircuitBreakerSuccess();
                 return saved;
             } catch (RuntimeException e) {
                 span.error(e);
+                recordCircuitBreakerFailure("MINT", e);
                 throw e;
             }
         }
@@ -256,6 +286,11 @@ public class BridgeServiceImpl implements BridgeService {
                 .attr("bridge.burn.amount", request.getAmount())
                 .attr("bridge.user.address", request.getUserAddress())) {
             try {
+                // B-21 修复：熔断器许可检查
+                if (!acquireCircuitBreakerPermission("BURN")) {
+                    throw new BridgeException("Bridge circuit breaker is OPEN, BURN rejected");
+                }
+
                 // P2-F2：幂等检查
                 String idempotencyKey = request.getSourceTxHash();
                 Optional<BridgeTransaction> existing = checkIdempotency(idempotencyKey, OP_BURN);
@@ -263,6 +298,7 @@ public class BridgeServiceImpl implements BridgeService {
                     span.attr("bridge.idempotent", true)
                             .attr("bridge.tx.id", existing.get().getTxId());
                     span.success();
+                    recordCircuitBreakerSuccess();
                     return existing.get();
                 }
 
@@ -297,9 +333,11 @@ public class BridgeServiceImpl implements BridgeService {
                 // P2-F2：保存幂等键
                 saveIdempotencyKey(idempotencyKey, OP_BURN, saved);
                 span.success();
+                recordCircuitBreakerSuccess();
                 return saved;
             } catch (RuntimeException e) {
                 span.error(e);
+                recordCircuitBreakerFailure("BURN", e);
                 throw e;
             }
         }
@@ -313,12 +351,18 @@ public class BridgeServiceImpl implements BridgeService {
                 .attr("bridge.burn.tx.id", request.getBurnTxId())
                 .attr("bridge.signatures.count", request.getSignatures() != null ? request.getSignatures().size() : 0)) {
             try {
+                // B-21 修复：熔断器许可检查
+                if (!acquireCircuitBreakerPermission("UNLOCK")) {
+                    throw new BridgeException("Bridge circuit breaker is OPEN, UNLOCK rejected");
+                }
+
                 // P2-F2：幂等检查（以 burnTxId 为幂等键）
                 Optional<BridgeTransaction> existing = checkIdempotency(request.getBurnTxId(), OP_UNLOCK);
                 if (existing.isPresent()) {
                     span.attr("bridge.idempotent", true)
                             .attr("bridge.tx.id", existing.get().getTxId());
                     span.success();
+                    recordCircuitBreakerSuccess();
                     return existing.get();
                 }
 
@@ -361,9 +405,11 @@ public class BridgeServiceImpl implements BridgeService {
                 // P2-F2：保存幂等键
                 saveIdempotencyKey(request.getBurnTxId(), OP_UNLOCK, saved);
                 span.attr("bridge.status", "UNLOCKED").success();
+                recordCircuitBreakerSuccess();
                 return saved;
             } catch (RuntimeException e) {
                 span.error(e);
+                recordCircuitBreakerFailure("UNLOCK", e);
                 throw e;
             }
         }
@@ -576,6 +622,49 @@ public class BridgeServiceImpl implements BridgeService {
         } catch (RuntimeException | JsonProcessingException e) {
             log.warn("Failed to persist idempotency key (key={}, op={}): {}",
                     key, operation, e.getMessage());
+        }
+    }
+
+    // ==================== B-21 熔断器辅助 ====================
+
+    /**
+     * 获取熔断器执行许可（B-21 修复）。
+     *
+     * <p>未注入熔断器时返回 {@code true}（向后兼容）；注入后调用
+     * {@link CircuitBreaker#acquirePermission()}。</p>
+     *
+     * @param operation 操作名称（LOCK/MINT/BURN/UNLOCK），用于日志
+     * @return 允许执行返回 {@code true}；熔断中返回 {@code false}
+     */
+    private boolean acquireCircuitBreakerPermission(String operation) {
+        if (circuitBreaker == null) {
+            return true;
+        }
+        boolean permitted = circuitBreaker.acquirePermission();
+        if (!permitted) {
+            log.warn("Bridge {} rejected by circuit breaker: reason={}", operation, circuitBreaker.getTripReason());
+        }
+        return permitted;
+    }
+
+    /**
+     * 记录桥操作成功（B-21 修复）。
+     */
+    private void recordCircuitBreakerSuccess() {
+        if (circuitBreaker != null) {
+            circuitBreaker.recordSuccess();
+        }
+    }
+
+    /**
+     * 记录桥操作失败（B-21 修复）。
+     *
+     * @param operation 操作名称
+     * @param e         失败异常
+     */
+    private void recordCircuitBreakerFailure(String operation, RuntimeException e) {
+        if (circuitBreaker != null) {
+            circuitBreaker.recordFailure(operation + ": " + e.getClass().getSimpleName() + " - " + e.getMessage());
         }
     }
 

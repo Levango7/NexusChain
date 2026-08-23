@@ -25,6 +25,9 @@ public enum ErrorCode {
     RISK_REJECTED(40310, "Payment rejected by risk control"),
     COMPLIANCE_REJECTED(40311, "Payment rejected by compliance screening"),
 
+    // 403xx - Ownership (P0-4 IDOR hardening)
+    RESOURCE_NOT_OWNED(40320, "Resource does not belong to the authenticated merchant"),
+
     // 409xx - Conflict / State
     ILLEGAL_STATE_TRANSITION(40900, "Illegal state transition"),
     ORDER_ALREADY_PAID(40901, "Order already paid"),

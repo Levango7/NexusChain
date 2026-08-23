@@ -231,7 +231,8 @@ public class PaymentServiceImpl implements PaymentService {
                 log.warn("Transaction-Order binding check failed: invalid chainTxHash length for orderNo={}, txHash={}",
                         order.getOrderNo(), chainTxHash);
                 OrderStateMachine.transition(order, PaymentOrder.OrderStatus.FAILED);
-                order.setChainTxHash(chainTxHash);
+                // 安全加固：失败路径不持久化攻击者可控的 txHash——否则可被用于抢占
+                // uk_payment_orders_chain_tx_hash 唯一约束槽位，造成合法交易确认 DoS。
                 orderRepository.save(order);
                 confirmSpan.attr("payment.status", "FAILED")
                         .attr("tx.binding.check", "INVALID_HASH")
@@ -259,7 +260,7 @@ public class PaymentServiceImpl implements PaymentService {
                         + "existingOrderNo={}, currentOrderNo={}",
                         chainTxHash, existingOrder.getOrderNo(), order.getOrderNo());
                 OrderStateMachine.transition(order, PaymentOrder.OrderStatus.FAILED);
-                order.setChainTxHash(chainTxHash);
+                // 同上：不持久化（该 txHash 已绑定其他订单，写入还会违反 V12 唯一约束）
                 orderRepository.save(order);
                 confirmSpan.attr("payment.status", "FAILED")
                         .attr("tx.binding.check", "DUPLICATE_TX_HASH")
@@ -277,7 +278,7 @@ public class PaymentServiceImpl implements PaymentService {
                     log.warn("SECURITY: transaction amount mismatch: txHash={}, txAmount={}, orderAmount={}, orderNo={}",
                             chainTxHash, onChainTx.amount(), order.getAmount(), order.getOrderNo());
                     OrderStateMachine.transition(order, PaymentOrder.OrderStatus.FAILED);
-                    order.setChainTxHash(chainTxHash);
+                    // 同上：失败路径不持久化攻击者可控的 txHash
                     orderRepository.save(order);
                     confirmSpan.attr("payment.status", "FAILED")
                             .attr("tx.binding.check", "AMOUNT_MISMATCH")
@@ -289,7 +290,7 @@ public class PaymentServiceImpl implements PaymentService {
                     log.warn("SECURITY: transaction recipient mismatch: txHash={}, txRecipient={}, orderPayee={}, orderNo={}",
                             chainTxHash, onChainTx.recipient(), order.getPayeeAddress(), order.getOrderNo());
                     OrderStateMachine.transition(order, PaymentOrder.OrderStatus.FAILED);
-                    order.setChainTxHash(chainTxHash);
+                    // 同上：失败路径不持久化攻击者可控的 txHash
                     orderRepository.save(order);
                     confirmSpan.attr("payment.status", "FAILED")
                             .attr("tx.binding.check", "RECIPIENT_MISMATCH")
@@ -521,10 +522,14 @@ public class PaymentServiceImpl implements PaymentService {
      * <p>In production, merchant key material comes from secure storage (HSM/KMS/Vault).
      * If the merchant keypair is not configured, the refund cannot be signed and this
      * method fails loudly with {@link IllegalStateException} — no synthetic hash is ever
-     * produced. If the wallet service is unavailable during the transfer call, null is
-     * returned and the caller marks the refund FAILED.</p>
+     * produced. If the wallet service is unavailable during the transfer call, the
+     * underlying exception is propagated to the caller (three-phase template) so that
+     * the refund is correctly marked FAILED rather than silently treated as success.</p>
      *
      * @throws IllegalStateException if the merchant keypair is not configured
+     * @throws RuntimeException      if the signing service call fails (B-01 fix:
+     *                               never swallow the exception and return null,
+     *                               which would let the caller assume success)
      */
     private String executeRefundTransfer(PaymentOrder order, String receiverPubkeyHash, BigDecimal amount) {
         // SECURITY FIX: refunds are signed by the PLATFORM hot-wallet key held inside
@@ -538,11 +543,14 @@ public class PaymentServiceImpl implements PaymentService {
                     + "refund cannot be signed without the platform hot-wallet key");
         }
 
+        // B-01 修复：不再吞掉异常返回 null（调用方会误以为退款成功）。
+        // 记录错误日志后将异常向上抛出，由三阶段模板捕获并将退款标记为 FAILED。
         try {
             return signingServiceClient.signTransfer(platformPubkey, receiverPubkeyHash, amount);
         } catch (RuntimeException e) {
-            log.error("Refund transfer exception for order {}: {}", order.getOrderNo(), e.getMessage());
-            return null;
+            log.error("Refund transfer exception for order {}: {}", order.getOrderNo(), e.getMessage(), e);
+            throw new RuntimeException("Refund transfer failed for order "
+                    + order.getOrderNo() + ": " + e.getMessage(), e);
         }
     }
 }

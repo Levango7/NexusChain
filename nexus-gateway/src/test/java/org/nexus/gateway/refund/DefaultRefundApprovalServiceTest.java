@@ -3,6 +3,7 @@ package org.nexus.gateway.refund;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.nexus.gateway.model.PaymentOrder;
@@ -17,8 +18,8 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
-
 /**
  * {@link DefaultRefundApprovalService} 与 {@link DefaultRefundPolicy} 单元测试：
  * 验证退款请求校验、审批/拒绝状态流转与执行。
@@ -49,6 +50,8 @@ class DefaultRefundApprovalServiceTest {
         paidOrder.setAmount(new BigDecimal("1000000"));
         paidOrder.setStatus(PaymentOrder.OrderStatus.PAID);
         paidOrder.setPaidAt(LocalDateTime.now().minusDays(1));
+        // P0-2 修复后 executeOnChain 会校验付款人地址非空
+        paidOrder.setPayerAddress("1PayerAddr00000000000000000000000000000");
     }
 
     // --- DefaultRefundPolicy ---
@@ -168,28 +171,62 @@ class DefaultRefundApprovalServiceTest {
     // --- executeRefund ---
 
     @Test
-    void executeRefund_onChainSuccessMarksExecuted() {
+    void executeRefund_onChainSuccessMarksExecutedAndOrderRefunded() {
         RefundRequest approved = newPendingRequest();
         approved.setStatus(RefundRequest.RefundStatus.APPROVED);
+        when(refundRequestRepository.claimForExecution(eq(10L), any())).thenReturn(1);
         when(refundRequestRepository.findById(10L)).thenReturn(Optional.of(approved));
         when(refundRequestRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(paymentOrderRepository.findById(1L)).thenReturn(Optional.of(paidOrder));
         when(executionChannel.execute(any(TransactionRequest.class)))
                 .thenReturn(TransactionResult.success("TX-ABC-123", 12, false));
 
         RefundRequest result = service.executeRefund(10L);
 
-        // 链上退款执行成功：请求置 EXECUTED 并记录真实交易哈希
+        // 链上退款执行成功：请求置 EXECUTED 并记录真实交易哈希；订单迁移至 REFUNDED 终态
         assertEquals(RefundRequest.RefundStatus.EXECUTED, result.getStatus());
         assertEquals("TX-ABC-123", result.getChainTxHash());
         assertNotNull(result.getExecutedAt());
+        assertEquals(PaymentOrder.OrderStatus.REFUNDED, paidOrder.getStatus());
+    }
+
+    @Test
+    void executeRefund_claimBeforeOnChainCall() {
+        RefundRequest approved = newPendingRequest();
+        approved.setStatus(RefundRequest.RefundStatus.APPROVED);
+        when(refundRequestRepository.claimForExecution(eq(10L), any())).thenReturn(1);
+        when(refundRequestRepository.findById(10L)).thenReturn(Optional.of(approved));
+        when(refundRequestRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(paymentOrderRepository.findById(1L)).thenReturn(Optional.of(paidOrder));
+        when(executionChannel.execute(any(TransactionRequest.class)))
+                .thenReturn(TransactionResult.success("TX-ABC-123", 12, false));
+
+        service.executeRefund(10L);
+
+        // 认领（CAS）必须先于不可逆的链上调用
+        InOrder inOrder = inOrder(refundRequestRepository, executionChannel);
+        inOrder.verify(refundRequestRepository).claimForExecution(eq(10L), any());
+        inOrder.verify(executionChannel).execute(any(TransactionRequest.class));
+    }
+
+    @Test
+    void executeRefund_claimConflictAbortsBeforeOnChainCall() {
+        // 并发/重复执行：CAS 认领失败（返回 0），必须完全不触碰链上通道
+        when(refundRequestRepository.claimForExecution(eq(10L), any())).thenReturn(0);
+
+        assertThrows(IllegalStateException.class, () -> service.executeRefund(10L));
+        verify(executionChannel, never()).execute(any());
+        verify(refundRequestRepository, never()).save(any());
     }
 
     @Test
     void executeRefund_onChainFailureMarksFailed() {
         RefundRequest approved = newPendingRequest();
         approved.setStatus(RefundRequest.RefundStatus.APPROVED);
+        when(refundRequestRepository.claimForExecution(eq(10L), any())).thenReturn(1);
         when(refundRequestRepository.findById(10L)).thenReturn(Optional.of(approved));
         when(refundRequestRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(paymentOrderRepository.findById(1L)).thenReturn(Optional.of(paidOrder));
         when(executionChannel.execute(any(TransactionRequest.class)))
                 .thenReturn(TransactionResult.failure("broadcast rejected", false));
 
@@ -200,14 +237,6 @@ class DefaultRefundApprovalServiceTest {
         assertNull(result.getChainTxHash());
         assertNotNull(result.getRejectionReason());
         assertTrue(result.getRejectionReason().contains("broadcast rejected"));
-    }
-
-    @Test
-    void executeRefund_pendingThrows() {
-        RefundRequest pending = newPendingRequest();
-        when(refundRequestRepository.findById(10L)).thenReturn(Optional.of(pending));
-
-        assertThrows(IllegalStateException.class, () -> service.executeRefund(10L));
     }
 
     private RefundRequest newPendingRequest() {

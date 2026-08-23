@@ -41,6 +41,8 @@ import org.nexus.core.account.AccountDB;
 import org.nexus.core.account.Transaction;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.math.BigDecimal;
 import java.text.SimpleDateFormat;
@@ -50,6 +52,8 @@ import static java.util.stream.Collectors.toList;
 
 @Service
 public class HatchServiceImpl implements HatchService {
+
+    private static final Logger log = LoggerFactory.getLogger(HatchServiceImpl.class);
 
     @Autowired
     AccountDB accountDB;
@@ -76,6 +80,7 @@ public class HatchServiceImpl implements HatchService {
             long balance = accountDB.getBalance(pubkey);
             return APIResult.newFailResult(2000, "SUCCESS", balance);
         } catch (DecoderException e) {
+            log.error("getBalance failed: pubkeyhash={}", pubkeyhash, e);
             return APIResult.newFailResult(5000, "Exception error");
         }
     }
@@ -89,6 +94,7 @@ public class HatchServiceImpl implements HatchService {
             long nonce = accountState.getAccount().getNonce();
             return APIResult.newFailResult(2000, "SUCCESS", nonce);
         } catch (DecoderException e) {
+            log.error("getNonce failed: pubkeyhash={}", pubkeyhash, e);
             return APIResult.newFailResult(5000, "Exception error");
         }
     }
@@ -134,6 +140,7 @@ public class HatchServiceImpl implements HatchService {
             }
             return APIResult.newFailResult(2000, "SUCCESS", jsonArray);
         } catch (Exception e) {
+            log.error("getHatch failed: height={}", height, e);
             return APIResult.newFailResult(5000, "ERROR");
         }
     }
@@ -164,6 +171,7 @@ public class HatchServiceImpl implements HatchService {
             }
             return APIResult.newFailResult(2000, "SUCCESS", jsonArray);
         } catch (Exception e) {
+            log.error("getInterest failed: height={}", height, e);
             return APIResult.newFailResult(5000, "Exception error");
         }
     }
@@ -182,6 +190,7 @@ public class HatchServiceImpl implements HatchService {
             }
             return APIResult.newFailResult(2000, "SUCCESS", jsonArray);
         } catch (Exception e) {
+            log.error("getShare failed: height={}", height, e);
             return APIResult.newFailResult(5000, "Exception error");
         }
     }
@@ -199,6 +208,7 @@ public class HatchServiceImpl implements HatchService {
             }
             return APIResult.newFailResult(2000, "SUCCESS", jsonArray);
         } catch (Exception e) {
+            log.error("getCost failed: height={}", height, e);
             return APIResult.newFailResult(5000, "Exception error");
         }
     }
@@ -219,6 +229,7 @@ public class HatchServiceImpl implements HatchService {
             }
             return APIResult.newFailResult(2000, "SUCCESS", jsonArray);
         } catch (Exception e) {
+            log.error("getVote failed: height={}", height, e);
             return APIResult.newFailResult(5000, "Exception error");
         }
     }
@@ -239,6 +250,7 @@ public class HatchServiceImpl implements HatchService {
             }
             return APIResult.newFailResult(2000, "SUCCESS", jsonArray);
         } catch (Exception e) {
+            log.error("getCancelVote failed: height={}", height, e);
             return APIResult.newFailResult(5000, "Exception error");
         }
     }
@@ -256,6 +268,7 @@ public class HatchServiceImpl implements HatchService {
             }
             return APIResult.newFailResult(2000, "SUCCESS", jsonArray);
         } catch (Exception e) {
+            log.error("getMortgage failed: height={}", height, e);
             return APIResult.newFailResult(5000, "Exception error");
         }
     }
@@ -273,6 +286,7 @@ public class HatchServiceImpl implements HatchService {
             }
             return APIResult.newFailResult(2000, "SUCCESS", jsonArray);
         } catch (Exception e) {
+            log.error("getCancelMortgage failed: height={}", height, e);
             return APIResult.newFailResult(5000, "Exception error");
         }
     }
@@ -337,6 +351,7 @@ public class HatchServiceImpl implements HatchService {
             }
             return APIResult.newFailResult(2000, "SUCCESS", jsonObject);
         } catch (Exception e) {
+            log.error("getNowInterest failed: tranhash={}", tranhash, e);
             return APIResult.newFailResult(5000, "Exception error");
         }
     }
@@ -403,6 +418,7 @@ public class HatchServiceImpl implements HatchService {
             }
             return APIResult.newFailResult(2000, "SUCCESS", jsonObject);
         } catch (Exception e) {
+            log.error("getNowShare failed: tranhash={}", tranhash, e);
             return APIResult.newFailResult(5000, "Exception error");
         }
     }

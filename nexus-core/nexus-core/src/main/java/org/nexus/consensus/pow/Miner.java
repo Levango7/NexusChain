@@ -187,7 +187,7 @@ public class Miner implements ApplicationListener {
                 thread = ctx.getBean(MineThread.class);
                 thread.mine(b, proposer.startTimeStamp, proposer.endTimeStamp);
             } catch (Exception e) {
-                e.printStackTrace();
+                logger.error("Mine thread failed", e);
             }
         });
     }
