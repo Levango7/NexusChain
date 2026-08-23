@@ -353,7 +353,7 @@ public class PeerServer extends NexusChainGrpc.NexusChainImplBase {
         try {
             address = InetAddress.getLocalHost();
         } catch (UnknownHostException e) {
-            e.printStackTrace();
+            logger.warn("Failed to resolve local host address", e);
         }
         return Objects.requireNonNull(address).getHostAddress();
     }

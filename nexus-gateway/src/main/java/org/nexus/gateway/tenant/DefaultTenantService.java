@@ -14,6 +14,9 @@ import java.util.UUID;
  * <p>所有写操作在事务内执行；状态流转校验租户当前状态，非法流转抛
  * {@link IllegalStateException}。API Key 验证仅放行 {@link TenantStatus#ACTIVE}
  * 租户，由 {@link TenantApiKeyInterceptor} 调用。</p>
+ *
+ * <p>性能优化（任务 #310）：{@link #validateApiKey} 添加 TTL 内存缓存，
+ * 避免每次 API 请求都查询数据库。租户状态变更时主动失效缓存。</p>
  */
 @Service
 public class DefaultTenantService implements TenantService {
@@ -21,6 +24,8 @@ public class DefaultTenantService implements TenantService {
     private static final Logger log = LoggerFactory.getLogger(DefaultTenantService.class);
 
     private final TenantRepository tenantRepository;
+    /** API Key 验证缓存：高频调用（每个 API 请求一次），TTL 5 分钟。 */
+    private final TenantApiKeyCache apiKeyCache = new TenantApiKeyCache();
 
     public DefaultTenantService(TenantRepository tenantRepository) {
         this.tenantRepository = tenantRepository;
@@ -74,7 +79,10 @@ public class DefaultTenantService implements TenantService {
         if (updated.getStatus() != null) {
             existing.setStatus(updated.getStatus());
         }
-        return tenantRepository.save(existing);
+        Tenant saved = tenantRepository.save(existing);
+        // 状态变更可能影响 API Key 验证结果，主动失效缓存
+        apiKeyCache.invalidate(saved.getApiKey());
+        return saved;
     }
 
     @Override
@@ -97,6 +105,8 @@ public class DefaultTenantService implements TenantService {
         }
         existing.setStatus(TenantStatus.SUSPENDED);
         Tenant saved = tenantRepository.save(existing);
+        // 暂停后 API Key 验证应立即拒绝，主动失效缓存
+        apiKeyCache.invalidate(saved.getApiKey());
         log.info("Suspended tenant: tenantId={}", tenantId);
         return saved;
     }
@@ -111,6 +121,8 @@ public class DefaultTenantService implements TenantService {
         }
         existing.setStatus(TenantStatus.TERMINATED);
         Tenant saved = tenantRepository.save(existing);
+        // 终止后 API Key 验证应立即拒绝，主动失效缓存
+        apiKeyCache.invalidate(saved.getApiKey());
         log.info("Terminated tenant: tenantId={}", tenantId);
         return saved;
     }
@@ -126,6 +138,8 @@ public class DefaultTenantService implements TenantService {
         }
         existing.setStatus(TenantStatus.ACTIVE);
         Tenant saved = tenantRepository.save(existing);
+        // 激活后 API Key 验证应立即通过，主动失效缓存
+        apiKeyCache.invalidate(saved.getApiKey());
         log.info("Activated tenant: tenantId={}", tenantId);
         return saved;
     }
@@ -135,16 +149,28 @@ public class DefaultTenantService implements TenantService {
         if (apiKey == null || apiKey.isEmpty()) {
             return Optional.empty();
         }
+        // 查缓存：命中直接返回（含负缓存），未命中回源
+        Optional<Tenant> cached = apiKeyCache.get(apiKey);
+        if (cached != null) {
+            return cached;
+        }
+        // 回源查询
         Optional<Tenant> opt = tenantRepository.findByApiKey(apiKey);
         if (opt.isEmpty()) {
+            // 负缓存：不存在的 apiKey 也缓存，避免恶意请求打穿
+            apiKeyCache.put(apiKey, Optional.empty());
             return Optional.empty();
         }
         Tenant tenant = opt.get();
         if (tenant.getStatus() != TenantStatus.ACTIVE) {
             log.warn("API Key validation rejected: tenantId={} status={}",
                     tenant.getTenantId(), tenant.getStatus());
+            // 缓存非 ACTIVE 状态的结果（下次快速拒绝）
+            apiKeyCache.put(apiKey, Optional.empty());
             return Optional.empty();
         }
+        // 缓存 ACTIVE 租户
+        apiKeyCache.put(apiKey, opt);
         return opt;
     }
 }

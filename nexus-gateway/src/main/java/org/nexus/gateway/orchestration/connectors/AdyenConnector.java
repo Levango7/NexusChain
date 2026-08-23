@@ -3,6 +3,7 @@ package org.nexus.gateway.orchestration.connectors;
 import org.nexus.gateway.orchestration.connector.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.stereotype.Component;
@@ -15,6 +16,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * Adyen Payment Connector - integrates with Adyen's /payments API.
  * Requires: nexus.connectors.adyen.api-key + merchant-account in config.
  * In sandbox mode without a real key, operates in dry-run (simulates success).
+ *
+ * <p>性能优化（任务 #310）：注入共享的连接池化 RestTemplate。</p>
  */
 @Component
 public class AdyenConnector implements PaymentConnector {
@@ -31,8 +34,18 @@ public class AdyenConnector implements PaymentConnector {
     @Value("${nexus.connectors.adyen.enabled:false}")
     private boolean enabled;
 
-    private final RestTemplate restTemplate = new RestTemplate();
+    private final RestTemplate restTemplate;
     private final Map<String, PaymentStatus> localState = new ConcurrentHashMap<>();
+
+    @Autowired
+    public AdyenConnector(RestTemplate restTemplate) {
+        this.restTemplate = restTemplate;
+    }
+
+    /** 测试用兼容构造器。 */
+    public AdyenConnector() {
+        this.restTemplate = new RestTemplate();
+    }
 
     @Override
     public String getId() { return "adyen"; }

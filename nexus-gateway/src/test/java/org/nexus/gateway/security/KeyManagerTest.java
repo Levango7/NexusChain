@@ -2,17 +2,33 @@ package org.nexus.gateway.security;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.io.TempDir;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.nexus.gateway.model.MerchantKeypairEntry;
+import org.nexus.gateway.repository.MerchantKeypairRepository;
 
 import java.nio.file.Path;
 import java.util.Base64;
+import java.util.Collections;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
 
 /**
  * KeyManager 实现单元测试：Sandbox / LocalFile / Vault。
+ *
+ * <p>B-14 修复后 VaultKeyManager 构造函数要求注入 {@link MerchantKeypairRepository}，
+ * 本测试使用 Mockito Mock 该依赖。</p>
  */
+@ExtendWith(MockitoExtension.class)
 class KeyManagerTest {
+
+    @Mock
+    private MerchantKeypairRepository keypairRepository;
 
     // === SandboxKeyManager ===
 
@@ -96,21 +112,22 @@ class KeyManagerTest {
         byte[] key = new byte[32];
         for (int i = 0; i < 32; i++) key[i] = (byte) i;
         String b64 = Base64.getEncoder().encodeToString(key);
-        VaultKeyManager km = new VaultKeyManager(b64);
+        when(keypairRepository.findAll()).thenReturn(Collections.emptyList());
+        VaultKeyManager km = new VaultKeyManager(b64, keypairRepository);
         assertNotNull(km);
     }
 
     @Test
     @DisplayName("VaultKeyManager: 空 master key 抛异常")
     void vault_emptyMasterKey() {
-        assertThrows(IllegalStateException.class, () -> new VaultKeyManager(""));
+        assertThrows(IllegalStateException.class, () -> new VaultKeyManager("", keypairRepository));
     }
 
     @Test
     @DisplayName("VaultKeyManager: 非 32 字节 master key 抛异常")
     void vault_shortMasterKey() {
         String b64 = Base64.getEncoder().encodeToString(new byte[16]);
-        assertThrows(IllegalStateException.class, () -> new VaultKeyManager(b64));
+        assertThrows(IllegalStateException.class, () -> new VaultKeyManager(b64, keypairRepository));
     }
 
     @Test
@@ -118,7 +135,10 @@ class KeyManagerTest {
     void vault_storeAndDecrypt() {
         byte[] key = new byte[32];
         for (int i = 0; i < 32; i++) key[i] = (byte) (i + 1);
-        VaultKeyManager km = new VaultKeyManager(Base64.getEncoder().encodeToString(key));
+        when(keypairRepository.findAll()).thenReturn(Collections.emptyList());
+        when(keypairRepository.findByMerchantId(any())).thenReturn(Optional.empty());
+        when(keypairRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        VaultKeyManager km = new VaultKeyManager(Base64.getEncoder().encodeToString(key), keypairRepository);
 
         km.storeKeypair(5005L, "pub-secret", "priv-secret");
         assertTrue(km.hasKeypair(5005L));
@@ -131,7 +151,8 @@ class KeyManagerTest {
     void vault_unknownMerchant() {
         byte[] key = new byte[32];
         String b64 = Base64.getEncoder().encodeToString(key);
-        VaultKeyManager km = new VaultKeyManager(b64);
+        when(keypairRepository.findAll()).thenReturn(Collections.emptyList());
+        VaultKeyManager km = new VaultKeyManager(b64, keypairRepository);
         assertNull(km.getPublicKey(6006L));
         assertNull(km.getPrivateKey(6006L));
         assertFalse(km.hasKeypair(6006L));

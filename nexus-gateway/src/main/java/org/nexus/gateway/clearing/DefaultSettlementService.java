@@ -206,6 +206,10 @@ public class DefaultSettlementService implements SettlementService {
 
     /**
      * Map the gateway batch entity to the nexus-settlement engine batch DTO.
+     *
+     * <p>性能优化（任务 #310）：修复 N+1 查询。原实现对每个交易 ID 调用
+     * {@code orderRepository.findById(txId)}，N 个交易产生 N 次 SQL。
+     * 改为单次 {@code findByIdIn} 批量查询，将 N 次 SQL 降为 1 次。</p>
      */
     private org.nexus.settlement.clearing.SettlementBatch toEngineBatch(SettlementBatch batch) {
         org.nexus.settlement.clearing.SettlementBatch engineBatch =
@@ -215,8 +219,11 @@ public class DefaultSettlementService implements SettlementService {
         engineBatch.setStatus(org.nexus.settlement.clearing.SettlementBatch.BatchStatus.PENDING);
 
         List<ClearingOrder> orders = new ArrayList<>();
-        for (Long txId : batch.getTransactionList()) {
-            orderRepository.findById(txId).ifPresent(order -> {
+        List<Long> txIds = batch.getTransactionList();
+        if (!txIds.isEmpty()) {
+            // 批量查询：1 次 SQL 取回所有订单，替代原 N 次 findById
+            List<PaymentOrder> paymentOrders = orderRepository.findByIdIn(txIds);
+            for (PaymentOrder order : paymentOrders) {
                 ClearingOrder co = new ClearingOrder();
                 co.setOrderId(String.valueOf(order.getId()));
                 co.setMerchantId(String.valueOf(order.getMerchantId()));
@@ -225,7 +232,7 @@ public class DefaultSettlementService implements SettlementService {
                 co.setSettlementCycle(batch.getPeriod().name());
                 co.setStatus(ClearingOrder.OrderStatus.PENDING);
                 orders.add(co);
-            });
+            }
         }
         engineBatch.setOrders(orders);
         return engineBatch;

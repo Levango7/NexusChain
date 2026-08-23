@@ -138,4 +138,17 @@ public interface PaymentOrderRepository extends JpaRepository<PaymentOrder, Long
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT o FROM PaymentOrder o WHERE o.id = :id")
     Optional<PaymentOrder> findByIdForUpdate(@Param("id") Long id);
+
+    /**
+     * 批量按 ID 查询订单（性能优化任务 #310：修复 N+1 查询）。
+     *
+     * <p>用于 {@link org.nexus.gateway.clearing.DefaultSettlementService#toEngineBatch}
+     * 替代循环调用 {@code findById} 的 N+1 查询模式。一次 IN 查询取回所有订单，
+     * 将 N 次 SQL 降为 1 次。</p>
+     *
+     * @param ids 订单 ID 集合
+     * @return 匹配的订单列表（顺序不保证，调用方按需排序）
+     */
+    @Query("SELECT o FROM PaymentOrder o WHERE o.id IN :ids")
+    List<PaymentOrder> findByIdIn(@Param("ids") List<Long> ids);
 }

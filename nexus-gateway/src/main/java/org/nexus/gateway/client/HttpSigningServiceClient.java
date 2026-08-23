@@ -4,6 +4,7 @@ import org.nexus.sdk.client.SigningServiceClient;
 import org.nexus.gateway.config.GatewayConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.*;
 import org.springframework.stereotype.Component;
 import org.springframework.util.LinkedMultiValueMap;
@@ -33,6 +34,8 @@ import java.util.Map;
  * （{@link org.nexus.sdk.client.feign.SigningServiceFeignClient}）。本 HTTP 实现类
  * 保留作为 legacy/回滚备用，Resilience4j 注解保留（与 Sentinel 共存：
  * Resilience4j 管理本类对 exchange-wallet 的直接 HTTP 调用，Sentinel 管理 Feign 层）。</p>
+ *
+ * <p>性能优化（任务 #310）：注入共享的连接池化 RestTemplate。</p>
  */
 @Component
 public class HttpSigningServiceClient implements SigningServiceClient {
@@ -42,6 +45,13 @@ public class HttpSigningServiceClient implements SigningServiceClient {
     private final RestTemplate restTemplate;
     private final GatewayConfig gatewayConfig;
 
+    @Autowired
+    public HttpSigningServiceClient(GatewayConfig gatewayConfig, RestTemplate restTemplate) {
+        this.gatewayConfig = gatewayConfig;
+        this.restTemplate = restTemplate;
+    }
+
+    /** 测试用兼容构造器。 */
     public HttpSigningServiceClient(GatewayConfig gatewayConfig) {
         this.gatewayConfig = gatewayConfig;
         this.restTemplate = new RestTemplate();

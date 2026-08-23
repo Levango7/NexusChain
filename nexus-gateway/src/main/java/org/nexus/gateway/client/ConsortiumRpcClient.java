@@ -3,6 +3,7 @@ package org.nexus.gateway.client;
 import org.nexus.gateway.config.GatewayConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.*;
 import org.springframework.stereotype.Component;
 import org.springframework.util.LinkedMultiValueMap;
@@ -35,6 +36,8 @@ import java.util.Map;
  *
  * <p>Phase 1 任务 #55：Resilience4j {@code @CircuitBreaker}/{@code @Retry} 注解保留
  * （管理对链节点直接 HTTP 调用的熔断/重试，与 Sentinel 共存）。</p>
+ *
+ * <p>性能优化（任务 #310）：注入共享的连接池化 RestTemplate。</p>
  */
 @Component
 public class ConsortiumRpcClient {
@@ -44,6 +47,13 @@ public class ConsortiumRpcClient {
     private final RestTemplate restTemplate;
     private final GatewayConfig gatewayConfig;
 
+    @Autowired
+    public ConsortiumRpcClient(GatewayConfig gatewayConfig, RestTemplate restTemplate) {
+        this.gatewayConfig = gatewayConfig;
+        this.restTemplate = restTemplate;
+    }
+
+    /** 测试用兼容构造器：保留无连接池 RestTemplate，便于单元测试注入 mock。 */
     public ConsortiumRpcClient(GatewayConfig gatewayConfig) {
         this.gatewayConfig = gatewayConfig;
         this.restTemplate = new RestTemplate();

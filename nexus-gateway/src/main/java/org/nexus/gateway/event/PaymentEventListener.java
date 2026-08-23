@@ -3,6 +3,7 @@ package org.nexus.gateway.event;
 import org.nexus.gateway.config.GatewayConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.event.EventListener;
 import org.springframework.http.*;
 import org.springframework.scheduling.annotation.Async;
@@ -20,21 +21,32 @@ import java.util.Map;
 /**
  * Listens for payment lifecycle events and sends webhook notifications to merchants.
  * Runs asynchronously to avoid blocking the payment confirmation flow.
+ *
+ * <p>性能优化（任务 #310）：注入共享的连接池化 RestTemplate，
+ * 替代 {@code new RestTemplate()} 创建的无连接池实例。</p>
  */
 @Component
 public class PaymentEventListener {
 
     private static final Logger log = LoggerFactory.getLogger(PaymentEventListener.class);
 
-    private final RestTemplate restTemplate = new RestTemplate();
+    private final RestTemplate restTemplate;
     private final GatewayConfig gatewayConfig;
 
     /** Deterministic (sorted-key) JSON mapper; must match WebhookController's canonical form. */
     private static final ObjectMapper CANONICAL_MAPPER = new ObjectMapper()
             .configure(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS, true);
 
+    @Autowired
+    public PaymentEventListener(GatewayConfig gatewayConfig, RestTemplate restTemplate) {
+        this.gatewayConfig = gatewayConfig;
+        this.restTemplate = restTemplate;
+    }
+
+    /** 测试用兼容构造器：保留无连接池 RestTemplate。 */
     public PaymentEventListener(GatewayConfig gatewayConfig) {
         this.gatewayConfig = gatewayConfig;
+        this.restTemplate = new RestTemplate();
     }
 
     @Async

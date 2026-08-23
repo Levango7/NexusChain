@@ -52,11 +52,15 @@ class DefaultInsuranceFundTest {
     }
 
     @Test
-    @DisplayName("构造时 DB 异常应被捕获，余额为 0")
-    void constructor_dbExceptionHandled() {
+    @DisplayName("构造时 DB 异常应抛 IllegalStateException（B-03 修复：拒绝启动而非默认 balance=0）")
+    void constructor_dbExceptionThrowsIllegalState() {
         when(ledgerRepository.findAll()).thenThrow(new RuntimeException("DB not ready"));
-        DefaultInsuranceFund f = new DefaultInsuranceFund(ledgerRepository);
-        assertEquals(0, BigDecimal.ZERO.compareTo(f.getBalance()));
+        // B-03 修复后：恢复失败时拒绝启动，避免默认 balance=0 导致所有桥交易无保障
+        IllegalStateException ex = assertThrows(IllegalStateException.class,
+                () -> new DefaultInsuranceFund(ledgerRepository));
+        assertNotNull(ex.getCause(), "异常应包含原始 cause");
+        assertTrue(ex.getMessage().contains("restoration failed"),
+                "异常消息应说明恢复失败: " + ex.getMessage());
     }
 
     @Test

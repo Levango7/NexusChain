@@ -59,9 +59,16 @@ public class WebhookDeliveryService {
             WebhookRetryService retryService,
             WebhookSignatureService signatureService,
             DeadLetterSender deadLetterSender,
+            org.springframework.web.client.RestTemplate restTemplate,
+            com.fasterxml.jackson.databind.ObjectMapper objectMapper,
             @Value("${nexus.webhook.callback-secret:}") String signingSecret) {
-        this(repository, retryService, signatureService, deadLetterSender,
-                new RestTemplate(), signingSecret);
+        this.repository = repository;
+        this.retryService = retryService;
+        this.signatureService = signatureService;
+        this.deadLetterSender = deadLetterSender;
+        this.restTemplate = restTemplate;
+        this.signingSecret = signingSecret;
+        this.objectMapper = objectMapper;
     }
 
     /** 测试构造器：可注入 RestTemplate。 */

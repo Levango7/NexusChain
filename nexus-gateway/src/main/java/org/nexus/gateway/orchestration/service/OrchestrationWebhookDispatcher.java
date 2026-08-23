@@ -61,8 +61,10 @@ public class OrchestrationWebhookDispatcher {
     /** Production constructor: real RestTemplate with the default backoff schedule. */
     @Autowired
     public OrchestrationWebhookDispatcher(Tracer tracer,
-                                          org.springframework.beans.factory.ObjectProvider<WebhookDeliveryService> deliveryServiceProvider) {
-        this(new RestTemplate(), DEFAULT_RETRY_DELAYS_MS, tracer, deliveryServiceProvider.getIfAvailable());
+                                          org.springframework.beans.factory.ObjectProvider<WebhookDeliveryService> deliveryServiceProvider,
+                                          org.springframework.beans.factory.ObjectProvider<RestTemplate> restTemplateProvider) {
+        this(restTemplateProvider.getIfAvailable() != null ? restTemplateProvider.getIfAvailable() : new RestTemplate(),
+                DEFAULT_RETRY_DELAYS_MS, tracer, deliveryServiceProvider.getIfAvailable());
     }
 
     /** Production constructor without tracer (backward compat). */

@@ -3,6 +3,7 @@ package org.nexus.gateway.orchestration.connectors;
 import org.nexus.gateway.orchestration.connector.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.stereotype.Component;
@@ -15,6 +16,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * Stripe Payment Connector - integrates with Stripe's PaymentIntents API.
  * Requires: stripe.api-key in application.yml (or env STRIPE_API_KEY).
  * In sandbox mode without a real key, operates in dry-run (simulates success).
+ *
+ * <p>性能优化（任务 #310）：注入共享的连接池化 RestTemplate。</p>
  */
 @Component
 public class StripeConnector implements PaymentConnector {
@@ -35,8 +38,18 @@ public class StripeConnector implements PaymentConnector {
     @Value("${nexus.connectors.stripe.api-base-url:https://api.stripe.com/v1}")
     private String apiBase = DEFAULT_STRIPE_API_BASE;
 
-    private final RestTemplate restTemplate = new RestTemplate();
+    private final RestTemplate restTemplate;
     private final Map<String, PaymentStatus> localState = new ConcurrentHashMap<>();
+
+    @Autowired
+    public StripeConnector(RestTemplate restTemplate) {
+        this.restTemplate = restTemplate;
+    }
+
+    /** 测试用兼容构造器。 */
+    public StripeConnector() {
+        this.restTemplate = new RestTemplate();
+    }
 
     @Override
     public String getId() { return "stripe"; }
