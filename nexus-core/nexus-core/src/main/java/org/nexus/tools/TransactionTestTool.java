@@ -11,6 +11,7 @@ import com.fasterxml.jackson.databind.deser.std.StdDeserializer;
 import com.fasterxml.jackson.databind.module.SimpleModule;
 import com.google.protobuf.ByteString;
 import org.apache.commons.cli.*;
+import org.apache.commons.codec.DecoderException;
 import org.apache.commons.codec.binary.Hex;
 import org.springframework.core.io.FileSystemResource;
 import org.nexus.ApiResult.APIResult;
@@ -77,7 +78,7 @@ public class TransactionTestTool {
                 if (publicKeyHash.length == Transaction.PUBLIC_KEY_SIZE) {
                     publicKeyHash = Address.publicKeyToHash(publicKeyHash);
                 }
-            } catch (RuntimeException e) {
+            } catch (RuntimeException | DecoderException e) {
                 publicKeyHash = Address.addressToPublicKeyHash(encoded);
             }
             if (publicKeyHash == null) {
@@ -179,13 +180,13 @@ public class TransactionTestTool {
             if (encoded.startsWith("0x")) {
                 try {
                     return new Payload(Hex.decodeHex(encoded.substring(2)));
-                } catch (RuntimeException e) {
+                } catch (RuntimeException | DecoderException e) {
                     throw new PayloadDeserializeException(e.getMessage());
                 }
             }
             try {
                 return new Payload(Hex.decodeHex(encoded));
-            } catch (RuntimeException e) {
+            } catch (RuntimeException | DecoderException e) {
                 return new Payload(encoded.getBytes(StandardCharsets.UTF_8));
             }
         }

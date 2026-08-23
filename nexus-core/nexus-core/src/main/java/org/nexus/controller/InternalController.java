@@ -1,5 +1,6 @@
 package org.nexus.controller;
 
+import org.apache.commons.codec.DecoderException;
 import org.apache.commons.codec.binary.Hex;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -46,7 +47,7 @@ public class InternalController {
             if (tx != null) {
                 return codec.encodeTransaction(tx);
             }
-        } catch (RuntimeException e) {
+        } catch (RuntimeException | DecoderException e) {
             return "invalid transaction hash hex string " + hash;
         }
         return "the transaction " + hash + " not exists";
@@ -61,7 +62,7 @@ public class InternalController {
             if (tx != null) {
                 return codec.encodeTransaction(tx);
             }
-        } catch (RuntimeException e) {
+        } catch (RuntimeException | DecoderException e) {
             return "invalid transaction hash hex string " + hash;
         }
         return "the transaction " + hash + " not exists";
@@ -85,7 +86,7 @@ public class InternalController {
         try {
             byte[] hash = Hex.decodeHex(blockInfo);
             return stateDB.getBlock(hash);
-        } catch (RuntimeException e) {
+        } catch (RuntimeException | DecoderException e) {
             return getBlocksByHeight(blockInfo);
         }
     }
@@ -126,7 +127,7 @@ public class InternalController {
             byte[] publicKey;
             try {
                 publicKey = Hex.decodeHex(from);
-            } catch (RuntimeException e) {
+            } catch (RuntimeException | DecoderException e) {
                 return e.getMessage();
             }
             if (typeParsed == null) {
@@ -142,7 +143,7 @@ public class InternalController {
             byte[] publicKey;
             try {
                 publicKey = Hex.decodeHex(from);
-            } catch (RuntimeException e) {
+            } catch (RuntimeException | DecoderException e) {
                 return e.getMessage();
             }
             if (typeParsed == null) {

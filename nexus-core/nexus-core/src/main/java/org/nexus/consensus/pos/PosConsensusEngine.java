@@ -1,5 +1,6 @@
 package org.nexus.consensus.pos;
 
+import org.apache.commons.codec.DecoderException;
 import org.apache.commons.codec.binary.Hex;
 import org.nexus.consensus.pow.ConsensusConfig;
 import org.nexus.consensus.pow.EconomicModel;
@@ -159,7 +160,7 @@ public class PosConsensusEngine implements PosConsensus {
             this.signingKeyPair = new KeyPair(publicKey, privateKey);
             logger.info("PosConsensusEngine: applied configured validator key (public={})",
                     Hex.encodeHexString(publicKey));
-        } catch (RuntimeException e) {
+        } catch (RuntimeException | DecoderException e) {
             logger.warn("validator-private-key parse failed, keeping random key: {}", e.getMessage());
         }
     }
@@ -254,7 +255,7 @@ public class PosConsensusEngine implements PosConsensus {
             logger.info("Block proposed at height {} hash={} by proposer {}",
                     height, block.getHashHexString(), selected.getAddress());
             return block;
-        } catch (RuntimeException e) {
+        } catch (Exception e) {
             logger.error("Propose failed at height {}: {}", height, e.getMessage(), e);
             return null;
         }
@@ -646,7 +647,7 @@ public class PosConsensusEngine implements PosConsensus {
                         block.nHeight);
             }
             return valid;
-        } catch (RuntimeException e) {
+        } catch (RuntimeException | DecoderException e) {
             // fail-closed：验签异常直接拒绝
             logger.warn("Signature check failed (fail-closed): verification exception at height {}: {}",
                     block.nHeight, e.getMessage());

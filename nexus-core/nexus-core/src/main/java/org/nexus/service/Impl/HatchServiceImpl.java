@@ -133,7 +133,7 @@ public class HatchServiceImpl implements HatchService {
                 jsonArray.add(json);
             }
             return APIResult.newFailResult(2000, "SUCCESS", jsonArray);
-        } catch (RuntimeException e) {
+        } catch (Exception e) {
             return APIResult.newFailResult(5000, "ERROR");
         }
     }
@@ -163,7 +163,7 @@ public class HatchServiceImpl implements HatchService {
                 jsonArray.add(map);
             }
             return APIResult.newFailResult(2000, "SUCCESS", jsonArray);
-        } catch (RuntimeException e) {
+        } catch (Exception e) {
             return APIResult.newFailResult(5000, "Exception error");
         }
     }
@@ -181,7 +181,7 @@ public class HatchServiceImpl implements HatchService {
                 jsonArray.add(map);
             }
             return APIResult.newFailResult(2000, "SUCCESS", jsonArray);
-        } catch (RuntimeException e) {
+        } catch (Exception e) {
             return APIResult.newFailResult(5000, "Exception error");
         }
     }
@@ -198,7 +198,7 @@ public class HatchServiceImpl implements HatchService {
                 jsonArray.add(map);
             }
             return APIResult.newFailResult(2000, "SUCCESS", jsonArray);
-        } catch (RuntimeException e) {
+        } catch (Exception e) {
             return APIResult.newFailResult(5000, "Exception error");
         }
     }
@@ -218,7 +218,7 @@ public class HatchServiceImpl implements HatchService {
                 jsonArray.add(map);
             }
             return APIResult.newFailResult(2000, "SUCCESS", jsonArray);
-        } catch (RuntimeException e) {
+        } catch (Exception e) {
             return APIResult.newFailResult(5000, "Exception error");
         }
     }
@@ -238,7 +238,7 @@ public class HatchServiceImpl implements HatchService {
                 jsonArray.add(map);
             }
             return APIResult.newFailResult(2000, "SUCCESS", jsonArray);
-        } catch (RuntimeException e) {
+        } catch (Exception e) {
             return APIResult.newFailResult(5000, "Exception error");
         }
     }
@@ -255,7 +255,7 @@ public class HatchServiceImpl implements HatchService {
                 jsonArray.add(map);
             }
             return APIResult.newFailResult(2000, "SUCCESS", jsonArray);
-        } catch (RuntimeException e) {
+        } catch (Exception e) {
             return APIResult.newFailResult(5000, "Exception error");
         }
     }
@@ -272,7 +272,7 @@ public class HatchServiceImpl implements HatchService {
                 jsonArray.add(map);
             }
             return APIResult.newFailResult(2000, "SUCCESS", jsonArray);
-        } catch (RuntimeException e) {
+        } catch (Exception e) {
             return APIResult.newFailResult(5000, "Exception error");
         }
     }
@@ -336,7 +336,7 @@ public class HatchServiceImpl implements HatchService {
                 }
             }
             return APIResult.newFailResult(2000, "SUCCESS", jsonObject);
-        } catch (RuntimeException e) {
+        } catch (Exception e) {
             return APIResult.newFailResult(5000, "Exception error");
         }
     }
@@ -402,7 +402,7 @@ public class HatchServiceImpl implements HatchService {
                 }
             }
             return APIResult.newFailResult(2000, "SUCCESS", jsonObject);
-        } catch (RuntimeException e) {
+        } catch (Exception e) {
             return APIResult.newFailResult(5000, "Exception error");
         }
     }

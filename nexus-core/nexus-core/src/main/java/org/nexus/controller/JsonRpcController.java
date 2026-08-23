@@ -30,6 +30,7 @@
  */
 package org.nexus.controller;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -129,7 +130,7 @@ public class JsonRpcController {
             } else {
                 response.set("result", MAPPER.valueToTree(result));
             }
-        } catch (RuntimeException e) {
+        } catch (RuntimeException | JsonProcessingException e) {
             logger.warn("JSON-RPC dispatch failed: {}", e.getMessage());
             response.put("id", id);
             response.set("error", error(CODE_INVALID_REQUEST, "malformed JSON-RPC request: " + e.getMessage(), id));
@@ -416,7 +417,7 @@ public class JsonRpcController {
                     status = "confirmed";
                 }
                 if (p.has("timestamp")) ts = p.get("timestamp").asLong(ts);
-            } catch (RuntimeException e) {
+            } catch (RuntimeException | JsonProcessingException e) {
                 // payload 解析失败则回退到交易本身字段（使用上面默认值）
                 logger.debug("crosschain payload parse failed for {}: {}",
                         tx.getHashHexString(), e.getMessage());
@@ -644,7 +645,7 @@ public class JsonRpcController {
         if (rc.getAbi() != null && !rc.getAbi().isEmpty()) {
             try {
                 n.set("abi", MAPPER.readTree(rc.getAbi()));
-            } catch (RuntimeException e) {
+            } catch (RuntimeException | JsonProcessingException e) {
                 // abi 非合法 JSON 则回退为字符串输出
                 n.put("abi", rc.getAbi());
             }

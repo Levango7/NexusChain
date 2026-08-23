@@ -166,7 +166,7 @@ public class CommandController {
                 return encodeDecoder.encodeBlock(b);
             }
             return ConsensusResult.ERROR("cannot find transaction where hash = " + hash);
-        } catch (RuntimeException e) {
+        } catch (RuntimeException | DecoderException e) {
             return ConsensusResult.ERROR("invalid hex " + hash);
         }
     }
@@ -179,7 +179,7 @@ public class CommandController {
             if (tx != null) {
                 return encodeDecoder.encodeTransaction(tx);
             }
-        } catch (RuntimeException e) {
+        } catch (RuntimeException | DecoderException e) {
             return ConsensusResult.ERROR("invalid transaction hash hex string " + hash);
         }
         return ConsensusResult.ERROR("the transaction " + hash + " not exists");
@@ -193,7 +193,7 @@ public class CommandController {
             if (tx != null) {
                 return encodeDecoder.encodeTransaction(tx);
             }
-        } catch (RuntimeException e) {
+        } catch (RuntimeException | DecoderException e) {
             return ConsensusResult.ERROR("invalid pubkey hex string " + hash);
         }
         return ConsensusResult.ERROR("the transaction where to = " + hash + " not exists");
@@ -215,7 +215,7 @@ public class CommandController {
                 res = CONFIRMED;
             }
             return APIResult.newFailResult(2000, "success", res);
-        } catch (RuntimeException e) {
+        } catch (RuntimeException | DecoderException e) {
             return APIResult.newFailResult(5000, "fail");
         }
     }
@@ -228,7 +228,7 @@ public class CommandController {
             res.put("blockHash", Hex.encodeHexString(tx.blockHash));
             res.put("height", tx.height);
             return APIResult.newFailResult(2000, "success", res);
-        } catch (RuntimeException e) {
+        } catch (RuntimeException | DecoderException e) {
             return APIResult.newFailResult(5000, "fail");
         }
     }

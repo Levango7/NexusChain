@@ -72,7 +72,7 @@ public class RPCClient {
         try {
             HttpEntity entity = response.getEntity();
             return entity != null ? EntityUtils.toByteArray(entity) : null;
-        } catch (RuntimeException e) {
+        } catch (Exception e) {
             return null;
         }
     }
@@ -97,13 +97,13 @@ public class RPCClient {
                 logger.error("post " + url + " fail");
             }
             responseBody.map(cb::call);
-        } catch (RuntimeException e) {
+        } catch (Exception e) {
             logger.error("post " + url + " fail");
         } finally {
             resp.map(x -> {
                 try {
                     x.close();
-                } catch (RuntimeException e) {
+                } catch (Exception e) {
                     return false;
                 }
                 return true;
@@ -143,13 +143,13 @@ public class RPCClient {
                 logger.error("get " + uri + " fail");
             }
             responseBody.map(cb::call);
-        } catch (RuntimeException e) {
+        } catch (Exception e) {
             logger.error("get " + uri + " fail");
         } finally {
             resp.map(x -> {
                 try {
                     x.close();
-                } catch (RuntimeException e) {
+                } catch (Exception e) {
                     return false;
                 }
                 return true;

@@ -1,5 +1,6 @@
 package org.nexus.service;
 
+import org.apache.commons.codec.DecoderException;
 import org.apache.commons.codec.binary.Hex;
 import org.nexus.ApiResult.APIResult;
 import org.nexus.core.Block;

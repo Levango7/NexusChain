@@ -248,7 +248,7 @@ public class BridgeService {
                             "recipient must be pubkey (64 hex) or pubkeyHash (40 hex), got "
                                     + recipientBytes.length + " bytes");
                 }
-            } catch (RuntimeException e) {
+            } catch (RuntimeException | DecoderException e) {
                 return APIResult.newFailResult(APIResult.FAIL, "invalid recipient hex: " + e.getMessage());
             }
             byte[] emptySig = new byte[Transaction.SIGNATURE_SIZE];
@@ -275,7 +275,7 @@ public class BridgeService {
             data.put("txHash", tx.getHashHexString());
 
             return APIResult.newSuccess(data);
-        } catch (RuntimeException e) {
+        } catch (RuntimeException | DecoderException e) {
             return APIResult.newFailResult(APIResult.FAIL, "Failed to mint bridge assets: " + e.getMessage());
         }
     }
