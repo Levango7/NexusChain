@@ -1,11 +1,19 @@
 package org.nexus.core.validate;
 
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.stereotype.Component;
+import org.apache.commons.codec.binary.Hex;
+import org.nexus.consensus.pos.Validator;
+import org.nexus.consensus.pos.ValidatorRegistry;
 import org.nexus.core.account.Transaction;
 import org.nexus.crypto.ed25519.Ed25519PublicKey;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
 
 import java.util.Arrays;
+import java.util.HashSet;
+import java.util.Set;
 
 /**
  * 跨链桥交易验证规则。
@@ -25,13 +33,23 @@ import java.util.Arrays;
  *   <li>{@code nexus.bridge.daily-limit} - 每日跨链交易总额上限</li>
  *   <li>{@code nexus.bridge.timelock-duration} - 时间锁持续时间（秒）</li>
  *   <li>{@code nexus.bridge.min-validators} - 最低验证人签名数</li>
+ *   <li>{@code nexus.bridge.validator-pubkeys} - 桥验证人公钥白名单（逗号分隔 hex，
+ *       v2.0.0 安全修复），空则回退到 {@link ValidatorRegistry} 活跃验证人集合</li>
  * </ul></p>
+ *
+ * <p><b>v2.0.0 安全修复</b>：{@code BRIDGE_MINT} 验签循环此前仅校验签名真实性，
+ * 未校验签名公钥是否属于注册验证人集合，攻击者可放入自生成公钥+对应私钥签名
+ * 通过验签冒充授权验证人。现增加公钥归属校验（fail-closed），允许集合 =
+ * {@link ValidatorRegistry} 活跃验证人公钥 ∪ 配置白名单。集合为空时（未配置且
+ * 注册表无验证人，如单元测试/启动初期）warn 跳过以保持向后兼容。</p>
  *
  * @author nexus-core
  * @since 1.0
  */
 @Component
 public class BridgeRule implements TransactionRule {
+
+    private static final Logger log = LoggerFactory.getLogger(BridgeRule.class);
 
     /** 单笔跨链交易金额上限（NEX 最小单位），通过配置注入。 */
     @Value("${nexus.bridge.single-tx-limit:1000000000}")
@@ -48,6 +66,22 @@ public class BridgeRule implements TransactionRule {
     /** 最低验证人签名数，通过配置注入。 */
     @Value("${nexus.bridge.min-validators:3}")
     private int minValidators;
+
+    /**
+     * 桥验证人公钥白名单（逗号分隔的 Ed25519 公钥 hex），通过配置注入。
+     * <p>空串表示未配置，此时回退到 {@link ValidatorRegistry} 活跃验证人集合；
+     * 两者均为空时跳过公钥归属校验（向后兼容）。</p>
+     */
+    @Value("${nexus.bridge.validator-pubkeys:}")
+    private String validatorPubkeysConfig;
+
+    /**
+     * 验证人注册中心（可选注入），用于公钥归属校验。
+     * <p>{@code required=false} 以兼容无 Spring 上下文的单元测试
+     * （{@code new BridgeRule()} 时保持 null）。</p>
+     */
+    @Autowired(required = false)
+    private ValidatorRegistry validatorRegistry;
 
     /**
      * 获取单笔跨链交易金额上限。
@@ -217,6 +251,18 @@ public class BridgeRule implements TransactionRule {
         // 提取消息哈希（验证人签名的内容）
         byte[] messageHash = Arrays.copyOfRange(tx.payload, MSG_HASH_OFFSET, sigBlockOffset);
 
+        // v2.0.0 安全修复：构建桥验证人公钥允许集合（小写 hex，无 0x 前缀）。
+        // 来源：ValidatorRegistry 活跃验证人公钥 ∪ 配置白名单 nexus.bridge.validator-pubkeys。
+        // 集合为空时（未配置且注册表无验证人，如单元测试/启动初期）warn 跳过公钥归属校验
+        // 以保持向后兼容；非空时对每个签名公钥执行归属校验（fail-closed）。
+        Set<String> allowedValidatorPubkeys = buildAllowedValidatorPubkeys();
+        if (allowedValidatorPubkeys.isEmpty()) {
+            log.warn("BRIDGE_MINT: validator pubkey allowlist is empty (no ValidatorRegistry active "
+                    + "validators and nexus.bridge.validator-pubkeys unset); skipping pubkey ownership "
+                    + "check (backward-compatible mode). Configure the allowlist in production to enforce "
+                    + "bridge validator authorization.");
+        }
+
         // 遍历每个签名，用对应验证人公钥验签
         for (int i = 0; i < sigCount; i++) {
             int entryOffset = sigBlockOffset + i * SIG_ENTRY_LENGTH;
@@ -224,6 +270,17 @@ public class BridgeRule implements TransactionRule {
                     tx.payload, entryOffset, entryOffset + PUBKEY_LENGTH);
             byte[] signature = Arrays.copyOfRange(
                     tx.payload, entryOffset + PUBKEY_LENGTH, entryOffset + SIG_ENTRY_LENGTH);
+
+            // v2.0.0 安全修复：公钥归属校验（fail-closed）。
+            // 此前仅验证签名真实性，未校验签名公钥是否属于注册验证人集合，
+            // 攻击者可放入自生成公钥+对应私钥签名通过验签冒充授权验证人。
+            if (!allowedValidatorPubkeys.isEmpty()) {
+                String pubHex = Hex.encodeHexString(validatorPubkey);
+                if (!allowedValidatorPubkeys.contains(pubHex)) {
+                    return Result.Error("BRIDGE_MINT: validator pubkey at index " + i
+                            + " is not in the registered validator set (unauthorized bridge signer)");
+                }
+            }
 
             try {
                 boolean valid = new Ed25519PublicKey(validatorPubkey).verify(messageHash, signature);
@@ -303,5 +360,63 @@ public class BridgeRule implements TransactionRule {
         }
         byte[] zeros = new byte[bytes.length];
         return !Arrays.equals(bytes, zeros);
+    }
+
+    /**
+     * 构建允许的桥验证人公钥集合（小写 hex，无 {@code 0x} 前缀）。
+     *
+     * <p>来源合并（并集）：</p>
+     * <ul>
+     *   <li>{@link ValidatorRegistry#getActiveValidators()} 中每个验证人的
+     *       {@link Validator#getPublicKey()}（hex）</li>
+     *   <li>配置项 {@code nexus.bridge.validator-pubkeys}（逗号分隔 hex）</li>
+     * </ul>
+     *
+     * <p>所有条目统一去除 {@code 0x} 前缀并转小写，以与
+     * {@code Hex.encodeHexString(validatorPubkey)}（小写无前缀）一致比较。
+     * 读取注册表异常时 warn 并保留已收集部分（fail-open 集合构建，
+     * 但校验本身仍 fail-closed——非空集合外的公钥一律拒绝）。</p>
+     *
+     * @return 允许公钥 hex 集合；两者均未配置时返回空集
+     */
+    private Set<String> buildAllowedValidatorPubkeys() {
+        Set<String> allowed = new HashSet<>();
+        if (validatorRegistry != null) {
+            try {
+                for (Validator v : validatorRegistry.getActiveValidators()) {
+                    if (v != null && v.getPublicKey() != null && !v.getPublicKey().isEmpty()) {
+                        allowed.add(stripHexPrefix(v.getPublicKey()).toLowerCase());
+                    }
+                }
+            } catch (RuntimeException e) {
+                log.warn("BRIDGE_MINT: failed to read ValidatorRegistry active validators: {}",
+                        e.getMessage());
+            }
+        }
+        if (validatorPubkeysConfig != null && !validatorPubkeysConfig.isEmpty()) {
+            for (String token : validatorPubkeysConfig.split(",")) {
+                String trimmed = token.trim();
+                if (!trimmed.isEmpty()) {
+                    allowed.add(stripHexPrefix(trimmed).toLowerCase());
+                }
+            }
+        }
+        return allowed;
+    }
+
+    /**
+     * 去除十六进制字符串的 {@code 0x}/{@code 0X} 前缀。
+     *
+     * @param hex 原始 hex 字符串
+     * @return 去除前缀后的字符串；入参为 null 返回空串
+     */
+    private static String stripHexPrefix(String hex) {
+        if (hex == null) {
+            return "";
+        }
+        if (hex.startsWith("0x") || hex.startsWith("0X")) {
+            return hex.substring(2);
+        }
+        return hex;
     }
 }
