@@ -2,9 +2,35 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [2.37.1] - 2026-08-26
+
+### 测试基础设施修复 + P2清单账本化
+
+本次发布聚焦测试稳定性修复与审计改进清单账本化，无业务逻辑变更。
+
+#### Fixed（测试稳定性）
+
+- **ParameterGovernanceMockTest 环境性失败消除**：无 PostgreSQL 环境时优雅跳过（`@EnabledIf` 探测 Docker/本地 PG），消除 6 个环境性 FAIL；无 Docker/PG 的开发机可达 0 FAIL
+
+#### Added（测试覆盖）
+
+- **nexus-common 首批单元测试**：结束零测试历史——新增 `BusinessSpanTest` 约 11 用例（no-op 降级 / mock tracer 真实路径 / close 幂等 / try-with-resources）
+- **nexus-common build.gradle 补齐 JUnit5 + Mockito 测试依赖**
+
+#### Documentation（审计账本）
+
+- **optional-improvements.md 43 项建议全面核实账本化**：三张优先级表格新增"状态"列三态标注（✅ 已修复 42 项，均附证据文件:行号；⏸ 不适用 0 项；📋 待办 1 项——高#8 SigningApprovalService 多实例共享存储，单实例部署假设下无阻塞，纳入 P3 规划）；文档头部追加"2026-08-26 全面核实结论"
+- **CI workflow 残留项核实**：清单内 CI 类建议（中#14–18）经核实均已在先前版本修复（Rust 测试门禁、Gradle wrapper 校验、12 模块镜像扫描矩阵、Trivy/OWASP action 钉 commit sha、Release body 版本段落提取），本轮未改动任何 workflow 文件
+
 ## [Unreleased]
 
-### 计划于 2.37.0 发布
+## [2.37.0] - 2026-08-26
+
+### 路由规则DB持久化 + Connector管理API
+
+本次发布聚焦多通道路由规则持久化存储与支付渠道连接器动态管理（对应提交 `6e67ef7`）。
+
+#### Added（路由规则与连接器）
 
 - **路由规则 DB 持久化**：多通道路由规则持久化存储，替代内存态配置
 - **路由规则 PUT 端点**：路由规则支持运行时更新

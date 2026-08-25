@@ -19,5 +19,16 @@ dependencies {
     // 仅编译期需要 Micrometer Tracing API；运行时由各消费模块（Spring Boot 3.2.5 BOM 提供 1.2.5）。
     // 本模块未引入 Spring Boot BOM，无法自动推导版本，故显式锁定与 BOM 一致的 1.2.5。
     compileOnlyApi 'io.micrometer:micrometer-tracing:1.2.5'
-    testCompileOnly 'io.micrometer:micrometer-tracing:1.2.5'
+    // 测试运行时同样需要 Micrometer Tracing 接口类（BusinessSpanTest 通过 Mockito mock
+    // Span/Tracer 接口并在 JVM 中加载它们）；testCompileOnly 仅进编译期 classpath，
+    // 测试执行期会 NoClassDefFoundError，故改为 testImplementation。
+    testImplementation 'io.micrometer:micrometer-tracing:1.2.5'
+
+    // JUnit 5 + Mockito 测试栈（本模块此前 0 测试）。
+    // useJUnitPlatform() 已由根 build.gradle 的 subprojects 块统一配置，无需重复声明。
+    testImplementation platform('org.junit:junit-bom:5.10.2')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    // 显式升级到 5.x（根构建统一注入的 mockito-core 4.11.0 会被 Gradle 版本冲突消解为更高版本）
+    testImplementation 'org.mockito:mockito-core:5.11.0'
 }

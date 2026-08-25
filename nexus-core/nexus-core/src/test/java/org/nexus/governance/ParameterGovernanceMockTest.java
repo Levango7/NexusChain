@@ -1,6 +1,7 @@
 package org.nexus.governance;
 
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.condition.EnabledIf;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.test.context.ActiveProfiles;
@@ -27,10 +28,17 @@ import static org.junit.jupiter.api.Assertions.*;
  *
  * <p>真实治理端到端验证见 {@link OnChainGovernanceIntegrationTest}
  * 与 {@link GovernanceExecutorOnChainIntegrationTest}（需 Hardhat 节点）。</p>
+ *
+ * <p><b>环境前置条件</b>：本测试依赖数据源（容器化或本地 PostgreSQL）。
+ * 通过 {@link EnabledIf} 前置探测：仅当 Docker 可用（Testcontainers 可启动
+ * 一次性 PG 容器）或本地 PostgreSQL 端口可达时才启用；否则整类优雅 SKIP，
+ * 而不是让 Spring 上下文启动失败导致全部用例 FAILED。</p>
  */
 @SpringBootTest
 @ActiveProfiles("test")
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
+@EnabledIf(value = "postgresEnvironmentAvailable",
+        disabledReason = "无Docker且本地PostgreSQL不可达，跳过依赖数据源的治理Mock测试")
 class ParameterGovernanceMockTest {
 
     /** 一次性 PG 容器（单例静态启动，整个测试类共享）。 */
@@ -43,6 +51,53 @@ class ParameterGovernanceMockTest {
     static {
         if (DockerClientFactory.instance().isDockerAvailable()) {
             Startables.deepStart(POSTGRES).join();
+        }
+    }
+
+    /**
+     * 判断当前环境是否具备运行本测试的数据源前置条件，供
+     * {@code @EnabledIf("postgresEnvironmentAvailable")} 引用。
+     *
+     * <p>判定顺序：</p>
+     * <ol>
+     *   <li>Docker 可达（Testcontainers 可启动一次性 PG 容器）→ 启用；</li>
+     *   <li>回落探测本地 PG：从环境变量 {@code DATA_SOURCE_URL}
+     *       （缺省 {@code jdbc:postgresql://localhost:5432/nexus_test}）
+     *       提取 host/port 后做 TCP 连通性探测（800ms 超时），
+     *       端口可达 → 启用。</li>
+     * </ol>
+     *
+     * @return true 表示数据源环境可用；任何异常一律视为不可用（返回 false）
+     */
+    static boolean postgresEnvironmentAvailable() {
+        // 1) Docker daemon 探测：异常（daemon 未装/未启动等）视为不可用
+        try {
+            if (org.testcontainers.DockerClientFactory.instance().isDockerAvailable()) {
+                return true;
+            }
+        } catch (Throwable t) {
+            /* Docker daemon 异常视为不可用 */
+        }
+
+        // 2) 回落探测本地 PostgreSQL：解析 DATA_SOURCE_URL 提取 host/port
+        String dataSourceUrl = System.getenv("DATA_SOURCE_URL");
+        if (dataSourceUrl == null || dataSourceUrl.isBlank()) {
+            dataSourceUrl = "jdbc:postgresql://localhost:5432/nexus_test";
+        }
+
+        try (java.net.Socket socket = new java.net.Socket()) {
+            java.util.regex.Matcher matcher = java.util.regex.Pattern
+                    .compile("jdbc:postgresql://([^:/]+):(\\d+)/")
+                    .matcher(dataSourceUrl);
+            if (!matcher.find()) {
+                return false; // URL 格式不符合预期，视为不可用
+            }
+            String host = matcher.group(1);
+            int port = Integer.parseInt(matcher.group(2));
+            socket.connect(new java.net.InetSocketAddress(host, port), 800);
+            return true;
+        } catch (Throwable t) {
+            return false; // 任何连接/解析异常均视为本地 PG 不可达
         }
     }
 
