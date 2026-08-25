@@ -276,6 +276,22 @@ public class BridgeRule implements TransactionRule {
                     + " signatures, required " + requiredLength + " bytes, got " + tx.payload.length);
         }
 
+        // v2.3.0：可选 [2B idLen][bridgeTxId] 尾部校验（fail-closed）。
+        // 不带尾部 = 旧格式，保持兼容；带尾部则必须格式完整，
+        // 残缺/长度不一致的尾部一律拒绝交易。
+        int trailingBytes = tx.payload.length - requiredLength;
+        if (trailingBytes > 0) {
+            if (trailingBytes < org.nexus.core.payment.BridgePayloadCodec.TRAILER_OVERHEAD) {
+                return Result.Error("BRIDGE_MINT: truncated bridgeTxId trailer (" + trailingBytes + " bytes)");
+            }
+            int idLen = ((tx.payload[requiredLength] & 0xFF) << 8)
+                    | (tx.payload[requiredLength + 1] & 0xFF);
+            if (idLen == 0 || trailingBytes != org.nexus.core.payment.BridgePayloadCodec.TRAILER_OVERHEAD + idLen) {
+                return Result.Error("BRIDGE_MINT: malformed bridgeTxId trailer, declared length "
+                        + idLen + " but got " + (trailingBytes - org.nexus.core.payment.BridgePayloadCodec.TRAILER_OVERHEAD));
+            }
+        }
+
         // 提取消息哈希（验证人签名的内容）
         byte[] messageHash = Arrays.copyOfRange(tx.payload, MSG_HASH_OFFSET, sigBlockOffset);
 

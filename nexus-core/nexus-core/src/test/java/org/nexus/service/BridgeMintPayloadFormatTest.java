@@ -97,10 +97,15 @@ class BridgeMintPayloadFormatTest {
         assertEquals(Transaction.Type.BRIDGE_MINT.ordinal(), tx.type);
 
         // 1. payload 二进制格式：[8B timelock][1B sigCount][32B messageHash][3×(32B pubkey+64B sig)]
+        //    v2.3.0：追加 [2B idLen][bridgeTxId] 尾部，显式携带生命周期统一 ID
         byte[] payload = tx.payload;
-        int expectedLength = 8 + 1 + 32 + 3 * (32 + 64);
+        byte[] idBytes = BRIDGE_TX_ID.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        int baseLength = 8 + 1 + 32 + 3 * (32 + 64);
+        int expectedLength = baseLength
+                + org.nexus.core.payment.BridgePayloadCodec.TRAILER_OVERHEAD + idBytes.length;
         assertEquals(expectedLength, payload.length,
-                "payload 长度应为 " + expectedLength + " 字节（v1.9.4 格式，329 = 41 + 3×96）");
+                "payload 长度应为 " + expectedLength + " 字节（v1.9.4 基础 " + baseLength
+                        + " + 尾部 " + (expectedLength - baseLength) + "）");
         // 前 8 字节 = 到期时间戳（显式传入的固定值）
         assertEquals(TIMELOCK_EXPIRY, ByteBuffer.wrap(payload, 0, 8).getLong(), "前 8 字节应为时间锁");
         // 第 9 字节 = 签名数 3
@@ -120,6 +125,11 @@ class BridgeMintPayloadFormatTest {
                     java.util.Arrays.copyOfRange(payload, entryOffset + 32, entryOffset + 96),
                     "签名 " + i + " 应与传入一致");
         }
+
+        // 尾部回读：extractIdTrailer 应还原出与传入一致的 bridgeTxId
+        String extractedId = org.nexus.core.payment.BridgePayloadCodec.extractIdTrailer(
+                payload, baseLength);
+        assertEquals(BRIDGE_TX_ID, extractedId, "尾部应能还原生命周期统一 bridgeTxId");
 
         // 2. tx.to 填充真实 recipient pubkeyHash
         assertFalse(java.util.Arrays.equals(tx.to, new byte[Transaction.PUBLIC_KEY_HASH_SIZE]),

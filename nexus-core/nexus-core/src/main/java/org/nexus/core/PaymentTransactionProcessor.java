@@ -492,9 +492,27 @@ public class PaymentTransactionProcessor {
                     + "skipping duplicate tx={}", blockHeight, messageHashHex, tx.getHashHexString());
             return;
         }
+        // 持久化已消费的 messageHash（重启后仍拒绝重复铸造）
+        stateStore.putConsumedReplayKey(BridgeLifecycleReplayGuard.KIND_MINT, messageHashHex);
 
-        // 以 messageHash 为桥交易 ID（即源链锁定交易的规范引用）
-        String bridgeTxId = messageHashHex;
+        // v2.3.0 生命周期键统一：payload 尾部携带与 lock 阶段一致的 bridgeTxId 时，
+        // 直接命中同一条 BridgeTransaction 记录（LOCKED → MINTED 状态机推进）；
+        // 旧格式（无尾部）回退为以 messageHash 为 ID 的独立记录。
+        // 基础长度 = [8B timelock][1B sigCount][32B messageHash][sigCount × (32B pubkey + 64B sig)]，
+        // 必须先读取 sigCount 才能正确定位尾部起点。
+        int sigCount = tx.payload[8] & 0xFF;
+        int mintBaseLength = 9 + 32
+                + sigCount * (Transaction.PUBLIC_KEY_SIZE + Transaction.SIGNATURE_SIZE);
+        String linkedId = org.nexus.core.payment.BridgePayloadCodec.extractIdTrailer(
+                tx.payload, mintBaseLength);
+        String bridgeTxId;
+        if (linkedId != null && !linkedId.isEmpty()) {
+            bridgeTxId = linkedId;
+            logger.info("BRIDGE_MINT: linked to lifecycle bridgeTx={} at height={}", bridgeTxId, blockHeight);
+        } else {
+            // 旧格式回退：以 messageHash 为桥交易 ID（即源链锁定交易的规范引用）
+            bridgeTxId = messageHashHex;
+        }
         BridgeTransaction bridgeTx = stateStore.getBridgeTx(bridgeTxId);
         if (bridgeTx == null) {
             bridgeTx = new BridgeTransaction(
@@ -519,8 +537,18 @@ public class PaymentTransactionProcessor {
         // 1) 幂等键为销毁意图的规范语义（from + to + amount），与 nonce/txHash 无关；
         // 2) 仅当存在 MINTED 记录时允许销毁，无关联记录/非法状态下 fail-closed 拒绝，
         //    不再凭空创建"已销毁"记录或静默跳过。
-        String bridgeTxId = BridgeLifecycleReplayGuard.computeBurnKey(
-                Hex.encodeHexString(tx.from), Hex.encodeHexString(tx.to), tx.amount);
+        // v2.3.0 生命周期键统一：payload 尾部携带与 lock/mint 一致的 bridgeTxId 时，
+        // 直接按该 ID 命中同一条 BridgeTransaction 记录；旧格式（无尾部）回退
+        // 旧语义键路径（from + to + amount，targetChain 空串，仅兼容历史数据）。
+        String linkedId = org.nexus.core.payment.BridgePayloadCodec.extractIdTrailer(tx.payload, 9);
+        String bridgeTxId;
+        if (linkedId != null && !linkedId.isEmpty()) {
+            bridgeTxId = linkedId;
+            logger.info("BRIDGE_BURN: linked to lifecycle bridgeTx={} at height={}", bridgeTxId, blockHeight);
+        } else {
+            bridgeTxId = BridgeLifecycleReplayGuard.computeBurnKey(
+                    Hex.encodeHexString(tx.from), Hex.encodeHexString(tx.to), tx.amount);
+        }
 
         if (lifecycleReplayGuard.isConsumed(BridgeLifecycleReplayGuard.KIND_BURN, bridgeTxId)) {
             lifecycleReplayGuard.recordRejected(BridgeLifecycleReplayGuard.KIND_BURN);
@@ -554,7 +582,9 @@ public class PaymentTransactionProcessor {
             }
             bridgeTx.burn();
             stateStore.putBridgeTx(bridgeTxId, bridgeTx);
-            lifecycleReplayGuard.markConsumed(BridgeLifecycleReplayGuard.KIND_BURN, bridgeTxId);
+            if (lifecycleReplayGuard.markConsumed(BridgeLifecycleReplayGuard.KIND_BURN, bridgeTxId)) {
+                stateStore.putConsumedReplayKey(BridgeLifecycleReplayGuard.KIND_BURN, bridgeTxId);
+            }
             logger.info("BRIDGE_BURN: burned {} at height={}, bridgeTx={}",
                     tx.amount, blockHeight, bridgeTxId);
         } catch (RuntimeException e) {

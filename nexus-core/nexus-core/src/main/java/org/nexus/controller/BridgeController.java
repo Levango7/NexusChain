@@ -155,10 +155,13 @@ public class BridgeController {
         String pubkey = fromPubkey != null ? fromPubkey : (String) request.get("from");
         Object amountObj = request.get("amount");
         String targetChain = (String) request.get("targetChain");
+        // v2.3.0：可选的生命周期统一桥交易 ID（lock 返回的 bridgeTxId），
+        // 提供时 burn payload 携带该 ID，链上直接命中同一条桥交易记录。
+        String bridgeTxId = (String) request.get("bridgeTxId");
 
         long amount = amountObj != null ? Long.parseLong(amountObj.toString()) : 0L;
 
-        return bridgeService.burn(pubkey, targetChain, amount, prikey, nonce);
+        return bridgeService.burn(pubkey, targetChain, amount, prikey, nonce, bridgeTxId);
     }
 
     /**

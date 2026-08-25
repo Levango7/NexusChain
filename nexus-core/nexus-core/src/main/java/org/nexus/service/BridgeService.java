@@ -139,8 +139,13 @@ public class BridgeService {
                 return APIResult.newFailResult(APIResult.FAIL, "prikey is required");
             }
 
-            // 构造桥交易对象
-            String bridgeTxId = "br_" + System.currentTimeMillis();
+            // v2.3.0 生命周期键统一：桥交易 ID 改为确定性语义键，
+            // 与 PaymentTransactionProcessor.processBridgeLock 的
+            // computeLockKey(from, targetChain, recipient, amount) 完全一致——
+            // 服务端返回的 bridgeTxId 即链上唯一生命周期记录 ID，
+            // 此前的 "br_" + 毫秒时间戳随机 ID 与链上记录无法关联。
+            String bridgeTxId = org.nexus.core.payment.BridgeLifecycleReplayGuard.computeLockKey(
+                    fromPubkey.toLowerCase(java.util.Locale.ROOT), targetChain, recipient, amount);
             long timelockExpiry = System.currentTimeMillis() / 1000 + timelockDuration;
             BridgeTransaction bridgeTx = new BridgeTransaction(
                     bridgeTxId, "NEX", targetChain, amount, recipient, minValidators, timelockExpiry);
@@ -313,8 +318,12 @@ public class BridgeService {
             }
 
             // v1.9.4 格式：[8B timelock][1B sigCount][32B messageHash][N×(32B pubkey + 64B sig)]
+            // v2.3.0：追加 [2B idLen][bridgeTxId] 尾部，显式携带生命周期统一 ID，
+            // 使目标链铸造直接命中源链锁定创建的同一 BridgeTransaction 记录。
+            byte[] idBytes = bridgeTxId.getBytes(StandardCharsets.UTF_8);
             ByteBuffer payloadBuf = ByteBuffer.allocate(
-                    8 + 1 + 32 + n * (Transaction.PUBLIC_KEY_SIZE + Transaction.SIGNATURE_SIZE));
+                    8 + 1 + 32 + n * (Transaction.PUBLIC_KEY_SIZE + Transaction.SIGNATURE_SIZE)
+                            + org.nexus.core.payment.BridgePayloadCodec.TRAILER_OVERHEAD + idBytes.length);
             payloadBuf.putLong(timelockExpiry);
             payloadBuf.put((byte) n);
             payloadBuf.put(messageHash);
@@ -322,6 +331,8 @@ public class BridgeService {
                 payloadBuf.put(pubkeyBytes[i]);
                 payloadBuf.put(sigBytes[i]);
             }
+            payloadBuf.putShort((short) idBytes.length);
+            payloadBuf.put(idBytes);
 
             return submitMintTransaction(bridgeTxId, sourceChain, recipient, amount,
                     payloadBuf.array(), n);
@@ -525,6 +536,30 @@ public class BridgeService {
      */
     public APIResult burn(String fromPubkey, String targetChain, long amount,
                           String prikey, long nonce) {
+        // v2.3.0 兼容入口：未提供 bridgeTxId 时使用旧格式 payload（无尾部）。
+        return burn(fromPubkey, targetChain, amount, prikey, nonce, null);
+    }
+
+    /**
+     * 销毁资产（v2.3.0 生命周期键统一版本）。
+     *
+     * <p>payload 格式：
+     * <pre>[8B timestamp][1B flags][2B idLen][bridgeTxId UTF-8]</pre>
+     * 携带与 lock 阶段一致的生命周期统一 ID，使
+     * {@code PaymentTransactionProcessor.processBridgeBurn} 能直接命中
+     * 同一条 {@link BridgeTransaction} 记录并驱动状态机 MINTED → BURNED。
+     * {@code bridgeTxId} 为 {@code null}/空时回退旧格式（9 字节，无尾部）。</p>
+     *
+     * @param fromPubkey 销毁发起方公钥（hex）
+     * @param targetChain 目标链标识
+     * @param amount      销毁金额
+     * @param prikey      发起方私钥（hex）
+     * @param nonce       交易 nonce
+     * @param bridgeTxId  生命周期统一桥交易 ID（可空，空则旧格式）
+     * @return 统一响应结果
+     */
+    public APIResult burn(String fromPubkey, String targetChain, long amount,
+                          String prikey, long nonce, String bridgeTxId) {
         try {
             if (fromPubkey == null || fromPubkey.isEmpty()) {
                 return APIResult.newFailResult(APIResult.FAIL, "fromPubkey is required");
@@ -546,10 +581,17 @@ public class BridgeService {
             // PLAN-004 同类修复：burn payload 改二进制格式（对齐 BridgeRule 解析约定）：
             // 前 8 字节 = 时间戳，第 9 字节 = 签名数。burn 为单用户自签（tx.signature
             // 由 Ed25519 验签），非验证人多签——签名数填 0，BridgeRule 不再要求多签。
-            ByteBuffer payloadBuf = ByteBuffer.allocate(8 + 1);
-            payloadBuf.putLong(System.currentTimeMillis() / 1000);
-            payloadBuf.put((byte) 0);
-            byte[] payload = payloadBuf.array();
+            // v2.3.0：bridgeTxId 非空时追加 [2B idLen][bridgeTxId] 尾部。
+            byte[] payload;
+            if (bridgeTxId != null && !bridgeTxId.isEmpty()) {
+                payload = org.nexus.core.payment.BridgePayloadCodec.buildBurnPayload(
+                        System.currentTimeMillis() / 1000, 0, bridgeTxId);
+            } else {
+                ByteBuffer payloadBuf = ByteBuffer.allocate(8 + 1);
+                payloadBuf.putLong(System.currentTimeMillis() / 1000);
+                payloadBuf.put((byte) 0);
+                payload = payloadBuf.array();
+            }
 
             byte[] emptySig = new byte[Transaction.SIGNATURE_SIZE];
 
