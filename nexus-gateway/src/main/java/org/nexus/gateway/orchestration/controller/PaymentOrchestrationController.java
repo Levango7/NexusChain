@@ -3,6 +3,7 @@ package org.nexus.gateway.orchestration.controller;
 import org.nexus.gateway.orchestration.connector.ConnectorHealth;
 import org.nexus.gateway.orchestration.connector.ConnectorRegistry;
 import org.nexus.gateway.orchestration.connector.PaymentConnector;
+import org.nexus.gateway.orchestration.connectors.DynamicHttpPspConnector;
 import org.nexus.gateway.orchestration.model.OrchestratedPayment;
 import org.nexus.gateway.orchestration.routing.RoutingEngine;
 import org.nexus.gateway.orchestration.routing.RoutingRule;
@@ -10,9 +11,11 @@ import org.nexus.gateway.orchestration.service.OrchestrationService;
 import org.springframework.data.domain.Page;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 /**
@@ -23,9 +26,14 @@ import java.util.stream.Collectors;
 @RequestMapping("/api/v1/payments")
 public class PaymentOrchestrationController {
 
+    private static final org.slf4j.Logger log =
+            org.slf4j.LoggerFactory.getLogger(PaymentOrchestrationController.class);
+
     private final OrchestrationService orchestrationService;
     private final ConnectorRegistry connectorRegistry;
     private final RoutingEngine routingEngine;
+    /** 本实例运行期动态注册的连接器 id；核心（静态装配）连接器不在其中，删除受保护。 */
+    private final Set<String> dynamicConnectorIds = ConcurrentHashMap.newKeySet();
 
     public PaymentOrchestrationController(OrchestrationService orchestrationService,
                                           ConnectorRegistry connectorRegistry,
@@ -120,6 +128,69 @@ public class PaymentOrchestrationController {
                 .orElse(ResponseEntity.notFound().build());
     }
 
+    /**
+     * Dynamically register an HTTP PSP connector at runtime.
+     * Admin-only. Only {@code type=http_psp} is supported.
+     */
+    @PreAuthorize("hasRole('ADMIN')")
+    @PostMapping("/connectors")
+    public ResponseEntity<Map<String, Object>> registerConnector(@RequestBody Map<String, Object> body) {
+        String id = strOrNull(body.get("id"));
+        String type = strOrNull(body.get("type"));
+        if (id == null || id.isBlank()) {
+            return ResponseEntity.badRequest().build();
+        }
+        if (!"http_psp".equals(type)) {
+            return ResponseEntity.badRequest().build();
+        }
+        if (connectorRegistry.get(id).isPresent()) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).build();
+        }
+
+        String displayName = body.containsKey("display_name") ? strOrNull(body.get("display_name")) : id;
+        String baseUrl = strOrNull(body.get("base_url"));
+        String apiKeyEnv = strOrNull(body.get("api_key_env"));
+        Set<String> currencies = parseCurrencies(body.get("currencies"));
+        int feeBps = body.containsKey("fee_bps") ? parseIntOrDefault(body.get("fee_bps"), 0) : 0;
+
+        DynamicHttpPspConnector connector =
+                new DynamicHttpPspConnector(id, displayName, baseUrl, apiKeyEnv, currencies, feeBps);
+        connectorRegistry.register(connector);
+        dynamicConnectorIds.add(id);
+        logRegistered(id);
+
+        Map<String, Object> resp = new LinkedHashMap<>();
+        resp.put("id", id);
+        resp.put("type", "http_psp");
+        resp.put("display_name", displayName);
+        resp.put("base_url", baseUrl);
+        resp.put("api_key_env", apiKeyEnv);
+        resp.put("currencies", currencies);
+        resp.put("fee_bps", feeBps);
+        resp.put("status", "registered");
+        return ResponseEntity.status(HttpStatus.CREATED).body(resp);
+    }
+
+    /**
+     * Unregister a dynamically registered connector.
+     * Core (statically wired) connectors are protected and cannot be deleted (403).
+     */
+    @PreAuthorize("hasRole('ADMIN')")
+    @DeleteMapping("/connectors/{id}")
+    public ResponseEntity<Void> unregisterConnector(@PathVariable String id) {
+        if (!dynamicConnectorIds.contains(id)) {
+            // 非动态连接器：存在则为核心连接器，禁止删除；不存在则 404
+            if (connectorRegistry.get(id).isPresent()) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+            }
+            return ResponseEntity.notFound().build();
+        }
+        connectorRegistry.unregister(id);
+        dynamicConnectorIds.remove(id);
+        logUnregistered(id);
+        return ResponseEntity.noContent().build();
+    }
+
     // === Routing Rules ===
 
     @GetMapping("/routing-rules")
@@ -139,7 +210,55 @@ public class PaymentOrchestrationController {
         return ResponseEntity.noContent().build();
     }
 
+    @PutMapping("/routing-rules/{id}")
+    public ResponseEntity<RoutingRule> updateRule(@PathVariable String id, @RequestBody RoutingRule rule) {
+        if (rule.getId() == null || rule.getId().isBlank()) {
+            rule.setId(id);
+        } else if (!rule.getId().equals(id)) {
+            return ResponseEntity.badRequest().build();
+        }
+        boolean exists = routingEngine.getRules().stream().anyMatch(r -> r.getId().equals(id));
+        if (!exists) {
+            return ResponseEntity.notFound().build();
+        }
+        return ResponseEntity.ok(routingEngine.updateRule(id, rule));
+    }
+
     // === Helpers ===
+
+    private static String strOrNull(Object value) {
+        return value == null ? null : String.valueOf(value);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Set<String> parseCurrencies(Object value) {
+        if (!(value instanceof Collection<?> collection)) {
+            return Set.of();
+        }
+        Set<String> result = new LinkedHashSet<>();
+        for (Object item : collection) {
+            if (item != null && !String.valueOf(item).isBlank()) {
+                result.add(String.valueOf(item));
+            }
+        }
+        return result;
+    }
+
+    private static int parseIntOrDefault(Object value, int defaultValue) {
+        try {
+            return Integer.parseInt(String.valueOf(value));
+        } catch (NumberFormatException | NullPointerException e) {
+            return defaultValue;
+        }
+    }
+
+    private void logRegistered(String id) {
+        log.info("Dynamic connector registered via API: {} (total dynamic={})", id, dynamicConnectorIds.size());
+    }
+
+    private void logUnregistered(String id) {
+        log.info("Dynamic connector unregistered via API: {}", id);
+    }
 
     private Map<String, Object> toResponse(OrchestratedPayment p) {
         Map<String, Object> m = new LinkedHashMap<>();

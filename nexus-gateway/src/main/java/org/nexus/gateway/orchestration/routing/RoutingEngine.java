@@ -3,6 +3,8 @@ package org.nexus.gateway.orchestration.routing;
 import org.nexus.gateway.config.GatewayConfig;
 import org.nexus.gateway.orchestration.connector.PaymentConnector;
 import org.nexus.gateway.orchestration.connector.ConnectorRegistry;
+import org.nexus.gateway.orchestration.model.RoutingRuleEntity;
+import org.nexus.gateway.orchestration.repository.RoutingRuleEntityRepository;
 import org.nexus.gateway.orchestration.routing.ai.AbTestRouter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -11,6 +13,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.*;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.stream.Collectors;
 
 /**
  * Routing Engine - selects which connector(s) to use for a payment.
@@ -34,6 +37,11 @@ import java.util.concurrent.ThreadLocalRandom;
  * 框架决定是否用 AI 模型重排序。AI 路由推荐失败（模型异常或样本不足）时，
  * A/B 测试框架自动降级到规则路由结果。{@code preferredConnector} 非空
  * （explicit 路由）时跳过 AI 路由，尊重商户显式选择。</p>
+ *
+ * <p><b>规则持久化（v2.37.0）</b>：当 {@link RoutingRuleEntityRepository} 可注入时，
+ * 引擎以 write-through 方式将每次 {@link #addRule}/{@link #removeRule} 同步到
+ * {@code routing_rules} 表；启动时若表为空则幂等 seed 默认规则，否则以 DB 为准
+ * 恢复运营配置。repo 不可用时行为与旧版完全一致（纯内存）。</p>
  */
 @Component
 public class RoutingEngine {
@@ -48,17 +56,26 @@ public class RoutingEngine {
     private final List<RoutingRule> rules = Collections.synchronizedList(new ArrayList<>());
     /** A/B 测试路由器，nullable（AI 路由禁用或测试环境时为 null）。 */
     private final AbTestRouter abTestRouter;
+    /** 路由规则持久化仓库，nullable（单测或 JPA 未启用时为 null）。 */
+    private final RoutingRuleEntityRepository ruleRepository;
 
     public RoutingEngine(ConnectorRegistry registry, GatewayConfig gatewayConfig) {
-        this(registry, gatewayConfig, null);
+        this(registry, gatewayConfig, null, null);
+    }
+
+    public RoutingEngine(ConnectorRegistry registry, GatewayConfig gatewayConfig,
+                         AbTestRouter abTestRouter) {
+        this(registry, gatewayConfig, abTestRouter, null);
     }
 
     @Autowired
     public RoutingEngine(ConnectorRegistry registry, GatewayConfig gatewayConfig,
-                         @Autowired(required = false) AbTestRouter abTestRouter) {
+                         @Autowired(required = false) AbTestRouter abTestRouter,
+                         @Autowired(required = false) RoutingRuleEntityRepository ruleRepository) {
         this.registry = registry;
         this.gatewayConfig = gatewayConfig;
         this.abTestRouter = abTestRouter;
+        this.ruleRepository = ruleRepository;
 
         // Dual-chain routing rules (registered first so merchant-added rules at
         // priority > 50 still win; the default NEX/fallback rules below at
@@ -70,8 +87,93 @@ public class RoutingEngine {
                 Map.of("currency", "NEX"), RoutingStrategy.PRIORITY, List.of("chain", "mock"), 10));
         rules.add(new RoutingRule("default-fallback", "All other payments use mock",
                 Map.of(), RoutingStrategy.PRIORITY, List.of("mock", "chain"), 0));
-        log.info("RoutingEngine initialized with {} rules, aiRouting={}",
-                rules.size(), abTestRouter != null);
+
+        if (ruleRepository != null) {
+            syncWithDatabase();
+        }
+        log.info("RoutingEngine initialized with {} rules, aiRouting={}, persistence={}",
+                rules.size(), abTestRouter != null, ruleRepository != null);
+    }
+
+    /**
+     * 启动期内存规则与数据库同步：
+     * <ul>
+     *   <li>表为空 → 将当前内存规则（含 dual-chain 与默认规则）幂等 seed 进 DB；</li>
+     *   <li>表非空 → 清空内存并以 DB 为准恢复运营配置。</li>
+     * </ul>
+     * 任何 DB 异常仅记录告警，不阻断引擎初始化（保持纯内存降级可用）。
+     */
+    private void syncWithDatabase() {
+        try {
+            if (ruleRepository.count() == 0) {
+                List<RoutingRuleEntity> entities = new ArrayList<>();
+                for (RoutingRule rule : rules) {
+                    entities.add(toEntity(rule));
+                }
+                ruleRepository.saveAll(entities);
+                log.info("Seeded {} routing rules into database (idempotent bootstrap)", entities.size());
+            } else {
+                List<RoutingRule> restored = new ArrayList<>();
+                for (RoutingRuleEntity entity : ruleRepository.findAll()) {
+                    RoutingRule rule = fromEntity(entity);
+                    if (rule != null) restored.add(rule);
+                }
+                if (!restored.isEmpty()) {
+                    rules.clear();
+                    rules.addAll(restored);
+                    log.info("Restored {} routing rules from database (DB is source of truth)", restored.size());
+                } else {
+                    log.warn("routing_rules table has rows but none readable; keeping in-memory defaults");
+                }
+            }
+        } catch (RuntimeException e) {
+            log.warn("Routing rule DB sync failed, keeping in-memory rules: {}", e.getMessage());
+        }
+    }
+
+    /** 内存规则 → 实体（write-through 用）。 */
+    private RoutingRuleEntity toEntity(RoutingRule rule) {
+        RoutingRuleEntity entity = new RoutingRuleEntity();
+        entity.setId(rule.getId());
+        entity.setName(rule.getName());
+        entity.setConditionsJson(RoutingRuleEntity.toConditionsJson(rule.getConditions()));
+        entity.setStrategy(rule.getStrategy() == null ? RoutingStrategy.PRIORITY.name() : rule.getStrategy().name());
+        entity.setConnectorsCsv(rule.getConnectors() == null ? ""
+                : String.join(",", rule.getConnectors()));
+        entity.setPriority(rule.getPriority());
+        return entity;
+    }
+
+    /** 实体 → 内存规则（启动恢复用）；无法解析的行返回 null 并跳过。 */
+    private RoutingRule fromEntity(RoutingRuleEntity entity) {
+        if (entity == null || entity.getId() == null || entity.getId().isBlank()) return null;
+
+        RoutingStrategy strategy;
+        try {
+            strategy = RoutingStrategy.valueOf(entity.getStrategy());
+        } catch (IllegalArgumentException | NullPointerException e) {
+            log.warn("Unknown routing strategy '{}' for persisted rule {}; falling back to PRIORITY",
+                    entity.getStrategy(), entity.getId());
+            strategy = RoutingStrategy.PRIORITY;
+        }
+
+        Map<String, String> conditions;
+        try {
+            conditions = RoutingRuleEntity.fromConditionsJson(entity.getConditionsJson());
+        } catch (IllegalArgumentException e) {
+            log.warn("Corrupt conditions JSON for persisted rule {} ({}); treating as unconditional",
+                    entity.getId(), e.getMessage());
+            conditions = Map.of();
+        }
+
+        List<String> connectors = entity.getConnectorsCsv() == null ? List.of()
+                : Arrays.stream(entity.getConnectorsCsv().split(","))
+                        .map(String::trim)
+                        .filter(s -> !s.isEmpty())
+                        .collect(Collectors.toList());
+
+        return new RoutingRule(entity.getId(), entity.getName(), conditions,
+                strategy, connectors, entity.getPriority());
     }
 
     /**
@@ -210,11 +312,41 @@ public class RoutingEngine {
         rules.removeIf(r -> r.getId().equals(rule.getId()));
         rules.add(rule);
         log.info("Routing rule added/updated: {} (priority={})", rule.getId(), rule.getPriority());
+        // Write-through：DB 异常不阻断内存操作（内存仍是路由主数据源）
+        if (ruleRepository != null) {
+            try {
+                ruleRepository.save(toEntity(rule));
+            } catch (RuntimeException e) {
+                log.warn("persist routing rule failed: {}", e.getMessage());
+            }
+        }
     }
 
     public void removeRule(String id) {
         rules.removeIf(r -> r.getId().equals(id));
         log.info("Routing rule removed: {}", id);
+        if (ruleRepository != null) {
+            try {
+                ruleRepository.deleteById(id);
+            } catch (RuntimeException e) {
+                log.warn("delete routing rule failed: {}", e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * 更新（upsert 语义）指定 id 的规则。
+     *
+     * @throws IllegalArgumentException 当 body 携带的 id 与 path id 不一致时
+     */
+    public RoutingRule updateRule(String id, RoutingRule rule) {
+        if (!id.equals(rule.getId()) && rule.getId() != null) {
+            throw new IllegalArgumentException(
+                    "path id '%s' does not match body id '%s'".formatted(id, rule.getId()));
+        }
+        rule.setId(id);
+        addRule(rule);
+        return rule;
     }
 
     /**

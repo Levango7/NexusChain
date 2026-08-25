@@ -23,6 +23,7 @@ NexusChain is a **Payment Orchestration Platform** built on blockchain infrastru
 
 Blockchain is the foundational settlement layer — not the product itself. On top of it, we build:
 - Unified payment gateway (acquiring)
+  - 统一支付网关（acquiring）：订单 API（`/api/v1/orders`）+ 编排 API（`/api/v1/payments`）+ 收银台（`checkout.html` + `/api/v1/checkout`，checkoutToken 重定向流）
 - Cross-chain asset bridge
 - Recurring/subscription billing engine
 - IoT device payment protocols (smart city long-term vision)
@@ -99,9 +100,11 @@ Blockchain is the foundational settlement layer — not the product itself. On t
   - Gas 估算（`l2/gas/`）
 - **ZK Rollup**（`l2/` + `l2/zk/`）：ZK 证明即最终性
   - `ZkProofSystem` 抽象（setup/prove/verify），支持未来接入 halo2/Plonk/Groth16
-  - `ZkCircuit` 电路抽象 + `RollupStateTransitionCircuit` 状态转换电路骨架
+  - `ZkCircuit` 电路抽象 + `RollupStateTransitionCircuit` 状态转换电路
   - `TrustedSetup` 可信设置多版本管理
-  - 当前为骨架实现，真实 ZK 接入仅需替换 ZkProofSystem 实现
+  - **Groth16 真实实现**（`l2/zk/groth16/`）：BouncyCastle 椭圆曲线证明系统 + R1CS 约束系统集成（`r1cs/`），setup/prove/verify 完整流程
+  - **mock 后端安全控制**（ZK-P2-04）：mock 证明带 "MOCK|" 前缀标记，`zk.prover.mock.allow-verify=false`（默认）时 verify 一律拒绝，防生产误用
+  - plonk/halo2 按 ADR-001 决策冻结，当前降级为 groth16 后端
 
 ## Technology Stack
 
@@ -154,7 +157,7 @@ Blockchain is the foundational settlement layer — not the product itself. On t
 ### 已交付（Delivered）
 
 - 双链 acquiring：gateway 路由至 `nexus-core`（公链结算主网）与 `nexus-consortium`（联盟侧链）
-- 多通道路由（5 connector）：core / consortium / signing-service + wallet-service / bridge / on-chain execution
+- 多通道路由（7 connector）：chain(core) / consortium / adyen / stripe / http_psp(通用REST适配) / mock(sandbox) / oracle 喂价适配器
 - 合约引擎：WASM（Chicory 纯 Java 解释器）+ EVM 子集解释器
 - 跨链桥（链上执行）：Web3j 3 链适配器，lock/mint/burn/unlock + EmergencyPause/InsuranceFund
 - 清结算 + 风控：复式记账、对账、资金归集、风控规则链（`nexus-settlement`）
@@ -164,13 +167,13 @@ Blockchain is the foundational settlement layer — not the product itself. On t
 - 前端认证：OrchestrationDashboard HMAC-SHA256 签名
 - SDK：4 语言（Java/JS/Python/Go）
 - PoS 共识（替换/增强现有 DPoS，自 v1.2.3，实证出块/验签/罚没/同步已闭环）
-- L2 Rollup 扩容方案（自 v1.3.0，Optimistic + ZK 骨架，欺诈证明/挑战窗口/slashing）
+- L2 Rollup 扩容方案（自 v1.3.0，Optimistic + ZK Groth16，欺诈证明/挑战窗口/slashing）
 - 链上治理执行（自 v1.3.0，提案 → 国库 → 链上动作，参数化治理 + commit-reveal + 守护人）
 - MPC 多签协议（GG18/GG20 阈值签名，v2.0.0-rc1 真实 GG20 可信协调器模型）
 
 ### 进行中（In Progress）
 
-- ZK Rollup 真实 ZK 库接入（halo2/Plonk）
+- ZK Rollup 真实 ZK 库接入（halo2/Plonk；注：Groth16 后端已可用，plonk/halo2 按 ADR-001 决策冻结，当前使用 groth16）
 - 签名服务/钱包服务独立部署（PoC → 生产）
 
 ### 规划中（Planned）

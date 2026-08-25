@@ -4,6 +4,131 @@
 
 ## [Unreleased]
 
+### 计划于 2.37.0 发布
+
+- **路由规则 DB 持久化**：多通道路由规则持久化存储，替代内存态配置
+- **路由规则 PUT 端点**：路由规则支持运行时更新
+- **Connector 动态注册/注销 API**：支付渠道连接器支持运行时动态注册与注销管理
+
+## [2.36.0] - 2026-08-25
+
+### BridgePayloadCodec + bridgeTxId尾部校验 + application.yml停止git跟踪
+
+本次发布聚焦跨链桥 payload 编解码统一、bridgeTxId 尾部校验安全增强与配置安全加固（对应提交 `15c7d98`）。
+
+#### Added（桥payload编解码与尾部校验）
+
+- **BridgePayloadCodec**：新增 payload 编解码器，统一 bridgeTxId trailer 格式
+- **bridgeTxId 尾部校验（fail-closed）**：截断/格式错误一律拒绝；`BridgeService`/`PaymentTransactionProcessor`/`BridgeController` 配套适配
+- **BridgeFullLifecycleIntegrationTest**：桥全生命周期集成测试
+
+#### Changed（配置安全）
+
+- **application.yml 停止 git 跟踪**：`git rm --cached` 移除跟踪，防止未来硬编码敏感值回退；当前内容已使用环境变量占位符，无明文密钥
+
+#### Verification（验证）
+
+- 编译通过 + 1346/1352 测试通过（6 个失败为环境问题：`ParameterGovernanceMockTest` 需 PostgreSQL 连接）
+
+## [2.35.0] - 2026-08-25
+
+### BridgeRule重放防护 + 彻底fail-closed + BridgeService消息哈希规范化
+
+本次发布聚焦跨链桥授权规则的重放防护与 fail-closed 安全语义收紧（对应提交 `d5dfb8a`）。
+
+#### Security（桥安全加固）
+
+- **BRIDGE_MINT 重放防护**：新增 `BridgeMintReplayGuard`，同一 messageHash 只允许铸造一次；重放键持久化至 `bridge_replay_keys` 表（`JdbcPaymentStateStore` 实现 `putConsumedReplayKey`/`getAllConsumedReplayKeys`，`InMemoryPaymentStateStore` 内存实现同步支持）
+- **彻底 fail-closed**：`BridgeRule` 允许集合为空时从 warn 跳过改为拒绝
+- **消息哈希规范化**：`BridgeService` 重构 mint 方法，域分隔前缀防止跨消息类型重放
+- **桥生命周期重放防护**：新增 `BridgeLifecycleReplayGuard` 组件
+
+#### Fixed（清理）
+
+- 去除 `InMemoryPaymentStateStore`/`PaymentStateStore` 的 UTF-8 BOM 标记
+- README 版本号同步更新
+- 全量测试通过（BUILD SUCCESSFUL in 5m 27s）
+
+## [2.34.0] - 2026-08-25
+
+### P0安全漏洞修复（15个P0跨6个安全域）
+
+本次发布完成全面安全审计的 15 个 P0 漏洞修复，覆盖 6 个安全域（对应提交 `5057e49`）。
+
+#### Security（15个P0跨6个安全域）
+
+- **共识层（3）**：PoS 区块签名验证 + Transaction payloadLength 上限校验 + BridgeRule 签名真实性验证
+- **MPC 签名（3）**：ECDSA 签名聚合实现 + Invalid Curve 防护（`ECPoint.isValid()` 曲线校验）+ TLS fail-closed
+- **权限控制（2）**：`MerchantV2Controller` 权限注解（`@PreAuthorize`）+ `SubscriptionController` 订阅资源归属校验
+- **密钥管理（2）**：JWT 密钥外部化（`JwtUtil` 改 `@Value` 配置注入）+ 治理私钥环境变量注入 + fail-closed
+- **智能合约（2）**：L2Bridge `nonReentrant` 修饰符 + Checks-Effects-Interactions（CEI）违反修复
+- **支付编排（3）**：空地址转账防护 + 幂等性 TOCTOU 原子操作 + refund 状态校验
+
+#### Fixed（P1代码审查修复，随本版本一并交付）
+
+- `PaymentServiceImpl` 退款回归修复：`addressToPubkeyHash` 返回值 null 校验增加 `isEmpty()` 兼容
+- `BridgeRule` 公钥归属校验：验签循环增加 validatorPubkey 白名单校验（`nexus.bridge.validator-pubkeys` 配置 + `ValidatorRegistry` 注入），防止攻击者用自生成密钥对伪造授权签名
+- 全量编译 BUILD SUCCESSFUL
+
+## [2.33.0] - 2026-08-24
+
+### 全面质量审计修复（Feign接口清理 + gateway测试修复 + 认证修复 + 环境依赖排除）
+
+本次发布聚焦质量审计遗留问题集中修复，gateway 测试全量恢复绿色（对应提交 `4448215`）。
+
+#### Fixed（质量审计修复）
+
+- **Feign 接口清理**：移除 `SigningServiceFeignClient`/`WalletMgmtFeignClient` 中未实现的方法（transfer/canSignViaMpc/getNoncePool/addressToPubkeyHash 等），主代码改用 `WalletUtils` 静态方法
+- **gateway 测试修复**：11 个文件 82 个编译错误 → 0，99 个失败 → 0，30 个认证失败 → 0，1 个并发失败 → 0（引入 mockito-inline 5.2.0 + spring-security-test 依赖；mockStatic 并发测试线程安全修复（子线程内创建 mockStatic）；`@WithMockUser` 注解 + WebConfig 排除 ADMIN 端点）
+- **Spring 注入歧义修复**：`SigningApprovalService` 构造函数显式 `@Autowired`（多构造函数场景）
+- **配置修复**：JaCoCo 门禁统一 + 认证密钥配置 + 前端 catch 日志 + API Gateway 路由补全
+- **Bridge 测试修复**：`@WithMockUser` 注解 + mockMode 配置
+
+#### Changed（环境依赖测试排除）
+
+- `MultiNodeMpcMockTest`/`WalletControllerIT`/`WithdrawalRollbackTest` 排除出常规构建（需 Nacos/Seata 等外部服务，仅在 CI 环境运行）
+
+## [2.32.0] - 2026-08-24
+
+### 测试覆盖补充 + 性能优化（P0修复针对性测试 + 连接池 + N+1查询 + 索引 + 缓存）
+
+本次发布针对上一轮 P0 修复补充针对性回归测试，并落地一批性能优化（对应提交 `9b6b18c`）。
+
+#### Added（P0修复针对性测试，8新增 + 2修复）
+
+- **后端**：`DefaultInsuranceFundDbConsistencyTest`（保险基金 DB 一致性 B-04）、`StakingServiceImplConcurrencyTest`（PoS 质押线程安全 B-07/08/09）、`ChannelManagerDoubleSpendTest`（通道防双花 B-10/11）、`VaultKeyManagerPersistenceTest`（密钥持久化 B-14）、`ReplayProtectionPersistenceTest`（重放保护持久化 B-22/23）、`CircuitBreakerIntegrationTest`（熔断器接入 B-21）
+- **前端**：`AuthContext.btoa.test.tsx`（非 ASCII 编码 F-03）、`Settings.placeholder.test.tsx`（占位符碰撞 F-09）
+- **既有测试修复**：`DefaultInsuranceFundTest` 与 B-03 修复冲突、`KeyManagerTest` 单参数构造调用
+
+#### Changed（性能优化）
+
+- **RestTemplate 连接池**：基于 `JdkClientHttpRequestFactory` 配置连接池，7 个 connector/client 改用注入 RestTemplate
+- **N+1 查询修复**：`PaymentOrderRepository.findAllByIdIn` 批量查询
+- **数据库索引**：Flyway V14 迁移，refunds/payment_orders 添加复合索引
+- **缓存与重用**：TenantApiKey TTL 缓存（避免每次 API 请求查 DB）；`WebhookDeliveryService` ObjectMapper 重用
+- `PeerServer.java` printStackTrace 替换为 logger.warn
+
+## [2.31.0] - 2026-08-23
+
+### 全面代码质量审计修复（39个P0严重问题 + P1坏味道 + P2建议）
+
+本次发布完成全面代码质量审计，修复 39 个 P0 严重问题及 P1 坏味道、P2 建议（对应提交 `4670693`）。
+
+#### Fixed（P0严重问题，39个）
+
+- **资金安全（13）**：退款吞异常改为抛出、InsuranceFund 先 DB 后内存一致性、Saga 重试实际执行 unlock、Staking 全局锁 + CopyOnWriteArrayList 防并发、Channel 全局锁防双花、TransactionPool `Long.compare` 防溢出
+- **密钥安全（3）**：`VaultKeyManager` JPA 持久化（Flyway V13/V8 迁移）、`LocalFileKeyManager` AES-256-GCM 加密存储、`FileKeyVault` PBKDF2WithHmacSHA256（150000 迭代）+ salt 文件
+- **共识安全（7）**：`FinalityCoordinator` 真实 BLS 签名替代占位、`SignatureAggregator` 公钥 null 即拒绝、`ChainRpcClient` txHash 格式校验、CircuitBreaker 接入桥主流程 lock/mint/burn/unlock、ReplayProtection DB 持久化 + nonce 长度校验
+- **前端崩溃（11）**：变量遮蔽修复、useEffect 依赖项修复、非空断言 → early return、区块 0 边界检查、btoa 非 ASCII 编码修复、AuthContext localStorage 懒加载、zh.json 中文翻译补全
+- **文档 API 修正（5）**：PRD API 路径修正、MPC/PoS 状态修正、CHANGELOG/ARCHITECTURE 轮次矛盾修正
+
+#### Fixed（P1坏味道 + P2建议）
+
+- **后端**：try-with-resources 资源泄漏修复（KeystoreAction/InitializeAccount/Leveldb）、异常处理规范化（printStackTrace → logger、静默吞异常 → log.warn）、魔法数字提取为常量
+- **前端**：未使用 import 移除、共享组件提取（DetailPageLayout）、路由级 ErrorBoundary 包裹、i18n 硬编码字符串提取
+- **文档**：PRD §9 版本号修正、Module Map 补全 nexus-common/nexus-api-gateway、架构图更新、Table of Contents 添加、Gradle 版本号更新（7.6+ → 8.5）
+- 验证：后端 BUILD SUCCESSFUL + 前端 tsc + vite build 成功 + 76 测试全通过
+
 ## [2.30.0] - 2026-08-23
 
 ### 前端i18n文本替换 + 组件测试 + 覆盖率门禁提升 + nexus-core异常处理规范化
