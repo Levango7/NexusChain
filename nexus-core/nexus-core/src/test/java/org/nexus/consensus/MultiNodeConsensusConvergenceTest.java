@@ -7,10 +7,16 @@ import org.nexus.consensus.finality.Vote;
 import org.nexus.consensus.pos.StakingService;
 import org.nexus.consensus.pos.ValidatorRegistry;
 import org.nexus.consensus.pos.ValidatorStatus;
+import org.nexus.core.crypto.bls.BlsSigner;
+import org.nexus.core.crypto.bls.BlsSignature;
+import org.nexus.core.crypto.bls.Secp256k1BlsSigner;
 
 import java.math.BigDecimal;
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -43,8 +49,14 @@ class MultiNodeConsensusConvergenceTest {
 
     private List<ConsensusNode> nodes;
 
+    /** B-17/B-18 修复后：投票必须携带真实 BLS 公钥+可验签签名才能最终化。 */
+    private final Map<String, BlsSigner> validatorSigners = new HashMap<>();
+
     @BeforeEach
     void setUp() {
+        for (String v : VALIDATORS) {
+            validatorSigners.put(v, BlsSigner.generate());
+        }
         nodes = new ArrayList<>();
         for (int i = 0; i < 3; i++) {
             nodes.add(new ConsensusNode("node-" + i));
@@ -69,8 +81,17 @@ class MultiNodeConsensusConvergenceTest {
         return new byte[]{(byte) epoch, 1, 2, 3};
     }
 
+    /**
+     * 构造带真实 BLS 签名与公钥的投票（对齐 FinalityCoordinator 生产路径）。
+     * 载荷格式与 {@link Vote#signingPayload()} 一致：epoch(8B BE) || checkpointHash。
+     */
     private Vote vote(long epoch, String validator) {
-        return new Vote(epoch, checkpoint(epoch), validator, new byte[32]);
+        byte[] cp = checkpoint(epoch);
+        BlsSigner signer = validatorSigners.get(validator);
+        byte[] payload = ByteBuffer.allocate(8 + cp.length).putLong(epoch).put(cp).array();
+        BlsSignature sig = signer.sign(payload);
+        byte[] pub = ((Secp256k1BlsSigner) signer).getPublicKey().toBytesCompressed();
+        return new Vote(epoch, cp, validator, sig.toBytesCompressed(), pub);
     }
 
     // ==================== 测试用例 ====================

@@ -4,6 +4,11 @@ import org.junit.jupiter.api.*;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
+import org.testcontainers.DockerClientFactory;
+import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.lifecycle.Startables;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -15,6 +20,11 @@ import static org.junit.jupiter.api.Assertions.*;
  * 模型对象的字段设置与状态枚举，不涉及真实治理服务调用或链上提案流程，
  * 因此从 "E2E" 重命名为 "Mock" 以准确反映测试性质。</p>
  *
+ * <p><b>数据源策略（REQ-TEST-01）</b>：检测到 Docker 时通过 Testcontainers 启动
+ * 一次性 PostgreSQL 容器并覆盖数据源配置，使测试不再依赖本机
+ * {@code nexus_test} 库的角色/密码漂移；无 Docker 时回落到
+ * {@code application-test.yml} 的本地库默认值。</p>
+ *
  * <p>真实治理端到端验证见 {@link OnChainGovernanceIntegrationTest}
  * 与 {@link GovernanceExecutorOnChainIntegrationTest}（需 Hardhat 节点）。</p>
  */
@@ -22,6 +32,28 @@ import static org.junit.jupiter.api.Assertions.*;
 @ActiveProfiles("test")
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class ParameterGovernanceMockTest {
+
+    /** 一次性 PG 容器（单例静态启动，整个测试类共享）。 */
+    private static final PostgreSQLContainer<?> POSTGRES =
+            new PostgreSQLContainer<>("postgres:16-alpine")
+                    .withDatabaseName("nexus_test")
+                    .withUsername("nexus_test")
+                    .withPassword("nexus_test_pw");
+
+    static {
+        if (DockerClientFactory.instance().isDockerAvailable()) {
+            Startables.deepStart(POSTGRES).join();
+        }
+    }
+
+    @DynamicPropertySource
+    static void overrideDatasource(DynamicPropertyRegistry registry) {
+        if (POSTGRES.isRunning()) {
+            registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
+            registry.add("spring.datasource.username", POSTGRES::getUsername);
+            registry.add("spring.datasource.password", POSTGRES::getPassword);
+        }
+    }
 
     @MockBean private GovernanceService governanceService;
 

@@ -13,8 +13,6 @@ import org.nexus.gateway.client.ExchangeWalletClient;
 import org.nexus.sdk.client.feign.SigningServiceFeignClient;
 import org.nexus.sdk.client.feign.WalletMgmtFeignClient;
 import org.nexus.sdk.wallet.WalletUtils;
-import org.mockito.MockedStatic;
-import org.mockito.Mockito;
 import static org.mockito.Mockito.when;
 import static org.mockito.ArgumentMatchers.anyString;
 import org.springframework.test.web.servlet.MvcResult;
@@ -50,22 +48,19 @@ class GatewayCoreIntegrationTest {
     @MockBean
     private WalletMgmtFeignClient walletMgmtFeignClient;
 
-    /** WalletUtils.addressToPubkeyHash 静态方法 mock（替代原 walletMgmtFeignClient.addressToPubkeyHash） */
-    private static MockedStatic<WalletUtils> mockedWalletUtils;
-
-    @BeforeAll
-    static void initWalletUtilsMock() {
-        mockedWalletUtils = Mockito.mockStatic(WalletUtils.class);
-        mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash(anyString()))
-                .thenReturn("aabbccddeeff00112233445566778899aabbccdd");
-    }
-
-    @AfterAll
-    static void closeWalletUtilsMock() {
-        if (mockedWalletUtils != null) {
-            mockedWalletUtils.close();
-        }
-    }
+    /**
+     * 真实合法的 Base58Check 地址（由 20 字节 pubkey hash 经 WalletUtils 构造）。
+     *
+     * <p>不再使用 Mockito.mockStatic 模拟 {@link WalletUtils#addressToPubkeyHash}：
+     * MockedStatic 仅在创建线程生效（thread-local），而退款阶段2 经
+     * ThreePhaseExecutionTemplate 在 ForkJoinPool 异步线程执行真实转换，
+     * mock 不生效导致地址转换返回 null，退款被误判为 FAILED。
+     * 该方法本身是纯函数（Base58 解码 + 截取 + Hex），无需 mock。</p>
+     */
+    private static final String MERCHANT_SETTLEMENT_ADDRESS =
+            WalletUtils.pubkeyHashToAddress("aabbccddeeff00112233445566778899aabbccdd");
+    private static final String PAYER_ADDRESS =
+            WalletUtils.pubkeyHashToAddress("1122334455667788990011223344556677889900");
 
     @BeforeEach
     void stubWalletSign() {
@@ -73,7 +68,8 @@ class GatewayCoreIntegrationTest {
         // In this gateway-only integration test the wallet service is stubbed to succeed.
         when(signingServiceFeignClient.signTransfer(anyString(), anyString(), org.mockito.ArgumentMatchers.any(java.math.BigDecimal.class)))
                 .thenReturn("0xRefundTxHash1234567890abcdef1234567890abcdef");
-        // Refund flow first converts the payer address to a pubkey hash via WalletUtils (static, mocked in @BeforeAll).
+        // Refund flow converts the payer address via WalletUtils.addressToPubkeyHash (pure function,
+        // executed on the async ForkJoinPool thread inside the three-phase template — no mock needed).
     }
 
     private static String apiKey;
@@ -87,7 +83,7 @@ class GatewayCoreIntegrationTest {
         // Register
         MvcResult reg = mockMvc.perform(post("/api/v1/merchants/register")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"merchantName\":\"Integration Shop\",\"email\":\"int@test.io\",\"settlementAddress\":\"1IntegAddr000000000000000000000000000\"}"))
+                .content("{\"merchantName\":\"Integration Shop\",\"email\":\"int@test.io\",\"settlementAddress\":\"" + MERCHANT_SETTLEMENT_ADDRESS + "\"}"))
                 .andExpect(status().isCreated())
                 .andReturn();
         String body = reg.getResponse().getContentAsString();
@@ -129,7 +125,7 @@ class GatewayCoreIntegrationTest {
                 .header("X-NexusChain-ApiKey", apiKey)
                 .with(SignedRequests.sandbox())
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"payerAddress\":\"1PayerAddr000000000000000000000000000\"}"))
+                .content("{\"payerAddress\":\"" + PAYER_ADDRESS + "\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("PENDING"));
     }

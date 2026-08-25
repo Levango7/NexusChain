@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -15,10 +16,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <ul>
  *   <li>{@code usePlaintext=true}：明文模式，channel 创建成功</li>
  *   <li>{@code usePlaintext=false} + TLS 配置完整：mTLS 模式（证书不存在时记录错误并回退）</li>
- *   <li>{@code usePlaintext=false} + TLS 配置不完整：回退到明文并记录错误</li>
+ *   <li>{@code usePlaintext=false} + TLS 配置不完整：fail-closed，拒绝启动（MPC-P0 安全修复）</li>
  * </ul>
  *
- * <p>JUnit 4（与现有测试一致）。</p>
+ * <p>JUnit 5（jupiter）。</p>
  */
 public class GrpcMpcCryptoEngineTlsConfigTest {
 
@@ -67,14 +68,16 @@ public class GrpcMpcCryptoEngineTlsConfigTest {
         // 不应抛异常，应回退到明文
         engine.init();
 
+        // MPC-P0 fail-closed：TLS 配置不完整不再回退明文（init 内部捕获异常并置空 channel）
         Object channel = ReflectionTestUtils.getField(engine, "channel");
-        assertTrue(channel != null, "channel should be created (fallback to plaintext)");
+        assertFalse(channel != null,
+                "channel should NOT be created when TLS config incomplete (fail-closed)");
 
         engine.shutdown();
     }
 
     /**
-     * 验证 usePlaintext=false + TLS 配置指向不存在的文件时，init 回退到明文。
+     * 验证 usePlaintext=false + TLS 配置指向不存在的文件时，init fail-closed。
      */
     @Test
     public void testInitWithTlsConfiguredButFileNotFoundFallsBack() {
@@ -87,19 +90,21 @@ public class GrpcMpcCryptoEngineTlsConfigTest {
         ReflectionTestUtils.setField(engine, "tlsClientCertPath", "/nonexistent/client.pem");
         ReflectionTestUtils.setField(engine, "tlsClientKeyPath", "/nonexistent/client.key");
 
-        // 不应抛异常，应回退到明文（init 内部 catch 所有 Exception）
+        // 不应抛异常（init 内部 catch），但必须 fail-closed：channel=null
         engine.init();
 
         Object channel = ReflectionTestUtils.getField(engine, "channel");
-        // 由于文件不存在，SslContext 构建抛异常，init 整体 catch 后 channel=null
-        // 这是预期行为：init 失败时 channel=null，healthCheck 返回 false
         assertFalse(channel != null, "channel should be null when TLS config invalid");
 
         engine.shutdown();
     }
 
     /**
-     * 验证 usePlaintext=false + 部分TLS配置（仅 trust-cert）时，init 回退到明文。
+     * 验证 usePlaintext=false + 部分TLS配置（仅 trust-cert）时，init fail-closed 拒绝启动。
+     *
+     * <p>MPC-P0 安全修复：TLS 配置不完整不再回退明文（原 fail-open 行为允许
+     * 攻击者通过配置缺失降级为明文连接绕过 mTLS），必须显式设置
+     * {@code use-plaintext=true}（仅限开发环境）或提供完整 TLS 配置。</p>
      */
     @Test
     public void testInitWithPartialTlsConfigFallsBackToPlaintext() {
@@ -114,9 +119,10 @@ public class GrpcMpcCryptoEngineTlsConfigTest {
 
         engine.init();
 
-        // 配置不完整应回退到明文
+        // 配置不完整应 fail-closed（init 内部捕获 IllegalStateException 并置空 channel）
         Object channel = ReflectionTestUtils.getField(engine, "channel");
-        assertTrue(channel != null, "channel should be created (fallback to plaintext for incomplete TLS config)");
+        assertFalse(channel != null,
+                "channel should NOT be created when TLS config incomplete (fail-closed)");
 
         engine.shutdown();
     }

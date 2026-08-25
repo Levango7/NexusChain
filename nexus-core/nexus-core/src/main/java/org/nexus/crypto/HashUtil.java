@@ -56,6 +56,9 @@ public class HashUtil {
             return digest.digest(in);
         }catch (java.security.GeneralSecurityException e){
             throw new IllegalStateException("Hash computation failed for algorithm: " + algorithm, e);
+        }catch (NullPointerException e){
+            // P2-11: null 输入 fail-fast——保留 NPE 作为 cause，证明 null 被直接传入而非静默吞掉
+            throw new IllegalStateException("Hash input must not be null for algorithm: " + algorithm, e);
         }
     }
 

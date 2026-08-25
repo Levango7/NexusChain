@@ -8,8 +8,14 @@ import org.nexus.consensus.pos.StakingService;
 import org.nexus.consensus.pos.Validator;
 import org.nexus.consensus.pos.ValidatorRegistry;
 import org.nexus.consensus.pos.ValidatorStatus;
+import org.nexus.core.crypto.bls.BlsSigner;
+import org.nexus.core.crypto.bls.BlsSignature;
+import org.nexus.core.crypto.bls.Secp256k1BlsSigner;
 
 import java.math.BigDecimal;
+import java.nio.ByteBuffer;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -37,6 +43,9 @@ class ConsensusChaosTest {
 
     private ValidatorRegistry registry;
     private StakingService stakingService;
+
+    /** B-17/B-18 修复后：投票必须携带真实 BLS 公钥+可验签签名才能最终化。 */
+    private final Map<String, BlsSigner> validatorSigners = new ConcurrentHashMap<>();
 
     @BeforeEach
     void setUp() {
@@ -69,9 +78,17 @@ class ConsensusChaosTest {
         return new byte[]{(byte) epoch, 1, 2, 3};
     }
 
+    /**
+     * 构造带真实 BLS 签名与公钥的投票（对齐 FinalityCoordinator 生产路径）。
+     * 载荷格式与 {@link Vote#signingPayload()} 一致：epoch(8B BE) || checkpointHash。
+     */
     private Vote vote(long epoch, String validator) {
-        // 签名需 >= 32 字节通过 CollectingAggregator 格式校验
-        return new Vote(epoch, checkpoint(epoch), validator, new byte[32]);
+        byte[] cp = checkpoint(epoch);
+        BlsSigner signer = validatorSigners.computeIfAbsent(validator, k -> BlsSigner.generate());
+        byte[] payload = ByteBuffer.allocate(8 + cp.length).putLong(epoch).put(cp).array();
+        BlsSignature sig = signer.sign(payload);
+        byte[] pub = ((Secp256k1BlsSigner) signer).getPublicKey().toBytesCompressed();
+        return new Vote(epoch, cp, validator, sig.toBytesCompressed(), pub);
     }
 
     // ==================== 混沌测试用例 ====================

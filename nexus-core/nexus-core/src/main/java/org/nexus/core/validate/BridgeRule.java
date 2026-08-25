@@ -40,8 +40,11 @@ import java.util.Set;
  * <p><b>v2.0.0 安全修复</b>：{@code BRIDGE_MINT} 验签循环此前仅校验签名真实性，
  * 未校验签名公钥是否属于注册验证人集合，攻击者可放入自生成公钥+对应私钥签名
  * 通过验签冒充授权验证人。现增加公钥归属校验（fail-closed），允许集合 =
- * {@link ValidatorRegistry} 活跃验证人公钥 ∪ 配置白名单。集合为空时（未配置且
- * 注册表无验证人，如单元测试/启动初期）warn 跳过以保持向后兼容。</p>
+ * {@link ValidatorRegistry} 活跃验证人公钥 ∪ 配置白名单。</p>
+ *
+ * <p><b>v2.1.0 安全修复</b>：① 允许集合为空时由 warn 跳过改为直接拒绝
+ * （彻底 fail-closed，消除验证人集为空窗口期的越权铸造）；② 新增重放防护，
+ * 同一规范化 messageHash 只允许铸造一次（{@link org.nexus.core.payment.BridgeMintReplayGuard}）。</p>
  *
  * @author nexus-core
  * @since 1.0
@@ -82,6 +85,31 @@ public class BridgeRule implements TransactionRule {
      */
     @Autowired(required = false)
     private ValidatorRegistry validatorRegistry;
+
+    /**
+     * BRIDGE_MINT 重放防护（v2.1.0 安全修复，可选注入）。
+     * <p>{@code required=false} 以兼容无 Spring 上下文的单元测试；
+     * 此时回退到本实例私有的 guard（JVM 内去重仍然有效）。</p>
+     */
+    @Autowired(required = false)
+    private org.nexus.core.payment.BridgeMintReplayGuard replayGuard;
+
+    /** 无 Spring 注入时的兜底 guard（延迟创建）。 */
+    private volatile org.nexus.core.payment.BridgeMintReplayGuard fallbackReplayGuard;
+
+    private org.nexus.core.payment.BridgeMintReplayGuard replayGuard() {
+        if (replayGuard != null) {
+            return replayGuard;
+        }
+        if (fallbackReplayGuard == null) {
+            synchronized (this) {
+                if (fallbackReplayGuard == null) {
+                    fallbackReplayGuard = new org.nexus.core.payment.BridgeMintReplayGuard();
+                }
+            }
+        }
+        return fallbackReplayGuard;
+    }
 
     /**
      * 获取单笔跨链交易金额上限。
@@ -251,16 +279,26 @@ public class BridgeRule implements TransactionRule {
         // 提取消息哈希（验证人签名的内容）
         byte[] messageHash = Arrays.copyOfRange(tx.payload, MSG_HASH_OFFSET, sigBlockOffset);
 
-        // v2.0.0 安全修复：构建桥验证人公钥允许集合（小写 hex，无 0x 前缀）。
-        // 来源：ValidatorRegistry 活跃验证人公钥 ∪ 配置白名单 nexus.bridge.validator-pubkeys。
-        // 集合为空时（未配置且注册表无验证人，如单元测试/启动初期）warn 跳过公钥归属校验
-        // 以保持向后兼容；非空时对每个签名公钥执行归属校验（fail-closed）。
+        // v2.1.0 安全修复：重放防护。同一规范化 messageHash 只允许铸造一次；
+        // 已消费（成功入账）的 messageHash 直接拒绝交易进入区块。
+        String messageHashHex = Hex.encodeHexString(messageHash).toLowerCase();
+        if (replayGuard().isConsumed(messageHashHex)) {
+            return Result.Error("BRIDGE_MINT: replay detected, messageHash " + messageHashHex
+                    + " has already been minted");
+        }
+
+        // v2.1.0 安全修复：公钥归属校验改为彻底 fail-closed。
+        // 允许集合 = ValidatorRegistry 活跃验证人公钥 ∪ 配置白名单
+        // nexus.bridge.validator-pubkeys。此前集合为空时仅 warn 跳过归属校验
+        // （fail-open），攻击者可在验证人集为空的窗口期用自生成密钥对通过
+        // 多签校验铸造资产。现集合为空一律拒绝交易，生产环境必须在启动时
+        // 配置验证人白名单或确保 ValidatorRegistry 就绪。
         Set<String> allowedValidatorPubkeys = buildAllowedValidatorPubkeys();
         if (allowedValidatorPubkeys.isEmpty()) {
-            log.warn("BRIDGE_MINT: validator pubkey allowlist is empty (no ValidatorRegistry active "
-                    + "validators and nexus.bridge.validator-pubkeys unset); skipping pubkey ownership "
-                    + "check (backward-compatible mode). Configure the allowlist in production to enforce "
-                    + "bridge validator authorization.");
+            return Result.Error("BRIDGE_MINT: validator pubkey allowlist is empty "
+                    + "(no ValidatorRegistry active validators and nexus.bridge.validator-pubkeys "
+                    + "unset); rejecting to prevent unauthorized bridge mints. Configure the "
+                    + "allowlist or register validators before enabling bridge minting.");
         }
 
         // 遍历每个签名，用对应验证人公钥验签

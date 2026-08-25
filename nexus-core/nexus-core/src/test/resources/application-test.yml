@@ -12,3 +12,13 @@ nexus:
     jwt:
       app-id: ${NEXUS_JWT_APP_ID:test-app-id-not-for-production}
       app-secret: ${NEXUS_JWT_APP_SECRET:test-app-secret-not-for-production}
+
+# 测试数据源：默认指向本地 nexus_test 库（可用环境变量覆盖指向 CI 数据库）
+spring:
+  datasource:
+    url: ${DATA_SOURCE_URL:jdbc:postgresql://localhost:5432/nexus_test}
+    username: ${DB_USERNAME:nexus_test}
+    password: ${DB_PASSWORD:nexus_test_pw}
+  jpa:
+    hibernate:
+      ddl-auto: update

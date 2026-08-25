@@ -186,7 +186,7 @@ public class Utils {
     // before encode 14127.549 kb
     // after encode 11639.101 kb
     public static void main(String[] args)throws Exception{
-        Resource resource = new ClassPathResource("genesis/nexus-genesis-generator.json");
+        Resource resource = new ClassPathResource("genesis/NexusChain-genesis-generator.json");
         Genesis g = new JSONEncodeDecoder().decode(IOUtils.toByteArray(resource.getInputStream()), Genesis.class);
         Block b = new Block(g);
         System.out.println(

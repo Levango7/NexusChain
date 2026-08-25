@@ -10,6 +10,7 @@ import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.nexus.signing.controller.NodeController;
 import org.nexus.signing.storage.Leveldb;
+import org.nexus.sdk.wallet.WalletUtils;
 
 import java.io.IOException;
 
@@ -33,12 +34,21 @@ import static org.mockito.Mockito.when;
  *   <li>NonceState 为 null → 移除 firstkey</li>
  * </ul></p>
  *
- * <p>注：{@code WalletUtils.addressToPubkeyHash} 是静态方法，无法 mock。
- * 测试使用真实地址字符串，RPC mock 会拦截具体调用。</p>
+ * <p>注：{@code PoolTask.task()} 内部会调用 {@code WalletUtils.addressToPubkeyHash(地址)}
+ * 做真实转换。SDK 的 P0 安全修复后，非法地址（如 ADDR1）转换返回 {@code null}，
+ * 而 Mockito 的 {@code anyString()} 不匹配 {@code null}，会导致 RPC mock 失效、
+ * 清理逻辑被跳过。因此测试必须使用经 {@link WalletUtils#pubkeyHashToAddress}
+ * 构造的真实合法 Base58Check 地址。</p>
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
 public class PoolTaskTest {
+
+    /** 由 20 字节 pubkey hash 构造的真实合法 Base58Check 地址 */
+    private static final String ADDR1 =
+            WalletUtils.pubkeyHashToAddress("aabbccddeeff00112233445566778899aabbccdd");
+    private static final String ADDR2 =
+            WalletUtils.pubkeyHashToAddress("1122334455667788990011223344556677889900");
 
     @Mock
     private NoncePool noncePool;
@@ -69,7 +79,7 @@ public class PoolTaskTest {
     @Test
     public void testTask_rpcNonceGreaterThanOrEqualFirstKey_removesFirstKey() throws IOException {
         NoncePool realNoncePool = poolTask.noncePool;
-        realNoncePool.add("addr1", new NonceState("0xabc", 5L, 1000L));
+        realNoncePool.add(ADDR1, new NonceState("0xabc", 5L, 1000L));
 
         JsonObject getNonceResp = new JsonObject();
         getNonceResp.addProperty("code", 2000);
@@ -79,13 +89,13 @@ public class PoolTaskTest {
         poolTask.task();
 
         // firstkey=5 被移除后池应为空
-        org.junit.jupiter.api.Assertions.assertEquals(0L, realNoncePool.getMaxNonce("addr1"));
+        org.junit.jupiter.api.Assertions.assertEquals(0L, realNoncePool.getMaxNonce(ADDR1));
     }
 
     @Test
     public void testTask_rpcNonceLessThanFirstKey_checksTxConfirmation() throws IOException {
         NoncePool realNoncePool = poolTask.noncePool;
-        realNoncePool.add("addr1", new NonceState("0xabc", 10L, 1000L));
+        realNoncePool.add(ADDR1, new NonceState("0xabc", 10L, 1000L));
 
         JsonObject getNonceResp = new JsonObject();
         getNonceResp.addProperty("code", 2000);
@@ -99,14 +109,14 @@ public class PoolTaskTest {
         poolTask.task();
 
         // tx 已确认 → firstkey=10 被移除
-        org.junit.jupiter.api.Assertions.assertEquals(0L, realNoncePool.getMaxNonce("addr1"));
+        org.junit.jupiter.api.Assertions.assertEquals(0L, realNoncePool.getMaxNonce(ADDR1));
         verify(nodeController).getTransactionConfirmed("0xabc");
     }
 
     @Test
     public void testTask_rpcNonceLessThanFirstKey_txNotConfirmed_keepsEntry() throws IOException {
         NoncePool realNoncePool = poolTask.noncePool;
-        realNoncePool.add("addr1", new NonceState("0xabc", 10L, 1000L));
+        realNoncePool.add(ADDR1, new NonceState("0xabc", 10L, 1000L));
 
         JsonObject getNonceResp = new JsonObject();
         getNonceResp.addProperty("code", 2000);
@@ -120,13 +130,13 @@ public class PoolTaskTest {
         poolTask.task();
 
         // tx 未确认 → 保留
-        org.junit.jupiter.api.Assertions.assertEquals(10L, realNoncePool.getMaxNonce("addr1"));
+        org.junit.jupiter.api.Assertions.assertEquals(10L, realNoncePool.getMaxNonce(ADDR1));
     }
 
     @Test
     public void testTask_rpcGetNonceNon2000_keepsEntry() throws IOException {
         NoncePool realNoncePool = poolTask.noncePool;
-        realNoncePool.add("addr1", new NonceState("0xabc", 5L, 1000L));
+        realNoncePool.add(ADDR1, new NonceState("0xabc", 5L, 1000L));
 
         JsonObject getNonceResp = new JsonObject();
         getNonceResp.addProperty("code", 5000);
@@ -134,27 +144,27 @@ public class PoolTaskTest {
 
         poolTask.task();
 
-        org.junit.jupiter.api.Assertions.assertEquals(5L, realNoncePool.getMaxNonce("addr1"));
+        org.junit.jupiter.api.Assertions.assertEquals(5L, realNoncePool.getMaxNonce(ADDR1));
         verify(nodeController, never()).getTransactionConfirmed(anyString());
     }
 
     @Test
     public void testTask_rpcGetNonceNull_keepsEntry() throws IOException {
         NoncePool realNoncePool = poolTask.noncePool;
-        realNoncePool.add("addr1", new NonceState("0xabc", 5L, 1000L));
+        realNoncePool.add(ADDR1, new NonceState("0xabc", 5L, 1000L));
 
         when(nodeController.getNonce(anyString())).thenReturn(null);
 
         poolTask.task();
 
-        org.junit.jupiter.api.Assertions.assertEquals(5L, realNoncePool.getMaxNonce("addr1"));
+        org.junit.jupiter.api.Assertions.assertEquals(5L, realNoncePool.getMaxNonce(ADDR1));
     }
 
     @Test
     public void testTask_multipleAddresses_processesAll() throws IOException {
         NoncePool realNoncePool = poolTask.noncePool;
-        realNoncePool.add("addr1", new NonceState("0xabc", 5L, 1000L));
-        realNoncePool.add("addr2", new NonceState("0xdef", 10L, 2000L));
+        realNoncePool.add(ADDR1, new NonceState("0xabc", 5L, 1000L));
+        realNoncePool.add(ADDR2, new NonceState("0xdef", 10L, 2000L));
 
         JsonObject getNonceResp = new JsonObject();
         getNonceResp.addProperty("code", 2000);
@@ -163,8 +173,8 @@ public class PoolTaskTest {
 
         poolTask.task();
 
-        org.junit.jupiter.api.Assertions.assertEquals(0L, realNoncePool.getMaxNonce("addr1"));
-        org.junit.jupiter.api.Assertions.assertEquals(0L, realNoncePool.getMaxNonce("addr2"));
+        org.junit.jupiter.api.Assertions.assertEquals(0L, realNoncePool.getMaxNonce(ADDR1));
+        org.junit.jupiter.api.Assertions.assertEquals(0L, realNoncePool.getMaxNonce(ADDR2));
         verify(nodeController, atLeastOnce()).getNonce(anyString());
     }
 

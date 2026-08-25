@@ -7,8 +7,14 @@ import org.nexus.consensus.pos.StakingServiceImpl;
 import org.nexus.consensus.pos.Validator;
 import org.nexus.consensus.pos.ValidatorRegistry;
 import org.nexus.consensus.pos.ValidatorStatus;
+import org.nexus.core.crypto.bls.BlsSigner;
+import org.nexus.core.crypto.bls.BlsSignature;
+import org.nexus.core.crypto.bls.Secp256k1BlsSigner;
 
 import java.math.BigDecimal;
+import java.nio.ByteBuffer;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -24,6 +30,9 @@ class GovernanceWeightRefreshTest {
 
     private ValidatorRegistry registry;
     private StakingService staking;
+
+    /** B-17/B-18 修复后：投票必须携带真实 BLS 公钥+可验签签名才能最终化。 */
+    private final Map<String, BlsSigner> validatorSigners = new java.util.concurrent.ConcurrentHashMap<>();
 
     @BeforeEach
     void setUp() {
@@ -45,8 +54,16 @@ class GovernanceWeightRefreshTest {
         staking.stake(addr, new BigDecimal(stake));
     }
 
+    /**
+     * 构造带真实 BLS 签名与公钥的投票（对齐 FinalityCoordinator 生产路径）。
+     * 载荷格式与 {@link Vote#signingPayload()} 一致：epoch(8B BE) || checkpointHash。
+     */
     private Vote vote(String validator, long epoch, byte[] cp) {
-        return new Vote(epoch, cp, validator, new byte[32]);
+        BlsSigner signer = validatorSigners.computeIfAbsent(validator, k -> BlsSigner.generate());
+        byte[] payload = ByteBuffer.allocate(8 + cp.length).putLong(epoch).put(cp).array();
+        BlsSignature sig = signer.sign(payload);
+        byte[] pub = ((Secp256k1BlsSigner) signer).getPublicKey().toBytesCompressed();
+        return new Vote(epoch, cp, validator, sig.toBytesCompressed(), pub);
     }
 
     @Test

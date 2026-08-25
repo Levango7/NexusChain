@@ -30,6 +30,7 @@ public class JdbcPaymentStateStore implements PaymentStateStore {
     private final Map<String, PaymentChannel> channelCache = new ConcurrentHashMap<>();
     private final Map<String, StableCoinPosition> positionCache = new ConcurrentHashMap<>();
     private final Map<String, BridgeTransaction> bridgeCache = new ConcurrentHashMap<>();
+    private final Map<String, java.util.Set<String>> replayKeyCache = new ConcurrentHashMap<>();
 
     public JdbcPaymentStateStore(JdbcTemplate jdbc) {
         this.jdbc = jdbc;
@@ -51,6 +52,9 @@ public class JdbcPaymentStateStore implements PaymentStateStore {
             + "source_chain VARCHAR(64), target_chain VARCHAR(64), "
             + "amount BIGINT, recipient VARCHAR(128), "
             + "state VARCHAR(32), confirmations INT)");
+        jdbc.execute("CREATE TABLE IF NOT EXISTS bridge_replay_keys ("
+            + "kind VARCHAR(64), key_hex VARCHAR(128), "
+            + "PRIMARY KEY(kind, key_hex))");
         log.info("JdbcPaymentStateStore: schema initialized");
     }
 
@@ -96,4 +100,31 @@ public class JdbcPaymentStateStore implements PaymentStateStore {
 
     @Override
     public Collection<BridgeTransaction> getAllBridgeTxs() { return Collections.unmodifiableCollection(bridgeCache.values()); }
+
+    @Override
+    public void putConsumedReplayKey(String kind, String keyHex) {
+        jdbc.update("MERGE INTO bridge_replay_keys KEY(kind, key_hex) VALUES(?,?)", kind, keyHex);
+        replayKeyCache.computeIfAbsent(kind, k -> ConcurrentHashMap.newKeySet()).add(keyHex);
+    }
+
+    @Override
+    public Collection<String> getAllConsumedReplayKeys(String kind) {
+        // 缓存命中则直接返回；否则回退查库（进程重启后的恢复路径）。
+        Collection<String> cached = replayKeyCache.get(kind);
+        if (cached != null && !cached.isEmpty()) {
+            return Collections.unmodifiableCollection(cached);
+        }
+        try {
+            java.util.List<String> fromDb = jdbc.query(
+                    "SELECT key_hex FROM bridge_replay_keys WHERE kind = ?",
+                    (rs, rowNum) -> rs.getString("key_hex"), kind);
+            java.util.Set<String> set = new java.util.HashSet<>(fromDb);
+            replayKeyCache.put(kind, set);
+            return Collections.unmodifiableCollection(set);
+        } catch (RuntimeException e) {
+            log.warn("JdbcPaymentStateStore: failed to load replay keys for kind={}: {}",
+                    kind, e.getMessage());
+            return Collections.emptyList();
+        }
+    }
 }

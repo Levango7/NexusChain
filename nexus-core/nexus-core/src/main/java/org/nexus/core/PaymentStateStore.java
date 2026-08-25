@@ -26,4 +26,9 @@ public interface PaymentStateStore {
     void putBridgeTx(String bridgeTxId, BridgeTransaction bridgeTx);
     BridgeTransaction getBridgeTx(String bridgeTxId);
     Collection<BridgeTransaction> getAllBridgeTxs();
+
+    // --- Bridge Replay Prevention (v2.2.0+): persistent consumed keys ---
+    void putConsumedReplayKey(String kind, String keyHex);
+    Collection<String> getAllConsumedReplayKeys(String kind);
+
 }

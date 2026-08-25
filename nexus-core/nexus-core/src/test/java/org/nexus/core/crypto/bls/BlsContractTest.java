@@ -40,11 +40,12 @@ class BlsContractTest {
     }
 
     /**
-     * 当前接口的诚实占位断言：generate() 尚未实现。
-     * 若此断言失败，说明 M2 已落地（届时应删除本用例）。
+     * M2 已落地（Secp256k1 过渡实现）：generate() 应返回可用 signer 实例。
+     * blst 真正集成后的跨节点验签一致性见 crossNodeVerificationCompatible。
      */
     @Test
-    void signerGenerationIsStubbedUntilM2() {
-        assertThrows(UnsupportedOperationException.class, BlsSigner::generate);
+    void signerGenerationAvailableSinceM2() {
+        BlsSigner signer = assertDoesNotThrow(BlsSigner::generate);
+        assertNotNull(signer, "M2 落地后 generate() 应返回 signer 实例");
     }
 }

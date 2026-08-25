@@ -105,7 +105,9 @@ public class BridgeController {
      *                  <li>{@code amount} - 铸造金额</li>
      *                  <li>{@code recipient} - 收款人地址</li>
      *                  <li>{@code sourceChain} - 源链标识</li>
-     *                  <li>{@code signatures} - 验证人签名数组</li>
+     *                  <li>{@code signatures} - 验证人签名数组（对规范化 messageHash 的 Ed25519 签名）</li>
+     *                  <li>{@code pubkeys} - 可选，验证人公钥数组（与 signatures 一一对应；
+     *                      提供时走 v1.9.4 显式公钥路径，缺省时由 ValidatorRegistry 解析归属）</li>
      *                </ul>
      * @return 统一响应格式，data 中包含铸造结果
      */
@@ -117,9 +119,14 @@ public class BridgeController {
         String sourceChain = (String) request.get("sourceChain");
         @SuppressWarnings("unchecked")
         List<String> signatures = (List<String>) request.get("signatures");
+        @SuppressWarnings("unchecked")
+        List<String> pubkeys = (List<String>) request.get("pubkeys");
 
         long amount = amountObj != null ? Long.parseLong(amountObj.toString()) : 0L;
 
+        if (pubkeys != null && !pubkeys.isEmpty()) {
+            return bridgeService.mint(bridgeTxId, sourceChain, recipient, amount, pubkeys, signatures);
+        }
         return bridgeService.mint(bridgeTxId, sourceChain, recipient, amount, signatures);
     }
 
