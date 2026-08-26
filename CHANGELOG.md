@@ -4,6 +4,26 @@
 
 ## [Unreleased]
 
+## [2.38.0] - 2026-08-26
+
+### 多签审批请求 DB 持久化（审计清单高#8 结案）
+
+本次发布将签名服务审批存储从内存态升级为可切换的数据库持久化，消除多实例部署下的状态割裂风险。对应审计改进清单 43 项中最后一项待办（高#8），至此全部闭环。
+
+#### Added（审批持久化）
+
+- **signing-service JPA 持久化全套**：`signing_approval_request` 表（Flyway V1，request_id 唯一约束 + 状态/截止时间索引）、`SigningApprovalRequestEntity`（@Version 乐观锁支撑多实例 CAS）、`SigningApprovalRequestRepository`、`JpaApprovalStore implements ApprovalStore`
+- **三态存储开关 `nexus.approval.store-type`**：memory（默认）/ file / jpa；留空时回落既有 `use-database` 开关语义（false→memory，true→jpa）；默认行为完全向后兼容
+- **测试**：新增 JpaApprovalStoreTest（10 用例）+ SigningApprovalStoreSelectionTest（7 用例）；signing-service 全量 548 用例 0 失败
+
+#### Fixed
+
+- **use-database 开关时序缺陷**：原实现为字段注入却在构造器读取（Spring 场景下恒为 false，开关从未生效），改为构造器参数注入，配置真正生效
+
+#### Documentation
+
+- **optional-improvements.md 高#8 结案**：43 项审计建议全部闭环（43✅ / 0⏸ / 0📋），账本转为历史存档
+
 ## [2.37.2] - 2026-08-26
 
 ### Documentation（文档勘误）

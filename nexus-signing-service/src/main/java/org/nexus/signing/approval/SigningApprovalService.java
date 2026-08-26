@@ -107,14 +107,25 @@ public class SigningApprovalService {
     private String approverWhitelist;
 
     /**
-     * 是否使用数据库持久化审批请求（多实例部署共享状态）。
+     * 是否使用数据库持久化审批请求（多实例部署共享状态）——遗留开关。
+     *
      * <p>从 {@code nexus.approval.use-database} 配置读取，默认 false（内存存储）。
-     * 设为 true 时应替换 {@link #requestStore} 为 Repository 调用，
-     * 当前实现保留扩展点，true 时记录 WARN 日志并回退到内存存储，
-     * 待 P3 阶段引入 JPA Entity + Repository 后完整实现。</p>
+     * v2.31.0（任务 #375）起推荐使用 {@link #storeType} 显式选择存储类型；
+     * 本开关仅在 store-type 未显式配置时生效：true → jpa，false → memory。</p>
+     *
+     * <p>由构造器参数注入（修复原 @Value 字段注入在构造器执行后才生效、
+     * 导致构造期读取恒为 false 的时序缺陷）。</p>
      */
-    @Value("${nexus.approval.use-database:false}")
-    private boolean useDatabase;
+    private final boolean useDatabase;
+
+    /**
+     * 审批存储类型显式选择。
+     *
+     * <p>从 {@code nexus.approval.store-type} 配置读取，可选值：
+     * {@code memory}（内存）/ {@code file}（JSONL 文件）/ {@code jpa}（数据库）。
+     * 空值表示回落到 {@link #useDatabase} 遗留开关语义。</p>
+     */
+    private final String storeType;
 
     /**
      * 过期清理定时任务执行间隔（毫秒）。
@@ -134,11 +145,11 @@ public class SigningApprovalService {
     private long cleanupRetentionSeconds;
 
     /**
-     * 审批记录文件持久化路径（use-database=true 时生效）。
+     * 审批记录文件持久化路径（store-type=file 或遗留 use-database=true 时生效）。
      * 默认 data/approval-records.jsonl（相对于工作目录）。
+     * 由构造器参数注入，避免 @Value 字段注入的构造期时序问题。
      */
-    @Value("${nexus.approval.persistence.file-path:data/approval-records.jsonl}")
-    private String approvalDataFilePath;
+    private final String approvalDataFilePath;
 
     private final MpcApprovalPolicy mpcApprovalPolicy;
     private final AuditLogService auditLogService;
@@ -166,43 +177,122 @@ public class SigningApprovalService {
     private final ApprovalNotifier approvalNotifier;
 
     /**
-     * 构造函数（Spring 自动注入用）。
+     * 简化构造函数（单元测试手动构造用）。
+     *
+     * <p>行为约定：不配置任何开关参数 → 内存存储（默认行为，向后兼容）。</p>
      *
      * @param mpcApprovalPolicy MPC 审批策略，用于计算所需审批人数
      * @param auditLogService   审计日志服务
      */
-    @org.springframework.beans.factory.annotation.Autowired
     public SigningApprovalService(MpcApprovalPolicy mpcApprovalPolicy,
                                   AuditLogService auditLogService) {
-        this(mpcApprovalPolicy, auditLogService, null, null);
+        this(mpcApprovalPolicy, auditLogService, null, null, "", false,
+                "data/approval-records.jsonl", null);
+    }
+
+    /**
+     * Spring 自动装配构造函数。
+     *
+     * <p>存储选择参数通过构造器参数注入（而非 @Value 字段注入），确保
+     * store 选择逻辑执行时配置已就绪——修复原实现中 @Value 字段在构造器
+     * 执行后才注入、导致 {@code use-database} 判断恒为 false 的时序缺陷。</p>
+     *
+     * @param mpcApprovalPolicy   MPC 审批策略
+     * @param auditLogService     审计日志服务
+     * @param repositoryProvider  JPA Repository 提供者（JPA 未启用时 getIfAvailable 返回 null）
+     * @param storeTypeConfigured 显式存储类型（nexus.approval.store-type，空值回落遗留开关）
+     * @param useDatabaseLegacy   遗留开关（nexus.approval.use-database）
+     * @param filePathConfigured  文件存储路径（nexus.approval.persistence.file-path）
+     */
+    @org.springframework.beans.factory.annotation.Autowired
+    public SigningApprovalService(MpcApprovalPolicy mpcApprovalPolicy,
+                                  AuditLogService auditLogService,
+                                  org.springframework.beans.factory.ObjectProvider<SigningApprovalRequestRepository> repositoryProvider,
+                                  @Value("${nexus.approval.store-type:}") String storeTypeConfigured,
+                                  @Value("${nexus.approval.use-database:false}") boolean useDatabaseLegacy,
+                                  @Value("${nexus.approval.persistence.file-path:data/approval-records.jsonl}") String filePathConfigured) {
+        this(mpcApprovalPolicy, auditLogService, null, null,
+                storeTypeConfigured, useDatabaseLegacy, filePathConfigured,
+                repositoryProvider != null ? repositoryProvider.getIfAvailable() : null);
     }
 
     /**
      * 完整构造函数（支持注入自定义存储和通知器）。
      *
+     * <p>行为约定：未显式传入 customStore 时按内存模式初始化
+     * （等价于 store-type=memory，保持既有调用方行为不变）。</p>
+     *
      * @param mpcApprovalPolicy MPC 审批策略
      * @param auditLogService   审计日志服务
-     * @param customStore       自定义审批存储（null 时自动选择）
+     * @param customStore       自定义审批存储（null 时自动选择内存模式）
      * @param customNotifier    自定义通知器（null 时使用日志通知器）
      */
     public SigningApprovalService(MpcApprovalPolicy mpcApprovalPolicy,
                                   AuditLogService auditLogService,
                                   ApprovalStore customStore,
                                   ApprovalNotifier customNotifier) {
+        this(mpcApprovalPolicy, auditLogService, customStore, customNotifier, "", false,
+                "data/approval-records.jsonl", null);
+    }
+
+    /**
+     * 全参私有构造函数（所有公共构造器的最终委托目标）。
+     *
+     * <p>存储选择优先级：</p>
+     * <ol>
+     *   <li>{@code customStore} 非空：直接使用（测试 / 高级定制场景）</li>
+     *   <li>{@code storeType} 显式配置：memory / file / jpa 三选一</li>
+     *   <li>回落遗留开关 {@code useDatabaseLegacy}：true → jpa，false → memory</li>
+     * </ol>
+     *
+     * <p>jpa 模式要求 {@code jpaRepository} 非空；缺失时记录 WARN 并回退
+     * 内存存储（fail-safe，保证服务可用性）。</p>
+     */
+    private SigningApprovalService(MpcApprovalPolicy mpcApprovalPolicy,
+                                   AuditLogService auditLogService,
+                                   ApprovalStore customStore,
+                                   ApprovalNotifier customNotifier,
+                                   String storeType,
+                                   boolean useDatabaseLegacy,
+                                   String approvalDataFilePath,
+                                   SigningApprovalRequestRepository jpaRepository) {
         this.mpcApprovalPolicy = Objects.requireNonNull(mpcApprovalPolicy, "mpcApprovalPolicy");
         this.auditLogService = Objects.requireNonNull(auditLogService, "auditLogService");
+        this.storeType = storeType == null ? "" : storeType;
+        this.useDatabase = useDatabaseLegacy;
+        this.approvalDataFilePath = approvalDataFilePath == null || approvalDataFilePath.isBlank()
+                ? "data/approval-records.jsonl" : approvalDataFilePath;
 
-        // 审批存储选择
+        // 审批存储选择（优先级见方法 javadoc）
         if (customStore != null) {
             this.requestStore = customStore;
             log.info("使用自定义审批存储: {}", customStore.getClass().getSimpleName());
-        } else if (useDatabase) {
-            this.requestStore = new FileBasedApprovalStore(
-                    approvalDataFilePath);
-            log.info("使用文件持久化审批存储: path={}", approvalDataFilePath);
         } else {
-            this.requestStore = new MapApprovalStore(new ConcurrentHashMap<>());
-            log.info("使用内存审批存储（单实例部署）");
+            String effectiveType = resolveStoreType(this.storeType, useDatabaseLegacy);
+            switch (effectiveType) {
+                case "jpa" -> {
+                    if (jpaRepository != null) {
+                        this.requestStore = new JpaApprovalStore(jpaRepository);
+                        log.info("使用数据库持久化审批存储（多实例共享）: table=signing_approval_request");
+                    } else {
+                        this.requestStore = new MapApprovalStore(new ConcurrentHashMap<>());
+                        log.warn("store-type=jpa 但 JPA Repository 不可用，回退到内存审批存储"
+                                + "（请检查 datasource 配置与 spring-boot-starter-data-jpa 依赖）");
+                    }
+                }
+                case "file" -> {
+                    this.requestStore = new FileBasedApprovalStore(this.approvalDataFilePath);
+                    log.info("使用文件持久化审批存储: path={}", this.approvalDataFilePath);
+                }
+                case "memory" -> {
+                    this.requestStore = new MapApprovalStore(new ConcurrentHashMap<>());
+                    log.info("使用内存审批存储（单实例部署）");
+                }
+                default -> {
+                    this.requestStore = new MapApprovalStore(new ConcurrentHashMap<>());
+                    log.warn("未知的审批存储类型 '{}'，回退到内存审批存储", effectiveType);
+                }
+            }
         }
 
         // 通知器选择
@@ -214,12 +304,38 @@ public class SigningApprovalService {
         if (this.cleanupIntervalMs == 0) this.cleanupIntervalMs = 60000;
         if (this.cleanupRetentionSeconds == 0) this.cleanupRetentionSeconds = 3600;
 
-        log.info("SigningApprovalService 初始化完成: useDatabase={}, storeType={}, notifierType={}, "
+        log.info("SigningApprovalService 初始化完成: storeType={}, useDatabase(legacy)={}, storeClass={}, notifierType={}, "
                 + "cleanupIntervalMs={}, retentionSeconds={}, whitelistConfigured={}",
-                useDatabase, requestStore.getClass().getSimpleName(),
+                this.storeType.isBlank() ? "(unset)" : this.storeType, useDatabaseLegacy,
+                requestStore.getClass().getSimpleName(),
                 approvalNotifier.getClass().getSimpleName(),
                 cleanupIntervalMs, cleanupRetentionSeconds,
                 approverWhitelist != null && !approverWhitelist.trim().isEmpty());
+    }
+
+    /**
+     * 解析生效的存储类型。
+     *
+     * <p>显式 {@code store-type} 优先；为空时回落遗留开关语义：
+     * {@code use-database=true} → jpa，否则 memory（默认行为不变）。</p>
+     *
+     * @param storeTypeConfigured 显式配置的存储类型（可能为空 / 空白）
+     * @param legacyUseDatabase   遗留开关值
+     * @return 生效类型：memory / file / jpa
+     */
+    static String resolveStoreType(String storeTypeConfigured, boolean legacyUseDatabase) {
+        if (storeTypeConfigured != null && !storeTypeConfigured.isBlank()) {
+            return storeTypeConfigured.trim().toLowerCase(java.util.Locale.ROOT);
+        }
+        return legacyUseDatabase ? "jpa" : "memory";
+    }
+
+    /**
+     * 当前生效的审批存储实例（包级可见，仅供同包测试断言存储类型使用，
+     * 非公共 API）。
+     */
+    ApprovalStore storeInUse() {
+        return requestStore;
     }
 
     /**

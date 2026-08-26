@@ -1,0 +1,12 @@
+# signing-service 开发环境覆盖：H2 内存库替代 MySQL
+#
+# 激活方式：spring.profiles.active=dev
+# H2 启用 MODE=MySQL 兼容模式 + DATABASE_TO_LOWER/CASE_INSENSITIVE_IDENTIFIERS，
+# 使 Flyway migration（db/migration/V1__init_signing_approval_table.sql）的
+# 同一份 SQL 在 H2 和 MySQL 下均可执行（与 nexus-wallet-service dev profile 范式一致）。
+spring:
+  datasource:
+    url: jdbc:h2:mem:signing;MODE=MySQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver

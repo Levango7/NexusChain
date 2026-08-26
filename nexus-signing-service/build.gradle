@@ -64,6 +64,9 @@ dependencies {
     // === Spring Boot ===
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    // === P3 optional-improvements 高#8（任务 #375）：审批请求 DB 持久化，
+    //     多实例部署共享 signing_approval_request 表，消除内存存储状态不共享风险 ===
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
 
     // === P1-F1 安全加固：Spring Security + JWT 鉴权 ===
     // 引入 spring-boot-starter-security 启用方法级鉴权（@PreAuthorize），
@@ -75,6 +78,14 @@ dependencies {
     implementation 'io.jsonwebtoken:jjwt-api:0.12.6'
     runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.12.6'
     runtimeOnly 'io.jsonwebtoken:jjwt-jackson:0.12.6'
+
+    // === P3 高#8（任务 #375）：数据库迁移 + 驱动（与 nexus-wallet-service 既有写法对齐） ===
+    // Flyway 9.22.3（Boot 3.2.5 BOM 管理），9.x 无需单独 flyway-mysql 模块
+    implementation 'org.flywaydb:flyway-core'
+    // H2 内存数据库（dev/test profile）
+    runtimeOnly 'com.h2database:h2'
+    // MySQL 驱动（生产 profile）
+    runtimeOnly 'com.mysql:mysql-connector-j'
 
     // === Micrometer Tracing + Zipkin（Phase 3 任务 #61，设计文档 §4.3.1） ===
     // SpringBoot 3.2.5 BOM 管理版本（micrometer-tracing 1.2.5 + zipkin-reporter-brave 2.16.4）

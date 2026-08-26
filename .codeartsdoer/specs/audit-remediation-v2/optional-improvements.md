@@ -15,14 +15,14 @@
 
 | 状态 | 数量 | 占比 | 说明 |
 |------|------|------|------|
-| ✅ 已修复 | 42 项 | 97.7% | 均附当前代码证据（文件:行号），多数带"中N 改进"/"低N 改进"标记注释 |
+| ✅ 已修复 | 43 项 | 100% | 均附当前代码证据（文件:行号），多数带"中N 改进"/"低N 改进"标记注释 |
 | ⏸ 不适用 | 0 项 | — | 无 |
-| 📋 待办 | 1 项 | 2.3% | 高#8 多实例共享存储（预估 4-6h），纳入 P3 规划 |
+| 📋 待办 | 0 项 | — | 无（高#8 已于 v2.38.0 完成 DB 持久化改造） |
 
 ### 结论说明
 
 1. **系统性消化**：43 项建议已在后续版本（约 v2.3.x – v2.37.x 的 P2-C/P2-F 各批次）中系统性消化 42 项；代码内大量"中7 改进""低4 改进"式标记注释与本次核实证据一一对应。
-2. **唯一待办**：高#8 SigningApprovalService 多实例共享存储——当前默认仍为内存 `ConcurrentHashMap`（单实例部署假设），已预留 `nexus.approval.use-database` 开关与 `FileBasedApprovalStore` 扩展点，完整 Redis/DB 共享存储留待 P3 阶段；单实例部署形态下无阻塞。
+2. **原唯一待办已结案**：高#8 SigningApprovalService 多实例共享存储已于 **v2.38.0** 完成 DB 持久化改造（JPA + Flyway `signing_approval_request` 表 + `nexus.approval.store-type` 三态开关 memory/file/jpa，`@Version` 乐观锁支撑多实例 CAS；默认不配置仍为内存模式向后兼容），43 项至此全部闭环。
 3. **已知边界注记**（不影响主结论，记录备查）：
    - 高#9 WITHDRAWAL 补偿入口已建立，但 wallet-service 补偿端点尚未提供，暂以日志告警 + 下次对账重试兜底（任务 #317 端点对齐修复移除了指向不存在端点的 Feign 调用）；
    - 低#10 storage_key 的 `env` 来源模式已实现（消除密钥明文落盘必选性），`kms` 模式为 TODO 扩展点；
@@ -42,7 +42,7 @@
 | 5 | BLS Secp256k1BlsSigner构造函数未校验privateKey范围 | Secp256k1BlsSigner.java:28-31 | 构造时校验privateKey ∈ [1, N-1] | 15min | ✅ 已修复（构造函数 null/ZERO/mod N 范围校验） |
 | 6 | SigningApprovalService内存存储无过期清理 | SigningApprovalService.java:97 | 添加@Scheduled定时清理EXPIRED请求 | 1h | ✅ 已修复（cleanupExpiredRequests @Scheduled 每分钟执行，另支持 cleanup-interval-ms 配置） |
 | 7 | SigningApprovalService无审批人白名单 | SigningApprovalService.java | 增加nexus.approval.approver-whitelist配置 | 2h | ✅ 已修复（SigningApprovalService.java:106-107 配置项 + :342-352 updateRequest 白名单校验拒绝并记审计） |
-| 8 | SigningApprovalService单实例内存存储不支持多实例 | SigningApprovalService.java | 替换为Redis/DB共享存储 | 4-6h | 📋 待办（默认仍为内存 ConcurrentHashMap 单实例存储，SigningApprovalService.java:204；已预留 use-database 开关 + FileBasedApprovalStore 扩展点 :116/:199-202，注释明确留待 P3；当前单实例部署假设下可接受，预估 4-6h） |
+| 8 | SigningApprovalService单实例内存存储不支持多实例 | SigningApprovalService.java | 替换为Redis/DB共享存储 | 4-6h | ✅ 已修复（v2.38.0：JPA 持久化——`signing_approval_request` 表（Flyway V1，唯一约束+状态/截止时间索引）+ `SigningApprovalRequestEntity`（@Version 乐观锁支撑多实例 CAS）+ `JpaApprovalStore implements ApprovalStore`；新增 `nexus.approval.store-type` 三态开关 memory/file/jpa（留空回落 use-database 旧语义），默认不配置仍为内存模式向后兼容；顺带修复 use-database 开关构造期 @Value 字段注入时序缺陷；signing-service 全量 548 用例 0 失败） |
 | 9 | CompensationService缺少WITHDRAWAL/SETTLEMENT补偿实现 | CompensationService.java:245-252 TODO | 通过Feign调用wallet-service/settlement-service补偿端点 | 6-8h | ✅ 已修复（CompensationService.java:282-301 compensate() 通用入口分发三类操作；SETTLEMENT 进程内回滚批次状态 :345-373；WITHDRAWAL 入口已建立，因 wallet-service 补偿端点未提供暂以日志+下次对账重试兜底 :317-324，#317 端点对齐修复移除无效 Feign 调用） |
 | 10 | ReconciliationTask无分布式锁，多实例重复执行 | ReconciliationTask.java:79 | 使用ShedLock或Redis分布式锁 | 2h | ✅ 已修复（ShedLock @SchedulerLock + shedlock 表 Flyway V11） |
 
@@ -95,9 +95,9 @@
 
 | 优先级 | 数量 | ✅ 已修复 | ⏸ 不适用 | 📋 待办 | 待办项 |
 |--------|------|-----------|-----------|---------|--------|
-| 🟠 高优先级 | 10项 | 9 | 0 | 1 | 高#8（多实例共享存储，P3） |
+| 🟠 高优先级 | 10项 | 10 | 0 | 0 | — |
 | 🟡 中优先级 | 18项 | 18 | 0 | 0 | — |
 | 🟢 低优先级 | 15项 | 15 | 0 | 0 | — |
-| **合计** | **43项** | **42** | **0** | **1** | — |
+| **合计** | **43项** | **43** | **0** | **0** | — |
 
-> 2026-08-26 核实：43 项建议中 42 项已在后续版本（约 v2.3.x – v2.37.x）系统性消化，唯一待办为高#8 多实例共享存储（单实例部署假设下无阻塞，纳入 P3 规划）。本清单自此转为历史账本，后续新增可选改进建议请新建文档，避免本账本状态失真。
+> 2026-08-26 核实：43 项建议中 42 项已在后续版本（约 v2.3.x – v2.37.x）系统性消化；最后 1 项（高#8 多实例共享存储）已于 v2.38.0 完成 DB 持久化改造。**本清单 43 项全部闭环**，自此转为历史账本，后续新增可选改进建议请新建文档，避免本账本状态失真。

@@ -4,6 +4,13 @@
 spring:
   main:
     allow-bean-definition-overriding: true
+  # === P3 高#8（任务 #375）：审批持久化测试数据源，H2 内存库替代 MySQL ===
+  # MODE=MySQL 兼容模式保证 Flyway migration 同一份 SQL 在 H2 下可执行
+  datasource:
+    url: jdbc:h2:mem:signing;MODE=MySQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
   # 测试中不连接 Nacos / Seata 等外部服务
   cloud:
     nacos:

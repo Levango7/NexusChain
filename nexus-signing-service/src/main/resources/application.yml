@@ -40,6 +40,29 @@ spring:
             group-id: NEXUS_GROUP
             data-id: nexus-sentinel-rules.yaml
             rule-type: flow
+  # === P3 审批持久化（optional-improvements 高#8）：数据库持久化 ===
+  # 生产 MySQL；dev/test profile 由 application-dev.yml / application-test.yml 覆盖为 H2
+  datasource:
+    url: ${NEX_DB_URL:jdbc:mysql://localhost:3306/nexus_signing?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=UTC}
+    username: ${NEX_DB_USERNAME:root}
+    password: ${NEX_DB_PASSWORD:}
+    driver-class-name: ${NEX_DB_DRIVER:com.mysql.cj.jdbc.Driver}
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 30000
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+    open-in-view: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQLDialect
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
 
 # === 链节点 RPC（从 exchange-wallet application.properties 迁移） ===
 # nodeNet 为 NodeController 使用的链节点 RPC 地址
@@ -106,6 +129,9 @@ nexus:
     # true：应使用 DB 共享存储（多实例部署审批状态共享）。
     # 当前 true 时记录 WARN 日志并回退到内存存储（P3 阶段引入 JPA Repository 后完整实现）。
     use-database: ${NEX_APPROVAL_USE_DATABASE:false}
+    # 存储类型显式选择：memory（默认）/ file / jpa
+    # 留空时回落 use-database 旧开关语义：false→memory，true→jpa
+    store-type: ${NEX_APPROVAL_STORE_TYPE:}
     # === 项1：过期清理定时任务配置 ===
     # 清理任务执行间隔（毫秒），默认 60000（1 分钟）。
     # cleanupExpiredRequests @Scheduled 方法按此间隔扫描 requestStore：
