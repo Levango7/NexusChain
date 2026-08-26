@@ -90,8 +90,9 @@ test {
 
 ext {
     // slf4j 2.0.x 与 Spring Boot 3.2.x 对齐（1.7 与 logback 2.x 冲突导致
-    // Spring Boot 3 容器无法启动，见 docs/adr/ADR-031 环境约束）
-    slf4jVersion = '2.0.13'
+    // Spring Boot 3 容器无法启动，见 docs/adr/ADR-031 环境约束）。
+    // TD-11（tech-debt-audit）：由 2.0.13 对齐至根 ext 的 2.0.16，消除微漂移。
+    slf4jVersion = '2.0.16'
     leveldbVersion = '0.12'
     scastleVersion = '1.58.0.0'
     hibernateValidatorVersion = '8.0.1.Final'

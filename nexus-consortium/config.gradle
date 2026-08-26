@@ -4,7 +4,9 @@ ext {
     jargon2Version = '1.1.1'
     guavaVersion = '31.1-jre'
     lombokVersion = '1.18.32'
-    jacksonVersion = '2.14.2'
+    // TD-04（tech-debt-audit）：composite 无法消费主构建的 Boot BOM，直接对齐数值。
+    // 主构建 Jackson 实际生效值 = Boot 3.2.5 BOM 管理的 2.15.4。
+    jacksonVersion = '2.15.4'
     commonsCliVersion = '1.4'
     gRPCVersion = '1.54.0'
     webSocketVersion = '1.4.0'

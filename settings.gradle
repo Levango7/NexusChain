@@ -11,8 +11,9 @@ rootProject.name = 'nexus'
 // NexusChain 统一构建系统
 // 按依赖顺序包含所有子模块
 
-// === 基础协议层 ===
-include 'nexus-rpc-doc'
+// TD-13（tech-debt-audit）：nexus-rpc-doc 为幽灵 include 已删除——该目录无 build.gradle
+// （仅 README 文档），include 后仍参与 allprojects/subprojects 配置却无任何构建产物。
+// 目录本身保留作为 gRPC 接口文档，不参与构建。
 
 // === 核心层 ===
 include ':nexus-core:nexus-core'
@@ -20,7 +21,9 @@ include ':nexus-core:nexus-core'
 // === SDK 层 ===
 // 已废弃（Deprecated，已从构建中排除）：
 //   - nexus-java-sdk：Legacy Java SDK，已迁移至 nexus-sdk（目录已移除）
-//   - nexus-js-sdk：Legacy JS SDK，已迁移至 nexus-sdk/typescript（目录保留，README 已标记 DEPRECATED）
+//   - nexus-js-sdk：Legacy JS SDK，已迁移至 nexus-sdk/typescript。
+//     TD-15（tech-debt-audit）：废弃目录已于 v2.39.0 删除（未采用 .archived 归档形态，
+//     因 exchange-wallet 先例中归档目录从未入库且已不存在；git 历史可恢复）。
 // 统一 SDK 请使用 nexus-sdk（Java/JS/Python/Go 多语言）。
 include 'nexus-sdk:java'
 include 'nexus-common'

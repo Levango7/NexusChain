@@ -1,5 +1,17 @@
 # Consortium Development Guide
 
+> **构建方式变更（v2.39.0，TD-02）**：本目录自带的 Gradle wrapper 5.2.1（2019 年）
+> 及 gradlew / gradlew.bat 已删除——Gradle 5.x 无法驱动 Boot 3.x 插件（Boot 3 要求
+> Gradle 7.5+）。nexus-consortium 已作为 composite build 收编进根构建（见仓库根
+> settings.gradle 的 `includeBuild 'nexus-consortium'`），**独立构建不再支持**，
+> 一律由仓库根目录的 Gradle 8.5 wrapper 驱动：
+>
+> ```shell script
+> # 仓库根目录执行
+> gradlew.bat :consortium:build        # 构建 consortium 全部子项
+> gradlew.bat :consortium:bootRun      # 启动 consortium 应用
+> ```
+
 1. git subtree usage
 
 ```shell script
@@ -25,18 +37,20 @@ https://jingyan.baidu.com/article/0a52e3f4e53ca1bf63ed725c.html
 
 ## Commands
 
+> 以下命令需在**仓库根目录**用根 Gradle wrapper 执行（本目录自带 wrapper 已随 TD-02 删除）。
+
 1. start application: (Windows) 
 
-```.\gradlew consortium:bootRun```
+```gradlew.bat :consortium:bootRun```
 
 2. clear builds (Windows) 
 
-```.\gradlew consortium:clean```
+```gradlew.bat :consortium:clean```
 
 3. build and run fat jar (Windows)
 
 ```shell script
-.\gradlew consortium:bootJar       
+gradlew.bat :consortium:bootJar       
 
 # override default spring config with your custom config                     
 java -jar consortium\build\libs\consortium-0.0.1-SNAPSHOT.jar -Dspring.config.location=classpath:\application.yml,some-path\custom-config.yml

@@ -4,6 +4,34 @@
 
 ## [Unreleased]
 
+## [2.39.0] - 2026-08-26
+
+### 技术债 B1 快赢包（consortium 卫生清理 + 版本统一 + 死配置清理）
+
+本次发布为纯构建卫生批次（tech-debt-audit 报告第 7.1 章 B1 批次），不改动任何 Java 源码逻辑，全部为构建脚本 / 依赖声明 / 废弃目录层面的清理。
+
+#### Removed
+
+- **TD-02 删除 consortium 自带 Gradle wrapper 5.2.1**：删除 `nexus-consortium/{gradlew,gradlew.bat,gradle/wrapper/*}`（2019 年 Gradle 5.x，无法驱动 Boot 3.x 插件）；composite 收编后一律由仓库根 wrapper 8.5 驱动，独立构建改经根 wrapper 启动器完成（已在 nexus-consortium/README.md 注明）
+- **TD-03 删除 jcenter 死仓库引用 ×2**：`nexus-consortium/common/build.gradle`、`crypto/build.gradle` 的 aliyun-jcenter 反代条目移除（jcenter 已 sunset），保留 aliyun public + mavenCentral
+- **TD-13 删除幽灵 include**：根 settings.gradle 移除 `include 'nexus-rpc-doc'`（该目录无 build.gradle 仅文档，却参与 allprojects/subprojects 配置）；目录本身保留
+- **TD-14 清理根 ext 死变量 ×16**：logbackVersion、bouncycastleVersion、jargon2Version、httpClientVersion、gsonVersion、commonsCodecVersion、commonsIoVersion、commonsLang3Version、commonsCollections4Version、commonsCliVersion、jcommanderVersion、jjwtVersion、quartzVersion、junitVersion、junitJupiterVersion、nexusVersion——逐一经 rg 复核确认主构建树零 `${}` 引用后删除；保留的 10 个变量均有真实消费点（注释已列明）
+- **TD-15 删除废弃目录 nexus-js-sdk/**：settings.gradle 已标注 DEPRECATED 且不参与构建；采用 git rm 直接删除而非 .archived 归档形态（exchange-wallet 先例中归档目录从未入库且已不存在），git 历史可恢复
+
+#### Changed
+
+- **TD-04 Jackson 统一（消除三轨并存）**：`nexus-sdk/java` 硬编码 jackson-databind 2.14.2 → 无版本号，由 Boot BOM 管理；配套将 Boot BOM 从 compileOnly platform 提升为 implementation platform（compileOnly 平台约束不传播到 runtimeClasspath，无版本依赖在测试/运行期无法解析；约束值与消费方自身 Boot 3.2.5 BOM 完全一致，无行为变化）。`nexus-consortium/config.gradle` jacksonVersion 2.14.2 → **2.15.4**（composite 无法消费主构建 BOM，直接对齐数值）；nexus-core 的 `${jacksonVersion}` 保持不变
+- **TD-11 slf4j 对齐**：nexus-core 自身 ext slf4jVersion 2.0.13 → **2.0.16**，与根 ext 一致，消除微漂移
+- **TD-12 gateway 去死版本号**：对 settlement/compliance/analytics/oracle 四个 composite 依赖去掉写死的 `:2.1.0` 后缀（实际 version=2.30.0，includeBuild 按坐标替换忽略版本号），消除语义误导与「坐标变更时静默退化为真实 Maven 解析」隐患
+- **TD-14 失真注释修正 ×2**：gateway build.gradle 与 signing-service build.gradle 中「jjwt 版本与根 ext.jjwtVersion 对齐」的说法改为如实注明硬编码值与 Boot BOM 不管理 io.jsonwebtoken 的关系
+
+#### Verification（验证记录）
+
+- 全量编译 `gradlew build -x test` 通过（offline 首跑因 slf4j-api 2.0.16 新值缓存缺失失败，联网重试成功）
+- 受影响模块测试：`:nexus-gateway:test`、`:nexus-core:nexus-core:test`、`:nexus-common:test` 全绿
+- consortium composite 构建回归：consortium 目录内经根 wrapper 驱动 `build` BUILD SUCCESSFUL（含 common/crypto 测试）
+- 已知存量问题（非本版引入，HEAD 基线复现同一集合）：`:nexus-sdk:java:test` 存在 6 个既有失败——WalletUtilsTest.addressToPubkeyHash_invalidAddress_shouldReturnEmpty（源码 P0 安全修复改为返回 null 后测试未同步）及 SdkUnitTest 5 个「no node reachable」RPC 异常路径用例（环境脆弱测试）；改动前后失败集合零差异
+
 ## [2.38.0] - 2026-08-26
 
 ### 多签审批请求 DB 持久化（审计清单高#8 结案）

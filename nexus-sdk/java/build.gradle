@@ -18,8 +18,10 @@ repositories {
 }
 
 dependencies {
-    // Jackson (replaces fastjson in the rewritten wallet utilities)
-    implementation 'com.fasterxml.jackson.core:jackson-databind:2.14.2'
+    // TD-04（tech-debt-audit）：jackson-databind 移除硬编码 2.14.2，改由下方
+    // implementation platform 引入的 Spring Boot 3.2.5 BOM 管理（解析为 2.15.4），
+    // 与微服务群（BOM 2.15.4）及 nexus-core（根 ext 2.15.4）对齐，消除三轨并存。
+    implementation 'com.fasterxml.jackson.core:jackson-databind'
     implementation 'org.apache.httpcomponents:httpclient:4.5.14'
     implementation 'org.bouncycastle:bcprov-jdk18on:1.78'
     // Reuse nexus-core keystore/crypto/util classes (org.nexus.keystore.*)
@@ -39,7 +41,11 @@ dependencies {
     // （gateway / signing-service / wallet-service，均为 Spring Boot 应用）提供实现。
     // 用 compileOnly + BOM 约束版本，不向消费方传递 Spring 运行期依赖。
     // 版本矩阵对齐设计文档 §4.1：Spring Boot 3.2.5 / Spring Cloud 2023.0.3 / SCA 2023.0.1.0。
-    compileOnly platform('org.springframework.boot:spring-boot-dependencies:3.2.5')
+    // TD-04：Boot BOM 由 compileOnly platform 提升为 implementation platform——
+    // compileOnly 的平台约束不传播到 runtimeClasspath（Gradle configuration 继承语义），
+    // 无版本号的 jackson-databind 在测试/运行期将无法解析；implementation platform
+    // 使约束同时覆盖编译与运行期，且与消费方自身 Boot 3.2.5 BOM 完全一致、无行为变化。
+    implementation platform('org.springframework.boot:spring-boot-dependencies:3.2.5')
     compileOnly platform('org.springframework.cloud:spring-cloud-dependencies:2023.0.3')
     compileOnly 'org.springframework.cloud:spring-cloud-starter-openfeign'
     compileOnly 'org.springframework.boot:spring-boot-starter-web'

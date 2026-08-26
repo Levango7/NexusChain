@@ -73,7 +73,9 @@ dependencies {
     // 配合自定义 JwtAuthenticationFilter 解析 Bearer token 并填充 SecurityContext。
     // 不引入 spring-security-oauth2-resource-server，避免 Nimbus 依赖膨胀；
     // 直接使用 jjwt 0.12.x（与 nexus-core JWTUtil 对齐）做 HS256 自对称签名/校验。
-    // jjwt 版本与根 build.gradle subprojects.ext.jjwtVersion 对齐。
+    // jjwt 0.12.6 为模块硬编码值：Boot 3.2.5 BOM 不管理 io.jsonwebtoken，需手工维护；
+    // 原「与根 build.gradle subprojects.ext.jjwtVersion 对齐」的说法已失真——
+    // 根 ext.jjwtVersion 属零引用死变量，已于 v2.39.0 随 TD-14 清理移除。
     implementation 'org.springframework.boot:spring-boot-starter-security'
     implementation 'io.jsonwebtoken:jjwt-api:0.12.6'
     runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.12.6'

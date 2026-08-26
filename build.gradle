@@ -128,35 +128,24 @@ subprojects {
         systemProperty "file.encoding", "UTF-8"
     }
 
+    // === 共享版本变量（TD-14 清理后仅保留主构建树内有 ${} 消费点的变量） ===
+    // 消费点（rg '\$\{...Version\}' 复核，2026-08-26）：
+    //   slf4j/jackson/mockito → nexus-core；guava/leveldb/netty/grpc/protobuf/
+    //   postgresql/hibernateValidator → core 与 signing-service 各自消费。
+    // 已删除的 16 个死变量清单见 CHANGELOG v2.39.0 / tech-debt-audit TD-14。
     ext {
 
         slf4jVersion = '2.0.16'
-        logbackVersion = '1.5.18'
         postgresqlVersion = '42.5.4'
         leveldbVersion = '0.12'
         hibernateValidatorVersion = '8.0.1.Final'
-        bouncycastleVersion = '1.78'
-        jargon2Version = '1.1.1'
         nettyVersion = '4.1.108.Final'
         grpcVersion = '1.54.0'
-        httpClientVersion = '4.5.14'
         protobufVersion = '3.22.2'
         jacksonVersion = '2.15.4'
-        gsonVersion = '2.10.1'
         guavaVersion = '33.4.8-jre'
-        commonsCodecVersion = '1.15'
-        commonsIoVersion = '2.11.0'
-        commonsLang3Version = '3.12.0'
-        commonsCollections4Version = '4.4'
-        commonsCliVersion = '1.5.0'
-        jcommanderVersion = '1.82'
-        jjwtVersion = '0.12.6'
-        quartzVersion = '2.3.2'
-        junitVersion = '4.13.2'
-        junitJupiterVersion = '5.10.2'
         mockitoVersion = '4.11.0'
 
-        nexusVersion = '2.30.0'
     }
 
     // B1 baseline (2026-08-03): NO global forced test deps.

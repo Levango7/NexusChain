@@ -8,11 +8,10 @@ version '1.0-SNAPSHOT'
 sourceCompatibility = 17
 
 repositories {
+    // TD-03（tech-debt-audit）：已移除 aliyun-jcenter 反代条目——jcenter 已 sunset，
+    // 该仓库对现存构件不再提供服务，属死仓库引用。
     maven {
         url 'https://maven.aliyun.com/nexus/content/groups/public/'
-    }
-    maven {
-        url 'https://maven.aliyun.com/nexus/content/repositories/jcenter'
     }
     mavenCentral()
 }

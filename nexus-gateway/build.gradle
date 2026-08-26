@@ -98,7 +98,9 @@ dependencies {
     // 自动在请求头注入 Authorization: Bearer <jwt>。token 用共享 JWT_SECRET 签发，
     // roles 含 SIGNING_SERVICE，signing-service 侧 SecurityConfig 校验通过。
     // jjwt 0.12.x 与 signing-service / nexus-core JWTUtil 对齐。
-    // jjwt 版本与根 build.gradle subprojects.ext.jjwtVersion 对齐。
+    // jjwt 0.12.6 为模块硬编码值：Boot 3.2.5 BOM 不管理 io.jsonwebtoken，
+    // 需手工维护。原「与根 build.gradle subprojects.ext.jjwtVersion 对齐」的说法已失真——
+    // 根 ext.jjwtVersion 属零引用死变量，已于 v2.39.0 随 TD-14 清理移除。
     implementation 'io.jsonwebtoken:jjwt-api:0.12.6'
     runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.12.6'
     runtimeOnly 'io.jsonwebtoken:jjwt-jackson:0.12.6'
@@ -113,11 +115,14 @@ dependencies {
     implementation 'com.fasterxml.jackson.core:jackson-databind'
     implementation 'org.apache.commons:commons-lang3'
 
-    // 中间服务层（composite build 依赖替换，见根 settings.gradle 的 includeBuild）
-    implementation 'org.nexus:nexus-settlement:2.1.0'
-    implementation 'org.nexus:nexus-compliance:2.1.0'
-    implementation 'org.nexus:nexus-analytics:2.1.0'
-    implementation 'org.nexus:nexus-oracle:2.1.0'
+    // 中间服务层（composite build 依赖替换，见根 settings.gradle 的 includeBuild）。
+    // TD-12（tech-debt-audit）：去掉写死的 :2.1.0 版本后缀——includeBuild 按
+    // group:name 坐标做依赖替换、忽略版本号，四模块实际 version=2.30.0；
+    // 无版本坐标可避免「若未来坐标变更则静默退化为真实 Maven 解析」的误导语义。
+    implementation 'org.nexus:nexus-settlement'
+    implementation 'org.nexus:nexus-compliance'
+    implementation 'org.nexus:nexus-analytics'
+    implementation 'org.nexus:nexus-oracle'
 
     // P2 方向5「签名服务独立部署 PoC」：gateway 引用 nexus-sdk 中的
     // WalletMgmtClient / SigningServiceClient 接口与 ServiceDiscovery 骨架。
