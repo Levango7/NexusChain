@@ -29,6 +29,9 @@ dependencies {
     testImplementation platform('org.junit:junit-bom:5.10.2')
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
-    // 显式升级到 5.x（根构建统一注入的 mockito-core 4.11.0 会被 Gradle 版本冲突消解为更高版本）
-    testImplementation 'org.mockito:mockito-core:5.11.0'
+    // TD-06：本模块非 Boot 应用，经 testImplementation platform 导入 Boot 3.2.5 BOM，
+    // mockito-core 去版本号由 BOM 管理（解析为 5.2.0）。原先为对冲根注入 4.11.0 而显式
+    // 锁定的 5.11.0 随根注入删除（v2.40.0）一并移除，全仓 Mockito 收敛到单版本。
+    testImplementation platform('org.springframework.boot:spring-boot-dependencies:3.2.5')
+    testImplementation 'org.mockito:mockito-core'
 }

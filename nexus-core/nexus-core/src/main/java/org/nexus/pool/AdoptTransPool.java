@@ -3,7 +3,9 @@ package org.nexus.pool;
 import com.fasterxml.jackson.core.type.TypeReference;
 import org.nexus.keystore.util.JsonUtils;
 import org.apache.commons.codec.binary.Hex;
-import org.apache.commons.collections.map.LinkedMap;
+// TD-07 连带修复：原经 json-lib 传递获得的 commons-collections 3.x LinkedMap，
+// 迁移后改用仓库既有 commons-collections4:4.4 的同名类（同为插入序 Map，API 延续，行为等价）。
+import org.apache.commons.collections4.map.LinkedMap;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.nexus.command.Configuration;

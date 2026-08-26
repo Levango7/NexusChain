@@ -4,7 +4,7 @@ NexusChain 是一个**基于自研区块链的支付编排平台（Payment Orche
 
 > **定位**：区块链是底层结算基础设施，不是产品本身。产品价值在于统一支付 API、启发式路由与清结算。
 
-**当前版本**：v2.39.0（2026-08-26，技术债B1快赢包——consortium wrapper/jcenter清理+Jackson统一+死版本号/死变量清理+js-sdk归档）
+**当前版本**：v2.40.0（2026-08-26，技术债B2一致性加固——Guava 33.x CVE修复+Mockito统一BOM 5.x+老JSON库迁移Jackson+core依赖管理规范化）
 
 ## 快速开始
 

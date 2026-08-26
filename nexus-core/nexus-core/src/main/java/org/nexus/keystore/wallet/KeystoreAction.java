@@ -29,10 +29,10 @@ import org.nexus.keystore.crypto.ArgonManage;
 import org.nexus.keystore.crypto.KeyPair;
 import org.nexus.keystore.crypto.SHA3Utility;
 import org.nexus.keystore.util.Base58Utility;
+import org.nexus.keystore.util.JsonUtils;
 import org.nexus.keystore.util.Utils;
 import org.nexus.util.ByteUtil;
-import org.json.simple.JSONArray;
-import net.sf.json.JSONObject;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.nexus.keystore.account.Address;
 import org.nexus.keystore.crypto.*;
 
@@ -137,10 +137,14 @@ public class KeystoreAction {
         String filePath=folderPath+File.separator+ks.address+System.currentTimeMillis()/1000;
         File file = new File(filePath);
         file.createNewFile();
-        JSONObject ksjson = JSONObject.fromObject(ks);
-        JSONObject cryptojson = JSONObject.fromObject(crypto);
-        JSONObject cipherparamsjson = JSONObject.fromObject(cipherparams);
-        cryptojson.put("cipherparams",cipherparamsjson.toString());
+        // TD-07（tech-debt-audit）：由 net.sf.json-lib 迁移至 Jackson（JsonUtils.MAPPER）。
+        // 注意：此处刻意保留历史序列化语义——crypto 与 cipherparams 字段均为
+        // 「字符串化的 JSON 文本」（而非嵌套 JSON 对象），与 json-lib 版行为逐字节一致，
+        // 以保证既有 keystore 文件兼容性（生产逻辑零变更）。
+        ObjectNode ksjson = JsonUtils.MAPPER.valueToTree(ks);
+        ObjectNode cryptojson = JsonUtils.MAPPER.valueToTree(crypto);
+        ObjectNode cipherparamsjson = JsonUtils.MAPPER.valueToTree(cipherparams);
+        cryptojson.put("cipherparams", cipherparamsjson.toString());
         ksjson.put("crypto", cryptojson.toString());
         String str = ksjson.toString();
         try (FileWriter fw = new FileWriter(file.getAbsoluteFile());

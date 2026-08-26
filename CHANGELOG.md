@@ -4,6 +4,45 @@
 
 ## [Unreleased]
 
+## [2.40.0] - 2026-08-26
+
+### 技术债 B2 一致性加固（三方件收敛批）
+
+本次发布为 tech-debt-audit 报告第 7.2 章 B2 批次：Guava 统一（含 CVE 修复）、Mockito 三代收敛到 BOM、老 JSON 库迁移 Jackson、core 依赖管理规范化。生产逻辑零变更（JSON 迁移仅换实现库，输入输出语义保持）。
+
+#### Added
+
+- **TD-17 core 引入 dependency-management + Boot BOM 导入**：`nexus-core/nexus-core/build.gradle` 在既有 `io.spring.dependency-management:1.1.4` 插件基础上增加 `dependencyManagement { imports { mavenBom 'org.springframework.boot:spring-boot-dependencies:3.2.5' } }`（core 非 Boot 应用、无 Boot 插件类路径，故直接使用 BOM 坐标）；core 保持 application 插件 + mainClass=org.nexus.Start 的非 Boot 应用性质不变
+
+#### Fixed
+
+- **TD-05 Guava 统一 33.4.8-jre（CVE-2023-2976 修复）**：`nexus-core/nexus-core` 自身 ext guavaVersion 31.1-jre → **33.4.8-jre**；`nexus-sdk/java/build.gradle` 硬编码 31.1-jre → **33.4.8-jre**；`nexus-consortium/config.gradle` guavaVersion 31.1-jre → **33.4.8-jre**（composite 无法消费主构建 BOM，对齐数值）。CVE-2023-2976 于 Guava 32.0.0 修复；32+ 包名无变化，零代码改动
+- **TD-06 Mockito 三代并存收敛到 Boot BOM 单版本**：
+  - 根 `build.gradle` 删除向所有 subprojects 强制注入的 `testImplementation "org.mockito:mockito-core:${mockitoVersion}"`（4.11.0）及 ext 中已无消费者的 `mockitoVersion` 变量——该注入是三代并存的根源
+  - signing-service / wallet-service：`mockito-junit-jupiter:4.11.0` 去版本号走 BOM；显式 `mockito-inline:4.11.0` 整体删除
+  - gateway：显式 `mockito-inline:5.2.0` 删除（mockStatic 用途由 5.x 默认 inline mock maker 覆盖）
+  - nexus-common：显式 `mockito-core:5.11.0` 改经 testImplementation platform 导入 Boot BOM 后去版本号
+  - nexus-core：自身 ext mockitoVersion 删除，`mockito-core` 去版本号走 TD-17 导入的 BOM
+  - 验收抽查（dependencies testCompileClasspath）：gateway/signing/wallet/core/common 全链路 Mockito 单版本 **5.7.0**（Boot 3.2.5 BOM 实际管理值），无任何 4.11.0 残留；全仓 `rg "mockito" --glob "*.gradle"` 无版本号硬编码残留
+- **TD-07/08 json-lib/json-simple 迁移 Jackson 并删除依赖**：
+  - 使用面迁移（3 文件）：`KeystoreAction.generateKeystore()`（net.sf.json.JSONObject.fromObject → JsonUtils.MAPPER.valueToTree，刻意保留 crypto/cipherparams 字段「字符串化 JSON」的历史序列化语义，逐字节兼容既有 keystore 文件）、`HatchServiceImpl`（fromObject/getString/put/remove → valueToTree/get().asText()/put/remove）、`PoolController`（JSONArray/JSONObject 全套树操作 → ArrayNode/ObjectNode，含排序与 fromObject 字符串回解析等价改造；`json.put("payload",null)` 显式改为 `putNull("payload")` 以规避 ObjectNode 裸 null 重载歧义）
+  - `org.json.simple.JSONArray` 为死 import 直接删除；`AdoptTransPool.java` 的 JSONObject 关键词命中全部位于注释掉的 main 方法内，不参与编译，无需改动
+  - 连带修复：AdoptTransPool 实际使用的 `LinkedMap` 原经 json-lib 传递获得 commons-collections 3.x，迁移后改用仓库既有 commons-collections4:4.4 同名类（同为插入序 Map，API 延续，行为等价），避免重新引入 EOL 的 collections 3.x 显式依赖
+  - `nexus-core/nexus-core/build.gradle` 删除 `net.sf.json-lib:json-lib:2.4:jdk15` 与 `com.googlecode.json-simple:json-simple:1.1.1` 两行依赖
+  - 传递依赖查证：jsonrpc4j(testImplementation) 不传递引入 json-lib/json-simple（dependencies 抽查零命中），test 范围无影响
+
+#### Changed
+
+- **TD-17 core 硬编码版本交 BOM**：starter-web/starter-jdbc/starter-logging/starter-test 去 `:3.2.5` 后缀；spring-context/spring-test 去 `:6.1.6` 双轨声明去版本号（Boot 3.2.5 BOM 管理值恰为 Spring Framework 6.1.6，语义不变）。显式声明版本的 jackson `${jacksonVersion}`=2.15.4 与 slf4j 2.0.16 保持优先于 BOM，语义不变
+
+#### Verification（验证记录）
+
+- 全量编译 `gradlew build -x test` 通过
+- 依赖验收抽查（对照报告 7.2 验收标准）：① gateway/signing/wallet testCompileClasspath Mockito 全链路单版本 5.7.0 无 4.11.0 残留 ✅ ② core/sdk runtimeClasspath guava 单版本 33.4.8-jre（31.1-android/21.0 等传递请求全部消解）✅ ③ `rg "net\.sf\.json|org\.json\.simple"` 源码与构建脚本零残留 ✅ ④ core 无 spring-context 硬编码版本 ✅
+- 全量测试回归（分批短跑 + cmd /c 包装，除注明外均为当前代码树下强制新鲜执行）：`:nexus-core:nexus-core:test` 1352 用例 0 失败；`:nexus-gateway:test` 851 用例 0 失败（cleanTest 重跑）；`:nexus-common:test` 18 用例 0 失败（cleanTest 重跑）；`:nexus-signing-service:test` 548 用例 0 失败（cleanTest 重跑）；`:nexus-wallet-service:test` 175 用例 0 失败（cleanTest 重跑）；`:nexus-sdk:java:test` 354 用例 2 失败（见下）；`:nexus-bridge:test` 571 用例 0 失败（cleanTest 重跑）；consortium composite 经根 wrapper 驱动 `test`——consortium 294 + common 26 + crypto 1 用例 0 失败。合计 **4190 用例**
+- 已知存量失败基线（HEAD 复现同一集合，非本版引入）：sdk/java 仅复现 2 个基线失败——WalletUtilsTest.addressToPubkeyHash_invalidAddress_shouldReturnEmpty 与 SdkUnitTest.getGasPrice()「no node reachable」RPC 异常路径（环境脆弱测试，基线上限 5 个，本轮仅 1 个触发），**零新增失败**
+- Mockito 4→5 升级未产生需修测试的行为差异（strict stubbing / 参数匹配器均无新失败）
+
 ## [2.39.0] - 2026-08-26
 
 ### 技术债 B1 快赢包（consortium 卫生清理 + 版本统一 + 死配置清理）

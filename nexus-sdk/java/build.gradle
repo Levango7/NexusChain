@@ -29,8 +29,9 @@ dependencies {
 
     // Protobuf (TxUtils uses com.google.protobuf.ByteString; matches nexus-core 3.22.2)
     implementation 'com.google.protobuf:protobuf-java:3.22.2'
-    // Guava (WalletUtils uses com.google.common.primitives.Bytes; matches nexus-core 31.1-jre)
-    implementation 'com.google.guava:guava:31.1-jre'
+    // Guava (WalletUtils uses com.google.common.primitives.Bytes; matches nexus-core 33.4.8-jre)
+    // TD-05（tech-debt-audit）：由 31.1-jre 统一至 33.4.8-jre，32.0.0 修复 CVE-2023-2976。
+    implementation 'com.google.guava:guava:33.4.8-jre'
 
     // Gson — shared JsonUtil (org.nexus.sdk.util.JsonUtil) migrated from exchange-wallet in Phase 1.
     // Version aligned with exchange-wallet (2.10.1) and root build.gradle ext.gsonVersion.

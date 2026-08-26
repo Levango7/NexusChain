@@ -126,7 +126,8 @@ dependencies {
     // === 测试 ===
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
 
-    testImplementation 'org.mockito:mockito-junit-jupiter:4.11.0'
+    // TD-06：去版本号走 Boot 3.2.5 BOM（5.2.0），消除 4.11.0 显式声明与 BOM 5.x 消解混轨。
+    testImplementation 'org.mockito:mockito-junit-jupiter'
 }
 
 // 钱包服务为独立部署的 Spring Boot 应用，启用 bootJar 产出可执行 fat jar。

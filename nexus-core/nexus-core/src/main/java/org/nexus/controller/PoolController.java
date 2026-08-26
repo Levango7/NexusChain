@@ -1,7 +1,10 @@
 package org.nexus.controller;
 
-import net.sf.json.JSONArray;
-import net.sf.json.JSONObject;
+// TD-07/TD-08（tech-debt-audit）：由 net.sf.json-lib 迁移至 Jackson 树模型
+// （ObjectNode/ArrayNode），序列化输出语义保持不变。
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.nexus.keystore.util.JsonUtils;
 import org.apache.commons.codec.DecoderException;
 import org.apache.commons.codec.binary.Hex;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -37,14 +40,14 @@ public class PoolController {
 
     @RequestMapping(value="/getPoolAddress",method = RequestMethod.GET)
     public Object getPoolAddress(@RequestParam("address") String address){
-        JSONArray jsonArray = new JSONArray();
+        ArrayNode jsonArray = JsonUtils.MAPPER.createArrayNode();
         int check=KeystoreAction.verifyAddress(address);
         if(check==0){
             byte[] pubkeyhash=KeystoreAction.addressToPubkeyHash(address);
             List<TransPool> adoptpool=adoptTransPool.getAllFrom(Hex.encodeHexString(pubkeyhash));
             for(TransPool transPool:adoptpool){
                 Transaction transaction=transPool.getTransaction();
-                JSONObject json = new JSONObject();
+                ObjectNode json = JsonUtils.createObjectNode();
                 json.put("pool","AdoptTransPool");
                 json.put("traninfo",Hex.encodeHexString(transaction.toRPCBytes()));
                 json.put("tranhash",Hex.encodeHexString(transaction.getHash()));
@@ -55,7 +58,7 @@ public class PoolController {
                 json.put("fee",transaction.getFee());
                 json.put("to",Hex.encodeHexString(transaction.to));
                 if(transaction.payload==null){
-                    json.put("payload",null);
+                    json.putNull("payload");
                 }else{
                     json.put("payload",Hex.encodeHexString(transaction.payload));
                 }
@@ -67,7 +70,7 @@ public class PoolController {
             List<TransPool> pendingpool=peningTransPool.getAllFrom(Hex.encodeHexString(pubkeyhash));
             for(TransPool transPool:pendingpool){
                 Transaction transaction=transPool.getTransaction();
-                JSONObject json = new JSONObject();
+                ObjectNode json = JsonUtils.createObjectNode();
                 json.put("pool","PendingTransPool");
                 json.put("traninfo",Hex.encodeHexString(transaction.toRPCBytes()));
                 json.put("tranhash",Hex.encodeHexString(transaction.getHash()));
@@ -78,7 +81,7 @@ public class PoolController {
                 json.put("fee",transaction.getFee());
                 json.put("to",Hex.encodeHexString(transaction.to));
                 if(transaction.payload==null){
-                    json.put("payload",null);
+                    json.putNull("payload");
                 }else{
                     json.put("payload",Hex.encodeHexString(transaction.payload));
                 }
@@ -89,19 +92,20 @@ public class PoolController {
                 json.put("height",transPool.getHeight());
                 jsonArray.add(json);
             }
-            List<JSONObject> jsonValues = new ArrayList<JSONObject>();
+            List<ObjectNode> jsonValues = new ArrayList<ObjectNode>();
             for (int i = 0; i < jsonArray.size(); i++) {
-                jsonValues.add(jsonArray.getJSONObject(i));
+                jsonValues.add((ObjectNode) jsonArray.get(i));
             }
-            Collections.sort(jsonValues, new Comparator<JSONObject>() {
+            Collections.sort(jsonValues, new Comparator<ObjectNode>() {
                 @Override
-                public int compare(JSONObject o1, JSONObject o2) {
-                    long nonce1=o1.getLong("nonce");
-                    long nonce2=o2.getLong("nonce");
+                public int compare(ObjectNode o1, ObjectNode o2) {
+                    long nonce1=o1.get("nonce").asLong();
+                    long nonce2=o2.get("nonce").asLong();
                     return (int)(nonce1-nonce2);
                 }
             });
-            JSONArray jsonArray1=JSONArray.fromObject(jsonValues.toString());
+            // 保持原 json-lib 逻辑：先整体字符串化再解析回 JSON 数组（行为等价的深拷贝）
+            ArrayNode jsonArray1=(ArrayNode) JsonUtils.readTree(jsonValues.toString());
             return APIResult.newFailResult(2000,"SUCCESS",jsonArray1);
         }else{
             return APIResult.newFailResult(5000,"Address check error");
@@ -116,7 +120,7 @@ public class PoolController {
                 TransPool adoptpool=adoptTransPool.getPoolTranHash(txhash);
                 if(adoptpool!=null){
                     Transaction transaction=adoptpool.getTransaction();
-                    JSONObject json = new JSONObject();
+                    ObjectNode json = JsonUtils.createObjectNode();
                     json.put("pool","AdoptTransPool");
                     json.put("traninfo",Hex.encodeHexString(transaction.toRPCBytes()));
                     json.put("tranhash",Hex.encodeHexString(transaction.getHash()));
@@ -127,7 +131,7 @@ public class PoolController {
                     json.put("fee",transaction.getFee());
                     json.put("to",Hex.encodeHexString(transaction.to));
                     if(transaction.payload==null){
-                        json.put("payload",null);
+                        json.putNull("payload");
                     }else{
                         json.put("payload",Hex.encodeHexString(transaction.payload));
                     }
@@ -139,7 +143,7 @@ public class PoolController {
                 TransPool pendingpool=peningTransPool.getPoolTranHash(txhash);
                 if(pendingpool!=null){
                     Transaction transaction=pendingpool.getTransaction();
-                    JSONObject json = new JSONObject();
+                    ObjectNode json = JsonUtils.createObjectNode();
                     json.put("pool","PendingTransPool");
                     json.put("traninfo",Hex.encodeHexString(transaction.toRPCBytes()));
                     json.put("tranhash",Hex.encodeHexString(transaction.getHash()));
@@ -150,7 +154,7 @@ public class PoolController {
                     json.put("fee",transaction.getFee());
                     json.put("to",Hex.encodeHexString(transaction.to));
                     if(transaction.payload==null){
-                        json.put("payload",null);
+                        json.putNull("payload");
                     }else{
                         json.put("payload",Hex.encodeHexString(transaction.payload));
                     }
@@ -175,7 +179,7 @@ public class PoolController {
         int adoptcount=adoptTransPool.getAllFull().size();
         List<TransPool> pengdingcount=peningTransPool.getAllnostate();
         int pengcount=pengdingcount.size();
-        JSONObject json = new JSONObject();
+        ObjectNode json = JsonUtils.createObjectNode();
         json.put("adoptcount",adoptcount);
         json.put("pengcount",pengcount);
         return APIResult.newFailResult(2000,"SUCCESS",json);
@@ -183,7 +187,7 @@ public class PoolController {
 
     @RequestMapping(value="/getPoolInfo",method = RequestMethod.GET)
     public Object getPoolInfo(){
-        JSONObject json = new JSONObject();
+        ObjectNode json = JsonUtils.createObjectNode();
         json.put("QueuePool", PoolJson(adoptTransPool.getAllFull(),0));
         json.put("PendPool",PoolJson(peningTransPool.getAll(),1));
         return APIResult.newFailResult(2000,"SUCCESS",json);
@@ -243,15 +247,15 @@ public class PoolController {
         }
     }
 
-    public static JSONArray PoolJson(List<TransPool> pool,int state){
-        JSONArray jsonArray = new JSONArray();
+    public static ArrayNode PoolJson(List<TransPool> pool,int state){
+        ArrayNode jsonArray = JsonUtils.MAPPER.createArrayNode();
         String type="AdoptTransPool";
         if(state==1){
             type="PendingTransPool";
         }
         for(TransPool transPool:pool){
             Transaction transaction=transPool.getTransaction();
-            JSONObject json = new JSONObject();
+            ObjectNode json = JsonUtils.createObjectNode();
             json.put("pool",type);
             json.put("traninfo",Hex.encodeHexString(transaction.toRPCBytes()));
             json.put("tranhash",Hex.encodeHexString(transaction.getHash()));
@@ -262,7 +266,7 @@ public class PoolController {
             json.put("fee",transaction.getFee());
             json.put("to",Hex.encodeHexString(transaction.to));
             if(transaction.payload==null){
-                json.put("payload",null);
+                json.putNull("payload");
             }else{
                 json.put("payload",Hex.encodeHexString(transaction.payload));
             }

@@ -18,7 +18,9 @@
 
 package org.nexus.service.Impl;
 
-import net.sf.json.JSONObject;
+// TD-07（tech-debt-audit）：由 net.sf.json-lib 迁移至 Jackson 树模型（ObjectNode）。
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.nexus.keystore.util.JsonUtils;
 import org.apache.commons.codec.DecoderException;
 import org.apache.commons.codec.binary.Hex;
 import org.apache.commons.math3.fraction.BigFraction;
@@ -119,10 +121,10 @@ public class HatchServiceImpl implements HatchService {
             List<Map<String, Object>> list = accountDB.selectlistHacth(height, 9);
             List<Object> jsonArray = new ArrayList<>();
             for (Map<String, Object> map : list) {
-                JSONObject json = JSONObject.fromObject(map);
-                String to = json.getString("coinAddress");
+                ObjectNode json = JsonUtils.MAPPER.valueToTree(map);
+                String to = json.get("coinAddress").asText();
                 byte[] tohash = Hex.decodeHex(to.toCharArray());
-                String payload = json.getString("payload");
+                String payload = json.get("payload").asText();
                 byte[] payloadbyte = Hex.decodeHex(payload);
                 HatchModel.Payload payloadproto = HatchModel.Payload.parseFrom(payloadbyte);
                 int days = payloadproto.getType();
@@ -322,7 +324,7 @@ public class HatchServiceImpl implements HatchService {
             BigDecimal nowratebig = new BigDecimal(nowrate);
             BigDecimal dayrate = aount.multiply(nowratebig);
             long dayratelong = dayrate.longValue();
-            JSONObject jsonObject = new JSONObject();
+            ObjectNode jsonObject = JsonUtils.createObjectNode();
             //判断利息金额小于每天利息
             if (incubator.getInterest_amount() < dayrate.longValue()) {
                 jsonObject.put("dueinAmount", incubator.getInterest_amount());
@@ -389,7 +391,7 @@ public class HatchServiceImpl implements HatchService {
             BigDecimal nowlv = aount.multiply(nowratebig);
             BigDecimal dayrate = nowlv.multiply(lv);
             long dayrates = dayrate.longValue();
-            JSONObject jsonObject = new JSONObject();
+            ObjectNode jsonObject = JsonUtils.createObjectNode();
             //判断分享金额小于每天可提取的
             if (incubator.getShare_amount() < dayrate.longValue()) {
                 jsonObject.put("dueinAmount", incubator.getShare_amount());

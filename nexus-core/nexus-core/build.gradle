@@ -3,6 +3,19 @@ plugins {
     id 'application'
 }
 
+// TD-17（tech-debt-audit）：core 非 Boot 应用（无 Boot 插件），但长期硬编码
+// starter-* 与 spring-context/test 版本，与微服务群的版本来源脱节。此处导入
+// Boot 3.2.5 BOM 作为依赖版本单一来源；因未应用 Boot 插件（SpringBootPlugin
+// 类不在 classpath），直接使用 BOM 坐标字符串。core 保持 application 插件 +
+// mainClass=org.nexus.Start 的非 Boot 应用性质不变。
+// 注意：显式声明版本的依赖（如 jackson ${jacksonVersion}=2.15.4、slf4j 2.0.16）
+// 优先于 BOM 管理值，语义不变；BOM 仅对去版本号声明生效。
+dependencyManagement {
+    imports {
+        mavenBom 'org.springframework.boot:spring-boot-dependencies:3.2.5'
+    }
+}
+
 // Docker build tasks have been removed; container images are now built via
 // the Dockerfiles located under src/main/docker/ (see build-docker.sh scripts).
 
@@ -103,9 +116,10 @@ ext {
     grpcVersion = '1.54.0'
     protobufVersion = '3.22.2'
     // jacksonVersion managed by Spring Boot BOM
-    guavaVersion = '31.1-jre'
+    // TD-05（tech-debt-audit）：Guava 由 31.1-jre 统一至 33.4.8-jre，
+    // 32.0.0 修复 CVE-2023-2976（TempDirectory 局部拒绝服务）；32+ 包名无变化。
+    guavaVersion = '33.4.8-jre'
     postgresqlVersion = '42.5.4'
-    mockitoVersion = '4.11.0'
 }
 
 dependencies {
@@ -122,26 +136,28 @@ dependencies {
     implementation "org.apache.commons:commons-lang3:3.12.0"
     implementation 'org.apache.commons:commons-math3:3.6.1'
     implementation "commons-codec:commons-codec:1.15"
-    implementation "org.springframework:spring-context:6.1.6"
+    // TD-17：spring-context/spring-test 去版本号交 Boot BOM 管理（Boot 3.2.5 → Spring Framework 6.1.6，数值不变），
+    // 消除与 BOM 的双轨声明。
+    implementation "org.springframework:spring-context"
     implementation "com.typesafe:config:1.4.2"
-    implementation("com.googlecode.json-simple:json-simple:1.1.1") {
-        exclude group: 'junit', module: 'junit'
-    }
+
 
     // used to hide spring initialization logs messages in samples
     compileOnly "org.slf4j:jcl-over-slf4j:${slf4jVersion}"
 
     // P1-T12: 所有测试已从 JUnit 4 迁移到 JUnit 5 (junit-jupiter)。
-    // junit-jupiter 由 spring-boot-starter-test 3.2.5 提供，无需额外声明。
+    // junit-jupiter 由 spring-boot-starter-test（BOM 管理版本）提供，无需额外声明。
     // 移除 junit:junit 和 junit-vintage-engine，因为不再有 JUnit 4 测试。
-    implementation "org.springframework:spring-test:6.1.6"
-    testImplementation "org.mockito:mockito-core:${mockitoVersion}"
+    implementation "org.springframework:spring-test"
+    // TD-06：去版本号，交由上方 dependencyManagement 导入的 Boot 3.2.5 BOM 管理（5.2.0）
+    testImplementation 'org.mockito:mockito-core'
     testImplementation "com.github.briandilley.jsonrpc4j:jsonrpc4j:1.6"
     testImplementation 'com.h2database:h2:2.2.224'
     // 本地联调（无 Postgres 环境）：H2 文件库。生产仍走 postgresql 驱动。
     runtimeOnly 'com.h2database:h2:2.2.224'
 
-    implementation "org.springframework.boot:spring-boot-starter-web:3.2.5"
+    // TD-17：starter-* 去硬编码 :3.2.5 后缀，交由 dependencyManagement 导入的 Boot BOM 管理
+    implementation "org.springframework.boot:spring-boot-starter-web"
 
     // Chicory: pure-Java WASM interpreter for native contract execution (no native deps)
     implementation group: 'com.dylibso.chicory', name: 'wasm', version: '0.0.12'
@@ -157,8 +173,9 @@ dependencies {
     implementation group: 'com.kosprov.jargon2', name: 'jargon2-api', version: '1.1.1'
     implementation group: 'com.kosprov.jargon2', name: 'jargon2-native-ri-backend', version: '1.1.1'
     implementation group: 'com.google.protobuf', name: 'protobuf-java', version: "${protobufVersion}"
-    implementation('net.sf.json-lib:json-lib:2.4:jdk15')
-    testImplementation "org.springframework.boot:spring-boot-starter-test:3.2.5"
+    // TD-07/TD-08：net.sf.json-lib:2.4:jdk15 与 json-simple:1.1.1 已删除，
+    // 使用面（KeystoreAction/HatchServiceImpl/PoolController）已迁移至 Jackson。
+    testImplementation "org.springframework.boot:spring-boot-starter-test"
     // REQ-TEST-01: Testcontainers——@SpringBootTest 用一次性真实 Postgres 容器，
     // 消除对本机 nexus_test 库角色/密码状态的依赖（无 Docker 时回落本地库配置）
     testImplementation platform("org.testcontainers:testcontainers-bom:1.19.8")
@@ -169,8 +186,8 @@ dependencies {
     implementation group: 'com.googlecode.concurrentlinkedhashmap', name: 'concurrentlinkedhashmap-lru', version: '1.4.2'
     implementation group: 'jakarta.validation', name: 'jakarta.validation-api', version: '3.0.2'
     implementation group: 'commons-io', name: 'commons-io', version: '2.11.0'
-    implementation "org.springframework.boot:spring-boot-starter-jdbc:3.2.5"
-    implementation "org.springframework.boot:spring-boot-starter-logging:3.2.5"
+    implementation "org.springframework.boot:spring-boot-starter-jdbc"
+    implementation "org.springframework.boot:spring-boot-starter-logging"
     implementation group: 'org.apache.commons', name: 'commons-dbcp2', version: '2.9.0'
     implementation group: 'org.hibernate.validator', name: 'hibernate-validator', version: "${hibernateValidatorVersion}"
     implementation group: 'org.apache.httpcomponents', name: 'httpclient', version: '4.5.14'

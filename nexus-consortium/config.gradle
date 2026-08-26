@@ -2,7 +2,9 @@ ext {
     bouncycastleVersion = '1.78'
     commonsCodecVersion = '1.13'
     jargon2Version = '1.1.1'
-    guavaVersion = '31.1-jre'
+    // TD-05（tech-debt-audit）：由 31.1-jre 统一至 33.4.8-jre（CVE-2023-2976 于 32.0.0 修复），
+    // 与主构建 nexus-core / sdk 数值对齐。
+    guavaVersion = '33.4.8-jre'
     lombokVersion = '1.18.32'
     // TD-04（tech-debt-audit）：composite 无法消费主构建的 Boot BOM，直接对齐数值。
     // 主构建 Jackson 实际生效值 = Boot 3.2.5 BOM 管理的 2.15.4。
