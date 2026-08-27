@@ -66,8 +66,10 @@ dependencies {
     runtimeOnly 'io.jsonwebtoken:jjwt-jackson:0.12.6'
 
     // === Phase 4 任务 #68：数据库迁移 + 驱动（设计文档 §4.3 Flyway） ===
-    // Flyway 9.22.3（Spring Boot 3.2.5 BOM 管理），9.x 无需单独 flyway-mysql 模块
+    // Flyway 10.x（Boot 3.3.13 BOM 管理），10.x 需数据库专用模块
     implementation 'org.flywaydb:flyway-core'
+    implementation 'org.flywaydb:flyway-mysql'
+    implementation 'org.flywaydb:flyway-database-postgresql'
     // H2 内存数据库（开发 / 测试 profile）
     runtimeOnly 'com.h2database:h2'
     // MySQL 驱动（生产 profile）
@@ -121,7 +123,7 @@ dependencies {
     implementation 'com.fasterxml.jackson.core:jackson-databind:2.15.4'
 
     // === Resilience4j（与 Sentinel 共存，迁移期保留） ===
-    implementation 'io.github.resilience4j:resilience4j-spring-boot3:2.2.0'
+    implementation 'io.github.resilience4j:resilience4j-spring-boot3:2.4.0'
 
     // === 测试 ===
     testImplementation 'org.springframework.boot:spring-boot-starter-test'

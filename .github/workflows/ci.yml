@@ -223,8 +223,8 @@ jobs:
       - name: Flyway migrate 验证（所有含迁移脚本的模块）
         run: |
           set -euo pipefail
-          # Flyway 9.x 官方镜像（与项目 flyway-core 9.22.3 大版本对齐，9.x 内置 MySQL 驱动）
-          FLYWAY_IMG="flyway/flyway:9"
+          # Flyway 11.x 官方镜像（与项目 flyway-core 10.x 大版本对齐，Boot 3.3.13 BOM 管理）
+          FLYWAY_IMG="flyway/flyway:11"
           # 含 db/migration 的模块列表（模块逻辑名 : 迁移脚本目录）
           declare -a MODULES=(
             "nexus-gateway:nexus-gateway/src/main/resources/db/migration"

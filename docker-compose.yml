@@ -152,7 +152,7 @@ services:
   # 生产环境请使用 docker-compose.prod.yml 中的 Nacos 集群 + MySQL 持久化方案。
   # 版本对齐设计文档 §4.1：SCA 2023.0.1.0 内置 Nacos Client 2.3.2。
   nacos:
-    image: nacos/nacos-server:v2.3.2
+    image: nacos/nacos-server:v2.4.3
     container_name: nexus-nacos
     ports:
       - '8848:8848'    # Nacos HTTP API + 控制台
@@ -205,7 +205,7 @@ services:
   # 开发环境 STORE_MODE=file（生产环境建议 db 模式 + MySQL 持久化）。
   # 版本对齐设计文档 §4.2.1：与 SCA 2023.0.1.0 seata-spring-boot-starter 兼容。
   seata-server:
-    image: seataio/seata-server:2.0.0
+    image: seataio/seata-server:2.1.0
     container_name: nexus-seata-server
     ports:
       - '8091:8091'    # Seata Server TC 端口（client 通过此端口注册分支事务）

@@ -82,8 +82,9 @@ dependencies {
     runtimeOnly 'io.jsonwebtoken:jjwt-jackson:0.12.6'
 
     // === P3 高#8（任务 #375）：数据库迁移 + 驱动（与 nexus-wallet-service 既有写法对齐） ===
-    // Flyway 9.22.3（Boot 3.2.5 BOM 管理），9.x 无需单独 flyway-mysql 模块
+    // Flyway 10.x（Boot 3.3.13 BOM 管理），10.x 需数据库专用模块
     implementation 'org.flywaydb:flyway-core'
+    implementation 'org.flywaydb:flyway-mysql'
     // H2 内存数据库（dev/test profile）
     runtimeOnly 'com.h2database:h2'
     // MySQL 驱动（生产 profile）

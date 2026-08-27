@@ -37,7 +37,10 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-security'
 
     // Database
+    // Flyway 10.x（Boot 3.3.13 BOM 管理），10.x 需数据库专用模块
     implementation 'org.flywaydb:flyway-core'
+    implementation 'org.flywaydb:flyway-mysql'
+    implementation 'org.flywaydb:flyway-database-postgresql'
     runtimeOnly 'com.h2database:h2'
     runtimeOnly 'com.mysql:mysql-connector-j'
     // === P2-T8：PostgreSQL 生产化（设计文档 §4.1） ===
@@ -45,13 +48,13 @@ dependencies {
     runtimeOnly 'org.postgresql:postgresql:42.5.4'
 
     // === 项10：ShedLock 分布式锁（ReconciliationTask 多实例去重） ===
-    // ShedLock 5.10.0 兼容 Spring Boot 3.2.x，使用 JDBC provider
+    // ShedLock 6.2.0 兼容 Spring Boot 3.3.x，使用 JDBC provider
     // （复用 gateway 已有 MySQL/PostgreSQL 数据源，无需额外引入 Redis）。
     // shedlock-spring：核心注解 @SchedulerLock + @EnableSchedulerLock
     // shedlock-provider-jdbc-template：基于 JdbcTemplate 的 JdbcTemplateLockProvider，
     //   支持 builder + usingDbTime()（使用 DB 服务器时间避免多实例 JVM 时钟漂移）
-    implementation 'net.javacrumbs.shedlock:shedlock-spring:5.10.0'
-    implementation 'net.javacrumbs.shedlock:shedlock-provider-jdbc-template:5.10.0'
+    implementation 'net.javacrumbs.shedlock:shedlock-spring:6.2.0'
+    implementation 'net.javacrumbs.shedlock:shedlock-provider-jdbc-template:6.2.0'
 
     // Observability
     implementation 'io.micrometer:micrometer-registry-prometheus'
@@ -66,7 +69,7 @@ dependencies {
 
     // Resilience4j（保留：管理对链节点直接 HTTP 调用的熔断/重试，与 Sentinel 共存。
     // Sentinel 管理对 signing/wallet-service 的 Feign 调用。Phase 1 任务 #55 不删除。）
-    implementation 'io.github.resilience4j:resilience4j-spring-boot3:2.2.0'
+    implementation 'io.github.resilience4j:resilience4j-spring-boot3:2.4.0'
 
     // === Spring Cloud BOM（管理 OpenFeign / LoadBalancer 版本，设计文档 §4.1） ===
     implementation platform('org.springframework.cloud:spring-cloud-dependencies:2023.0.3')
@@ -109,7 +112,7 @@ dependencies {
     implementation 'org.springframework.cloud:spring-cloud-starter-bootstrap'
 
     // OpenAPI
-    implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.3.0'
+    implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.0'
 
     // Utilities
     implementation 'com.fasterxml.jackson.core:jackson-databind'

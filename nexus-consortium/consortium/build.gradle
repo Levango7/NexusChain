@@ -28,7 +28,9 @@ dependencies {
     // === REQ-21 安全加固：引入 Flyway 数据库迁移管理 ===
     // 替代 Hibernate ddl-auto 进行 schema 演进管理，确保生产环境 schema 受控、可审计、可回滚。
     // Spring Boot starter 自动配置 Flyway，在 JPA 初始化前执行迁移脚本。
+    // Flyway 10.x（Boot 3.3.13 BOM 管理），10.x 需数据库专用模块
     implementation 'org.flywaydb:flyway-core'
+    implementation 'org.flywaydb:flyway-database-postgresql'
 
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     // 测试环境用 H2 内存库（生产走 Postgres；占位 datasource 导致 JPA 无法确定 Dialect，
