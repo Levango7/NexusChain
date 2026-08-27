@@ -137,13 +137,13 @@ subprojects {
     ext {
 
         slf4jVersion = '2.0.16'
-        postgresqlVersion = '42.5.4'
+        postgresqlVersion = '42.7.2'
         leveldbVersion = '0.12'
         hibernateValidatorVersion = '8.0.1.Final'
-        nettyVersion = '4.1.108.Final'
-        grpcVersion = '1.54.0'
-        protobufVersion = '3.22.2'
-        jacksonVersion = '2.15.4'
+        nettyVersion = '4.1.115.Final'
+        grpcVersion = '1.63.0'
+        protobufVersion = '3.25.5'
+        jacksonVersion = '2.18.8'
         guavaVersion = '33.4.8-jre'
 
     }
