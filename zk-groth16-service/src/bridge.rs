@@ -295,9 +295,8 @@ pub fn verify_with_fingerprint_and_inputs(
     let proof = crate::setup_store::parse_proof_hex(proof_hex)?;
     let public: Vec<Fr> = public_inputs
         .iter()
-        .map(|s| s.parse::<Fr>())
-        .collect::<Result<_, _>>()
-        .map_err(|e| eyre::eyre!("bad public input decimal: {e}"))?;
+        .map(|s| s.parse::<Fr>().map_err(|_| eyre::eyre!("bad public input decimal: {s}")))
+        .collect::<Result<Vec<Fr>, eyre::Error>>()?;
     let ok = ark_groth16::Groth16::<ark_bn254::Bn254>::verify(&vk, &public, &proof)?;
     Ok(ok)
 }

@@ -1,5 +1,5 @@
 plugins {
-    id 'org.springframework.boot' version '3.3.13'
+    id 'org.springframework.boot' version '3.2.5'
     id 'io.spring.dependency-management' version '1.1.4'
     id 'java'
     id 'jacoco'
@@ -37,10 +37,7 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-security'
 
     // Database
-    // Flyway 10.x（Boot 3.3.13 BOM 管理），10.x 需数据库专用模块
     implementation 'org.flywaydb:flyway-core'
-    implementation 'org.flywaydb:flyway-mysql'
-    implementation 'org.flywaydb:flyway-database-postgresql'
     runtimeOnly 'com.h2database:h2'
     runtimeOnly 'com.mysql:mysql-connector-j'
     // === P2-T8：PostgreSQL 生产化（设计文档 §4.1） ===
@@ -48,13 +45,13 @@ dependencies {
     runtimeOnly 'org.postgresql:postgresql:42.5.4'
 
     // === 项10：ShedLock 分布式锁（ReconciliationTask 多实例去重） ===
-    // ShedLock 6.2.0 兼容 Spring Boot 3.3.x，使用 JDBC provider
+    // ShedLock 5.10.0 兼容 Spring Boot 3.2.x，使用 JDBC provider
     // （复用 gateway 已有 MySQL/PostgreSQL 数据源，无需额外引入 Redis）。
     // shedlock-spring：核心注解 @SchedulerLock + @EnableSchedulerLock
     // shedlock-provider-jdbc-template：基于 JdbcTemplate 的 JdbcTemplateLockProvider，
     //   支持 builder + usingDbTime()（使用 DB 服务器时间避免多实例 JVM 时钟漂移）
-    implementation 'net.javacrumbs.shedlock:shedlock-spring:6.2.0'
-    implementation 'net.javacrumbs.shedlock:shedlock-provider-jdbc-template:6.2.0'
+    implementation 'net.javacrumbs.shedlock:shedlock-spring:5.10.0'
+    implementation 'net.javacrumbs.shedlock:shedlock-provider-jdbc-template:5.10.0'
 
     // Observability
     implementation 'io.micrometer:micrometer-registry-prometheus'
@@ -69,12 +66,12 @@ dependencies {
 
     // Resilience4j（保留：管理对链节点直接 HTTP 调用的熔断/重试，与 Sentinel 共存。
     // Sentinel 管理对 signing/wallet-service 的 Feign 调用。Phase 1 任务 #55 不删除。）
-    implementation 'io.github.resilience4j:resilience4j-spring-boot3:2.4.0'
+    implementation 'io.github.resilience4j:resilience4j-spring-boot3:2.2.0'
 
     // === Spring Cloud BOM（管理 OpenFeign / LoadBalancer 版本，设计文档 §4.1） ===
     implementation platform('org.springframework.cloud:spring-cloud-dependencies:2023.0.3')
     // === Spring Cloud Alibaba BOM（管理 Nacos / Sentinel 版本） ===
-    implementation platform('com.alibaba.cloud:spring-cloud-alibaba-dependencies:2023.0.3.4')
+    implementation platform('com.alibaba.cloud:spring-cloud-alibaba-dependencies:2023.0.1.0')
 
     // === Nacos 服务发现 + 配置中心（Phase 1 任务 #55） ===
     implementation 'com.alibaba.cloud:spring-cloud-starter-alibaba-nacos-discovery'
@@ -101,9 +98,7 @@ dependencies {
     // 自动在请求头注入 Authorization: Bearer <jwt>。token 用共享 JWT_SECRET 签发，
     // roles 含 SIGNING_SERVICE，signing-service 侧 SecurityConfig 校验通过。
     // jjwt 0.12.x 与 signing-service / nexus-core JWTUtil 对齐。
-    // jjwt 0.12.6 为模块硬编码值：Boot 3.2.5 BOM 不管理 io.jsonwebtoken，
-    // 需手工维护。原「与根 build.gradle subprojects.ext.jjwtVersion 对齐」的说法已失真——
-    // 根 ext.jjwtVersion 属零引用死变量，已于 v2.39.0 随 TD-14 清理移除。
+    // jjwt 版本与根 build.gradle subprojects.ext.jjwtVersion 对齐。
     implementation 'io.jsonwebtoken:jjwt-api:0.12.6'
     runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.12.6'
     runtimeOnly 'io.jsonwebtoken:jjwt-jackson:0.12.6'
@@ -112,20 +107,17 @@ dependencies {
     implementation 'org.springframework.cloud:spring-cloud-starter-bootstrap'
 
     // OpenAPI
-    implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.0'
+    implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.3.0'
 
     // Utilities
     implementation 'com.fasterxml.jackson.core:jackson-databind'
     implementation 'org.apache.commons:commons-lang3'
 
-    // 中间服务层（composite build 依赖替换，见根 settings.gradle 的 includeBuild）。
-    // TD-12（tech-debt-audit）：去掉写死的 :2.1.0 版本后缀——includeBuild 按
-    // group:name 坐标做依赖替换、忽略版本号，四模块实际 version=2.30.0；
-    // 无版本坐标可避免「若未来坐标变更则静默退化为真实 Maven 解析」的误导语义。
-    implementation 'org.nexus:nexus-settlement'
-    implementation 'org.nexus:nexus-compliance'
-    implementation 'org.nexus:nexus-analytics'
-    implementation 'org.nexus:nexus-oracle'
+    // 中间服务层（composite build 依赖替换，见根 settings.gradle 的 includeBuild）
+    implementation 'org.nexus:nexus-settlement:2.1.0'
+    implementation 'org.nexus:nexus-compliance:2.1.0'
+    implementation 'org.nexus:nexus-analytics:2.1.0'
+    implementation 'org.nexus:nexus-oracle:2.1.0'
 
     // P2 方向5「签名服务独立部署 PoC」：gateway 引用 nexus-sdk 中的
     // WalletMgmtClient / SigningServiceClient 接口与 ServiceDiscovery 骨架。
@@ -138,9 +130,10 @@ dependencies {
     // 集成测试中 verify / generateApiKey / revokeApiKey 端点要求 hasRole('ADMIN')，
     // 需通过 @WithMockUser 模拟认证用户与角色才能访问这些端点。
     testImplementation 'org.springframework.security:spring-security-test'
-    // === TD-06：原 mockito-inline 5.2.0（支持 mockStatic 静态方法 mock）已删除——
-    // Mockito 5 起 inline mock maker 为默认实现，starter-test/BOM 管理的 mockito-core 5.2.0
-    // 已内置静态与 final mock 能力，无需独立 inline 构件。 ===
+    // === Mockito inline mock maker：支持 mockStatic 静态方法 mock ===
+    // Spring Boot 3.2.5 BOM 管理 Mockito 5.2.0 版本，mockito-inline 需显式指定版本对齐。
+    // 修复 MockitoException: SubclassByteBuddyMockMaker does not support static mocks
+    testImplementation 'org.mockito:mockito-inline:5.2.0'
     // === P0-3a：PSP 集成测试 — WireMock 模拟 Stripe / Adyen HTTP API ===
     // WireMock 3.x standalone（含 Jetty）兼容 JUnit 5 + Spring Boot 3.2
     testImplementation 'org.wiremock:wiremock-standalone:3.5.2'
