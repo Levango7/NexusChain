@@ -114,6 +114,21 @@ jobs:
         working-directory: mpc-engine
         run: cargo test --no-fail-fast
 
+      # P2-C7 / ZK-A1-R5(a): zk-groth16-service 单测（bridge 动态电路 + 仪式导入回归）
+      # 复用上方已安装的 Rust 工具链；bridge.rs 内含 #[cfg(test)] 单测（真实 Groth16 往返）。
+      - name: Rust tests (zk-groth16-service)
+        working-directory: zk-groth16-service
+        run: cargo test --no-fail-fast
+
+      # ZK-A1-R5(b)(c): HTTP E2E（setup→prove→verify 全链路 curl 断言）+ bench 阈值断言
+      # scripts/zk-e2e.sh 启动服务并断言：真实配对 valid=true、错误输入 valid=false、
+      # /v1/bench verify_avg_ms < 100ms。服务为 arkworks 真实实现，验证不依赖 Java 侧。
+      - name: ZK service E2E (HTTP 全链路 + bench 阈值)
+        working-directory: zk-groth16-service
+        run: |
+          cargo build --release
+          bash ../scripts/zk-e2e.sh --start
+
       - name: 生成 JaCoCo 覆盖率报告
         run: ./gradlew jacocoTestReport --no-daemon
 
