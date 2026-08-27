@@ -272,9 +272,13 @@ public class SigningTccActionTest {
 
     // ==================== 辅助方法 ====================
 
-    /** 创建一个带测试 xid 的 BusinessActionContext。 */
+    /** 创建一个带测试 xid 的 BusinessActionContext（seata 2.1.0 起 io.seata 子类仅无参构造，改用 setter）。 */
     private BusinessActionContext newCtx() {
-        return new BusinessActionContext("test-xid", "prepareSignTransfer", new HashMap<>());
+        BusinessActionContext ctx = new BusinessActionContext();
+        ctx.setXid("test-xid");
+        ctx.setActionName("prepareSignTransfer");
+        ctx.setActionContext(new HashMap<>());
+        return ctx;
     }
 
     private static String repeat(char c, int n) {
