@@ -38,6 +38,7 @@ COPY nexus-settlement ./nexus-settlement
 COPY nexus-compliance ./nexus-compliance
 COPY nexus-analytics ./nexus-analytics
 COPY nexus-oracle ./nexus-oracle
+COPY nexus-api-gateway ./nexus-api-gateway
 
 # COPY 目标模块源码（含 src/main/proto/*.proto，protobuf 插件构建期自动生成 stub）
 COPY nexus-signing-service ./nexus-signing-service

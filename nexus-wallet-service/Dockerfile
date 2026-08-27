@@ -32,6 +32,7 @@ COPY nexus-settlement ./nexus-settlement
 COPY nexus-compliance ./nexus-compliance
 COPY nexus-analytics ./nexus-analytics
 COPY nexus-oracle ./nexus-oracle
+COPY nexus-api-gateway ./nexus-api-gateway
 
 # COPY 目标模块源码（变更频率高，放最后，最大化分层缓存命中）
 COPY nexus-wallet-service ./nexus-wallet-service

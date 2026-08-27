@@ -36,6 +36,7 @@ COPY nexus-settlement ./nexus-settlement
 COPY nexus-compliance ./nexus-compliance
 COPY nexus-analytics ./nexus-analytics
 COPY nexus-oracle ./nexus-oracle
+COPY nexus-api-gateway ./nexus-api-gateway
 
 # 构建 plain jar（bootJar disabled，jar.archiveClassifier=''）
 # 跳过测试与 jacoco 报告，加速构建
