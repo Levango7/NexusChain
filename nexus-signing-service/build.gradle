@@ -20,7 +20,7 @@
 
 plugins {
     id 'java'
-    id 'org.springframework.boot' version '3.2.5'
+    id 'org.springframework.boot' version '3.3.13'
     id 'io.spring.dependency-management' version '1.1.4'
     // === Phase 4 任务 #79：protobuf-gradle-plugin，从 src/main/proto/*.proto
     //     生成 Java gRPC stub（MpcCryptoServiceGrpc + message 类）。
@@ -99,7 +99,7 @@ dependencies {
     // === Spring Cloud BOM（管理 OpenFeign / LoadBalancer 版本） ===
     implementation platform('org.springframework.cloud:spring-cloud-dependencies:2023.0.3')
     // === Spring Cloud Alibaba BOM（管理 Nacos / Sentinel 版本） ===
-    implementation platform('com.alibaba.cloud:spring-cloud-alibaba-dependencies:2023.0.1.0')
+    implementation platform('com.alibaba.cloud:spring-cloud-alibaba-dependencies:2023.0.3.4')
 
     // === Nacos 服务发现 + 配置中心 ===
     implementation 'com.alibaba.cloud:spring-cloud-starter-alibaba-nacos-discovery'

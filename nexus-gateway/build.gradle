@@ -1,5 +1,5 @@
 plugins {
-    id 'org.springframework.boot' version '3.2.5'
+    id 'org.springframework.boot' version '3.3.13'
     id 'io.spring.dependency-management' version '1.1.4'
     id 'java'
     id 'jacoco'
@@ -71,7 +71,7 @@ dependencies {
     // === Spring Cloud BOM（管理 OpenFeign / LoadBalancer 版本，设计文档 §4.1） ===
     implementation platform('org.springframework.cloud:spring-cloud-dependencies:2023.0.3')
     // === Spring Cloud Alibaba BOM（管理 Nacos / Sentinel 版本） ===
-    implementation platform('com.alibaba.cloud:spring-cloud-alibaba-dependencies:2023.0.1.0')
+    implementation platform('com.alibaba.cloud:spring-cloud-alibaba-dependencies:2023.0.3.4')
 
     // === Nacos 服务发现 + 配置中心（Phase 1 任务 #55） ===
     implementation 'com.alibaba.cloud:spring-cloud-starter-alibaba-nacos-discovery'
