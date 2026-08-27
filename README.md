@@ -99,12 +99,13 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
 - **编译状态**：已完成编译验证（`mpc-engine/target/release/mpc-engine` 产物存在；README 早期"未编译"声明过时，2026-08-27 核实）。
 - **传输安全**：gRPC mTLS 已实现（MPC-P0-02 修复，use-plaintext 默认 false）。
 
-### ZK 证明（v2.0.0-rc1 真实化）
+### ZK 证明（v2.41.0：方案 C 真实 Groth16 已启用）
 
-- **`Groth16ProofSystem`**：基于 BouncyCastle secp256k1 + **Schnorr 知识证明 + Fiat-Shamir 变换**，包含真实 R1CS 约束系统。
-- **诚实声明**：secp256k1 **不支持双线性配对**，本实现**非真实 Groth16**，用 Schnorr 协议替代配对验证。三重降级：halo2 (FROZEN) → Groth16 (声称) → Schnorr (实际)。
-- **安全限制**：verifier 不验证 witness 满足 R1CS（P0），toxic waste 未销毁（P0），R1CS 约束严重不完备（P0，缺少签名验证/nonce/gas 等约束）。
-- **不具备通用电路 ZK 安全属性**，仅可用于逻辑流程验证。真实 ZK 待接入 halo2 / Plonk / gnark（v2.1.0+）。
+- **真实 Groth16（方案 C，已启用）**：`zk-groth16-service`（Rust arkworks，BN254 双线性配对）提供**真实配对验证**；Java `DefaultZkProofSystem` 默认远程对接（fail-closed：远程不可用 prove 抛异常 / verify 返回 false），本地 Schnorr 仅作未配置远程服务时的降级路径。
+- **witness BigInteger 化（A1-R3）**：prove/verify 全链路 `long[]` → `BigInteger[]`，256 位状态根无精度损失（ZK-P2-01 关闭）。
+- **可信设置仪式（A1-R4）**：`scripts/zk-setup-ceremony.sh` 离线仪式（generate 导出 pk/vk hex → import 导入 + SHA256 校验 + 指纹比对），安全要求见 `docs/zk-setup-ceremony.md`。
+- **回归自动化（A1-R5）**：`scripts/zk-e2e.sh` HTTP E2E（setup→prove→verify + bench 阈值）与 `cargo test` 已纳入 CI 门禁。
+- **历史遗留（v2.0.0-rc1 起，仍有效）**：无远程服务时的本地 Schnorr 降级路径**不具备通用电路 ZK 安全属性**，仅用于逻辑流程验证；halo2 / Plonk 后端仍冻结。
 
 ### L2 Rollup（v2.0.0-rc1 真实化）
 
