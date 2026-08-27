@@ -3,6 +3,8 @@ package org.nexus.gateway.orchestration.routing;
 import org.nexus.gateway.config.GatewayConfig;
 import org.nexus.gateway.orchestration.connector.PaymentConnector;
 import org.nexus.gateway.orchestration.connector.ConnectorRegistry;
+import org.nexus.gateway.orchestration.model.RoutingRuleEntity;
+import org.nexus.gateway.orchestration.repository.RoutingRuleEntityRepository;
 import org.nexus.gateway.orchestration.routing.ai.AbTestRouter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -11,6 +13,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.*;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.stream.Collectors;
 
 /**
  * Routing Engine - selects which connector(s) to use for a payment.
@@ -48,17 +51,43 @@ public class RoutingEngine {
     private final List<RoutingRule> rules = Collections.synchronizedList(new ArrayList<>());
     /** A/B 测试路由器，nullable（AI 路由禁用或测试环境时为 null）。 */
     private final AbTestRouter abTestRouter;
+    /** 路由规则持久化仓库，nullable（纯内存模式/测试环境时为 null）。 */
+    private final RoutingRuleEntityRepository ruleRepository;
 
     public RoutingEngine(ConnectorRegistry registry, GatewayConfig gatewayConfig) {
-        this(registry, gatewayConfig, null);
+        this(registry, gatewayConfig, null, null);
     }
 
     @Autowired
     public RoutingEngine(ConnectorRegistry registry, GatewayConfig gatewayConfig,
                          @Autowired(required = false) AbTestRouter abTestRouter) {
+        this(registry, gatewayConfig, abTestRouter, null);
+    }
+
+    /**
+     * 全量构造器（含路由规则 DB 持久化，全局核验补全）。
+     *
+     * <p>当 {@code ruleRepository} 非 null 时：
+     * <ul>
+     *   <li>DB 为空（{@code count()==0}）→ 将内存默认规则（default-nex/default-fallback）幂等写入
+     *       （{@code saveAll}），作为初始运营配置种子；</li>
+     *   <li>DB 已有数据 → 以 DB 为准 {@code findAll()} 恢复内存规则（清空默认，换成持久化配置）；</li>
+     *   <li>DB 不可用（异常）→ 降级为纯内存默认规则，不阻断初始化。</li>
+     * </ul>
+     * 后续 {@link #addRule} / {@link #updateRule} / {@link #removeRule} 均 write-through
+     * 同步 DB（异常不阻断内存操作，保证路由引擎可用性优先）。</p>
+     *
+     * @param registry         连接器注册表
+     * @param gatewayConfig    网关配置
+     * @param abTestRouter     A/B 测试路由器（可空）
+     * @param ruleRepository   路由规则仓库（可空 = 纯内存模式）
+     */
+    public RoutingEngine(ConnectorRegistry registry, GatewayConfig gatewayConfig,
+                         AbTestRouter abTestRouter, RoutingRuleEntityRepository ruleRepository) {
         this.registry = registry;
         this.gatewayConfig = gatewayConfig;
         this.abTestRouter = abTestRouter;
+        this.ruleRepository = ruleRepository;
 
         // Dual-chain routing rules (registered first so merchant-added rules at
         // priority > 50 still win; the default NEX/fallback rules below at
@@ -70,8 +99,30 @@ public class RoutingEngine {
                 Map.of("currency", "NEX"), RoutingStrategy.PRIORITY, List.of("chain", "mock"), 10));
         rules.add(new RoutingRule("default-fallback", "All other payments use mock",
                 Map.of(), RoutingStrategy.PRIORITY, List.of("mock", "chain"), 0));
-        log.info("RoutingEngine initialized with {} rules, aiRouting={}",
-                rules.size(), abTestRouter != null);
+
+        // 持久化同步（异常降级为纯内存，不阻断初始化）
+        if (ruleRepository != null) {
+            try {
+                if (ruleRepository.count() == 0) {
+                    ruleRepository.saveAll(rules.stream().map(this::toEntity).collect(Collectors.toList()));
+                    log.info("RoutingEngine: seeded {} default rules to DB", rules.size());
+                } else {
+                    List<RoutingRule> restored = ruleRepository.findAll().stream()
+                            .map(this::fromEntity)
+                            .collect(Collectors.toList());
+                    if (!restored.isEmpty()) {
+                        rules.clear();
+                        rules.addAll(restored);
+                        log.info("RoutingEngine: restored {} rules from DB", restored.size());
+                    }
+                }
+            } catch (RuntimeException e) {
+                log.warn("RoutingEngine: DB sync failed, degraded to in-memory defaults: {}", e.getMessage());
+            }
+        }
+
+        log.info("RoutingEngine initialized with {} rules, aiRouting={}, dbPersist={}",
+                rules.size(), abTestRouter != null, ruleRepository != null);
     }
 
     /**
@@ -209,12 +260,76 @@ public class RoutingEngine {
     public void addRule(RoutingRule rule) {
         rules.removeIf(r -> r.getId().equals(rule.getId()));
         rules.add(rule);
+        persistSave(rule);
         log.info("Routing rule added/updated: {} (priority={})", rule.getId(), rule.getPriority());
+    }
+
+    /**
+     * 更新路由规则（write-through 持久化，全局核验补全）。
+     *
+     * @param id   规则 id（强制覆盖 rule 的 id，路径语义）
+     * @param rule 新规则内容
+     * @return 更新后的规则（即入参 rule，id 已归一）
+     */
+    public RoutingRule updateRule(String id, RoutingRule rule) {
+        rule.setId(id);
+        rules.removeIf(r -> r.getId().equals(id));
+        rules.add(rule);
+        persistSave(rule);
+        log.info("Routing rule updated: {} (priority={})", id, rule.getPriority());
+        return rule;
     }
 
     public void removeRule(String id) {
         rules.removeIf(r -> r.getId().equals(id));
+        persistDelete(id);
         log.info("Routing rule removed: {}", id);
+    }
+
+    /** write-through save（DB 异常不阻断内存操作） */
+    private void persistSave(RoutingRule rule) {
+        if (ruleRepository == null) return;
+        try {
+            ruleRepository.save(toEntity(rule));
+        } catch (RuntimeException e) {
+            log.warn("RoutingEngine: DB save failed for rule {} (in-memory kept): {}",
+                    rule.getId(), e.getMessage());
+        }
+    }
+
+    /** write-through delete（DB 异常不阻断内存操作） */
+    private void persistDelete(String id) {
+        if (ruleRepository == null) return;
+        try {
+            ruleRepository.deleteById(id);
+        } catch (RuntimeException e) {
+            log.warn("RoutingEngine: DB delete failed for rule {} (in-memory kept): {}",
+                    id, e.getMessage());
+        }
+    }
+
+    /** 领域规则 → 持久化实体 */
+    private RoutingRuleEntity toEntity(RoutingRule rule) {
+        RoutingRuleEntity e = new RoutingRuleEntity();
+        e.setId(rule.getId());
+        e.setName(rule.getName());
+        e.setConditionsJson(RoutingRuleEntity.toConditionsJson(rule.getConditions()));
+        e.setStrategy(rule.getStrategy().name());
+        e.setConnectorsCsv(String.join(",", rule.getConnectors()));
+        e.setPriority(rule.getPriority());
+        return e;
+    }
+
+    /** 持久化实体 → 领域规则 */
+    private RoutingRule fromEntity(RoutingRuleEntity e) {
+        return new RoutingRule(
+                e.getId(),
+                e.getName(),
+                RoutingRuleEntity.fromConditionsJson(e.getConditionsJson()),
+                RoutingStrategy.valueOf(e.getStrategy()),
+                List.of(e.getConnectorsCsv() == null || e.getConnectorsCsv().isBlank()
+                        ? new String[0] : e.getConnectorsCsv().split(",")),
+                e.getPriority());
     }
 
     /**

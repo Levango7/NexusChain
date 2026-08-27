@@ -355,6 +355,32 @@ services:
       - nexus-net
     restart: unless-stopped
 
+  # === L1 Hardhat 本地节点（P5：消除 L2-L1 E2E 跳过）===
+  # 挂载 nexus-core 的 l1-test 测试资源（合约 + 部署脚本），容器内 npm install + 启动
+  # `hardhat node` 监听 8545。AbstractHardhatIntegrationTest 的 ensureHardhatNodeRunning()
+  # 优先探测 127.0.0.1:8545，已可用则复用（reuseExistingNode=true）而非自启子进程——
+  # 因此本服务启动后，L2L1EndToEndTest / OnChainGovernanceIntegrationTest 等
+  # Hardhat 集成测试不再因本机缺 node/npx 环境而被 assumeHardhatAvailable 跳过。
+  # 使用：docker-compose up -d l1-hardhat
+  l1-hardhat:
+    image: node:20-alpine
+    container_name: nexus-l1-hardhat
+    working_dir: /app
+    command: sh -c "npm install --no-audit --no-fund && npx hardhat node --hostname 0.0.0.0"
+    ports:
+      - '127.0.0.1:8545:8545'    # Hardhat L1 RPC（web3j 连接；仅本机访问）
+    volumes:
+      - ./nexus-core/nexus-core/src/test/resources/l1-test:/app
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- --post-data="{\"jsonrpc\":\"2.0\",\"method\":\"eth_blockNumber\",\"params\":[],\"id\":1}" --header="Content-Type: application/json" http://127.0.0.1:8545 || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 60s   # npm install 首启较慢
+    networks:
+      - nexus-net
+    restart: unless-stopped
+
   # === ZK Groth16 真实验证服务（Rust arkworks，BN254 配对）===
   # gRPC 50061 + HTTP 50062（Java 桥接 /v1/verify）。setup 持久化到命名卷
   # （可信设置仪式产出经 GROTH16_EXTERNAL_SETUP_DIR 挂载或 /v1/setup-external 导入）。

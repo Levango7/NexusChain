@@ -83,13 +83,20 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
 | `nexus-signing-service` | 签名服务：交易签名编排、MPC 传输层 | 编排完整，MPC 真实 GG20（可信协调器模型） |
 | `nexus-wallet-service` | 钱包服务：白名单、冷热托管、审批流 | 白名单/审批完整，托管为模拟 |
 | `mpc-engine` | Rust gRPC MPC 密码学引擎 | **真实 GG20（multi-party-ecdsa），可信协调器模型** |
-| `nexus-explorer` | React + TS 区块浏览器 | 可用 |
+| `nexus-explorer` | React + TS 区块浏览器 | **MVP 骨架**（约 40 个前端源文件，见成熟度声明） |
 | `nexus-sdk` | Java SDK：RPC、钱包、支付编排、跨链/稳定币客户端 | 较完整 |
 | `nexus-rpc-doc` | RPC API 文档 | 参考 |
 
 ## 成熟度声明（重要）
 
 为避免"宣称能力 >> 实际能力"，以下组件的真实状态如实标注。**v2.0.0-rc1 已完成 Phase 5 真实化改造**，各组件状态如下：
+
+### 区块浏览器（nexus-explorer，P6 诚实声明 2026-08-27）
+
+- **状态：MVP 骨架，非生产级**。`nexus-explorer/frontend/src` 真实源码约 **40 个文件**（26 tsx + 10 ts + 2 json + 2 css）；`backend/src` 仅 2 个文件。仓库统计中的大量文件为 `node_modules` 依赖，**不代表产品功能**。
+- **已具备**：基础页面骨架、i18n 框架（7 页面翻译替换）、4 个基础组件测试（Button/Card/Modal/Badge，57 用例）。
+- **未具备**：完整的区块/交易/地址详情数据接入、链上状态实时订阅、图表可视化、监控告警前端。此前模块清单"可用"标注与实际情况不符，已修正。
+- **演进**：列入后续迭代，功能范围需另行立项评审。
 
 ### MPC 多方签名（v2.0.0-rc1 真实化）
 
