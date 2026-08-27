@@ -32,7 +32,9 @@
 //!    ```bash
 //!    cargo test --features tls --test integration_test -- --ignored
 //!    ```
-//!    `--ignored` 是必须的：所有测试标注了 `#[ignore]`，因它们需要多节点环境。
+//!    `--ignored` 是必须的：需多节点环境。**B2-T1 起**：DKG/签名/阈值/mTLS
+//!    4 个稳定用例已去除 `#[ignore]`（由 CI 分布式 E2E job 先启动集群后运行）；
+//!    `test_node_recovery`（WAL 重放）仍 `#[ignore]`，视稳定性择机启用。
 //!
 //! 5. **单个测试**：
 //!    ```bash
@@ -257,7 +259,6 @@ async fn wait_all_nodes_healthy(timeout_secs: u64) {
 /// cargo test --features tls --test integration_test -- --ignored test_dkg_3_nodes
 /// ```
 #[tokio::test]
-#[ignore = "需多节点环境：先 bash scripts/start-mpc-cluster.sh 启动集群"]
 async fn test_dkg_3_nodes() {
     wait_all_nodes_healthy(30).await;
 
@@ -348,7 +349,6 @@ async fn test_dkg_3_nodes() {
 /// cargo test --features tls --test integration_test -- --ignored test_sign_2_of_3
 /// ```
 #[tokio::test]
-#[ignore = "需多节点环境：先 bash scripts/start-mpc-cluster.sh 启动集群"]
 async fn test_sign_2_of_3() {
     wait_all_nodes_healthy(30).await;
 
@@ -471,7 +471,6 @@ async fn test_sign_2_of_3() {
 /// cargo test --features tls --test integration_test -- --ignored test_sign_wrong_threshold
 /// ```
 #[tokio::test]
-#[ignore = "需多节点环境：先 bash scripts/start-mpc-cluster.sh 启动集群"]
 async fn test_sign_wrong_threshold() {
     wait_all_nodes_healthy(30).await;
 
@@ -730,7 +729,6 @@ async fn test_node_recovery() {
 /// cargo test --features tls --test integration_test -- --ignored test_mtls_handshake
 /// ```
 #[tokio::test]
-#[ignore = "需多节点环境：先 bash scripts/start-mpc-cluster.sh 启动集群"]
 async fn test_mtls_handshake() {
     wait_all_nodes_healthy(30).await;
 
@@ -781,5 +779,7 @@ async fn test_mtls_handshake() {
 // =============================================================================
 // 测试套件入口（cargo test 自动发现 #[tokio::test] 函数，无需 main）
 // =============================================================================
-// 注：所有测试标注 #[ignore]，需 `cargo test -- --ignored` 显式运行。
+// 注：DKG/签名/阈值/mTLS 4 个稳定用例已去 #[ignore]（B2-T1），需集群环境——
+// 先 bash scripts/start-mpc-cluster.sh 启动集群，再 cargo test --features tls
+// --test integration_test；test_node_recovery 仍 #[ignore]，需 --ignored 显式运行。
 // 这避免在无多节点环境的常规 `cargo test` 中误触发网络连接超时。

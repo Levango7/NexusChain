@@ -69,6 +69,9 @@ public class DefaultZkProofSystem implements ZkProofSystem {
     /** 证明编码 magic */
     private static final byte[] PROOF_MAGIC = "G16P".getBytes(StandardCharsets.US_ASCII);
 
+    /** 远程证明内嵌 fingerprint 定长（字节，A1-R6） */
+    private static final int REMOTE_FP_LEN = 32;
+
     /**
      * mock 证明前缀（ZK-P2-04 修复）。
      *
@@ -206,8 +209,24 @@ public class DefaultZkProofSystem implements ZkProofSystem {
         // 检查是否为 Groth16 证明
         if (isGroth16Proof(data) && groth16 != null) {
             try {
-                Groth16Proof g16Proof = decodeGroth16Proof(data);
                 BigInteger[] publicInputs = extractPublicInputs(publicInput);
+                // A1-R6: 远程真实证明（G16P + fingerprint + proofHex）走分离验证 /v1/verify-sep
+                if (isRemoteGroth16Proof(data)) {
+                    String[] remote = decodeRemoteGroth16Proof(data);
+                    if (remoteVerifyUrl == null || remoteVerifyUrl.isBlank()) {
+                        logger.warn("DefaultZkProofSystem verify REJECTED: remote proof (fp={}) "
+                                + "without remote-verify-url configured (fail-closed)",
+                                remote[0]);
+                        return false;
+                    }
+                    boolean remoteValid = groth16.verifyRemoteSep(
+                            remoteVerifyUrl, remote[0], remote[1], publicInputs);
+                    logger.info("DefaultZkProofSystem verify (groth16 REMOTE SEP): circuit={} fp={} -> {}",
+                            proof.getCircuitId(), remote[0], remoteValid);
+                    return remoteValid;
+                }
+                // 本地 Groth16 证明（Schnorr 降级路径）
+                Groth16Proof g16Proof = decodeGroth16Proof(data);
                 // ZK 方案 C：配置了真实远程验证服务时优先走 BN254 配对（fail-closed）
                 if (remoteVerifyUrl != null && !remoteVerifyUrl.isBlank()) {
                     boolean remoteValid = groth16.verifyRemote(remoteVerifyUrl, publicInputs);
@@ -390,14 +409,65 @@ public class DefaultZkProofSystem implements ZkProofSystem {
     /**
      * 编码远程真实 Groth16 证明（ZK 方案 C：Rust 服务产出）。
      *
-     * <p>格式："G16P" + fingerprint(32字节) + proof_hex 字节</p>
+     * <p>格式："G16P" + fingerprint(32字节, ASCII 左对齐补零) + proof_hex 字节</p>
      */
     private byte[] encodeRemoteGroth16Proof(String fingerprint, String proofHex) {
         byte[] proofBytes = hexStringToByteArray(proofHex);
-        byte[] result = new byte[PROOF_MAGIC.length + proofBytes.length];
+        byte[] fpBytes = new byte[REMOTE_FP_LEN];
+        if (fingerprint != null) {
+            byte[] fpRaw = fingerprint.getBytes(StandardCharsets.US_ASCII);
+            System.arraycopy(fpRaw, 0, fpBytes, 0, Math.min(fpRaw.length, REMOTE_FP_LEN));
+        }
+        byte[] result = new byte[PROOF_MAGIC.length + fpBytes.length + proofBytes.length];
         System.arraycopy(PROOF_MAGIC, 0, result, 0, PROOF_MAGIC.length);
-        System.arraycopy(proofBytes, 0, result, PROOF_MAGIC.length, proofBytes.length);
+        System.arraycopy(fpBytes, 0, result, PROOF_MAGIC.length, fpBytes.length);
+        System.arraycopy(proofBytes, 0, result, PROOF_MAGIC.length + fpBytes.length, proofBytes.length);
         return result;
+    }
+
+    /**
+     * 判断是否为远程真实 Groth16 证明（"G16P" + fingerprint(32) + proofHex 结构）。
+     *
+     * <p>与本地证明（"G16P" + Groth16Proof 编码，magic "G16"）区分：
+     * 远程证明 fingerprint 区为 hex 字符（0-9a-f），首字节不可能是 'G'（0x47）；
+     * 本地证明首字节恒为 'G'。</p>
+     */
+    private boolean isRemoteGroth16Proof(byte[] data) {
+        if (!isGroth16Proof(data) || data.length < PROOF_MAGIC.length + REMOTE_FP_LEN) {
+            return false;
+        }
+        return data[PROOF_MAGIC.length] != 'G';
+    }
+
+    /**
+     * 解码远程真实 Groth16 证明：返回 {fingerprint, proofHex}。
+     */
+    private String[] decodeRemoteGroth16Proof(byte[] data) {
+        int fpStart = PROOF_MAGIC.length;
+        int proofStart = fpStart + REMOTE_FP_LEN;
+        byte[] fpBytes = new byte[REMOTE_FP_LEN];
+        System.arraycopy(data, fpStart, fpBytes, 0, REMOTE_FP_LEN);
+        // 截断尾部空白/零填充
+        int fpLen = 0;
+        while (fpLen < REMOTE_FP_LEN && fpBytes[fpLen] != 0 && fpBytes[fpLen] != ' ') {
+            fpLen++;
+        }
+        String fingerprint = new String(fpBytes, 0, fpLen, StandardCharsets.US_ASCII);
+        byte[] proofBytes = new byte[data.length - proofStart];
+        System.arraycopy(data, proofStart, proofBytes, 0, proofBytes.length);
+        return new String[]{fingerprint, byteArrayToHex(proofBytes)};
+    }
+
+    /**
+     * 字节数组转 Hex 字符串（小写，无 0x 前缀）。
+     */
+    private static String byteArrayToHex(byte[] bytes) {
+        StringBuilder sb = new StringBuilder(bytes.length * 2);
+        for (byte b : bytes) {
+            sb.append(Character.forDigit((b >> 4) & 0xF, 16));
+            sb.append(Character.forDigit(b & 0xF, 16));
+        }
+        return sb.toString();
     }
 
     /**

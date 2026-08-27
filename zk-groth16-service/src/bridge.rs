@@ -281,6 +281,27 @@ pub fn verify_with_proof(json: &str, proof_hex: &str) -> eyre::Result<bool> {
     Ok(ok)
 }
 
+/// 分离验证（按指纹，A1-R6）：持久化 vk + 外部证明 + 外部公共输入（十进制字符串）。
+///
+/// Java 侧 `DefaultZkProofSystem` verify 阶段无电路 JSON（仅有 proof 字节与公共输入），
+/// 走本路径：fingerprint 定位持久化 vk，公共输入直接十进制传输（无 witness 提取）。
+pub fn verify_with_fingerprint_and_inputs(
+    fp: &str,
+    proof_hex: &str,
+    public_inputs: &[String],
+) -> eyre::Result<bool> {
+    let vk_bytes = crate::setup_store::load_vk_bytes(fp)?;
+    let vk = <ark_groth16::VerifyingKey<ark_bn254::Bn254> as ark_serialize::CanonicalDeserialize>::deserialize_uncompressed(&vk_bytes[..])?;
+    let proof = crate::setup_store::parse_proof_hex(proof_hex)?;
+    let public: Vec<Fr> = public_inputs
+        .iter()
+        .map(|s| s.parse::<Fr>())
+        .collect::<Result<_, _>>()
+        .map_err(|e| eyre::eyre!("bad public input decimal: {e}"))?;
+    let ok = ark_groth16::Groth16::<ark_bn254::Bn254>::verify(&vk, &public, &proof)?;
+    Ok(ok)
+}
+
 /// 幂等 setup：返回指纹 + vk hex（公开验证密钥）。
 pub fn setup_public(json: &str) -> eyre::Result<(String, String)> {
     let circuit = DynamicCircuit::from_json(json)?;

@@ -88,8 +88,10 @@ PROVE_RESP=$(curl -sf --max-time 60 -H "Content-Type: application/json" \
     -d "{\"circuit_json\":$CIRCUIT_JSON}" "$SERVICE_URL/v1/prove") \
     || fail "POST /v1/prove 失败"
 PROOF_HEX=$(echo "$PROVE_RESP" | sed -n 's/.*"proof_hex":"\([^"]*\)".*/\1/p')
+PROVE_FP=$(echo "$PROVE_RESP" | sed -n 's/.*"fingerprint":"\([^"]*\)".*/\1/p')
 [ -n "$PROOF_HEX" ] || fail "prove 响应无 proof_hex: $PROVE_RESP"
-ok "prove OK: proof_hex ${#PROOF_HEX} 字符"
+[ -n "$PROVE_FP" ] || fail "prove 响应无 fingerprint: $PROVE_RESP"
+ok "prove OK: proof_hex ${#PROOF_HEX} 字符 (fp=$PROVE_FP)"
 
 echo "[e2e] 3/3 /v1/verify（真实 BN254 配对验证）..."
 VERIFY_RESP=$(curl -sf --max-time 60 -H "Content-Type: application/json" \
@@ -106,6 +108,23 @@ NEG_RESP=$(curl -sf --max-time 60 -H "Content-Type: application/json" \
 NEG_VALID=$(echo "$NEG_RESP" | sed -n 's/.*"valid":\([a-z]*\).*/\1/p')
 [ "$NEG_VALID" = "false" ] || fail "错误公共输入应 valid=false: $NEG_RESP"
 ok "反例校验 OK: 错误输入 valid=false"
+
+# A1-R6: /v1/verify-sep 分离验证（fingerprint + proof_hex + 十进制公共输入）
+echo "[e2e] 4/4 /v1/verify-sep（分离验证：持久化 vk + 外部证明）..."
+SEP_RESP=$(curl -sf --max-time 60 -H "Content-Type: application/json" \
+    -d "{\"fingerprint\":\"$PROVE_FP\",\"proof_hex\":\"$PROOF_HEX\",\"public_inputs\":[\"35\"]}" \
+    "$SERVICE_URL/v1/verify-sep") || fail "POST /v1/verify-sep 失败"
+SEP_VALID=$(echo "$SEP_RESP" | sed -n 's/.*"valid":\([a-z]*\).*/\1/p')
+[ "$SEP_VALID" = "true" ] || fail "verify-sep 应为 valid=true: $SEP_RESP"
+ok "verify-sep OK: valid=true（分离验证通过）"
+
+# verify-sep 反例：错误公共输入应验证失败
+SEP_NEG=$(curl -sf --max-time 60 -H "Content-Type: application/json" \
+    -d "{\"fingerprint\":\"$PROVE_FP\",\"proof_hex\":\"$PROOF_HEX\",\"public_inputs\":[\"36\"]}" \
+    "$SERVICE_URL/v1/verify-sep") || fail "POST /v1/verify-sep（反例）失败"
+SEP_NEG_VALID=$(echo "$SEP_NEG" | sed -n 's/.*"valid":\([a-z]*\).*/\1/p')
+[ "$SEP_NEG_VALID" = "false" ] || fail "verify-sep 错误输入应 valid=false: $SEP_NEG"
+ok "verify-sep 反例 OK: 错误输入 valid=false"
 
 # ---- (c) bench 阈值断言 ----
 if [ "$SKIP_BENCH" = "1" ]; then

@@ -220,8 +220,14 @@ async fn http_prove(Json(req): Json<ProveRequest>) -> Json<ProveResponse> {
 
 #[derive(serde::Deserialize)]
 struct VerifySepRequest {
-    circuit_json: serde_json::Value,
+    /// 电路 JSON（原分离验证载荷；有 fingerprint 时忽略，公共输入以 public_inputs 传输）
+    circuit_json: Option<serde_json::Value>,
+    /// 电路指纹（A1-R6：Java verify 无电路 JSON 时按指纹定位持久化 vk）
+    fingerprint: Option<String>,
     proof_hex: String,
+    /// 公共输入（十进制字符串；fingerprint 模式必需）
+    #[serde(default)]
+    public_inputs: Vec<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -231,9 +237,20 @@ struct VerifySepResponse {
 }
 
 async fn http_verify_sep(Json(req): Json<VerifySepRequest>) -> Json<VerifySepResponse> {
-    match bridge::verify_with_proof(&req.circuit_json.to_string(), &req.proof_hex) {
-        Ok(valid) => Json(VerifySepResponse { valid, error: String::new() }),
-        Err(e) => Json(VerifySepResponse { valid: false, error: format!("{e}") }),
+    // A1-R6：优先按指纹分离验证（Java verify 阶段无电路 JSON 的场景）
+    if let Some(fp) = &req.fingerprint {
+        return match bridge::verify_with_fingerprint_and_inputs(fp, &req.proof_hex, &req.public_inputs) {
+            Ok(valid) => Json(VerifySepResponse { valid, error: String::new() }),
+            Err(e) => Json(VerifySepResponse { valid: false, error: format!("{e}") }),
+        };
+    }
+    // 兼容：原 circuit_json + proof_hex 载荷
+    match req.circuit_json {
+        Some(json) => match bridge::verify_with_proof(&json.to_string(), &req.proof_hex) {
+            Ok(valid) => Json(VerifySepResponse { valid, error: String::new() }),
+            Err(e) => Json(VerifySepResponse { valid: false, error: format!("{e}") }),
+        },
+        None => Json(VerifySepResponse { valid: false, error: "either fingerprint or circuit_json required".to_string() }),
     }
 }
 

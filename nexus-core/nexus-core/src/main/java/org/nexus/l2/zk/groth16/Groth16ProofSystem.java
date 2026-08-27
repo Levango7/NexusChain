@@ -299,6 +299,66 @@ public class Groth16ProofSystem {
     }
 
     /**
+     * 远程分离真实验证（A1-R6：走 /v1/verify-sep，按 fingerprint 定位持久化 vk）。
+     *
+     * <p>与 {@link #verifyRemote(String, BigInteger[])}（桥接 /v1/verify，服务端自证明）
+     * 不同：本方法携带 prove 阶段产出的 proofHex 与公共输入，由服务端用持久化 vk
+     * 做真实 BN254 配对验证，杜绝"验证的是重新生成的证明而非被签名证明"的不匹配。
+     * 服务不可用或异常返回 false（fail-closed，不降级到 Schnorr）。</p>
+     *
+     * @param remoteUrl    服务地址（如 http://localhost:50062/v1/verify-sep）
+     * @param fingerprint  电路指纹（prove 阶段返回，定位持久化 vk）
+     * @param proofHex     prove 阶段产出的证明 hex
+     * @param publicInputs 公共输入（十进制传输，BigInteger 无精度损失）
+     * @return 验证结果；服务不可用或异常返回 false
+     */
+    public boolean verifyRemoteSep(String remoteUrl, String fingerprint, String proofHex,
+                                   BigInteger[] publicInputs) {
+        try {
+            java.net.URI uri = java.net.URI.create(remoteUrl);
+            java.net.http.HttpClient client = java.net.http.HttpClient.newBuilder()
+                    .connectTimeout(java.time.Duration.ofSeconds(5))
+                    .build();
+            java.util.List<String> inputs = new java.util.ArrayList<>();
+            if (publicInputs != null) {
+                for (BigInteger v : publicInputs) {
+                    inputs.add(v == null ? "0" : v.toString());
+                }
+            }
+            String body = "{\"fingerprint\":\"" + (fingerprint == null ? "" : fingerprint)
+                    + "\",\"proof_hex\":\"" + (proofHex == null ? "" : proofHex)
+                    + "\",\"public_inputs\":" + toJsonArray(inputs) + "}";
+            java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder(uri)
+                    .header("Content-Type", "application/json")
+                    .timeout(java.time.Duration.ofSeconds(10))
+                    .POST(java.net.http.HttpRequest.BodyPublishers.ofString(body))
+                    .build();
+            java.net.http.HttpResponse<String> resp = client.send(req,
+                    java.net.http.HttpResponse.BodyHandlers.ofString());
+            if (resp.statusCode() != 200) {
+                logger.warn("Groth16 verifyRemoteSep: HTTP {} from {}", resp.statusCode(), remoteUrl);
+                return false;
+            }
+            String json = resp.body();
+            int validIdx = json.indexOf("\"valid\"");
+            if (validIdx < 0) {
+                logger.warn("Groth16 verifyRemoteSep: unexpected response: {}", json);
+                return false;
+            }
+            String after = json.substring(validIdx);
+            int colon = after.indexOf(':');
+            int valStart = after.indexOf("true", colon);
+            boolean valid = valStart >= 0 && valStart < after.indexOf('}');
+            logger.info("Groth16 verifyRemoteSep (真实 BN254 分离验证): fp={} -> {}",
+                    fingerprint, valid);
+            return valid;
+        } catch (RuntimeException | java.io.IOException | InterruptedException e) {
+            logger.warn("Groth16 verifyRemoteSep FAILED (fail-closed): {}: {}", remoteUrl, e.getMessage());
+            return false;
+        }
+    }
+
+    /**
      * 为 R1CS 约束系统执行 Groth16 可信设置。
      *
      * <p><b>ZK-P0-02 修复</b>：setup 完成后立即销毁 toxic waste（α, β, γ, δ 标量），

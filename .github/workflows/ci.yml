@@ -110,9 +110,23 @@ jobs:
         working-directory: mpc-engine
         run: cargo clippy --all-targets -- -D warnings
 
-      - name: Rust tests (mpc-engine)
+      # MPC-B2-T1/T2: 集成测试去 #[ignore] 后需集群环境，普通 cargo test 只跑 lib 单测；
+      # 分布式 E2E（3 节点集群）由下方独立步骤先启动集群再运行。
+      - name: Rust tests (mpc-engine, lib)
         working-directory: mpc-engine
-        run: cargo test --no-fail-fast
+        run: cargo test --no-fail-fast --lib
+
+      # MPC-B2-T2: 分布式 E2E（3 节点集群）——ubuntu runner + openssl + protoc
+      # （tonic_build 需系统 protoc）+ cargo test --features tls --test integration_test。
+      # start-mpc-cluster.sh -d 自动生成 mTLS 证书、编译并后台启动 3 节点（50051-50053）。
+      - name: MPC distributed E2E (3-node cluster)
+        working-directory: mpc-engine
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq protobuf-compiler openssl
+          bash scripts/start-mpc-cluster.sh -d
+          trap 'bash scripts/start-mpc-cluster.sh -k' EXIT
+          cargo test --features tls --test integration_test
 
       # P2-C7 / ZK-A1-R5(a): zk-groth16-service 单测（bridge 动态电路 + 仪式导入回归）
       # 复用上方已安装的 Rust 工具链；bridge.rs 内含 #[cfg(test)] 单测（真实 Groth16 往返）。
