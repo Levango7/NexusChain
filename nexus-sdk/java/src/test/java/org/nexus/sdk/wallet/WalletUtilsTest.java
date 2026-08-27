@@ -5,6 +5,7 @@ import org.nexus.keystore.wallet.Keystore;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -78,9 +79,11 @@ class WalletUtilsTest {
     }
 
     @Test
-    void addressToPubkeyHash_invalidAddress_shouldReturnEmpty() {
+    void addressToPubkeyHash_invalidAddress_shouldReturnNull() {
+        // P0 安全修复语义（WalletUtils.addressToPubkeyHash 异常时返回 null 而非空串，
+        // 使调用方 null 校验生效，避免非法地址被误判为有效并触发空 pubkeyHash 转账）
         String result = WalletUtils.addressToPubkeyHash("invalid!");
-        assertEquals("", result);
+        assertNull(result);
     }
 
     @Test

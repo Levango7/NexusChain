@@ -79,7 +79,7 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
 | `nexus-settlement` | 清结算：复式账本、对账、风控规则、资金归集 | 完整 |
 | `nexus-compliance` | 合规：KYC、AML 筛查、DID、信誉评分 | 完整 |
 | `nexus-analytics` | 数据分析：交易图谱、监控告警、统计、导出 | 完整 |
-| `nexus-oracle` | 预言机：多源价格聚合、链上治理、可验证随机数 | 完整（治理执行 P0 待修复） |
+| `nexus-oracle` | 预言机：多源价格聚合、链上治理、可验证随机数 | 完整（治理执行已修复：GOV-P0-01 事件源白名单 + 审计日志持久化） |
 | `nexus-signing-service` | 签名服务：交易签名编排、MPC 传输层 | 编排完整，MPC 真实 GG20（可信协调器模型） |
 | `nexus-wallet-service` | 钱包服务：白名单、冷热托管、审批流 | 白名单/审批完整，托管为模拟 |
 | `mpc-engine` | Rust gRPC MPC 密码学引擎 | **真实 GG20（multi-party-ecdsa），可信协调器模型** |
@@ -96,7 +96,7 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
 - **Rust `mpc-engine`**：已接入 ZenGo-X/KZen `multi-party-ecdsa` 0.8.1 crate，实现**真实 GG20 门限 ECDSA**（真实 Paillier、Feldman VSS、MtA、ZK 证明，产出可被标准 secp256k1 验证的签名）。
 - **Java MPC 传输层**：`GrpcMpcTransportStub` + `MpcTransportGrpcServer` 实现**真实 gRPC over HTTP/2** 传输，支持 P2P 消息路由。
 - **部署模型限制（诚实声明）**：当前为「可信协调器」模型——全部 n 方私钥份额驻留同一进程内存，**门限容错属性失效**（进程被攻破即等价单点签名）。完全分散式部署（t-of-n 方被攻破不泄露私钥）为 v2.2.0 演进目标。
-- **编译状态**：代码完成但**未编译验证**（开发环境缺少 C 编译器）。
+- **编译状态**：已完成编译验证（`mpc-engine/target/release/mpc-engine` 产物存在；README 早期"未编译"声明过时，2026-08-27 核实）。
 - **传输安全**：gRPC mTLS 已实现（MPC-P0-02 修复，use-plaintext 默认 false）。
 
 ### ZK 证明（v2.0.0-rc1 真实化）
@@ -138,9 +138,9 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
 依据 [ADR-001](docs/adr/ADR-001-research-layer-freeze.md)，研究层模块经历「冻结 → Phase 5 真实化 → 条件解冻」过程：
 
 - **mpc-engine**：**已解冻**（真实 GG20，可信协调器模型限制）
-- **nexus-core L2 ZK 证明系统**：**条件解冻**（Schnorr 知识证明，非真实 Groth16，P0 待修复）
+- **nexus-core L2 ZK 证明系统**：**已解冻**（方案 C 已实现：`zk-groth16-service`（Rust arkworks，BN254 配对验证）+ Java fail-closed 对接；本地 Schnorr 仅作未配置远程服务时的降级路径）
 - **nexus-core L2 L1 合约交互**：**条件解冻**（Hardhat 环境就绪，EDR 兼容性待解决）
-- **nexus-oracle 治理执行**：**条件解冻**（执行流程真实，P0 待修复）
+- **nexus-oracle 治理执行**：**已解冻**（GOV-P0-01 事件源白名单 + 审计日志持久化已修复）
 - **halo2 / Plonk 后端**：**仍冻结**，降级为 Groth16（实际 Schnorr）
 
 ADR-001 状态：**Resolved**（2026-08-10）。

@@ -105,10 +105,12 @@ class SdkUnitTest {
         }
 
         @Test
-        @DisplayName("getGasPrice() throws RpcException when no node reachable")
-        void gasPriceThrowsRpcException() {
-            TransactionBuilder builder = new TransactionBuilder(rpc, "mainnet");
-            assertThrows(RpcClient.RpcException.class, builder::getGasPrice);
+        @DisplayName("getGasPrice() returns default 1 gwei when no node reachable (fail-safe)")
+        void gasPriceReturnsDefaultWhenNoNodeReachable() {
+            // getGasPrice 为 fail-safe：节点不可达时捕获异常并返回默认 1 gwei，而非抛 RpcException
+            RpcClient noNode = new RpcClient("http://127.0.0.1:1", 500, null);
+            TransactionBuilder builder = new TransactionBuilder(noNode, "mainnet");
+            assertEquals(BigInteger.valueOf(1_000_000_000L), builder.getGasPrice());
         }
 
         @Test
