@@ -23,10 +23,20 @@ pub struct VerifierImpl;
 impl Groth16VerifierService for VerifierImpl {
     async fn verify(&self, req: Request<VerifyRequest>) -> Result<Response<VerifyResponse>, Status> {
         let req = req.into_inner();
-        tracing::info!(curve = %req.curve, inputs = req.public_inputs_hex.len(), "rpc Verify");
-        let resp = match demo_verify(&req.public_inputs_hex) {
-            Ok(valid) => VerifyResponse { valid, error: String::new() },
-            Err(e) => VerifyResponse { valid: false, error: format!("{e}") },
+        tracing::info!(curve = %req.curve, inputs = req.public_inputs_hex.len(), has_circuit = !req.circuit_json.is_empty(), "rpc Verify");
+        // A1-R2：gRPC Verify 支持真实电路桥接（与 HTTP /v1/verify 一致）——
+        // circuit_json 非空时走动态电路（Java R1CS JSON → arkworks → 真实 BN254 配对验证）；
+        // 空载荷仅作演示电路 fallback（x^3+x+5=35，测试用途）。
+        let resp = if req.circuit_json.is_empty() {
+            match demo_verify(&req.public_inputs_hex) {
+                Ok(valid) => VerifyResponse { valid, error: String::new() },
+                Err(e) => VerifyResponse { valid: false, error: format!("{e}") },
+            }
+        } else {
+            match bridge::bridge_verify(&req.circuit_json) {
+                Ok(valid) => VerifyResponse { valid, error: String::new() },
+                Err(e) => VerifyResponse { valid: false, error: format!("{e}") },
+            }
         };
         Ok(Response::new(resp))
     }
