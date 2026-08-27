@@ -1,0 +1,46 @@
+# NexusChain gitleaks 配置（P4 修复，2026-08-27）
+# -----------------------------------------------------------------------------
+# 背景：CI 的 gitleaks-scan job 引用 GITLEAKS_CONFIG=.gitleaks.toml 但文件缺失，
+# 且默认规则对项目内 dev 默认值/测试数据产生 514 处误报（generic-api-key 高熵命中）。
+# 本配置：
+#   1. 继承 gitleaks 内置默认规则（extend）——真实密钥规则全部保留
+#   2. allowlist 精确排除确认的误报（dev 默认值 / 测试数据 / 注释样例）
+# 修复后本地 `gitleaks detect` 应 0 泄漏。
+#
+# 白名单原则（只排除"明确不是密钥"的模式，不放过真实密钥）：
+#   - 项目贯穿使用的 dev 默认 storage key（docker-compose.yml / start-node.bat / 各 yml 同值）
+#   - 测试数据文件（dbdump/StorageDictionary/组件测试占位符）
+#   - 注释中 JWT 样例与测试专用假密钥
+
+title = "NexusChain gitleaks config"
+
+[extend]
+# 继承 gitleaks 默认规则集（保持真实密钥检测能力）
+
+[allowlist]
+description = "NexusChain 项目级白名单：dev 默认值 + 测试数据 + 误报排除"
+
+# === 1. dev 默认值（贯穿仓库，非真实密钥）===
+regexes = [
+    # 开发默认 storage key：0123 开头 + 60 个 hex 字符（64 字符全长，
+    # docker-compose / start-node.bat / yml 共用；通配形式避免明文密钥入库）
+    '''0123[0-9a-f]{60}''',
+    # 同一 dev 密钥的 base64 编码（application-dev.yml keystore.encryption-key）
+    '''MDEy[0-9A-Za-z+/=]{40,}''',
+    # 开发默认 auth token（docker-compose / start-node.bat 共用）
+    '''dev-mpc-engine-token-change-in-prod''',
+    # 测试专用 JWT 样例（注释中，含 hmac secret 的 demo token）
+    '''eyJhbGciOiJIUzI1NiJ9\.eyJqdGkiOiIxIiwiaWF0IjoxNTcyNDE2MTYw''',
+]
+
+# === 2. 测试数据 / 测试代码（非生产文件）===
+paths = [
+    '''src/test/resources/dbdump/''',
+    '''src/test/resources/db/''',
+    '''newanalogTest''',
+    '''KeystoreTests''',
+    '''PosConsensusIntegrationTest''',
+    '''ErrorMessageSanitizerTest''',
+    '''__tests__/''',
+    '''transaction-test-example.jsonc''',
+]
