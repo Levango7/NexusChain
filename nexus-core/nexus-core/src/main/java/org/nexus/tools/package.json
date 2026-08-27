@@ -1,7 +1,7 @@
 {
   "dependencies": {
     "@alicloud/pop-core": "^1.7.7",
-    "axios": "^0.32.0",
+    "axios": "^0.33.0",
     "commander": "^2.20.0",
     "glob": "^7.1.4",
     "nacl": "^0.1.3",
