@@ -39,7 +39,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
-@ActiveProfiles("test")
+@ActiveProfiles({"test", "sandbox"})
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class RefundApprovalE2ETest {
 
@@ -56,12 +56,17 @@ class RefundApprovalE2ETest {
     // preHandle() 默认返回 false 会拒绝所有请求，因此必须在 setup 中 stub 为 true。
     // 作用域仅限本测试类，其他集成测试仍使用真实拦截器。
     @MockBean private ApiKeyInterceptor apiKeyInterceptor;
+    // B4 Boot 3.3.13 升级修复：构造函数注入更严格，test profile 下无 RateLimiter bean
+    @MockBean private org.nexus.gateway.ratelimit.RateLimiter rateLimiter;
 
     @BeforeEach
     void setup() throws Exception {
         reset(chainConnector, refundApprovalService);
         // 放行所有请求，绕过 API Key 鉴权
         when(apiKeyInterceptor.preHandle(any(), any(), any())).thenReturn(true);
+        // B4: @MockBean RateLimiter 的 tryAcquire() 默认返回 false → RateLimitAdapter 返回 429，
+        // 必须显式 stub 为 true 才能放行请求
+        when(rateLimiter.tryAcquire(any())).thenReturn(true);
 
         // stub refundApprovalService：所有方法返回同一个预设 RefundRequest，
         // 使 HTTP 接口测试与业务逻辑解耦。
@@ -95,7 +100,7 @@ class RefundApprovalE2ETest {
     void requestRefund() throws Exception {
         // POST /api/v1/refunds 返回 201 CREATED
         mockMvc.perform(post("/api/v1/refunds")
-                .with(SignedRequests.test())
+                .with(SignedRequests.sandbox())
                 .requestAttr(MERCHANT_ATTR, 1L)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"orderId\":1,\"amount\":\"50.00\",\"reason\":\"customer request\"}"))
@@ -106,7 +111,7 @@ class RefundApprovalE2ETest {
     void multiLevelApprovalChain() throws Exception {
         // L1: 初级审批 → POST /api/v1/refunds/approve 返回 200 OK
         mockMvc.perform(post("/api/v1/refunds/approve")
-                .with(SignedRequests.test())
+                .with(SignedRequests.sandbox())
                 .requestAttr(MERCHANT_ATTR, 1L)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"refundId\":1,\"approver\":\"l1_approver\",\"approved\":true}"))
@@ -116,7 +121,7 @@ class RefundApprovalE2ETest {
     @Test @Order(3)
     void finalApprovalLargeAmount() throws Exception {
         mockMvc.perform(post("/api/v1/refunds/approve")
-                .with(SignedRequests.test())
+                .with(SignedRequests.sandbox())
                 .requestAttr(MERCHANT_ATTR, 1L)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"refundId\":1,\"approver\":\"l2_approver\",\"approved\":true}"))
@@ -126,7 +131,7 @@ class RefundApprovalE2ETest {
     @Test @Order(4)
     void refundRejectedByApprover() throws Exception {
         mockMvc.perform(post("/api/v1/refunds/approve")
-                .with(SignedRequests.test())
+                .with(SignedRequests.sandbox())
                 .requestAttr(MERCHANT_ATTR, 1L)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"refundId\":1,\"approver\":\"l1_approver\",\"approved\":false,\"reason\":\"violates policy\"}"))
@@ -137,7 +142,7 @@ class RefundApprovalE2ETest {
     void autoRefundOnTimeout() throws Exception {
         // 自动退款：POST /api/v1/refunds 返回 201 CREATED
         mockMvc.perform(post("/api/v1/refunds")
-                .with(SignedRequests.test())
+                .with(SignedRequests.sandbox())
                 .requestAttr(MERCHANT_ATTR, 1L)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"orderId\":1,\"amount\":\"10.00\",\"autoRefund\":true}"))
@@ -148,7 +153,7 @@ class RefundApprovalE2ETest {
     void partialRefund() throws Exception {
         // 部分退款：POST /api/v1/refunds 返回 201 CREATED
         mockMvc.perform(post("/api/v1/refunds")
-                .with(SignedRequests.test())
+                .with(SignedRequests.sandbox())
                 .requestAttr(MERCHANT_ATTR, 1L)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"orderId\":1,\"amount\":\"25.00\",\"originalAmount\":\"100.00\"}"))

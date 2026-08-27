@@ -1,5 +1,5 @@
 plugins {
-    id 'org.springframework.boot' version '3.2.5'
+    id 'org.springframework.boot' version '3.3.13'
     id 'io.spring.dependency-management' version '1.1.4'
     id 'java'
     id 'jacoco'
@@ -37,7 +37,10 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-security'
 
     // Database
+    // Flyway 10.x（Boot 3.3.13 BOM 管理），10.x 需数据库专用模块
     implementation 'org.flywaydb:flyway-core'
+    implementation 'org.flywaydb:flyway-mysql'
+    implementation 'org.flywaydb:flyway-database-postgresql'
     runtimeOnly 'com.h2database:h2'
     runtimeOnly 'com.mysql:mysql-connector-j'
     // === P2-T8：PostgreSQL 生产化（设计文档 §4.1） ===
@@ -45,20 +48,20 @@ dependencies {
     runtimeOnly 'org.postgresql:postgresql:42.5.4'
 
     // === 项10：ShedLock 分布式锁（ReconciliationTask 多实例去重） ===
-    // ShedLock 5.10.0 兼容 Spring Boot 3.2.x，使用 JDBC provider
+    // ShedLock 6.2.0 兼容 Spring Boot 3.3.x，使用 JDBC provider
     // （复用 gateway 已有 MySQL/PostgreSQL 数据源，无需额外引入 Redis）。
     // shedlock-spring：核心注解 @SchedulerLock + @EnableSchedulerLock
     // shedlock-provider-jdbc-template：基于 JdbcTemplate 的 JdbcTemplateLockProvider，
     //   支持 builder + usingDbTime()（使用 DB 服务器时间避免多实例 JVM 时钟漂移）
-    implementation 'net.javacrumbs.shedlock:shedlock-spring:5.10.0'
-    implementation 'net.javacrumbs.shedlock:shedlock-provider-jdbc-template:5.10.0'
+    implementation 'net.javacrumbs.shedlock:shedlock-spring:6.2.0'
+    implementation 'net.javacrumbs.shedlock:shedlock-provider-jdbc-template:6.2.0'
 
     // Observability
     implementation 'io.micrometer:micrometer-registry-prometheus'
     implementation 'net.logstash.logback:logstash-logback-encoder:7.4'
 
     // === Micrometer Tracing + Zipkin（Phase 3 任务 #61，设计文档 §4.3.1） ===
-    // SpringBoot 3.2.5 BOM 管理版本（micrometer-tracing 1.2.5 + zipkin-reporter-brave 2.16.4）
+    // SpringBoot 3.3.13 BOM 管理版本（micrometer-tracing + zipkin-reporter-brave）
     // W3C traceparent 格式跨服务传播，Zipkin 上报，Feign 自动埋点
     implementation 'io.micrometer:micrometer-tracing-bridge-brave'
     implementation 'io.zipkin.reporter2:zipkin-reporter-brave'
@@ -66,12 +69,12 @@ dependencies {
 
     // Resilience4j（保留：管理对链节点直接 HTTP 调用的熔断/重试，与 Sentinel 共存。
     // Sentinel 管理对 signing/wallet-service 的 Feign 调用。Phase 1 任务 #55 不删除。）
-    implementation 'io.github.resilience4j:resilience4j-spring-boot3:2.2.0'
+    implementation 'io.github.resilience4j:resilience4j-spring-boot3:2.4.0'
 
     // === Spring Cloud BOM（管理 OpenFeign / LoadBalancer 版本，设计文档 §4.1） ===
     implementation platform('org.springframework.cloud:spring-cloud-dependencies:2023.0.3')
     // === Spring Cloud Alibaba BOM（管理 Nacos / Sentinel 版本） ===
-    implementation platform('com.alibaba.cloud:spring-cloud-alibaba-dependencies:2023.0.1.0')
+    implementation platform('com.alibaba.cloud:spring-cloud-alibaba-dependencies:2023.0.3.4')
 
     // === Nacos 服务发现 + 配置中心（Phase 1 任务 #55） ===
     implementation 'com.alibaba.cloud:spring-cloud-starter-alibaba-nacos-discovery'
@@ -81,12 +84,12 @@ dependencies {
     implementation 'com.alibaba.cloud:spring-cloud-starter-alibaba-sentinel'
 
     // === Seata 分布式事务（Phase 3 任务 #61） ===
-    // SCA 2023.0.1.0 BOM 管理 seata-spring-boot-starter 版本（2.0.0），设计文档 §4.1 / §4.2.2
+    // SCA 2023.0.3.4 BOM 管理 seata-spring-boot-starter 版本（2.1.0），设计文档 §4.1 / §4.2.2
     implementation 'com.alibaba.cloud:spring-cloud-starter-alibaba-seata'
 
     // === P3-T3：事件溯源 + CQRS（Kafka 事件总线） ===
     // spring-kafka：支付事件持久化到 payment-events topic，由 nexus-analytics 投影消费
-    // Spring Boot 3.2.5 BOM 管理 spring-kafka 版本（3.1.4），与 P3-T4 Kafka 部署对齐
+    // Spring Boot 3.3.13 BOM 管理 spring-kafka 版本，与 P3-T4 Kafka 部署对齐
     implementation 'org.springframework.kafka:spring-kafka'
 
     // === OpenFeign 声明式调用 + LoadBalancer（gateway → signing-service / wallet-service / bridge） ===
@@ -107,7 +110,7 @@ dependencies {
     implementation 'org.springframework.cloud:spring-cloud-starter-bootstrap'
 
     // OpenAPI
-    implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.3.0'
+    implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.6.0'
 
     // Utilities
     implementation 'com.fasterxml.jackson.core:jackson-databind'
@@ -131,7 +134,7 @@ dependencies {
     // 需通过 @WithMockUser 模拟认证用户与角色才能访问这些端点。
     testImplementation 'org.springframework.security:spring-security-test'
     // === Mockito inline mock maker：支持 mockStatic 静态方法 mock ===
-    // Spring Boot 3.2.5 BOM 管理 Mockito 5.2.0 版本，mockito-inline 需显式指定版本对齐。
+    // Spring Boot 3.3.13 BOM 管理 Mockito 版本，mockito-inline 需显式指定版本对齐。
     // 修复 MockitoException: SubclassByteBuddyMockMaker does not support static mocks
     testImplementation 'org.mockito:mockito-inline:5.2.0'
     // === P0-3a：PSP 集成测试 — WireMock 模拟 Stripe / Adyen HTTP API ===

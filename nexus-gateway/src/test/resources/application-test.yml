@@ -14,6 +14,7 @@
 #    sandbox profile 的禁用配置在 main/resources/application-sandbox.yml 中补充。
 #    本文件作为标准 test profile 供新测试使用。
 spring:
+
   # === 允许 Bean 定义覆盖：PaymentE2EIntegrationTest 等测试需要覆盖部分 Bean ===
   # 修复 BeanDefinitionOverrideException
   main:

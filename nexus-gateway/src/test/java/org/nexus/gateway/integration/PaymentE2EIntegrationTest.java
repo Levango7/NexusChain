@@ -42,7 +42,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
-@ActiveProfiles("test")
+@ActiveProfiles({"test", "sandbox"})
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 @Import(PaymentE2EIntegrationTest.TestSecurityConfig.class)
 class PaymentE2EIntegrationTest {
@@ -83,6 +83,9 @@ class PaymentE2EIntegrationTest {
     //      RequestSignatureInterceptorTest 单元测试覆盖。
     @MockBean private ApiKeyInterceptor apiKeyInterceptor;
     @MockBean private RequestSignatureInterceptor requestSignatureInterceptor;
+    // B4 Boot 3.3.13 升级修复：构造函数注入更严格，test profile 下无 RateLimiter bean
+    //（InMemoryRateLimiter @Profile({"dev","sandbox"})，RedisRateLimiter @Profile("prod")）
+    @MockBean private org.nexus.gateway.ratelimit.RateLimiter rateLimiter;
 
     @BeforeEach
     void setup() throws Exception {
@@ -90,6 +93,9 @@ class PaymentE2EIntegrationTest {
         // 放行所有请求，绕过 API Key 鉴权与 HMAC 请求签名校验
         when(apiKeyInterceptor.preHandle(any(), any(), any())).thenReturn(true);
         when(requestSignatureInterceptor.preHandle(any(), any(), any())).thenReturn(true);
+        // B4: @MockBean RateLimiter 的 tryAcquire() 默认返回 false → RateLimitAdapter 返回 429，
+        // 必须显式 stub 为 true 才能放行请求
+        when(rateLimiter.tryAcquire(any())).thenReturn(true);
         // 模拟 core 通道可用：ConnectorRegistry 会跳过 getId() 返回 null 的连接器，
         // 因此必须 stub getId() 返回非 null 值，isActive() 返回 true，
         // 才能让多通道路由引擎正确识别 core 通道为活跃状态。
