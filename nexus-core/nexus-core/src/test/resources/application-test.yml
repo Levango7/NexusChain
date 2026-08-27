@@ -22,3 +22,9 @@ spring:
   jpa:
     hibernate:
       ddl-auto: update
+
+# 测试环境禁用远程 ZK 服务（避免单测依赖 zk-groth16-service 进程；走本地逻辑路径）
+zk:
+  prover:
+    remote-verify-url:
+    remote-prove-url:
