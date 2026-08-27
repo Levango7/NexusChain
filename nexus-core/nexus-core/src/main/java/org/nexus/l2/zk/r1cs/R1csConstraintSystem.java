@@ -1,5 +1,6 @@
 package org.nexus.l2.zk.r1cs;
 
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -72,11 +73,34 @@ public final class R1csConstraintSystem {
     }
 
     /**
-     * 检查完整 witness 向量是否满足所有约束。
+     * 检查完整 witness 向量是否满足所有约束（BigInteger，A1-R3/ZK-P2-01）。
      *
      * @param witness 完整 witness 向量（长度需等于 {@link #getWitnessSize()}）
      * @return 全部约束成立返回 true
      */
+    public boolean isSatisfied(BigInteger[] witness) {
+        if (witness == null || witness.length != getWitnessSize()) {
+            return false;
+        }
+        if (!BigInteger.ONE.equals(witness[0])) {
+            return false;
+        }
+        for (R1csConstraint c : constraints) {
+            if (!c.isSatisfied(witness)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * 检查完整 witness 向量是否满足所有约束（long 兼容重载）。
+     *
+     * @param witness 完整 witness 向量（长度需等于 {@link #getWitnessSize()}）
+     * @return 全部约束成立返回 true
+     * @deprecated 使用 {@link #isSatisfied(BigInteger[])}
+     */
+    @Deprecated
     public boolean isSatisfied(long[] witness) {
         if (witness == null || witness.length != getWitnessSize()) {
             return false;
@@ -93,12 +117,39 @@ public final class R1csConstraintSystem {
     }
 
     /**
-     * 从公共输入和私密 witness 拼装完整 witness 向量。
+     * 从公共输入和私密 witness 拼装完整 witness 向量（BigInteger，A1-R3/ZK-P2-01）。
      *
      * @param publicInputs 公共输入值（长度需等于 numPublic）
      * @param privateWitness 私密 witness 值（长度需等于 numPrivate）
      * @return 完整 witness 向量
      */
+    public BigInteger[] buildWitness(BigInteger[] publicInputs, BigInteger[] privateWitness) {
+        if (publicInputs == null || publicInputs.length != numPublic) {
+            throw new IllegalArgumentException(
+                    "publicInputs length mismatch: expected " + numPublic
+                            + ", got " + (publicInputs == null ? 0 : publicInputs.length));
+        }
+        if (privateWitness == null || privateWitness.length != numPrivate) {
+            throw new IllegalArgumentException(
+                    "privateWitness length mismatch: expected " + numPrivate
+                            + ", got " + (privateWitness == null ? 0 : privateWitness.length));
+        }
+        BigInteger[] w = new BigInteger[getWitnessSize()];
+        w[0] = BigInteger.ONE;
+        System.arraycopy(publicInputs, 0, w, 1, numPublic);
+        System.arraycopy(privateWitness, 0, w, 1 + numPublic, numPrivate);
+        return w;
+    }
+
+    /**
+     * 从公共输入和私密 witness 拼装完整 witness 向量（long 兼容重载）。
+     *
+     * @param publicInputs 公共输入值（长度需等于 numPublic）
+     * @param privateWitness 私密 witness 值（长度需等于 numPrivate）
+     * @return 完整 witness 向量
+     * @deprecated 使用 {@link #buildWitness(BigInteger[], BigInteger[])}
+     */
+    @Deprecated
     public long[] buildWitness(long[] publicInputs, long[] privateWitness) {
         if (publicInputs == null || publicInputs.length != numPublic) {
             throw new IllegalArgumentException(

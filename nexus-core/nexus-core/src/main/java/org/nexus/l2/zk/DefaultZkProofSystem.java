@@ -12,6 +12,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
+import java.math.BigInteger;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
@@ -206,7 +207,7 @@ public class DefaultZkProofSystem implements ZkProofSystem {
         if (isGroth16Proof(data) && groth16 != null) {
             try {
                 Groth16Proof g16Proof = decodeGroth16Proof(data);
-                long[] publicInputs = extractPublicInputs(publicInput);
+                BigInteger[] publicInputs = extractPublicInputs(publicInput);
                 // ZK 方案 C：配置了真实远程验证服务时优先走 BN254 配对（fail-closed）
                 if (remoteVerifyUrl != null && !remoteVerifyUrl.isBlank()) {
                     boolean remoteValid = groth16.verifyRemote(remoteVerifyUrl, publicInputs);
@@ -290,43 +291,50 @@ public class DefaultZkProofSystem implements ZkProofSystem {
 
     private Groth16Proof proveGroth16(ZkCircuit circuit, byte[] witness, ZkPublicInput publicInput) {
         R1csConstraintSystem r1cs = circuit.buildR1cs();
-        long[] fullWitness = buildWitnessFromInputs(circuit, witness, publicInput, r1cs);
+        BigInteger[] fullWitness = buildWitnessFromInputs(circuit, witness, publicInput, r1cs);
         return groth16.prove(circuit.getCircuitId(), r1cs, fullWitness);
     }
 
     /**
-     * 从 witness byte[] 和公共输入构造完整 R1CS witness 向量。
+     * 从 witness byte[] 和公共输入构造完整 R1CS witness 向量（A1-R3：BigInteger 域）。
      *
      * <p>针对 RollupStateTransitionCircuit 优化：解析 witness 中的 txEffects，
-     * 结合公共输入（preStateRoot, postStateRoot, batchDataHash）构造完整 witness。</p>
+     * 结合公共输入（preStateRoot, postStateRoot, batchDataHash）构造完整 witness。
+     * 状态根经 {@link RollupStateTransitionCircuit#hashToBigInteger} 映射为 256 位
+     * BigInteger，无 long 截断（ZK-P2-01 关闭）。</p>
      */
-    private long[] buildWitnessFromInputs(ZkCircuit circuit, byte[] witness,
-                                          ZkPublicInput publicInput,
-                                          R1csConstraintSystem r1cs) {
-        // 提取公共输入
-        long preStateRoot = RollupStateTransitionCircuit.hashToLong(publicInput.getPreStateRoot());
-        long postStateRoot = RollupStateTransitionCircuit.hashToLong(publicInput.getPostStateRoot());
-        long batchDataHash = RollupStateTransitionCircuit.hashToLong(publicInput.getBatchDataHash());
+    private BigInteger[] buildWitnessFromInputs(ZkCircuit circuit, byte[] witness,
+                                                ZkPublicInput publicInput,
+                                                R1csConstraintSystem r1cs) {
+        // 提取公共输入（256 位 BigInteger）
+        BigInteger preStateRoot = RollupStateTransitionCircuit.hashToBigInteger(publicInput.getPreStateRoot());
+        BigInteger postStateRoot = RollupStateTransitionCircuit.hashToBigInteger(publicInput.getPostStateRoot());
+        BigInteger batchDataHash = RollupStateTransitionCircuit.hashToBigInteger(publicInput.getBatchDataHash());
 
         // 解析 witness 中的 txEffects
         long[] txEffects = decodeWitnessEffects(witness);
 
-        // 若电路是 RollupStateTransitionCircuit，使用其 buildWitness 方法
+        // 若电路是 RollupStateTransitionCircuit，使用其 BigInteger witness 构造方法
         if (circuit instanceof RollupStateTransitionCircuit) {
             RollupStateTransitionCircuit rollupCircuit = (RollupStateTransitionCircuit) circuit;
-            // 调整 txEffects 长度以匹配 maxBatchSize
+            // 调整 txEffects 长度以匹配 maxBatchSize（缺失补 0，由构造方法处理）
             int maxBatch = rollupCircuit.getMaxBatchSize();
             long[] adjusted = new long[Math.min(txEffects.length, maxBatch)];
             System.arraycopy(txEffects, 0, adjusted, 0, adjusted.length);
-            return rollupCircuit.buildWitness(preStateRoot, postStateRoot, batchDataHash, adjusted);
+            return rollupCircuit.buildWitnessBigIntegerArray(preStateRoot, postStateRoot, 0L, adjusted);
         }
 
-        // 通用回退：直接拼装
-        long[] publicInputs = {preStateRoot, postStateRoot, batchDataHash};
+        // 通用回退：直接拼装（BigInteger）
+        BigInteger[] publicInputs = {preStateRoot, postStateRoot, batchDataHash};
         int numPrivate = r1cs.getNumPrivate();
-        long[] privateWitness = new long[numPrivate];
+        BigInteger[] privateWitness = new BigInteger[numPrivate];
         int copyLen = Math.min(txEffects.length, numPrivate);
-        System.arraycopy(txEffects, 0, privateWitness, 0, copyLen);
+        for (int i = 0; i < copyLen; i++) {
+            privateWitness[i] = BigInteger.valueOf(txEffects[i]);
+        }
+        for (int i = copyLen; i < numPrivate; i++) {
+            privateWitness[i] = BigInteger.ZERO;
+        }
         return r1cs.buildWitness(publicInputs, privateWitness);
     }
 
@@ -362,11 +370,11 @@ public class DefaultZkProofSystem implements ZkProofSystem {
         return effects;
     }
 
-    private long[] extractPublicInputs(ZkPublicInput publicInput) {
-        long pre = RollupStateTransitionCircuit.hashToLong(publicInput.getPreStateRoot());
-        long post = RollupStateTransitionCircuit.hashToLong(publicInput.getPostStateRoot());
-        long hash = RollupStateTransitionCircuit.hashToLong(publicInput.getBatchDataHash());
-        return new long[]{pre, post, hash};
+    private BigInteger[] extractPublicInputs(ZkPublicInput publicInput) {
+        BigInteger pre = RollupStateTransitionCircuit.hashToBigInteger(publicInput.getPreStateRoot());
+        BigInteger post = RollupStateTransitionCircuit.hashToBigInteger(publicInput.getPostStateRoot());
+        BigInteger hash = RollupStateTransitionCircuit.hashToBigInteger(publicInput.getBatchDataHash());
+        return new BigInteger[]{pre, post, hash};
     }
 
     // ==================== 证明编码/解码 ====================

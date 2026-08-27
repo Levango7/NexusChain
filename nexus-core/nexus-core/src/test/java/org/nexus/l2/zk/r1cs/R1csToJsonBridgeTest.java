@@ -2,6 +2,7 @@ package org.nexus.l2.zk.r1cs;
 
 import org.junit.jupiter.api.Test;
 
+import java.math.BigInteger;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -14,17 +15,18 @@ class R1csToJsonBridgeTest {
 
     /** 构造 x^3 + x + 5 = 35 电路（witness=[1,35,3,9,27]） */
     private R1csConstraintSystem cubeCircuit() {
-        Map<Integer, Long> a1 = new LinkedHashMap<>(); a1.put(2, 1L);
-        Map<Integer, Long> b1 = new LinkedHashMap<>(); b1.put(2, 1L);
-        Map<Integer, Long> c1 = new LinkedHashMap<>(); c1.put(3, 1L);
+        Map<Integer, BigInteger> a1 = new LinkedHashMap<>(); a1.put(2, BigInteger.ONE);
+        Map<Integer, BigInteger> b1 = new LinkedHashMap<>(); b1.put(2, BigInteger.ONE);
+        Map<Integer, BigInteger> c1 = new LinkedHashMap<>(); c1.put(3, BigInteger.ONE);
 
-        Map<Integer, Long> a2 = new LinkedHashMap<>(); a2.put(3, 1L);
-        Map<Integer, Long> b2 = new LinkedHashMap<>(); b2.put(2, 1L);
-        Map<Integer, Long> c2 = new LinkedHashMap<>(); c2.put(4, 1L);
+        Map<Integer, BigInteger> a2 = new LinkedHashMap<>(); a2.put(3, BigInteger.ONE);
+        Map<Integer, BigInteger> b2 = new LinkedHashMap<>(); b2.put(2, BigInteger.ONE);
+        Map<Integer, BigInteger> c2 = new LinkedHashMap<>(); c2.put(4, BigInteger.ONE);
 
-        Map<Integer, Long> a3 = new LinkedHashMap<>(); a3.put(4, 1L); a3.put(2, 1L); a3.put(0, 5L);
-        Map<Integer, Long> b3 = new LinkedHashMap<>(); b3.put(0, 1L);
-        Map<Integer, Long> c3 = new LinkedHashMap<>(); c3.put(1, 1L);
+        Map<Integer, BigInteger> a3 = new LinkedHashMap<>();
+        a3.put(4, BigInteger.ONE); a3.put(2, BigInteger.ONE); a3.put(0, BigInteger.valueOf(5));
+        Map<Integer, BigInteger> b3 = new LinkedHashMap<>(); b3.put(0, BigInteger.ONE);
+        Map<Integer, BigInteger> c3 = new LinkedHashMap<>(); c3.put(1, BigInteger.ONE);
 
         java.util.List<R1csConstraint> cons = java.util.List.of(
                 new R1csConstraint(a1, b1, c1),

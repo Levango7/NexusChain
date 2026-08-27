@@ -2,6 +2,7 @@ package org.nexus.l2.zk.r1cs;
 
 import org.junit.jupiter.api.Test;
 
+import java.math.BigInteger;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -59,7 +60,7 @@ class R1csConstraintSystemTest {
     @Test
     void isSatisfiedNullReturnsFalse() {
         R1csConstraintSystem sys = new R1csConstraintSystem(0, 0, Collections.emptyList());
-        assertFalse(sys.isSatisfied(null));
+        assertFalse(sys.isSatisfied((BigInteger[]) null));
     }
 
     @Test
@@ -120,7 +121,7 @@ class R1csConstraintSystemTest {
     void buildWitnessNullThrows() {
         R1csConstraintSystem sys = new R1csConstraintSystem(0, 0, Collections.emptyList());
         assertThrows(IllegalArgumentException.class, () ->
-                sys.buildWitness(null, null));
+                sys.buildWitness((BigInteger[]) null, (BigInteger[]) null));
     }
 
     @Test

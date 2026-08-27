@@ -62,14 +62,17 @@ public final class R1csSatisfactionProof {
 
     /**
      * 单条 R1CS 约束的满足性证明。
+     *
+     * <p><b>A1-R3（ZK-P2-01）</b>：{@code aVal/bVal/cVal} 由 {@code long} 升级为
+     * {@link BigInteger}，解除 64 位编码对 256 位状态根 witness 的精度限制。</p>
      */
     public static final class ConstraintProof {
         /** A·w 的求值值（公开供 verifier 验证 aVal * bVal == cVal） */
-        private final long aVal;
+        private final BigInteger aVal;
         /** B·w 的求值值 */
-        private final long bVal;
+        private final BigInteger bVal;
         /** C·w 的求值值 */
-        private final long cVal;
+        private final BigInteger cVal;
         /** Pedersen 承诺 C = aVal·G + bVal·H + cVal·K + r·L */
         private final ECPoint commitment;
         /** Schnorr 协议的 T 点 */
@@ -83,7 +86,7 @@ public final class R1csSatisfactionProof {
         /** Schnorr 响应 zR */
         private final BigInteger zR;
 
-        public ConstraintProof(long aVal, long bVal, long cVal,
+        public ConstraintProof(BigInteger aVal, BigInteger bVal, BigInteger cVal,
                                ECPoint commitment, ECPoint tPoint,
                                BigInteger zA, BigInteger zB, BigInteger zC, BigInteger zR) {
             this.aVal = aVal;
@@ -97,9 +100,9 @@ public final class R1csSatisfactionProof {
             this.zR = zR;
         }
 
-        public long getAVal() { return aVal; }
-        public long getBVal() { return bVal; }
-        public long getCVal() { return cVal; }
+        public BigInteger getAVal() { return aVal; }
+        public BigInteger getBVal() { return bVal; }
+        public BigInteger getCVal() { return cVal; }
         public ECPoint getCommitment() { return commitment; }
         public ECPoint getTPoint() { return tPoint; }
         public BigInteger getZA() { return zA; }
@@ -110,7 +113,7 @@ public final class R1csSatisfactionProof {
         @Override
         public String toString() {
             return "ConstraintProof{aVal=" + aVal + ", bVal=" + bVal + ", cVal=" + cVal
-                    + ", aTimesB=" + (aVal * bVal) + ", satisfied=" + (aVal * bVal == cVal) + '}';
+                    + ", satisfied=" + (aVal.multiply(bVal).equals(cVal)) + '}';
         }
     }
 

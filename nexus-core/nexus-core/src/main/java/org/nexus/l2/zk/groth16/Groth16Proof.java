@@ -135,10 +135,10 @@ public final class Groth16Proof {
         bos.write(count & 0xFF);
         bos.write((count >> 8) & 0xFF);
         for (R1csSatisfactionProof.ConstraintProof cp : proofs) {
-            // aVal, bVal, cVal (8 bytes each, little-endian)
-            bos.write(longToBytesLE(cp.getAVal()));
-            bos.write(longToBytesLE(cp.getBVal()));
-            bos.write(longToBytesLE(cp.getCVal()));
+            // aVal, bVal, cVal (BigInteger as [len(4)][bytes])
+            writeBigInteger(bos, cp.getAVal());
+            writeBigInteger(bos, cp.getBVal());
+            writeBigInteger(bos, cp.getCVal());
             // commitment, tPoint
             writePoint(bos, cp.getCommitment());
             writePoint(bos, cp.getTPoint());
@@ -223,12 +223,12 @@ public final class Groth16Proof {
         R1csSatisfactionProof.ConstraintProof[] proofs =
                 new R1csSatisfactionProof.ConstraintProof[count];
         for (int i = 0; i < count; i++) {
-            long aVal = readLongLE(bytes, pos);
-            pos += 8;
-            long bVal = readLongLE(bytes, pos);
-            pos += 8;
-            long cVal = readLongLE(bytes, pos);
-            pos += 8;
+            BigInteger aVal = readBigInteger(bytes, pos);
+            pos += 4 + readUIntLE(bytes, pos);
+            BigInteger bVal = readBigInteger(bytes, pos);
+            pos += 4 + readUIntLE(bytes, pos);
+            BigInteger cVal = readBigInteger(bytes, pos);
+            pos += 4 + readUIntLE(bytes, pos);
 
             ECPoint commitment = readPoint(bytes, pos);
             pos += 2 + readUShortLE(bytes, pos);

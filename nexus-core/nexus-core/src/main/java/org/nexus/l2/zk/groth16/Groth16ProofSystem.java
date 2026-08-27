@@ -229,6 +229,24 @@ public class Groth16ProofSystem {
      * @return 验证结果；服务不可用或异常返回 false（fail-closed，不降级到 Schnorr）
      */
     public boolean verifyRemote(String remoteUrl, long[] publicInputs) {
+        if (publicInputs == null) {
+            return verifyRemote(remoteUrl, (BigInteger[]) null);
+        }
+        BigInteger[] bigInputs = new BigInteger[publicInputs.length];
+        for (int i = 0; i < publicInputs.length; i++) {
+            bigInputs[i] = BigInteger.valueOf(publicInputs[i]);
+        }
+        return verifyRemote(remoteUrl, bigInputs);
+    }
+
+    /**
+     * 远程真实验证（A1-R3：BigInteger 公共输入，支持 256 位状态根）。
+     *
+     * @param remoteUrl   服务地址（如 http://localhost:50062/v1/verify）
+     * @param publicInputs 公共输入（十进制传输，BigInteger 无精度损失）
+     * @return 验证结果；服务不可用或异常返回 false（fail-closed，不降级到 Schnorr）
+     */
+    public boolean verifyRemote(String remoteUrl, BigInteger[] publicInputs) {
         try {
             java.net.URI uri = java.net.URI.create(remoteUrl);
             java.net.http.HttpClient client = java.net.http.HttpClient.newBuilder()
@@ -236,9 +254,9 @@ public class Groth16ProofSystem {
                     .build();
             java.util.List<String> inputs = new java.util.ArrayList<>();
             if (publicInputs != null) {
-                for (long v : publicInputs) {
+                for (BigInteger v : publicInputs) {
                     // ark Fr::from_str 解析十进制（非 hex）——直接十进制传输
-                    inputs.add(java.math.BigInteger.valueOf(v).toString());
+                    inputs.add(v == null ? "0" : v.toString());
                 }
             }
             String body = "{\"public_inputs_hex\":" + toJsonArray(inputs) + "}";
@@ -396,6 +414,22 @@ public class Groth16ProofSystem {
      * @return Groth16 证明 (A=承诺, B=随机承诺, C=响应点, r1csProof)
      */
     public Groth16Proof prove(String circuitId, R1csConstraintSystem constraintSystem, long[] witness) {
+        BigInteger[] bigWitness = new BigInteger[witness.length];
+        for (int i = 0; i < witness.length; i++) {
+            bigWitness[i] = BigInteger.valueOf(witness[i]);
+        }
+        return prove(circuitId, constraintSystem, bigWitness);
+    }
+
+    /**
+     * 生成 Groth16 证明（A1-R3：BigInteger witness，解除 ZK-P2-01 64 位编码限制）。
+     *
+     * @param circuitId        电路 ID
+     * @param constraintSystem R1CS 约束系统
+     * @param witness          完整 witness 向量（长度需等于 witnessSize）
+     * @return Groth16 证明 (A=承诺, B=随机承诺, C=响应点, r1csProof)
+     */
+    public Groth16Proof prove(String circuitId, R1csConstraintSystem constraintSystem, BigInteger[] witness) {
         Groth16Setup setup = setups.get(circuitId);
         if (setup == null) {
             throw new IllegalStateException("setup not performed for circuit: " + circuitId);
@@ -420,7 +454,7 @@ public class Groth16ProofSystem {
         // 2. 计算 witness 摘要 d = Σ w_i · (i+1) mod n（用于 Schnorr 证明）
         BigInteger d = BigInteger.ZERO;
         for (int i = 0; i < witness.length; i++) {
-            d = ZkCurveParams.mod(d.add(BigInteger.valueOf(witness[i]).multiply(BigInteger.valueOf(i + 1))));
+            d = ZkCurveParams.mod(d.add(witness[i].multiply(BigInteger.valueOf(i + 1))));
         }
 
         // 3. 计算承诺 C = d · G + r · H（对 witness 摘要的 Pedersen 承诺）
@@ -439,7 +473,7 @@ public class Groth16ProofSystem {
 
         // 5. Fiat-Shamir 挑战 e = H(C, T, publicInput, circuitId)
         //    注意：用公共输入（witness[1..numPublic]）计算，确保 prover/verifier 一致
-        long[] publicInputsForChallenge = extractPublicInputs(witness, constraintSystem.getNumPublic());
+        BigInteger[] publicInputsForChallenge = extractPublicInputs(witness, constraintSystem.getNumPublic());
         BigInteger challenge = computeChallenge(commitment, tPoint, circuitId, publicInputsForChallenge);
 
         // 6. 响应 z_d = t_d + e · d, z_r = t_r + e · r
@@ -477,7 +511,7 @@ public class Groth16ProofSystem {
      * </ul>
      */
     private R1csSatisfactionProof generateR1csSatisfactionProof(
-            String circuitId, R1csConstraintSystem constraintSystem, long[] witness,
+            String circuitId, R1csConstraintSystem constraintSystem, BigInteger[] witness,
             Groth16ProvingKey pk, Groth16VerifyingKey vk) {
 
         List<R1csConstraint> constraints = constraintSystem.getConstraints();
@@ -493,13 +527,13 @@ public class Groth16ProofSystem {
         for (int i = 0; i < constraints.size(); i++) {
             R1csConstraint constraint = constraints.get(i);
 
-            // 计算 aVal = A·w, bVal = B·w, cVal = C·w
-            long aVal = dot(constraint.getA(), witness);
-            long bVal = dot(constraint.getB(), witness);
-            long cVal = dot(constraint.getC(), witness);
+            // 计算 aVal = A·w, bVal = B·w, cVal = C·w（BigInteger，无精度损失）
+            BigInteger aVal = dot(constraint.getA(), witness);
+            BigInteger bVal = dot(constraint.getB(), witness);
+            BigInteger cVal = dot(constraint.getC(), witness);
 
             // prover 自检（isSatisfied 已验证，此处冗余但安全）
-            if (aVal * bVal != cVal) {
+            if (!aVal.multiply(bVal).equals(cVal)) {
                 throw new IllegalStateException(
                         "R1CS constraint " + i + " not satisfied: " + aVal + " * " + bVal + " != " + cVal);
             }
@@ -508,10 +542,10 @@ public class Groth16ProofSystem {
             BigInteger r = ZkCurveParams.randomScalar(random);
             ECPoint commitment = ZkCurveParams.add(
                     ZkCurveParams.add(
-                            ZkCurveParams.scalarMultiply(g, BigInteger.valueOf(aVal)),
-                            ZkCurveParams.scalarMultiply(h, BigInteger.valueOf(bVal))),
+                            ZkCurveParams.scalarMultiply(g, aVal),
+                            ZkCurveParams.scalarMultiply(h, bVal)),
                     ZkCurveParams.add(
-                            ZkCurveParams.scalarMultiply(k, BigInteger.valueOf(cVal)),
+                            ZkCurveParams.scalarMultiply(k, cVal),
                             ZkCurveParams.scalarMultiply(l, r)));
 
             // Schnorr 协议：生成随机 t_a, t_b, t_c, t_r，计算 T = t_a·G + t_b·H + t_c·K + t_r·L
@@ -531,9 +565,9 @@ public class Groth16ProofSystem {
             BigInteger challenge = computeR1csChallenge(commitment, tPoint, i, circuitId);
 
             // 响应 zA = t_a + e·aVal, zB = t_b + e·bVal, zC = t_c + e·cVal, zR = t_r + e·r
-            BigInteger zA = ZkCurveParams.mod(tA.add(challenge.multiply(BigInteger.valueOf(aVal))));
-            BigInteger zB = ZkCurveParams.mod(tB.add(challenge.multiply(BigInteger.valueOf(bVal))));
-            BigInteger zC = ZkCurveParams.mod(tC.add(challenge.multiply(BigInteger.valueOf(cVal))));
+            BigInteger zA = ZkCurveParams.mod(tA.add(challenge.multiply(aVal)));
+            BigInteger zB = ZkCurveParams.mod(tB.add(challenge.multiply(bVal)));
+            BigInteger zC = ZkCurveParams.mod(tC.add(challenge.multiply(cVal)));
             BigInteger zR = ZkCurveParams.mod(tR.add(challenge.multiply(r)));
 
             proofs[i] = new R1csSatisfactionProof.ConstraintProof(
@@ -560,6 +594,25 @@ public class Groth16ProofSystem {
      * @return 验证通过返回 true
      */
     public boolean verify(String circuitId, Groth16Proof proof, long[] publicInputs) {
+        if (publicInputs == null) {
+            return verify(circuitId, proof, (BigInteger[]) null);
+        }
+        BigInteger[] bigInputs = new BigInteger[publicInputs.length];
+        for (int i = 0; i < publicInputs.length; i++) {
+            bigInputs[i] = BigInteger.valueOf(publicInputs[i]);
+        }
+        return verify(circuitId, proof, bigInputs);
+    }
+
+    /**
+     * 验证 Groth16 证明（A1-R3：BigInteger publicInputs，解除 ZK-P2-01 64 位限制）。
+     *
+     * @param circuitId     电路 ID
+     * @param proof         Groth16 证明
+     * @param publicInputs  公共输入值（长度需等于 numPublic）
+     * @return 验证通过返回 true
+     */
+    public boolean verify(String circuitId, Groth16Proof proof, BigInteger[] publicInputs) {
         Groth16Setup setup = setups.get(circuitId);
         if (setup == null) {
             logger.warn("Groth16 verify: setup not found for circuit {}", circuitId);
@@ -648,11 +701,11 @@ public class Groth16ProofSystem {
         for (int i = 0; i < constraintProofs.length; i++) {
             R1csSatisfactionProof.ConstraintProof cp = constraintProofs[i];
 
-            // 验证 1: R1CS 约束等式 aVal * bVal == cVal
-            long aVal = cp.getAVal();
-            long bVal = cp.getBVal();
-            long cVal = cp.getCVal();
-            if (aVal * bVal != cVal) {
+            // 验证 1: R1CS 约束等式 aVal * bVal == cVal（BigInteger，A1-R3/ZK-P2-01）
+            BigInteger aVal = cp.getAVal();
+            BigInteger bVal = cp.getBVal();
+            BigInteger cVal = cp.getCVal();
+            if (!aVal.multiply(bVal).equals(cVal)) {
                 logger.warn("R1CS proof: constraint {} not satisfied: {} * {} != {}",
                         i, aVal, bVal, cVal);
                 return false;
@@ -724,6 +777,35 @@ public class Groth16ProofSystem {
                 ctxBuf.putLong(v);
             }
             md.update(ctxBuf.array());
+            byte[] baseHash = md.digest();
+            // 映射到 F_n，零挑战时通过 counter 扰动重新生成
+            return mapHashToNonZeroScalar(baseHash, circuitId, "main");
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 not available", e);
+        }
+    }
+
+    /**
+     * 计算 Fiat-Shamir 挑战 e = H(C, T, circuitId, context)（A1-R3：BigInteger 版本）。
+     *
+     * <p>BigInteger 值以 {@link BigInteger#toByteArray()} 定长前缀序列化进入哈希，
+     * 支持 256 位状态根等大整数，消除 long 版本 64 位截断（ZK-P2-01）。</p>
+     */
+    private BigInteger computeChallenge(ECPoint commitment, ECPoint tPoint,
+                                        String circuitId, BigInteger[] context) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            md.update(ZkCurveParams.encodePoint(commitment));
+            md.update(ZkCurveParams.encodePoint(tPoint));
+            md.update(circuitId.getBytes(StandardCharsets.UTF_8));
+            if (context != null) {
+                for (BigInteger v : context) {
+                    byte[] b = v == null ? new byte[0] : v.toByteArray();
+                    md.update((byte) (b.length & 0xFF));
+                    md.update((byte) ((b.length >> 8) & 0xFF));
+                    md.update(b);
+                }
+            }
             byte[] baseHash = md.digest();
             // 映射到 F_n，零挑战时通过 counter 扰动重新生成
             return mapHashToNonZeroScalar(baseHash, circuitId, "main");
@@ -814,8 +896,23 @@ public class Groth16ProofSystem {
     }
 
     /**
-     * 计算稀疏向量与 witness 的点积。
+     * 计算稀疏向量与 witness 的点积（BigInteger，A1-R3/ZK-P2-01）。
      */
+    private static BigInteger dot(Map<Integer, BigInteger> coeffs, BigInteger[] witness) {
+        BigInteger sum = BigInteger.ZERO;
+        for (Map.Entry<Integer, BigInteger> e : coeffs.entrySet()) {
+            int idx = e.getKey();
+            if (idx >= 0 && idx < witness.length) {
+                sum = sum.add(e.getValue().multiply(witness[idx]));
+            }
+        }
+        return sum;
+    }
+
+    /**
+     * 计算稀疏向量与 witness 的点积（long 兼容重载）。
+     */
+    @Deprecated
     private static long dot(Map<Integer, Long> coeffs, long[] witness) {
         long sum = 0;
         for (Map.Entry<Integer, Long> e : coeffs.entrySet()) {
@@ -828,11 +925,28 @@ public class Groth16ProofSystem {
     }
 
     /**
-     * 从完整 witness 提取公共输入部分（witness[1..numPublic]）。
+     * 从完整 witness 提取公共输入部分（witness[1..numPublic]，BigInteger）。
      *
      * <p>witness 布局：[1, public_0, public_1, ..., private_0, ...]，
      * 公共输入从 index 1 开始，共 numPublic 个。</p>
      */
+    private static BigInteger[] extractPublicInputs(BigInteger[] witness, int numPublic) {
+        if (numPublic <= 0) {
+            return new BigInteger[0];
+        }
+        BigInteger[] publicInputs = new BigInteger[numPublic];
+        int copyLen = Math.min(numPublic, Math.max(0, witness.length - 1));
+        System.arraycopy(witness, 1, publicInputs, 0, copyLen);
+        return publicInputs;
+    }
+
+    /**
+     * 从完整 witness 提取公共输入部分（long 兼容重载）。
+     *
+     * <p>witness 布局：[1, public_0, public_1, ..., private_0, ...]，
+     * 公共输入从 index 1 开始，共 numPublic 个。</p>
+     */
+    @Deprecated
     private static long[] extractPublicInputs(long[] witness, int numPublic) {
         if (numPublic <= 0) {
             return new long[0];

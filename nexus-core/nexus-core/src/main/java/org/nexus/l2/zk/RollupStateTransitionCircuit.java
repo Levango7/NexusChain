@@ -216,35 +216,35 @@ public class RollupStateTransitionCircuit implements ZkCircuit {
             List<R1csConstraint> constraints = new ArrayList<>(3 + 2 * n);
 
             // C1: 状态守恒约束 — postStateRoot - preStateRoot - sumEffects = 0
-            java.util.Map<Integer, Long> c1Coeffs = new java.util.TreeMap<>();
-            c1Coeffs.put(2, 1L);              // postStateRoot
-            c1Coeffs.put(1, -1L);             // preStateRoot
-            c1Coeffs.put(sumEffectsIndex(), -1L); // sumEffects
+            java.util.Map<Integer, java.math.BigInteger> c1Coeffs = new java.util.TreeMap<>();
+            c1Coeffs.put(2, java.math.BigInteger.ONE);              // postStateRoot
+            c1Coeffs.put(1, java.math.BigInteger.valueOf(-1));      // preStateRoot
+            c1Coeffs.put(sumEffectsIndex(), java.math.BigInteger.valueOf(-1)); // sumEffects
             constraints.add(R1csConstraint.linear(c1Coeffs));
 
             // C2: 状态变更累加约束 — sumEffects - Σ txEffect_i = 0
-            java.util.Map<Integer, Long> c2Coeffs = new java.util.TreeMap<>();
-            c2Coeffs.put(sumEffectsIndex(), 1L);
+            java.util.Map<Integer, java.math.BigInteger> c2Coeffs = new java.util.TreeMap<>();
+            c2Coeffs.put(sumEffectsIndex(), java.math.BigInteger.ONE);
             for (int i = 0; i < n; i++) {
-                c2Coeffs.put(4 + i, -1L);
+                c2Coeffs.put(4 + i, java.math.BigInteger.valueOf(-1));
             }
             constraints.add(R1csConstraint.linear(c2Coeffs));
 
             // C3: Gas 累计约束 — totalGas - Σ txGas_i = 0
-            java.util.Map<Integer, Long> c3Coeffs = new java.util.TreeMap<>();
-            c3Coeffs.put(totalGasIndex(), 1L);
+            java.util.Map<Integer, java.math.BigInteger> c3Coeffs = new java.util.TreeMap<>();
+            c3Coeffs.put(totalGasIndex(), java.math.BigInteger.ONE);
             for (int i = 0; i < n; i++) {
-                c3Coeffs.put(txGasIndex(i), -1L);
+                c3Coeffs.put(txGasIndex(i), java.math.BigInteger.valueOf(-1));
             }
             constraints.add(R1csConstraint.linear(c3Coeffs));
 
             // C4..C4+n-1: Nonce 单调递增约束 — txNonce_i - accountNonce_i - 1 = 0
             // 即 txNonce_i = accountNonce_i + 1（nonce 严格递增）
             for (int i = 0; i < n; i++) {
-                java.util.Map<Integer, Long> nonceCoeffs = new java.util.TreeMap<>();
-                nonceCoeffs.put(txNonceIndex(i), 1L);         // txNonce_i
-                nonceCoeffs.put(accountNonceIndex(i), -1L);   // accountNonce_i
-                nonceCoeffs.put(0, -1L);                      // -1（常量）
+                java.util.Map<Integer, java.math.BigInteger> nonceCoeffs = new java.util.TreeMap<>();
+                nonceCoeffs.put(txNonceIndex(i), java.math.BigInteger.ONE);         // txNonce_i
+                nonceCoeffs.put(accountNonceIndex(i), java.math.BigInteger.valueOf(-1));   // accountNonce_i
+                nonceCoeffs.put(0, java.math.BigInteger.valueOf(-1));                      // -1（常量）
                 constraints.add(R1csConstraint.linear(nonceCoeffs));
             }
 
@@ -454,6 +454,109 @@ public class RollupStateTransitionCircuit implements ZkCircuit {
         long postLong = postStateRoot.longValueExact();
         // 委托至 long 重载（已含 txEffects 校验）
         return buildWitness(preLong, postLong, batchDataHash, txEffects);
+    }
+
+    /**
+     * 从完整参数构造 witness 向量（A1-R3：真正的 BigInteger 域，返回 BigInteger[]，无 long 截断）。
+     *
+     * <p>与 {@link #buildWitnessBigInteger(BigInteger, BigInteger, long, long[])} 不同，
+     * 本方法不将状态根折算为 long，witness 全部以 {@link BigInteger} 承载，
+     * 支持 256 位状态根全精度（ZK-P2-01 关闭）。</p>
+     *
+     * @param preStateRoot   前状态根（256 位 BigInteger，必须非空且非负）
+     * @param postStateRoot  后状态根（256 位 BigInteger，必须非空且非负）
+     * @param batchDataHash  批次数据哈希（数值编码）
+     * @param txEffects      每笔交易的状态变更效果（长度需 ≤ maxBatchSize）
+     * @return 完整 witness 向量（BigInteger[]）
+     * @throws IllegalArgumentException 若状态根为 null/负或 txEffects 长度超限
+     * @since 2.41.0
+     */
+    public java.math.BigInteger[] buildWitnessBigIntegerArray(
+            java.math.BigInteger preStateRoot, java.math.BigInteger postStateRoot,
+            long batchDataHash, long[] txEffects) {
+        if (preStateRoot == null) {
+            throw new IllegalArgumentException("preStateRoot cannot be null");
+        }
+        if (postStateRoot == null) {
+            throw new IllegalArgumentException("postStateRoot cannot be null");
+        }
+        if (preStateRoot.signum() < 0) {
+            throw new IllegalArgumentException(
+                    "preStateRoot must be non-negative: got " + preStateRoot);
+        }
+        if (postStateRoot.signum() < 0) {
+            throw new IllegalArgumentException(
+                    "postStateRoot must be non-negative: got " + postStateRoot);
+        }
+        int n = maxBatchSize;
+        if (txEffects == null || txEffects.length > n) {
+            throw new IllegalArgumentException(
+                    "txEffects length must be <= maxBatchSize (" + n + "), got "
+                            + (txEffects == null ? 0 : txEffects.length));
+        }
+        // 补齐到 maxBatchSize（缺失补 0）
+        long[] padded = new long[n];
+        if (txEffects != null) {
+            System.arraycopy(txEffects, 0, padded, 0, txEffects.length);
+        }
+        return buildWitnessBigIntegerArrayInternal(preStateRoot, postStateRoot, batchDataHash, padded);
+    }
+
+    private java.math.BigInteger[] buildWitnessBigIntegerArrayInternal(
+            java.math.BigInteger preStateRoot, java.math.BigInteger postStateRoot,
+            long batchDataHash, long[] paddedEffects) {
+        int n = maxBatchSize;
+        // 与 long 版 buildWitness 布局完全一致（见 buildWitness javadoc）：
+        // [1, pre, post, batchHash, effect_0..n-1, sumEffects, totalGas,
+        //  txGas_0..n-1, txNonce_0..n-1, accountNonce_0..n-1, sigR_0..n-1, sigS_0..n-1, sigRSProduct_0..n-1]
+        int numPublic = 3;
+        int numPrivate = 7 * n + 2;
+        int size = 1 + numPublic + numPrivate;
+        java.math.BigInteger[] w = new java.math.BigInteger[size];
+        w[0] = java.math.BigInteger.ONE;
+        w[1] = preStateRoot;
+        w[2] = postStateRoot;
+        w[3] = java.math.BigInteger.valueOf(batchDataHash);
+
+        long sum = 0;
+        long totalGas = 0;
+        // txEffect_i, txGas_i, txNonce_i, accountNonce_i, sigR_i, sigS_i, sigRSProduct_i
+        for (int i = 0; i < n; i++) {
+            w[4 + i] = java.math.BigInteger.valueOf(paddedEffects[i]);
+            sum += paddedEffects[i];
+            // txGas_i 无独立输入，默认 0（与 long 版一致：txGas 数组全 0）
+            w[2 * n + 2 + i] = java.math.BigInteger.valueOf(i + 1); // txNonce_i = i + 1
+            w[3 * n + 2 + i] = java.math.BigInteger.valueOf(i);     // accountNonce_i = i
+            w[4 * n + 2 + i] = java.math.BigInteger.ONE;            // sigR_i = 1
+            w[5 * n + 2 + i] = java.math.BigInteger.ONE;            // sigS_i = 1
+            w[6 * n + 2 + i] = java.math.BigInteger.ONE;            // sigRSProduct_i = 1
+        }
+        w[n + 1] = java.math.BigInteger.valueOf(sum);          // sumEffects (index n)
+        w[n + 2] = java.math.BigInteger.valueOf(totalGas);     // totalGas (index n+1)
+        return w;
+    }
+
+    /**
+     * 将字符串哈希为 256 位 BigInteger（A1-R3：替代有损 hashToLong）。
+     *
+     * <p>对输入字符串取 SHA-256 摘要并转为非负 BigInteger，完整承载 256 位
+     * 状态根空间，无碰撞风险（ZK-P2-01 关闭）。</p>
+     *
+     * @param hex 字符串（如十六进制状态根）
+     * @return 256 位 BigInteger 编码
+     */
+    public static java.math.BigInteger hashToBigInteger(String hex) {
+        if (hex == null || hex.isEmpty()) {
+            return java.math.BigInteger.ZERO;
+        }
+        try {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] digest = md.digest(hex.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            return new java.math.BigInteger(1, digest);
+        } catch (java.security.NoSuchAlgorithmException e) {
+            // SHA-256 必然可用；兜底退化为 hashToLong 的有损值
+            return java.math.BigInteger.valueOf(hashToLong(hex));
+        }
     }
 
     /**

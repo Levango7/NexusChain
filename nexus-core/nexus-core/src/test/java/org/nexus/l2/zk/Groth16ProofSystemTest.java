@@ -9,6 +9,7 @@ import org.nexus.l2.zk.groth16.R1csSatisfactionProof;
 import org.nexus.l2.zk.r1cs.R1csConstraint;
 import org.nexus.l2.zk.r1cs.R1csConstraintSystem;
 
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -155,10 +156,10 @@ public class Groth16ProofSystemTest {
         assertFalse(con.isSatisfied(new long[]{1, 6}));
 
         // linear: w[1] + w[2] - w[3] = 0
-        Map<Integer, Long> lin = new HashMap<>();
-        lin.put(1, 1L);
-        lin.put(2, 1L);
-        lin.put(3, -1L);
+        Map<Integer, BigInteger> lin = new HashMap<>();
+        lin.put(1, BigInteger.ONE);
+        lin.put(2, BigInteger.ONE);
+        lin.put(3, BigInteger.valueOf(-1));
         R1csConstraint linear = R1csConstraint.linear(lin);
         assertTrue(linear.isSatisfied(new long[]{1, 3, 4, 7}));
         assertFalse(linear.isSatisfied(new long[]{1, 3, 4, 8}));
@@ -218,10 +219,11 @@ public class Groth16ProofSystemTest {
 
         // 验证 R1CS 约束等式 aVal * bVal == cVal
         R1csSatisfactionProof.ConstraintProof cp = r1csProof.getConstraintProofs()[0];
-        assertEquals(6, cp.getAVal(), "aVal should be x=6");
-        assertEquals(7, cp.getBVal(), "bVal should be y=7");
-        assertEquals(42, cp.getCVal(), "cVal should be z=42");
-        assertEquals(42, cp.getAVal() * cp.getBVal(), "aVal * bVal should equal cVal");
+        assertEquals(BigInteger.valueOf(6), cp.getAVal(), "aVal should be x=6");
+        assertEquals(BigInteger.valueOf(7), cp.getBVal(), "bVal should be y=7");
+        assertEquals(BigInteger.valueOf(42), cp.getCVal(), "cVal should be z=42");
+        assertEquals(BigInteger.valueOf(42), cp.getAVal().multiply(cp.getBVal()),
+                "aVal * bVal should equal cVal");
 
         // 验证通过
         boolean valid = proofSystem.verify("p0_01_honest", proof, new long[0]);
@@ -493,7 +495,7 @@ public class Groth16ProofSystemTest {
             boolean isIdentity = c.getA().equals(c.getC())
                     && c.getB().size() == 1
                     && c.getB().containsKey(0)
-                    && c.getB().get(0) == 1L;
+                    && BigInteger.ONE.equals(c.getB().get(0));
             assertFalse(isIdentity, "R1CS should not contain identity constraints (txEffect * 1 = txEffect)");
         }
     }

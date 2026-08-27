@@ -1,5 +1,6 @@
 package org.nexus.l2.zk.r1cs;
 
+import java.math.BigInteger;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -26,13 +27,33 @@ public final class R1csToJsonBridge {
     private R1csToJsonBridge() {}
 
     /**
-     * 序列化约束系统 + witness 为桥接 JSON。
+     * 序列化约束系统 + witness 为桥接 JSON（long 兼容重载，委托 BigInteger 版本）。
+     *
+     * @param system  约束系统
+     * @param witness 完整 witness（w[0]=1，随后 public，再 private）
+     * @return JSON 字符串（无依赖的紧凑实现）
+     * @deprecated 使用 {@link #toJson(R1csConstraintSystem, BigInteger[])}
+     */
+    @Deprecated
+    public static String toJson(R1csConstraintSystem system, long[] witness) {
+        if (witness == null) {
+            return toJson(system, (BigInteger[]) null);
+        }
+        BigInteger[] bigWitness = new BigInteger[witness.length];
+        for (int i = 0; i < witness.length; i++) {
+            bigWitness[i] = BigInteger.valueOf(witness[i]);
+        }
+        return toJson(system, bigWitness);
+    }
+
+    /**
+     * 序列化约束系统 + witness 为桥接 JSON（A1-R3：BigInteger witness，支持 256 位状态根）。
      *
      * @param system  约束系统
      * @param witness 完整 witness（w[0]=1，随后 public，再 private）
      * @return JSON 字符串（无依赖的紧凑实现）
      */
-    public static String toJson(R1csConstraintSystem system, long[] witness) {
+    public static String toJson(R1csConstraintSystem system, BigInteger[] witness) {
         if (system == null || witness == null) {
             throw new IllegalArgumentException("system and witness are required");
         }
@@ -64,7 +85,7 @@ public final class R1csToJsonBridge {
                 + ",\"c\":" + toCoeffJson(c.getC()) + "}";
     }
 
-    private static String toCoeffJson(Map<Integer, Long> coeffs) {
+    private static String toCoeffJson(Map<Integer, BigInteger> coeffs) {
         StringBuilder sb = new StringBuilder("{");
         boolean first = true;
         // 按索引排序保证确定性
@@ -80,8 +101,32 @@ public final class R1csToJsonBridge {
 
     /**
      * 桥接 JSON 请求体（给 /v1/verify 的完整载荷：电路 + witness + 公共输入）。
+     *
+     * @deprecated 使用 {@link #verifyRequestBody(R1csConstraintSystem, BigInteger[], BigInteger[])}
      */
+    @Deprecated
     public static String verifyRequestBody(R1csConstraintSystem system, long[] witness, long[] publicInputs) {
+        if (witness == null) {
+            return verifyRequestBody(system, (BigInteger[]) null, (BigInteger[]) null);
+        }
+        BigInteger[] bigWitness = new BigInteger[witness.length];
+        for (int i = 0; i < witness.length; i++) {
+            bigWitness[i] = BigInteger.valueOf(witness[i]);
+        }
+        BigInteger[] bigInputs = null;
+        if (publicInputs != null) {
+            bigInputs = new BigInteger[publicInputs.length];
+            for (int i = 0; i < publicInputs.length; i++) {
+                bigInputs[i] = BigInteger.valueOf(publicInputs[i]);
+            }
+        }
+        return verifyRequestBody(system, bigWitness, bigInputs);
+    }
+
+    /**
+     * 桥接 JSON 请求体（给 /v1/verify 的完整载荷：电路 + witness + 公共输入，A1-R3：BigInteger）。
+     */
+    public static String verifyRequestBody(R1csConstraintSystem system, BigInteger[] witness, BigInteger[] publicInputs) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("num_public", system.getNumPublic());
         body.put("num_private", system.getNumPrivate());
@@ -118,6 +163,15 @@ public final class R1csToJsonBridge {
 
     private static String toJsonValue(Object v) {
         if (v instanceof Number) return v.toString();
+        if (v instanceof BigInteger[]) {
+            BigInteger[] arr = (BigInteger[]) v;
+            StringBuilder sb = new StringBuilder("[");
+            for (int i = 0; i < arr.length; i++) {
+                if (i > 0) sb.append(',');
+                sb.append(arr[i] == null ? "null" : arr[i].toString());
+            }
+            return sb.append(']').toString();
+        }
         if (v instanceof long[]) {
             long[] arr = (long[]) v;
             StringBuilder sb = new StringBuilder("[");
