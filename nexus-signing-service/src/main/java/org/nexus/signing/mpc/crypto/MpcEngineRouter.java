@@ -109,6 +109,17 @@ public class MpcEngineRouter {
     @Value("${mpc.engine.endpoints:}")
     private String endpoints;
 
+    /**
+     * 分布式模式（P2-T3，B2：可信协调器退役）。
+     *
+     * <p>{@code true}（生产 prod profile）时强制分布式部署：endpoints 必须配置
+     * 且不少于 3 个节点；partyIndex 超界时抛异常而非回退端点 0（fail-closed，
+     * 杜绝单进程全份额路径与错误路由）。{@code false}（默认，dev 兼容）保留
+     * 原可信协调器回退行为。</p>
+     */
+    @Value("${mpc.engine.distributed-mode:false}")
+    private boolean distributedMode;
+
     /** 引擎 gRPC 主机（单端点模式，向后兼容）。 */
     @Value("${mpc.engine.host:localhost}")
     private String host;
@@ -159,6 +170,23 @@ public class MpcEngineRouter {
     @PostConstruct
     public void init() {
         List<String> parsedEndpoints = parseEndpoints();
+
+        // P2-T3：分布式模式（prod）强制多端点，拒绝可信协调器单端点路径
+        if (distributedMode) {
+            if (parsedEndpoints.isEmpty()) {
+                throw new IllegalStateException(
+                        "MpcEngineRouter: distributed-mode=true requires mpc.engine.endpoints "
+                                + "configured (>=3 nodes, e.g. mpc-engine-0:50051,mpc-engine-1:50051,"
+                                + "mpc-engine-2:50051). Single-process trusted-coordinator mode "
+                                + "is forbidden in production (B2-T3).");
+            }
+            if (parsedEndpoints.size() < 3) {
+                throw new IllegalStateException(
+                        "MpcEngineRouter: distributed-mode=true requires >=3 endpoints, got "
+                                + parsedEndpoints.size() + ". Threshold signature (t-of-n) needs "
+                                + "at least 3 parties (B2-T3).");
+            }
+        }
 
         if (parsedEndpoints.isEmpty()) {
             log.warn("MpcEngineRouter: no endpoints configured — engine calls will fail");
@@ -247,6 +275,14 @@ public class MpcEngineRouter {
         }
         int idx = partyIndex;
         if (idx < 0 || idx >= channels.size()) {
+            // P2-T3：分布式模式（prod）下超界为配置/路由错误，fail-closed 拒绝静默回退
+            if (distributedMode) {
+                throw new IllegalArgumentException(
+                        "MpcEngineRouter: partyIndex=" + partyIndex + " out of range [0,"
+                                + (channels.size() - 1) + "] in distributed-mode — "
+                                + "endpoints configuration mismatch (B2-T3). Refusing to "
+                                + "fall back to endpoint 0 (would route to wrong party).");
+            }
             log.warn("MpcEngineRouter: partyIndex={} out of range [0,{}], falling back to endpoint 0",
                     partyIndex, channels.size() - 1);
             idx = 0;

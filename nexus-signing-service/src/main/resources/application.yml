@@ -211,6 +211,11 @@ mpc:
     # 优先于 host:port；为空时回退到单端点模式（向后兼容）。
     # 示例：mpc-engine-0:50051,mpc-engine-1:50051,mpc-engine-2:50051
     endpoints: ${NEX_MPC_ENGINE_ENDPOINTS:}
+    # === P2-T3（B2：可信协调器退役）：分布式模式强制开关 ===
+    # true（生产 prod profile 必须设置）：强制多端点（>=3 节点）+ partyIndex 超界
+    # fail-closed（抛异常而非回退端点 0），拒绝单进程全份额路径。
+    # false（默认，dev 兼容）：保留可信协调器回退行为。
+    distributed-mode: ${NEX_MPC_ENGINE_DISTRIBUTED:false}
     # 引擎 gRPC 主机（单端点模式，endpoints 为空时使用，向后兼容）
     host: ${NEX_MPC_ENGINE_HOST:localhost}
     # 引擎 gRPC 端口（Rust tonic server 默认 50051）

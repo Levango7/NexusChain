@@ -17,6 +17,12 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p>封装 blob 提交与可用性验证。当前为<b>模拟实现</b>：使用 SHA-256 模拟 KZG 承诺/证明，
  * 不依赖真实 BLS12-381 库。生产环境可替换为对接 L1 KZG 预编译合约的真实实现。</p>
  *
+ * <p><b>P3 降级声明（A1-R6 确认）</b>：KZG 为 SHA-256 模拟，<b>不具备真实 KZG 安全属性</b>
+ * （真实实现需 BLS12-381 配对：C = Σ blob[i]·sᵢ 为 G1 点，证明 π 为商多项式求值）。
+ * 配置开关 {@code l2.blob.kzg-mode}：默认 {@code mock}（模拟）；设为 {@code real}
+ * 时构造抛 {@link IllegalStateException} 拒绝启动——防止误配置导致"声称真实但实际模拟"
+ * 的错误安全声明。接入真实 KZG 库（c-kzg/blst 绑定）后再开放 {@code real}。</p>
+ *
  * <p>设计要点：</p>
  * <ul>
  *   <li>blob 字段元素编码：将批次数据按 32 字节切分填入 4096 个字段元素，不足补零</li>
@@ -55,13 +61,56 @@ public class Eip4844BlobCarrier implements BlobDataCarrier {
     /** L1 blob base fee（可动态更新，模拟 EIP-4844 fee market） */
     private volatile long currentBlobBaseFee;
 
+    /** KZG 模式（P3 降级声明）：mock（SHA-256 模拟，默认）/ real（真实 BLS12-381，未实现） */
+    private volatile String kzgMode;
+
     public Eip4844BlobCarrier() {
         this(DEFAULT_BLOB_BASE_FEE);
     }
 
     public Eip4844BlobCarrier(long defaultBlobBaseFee) {
+        this(defaultBlobBaseFee, "mock");
+    }
+
+    /**
+     * 构造（P3 降级声明）：显式指定 KZG 模式。
+     *
+     * @param defaultBlobBaseFee blob base fee
+     * @param kzgMode            kzg-mode：mock（默认，SHA-256 模拟）或 real（未实现，拒绝）
+     * @throws IllegalStateException kzgMode=real 时抛出（防止"声称真实但实际模拟"的错误安全声明）
+     */
+    public Eip4844BlobCarrier(long defaultBlobBaseFee, String kzgMode) {
         this.defaultBlobBaseFee = defaultBlobBaseFee;
         this.currentBlobBaseFee = defaultBlobBaseFee;
+        this.kzgMode = validateKzgMode(kzgMode);
+    }
+
+    /**
+     * 校验并返回 KZG 模式（P3：real 未实现，拒绝启动）。
+     *
+     * @param mode 配置值（可为 null，视为默认 mock）
+     * @return 规范化模式值（"mock"）
+     * @throws IllegalStateException mode=real（真实 KZG 未接入）
+     * @throws IllegalArgumentException 未知模式
+     */
+    private static String validateKzgMode(String mode) {
+        String normalized = mode == null ? "mock" : mode.trim().toLowerCase();
+        if ("real".equals(normalized)) {
+            throw new IllegalStateException(
+                    "l2.blob.kzg-mode=real 未实现：Eip4844BlobCarrier 的 KZG 承诺/证明仍为 "
+                            + "SHA-256 模拟（不具备真实 KZG 安全属性）。接入真实 BLS12-381 KZG "
+                            + "库（c-kzg/blst 绑定）前禁止声明 real（P3 降级声明）。");
+        }
+        if (!"mock".equals(normalized)) {
+            throw new IllegalArgumentException(
+                    "l2.blob.kzg-mode 仅支持 mock（模拟）或 real（未实现），got: " + mode);
+        }
+        return normalized;
+    }
+
+    /** 获取当前 KZG 模式（P3：mock / real） */
+    public String getKzgMode() {
+        return kzgMode;
     }
 
     @Override

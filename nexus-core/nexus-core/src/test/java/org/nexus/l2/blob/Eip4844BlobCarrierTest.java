@@ -30,6 +30,36 @@ public class Eip4844BlobCarrierTest {
         carrier = new Eip4844BlobCarrier();
     }
 
+    // ==================== P3: KZG 模式降级声明 ====================
+
+    @Test
+    public void kzgMode_defaultIsMock() {
+        assertEquals("mock", carrier.getKzgMode());
+    }
+
+    @Test
+    public void kzgMode_explicitMock_accepted() {
+        Eip4844BlobCarrier c = new Eip4844BlobCarrier(1L, "mock");
+        assertEquals("mock", c.getKzgMode());
+    }
+
+    @Test
+    public void kzgMode_real_rejected() {
+        // P3：真实 KZG 未实现，设 real 必须拒绝启动（防止错误安全声明）
+        assertThrows(IllegalStateException.class, () -> new Eip4844BlobCarrier(1L, "real"));
+    }
+
+    @Test
+    public void kzgMode_unknownValue_rejected() {
+        assertThrows(IllegalArgumentException.class, () -> new Eip4844BlobCarrier(1L, "hybrid"));
+    }
+
+    @Test
+    public void kzgMode_null_defaultsToMock() {
+        Eip4844BlobCarrier c = new Eip4844BlobCarrier(1L, null);
+        assertEquals("mock", c.getKzgMode());
+    }
+
     // ==================== carryBatchData ====================
 
     @Test
