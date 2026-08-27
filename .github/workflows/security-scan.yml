@@ -136,7 +136,16 @@ jobs:
         uses: actions/checkout@v4
 
       - name: 构建 Docker 镜像（仅用于扫描，不推送）
-        run: docker build -t ${{ matrix.module }}:scan ./${{ matrix.module }}
+        # P4-A：Java 模块 Dockerfile 要求 repo 根构建上下文（COPY 根级模块如
+        # nexus-core/nexus-sdk/nexus-consortium，project() 依赖解析），此前用
+        # 模块目录作上下文导致 docker build 失败（"/nexus-gateway": not found）；
+        # Rust 模块（mpc-engine/zk-groth16-service）为独立 COPY . .，用模块目录。
+        run: |
+          if [[ "${{ matrix.module }}" == "mpc-engine" || "${{ matrix.module }}" == "zk-groth16-service" ]]; then
+            docker build -t ${{ matrix.module }}:scan ./${{ matrix.module }}
+          else
+            docker build -t ${{ matrix.module }}:scan -f ./${{ matrix.module }}/Dockerfile .
+          fi
 
       - name: Trivy 镜像扫描 → SARIF
         # 钉 commit sha 提升供应链安全（v0.20.0 → b2933f565dbc598b29947660e66259e3c7bc8561）
