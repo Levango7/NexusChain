@@ -28,6 +28,7 @@ COPY gradle ./gradle
 COPY nexus-rpc-doc ./nexus-rpc-doc
 COPY nexus-core ./nexus-core
 COPY nexus-sdk ./nexus-sdk
+COPY nexus-common ./nexus-common
 # composite build 模块（根 settings.gradle includeBuild）
 COPY nexus-consortium ./nexus-consortium
 COPY nexus-settlement ./nexus-settlement

@@ -33,6 +33,7 @@ COPY gradle ./gradle
 COPY nexus-rpc-doc ./nexus-rpc-doc
 COPY nexus-core ./nexus-core
 COPY nexus-sdk ./nexus-sdk
+COPY nexus-common ./nexus-common
 COPY nexus-consortium ./nexus-consortium
 COPY nexus-settlement ./nexus-settlement
 COPY nexus-compliance ./nexus-compliance
