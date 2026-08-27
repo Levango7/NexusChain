@@ -1100,6 +1100,7 @@ dependencies = [
  "tonic-build",
  "tracing",
  "tracing-subscriber",
+ "zeroize",
  "zk-paillier",
 ]
 

@@ -93,7 +93,7 @@ impl mpc_crypto_service_server::MpcCryptoService for MpcCryptoServiceImpl {
     async fn dkg(&self, req: Request<DkgRequest>) -> Result<Response<DkgResponse>, Status> {
         // MPC-P1-05: 记录调用方身份（peer_addr），便于审计追溯
         let peer = req
-            .peer_addr()
+            .remote_addr()
             .map(|a| a.to_string())
             .unwrap_or_else(|| "unknown".to_string());
         let req = req.into_inner();
@@ -137,7 +137,7 @@ impl mpc_crypto_service_server::MpcCryptoService for MpcCryptoServiceImpl {
     async fn sign(&self, req: Request<SignRequest>) -> Result<Response<SignResponse>, Status> {
         // MPC-P1-05: 记录调用方身份
         let peer = req
-            .peer_addr()
+            .remote_addr()
             .map(|a| a.to_string())
             .unwrap_or_else(|| "unknown".to_string());
         let req = req.into_inner();
@@ -175,7 +175,7 @@ impl mpc_crypto_service_server::MpcCryptoService for MpcCryptoServiceImpl {
     ) -> Result<Response<AggregateResponse>, Status> {
         // MPC-P1-05: 记录调用方身份
         let peer = req
-            .peer_addr()
+            .remote_addr()
             .map(|a| a.to_string())
             .unwrap_or_else(|| "unknown".to_string());
         let req = req.into_inner();
@@ -354,10 +354,10 @@ impl AuthInterceptor {
 }
 
 impl tonic::service::Interceptor for AuthInterceptor {
-    fn call(&mut self, req: &Request<()>) -> Result<Request<()>, Status> {
+    fn call(&mut self, req: Request<()>) -> Result<Request<()>, Status> {
         // 空 token：跳过校验（开发模式）
         if self.expected_token.is_empty() {
-            return Ok(req.clone());
+            return Ok(req);
         }
 
         // 从 metadata 读取 Authorization 头
@@ -391,13 +391,15 @@ impl tonic::service::Interceptor for AuthInterceptor {
         }
 
         tracing::debug!("MPC-P1-05: gRPC request authorized");
-        Ok(req.clone())
+        Ok(req)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    // tonic 0.12: Interceptor trait 需显式引入才能调用 AuthInterceptor::call
+    use tonic::service::Interceptor;
 
     // ===== 中13: constant_time_compare 单元测试 =====
 
@@ -430,7 +432,8 @@ mod tests {
             AUTHORIZATION_HEADER,
             "Bearer secret-token".parse().unwrap(),
         );
-        assert!(interceptor.call(&req).is_ok());
+        // tonic 0.12: Interceptor::call 按值接收 Request（trait 签名变更）
+        assert!(interceptor.call(req).is_ok());
     }
 
     #[test]
@@ -441,7 +444,7 @@ mod tests {
             AUTHORIZATION_HEADER,
             "Bearer wrong-token".parse().unwrap(),
         );
-        let err = interceptor.call(&req).unwrap_err();
+        let err = interceptor.call(req).unwrap_err();
         assert_eq!(err.code(), tonic::Code::Unauthenticated);
     }
 
@@ -449,6 +452,6 @@ mod tests {
     fn auth_interceptor_skips_when_token_empty() {
         let mut interceptor = AuthInterceptor::new(String::new());
         let req = Request::new(());
-        assert!(interceptor.call(&req).is_ok(), "empty token should skip auth");
+        assert!(interceptor.call(req).is_ok(), "empty token should skip auth");
     }
 }

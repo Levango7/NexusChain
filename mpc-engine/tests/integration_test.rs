@@ -72,6 +72,7 @@
 
 
 use std::path::PathBuf;
+use std::str::FromStr;
 
 use tonic::metadata::MetadataValue;
 use tonic::transport::{Channel, ClientTlsConfig, Certificate, Identity};
@@ -776,10 +777,162 @@ async fn test_mtls_handshake() {
     println!("[test_mtls_handshake] ✓ mTLS 握手验证通过：合法证书成功，无证书被拒绝");
 }
 
+/// ## test_sign_with_offline_node（B2-T4）：2-of-3 下 1 节点离线仍可签名
+///
+/// **验证内容**（门限容错，G3）：
+/// 1. 执行 3 节点 DKG（node1/2/3）
+/// 2. SIGTERM 停止 node3（party_index=2）
+/// 3. 仅用剩余 2 个在线节点（party_index=0,1）签名并聚合
+/// 4. 用 secp256k1 验证签名（2-of-3 阈值满足，无需离线节点参与）
+///
+/// **协议背景**：
+/// GG20 阈值签名要求至少 threshold 个参与方协作。2-of-3 下 1 节点离线时，
+/// 剩余 2 节点仍满足 threshold=2，可独立完成签名——这是门限容错的直接证据
+/// （t-1 节点宕机仍可签名，B2 计划 G3 关闭）。
+///
+/// **运行方式**：
+/// ```bash
+/// bash scripts/start-mpc-cluster.sh
+/// cargo test --features tls --test integration_test -- --ignored test_sign_with_offline_node
+/// ```
+#[tokio::test]
+#[ignore = "需多节点环境：先 bash scripts/start-mpc-cluster.sh 启动集群"]
+async fn test_sign_with_offline_node() {
+    wait_all_nodes_healthy(30).await;
+
+    // ---------- 1. 3 节点 DKG ----------
+    let session_id = make_session_id("sign-offline-node");
+    let peer_endpoints: Vec<String> = NODE_ENDPOINTS.iter().map(|s| s.to_string()).collect();
+
+    let mut dkg_results = Vec::new();
+    for i in 0..3 {
+        let mut client = make_client(i).await;
+        let req = DkgRequest {
+            session_id: session_id.clone(),
+            threshold: THRESHOLD,
+            total_parties: TOTAL_PARTIES,
+            party_index: PARTY_INDICES[i],
+            curve: CURVE.to_string(),
+            peer_endpoints: peer_endpoints.clone(),
+        };
+        let resp = client
+            .dkg(with_auth(Request::new(req)))
+            .await
+            .expect(&format!("node{} DKG 失败", i + 1))
+            .into_inner();
+        assert!(resp.success, "node{} DKG 失败: {}", i + 1, resp.error);
+        dkg_results.push(resp);
+    }
+    let public_key = dkg_results[0].public_key.clone();
+    let msg_hash = make_message_hash();
+
+    // ---------- 2. SIGTERM 停止 node3（party_index=2） ----------
+    let pid_file = project_root().join(".run/node3.pid");
+    let pid_str = std::fs::read_to_string(&pid_file).expect(
+        format!(
+            "读取 node3 PID 文件失败 {}: 请确认集群由 start-mpc-cluster.sh 启动",
+            pid_file.display()
+        )
+        .as_str(),
+    );
+    let pid: u32 = pid_str.trim().parse().expect("PID 解析失败");
+
+    #[cfg(unix)]
+    {
+        let _ = nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(pid as i32),
+            nix::sys::signal::Signal::SIGTERM,
+        );
+        // 等待 node3 退出（最多 10 秒）
+        for _ in 0..100 {
+            if nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), None).is_err() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        panic!("test_sign_with_offline_node 仅支持 Linux（需 SIGTERM 信号）");
+    }
+    println!("[test_sign_with_offline_node] node3 (pid={}) 已离线", pid);
+
+    // ---------- 3. 剩余 2 个在线节点签名（party_index=0,1） ----------
+    let signing_parties = [0usize, 1];
+    let mut partial_sigs = Vec::new();
+    for &i in &signing_parties {
+        let mut client = make_client(i).await;
+        let req = SignRequest {
+            session_id: session_id.clone(),
+            public_key: public_key.clone(),
+            key_share: dkg_results[i].key_share.clone(),
+            message_hash: msg_hash.clone(),
+            party_index: PARTY_INDICES[i],
+            peer_endpoints: peer_endpoints.clone(),
+        };
+        let resp = client
+            .sign(with_auth(Request::new(req)))
+            .await
+            .expect(&format!("node{} Sign 失败", i + 1))
+            .into_inner();
+        assert!(resp.success, "node{} Sign 失败（node3 离线仍应成功）: {}", i + 1, resp.error);
+        assert!(
+            !resp.partial_signature.is_empty(),
+            "node{} partial_signature 为空",
+            i + 1
+        );
+        partial_sigs.push(resp.partial_signature);
+    }
+
+    // ---------- 4. 聚合签名（用 node1 作为聚合方） ----------
+    let mut agg_client = make_client(0).await;
+    let agg_req = AggregateRequest {
+        session_id: session_id.clone(),
+        public_key: public_key.clone(),
+        message_hash: msg_hash.clone(),
+        partial_signatures: partial_sigs,
+    };
+    let agg_resp = agg_client
+        .aggregate(with_auth(Request::new(agg_req)))
+        .await
+        .expect("Aggregate 失败")
+        .into_inner();
+    assert!(agg_resp.success, "Aggregate 失败: {}", agg_resp.error);
+    assert!(!agg_resp.r.is_empty(), "r 为空");
+    assert!(!agg_resp.s.is_empty(), "s 为空");
+
+    // ---------- 5. 用 secp256k1 验证签名 ----------
+    use secp256k1::{Message, PublicKey, Secp256k1, Signature};
+
+    let secp = Secp256k1::verification_only();
+    let pk_bytes = hex::decode(&public_key).expect("public_key hex 解码失败");
+    let pk = PublicKey::from_slice(&pk_bytes).expect("PublicKey 解析失败");
+
+    let r_bytes = hex::decode(&agg_resp.r).expect("r hex 解码失败");
+    let s_bytes = hex::decode(&agg_resp.s).expect("s hex 解码失败");
+    let mut sig_bytes = Vec::with_capacity(64);
+    sig_bytes.extend_from_slice(&r_bytes);
+    sig_bytes.extend_from_slice(&s_bytes);
+    let sig = Signature::from_compact(&sig_bytes).expect("Signature 解析失败");
+
+    let msg_bytes = hex::decode(&msg_hash).expect("message_hash hex 解码失败");
+    let msg = Message::from_slice(&msg_bytes).expect("Message 解析失败");
+
+    assert!(
+        secp.verify(&msg, &sig, &pk).is_ok(),
+        "签名验证失败：node3 离线后 2-of-3 签名应可通过 secp256k1 验证"
+    );
+
+    println!(
+        "[test_sign_with_offline_node] ✓ 2-of-3 容错签名成功（node3 离线），签名验证通过"
+    );
+}
+
 // =============================================================================
 // 测试套件入口（cargo test 自动发现 #[tokio::test] 函数，无需 main）
 // =============================================================================
 // 注：DKG/签名/阈值/mTLS 4 个稳定用例已去 #[ignore]（B2-T1），需集群环境——
 // 先 bash scripts/start-mpc-cluster.sh 启动集群，再 cargo test --features tls
-// --test integration_test；test_node_recovery 仍 #[ignore]，需 --ignored 显式运行。
+// --test integration_test；test_node_recovery 与 test_sign_with_offline_node
+// （B2-T4 容错用例）仍 #[ignore]，需 --ignored 显式运行。
 // 这避免在无多节点环境的常规 `cargo test` 中误触发网络连接超时。

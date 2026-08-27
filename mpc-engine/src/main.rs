@@ -212,8 +212,9 @@ async fn main() -> eyre::Result<()> {
     } else {
         MpcCryptoServiceImpl::default()
     };
-    let server = proto::mpc_crypto::mpc_crypto_service_server::MpcCryptoServiceServer::new(svc)
-        .interceptor(AuthInterceptor::new(auth_token));
+    let server = proto::mpc_crypto::mpc_crypto_service_server::MpcCryptoServiceServer::new(svc);
+    // tonic 0.12：AuthInterceptor 经 Server::builder().layer(...) 注入（生成的 server 无 interceptor 方法）
+    let auth_layer = tonic::service::interceptor(AuthInterceptor::new(auth_token));
 
     // MPC-P0-01 / MPC-P2-F5: TLS / mTLS 配置
     #[cfg(feature = "tls")]
@@ -244,6 +245,7 @@ async fn main() -> eyre::Result<()> {
                 );
                 tonic::transport::Server::builder()
                     .tls_config(tls_config)?
+                    .layer(auth_layer.clone())
                     .add_service(server)
                     .serve(bind)
                     .await?;
@@ -254,6 +256,7 @@ async fn main() -> eyre::Result<()> {
             let tls_config = ServerTlsConfig::new().identity(identity);
             tonic::transport::Server::builder()
                 .tls_config(tls_config)?
+                .layer(auth_layer.clone())
                 .add_service(server)
                 .serve(bind)
                 .await?;
@@ -305,6 +308,7 @@ async fn main() -> eyre::Result<()> {
     }
 
     tonic::transport::Server::builder()
+        .layer(auth_layer.clone())
         .add_service(server)
         .serve(bind)
         .await?;

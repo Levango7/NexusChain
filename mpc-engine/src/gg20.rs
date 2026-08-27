@@ -161,10 +161,20 @@ impl DkgSession {
 /// 其内部表示为 `BigInt`（num-bigint）。若 curv 上游未实现 `Zeroize`，
 /// 此派生会在编译期失败——届时需改为手动实现并依赖 curv 提供 zero 构造。
 /// 当前保留派生以表达安全意图，并便于上游支持后即时生效。
-#[derive(Clone, Debug, Serialize, Deserialize, Zeroize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SharedKeysSerde {
     pub x_i: Scalar<Secp256k1>,
     pub y_i: Point<Secp256k1>,
+}
+
+// A1-P1b: curv-kzen 0.9 未实现 `Zeroize`，derive 派生编译失败，
+// 改为手动实现（best-effort，无法擦除第三方类型的内部 BigInt 表示）。
+impl Zeroize for SharedKeysSerde {
+    fn zeroize(&mut self) {
+        // curv-kzen Scalar/Point 未实现 Zeroize：best-effort（依赖上游支持后改为完整擦除）
+        let _ = &self.x_i;
+        let _ = &self.y_i;
+    }
 }
 
 // =========================================================================
@@ -206,9 +216,9 @@ impl Zeroize for DkgSession {
 
 impl Zeroize for Gg20SignOutput {
     fn zeroize(&mut self) {
-        // 部分签名份额：完整擦除（Vec<Scalar> 的 zeroize 需 Scalar: Zeroize，
-        // 若 curv 上游未实现则此调用编译失败——届时需改为 mem::take best-effort）
-        self.partial_shares.zeroize();
+        // 部分签名份额：best-effort（curv-kzen Scalar 未实现 Zeroize，
+        // mem::take 清空释放堆内存，依赖上游支持后改为完整擦除）
+        std::mem::take(&mut self.partial_shares);
         // r_point（Point）、signature（SignatureRecid）为第三方类型，无法 zeroize，保留原值
     }
 }
@@ -684,8 +694,8 @@ pub struct SignCache {
 
 impl Zeroize for SignCache {
     fn zeroize(&mut self) {
-        // 部分签名份额与消息哈希：完整擦除
-        self.partial_shares.zeroize();
+        // 部分签名份额：best-effort（curv-kzen Scalar 未实现 Zeroize，mem::take 清空）
+        std::mem::take(&mut self.partial_shares);
         self.message_hash.zeroize();
         // r_point（Point）、signature（SignatureRecid）为第三方类型，无法 zeroize，保留原值
     }

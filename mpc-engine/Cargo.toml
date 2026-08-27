@@ -5,6 +5,12 @@ edition = "2021"
 description = "NexusChain MPC 密码学引擎（GG18/GG20 DKG/Sign/Aggregate），审计报告 §4.1 方案 A"
 license = "Apache-2.0"
 
+# P2-T4：lib target 暴露 proto 模块，供 tests/integration_test.rs 集成测试引用
+# （此前缺失导致集成测试编译失败：cannot find module or crate `mpc_engine`）。
+[lib]
+name = "mpc_engine"
+path = "src/lib.rs"
+
 [dependencies]
 tonic = "0.12"
 prost = "0.13"

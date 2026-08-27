@@ -159,10 +159,13 @@ impl SessionManager {
                 ));
             }
             // 幂等创建：刷新 updated_at（视为一次活动）
-            if let Some(info) = guard.get_mut(session_id) {
+            // 借用拆分：先取 info 更新 updated_at，再 clone 返回（避免 get_mut 与 clone 同时借用）
+            let updated = {
+                let info = guard.get_mut(session_id).expect("just verified by get");
                 info.updated_at = Instant::now();
-            }
-            return Ok(existing.clone());
+                info.clone()
+            };
+            return Ok(updated);
         }
 
         // 中11: session 数量上限检查（防 DoS）

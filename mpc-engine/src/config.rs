@@ -64,7 +64,7 @@ pub struct PeerConfig {
 /// `zeroize()` 将 `storage_key`（AES-256-GCM 密钥 hex）、`storage_keys`
 ///（多密钥映射）、`tls_key`（mTLS 私钥路径）等敏感材料内存清零。
 /// 未派生 `ZeroizeOnDrop` 以避免改变现有 Drop 语义，调用方需显式调用 `zeroize()`。
-#[derive(Clone, Debug, Serialize, Deserialize, Zeroize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PartyConfig {
     /// 本方索引（0..n），对应 DKG/Sign RPC 的 `party_index`。
     pub party_index: usize,
@@ -124,6 +124,26 @@ fn default_storage_key_version() -> u32 {
 /// `storage_key_source` 的 serde 默认值（"plain"）。
 fn default_storage_key_source() -> String {
     "plain".to_string()
+}
+
+/// 手动实现 `Zeroize`（A1-P1b）：zeroize 1.9 的 `derive(Zeroize)` 对含
+/// `HashMap` 的结构体派生失败（trait bound 不满足），改为手动擦除——
+/// `String`/`Vec` 字段直接 `zeroize()`，`HashMap<u32, String>` 逐 value 擦除，
+/// 与 `PeerConfig` 的派生实现保持一致的安全意图。
+impl Zeroize for PartyConfig {
+    fn zeroize(&mut self) {
+        self.party_id.zeroize();
+        self.listen_addr.zeroize();
+        self.peers.zeroize();
+        self.storage_key.zeroize();
+        for v in self.storage_keys.values_mut() {
+            v.zeroize();
+        }
+        self.storage_key_source.zeroize();
+        self.tls_cert.zeroize();
+        self.tls_key.zeroize();
+        self.tls_ca.zeroize();
+    }
 }
 
 /// 低10: 从环境变量或 KMS 读取 storage_key 的环境变量名。
