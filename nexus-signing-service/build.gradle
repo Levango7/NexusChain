@@ -44,8 +44,11 @@ repositories {
 // === Phase 4 任务 #79：MPC 密码学引擎 gRPC 接口版本矩阵（审计报告 §4.1 方案 A）
 // 与根 build.gradle ext.grpcVersion/protobufVersion 及 nexus-core 对齐。 ===
 ext {
-    grpcVersion = '1.54.0'
-    protobufVersion = '3.22.2'
+    // P4-A（2026-08-29）：1.54.0 存在 CVE-2025-55163（HIGH，netty HTTP/2 DDoS）与
+    // CVE-2023-32731（HIGH，gRPC 敏感信息泄漏），升级至 1.75.0（与根 build.gradle 对齐）
+    grpcVersion = '1.75.0'
+    // P4-A：3.22.2 存在 CVE-2024-7254（HIGH，protobuf StackOverflow），升级至 3.25.5
+    protobufVersion = '3.25.5'
 }
 
 tasks.withType(JavaCompile) {
@@ -108,6 +111,13 @@ dependencies {
     // === Nacos 服务发现 + 配置中心 ===
     implementation 'com.alibaba.cloud:spring-cloud-starter-alibaba-nacos-discovery'
     implementation 'com.alibaba.cloud:spring-cloud-starter-alibaba-nacos-config'
+    // P4-A（2026-08-29）：Nacos client 传递引入 httpcore5 5.3.6（CVE-2026-54399/54428 HIGH），
+    // 显式声明 5.4.3 强制升级消除（与 nexus-gateway 对齐）
+    implementation 'org.apache.httpcomponents.core5:httpcore5:5.4.3'
+    implementation 'org.apache.httpcomponents.core5:httpcore5-h2:5.4.3'
+    // P4-A：Spring Cloud/Seata 传递引入 commons-fileupload 1.5（CVE-2025-48976 HIGH），
+    // 显式声明 1.6.0 强制升级消除（与 nexus-gateway 对齐）
+    implementation 'commons-fileupload:commons-fileupload:1.6.0'
 
     // === Sentinel 熔断 / 限流 ===
     implementation 'com.alibaba.cloud:spring-cloud-starter-alibaba-sentinel'
@@ -137,7 +147,9 @@ dependencies {
     implementation 'org.iq80.leveldb:leveldb-api:0.12'
 
     // === Jackson（WalletUtils / TxUtils 依赖） ===
-    implementation 'com.fasterxml.jackson.core:jackson-databind:2.15.4'
+    // P4-A（2026-08-29）：2.15.4 存在 CVE-2026-54512/54513（HIGH，任意代码执行/
+    // 安全绕过），升级至 2.18.8（与根 build.gradle ext.jacksonVersion 对齐）
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.18.8'
 
     // === Phase 4 任务 #79：MPC 密码学引擎 gRPC 客户端（审计报告 §4.1 方案 A） ===
     // Rust multi-party-ecdsa 引擎作为独立进程，signing-service 通过 gRPC 调用。
@@ -153,10 +165,11 @@ dependencies {
     implementation 'javax.annotation:javax.annotation-api:1.3.2'
     // jakarta.annotation.@PostConstruct/@PreDestroy 已由 spring-boot-starter-web 传递引入
 
-    // === Phase 4 任务 #81：BouncyCastle ECDSA 签名验证（DefaultMpcService.aggregateSignature）
+    // === P4-A 任务 #81：BouncyCastle ECDSA 签名验证（DefaultMpcService.aggregateSignature）
     //     用于聚合签名后对 (r, s) 做 secp256k1 ECDSA verify against joint publicKey。
-    //     bcprov-jdk18on:1.78 与 nexus-sdk:java 对齐，适配 JDK 17/18。 ===
-    implementation 'org.bouncycastle:bcprov-jdk18on:1.78'
+    //     P4-A（2026-08-29）：1.78 存在 CVE-2025-14813（CRITICAL，GOSTCTR 实现缺陷），
+    //     升级至 1.81.1（与 nexus-bridge / nexus-api-gateway 对齐）。 ===
+    implementation 'org.bouncycastle:bcprov-jdk18on:1.81.1'
 
     // === 测试 ===
     testImplementation 'org.springframework.boot:spring-boot-starter-test'

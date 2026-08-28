@@ -80,7 +80,9 @@ dependencies {
     runtimeOnly 'com.mysql:mysql-connector-j'
     // === P2-T8：PostgreSQL 生产化（设计文档 §4.1） ===
     // PostgreSQL 16 生产数据源驱动，runtimeOnly 仅运行时加载
-    runtimeOnly 'org.postgresql:postgresql:42.5.4'
+    // P4-A（2026-08-29）：42.5.4 存在 CVE-2024-1597（CRITICAL，SQL 注入）与
+    // CVE-2026-42198（HIGH），升级至 42.7.12（与 nexus-core 对齐）
+    runtimeOnly 'org.postgresql:postgresql:42.7.12'
 
     // === Micrometer Tracing + Zipkin（Phase 3 任务 #61，设计文档 §4.3.1） ===
     // SpringBoot 3.2.5 BOM 管理版本（micrometer-tracing 1.2.5 + zipkin-reporter-brave 2.16.4）
@@ -102,6 +104,13 @@ dependencies {
     // === Nacos 服务发现 + 配置中心 ===
     implementation 'com.alibaba.cloud:spring-cloud-starter-alibaba-nacos-discovery'
     implementation 'com.alibaba.cloud:spring-cloud-starter-alibaba-nacos-config'
+    // P4-A（2026-08-29）：Nacos client 传递引入 httpcore5 5.3.6（CVE-2026-54399/54428 HIGH），
+    // 显式声明 5.4.3 强制升级消除（与 nexus-gateway 对齐）
+    implementation 'org.apache.httpcomponents.core5:httpcore5:5.4.3'
+    implementation 'org.apache.httpcomponents.core5:httpcore5-h2:5.4.3'
+    // P4-A：Spring Cloud BOM 引入 commons-fileupload 1.5（CVE-2025-48976 HIGH），
+    // 显式声明 1.6.0 强制升级消除（与 nexus-gateway 对齐）
+    implementation 'commons-fileupload:commons-fileupload:1.6.0'
 
     // === Sentinel 熔断 / 限流 ===
     implementation 'com.alibaba.cloud:spring-cloud-starter-alibaba-sentinel'
@@ -129,7 +138,9 @@ dependencies {
     implementation 'com.google.code.gson:gson:2.10.1'
 
     // === Jackson（WalletUtils / TxUtils 依赖） ===
-    implementation 'com.fasterxml.jackson.core:jackson-databind:2.15.4'
+    // P4-A（2026-08-29）：2.15.4 存在 CVE-2026-54512/54513（HIGH，任意代码执行/
+    // 安全绕过），升级至 2.18.8（与根 build.gradle ext.jacksonVersion 对齐）
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.18.8'
 
     // === Resilience4j（与 Sentinel 共存，迁移期保留） ===
     // 升级修复（task #395）：resilience4j-spring-boot3 的 SpringBoot3Verifier 在启动时

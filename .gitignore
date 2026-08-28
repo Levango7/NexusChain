@@ -160,3 +160,5 @@ deploy/config/seata.local.properties
 .test-batch
 # Gradle 命令行测试输出（临时重定向产物，不入库）
 gw-test-output.txt
+# 本地 AI 工具会话产物（memory/reports），不入库
+.workbuddy/

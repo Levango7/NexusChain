@@ -30,4 +30,10 @@ ignore = [
     # rustls-pemfile 2.2.0（RUSTSEC-2025-0134, unmaintained）
     # 传递依赖（经 tonic/tls 链），无修复版本，仅 informational 维护状态
     "RUSTSEC-2025-0134",
+
+    # rand 0.7.x（RUSTSEC-2026-0097, unsound——自定义 logger 场景下 rand::rng() 未定义行为）
+    # rand 0.7 与 curv-kzen 0.9 / multi-party-ecdsa 0.8.1 绑定（Cargo.toml REQ-26 注释），
+    # 项目实际使用为 GCM nonce 生成（aes-gcm 0.10），未启用自定义 logger 路径，
+    # 升级 0.8 需 multi-party-ecdsa 上游先升级——与 RUSTSEC-2022-0070 同类延后
+    "RUSTSEC-2026-0097",
 ]

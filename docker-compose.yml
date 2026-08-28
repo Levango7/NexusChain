@@ -25,7 +25,13 @@ version: '3.8'
 
 services:
   nexus-gateway:
-    build: ./nexus-gateway
+    # 2026-08-29 修复：Java 模块 Dockerfile 要求 repo 根构建上下文
+    # （COPY nexus-core/nexus-sdk/nexus-common 等根级模块，project() 依赖解析），
+    # 此前 build: ./nexus-gateway 以模块目录为上下文导致 DAST/CI 构建失败
+    # （"/nexus-gateway": not found）。与 security-scan.yml trivy-docker job 一致。
+    build:
+      context: .
+      dockerfile: nexus-gateway/Dockerfile
     ports:
       - '127.0.0.1:8080:8080'
     environment:
@@ -45,7 +51,10 @@ services:
       start_period: 40s
 
   nexus-core:
-    build: ./nexus-core
+    # 2026-08-29：与 nexus-gateway 一致，Java 模块 Dockerfile 需 repo 根上下文
+    build:
+      context: .
+      dockerfile: nexus-core/Dockerfile
     ports:
       - '127.0.0.1:19585:19585'
     healthcheck:
@@ -61,7 +70,10 @@ services:
   # 依赖 Seata Server（TCC 分布式事务）+ Nacos（服务注册 + 配置）。
   # 设计文档 §4.5.1。
   nexus-signing-service:
-    build: ./nexus-signing-service
+    # 2026-08-29：与 nexus-gateway 一致，Java 模块 Dockerfile 需 repo 根上下文
+    build:
+      context: .
+      dockerfile: nexus-signing-service/Dockerfile
     ports:
       - '127.0.0.1:8082:8082'
     environment:
@@ -111,7 +123,10 @@ services:
   # 依赖 Seata Server（提现审批 TCC）+ Nacos（服务注册 + 配置）。
   # 设计文档 §4.5.1。
   nexus-wallet-service:
-    build: ./nexus-wallet-service
+    # 2026-08-29：与 nexus-gateway 一致，Java 模块 Dockerfile 需 repo 根上下文
+    build:
+      context: .
+      dockerfile: nexus-wallet-service/Dockerfile
     ports:
       - '127.0.0.1:8083:8083'
     environment:
@@ -133,7 +148,10 @@ services:
       start_period: 40s
 
   nexus-bridge:
-    build: ./nexus-bridge
+    # 2026-08-29：与 nexus-gateway 一致，Java 模块 Dockerfile 需 repo 根上下文
+    build:
+      context: .
+      dockerfile: nexus-bridge/Dockerfile
     ports:
       - '127.0.0.1:8084:8084'   # 修正：原 8082 → 8084（与 signing-service 8082 冲突，见 §4.5.1）
     environment:

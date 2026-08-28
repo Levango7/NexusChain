@@ -209,9 +209,12 @@ jobs:
           project: NexusChain
           path: .
           format: HTML,JSON
-          others: >
-            --enableExperimental
-            --failOnCVSS 9
+          # 2026-08-29 修复：该 Action 把 `others` 整体作为【单个】命令行参数追加
+          # （见 action.yml args 列表末尾 `- '${{ inputs.others }}'`），因此传入
+          # 含空格的 "… --failOnCVSS 9" 会被 dependency-check 当作一个未知 token，
+          # 打印 usage 后 exit 1（此前 OWASP job 恒红）。改用 `--failOnCVSS=9`
+          # 单 token 形式（commons-cli 支持 `--opt=value`），保留 CVSS>=9 阻断门禁。
+          others: '--failOnCVSS=9'
 
       - name: 上传 OWASP 报告
         if: always()
@@ -272,7 +275,12 @@ jobs:
           set -e
           total_bugs=0
           while IFS= read -r report; do
-            count=$(grep -c "<BugInstance" "$report" 2>/dev/null || echo 0)
+            # 2026-08-29 修复：grep -c 在 0 匹配时输出 "0" 且退出码为 1，
+            # 原先 `|| echo 0` 会再补一行 "0" 导致 count="0\n0"，
+            # `[ "$count" -gt 0 ]` 报 integer expression expected（0 finding 也误红）。
+            # 改为先取 count 再兜底默认 0。
+            count=$(grep -c "<BugInstance" "$report" 2>/dev/null || true)
+            count=${count:-0}
             if [ "$count" -gt 0 ]; then
               echo "[SpotBugs] $report: $count findings"
               total_bugs=$((total_bugs + count))

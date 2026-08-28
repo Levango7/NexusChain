@@ -209,7 +209,14 @@ dependencies {
     implementation group: 'org.iq80.leveldb', name: 'leveldb', version: "${leveldbVersion}"
     implementation group: 'org.iq80.leveldb', name: 'leveldb-api', version: "${leveldbVersion}"
 
-    implementation group: 'org.quartz-scheduler', name: 'quartz', version: '2.3.2'
+    // quartz 2.3.2 传递引入 com.zaxxer:HikariCP-java7:2.4.13（Java 7 时代旧版，与
+    // spring-boot-starter-jdbc 的 HikariCP 7.0.2 类冲突——两者都提供 com.zaxxer.hikari.*，
+    // 旧版先加载时 DataSourceBuilder 调用 2.4.13 不存在的方法抛 NoSuchMethodError，
+    // 表现为 ParameterGovernanceMockTest 等 @SpringBootTest 上下文启动失败）。
+    // 2026-08-29 修复：排除旧版，统一走 Boot BOM 管理的 HikariCP。
+    implementation('org.quartz-scheduler:quartz:2.3.2') {
+        exclude group: 'com.zaxxer', module: 'HikariCP-java7'
+    }
     implementation group: 'commons-cli', name: 'commons-cli', version: '1.5.0'
     implementation group: 'com.beust', name: 'jcommander', version: '1.82'
 

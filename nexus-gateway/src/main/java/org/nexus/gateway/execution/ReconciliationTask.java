@@ -15,6 +15,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -194,15 +195,15 @@ public class ReconciliationTask {
             return;
         }
 
-        Boolean confirmed = queryChainConfirmation(refund.getChainTxHash());
-        if (confirmed == null) {
+        Optional<Boolean> confirmed = queryChainConfirmation(refund.getChainTxHash());
+        if (confirmed.isEmpty()) {
             // 链不可达/查询失败：跳过，不计入 reconciliationNeeded（下轮重试）
             report.errors++;
             log.warn("Refund {} chain confirmation query failed (chain unreachable?), skipped this round",
                     refund.getRefundNo());
             return;
         }
-        if (!confirmed) {
+        if (!confirmed.orElse(false)) {
             // 数据库 COMPLETED 但链上明确未确认 → 标记为 RECONCILIATION_NEEDED
             verifyTemplate.executeWithoutResult(status -> {
                 refund.setStatus(Refund.RefundStatus.RECONCILIATION_NEEDED);
@@ -247,13 +248,13 @@ public class ReconciliationTask {
             return;
         }
 
-        Boolean confirmed = queryChainConfirmation(refund.getChainTxHash());
-        if (confirmed == null) {
+        Optional<Boolean> confirmed = queryChainConfirmation(refund.getChainTxHash());
+        if (confirmed.isEmpty()) {
             // 链不可达/查询失败：跳过（下轮重试），不误改状态
             report.errors++;
             return;
         }
-        if (confirmed) {
+        if (confirmed.orElse(false)) {
             // 数据库 PENDING 但链上已确认 → 更新为 COMPLETED
             verifyTemplate.executeWithoutResult(status -> {
                 refund.setStatus(Refund.RefundStatus.COMPLETED);
@@ -277,15 +278,18 @@ public class ReconciliationTask {
     /**
      * 查询链上交易确认状态（三态，容错）。
      *
-     * @return true=已确认；false=链明确答复未确认；null=查询失败（链不可达等）
+     * @return Optional.of(true)=已确认；Optional.of(false)=链明确答复未确认；
+     *         Optional.empty()=查询失败（链不可达等）。
+     *         2026-08-29：原 Boolean+显式 null 触发 SpotBugs NP_BOOLEAN_RETURN_NULL，
+     *         改用 Optional<Boolean> 表达三态。
      */
-    private Boolean queryChainConfirmation(String chainTxHash) {
+    private Optional<Boolean> queryChainConfirmation(String chainTxHash) {
         try {
-            return chainRpcClient.isTransactionConfirmed(chainTxHash);
+            return Optional.ofNullable(chainRpcClient.isTransactionConfirmed(chainTxHash));
         } catch (RuntimeException e) {
             log.warn("Chain confirmation query failed for txHash={}: {}",
                     chainTxHash, e.getMessage());
-            return null;
+            return Optional.empty();
         }
     }
 

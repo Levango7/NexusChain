@@ -84,6 +84,16 @@ dependencies {
     // === Nacos 服务发现 + 配置中心（Phase 2 任务 #58） ===
     implementation 'com.alibaba.cloud:spring-cloud-starter-alibaba-nacos-discovery'
     implementation 'com.alibaba.cloud:spring-cloud-starter-alibaba-nacos-config'
+    // P4-A（2026-08-29）：Nacos client 传递引入 httpcore5 5.3.6（CVE-2026-54399/54428 HIGH，
+    // HTTP/HPACK 头 DoS），显式声明 5.4.3 强制升级消除（与 nexus-gateway 对齐）
+    implementation 'org.apache.httpcomponents.core5:httpcore5:5.4.3'
+    implementation 'org.apache.httpcomponents.core5:httpcore5-h2:5.4.3'
+    // P4-A：Seata/Spring Cloud 传递引入 commons-fileupload 1.5（CVE-2025-48976 HIGH），
+    // 显式声明 1.6.0 强制升级消除（与 nexus-gateway 对齐）
+    implementation 'commons-fileupload:commons-fileupload:1.6.0'
+    // P4-A：web3j/传递依赖引入 bcprov-jdk18on 1.81（CVE-2025-14813 CRITICAL，GOSTCTR
+    // 实现缺陷），显式声明 1.81.1 强制升级消除
+    implementation 'org.bouncycastle:bcprov-jdk18on:1.81.1'
 
     // === Sentinel 熔断 / 限流 ===
     implementation 'com.alibaba.cloud:spring-cloud-starter-alibaba-sentinel'
