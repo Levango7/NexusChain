@@ -96,6 +96,9 @@ dependencies {
     // === OpenFeign 声明式调用 + LoadBalancer（gateway → signing-service / wallet-service / bridge） ===
     implementation 'org.springframework.cloud:spring-cloud-starter-openfeign'
     implementation 'org.springframework.cloud:spring-cloud-starter-loadbalancer'
+    // P4-A: Spring Cloud BOM 引入 commons-fileupload 1.5（CVE-2025-48976 HIGH），
+    // 显式声明 1.6.0 强制升级消除
+    implementation 'commons-fileupload:commons-fileupload:1.6.0'
 
     // === P1-F1 安全加固：服务间 JWT 鉴权 ===
     // gateway 通过 Feign 调用 signing-service 时，由 FeignJwtRequestInterceptor
