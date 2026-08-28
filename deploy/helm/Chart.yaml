@@ -1,7 +1,10 @@
 # NexusChain Helm Umbrella Chart
 # ============================================================================
-# 聚合 4 个 Spring Boot 服务子 chart：
+# 聚合 4 个 Spring Boot 服务子 chart + 链基础设施：
 #   nexus-gateway / nexus-bridge / nexus-signing-service / nexus-wallet-service
+#   + nexus-core（结算链节点 StatefulSet）+ mpc-engine（MPC 密码学引擎）
+# P0-10 审计修复：此前 umbrella 不含 nexus-core 与 mpc-engine——helm 发布路径
+# 不部署链节点、K8s 路径下 signing-service 无法连接 MPC 引擎（门限签名不可用）。
 # 基础设施（Nacos/Sentinel/Seata/Zipkin/Postgres/Redis）由独立 chart 或
 # 运维平台提供，本 chart 仅注入指向它们的服务地址环境变量。
 # ============================================================================
@@ -39,3 +42,11 @@ dependencies:
   - name: nexus-api-gateway
     version: 2.1.0
     repository: "file://charts/nexus-api-gateway"
+  - name: nexus-core
+    version: 2.2.0
+    repository: "file://charts/nexus-core"
+    condition: nexus-core.enabled
+  - name: mpc-engine
+    version: 2.2.0
+    repository: "file://charts/mpc-engine"
+    condition: mpc-engine.enabled

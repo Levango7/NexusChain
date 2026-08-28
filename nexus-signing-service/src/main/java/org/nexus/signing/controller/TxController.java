@@ -134,6 +134,31 @@ public class TxController {
     }
 
     /**
+     * GET /api/v1/transfers/capability：无副作用轻量探针（审计修复）。
+     *
+     * <p>供 gateway 健康检查替代 signTransfer 生产端点探测——原探针每 30 秒
+     * 触发一次完整签名路径（读平台密钥库 + 写签名审计日志）。本端点只读，
+     * 不读密钥库、不产生审计事件，仅回报服务存活与平台公钥配置状态。</p>
+     *
+     * <p>SECURITY (P2-F1)：端点强制 {@code ROLE_READ} 鉴权（gateway 的
+     * Feign JWT 携带该角色）。</p>
+     */
+    @PreAuthorize("hasRole('" + SecurityRoles.READ + "')")
+    @RequestMapping(value = "/api/v1/transfers/capability", method = RequestMethod.GET)
+    public Object capability() {
+        APIResult result = new APIResult();
+        result.setStatusCode(2000);
+        result.setMessage("UP");
+        java.util.Map<String, Object> data = new java.util.LinkedHashMap<>();
+        data.put("service", "nexus-signing-service");
+        data.put("platformPubkeyConfigured",
+                platformKeystore != null && platformKeystore.getPubkey() != null
+                        && !platformKeystore.getPubkey().isBlank());
+        result.setData(data);
+        return JsonUtil.GSON.fromJson(JsonUtil.GSON.toJson(result), HashMap.class);
+    }
+
+    /**
      * P0-2：审批通过后执行签名 + 广播。
      *
      * <p>大额签名流程改为阻断式后，{@code /api/v1/transfers/sign} 对大额请求

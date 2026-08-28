@@ -1,6 +1,7 @@
 package org.nexus.sdk;
 
 import java.math.BigInteger;
+import java.net.ServerSocket;
 import org.junit.jupiter.api.*;
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -9,11 +10,27 @@ import static org.junit.jupiter.api.Assertions.*;
  * Updated 2026-08-06 to match the implemented SDK (methods no longer stubs).
  *
  * <p>Network-dependent methods assert {@link RpcClient.RpcException} because no
- * RPC node is reachable at localhost:8080 in the unit-test environment. Pure
- * logic methods (wallet creation, address validation, transfer building) are
+ * RPC node is reachable in the unit-test environment. "不可达"目标端口由
+ * {@link #unreachablePort()} 动态选取（绑定后立即释放的空闲端口）——审计修复：
+ * 原硬编码 localhost:8080，与本机正在运行的 gateway 冲突时测试失效
+ * （HTTP 400 应答导致 NPE 而非 RpcException）。Pure logic methods
+ * (wallet creation, address validation, transfer building) are
  * asserted against their real behavior.</p>
  */
 class SdkUnitTest {
+
+    /**
+     * 返回一个当前保证空闲的端口：绑定 0（内核分配）后立即释放。
+     * 仍存在极小的 TOCTOU 窗口，但远优于硬编码易冲突端口。
+     */
+    private static int unreachablePort() {
+        try (ServerSocket socket = new ServerSocket(0)) {
+            socket.setReuseAddress(true);
+            return socket.getLocalPort();
+        } catch (Exception e) {
+            throw new IllegalStateException("Cannot acquire a free port", e);
+        }
+    }
 
     // -- RpcClient tests -------------------------------------------------
 
@@ -24,7 +41,7 @@ class SdkUnitTest {
         @Test
         @DisplayName("Construct client with valid URL and defaults")
         void constructClient() {
-            RpcClient client = new RpcClient("http://localhost:8080", 30000, null);
+            RpcClient client = new RpcClient("http://localhost:" + unreachablePort(), 30000, null);
             assertNotNull(client);
         }
 
@@ -38,7 +55,7 @@ class SdkUnitTest {
         @Test
         @DisplayName("call() throws RpcException when no node reachable")
         void callThrowsRpcException() {
-            RpcClient client = new RpcClient("http://localhost:8080", 500, null);
+            RpcClient client = new RpcClient("http://localhost:" + unreachablePort(), 500, null);
             // 对齐 nexus-core：nexus_blockNumber → nexus_getLatestBlocks
             assertThrows(RpcClient.RpcException.class, () ->
                 client.call("nexus_getLatestBlocks"));
@@ -47,14 +64,14 @@ class SdkUnitTest {
         @Test
         @DisplayName("getBlockNumber() throws RpcException when no node reachable")
         void blockNumberThrowsRpcException() {
-            RpcClient client = new RpcClient("http://localhost:8080", 500, null);
+            RpcClient client = new RpcClient("http://localhost:" + unreachablePort(), 500, null);
             assertThrows(RpcClient.RpcException.class, client::getBlockNumber);
         }
 
         @Test
         @DisplayName("getChainId() throws RpcException when no node reachable")
         void chainIdThrowsRpcException() {
-            RpcClient client = new RpcClient("http://localhost:8080", 500, null);
+            RpcClient client = new RpcClient("http://localhost:" + unreachablePort(), 500, null);
             assertThrows(RpcClient.RpcException.class, client::getChainId);
         }
     }
@@ -65,7 +82,7 @@ class SdkUnitTest {
     @DisplayName("TransactionBuilder")
     class TransactionBuilderTests {
 
-        private final RpcClient rpc = new RpcClient("http://localhost:8080", 500, null);
+        private final RpcClient rpc = new RpcClient("http://localhost:" + unreachablePort(), 500, null);
 
         @Test
         @DisplayName("buildTransfer() returns a populated transaction")
@@ -128,7 +145,7 @@ class SdkUnitTest {
     @DisplayName("Wallet")
     class WalletTests {
 
-        private final RpcClient rpc = new RpcClient("http://localhost:8080", 500, null);
+        private final RpcClient rpc = new RpcClient("http://localhost:" + unreachablePort(), 500, null);
 
         @Test
         @DisplayName("create() generates a wallet with a non-empty address")

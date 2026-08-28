@@ -7,9 +7,6 @@ import org.nexus.consensus.finality.Vote;
 import org.nexus.consensus.pos.StakingService;
 import org.nexus.consensus.pos.ValidatorRegistry;
 import org.nexus.consensus.pos.ValidatorStatus;
-import org.nexus.core.crypto.bls.BlsSigner;
-import org.nexus.core.crypto.bls.BlsSignature;
-import org.nexus.core.crypto.bls.Secp256k1BlsSigner;
 
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;

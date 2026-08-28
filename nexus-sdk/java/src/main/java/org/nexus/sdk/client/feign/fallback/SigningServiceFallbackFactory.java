@@ -51,6 +51,12 @@ public class SigningServiceFallbackFactory implements FallbackFactory<SigningSer
             public String signTransfer(String fromPubkey, String toPubkeyHash, BigDecimal amount) {
                 return null;
             }
+
+            @Override
+            public java.util.Map<String, Object> getCapability() {
+                // 审计修复：capability 探针降级返回 null，健康指示器按 DOWN 处理
+                return null;
+            }
         };
     }
 }

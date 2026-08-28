@@ -4,8 +4,9 @@ package org.nexus.consensus.finality;
  * BFT 检查点投票记录。
  *
  * <p>一条 Vote 代表一个验证者对某个 epoch 检查点区块的最终化投票。
- * M1/M2 阶段签名用现有 Ed25519 字节承载（接口先行），M3 阶段
- * 切换到 {@link org.nexus.core.crypto.bls.BlsSignature} 以实现聚合验签。</p>
+ * 签名使用验证人注册的 Ed25519 密钥产生（P0-1 审计修复：替代早期
+ * 可伪造的 BLS-like 构造，该构造类已删除）；{@code validatorPublicKey}
+ * 承载投票者公钥，供聚合器逐一验签与 FinalityGadget 注册表绑定校验。</p>
  */
 public final class Vote {
 

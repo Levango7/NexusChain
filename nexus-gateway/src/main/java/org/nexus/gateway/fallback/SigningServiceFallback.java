@@ -6,6 +6,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
+import java.util.Map;
 
 /**
  * 签名服务 Feign 调用降级处理（gateway → nexus-signing-service）。
@@ -40,6 +41,12 @@ public class SigningServiceFallback implements SigningServiceFeignClient {
         log.error("signTransfer Feign 降级触发: signing-service 不可用, from={}, to={}, amount={}",
                 fromPubkey, toPubkeyHash, amount);
         // 已有 ERROR 级别日志告警；Prometheus counter + 外部告警通道接入为后续任务
+        return null;
+    }
+
+    @Override
+    public Map<String, Object> getCapability() {
+        // 审计修复：capability 探针降级返回 null，健康指示器按 DOWN 处理
         return null;
     }
 }

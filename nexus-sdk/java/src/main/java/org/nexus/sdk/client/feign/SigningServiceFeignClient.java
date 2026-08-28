@@ -2,10 +2,12 @@ package org.nexus.sdk.client.feign;
 
 import org.nexus.sdk.client.feign.fallback.SigningServiceFallbackFactory;
 import org.springframework.cloud.openfeign.FeignClient;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 
 import java.math.BigDecimal;
+import java.util.Map;
 
 /**
  * 签名服务 Feign 客户端契约（gateway → nexus-signing-service）。
@@ -57,5 +59,16 @@ public interface SigningServiceFeignClient {
     String signTransfer(@RequestParam("fromPubkey") String fromPubkey,
                         @RequestParam("toPubkeyHash") String toPubkeyHash,
                         @RequestParam("amount") BigDecimal amount);
+
+    /**
+     * 无副作用轻量探针（审计修复，任务 #317 的重新落地）。
+     *
+     * <p>对应 {@code GET /api/v1/transfers/capability}。供 gateway 健康检查
+     * 替代 signTransfer 生产端点探测——原探针每 30 秒触发一次完整签名路径
+     * （读平台密钥库 + 写签名审计日志）。返回 {@code {statusCode: 2000, data:
+     * {platformPubkeyConfigured: bool}}}</p>
+     */
+    @GetMapping("/transfers/capability")
+    Map<String, Object> getCapability();
 
 }

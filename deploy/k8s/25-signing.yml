@@ -42,6 +42,13 @@ spec:
           emptyDir: {}
         - name: spring-tmp
           emptyDir: {}
+        # P0-10 审计修复：MPC mTLS 证书（对齐 docker-compose.prod.yml 的
+        # NEX_MPC_ENGINE_ENDPOINTS + 证书挂载；证书由 nexus-mpc-certs Secret 提供，
+        # 部署前须注入 mpc-engine 三节点 CA/客户端证书，见 SECRET-MANAGEMENT.md）
+        - name: mpc-certs
+          secret:
+            secretName: nexus-mpc-certs
+            optional: false
       containers:
         - name: signing-service
           image: ghcr.io/levango7/nexuschain/nexus-signing-service:2.1.0
@@ -61,6 +68,17 @@ spec:
               value: prod
             - name: JAVA_TOOL_OPTIONS
               value: "-Djava.io.tmpdir=/tmp"
+            # P0-10 审计修复：补齐 MPC 后端连接配置（K8s 路径下门限签名此前不可用）
+            - name: NEX_MPC_TRANSPORT_GRPC
+              value: "true"
+            - name: NEX_MPC_ENGINE_ENDPOINTS
+              value: "mpc-engine-0.mpc-engine:50051,mpc-engine-1.mpc-engine:50051,mpc-engine-2.mpc-engine:50051"
+            - name: NEX_MPC_ENGINE_TLS_TRUST_CERT
+              value: "/etc/mpc/certs/ca/CA.pem"
+            - name: NEX_MPC_ENGINE_TLS_CLIENT_CERT
+              value: "/etc/mpc/certs/node-A/cert.pem"
+            - name: NEX_MPC_ENGINE_TLS_CLIENT_KEY
+              value: "/etc/mpc/certs/node-A/key.pem"
           envFrom:
             - configMapRef:
                 name: nexus-config
@@ -72,6 +90,9 @@ spec:
               mountPath: /tmp
             - name: spring-tmp
               mountPath: /app/tmp
+            - name: mpc-certs
+              mountPath: /etc/mpc/certs
+              readOnly: true
           resources:
             requests:
               memory: "256Mi"

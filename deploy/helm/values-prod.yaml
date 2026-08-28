@@ -102,6 +102,24 @@ nexus-signing-service:
       labelSelector:
         matchLabels:
           app.kubernetes.io/name: nexus-signing-service
+  # P0-10 审计修复：接入 mpc-engine（umbrella 现已部署 mpc-engine chart，
+  # 端点为 StatefulSet 逐 Pod headless DNS）。证书由 nexus-mpc-certs Secret
+  # 提供（部署前注入 mTLS CA/客户端证书，见 SECRET-MANAGEMENT.md）。
+  extraEnv:
+    NEX_MPC_TRANSPORT_GRPC: "true"
+    NEX_MPC_ENGINE_ENDPOINTS: "mpc-engine-0.mpc-engine-headless:50051,mpc-engine-1.mpc-engine-headless:50051,mpc-engine-2.mpc-engine-headless:50051"
+    NEX_MPC_ENGINE_TLS_TRUST_CERT: "/etc/mpc/certs/ca/CA.pem"
+    NEX_MPC_ENGINE_TLS_CLIENT_CERT: "/etc/mpc/certs/node-A/cert.pem"
+    NEX_MPC_ENGINE_TLS_CLIENT_KEY: "/etc/mpc/certs/node-A/key.pem"
+  extraVolumes:
+    - name: mpc-certs
+      secret:
+        secretName: nexus-mpc-certs
+        optional: false
+  extraVolumeMounts:
+    - name: mpc-certs
+      mountPath: /etc/mpc/certs
+      readOnly: true
 
 nexus-wallet-service:
   replicaCount: 3

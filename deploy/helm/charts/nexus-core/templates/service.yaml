@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "nexus-core.fullname" . }}
+  labels:
+    app.kubernetes.io/name: {{ include "nexus-core.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  # headless：P2P 与 RPC 需按 Pod DNS 逐一定址（BOOTSTRAPS 引用 nexus-core-N）
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: {{ include "nexus-core.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: rpc
+      port: 19585
+    - name: p2p
+      port: 9585

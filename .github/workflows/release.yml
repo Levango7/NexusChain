@@ -211,6 +211,8 @@ jobs:
             --set nexus-signing-service.image.tag="${IMAGE_TAG}" \
             --set nexus-wallet-service.image.tag="${IMAGE_TAG}" \
             --set nexus-api-gateway.image.tag="${IMAGE_TAG}" \
+            --set nexus-core.image.tag="${IMAGE_TAG}" \
+            --set mpc-engine.image.tag="${IMAGE_TAG}" \
             --wait --timeout 10m
 
   # ============================================================
@@ -255,6 +257,8 @@ jobs:
             --set nexus-signing-service.image.tag="${IMAGE_TAG}" \
             --set nexus-wallet-service.image.tag="${IMAGE_TAG}" \
             --set nexus-api-gateway.image.tag="${IMAGE_TAG}" \
+            --set nexus-core.image.tag="${IMAGE_TAG}" \
+            --set mpc-engine.image.tag="${IMAGE_TAG}" \
             --wait --timeout 15m
 
   # ============================================================
@@ -348,6 +352,8 @@ jobs:
             --set nexus-signing-service.image.tag="${IMAGE_TAG}" \
             --set nexus-wallet-service.image.tag="${IMAGE_TAG}" \
             --set nexus-api-gateway.image.tag="${IMAGE_TAG}" \
+            --set nexus-core.image.tag="${IMAGE_TAG}" \
+            --set mpc-engine.image.tag="${IMAGE_TAG}" \
             --wait --timeout 15m
 
       - name: 回滚后状态核对

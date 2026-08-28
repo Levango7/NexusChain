@@ -1,0 +1,52 @@
+# nexus-core 子 chart 默认值
+# P0-10 审计修复：此前 helm umbrella 不部署链节点（静态清单 deploy/k8s/20-core-statefulset.yml
+# 与 helm 路径脱节），本 chart 以该清单为底稿收编进 umbrella。
+
+# -- StatefulSet 副本数（验证人节点数；BOOTSTRAPS 按此生成）
+replicaCount: 4
+
+image:
+  # -- 镜像仓库；为空时用 {{ global.imageRegistry }}/nexus-core
+  repository: ""
+  # -- 镜像 tag；为空时回退 global.env；发布流程由 release.yml --set 覆盖
+  tag: ""
+
+imagePullPolicy: IfNotPresent
+
+# -- 链数据 PVC 大小
+storageSize: 50Gi
+
+# -- genesis ConfigMap（由集群侧创建，chart 不管理其内容）
+genesisConfigMap: nexus-genesis
+
+# -- 既有凭据 Secret（nexus-secrets：NEX_DB_USERNAME / NEX_DB_PASSWORD）
+existingSecret: nexus-secrets
+
+env:
+  DATA_SOURCE_URL: "jdbc:postgresql://postgres:5432/nexus_core"
+  P2P_MODE: "grpc"
+  ENABLE_MINING: "true"
+  ENABLE_DISCOVERY: "true"
+
+resources:
+  requests:
+    memory: "512Mi"
+    cpu: "500m"
+  limits:
+    memory: "2Gi"
+    cpu: "2000m"
+
+# -- 探针（/height 只读端点）
+livenessProbe:
+  initialDelaySeconds: 60
+  periodSeconds: 30
+readinessProbe:
+  initialDelaySeconds: 30
+  periodSeconds: 10
+
+global:
+  # -- 部署目标环境：dev / staging / prod（同时作为镜像 tag 兜底）
+  env: staging
+  # -- GHCR registry 前缀
+  imageRegistry: "ghcr.io/levango7/nexuschain"
+  imagePullPolicy: IfNotPresent

@@ -78,6 +78,22 @@ nexus-signing-service:
   pdb:
     enabled: true
     minAvailable: 1
+  # P0-10 审计修复：接入 mpc-engine（同 values-prod.yaml，证书来自 nexus-mpc-certs Secret）
+  extraEnv:
+    NEX_MPC_TRANSPORT_GRPC: "true"
+    NEX_MPC_ENGINE_ENDPOINTS: "mpc-engine-0.mpc-engine-headless:50051,mpc-engine-1.mpc-engine-headless:50051,mpc-engine-2.mpc-engine-headless:50051"
+    NEX_MPC_ENGINE_TLS_TRUST_CERT: "/etc/mpc/certs/ca/CA.pem"
+    NEX_MPC_ENGINE_TLS_CLIENT_CERT: "/etc/mpc/certs/node-A/cert.pem"
+    NEX_MPC_ENGINE_TLS_CLIENT_KEY: "/etc/mpc/certs/node-A/key.pem"
+  extraVolumes:
+    - name: mpc-certs
+      secret:
+        secretName: nexus-mpc-certs
+        optional: false
+  extraVolumeMounts:
+    - name: mpc-certs
+      mountPath: /etc/mpc/certs
+      readOnly: true
 
 nexus-wallet-service:
   replicaCount: 2

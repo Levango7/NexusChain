@@ -59,10 +59,13 @@ class HealthIndicatorTest {
     // === SigningServiceHealthIndicator ===
 
     @Test
-    @DisplayName("SigningServiceHealthIndicator: signTransfer 不抛异常返回 UP")
+    @DisplayName("SigningServiceHealthIndicator: capability 探针 2000 返回 UP")
     void signingService_up() {
         SigningServiceFeignClient client = mock(SigningServiceFeignClient.class);
-        when(client.signTransfer(any(), any(), any())).thenReturn("ok");
+        // 审计修复后：探针为只读 capability 端点（statusCode=2000 → UP）
+        java.util.Map<String, Object> ok = new java.util.HashMap<>();
+        ok.put("statusCode", 2000);
+        when(client.getCapability()).thenReturn(ok);
 
         SigningServiceHealthIndicator indicator = new SigningServiceHealthIndicator(client);
         Health h = indicator.health();
@@ -74,7 +77,7 @@ class HealthIndicatorTest {
     @DisplayName("SigningServiceHealthIndicator: 抛异常返回 DOWN")
     void signingService_down() {
         SigningServiceFeignClient client = mock(SigningServiceFeignClient.class);
-        when(client.signTransfer(any(), any(), any())).thenThrow(new RuntimeException("unreachable"));
+        when(client.getCapability()).thenThrow(new RuntimeException("unreachable"));
 
         SigningServiceHealthIndicator indicator = new SigningServiceHealthIndicator(client);
         Health h = indicator.health();

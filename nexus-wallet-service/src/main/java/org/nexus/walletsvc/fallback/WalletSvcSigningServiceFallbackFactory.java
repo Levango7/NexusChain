@@ -52,6 +52,12 @@ public class WalletSvcSigningServiceFallbackFactory extends SigningServiceFallba
                 // DefaultWithdrawalApprovalService 收到 null 标记提现 FAILED
                 return null;
             }
+
+            @Override
+            public java.util.Map<String, Object> getCapability() {
+                // 审计修复：capability 探针降级返回 null，健康指示器按 DOWN 处理
+                return null;
+            }
         };
     }
 }
