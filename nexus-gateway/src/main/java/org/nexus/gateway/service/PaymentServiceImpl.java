@@ -70,6 +70,8 @@ public class PaymentServiceImpl implements PaymentService {
     private final Tracer tracer;
     /** P2-F3：三阶段执行模板（落库 PENDING → 链上执行 → 更新 CONFIRMED/FAILED） */
     private final ThreePhaseExecutionTemplate threePhaseTemplate;
+    /** WalletUtils.addressToPubkeyHash 的 bean 包装（Spring Boot 4.0 MockedStatic 兼容） */
+    private final WalletAddressHelper walletAddressHelper;
 
     @Autowired
     public PaymentServiceImpl(PaymentOrderRepository orderRepository,
@@ -83,7 +85,8 @@ public class PaymentServiceImpl implements PaymentService {
                               PaymentRiskService riskService,
                               ComplianceService complianceService,
                               Tracer tracer,
-                              ThreePhaseExecutionTemplate threePhaseTemplate) {
+                              ThreePhaseExecutionTemplate threePhaseTemplate,
+                              WalletAddressHelper walletAddressHelper) {
         this.orderRepository = orderRepository;
         this.refundRepository = refundRepository;
         this.gatewayConfig = gatewayConfig;
@@ -96,6 +99,7 @@ public class PaymentServiceImpl implements PaymentService {
         this.complianceService = complianceService;
         this.tracer = tracer;
         this.threePhaseTemplate = threePhaseTemplate;
+        this.walletAddressHelper = walletAddressHelper;
     }
 
     /**
@@ -118,7 +122,7 @@ public class PaymentServiceImpl implements PaymentService {
                               ComplianceService complianceService) {
         this(orderRepository, refundRepository, gatewayConfig, chainRpcClient,
                 signingServiceClient, walletMgmtClient, eventPublisher, keyManager,
-                riskService, complianceService, null, null);
+                riskService, complianceService, null, null, null);
     }
 
     /**
@@ -137,7 +141,7 @@ public class PaymentServiceImpl implements PaymentService {
                               Tracer tracer) {
         this(orderRepository, refundRepository, gatewayConfig, chainRpcClient,
                 signingServiceClient, walletMgmtClient, eventPublisher, keyManager,
-                riskService, complianceService, tracer, null);
+                riskService, complianceService, tracer, null, null);
     }
 
     @Override
@@ -271,8 +275,13 @@ public class PaymentServiceImpl implements PaymentService {
             }
 
             // P0-5 修复（v2.27.0 完整版）：链上交易详情校验——金额与收款人必须与订单一致。
-            // 从链节点查询交易详情，校验 tx.amount == order.amount 且 tx.recipient == order.payeeAddress。
+            // 从链节点查询交易详情，校验 tx.amount == order.amount 且 tx 收款人 == order.payeeAddress。
             // 链节点不支持返回交易详情时（getTransaction 返回 null），降级为仅长度校验并记录安全告警。
+            //
+            // 收款人比较（审计修复）：core /rpc/v1/transaction/{txHash} 现已存在并返回
+            // to 字段的 20 字节公钥哈希小写 hex；此处将订单收款地址解码为同一编码空间的
+            // 公钥哈希再比较（构造性对称，不依赖地址字符串格式）。payeeAddress 解码失败
+            // 视为校验不通过（fail-closed），不放行支付确认。
             OnChainTransaction onChainTx = chainRpcClient.getTransaction(chainTxHash);
             if (onChainTx != null) {
                 if (onChainTx.amount() != null && onChainTx.amount().compareTo(order.getAmount()) != 0) {
@@ -287,17 +296,25 @@ public class PaymentServiceImpl implements PaymentService {
                     return PaymentResult.failed(order.getOrderNo(),
                             "Transaction amount does not match order");
                 }
-                if (onChainTx.recipient() != null && !onChainTx.recipient().equals(order.getPayeeAddress())) {
-                    log.warn("SECURITY: transaction recipient mismatch: txHash={}, txRecipient={}, orderPayee={}, orderNo={}",
-                            chainTxHash, onChainTx.recipient(), order.getPayeeAddress(), order.getOrderNo());
-                    OrderStateMachine.transition(order, PaymentOrder.OrderStatus.FAILED);
-                    // 同上：失败路径不持久化攻击者可控的 txHash
-                    orderRepository.save(order);
-                    confirmSpan.attr("payment.status", "FAILED")
-                            .attr("tx.binding.check", "RECIPIENT_MISMATCH")
-                            .error(null);
-                    return PaymentResult.failed(order.getOrderNo(),
-                            "Transaction recipient does not match order payee");
+                if (onChainTx.recipient() != null) {
+                    String expectedPayeeHash = WalletUtils.addressToPubkeyHash(order.getPayeeAddress());
+                    boolean payeeMatches = expectedPayeeHash != null
+                            && onChainTx.recipient().equalsIgnoreCase(expectedPayeeHash);
+                    if (!payeeMatches) {
+                        log.warn("SECURITY: transaction recipient mismatch: txHash={}, txRecipientHash={}, "
+                                        + "orderPayee={}, orderPayeeHash={}, orderNo={}",
+                                chainTxHash, onChainTx.recipient(), order.getPayeeAddress(),
+                                expectedPayeeHash == null ? "UNDECODABLE" : expectedPayeeHash,
+                                order.getOrderNo());
+                        OrderStateMachine.transition(order, PaymentOrder.OrderStatus.FAILED);
+                        // 同上：失败路径不持久化攻击者可控的 txHash
+                        orderRepository.save(order);
+                        confirmSpan.attr("payment.status", "FAILED")
+                                .attr("tx.binding.check", "RECIPIENT_MISMATCH")
+                                .error(null);
+                        return PaymentResult.failed(order.getOrderNo(),
+                                "Transaction recipient does not match order payee");
+                    }
                 }
             } else {
                 // 链节点不支持返回交易详情，降级为仅长度+唯一性校验
@@ -454,7 +471,7 @@ public class PaymentServiceImpl implements PaymentService {
                     },
                     // 阶段2：链上执行（事务外，不可逆）
                     refund -> {
-                        String receiverPubkeyHash = WalletUtils.addressToPubkeyHash(order.getPayerAddress());
+                        String receiverPubkeyHash = walletAddressHelper.addressToPubkeyHash(order.getPayerAddress());
 
                         if (receiverPubkeyHash == null) {
                             return OnChainResult.failure("wallet unreachable", false);

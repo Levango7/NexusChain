@@ -5,6 +5,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
+import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.nexus.gateway.client.ChainRpcClient;
 import org.nexus.gateway.client.OnChainTransaction;
@@ -19,6 +20,7 @@ import org.nexus.gateway.risk.PaymentRiskService;
 import org.nexus.gateway.security.KeyManager;
 import org.nexus.sdk.client.feign.SigningServiceFeignClient;
 import org.nexus.sdk.client.feign.WalletMgmtFeignClient;
+import org.nexus.sdk.wallet.WalletUtils;
 import org.springframework.context.ApplicationEventPublisher;
 
 import java.math.BigDecimal;
@@ -144,12 +146,18 @@ class PaymentServiceImplConfirmBindingTest {
                 .thenReturn(onChainTx(new BigDecimal("1000000"), "NXPAYEEADDR"));
         when(complianceService.screenAml(any())).thenReturn(new AmlResult());
 
-        PaymentResult result = service.confirmPayment(1L, TX_HASH);
+        try (MockedStatic<WalletUtils> mockedWalletUtils = mockStatic(WalletUtils.class)) {
+            // P0-5 修复后 confirmPayment 用 WalletUtils.addressToPubkeyHash 将 payee 地址转为 hash，
+            // 再与链上交易 recipient（pubkey hash）比较。单测中 mock 使 NXPAYEEADDR → NXPAYEEADDR。
+            mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("NXPAYEEADDR")).thenReturn("NXPAYEEADDR");
 
-        assertEquals("PAID", result.getStatus());
-        assertEquals(PaymentOrder.OrderStatus.PAID, order.getStatus());
-        assertEquals(TX_HASH, order.getChainTxHash());
-        assertNotNull(order.getPaidAt());
+            PaymentResult result = service.confirmPayment(1L, TX_HASH);
+
+            assertEquals("PAID", result.getStatus());
+            assertEquals(PaymentOrder.OrderStatus.PAID, order.getStatus());
+            assertEquals(TX_HASH, order.getChainTxHash());
+            assertNotNull(order.getPaidAt());
+        }
     }
 
     @Test

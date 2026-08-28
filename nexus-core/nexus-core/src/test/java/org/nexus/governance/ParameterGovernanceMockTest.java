@@ -49,8 +49,13 @@ class ParameterGovernanceMockTest {
                     .withPassword("nexus_test_pw");
 
     static {
-        if (DockerClientFactory.instance().isDockerAvailable()) {
-            Startables.deepStart(POSTGRES).join();
+        try {
+            if (DockerClientFactory.instance().isDockerAvailable()) {
+                Startables.deepStart(POSTGRES).join();
+            }
+        } catch (Throwable t) {
+            // Docker daemon 不可用或 Ryuk 容器拉取失败时，跳过容器启动，
+            // 由 @EnabledIf("postgresEnvironmentAvailable") 决定是否跳过整个测试类。
         }
     }
 

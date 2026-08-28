@@ -13,9 +13,9 @@ import org.springframework.test.web.servlet.MvcResult;
 import io.micrometer.tracing.Tracer;
 import org.nexus.sdk.client.feign.SigningServiceFeignClient;
 import org.nexus.sdk.client.feign.WalletMgmtFeignClient;
-import org.nexus.sdk.wallet.WalletUtils;
-import org.mockito.MockedStatic;
-import org.mockito.Mockito;
+import org.nexus.gateway.model.Subscription;
+import org.nexus.gateway.repository.SubscriptionRepository;
+import org.nexus.gateway.service.WalletAddressHelper;
 
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
@@ -23,6 +23,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
+
+import java.time.LocalDateTime;
 
 /**
  * Subscription + Refund flow integration test.
@@ -38,6 +40,9 @@ class SubscriptionRefundIntegrationTest {
     @Autowired
     private MockMvc mockMvc;
 
+    @Autowired
+    private SubscriptionRepository subscriptionRepository;
+
     // Spring Boot 4.0.8 升级修复：测试上下文未启用 tracing autoconfigure，
     // PaymentServiceImpl 等构造函数需要 Tracer bean，用 @MockitoBean 提供 mock。
     @MockitoBean
@@ -52,30 +57,19 @@ class SubscriptionRefundIntegrationTest {
     @MockitoBean
     private WalletMgmtFeignClient walletMgmtFeignClient;
 
-    /** WalletUtils.addressToPubkeyHash 静态方法 mock（替代原 walletMgmtFeignClient.addressToPubkeyHash） */
-    private static MockedStatic<WalletUtils> mockedWalletUtils;
-
-    @BeforeAll
-    static void initWalletUtilsMock() {
-        mockedWalletUtils = Mockito.mockStatic(WalletUtils.class);
-        mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash(anyString()))
-                .thenReturn("aabbccddeeff00112233445566778899aabbccdd");
-    }
-
-    @AfterAll
-    static void closeWalletUtilsMock() {
-        if (mockedWalletUtils != null) {
-            mockedWalletUtils.close();
-        }
-    }
+    @MockitoBean
+    private WalletAddressHelper walletAddressHelper;
 
     @BeforeEach
     void stubWalletSign() {
+        // WalletUtils.addressToPubkeyHash 通过 WalletAddressHelper bean 包装，
+        // 用 @MockitoBean 替换避免 MockedStatic 在 @SpringBootTest 中的 classloader 隔离问题。
+        when(walletAddressHelper.addressToPubkeyHash(anyString()))
+                .thenReturn("aabbccddeeff00112233445566778899aabbccdd");
         // 订阅扣款 / 退款签名委托给签名服务（平台热钱包密钥库，不传私钥）。
         when(signingServiceFeignClient.signTransfer(anyString(), anyString(),
                 org.mockito.ArgumentMatchers.any(java.math.BigDecimal.class)))
                 .thenReturn("0xSubTxHash1234567890abcdef1234567890abcdef");
-        // 扣款 / 退款前需把收款地址转为公钥哈希（WalletUtils 静态方法，在 @BeforeAll 中 mock）。
     }
 
     private static String apiKey;
@@ -120,6 +114,13 @@ class SubscriptionRefundIntegrationTest {
                 .andExpect(jsonPath("$.status").value("ACTIVE"))
                 .andReturn();
         subscriptionId = Long.parseLong(res.getResponse().getContentAsString().replaceAll(".*\"id\":(\\d+).*", "$1"));
+
+        // P0-4 审计修复后 charge() 使用 claimCharge 条件 UPDATE（nextChargeAt <= now），
+        // 创建时 nextChargeAt = now + cycleDays（未来），手动 charge 会被拒（409）。
+        // 测试需将 nextChargeAt 回拨到过去，使手动 charge 能通过认领检查。
+        Subscription sub = subscriptionRepository.findById(subscriptionId).orElseThrow();
+        sub.setNextChargeAt(LocalDateTime.now().minusDays(1));
+        subscriptionRepository.save(sub);
     }
 
     @Test

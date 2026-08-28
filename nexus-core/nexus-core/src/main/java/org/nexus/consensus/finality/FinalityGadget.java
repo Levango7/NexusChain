@@ -1,5 +1,6 @@
 package org.nexus.consensus.finality;
 
+import org.apache.commons.codec.binary.Hex;
 import org.nexus.consensus.pos.SlashingService;
 import org.nexus.consensus.pos.StakingService;
 import org.nexus.consensus.pos.Validator;
@@ -28,6 +29,8 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 @Component
 public class FinalityGadget {
+
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(FinalityGadget.class);
 
     private final ValidatorRegistry validatorRegistry;
     private final StakingService stakingService;
@@ -172,6 +175,21 @@ public class FinalityGadget {
         // 权重累积
         Validator v = validatorRegistry.getValidator(vote.getValidatorAddress());
         if (v == null || v.getStatus() != ValidatorStatus.ACTIVE) {
+            return record(epoch, vote.getCheckpointHash(), total);
+        }
+        // P0-1 审计修复：公钥绑定校验（fail-closed）。
+        // 投票携带的公钥必须与验证人注册表登记的公钥一致，否则拒绝计票——
+        // 防止攻击者携带任意公钥冒充活跃验证人参与权重累积。
+        // （配合 SignatureAggregator 的逐一 Ed25519 验签，伪造投票需要验证人私钥本身。）
+        String registeredPubHex = v.getPublicKey();
+        byte[] votePubKey = vote.getPublicKeyBytes();
+        if (registeredPubHex == null || registeredPubHex.isEmpty()
+                || votePubKey == null || votePubKey.length == 0
+                || !registeredPubHex.equalsIgnoreCase(Hex.encodeHexString(votePubKey))) {
+            log.warn("Vote pubkey binding FAILED for validator {}: registered={}, votePayloadPubKey={}",
+                    vote.getValidatorAddress(),
+                    registeredPubHex == null || registeredPubHex.isEmpty() ? "none" : "present",
+                    votePubKey == null || votePubKey.length == 0 ? "none" : "mismatch");
             return record(epoch, vote.getCheckpointHash(), total);
         }
         BigDecimal weight = stakingService.getStake(vote.getValidatorAddress());

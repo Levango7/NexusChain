@@ -10,12 +10,10 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.nexus.gateway.client.ExchangeWalletClient;
+import org.nexus.gateway.service.WalletAddressHelper;
 import org.nexus.sdk.client.feign.SigningServiceFeignClient;
 import org.nexus.sdk.client.feign.WalletMgmtFeignClient;
-import org.nexus.sdk.wallet.WalletUtils;
 import io.micrometer.tracing.Tracer;
-import org.mockito.MockedStatic;
-import org.mockito.Mockito;
 import static org.mockito.Mockito.when;
 import static org.mockito.ArgumentMatchers.anyString;
 import org.springframework.test.web.servlet.MvcResult;
@@ -57,31 +55,19 @@ class GatewayCoreIntegrationTest {
     @MockitoBean
     private WalletMgmtFeignClient walletMgmtFeignClient;
 
-    /** WalletUtils.addressToPubkeyHash 静态方法 mock（替代原 walletMgmtFeignClient.addressToPubkeyHash） */
-    // Spring Boot 4.0.8 升级修复：@MockitoBean 在每个测试方法前可能重置 Mockito mock maker，
-    // 导致 @BeforeAll 里创建的 MockedStatic 在服务代码中失效。改为 @BeforeEach/@AfterEach
-    // 逐方法管理 MockedStatic 生命周期，确保 mock 在 mockMvc.perform() 的服务调用中生效。
-    private MockedStatic<WalletUtils> mockedWalletUtils;
+    @MockitoBean
+    private WalletAddressHelper walletAddressHelper;
 
     @BeforeEach
     void stubWalletSign() {
-        // 逐方法重建 MockedStatic，避免 @MockitoBean 重置后失效
-        mockedWalletUtils = Mockito.mockStatic(WalletUtils.class);
-        mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash(anyString()))
+        // WalletUtils.addressToPubkeyHash 通过 WalletAddressHelper bean 包装，
+        // 用 @MockitoBean 替换避免 MockedStatic 在 @SpringBootTest 中的 classloader 隔离问题。
+        when(walletAddressHelper.addressToPubkeyHash(anyString()))
                 .thenReturn("aabbccddeeff00112233445566778899aabbccdd");
         // Refund signing is delegated to signing-service via signTransfer (platform key).
         // In this gateway-only integration test the wallet service is stubbed to succeed.
         when(signingServiceFeignClient.signTransfer(anyString(), anyString(), org.mockito.ArgumentMatchers.any(java.math.BigDecimal.class)))
                 .thenReturn("0xRefundTxHash1234567890abcdef1234567890abcdef");
-        // Refund flow first converts the payer address to a pubkey hash via WalletUtils (static, mocked above).
-    }
-
-    @AfterEach
-    void closeWalletUtilsMock() {
-        if (mockedWalletUtils != null) {
-            mockedWalletUtils.close();
-            mockedWalletUtils = null;
-        }
     }
 
     private static String apiKey;
