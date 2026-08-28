@@ -121,7 +121,7 @@ ext {
     // TD-05（tech-debt-audit）：Guava 由 31.1-jre 统一至 33.4.8-jre，
     // 32.0.0 修复 CVE-2023-2976（TempDirectory 局部拒绝服务）；32+ 包名无变化。
     guavaVersion = '33.4.8-jre'
-    postgresqlVersion = '42.7.11'
+    postgresqlVersion = '42.7.12'
 }
 
 dependencies {
