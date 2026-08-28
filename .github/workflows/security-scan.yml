@@ -156,6 +156,7 @@ jobs:
           severity: CRITICAL,HIGH,MEDIUM,LOW
           format: sarif
           output: trivy-docker-${{ matrix.module }}.sarif
+          trivyignores: .trivyignore
           exit-code: 0
 
       - name: 上传 SARIF 到 GitHub Security tab
@@ -173,6 +174,9 @@ jobs:
           # P2-C7: 镜像扫描同步提升至 CRITICAL,HIGH 阻断
           severity: CRITICAL,HIGH
           format: table
+          # P4-A: 豁免上游声明不修的系统包漏洞（.trivyignore 白名单，
+          # 含 zlib1g/libexpat1/libglib2.0-0/bsdutils，详见文件注释）
+          trivyignores: .trivyignore
           exit-code: 1
 
   # ============================================================

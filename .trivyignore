@@ -1,0 +1,25 @@
+# Trivy ignore 白名单 —— 系统包层漏洞（2026-08-28, P4-A 审计）
+# ============================================================================
+# 处置原则：仅豁免「上游声明不修/无可用修复版本」的系统包漏洞，避免用
+# ignore 掩盖可修复的 Java 依赖漏洞。下列 CVE 均来自基础镜像系统包
+# （distroless java17-debian12 / debian:bookworm-slim），Debian 上游状态：
+#   will_not_fix  = Debian 决定不修复（影响面/维护成本考量）
+#   fix_deferred  = Debian 延后修复（上游尚未发布补丁）
+#   affected      = 受影响但当前无可用修复版本
+# 升级应用依赖无法消除这些漏洞；唯一彻底方案是更换基础镜像（成本高、
+# 需全面回归），暂以白名单豁免 + 持续跟踪 Debian 更新。
+
+# --- distroless java17-debian12（Java 模块镜像）---
+# zlib: integer overflow and resultant heap-based buffer overflow in
+# inflate.c (CVE-2023-45853) — will_not_fix（Debian 判定低利用价值，
+# 仅影响 zlib 1.2.13 特定路径，distroless 非 root 运行缓解）
+CVE-2023-45853
+# libexpat: 多个解析器漏洞（CVE-2025-59375 等 4 个）— will_not_fix
+CVE-2025-59375
+# glib: gdbusintrospection integer underflow（CVE-2026-58016）— fix_deferred
+CVE-2026-58016
+
+# --- debian:bookworm-slim（Rust 模块镜像）---
+# util-linux bsdutils: TOCTOU in mount（CVE-2026-53613）— affected，
+# Rust 服务（mpc-engine/zk-groth16-service）不调用 mount，无实际暴露面
+CVE-2026-53613
