@@ -27,7 +27,7 @@
 
 plugins {
     id 'java'
-    id 'org.springframework.boot' version '3.3.13'
+    id 'org.springframework.boot' version '4.0.8'
     id 'io.spring.dependency-management' version '1.1.4'
 }
 
@@ -66,8 +66,12 @@ dependencies {
     runtimeOnly 'io.jsonwebtoken:jjwt-jackson:0.12.6'
 
     // === Phase 4 任务 #68：数据库迁移 + 驱动（设计文档 §4.3 Flyway） ===
-    // Flyway 10.x（Boot 3.3.13 BOM 管理），10.x 需数据库专用模块
-    implementation 'org.flywaydb:flyway-core'
+    // 升级修复（task #395）：Spring Boot 4.0 模块化拆分，Flyway 自动配置从
+    // spring-boot-autoconfigure 移到独立模块 spring-boot-flyway。仅引入 flyway-core
+    // 不携带 FlywayAutoConfiguration，导致 Flyway 不执行、迁移不运行、表缺失，
+    // Hibernate ddl-auto=validate 抛 SchemaManagementException: missing table。
+    // spring-boot-starter-flyway 引入 flyway-core + spring-boot-flyway 自动配置模块。
+    implementation 'org.springframework.boot:spring-boot-starter-flyway'
     implementation 'org.flywaydb:flyway-mysql'
     implementation 'org.flywaydb:flyway-database-postgresql'
     // H2 内存数据库（开发 / 测试 profile）
@@ -86,9 +90,14 @@ dependencies {
     implementation 'io.github.openfeign:feign-micrometer'
 
     // === Spring Cloud BOM（管理 OpenFeign / LoadBalancer 版本） ===
-    implementation platform('org.springframework.cloud:spring-cloud-dependencies:2023.0.3')
+    // 升级修复（task #395）：Spring Cloud 2023.0.3 对应 Spring Boot 3.2.x，其
+    // FeignClientsConfiguration 引用 Spring Boot 3.x 旧位置 SpringDataWebProperties
+    // (org.springframework.boot.autoconfigure.data.web)，Spring Boot 4.0 模块化后
+    // 该类移走，导致 NoClassDefFoundError → Feign 客户端 bean 创建失败 → 上下文加载失败。
+    // 升级到 Spring Cloud 2025.1.0（对应 Spring Boot 4.0.x，与 SCA 2025.1.0.0 配套）。
+    implementation platform('org.springframework.cloud:spring-cloud-dependencies:2025.1.0')
     // === Spring Cloud Alibaba BOM（管理 Nacos / Sentinel 版本） ===
-    implementation platform('com.alibaba.cloud:spring-cloud-alibaba-dependencies:2023.0.3.4')
+    implementation platform('com.alibaba.cloud:spring-cloud-alibaba-dependencies:2025.1.0.0')
 
     // === Nacos 服务发现 + 配置中心 ===
     implementation 'com.alibaba.cloud:spring-cloud-starter-alibaba-nacos-discovery'
@@ -123,10 +132,15 @@ dependencies {
     implementation 'com.fasterxml.jackson.core:jackson-databind:2.15.4'
 
     // === Resilience4j（与 Sentinel 共存，迁移期保留） ===
-    implementation 'io.github.resilience4j:resilience4j-spring-boot3:2.4.0'
+    // 升级修复（task #395）：resilience4j-spring-boot3 的 SpringBoot3Verifier 在启动时
+    // 检查 Spring Boot 主版本，遇到 4.0 抛 IncompatibleSpringBootVersionException。
+    // 替换为 resilience4j-spring-boot4（同 2.4.0 版本，兼容 Spring Boot 4.0）。
+    implementation 'io.github.resilience4j:resilience4j-spring-boot4:2.4.0'
 
     // === 测试 ===
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    // === Spring Boot 4.0 模块化：@AutoConfigureMockMvc 移到 spring-boot-webmvc-test ===
+    testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
 
     // TD-06：去版本号走 Boot 3.2.5 BOM（5.2.0），消除 4.11.0 显式声明与 BOM 5.x 消解混轨。
     testImplementation 'org.mockito:mockito-junit-jupiter'

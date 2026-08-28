@@ -32,6 +32,6 @@ dependencies {
     // TD-06：本模块非 Boot 应用，经 testImplementation platform 导入 Boot 3.2.5 BOM，
     // mockito-core 去版本号由 BOM 管理（解析为 5.2.0）。原先为对冲根注入 4.11.0 而显式
     // 锁定的 5.11.0 随根注入删除（v2.40.0）一并移除，全仓 Mockito 收敛到单版本。
-    testImplementation platform('org.springframework.boot:spring-boot-dependencies:3.2.5')
+    testImplementation platform('org.springframework.boot:spring-boot-dependencies:4.0.8')
     testImplementation 'org.mockito:mockito-core'
 }

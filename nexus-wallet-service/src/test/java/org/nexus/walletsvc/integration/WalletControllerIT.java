@@ -7,9 +7,9 @@ import org.nexus.sdk.client.feign.SigningServiceFeignClient;
 import org.nexus.walletsvc.entity.WhitelistEntryEntity;
 import org.nexus.walletsvc.repository.WhitelistEntryRepository;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -44,7 +44,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * </ul>
  * </p>
  *
- * <p>{@link SigningServiceFeignClient} 通过 {@code @MockBean} 模拟。</p>
+ * <p>{@link SigningServiceFeignClient} 通过 {@code @MockitoBean} 模拟。</p>
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -57,7 +57,7 @@ class WalletControllerIT {
     @Autowired
     private WhitelistEntryRepository whitelistEntryRepository;
 
-    @MockBean
+    @MockitoBean
     private SigningServiceFeignClient signingServiceClient;
 
     private static final String WHITELISTED_ADDR = "0xcontrollerTestAddr12345678901";

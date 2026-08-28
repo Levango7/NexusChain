@@ -60,7 +60,7 @@ public class HttpWalletMgmtClient implements WalletMgmtClient {
     public String addressToPubkeyHash(String address) {
         try {
             String baseUrl = gatewayConfig.getExchangeWallet().getBaseUrl();
-            String url = UriComponentsBuilder.fromHttpUrl(baseUrl)
+            String url = UriComponentsBuilder.fromUriString(baseUrl)
                     .pathSegment("addressToPubkeyHash")
                     .queryParam("address", address)
                     .toUriString();
@@ -84,7 +84,7 @@ public class HttpWalletMgmtClient implements WalletMgmtClient {
     public boolean verifyAddress(String address) {
         try {
             String baseUrl = gatewayConfig.getExchangeWallet().getBaseUrl();
-            String url = UriComponentsBuilder.fromHttpUrl(baseUrl)
+            String url = UriComponentsBuilder.fromUriString(baseUrl)
                     .pathSegment("verifyAddress")
                     .queryParam("address", address)
                     .toUriString();

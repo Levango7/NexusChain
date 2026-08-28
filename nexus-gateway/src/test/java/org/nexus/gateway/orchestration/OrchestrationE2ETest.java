@@ -4,13 +4,14 @@ import org.junit.jupiter.api.*;
 import org.nexus.gateway.interceptor.ApiKeyInterceptor;
 import org.nexus.gateway.security.RequestSignatureInterceptor;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
+import io.micrometer.tracing.Tracer;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
@@ -37,16 +38,21 @@ class OrchestrationE2ETest {
     @Autowired
     private MockMvc mockMvc;
 
+    // Spring Boot 4.0.8 升级修复：测试上下文未启用 tracing autoconfigure，
+    // OrchestrationService 等构造函数需要 Tracer bean，用 @MockitoBean 提供 mock。
+    @MockitoBean
+    private Tracer tracer;
+
     // Replace the auth interceptors with no-op mocks so the E2E tests can drive
     // the orchestration engine directly. WebConfig registers these interceptor
     // beans into the Spring MVC interceptor chain; by substituting Mockito mocks
     // whose preHandle() returns true, every /api/v1/payments/** request passes
     // through unauthenticated. This scope is limited to this test class only —
     // other integration tests keep the real interceptors.
-    @MockBean
+    @MockitoBean
     private ApiKeyInterceptor apiKeyInterceptor;
 
-    @MockBean
+    @MockitoBean
     private RequestSignatureInterceptor requestSignatureInterceptor;
 
     private static String paymentId;

@@ -3,7 +3,7 @@ package org.nexus.governance;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.condition.EnabledIf;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -16,7 +16,7 @@ import static org.junit.jupiter.api.Assertions.*;
 /**
  * 治理参数化 Mock 测试（原 ParameterGovernanceE2ETest 重命名）。
  *
- * <p><b>命名诚实性说明</b>：本测试使用 {@code @MockBean} 替换
+ * <p><b>命名诚实性说明</b>：本测试使用 {@code @MockitoBean} 替换
  * {@link GovernanceService}，仅验证 {@link GovernanceProposal}
  * 模型对象的字段设置与状态枚举，不涉及真实治理服务调用或链上提案流程，
  * 因此从 "E2E" 重命名为 "Mock" 以准确反映测试性质。</p>
@@ -110,7 +110,7 @@ class ParameterGovernanceMockTest {
         }
     }
 
-    @MockBean private GovernanceService governanceService;
+    @MockitoBean private GovernanceService governanceService;
 
     @Test @Order(1)
     void governanceServiceMockBeanAvailable() {

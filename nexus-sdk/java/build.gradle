@@ -46,7 +46,7 @@ dependencies {
     // compileOnly 的平台约束不传播到 runtimeClasspath（Gradle configuration 继承语义），
     // 无版本号的 jackson-databind 在测试/运行期将无法解析；implementation platform
     // 使约束同时覆盖编译与运行期，且与消费方自身 Boot 3.2.5 BOM 完全一致、无行为变化。
-    implementation platform('org.springframework.boot:spring-boot-dependencies:3.2.5')
+    implementation platform('org.springframework.boot:spring-boot-dependencies:4.0.8')
     compileOnly platform('org.springframework.cloud:spring-cloud-dependencies:2023.0.3')
     compileOnly 'org.springframework.cloud:spring-cloud-starter-openfeign'
     compileOnly 'org.springframework.boot:spring-boot-starter-web'

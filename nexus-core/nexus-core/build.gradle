@@ -12,7 +12,7 @@ plugins {
 // 优先于 BOM 管理值，语义不变；BOM 仅对去版本号声明生效。
 dependencyManagement {
     imports {
-        mavenBom 'org.springframework.boot:spring-boot-dependencies:3.2.5'
+        mavenBom 'org.springframework.boot:spring-boot-dependencies:4.0.8'
     }
 }
 
@@ -89,7 +89,9 @@ test {
         logger.lifecycle("Running test: ${descriptor}")
     }
 
-    jvmArgs = ["-Xss8m", "-Xmx3G"]
+    // Spring Boot 4.0 升级后依赖图扩大、动态代理类增多，补充 MaxMetaspaceSize
+    // 防止 forked 测试 JVM Metaspace 爆炸（默认无上限可能耗尽 native 内存）。
+    jvmArgs = ["-Xss8m", "-Xmx3G", "-XX:MaxMetaspaceSize=512m"]
 
     testLogging {
         events "failed"
@@ -176,6 +178,14 @@ dependencies {
     // TD-07/TD-08：net.sf.json-lib:2.4:jdk15 与 json-simple:1.1.1 已删除，
     // 使用面（KeystoreAction/HatchServiceImpl/PoolController）已迁移至 Jackson。
     testImplementation "org.springframework.boot:spring-boot-starter-test"
+    // Spring Boot 4.0.8 BOM 拉入 JUnit Platform/Jupiter 6.0.3（JUnit 6.x）。
+    // Gradle 8.14 useJUnitPlatform() 内部注入的 junit-platform-launcher 是 1.11.x，
+    // 与 engine 6.0.3 不兼容：launcher 缺少 OutputDirectoryCreator 实现，导致
+    // "TestEngine with ID 'junit-jupiter' failed to discover tests" /
+    // "Could not complete execution for Gradle Test Executor 1"。
+    // 显式声明 launcher，版本交由上方 dependencyManagement 导入的 Boot 4.0.8 BOM
+    // （传递 junit-bom:6.0.3）管理，解析到 6.0.3，与 engine 对齐。
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
     // REQ-TEST-01: Testcontainers——@SpringBootTest 用一次性真实 Postgres 容器，
     // 消除对本机 nexus_test 库角色/密码状态的依赖（无 Docker 时回落本地库配置）
     testImplementation platform("org.testcontainers:testcontainers-bom:1.19.8")

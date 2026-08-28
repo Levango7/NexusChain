@@ -2,17 +2,18 @@ package org.nexus.gateway.integration;
 
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.nexus.gateway.client.ExchangeWalletClient;
 import org.nexus.sdk.client.feign.SigningServiceFeignClient;
 import org.nexus.sdk.client.feign.WalletMgmtFeignClient;
 import org.nexus.sdk.wallet.WalletUtils;
+import io.micrometer.tracing.Tracer;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import static org.mockito.Mockito.when;
@@ -22,6 +23,7 @@ import org.springframework.test.web.servlet.MvcResult;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 import static org.junit.jupiter.api.Assertions.*;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 
 /**
  * Gateway → Core cross-module integration test.
@@ -38,42 +40,48 @@ class GatewayCoreIntegrationTest {
     @Autowired
     private MockMvc mockMvc;
 
+    // Spring Boot 4.0.8 升级修复：测试上下文未启用 tracing autoconfigure，
+    // PaymentServiceImpl 等构造函数需要 Tracer bean，用 @MockitoBean 提供 mock。
+    @MockitoBean
+    private Tracer tracer;
+
     // PaymentServiceImpl 直接注入 Feign 客户端（Phase 1 #55 改造），
     // ExchangeWalletClient 兼容层默认不装配（@ConditionalOnProperty enabled=false），
     // 因此必须 mock Feign 客户端才能让退款流程在无远程服务的测试环境正常工作。
-    @MockBean
+    @MockitoBean
     private ExchangeWalletClient walletClient;
 
-    @MockBean
+    @MockitoBean
     private SigningServiceFeignClient signingServiceFeignClient;
 
-    @MockBean
+    @MockitoBean
     private WalletMgmtFeignClient walletMgmtFeignClient;
 
     /** WalletUtils.addressToPubkeyHash 静态方法 mock（替代原 walletMgmtFeignClient.addressToPubkeyHash） */
-    private static MockedStatic<WalletUtils> mockedWalletUtils;
-
-    @BeforeAll
-    static void initWalletUtilsMock() {
-        mockedWalletUtils = Mockito.mockStatic(WalletUtils.class);
-        mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash(anyString()))
-                .thenReturn("aabbccddeeff00112233445566778899aabbccdd");
-    }
-
-    @AfterAll
-    static void closeWalletUtilsMock() {
-        if (mockedWalletUtils != null) {
-            mockedWalletUtils.close();
-        }
-    }
+    // Spring Boot 4.0.8 升级修复：@MockitoBean 在每个测试方法前可能重置 Mockito mock maker，
+    // 导致 @BeforeAll 里创建的 MockedStatic 在服务代码中失效。改为 @BeforeEach/@AfterEach
+    // 逐方法管理 MockedStatic 生命周期，确保 mock 在 mockMvc.perform() 的服务调用中生效。
+    private MockedStatic<WalletUtils> mockedWalletUtils;
 
     @BeforeEach
     void stubWalletSign() {
+        // 逐方法重建 MockedStatic，避免 @MockitoBean 重置后失效
+        mockedWalletUtils = Mockito.mockStatic(WalletUtils.class);
+        mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash(anyString()))
+                .thenReturn("aabbccddeeff00112233445566778899aabbccdd");
         // Refund signing is delegated to signing-service via signTransfer (platform key).
         // In this gateway-only integration test the wallet service is stubbed to succeed.
         when(signingServiceFeignClient.signTransfer(anyString(), anyString(), org.mockito.ArgumentMatchers.any(java.math.BigDecimal.class)))
                 .thenReturn("0xRefundTxHash1234567890abcdef1234567890abcdef");
-        // Refund flow first converts the payer address to a pubkey hash via WalletUtils (static, mocked in @BeforeAll).
+        // Refund flow first converts the payer address to a pubkey hash via WalletUtils (static, mocked above).
+    }
+
+    @AfterEach
+    void closeWalletUtilsMock() {
+        if (mockedWalletUtils != null) {
+            mockedWalletUtils.close();
+            mockedWalletUtils = null;
+        }
     }
 
     private static String apiKey;
@@ -95,12 +103,14 @@ class GatewayCoreIntegrationTest {
 
         // Verify
         mockMvc.perform(post("/api/v1/merchants/" + merchantId + "/verify")
+                .with(user("admin").roles("ADMIN", "OPERATOR"))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"status\":\"VERIFIED\"}"))
                 .andExpect(status().isOk());
 
         // Generate API key
         MvcResult keyRes = mockMvc.perform(post("/api/v1/merchants/" + merchantId + "/api-keys")
+                .with(user("admin").roles("ADMIN", "OPERATOR"))
                 .contentType(MediaType.APPLICATION_JSON))
                 .andExpect(status().isCreated())
                 .andReturn();
@@ -167,6 +177,7 @@ class GatewayCoreIntegrationTest {
     @org.junit.jupiter.api.Order(5)
     @DisplayName("Refund a paid order")
     void refundPaidOrder() throws Exception {
+
         mockMvc.perform(post("/api/v1/orders/" + orderId + "/refund")
                 .header("X-NexusChain-ApiKey", apiKey)
                 .with(SignedRequests.sandbox())

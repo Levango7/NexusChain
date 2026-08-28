@@ -2,14 +2,15 @@ package org.nexus.gateway.integration;
 
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.http.MediaType;
 import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
+import io.micrometer.tracing.Tracer;
 import org.nexus.sdk.client.feign.SigningServiceFeignClient;
 import org.nexus.sdk.client.feign.WalletMgmtFeignClient;
 import org.nexus.sdk.wallet.WalletUtils;
@@ -21,6 +22,7 @@ import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 import static org.junit.jupiter.api.Assertions.*;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 
 /**
  * Subscription + Refund flow integration test.
@@ -36,13 +38,18 @@ class SubscriptionRefundIntegrationTest {
     @Autowired
     private MockMvc mockMvc;
 
+    // Spring Boot 4.0.8 升级修复：测试上下文未启用 tracing autoconfigure，
+    // PaymentServiceImpl 等构造函数需要 Tracer bean，用 @MockitoBean 提供 mock。
+    @MockitoBean
+    private Tracer tracer;
+
     // SubscriptionServiceImpl 与 PaymentServiceImpl 直接注入 Feign 客户端，
     // gateway-only 集成测试中签名/钱包服务不可达，需 mock 让订阅扣款与退款
     // 流程在无远程服务环境下正常工作（与 GatewayCoreIntegrationTest 对齐）。
-    @MockBean
+    @MockitoBean
     private SigningServiceFeignClient signingServiceFeignClient;
 
-    @MockBean
+    @MockitoBean
     private WalletMgmtFeignClient walletMgmtFeignClient;
 
     /** WalletUtils.addressToPubkeyHash 静态方法 mock（替代原 walletMgmtFeignClient.addressToPubkeyHash） */
@@ -88,11 +95,13 @@ class SubscriptionRefundIntegrationTest {
         merchantId = Long.parseLong(reg.getResponse().getContentAsString().replaceAll(".*\"id\":(\\d+).*", "$1"));
 
         mockMvc.perform(post("/api/v1/merchants/" + merchantId + "/verify")
+                .with(user("admin").roles("ADMIN", "OPERATOR"))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"status\":\"VERIFIED\"}"))
                 .andExpect(status().isOk());
 
         MvcResult keyRes = mockMvc.perform(post("/api/v1/merchants/" + merchantId + "/api-keys")
+                .with(user("admin").roles("ADMIN", "OPERATOR"))
                 .contentType(MediaType.APPLICATION_JSON))
                 .andExpect(status().isCreated())
                 .andReturn();

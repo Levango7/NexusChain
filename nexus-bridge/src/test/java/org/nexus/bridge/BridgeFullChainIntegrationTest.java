@@ -1,13 +1,15 @@
 package org.nexus.bridge;
 
 import com.jayway.jsonpath.JsonPath;
+import io.micrometer.tracing.Tracer;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
-import org.springframework.security.test.context.support.WithMockUser;
+
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
@@ -19,6 +21,7 @@ import java.security.spec.PKCS8EncodedKeySpec;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 import static org.junit.jupiter.api.Assertions.*;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 
 /**
  * Bridge full-chain integration test: lock → mint → burn → unlock.
@@ -34,11 +37,16 @@ import static org.junit.jupiter.api.Assertions.*;
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
-@WithMockUser(username = "test", roles = {"OPERATOR", "ADMIN"})
+
 class BridgeFullChainIntegrationTest {
 
     @Autowired
     private MockMvc mockMvc;
+
+    // Spring Boot 4.0.8 升级修复：测试上下文未启用 tracing autoconfigure，
+    // BridgeServiceImpl 构造函数需要 Tracer bean，用 @MockitoBean 提供 mock。
+    @MockitoBean
+    private Tracer tracer;
 
     private static String lockTxId;
     private static String burnTxId;
@@ -103,6 +111,7 @@ class BridgeFullChainIntegrationTest {
     @DisplayName("Lock assets on source chain")
     void lockAssets() throws Exception {
         MvcResult res = mockMvc.perform(post("/api/v1/bridge/lock")
+                        .with(user("test").roles("OPERATOR", "ADMIN"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(LOCK_BODY))
                 .andExpect(status().isCreated())
@@ -120,10 +129,11 @@ class BridgeFullChainIntegrationTest {
     @DisplayName("Mint wrapped assets on target chain with valid threshold signatures")
     void mintWrapped() throws Exception {
         mockMvc.perform(post("/api/v1/bridge/mint")
+                        .with(user("test").roles("OPERATOR", "ADMIN"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"lockTxId\":\"" + lockTxId + "\","
                                 + twoSigJson(lockTxId, 500000L, "0xRecipient")
-                                + ",\"minterAddress\":\"" + PUB_V1 + "\",\"targetChainId\":\"ethereum\"}"))
+                                + ",\"minterAddress\":\"" + PUB_V1 + "\",\"targetChainId\":\"ethereum\",\"timestamp\":0}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("MINTED"));
     }
@@ -133,6 +143,7 @@ class BridgeFullChainIntegrationTest {
     @DisplayName("Burn wrapped assets (initiate return)")
     void burnWrapped() throws Exception {
         MvcResult res = mockMvc.perform(post("/api/v1/bridge/burn")
+                        .with(user("test").roles("OPERATOR", "ADMIN"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"sourceChainId\":\"nexus\",\"targetChainId\":\"ethereum\","
                                 + "\"amount\":500000,\"userAddress\":\"0xUser\","
@@ -150,10 +161,11 @@ class BridgeFullChainIntegrationTest {
     @DisplayName("Unlock original assets on source chain")
     void unlockAssets() throws Exception {
         mockMvc.perform(post("/api/v1/bridge/unlock")
+                        .with(user("test").roles("OPERATOR", "ADMIN"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"burnTxId\":\"" + burnTxId + "\","
                                 + twoUnlockSigJson(burnTxId, 500000L, "0xRecipient")
-                                + ",\"unlockerAddress\":\"" + PUB_V1 + "\",\"sourceChainId\":\"nexus\"}"))
+                                + ",\"unlockerAddress\":\"" + PUB_V1 + "\",\"sourceChainId\":\"nexus\",\"timestamp\":0}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("UNLOCKED"));
     }
@@ -175,6 +187,7 @@ class BridgeFullChainIntegrationTest {
     @DisplayName("Reject mint with insufficient signatures (below threshold)")
     void rejectMintWithInsufficientSignatures() throws Exception {
         MvcResult lockRes = mockMvc.perform(post("/api/v1/bridge/lock")
+                        .with(user("test").roles("OPERATOR", "ADMIN"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"sourceChainId\":\"nexus\",\"targetChainId\":\"ethereum\","
                                 + "\"amount\":100000,\"userAddress\":\"0xUser2\","
@@ -188,10 +201,11 @@ class BridgeFullChainIntegrationTest {
         String oneSig = "\"signatures\":{\"" + PUB_V1 + "\":\"" + sign(PRIV_V1, payload) + "\"}";
 
         mockMvc.perform(post("/api/v1/bridge/mint")
+                        .with(user("test").roles("OPERATOR", "ADMIN"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"lockTxId\":\"" + txId + "\","
                                 + oneSig
-                                + ",\"minterAddress\":\"" + PUB_V1 + "\",\"targetChainId\":\"ethereum\"}"))
+                                + ",\"minterAddress\":\"" + PUB_V1 + "\",\"targetChainId\":\"ethereum\",\"timestamp\":0}"))
                 .andExpect(status().isConflict());
 
         // 修复点 2：失败的锁定交易应进入 FAILED 终态并记录失败原因
@@ -206,6 +220,7 @@ class BridgeFullChainIntegrationTest {
     @DisplayName("Reject mint with forged signature content even above count threshold (P1 fix)")
     void rejectMintWithForgedSignatures() throws Exception {
         MvcResult lockRes = mockMvc.perform(post("/api/v1/bridge/lock")
+                        .with(user("test").roles("OPERATOR", "ADMIN"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"sourceChainId\":\"nexus\",\"targetChainId\":\"ethereum\","
                                 + "\"amount\":100000,\"userAddress\":\"0xUser3\","
@@ -218,10 +233,11 @@ class BridgeFullChainIntegrationTest {
         String forged = "\"signatures\":{\"" + PUB_V1 + "\":\"deadbeef\",\"" + PUB_V2 + "\":\"cafebabe\"}";
 
         mockMvc.perform(post("/api/v1/bridge/mint")
+                        .with(user("test").roles("OPERATOR", "ADMIN"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"lockTxId\":\"" + txId + "\","
                                 + forged
-                                + ",\"minterAddress\":\"" + PUB_V1 + "\",\"targetChainId\":\"ethereum\"}"))
+                                + ",\"minterAddress\":\"" + PUB_V1 + "\",\"targetChainId\":\"ethereum\",\"timestamp\":0}"))
                 .andExpect(status().isConflict());
 
         mockMvc.perform(get("/api/v1/bridge/tx/" + txId))

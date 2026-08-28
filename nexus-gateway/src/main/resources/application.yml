@@ -58,8 +58,9 @@ spring:
 
   jackson:
     default-property-inclusion: non_null
-    serialization:
-      write-dates-as-timestamps: false
+    # serialization.write-dates-as-timestamps 已移除：Jackson 3 (tools.jackson) 的
+    # SerializationFeature 不再包含 WRITE_DATES_AS_TIMESTAMPS 常量，日期默认以 ISO-8601
+    # 格式序列化（即原 write-dates-as-timestamps=false 的目标行为，已是默认）。
 
 
   # === Phase 1 任务 #55：Spring Cloud Alibaba / OpenFeign 配置 ===

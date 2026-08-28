@@ -258,7 +258,7 @@ services:
   # 集群部署参考：https://nacos.io/zh-cn/docs/cluster-mode-quick-start.html
   # 集群配置示例（注释形式，按需取消注释并调整）：
   # nacos-1:
-  #   image: nacos/nacos-server:v2.4.3
+  #   image: nacos/nacos-server:v3.1.2
   #   environment:
   #     - MODE=cluster
   #     - NACOS_SERVERS=nacos-1:8848 nacos-2:8848 nacos-3:8848
@@ -268,7 +268,7 @@ services:
   #     - MYSQL_SERVICE_DB_NAME=nacos
   #   ...
   nacos:
-    image: nacos/nacos-server:v2.4.3
+    image: nacos/nacos-server:v3.1.2
     container_name: nexus-nacos-prod
     expose: ['8848', '9848']
     environment:
@@ -294,10 +294,10 @@ services:
       start_period: 30s
     restart: always
 
-  # === 分布式事务协调器（Seata 2.0.0） ===
+  # === 分布式事务协调器（Seata 2.5.0） ===
   # REQ-36/T36.4: 配置加密 key 用占位符
   seata:
-    image: seataio/seata-server:2.1.0
+    image: seataio/seata-server:2.5.0
     container_name: nexus-seata-prod
     expose: ['8091', '7091']
     environment:

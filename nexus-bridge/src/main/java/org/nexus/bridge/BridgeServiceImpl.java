@@ -243,6 +243,7 @@ public class BridgeServiceImpl implements BridgeService {
                 // 1) 验签：签名者必须位于白名单且签名对确定性载荷有效
                 Map<String, String> signatures = BridgeValidator.snapshot(request.getSignatures());
                 String payload = mintPayload(lockTx, request);
+
                 Set<String> validSigners = BridgeValidator.filterValidSignatures(payload, signatures, config);
 
                 // 2) 数阈值：只对验签通过的签名计数

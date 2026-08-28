@@ -68,7 +68,11 @@ public final class BusinessSpan implements AutoCloseable {
         if (tracer == null) {
             return new BusinessSpan(null, null, name);
         }
-        Span span = tracer.nextSpan().name(name).start();
+        Span nextSpan = tracer.nextSpan();
+        if (nextSpan == null) {
+            return new BusinessSpan(tracer, null, name);
+        }
+        Span span = nextSpan.name(name).start();
         return new BusinessSpan(tracer, span, name);
     }
 

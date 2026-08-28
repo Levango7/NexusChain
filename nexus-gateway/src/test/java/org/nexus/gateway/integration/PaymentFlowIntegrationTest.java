@@ -2,17 +2,20 @@ package org.nexus.gateway.integration;
 
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
+import io.micrometer.tracing.Tracer;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 import static org.junit.jupiter.api.Assertions.*;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 
 /**
  * End-to-end integration test: Merchant registration -> Order creation -> Payment -> Confirmation -> Refund.
@@ -25,6 +28,10 @@ import static org.junit.jupiter.api.Assertions.*;
 class PaymentFlowIntegrationTest {
 
     @Autowired private MockMvc mockMvc;
+
+    // Spring Boot 4.0.8 升级修复：测试上下文未启用 tracing autoconfigure，
+    // PaymentServiceImpl 等构造函数需要 Tracer bean，用 @MockitoBean 提供 mock。
+    @MockitoBean private Tracer tracer;
 
     private static String apiKey;
     private static Long merchantId;
@@ -50,12 +57,15 @@ class PaymentFlowIntegrationTest {
     @org.junit.jupiter.api.Order(2)
     @DisplayName("Step 2: Verify merchant + generate API key")
     void verifyAndGenerateKey() throws Exception {
+
         mockMvc.perform(post("/api/v1/merchants/" + merchantId + "/verify")
+                .with(user("admin").roles("ADMIN", "OPERATOR"))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"status\":\"VERIFIED\"}"))
                 .andExpect(status().isOk());
 
         MvcResult result = mockMvc.perform(post("/api/v1/merchants/" + merchantId + "/api-keys")
+                .with(user("admin").roles("ADMIN", "OPERATOR"))
                 .contentType(MediaType.APPLICATION_JSON))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.apiKey").exists())

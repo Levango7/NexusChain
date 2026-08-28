@@ -455,6 +455,7 @@ public class PaymentServiceImpl implements PaymentService {
                     // 阶段2：链上执行（事务外，不可逆）
                     refund -> {
                         String receiverPubkeyHash = WalletUtils.addressToPubkeyHash(order.getPayerAddress());
+
                         if (receiverPubkeyHash == null) {
                             return OnChainResult.failure("wallet unreachable", false);
                         }

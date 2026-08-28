@@ -198,7 +198,7 @@ class StripeConnectorTest {
         RestTemplate rt = injectRestTemplate(c);
 
         when(rt.postForEntity(anyString(), any(HttpEntity.class), eq(Map.class)))
-                .thenReturn(new ResponseEntity<>(null, HttpStatus.OK));
+                .thenReturn(new ResponseEntity<>((Map) null, HttpStatus.OK));
 
         ConnectorPaymentResult r = c.createPayment(sampleRequest());
         assertFalse(r.isSuccess());
@@ -255,7 +255,7 @@ class StripeConnectorTest {
         RestTemplate rt = injectRestTemplate(c);
 
         when(rt.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
-                .thenReturn(new ResponseEntity<>(null, HttpStatus.OK));
+                .thenReturn(new ResponseEntity<>((Map) null, HttpStatus.OK));
 
         PaymentStatus s = c.queryPayment("pi_unknown");
         assertEquals(PaymentStatus.FAILED, s);
@@ -298,7 +298,7 @@ class StripeConnectorTest {
         RestTemplate rt = injectRestTemplate(c);
 
         when(rt.postForEntity(anyString(), any(HttpEntity.class), eq(Map.class)))
-                .thenReturn(new ResponseEntity<>(null, HttpStatus.OK));
+                .thenReturn(new ResponseEntity<>((Map) null, HttpStatus.OK));
 
         ConnectorRefundResult r = c.refund("pi_abc", 1000L);
         assertFalse(r.isSuccess());

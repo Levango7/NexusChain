@@ -1,5 +1,5 @@
 plugins {
-    id 'org.springframework.boot' version '3.3.13'
+    id 'org.springframework.boot' version '4.0.8'
     id 'io.spring.dependency-management' version '1.1.4'
     id 'java'
     id 'jacoco'
@@ -69,12 +69,12 @@ dependencies {
 
     // Resilience4j（保留：管理对链节点直接 HTTP 调用的熔断/重试，与 Sentinel 共存。
     // Sentinel 管理对 signing/wallet-service 的 Feign 调用。Phase 1 任务 #55 不删除。）
-    implementation 'io.github.resilience4j:resilience4j-spring-boot3:2.4.0'
+    implementation 'io.github.resilience4j:resilience4j-spring-boot4:2.4.0'
 
     // === Spring Cloud BOM（管理 OpenFeign / LoadBalancer 版本，设计文档 §4.1） ===
-    implementation platform('org.springframework.cloud:spring-cloud-dependencies:2023.0.3')
+    implementation platform('org.springframework.cloud:spring-cloud-dependencies:2025.1.0')
     // === Spring Cloud Alibaba BOM（管理 Nacos / Sentinel 版本） ===
-    implementation platform('com.alibaba.cloud:spring-cloud-alibaba-dependencies:2023.0.3.4')
+    implementation platform('com.alibaba.cloud:spring-cloud-alibaba-dependencies:2025.1.0.0')
 
     // === Nacos 服务发现 + 配置中心（Phase 1 任务 #55） ===
     implementation 'com.alibaba.cloud:spring-cloud-starter-alibaba-nacos-discovery'
@@ -129,6 +129,8 @@ dependencies {
 
     // Testing
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    // === Spring Boot 4.0 模块化：@AutoConfigureMockMvc 移到 spring-boot-webmvc-test ===
+    testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
     // === 测试期安全支持：提供 @WithMockUser 注解用于 MockMvc 方法级鉴权测试 ===
     // 集成测试中 verify / generateApiKey / revokeApiKey 端点要求 hasRole('ADMIN')，
     // 需通过 @WithMockUser 模拟认证用户与角色才能访问这些端点。

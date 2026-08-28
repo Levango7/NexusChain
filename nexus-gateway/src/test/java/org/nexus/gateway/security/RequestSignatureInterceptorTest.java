@@ -111,7 +111,7 @@ class RequestSignatureInterceptorTest {
         req.addHeader("X-NexusChain-Nonce", nonce);
 
         // 使用 ContentCachingRequestWrapper 走 readBody 分支
-        ContentCachingRequestWrapper wrapped = new ContentCachingRequestWrapper(req);
+        ContentCachingRequestWrapper wrapped = new ContentCachingRequestWrapper(req, 1024);
         // 触发 body 缓存
         wrapped.getContentAsByteArray();
 
@@ -135,7 +135,7 @@ class RequestSignatureInterceptorTest {
         req1.addHeader("X-NexusChain-Signature", sig);
         req1.addHeader("X-NexusChain-Timestamp", ts);
         req1.addHeader("X-NexusChain-Nonce", nonce);
-        ContentCachingRequestWrapper w1 = new ContentCachingRequestWrapper(req1);
+        ContentCachingRequestWrapper w1 = new ContentCachingRequestWrapper(req1, 1024);
         w1.getContentAsByteArray();
         assertTrue(interceptor.preHandle(w1, new MockHttpServletResponse(), null));
 
@@ -145,7 +145,7 @@ class RequestSignatureInterceptorTest {
         req2.addHeader("X-NexusChain-Signature", sig);
         req2.addHeader("X-NexusChain-Timestamp", ts);
         req2.addHeader("X-NexusChain-Nonce", nonce);
-        ContentCachingRequestWrapper w2 = new ContentCachingRequestWrapper(req2);
+        ContentCachingRequestWrapper w2 = new ContentCachingRequestWrapper(req2, 1024);
         w2.getContentAsByteArray();
         MockHttpServletResponse resp2 = new MockHttpServletResponse();
         assertFalse(interceptor.preHandle(w2, resp2, null));

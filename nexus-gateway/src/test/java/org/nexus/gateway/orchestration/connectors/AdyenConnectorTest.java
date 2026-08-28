@@ -249,7 +249,7 @@ class AdyenConnectorTest {
         RestTemplate rt = injectRestTemplate(c);
 
         when(rt.postForEntity(anyString(), any(HttpEntity.class), eq(Map.class)))
-                .thenReturn(new ResponseEntity<>(null, HttpStatus.OK));
+                .thenReturn(new ResponseEntity<>((Map) null, HttpStatus.OK));
 
         ConnectorPaymentResult r = c.createPayment(sampleRequest());
         assertFalse(r.isSuccess());
@@ -295,7 +295,7 @@ class AdyenConnectorTest {
         RestTemplate rt = injectRestTemplate(c);
 
         when(rt.postForEntity(anyString(), any(HttpEntity.class), eq(Map.class)))
-                .thenReturn(new ResponseEntity<>(null, HttpStatus.OK));
+                .thenReturn(new ResponseEntity<>((Map) null, HttpStatus.OK));
 
         ConnectorRefundResult r = c.refund("ref1", 1000L);
         assertFalse(r.isSuccess());

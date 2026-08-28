@@ -73,7 +73,7 @@ class HttpClientTest {
         HttpSigningServiceClient client = new HttpSigningServiceClient(cfg);
         RestTemplate rt = mock(RestTemplate.class);
         when(rt.postForEntity(anyString(), any(), eq(Map.class)))
-                .thenReturn(new ResponseEntity<>(null, HttpStatus.OK));
+                .thenReturn(new ResponseEntity<>((Map) null, HttpStatus.OK));
         setField(client, "restTemplate", rt);
 
         assertNull(client.signTransfer("from", "to", BigDecimal.ONE));

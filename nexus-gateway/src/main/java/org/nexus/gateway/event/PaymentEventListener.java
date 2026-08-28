@@ -111,7 +111,7 @@ public class PaymentEventListener {
             ResponseEntity<String> resp = restTemplate.postForEntity(callbackUrl, request, String.class);
 
             log.info("Webhook sent: merchant={}, event={}, status={}",
-                    merchantId, payload.get("eventType"), resp.getStatusCodeValue());
+                    merchantId, payload.get("eventType"), resp.getStatusCode().value());
         } catch (RuntimeException e) {
             log.error("Webhook delivery failed: merchant={}, error={}", merchantId, e.getMessage());
             retryWebhook(callbackUrl, payload, secret, 1);

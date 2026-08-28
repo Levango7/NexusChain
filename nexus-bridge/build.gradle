@@ -18,7 +18,7 @@
 // 详见 .codeartsdoer/specs/microservice-phase1-2/design.md §3.3 / §4.1。
 
 plugins {
-    id 'org.springframework.boot' version '3.3.13'
+    id 'org.springframework.boot' version '4.0.8'
     id 'io.spring.dependency-management' version '1.1.4'
     id 'java'
 }
@@ -77,9 +77,9 @@ dependencies {
     }
 
     // === Spring Cloud BOM（管理 OpenFeign / LoadBalancer 版本，设计文档 §4.1） ===
-    implementation platform('org.springframework.cloud:spring-cloud-dependencies:2023.0.3')
+    implementation platform('org.springframework.cloud:spring-cloud-dependencies:2025.1.0')
     // === Spring Cloud Alibaba BOM（管理 Nacos / Sentinel 版本） ===
-    implementation platform('com.alibaba.cloud:spring-cloud-alibaba-dependencies:2023.0.3.4')
+    implementation platform('com.alibaba.cloud:spring-cloud-alibaba-dependencies:2025.1.0.0')
 
     // === Nacos 服务发现 + 配置中心（Phase 2 任务 #58） ===
     implementation 'com.alibaba.cloud:spring-cloud-starter-alibaba-nacos-discovery'
@@ -112,6 +112,8 @@ dependencies {
     runtimeOnly 'com.h2database:h2'
     runtimeOnly 'com.mysql:mysql-connector-j'
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    // === Spring Boot 4.0 模块化：@AutoConfigureMockMvc 移到 spring-boot-webmvc-test ===
+    testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
     // === 测试期安全支持：提供 @WithMockUser 注解用于 MockMvc 方法级鉴权测试 ===
     // BridgeController 的 lock/mint/burn/unlock 端点有 @PreAuthorize("hasRole('OPERATOR')")，
     // 集成测试需通过 @WithMockUser 模拟认证用户与角色才能访问这些端点。

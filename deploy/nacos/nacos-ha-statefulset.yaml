@@ -65,7 +65,7 @@ spec:
       # 优雅终止：给 Nacos 时间让 Raft 重新选主
       terminationGracePeriodSeconds: 30
       securityContext:
-        # nacos/nacos-server:v2.4.3 镜像默认以 UID 1000 运行（non-root）
+        # nacos/nacos-server:v3.1.2 镜像默认以 UID 1000 运行（non-root）
         runAsNonRoot: true
         runAsUser: 1000
         runAsGroup: 1000
@@ -101,7 +101,7 @@ spec:
               memory: "64Mi"
       containers:
         - name: nacos
-          image: nacos/nacos-server:v2.4.3
+          image: nacos/nacos-server:v3.1.2
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false

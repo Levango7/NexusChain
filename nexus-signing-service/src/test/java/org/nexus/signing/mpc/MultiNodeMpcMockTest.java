@@ -7,7 +7,7 @@ import org.nexus.signing.mpc.crypto.GrpcMpcCryptoEngine;
 import org.nexus.signing.mpc.crypto.MpcEngineRouter;
 import org.nexus.signing.mpc.transport.MpcTransport;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.beans.factory.annotation.Autowired;
 
@@ -21,7 +21,7 @@ import static org.mockito.Mockito.*;
 /**
  * 多节点 MPC 多方签名 Mock 测试（原 MultiNodeMpcE2ETest 重命名）。
  *
- * <p><b>命名诚实性说明</b>：本测试使用 {@code @MockBean} 替换
+ * <p><b>命名诚实性说明</b>：本测试使用 {@code @MockitoBean} 替换
  * {@link GrpcMpcCryptoEngine} 与 {@link MpcEngineRouter}，
  * 仅验证 Spring 上下文加载与 mock 桩行为，不涉及真实 gRPC/MPC 引擎，
  * 因此从 "E2E" 重命名为 "Mock" 以准确反映测试性质。</p>
@@ -34,12 +34,12 @@ import static org.mockito.Mockito.*;
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class MultiNodeMpcMockTest {
 
-    @MockBean private GrpcMpcCryptoEngine cryptoEngine;
-    @MockBean private MpcEngineRouter engineRouter;
+    @MockitoBean private GrpcMpcCryptoEngine cryptoEngine;
+    @MockitoBean private MpcEngineRouter engineRouter;
     // SigningApprovalService 通过构造函数注入 MpcApprovalPolicy 和 AuditLogService，
     // 需 mock 这两个 bean 否则 Spring 上下文无法加载（NoSuchMethodException: <init>()）。
-    @MockBean private MpcApprovalPolicy mpcApprovalPolicy;
-    @MockBean private AuditLogService auditLogService;
+    @MockitoBean private MpcApprovalPolicy mpcApprovalPolicy;
+    @MockitoBean private AuditLogService auditLogService;
 
     @Test @Order(1)
     void cryptoEngineMockBeanAvailable() {

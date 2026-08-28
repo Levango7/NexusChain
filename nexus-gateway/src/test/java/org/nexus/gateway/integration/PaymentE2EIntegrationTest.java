@@ -7,9 +7,9 @@ import org.nexus.gateway.orchestration.connectors.ChainConnector;
 import org.nexus.gateway.orchestration.connectors.ConsortiumConnector;
 import org.nexus.gateway.security.RequestSignatureInterceptor;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
@@ -19,6 +19,7 @@ import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.test.context.ActiveProfiles;
 
 import org.springframework.test.web.servlet.MockMvc;
+import io.micrometer.tracing.Tracer;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -67,25 +68,28 @@ class PaymentE2EIntegrationTest {
 
     @Autowired private MockMvc mockMvc;
     @Autowired private ObjectMapper objectMapper;
-    @MockBean private ChainConnector chainConnector;
-    @MockBean private ConsortiumConnector consortiumConnector;
+    // Spring Boot 4.0.8 升级修复：测试上下文未启用 tracing autoconfigure，
+    // PaymentServiceImpl 等构造函数需要 Tracer bean，用 @MockitoBean 提供 mock。
+    @MockitoBean private Tracer tracer;
+    @MockitoBean private ChainConnector chainConnector;
+    @MockitoBean private ConsortiumConnector consortiumConnector;
 
     // 替换鉴权拦截器为 no-op mock，让支付 E2E 测试直接驱动业务链路。
     // WebConfig 将这两个 bean 注册到 Spring MVC 拦截器链；用 Mockito mock 替换后，
     // preHandle() 默认返回 false 会拒绝所有请求，因此必须在 setup 中 stub 为 true。
     // 作用域仅限本测试类，其他集成测试仍使用真实拦截器。
-    // P1-4: 保留 @MockBean 而非改为真实鉴权，因为：
+    // P1-4: 保留 @MockitoBean 而非改为真实鉴权，因为：
     //   1) /api/v1/merchants/register 受 ApiKeyInterceptor 保护（P0-1 安全加固移除了
     //      商户端点排除），存在鸡生蛋问题——注册首个商户需要已有 API key；
     //   2) 每个支付请求需计算 HMAC-SHA256(timestamp+nonce+method+path+body) 签名，
     //      且时间戳必须在 5 分钟窗口内，测试维护成本高；
     //   3) 本测试聚焦编排链路而非鉴权边界，鉴权边界由 ApiKeyInterceptorTest /
     //      RequestSignatureInterceptorTest 单元测试覆盖。
-    @MockBean private ApiKeyInterceptor apiKeyInterceptor;
-    @MockBean private RequestSignatureInterceptor requestSignatureInterceptor;
+    @MockitoBean private ApiKeyInterceptor apiKeyInterceptor;
+    @MockitoBean private RequestSignatureInterceptor requestSignatureInterceptor;
     // B4 Boot 3.3.13 升级修复：构造函数注入更严格，test profile 下无 RateLimiter bean
     //（InMemoryRateLimiter @Profile({"dev","sandbox"})，RedisRateLimiter @Profile("prod")）
-    @MockBean private org.nexus.gateway.ratelimit.RateLimiter rateLimiter;
+    @MockitoBean private org.nexus.gateway.ratelimit.RateLimiter rateLimiter;
 
     @BeforeEach
     void setup() throws Exception {
@@ -93,7 +97,7 @@ class PaymentE2EIntegrationTest {
         // 放行所有请求，绕过 API Key 鉴权与 HMAC 请求签名校验
         when(apiKeyInterceptor.preHandle(any(), any(), any())).thenReturn(true);
         when(requestSignatureInterceptor.preHandle(any(), any(), any())).thenReturn(true);
-        // B4: @MockBean RateLimiter 的 tryAcquire() 默认返回 false → RateLimitAdapter 返回 429，
+        // B4: @MockitoBean RateLimiter 的 tryAcquire() 默认返回 false → RateLimitAdapter 返回 429，
         // 必须显式 stub 为 true 才能放行请求
         when(rateLimiter.tryAcquire(any())).thenReturn(true);
         // 模拟 core 通道可用：ConnectorRegistry 会跳过 getId() 返回 null 的连接器，

@@ -5,8 +5,8 @@ import org.junit.jupiter.api.Test;
 import org.nexus.gateway.config.GatewayConfig;
 import org.nexus.sdk.client.feign.SigningServiceFeignClient;
 import org.nexus.sdk.client.feign.WalletMgmtFeignClient;
-import org.springframework.boot.actuate.health.Health;
-import org.springframework.boot.actuate.health.Status;
+import org.springframework.boot.health.contributor.Health;
+import org.springframework.boot.health.contributor.Status;
 import org.springframework.web.client.RestTemplate;
 
 import java.math.BigDecimal;

@@ -148,11 +148,11 @@ services:
       start_period: 30s
 
   # === 服务发现 + 配置中心 ===
-  # Nacos 2.3.2 standalone 模式，嵌入式 derby 持久化（开发环境，不依赖外部 MySQL）。
+  # Nacos 3.1.2 standalone 模式，嵌入式 derby 持久化（开发环境，不依赖外部 MySQL）。
   # 生产环境请使用 docker-compose.prod.yml 中的 Nacos 集群 + MySQL 持久化方案。
-  # 版本对齐设计文档 §4.1：SCA 2023.0.1.0 内置 Nacos Client 2.3.2。
+  # 版本对齐设计文档 §4.1：SCA 2025.1.0.0 内置 Nacos Client 3.1.1（server 3.1.2 同系列稳定版）。
   nacos:
-    image: nacos/nacos-server:v2.4.3
+    image: nacos/nacos-server:v3.1.2
     container_name: nexus-nacos
     ports:
       - '8848:8848'    # Nacos HTTP API + 控制台
@@ -200,12 +200,12 @@ services:
     restart: unless-stopped
 
   # === 分布式事务协调器 ===
-  # Seata Server 2.0.0，TC（Transaction Coordinator）角色。
+  # Seata Server 2.5.0，TC（Transaction Coordinator）角色。
   # 注册到 Nacos（复用 nexus-nacos），配置中心指向 Nacos（namespace=dev, group=SEATA_GROUP）。
   # 开发环境 STORE_MODE=file（生产环境建议 db 模式 + MySQL 持久化）。
-  # 版本对齐设计文档 §4.2.1：与 SCA 2023.0.1.0 seata-spring-boot-starter 兼容。
+  # 版本对齐设计文档 §4.2.1：与 SCA 2025.1.0.0 seata-spring-boot-starter 2.5.0 兼容。
   seata-server:
-    image: seataio/seata-server:2.1.0
+    image: seataio/seata-server:2.5.0
     container_name: nexus-seata-server
     ports:
       - '8091:8091'    # Seata Server TC 端口（client 通过此端口注册分支事务）

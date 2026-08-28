@@ -9,12 +9,13 @@ import org.nexus.gateway.refund.RefundApprovalService;
 import org.nexus.gateway.refund.RefundRequest;
 import org.nexus.gateway.security.MerchantOwnershipGuard;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
+import io.micrometer.tracing.Tracer;
 
 import java.math.BigDecimal;
 import java.util.Optional;
@@ -46,25 +47,28 @@ class RefundApprovalE2ETest {
     private static final String MERCHANT_ATTR = MerchantOwnershipGuard.MERCHANT_ID_ATTR;
 
     @Autowired private MockMvc mockMvc;
-    @MockBean private ChainConnector chainConnector;
-    @MockBean private RefundApprovalService refundApprovalService;
+    // Spring Boot 4.0.8 升级修复：测试上下文未启用 tracing autoconfigure，
+    // PaymentServiceImpl 等构造函数需要 Tracer bean，用 @MockitoBean 提供 mock。
+    @MockitoBean private Tracer tracer;
+    @MockitoBean private ChainConnector chainConnector;
+    @MockitoBean private RefundApprovalService refundApprovalService;
     // P0-4：归属预检会加载目标订单，契约测试中 mock 之（属主=1L）
-    @MockBean private OrderService orderService;
+    @MockitoBean private OrderService orderService;
 
     // 替换鉴权拦截器为 no-op mock，让退款审批 E2E 测试直接驱动业务链路。
     // WebConfig 将该 bean 注册到 Spring MVC 拦截器链；用 Mockito mock 替换后,
     // preHandle() 默认返回 false 会拒绝所有请求，因此必须在 setup 中 stub 为 true。
     // 作用域仅限本测试类，其他集成测试仍使用真实拦截器。
-    @MockBean private ApiKeyInterceptor apiKeyInterceptor;
+    @MockitoBean private ApiKeyInterceptor apiKeyInterceptor;
     // B4 Boot 3.3.13 升级修复：构造函数注入更严格，test profile 下无 RateLimiter bean
-    @MockBean private org.nexus.gateway.ratelimit.RateLimiter rateLimiter;
+    @MockitoBean private org.nexus.gateway.ratelimit.RateLimiter rateLimiter;
 
     @BeforeEach
     void setup() throws Exception {
         reset(chainConnector, refundApprovalService);
         // 放行所有请求，绕过 API Key 鉴权
         when(apiKeyInterceptor.preHandle(any(), any(), any())).thenReturn(true);
-        // B4: @MockBean RateLimiter 的 tryAcquire() 默认返回 false → RateLimitAdapter 返回 429，
+        // B4: @MockitoBean RateLimiter 的 tryAcquire() 默认返回 false → RateLimitAdapter 返回 429，
         // 必须显式 stub 为 true 才能放行请求
         when(rateLimiter.tryAcquire(any())).thenReturn(true);
 

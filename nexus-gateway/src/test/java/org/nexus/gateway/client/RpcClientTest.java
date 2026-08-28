@@ -99,7 +99,7 @@ class RpcClientTest {
         ChainRpcClient client = new ChainRpcClient(cfg);
         RestTemplate rt = mock(RestTemplate.class);
         when(rt.getForEntity(anyString(), eq(Map.class)))
-                .thenReturn(new ResponseEntity<>(null, HttpStatus.OK));
+                .thenReturn(new ResponseEntity<>((Map) null, HttpStatus.OK));
         setField(client, "restTemplate", rt);
 
         assertFalse(client.isTransactionConfirmed("0xabc"));

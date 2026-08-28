@@ -102,7 +102,7 @@ public class HttpOnChainExecutionClient implements OnChainExecutionClient {
                     0, null, true);
         }
         try {
-            String url = UriComponentsBuilder.fromHttpUrl(gatewayBaseUrl)
+            String url = UriComponentsBuilder.fromUriString(gatewayBaseUrl)
                     .pathSegment("api", "v1", "execution", "status")
                     .queryParam("txHash", txHash)
                     .toUriString();

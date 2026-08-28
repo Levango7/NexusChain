@@ -377,9 +377,40 @@ public class TxController {
                 span.attr("signing.tx.hash", texhash).success();
                 // P2-F1：记录签名成功审计日志（target 为 txHash，不含私钥/签名内容）
                 auditSignSuccess(actor, sourceIp, texhash, amount);
-                return data;
+                // Spring Boot 4.0 升级兼容：TxUtils.ClientToTransferAccount 返回的是 Jackson 2
+                // (com.fasterxml.jackson) 的 ObjectNode，而 Spring Boot 4.0 默认 HTTP 序列化器
+                // 已切换为 Jackson 3 (tools.jackson)。Jackson 3 不识别 Jackson 2 的 ObjectNode，
+                // 会按 JavaBean 反射序列化其内部属性（array/nodeType/containerNode...），
+                // 导致响应体丢失业务字段（statusCode/data/message），前端 JSON 路径断言失败。
+                // 转为 Map 后 Jackson 3 可按普通 Map 正常序列化，响应 JSON 结构保持不变。
+                return toResponseMap(data);
             }
         }
+    }
+
+    /**
+     * Spring Boot 4.0 / Jackson 3 兼容：将 Jackson 2 的 {@link ObjectNode} 转为
+     * {@link Map}，供 Spring MVC 的 Jackson 3 HTTP 序列化器正确输出业务字段。
+     *
+     * <p>背景：{@code TxUtils.ClientToTransferAccount} 返回 Jackson 2
+     * ({@code com.fasterxml.jackson.databind.node.ObjectNode}) 的 JSON 树，
+     * 内含 {@code statusCode}/{@code data}/{@code message} 等业务字段。
+     * Spring Boot 4.0 默认使用 Jackson 3
+     * ({@code tools.jackson.databind}) 作为 HttpMessageConverter，
+     * Jackson 3 不识别 Jackson 2 的 {@code ObjectNode}（非其 {@code JsonNode} 子类型），
+     * 退化为 JavaBean 反射序列化，输出 {@code isArray()}/{@code getNodeType()} 等
+     * 内部属性，业务字段全部丢失。</p>
+     *
+     * <p>实现：{@code ObjectNode.toString()} 返回 Jackson 2 规范 JSON 字符串
+     * （含 statusCode/data/message），用共享 {@link JsonUtil#GSON} 解析为
+     * {@code HashMap}，Jackson 3 可按普通 Map 正常序列化。与 {@link #fail}
+     * 的 Gson 转 HashMap 模式一致，不引入新依赖。</p>
+     *
+     * @param data Jackson 2 ObjectNode（含 statusCode/data/message 业务字段）
+     * @return 等价的 HashMap，供 Jackson 3 HTTP 序列化器正确输出
+     */
+    private Map<String, Object> toResponseMap(ObjectNode data) {
+        return JsonUtil.GSON.fromJson(data.toString(), HashMap.class);
     }
 
     /**

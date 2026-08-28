@@ -236,7 +236,7 @@ kubectl rollout status sts/nacos -n nexus
 ```bash
 # 命令示例：滚动升级 Nacos 镜像版本
 
-# 1. 修改 nacos-ha-statefulset.yaml 中 image: nacos/nacos-server:v2.3.2 → v2.4.0
+# 1. 修改 nacos-ha-statefulset.yaml 中 image: nacos/nacos-server:v2.4.3 → v3.1.2
 # 2. 应用变更（StatefulSet RollingUpdate 会逐节点升级）
 kubectl apply -f deploy/nacos/nacos-ha-statefulset.yaml
 

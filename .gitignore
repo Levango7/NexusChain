@@ -154,3 +154,7 @@ deploy/config/seata.local.properties
 # 例外：开发/测试 profile 配置可入库（不含生产凭据）
 !**/src/main/resources/application-dev.yml
 !**/src/main/resources/application-test.yml
+
+# Temp test debug artifacts
+.test-batch/
+.test-batch

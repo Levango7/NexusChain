@@ -169,7 +169,7 @@ class HttpPspConnectorTest {
     void real_createPayment_emptyBody() {
         RestTemplate rt = mock(RestTemplate.class);
         when(rt.postForEntity(anyString(), any(HttpEntity.class), eq(Map.class)))
-                .thenReturn(new ResponseEntity<>(null, HttpStatus.OK));
+                .thenReturn(new ResponseEntity<>((Map) null, HttpStatus.OK));
         HttpPspConnector c = realConnector(rt);
 
         ConnectorPaymentResult r = c.createPayment(sampleRequest());

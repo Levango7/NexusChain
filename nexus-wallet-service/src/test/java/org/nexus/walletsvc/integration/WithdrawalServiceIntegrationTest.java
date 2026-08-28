@@ -12,7 +12,7 @@ import org.nexus.walletsvc.repository.WhitelistEntryRepository;
 import org.nexus.walletsvc.repository.WithdrawalRequestRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.ActiveProfiles;
 
 import java.math.BigDecimal;
@@ -35,7 +35,7 @@ import static org.mockito.Mockito.when;
  * 确认数据库中状态正确流转
  * （替代原 ConcurrentHashMap 内存存储）。</p>
  *
- * <p>{@link SigningServiceFeignClient} 通过 {@code @MockBean} 模拟，
+ * <p>{@link SigningServiceFeignClient} 通过 {@code @MockitoBean} 模拟，
  * 避免依赖 signing-service 实例运行。Mock 的 {@code signTransfer} 返回模拟交易哈希。</p>
  *
  * <p>验证要点：
@@ -62,7 +62,7 @@ class WithdrawalServiceIntegrationTest {
     @Autowired
     private WhitelistEntryRepository whitelistEntryRepository;
 
-    @MockBean
+    @MockitoBean
     private SigningServiceFeignClient signingServiceClient;
 
     /** 测试用白名单地址（长度 ≥ 20）。 */

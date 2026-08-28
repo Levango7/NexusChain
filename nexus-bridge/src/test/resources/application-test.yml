@@ -39,6 +39,12 @@ management:
     sampling:
       probability: 0.0
 
+# 临时调试：Spring Security 详细日志
+logging:
+  level:
+    org.springframework.security: DEBUG
+    org.springframework.test.context: DEBUG
+
 # 测试用验证者公钥白名单（Ed25519 X.509 DER 十六进制）。
 # 签名者 ID 必须与条目完全一致（见 BridgeFullChainIntegrationTest 的 PUB_V1/PUB_V2）。
 # 仅用于测试；生产环境必须由治理层配置真实验证者公钥。

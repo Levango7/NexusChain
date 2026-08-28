@@ -11,7 +11,7 @@ import org.nexus.walletsvc.repository.WhitelistEntryRepository;
 import org.nexus.walletsvc.repository.WithdrawalRequestRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.ActiveProfiles;
 
 import java.math.BigDecimal;
@@ -66,7 +66,7 @@ class SeataIntegrationTest {
     @Autowired
     private WhitelistEntryRepository whitelistEntryRepository;
 
-    @MockBean
+    @MockitoBean
     private SigningServiceFeignClient signingServiceClient;
 
     private static final String WHITELISTED_ADDR = "0xseataIntegrationTestAddr1234567";

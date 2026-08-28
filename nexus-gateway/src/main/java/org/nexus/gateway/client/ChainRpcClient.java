@@ -59,7 +59,7 @@ public class ChainRpcClient {
     @Retry(name = "chainNode")
     public boolean isTransactionConfirmed(String txHash) {
         try {
-            String url = UriComponentsBuilder.fromHttpUrl(gatewayConfig.getChain().getRpcUrl())
+            String url = UriComponentsBuilder.fromUriString(gatewayConfig.getChain().getRpcUrl())
                     .pathSegment("transactionConfirmed")
                     .queryParam("txHash", txHash)
                     .toUriString();

@@ -71,7 +71,7 @@ public class ConsortiumRpcClient {
     @Retry(name = "consortiumNode")
     public boolean isTransactionConfirmed(String txHash) {
         try {
-            String url = UriComponentsBuilder.fromHttpUrl(gatewayConfig.getConsortium().getRpcUrl())
+            String url = UriComponentsBuilder.fromUriString(gatewayConfig.getConsortium().getRpcUrl())
                     .pathSegment("transactionConfirmed")
                     .queryParam("txHash", txHash)
                     .toUriString();
