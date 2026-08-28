@@ -17,7 +17,9 @@ plugins {
 
 allprojects {
     group = 'org.nexus'
-    version = '2.30.0'
+    // 2026-08-29 审计对齐：此前 2.30.0 与 README/CHANGELOG 的 v2.40.0 漂移。
+    // 建议后续由 release.yml 从 CHANGELOG 自动同步此版本号，避免再次失配。
+    version = '2.40.0'
 
     repositories {
         mavenCentral()

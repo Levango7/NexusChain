@@ -10,6 +10,7 @@ import org.springframework.http.*;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestTemplate;
+import org.nexus.gateway.webhook.WebhookUrlValidator;
 
 import java.time.Instant;
 import java.util.LinkedHashMap;
@@ -52,6 +53,11 @@ public class WebhookDeliveryService {
     private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper;
     private final String signingSecret;
+    /**
+     * 出站 URL 校验器（SSRF 防护，P1 审计项 2026-08-29）。
+     * 无状态组件，直接实例化以避免修改构造器签名影响既有测试。
+     */
+    private final WebhookUrlValidator urlValidator = new WebhookUrlValidator();
 
     @Autowired
     public WebhookDeliveryService(
@@ -108,6 +114,9 @@ public class WebhookDeliveryService {
             return null;
         }
 
+        // SSRF 防护：投递前校验回调 URL（非法/内网地址抛异常 → 事务回滚，不落投递记录）
+        urlValidator.validate(notifyUrl);
+
         // 去重：同一支付 + 同一状态事件只投递一次
         WebhookDeliveryRecord existing = repository
                 .findByPaymentIdAndStatus(paymentId, statusEvent).orElse(null);
@@ -151,6 +160,9 @@ public class WebhookDeliveryService {
         }
         log.info("Webhook replay: deliveryId={}, paymentId={}",
                 message.getDeliveryId(), message.getPaymentId());
+
+        // SSRF 防护：死信重投同样校验回调 URL
+        urlValidator.validate(message.getNotifyUrl());
 
         WebhookDeliveryRecord record = repository.findById(message.getDeliveryId()).orElse(null);
         if (record == null) {

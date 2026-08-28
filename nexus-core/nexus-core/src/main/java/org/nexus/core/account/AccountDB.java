@@ -51,6 +51,7 @@ public class AccountDB {
             String sql = "select * from account b where b.pubkeyhash=? order by b.blockheight desc LIMIT 1";
             return tmpl.queryForObject(sql, new Object[]{pubkeyhash}, new BeanPropertyRowMapper<>(Account.class));
         } catch (RuntimeException e) {
+            logger.error("AccountDB.{} failed: {}", e, e.getMessage());
             return null;
         }
     }
@@ -64,8 +65,8 @@ public class AccountDB {
             }
             return Optional.empty();
         } catch (RuntimeException e) {
-            e.printStackTrace();
-            return null;
+            logger.error("AccountDB.{} failed: {}", e, e.getMessage());
+            return Optional.empty();
         }
     }
 
@@ -74,8 +75,8 @@ public class AccountDB {
             String sql = "select count(*) from account";
             return tmpl.queryForObject(sql, Integer.class);
         } catch (RuntimeException e) {
-            e.printStackTrace();
-            return 0;
+            logger.error("AccountDB.{} failed: {}", e, e.getMessage());
+            throw new IllegalStateException("AccountDB.{} failed", e);
         }
     }
 
@@ -84,8 +85,8 @@ public class AccountDB {
             String sql = "select COALESCE(max(blockheight),0) from account";
             return tmpl.queryForObject(sql, Long.class);
         } catch (RuntimeException e) {
-            e.printStackTrace();
-            return 0;
+            logger.error("AccountDB.{} failed: {}", e, e.getMessage());
+            throw new IllegalStateException("AccountDB.{} failed", e);
         }
     }
 
@@ -94,8 +95,8 @@ public class AccountDB {
             String sql = "select COALESCE(MAx(a.nonce),0) from account a where a.pubkeyhash=? ";
             return tmpl.queryForObject(sql, new Object[]{pubkeyhash}, Long.class);
         } catch (RuntimeException e) {
-            e.printStackTrace();
-            return 0;
+            logger.error("AccountDB.{} failed: {}", e, e.getMessage());
+            throw new IllegalStateException("AccountDB.{} failed", e);
         }
     }
 
@@ -104,7 +105,8 @@ public class AccountDB {
             String sql = "select b.balance from account b where b.pubkeyhash=? and b.blockheight =(select COALESCE(MAx(a.blockheight),0) from account a where a.pubkeyhash=?)";
             return tmpl.queryForObject(sql, new Object[]{pubkeyhash, pubkeyhash}, Long.class);
         } catch (RuntimeException e) {
-            return 0;
+            logger.error("AccountDB.{} failed: {}", e, e.getMessage());
+            throw new IllegalStateException("AccountDB.{} failed", e);
         }
     }
 
@@ -113,9 +115,8 @@ public class AccountDB {
             String sql = "insert into account values(?,?,?,?,?,?,?)";
             return tmpl.update(sql, new Object[]{account.getId(), account.getBlockHeight(), account.getPubkeyHash(), account.getNonce(), account.getBalance(), account.getIncubatecost(), account.getMortgage()});
         } catch (RuntimeException e) {
-            logger.error("FATAL DEAD LOCK !!!!!!!!!!!!!!!!!!!!!");
-            e.printStackTrace();
-            return 0;
+            logger.error("AccountDB.{} failed: {}", e, e.getMessage());
+            throw new IllegalStateException("AccountDB.{} failed", e);
         }
     }
 
@@ -125,8 +126,8 @@ public class AccountDB {
                     "select max(a.blockheight) from account a where a.pubkeyhash=? and a.blockheight<=?)";
             return tmpl.queryForObject(sql, new Object[]{pubkeyhash, pubkeyhash, height}, Long.class);
         } catch (RuntimeException e) {
-            e.printStackTrace();
-            return 0;
+            logger.error("AccountDB.{} failed: {}", e, e.getMessage());
+            throw new IllegalStateException("AccountDB.{} failed", e);
         }
     }
 
@@ -135,9 +136,8 @@ public class AccountDB {
             String sql = "insert into account(id,blockheight,pubkeyhash,nonce,balance,incubatecost,mortgage,vote) VALUES(?,?,?,?,?,?,?,?) on conflict(id) do nothing";
             return tmpl.batchUpdate(sql, Object);
         } catch (RuntimeException e) {
-            logger.error("FATAL DEAD LOCK !!!!!!!!!!!!!!!!!!!!!");
-            e.printStackTrace();
-            return null;
+            logger.error("AccountDB.{} failed: {}", e, e.getMessage());
+            throw new IllegalStateException("AccountDB.{} failed", e);
         }
     }
 
@@ -149,7 +149,7 @@ public class AccountDB {
                     "where  h.height=? and TYPE=? order by h.height";
             return tmpl.queryForList(sql, new Object[]{gas, height, type});
         } catch (RuntimeException e) {
-            e.printStackTrace();
+            logger.error("AccountDB.{} failed: {}", e, e.getMessage());
             return null;
         }
     }
@@ -159,7 +159,7 @@ public class AccountDB {
             String sql = "select *,0 as height,0 as block_hash from transaction a where a.to=?";
             return tmpl.query(sql, new Object[]{frompublickey}, new TransactionMapper());
         } catch (RuntimeException e) {
-            e.printStackTrace();
+            logger.error("AccountDB.{} failed: {}", e, e.getMessage());
             return null;
         }
     }
@@ -177,7 +177,7 @@ public class AccountDB {
                     "where a.type=1 and a.to=?";
             return tmpl.queryForList(sql, new Object[]{pubkeyhash});
         } catch (RuntimeException e) {
-            e.printStackTrace();
+            logger.error("AccountDB.{} failed: {}", e, e.getMessage());
             return null;
         }
     }
@@ -190,7 +190,7 @@ public class AccountDB {
                     "where a.type=1 and a.to!=?";
             return tmpl.queryForList(sql, new Object[]{pubkeyhash});
         } catch (RuntimeException e) {
-            e.printStackTrace();
+            logger.error("AccountDB.{} failed: {}", e, e.getMessage());
             return null;
         }
     }
@@ -203,7 +203,7 @@ public class AccountDB {
                     "where  h.height=? and TYPE=? ";
             return tmpl.queryForList(sql, new Object[]{height, type});
         } catch (RuntimeException e) {
-            e.printStackTrace();
+            logger.error("AccountDB.{} failed: {}", e, e.getMessage());
             return null;
         }
     }
@@ -216,7 +216,7 @@ public class AccountDB {
                     "where  h.height=? and TYPE=? ";
             return tmpl.queryForList(sql, new Object[]{height, type});
         } catch (RuntimeException e) {
-            e.printStackTrace();
+            logger.error("AccountDB.{} failed: {}", e, e.getMessage());
             return null;
         }
     }
@@ -232,7 +232,7 @@ public class AccountDB {
                     "where  h.height=? and t.type=? ";
             return tmpl.queryForList(sql, new Object[]{height, type});
         } catch (RuntimeException e) {
-            e.printStackTrace();
+            logger.error("AccountDB.{} failed: {}", e, e.getMessage());
             return null;
         }
     }
@@ -246,7 +246,7 @@ public class AccountDB {
                     "where  h.height=? and t.type=? ";
             return tmpl.queryForList(sql, new Object[]{height, type});
         } catch (RuntimeException e) {
-            e.printStackTrace();
+            logger.error("AccountDB.{} failed: {}", e, e.getMessage());
             return null;
         }
     }
@@ -259,8 +259,8 @@ public class AccountDB {
                     "left join header h on h.block_hash=i.block_hash\n" +
                     "where  h.height=? and t.type=? ";
             return tmpl.queryForList(sql, new Object[]{height, type});
-        }catch (RuntimeException e){
-            e.printStackTrace();
+        } catch (RuntimeException e) {
+            logger.error("AccountDB.{} failed: {}", e, e.getMessage());
             return null;
         }
     }
@@ -273,8 +273,8 @@ public class AccountDB {
                     "left join header h on h.block_hash=i.block_hash\n" +
                     "where  h.height=? and t.type=? ";
             return tmpl.queryForList(sql, new Object[]{height, type});
-        }catch (RuntimeException e){
-            e.printStackTrace();
+        } catch (RuntimeException e) {
+            logger.error("AccountDB.{} failed: {}", e, e.getMessage());
             return null;
         }
     }
@@ -287,8 +287,8 @@ public class AccountDB {
                     "left join header h on h.block_hash=i.block_hash\n" +
                     "where  h.height=? and t.type=? ";
             return tmpl.queryForList(sql, new Object[]{height, type});
-        }catch (RuntimeException e){
-            e.printStackTrace();
+        } catch (RuntimeException e) {
+            logger.error("AccountDB.{} failed: {}", e, e.getMessage());
             return null;
         }
     }
@@ -301,8 +301,8 @@ public class AccountDB {
                     "left join header h on h.block_hash=i.block_hash\n" +
                     "where  h.height=? and t.type=? ";
             return tmpl.queryForList(sql, new Object[]{height, type});
-        }catch (RuntimeException e){
-            e.printStackTrace();
+        } catch (RuntimeException e) {
+            logger.error("AccountDB.{} failed: {}", e, e.getMessage());
             return null;
         }
     }
@@ -313,6 +313,7 @@ public class AccountDB {
             int count = tmpl.queryForObject(sql, new Object[]{tranbyte}, Integer.class);
             return count == 1 ? false : true;
         } catch (RuntimeException e) {
+            logger.error("AccountDB.{} failed: {}", e, e.getMessage());
             return false;
         }
     }
@@ -323,6 +324,7 @@ public class AccountDB {
             int count = tmpl.queryForObject(sql, new Object[]{tranbyte}, Integer.class);
             return count == 1 ? false : true;
         } catch (RuntimeException e) {
+            logger.error("AccountDB.{} failed: {}", e, e.getMessage());
             return false;
         }
     }

@@ -76,16 +76,21 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
 | `nexus-gateway` | 商户支付网关：订单、路由、Webhook、清结算/风控/合规关卡接入 | 较完整 |
 | `nexus-bridge` | 跨链桥：锁定/铸造/销毁/解锁状态机、Relayer 网络、流动性管理 | 核心完整，Solana/Avalanche 适配器已交付（含测试），其余外部链为骨架 |
 | `nexus-consortium` | 联盟链/侧链：完整 PoA 链、国密 SM2/3/4 | 完整 |
-| `nexus-settlement` | 清结算：复式账本、对账、风控规则、资金归集 | 完整 |
-| `nexus-compliance` | 合规：KYC、AML 筛查、DID、信誉评分 | 完整 |
-| `nexus-analytics` | 数据分析：交易图谱、监控告警、统计、导出 | 完整 |
-| `nexus-oracle` | 预言机：多源价格聚合、链上治理、可验证随机数 | 完整（治理执行已修复：GOV-P0-01 事件源白名单 + 审计日志持久化） |
+| `nexus-settlement` | 清结算：复式账本、对账、风控规则、资金归集 | 完整（库形态，由 gateway 内嵌，不独立部署，见下注） |
+| `nexus-compliance` | 合规：KYC、AML 筛查、DID、信誉评分 | 完整（库形态，由 gateway 内嵌，不独立部署） |
+| `nexus-analytics` | 数据分析：交易图谱、监控告警、统计、导出 | 完整（库形态，由 gateway 内嵌，不独立部署） |
+| `nexus-oracle` | 预言机：多源价格聚合、链上治理、可验证随机数 | 完整（库形态，由 gateway 内嵌，不独立部署；治理执行已修复：GOV-P0-01 事件源白名单 + 审计日志持久化） |
 | `nexus-signing-service` | 签名服务：交易签名编排、MPC 传输层 | 编排完整，MPC 真实 GG20（可信协调器模型） |
 | `nexus-wallet-service` | 钱包服务：白名单、冷热托管、审批流 | 白名单/审批完整，托管为模拟 |
 | `mpc-engine` | Rust gRPC MPC 密码学引擎 | **真实 GG20（multi-party-ecdsa），可信协调器模型** |
 | `nexus-explorer` | React + TS 区块浏览器 | **MVP 骨架**（约 40 个前端源文件，见成熟度声明） |
 | `nexus-sdk` | Java SDK：RPC、钱包、支付编排、跨链/稳定币客户端 | 较完整 |
 | `nexus-rpc-doc` | RPC API 文档 | 参考 |
+
+> **注（2026-08-29 审计核实）**：`nexus-settlement` / `nexus-compliance` / `nexus-analytics` / `nexus-oracle`
+> 均为**库模块**（各自 build.gradle 中 `bootJar.enabled=false`，注释明确"不产出 Spring Boot fat jar"），
+> 由 `nexus-gateway` 内嵌消费，**不提供独立部署形态**（docker-compose / Helm charts 中无对应服务属预期设计）。
+> 如未来需独立部署（如合规审计独立进程），需另行改造为可执行应用。
 
 ## 成熟度声明（重要）
 
