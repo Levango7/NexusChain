@@ -1,0 +1,33 @@
+# cargo-audit 豁免白名单（2026-08-28, P4 审计增补）
+# ============================================================================
+# 处置原则：仅豁免「上游依赖锁定 / 无可用修复版本」的 advisory，避免用 ignore
+# 掩盖可修复的依赖漏洞。可修复项一律升级（见 Cargo.lock：h2 0.4.15→0.4.19、
+# hyper/rustls-webpki/rand/log/syn 等 8 项已 cargo update 升级）。
+# 豁免项均附带上游锁定依据，跟踪上游发版后移除。
+
+[advisories]
+ignore = [
+    # curve25519-dalek 3.2.0（RUSTSEC-2024-0344, CVE-2024-58262, timing variability）
+    # patched >= 4.1.3 属 major 升级；curv-kzen 0.9（multi-party-ecdsa 0.8.1 依赖链）
+    # 声明 curve25519-dalek = "^3"，无 3.x 修复版本，升级 4.x 需 multi-party-ecdsa
+    # 上游先升级 —— 与 Cargo.toml secp256k1 REQ-26 同类（密码学依赖链锁定，延后）
+    "RUSTSEC-2024-0344",
+
+    # secp256k1 0.20.3（RUSTSEC-2022-0070, unsound, timing side-channel）
+    # patched >= 0.22.2 但 multi-party-ecdsa 0.8.1 / curv-kzen 0.9 绑定 0.20 API
+    # （secp256k1::Signature 导出、verify()/Message::from_slice 等 breaking 变更），
+    # 已在 Cargo.toml 注释声明 REQ-26 延后：等 multi-party-ecdsa 上游发版后升级
+    "RUSTSEC-2022-0070",
+
+    # derivative 2.2.0（RUSTSEC-2024-0388, unmaintained）
+    # 传递依赖（经 multi-party-ecdsa 依赖链），无修复版本，仅 informational 维护状态
+    "RUSTSEC-2024-0388",
+
+    # rand_os 0.1.3（RUSTSEC-2025-0124, unmaintained）
+    # 传递依赖（经 curv-kzen 旧链），无修复版本，仅 informational 维护状态
+    "RUSTSEC-2025-0124",
+
+    # rustls-pemfile 2.2.0（RUSTSEC-2025-0134, unmaintained）
+    # 传递依赖（经 tonic/tls 链），无修复版本，仅 informational 维护状态
+    "RUSTSEC-2025-0134",
+]

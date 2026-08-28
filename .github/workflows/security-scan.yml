@@ -199,16 +199,18 @@ jobs:
       # commit sha：75ba02d6183445fe0761d26e836bde58b1560600
       # 更新策略：季度更新，需安全负责人审批（见 docs/dependency-check-update-policy.md）
       # 切勿改用 @main 或 @latest——存在供应链攻击风险
+      # 2026-08-28 修复：该 Action 合法输入仅 project/path/format/others；
+      # 此前误用 scan/args（GitHub 报 "Unexpected input(s) 'scan'"，且必需的 path
+      # 缺失导致 step 失败）。Action 自身已硬编码 --noupdate 与
+      # --out /github/workspace/reports，故 others 只传补充参数。
       - name: 运行 OWASP Dependency-Check
         uses: dependency-check/Dependency-Check_Action@75ba02d6183445fe0761d26e836bde58b1560600
         with:
           project: NexusChain
-          scan: .
+          path: .
           format: HTML,JSON
-          args: >
+          others: >
             --enableExperimental
-            --noupdate
-            --out reports
             --failOnCVSS 9
 
       - name: 上传 OWASP 报告
@@ -260,14 +262,17 @@ jobs:
 
       # P2-C7: SpotBugs CI 门禁
       # 根 build.gradle 中 SpotBugs 可能配置 ignoreFailures=true（避免 Gradle 直接失败），
-      # 此处独立解析 XML 报告，发现任何 <Bug> 即 exit 1，强制 SAST 门禁。
+      # 此处独立解析 XML 报告，发现任何 <BugInstance> 即 exit 1，强制 SAST 门禁。
       # 覆盖所有模块的 build/reports/spotbugs/main.xml。
+      # 注意：必须统计 <BugInstance（真实 finding）而非 <Bug——后者会误计入
+      # 每个报告恒存在的 <BugCategory>/<BugPattern> 定义行（每模块约 22 行），
+      # 导致 0 finding 时也误报失败（2026-08-28 修复）。
       - name: SpotBugs gate（解析 XML 报告，有 finding 则 fail）
         run: |
           set -e
           total_bugs=0
           while IFS= read -r report; do
-            count=$(grep -c "<Bug" "$report" 2>/dev/null || echo 0)
+            count=$(grep -c "<BugInstance" "$report" 2>/dev/null || echo 0)
             if [ "$count" -gt 0 ]; then
               echo "[SpotBugs] $report: $count findings"
               total_bugs=$((total_bugs + count))

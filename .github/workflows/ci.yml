@@ -50,9 +50,12 @@ jobs:
       # P2-C6: Gradle wrapper 完整性校验
       # 重新生成 wrapper 并与仓库版本对比，确保 gradle/wrapper/ 下文件未被篡改、版本一致。
       # 若 runner 上 wrapper 与仓库不一致（例如被 PR 修改但未同步），git diff --exit-code 会非零退出。
+      # 注意：仓库 wrapper 已随 ca7e0ba 升级到 Gradle 8.14（huaweicloud 镜像 + networkTimeout=600000 定制），
+      # 校验命令必须与仓库 gradle-wrapper.properties 的版本、distribution URL、networkTimeout 完全一致，
+      # 否则重新生成必然产生 diff（如旧参数 8.5 会把 properties 改回 8.5）导致误报失败。
       - name: Validate Gradle wrapper
         run: |
-          ./gradlew wrapper --gradle-version 8.5
+          ./gradlew wrapper --gradle-version 8.14 --gradle-distribution-url https://mirrors.huaweicloud.com/gradle/gradle-8.14-bin.zip --network-timeout 600000
           git diff --exit-code gradle/wrapper/
 
       - name: 编译 (compileJava + compileTestJava)
@@ -226,11 +229,18 @@ jobs:
           # Flyway 11.x 官方镜像（与项目 flyway-core 10.x 大版本对齐，Boot 3.3.13 BOM 管理）
           FLYWAY_IMG="flyway/flyway:11"
           # 含 db/migration 的模块列表（模块逻辑名 : 迁移脚本目录）
+          # 2026-08-28 修复：
+          #   1) nexus-consortium 迁移脚本真实路径是 nexus-consortium/consortium/...
+          #      （settings.gradle includeBuild 'nexus-consortium'），此前误写
+          #      consortium/consortium/... 导致 docker 挂载空目录、Flyway 迁移失败。
+          #   2) nexus-consortium 是 PostgreSQL 模块（迁移脚本 BYTEA 语法，build.gradle
+          #      依赖 flyway-database-postgresql），本预检 job 的 service container 是
+          #      MySQL 8.0，方言不匹配无法迁移验证——从 MySQL 预检列表移除，
+          #      consortium 的 PG 迁移验证在 PostgreSQL 环境（本地/部署流水线）进行。
           declare -a MODULES=(
             "nexus-gateway:nexus-gateway/src/main/resources/db/migration"
             "nexus-wallet-service:nexus-wallet-service/src/main/resources/db/migration"
             "nexus-bridge:nexus-bridge/src/main/resources/db/migration"
-            "nexus-consortium:consortium/consortium/src/main/resources/db/migration"
           )
           for ENTRY in "${MODULES[@]}"; do
             MODULE_NAME="${ENTRY%%:*}"

@@ -51,15 +51,18 @@ RUN find /workspace/nexus-bridge/build/libs -name '*.jar' ! -name '*-plain.jar' 
 FROM gcr.io/distroless/java17-debian12:nonroot
 WORKDIR /app
 COPY --from=builder /workspace/app.jar app.jar
+# busybox 静态二进制（~1.2MB，无动态依赖）：仅用于 compose healthcheck（wget）。
+# distroless 无 curl/wget/shell，注入单个静态 busybox 提供 wget 子命令，
+# 不引入 shell 与包管理器，保持最小攻击面（DAST 修复 2026-08-28）。
+COPY --from=busybox:1.36.1 /bin/busybox /busybox
 
 # 暴露服务端口（与 application.yml server.port: ${SERVER_PORT:8084} 对齐）
 EXPOSE 8084
 
 # HEALTHCHECK 说明：distroless nonroot 镜像不含 shell/curl，
-# 无法在 Dockerfile 中配置 CMD 式 HEALTHCHECK。
-# 健康检查请在编排层配置：
+# 通过注入的静态 busybox 提供 wget，healthcheck 在编排层配置：
+#   - docker-compose: ['CMD', '/busybox', 'wget', '-q', '-O', '/dev/null', 'http://localhost:8084/api/v1/bridge/status']
 #   - Kubernetes: livenessProbe / readinessProbe (httpGet /api/v1/bridge/status)
-#   - docker-compose: 需改用 distroless:debug 镜像或外部 probe
 # 端点：GET http://localhost:8084/api/v1/bridge/status
 
 # JVM 参数：

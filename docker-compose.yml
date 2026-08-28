@@ -37,7 +37,8 @@ services:
       nacos:
         condition: service_healthy
     healthcheck:
-      test: ['CMD', 'curl', '-f', 'http://localhost:8080/actuator/health']
+      # distroless 运行时无 curl/shell：使用 Dockerfile 注入的静态 busybox wget
+      test: ['CMD', '/busybox', 'wget', '-q', '-O', '/dev/null', 'http://localhost:8080/actuator/health']
       interval: 30s
       timeout: 10s
       retries: 3
@@ -48,7 +49,8 @@ services:
     ports:
       - '127.0.0.1:19585:19585'
     healthcheck:
-      test: ['CMD', 'curl', '-f', 'http://localhost:19585/height']
+      # distroless 运行时无 curl/shell：使用 Dockerfile 注入的静态 busybox wget
+      test: ['CMD', '/busybox', 'wget', '-q', '-O', '/dev/null', 'http://localhost:19585/height']
       interval: 30s
       timeout: 10s
       retries: 5
@@ -97,7 +99,8 @@ services:
       # 挂载 mpc-certs 供 mTLS 客户端证书
       - ./mpc-certs:/etc/mpc/certs:ro
     healthcheck:
-      test: ['CMD', 'curl', '-f', 'http://localhost:8082/actuator/health']
+      # distroless 运行时无 curl/shell：使用 Dockerfile 注入的静态 busybox wget
+      test: ['CMD', '/busybox', 'wget', '-q', '-O', '/dev/null', 'http://localhost:8082/actuator/health']
       interval: 30s
       timeout: 10s
       retries: 3
@@ -122,7 +125,8 @@ services:
       seata-server:
         condition: service_healthy
     healthcheck:
-      test: ['CMD', 'curl', '-f', 'http://localhost:8083/actuator/health']
+      # distroless 运行时无 curl/shell：使用 Dockerfile 注入的静态 busybox wget
+      test: ['CMD', '/busybox', 'wget', '-q', '-O', '/dev/null', 'http://localhost:8083/actuator/health']
       interval: 30s
       timeout: 10s
       retries: 3
@@ -141,7 +145,8 @@ services:
       nacos:
         condition: service_healthy
     healthcheck:
-      test: ['CMD', 'curl', '-f', 'http://localhost:8084/api/v1/bridge/status']
+      # distroless 运行时无 curl/shell：使用 Dockerfile 注入的静态 busybox wget
+      test: ['CMD', '/busybox', 'wget', '-q', '-O', '/dev/null', 'http://localhost:8084/api/v1/bridge/status']
       interval: 30s
       timeout: 10s
       retries: 3

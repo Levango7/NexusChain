@@ -7,11 +7,11 @@
 -- 均允许多个 NULL 共存，不影响无源链哈希的记录。
 --
 -- 语法说明：
---   * H2（dev profile）/ PostgreSQL / SQLite 支持 CREATE UNIQUE INDEX IF NOT EXISTS。
+--   * H2（dev profile）/ PostgreSQL / SQLite 支持 CREATE UNIQUE INDEX。
 --   * MySQL 8.0 不支持 IF NOT EXISTS，但生产环境由 Flyway schema history 保证
 --     本脚本仅执行一次，不会触发重复创建错误。
 --   * 若需在 MySQL 上手动幂等执行，可改为 ALTER TABLE ... ADD CONSTRAINT
 --     并捕获重复键错误，或拆分为条件性 DDL。
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_bridge_tx_source_hash
+CREATE UNIQUE INDEX idx_bridge_tx_source_hash
     ON bridge_transactions (source_tx_hash);

@@ -24,8 +24,24 @@ WORKDIR /workspace
 COPY gradlew gradlew.bat build.gradle settings.gradle ./
 COPY gradle ./gradle
 
-# COPY nexus-core 嵌套模块源码（含 nexus-core/nexus-core/ 子模块，变更频率高，放最后）
+# COPY 依赖模块源码（project() 引用 + composite build includeBuild）
+# 根 settings.gradle include 了 nexus-sdk:java / nexus-common / includeBuild
+# nexus-consortium 等模块，构建上下文必须包含这些目录，否则 Gradle 配置阶段
+# 报 "Included build ... does not exist"（P4 Trivy Docker 修复：nexus-core 此前
+# 遗漏补齐 COPY 列表，参照 nexus-gateway 等 8 个模块的 Dockerfile 对齐）
+COPY nexus-rpc-doc ./nexus-rpc-doc
 COPY nexus-core ./nexus-core
+COPY nexus-sdk ./nexus-sdk
+COPY nexus-common ./nexus-common
+COPY nexus-consortium ./nexus-consortium
+COPY nexus-settlement ./nexus-settlement
+COPY nexus-compliance ./nexus-compliance
+COPY nexus-analytics ./nexus-analytics
+COPY nexus-oracle ./nexus-oracle
+COPY nexus-api-gateway ./nexus-api-gateway
+COPY nexus-bridge ./nexus-bridge
+COPY nexus-signing-service ./nexus-signing-service
+COPY nexus-wallet-service ./nexus-wallet-service
 
 # 构建 fat jar：根 settings.gradle include ':nexus-core:nexus-core'，
 # 故 fatJar 任务路径为 :nexus-core:nexus-core:fatJar（嵌套项目）。
@@ -44,15 +60,18 @@ RUN find /workspace/nexus-core/nexus-core/build/libs -name '*-all.jar' \
 FROM gcr.io/distroless/java17-debian12:nonroot
 WORKDIR /app
 COPY --from=builder /workspace/app.jar app.jar
+# busybox 静态二进制（~1.2MB，无动态依赖）：仅用于 compose healthcheck（wget）。
+# distroless 无 curl/wget/shell，注入单个静态 busybox 提供 wget 子命令，
+# 不引入 shell 与包管理器，保持最小攻击面（DAST 修复 2026-08-28）。
+COPY --from=busybox:1.36.1 /bin/busybox /busybox
 
 # 暴露服务端口（与 application.properties server.port: 19585 对齐）
 EXPOSE 19585
 
 # HEALTHCHECK 说明：distroless nonroot 镜像不含 shell/curl，
-# 无法在 Dockerfile 中配置 CMD 式 HEALTHCHECK。
-# 健康检查请在编排层配置：
+# 通过注入的静态 busybox 提供 wget，healthcheck 在编排层配置：
+#   - docker-compose: ['CMD', '/busybox', 'wget', '-q', '-O', '/dev/null', 'http://localhost:19585/height']
 #   - Kubernetes: livenessProbe / readinessProbe (httpGet /height 或 /actuator/health)
-#   - docker-compose: 需改用 distroless:debug 镜像或外部 probe
 # 端点：GET http://localhost:19585/height（nexus-core 区块高度端点）
 
 # JVM 参数：

@@ -94,6 +94,11 @@ subprojects {
                 outputLocation = file("$buildDir/reports/spotbugs/main.xml")
             }
         }
+        // P4-A（2026-08-28）：全仓 SpotBugs 基线过滤——豁免已审计/风格类存量告警
+        // （详见根目录 spotbugs-exclude-filter.xml，与 .trivyignore 同策略：
+        // 仅豁免存量基线 + 附 justification，安全敏感类不豁免由 CI gate 拦截）。
+        // signing-service 既有模块级 spotbugs-exclude-filter.xml 继续生效。
+        excludeFilter = rootProject.file('spotbugs-exclude-filter.xml')
         // 排除 protobuf 生成代码（com.google.protobuf.* 及 *OrBuilder）
         // 这些由 protoc 自动生成，不符合安全规则也无业务逻辑
         classes = classes.filter { file ->

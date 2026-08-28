@@ -8,7 +8,13 @@
 --   saga_type          — Saga 类型（LOCK_MINT / BURN_UNLOCK）
 --   state              — Saga 状态（PENDING / EXECUTING / COMPENSATING / COMPLETED / FAILED）
 --   current_step_index — 当前步骤下标（从 0 开始）
---   payload            — Saga 上下文 JSON（CLOB，可长）
+--   payload            — Saga 上下文 JSON（LONGTEXT，可长）
+--
+-- 语法说明：
+--   * H2 / MySQL 8.0 不支持 CLOB 类型；用 LONGTEXT 兼容（H2 亦支持），
+--     PostgreSQL 版本见 db/migration-pg。
+--   * 索引使用不带 IF NOT EXISTS 的 CREATE INDEX——MySQL 8.0 不支持
+--     IF NOT EXISTS（语法错误 1064），Flyway schema history 保证脚本单次执行。
 --   related_tx_id      — 关联桥交易 ID（如 lockTxId / burnTxId）
 --   retry_count        — 已重试次数
 --   max_retries        — 最大重试次数
@@ -21,7 +27,7 @@ CREATE TABLE IF NOT EXISTS saga_instances (
     saga_type          VARCHAR(32)   NOT NULL,
     state              VARCHAR(32)   NOT NULL,
     current_step_index INTEGER       NOT NULL,
-    payload            CLOB,
+    payload            LONGTEXT,
     related_tx_id      VARCHAR(64),
     retry_count        INTEGER       NOT NULL,
     max_retries        INTEGER       NOT NULL,
@@ -31,8 +37,8 @@ CREATE TABLE IF NOT EXISTS saga_instances (
     CONSTRAINT pk_saga_instances PRIMARY KEY (id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_saga_state
+CREATE INDEX idx_saga_state
     ON saga_instances (state);
 
-CREATE INDEX IF NOT EXISTS idx_saga_related_tx
+CREATE INDEX idx_saga_related_tx
     ON saga_instances (related_tx_id);

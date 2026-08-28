@@ -29,5 +29,5 @@ CREATE TABLE IF NOT EXISTS idempotency_keys (
     CONSTRAINT pk_idempotency_keys PRIMARY KEY (id)
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS uk_idempotency_key_op
+CREATE UNIQUE INDEX uk_idempotency_key_op
     ON idempotency_keys (key_value, operation);

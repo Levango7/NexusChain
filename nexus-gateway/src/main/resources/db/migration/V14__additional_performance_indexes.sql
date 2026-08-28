@@ -8,28 +8,30 @@
 --   5. refund_requests(order_id)            —— 已有 idx_rr_order，此处补充确保
 --   6. webhook_deliveries(payment_id, status) —— WebhookDeliveryService 去重查询
 --
--- 所有索引使用 IF NOT EXISTS 保证幂等，兼容 MySQL 8 / H2 / PostgreSQL。
+-- 2026-08-28 修复：所有索引改为不带 IF NOT EXISTS 的 CREATE INDEX——
+-- MySQL 8.0 不支持 CREATE INDEX IF NOT EXISTS（语法错误 1064，CI Flyway 预检
+-- 已因此失败）；Flyway schema history 保证脚本仅执行一次，无需幂等语法。
 -- PostgreSQL 版本见 db/migration-pg/V9__additional_performance_indexes.sql。
 
 -- refunds: CompensationService.findByStatusAndCreatedAtBefore
-CREATE INDEX IF NOT EXISTS idx_refunds_status_created ON refunds(status, created_at);
+CREATE INDEX idx_refunds_status_created ON refunds(status, created_at);
 
 -- payment_orders: SettlementService.findByMerchantIdAndStatusAndPaidAtBetween
 -- 复合索引覆盖 merchant_id + status + paid_at，避免回表扫描
-CREATE INDEX IF NOT EXISTS idx_orders_merchant_status_paidat ON payment_orders(merchant_id, status, paid_at);
+CREATE INDEX idx_orders_merchant_status_paidat ON payment_orders(merchant_id, status, paid_at);
 
 -- payment_orders: 多租户订单列表 findByTenantIdAndMerchantIdAndStatus
-CREATE INDEX IF NOT EXISTS idx_orders_tenant_merchant_status ON payment_orders(tenant_id, merchant_id, status);
+CREATE INDEX idx_orders_tenant_merchant_status ON payment_orders(tenant_id, merchant_id, status);
 
 -- payment_orders: 租户计费/风控按时间窗口汇总 sumTenantAmountSince / countTenantPaidInWindow
-CREATE INDEX IF NOT EXISTS idx_orders_tenant_created ON payment_orders(tenant_id, created_at);
+CREATE INDEX idx_orders_tenant_created ON payment_orders(tenant_id, created_at);
 
 -- payment_orders: 租户按 paid_at 时间窗口汇总 sumTenantPaidInWindow
-CREATE INDEX IF NOT EXISTS idx_orders_tenant_paidat ON payment_orders(tenant_id, paid_at);
+CREATE INDEX idx_orders_tenant_paidat ON payment_orders(tenant_id, paid_at);
 
 -- webhook_deliveries: WebhookDeliveryService.findByPaymentIdAndStatus 去重查询
-CREATE INDEX IF NOT EXISTS idx_wd_payment_status ON webhook_deliveries(payment_id, status);
+CREATE INDEX idx_wd_payment_status ON webhook_deliveries(payment_id, status);
 
 -- refund_requests: 按 order_id 查询已有退款（sumPendingRefundsByOrderId）
 -- 注：V6 已创建 idx_rr_order，此处 IF NOT EXISTS 保证幂等
-CREATE INDEX IF NOT EXISTS idx_rr_order_id ON refund_requests(order_id);
+CREATE INDEX idx_rr_order_id ON refund_requests(order_id);

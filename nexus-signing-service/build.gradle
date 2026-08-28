@@ -53,10 +53,11 @@ tasks.withType(JavaCompile) {
 }
 
 // === SAST: SpotBugs 排除过滤器 ===
-// 抑制已人工审计并确认已缓解的 FindSecBugs 告警（详见 spotbugs-exclude-filter.xml）
-spotbugsMain {
-    excludeFilter = file("${projectDir}/spotbugs-exclude-filter.xml")
-}
+// 抑制已人工审计并确认已缓解的 FindSecBugs 告警。
+// P4-A（2026-08-28）：signing-service 不再覆盖 excludeFilter——根 build.gradle
+// 的全仓 spotbugs-exclude-filter.xml 已含 SPRING_CSRF_PROTECTION_DISABLED 全局豁免
+// （无状态 JWT API，CSRF 不适用）及全部存量基线；模块级文件保留作审计记录，
+// 避免子项目赋值覆盖根 filter 导致 88 条豁免失效（Gradle 属性后赋值者胜）。
 
 dependencies {
     // 共享通用库（tracing 等，合并自原模块内逐字节一致的拷贝）
@@ -98,7 +99,9 @@ dependencies {
     implementation 'io.github.openfeign:feign-micrometer'
 
     // === Spring Cloud BOM（管理 OpenFeign / LoadBalancer 版本） ===
-    implementation platform('org.springframework.cloud:spring-cloud-dependencies:2023.0.3')
+    // 审计修复：Boot 4.0.8 需要配套的 Spring Cloud 2025.1.x 线（2023.0.3 只兼容
+    // Boot 3.2.x）。与 gateway/wallet/bridge 的 ca7e0ba 升级对齐。
+    implementation platform('org.springframework.cloud:spring-cloud-dependencies:2025.1.0')
     // === Spring Cloud Alibaba BOM（管理 Nacos / Sentinel 版本） ===
     implementation platform('com.alibaba.cloud:spring-cloud-alibaba-dependencies:2025.1.0.0')
 
