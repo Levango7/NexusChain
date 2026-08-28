@@ -4,6 +4,26 @@
 
 ## [Unreleased]
 
+### 2026-08-29 审计修复（交付就绪度审计发现项）
+
+#### Fixed
+
+- **AccountDB 账本读/写失败静默降级改 fail-fast**（`nexus-core/.../account/AccountDB.java`）：
+  - 账本状态读（`getNonce`/`getBalance`/`getBestHeight`/`count`/`getHeightBalance`）与写（`insertaccount`/`insertAccountList`）失败时由"打印堆栈 + 返回 0/null"改为 `logger.error` + 抛 `IllegalStateException`——消除"数据库抖动时 nonce 归零致交易重放/高度归零致异常同步"的错值风险
+  - 修复 `hasAccount` 在异常分支返回 `null` 违反 `Optional<Account>` 契约的 NPE 隐患（调用方 `PaymentRpcController` 会对 null 解引用）→ 改返回 `Optional.empty()`
+  - 浏览类查询（selectTran/selectlist*/hasExitVote 等）保持降级返回但补 `logger.error`
+  - 全文件 `e.printStackTrace()` 42 处 → 0，统一 slf4j
+- **TestController 生产暴露**（`nexus-core/.../controller/TestController.java`）：加 `@Profile({"dev","local"})`，生产默认不加载该无鉴权调试接口；`printStackTrace` → slf4j
+- **出站 Webhook SSRF 防护**（`nexus-gateway`）：
+  - 新增 `WebhookUrlValidator`：scheme 限 http/https；拒绝环回/私网/链路本地/CGNAT 100.64.0.0/10/基准段 198.18.0.0/15/ULA fc00::/7/文档段 2001:db8::/32/保留段 240.0.0.0/4/IPv4-mapped IPv6 解包校验；域名拒绝 localhost/.local/.internal/.lan/.home/.corp 并对其 DNS 解析的全部地址做 IP 级校验（缓解 DNS rebinding）
+  - `WebhookDeliveryService.deliver`/`replay` 投递前校验，非法 URL fail-closed（事务回滚不落投递记录）
+  - 新增 `WebhookUrlValidatorTest` 11 用例（含 IPv6/保留段/畸形 URL）全部通过
+- **版本号漂移**：根 `build.gradle` `version 2.30.0 → 2.40.0`，对齐 README/CHANGELOG
+
+#### Changed
+
+- **README 模块清单诚实标注**：`nexus-settlement`/`nexus-compliance`/`nexus-analytics`/`nexus-oracle` 标注"库形态，由 gateway 内嵌，不独立部署"（审计核实四模块 `bootJar.enabled=false`，compose/Helm 无对应服务属预期设计，附注释说明）
+
 ## [2.40.0] - 2026-08-26
 
 ### 技术债 B2 一致性加固（三方件收敛批）
