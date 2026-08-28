@@ -25,7 +25,7 @@ services:
     environment:
       - SPRING_PROFILES_ACTIVE=prod
     healthcheck:
-      test: ['CMD', 'curl', '-f', 'http://localhost:8080/actuator/health']
+      test: ['CMD', '/busybox', 'wget', '-q', '-O', '/dev/null', 'http://localhost:8080/actuator/health']
       interval: 30s
       timeout: 10s
       retries: 3
@@ -41,7 +41,7 @@ services:
     build: ./nexus-core
     expose: ['19585']
     healthcheck:
-      test: ['CMD', 'curl', '-f', 'http://localhost:19585/height']
+      test: ['CMD', '/busybox', 'wget', '-q', '-O', '/dev/null', 'http://localhost:19585/height']
       interval: 30s
       timeout: 10s
       retries: 5
@@ -84,7 +84,7 @@ services:
       seata:
         condition: service_healthy
     healthcheck:
-      test: ['CMD', 'curl', '-f', 'http://localhost:8082/actuator/health']
+      test: ['CMD', '/busybox', 'wget', '-q', '-O', '/dev/null', 'http://localhost:8082/actuator/health']
       interval: 30s
       timeout: 10s
       retries: 3
@@ -112,7 +112,7 @@ services:
       seata:
         condition: service_healthy
     healthcheck:
-      test: ['CMD', 'curl', '-f', 'http://localhost:8083/actuator/health']
+      test: ['CMD', '/busybox', 'wget', '-q', '-O', '/dev/null', 'http://localhost:8083/actuator/health']
       interval: 30s
       timeout: 10s
       retries: 3
@@ -131,7 +131,7 @@ services:
       nacos:
         condition: service_healthy
     healthcheck:
-      test: ['CMD', 'curl', '-f', 'http://localhost:8084/api/v1/bridge/status']
+      test: ['CMD', '/busybox', 'wget', '-q', '-O', '/dev/null', 'http://localhost:8084/api/v1/bridge/status']
       interval: 30s
       timeout: 10s
       retries: 3
@@ -154,7 +154,7 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ['CMD', 'curl', '-f', 'http://localhost:8085/actuator/health']
+      test: ['CMD', '/busybox', 'wget', '-q', '-O', '/dev/null', 'http://localhost:8085/actuator/health']
       interval: 30s
       timeout: 10s
       retries: 3

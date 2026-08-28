@@ -23,6 +23,10 @@ public class SplitSettlementService {
      * @param totalAmount total amount to split (smallest unit)
      * @param rules list of split rules
      * @return list of settlement entries
+     * @throws IllegalArgumentException 分账总额与原始金额不一致时抛出
+     *         （审计修复：原实现仅 warn 继续——超额/不足分账属资金一致性错误，
+     *         必须 fail-closed；另 PERCENTAGE 计算由 double 改为 BigDecimal，
+     *         避免 long &gt; 2^53 时精度丢失）
      */
     public List<SplitEntry> executeSplit(String paymentId, long totalAmount, List<SplitRule> rules) {
         List<SplitEntry> entries = new ArrayList<>();
@@ -30,7 +34,11 @@ public class SplitSettlementService {
 
         for (SplitRule rule : rules) {
             long amount = switch (rule.getType()) {
-                case PERCENTAGE -> Math.round(totalAmount * rule.getValue() / 10000.0); // value in bps
+                // value in bps：BigDecimal 交叉乘法消除 double 精度损失
+                case PERCENTAGE -> java.math.BigDecimal.valueOf(totalAmount)
+                        .multiply(java.math.BigDecimal.valueOf(rule.getValue()))
+                        .divide(java.math.BigDecimal.valueOf(10_000), 0, java.math.RoundingMode.HALF_UP)
+                        .longValueExact();
                 case FIXED -> rule.getValue();
                 case REMAINDER -> totalAmount - allocated;
             };
@@ -41,7 +49,10 @@ public class SplitSettlementService {
         }
 
         if (allocated != totalAmount) {
-            log.warn("Split mismatch: paymentId={} total={} allocated={}", paymentId, totalAmount, allocated);
+            // 审计修复：不匹配即拒绝（原仅 warn 并返回错误分账结果）
+            throw new IllegalArgumentException(
+                    "Split mismatch: paymentId=" + paymentId + " total=" + totalAmount
+                            + " allocated=" + allocated);
         }
         log.info("Split settlement executed: paymentId={} entries={} total={}", paymentId, entries.size(), totalAmount);
         return entries;

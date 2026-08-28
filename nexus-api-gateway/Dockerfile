@@ -55,14 +55,20 @@ FROM gcr.io/distroless/java17-debian12:nonroot
 WORKDIR /app
 COPY --from=builder /workspace/app.jar app.jar
 
+# busybox 静态二进制（~1.2MB，无动态依赖）：仅用于 compose healthcheck（wget）。
+# 与 nexus-gateway/nexus-core/nexus-bridge/nexus-wallet-service/nexus-signing-service
+# 的 Dockerfile 保持同一模式；K8s 侧健康检查仍走 httpGet 探针，不依赖本二进制。
+COPY --from=busybox:1.36.1 /bin/busybox /busybox
+
 # 暴露服务端口（与 application.yml server.port: ${SERVER_PORT:8085} 对齐）
 EXPOSE 8085
 
 # HEALTHCHECK 说明：distroless nonroot 镜像不含 shell/curl，
 # 无法在 Dockerfile 中配置 CMD 式 HEALTHCHECK。
-# 健康检查请在编排层配置：
+# 健康检查在编排层配置（P0-8 审计修复：原 prod compose 用 curl 探测，
+# 而 distroless 内无 curl，健康检查恒失败并阻塞 depends_on 链）：
+#   - docker-compose: ['CMD', '/busybox', 'wget', '-q', '-O', '/dev/null', 'http://localhost:8085/actuator/health']
 #   - Kubernetes: livenessProbe / readinessProbe (httpGet /actuator/health)
-#   - docker-compose: 需改用 distroless:debug 镜像或外部 probe
 # 端点：GET http://localhost:8085/actuator/health
 
 # JVM 参数：

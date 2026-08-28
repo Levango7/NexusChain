@@ -5,6 +5,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.OptimisticLockingFailureException;
 
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -107,6 +108,37 @@ public class JpaApprovalStore implements ApprovalStore {
     @Override
     public int size() {
         return (int) Math.min(repository.count(), Integer.MAX_VALUE);
+    }
+
+    /**
+     * 原子 CAS：基于实体 {@code @Version} 乐观锁的条件状态迁移。
+     *
+     * <p>实现：读取当前行 → 校验状态等于 expected → setStatus 后 save。
+     * 两个并发迁移读到同一版本时，数据库层 {@code UPDATE ... WHERE version=?}
+     * 保证仅一个提交成功，后提交者抛 {@link OptimisticLockingFailureException}，
+     * 在此捕获并返回 false——与内存实现的 CAS 语义对齐。
+     * 若需跨实例严格单次迁移，应配合数据库唯一约束或行锁；
+     * 当前乐观锁方案与 v2.38.0 引入的 {@code @Version} 机制一致。</p>
+     */
+    @Override
+    public boolean compareAndTransition(String requestId, SigningApprovalRequest.Status expected,
+                                        SigningApprovalRequest.Status to) {
+        if (requestId == null) {
+            return false;
+        }
+        SigningApprovalRequestEntity entity = repository.findByRequestId(requestId).orElse(null);
+        if (entity == null || entity.getStatus() != expected) {
+            return false;
+        }
+        entity.setStatus(to);
+        try {
+            repository.save(entity);
+            return true;
+        } catch (OptimisticLockingFailureException e) {
+            log.warn("审批状态 CAS 并发冲突: requestId={}, expected={}→{}, 由其他实例先行迁移",
+                    requestId, expected, to);
+            return false;
+        }
     }
 
     /**

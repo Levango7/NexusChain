@@ -75,8 +75,13 @@ public class StableCoinController {
 
         // 本地抵押率校验（与 Service 中仓位级别校验互补）
         if (collateralAmount > 0 && mintAmount > 0) {
-            double ratio = (double) collateralAmount / (double) mintAmount;
-            if (ratio < collateralRatio) {
+            // 审计修复：BigDecimal 交叉乘法比较（double 除法在 >2^53 时精度丢失）
+            java.math.BigDecimal collateral = java.math.BigDecimal.valueOf(collateralAmount);
+            java.math.BigDecimal required = java.math.BigDecimal.valueOf(collateralRatio)
+                    .multiply(java.math.BigDecimal.valueOf(mintAmount));
+            if (collateral.compareTo(required) < 0) {
+                java.math.BigDecimal ratio = collateral.divide(
+                        java.math.BigDecimal.valueOf(mintAmount), 6, java.math.RoundingMode.HALF_UP);
                 return APIResult.newFailResult(APIResult.FAIL,
                         "collateral ratio " + ratio + " is below minimum " + collateralRatio);
             }

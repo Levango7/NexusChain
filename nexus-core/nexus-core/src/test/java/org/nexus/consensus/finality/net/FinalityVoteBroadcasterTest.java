@@ -27,6 +27,9 @@ class FinalityVoteBroadcasterTest {
 
     private static final byte[] CP1 = new byte[]{1, 2, 3};
 
+    /** P0-1 修复后：v1 注册真实 Ed25519 公钥，绑定校验要求投票公钥与之一致。 */
+    private org.nexus.crypto.ed25519.Ed25519KeyPair v1Keys;
+
     @BeforeEach
     void setUp() {
         ValidatorRegistry registry = new ValidatorRegistry(new BigDecimal("100"), 100);
@@ -38,7 +41,9 @@ class FinalityVoteBroadcasterTest {
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
-        registry.register("v1", "pubkey-v1", new BigDecimal("300"), 0.1);
+        v1Keys = org.nexus.crypto.ed25519.Ed25519.generateKeyPair();
+        registry.register("v1", org.apache.commons.codec.binary.Hex.encodeHexString(
+                v1Keys.getPublicKey().getEncoded()), new BigDecimal("300"), 0.1);
         Validator v = registry.getValidator("v1");
         v.setStatus(ValidatorStatus.ACTIVE);
         staking.stake("v1", new BigDecimal("300"));
@@ -58,6 +63,18 @@ class FinalityVoteBroadcasterTest {
             }
         };
         broadcaster = new FinalityVoteBroadcaster(gadget, publisher);
+    }
+
+    /** 构造携带 v1 真实公钥与 Ed25519 签名的投票（进入 gadget 计票路径时必需）。 */
+    private Vote signedVote(long epoch, byte[] checkpoint) {
+        byte[] pub = v1Keys.getPublicKey().getEncoded();
+        Vote unsigned = new Vote(epoch, checkpoint, "v1", new byte[0], pub);
+        try {
+            byte[] sig = v1Keys.getPrivateKey().sign(unsigned.signingPayload());
+            return new Vote(epoch, checkpoint, "v1", sig, pub);
+        } catch (Exception e) {
+            throw new RuntimeException("Ed25519 signing failed", e);
+        }
     }
 
     @Test
@@ -91,7 +108,8 @@ class FinalityVoteBroadcasterTest {
     @Test
     void onVoteReceivedSubmitsToGadget() {
         // 外部收到一票后应进入 FinalityGadget（权重累积）
-        Vote external = new Vote(1, CP1, "v1", new byte[]{0x01});
+        // P0-1 修复后：投票需通过公钥绑定校验，使用 v1 的真实公钥与签名
+        Vote external = signedVote(1, CP1);
         broadcaster.onVoteReceived(FinalityVoteCodec.encode(external));
 
         org.nexus.consensus.finality.FinalityRecord rec = gadget.getFinality(1, CP1);

@@ -106,6 +106,12 @@ spec:
           env:
             - name: REDIS_ADDR
               value: "redis://redis:6379"
+            # 审计修复：Redis 已启用 requirepass，exporter 需携带认证
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: nexus-secrets
+                  key: SPRING_DATA_REDIS_PASSWORD
           resources:
             requests: { memory: "64Mi", cpu: "50m" }
             limits:   { memory: "128Mi", cpu: "200m" }

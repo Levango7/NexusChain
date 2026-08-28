@@ -95,6 +95,31 @@ public class FileBasedApprovalStore implements ApprovalStore {
         rewriteFile();
     }
 
+    /**
+     * 原子 CAS：内存缓存经 {@link ConcurrentHashMap#compute} 原子迁移（成功判定
+     * 在 bin 锁内的 lambda 中完成），成功后全量重写文件持久化。文件写入失败不影响
+     * 内存状态一致性（与既有 save 的容错语义一致）。
+     */
+    @Override
+    public boolean compareAndTransition(String requestId, SigningApprovalRequest.Status expected,
+                                        SigningApprovalRequest.Status to) {
+        if (requestId == null) {
+            return false;
+        }
+        boolean[] transitioned = {false};
+        store.compute(requestId, (k, existing) -> {
+            if (existing != null && existing.getStatus() == expected) {
+                transitioned[0] = true;
+                return existing.withStatus(to);
+            }
+            return existing;
+        });
+        if (transitioned[0]) {
+            rewriteFile();
+        }
+        return transitioned[0];
+    }
+
     @Override
     public Set<Map.Entry<String, SigningApprovalRequest>> entrySet() {
         return store.entrySet();

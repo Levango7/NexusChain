@@ -10,9 +10,15 @@ import java.nio.charset.StandardCharsets;
  * <p>投票消息体统一为 JSON，进入 P2P 前的封装规则：</p>
  * <ul>
  *   <li>载荷前缀 Byte 标记 {@link #MAGIC}（0x5A，占位），后续 protoc 生成后可去除</li>
- *   <li>载荷格式： {@code {"epoch":1,"checkpoint":"hex","validator":"addr","sig":"hex"}}</li>
+ *   <li>载荷格式： {@code {"epoch":1,"checkpoint":"hex","validator":"addr",
+ *       "sig":"hex","pub":"hex"}}</li>
  *   <li>字节序：signed big-endian（与区块链其余模块统一）</li>
  * </ul>
+ *
+ * <p>P0-1 审计修复：新增 {@code pub} 字段承载投票者 Ed25519 公钥。接收方依赖该
+ * 公钥做逐一验签（SignatureAggregator）与注册表绑定校验（FinalityGadget）；
+ * 旧格式（无 pub）解码后公钥为 null，会被 fail-closed 拒绝计票——生产网络
+ * 全网升级后旧格式自然消失。</p>
  *
  * <p>未来当 {@code protoc} 工具链可用后，将替换为 proto 文件
  * {@code message FinalityVote} + {@code Code.FINALITY_VOTE = 15} 生成类，
@@ -30,6 +36,9 @@ public final class FinalityVoteCodec {
         sb.append(",\"checkpoint\":\"").append(toHex(vote.getCheckpointHash())).append('"');
         sb.append(",\"validator\":\"").append(escape(vote.getValidatorAddress())).append('"');
         sb.append(",\"sig\":\"").append(toHex(vote.getSignature())).append('"');
+        if (vote.getPublicKeyBytes() != null && vote.getPublicKeyBytes().length > 0) {
+            sb.append(",\"pub\":\"").append(toHex(vote.getPublicKeyBytes())).append('"');
+        }
         sb.append('}');
         byte[] body = sb.toString().getBytes(StandardCharsets.UTF_8);
         byte[] out = new byte[1 + body.length];
@@ -47,7 +56,10 @@ public final class FinalityVoteCodec {
         String checkpointHex = parseStr(json, "\"checkpoint\":\"");
         String validator = parseStr(json, "\"validator\":\"");
         String sigHex = parseStr(json, "\"sig\":\"");
-        return new Vote(epoch, fromHex(checkpointHex), validator, fromHex(sigHex));
+        // P0-1 审计修复：解析投票者公钥（旧格式缺失时为 null → 接收方 fail-closed 拒绝）
+        String pubHex = parseStr(json, "\"pub\":\"");
+        byte[] pubKey = pubHex.isEmpty() ? null : fromHex(pubHex);
+        return new Vote(epoch, fromHex(checkpointHex), validator, fromHex(sigHex), pubKey);
     }
 
     private static long parseLong(String json, String key) {

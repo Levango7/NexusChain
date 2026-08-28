@@ -97,8 +97,9 @@ public class StateDB implements ApplicationListener<AccountUpdatedEvent> {
      * 共识模式（PLAN-005）：pos 模式下 leastConfirms 按活跃验证人数计算，
      * 而非 DPoS proposer 时间表（后者在 PoS 自举单验证人场景导致 confirms
      * 永不达标 → 区块不落 PG → 多节点无法共享链状态）。
+     * 审计修复：默认值对齐主配置/ConsensusConfig 的 dpos（原为 pow）。
      */
-    @org.springframework.beans.factory.annotation.Value("${nexus.consensus.mode:pow}")
+    @org.springframework.beans.factory.annotation.Value("${nexus.consensus.mode:dpos}")
     private String consensusMode;
 
     /** 验证人注册表（PoS leastConfirms 计算来源；可选注入，单测/无共识节点为 null）。 */

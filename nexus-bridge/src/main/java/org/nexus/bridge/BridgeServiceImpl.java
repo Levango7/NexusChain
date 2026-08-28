@@ -2,11 +2,14 @@ package org.nexus.bridge;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.annotation.PostConstruct;
 import org.nexus.bridge.entity.IdempotencyKey;
 import org.nexus.bridge.model.BridgeEvent;
+import org.nexus.bridge.model.BridgePauseRecord;
 import org.nexus.bridge.model.BridgeTransaction;
 import org.nexus.bridge.model.BridgeTransaction.BridgeOperationType;
 import org.nexus.bridge.model.BridgeTransaction.BridgeTxStatus;
+import org.nexus.bridge.repository.BridgePauseRecordRepository;
 import org.nexus.bridge.repository.BridgeTransactionRepository;
 import org.nexus.bridge.repository.IdempotencyKeyRepository;
 import org.nexus.bridge.safety.CircuitBreaker;
@@ -85,6 +88,75 @@ public class BridgeServiceImpl implements BridgeService {
     private static final String OP_MINT = "MINT";
     private static final String OP_BURN = "BURN";
     private static final String OP_UNLOCK = "UNLOCK";
+
+    /**
+     * 本桥实例的持久化状态记录 ID（P0-6 审计修复）。
+     * {@link BridgePauseRecord} 以 bridgeId 为主键，单桥部署固定使用此 ID。
+     */
+    private static final String BRIDGE_STATE_RECORD_ID = "nexus-bridge";
+
+    /**
+     * 桥暂停状态记录 Repository（P0-6 审计修复）。
+     *
+     * <p>通过 {@code required = false} 注入：未配置时为 {@code null}，暂停状态
+     * 退化为纯内存（与旧行为一致，测试环境兼容）；注入后 pause/resume 落库、
+     * 启动时恢复，消除"进程重启后 PAUSED 自动复活为 ACTIVE"的安全缺陷。</p>
+     */
+    @Autowired(required = false)
+    private BridgePauseRecordRepository pauseRecordRepository;
+
+    /**
+     * 启动时恢复持久化的桥运行状态（P0-6 审计修复）。
+     *
+     * <p>重建/崩溃/发版导致的进程重启不再把 PAUSED/EMERGENCY_STOP 静默重置为
+     * ACTIVE。DB 读取失败时沿用既有 {@code @Autowired(required=false)} 依赖的
+     * 降级约定：记录 WARN 并以 ACTIVE 启动（与 DefaultEmergencyPauseService
+     * 构造期回放的容错语义一致）。</p>
+     */
+    @PostConstruct
+    void restoreBridgeState() {
+        if (pauseRecordRepository == null) {
+            return;
+        }
+        try {
+            Optional<BridgePauseRecord> record = pauseRecordRepository.findById(BRIDGE_STATE_RECORD_ID);
+            if (record.isPresent()) {
+                String state = record.get().getState();
+                if ("PAUSED".equalsIgnoreCase(state)) {
+                    bridgeState.set(BridgeState.PAUSED);
+                    log.warn("Bridge state restored from DB: PAUSED (reason={}), operations stay blocked "
+                            + "until explicit resume", record.get().getReason());
+                } else if ("EMERGENCY_STOP".equalsIgnoreCase(state)) {
+                    bridgeState.set(BridgeState.EMERGENCY_STOP);
+                    log.warn("Bridge state restored from DB: EMERGENCY_STOP (reason={})",
+                            record.get().getReason());
+                } else {
+                    log.info("Bridge state restored from DB: {} (idempotent to default ACTIVE)", state);
+                }
+            }
+        } catch (RuntimeException e) {
+            log.warn("Failed to restore bridge state from DB (starting as ACTIVE): {}", e.getMessage());
+        }
+    }
+
+    /**
+     * 持久化桥运行状态（P0-6 审计修复，best-effort）。
+     *
+     * <p>落库失败不影响内存状态切换（与既有持久化辅助路径的容错语义一致），
+     * 但会记录 ERROR——此时"重启恢复"能力对该次变更有缺口，需运维介入。</p>
+     */
+    private void persistBridgeState(BridgeState state, String reason, String triggeredBy) {
+        if (pauseRecordRepository == null) {
+            return;
+        }
+        try {
+            pauseRecordRepository.save(new BridgePauseRecord(
+                    BRIDGE_STATE_RECORD_ID, state.name(), reason, triggeredBy));
+        } catch (RuntimeException e) {
+            log.error("Failed to persist bridge state transition to {}: state={}, error={}",
+                    BRIDGE_STATE_RECORD_ID, state, e.getMessage());
+        }
+    }
 
     /**
      * 供单元测试使用的简化构造器（不注入事件发布器与事务管理器）。
@@ -446,6 +518,7 @@ public class BridgeServiceImpl implements BridgeService {
         if (bridgeState.get() == BridgeState.EMERGENCY_STOP)
             throw new BridgeException("Cannot pause: bridge is EMERGENCY_STOP");
         bridgeState.set(BridgeState.PAUSED);
+        persistBridgeState(BridgeState.PAUSED, "manual pause", validatorId);
         publishStateEvent(BridgeEvent.EventType.BRIDGE_PAUSED, "Bridge paused by " + validatorId, validatorId);
     }
 
@@ -456,6 +529,7 @@ public class BridgeServiceImpl implements BridgeService {
         if (!BridgeValidator.meetsThreshold(validatorIds, config))
             throw new BridgeException("Insufficient signatures to resume");
         bridgeState.set(BridgeState.ACTIVE);
+        persistBridgeState(BridgeState.ACTIVE, null, null);
         publishStateEvent(BridgeEvent.EventType.BRIDGE_RESUMED,
                 "Bridge resumed by " + validatorIds.size() + " validators", null);
     }

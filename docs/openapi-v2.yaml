@@ -682,7 +682,9 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/V2ErrorResponse'
+                # 审计修复：原引用 #/components/schemas/V2ErrorResponse 未定义
+                # （spec 校验器报错），改指实际定义的同一信封结构 ErrorResponse。
+                $ref: '#/components/schemas/ErrorResponse'
 
   # === 支付（批量） ===
   /api/v2/payments/batch:

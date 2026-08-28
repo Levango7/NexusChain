@@ -19,6 +19,7 @@ import java.lang.reflect.Field;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -46,6 +47,9 @@ class FinalityEndToEndIntegrationTest {
     private FinalityVoteBroadcaster broadcaster;
     private TestPublisher publisher;
 
+    /** P0-1 修复后：每个验证人的真实 Ed25519 密钥（注册公钥与投票签名密钥一致） */
+    private final Map<String, org.nexus.crypto.ed25519.Ed25519KeyPair> validatorKeys = new java.util.HashMap<>();
+
     private static final long EPOCH_LENGTH = 4;  // 每 4 个块一个 epoch 检查点
     private static final byte[] EMPTY_SIG = new byte[0];
 
@@ -67,8 +71,13 @@ class FinalityEndToEndIntegrationTest {
         stakingService = newStaking(validatorRegistry);
 
         // 注册 3 个验证人，各质押 300（总权重 900，2/3 阈值 = 600）
+        // P0-1 绑定校验：注册真实 Ed25519 公钥
+        validatorKeys.clear();
         for (String v : VALIDATORS) {
-            validatorRegistry.register(v, "pub-" + v, new BigDecimal("300"), 0.1);
+            org.nexus.crypto.ed25519.Ed25519KeyPair kp = org.nexus.crypto.ed25519.Ed25519.generateKeyPair();
+            validatorKeys.put(v, kp);
+            validatorRegistry.register(v, org.apache.commons.codec.binary.Hex.encodeHexString(
+                    kp.getPublicKey().getEncoded()), new BigDecimal("300"), 0.1);
             Validator val = validatorRegistry.getValidator(v);
             val.setStatus(ValidatorStatus.ACTIVE);
             stakingService.stake(v, new BigDecimal("300"));
@@ -78,7 +87,7 @@ class FinalityEndToEndIntegrationTest {
         gadget = new FinalityGadget(validatorRegistry, stakingService);
         // P0-1 审计修复后：注入 Ed25519 密钥对才能投票
         coordinator = new FinalityCoordinator(gadget, validatorRegistry, EPOCH_LENGTH, null);
-        var keyPair = Ed25519.generateKeyPair();
+        var keyPair = validatorKeys.get("v1");
         coordinator.setVoteSigningKeyPair(keyPair.getPrivateKey(), keyPair.getPublicKey());
         broadcaster = new FinalityVoteBroadcaster(gadget, publisher);
 
@@ -105,11 +114,14 @@ class FinalityEndToEndIntegrationTest {
         }
     }
 
-    /** 让 v1 作为本节点（由 coordinator 驱动）产生一次投票 */
+    /** 让指定验证人作为本节点（由 coordinator 驱动）产生投票；selfAddr=null 时空转 */
     private void makeCoordinator(String selfAddr) {
         coordinator = new FinalityCoordinator(gadget, validatorRegistry, EPOCH_LENGTH, null);
-        var keyPair = Ed25519.generateKeyPair();
-        coordinator.setVoteSigningKeyPair(keyPair.getPrivateKey(), keyPair.getPublicKey());
+        if (selfAddr != null) {
+            // P0-1 绑定校验：投票签名密钥必须是该验证人注册的密钥
+            var keyPair = validatorKeys.get(selfAddr);
+            coordinator.setVoteSigningKeyPair(keyPair.getPrivateKey(), keyPair.getPublicKey());
+        }
         coordinator.setSelfValidatorAddress(selfAddr);
     }
 

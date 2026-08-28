@@ -214,6 +214,14 @@ public class TxController {
             signingApprovalService.revertExecuting(approvalId);
             throw e;
         }
+        // 审计修复：doSignAndBroadcast 的失败路径（无签名键/地址非法/nonce 获取失败/
+        // 交易构造失败）以 statusCode=5000 的 fail 响应返回而【不抛异常】，
+        // catch 不会触发。此场景资金未转出，审批必须回退到 APPROVED 允许重试——
+        // 原实现直接 markExecuted，导致"审批被消耗但转账未发生"。
+        if (isFailureResponse(result)) {
+            signingApprovalService.revertExecuting(approvalId);
+            return result;
+        }
         // P1-8 修复（v2.27.0）：签名成功后将审批请求标记为 EXECUTED。
         // 标记失败不再静默吞异常——记录 ERROR 级别审计日志，便于运维排查。
         // 签名已广播不可逆，但审批状态不一致需人工介入。
@@ -447,6 +455,22 @@ public class TxController {
         result.setStatusCode(5000);
         result.setMessage(message);
         return JsonUtil.GSON.fromJson(JsonUtil.GSON.toJson(result), HashMap.class);
+    }
+
+    /**
+     * 判断签名广播结果是否为失败响应（审计修复辅助）。
+     *
+     * <p>{@code doSignAndBroadcast} 的失败路径返回 {@link #fail} 构造的
+     * {@code statusCode=5000} HashMap 而非抛异常；成功路径返回
+     * {@code statusCode=2000}。任何非 2000 响应都视为"资金未转出"。</p>
+     */
+    private boolean isFailureResponse(Object result) {
+        if (!(result instanceof Map<?, ?> map)) {
+            // 非 Map 结构（意外类型/null）按失败处理，回退审批允许重试
+            return true;
+        }
+        Object code = map.get("statusCode");
+        return !(code instanceof Number) || ((Number) code).intValue() != 2000;
     }
 
     /**

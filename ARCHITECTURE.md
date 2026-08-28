@@ -109,9 +109,9 @@ Blockchain is the foundational settlement layer — not the product itself. On t
 ## Technology Stack
 
 - **Language**: Java 17
-- **Framework**: Spring Boot — unified to `3.2.5` across all modules (managed via Spring Boot BOM and io.spring.dependency-management plugin)
-- **Build**: Gradle 8.5（兼容 7.6+）with toolchain auto-provisioning
-- **Database**: PostgreSQL (production), H2 (dev/sandbox)
+- **Framework**: Spring Boot — unified to `4.0.8` across all modules（2026-08 升级，配套 Spring Cloud 2025.1.0 / Spring Cloud Alibaba 2025.1.0.0；managed via Spring Boot BOM and io.spring.dependency-management plugin）
+- **Build**: Gradle 8.14（wrapper，见 gradle/wrapper/gradle-wrapper.properties）with toolchain auto-provisioning
+- **Database**: PostgreSQL (production), H2 (dev/sandbox)；注意：nexus-gateway 默认配置为 MySQL 方言、dev profile 为 H2 内存库，多模块数据库策略尚未完全统一
 - **P2P**: gRPC + Protobuf
 - **Smart Contracts**: WASM (Chicory 纯 Java 解释器) + EVM 子集解释器
 - **Frontend**: React + TypeScript + Tailwind CSS

@@ -2,9 +2,7 @@ package org.nexus.consensus.finality;
 
 import java.util.List;
 
-import org.nexus.core.crypto.bls.Secp256k1BlsPublicKey;
-import org.nexus.core.crypto.bls.Secp256k1BlsSignature;
-import org.nexus.core.crypto.bls.Secp256k1BlsSigner;
+import org.nexus.crypto.ed25519.Ed25519PublicKey;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -13,15 +11,15 @@ import org.slf4j.LoggerFactory;
  *
  * <p>NexFinality 的性能基石：N 个验证者投票的签名，从"逐一验签 O(N)"降为
  * "聚合后一次验签 O(1)"。本接口定义聚合的<strong>调用契约</strong>，
- * 与具体密码学实现（BLS）解耦。</p>
+ * 与具体密码学实现解耦。</p>
  *
  * <p>实现分层：</p>
  * <ul>
- *   <li>{@link CollectingAggregator} —— M2 默认实现：仅收集，验签退化为逐一验证（诚实降级）</li>
- *   <li>BlstSignatureAggregator —— M3 目标实现（需 blst jar，见 docs/adr/M3-BLS-blocking-notes.md）</li>
+ *   <li>{@link CollectingAggregator} —— 默认实现：逐一 Ed25519 验签（诚实降级）</li>
+ *   <li>BlstSignatureAggregator —— 目标实现（需 blst jar，见 docs/adr/M3-BLS-blocking-notes.md）</li>
  * </ul>
  *
- * <p><b>设计纪律</b>：FinalityGadget 只依赖此接口；接入 blst 时零改动调用方。</p>
+ * <p><b>设计纪律</b>：FinalityGadget 只依赖此接口；接入配对密码学聚合时零改动调用方。</p>
  */
 public interface SignatureAggregator {
 
@@ -108,32 +106,31 @@ public interface SignatureAggregator {
                     return false;
                 }
             }
-            // 格式校验通过后，尝试BLS-like验签（如果Vote携带了公钥）
-            // NOTE: 纯Java环境使用secp256k1 EC点实现BLS-like签名验证。
-            // 生产环境应接入blst原生库做完整BLS12-381配对验签。
+            // 格式校验通过后，逐一 Ed25519 验签。
+            // P0-1 审计修复：原实现为 secp256k1 上的 σ=PK·H(m) "BLS-like" 构造——
+            // PK 公开即可对任意消息伪造签名，等同无验签。现改为标准 Ed25519
+            // （签名密钥为验证人注册密钥，伪造需要私钥）。公钥与验证人身份的
+            // 绑定由 FinalityGadget 在计票前对照 ValidatorRegistry 完成。
             try {
                 for (Vote vote : votes) {
                     byte[] pubKeyBytes = vote.getPublicKeyBytes();
                     // B-18 修复（P0-C 安全）：公钥为 null 时拒绝该签名（fail-closed），
                     // 不再跳过验签。攻击者可能提交无公钥的签名绕过验签。
-                    // 修复前：continue 跳过 → 无公钥投票仅通过格式校验即可计入；
-                    // 修复后：return false → 无公钥投票直接导致整批验签失败。
                     if (pubKeyBytes == null || pubKeyBytes.length == 0) {
                         log.warn("Vote from validator {} has no public key, rejecting (B-18 fail-closed)",
                                 vote.getValidatorAddress());
                         return false;
                     }
                     byte[] message = vote.signingPayload();
-                    Secp256k1BlsPublicKey pubKey = Secp256k1BlsPublicKey.fromBytesCompressed(pubKeyBytes);
-                    Secp256k1BlsSignature signature = new Secp256k1BlsSignature(Secp256k1BlsSigner.decodePointPublic(vote.getSignature()));
-                    if (!signature.verify(message, pubKey)) {
-                        log.warn("BLS signature verification failed for validator {}", vote.getValidatorAddress());
+                    Ed25519PublicKey pubKey = new Ed25519PublicKey(pubKeyBytes);
+                    if (!pubKey.verify(message, vote.getSignature())) {
+                        log.warn("Vote signature verification failed for validator {}", vote.getValidatorAddress());
                         return false;
                     }
                 }
             } catch (RuntimeException e) {
                 // P0-6 修复：fail-closed — 任何验签异常都应视为验签失败
-                log.error("BLS signature verification failed: {}", e.getMessage());
+                log.error("Vote signature verification failed: {}", e.getMessage());
                 return false;
             }
             return true;

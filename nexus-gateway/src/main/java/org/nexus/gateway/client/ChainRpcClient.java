@@ -190,10 +190,12 @@ public class ChainRpcClient {
     }
 
     /**
-     * 查询链上交易的完整详情（P0-5 修复，v2.27.0）。
+     * 查询链上交易的完整详情（P0-5 修复，v2.27.0；审计修复后端点已补齐）。
      *
      * <p>调用 core: GET /rpc/v1/transaction/{txHash}，返回交易金额、收款人、发送方等完整信息。
-     * 用于支付确认时校验交易-订单绑定（金额一致 + 收款人为商户结算地址）。
+     * 用于支付确认时校验交易-订单绑定（金额一致 + 收款人公钥哈希与订单收款地址解码哈希一致）。
+     * recipient/sender 为 20 字节公钥哈希的小写 hex（与 WalletUtils.addressToPubkeyHash
+     * 同一编码空间）。
      * 链节点不支持此端点或交易不存在时返回 null，调用方应做 null 检查并降级处理。</p>
      *
      * @param txHash 链上交易哈希

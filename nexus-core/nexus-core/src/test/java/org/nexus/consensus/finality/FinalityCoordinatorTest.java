@@ -27,7 +27,10 @@ class FinalityCoordinatorTest {
         staking.stake("v1", new BigDecimal("300"));
         staking.stake("v2", new BigDecimal("300"));
         staking.stake("v3", new BigDecimal("300"));
-        registry.register("v1", "pub1", new BigDecimal("300"), 0.1);
+        // P0-1 绑定校验：v1 必须注册与投票签名密钥一致的 Ed25519 公钥
+        var keyPair = Ed25519.generateKeyPair();
+        registry.register("v1", org.apache.commons.codec.binary.Hex.encodeHexString(
+                keyPair.getPublicKey().getEncoded()), new BigDecimal("300"), 0.1);
         registry.register("v2", "pub2", new BigDecimal("300"), 0.1);
         registry.register("v3", "pub3", new BigDecimal("300"), 0.1);
         registry.getValidator("v1").setStatus(ValidatorStatus.ACTIVE);
@@ -37,7 +40,6 @@ class FinalityCoordinatorTest {
         gadget = new FinalityGadget(registry, staking);
         // P0-1 审计修复后：必须注入 Ed25519 密钥对才能投票（fail-closed 防伪造）
         coordinator = new FinalityCoordinator(gadget, registry, EPOCH, null);
-        var keyPair = Ed25519.generateKeyPair();
         coordinator.setVoteSigningKeyPair(keyPair.getPrivateKey(), keyPair.getPublicKey());
         coordinator.setSelfValidatorAddress("v1");
     }

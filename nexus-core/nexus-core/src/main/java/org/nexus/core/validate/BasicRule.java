@@ -67,8 +67,10 @@ public class BasicRule implements BlockRule, TransactionRule {
     /**
      * 共识模式（PLAN-001 缺口 B）：pow/dpos 走 PoW 难度校验；
      * pos 模式跳过（PoS 区块由引擎 Ed25519 验签，无 nBits 难度）。
+     * 审计修复：默认值对齐主配置/ConsensusConfig 的 dpos（原为 pow，
+     * 属性缺失时各组件对共识模式认知分裂）。
      */
-    @Value("${nexus.consensus.mode:pow}")
+    @Value("${nexus.consensus.mode:dpos}")
     private String consensusMode;
 
     /** 是否为 PoS 共识模式。 */

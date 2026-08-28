@@ -180,6 +180,12 @@ public class PaymentOrchestrationController {
         // 201：构造动态 HTTP PSP 连接器并注册
         String displayName = body.get("display_name") == null ? id : String.valueOf(body.get("display_name"));
         String baseUrl = body.get("base_url") == null ? "" : String.valueOf(body.get("base_url"));
+        // 审计修复：base_url 校验（SSRF 面收窄）。原实现接受任意字符串并作为
+        // DynamicHttpPspConnector 的请求目标——认证后的调用方可让网关向任意
+        // 地址（含内网/file: 等）发起 POST。现强制 http/https + 非空 host。
+        if (!isValidHttpBaseUrl(baseUrl)) {
+            return ResponseEntity.badRequest().build();
+        }
         String apiKeyEnv = body.get("api_key_env") == null ? null : String.valueOf(body.get("api_key_env"));
         @SuppressWarnings("unchecked")
         Set<String> currencies = body.get("currencies") instanceof java.util.List
@@ -197,6 +203,24 @@ public class PaymentOrchestrationController {
         resp.put("type", type);
         resp.put("status", "registered");
         return ResponseEntity.status(HttpStatus.CREATED).body(resp);
+    }
+
+    /**
+     * base_url 合法性校验（审计修复辅助）：必须为合法的 http/https URL
+     * 且 host 非空。拦截 file:/ftp:/内网探测等非 PSP 目标。
+     */
+    private static boolean isValidHttpBaseUrl(String baseUrl) {
+        if (baseUrl == null || baseUrl.isBlank()) {
+            return false;
+        }
+        try {
+            java.net.URI uri = java.net.URI.create(baseUrl);
+            String scheme = uri.getScheme();
+            return ("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme))
+                    && uri.getHost() != null && !uri.getHost().isBlank();
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
     }
 
     @DeleteMapping("/connectors/{id}")

@@ -48,9 +48,12 @@ tasks.withType(JavaCompile) {
 
 dependencies {
     // === Spring Cloud Gateway（含 WebFlux + Reactor Netty） ===
-    // 引入 spring-cloud-starter-gateway 会传递引入 spring-boot-starter-webflux，
+    // 审计修复：Spring Cloud 2025.x 将 gateway starter 更名为
+    // spring-cloud-starter-gateway-server-webflux（旧坐标不在 2025.1.0 BOM 中，
+    // 声明后解析为空版本导致依赖解析失败）。
+    // 引入它会传递引入 spring-boot-starter-webflux，
     // 切勿再引入 spring-boot-starter-web（Tomcat），否则启动失败。
-    implementation 'org.springframework.cloud:spring-cloud-starter-gateway'
+    implementation 'org.springframework.cloud:spring-cloud-starter-gateway-server-webflux'
 
     // === Spring Boot Actuator（健康检查 / 指标暴露） ===
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
@@ -66,7 +69,9 @@ dependencies {
     implementation 'io.micrometer:micrometer-registry-prometheus'
 
     // === Spring Cloud BOM（管理 Gateway / LoadBalancer 版本） ===
-    implementation platform('org.springframework.cloud:spring-cloud-dependencies:2023.0.3')
+    // 审计修复：Boot 4.0.8 需要配套的 Spring Cloud 2025.1.x 线（2023.0.3 只兼容
+    // Boot 3.2.x）。与 gateway/wallet/bridge 的 ca7e0ba 升级对齐。
+    implementation platform('org.springframework.cloud:spring-cloud-dependencies:2025.1.0')
     // === Spring Cloud Alibaba BOM（管理 Nacos / Sentinel 版本） ===
     implementation platform('com.alibaba.cloud:spring-cloud-alibaba-dependencies:2025.1.0.0')
 

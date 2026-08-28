@@ -118,7 +118,17 @@ spec:
                 - ALL
             seccompProfile:
               type: RuntimeDefault
-          command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+          # 审计修复：启用 requirepass（密码经 nexus-secrets 注入）。
+          # 原先无认证，命名空间内任意 Pod（NetworkPolicy 仅 default-deny 入站，
+          # 同 ns 互访放行）可直连读写限流/缓存数据。
+          # 业务 Pod 认证：nexus-secrets 的 SPRING_DATA_REDIS_PASSWORD（envFrom 注入）。
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: nexus-secrets
+                  key: SPRING_DATA_REDIS_PASSWORD
+          command: ["sh", "-c", "exec redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru --requirepass \"$REDIS_PASSWORD\""]
           ports:
             - containerPort: 6379
           resources:
@@ -129,7 +139,8 @@ spec:
               memory: "256Mi"
           livenessProbe:
             exec:
-              command: ["redis-cli", "ping"]
+              # 认证后的存活探测（REDISCLI_AUTH 免命令行泄露密码）
+              command: ["sh", "-c", "REDISCLI_AUTH=\"$REDIS_PASSWORD\" redis-cli ping | grep PONG"]
             initialDelaySeconds: 10
             periodSeconds: 10
 ---

@@ -106,7 +106,7 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
 - **编译状态**：已完成编译验证（`mpc-engine/target/release/mpc-engine` 产物存在；README 早期"未编译"声明过时，2026-08-27 核实）。
 - **传输安全**：gRPC mTLS 已实现（MPC-P0-02 修复，use-plaintext 默认 false）。
 
-### ZK 证明（v2.41.0：方案 C 真实 Groth16 已启用）
+### ZK 证明（方案 C 真实 Groth16 已启用，详见 CHANGELOG v2.40.0）
 
 - **真实 Groth16（方案 C，已启用）**：`zk-groth16-service`（Rust arkworks，BN254 双线性配对）提供**真实配对验证**；Java `DefaultZkProofSystem` 默认远程对接（fail-closed：远程不可用 prove 抛异常 / verify 返回 false），本地 Schnorr 仅作未配置远程服务时的降级路径。
 - **witness BigInteger 化（A1-R3）**：prove/verify 全链路 `long[]` → `BigInteger[]`，256 位状态根无精度损失（ZK-P2-01 关闭）。
@@ -153,7 +153,9 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
 
 ADR-001 状态：**Resolved**（2026-08-10）。
 
-## 最新改动摘要（v2.30.0，前端i18n+组件测试+覆盖率门禁+nexus-core异常处理）
+## 历史改动摘要（v2.30.0，前端i18n+组件测试+覆盖率门禁+nexus-core异常处理）
+
+> 注：以下为 v2.30.0 的历史摘要，最新变更见 [CHANGELOG](CHANGELOG.md)（当前 v2.40.0）。
 
 本次发布聚焦前端 i18n 文本替换、前端组件测试、覆盖率门禁提升和 nexus-core 异常处理规范化：
 

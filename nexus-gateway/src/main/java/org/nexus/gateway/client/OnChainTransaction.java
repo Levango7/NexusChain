@@ -13,8 +13,8 @@ import java.math.BigDecimal;
  * @param txHash      交易哈希
  * @param amount      交易金额（最小单位）
  * @param tokenSymbol 代币符号
- * @param sender      发送方地址
- * @param recipient   接收方地址
+ * @param sender      发送方（20 字节公钥哈希小写 hex）
+ * @param recipient   接收方（20 字节公钥哈希小写 hex，与 WalletUtils.addressToPubkeyHash 同一编码空间）
  * @param confirmed   是否已确认
  * @param blockHeight 所在区块高度（未确认时为 null）
  */

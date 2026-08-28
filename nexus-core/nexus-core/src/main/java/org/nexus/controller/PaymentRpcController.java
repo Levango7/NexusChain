@@ -121,6 +121,49 @@ public class PaymentRpcController {
     }
 
     /**
+     * GET /rpc/v1/transaction/{txHash}
+     * Returns full transaction details for the gateway payment-binding check.
+     *
+     * <p>修复（P0-5 审计）：gateway 的 ChainRpcClient.getTransaction 此前调用本路径，
+     * 但 core 侧仅有根路径 /transaction/{txHash}（CommandController）与 /rpc/v1 下的
+     * /transaction/{txHash}/status，导致该调用恒 404、v2.27.0 引入的交易-订单绑定校验
+     * 永远走降级分支。本端点补齐 /rpc/v1 版本化路径。</p>
+     *
+     * <p>字段约定与 gateway 解析器（ChainRpcClient#getTransaction）严格对齐：
+     * sender/recipient 为 20 字节公钥哈希的<b>小写 hex</b>——与 nexus-sdk
+     * WalletUtils.addressToPubkeyHash 的输出同一编码空间，使 gateway 侧
+     * "订单收款地址 → 公钥哈希" 与 "链上 to 字段" 的比较具有构造性对称性，
+     * 不依赖任何地址编码实现细节。</p>
+     */
+    @GetMapping("/transaction/{txHash}")
+    public Map<String, Object> getTransactionDetail(@PathVariable String txHash) {
+        try {
+            byte[] hashBytes = Hex.decodeHex(txHash.toCharArray());
+            Transaction tx = bc.getTransaction(hashBytes);
+            if (tx == null) {
+                return rpcResult(4004, "transaction not found", null);
+            }
+            Block current = bc.currentHeader();
+            long currentHeight = current != null ? current.nHeight : 0;
+            long confirmations = currentHeight - tx.height;
+
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("tx_hash", txHash);
+            data.put("amount", tx.amount);
+            data.put("sender", Hex.encodeHexString(tx.from));
+            data.put("recipient", Hex.encodeHexString(tx.to));
+            data.put("confirmed", confirmations >= 1);
+            data.put("block_height", tx.height);
+            data.put("type", tx.type);
+            return rpcResult(2000, "success", data);
+        } catch (DecoderException e) {
+            return rpcResult(4002, "invalid tx hash hex", null);
+        } catch (RuntimeException e) {
+            return rpcResult(5001, "query error: " + e.getMessage(), null);
+        }
+    }
+
+    /**
      * GET /rpc/v1/account/{pubKeyHash}/nonce
      * Returns next nonce for an account (by public key hash hex).
      */

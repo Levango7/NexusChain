@@ -36,3 +36,7 @@ stringData:
   NEX_DB_PASSWORD: "CHANGE_ME_IN_PRODUCTION"
   NEX_MASTER_KEY: "BASE64_ENCODED_32_BYTE_AES_KEY_HERE"
   NEX_WEBHOOK_SECRET: "CHANGE_ME_WEBHOOK_SECRET"
+  # 审计修复：Redis 启用 requirepass（30-infrastructure.yml）。
+  # 所有业务 Pod 经 envFrom: nexus-secrets 自动获得该变量，
+  # Spring Data Redis 按 SPRING_DATA_REDIS_PASSWORD 读取认证。
+  SPRING_DATA_REDIS_PASSWORD: "CHANGE_ME_REDIS_PASSWORD"

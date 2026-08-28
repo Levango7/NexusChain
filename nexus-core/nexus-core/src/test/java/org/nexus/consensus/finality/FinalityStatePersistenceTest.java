@@ -34,11 +34,12 @@ class FinalityStatePersistenceTest {
     private ValidatorRegistry registry;
     private StakingService staking;
 
-    /** B-17/B-18 修复后：投票必须携带真实 BLS 公钥+可验签签名才能最终化。 */
-    private final Map<String, BlsSigner> validatorSigners = new java.util.concurrent.ConcurrentHashMap<>();
+    /** P0-1 修复后：投票必须携带与注册表一致的 Ed25519 公钥+真实签名才能计票。 */
+    private final Map<String, org.nexus.crypto.ed25519.Ed25519KeyPair> validatorKeys = new java.util.concurrent.ConcurrentHashMap<>();
 
     @BeforeEach
     void setUp() {
+        validatorKeys.clear();
         registry = new ValidatorRegistry(new BigDecimal("100"), 100);
         staking = new StakingServiceImpl();
         injectRegistryIntoStaking();
@@ -58,22 +59,32 @@ class FinalityStatePersistenceTest {
     }
 
     private void addValidator(String addr, int stake) {
-        registry.register(addr, "pub-" + addr, new BigDecimal(stake), 0.1);
+        org.nexus.crypto.ed25519.Ed25519KeyPair kp = org.nexus.crypto.ed25519.Ed25519.generateKeyPair();
+        validatorKeys.put(addr, kp);
+        registry.register(addr, org.apache.commons.codec.binary.Hex.encodeHexString(
+                kp.getPublicKey().getEncoded()), new BigDecimal(stake), 0.1);
         Validator v = registry.getValidator(addr);
         v.setStatus(ValidatorStatus.ACTIVE);
         staking.stake(addr, new BigDecimal(stake));
     }
 
     /**
-     * 构造带真实 BLS 签名与公钥的投票（对齐 FinalityCoordinator 生产路径）。
+     * 构造带真实 Ed25519 签名与公钥的投票（P0-1 审计修复后对齐生产路径）。
      * 载荷格式与 {@link Vote#signingPayload()} 一致：epoch(8B BE) || checkpointHash。
      */
     private Vote vote(String validator, long epoch, byte[] cp) {
-        BlsSigner signer = validatorSigners.computeIfAbsent(validator, k -> BlsSigner.generate());
+        org.nexus.crypto.ed25519.Ed25519KeyPair kp = validatorKeys.get(validator);
+        if (kp == null) {
+            throw new IllegalStateException("validator not registered: " + validator);
+        }
         byte[] payload = ByteBuffer.allocate(8 + cp.length).putLong(epoch).put(cp).array();
-        BlsSignature sig = signer.sign(payload);
-        byte[] pub = ((Secp256k1BlsSigner) signer).getPublicKey().toBytesCompressed();
-        return new Vote(epoch, cp, validator, sig.toBytesCompressed(), pub);
+        byte[] pub = kp.getPublicKey().getEncoded();
+        try {
+            byte[] sig = kp.getPrivateKey().sign(payload);
+            return new Vote(epoch, cp, validator, sig, pub);
+        } catch (Exception e) {
+            throw new RuntimeException("Ed25519 signing failed", e);
+        }
     }
 
     @Test

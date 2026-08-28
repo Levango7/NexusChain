@@ -65,17 +65,30 @@ public class ReconciliationTask {
     private final RefundRepository refundRepository;
     private final PaymentOrderRepository paymentOrderRepository;
     private final ChainRpcClient chainRpcClient;
+    /**
+     * 独立事务模板（审计修复）。
+     *
+     * <p>verifyCompletedRefund/verifyPendingRefund 原以
+     * {@code @Transactional(REQUIRES_NEW)} 标注，但由同类循环自调用，
+     * Spring 代理被绕过、注解不生效。改为编程式事务（REQUIRES_NEW），
+     * 逐条对账状态独立提交。</p>
+     */
+    private final org.springframework.transaction.support.TransactionTemplate verifyTemplate;
 
     public ReconciliationTask(ExecutionConfig executionConfig,
                               CompensationService compensationService,
                               RefundRepository refundRepository,
                               PaymentOrderRepository paymentOrderRepository,
-                              ChainRpcClient chainRpcClient) {
+                              ChainRpcClient chainRpcClient,
+                              org.springframework.transaction.PlatformTransactionManager transactionManager) {
         this.executionConfig = executionConfig;
         this.compensationService = compensationService;
         this.refundRepository = refundRepository;
         this.paymentOrderRepository = paymentOrderRepository;
         this.chainRpcClient = chainRpcClient;
+        this.verifyTemplate = new org.springframework.transaction.support.TransactionTemplate(transactionManager);
+        this.verifyTemplate.setPropagationBehavior(
+                org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
 
     /**
@@ -164,8 +177,12 @@ public class ReconciliationTask {
 
     /**
      * 验证单条 COMPLETED 退款的链上状态。
+     *
+     * <p>审计修复：链查询失败（UNKNOWN）与"链上明确未确认"（NOT_CONFIRMED）
+     * 区分处理——原实现 queryChainConfirmation 吞异常返回 false，链节点不可达时
+     * 会把全部 COMPLETED 退款误标 RECONCILIATION_NEEDED。现链不可达时跳过该条
+     * （计入 errors，下轮重试），仅链明确答复未确认时才降级标记。</p>
      */
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void verifyCompletedRefund(Refund refund, ReconciliationReport report) {
         if (refund.getChainTxHash() == null || refund.getChainTxHash().isEmpty()) {
             // COMPLETED 但无 chainTxHash：数据异常，标记需要人工对账
@@ -177,11 +194,20 @@ public class ReconciliationTask {
             return;
         }
 
-        boolean confirmed = queryChainConfirmation(refund.getChainTxHash());
+        Boolean confirmed = queryChainConfirmation(refund.getChainTxHash());
+        if (confirmed == null) {
+            // 链不可达/查询失败：跳过，不计入 reconciliationNeeded（下轮重试）
+            report.errors++;
+            log.warn("Refund {} chain confirmation query failed (chain unreachable?), skipped this round",
+                    refund.getRefundNo());
+            return;
+        }
         if (!confirmed) {
-            // 数据库 COMPLETED 但链上未确认 → 标记为 RECONCILIATION_NEEDED
-            refund.setStatus(Refund.RefundStatus.RECONCILIATION_NEEDED);
-            refundRepository.save(refund);
+            // 数据库 COMPLETED 但链上明确未确认 → 标记为 RECONCILIATION_NEEDED
+            verifyTemplate.executeWithoutResult(status -> {
+                refund.setStatus(Refund.RefundStatus.RECONCILIATION_NEEDED);
+                refundRepository.save(refund);
+            });
             report.reconciliationNeeded++;
             log.warn("Refund {} marked RECONCILIATION_NEEDED (COMPLETED but not confirmed on chain, txHash={})",
                     refund.getRefundNo(), refund.getChainTxHash());
@@ -215,26 +241,32 @@ public class ReconciliationTask {
     /**
      * 验证单条 PENDING 退款的链上状态。
      */
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void verifyPendingRefund(Refund refund, ReconciliationReport report) {
         if (refund.getChainTxHash() == null || refund.getChainTxHash().isEmpty()) {
             // PENDING 且无 chainTxHash：阶段2 未执行，由 CompensationService 在步骤1 处理
             return;
         }
 
-        boolean confirmed = queryChainConfirmation(refund.getChainTxHash());
+        Boolean confirmed = queryChainConfirmation(refund.getChainTxHash());
+        if (confirmed == null) {
+            // 链不可达/查询失败：跳过（下轮重试），不误改状态
+            report.errors++;
+            return;
+        }
         if (confirmed) {
             // 数据库 PENDING 但链上已确认 → 更新为 COMPLETED
-            refund.setStatus(Refund.RefundStatus.COMPLETED);
-            refund.setCompletedAt(LocalDateTime.now());
-            refundRepository.save(refund);
+            verifyTemplate.executeWithoutResult(status -> {
+                refund.setStatus(Refund.RefundStatus.COMPLETED);
+                refund.setCompletedAt(LocalDateTime.now());
+                refundRepository.save(refund);
 
-            // 同步更新订单状态
-            paymentOrderRepository.findById(refund.getOrderId()).ifPresent(order -> {
-                if (order.getStatus() == PaymentOrder.OrderStatus.REFUND_PENDING) {
-                    order.setStatus(PaymentOrder.OrderStatus.REFUNDED);
-                    paymentOrderRepository.save(order);
-                }
+                // 同步更新订单状态
+                paymentOrderRepository.findById(refund.getOrderId()).ifPresent(order -> {
+                    if (order.getStatus() == PaymentOrder.OrderStatus.REFUND_PENDING) {
+                        order.setStatus(PaymentOrder.OrderStatus.REFUNDED);
+                        paymentOrderRepository.save(order);
+                    }
+                });
             });
             report.pendingToCompleted++;
             log.info("Refund {} reconciled: PENDING → COMPLETED (chain confirmed, txHash={})",
@@ -243,15 +275,17 @@ public class ReconciliationTask {
     }
 
     /**
-     * 查询链上交易确认状态（容错）。
+     * 查询链上交易确认状态（三态，容错）。
+     *
+     * @return true=已确认；false=链明确答复未确认；null=查询失败（链不可达等）
      */
-    private boolean queryChainConfirmation(String chainTxHash) {
+    private Boolean queryChainConfirmation(String chainTxHash) {
         try {
             return chainRpcClient.isTransactionConfirmed(chainTxHash);
         } catch (RuntimeException e) {
             log.warn("Chain confirmation query failed for txHash={}: {}",
                     chainTxHash, e.getMessage());
-            return false;
+            return null;
         }
     }
 

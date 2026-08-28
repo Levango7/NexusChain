@@ -4,8 +4,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Propagation;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
@@ -90,6 +91,21 @@ public class ThreePhaseExecutionTemplate {
     private long phase2TimeoutSeconds;
 
     /**
+     * 阶段1/阶段3 事务模板（审计修复）。
+     *
+     * <p>早期实现以 {@code @Transactional(REQUIRES_NEW)} 标注 persistPhase/confirmPhase，
+     * 但 execute() 以 this 自调用这两个方法，Spring 代理被绕过，注解完全不生效
+     * （"阶段1 独立提交"的声明不成立）。改为编程式 {@link TransactionTemplate}
+     * （PROPAGATION_REQUIRES_NEW），事务边界不再依赖代理机制。</p>
+     */
+    private final TransactionTemplate phaseTransactionTemplate;
+
+    public ThreePhaseExecutionTemplate(PlatformTransactionManager transactionManager) {
+        this.phaseTransactionTemplate = new TransactionTemplate(transactionManager);
+        this.phaseTransactionTemplate.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+    }
+
+    /**
      * 执行三阶段链上副作用操作。
      *
      * <p><strong>事务边界</strong>：本方法本身不标注 {@code @GlobalTransactional}，
@@ -125,8 +141,9 @@ public class ThreePhaseExecutionTemplate {
         // 阶段2：链上执行（事务外，不可逆）
         // 低5 改进：添加超时机制，避免链节点不可达 / RPC 挂起导致无限等待
         OnChainResult result;
+        CompletableFuture<OnChainResult> phase2Future = null;
         try {
-            CompletableFuture<OnChainResult> phase2Future = CompletableFuture.supplyAsync(
+            phase2Future = CompletableFuture.supplyAsync(
                     () -> {
                         OnChainResult r = onChainExecute.apply(record);
                         return r != null ? r : OnChainResult.failure("onChainExecute returned null", false);
@@ -134,8 +151,15 @@ public class ThreePhaseExecutionTemplate {
             result = phase2Future.get(phase2TimeoutSeconds, TimeUnit.SECONDS);
         } catch (TimeoutException te) {
             // 超时：链上执行未在阈值内完成，标记 FAILED 触发补偿
+            // （审计修复：取消孤儿任务。否则后台任务继续运行、可能稍后成功广播交易，
+            // 而阶段3 已标 FAILED、订单回滚允许重试退款 → 同一退款可能链上执行两次。
+            // cancel(true) 发出中断信号；对不可中断的 socket I/O 仍存在残余窗口，
+            // 由 CompensationService 幂等键兜底，见类文档"幂等性"。）
+            if (phase2Future != null) {
+                phase2Future.cancel(true);
+            }
             log.error("Phase 2 (onChainExecute) timeout after {}s: idempotencyKey={}, " +
-                    "triggering compensation via phase 3",
+                    "orphan task cancelled, triggering compensation via phase 3",
                     phase2TimeoutSeconds, request.getIdempotencyKey());
             result = OnChainResult.failure(
                     "on-chain execution timeout after " + phase2TimeoutSeconds + "s", false);
@@ -171,24 +195,22 @@ public class ThreePhaseExecutionTemplate {
     /**
      * 阶段1：落库 PENDING。
      *
-     * <p>使用 {@code REQUIRES_NEW} 在新事务内执行，确保 PENDING 记录独立提交。
-     * 即使后续阶段2/3 失败，PENDING 记录已落库，可被 {@link CompensationService}
-     * 扫描超时后处理。</p>
+     * <p>经 {@link TransactionTemplate}（REQUIRES_NEW）在新事务内执行，确保 PENDING
+     * 记录独立提交。即使后续阶段2/3 失败，PENDING 记录已落库，可被
+     * {@link CompensationService} 扫描超时后处理。</p>
      */
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public <T> T persistPhase(ExecutionRequest request, Function<ExecutionRequest, T> dbPersist) {
-        return dbPersist.apply(request);
+        return phaseTransactionTemplate.execute(status -> dbPersist.apply(request));
     }
 
     /**
      * 阶段3：更新 CONFIRMED/FAILED。
      *
-     * <p>使用 {@code REQUIRES_NEW} 在新事务内执行，与阶段1 事务隔离。
+     * <p>经 {@link TransactionTemplate}（REQUIRES_NEW）在新事务内执行，与阶段1 事务隔离。
      * 阶段3 失败时（如数据库连接断开），PENDING/链上结果已固化，
      * 由 {@code ReconciliationTask} 定时对账修正。</p>
      */
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public <T> void confirmPhase(T record, OnChainResult result, BiConsumer<T, OnChainResult> dbConfirm) {
-        dbConfirm.accept(record, result);
+        phaseTransactionTemplate.executeWithoutResult(status -> dbConfirm.accept(record, result));
     }
 }

@@ -49,13 +49,15 @@ class MultiNodeConsensusConvergenceTest {
 
     private List<ConsensusNode> nodes;
 
-    /** B-17/B-18 修复后：投票必须携带真实 BLS 公钥+可验签签名才能最终化。 */
-    private final Map<String, BlsSigner> validatorSigners = new HashMap<>();
+    /** P0-1 修复后：投票必须携带与注册表一致的 Ed25519 公钥+真实签名才能计票。
+     *  static：ConsensusNode 为静态内部类，需要访问本映射。 */
+    private static final Map<String, org.nexus.crypto.ed25519.Ed25519KeyPair> validatorKeys = new HashMap<>();
 
     @BeforeEach
     void setUp() {
+        validatorKeys.clear();
         for (String v : VALIDATORS) {
-            validatorSigners.put(v, BlsSigner.generate());
+            validatorKeys.put(v, org.nexus.crypto.ed25519.Ed25519.generateKeyPair());
         }
         nodes = new ArrayList<>();
         for (int i = 0; i < 3; i++) {
@@ -82,16 +84,20 @@ class MultiNodeConsensusConvergenceTest {
     }
 
     /**
-     * 构造带真实 BLS 签名与公钥的投票（对齐 FinalityCoordinator 生产路径）。
+     * 构造带真实 Ed25519 签名与公钥的投票（P0-1 审计修复后对齐生产路径）。
      * 载荷格式与 {@link Vote#signingPayload()} 一致：epoch(8B BE) || checkpointHash。
      */
     private Vote vote(long epoch, String validator) {
         byte[] cp = checkpoint(epoch);
-        BlsSigner signer = validatorSigners.get(validator);
+        org.nexus.crypto.ed25519.Ed25519KeyPair kp = validatorKeys.get(validator);
         byte[] payload = ByteBuffer.allocate(8 + cp.length).putLong(epoch).put(cp).array();
-        BlsSignature sig = signer.sign(payload);
-        byte[] pub = ((Secp256k1BlsSigner) signer).getPublicKey().toBytesCompressed();
-        return new Vote(epoch, cp, validator, sig.toBytesCompressed(), pub);
+        byte[] pub = kp.getPublicKey().getEncoded();
+        try {
+            byte[] sig = kp.getPrivateKey().sign(payload);
+            return new Vote(epoch, cp, validator, sig, pub);
+        } catch (Exception e) {
+            throw new RuntimeException("Ed25519 signing failed", e);
+        }
     }
 
     // ==================== 测试用例 ====================
@@ -237,9 +243,11 @@ class MultiNodeConsensusConvergenceTest {
             this.id = id;
             this.registry = new ValidatorRegistry();
             this.stakingService = mock(StakingService.class);
-            // 注册相同的 3 个验证人
+            // 注册相同的 3 个验证人（P0-1 绑定校验：注册真实 Ed25519 公钥 hex）
             for (String v : VALIDATORS) {
-                registry.register(v, "pub-" + v, STAKE, 0.1);
+                org.nexus.crypto.ed25519.Ed25519KeyPair kp = validatorKeys.get(v);
+                registry.register(v, org.apache.commons.codec.binary.Hex.encodeHexString(
+                        kp.getPublicKey().getEncoded()), STAKE, 0.1);
                 when(stakingService.getStake(v)).thenReturn(STAKE);
             }
             this.gadget = new FinalityGadget(registry, stakingService);

@@ -1,0 +1,47 @@
+# NexusChain 生产 compose 栈 Prometheus 配置（P0 审计修复，2026-08-28）
+# ----------------------------------------------------------------------------
+# 背景：docker-compose.prod.yml 将 ./prometheus.yml 挂载进 prometheus 容器，
+# 但仓库根目录此前不存在该文件，监控容器无法启动。
+#
+# 说明：
+#   - 抓取目标为 compose 网络内的服务 DNS 名（见 docker-compose.prod.yml）。
+#   - 抓取路径 /actuator/prometheus：要求各服务启用 Micrometer Prometheus
+#     endpoint（参考 deploy/monitoring/micrometer-config.yaml 的管理端点配置，
+#     K8s 部署走 ServiceMonitor，与本文件互不影响）。
+#   - 若某服务未暴露该端点，仅该 target 抓取失败（up=0），
+#     不影响 Prometheus 自身与其他 target。
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'nexus-gateway'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['nexus-gateway:8080']
+
+  - job_name: 'nexus-core'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['nexus-core:19585']
+
+  - job_name: 'nexus-signing-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['nexus-signing-service:8082']
+
+  - job_name: 'nexus-wallet-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['nexus-wallet-service:8083']
+
+  - job_name: 'nexus-bridge'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['nexus-bridge:8084']
+
+  - job_name: 'nexus-api-gateway'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['nexus-api-gateway:8085']

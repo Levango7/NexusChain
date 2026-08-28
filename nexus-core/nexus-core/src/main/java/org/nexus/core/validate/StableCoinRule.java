@@ -109,8 +109,15 @@ public class StableCoinRule implements TransactionRule {
         }
 
         // 计算抵押率 = 抵押物数量 / 铸造金额
-        double ratio = (double) collateralAmount / (double) tx.amount;
-        if (ratio < collateralRatio) {
+        // 审计修复：改用 BigDecimal 交叉乘法比较。原 double 除法在
+        // collateralAmount/mintAmount 超过 2^53 时丢失精度，可误放行不达标的
+        // 铸造请求（consensus 校验路径，属资金安全参数）。
+        java.math.BigDecimal collateral = java.math.BigDecimal.valueOf(collateralAmount);
+        java.math.BigDecimal required = java.math.BigDecimal.valueOf(collateralRatio)
+                .multiply(java.math.BigDecimal.valueOf(tx.amount));
+        if (collateral.compareTo(required) < 0) {
+            java.math.BigDecimal ratio = collateral.divide(
+                    java.math.BigDecimal.valueOf(tx.amount), 6, java.math.RoundingMode.HALF_UP);
             return Result.Error("MINT_STABLECOIN: collateral ratio " + ratio
                     + " is below minimum " + collateralRatio);
         }

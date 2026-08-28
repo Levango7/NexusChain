@@ -3,8 +3,9 @@ package org.nexus.walletsvc.execution;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Propagation;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.Objects;
 import java.util.function.BiConsumer;
@@ -29,6 +30,20 @@ import java.util.function.Function;
 public class ThreePhaseExecutionTemplate {
 
     private static final Logger log = LoggerFactory.getLogger(ThreePhaseExecutionTemplate.class);
+
+    /**
+     * 阶段1/阶段3 事务模板（审计修复，与 gateway 副本一致）。
+     *
+     * <p>早期实现以 {@code @Transactional(REQUIRES_NEW)} 标注 persistPhase/confirmPhase，
+     * 但 execute() 以 this 自调用，Spring 代理被绕过，注解不生效。改为编程式
+     * {@link TransactionTemplate}（PROPAGATION_REQUIRES_NEW）。</p>
+     */
+    private final TransactionTemplate phaseTransactionTemplate;
+
+    public ThreePhaseExecutionTemplate(PlatformTransactionManager transactionManager) {
+        this.phaseTransactionTemplate = new TransactionTemplate(transactionManager);
+        this.phaseTransactionTemplate.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+    }
 
     public <T> T execute(ExecutionRequest request,
                          Function<ExecutionRequest, T> dbPersist,
@@ -67,13 +82,13 @@ public class ThreePhaseExecutionTemplate {
         return record;
     }
 
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    /** 阶段1：落库 PENDING（REQUIRES_NEW，独立提交，供 CompensationService 扫描）。 */
     public <T> T persistPhase(ExecutionRequest request, Function<ExecutionRequest, T> dbPersist) {
-        return dbPersist.apply(request);
+        return phaseTransactionTemplate.execute(status -> dbPersist.apply(request));
     }
 
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    /** 阶段3：更新 CONFIRMED/FAILED（REQUIRES_NEW，与阶段1 事务隔离）。 */
     public <T> void confirmPhase(T record, OnChainResult result, BiConsumer<T, OnChainResult> dbConfirm) {
-        dbConfirm.accept(record, result);
+        phaseTransactionTemplate.executeWithoutResult(status -> dbConfirm.accept(record, result));
     }
 }

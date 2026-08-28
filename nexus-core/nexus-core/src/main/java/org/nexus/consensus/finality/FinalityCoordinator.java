@@ -5,9 +5,9 @@ import org.nexus.consensus.pos.Validator;
 import org.nexus.consensus.pos.ValidatorRegistry;
 import org.nexus.consensus.pos.ValidatorStatus;
 import org.nexus.core.Block;
-import org.nexus.core.crypto.bls.BlsSigner;
-import org.nexus.core.crypto.bls.BlsSignature;
 import org.nexus.core.event.NewBlockMinedEvent;
+import org.nexus.crypto.ed25519.Ed25519PrivateKey;
+import org.nexus.crypto.ed25519.Ed25519PublicKey;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -24,8 +24,8 @@ import java.util.Objects;
  * <ul>
  *   <li>监听 {@link NewBlockMinedEvent}，识别 epoch 边界检查点</li>
  *   <li>若本节点是活跃验证人，自动为该检查点产出 {@link Vote} 并提交至 {@link FinalityGadget}</li>
- *   <li>投票签名使用注入的 {@link BlsSigner} 产生真实 BLS 签名（B-17 修复）；
- *       未注入签名者时 fail-closed 拒绝投票，不再使用占位签名</li>
+ *   <li>投票签名使用注入的 Ed25519 密钥对产生真实签名（P0-1 审计修复，
+ *       替代可伪造的 BLS-like 构造）；未注入密钥对时 fail-closed 拒绝投票</li>
  * </ul>
  *
  * <p>设计约束：</p>
@@ -49,13 +49,19 @@ public class FinalityCoordinator {
     private final long epochLength;
     private final FinalityVoteBroadcaster broadcaster;
     /**
-     * BLS 签名者（B-17 修复）：用于对最终性投票产生真实签名。
+     * 投票签名密钥（P0-1 审计修复）。
      *
-     * <p>通过 {@code required = false} 注入：未配置签名基础设施时为 {@code null}，
-     * 此时 {@link #onBlock(Block)} 会 fail-closed 拒绝投票并记录 warn 日志，
-     * 不再退化为占位签名（防止任何节点伪造投票）。</p>
+     * <p>早期实现注入 {@code BlsSigner}（secp256k1 上的 σ=H(m)·PK 构造——PK 公开，
+     * 任何人可对任意消息计算出通过验证的"签名"，属可伪造方案）。现改为 Ed25519
+     * 真实签名：签名密钥与 {@code ValidatorRegistry} 登记的验证人公钥配对
+     * （由 {@code ValidatorNodeBootstrapper} 自举注册时注入），伪造签名需要私钥。</p>
+     *
+     * <p>通过 setter 注入（密钥非 Spring bean）：未注入时 {@link #onBlock(Block)}
+     * fail-closed 拒绝投票。</p>
      */
-    private final BlsSigner blsSigner;
+    private Ed25519PrivateKey voteSigningKey;
+    /** 随投票广播的验证人公钥（与注册表登记 hex 一致，供聚合器/绑定校验使用） */
+    private Ed25519PublicKey voteVerifyingKey;
     private String selfValidatorAddress;
 
     /**
@@ -63,42 +69,25 @@ public class FinalityCoordinator {
      * @param validatorRegistry    验证人注册表（判定本节点是否活跃验证人）
      * @param epochLength          epoch 长度（每多少个块一个检查点）
      * @param broadcaster          P2P 投票广播器（可为 null）
-     * @param blsSigner            BLS 签名者（可为 null，此时 fail-closed 不投票）
      */
     @Autowired
     public FinalityCoordinator(FinalityGadget gadget,
                                ValidatorRegistry validatorRegistry,
                                @org.springframework.beans.factory.annotation.Value("${nexus.finality.epoch-length:32}") long epochLength,
-                               @Autowired(required = false) FinalityVoteBroadcaster broadcaster,
-                               @Autowired(required = false) BlsSigner blsSigner) {
+                               @Autowired(required = false) FinalityVoteBroadcaster broadcaster) {
         this.gadget = Objects.requireNonNull(gadget, "gadget must not be null");
         this.validatorRegistry = Objects.requireNonNull(validatorRegistry, "validatorRegistry must not be null");
         this.epochLength = epochLength <= 0 ? 32 : epochLength;
         this.broadcaster = broadcaster;
-        this.blsSigner = blsSigner;
     }
 
     /**
-     * 兼容构造器（单进程/测试场景：无 P2P 广播器、无 BLS 签名者）。
-     *
-     * <p><b>注意</b>：使用此构造器时 blsSigner 为 null，
-     * {@link #onBlock(Block)} 将 fail-closed 不投票。测试需要真实投票时应使用
-     * {@link #FinalityCoordinator(FinalityGadget, ValidatorRegistry, long, FinalityVoteBroadcaster, BlsSigner)}。</p>
+     * 兼容构造器（单进程/测试场景：无 P2P 广播器）。
      */
     public FinalityCoordinator(FinalityGadget gadget,
                                ValidatorRegistry validatorRegistry,
                                long epochLength) {
-        this(gadget, validatorRegistry, epochLength, null, null);
-    }
-
-    /**
-     * 兼容构造器（带广播器但无 BLS 签名者）。
-     */
-    public FinalityCoordinator(FinalityGadget gadget,
-                               ValidatorRegistry validatorRegistry,
-                               long epochLength,
-                               FinalityVoteBroadcaster broadcaster) {
-        this(gadget, validatorRegistry, epochLength, broadcaster, null);
+        this(gadget, validatorRegistry, epochLength, null);
     }
 
     /**
@@ -107,6 +96,21 @@ public class FinalityCoordinator {
      */
     public void setSelfValidatorAddress(String selfValidatorAddress) {
         this.selfValidatorAddress = selfValidatorAddress;
+    }
+
+    /**
+     * 注入投票签名密钥对（P0-1 审计修复）。
+     *
+     * <p>由 {@code ValidatorNodeBootstrapper} 在自举注册时注入：私钥用于签署投票，
+     * 公钥必须与 {@code ValidatorRegistry} 为本验证人登记的公钥一致
+     * （{@link FinalityGadget} 在计票前做绑定校验）。未注入时 fail-closed 不投票。</p>
+     *
+     * @param signingKey   Ed25519 私钥
+     * @param verifyingKey 与私钥配对的 Ed25519 公钥（即注册表登记公钥）
+     */
+    public void setVoteSigningKeyPair(Ed25519PrivateKey signingKey, Ed25519PublicKey verifyingKey) {
+        this.voteSigningKey = Objects.requireNonNull(signingKey, "signingKey must not be null");
+        this.voteVerifyingKey = Objects.requireNonNull(verifyingKey, "verifyingKey must not be null");
     }
 
     /**
@@ -147,32 +151,30 @@ public class FinalityCoordinator {
         byte[] blockHash = block.getHash();
         byte[] checkpointHash = blockHash != null ? blockHash : new byte[0];
 
-        // B-17 修复：使用真实 BLS 签名，不再使用占位字节
-        // fail-closed：未注入 BlsSigner 时拒绝投票，防止任何节点伪造投票
-        if (blsSigner == null) {
-            log.warn("Skip finality vote at epoch={}: no BlsSigner injected, fail-closed to prevent forgery", epoch);
+        // P0-1 审计修复：使用 Ed25519 真实签名（替代可伪造的 BLS-like 构造）
+        // fail-closed：未注入投票密钥对时拒绝投票，防止任何节点伪造投票
+        if (voteSigningKey == null || voteVerifyingKey == null) {
+            log.warn("Skip finality vote at epoch={}: no vote signing key pair injected, fail-closed", epoch);
             return null;
         }
 
-        // 构造投票载荷并产生真实 BLS 签名
+        // 构造投票载荷并产生 Ed25519 签名
         // 载荷格式与 Vote.signingPayload() 保持一致：epoch || checkpointHash
         byte[] signingPayload = buildSigningPayload(epoch, checkpointHash);
-        BlsSignature blsSignature;
         byte[] sigBytes;
         byte[] publicKeyBytes;
         try {
-            blsSignature = blsSigner.sign(signingPayload);
-            sigBytes = blsSignature.toBytesCompressed();
-            // 从签名者提取公钥（Secp256k1BlsSigner 提供 getPublicKey()）
-            publicKeyBytes = extractPublicKeyBytes(blsSigner);
-        } catch (RuntimeException e) {
+            sigBytes = voteSigningKey.sign(signingPayload);
+            publicKeyBytes = voteVerifyingKey.getEncoded();
+        } catch (Exception e) {
             log.error("Failed to sign finality vote at epoch={}: {}", epoch, e.getMessage());
             return null;
         }
 
-        // 签名长度护栏：确保签名满足聚合器最小长度要求
+        // 签名长度护栏：Ed25519 签名为 64 字节，确保满足聚合器最小长度要求
         if (sigBytes == null || sigBytes.length < 32) {
-            log.error("BLS signature too short ({} bytes) at epoch={}, fail-closed", sigBytes == null ? 0 : sigBytes.length, epoch);
+            log.error("Vote signature too short ({} bytes) at epoch={}, fail-closed",
+                    sigBytes == null ? 0 : sigBytes.length, epoch);
             return null;
         }
 
@@ -222,25 +224,5 @@ public class FinalityCoordinator {
         }
         System.arraycopy(checkpointHash, 0, payload, 8, checkpointHash.length);
         return payload;
-    }
-
-    /**
-     * 从 BlsSigner 提取公钥压缩字节（供验签方使用）。
-     *
-     * <p>当前仅支持 {@link org.nexus.core.crypto.bls.Secp256k1BlsSigner}；
-     * 其他实现返回 null（验签方将走格式校验降级路径）。</p>
-     *
-     * @param signer BLS 签名者
-     * @return 公钥压缩字节；无法提取时返回 null
-     */
-    private static byte[] extractPublicKeyBytes(BlsSigner signer) {
-        if (signer instanceof org.nexus.core.crypto.bls.Secp256k1BlsSigner) {
-            try {
-                return ((org.nexus.core.crypto.bls.Secp256k1BlsSigner) signer).getPublicKey().toBytesCompressed();
-            } catch (RuntimeException e) {
-                return null;
-            }
-        }
-        return null;
     }
 }

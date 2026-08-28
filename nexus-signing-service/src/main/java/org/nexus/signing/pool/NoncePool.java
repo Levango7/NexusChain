@@ -80,7 +80,13 @@ public class NoncePool {
         return noncepool;
     }
 
-    public void add(String address,NonceState nonceState) throws IOException {
+    /**
+     * 审计修复：add/remove/getMinNonce/getMaxNonce 全部 synchronized。
+     * 原实现对非线程安全的 TreeMap 做 containsKey→get→put 复合操作且无同步，
+     * 并发签名请求可取到同一 nonce（两笔交易同 nonce 上链必有一笔被拒）、
+     * 甚至损坏 TreeMap 结构。签名服务吞吐量下，粗粒度方法级同步可接受。
+     */
+    public synchronized void add(String address,NonceState nonceState) throws IOException {
         if(noncepool.containsKey(address)){
             TreeMap<Long, NonceState> tmaps=noncepool.get(address);
             long nownonce=nonceState.getNonce();
@@ -96,7 +102,7 @@ public class NoncePool {
         leveldb.addPoolDb(json);
     }
 
-    public void remove(String address,long nonce) throws IOException {
+    public synchronized void remove(String address,long nonce) throws IOException {
         if(noncepool.containsKey(address)){
             TreeMap<Long, NonceState> tmaps=noncepool.get(address);
             if(tmaps.containsKey(nonce)){
@@ -110,7 +116,7 @@ public class NoncePool {
         leveldb.addPoolDb(json);
     }
 
-    public long getMinNonce(String address){
+    public synchronized long getMinNonce(String address){
         if(noncepool.containsKey(address)){
             TreeMap<Long, NonceState> tmaps=noncepool.get(address);
             return tmaps.firstKey();
@@ -118,7 +124,7 @@ public class NoncePool {
         return 0;
     }
 
-    public long getMaxNonce(String address){
+    public synchronized long getMaxNonce(String address){
         if(noncepool.containsKey(address)){
             TreeMap<Long, NonceState> tmaps=noncepool.get(address);
             return tmaps.lastKey();

@@ -102,6 +102,12 @@ public class ValidatorNodeBootstrapper implements ApplicationListener<Applicatio
         // 点亮最终性投票链路：协调器需知道本节点地址才能对检查点投票
         if (finalityCoordinator != null) {
             finalityCoordinator.setSelfValidatorAddress(address);
+            // P0-1 审计修复：注入投票签名密钥对（Ed25519，公钥=注册表登记的 pubHex）
+            if (keyPair != null && keyPair.getPrivateKey() != null && keyPair.getPublicKey() != null) {
+                finalityCoordinator.setVoteSigningKeyPair(
+                        new org.nexus.crypto.ed25519.Ed25519PrivateKey(keyPair.getPrivateKey().getBytes()),
+                        new org.nexus.crypto.ed25519.Ed25519PublicKey(keyPair.getPublicKey().getBytes()));
+            }
         }
         // PLAN-001 步骤 5：本节点验证人写入共享表（重启后全网可重放）
         if (validatorSetPersistence != null) {

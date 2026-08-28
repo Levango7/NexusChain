@@ -545,46 +545,54 @@ public class SigningApprovalService {
                     requestId, existing.getStatus());
             return existing;
         }
-        SigningApprovalRequest executed = existing.withStatus(SigningApprovalRequest.Status.EXECUTED);
-        requestStore.save(requestId, executed);
+        // CAS 迁移：优先 EXECUTING→EXECUTED（正常流程），失败再尝试
+        // APPROVED→EXECUTED（向后兼容路径）。两步 CAS 保证与并发执行路径互斥。
+        boolean transitioned = requestStore.compareAndTransition(requestId,
+                SigningApprovalRequest.Status.EXECUTING, SigningApprovalRequest.Status.EXECUTED)
+                || requestStore.compareAndTransition(requestId,
+                        SigningApprovalRequest.Status.APPROVED, SigningApprovalRequest.Status.EXECUTED);
+        if (!transitioned) {
+            log.warn("标记 EXECUTED 失败（并发状态已变更）: requestId={}", requestId);
+            return requestStore.get(requestId);
+        }
         log.info("审批请求标记已执行: requestId={}", requestId);
-        return executed;
+        return requestStore.get(requestId);
     }
 
     /**
-     * P1-8 修复（v2.27.0）：原子地将审批请求从 APPROVED 标记为 EXECUTING（CAS 中间态）。
+     * P1-8 修复（v2.27.0 修复，审计复核后加固）：以存储层原子 CAS 将审批请求从 APPROVED
+     * 标记为 EXECUTING。
      *
-     * <p>在执行签名前调用此方法，确保同一审批请求不会被并发重复执行。
-     * 若当前状态不是 APPROVED（例如已被另一个线程标记为 EXECUTING/EXECUTED），
-     * 返回 false 表示 CAS 失败，调用方应中止签名执行。</p>
+     * <p>在执行签名前调用此方法，确保同一审批请求不会被并发重复执行（双重放款）。
+     * 早期实现为 get→判状态→save 三步非原子操作，两个并发请求可同时通过检查；
+     * 现改为委托 {@link ApprovalStore#compareAndTransition} 的原子实现
+     * （内存 compute / 文件 compute+落盘 / JPA 乐观锁），由存储层保证互斥。</p>
      *
      * @param requestId 审批请求 ID
-     * @return true 表示成功迁移到 EXECUTING；false 表示状态不匹配或请求不存在
+     * @return true 表示成功迁移到 EXECUTING；false 表示状态不匹配或并发冲突
      */
     public boolean tryMarkExecuting(String requestId) {
         if (requestId == null) {
             return false;
         }
-        SigningApprovalRequest existing = requestStore.get(requestId);
-        if (existing == null) {
+        boolean transitioned = requestStore.compareAndTransition(requestId,
+                SigningApprovalRequest.Status.APPROVED, SigningApprovalRequest.Status.EXECUTING);
+        if (!transitioned) {
+            SigningApprovalRequest current = requestStore.get(requestId);
+            log.warn("CAS 失败：审批请求状态非 APPROVED 或已被并发迁移: requestId={}, status={}",
+                    requestId, current == null ? "不存在" : current.getStatus());
             return false;
         }
-        if (existing.getStatus() != SigningApprovalRequest.Status.APPROVED) {
-            log.warn("CAS 失败：审批请求状态非 APPROVED，无法标记 EXECUTING: requestId={}, status={}",
-                    requestId, existing.getStatus());
-            return false;
-        }
-        SigningApprovalRequest executing = existing.withStatus(SigningApprovalRequest.Status.EXECUTING);
-        requestStore.save(requestId, executing);
         log.info("审批请求标记执行中 (CAS APPROVED→EXECUTING): requestId={}", requestId);
         return true;
     }
 
     /**
-     * P1-8 修复（v2.27.0）：将审批请求从 EXECUTING 回退到 APPROVED（签名执行失败时调用）。
+     * P1-8 修复（v2.27.0 修复，审计复核后加固）：以存储层原子 CAS 将审批请求从 EXECUTING
+     * 回退到 APPROVED（签名执行失败时调用）。
      *
      * <p>当签名执行失败后，调用此方法将审批请求恢复到 APPROVED 状态，
-     * 允许后续重试。若当前状态不是 EXECUTING，则不执行任何操作（防止误回退）。</p>
+     * 允许后续重试。若当前状态不是 EXECUTING（含并发下已被迁移），则不执行任何操作。</p>
      *
      * @param requestId 审批请求 ID
      */
@@ -592,18 +600,15 @@ public class SigningApprovalService {
         if (requestId == null) {
             return;
         }
-        SigningApprovalRequest existing = requestStore.get(requestId);
-        if (existing == null) {
-            return;
+        boolean reverted = requestStore.compareAndTransition(requestId,
+                SigningApprovalRequest.Status.EXECUTING, SigningApprovalRequest.Status.APPROVED);
+        if (reverted) {
+            log.info("审批请求回退 (EXECUTING→APPROVED): requestId={}", requestId);
+        } else {
+            SigningApprovalRequest current = requestStore.get(requestId);
+            log.warn("无法回退：审批请求状态非 EXECUTING 或已被并发迁移: requestId={}, status={}",
+                    requestId, current == null ? "不存在" : current.getStatus());
         }
-        if (existing.getStatus() != SigningApprovalRequest.Status.EXECUTING) {
-            log.warn("无法回退：审批请求状态非 EXECUTING: requestId={}, status={}",
-                    requestId, existing.getStatus());
-            return;
-        }
-        SigningApprovalRequest reverted = existing.withStatus(SigningApprovalRequest.Status.APPROVED);
-        requestStore.save(requestId, reverted);
-        log.info("审批请求回退 (EXECUTING→APPROVED): requestId={}", requestId);
     }
 
     /**

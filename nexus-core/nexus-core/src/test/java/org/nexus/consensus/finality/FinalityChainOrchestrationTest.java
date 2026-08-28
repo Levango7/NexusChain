@@ -120,10 +120,13 @@ class FinalityChainOrchestrationTest {
 
         // 最终性层
         gadget = new FinalityGadget(validatorRegistry, stakingService);
-        // P0-1 审计修复后：注入 Ed25519 密钥对才能投票
+        // P0-1 审计修复后：注入 Ed25519 密钥对才能投票。
+        // 必须使用引擎密钥（与 selfAddress/enginePubHex 注册一致），
+        // 与生产 ValidatorNodeBootstrapper 的接线相同。
         coordinator = new FinalityCoordinator(gadget, validatorRegistry, EPOCH_LENGTH, null);
-        var keyPair = Ed25519.generateKeyPair();
-        coordinator.setVoteSigningKeyPair(keyPair.getPrivateKey(), keyPair.getPublicKey());
+        coordinator.setVoteSigningKeyPair(
+                new org.nexus.crypto.ed25519.Ed25519PrivateKey(engineKeyPair.getPrivateKey().getBytes()),
+                new org.nexus.crypto.ed25519.Ed25519PublicKey(engineKeyPair.getPublicKey().getBytes()));
         coordinator.setSelfValidatorAddress(selfAddress);
     }
 

@@ -7,8 +7,13 @@ import org.nexus.consensus.pos.StakingServiceImpl;
 import org.nexus.consensus.pos.ValidatorRegistry;
 import org.nexus.consensus.pos.ValidatorStatus;
 import org.nexus.consensus.pos.Validator;
+import org.nexus.crypto.ed25519.Ed25519;
+import org.nexus.crypto.ed25519.Ed25519KeyPair;
+import org.apache.commons.codec.binary.Hex;
 
 import java.math.BigDecimal;
+import java.util.HashMap;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -18,11 +23,15 @@ class FinalityGadgetTest {
     private StakingService staking;
     private FinalityGadget gadget;
 
+    /** 每个验证者的真实 Ed25519 密钥（P0-1 绑定校验后，投票必须注册公钥+真实签名） */
+    private final Map<String, Ed25519KeyPair> validatorKeys = new HashMap<>();
+
     private static final byte[] CP1 = new byte[]{1, 2, 3};
     private static final byte[] CP2 = new byte[]{9, 9, 9};
 
     @BeforeEach
     void setUp() {
+        validatorKeys.clear();
         registry = new ValidatorRegistry(new BigDecimal("100"), 100);
         staking = new StakingServiceImpl();
         try {
@@ -38,7 +47,8 @@ class FinalityGadgetTest {
         addValidator("v3", 300);
         gadget = new FinalityGadget(registry, staking);
         // B-18 修复后：默认 CollectingAggregator 对无公钥投票 fail-closed。
-        // 本测试套件聚焦权重累积/最终化/双签逻辑，注入恒通过聚合器隔离签名验证。
+        // 本测试套件聚焦权重累积/最终化/双签逻辑，注入恒通过聚合器隔离聚合验签
+        // （投票本身的签名与公钥绑定已通过 vote() 工厂用真实 Ed25519 构造）。
         gadget.setSignatureAggregator(new SignatureAggregator() {
             @Override
             public AggregatedSignature aggregate(java.util.List<Vote> votes) {
@@ -56,14 +66,32 @@ class FinalityGadgetTest {
     }
 
     private void addValidator(String addr, int stake) {
-        registry.register(addr, "pubkey-" + addr, new BigDecimal(stake), 0.1);
+        // P0-1 审计修复：注册真实 Ed25519 公钥（gadget 的公钥绑定校验要求
+        // 投票携带的公钥与注册表登记一致）
+        Ed25519KeyPair kp = Ed25519.generateKeyPair();
+        validatorKeys.put(addr, kp);
+        registry.register(addr, Hex.encodeHexString(kp.getPublicKey().getEncoded()),
+                new BigDecimal(stake), 0.1);
         Validator v = registry.getValidator(addr);
         v.setStatus(ValidatorStatus.ACTIVE);
         staking.stake(addr, new BigDecimal(stake));
     }
 
+    /** 构造携带正确公钥与真实 Ed25519 签名的投票（未注册验证者返回未签名投票） */
     private Vote vote(String validator, long epoch, byte[] checkpoint) {
-        return new Vote(epoch, checkpoint, validator, new byte[32]);
+        Ed25519KeyPair kp = validatorKeys.get(validator);
+        if (kp == null) {
+            // 未注册验证者（如 unknownValidatorVoteIgnored 用例）：绑定校验应拒绝
+            return new Vote(epoch, checkpoint, validator, new byte[64], new byte[32]);
+        }
+        byte[] pub = kp.getPublicKey().getEncoded();
+        Vote unsigned = new Vote(epoch, checkpoint, validator, new byte[0], pub);
+        try {
+            byte[] sig = kp.getPrivateKey().sign(unsigned.signingPayload());
+            return new Vote(epoch, checkpoint, validator, sig, pub);
+        } catch (Exception e) {
+            throw new RuntimeException("Ed25519 signing failed for test vote", e);
+        }
     }
 
     @Test
