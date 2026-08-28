@@ -50,9 +50,14 @@ jobs:
 
       - name: Install kubeconform
         run: |
-          curl -sSL -o kubeconform https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64
-          chmod +x kubeconform
-          sudo mv kubeconform /usr/local/bin/
+          # 2026-08-29 修复：kubeconform release 资产为 kubeconform-linux-amd64.tar.gz（压缩包），
+          # 无裸二进制资产名；此前下载裸名得到 404 页面，mv 后执行报 exit 127 command not found。
+          # 固定版本 v0.8.0 保证可复现（与下载策略一致，升级需显式改版本号）。
+          KUBECONFORM_VER=v0.8.0
+          curl -sSL -o /tmp/kubeconform.tar.gz "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VER}/kubeconform-linux-amd64.tar.gz"
+          tar -xzf /tmp/kubeconform.tar.gz -C /tmp kubeconform
+          sudo mv /tmp/kubeconform /usr/local/bin/
+          kubeconform -v
 
       - name: Helm lint（全部 Chart 与子 Chart）
         run: |
