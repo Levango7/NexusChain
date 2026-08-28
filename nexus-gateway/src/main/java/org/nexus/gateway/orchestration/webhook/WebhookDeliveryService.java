@@ -55,9 +55,9 @@ public class WebhookDeliveryService {
     private final String signingSecret;
     /**
      * 出站 URL 校验器（SSRF 防护，P1 审计项 2026-08-29）。
-     * 无状态组件，直接实例化以避免修改构造器签名影响既有测试。
+     * 无状态组件，通过构造器注入以便测试可 mock（避免 DNS 解析的环境依赖）。
      */
-    private final WebhookUrlValidator urlValidator = new WebhookUrlValidator();
+    private final WebhookUrlValidator urlValidator;
 
     @Autowired
     public WebhookDeliveryService(
@@ -67,7 +67,8 @@ public class WebhookDeliveryService {
             DeadLetterSender deadLetterSender,
             org.springframework.web.client.RestTemplate restTemplate,
             com.fasterxml.jackson.databind.ObjectMapper objectMapper,
-            @Value("${nexus.webhook.callback-secret:}") String signingSecret) {
+            @Value("${nexus.webhook.callback-secret:}") String signingSecret,
+            WebhookUrlValidator urlValidator) {
         this.repository = repository;
         this.retryService = retryService;
         this.signatureService = signatureService;
@@ -75,16 +76,18 @@ public class WebhookDeliveryService {
         this.restTemplate = restTemplate;
         this.signingSecret = signingSecret;
         this.objectMapper = objectMapper;
+        this.urlValidator = urlValidator;
     }
 
-    /** 测试构造器：可注入 RestTemplate。 */
+    /** 测试构造器：可注入 RestTemplate + UrlValidator。 */
     public WebhookDeliveryService(
             WebhookDeliveryRepository repository,
             WebhookRetryService retryService,
             WebhookSignatureService signatureService,
             DeadLetterSender deadLetterSender,
             RestTemplate restTemplate,
-            String signingSecret) {
+            String signingSecret,
+            WebhookUrlValidator urlValidator) {
         this.repository = repository;
         this.retryService = retryService;
         this.signatureService = signatureService;
@@ -92,6 +95,7 @@ public class WebhookDeliveryService {
         this.restTemplate = restTemplate;
         this.signingSecret = signingSecret;
         this.objectMapper = new ObjectMapper();
+        this.urlValidator = urlValidator;
     }
 
     /**

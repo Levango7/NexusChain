@@ -9,6 +9,7 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.client.RestTemplate;
+import org.nexus.gateway.webhook.WebhookUrlValidator;
 
 import java.time.Instant;
 import java.util.LinkedHashMap;
@@ -67,7 +68,7 @@ class WebhookDeliveryServiceTest {
 
         deliveryService = new WebhookDeliveryService(
                 repository, retryService, signatureService, dlqService,
-                restTemplate, SECRET);
+                restTemplate, SECRET, mock(WebhookUrlValidator.class));
     }
 
     private Map<String, Object> samplePayload() {
