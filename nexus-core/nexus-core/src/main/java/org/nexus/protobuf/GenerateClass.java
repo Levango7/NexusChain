@@ -24,7 +24,7 @@ import java.io.IOException;
 
 public class GenerateClass {
 
-    public static void main(String[] args) throws IOException {
+    public static void main(String[] args) throws IOException, InterruptedException {
 
         /*
          *protobuf generation method
@@ -33,10 +33,14 @@ public class GenerateClass {
         String protoFile = "Protocol.proto";
         String path = "C:/Users/Administrator/IdeaProjects/java-nexuscore/nexus-core/src/main/java/org/nexus/protobuf/tcp";
         String out = "C:/Users/Administrator/IdeaProjects/java-nexuscore/nexus-core/src/main/java";
-        String strCmd = "D:/protoc-3.7.0-win64/bin/protoc.exe -I=" + path + " --java_out=" + out + " " + path + "/" + protoFile;
-        System.out.println(strCmd);
-        Runtime.getRuntime().exec(strCmd);
-        System.out.println("完成");
+        // P4-SA: Runtime.exec(字符串) → ProcessBuilder 数组参数（不经 shell，
+        // 消除 COMMAND_INJECTION；路径含空格也安全）
+        String protoc = "D:/protoc-3.7.0-win64/bin/protoc.exe";
+        Process process = new ProcessBuilder(protoc, "-I=" + path, "--java_out=" + out,
+                path + "/" + protoFile)
+                .redirectErrorStream(true)
+                .start();
+        System.out.println(process.waitFor() == 0 ? "完成" : "protoc 执行失败");
 
     }
 }

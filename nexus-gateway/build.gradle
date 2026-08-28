@@ -45,7 +45,8 @@ dependencies {
     runtimeOnly 'com.mysql:mysql-connector-j'
     // === P2-T8：PostgreSQL 生产化（设计文档 §4.1） ===
     // PostgreSQL 16 生产数据源驱动，runtimeOnly 仅运行时加载
-    runtimeOnly 'org.postgresql:postgresql:42.5.4'
+    // P4-A: 42.5.4 → 42.7.2（CVE-2024-1597 修复，与根 build.gradle 对齐）
+    runtimeOnly 'org.postgresql:postgresql:42.7.2'
 
     // === 项10：ShedLock 分布式锁（ReconciliationTask 多实例去重） ===
     // ShedLock 6.2.0 兼容 Spring Boot 3.3.x，使用 JDBC provider

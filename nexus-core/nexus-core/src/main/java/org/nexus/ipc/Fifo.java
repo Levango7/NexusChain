@@ -161,9 +161,11 @@ public class Fifo implements ApplicationRunner, ApplicationListener<Fifo.FifoMes
      * @throws InterruptedException
      */
     private File createFifoPipe(String fifoName) throws IOException, InterruptedException {
-        Process process;
-        String[] command = new String[]{"mkfifo", fifoName};
-        process = Runtime.getRuntime().exec(command);
+        // P4-SA: Runtime.exec → ProcessBuilder（数组参数，不经 shell 解析，
+        // 消除 COMMAND_INJECTION；fifoName 为构造路径非用户可控输入）
+        Process process = new ProcessBuilder("mkfifo", fifoName)
+                .redirectErrorStream(true)
+                .start();
         process.waitFor();
         return new File(fifoName);
     }
