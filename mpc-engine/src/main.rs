@@ -30,6 +30,11 @@
 //!
 //! 审计报告 §4.1 方案 A：Rust 密码学引擎独立进程，signing-service 通过本地 gRPC 调用。
 
+// gRPC 服务方法返回 Result<_, tonic::Status>，tonic::Status 为 176 字节，
+// 触发 clippy::result_large_err（perf lint，阈值 128 字节）。
+// tonic::Status 由框架定义无法修改，在 crate 级别抑制此 lint。
+#![allow(clippy::result_large_err)]
+
 use std::net::SocketAddr;
 
 use tracing_subscriber::EnvFilter;

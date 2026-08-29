@@ -118,7 +118,7 @@ jobs:
       # 常见 clippy 修正：冗余 clone、不必要的 mut、风格统一等。
       - name: Rust lint check (cargo clippy)
         working-directory: mpc-engine
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets --features tls -- -D warnings
 
       # MPC-B2-T1/T2: 集成测试去 #[ignore] 后需集群环境，普通 cargo test 只跑 lib 单测；
       # 分布式 E2E（3 节点集群）由下方独立步骤先启动集群再运行。
