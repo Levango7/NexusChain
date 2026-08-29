@@ -57,10 +57,12 @@ RUN find /workspace/nexus-core/nexus-core/build/libs -name '*-all.jar' \
 # 视为模块化 jar，限制只有导出包的类可访问（org.nexus.Start 不在导出包中，
 # 报 ClassNotFoundException）。Gradle exclude '**/module-info.class' 可能
 # 因 Ant 模式匹配差异未覆盖根级文件，此处用 zip -d 确保彻底移除。
+RUN apt-get update && apt-get install -y --no-install-recommends zip
 RUN zip -d /workspace/app.jar \
     'module-info.class' \
     'META-INF/versions/*/module-info.class' \
-    || true
+    ; echo "=== 验证 module-info.class 已移除 ===" && \
+    (jar tf /workspace/app.jar | grep "module-info.class" || echo "All module-info.class removed!")
 
 
 # === Stage 1.5: directory builder ===
