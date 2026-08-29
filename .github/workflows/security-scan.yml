@@ -339,10 +339,10 @@ jobs:
         working-directory: mpc-engine
         run: |
           cargo install cargo-audit --locked
-          # 豁免清单：mpc-engine/.cargo-audit.toml（上游锁定/无修复版本的 advisory，
-          # 逐项附依据；可修复项已在 Cargo.lock 升级）。不传 --config 时 cargo-audit
-          # 仅读取 Cargo.toml 同级的 .cargo/audit.toml，本仓豁免文件名不受默认发现。
-          cargo audit --config .cargo-audit.toml
+          # 豁免清单：mpc-engine/.cargo/audit.toml——cargo-audit 的默认发现路径
+          # （.cargo/audit.toml，同 ~/.cargo/audit.toml 机制）。
+          # 注：cargo-audit v0.22 无 --config 参数（此前误用导致 CI 失败）。
+          cargo audit
 
   # ============================================================
   # 4.6 密钥泄漏扫描：gitleaks（P2-C7）
