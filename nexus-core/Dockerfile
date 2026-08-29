@@ -54,6 +54,16 @@ RUN TRAVIS_BRANCH=master ./gradlew :nexus-core:nexus-core:fatJar --no-daemon -x 
 RUN find /workspace/nexus-core/nexus-core/build/libs -name '*-all.jar' \
     -exec cp {} /workspace/app.jar \;
 
+# 诊断：检查 fat jar 是否包含主类 org.nexus.Start
+RUN echo "=== jar 内容前 30 行 ===" && \
+    jar tf /workspace/app.jar | head -30 && \
+    echo "=== 检查 org/nexus/Start.class ===" && \
+    (jar tf /workspace/app.jar | grep "org/nexus/Start.class" || echo "NOT FOUND") && \
+    echo "=== org/nexus/ 下的类（前 30 行）===" && \
+    jar tf /workspace/app.jar | grep "org/nexus/" | head -30 && \
+    echo "=== jar 总条目数 ===" && \
+    jar tf /workspace/app.jar | wc -l
+
 # === Stage 2: runtime (distroless nonroot) ===
 # gcr.io/distroless/java17-debian12:nonroot 默认用户 nonroot (UID=65532)
 # 无 shell / 无 curl / 无包管理器，攻击面最小，满足非 root 要求
