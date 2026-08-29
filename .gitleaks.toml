@@ -44,6 +44,8 @@ regexes = [
     '''0123456789abcdef''',
     # 开发默认 auth token（docker-compose / start-node.bat 共用）
     '''dev-mpc-engine-token-change-in-prod''',
+    # Nacos 3.x 鉴权占位 token（docker-compose.yml dev 凭据，仅本机网络可达）
+    '''SecretKey[0-9]{60}''',
     # 测试专用 JWT 样例（注释中，含 hmac secret 的 demo token）
     '''eyJhbGciOiJIUzI1NiJ9\.eyJqdGkiOiIxIiwiaWF0IjoxNTcyNDE2MTYw''',
     # 代码标识符误报：generic-api-key 规则将类型名/参数名误判为密钥
