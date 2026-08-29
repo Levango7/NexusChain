@@ -387,7 +387,16 @@ jobs:
         run: |
           docker compose up -d nexus-gateway
           echo "等待 gateway 健康检查通过（最长 180s）..."
-          timeout 180 bash -c 'until curl -sf http://localhost:8080/actuator/health > /dev/null 2>&1; do echo "等待中..."; sleep 3; done' && echo "gateway 已就绪" || { echo "gateway 启动超时，跳过 DAST"; exit 1; }
+          timeout 180 bash -c 'until curl -sf http://localhost:8080/actuator/health > /dev/null 2>&1; do echo "等待中..."; sleep 3; done' && echo "gateway 已就绪" || {
+            echo "gateway 启动超时，跳过 DAST"
+            echo "=== nexus-core 容器日志（最后 150 行）==="
+            docker compose logs --tail 150 nexus-core 2>&1 || true
+            echo "=== nexus-gateway 容器日志（最后 50 行）==="
+            docker compose logs --tail 50 nexus-gateway 2>&1 || true
+            echo "=== 容器状态 ==="
+            docker compose ps 2>&1 || true
+            exit 1
+          }
 
       - name: OWASP ZAP 基线扫描
         run: |
