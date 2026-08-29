@@ -271,6 +271,11 @@ task fatJar(type: Jar) {
     }
     from { configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) } }
     with jar
+    // 排除依赖中的 module-info.class，防止 fat jar 被 JVM 当作模块化 jar。
+    // 模块化 jar 中只有 module-info 导出的包才可访问，org.nexus 包未导出，
+    // 导致 java -jar 报 ClassNotFoundException: org.nexus.Start。
+    // fat jar 是 uber jar，以 classpath 模式运行，不需要模块化。
+    exclude '**/module-info.class'
 }
 
 // === 覆盖率门禁（与 nexus-gateway 对齐，minimum 0.15） ===
