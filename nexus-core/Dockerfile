@@ -62,7 +62,11 @@ RUN echo "=== jar 内容前 30 行 ===" && \
     echo "=== org/nexus/ 下的类（前 30 行）===" && \
     jar tf /workspace/app.jar | grep "org/nexus/" | head -30 && \
     echo "=== jar 总条目数 ===" && \
-    jar tf /workspace/app.jar | wc -l
+    jar tf /workspace/app.jar | wc -l && \
+    echo "=== 检查 module-info.class ===" && \
+    (jar tf /workspace/app.jar | grep "module-info.class" || echo "NO module-info") && \
+    echo "=== MANIFEST.MF 内容 ===" && \
+    unzip -p /workspace/app.jar META-INF/MANIFEST.MF | head -20
 
 # === Stage 2: runtime (distroless nonroot) ===
 # gcr.io/distroless/java17-debian12:nonroot 默认用户 nonroot (UID=65532)
