@@ -37,6 +37,9 @@ services:
     environment:
       # REQ-33/P2: dev compose 应使用 dev profile，prod profile 留给 docker-compose.prod.yml
       - SPRING_PROFILES_ACTIVE=dev
+      # CI 审计修复（ZAP/DAST）：容器网络内 core 的地址是服务名 nexus-core，
+      # 默认 http://localhost:19585 在容器内指向自身导致链 RPC 恒不可达
+      - NEX_CHAIN_RPC_URL=http://nexus-core:19585
     depends_on:
       nexus-core:
         condition: service_healthy
@@ -57,6 +60,20 @@ services:
       dockerfile: nexus-core/Dockerfile
     ports:
       - '127.0.0.1:19585:19585'
+    environment:
+      # CI 审计修复（ZAP/DAST 修复）：core 持久化绑 Postgres 方言，此前 compose 内
+      # core 无任何环境变量——容器内走 application.properties 的占位数据源
+      # （jdbc:postgresql://localhost:5432/your-data-base）启动即失败（exit 1），
+      # 连带 gateway 的 depends_on(service_healthy) 全链启动死锁。
+      # local profile + 指向 compose 网络内的 nexus-pgsql（用户/库与该服务
+      # POSTGRES_* 环境一致，见下方 nexus-pgsql 定义）。
+      - SPRING_PROFILES_ACTIVE=local
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://nexus-pgsql:5432/nexuschain
+      - SPRING_DATASOURCE_USERNAME=nexus
+      - SPRING_DATASOURCE_PASSWORD=nexus123
+    depends_on:
+      nexus-pgsql:
+        condition: service_healthy
     healthcheck:
       # distroless 运行时无 curl/shell：使用 Dockerfile 注入的静态 busybox wget
       test: ['CMD', '/busybox', 'wget', '-q', '-O', '/dev/null', 'http://localhost:19585/height']
