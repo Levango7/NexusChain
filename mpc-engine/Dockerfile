@@ -16,6 +16,9 @@ RUN apt-get update \
 
 WORKDIR /app
 COPY . .
+# CI 构建上下文为 repo 根目录（Java 模块需根级 gradlew/build.gradle），
+# Cargo.toml 在 mpc-engine/ 子目录，需切换后构建。
+WORKDIR /app/mpc-engine
 RUN cargo build --release
 
 # === 运行阶段 ===
@@ -31,7 +34,7 @@ RUN apt-get update \
 RUN groupadd -r -g 1000 mpc \
     && useradd -r -u 1000 -g mpc -m -d /home/mpc mpc
 
-COPY --from=builder /app/target/release/mpc-engine /usr/local/bin/mpc-engine
+COPY --from=builder /app/mpc-engine/target/release/mpc-engine /usr/local/bin/mpc-engine
 
 # 工作目录归属非 root 用户，确保运行时可写日志/临时文件
 WORKDIR /home/mpc

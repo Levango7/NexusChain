@@ -7,11 +7,13 @@ FROM rust:1.85-slim AS build
 WORKDIR /src
 RUN apt-get update -qq && apt-get install -y -qq protobuf-compiler
 COPY . .
+# CI 构建上下文为 repo 根目录，Cargo.toml 在 zk-groth16-service/ 子目录。
+WORKDIR /src/zk-groth16-service
 RUN cargo build --release
 
 FROM debian:bookworm-slim
 RUN apt-get update -qq && apt-get install -y -qq ca-certificates && rm -rf /var/lib/apt/lists/*
-COPY --from=build /src/target/release/zk-groth16-service /usr/local/bin/zk-groth16-service
+COPY --from=build /src/zk-groth16-service/target/release/zk-groth16-service /usr/local/bin/zk-groth16-service
 # 可信设置目录（外部仪式产出经卷挂载或 API 导入）
 RUN mkdir -p /setup && chmod 0700 /setup
 EXPOSE 50061 50062
