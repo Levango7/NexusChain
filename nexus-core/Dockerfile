@@ -55,6 +55,13 @@ RUN find /workspace/nexus-core/nexus-core/build/libs -name '*-all.jar' \
     -exec cp {} /workspace/app.jar \;
 
 
+# === Stage 1.5: directory builder ===
+# distroless 无 shell/mkdir/chown，用 busybox 创建 nonroot 可写目录
+FROM busybox:1.36.1 AS dir-builder
+RUN mkdir -p /app/leveldb /app/data && \
+    touch /app/leveldb/.keep /app/data/.keep && \
+    chown -R 65532:65532 /app/leveldb /app/data
+
 # === Stage 2: runtime (distroless nonroot) ===
 # gcr.io/distroless/java17-debian12:nonroot 默认用户 nonroot (UID=65532)
 # 无 shell / 无 curl / 无包管理器，攻击面最小，满足非 root 要求
@@ -65,6 +72,12 @@ COPY --from=builder /workspace/app.jar app.jar
 # distroless 无 curl/wget/shell，注入单个静态 busybox 提供 wget 子命令，
 # 不引入 shell 与包管理器，保持最小攻击面（DAST 修复 2026-08-28）。
 COPY --from=busybox:1.36.1 /bin/busybox /busybox
+# 创建 nonroot 用户可写目录：
+# - /app/leveldb：LevelDB 缓存（nexus.cache-dir 为空时回退到 user.dir + "/leveldb"）
+# - /app/data：链上状态快照持久化（nexus.chain.state-dir 默认 ./data/）
+# distroless 无 shell/mkdir，通过 busybox 中间阶段创建并 chown 65532
+COPY --chown=nonroot:nonroot --from=dir-builder /app/leveldb /app/leveldb
+COPY --chown=nonroot:nonroot --from=dir-builder /app/data /app/data
 
 # 暴露服务端口（与 application.properties server.port: 19585 对齐）
 EXPOSE 19585
