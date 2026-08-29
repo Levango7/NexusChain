@@ -26,7 +26,7 @@ use multi_party_ecdsa::protocols::multi_party_ecdsa::gg_2020::party_i::{
 use multi_party_ecdsa::utilities::mta::{MessageA, MessageB};
 
 use curv::arithmetic::traits::Converter;
-use curv::cryptographic_primitives::hashing::{Digest, DigestExt};
+
 use curv::cryptographic_primitives::proofs::sigma_dlog::DLogProof;
 use curv::cryptographic_primitives::proofs::sigma_valid_pedersen::PedersenProof;
 use curv::cryptographic_primitives::secret_sharing::feldman_vss::VerifiableSS;
