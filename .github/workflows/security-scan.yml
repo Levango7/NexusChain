@@ -383,9 +383,34 @@ jobs:
       - name: Checkout 代码
         uses: actions/checkout@v4
 
-      - name: 启动 nexus-gateway + 依赖
+      - name: 启动依赖并诊断容器状态
         run: |
-          docker compose up -d nexus-gateway
+          # 启动所有依赖（|| true 防止 compose 因 nexus-core exit(1) 直接失败退出）
+          docker compose up -d nexus-gateway 2>&1 || true
+          sleep 10
+
+          # 诊断：检查每个关键容器状态
+          echo "=== 容器状态 ==="
+          docker compose ps 2>&1 || true
+
+          # 检查 nexus-core 是否在运行
+          CORE_ID=$(docker compose ps -q nexus-core 2>/dev/null)
+          if [ -n "$CORE_ID" ]; then
+            CORE_STATUS=$(docker inspect --format '{{.State.Status}}' "$CORE_ID" 2>/dev/null || echo "unknown")
+            CORE_EXIT=$(docker inspect --format '{{.State.ExitCode}}' "$CORE_ID" 2>/dev/null || echo "?")
+            echo "nexus-core 状态: $CORE_STATUS, 退出码: $CORE_EXIT"
+            if [ "$CORE_STATUS" != "running" ]; then
+              echo "=== nexus-core 启动失败，日志（最后 300 行）==="
+              docker compose logs --tail 300 nexus-core 2>&1 || true
+              exit 1
+            fi
+          else
+            echo "=== nexus-core 容器未创建，尝试获取日志 ==="
+            docker compose logs --tail 300 nexus-core 2>&1 || true
+            exit 1
+          fi
+          echo "nexus-core 已启动，等待 gateway 健康..."
+
           echo "等待 gateway 健康检查通过（最长 180s）..."
           timeout 180 bash -c 'until curl -sf http://localhost:8080/actuator/health > /dev/null 2>&1; do echo "等待中..."; sleep 3; done' && echo "gateway 已就绪" || {
             echo "gateway 启动超时，跳过 DAST"
@@ -393,8 +418,6 @@ jobs:
             docker compose logs --tail 150 nexus-core 2>&1 || true
             echo "=== nexus-gateway 容器日志（最后 50 行）==="
             docker compose logs --tail 50 nexus-gateway 2>&1 || true
-            echo "=== 容器状态 ==="
-            docker compose ps 2>&1 || true
             exit 1
           }
 
