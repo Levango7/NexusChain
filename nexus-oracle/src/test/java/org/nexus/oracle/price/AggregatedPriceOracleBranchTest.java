@@ -52,8 +52,11 @@ class AggregatedPriceOracleBranchTest {
 
     @Test
     void getPrice_someFeedsUnavailable_shouldUseAvailableOnly() {
-        // 仅 binance 注入价格，其他源不可用
+        // 仅 binance 注入有效价格，其他源注入 0（被聚合逻辑过滤）
+        // 注：不注入静态价格时，CI 环境可访问真实 API 导致非确定性失败
         binance.setStaticPrice("BTC", new BigDecimal("50000"));
+        coinGecko.setStaticPrice("BTC", BigDecimal.ZERO);
+        chainlink.setStaticPrice("BTC", BigDecimal.ZERO);
 
         PriceEntry e = oracle.getPrice("BTC");
         assertEquals(0, new BigDecimal("50000").compareTo(e.getPrice()));
