@@ -667,8 +667,11 @@ pub fn verify_signature(
 }
 
 /// 将 32 字节消息哈希转为 BigInt（与 GG20 协议的消息编码一致）。
+///
+/// ECDSA 签名方程 s = k⁻¹(z + r·x) mod n 中，z 是消息哈希的大整数表示。
+/// 调用方已提供 message_hash（即 H(m)），此处直接转为 BigInt，不再二次哈希。
 pub fn message_hash_to_bigint(hash: &[u8]) -> curv::BigInt {
-    Sha256::new().chain(hash).result_bigint()
+    curv::BigInt::from_bytes(hash)
 }
 
 /// 将点编码为 33 字节压缩 SEC1 字节串（gRPC 传输用）。
