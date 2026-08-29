@@ -287,7 +287,8 @@ jobs:
     timeout-minutes: ${{ matrix.timeout-minutes || 20 }}
     env:
       REGISTRY: ghcr.io
-      IMAGE_PREFIX: ${{ github.repository }}
+      # IMAGE_PREFIX 已移除：github.repository 含大写（Levango7/NexusChain），
+      # Docker tag 必须全小写，改由下方 step 输出 steps.img_prefix.outputs.prefix。
     strategy:
       fail-fast: false
       # max-parallel: 4 控制并发，避免触发 GitHub Actions 并发限额
@@ -317,6 +318,13 @@ jobs:
       - name: Checkout 代码
         uses: actions/checkout@v4
 
+      - name: Compute lowercase image prefix
+        id: img_prefix
+        # Bash 参数扩展 ${VAR,,} 转 lowercase——Docker tag 不允许大写字符，
+        # github.repository 产生 "Levango7/NexusChain" 会导致
+        # "invalid tag ... repository name must be lowercase" 构建失败。
+        run: echo "prefix=${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -334,5 +342,5 @@ jobs:
           file: ./${{ matrix.module }}/Dockerfile
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.module }}:latest
-            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.module }}:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ steps.img_prefix.outputs.prefix }}/${{ matrix.module }}:latest
+            ${{ env.REGISTRY }}/${{ steps.img_prefix.outputs.prefix }}/${{ matrix.module }}:${{ github.sha }}
