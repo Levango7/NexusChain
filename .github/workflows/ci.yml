@@ -278,6 +278,11 @@ jobs:
     needs: build-and-test
     if: github.ref == 'refs/heads/master' && github.event_name == 'push'
     runs-on: ubuntu-latest
+    # GHCR 推送需要 packages: write 权限（默认 GITHUB_TOKEN 无此权限，
+    # 导致 "denied: installation not allowed to Create organization package"）。
+    permissions:
+      contents: read
+      packages: write
     # REQ-02: 单模块构建失败不阻断其他模块（continue-on-error + fail-fast: false）
     continue-on-error: true
     # 审计修复：默认 10min → 20min。Dockerfile 内 ./gradlew（wrapper）需从
