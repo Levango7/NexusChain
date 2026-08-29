@@ -295,6 +295,11 @@ jacocoTestCoverageVerification {
 // NexusChainOuterClass (~15910 行) 与 NexusChainGrpc (~242 行) 均为 protoc 生成，
 // 行业惯例不计入覆盖率统计。
 jacocoTestReport {
+    // CI 审计修复：classDirectories.setFrom 重置任务输入时破坏了 Gradle 对
+    // processResources/compileJava 的隐式依赖追踪（Gradle 8.14 严格校验直接
+    // 报 "uses this output ... without declaring an explicit dependency"）。
+    // 显式补回 classes（含 compileJava+processResources）依赖。
+    dependsOn classes
     afterEvaluate {
         classDirectories.setFrom(files(classDirectories.files.collect {
             fileTree(dir: it, exclude: [
