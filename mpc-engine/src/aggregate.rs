@@ -42,8 +42,8 @@ pub fn run_aggregate(
     if req.session_id.is_empty() {
         return Ok(fail("missing session_id".to_string()));
     }
-    let message_bytes = hex::decode(&req.message_hash)
-        .map_err(|e| eyre::eyre!("invalid message_hash hex: {e}"))?;
+    let message_bytes =
+        hex::decode(&req.message_hash).map_err(|e| eyre::eyre!("invalid message_hash hex: {e}"))?;
     if message_bytes.len() != 32 {
         return Ok(fail(format!(
             "invalid message_hash: expected 32 bytes, got {}",
@@ -64,11 +64,17 @@ pub fn run_aggregate(
             .map_err(|e| eyre::eyre!("sign_runs lock poisoned: {e}"))?;
         match guard.get(&req.session_id) {
             Some(c) if c.message_hash == req.message_hash => c.clone(),
-            Some(_) => return Ok(fail("message_hash mismatch with cached signing run".to_string())),
-            None => return Ok(fail(format!(
-                "no signing run cached for session_id {} (run Sign first)",
-                req.session_id
-            ))),
+            Some(_) => {
+                return Ok(fail(
+                    "message_hash mismatch with cached signing run".to_string(),
+                ))
+            }
+            None => {
+                return Ok(fail(format!(
+                    "no signing run cached for session_id {} (run Sign first)",
+                    req.session_id
+                )))
+            }
         }
     };
 

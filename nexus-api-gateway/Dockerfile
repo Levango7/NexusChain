@@ -16,7 +16,7 @@
 # ============================================================================
 
 # === Stage 1: builder ===
-FROM gradle:8.5-jdk17 AS builder
+FROM gradle:8.14-jdk17 AS builder
 USER root
 WORKDIR /workspace
 

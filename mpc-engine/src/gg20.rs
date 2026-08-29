@@ -21,7 +21,7 @@ use zeroize::Zeroize;
 
 use multi_party_ecdsa::protocols::multi_party_ecdsa::gg_2020::party_i::{
     verify, KeyGenBroadcastMessage1, KeyGenDecommitMessage1, Keys, LocalSignature, Parameters,
-    SignatureRecid, SignKeys,
+    SignKeys, SignatureRecid,
 };
 use multi_party_ecdsa::utilities::mta::{MessageA, MessageB};
 
@@ -245,8 +245,14 @@ pub struct Gg20SignOutput {
 /// 运行完整 GG20 分布式密钥生成（n 方，阈值 t）。
 ///
 /// 返回聚合公钥、各方私钥份额与会话状态。
-pub fn run_keygen(t: u16, n: u16) -> eyre::Result<(Point<Secp256k1>, Vec<Scalar<Secp256k1>>, DkgSession)> {
-    let params = Parameters { threshold: t, share_count: n };
+pub fn run_keygen(
+    t: u16,
+    n: u16,
+) -> eyre::Result<(Point<Secp256k1>, Vec<Scalar<Secp256k1>>, DkgSession)> {
+    let params = Parameters {
+        threshold: t,
+        share_count: n,
+    };
     let n_us = n as usize;
 
     // Phase 1: 各方生成 Paillier 密钥对并广播承诺
@@ -258,11 +264,15 @@ pub fn run_keygen(t: u16, n: u16) -> eyre::Result<(Point<Secp256k1>, Vec<Scalar<
             .unzip();
 
     let e_vec: Vec<EncryptionKey> = bc1_vec.iter().map(|bc1| bc1.e.clone()).collect();
-    let h1_h2_n_tilde_vec: Vec<DLogStatement> =
-        bc1_vec.iter().map(|bc1| bc1.dlog_statement.clone()).collect();
+    let h1_h2_n_tilde_vec: Vec<DLogStatement> = bc1_vec
+        .iter()
+        .map(|bc1| bc1.dlog_statement.clone())
+        .collect();
     let y_vec: Vec<Point<Secp256k1>> = (0..n_us).map(|i| decom_vec[i].y_i.clone()).collect();
     let mut y_vec_iter = y_vec.iter();
-    let head = y_vec_iter.next().ok_or_else(|| eyre::eyre!("empty party set"))?;
+    let head = y_vec_iter
+        .next()
+        .ok_or_else(|| eyre::eyre!("empty party set"))?;
     let tail = y_vec_iter;
     let y_sum = tail.fold(head.clone(), |acc, x| acc + x);
 
@@ -288,11 +298,7 @@ pub fn run_keygen(t: u16, n: u16) -> eyre::Result<(Point<Secp256k1>, Vec<Scalar<
 
     // 每方聚合收到的份额构造本地密钥对 + DLog 证明
     let party_shares: Vec<Vec<Scalar<Secp256k1>>> = (0..n_us)
-        .map(|i| {
-            (0..n_us)
-                .map(|j| secret_shares_vec[j][i].clone())
-                .collect()
-        })
+        .map(|i| (0..n_us).map(|j| secret_shares_vec[j][i].clone()).collect())
         .collect();
 
     let mut shared_keys_vec = Vec::new();
@@ -311,23 +317,24 @@ pub fn run_keygen(t: u16, n: u16) -> eyre::Result<(Point<Secp256k1>, Vec<Scalar<
         dlog_proof_vec.push(dlog_proof);
     }
 
-    let pk_vec: Vec<Point<Secp256k1>> =
-        (0..n_us).map(|i| dlog_proof_vec[i].pk.clone()).collect();
+    let pk_vec: Vec<Point<Secp256k1>> = (0..n_us).map(|i| dlog_proof_vec[i].pk.clone()).collect();
 
     Keys::verify_dlog_proofs_check_against_vss(&params, &dlog_proof_vec, &y_vec, &vss_scheme_vec)
         .map_err(|e| eyre::eyre!("DLog proof verification failed: {e:?}"))?;
 
     // 输出各方私钥份额 x_i（全部 n 方，调用方按 party_index 取用）
-    let x_shares: Vec<Scalar<Secp256k1>> = (0..n_us)
-        .map(|i| shared_keys_vec[i].x_i.clone())
-        .collect();
+    let x_shares: Vec<Scalar<Secp256k1>> =
+        (0..n_us).map(|i| shared_keys_vec[i].x_i.clone()).collect();
 
     let session = DkgSession {
         params,
         party_keys: party_keys_vec,
         shared_keys: shared_keys_vec
             .iter()
-            .map(|sk| SharedKeysSerde { x_i: sk.x_i.clone(), y_i: sk.y.clone() })
+            .map(|sk| SharedKeysSerde {
+                x_i: sk.x_i.clone(),
+                y_i: sk.y.clone(),
+            })
             .collect(),
         pk_vec,
         y_sum: y_sum.clone(),
@@ -380,7 +387,14 @@ pub fn run_sign(
 
     // 各签名方创建签名密钥
     let sign_keys_vec: Vec<SignKeys> = (0..ttag)
-        .map(|i| SignKeys::create(&private_vec[signer_indices[i]], vss_scheme, signer_indices[i], signer_indices))
+        .map(|i| {
+            SignKeys::create(
+                &private_vec[signer_indices[i]],
+                vss_scheme,
+                signer_indices[i],
+                signer_indices,
+            )
+        })
         .collect();
 
     // Phase 1: 各方广播 g^gamma_i 承诺 + Paillier 加密 k_i
@@ -394,7 +408,13 @@ pub fn run_sign(
     let m_a_vec: Vec<_> = sign_keys_vec
         .iter()
         .enumerate()
-        .map(|(i, k)| MessageA::a(&k.k_i, &party_keys_vec[signer_indices[i]].ek, &signers_dlog_statements))
+        .map(|(i, k)| {
+            MessageA::a(
+                &k.k_i,
+                &party_keys_vec[signer_indices[i]].ek,
+                &signers_dlog_statements,
+            )
+        })
         .collect();
 
     // Phase 2: MtA 交换（各方向其余各方发送 MessageB）
@@ -444,11 +464,17 @@ pub fn run_sign(
         for j in 0..ttag - 1 {
             let m_b = m_b_gamma_vec_all[i][j].clone();
             let alpha_ij_gamma = m_b
-                .verify_proofs_get_alpha(&party_keys_vec[signer_indices[i]].dk, &sign_keys_vec[i].k_i)
+                .verify_proofs_get_alpha(
+                    &party_keys_vec[signer_indices[i]].dk,
+                    &sign_keys_vec[i].k_i,
+                )
                 .map_err(|e| eyre::eyre!("alpha gamma verify failed: {e:?}"))?;
             let m_b = m_b_w_vec_all[i][j].clone();
             let alpha_ij_wi = m_b
-                .verify_proofs_get_alpha(&party_keys_vec[signer_indices[i]].dk, &sign_keys_vec[i].k_i)
+                .verify_proofs_get_alpha(
+                    &party_keys_vec[signer_indices[i]].dk,
+                    &sign_keys_vec[i].k_i,
+                )
                 .map_err(|e| eyre::eyre!("alpha w verify failed: {e:?}"))?;
             alpha_vec.push(alpha_ij_gamma.0);
             miu_vec.push(alpha_ij_wi.0);
@@ -493,16 +519,16 @@ pub fn run_sign(
         t_proof_vec.push(t_proof_i);
     }
     for i in 0..ttag {
-        PedersenProof::verify(&t_proof_vec[i]).map_err(|e| eyre::eyre!("T proof verify failed: {e:?}"))?;
+        PedersenProof::verify(&t_proof_vec[i])
+            .map_err(|e| eyre::eyre!("T proof verify failed: {e:?}"))?;
     }
 
     // Phase 4: 解承诺 g^gamma_i 得到 R
     let r_vec: Vec<Point<Secp256k1>> = (0..ttag)
         .map(|i| {
             let m_b_gamma_vec = &m_b_gamma_vec_all[i];
-            let b_proof_vec: Vec<&DLogProof<Secp256k1, Sha256>> = (0..ttag - 1)
-                .map(|j| &m_b_gamma_vec[j].b_proof)
-                .collect();
+            let b_proof_vec: Vec<&DLogProof<Secp256k1, Sha256>> =
+                (0..ttag - 1).map(|j| &m_b_gamma_vec[j].b_proof).collect();
             SignKeys::phase4(&delta_inv, &b_proof_vec, decommit_vec1.clone(), &bc1_vec, i)
                 .expect("phase4 R computation failed")
         })
@@ -541,21 +567,26 @@ pub fn run_sign(
         )
         .map_err(|e| eyre::eyre!("phase5 PDL verify failed: {e:?}"))?;
     }
-    LocalSignature::phase5_check_R_dash_sum(&r_dash_vec).map_err(|e| eyre::eyre!("phase5 R_dash sum check failed: {e:?}"))?;
+    LocalSignature::phase5_check_R_dash_sum(&r_dash_vec)
+        .map_err(|e| eyre::eyre!("phase5 R_dash sum check failed: {e:?}"))?;
 
     // Phase 6: 计算 S_i 与一致性证明并验证
     let mut s_vec_pts = Vec::new();
     let mut homo_elgamal_proof_vec = Vec::new();
     for i in 0..ttag {
         let (s_i, proof) = LocalSignature::phase6_compute_S_i_and_proof_of_consistency(
-            &r_vec[i], &t_vec[i], &sigma_vec[i], &l_vec[i],
+            &r_vec[i],
+            &t_vec[i],
+            &sigma_vec[i],
+            &l_vec[i],
         );
         s_vec_pts.push(s_i);
         homo_elgamal_proof_vec.push(proof);
     }
     LocalSignature::phase6_verify_proof(&s_vec_pts, &homo_elgamal_proof_vec, &r_vec, &t_vec)
         .map_err(|e| eyre::eyre!("phase6 verify failed: {e:?}"))?;
-    LocalSignature::phase6_check_S_i_sum(y, &s_vec_pts).map_err(|e| eyre::eyre!("phase6 S sum check failed: {e:?}"))?;
+    LocalSignature::phase6_check_S_i_sum(y, &s_vec_pts)
+        .map_err(|e| eyre::eyre!("phase6 S sum check failed: {e:?}"))?;
 
     // Phase 7: 各方计算 s_i 并聚合出最终签名
     let mut local_sig_vec = Vec::new();
@@ -576,7 +607,8 @@ pub fn run_sign(
         .map_err(|e| eyre::eyre!("phase7 signature aggregation failed: {e:?}"))?;
 
     // 库内验证签名正确性（verify 为 party_i 模块自由函数）
-    verify(&sig, y, message_bn).map_err(|e| eyre::eyre!("GG20 signature verification failed: {e:?}"))?;
+    verify(&sig, y, message_bn)
+        .map_err(|e| eyre::eyre!("GG20 signature verification failed: {e:?}"))?;
 
     let _ = g_w_vec; // g_w_vec 用于 phase6 的 blame 路径，正常路径不需要
 
@@ -636,9 +668,7 @@ pub fn verify_signature(
 
 /// 将 32 字节消息哈希转为 BigInt（与 GG20 协议的消息编码一致）。
 pub fn message_hash_to_bigint(hash: &[u8]) -> curv::BigInt {
-    Sha256::new()
-        .chain(hash)
-        .result_bigint()
+    Sha256::new().chain(hash).result_bigint()
 }
 
 /// 将点编码为 33 字节压缩 SEC1 字节串（gRPC 传输用）。
@@ -718,25 +748,26 @@ mod tests {
     #[test]
     fn gg20_end_to_end_real_threshold_ecdsa() {
         // === DKG：t=1, n=3 ===
-        let (y_sum, x_shares, session) = run_keygen(1, 3)
-            .expect("GG20 DKG failed");
+        let (y_sum, x_shares, session) = run_keygen(1, 3).expect("GG20 DKG failed");
 
         // DKG 输出完整性：3 方份额、聚合公钥非无穷远点
         assert_eq!(x_shares.len(), 3, "should produce n=3 secret shares");
         assert_eq!(session.shared_keys.len(), 3);
-        assert!(!y_sum.is_zero(), "aggregate public key must not be infinity");
+        assert!(
+            !y_sum.is_zero(),
+            "aggregate public key must not be infinity"
+        );
 
         // === Sign：对 32 字节消息哈希签名，签名方 [0,1] ===
         let message_hash: [u8; 32] = [
-            0x4e, 0x65, 0x78, 0x75, 0x73, 0x43, 0x68, 0x61, 0x69, 0x6e, 0x2d, 0x4d, 0x50,
-            0x43, 0x2d, 0x74, 0x65, 0x73, 0x74, 0x2d, 0x68, 0x61, 0x73, 0x68, 0x2d, 0x33,
-            0x32, 0x62, 0x2d, 0x21, 0x00, 0x07,
+            0x4e, 0x65, 0x78, 0x75, 0x73, 0x43, 0x68, 0x61, 0x69, 0x6e, 0x2d, 0x4d, 0x50, 0x43,
+            0x2d, 0x74, 0x65, 0x73, 0x74, 0x2d, 0x68, 0x61, 0x73, 0x68, 0x2d, 0x33, 0x32, 0x62,
+            0x2d, 0x21, 0x00, 0x07,
         ];
         let message_bn = message_hash_to_bigint(&message_hash);
 
         let signer_indices = vec![0usize, 1usize]; // ttag=2 > t=1
-        let output = run_sign(&session, &signer_indices, &message_bn)
-            .expect("GG20 sign failed");
+        let output = run_sign(&session, &signer_indices, &message_bn).expect("GG20 sign failed");
 
         // === 聚合签名 (r, s) 已由 run_sign 库内验证，此处用标准库复核 ===
         let sig = &output.signature;

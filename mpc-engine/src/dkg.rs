@@ -111,8 +111,7 @@ pub fn run_dkg(
                     total_parties,
                     "dkg: executing full GG20 keygen (MPC-P2-F5 distributed security model)"
                 );
-                let (_y_sum, _x_shares, mut session) =
-                    gg20::run_keygen(threshold, total_parties)?;
+                let (_y_sum, _x_shares, mut session) = gg20::run_keygen(threshold, total_parties)?;
                 // MPC-P2-F5: 设置本方身份，提取本方私钥份额到 my_private_share。
                 // 设置后 extract_private_share 仅返回本方份额，跨方提取拒绝。
                 session.set_my_identity(party_index)?;
@@ -172,7 +171,8 @@ pub fn run_dkg(
             success: false,
             error: format!(
                 "party_index {} out of dlog_proofs range [0, {}) (MPC-P1-05)",
-                party_index, session.dlog_proofs.len()
+                party_index,
+                session.dlog_proofs.len()
             ),
         });
     }

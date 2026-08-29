@@ -266,7 +266,10 @@ impl SessionManager {
             .lock()
             .map_err(|e| eyre::eyre!("session manager lock poisoned: {e}"))?;
         let info = guard.get_mut(session_id).ok_or_else(|| {
-            eyre::eyre!("MPC-P2-F5: session_id '{}' not found for state transition", session_id)
+            eyre::eyre!(
+                "MPC-P2-F5: session_id '{}' not found for state transition",
+                session_id
+            )
         })?;
         // 校验状态转换合法性
         let valid = match (&info.state, &new_state) {
@@ -389,9 +392,7 @@ mod tests {
     #[test]
     fn create_and_verify_session() {
         let mgr = SessionManager::new();
-        let info = mgr
-            .create_session("sess-1", "party-0", 0)
-            .expect("create");
+        let info = mgr.create_session("sess-1", "party-0", 0).expect("create");
         assert_eq!(info.party_id, "party-0");
         assert_eq!(info.party_index, 0);
         assert_eq!(info.state, SessionState::DkgReady);
@@ -410,27 +411,21 @@ mod tests {
     #[test]
     fn deny_cross_party_hijack() {
         let mgr = SessionManager::new();
-        mgr.create_session("sess-2", "party-0", 0)
-            .expect("create");
+        mgr.create_session("sess-2", "party-0", 0).expect("create");
 
         // 不同身份重新绑定：拒绝
-        let err = mgr
-            .create_session("sess-2", "party-1", 1)
-            .unwrap_err();
+        let err = mgr.create_session("sess-2", "party-1", 1).unwrap_err();
         assert!(err.to_string().contains("cross-party hijack denied"));
 
         // 不同身份校验：拒绝
-        let err = mgr
-            .verify_caller("sess-2", "party-1", 1)
-            .unwrap_err();
+        let err = mgr.verify_caller("sess-2", "party-1", 1).unwrap_err();
         assert!(err.to_string().contains("cross-party access denied"));
     }
 
     #[test]
     fn state_transitions() {
         let mgr = SessionManager::new();
-        mgr.create_session("sess-3", "party-0", 0)
-            .expect("create");
+        mgr.create_session("sess-3", "party-0", 0).expect("create");
 
         mgr.transition("sess-3", SessionState::SignReady)
             .expect("DkgReady -> SignReady");
@@ -447,9 +442,7 @@ mod tests {
     #[test]
     fn verify_nonexistent_session_fails() {
         let mgr = SessionManager::new();
-        let err = mgr
-            .verify_caller("no-such", "party-0", 0)
-            .unwrap_err();
+        let err = mgr.verify_caller("no-such", "party-0", 0).unwrap_err();
         assert!(err.to_string().contains("not found"));
     }
 
@@ -458,14 +451,20 @@ mod tests {
     #[test]
     fn cleanup_removes_closed_sessions() {
         let mgr = SessionManager::new();
-        mgr.create_session("s-closed", "party-0", 0).expect("create");
-        mgr.create_session("s-active", "party-0", 0).expect("create");
+        mgr.create_session("s-closed", "party-0", 0)
+            .expect("create");
+        mgr.create_session("s-active", "party-0", 0)
+            .expect("create");
         // 关闭一个
-        mgr.transition("s-closed", SessionState::Closed).expect("close");
+        mgr.transition("s-closed", SessionState::Closed)
+            .expect("close");
         let reaped = mgr.cleanup_expired_sessions();
         assert_eq!(reaped, 1, "Closed session should be reaped");
         assert!(mgr.get("s-closed").is_none());
-        assert!(mgr.get("s-active").is_some(), "active session should remain");
+        assert!(
+            mgr.get("s-active").is_some(),
+            "active session should remain"
+        );
     }
 
     #[test]
@@ -486,7 +485,10 @@ mod tests {
         // 让时间推进（Instant::now + 1ns 不可直接构造，但 cleanup 内部 now > updated_at）
         std::thread::sleep(Duration::from_millis(2));
         let reaped = mgr.cleanup_expired_sessions();
-        assert_eq!(reaped, 1, "inactive session should be reaped with 1ns timeout");
+        assert_eq!(
+            reaped, 1,
+            "inactive session should be reaped with 1ns timeout"
+        );
         assert!(mgr.get("s-old").is_none());
     }
 
@@ -505,10 +507,7 @@ mod tests {
         mgr.create_session("s2", "party-0", 0).expect("create 2");
         // 第三个应失败
         let err = mgr.create_session("s3", "party-0", 0).unwrap_err();
-        assert!(
-            err.to_string().contains("max sessions limit"),
-            "err: {err}"
-        );
+        assert!(err.to_string().contains("max sessions limit"), "err: {err}");
         assert_eq!(mgr.len(), 2);
     }
 

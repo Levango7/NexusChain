@@ -70,8 +70,12 @@ fn parse_config_arg() -> Option<String> {
 /// 返回 `Some((cert_path, key_path))` 当且仅当 `MPC_TLS_CERT_PATH` 与
 /// `MPC_TLS_KEY_PATH` 都已设置且非空；否则返回 `None`。
 fn read_tls_env() -> Option<(String, String)> {
-    let cert = std::env::var("MPC_TLS_CERT_PATH").ok().filter(|s| !s.is_empty());
-    let key = std::env::var("MPC_TLS_KEY_PATH").ok().filter(|s| !s.is_empty());
+    let cert = std::env::var("MPC_TLS_CERT_PATH")
+        .ok()
+        .filter(|s| !s.is_empty());
+    let key = std::env::var("MPC_TLS_KEY_PATH")
+        .ok()
+        .filter(|s| !s.is_empty());
     match (cert, key) {
         (Some(c), Some(k)) => Some((c, k)),
         _ => None,
@@ -86,9 +90,7 @@ async fn main() -> eyre::Result<()> {
 
     // === MPC-P2-F5: 尝试从配置文件加载 PartyConfig（分布式模式） ===
     let config_path = parse_config_arg();
-    let party_config = if config_path.is_some()
-        || std::env::var(config::CONFIG_PATH_ENV).is_ok()
-    {
+    let party_config = if config_path.is_some() || std::env::var(config::CONFIG_PATH_ENV).is_ok() {
         match config::load_config(config_path.as_deref()) {
             Ok(cfg) => {
                 tracing::info!(
@@ -124,8 +126,7 @@ async fn main() -> eyre::Result<()> {
             (bind, cfg.party_id.clone())
         }
         None => {
-            let host =
-                std::env::var("MPC_ENGINE_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
+            let host = std::env::var("MPC_ENGINE_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
             let port: u16 = std::env::var("MPC_ENGINE_PORT")
                 .unwrap_or_else(|_| "50051".to_string())
                 .parse()
@@ -141,7 +142,11 @@ async fn main() -> eyre::Result<()> {
     // MPC-P2-F5: 优先使用 PartyConfig 的 mTLS 配置；否则回退到环境变量
     let tls_config = if let Some(cfg) = &party_config {
         // 分布式模式：mTLS 配置来自 PartyConfig
-        Some((cfg.tls_cert.clone(), cfg.tls_key.clone(), Some(cfg.tls_ca.clone())))
+        Some((
+            cfg.tls_cert.clone(),
+            cfg.tls_key.clone(),
+            Some(cfg.tls_ca.clone()),
+        ))
     } else {
         // 旧模式：单 TLS（无 client CA）
         read_tls_env().map(|(c, k)| (c, k, None))
@@ -240,9 +245,7 @@ async fn main() -> eyre::Result<()> {
                 let tls_config = ServerTlsConfig::new()
                     .identity(identity)
                     .client_ca_root(client_ca);
-                tracing::info!(
-                    "MPC-P2-F5: mTLS enabled (server requires client certificate)"
-                );
+                tracing::info!("MPC-P2-F5: mTLS enabled (server requires client certificate)");
                 tonic::transport::Server::builder()
                     .tls_config(tls_config)?
                     .layer(auth_layer.clone())

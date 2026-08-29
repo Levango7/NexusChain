@@ -70,12 +70,11 @@
 // 引用与常量
 // =============================================================================
 
-
 use std::path::PathBuf;
 use std::str::FromStr;
 
 use tonic::metadata::MetadataValue;
-use tonic::transport::{Channel, ClientTlsConfig, Certificate, Identity};
+use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity};
 use tonic::Request;
 
 use mpc_engine::proto::mpc_crypto::mpc_crypto_service_client::MpcCryptoServiceClient;
@@ -182,8 +181,7 @@ async fn make_client(node_idx: usize) -> MpcCryptoServiceClient<Channel> {
 fn with_auth<T>(req: Request<T>) -> Request<T> {
     let mut req = req;
     let bearer = format!("Bearer {}", AUTH_TOKEN);
-    let val = MetadataValue::from_str(&bearer)
-        .expect("Bearer token 含无效 ASCII 字符");
+    let val = MetadataValue::from_str(&bearer).expect("Bearer token 含无效 ASCII 字符");
     req.metadata_mut().insert("authorization", val);
     req
 }
@@ -288,12 +286,7 @@ async fn test_dkg_3_nodes() {
 
     // 1. 所有节点 DKG 成功
     for (i, r) in results.iter().enumerate() {
-        assert!(
-            r.success,
-            "node{} DKG 未成功: {}",
-            i + 1,
-            r.error
-        );
+        assert!(r.success, "node{} DKG 未成功: {}", i + 1, r.error);
     }
 
     // 2. 聚合公钥一致（核心不变量）
@@ -301,7 +294,8 @@ async fn test_dkg_3_nodes() {
     assert!(!pk0.is_empty(), "node1 public_key 为空");
     for (i, r) in results.iter().enumerate().skip(1) {
         assert_eq!(
-            r.public_key, *pk0,
+            r.public_key,
+            *pk0,
             "node{} 公钥与 node1 不一致（DKG 协议失败）",
             i + 1
         );
@@ -542,8 +536,7 @@ async fn test_sign_wrong_threshold() {
     assert!(
         !agg_resp.success,
         "聚合应失败（仅 1 个部分签名 < threshold=2），但返回 success=true: r={}, s={}",
-        agg_resp.r,
-        agg_resp.s
+        agg_resp.r, agg_resp.s
     );
 
     println!(
@@ -651,10 +644,12 @@ async fn test_node_recovery() {
     let mpc_binary = project_root().join("target/release/mpc-engine");
     let node3_config = project_root().join("config/node3.json");
     let node3_log_path = project_root().join("logs/node3-recovery.log");
-    let node3_log_file = std::fs::File::create(&node3_log_path)
-        .expect("创建 node3-recovery.log 失败");
+    let node3_log_file =
+        std::fs::File::create(&node3_log_path).expect("创建 node3-recovery.log 失败");
     let node3_stdout = std::process::Stdio::from(
-        node3_log_file.try_clone().expect("clone log file for stdout"),
+        node3_log_file
+            .try_clone()
+            .expect("clone log file for stdout"),
     );
     let node3_stderr = std::process::Stdio::from(node3_log_file);
 
@@ -745,7 +740,11 @@ async fn test_mtls_handshake() {
         .expect("mTLS 握手失败：node1 证书应能连接 node1 server");
 
     let health = resp.into_inner();
-    assert!(health.healthy, "HealthCheck.healthy=false: {}", health.status);
+    assert!(
+        health.healthy,
+        "HealthCheck.healthy=false: {}",
+        health.status
+    );
     assert!(
         health.status.contains("mpc-engine"),
         "HealthCheck.status 不含 'mpc-engine': {}",
@@ -875,7 +874,12 @@ async fn test_sign_with_offline_node() {
             .await
             .expect(&format!("node{} Sign 失败", i + 1))
             .into_inner();
-        assert!(resp.success, "node{} Sign 失败（node3 离线仍应成功）: {}", i + 1, resp.error);
+        assert!(
+            resp.success,
+            "node{} Sign 失败（node3 离线仍应成功）: {}",
+            i + 1,
+            resp.error
+        );
         assert!(
             !resp.partial_signature.is_empty(),
             "node{} partial_signature 为空",
@@ -923,9 +927,7 @@ async fn test_sign_with_offline_node() {
         "签名验证失败：node3 离线后 2-of-3 签名应可通过 secp256k1 验证"
     );
 
-    println!(
-        "[test_sign_with_offline_node] ✓ 2-of-3 容错签名成功（node3 离线），签名验证通过"
-    );
+    println!("[test_sign_with_offline_node] ✓ 2-of-3 容错签名成功（node3 离线），签名验证通过");
 }
 
 // =============================================================================

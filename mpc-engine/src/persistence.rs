@@ -25,9 +25,9 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 // zeroize：密钥材料安全擦除。MyShareRecord 派生 Zeroize，
 // 在加密的私钥份额密文与公钥材料 hex 离开作用域前擦除内存。
-use zeroize::Zeroize;
 use std::fs;
 use std::path::{Path, PathBuf};
+use zeroize::Zeroize;
 
 /// 会话目录环境变量。
 const SESSION_DIR_ENV: &str = "MPC_ENGINE_SESSION_DIR";
@@ -115,15 +115,19 @@ fn load_storage_key() -> eyre::Result<[u8; KEY_LEN]> {
         eyre!(
             "{} not set — refusing to persist/load session without encryption key \
              (MPC-P1-05: fail-closed, set {} to a 64-char hex string encoding 32 bytes)",
-            STORAGE_KEY_ENV, STORAGE_KEY_ENV
+            STORAGE_KEY_ENV,
+            STORAGE_KEY_ENV
         )
     })?;
-    let key_bytes = hex::decode(&key_hex)
-        .map_err(|e| eyre!("{} hex decode failed: {e}", STORAGE_KEY_ENV))?;
+    let key_bytes =
+        hex::decode(&key_hex).map_err(|e| eyre!("{} hex decode failed: {e}", STORAGE_KEY_ENV))?;
     if key_bytes.len() != KEY_LEN {
         return Err(eyre!(
             "{} must be {} bytes ({} hex chars), got {} bytes",
-            STORAGE_KEY_ENV, KEY_LEN, KEY_LEN * 2, key_bytes.len()
+            STORAGE_KEY_ENV,
+            KEY_LEN,
+            KEY_LEN * 2,
+            key_bytes.len()
         ));
     }
     let mut key = [0u8; KEY_LEN];
@@ -155,7 +159,8 @@ fn aes_decrypt(data: &[u8], key: &[u8; KEY_LEN]) -> eyre::Result<Vec<u8>> {
     if data.len() < NONCE_LEN {
         return Err(eyre!(
             "encrypted data too short ({} < {}): corrupted or not encrypted with MPC-P1-05 format",
-            data.len(), NONCE_LEN
+            data.len(),
+            NONCE_LEN
         ));
     }
     let (nonce_bytes, ciphertext) = data.split_at(NONCE_LEN);
@@ -198,9 +203,7 @@ fn aes_encrypt_with_version(
 fn aes_decrypt_with_version(data: &[u8], key: &[u8; KEY_LEN]) -> eyre::Result<(u32, Vec<u8>)> {
     // 检测新格式：以 MAGIC 前缀开头
     if data.len() >= KEY_VERSION_HEADER_LEN && &data[0..4] == KEY_VERSION_MAGIC {
-        let version = u32::from_le_bytes([
-            data[4], data[5], data[6], data[7],
-        ]);
+        let version = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
         let payload = &data[KEY_VERSION_HEADER_LEN..];
         let plaintext = aes_decrypt(payload, key)?;
         Ok((version, plaintext))
@@ -254,8 +257,8 @@ pub fn persist_session(session_id: &str, session: &DkgSession) -> eyre::Result<(
     let dir = session_dir();
     fs::create_dir_all(&dir)
         .map_err(|e| eyre!("cannot create session dir {}: {e}", dir.display()))?;
-    let json = serde_json::to_vec_pretty(session)
-        .map_err(|e| eyre!("session serialize failed: {e}"))?;
+    let json =
+        serde_json::to_vec_pretty(session).map_err(|e| eyre!("session serialize failed: {e}"))?;
     // MPC-P1-05: AES-256-GCM 加密后落盘（防明文份额泄露）
     // 中12: 加密时在文件头写入当前密钥版本号，支持密钥轮换
     let key = load_storage_key()?;
@@ -296,14 +299,14 @@ pub fn load_session(session_id: &str) -> eyre::Result<Option<DkgSession>> {
     if !Path::new(&path).exists() {
         return Ok(None);
     }
-    let bytes = fs::read(&path)
-        .map_err(|e| eyre!("cannot read session {}: {e}", path.display()))?;
+    let bytes =
+        fs::read(&path).map_err(|e| eyre!("cannot read session {}: {e}", path.display()))?;
     // MPC-P1-05: AES-256-GCM 解密
     // 中12: 从文件头读取密钥版本号，按版本号选择密钥（当前单密钥，多密钥 TODO）
     let key = load_storage_key()?;
     let (version, plaintext) = aes_decrypt_with_version(&bytes, &key)?;
-    let session: DkgSession = serde_json::from_slice(&plaintext)
-        .map_err(|e| eyre!("session deserialize failed: {e}"))?;
+    let session: DkgSession =
+        serde_json::from_slice(&plaintext).map_err(|e| eyre!("session deserialize failed: {e}"))?;
     tracing::info!(
         session_id = %session_id,
         key_version = version,
@@ -392,11 +395,8 @@ pub fn persist_my_share(session_id: &str, session: &DkgSession) -> eyre::Result<
 
     // 公钥材料明文（hex 编码）
     let aggregate_public_key = crate::gg20::hex_point(&session.y_sum);
-    let party_public_keys: Vec<String> = session
-        .pk_vec
-        .iter()
-        .map(crate::gg20::hex_point)
-        .collect();
+    let party_public_keys: Vec<String> =
+        session.pk_vec.iter().map(crate::gg20::hex_point).collect();
 
     let record = MyShareRecord {
         my_party_index: session.my_party_index,
@@ -411,8 +411,7 @@ pub fn persist_my_share(session_id: &str, session: &DkgSession) -> eyre::Result<
     let json = serde_json::to_vec_pretty(&record)
         .map_err(|e| eyre!("MyShareRecord serialize failed: {e}"))?;
     let path = my_share_path(session_id);
-    fs::write(&path, json)
-        .map_err(|e| eyre!("cannot write my-share {}: {e}", path.display()))?;
+    fs::write(&path, json).map_err(|e| eyre!("cannot write my-share {}: {e}", path.display()))?;
     // 低9: 设置 0600 权限（仅所有者可读写，Unix 特有，Windows 空操作）
     set_secure_permissions(&path);
 
@@ -438,8 +437,8 @@ pub fn load_my_share(session_id: &str) -> eyre::Result<Option<MyShareRecord>> {
     if !Path::new(&path).exists() {
         return Ok(None);
     }
-    let bytes = fs::read(&path)
-        .map_err(|e| eyre!("cannot read my-share {}: {e}", path.display()))?;
+    let bytes =
+        fs::read(&path).map_err(|e| eyre!("cannot read my-share {}: {e}", path.display()))?;
     let record: MyShareRecord = serde_json::from_slice(&bytes)
         .map_err(|e| eyre!("MyShareRecord deserialize failed: {e}"))?;
     tracing::info!(
@@ -454,9 +453,7 @@ pub fn load_my_share(session_id: &str) -> eyre::Result<Option<MyShareRecord>> {
 ///
 /// 从 `MyShareRecord.encrypted_private_share` 解密出 `SharedKeysSerde`。
 /// 中12: 从密文头读取密钥版本号，按版本号选择密钥（当前单密钥，多密钥 TODO）。
-pub fn decrypt_my_share(
-    record: &MyShareRecord,
-) -> eyre::Result<crate::gg20::SharedKeysSerde> {
+pub fn decrypt_my_share(record: &MyShareRecord) -> eyre::Result<crate::gg20::SharedKeysSerde> {
     let key = load_storage_key()?;
     let (version, plaintext) = aes_decrypt_with_version(&record.encrypted_private_share, &key)?;
     let share: crate::gg20::SharedKeysSerde = serde_json::from_slice(&plaintext)
@@ -494,8 +491,7 @@ mod tests {
     fn persist_and_restore_round_trip() {
         ensure_test_key();
         // 使用真实 DKG 会话验证序列化往返
-        let (_, _, session) = crate::gg20::run_keygen(1, 2)
-            .expect("GG20 DKG failed");
+        let (_, _, session) = crate::gg20::run_keygen(1, 2).expect("GG20 DKG failed");
         let id = "persist-test-1";
         persist_session(id, &session).expect("persist");
         let restored = load_session(id).expect("load").expect("some");
@@ -516,8 +512,7 @@ mod tests {
     fn encrypted_file_is_not_plaintext() {
         ensure_test_key();
         // 验证落盘文件不是明文 JSON（应含版本号头 + nonce 前缀 + 密文）
-        let (_, _, session) = crate::gg20::run_keygen(1, 2)
-            .expect("GG20 DKG failed");
+        let (_, _, session) = crate::gg20::run_keygen(1, 2).expect("GG20 DKG failed");
         let id = "persist-enc-test-1";
         persist_session(id, &session).expect("persist");
         let path = session_path(id);
@@ -541,8 +536,7 @@ mod tests {
     #[test]
     fn decrypt_with_wrong_key_fails() {
         ensure_test_key();
-        let (_, _, session) = crate::gg20::run_keygen(1, 2)
-            .expect("GG20 DKG failed");
+        let (_, _, session) = crate::gg20::run_keygen(1, 2).expect("GG20 DKG failed");
         let id = "persist-wrong-key-test-1";
         persist_session(id, &session).expect("persist");
         // 用错误密钥解密应失败（GCM 完整性校验）
@@ -550,7 +544,10 @@ mod tests {
         let wrong_key = [0xAAu8; KEY_LEN];
         let raw = std::fs::read(session_path(id)).expect("read raw");
         let result = aes_decrypt_with_version(&raw, &wrong_key);
-        assert!(result.is_err(), "decrypt with wrong key should fail (GCM integrity)");
+        assert!(
+            result.is_err(),
+            "decrypt with wrong key should fail (GCM integrity)"
+        );
         remove_session(id);
     }
 
@@ -559,8 +556,7 @@ mod tests {
     #[test]
     fn encrypted_file_has_version_header_magic() {
         ensure_test_key();
-        let (_, _, session) = crate::gg20::run_keygen(1, 2)
-            .expect("GG20 DKG failed");
+        let (_, _, session) = crate::gg20::run_keygen(1, 2).expect("GG20 DKG failed");
         let id = "persist-version-header-test";
         persist_session(id, &session).expect("persist");
         let raw = std::fs::read(session_path(id)).expect("read raw");
@@ -582,8 +578,7 @@ mod tests {
         unsafe {
             std::env::set_var(STORAGE_KEY_VERSION_ENV, "7");
         }
-        let (_, _, session) = crate::gg20::run_keygen(1, 2)
-            .expect("GG20 DKG failed");
+        let (_, _, session) = crate::gg20::run_keygen(1, 2).expect("GG20 DKG failed");
         let id = "persist-version-7-test";
         persist_session(id, &session).expect("persist");
         let raw = std::fs::read(session_path(id)).expect("read raw");
@@ -608,7 +603,8 @@ mod tests {
         let key = load_storage_key().expect("key");
         let old_format_enc = aes_encrypt(plaintext, &key).expect("encrypt");
         // 解密旧格式应返回 DEFAULT_KEY_VERSION
-        let (version, decrypted) = aes_decrypt_with_version(&old_format_enc, &key).expect("decrypt");
+        let (version, decrypted) =
+            aes_decrypt_with_version(&old_format_enc, &key).expect("decrypt");
         assert_eq!(version, DEFAULT_KEY_VERSION);
         assert_eq!(decrypted, plaintext);
     }
@@ -672,8 +668,7 @@ mod tests {
     #[test]
     fn persist_my_share_only_stores_my_share() {
         ensure_test_key();
-        let (_, _, mut session) = crate::gg20::run_keygen(1, 3)
-            .expect("GG20 DKG failed");
+        let (_, _, mut session) = crate::gg20::run_keygen(1, 3).expect("GG20 DKG failed");
         // 设置本方身份为 party 1
         session.set_my_identity(1).expect("set identity");
 
@@ -699,7 +694,10 @@ mod tests {
         let raw_str = String::from_utf8_lossy(&raw);
         // 应包含 aggregate_public_key（明文）但不包含 shared_keys 数组
         assert!(raw_str.contains("aggregate_public_key"));
-        assert!(!raw_str.contains("shared_keys"), "my-share 文件不应包含 shared_keys 数组");
+        assert!(
+            !raw_str.contains("shared_keys"),
+            "my-share 文件不应包含 shared_keys 数组"
+        );
 
         remove_session(id);
     }
@@ -707,13 +705,15 @@ mod tests {
     #[test]
     fn persist_my_share_without_identity_fails() {
         ensure_test_key();
-        let (_, _, session) = crate::gg20::run_keygen(1, 2)
-            .expect("GG20 DKG failed");
+        let (_, _, session) = crate::gg20::run_keygen(1, 2).expect("GG20 DKG failed");
         // 不调用 set_my_identity，my_private_share 为 None
         let id = "persist-my-share-fail-test";
         let result = persist_my_share(id, &session);
         assert!(result.is_err(), "未设置 my_private_share 应失败");
-        assert!(result.unwrap_err().to_string().contains("my_private_share not set"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("my_private_share not set"));
         remove_session(id);
     }
 }

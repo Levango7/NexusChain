@@ -208,7 +208,12 @@ jobs:
         with:
           project: NexusChain
           path: .
-          format: HTML,JSON
+          # 2026-08-29 修复：dependency-check 拒绝逗号分隔的 format 值
+          # （"An invalid 'format' of 'HTML,JSON' was specified"——该 CLI 只接受
+          # 单个格式，多次指定需重复 --format）。此 Action 的 format 输入映射为
+          # 单个 --format 参数，故改为单一 HTML（JSON 报告由后续步骤可选生成/上传，
+          # 上传步骤已 if-no-files-found: ignore 容忍缺失）。
+          format: HTML
           # 2026-08-29 修复：该 Action 把 `others` 整体作为【单个】命令行参数追加
           # （见 action.yml args 列表末尾 `- '${{ inputs.others }}'`），因此传入
           # 含空格的 "… --failOnCVSS 9" 会被 dependency-check 当作一个未知 token，
@@ -423,7 +428,11 @@ jobs:
     name: Security Issue Triage
     runs-on: ubuntu-latest
     needs: [trivy-fs-scan]
-    if: always() && needs.trivy-fs-scan.result == 'success'
+    # 审计修复：原条件 result == 'success' 使 triage 只在扫描【通过】时运行——
+    # 有 CRITICAL/HIGH 时 job 失败反而跳过建 Issue，无漏洞时又无漏可报，
+    # 自动分诊永不生效。改为扫描已执行（未跳过/未取消）即运行，
+    # 扫描失败（发现漏洞）时对报告中的漏洞建 Issue。
+    if: ${{ !cancelled() && needs.trivy-fs-scan.result != 'skipped' }}
     permissions:
       contents: read
       issues: write

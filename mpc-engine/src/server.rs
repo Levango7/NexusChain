@@ -70,20 +70,14 @@ impl MpcCryptoServiceImpl {
     /// MPC-P2-F5: 校验调用方身份与 session 绑定一致。
     ///
     /// `my_party_id` 为空时跳过校验（兼容旧模式）；非空时严格校验。
-    fn check_session_identity(
-        &self,
-        session_id: &str,
-        party_index: usize,
-    ) -> Result<(), Status> {
+    fn check_session_identity(&self, session_id: &str, party_index: usize) -> Result<(), Status> {
         if self.my_party_id.is_empty() {
             return Ok(()); // 兼容旧模式：未配置 party_id，跳过身份绑定
         }
         self.session_mgr
             .verify_caller(session_id, &self.my_party_id, party_index)
             .map(|_| ())
-            .map_err(|e| {
-                Status::permission_denied(format!("session identity check failed: {e}"))
-            })
+            .map_err(|e| Status::permission_denied(format!("session identity check failed: {e}")))
     }
 }
 
@@ -122,14 +116,12 @@ impl mpc_crypto_service_server::MpcCryptoService for MpcCryptoServiceImpl {
             self.session_mgr
                 .create_session(&req.session_id, &self.my_party_id, req.party_index as usize)
                 .map_err(|e| {
-                    Status::permission_denied(format!(
-                        "session identity binding failed: {e}"
-                    ))
+                    Status::permission_denied(format!("session identity binding failed: {e}"))
                 })?;
         }
 
-        let resp = dkg::run_dkg(&self.sessions, req)
-            .map_err(|e| Status::internal(format!("dkg: {e}")))?;
+        let resp =
+            dkg::run_dkg(&self.sessions, req).map_err(|e| Status::internal(format!("dkg: {e}")))?;
         Ok(Response::new(resp))
     }
 
@@ -230,9 +222,7 @@ impl MtlsConfig {
     /// 从 PartyConfig 加载 mTLS 配置。
     ///
     /// 读取 `tls_cert`/`tls_key`/`tls_ca` 文件，构造 `Identity` 与 `Certificate`。
-    pub fn from_party_config(
-        config: &crate::config::PartyConfig,
-    ) -> eyre::Result<Self> {
+    pub fn from_party_config(config: &crate::config::PartyConfig) -> eyre::Result<Self> {
         let cert = std::fs::read(&config.tls_cert).map_err(|e| {
             eyre::eyre!(
                 "MPC-P2-F5: failed to read TLS cert '{}': {e}",
@@ -246,10 +236,7 @@ impl MtlsConfig {
             )
         })?;
         let ca = std::fs::read(&config.tls_ca).map_err(|e| {
-            eyre::eyre!(
-                "MPC-P2-F5: failed to read TLS CA '{}': {e}",
-                config.tls_ca
-            )
+            eyre::eyre!("MPC-P2-F5: failed to read TLS CA '{}': {e}", config.tls_ca)
         })?;
 
         let server_identity = tonic::transport::Identity::from_pem(cert, key);
@@ -366,9 +353,7 @@ impl tonic::service::Interceptor for AuthInterceptor {
             .get(AUTHORIZATION_HEADER)
             .and_then(|v| v.to_str().ok())
             .ok_or_else(|| {
-                tracing::warn!(
-                    "MPC-P1-05: gRPC request rejected — missing Authorization header"
-                );
+                tracing::warn!("MPC-P1-05: gRPC request rejected — missing Authorization header");
                 Status::unauthenticated("Missing Authorization header")
             })?;
 
@@ -428,10 +413,8 @@ mod tests {
     fn auth_interceptor_accepts_correct_token() {
         let mut interceptor = AuthInterceptor::new("secret-token".to_string());
         let mut req = Request::new(());
-        req.metadata_mut().insert(
-            AUTHORIZATION_HEADER,
-            "Bearer secret-token".parse().unwrap(),
-        );
+        req.metadata_mut()
+            .insert(AUTHORIZATION_HEADER, "Bearer secret-token".parse().unwrap());
         // tonic 0.12: Interceptor::call 按值接收 Request（trait 签名变更）
         assert!(interceptor.call(req).is_ok());
     }
@@ -440,10 +423,8 @@ mod tests {
     fn auth_interceptor_rejects_wrong_token() {
         let mut interceptor = AuthInterceptor::new("secret-token".to_string());
         let mut req = Request::new(());
-        req.metadata_mut().insert(
-            AUTHORIZATION_HEADER,
-            "Bearer wrong-token".parse().unwrap(),
-        );
+        req.metadata_mut()
+            .insert(AUTHORIZATION_HEADER, "Bearer wrong-token".parse().unwrap());
         let err = interceptor.call(req).unwrap_err();
         assert_eq!(err.code(), tonic::Code::Unauthenticated);
     }
@@ -452,6 +433,9 @@ mod tests {
     fn auth_interceptor_skips_when_token_empty() {
         let mut interceptor = AuthInterceptor::new(String::new());
         let req = Request::new(());
-        assert!(interceptor.call(req).is_ok(), "empty token should skip auth");
+        assert!(
+            interceptor.call(req).is_ok(),
+            "empty token should skip auth"
+        );
     }
 }

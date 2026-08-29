@@ -44,8 +44,8 @@ pub fn run_sign(
         return Ok(fail("missing session_id".to_string()));
     }
     // message_hash 为 hex 编码的 32 字节（64 hex 字符）
-    let message_bytes = hex::decode(&req.message_hash)
-        .map_err(|e| eyre::eyre!("invalid message_hash hex: {e}"))?;
+    let message_bytes =
+        hex::decode(&req.message_hash).map_err(|e| eyre::eyre!("invalid message_hash hex: {e}"))?;
     if message_bytes.len() != 32 {
         return Ok(fail(format!(
             "invalid message_hash: expected 32 bytes, got {}",

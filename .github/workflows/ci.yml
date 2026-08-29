@@ -226,7 +226,7 @@ jobs:
       - name: Flyway migrate 验证（所有含迁移脚本的模块）
         run: |
           set -euo pipefail
-          # Flyway 11.x 官方镜像（与项目 flyway-core 10.x 大版本对齐，Boot 3.3.13 BOM 管理）
+          # Flyway 11.x 官方镜像（Boot 4.0.8 BOM 管理 flyway-core 11.x，版本对齐）
           FLYWAY_IMG="flyway/flyway:11"
           # 含 db/migration 的模块列表（模块逻辑名 : 迁移脚本目录）
           # 2026-08-28 修复：
@@ -273,8 +273,11 @@ jobs:
     runs-on: ubuntu-latest
     # REQ-02: 单模块构建失败不阻断其他模块（continue-on-error + fail-fast: false）
     continue-on-error: true
-    # Rust 模块（mpc-engine / zk-groth16-service）构建耗时较长，通过 matrix.include 放宽至 15min
-    timeout-minutes: ${{ matrix.timeout-minutes || 10 }}
+    # 审计修复：默认 10min → 20min。Dockerfile 内 ./gradlew（wrapper）需从
+    # huaweicloud 下载 Gradle 8.14 发行包（~130MB）+ 全量依赖解析（构建容器
+    # 无 Gradle 缓存），GitHub 美区 runner 访问华为云镜像较慢，10min 易超时。
+    # Rust 模块多阶段构建耗时较长，通过 matrix.include 放宽至 25min
+    timeout-minutes: ${{ matrix.timeout-minutes || 20 }}
     env:
       REGISTRY: ghcr.io
       IMAGE_PREFIX: ${{ github.repository }}
@@ -297,12 +300,12 @@ jobs:
           - nexus-oracle
           - mpc-engine
           - zk-groth16-service
-        # Rust 多阶段构建耗时较长，单独放宽 timeout
+        # Rust 多阶段构建耗时较长，单独放宽 timeout（wrapper 下载 + cargo 全量编译）
         include:
           - module: mpc-engine
-            timeout-minutes: 15
+            timeout-minutes: 25
           - module: zk-groth16-service
-            timeout-minutes: 15
+            timeout-minutes: 25
     steps:
       - name: Checkout 代码
         uses: actions/checkout@v4

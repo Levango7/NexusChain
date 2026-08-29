@@ -174,7 +174,10 @@ pub fn load_config(path: Option<&str>) -> eyre::Result<PartyConfig> {
     };
 
     let content = std::fs::read_to_string(&config_path).map_err(|e| {
-        eyre::eyre!("MPC-P2-F5: failed to read config file '{}': {e}", config_path)
+        eyre::eyre!(
+            "MPC-P2-F5: failed to read config file '{}': {e}",
+            config_path
+        )
     })?;
 
     let config: PartyConfig = serde_json::from_str(&content).map_err(|e| {
@@ -206,9 +209,7 @@ impl PartyConfig {
             ));
         }
         if self.listen_addr.is_empty() {
-            return Err(eyre::eyre!(
-                "MPC-P2-F5: listen_addr must be non-empty"
-            ));
+            return Err(eyre::eyre!("MPC-P2-F5: listen_addr must be non-empty"));
         }
         // storage_key 校验：根据 storage_key_source 决定校验策略
         // 低10: 支持 "plain" / "env" / "kms" 三种来源
@@ -221,9 +222,8 @@ impl PartyConfig {
                          for AES-256-GCM) when storage_key_source='plain'"
                     ));
                 }
-                let key_bytes = hex::decode(&self.storage_key).map_err(|e| {
-                    eyre::eyre!("MPC-P2-F5: storage_key hex decode failed: {e}")
-                })?;
+                let key_bytes = hex::decode(&self.storage_key)
+                    .map_err(|e| eyre::eyre!("MPC-P2-F5: storage_key hex decode failed: {e}"))?;
                 if key_bytes.len() != 32 {
                     return Err(eyre::eyre!(
                         "MPC-P2-F5: storage_key must be 32 bytes (64 hex chars), got {} bytes",
@@ -268,9 +268,8 @@ impl PartyConfig {
                     "中12: storage_keys contains version 0 (reserved/invalid)"
                 ));
             }
-            let key_bytes = hex::decode(key_hex).map_err(|e| {
-                eyre::eyre!("中12: storage_keys[{}] hex decode failed: {e}", ver)
-            })?;
+            let key_bytes = hex::decode(key_hex)
+                .map_err(|e| eyre::eyre!("中12: storage_keys[{}] hex decode failed: {e}", ver))?;
             if key_bytes.len() != 32 {
                 return Err(eyre::eyre!(
                     "中12: storage_keys[{}] must be 32 bytes (64 hex chars), got {} bytes",
@@ -280,7 +279,9 @@ impl PartyConfig {
             }
         }
         // 中12: 当前版本密钥必须可用（storage_keys 非空时当前版本必须在映射中，否则回退到 storage_key）
-        if !self.storage_keys.is_empty() && !self.storage_keys.contains_key(&self.storage_key_version) {
+        if !self.storage_keys.is_empty()
+            && !self.storage_keys.contains_key(&self.storage_key_version)
+        {
             tracing::warn!(
                 version = self.storage_key_version,
                 "中12: storage_keys does not contain current storage_key_version — \
@@ -390,7 +391,10 @@ impl PartyConfig {
         unsafe {
             std::env::set_var("MPC_STORAGE_KEY", &key);
             // 中12: 同步密钥版本号到环境变量，供 persistence 模块加密新文件时写入文件头
-            std::env::set_var("MPC_STORAGE_KEY_VERSION", self.storage_key_version.to_string());
+            std::env::set_var(
+                "MPC_STORAGE_KEY_VERSION",
+                self.storage_key_version.to_string(),
+            );
         }
         tracing::info!(
             version = self.storage_key_version,
@@ -430,8 +434,7 @@ mod tests {
 
     #[test]
     fn parse_and_validate_sample_config() {
-        let config: PartyConfig =
-            serde_json::from_str(sample_config_json()).expect("parse config");
+        let config: PartyConfig = serde_json::from_str(sample_config_json()).expect("parse config");
         config.validate().expect("validate should pass");
         assert_eq!(config.party_index, 0);
         assert_eq!(config.peers.len(), 2);
@@ -599,7 +602,9 @@ mod tests {
             "tls_ca": "/etc/mpc/tls/ca.crt"
         }"#;
         let config: PartyConfig = serde_json::from_str(json).expect("parse");
-        config.validate().expect("validate should pass (env mode, storage_key optional)");
+        config
+            .validate()
+            .expect("validate should pass (env mode, storage_key optional)");
     }
 
     #[test]
@@ -625,6 +630,8 @@ mod tests {
         let config: PartyConfig = serde_json::from_str(json).expect("parse");
         config.validate().expect("validate (kms warns but passes)");
         let err = config.resolve_storage_key().unwrap_err();
-        assert!(err.to_string().contains("KMS decryption not yet implemented"));
+        assert!(err
+            .to_string()
+            .contains("KMS decryption not yet implemented"));
     }
 }

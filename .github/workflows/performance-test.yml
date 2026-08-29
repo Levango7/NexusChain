@@ -50,7 +50,10 @@ jobs:
     name: k6 Smoke Test (PR)
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'smoke')
-    timeout-minutes: 15
+    # 审计修复：15min → 30min。docker compose 从源码构建 gateway+bridge 两个镜像
+    # （每个含 wrapper 发行包下载 ~130MB + 全量依赖解析，构建容器无 Gradle 缓存），
+    # 15min 内完成两个 Boot 4 镜像构建 + 服务就绪 + k6 冒烟不现实。
+    timeout-minutes: 30
     steps:
       - name: Checkout 代码
         uses: actions/checkout@v4
