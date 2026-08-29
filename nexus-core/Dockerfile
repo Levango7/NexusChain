@@ -62,7 +62,15 @@ RUN zip -d /workspace/app.jar \
     'module-info.class' \
     'META-INF/versions/*/module-info.class' \
     ; echo "=== 验证 module-info.class 已移除 ===" && \
-    (jar tf /workspace/app.jar | grep "module-info.class" || echo "All module-info.class removed!")
+    (jar tf /workspace/app.jar | grep "module-info.class" || echo "All module-info.class removed!") && \
+    echo "=== 验证 org/nexus/Start.class 存在 ===" && \
+    (jar tf /workspace/app.jar | grep "org/nexus/Start.class" || echo "Start.class NOT FOUND!") && \
+    echo "=== jar 文件大小 ===" && \
+    ls -la /workspace/app.jar && \
+    echo "=== MANIFEST.MF ===" && \
+    unzip -p /workspace/app.jar META-INF/MANIFEST.MF | head -10 && \
+    echo "=== javap 检查 Start.class ===" && \
+    (cd /tmp && jar xf /workspace/app.jar org/nexus/Start.class && javap -p org/nexus/Start.class | head -5 || echo "javap FAILED")
 
 
 # === Stage 1.5: directory builder ===
