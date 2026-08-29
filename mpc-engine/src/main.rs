@@ -35,7 +35,7 @@
 // tonic::Status 由框架定义无法修改，在 crate 级别抑制此 lint。
 //
 // dead_code：部分工具函数/结构体在 tls feature 未启用时未使用，属条件编译正常现象。
-#![allow(clippy::result_large_err, dead_code)]
+#![allow(clippy::result_large_err, dead_code, clippy::needless_range_loop)]
 
 use std::net::SocketAddr;
 
