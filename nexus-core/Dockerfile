@@ -109,4 +109,6 @@ EXPOSE 19585
 # JVM 参数：
 #   -XX:+UseContainerSupport      自动识别容器 cgroup 内存限制
 #   -XX:MaxRAMPercentage=75.0     堆上限 = 容器内存 × 75%（预留 25% 给非堆/Metaspace/直接内存）
-ENTRYPOINT ["java", "-XX:+UseContainerSupport", "-XX:MaxRAMPercentage=75.0", "-jar", "app.jar"]
+# 使用 -cp 而非 -jar：-jar 模式下 JarClassLoader 报 ClassNotFoundException
+# （原因待查，可能与 Class-Path manifest 属性交互有关），-cp 使用 AppClassLoader
+ENTRYPOINT ["java", "-XX:+UseContainerSupport", "-XX:MaxRAMPercentage=75.0", "-cp", "app.jar", "org.nexus.Start"]
