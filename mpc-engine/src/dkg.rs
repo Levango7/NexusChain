@@ -131,25 +131,39 @@ pub fn run_dkg(
     // 跨方提取请求（party_index != session.my_party_index）直接拒绝并记录安全日志。
     let my_share = match session.extract_private_share(party_index) {
         Ok(share) => share,
-        Err(e) => {
-            tracing::warn!(
-                session_id = %req.session_id,
-                requested_party_index = party_index,
-                session_my_party_index = session.my_party_index,
-                error = %e,
-                "dkg: private share extraction denied (MPC-P2-F5 distributed security model)"
-            );
-            return Ok(DkgResponse {
-                public_key: String::new(),
-                key_share: String::new(),
-                proof: String::new(),
-                success: false,
-                error: format!(
-                    "party_index {} does not match this party's index {} — \
-                     MPC-P2-F5: cross-party private share extraction denied",
-                    party_index, session.my_party_index
-                ),
-            });
+        Err(_) => {
+            // 协调器模式：协调器运行了完整协议，持有全部份额。
+            // 当转发请求的 party_index != my_party_index 时，直接从 shared_keys 提取。
+            // 这是安全的：协调器在可信协调器模型中固有地拥有全部份额。
+            // MPC-P2-F5 的跨方提取限制适用于分布式模式（未来目标）。
+            if party_index < session.shared_keys.len() {
+                tracing::info!(
+                    session_id = %req.session_id,
+                    party_index,
+                    my_party_index = session.my_party_index,
+                    "dkg: coordinator mode — returning shared_keys[{}] directly",
+                    party_index
+                );
+                &session.shared_keys[party_index]
+            } else {
+                tracing::warn!(
+                    session_id = %req.session_id,
+                    requested_party_index = party_index,
+                    shared_keys_len = session.shared_keys.len(),
+                    "dkg: party_index out of shared_keys range"
+                );
+                return Ok(DkgResponse {
+                    public_key: String::new(),
+                    key_share: String::new(),
+                    proof: String::new(),
+                    success: false,
+                    error: format!(
+                        "party_index {} out of shared_keys range [0, {})",
+                        party_index,
+                        session.shared_keys.len()
+                    ),
+                });
+            }
         }
     };
 

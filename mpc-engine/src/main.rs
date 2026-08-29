@@ -218,9 +218,42 @@ async fn main() -> eyre::Result<()> {
     }
 
     // === 启动 gRPC 服务端 ===
-    // MPC-P2-F5: 若有 party_config，使用 with_party_id 启用 session 身份绑定
+    // MPC-P2-F5: 分布式配置——传递 is_coordinator + forward_tls_config + auth_token
+    let is_coordinator = party_config
+        .as_ref()
+        .map(|cfg| cfg.party_index == 0)
+        .unwrap_or(true);
+
+    #[cfg(feature = "tls")]
+    let forward_tls_config = if let Some(cfg) = &party_config {
+        let cert = std::fs::read(&cfg.tls_cert).ok();
+        let key = std::fs::read(&cfg.tls_key).ok();
+        let ca = std::fs::read(&cfg.tls_ca).ok();
+        match (cert, key, ca) {
+            (Some(c), Some(k), Some(a)) => {
+                let identity = tonic::transport::Identity::from_pem(c, k);
+                let ca_cert = tonic::transport::Certificate::from_pem(a);
+                Some(
+                    tonic::transport::ClientTlsConfig::new()
+                        .identity(identity)
+                        .ca_certificate(ca_cert)
+                        .domain_name("localhost"),
+                )
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
+
     let svc = if !my_party_id.is_empty() {
-        MpcCryptoServiceImpl::with_party_id(my_party_id.clone())
+        MpcCryptoServiceImpl::with_distributed_config(
+            my_party_id.clone(),
+            is_coordinator,
+            #[cfg(feature = "tls")]
+            forward_tls_config,
+            auth_token.clone(),
+        )
     } else {
         MpcCryptoServiceImpl::default()
     };

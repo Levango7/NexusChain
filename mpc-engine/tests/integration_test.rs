@@ -573,8 +573,13 @@ async fn test_sign_wrong_threshold() {
 ///
 /// **注**：本测试会停止并重启 node3，需确保 `scripts/start-mpc-cluster.sh` 的
 /// PID 文件机制可用（`.run/node3.pid`）。
+///
+/// lint 说明：`#[cfg(not(unix))]` 的 panic 分支使后续代码在本平台判定为
+/// unreachable，且 `public_key`/`msg_hash`/`pid` 在非 unix 分支下未消费——
+/// 本测试仅在 Linux CI 运行，函数级 allow 消除跨平台编译的 lint 噪音。
 #[tokio::test]
 #[ignore = "需多节点环境：先 bash scripts/start-mpc-cluster.sh 启动集群"]
+#[allow(unreachable_code, unused_variables)]
 async fn test_node_recovery() {
     wait_all_nodes_healthy(30).await;
 
@@ -756,8 +761,9 @@ async fn test_mtls_handshake() {
         health.status
     );
 
-    // ---------- 2. 负面：无证书连接应失败 ----------
-    // 构造无客户端证书的 Channel，预期 TLS 握手被 server 拒绝
+    // ---------- 2. 负面：无证书 RPC 调用应失败 ----------
+    // tonic 的 connect() 是惰性的，TLS 握手错误只在 RPC 调用时暴露。
+    // 因此需要实际发起 RPC 调用来验证 mTLS 拒绝无客户端证书的连接。
     let ca_pem = read_pem("certs/ca.crt");
     let ca_cert = Certificate::from_pem(ca_pem);
 
@@ -766,16 +772,24 @@ async fn test_mtls_handshake() {
         .domain_name("localhost");
 
     let endpoint: tonic::transport::Endpoint = NODE_ENDPOINTS[1].parse().expect("无效 endpoint");
-    let no_client_cert_result = endpoint
+    let channel = endpoint
         .tls_config(tls_config_no_client)
         .expect("TLS 配置失败")
         .connect()
+        .await
+        .expect("connect() 应成功（tonic 连接是惰性的，TLS 握手在 RPC 调用时才发生）");
+
+    // 无客户端证书的 RPC 调用应被 server 拒绝（mTLS 握手失败）
+    let mut no_cert_client = MpcCryptoServiceClient::new(channel);
+    let rpc_result = no_cert_client
+        .health_check(Request::new(HealthCheckRequest {
+            service: "mpc-engine".to_string(),
+        }))
         .await;
 
-    // 无客户端证书应握手失败（server 要求 mTLS）
     assert!(
-        no_client_cert_result.is_err(),
-        "无客户端证书应被 mTLS server 拒绝，但连接成功——server 可能未启用 mTLS"
+        rpc_result.is_err(),
+        "无客户端证书应被 mTLS server 拒绝（RPC 调用应失败），但调用成功——server 可能未启用 mTLS"
     );
 
     println!("[test_mtls_handshake] ✓ mTLS 握手验证通过：合法证书成功，无证书被拒绝");
@@ -801,6 +815,7 @@ async fn test_mtls_handshake() {
 /// ```
 #[tokio::test]
 #[ignore = "需多节点环境：先 bash scripts/start-mpc-cluster.sh 启动集群"]
+#[allow(unreachable_code, unused_variables)]
 async fn test_sign_with_offline_node() {
     wait_all_nodes_healthy(30).await;
 

@@ -43,6 +43,13 @@ pub struct MpcCryptoServiceImpl {
     /// MPC-P2-F5: 本方 party_id（来自 PartyConfig，用于 session 身份绑定）。
     /// 空字符串表示未配置（兼容旧模式，不启用身份绑定）。
     pub my_party_id: String,
+    /// 协调器转发：true 表示此节点是 DKG/Sign 协调器（party_index=0）。
+    pub is_coordinator: bool,
+    /// 客户端 TLS 配置，用于转发 gRPC 调用到协调器。
+    #[cfg(feature = "tls")]
+    pub forward_tls_config: Option<tonic::transport::ClientTlsConfig>,
+    /// Auth token，用于转发 gRPC 调用。
+    pub auth_token: String,
 }
 
 impl Default for MpcCryptoServiceImpl {
@@ -52,6 +59,10 @@ impl Default for MpcCryptoServiceImpl {
             sign_runs: Mutex::new(HashMap::new()),
             session_mgr: SessionManager::new(),
             my_party_id: String::new(),
+            is_coordinator: true,
+            #[cfg(feature = "tls")]
+            forward_tls_config: None,
+            auth_token: String::new(),
         }
     }
 }
@@ -64,6 +75,32 @@ impl MpcCryptoServiceImpl {
             sign_runs: Mutex::new(HashMap::new()),
             session_mgr: SessionManager::new(),
             my_party_id,
+            is_coordinator: true,
+            #[cfg(feature = "tls")]
+            forward_tls_config: None,
+            auth_token: String::new(),
+        }
+    }
+
+    /// 创建分布式配置的服务实例（MPC-P2-F5 协调器转发模式）。
+    ///
+    /// `is_coordinator` 为 true 时此节点作为协调器（party_index=0）本地执行 DKG/Sign；
+    /// 为 false 时非协调器节点将 DKG/Sign 请求转发到协调器（peer_endpoints[0]）。
+    pub fn with_distributed_config(
+        my_party_id: String,
+        is_coordinator: bool,
+        #[cfg(feature = "tls")] forward_tls_config: Option<tonic::transport::ClientTlsConfig>,
+        auth_token: String,
+    ) -> Self {
+        Self {
+            sessions: Mutex::new(HashMap::new()),
+            sign_runs: Mutex::new(HashMap::new()),
+            session_mgr: SessionManager::new(),
+            my_party_id,
+            is_coordinator,
+            #[cfg(feature = "tls")]
+            forward_tls_config,
+            auth_token,
         }
     }
 
@@ -79,6 +116,87 @@ impl MpcCryptoServiceImpl {
             .map(|_| ())
             .map_err(|e| Status::permission_denied(format!("session identity check failed: {e}")))
     }
+
+    /// 协调器转发：将 DKG 请求转发到协调器节点（peer_endpoints[0]）。
+    ///
+    /// 非协调器节点在本地无缓存会话时调用此方法，将请求转发给协调器，
+    /// 由协调器执行完整 GG20 DKG 并返回对应 party_index 的份额。
+    async fn forward_dkg(
+        &self,
+        req: &DkgRequest,
+        auth_header: Option<&tonic::metadata::MetadataValue>,
+    ) -> Result<Response<DkgResponse>, Status> {
+        let coordinator_endpoint = req
+            .peer_endpoints
+            .get(0)
+            .ok_or_else(|| Status::internal("no coordinator endpoint"))?;
+
+        let channel = self.connect_to_coordinator(coordinator_endpoint).await?;
+        let mut client =
+            crate::proto::mpc_crypto::mpc_crypto_service_client::MpcCryptoServiceClient::new(channel);
+
+        let mut forward_req = Request::new(req.clone());
+        if let Some(auth) = auth_header {
+            forward_req.metadata_mut().insert("authorization", auth.clone());
+        }
+
+        client.dkg(forward_req).await
+    }
+
+    /// 协调器转发：将 Sign 请求转发到协调器节点（peer_endpoints[0]）。
+    ///
+    /// 非协调器节点在本地无缓存签名运行时调用此方法，将请求转发给协调器。
+    async fn forward_sign(
+        &self,
+        req: &SignRequest,
+        auth_header: Option<&tonic::metadata::MetadataValue>,
+    ) -> Result<Response<SignResponse>, Status> {
+        let coordinator_endpoint = req
+            .peer_endpoints
+            .get(0)
+            .ok_or_else(|| Status::internal("no coordinator endpoint"))?;
+
+        let channel = self.connect_to_coordinator(coordinator_endpoint).await?;
+        let mut client =
+            crate::proto::mpc_crypto::mpc_crypto_service_client::MpcCryptoServiceClient::new(channel);
+
+        let mut forward_req = Request::new(req.clone());
+        if let Some(auth) = auth_header {
+            forward_req.metadata_mut().insert("authorization", auth.clone());
+        }
+
+        client.sign(forward_req).await
+    }
+
+    /// 建立到协调器节点的 gRPC Channel。
+    ///
+    /// 当 `forward_tls_config` 已配置时启用 mTLS；否则使用明文连接。
+    async fn connect_to_coordinator(
+        &self,
+        endpoint_str: &str,
+    ) -> Result<tonic::transport::Channel, Status> {
+        let endpoint: tonic::transport::Endpoint = endpoint_str
+            .parse()
+            .map_err(|e| Status::internal(format!("invalid coordinator endpoint '{}': {}", endpoint_str, e)))?;
+
+        #[cfg(feature = "tls")]
+        {
+            if let Some(tls) = &self.forward_tls_config {
+                let endpoint = endpoint
+                    .tls_config(tls.clone())
+                    .map_err(|e| Status::internal(format!("TLS config: {}", e)))?;
+                return endpoint
+                    .connect()
+                    .await
+                    .map_err(|e| Status::internal(format!("connect to coordinator: {}", e)));
+            }
+        }
+
+        endpoint
+            .connect()
+            .await
+            .map_err(|e| Status::internal(format!("connect to coordinator: {}", e)))
+    }
 }
 
 #[tonic::async_trait]
@@ -90,15 +208,31 @@ impl mpc_crypto_service_server::MpcCryptoService for MpcCryptoServiceImpl {
             .remote_addr()
             .map(|a| a.to_string())
             .unwrap_or_else(|| "unknown".to_string());
-        let req = req.into_inner();
+        let auth_header = req.metadata().get("authorization").cloned();
+        let req_inner = req.into_inner();
         tracing::info!(
-            session_id = %req.session_id,
-            threshold = req.threshold,
-            total_parties = req.total_parties,
-            party_index = req.party_index,
+            session_id = %req_inner.session_id,
+            threshold = req_inner.threshold,
+            total_parties = req_inner.total_parties,
+            party_index = req_inner.party_index,
             peer = %peer,
             "rpc Dkg (MPC-P1-05: caller identity logged, MPC-P2-F5: distributed security)"
         );
+
+        // 协调器转发：非协调器节点在无缓存会话时转发到协调器
+        if !self.is_coordinator && req_inner.party_index != 0 && !req_inner.peer_endpoints.is_empty() {
+            let has_session = {
+                let guard = self
+                    .sessions
+                    .lock()
+                    .map_err(|e| Status::internal(format!("lock: {e}")))?;
+                guard.contains_key(&req_inner.session_id)
+            };
+            if !has_session {
+                tracing::info!(session_id = %req_inner.session_id, "forwarding DKG to coordinator");
+                return self.forward_dkg(&req_inner, auth_header.as_ref()).await;
+            }
+        }
 
         // 中10: 在 DKG（创建新 session 的入口）触发过期清理，回收 Closed/超时 session。
         // 选择在 DKG 触发而非 Sign/Aggregate：DKG 是 session 生命周期的起点，
@@ -112,16 +246,26 @@ impl mpc_crypto_service_server::MpcCryptoService for MpcCryptoServiceImpl {
         }
 
         // MPC-P2-F5: 创建 session 并绑定调用方身份（my_party_id 非空时）
-        if !self.my_party_id.is_empty() && !req.session_id.is_empty() && req.party_index >= 0 {
+        // 跳过转发请求的 identity binding（协调器处理转发请求时 party_index != 0）
+        let is_forwarded = self.is_coordinator && req_inner.party_index != 0;
+        if !is_forwarded
+            && !self.my_party_id.is_empty()
+            && !req_inner.session_id.is_empty()
+            && req_inner.party_index >= 0
+        {
             self.session_mgr
-                .create_session(&req.session_id, &self.my_party_id, req.party_index as usize)
+                .create_session(
+                    &req_inner.session_id,
+                    &self.my_party_id,
+                    req_inner.party_index as usize,
+                )
                 .map_err(|e| {
                     Status::permission_denied(format!("session identity binding failed: {e}"))
                 })?;
         }
 
-        let resp =
-            dkg::run_dkg(&self.sessions, req).map_err(|e| Status::internal(format!("dkg: {e}")))?;
+        let resp = dkg::run_dkg(&self.sessions, req_inner)
+            .map_err(|e| Status::internal(format!("dkg: {e}")))?;
         Ok(Response::new(resp))
     }
 
@@ -132,22 +276,40 @@ impl mpc_crypto_service_server::MpcCryptoService for MpcCryptoServiceImpl {
             .remote_addr()
             .map(|a| a.to_string())
             .unwrap_or_else(|| "unknown".to_string());
-        let req = req.into_inner();
+        let auth_header = req.metadata().get("authorization").cloned();
+        let req_inner = req.into_inner();
         tracing::info!(
-            session_id = %req.session_id,
-            party_index = req.party_index,
+            session_id = %req_inner.session_id,
+            party_index = req_inner.party_index,
             peer = %peer,
             "rpc Sign (MPC-P1-05: caller identity logged, MPC-P2-F5: identity check)"
         );
 
-        // MPC-P2-F5: 校验调用方身份与 session 绑定一致
-        // 保存 session_id 供状态转换使用（req 会被 move 进 run_sign）
-        let session_id = req.session_id.clone();
-        if req.party_index >= 0 {
-            self.check_session_identity(&req.session_id, req.party_index as usize)?;
+        // 协调器转发：非协调器节点在无缓存签名运行时转发到协调器
+        if !self.is_coordinator && req_inner.party_index != 0 && !req_inner.peer_endpoints.is_empty() {
+            let has_sign_run = {
+                let guard = self
+                    .sign_runs
+                    .lock()
+                    .map_err(|e| Status::internal(format!("lock: {e}")))?;
+                guard.contains_key(&req_inner.session_id)
+            };
+            if !has_sign_run {
+                tracing::info!(session_id = %req_inner.session_id, "forwarding Sign to coordinator");
+                return self.forward_sign(&req_inner, auth_header.as_ref()).await;
+            }
         }
 
-        let resp = sign::run_sign(&self.sessions, &self.sign_runs, req)
+        // MPC-P2-F5: 校验调用方身份与 session 绑定一致
+        // 保存 session_id 供状态转换使用（req 会被 move 进 run_sign）
+        let session_id = req_inner.session_id.clone();
+        // 跳过转发请求的 identity check（协调器处理转发请求时 party_index != 0）
+        let is_forwarded = self.is_coordinator && req_inner.party_index != 0;
+        if !is_forwarded && req_inner.party_index >= 0 {
+            self.check_session_identity(&req_inner.session_id, req_inner.party_index as usize)?;
+        }
+
+        let resp = sign::run_sign(&self.sessions, &self.sign_runs, req_inner)
             .map_err(|e| Status::internal(format!("sign: {e}")))?;
 
         // MPC-P2-F5: 状态转换 DkgReady -> SignReady（resp.success 时）
