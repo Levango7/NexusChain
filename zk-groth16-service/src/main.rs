@@ -33,7 +33,9 @@ impl Groth16VerifierService for VerifierImpl {
                 Err(e) => VerifyResponse { valid: false, error: format!("{e}") },
             }
         } else {
-            match bridge::bridge_verify(&req.circuit_json) {
+            // 审计修复：gRPC Verify 传入调用方公共输入参与配对验证
+            // （此前忽略，bridge_verify 用 witness 自证自验恒 valid=true）
+            match bridge::bridge_verify(&req.circuit_json, Some(&req.public_inputs_hex)) {
                 Ok(valid) => VerifyResponse { valid, error: String::new() },
                 Err(e) => VerifyResponse { valid: false, error: format!("{e}") },
             }
@@ -102,7 +104,10 @@ struct HttpVerifyResponse {
 async fn http_verify(State(_): State<VerifierImpl>, Json(req): Json<HttpVerifyRequest>) -> Json<HttpVerifyResponse> {
     // 正式电路桥接：Java R1CS JSON → 动态 arkworks 电路 → 真实 Groth16 验证
     if let Some(json) = &req.circuit_json {
-        return match bridge::bridge_verify(&json.to_string()) {
+        // 审计修复：HTTP /v1/verify 的 public_inputs_hex 参与配对验证
+        // （此前被忽略，bridge_verify 用 witness 自证自验恒 valid=true，
+        // E2E 反例"错误公共输入应 valid=false"失败）
+        return match bridge::bridge_verify(&json.to_string(), Some(&req.public_inputs_hex)) {
             Ok(valid) => Json(HttpVerifyResponse { valid, error: String::new() }),
             Err(e) => Json(HttpVerifyResponse { valid: false, error: format!("{e}") }),
         };

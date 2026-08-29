@@ -7,6 +7,7 @@ use ark_snark::SNARK;
 use ark_serialize::{CanonicalDeserialize as _, CanonicalSerialize as _};
 use serde_json::Value;
 use std::collections::BTreeMap;
+use std::str::FromStr;
 
 /// 从 JSON 构建的动态电路。
 #[derive(Clone)]
@@ -124,7 +125,14 @@ fn lc_from_vars(coeffs: &BTreeMap<usize, i64>, vars: &[Variable]) -> LinearCombi
 }
 
 /// 桥接验证：解析 Java R1CS JSON → 动态电路 → 真实 Groth16 prove+verify。
-pub fn bridge_verify(json: &str) -> eyre::Result<bool> {
+///
+/// `public_inputs_override`：调用方声明的公共输入（hex/十进制字符串）。
+/// - `Some(inputs)`：以调用方输入为准做配对验证——证明是电路 witness 满足
+///   约束时生成的，公开输入与证明承诺不匹配则 verify 失败（这是 ZK 验证
+///   的核心语义）。修复前该参数被忽略：bridge_verify 用 witness 自带的
+///   公开部分"自证自验"，任何传入输入都返回 valid=true（E2E 反例失败根因）。
+/// - `None`：回退 witness 派生的公开输入（gRPC/旧调用方兼容路径）。
+pub fn bridge_verify(json: &str, public_inputs_override: Option<&[String]>) -> eyre::Result<bool> {
     let circuit = DynamicCircuit::from_json(json)?;
     let mut rng = StdRng::seed_from_u64(42);
     let pk = ark_groth16::Groth16::<ark_bn254::Bn254>::generate_random_parameters_with_reduction(
@@ -136,7 +144,20 @@ pub fn bridge_verify(json: &str) -> eyre::Result<bool> {
     let num_public = v["num_public"].as_u64().unwrap_or(0) as usize;
     let witness: Vec<u64> = v["witness"].as_array()
         .map(|a| a.iter().map(|x| x.as_u64().unwrap_or(0)).collect()).unwrap_or_default();
-    let public: Vec<Fr> = witness.iter().skip(1).take(num_public).map(|w| Fr::from(*w)).collect();
+    let public: Vec<Fr> = match public_inputs_override {
+        Some(inputs) => {
+            // 调用方传入的公共输入覆盖 witness 派生值。
+            // 输入个数必须与电路公开输入数一致，否则直接失败（fail-closed）。
+            if inputs.len() != num_public {
+                return Ok(false);
+            }
+            let parsed: Result<Vec<Fr>, _> = inputs.iter()
+                .map(|s| Fr::from_str(s))
+                .collect();
+            parsed.map_err(|_| eyre::eyre!("bad public input (hex/decimal string expected)"))?
+        }
+        None => witness.iter().skip(1).take(num_public).map(|w| Fr::from(*w)).collect(),
+    };
     let ok = ark_groth16::Groth16::<ark_bn254::Bn254>::verify(&vk, &public, &proof)?;
     Ok(ok)
 }
@@ -146,6 +167,27 @@ mod tests {
     use super::*;
     use ark_bn254::Bn254;
     use ark_groth16::Groth16;
+
+    /// 审计修复回归：bridge_verify 的公共输入覆盖语义。
+    /// - 正确公开输入（35，x=3 的 x³+x+5）→ valid=true
+    /// - 错误公开输入（36）→ valid=false（修复前恒 true：witness 自证自验）
+    /// - 输入个数与 num_public 不符 → valid=false（fail-closed）
+    /// - None（旧路径）→ witness 派生公开输入，valid=true
+    #[test]
+    fn bridge_verify_public_inputs_override_semantics() {
+        let json = demo_circuit_json();
+        let ok = bridge_verify(&json, Some(&["35".to_string()])).unwrap();
+        assert!(ok, "正确公开输入 35 应通过");
+
+        let wrong = bridge_verify(&json, Some(&["36".to_string()])).unwrap();
+        assert!(!wrong, "错误公开输入 36 应被拒绝（ZK 验证核心语义）");
+
+        let mismatch = bridge_verify(&json, Some(&[])).unwrap();
+        assert!(!mismatch, "公开输入个数与 num_public 不符应 fail-closed");
+
+        let legacy = bridge_verify(&json, None).unwrap();
+        assert!(legacy, "旧路径（None）witness 派生公开输入应通过");
+    }
 
     fn demo_circuit_json() -> String {
         r#"{
