@@ -124,20 +124,24 @@ impl MpcCryptoServiceImpl {
     async fn forward_dkg(
         &self,
         req: &DkgRequest,
-        auth_header: Option<&tonic::metadata::MetadataValue>,
+        auth_header: Option<&tonic::metadata::MetadataValue<tonic::metadata::Ascii>>,
     ) -> Result<Response<DkgResponse>, Status> {
         let coordinator_endpoint = req
             .peer_endpoints
-            .get(0)
+            .first()
             .ok_or_else(|| Status::internal("no coordinator endpoint"))?;
 
         let channel = self.connect_to_coordinator(coordinator_endpoint).await?;
         let mut client =
-            crate::proto::mpc_crypto::mpc_crypto_service_client::MpcCryptoServiceClient::new(channel);
+            crate::proto::mpc_crypto::mpc_crypto_service_client::MpcCryptoServiceClient::new(
+                channel,
+            );
 
         let mut forward_req = Request::new(req.clone());
         if let Some(auth) = auth_header {
-            forward_req.metadata_mut().insert("authorization", auth.clone());
+            forward_req
+                .metadata_mut()
+                .insert("authorization", auth.clone());
         }
 
         client.dkg(forward_req).await
@@ -149,20 +153,24 @@ impl MpcCryptoServiceImpl {
     async fn forward_sign(
         &self,
         req: &SignRequest,
-        auth_header: Option<&tonic::metadata::MetadataValue>,
+        auth_header: Option<&tonic::metadata::MetadataValue<tonic::metadata::Ascii>>,
     ) -> Result<Response<SignResponse>, Status> {
         let coordinator_endpoint = req
             .peer_endpoints
-            .get(0)
+            .first()
             .ok_or_else(|| Status::internal("no coordinator endpoint"))?;
 
         let channel = self.connect_to_coordinator(coordinator_endpoint).await?;
         let mut client =
-            crate::proto::mpc_crypto::mpc_crypto_service_client::MpcCryptoServiceClient::new(channel);
+            crate::proto::mpc_crypto::mpc_crypto_service_client::MpcCryptoServiceClient::new(
+                channel,
+            );
 
         let mut forward_req = Request::new(req.clone());
         if let Some(auth) = auth_header {
-            forward_req.metadata_mut().insert("authorization", auth.clone());
+            forward_req
+                .metadata_mut()
+                .insert("authorization", auth.clone());
         }
 
         client.sign(forward_req).await
@@ -175,9 +183,12 @@ impl MpcCryptoServiceImpl {
         &self,
         endpoint_str: &str,
     ) -> Result<tonic::transport::Channel, Status> {
-        let endpoint: tonic::transport::Endpoint = endpoint_str
-            .parse()
-            .map_err(|e| Status::internal(format!("invalid coordinator endpoint '{}': {}", endpoint_str, e)))?;
+        let endpoint: tonic::transport::Endpoint = endpoint_str.parse().map_err(|e| {
+            Status::internal(format!(
+                "invalid coordinator endpoint '{}': {}",
+                endpoint_str, e
+            ))
+        })?;
 
         #[cfg(feature = "tls")]
         {
@@ -220,7 +231,10 @@ impl mpc_crypto_service_server::MpcCryptoService for MpcCryptoServiceImpl {
         );
 
         // 协调器转发：非协调器节点在无缓存会话时转发到协调器
-        if !self.is_coordinator && req_inner.party_index != 0 && !req_inner.peer_endpoints.is_empty() {
+        if !self.is_coordinator
+            && req_inner.party_index != 0
+            && !req_inner.peer_endpoints.is_empty()
+        {
             let has_session = {
                 let guard = self
                     .sessions
@@ -286,7 +300,10 @@ impl mpc_crypto_service_server::MpcCryptoService for MpcCryptoServiceImpl {
         );
 
         // 协调器转发：非协调器节点在无缓存签名运行时转发到协调器
-        if !self.is_coordinator && req_inner.party_index != 0 && !req_inner.peer_endpoints.is_empty() {
+        if !self.is_coordinator
+            && req_inner.party_index != 0
+            && !req_inner.peer_endpoints.is_empty()
+        {
             let has_sign_run = {
                 let guard = self
                     .sign_runs
