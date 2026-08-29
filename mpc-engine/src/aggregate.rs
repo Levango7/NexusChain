@@ -6,7 +6,6 @@
 //! 本聚合步骤完成：份额求和、低 s 归一化（ECDSA 规范）、使用聚合公钥对消息哈希
 //! 做标准 secp256k1 验证，输出 signature = r || s（hex）。
 
-
 use curv::elliptic::curves::{secp256_k1::Secp256k1, Scalar};
 
 use crate::gg20;
