@@ -10,7 +10,7 @@
 //!   - node2 → 127.0.0.1:50052（party_index=1, party_id="party-1"）
 //!   - node3 → 127.0.0.1:50053（party_index=2, party_id="party-2"）
 //!
-//! 阈值签名参数：2-of-3（threshold=2, total_parties=3）。
+//! 阈值签名参数：2-of-3（threshold=1, total_parties=3；GG20 中 threshold=t 意味着 t+1 方签名）。
 //!
 //! ## 运行前置条件
 //!
@@ -60,7 +60,7 @@
 //! |------|----------|
 //! | `test_dkg_3_nodes` | 3 节点 DKG，各节点获得一致聚合公钥 |
 //! | `test_sign_2_of_3` | 2 节点协作签名，签名可由聚合公钥验证 |
-//! | `test_sign_wrong_threshold` | 1 节点签名（低于 threshold=2）应失败 |
+//! | `test_sign_wrong_threshold` | 1 节点签名（低于 threshold+1=2）应失败 |
 //! | `test_node_recovery` | 节点重启后从 WAL 恢复会话 |
 //! | `test_mtls_handshake` | mTLS 双向证书握手验证 |
 //!
@@ -102,7 +102,8 @@ const NODE_ENDPOINTS: [&str; 3] = [
 const PARTY_INDICES: [i32; 3] = [0, 1, 2];
 
 /// 阈值签名参数：2-of-3。
-const THRESHOLD: i32 = 2;
+/// GG20 中 threshold=t 意味着任意 t+1 方可签名，故 2-of-3 对应 threshold=1。
+const THRESHOLD: i32 = 1;
 const TOTAL_PARTIES: i32 = 3;
 
 /// gRPC Bearer 认证 token（与 start-mpc-cluster.sh 中 MPC_AUTH_TOKEN 一致）。
@@ -329,7 +330,7 @@ async fn test_dkg_3_nodes() {
     );
 }
 
-/// ## test_sign_2_of_3：2 节点协作签名（threshold=2）
+/// ## test_sign_2_of_3：2 节点协作签名（2-of-3，threshold=1）
 ///
 /// **验证内容**：
 /// 1. 先执行 3 节点 DKG，获得聚合公钥与各方份额
@@ -540,7 +541,7 @@ async fn test_sign_wrong_threshold() {
     // ---------- 4. 预期聚合失败 ----------
     assert!(
         !agg_resp.success,
-        "聚合应失败（仅 1 个部分签名 < threshold=2），但返回 success=true: r={}, s={}",
+        "聚合应失败（仅 1 个部分签名 < threshold+1=2），但返回 success=true: r={}, s={}",
         agg_resp.r, agg_resp.s
     );
 
@@ -805,7 +806,7 @@ async fn test_mtls_handshake() {
 ///
 /// **协议背景**：
 /// GG20 阈值签名要求至少 threshold 个参与方协作。2-of-3 下 1 节点离线时，
-/// 剩余 2 节点仍满足 threshold=2，可独立完成签名——这是门限容错的直接证据
+/// 剩余 2 节点仍满足 threshold+1=2，可独立完成签名——这是门限容错的直接证据
 /// （t-1 节点宕机仍可签名，B2 计划 G3 关闭）。
 ///
 /// **运行方式**：

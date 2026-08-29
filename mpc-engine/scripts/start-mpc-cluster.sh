@@ -50,8 +50,8 @@ NODES=(
     "node2|50052|1|party-1"
     "node3|50053|2|party-2"
 )
-# 阈值签名参数：2-of-3（threshold=2, total_parties=3）
-THRESHOLD=2
+# 阈值签名参数：2-of-3（threshold=1, total_parties=3；GG20 中 threshold=t 意味着 t+1 方签名）
+THRESHOLD=1
 TOTAL_PARTIES=3
 
 # ---------- 参数 ----------
@@ -358,7 +358,7 @@ fi
 # ---------- 启动完成 ----------
 echo ""
 log "=========================================="
-log " MPC 集群已启动（${TOTAL_PARTIES} 节点, threshold=${THRESHOLD}-of-${TOTAL_PARTIES}）"
+log " MPC 集群已启动（${TOTAL_PARTIES} 节点, $((THRESHOLD+1))-of-${TOTAL_PARTIES} 签名）"
 log "=========================================="
 for entry in "${NODES[@]}"; do
     IFS='|' read -r name port idx pid_id <<< "${entry}"
