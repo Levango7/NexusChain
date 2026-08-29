@@ -33,7 +33,9 @@
 // gRPC 服务方法返回 Result<_, tonic::Status>，tonic::Status 为 176 字节，
 // 触发 clippy::result_large_err（perf lint，阈值 128 字节）。
 // tonic::Status 由框架定义无法修改，在 crate 级别抑制此 lint。
-#![allow(clippy::result_large_err)]
+//
+// dead_code：部分工具函数/结构体在 tls feature 未启用时未使用，属条件编译正常现象。
+#![allow(clippy::result_large_err, dead_code)]
 
 use std::net::SocketAddr;
 
