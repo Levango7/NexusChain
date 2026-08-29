@@ -53,6 +53,14 @@ RUN TRAVIS_BRANCH=master ./gradlew :nexus-core:nexus-core:fatJar --no-daemon -x 
 # 嵌套项目 build 目录：nexus-core/nexus-core/build/libs/
 RUN find /workspace/nexus-core/nexus-core/build/libs -name '*-all.jar' \
     -exec cp {} /workspace/app.jar \;
+# 剥离 module-info.class：依赖中的 module-info.class 会导致 JVM 将 fat jar
+# 视为模块化 jar，限制只有导出包的类可访问（org.nexus.Start 不在导出包中，
+# 报 ClassNotFoundException）。Gradle exclude '**/module-info.class' 可能
+# 因 Ant 模式匹配差异未覆盖根级文件，此处用 zip -d 确保彻底移除。
+RUN zip -d /workspace/app.jar \
+    'module-info.class' \
+    'META-INF/versions/*/module-info.class' \
+    || true
 
 
 # === Stage 1.5: directory builder ===
