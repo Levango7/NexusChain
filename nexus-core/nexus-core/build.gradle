@@ -198,7 +198,10 @@ dependencies {
     implementation group: 'commons-io', name: 'commons-io', version: '2.14.0'
     implementation "org.springframework.boot:spring-boot-starter-jdbc"
     implementation "org.springframework.boot:spring-boot-starter-logging"
-    implementation group: 'org.apache.commons', name: 'commons-dbcp2', version: '2.9.0'
+    // TD-17：去硬编码版本，交由 Boot 4.0.8 BOM 管理（2.13.0）。
+    // 2.9.0 缺少 DataSourceMXBean.getUserName()，Spring Boot 4.0.8 的
+    // DataSourceBuilder$MappedDbcp2DataSource 调用该方法导致 NoSuchMethodError。
+    implementation 'org.apache.commons:commons-dbcp2'
     implementation group: 'org.hibernate.validator', name: 'hibernate-validator', version: "${hibernateValidatorVersion}"
     implementation group: 'org.apache.httpcomponents', name: 'httpclient', version: '4.5.14'
 
@@ -228,6 +231,13 @@ dependencies {
     implementation('org.web3j:core:4.11.0') {
         exclude group: 'tech.pegasys', module: 'jc-kzg-4844'
     }
+    // Trivy 安全修复（thin jar + lib/ 方案后 Trivy 可扫描独立依赖 jar）：
+    // - c3p0 0.9.5.4 → 0.12.0：CVE-2026-27830 Arbitrary Code Execution
+    // - mchange-commons-java 0.2.15 → 0.6.0：CVE-2026-27727 + CVE-2026-55153 RCE
+    // - okhttp 4.9.0 → 4.12.0：CVE-2021-0341 信息泄露
+    implementation 'com.mchange:c3p0:0.12.0'
+    implementation 'com.mchange:mchange-commons-java:0.6.0'
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
     // REQ-11/P2: jjwt 升级到 0.12.x 获取安全修复
     implementation group: 'io.jsonwebtoken', name: 'jjwt-api', version: '0.12.6'
     implementation group: 'io.jsonwebtoken', name: 'jjwt-impl', version: '0.12.6'
