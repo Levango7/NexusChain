@@ -44,8 +44,14 @@ regexes = [
     '''0123456789abcdef''',
     # 开发默认 auth token（docker-compose / start-node.bat 共用）
     '''dev-mpc-engine-token-change-in-prod''',
-    # Nacos 3.x 鉴权占位 token（docker-compose.yml dev 凭据，仅本机网络可达）
+    # Nacos 3.x 鉴权占位 token（docker-compose.yml dev 凭据，仅本机网络可达）。
+    # 两种形态都精确豁免：token 的 base64 体（SecretKey+60 数字）与
+    # 环境变量注入形式的完整默认值（远端 gitleaks-action 最新版规则
+    # generic-api-key 命中 NACOS_AUTH_TOKEN=<值> 整行，本地旧版不命中，
+    # 故对两种写法都加白）。占位值本身即 nacos 官方文档示例串，非真实密钥。
     '''SecretKey[0-9]{60}''',
+    '''NACOS_AUTH_TOKEN=SecretKey[0-9]{60}''',
+    '''NACOS_AUTH_TOKEN=\$\{NACOS_AUTH_TOKEN:-SecretKey[0-9]{60}\}''',
     # 测试专用 JWT 样例（注释中，含 hmac secret 的 demo token）
     '''eyJhbGciOiJIUzI1NiJ9\.eyJqdGkiOiIxIiwiaWF0IjoxNTcyNDE2MTYw''',
     # 代码标识符误报：generic-api-key 规则将类型名/参数名误判为密钥

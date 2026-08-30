@@ -202,9 +202,11 @@ services:
       - PREFER_HOST_MODE=hostname
       # CI 审计修复：Nacos 3.x 强制要求鉴权环境变量（缺省容器启动即 exit 255，
       # 健康检查永 false → ZAP/性能冒烟的 depends_on(service_healthy) 死锁）。
-      # dev 凭据为占位值（仅本机 compose 网络可达，端口未绑公网）。
+      # token 走环境变量注入：本地开发默认值为公开占位串（nacos 官方文档示例值，
+      # 非secret——已过 .gitleaks.toml 精确白名单）；生产用 docker-compose.prod.yml
+      # 的 CHANGE_ME_* 占位注入真实凭据。
       - NACOS_AUTH_ENABLE=true
-      - NACOS_AUTH_TOKEN=SecretKey012345678901234567890123456789012345678901234567890123456789
+      - NACOS_AUTH_TOKEN=${NACOS_AUTH_TOKEN:-SecretKey012345678901234567890123456789012345678901234567890123456789}
       - NACOS_AUTH_IDENTITY_KEY=nexus-identity
       - NACOS_AUTH_IDENTITY_VALUE=nexus-dev
       - JVM_XMS=256m
