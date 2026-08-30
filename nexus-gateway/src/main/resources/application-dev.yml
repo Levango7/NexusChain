@@ -30,6 +30,15 @@ spring:
   autoconfigure:
     exclude:
       - org.apache.seata.spring.boot.autoconfigure.SeataAutoConfiguration
+      - org.apache.seata.spring.boot.autoconfigure.SeataDataSourceAutoConfiguration
+      - com.alibaba.cloud.seata.SeataAutoConfiguration
+
+# Seata 禁用：dev/DAST 无 TC server，且 SeataAutoDataSourceProxyCreator
+# 会对 H2 DataSource 创建代理并报 "AT mode don't support the dbtype: h2"
+seata:
+  enabled: false
+  enable-auto-data-source-proxy: false
+  data-source-proxy-mode: off
 
 # Dev-mode: skip real chain confirmation when core node is not running
 nexus:
