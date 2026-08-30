@@ -57,20 +57,23 @@ RUN find /workspace/nexus-core/nexus-core/build/libs -name '*-all.jar' \
 # 视为模块化 jar，限制只有导出包的类可访问（org.nexus.Start 不在导出包中，
 # 报 ClassNotFoundException）。Gradle exclude '**/module-info.class' 可能
 # 因 Ant 模式匹配差异未覆盖根级文件，此处用 zip -d 确保彻底移除。
-RUN apt-get update && apt-get install -y --no-install-recommends zip
-RUN zip -d /workspace/app.jar \
-    'module-info.class' \
-    'META-INF/versions/*/module-info.class' \
-    ; echo "=== 验证 module-info.class 已移除 ===" && \
-    (jar tf /workspace/app.jar | grep "module-info.class" || echo "All module-info.class removed!") && \
-    echo "=== 验证 org/nexus/Start.class 存在 ===" && \
-    (jar tf /workspace/app.jar | grep "org/nexus/Start.class" || echo "Start.class NOT FOUND!") && \
-    echo "=== jar 文件大小 ===" && \
-    ls -la /workspace/app.jar && \
-    echo "=== MANIFEST.MF ===" && \
-    unzip -p /workspace/app.jar META-INF/MANIFEST.MF | head -10 && \
+# 诊断：检查 fat jar 是否包含主类 org.nexus.Start
+RUN echo "=== jar 内容前 30 行 ===" && \
+    jar tf /workspace/app.jar | head -30 && \
+    echo "=== 检查 org/nexus/Start.class ===" && \
+    (jar tf /workspace/app.jar | grep "org/nexus/Start.class" || echo "NOT FOUND") && \
+    echo "=== org/nexus/ 下的类（前 30 行）===" && \
+    jar tf /workspace/app.jar | grep "org/nexus/" | head -30 && \
+    echo "=== jar 总条目数 ===" && \
+    jar tf /workspace/app.jar | wc -l && \
+    echo "=== 检查 module-info.class ===" && \
+    (jar tf /workspace/app.jar | grep "module-info.class" || echo "NO module-info") && \
+    echo "=== MANIFEST.MF 内容 ===" && \
+    unzip -p /workspace/app.jar META-INF/MANIFEST.MF | head -20 && \
     echo "=== javap 检查 Start.class ===" && \
-    (cd /tmp && jar xf /workspace/app.jar org/nexus/Start.class && javap -p org/nexus/Start.class | head -5 || echo "javap FAILED")
+    (cd /tmp && jar xf /workspace/app.jar org/nexus/Start.class && javap -p org/nexus/Start.class | head -5 || echo "javap FAILED") && \
+    echo "=== Start.class major version ===" && \
+    (cd /tmp && xxd org/nexus/Start.class | head -2)
 
 
 # === Stage 1.5: directory builder ===
@@ -89,7 +92,7 @@ COPY --from=builder /workspace/app.jar app.jar
 # busybox 静态二进制（~1.2MB，无动态依赖）：仅用于 compose healthcheck（wget）。
 # distroless 无 curl/wget/shell，注入单个静态 busybox 提供 wget 子命令，
 # 不引入 shell 与包管理器，保持最小攻击面（DAST 修复 2026-08-28）。
-COPY --from=busybox:1.36.1 /bin/busybox /busybox
+COPY --from=busybox:musl /bin/busybox /busybox
 # 创建 nonroot 用户可写目录：
 # - /app/leveldb：LevelDB 缓存（nexus.cache-dir 为空时回退到 user.dir + "/leveldb"）
 # - /app/data：链上状态快照持久化（nexus.chain.state-dir 默认 ./data/）
@@ -109,7 +112,5 @@ EXPOSE 19585
 # JVM 参数：
 #   -XX:+UseContainerSupport      自动识别容器 cgroup 内存限制
 #   -XX:MaxRAMPercentage=75.0     堆上限 = 容器内存 × 75%（预留 25% 给非堆/Metaspace/直接内存）
-# 使用 -cp 而非 -jar：-jar 模式下 JarClassLoader 报 ClassNotFoundException
-# （原因待查，可能与 Class-Path manifest 属性交互有关），-cp 使用 AppClassLoader
-# 诊断：先检查 jar 文件再启动
-ENTRYPOINT ["/busybox", "sh", "-c", "echo '=== /app/ 内容 ===' && /busybox ls -la /app/ && echo '=== jar 大小 ===' && /busybox wc -c /app/app.jar && echo '=== 启动 ===' && java -XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0 -cp app.jar org.nexus.Start"]
+# 诊断：先打印 java 版本再启动
+ENTRYPOINT ["/busybox", "sh", "-c", "java -version 2>&1 && echo '=== Starting app ===' && java -XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0 -jar app.jar"]
