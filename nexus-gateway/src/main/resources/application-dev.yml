@@ -10,6 +10,13 @@ management:
   endpoint:
     health:
       show-details: always
+  health:
+    redis:
+      enabled: false
+    # discoveryComposite 报 UNKNOWN（Discovery Client not initialized），
+    # 不影响整体状态（UNKNOWN 不导致 DOWN），但禁用以清洁健康响应。
+    discovery:
+      enabled: false
 
 spring:
   datasource:
