@@ -438,7 +438,7 @@ jobs:
         run: |
           mkdir -p reports/zap
           docker run --rm -t --network=host \
-            -v $(pwd)/reports/zap:/zap/reports:rw \
+            -v $(pwd)/reports/zap:/zap/wrk:rw \
             zaproxy/zap-stable zap-baseline.py \
             -t http://localhost:8080 \
             -r zap-report.html \
