@@ -1,6 +1,7 @@
 package org.nexus.gateway.health;
 
 import org.nexus.sdk.client.feign.WalletMgmtFeignClient;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.health.contributor.Health;
 import org.springframework.boot.health.contributor.HealthIndicator;
 import org.springframework.stereotype.Component;
@@ -22,6 +23,7 @@ import org.springframework.stereotype.Component;
  * <p>设计文档 §4.6.3 服务健康检查增强。</p>
  */
 @Component("walletServiceHealth")
+@ConditionalOnProperty(name = "nexus.health.downstream-indicators.enabled", havingValue = "true", matchIfMissing = true)
 public class WalletServiceHealthIndicator implements HealthIndicator {
 
     private static final String PROBE_ADDRESS = "NEX0000000000000000000000000000000000";

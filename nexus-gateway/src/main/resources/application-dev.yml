@@ -91,6 +91,12 @@ nexus:
   # Dev/DAST 环境禁用 Nacos 服务发现（见上方 spring.cloud.nacos.discovery.enabled: false）
   nacos:
     enabled: false
+  # Dev/DAST 环境无下游服务（signing-service, wallet-service, chain node），
+  # 自定义 HealthIndicator 探测这些服务会报 DOWN → /actuator/health 返回 503。
+  # 禁用下游健康指标，仅保留标准健康指标（ping, db, diskSpace）。
+  health:
+    downstream-indicators:
+      enabled: false
   # === Dev/DAST 环境无 Kafka broker ===
   # KafkaEventStore（@ConditionalOnProperty matchIfMissing=true）默认使用 kafka，
   # DeadLetterQueueService 同理。dev 环境切换到内存实现，避免 KafkaTemplate bean 缺失。

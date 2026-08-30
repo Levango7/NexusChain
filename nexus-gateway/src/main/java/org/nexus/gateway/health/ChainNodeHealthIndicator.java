@@ -2,6 +2,7 @@ package org.nexus.gateway.health;
 
 import org.nexus.gateway.config.GatewayConfig;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.health.contributor.Health;
 import org.springframework.boot.health.contributor.HealthIndicator;
 import org.springframework.stereotype.Component;
@@ -13,6 +14,7 @@ import org.springframework.web.client.RestTemplate;
  * <p>性能优化（任务 #310）：注入共享的连接池化 RestTemplate。</p>
  */
 @Component
+@ConditionalOnProperty(name = "nexus.health.downstream-indicators.enabled", havingValue = "true", matchIfMissing = true)
 public class ChainNodeHealthIndicator implements HealthIndicator {
 
     private final GatewayConfig config;

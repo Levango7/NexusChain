@@ -1,6 +1,7 @@
 package org.nexus.gateway.health;
 
 import org.nexus.sdk.client.feign.SigningServiceFeignClient;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.health.contributor.Health;
 import org.springframework.boot.health.contributor.HealthIndicator;
 import org.springframework.stereotype.Component;
@@ -25,6 +26,7 @@ import java.util.Map;
  * <p>设计文档 §4.6.3 服务健康检查增强。</p>
  */
 @Component("signingServiceHealth")
+@ConditionalOnProperty(name = "nexus.health.downstream-indicators.enabled", havingValue = "true", matchIfMissing = true)
 public class SigningServiceHealthIndicator implements HealthIndicator {
 
     private final SigningServiceFeignClient signingServiceClient;
