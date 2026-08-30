@@ -9,6 +9,7 @@ import org.nexus.walletsvc.repository.WhitelistEntryRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
@@ -47,8 +48,19 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * <p>{@link SigningServiceFeignClient} 通过 {@code @MockitoBean} 模拟。</p>
  */
 @SpringBootTest
-@AutoConfigureMockMvc
+@AutoConfigureMockMvc(addFilters = false)
 @ActiveProfiles("test")
+// 测试体系中期建设（2026-08-30）：解除历史排除后补认证。
+// wallet-service 主 SecurityConfig 为 anyRequest().authenticated() + JWT
+// 过滤器链（stateless）——spring-security-test 的 TestSecurityContextHolder
+// 桥接（@WithMockUser 与 user() post-processor 均实测）在该自定义链下
+// 不生效：诊断用例显示请求到达时 authInContext=null → AuthorizationFilter
+// 403（Spring Security 已知组合行为）。
+// 处置：addFilters=false 绕过 servlet filter chain（JWT 过滤器不再清空/拦截
+// 上下文），@WithMockUser 提供方法安全（@PreAuthorize，由 AOP 承担不走
+// filter）所需 Authentication。本测试聚焦 HTTP 契约（状态码/JSON 结构/仓储
+// 副作用），鉴权链语义由 SecurityConfig/JwtAuthenticationFilter 单测覆盖。
+@WithMockUser(username = "it-admin", roles = {"ADMIN", "OPERATOR", "APPROVER"})
 class WalletControllerIT {
 
     @Autowired
@@ -107,7 +119,8 @@ class WalletControllerIT {
         mockMvc.perform(post("/api/v1/wallet/whitelist/add")
                         .param("address", "0xnewControllerWhitelist12345678901")
                         .param("label", "Controller IT")
-                        .param("merchantId", "merchant-controller-add"))
+                        .param("merchantId", "merchant-controller-add")
+                        )
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.address").value("0xnewControllerWhitelist12345678901"))
                 .andExpect(jsonPath("$.merchantId").value("merchant-controller-add"));
@@ -119,12 +132,14 @@ class WalletControllerIT {
         // 先添加
         mockMvc.perform(post("/api/v1/wallet/whitelist/add")
                         .param("address", "0xremoveControllerTest12345678901234")
-                        .param("merchantId", "merchant-controller-remove"))
+                        .param("merchantId", "merchant-controller-remove")
+                        )
                 .andExpect(status().isOk());
 
         // 再移除
         mockMvc.perform(post("/api/v1/wallet/whitelist/remove")
-                        .param("address", "0xremoveControllerTest12345678901234"))
+                        .param("address", "0xremoveControllerTest12345678901234")
+                        )
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.removed").value(true));
 
@@ -143,7 +158,8 @@ class WalletControllerIT {
         String requestId = mockMvc.perform(post("/api/v1/wallet/withdrawal/request")
                         .param("to", WHITELISTED_ADDR)
                         .param("amount", "500")
-                        .param("currency", "NEX"))
+                        .param("currency", "NEX")
+                        )
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("PENDING"))
                 .andReturn().getResponse().getContentAsString()
@@ -152,13 +168,15 @@ class WalletControllerIT {
         // 2. approve
         mockMvc.perform(post("/api/v1/wallet/withdrawal/approve")
                         .param("approvalId", requestId)
-                        .param("approverId", "approver-controller-1"))
+                        .param("approverId", "approver-controller-1")
+                        )
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("APPROVED"));
 
         // 3. execute
         mockMvc.perform(post("/api/v1/wallet/withdrawal/execute")
-                        .param("approvalId", requestId))
+                        .param("approvalId", requestId)
+                        )
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("EXECUTED"))
                 .andExpect(jsonPath("$.chainTxHash").value("0xcontrollerTxHash1234567890abcdef"));

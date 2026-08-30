@@ -91,15 +91,15 @@ jobs:
       # 这些测试覆盖核心安全不变量，单独显式执行以确保被运行（即使其他测试被 skip）。
       # - ReplayProtectionTest：跨链消息重放保护（双花防御核心）
       # - DefaultInsuranceFundTest：保险基金账本守恒（桥资金守恒）
-      # - MpcEndToEndTest：MPC 门限签名端到端（t-of-n 阈值签名正确性）
-      - name: 关键回归测试（双花防御 / 桥资金守恒 / 门限签名）
+      # - MpcEndToEndTest：MPC 门限签名端到端（t-of-n 阈值签名正确性）——
+      #   时序修正（2026-08-30 审计）：此前在本步骤执行，位于 Rust 3 节点集群
+      #   启动【之前】，assumeTrue(healthy) 恒 false → CI 中此"关键门禁"实际
+      #   永远静默跳过。现移至下方 "MPC distributed E2E" 集群启动之后执行。
+      - name: 关键回归测试（双花防御 / 桥资金守恒）
         run: |
           ./gradlew :nexus-bridge:test \
             --tests "org.nexus.bridge.security.ReplayProtectionTest" \
             --tests "org.nexus.bridge.safety.DefaultInsuranceFundTest" \
-            --no-daemon
-          ./gradlew :nexus-signing-service:test \
-            --tests "org.nexus.signing.mpc.MpcEndToEndTest" \
             --no-daemon
 
       # P2-C6: Rust 测试（mpc-engine）
@@ -151,6 +151,16 @@ jobs:
           bash scripts/start-mpc-cluster.sh -d
           trap 'bash scripts/start-mpc-cluster.sh -k' EXIT
           cargo test --features tls --test integration_test
+
+      # MPC Java E2E（时序修正后移到此处）：Rust 3 节点集群已由上一步启动，
+      # MpcEndToEndTest 的 assumeTrue(healthy) 现在实际可达——真实执行
+      # DKG→Sign→Aggregate→ECDSA 验签的门限签名 Java 侧回归。
+      # 集群由上方 trap 在 job 结束时统一清理，此处无需重复。
+      - name: MPC Java E2E (MpcEndToEndTest, after cluster start)
+        run: |
+          ./gradlew :nexus-signing-service:test \
+            --tests "org.nexus.signing.mpc.MpcEndToEndTest" \
+            --no-daemon
 
       # P2-C7 / ZK-A1-R5(a): zk-groth16-service 单测（bridge 动态电路 + 仪式导入回归）
       # 复用上方已安装的 Rust 工具链；bridge.rs 内含 #[cfg(test)] 单测（真实 Groth16 往返）。
@@ -283,6 +293,60 @@ jobs:
             echo ">>> ${MODULE_NAME} migration OK"
             echo "::endgroup::"
           done
+
+  # ============================================================
+  # Hardhat L1/L2 E2E（测试体系中期建设 2026-08-30）
+  # ------------------------------------------------------------
+  # 审计缺口：5 个 Hardhat 集成测试类（L2L1EndToEndTest/OnChainGovernance×2/
+  # BridgeFullLifecycle/PaymentFlow/ValidationPipeline，46 用例）此前仅在
+  # 本地手动运行——测试自带 assumeTrue 优雅跳过，CI 中装了 Node 也从未
+  # 显式执行，属"影子测试资产"。
+  # 环境：Node 22 LTS（Hardhat EDR 与 Node 25 不兼容，见 docs/testing/
+  # skipped-tests.md §2.1）+ JDK 17。测试基类自适应：npm install →
+  # 启动 npx hardhat node → 部署合约，任一步失败即整类跳过（不红）。
+  # 首轮观察模式（continue-on-error）：远端跑通后移除该标记转为强制门禁。
+  # ============================================================
+  hardhat-e2e:
+    name: Hardhat L1/L2 E2E (Node 22)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 30
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v4
+
+      - name: Setup JDK 17 (Amazon Corretto)
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'corretto'
+          cache: gradle
+
+      - name: Setup Node 22 (Hardhat EDR 兼容 LTS)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: nexus-core/nexus-core/src/test/resources/l1-test/package-lock.json
+
+      # l1-test npm 依赖预装（测试基类 @BeforeAll 检测 node_modules 存在则跳过安装，
+      # 预装可显著缩短测试内启动路径并使依赖问题在本步骤独立暴露）
+      - name: Pre-install l1-test npm dependencies
+        working-directory: nexus-core/nexus-core/src/test/resources/l1-test
+        run: npm ci --no-audit --no-fund
+
+      - name: Hardhat E2E（5 个集成测试类）
+        run: |
+          ./gradlew :nexus-core:nexus-core:test \
+            --tests "org.nexus.l2.integration.L2L1EndToEndTest" \
+            --tests "org.nexus.governance.OnChainGovernanceIntegrationTest" \
+            --tests "org.nexus.governance.GovernanceExecutorOnChainIntegrationTest" \
+            --tests "org.nexus.integration.BridgeFullLifecycleIntegrationTest" \
+            --tests "org.nexus.integration.ValidationPipelineIntegrationTest" \
+            --no-daemon --info 2>&1 | tee hardhat-e2e-output.log
+          # 台账自约束（docs/testing/skipped-tests.md §5.4）：CI 须报告跳过数
+          echo "===== Hardhat E2E 跳过/执行统计 ====="
+          grep -cE "Skipped|skipped" hardhat-e2e-output.log || echo "0 skipped lines"
 
   # ============================================================
   # CD：master 分支构建并推送 Docker 镜像到 GitHub Container Registry

@@ -118,7 +118,9 @@ NexusChain v2.0.0-rc1 当前共有 **9 个被跳过的测试**，分布在 4 个
 **历史状态**：被 nexus-wallet-service/build.gradle `excludeTestsMatching` 排除（未在本台账登记——审计"台账不完整"的实证），排除理由为"需要 Nacos 等外部基础设施"。
 **解除依据**：该测试 `@ActiveProfiles("test")` 使用 H2 + `@MockitoBean`（application-test.yml 已禁用 Seata/Nacos/Sentinel），不依赖任何外部基础设施——排除理由已不成立。它是唯一的提现事务回滚安全路径覆盖（signing 失败 → FAILED 状态保留 rejectionReason 供排查）。解除后对断言做了对齐修正（rejectionReason 记录具体错误串而非 'execution failed' 前缀，以生产实现语义为准）。
 **当前状态**：已纳入常规 `test` 门禁，本地全绿。
-**仍排除**：WalletControllerIT（真实 HTTP 集成测试，需容器化环境，属 CI-with-Nacos 场景）。
+**同步更新（2026-08-30 第二批）**：WalletControllerIT 亦解除排除——同为 test profile 的 H2 自包含 MockMvc 设计。其 403 根因（JWT 过滤器链下 spring-security-test 桥接失效，经诊断用例实证 authInContext=null）以 `@AutoConfigureMockMvc(addFilters=false)` + `@WithMockUser` 组合解决：绕过 servlet filter chain，方法级 @PreAuthorize 由 AOP 承担正常鉴权。鉴权链语义由 SecurityConfig/JwtAuthenticationFilter 单测覆盖，本测试聚焦 HTTP 契约。7 用例全绿，纳入常规门禁。
+
+另：Hardhat L1/L2 E2E（5 测试类/46 用例）已以独立 CI job 纳入（Node 22 LTS，首轮 continue-on-error 观察模式）——本台账 §2.1 的"CI 中不可运行"状态就此变更：CI 环境具备运行条件，跳过仅发生在环境故障时（自适应 assumeTrue）。
 
 ---
 
