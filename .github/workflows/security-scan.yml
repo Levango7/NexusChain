@@ -444,8 +444,7 @@ jobs:
             -r zap-report.html \
             -x zap-report.xml \
             -J zap-report.json \
-            -I \
-            --base-line-url http://localhost:8080/actuator/health
+            -I
 
       - name: 上传 ZAP 报告
         if: always()
