@@ -112,5 +112,5 @@ EXPOSE 19585
 # JVM 参数：
 #   -XX:+UseContainerSupport      自动识别容器 cgroup 内存限制
 #   -XX:MaxRAMPercentage=75.0     堆上限 = 容器内存 × 75%（预留 25% 给非堆/Metaspace/直接内存）
-# 诊断：检查工作目录、jar 文件、classpath
-ENTRYPOINT ["/busybox", "sh", "-c", "echo '=== pwd ===' && /busybox pwd && echo '=== /app/ ===' && /busybox ls -la /app/ && echo '=== java.class.path ===' && java -XshowSettings:properties -cp app.jar -version 2>&1 | /busybox grep 'java.class.path' && echo '=== verbose ===' && java -verbose:class -cp app.jar org.nexus.Start 2>&1 | /busybox tail -10"]
+# 诊断：在运行时检查 jar 内容
+ENTRYPOINT ["/busybox", "sh", "-c", "echo '=== unzip -l check ===' && /busybox unzip -l app.jar | /busybox grep 'org/nexus/Start' && echo '=== sha256 ===' && /busybox sha256sum app.jar && echo '=== java -jar ===' && java -jar app.jar 2>&1 | /busybox head -5"]
