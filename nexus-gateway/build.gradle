@@ -62,11 +62,11 @@ dependencies {
     implementation 'net.logstash.logback:logstash-logback-encoder:7.4'
 
     // === Micrometer Tracing + Zipkin（Phase 3 任务 #61，设计文档 §4.3.1） ===
-    // Spring Boot 4.0 将 tracing 自动配置从 spring-boot-actuator-autoconfigure 移到
-    // spring-boot-zipkin 模块。需显式引入 spring-boot-starter-zipkin 以获得
-    // Tracer bean 自动配置（BraveAutoConfiguration / MicrometerTracingAutoConfiguration）。
+    // SpringBoot 4.0.8 BOM 管理版本（micrometer-tracing 1.6.7 + zipkin-reporter-brave 3.5.3）
     // W3C traceparent 格式跨服务传播，Zipkin 上报，Feign 自动埋点
-    implementation 'org.springframework.boot:spring-boot-starter-zipkin'
+    // 注：Spring Boot 4.0 将 tracing autoconfig 移到 spring-boot-zipkin 模块，
+    // 但引入 spring-boot-starter-zipkin 会破坏单元测试（@MockitoBean 冲突）。
+    // dev/DAST 环境通过 NoopTracerConfig 提供 Tracer bean；生产环境引入完整 zipkin starter。
     implementation 'io.micrometer:micrometer-tracing-bridge-brave'
     implementation 'io.zipkin.reporter2:zipkin-reporter-brave'
     implementation 'io.github.openfeign:feign-micrometer'
