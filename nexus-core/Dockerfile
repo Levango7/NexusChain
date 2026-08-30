@@ -4,14 +4,20 @@
 #
 # nexus-core 为嵌套 Gradle 结构（nexus-core/nexus-core/ 子模块，application 插件）。
 # 构建上下文为 repo 根目录，使用根 settings.gradle（include ':nexus-core:nexus-core'），
-# 嵌套项目路径为 :nexus-core:nexus-core，fatJar 任务路径为 :nexus-core:nexus-core:fatJar。
+# 嵌套项目路径为 :nexus-core:nexus-core，jar 任务路径为 :nexus-core:nexus-core:jar。
 #   docker build -t nexus-core:2.1.0 -f nexus-core/Dockerfile .
 #
-# Stage 1 (builder): gradle:8.5-jdk17，编译产出 fat jar（:nexus-core:nexus-core:fatJar 任务）
+# Stage 1 (builder): gradle:8.14-jdk17，编译产出 thin jar + 依赖 lib/
 # Stage 2 (runtime): gcr.io/distroless/java17-debian12:nonroot (UID=65532, 非 root)
 #
-# 镜像体积估算：distroless base ~180MB + fat jar ~80-100MB ≈ 260-280MB
-#   注：nexus-core 含 netty/grpc/protobuf/web3j/bouncycastle/quartz 等重依赖。
+# 采用 thin jar + Class-Path manifest 方案（替代 fat jar）：
+#   - thin jar（~1MB）：仅含项目编译类 + META-INF/MANIFEST.MF（Class-Path: lib/*.jar）
+#   - lib/（~80-100MB）：所有外部依赖 jar，由 copyDependencies 任务复制
+#   - JVM 通过 -jar 读取 manifest 的 Class-Path 自动加载 lib/ 下的依赖
+# 此方案避免了 fat jar 的 ZIP 中央目录膨胀问题（51256+ 条目导致 distroless JRE
+# 的 JarClassLoader 无法定位 org.nexus.Start，尽管 unzip/jar tf/javap 均可读取）。
+#
+# 镜像体积估算：distroless base ~180MB + thin jar ~1MB + lib/ ~80-100MB ≈ 260-280MB
 # ============================================================================
 
 # === Stage 1: builder ===
@@ -43,37 +49,32 @@ COPY nexus-bridge ./nexus-bridge
 COPY nexus-signing-service ./nexus-signing-service
 COPY nexus-wallet-service ./nexus-wallet-service
 
-# 构建 fat jar：根 settings.gradle include ':nexus-core:nexus-core'，
-# 故 fatJar 任务路径为 :nexus-core:nexus-core:fatJar（嵌套项目）。
+# 构建 thin jar + 复制依赖到 lib/
+# jar 任务：打包项目类 + Class-Path manifest（引用 lib/*.jar）
+# copyDependencies 任务：复制所有外部依赖 jar 到 build/libs/lib/
 # 跳过测试与 jacoco 报告，加速构建
 # TRAVIS_BRANCH=master 让 build.gradle 的 gitCurBranch() 不调用 git（gradle 镜像无 git）
-RUN TRAVIS_BRANCH=master ./gradlew :nexus-core:nexus-core:fatJar --no-daemon -x test -x jacocoTestReport
+RUN TRAVIS_BRANCH=master ./gradlew :nexus-core:nexus-core:jar :nexus-core:nexus-core:copyDependencies --no-daemon -x test -x jacocoTestReport
 
-# 提取 fat jar（*-all.jar）并重命名为 app.jar
+# 提取 thin jar（排除 fat jar *-all.jar）并重命名为 app.jar
 # 嵌套项目 build 目录：nexus-core/nexus-core/build/libs/
-RUN find /workspace/nexus-core/nexus-core/build/libs -name '*-all.jar' \
+RUN find /workspace/nexus-core/nexus-core/build/libs -maxdepth 1 -name '*.jar' ! -name '*-all.jar' \
     -exec cp {} /workspace/app.jar \;
-# 剥离 module-info.class：依赖中的 module-info.class 会导致 JVM 将 fat jar
-# 视为模块化 jar，限制只有导出包的类可访问（org.nexus.Start 不在导出包中，
-# 报 ClassNotFoundException）。Gradle exclude '**/module-info.class' 可能
-# 因 Ant 模式匹配差异未覆盖根级文件，此处用 zip -d 确保彻底移除。
-# 诊断：检查 fat jar 是否包含主类 org.nexus.Start
-RUN echo "=== jar 内容前 30 行 ===" && \
-    jar tf /workspace/app.jar | head -30 && \
-    echo "=== 检查 org/nexus/Start.class ===" && \
-    (jar tf /workspace/app.jar | grep "org/nexus/Start.class" || echo "NOT FOUND") && \
-    echo "=== org/nexus/ 下的类（前 30 行）===" && \
-    jar tf /workspace/app.jar | grep "org/nexus/" | head -30 && \
-    echo "=== jar 总条目数 ===" && \
-    jar tf /workspace/app.jar | wc -l && \
-    echo "=== 检查 module-info.class ===" && \
-    (jar tf /workspace/app.jar | grep "module-info.class" || echo "NO module-info") && \
-    echo "=== MANIFEST.MF 内容 ===" && \
-    unzip -p /workspace/app.jar META-INF/MANIFEST.MF | head -20 && \
-    echo "=== javap 检查 Start.class ===" && \
-    (cd /tmp && jar xf /workspace/app.jar org/nexus/Start.class && javap -p org/nexus/Start.class | head -5 || echo "javap FAILED") && \
-    echo "=== Start.class major version ===" && \
-    (cd /tmp && xxd org/nexus/Start.class | head -2)
+
+# 复制依赖 lib/ 目录
+RUN cp -r /workspace/nexus-core/nexus-core/build/libs/lib /workspace/lib
+
+# 诊断：验证 thin jar 和依赖
+RUN echo "=== thin jar 检查 org/nexus/Start.class ===" && \
+    (jar tf /workspace/app.jar | grep "org/nexus/Start.class" || echo "NOT FOUND IN THIN JAR") && \
+    echo "=== MANIFEST.MF Main-Class ===" && \
+    (unzip -p /workspace/app.jar META-INF/MANIFEST.MF | grep "Main-Class" || echo "NO Main-Class") && \
+    echo "=== 依赖 jar 数量 ===" && \
+    ls /workspace/lib/*.jar 2>/dev/null | wc -l && \
+    echo "=== thin jar 大小 ===" && \
+    ls -lh /workspace/app.jar && \
+    echo "=== lib/ 总大小 ===" && \
+    du -sh /workspace/lib
 
 
 # === Stage 1.5: directory builder ===
@@ -88,7 +89,10 @@ RUN mkdir -p /app/leveldb /app/data && \
 # 无 shell / 无 curl / 无包管理器，攻击面最小，满足非 root 要求
 FROM gcr.io/distroless/java17-debian12:nonroot
 WORKDIR /app
+# thin jar：仅含项目类 + Class-Path manifest
 COPY --from=builder /workspace/app.jar app.jar
+# 外部依赖：Class-Path manifest 中 lib/*.jar 相对路径，WORKDIR=/app 解析为 /app/lib/
+COPY --from=builder /workspace/lib lib/
 # busybox 静态二进制（~1.2MB，无动态依赖）：仅用于 compose healthcheck（wget）。
 # distroless 无 curl/wget/shell，注入单个静态 busybox 提供 wget 子命令，
 # 不引入 shell 与包管理器，保持最小攻击面（DAST 修复 2026-08-28）。
@@ -112,5 +116,6 @@ EXPOSE 19585
 # JVM 参数：
 #   -XX:+UseContainerSupport      自动识别容器 cgroup 内存限制
 #   -XX:MaxRAMPercentage=75.0     堆上限 = 容器内存 × 75%（预留 25% 给非堆/Metaspace/直接内存）
-# 诊断：在运行时检查 jar 内容
-ENTRYPOINT ["/busybox", "sh", "-c", "echo '=== unzip -l check ===' && /busybox unzip -l app.jar | /busybox grep 'org/nexus/Start' && echo '=== sha256 ===' && /busybox sha256sum app.jar && echo '=== java -jar ===' && java -jar app.jar 2>&1 | /busybox head -5"]
+# java -jar app.jar：JVM 读取 manifest 的 Main-Class=org.nexus.Start 和
+# Class-Path=lib/*.jar，自动加载主类和依赖。
+ENTRYPOINT ["java", "-XX:+UseContainerSupport", "-XX:MaxRAMPercentage=75.0", "-jar", "app.jar"]

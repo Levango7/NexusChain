@@ -250,7 +250,7 @@ javadoc {
 
 
 task copyDependencies(type: Copy) {
-    from configurations.runtimeClasspath
+    from configurations.runtimeClasspath.filter { !it.isDirectory() }
     destinationDir = file('build/libs/lib')
 }
 
