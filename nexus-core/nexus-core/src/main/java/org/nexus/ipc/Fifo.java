@@ -98,7 +98,15 @@ public class Fifo implements ApplicationRunner, ApplicationListener<Fifo.FifoMes
         if (!isLinuxSystem()) {
             return;
         }
-        initFifo();
+        try {
+            initFifo();
+        } catch (IOException e) {
+            // distroless 容器无 mkfifo 命令，IPC 命名管道不可用。
+            // 优雅降级：跳过 FIFO 初始化，Web/API 接口正常工作，
+            // 仅 IPC 管道通信不可用（DAST/容器化部署场景不需要）。
+            logger.warn("FIFO pipe init failed (mkfifo unavailable?), skipping IPC: {}", e.getMessage());
+            return;
+        }
         while (true) {
             char[] a = new char[1024];
             if ((reader.read(a)) != -1) {
