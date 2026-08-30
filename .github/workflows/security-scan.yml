@@ -439,7 +439,7 @@ jobs:
           mkdir -p reports/zap
           docker run --rm -t --network=host \
             -v $(pwd)/reports/zap:/zap/reports:rw \
-            owasp/zap2docker-stable zap-baseline.py \
+            zaproxy/zap-stable zap-baseline.py \
             -t http://localhost:8080 \
             -r zap-report.html \
             -x zap-report.xml \
