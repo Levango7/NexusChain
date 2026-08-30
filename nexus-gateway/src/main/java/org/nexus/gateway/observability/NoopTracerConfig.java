@@ -2,6 +2,7 @@ package org.nexus.gateway.observability;
 
 import brave.Tracing;
 import io.micrometer.tracing.Tracer;
+import io.micrometer.tracing.brave.bridge.BraveCurrentTraceContext;
 import io.micrometer.tracing.brave.bridge.BraveTracer;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;
@@ -33,6 +34,7 @@ public class NoopTracerConfig {
     @ConditionalOnMissingBean(Tracer.class)
     public Tracer noopTracer() {
         Tracing tracing = Tracing.newBuilder().build();
-        return new BraveTracer(tracing.tracer(), tracing.currentTraceContext());
+        return new BraveTracer(tracing.tracer(),
+                new BraveCurrentTraceContext(tracing.currentTraceContext()));
     }
 }
