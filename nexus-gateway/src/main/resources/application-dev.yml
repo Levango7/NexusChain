@@ -36,6 +36,15 @@ spring:
       - org.apache.seata.spring.boot.autoconfigure.SeataDataSourceAutoConfiguration
       - com.alibaba.cloud.seata.SeataAutoConfiguration
 
+  # Dev/DAST 环境 Nacos 服务注册禁用：
+  # docker-compose.yml 未为 gateway 设置 NEX_NACOS_SERVER=nexus-nacos:8848，
+  # 默认 localhost:8848 在容器内不可达。禁用注册避免 "Client not connected" 启动失败。
+  # 生产环境通过 docker-compose.prod.yml 设置正确的 Nacos 地址。
+  cloud:
+    nacos:
+      discovery:
+        register-enabled: false
+
 # Seata 禁用：dev/DAST 无 TC server，且 SeataAutoDataSourceProxyCreator
 # 会对 H2 DataSource 创建代理并报 "AT mode don't support the dbtype: h2"
 seata:
