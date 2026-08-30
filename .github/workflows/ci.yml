@@ -309,7 +309,9 @@ jobs:
   hardhat-e2e:
     name: Hardhat L1/L2 E2E (Node 22)
     runs-on: ubuntu-latest
-    continue-on-error: true
+    # 观察模式已毕业（2026-08-30 首轮真实执行：33 用例运行/0 失败，
+    # 5 类全部真实执行——治理 12/桥 4/校验管道 11/L2↔L1 6；其余 13 用例为
+    # 环境断言下的合法 assumeTrue 跳过），转为强制门禁。
     timeout-minutes: 30
     steps:
       - name: Checkout 代码
