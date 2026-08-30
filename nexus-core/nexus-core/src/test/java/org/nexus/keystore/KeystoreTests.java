@@ -62,6 +62,57 @@ public class KeystoreTests {
         }
     }
 
+    // =====================================================================
+    // 测试体系中期建设（2026-08-30）：Keystore 安全路径往返覆盖。
+    //
+    // 审计背景：上方 verifyPassword/decrypt 两个用例依赖跨平台不一致的
+    // argon2 fixture，恒 skip——Keystore「加密落盘 → 密码校验 → 解密取私钥」
+    // 的核心安全路径此前零有效覆盖。以下用例用【本机生成-本机解密】的往返
+    // 不变量替代 fixture 比对（不依赖平台一致的预置密文），跨平台恒可运行：
+    // =====================================================================
+
+    /** 生成 → 正确密码解密：取回合法 32 字节 Ed25519 私钥（往返不变量） */
+    @Test
+    public void decryptRoundTrip_correctPassword_returnsValidKey() throws Exception {
+        Keystore ks = KeystoreAction.fromPassword(password);
+        byte[] privKey = KeystoreAction.decrypt(ks, password);
+        // Ed25519 私钥为 32 字节（本平台编码）；解密产物必须是合法私钥长度
+        assert privKey != null && privKey.length == 32
+                : "解密产物应为 32 字节 Ed25519 私钥，实际 " + (privKey == null ? "null" : privKey.length);
+    }
+
+    /** 生成 → 错误密码：verifyPassword 拒绝（fail-closed） */
+    @Test
+    public void verifyPassword_wrongPassword_rejected() throws Exception {
+        Keystore ks = KeystoreAction.fromPassword(password);
+        assert !KeystoreAction.verifyPassword(ks, "wrong-password-123")
+                : "错误密码必须被 verifyPassword 拒绝（mac 不匹配）";
+        assert KeystoreAction.verifyPassword(ks, password)
+                : "正确密码必须通过 mac 校验";
+    }
+
+    /** 生成 → 错误密码解密：抛异常不吐私钥（fail-closed，不部分泄露） */
+    @Test
+    public void decrypt_wrongPassword_throws() throws Exception {
+        Keystore ks = KeystoreAction.fromPassword(password);
+        try {
+            KeystoreAction.decrypt(ks, "wrong-password-123");
+            assert false : "错误密码解密必须抛异常（verifyPassword 先行拒绝），不得返回任何明文";
+        } catch (Exception expected) {
+            // 预期路径：invalid password
+        }
+    }
+
+    /** 序列化往返后解密仍成立（落盘-重载不破坏密文/mac 一致性） */
+    @Test
+    public void decrypt_afterMarshalRoundTrip_stillWorks() throws Exception {
+        Keystore ks = KeystoreAction.fromPassword(password);
+        Keystore reloaded = KeystoreAction.unmarshal(KeystoreAction.marshal(ks));
+        byte[] privKey = KeystoreAction.decrypt(reloaded, password);
+        assert privKey != null && privKey.length == 32
+                : "序列化往返后解密应仍取回合法私钥";
+    }
+
     public static String testJson(){
         return "{" +
                 "  \"address\": \"WXCf8e2b617210d44ccd232ec081f17be76b3eaa6f0cb41\"," +

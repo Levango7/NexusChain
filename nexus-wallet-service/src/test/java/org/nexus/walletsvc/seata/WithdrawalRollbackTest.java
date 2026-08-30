@@ -181,8 +181,11 @@ class WithdrawalRollbackTest {
         WithdrawalRequestEntity entity = withdrawalRequestRepository.findByRequestId(requestId).orElseThrow();
         assertEquals(WithdrawalRequest.WithdrawalStatus.FAILED, entity.getStatus());
         assertNotNull(entity.getRejectionReason());
-        // rejectionReason 应包含异常信息（供排查）
-        assertEquals(true, entity.getRejectionReason().contains("execution failed"),
-                "rejectionReason 应包含 'execution failed' 前缀");
+        // 2026-08-30 断言修正：生产实现记录的是链上执行的具体错误串
+        // （OnChainResult.error，经三阶段模板传递），不再有统一 'execution failed'
+        // 前缀——安全属性是「具体失败原因被保留供排查」而非固定前缀。
+        assertEquals(true, entity.getRejectionReason().contains("detailed failure reason for debugging"),
+                "rejectionReason 应保留底层异常信息供排查: " + entity.getRejectionReason());
+        assert !entity.getRejectionReason().isBlank() : "rejectionReason 不得为空白";
     }
 }

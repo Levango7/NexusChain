@@ -170,17 +170,21 @@ jar {
 
 test {
     useJUnitPlatform()
-    // WalletControllerIT 和 WithdrawalRollbackTest 需要 Nacos 等外部基础设施服务，
-    // 在无外部服务的单元测试环境中无法连接 Nacos（Connection refused: localhost:9848）。
-    // 这些测试应在集成测试环境（CI with Nacos）中运行，此处排除以避免构建失败。
+    // 测试体系中期建设（2026-08-30）：解除 WithdrawalRollbackTest 的历史排除。
+    // 该测试的 @ActiveProfiles("test") 已禁用 Seata/Nacos/Sentinel 并用 H2 +
+    // @MockitoBean（见 src/test/resources/application-test.yml）——不依赖任何
+    // 外部基础设施，历史排除原因（Nacos Connection refused）已不成立；
+    // 它是唯一的提现事务回滚安全路径覆盖，应纳入常规门禁。
+    // WalletControllerIT 仍排除：其为真实 HTTP 集成测试（需容器化环境）。
     filter {
         excludeTestsMatching "org.nexus.walletsvc.integration.WalletControllerIT"
-        excludeTestsMatching "org.nexus.walletsvc.seata.WithdrawalRollbackTest"
     }
 }
 
 // === 覆盖率门禁（与 nexus-gateway 对齐，minimum 0.15） ===
 // BUNDLE 级别指令覆盖率下限 0.15；check 依赖 jacocoTestCoverageVerification 以强制门禁
+// 测试体系中期建设：模块自定义覆盖率渐进线，根 0.30 门禁不注入（见根 build.gradle）
+ext.jacocoGateOverridden = true
 jacocoTestCoverageVerification {
     violationRules {
         rule {

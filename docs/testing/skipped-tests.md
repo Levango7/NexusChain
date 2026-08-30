@@ -81,7 +81,11 @@ NexusChain v2.0.0-rc1 当前共有 **9 个被跳过的测试**，分布在 4 个
 
 ### 2.4 Keystore argon2 跨平台测试
 
-**所在文件**：`nexus-core/nexus-core/src/test/java/org/nexus/keystore/KeystoreTests.java`（第 46、60 行）
+**所在文件**：`nexus-core/nexus-core/src/test/java/org/nexus/keystore/KeystoreTests.java`
+**状态更新（2026-08-30，测试体系中期建设）**：`verifyPassword`/`decrypt` 对 fixture 的比对仍按平台差异跳过（见下），但该安全路径已由新增的**往返不变量用例**补全恒可运行覆盖：
+`decryptRoundTrip_correctPassword_returnsValidKey` / `verifyPassword_wrongPassword_rejected` /
+`decrypt_wrongPassword_throws` / `decrypt_afterMarshalRoundTrip_stillWorks`——本机生成→本机解密，
+不依赖跨平台一致的预置密文。
 **跳过机制**：`assumeTrue(false, "本平台 argon2 native 计算与 testJson 数据不一致，跳过")`，当本平台 argon2 native 计算结果与测试向量 `testJson` 不一致时跳过该断言
 **跳过原因**：`testJson` 中的 mac 与密文由特定平台的 argon2 native 库生成，跨平台（不同 OS/架构）的 argon2 native 计算可能不一致
 **启用条件**：统一 argon2 native 实现的跨平台行为（固定参数集/版本）；或改用纯 Java argon2 实现（如 BouncyCastle `Argon2BytesGenerator`）消除 native 差异；或按平台生成对应测试向量
@@ -90,8 +94,8 @@ NexusChain v2.0.0-rc1 当前共有 **9 个被跳过的测试**，分布在 4 个
 
 | # | 测试方法 | 验证内容 |
 |---|----------|----------|
-| 10 | `verifyPassword` | Keystore 密码验证（argon2id KDF） |
-| 11 | `decrypt` | Keystore 解密出预期私钥 |
+| 10 | `verifyPassword` | Keystore 密码验证（argon2id KDF）——fixture 比对路径 |
+| 11 | `decrypt` | Keystore 解密出预期私钥——fixture 比对路径 |
 
 ### 2.5 SDK 交易编码测试（protobuf 未同步）
 
@@ -105,6 +109,16 @@ NexusChain v2.0.0-rc1 当前共有 **9 个被跳过的测试**，分布在 4 个
 | # | 测试方法 | 验证内容 |
 |---|----------|----------|
 | 12 | `testTransactionEncoding` | 交易 protobuf 编码往返（构造→encode→fromProto→字段一致） |
+
+---
+
+### 2.6 已解除的历史排除（2026-08-30，测试体系中期建设）
+
+**WithdrawalRollbackTest（提现事务回滚，org.nexus.walletsvc.seata）**
+**历史状态**：被 nexus-wallet-service/build.gradle `excludeTestsMatching` 排除（未在本台账登记——审计"台账不完整"的实证），排除理由为"需要 Nacos 等外部基础设施"。
+**解除依据**：该测试 `@ActiveProfiles("test")` 使用 H2 + `@MockitoBean`（application-test.yml 已禁用 Seata/Nacos/Sentinel），不依赖任何外部基础设施——排除理由已不成立。它是唯一的提现事务回滚安全路径覆盖（signing 失败 → FAILED 状态保留 rejectionReason 供排查）。解除后对断言做了对齐修正（rejectionReason 记录具体错误串而非 'execution failed' 前缀，以生产实现语义为准）。
+**当前状态**：已纳入常规 `test` 门禁，本地全绿。
+**仍排除**：WalletControllerIT（真实 HTTP 集成测试，需容器化环境，属 CI-with-Nacos 场景）。
 
 ---
 

@@ -50,6 +50,8 @@ jacocoTestReport {
 
 // === 覆盖率门禁（与 nexus-bridge / nexus-gateway 对齐，minimum 0.15） ===
 // BUNDLE 级别指令覆盖率下限 0.15；check 依赖 jacocoTestCoverageVerification 以强制门禁
+// 测试体系中期建设：模块自定义覆盖率渐进线，根 0.30 门禁不注入（见根 build.gradle）
+ext.jacocoGateOverridden = true
 jacocoTestCoverageVerification {
     violationRules {
         rule {

@@ -61,8 +61,12 @@ jobs:
       - name: 编译 (compileJava + compileTestJava)
         run: ./gradlew compileJava compileTestJava --no-daemon
 
-      - name: 测试 (test, 跳过 jacoco 报告)
-        run: ./gradlew test -x jacocoTestReport --no-daemon
+      # 测试体系中期建设（2026-08-30）：test → check（含覆盖率门禁）。
+      # check 隐含 test + jacocoTestCoverageVerification（根 build.gradle 已全局
+      # check.dependsOn 接线）——覆盖率不达 0.30 即 CI 失败，门禁从"定义了
+      # 但从不运行"（审计三层落差）变为真实生效。
+      - name: 测试 + 覆盖率门禁 (check)
+        run: ./gradlew check --continue --no-daemon
 
       # P2-C6: composite build 模块测试门禁
       # settings.gradle 中 includeBuild 的模块（nexus-settlement/compliance/analytics/oracle）
@@ -72,6 +76,16 @@ jobs:
       - name: Test composite build modules
         run: |
           ./gradlew :nexus-settlement:test :nexus-compliance:test :nexus-analytics:test :nexus-oracle:test --no-daemon
+
+      # 测试体系中期建设（2026-08-30）：影子测试资产纳入 CI。
+      # 此前仅本地跑过的两模块，现纳入门禁（测试探活审计项）：
+      # - nexus-consortium：includeBuild 且自带 settings.gradle，根 test 不覆盖，
+      #   43 个测试文件/约 321 用例（PoA + 国密 SM2/3/4）——组合路径：
+      #   consortium 是 includeBuild 声明的构建名，测试任务为 :nexus-consortium:consortium:test
+      # - nexus-api-gateway：根构建 include 的 21 用例（AuthenticationFilter/RateLimitFilter）
+      - name: Test consortium + api-gateway (shadow test assets)
+        run: |
+          ./gradlew :nexus-consortium:consortium:test :nexus-api-gateway:test --no-daemon
 
       # P2-C6: 三个关键回归测试门禁（双花防御 / 桥资金守恒 / 门限签名）
       # 这些测试覆盖核心安全不变量，单独显式执行以确保被运行（即使其他测试被 skip）。

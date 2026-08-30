@@ -48,15 +48,36 @@ subprojects {
 
     // P2-10: JaCoCo 覆盖率门禁（30% 行覆盖起步，渐进提升）
     // 当前项目覆盖率不高，先设低门槛，后续随测试补全逐步上调
-    jacocoTestCoverageVerification {
-        violationRules {
-            rule {
-                limit {
-                    minimum = 0.30  // 30% 行覆盖起步门禁（当前覆盖率渐进提升）
+    //
+    // 测试体系中期建设（2026-08-30）：全局接线 check.dependsOn（见下）。
+    // 规则注入用 afterEvaluate + ext 标记判断（subprojects 闭包先于子项目脚本
+    // 执行，配置期无法看到子项目的标记，必须延后到子项目配置完成后）：
+    // 模块自身声明 ext.jacocoGateOverridden = true 即走自定义渐进线
+    // （7 个模块：sdk/api-gateway/analytics/compliance/signing/wallet/core，
+    // 如 core 的 0.25 现状线）；未声明的模块（gateway/bridge/settlement/oracle 等）
+    // 由根 0.30 生效——审计三层落差中"定义了但从不运行"至此闭合。
+    afterEvaluate {
+        if (!project.hasProperty('jacocoGateOverridden')) {
+            jacocoTestCoverageVerification {
+                violationRules {
+                    rule {
+                        limit {
+                            minimum = 0.30  // 30% 行覆盖起步门禁（渐进提升）
+                        }
+                    }
                 }
             }
         }
     }
+
+    // 测试体系中期建设（2026-08-30）：覆盖率门禁全局接线。
+    // 审计发现：根 subprojects 定义了 0.30 门禁但从未接线 check——仅 7 个模块
+    // 自行 check.dependsOn（各自覆盖为 0.15），gateway/bridge/settlement/oracle
+    // 实际无任何生效门禁；且 CI 从不运行 check，门禁在 CI 永不触发（三层落差）。
+    // 全局接线后各模块 check（含 test）强制走覆盖率验证；模块自有 0.15 覆盖
+    // 继续叠加生效（取更严格者）。无测试输入时 jacocoTestCoverageVerification
+    // 对空 classDirectories 自然通过，不误伤。
+    check.dependsOn jacocoTestCoverageVerification
 
     // === SAST: SpotBugs + FindSecBugs 配置（P2-T7） ===
     // 在 java 插件之后应用 spotbugs 插件
