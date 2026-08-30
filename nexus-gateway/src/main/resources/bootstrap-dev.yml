@@ -4,3 +4,13 @@ nacos:
   tls:
     enabled: false
     protocol: http
+
+# Dev/DAST 环境禁用 Nacos 配置中心：
+# docker-compose.yml 未为 gateway 设置 NEX_NACOS_SERVER=nexus-nacos:8848，
+# 默认 localhost:8848 在容器内不可达。禁用 config 避免远程配置覆盖本地配置
+# （如 server.port 被远程配置改为 19585 导致健康检查 8080 端口超时）。
+spring:
+  cloud:
+    nacos:
+      config:
+        enabled: false
