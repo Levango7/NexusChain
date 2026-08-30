@@ -1,4 +1,10 @@
 # Development profile: use H2 in-memory database (no MySQL required)
+
+# 显式设置 server.port=8080：Nacos config 可能在 bootstrap context 外加载
+# 并覆盖 application.yml 中的端口。在 application-dev.yml 中显式设置确保优先级。
+server:
+  port: 8080
+
 spring:
   datasource:
     url: jdbc:h2:mem:nexus_gateway;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE;MODE=MySQL;DATABASE_TO_LOWER=TRUE
@@ -35,6 +41,8 @@ spring:
       - org.apache.seata.spring.boot.autoconfigure.SeataAutoConfiguration
       - org.apache.seata.spring.boot.autoconfigure.SeataDataSourceAutoConfiguration
       - com.alibaba.cloud.seata.SeataAutoConfiguration
+      - com.alibaba.cloud.nacos.NacosConfigAutoConfiguration
+      - com.alibaba.cloud.nacos.client.NacosConfigBootstrapAutoConfiguration
 
   # Dev/DAST 环境 Nacos 完全禁用：
   # docker-compose.yml 未为 gateway 设置 NEX_NACOS_SERVER=nexus-nacos:8848，
@@ -49,10 +57,23 @@ spring:
       discovery:
         enabled: false
         register-enabled: false
+      # 禁用 Nacos config loading：bootstrap-dev.yml 的 enabled=false 可能
+      # 在 Spring Cloud 2025.1 中不被 bootstrap context 读取（bootstrap 已废弃）。
+      # 在 application-dev.yml 中重复设置确保生效。
+      config:
+        enabled: false
     # Sentinel transport 也尝试连接 localhost:8858（sentinel-dashboard），
     # DAST 环境未启动 sentinel-dashboard，连接超时延迟启动。禁用 Sentinel。
     sentinel:
       enabled: false
+
+  # ShedLock 表在 H2 中可能未被 Flyway 创建（早期迁移失败或迁移顺序问题）。
+  # spring.sql.init 在 Flyway 之前执行，确保 shedlock 表存在。
+  # mode: embedded 仅对嵌入式数据库（H2）生效，不影响生产 MySQL/PostgreSQL。
+  sql:
+    init:
+      mode: embedded
+      schema-locations: classpath:db/shedlock-init.sql
 
 # Seata 禁用：dev/DAST 无 TC server，且 SeataAutoDataSourceProxyCreator
 # 会对 H2 DataSource 创建代理并报 "AT mode don't support the dbtype: h2"

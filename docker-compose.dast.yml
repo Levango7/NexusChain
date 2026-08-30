@@ -1,0 +1,17 @@
+# Docker Compose override for DAST (OWASP ZAP Baseline) CI job.
+#
+# This file overrides docker-compose.yml for the DAST environment:
+#   - Sets SERVER_PORT=8080 for nexus-gateway to ensure the gateway listens
+#     on port 8080 regardless of any Nacos remote config that might override
+#     server.port. Environment variables have the highest priority in Spring Boot
+#     property resolution, so this takes precedence over application.yml and
+#     any remote config.
+#
+# Usage in CI:
+#   docker compose -f docker-compose.yml -f docker-compose.dast.yml up -d nexus-gateway
+#
+# This file is NOT used by local development or production deployments.
+services:
+  nexus-gateway:
+    environment:
+      - SERVER_PORT=8080

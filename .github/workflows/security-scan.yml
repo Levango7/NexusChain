@@ -385,32 +385,36 @@ jobs:
 
       - name: 启动依赖并诊断容器状态
         run: |
+          # Docker Compose override: docker-compose.dast.yml 设置 SERVER_PORT=8080
+          # 确保gateway监听8080端口（环境变量优先级最高，覆盖任何Nacos远程配置）
+          COMPOSE="docker compose -f docker-compose.yml -f docker-compose.dast.yml"
+
           # 启动所有依赖（|| true 防止 compose 因 nexus-core exit(1) 直接失败退出）
           # seata-server：nexus-gateway 的 Seata TC 依赖（分布式事务），
           # docker-compose.yml 中 gateway depends_on 未含 seata-server，
           # 需显式启动否则 gateway 报 can not connect to 127.0.0.1:8091
-          docker compose up -d seata-server 2>&1 || true
-          docker compose up -d nexus-gateway 2>&1 || true
+          $COMPOSE up -d seata-server 2>&1 || true
+          $COMPOSE up -d nexus-gateway 2>&1 || true
           sleep 10
 
           # 诊断：检查每个关键容器状态
           echo "=== 容器状态 ==="
-          docker compose ps 2>&1 || true
+          $COMPOSE ps 2>&1 || true
 
           # 检查 nexus-core 是否在运行
-          CORE_ID=$(docker compose ps -q nexus-core 2>/dev/null)
+          CORE_ID=$($COMPOSE ps -q nexus-core 2>/dev/null)
           if [ -n "$CORE_ID" ]; then
             CORE_STATUS=$(docker inspect --format '{{.State.Status}}' "$CORE_ID" 2>/dev/null || echo "unknown")
             CORE_EXIT=$(docker inspect --format '{{.State.ExitCode}}' "$CORE_ID" 2>/dev/null || echo "?")
             echo "nexus-core 状态: $CORE_STATUS, 退出码: $CORE_EXIT"
             if [ "$CORE_STATUS" != "running" ]; then
               echo "=== nexus-core 启动失败，日志（最后 300 行）==="
-              docker compose logs --tail 300 nexus-core 2>&1 || true
+              $COMPOSE logs --tail 300 nexus-core 2>&1 || true
               exit 1
             fi
           else
             echo "=== nexus-core 容器未创建，尝试获取日志 ==="
-            docker compose logs --tail 300 nexus-core 2>&1 || true
+            $COMPOSE logs --tail 300 nexus-core 2>&1 || true
             exit 1
           fi
           echo "nexus-core 已启动，等待 gateway 健康..."
@@ -419,14 +423,14 @@ jobs:
           timeout 180 bash -c 'until curl -sf http://localhost:8080/actuator/health > /dev/null 2>&1; do echo "等待中..."; sleep 3; done' && echo "gateway 已就绪" || {
             echo "gateway 启动超时，跳过 DAST"
             echo "=== nexus-core 容器日志（最后 150 行）==="
-            docker compose logs --tail 150 nexus-core 2>&1 || true
-            echo "=== nexus-gateway 容器日志（最后 300 行）==="
-            docker compose logs --tail 300 nexus-gateway 2>&1 || true
+            $COMPOSE logs --tail 150 nexus-core 2>&1 || true
+            echo "=== nexus-gateway 容器日志（最后 500 行）==="
+            $COMPOSE logs --tail 500 nexus-gateway 2>&1 || true
             echo "=== 健康端点诊断 ==="
             curl -s -o /dev/null -w "HTTP 状态码: %{http_code}\n" http://localhost:8080/actuator/health 2>&1 || echo "curl 失败"
             curl -s http://localhost:8080/actuator/health 2>&1 || echo "无响应"
             echo "=== 端口 8080 监听状态 ==="
-            docker compose exec -T nexus-gateway /busybox netstat -tlnp 2>/dev/null || true
+            $COMPOSE exec -T nexus-gateway /busybox netstat -tlnp 2>/dev/null || true
             exit 1
           }
 
@@ -454,7 +458,7 @@ jobs:
 
       - name: 关闭服务
         if: always()
-        run: docker compose down || true
+        run: docker compose -f docker-compose.yml -f docker-compose.dast.yml down || true
 
   # ============================================================
   # 6. 安全发现分诊：高危漏洞自动创建 GitHub Issue（P2-T7）
