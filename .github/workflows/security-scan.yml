@@ -420,8 +420,13 @@ jobs:
             echo "gateway 启动超时，跳过 DAST"
             echo "=== nexus-core 容器日志（最后 150 行）==="
             docker compose logs --tail 150 nexus-core 2>&1 || true
-            echo "=== nexus-gateway 容器日志（最后 50 行）==="
-            docker compose logs --tail 50 nexus-gateway 2>&1 || true
+            echo "=== nexus-gateway 容器日志（最后 300 行）==="
+            docker compose logs --tail 300 nexus-gateway 2>&1 || true
+            echo "=== 健康端点诊断 ==="
+            curl -s -o /dev/null -w "HTTP 状态码: %{http_code}\n" http://localhost:8080/actuator/health 2>&1 || echo "curl 失败"
+            curl -s http://localhost:8080/actuator/health 2>&1 || echo "无响应"
+            echo "=== 端口 8080 监听状态 ==="
+            docker compose exec -T nexus-gateway /busybox netstat -tlnp 2>/dev/null || true
             exit 1
           }
 
