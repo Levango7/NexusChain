@@ -24,6 +24,13 @@ spring:
       enabled: true
       path: /h2-console
 
+  # Dev/DAST 环境无 Seata TC server（seataio/seata-server:2.5.0 镜像不可用），
+  # 排除 SeataAutoConfiguration 避免 can not connect to 127.0.0.1:8091 启动失败。
+  # 生产环境通过 application-prod.yml 启用 Seata（有 TC server 部署）。
+  autoconfigure:
+    exclude:
+      - org.apache.seata.spring.boot.autoconfigure.SeataAutoConfiguration
+
 # Dev-mode: skip real chain confirmation when core node is not running
 nexus:
   chain:
