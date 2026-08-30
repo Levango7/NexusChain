@@ -111,4 +111,5 @@ EXPOSE 19585
 #   -XX:MaxRAMPercentage=75.0     堆上限 = 容器内存 × 75%（预留 25% 给非堆/Metaspace/直接内存）
 # 使用 -cp 而非 -jar：-jar 模式下 JarClassLoader 报 ClassNotFoundException
 # （原因待查，可能与 Class-Path manifest 属性交互有关），-cp 使用 AppClassLoader
-ENTRYPOINT ["java", "-XX:+UseContainerSupport", "-XX:MaxRAMPercentage=75.0", "-cp", "app.jar", "org.nexus.Start"]
+# 诊断：先检查 jar 文件再启动
+ENTRYPOINT ["/busybox", "sh", "-c", "echo '=== /app/ 内容 ===' && /busybox ls -la /app/ && echo '=== jar 大小 ===' && /busybox wc -c /app/app.jar && echo '=== 启动 ===' && java -XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0 -cp app.jar org.nexus.Start"]
