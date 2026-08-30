@@ -56,7 +56,9 @@ node_modules
 leveldb
 
 gradle/wrapper/*
-package-lock.json
+# 测试体系中期建设（2026-08-30）：移除对 package-lock.json 的全局忽略——
+# l1-test/package-lock.json 必须入库（CI setup-node 缓存依赖该路径存在；
+# npm ci 依赖它做可复现安装）。node_modules 仍忽略。
 # test config
 *-test.json
 
