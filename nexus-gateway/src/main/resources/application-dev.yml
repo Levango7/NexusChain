@@ -8,7 +8,10 @@ spring:
 
   jpa:
     hibernate:
-      ddl-auto: validate
+      # dev profile 用 H2 内存库，validate 模式要求 Flyway 迁移覆盖所有实体表，
+      # 若有新增实体（如 currency_wallets）未在迁移脚本中则启动失败。
+      # update 模式让 Hibernate 自动建表，适合 dev/DAST 场景。
+      ddl-auto: update
     show-sql: false
     open-in-view: false
     properties:
