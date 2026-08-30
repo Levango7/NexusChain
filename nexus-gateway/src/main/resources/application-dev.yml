@@ -49,6 +49,15 @@ nexus:
     skip-confirmation: true
   consortium:
     skip-confirmation: true
+  # === Dev/DAST 环境无 Kafka broker ===
+  # KafkaEventStore（@ConditionalOnProperty matchIfMissing=true）默认使用 kafka，
+  # DeadLetterQueueService 同理。dev 环境切换到内存实现，避免 KafkaTemplate bean 缺失。
+  event-sourcing:
+    store: memory
+  webhook:
+    dlq:
+      store: memory
+      wait-for-ack: false
   # === REQ-15 安全加固：dev profile 覆盖 CORS 为本地开发前端地址 ===
   cors:
     allowed-origins: http://localhost:3000,http://localhost:5173,http://localhost:8080
