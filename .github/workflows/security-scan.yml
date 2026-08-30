@@ -386,6 +386,10 @@ jobs:
       - name: 启动依赖并诊断容器状态
         run: |
           # 启动所有依赖（|| true 防止 compose 因 nexus-core exit(1) 直接失败退出）
+          # seata-server：nexus-gateway 的 Seata TC 依赖（分布式事务），
+          # docker-compose.yml 中 gateway depends_on 未含 seata-server，
+          # 需显式启动否则 gateway 报 can not connect to 127.0.0.1:8091
+          docker compose up -d seata-server 2>&1 || true
           docker compose up -d nexus-gateway 2>&1 || true
           sleep 10
 
