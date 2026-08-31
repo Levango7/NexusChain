@@ -2,9 +2,24 @@
 
 统一多语言 SDK，聚合原 `nexus-js-sdk` 和 `nexus-java-sdk` 的能力，为 NexusChain 区块链支付网络提供一致的开发体验。
 
+> **⚠️ 诚实声明（2026-08-31 交付前审计，F12 状态修正）**
+>
+> 当前**只有 Java SDK 可用于生产**（63 个文件 / 万行级实现，含 RPC/钱包/支付编排/跨链客户端，测试全绿）。
+> TypeScript / Python / Go 三门语言为**早期骨架占位**，核心能力（钱包导入、离线签名、合约调用）为
+> `NotImplementedError` 占位，**请勿集成**：
+>
+> | 语言 | 实际状态 | 已知缺陷 |
+> |------|----------|----------|
+> | **Java** | ✅ 可用（63 文件，PaymentOrchestrationClient/Feign 客户端/RPC 全覆盖） | — |
+> | **TypeScript** | ⚠️ 骨架（`typescript/`） | `wallet.create/fromPrivateKey/fromMnemonic` 与 `transaction.sign/buildContractCall` 未实现 |
+> | **Python** | ⚠️ 骨架（`python/`，旧包名 `conpay`） | wallet 6 方法 5 个 `NotImplementedError` |
+> | **Go** | ⚠️ 骨架（`go/`，旧包名 `conpay`） | `Sign/BuildContractCall` 未实现；**`Broadcast` 调用 core 不存在的 `nexus_sendRawTransaction`，调用必失败** |
+>
+> 三门语言的补全为后续迭代项（v2.2.0+），品牌残留（conpay/CPAY → nexus/NEX）将随补全一并修正。
+
 ## 概述
 
-NexusChain SDK 是一个统一的多语言软件开发工具包，为 NexusChain 网络提供全栈访问能力。无论你使用哪种主流编程语言，都能获得一致的 API 设计和完整的功能覆盖。
+NexusChain SDK 是一个统一的多语言软件开发工具包（当前 Java 为主），为 NexusChain 网络提供全栈访问能力。
 
 - **代币符号**: NEX
 - **项目名称**: NexusChain
@@ -13,10 +28,10 @@ NexusChain SDK 是一个统一的多语言软件开发工具包，为 NexusChain
 
 | 语言 | 状态 | 目录 | 包名 |
 |------|------|------|------|
-| JavaScript / TypeScript | 迁移自 nexus-js-sdk | `typescript/` | `@nexus/sdk` |
-| Java | 迁移自 nexus-java-sdk | `java/` | `org.nexus.sdk` |
-| Python | 新增 | `python/` | `nexus` |
-| Go | 新增 | `go/` | `nexus` |
+| Java | **可用（推荐）** | `java/` | `org.nexus.sdk` |
+| JavaScript / TypeScript | 规划中（骨架） | `typescript/` | `@nexus/sdk` |
+| Python | 规划中（骨架） | `python/` | `nexus`（现为旧名 conpay） |
+| Go | 规划中（骨架） | `go/` | `nexus`（现为旧名 conpay） |
 
 ## 核心能力
 

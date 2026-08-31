@@ -42,7 +42,7 @@ Mid-size e-commerce / SaaS developers (team 5-20, monthly volume $10K-$1M) who n
 | F9 | Payment status query + list | P0 | gateway |
 | F10 | Connector health check + auto-failover | P1 | gateway |
 | F11 | Explorer: blockchain explorer + payment orchestration dashboard (HMAC auth) | P1 | explorer |
-| F12 | Multi-language SDK: PaymentClient (Java/JS/Python/Go) | P1 | sdk |
+| F12 | Multi-language SDK: PaymentClient (Java/JS/Python/Go) — **实际状态：仅 Java 达标；JS/Py/Go 为骨架占位（2026-08-31 审计修正）** | P1 | sdk |
 | F13 | Cross-chain Bridge (lock/mint/burn/unlock) | Delivered | bridge |
 | F14 | Settlement & Risk Engine | Delivered | settlement |
 | F15 | Compliance (KYC/AML/DID) | Delivered | compliance |
