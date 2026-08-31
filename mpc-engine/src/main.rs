@@ -43,6 +43,7 @@ use tracing_subscriber::EnvFilter;
 
 mod aggregate;
 mod config;
+mod distributed;
 mod dkg;
 mod gg20;
 mod persistence;

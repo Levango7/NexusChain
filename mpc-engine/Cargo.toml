@@ -32,6 +32,10 @@ paillier = { version = "0.4.2", package = "kzen-paillier" }
 zk-paillier = "0.4.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+# v2.2.0 分散式（真门限安全）：round_based 是 multi-party-ecdsa 的协议消息
+# 层（Msg/StateMachine trait），dev feature 提供 Simulation（测试驱动 3 方
+# 状态机）。版本与 multi-party-ecdsa 0.8.1 解析一致（0.1.x）。
+round-based = { version = "0.1", features = ["dev"] }
 # secp256k1 版本锁定 0.20：multi-party-ecdsa 0.8.1 / curv-kzen 0.9 依赖
 # secp256k1 0.20 的 API。曾尝试升级至 0.29，但 0.29 存在 breaking API 变更：
 #   1) `secp256k1::Signature` 不再从 crate 根导出（需改用 `secp256k1::ecdsa::Signature`）；
@@ -74,5 +78,9 @@ tls = ["tonic/tls"]
 # === 集成测试依赖（tests/integration_test.rs）===
 # nix：Unix 信号（SIGTERM）+ unistd::Pid，用于 test_node_recovery 停止 node3 子进程
 # 仅 Linux/WSL 可用，Windows 上 test_node_recovery 会被 #[cfg(not(unix))] panic
+# serial_test：persistence 测试家族依赖全局 MPC_STORAGE_KEY_VERSION env，
+# 并行测试下 set/remove 交错导致 flaky（v2.2.0 分散式测试引入时序扰动后暴露
+# 的存量缺陷）。#[serial] 标记 env 竞态用例。
 [dev-dependencies]
 nix = { version = "0.27", features = ["signal", "process"] }
+serial_test = "3"

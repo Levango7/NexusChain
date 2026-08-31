@@ -50,6 +50,8 @@ pub struct MpcCryptoServiceImpl {
     pub forward_tls_config: Option<tonic::transport::ClientTlsConfig>,
     /// Auth token，用于转发 gRPC 调用。
     pub auth_token: String,
+    /// v2.2.0 分散式注册表（真门限安全，阶段一：DKG 份额隔离 + 消息转发）。
+    pub dist: crate::distributed::DistRegistry,
 }
 
 impl Default for MpcCryptoServiceImpl {
@@ -63,6 +65,7 @@ impl Default for MpcCryptoServiceImpl {
             #[cfg(feature = "tls")]
             forward_tls_config: None,
             auth_token: String::new(),
+            dist: crate::distributed::DistRegistry::new(),
         }
     }
 }
@@ -79,6 +82,7 @@ impl MpcCryptoServiceImpl {
             #[cfg(feature = "tls")]
             forward_tls_config: None,
             auth_token: String::new(),
+            dist: crate::distributed::DistRegistry::new(),
         }
     }
 
@@ -101,6 +105,7 @@ impl MpcCryptoServiceImpl {
             #[cfg(feature = "tls")]
             forward_tls_config,
             auth_token,
+            dist: crate::distributed::DistRegistry::new(),
         }
     }
 
@@ -370,6 +375,92 @@ impl mpc_crypto_service_server::MpcCryptoService for MpcCryptoServiceImpl {
         Ok(Response::new(HealthCheckResponse {
             healthy: true,
             status: format!("mpc-engine {}", env!("CARGO_PKG_VERSION")),
+        }))
+    }
+
+    // ==================== v2.2.0 分散式（真门限安全，阶段一） ====================
+    // 以下三个 RPC 实现 DKG 份额隔离：协调器只做消息转发（relay_*），
+    // 任何一方（含协调器）都无法接触他方份额。
+
+    /// 各方向协调器发布 DKG 协议消息；协调器落入转发池供其他方拉取。
+    ///
+    /// 安全属性：协调器不理解、不落盘、不修改 payload（纯管道）；
+    /// 消息内容是 round_based::Msg<keygen::ProtocolMessage> 的 JSON——
+    /// 含本方 Paillier 公钥材料/VSS 承诺，不含任何私钥份额。
+    async fn relay_dkg_message(
+        &self,
+        req: Request<DistDkgMessage>,
+    ) -> Result<Response<RelayAck>, Status> {
+        use crate::distributed::DistMessage;
+        let m = req.into_inner();
+        let msg = DistMessage {
+            sender: u16::try_from(m.sender_index)
+                .map_err(|_| Status::invalid_argument("sender_index overflow"))?,
+            receiver: if m.receiver_index == 0 {
+                None
+            } else {
+                Some(
+                    u16::try_from(m.receiver_index)
+                        .map_err(|_| Status::invalid_argument("receiver_index overflow"))?,
+                )
+            },
+            payload_json: m.payload_json,
+        };
+        // 基本载荷校验（fail-closed：非 JSON 直接拒绝，防垃圾灌池）
+        if serde_json::from_str::<serde_json::Value>(&msg.payload_json).is_err() {
+            return Ok(Response::new(RelayAck {
+                success: false,
+                error: "payload_json is not valid JSON".to_string(),
+            }));
+        }
+        let before = self.dist.relay_publish(&m.session_id, vec![msg]);
+        tracing::info!(
+            session_id = %m.session_id,
+            sender = m.sender_index,
+            queue_len = before + 1,
+            "v2.2.0 dist: DKG message relayed (coordinator is a byte pipe)"
+        );
+        Ok(Response::new(RelayAck {
+            success: true,
+            error: String::new(),
+        }))
+    }
+
+    /// sign 阶段一不做转发（上游 OfflineProtocolMessage 私有，见
+    /// distributed.rs 模块头"范围"）——预留 RPC 返回明确的 not-implemented。
+    async fn relay_sign_message(
+        &self,
+        _req: Request<DistSignMessage>,
+    ) -> Result<Response<RelayAck>, Status> {
+        Ok(Response::new(RelayAck {
+            success: false,
+            error: "distributed sign relay is not available in stage 1 \
+                     (upstream OfflineProtocolMessage is crate-private; see distributed.rs)"
+                .to_string(),
+        }))
+    }
+
+    /// 查询本节点分散式 DKG 进度（轮次/完成态）。
+    async fn dist_status(
+        &self,
+        req: Request<DistStatusRequest>,
+    ) -> Result<Response<DistStatusResponse>, Status> {
+        let sid = req.into_inner().session_id;
+        let (round, finished) = self
+            .dist
+            .dkg_with::<(u16, bool)>(&sid, |s| match s {
+                Some(st) => (st.current_round(), st.is_finished()),
+                None => (0, false),
+            })
+            .map_err(|e| Status::internal(format!("dist registry lock: {e}")))?;
+        Ok(Response::new(DistStatusResponse {
+            current_round: u32::from(round),
+            finished,
+            error: if self.dist.dkg_exists(&sid) {
+                String::new()
+            } else {
+                "no distributed DKG state for this session".to_string()
+            },
         }))
     }
 }

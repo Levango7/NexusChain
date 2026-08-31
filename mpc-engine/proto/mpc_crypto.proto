@@ -14,6 +14,10 @@ service MpcCryptoService {
   rpc Sign(SignRequest) returns (SignResponse);
   rpc Aggregate(AggregateRequest) returns (AggregateResponse);
   rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+  // v2.2.0 分散式（真门限安全）：协调器只做消息转发，不解密、不持密钥
+  rpc RelayDkgMessage(DistDkgMessage) returns (RelayAck);
+  rpc RelaySignMessage(DistSignMessage) returns (RelayAck);
+  rpc DistStatus(DistStatusRequest) returns (DistStatusResponse);
 }
 
 // === DKG ===
@@ -80,4 +84,42 @@ message HealthCheckRequest {
 message HealthCheckResponse {
   bool healthy = 1;
   string status = 2;
+}
+
+// === v2.2.0 分散式（真门限安全） ===
+// 协调器仅转发各方的协议消息（round_based::Msg<ProtocolMessage> 的
+// serde_json 序列化），任何一方（含协调器自身）都无法接触他方份额。
+
+message DistDkgMessage {
+  string session_id = 1;
+  // 发送方在协议中的 party index（1-based，与 multi-party-ecdsa Keygen::new 对齐）
+  uint32 sender_index = 2;
+  // 可选接收方 index（0 = 广播）
+  uint32 receiver_index = 3;
+  // round_based::Msg<keygen::ProtocolMessage> 的 serde_json 序列化载荷
+  string payload_json = 4;
+}
+
+message DistSignMessage {
+  string session_id = 1;
+  uint32 sender_index = 2;
+  uint32 receiver_index = 3;
+  // round_based::Msg<sign::ProtocolMessage> 的 serde_json 序列化载荷
+  string payload_json = 4;
+}
+
+message RelayAck {
+  bool success = 1;
+  string error = 2;
+}
+
+message DistStatusRequest {
+  string session_id = 1;
+}
+
+message DistStatusResponse {
+  // 当前协议轮次（Keygen 0-4；OfflineStage 递进；5=Final）
+  uint32 current_round = 1;
+  bool finished = 2;
+  string error = 3;
 }

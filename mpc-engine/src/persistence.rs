@@ -571,6 +571,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn version_header_records_current_version() {
         ensure_test_key();
         // 设置版本号为 7
@@ -634,6 +635,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn current_storage_key_version_reads_env() {
         ensure_test_key();
         unsafe {
@@ -646,6 +648,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn current_storage_key_version_ignores_invalid_env() {
         ensure_test_key();
         unsafe {
