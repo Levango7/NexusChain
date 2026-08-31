@@ -253,7 +253,12 @@ nexus:
     # Public base URL for chain event callbacks
     callback-url: http://localhost:8080/api/v1/webhooks/chain-events
     # Shared secret for verifying callback signatures
-    callback-secret: ${NEX_WEBHOOK_SECRET:dummy-test-secret}
+    # A6 修复（2026-08-31 交付前审计）：去掉公开默认值 dummy-test-secret。
+    # 原默认值随源码公开在仓库，攻击者可据此伪造支付确认回调签名
+    # （WebhookController 常量时间比较依赖 secret 的保密性）。现未设置
+    # NEX_WEBHOOK_SECRET 时为空 → 验签必然失败（fail-closed），强制部署方注入。
+    # dev/sandbox profile 由各 profile 文件提供明确的开发值。
+    callback-secret: ${NEX_WEBHOOK_SECRET:}
     # === P4-T5：Webhook 重试与死信队列增强 ===
     # 死信队列存储：kafka（生产，默认）| memory（测试/无 Kafka broker 环境）
     dlq:

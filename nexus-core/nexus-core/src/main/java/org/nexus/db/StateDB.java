@@ -587,8 +587,15 @@ public class StateDB implements ApplicationListener<AccountUpdatedEvent> {
                 }
                 boolean writeResult = bc.writeBlock(b);
                 if (!writeResult) {
-                    // 数据库 写入失败 重试写入
-                    logger.error("write block " + new String(codec.encodeBlock(b)) + " to database failed, retrying...");
+                    // A2 修复（2026-08-31 交付前审计）：写失败不再无限重试。
+                    // 原实现 continue 不自增 i → 同一块永久重试，且本循环持全局写锁
+                    // —— 单块 DB 写失败即永久挂死整个节点。
+                    // 现记录失败并跳过该块（交由后续确认轮次重新收集/重写），
+                    // 释放锁让节点继续可用；后续轮次若 DB 恢复将补写该高度区间。
+                    logger.error("write block at height " + b.nHeight + " to database failed, "
+                            + "skipping this block (will be retried on next confirmation pass) "
+                            + "to avoid holding global write lock forever");
+                    i++;
                     continue;
                 }
                 logger.info("write block at height " + b.nHeight + " to db success");

@@ -220,6 +220,7 @@ class PaymentServiceTest {
     void refund_amountExceedsOrder_throws() {
         sampleOrder.setStatus(PaymentOrder.OrderStatus.PAID);
         when(orderRepository.findById(1L)).thenReturn(Optional.of(sampleOrder));
+        // 注意：单次金额校验先于累计校验触发（本用例不消费 sumActive stub）
 
         assertThrows(IllegalArgumentException.class,
                 () -> paymentService.refund(1L, new BigDecimal("2000000"), "reason"));
@@ -260,11 +261,28 @@ class PaymentServiceTest {
     void refund_riskRejected_throws() {
         sampleOrder.setStatus(PaymentOrder.OrderStatus.PAID);
         when(orderRepository.findById(1L)).thenReturn(Optional.of(sampleOrder));
+        // S3 修复配套：refund() 现先做累计退款额度校验（sumActiveRefundsByOrderId）
+        when(refundRepository.sumActiveRefundsByOrderId(1L)).thenReturn(java.math.BigDecimal.ZERO);
         when(riskService.evaluateRefund(any())).thenReturn(RiskDecision.REJECTED);
 
         IllegalStateException ex = assertThrows(IllegalStateException.class,
                 () -> paymentService.refund(1L, new BigDecimal("100"), "reason"));
         assertTrue(ex.getMessage().contains("risk control"));
+        verify(refundRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("refund: S3 累计额度校验——已有退款+本次超订单金额时拒绝")
+    void refund_cumulativeLimitExceeded_throws() {
+        sampleOrder.setStatus(PaymentOrder.OrderStatus.PAID);
+        when(orderRepository.findById(1L)).thenReturn(Optional.of(sampleOrder));
+        // 已有 90% 退款在途/完成，本次再退 90% → 累计 180% > 100%，必须拒绝
+        when(refundRepository.sumActiveRefundsByOrderId(1L))
+                .thenReturn(new BigDecimal("900000"));
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> paymentService.refund(1L, new BigDecimal("900000"), "partial"));
+        assertTrue(ex.getMessage().contains("cumulative"),
+                "应抛出累计额度校验错误: " + ex.getMessage());
         verify(refundRepository, never()).save(any());
     }
 }

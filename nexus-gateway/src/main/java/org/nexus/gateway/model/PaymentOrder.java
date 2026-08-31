@@ -53,6 +53,17 @@ public class PaymentOrder {
     @Column(name = "payer_address", length = 66)
     private String payerAddress;
 
+    /**
+     * 商户支付结果异步通知地址（A1 修复，2026-08-31 交付前审计）。
+     *
+     * <p>CreateOrderRequest.notifyUrl 此前为必填字段（@NotBlank）但实体无对应列——
+     * 商户通知 URL 从未持久化，主链路支付完成事件只回环到自身
+     * /webhooks/chain-events（配置的 callback-url），商户异步通知为死功能。
+     * 落库后由 PaymentEventListener 在支付完成时投递（带 HMAC 签名）。</p>
+     */
+    @Column(name = "notify_url", length = 512)
+    private String notifyUrl;
+
     /** Merchant's settlement wallet address. */
     @Column(name = "payee_address", nullable = false, length = 66)
     private String payeeAddress;
@@ -131,6 +142,9 @@ public class PaymentOrder {
 
     public String getPayerAddress() { return payerAddress; }
     public void setPayerAddress(String payerAddress) { this.payerAddress = payerAddress; }
+
+    public String getNotifyUrl() { return notifyUrl; }
+    public void setNotifyUrl(String notifyUrl) { this.notifyUrl = notifyUrl; }
 
     public String getPayeeAddress() { return payeeAddress; }
     public void setPayeeAddress(String payeeAddress) { this.payeeAddress = payeeAddress; }

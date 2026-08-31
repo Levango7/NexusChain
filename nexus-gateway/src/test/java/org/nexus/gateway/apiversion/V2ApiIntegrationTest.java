@@ -12,6 +12,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import io.micrometer.tracing.Tracer;
 
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 import static org.junit.jupiter.api.Assertions.*;
@@ -107,14 +108,17 @@ class V2ApiIntegrationTest {
         String json = result.getResponse().getContentAsString();
         merchantId = Long.parseLong(json.replaceAll(".*\"id\":(\\d+).*", "$1"));
 
-        // 验证
+        // 验证（S1 修复后需 ADMIN：.with(user(...)) 显式注入——类级 @WithMockUser
+        // 在此 MockMvc 自定义安全链下不桥接，与 v1 测试 GatewayCoreIntegrationTest 同款做法）
         mockMvc.perform(post("/api/v2/merchants/" + merchantId + "/verify")
+                        .with(user("admin").roles("ADMIN", "OPERATOR"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"status\":\"VERIFIED\"}"))
                 .andExpect(status().isOk());
 
-        // 生成 API Key
-        MvcResult keyResult = mockMvc.perform(post("/api/v2/merchants/" + merchantId + "/api-keys"))
+        // 生成 API Key（同上，ADMIN-only）
+        MvcResult keyResult = mockMvc.perform(post("/api/v2/merchants/" + merchantId + "/api-keys")
+                        .with(user("admin").roles("ADMIN", "OPERATOR")))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.apiKey").exists())
                 .andReturn();

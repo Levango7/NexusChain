@@ -56,8 +56,10 @@ ca_cert_path = "certs/ca.crt"      # CA 证书（用于验证对端）
 # data_dir：本节点数据目录（会话快照、WAL 等）
 data_dir = "data/node2"
 # storage_key：AES-256-GCM 加密密钥（hex 编码 32 字节 = 64 字符）
-# 生产环境应从 KMS / 环境变量读取，此处为本地验证用测试密钥
-storage_key = "4242424242424242424242424242424242424242424242424242424242424242"
+# S4 修复（2026-08-31）：模板改为 ${MPC_STORAGE_KEY} 环境变量占位——
+# 三方共用硬编码 4242...42 随源码公开，任何拿到仓库者可解密落盘会话。
+# start-mpc-cluster.sh 在 MPC_STORAGE_KEY 未设置时生成一次性随机密钥。
+storage_key = "${MPC_STORAGE_KEY}"
 # storage_key_version：密钥版本号（密钥轮换用，默认 1）
 storage_key_version = 1
 # storage_key_source：密钥来源（plain / env / kms）

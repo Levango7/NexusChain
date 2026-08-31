@@ -363,11 +363,11 @@ jobs:
     permissions:
       contents: read
       packages: write
-    # REQ-02: 单模块构建失败不阻断其他模块（continue-on-error + fail-fast: false）
-    continue-on-error: true
-    # 审计修复：默认 10min → 20min。Dockerfile 内 ./gradlew（wrapper）需从
-    # huaweicloud 下载 Gradle 8.14 发行包（~130MB）+ 全量依赖解析（构建容器
-    # 无 Gradle 缓存），GitHub 美区 runner 访问华为云镜像较慢，10min 易超时。
+    # B2 修复（2026-08-31 交付前审计）：摘除 continue-on-error。
+    # 原注释"REQ-02: 单模块构建失败不阻断其他模块"的代价是 master 可带着
+    # 残缺镜像集前进（fail-fast: false 已保证并行互不阻断；单个失败整体红）。
+    # GHCR 组织包创建权限此前已修（packages: write + 镜像 tag 小写化），
+    # 剩余失败属真实构建问题，应阻断而非静默。
     # Rust 模块多阶段构建耗时较长，通过 matrix.include 放宽至 25min
     timeout-minutes: ${{ matrix.timeout-minutes || 20 }}
     env:

@@ -1,6 +1,8 @@
 package org.nexus.gateway.event;
 
 import org.nexus.gateway.config.GatewayConfig;
+import org.nexus.gateway.model.PaymentOrder;
+import org.nexus.gateway.repository.PaymentOrderRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -24,6 +26,10 @@ import java.util.Map;
  *
  * <p>性能优化（任务 #310）：注入共享的连接池化 RestTemplate，
  * 替代 {@code new RestTemplate()} 创建的无连接池实例。</p>
+ *
+ * <p>A1 修复（2026-08-31 交付前审计）：投递目标优先取订单持久化的
+ * notifyUrl（商户下单时提供的真实回调地址）；无订单级地址时回退配置的
+ * callback-url（原行为，内部链事件回环），保持向后兼容。</p>
  */
 @Component
 public class PaymentEventListener {
@@ -32,20 +38,24 @@ public class PaymentEventListener {
 
     private final RestTemplate restTemplate;
     private final GatewayConfig gatewayConfig;
+    private final PaymentOrderRepository orderRepository;
 
     /** Deterministic (sorted-key) JSON mapper; must match WebhookController's canonical form. */
     private static final ObjectMapper CANONICAL_MAPPER = new ObjectMapper()
             .configure(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS, true);
 
     @Autowired
-    public PaymentEventListener(GatewayConfig gatewayConfig, RestTemplate restTemplate) {
+    public PaymentEventListener(GatewayConfig gatewayConfig, RestTemplate restTemplate,
+                                PaymentOrderRepository orderRepository) {
         this.gatewayConfig = gatewayConfig;
         this.restTemplate = restTemplate;
+        this.orderRepository = orderRepository;
     }
 
     /** 测试用兼容构造器：保留无连接池 RestTemplate。 */
-    public PaymentEventListener(GatewayConfig gatewayConfig) {
+    public PaymentEventListener(GatewayConfig gatewayConfig, PaymentOrderRepository orderRepository) {
         this.gatewayConfig = gatewayConfig;
+        this.orderRepository = orderRepository;
         this.restTemplate = new RestTemplate();
     }
 
@@ -82,10 +92,33 @@ public class PaymentEventListener {
     }
 
     /**
+     * A1 修复：解析本事件应投递的回调地址。
+     *
+     * <p>优先取订单持久化的 notifyUrl（商户下单时提供的地址）；订单未带地址
+     * 或查询失败时回退配置的 callback-url（原行为）。两路都空则不投递。</p>
+     */
+    private String resolveCallbackUrl(Long orderId) {
+        if (orderId != null && orderRepository != null) {
+            try {
+                String notifyUrl = orderRepository.findById(orderId)
+                        .map(PaymentOrder::getNotifyUrl)
+                        .orElse(null);
+                if (notifyUrl != null && !notifyUrl.isBlank()) {
+                    return notifyUrl;
+                }
+            } catch (RuntimeException e) {
+                log.warn("Failed to load order notifyUrl for webhook delivery, orderId={}, "
+                        + "falling back to configured callback-url: {}", orderId, e.getMessage());
+            }
+        }
+        return gatewayConfig.getWebhook().getCallbackUrl();
+    }
+
+    /**
      * Send webhook callback to the merchant's notify URL with HMAC signature.
      */
     private void sendWebhook(Long merchantId, Map<String, Object> payload) {
-        String callbackUrl = gatewayConfig.getWebhook().getCallbackUrl();
+        String callbackUrl = resolveCallbackUrl((Long) payload.get("orderId"));
         String secret = gatewayConfig.getWebhook().getCallbackSecret();
 
         if (callbackUrl == null || callbackUrl.isEmpty()) {

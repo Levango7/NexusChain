@@ -67,6 +67,10 @@ public class OrderServiceImpl implements OrderService {
         order.setTokenSymbol(request.getTokenSymbol() != null ? request.getTokenSymbol() : "NEX");
         order.setDescription(request.getDescription());
         order.setPayerAddress(request.getPayerAddress());
+        // A1 修复（2026-08-31 交付前审计）：持久化商户通知 URL。
+        // 此前 CreateOrderRequest.notifyUrl 必填但从未落库——支付完成通知
+        // 无从投递到商户端点（主链路商户通知死功能）。
+        order.setNotifyUrl(request.getNotifyUrl());
         order.setPayeeAddress(resolveSettlementAddress(request.getMerchantId()));
         order.setCheckoutToken(UUID.randomUUID().toString().replace("-", ""));
         order.setStatus(PaymentOrder.OrderStatus.PENDING);

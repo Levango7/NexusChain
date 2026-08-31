@@ -52,7 +52,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 public class ShedLockConfig {
 
     /**
-     * 构建 JDBC-based {@link LockProvider}。
+     * 构建 JDBC-based {@link LockProvider}（非 test profile）。
      *
      * <p>使用 {@link JdbcTemplate} 操作 {@code shedlock} 表，
      * {@code usingDbTime()} 让锁时间计算依赖数据库服务器时间，
@@ -62,10 +62,17 @@ public class ShedLockConfig {
      * 构建 Configuration，再传入 {@code JdbcTemplateLockProvider} 构造函数
      * （5.x 移除了旧的 {@code JdbcTemplateLockProvider.builder()} 静态工厂）。</p>
      *
+     * <p>测试 profile（test/sandbox）排除：H2 测试库不认 usingDbTime() 生成的
+     * MySQL 方言 SQL（TIMESTAMPADD/MICROSECOND），且 shedlock 表无 JPA 实体。
+     * 测试环境的 LockProvider 由测试配置类提供内存实现（见
+     * nexus-gateway/src/test/java/org/nexus/gateway/config/TestShedLockConfig.java，
+     * 挂 test 与 sandbox 两个 profile）。</p>
+     *
      * @param jdbcTemplate Spring 自动注入的 JdbcTemplate（基于 primary DataSource）
      * @return JdbcTemplateLockProvider 实例
      */
     @Bean
+    @org.springframework.context.annotation.Profile({"!test", "!sandbox"})
     public LockProvider lockProvider(JdbcTemplate jdbcTemplate) {
         JdbcTemplateLockProvider.Configuration configuration = JdbcTemplateLockProvider.Configuration.builder()
                 .withJdbcTemplate(jdbcTemplate)

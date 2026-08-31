@@ -322,7 +322,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    continue-on-error: true
+    # B1 修复（2026-08-31 交付前审计）：摘除 continue-on-error。
+    # mpc-engine 是承载门限签名的密码学组件——Rust 依赖的 RustSec 漏洞
+    # 与 Java 侧 CRITICAL/HIGH 阻断标准应当对等。豁免清单（.cargo/audit.toml，
+    # 上游锁定/无修复版本逐项附依据）继续生效。
     steps:
       - name: Checkout 代码
         uses: actions/checkout@v4
@@ -378,7 +381,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    continue-on-error: true
+    # B1 修复（2026-08-31 交付前审计）：摘除 continue-on-error。
+    # 此前 DAST 连败 ~25 次被该开关静默吞掉（面板恒绿）；DAST 链路
+    # （compose 依赖 + ZAP 镜像）已修复跑通（d98e65f），安全动态验证
+    # 结果应真实反映在流水线状态上。
     steps:
       - name: Checkout 代码
         uses: actions/checkout@v4

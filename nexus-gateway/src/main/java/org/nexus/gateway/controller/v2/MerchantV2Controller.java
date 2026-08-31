@@ -9,6 +9,7 @@ import org.nexus.gateway.apiversion.V2ErrorResponse;
 import org.nexus.gateway.model.Merchant;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
@@ -43,6 +44,11 @@ public class MerchantV2Controller {
     }
 
     @Operation(summary = "Verify merchant (v2)")
+    // S1 修复（2026-08-31 交付前审计）：补 @PreAuthorize。v1 同端点有此注解
+    // （MerchantController:51），v2 迁移时遗漏——而 WebConfig 以"由 @PreAuthorize
+    // 保护"为由将这些路径排除出 API Key 拦截器，注解缺失 = 任意调用方可将任意
+    // 商户置 VERIFIED 并接管（P0 级）。现与 v1 对齐为 ADMIN-only。
+    @PreAuthorize("hasRole('ADMIN')")
     @PostMapping("/{id}/verify")
     public ResponseEntity<Object> verify(@PathVariable Long id, @RequestBody VerifyRequest request) {
         try {
@@ -61,6 +67,9 @@ public class MerchantV2Controller {
     }
 
     @Operation(summary = "Generate API key (v2)")
+    // S1 修复：与 verify 同因补齐（WebConfig 拦截器排除 + 注解缺失 = 无鉴权）。
+    // 签发 API Key/Secret 即商户接管凭证，必须 ADMIN。
+    @PreAuthorize("hasRole('ADMIN')")
     @PostMapping("/{id}/api-keys")
     public ResponseEntity<Map<String, String>> generateApiKey(@PathVariable Long id) {
         MerchantService.ApiKeyPair pair = merchantService.generateApiKey(id);
@@ -71,6 +80,8 @@ public class MerchantV2Controller {
     }
 
     @Operation(summary = "Revoke API key (v2)")
+    // S1 修复：撤销凭证与签发同级敏感（可对任意商户发起拒绝服务）。
+    @PreAuthorize("hasRole('ADMIN')")
     @DeleteMapping("/{id}/api-keys")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void revokeApiKey(@PathVariable Long id, @RequestBody RevokeRequest request) {

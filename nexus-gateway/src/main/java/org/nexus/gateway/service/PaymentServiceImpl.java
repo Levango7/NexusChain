@@ -414,6 +414,22 @@ public class PaymentServiceImpl implements PaymentService {
                 throw new IllegalArgumentException("Refund amount exceeds order amount");
             }
 
+            // S3 修复（2026-08-31 交付前审计）：累计退款额度校验。
+            // 此前仅校验单次金额 ≤ 订单金额——两笔 90% 部分退款即可退超 100%。
+            // 与审批路径（DefaultRefundApprovalService:96-98）同口径：
+            // 已发起（PENDING/PROCESSING/COMPLETED/RECONCILIATION_NEEDED）退款
+            // 总额 + 本次金额不得超过订单金额；FAILED 不占额度。
+            java.math.BigDecimal activeRefunds =
+                    refundRepository.sumActiveRefundsByOrderId(orderId);
+            if (activeRefunds.add(amount).compareTo(order.getAmount()) > 0) {
+                log.warn("SECURITY: cumulative refund limit exceeded: orderId={}, "
+                                + "activeRefunds={}, requested={}, orderAmount={}",
+                        orderId, activeRefunds, amount, order.getAmount());
+                throw new IllegalArgumentException(
+                        "Refund would exceed cumulative limit: active=" + activeRefunds
+                                + " + requested=" + amount + " > orderAmount=" + order.getAmount());
+            }
+
             // Risk gate: evaluate refund before executing the transfer.
             RefundRequest riskRequest = new RefundRequest(orderId, order.getMerchantId(), amount, reason);
             riskRequest.setReceiverAddress(order.getPayerAddress());

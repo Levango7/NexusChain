@@ -107,7 +107,12 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
 
 - **Rust `mpc-engine`**：已接入 ZenGo-X/KZen `multi-party-ecdsa` 0.8.1 crate，实现**真实 GG20 门限 ECDSA**（真实 Paillier、Feldman VSS、MtA、ZK 证明，产出可被标准 secp256k1 验证的签名）。
 - **Java MPC 传输层**：`GrpcMpcTransportStub` + `MpcTransportGrpcServer` 实现**真实 gRPC over HTTP/2** 传输，支持 P2P 消息路由。
-- **部署模型限制（诚实声明）**：当前为「可信协调器」模型——全部 n 方私钥份额驻留同一进程内存，**门限容错属性失效**（进程被攻破即等价单点签名）。完全分散式部署（t-of-n 方被攻破不泄露私钥）为 v2.2.0 演进目标。
+- **部署模型限制（诚实声明，2026-08-31 交付前审计补强）**：当前为「可信协调器」模型，**在密码学意义上不等价于分布式门限签名**，交付材料不得宣称"2-of-3 MPC 门限安全"：
+  1. 全部 n 方私钥份额与 Paillier 解密密钥驻留**同一进程**（`gg20.rs` DkgSession 同时持有全量份额；`set_my_identity` 只标记本方身份，不清除他方份额）；
+  2. 协调器模式回退分支允许**跨方提取任意份额**（`dkg.rs` `extract_private_share` 失败后直接返回 `shared_keys[party_index]`，调用方传任意 party_index 即得对应方份额）——签名协议真实（数学正确），但访问控制是单进程信任边界；
+  3. 份额加密落盘的 storage_key 此前三方共用硬编码值（S4 修复：集群脚本与 node.toml 模板已改为 `MPC_STORAGE_KEY` 环境变量/一次性随机密钥），密钥轮换未实现版本化（`load_storage_key_for_version` 忽略版本号）。
+
+  **门限容错属性失效**（进程被攻破即等价单点签名）。完全分散式部署（t-of-n 方被攻破不泄露私钥）为 v2.2.0 演进目标；份额的 ZK 范围证明校验亦未接入（`MpcSignatureAggregator` TODO，聚合前仅格式校验，依赖最终 ECDSA 整体验签兜底）。
 - **编译状态**：已完成编译验证（`mpc-engine/target/release/mpc-engine` 产物存在；README 早期"未编译"声明过时，2026-08-27 核实）。
 - **传输安全**：gRPC mTLS 已实现（MPC-P0-02 修复，use-plaintext 默认 false）。
 

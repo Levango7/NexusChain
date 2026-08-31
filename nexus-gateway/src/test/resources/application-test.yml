@@ -20,10 +20,20 @@ spring:
   main:
     allow-bean-definition-overriding: true
   datasource:
-    url: jdbc:h2:mem:nexus_gateway_test;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    # MODE=MySQL（2026-08-31）：ShedLock usingDbTime() 生成 TIMESTAMPADD/MICROSECOND
+    # 等 MySQL 方言 SQL，H2 兼容模式下可执行（与 wallet-service 测试库同款做法）。
+    url: jdbc:h2:mem:nexus_gateway_test;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE;MODE=MySQL
     username: sa
     password:
     driver-class-name: org.h2.Driver
+  # S3/S1 测试适配（2026-08-31）：测试库 Flyway 禁用、ddl-auto 只建 @Entity 表，
+  # 而 ShedLock 的 shedlock 表无 JPA 实体——@Scheduled 调度器（含由 @PreAuthorize
+  # AOP 链激活的启动期首个任务）打该表报 Table not found，异常经调度冒泡为
+  # 端点 500。此处经 sql.init 在 H2 启动时建表（与 V11 migration 同构，H2 语法）。
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:h2-shedlock-init.sql
   jpa:
     hibernate:
       ddl-auto: create-drop
