@@ -35,10 +35,10 @@ regexes = [
     # 审计收窄：仅匹配纯 hex 形态（原 0123 前缀 hex 64 位不变）。
     '''0123[0-9a-f]{60}''',
     # 同一 dev 密钥的 base64 编码（application-dev.yml keystore.encryption-key，
-    # 32 字节 → 44 个 base64 字符 + '='）。
-    # 审计收窄：要求 "MDEy"（"012" 的 base64）前缀 + 定长 base64 + '=' 结尾，
-    # 不再放过任意以 MDEy 开头的 ≥40 字符串（原模式会豁免任何形如 MDEy... 的高熵串）。
-    '''MDEy[A-Za-z0-9+/]{38}[AQgw]=''',
+    # "0123456789abcdef..." 全假数据，44 字符 = MDEy + 39 主体 + '='）。
+    # 修正（2026-08-31 历史重写后验证）：原模式 [AQgw]= 的 padding 前字符
+    # 假设与真实形态不匹配导致残留误报；改为定长 39 主体 + '=' 收尾。
+    '''MDEy[A-Za-z0-9+/]{39}=''',
     # 上述 dev 密钥经 base64 解码后的字面量（32 hex 字符；gitleaks 部分规则会
     # 解码匹配）。精确豁免该假数据本身。
     '''0123456789abcdef''',
@@ -71,16 +71,10 @@ paths = [
     '''transaction-test-example.jsonc''',
 ]
 
-# === 3. 历史提交豁免（P0 审计修复，2026-08-28）===
-# gitleaks 扫描完整 git 历史。以下历史提交中的命中经人工逐一核实：
-#   - 34ca4ea7（v2.1.0 仓库导入）：JWTUtil.java 的旧 JWT 密钥——【已轮换】，
-#     当前代码为 @Value 注入 + 启动 fail-closed，旧值已失效；SM2Pkcs12Maker/
-#     Groth16Setup/Groth16ProofSystem/LogSanitizerTest 命中均为代码标识符与
-#     测试假数据误报（regex 豁免同步保留，防未来重新引入时静默漏报）。
-#   - 46706934（v2.31.0）：application-dev.yml 的 dev storage key（regex 豁免）。
-# 跟进建议（不阻断本次修复）：如需彻底抹除历史中的已轮换密钥，
-# 使用 git filter-repo/BFG 重写历史并强推（需要所有协作者重新克隆）。
-commits = [
-    '34ca4ea7b40911ecaaa84aca8f1fdaf771512785',
-    '46706934790c113ba30e79c88fee8bdd3459777a',
-]
+# === 3. 历史密钥重写记录（2026-08-31 完成）===
+# 此前此处有两笔历史 commit 豁免（34ca4ea7 / 46706934——已轮换 JWT 密钥
+# 与 dev storage key）。2026-08-31 已执行 git filter-repo 历史重写：
+#   - 两个已轮换 JWT 密钥全历史 blob 替换为 REDACTED-ROTATED-JWT-SECRET
+#     （git log -S 全历史零命中验证）
+#   - 重写后全部 commit SHA 变化，旧豁免已随 SHA 失效，整块移除
+# 备份：重写前镜像存于仓库外（NexusChain-pre-rewrite.git，HEAD 9e932dc）。
