@@ -13,6 +13,8 @@ export interface NexusChainConfig {
   network: Network;
   /** NexusChain 节点 RPC 地址 */
   rpcUrl: string;
+  /** nexus-wallet-service 基址（交易提交需要；仅查询可不填） */
+  walletServiceUrl?: string;
   /** 请求超时时间（毫秒），默认 30000 */
   timeout?: number;
   /** API 密钥（可选，用于付费节点认证） */

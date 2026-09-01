@@ -20,7 +20,7 @@
 
 import { RpcClient } from './rpc';
 import { WalletManager } from './wallet';
-import { TransactionManager } from './transaction';
+import { TransactionManager, BridgeManager } from './transaction';
 import type { NexusChainConfig } from './types';
 
 /**
@@ -35,6 +35,8 @@ export class NexusChainClient {
   readonly wallet: WalletManager;
   /** 交易管理器 */
   readonly transaction: TransactionManager;
+  /** 跨链桥管理器 */
+  readonly bridge: BridgeManager;
 
   /**
    * 创建 NexusChainClient 实例。
@@ -48,8 +50,9 @@ export class NexusChainClient {
       timeout: config.timeout,
       apiKey: config.apiKey,
     });
-    this.wallet = new WalletManager(this.rpc, config.network);
+    this.wallet = new WalletManager(this.rpc, config.network, config.walletServiceUrl, config.apiKey);
     this.transaction = new TransactionManager(this.rpc, config.network);
+    this.bridge = new BridgeManager(this.rpc);
   }
 
   /**

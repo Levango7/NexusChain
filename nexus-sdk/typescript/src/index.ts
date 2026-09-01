@@ -18,7 +18,8 @@
 export { NexusChainClient } from './client';
 export { RpcClient } from './rpc';
 export { WalletManager } from './wallet';
-export { TransactionManager } from './transaction';
+export { TransactionManager, BridgeManager } from './transaction';
+export { validateAddress, base58Decode, keccak256 } from './address';
 
 export type {
   NexusChainConfig,

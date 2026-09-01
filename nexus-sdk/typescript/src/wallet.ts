@@ -1,113 +1,116 @@
 /**
- * NexusChain SDK 钱包管理模块。
+ * NexusChain SDK 钱包管理模块（v2.2.0 补真，2026-09-01）。
  *
- * 提供钱包创建、导入、余额查询等能力。
- * 所有余额以最小单位（wei）表示，NEX 为原生代币。
+ * 查询走 nexus-core JSON-RPC 真实信封；交易提交走 nexus-wallet-service
+ * HTTP（core 无 nexus_sendRawTransaction——签名与密钥管控是 wallet-service
+ * 的架构职责，SDK 不持私钥）。地址校验为纯本地实现（Base58 + 25 字节 +
+ * keccak 双哈希校验尾，对齐 Java KeystoreAction.verifyAddress）。
  */
 
 import type { RpcClient } from './rpc';
-import type { WalletInfo, TokenSymbol } from './types';
+import type { WalletInfo } from './types';
+import { validateAddress } from './address';
+import axios from 'axios';
 
 /** 钱包管理器 */
 export class WalletManager {
   private readonly rpcClient: RpcClient;
   private readonly network: string;
+  private readonly walletServiceUrl?: string;
+  private readonly apiKey?: string;
 
-  constructor(rpcClient: RpcClient, network: string) {
+  constructor(
+    rpcClient: RpcClient,
+    network: string,
+    walletServiceUrl?: string,
+    apiKey?: string,
+  ) {
     this.rpcClient = rpcClient;
     this.network = network;
+    this.walletServiceUrl = walletServiceUrl;
+    this.apiKey = apiKey;
   }
 
   /**
-   * 创建新钱包，生成新的密钥对。
+   * 创建新钱包。
    *
-   * Not implemented: wallet key generation must be performed by the wallet-service
-   * (nexus-wallet-service) which enforces KMS, key rotation, and audit policies.
-   *
-   * @returns 新创建的 WalletInfo
-   * @throws  Error — 本方法未实现，应调用 wallet-service API。
+   * 架构决策（非缺陷）：密钥生成由 wallet-service 执行（KMS、轮换、审计
+   * 策略集中管控），SDK 不在客户端生成私钥。调用 wallet-service 的
+   * /api/v1/wallets 端点。
    */
   async create(): Promise<WalletInfo> {
     throw new Error(
-      'WalletManager.create not implemented: use wallet-service API instead. ' +
-        'See nexus-wallet-service OpenAPI docs for the /api/v1/wallets endpoint.'
+      'WalletManager.create: key generation is wallet-service\'s domain ' +
+        '(KMS/rotation/audit). POST /api/v1/wallets on nexus-wallet-service.',
     );
   }
 
-  /**
-   * 从私钥导入钱包。
-   *
-   * @param privateKey 十六进制私钥
-   * @returns 导入的 WalletInfo
-   * @throws  Error — 本方法未实现，应调用 wallet-service API。
-   */
-  async fromPrivateKey(privateKey: string): Promise<WalletInfo> {
-    throw new Error(
-      'WalletManager.fromPrivateKey not implemented: use wallet-service API instead. ' +
-        'See nexus-wallet-service OpenAPI docs for the /api/v1/wallets/import endpoint.'
-    );
-  }
-
-  /**
-   * 从助记词导入钱包。
-   *
-   * @param mnemonic BIP-39 助记词
-   * @param path      派生路径（如 "m/44'/60'/0'/0/0"）
-   * @returns 导入的 WalletInfo
-   * @throws  Error — 本方法未实现，应调用 wallet-service API。
-   */
-  async fromMnemonic(mnemonic: string, path?: string): Promise<WalletInfo> {
-    throw new Error(
-      'WalletManager.fromMnemonic not implemented: use wallet-service API instead. ' +
-        'See nexus-wallet-service OpenAPI docs for the /api/v1/wallets/import-mnemonic endpoint.'
-    );
-  }
-
-  /**
-   * 查询地址的 NEX 余额。
-   *
-   * 对齐 nexus-core：nexus_getBalance 返回 {"balance": "<decimal>"} 信封，需解包。
-   *
-   * @param address 钱包地址
-   * @returns 余额（最小单位 wei）
-   */
+  /** NEX 余额（最小单位）。信封：nexus_getBalance → {"balance":"<decimal>"}。 */
   async getBalance(address: string): Promise<string> {
     const result = (await this.rpcClient.call('nexus_getBalance', [address, 'latest'])) as unknown;
     if (typeof result === 'object' && result !== null) {
       const obj = result as Record<string, unknown>;
-      if (obj.balance !== undefined) {
-        return obj.balance as string;
-      }
+      if (obj.balance !== undefined) return String(obj.balance);
     }
-    return result as string;
+    return String(result);
   }
 
-  /**
-   * 查询地址的指定代币余额。
-   *
-   * @param address       钱包地址
-   * @param tokenContract 代币合约地址
-   * @returns 代币余额（最小单位）
-   * @throws  Error — 本方法未实现，应调用 wallet-service API 或直接调用合约。
-   */
-  async getTokenBalance(address: string, tokenContract: string): Promise<string> {
-    throw new Error(
-      'WalletManager.getTokenBalance not implemented: use wallet-service API or call contract balanceOf directly. ' +
-        'See nexus-wallet-service OpenAPI docs for the /api/v1/wallets/balance endpoint.'
-    );
+  /** 下一 nonce。信封：nexus_getTransactionCount → {"count":N}。 */
+  async getNonce(address: string): Promise<number> {
+    const result = (await this.rpcClient.call('nexus_getTransactionCount', [address])) as unknown;
+    if (typeof result === 'object' && result !== null) {
+      const c = (result as Record<string, unknown>).count;
+      if (c !== undefined) return Number(c);
+    }
+    throw new Error(`unexpected count envelope: ${typeof result}`);
   }
 
-  /**
-   * 验证地址格式是否合法。
-   *
-   * @param address 待验证地址
-   * @returns 是否合法
-   * @throws  Error — 本方法未实现，应调用 wallet-service API 或本地校验。
-   */
+  /** 按地址查交易（nexus_getTransactionsByAddress → dict[]）。 */
+  async getTransactionsByAddress(address: string, limit = 20): Promise<Record<string, unknown>[]> {
+    const result = (await this.rpcClient.call('nexus_getTransactionsByAddress', [address, limit])) as unknown;
+    if (Array.isArray(result)) return result as Record<string, unknown>[];
+    throw new Error(`unexpected transaction list envelope: ${typeof result}`);
+  }
+
+  /** 本地地址校验（Base58 + 25 字节 + keccak 双哈希校验尾，不联网）。 */
   validateAddress(address: string): boolean {
-    throw new Error(
-      'WalletManager.validateAddress not implemented: use wallet-service API or validate locally. ' +
-        'See nexus-wallet-service OpenAPI docs for the /api/v1/wallets/validate-address endpoint.'
+    return validateAddress(address);
+  }
+
+  /**
+   * 通过 wallet-service 签名并提交转账，返回交易哈希。
+   *
+   * 需要 NexusChainConfig.walletServiceUrl；本地先做地址格式校验。
+   */
+  async submitTransfer(from: string, to: string, amount: string): Promise<string> {
+    if (!this.walletServiceUrl) {
+      throw new Error(
+        'walletServiceUrl is required for submitTransfer ' +
+          '(submission goes through nexus-wallet-service, not core JSON-RPC)',
+      );
+    }
+    if (!validateAddress(from)) throw new Error(`invalid from address: ${from}`);
+    if (!validateAddress(to)) throw new Error(`invalid to address: ${to}`);
+
+    const resp = await axios.post(
+      `${this.walletServiceUrl.replace(/\/$/, '')}/api/v1/transfers`,
+      { from, to, amount, token: 'NEX' },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          ...(this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : {}),
+        },
+      },
     );
+    const body = resp.data as Record<string, unknown>;
+    const candidates = [
+      body.txHash,
+      body.hash,
+      (body.data as Record<string, unknown> | undefined)?.txHash,
+    ];
+    for (const c of candidates) {
+      if (typeof c === 'string' && c) return c;
+    }
+    throw new Error(`wallet-service response missing tx hash: ${JSON.stringify(body)}`);
   }
 }

@@ -1,289 +1,144 @@
 # NexusChain SDK
 
-统一多语言 SDK，聚合原 `nexus-js-sdk` 和 `nexus-java-sdk` 的能力，为 NexusChain 区块链支付网络提供一致的开发体验。
+统一多语言 SDK，为 NexusChain 区块链支付网络提供一致的开发体验。
 
-> **⚠️ 诚实声明（2026-08-31 交付前审计，F12 状态修正）**
+> **状态声明（2026-09-01 v2.2.0 三语言补真）**
 >
-> 当前**只有 Java SDK 可用于生产**（63 个文件 / 万行级实现，含 RPC/钱包/支付编排/跨链客户端，测试全绿）。
-> TypeScript / Python / Go 三门语言为**早期骨架占位**，核心能力（钱包导入、离线签名、合约调用）为
-> `NotImplementedError` 占位，**请勿集成**：
+> | 语言 | 状态 | 包名 | 测试 |
+> |------|------|------|------|
+> | **Java** | ✅ 生产可用（全能力：RPC/钱包/支付编排/跨链/v2 客户端） | `org.nexus.sdk` | gradle 全绿 |
+> | **TypeScript** | ✅ 可用（真实 RPC 契约：链查询/钱包查询/交易构建/跨链桥/地址校验/提交走 wallet-service） | `@nexus/sdk` | 8 用例（含 keccak 权威向量） |
+> | **Python** | ✅ 可用（同上能力面，零第三方依赖） | `nexus_sdk` | 15 用例（keccak 双权威向量） |
+> | **Go** | ✅ 可用（同上能力面） | `nexus` | 13 用例（含黄金地址跨语言一致性） |
 >
-> | 语言 | 实际状态 | 已知缺陷 |
-> |------|----------|----------|
-> | **Java** | ✅ 可用（63 文件，PaymentOrchestrationClient/Feign 客户端/RPC 全覆盖） | — |
-> | **TypeScript** | ⚠️ 骨架（`typescript/`） | `wallet.create/fromPrivateKey/fromMnemonic` 与 `transaction.sign/buildContractCall` 未实现 |
-> | **Python** | ⚠️ 骨架（`python/`，旧包名 `conpay`） | wallet 6 方法 5 个 `NotImplementedError` |
-> | **Go** | ⚠️ 骨架（`go/`，旧包名 `conpay`） | `Sign/BuildContractCall` 未实现；**`Broadcast` 调用 core 不存在的 `nexus_sendRawTransaction`，调用必失败** |
+> 三语言共享的架构决策：**交易签名与密钥管控集中在 nexus-wallet-service**
+> （KMS/轮换/审计），SDK 不持私钥——`create/submit` 方法指向 wallet-service
+> 端点。查询能力直连 nexus-core JSON-RPC（15 个已核实方法，数值信封）。
+> 各语言详情见对应目录 `STATUS.md`。
 >
-> 三门语言的补全为后续迭代项（v2.2.0+），品牌残留（conpay/CPAY → nexus/NEX）将随补全一并修正。
+> 历史：2026-08-31 前三门语言为骨架占位（含 Broadcast 调用不存在方法等缺陷）；
+> 旧 `conpay` 包（Go/Python）保留源码但已弃用，迁移到新 `nexus`/`nexus_sdk` 包。
 
 ## 概述
-
-NexusChain SDK 是一个统一的多语言软件开发工具包（当前 Java 为主），为 NexusChain 网络提供全栈访问能力。
 
 - **代币符号**: NEX
 - **项目名称**: NexusChain
 
-## 支持语言
+## 核心能力（三语言一致）
 
-| 语言 | 状态 | 目录 | 包名 |
-|------|------|------|------|
-| Java | **可用（推荐）** | `java/` | `org.nexus.sdk` |
-| JavaScript / TypeScript | 规划中（骨架） | `typescript/` | `@nexus/sdk` |
-| Python | 规划中（骨架） | `python/` | `nexus`（现为旧名 conpay） |
-| Go | 规划中（骨架） | `go/` | `nexus`（现为旧名 conpay） |
+### 链查询
+- 区块高度 / 链 ID / 节点状态（`nexus_getNodeStatus`，数值信封）
+- 按高度取块（`nexus_getBlockByHeight`）
 
-## 核心能力
+### 钱包查询
+- 余额（`nexus_getBalance` → `{"balance":"<decimal>"}` 信封解包）
+- nonce（`nexus_getTransactionCount` → `{"count":N}`）
+- 按地址查交易（`nexus_getTransactionsByAddress`）
 
-### 钱包管理 (Wallet)
-- 创建新钱包（生成密钥对）
-- 从私钥/助记词导入钱包
-- 查询余额（NEX 及其他代币）
-- 地址验证与格式转换
+### 交易
+- 构建转账（本地地址校验 + 实时 nonce）
+- 查询确认交易 / 最新交易列表
+- **提交**走 nexus-wallet-service HTTP（`/api/v1/transfers`）
 
-### 交易构造 / 签名 / 广播 (Transaction)
-- 构建转账交易
-- 离线签名
-- 交易序列化 / 反序列化
-- 广播交易到网络
-- 查询交易状态
+### 跨链桥
+- 跨链交易列表（`nexus_getCrossChainTransactions`，近 200 区块 BRIDGE_* 推导，支持状态过滤）
 
-### RPC 客户端 (RpcClient)
-- 封装 NexusChain 节点 JSON-RPC 接口
-- 支持主网 / 测试网切换
-- 连接池管理与自动重连
-- 批量请求支持
-
-### 支付通道操作 (Payment Channel)
-- 开启 / 关闭支付通道
-- 链下状态更新
-- 通道结算与争议处理
-
-### 稳定币操作 (StableCoin)
-- 稳定币发行 / 销毁
-- 稳定币转账
-- 抵押率查询
-- 价格喂价接口
-
-### 跨链操作 (Bridge)
-- 跨链资产锁定 / 解锁
-- 跨链交易状态跟踪
-- 支持多目标链（Ethereum、BSC、Polygon 等）
-
-## 目录结构
-
-```
-nexus-sdk/
-├── README.md
-├── package.json              # npm workspace 根配置
-├── java/                     # Java SDK
-│   ├── build.gradle
-│   ├── settings.gradle
-│   └── src/main/java/org/nexus/sdk/
-│       ├── NexusChainClient.java
-│       ├── Wallet.java
-│       ├── TransactionBuilder.java
-│       ├── RpcClient.java
-│       ├── channel/PaymentChannelClient.java
-│       ├── stablecoin/StableCoinClient.java
-│       └── bridge/BridgeClient.java
-├── typescript/               # TypeScript SDK
-│   ├── package.json
-│   ├── tsconfig.json
-│   └── src/
-│       ├── index.ts
-│       ├── client.ts
-│       ├── wallet.ts
-│       ├── transaction.ts
-│       ├── rpc.ts
-│       └── types.ts
-├── python/                   # Python SDK
-│   ├── setup.py
-│   └── nexus/
-│       ├── __init__.py
-│       ├── client.py
-│       ├── wallet.py
-│       └── transaction.py
-├── go/                       # Go SDK
-│   ├── go.mod
-│   └── nexus/
-│       ├── client.go
-│       ├── wallet.go
-│       └── transaction.go
-└── common/                   # 跨语言共享
-    ├── protobuf/
-    │   └── nexus.proto      # 统一 Protobuf 协议定义
-    └── docs/                  # API 文档
-```
+### 地址校验（纯本地，零依赖）
+- Base58 解码 + 25 字节布局（1 版本 + 20 哈希 + 4 校验尾）
+- keccak256(keccak256(pubkeyHash)) 校验尾验证
+- 语义对齐 Java `KeystoreAction.verifyAddress`，黄金地址跨语言一致
 
 ## 快速开始
 
 ### TypeScript / JavaScript
 
 ```typescript
-import { NexusChainClient } from '@nexus/sdk';
+import { NexusChainClient, validateAddress } from '@nexus/sdk';
 
 const client = new NexusChainClient({
   network: 'mainnet',
-  rpcUrl: 'https://rpc.nexus.network',
+  rpcUrl: 'http://127.0.0.1:19585/rpc',
+  walletServiceUrl: 'http://127.0.0.1:8083', // 交易提交需要
 });
 
-// 创建钱包
-const wallet = client.wallet.create();
-console.log('Address:', wallet.address);
-console.log('PrivateKey:', wallet.privateKey);
+const height = await client.getBlockNumber();           // 数值信封
+const balance = await client.wallet.getBalance(addr);   // 十进制字符串
+const nonce = await client.wallet.getNonce(addr);       // count 信封
+const ok = validateAddress(addr);                       // 本地校验
 
-// 查询余额
-const balance = await client.wallet.getBalance(wallet.address);
-console.log('NEX Balance:', balance);
-
-// 构建并发送交易
-const tx = client.transaction.buildTransfer({
-  from: wallet.address,
-  to: '0xRecipientAddress',
-  amount: '100',
-  token: 'NEX',
-});
-const signedTx = client.transaction.sign(tx, wallet.privateKey);
-const txHash = await client.transaction.broadcast(signedTx);
-console.log('Transaction Hash:', txHash);
-```
-
-### Java
-
-```java
-import org.nexus.sdk.NexusChainClient;
-import org.nexus.sdk.Wallet;
-
-NexusChainClient client = new NexusChainClient.Builder()
-    .network("mainnet")
-    .rpcUrl("https://rpc.nexus.network")
-    .build();
-
-// 创建钱包
-Wallet wallet = client.wallet().create();
-System.out.println("Address: " + wallet.getAddress());
-
-// 查询余额
-BigInteger balance = client.wallet().getBalance(wallet.getAddress());
-System.out.println("NEX Balance: " + balance);
-
-// 构建并发送交易
-Transaction tx = client.transactionBuilder()
-    .buildTransfer(wallet.getAddress(), "0xRecipient", BigInteger.valueOf(100), "NEX");
-String signedTx = client.transactionBuilder().sign(tx, wallet.getPrivateKey());
-String txHash = client.transactionBuilder().broadcast(signedTx);
-System.out.println("Transaction Hash: " + txHash);
+// 提交转账（wallet-service 签名与提交）
+const txHash = await client.wallet.submitTransfer(from, to, '100');
 ```
 
 ### Python
 
 ```python
-from nexus import NexusChainClient
+from nexus_sdk import Client, validate_address
 
-client = NexusChainClient(
-    network='mainnet',
-    rpc_url='https://rpc.nexus.network',
+client = Client(
+    rpc_url="http://127.0.0.1:19585/rpc",
+    wallet_service_url="http://127.0.0.1:8083",  # 交易提交需要
 )
 
-# 创建钱包
-wallet = client.wallet.create()
-print(f'Address: {wallet.address}')
+height = client.get_block_number()
+balance = client.wallet.get_balance(addr)    # 十进制字符串信封 → int
+nonce = client.wallet.get_nonce(addr)
+ok = validate_address(addr)                  # 本地校验
 
-# 查询余额
-balance = client.wallet.get_balance(wallet.address)
-print(f'NEX Balance: {balance}')
-
-# 构建并发送交易
-tx = client.transaction.build_transfer(
-    from_addr=wallet.address,
-    to='0xRecipientAddress',
-    amount='100',
-    token='NEX',
-)
-signed_tx = client.transaction.sign(tx, wallet.private_key)
-tx_hash = client.transaction.broadcast(signed_tx)
-print(f'Transaction Hash: {tx_hash}')
+# 提交转账（wallet-service 签名与提交）
+tx_hash = client.wallet.submit_transfer(from_addr, to, 100)
 ```
 
 ### Go
 
 ```go
-package main
+import "github.com/levango7/nexuschain/sdk/go/nexus"
 
-import (
-    "fmt"
-    "nexus"
-)
+client, err := nexus.NewClient(&nexus.Config{
+    RPCUrl:           "http://127.0.0.1:19585/rpc",
+    WalletServiceURL: "http://127.0.0.1:8083", // 交易提交需要
+})
 
-func main() {
-    client := nexus.NewClient(&nexus.Config{
-        Network: "mainnet",
-        RPCUrl:  "https://rpc.nexus.network",
-    })
+height, _ := client.GetBlockNumber()          // 数值信封
+balance, _ := client.Wallet.GetBalance(addr)   // *big.Int（十进制信封）
+nonce, _ := client.Wallet.GetNonce(addr)
+ok := nexus.ValidateAddress(addr)              // 本地校验
 
-    // 创建钱包
-    wallet := client.Wallet().Create()
-    fmt.Println("Address:", wallet.Address)
-
-    // 查询余额
-    balance, _ := client.Wallet().GetBalance(wallet.Address)
-    fmt.Println("NEX Balance:", balance)
-
-    // 构建并发送交易
-    tx := client.Transaction().BuildTransfer(
-        wallet.Address, "0xRecipient", "100", "NEX",
-    )
-    signedTx := client.Transaction().Sign(tx, wallet.PrivateKey)
-    txHash, _ := client.Transaction().Broadcast(signedTx)
-    fmt.Println("Transaction Hash:", txHash)
-}
+// 提交转账（wallet-service 签名与提交）
+txHash, err := client.Wallet.SubmitTransfer(nexus.SubmitTransferRequest{
+    From: from, To: to, Amount: big.NewInt(100),
+})
 ```
+
+### Java（全能力，见 `java/`）
+
+支付编排、支付通道、稳定币、跨链、v2 分页/订阅/租户客户端等完整能力
+仅在 Java SDK 提供（Feign 客户端 + 服务发现）；三轻语言覆盖上表查询
+与提交能力面。
 
 ## 配置
 
-SDK 支持以下配置项：
-
 | 参数 | 类型 | 说明 |
 |------|------|------|
-| `network` | string | 网络类型：`mainnet` / `testnet` |
-| `rpcUrl` | string | NexusChain 节点 RPC 地址 |
-| `timeout` | number | 请求超时时间（毫秒），默认 30000 |
-| `apiKey` | string | API 密钥（可选，用于付费节点） |
+| `rpcUrl` / `rpc_url` / `RPCUrl` | string | nexus-core JSON-RPC 端点（如 `http://127.0.0.1:19585/rpc`） |
+| `walletServiceUrl` | string | nexus-wallet-service 基址（交易提交需要；仅查询可不填） |
+| `timeout` | number | 请求超时（TS/Go 毫秒 / Python 秒），默认 30000 / 30 |
+| `apiKey` | string | 可选 Bearer token |
 
-## 协议定义
-
-所有语言共享统一的 Protobuf 协议定义，位于 `common/protobuf/nexus.proto`。各语言 SDK 可基于该定义生成对应的序列化代码，确保跨语言兼容。
-
-## 构建
-
-### TypeScript
+## 构建与测试
 
 ```bash
-cd typescript
-npm install
-npm run build
-```
+# TypeScript（Node >= 18）
+cd typescript && npm install && npm test
 
-### Java
+# Python（>= 3.10，零依赖）
+cd python && python tests/test_nexus_sdk.py
 
-```bash
-cd java
-./gradlew build
-```
+# Go（>= 1.21）
+cd go && go test ./nexus/
 
-### Python
-
-```bash
-cd python
-pip install -e .
-```
-
-### Go
-
-```bash
-cd go
-go build ./...
+# Java
+cd java && ./gradlew build
 ```
 
 ## 许可证

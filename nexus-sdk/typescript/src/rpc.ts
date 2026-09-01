@@ -90,30 +90,24 @@ export class RpcClient {
   /**
    * 查询当前区块高度。
    *
-   * 兼容实现：nexus-core 未提供 nexus_blockNumber，改为调用
-   * nexus_getLatestBlocks 取最新区块列表中的第一个区块高度。
+   * v2.2.0 补真：对齐 nexus_getNodeStatus 真实信封（latestHeight 数值型，
+   * 非 0x hex）。原骨架的 nexus_getLatestBlocks+hex 解析路径与真实信封不符。
    *
    * @returns 区块高度
    */
   async getBlockNumber(): Promise<number> {
-    const result = (await this.call('nexus_getLatestBlocks', [1])) as unknown;
-    if (Array.isArray(result)) {
-      if (result.length === 0) return 0;
-      const first = result[0] as Record<string, unknown> | string;
-      if (typeof first === 'object' && first !== null) {
-        const h = (first as Record<string, unknown>).height ?? (first as Record<string, unknown>).number;
-        return typeof h === 'string' ? parseInt(h as string, 16) : Number(h);
-      }
-      return typeof first === 'string' ? parseInt(first, 16) : Number(first);
+    const result = (await this.call('nexus_getNodeStatus', [])) as unknown;
+    if (typeof result === 'object' && result !== null) {
+      const h = (result as Record<string, unknown>).latestHeight;
+      return typeof h === 'number' ? h : parseInt(String(h), 10);
     }
-    return parseInt(result as string, 16);
+    throw new Error(`unexpected getNodeStatus envelope: ${typeof result}`);
   }
 
   /**
    * 根据 hash 获取区块信息。
    *
-   * 注意：nexus-core 当前未提供 nexus_getBlockByHash，保留接口以兼容旧 SDK 用户。
-   * 实际应通过 nexus_getBlockByHeight 配合索引服务使用。
+   * nexus-core 未提供 nexus_getBlockByHash（真实限制，非骨架假设）。
    *
    * @param blockHash 区块哈希
    * @returns 区块信息
@@ -143,28 +137,39 @@ export class RpcClient {
   /**
    * 获取网络链 ID。
    *
-   * 兼容实现：nexus-core 未提供 nexus_chainId，改为调用
-   * nexus_getNodeStatus 从节点状态中获取 chainId 字段。
+   * v2.2.0 补真：对齐 nexus_getNodeStatus.chainId（数值型）。
    *
    * @returns 链 ID
    */
   async getChainId(): Promise<number> {
     const result = (await this.call('nexus_getNodeStatus', [])) as unknown;
     if (typeof result === 'object' && result !== null) {
-      const obj = result as Record<string, unknown>;
-      const cid = obj.chainId ?? obj.chain_id;
+      const cid = (result as Record<string, unknown>).chainId;
       if (cid !== undefined) {
-        return typeof cid === 'string' ? parseInt(cid, 16) : Number(cid);
+        return typeof cid === 'number' ? cid : parseInt(String(cid), 10);
       }
     }
-    return parseInt(result as string, 16);
+    throw new Error(`unexpected getNodeStatus envelope: ${typeof result}`);
+  }
+
+  /**
+   * 获取节点状态全量信封（chainId/latestHeight/latestHash/syncing/peers/version）。
+   */
+  async getNodeStatus(): Promise<Record<string, unknown>> {
+    const result = (await this.call('nexus_getNodeStatus', [])) as unknown;
+    if (typeof result === 'object' && result !== null) {
+      return result as Record<string, unknown>;
+    }
+    throw new Error(`unexpected getNodeStatus envelope: ${typeof result}`);
   }
 
   /**
    * 获取当前 Gas 价格。
    *
-   * 兼容实现：nexus-core 未提供 nexus_gasPrice，改为调用
-   * nexus_getNodeStatus 从节点状态中获取 gasPrice 字段；若不存在则返回默认值 1 gwei。
+   * v2.2.0 补真：nexus_getNodeStatus 信封实际不含 gasPrice 字段
+   * （JsonRpcController.doGetNodeStatus 只返回 chainId/latestHeight/
+   * latestHash/syncing/peers/version）。原骨架的 gasPrice 读取永远走
+   * 默认值分支。保留默认 1 gwei 兜底并如实标注。
    *
    * @returns Gas 价格（wei，十六进制）
    */
@@ -176,7 +181,7 @@ export class RpcClient {
         return obj.gasPrice as string;
       }
     }
-    // 默认 1 gwei
+    // 节点状态无 gasPrice 字段 → 默认 1 gwei（与 Java GAS_TABLE 体系并存）
     return '0x3b9aca00';
   }
 

@@ -84,7 +84,7 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
 | `nexus-wallet-service` | 钱包服务：白名单、冷热托管、审批流 | 白名单/审批完整，托管为模拟 |
 | `mpc-engine` | Rust gRPC MPC 密码学引擎 | **真实 GG20（multi-party-ecdsa），可信协调器模型** |
 | `nexus-explorer` | React + TS 区块浏览器 | **MVP 骨架**（约 40 个前端源文件，见成熟度声明） |
-| `nexus-sdk` | Java SDK：RPC、钱包、支付编排、跨链/稳定币客户端 | Java 较完整；TypeScript/Python/Go 为规划中骨架（核心能力未实现，见 nexus-sdk/README 诚实声明） |
+| `nexus-sdk` | 四语言 SDK：Java 全能力；TS/Python/Go 真实 RPC 契约实现（链/钱包/交易查询、跨链桥、地址校验、提交走 wallet-service） | **四语言全部可用**（2026-09-01 v2.2.0 补真，36 用例全绿，见 nexus-sdk/README） |
 | `nexus-rpc-doc` | RPC API 文档 | 参考 |
 
 > **注（2026-08-29 审计核实）**：`nexus-settlement` / `nexus-compliance` / `nexus-analytics` / `nexus-oracle`

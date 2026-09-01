@@ -7,8 +7,9 @@
   "license": "MIT",
   "scripts": {
     "build": "tsc",
-    "clean": "rimraf dist",
+    "clean": "rimraf dist dist-test",
     "lint": "eslint src --ext .ts",
+    "test": "tsc -p tsconfig.test.json && node --test dist-test/test/sdk.test.js",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
