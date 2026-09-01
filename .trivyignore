@@ -71,3 +71,16 @@ CVE-2026-41992
 CVE-2026-54369
 # libtinfo6 / ncurses-base / ncurses-bin 6.4-4：CVE-2025-69720 — 无 Fixed Version
 CVE-2025-69720
+
+# --- 2026-09-01 增补（7895c03 CGGMP21 迁移批 CI run 33568312697）---
+# 处置原则首例：应用依赖层（Rust crate），非系统包。豁免依据与
+# mpc-engine/.cargo/audit.toml RUSTSEC-2025-0127 条目完全一致：
+# cggmp21 0.6.3 CVE-2025-66017（GHSA-8frv-q972-9rq5，CVSS4.0 8.2 HIGH）——
+# 漏洞面为 presignature 的两种削弱用法（HD 派生后选 / raw signing 未观测
+# 原文即签）；advisory 官方 workaround 原文允许"不用 presignature 即安全"。
+# mpc-engine 仅用 signing().sign_sync() 完整签名协议（cggmp.rs），从不调用
+# generate_presignature / issue_partial_signature / set_derivation_path
+# （hd-wallet feature 未启用）。Rust 生态无 0.6.x 补丁版（first_patched null，
+# 修复随 cggmp24 v0.7.0-alpha.2 API 变更发布）——cggmp24 v0.7 正式版发布后
+# 迁移并移除本豁免。
+CVE-2025-66017

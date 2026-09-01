@@ -36,4 +36,20 @@ ignore = [
     # 项目实际使用为 GCM nonce 生成（aes-gcm 0.10），未启用自定义 logger 路径，
     # 升级 0.8 需 multi-party-ecdsa 上游先升级——与 RUSTSEC-2022-0070 同类延后
     "RUSTSEC-2026-0097",
+
+    # cggmp21 0.6.3（RUSTSEC-2025-0127, CVE-2025-66017, crypto-failure）
+    # 漏洞面：presignature 的两种削弱用法——①Presignature::set_derivation_path
+    # （HD 派生路径后选，安全级降至 85bit）；②raw signing（PrehashedDataToSign
+    # 未观测原文即签，签名伪造）。修复仅随 cggmp24 v0.7.0-alpha.2+（API 变更式
+    # 修复，0.6.x 无补丁版）。
+    # 豁免依据（advisory 官方 workaround 原文："unpatched versions can be used
+    # safely as long as presignatures are not used in the two scenarios above"）：
+    # mpc-engine 仅使用 cggmp21::signing(eid,i,parties,key_share).sign_sync()
+    # 完整签名协议（cggmp.rs sign_state_machine），**从不调用 generate_presignature /
+    # issue_partial_signature / set_derivation_path**（HD-wallet feature 未启用，
+    # Cargo.toml features=[state-machine, curve-secp256k1]）。签名消息哈希经
+    # DataToSign::from_digest 构造（原文哈希，非任意 prehash）。
+    # 升级路线：cggmp24 v0.7 正式版发布后迁移（CGGMP21_MIGRATION.md 四步），
+    # 届时移除本豁免。见 docs/plan/ v2.2.0 阶段二批注。
+    "RUSTSEC-2025-0127",
 ]
