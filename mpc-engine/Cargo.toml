@@ -26,15 +26,42 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # GPL 传染性限于本二进制，不影响仓库其余 Apache-2.0 组件（进程隔离）。
 # 版本 0.8.1 依赖 curv-kzen 0.9 / kzen-paillier 0.4.2 / sha2 0.9 / secp256k1 0.20，
 # 此处显式声明同版本以让 cargo 统一解析。
+#
+# v2.2.0 阶段二（2026-09-01）：**分布式路径已迁移至 cggmp21**（见下）。
+# multi-party-ecdsa 保留给单进程可信协调器路径（gg20.rs/sign.rs/aggregate.rs，
+# Java E2E 与集成测试依赖），两条路径并存直至协调器路径退役。
 multi-party-ecdsa = "0.8.1"
 curv-kzen = "0.9"
 paillier = { version = "0.4.2", package = "kzen-paillier" }
 zk-paillier = "0.4.3"
+
+# === v2.2.0 阶段二：CGGMP21（分布式 sign 路径引擎）===
+# LFDT-Lockness/cggmp21 0.6.3：state-of-art 门限 ECDSA（Kudelski 审计）。
+# 关键优势（阶段一用 GG20 无法做到的）：
+#   1. 全部协议消息类型 pub（keygen ThresholdMsg/signing Msg/AuxOnlyMsg）——
+#      分布式转发的前提（GG20 的 OfflineProtocolMessage 是 crate 私有）
+#   2. 原生 t-of-n 门限（签名恰好 t 方；GG20 是 t+1 的怪癖语义）
+#   3. 活跃维护（0.6.3 发布于 2025-11；multi-party-ecdsa 0.8.1 停更于 2023-06）
+# 许可证 MIT OR Apache-2.0（比 GPL 的 multi-party-ecdsa 更宽松）。
+# features：state-machine = 同步状态机包装（wrap_protocol）；curve-secp256k1 = 曲线。
+# 依赖链注意：crates.io 锁定 paillier-zk 0.4.3 → fast-paillier 0.1.1 → rug/GMP
+# 硬依赖（Windows 本地构建需 MSYS2 m4+make；Linux CI 直接可用）。
+# 依赖策略：cggmp21 自带 generic-ec/round-based 0.4.x（其 re-export 即可用），
+# 不在此显式声明版本以免与旧 GG20 路径的 round-based 0.1 冲突——两条协议栈
+# 的依赖在树中按 major 版本隔离共存。
+cggmp21 = { version = "0.6.3", features = ["state-machine", "curve-secp256k1"] }
+# sha2 0.10：cggmp21 依赖 digest 0.10 trait（GenericArray 等新 API），与 mpc-engine
+# 旧锁定的 sha2 0.9（GG20 路径）不兼容。以别名引入供 cggmp.rs 专用；旧 sha2 0.9
+# 保留给 GG20 路径不变（package 名 sha2 不变 = 旧路径不感知）。
+sha2_010 = { package = "sha2", version = "0.10" }
+# rand_core：cggmp21 链路使用（cggmp21-keygen re-export）。与 mpc-engine 已有
+# rand 0.7 同 crate 名冲突——以别名引入供 cggmp.rs 专用。
+rand_core = "0.6"
+
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-# v2.2.0 分散式（真门限安全）：round_based 是 multi-party-ecdsa 的协议消息
-# 层（Msg/StateMachine trait），dev feature 提供 Simulation（测试驱动 3 方
-# 状态机）。版本与 multi-party-ecdsa 0.8.1 解析一致（0.1.x）。
+# v2.2.0 分散式（真门限安全）：round_based 0.1 保留给 GG20 单进程路径的
+# Simulation 测试驱动（multi-party-ecdsa 0.8.1 消息层）。
 round-based = { version = "0.1", features = ["dev"] }
 # secp256k1 版本锁定 0.20：multi-party-ecdsa 0.8.1 / curv-kzen 0.9 依赖
 # secp256k1 0.20 的 API。曾尝试升级至 0.29，但 0.29 存在 breaking API 变更：

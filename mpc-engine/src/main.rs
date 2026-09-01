@@ -42,6 +42,7 @@ use std::net::SocketAddr;
 use tracing_subscriber::EnvFilter;
 
 mod aggregate;
+mod cggmp;
 mod config;
 mod distributed;
 mod dkg;
