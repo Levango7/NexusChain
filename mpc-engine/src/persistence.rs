@@ -52,7 +52,9 @@ const KEY_LEN: usize = 32;
 ///
 /// 加密文件新格式：`MAGIC(4B) || version(4B LE) || nonce(12B) || ciphertext`。
 /// 旧格式（无版本号）：`nonce(12B) || ciphertext`，解密时检测无 MAGIC 前缀则视为版本 1。
-const KEY_VERSION_MAGIC: &[u8; 4] = b"NXC1";
+///
+/// `pub(crate)`：distributed.rs 的加密落盘测试断言魔数前缀。
+pub(crate) const KEY_VERSION_MAGIC: &[u8; 4] = b"NXC1";
 
 /// 中12: 密钥版本号文件头长度（MAGIC 4B + version 4B LE）。
 const KEY_VERSION_HEADER_LEN: usize = 8;
@@ -84,8 +86,10 @@ fn my_share_path(session_id: &str) -> PathBuf {
 /// # 安全
 /// 0600 = rw-------（所有者读写，组与其他无任何权限）。
 /// 防止其他用户/进程读取加密文件（虽然文件已加密，但权限收紧是纵深防御）。
+///
+/// `pub(crate)`：distributed.rs 的 v2.2.0 份额落盘加密（阶段二接入）复用此函数。
 #[cfg(unix)]
-fn set_secure_permissions(path: &Path) {
+pub(crate) fn set_secure_permissions(path: &Path) {
     use std::os::unix::fs::PermissionsExt;
     if let Err(e) = fs::set_permissions(path, fs::Permissions::from_mode(0o600)) {
         tracing::warn!(
@@ -97,8 +101,11 @@ fn set_secure_permissions(path: &Path) {
 }
 
 /// 低9: 非 Unix 平台（如 Windows）的空操作。
+///
+/// Windows 上文件权限通过 ACL 管理，此处空操作。
+/// 部署时应通过 NTFS ACL 限制 session 目录访问（如仅 mpc-engine 服务账户可访问）。
 #[cfg(not(unix))]
-fn set_secure_permissions(_path: &Path) {
+pub(crate) fn set_secure_permissions(_path: &Path) {
     // Windows 上文件权限通过 ACL 管理，此处空操作。
     // 部署时应通过 NTFS ACL 限制 session 目录访问（如仅 mpc-engine 服务账户可访问）。
     tracing::debug!(
@@ -139,7 +146,9 @@ fn load_storage_key() -> eyre::Result<[u8; KEY_LEN]> {
 ///
 /// 输出格式：`nonce(12B) || ciphertext`（GCM tag 内嵌于 ciphertext 尾部）。
 /// nonce 使用 `OsRng` 密码学随机数生成器生成。
-fn aes_encrypt(plaintext: &[u8], key: &[u8; KEY_LEN]) -> eyre::Result<Vec<u8>> {
+///
+/// `pub(crate)`：distributed.rs 的 v2.2.0 份额落盘加密复用。
+pub(crate) fn aes_encrypt(plaintext: &[u8], key: &[u8; KEY_LEN]) -> eyre::Result<Vec<u8>> {
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
     let mut nonce_bytes = [0u8; NONCE_LEN];
     OsRng.fill_bytes(&mut nonce_bytes);
@@ -155,7 +164,7 @@ fn aes_encrypt(plaintext: &[u8], key: &[u8; KEY_LEN]) -> eyre::Result<Vec<u8>> {
 /// AES-256-GCM 解密。
 ///
 /// 输入格式：`nonce(12B) || ciphertext`。GCM 自带完整性校验，篡改会返回错误。
-fn aes_decrypt(data: &[u8], key: &[u8; KEY_LEN]) -> eyre::Result<Vec<u8>> {
+pub(crate) fn aes_decrypt(data: &[u8], key: &[u8; KEY_LEN]) -> eyre::Result<Vec<u8>> {
     if data.len() < NONCE_LEN {
         return Err(eyre!(
             "encrypted data too short ({} < {}): corrupted or not encrypted with MPC-P1-05 format",
@@ -178,7 +187,9 @@ fn aes_decrypt(data: &[u8], key: &[u8; KEY_LEN]) -> eyre::Result<Vec<u8>> {
 ///
 /// `version` 为密钥版本号，用于密钥轮换：新文件用当前版本加密，
 /// 旧文件由解密方根据版本号选择对应密钥。
-fn aes_encrypt_with_version(
+///
+/// `pub(crate)`：distributed.rs 的 v2.2.0 份额落盘加密复用。
+pub(crate) fn aes_encrypt_with_version(
     plaintext: &[u8],
     key: &[u8; KEY_LEN],
     version: u32,
@@ -200,7 +211,12 @@ fn aes_encrypt_with_version(
 ///
 /// 返回 `(version, plaintext)`。调用方根据 version 选择对应密钥
 /// （当前实现仍用单一 `MPC_STORAGE_KEY`，完整多密钥支持标注 TODO）。
-fn aes_decrypt_with_version(data: &[u8], key: &[u8; KEY_LEN]) -> eyre::Result<(u32, Vec<u8>)> {
+///
+/// `pub(crate)`：distributed.rs 的 v2.2.0 份额落盘解密复用。
+pub(crate) fn aes_decrypt_with_version(
+    data: &[u8],
+    key: &[u8; KEY_LEN],
+) -> eyre::Result<(u32, Vec<u8>)> {
     // 检测新格式：以 MAGIC 前缀开头
     if data.len() >= KEY_VERSION_HEADER_LEN && &data[0..4] == KEY_VERSION_MAGIC {
         let version = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);

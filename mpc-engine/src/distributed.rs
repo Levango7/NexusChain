@@ -412,59 +412,88 @@ impl Default for DistRegistry {
     }
 }
 
-/// 本方 LocalKey 的持久化（仅本方份额，v2.2.0 分散式）。
+/// 本方 LocalKey 的持久化（仅本方份额，v2.2.0 分散式；**AES-256-GCM 加密落盘**）。
 ///
 /// 与 persistence.rs 的全量 `DkgSession` 序列化互斥使用——分散式路径**从不**
 /// 写全量会话；磁盘只存本方 LocalKey，供 E2E 断言"无他方份额"。
 ///
 /// `base_dir`：显式传入的数据目录（生产=PartyConfig.data_dir；测试=tempdir）。
 /// 不读全局 env——路径注入使测试无 env 竞态，且多实例目录隔离由调用方保证。
-/// 注意：阶段一为明文 JSON 落盘（persistence.rs 的 AES-256-GCM 加密与
-/// key 版本机制属阶段二接入点，接入时改走 persistence 的加密原语）。
+///
+/// **v2.2.0 阶段二：静态加密接入**（persistence.rs 的 AES-256-GCM 原语 +
+/// 密钥版本头）。`key` 显式传入（生产从 `PartyConfig::resolve_storage_key`
+/// 解析；32 字节 AES-256 密钥），`key_version` 透传写入文件头
+/// （`NXC1 || version LE || nonce || ciphertext`）支持密钥轮换——
+/// 旧密钥文件由 `load_local_key` 调用方按版本选择密钥解密。
+/// 文件不以明文 JSON 形态存在（防主机落盘窃取直接拿到门限份额）。
 pub fn persist_local_key(
     base_dir: &std::path::Path,
     session_id: &str,
     party_index: u16,
     local_key: &sm_keygen::LocalKey<Secp256k1>,
+    key: &[u8; 32],
+    key_version: u32,
 ) -> eyre::Result<()> {
     let json =
         serde_json::to_string(local_key).map_err(|e| eyre::eyre!("serialize local key: {e}"))?;
+    let encrypted =
+        crate::persistence::aes_encrypt_with_version(json.as_bytes(), key, key_version)?;
     let dir = base_dir.join("dist");
     std::fs::create_dir_all(&dir)
         .map_err(|e| eyre::eyre!("create dist dir {}: {e}", dir.display()))?;
     let path = dir.join(format!(
-        "p{party_index}-{}.json",
+        "p{party_index}-{}.bin",
         sanitize_session_id(session_id)
     ));
-    std::fs::write(&path, json)
+    std::fs::write(&path, encrypted)
         .map_err(|e| eyre::eyre!("write local key {}: {e}", path.display()))?;
+    // 低9: 0600 权限（Unix；Windows 由 NTFS ACL 负责）——加密之上的纵深防御
+    crate::persistence::set_secure_permissions(&path);
     tracing::info!(
         session_id = %session_id,
         party_index,
         path = %path.display(),
-        "v2.2.0 dist: local key persisted (this party's share only)"
+        key_version,
+        "v2.2.0 dist: local key persisted \
+         (AES-256-GCM encrypted, this party's share only)"
     );
     Ok(())
 }
 
 /// 读取本方 LocalKey（重启恢复用）。`base_dir` 须与 persist 时一致。
+///
+/// 只认加密格式（`NXC1` 版本头 + GCM 密文）——明文 JSON 阶段一测试产物
+/// 不是合法输入（fail-closed：解密失败即报错，不做明文回退降级）。
+/// 返回值含文件头记录的密钥版本号，供调用方轮换审计。
+#[allow(clippy::type_complexity)]
 pub fn load_local_key(
     base_dir: &std::path::Path,
     session_id: &str,
     party_index: u16,
-) -> eyre::Result<Option<sm_keygen::LocalKey<Secp256k1>>> {
+    key: &[u8; 32],
+) -> eyre::Result<Option<(u32, sm_keygen::LocalKey<Secp256k1>)>> {
     let path = base_dir.join("dist").join(format!(
-        "p{party_index}-{}.json",
+        "p{party_index}-{}.bin",
         sanitize_session_id(session_id)
     ));
     if !path.exists() {
         return Ok(None);
     }
-    let json = std::fs::read_to_string(&path)
-        .map_err(|e| eyre::eyre!("read local key {}: {e}", path.display()))?;
-    let key: sm_keygen::LocalKey<Secp256k1> =
+    let bytes =
+        std::fs::read(&path).map_err(|e| eyre::eyre!("read local key {}: {e}", path.display()))?;
+    let (version, plaintext) =
+        crate::persistence::aes_decrypt_with_version(&bytes, key).map_err(|e| {
+            eyre::eyre!(
+                "decrypt local key {} failed ({e}) — wrong key, tampered file, \
+                 or legacy plaintext from stage-1 (not supported)",
+                path.display()
+            )
+        })?;
+    let json = String::from_utf8(plaintext)
+        .map_err(|e| eyre::eyre!("local key plaintext is not valid UTF-8: {e}"))?;
+    let local_key: sm_keygen::LocalKey<Secp256k1> =
         serde_json::from_str(&json).map_err(|e| eyre::eyre!("deserialize local key: {e}"))?;
-    Ok(Some(key))
+    Ok(Some((version, local_key)))
 }
 
 /// session_id 文件名安全化（仅保留 [A-Za-z0-9-_]；防路径穿越——审计 S4 修复
@@ -576,7 +605,8 @@ mod tests {
 
     /// 分散式份额落盘隔离：每方只写自己的 local_key 文件；读取不含他方份额。
     ///
-    /// 显式 base_dir（零全局 env——与 persistence 测试家族无并行竞态）。
+    /// 显式 base_dir + 显式密钥（零全局 env——与 persistence 测试家族无并行竞态）。
+    /// v2.2.0 阶段二起文件为 AES-256-GCM 密文（`NXC1` 版本头）。
     #[test]
     fn dist_local_key_persistence_isolated() {
         let mut sim = Simulation::new();
@@ -584,22 +614,32 @@ mod tests {
             sim.add_party(sm_keygen::Keygen::new(i, 2, 3).expect("Keygen::new"));
         }
         let keys: Vec<sm_keygen::LocalKey<Secp256k1>> = sim.run().expect("dkg");
-        let dir = std::env::temp_dir().join(format!("dist-mpc-test-{}", std::process::id()));
+        // 唯一化目录（pid + 纳秒时钟）：防同 pid 重跑时读到上次残留文件
+        let dir = std::env::temp_dir().join(format!(
+            "dist-mpc-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let key = [0x42u8; 32];
 
         let sid = "dist-persist-test";
-        for (idx, key) in keys.iter().enumerate() {
+        for (idx, k) in keys.iter().enumerate() {
             let party = u16::try_from(idx + 1).expect("index fits u16");
-            persist_local_key(&dir, sid, party, key).expect("persist local key");
+            persist_local_key(&dir, sid, party, k, &key, 1).expect("persist local key");
         }
 
-        // 每方读回自己的 LocalKey：i 与本方一致
+        // 每方读回自己的 LocalKey：i 与本方一致；版本号往返一致
         for idx in 0..3u16 {
-            let loaded = load_local_key(&dir, sid, idx + 1)
+            let (version, loaded) = load_local_key(&dir, sid, idx + 1, &key)
                 .expect("load")
                 .expect("exists");
             assert_eq!(loaded.i, idx + 1, "party {idx} loads only its own key");
             assert_eq!(loaded.t, 2);
             assert_eq!(loaded.n, 3);
+            assert_eq!(version, 1, "key version round-trips from file header");
         }
 
         // 目录内 3 个文件、每个文件 < 32KB（LocalKey 体量级，断言非全量会话
@@ -618,6 +658,70 @@ mod tests {
         }
 
         // 清理
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// v2.2.0 份额静态加密安全属性（阶段二接入）：
+    /// 1. 落盘文件是密文（`NXC1` 魔数开头，非明文 JSON）
+    /// 2. 密文不泄露份额内容（x_i 的 hex 不在文件字节中出现）
+    /// 3. 错误密钥解密失败（GCM 完整性校验 fail-closed）
+    /// 4. 明文 JSON（阶段一格式）被拒绝读取——不降级
+    /// 5. key_version 写入文件头并往返
+    #[test]
+    fn dist_local_key_encrypted_at_rest() {
+        let mut sim = Simulation::new();
+        sim.add_party(sm_keygen::Keygen::new(1, 1, 2).expect("Keygen::new"));
+        sim.add_party(sm_keygen::Keygen::new(2, 1, 2).expect("Keygen::new"));
+        let keys: Vec<sm_keygen::LocalKey<Secp256k1>> = sim.run().expect("dkg");
+        // 唯一化目录（pid + 会话名 + 纳秒时钟）：防同 pid 重跑时读到上次残留文件
+        let dir = std::env::temp_dir().join(format!(
+            "dist-mpc-enc-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let key = [0x42u8; 32];
+        let sid = "dist-enc-test";
+
+        persist_local_key(&dir, sid, 1, &keys[0], &key, 3).expect("persist");
+        let path = dir.join("dist").join("p1-dist-enc-test.bin");
+        let raw = std::fs::read(&path).expect("read raw");
+
+        // 1. NXC1 魔数 + 非明文 JSON
+        assert!(
+            raw.starts_with(crate::persistence::KEY_VERSION_MAGIC),
+            "encrypted local key file must start with NXC1 magic"
+        );
+        assert!(!raw.starts_with(b"{"), "file must not be plaintext JSON");
+        // 2. 密文不含份额内容（x_i 经 BigInt 的 hex 表示不在密文字节里）
+        let xi_hex =
+            curv::arithmetic::traits::Converter::to_hex(&keys[0].keys_linear.x_i.to_bigint());
+        assert!(
+            !raw.windows(xi_hex.len()).any(|w| w == xi_hex.as_bytes()),
+            "ciphertext must not contain the plaintext share bytes"
+        );
+        // 3. 错误密钥 fail-closed
+        let wrong = [0xAAu8; 32];
+        assert!(
+            load_local_key(&dir, sid, 1, &wrong).is_err(),
+            "wrong key must fail (GCM integrity)"
+        );
+        // 4. 明文 JSON 不是合法输入：手工写一个 .bin 明文文件，读取必须报错
+        std::fs::write(&path, b"{\"stage1\":\"plaintext\"}").expect("plant plaintext");
+        assert!(
+            load_local_key(&dir, sid, 1, &key).is_err(),
+            "plaintext JSON must be rejected (fail-closed, no legacy fallback)"
+        );
+        // 5. 重写加密文件（version 3）后版本号往返
+        persist_local_key(&dir, sid, 1, &keys[0], &key, 3).expect("re-persist");
+        let (version, loaded) = load_local_key(&dir, sid, 1, &key)
+            .expect("load")
+            .expect("exists");
+        assert_eq!(version, 3, "key version must round-trip");
+        assert_eq!(loaded.i, 1);
+
         std::fs::remove_dir_all(&dir).ok();
     }
 }

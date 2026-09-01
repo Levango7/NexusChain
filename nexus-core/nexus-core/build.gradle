@@ -288,29 +288,26 @@ task fatJar(type: Jar) {
     exclude '**/module-info.class'
 }
 
-// === 覆盖率门禁（与 nexus-gateway 对齐，minimum 0.15） ===
-// BUNDLE 级别指令覆盖率下限；check 依赖 jacocoTestCoverageVerification 以强制门禁
-// P2-F4 修复：仅在实际执行 test 任务时才运行覆盖率验证，避免 `build -x test` 因
-// 无测试执行数据（覆盖率默认 0% < 门槛）而失败。
+// === 覆盖率门禁：已毕业（2026-09-01）===
+// 历史：模块因 p2p/governance 覆盖欠账曾显式覆盖为 0.25 渐进线（防倒退），
+// 根 0.30 门禁不注入（ext.jacocoGateOverridden）。2026-09-01 补齐
+// ByteUtil/Arrays/Transaction/Block/PeningTransPool 五套模型与工具单测后
+// 实测指令覆盖 0.3085、行覆盖 0.3009（排除生成代码口径），双双越过根 0.30
+// 门禁——删除本覆盖块，回归根值。
 //
-// 测试体系中期建设（2026-08-30）：根 subprojects 的 0.30 全局门禁已接线生效后，
-// 本模块实测指令覆盖率 0.25（420 个主源码文件，L2/密码学单测扎实但 p2p/governance
-// 历史欠账），一步到 0.30 不现实。此处显式覆盖为 0.25 现状门禁（防倒退），
-// 目标 0.30 —— 接近后删除本覆盖块回归根值。比"回调根门禁为不生效"诚实：
-// 0.25 门禁真实挡住覆盖率下滑。
-// 测试体系中期建设：模块自定义覆盖率渐进线，根 0.30 门禁不注入（见根 build.gradle）
-ext.jacocoGateOverridden = true
+// 口径对齐（report-vs-BUNDLE-gate scope trap）：jacocoTestReport 的
+// classDirectories 排除了 protoc 生成代码（NexusChainOuterClass/Grpc），
+// 验证任务必须同样排除，否则 ~16k 行生成代码摊薄分母（实测 0.29 < 0.30 假阴性）。
+// 生成代码不是本仓维护面，不应参与覆盖率门禁。
 jacocoTestCoverageVerification {
     onlyIf { gradle.taskGraph.hasTask(test) }
-    violationRules {
-        rule {
-            element = 'BUNDLE'
-            limit {
-                counter = 'INSTRUCTION'
-                value = 'COVEREDRATIO'
-                minimum = 0.25
-            }
-        }
+    afterEvaluate {
+        classDirectories.setFrom(files(classDirectories.files.collect {
+            fileTree(dir: it, exclude: [
+                    'org/nexus/p2p/NexusChainOuterClass*.class',
+                    'org/nexus/p2p/NexusChainGrpc*.class'
+            ])
+        }))
     }
 }
 
