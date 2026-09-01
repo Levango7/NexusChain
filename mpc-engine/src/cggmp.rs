@@ -135,10 +135,20 @@ pub struct CgMessage {
 ///
 /// 协议消息的 id（`MsgId = u64`）由调用方分配（CgMessage 暂不携带，
 /// 默认给 0；协议对 id 不敏感，只对 sender/payload 敏感）。
-pub fn pump<SM, M>(sm: &mut SM, incoming: &[CgMessage]) -> eyre::Result<(Vec<CgMessage>, bool)>
+///
+/// 返回 `(outgoing, finished, output)`：
+/// - outgoing：本轮驱动产出的待发消息
+/// - finished：是否已完成（`ProceedResult::Output(_)` 已到达）
+/// - output：协议产物（`Some` 当 `finished=true`）；调用方拿到签名结果
+///   /份额等。`None` 当 `finished=false`。
+pub fn pump<SM, M>(
+    sm: &mut SM,
+    incoming: &[CgMessage],
+) -> eyre::Result<(Vec<CgMessage>, bool, Option<SM::Output>)>
 where
-    SM: CgStateMachine<Msg = M>,
+    SM: CgStateMachine<Msg = M> + ?Sized,
     M: serde::de::DeserializeOwned + serde::Serialize,
+    SM::Output: Sized, // 同步状态机产物 Sized（生成器产物非 dyn 友好）
 {
     // 1. 喂入收到的消息
     for m in incoming {
@@ -163,7 +173,7 @@ where
 
     // 2. 轮询驱动 proceed 取出消息
     let mut outgoing = Vec::new();
-    let mut finished = false;
+    let mut output: Option<SM::Output> = None;
     loop {
         match sm.proceed() {
             ProceedResult::SendMsg(out) => {
@@ -181,8 +191,8 @@ where
                 });
             }
             ProceedResult::NeedsOneMoreMessage => break,
-            ProceedResult::Output(_) => {
-                finished = true;
+            ProceedResult::Output(o) => {
+                output = Some(o);
                 break;
             }
             // Yielded/Error 是 round_based 0.4 异步/错误路径——同步状态机
@@ -198,7 +208,8 @@ where
         }
     }
 
-    Ok((outgoing, finished))
+    let finished = output.is_some();
+    Ok((outgoing, finished, output))
 }
 
 // =========================================================================
