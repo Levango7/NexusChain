@@ -102,6 +102,9 @@ jobs:
           # 原 CRITICAL-only 会放过 HIGH 漏洞，不符合 P1 SLA（HIGH 7d 修复）
           severity: CRITICAL,HIGH
           skip-dirs: build,out,target,.gradle,gradle,node_modules,jdk17,jdk-provision,.codeartsdoer
+          # P4-A: 与 Docker 扫描 job 同款豁免白名单（此前 fs 阻断从未踩中
+          # 豁免项故遗漏；CVE-2025-66017 首例踩中，对齐 .trivyignore 生效路径）
+          trivyignores: .trivyignore
           format: table
           exit-code: 1
 
