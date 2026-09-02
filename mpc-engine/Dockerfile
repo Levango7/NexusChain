@@ -3,15 +3,28 @@
 # Rust 密码学引擎独立进程，gRPC 端口 50051。
 
 # === 构建阶段 ===
-FROM rust:1.85 AS builder
+# v2.2.0 CGGMP21 批（7895c03）：rust:1.85 → rust:1.88。cggmp21 0.6.3 依赖链
+# 新引入的 darling 0.23 / serde_with 3.22 要求 rustc >= 1.88（Docker 构建实测
+# 1.85.1 报 requires rustc 1.88.0）。1.88 为满足门槛的最低 minor 版本，
+# 保持可复现钉版；后续升 cggmp24 时再评估随 stable 浮动。
+FROM rust:1.88 AS builder
 
 # tonic-build 生成 gRPC stub 需要 protoc；
 # pkg-config + libssl-dev 为部分密码学库的可选系统依赖（按需启用）。
+# v2.2.0 CGGMP21 批（7895c03）：cggmp21 0.6.3 依赖链锁定 rug → gmp-mpfr-sys
+# （源码编译 GMP），构建容器需 GMP/MPFR 头文件与 m4/make/build-essential
+# （gmp-mpfr-sys build.rs 驱动 ./configure && make）。本地 Windows 等价物为
+# MSYS2 的 m4+make（项目记忆 nexuschain-build-environment 已录）。
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         protobuf-compiler \
         pkg-config \
         libssl-dev \
+        libgmp-dev \
+        libmpfr-dev \
+        m4 \
+        make \
+        build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
