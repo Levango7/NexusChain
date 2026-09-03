@@ -105,6 +105,21 @@ public class V2ExceptionHandler {
                         "Batch rolled back due to item failure", details));
     }
 
+    /**
+     * 方法安全层（@PreAuthorize）拒绝：403（2026-09-03 死端点修复配套）。
+     *
+     * <p>无此 handler 时 AccessDeniedException 会落入 Exception 兜底被报成
+     * 500，鉴权失败伪装成服务器内部错误。</p>
+     */
+    @ExceptionHandler(org.springframework.security.access.AccessDeniedException.class)
+    public ResponseEntity<V2ErrorResponse> handleAccessDenied(
+            org.springframework.security.access.AccessDeniedException e) {
+        log.warn("v2 access denied by method security: {}", e.getMessage());
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(V2ErrorResponse.of(V2ErrorCode.FORBIDDEN.getCode(),
+                        V2ErrorCode.FORBIDDEN.getDefaultMessage()));
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<V2ErrorResponse> handleGeneric(Exception e) {
         log.error("v2 unhandled exception", e);

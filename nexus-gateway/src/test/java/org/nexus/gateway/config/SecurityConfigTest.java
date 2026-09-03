@@ -4,6 +4,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.nexus.gateway.security.JwtAuthenticationFilter;
+import org.nexus.gateway.security.JwtTokenProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.web.SecurityFilterChain;
@@ -43,6 +45,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @ExtendWith(SpringExtension.class)
 @ContextConfiguration(classes = {
         SecurityConfig.class,
+        org.nexus.gateway.security.JwtTokenProvider.class,
+        org.nexus.gateway.security.JwtAuthenticationFilter.class,
         SecurityConfigTest.WebConfig.class,
         SecurityConfigTest.TestEndpoint.class
 })
