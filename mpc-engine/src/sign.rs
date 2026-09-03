@@ -112,6 +112,9 @@ pub fn run_sign(
                 signature: output.signature,
                 partial_shares: output.partial_shares,
                 message_hash: req.message_hash.clone(),
+                // S4-b: 从 DKG 会话绑定聚合公钥——Aggregate 据此验签，
+                // 不再信任调用方传入的公钥（防自控公钥伪造"验证通过"）
+                aggregate_public_key: session.y_sum.clone(),
             };
             guard.insert(req.session_id.clone(), cache.clone());
             cache

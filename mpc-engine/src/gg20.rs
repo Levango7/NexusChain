@@ -723,6 +723,16 @@ pub struct SignCache {
     pub partial_shares: Vec<Scalar<Secp256k1>>,
     /// 本次签名运行的消息哈希（hex），防止跨消息重放缓存。
     pub message_hash: String,
+    /// **S4-b 修复**：本次签名对应的 DKG 聚合公钥（`session.y_sum`）。
+    ///
+    /// **修复背景**：Aggregate RPC 旧实现用调用方传入的 `req.public_key` 做
+    /// 最终验签——攻击者可用自控公钥 + 自控份额让验签"通过"，产出对 DKG
+    /// 聚合公钥无意义的签名（验签与 DKG 产物脱钩）。Sign 构造缓存时由
+    /// 引擎从会话写入本字段，Aggregate 只信任缓存值并对请求公钥做一致性
+    /// 绑定校验——验签公钥恢复与 DKG 产物的密码学绑定。
+    ///
+    /// 注意：公钥非秘密材料（DKG 响应明文返回），无需 zeroize。
+    pub aggregate_public_key: Point<Secp256k1>,
 }
 
 impl Zeroize for SignCache {

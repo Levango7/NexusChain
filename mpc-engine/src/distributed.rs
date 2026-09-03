@@ -496,19 +496,10 @@ pub fn load_local_key(
     Ok(Some((version, local_key)))
 }
 
-/// session_id 文件名安全化（仅保留 [A-Za-z0-9-_]；防路径穿越——审计 S4 修复
-/// persistence.rs:70-77 同款问题的分散式新路径版本）。
+/// session_id 文件名安全化由共享实现提供（S4-a 提升至 persistence.rs，
+/// 与协调器路径 persist/load/remove 共用同一净化策略——防两处漂移）。
 fn sanitize_session_id(session_id: &str) -> String {
-    session_id
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect()
+    crate::persistence::sanitize_session_id(session_id)
 }
 
 #[cfg(test)]

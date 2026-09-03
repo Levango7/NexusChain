@@ -15,6 +15,12 @@
 //!   * `persist_my_share`：**只加密存储本方私钥份额**（`my_private_share`），
 //!     聚合公钥与各方可验证公钥明文存储（验签所需，非私钥材料）。
 //!   * `MyShareRecord`：本方份额持久化记录（私钥份额加密，公钥材料明文）。
+//!
+//! **S4-a 修复（session_id 路径穿越净化）**：RPC 原始 session_id 在拼接落盘
+//! 文件名前一律经 `sanitize_session_id` 净化（仅保留 [A-Za-z0-9-_]），
+//! 产物被约束为会话目录内的单文件名——封堵 `../` 逃逸、Windows 盘符冒号、
+//! UNC 前缀与嵌套分隔符；persist/load/remove 三入口共用同一净化函数，
+//! 读写闭环一致（原 distributed.rs 私有实现提升为共享）。
 
 use crate::gg20::DkgSession;
 use aes_gcm::aead::{Aead, KeyInit};
@@ -69,13 +75,41 @@ pub fn session_dir() -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from("./mpc-sessions"))
 }
 
+/// S4-a: session_id 文件名安全化（仅保留 [A-Za-z0-9-_]，其余字符替换为 '_'）。
+///
+/// **修复背景**：dkg.rs 可信协调器路径把 RPC 原始 `session_id` 直接传给
+/// `persist_session`/`load_session`，而旧 `session_path` 用 `format!` 无净化
+/// 拼接文件名——含 `../` 的 session_id 可穿越会话目录逃逸写任意路径。
+/// 净化后产物只含安全字符集，`session_dir().join(sanitized)` 必然落在
+/// 会话目录内的单文件名（无 `/`、`\`、盘符冒号、UNC 前缀），穿越被结构性封堵。
+///
+/// 实现与 distributed.rs v2.2.0 分散式路径的私有 `sanitize_session_id`
+/// 逐字符策略一致——原实现提升至此作为共享实现，distributed.rs 改为复用，
+/// 消除两处独立维护的净化逻辑漂移风险。
+///
+/// `pub(crate)`：distributed.rs 的分散式落盘路径与本模块测试复用。
+pub(crate) fn sanitize_session_id(session_id: &str) -> String {
+    session_id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
 fn session_path(session_id: &str) -> PathBuf {
-    session_dir().join(format!("session-{}.json", session_id))
+    // S4-a: 净化后拼接——封堵 `../` 穿越与非法文件名字符
+    session_dir().join(format!("session-{}.json", sanitize_session_id(session_id)))
 }
 
 /// MPC-P2-F5: 本方份额持久化文件路径（与全量会话文件分离）。
 fn my_share_path(session_id: &str) -> PathBuf {
-    session_dir().join(format!("my-share-{}.json", session_id))
+    // S4-a: 净化后拼接——封堵 `../` 穿越与非法文件名字符
+    session_dir().join(format!("my-share-{}.json", sanitize_session_id(session_id)))
 }
 
 /// 低9: 设置文件权限为 0600（仅所有者可读写），Unix 特有。
@@ -522,6 +556,81 @@ mod tests {
         ensure_test_key();
         let r = load_session("no-such-session").expect("no error");
         assert!(r.is_none());
+    }
+
+    // ===== S4-a: session_id 路径穿越净化回归 =====
+
+    /// S4-a 核心不变量：净化学不改变文件名安全性——任意 session_id
+    /// （含 `../`、盘符、UNC、分隔符）经 session_path/my_share_path 产出的
+    /// 路径必须仍落在会话目录内（parent == session_dir），且文件名不含
+    /// 路径分隔符。
+    #[test]
+    fn session_path_never_escapes_session_dir() {
+        ensure_test_key();
+        let dir = session_dir();
+        for evil in [
+            "../evil",
+            "../../etc/passwd",
+            "..\\..\\windows\\evil",
+            "C:\\Users\\evil",
+            "\\\\server\\share\\evil",
+            "a/b/c",
+            "a\\b",
+            "..",
+            ".",
+            "con", // Windows 保留名（sanitize 不处理，但也不含分隔符）
+        ] {
+            for path in [session_path(evil), my_share_path(evil)] {
+                assert_eq!(
+                    path.parent().unwrap_or_else(|| panic!("no parent for {evil}")),
+                    dir,
+                    "S4-a: sanitized path for {evil:?} must stay inside session dir"
+                );
+                let file_name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or_else(|| panic!("no file_name for {evil}"));
+                assert!(
+                    !file_name.contains('/') && !file_name.contains('\\'),
+                    "S4-a: file_name for {evil:?} must not contain path separators: {file_name}"
+                );
+            }
+        }
+    }
+
+    /// 攻击语义闭环：persist/load/remove 用同一原始（恶意）session_id，
+    /// 读写删必须命中同一净化文件——穿越不成立且功能不回归。
+    #[test]
+    fn persist_load_remove_round_trip_with_traversal_session_id() {
+        ensure_test_key();
+        let (_, _, session) = crate::gg20::run_keygen(1, 2).expect("GG20 DKG failed");
+        let evil_id = "../../escape/attack";
+        persist_session(evil_id, &session).expect("persist");
+        // 逃逸目标路径不应存在（穿越被封堵）
+        assert!(
+            !session_dir()
+                .join("../../escape")
+                .join("session-attack.json")
+                .exists(),
+            "S4-a: traversal must not create files outside session dir"
+        );
+        // 同一原始 id 可读回（净化闭环一致）
+        let restored = load_session(evil_id).expect("load").expect("some");
+        assert_eq!(restored.params.threshold, session.params.threshold);
+        remove_session(evil_id);
+        assert!(load_session(evil_id).expect("load").is_none());
+    }
+
+    #[test]
+    fn sanitize_session_id_only_keeps_safe_chars() {
+        for (input, expected) in [
+            ("normal-id_1", "normal-id_1"),
+            ("../evil", "___evil"),
+            ("a/b\\c:d*e", "a_b_c_d_e"),
+            ("", ""),
+        ] {
+            assert_eq!(sanitize_session_id(input), expected, "input: {input:?}");
+        }
     }
 
     #[test]
