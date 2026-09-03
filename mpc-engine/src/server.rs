@@ -21,6 +21,10 @@ use std::sync::Mutex;
 use tonic::{Request, Response, Status};
 
 use crate::aggregate;
+use crate::cggmp::CgMessage;
+use crate::cggmp_state::{
+    CgDriverHandle, DriverCommand, DriverReply,
+};
 use crate::dkg;
 use crate::gg20::{DkgSession, SignCache};
 use crate::proto::mpc_crypto::*;
@@ -52,6 +56,9 @@ pub struct MpcCryptoServiceImpl {
     pub auth_token: String,
     /// v2.2.0 分散式注册表（真门限安全，阶段一：DKG 份额隔离 + 消息转发）。
     pub dist: crate::distributed::DistRegistry,
+    /// v2.2.0 阶段二 F 批：CGGMP21 驱动线程 actor 句柄（!Send 状态机独占线程）。
+    /// `global()` 进程单例——clone 廉价（信封通道 + Arc relay 池）。
+    pub cg_driver: CgDriverHandle,
 }
 
 impl Default for MpcCryptoServiceImpl {
@@ -66,6 +73,7 @@ impl Default for MpcCryptoServiceImpl {
             forward_tls_config: None,
             auth_token: String::new(),
             dist: crate::distributed::DistRegistry::new(),
+            cg_driver: CgDriverHandle::global(),
         }
     }
 }
@@ -83,6 +91,30 @@ impl MpcCryptoServiceImpl {
             forward_tls_config: None,
             auth_token: String::new(),
             dist: crate::distributed::DistRegistry::new(),
+            cg_driver: CgDriverHandle::global(),
+        }
+    }
+
+    /// 创建带**独立** CGGMP 驱动线程的服务实例（F 批）。
+    ///
+    /// `CgDriverHandle::global()` 是进程单例——**一个引擎进程只代表一个
+    /// MPC 参与方**（生产部署每 party 一进程，K8s StatefulSet 3 副本）。
+    /// 同进程需要多个独立参与方时（tests/cggmp_rpc_e2e.rs 的进程内 3-server
+    /// 验收），用本构造器为每个 server 配独立驱动线程——否则三方共享
+    /// 同一 session 槽位，StartKeygen 幂等守卫会把 i=1/2 挡掉（F 批 e2e
+    /// 实证：三方变一方，200 轮空转）。
+    pub fn with_independent_cggmp_driver() -> Self {
+        Self {
+            sessions: Mutex::new(HashMap::new()),
+            sign_runs: Mutex::new(HashMap::new()),
+            session_mgr: SessionManager::new(),
+            my_party_id: String::new(),
+            is_coordinator: true,
+            #[cfg(feature = "tls")]
+            forward_tls_config: None,
+            auth_token: String::new(),
+            dist: crate::distributed::DistRegistry::new(),
+            cg_driver: CgDriverHandle::start(),
         }
     }
 
@@ -106,6 +138,7 @@ impl MpcCryptoServiceImpl {
             forward_tls_config,
             auth_token,
             dist: crate::distributed::DistRegistry::new(),
+            cg_driver: CgDriverHandle::global(),
         }
     }
 
@@ -120,6 +153,124 @@ impl MpcCryptoServiceImpl {
             .verify_caller(session_id, &self.my_party_id, party_index)
             .map(|_| ())
             .map_err(|e| Status::permission_denied(format!("session identity check failed: {e}")))
+    }
+
+    // ---- F 批辅助：CGGMP proto ↔ 内部类型互转 + driver 桥接 + 回执映射 ----
+    // 固有方法（非 trait RPC）——供下方 trait impl 的 11 个 Cg* RPC 复用。
+
+    /// CgRelayMessage（proto，0-based + is_p2p 哨兵消歧）→ CgMessage（内部）。
+    fn cg_msg_from_proto(m: &CgRelayMessage) -> Result<CgMessage, Status> {
+        let sender = u16::try_from(m.sender_index)
+            .map_err(|_| Status::invalid_argument("sender_index overflow"))?;
+        // is_p2p 显式区分定向/广播（F 批修正：p2p 目标方 0 与广播哨兵 0 冲突）
+        let receiver = if m.is_p2p {
+            Some(
+                u16::try_from(m.receiver_index)
+                    .map_err(|_| Status::invalid_argument("receiver_index overflow"))?,
+            )
+        } else {
+            None
+        };
+        Ok(CgMessage {
+            sender,
+            receiver,
+            payload_json: m.payload_json.clone(),
+        })
+    }
+
+    /// CgMessage（内部）→ CgRelayMessage（proto）。
+    fn cg_msg_to_proto(session_id: &str, m: CgMessage) -> CgRelayMessage {
+        CgRelayMessage {
+            session_id: session_id.to_string(),
+            sender_index: u32::from(m.sender),
+            receiver_index: m.receiver.map(u32::from).unwrap_or(0),
+            payload_json: m.payload_json,
+            is_p2p: m.receiver.is_some(),
+        }
+    }
+
+    /// 驱动线程调用（spawn_blocking 包裹阻塞 `call`——keygen/aux 含
+    /// Paillier 大素数生成单轮可达秒级，不占 tokio worker）。
+    async fn cg_call(&self, cmd: DriverCommand) -> Result<DriverReply, Status> {
+        let driver = self.cg_driver.clone();
+        tokio::task::spawn_blocking(move || driver.call(cmd))
+            .await
+            .map_err(|e| Status::internal(format!("driver task join error: {e}")))?
+            .map_err(|e| Status::internal(format!("cggmp driver: {e}")))
+    }
+
+    /// DriverReply → CgPumpResponse（keygen/aux 泵结果映射）。
+    fn cg_pump_reply_to_proto(
+        reply: DriverReply,
+        sid: &str,
+    ) -> Result<Response<CgPumpResponse>, Status> {
+        match reply {
+            DriverReply::PumpResult { outgoing, finished, aggregate_public_key } => {
+                Ok(Response::new(CgPumpResponse {
+                    outgoing: outgoing
+                        .into_iter()
+                        .map(|m| Self::cg_msg_to_proto(sid, m))
+                        .collect(),
+                    finished,
+                    aggregate_public_key: aggregate_public_key.unwrap_or_default(),
+                    success: true,
+                    error: String::new(),
+                }))
+            }
+            DriverReply::Error { message } => Ok(Response::new(CgPumpResponse {
+                outgoing: vec![],
+                finished: false,
+                aggregate_public_key: String::new(),
+                success: false,
+                error: message,
+            })),
+            other => Err(Status::internal(format!(
+                "unexpected driver reply for pump: {other:?}"
+            ))),
+        }
+    }
+
+    /// DriverReply → CgSignPumpResponse（sign 泵结果映射——完成时带 r/s hex）。
+    fn cg_sign_reply_to_proto(
+        reply: DriverReply,
+        sid: &str,
+    ) -> Result<Response<CgSignPumpResponse>, Status> {
+        match reply {
+            DriverReply::PumpResult { outgoing, finished, .. } => {
+                Ok(Response::new(CgSignPumpResponse {
+                    outgoing: outgoing
+                        .into_iter()
+                        .map(|m| Self::cg_msg_to_proto(sid, m))
+                        .collect(),
+                    finished,
+                    r_hex: String::new(),
+                    s_hex: String::new(),
+                    success: true,
+                    error: String::new(),
+                }))
+            }
+            DriverReply::SignatureProduced { r_hex, s_hex } => {
+                Ok(Response::new(CgSignPumpResponse {
+                    outgoing: vec![],
+                    finished: true,
+                    r_hex,
+                    s_hex,
+                    success: true,
+                    error: String::new(),
+                }))
+            }
+            DriverReply::Error { message } => Ok(Response::new(CgSignPumpResponse {
+                outgoing: vec![],
+                finished: false,
+                r_hex: String::new(),
+                s_hex: String::new(),
+                success: false,
+                error: message,
+            })),
+            other => Err(Status::internal(format!(
+                "unexpected driver reply for sign pump: {other:?}"
+            ))),
+        }
     }
 
     /// 协调器转发：将 DKG 请求转发到协调器节点（peer_endpoints[0]）。
@@ -461,6 +612,361 @@ impl mpc_crypto_service_server::MpcCryptoService for MpcCryptoServiceImpl {
             } else {
                 "no distributed DKG state for this session".to_string()
             },
+        }))
+    }
+
+    // ==================== v2.2.0 阶段二 F 批：CGGMP21 分散式生命周期 ====================
+    // 全部经 CgDriverHandle 信封指令转发到驱动线程（状态机 !Send——独占线程
+    // 是 E 批确立的硬约束）。`call` 阻塞等待回执——用 spawn_blocking 包裹，
+    // 不占 tokio worker 线程（keygen/aux 含 Paillier 大素数生成，单轮可达秒级）。
+    // 辅助函数（互转/桥接/回执映射）在固有 impl 块（check_session_identity 后）。
+
+    /// 启动 CGGMP21 threshold keygen（0-based index；t = 签名所需方数）。
+    async fn cg_start_keygen(
+        &self,
+        req: Request<CgStartKeygenRequest>,
+    ) -> Result<Response<CgPumpResponse>, Status> {
+        let r = req.into_inner();
+        tracing::info!(
+            session_id = %r.session_id,
+            my_index = r.my_index,
+            n = r.total_parties,
+            t = r.threshold,
+            "rpc CgStartKeygen (v2.2.0 stage-2 CGGMP21 threshold keygen)"
+        );
+        let sid = r.session_id.clone();
+        let my_index = u16::try_from(r.my_index)
+            .map_err(|_| Status::invalid_argument("my_index overflow"))?;
+        let n = u16::try_from(r.total_parties)
+            .map_err(|_| Status::invalid_argument("total_parties overflow"))?;
+        let t = u16::try_from(r.threshold)
+            .map_err(|_| Status::invalid_argument("threshold overflow"))?;
+        if t == 0 || t > n {
+            return Ok(Response::new(CgPumpResponse {
+                outgoing: vec![],
+                finished: false,
+                aggregate_public_key: String::new(),
+                success: false,
+                error: format!("threshold must be in [1, {n}] (got {t})"),
+            }));
+        }
+        let reply = self
+            .cg_call(DriverCommand::StartKeygen {
+                session_id: r.session_id,
+                counter: r.counter,
+                i: my_index,
+                n,
+                t,
+            })
+            .await?;
+        Self::cg_pump_reply_to_proto(reply, &sid)
+    }
+
+    /// 泵动 keygen（喂入协调器转来的消息，取回新产出 outgoing）。
+    async fn cg_pump_keygen(
+        &self,
+        req: Request<CgPumpRequest>,
+    ) -> Result<Response<CgPumpResponse>, Status> {
+        let r = req.into_inner();
+        let sid = r.session_id.clone();
+        let incoming = r
+            .incoming
+            .iter()
+            .map(Self::cg_msg_from_proto)
+            .collect::<Result<Vec<_>, _>>()?;
+        let reply = self
+            .cg_call(DriverCommand::PumpKeygen {
+                session_id: r.session_id,
+                incoming,
+            })
+            .await?;
+        Self::cg_pump_reply_to_proto(reply, &sid)
+    }
+
+    /// 启动 CGGMP21 aux_info 生成（Paillier 辅助数据；DKG 前置/并行）。
+    async fn cg_start_aux(
+        &self,
+        req: Request<CgStartAuxRequest>,
+    ) -> Result<Response<CgPumpResponse>, Status> {
+        let r = req.into_inner();
+        tracing::info!(
+            session_id = %r.session_id,
+            my_index = r.my_index,
+            n = r.total_parties,
+            "rpc CgStartAux (v2.2.0 stage-2 CGGMP21 aux_info gen)"
+        );
+        let sid = r.session_id.clone();
+        // 阶段边界：清 relay 池（keygen 尾巴不得混入 aux 阶段——F 批阶段隔离）
+        self.cg_driver.relay.clear_session(&sid);
+        let my_index = u16::try_from(r.my_index)
+            .map_err(|_| Status::invalid_argument("my_index overflow"))?;
+        let n = u16::try_from(r.total_parties)
+            .map_err(|_| Status::invalid_argument("total_parties overflow"))?;
+        let reply = self
+            .cg_call(DriverCommand::StartAux {
+                session_id: r.session_id,
+                counter: r.counter,
+                i: my_index,
+                n,
+            })
+            .await?;
+        Self::cg_pump_reply_to_proto(reply, &sid)
+    }
+
+    /// 泵动 aux_info。
+    async fn cg_pump_aux(
+        &self,
+        req: Request<CgPumpRequest>,
+    ) -> Result<Response<CgPumpResponse>, Status> {
+        let r = req.into_inner();
+        let sid = r.session_id.clone();
+        let incoming = r
+            .incoming
+            .iter()
+            .map(Self::cg_msg_from_proto)
+            .collect::<Result<Vec<_>, _>>()?;
+        let reply = self
+            .cg_call(DriverCommand::PumpAux {
+                session_id: r.session_id,
+                incoming,
+            })
+            .await?;
+        Self::cg_pump_reply_to_proto(reply, &sid)
+    }
+
+    /// 合成完整 KeyShare（core + aux → validate）。
+    async fn cg_assemble_share(
+        &self,
+        req: Request<CgSessionOnly>,
+    ) -> Result<Response<CgAck>, Status> {
+        let r = req.into_inner();
+        tracing::info!(session_id = %r.session_id, "rpc CgAssembleShare");
+        let reply = self
+            .cg_call(DriverCommand::AssembleShare {
+                session_id: r.session_id,
+            })
+            .await?;
+        Ok(Response::new(match reply {
+            DriverReply::ShareAssembled => CgAck {
+                success: true,
+                error: String::new(),
+            },
+            DriverReply::Error { message } => CgAck {
+                success: false,
+                error: message,
+            },
+            other => return Err(Status::internal(format!("unexpected reply: {other:?}"))),
+        }))
+    }
+
+    /// 启动 CGGMP21 签名（0-based；signers 恰好 t 个——原生 t-of-n）。
+    async fn cg_start_sign(
+        &self,
+        req: Request<CgStartSignRequest>,
+    ) -> Result<Response<CgSignPumpResponse>, Status> {
+        let r = req.into_inner();
+        tracing::info!(
+            session_id = %r.session_id,
+            my_index_in_signers = r.my_index_in_signers,
+            signers = ?r.signers_at_keygen,
+            "rpc CgStartSign (v2.2.0 stage-2 CGGMP21 threshold sign)"
+        );
+        let sid = r.session_id.clone();
+        // 阶段边界：清 relay 池（keygen/aux 尾巴不得混入 sign 阶段）
+        self.cg_driver.relay.clear_session(&sid);
+        let my_index_in_signers = u16::try_from(r.my_index_in_signers)
+            .map_err(|_| Status::invalid_argument("my_index_in_signers overflow"))?;
+        if r.message_hash.len() != 32 {
+            return Err(Status::invalid_argument(format!(
+                "message_hash must be 32 bytes, got {}",
+                r.message_hash.len()
+            )));
+        }
+        let mut message_hash = [0u8; 32];
+        message_hash.copy_from_slice(&r.message_hash);
+        let signers = r
+            .signers_at_keygen
+            .iter()
+            .map(|&s| {
+                u16::try_from(s).map_err(|_| Status::invalid_argument("signer index overflow"))
+            })
+            .collect::<Result<Vec<u16>, _>>()?;
+        if signers.is_empty() {
+            return Err(Status::invalid_argument("signers_at_keygen must not be empty"));
+        }
+        let reply = self
+            .cg_call(DriverCommand::StartSign {
+                session_id: r.session_id,
+                counter: r.counter,
+                i: my_index_in_signers,
+                signers_at_keygen: signers,
+                message_hash,
+            })
+            .await?;
+        Self::cg_sign_reply_to_proto(reply, &sid)
+    }
+
+    /// 泵动 sign。
+    async fn cg_pump_sign(
+        &self,
+        req: Request<CgPumpRequest>,
+    ) -> Result<Response<CgSignPumpResponse>, Status> {
+        let r = req.into_inner();
+        let sid = r.session_id.clone();
+        let incoming = r
+            .incoming
+            .iter()
+            .map(Self::cg_msg_from_proto)
+            .collect::<Result<Vec<_>, _>>()?;
+        let reply = self
+            .cg_call(DriverCommand::PumpSign {
+                session_id: r.session_id,
+                incoming,
+            })
+            .await?;
+        Self::cg_sign_reply_to_proto(reply, &sid)
+    }
+
+    /// 用 session 聚合公钥本地验签（不信任调用方传参——S4 同款信任根基）。
+    async fn cg_verify_signature(
+        &self,
+        req: Request<CgVerifyRequest>,
+    ) -> Result<Response<CgVerifyResponse>, Status> {
+        let r = req.into_inner();
+        tracing::info!(session_id = %r.session_id, "rpc CgVerifySignature");
+        if r.signature_r.len() != 32 || r.signature_s.len() != 32 || r.message_hash.len() != 32 {
+            return Err(Status::invalid_argument(
+                "signature_r/signature_s/message_hash must each be 32 bytes",
+            ));
+        }
+        let (mut sig_r, mut sig_s, mut msg) = ([0u8; 32], [0u8; 32], [0u8; 32]);
+        sig_r.copy_from_slice(&r.signature_r);
+        sig_s.copy_from_slice(&r.signature_s);
+        msg.copy_from_slice(&r.message_hash);
+        let reply = self
+            .cg_call(DriverCommand::VerifySignature {
+                session_id: r.session_id,
+                signature_r: sig_r,
+                signature_s: sig_s,
+                message_hash: msg,
+            })
+            .await?;
+        Ok(Response::new(match reply {
+            DriverReply::VerificationResult { valid } => CgVerifyResponse {
+                valid,
+                success: true,
+                error: String::new(),
+            },
+            DriverReply::Error { message } => CgVerifyResponse {
+                valid: false,
+                success: false,
+                error: message,
+            },
+            other => return Err(Status::internal(format!("unexpected reply: {other:?}"))),
+        }))
+    }
+
+    /// 查询会话状态快照（驱动线程内三协议状态与产物）。
+    async fn cg_status(
+        &self,
+        req: Request<CgSessionOnly>,
+    ) -> Result<Response<CgStatusResponse>, Status> {
+        let r = req.into_inner();
+        let reply = self
+            .cg_call(DriverCommand::Status {
+                session_id: r.session_id,
+            })
+            .await?;
+        Ok(Response::new(match reply {
+            DriverReply::Status {
+                has_keygen_state,
+                has_aux_state,
+                has_sign_state,
+                has_core_share,
+                has_aux_info,
+                has_key_share,
+            } => CgStatusResponse {
+                has_keygen_state,
+                has_aux_state,
+                has_sign_state,
+                has_core_share,
+                has_aux_info,
+                has_key_share,
+                success: true,
+                error: String::new(),
+            },
+            DriverReply::Error { message } => CgStatusResponse {
+                has_keygen_state: false,
+                has_aux_state: false,
+                has_sign_state: false,
+                has_core_share: false,
+                has_aux_info: false,
+                has_key_share: false,
+                success: false,
+                error: message,
+            },
+            other => return Err(Status::internal(format!("unexpected reply: {other:?}"))),
+        }))
+    }
+
+    /// CGGMP21 消息发布（协调器字节管道——不解密/不落盘/不修改）。
+    async fn cg_relay_publish(
+        &self,
+        req: Request<CgRelayMessage>,
+    ) -> Result<Response<CgRelayAck>, Status> {
+        let m = req.into_inner();
+        let sender = u16::try_from(m.sender_index)
+            .map_err(|_| Status::invalid_argument("sender_index overflow"))?;
+        // is_p2p 显式区分（F 批哨兵修正——与 cg_msg_from_proto 同语义）
+        let receiver = if m.is_p2p {
+            Some(
+                u16::try_from(m.receiver_index)
+                    .map_err(|_| Status::invalid_argument("receiver_index overflow"))?,
+            )
+        } else {
+            None
+        };
+        // 基本载荷校验（fail-closed：非 JSON 拒绝，防垃圾灌池——与 GG20 relay 同水位）
+        if serde_json::from_str::<serde_json::Value>(&m.payload_json).is_err() {
+            return Ok(Response::new(CgRelayAck {
+                success: false,
+                error: "payload_json is not valid JSON".to_string(),
+            }));
+        }
+        let msg = CgMessage {
+            sender,
+            receiver,
+            payload_json: m.payload_json,
+        };
+        let before = self.cg_driver.relay.publish(&m.session_id, vec![msg]);
+        tracing::info!(
+            session_id = %m.session_id,
+            sender = sender,
+            queue_len = before + 1,
+            "rpc CgRelayPublish (coordinator is a byte pipe, 0-based)"
+        );
+        Ok(Response::new(CgRelayAck {
+            success: true,
+            error: String::new(),
+        }))
+    }
+
+    /// CGGMP21 消息拉取（幂等；自动排除自发消息）。
+    async fn cg_relay_pull(
+        &self,
+        req: Request<CgRelayPullRequest>,
+    ) -> Result<Response<CgRelayPullResponse>, Status> {
+        let r = req.into_inner();
+        let my_index = u16::try_from(r.my_index)
+            .map_err(|_| Status::invalid_argument("my_index overflow"))?;
+        let msgs = self.cg_driver.relay.pull(&r.session_id, my_index);
+        Ok(Response::new(CgRelayPullResponse {
+            messages: msgs
+                .into_iter()
+                .map(|m| Self::cg_msg_to_proto(&r.session_id, m))
+                .collect(),
+            success: true,
+            error: String::new(),
         }))
     }
 }

@@ -42,7 +42,7 @@
 
 use std::collections::HashMap;
 use std::sync::mpsc::{channel, Sender};
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use cggmp21::generic_ec::{NonZero, Point, Scalar};
 use cggmp21::key_share::{Validate, ValidateFromParts};
@@ -527,8 +527,97 @@ fn data_to_sign(message_hash: [u8; 32]) -> DataToSign<Secp256k1> {
 }
 
 // =========================================================================
-// 驱动线程 + 对外句柄（Send + Clone）
+// 驱动线程 + 对外句柄（Send + Clone）+ 协调器 relay 池
 // =========================================================================
+
+/// CGGMP21 协调器 relay 池（发布/拉取消息——协调器是字节管道）。
+///
+/// 与 distributed.rs 的 DistRegistry.relays 同构但 0-based：
+///   * `pool`：session_id → 待转发消息（`CgMessage` 0-based 三元组）
+///   * `consumed`：`session:my_index` → 已消费**队列索引**集合（幂等拉取）
+///
+/// 池本身是共享数据（非 !Send 状态机）——放 handle 的 Arc<Mutex>，
+/// 拉取方直接读写，不绕驱动线程（E/F 批架构：relay 是协调器职责）。
+///
+/// **消费幂等以队列索引为准（F 批 e2e 实证修正）**：初版按消息指纹
+/// （sender:receiver:payload_len）去重——keygen 同轮多条同尺寸消息
+/// （承诺/公钥材料等长是常态）互相吞掉，状态机永远等缺失消息
+/// （200 轮空转）。队列在阶段内 append-only，索引天然唯一；
+/// 阶段切换 `clear_session` 重置队列与消费记录。
+#[derive(Default)]
+pub struct CgRelayPool {
+    pool: Mutex<HashMap<String, Vec<CgMessage>>>,
+    consumed: Mutex<HashMap<String, std::collections::HashSet<usize>>>,
+}
+
+impl CgRelayPool {
+    /// 发布消息（协调器侧追加；返回发布前的队列长度）。
+    pub fn publish(&self, session_id: &str, msgs: Vec<CgMessage>) -> usize {
+        let mut g = match self.pool.lock() {
+            Ok(g) => g,
+            Err(_) => return 0,
+        };
+        let queue = g.entry(session_id.to_string()).or_default();
+        let before = queue.len();
+        queue.extend(msgs);
+        before
+    }
+
+    /// 清空会话消息队列与消费记录（协议阶段切换边界用）。
+    ///
+    /// 同一 session 的 keygen/aux/sign 三阶段共用一个队列——前一阶段的
+    /// 尾巴消息会在后一阶段被错误拉取（round mismatch）。在 StartAux/
+    /// StartSign（server 层）调用本方法清池，阶段边界即协议边界
+    /// （队列索引随之重置，消费幂等重新计数）。
+    pub fn clear_session(&self, session_id: &str) {
+        if let Ok(mut g) = self.pool.lock() {
+            g.remove(session_id);
+        }
+        // consumed 按 `session:my_index` 前缀清理
+        if let Ok(mut g) = self.consumed.lock() {
+            let prefix = format!("{session_id}:");
+            g.retain(|k, _| !k.starts_with(&prefix));
+        }
+    }
+
+    /// 拉取并消费本方尚未见过的消息（幂等——重复拉取不重复消费）。
+    ///
+    /// **按接收方过滤（F 批修正——GG20 relay_pull 同款缺陷的修复）**：
+    /// 广播（receiver=None）对所有非 sender 方可拉；p2p（receiver=Some(idx)）
+    /// **仅目标方 idx 可拉**——否则非目标方会把定向消息喂给状态机造成
+    /// round mismatch（distributed.rs 的 relay_pull 只排除自发不按 receiver
+    /// 过滤，该缺陷因无调用方从未暴露；本池随 F 批 e2e 修复）。
+    pub fn pull(&self, session_id: &str, my_index: u16) -> Vec<CgMessage> {
+        let relays = match self.pool.lock() {
+            Ok(g) => g,
+            Err(_) => return vec![],
+        };
+        let mut consumed = match self.consumed.lock() {
+            Ok(g) => g,
+            Err(_) => return vec![],
+        };
+        let key = format!("{session_id}:{my_index}");
+        let seen = consumed.entry(key).or_default();
+        let mut out = vec![];
+        if let Some(queue) = relays.get(session_id) {
+            for (idx, m) in queue.iter().enumerate() {
+                // 接收方过滤：p2p 消息仅目标方可拉
+                let for_me = match m.receiver {
+                    None => true,                        // 广播：所有方
+                    Some(target) => target == my_index, // p2p：仅目标方
+                };
+                if !for_me || m.sender == my_index {
+                    continue;
+                }
+                // 幂等键 = 队列索引（append-only 队列内天然唯一）
+                if seen.insert(idx) {
+                    out.push(m.clone());
+                }
+            }
+        }
+        out
+    }
+}
 
 /// 驱动线程句柄（RPC 层持有；线程内独占全部 !Send 状态机）。
 ///
@@ -537,6 +626,8 @@ fn data_to_sign(message_hash: [u8; 32]) -> DataToSign<Secp256k1> {
 #[derive(Clone)]
 pub struct CgDriverHandle {
     tx: Sender<DriverEnvelope>,
+    /// 协调器 relay 池（共享数据；发布方任意，拉取方按 my_index 幂等消费）。
+    pub relay: Arc<CgRelayPool>,
 }
 
 impl CgDriverHandle {
@@ -554,7 +645,10 @@ impl CgDriverHandle {
                 tracing::info!("cggmp-driver thread exiting (all handles dropped)");
             })
             .expect("spawn cggmp-driver thread");
-        Self { tx }
+        Self {
+            tx,
+            relay: Arc::new(CgRelayPool::default()),
+        }
     }
 
     /// 发送指令并等待回执（阻塞当前线程）。

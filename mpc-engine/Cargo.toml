@@ -111,3 +111,5 @@ tls = ["tonic/tls"]
 [dev-dependencies]
 nix = { version = "0.27", features = ["signal", "process"] }
 serial_test = "3"
+# F 批：tests/cggmp_rpc_e2e.rs 进程内 tonic server 需要 TcpListenerStream
+tokio-stream = { version = "0.1", features = ["net"] }

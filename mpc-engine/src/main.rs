@@ -30,37 +30,17 @@
 //!
 //! 审计报告 §4.1 方案 A：Rust 密码学引擎独立进程，signing-service 通过本地 gRPC 调用。
 
-// gRPC 服务方法返回 Result<_, tonic::Status>，tonic::Status 为 176 字节，
-// 触发 clippy::result_large_err（perf lint，阈值 128 字节）。
-// tonic::Status 由框架定义无法修改，在 crate 级别抑制此 lint。
-//
-// dead_code：部分工具函数/结构体在 tls feature 未启用时未使用，属条件编译正常现象。
-#![allow(clippy::result_large_err, dead_code, clippy::needless_range_loop)]
-
 use std::net::SocketAddr;
 
 use tracing_subscriber::EnvFilter;
 
-mod aggregate;
-mod cggmp;
-// E 批：CGGMP21 会话驱动层——驱动线程 actor（!Send 状态机独占线程）。
-// server 层 RPC 接线是下一批；当前经 CgDriverHandle::global() 可用。
-mod cggmp_state;
-mod config;
-mod distributed;
-mod dkg;
-mod gg20;
-mod persistence;
-/// 暴露 proto 模块供 tests/integration_test.rs 集成测试使用（gRPC client stub）。
-pub mod proto;
-mod server;
-mod session;
-mod sign;
+// F 批：业务模块整体迁至 lib target（mpc_engine::...）——main 薄壳化，
+// 仅保留启动装配逻辑。tests/cggmp_rpc_e2e.rs 经 lib 直接触达 server。
+use mpc_engine::proto;
+use mpc_engine::server::{AuthInterceptor, MpcCryptoServiceImpl};
 
 #[cfg(feature = "tls")]
 use tonic::transport::ServerTlsConfig;
-
-use server::{AuthInterceptor, MpcCryptoServiceImpl};
 
 /// 解析命令行参数，返回 `--config` 指定的配置文件路径。
 fn parse_config_arg() -> Option<String> {
@@ -102,8 +82,10 @@ async fn main() -> eyre::Result<()> {
 
     // === MPC-P2-F5: 尝试从配置文件加载 PartyConfig（分布式模式） ===
     let config_path = parse_config_arg();
-    let party_config = if config_path.is_some() || std::env::var(config::CONFIG_PATH_ENV).is_ok() {
-        match config::load_config(config_path.as_deref()) {
+    let party_config = if config_path.is_some()
+        || std::env::var(mpc_engine::config::CONFIG_PATH_ENV).is_ok()
+    {
+        match mpc_engine::config::load_config(config_path.as_deref()) {
             Ok(cfg) => {
                 tracing::info!(
                     party_index = cfg.party_index,
