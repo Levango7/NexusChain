@@ -134,7 +134,7 @@ cd typescript && npm install && npm test
 # Python（>= 3.10，零依赖）
 cd python && python tests/test_nexus_sdk.py
 
-# Go（>= 1.21）
+# Go（>= 1.25；x/crypto 0.55 要求，go.mod 已声明）
 cd go && go test ./nexus/
 
 # Java
