@@ -57,6 +57,14 @@ public class OnChainTransaction implements Serializable {
     @JsonProperty("confirmationLatencyMs")
     private Long confirmationLatencyMs;
 
+    /** 路由决策耗时（毫秒） */
+    @JsonProperty("routingLatencyMs")
+    private Long routingLatencyMs;
+
+    /** 支付成本（basis points） */
+    @JsonProperty("cost_bps")
+    private Integer costBps;
+
     /** 交易状态枚举 */
     public enum Status {
         /** 待确认 */

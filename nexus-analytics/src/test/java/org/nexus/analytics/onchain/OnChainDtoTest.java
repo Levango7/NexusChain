@@ -1,5 +1,6 @@
 package org.nexus.analytics.onchain;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigInteger;
@@ -138,5 +139,69 @@ class OnChainDtoTest {
         assertEquals(OnChainTransaction.Status.SUCCESS, OnChainTransaction.Status.valueOf("SUCCESS"));
         assertEquals(OnChainTransaction.Status.FAILED, OnChainTransaction.Status.valueOf("FAILED"));
         assertEquals(3, OnChainTransaction.Status.values().length);
+    }
+
+    // === Path B 扩展：routingLatencyMs / costBps 链路埋点字段 ===
+
+    @Test
+    void onChainTransaction_builder_latencyAndCost_shouldWork() {
+        OnChainTransaction tx = OnChainTransaction.builder()
+                .txHash("h1")
+                .routingLatencyMs(42L)
+                .costBps(5)
+                .build();
+
+        assertEquals("h1", tx.getTxHash());
+        assertEquals(42L, tx.getRoutingLatencyMs());
+        assertEquals(5, tx.getCostBps());
+    }
+
+    @Test
+    void onChainTransaction_setters_latencyAndCost_shouldWork() {
+        OnChainTransaction tx = new OnChainTransaction();
+        tx.setRoutingLatencyMs(7L);
+        tx.setCostBps(12);
+
+        assertEquals(7L, tx.getRoutingLatencyMs());
+        assertEquals(12, tx.getCostBps());
+    }
+
+    @Test
+    void onChainTransaction_equalsAndHashCode_includesLatencyAndCost() {
+        OnChainTransaction t1 = OnChainTransaction.builder().txHash("h1")
+                .routingLatencyMs(42L).costBps(5).build();
+        OnChainTransaction t2 = OnChainTransaction.builder().txHash("h1")
+                .routingLatencyMs(42L).costBps(5).build();
+        OnChainTransaction t3 = OnChainTransaction.builder().txHash("h1")
+                .routingLatencyMs(99L).costBps(5).build();
+
+        assertEquals(t1, t2);
+        assertEquals(t1.hashCode(), t2.hashCode());
+        assertNotEquals(t1, t3);
+    }
+
+    @Test
+    void onChainTransaction_jsonSerialization_shouldEmitJsonPropertyNames() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        OnChainTransaction tx = OnChainTransaction.builder()
+                .txHash("h1").routingLatencyMs(42L).costBps(5).build();
+
+        String json = mapper.writeValueAsString(tx);
+
+        // 埋点字段按 @JsonProperty 输出：routingLatencyMs（camelCase），costBps → cost_bps
+        org.junit.jupiter.api.Assertions.assertTrue(json.contains("\"routingLatencyMs\":42"));
+        org.junit.jupiter.api.Assertions.assertTrue(json.contains("\"cost_bps\":5"));
+    }
+
+    @Test
+    void onChainTransaction_jsonDeserialization_shouldRestoreLatencyAndCost() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        OnChainTransaction tx = mapper.readValue(
+                "{\"txHash\":\"h1\",\"routingLatencyMs\":42,\"cost_bps\":5}",
+                OnChainTransaction.class);
+
+        assertEquals("h1", tx.getTxHash());
+        assertEquals(42L, tx.getRoutingLatencyMs());
+        assertEquals(5, tx.getCostBps());
     }
 }

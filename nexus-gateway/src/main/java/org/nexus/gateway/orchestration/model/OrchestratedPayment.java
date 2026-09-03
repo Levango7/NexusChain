@@ -45,6 +45,14 @@ public class OrchestratedPayment {
     @Column(length = 64)
     private String connectorId;
 
+    /** Connector 端到端耗时（毫秒），仅当实际测量后填充（可为 null）。 */
+    @Column(name = "latency_ms")
+    private Long latencyMs;
+
+    /** Connector 成本（basis points），仅当实际测量后填充（可为 null）。 */
+    @Column(name = "cost_bps")
+    private Integer costBps;
+
     @Column(length = 128)
     private String connectorPaymentId;
 
@@ -92,6 +100,10 @@ public class OrchestratedPayment {
     public void setStatus(OrchPaymentStatus status) { this.status = status; }
     public String getConnectorId() { return connectorId; }
     public void setConnectorId(String connectorId) { this.connectorId = connectorId; }
+    public Long getLatencyMs() { return latencyMs; }
+    public void setLatencyMs(Long latencyMs) { this.latencyMs = latencyMs; }
+    public Integer getCostBps() { return costBps; }
+    public void setCostBps(Integer costBps) { this.costBps = costBps; }
     public String getConnectorPaymentId() { return connectorPaymentId; }
     public void setConnectorPaymentId(String connectorPaymentId) { this.connectorPaymentId = connectorPaymentId; }
     public String getTransactionHash() { return transactionHash; }

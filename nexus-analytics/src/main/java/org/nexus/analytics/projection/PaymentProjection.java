@@ -174,6 +174,12 @@ public class PaymentProjection {
         }
         Instant paidAt = parseInstant(root.path("paidAt"));
         rm.setPaidAt(paidAt);
+        if (root.has("latencyMs") && !root.path("latencyMs").isNull()) {
+            rm.setRoutingLatencyMs(root.path("latencyMs").asLong());
+        }
+        if (root.has("costBps") && !root.path("costBps").isNull()) {
+            rm.setCostBps(root.path("costBps").asInt());
+        }
         rm.setVersion(version);
         rm.setUpdatedAt(timestamp);
     }

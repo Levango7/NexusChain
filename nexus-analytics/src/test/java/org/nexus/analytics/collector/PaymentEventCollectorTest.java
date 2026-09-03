@@ -31,17 +31,19 @@ class PaymentEventCollectorTest {
     }
 
     private PaymentCompletedEvent event(Long paymentId, BigDecimal amount, Long merchantId,
-                                        String chainTxHash, String payer, String payee, Instant occurredAt) {
+                                        String chainTxHash, String payer, String payee,
+                                        Instant occurredAt, long latencyMs, int costBps) {
         return new PaymentCompletedEvent(
                 this, paymentId, amount, "CNY", "ETHEREUM",
-                merchantId, chainTxHash, payer, payee, occurredAt);
+                merchantId, chainTxHash, payer, payee, occurredAt,
+                latencyMs, costBps);
     }
 
     @Test
     void onPaymentCompleted_normalEvent_shouldFeedTransaction() {
         Instant ts = Instant.now();
         PaymentCompletedEvent ev = event(1L, new BigDecimal("100.50"), 200L,
-                "0xabc", "0xpayer", "0xpayee", ts);
+                "0xabc", "0xpayer", "0xpayee", ts, 42L, 5);
 
         collector.onPaymentCompleted(ev);
 
@@ -55,21 +57,27 @@ class PaymentEventCollectorTest {
         assertEquals("200", tx.getMerchantId());
         assertEquals(ts, tx.getTimestamp());
         assertEquals(OnChainTransaction.Status.SUCCESS, tx.getStatus());
+        assertEquals(42L, tx.getRoutingLatencyMs());
+        assertEquals(5, tx.getCostBps());
     }
 
     @Test
     void onPaymentCompleted_nullAmount_shouldUseZero() {
-        PaymentCompletedEvent ev = event(1L, null, 200L, "0xabc", "0xpayer", "0xpayee", Instant.now());
+        PaymentCompletedEvent ev = event(1L, null, 200L, "0xabc", "0xpayer", "0xpayee",
+                Instant.now(), 10L, 2);
 
         collector.onPaymentCompleted(ev);
 
         OnChainTransaction tx = dataSource.fetchAll().get(0);
         assertEquals(BigInteger.ZERO, tx.getAmount());
+        assertEquals(10L, tx.getRoutingLatencyMs());
+        assertEquals(2, tx.getCostBps());
     }
 
     @Test
     void onPaymentCompleted_nullMerchantId_shouldKeepNull() {
-        PaymentCompletedEvent ev = event(1L, new BigDecimal("10"), null, "0xabc", "0xpayer", "0xpayee", Instant.now());
+        PaymentCompletedEvent ev = event(1L, new BigDecimal("10"), null, "0xabc",
+                "0xpayer", "0xpayee", Instant.now(), 0L, 0);
 
         collector.onPaymentCompleted(ev);
 
@@ -79,12 +87,15 @@ class PaymentEventCollectorTest {
 
     @Test
     void onPaymentCompleted_nullOccurredAt_shouldUseNow() {
-        PaymentCompletedEvent ev = event(1L, new BigDecimal("10"), 1L, "0xabc", "0xpayer", "0xpayee", null);
+        PaymentCompletedEvent ev = event(1L, new BigDecimal("10"), 1L, "0xabc",
+                "0xpayer", "0xpayee", null, 8L, 3);
 
         collector.onPaymentCompleted(ev);
 
         OnChainTransaction tx = dataSource.fetchAll().get(0);
         assertTrue(tx.getTimestamp() != null);
+        assertEquals(8L, tx.getRoutingLatencyMs());
+        assertEquals(3, tx.getCostBps());
     }
 
     @Test
@@ -96,8 +107,10 @@ class PaymentEventCollectorTest {
 
     @Test
     void onPaymentCompleted_multipleEvents_shouldAccumulate() {
-        collector.onPaymentCompleted(event(1L, new BigDecimal("10"), 1L, "h1", "A", "B", Instant.now()));
-        collector.onPaymentCompleted(event(2L, new BigDecimal("20"), 2L, "h2", "C", "D", Instant.now()));
+        collector.onPaymentCompleted(event(1L, new BigDecimal("10"), 1L, "h1", "A", "B",
+                Instant.now(), 5L, 1));
+        collector.onPaymentCompleted(event(2L, new BigDecimal("20"), 2L, "h2", "C", "D",
+                Instant.now(), 15L, 4));
 
         assertEquals(2, dataSource.fetchAll().size());
     }
@@ -105,10 +118,13 @@ class PaymentEventCollectorTest {
     @Test
     void onPaymentCompleted_decimalAmount_shouldTruncateToIntegral() {
         // BigDecimal.toBigInteger() 取整数部分
-        PaymentCompletedEvent ev = event(1L, new BigDecimal("99.99"), 1L, "h", "A", "B", Instant.now());
+        PaymentCompletedEvent ev = event(1L, new BigDecimal("99.99"), 1L, "h", "A", "B",
+                Instant.now(), 20L, 6);
 
         collector.onPaymentCompleted(ev);
 
         assertEquals(BigInteger.valueOf(99), dataSource.fetchAll().get(0).getAmount());
+        assertEquals(20L, dataSource.fetchAll().get(0).getRoutingLatencyMs());
+        assertEquals(6, dataSource.fetchAll().get(0).getCostBps());
     }
 }

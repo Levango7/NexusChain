@@ -53,8 +53,9 @@ public class PaymentEventCollector {
         try {
             OnChainTransaction tx = mapToOnChainTransaction(event);
             transactionDataSource.feed(List.of(tx));
-            log.info("Payment event collected: paymentId={}, txHash={}, merchantId={}, amount={}",
-                    event.getPaymentId(), event.getChainTxHash(), event.getMerchantId(), event.getAmount());
+            log.info("Payment event collected: paymentId={}, txHash={}, merchantId={}, amount={}, latencyMs={}, costBps={}",
+                    event.getPaymentId(), event.getChainTxHash(), event.getMerchantId(), event.getAmount(),
+                    event.getLatencyMs(), event.getCostBps());
         } catch (Exception e) {
             // 采集失败不影响主链路；记录错误后吞掉异常
             log.error("Failed to collect payment event: paymentId={}, error={}",
@@ -78,6 +79,8 @@ public class PaymentEventCollector {
                 .timestamp(timestamp)
                 .status(OnChainTransaction.Status.SUCCESS)
                 .merchantId(merchantIdStr)
+                .routingLatencyMs(event.getLatencyMs())
+                .costBps(event.getCostBps())
                 .build();
     }
 

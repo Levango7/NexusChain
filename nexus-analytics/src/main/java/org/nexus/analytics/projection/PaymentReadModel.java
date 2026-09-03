@@ -51,6 +51,10 @@ public class PaymentReadModel {
     private String failureCode;
     /** 失败详情 */
     private String failureMessage;
+    /** 路由决策耗时（毫秒） */
+    private Long routingLatencyMs;
+    /** 支付成本（basis points） */
+    private Integer costBps;
     /** 退款单号 */
     private String refundNo;
     /** 退款金额 */
@@ -187,6 +191,22 @@ public class PaymentReadModel {
 
     public void setFailureMessage(String failureMessage) {
         this.failureMessage = failureMessage;
+    }
+
+    public Long getRoutingLatencyMs() {
+        return routingLatencyMs;
+    }
+
+    public void setRoutingLatencyMs(Long routingLatencyMs) {
+        this.routingLatencyMs = routingLatencyMs;
+    }
+
+    public Integer getCostBps() {
+        return costBps;
+    }
+
+    public void setCostBps(Integer costBps) {
+        this.costBps = costBps;
     }
 
     public String getRefundNo() {

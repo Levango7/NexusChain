@@ -4,16 +4,20 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.nexus.analytics.event.PaymentCompletedEvent;
 import org.nexus.gateway.orchestration.connector.*;
 import org.nexus.gateway.orchestration.model.OrchPaymentStatus;
 import org.nexus.gateway.orchestration.model.OrchestratedPayment;
 import org.nexus.gateway.orchestration.repository.OrchestratedPaymentRepository;
 import org.nexus.gateway.orchestration.routing.RoutingEngine;
+import org.nexus.gateway.orchestration.routing.ai.MetricsCollector;
 import org.nexus.gateway.risk.PaymentRequest;
 import org.nexus.gateway.risk.PaymentRiskService;
 import org.nexus.gateway.risk.RiskDecision;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
@@ -25,10 +29,11 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
+import org.mockito.InOrder;
 
 /**
  * {@link OrchestrationService} 单元测试：覆盖幂等重放、风控拒绝、路由空、
- * 连接器成功/失败/异常、refreshStatus 终态/非终态、listPayments 等分支。
+ * 连接器成功/失败/异常、refreshStatus 终态/非终态、listPayments、事件发布等分支。
  */
 @ExtendWith(MockitoExtension.class)
 class OrchestrationServiceTest {
@@ -39,13 +44,16 @@ class OrchestrationServiceTest {
     @Mock private OrchestrationIdempotencyStore idempotencyStore;
     @Mock private OrchestrationWebhookDispatcher webhookDispatcher;
     @Mock private PaymentRiskService riskService;
+    @Mock private MetricsCollector metricsCollector;
+    @Mock private ApplicationEventPublisher applicationEventPublisher;
 
     private OrchestrationService service;
 
     @BeforeEach
     void setUp() {
         service = new OrchestrationService(repo, routingEngine, connectorRegistry,
-                idempotencyStore, webhookDispatcher, riskService);
+                idempotencyStore, webhookDispatcher, riskService, null, metricsCollector,
+                applicationEventPublisher);
     }
 
     // === createPayment: 幂等重放 ===
@@ -263,6 +271,172 @@ class OrchestrationServiceTest {
                 null, "stripe", null, null);
 
         assertEquals("explicit", result.getRoutingStrategy());
+    }
+
+    // === createPayment: 延迟 / 成本采集 ===
+
+    @Test
+    @DisplayName("createPayment: connector 未回填 latency/cost 时 -> 外层兜底（计时 + feeBasisPoints）")
+    void createPayment_metricsFallback() {
+        when(riskService.evaluatePayment(any())).thenReturn(RiskDecision.APPROVED);
+        PaymentConnector connector = mock(PaymentConnector.class);
+        when(connector.getId()).thenReturn("chain");
+        when(connector.feeBasisPoints()).thenReturn(5);
+        when(connector.createPayment(any())).thenAnswer(inv -> {
+            // 模拟 connector 内部未填 latency/cost
+            Thread.sleep(15);
+            return ConnectorPaymentResult.ok("c-1", PaymentStatus.SUCCEEDED, "0xTx");
+        });
+        when(routingEngine.resolve("NEX", 1000, null)).thenReturn(List.of(connector));
+        when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        OrchestratedPayment result = service.createPayment(100L, 1000, "NEX", "d",
+                null, null, null, null);
+
+        assertEquals(OrchPaymentStatus.SUCCEEDED, result.getStatus());
+        // 验证 MetricsCollector.record 收到兜底值：success=true, latency>=15ms, cost=5bps
+        ArgumentCaptor<Long> latCaptor = ArgumentCaptor.forClass(Long.class);
+        ArgumentCaptor<Integer> costCaptor = ArgumentCaptor.forClass(Integer.class);
+        verify(metricsCollector).record(eq("chain"), eq(true), latCaptor.capture(), costCaptor.capture());
+        assertTrue(latCaptor.getValue() >= 10, "外层兜底延迟应 >= 10ms（实际 15ms）");
+        assertEquals(5, costCaptor.getValue());
+    }
+
+    @Test
+    @DisplayName("createPayment: connector 已回填 latency/cost 时 -> 不覆盖")
+    void createPayment_metricsKeepConnectorValues() {
+        when(riskService.evaluatePayment(any())).thenReturn(RiskDecision.APPROVED);
+        PaymentConnector connector = mock(PaymentConnector.class);
+        when(connector.getId()).thenReturn("consortium");
+        lenient().when(connector.feeBasisPoints()).thenReturn(2);
+        when(connector.createPayment(any())).thenAnswer(inv -> {
+            // connector 自身已测量延迟并报告
+            return ConnectorPaymentResult.ok("c-1", PaymentStatus.SUCCEEDED, "0xTx")
+                    .withLatencyMs(42L)
+                    .withCostBps(7); // 注意：7 != feeBasisPoints(2)，应被保留
+        });
+        when(routingEngine.resolve("NEX", 1000, null)).thenReturn(List.of(connector));
+        when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        OrchestratedPayment result = service.createPayment(100L, 1000, "NEX", "d",
+                null, null, null, null);
+
+        assertEquals(OrchPaymentStatus.SUCCEEDED, result.getStatus());
+        verify(metricsCollector).record(eq("consortium"), eq(true), eq(42L), eq(7));
+    }
+
+    @Test
+    @DisplayName("createPayment: connector 失败时 MetricsCollector 收到 success=false")
+    void createPayment_metricsRecordFailure() {
+        when(riskService.evaluatePayment(any())).thenReturn(RiskDecision.APPROVED);
+        PaymentConnector connector = mock(PaymentConnector.class);
+        when(connector.getId()).thenReturn("chain");
+        when(connector.feeBasisPoints()).thenReturn(5);
+        when(connector.createPayment(any())).thenReturn(ConnectorPaymentResult.fail("down"));
+        PaymentConnector fallback = mock(PaymentConnector.class);
+        when(fallback.getId()).thenReturn("consortium");
+        when(fallback.feeBasisPoints()).thenReturn(2);
+        when(fallback.createPayment(any())).thenReturn(
+                ConnectorPaymentResult.ok("c-2", PaymentStatus.SUCCEEDED, "0xTx2"));
+        when(routingEngine.resolve("NEX", 1000, null)).thenReturn(List.of(connector, fallback));
+        when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        OrchestratedPayment result = service.createPayment(100L, 1000, "NEX", "d",
+                null, null, null, null);
+
+        assertEquals(OrchPaymentStatus.SUCCEEDED, result.getStatus());
+        // 第一次调用：chain 失败
+        InOrder order = inOrder(metricsCollector);
+        order.verify(metricsCollector).record(eq("chain"), eq(false), anyLong(), eq(5));
+        order.verify(metricsCollector).record(eq("consortium"), eq(true), anyLong(), eq(2));
+    }
+
+    @Test
+    @DisplayName("createPayment: connector 抛异常时 MetricsCollector 仍记录 failure")
+    void createPayment_metricsRecordException() {
+        when(riskService.evaluatePayment(any())).thenReturn(RiskDecision.APPROVED);
+        PaymentConnector c1 = mock(PaymentConnector.class);
+        when(c1.getId()).thenReturn("chain");
+        lenient().when(c1.feeBasisPoints()).thenReturn(5);
+        when(c1.createPayment(any())).thenThrow(new RuntimeException("conn error"));
+        PaymentConnector c2 = mock(PaymentConnector.class);
+        when(c2.getId()).thenReturn("consortium");
+        when(c2.feeBasisPoints()).thenReturn(2);
+        when(c2.createPayment(any())).thenReturn(
+                ConnectorPaymentResult.ok("c-2", PaymentStatus.SUCCEEDED, "0xTx2"));
+        when(routingEngine.resolve("NEX", 1000, null)).thenReturn(List.of(c1, c2));
+        when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        OrchestratedPayment result = service.createPayment(100L, 1000, "NEX", "d",
+                null, null, null, null);
+
+        assertEquals(OrchPaymentStatus.SUCCEEDED, result.getStatus());
+        verify(metricsCollector).record(eq("chain"), eq(false), anyLong(), eq(0));
+        verify(metricsCollector).record(eq("consortium"), eq(true), anyLong(), eq(2));
+    }
+
+    @Test
+    @DisplayName("createPayment: MetricsCollector 抛异常不影响主流程")
+    void createPayment_metricsCollectorExceptionSwallowed() {
+        when(riskService.evaluatePayment(any())).thenReturn(RiskDecision.APPROVED);
+        PaymentConnector connector = mock(PaymentConnector.class);
+        when(connector.getId()).thenReturn("chain");
+        when(connector.feeBasisPoints()).thenReturn(5);
+        when(connector.createPayment(any())).thenReturn(
+                ConnectorPaymentResult.ok("c-1", PaymentStatus.SUCCEEDED, "0xTx"));
+        when(routingEngine.resolve("NEX", 1000, null)).thenReturn(List.of(connector));
+        when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        doThrow(new RuntimeException("metrics down"))
+                .when(metricsCollector).record(anyString(), anyBoolean(), anyLong(), anyInt());
+
+        // 主流程不应被指标采集异常打断
+        OrchestratedPayment result = service.createPayment(100L, 1000, "NEX", "d",
+                null, null, null, null);
+
+        assertEquals(OrchPaymentStatus.SUCCEEDED, result.getStatus());
+        assertEquals("chain", result.getConnectorId());
+    }
+
+    // === createPayment: 事件发布 ===
+
+    @Test
+    @DisplayName("createPayment: 成功路径发布 PaymentCompletedEvent，含 latencyMs/costBps")
+    void createPayment_success_publishesAnalyticsEvent() {
+        when(riskService.evaluatePayment(any())).thenReturn(RiskDecision.APPROVED);
+        PaymentConnector connector = mock(PaymentConnector.class);
+        when(connector.getId()).thenReturn("chain");
+        lenient().when(connector.feeBasisPoints()).thenReturn(5);
+        when(connector.createPayment(any())).thenReturn(
+                ConnectorPaymentResult.ok("c-1", PaymentStatus.SUCCEEDED, "0xTx")
+                        .withLatencyMs(42L).withCostBps(8));
+        when(routingEngine.resolve("NEX", 1000, null)).thenReturn(List.of(connector));
+        when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        OrchestratedPayment result = service.createPayment(100L, 1000, "NEX", "d",
+                null, null, null, null);
+
+        assertEquals(OrchPaymentStatus.SUCCEEDED, result.getStatus());
+
+        ArgumentCaptor<PaymentCompletedEvent> captor = ArgumentCaptor.forClass(PaymentCompletedEvent.class);
+        verify(applicationEventPublisher).publishEvent(captor.capture());
+
+        PaymentCompletedEvent event = captor.getValue();
+        assertEquals(new java.math.BigDecimal("1000"), event.getAmount());
+        assertEquals("chain", event.getConnector());
+        assertEquals("0xTx", event.getChainTxHash());
+        assertEquals(42L, event.getLatencyMs());
+        assertEquals(8, event.getCostBps());
+    }
+
+    @Test
+    @DisplayName("createPayment: 失败路径不发布 PaymentCompletedEvent")
+    void createPayment_failure_doesNotPublishAnalyticsEvent() {
+        when(riskService.evaluatePayment(any())).thenReturn(RiskDecision.REJECTED);
+        when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.createPayment(100L, 1000, "NEX", "d", null, null, null, null);
+
+        verify(applicationEventPublisher, never()).publishEvent(any(PaymentCompletedEvent.class));
     }
 
     // === getPayment / listPayments ===

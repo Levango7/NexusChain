@@ -253,6 +253,8 @@ public class PaymentOrchestrationController {
         m.put("connector_payment_id", p.getConnectorPaymentId());
         m.put("transaction_hash", p.getTransactionHash());
         m.put("routing_strategy", p.getRoutingStrategy());
+        m.put("latency_ms", p.getLatencyMs());
+        m.put("cost_bps", p.getCostBps());
         m.put("created_at", p.getCreatedAt() != null ? p.getCreatedAt().toString() : null);
         m.put("confirmed_at", p.getConfirmedAt() != null ? p.getConfirmedAt().toString() : null);
         m.put("expires_at", p.getExpiresAt() != null ? p.getExpiresAt().toString() : null);

@@ -387,7 +387,9 @@ public class PaymentServiceImpl implements PaymentService {
                     chainTxHash,
                     order.getPayerAddress(),
                     order.getPayeeAddress(),
-                    Instant.now()));
+                    Instant.now(),
+                    0L,
+                    0));
 
             return PaymentResult.success(order.getOrderNo(), chainTxHash, order.getPaidAt());
         }

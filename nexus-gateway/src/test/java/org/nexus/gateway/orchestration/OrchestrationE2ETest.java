@@ -108,6 +108,8 @@ class OrchestrationE2ETest {
                 .andExpect(jsonPath("$.connector").value("mock"))
                 .andExpect(jsonPath("$.amount").value(50000))
                 .andExpect(jsonPath("$.currency").value("NEX"))
+                .andExpect(jsonPath("$.latency_ms").isNumber())
+                .andExpect(jsonPath("$.cost_bps").isNumber())
                 .andReturn();
 
         String body = res.getResponse().getContentAsString();

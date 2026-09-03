@@ -7,12 +7,15 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.time.Clock;
+import java.time.Duration;
+
 /**
  * AI 路由自动装配（P4-T4）。
  *
  * <p>当 {@code nexus.routing.ai.enabled=true} 时装配以下 bean：</p>
  * <ul>
- *   <li>{@link MetricsCollector} — 滑动窗口指标收集器（windowSize 来自配置）</li>
+ *   <li>{@link MetricsCollector} — 时间桶指标收集器（windowSize + bucketSize 来自配置）</li>
  *   <li>{@link AiRoutingStrategy} — AI 路由策略（minSamples 来自配置）</li>
  *   <li>{@link AbTestRouter} — A/B 测试路由器（aiTrafficPercentage 来自配置）</li>
  * </ul>
@@ -31,8 +34,10 @@ public class AiRoutingConfiguration {
     public MetricsCollector metricsCollector(GatewayConfig gatewayConfig) {
         GatewayConfig.AiMetricsConfig metricsConfig = aiMetricsConfig(gatewayConfig);
         int windowSize = metricsConfig.getWindowSize();
-        log.info("AI routing MetricsCollector: windowSize={}", windowSize);
-        return new MetricsCollector(windowSize);
+        Duration bucketSize = parseBucketSize(metricsConfig.getBucketSize());
+        log.info("AI routing MetricsCollector: windowSize={} buckets, bucketSize={} (window ≈ {})",
+                windowSize, bucketSize, bucketSize.multipliedBy(windowSize));
+        return new MetricsCollector(windowSize, bucketSize, Clock.systemUTC());
     }
 
     @Bean
@@ -54,6 +59,23 @@ public class AiRoutingConfiguration {
         int percentage = abConfig.getAiTrafficPercentage();
         log.info("AI routing A/B test: enabled={}, aiTrafficPercentage={}%", abEnabled, percentage);
         return new AbTestRouter(aiRoutingStrategy, percentage, abEnabled);
+    }
+
+    private static Duration parseBucketSize(String iso) {
+        if (iso == null || iso.isBlank()) {
+            return Duration.ofMinutes(1);
+        }
+        try {
+            Duration d = Duration.parse(iso);
+            if (d.isZero() || d.isNegative()) {
+                log.warn("Invalid bucketSize '{}', fallback to PT1M", iso);
+                return Duration.ofMinutes(1);
+            }
+            return d;
+        } catch (RuntimeException e) {
+            log.warn("Failed to parse bucketSize '{}', fallback to PT1M: {}", iso, e.getMessage());
+            return Duration.ofMinutes(1);
+        }
     }
 
     private static GatewayConfig.AiRoutingConfig aiConfig(GatewayConfig gatewayConfig) {

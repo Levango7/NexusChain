@@ -37,10 +37,15 @@ public class PaymentCompletedEvent extends ApplicationEvent {
     private final String payeeAddress;
     /** 事件发生时间戳 */
     private final Instant occurredAt;
+    /** 路由决策耗时（毫秒） */
+    private final long latencyMs;
+    /** 支付成本（basis points） */
+    private final int costBps;
 
     public PaymentCompletedEvent(Object source, Long paymentId, BigDecimal amount, String currency,
                                  String connector, Long merchantId, String chainTxHash,
-                                 String payerAddress, String payeeAddress, Instant occurredAt) {
+                                 String payerAddress, String payeeAddress, Instant occurredAt,
+                                 long latencyMs, int costBps) {
         super(source);
         this.paymentId = paymentId;
         this.amount = amount;
@@ -51,6 +56,8 @@ public class PaymentCompletedEvent extends ApplicationEvent {
         this.payerAddress = payerAddress;
         this.payeeAddress = payeeAddress;
         this.occurredAt = occurredAt;
+        this.latencyMs = latencyMs;
+        this.costBps = costBps;
     }
 
     public Long getPaymentId() { return paymentId; }
@@ -62,4 +69,6 @@ public class PaymentCompletedEvent extends ApplicationEvent {
     public String getPayerAddress() { return payerAddress; }
     public String getPayeeAddress() { return payeeAddress; }
     public Instant getOccurredAt() { return occurredAt; }
+    public long getLatencyMs() { return latencyMs; }
+    public int getCostBps() { return costBps; }
 }

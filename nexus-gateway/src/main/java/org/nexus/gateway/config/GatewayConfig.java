@@ -192,10 +192,14 @@ public class GatewayConfig {
         private int windowSize = 1000;
         /** 模型推理所需的最小样本数（冷启动保护）。 */
         private int minSamples = 10;
+        /** 单桶时长（ISO-8601 duration，如 PT60S = 60s、PT1M = 1 分钟）。默认 PT1M。 */
+        private String bucketSize = "PT1M";
 
         public int getWindowSize() { return windowSize; }
         public void setWindowSize(int windowSize) { this.windowSize = windowSize; }
         public int getMinSamples() { return minSamples; }
+        public String getBucketSize() { return bucketSize; }
+        public void setBucketSize(String bucketSize) { this.bucketSize = bucketSize; }
         public void setMinSamples(int minSamples) { this.minSamples = minSamples; }
     }
 
