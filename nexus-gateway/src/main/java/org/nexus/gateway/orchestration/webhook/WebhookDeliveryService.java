@@ -8,7 +8,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestTemplate;
 import org.nexus.gateway.webhook.WebhookUrlValidator;
 
@@ -18,7 +17,7 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * Webhook 投递服务（P4-T5）。
+ * Webhook 投递服务（P4-T5 / A3 长事务修复 2026-09-03）。
  *
  * <p>核心投递流程：
  * <ol>
@@ -29,6 +28,23 @@ import java.util.UUID;
  *   <li>重试耗尽后转入死信队列（Kafka DLQ topic）</li>
  *   <li>全程更新投递记录状态（PENDING → RETRYING → DELIVERED/DEAD_LETTER）</li>
  * </ol>
+ *
+ * <h3>事务边界（A3 修复）</h3>
+ * <p>本服务所有方法<b>不持有</b>方法级 {@code @Transactional}：
+ * <ul>
+ *   <li>每次状态更新（{@code repository.save}）由 JpaRepository 的
+ *       {@code SimpleJpaRepository.save} 自带事务独立提交（短事务，毫秒级）</li>
+ *   <li>HTTP 投递与指数退避等待（{@code WebhookRetryService.awaitRetry}，
+ *       最长 8 次退避可达数十秒）在<b>事务外</b>执行，不再占用数据库连接</li>
+ * </ul>
+ * 修复前：方法级事务将「PENDING 落库 + 9 次 HTTP + 8 次退避 + 多次状态更新」
+ * 包在同一长事务里，高峰期会拖垮连接池（连接被投递等待独占数秒到数十秒）。
+ * 修复后：投递全程仅按需获取连接（每次 save 短暂借用即归还），连接持有时间
+ * 与投递时长解耦。</p>
+ * <p>原子性取舍：PENDING 创建与首次投递不再同事务——若进程在两者之间崩溃，
+ * 会残留 PENDING 记录（无投递发生），由 {@code replay}（死信重投）或
+ * 运维查询发现；换取的是连接池健康。SSRF 校验（validate 抛异常）仍在
+ * save 之前，非法 URL 不落库的语义保持不变。</p>
  *
  * <p>设计要点：
  * <ul>
@@ -103,6 +119,11 @@ public class WebhookDeliveryService {
      *
      * <p>同步执行：包含重试与退避等待。调用方若需异步，应包装在 {@code @Async} 中。
      *
+     * <h3>事务边界（A3 修复）</h3>
+     * <p>无方法级事务：PENDING 落库与每次状态更新均为 repository 短事务；
+     * HTTP 投递与退避等待在事务外，不占用数据库连接。
+     * SSRF 校验仍在落库之前（非法 URL 不产生投递记录）。</p>
+     *
      * @param paymentId    支付 ID
      * @param merchantId   商户 ID
      * @param notifyUrl    回调地址（null/空则跳过）
@@ -110,7 +131,6 @@ public class WebhookDeliveryService {
      * @param statusEvent  状态事件名（如 "payment.succeeded"，用于去重与日志）
      * @return 投递记录（最终状态：DELIVERED 或 DEAD_LETTER）；若 notifyUrl 为空则返回 null
      */
-    @Transactional
     public WebhookDeliveryRecord deliver(String paymentId, Long merchantId, String notifyUrl,
                                          Map<String, Object> payload, String statusEvent) {
         if (notifyUrl == null || notifyUrl.isBlank()) {
@@ -153,11 +173,12 @@ public class WebhookDeliveryService {
      * 从死信队列重投。
      *
      * <p>将死信消息重新投递，状态从 DEAD_LETTER 转为 RETRYING。
+     * 事务边界同 {@link #deliver}：状态更新走 repository 短事务，
+     * HTTP 与退避在事务外。
      *
      * @param message 死信消息
      * @return 投递记录（最终状态）
      */
-    @Transactional
     public WebhookDeliveryRecord replay(DeadLetterMessage message) {
         if (message == null) {
             throw new IllegalArgumentException("dead letter message must not be null");
