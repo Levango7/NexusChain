@@ -25,6 +25,11 @@ dependencies {
     compileOnly 'org.projectlombok:lombok:1.18.32'
     annotationProcessor 'org.projectlombok:lombok:1.18.32'
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    // === Spring Boot 4.0 模块化：@JdbcTest/@DataJpaTest/TestEntityManager 移到独立测试模块
+    //（与 gateway 的 spring-boot-starter-webmvc-test 同理），账务核心持久化集成测试所需 ===
+    testImplementation 'org.springframework.boot:spring-boot-jdbc-test'
+    testImplementation 'org.springframework.boot:spring-boot-jpa-test'
+    testImplementation 'org.springframework.boot:spring-boot-data-jpa-test'
     testImplementation 'com.h2database:h2:2.2.224'
 }
 

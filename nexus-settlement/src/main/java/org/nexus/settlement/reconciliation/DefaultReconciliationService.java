@@ -77,6 +77,9 @@ public class DefaultReconciliationService implements ReconciliationService {
     /**
      * 核心比对逻辑：本地账本商户结算分录 vs 外部记录。
      *
+     * <p>Path C 扩展：产出结构化维度（source/双边总量/差错金额汇总）与
+     * {@link DiscrepancyDetail} 明细列表，同时保留既有 String 差错描述。</p>
+     *
      * @param externalRecords 外部（链上/银行）记录
      * @param sourceLabel     数据源标签（用于差错描述）
      * @return 对账报告
@@ -97,6 +100,8 @@ public class DefaultReconciliationService implements ReconciliationService {
 
         long matched = 0;
         List<String> discrepancies = new ArrayList<>();
+        List<DiscrepancyDetail> details = new ArrayList<>();
+        BigDecimal discrepancyAmount = BigDecimal.ZERO;
 
         for (Map.Entry<String, BigDecimal> entry : localByRef.entrySet()) {
             String ref = entry.getKey();
@@ -104,16 +109,30 @@ public class DefaultReconciliationService implements ReconciliationService {
             if (!externalByRef.containsKey(ref)) {
                 discrepancies.add(String.format("[%s] ref=%s 本地有、外部无（amount=%s）",
                         sourceLabel, ref, localAmount));
+                details.add(new DiscrepancyDetail(
+                        DiscrepancyDetail.Type.LOCAL_ONLY, ref, localAmount, null));
+                discrepancyAmount = discrepancyAmount.add(localAmount != null ? localAmount : BigDecimal.ZERO);
             } else if (localAmount.compareTo(externalByRef.get(ref)) != 0) {
+                BigDecimal externalAmount = externalByRef.get(ref);
                 discrepancies.add(String.format("[%s] ref=%s 金额不符（local=%s, external=%s）",
-                        sourceLabel, ref, localAmount, externalByRef.get(ref)));
+                        sourceLabel, ref, localAmount, externalAmount));
+                details.add(new DiscrepancyDetail(
+                        DiscrepancyDetail.Type.AMOUNT_MISMATCH, ref, localAmount, externalAmount));
+                discrepancyAmount = discrepancyAmount.add(
+                        localAmount.subtract(externalAmount).abs());
             } else {
                 matched++;
             }
         }
         for (String ref : externalByRef.keySet()) {
             if (!localByRef.containsKey(ref)) {
-                discrepancies.add(String.format("[%s] ref=%s 外部有、本地无（疑似漏记账）", sourceLabel, ref));
+                BigDecimal externalAmount = externalByRef.get(ref);
+                discrepancies.add(String.format("[%s] ref=%s 外部有、本地无（疑似漏记账）",
+                        sourceLabel, ref));
+                details.add(new DiscrepancyDetail(
+                        DiscrepancyDetail.Type.EXTERNAL_ONLY, ref, null, externalAmount));
+                discrepancyAmount = discrepancyAmount.add(
+                        externalAmount != null ? externalAmount : BigDecimal.ZERO);
             }
         }
 
@@ -122,6 +141,12 @@ public class DefaultReconciliationService implements ReconciliationService {
         report.setMatchedCount(matched);
         report.setDiscrepancyCount(discrepancies.size());
         report.setDiscrepancies(discrepancies);
+        report.setSource(sourceLabel);
+        report.setTotalLocal(localByRef.size());
+        report.setTotalExternal(externalByRef.size());
+        report.setTotalDiscrepancyAmount(discrepancyAmount);
+        report.setDetails(details);
+        report.setReconciledAt(java.time.Instant.now());
         return report;
     }
 }

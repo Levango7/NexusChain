@@ -101,6 +101,90 @@ Flyway 不支持自动回滚，需手动执行以下步骤。
 | V10 | `V10__tenant_tables.sql` | 多租户表 |
 | V11 | `V11__shedlock.sql` | ShedLock 分布式锁表 |
 | V12 | `V12__chain_tx_hash_unique.sql` | chain_tx_hash 唯一约束（v2.27.0 安全加固） |
+| V18 | `V18__settlement_persistence.sql` | 清结算账务核心持久化三表（ledger_entry / clearing_order / settlement_record） |
+
+## V18 迁移说明（清结算账务核心持久化，v2.41.x）
+
+### 背景与目标
+
+清结算账务核心此前为纯内存实现——`Ledger`（复式记账）、清算订单 PENDING staging、链上/银行对账记录（`InMemoryChainRecordSource` / `InMemoryBankRecordSource`）在进程重启后全部丢失，生产不可靠。V18 将其持久化为「JdbcTemplate（账本）+ JPA（清算订单/对账记录）」的混合方案：
+
+- **重启不丢**：账本分录、PENDING 订单、对账记录全部落库。
+- **跨实例可见**：结算调度器（ShedLock 单实例）drain 的 PENDING 批次来自数据库而非进程内存。
+- **幂等防重**：账本以 `(reference, account)` 唯一键防止同一订单重复记账；对账记录以 `(reference, source)` 唯一键复刻内存去重语义。
+
+### 变更内容
+
+**脚本**：`V18__settlement_persistence.sql`（三表 DDL 一次建齐，MySQL / PostgreSQL / H2 MODE=MySQL 兼容）
+
+| 表 | 管理方式 | 说明 |
+|----|---------|------|
+| `ledger_entry` | JdbcTemplate 手管（无 JPA 实体） | 复式记账分录：借/贷双行原子写入，`UNIQUE(reference, account)` 幂等；余额 = `SUM(CREDIT ? amount : -amount)` |
+| `clearing_order` | JPA `@Entity`（`ClearingOrder`） | `order_id` 业务主键；PENDING 落库 → drain 删除 → settle 同键回写 SETTLED+`settlement_tx_hash` |
+| `settlement_record` | JPA `@Entity`（`SettlementRecord`） | 新增 `source`（CHAIN/BANK）区分两类对账记录，`UNIQUE(reference, source)` |
+
+**应用层配套改造**（双模式设计，既有纯单测零破坏）：
+
+| 类 | 改造 |
+|----|------|
+| `org.nexus.settlement.clearing.Ledger` | 双构造器：`@Autowired(required=false)` 注入 JdbcTemplate/事务管理器 → DB 模式（TransactionTemplate 包借/贷双写）；无参构造 → 原内存语义 |
+| `org.nexus.settlement.clearing.ClearingOrder` | 叠加 `@Entity/@Table`，保留 `@JsonProperty` 序列化与隐式无参构造 |
+| `org.nexus.settlement.reconciliation.SettlementRecord` | 叠加 `@Entity`，新增 `id`/`source` 字段，保留既有构造器 |
+| `ClearingOrderRepository` / `SettlementRecordRepository` | 新增 Spring Data JpaRepository（findByStatus / findBySource / findByReferenceAndSource / deleteBySource） |
+| `org.nexus.gateway.settlement.SettlementEventCollector` | 双构造器：DB 模式 PENDING 落库、drain 查询+删除；无 repository 走内存 staging |
+| `InMemoryChainRecordSource` / `InMemoryBankRecordSource` | 同 Bean 可选注入 repository（不新增 Bean，避免接口注入歧义），source=CHAIN/BANK |
+| `org.nexus.settlement.clearing.DefaultClearingEngine` | `@Autowired(required=false)` 注入仓储，settle 终态（SETTLED/FAILED + settlementTxHash）回写 |
+| `org.nexus.gateway.config.SettlementPersistenceConfig` | 新增：`@EntityScan`+`@EnableJpaRepositories` 显式扩至 settlement 两个包（composite build 库实体经 gateway classpath 装配） |
+
+**Spring Boot 4.0 模块化适配**（本次迁移中发现并解决的兼容问题）：
+
+| 组件 | Boot 3.x 包路径 | Boot 4.0 新路径 |
+|------|----------------|----------------|
+| `@JdbcTest` | `o.s.boot.test.autoconfigure.jdbc` | `o.s.boot.jdbc.test.autoconfigure` |
+| `@DataJpaTest` | `o.s.boot.test.autoconfigure.orm.jpa` | `o.s.boot.data.jpa.test.autoconfigure`（且不再支持 `classes` 属性） |
+| `TestEntityManager` | `o.s.boot.test.autoconfigure.orm.jpa` | `o.s.boot.jpa.test.autoconfigure` |
+| `@EntityScan` | `o.s.boot.autoconfigure.domain` | `o.s.boot.persistence.autoconfigure` |
+| 测试依赖 | 随 starter-test 提供 | 需显式 `spring-boot-jdbc-test` / `spring-boot-jpa-test` / `spring-boot-data-jpa-test` |
+
+### 迁移前置条件
+
+- 已完成 V1–V17 全部 migration。
+- `spring.jpa.hibernate.ddl-auto=validate`（生产默认）：V18 三表 DDL 与实体映射逐列对齐，由 `SettlementPersistenceSchemaValidateIT`（H2 + 生产 V18 脚本 + validate）作为 CI 防线拦截漂移。
+- dev/test 环境无需额外操作：test profile 的 `create-drop` 自建表；dev 的 H2 `MODE=MySQL` + `update` 兼容 V18 脚本。
+
+### 验证步骤
+
+1. **启动验证**：Flyway 自动执行 V18 后查三表存在：
+   ```sql
+   SELECT version, success FROM flyway_schema_history WHERE version = '18';
+   ```
+2. **回归测试**：
+   ```bash
+   ./gradlew --no-daemon --no-parallel --max-workers=1 :nexus-settlement:test :nexus-gateway:test
+   ```
+   两模块全绿（settlement 159 用例含 12 个新增 H2 集成测试；gateway 全量含 SchemaValidateIT/WiringIT 两个防线）。
+3. **运行时行为验证**：支付成功 → SettlementEventCollector 落 PENDING（查 `clearing_order` where status='PENDING'）→ 结算调度器 drain → settle 回写 SETTLED+`settlement_tx_hash`，同时 `ledger_entry` 出现借/贷双行、`settlement_record` 出现 source=CHAIN 回填记录。
+
+### 已知注意事项
+
+- **`@EnableJpaRepositories` 显式声明的退避效应**：`SettlementPersistenceConfig` 一旦显式声明仓储扫描包，Spring Data 自动配置整体退避——必须覆盖 gateway 全部仓储包（现以 `org.nexus.gateway` 全包扫描）。新增顶层包下的仓储时无需改动；若未来 gateway 出现 `org.nexus.*` 之外的仓储包，需同步扩展该 config。
+- **`SettlementScheduler.drainStaging` 的取出语义**：DB 模式为「查询 PENDING + 删除」，与内存模式「快照 + 清空」语义一致；结算失败的订单不重入 staging（与内存实现行为一致），由对账报告暴露差错。
+- **`ledger_entry` 无 JPA 实体**：其结构正确性由 `LedgerJdbcTest`（H2 真实落库）与 V18 脚本共同保证，`validate` 不覆盖此表。
+
+### 回滚步骤
+
+Flyway 不支持自动回滚，手动执行：
+
+1. 停止 gateway 实例（确保无新 PENDING 写入）。
+2. 若需保留账务数据供审计，先导出三表备份。
+3. 删除三表并修正历史：
+   ```sql
+   DROP TABLE IF EXISTS ledger_entry;
+   DROP TABLE IF EXISTS clearing_order;
+   DROP TABLE IF EXISTS settlement_record;
+   DELETE FROM flyway_schema_history WHERE version = '18';
+   ```
+4. 回退代码版本，应用自动回退到内存模式（无 JdbcTemplate/Repository 注入时双模式设计走内存路径）。
 
 ## 注意事项
 
