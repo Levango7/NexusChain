@@ -10,6 +10,11 @@
 //!
 //! **v2.2.0 D 批（F-U 1 验证）**：`cggmp` 暴露使三方 DKG Simulation 端到端
 //! 跑通；批量测试三方 IncompleteKeyShare 产出与 validate 通过。
+//!
+//! **v2.2.0 E 批**：`cggmp_state` 暴露驱动线程 actor——tests/cggmp_threshold_e2e.rs
+//! 经 `CgDriverHandle` 完成三方 keygen→aux→合成→2-of-3 sign→verify 里程碑。
 
 pub mod cggmp;
+// E 批：驱动线程 actor（内部 !Send 状态机独占线程；跨线程只传指令/回执）。
+pub mod cggmp_state;
 pub mod proto;

@@ -33,8 +33,10 @@ type KeygenOutput = Result<IncompleteKeyShare<Secp256k1>, cggmp21::KeygenError>;
 fn pump_initial_proceed_returns_needs_one_more_message() {
     // 单方 keygen 状态机——第一次 proceed 应返 NeedsOneMoreMessage（等输入）
     // pump 应当不 panic、finished=false、output=None
+    // E 批：pump 签名新增 my_index（outgoing 编码需要本方 index）
     let mut sm = Box::new(keygen_state_machine("test-initial", 0, 0, 3, 1));
-    let (_outgoing, finished, _output) = pump::<_, KeygenMsg>(sm.as_mut(), &[]).expect("pump ok");
+    let (_outgoing, finished, _output) =
+        pump::<_, KeygenMsg>(sm.as_mut(), &[], 0).expect("pump ok");
     assert!(!finished, "initial pump must not be finished");
     assert!(_output.is_none(), "Output must be None when not finished");
 }
@@ -44,10 +46,10 @@ fn pump_multiple_calls_do_not_panic() {
     // pump 是幂等函数——多次 pump 不应破坏状态机内部不变量
     let mut sm = Box::new(keygen_state_machine("test-multi", 0, 1, 3, 1));
     for _ in 0..5 {
-        let _ = pump::<_, KeygenMsg>(sm.as_mut(), &[]);
+        let _ = pump::<_, KeygenMsg>(sm.as_mut(), &[], 1);
     }
     // 关键断言：pump 5 次后状态机仍能正常推进（不锁死/不 panic）
-    let (_, _, _) = pump::<_, KeygenMsg>(sm.as_mut(), &[]).expect("final pump ok");
+    let (_, _, _) = pump::<_, KeygenMsg>(sm.as_mut(), &[], 1).expect("final pump ok");
 }
 
 #[test]
@@ -59,7 +61,7 @@ fn pump_with_malformed_payload_returns_err() {
         receiver: Some(0),
         payload_json: "{not valid json".to_string(),
     }];
-    let result = pump::<_, KeygenMsg>(sm.as_mut(), &cgs);
+    let result = pump::<_, KeygenMsg>(sm.as_mut(), &cgs, 2);
     assert!(
         result.is_err(),
         "malformed payload should be rejected with Err"

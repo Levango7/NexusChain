@@ -130,8 +130,19 @@ pub struct CgMessage {
 /// 喂入收到的消息、取出发出的消息；返回 (outgoing, finished)。
 ///
 /// round-based 0.4 的 StateMachine API 是轮询式（`proceed()` 返回
-/// ProceedResult 枚举），不是 0.1 的事件回调式（feed_messages/pull_outgoing）——
-/// 本函数实现前者：循环 proceed 直到需要更多消息或完成。
+/// ProceedResult 枚举），不是 0.1 的事件回调式（feed_messages/pull_outgoing）。
+///
+/// **上游契约（E 批修正）**：`received_msg` 后必须紧跟一次 `proceed`，
+/// **不允许连续喂多条**（上游 mod.rs:96-99 原文 "Do not invoke this method
+/// more than once in a row"）——D 批旧实现 for 循环连喂再统一 proceed 违反
+/// 契约，多消息场景下状态机会错误地积压/丢弃（F-U 1 仅测空 inbox 未暴露）。
+/// 现改为严格交替：每条 incoming → received_msg → proceed，循环至
+/// NeedsOneMoreMessage（inbox 耗尽）或 Output（完成）。
+///
+/// **!Send 限制（E 批发现）**：状态机内部是 `Rc<RefCell<SharedState>>`
+/// （round_based 0.4 wrap_protocol 的固有设计），**非 Send**——持有它的
+/// 代码不能进 async 上下文/跨线程。cggmp_state.rs 的专用驱动线程 actor
+/// 满足此约束；直接在本模块测试中单线程使用亦安全。
 ///
 /// 协议消息的 id（`MsgId = u64`）由调用方分配（CgMessage 暂不携带，
 /// 默认给 0；协议对 id 不敏感，只对 sender/payload 敏感）。
@@ -141,16 +152,25 @@ pub struct CgMessage {
 /// - finished：是否已完成（`ProceedResult::Output(_)` 已到达）
 /// - output：协议产物（`Some` 当 `finished=true`）；调用方拿到签名结果
 ///   /份额等。`None` 当 `finished=false`。
+///
+/// **注意**：喂入的消息若非状态机当前期望（轮次不匹配），received_msg 会
+/// 返 Err——本函数将其转为协议错误（fail-closed，不静默丢弃）。
 pub fn pump<SM, M>(
     sm: &mut SM,
     incoming: &[CgMessage],
+    my_index: u16,
 ) -> eyre::Result<(Vec<CgMessage>, bool, Option<SM::Output>)>
 where
     SM: CgStateMachine<Msg = M> + ?Sized,
     M: serde::de::DeserializeOwned + serde::Serialize,
     SM::Output: Sized, // 同步状态机产物 Sized（生成器产物非 dyn 友好）
 {
-    // 1. 喂入收到的消息
+    let mut outgoing = Vec::new();
+    let mut output: Option<SM::Output> = None;
+
+    // E 批：received_msg 与 proceed 严格交替（上游契约）。
+    // 每处理完一条 incoming 就 proceed 一次，让状态机消费后继续产出；
+    // inbox 耗尽时若状态机仍 NeedsOneMoreMessage 则等待下一批。
     for m in incoming {
         let inner: M = serde_json::from_str(&m.payload_json)
             .map_err(|e| eyre::eyre!("bad protocol message json: {e}"))?;
@@ -166,41 +186,84 @@ where
             msg_type,
             msg: inner,
         };
-        sm.received_msg(incoming_msg).map_err(|_| {
-            eyre::eyre!("state machine did not request this message (round mismatch)")
-        })?;
-    }
-
-    // 2. 轮询驱动 proceed 取出消息
-    let mut outgoing = Vec::new();
-    let mut output: Option<SM::Output> = None;
-    loop {
+        if sm.received_msg(incoming_msg).is_err() {
+            return Err(eyre::eyre!(
+                "state machine did not request this message (round mismatch or duplicate)"
+            ));
+        }
+        // received_msg 后必须紧跟 proceed（上游契约）——此处驱动一轮，
+        // 产出的消息全部收集；若恰在此轮完成则收 output 并停止。
+        // Yielded = 协议主动让出（把长计算切块，上游 mod.rs:118-125 原文
+        // "resume by calling proceed immediately"）——继续轮询即可；
+        // 加连续 yield 上限防御异常状态机（正常协议不会无限 yield）。
+        let mut yields = 0usize;
         match sm.proceed() {
             ProceedResult::SendMsg(out) => {
-                let Outgoing { msg, recipient } = out;
-                let payload_json = serde_json::to_string(&msg)
-                    .map_err(|e| eyre::eyre!("serialize outgoing message: {e}"))?;
-                let (sender, receiver) = match recipient {
-                    MessageDestination::AllParties => (0, None),
-                    MessageDestination::OneParty(idx) => (idx, Some(idx)),
-                };
-                outgoing.push(CgMessage {
-                    sender,
-                    receiver,
-                    payload_json,
-                });
+                outgoing.push(encode_outgoing(out, my_index)?);
+            }
+            ProceedResult::NeedsOneMoreMessage => {
+                // 状态机消费了刚喂入的消息但仍需更多——继续喂下一条
+                // incoming（若还有），或返回等待调用方拉取新消息。
+                continue;
+            }
+            ProceedResult::Output(o) => {
+                output = Some(o);
+                break;
+            }
+            // Yielded/Error：Yielded 是协议主动让出（长计算切块）——立即
+            // 重新 proceed 继续（见上方 Javadoc 与上游 mod.rs:118-125）；
+            // Error 是真正的协议/使用错误（fail-closed）。
+            ProceedResult::Yielded => loop {
+                yields += 1;
+                if yields > 1_000_000 {
+                    return Err(eyre::eyre!(
+                        "cggmp state machine yielded more than 1M times — abnormal"
+                    ));
+                }
+                match sm.proceed() {
+                    ProceedResult::SendMsg(out) => {
+                        outgoing.push(encode_outgoing(out, my_index)?);
+                    }
+                    ProceedResult::NeedsOneMoreMessage => break,
+                    ProceedResult::Output(o) => {
+                        output = Some(o);
+                        break;
+                    }
+                    ProceedResult::Yielded => continue,
+                    ProceedResult::Error(e) => {
+                        return Err(eyre::eyre!("cggmp state machine returned error: {e:?}"));
+                    }
+                }
+            },
+            ProceedResult::Error(e) => {
+                return Err(eyre::eyre!("cggmp state machine returned error: {e:?}"));
+            }
+        }
+    }
+
+    // inbox 耗尽后：继续 proceed 排空待发消息（直到 NeedsOneMoreMessage/Output）。
+    // 仅当第一循环未完成时才排空——状态机 Output 后再 proceed 会
+    // ExecutionError(Exhausted)（上游 mod.rs:87-89 原文契约）。
+    // Yielded = 主动让出长计算切块——继续轮询（同第一循环语义）。
+    let mut yields = 0usize;
+    while output.is_none() {
+        match sm.proceed() {
+            ProceedResult::SendMsg(out) => {
+                outgoing.push(encode_outgoing(out, my_index)?);
             }
             ProceedResult::NeedsOneMoreMessage => break,
             ProceedResult::Output(o) => {
                 output = Some(o);
                 break;
             }
-            // Yielded/Error 是 round_based 0.4 异步/错误路径——同步状态机
-            // 不会到达。到达则视为协议错误（fail-closed）。
             ProceedResult::Yielded => {
-                return Err(eyre::eyre!(
-                    "cggmp state machine unexpectedly yielded in sync mode"
-                ));
+                yields += 1;
+                if yields > 1_000_000 {
+                    return Err(eyre::eyre!(
+                        "cggmp state machine yielded more than 1M times — abnormal"
+                    ));
+                }
+                continue;
             }
             ProceedResult::Error(e) => {
                 return Err(eyre::eyre!("cggmp state machine returned error: {e:?}"));
@@ -210,6 +273,31 @@ where
 
     let finished = output.is_some();
     Ok((outgoing, finished, output))
+}
+
+/// 把上游 `Outgoing<M>` 编码为跨进程形态 `CgMessage`。
+///
+/// **E 批修正（D 批 sender bug）**：`Outgoing` 只有 recipient 没有 sender——
+/// D 批旧代码把 recipient 目标错填进 `CgMessage.sender`（广播被标 sender=0、
+/// p2p 时 sender/receiver 颠倒），接收方 `received_msg` 会拿到错误的来源方。
+/// 现由调用方传入 `my_index`（状态机所属方），broadcast → receiver=None、
+/// p2p → receiver=Some(idx)，sender 恒为 my_index。
+fn encode_outgoing<M: serde::Serialize>(
+    out: Outgoing<M>,
+    my_index: u16,
+) -> eyre::Result<CgMessage> {
+    let Outgoing { msg, recipient } = out;
+    let payload_json = serde_json::to_string(&msg)
+        .map_err(|e| eyre::eyre!("serialize outgoing message: {e}"))?;
+    let receiver = match recipient {
+        MessageDestination::AllParties => None,
+        MessageDestination::OneParty(idx) => Some(idx),
+    };
+    Ok(CgMessage {
+        sender: my_index,
+        receiver,
+        payload_json,
+    })
 }
 
 // =========================================================================
@@ -304,30 +392,69 @@ fn cggmp21_keygen_rng() -> rand_core::OsRng {
 }
 
 // =========================================================================
-// 注册表（session → 状态机，进程内单例；server 层经此驱动）
+// 注册表（session → 状态机；**仅 cggmp_state.rs 驱动线程内访问**）
 // =========================================================================
 //
-// 状态机的归宿选择：Rust 不允许 `type X = impl Trait`（稳定版），
-// `dyn StateMachine<...>` 也不支持关联类型（异步生成器的本质限制）。
-// 折中方案：每协议各自一个**结构体**持有状态 + 提供同名 `pump_*` 方法；
-// `CgSession` 的三个字段是 `Option<Box<具体状态类型>>`——这与协调器
-// 按 protocol tag 分发的架构天然契合。
+// 状态机的归宿选择（E 批定稿）：
+//   1. round_based 0.4 的 `StateMachine` trait 方法无泛型参数——
+//      `Box<dyn StateMachine<Output = ..., Msg = ...>>`（关联类型显式指定）
+//      是合法 Rust 且对象安全可用。D 批注释"dyn 不支持关联类型"实为误判
+//      （不支持的是 `type X = impl Trait` 类型别名）。
+//   2. 但 wrap_protocol 状态机内部是 `Rc<RefCell<SharedState>>`，**!Send**——
+//      不能进 `Mutex`/不能跨线程/不能进 async。因此 CgSession 及其注册表
+//      **只允许在 cggmp_state.rs 的专用驱动线程内构造与访问**（Rc 不跨线程
+//      由编译器静态保证），对外 API 经 actor 指令通道（mpsc + oneshot）。
+//   3. keygen/aux 状态机 `'static`（eid 与 RNG 均已 leak）；sign 状态机
+//      借用 share/signers——构造时一并 leak 成 'static（与 eid/RNG 同一
+//      权衡：每 session 泄漏量 ~KB 级，registry 化回收留后续批次）。
 //
-// 本节代码暂留占位（三协议状态结构体的 `pump_*` 实现在后续
-// `cggmp_state.rs` 拆分时再写）。本批先保证 cggmp.rs 编译通过。
+// 下游：cggmp_state.rs（E 批）——驱动线程 actor + 三协议处理 + 合成/验签。
 
-/// CGGMP21 会话注册表。
+/// CGGMP21 keygen 消息类型别名（协议固定三参数）。
+pub type CgKeygenMsg = cggmp21::keygen::ThresholdMsg<Secp256k1, SecurityLevel128, CgSha>;
+/// CGGMP21 aux_info 消息类型别名。
+pub type CgAuxMsg = cggmp21::key_refresh::AuxOnlyMsg<CgSha, SecurityLevel128>;
+/// CGGMP21 sign 消息类型别名。
+pub type CgSignMsg = cggmp21::signing::msg::Msg<Secp256k1, CgSha>;
+
+/// keygen 状态机对象（驱动线程内使用）。
+pub type DynKeygenSm = Box<
+    dyn CgStateMachine<
+        Output = Result<IncompleteKeyShare<Secp256k1>, cggmp21::KeygenError>,
+        Msg = CgKeygenMsg,
+    > + 'static,
+>;
+/// aux_info 状态机对象。
+pub type DynAuxSm = Box<
+    dyn CgStateMachine<
+        Output = Result<AuxInfo<SecurityLevel128>, cggmp21::KeyRefreshError>,
+        Msg = CgAuxMsg,
+    > + 'static,
+>;
+/// sign 状态机对象（`'static`——share/signers 构造时 leak）。
+pub type DynSignSm = Box<
+    dyn CgStateMachine<
+        Output = Result<Signature<Secp256k1>, cggmp21::SigningError>,
+        Msg = CgSignMsg,
+    > + 'static,
+>;
+
+/// CGGMP21 会话注册表（**仅驱动线程内访问**——状态机 !Send）。
 pub struct CgRegistry {
     sessions: Mutex<HashMap<String, CgSession>>,
 }
 
-/// CgSession 字段：每个协议一个独立状态结构体的 Option<Box>。
-/// 当前占位字段（实际类型由后续 pump 分离时填入）。
+/// CgSession：一个 session 的三协议状态与产物。
+///
+/// sign 状态机的 share/signers 借用在构造时 Box::leak 成 'static——
+/// 重复 sign 会累积泄漏（每 session ~KB 级；registry 化回收留后续批次）。
 pub struct CgSession {
-    /// 各协议状态机（占位 Box<dyn 不可用——后续填具体类型）
-    pub keygen_state: Option<Box<dyn std::any::Any + Send>>,
-    pub aux_state: Option<Box<dyn std::any::Any + Send>>,
-    pub sign_state: Option<Box<dyn std::any::Any + Send>>,
+    /// keygen 状态机（一旦完成即取走产物，置 None 释放）
+    pub keygen_state: Option<DynKeygenSm>,
+    /// aux_info 状态机（同上）
+    pub aux_state: Option<DynAuxSm>,
+    /// sign 状态机（'static 借用已 leak 的 share/signers）
+    pub sign_state: Option<DynSignSm>,
     /// keygen 产出（本方 IncompleteKeyShare）
     pub core_share: Option<IncompleteKeyShare<Secp256k1>>,
     /// aux 产出（本方 AuxInfo）
@@ -354,9 +481,6 @@ impl CgRegistry {
     }
 }
 
-// Box<dyn Any> 不实现 Default（std 未提供 dyn trait 的默认构造），
-// 手动 impl 是当前唯一写法。clippy::derivable_impls 误报——显式忽略。
-#[allow(clippy::derivable_impls)]
 impl Default for CgSession {
     fn default() -> Self {
         Self {

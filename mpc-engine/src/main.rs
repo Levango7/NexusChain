@@ -43,6 +43,9 @@ use tracing_subscriber::EnvFilter;
 
 mod aggregate;
 mod cggmp;
+// E 批：CGGMP21 会话驱动层——驱动线程 actor（!Send 状态机独占线程）。
+// server 层 RPC 接线是下一批；当前经 CgDriverHandle::global() 可用。
+mod cggmp_state;
 mod config;
 mod distributed;
 mod dkg;
