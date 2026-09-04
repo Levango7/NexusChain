@@ -8,6 +8,10 @@
 //   * Sign      — 部分签名（每个参与方本地执行签名轮次）
 //   * Aggregate — 聚合部分签名为最终 ECDSA 签名 (r, s)
 //
+// v2.2.0 阶段二 F/G 批：扩展 CGGMP21 分散式门限签名生命周期 11 个 RPC。
+// **index 全部 0-based**（与 CGGMP21 对齐；区别于 GG20 分散式的 1-based）。
+// CgRelayMessage.is_p2p 消解 receiver_index=0 的 P2P/广播二义（F 批修正）。
+//
 // Java 侧编排层（org.nexus.signing.mpc.*）通过 MpcCryptoEngine SPI 接口
 // 调用本服务，GrpcMpcCryptoEngine 负责将纯 Java DTO 转换为 protobuf 生成类
 // 并发起 gRPC 调用。DTO 与传输层解耦，便于未来切换为 in-process 引擎或
@@ -27,7 +31,7 @@ option java_outer_classname = "MpcCryptoProto";
 
 // MPC 密码学引擎服务。
 //
-// 由 Rust multi-party-ecdsa 引擎进程实现（tonic gRPC server），
+// 由 Rust mpc-engine 进程实现（tonic gRPC server），
 // signing-service 作为 gRPC 客户端调用。
 service MpcCryptoService {
   // 分布式密钥生成（DKG）。
@@ -48,6 +52,28 @@ service MpcCryptoService {
   // 健康检查（gRPC Health Checking Protocol 之外的轻量级 ping）。
   // 用于 MpcCryptoEngine.healthCheck() SPI 方法。
   rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+
+  // v2.2.0 分散式（真门限安全）：协调器只做消息转发，不解密、不持密钥
+  rpc RelayDkgMessage(DistDkgMessage) returns (RelayAck);
+  rpc RelaySignMessage(DistSignMessage) returns (RelayAck);
+  rpc DistStatus(DistStatusRequest) returns (DistStatusResponse);
+
+  // v2.2.0 阶段二 F/G 批：CGGMP21 分散式门限签名生命周期。
+  // 驱动线程 actor 模型（E 批）——所有 Cg* RPC 经 CgDriverHandle 信封
+  // 转发到专用驱动线程执行（!Send 状态机独占线程）。**index 全部 0-based**
+  // （与 CGGMP21 对齐；区别于 GG20 分散式的 1-based）。
+  rpc CgStartKeygen(CgStartKeygenRequest) returns (CgPumpResponse);
+  rpc CgPumpKeygen(CgPumpRequest) returns (CgPumpResponse);
+  rpc CgStartAux(CgStartAuxRequest) returns (CgPumpResponse);
+  rpc CgPumpAux(CgPumpRequest) returns (CgPumpResponse);
+  rpc CgAssembleShare(CgSessionOnly) returns (CgAck);
+  rpc CgStartSign(CgStartSignRequest) returns (CgSignPumpResponse);
+  rpc CgPumpSign(CgPumpRequest) returns (CgSignPumpResponse);
+  rpc CgVerifySignature(CgVerifyRequest) returns (CgVerifyResponse);
+  rpc CgStatus(CgSessionOnly) returns (CgStatusResponse);
+  // CGGMP21 消息中转（协调器字节管道）：发布 + 拉取（拉取自动排除自发消息）
+  rpc CgRelayPublish(CgRelayMessage) returns (CgRelayAck);
+  rpc CgRelayPull(CgRelayPullRequest) returns (CgRelayPullResponse);
 }
 
 // === DKG ===
@@ -148,4 +174,166 @@ message HealthCheckResponse {
   bool healthy = 1;
   // 引擎版本 / 状态描述。
   string status = 2;
+}
+
+// === v2.2.0 分散式（真门限安全） ===
+// 协调器仅转发各方的协议消息（round_based::Msg<ProtocolMessage> 的
+// serde_json 序列化），任何一方（含协调器自身）都无法接触他方份额。
+
+message DistDkgMessage {
+  string session_id = 1;
+  // 发送方在协议中的 party index（1-based，与 multi-party-ecdsa Keygen::new 对齐）
+  uint32 sender_index = 2;
+  // 可选接收方 index（0 = 广播）
+  uint32 receiver_index = 3;
+  // round_based::Msg<keygen::ProtocolMessage> 的 serde_json 序列化载荷
+  string payload_json = 4;
+}
+
+message DistSignMessage {
+  string session_id = 1;
+  uint32 sender_index = 2;
+  uint32 receiver_index = 3;
+  // round_based::Msg<sign::ProtocolMessage> 的 serde_json 序列化载荷
+  string payload_json = 4;
+}
+
+message RelayAck {
+  bool success = 1;
+  string error = 2;
+}
+
+message DistStatusRequest {
+  string session_id = 1;
+}
+
+message DistStatusResponse {
+  // 当前协议轮次（Keygen 0-4；OfflineStage 递进；5=Final）
+  uint32 current_round = 1;
+  bool finished = 2;
+  string error = 3;
+}
+
+// =========================================================================
+// v2.2.0 阶段二 F/G 批：CGGMP21 分散式门限签名生命周期
+// =========================================================================
+// 与 Rust mpc-engine proto 字段名/编号/类型完全对齐。协议消息是
+// cggmp21 协议 Msg 的 serde JSON（协调器不理解、不落盘、不修改）。
+
+// --- 启动/泵动 ---
+
+message CgStartKeygenRequest {
+  string session_id = 1;
+  // eid 防重放序号（同 session 同协议重试单调递增；首次 0）
+  uint32 counter = 2;
+  uint32 my_index = 3;       // 0-based 本方索引
+  uint32 total_parties = 4;  // n
+  uint32 threshold = 5;      // t（签名所需方数）
+}
+
+message CgStartAuxRequest {
+  string session_id = 1;
+  uint32 counter = 2;
+  uint32 my_index = 3;   // 0-based
+  uint32 total_parties = 4;
+}
+
+message CgPumpRequest {
+  string session_id = 1;
+  repeated CgRelayMessage incoming = 2;
+}
+
+message CgPumpResponse {
+  repeated CgRelayMessage outgoing = 1;
+  bool finished = 2;
+  // keygen 完成时的聚合公钥（压缩 SEC1 hex）——三方一致，可任一方导出
+  string aggregate_public_key = 3;
+  bool success = 4;
+  string error = 5;
+}
+
+message CgSessionOnly {
+  string session_id = 1;
+}
+
+message CgAck {
+  bool success = 1;
+  string error = 2;
+}
+
+message CgStartSignRequest {
+  string session_id = 1;
+  uint32 counter = 2;
+  // 本方在**本批签名方**中的 0-based 序号（0..t）
+  uint32 my_index_in_signers = 3;
+  // 本批签名方在 keygen 时的原始 0-based 索引（恰好 t 个）
+  repeated uint32 signers_at_keygen = 4;
+  // 32 字节消息哈希（原始字节非 hex——与 CGGMP21 DataToSign 对齐）
+  bytes message_hash = 5;
+}
+
+message CgSignPumpResponse {
+  repeated CgRelayMessage outgoing = 1;
+  bool finished = 2;
+  string r_hex = 3;  // 完成时签名 r（32 字节大端 hex）
+  string s_hex = 4;  // 完成时签名 s
+  bool success = 5;
+  string error = 6;
+}
+
+message CgVerifyRequest {
+  string session_id = 1;
+  bytes signature_r = 2;  // 32 字节
+  bytes signature_s = 3;  // 32 字节
+  bytes message_hash = 4; // 32 字节
+}
+
+message CgVerifyResponse {
+  bool valid = 1;
+  bool success = 2;  // 指令执行成功（区别于验签结果 valid）
+  string error = 3;
+}
+
+message CgStatusResponse {
+  bool has_keygen_state = 1;
+  bool has_aux_state = 2;
+  bool has_sign_state = 3;
+  bool has_core_share = 4;
+  bool has_aux_info = 5;
+  bool has_key_share = 6;
+  bool success = 7;
+  string error = 8;
+}
+
+// --- 消息中转（协调器字节管道；与 DistDkgMessage 同构但 0-based） ---
+
+message CgRelayMessage {
+  string session_id = 1;
+  // 0-based 发送方索引（注意：GG20 的 DistDkgMessage 是 1-based）
+  uint32 sender_index = 2;
+  // 0-based 目标方索引（仅 is_p2p=true 时有效）
+  uint32 receiver_index = 3;
+  // cggmp21 协议消息 serde JSON（keygen/aux/sign 按会话阶段区分）
+  string payload_json = 4;
+  // F 批修正（哨兵冲突）：CGGMP21 PartyIndex 0-based——p2p 目标方 0
+  // 与"广播"哨兵 0 冲突。is_p2p=true 表示定向（receiver_index 有效）；
+  // false 表示广播。
+  bool is_p2p = 5;
+}
+
+message CgRelayAck {
+  bool success = 1;
+  string error = 2;
+}
+
+message CgRelayPullRequest {
+  string session_id = 1;
+  // 拉取方自己的 0-based 索引（服务端自动排除自发消息）
+  uint32 my_index = 2;
+}
+
+message CgRelayPullResponse {
+  repeated CgRelayMessage messages = 1;
+  bool success = 2;
+  string error = 3;
 }
