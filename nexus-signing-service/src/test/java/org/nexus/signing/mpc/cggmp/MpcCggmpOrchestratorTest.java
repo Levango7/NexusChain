@@ -48,7 +48,7 @@ public class MpcCggmpOrchestratorTest {
         when(coordinator.publishRelay(any(CgRelayMessageDto.class))).thenReturn(true);
         // 模拟 pull 全部空
         when(coordinator.pullRelay(anyString(), anyInt())).thenReturn(Collections.emptyList());
-        orch = new MpcCggmpOrchestrator(local, coordinator);
+        orch = new MpcCggmpOrchestrator(local, coordinator, 0);
     }
 
     // ============================================================
@@ -178,30 +178,35 @@ public class MpcCggmpOrchestratorTest {
     // ============================================================
 
     @Test
-    @DisplayName("pullRelay 使用本方 senderIndex（myIndexOf 推断）")
+    @DisplayName("pullRelay 使用 orchestrator 绑定的 defaultMyIndex（不再依赖 outgoing 推断）")
     void testMyIndexInference() {
-        // 3 条 outgoing，最后一条 sender=2
-        CgRelayMessageDto m1 = new CgRelayMessageDto("s", 0, 0, "{}", false);
-        CgRelayMessageDto m2 = new CgRelayMessageDto("s", 0, 0, "{}", false);
-        CgRelayMessageDto m3 = new CgRelayMessageDto("s", 2, 0, "{}", false);
+        // I 批：orchestrator 构造时绑定 myIndex=2，pumpLoop 拉取时用此值
+        MpcCggmpOrchestrator orchParty2 = new MpcCggmpOrchestrator(local, coordinator, 2);
+        CgRelayMessageDto m = new CgRelayMessageDto("s", 0, 0, "{}", false);
         when(local.startKeygen(anyString(), anyInt(), anyInt(), anyInt(), anyInt()))
-                .thenReturn(new CgPumpResult(List.of(m1, m2, m3), false, null, true, ""));
+                .thenReturn(new CgPumpResult(List.of(m), false, null, true, ""));
         when(local.pumpKeygen(eq("s"), any()))
                 .thenReturn(new CgPumpResult(Collections.emptyList(), true, "k", true, ""));
 
-        orch.runKeygen("s", 0, 2, 3, 2);
+        orchParty2.runKeygen("s", 0, 2, 3, 2);
         ArgumentCaptor<Integer> myIdxCap = ArgumentCaptor.forClass(Integer.class);
         verify(coordinator).pullRelay(eq("s"), myIdxCap.capture());
-        assertEquals(2, myIdxCap.getValue());
+        assertEquals(2, myIdxCap.getValue(),
+                "pullRelay myIndex must equal orchestrator's defaultMyIndex");
     }
 
     @Test
-    @DisplayName("无 outgoing 时 pullRelay myIndex=-1（兜底）")
+    @DisplayName("无 outgoing 时仍调 pullRelay（用 defaultMyIndex=0，I 批修复）")
     void testNoOutgoingMyIndexFallback() {
-        // 一次 start 直接 finished（没 outgoing），不应调 pull
+        // I 批：I 批之前 outgoing 为空会返回 -1 触发校验失败。
+        // 修复后 pumpLoop 用 defaultMyIndex 替代 myIndexOf，start 立即 finished
+        // 也仍会调一次 pullRelay(0)（与 F 批 e2e 行为一致）。
         when(local.startKeygen(anyString(), anyInt(), anyInt(), anyInt(), anyInt()))
                 .thenReturn(new CgPumpResult(Collections.emptyList(), true, "k", true, ""));
         orch.runKeygen("s", 0, 0, 3, 2);
+        // I 批：first.isFinished() 仍成立但 orchestrator 会先 publish 0 outgoing，
+        // 再 pull（空 list，since first finished 进 loop body 一次）
+        // 实际：while loop 检查 !first.isFinished() 立即退出 → 不调 pull
         verify(coordinator, never()).pullRelay(anyString(), anyInt());
     }
 

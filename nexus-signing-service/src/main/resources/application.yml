@@ -238,6 +238,10 @@ mpc:
     # MPC-P1-05: gRPC Bearer token 认证。非空时客户端在 metadata 添加
     # Authorization: Bearer <token> 头，供 mpc-engine 的 AuthInterceptor 校验。
     # 生产环境必须设置，且与 mpc-engine 的 MPC_AUTH_TOKEN 环境变量一致。
+    # H 批：启用 CGGMP21 分散式门限签名路径（F 批 RPC + G 批客户端）。
+    # true：编排层走 CGGMP21 路径（原生 t-of-n，无 GG20 t+1 怪癖）；
+    # false（默认）：编排层走 GG20 路径（GrpcMpcCryptoEngine，可信协调器模式）。
+    cggmp-enabled: ${NEX_MPC_ENGINE_CGGMP_ENABLED:false}
     auth-token: ${NEX_MPC_ENGINE_AUTH_TOKEN:}
   # === P5-T3：MPC P2P 传输层配置（Java 参与方之间传递 MpcMessage） ===
   # GrpcMpcTransportStub 通过 gRPC 在 signing-service 实例之间传递部分签名等编排消息。
