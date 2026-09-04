@@ -75,7 +75,10 @@ public class MpcCggmpOrchestratorConfig {
     public MpcCggmpOrchestrator mpcCggmpOrchestrator(
             MpcCggmpClient cggmpLocalClient,
             MpcCggmpClient cggmpCoordinatorClient) {
-        return new MpcCggmpOrchestrator(cggmpLocalClient, cggmpCoordinatorClient);
+        // I 批：多端点模式下 myIndex 应由部署侧注入（本方 party_index）；
+        //      单进程视角（endpoints=[self]）默认 0（= 协调方）。
+        //      后续 I 批外的多副本部署可加 mpc.engine.cggmp-my-index 配置。
+        return new MpcCggmpOrchestrator(cggmpLocalClient, cggmpCoordinatorClient, 0);
     }
 
     private MpcCryptoServiceGrpc.MpcCryptoServiceBlockingStub requireLocalStub() {

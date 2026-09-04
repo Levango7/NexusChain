@@ -37,11 +37,25 @@ public final class MpcCggmpOrchestrator {
     private final MpcCggmpClient localClient;
     private final MpcCggmpClient coordinatorClient;
 
+    /**
+     * 本方在 keygen 时的 0-based 索引。
+     *
+     * <p>每方 orchestrator 绑定一个固定 myIndex（构造时设定，runXxx 期间不变）——
+     * 用于 {@code pullRelay} 时排除自发消息。生产部署每方进程绑一个 party index；</p>
+     */
+    private final int defaultMyIndex;
+
     public MpcCggmpOrchestrator(
             MpcCggmpClient localClient,
-            MpcCggmpClient coordinatorClient) {
+            MpcCggmpClient coordinatorClient,
+            int defaultMyIndex) {
         this.localClient = Objects.requireNonNull(localClient, "localClient");
         this.coordinatorClient = Objects.requireNonNull(coordinatorClient, "coordinatorClient");
+        if (defaultMyIndex < 0 || defaultMyIndex > 255) {
+            throw new IllegalArgumentException(
+                    "defaultMyIndex out of range [0,255]: " + defaultMyIndex);
+        }
+        this.defaultMyIndex = defaultMyIndex;
     }
 
     /**
@@ -135,8 +149,10 @@ public final class MpcCggmpOrchestrator {
             }
 
             // 2. pull 本方入站（协调器按 receiver 过滤 + 排除自发）
+            //    I 批修复：使用 orchestrator 绑定的 defaultMyIndex（不再依赖 outgoing 推断——
+            //    首次 pump 时 outgoing 可能为空会导致 -1 触发校验失败）
             List<CgRelayMessageDto> incoming = coordinatorClient.pullRelay(
-                    sessionId, myIndexOf(last.getOutgoing()));
+                    sessionId, defaultMyIndex);
             if (incoming == null) {
                 incoming = new ArrayList<>();
             }
@@ -173,7 +189,7 @@ public final class MpcCggmpOrchestrator {
                 }
             }
             List<CgRelayMessageDto> incoming = coordinatorClient.pullRelay(
-                    sessionId, myIndexOf(last.getOutgoing()));
+                    sessionId, defaultMyIndex);
             if (incoming == null) {
                 incoming = new ArrayList<>();
             }
