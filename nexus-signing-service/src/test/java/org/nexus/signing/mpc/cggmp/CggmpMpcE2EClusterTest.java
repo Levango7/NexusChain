@@ -259,8 +259,8 @@ public class CggmpMpcE2EClusterTest {
         }
         log.info("keygen done, agg pubkey = {}", aggPk0);
 
-            // I 批：aux + assemble + sign + verify 三阶段属于 v2.2.0 阶段三（J 批：端到端
-            // 完整流水线 + K 批：K8s 部署）。本批**关键验证已完成**：
+            // I 批：aux + assemble + sign + verify 三阶段见下方 cggmpE2EFullPipeline
+            // （J 批已补齐）。本批**关键验证**：
             //   1. Java 客户端经 mTLS + Bearer auth gRPC 真实驱动 3 进程 mpc-engine
             //   2. CGGMP21 keygen 协议 4-5 轮内完成（端到端延迟 < 1s）
             //   3. 三方产出一致的压缩 SEC1 hex 聚合公钥（33 字节）
@@ -268,7 +268,7 @@ public class CggmpMpcE2EClusterTest {
             //      （status 测试单独验）
             log.info("I 批 keygen done: agg pubkey = {}",
                     keygenResults.get(0).getAggregatePublicKey());
-            log.info("I 批端到端验证完成（aux+sign+verify 留 J 批）");
+            log.info("I 批端到端验证完成（全流水线见 cggmpE2EFullPipeline）");
         } finally {
             exec.shutdown();
             exec.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS);
@@ -310,6 +310,205 @@ public class CggmpMpcE2EClusterTest {
                 "key_share still None (needs aux)");
         assertFalse(st0.isHasAuxState(),
                 "aux not run yet in I batch");
+    }
+
+    @Test
+    @DisplayName("CGGMP21 全流水线：keygen→aux→assemble→sign(2-of-3)→verify（含篡改拒绝）")
+    void cggmpE2EFullPipeline() throws Exception {
+        String sid = "j-batch-full-" + System.currentTimeMillis();
+        int n = 3;
+        int t = 2;
+
+        // J 批（2026-09-05）：I 批只验证到 keygen；本测试补齐签名主路径
+        // 的最后一段——aux（Paillier 密钥协商）→ assembleShare（KeyShare 合成）
+        // → sign（2-of-3 真出签名）→ verify（验签 + 篡改拒绝）。
+        //
+        // 结构逐相位对齐 mpc-engine/tests/cggmp_rpc_e2e.rs（F 批验收）：
+        // **三方 start 串行完成（首波 outgoing 留在内存）后，才进入统一的
+        // publish→pull→pump 循环**。不可用三方并发 orchestrator.runAux/runSign：
+        // StartAux/StartSign 在服务端 clear_session 清协调器 relay 池（阶段边界
+        // 设计），并发 start 时先发布方的前期消息会被 party0 的 start 清掉
+        // （竞态→状态机永远等缺失消息→空转死锁，首跑实证）。orchestrator 把
+        // start 与 pump 循环融合无法拆开，故本测试直接用 client 原语驱动。
+
+        // ---------- Phase 1: keygen——三方 start 串行，再统一循环 ----------
+        List<CgPumpResult> keygenStates = new ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            CgPumpResult r = partyClients.get(i).startKeygen(sid, 0, i, n, t);
+            assertTrue(r.isSuccess(), "start keygen party " + i + " failed: " + r.getError());
+            keygenStates.add(r);
+        }
+        keygenStates = pumpAll(keygenStates, sid, allParties(n), true, "keygen");
+        String aggPk = keygenStates.get(0).getAggregatePublicKey();
+        assertNotNull(aggPk, "keygen must produce aggregate pk");
+        for (int i = 1; i < n; i++) {
+            assertEquals(aggPk, keygenStates.get(i).getAggregatePublicKey(),
+                    "agg pubkey mismatch party " + i);
+        }
+
+        // ---------- Phase 2: aux——三方 start 串行，再统一循环 ----------
+        List<CgPumpResult> auxStates = new ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            CgPumpResult r = partyClients.get(i).startAux(sid, 0, i, n);
+            assertTrue(r.isSuccess(), "start aux party " + i + " failed: " + r.getError());
+            auxStates.add(r);
+        }
+        auxStates = pumpAll(auxStates, sid, allParties(n), false, "aux");
+        for (int i = 0; i < n; i++) {
+            assertTrue(auxStates.get(i).isFinished(), "aux party " + i + " not finished");
+        }
+
+        // ---------- Phase 3: assembleShare ×3（IncompleteKeyShare + aux → KeyShare） ----------
+        for (int i = 0; i < n; i++) {
+            assertTrue(partyClients.get(i).assembleShare(sid),
+                    "assembleShare failed for party " + i);
+        }
+
+        // ---------- Phase 4: sign 2-of-3（signers = [0,1]，start 串行再循环） ----------
+        int[] signers = {0, 1};
+        byte[] messageHash = new byte[32];
+        java.util.Arrays.fill(messageHash, (byte) 0x42);
+        List<CgSignPumpResult> signStates = new ArrayList<>();
+        for (int b = 0; b < signers.length; b++) {
+            CgSignPumpResult r = partyClients.get(signers[b])
+                    .startSign(sid, 0, b, signers, messageHash);
+            assertTrue(r.isSuccess(), "start sign signer " + b + " failed: " + r.getError());
+            signStates.add(r);
+        }
+        signStates = pumpAllSign(signStates, sid, signers, "sign");
+        String rHex = signStates.get(0).getRHex();
+        String sHex = signStates.get(0).getSHex();
+        assertNotNull(rHex, "signature r is null");
+        assertEquals(64, rHex.length(), "r hex must be 32 bytes big-endian");
+        assertEquals(64, sHex.length(), "s hex must be 32 bytes big-endian");
+        for (int b = 1; b < signers.length; b++) {
+            // 两签名方产出的 r/s 必须一致（同一签名可在任一方 verify）
+            assertEquals(rHex, signStates.get(b).getRHex(), "signer " + b + " r mismatch");
+            assertEquals(sHex, signStates.get(b).getSHex(), "signer " + b + " s mismatch");
+        }
+        log.info("full pipeline sign done: r={}, s={}", rHex, sHex);
+
+        // ---------- Phase 5: verify 正确签名通过 + 篡改拒绝 ----------
+        byte[] r = hexToBytes(rHex);
+        byte[] s = hexToBytes(sHex);
+        CgVerifyResult ok = partyClients.get(0).verifySignature(sid, r, s, messageHash);
+        assertTrue(ok.isSuccess(), "verify rpc failed: " + ok.getError());
+        assertTrue(ok.isValid(), "2-of-3 signature must verify against agg pubkey");
+        byte[] tamperedR = r.clone();
+        tamperedR[0] ^= 0xFF;
+        CgVerifyResult bad = partyClients.get(0)
+                .verifySignature(sid, tamperedR, s, messageHash);
+        assertTrue(bad.isSuccess(), "verify(tampered) rpc failed: " + bad.getError());
+        assertFalse(bad.isValid(), "tampered signature must be rejected");
+
+        // ---------- CgStatus 终态：KeyShare 已合成（对照 I 批 keygen-only 的 false） ----------
+        CgStatus st = partyClients.get(0).status(sid);
+        assertTrue(st.isHasKeyShare(), "key_share should exist after assemble");
+        log.info("J batch full pipeline PASSED: keygen→aux→assemble→sign→verify, sid={}", sid);
+    }
+
+    /** 0..n-1 全体参与方索引。 */
+    private static int[] allParties(int n) {
+        int[] all = new int[n];
+        for (int i = 0; i < n; i++) {
+            all[i] = i;
+        }
+        return all;
+    }
+
+    /**
+     * keygen/aux 通用 relay 循环：未完成方的 outgoing 全部发布到协调器
+     * （node0 relay 池），各参与方按自己的 index 拉取并 pump（打各自的引擎）。
+     * 广播消息每方各拉一份（消费幂等按方记账），p2p 消息仅目标方可拉。
+     */
+    private List<CgPumpResult> pumpAll(
+            List<CgPumpResult> states, String sid, int[] parties,
+            boolean isKeygen, String phase) throws Exception {
+        for (int round = 0; round < 200; round++) {
+            boolean allDone = true;
+            for (CgPumpResult st : states) {
+                allDone &= st.isFinished();
+            }
+            if (allDone) {
+                return states;
+            }
+            for (int i = 0; i < parties.length; i++) {
+                CgPumpResult st = states.get(i);
+                if (st.isFinished()) {
+                    continue;
+                }
+                for (CgRelayMessageDto m : st.getOutgoing()) {
+                    assertTrue(partyClients.get(0).publishRelay(m),
+                            phase + ": publish failed sender=" + m.getSenderIndex());
+                }
+            }
+            List<CgPumpResult> next = new ArrayList<>();
+            for (int i = 0; i < parties.length; i++) {
+                CgPumpResult st = states.get(i);
+                if (st.isFinished()) {
+                    next.add(st);
+                    continue;
+                }
+                int partyIdx = parties[i];
+                List<CgRelayMessageDto> incoming =
+                        partyClients.get(0).pullRelay(sid, partyIdx);
+                if (incoming == null) {
+                    incoming = new ArrayList<>();
+                }
+                CgPumpResult r = isKeygen
+                        ? partyClients.get(partyIdx).pumpKeygen(sid, incoming)
+                        : partyClients.get(partyIdx).pumpAux(sid, incoming);
+                assertTrue(r.isSuccess(),
+                        phase + ": pump party " + partyIdx + " failed: " + r.getError());
+                next.add(r);
+            }
+            states = next;
+        }
+        throw new AssertionError(phase + " stuck after 200 rounds");
+    }
+
+    /** sign 阶段 relay 循环：仅 signers 参与拉取/pump（非签名方持份额不动作）。 */
+    private List<CgSignPumpResult> pumpAllSign(
+            List<CgSignPumpResult> states, String sid, int[] signers, String phase) throws Exception {
+        for (int round = 0; round < 200; round++) {
+            boolean allDone = true;
+            for (CgSignPumpResult st : states) {
+                allDone &= st.isFinished();
+            }
+            if (allDone) {
+                return states;
+            }
+            for (int b = 0; b < signers.length; b++) {
+                CgSignPumpResult st = states.get(b);
+                if (st.isFinished()) {
+                    continue;
+                }
+                for (CgRelayMessageDto m : st.getOutgoing()) {
+                    assertTrue(partyClients.get(0).publishRelay(m),
+                            phase + ": publish failed sender=" + m.getSenderIndex());
+                }
+            }
+            List<CgSignPumpResult> next = new ArrayList<>();
+            for (int b = 0; b < signers.length; b++) {
+                CgSignPumpResult st = states.get(b);
+                if (st.isFinished()) {
+                    next.add(st);
+                    continue;
+                }
+                int keygenIdx = signers[b];
+                List<CgRelayMessageDto> incoming =
+                        partyClients.get(0).pullRelay(sid, keygenIdx);
+                if (incoming == null) {
+                    incoming = new ArrayList<>();
+                }
+                CgSignPumpResult r = partyClients.get(keygenIdx).pumpSign(sid, incoming);
+                assertTrue(r.isSuccess(),
+                        phase + ": pump signer " + b + " failed: " + r.getError());
+                next.add(r);
+            }
+            states = next;
+        }
+        throw new AssertionError(phase + " stuck after 200 rounds");
     }
 
     // ============================================================
