@@ -255,7 +255,7 @@ spec:
     - metadata:
         name: mpc-sessions
       spec:
-        accessModes: ["{{ .Values.sessionStorage.accessMode | default \"ReadWriteOnce\" }}"]
+        accessModes: ['{{ .Values.sessionStorage.accessMode | default "ReadWriteOnce" }}']
         resources:
           requests:
             storage: {{ .Values.sessionStorage.size | default "1Gi" | quote }}
