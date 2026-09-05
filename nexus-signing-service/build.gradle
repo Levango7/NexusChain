@@ -206,10 +206,12 @@ test {
     // 环境差异会让 E2E 测试必败（与 MultiNodeMpcMockTest 同型：单元测试环境无
     // 集群依赖）。应在独立集成测试 job（已起 mpc-engine Linux 二进制 + 集群环境
     // 变量）中跑；主 check 任务排除以恢复 CI 绿。
-    filter {
-        excludeTestsMatching "org.nexus.signing.mpc.MultiNodeMpcMockTest"
-        excludeTestsMatching "org.nexus.signing.mpc.cggmp.CggmpMpcE2EClusterTest"
-    }
+    // Gradle 8.x JUnit 5 useJUnitPlatform 块不支持旧 DSL filter 语法
+    // （filter { excludeTestsMatching } 在 useJUnitPlatform 下被忽略），
+    // 改用 systemProperty 透传 JUnit 5 exclude.tags。
+    // E2E 测试本身应在 CggmpMpcE2EClusterTest 类声明处加 @Tag("cluster-e2e")
+    // 标记——本笔提交同时动测试类加注解，确保 systemProperty 生效。
+    systemProperty 'junit.jupiter.exclude.tags', 'cluster-e2e'
 }
 
 // === Phase 4 任务 #79：protobuf-gradle-plugin 配置（审计报告 §4.1 方案 A）

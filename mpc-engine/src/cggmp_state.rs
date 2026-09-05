@@ -225,7 +225,7 @@ impl DriverInner {
             s.keygen_state = Some(Box::new(keygen_state_machine(sid, counter, i, n, t)));
             Ok(())
         });
-        if let Err(e) = r.flatten() {
+        if let Err(e) = r.and_then(|inner| match inner { Ok(v) => Ok(v), Err(e) => Err(e) }) {
             return Self::err(format!("start_keygen {sid}: {e}"));
         }
         self.ctxs.insert(sid.to_string(), SessionCtx { my_index: i });
@@ -244,7 +244,7 @@ impl DriverInner {
                 s.aux_state = Some(Box::new(aux_info_state_machine(sid, counter, i, n)?));
                 Ok(())
             })
-            .flatten();
+            .and_then(|inner| match inner { Ok(v) => Ok(v), Err(e) => Err(e) });
         if let Err(e) = r {
             return Self::err(format!("start_aux {sid}: {e}"));
         }
@@ -306,7 +306,7 @@ impl DriverInner {
                     }
                 }
             })
-            .flatten();
+            .and_then(|inner| match inner { Ok(v) => Ok(v), Err(e) => Err(e) });
         match r {
             Ok((outgoing, finished, prod)) => {
                 // keygen 完成时导出聚合公钥（core_share 的 shared_public_key）
@@ -361,7 +361,7 @@ impl DriverInner {
                 s.key_share = Some(share);
                 Ok(())
             })
-            .flatten();
+            .and_then(|inner| match inner { Ok(v) => Ok(v), Err(e) => Err(e) });
         match r {
             Ok(()) => DriverReply::ShareAssembled,
             Err(e) => Self::err(format!("assemble_share: {e}")),
@@ -403,7 +403,7 @@ impl DriverInner {
                 s.sign_state = Some(Box::new(sm));
                 Ok(())
             })
-            .flatten();
+            .and_then(|inner| match inner { Ok(v) => Ok(v), Err(e) => Err(e) });
         match r {
             Ok(()) => self.pump_protocol(sid, vec![], Protocol::Sign),
             Err(e) => Self::err(format!("start_sign: {e}")),
@@ -435,7 +435,7 @@ impl DriverInner {
                     Err(_) => Ok(false), // 验签失败是**结果**而非错误（fail-closed 于语义）
                 }
             })
-            .flatten();
+            .and_then(|inner| match inner { Ok(v) => Ok(v), Err(e) => Err(e) });
         match result {
             Ok(valid) => DriverReply::VerificationResult { valid },
             Err(e) => Self::err(format!("verify_signature: {e}")),

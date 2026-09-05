@@ -5,6 +5,7 @@ import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.nexus.signing.mpc.crypto.grpc.MpcCryptoServiceGrpc;
 import org.slf4j.Logger;
@@ -62,6 +63,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *       （先前 F 批验证已就位）</li>
  * </ul>
  */
+@Tag("cluster-e2e")
 public class CggmpMpcE2EClusterTest {
 
     private static final Logger log = LoggerFactory.getLogger(CggmpMpcE2EClusterTest.class);
