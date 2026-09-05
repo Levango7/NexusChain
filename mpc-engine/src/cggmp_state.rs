@@ -160,17 +160,82 @@ struct SessionCtx {
     my_index: u16,
 }
 
+/// 份额持久化上下文（PLAN-cggmp-keyshare-persistence）。
+///
+/// `None` = 持久化功能关闭（`MPC_STORAGE_KEY` / `MPC_ENGINE_SESSION_DIR`
+/// 未配置——WARN 一次，协议照常，与既有行为兼容）；`Some` = 写钩子 +
+/// 读守卫全启用，写盘 IO 失败 fail-closed（绝不静默丢份额）。
+#[derive(Clone, Debug)]
+pub struct StorageCtx {
+    pub base_dir: std::path::PathBuf,
+    pub key: [u8; 32],
+    pub key_version: u32,
+}
+
+impl StorageCtx {
+    /// 从环境变量解析（生产路径：main.rs 把 PartyConfig.storage_key 同步到
+    /// `MPC_STORAGE_KEY`；start-mpc-cluster.sh / K8s / 集群测试设
+    /// `MPC_ENGINE_SESSION_DIR`——每节点独立的会话根目录）。
+    fn from_env() -> Option<Self> {
+        let base_dir = std::env::var("MPC_ENGINE_SESSION_DIR").ok()?;
+        let key_hex = std::env::var("MPC_STORAGE_KEY").ok()?;
+        Self::from_parts(base_dir, &key_hex)
+    }
+
+    /// 显式构造（测试注入用——绕开环境变量避免并行测试 env 竞态）。
+    pub fn new(base_dir: std::path::PathBuf, key: [u8; 32], key_version: u32) -> Self {
+        Self {
+            base_dir,
+            key,
+            key_version,
+        }
+    }
+
+    fn from_parts(base_dir: String, key_hex: &str) -> Option<Self> {
+        if key_hex.len() != 64 {
+            tracing::warn!(
+                "cggmp persistence disabled: MPC_STORAGE_KEY must be 64 hex chars (got {})",
+                key_hex.len()
+            );
+            return None;
+        }
+        let mut key = [0u8; 32];
+        hex::decode_to_slice(key_hex, &mut key).ok()?;
+        let key_version = std::env::var("MPC_STORAGE_KEY_VERSION")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1);
+        Some(Self {
+            base_dir: std::path::PathBuf::from(base_dir),
+            key,
+            key_version,
+        })
+    }
+}
+
 /// 驱动线程内部状态（全 !Send——只在本线程存活）。
 struct DriverInner {
     registry: CgRegistry,
     ctxs: HashMap<String, SessionCtx>,
+    storage: Option<StorageCtx>,
 }
 
 impl DriverInner {
     fn new() -> Self {
+        Self::with_storage(StorageCtx::from_env())
+    }
+
+    fn with_storage(storage: Option<StorageCtx>) -> Self {
+        if storage.is_none() {
+            tracing::warn!(
+                "cggmp share persistence DISABLED (MPC_STORAGE_KEY / \
+                 MPC_ENGINE_SESSION_DIR_BASE unset) — restart loses shares"
+            );
+        }
         Self {
             registry: CgRegistry::new(),
             ctxs: HashMap::new(),
+            storage,
         }
     }
 
@@ -236,6 +301,33 @@ impl DriverInner {
     // ---- keygen ----
 
     fn start_keygen(&mut self, sid: &str, counter: u32, i: u16, n: u16, t: u16) -> DriverReply {
+        // 持久化读守卫（PLAN-cggmp-keyshare-persistence §3.4）：进程重启后同
+        // session 重入——盘上已有产物则恢复进 registry 并幂等返回，绝不重跑
+        // DKG 覆盖既有份额。解码失败 = 篡改/截断/错密钥 → fail-closed 硬错误。
+        if let Some(ctx) = self.storage.clone() {
+            match self.load_persisted_shares(sid, &ctx) {
+                Ok(restored) => {
+                    if restored {
+                        // 恢复成功：finished 即回（keygen_state 保持 None——
+                        // 调用方拿到 finished 直接进入下一阶段）
+                        let agg = match self.registry.with(sid, |s| {
+                            s.core_share
+                                .as_ref()
+                                .map(|c| point_hex(&c.shared_public_key))
+                        }) {
+                            Ok(pk) => pk,
+                            Err(e) => return Self::err(format!("start_keygen {sid}: {e}")),
+                        };
+                        return DriverReply::PumpResult {
+                            outgoing: vec![],
+                            finished: true,
+                            aggregate_public_key: agg,
+                        };
+                    }
+                }
+                Err(e) => return Self::err(format!("start_keygen {sid}: restore: {e}")),
+            }
+        }
         let r = self.registry.with(sid, |s| {
             if s.keygen_state.is_some() {
                 // 幂等：已初始化则不重建（防 eid 漂移——同 counter 才是同一执行）
@@ -255,9 +347,90 @@ impl DriverInner {
         self.pump_protocol(sid, vec![], Protocol::Keygen)
     }
 
+    /// 从盘上恢复 CGGMP21 产物进 registry（存在才恢复；都不存在 = Ok(false)）。
+    ///
+    /// 恢复顺序：keyshare（终态）优先——存在即视为完成态；否则尝试
+    /// incomplete（keygen 完成但 aux/assemble 未完成的中间态）。
+    /// 解码失败 fail-closed；keyshare 与 incomplete 同时缺失属正常首跑。
+    fn load_persisted_shares(&mut self, sid: &str, ctx: &StorageCtx) -> eyre::Result<bool> {
+        let mut restored = false;
+        let ks = crate::persistence::load_cggmp_blob(sid, "keyshare", &ctx.base_dir, &ctx.key)?;
+        if let Some((_, plaintext)) = ks {
+            let share = crate::cggmp::decode_key_share(&plaintext)
+                .map_err(|e| eyre::eyre!("persisted keyshare invalid: {e}"))?;
+            self.registry
+                .with(sid, |s| {
+                    s.key_share = Some(share);
+                })
+                .map_err(|e| eyre::eyre!("registry lock: {e}"))?;
+            restored = true;
+        }
+        let inc = crate::persistence::load_cggmp_blob(sid, "incomplete", &ctx.base_dir, &ctx.key)?;
+        if let Some((_, plaintext)) = inc {
+            let core = crate::cggmp::decode_incomplete(&plaintext)
+                .map_err(|e| eyre::eyre!("persisted incomplete share invalid: {e}"))?;
+            self.registry
+                .with(sid, |s| {
+                    s.core_share = Some(core);
+                })
+                .map_err(|e| eyre::eyre!("registry lock: {e}"))?;
+            restored = true;
+        }
+        Ok(restored)
+    }
+
     // ---- aux ----
 
     fn start_aux(&mut self, sid: &str, counter: u32, i: u16, n: u16) -> DriverReply {
+        // 持久化读守卫：
+        //   1) keyshare 已在 registry → 完成态，aux 无意义，幂等返回 finished；
+        //   2) 盘上有 keyshare.bin → 同上（进程重启后直接跳到 sign 的路径）；
+        //   3) registry 缺 core_share 且盘上有 incomplete.bin → 恢复中间态
+        //      （重启于 keygen 后 / aux 前），aux 照常跑，assemble 用恢复的 core。
+        // 解码失败 fail-closed（见 load_persisted_shares）。
+        let have_key_share = match self.registry.with(sid, |s| s.key_share.is_some()) {
+            Ok(v) => v,
+            Err(e) => return Self::err(format!("start_aux {sid}: {e}")),
+        };
+        if have_key_share {
+            // registry 已有 key_share（含 StartKeygen 恢复路径回填）——完成态，
+            // aux 无意义，幂等返回 finished（与盘上守卫同语义）。
+            return DriverReply::PumpResult {
+                outgoing: vec![],
+                finished: true,
+                aggregate_public_key: None,
+            };
+        }
+        if let Some(ctx) = self.storage.clone() {
+            let ks = crate::persistence::load_cggmp_blob(sid, "keyshare", &ctx.base_dir, &ctx.key);
+            match ks {
+                Err(e) => return Self::err(format!("start_aux {sid}: restore: {e}")),
+                Ok(Some((_, plaintext))) => match crate::cggmp::decode_key_share(&plaintext) {
+                    Ok(share) => {
+                        if let Err(e) = self.registry.with(sid, |s| {
+                            s.key_share = Some(share);
+                        }) {
+                            return Self::err(format!("start_aux {sid}: {e}"));
+                        }
+                        return DriverReply::PumpResult {
+                            outgoing: vec![],
+                            finished: true,
+                            aggregate_public_key: None,
+                        };
+                    }
+                    Err(e) => {
+                        return Self::err(format!(
+                            "start_aux {sid}: persisted keyshare invalid: {e}"
+                        ))
+                    }
+                },
+                Ok(None) => {}
+            }
+            // 无 keyshare：恢复 incomplete（若有）——assemble 需要 core_share
+            if let Err(e) = self.load_persisted_shares(sid, &ctx) {
+                return Self::err(format!("start_aux {sid}: restore: {e}"));
+            }
+        }
         let r = self
             .registry
             .with(sid, |s| -> eyre::Result<()> {
@@ -292,6 +465,7 @@ impl DriverInner {
         };
         // 三协议同一 pump——闭包按协议取状态机槽位并 pump；完成时收产物。
         // with 返回 Result<Result<...>>（外层=registry 锁，内层=协议结果）→ flatten。
+        let storage = self.storage.clone();
         let r = self
             .registry
             .with(
@@ -306,6 +480,28 @@ impl DriverInner {
                                 pump::<_, CgKeygenMsg>(sm.as_mut(), &incoming, my)?;
                             if let Some(res) = output {
                                 let core = res.map_err(|e| eyre::eyre!("keygen failed: {e:?}"))?;
+                                // 写钩子（PLAN-cggmp-keyshare-persistence §3.4）：
+                                // core_share 先落盘成功才进 registry 并释放状态机。
+                                // 落盘失败 = fail-closed：registry 不变、RPC 报错；
+                                // Output 后状态机已 Exhausted 不可重 pump，调用方
+                                // 收到错误即知本轮作废——重启后无残留，整组安全重跑。
+                                if let Some(st) = &storage {
+                                    let plaintext = crate::cggmp::encode_incomplete(&core)
+                                        .map_err(|e| eyre::eyre!("keygen output encode: {e}"))?;
+                                    crate::persistence::persist_cggmp_blob(
+                                        sid,
+                                        "incomplete",
+                                        &st.base_dir,
+                                        &plaintext,
+                                        &st.key,
+                                        st.key_version,
+                                    )
+                                    .map_err(|e| {
+                                        eyre::eyre!(
+                                            "keygen share persist failed (fail-closed): {e}"
+                                        )
+                                    })?;
+                                }
                                 s.core_share = Some(core);
                                 s.keygen_state = None; // 完成：释放状态机
                             }
@@ -380,9 +576,14 @@ impl DriverInner {
             cggmp21::key_share::AuxInfo<SecurityLevel128>,
         );
         type Dirty = cggmp21::key_share::DirtyKeyShare<Secp256k1, SecurityLevel128>;
+        let storage = self.storage.clone();
         let r = self
             .registry
             .with(sid, |s| -> eyre::Result<()> {
+                // 幂等：已完成（或从盘恢复）直接成功
+                if s.key_share.is_some() {
+                    return Ok(());
+                }
                 let (Some(core), Some(aux)) = (s.core_share.clone(), s.aux_info.clone()) else {
                     return Err(eyre::eyre!(
                         "assemble_share {sid}: core_share or aux_info missing \
@@ -396,6 +597,21 @@ impl DriverInner {
                 let share: KeyShare<Secp256k1> = dirty
                     .validate()
                     .map_err(|e| eyre::eyre!("assembled share invalid: {e:?}"))?;
+                // 写钩子：keyshare（长期份额）先落盘成功才进 registry——
+                // fail-closed 同 keygen（core/aux 仍在 registry，调用方可重试 assemble）
+                if let Some(st) = &storage {
+                    let plaintext = crate::cggmp::encode_key_share(&share)
+                        .map_err(|e| eyre::eyre!("keyshare encode: {e}"))?;
+                    crate::persistence::persist_cggmp_blob(
+                        sid,
+                        "keyshare",
+                        &st.base_dir,
+                        &plaintext,
+                        &st.key,
+                        st.key_version,
+                    )
+                    .map_err(|e| eyre::eyre!("keyshare persist failed (fail-closed): {e}"))?;
+                }
                 s.key_share = Some(share);
                 Ok(())
             })
@@ -416,6 +632,54 @@ impl DriverInner {
         signers_at_keygen: Vec<u16>,
         message_hash: [u8; 32],
     ) -> DriverReply {
+        // 持久化读守卫：registry 缺 key_share 时尝试盘上恢复——这是
+        // "keygen 仪式一次、长期反复签名"的生产主路径（进程重启后
+        // StartSign 直接从磁盘加载份额，无需重跑 DKG/aux）。
+        // 解码失败 fail-closed（篡改/截断/错密钥 → 显式报错拒绝签名）。
+        let have_key_share = match self.registry.with(sid, |s| s.key_share.is_some()) {
+            Ok(v) => v,
+            Err(e) => return Self::err(format!("start_sign {sid}: {e}")),
+        };
+        if !have_key_share {
+            if let Some(ctx) = self.storage.clone() {
+                match crate::persistence::load_cggmp_blob(sid, "keyshare", &ctx.base_dir, &ctx.key)
+                {
+                    Err(e) => return Self::err(format!("start_sign {sid}: restore: {e}")),
+                    Ok(Some((_, plaintext))) => match crate::cggmp::decode_key_share(&plaintext) {
+                        Ok(share) => {
+                            if let Err(e) = self.registry.with(sid, |s| {
+                                s.key_share = Some(share);
+                            }) {
+                                return Self::err(format!("start_sign {sid}: {e}"));
+                            }
+                        }
+                        Err(e) => {
+                            return Self::err(format!(
+                                "start_sign {sid}: persisted keyshare invalid: {e}"
+                            ))
+                        }
+                    },
+                    Ok(None) => {}
+                }
+            }
+        }
+        // sign 会话上下文：my_index = 本方 keygen 索引（signers[i]——pump 编码
+        // outgoing 的 sender；J 批 e2e 的 pullRelay(my_index=keygenIdx) 同语义）。
+        // 恢复路径（重启后直接 StartSign）没有先跑 StartKeygen/StartAux，
+        // ctx 在此补建——否则 pump 报 "no session context"。
+        let my_keygen_index = signers_at_keygen.get(i as usize).copied().ok_or_else(|| {
+            eyre::eyre!("start_sign {sid}: my_index_in_signers {i} out of signers range")
+        });
+        let my_keygen_index = match my_keygen_index {
+            Ok(v) => v,
+            Err(e) => return Self::err(format!("start_sign: {e}")),
+        };
+        self.ctxs.insert(
+            sid.to_string(),
+            SessionCtx {
+                my_index: my_keygen_index,
+            },
+        );
         // sign 状态机借 share/signers——leak 成 'static（E 批权衡：每 session
         // ~KB 级泄漏，registry 化回收留后续批次；同 eid/RNG 的既有先例）
         let r = self
@@ -669,12 +933,21 @@ pub struct CgDriverHandle {
 
 impl CgDriverHandle {
     /// 启动驱动线程（通常进程单例，见 `global`）。
+    ///
+    /// 持久化上下文从环境变量解析（`StorageCtx::from_env`）——未配置则
+    /// 持久化关闭（WARN 一次，协议照常）。
     pub fn start() -> Self {
+        Self::start_with_storage(StorageCtx::from_env())
+    }
+
+    /// 启动驱动线程并显式指定持久化上下文（测试注入用——绕开环境变量，
+    /// 避免并行测试的 env 竞态；`None` = 显式关闭持久化）。
+    pub fn start_with_storage(storage: Option<StorageCtx>) -> Self {
         let (tx, rx) = channel::<DriverEnvelope>();
         std::thread::Builder::new()
             .name("cggmp-driver".to_string())
             .spawn(move || {
-                let mut inner = DriverInner::new();
+                let mut inner = DriverInner::with_storage(storage);
                 while let Ok(env) = rx.recv() {
                     let reply = inner.handle(env.cmd);
                     let _ = env.reply_tx.send(reply);

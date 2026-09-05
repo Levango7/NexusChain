@@ -116,6 +116,26 @@ impl MpcCryptoServiceImpl {
         }
     }
 
+    /// 创建带独立 CGGMP 驱动线程 + 显式持久化上下文的服务实例
+    /// （PLAN-cggmp-keyshare-persistence：恢复 E2E 测试注入用——
+    /// 同一 StorageCtx 的两个实例先后充当"重启前/重启后"进程）。
+    pub fn with_independent_cggmp_driver_and_storage(
+        storage: Option<crate::cggmp_state::StorageCtx>,
+    ) -> Self {
+        Self {
+            sessions: Mutex::new(HashMap::new()),
+            sign_runs: Mutex::new(HashMap::new()),
+            session_mgr: SessionManager::new(),
+            my_party_id: String::new(),
+            is_coordinator: true,
+            #[cfg(feature = "tls")]
+            forward_tls_config: None,
+            auth_token: String::new(),
+            dist: crate::distributed::DistRegistry::new(),
+            cg_driver: CgDriverHandle::start_with_storage(storage),
+        }
+    }
+
     /// 创建分布式配置的服务实例（MPC-P2-F5 协调器转发模式）。
     ///
     /// `is_coordinator` 为 true 时此节点作为协调器（party_index=0）本地执行 DKG/Sign；

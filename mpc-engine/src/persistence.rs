@@ -516,6 +516,91 @@ pub fn decrypt_my_share(record: &MyShareRecord) -> eyre::Result<crate::gg20::Sha
     Ok(share)
 }
 
+// =========================================================================
+// CGGMP21 份额持久化（PLAN-cggmp-keyshare-persistence，K 批前置）
+// =========================================================================
+// 与 D 批 LocalKey 落盘（distributed.rs）同一 NXC1 信封：
+// `MAGIC("NXC1") || version(4B LE) || nonce(12B) || GCM ciphertext`。
+// 明文是 cggmp.rs 的 serde JSON（encode_incomplete / encode_key_share——
+// 后者调用方必须先经 sanitize_for_disk 清洗 crt/multiexp）。
+//
+// 语义约定（设计稿 §7 审核修订）：
+//   * 会话/份额文件名经 sanitize_session_id 净化——封堵 `../` 穿越（S4-a 同款）；
+//   * 解码失败（篡改/截断/错密钥）一律硬错误 fail-closed，绝不静默跳过；
+//   * `None` 返回值仅表示"文件不存在"（首次运行），与"存在但损坏"严格区分。
+
+/// CGGMP21 份额文件路径：`{base_dir}/cggmp/{sanitized_session_id}/{kind}.bin`。
+fn cggmp_share_path(base_dir: &std::path::Path, session_id: &str, kind: &str) -> PathBuf {
+    base_dir
+        .join("cggmp")
+        .join(sanitize_session_id(session_id))
+        .join(format!("{kind}.bin"))
+}
+
+/// 持久化一个 CGGMP21 协议产物（加密 + 原子性由调用方保证单写者——驱动线程独占）。
+///
+/// `kind` 仅允许 `incomplete` / `keyshare`（白名单，防拼接逃逸）。
+/// `base_dir` 传入会话根目录（生产 = `MPC_ENGINE_SESSION_DIR`）。
+pub(crate) fn persist_cggmp_blob(
+    session_id: &str,
+    kind: &str,
+    base_dir: &std::path::Path,
+    plaintext: &[u8],
+    key: &[u8; KEY_LEN],
+    key_version: u32,
+) -> eyre::Result<PathBuf> {
+    if kind != "incomplete" && kind != "keyshare" {
+        return Err(eyre!("cggmp persist: invalid kind '{kind}'"));
+    }
+    let path = cggmp_share_path(base_dir, session_id, kind);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| eyre!("cggmp persist: create dir {}: {e}", parent.display()))?;
+    }
+    let blob = aes_encrypt_with_version(plaintext, key, key_version)?;
+    fs::write(&path, &blob).map_err(|e| eyre!("cggmp persist: write {}: {e}", path.display()))?;
+    tracing::info!(
+        session_id = %session_id,
+        kind = kind,
+        path = %path.display(),
+        "cggmp share persisted (NXC1 encrypted)"
+    );
+    Ok(path)
+}
+
+/// 加载 CGGMP21 协议产物密文并解密。
+///
+/// 返回 `Ok(None)` = 文件不存在（首次运行）；存在但解密/解码失败 → 硬错误
+/// （fail-closed——篡改/截断/错密钥在此暴露，绝不降级为"没有"）。
+pub(crate) fn load_cggmp_blob(
+    session_id: &str,
+    kind: &str,
+    base_dir: &std::path::Path,
+    key: &[u8; KEY_LEN],
+) -> eyre::Result<Option<(u32, Vec<u8>)>> {
+    if kind != "incomplete" && kind != "keyshare" {
+        return Err(eyre!("cggmp load: invalid kind '{kind}'"));
+    }
+    let path = cggmp_share_path(base_dir, session_id, kind);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let blob = fs::read(&path).map_err(|e| eyre!("cggmp load: read {}: {e}", path.display()))?;
+    let (version, plaintext) = aes_decrypt_with_version(&blob, key).map_err(|e| {
+        eyre!(
+            "cggmp load: decrypt {} failed (tampered/truncated/wrong key?): {e}",
+            path.display()
+        )
+    })?;
+    tracing::info!(
+        session_id = %session_id,
+        kind = kind,
+        key_version = version,
+        "cggmp share loaded from disk"
+    );
+    Ok(Some((version, plaintext)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -549,6 +634,105 @@ mod tests {
         assert_eq!(restored.params.share_count, session.params.share_count);
         assert_eq!(restored.y_sum, session.y_sum, "聚合公钥应一致");
         remove_session(id);
+    }
+
+    // ---- CGGMP21 blob API（PLAN-cggmp-keyshare-persistence §3.5）----
+
+    fn cggmp_test_base(tag: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("cggmp-persist-unit-{}-{}", tag, std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    fn cggmp_test_key() -> [u8; 32] {
+        [0x5A; 32]
+    }
+
+    #[test]
+    fn cggmp_blob_round_trip_and_nxc1_magic() {
+        let base = cggmp_test_base("rt");
+        let key = cggmp_test_key();
+        let plaintext = b"{\"kind\":\"unit-test-payload\",\"v\":7}";
+
+        persist_cggmp_blob("sess-rt", "keyshare", &base, plaintext, &key, 3).expect("persist");
+
+        // 落盘文件以 NXC1 魔数开头（版本化信封格式）
+        let raw = std::fs::read(cggmp_share_path(&base, "sess-rt", "keyshare")).expect("read");
+        assert!(raw.len() > 8, "blob must exceed header");
+        assert_eq!(&raw[0..4], KEY_VERSION_MAGIC, "NXC1 magic prefix");
+        // 版本号 = 3（LE）
+        assert_eq!(u32::from_le_bytes([raw[4], raw[5], raw[6], raw[7]]), 3);
+        // 密文不是明文（payload 不出现）
+        assert!(!raw.windows(8).any(|w| w == b"unit-test"));
+
+        let (ver, decoded) = load_cggmp_blob("sess-rt", "keyshare", &base, &key)
+            .expect("load")
+            .expect("some");
+        assert_eq!(ver, 3);
+        assert_eq!(decoded, plaintext.to_vec());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn cggmp_blob_load_missing_is_none() {
+        let base = cggmp_test_base("missing");
+        let r = load_cggmp_blob("no-such-session", "incomplete", &base, &cggmp_test_key())
+            .expect("load must not error on missing file");
+        assert!(r.is_none(), "missing file → None (首次运行)，不是错误");
+    }
+
+    #[test]
+    fn cggmp_blob_tamper_truncate_wrong_key_fail_closed() {
+        let base = cggmp_test_base("tamper");
+        let key = cggmp_test_key();
+        persist_cggmp_blob("sess-t", "keyshare", &base, b"payload-0123456789", &key, 1)
+            .expect("persist");
+        let path = cggmp_share_path(&base, "sess-t", "keyshare");
+        let good = std::fs::read(&path).expect("read");
+
+        // 1) 篡改密文 → 解密失败
+        let mut tampered = good.clone();
+        tampered[KEY_VERSION_HEADER_LEN + NONCE_LEN] ^= 0xFF;
+        std::fs::write(&path, &tampered).expect("write tampered");
+        assert!(
+            load_cggmp_blob("sess-t", "keyshare", &base, &key).is_err(),
+            "tampered blob must fail closed"
+        );
+
+        // 2) 截断（模拟半写）→ 解密失败
+        let truncated = good[..good.len() - 7].to_vec();
+        std::fs::write(&path, &truncated).expect("write truncated");
+        assert!(
+            load_cggmp_blob("sess-t", "keyshare", &base, &key).is_err(),
+            "truncated blob must fail closed"
+        );
+
+        // 3) 错误密钥 → 解密失败
+        std::fs::write(&path, &good).expect("restore good");
+        let wrong_key = [0x00; 32];
+        assert!(
+            load_cggmp_blob("sess-t", "keyshare", &base, &wrong_key).is_err(),
+            "wrong key must fail closed"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn cggmp_blob_kind_whitelist_and_path_traversal() {
+        let base = cggmp_test_base("traversal");
+        let key = cggmp_test_key();
+        // kind 白名单
+        assert!(persist_cggmp_blob("s", "evil", &base, b"x", &key, 1).is_err());
+        assert!(load_cggmp_blob("s", "../evil", &base, &key).is_err());
+        // session_id 穿越被 sanitize 封堵：文件必然落在 base 内
+        let path = cggmp_share_path(&base, "../../etc/passwd", "keyshare");
+        let base_str = base.to_string_lossy();
+        let path_str = path.to_string_lossy();
+        assert!(
+            path_str.starts_with(&*base_str) && !path_str.contains(".."),
+            "sanitized path must stay under base: {path_str}"
+        );
     }
 
     #[test]
