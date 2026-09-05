@@ -415,25 +415,36 @@ jobs:
 
       # helm install 只装 mpc-engine 子 chart；镜像指向 kind 内本地 tag；
       # storageKey 冒烟值 64 hex（真值由生产 sealed-secrets 注入）。
-      # 证书走 --set-file（PEM 多行——--set 的字符串内嵌换行会碎）。
-      # 注意：tlsCerts 的键名与 statefulset 的 subPath 证书选择器对齐
-      # （node-0/1/2 + ca；每 Pod 通过 ordinal 取自己的证书）。
+      # 证书走临时 values 文件——--set-file 的键名点号（tls.crt）会把
+      # node-0 再拆一层成 {tls:{crt:...}}，range 展开拿到 map 而非 string
+      # （首跑 fe21c9f 实证）；YAML 文件里点号键安全。
       - name: Helm install mpc-engine (subchart only)
         run: |
+          # 直接构造（键行 6 空格、block 值 8 空格——YAML block scalar 缩进对齐）
+          {
+            echo "secrets:"
+            echo "  tlsCerts:"
+            for spec in "node-0 1" "node-1 2" "node-2 3"; do
+              set -- $spec
+              echo "    $1:"
+              echo "      tls.crt: |"
+              sed 's/^/        /' mpc-engine/certs/node$2.crt
+              echo "      tls.key: |"
+              sed 's/^/        /' mpc-engine/certs/node$2.key
+            done
+            echo "    ca:"
+            echo "      tls.crt: |"
+            sed 's/^/        /' mpc-engine/certs/ca.crt
+          } > /tmp/mpc-tls-values.yaml
           helm install mpc deploy/helm/charts/mpc-engine \
             --namespace nexus \
             --create-namespace \
+            -f /tmp/mpc-tls-values.yaml \
             --set image.repository=mpc-engine \
             --set image.tag=kind-smoke \
             --set image.pullPolicy=Never \
-            --set storageKey=4242424242424242424242424242424242424242424242424242424242424242 \
-            --set-file secrets.tlsCerts.node-0.tls.crt=mpc-engine/certs/node1.crt \
-            --set-file secrets.tlsCerts.node-0.tls.key=mpc-engine/certs/node1.key \
-            --set-file secrets.tlsCerts.node-1.tls.crt=mpc-engine/certs/node2.crt \
-            --set-file secrets.tlsCerts.node-1.tls.key=mpc-engine/certs/node2.key \
-            --set-file secrets.tlsCerts.node-2.tls.crt=mpc-engine/certs/node3.crt \
-            --set-file secrets.tlsCerts.node-2.tls.key=mpc-engine/certs/node3.key \
-            --set-file secrets.tlsCerts.ca.tls.crt=mpc-engine/certs/ca.crt
+            --set storageKey=4242424242424242424242424242424242424242424242424242424242424242
+          rm -f /tmp/mpc-tls-values.yaml
 
       - name: Wait for StatefulSet rollout (3 replicas Ready)
         run: |
