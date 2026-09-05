@@ -110,8 +110,9 @@ spec:
               # 生成 peers JSON（排除本节点的其他参与方端点）
               PEERS_JSON="$(sh /etc/mpc-config/gen-peers-sh)"
               echo "[init-config] PEERS_JSON=${PEERS_JSON}"
-              # 读取 storage_key（从 Secret 注入的环境变量）
+              # 读取 storage_key / storage_key_version（从 Secret 注入的环境变量）
               STORAGE_KEY_VAL="${STORAGE_KEY:-}"
+              STORAGE_KEY_VERSION_VAL="${STORAGE_KEY_VERSION:-1}"
               if [ -z "${STORAGE_KEY_VAL}" ]; then
                 echo "[init-config] WARNING: STORAGE_KEY empty, mpc-engine will fail to decrypt sessions"
                 STORAGE_KEY_VAL="0000000000000000000000000000000000000000000000000000000000000000"
@@ -120,6 +121,7 @@ spec:
               export POD_ORDINAL="${ORDINAL}"
               export PEERS_JSON="${PEERS_JSON}"
               export STORAGE_KEY="${STORAGE_KEY_VAL}"
+              export STORAGE_KEY_VERSION="${STORAGE_KEY_VERSION_VAL}"
               envsubst < /etc/mpc-config/node-json-template > /app/config/node.json
               echo "[init-config] node.json generated:"
               cat /app/config/node.json
@@ -133,6 +135,12 @@ spec:
                 secretKeyRef:
                   name: {{ printf "%s-secret" .Chart.Name }}
                   key: storage-key
+                  optional: true
+            - name: STORAGE_KEY_VERSION
+              valueFrom:
+                secretKeyRef:
+                  name: {{ printf "%s-secret" .Chart.Name }}
+                  key: storage-key-version
                   optional: true
           volumeMounts:
             - name: mpc-config-template
@@ -159,8 +167,12 @@ spec:
               value: {{ .Values.service.targetPort | quote }}
             - name: MPC_CONFIG_PATH
               value: /app/config/node.json
+            - name: MPC_ENGINE_SESSION_DIR
+              value: /app/sessions
             - name: MPC_REQUIRE_TLS
               value: {{ (not .Values.usePlaintext) | quote }}
+            - name: MPC_STORAGE_KEY_VERSION
+              value: {{ .Values.storageKeyVersion | default "1" | quote }}
             {{- if .Values.authToken }}
             - name: MPC_AUTH_TOKEN
               valueFrom:
@@ -209,6 +221,8 @@ spec:
             - name: mpc-config
               mountPath: /app/config
               readOnly: true
+            - name: mpc-sessions
+              mountPath: /app/sessions
             - name: mpc-tls
               mountPath: /etc/mpc/tls
               readOnly: true
@@ -227,8 +241,9 @@ spec:
         {{- with .Values.extraVolumes }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-  # 每副本独立 PVC（会话快照、WAL 持久化）
+  # 每副本独立 PVC（会话快照、WAL 持久化 / 配置目录）
   volumeClaimTemplates:
+    # 配置目录（node.json、gen-peers-sh 等）
     - metadata:
         name: mpc-config
       spec:
@@ -236,3 +251,11 @@ spec:
         resources:
           requests:
             storage: 100Mi
+    # 会话持久化目录（KeyShare、WAL、AES 密文文件）——PLAN-cggmp-keyshare-persistence
+    - metadata:
+        name: mpc-sessions
+      spec:
+        accessModes: ["{{ .Values.sessionStorage.accessMode | default \"ReadWriteOnce\" }}"]
+        resources:
+          requests:
+            storage: {{ .Values.sessionStorage.size | default "1Gi" | quote }}
