@@ -40,9 +40,9 @@ import java.util.concurrent.LinkedBlockingQueue;
  *       dead-letter queue for later inspection / replay.</li>
  * </ul>
  *
- * <p>Note: the de-dup set and dead-letter queue are in-process. In a multi-instance
- * production deployment these should be backed by Redis (shared dedup key, durable
- * dead-letter store). TODO(v2.0.0): swap the local structures for a Redis-backed store — tracked in v2.0.0 roadmap</p>
+ * <p>Note: the de-dup set and dead-letter queue are in-process by default.
+ * Redis backing (shared dedup key + durable dead-letter store) 已落地（v2.0.0）：
+ * 可选注入 StringRedisTemplate 即启用（多实例生产部署），未注入时回退本地结构。</p>
  */
 @Component
 public class OrchestrationWebhookDispatcher {
@@ -97,7 +97,7 @@ public class OrchestrationWebhookDispatcher {
     private final BlockingQueue<DeadLetter> deadLetterQueue = new LinkedBlockingQueue<>();
 
     /**
-     * Redis 支持（TODO v2.0.0 落地）：多实例共享 dedup + 持久化 DLQ。
+     * Redis 支持（v2.0.0 已落地）：多实例共享 dedup + 持久化 DLQ。
      * 可选注入——无 Redis/测试环境回退本地结构（向后兼容）。
      */
     private org.springframework.data.redis.core.StringRedisTemplate redisTemplate;

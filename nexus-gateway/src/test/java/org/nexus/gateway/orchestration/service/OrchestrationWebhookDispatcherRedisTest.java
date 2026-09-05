@@ -14,7 +14,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 /**
- * OrchestrationWebhookDispatcher Redis 路径测试（TODO v2.0.0 落地）：
+ * OrchestrationWebhookDispatcher Redis 路径测试（v2.0.0 已落地）：
  * 多实例共享 dedup（SETNX）+ 持久化 DLQ（List）。
  */
 class OrchestrationWebhookDispatcherRedisTest {

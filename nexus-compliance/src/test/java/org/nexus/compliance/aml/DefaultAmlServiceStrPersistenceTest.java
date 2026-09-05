@@ -10,7 +10,7 @@ import java.nio.file.Path;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * STR 持久化测试（TODO v2.0.0 落地）：JSONL 追加 + 启动加载恢复。
+ * STR 持久化测试（v2.0.0 已落地）：JSONL 追加 + 启动加载恢复。
  */
 class DefaultAmlServiceStrPersistenceTest {
 

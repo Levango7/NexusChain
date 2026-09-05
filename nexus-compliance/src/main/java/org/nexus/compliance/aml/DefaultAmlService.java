@@ -45,7 +45,7 @@ public class DefaultAmlService implements AmlScreeningService {
     /** 制裁名单检查器 */
     private final SanctionListChecker sanctionListChecker;
 
-    /** 已受理的可疑交易报告登记表（内存索引 + JSONL 文件持久化——TODO(v2.0.0) 落地） */
+    /** 已受理的可疑交易报告登记表（内存索引 + JSONL 文件持久化——v2.0.0 已落地，见 {@link #persistReport}） */
     private final Map<String, SuspiciousTransactionReport> filedReports = new ConcurrentHashMap<>();
 
     /**
@@ -169,7 +169,7 @@ public class DefaultAmlService implements AmlScreeningService {
         report.setReportStatus(SuspiciousTransactionReport.ReportStatus.SUBMITTED);
         report.setReportedAt(Instant.now());
         filedReports.put(report.getReportId(), report);
-        persistReport(report);  // TODO(v2.0.0) 落地：STR 持久化（JSONL 追加）
+        persistReport(report);  // STR 持久化：JSONL 追加落盘（v2.0.0 已落地）
         log.warn("Suspicious transaction report filed: reportId={}, reason={}",
                 report.getReportId(), report.getSuspiciousReason());
         return report;
