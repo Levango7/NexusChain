@@ -173,6 +173,11 @@ subprojects {
         protobufVersion = '3.25.5'
         jacksonVersion = '2.18.8'
         guavaVersion = '33.4.8-jre'
+        // Tomcat embed-core 11.0.24 有 3 个新 CVE（CVE-2026-65182 CRITICAL
+        // 安全约束绕过 / CVE-2026-65905 HIGH DIGEST 重放 / CVE-2026-68525 HIGH
+        // FORM 认证绕过），修复版 11.0.25。Spring Boot 4.0.8 BOM 管理解析为
+        // 11.0.24——此处 override 到 11.0.25（可修复一律升级，不用 ignore）。
+        tomcatVersion = '11.0.25'
 
     }
 

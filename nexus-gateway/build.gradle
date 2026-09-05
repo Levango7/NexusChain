@@ -5,6 +5,13 @@ plugins {
     id 'jacoco'
 }
 
+// CVE-2026-65182（CRITICAL 安全约束绕过）/ CVE-2026-65905（HIGH DIGEST 重放）
+// / CVE-2026-68525（HIGH FORM 认证绕过）：tomcat-embed-core 11.0.24 修复于
+// 11.0.25。ext['tomcat.version'] 是 io.spring.dependency-management 插件的
+// 官方 BOM 属性覆盖机制（根 build.gradle 的 resolutionStrategy force 对
+// Spring Boot BOM 无效，已实测）。
+ext['tomcat.version'] = '11.0.25'
+
 group = 'org.nexus'
 
 
