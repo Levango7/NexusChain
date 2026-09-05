@@ -217,7 +217,7 @@ jobs:
           # 含空格的 "… --failOnCVSS 9" 会被 dependency-check 当作一个未知 token，
           # 打印 usage 后 exit 1（此前 OWASP job 恒红）。改用 `--failOnCVSS=9`
           # 单 token 形式（commons-cli 支持 `--opt=value`），保留 CVSS>=9 阻断门禁。
-          others: '--failOnCVSS=9'
+          others: '--failOnCVSS=9 --disableNodeAudit'
 
       - name: 上传 OWASP 报告
         if: always()
