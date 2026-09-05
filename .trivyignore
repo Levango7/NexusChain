@@ -14,8 +14,9 @@
 # openjdk 17.0.18），java17-debian13 当前为 17.0.20.1（Temurin，debian 13.6）。
 # 预飞扫描（本地 trivy 0.74.0，DB 2026-09-04，HIGH/CRITICAL 口径）实证：
 # 新镜像 HIGH/CRITICAL 仅 5 项且全部由下方保留条目覆盖；原 debian12 专有
-# 豁免（openjdk 停更批 4 项 / zlib 45853 / expat 4 项 / glib 系列 7 项 /
-# harfbuzz 25193 / libuuid 53615 / lcms2 41254）在新镜像中已消除，条目移除。
+# 豁免（openjdk 停更批 4 项 / expat 4 项 / glib 系列 7 项 / harfbuzz 25193 /
+# libuuid 53615 / lcms2 41254）在新镜像中已消除，条目移除。zlib 45853 原先
+# 亦被删除，后经 CI 实证仍匹配 bookworm-slim Rust 镜像而补回（见下节注记）。
 
 # --- distroless java17-debian13（Java 模块镜像）---
 # libexpat1（debian 13.6）：解析器漏洞（信息泄露类）HIGH — 无可用修复版本，
@@ -25,6 +26,12 @@
 CVE-2026-66046
 
 # --- debian:bookworm-slim（Rust 模块镜像）---
+# zlib1g 1.2.13: integer overflow in inflate.c（CVE-2023-45853）— will_not_fix。
+# 注（2026-09-05 修正）：此 CVE 原挂在 debian12 Java 镜像节下，debian13 迁移批
+# 清理时误判作用域删除——c43ad0f CI run 33966509897 实证 mpc-engine /
+# zk-groth16-service 两个 bookworm-slim 镜像同样携带 zlib1g 且为 HIGH。
+# Java 模块 java17-debian13 镜像已实证不含此 finding（可安全不再覆盖该侧）。
+CVE-2023-45853
 # util-linux bsdutils: TOCTOU in mount（CVE-2026-53613/53615）— affected，
 # Rust 服务（mpc-engine/zk-groth16-service）不调用 mount，无实际暴露面
 # （注：53615 原同时匹配 debian12 的 libuuid1，迁移后仅余本节用途）
