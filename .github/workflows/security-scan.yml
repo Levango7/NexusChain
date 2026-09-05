@@ -446,6 +446,13 @@ jobs:
       - name: OWASP ZAP 基线扫描
         run: |
           mkdir -p reports/zap
+          # Docker Hub 匿名拉取自 2026 年限流收紧（auth.docker.io 握手失败，
+          # 33937656688 轮 exit 125 实测）——先经 GHCR 官方镜像预拉再 tag。
+          # zaproxy 官方自 2025-Q4 起同步发布 ghcr.io/zaproxy/zap-stable。
+          docker pull ghcr.io/zaproxy/zap-stable:latest || \
+            docker pull docker.m.daocloud.io/zaproxy/zap-stable:latest
+          docker tag ghcr.io/zaproxy/zap-stable:latest zaproxy/zap-stable:latest 2>/dev/null || \
+            docker tag docker.m.daocloud.io/zaproxy/zap-stable:latest zaproxy/zap-stable:latest
           docker run --rm -t --network=host \
             -v $(pwd)/reports/zap:/zap/wrk:rw \
             zaproxy/zap-stable zap-baseline.py \
