@@ -94,6 +94,42 @@ jobs:
         run: |
           ./gradlew :nexus-consortium:consortium:check :nexus-consortium:common:check :nexus-consortium:crypto:check :nexus-api-gateway:test --no-daemon
 
+      # ① SDK 三语言回归（2026-09-05）：B 批（5f62509）产出的 Go 13 / Python 15 /
+      # TS 8 用例此前仅本地验证、未进 CI——对外交付物无回归保护（如 core 的
+      # JSON-RPC envelope 变更时三语言 SDK 不会告警）。三语言均为零基础设施
+      # 测试（Go 标准库测试 / Python stdlib unittest / Node 内置 test runner），
+      # ubuntu runner 预装 Go/Node/Python，零额外环境成本。
+      # Java SDK 由根构建 check + codecov 覆盖，不在此列。
+      - name: SDK Go regression
+        working-directory: nexus-sdk/go
+        run: go test ./nexus/
+
+      - name: SDK Python regression
+        working-directory: nexus-sdk/python
+        run: python3 tests/test_nexus_sdk.py
+
+      - name: SDK TypeScript regression
+        working-directory: nexus-sdk
+        run: |
+          npm install
+          npm run test:ts
+
+      # ③ helm charts 门禁（2026-09-05）：lint + template 渲染 umbrella 与全部
+      # 子 chart，防止部署资产腐化（此前 chart 改坏要到真部署时才发现）。
+      # runner 预装 helm 3.x；模板无 required 硬约束，默认值可完整渲染。
+      - name: Helm charts lint + template
+        run: |
+          for chart in deploy/helm/charts/*/; do
+            name=$(basename "$chart")
+            echo "=== helm lint $name ==="
+            helm lint "$chart"
+            echo "=== helm template $name ==="
+            helm template "t-$name" "$chart" > /dev/null
+          done
+          echo "=== helm lint umbrella (nexus-chain) ==="
+          helm lint deploy/helm
+          helm template t-umbrella deploy/helm > /dev/null
+
       # P2-C6: 三个关键回归测试门禁（双花防御 / 桥资金守恒 / 门限签名）
       # 这些测试覆盖核心安全不变量，单独显式执行以确保被运行（即使其他测试被 skip）。
       # - ReplayProtectionTest：跨链消息重放保护（双花防御核心）
