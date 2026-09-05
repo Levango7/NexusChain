@@ -582,7 +582,8 @@ mod tests {
         ] {
             for path in [session_path(evil), my_share_path(evil)] {
                 assert_eq!(
-                    path.parent().unwrap_or_else(|| panic!("no parent for {evil}")),
+                    path.parent()
+                        .unwrap_or_else(|| panic!("no parent for {evil}")),
                     dir,
                     "S4-a: sanitized path for {evil:?} must stay inside session dir"
                 );

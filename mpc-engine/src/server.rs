@@ -22,9 +22,7 @@ use tonic::{Request, Response, Status};
 
 use crate::aggregate;
 use crate::cggmp::CgMessage;
-use crate::cggmp_state::{
-    CgDriverHandle, DriverCommand, DriverReply,
-};
+use crate::cggmp_state::{CgDriverHandle, DriverCommand, DriverReply};
 use crate::dkg;
 use crate::gg20::{DkgSession, SignCache};
 use crate::proto::mpc_crypto::*;
@@ -205,18 +203,20 @@ impl MpcCryptoServiceImpl {
         sid: &str,
     ) -> Result<Response<CgPumpResponse>, Status> {
         match reply {
-            DriverReply::PumpResult { outgoing, finished, aggregate_public_key } => {
-                Ok(Response::new(CgPumpResponse {
-                    outgoing: outgoing
-                        .into_iter()
-                        .map(|m| Self::cg_msg_to_proto(sid, m))
-                        .collect(),
-                    finished,
-                    aggregate_public_key: aggregate_public_key.unwrap_or_default(),
-                    success: true,
-                    error: String::new(),
-                }))
-            }
+            DriverReply::PumpResult {
+                outgoing,
+                finished,
+                aggregate_public_key,
+            } => Ok(Response::new(CgPumpResponse {
+                outgoing: outgoing
+                    .into_iter()
+                    .map(|m| Self::cg_msg_to_proto(sid, m))
+                    .collect(),
+                finished,
+                aggregate_public_key: aggregate_public_key.unwrap_or_default(),
+                success: true,
+                error: String::new(),
+            })),
             DriverReply::Error { message } => Ok(Response::new(CgPumpResponse {
                 outgoing: vec![],
                 finished: false,
@@ -236,19 +236,19 @@ impl MpcCryptoServiceImpl {
         sid: &str,
     ) -> Result<Response<CgSignPumpResponse>, Status> {
         match reply {
-            DriverReply::PumpResult { outgoing, finished, .. } => {
-                Ok(Response::new(CgSignPumpResponse {
-                    outgoing: outgoing
-                        .into_iter()
-                        .map(|m| Self::cg_msg_to_proto(sid, m))
-                        .collect(),
-                    finished,
-                    r_hex: String::new(),
-                    s_hex: String::new(),
-                    success: true,
-                    error: String::new(),
-                }))
-            }
+            DriverReply::PumpResult {
+                outgoing, finished, ..
+            } => Ok(Response::new(CgSignPumpResponse {
+                outgoing: outgoing
+                    .into_iter()
+                    .map(|m| Self::cg_msg_to_proto(sid, m))
+                    .collect(),
+                finished,
+                r_hex: String::new(),
+                s_hex: String::new(),
+                success: true,
+                error: String::new(),
+            })),
             DriverReply::SignatureProduced { r_hex, s_hex } => {
                 Ok(Response::new(CgSignPumpResponse {
                     outgoing: vec![],
@@ -635,8 +635,8 @@ impl mpc_crypto_service_server::MpcCryptoService for MpcCryptoServiceImpl {
             "rpc CgStartKeygen (v2.2.0 stage-2 CGGMP21 threshold keygen)"
         );
         let sid = r.session_id.clone();
-        let my_index = u16::try_from(r.my_index)
-            .map_err(|_| Status::invalid_argument("my_index overflow"))?;
+        let my_index =
+            u16::try_from(r.my_index).map_err(|_| Status::invalid_argument("my_index overflow"))?;
         let n = u16::try_from(r.total_parties)
             .map_err(|_| Status::invalid_argument("total_parties overflow"))?;
         let t = u16::try_from(r.threshold)
@@ -698,8 +698,8 @@ impl mpc_crypto_service_server::MpcCryptoService for MpcCryptoServiceImpl {
         let sid = r.session_id.clone();
         // 阶段边界：清 relay 池（keygen 尾巴不得混入 aux 阶段——F 批阶段隔离）
         self.cg_driver.relay.clear_session(&sid);
-        let my_index = u16::try_from(r.my_index)
-            .map_err(|_| Status::invalid_argument("my_index overflow"))?;
+        let my_index =
+            u16::try_from(r.my_index).map_err(|_| Status::invalid_argument("my_index overflow"))?;
         let n = u16::try_from(r.total_parties)
             .map_err(|_| Status::invalid_argument("total_parties overflow"))?;
         let reply = self
@@ -792,7 +792,9 @@ impl mpc_crypto_service_server::MpcCryptoService for MpcCryptoServiceImpl {
             })
             .collect::<Result<Vec<u16>, _>>()?;
         if signers.is_empty() {
-            return Err(Status::invalid_argument("signers_at_keygen must not be empty"));
+            return Err(Status::invalid_argument(
+                "signers_at_keygen must not be empty",
+            ));
         }
         let reply = self
             .cg_call(DriverCommand::StartSign {
@@ -957,8 +959,8 @@ impl mpc_crypto_service_server::MpcCryptoService for MpcCryptoServiceImpl {
         req: Request<CgRelayPullRequest>,
     ) -> Result<Response<CgRelayPullResponse>, Status> {
         let r = req.into_inner();
-        let my_index = u16::try_from(r.my_index)
-            .map_err(|_| Status::invalid_argument("my_index overflow"))?;
+        let my_index =
+            u16::try_from(r.my_index).map_err(|_| Status::invalid_argument("my_index overflow"))?;
         let msgs = self.cg_driver.relay.pull(&r.session_id, my_index);
         Ok(Response::new(CgRelayPullResponse {
             messages: msgs

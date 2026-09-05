@@ -182,34 +182,53 @@ impl DriverInner {
     }
 
     fn err(msg: impl std::fmt::Display) -> DriverReply {
-        DriverReply::Error { message: msg.to_string() }
+        DriverReply::Error {
+            message: msg.to_string(),
+        }
     }
 
     /// 处理一条指令 → 回执。
     fn handle(&mut self, cmd: DriverCommand) -> DriverReply {
         match cmd {
-            DriverCommand::StartKeygen { session_id, counter, i, n, t } => {
-                self.start_keygen(&session_id, counter, i, n, t)
-            }
-            DriverCommand::PumpKeygen { session_id, incoming } => {
-                self.pump_protocol(&session_id, incoming, Protocol::Keygen)
-            }
-            DriverCommand::StartAux { session_id, counter, i, n } => {
-                self.start_aux(&session_id, counter, i, n)
-            }
-            DriverCommand::PumpAux { session_id, incoming } => {
-                self.pump_protocol(&session_id, incoming, Protocol::Aux)
-            }
+            DriverCommand::StartKeygen {
+                session_id,
+                counter,
+                i,
+                n,
+                t,
+            } => self.start_keygen(&session_id, counter, i, n, t),
+            DriverCommand::PumpKeygen {
+                session_id,
+                incoming,
+            } => self.pump_protocol(&session_id, incoming, Protocol::Keygen),
+            DriverCommand::StartAux {
+                session_id,
+                counter,
+                i,
+                n,
+            } => self.start_aux(&session_id, counter, i, n),
+            DriverCommand::PumpAux {
+                session_id,
+                incoming,
+            } => self.pump_protocol(&session_id, incoming, Protocol::Aux),
             DriverCommand::AssembleShare { session_id } => self.assemble_share(&session_id),
-            DriverCommand::StartSign { session_id, counter, i, signers_at_keygen, message_hash } => {
-                self.start_sign(&session_id, counter, i, signers_at_keygen, message_hash)
-            }
-            DriverCommand::PumpSign { session_id, incoming } => {
-                self.pump_protocol(&session_id, incoming, Protocol::Sign)
-            }
-            DriverCommand::VerifySignature { session_id, signature_r, signature_s, message_hash } => {
-                self.verify_signature(&session_id, signature_r, signature_s, message_hash)
-            }
+            DriverCommand::StartSign {
+                session_id,
+                counter,
+                i,
+                signers_at_keygen,
+                message_hash,
+            } => self.start_sign(&session_id, counter, i, signers_at_keygen, message_hash),
+            DriverCommand::PumpSign {
+                session_id,
+                incoming,
+            } => self.pump_protocol(&session_id, incoming, Protocol::Sign),
+            DriverCommand::VerifySignature {
+                session_id,
+                signature_r,
+                signature_s,
+                message_hash,
+            } => self.verify_signature(&session_id, signature_r, signature_s, message_hash),
             DriverCommand::Status { session_id } => self.status(&session_id),
         }
     }
@@ -225,10 +244,14 @@ impl DriverInner {
             s.keygen_state = Some(Box::new(keygen_state_machine(sid, counter, i, n, t)));
             Ok(())
         });
-        if let Err(e) = r.and_then(|inner| match inner { Ok(v) => Ok(v), Err(e) => Err(e) }) {
+        if let Err(e) = r.and_then(|inner| match inner {
+            Ok(v) => Ok(v),
+            Err(e) => Err(e),
+        }) {
             return Self::err(format!("start_keygen {sid}: {e}"));
         }
-        self.ctxs.insert(sid.to_string(), SessionCtx { my_index: i });
+        self.ctxs
+            .insert(sid.to_string(), SessionCtx { my_index: i });
         self.pump_protocol(sid, vec![], Protocol::Keygen)
     }
 
@@ -244,19 +267,25 @@ impl DriverInner {
                 s.aux_state = Some(Box::new(aux_info_state_machine(sid, counter, i, n)?));
                 Ok(())
             })
-            .and_then(|inner| match inner { Ok(v) => Ok(v), Err(e) => Err(e) });
+            .and_then(|inner| inner);
         if let Err(e) = r {
             return Self::err(format!("start_aux {sid}: {e}"));
         }
         // aux 与 keygen 同 party 布局：沿用/建立会话上下文（StartAux 带 i，
         // 直接以指令的 i 为准——与 StartKeygen 的 insert 语义一致）
-        self.ctxs.insert(sid.to_string(), SessionCtx { my_index: i });
+        self.ctxs
+            .insert(sid.to_string(), SessionCtx { my_index: i });
         self.pump_protocol(sid, vec![], Protocol::Aux)
     }
 
     // ---- 通用泵（keygen/aux/sign 三协议同构驱动） ----
 
-    fn pump_protocol(&mut self, sid: &str, incoming: Vec<CgMessage>, proto: Protocol) -> DriverReply {
+    fn pump_protocol(
+        &mut self,
+        sid: &str,
+        incoming: Vec<CgMessage>,
+        proto: Protocol,
+    ) -> DriverReply {
         let my = match self.ctx_index(sid) {
             Ok(i) => i,
             Err(e) => return Self::err(format!("pump {proto:?} {sid}: {e}")),
@@ -265,48 +294,54 @@ impl DriverInner {
         // with 返回 Result<Result<...>>（外层=registry 锁，内层=协议结果）→ flatten。
         let r = self
             .registry
-            .with(sid, |s| -> eyre::Result<(Vec<CgMessage>, bool, Option<ProdKind>)> {
-                match proto {
-                    Protocol::Keygen => {
-                        let Some(sm) = s.keygen_state.as_mut() else {
-                            return Err(eyre::eyre!("keygen not started for {sid}"));
-                        };
-                        let (out, fin, output) = pump::<_, CgKeygenMsg>(sm.as_mut(), &incoming, my)?;
-                        if let Some(res) = output {
-                            let core = res.map_err(|e| eyre::eyre!("keygen failed: {e:?}"))?;
-                            s.core_share = Some(core);
-                            s.keygen_state = None; // 完成：释放状态机
+            .with(
+                sid,
+                |s| -> eyre::Result<(Vec<CgMessage>, bool, Option<ProdKind>)> {
+                    match proto {
+                        Protocol::Keygen => {
+                            let Some(sm) = s.keygen_state.as_mut() else {
+                                return Err(eyre::eyre!("keygen not started for {sid}"));
+                            };
+                            let (out, fin, output) =
+                                pump::<_, CgKeygenMsg>(sm.as_mut(), &incoming, my)?;
+                            if let Some(res) = output {
+                                let core = res.map_err(|e| eyre::eyre!("keygen failed: {e:?}"))?;
+                                s.core_share = Some(core);
+                                s.keygen_state = None; // 完成：释放状态机
+                            }
+                            Ok((out, fin, None))
                         }
-                        Ok((out, fin, None))
-                    }
-                    Protocol::Aux => {
-                        let Some(sm) = s.aux_state.as_mut() else {
-                            return Err(eyre::eyre!("aux not started for {sid}"));
-                        };
-                        let (out, fin, output) = pump::<_, CgAuxMsg>(sm.as_mut(), &incoming, my)?;
-                        if let Some(res) = output {
-                            let aux = res.map_err(|e| eyre::eyre!("aux_info failed: {e:?}"))?;
-                            s.aux_info = Some(aux);
-                            s.aux_state = None;
+                        Protocol::Aux => {
+                            let Some(sm) = s.aux_state.as_mut() else {
+                                return Err(eyre::eyre!("aux not started for {sid}"));
+                            };
+                            let (out, fin, output) =
+                                pump::<_, CgAuxMsg>(sm.as_mut(), &incoming, my)?;
+                            if let Some(res) = output {
+                                let aux = res.map_err(|e| eyre::eyre!("aux_info failed: {e:?}"))?;
+                                s.aux_info = Some(aux);
+                                s.aux_state = None;
+                            }
+                            Ok((out, fin, None))
                         }
-                        Ok((out, fin, None))
-                    }
-                    Protocol::Sign => {
-                        let Some(sm) = s.sign_state.as_mut() else {
-                            return Err(eyre::eyre!("sign not started for {sid}"));
-                        };
-                        let (out, fin, output) = pump::<_, CgSignMsg>(sm.as_mut(), &incoming, my)?;
-                        if let Some(res) = output {
-                            let sig = res.map_err(|e| eyre::eyre!("sign failed: {e:?}"))?;
-                            let (r_hex, s_hex) = signature_to_hex(&sig);
-                            s.sign_state = None;
-                            return Ok((out, fin, Some(ProdKind::Signature(r_hex, s_hex))));
+                        Protocol::Sign => {
+                            let Some(sm) = s.sign_state.as_mut() else {
+                                return Err(eyre::eyre!("sign not started for {sid}"));
+                            };
+                            let (out, fin, output) =
+                                pump::<_, CgSignMsg>(sm.as_mut(), &incoming, my)?;
+                            if let Some(res) = output {
+                                let sig = res.map_err(|e| eyre::eyre!("sign failed: {e:?}"))?;
+                                let (r_hex, s_hex) = signature_to_hex(&sig);
+                                s.sign_state = None;
+                                return Ok((out, fin, Some(ProdKind::Signature(r_hex, s_hex))));
+                            }
+                            Ok((out, fin, None))
                         }
-                        Ok((out, fin, None))
                     }
-                }
-            })
-            .and_then(|inner| match inner { Ok(v) => Ok(v), Err(e) => Err(e) });
+                },
+            )
+            .and_then(|inner| inner);
         match r {
             Ok((outgoing, finished, prod)) => {
                 // keygen 完成时导出聚合公钥（core_share 的 shared_public_key）
@@ -340,7 +375,10 @@ impl DriverInner {
     // ---- share 合成 ----
 
     fn assemble_share(&mut self, sid: &str) -> DriverReply {
-        type Parts = (IncompleteKeyShare<Secp256k1>, cggmp21::key_share::AuxInfo<SecurityLevel128>);
+        type Parts = (
+            IncompleteKeyShare<Secp256k1>,
+            cggmp21::key_share::AuxInfo<SecurityLevel128>,
+        );
         type Dirty = cggmp21::key_share::DirtyKeyShare<Secp256k1, SecurityLevel128>;
         let r = self
             .registry
@@ -361,7 +399,7 @@ impl DriverInner {
                 s.key_share = Some(share);
                 Ok(())
             })
-            .and_then(|inner| match inner { Ok(v) => Ok(v), Err(e) => Err(e) });
+            .and_then(|inner| inner);
         match r {
             Ok(()) => DriverReply::ShareAssembled,
             Err(e) => Self::err(format!("assemble_share: {e}")),
@@ -388,8 +426,7 @@ impl DriverInner {
                         "start_sign {sid}: key_share missing (AssembleShare first)"
                     ));
                 };
-                let share_static: &'static KeyShare<Secp256k1> =
-                    Box::leak(Box::new(share.clone()));
+                let share_static: &'static KeyShare<Secp256k1> = Box::leak(Box::new(share.clone()));
                 let signers_static: &'static [u16] =
                     Box::leak(signers_at_keygen.clone().into_boxed_slice());
                 let sm = sign_state_machine(
@@ -403,7 +440,7 @@ impl DriverInner {
                 s.sign_state = Some(Box::new(sm));
                 Ok(())
             })
-            .and_then(|inner| match inner { Ok(v) => Ok(v), Err(e) => Err(e) });
+            .and_then(|inner| inner);
         match r {
             Ok(()) => self.pump_protocol(sid, vec![], Protocol::Sign),
             Err(e) => Self::err(format!("start_sign: {e}")),
@@ -435,7 +472,7 @@ impl DriverInner {
                     Err(_) => Ok(false), // 验签失败是**结果**而非错误（fail-closed 于语义）
                 }
             })
-            .and_then(|inner| match inner { Ok(v) => Ok(v), Err(e) => Err(e) });
+            .and_then(|inner| inner);
         match result {
             Ok(valid) => DriverReply::VerificationResult { valid },
             Err(e) => Self::err(format!("verify_signature: {e}")),
@@ -603,7 +640,7 @@ impl CgRelayPool {
             for (idx, m) in queue.iter().enumerate() {
                 // 接收方过滤：p2p 消息仅目标方可拉
                 let for_me = match m.receiver {
-                    None => true,                        // 广播：所有方
+                    None => true,                       // 广播：所有方
                     Some(target) => target == my_index, // p2p：仅目标方
                 };
                 if !for_me || m.sender == my_index {
@@ -691,11 +728,17 @@ mod tests {
             })
             .expect("call");
         match reply {
-            DriverReply::PumpResult { outgoing, finished, aggregate_public_key } => {
+            DriverReply::PumpResult {
+                outgoing,
+                finished,
+                aggregate_public_key,
+            } => {
                 // keygen 第 0 轮是广播（Broadcast 消息 receiver=None）
                 assert!(!outgoing.is_empty(), "round-0 must produce messages");
-                assert!(outgoing.iter().all(|m| m.receiver.is_none()),
-                    "round-0 must be broadcast");
+                assert!(
+                    outgoing.iter().all(|m| m.receiver.is_none()),
+                    "round-0 must be broadcast"
+                );
                 assert!(!finished);
                 assert!(aggregate_public_key.is_none());
                 // E 批 sender 修正验证：广播消息 sender 应为本方 index（0）
@@ -724,7 +767,11 @@ mod tests {
             })
             .expect("call");
         match reply {
-            DriverReply::Status { has_keygen_state, has_key_share, .. } => {
+            DriverReply::Status {
+                has_keygen_state,
+                has_key_share,
+                ..
+            } => {
                 assert!(!has_keygen_state && !has_key_share);
             }
             other => panic!("expected Status, got {other:?}"),

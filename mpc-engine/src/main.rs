@@ -82,32 +82,31 @@ async fn main() -> eyre::Result<()> {
 
     // === MPC-P2-F5: 尝试从配置文件加载 PartyConfig（分布式模式） ===
     let config_path = parse_config_arg();
-    let party_config = if config_path.is_some()
-        || std::env::var(mpc_engine::config::CONFIG_PATH_ENV).is_ok()
-    {
-        match mpc_engine::config::load_config(config_path.as_deref()) {
-            Ok(cfg) => {
-                tracing::info!(
-                    party_index = cfg.party_index,
-                    party_id = %cfg.party_id,
-                    "MPC-P2-F5: distributed security model enabled (per-party config loaded)"
-                );
-                // 将 storage_key 同步到环境变量（供 persistence 模块读取）
-                cfg.apply_storage_key_to_env()?;
-                Some(cfg)
+    let party_config =
+        if config_path.is_some() || std::env::var(mpc_engine::config::CONFIG_PATH_ENV).is_ok() {
+            match mpc_engine::config::load_config(config_path.as_deref()) {
+                Ok(cfg) => {
+                    tracing::info!(
+                        party_index = cfg.party_index,
+                        party_id = %cfg.party_id,
+                        "MPC-P2-F5: distributed security model enabled (per-party config loaded)"
+                    );
+                    // 将 storage_key 同步到环境变量（供 persistence 模块读取）
+                    cfg.apply_storage_key_to_env()?;
+                    Some(cfg)
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "MPC-P2-F5: failed to load party config");
+                    return Err(e);
+                }
             }
-            Err(e) => {
-                tracing::error!(error = %e, "MPC-P2-F5: failed to load party config");
-                return Err(e);
-            }
-        }
-    } else {
-        tracing::info!(
-            "MPC-P2-F5: no party config provided — falling back to env-var mode \
+        } else {
+            tracing::info!(
+                "MPC-P2-F5: no party config provided — falling back to env-var mode \
              (trusted-coordinator compatibility)"
-        );
-        None
-    };
+            );
+            None
+        };
 
     // === 配置读取 ===
     // 优先使用 PartyConfig.listen_addr；否则回退到环境变量

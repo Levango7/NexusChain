@@ -1,9 +1,9 @@
 //! E 批里程碑：CGGMP21 三方门限签名端到端（进程内三方 + 消息总线模拟协调器）。
 //!
 //! **这是 NexusChain 首次 CGGMP21 门限签名全链路验证**——证明 D 批基础设施
-//! + E 批驱动层可以完成真实密码学协议：3 方 keygen（t=2）→ 3 方 aux_info →
-//! 各自合成完整 KeyShare → 2-of-3 签名（恰好 t 方，CGGMP21 原生门限语义，
-//! 无 GG20 的 t+1 怪癖）→ 聚合公钥验签通过。
+//! 与 E 批驱动层可以完成真实密码学协议。流程为 3 方 keygen（t=2）、3 方
+//! aux_info、各自合成完整 KeyShare、2-of-3 签名（恰好 t 方，CGGMP21 原生
+//! 门限语义）与聚合公钥验签通过。
 //!
 //! ## 架构（模拟分布式）
 //!
@@ -69,9 +69,11 @@ type NodeState = (Vec<CgMessage>, bool, Option<String>);
 /// 从回执提取 PumpResult（其他回执类型 = 协议错误，panic）。
 fn expect_pump(reply: DriverReply, ctx: &str) -> NodeState {
     match reply {
-        DriverReply::PumpResult { outgoing, finished, aggregate_public_key } => {
-            (outgoing, finished, aggregate_public_key)
-        }
+        DriverReply::PumpResult {
+            outgoing,
+            finished,
+            aggregate_public_key,
+        } => (outgoing, finished, aggregate_public_key),
         other => panic!("{ctx}: expected PumpResult, got {other:?}"),
     }
 }
@@ -109,7 +111,10 @@ fn run_until_done(
             let reply = cluster.nodes[j]
                 .call(make_pump(j, inboxes[j].clone()))
                 .unwrap_or_else(|e| panic!("{proto} round {round} node {j}: {e}"));
-            next.push(expect_pump(reply, &format!("{proto} round {round} node {j}")));
+            next.push(expect_pump(
+                reply,
+                &format!("{proto} round {round} node {j}"),
+            ));
         }
         states = next;
     }
@@ -138,15 +143,12 @@ fn cggmp_threshold_e2e_3_of_3_keygen_2_sign() {
             expect_pump(reply, "keygen initial")
         })
         .collect();
-    let keygen_states = run_until_done(
-        &cluster,
-        initial,
-        "keygen",
-        |_j, inc| DriverCommand::PumpKeygen {
+    let keygen_states = run_until_done(&cluster, initial, "keygen", |_j, inc| {
+        DriverCommand::PumpKeygen {
             session_id: sid.into(),
             incoming: inc,
-        },
-    );
+        }
+    });
     // 三方聚合公钥一致（分散式信任根基）
     let pks: Vec<String> = keygen_states
         .iter()
@@ -155,7 +157,11 @@ fn cggmp_threshold_e2e_3_of_3_keygen_2_sign() {
     assert_eq!(pks[0], pks[1], "aggregate pk must match: node0 vs node1");
     assert_eq!(pks[0], pks[2], "aggregate pk must match: node0 vs node2");
     let aggregate_pk = &pks[0];
-    assert_eq!(aggregate_pk.len(), 66, "compressed SEC1 hex (0x02/03 + 32B)");
+    assert_eq!(
+        aggregate_pk.len(),
+        66,
+        "compressed SEC1 hex (0x02/03 + 32B)"
+    );
 
     // ---------- Phase 2: aux_info（3 方） ----------
     let aux_initial: Vec<NodeState> = (0..n)
@@ -171,20 +177,19 @@ fn cggmp_threshold_e2e_3_of_3_keygen_2_sign() {
             expect_pump(reply, "aux initial")
         })
         .collect();
-    run_until_done(
-        &cluster,
-        aux_initial,
-        "aux",
-        |_j, inc| DriverCommand::PumpAux {
+    run_until_done(&cluster, aux_initial, "aux", |_j, inc| {
+        DriverCommand::PumpAux {
             session_id: sid.into(),
             incoming: inc,
-        },
-    );
+        }
+    });
 
     // ---------- Phase 3: 合成完整 KeyShare ----------
     for i in 0..n {
         let reply = cluster.nodes[i]
-            .call(DriverCommand::AssembleShare { session_id: sid.into() })
+            .call(DriverCommand::AssembleShare {
+                session_id: sid.into(),
+            })
             .unwrap_or_else(|e| panic!("assemble node {i}: {e}"));
         assert!(
             matches!(reply, DriverReply::ShareAssembled),
@@ -199,10 +204,7 @@ fn cggmp_threshold_e2e_3_of_3_keygen_2_sign() {
     let mut states: Vec<NodeState> = signers
         .iter()
         .map(|&keygen_idx| {
-            let i_in_batch = signers
-                .iter()
-                .position(|&x| x == keygen_idx)
-                .unwrap() as u16;
+            let i_in_batch = signers.iter().position(|&x| x == keygen_idx).unwrap() as u16;
             let reply = cluster.nodes[usize::from(keygen_idx)]
                 .call(DriverCommand::StartSign {
                     session_id: sid.into(),
@@ -244,7 +246,9 @@ fn cggmp_threshold_e2e_3_of_3_keygen_2_sign() {
                 })
                 .unwrap_or_else(|e| panic!("sign round {round} node {keygen_idx}: {e}"));
             match reply {
-                DriverReply::PumpResult { outgoing, finished, .. } => {
+                DriverReply::PumpResult {
+                    outgoing, finished, ..
+                } => {
                     assert!(
                         !finished,
                         "sign must end with SignatureProduced, not PumpResult(finished)"
@@ -268,10 +272,14 @@ fn cggmp_threshold_e2e_3_of_3_keygen_2_sign() {
     assert_eq!(s_hex.len(), 64, "s is 32-byte hex");
 
     // ---------- Phase 5: 聚合公钥验签 ----------
-    let r_bytes: [u8; 32] =
-        hex::decode(&r_hex).expect("r hex").try_into().expect("r 32 bytes");
-    let s_bytes: [u8; 32] =
-        hex::decode(&s_hex).expect("s hex").try_into().expect("s 32 bytes");
+    let r_bytes: [u8; 32] = hex::decode(&r_hex)
+        .expect("r hex")
+        .try_into()
+        .expect("r 32 bytes");
+    let s_bytes: [u8; 32] = hex::decode(&s_hex)
+        .expect("s hex")
+        .try_into()
+        .expect("s 32 bytes");
     let reply = cluster.nodes[0]
         .call(DriverCommand::VerifySignature {
             session_id: sid.into(),

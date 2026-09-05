@@ -287,8 +287,8 @@ fn encode_outgoing<M: serde::Serialize>(
     my_index: u16,
 ) -> eyre::Result<CgMessage> {
     let Outgoing { msg, recipient } = out;
-    let payload_json = serde_json::to_string(&msg)
-        .map_err(|e| eyre::eyre!("serialize outgoing message: {e}"))?;
+    let payload_json =
+        serde_json::to_string(&msg).map_err(|e| eyre::eyre!("serialize outgoing message: {e}"))?;
     let receiver = match recipient {
         MessageDestination::AllParties => None,
         MessageDestination::OneParty(idx) => Some(idx),
@@ -420,23 +420,23 @@ pub type CgSignMsg = cggmp21::signing::msg::Msg<Secp256k1, CgSha>;
 /// keygen 状态机对象（驱动线程内使用）。
 pub type DynKeygenSm = Box<
     dyn CgStateMachine<
-        Output = Result<IncompleteKeyShare<Secp256k1>, cggmp21::KeygenError>,
-        Msg = CgKeygenMsg,
-    > + 'static,
+            Output = Result<IncompleteKeyShare<Secp256k1>, cggmp21::KeygenError>,
+            Msg = CgKeygenMsg,
+        > + 'static,
 >;
 /// aux_info 状态机对象。
 pub type DynAuxSm = Box<
     dyn CgStateMachine<
-        Output = Result<AuxInfo<SecurityLevel128>, cggmp21::KeyRefreshError>,
-        Msg = CgAuxMsg,
-    > + 'static,
+            Output = Result<AuxInfo<SecurityLevel128>, cggmp21::KeyRefreshError>,
+            Msg = CgAuxMsg,
+        > + 'static,
 >;
 /// sign 状态机对象（`'static`——share/signers 构造时 leak）。
 pub type DynSignSm = Box<
     dyn CgStateMachine<
-        Output = Result<Signature<Secp256k1>, cggmp21::SigningError>,
-        Msg = CgSignMsg,
-    > + 'static,
+            Output = Result<Signature<Secp256k1>, cggmp21::SigningError>,
+            Msg = CgSignMsg,
+        > + 'static,
 >;
 
 /// CGGMP21 会话注册表（**仅驱动线程内访问**——状态机 !Send）。
@@ -448,6 +448,7 @@ pub struct CgRegistry {
 ///
 /// sign 状态机的 share/signers 借用在构造时 Box::leak 成 'static——
 /// 重复 sign 会累积泄漏（每 session ~KB 级；registry 化回收留后续批次）。
+#[derive(Default)]
 pub struct CgSession {
     /// keygen 状态机（一旦完成即取走产物，置 None 释放）
     pub keygen_state: Option<DynKeygenSm>,
@@ -478,19 +479,6 @@ impl CgRegistry {
     ) -> eyre::Result<T> {
         let mut g = self.sessions.lock().map_err(|e| eyre::eyre!("lock: {e}"))?;
         Ok(f(g.entry(session_id.to_string()).or_default()))
-    }
-}
-
-impl Default for CgSession {
-    fn default() -> Self {
-        Self {
-            keygen_state: None,
-            aux_state: None,
-            sign_state: None,
-            core_share: None,
-            aux_info: None,
-            key_share: None,
-        }
     }
 }
 

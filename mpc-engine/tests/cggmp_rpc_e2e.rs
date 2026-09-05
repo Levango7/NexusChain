@@ -1,4 +1,4 @@
-﻿//! F 批验收：CGGMP21 生命周期 RPC 面的 gRPC 端到端（进程内）。
+//! F 批验收：CGGMP21 生命周期 RPC 面的 gRPC 端到端（进程内）。
 //!
 //! **验证目标**：proto 扩展 + server.rs 接线（spawn_blocking 驱动线程 actor
 //! 桥接 + relay 池）在**真实 gRPC 传输**下可用——E 批里程碑（进程内直调
@@ -156,7 +156,9 @@ async fn cggmp_rpc_e2e_full_lifecycle_over_grpc() {
     // ---------- Phase 4: CgStartSign（2-of-3：signers = [0,1]）+ 协议循环 ----------
     let signers = vec![0u32, 1u32];
     let message_hash = vec![0x42u8; 32];
-    let mut sign_states: Vec<(Vec<CgRelayMessage>, bool, Option<(String, String)>)> = Vec::new();
+    // 类型别名消解 clippy::type_complexity（三层嵌套泛型超阈值）
+    type SignStateEntry = (Vec<CgRelayMessage>, bool, Option<(String, String)>);
+    let mut sign_states: Vec<SignStateEntry> = Vec::new();
     for (batch_pos, &keygen_idx) in signers.iter().enumerate() {
         let resp = clients[keygen_idx as usize]
             .cg_start_sign(Request::new(CgStartSignRequest {
@@ -169,7 +171,11 @@ async fn cggmp_rpc_e2e_full_lifecycle_over_grpc() {
             .await
             .expect("CgStartSign rpc")
             .into_inner();
-        assert!(resp.success, "start sign {keygen_idx} failed: {}", resp.error);
+        assert!(
+            resp.success,
+            "start sign {keygen_idx} failed: {}",
+            resp.error
+        );
         sign_states.push((resp.outgoing, resp.finished, None));
     }
     let mut sig: Option<(String, String)> = None;
@@ -238,9 +244,23 @@ async fn cggmp_rpc_e2e_full_lifecycle_over_grpc() {
     let r_bytes = hex::decode(&r_hex).expect("r hex");
     let s_bytes = hex::decode(&s_hex).expect("s hex");
 
-    let valid = verify_signature(&mut clients[0], &sid, r_bytes.clone(), s_bytes.clone(), &message_hash).await;
+    let valid = verify_signature(
+        &mut clients[0],
+        &sid,
+        r_bytes.clone(),
+        s_bytes.clone(),
+        &message_hash,
+    )
+    .await;
     assert!(
-        matches!(&valid, CgVerifyResponse { valid: true, success: true, .. }),
+        matches!(
+            &valid,
+            CgVerifyResponse {
+                valid: true,
+                success: true,
+                ..
+            }
+        ),
         "2-of-3 signature must verify: {valid:?}"
     );
     let mut bad = r_bytes;
@@ -260,7 +280,14 @@ async fn cggmp_rpc_e2e_full_lifecycle_over_grpc() {
         .expect("CgStatus rpc")
         .into_inner();
     assert!(
-        matches!(&st, CgStatusResponse { has_key_share: true, success: true, .. }),
+        matches!(
+            &st,
+            CgStatusResponse {
+                has_key_share: true,
+                success: true,
+                ..
+            }
+        ),
         "status snapshot: {st:?}"
     );
 
@@ -343,7 +370,10 @@ async fn run_protocol_over_relay(
                 incoming: pulled.messages,
             });
             let resp = if is_keygen {
-                clients[i].cg_pump_keygen(req).await.expect("pump keygen rpc")
+                clients[i]
+                    .cg_pump_keygen(req)
+                    .await
+                    .expect("pump keygen rpc")
             } else {
                 clients[i].cg_pump_aux(req).await.expect("pump aux rpc")
             };
