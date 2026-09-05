@@ -58,3 +58,15 @@ jacocoTestReport {
         html.required = false
     }
 }
+
+jacocoTestCoverageVerification {
+    violationRules {
+        rule {
+            limit {
+                minimum = 0.30
+            }
+        }
+    }
+}
+
+check.dependsOn jacocoTestCoverageVerification

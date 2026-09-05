@@ -70,22 +70,29 @@ jobs:
 
       # P2-C6: composite build 模块测试门禁
       # settings.gradle 中 includeBuild 的模块（nexus-settlement/compliance/analytics/oracle）
-      # 不被根 `./gradlew test` 覆盖，需单独执行其 test 任务。
+      # 不被根 `./gradlew check` 覆盖，需单独执行其任务。
       # 这些模块自带 settings.gradle，通过 includeBuild 纳入统一构建，
-      # 可通过根 gradlew 以 `:nexus-settlement:test` 形式调用（Gradle 8.x composite build 支持）。
+      # 可通过根 gradlew 以 `:nexus-settlement:check` 形式调用（Gradle 8.x composite build 支持）。
+      # 2026-09-05（覆盖率门禁收编）：settlement/oracle 自带模块级
+      # jacocoTestCoverageVerification（0.30 下限，实测通过），test→check 激活门禁
+      # （check 仍依赖 test，测试照跑）；compliance/analytics 暂无门禁，保持 test。
       - name: Test composite build modules
         run: |
-          ./gradlew :nexus-settlement:test :nexus-compliance:test :nexus-analytics:test :nexus-oracle:test --no-daemon
+          ./gradlew :nexus-settlement:check :nexus-compliance:test :nexus-analytics:test :nexus-oracle:check --no-daemon
 
       # 测试体系中期建设（2026-08-30）：影子测试资产纳入 CI。
       # 此前仅本地跑过的两模块，现纳入门禁（测试探活审计项）：
-      # - nexus-consortium：includeBuild 且自带 settings.gradle，根 test 不覆盖，
+      # - nexus-consortium：includeBuild 且自带 settings.gradle，根 check 不覆盖，
       #   43 个测试文件/约 321 用例（PoA + 国密 SM2/3/4）——组合路径：
       #   consortium 是 includeBuild 声明的构建名，测试任务为 :nexus-consortium:consortium:test
-      # - nexus-api-gateway：根构建 include 的 21 用例（AuthenticationFilter/RateLimitFilter）
+      #   2026-09-05（覆盖率门禁收编）：consortium 构建树自带子模块级门禁
+      #   （common/consortium 0.30，crypto 0.00 占位——实测指令覆盖 0/4259），
+      #   test→check 激活；check 仍依赖 test，测试照跑。
+      # - nexus-api-gateway：根构建 include 的 21 用例（AuthenticationFilter/RateLimitFilter），
+      #   暂无模块级门禁，保持 test
       - name: Test consortium + api-gateway (shadow test assets)
         run: |
-          ./gradlew :nexus-consortium:consortium:test :nexus-api-gateway:test --no-daemon
+          ./gradlew :nexus-consortium:consortium:check :nexus-consortium:common:check :nexus-consortium:crypto:check :nexus-api-gateway:test --no-daemon
 
       # P2-C6: 三个关键回归测试门禁（双花防御 / 桥资金守恒 / 门限签名）
       # 这些测试覆盖核心安全不变量，单独显式执行以确保被运行（即使其他测试被 skip）。

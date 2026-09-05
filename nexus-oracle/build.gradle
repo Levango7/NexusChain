@@ -43,6 +43,18 @@ jacocoTestReport {
     }
 }
 
+jacocoTestCoverageVerification {
+    violationRules {
+        rule {
+            limit {
+                minimum = 0.30
+            }
+        }
+    }
+}
+
+check.dependsOn jacocoTestCoverageVerification
+
 // 本模块是供其他应用消费的库（无 main class），不产出 Spring Boot fat jar：
 // 关闭 bootJar、启用普通 jar，否则消费方无法解析编译类路径。
 bootJar {
