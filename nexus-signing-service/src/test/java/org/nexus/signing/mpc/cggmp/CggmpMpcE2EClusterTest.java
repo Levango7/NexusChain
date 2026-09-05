@@ -45,22 +45,27 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * <h2>先决条件</h2>
  * <ul>
- *   <li>mpc-engine debug 二进制存在：{@code F:/Nexus/NexusChain/mpc-engine/target/debug/mpc-engine.exe}</li>
- *   <li>先前 F 批 e2e 用过的 mTLS 证书 + 节点 JSON 配置就位</li>
- *   <li>{@link #engineBinary} / {@link #configDir} 可由 JUnit 启动器调整</li>
+ *   <li>mpc-engine 二进制存在（Windows 默认 {@code <repo>/mpc-engine/target/debug/mpc-engine.exe}，
+ *       Linux 默认 {@code mpc-engine} 同目录布局；CI 由 {@code MPC_ENGINE_BIN} 指向 release 产物）</li>
+ *   <li>mTLS 证书 + 节点 JSON 配置就位（CI 用 {@code mpc-engine/scripts/start-mpc-cluster.sh
+ *       --setup-only} 生成；本地可手动生成或沿用既有产物）</li>
  * </ul>
  *
  * <h2>运行</h2>
  * <pre>
- * gradle :nexus-signing-service:test --tests org.nexus.signing.mpc.cggmp.CggmpMpcE2EClusterTest
+ * gradle :nexus-signing-service:test -PincludeClusterE2E \
+ *        --tests org.nexus.signing.mpc.cggmp.CggmpMpcE2EClusterTest
  * </pre>
+ * （{@code -PincludeClusterE2E} 解除 build.gradle 对本类的默认排除）
  *
  * <h2>环境要求</h2>
- * <p>需要：</p>
+ * <p>均可覆盖；不设时按 OS/二进制位置自动锚定：</p>
  * <ul>
- *   <li>环境变量 {@code MPC_ENGINE_BIN} 指向 mpc-engine.exe（默认 F:/Nexus/.../debug/mpc-engine.exe）</li>
- *   <li>{@code F:/Nexus/NexusChain/mpc-engine/config/node{1,2,3}.json} + {@code certs/} 存在
- *       （先前 F 批验证已就位）</li>
+ *   <li>{@code MPC_ENGINE_BIN}——mpc-engine 二进制绝对路径</li>
+ *   <li>{@code MPC_CONFIG_DIR}——node{1,2,3}.json 所在目录（默认 {@code <mpc-engine>/config}）</li>
+ *   <li>{@code MPC_LOG_DIR}——引擎 stdout 日志目录（默认 {@code <mpc-engine>/logs}）</li>
+ *   <li>{@code MPC_DATA_DIR}——会话数据目录（默认 {@code <mpc-engine>/data}）</li>
+ *   <li>{@code MPC_CERTS_DIR}——mTLS 证书目录（默认 {@code <mpc-engine>/certs}）</li>
  * </ul>
  */
 @Tag("cluster-e2e")
@@ -68,15 +73,28 @@ public class CggmpMpcE2EClusterTest {
 
     private static final Logger log = LoggerFactory.getLogger(CggmpMpcE2EClusterTest.class);
 
-    /** mpc-engine 二进制路径（可由 MPC_ENGINE_BIN 覆盖）。 */
-    private static final Path DEFAULT_BIN = Paths.get(
-            "F:", "Nexus", "NexusChain", "mpc-engine", "target", "debug", "mpc-engine.exe");
-    private static final Path CONFIG_DIR = Paths.get(
-            "F:", "Nexus", "NexusChain", "mpc-engine", "config");
-    private static final Path LOG_DIR = Paths.get(
-            "F:", "Nexus", "NexusChain", "mpc-engine", "logs");
+    /**
+     * mpc-engine 二进制路径（可由 MPC_ENGINE_BIN 覆盖）。
+     * 默认值按 OS 选择二进制名，路径锚定 repo 相对位置（测试工作目录 =
+     * nexus-signing-service/，Gradle 多模块下 user.dir 即模块目录）：
+     * ../mpc-engine/target/{debug|release}/mpc-engine[.exe]。
+     * Windows 本地默认 debug；Linux/CI 用 MPC_ENGINE_BIN 指向 release 产物。
+     */
+    private static final Path DEFAULT_BIN = defaultEngineBinary();
+    /**
+     * 目录族默认锚定二进制所在 mpc-engine 根（target/{debug|release} 上两级），
+     * 与本地布局和 CI（start-mpc-cluster.sh --setup-only 产物布局）一致；
+     * 均可被环境变量覆盖（MPC_CONFIG_DIR / MPC_LOG_DIR / MPC_DATA_DIR /
+     * MPC_CERTS_DIR）。在 startCluster 中 engineBinary 解析后初始化。
+     */
+    private static Path configDir;
+    private static Path logDir;
+    private static Path dataDir;
+    private static Path certsDir;
 
-    private static final long DEADLINE_MS = 60_000L;
+    // C 批：60s → 120s。CI 共享 runner 首次冷启动（JIT/磁盘 IO）慢于本地，
+    // 实测 I 批 keygen 端到端 <1s，但端口就绪与进程拉起在 runner 上留倍数余量。
+    private static final long DEADLINE_MS = 120_000L;
 
     private static Path engineBinary;
     private static final List<Process> engines = new ArrayList<>();
@@ -95,10 +113,14 @@ public class CggmpMpcE2EClusterTest {
                     "mpc-engine binary not found: " + engineBinary.toAbsolutePath()
                             + " (set MPC_ENGINE_BIN to override)");
         }
-        Files.createDirectories(LOG_DIR);
+        configDir = resolveDir("MPC_CONFIG_DIR", "config");
+        logDir = resolveDir("MPC_LOG_DIR", "logs");
+        dataDir = resolveDir("MPC_DATA_DIR", "data");
+        certsDir = resolveDir("MPC_CERTS_DIR", "certs");
+        Files.createDirectories(logDir);
         // 起 3 个 mpc-engine 子进程（端口由 nodeN.json listen_addr 决定）
         for (int i = 1; i <= 3; i++) {
-            Path configPath = CONFIG_DIR.resolve("node" + i + ".json");
+            Path configPath = configDir.resolve("node" + i + ".json");
             if (!Files.isRegularFile(configPath)) {
                 throw new IllegalStateException(
                         "node config missing: " + configPath + " (run scripts/start-mpc-cluster.sh first)");
@@ -110,8 +132,7 @@ public class CggmpMpcE2EClusterTest {
             // 显式 env（与生产启动脚本一致）
             pb.environment().put("MPC_CONFIG_PATH", configPath.toString());
             pb.environment().put("MPC_ENGINE_SESSION_DIR",
-                    Paths.get("F:", "Nexus", "NexusChain", "mpc-engine",
-                            "data", "node" + i, "sessions").toString());
+                    dataDir.resolve("node" + i).resolve("sessions").toString());
             pb.environment().put("MPC_REQUIRE_TLS", "true");
             pb.environment().put("MPC_AUTH_TOKEN", "nexus-mpc-test-token");
             pb.environment().put("RUST_LOG", "info");
@@ -126,10 +147,9 @@ public class CggmpMpcE2EClusterTest {
         log.info("3 mpc-engine nodes up: 127.0.0.1:50051,50052,50053");
 
         // 建 3 个 mTLS channel（用项目自带 GrpcTlsContextFactory，与生产 GrpcMpcCryptoEngine 一致）
-        // 证书路径：F:/Nexus/NexusChain/mpc-engine/certs/{nodeN.crt, nodeN.key, ca.crt}
+        // 证书路径：<mpc-engine>/certs/{nodeN.crt, nodeN.key, ca.crt}
         // domain_name 匹配证书 SAN = localhost
-        // mpc-engine.exe 在 <mpc>/target/debug/，certs 在 <mpc>/certs/（上三级）
-        Path certDir = engineBinary.getParent().getParent().getParent().resolve("certs");
+        Path certDir = certsDir;
         if (!Files.isDirectory(certDir)) {
             throw new IllegalStateException("certs dir not found: " + certDir);
         }
@@ -296,6 +316,28 @@ public class CggmpMpcE2EClusterTest {
     // 工具
     // ============================================================
 
+    /** mpc-engine 仓库根：二进制约定在 {@code <root>/target/{debug|release}/} 下，上两级即根。 */
+    private static Path engineRoot() {
+        return engineBinary.getParent().getParent().getParent();
+    }
+
+    /** 默认二进制：按 OS 选二进制名，锚定 {@code <repo>/mpc-engine/target/debug/}（Gradle test 工作目录 = 模块目录）。 */
+    private static Path defaultEngineBinary() {
+        String name = System.getProperty("os.name", "").toLowerCase().contains("win")
+                ? "mpc-engine.exe" : "mpc-engine";
+        return Paths.get("..", "mpc-engine", "target", "debug", name)
+                .normalize().toAbsolutePath();
+    }
+
+    /** 目录解析：环境变量优先，否则锚定 mpc-engine 根下的约定相对目录。 */
+    private static Path resolveDir(String envName, String relative) {
+        String env = System.getenv(envName);
+        if (env != null && !env.isBlank()) {
+            return Paths.get(env);
+        }
+        return engineRoot().resolve(relative);
+    }
+
     private static byte[] sha256(byte[] input) {
         try {
             return java.security.MessageDigest.getInstance("SHA-256").digest(input);
@@ -328,7 +370,7 @@ public class CggmpMpcE2EClusterTest {
         Thread t = new Thread(() -> {
             try (InputStream in = p.getInputStream()) {
                 byte[] buf = new byte[4096];
-                Path logPath = LOG_DIR.resolve("i-batch-" + tag + ".log");
+                Path logPath = logDir.resolve("i-batch-" + tag + ".log");
                 try (var fout = Files.newOutputStream(logPath)) {
                     int n;
                     while ((n = in.read(buf)) > 0) {

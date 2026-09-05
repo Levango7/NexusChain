@@ -58,6 +58,7 @@ TOTAL_PARTIES=3
 DAEMON=false
 KILL_ONLY=false
 SKIP_HEALTH=false
+SETUP_ONLY=false
 MPC_BINARY=""
 BUILD_FEATURES="tls"
 
@@ -70,6 +71,8 @@ usage() {
   -f <features>   cargo 编译 features（默认: tls）
   --no-health     跳过启动后健康检查
   --no-build      跳过编译（使用已有二进制或 -b 指定）
+  --setup-only    仅生成 mTLS 证书与节点 JSON 配置后退出（不编译/不启动），
+                  供 CI 集群 E2E（CggmpMpcE2EClusterTest 自行拉起引擎）预备环境
   -h              显示帮助
 EOF
 }
@@ -83,6 +86,7 @@ while [[ $# -gt 0 ]]; do
         -f) BUILD_FEATURES="$2"; shift 2 ;;
         --no-health) SKIP_HEALTH=true; shift ;;
         --no-build) NO_BUILD=true; shift ;;
+        --setup-only) SETUP_ONLY=true; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "错误: 未知参数 $1" >&2; usage; exit 1 ;;
     esac
@@ -149,7 +153,9 @@ fi
 
 # ---------- 2. 编译 mpc-engine（若未指定二进制） ----------
 log "[2/5] 准备 mpc-engine 二进制..."
-if [[ -n "${MPC_BINARY}" ]]; then
+if ${SETUP_ONLY}; then
+    log "  --setup-only：仅生成证书与配置，跳过二进制准备"
+elif [[ -n "${MPC_BINARY}" ]]; then
     if [[ ! -x "${MPC_BINARY}" ]]; then
         err "指定的二进制不存在或不可执行: ${MPC_BINARY}"
         exit 1
@@ -234,6 +240,14 @@ for entry in "${NODES[@]}"; do
         generate_node_json "${name}" "${port}" "${idx}" "${pid_id}"
     fi
 done
+
+# ---------- --setup-only：证书 + 配置就绪即退出 ----------
+if ${SETUP_ONLY}; then
+    log "--setup-only 完成：证书与节点配置已就绪（未编译/未启动）"
+    log "  配置: ${CONFIG_DIR}/node{1,2,3}.json"
+    log "  证书: ${CERT_DIR}/ca.crt + node{1,2,3}.{crt,key}"
+    exit 0
+fi
 
 # ---------- 4. 启动节点 ----------
 log "[4/5] 启动 MPC 节点..."

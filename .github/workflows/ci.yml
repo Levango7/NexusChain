@@ -118,6 +118,19 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq protobuf-compiler
 
+      # C 批：Rust 编译缓存（Cargo registry + target 增量产物）。两个 Rust 工程
+      # 各自独立缓存（workspaces 按 Cargo.lock 指纹 keying），命中后
+      # fmt/clippy/test 的依赖编译跳过，Rust 相关步骤显著提速。
+      - name: Rust build cache (mpc-engine)
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: mpc-engine
+
+      - name: Rust build cache (zk-groth16-service)
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: zk-groth16-service
+
       # Rust 代码格式检查（rustfmt 门禁）。
       # `cargo fmt --all -- --check` 不修改文件，仅检查是否符合 rustfmt.toml 规则；
       # 不符合则非零退出，阻断 CI。开发者本地运行 `cargo fmt` 自动格式化。
@@ -207,6 +220,93 @@ jobs:
             **/build/libs/*.jar
           if-no-files-found: ignore
           retention-days: 14
+
+  # ============================================================
+  # C 批：CGGMP21 Java 集群 E2E 回归（C1 独立 job 结构）
+  # ------------------------------------------------------------
+  # CggmpMpcE2EClusterTest 在 JVM 内拉起 3 个 mpc-engine 子进程，经
+  # gRPC + mTLS + Bearer auth 驱动 CGGMP21 keygen(t=2, n=3) 全链路，
+  # 断言三方产出一致聚合公钥。此前为 Windows 本地手工验证（I 批），
+  # 现纳入 CI 回归（C 批：测试路径 env 化 + 本 job）。
+  #
+  # 结构决策（C1）：独立 job 而非并入 build-and-test——
+  #  1) 失败隔离：Rust release 编译 / 集群时序波动不拖累 Java 主链与覆盖率门禁；
+  #  2) 覆盖率不回灌：集群 E2E 的覆盖依赖真实引擎进程，CI 常规 check
+  #     仍排除该类（signing-service 门禁口径 0.36 不变，诚实口径）。
+  #
+  # 流程：GMP 工具链（cggmp21 rug 硬依赖）→ rust-cache → cargo build
+  # --release --features tls → start-mpc-cluster.sh --setup-only（生成
+  # mTLS 证书 + node{1,2,3}.json，不启动引擎）→ gradle 显式点名运行
+  # （-PincludeClusterE2E 解除 test 任务级 exclude——--tests 过滤不
+  # 穿透 exclude）。引擎进程由测试 @AfterAll 自毁，无需 trap 清理。
+  # ============================================================
+  mpc-java-cluster-e2e:
+    name: MPC Java Cluster E2E (CGGMP21 3-node)
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    timeout-minutes: 45
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v4
+
+      - name: Setup JDK 17 (Amazon Corretto)
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'corretto'
+          cache: gradle
+
+      - name: Ensure gradlew is LF
+        run: |
+          sed -i 's/\r$//' gradlew
+          chmod +x gradlew
+
+      # GMP 工具链：cggmp21 → rug 硬依赖（gmp/mpfr），m4 为其构建脚本所需；
+      # protoc 供 mpc-engine build.rs（prost-build）；openssl 供证书生成
+      # （runner 预装，显式列出以保证）。
+      - name: Install GMP toolchain + protoc
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libgmp-dev libmpfr-dev m4 protobuf-compiler openssl
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          working-directory: mpc-engine
+
+      - name: Rust build cache (mpc-engine)
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: mpc-engine
+
+      - name: Build mpc-engine (release, tls)
+        working-directory: mpc-engine
+        run: cargo build --release --features tls
+
+      # 仅生成证书与节点 JSON 配置（node{1,2,3}.json 内嵌绝对证书路径），
+      # 不启动引擎——测试自行拉起 3 进程并自毁。
+      - name: Generate cluster certs + node configs (setup-only)
+        working-directory: mpc-engine
+        run: bash scripts/start-mpc-cluster.sh --setup-only
+
+      - name: Run CggmpMpcE2EClusterTest (CGGMP21 keygen 2-of-3)
+        run: |
+          ./gradlew :nexus-signing-service:test -PincludeClusterE2E \
+            --tests "org.nexus.signing.mpc.cggmp.CggmpMpcE2EClusterTest" \
+            --no-daemon
+        env:
+          MPC_ENGINE_BIN: ${{ github.workspace }}/mpc-engine/target/release/mpc-engine
+
+      - name: Upload engine logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mpc-cluster-e2e-logs
+          path: |
+            mpc-engine/logs/**
+            nexus-signing-service/build/reports/tests/test/**
+          if-no-files-found: ignore
+          retention-days: 7
 
   # ============================================================
   # Flyway 数据库迁移预检（Task 284）
@@ -304,7 +404,7 @@ jobs:
   # 环境：Node 22 LTS（Hardhat EDR 与 Node 25 不兼容，见 docs/testing/
   # skipped-tests.md §2.1）+ JDK 17。测试基类自适应：npm install →
   # 启动 npx hardhat node → 部署合约，任一步失败即整类跳过（不红）。
-  # 首轮观察模式（continue-on-error）：远端跑通后移除该标记转为强制门禁。
+  # 该 job 已为强制门禁（2026-08-30 首轮真实执行毕业，无 continue-on-error 遮错；原观察模式注释已废弃）。
   # ============================================================
   hardhat-e2e:
     name: Hardhat L1/L2 E2E (Node 22)

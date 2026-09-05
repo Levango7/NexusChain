@@ -207,18 +207,22 @@ test {
     //
     // 1. MultiNodeMpcMockTest：需 Nacos / Sentinel / Seata 等外部基础设施，
     //    无外部服务的单元测试环境无法加载 Spring 上下文（预先存在）。
-    // 2. CggmpMpcE2EClusterTest（I 批新增）：Windows 进程内 JVM 启 3 个
-    //    mpc-engine.exe 子进程做 CGGMP21 集群 E2E，路径硬编码
-    //    F:\Nexus\...——CI Linux runner 必报 ENOENT/IllegalState。
-    //    两测试均应在独立集成测试 job（集群环境就绪）中跑。
+    // 2. CggmpMpcE2EClusterTest（I 批新增）：JVM 启 3 个 mpc-engine 子进程做
+    //    CGGMP21 集群 E2E——现由独立 CI job mpc-java-cluster-e2e 运行
+    //    （C 批：路径已 env 化，Linux 可跑），常规 check 门禁保持排除。
     //
     // Gradle 原生 exclude（按类名模式，对 JUnit Platform 生效——
     // d201176 的 filter { excludeTestsMatching } 在 useJUnitPlatform 下
     // 被忽略，CI 重跑证伪；exclude 是 Test 任务级 discover 过滤，可靠）：
     exclude "**/MultiNodeMpcMockTest*"
-    exclude "**/CggmpMpcE2EClusterTest*"
-    // @Tag("cluster-e2e") + systemProperty 双保险（JUnit Platform 侧）：
-    systemProperty 'junit.jupiter.exclude.tags', 'cluster-e2e'
+    // C 批开关：独立集群 E2E job 传 -PincludeClusterE2E 解除对本类的排除。
+    // --tests 过滤不穿透任务级 exclude（exclude 在 discover 阶段先行剔除），
+    // 显式 --tests 会被静默吞掉，必须用项目属性解除而非仅靠过滤。
+    if (!project.hasProperty('includeClusterE2E')) {
+        exclude "**/CggmpMpcE2EClusterTest*"
+        // @Tag("cluster-e2e") + systemProperty 双保险（JUnit Platform 侧）：
+        systemProperty 'junit.jupiter.exclude.tags', 'cluster-e2e'
+    }
 }
 
 // === Phase 4 任务 #79：protobuf-gradle-plugin 配置（审计报告 §4.1 方案 A）

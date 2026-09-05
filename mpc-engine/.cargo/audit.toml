@@ -51,5 +51,11 @@ ignore = [
     # DataToSign::from_digest 构造（原文哈希，非任意 prehash）。
     # 升级路线：cggmp24 v0.7 正式版发布后迁移（CGGMP21_MIGRATION.md 四步），
     # 届时移除本豁免。见 docs/plan/ v2.2.0 阶段二批注。
+    # 移除触发条件（A 批注记 2026-09-05，任一满足即应重估并迁移）：
+    #   ① cggmp24 0.7 stable 正式发布（Cargo Audit 自动监视——本文件即其触发器，
+    #      新 advisory / 版本发布均会使 cargo audit 门禁告警提醒重估）；
+    #   ② 出现影响本项目实际用法（sign_sync 完整签名路径）的新 CVE——同上自动监视；
+    #   ③ cggmp21 0.6.x 与未来工具链不兼容（rustc edition/新 MSRV/GMP API 变更
+    #      导致无法编译），被迫升级时的窗口期同样适用本豁免依据。
     "RUSTSEC-2025-0127",
 ]
