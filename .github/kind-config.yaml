@@ -1,0 +1,11 @@
+# kind 集群配置（mpc-kind-smoke job 用）
+# 3 worker：StatefulSet podAntiAffinity(hard, hostname) 要求 3 副本
+# 调度到不同 Node——3 worker 保证该反亲和约束在冒烟中可满足
+# （2 worker 会让第 3 副本 Pending，是反亲和正确行为而非部署缺陷）。
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+  - role: worker
+  - role: worker
+  - role: worker

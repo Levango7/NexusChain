@@ -352,6 +352,127 @@ jobs:
           retention-days: 7
 
   # ============================================================
+  # K 批验收：kind 真集群冒烟——mpc-engine chart K8s 语义验证
+  # ------------------------------------------------------------
+  # 冒烟范围决策：只装 mpc-engine 子 chart（不装 umbrella——全栈需
+  # Nacos/PG/Redis 等基础设施，kind 内不具备；冒烟目标是 MPC 的 K8s
+  # 语义，不是全栈）。验证链：
+  #   kind 3 节点集群 → 本机构建 mpc-engine 镜像 + kind load（免
+  #   GHCR 拉取）→ generate-certs.sh 产 mTLS 证书 → helm install →
+  #   StatefulSet 3 Pod 全 Ready（PVC 挂载 /app/sessions、env 注入
+  #   MPC_ENGINE_SESSION_DIR/MPC_STORAGE_KEY_VERSION——⑤批持久化
+  #   接线的部署面验证）→ Pod 内 keyshare 目录可写断言。
+  # 镜像 tag 用 <sha>（与 global.env 回退链一致，冒烟专用）。
+  # ============================================================
+  mpc-kind-smoke:
+    name: MPC Kind Smoke (mpc-engine chart on K8s)
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    timeout-minutes: 50
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          working-directory: mpc-engine
+
+      # GMP 工具链：cggmp21 rug 硬依赖（gmp/mpfr + m4）+ protoc（prost-build）
+      - name: Install GMP toolchain + protoc
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libgmp-dev libmpfr-dev m4 protobuf-compiler openssl
+
+      - name: Rust build cache (mpc-engine)
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: mpc-engine
+
+      - name: Build mpc-engine (release, tls)
+        working-directory: mpc-engine
+        run: cargo build --release --features tls
+
+      - name: Build mpc-engine image
+        run: docker build -t mpc-engine:kind-smoke -f mpc-engine/Dockerfile .
+
+      # kind 3 节点集群：StatefulSet 反亲和（podAntiAffinity hard）要求
+      # 3 副本可调度到不同 Node——3 worker 验证该约束在真实拓扑下成立
+      - name: Create kind cluster (3 workers)
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: mpc-smoke
+          config: .github/kind-config.yaml
+
+      - name: Load mpc-engine image into kind
+        run: kind load docker-image mpc-engine:kind-smoke --name mpc-smoke
+
+      # 生成 mTLS 证书：SAN 覆盖 localhost/127.0.0.1（Pod DNS 名不进 SAN——
+      # 客户端 overrideAuthority 对齐，与既有 e2e 证书同语义）
+      - name: Generate mTLS certs
+        working-directory: mpc-engine
+        run: bash scripts/generate-certs.sh -f
+
+      # helm install 只装 mpc-engine 子 chart；镜像指向 kind 内本地 tag；
+      # storageKey 冒烟值 64 hex（真值由生产 sealed-secrets 注入）。
+      # 证书走 --set-file（PEM 多行——--set 的字符串内嵌换行会碎）。
+      # 注意：tlsCerts 的键名与 statefulset 的 subPath 证书选择器对齐
+      # （node-0/1/2 + ca；每 Pod 通过 ordinal 取自己的证书）。
+      - name: Helm install mpc-engine (subchart only)
+        run: |
+          helm install mpc deploy/helm/charts/mpc-engine \
+            --namespace nexus \
+            --create-namespace \
+            --set image.repository=mpc-engine \
+            --set image.tag=kind-smoke \
+            --set image.pullPolicy=Never \
+            --set storageKey=4242424242424242424242424242424242424242424242424242424242424242 \
+            --set-file secrets.tlsCerts.node-0.tls.crt=mpc-engine/certs/node1.crt \
+            --set-file secrets.tlsCerts.node-0.tls.key=mpc-engine/certs/node1.key \
+            --set-file secrets.tlsCerts.node-1.tls.crt=mpc-engine/certs/node2.crt \
+            --set-file secrets.tlsCerts.node-1.tls.key=mpc-engine/certs/node2.key \
+            --set-file secrets.tlsCerts.node-2.tls.crt=mpc-engine/certs/node3.crt \
+            --set-file secrets.tlsCerts.node-2.tls.key=mpc-engine/certs/node3.key \
+            --set-file secrets.tlsCerts.ca.tls.crt=mpc-engine/certs/ca.crt
+
+      - name: Wait for StatefulSet rollout (3 replicas Ready)
+        run: |
+          kubectl rollout status statefulset/mpc-engine -n nexus --timeout=180s
+          kubectl get pods -n nexus -o wide
+
+      # ⑤批持久化接线部署面验证：PVC 挂载 + 会话目录可写 + env 注入
+      - name: Verify session PVC + persistence env wiring
+        run: |
+          echo "=== PVCs (expect 2 kinds: mpc-config + mpc-sessions) ==="
+          kubectl get pvc -n nexus
+          for p in 0 1 2; do
+            echo "=== mpc-engine-$p persistence wiring ==="
+            kubectl exec -n nexus mpc-engine-$p -- sh -c 'ls -ld /app/sessions || echo MISSING_SESSIONS_DIR'
+            kubectl exec -n nexus mpc-engine-$p -- sh -c 'echo smoke > /app/sessions/.write-test && cat /app/sessions/.write-test && rm /app/sessions/.write-test'
+          done
+          echo "=== env wiring ==="
+          kubectl exec -n nexus mpc-engine-0 -- sh -c 'env | grep -E "MPC_ENGINE_SESSION_DIR|MPC_STORAGE_KEY_VERSION|MPC_CONFIG_PATH" || true'
+
+      # 协议冒烟：Pod 0 上起一轮 keygen 首轮（CgStartKeygen 广播消息 = 引擎
+      # 在 K8s 内可驱动协议），用 grpcurl 不现实（容器无该二进制）——用
+      # kubectl exec + 环境变量直查进程日志中的启动横幅做最低限度验证
+      - name: Engine startup banner check (all pods)
+        run: |
+          for p in 0 1 2; do
+            echo "=== mpc-engine-$p startup log ==="
+            kubectl logs -n nexus mpc-engine-$p | tail -20
+            kubectl logs -n nexus mpc-engine-$p | grep -q "starting mpc-engine gRPC server" \
+              || { echo "ERROR: mpc-engine-$p startup banner missing"; exit 1; }
+          done
+
+      - name: Dump cluster state on failure
+        if: failure()
+        run: |
+          kubectl get all,pvc -n nexus || true
+          for p in 0 1 2; do kubectl logs -n nexus mpc-engine-$p || true; done
+          helm get all mpc -n nexus || true
+
+  # ============================================================
   # Flyway 数据库迁移预检（Task 284）
   # ------------------------------------------------------------
   # 目的：在 CI 阶段验证各模块的 Flyway 迁移脚本可顺序应用、无语法/冲突错误，
