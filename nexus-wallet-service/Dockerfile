@@ -7,7 +7,7 @@
 #   docker build -t nexus-wallet-service:1.9.2 -f nexus-wallet-service/Dockerfile .
 #
 # Stage 1 (builder): gradle:8.5-jdk17，编译产出 Spring Boot fat jar
-# Stage 2 (runtime): gcr.io/distroless/java17-debian12:nonroot (UID=65532, 非 root)
+# Stage 2 (runtime): gcr.io/distroless/java17-debian13:nonroot (UID=65532, 非 root)
 #
 # 镜像体积估算：distroless base ~180MB + fat jar ~45-60MB ≈ 225-240MB
 #   注：含 SCA/Nacos/Sentinel/Seata/Feign/JPA/Flyway/MySQL/Resilience4j 等依赖，
@@ -47,9 +47,9 @@ RUN find /workspace/nexus-wallet-service/build/libs -name '*.jar' ! -name '*-pla
     -exec cp {} /workspace/app.jar \;
 
 # === Stage 2: runtime (distroless nonroot) ===
-# gcr.io/distroless/java17-debian12:nonroot 默认用户 nonroot (UID=65532)
+# gcr.io/distroless/java17-debian13:nonroot 默认用户 nonroot (UID=65532)
 # 无 shell / 无 curl / 无包管理器，攻击面最小，满足非 root 要求
-FROM gcr.io/distroless/java17-debian12:nonroot
+FROM gcr.io/distroless/java17-debian13:nonroot
 WORKDIR /app
 COPY --from=builder /workspace/app.jar app.jar
 # busybox 静态二进制（~1.2MB，无动态依赖）：仅用于 compose healthcheck（wget）。

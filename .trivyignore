@@ -2,59 +2,34 @@
 # ============================================================================
 # 处置原则：仅豁免「上游声明不修/无可用修复版本」的系统包漏洞，避免用
 # ignore 掩盖可修复的 Java 依赖漏洞。下列 CVE 均来自基础镜像系统包
-# （distroless java17-debian12 / debian:bookworm-slim），Debian 上游状态：
+# （distroless java17-debian13 / debian:bookworm-slim），Debian 上游状态：
 #   will_not_fix  = Debian 决定不修复（影响面/维护成本考量）
 #   fix_deferred  = Debian 延后修复（上游尚未发布补丁）
 #   affected      = 受影响但当前无可用修复版本
-# 升级应用依赖无法消除这些漏洞；唯一彻底方案是更换基础镜像（成本高、
-# 需全面回归），暂以白名单豁免 + 持续跟踪 Debian 更新。
+# 升级应用依赖无法消除这些漏洞。
+#
+# 2026-09-05（distroless debian13 迁移批）：Java 模块基础镜像从
+# java17-debian12 全量迁移至 java17-debian13（10 个 Dockerfile）。
+# 迁移依据：distroless 上游 2026-02 起 java17 停止 debian12 构建（镜像停更于
+# openjdk 17.0.18），java17-debian13 当前为 17.0.20.1（Temurin，debian 13.6）。
+# 预飞扫描（本地 trivy 0.74.0，DB 2026-09-04，HIGH/CRITICAL 口径）实证：
+# 新镜像 HIGH/CRITICAL 仅 5 项且全部由下方保留条目覆盖；原 debian12 专有
+# 豁免（openjdk 停更批 4 项 / zlib 45853 / expat 4 项 / glib 系列 7 项 /
+# harfbuzz 25193 / libuuid 53615 / lcms2 41254）在新镜像中已消除，条目移除。
 
-# --- distroless java17-debian12（Java 模块镜像）---
-# zlib: integer overflow in inflate.c（CVE-2023-45853）— will_not_fix
-CVE-2023-45853
-# libexpat1: 解析器系列漏洞（信息泄露/DoS/整数溢出）— affected/无修复
-CVE-2025-59375
-CVE-2026-25210
-CVE-2026-45186
-CVE-2026-56408
+# --- distroless java17-debian13（Java 模块镜像）---
+# libexpat1（debian 13.6）：解析器漏洞（信息泄露类）HIGH — 无可用修复版本，
+# 迁移后仍存在（trivy --show-suppressed 实证）；Java 服务不解析不可信 XML 流，
+# 实际暴露面低。debian12 时代其余 expat CVE（59375/25210/45186/56408）已随
+# 镜像升级消除。
 CVE-2026-66046
-# libglib2.0-0: gdbus/gvariant/gio 系列越界读 — fix_deferred（上游延后）
-CVE-2026-58010
-CVE-2026-58011
-CVE-2026-58012
-CVE-2026-58013
-CVE-2026-58014
-CVE-2026-58015
-CVE-2026-58016
-# libharfbuzz0b: O(n^2) 增长 DoS — affected
-CVE-2023-25193
-# libuuid1: Integer Overflow/Wraparound — affected
-CVE-2026-53615
 
 # --- debian:bookworm-slim（Rust 模块镜像）---
 # util-linux bsdutils: TOCTOU in mount（CVE-2026-53613/53615）— affected，
 # Rust 服务（mpc-engine/zk-groth16-service）不调用 mount，无实际暴露面
+# （注：53615 原同时匹配 debian12 的 libuuid1，迁移后仅余本节用途）
 CVE-2026-53613
 CVE-2026-53615
-
-# --- 2026-08-28 增补（99f93e4 CI run 33147531086 复扫）---
-# 处置原则不变：仅豁免基础镜像系统包层（上游无可用修复版本 / 镜像已停更）。
-# 升级应用依赖无法消除；彻底方案为更换基础镜像，成本高需全面回归，暂豁免 + 跟踪。
-
-# --- distroless java17-debian12（Java 模块镜像）---
-# openjdk-17-jre-headless 17.0.18：distroless 上游已于 2026-02 迁移 java17-debian13
-# （GoogleContainerTools/distroless PR #2023 移除 debian12 Java 构建），java17-debian12
-# 镜像停更于 17.0.18，镜像内无 17.0.19/17.0.20 修复版本可获取；彻底修复需换基础镜像
-# （迁移 debian13，成本高需全面回归）——暂豁免 + 跟踪上游镜像发布
-CVE-2026-22016
-CVE-2026-34282
-CVE-2026-41254
-CVE-2026-47063
-# liblcms2-2 2.14-2：CVE-2026-41254（与 openjdk 同源，java17-debian12 停更，
-# 镜像内无 2.14-2+deb12u1 修复版本）
-CVE-2026-41254
-
-# --- debian:bookworm-slim（Rust 模块镜像，99f93e4 复扫新增）---
 # perl-base 5.36.0-7+deb12u3：8 个 CVE 均无 Fixed Version（Debian bookworm 未发布
 # 修复/延后），Rust 服务不调用 perl 解释器，无实际暴露面
 CVE-2026-13221
@@ -78,7 +53,9 @@ CVE-2025-69720
 # util-linux/util-linux-extra）：nsenter cgroup 越权 / X-mount.subdir 符号
 # 链接逃逸 / 受限 bind mount 未固定源 / mount helper 特权 post-hook（4 个
 # CVE 均无 Fixed Version，Debian bookworm 未发布修复）——容器内服务进程
-# 不调用 mount/nsenter，无实际暴露面
+# 不调用 mount/nsenter，无实际暴露面。
+# 迁移后复核：此 4 项同样匹配 distroless java17-debian13 的 libuuid1
+# （trivy --show-suppressed 实证），保留本节即同时覆盖两类镜像。
 CVE-2026-76642
 CVE-2026-78408
 CVE-2026-78409

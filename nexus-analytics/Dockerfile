@@ -48,9 +48,9 @@ RUN find /workspace/nexus-analytics/build/libs -name '*.jar' \
     -exec cp {} /workspace/app.jar \;
 
 # === Stage 2: artifact (distroless nonroot, 无 ENTRYPOINT) ===
-# gcr.io/distroless/java17-debian12:nonroot 默认用户 nonroot (UID=65532)
+# gcr.io/distroless/java17-debian13:nonroot 默认用户 nonroot (UID=65532)
 # 无 shell / 无 curl / 无包管理器，满足非 root 要求
-FROM gcr.io/distroless/java17-debian12:nonroot
+FROM gcr.io/distroless/java17-debian13:nonroot
 WORKDIR /app
 COPY --from=builder /workspace/app.jar app.jar
 

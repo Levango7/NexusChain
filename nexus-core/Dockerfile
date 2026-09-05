@@ -8,7 +8,7 @@
 #   docker build -t nexus-core:2.1.0 -f nexus-core/Dockerfile .
 #
 # Stage 1 (builder): gradle:8.14-jdk17，编译产出 thin jar + 依赖 lib/
-# Stage 2 (runtime): gcr.io/distroless/java17-debian12:nonroot (UID=65532, 非 root)
+# Stage 2 (runtime): gcr.io/distroless/java17-debian13:nonroot (UID=65532, 非 root)
 #
 # 采用 thin jar + Class-Path manifest 方案（替代 fat jar）：
 #   - thin jar（~1MB）：仅含项目编译类 + META-INF/MANIFEST.MF（Class-Path: lib/*.jar）
@@ -85,9 +85,9 @@ RUN mkdir -p /app/leveldb /app/data && \
     chown -R 65532:65532 /app/leveldb /app/data
 
 # === Stage 2: runtime (distroless nonroot) ===
-# gcr.io/distroless/java17-debian12:nonroot 默认用户 nonroot (UID=65532)
+# gcr.io/distroless/java17-debian13:nonroot 默认用户 nonroot (UID=65532)
 # 无 shell / 无 curl / 无包管理器，攻击面最小，满足非 root 要求
-FROM gcr.io/distroless/java17-debian12:nonroot
+FROM gcr.io/distroless/java17-debian13:nonroot
 WORKDIR /app
 # thin jar：仅含项目类 + Class-Path manifest
 COPY --from=builder /workspace/app.jar app.jar
