@@ -155,17 +155,17 @@ spec:
               readOnly: true
             - name: mpc-tls
               mountPath: /etc/mpc/tls
-      # TLS 证书选择 init：按 POD_ORDINAL 从 Secret 扁平键
-      # （node-N.tls.crt / node-N.tls.key / ca.tls.crt）拷贝本方证书到
-      # /etc/mpc/tls/tls.crt|tls.key|ca.crt——容器内路径与 node.json
-      # 模板的 tls_cert/tls_key/tls_ca 对齐（K 批 kind 冒烟修正）。
-      - name: init-tls
-        image: busybox:1.36
-        command:
-          - /bin/sh
-          - -c
-          - |
-            set -eu
+        # TLS 证书选择 init：按 POD_ORDINAL 从 Secret 扁平键
+        # （node-N.tls.crt / node-N.tls.key / ca.tls.crt）拷贝本方证书到
+        # /etc/mpc/tls/tls.crt|tls.key|ca.crt——容器内路径与 node.json
+        # 模板的 tls_cert/tls_key/tls_ca 对齐（K 批 kind 冒烟修正）。
+        - name: init-tls
+          image: busybox:1.36
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
               ORDINAL="${POD_NAME##*-}"
               SRC="/etc/mpc/tls-src"
               DST="/etc/mpc/tls"
@@ -175,17 +175,17 @@ spec:
               cp "${SRC}/ca.tls.crt" "${DST}/ca.crt"
               chmod 0400 "${DST}/tls.crt" "${DST}/tls.key" "${DST}/ca.crt"
               echo "[init-tls] certs ready: $(ls -l ${DST})"
-        env:
-          - name: POD_NAME
-            valueFrom:
-              fieldRef:
-                fieldPath: metadata.name
-        volumeMounts:
-          - name: mpc-tls-src
-            mountPath: /etc/mpc/tls-src
-            readOnly: true
-          - name: mpc-tls
-            mountPath: /etc/mpc/tls
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          volumeMounts:
+            - name: mpc-tls-src
+              mountPath: /etc/mpc/tls-src
+              readOnly: true
+            - name: mpc-tls
+              mountPath: /etc/mpc/tls
       containers:
         - name: {{ .Chart.Name }}
           image: {{ .Values.image.repository | default (printf "%s/%s" .Values.global.imageRegistry .Chart.Name) }}:{{ .Values.image.tag | default .Values.global.env | default "latest" }}
