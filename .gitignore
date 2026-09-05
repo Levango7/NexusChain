@@ -124,6 +124,9 @@ local.env
 mpc-certs/
 mpc-engine/mpc-sessions/
 nexus-core/nexus-core/data-*/
+# start-mpc-cluster.sh 运行时生成（内嵌机器特定绝对证书路径 + 随机 storage_key）；
+# TOML 模板（node*.toml）已入库，JSON 由脚本按需生成
+mpc-engine/config/node*.json
 
 # P1-D6 安全加固：本地敏感配置覆盖文件（含明文凭据，禁止入库）
 # 开发者本地通过这些文件覆盖 ${VAR:-CHANGE_ME} 占位符，必须保留在本地
