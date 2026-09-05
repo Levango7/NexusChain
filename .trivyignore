@@ -72,6 +72,21 @@ CVE-2026-54369
 # libtinfo6 / ncurses-base / ncurses-bin 6.4-4：CVE-2025-69720 — 无 Fixed Version
 CVE-2025-69720
 
+# --- 2026-09-05 增补（b89417c CI run 33936954506 复扫）---
+# Debian bookworm-slim 基础镜像系统包（Trivy DB 上游更新后新扫出）：
+# util-linux 系（bsdutils/libblkid1/libmount1/libsmartcols1/libuuid1/mount/
+# util-linux/util-linux-extra）：nsenter cgroup 越权 / X-mount.subdir 符号
+# 链接逃逸 / 受限 bind mount 未固定源 / mount helper 特权 post-hook（4 个
+# CVE 均无 Fixed Version，Debian bookworm 未发布修复）——容器内服务进程
+# 不调用 mount/nsenter，无实际暴露面
+CVE-2026-76642
+CVE-2026-78408
+CVE-2026-78409
+CVE-2026-78410
+# libsystemd0 / libudev1 252.x：systemd 组件 HIGH（无 Fixed Version）——
+# 容器内不以 systemd 为 PID 1（各服务直接 exec 入口二进制），无暴露面
+CVE-2026-16742
+
 # --- 2026-09-01 增补（7895c03 CGGMP21 迁移批 CI run 33568312697）---
 # 处置原则首例：应用依赖层（Rust crate），非系统包。豁免依据与
 # mpc-engine/.cargo/audit.toml RUSTSEC-2025-0127 条目完全一致：
