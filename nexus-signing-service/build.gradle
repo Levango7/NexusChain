@@ -203,21 +203,21 @@ jar {
 
 test {
     useJUnitPlatform()
-    // MultiNodeMpcMockTest 需要 Nacos / Sentinel / Seata 等外部基础设施服务，
-    // 在无外部服务的单元测试环境中无法加载 Spring 上下文（预先存在的环境依赖问题）。
-    // 该测试应在集成测试环境（CI with Nacos）中运行，此处排除以避免构建失败。
+    // === 环境依赖型测试排除（CI check 恢复绿） ===
     //
-    // I 批新增：CggmpMpcE2EClusterTest 在 Windows 进程内 JVM 启 3 个 mpc-engine.exe
-    // 子进程做 CGGMP21 集群 E2E（I 批 commit 描述原文）。CI Linux runner 上无
-    // mpc-engine.exe 二进制——即使构建时拉 Linux 二进制，集群 spawn 子进程的
-    // 环境差异会让 E2E 测试必败（与 MultiNodeMpcMockTest 同型：单元测试环境无
-    // 集群依赖）。应在独立集成测试 job（已起 mpc-engine Linux 二进制 + 集群环境
-    // 变量）中跑；主 check 任务排除以恢复 CI 绿。
-    // Gradle 8.x JUnit 5 useJUnitPlatform 块不支持旧 DSL filter 语法
-    // （filter { excludeTestsMatching } 在 useJUnitPlatform 下被忽略），
-    // 改用 systemProperty 透传 JUnit 5 exclude.tags。
-    // E2E 测试本身应在 CggmpMpcE2EClusterTest 类声明处加 @Tag("cluster-e2e")
-    // 标记——本笔提交同时动测试类加注解，确保 systemProperty 生效。
+    // 1. MultiNodeMpcMockTest：需 Nacos / Sentinel / Seata 等外部基础设施，
+    //    无外部服务的单元测试环境无法加载 Spring 上下文（预先存在）。
+    // 2. CggmpMpcE2EClusterTest（I 批新增）：Windows 进程内 JVM 启 3 个
+    //    mpc-engine.exe 子进程做 CGGMP21 集群 E2E，路径硬编码
+    //    F:\Nexus\...——CI Linux runner 必报 ENOENT/IllegalState。
+    //    两测试均应在独立集成测试 job（集群环境就绪）中跑。
+    //
+    // Gradle 原生 exclude（按类名模式，对 JUnit Platform 生效——
+    // d201176 的 filter { excludeTestsMatching } 在 useJUnitPlatform 下
+    // 被忽略，CI 重跑证伪；exclude 是 Test 任务级 discover 过滤，可靠）：
+    exclude "**/MultiNodeMpcMockTest*"
+    exclude "**/CggmpMpcE2EClusterTest*"
+    // @Tag("cluster-e2e") + systemProperty 双保险（JUnit Platform 侧）：
     systemProperty 'junit.jupiter.exclude.tags', 'cluster-e2e'
 }
 
