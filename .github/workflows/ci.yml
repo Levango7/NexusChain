@@ -481,7 +481,14 @@ jobs:
         if: failure()
         run: |
           kubectl get all,pvc -n nexus || true
-          for p in 0 1 2; do kubectl logs -n nexus mpc-engine-$p || true; done
+          for p in 0 1 2; do
+            echo "=== init-config mpc-engine-$p ==="
+            kubectl logs -n nexus mpc-engine-$p -c init-config || true
+            echo "=== init-tls mpc-engine-$p ==="
+            kubectl logs -n nexus mpc-engine-$p -c init-tls || true
+            echo "=== mpc-engine-$p main ==="
+            kubectl logs -n nexus mpc-engine-$p -c mpc-engine || true
+          done
           helm get all mpc -n nexus || true
 
   # ============================================================

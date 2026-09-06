@@ -117,12 +117,15 @@ spec:
                 echo "[init-config] WARNING: STORAGE_KEY empty, mpc-engine will fail to decrypt sessions"
                 STORAGE_KEY_VAL="0000000000000000000000000000000000000000000000000000000000000000"
               fi
-              # envsubst 替换占位符 -> /app/config/node.json
-              export POD_ORDINAL="${ORDINAL}"
-              export PEERS_JSON="${PEERS_JSON}"
-              export STORAGE_KEY="${STORAGE_KEY_VAL}"
-              export STORAGE_KEY_VERSION="${STORAGE_KEY_VERSION_VAL}"
-              envsubst < /etc/mpc-config/node-json-template > /app/config/node.json
+              # 占位符替换 -> /app/config/node.json（busybox 无 envsubst——
+              # sed 双分隔符替换，${VAR} 形态的 4 个占位符逐一展开；
+              # STORAGE_KEY 为 64 hex 无特殊字符，PEERS_JSON 无 &（URL 无
+              # 查询参数），sed 替换安全）
+              sed -e "s/\${POD_ORDINAL}/${ORDINAL}/g" \
+                  -e "s/\${PEERS_JSON}/${PEERS_JSON}/g" \
+                  -e "s/\${STORAGE_KEY}/${STORAGE_KEY_VAL}/g" \
+                  -e "s/\${STORAGE_KEY_VERSION}/${STORAGE_KEY_VERSION_VAL}/g" \
+                  /etc/mpc-config/node-json-template > /app/config/node.json
               echo "[init-config] node.json generated:"
               cat /app/config/node.json
           env:
