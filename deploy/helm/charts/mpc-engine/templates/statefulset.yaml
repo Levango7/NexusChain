@@ -236,9 +236,14 @@ spec:
             {{- toYaml .Values.resources | nindent 12 }}
           {{- if .Values.probes.liveness.enabled }}
           livenessProbe:
+            {{- if eq (.Values.probes.type | default "tcp") "grpc" }}
             grpc:
-              port: {{ .Values.probes.liveness.grpc.port }}
-              service: {{ .Values.probes.liveness.grpc.service | quote }}
+              port: {{ .Values.probes.liveness.port }}
+              service: "default"
+            {{- else }}
+            tcpSocket:
+              port: {{ .Values.probes.liveness.port }}
+            {{- end }}
             initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
             timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
@@ -246,9 +251,14 @@ spec:
           {{- end }}
           {{- if .Values.probes.readiness.enabled }}
           readinessProbe:
+            {{- if eq (.Values.probes.type | default "tcp") "grpc" }}
             grpc:
-              port: {{ .Values.probes.readiness.grpc.port }}
-              service: {{ .Values.probes.readiness.grpc.service | quote }}
+              port: {{ .Values.probes.readiness.port }}
+              service: "default"
+            {{- else }}
+            tcpSocket:
+              port: {{ .Values.probes.readiness.port }}
+            {{- end }}
             initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
             timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
@@ -256,9 +266,14 @@ spec:
           {{- end }}
           {{- if .Values.probes.startup.enabled }}
           startupProbe:
+            {{- if eq (.Values.probes.type | default "tcp") "grpc" }}
             grpc:
-              port: {{ .Values.probes.startup.grpc.port }}
-              service: {{ .Values.probes.startup.grpc.service | quote }}
+              port: {{ .Values.probes.startup.port }}
+              service: "default"
+            {{- else }}
+            tcpSocket:
+              port: {{ .Values.probes.startup.port }}
+            {{- end }}
             initialDelaySeconds: {{ .Values.probes.startup.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.startup.periodSeconds }}
             failureThreshold: {{ .Values.probes.startup.failureThreshold }}

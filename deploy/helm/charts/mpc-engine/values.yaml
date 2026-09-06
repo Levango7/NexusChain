@@ -76,30 +76,29 @@ podAntiAffinity:
   mode: hard
 
 probes:
+  # probe 类型：grpc（K8s 原生 gRPC health probe）/ tcp（端口连通）。
+  # mTLS 模式的引擎要求客户端证书——原生 grpc probe 不带证书会被
+  # 引擎正确拒绝 → Pod 永不 Ready（kind 冒烟 c708870 轮实证三 Pod
+  # Running 但 0/1）。mTLS 部署用 tcp 探端口活性；真生产要 gRPC 级
+  # 探活须部署带证书的 grpc-health-probe sidecar（超本 chart 范围）。
+  type: tcp
   liveness:
     enabled: true
-    # gRPC health probe（需 grpc-health-probe 二进制；K8s 1.24+ 原生支持 grpc probe）
-    grpc:
-      port: 50051
-      service: default
+    port: 50051
     initialDelaySeconds: 20
     periodSeconds: 30
     timeoutSeconds: 5
     failureThreshold: 3
   readiness:
     enabled: true
-    grpc:
-      port: 50051
-      service: default
+    port: 50051
     initialDelaySeconds: 10
     periodSeconds: 10
     timeoutSeconds: 3
     failureThreshold: 3
   startup:
     enabled: true
-    grpc:
-      port: 50051
-      service: default
+    port: 50051
     initialDelaySeconds: 0
     periodSeconds: 10
     failureThreshold: 30
