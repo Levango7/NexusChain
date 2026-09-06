@@ -103,24 +103,24 @@ spec:
             - -c
             - |
               set -eu
-              # 从 pod 名解析 ordinal：mpc-engine-N -> N
+              # resolve ordinal from pod name: mpc-engine-N -> N
               POD_NAME="${POD_NAME}"
               ORDINAL="${POD_NAME##*-}"
               echo "[init-config] POD_NAME=${POD_NAME} ORDINAL=${ORDINAL}"
-              # 生成 peers JSON（排除本节点的其他参与方端点）
+              # generate peers JSON (exclude self endpoints)
               PEERS_JSON="$(sh /etc/mpc-config/gen-peers-sh)"
               echo "[init-config] PEERS_JSON=${PEERS_JSON}"
-              # 读取 storage_key / storage_key_version（从 Secret 注入的环境变量）
+              # storage_key / storage_key_version from Secret-injected env
               STORAGE_KEY_VAL="${STORAGE_KEY:-}"
               STORAGE_KEY_VERSION_VAL="${STORAGE_KEY_VERSION:-1}"
               if [ -z "${STORAGE_KEY_VAL}" ]; then
                 echo "[init-config] WARNING: STORAGE_KEY empty, mpc-engine will fail to decrypt sessions"
                 STORAGE_KEY_VAL="0000000000000000000000000000000000000000000000000000000000000000"
               fi
-              # 占位符替换 -> /app/config/node.json（busybox 无 envsubst、
-              # 其 sed 不支持 \$——改用 | 分隔符 + 单引号模式（${...} 在 BRE
-              # 中间位是字面量；替换值含 /（https:// URL）故不能用 / 分隔；
-              # JSON 值不含 | 与 &）
+              # placeholder substitution -> /app/config/node.json
+              # (busybox has no envsubst; busybox sed rejects \$; use single-quoted
+              #  literal ${VAR} patterns + | delimiter: replacement values contain
+              #  / in https:// URLs; values contain no | and no &)
               sed -e 's|${POD_ORDINAL}|'"${ORDINAL}"'|g' \
                   -e 's|${PEERS_JSON}|'"${PEERS_JSON}"'|g' \
                   -e 's|${STORAGE_KEY}|'"${STORAGE_KEY_VAL}"'|g' \
