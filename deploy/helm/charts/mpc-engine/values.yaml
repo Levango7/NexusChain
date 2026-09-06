@@ -128,7 +128,7 @@ config:
       "peers": ${PEERS_JSON},
       "storage_key": "${STORAGE_KEY}",
       "storage_key_version": ${STORAGE_KEY_VERSION},
-      "storage_key_source": "secret",
+      "storage_key_source": "plain",
       "tls_cert": "/etc/mpc/tls/tls.crt",
       "tls_key": "/etc/mpc/tls/tls.key",
       "tls_ca": "/etc/mpc/tls/ca.crt"
