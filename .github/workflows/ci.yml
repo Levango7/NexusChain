@@ -481,6 +481,7 @@ jobs:
         if: failure()
         run: |
           kubectl get all,pvc -n nexus || true
+          kubectl describe pod -n nexus mpc-engine-0 || true
           for p in 0 1 2; do
             echo "=== init-config mpc-engine-$p ==="
             kubectl logs -n nexus mpc-engine-$p -c init-config || true
