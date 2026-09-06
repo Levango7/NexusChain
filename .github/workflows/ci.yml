@@ -443,6 +443,7 @@ jobs:
             --set image.repository=mpc-engine \
             --set image.tag=kind-smoke \
             --set image.pullPolicy=Never \
+            --set serviceMonitor.enabled=false \
             --set storageKey=4242424242424242424242424242424242424242424242424242424242424242
           rm -f /tmp/mpc-tls-values.yaml
 

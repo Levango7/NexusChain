@@ -164,9 +164,20 @@ public class CggmpMpcE2EClusterTest {
             io.grpc.netty.shaded.io.netty.handler.ssl.SslContext clientSsl =
                     org.nexus.signing.mpc.transport.GrpcTlsContextFactory.buildClientSslContext(
                             trustCertPath, clientCertPath, clientKeyPath);
+            // CI 长尾修复（2026-09-06）：keygen→aux 阶段间隙约 30s 无 RPC 时，
+            // NettyChannelBuilder 默认 idleTimeout(30s) 关闭连接——下一调用
+            // （startAux party1）落在已关连接上报 UNKNOWN/HTTP status 200、
+            // 且重连后的请求约 30s 后才到引擎（ab91ea5 CI run 33998883106
+            // 三节点日志时间线实证：party1 StartAux 23:55:16 才到而 party0
+            // 23:54:45 已回）。显式 keepalive + 禁 idle 修复；本地无 JDK
+            // 环境（Corretto 目录消失），由 CI 实证。
             ManagedChannel ch = NettyChannelBuilder
                     .forAddress("127.0.0.1", port)
                     .overrideAuthority("localhost")
+                    .keepAliveTime(10, java.util.concurrent.TimeUnit.SECONDS)
+                    .keepAliveTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+                    .keepAliveWithoutCalls(true)
+                    .idleTimeout(java.util.concurrent.TimeUnit.DAYS.toSeconds(1), java.util.concurrent.TimeUnit.SECONDS)
                     .sslContext(clientSsl)
                     .build();
             // 注入 Bearer auth（与 mpc-engine AuthInterceptor 契约：MPC_AUTH_TOKEN=nexus-mpc-test-token）
