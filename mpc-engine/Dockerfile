@@ -31,8 +31,11 @@ WORKDIR /app
 COPY . .
 # CI 构建上下文为 repo 根目录（Java 模块需根级 gradlew/build.gradle），
 # Cargo.toml 在 mpc-engine/ 子目录，需切换后构建。
+# --features tls：K8s 生产路径 MPC_REQUIRE_TLS=true fail-closed——无 tls
+# feature 的二进制直接拒启（main.rs:301）。此前无 --features 构建的镜像
+# 是"能构建不能跑"的缺陷镜像（kind 冒烟 5dce903 轮 CrashLoop 实证）。
 WORKDIR /app/mpc-engine
-RUN cargo build --release
+RUN cargo build --release --features tls
 
 # === 运行阶段 ===
 FROM debian:bookworm-slim
