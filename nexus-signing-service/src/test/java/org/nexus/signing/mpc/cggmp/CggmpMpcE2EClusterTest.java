@@ -255,7 +255,7 @@ public class CggmpMpcE2EClusterTest {
             }
             List<CgPumpResult> keygenResults = new ArrayList<>();
             for (int i = 0; i < n; i++) {
-                CgPumpResult r = keygenFutures.get(i).get(120, java.util.concurrent.TimeUnit.SECONDS);
+                CgPumpResult r = keygenFutures.get(i).get(240, java.util.concurrent.TimeUnit.SECONDS);
                 assertTrue(r.isSuccess(), "keygen party " + i + " failed: " + r.getError());
                 assertTrue(r.isFinished(), "keygen party " + i + " not finished");
                 keygenResults.add(r);
@@ -301,7 +301,7 @@ public class CggmpMpcE2EClusterTest {
                         orchestrators.get(idx).runKeygen(sid, 0, idx, n, t)));
             }
             for (int i = 0; i < n; i++) {
-                CgPumpResult r = futures.get(i).get(120, java.util.concurrent.TimeUnit.SECONDS);
+                CgPumpResult r = futures.get(i).get(240, java.util.concurrent.TimeUnit.SECONDS);
                 assertTrue(r.isSuccess());
                 assertTrue(r.isFinished());
             }
@@ -357,12 +357,34 @@ public class CggmpMpcE2EClusterTest {
                     "agg pubkey mismatch party " + i);
         }
 
-        // ---------- Phase 2: aux——三方 start 串行，再统一循环 ----------
-        List<CgPumpResult> auxStates = new ArrayList<>();
-        for (int i = 0; i < n; i++) {
-            CgPumpResult r = partyClients.get(i).startAux(sid, 0, i, n);
-            assertTrue(r.isSuccess(), "start aux party " + i + " failed: " + r.getError());
-            auxStates.add(r);
+        // ---------- Phase 2: aux——三方 start 并发（三轮 CI 实证修正） ----------
+        // aux 首轮含 PregeneratedPrimes 安全素数生成（2048bit，CI 慢机每方
+        // ~80s）——串行 start 会把 3×80s 叠加成 ~4min，party2 的 startAux
+        // 发起时 party0 的连接已空闲>30s 报 HTTP 200 UNKNOWN（34024439200
+        // 轮三节点日志：23.6s/43.9s/46:39 阶梯到达）。并发 start = 三方
+        // 并行算素数（总时长 = max 而非 sum），且连接全程活跃无空闲窗口。
+        // 服务端 StartAux 幂等守卫（registry 已建状态机跳过）容忍并发重试；
+        // clear_session 阶段边界在首方 start 时清一次池——并发方首波 outgoing
+        // 在 start 全部返回后才进入 pumpAll 循环发布，时序安全。
+        java.util.concurrent.ExecutorService auxExec =
+                java.util.concurrent.Executors.newFixedThreadPool(n);
+        List<CgPumpResult> auxStates;
+        try {
+            List<java.util.concurrent.Future<CgPumpResult>> auxFutures = new ArrayList<>();
+            for (int i = 0; i < n; i++) {
+                final int idx = i;
+                auxFutures.add(auxExec.submit(() ->
+                        partyClients.get(idx).startAux(sid, 0, idx, n)));
+            }
+            auxStates = new ArrayList<>();
+            for (int i = 0; i < n; i++) {
+                CgPumpResult r = auxFutures.get(i).get(240, java.util.concurrent.TimeUnit.SECONDS);
+                assertTrue(r.isSuccess(), "start aux party " + i + " failed: " + r.getError());
+                auxStates.add(r);
+            }
+        } finally {
+            auxExec.shutdown();
+            auxExec.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS);
         }
         auxStates = pumpAll(auxStates, sid, allParties(n), false, "aux");
         for (int i = 0; i < n; i++) {
