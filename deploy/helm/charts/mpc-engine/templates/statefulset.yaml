@@ -107,6 +107,11 @@ spec:
               POD_NAME="${POD_NAME}"
               ORDINAL="${POD_NAME##*-}"
               echo "[init-config] POD_NAME=${POD_NAME} ORDINAL=${ORDINAL}"
+              # export ordinal BEFORE gen-peers-sh (it reads POD_ORDINAL from env
+              #  to exclude self from the peers list) — the sed rewrite dropped
+              #  this export and pods 1/2 fell back to ordinal 0, keeping self
+              #  in peers; config.rs rejects self (387ca49 round kubelet events)
+              export POD_ORDINAL="${ORDINAL}"
               # generate peers JSON (exclude self endpoints)
               PEERS_JSON="$(sh /etc/mpc-config/gen-peers-sh)"
               echo "[init-config] PEERS_JSON=${PEERS_JSON}"
