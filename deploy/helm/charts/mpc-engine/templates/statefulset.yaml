@@ -223,8 +223,9 @@ spec:
                   name: {{ if .Values.secrets.sealedSecretName }}{{ .Values.secrets.sealedSecretName }}{{ else }}{{ printf "%s-secret" .Chart.Name }}{{ end }}
                   key: storage-key-version
                   optional: true
-              # 兜底：未设 sealedSecretName 或 SealedSecret 缺此键时回退明文 env
-              value: {{ .Values.storageKeyVersion | default "1" | quote }}
+              # 兜底（明文模式 / SealedSecret 缺键时回退）：value 字段须空，
+              # 由 valueFrom optional 决定——若引用的 Secret 缺此键则 env 为空字符串。
+              # 明文模式下，Pod env 缺此键时，引擎 fallback 取默认 "1"（见 main.rs）。
             {{- if .Values.authToken }}
             - name: MPC_AUTH_TOKEN
               valueFrom:
