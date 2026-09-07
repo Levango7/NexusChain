@@ -16,5 +16,4 @@ namespace: nexus-dev
 labels:
   - includeSelectors: false
     pairs:
-      - key: nexus-chain.io/env
-        value: dev
+      nexus-chain.io/env: dev

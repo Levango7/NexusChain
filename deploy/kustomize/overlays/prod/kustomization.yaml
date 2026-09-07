@@ -9,5 +9,4 @@ namespace: nexus
 labels:
   - includeSelectors: false
     pairs:
-      - key: nexus-chain.io/env
-        value: prod
+      nexus-chain.io/env: prod
