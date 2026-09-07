@@ -1,0 +1,28 @@
+# deploy/kustomize/
+# ============================================================================
+# 多环境 Kustomize overlay 集合（PLAN-002 Step B）
+#
+# **真相源仍是 `deploy/helm/values-{dev,staging,prod}.yaml`**——Kustomize
+# 只在 namespace + image tag + sealedSecretName 引用 + 环境标签这四维做
+# patch。三个 overlay 与 values-*.yaml 一一对应（dev/staging/prod）。
+#
+# 用法：
+#   # 1. 渲染 helm 模板到本地
+#   helm template nexus-chain deploy/helm/ \
+#     -f deploy/helm/values-<env>.yaml > /tmp/rendered.yaml
+#   # 2. 套用 Kustomize overlay
+#   kubectl kustomize deploy/kustomize/overlays/<env> | kubectl apply -f -
+#   # 或者：合并渲染（更安全）
+#   helm template ... | kubectl kustomize ... | kubectl apply -f -
+#
+# 为什么不直接 Kustomize 全部——Helm 模板生成已含复杂逻辑（envsubst、
+# JSON 解析、tpl 继承），用 kustomize 重新渲染是一次大重构。**Kustomize
+# 仅补环境差异**——保持简单。
+# ============================================================================
+
+resources:
+  # 路径需与你的 helm template 输出路径匹配
+  # （CI 阶段用 helm template 输出到 /tmp/rendered.yaml 后引用）
+  # 实际 Kustomize 不解析 helm 模板；这里 resource 仅作文档参考
+  # - /tmp/rendered.yaml
+  # 真实部署合并使用：见 docs/deploy/kustomize.md

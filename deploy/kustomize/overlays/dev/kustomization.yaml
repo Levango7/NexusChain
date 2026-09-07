@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# dev overlay（PLAN-002 Step B）
+# 配套 helm template 使用：helm template deploy/helm/ -f values-dev.yaml
+#   | kubectl kustomize deploy/kustomize/overlays/dev
+#
+# 实际差异（Kustomize 仅做**轻量环境层 patch**——重型差异由 values-dev.yaml
+# 表达：replicas / resources / HPA / PDB / feature toggles 等）：
+#   1. namespace: nexus-dev
+#   2. env 标签: nexus-chain.io/env=dev
+# 镜像 tag 锁定**故意不在 Kustomize 表达**——它已经在 values-dev.yaml（tag=latest）
+# 控制。Kustomize 重复 patch 容易出现"values 与 overlay 错位"——单源真相。
+namespace: nexus-dev
+
+labels:
+  - includeSelectors: false
+    pairs:
+      - key: nexus-chain.io/env
+        value: dev

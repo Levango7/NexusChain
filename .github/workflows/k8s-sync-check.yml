@@ -185,6 +185,24 @@ jobs:
           fi
           echo ">>> 无镜像版本漂移；结构差异见上方报告（仅告警）"
 
+      # PLAN-002 Step B: Kustomize overlay 验证（多环境部署入口）
+      # 三套 overlay（dev/staging/prod）只做 namespace + image tag + env label
+      # 差异——本质是声明式 GitOps 入口的 precondition。kubectl 内置 kustomize，
+      # 此 step 不依赖 helm——独立验证 kustomization 合法性。
+      - name: Kustomize overlay 验证
+        run: |
+          set -e
+          for env in dev staging prod; do
+            echo ">>> kubectl kustomize deploy/kustomize/overlays/${env}"
+            kubectl kustomize "deploy/kustomize/overlays/${env}" > "/tmp/kustomize-${env}.yaml"
+            # 文件行数 > 0（不是空模板）= 渲染成功
+            [ -s "/tmp/kustomize-${env}.yaml" ] || { echo "FAIL: empty kustomize output for ${env}"; exit 1; }
+            # 验证环境标签确实在（dev→env=dev 等）
+            grep -q "nexus-chain.io/env: ${env}" "/tmp/kustomize-${env}.yaml" || \
+              { echo "FAIL: env label not applied for ${env}"; exit 1; }
+            echo "  ✓ ${env} overlay renders + env label applied"
+          done
+
       - name: 上传对比报告
         if: always()
         # GitHub 官方 action，使用主版本标签 v4
