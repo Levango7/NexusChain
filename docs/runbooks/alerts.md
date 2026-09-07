@@ -48,6 +48,25 @@ kubectl get prometheusrules -n nexus
 # 应看到 nexuschain-alerts CRD
 ```
 
+## 已知限制（诚实标注——2026-09-07 完善批）
+
+1. **namespace 硬编码 `nexus`**：所有告警表达式的 `namespace="nexus"`
+   仅匹配 prod 命名空间。dev（nexus-dev）/ staging（nexus-staging）
+   集群 apply 同一文件**不会触发任何告警**——多集群多命名空间部署
+   需要按环境改写表达式（或用 PrometheusRule 的 `excludedFromEnforcement`/
+   生成器参数化——留待需要时做）。
+
+2. **`MpcEngineNotReady` 表达式过宽**：`kube_pod_status_ready{namespace="nexus"} == 0`
+   匹配命名空间内**所有**非 Ready Pod（不只 mpc-engine）——nexus namespace
+   只跑 mpc-engine + 各 Java 服务，Java 服务 Pod 挂也会触发此"mpc"告警
+   （语义有歧义但不会漏报）。精确化需加 `pod=~"mpc-engine-.*"` 匹配——
+   因 kube-state-metrics 的 label 名因版本而异（pod vs pod_name），留待
+   真集群验证时对齐 label 后收窄。
+
+3. **块高停滞类告警缺失**：链停最直接的信号（block height 不增长）
+   需要 nexus-core 暴露 `/actuator/prometheus`——2.x TODO。当前用
+   mpc-engine CrashLoop 作**间接**信号（5min 延迟的近似）。
+
 ## Alertmanager 路由（未做，留待 3.x）
 
 告警发到 Alertmanager 后**目前会按 default receiver 走**（无路由配置）——

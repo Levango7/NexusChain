@@ -2,8 +2,6 @@
 
 本文件记录 NexusChain 各版本的变更。
 
-## [Unreleased]
-
 ## [2.50.0] - 2026-09-07
 
 ### K 批发布闭环（PLAN-002——可上 K8s 生产的基础设施就绪）
@@ -57,6 +55,20 @@ Scan / Pipeline 全绿，commit 82eb96a）。
   在 Kustomize v1beta1 是 `map[string]string`，不是 list of {key,value}
 - 修复 Kustomize overlay 验证 step 因 labels 语法错导致 4143413 轮 K8s Sync
   Check job 失败
+- **基线完善批（post-tag health scan）**：v2.50.0 打 tag 后健康扫描发现
+  6 处 CI 验证不到的盲点，随 v2.50.1 修正——
+  - values.yaml 两个 `secrets:` 键冲突（sealedSecretName 被 YAML 后键
+    静默覆盖，文件内从未生效）→ 合并为单一 secrets 块
+  - 生产 SealedSecret 模式零测试覆盖 → values-prod.yaml 设
+    `mpc-engine.secrets.sealedSecretName: mpc-engine-secret` + CI 新增
+    "SealedSecret 模式渲染断言" step（断言 prod 渲染无 stringData +
+    env 引用正确）
+  - CHANGELOG 双 `[Unreleased]` 头结构错乱 → 修正
+  - version.properties 漂移（2.30.0 vs CHANGELOG 2.50.0——2.30→2.40
+    历史漂移病根）→ 对齐 + bump-version.sh 新增第 8 步覆盖此文件
+  - alerts.md 补"已知限制"（namespace 硬编码 nexus 仅 prod 生效 /
+    MpcEngineNotReady 表达式过宽 / 块高告警缺失的替代信号说明）
+  - kustomize.md 诚实标注当前定位（GitOps 预备设施，非实际部署路径）
 
 ## [Unreleased]
 

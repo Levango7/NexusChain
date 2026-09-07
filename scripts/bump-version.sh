@@ -13,6 +13,8 @@
 #   5. deploy/helm/values-prod.yaml    - image tag
 #   6. deploy/k8s/SECRET-MANAGEMENT.md - 标题版本
 #   7. nexus-core application.properties - nexus.version
+#   8. nexus-core version.properties    - versionNumber（2026-09-07 补——
+#      此前脚本遗漏导致与 CHANGELOG 漂移的历史病根）
 #
 # 前置：在项目根目录执行
 # ============================================================
@@ -96,11 +98,21 @@ if [ -f "$PROPS_FILE" ]; then
   rm -f "$PROPS_FILE.bak"
 fi
 
+# 8. nexus-core version.properties（versionNumber='X.Y.Z'——单引号 Java properties 格式）
+#    2026-09-07 完善批补：此前脚本不覆盖此文件，导致它与 CHANGELOG 漂移
+#    （2.30 vs 2.40 的历史漂移即此单点遗漏；治根）
+echo "[8/8] 更新 nexus-core version.properties versionNumber ..."
+VERSION_PROPS="nexus-core/nexus-core/src/main/resources/version.properties"
+if [ -f "$VERSION_PROPS" ]; then
+  sed -i.bak "s|^versionNumber='[0-9]*\.[0-9]*\.[0-9]*'|versionNumber='${NEW_VERSION}'|" "$VERSION_PROPS"
+  rm -f "$VERSION_PROPS.bak"
+fi
+
 echo "============================================================"
 echo "✅ 版本号已统一升级至 v${NEW_VERSION}"
 echo "============================================================"
 echo ""
 echo "请执行以下验证："
-echo "  1. grep -rn '${NEW_VERSION}' build.gradle deploy/ nexus-core/nexus-core/src/main/resources/application.properties"
-echo "  2. grep -rn '1\.0\.0\|2\.0\.0' build.gradle deploy/ nexus-core/nexus-core/src/main/resources/application.properties  # 应无残留"
+echo "  1. grep -rn '${NEW_VERSION}' build.gradle deploy/ nexus-core/nexus-core/src/main/resources/"
+echo "  2. grep -rn 'versionNumber' nexus-core/nexus-core/src/main/resources/version.properties  # 应为 ${NEW_VERSION}"
 echo "  3. gradle.bat build -x test  # 编译验证"

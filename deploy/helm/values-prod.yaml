@@ -148,3 +148,16 @@ nexus-wallet-service:
       labelSelector:
         matchLabels:
           app.kubernetes.io/name: nexus-wallet-service
+
+# -- mpc-engine（MPC 密码学引擎，prod 独有覆盖，PLAN-002 Step A）
+# 生产密钥经 sealed-secrets 注入：
+#   * sealedSecretName 非空 → chart secret.yaml 仅渲染元数据（无 stringData），
+#     Pod env 经 secretKeyRef 引用集群内 controller 解密后的同名 Secret
+#   * 集群前置：sealed-secrets controller 已部署 + 管理员已用 kubeseal
+#     生成 SealedSecret（commit 覆盖 deploy/k8s/30-sealed-secret-mpc-engine.yaml
+#     占位文件），见 docs/runbooks/sealed-secrets.md
+#   * storageKey 不在此设置——明文路径生产禁用（防误用；紧急明文冒烟
+#     请用 dev/staging 环境）
+mpc-engine:
+  secrets:
+    sealedSecretName: mpc-engine-secret

@@ -225,12 +225,36 @@ jobs:
           if [ "$cnt" -lt 4 ]; then
             echo "FAIL: 告警数 $cnt < 4（设计稿 4 条）"; exit 1
           fi
-          echo "  ✓ $cnt 条告警（>= 设计稿 4 条）"
+          echo "  ✓ $cnt 条告警（>= 设计稿 4 条"
           # 3) for: 必填——避免抖动误报
           missing=$(grep -c "for:" deploy/k8s/50-prometheus-rules.yaml || true)
           if [ "$missing" -lt "$cnt" ]; then
             echo "FAIL: 部分 alert 缺少 for: 字段"; exit 1
           fi
+
+      # PLAN-002 完善-修2：生产 SealedSecret 模式渲染断言——values-prod.yaml
+      # 设 sealedSecretName 后，secret.yaml 必须【只渲染元数据、不写 stringData】
+      # （否则明文密钥会经 values 泄漏到渲染产物）。此断言以前不存在——
+      # sealed 模式从未被任何测试执行（健康扫描发现的盲点）。
+      - name: SealedSecret 模式渲染断言（prod）
+        run: |
+          set -e
+          helm template mpc-prod deploy/helm/charts/mpc-engine \
+            -f deploy/helm/values-prod.yaml \
+            > /tmp/mpc-prod-rendered.yaml
+          # 断言 1：渲染产物中 mpc-engine Secret 不含 stringData（生产模式仅元数据）
+          if grep -q "stringData" /tmp/mpc-prod-rendered.yaml; then
+            echo "FAIL: prod 模式 secret 渲染仍含 stringData——明文泄漏路径未关闭"
+            exit 1
+          fi
+          # 断言 2：sealedSecretName 确实在 values-prod 中接线（防误删）
+          grep -q "sealedSecretName: mpc-engine-secret" deploy/helm/values-prod.yaml \
+            || { echo "FAIL: values-prod.yaml 未设 sealedSecretName"; exit 1; }
+          # 断言 3：statefulset 的 env secretKeyRef 指向 mpc-engine-secret
+          # （Pod 经它读 controller 解密后的同名 Secret）
+          grep -q "name: mpc-engine-secret" /tmp/mpc-prod-rendered.yaml \
+            || { echo "FAIL: 渲染产物中 env secretKeyRef 未指向 mpc-engine-secret"; exit 1; }
+          echo "  ✓ prod SealedSecret 模式：无 stringData + env 引用 mpc-engine-secret"
 
       - name: 上传对比报告
         if: always()

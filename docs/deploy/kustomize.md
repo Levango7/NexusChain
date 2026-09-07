@@ -1,5 +1,22 @@
 # Kustomize 多环境部署
 
+## 当前定位（诚实标注——2026-09-07 完善批）
+
+**本路径目前是 GitOps 预备设施，不是实际部署路径。** 三套 overlay 没有
+`resources:` 引用任何 workload——`kubectl kustomize` 渲染的只有空
+kustomization 骨架 + 标签注入逻辑，**不含任何真实 K8s 对象**。当前所有
+实际部署（kind 冒烟 / 未来 staging）都走 `helm install/template` 路径。
+
+**它的价值**：
+1. CI 有 "Kustomize overlay 验证" step（`k8s-sync-check.yml`）——保证
+   kustomization 语法合法 + env 标签接线正确，**未来接 GitOps 时不踩语法坑**
+2. 未来 ArgoCD 接入时，在 overlay 的 `resources:` 加一行引用 helm 渲染
+   产物（或用 ArgoCD 的 helm source），namespace/env 标签 patch 即刻生效
+3. 多环境差异的结构化存档（一眼看出 dev/staging/prod 只差什么）
+
+**它不做什么**：不渲染 workload、不替代 helm、不影响任何现有部署——
+纯"未来入口"性质。
+
 ## 设计
 
 3 套 overlay（dev/staging/prod）作为未来 GitOps（ArgoCD/Flux）的入口。
