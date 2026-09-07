@@ -203,6 +203,35 @@ jobs:
             echo "  ✓ ${env} overlay renders + env label applied"
           done
 
+      # PLAN-002 Step C: PrometheusRule 静态校验（YAML 结构 + 告警数）
+      # kubectl apply --dry-run=client 验 CRD schema——若集群无
+      # monitoring.coreos.com CRD 则跳过。promtool 校验 PromQL 表达式
+      # 需二进制安装（GitHub release 1 步），不强制——应用 prom metrics
+      # 大部分 TODO（2.x 阶段补），告警表达式暂只基于 kube_* 通用 metrics。
+      - name: PrometheusRule 静态校验
+        run: |
+          set -e
+          # 1) YAML 语法 + CRD schema 校验（若 kubectl 集群访问可用）
+          if kubectl apply --dry-run=client -f deploy/k8s/50-prometheus-rules.yaml >/dev/null 2>&1; then
+            echo "  ✓ YAML 语法 + CRD schema 校验通过"
+          else
+            echo "  WARN: kubectl dry-run 失败（无 CRD 或无权限），仅做 YAML 解析"
+            python3 -c "import yaml; yaml.safe_load(open('deploy/k8s/50-prometheus-rules.yaml'))" || \
+              python -c "import yaml; yaml.safe_load(open('deploy/k8s/50-prometheus-rules.yaml'))" || \
+              { echo "FAIL: even YAML parse 失败"; exit 1; }
+          fi
+          # 2) 告警数断言（PLAN-002 设计稿 4 条 critical/warning）
+          cnt=$(grep -c "^    - alert:" deploy/k8s/50-prometheus-rules.yaml)
+          if [ "$cnt" -lt 4 ]; then
+            echo "FAIL: 告警数 $cnt < 4（设计稿 4 条）"; exit 1
+          fi
+          echo "  ✓ $cnt 条告警（>= 设计稿 4 条）"
+          # 3) for: 必填——避免抖动误报
+          missing=$(grep -c "for:" deploy/k8s/50-prometheus-rules.yaml || true)
+          if [ "$missing" -lt "$cnt" ]; then
+            echo "FAIL: 部分 alert 缺少 for: 字段"; exit 1
+          fi
+
       - name: 上传对比报告
         if: always()
         # GitHub 官方 action，使用主版本标签 v4

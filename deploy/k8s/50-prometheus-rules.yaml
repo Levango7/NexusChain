@@ -1,0 +1,101 @@
+# ============================================================================
+# PrometheusRule: NexusChain 关键告警（PLAN-002 Step C）
+# ============================================================================
+# 依赖：kube-prometheus-stack（Prometheus Operator + PrometheusRule CRD）
+# 部署：kubectl apply -f deploy/k8s/50-prometheus-rules.yaml
+# 验证：promtool check rules deploy/k8s/50-prometheus-rules.yaml
+#
+# 设计原则（避免告警疲劳）：
+#   1. 起步只 5 条 critical/warning——"链停 / 服务不可用"级别
+#   2. 全部 for: 5m（避免抖动误报）
+#   3. 用 `kube_*` 系列兜底（不依赖应用暴露 prom metrics）—— 2.x 阶段
+#      逐步补应用 metrics 再细化
+#   4. 标签统一（severity + component + service）便于 Slack/PagerDuty 路由
+# ============================================================================
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: nexuschain-alerts
+  namespace: nexus
+  labels:
+    app.kubernetes.io/part-of: nexus
+    nexus-chain.io/component: alerting
+spec:
+  groups:
+  # ---- 链路核心（PLAN-002 Step C 起步：仅 MPC/服务层告警）----
+  # 块高停滞需 nexus-core 暴露 prom metrics（# TODO(stub) 待 2.x 补）——
+  # 现阶段用 mpc-engine CrashLoop 作为"链停摆"间接信号（mCrashLoop
+  # 一定时间内 == 5+ 节点的签名服务挂掉 == 新块无法签名 == 链停摆）。
+  # 设计权衡：宁可 5 分钟延迟的近似告警（mpc-engine CrashLoop）也不要
+  # "永远不触发的精确告警"（block height 永久不变 0）。
+  #
+  # 升级路径（PLAN-002 Step C 后续或 3.x）：
+  #   1. nexus-core 暴露 /actuator/prometheus（Spring Boot Actuator）
+  #   2. 替换下面 MPC 告警组的 mpc-engine CrashLoop 为 "block height
+  #      increase == 0 AND mpc-engine up" 复合告警——更精确、更早
+
+  # ---- MPC 引擎 ----
+  - name: nexuschain.mpc-engine
+    interval: 30s
+    rules:
+    # 引擎 CrashLoopBackOff 持续 5 分钟——这是 step A/B 改进后最容易
+    # 暴露的"寂静失败"——必须 5 分钟内 PagerDuty 唤醒
+    - alert: MpcEngineCrashLooping
+      expr: |
+        kube_pod_container_status_waiting_reason{reason="CrashLoopBackOff", container="mpc-engine"} == 1
+      for: 5m
+      labels:
+        severity: critical
+        component: mpc-engine
+      annotations:
+        summary: "mpc-engine CrashLoopBackOff 持续 {{ $value }}min"
+        description: "Pod {{ $labels.pod }} 在命名空间 {{ $labels.namespace }} 持续 CrashLoopBackOff——签名服务停摆。立即查 kubectl describe + logs。"
+
+    # 引擎任意 Pod 非 Ready 持续 5 分钟——单副本挂掉 t=2 仍能签，但
+    # 已损失安全冗余；持续 Ready=0 标志真故障
+    - alert: MpcEngineNotReady
+      expr: |
+        kube_pod_status_ready{condition="true", namespace="nexus"} == 0
+        and on(namespace) kube_deployment_status_replicas_ready{namespace="nexus"} > 0
+      for: 5m
+      labels:
+        severity: warning
+        component: mpc-engine
+      annotations:
+        summary: "mpc-engine 至少 1 副本 NotReady 5min"
+        description: "命名空间 nexus 内至少一个 mpc-engine Pod 非 Ready 持续 5min。"
+
+    # 关键 K8s 资源未绑定（PVC 失败或 Deployment 卡 Pending）持续 5min
+    - alert: MpcEngineResourceUnbound
+      expr: |
+        kube_persistentvolumeclaim_status_phase{phase!="Bound", namespace="nexus"} == 1
+        or kube_pod_status_phase{phase!="Running", namespace="nexus", pod=~"mpc-engine-.*"} == 1
+      for: 5m
+      labels:
+        severity: critical
+        component: mpc-engine
+      annotations:
+        summary: "mpc-engine 资源 5min 未就绪"
+        description: "PVC 未绑定或 Pod 非 Running 持续 5min——可能存储后端故障或调度问题。"
+
+  # ---- 链路服务（NexusChain 内 Java 编排服务）----
+  - name: nexuschain.services
+    interval: 30s
+    rules:
+    # 任何 Java 服务的 Deployment 非 Ready 持续 5min
+    - alert: NexusServiceUnhealthy
+      expr: |
+        (kube_deployment_status_replicas_unavailable{namespace="nexus"} > 0)
+        and
+        (changes(kube_deployment_status_replicas_unavailable{namespace="nexus"}[10m]) > 0
+         or
+         (kube_deployment_status_replicas_unavailable{namespace="nexus"}
+          / kube_deployment_spec_replicas{namespace="nexus"} > 0.5)
+        )
+      for: 5m
+      labels:
+        severity: warning
+        component: service
+      annotations:
+        summary: "{{ $labels.deployment }} 不可用副本 > 50%"
+        description: "Deployment {{ $labels.deployment }} 不可用副本持续 5min。检查 Pod 状态 + 日志。"
