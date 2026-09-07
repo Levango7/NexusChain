@@ -218,6 +218,12 @@ spec:
             - name: MPC_REQUIRE_TLS
               value: {{ (not .Values.usePlaintext) | quote }}
             - name: MPC_STORAGE_KEY_VERSION
+              valueFrom:
+                secretKeyRef:
+                  name: {{ if .Values.secrets.sealedSecretName }}{{ .Values.secrets.sealedSecretName }}{{ else }}{{ printf "%s-secret" .Chart.Name }}{{ end }}
+                  key: storage-key-version
+                  optional: true
+              # 兜底：未设 sealedSecretName 或 SealedSecret 缺此键时回退明文 env
               value: {{ .Values.storageKeyVersion | default "1" | quote }}
             {{- if .Values.authToken }}
             - name: MPC_AUTH_TOKEN

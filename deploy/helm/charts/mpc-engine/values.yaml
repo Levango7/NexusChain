@@ -49,6 +49,15 @@ storageKey: ""
 # -- 存储密钥版本号（用于密钥轮换，默认 1）
 storageKeyVersion: 1
 
+# -- 生产密钥注入：sealed-secrets 名称引用（PLAN-002 Step A）
+#   * 非空时：chart 不写 stringData，Pod 通过 `existingSecret` 引用
+#     集群内 SealedSecret（生产环境主路径，密钥经 controller 私钥解密）
+#   * 空时：chart 走 stringData 模式（明文 values.storageKey，**仅冒烟**）
+#   见 docs/runbooks/sealed-secrets.md
+secrets:
+  # SealedSecret 名（生产）：如 mpc-engine-secret
+  sealedSecretName: ""
+
 # -- Rust 日志级别
 rustLog: info
 
