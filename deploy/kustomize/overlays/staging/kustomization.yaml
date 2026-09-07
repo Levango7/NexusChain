@@ -4,6 +4,9 @@ kind: Kustomization
 # staging overlay
 # 配套：helm template deploy/helm/ -f values-staging.yaml
 #   | kubectl kustomize deploy/kustomize/overlays/staging
+resources:
+  - ../../base
+
 namespace: nexus-staging
 
 labels:

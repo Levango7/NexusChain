@@ -1,0 +1,17 @@
+# 占位资源（PLAN-002 Step B）：让 kustomize 渲染有实际输出。
+# overlay 当前定位是 GitOps 预备设施（见 docs/deploy/kustomize.md
+# "当前定位"节）——不含任何 workload；此 ConfigMap 是渲染骨架的
+# 最小真实对象，使 CI 断言（非空输出 + env 标签注入）有意义。
+# 未来 ArgoCD 接入时在 overlay 的 resources: 引用 helm 渲染产物
+# 后，本占位可保留（无害）或移除。
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nexus-env-marker
+  labels:
+    app.kubernetes.io/part-of: nexus
+    nexus-chain.io/component: env-marker
+data:
+  # 由 overlay 的 namespace/labels patch 注入实际环境值——
+  # CI 断言检查渲染产物中 nexus-chain.io/env 标签存在
+  purpose: "kustomize-render-skeleton-marker"

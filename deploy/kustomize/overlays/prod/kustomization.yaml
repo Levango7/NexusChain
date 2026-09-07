@@ -4,6 +4,9 @@ kind: Kustomization
 # prod overlay
 # 配套：helm template deploy/helm/ -f values-prod.yaml
 #   | kubectl kustomize deploy/kustomize/overlays/prod
+resources:
+  - ../../base
+
 namespace: nexus
 
 labels:
