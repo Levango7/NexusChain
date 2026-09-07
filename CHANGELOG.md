@@ -4,6 +4,62 @@
 
 ## [Unreleased]
 
+## [2.50.0] - 2026-09-07
+
+### K 批发布闭环（PLAN-002——可上 K8s 生产的基础设施就绪）
+
+本批是 K 批（kind 真集群冒烟）发布闭环的三项基础设施落地。**不涉及业务
+逻辑变更**——目标是让 NexusChain 在真 K8s 集群上**安全 / 可复现 / 可观测**
+部署运维。所有改动均通过 3 个 CI workflow 实证（K8s Sync / Security
+Scan / Pipeline 全绿，commit 82eb96a）。
+
+#### Added
+
+- **sealed-secrets 接入**（PLAN-002 Step A, commit 2c487b1 / 74b4dfc）——
+  生产密钥不再以明文入仓：
+  - `docs/runbooks/sealed-secrets.md` 完整 runbook（controller 安装、母本
+    `kubeseal` 加密、轮换、应急解封、常见错误）
+  - `deploy/k8s/30-sealed-secret-mpc-engine.yaml` 占位 manifest（生产由
+    管理员 `kubeseal` 加密后覆盖）
+  - `deploy/helm/charts/mpc-engine/values.yaml` 新增 `secrets.sealedSecretName`
+    字段；`secret.yaml` 按该字段切换两种模式——非空=引用 SealedSecret
+    （Pod 走 envFrom.existingSecret），空=明文 stringData（**冒烟专用**）
+  - `statefulset.yaml` `MPC_STORAGE_KEY_VERSION` env 改 secretKeyRef 引用
+    （与 storage-key 一致走 SealedSecret 模式）
+- **Kustomize 多环境 overlay**（PLAN-002 Step B, commit 4143413）—— 多环境
+  部署入口就绪，未来 GitOps（ArgoCD/Flux）直接消费：
+  - 3 套 overlay（dev/staging/prod）做轻量环境层 patch（namespace + env 标签）
+  - **`values-{env}.yaml` 仍为重型差异（replicas / resources / HPA / image
+    tag）的真相源**——Kustomize 不重复 patch image tag（避免双源错位）
+  - `deploy/kustomize/render.sh` 串联 helm template + kustomize 验证
+  - `docs/deploy/kustomize.md` 用法与设计理由
+- **PrometheusRule 告警**（PLAN-002 Step C, commit 6df161a / 82eb96a）——
+  生产环境故障可发现（4 条 critical/warning，全部用 `kube_*` 通用 metrics，
+  **不依赖应用 prom metrics**——应用 metrics 缺失是 2.x TODO）：
+  - `MpcEngineCrashLooping` (critical)：mpc-engine 容器 CrashLoopBackOff ≥ 5min
+  - `MpcEngineNotReady` (warning)：Pod 至少 1 个非 Ready ≥ 5min
+  - `MpcEngineResourceUnbound` (critical)：PVC 未绑 / Pod 非 Running ≥ 5min
+  - `NexusServiceUnhealthy` (warning)：Java 服务不可用副本 > 50% 持续 5min
+  - `docs/runbooks/alerts.md` 设计原则 + 部署 + 升级路径
+- **CI 门禁增量**（K 批 kind 冒烟后，PLAN-002 加固）：
+  - K8s Manifest Sync Check workflow 新增 "Kustomize overlay 验证" step
+    （3 套 overlay 渲染 + env 标签 + 文件非空断言）
+  - K8s Manifest Sync Check workflow 新增 "PrometheusRule 静态校验" step
+    （kubectl apply --dry-run=client 验 CRD schema + 告警数 ≥ 4 + for:
+    必填）
+
+#### Fixed
+
+- 修复 MPC_STORAGE_KEY_VERSION env `valueFrom` 与 `value` 同时设置触发的
+  K8s 校验错误（74b4dfc）—— 删 `value`，由 `valueFrom.optional` 兜底
+- 修复 Kustomize `labels.pairs` 字段用 array 形式触发的 unmarshal 错误
+  （4143413 commit 内自检 / 82eb96a 进一步确认 map 语法）——`labels.pairs`
+  在 Kustomize v1beta1 是 `map[string]string`，不是 list of {key,value}
+- 修复 Kustomize overlay 验证 step 因 labels 语法错导致 4143413 轮 K8s Sync
+  Check job 失败
+
+## [Unreleased]
+
 ### 2026-08-29 审计修复（交付就绪度审计发现项）
 
 #### Fixed

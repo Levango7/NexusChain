@@ -1,4 +1,4 @@
-# Kubernetes Secret 管理指南（v2.1.0）
+# Kubernetes Secret 管理指南（v2.50.0）
 
 <!-- 说明：标题中 v2.1.0 为历史架构阶段标记，非当前发布版本；当前版本请见根 README.md。本指南内容仍适用于当前部署。 -->
 

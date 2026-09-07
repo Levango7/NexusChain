@@ -12,8 +12,8 @@ apiVersion: v2
 name: nexus-chain
 description: NexusChain 区块链支付编排平台 Helm Umbrella Chart
 type: application
-version: 2.1.0
-appVersion: "2.1.0"
+version: 2.50.0
+appVersion: "2.50.0"
 keywords:
   - blockchain
   - payment
@@ -28,25 +28,25 @@ maintainers:
     email: devops@nexus.network
 dependencies:
   - name: nexus-gateway
-    version: 2.1.0
+    version: 2.50.0
     repository: "file://charts/nexus-gateway"
   - name: nexus-bridge
-    version: 2.1.0
+    version: 2.50.0
     repository: "file://charts/nexus-bridge"
   - name: nexus-signing-service
-    version: 2.1.0
+    version: 2.50.0
     repository: "file://charts/nexus-signing-service"
   - name: nexus-wallet-service
-    version: 2.1.0
+    version: 2.50.0
     repository: "file://charts/nexus-wallet-service"
   - name: nexus-api-gateway
-    version: 2.1.0
+    version: 2.50.0
     repository: "file://charts/nexus-api-gateway"
   - name: nexus-core
-    version: 2.2.0
+    version: 2.50.0
     repository: "file://charts/nexus-core"
     condition: nexus-core.enabled
   - name: mpc-engine
-    version: 2.2.0
+    version: 2.50.0
     repository: "file://charts/mpc-engine"
     condition: mpc-engine.enabled

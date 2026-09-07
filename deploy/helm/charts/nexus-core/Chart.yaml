@@ -2,8 +2,8 @@ apiVersion: v2
 name: nexus-core
 description: NexusChain 结算链节点（DPoS/PoS 共识、P2P gRPC、RPC、存储）
 type: application
-version: 2.2.0
-appVersion: "2.2.0"
+version: 2.50.0
+appVersion: "2.50.0"
 keywords:
   - blockchain
   - dpos
