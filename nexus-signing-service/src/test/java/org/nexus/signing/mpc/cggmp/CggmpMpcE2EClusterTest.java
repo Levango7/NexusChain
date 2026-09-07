@@ -291,23 +291,25 @@ public class CggmpMpcE2EClusterTest {
     void cggpE2EStatus() throws Exception {
         String sid = "i-batch-status-" + System.currentTimeMillis();
         int n = 3, t = 2;
-        java.util.concurrent.ExecutorService exec =
-                java.util.concurrent.Executors.newFixedThreadPool(n);
-        try {
-            List<java.util.concurrent.Future<CgPumpResult>> futures = new ArrayList<>();
-            for (int i = 0; i < n; i++) {
-                final int idx = i;
-                futures.add(exec.submit(() ->
-                        orchestrators.get(idx).runKeygen(sid, 0, idx, n, t)));
+        // 2026-09-07 完善批：与 fullPipeline 同款 client 原语 + 传输抖动重试
+        // （此前走 orchestrator.runKeygen——3be3993 轮 gRPC UNKNOWN 级联
+        // 挂在此处；改用 client 原语与重试保持全类一致性）。
+        // 三方 start 串行（keygen 守卫幂等：盘上有产物直接恢复；重试安全），
+        // 再统一 pumpAll 循环。
+        List<CgPumpResult> keygenStates = new ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            CgPumpResult r = partyClients.get(i).startKeygen(sid, 0, i, n, t);
+            if (!r.isSuccess() && r.getError() != null
+                    && r.getError().contains("HTTP status code")) {
+                log.warn("startKeygen party {} transport glitch, retry once", i);
+                r = partyClients.get(i).startKeygen(sid, 0, i, n, t);
             }
-            for (int i = 0; i < n; i++) {
-                CgPumpResult r = futures.get(i).get(240, java.util.concurrent.TimeUnit.SECONDS);
-                assertTrue(r.isSuccess());
-                assertTrue(r.isFinished());
-            }
-        } finally {
-            exec.shutdown();
-            exec.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS);
+            assertTrue(r.isSuccess(), "start keygen party " + i + " failed: " + r.getError());
+            keygenStates.add(r);
+        }
+        keygenStates = pumpAll(keygenStates, sid, allParties(n), true, "keygen");
+        for (int i = 0; i < n; i++) {
+            assertTrue(keygenStates.get(i).isFinished(), "keygen party " + i + " not finished");
         }
         CgStatus st0 = partyClients.get(0).status(sid);
         // F 批契约：keygen 完成时 keygen_state 被 take（has_keygen_state=false）
@@ -366,6 +368,13 @@ public class CggmpMpcE2EClusterTest {
         // 服务端 StartAux 幂等守卫（registry 已建状态机跳过）容忍并发重试；
         // clear_session 阶段边界在首方 start 时清一次池——并发方首波 outgoing
         // 在 start 全部返回后才进入 pumpAll 循环发布，时序安全。
+        //
+        // 2026-09-07 完善批：gRPC UNKNOWN 重试一次——三轮 CI 同症状
+        // （788ee89/82eb96a/3be3993 轮：party2 的响应回传报
+        // "HTTP status code 200"，引擎日志证请求已到达且处理完成——
+        // 是 Netty 连接层抖动，非协议错误）。重试安全依据：StartAux
+        // 幂等守卫——第一次已把 aux 状态机建进 registry 的话，重试走
+        // "已存在跳过"路径返回同结果；第一次没到的话重试正常执行。
         java.util.concurrent.ExecutorService auxExec =
                 java.util.concurrent.Executors.newFixedThreadPool(n);
         List<CgPumpResult> auxStates;
@@ -373,8 +382,16 @@ public class CggmpMpcE2EClusterTest {
             List<java.util.concurrent.Future<CgPumpResult>> auxFutures = new ArrayList<>();
             for (int i = 0; i < n; i++) {
                 final int idx = i;
-                auxFutures.add(auxExec.submit(() ->
-                        partyClients.get(idx).startAux(sid, 0, idx, n)));
+                auxFutures.add(auxExec.submit(() -> {
+                    CgPumpResult r = partyClients.get(idx).startAux(sid, 0, idx, n);
+                    if (!r.isSuccess() && r.getError() != null
+                            && r.getError().contains("HTTP status code")) {
+                        log.warn("startAux party {} hit transport glitch ({}), retrying once (idempotent guard)",
+                                idx, r.getError());
+                        r = partyClients.get(idx).startAux(sid, 0, idx, n);
+                    }
+                    return r;
+                }));
             }
             auxStates = new ArrayList<>();
             for (int i = 0; i < n; i++) {
