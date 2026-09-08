@@ -58,3 +58,10 @@ global:
   # -- GHCR registry 前缀
   imageRegistry: "ghcr.io/levango7/nexuschain"
   imagePullPolicy: IfNotPresent
+  # -- ServiceMonitor 总开关（umbrella 层覆盖；子 chart 独立 lint 需此默认值，
+  #    否则模板 nil pointer —— gateway 等 6 chart 同款结构）
+  serviceMonitor:
+    enabled: true
+    labels:
+      release: kube-prometheus-stack
+    interval: 30s
