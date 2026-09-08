@@ -168,6 +168,12 @@ dependencies {
     // TD-17：starter-* 去硬编码 :3.2.5 后缀，交由 dependencyManagement 导入的 Boot BOM 管理
     implementation "org.springframework.boot:spring-boot-starter-web"
 
+    // PLAN-002 后续（2026-09-07）：/actuator/prometheus 端点 + Micrometer 指标
+    // （block height gauge 是 MpcEngineCrashLoop 间接信号升级为
+    // BlockchainCoreStalled 精确信号的前提——见 deploy/k8s/50-prometheus-rules.yaml）
+    implementation "org.springframework.boot:spring-boot-starter-actuator"
+    implementation "io.micrometer:micrometer-registry-prometheus"
+
     // Chicory: pure-Java WASM interpreter for native contract execution (no native deps)
     implementation group: 'com.dylibso.chicory', name: 'wasm', version: '0.0.12'
     implementation group: 'com.dylibso.chicory', name: 'runtime', version: '0.0.12'

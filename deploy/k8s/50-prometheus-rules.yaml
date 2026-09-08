@@ -22,17 +22,27 @@ metadata:
     nexus-chain.io/component: alerting
 spec:
   groups:
-  # ---- 链路核心（PLAN-002 Step C 起步：仅 MPC/服务层告警）----
-  # 块高停滞需 nexus-core 暴露 prom metrics（# TODO(stub) 待 2.x 补）——
-  # 现阶段用 mpc-engine CrashLoop 作为"链停摆"间接信号（mCrashLoop
-  # 一定时间内 == 5+ 节点的签名服务挂掉 == 新块无法签名 == 链停摆）。
-  # 设计权衡：宁可 5 分钟延迟的近似告警（mpc-engine CrashLoop）也不要
-  # "永远不触发的精确告警"（block height 永久不变 0）。
-  #
-  # 升级路径（PLAN-002 Step C 后续或 3.x）：
-  #   1. nexus-core 暴露 /actuator/prometheus（Spring Boot Actuator）
-  #   2. 替换下面 MPC 告警组的 mpc-engine CrashLoop 为 "block height
-  #      increase == 0 AND mpc-engine up" 复合告警——更精确、更早
+  # ---- 链核心（PLAN-002 后续 2026-09-07 升级：精确块高告警）----
+  # nexus-core 已暴露 nexuschain_block_height gauge（CoreMetricsConfig，
+  # /actuator/prometheus + nexus-core ServiceMonitor）。5 分钟块高无增长
+  # 即链停摆——精确信号，替代此前仅靠 mpc-engine CrashLoop 的间接近似。
+  # 保留 MpcEngineCrashLooping 作独立信号（两者互补：链停可能是 mpc-engine
+  # 挂，也可能是共识/存储问题——块高告警覆盖后者的盲区）。
+  - name: nexuschain.blockchain-core
+    interval: 30s
+    rules:
+    - alert: BlockchainCoreStalled
+      expr: |
+        max(nexuschain_block_height) == 0
+        or (max(nexuschain_block_height) - max(nexuschain_block_height offset 5m) == 0)
+      for: 5m
+      labels:
+        severity: critical
+        component: blockchain-core
+      annotations:
+        runbook_url: "https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md"
+        summary: "链核心 5min 块高无增长（停摆）"
+        description: "max(nexuschain_block_height) 5 分钟内无增长——链停止出块。立即查 nexus-core Pod 日志（共识/存储）与 mpc-engine 状态。 genesis 链刚起或单节点 dev 环境预期也成立——仅 prod（ENABLE_MINING=true 集群）视为停摆。"
 
   # ---- MPC 引擎 ----
   - name: nexuschain.mpc-engine
@@ -48,6 +58,7 @@ spec:
         severity: critical
         component: mpc-engine
       annotations:
+        runbook_url: "https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md"
         summary: "mpc-engine CrashLoopBackOff 持续 {{ $value }}min"
         description: "Pod {{ $labels.pod }} 在命名空间 {{ $labels.namespace }} 持续 CrashLoopBackOff——签名服务停摆。立即查 kubectl describe + logs。"
 
@@ -62,6 +73,7 @@ spec:
         severity: warning
         component: mpc-engine
       annotations:
+        runbook_url: "https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md"
         summary: "mpc-engine 至少 1 副本 NotReady 5min"
         description: "命名空间 nexus 内至少一个 mpc-engine Pod 非 Ready 持续 5min。"
 
@@ -75,6 +87,7 @@ spec:
         severity: critical
         component: mpc-engine
       annotations:
+        runbook_url: "https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md"
         summary: "mpc-engine 资源 5min 未就绪"
         description: "PVC 未绑定或 Pod 非 Running 持续 5min——可能存储后端故障或调度问题。"
 
@@ -97,5 +110,6 @@ spec:
         severity: warning
         component: service
       annotations:
+        runbook_url: "https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md"
         summary: "{{ $labels.deployment }} 不可用副本 > 50%"
         description: "Deployment {{ $labels.deployment }} 不可用副本持续 5min。检查 Pod 状态 + 日志。"

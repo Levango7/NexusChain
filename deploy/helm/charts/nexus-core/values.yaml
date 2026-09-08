@@ -36,6 +36,14 @@ resources:
     memory: "2Gi"
     cpu: "2000m"
 
+# -- Prometheus 抓取（PLAN-002 后续 2026-09-07）：
+# 应用侧已暴露 /actuator/prometheus（actuator + micrometer，同 19585 端口）；
+# 启用条件 = 本开关 AND global.serviceMonitor.enabled（与 gateway 等 6 chart 一致）。
+serviceMonitor:
+  enabled: true
+  # rpc 端口（19585，headless Service 定义）——actuator 与 RPC 同端口
+  interval: ""
+
 # -- 探针（/height 只读端点）
 livenessProbe:
   initialDelaySeconds: 60

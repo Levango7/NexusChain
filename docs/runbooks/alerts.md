@@ -7,24 +7,32 @@
 - `for: 5m` 强制——避免抖动误报
 - 告警标签统一（severity + component + service）
 
-## 4 条告警
+## 5 条告警（2026-09-07 升级：+1 条精确链停告警）
 
 | 名称 | 级别 | 触发条件 | 含义 |
 |---|---|---|---|
-| MpcEngineCrashLooping | critical | mpc-engine 容器 CrashLoopBackOff ≥ 5min | 签名服务停摆——链停摆的间接信号 |
+| BlockchainCoreStalled | critical | `max(nexuschain_block_height)` 5min 无增长 | 链停摆（精确信号） |
+| MpcEngineCrashLooping | critical | mpc-engine 容器 CrashLoopBackOff ≥ 5min | 签名服务停摆 |
 | MpcEngineNotReady | warning | mpc-engine Pod 至少 1 个非 Ready ≥ 5min | 安全冗余损失 |
 | MpcEngineResourceUnbound | critical | PVC 未绑定 或 mpc-engine Pod 非 Running ≥ 5min | 存储或调度故障 |
 | NexusServiceUnhealthy | warning | Java 编排服务不可用副本 > 50% 持续 5min | 任何 Java 服务降级 |
 
-## 升级路径
+**BlockchainCoreStalled 说明（2026-09-07 应用 metrics 落地）**：
+- 数据链路：`CoreMetricsConfig`（nexus-core）注册 `nexuschain_block_height`
+  gauge（lazy 读 `stateDB.getBestBlock().nHeight`）→ `/actuator/prometheus`
+  （actuator + micrometer-registry-prometheus，同 19585 端口）→ nexus-core
+  ServiceMonitor（deploy/helm/charts/nexus-core/templates/servicemonitor.yaml，
+  抓 headless Service rpc 端口）→ Prometheus
+- 与 MpcEngineCrashLooping **互补保留**：链停可能是 mpc-engine 挂（CrashLoop
+  覆盖）也可能是共识/存储问题（块高覆盖后者的盲区）
+- **dev/staging 噪音警告**：genesis 刚起或单节点 dev 块高不增长是预期——
+  仅 prod（多节点 + ENABLE_MINING=true）视为停摆；其他环境按
+  Alertmanager 路由静默
 
-当前**不告警**：
-- 区块链块高停滞——需 nexus-core 暴露 `/actuator/prometheus`（Spring Boot Actuator）
-- gRPC 错误率——需 nexus-signing-service 暴露客户端 metrics
+## 后续升级路径（gRPC 错误率）
 
-升级方式：2.x 阶段补应用 prom metrics，PrometheusRule 用复合
-`mpc-engine up AND block height increase == 0` 替代间接 CrashLoop 信号——
-更精确、更早。
+当前**不告警**：gRPC 错误率——需 nexus-signing-service 暴露客户端 metrics
+（2.x TODO）。
 
 ## CI 验证
 
@@ -67,8 +75,27 @@ kubectl get prometheusrules -n nexus
    需要 nexus-core 暴露 `/actuator/prometheus`——2.x TODO。当前用
    mpc-engine CrashLoop 作**间接**信号（5min 延迟的近似）。
 
-## Alertmanager 路由（未做，留待 3.x）
+## Alertmanager 路由（已配置——2026-09-07 完善批修正错误标注）
 
-告警发到 Alertmanager 后**目前会按 default receiver 走**（无路由配置）——
-实际接 PagerDuty/Slack 需要 `AlertmanagerConfig` CRD 配置。本次保持
-"规则就绪，路由待补"状态——避免告警疲劳。
+**此前此节错误声称"路由未做"——实际 `deploy/monitoring/kube-prometheus-stack-values.yaml`
+早已含完整路由树**（kube-prometheus-stack chart 的 `alertmanager.config` 内联）：
+
+- `severity=critical` → `critical-slack-and-email` 接收器（Slack
+  #nexus-alerts-critical + 邮件 oncall@nexuschain.io），10s group_wait、
+  1h repeat
+- `severity=warning` → `warning-slack`（Slack #nexus-alerts），30s group_wait、
+  4h repeat
+- 抑制规则：critical 触发时抑制同 alertname+namespace 的 warning
+- 占位值（部署时替换）：`REPLACE_ME_SLACK_WEBHOOK_URL` /
+  `REPLACE_ME_SMTP_PASSWORD` / smtp host / 收件邮箱
+
+**部署（随 kube-prometheus-stack 一起）**：
+
+```bash
+helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
+  -n monitoring --create-namespace \
+  -f deploy/monitoring/kube-prometheus-stack-values.yaml
+```
+
+（无需独立 AlertmanagerConfig CRD——chart values 内联即权威配置。）
+

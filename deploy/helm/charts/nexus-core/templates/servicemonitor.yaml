@@ -1,0 +1,37 @@
+# ServiceMonitor：nexus-core 链节点 Prometheus 抓取配置
+# 前置（应用侧，PLAN-002 后续 2026-09-07）：build.gradle 引入
+# spring-boot-starter-actuator + micrometer-registry-prometheus；
+# application.properties 开放 management.endpoints=health,prometheus；
+# CoreMetricsConfig 注册 nexuschain_block_height gauge。
+# actuator 与 RPC 同端口（19585）——headless Service 的 rpc 端口直接抓。
+{{- if and .Values.global.serviceMonitor.enabled .Values.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ .Chart.Name }}
+  namespace: {{ .Values.global.namespace | default "nexus" }}
+  labels:
+    helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
+    app.kubernetes.io/name: {{ .Chart.Name }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/part-of: {{ .Values.global.partOfLabel | default "nexus" }}
+    {{- with .Values.global.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .Values.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "nexus-core.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  endpoints:
+    - port: rpc
+      path: /actuator/prometheus
+      interval: {{ .Values.serviceMonitor.interval | default .Values.global.serviceMonitor.interval | default "30s" }}
+      scheme: http
+      scrapeTimeout: 10s
+{{- end }}
