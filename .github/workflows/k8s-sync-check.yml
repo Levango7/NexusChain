@@ -220,12 +220,13 @@ jobs:
               python -c "import yaml; yaml.safe_load(open('deploy/k8s/50-prometheus-rules.yaml'))" || \
               { echo "FAIL: even YAML parse 失败"; exit 1; }
           fi
-          # 2) 告警数断言（PLAN-002 设计稿 4 条 critical/warning）
+          # 2) 告警数断言（PLAN-002 + ②升级：2026-09-07 应用 metrics 落地后
+          #    BlockchainCoreStalled 使告警数 4→5）
           cnt=$(grep -c "^    - alert:" deploy/k8s/50-prometheus-rules.yaml)
-          if [ "$cnt" -lt 4 ]; then
-            echo "FAIL: 告警数 $cnt < 4（设计稿 4 条）"; exit 1
+          if [ "$cnt" -lt 5 ]; then
+            echo "FAIL: 告警数 $cnt < 5（设计稿 4 条 + BlockchainCoreStalled）"; exit 1
           fi
-          echo "  ✓ $cnt 条告警（>= 设计稿 4 条"
+          echo "  ✓ $cnt 条告警（>= 设计稿 5 条"
           # 3) for: 必填——避免抖动误报
           missing=$(grep -c "for:" deploy/k8s/50-prometheus-rules.yaml || true)
           if [ "$missing" -lt "$cnt" ]; then
