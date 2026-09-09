@@ -1,0 +1,417 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "模块指标暴露状态（如实标注）",
+      "gridPos": {
+        "h": 16,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "content": "### 诚实说明：这四个服务当前没有任何指标暴露\n\n核对证据（2026-09-09）：\n\n1. **无 Micrometer 依赖**：`nexus-settlement` / `nexus-compliance` / `nexus-analytics` / `nexus-oracle` 的 `build.gradle` 均未引入 `spring-boot-starter-actuator` 与 `micrometer-registry-prometheus`（全仓检索仅 nexus-gateway/nexus-api-gateway/nexus-bridge/nexus-consortium/nexus-core/nexus-signing-service/nexus-wallet-service 7 个模块有）。\n2. **无抓取目标**：`deploy/helm/charts/` 中没有这四个服务的 chart；`deploy/prometheus.yml`（静态配置）与各 ServiceMonitor 也不含它们——Prometheus 中连 `up{}` 序列都不会存在。\n3. **无自定义指标代码**：全仓检索 `Counter.builder/Timer.builder/Gauge.builder/MeterRegistry/@Timed/@Counted` 无命中。\n\n因此下方 `up{}` 面板按预期显示 **No data**——这不是故障，而是这四个模块尚未接入可观测性。\n\n**接入路径（待后续批次）**：\n1. `build.gradle` 加 `spring-boot-starter-actuator` + `micrometer-registry-prometheus`；\n2. `management.endpoints.web.exposure.include: health,info,prometheus`；\n3. 部署 chart/ServiceMonitor（参考 nexus-gateway 模板），本 dashboard 的 `up{}` 面板即会自动点亮；\n4. 需要 JVM 面板时复制 nexus-gateway.json 并把 job 正则替换为对应服务名。",
+        "mode": "markdown"
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "nexus-settlement 结算 UP（预期 No data）",
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 0,
+        "y": 16
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": {
+            "options": {
+              "0": {
+                "color": "red",
+                "index": 1,
+                "text": "DOWN"
+              },
+              "1": {
+                "color": "green",
+                "index": 0,
+                "text": "UP"
+              }
+            },
+            "type": "value"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "description": "无抓取目标时显示 No data（见上方说明）。",
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "up{job=~\".*nexus-settlement.*\"}",
+          "refId": "A",
+          "legendFormat": "",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "nexus-compliance 合规 UP（预期 No data）",
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 6,
+        "y": 16
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": {
+            "options": {
+              "0": {
+                "color": "red",
+                "index": 1,
+                "text": "DOWN"
+              },
+              "1": {
+                "color": "green",
+                "index": 0,
+                "text": "UP"
+              }
+            },
+            "type": "value"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "description": "无抓取目标时显示 No data（见上方说明）。",
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "up{job=~\".*nexus-compliance.*\"}",
+          "refId": "A",
+          "legendFormat": "",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "nexus-analytics 分析 UP（预期 No data）",
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 12,
+        "y": 16
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": {
+            "options": {
+              "0": {
+                "color": "red",
+                "index": 1,
+                "text": "DOWN"
+              },
+              "1": {
+                "color": "green",
+                "index": 0,
+                "text": "UP"
+              }
+            },
+            "type": "value"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "description": "无抓取目标时显示 No data（见上方说明）。",
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "up{job=~\".*nexus-analytics.*\"}",
+          "refId": "A",
+          "legendFormat": "",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "nexus-oracle 预言机 UP（预期 No data）",
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 18,
+        "y": 16
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": {
+            "options": {
+              "0": {
+                "color": "red",
+                "index": 1,
+                "text": "DOWN"
+              },
+              "1": {
+                "color": "green",
+                "index": 0,
+                "text": "UP"
+              }
+            },
+            "type": "value"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "description": "无抓取目标时显示 No data（见上方说明）。",
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "up{job=~\".*nexus-oracle.*\"}",
+          "refId": "A",
+          "legendFormat": "",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "text",
+      "title": "备注",
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 22
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "content": "> 告警规则（deploy/monitoring/alerting-rules.yaml）中为这些服务预留的链路仍在；一旦接入暴露，PrometheusRule 无需改动。",
+        "mode": "markdown"
+      }
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": [
+    "nexus",
+    "nexuschain",
+    "prometheus"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "selected": false,
+          "text": "Prometheus",
+          "value": "Prometheus"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "multi": false,
+        "name": "DS_PROMETHEUS",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "datasource"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "NexusChain · backend-services 占位（settlement/compliance/analytics/oracle）",
+  "uid": "nexus-backend-services",
+  "version": 0,
+  "weekStart": ""
+}

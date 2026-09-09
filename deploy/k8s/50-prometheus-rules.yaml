@@ -6,7 +6,11 @@
 # 验证：promtool check rules deploy/k8s/50-prometheus-rules.yaml
 #
 # 设计原则（避免告警疲劳）：
-#   1. 起步只 5 条 critical/warning——"链停 / 服务不可用"级别
+#   1. 告警数 11 条（2026-09-09 "告警真值"整合）：原 5 条 + 从 legacy
+#      deploy/monitoring/alerting-rules.yaml 并入 6 条真实指标告警（JVM/GC、
+#      Pod 资源、ServiceDown、SeataTcDown）；legacy 文件中 11 条引用幽灵
+#      指标名（代码从未注册）的告警退役——规则只允许引用代码真实注册的
+#      应用指标或 kube_* 通用指标
 #   2. 全部 for: 5m（避免抖动误报）
 #   3. 用 `kube_*` 系列兜底（不依赖应用暴露 prom metrics）—— 2.x 阶段
 #      逐步补应用 metrics 再细化
@@ -113,3 +117,120 @@ spec:
         runbook_url: "https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md"
         summary: "{{ $labels.deployment }} 不可用副本 > 50%"
         description: "Deployment {{ $labels.deployment }} 不可用副本持续 5min。检查 Pod 状态 + 日志。"
+
+  # ---- JVM 健康（2026-09-09 告警真值整合：自 legacy alerting-rules.yaml 并入） ----
+  # jvm_gc_pause_seconds / jvm_memory_used_bytes 是 Micrometer 标准指标，
+  # 所有接 micrometer-registry-prometheus 的服务都会上报（真实存在）。
+  # 注意：service 标签来自 Prometheus Operator 对 ServiceMonitor 抓取的
+  # 自动注入（endpoint/pod/service 保留标签），值为 K8s Service 名
+  # （nexus-gateway 等）——与 regex nexus-.* 匹配。
+  - name: nexuschain.jvm
+    interval: 30s
+    rules:
+    # GC 时间占比 > 20% 持续 5m——内存压力 / Full GC 前兆
+    - alert: JvmGcTimeHigh
+      expr: |
+        (
+          sum(rate(jvm_gc_pause_seconds_sum{service=~"nexus-.*"}[5m])) by (service, instance)
+          /
+          clamp_min(sum(rate(process_uptime_seconds{service=~"nexus-.*"}[5m])) by (service, instance), 1)
+        ) > 0.20
+      for: 5m
+      labels:
+        severity: warning
+        component: jvm
+      annotations:
+        runbook_url: "https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md"
+        summary: "{{ $labels.service }} GC 时间占比高于 20%"
+        description: "{{ $labels.service }} ({{ $labels.instance }}) GC 时间占运行时间比例持续超过 20%，存在内存压力或频繁 Full GC。"
+
+    # 堆内存使用 > 85% 持续 5m——OOM 风险
+    - alert: JvmHeapUsageHigh
+      expr: |
+        (
+          sum(jvm_memory_used_bytes{service=~"nexus-.*", area="heap"}) by (service, instance)
+          /
+          clamp_min(sum(jvm_memory_max_bytes{service=~"nexus-.*", area="heap"}) by (service, instance), 1)
+        ) > 0.85
+      for: 5m
+      labels:
+        severity: warning
+        component: jvm
+      annotations:
+        runbook_url: "https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md"
+        summary: "{{ $labels.service }} 堆内存使用率高于 85%"
+        description: "{{ $labels.service }} ({{ $labels.instance }}) 堆内存使用率持续超过 85%，OOM 风险升高。请检查内存泄漏或扩容。"
+
+  # ---- Pod 资源（2026-09-09 告警真值整合：自 legacy alerting-rules.yaml 并入） ----
+  # container_* / kube_* 来自 cAdvisor 与 kube-state-metrics，K8s 集群
+  # 开箱即有（kube-prometheus-stack 默认启用）。
+  - name: nexuschain.resource
+    interval: 30s
+    rules:
+    # Pod CPU > limit 80% 持续 10m——节流影响延迟
+    - alert: PodCpuUsageHigh
+      expr: |
+        (
+          sum(rate(container_cpu_usage_seconds_total{namespace="nexus", container!="", container!="POD"}[5m])) by (pod, container)
+          /
+          clamp_min(kube_pod_container_resource_limits{namespace="nexus", resource="cpu"}, 1)
+        ) > 0.80
+      for: 10m
+      labels:
+        severity: warning
+        component: resource
+      annotations:
+        runbook_url: "https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md"
+        summary: "Pod {{ $labels.pod }} CPU 使用率高于 80%"
+        description: "容器 {{ $labels.container }} CPU 使用率持续超过 limit 的 80%，可能触发 CPU 节流（throttling）影响延迟。"
+
+    # Pod 内存 > limit 90% 持续 10m——OOMKilled 风险
+    - alert: PodMemoryUsageHigh
+      expr: |
+        (
+          container_memory_working_set_bytes{namespace="nexus", container!="", container!="POD"}
+          /
+          clamp_min(kube_pod_container_resource_limits{namespace="nexus", resource="memory"}, 1)
+        ) > 0.90
+      for: 10m
+      labels:
+        severity: warning
+        component: resource
+      annotations:
+        runbook_url: "https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md"
+        summary: "Pod {{ $labels.pod }} 内存使用率高于 90%"
+        description: "容器 {{ $labels.container }} 内存使用率持续超过 limit 的 90%，OOMKilled 风险高。请扩容或排查内存泄漏。"
+
+  # ---- 基础设施可达性（2026-09-09 告警真值整合：自 legacy alerting-rules.yaml 并入） ----
+  - name: nexuschain.infra
+    interval: 30s
+    rules:
+    # 任何 NexusChain 服务抓取失败 1m——最基础的服务在线信号
+    - alert: ServiceDown
+      expr: |
+        up{job=~"nexus-.*", namespace="nexus"} == 0
+      for: 1m
+      labels:
+        severity: critical
+        component: service
+      annotations:
+        runbook_url: "https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md"
+        summary: "服务 {{ $labels.job }} 不可达"
+        description: "Prometheus 抓取 {{ $labels.job }} ({{ $labels.instance }}) 连续 1 分钟失败。可能因 Pod 崩溃、Service 端口错误或 NetworkPolicy 阻断。"
+
+    # Seata TC 不可达 1m——分布式事务协调器（gateway/wallet/signing 依赖）
+    # 注意：仅当 Seata TC 有对应 Prometheus 抓取目标（job=seata-tc）时生效；
+    # 无抓取目标时 up 序列缺失、表达式无数据、不触发（部署演练 2026-09-10
+    # 实测修正：原 absent() 分支在无目标时恒为 1 造成永久假告警——已移除，
+    # 与 ServiceDown 同语义）。
+    - alert: SeataTcDown
+      expr: |
+        up{job="seata-tc", namespace="nexus"} == 0
+      for: 1m
+      labels:
+        severity: critical
+        component: seata
+      annotations:
+        runbook_url: "https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md"
+        summary: "Seata TC 事务协调器不可达"
+        description: "Seata TC Server 连续 1 分钟不可达，分布式事务无法提交/回滚，可能造成支付与桥操作挂起。请优先恢复 Seata TC。"

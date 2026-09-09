@@ -233,22 +233,42 @@ jobs:
             echo "FAIL: 部分 alert 缺少 for: 字段"; exit 1
           fi
 
-      # PLAN-002 完善-修2：生产 SealedSecret 模式渲染断言——values-prod.yaml
-      # 设 sealedSecretName 后，secret.yaml 必须【只渲染元数据、不写 stringData】
-      # （否则明文密钥会经 values 泄漏到渲染产物）。此断言以前不存在——
-      # sealed 模式从未被任何测试执行（健康扫描发现的盲点）。
+      # PLAN-002 完善-修2（2026-09-09 修3）：生产 SealedSecret 模式渲染断言——
+      # values-prod.yaml 设 sealedSecretName 后，secret.yaml 的【配置 Secret】
+      # 必须【只渲染元数据、不写 stringData】（否则明文密钥会经 values 泄漏到
+      # 渲染产物）。此断言以前不存在——sealed 模式从未被任何测试执行（健康扫描
+      # 发现的盲点）。
+      # 修3 根因（PR #2 首跑暴露）：原断言直接渲染子 chart 并 grep 整个渲染产物
+      # 的 "stringData"——但 values-prod.yaml 是 umbrella 形状（sealedSecretName
+      # 在 mpc-engine: 子树下），直接对子 chart 用它 -f 时 .Values.secrets 为空，
+      # 模板走冒烟分支渲染出 stringData（假阳性 FAIL）。修法：
+      #   a) 用 --set 注入子 chart 期望的平面键（模拟真实 umbrella 合并结果）
+      #   b) stringData 断言精确到 mpc-engine-secret 那个文档（TLS Secret 的
+      #      stringData 是证书机制、与密钥泄漏无关，不在本断言范围）
       - name: SealedSecret 模式渲染断言（prod）
         run: |
           set -e
           helm template mpc-prod deploy/helm/charts/mpc-engine \
-            -f deploy/helm/values-prod.yaml \
+            --set secrets.sealedSecretName=mpc-engine-secret \
             > /tmp/mpc-prod-rendered.yaml
-          # 断言 1：渲染产物中 mpc-engine Secret 不含 stringData（生产模式仅元数据）
-          if grep -q "stringData" /tmp/mpc-prod-rendered.yaml; then
-            echo "FAIL: prod 模式 secret 渲染仍含 stringData——明文泄漏路径未关闭"
-            exit 1
-          fi
-          # 断言 2：sealedSecretName 确实在 values-prod 中接线（防误删）
+          # 抽取 mpc-engine Secret 文档（配置 Secret；TLS Secret 是另一文档）
+          # 并断言其实际字段不含 stringData。注意：不能用 'stringData' in doc
+          # 的朴素匹配——模板头部说明注释里就写着"stringData"字样（会随
+          # 渲染产物一起输出），必须查行首零缩进的 stringData: 字段行。
+          python3 - <<'PYEOF'
+          import re, sys
+          docs = open('/tmp/mpc-prod-rendered.yaml').read().split('\n---\n')
+          secret_docs = [d for d in docs
+                         if 'kind: Secret' in d and 'name: mpc-engine-secret' in d]
+          assert secret_docs, "FAIL: 渲染产物中未找到 mpc-engine-secret Secret"
+          for s in secret_docs:
+              # 行首零缩进的 stringData: = Secret 的实际字段（注释/嵌套内容均排除）
+              assert not re.search(r'(?m)^stringData:', s), \
+                  "FAIL: prod 模式 mpc-engine-secret 仍含 stringData——明文泄漏路径未关闭"
+          print("  ✓ mpc-engine-secret 仅元数据（无 stringData 字段）")
+          PYEOF
+          # 断言 2：sealedSecretName 确实在 umbrella values-prod 的 mpc-engine
+          # 子树中接线（防误删；注意它是 umbrella 形状）
           grep -q "sealedSecretName: mpc-engine-secret" deploy/helm/values-prod.yaml \
             || { echo "FAIL: values-prod.yaml 未设 sealedSecretName"; exit 1; }
           # 断言 3：statefulset 的 env secretKeyRef 指向 mpc-engine-secret

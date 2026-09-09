@@ -1,6 +1,17 @@
 # ============================================================================
 # NexusChain - Micrometer 指标暴露配置（ConfigMap + Helm 注入说明）
 # ============================================================================
+# ⚠ 2026-09-09 告警真值整合注释：本文档中"业务指标命名约定"章节（下方
+#    nexus_payment_total / nexus_chain_rpc_duration_seconds / nexus_bridge_*
+#    等）为早期设计约定名——代码实际从未按此注册。真实注册名：
+#      * nexus-gateway PaymentMetrics.java：nexus_orders_created_total /
+#        nexus_payments_confirmed_total / nexus_payments_failed_total /
+#        nexus_refunds_issued_total / nexus_webhooks_delivered_total /
+#        nexus_webhooks_failed_total / nexus_payment_latency_seconds_*
+#      * nexus-core CoreMetricsConfig.java：nexuschain_block_height
+#    基于真实名的告警/dashboard 见 deploy/k8s/50-prometheus-rules.yaml 与
+#    deploy/grafana/dashboards/。约定名章节仅作历史对照，勿再作为实现依据。
+# ============================================================================
 # 用途：
 #   1. 提供 application.yml 中 management.* 配置的参考 ConfigMap
 #   2. 实际部署通过 Helm values 注入 Pod 环境变量（不修改 application.yml，12-factor）
