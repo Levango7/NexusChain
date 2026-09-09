@@ -252,19 +252,20 @@ jobs:
             --set secrets.sealedSecretName=mpc-engine-secret \
             > /tmp/mpc-prod-rendered.yaml
           # 抽取 mpc-engine Secret 文档（配置 Secret；TLS Secret 是另一文档）
-          # 并断言其不含 stringData（生产模式仅元数据）
+          # 并断言其实际字段不含 stringData。注意：不能用 'stringData' in doc
+          # 的朴素匹配——模板头部说明注释里就写着"stringData"字样（会随
+          # 渲染产物一起输出），必须查行首零缩进的 stringData: 字段行。
           python3 - <<'PYEOF'
-          import sys
+          import re, sys
           docs = open('/tmp/mpc-prod-rendered.yaml').read().split('\n---\n')
-          secret_docs = []
-          for d in docs:
-              if 'kind: Secret' in d and 'name: mpc-engine-secret' in d:
-                  secret_docs.append(d)
+          secret_docs = [d for d in docs
+                         if 'kind: Secret' in d and 'name: mpc-engine-secret' in d]
           assert secret_docs, "FAIL: 渲染产物中未找到 mpc-engine-secret Secret"
           for s in secret_docs:
-              assert 'stringData' not in s, \
+              # 行首零缩进的 stringData: = Secret 的实际字段（注释/嵌套内容均排除）
+              assert not re.search(r'(?m)^stringData:', s), \
                   "FAIL: prod 模式 mpc-engine-secret 仍含 stringData——明文泄漏路径未关闭"
-          print("  ✓ mpc-engine-secret 仅元数据（无 stringData）")
+          print("  ✓ mpc-engine-secret 仅元数据（无 stringData 字段）")
           PYEOF
           # 断言 2：sealedSecretName 确实在 umbrella values-prod 的 mpc-engine
           # 子树中接线（防误删；注意它是 umbrella 形状）
