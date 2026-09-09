@@ -220,13 +220,12 @@ spec:
 
     # Seata TC 不可达 1m——分布式事务协调器（gateway/wallet/signing 依赖）
     # 注意：仅当 Seata TC 有对应 Prometheus 抓取目标（job=seata-tc）时生效；
-    # 无抓取目标时 up 序列缺失，表达式结果为空、不触发（而已知故障由
-    # NexusServiceUnhealthy 兜底）。
+    # 无抓取目标时 up 序列缺失、表达式无数据、不触发（部署演练 2026-09-10
+    # 实测修正：原 absent() 分支在无目标时恒为 1 造成永久假告警——已移除，
+    # 与 ServiceDown 同语义）。
     - alert: SeataTcDown
       expr: |
         up{job="seata-tc", namespace="nexus"} == 0
-        or
-        (absent(up{job="seata-tc", namespace="nexus"}) == 1)
       for: 1m
       labels:
         severity: critical
