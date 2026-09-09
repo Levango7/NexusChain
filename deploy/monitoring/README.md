@@ -8,6 +8,18 @@
 >
 > 监控栈：kube-prometheus-stack（Prometheus Operator + Alertmanager + Grafana）+ PrometheusRule CRD + Grafana Dashboard ConfigMap
 
+> **⚠ 2026-09-09 告警真值整合（历史遗留退役）**：本文档原配套的
+> `alerting-rules.yaml`（17 条告警）中有 11 条引用 `nexus_payment_total` /
+> `nexus_bridge_*` / `nexus_chain_*` / `nexus_span_*` 等约定指标名——这些名字
+> 从未在代码中注册（代码实际注册的是 `nexus.payments.confirmed` →
+> `nexus_payments_confirmed_total` 等另一套名，见 nexus-gateway
+> PaymentMetrics.java / nexus-core CoreMetricsConfig.java），相关告警永不触发。
+> 该文件已退役，其中 6 条真实指标告警并入 CI 校验的
+> `deploy/k8s/50-prometheus-rules.yaml`（现共 11 条）。**告警规则一律以
+> `deploy/k8s/50-prometheus-rules.yaml` 为准。** 本章节历史 dashboard
+> （payment-success-rate 等 5 个）同样引用幽灵指标，已标注废弃；实际可用的
+> dashboard 在 `deploy/grafana/dashboards/`（基于代码真实注册名）。
+
 ## 第1章 文件清单
 
 | 文件 | 用途 |
@@ -17,8 +29,8 @@
 | `grafana-dashboards/chain-latency.json` | 链上延迟仪表盘（区块确认、RPC 响应、桥操作延迟） |
 | `grafana-dashboards/bridge-volume.json` | 桥锁定量仪表盘（锁定/铸造/销毁/解锁、金额、流动性） |
 | `grafana-dashboards/risk-trigger-rate.json` | 风控触发率仪表盘（规则触发、拦截率、误报率） |
-| `grafana-dashboards/jvm-health.json` | JVM 健康仪表盘（GC、堆内存、线程、CPU） |
-| `alerting-rules.yaml` | PrometheusRule CRD，共 12 条告警（6 个分组） |
+| `grafana-dashboards/jvm-health.json` | JVM 健康仪表盘（GC、堆内存、线程、CPU）——**⚠ 上述 5 个 dashboard 废弃**：引用代码未实现的幽灵指标名，仅保守留档（详见 `grafana-dashboards/README.md` 与 `deploy/grafana/README.md`） |
+| ~~`alerting-rules.yaml`~~ | **已退役（2026-09-09）**：11 条幽灵指标告警永不会触发；真实告警见 `deploy/k8s/50-prometheus-rules.yaml`（11 条，CI 校验） |
 | `micrometer-config.yaml` | Micrometer 指标暴露 ConfigMap 示例 + Helm 注入说明 |
 | `README.md` | 本文档 |
 
@@ -133,8 +145,11 @@ curl -s http://localhost:9090/api/v1/targets | jq '.data.activeTargets[] | {job:
 
 ### 4.1 应用 PrometheusRule
 
+> 2026-09-09 起告警规则唯一来源是 CI 校验的 deploy/k8s/50-prometheus-rules.yaml
+> （历史 alerting-rules.yaml 已退役，见文首 banner）。
+
 ```bash
-kubectl apply -f deploy/monitoring/alerting-rules.yaml -n nexus
+kubectl apply -f deploy/k8s/50-prometheus-rules.yaml -n nexus
 ```
 
 ### 4.2 验证规则加载
@@ -142,12 +157,13 @@ kubectl apply -f deploy/monitoring/alerting-rules.yaml -n nexus
 ```bash
 # 检查 PrometheusRule CRD 对象
 kubectl -n nexus get prometheusrules
-# 期望：nexus-alerting-rules
+# 期望：nexuschain-alerts
 
 # 检查 Prometheus 已加载规则
 kubectl -n monitoring port-forward svc/kube-prometheus-stack-prometheus 9090:9090 &
 curl -s http://localhost:9090/api/v1/rules | jq '.data.groups[] | .name'
-# 期望包含：nexus.payment / nexus.bridge / nexus.chain / nexus.jvm / nexus.resource / nexus.infra
+# 期望包含：nexuschain.blockchain-core / nexuschain.mpc-engine /
+# nexuschain.services / nexuschain.jvm / nexuschain.resource / nexuschain.infra
 
 # 检查告警状态
 curl -s http://localhost:9090/api/v1/alerts | jq '.data.alerts[] | {alertstate: .state, labels: .labels.alertname}'
@@ -369,16 +385,18 @@ kubectl -n nexus scale deployment nexus-gateway --replicas=2
 ### 9.1 更新告警规则
 
 ```bash
-kubectl apply -f deploy/monitoring/alerting-rules.yaml -n nexus
+kubectl apply -f deploy/k8s/50-prometheus-rules.yaml -n nexus
 # Prometheus Operator 自动热加载，无需重启
 ```
 
 ### 9.2 更新 Dashboard
 
 ```bash
+# 主 dashboard（基于代码真实注册名，见 deploy/grafana/README.md）
 kubectl -n monitoring create configmap nexus-grafana-dashboards \
-  --from-file=deploy/monitoring/grafana-dashboards/ \
+  --from-file=deploy/grafana/dashboards/ \
   --dry-run=client -o yaml | kubectl apply -f -
+# 历史废弃 dashboard（幽灵指标、无数据）不要再挂载
 kubectl -n monitoring label configmap nexus-grafana-dashboards grafana_dashboard=1 --overwrite
 # Grafana sidecar 自动热加载（约 30s）
 ```
@@ -424,7 +442,7 @@ curl -s http://localhost:9090/api/v1/targets | jq '.data.activeTargets[] | selec
 
 ```bash
 # 检查规则是否加载
-kubectl -n nexus describe prometheusrules nexus-alerting-rules
+kubectl -n nexus describe prometheusrules nexuschain-alerts
 
 # 检查 Prometheus 评估
 curl -s http://localhost:9090/api/v1/rules | jq '.data.groups[] | .rules[] | {name: .name, state: .state, health: .health}'
