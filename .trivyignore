@@ -24,6 +24,12 @@
 # 实际暴露面低。debian12 时代其余 expat CVE（59375/25210/45186/56408）已随
 # 镜像升级消除。
 CVE-2026-66046
+# 2026-09-10 Trivy DB 增补：libexpat1 2.8.3-1~deb13u1 新增 2 项（CVE-2026-76956
+# hash flooding DoS / CVE-2026-76957 内存损坏）——Debian bookworm 无 Fixed
+# Version（affected），豁免依据与 CVE-2026-66046 完全一致（Java 服务不解析
+# 不可信 XML）；Debian 发布修复后移除。
+CVE-2026-76956
+CVE-2026-76957
 
 # --- debian:bookworm-slim（Rust 模块镜像）---
 # zlib1g 1.2.13: integer overflow in inflate.c（CVE-2023-45853）— will_not_fix。
