@@ -19,9 +19,11 @@ subprojects {
                 violationRules {
                     rule {
                         limit {
-                            // 默认 0.30 行覆盖门禁。crypto 子模块当前无有效测试覆盖（实测指令覆盖 0.00），
-                            // 先以 0.00 作为强制下限占位以免 CI 失败；待补充测试后提升到 0.30。
-                            minimum = (project.name == 'crypto') ? 0.00 : 0.30
+                            // 默认 0.30 BUNDLE 指令覆盖门禁（与根构建 0.30 对齐）。
+                            // crypto 补测批次（2026-09-09）：新增 SM2/SM3/SM4/Base58/
+                            // HashFunctions/Ed25519/AES256CTR 测试套件（44 用例），
+                            // 实测指令覆盖 ~42%，0.00 占位提升为统一 0.30。
+                            minimum = 0.30
                         }
                     }
                 }
