@@ -75,6 +75,8 @@ dependencies {
     // === Spring Boot ===
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    // C 批（2026-09-08）：/actuator/prometheus 指标输出——供 ServiceMonitor 抓取
+    implementation 'io.micrometer:micrometer-registry-prometheus'
     // === P3 optional-improvements 高#8（任务 #375）：审批请求 DB 持久化，
     //     多实例部署共享 signing_approval_request 表，消除内存存储状态不共享风险 ===
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'

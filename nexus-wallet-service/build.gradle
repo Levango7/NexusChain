@@ -59,6 +59,8 @@ dependencies {
     // === Spring Boot ===
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    // C 批（2026-09-08）：/actuator/prometheus 指标输出——供 ServiceMonitor 抓取
+    implementation 'io.micrometer:micrometer-registry-prometheus'
     // === Phase 4 任务 #68：JPA 持久化（设计文档 §4.2） ===
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
 

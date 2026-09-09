@@ -59,6 +59,9 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     implementation 'org.springframework.boot:spring-boot-starter-validation'
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    // C 批（2026-09-08）：/actuator/prometheus 指标输出——供 ServiceMonitor 抓取
+    //（actuator 只给端点框架，registry-prometheus 才给 Prometheus 格式数据）
+    implementation 'io.micrometer:micrometer-registry-prometheus'
 
     // === P0-6 安全加固：Spring Security 方法级鉴权 ===
     // 引入 spring-boot-starter-security 启用 @PreAuthorize 方法级鉴权，

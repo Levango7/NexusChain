@@ -99,3 +99,41 @@ helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheu
 
 （无需独立 AlertmanagerConfig CRD——chart values 内联即权威配置。）
 
+## 验证告警会响（部署后必做——2026-09-08 A 批）
+
+**CI 已覆盖的部分**（每次 push 自动跑，`.github/workflows/k8s-sync-check.yml`
+"Install amtool + 校验 Alertmanager 路由树" step）：
+- 路由树语法（receivers/route/inhibit 全树）经 `amtool check-config` 校验
+- severity 路由数 ≥ 2（critical/warning 两级防误删）
+
+**CI 覆盖不了的部分**（占位 URL → 真值后，集群侧人工验证一次）：
+
+```bash
+# 1. 替换占位值（运维操作，不入仓）
+#    deploy/monitoring/kube-prometheus-stack-values.yaml 中：
+#    REPLACE_ME_SLACK_WEBHOOK_URL → 真 Slack Incoming Webhook
+#    REPLACE_ME_SMTP_PASSWORD     → 真 SMTP 凭据
+#    smtp.example.com:587         → 真邮件服务器
+#    oncall@nexuschain.io         → 真 oncall 邮箱
+#    然后重新 helm upgrade（上方部署命令）
+
+# 2. 集群侧验证路由可达
+amtool config routes test --config.file=<抽出的 am-config.yaml> \
+  --tree --verify-receivers  # receivers 全部可达（URL 格式合法）
+
+# 3. 发一条真测试告警（不打扰——用 warning 级别，确认 Slack #nexus-alerts 收到）
+kubectl exec -n monitoring alertmanager-kube-prometheus-stack-alertmanager-0 \
+  -- amtool alert add \
+    --annotation summary="测试告警-验证通知链路" \
+    --annotation description="收到即链路通；可忽略" \
+    alertname="TestNotificationRoute" severity="warning"
+# Slack #nexus-alerts 应在 30s 内收到 [WARNING] TestNotificationRoute
+```
+
+**验证不过时的排查顺序**：
+1. `kubectl get alertmanager -n monitoring`（实例健康）
+2. `amtool config routes test`（路由树匹配——告警进的是哪个 receiver）
+3. Slack webhook 本身（curl 发 webhook 看 Slack 是否真有该频道）
+4. Alertmanager 日志（`kubectl logs` 看发送失败原因）
+
+

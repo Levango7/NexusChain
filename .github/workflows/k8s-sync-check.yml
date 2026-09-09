@@ -257,6 +257,34 @@ jobs:
             || { echo "FAIL: 渲染产物中 env secretKeyRef 未指向 mpc-engine-secret"; exit 1; }
           echo "  ✓ prod SealedSecret 模式：无 stringData + env 引用 mpc-engine-secret"
 
+      # A 批（2026-09-08）：Alertmanager 路由树真实校验——此前 5 条告警 +
+      # 路由配置全存在但**从未验证过路由语法**（健康扫描抓出的"看起来有
+      # 但实际没有"同族盲点）。amtool check-config 验证 receivers/route/
+      # inhibit_rules 全树语法（占位 URL 不影响语法校验）。
+      - name: Install amtool + 校验 Alertmanager 路由树
+        run: |
+          # amtool 随 alertmanager 发布；固定 0.27.x 与 kube-prometheus-stack 依赖版本对齐
+          AM_VER=0.27.0
+          curl -sSL -o /tmp/amtool.tar.gz "https://github.com/prometheus/alertmanager/releases/download/v${AM_VER}/alertmanager-${AM_VER}.linux-amd64.tar.gz"
+          tar -xzf /tmp/amtool.tar.gz -C /tmp
+          sudo mv "/tmp/alertmanager-${AM_VER}.linux-amd64/amtool" /usr/local/bin/
+          amtool --version
+          # 从 kube-prometheus-stack values 抽出 alertmanager.config 段为 amtool 可读的独立文件
+          yq '.alertmanager.config' deploy/monitoring/kube-prometheus-stack-values.yaml > /tmp/am-config.yaml
+          # 占位 URL 替换为合法格式假值（amtool 校验 URL 格式，REPLACE_ME 会挂语法；
+          # 真值部署时由运维按 runbook 替换——见 docs/runbooks/alerts.md）
+          sed -i 's|REPLACE_ME_SLACK_WEBHOOK_URL|https://hooks.slack.com/services/T000/B000/XXXX|g; s|REPLACE_ME_SMTP_PASSWORD|fakepass|g; s|smtp.example.com:587|localhost:2525|g' /tmp/am-config.yaml
+          # amtool check-config 要求顶层带 route——抽出的 config 段天然有
+          amtool check-config /tmp/am-config.yaml
+          echo "  ✓ Alertmanager 路由树语法通过（receivers/route/inhibit 全树）"
+          # 额外断言：路由树必须覆盖两个 severity（critical/warning）——
+          # 防止未来有人改 values 时不小心删掉一条路由
+          SEV_COUNT=$(yq '.route.routes | length' /tmp/am-config.yaml)
+          if [ "$SEV_COUNT" -lt 2 ]; then
+            echo "FAIL: severity 路由数 $SEV_COUNT < 2（critical/warning 两级）"; exit 1
+          fi
+          echo "  ✓ $SEV_COUNT 条 severity 路由（critical + warning）"
+
       - name: 上传对比报告
         if: always()
         # GitHub 官方 action，使用主版本标签 v4
