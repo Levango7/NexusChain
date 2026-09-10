@@ -1,5 +1,6 @@
 package org.nexus.gateway.tenant;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 
 import java.time.LocalDateTime;
@@ -47,7 +48,15 @@ public class Tenant {
     @Column(name = "api_key", nullable = false, length = 128)
     private String apiKey;
 
-    /** API Secret（HMAC 签名验证用，存储 SHA-256 哈希）。 */
+    /** API Secret（HMAC 签名验证用，存储 SHA-256 哈希）。
+     *
+     * <p>安全修复（质量审查 Top6，2026-09-10）：加 {@code @JsonIgnore}——
+     * TenantController 8 处直出实体，响应会泄露哈希后的 secret。服务内部
+     * 经 getter 读取不受影响（当前无内部消费方，DefaultTenantService 只
+     * 读 apiKey）。secret 值仅在创建/轮换响应中由 Controller 显式返回一次
+     * （明文原值），持久化后的哈希永不进响应。</p>
+     */
+    @JsonIgnore
     @Column(name = "api_secret", nullable = false, length = 256)
     private String apiSecret;
 
