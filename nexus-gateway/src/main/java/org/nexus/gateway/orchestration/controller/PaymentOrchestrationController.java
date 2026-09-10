@@ -8,17 +8,26 @@ import org.nexus.gateway.orchestration.model.OrchestratedPayment;
 import org.nexus.gateway.orchestration.routing.RoutingEngine;
 import org.nexus.gateway.orchestration.routing.RoutingRule;
 import org.nexus.gateway.orchestration.service.OrchestrationService;
+import org.nexus.gateway.security.MerchantOwnershipGuard;
 import org.springframework.data.domain.Page;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import jakarta.servlet.http.HttpServletRequest;
 import java.util.*;
 import java.util.stream.Collectors;
 
 /**
  * Unified Payment Orchestration API.
  * Single entry point for creating, querying, and managing orchestrated payments.
+ *
+ * <p>IDOR 加固（质量审查 Top2，2026-09-10）：支付 CRUD 四端点与
+ * PaymentController 的 P0-4 模式对齐——create 从认证上下文取 merchantId
+ * （不再信任请求体 merchant_id，原默认 "1" 使未认证调用即落入商户 1）；
+ * get/refresh 校验支付归属；list 忽略 merchantId 请求参数、强制按
+ * 认证商户过滤。routing-rules / connectors 为运营配置面（平台级），
+ * 不做商户归属校验。</p>
  */
 @RestController
 @RequestMapping("/api/v1/payments")
@@ -27,20 +36,24 @@ public class PaymentOrchestrationController {
     private final OrchestrationService orchestrationService;
     private final ConnectorRegistry connectorRegistry;
     private final RoutingEngine routingEngine;
+    private final MerchantOwnershipGuard ownershipGuard;
 
     public PaymentOrchestrationController(OrchestrationService orchestrationService,
                                           ConnectorRegistry connectorRegistry,
-                                          RoutingEngine routingEngine) {
+                                          RoutingEngine routingEngine,
+                                          MerchantOwnershipGuard ownershipGuard) {
         this.orchestrationService = orchestrationService;
         this.connectorRegistry = connectorRegistry;
         this.routingEngine = routingEngine;
+        this.ownershipGuard = ownershipGuard;
     }
 
     // === Payment CRUD ===
 
     @PostMapping
-    public ResponseEntity<Map<String, Object>> createPayment(@RequestBody Map<String, Object> body) {
-        Long merchantId = Long.valueOf(String.valueOf(body.getOrDefault("merchant_id", "1")));
+    public ResponseEntity<Map<String, Object>> createPayment(@RequestBody Map<String, Object> body,
+                                                               HttpServletRequest httpRequest) {
+        Long merchantId = ownershipGuard.requireMerchantId(httpRequest);
         long amount = Long.parseLong(String.valueOf(body.get("amount")));
         String currency = String.valueOf(body.getOrDefault("currency", "NEX"));
         String description = String.valueOf(body.getOrDefault("description", ""));
@@ -63,11 +76,15 @@ public class PaymentOrchestrationController {
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<Map<String, Object>> getPayment(@PathVariable String id) {
+    public ResponseEntity<Map<String, Object>> getPayment(@PathVariable String id,
+                                                            HttpServletRequest httpRequest) {
+        Long callerMerchantId = ownershipGuard.requireMerchantId(httpRequest);
         OrchestratedPayment payment = orchestrationService.getPayment(id);
         if (payment == null) {
             return ResponseEntity.notFound().build();
         }
+        ownershipGuard.requireOwned(callerMerchantId, payment.getMerchantId(),
+                "orchestrated_payment", null);
         return ResponseEntity.ok(toResponse(payment));
     }
 
@@ -76,8 +93,11 @@ public class PaymentOrchestrationController {
             @RequestParam(defaultValue = "1") Long merchantId,
             @RequestParam(required = false) String status,
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int limit) {
-        Page<OrchestratedPayment> payments = orchestrationService.listPayments(merchantId, status, page, limit);
+            @RequestParam(defaultValue = "20") int limit,
+            HttpServletRequest httpRequest) {
+        // 归属过滤（Top2）：忽略调用方传入的 merchantId 参数，强制按认证商户查询。
+        Long callerMerchantId = ownershipGuard.requireMerchantId(httpRequest);
+        Page<OrchestratedPayment> payments = orchestrationService.listPayments(callerMerchantId, status, page, limit);
         Map<String, Object> resp = new LinkedHashMap<>();
         resp.put("data", payments.getContent().stream().map(this::toResponse).collect(Collectors.toList()));
         resp.put("total", payments.getTotalElements());
@@ -87,9 +107,13 @@ public class PaymentOrchestrationController {
     }
 
     @PostMapping("/{id}/refresh")
-    public ResponseEntity<Map<String, Object>> refreshStatus(@PathVariable String id) {
+    public ResponseEntity<Map<String, Object>> refreshStatus(@PathVariable String id,
+                                                               HttpServletRequest httpRequest) {
+        Long callerMerchantId = ownershipGuard.requireMerchantId(httpRequest);
         OrchestratedPayment payment = orchestrationService.refreshStatus(id);
         if (payment == null) return ResponseEntity.notFound().build();
+        ownershipGuard.requireOwned(callerMerchantId, payment.getMerchantId(),
+                "orchestrated_payment", null);
         return ResponseEntity.ok(toResponse(payment));
     }
 

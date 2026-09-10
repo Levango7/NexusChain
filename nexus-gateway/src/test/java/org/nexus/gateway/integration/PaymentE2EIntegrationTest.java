@@ -94,8 +94,15 @@ class PaymentE2EIntegrationTest {
     @BeforeEach
     void setup() throws Exception {
         reset(chainConnector, consortiumConnector);
-        // 放行所有请求，绕过 API Key 鉴权与 HMAC 请求签名校验
-        when(apiKeyInterceptor.preHandle(any(), any(), any())).thenReturn(true);
+        // 放行所有请求，绕过 API Key 鉴权与 HMAC 请求签名校验。
+        // Top2 IDOR 加固：mock 的 ApiKeyInterceptor 同时写入认证商户 attribute
+        //（真实拦截器认证成功后设置 nexus.merchantId），供
+        // PaymentOrchestrationController/PaymentController 的 MerchantOwnershipGuard 消费。
+        when(apiKeyInterceptor.preHandle(any(), any(), any())).thenAnswer(inv -> {
+            jakarta.servlet.http.HttpServletRequest req = inv.getArgument(0);
+            req.setAttribute(org.nexus.gateway.security.MerchantOwnershipGuard.MERCHANT_ID_ATTR, 1L);
+            return true;
+        });
         when(requestSignatureInterceptor.preHandle(any(), any(), any())).thenReturn(true);
         // B4: @MockitoBean RateLimiter 的 tryAcquire() 默认返回 false → RateLimitAdapter 返回 429，
         // 必须显式 stub 为 true 才能放行请求

@@ -41,7 +41,11 @@ class PaymentOrchestrationControllerConnectorApiTest {
         registry = mock(ConnectorRegistry.class);
         // 真实 RoutingEngine 实例（repo=null，纯内存），与 Controller 共享同一 mock registry
         routingEngine = new RoutingEngine(registry, new GatewayConfig());
-        controller = new PaymentOrchestrationController(orchestrationService, registry, routingEngine);
+        // Top2 IDOR 加固：Controller 构造函数新增 MerchantOwnershipGuard 参数。
+        // 本测试聚焦 routing-rules/connectors 运营配置面（不做商户归属校验），
+        // guard 仅是被注入的依赖，不会被这些用例触达。
+        controller = new PaymentOrchestrationController(orchestrationService, registry, routingEngine,
+                new org.nexus.gateway.security.MerchantOwnershipGuard());
     }
 
     // === PUT /routing-rules/{id} ===
