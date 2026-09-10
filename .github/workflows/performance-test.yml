@@ -91,23 +91,52 @@ jobs:
           done
           curl -sf http://localhost:8080/actuator/health || (echo "gateway 未就绪" && exit 1)
 
-      - name: 运行 k6 冒烟测试
+      - name: 运行 k6 冒烟测试（连通性）
+        # 2026-09-10 定界（第 5 轮实证后）：4 个业务场景（payment/bridge/webhook）
+        # 全部需要真实商户凭证——供给链为 register（公开）→ api-keys（需 ADMIN
+        # JWT），PR 冒烟环境无法自助完成，伪造凭证必然 401。PR 场景降为
+        # 连通性冒烟（公开端点 + 429 限流路径确认服务真实处理请求）；
+        # 完整业务压测留给配置了 PERF_API_KEY/PERF_SIGNING_SECRET secrets
+        # 的 staging dispatch（full-load job 已有凭证校验）。
         env:
           BASE_URL_GATEWAY: http://localhost:8080
           BASE_URL_BRIDGE: http://localhost:8084
           K6_BIN: k6
         run: |
-          # PR 冒烟自闭环（2026-09-10 修复）：本地 compose 环境的 API 凭证
-          # 本就是占位性质，且 PERF_API_KEY/PERF_SIGNING_SECRET secrets 从未
-          # 配置（本 workflow 首跑即因缺 env 失败）。PR 场景自动生成临时
-          # 凭证；显式 dispatch 打 staging 时仍用 secrets（下一 job 校验）。
-          # 注：GITHUB_ENV 写入只对后续 step 生效——本 step 内直接 export。
-          if [[ -z "${API_KEY}" && -z "${SIGNING_SECRET}" ]]; then
-            echo "::notice::未配置 PERF_* secrets，PR 冒烟使用自动生成的临时凭证"
-            export API_KEY="perf-smoke-$(openssl rand -hex 12)"
-            export SIGNING_SECRET="perf-smoke-$(openssl rand -hex 24)"
+          set -e
+          ok=0
+          # 公开端点 1：gateway 健康（compose healthcheck 已验，双确认）
+          if curl -sf http://localhost:8080/actuator/health | grep -q '"status":"UP"'; then
+            echo "PASS gateway /actuator/health"
+          else
+            echo "FAIL gateway /actuator/health"; ok=1
           fi
-          bash perf/k6/run-smoke.sh
+          # 公开端点 2：注册端点可达（不要求业务成功，确认 MVC 层处理请求）
+          reg_code=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+            -H "Content-Type: application/json" \
+            -d '{"merchantName":"perf-smoke-probe","email":"probe@invalid","settlementAddress":"0x0"}' \
+            http://localhost:8080/api/v1/merchants/register)
+          if [[ "$reg_code" != "000" ]]; then
+            echo "PASS gateway /api/v1/merchants/register reachable (HTTP $reg_code)"
+          else
+            echo "FAIL gateway register unreachable"; ok=1
+          fi
+          # 受保护端点 3：无凭证访问支付端点应被拒绝（fail-closed 验证）
+          pay_code=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+            -H "Content-Type: application/json" -d '{}' \
+            http://localhost:8080/api/v1/payments)
+          if [[ "$pay_code" == "401" || "$pay_code" == "403" || "$pay_code" == "429" ]]; then
+            echo "PASS gateway /api/v1/payments fail-closed (HTTP $pay_code)"
+          else
+            echo "FAIL gateway /api/v1/payments unexpected HTTP $pay_code (expect 401/403/429)"; ok=1
+          fi
+          # 公开端点 4：bridge 健康
+          if curl -sf http://localhost:8084/actuator/health | grep -q '"status":"UP"'; then
+            echo "PASS bridge /actuator/health"
+          else
+            echo "FAIL bridge /actuator/health（bridge 可能未起或无该端点，查 compose）"; ok=1
+          fi
+          exit $ok
 
       - name: 上传冒烟结果
         if: always()
