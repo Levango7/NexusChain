@@ -101,10 +101,11 @@ jobs:
           # 本就是占位性质，且 PERF_API_KEY/PERF_SIGNING_SECRET secrets 从未
           # 配置（本 workflow 首跑即因缺 env 失败）。PR 场景自动生成临时
           # 凭证；显式 dispatch 打 staging 时仍用 secrets（下一 job 校验）。
+          # 注：GITHUB_ENV 写入只对后续 step 生效——本 step 内直接 export。
           if [[ -z "${API_KEY}" && -z "${SIGNING_SECRET}" ]]; then
             echo "::notice::未配置 PERF_* secrets，PR 冒烟使用自动生成的临时凭证"
-            echo "API_KEY=perf-smoke-$(openssl rand -hex 12)" >> "$GITHUB_ENV"
-            echo "SIGNING_SECRET=perf-smoke-$(openssl rand -hex 24)" >> "$GITHUB_ENV"
+            export API_KEY="perf-smoke-$(openssl rand -hex 12)"
+            export SIGNING_SECRET="perf-smoke-$(openssl rand -hex 24)"
           fi
           bash perf/k6/run-smoke.sh
 
