@@ -202,27 +202,27 @@ jobs:
       # 缺失导致 step 失败）。Action 自身已硬编码 --noupdate 与
       # --out /github/workspace/reports，故 others 只传补充参数。
       - name: 运行 OWASP Dependency-Check
-        uses: dependency-check/Dependency-Check_Action@75ba02d6183445fe0761d26e836bde58b1560600
-        with:
-          project: NexusChain
-          path: .
-          # 2026-08-29 修复：dependency-check 拒绝逗号分隔的 format 值
-          # （"An invalid 'format' of 'HTML,JSON' was specified"——该 CLI 只接受
-          # 单个格式，多次指定需重复 --format）。此 Action 的 format 输入映射为
-          # 单个 --format 参数，故改为单一 HTML（JSON 报告由后续步骤可选生成/上传，
-          # 上传步骤已 if-no-files-found: ignore 容忍缺失）。
-          format: HTML
-          # 2026-08-29 修复：该 Action 把 `others` 整体作为【单个】命令行参数追加
-          # （见 action.yml args 列表末尾 `- '${{ inputs.others }}'`），因此传入
-          # 含空格的 "… --failOnCVSS 9" 会被 dependency-check 当作一个未知 token，
-          # 打印 usage 后 exit 1（此前 OWASP job 恒红）。改用 `--failOnCVSS=9`
-          # 单 token 形式（commons-cli 支持 `--opt=value`），保留 CVSS>=9 阻断门禁。
-          # 2026-09-05 增补：--disableYarnAudit——npmjs 匿名 429 限流间歇性打断
-          # YarnAuditAnalyzer（nexus-core 的 cmd-monitor/yarn.lock，与 26e3999
-          # 禁 NodeAuditAnalyzer 同根因不同分析器；6c6a9ec CI run 33975701427
-          # 实证）。仓库无 Yarn 工作区，yarn.lock 为遗留监测脚本资产，
-          # 关闭该分析器不影响 Java 依赖审计口径。
-          others: '--failOnCVSS=9 --disableNodeAudit --disableYarnAudit'
+        # 2026-09-10 修复：Dependency-Check_Action 的 `others` input 经
+        # action.yml 的 `- '${{ inputs.others }}'` 单引号拼接——含空格的整串
+        # 会作为【一个 argv】传给 CLI（2026-08-29 已知坑，当时只把
+        # --failOnCVSS 改单 token 绕过；2026-09-05 增补
+        # --disableNodeAudit --disableYarnAudit 后三个 flag 拼成单 token
+        # 全部失效——NodeAuditAnalyzer 照跑，在 explorer 前端的 npm
+        # workspace 聚合 lock 上 Invalid payload 恒红，CI run 34535536040
+        # 实证）。Action 无多参数 input，弃用 Action 改直接 docker run
+        # 官方镜像，参数完全可控。
+        run: |
+          docker run --rm \
+            -v "$PWD:/src:rw" -w /src \
+            owaspdependencycheck/dependency-check:latest \
+            --project NexusChain \
+            --scan . \
+            --format HTML --format JSON \
+            --out ./reports \
+            --failOnCVSS=9 \
+            --disableNodeAudit \
+            --disableYarnAudit
+          ls -la reports/dependency-check-report.html
 
       - name: 上传 OWASP 报告
         if: always()
