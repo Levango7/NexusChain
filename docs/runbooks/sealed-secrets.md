@@ -131,6 +131,8 @@ kubectl apply -f sealed-secrets-key-backup.yaml
 | `controller not found` | controller 未装或装在错的 namespace | 检查 `kubectl get pod -n kube-system -l app.kubernetes.io/name=sealed-secrets` |
 | `failed to decrypt secret` | SealedSecret 由旧 key 加密，controller 密钥已轮换 | 用旧 controller 私钥解密或重新加密 |
 | Pod 启动报 `MPC_STORAGE_KEY empty`（WARN） | sealed-secret 名字/namespace 错 | `kubectl get secret -n nexus mpc-engine-secret` 确认存在；检查 chart `secrets.sealedSecretName` |
+| `Resource "mpc-engine-secret" already exists and is not managed by SealedSecret` | 同名普通 Secret 已存在（如 helm 明文模式安装过）——controller 只托管自己创建的 Secret | `kubectl delete secret mpc-engine-secret -n nexus` 删旧，controller 自动重建（带 ownerReference=SealedSecret） |
+| 删 SealedSecret 后 Pod 仍 Running 但会话不可解密 | 零密钥兜底（fail-warn 设计）：init-config 在 STORAGE_KEY 空时用全零密钥 + WARNING 日志，引擎可启动但无法解密既有会话 | 预期行为——SealedSecret 被删是严重事件，需立即恢复（重新 apply 备份的 SealedSecret），会话数据视为失效 |
 
 ## 5. 与本仓库的衔接
 
