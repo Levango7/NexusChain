@@ -20,22 +20,31 @@ import java.util.stream.Collectors;
 /**
  * Webhook 投递管理 API（P4-T5）。
  *
- * <p>端点：
+ * <p>端点（鉴权修正，质量审查 Top3 2026-09-10——路径前缀从
+ * {@code /api/v1/webhooks} 迁至 {@code /api/v1/webhook-admin}）：
  * <ul>
- *   <li>{@code GET /api/v1/webhooks/deliveries/{id}} - 查询投递状态</li>
- *   <li>{@code GET /api/v1/webhooks/deliveries} - 分页查询投递记录（支持按商户/状态过滤）</li>
- *   <li>{@code GET /api/v1/webhooks/payments/{paymentId}/deliveries} - 按支付 ID 查询投递记录</li>
- *   <li>{@code POST /api/v1/webhooks/dlq/replay} - 手动重投（从 DLQ）</li>
- *   <li>{@code GET /api/v1/webhooks/dlq/messages} - 列出 DLQ 消息（仅内存模式可用）</li>
+ *   <li>{@code GET /api/v1/webhook-admin/deliveries/{id}} - 查询投递状态</li>
+ *   <li>{@code GET /api/v1/webhook-admin/deliveries} - 分页查询投递记录（支持按商户/状态过滤）</li>
+ *   <li>{@code GET /api/v1/webhook-admin/payments/{paymentId}/deliveries} - 按支付 ID 查询投递记录</li>
+ *   <li>{@code POST /api/v1/webhook-admin/dlq/replay} - 手动重投（从 DLQ）</li>
+ *   <li>{@code GET /api/v1/webhook-admin/dlq/messages} - 列出 DLQ 消息（仅内存模式可用）</li>
  * </ul>
  *
- * <p>注意：{@code GET /api/v1/webhooks/dlq/messages} 仅在 {@code nexus.webhook.dlq.store=memory}
+ * <p>路径迁移原因：{@code WebConfig} 曾把 {@code /api/v1/webhooks/**} 整体
+ * 排除出 ApiKeyInterceptor（为公开的链事件接收端点 {@code POST
+ * /api/v1/webhooks/chain-events} 留通道，该端点靠验签保护）——但挂同一前缀
+ * 的本控制器（投递记录含商户 ID/notify_url/签名，以及可触发重放的 DLQ
+ * replay）也被一并放行，任何人可无鉴权枚举投递记录并触发重放。迁出后：
+ * 接收端点继续走公开前缀 + 验签；管理端点进入 {@code /api/v1/**} 拦截器
+ * 范围，强制商户 API Key 认证。</p>
+ *
+ * <p>注意：{@code GET /api/v1/webhook-admin/dlq/messages} 仅在 {@code nexus.webhook.dlq.store=memory}
  * 时可用（Kafka 模式下 DLQ 消息存储在 Kafka topic，需通过 Kafka consumer 读取）。
  *
  * @since Phase 4 - P4-T5 Webhook 重试与死信队列增强
  */
 @RestController
-@RequestMapping("/api/v1/webhooks")
+@RequestMapping("/api/v1/webhook-admin")
 public class WebhookDeliveryController {
 
     private static final Logger log = LoggerFactory.getLogger(WebhookDeliveryController.class);

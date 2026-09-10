@@ -94,7 +94,10 @@ public class WebConfig implements WebMvcConfigurer {
                 // 不应受商户 API Key 拦截器保护（管理员无商户 API Key）。
                 .excludePathPatterns(
                         "/api/v1/checkout/**",       // Cashier page APIs (payer-facing)
-                        "/api/v1/webhooks/**",       // Chain event callbacks (signature-verified)
+                        // 仅链事件接收端点（POST /api/v1/webhooks/chain-events，验签保护）公开；
+                        // 投递管理端点已迁至 /api/v1/webhook-admin/**（Top3 鉴权修正
+                        // 2026-09-10），随 /api/v1/** 模式进入 ApiKeyInterceptor。
+                        "/api/v1/webhooks/**",
                         "/api/v1/merchants/register",// Merchant onboarding (public)
                         "/api/v2/merchants/register",// Merchant onboarding (public, v2)
                         "/api/v1/merchants/*/verify",   // Admin-only: @PreAuthorize("hasRole('ADMIN')")
