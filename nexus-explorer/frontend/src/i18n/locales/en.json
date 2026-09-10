@@ -48,6 +48,8 @@
     "language": "Language",
     "apiKey": "API Key",
     "theme": "Theme",
+    "themeDark": "Dark",
+    "themeLight": "Light",
     "back": "Back",
     "authStatus": "Authentication Status",
     "authConfigured": "API credentials configured. Authenticated endpoints accessible.",

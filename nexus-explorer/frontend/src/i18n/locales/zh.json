@@ -48,6 +48,8 @@
     "language": "语言",
     "apiKey": "API 密钥",
     "theme": "主题",
+    "themeDark": "暗色",
+    "themeLight": "亮色",
     "back": "返回",
     "authStatus": "认证状态",
     "authConfigured": "已配置 API 凭证，可访问需认证接口",

@@ -18,9 +18,16 @@ export class ApiError extends Error {
 /**
  * Lightweight BFF request helper. Used for the explorer's own backend
  * (/api/blocks, /api/tx, ...) which does NOT require ApiKey/HMAC auth.
+ *
+ * 超时兜底（质量审查 2026-09-10）：裸 fetch 无 timeout——后端挂起时首页
+ * 永远 Loading（且 10s 轮询会堆积请求）。8s 超时对局域/公网 BFF 均宽裕。
  */
+const REQUEST_TIMEOUT_MS = 8_000;
+
 async function request<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`);
+  const res = await fetch(`${API_BASE}${path}`, {
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
   if (!res.ok) {
     throw new ApiError(res.status, `Request failed: ${res.status} ${res.statusText}`);
   }
@@ -108,6 +115,9 @@ export async function authenticatedRequest<T>(
     method,
     headers,
     body: bodyString || undefined,
+    // 超时兜底（质量审查 2026-09-10）：签名操作经 gateway 转发签名服务，
+    // 链节点慢时可到秒级——给 30s（比 BFF request 的 8s 宽，但绝不无限等）
+    signal: AbortSignal.timeout(30_000),
   });
 
   if (!res.ok) {

@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { ArrowLeft, Eye, EyeOff, CheckCircle2, AlertCircle, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useAuth } from "../auth/useAuth";
+import { useTheme } from "../hooks/useTheme";
 import { Button, Card } from "../components/ui";
 
 /**
@@ -34,6 +35,7 @@ const Settings: React.FC = () => {
   const { t } = useTranslation();
 
   const { apiKey, apiSecret, isAuthenticated, setCredentials, clearCredentials } = useAuth();
+  const { theme, setTheme } = useTheme();
 
   const [keyInput, setKeyInput] = useState<string>("");
   const [secretInput, setSecretInput] = useState<string>("");
@@ -152,6 +154,29 @@ const Settings: React.FC = () => {
               <code className="text-sm text-fg font-mono break-all">{apiKey}</code>
             </div>
           )}
+        </Card>
+
+        {/* 主题切换（质量审查 7c，2026-09-10）：激活 tokens.css 的亮色变量集 */}
+        <Card>
+          <h2 className="text-base font-semibold text-fg">{t("settings.theme")}</h2>
+          <div className="flex items-center gap-2 mt-3">
+            <Button
+              type="button"
+              variant={theme === "dark" ? "primary" : "ghost"}
+              size="md"
+              onClick={() => setTheme("dark")}
+            >
+              {t("settings.themeDark")}
+            </Button>
+            <Button
+              type="button"
+              variant={theme === "light" ? "primary" : "ghost"}
+              size="md"
+              onClick={() => setTheme("light")}
+            >
+              {t("settings.themeLight")}
+            </Button>
+          </div>
         </Card>
 
         {/* 凭证输入表单 */}
