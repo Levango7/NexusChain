@@ -97,6 +97,15 @@ jobs:
           BASE_URL_BRIDGE: http://localhost:8084
           K6_BIN: k6
         run: |
+          # PR 冒烟自闭环（2026-09-10 修复）：本地 compose 环境的 API 凭证
+          # 本就是占位性质，且 PERF_API_KEY/PERF_SIGNING_SECRET secrets 从未
+          # 配置（本 workflow 首跑即因缺 env 失败）。PR 场景自动生成临时
+          # 凭证；显式 dispatch 打 staging 时仍用 secrets（下一 job 校验）。
+          if [[ -z "${API_KEY}" && -z "${SIGNING_SECRET}" ]]; then
+            echo "::notice::未配置 PERF_* secrets，PR 冒烟使用自动生成的临时凭证"
+            echo "API_KEY=perf-smoke-$(openssl rand -hex 12)" >> "$GITHUB_ENV"
+            echo "SIGNING_SECRET=perf-smoke-$(openssl rand -hex 24)" >> "$GITHUB_ENV"
+          fi
           bash perf/k6/run-smoke.sh
 
       - name: 上传冒烟结果
@@ -128,13 +137,15 @@ jobs:
         uses: actions/checkout@v4
 
       - name: 安装 k6
+        # 2026-09-10 修复：同 smoke-test——gpg keyserver 不可达，改 GitHub releases 直装
         run: |
-          sudo gpg -k
-          sudo gpg --no-default-keyring --keyring /usr/share/keyrings/k6-archive-keyring.gpg \
-            --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E371532A8AE254D4BBF864CDA6EB11
-          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" \
-            | sudo tee /etc/apt/sources.list.d/k6.list
-          sudo apt-get update && sudo apt-get install -y k6
+          K6_VERSION="v0.54.0"
+          curl -sL --retry 3 --fail \
+            "https://github.com/grafana/k6/releases/download/${K6_VERSION}/k6-${K6_VERSION}-linux-amd64.tar.gz" \
+            -o /tmp/k6.tar.gz
+          tar -xzf /tmp/k6.tar.gz -C /tmp
+          sudo install -m 0755 /tmp/k6-${K6_VERSION}-linux-amd64/k6 /usr/local/bin/k6
+          k6 version
 
       - name: 校验凭据
         run: |
