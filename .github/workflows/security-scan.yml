@@ -214,6 +214,8 @@ jobs:
         # 注：首推镜像名误写 owaspdependencycheck/...（Docker Hub 不存在，
         # run 34538063764 实证 pull access denied），更正为官方 owasp/*。
         run: |
+          # 官方镜像以非 root 运行，无法自建输出目录——宿主侧预创建并放权
+          mkdir -p reports && chmod 777 reports
           docker run --rm \
             -v "$PWD:/src:rw" -w /src \
             owasp/dependency-check:latest \
