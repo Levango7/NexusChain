@@ -66,13 +66,16 @@ jobs:
           cache: gradle
 
       - name: 安装 k6
+        # 2026-09-10 修复：原走 apt 源 + gpg keyserver（keyserver.ubuntu.com
+        # 从 GitHub runner 访问持续 No data——PR #4 两轮实证），改用官方
+        # GitHub releases 直装二进制（无 gpg keyserver 依赖）。
         run: |
-          sudo gpg -k
-          sudo gpg --no-default-keyring --keyring /usr/share/keyrings/k6-archive-keyring.gpg \
-            --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E371532A8AE254D4BBF864CDA6EB11
-          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" \
-            | sudo tee /etc/apt/sources.list.d/k6.list
-          sudo apt-get update && sudo apt-get install -y k6
+          K6_VERSION="v0.54.0"
+          curl -sL --retry 3 --fail \
+            "https://github.com/grafana/k6/releases/download/${K6_VERSION}/k6-${K6_VERSION}-linux-amd64.tar.gz" \
+            -o /tmp/k6.tar.gz
+          tar -xzf /tmp/k6.tar.gz -C /tmp
+          sudo install -m 0755 /tmp/k6-${K6_VERSION}-linux-amd64/k6 /usr/local/bin/k6
           k6 version
 
       - name: 启动 NexusChain 服务（docker-compose）
