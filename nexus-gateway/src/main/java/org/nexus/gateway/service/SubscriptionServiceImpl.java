@@ -5,6 +5,7 @@ import org.nexus.gateway.config.GatewayConfig;
 import org.nexus.gateway.model.Subscription;
 import org.nexus.gateway.repository.SubscriptionRepository;
 import org.nexus.sdk.client.feign.SigningServiceFeignClient;
+import org.nexus.sdk.client.feign.SigningResponses;
 import org.nexus.sdk.client.feign.WalletMgmtFeignClient;
 import org.nexus.sdk.wallet.WalletUtils;
 import org.slf4j.Logger;
@@ -115,9 +116,10 @@ public class SubscriptionServiceImpl implements SubscriptionService {
                 return null;
             }
 
-            // 提交 0 金额授权标记交易（SUBSCRIPTION_AUTH），签名服务签名+广播
-            String txHash = signingServiceClient.signTransfer(
-                    platformPubkey, payeePubkeyHash, BigDecimal.ZERO);
+            // 提交 0 金额授权标记交易（SUBSCRIPTION_AUTH），签名服务签名+广播。
+            // 契约修正（2026-09-10）：Feign 返回响应 Map，经 SigningResponses 提取 txHash。
+            String txHash = SigningResponses.txHash(signingServiceClient.signTransfer(
+                    platformPubkey, payeePubkeyHash, BigDecimal.ZERO));
             log.info("On-chain subscription auth submitted: subNo={}, txHash={}",
                     sub.getSubscriptionNo(), txHash);
             return txHash;
@@ -257,7 +259,8 @@ public class SubscriptionServiceImpl implements SubscriptionService {
                 return null;
             }
 
-            return signingServiceClient.signTransfer(platformPubkey, receiverPubkeyHash, sub.getAmount());
+            return SigningResponses.txHash(
+                    signingServiceClient.signTransfer(platformPubkey, receiverPubkeyHash, sub.getAmount()));
         } catch (RuntimeException e) {
             log.error("Subscription charge exception: {}", e.getMessage());
             return null;

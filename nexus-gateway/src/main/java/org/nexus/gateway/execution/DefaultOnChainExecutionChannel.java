@@ -3,6 +3,7 @@ package org.nexus.gateway.execution;
 import org.nexus.gateway.client.ChainRpcClient;
 import org.nexus.gateway.config.GatewayConfig;
 import org.nexus.sdk.client.feign.SigningServiceFeignClient;
+import org.nexus.sdk.client.feign.SigningResponses;
 import org.nexus.sdk.client.feign.WalletMgmtFeignClient;
 import org.nexus.sdk.wallet.WalletUtils;
 import org.nexus.settlement.execution.OnChainExecutionChannel;
@@ -191,11 +192,13 @@ public class DefaultOnChainExecutionChannel implements OnChainExecutionChannel {
                     "cannot resolve pubkeyHash for toAddress: " + request.getToAddress(), false);
         }
 
-        // 2. 调用签名服务完成签名 + 广播，返回 txHash
+        // 2. 调用签名服务完成签名 + 广播，返回 txHash。
+        // 契约修正（2026-09-10）：Feign 返回签名服务真实响应 Map
+        // ({statusCode, data, message})，经 SigningResponses 提取 data 字段。
         String txHash;
         try {
-            txHash = signingServiceClient.signTransfer(
-                    platformPubkey, toPubkeyHash, request.getAmount());
+            txHash = SigningResponses.txHash(signingServiceClient.signTransfer(
+                    platformPubkey, toPubkeyHash, request.getAmount()));
         } catch (RuntimeException e) {
             log.error("executeProduction: signTransfer threw, requestId={}", request.getRequestId(), e);
             return TransactionResult.failure("signTransfer failed: " + e.getMessage(), false);

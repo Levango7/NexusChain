@@ -81,7 +81,7 @@ class PaymentChaosTest {
         try (MockedStatic<WalletUtils> mockedWalletUtils = mockStatic(WalletUtils.class)) {
             mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("0xPayee_chaos1")).thenReturn("payeeHash");
             mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("0xPayer_chaos1")).thenReturn("payerHash");
-            when(signing.signTransfer(anyString(), anyString(), any())).thenReturn("0xchaosTx1");
+            when(signing.signTransfer(anyString(), anyString(), any())).thenReturn(okResp("0xchaosTx1"));
 
             // 链上节点宕机：isTransactionConfirmed 抛异常
             AtomicBoolean nodeAlive = new AtomicBoolean(false);
@@ -121,7 +121,7 @@ class PaymentChaosTest {
             AtomicInteger callCount = new AtomicInteger(0);
             when(signing.signTransfer(anyString(), anyString(), any())).thenAnswer(inv -> {
                 int n = callCount.incrementAndGet();
-                return n <= 2 ? null : "0xrecoveredTx";
+                return n <= 2 ? null : okResp("0xrecoveredTx");
             });
 
             ChainConnector connector = newConnector();
@@ -151,7 +151,7 @@ class PaymentChaosTest {
                 return "payeeHash";
             });
             mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("0xPayer_chaos3")).thenReturn("payerHash");
-            when(signing.signTransfer(anyString(), anyString(), any())).thenReturn("0xwalletTx");
+            when(signing.signTransfer(anyString(), anyString(), any())).thenReturn(okResp("0xwalletTx"));
 
             ChainConnector connector = newConnector();
 
@@ -182,7 +182,7 @@ class PaymentChaosTest {
             when(signing.signTransfer(anyString(), anyString(), any())).thenAnswer(inv -> {
                 int n = signingCalls.incrementAndGet();
                 if (n == 1) return null; // 第1次：签名宕机
-                return "0xcascadeTx";     // 第2次起：签名恢复
+                return okResp("0xcascadeTx");     // 第2次起：签名恢复
             });
 
             AtomicBoolean chainAlive = new AtomicBoolean(false);
@@ -222,7 +222,7 @@ class PaymentChaosTest {
             AtomicBoolean signingResponsive = new AtomicBoolean(false);
             when(signing.signTransfer(anyString(), anyString(), any())).thenAnswer(inv -> {
                 if (!signingResponsive.get()) throw new RuntimeException("signing timeout");
-                return "0xtimeoutRecoverTx";
+                return okResp("0xtimeoutRecoverTx");
             });
 
             ChainConnector connector = newConnector();
@@ -239,5 +239,10 @@ class PaymentChaosTest {
             assertTrue(success.isSuccess(), "签名恢复后应成功");
             assertEquals("0xtimeoutRecoverTx", success.getTransactionHash());
         }
+    }
+
+    /** 契约修正（2026-09-10）：signTransfer 真实响应形状 {statusCode, data, message} 的成功响应构造器。 */
+    private static java.util.Map<String, Object> okResp(String txHash) {
+        return java.util.Map.of("statusCode", 2000, "data", txHash);
     }
 }

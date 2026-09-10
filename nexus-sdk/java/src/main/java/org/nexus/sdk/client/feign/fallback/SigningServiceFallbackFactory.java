@@ -48,7 +48,7 @@ public class SigningServiceFallbackFactory implements FallbackFactory<SigningSer
     public SigningServiceFeignClient create(Throwable cause) {
         return new SigningServiceFeignClient() {
             @Override
-            public String signTransfer(String fromPubkey, String toPubkeyHash, BigDecimal amount) {
+            public java.util.Map<String, Object> signTransfer(String fromPubkey, String toPubkeyHash, BigDecimal amount) {
                 return null;
             }
 

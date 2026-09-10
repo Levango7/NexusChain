@@ -151,8 +151,7 @@ class WalletControllerIT {
     @Test
     @DisplayName("POST /withdrawal/request → /approve → /execute 完整流程")
     void withdrawalFullFlow_requestApproveExecute() throws Exception {
-        when(signingServiceClient.signTransfer(anyString(), anyString(), any(BigDecimal.class)))
-                .thenReturn("0xcontrollerTxHash1234567890abcdef");
+        when(signingServiceClient.signTransfer(anyString(), anyString(), any(BigDecimal.class))).thenReturn(okResp("0xcontrollerTxHash1234567890abcdef"));
 
         // 1. request
         String requestId = mockMvc.perform(post("/api/v1/wallet/withdrawal/request")
@@ -189,5 +188,10 @@ class WalletControllerIT {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.hot").exists())
                 .andExpect(jsonPath("$.cold").exists());
+    }
+
+    /** 契约修正（2026-09-10）：signTransfer 真实响应形状 {statusCode, data, message} 的成功响应构造器。 */
+    private static java.util.Map<String, Object> okResp(String txHash) {
+        return java.util.Map.of("statusCode", 2000, "data", txHash);
     }
 }

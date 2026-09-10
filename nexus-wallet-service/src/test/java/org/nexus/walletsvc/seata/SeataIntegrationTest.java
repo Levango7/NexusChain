@@ -85,8 +85,7 @@ class SeataIntegrationTest {
             whitelistEntryRepository.save(entry);
         }
 
-        when(signingServiceClient.signTransfer(anyString(), anyString(), any(BigDecimal.class)))
-                .thenReturn("0xseataTxHash1234567890abcdef1234567890");
+        when(signingServiceClient.signTransfer(anyString(), anyString(), any(BigDecimal.class))).thenReturn(okResp("0xseataTxHash1234567890abcdef1234567890"));
 
         // 1. request → PENDING
         WithdrawalRequest request = withdrawalApprovalService.requestWithdrawal(
@@ -219,8 +218,7 @@ class SeataIntegrationTest {
             whitelistEntryRepository.save(entry);
         }
 
-        when(signingServiceClient.signTransfer(anyString(), anyString(), any(BigDecimal.class)))
-                .thenReturn("0xtimeoutTestTxHash1234567890123456");
+        when(signingServiceClient.signTransfer(anyString(), anyString(), any(BigDecimal.class))).thenReturn(okResp("0xtimeoutTestTxHash1234567890123456"));
 
         WithdrawalRequest request = withdrawalApprovalService.requestWithdrawal(
                 addr, new BigDecimal("500"), "NEX");
@@ -231,5 +229,10 @@ class SeataIntegrationTest {
         WithdrawalRequest result = withdrawalApprovalService.executeApprovedWithdrawal(request.getRequestId());
         assertEquals(WithdrawalRequest.WithdrawalStatus.EXECUTED, result.getStatus());
         assertTrue(result.getChainTxHash().startsWith("0xtimeoutTestTxHash"));
+    }
+
+    /** 契约修正（2026-09-10）：signTransfer 真实响应形状 {statusCode, data, message} 的成功响应构造器。 */
+    private static java.util.Map<String, Object> okResp(String txHash) {
+        return java.util.Map.of("statusCode", 2000, "data", txHash);
     }
 }

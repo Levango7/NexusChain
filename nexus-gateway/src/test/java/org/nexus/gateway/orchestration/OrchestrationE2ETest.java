@@ -59,7 +59,14 @@ class OrchestrationE2ETest {
 
     @BeforeEach
     void stubAuthInterceptors() throws Exception {
-        when(apiKeyInterceptor.preHandle(any(), any(), any())).thenReturn(true);
+        // Top2 IDOR 加固：mock 的 ApiKeyInterceptor 同时写入认证商户 attribute
+        //（真实拦截器认证成功后设置 nexus.merchantId=1，与测试请求体 merchant_id=1
+        // 对齐），供 PaymentOrchestrationController 的 MerchantOwnershipGuard 消费。
+        when(apiKeyInterceptor.preHandle(any(), any(), any())).thenAnswer(inv -> {
+            jakarta.servlet.http.HttpServletRequest req = inv.getArgument(0);
+            req.setAttribute(org.nexus.gateway.security.MerchantOwnershipGuard.MERCHANT_ID_ATTR, 1L);
+            return true;
+        });
         when(requestSignatureInterceptor.preHandle(any(), any(), any())).thenReturn(true);
     }
 

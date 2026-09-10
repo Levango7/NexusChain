@@ -46,10 +46,11 @@ public class WalletSvcSigningServiceFallbackFactory extends SigningServiceFallba
                 cause.getClass().getSimpleName(), cause.getMessage(), cause);
         return new SigningServiceFeignClient() {
             @Override
-            public String signTransfer(String fromPubkey, String toPubkeyHash, BigDecimal amount) {
+            public java.util.Map<String, Object> signTransfer(String fromPubkey, String toPubkeyHash, BigDecimal amount) {
                 log.error("提现签名降级: signing-service 不可用, from={}, to={}, amount={}",
                         fromPubkey, toPubkeyHash, amount);
-                // DefaultWithdrawalApprovalService 收到 null 标记提现 FAILED
+                // DefaultWithdrawalApprovalService 经 SigningResponses.txHash(null)
+                // 提取得 null，标记提现 FAILED
                 return null;
             }
 

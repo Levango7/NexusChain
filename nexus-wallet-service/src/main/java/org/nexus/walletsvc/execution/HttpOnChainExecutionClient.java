@@ -48,7 +48,14 @@ public class HttpOnChainExecutionClient implements OnChainExecutionClient {
     public HttpOnChainExecutionClient(
             @Value("${nexus.gateway.base-url:http://localhost:8080}") String gatewayBaseUrl,
             @Value("${nexus.wallet.execution.sandbox:false}") boolean sandboxMode) {
-        this.restTemplate = new RestTemplate();
+        // 健壮性修复（质量审查 Top4，2026-09-10）：裸 new RestTemplate() 无任何
+        // connect/read 超时（默认无限等待）——gateway 无响应时提现执行线程
+        // 永久挂起。设 connect 5s / read 30s：链上执行允许慢，但绝不无限等。
+        org.springframework.http.client.SimpleClientHttpRequestFactory factory =
+                new org.springframework.http.client.SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(5_000);
+        factory.setReadTimeout(30_000);
+        this.restTemplate = new RestTemplate(factory);
         this.gatewayBaseUrl = gatewayBaseUrl;
         this.sandboxMode = sandboxMode;
     }

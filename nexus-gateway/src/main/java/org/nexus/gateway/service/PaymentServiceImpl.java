@@ -18,6 +18,7 @@ import org.nexus.gateway.risk.RefundRequest;
 import org.nexus.gateway.risk.RiskDecision;
 import org.nexus.common.tracing.BusinessSpan;
 import org.nexus.sdk.client.feign.SigningServiceFeignClient;
+import org.nexus.sdk.client.feign.SigningResponses;
 import org.nexus.sdk.client.feign.WalletMgmtFeignClient;
 import org.nexus.sdk.wallet.WalletUtils;
 import org.springframework.context.ApplicationEventPublisher;
@@ -582,8 +583,10 @@ public class PaymentServiceImpl implements PaymentService {
 
         // B-01 修复：不再吞掉异常返回 null（调用方会误以为退款成功）。
         // 记录错误日志后将异常向上抛出，由三阶段模板捕获并将退款标记为 FAILED。
+        // 契约修正（2026-09-10）：Feign 返回响应 Map，经 SigningResponses 提取 txHash。
         try {
-            return signingServiceClient.signTransfer(platformPubkey, receiverPubkeyHash, amount);
+            return SigningResponses.txHash(
+                    signingServiceClient.signTransfer(platformPubkey, receiverPubkeyHash, amount));
         } catch (RuntimeException e) {
             log.error("Refund transfer exception for order {}: {}", order.getOrderNo(), e.getMessage(), e);
             throw new RuntimeException("Refund transfer failed for order "

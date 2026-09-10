@@ -98,7 +98,8 @@ public class NoncePool {
             treemap.put(nonceState.getNonce(),nonceState);
             noncepool.put(address,treemap);
         }
-        String json = JsonUtil.GSON_PRETTY.toJson(noncepool);
+        // Top5 修复：持久化用紧凑 JSON（原 PRETTY 纯粹浪费磁盘/IO，无人工读场景）
+        String json = JsonUtil.GSON.toJson(noncepool);
         leveldb.addPoolDb(json);
     }
 
@@ -112,7 +113,7 @@ public class NoncePool {
                 noncepool.remove(address);
             }
         }
-        String json = JsonUtil.GSON_PRETTY.toJson(noncepool);
+        String json = JsonUtil.GSON.toJson(noncepool);
         leveldb.addPoolDb(json);
     }
 
@@ -132,11 +133,19 @@ public class NoncePool {
         return 0;
     }
 
-    public TreeMap<Long, NonceState> getTreemap(String address) {
-        if (noncepool.containsKey(address)) {
-            return noncepool.get(address);
-        }
-        return new TreeMap<>();
+    /**
+     * 获取指定 address 的 nonce 状态快照（防御性拷贝）。
+     *
+     * <p>并发修复（质量审查 Top5，2026-09-10）：原实现把内部 TreeMap 的
+     * 活引用直接交给调用方（含 /getNoncePool 端点的序列化）——与
+     * synchronized add/remove 并发读写非线程安全 TreeMap，会触发
+     * ConcurrentModificationException 或数据竞争，且可能把未提交的中间
+     * 状态序列化出去。快照拷贝在 synchronized 块内完成，调用方拿到的是
+     * 不可变视图。</p>
+     */
+    public synchronized TreeMap<Long, NonceState> getTreemap(String address) {
+        TreeMap<Long, NonceState> tmaps = noncepool.get(address);
+        return tmaps == null ? new TreeMap<>() : new TreeMap<>(tmaps);
     }
 
     // ==================== Phase 3 任务 #62：TCC 预锁定 API ====================

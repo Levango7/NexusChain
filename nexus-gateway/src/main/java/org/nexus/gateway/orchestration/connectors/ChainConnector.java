@@ -4,6 +4,7 @@ import org.nexus.gateway.client.ChainRpcClient;
 import org.nexus.gateway.config.GatewayConfig;
 import org.nexus.gateway.orchestration.connector.*;
 import org.nexus.sdk.client.feign.SigningServiceFeignClient;
+import org.nexus.sdk.client.feign.SigningResponses;
 import org.nexus.sdk.client.feign.WalletMgmtFeignClient;
 import org.nexus.sdk.wallet.WalletUtils;
 import org.slf4j.Logger;
@@ -130,7 +131,9 @@ public class ChainConnector implements PaymentConnector {
 
             // Delegate construction + signing + broadcast to exchange-wallet. The returned
             // txHash is the real on-chain transaction hash (already signed by exchange-wallet).
-            String txHash = signingServiceClient.signTransfer(platformPubkey, toPubkeyHash, settlementAmount);
+            // 契约修正（2026-09-10）：Feign 返回响应 Map，经 SigningResponses 提取 txHash。
+            String txHash = SigningResponses.txHash(
+                    signingServiceClient.signTransfer(platformPubkey, toPubkeyHash, settlementAmount));
             if (txHash == null) {
                 return ConnectorPaymentResult.fail("exchange-wallet signing failed");
             }
@@ -219,7 +222,8 @@ public class ChainConnector implements PaymentConnector {
             if (targetHash == null) {
                 return ConnectorRefundResult.fail("original payment not found: " + connectorPaymentId);
             }
-            String txHash = signingServiceClient.signTransfer(platformPubkey, targetHash, BigDecimal.valueOf(amount));
+            String txHash = SigningResponses.txHash(signingServiceClient.signTransfer(
+                    platformPubkey, targetHash, BigDecimal.valueOf(amount)));
             if (txHash == null) {
                 return ConnectorRefundResult.fail("exchange-wallet refund signing failed");
             }

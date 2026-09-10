@@ -97,8 +97,7 @@ class PaymentSigningChainE2ETest {
             // given: 地址解析成功，签名返回真实 txHash
             mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("0xPayee_pay_1")).thenReturn("payeeHash001");
             mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("0xPayer_pay_1")).thenReturn("payerHash001");
-            when(signing.signTransfer(eq(PLATFORM_PUBKEY), eq("payeeHash001"), any()))
-                    .thenReturn("0xtxHashA1b2c3");
+            when(signing.signTransfer(eq(PLATFORM_PUBKEY), eq("payeeHash001"), any())).thenReturn(okResp("0xtxHashA1b2c3"));
             // 链上第一次未确认，第二次确认
             when(rpc.isTransactionConfirmed("0xtxHashA1b2c3"))
                     .thenReturn(false)
@@ -123,8 +122,7 @@ class PaymentSigningChainE2ETest {
             assertEquals(PaymentStatus.SUCCEEDED, s2, "确认后应为 SUCCEEDED");
 
             // when: 退款（默认退给 payer）
-            when(signing.signTransfer(eq(PLATFORM_PUBKEY), eq("payerHash001"), any()))
-                    .thenReturn("0xrefundHashX9y8");
+            when(signing.signTransfer(eq(PLATFORM_PUBKEY), eq("payerHash001"), any())).thenReturn(okResp("0xrefundHashX9y8"));
             ConnectorRefundResult refund = connector.refund(created.getConnectorPaymentId(), 50000L);
             // then: 退款成功
             assertTrue(refund.isSuccess(), "退款应成功");
@@ -146,7 +144,7 @@ class PaymentSigningChainE2ETest {
         try (MockedStatic<WalletUtils> mockedWalletUtils = mockStatic(WalletUtils.class)) {
             mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("0xPayee_pay_1")).thenReturn("payeeHash");
             mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("0xPayer_pay_1")).thenReturn("payerHash");
-            when(signing.signTransfer(anyString(), anyString(), any())).thenReturn(realTxHash);
+            when(signing.signTransfer(anyString(), anyString(), any())).thenReturn(okResp(realTxHash));
 
             ChainConnector connector = newConnector();
             ConnectorPaymentResult result = connector.createPayment(paymentRequest("pay_1", 100000L));
@@ -185,7 +183,7 @@ class PaymentSigningChainE2ETest {
             // 第一次签名故障（null），第二次恢复
             when(signing.signTransfer(anyString(), anyString(), any()))
                     .thenReturn(null)
-                    .thenReturn("0xrecoveredTx");
+                    .thenReturn(okResp("0xrecoveredTx"));
 
             ChainConnector connector = newConnector();
 
@@ -207,7 +205,7 @@ class PaymentSigningChainE2ETest {
         try (MockedStatic<WalletUtils> mockedWalletUtils = mockStatic(WalletUtils.class)) {
             mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("0xPayee_pay_1")).thenReturn("payeeHash");
             mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("0xPayer_pay_1")).thenReturn("payerHash");
-            when(signing.signTransfer(anyString(), anyString(), any())).thenReturn("0xpollTx");
+            when(signing.signTransfer(anyString(), anyString(), any())).thenReturn(okResp("0xpollTx"));
             when(rpc.isTransactionConfirmed("0xpollTx"))
                     .thenReturn(false)
                     .thenReturn(false)
@@ -233,8 +231,8 @@ class PaymentSigningChainE2ETest {
             // --- 场景1: payer 已知 → 退给 payer ---
             mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("0xPayee_pay_1")).thenReturn("payeeHash");
             mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("0xPayer_pay_1")).thenReturn("payerHash");
-            when(signing.signTransfer(eq(PLATFORM_PUBKEY), eq("payeeHash"), any())).thenReturn("0xpayTx");
-            when(signing.signTransfer(eq(PLATFORM_PUBKEY), eq("payerHash"), any())).thenReturn("0xrefundToPayer");
+            when(signing.signTransfer(eq(PLATFORM_PUBKEY), eq("payeeHash"), any())).thenReturn(okResp("0xpayTx"));
+            when(signing.signTransfer(eq(PLATFORM_PUBKEY), eq("payerHash"), any())).thenReturn(okResp("0xrefundToPayer"));
 
             ChainConnector connector = newConnector();
             ConnectorPaymentResult created = connector.createPayment(paymentRequest("pay_1", 50000L));
@@ -247,9 +245,8 @@ class PaymentSigningChainE2ETest {
             WalletMgmtFeignClient wallet2 = mock(WalletMgmtFeignClient.class);
             mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("0xPayee_pay_1")).thenReturn("payeeHash2");
             mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("0xPayer_pay_1")).thenReturn(null);
-            when(signing2.signTransfer(eq(PLATFORM_PUBKEY), eq("payeeHash2"), any()))
-                    .thenReturn("0xpayTx2")
-                    .thenReturn("0xrefundToPayee");
+            when(signing2.signTransfer(eq(PLATFORM_PUBKEY), eq("payeeHash2"), any())).thenReturn(okResp("0xpayTx2"))
+                    .thenReturn(okResp("0xrefundToPayee"));
 
             ChainConnector connector2 = new ChainConnector(rpc, signing2, wallet2, config);
             ConnectorPaymentResult created2 = connector2.createPayment(paymentRequest("pay_1", 50000L));
@@ -274,7 +271,7 @@ class PaymentSigningChainE2ETest {
                 mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash(payeeAddr)).thenReturn("payeeHash_" + i);
                 mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash(payerAddr)).thenReturn("payerHash_" + i);
                 when(signing.signTransfer(eq(PLATFORM_PUBKEY), eq("payeeHash_" + i), any()))
-                        .thenReturn("0xconcurrentTx_" + i);
+                        .thenReturn(okResp("0xconcurrentTx_" + i));
             }
 
             ExecutorService pool = Executors.newFixedThreadPool(4);
@@ -315,7 +312,7 @@ class PaymentSigningChainE2ETest {
         try (MockedStatic<WalletUtils> mockedWalletUtils = mockStatic(WalletUtils.class)) {
             mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("0xPayee_pay_1")).thenReturn("payeeHash");
             mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("0xPayer_pay_1")).thenReturn("payerHash");
-            when(signing.signTransfer(anyString(), anyString(), any())).thenReturn("0xrpcFailTx");
+            when(signing.signTransfer(anyString(), anyString(), any())).thenReturn(okResp("0xrpcFailTx"));
             when(rpc.isTransactionConfirmed("0xrpcFailTx"))
                     .thenThrow(new RuntimeException("RPC timeout"));
 
@@ -342,5 +339,10 @@ class PaymentSigningChainE2ETest {
         assertFalse(down.isHealthy(), "RPC 异常应标记不健康");
         assertNotNull(down.getMessage(), "应有故障原因");
         assertTrue(down.getMessage().contains("unreachable"), "故障信息应包含原因");
+    }
+
+    /** 契约修正（2026-09-10）：signTransfer 真实响应形状 {statusCode, data, message} 的成功响应构造器。 */
+    private static java.util.Map<String, Object> okResp(String txHash) {
+        return java.util.Map.of("statusCode", 2000, "data", txHash);
     }
 }

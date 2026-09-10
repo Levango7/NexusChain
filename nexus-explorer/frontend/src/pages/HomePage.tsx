@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { Search, Settings as SettingsIcon, AlertCircle } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -25,26 +25,40 @@ const HomePage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  // 轮询竞态守卫（质量审查 2026-09-10）：10s 轮询的慢响应（>10s）完成时
+  // 会用旧数据覆盖新一轮已渲染的新数据。请求序号保证只有最新一轮响应
+  // 才更新 state。
+  const fetchSeq = useRef(0);
 
   const fetchData = useCallback(async () => {
+    const seq = ++fetchSeq.current;
     try {
       const [b, t, s] = await Promise.all([
         api.getBlocks(10),
         api.getTransactions(10),
         api.getStatus().catch(err => { console.error('API请求失败:', err); return null; }),
       ]);
+      if (seq !== fetchSeq.current) {
+        // 旧响应晚到：本轮已被新一轮取代，丢弃防止覆盖新数据
+        return;
+      }
       setBlocks(b);
       setTransactions(t);
       if (s) setStatus(s);
       // 成功后清除之前的错误提示
       setError(null);
     } catch (err) {
+      if (seq !== fetchSeq.current) {
+        return;
+      }
       setBlocks([]);
       setTransactions([]);
       // 旧实现静默吞掉错误，用户看不到任何反馈；现在显式设置错误状态供 UI 展示
       setError(err instanceof Error ? err.message : t("common.unknownError"));
     } finally {
-      setLoading(false);
+      if (seq === fetchSeq.current) {
+        setLoading(false);
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

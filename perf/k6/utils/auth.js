@@ -21,6 +21,10 @@
 
 import http from "k6/http";
 import { fail } from "k6";
+// 修复（2026-09-10）：k6 的 hmac 在 k6/crypto 模块中，必须显式 import——
+// 原实现用 typeof hmac 探测全局（恒 undefined），导致从未走到 hmac 分支
+// 而是落到 fail("不支持 hmac/crypto")，本 workflow 首跑即实证。
+import { hmac } from "k6/crypto";
 
 // ---------------------------------------------------------------------------
 // 配置（来自 k6 -e 环境变量；缺失时给出明确失败，避免静默使用空密钥）
@@ -62,23 +66,11 @@ function genNonce() {
 
 /**
  * 计算 HMAC-SHA256，返回 lowercase hex。
- * k6 ≥ 0.43 提供 hmac(algo, key, msg, outputEncoding)。
- * 兼容旧版：若 hmac 不可用，回退到 crypto.createHMAC（k6 早期 API）。
+ * k6 ≥ 0.43 提供 k6/crypto 的 hmac(algo, key, msg, outputEncoding)。
  */
 function hmacSha256Hex(key, message) {
-  // 优先使用 k6 标准 hmac 函数
-  if (typeof hmac === "function") {
-    return hmac("sha256", key, message, "hex");
-  }
-  // 回退：k6 早期 crypto 模块
-  // eslint-disable-next-line no-undef
-  if (typeof crypto !== "undefined" && crypto.createHMAC) {
-    // eslint-disable-next-line no-undef
-    const h = crypto.createHMAC("sha256", key);
-    h.update(message);
-    return h.digest("hex");
-  }
-  fail("当前 k6 版本不支持 hmac/crypto；请升级到 k6 ≥ 0.43。");
+  // k6/crypto 的 hmac（顶部已 import；原实现的运行时探测分支已删除）
+  return hmac("sha256", key, message, "hex");
 }
 
 /**

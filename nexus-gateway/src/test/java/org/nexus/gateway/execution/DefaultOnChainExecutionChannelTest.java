@@ -146,8 +146,7 @@ class DefaultOnChainExecutionChannelTest {
         cfg.getExchangeWallet().setPlatformPubkey("platform-pk");
         try (MockedStatic<WalletUtils> mockedWalletUtils = mockStatic(WalletUtils.class)) {
             mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("to-addr")).thenReturn("to-hash");
-            when(signingServiceClient.signTransfer("platform-pk", "to-hash", new BigDecimal("100")))
-                    .thenReturn("0xTxHash");
+            when(signingServiceClient.signTransfer("platform-pk", "to-hash", new BigDecimal("100"))).thenReturn(okResp("0xTxHash"));
             when(chainRpcClient.isTransactionConfirmed("0xTxHash")).thenReturn(true);
 
             TransactionResult result = newChannel().execute(validRequest("r-7"));
@@ -163,8 +162,7 @@ class DefaultOnChainExecutionChannelTest {
         cfg.getExchangeWallet().setPlatformPubkey("platform-pk");
         try (MockedStatic<WalletUtils> mockedWalletUtils = mockStatic(WalletUtils.class)) {
             mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("to-addr")).thenReturn("to-hash");
-            when(signingServiceClient.signTransfer("platform-pk", "to-hash", new BigDecimal("100")))
-                    .thenReturn("0xTxHash");
+            when(signingServiceClient.signTransfer("platform-pk", "to-hash", new BigDecimal("100"))).thenReturn(okResp("0xTxHash"));
             when(chainRpcClient.isTransactionConfirmed("0xTxHash")).thenReturn(false);
 
             TransactionResult result = newChannel().execute(validRequest("r-8"));
@@ -217,7 +215,7 @@ class DefaultOnChainExecutionChannelTest {
         cfg.getExchangeWallet().setPlatformPubkey("platform-pk");
         try (MockedStatic<WalletUtils> mockedWalletUtils = mockStatic(WalletUtils.class)) {
             mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("to-addr")).thenReturn("to-hash");
-            when(signingServiceClient.signTransfer(any(), any(), any())).thenReturn("0xTxHash");
+            when(signingServiceClient.signTransfer(any(), any(), any())).thenReturn(okResp("0xTxHash"));
             when(chainRpcClient.isTransactionConfirmed("0xTxHash")).thenThrow(new RuntimeException("rpc err"));
 
             TransactionResult result = newChannel().execute(validRequest("r-12"));
@@ -276,5 +274,10 @@ class DefaultOnChainExecutionChannelTest {
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
+    }
+
+    /** 契约修正（2026-09-10）：signTransfer 真实响应形状 {statusCode, data, message} 的成功响应构造器。 */
+    private static java.util.Map<String, Object> okResp(String txHash) {
+        return java.util.Map.of("statusCode", 2000, "data", txHash);
     }
 }

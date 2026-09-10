@@ -68,8 +68,7 @@ class SubscriptionRefundIntegrationTest {
                 .thenReturn("aabbccddeeff00112233445566778899aabbccdd");
         // 订阅扣款 / 退款签名委托给签名服务（平台热钱包密钥库，不传私钥）。
         when(signingServiceFeignClient.signTransfer(anyString(), anyString(),
-                org.mockito.ArgumentMatchers.any(java.math.BigDecimal.class)))
-                .thenReturn("0xSubTxHash1234567890abcdef1234567890abcdef");
+                org.mockito.ArgumentMatchers.any(java.math.BigDecimal.class))).thenReturn(okResp("0xSubTxHash1234567890abcdef1234567890abcdef"));
     }
 
     private static String apiKey;
@@ -190,5 +189,10 @@ class SubscriptionRefundIntegrationTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"amount\":50000,\"reason\":\"Customer request\"}"))
                 .andExpect(status().isCreated());
+    }
+
+    /** 契约修正（2026-09-10）：signTransfer 真实响应形状 {statusCode, data, message} 的成功响应构造器。 */
+    private static java.util.Map<String, Object> okResp(String txHash) {
+        return java.util.Map.of("statusCode", 2000, "data", txHash);
     }
 }

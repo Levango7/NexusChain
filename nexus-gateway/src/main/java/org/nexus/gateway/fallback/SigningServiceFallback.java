@@ -37,10 +37,12 @@ public class SigningServiceFallback implements SigningServiceFeignClient {
     private static final Logger log = LoggerFactory.getLogger(SigningServiceFallback.class);
 
     @Override
-    public String signTransfer(String fromPubkey, String toPubkeyHash, BigDecimal amount) {
+    public Map<String, Object> signTransfer(String fromPubkey, String toPubkeyHash, BigDecimal amount) {
         log.error("signTransfer Feign 降级触发: signing-service 不可用, from={}, to={}, amount={}",
                 fromPubkey, toPubkeyHash, amount);
-        // 已有 ERROR 级别日志告警；Prometheus counter + 外部告警通道接入为后续任务
+        // 已有 ERROR 级别日志告警；Prometheus counter + 外部告警通道接入为后续任务。
+        // 契约修正（2026-09-10）：返回 Map 形态（降级为 null），调用方经
+        // SigningResponses.txHash(null) 提取得 null——按签名失败处理，语义不变。
         return null;
     }
 

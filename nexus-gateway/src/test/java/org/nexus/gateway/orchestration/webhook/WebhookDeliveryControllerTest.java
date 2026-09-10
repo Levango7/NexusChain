@@ -25,11 +25,11 @@ import static org.mockito.Mockito.*;
  *
  * <p>验证投递管理 API：
  * <ul>
- *   <li>GET /api/v1/webhooks/deliveries/{id} - 查询投递状态</li>
- *   <li>GET /api/v1/webhooks/deliveries - 分页查询</li>
- *   <li>GET /api/v1/webhooks/payments/{paymentId}/deliveries - 按支付查询</li>
- *   <li>POST /api/v1/webhooks/dlq/replay - 手动重投</li>
- *   <li>GET /api/v1/webhooks/dlq/messages - 列出 DLQ 消息</li>
+ *   <li>GET /api/v1/webhook-admin/deliveries/{id} - 查询投递状态</li>
+ *   <li>GET /api/v1/webhook-admin/deliveries - 分页查询</li>
+ *   <li>GET /api/v1/webhook-admin/payments/{paymentId}/deliveries - 按支付查询</li>
+ *   <li>POST /api/v1/webhook-admin/dlq/replay - 手动重投</li>
+ *   <li>GET /api/v1/webhook-admin/dlq/messages - 列出 DLQ 消息</li>
  * </ul>
  */
 class WebhookDeliveryControllerTest {

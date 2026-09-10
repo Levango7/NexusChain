@@ -65,7 +65,7 @@ class ChainConnectorTest {
         WalletMgmtFeignClient walletMgmt = mock(WalletMgmtFeignClient.class);
         try (MockedStatic<WalletUtils> mockedWalletUtils = Mockito.mockStatic(WalletUtils.class)) {
             mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
-            when(signing.signTransfer(anyString(), anyString(), Mockito.any())).thenReturn("txHash123");
+            when(signing.signTransfer(anyString(), anyString(), Mockito.any())).thenReturn(okResp("txHash123"));
 
             ChainConnector c = connectorWith(rpc, signing, walletMgmt, gatewayConfigWith("platformPk"));
             ConnectorPaymentResult r = c.createPayment(sampleRequest());
@@ -133,7 +133,7 @@ class ChainConnectorTest {
         WalletMgmtFeignClient walletMgmt = mock(WalletMgmtFeignClient.class);
         try (MockedStatic<WalletUtils> mockedWalletUtils = Mockito.mockStatic(WalletUtils.class)) {
             mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
-            when(signing.signTransfer(anyString(), anyString(), Mockito.any())).thenReturn("txHash123");
+            when(signing.signTransfer(anyString(), anyString(), Mockito.any())).thenReturn(okResp("txHash123"));
             when(rpc.isTransactionConfirmed("txHash123")).thenReturn(true);
 
             ChainConnector c = connectorWith(rpc, signing, walletMgmt, gatewayConfigWith("platformPk"));
@@ -152,7 +152,7 @@ class ChainConnectorTest {
         WalletMgmtFeignClient walletMgmt = mock(WalletMgmtFeignClient.class);
         try (MockedStatic<WalletUtils> mockedWalletUtils = Mockito.mockStatic(WalletUtils.class)) {
             mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
-            when(signing.signTransfer(anyString(), anyString(), Mockito.any())).thenReturn("txHash123");
+            when(signing.signTransfer(anyString(), anyString(), Mockito.any())).thenReturn(okResp("txHash123"));
             when(rpc.isTransactionConfirmed("txHash123")).thenReturn(false);
 
             ChainConnector c = connectorWith(rpc, signing, walletMgmt, gatewayConfigWith("platformPk"));
@@ -185,5 +185,10 @@ class ChainConnectorTest {
                 mock(WalletMgmtFeignClient.class), gatewayConfigWith("platformPk"));
         ConnectorHealth h = c.healthCheck();
         assertFalse(h.isHealthy());
+    }
+
+    /** 契约修正（2026-09-10）：signTransfer 真实响应形状 {statusCode, data, message} 的成功响应构造器。 */
+    private static java.util.Map<String, Object> okResp(String txHash) {
+        return java.util.Map.of("statusCode", 2000, "data", txHash);
     }
 }

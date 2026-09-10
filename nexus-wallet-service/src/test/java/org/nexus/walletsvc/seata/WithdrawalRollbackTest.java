@@ -135,8 +135,7 @@ class WithdrawalRollbackTest {
     @Test
     @DisplayName("场景 3: signing-service 返回空字符串 → 状态置 FAILED")
     void signingServiceReturnsEmptyString_statusSetToFailed() {
-        when(signingServiceClient.signTransfer(anyString(), anyString(), any(BigDecimal.class)))
-                .thenReturn("");
+        when(signingServiceClient.signTransfer(anyString(), anyString(), any(BigDecimal.class))).thenReturn(okResp(""));
 
         String requestId = createApprovedRequest();
 
@@ -152,8 +151,7 @@ class WithdrawalRollbackTest {
     @Test
     @DisplayName("场景 4: signing-service 正常返回 → 状态置 EXECUTED")
     void signingServiceReturnsTxHash_statusSetToExecuted() {
-        when(signingServiceClient.signTransfer(anyString(), anyString(), any(BigDecimal.class)))
-                .thenReturn("0xnormalExecutionTxHash1234567890");
+        when(signingServiceClient.signTransfer(anyString(), anyString(), any(BigDecimal.class))).thenReturn(okResp("0xnormalExecutionTxHash1234567890"));
 
         String requestId = createApprovedRequest();
 
@@ -187,5 +185,10 @@ class WithdrawalRollbackTest {
         assertEquals(true, entity.getRejectionReason().contains("detailed failure reason for debugging"),
                 "rejectionReason 应保留底层异常信息供排查: " + entity.getRejectionReason());
         assert !entity.getRejectionReason().isBlank() : "rejectionReason 不得为空白";
+    }
+
+    /** 契约修正（2026-09-10）：signTransfer 真实响应形状 {statusCode, data, message} 的成功响应构造器。 */
+    private static java.util.Map<String, Object> okResp(String txHash) {
+        return java.util.Map.of("statusCode", 2000, "data", txHash);
     }
 }

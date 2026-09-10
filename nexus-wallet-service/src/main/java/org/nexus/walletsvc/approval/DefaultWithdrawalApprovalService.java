@@ -2,6 +2,7 @@ package org.nexus.walletsvc.approval;
 
 import io.seata.spring.annotation.GlobalTransactional;
 import org.nexus.sdk.client.feign.SigningServiceFeignClient;
+import org.nexus.sdk.client.feign.SigningResponses;
 import org.nexus.sdk.signing.ApprovalPolicy;
 import org.nexus.sdk.wallet.WithdrawalRequest;
 import org.nexus.walletsvc.entity.WithdrawalApproverEntity;
@@ -295,10 +296,12 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
                                 "signing service client not configured; withdrawal aborted (fail-closed)",
                                 false);
                     }
-                    String txHash = signingServiceClient.signTransfer(
+                    // 契约修正（2026-09-10）：Feign 返回签名服务响应 Map，经
+                    // SigningResponses 提取 txHash（null/非2000/缺 data 均得 null）。
+                    String txHash = SigningResponses.txHash(signingServiceClient.signTransfer(
                             platformWalletAddress,
                             e.getToAddress(),
-                            e.getAmount());
+                            e.getAmount()));
                     if (txHash == null || txHash.isEmpty()) {
                         return OnChainResult.failure("signing service returned empty result", false);
                     }
@@ -335,10 +338,10 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
         try {
             String txHash;
             if (signingServiceClient != null) {
-                String result = signingServiceClient.signTransfer(
+                String result = SigningResponses.txHash(signingServiceClient.signTransfer(
                         platformWalletAddress,
                         entity.getToAddress(),
-                        entity.getAmount());
+                        entity.getAmount()));
                 if (result == null || result.isEmpty()) {
                     entity.setStatus(WithdrawalRequest.WithdrawalStatus.FAILED);
                     entity.setRejectionReason("signing service returned empty result");

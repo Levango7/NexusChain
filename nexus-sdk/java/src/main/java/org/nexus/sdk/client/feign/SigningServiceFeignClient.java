@@ -54,9 +54,17 @@ public interface SigningServiceFeignClient {
      *
      * <p>对应 {@code POST /api/v1/transfers/sign}。调用方不传私钥，
      * 由签名服务使用服务端 PlatformKeystore 完成签名。</p>
+     *
+     * <p>契约修正（质量审查 2026-09-10）：签名服务 {@code TxController} 实际
+     * 返回 {@code {"statusCode":2000,"data":"<txhash>","message":...}} JSON
+     * 对象（见 TxController.toResponseMap）。原声明返回 {@code String} 会让
+     * Jackson 在反序列化时抛 MismatchedInputException（JSON 对象 → String），
+     * 触发 fallback 返回 null → 退款/提现被标记 FAILED——真实联调前不会被
+     * 单测发现（全部 mock 返回字符串）。现改为返回 {@code Map<String, Object>}
+     * 匹配真实响应形状；txHash 由 {@code SigningResponses.txHash(Map)} 提取。</p>
      */
     @PostMapping(value = "/transfers/sign", consumes = "application/x-www-form-urlencoded")
-    String signTransfer(@RequestParam("fromPubkey") String fromPubkey,
+    java.util.Map<String, Object> signTransfer(@RequestParam("fromPubkey") String fromPubkey,
                         @RequestParam("toPubkeyHash") String toPubkeyHash,
                         @RequestParam("amount") BigDecimal amount);
 
