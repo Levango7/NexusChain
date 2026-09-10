@@ -213,16 +213,21 @@ jobs:
         # 官方镜像（owasp/dependency-check），参数完全可控。
         # 注：首推镜像名误写 owaspdependencycheck/...（Docker Hub 不存在，
         # run 34538063764 实证 pull access denied），更正为官方 owasp/*。
+        env:
+          # secrets 经 env 中转（2026-09-10）：直接在 if 里插值 secrets
+          # 不存在时会以空串参与表达式，曾以空 key 触发
+          # "Invalid API Key, length of 0"（run 34541005008 实证）
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
         run: |
           # 官方镜像以非 root 运行，无法自建输出目录——宿主侧预创建并放权
           mkdir -p reports && chmod 777 reports
-          # NVD 更新参数：有 NVD_API_KEY secret 时传入（官方推荐，限速宽）；
+          # NVD 更新参数：有 NVD_API_KEY 时传入（官方推荐，限速宽）；
           # 无 key 走匿名模式——NVD 对匿名限速严格，用官方推荐的 6s 请求间隔
-          # + 10 次重试慢速拉取（run 34540057045 实证匿名默认参数会
-          # RateLimited 中断）。NVD_API_KEY 申请：https://nvd.nist.gov/developers
+          # + 10 次重试慢速拉取。NVD_API_KEY 申请：https://nvd.nist.gov/developers
           NVD_ARGS="--nvdApiDelay=6000 --nvdMaxRetryCount=10"
-          if [[ -n "${{ secrets.NVD_API_KEY }}" ]]; then
-            NVD_ARGS="--nvdApiKey=${{ secrets.NVD_API_KEY }}"
+          if [[ -n "$NVD_API_KEY" ]]; then
+            NVD_ARGS="--nvdApiKey=$NVD_API_KEY"
+            echo "::notice::使用 NVD_API_KEY（配置了 secret）"
           else
             echo "::notice::未配置 NVD_API_KEY secret，使用匿名慢速模式（首次拉库较慢）"
           fi
