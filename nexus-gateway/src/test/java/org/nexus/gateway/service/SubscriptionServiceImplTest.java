@@ -55,8 +55,7 @@ class SubscriptionServiceImplTest {
     void createSubscription_onChainAuthSuccess() {
         when(subscriptionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         when(walletAddressHelper.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
-        when(signingServiceClient.signTransfer("platform-pubkey", "payeeHash", BigDecimal.ZERO))
-                .thenReturn("0xAuthTxHash");
+        when(signingServiceClient.signTransfer("platform-pubkey", "payeeHash", BigDecimal.ZERO)).thenReturn(okResp("0xAuthTxHash"));
 
         Subscription result = service.createSubscription(100L, "0xPayer", "0xPayee",
                 new BigDecimal("1000"), 30);
@@ -129,8 +128,7 @@ class SubscriptionServiceImplTest {
         when(subscriptionRepository.claimCharge(eq(1L), eq(Subscription.SubscriptionStatus.ACTIVE),
                 any(LocalDateTime.class), any(LocalDateTime.class))).thenReturn(1);
         when(walletAddressHelper.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
-        when(signingServiceClient.signTransfer("platform-pubkey", "payeeHash", new BigDecimal("1000")))
-                .thenReturn("0xTxHash");
+        when(signingServiceClient.signTransfer("platform-pubkey", "payeeHash", new BigDecimal("1000"))).thenReturn(okResp("0xTxHash"));
 
         String txHash = service.charge(1L);
 
@@ -228,7 +226,7 @@ class SubscriptionServiceImplTest {
         when(subscriptionRepository.claimCharge(anyLong(), eq(Subscription.SubscriptionStatus.ACTIVE),
                 any(LocalDateTime.class), any(LocalDateTime.class))).thenReturn(1);
         when(walletAddressHelper.addressToPubkeyHash("0xPayee")).thenReturn("payeeHash");
-        when(signingServiceClient.signTransfer(any(), any(), any())).thenReturn("0xTx");
+        when(signingServiceClient.signTransfer(any(), any(), any())).thenReturn(okResp("0xTx"));
 
         int count = service.processDueSubscriptions();
         assertEquals(2, count);
@@ -265,5 +263,10 @@ class SubscriptionServiceImplTest {
         s.setStatus(Subscription.SubscriptionStatus.ACTIVE);
         s.setNextChargeAt(LocalDateTime.now().minusDays(1));
         return s;
+    }
+
+    /** 契约修正（2026-09-10）：signTransfer 真实响应形状 {statusCode, data, message} 的成功响应构造器。 */
+    private static java.util.Map<String, Object> okResp(String txHash) {
+        return java.util.Map.of("statusCode", 2000, "data", txHash);
     }
 }

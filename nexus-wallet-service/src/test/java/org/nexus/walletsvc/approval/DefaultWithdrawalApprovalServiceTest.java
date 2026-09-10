@@ -376,7 +376,7 @@ class DefaultWithdrawalApprovalServiceTest {
         String signedTxHash = "0xsignedtxhash1234567890abcdef";
         when(signingServiceClient.signTransfer(
                 eq(PLATFORM_WALLET), eq(WHITELISTED_ADDR), eq(new BigDecimal("100"))))
-                .thenReturn(signedTxHash);
+                .thenReturn(okResp(signedTxHash));
 
         WithdrawalRequest executed = service.executeApprovedWithdrawal(request.getRequestId());
 
@@ -409,7 +409,7 @@ class DefaultWithdrawalApprovalServiceTest {
                 WHITELISTED_ADDR, new BigDecimal("100"), "NEX");
         service.approve(request.getRequestId(), "approver-1");
 
-        when(signingServiceClient.signTransfer(any(), any(), any())).thenReturn("");
+        when(signingServiceClient.signTransfer(any(), any(), any())).thenReturn(okResp(""));
 
         WithdrawalRequest executed = service.executeApprovedWithdrawal(request.getRequestId());
 
@@ -528,8 +528,7 @@ class DefaultWithdrawalApprovalServiceTest {
         svc.approve(request.getRequestId(), "approver-1");
 
         when(signingServiceClient.signTransfer(
-                eq("PLATFORM_HOT_WALLET"), eq(WHITELISTED_ADDR), any()))
-                .thenReturn("0xtx");
+                eq("PLATFORM_HOT_WALLET"), eq(WHITELISTED_ADDR), any())).thenReturn(okResp("0xtx"));
 
         WithdrawalRequest executed = svc.executeApprovedWithdrawal(request.getRequestId());
 
@@ -558,5 +557,10 @@ class DefaultWithdrawalApprovalServiceTest {
     @Test
     void getRequest_nullReturnsNull() {
         assertNull(service.getRequest(null));
+    }
+
+    /** 契约修正（2026-09-10）：signTransfer 真实响应形状 {statusCode, data, message} 的成功响应构造器。 */
+    private static java.util.Map<String, Object> okResp(String txHash) {
+        return java.util.Map.of("statusCode", 2000, "data", txHash);
     }
 }

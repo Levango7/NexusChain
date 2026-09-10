@@ -197,8 +197,7 @@ class WithdrawalServiceIntegrationTest {
     @DisplayName("executeApprovedWithdrawal: 调 signing-service 后转 EXECUTED")
     void executeApprovedWithdrawal_callsSigningServiceAndTransitionsToExecuted() {
         // Mock signing-service 返回交易哈希
-        when(signingServiceClient.signTransfer(anyString(), anyString(), any(BigDecimal.class)))
-                .thenReturn("0xsignedTxHash1234567890abcdef");
+        when(signingServiceClient.signTransfer(anyString(), anyString(), any(BigDecimal.class))).thenReturn(okResp("0xsignedTxHash1234567890abcdef"));
 
         WithdrawalRequest request = withdrawalApprovalService.requestWithdrawal(
                 WHITELISTED_ADDR, new BigDecimal("500"), "NEX");
@@ -233,8 +232,7 @@ class WithdrawalServiceIntegrationTest {
     @Test
     @DisplayName("完整流程: request → approve → execute")
     void fullWorkflow_requestApproveExecute() {
-        when(signingServiceClient.signTransfer(anyString(), anyString(), any(BigDecimal.class)))
-                .thenReturn("0xfullWorkflowTxHash1234567890");
+        when(signingServiceClient.signTransfer(anyString(), anyString(), any(BigDecimal.class))).thenReturn(okResp("0xfullWorkflowTxHash1234567890"));
 
         // 1. request
         WithdrawalRequest request = withdrawalApprovalService.requestWithdrawal(
@@ -254,5 +252,10 @@ class WithdrawalServiceIntegrationTest {
         WithdrawalRequestEntity entity = withdrawalRequestRepository
                 .findByRequestId(request.getRequestId()).orElseThrow();
         assertEquals(WithdrawalRequest.WithdrawalStatus.EXECUTED, entity.getStatus());
+    }
+
+    /** 契约修正（2026-09-10）：signTransfer 真实响应形状 {statusCode, data, message} 的成功响应构造器。 */
+    private static java.util.Map<String, Object> okResp(String txHash) {
+        return java.util.Map.of("statusCode", 2000, "data", txHash);
     }
 }

@@ -66,8 +66,7 @@ class GatewayCoreIntegrationTest {
                 .thenReturn("aabbccddeeff00112233445566778899aabbccdd");
         // Refund signing is delegated to signing-service via signTransfer (platform key).
         // In this gateway-only integration test the wallet service is stubbed to succeed.
-        when(signingServiceFeignClient.signTransfer(anyString(), anyString(), org.mockito.ArgumentMatchers.any(java.math.BigDecimal.class)))
-                .thenReturn("0xRefundTxHash1234567890abcdef1234567890abcdef");
+        when(signingServiceFeignClient.signTransfer(anyString(), anyString(), org.mockito.ArgumentMatchers.any(java.math.BigDecimal.class))).thenReturn(okResp("0xRefundTxHash1234567890abcdef1234567890abcdef"));
     }
 
     private static String apiKey;
@@ -179,5 +178,10 @@ class GatewayCoreIntegrationTest {
     void rejectUnauthorized() throws Exception {
         mockMvc.perform(get("/api/v1/orders/" + orderId))
                 .andExpect(status().isUnauthorized());
+    }
+
+    /** 契约修正（2026-09-10）：signTransfer 真实响应形状 {statusCode, data, message} 的成功响应构造器。 */
+    private static java.util.Map<String, Object> okResp(String txHash) {
+        return java.util.Map.of("statusCode", 2000, "data", txHash);
     }
 }

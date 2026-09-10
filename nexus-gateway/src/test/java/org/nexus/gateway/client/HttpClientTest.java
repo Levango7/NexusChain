@@ -190,6 +190,8 @@ class HttpClientTest {
     void exchangeWallet_delegates() {
         SigningServiceClient signing = mock(SigningServiceClient.class);
         WalletMgmtClient wallet = mock(WalletMgmtClient.class);
+        // 业务边界接口 SigningServiceClient.signTransfer 返回 String（txHash 直出），
+        // 不经 Feign Map 形态——与 Feign 接口的 Map 契约区分。
         when(signing.signTransfer("from", "to", BigDecimal.ONE)).thenReturn("0xTx");
         when(signing.transfer("from", "to", BigDecimal.ONE, "priv")).thenReturn("0xTx2");
         when(wallet.addressToPubkeyHash("addr")).thenReturn("hash");
@@ -212,5 +214,10 @@ class HttpClientTest {
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
+    }
+
+    /** 契约修正（2026-09-10）：signTransfer 真实响应形状 {statusCode, data, message} 的成功响应构造器。 */
+    private static java.util.Map<String, Object> okResp(String txHash) {
+        return java.util.Map.of("statusCode", 2000, "data", txHash);
     }
 }
