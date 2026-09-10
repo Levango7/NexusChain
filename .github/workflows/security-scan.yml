@@ -210,11 +210,13 @@ jobs:
         # 全部失效——NodeAuditAnalyzer 照跑，在 explorer 前端的 npm
         # workspace 聚合 lock 上 Invalid payload 恒红，CI run 34535536040
         # 实证）。Action 无多参数 input，弃用 Action 改直接 docker run
-        # 官方镜像，参数完全可控。
+        # 官方镜像（owasp/dependency-check），参数完全可控。
+        # 注：首推镜像名误写 owaspdependencycheck/...（Docker Hub 不存在，
+        # run 34538063764 实证 pull access denied），更正为官方 owasp/*。
         run: |
           docker run --rm \
             -v "$PWD:/src:rw" -w /src \
-            owaspdependencycheck/dependency-check:latest \
+            owasp/dependency-check:latest \
             --project NexusChain \
             --scan . \
             --format HTML --format JSON \
