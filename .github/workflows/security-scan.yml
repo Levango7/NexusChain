@@ -221,15 +221,13 @@ jobs:
         run: |
           # 官方镜像以非 root 运行，无法自建输出目录——宿主侧预创建并放权
           mkdir -p reports && chmod 777 reports
-          # NVD 更新参数：有 NVD_API_KEY 时传入（官方推荐，限速宽）；
-          # 无 key 走匿名模式——NVD 对匿名限速严格，用官方推荐的 6s 请求间隔
-          # + 10 次重试慢速拉取。NVD_API_KEY 申请：https://nvd.nist.gov/developers
-          NVD_ARGS="--nvdApiDelay=6000 --nvdMaxRetryCount=10"
-          if [[ -n "$NVD_API_KEY" ]]; then
-            NVD_ARGS="--nvdApiKey=$NVD_API_KEY"
-            echo "::notice::使用 NVD_API_KEY（配置了 secret）"
-          else
-            echo "::notice::未配置 NVD_API_KEY secret，使用匿名慢速模式（首次拉库较慢）"
+          # NVD 2023-12 起强制 API key（run 34541896852 实证：匿名+限速参数
+          # 仍被 NVD 拒绝，客户端报 'Invalid API Key, length of 0'）——
+          # --nvdApiDelay 只是限速参数，无 key 连 403 都过不去。
+          # 必须配置仓库 secret NVD_API_KEY（申请：https://nvd.nist.gov/developers）。
+          if [[ -z "$NVD_API_KEY" ]]; then
+            echo "::error::缺少 NVD_API_KEY secret——NVD 已强制 API key，匿名无法拉取漏洞库。请到 https://nvd.nist.gov/developers 申请（免费）并配置到仓库 secrets。"
+            exit 1
           fi
           docker run --rm \
             -v "$PWD:/src:rw" -w /src \
@@ -241,7 +239,7 @@ jobs:
             --failOnCVSS=9 \
             --disableNodeAudit \
             --disableYarnAudit \
-            $NVD_ARGS
+            --nvdApiKey="$NVD_API_KEY"
           ls -la reports/dependency-check-report.html
 
       - name: 上传 OWASP 报告
