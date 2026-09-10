@@ -216,6 +216,16 @@ jobs:
         run: |
           # 官方镜像以非 root 运行，无法自建输出目录——宿主侧预创建并放权
           mkdir -p reports && chmod 777 reports
+          # NVD 更新参数：有 NVD_API_KEY secret 时传入（官方推荐，限速宽）；
+          # 无 key 走匿名模式——NVD 对匿名限速严格，用官方推荐的 6s 请求间隔
+          # + 10 次重试慢速拉取（run 34540057045 实证匿名默认参数会
+          # RateLimited 中断）。NVD_API_KEY 申请：https://nvd.nist.gov/developers
+          NVD_ARGS="--nvdApiDelay=6000 --nvdMaxRetryCount=10"
+          if [[ -n "${{ secrets.NVD_API_KEY }}" ]]; then
+            NVD_ARGS="--nvdApiKey=${{ secrets.NVD_API_KEY }}"
+          else
+            echo "::notice::未配置 NVD_API_KEY secret，使用匿名慢速模式（首次拉库较慢）"
+          fi
           docker run --rm \
             -v "$PWD:/src:rw" -w /src \
             owasp/dependency-check:latest \
@@ -225,7 +235,8 @@ jobs:
             --out ./reports \
             --failOnCVSS=9 \
             --disableNodeAudit \
-            --disableYarnAudit
+            --disableYarnAudit \
+            $NVD_ARGS
           ls -la reports/dependency-check-report.html
 
       - name: 上传 OWASP 报告
