@@ -101,15 +101,23 @@ public class HttpWalletMgmtClient implements WalletMgmtClient {
 
     @Override
     public boolean isAddressWhitelisted(String address) {
-        // PoC 阶段：exchange-wallet 未暴露白名单查询端点，返回 false。
-        // 未来 nexus-wallet-service 独立部署后通过 /api/v1/wallet/whitelist/check 查询。
+        // 占位实现（2026-09-11 质量审查修正）：exchange-wallet 未暴露白名单查询
+        // 端点。当前无生产消费方（WalletMgmtClient.isAddressWhitelisted 接口
+        // 注释有未实现声明）——若被调用说明有代码误把占位值当真实风控输入，
+        // WARN 留痕。真实查询由 Feign 客户端对接 wallet-service
+        // GET /api/v1/wallet/whitelist/check。
+        log.warn("isAddressWhitelisted: stub invoked (address={}) — placeholder false returned; "
+                + "wire real wallet-service query before using in risk decisions", address);
         return false;
     }
 
     @Override
     public String getCustodyTier(String walletId) {
-        // PoC 阶段：exchange-wallet 未暴露托管查询端点，返回 HOT。
-        // 未来 nexus-wallet-service 独立部署后通过 /api/v1/wallet/custody 查询。
+        // 占位实现（2026-09-11 质量审查修正）：同上——无生产消费方，
+        // 占位 "HOT" 不得参与业务判定。真实查询由 Feign 客户端对接
+        // wallet-service 托管端点。
+        log.warn("getCustodyTier: stub invoked (walletId={}) — placeholder HOT returned; "
+                + "wire real wallet-service query before using in custody decisions", walletId);
         return "HOT";
     }
 

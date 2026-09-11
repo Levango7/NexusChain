@@ -3,6 +3,7 @@ package org.nexus.gateway.controller.v2;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.Valid;
 import org.nexus.gateway.OrderService;
 import org.nexus.gateway.PaymentService;
 import org.nexus.gateway.apiversion.CursorPageRequest;
@@ -78,7 +79,9 @@ public class OrderV2Controller {
      */
     @Operation(summary = "Create order (v2)")
     @PostMapping
-    public ResponseEntity<PaymentOrder> createOrder(@RequestBody CreateOrderRequest request,
+    // B8（2026-09-11 质量审查）：补 @Valid——v1 PaymentController.createOrder 有
+    // 而此处缺失，v2 校验口径与 v1 对齐（CreateOrderRequest 上的约束注解生效）
+    public ResponseEntity<PaymentOrder> createOrder(@Valid @RequestBody CreateOrderRequest request,
                                                     HttpServletRequest httpRequest) {
         // P0-4：订单归属以认证上下文为准，不信任请求体中的 merchantId
         Long callerMerchantId = ownershipGuard.requireMerchantId(httpRequest);

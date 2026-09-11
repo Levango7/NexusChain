@@ -107,14 +107,16 @@ const HomePage: React.FC = () => {
           </div>
           <div className="flex items-center gap-4">
             {status && (
+              // 响应式补丁（质量审查 B6）：窄屏隐藏链状态细节（sm:）防挤压
+              // logo 区；<md 只保留块高与 live 标识，peers 细节 md: 起展示
               <div className="flex items-center gap-4 text-xs text-fg-2">
-                <span>
+                <span className="hidden sm:inline">
                   {t("home.height")}:{" "}
                   <span className="text-fg font-mono">
                     {status.height.toLocaleString()}
                   </span>
                 </span>
-                <span>
+                <span className="hidden md:inline">
                   {t("home.peers")}: <span className="text-fg">{status.peers}</span>
                 </span>
                 <span className="flex items-center gap-1">
@@ -201,7 +203,7 @@ const HomePage: React.FC = () => {
                   </span>
                 </div>
                 <div className="flex items-center justify-between mt-1">
-                  <span className="text-xs text-muted font-mono truncate max-w-[200px]">
+                  <span className="text-xs text-muted font-mono truncate max-w-[45%] sm:max-w-[220px]">
                     {block.hash}
                   </span>
                   <span className="text-xs text-fg-2">
@@ -239,7 +241,7 @@ const HomePage: React.FC = () => {
                 className="bg-surface border border-border rounded-lg px-4 py-3 cursor-pointer hover:border-accent hover:bg-surface-2 transition-colors duration-base ease-standard group focus:outline-none focus-visible:shadow-focus"
               >
                 <div className="flex items-center justify-between">
-                  <span className="text-accent font-mono text-xs group-hover:text-accent-hover truncate max-w-[180px]">
+                  <span className="text-accent font-mono text-xs group-hover:text-accent-hover truncate max-w-[40%] sm:max-w-[200px]">
                     {tx.txHash}
                   </span>
                   <span className="text-xs text-muted">

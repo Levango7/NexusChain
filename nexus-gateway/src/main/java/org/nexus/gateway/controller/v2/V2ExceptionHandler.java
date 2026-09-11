@@ -1,5 +1,6 @@
 package org.nexus.gateway.controller.v2;
 
+import org.nexus.gateway.OrderService;
 import org.nexus.gateway.apiversion.V2ErrorCode;
 import org.nexus.gateway.apiversion.V2ErrorResponse;
 import org.nexus.gateway.security.MerchantOwnershipException;
@@ -93,9 +94,9 @@ public class V2ExceptionHandler {
                         V2ErrorCode.FORBIDDEN.getDefaultMessage()));
     }
 
-    @ExceptionHandler(PaymentV2Controller.BatchFailedException.class)
+    @ExceptionHandler(OrderService.BatchCreateException.class)
     public ResponseEntity<V2ErrorResponse> handleBatchFailed(
-            PaymentV2Controller.BatchFailedException e) {
+            OrderService.BatchCreateException e) {
         log.warn("Batch failed at index {}: {}", e.getFailedIndex(), e.getMessage());
         Map<String, Object> details = new HashMap<>();
         details.put("failedIndex", e.getFailedIndex());
