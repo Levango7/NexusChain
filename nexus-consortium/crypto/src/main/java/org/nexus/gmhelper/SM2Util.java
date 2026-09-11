@@ -219,9 +219,18 @@ public class SM2Util extends GMBaseUtil {
         byte[] c3 = new byte[digestLength];
         System.arraycopy(cipher, startPos, c3, 0, c3.length);
 
+        // 修复（2026-09-10，质量审查测试批 CI 实证）：ASN1Integer 对带符号
+        // byte[] 的解释是 BigInteger(sign-magnitude)——坐标首字节 >= 0x80 时
+        // 被解析为负数的补码位，抛 "malformed integer"（2000 次循环实测
+        // 命中率 ~1%，恰为椭圆曲线坐标首字节的概率分布）。必须显式转
+        // 无符号正数（new BigInteger(1, bytes)，与 decodeDERSM2Cipher 的
+        // toByteArray() 回读 + fixToCurveLengthBytes 左补零闭环一致）。
+        java.math.BigInteger x = new java.math.BigInteger(1, c1x);
+        java.math.BigInteger y = new java.math.BigInteger(1, c1y);
+
         ASN1Encodable[] arr = new ASN1Encodable[4];
-        arr[0] = new ASN1Integer(c1x);
-        arr[1] = new ASN1Integer(c1y);
+        arr[0] = new ASN1Integer(x);
+        arr[1] = new ASN1Integer(y);
         arr[2] = new DEROctetString(c3);
         arr[3] = new DEROctetString(c2);
         DERSequence ds = new DERSequence(arr);
@@ -240,6 +249,16 @@ public class SM2Util extends GMBaseUtil {
         byte[] c1y = ((ASN1Integer) as.getObjectAt(1)).getValue().toByteArray();
         byte[] c3 = ((DEROctetString) as.getObjectAt(2)).getOctets();
         byte[] c2 = ((DEROctetString) as.getObjectAt(3)).getOctets();
+
+        // 修复（2026-09-10，与 encodeSM2CipherToDER 的正数化闭环）：
+        // BigInteger.toByteArray() 对正数会【去前导零】——坐标首字节 < 0x80 的
+        // 32 字节值 toByteArray 只剩 31 字节甚至更短（0 值剩 1 字节）；
+        // 顶层前导 0x00 则返回 33 字节。两侧都不等长于 CURVE_LEN，拼回密文
+        // 长度漂移导致 round-trip 断言失败。统一左补零归一化到曲线长度
+        // （与 fixToCurveLengthBytes 同语义，encode 侧已按 new BigInteger(1,..)
+        // 保证无符号正值）。
+        c1x = padToCurveLength(c1x);
+        c1y = padToCurveLength(c1y);
 
         int pos = 0;
         byte[] cipherText = new byte[1 + c1x.length + c1y.length + c2.length + c3.length];
@@ -260,6 +279,26 @@ public class SM2Util extends GMBaseUtil {
         System.arraycopy(c3, 0, cipherText, pos, c3.length);
 
         return cipherText;
+    }
+
+    /**
+     * DER 解码辅助（2026-09-10 修复配套）：把 BigInteger.toByteArray() 的
+     * 变长输出归一化回 CURVE_LEN 字节——超过（顶层符号位 0x00 补零）取低位
+     * 尾部，不足左补零。与 {@code fixToCurveLengthBytes} 语义一致，
+     * 但不依赖实例状态（decode 路径早于实例初始化场景亦可安全使用）。
+     */
+    private static byte[] padToCurveLength(byte[] src) {
+        if (src.length == CURVE_LEN) {
+            return src;
+        }
+        byte[] result = new byte[CURVE_LEN];
+        if (src.length > CURVE_LEN) {
+            // 33 字节形态：首字节为 toByteArray 的符号补零，取尾部 32 字节
+            System.arraycopy(src, src.length - CURVE_LEN, result, 0, CURVE_LEN);
+        } else {
+            System.arraycopy(src, 0, result, CURVE_LEN - src.length, src.length);
+        }
+        return result;
     }
 
     public static byte[] sign(BCECPrivateKey priKey, byte[] srcData) throws NoSuchAlgorithmException,
