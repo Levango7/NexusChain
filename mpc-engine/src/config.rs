@@ -526,9 +526,14 @@ mod tests {
             "tls_ca": "/etc/mpc/tls/ca.crt"
         }"#;
         let config: PartyConfig = serde_json::from_str(json).expect("parse");
-        config.validate().expect("validate passes for env mode (value checked at resolve)");
+        config
+            .validate()
+            .expect("validate passes for env mode (value checked at resolve)");
         // SAFETY: 测试进程独占，不与其他读取该 env 的用例并行冲突
-        std::env::set_var("NEXUS_MPC_STORAGE_KEY", "0000000000000000000000000000000000000000000000000000000000000000");
+        std::env::set_var(
+            "NEXUS_MPC_STORAGE_KEY",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        );
         let err = config.resolve_storage_key().unwrap_err();
         assert!(
             err.to_string().contains("all-zero"),
