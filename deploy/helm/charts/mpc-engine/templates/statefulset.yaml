@@ -117,10 +117,29 @@ spec:
               echo "[init-config] PEERS_JSON=${PEERS_JSON}"
               # storage_key / storage_key_version from Secret-injected env
               STORAGE_KEY_VAL="${STORAGE_KEY:-}"
-              STORAGE_KEY_VERSION_VAL="${STORAGE_KEY_VERSION:-1}"
+              STORAGE_KEY_VERSION_VAL="${STORAGE_VERSION:-1}"
+              # C9 fail-closed（2026-09-12 ADR docs/adr/mpc-zero-key-fail-closed.md 拍板采纳）：
+              # 原全零兜底（fail-warn）会让引擎在全零密钥下建立新会话——恢复真密钥后
+              # 这些会话永久不可解密（静默数据损坏），且健康探针全绿=监控盲区。
+              # 现拒绝启动（exit 1）：Pod CrashLoop → MpcEngineCrashLooping 告警
+              # 立刻可见（kind 演练实测该告警有效），宁可短时不可用，不可用错密钥。
+              # 与 SecurityConfig JWT 密钥缺失 fail-closed 同策略。
               if [ -z "${STORAGE_KEY_VAL}" ]; then
-                echo "[init-config] WARNING: STORAGE_KEY empty, mpc-engine will fail to decrypt sessions"
-                STORAGE_KEY_VAL="0000000000000000000000000000000000000000000000000000000000000000"
+                echo "[init-config] FATAL: STORAGE_KEY is empty — refusing to start (fail-closed)."
+                echo "[init-config] SealedSecret missing/undecrypted? Check: kubectl get secret mpc-engine-secret -n ${NAMESPACE:-nexus}"
+                echo "[init-config] HINT: sessions are AES-256-GCM encrypted; starting with a wrong key"
+                echo "[init-config] silently corrupts new sessions (undecryptable after key restore)."
+                exit 1
+              fi
+              # 防变体：注入了全零占位值（历史兜底值/误 copy）同样拒绝
+              if [ "${STORAGE_KEY_VAL}" = "0000000000000000000000000000000000000000000000000000000000000000" ]; then
+                echo "[init-config] FATAL: STORAGE_KEY is the all-zero placeholder — refusing to start (fail-closed)."
+                exit 1
+              fi
+              # 长度校验：hex 32 字节 = 64 字符（与 MPC_STORAGE_KEY 语义对齐）
+              if [ "${#STORAGE_KEY_VAL}" -ne 64 ]; then
+                echo "[init-config] FATAL: STORAGE_KEY length ${#STORAGE_KEY_VAL} != 64 hex chars (32 bytes)"
+                exit 1
               fi
               # placeholder substitution -> /app/config/node.json
               # (busybox has no envsubst; busybox sed rejects \$; use single-quoted

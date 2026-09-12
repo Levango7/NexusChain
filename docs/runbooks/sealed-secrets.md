@@ -132,7 +132,7 @@ kubectl apply -f sealed-secrets-key-backup.yaml
 | `failed to decrypt secret` | SealedSecret 由旧 key 加密，controller 密钥已轮换 | 用旧 controller 私钥解密或重新加密 |
 | Pod 启动报 `MPC_STORAGE_KEY empty`（WARN） | sealed-secret 名字/namespace 错 | `kubectl get secret -n nexus mpc-engine-secret` 确认存在；检查 chart `secrets.sealedSecretName` |
 | `Resource "mpc-engine-secret" already exists and is not managed by SealedSecret` | 同名普通 Secret 已存在（如 helm 明文模式安装过）——controller 只托管自己创建的 Secret | `kubectl delete secret mpc-engine-secret -n nexus` 删旧，controller 自动重建（带 ownerReference=SealedSecret） |
-| 删 SealedSecret 后 Pod 仍 Running 但会话不可解密 | 零密钥兜底（fail-warn 设计）：init-config 在 STORAGE_KEY 空时用全零密钥 + WARNING 日志，引擎可启动但无法解密既有会话 | 预期行为——SealedSecret 被删是严重事件，需立即恢复（重新 apply 备份的 SealedSecret），会话数据视为失效 |
+| 删 SealedSecret 后 Pod CrashLoop（init-config `FATAL: STORAGE_KEY is empty`） | **fail-closed（2026-09-12 C9 拍板，原 fail-warn 全零兜底已移除）**：密钥缺失/全零/长度非 64 hex 时 init-config 拒绝启动；引擎侧 config.rs 同款校验双保险 | 预期防护行为——立即恢复：重新 apply 备份的 SealedSecret（或 helm 传 storageKey 冒烟值）；Pod 自动重调度恢复。MpcEngineCrashLooping 告警会立刻触发（5min） |
 
 ## 5. 与本仓库的衔接
 
