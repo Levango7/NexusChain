@@ -20,6 +20,9 @@ public enum ErrorCode {
 
     // 403xx - Authorization
     MERCHANT_NOT_VERIFIED(40300, "Merchant not verified"),
+    // 2026-09-11 质量审查 B7：方法安全层（@PreAuthorize）拒绝的业务码——
+    // 原实现 403 HTTP 配 BAD_REQUEST(40000)，业务码与 HTTP 状态错位。
+    ACCESS_DENIED(40301, "Access denied"),
 
     // 403xx - Risk / Compliance rejection
     RISK_REJECTED(40310, "Payment rejected by risk control"),

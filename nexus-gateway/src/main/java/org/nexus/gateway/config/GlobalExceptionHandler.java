@@ -46,8 +46,10 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(AccessDeniedException.class)
     public ResponseEntity<ApiResponse<Void>> handleAccessDenied(AccessDeniedException e) {
         log.warn("Access denied by method security: {}", e.getMessage());
+        // B7（2026-09-11 质量审查）：业务码与 HTTP 状态对齐——403 配
+        // ACCESS_DENIED(40301)（原 BAD_REQUEST(40000) 错位）
         return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                .body(ApiResponse.error(ErrorCode.BAD_REQUEST.getCode(), "Access denied"));
+                .body(ApiResponse.error(ErrorCode.ACCESS_DENIED.getCode(), ErrorCode.ACCESS_DENIED.getMessage()));
     }
 
     @ExceptionHandler(Exception.class)

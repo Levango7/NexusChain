@@ -80,7 +80,7 @@ class HttpClientTest {
     }
 
     @Test
-    @DisplayName("HttpSigningServiceClient.transfer: statusCode=2000 返回 data")
+    @DisplayName("HttpSigningServiceClient.transfer: 已 fail-closed（B4 私钥通道关闭）——即使下游可用也拒绝返回结果")
     void signing_transfer_success() {
         HttpSigningServiceClient client = new HttpSigningServiceClient(cfg);
         RestTemplate rt = mock(RestTemplate.class);
@@ -88,7 +88,9 @@ class HttpClientTest {
                 .thenReturn(new ResponseEntity<>(Map.of("statusCode", 2000, "data", "0xTxHash"), HttpStatus.OK));
         setField(client, "restTemplate", rt);
 
-        assertEquals("0xTxHash", client.transfer("from", "to", BigDecimal.ONE, "priv"));
+        // B4（2026-09-11）：明文私钥 HTTP 传输通道已关闭——方法不再发起
+        // 远程调用，恒返回 null（调用方既有 null=失败语义兼容）
+        assertNull(client.transfer("from", "to", BigDecimal.ONE, "priv"));
     }
 
     @Test

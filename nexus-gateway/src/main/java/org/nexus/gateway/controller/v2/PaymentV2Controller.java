@@ -14,7 +14,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
@@ -63,7 +62,6 @@ public class PaymentV2Controller {
      */
     @Operation(summary = "Batch create payments (v2)")
     @PostMapping("/batch")
-    @Transactional
     public ResponseEntity<Object> batchCreate(@Valid @RequestBody BatchPaymentRequest request) {
         List<BatchPaymentRequest.PaymentItem> items = request.getPayments();
         BatchPaymentRequest.FailureStrategy strategy = request.getOnFailure();
@@ -73,27 +71,29 @@ public class PaymentV2Controller {
 
         log.info("Batch create payments: count={}, strategy={}", items.size(), strategy);
 
-        List<BatchPaymentResponse.SucceededItem> succeeded = new ArrayList<>();
-        List<BatchPaymentResponse.FailedItem> failed = new ArrayList<>();
+        // 事务下沉（2026-09-11 质量审查 B5）：原方法级 @Transactional 迁至
+        // OrderService.batchCreate（Service 层事务边界）。Controller 只做
+        // 协议映射；ALL_OR_NOTHING 失败时 Service 抛 BatchCreateException
+        // 触发回滚，由 GlobalExceptionHandlerV2 转 422。
+        List<CreateOrderRequest> reqs = new ArrayList<>();
+        for (BatchPaymentRequest.PaymentItem item : items) {
+            reqs.add(toItemRequest(item));
+        }
+        boolean allOrNothing = strategy == BatchPaymentRequest.FailureStrategy.ALL_OR_NOTHING;
+        OrderService.BatchCreateResult result = orderService.batchCreate(reqs, allOrNothing);
 
-        for (int i = 0; i < items.size(); i++) {
-            BatchPaymentRequest.PaymentItem item = items.get(i);
-            try {
-                CreateOrderRequest req = toItemRequest(item);
-                PaymentOrder order = orderService.createOrder(req);
-                succeeded.add(new BatchPaymentResponse.SucceededItem(
-                        i, order.getId(), order.getOrderNo(), order.getStatus().name()));
-            } catch (Exception e) {
-                V2ErrorResponse.ErrorBody error = V2ErrorResponse.of(
-                        V2ErrorCode.INTERNAL_ERROR.getCode(),
-                        e.getMessage(), null).getError();
-                failed.add(new BatchPaymentResponse.FailedItem(i, error));
-                log.warn("Batch item {} failed: {}", i, e.getMessage());
-                if (strategy == BatchPaymentRequest.FailureStrategy.ALL_OR_NOTHING) {
-                    // 抛出异常触发事务回滚
-                    throw new BatchFailedException(i, e);
-                }
-            }
+        List<BatchPaymentResponse.SucceededItem> succeeded = new ArrayList<>();
+        for (OrderService.BatchCreateResult.OrderCreated oc : result.orders()) {
+            PaymentOrder order = oc.order();
+            succeeded.add(new BatchPaymentResponse.SucceededItem(
+                    oc.originalIndex(), order.getId(), order.getOrderNo(), order.getStatus().name()));
+        }
+        List<BatchPaymentResponse.FailedItem> failed = new ArrayList<>();
+        for (OrderService.BatchCreateResult.OrderFailed of : result.failures()) {
+            V2ErrorResponse.ErrorBody error = V2ErrorResponse.of(
+                    V2ErrorCode.INTERNAL_ERROR.getCode(),
+                    of.errorMessage(), null).getError();
+            failed.add(new BatchPaymentResponse.FailedItem(of.originalIndex(), error));
         }
 
         BatchPaymentResponse body = new BatchPaymentResponse(succeeded, failed);
@@ -116,20 +116,6 @@ public class PaymentV2Controller {
         req.setIdempotencyKey(item.getIdempotencyKey());
         return req;
     }
-
-    /**
-     * 批量失败异常——触发事务回滚，由 GlobalExceptionHandlerV2 转换为 422 响应。
-     */
-    public static class BatchFailedException extends RuntimeException {
-        private final int failedIndex;
-
-        public BatchFailedException(int failedIndex, Throwable cause) {
-            super("Batch failed at index " + failedIndex + ": " + cause.getMessage(), cause);
-            this.failedIndex = failedIndex;
-        }
-
-        public int getFailedIndex() {
-            return failedIndex;
-        }
-    }
+    // BatchFailedException 已随 B5 事务下沉移至 OrderService.BatchCreateException
+    // （2026-09-11 质量审查：批量事务边界归 Service 层，异常信号同层内聚）
 }

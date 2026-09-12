@@ -98,44 +98,17 @@ public class HttpSigningServiceClient implements SigningServiceClient {
     }
 
     @Override
-    @CircuitBreaker(name = "walletService", fallbackMethod = "transferFallback")
-    @Retry(name = "walletService")
     public String transfer(String fromPubkey, String toPubkeyHash, BigDecimal amount, String privateKey) {
-        try {
-            String baseUrl = gatewayConfig.getExchangeWallet().getBaseUrl();
-            String url = baseUrl + "/ClientToTransferAccount";
-
-            HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
-
-            MultiValueMap<String, String> params = new LinkedMultiValueMap<>();
-            params.add("fromPubkey", fromPubkey);
-            params.add("toPubkeyHash", toPubkeyHash);
-            params.add("amount", amount.toPlainString());
-            params.add("prikey", privateKey);
-
-            HttpEntity<MultiValueMap<String, String>> request = new HttpEntity<>(params, headers);
-            ResponseEntity<Map> resp = restTemplate.postForEntity(url, request, Map.class);
-
-            if (resp.getBody() == null) {
-                log.error("Exchange-wallet returned empty response");
-                return null;
-            }
-
-            Object statusCode = resp.getBody().get("statusCode");
-            if (statusCode instanceof Number && ((Number) statusCode).intValue() == 2000) {
-                Object data = resp.getBody().get("data");
-                String txHash = data != null ? data.toString() : null;
-                log.info("Transfer successful: txHash={}", txHash);
-                return txHash;
-            } else {
-                log.error("Transfer failed: response={}", resp.getBody());
-                return null;
-            }
-        } catch (RuntimeException e) {
-            log.error("Failed to call exchange-wallet transfer: {}", e.getMessage());
-            return null;
-        }
+        // 安全修复（2026-09-11 质量审查 B4）：明文私钥经 HTTP 表单传输的通道
+        // 彻底关闭——本方法 fail-closed 拒绝执行（返回 null，与调用方既有
+        // "null=失败"语义一致）。私钥签名应走 signTransfer（服务端密钥库持钥，
+        // 私钥永不离开签名服务进程）。接口方法保留以维持 SDK 契约稳定，
+        // 生产代码无调用方（仅委托层 ExchangeWalletClient.transfer 透传 +
+        // 一处单测）；未来 v3 API 可安全移除。
+        log.error("transfer(requires privateKey) is DISABLED: plaintext private key over HTTP "
+                + "violates the key-never-leaves-signing-service invariant. "
+                + "Use signTransfer (server-side keystore) instead.");
+        return null;
     }
 
     @Override
@@ -146,11 +119,7 @@ public class HttpSigningServiceClient implements SigningServiceClient {
     }
 
     // --- Circuit breaker fallbacks ---
-
-    private String transferFallback(String fromPubkey, String toPubkeyHash, BigDecimal amount, String privateKey, Throwable t) {
-        log.error("Circuit breaker fallback: transfer failed, cause={}", t.getMessage());
-        return null;
-    }
+    // transferFallback 已随 B4 私钥通道关闭一并移除（transfer 不再有远程调用）
 
     private String signTransferFallback(String fromPubkey, String toPubkeyHash, BigDecimal amount, Throwable t) {
         log.error("Circuit breaker fallback: sign-transfer failed, cause={}", t.getMessage());

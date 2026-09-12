@@ -40,6 +40,14 @@ public interface WalletMgmtClient {
     /**
      * 查询指定地址是否在提现白名单中。
      *
+     * <p><b>未实现声明（2026-09-11 质量审查修正）</b>：当前生产链路无任何
+     * 风控消费方调用本方法（全库检索实证——健康探针走 Feign 接口的真实端点）。
+     * 各实现的现状：HttpWalletMgmtClient 返回 {@code false}（PoC 占位）、
+     * Feign 客户端对接 wallet-service 真端点。若未来把本方法接入风控决策
+     * （提现白名单拦截），<b>必须先实现真实查询</b>——静默返回 {@code false}
+     * 的实现会让全部地址被误拒（fail-closed 方向但语义错误），恒
+     * {@code true} 则形同虚设。接入前删除本段声明并补集成测试。</p>
+     *
      * @param address 钱包地址
      * @return {@code true} 表示已加白
      */
@@ -47,6 +55,11 @@ public interface WalletMgmtClient {
 
     /**
      * 查询指定钱包的托管层级。
+     *
+     * <p><b>未实现声明（2026-09-11 质量审查修正）</b>：同
+     * {@link #isAddressWhitelisted}——无生产消费方；HttpWalletMgmtClient
+     * 占位返回 "HOT"。未来接入托管层级策略（如大额转 COLD 审批）前必须
+     * 实现真实查询，占位值不得参与任何业务判定。</p>
      *
      * @param walletId 钱包 ID
      * @return 托管层级名称（如 "HOT" / "COLD"）

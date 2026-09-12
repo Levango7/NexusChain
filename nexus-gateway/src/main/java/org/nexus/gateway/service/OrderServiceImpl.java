@@ -17,6 +17,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import org.nexus.gateway.ratelimit.IdempotencyStore;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -148,6 +149,36 @@ public class OrderServiceImpl implements OrderService {
 
     private String generateOrderNo() {
         return "NEX" + System.currentTimeMillis() + UUID.randomUUID().toString().substring(0, 6).toUpperCase();
+    }
+
+    /**
+     * v2 批量建单（事务下沉修复，2026-09-11 质量审查 B5）。
+     *
+     * <p>原 v2 Controller 方法级 @Transactional 迁移至此——批量循环 +
+     * ALL_OR_NOTHING 回滚语义不变，事务边界归 Service 层（代理正常生效，
+     * Controller 不再依赖事务代理细节）。异常转换（BatchCreateException →
+     * 422）由 Controller 的异常处理器负责，本层只抛信号。</p>
+     */
+    @Override
+    @Transactional
+    public BatchCreateResult batchCreate(List<CreateOrderRequest> requests, boolean allOrNothing) {
+        List<BatchCreateResult.OrderCreated> orders = new ArrayList<>();
+        List<BatchCreateResult.OrderFailed> failures = new ArrayList<>();
+
+        for (int i = 0; i < requests.size(); i++) {
+            try {
+                PaymentOrder order = createOrder(requests.get(i));
+                orders.add(new BatchCreateResult.OrderCreated(i, order));
+            } catch (Exception e) {
+                log.warn("Batch item {} failed: {}", i, e.getMessage());
+                if (allOrNothing) {
+                    // 抛出信号触发本事务回滚（全部已建单回滚）
+                    throw new BatchCreateException(i, e);
+                }
+                failures.add(new BatchCreateResult.OrderFailed(i, e.getMessage()));
+            }
+        }
+        return new BatchCreateResult(orders, failures);
     }
 
     /**

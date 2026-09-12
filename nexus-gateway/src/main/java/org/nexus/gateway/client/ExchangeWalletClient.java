@@ -63,15 +63,19 @@ public class ExchangeWalletClient {
     /**
      * 执行 NEX 转账（legacy 兼容端点，调用方提供私钥）。
      *
-     * <p>委托给 {@link SigningServiceClient#transfer}。
-     * 新代码应使用 {@link #signTransfer} 避免传输私钥。</p>
+     * <p><b>已废弃（2026-09-11 质量审查 B4）</b>：所有 HTTP 实现已
+     * fail-closed 拒绝执行（明文私钥经网络传输违反"私钥永不离开签名服务"
+     * 安全不变量）。本委托保留仅为接口形状稳定，恒返回 {@code null}。
+     * 新代码必须使用 {@link #signTransfer}（服务端密钥库持钥签名）。</p>
      *
      * @param fromPubkey   发送方公钥 hex
      * @param toPubkeyHash 收款方公钥哈希 hex
      * @param amount       转账金额（最小单位）
-     * @param privateKey   发送方私钥 hex
-     * @return 交易哈希，失败返回 {@code null}
+     * @param privateKey   发送方私钥 hex（已不再被传输，参数仅为契约兼容保留）
+     * @return 恒 {@code null}（通道已关闭）
+     * @deprecated 使用 {@link #signTransfer(String, String, BigDecimal)}
      */
+    @Deprecated
     public String transfer(String fromPubkey, String toPubkeyHash, BigDecimal amount, String privateKey) {
         return signingServiceClient.transfer(fromPubkey, toPubkeyHash, amount, privateKey);
     }
