@@ -112,9 +112,12 @@ kind 节点内 containerd 直连 docker.io/registry.k8s.io 会被墙。两条可
 - 若同名普通 Secret 已存在（如 helm 明文模式创建过），controller 拒绝更新
   （"already exists and is not managed by SealedSecret"）——删旧 Secret 让
   controller 重建（带 ownerReference）。
-- 删除 SealedSecret 会**级联删除**解密出的 Secret；mpc-engine 对此是
-  fail-warn 而非 fail-closed——init-config 用全零密钥兜底（日志 WARNING），
-  引擎能启动但无法解密既有会话（会话数据视为失效）。
+- 删除 SealedSecret 会**级联删除**解密出的 Secret；mpc-engine 对此
+  **fail-closed（2026-09-12 C9 拍板，原 fail-warn 全零兜底已移除）**——
+  init-config 检测 STORAGE_KEY 缺失/全零/长度非 64 hex 时 exit 1 拒绝
+  启动（Pod CrashLoop → MpcEngineCrashLooping 告警 5min 内触发）；
+  引擎侧 config.rs 对 plain/env 双路径同款校验兜底。宁可短时不可用，
+  不可用错密钥建立不可解密会话（静默数据损坏）。
 - 演练的 SealedSecret 密文**不可提交**（绑定演练 controller 公钥）；生产用
   生产 controller 重新 seal 后替换 `30-sealed-secret-mpc-engine.yaml`。
 

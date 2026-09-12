@@ -230,6 +230,17 @@ impl PartyConfig {
                         key_bytes.len()
                     ));
                 }
+                // C9 fail-closed（2026-09-12，ADR docs/adr/mpc-zero-key-fail-closed.md）：
+                // 拒绝全零密钥——历史 init 兜底占位值。全零密钥下建立的新会话在
+                // 真密钥恢复后永久不可解密（静默数据损坏），fail-closed 优于
+                // fail-degraded（与 SecurityConfig JWT 密钥缺失即拒绝启动同策略）。
+                if key_bytes.iter().all(|&b| b == 0) {
+                    return Err(eyre::eyre!(
+                        "MPC-P2-F5: storage_key is all-zero (legacy placeholder) — refusing to \
+                         start (fail-closed): sessions encrypted with this key would be \
+                         silently corrupted. Inject a real key via SealedSecret/secretKey."
+                    ));
+                }
             }
             "env" => {
                 // env 模式：storage_key 从 NEXUS_MPC_STORAGE_KEY 读取，配置文件中可为空
@@ -325,13 +336,25 @@ impl PartyConfig {
     /// 此方法不校验密钥格式（由 `validate` 或调用方负责），仅负责"从哪里取"。
     pub fn resolve_storage_key(&self) -> eyre::Result<String> {
         match self.storage_key_source.as_str() {
-            "env" => std::env::var(NEXUS_STORAGE_KEY_ENV).map_err(|_| {
-                eyre::eyre!(
-                    "低10: storage_key_source='env' but environment variable {} not set \
-                     — set it to a 64-char hex string encoding 32 bytes (AES-256-GCM key)",
-                    NEXUS_STORAGE_KEY_ENV
-                )
-            }),
+            "env" => {
+                let key = std::env::var(NEXUS_STORAGE_KEY_ENV).map_err(|_| {
+                    eyre::eyre!(
+                        "低10: storage_key_source='env' but environment variable {} not set \
+                         — set it to a 64-char hex string encoding 32 bytes (AES-256-GCM key)",
+                        NEXUS_STORAGE_KEY_ENV
+                    )
+                })?;
+                // C9 fail-closed（2026-09-12）：env 模式同款全零拒绝——
+                // resolve 时点才有值，validate 阶段无法预判。
+                if key == "0000000000000000000000000000000000000000000000000000000000000000" {
+                    return Err(eyre::eyre!(
+                        "MPC-P2-F5: {} is the all-zero placeholder — refusing to use \
+                         (fail-closed): sessions encrypted with it would be silently corrupted",
+                        NEXUS_STORAGE_KEY_ENV
+                    ));
+                }
+                Ok(key)
+            }
             "kms" => Err(eyre::eyre!(
                 "低10: storage_key_source='kms' but KMS decryption not yet implemented (TODO); \
                  use 'plain' or 'env' source for now"
@@ -459,6 +482,63 @@ mod tests {
         let config: PartyConfig = serde_json::from_str(json).expect("parse");
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("peers list contains self"));
+    }
+
+    /// C9 fail-closed（2026-09-12）：全零密钥（历史 init 兜底占位值）必须
+    /// 被 validate 拒绝——防止静默建立不可解密会话。
+    #[test]
+    fn reject_config_with_all_zero_storage_key() {
+        let json = r#"{
+            "party_index": 0,
+            "party_id": "party-0",
+            "listen_addr": "0.0.0.0:50051",
+            "peers": [
+                {"party_index": 1, "party_id": "party-1", "endpoint": "https://party-1:50051"}
+            ],
+            "storage_key": "0000000000000000000000000000000000000000000000000000000000000000",
+            "tls_cert": "/etc/mpc/tls/party-0.crt",
+            "tls_key": "/etc/mpc/tls/party-0.key",
+            "tls_ca": "/etc/mpc/tls/ca.crt"
+        }"#;
+        let config: PartyConfig = serde_json::from_str(json).expect("parse");
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.to_string().contains("all-zero"),
+            "error should name the all-zero cause, got: {err}"
+        );
+    }
+
+    /// C9 fail-closed：env 模式的全零值在 resolve 时拒绝（validate 阶段
+    /// 环境变量尚未读取）。
+    #[test]
+    fn reject_env_mode_all_zero_storage_key() {
+        let json = r#"{
+            "party_index": 0,
+            "party_id": "party-0",
+            "listen_addr": "0.0.0.0:50051",
+            "peers": [
+                {"party_index": 1, "party_id": "party-1", "endpoint": "https://party-1:50051"}
+            ],
+            "storage_key": "",
+            "storage_key_source": "env",
+            "tls_cert": "/etc/mpc/tls/party-0.crt",
+            "tls_key": "/etc/mpc/tls/party-0.key",
+            "tls_ca": "/etc/mpc/tls/ca.crt"
+        }"#;
+        let config: PartyConfig = serde_json::from_str(json).expect("parse");
+        config
+            .validate()
+            .expect("validate passes for env mode (value checked at resolve)");
+        // SAFETY: 测试进程独占，不与其他读取该 env 的用例并行冲突
+        std::env::set_var(
+            "NEXUS_MPC_STORAGE_KEY",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        );
+        let err = config.resolve_storage_key().unwrap_err();
+        assert!(
+            err.to_string().contains("all-zero"),
+            "resolve should reject all-zero env key, got: {err}"
+        );
     }
 
     #[test]
