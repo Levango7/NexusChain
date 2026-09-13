@@ -5,6 +5,15 @@
 # 使 Flyway migration 的同一份 SQL 在 H2 和 MySQL 下均可执行。
 # H2 控制台：http://localhost:8083/h2-console
 spring:
+  # Seata 排除（2026-09-14 10e 收尾，与 signing/gateway dev profile 对齐）：dev
+  # 环境无 Seata TC server，SeataAutoConfiguration 连 127.0.0.1:8091 失败阻断
+  # 启动（全栈演练实证——wallet 此前遗漏，旧 drill yaml 的 SEATA_ENABLED=false
+  # 是死配置：application.yml 硬编码 seata.enabled: true）。生产走 prod profile 启用。
+  autoconfigure:
+    exclude:
+      - org.apache.seata.spring.boot.autoconfigure.SeataAutoConfiguration
+      - org.apache.seata.spring.boot.autoconfigure.SeataDataSourceAutoConfiguration
+      - com.alibaba.cloud.seata.SeataAutoConfiguration
   datasource:
     url: jdbc:h2:mem:nexus_wallet;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE;MODE=MySQL
     username: sa
