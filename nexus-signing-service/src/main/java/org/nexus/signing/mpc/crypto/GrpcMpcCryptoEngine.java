@@ -21,6 +21,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
 import jakarta.annotation.PostConstruct;
@@ -104,6 +105,11 @@ import java.util.concurrent.TimeUnit;
  * @see MpcCryptoEngine
  * @see ZeroizingByteArray
  */
+// @Primary（2026-09-12 Boot4 兼容批）：两个 MpcCryptoEngine 实现并存时，
+// 按类型注入（如 ColdWalletMultiSigService 的 mpcCryptoEngine 字段）需要唯一
+// 主候选。GG20 路径是默认（mpc.engine.cggmp-enabled 默认 false），故本实现为主。
+// CGGMP21 路径由 cggmpEngine（具体类型注入）+ isCggmpEnabled() 运行时切换。
+@Primary
 @Component
 public class GrpcMpcCryptoEngine implements MpcCryptoEngine {
 
