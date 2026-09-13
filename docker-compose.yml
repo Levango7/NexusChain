@@ -40,6 +40,12 @@ services:
       # CI 审计修复（ZAP/DAST）：容器网络内 core 的地址是服务名 nexus-core，
       # 默认 http://localhost:19585 在容器内指向自身导致链 RPC 恒不可达
       - NEX_CHAIN_RPC_URL=http://nexus-core:19585
+      # 10g k6 凭证预置（2026-09-14）：确定性 dev JWT 密钥——此前未配置时
+      # gateway/signing 双侧各自随机密钥 fail-closed，服务间 JWT 鉴权从未
+      # 真正可用，ADMIN 端点（商户 api-keys）也无从自助调用。同一值必须
+      # 同时注入 nexus-signing-service（HS256 共享密钥，application.yml:246）。
+      # 仅限本地 dev，生产经 SealedSecret/环境注入真实密钥（backlog #2）。
+      - JWT_SECRET=${NEX_DEV_JWT_SECRET:-nexus-dev-only-jwt-secret-0123456789abcdef}
     depends_on:
       nexus-core:
         condition: service_healthy
@@ -98,6 +104,10 @@ services:
       - NEX_NACOS_SERVER=nexus-nacos:8848
       - NEX_SEATA_SERVER=nexus-seata-server:8091
       - NEX_ZIPKIN_ENDPOINT=http://nexus-zipkin:9411/api/v2/spans
+      # 10g（2026-09-14）：与 nexus-gateway 共享同一 dev JWT 密钥——signing
+      # 侧 SecurityConfig 校验 gateway Feign 注入的 Bearer token（HS256），
+      # 双侧密钥必须一致（此前双侧各自随机，服务间鉴权从未可用）
+      - JWT_SECRET=${NEX_DEV_JWT_SECRET:-nexus-dev-only-jwt-secret-0123456789abcdef}
       # MPC-P1-05: 向 mpc-engine 发起 gRPC 调用的 Bearer token，须与 mpc-engine 的 MPC_AUTH_TOKEN 一致
       # P0-8 加固：开发默认值内联，生产必须通过环境变量 MPC_AUTH_TOKEN 覆盖（与 mpc-engine 各节点保持一致）
       - NEX_MPC_ENGINE_AUTH_TOKEN=${MPC_AUTH_TOKEN:-dev-mpc-engine-token-change-in-prod}

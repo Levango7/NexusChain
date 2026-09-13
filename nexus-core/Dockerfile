@@ -79,10 +79,12 @@ RUN echo "=== thin jar 检查 org/nexus/Start.class ===" && \
 
 # === Stage 1.5: directory builder ===
 # distroless 无 shell/mkdir/chown，用 busybox 创建 nonroot 可写目录
+# /app/logs（2026-09-14 10b 补）：logback.xml:18 ./logs/nexuscore.log 无 profile
+# 守卫，WORKDIR=/app → /app/logs；目录缺失即 Logback 启动失败（演练 CrashLoop 实证）
 FROM busybox:1.36.1 AS dir-builder
-RUN mkdir -p /app/leveldb /app/data && \
-    touch /app/leveldb/.keep /app/data/.keep && \
-    chown -R 65532:65532 /app/leveldb /app/data
+RUN mkdir -p /app/leveldb /app/data /app/logs && \
+    touch /app/leveldb/.keep /app/data/.keep /app/logs/.keep && \
+    chown -R 65532:65532 /app/leveldb /app/data /app/logs
 
 # === Stage 2: runtime (distroless nonroot) ===
 # gcr.io/distroless/java17-debian13:nonroot 默认用户 nonroot (UID=65532)
