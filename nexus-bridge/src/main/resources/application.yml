@@ -44,6 +44,30 @@ spring:
             refresh: true
         file-extension: yaml
         refresh-enabled: true
+    # Sentinel 控制台地址（规则推送 + 监控），与 docker-compose sentinel-dashboard 对齐
+    sentinel:
+      transport:
+        dashboard: ${NEX_SENTINEL_DASHBOARD:localhost:8858}
+        # 客户端与 Sentinel Dashboard 通信端口（默认 8719，按服务递增；bridge 用 8721）
+        port: ${NEX_SENTINEL_CLIENT_PORT:8721}
+      # 取消懒加载，启动即向 Dashboard 注册
+      eager: true
+      # Sentinel 数据源：从 Nacos 订阅规则（nexus-sentinel-rules.yaml）
+      datasource:
+        ds1:
+          nacos:
+            server-addr: ${NEX_NACOS_SERVER:localhost:8848}
+            namespace: ${NEX_NACOS_NAMESPACE:dev}
+            group-id: NEXUS_GROUP
+            data-id: nexus-sentinel-rules.yaml
+            rule-type: flow
+    # Spring Cloud LoadBalancer 配置（替代已废弃的 Ribbon）
+    loadbalancer:
+      ribbon:
+        enabled: false
+      cache:
+        enabled: true
+        ttl: 30s
   # === Phase 3 任务 #61：优雅停机等待时长（设计文档 §4.6.2） ===
   lifecycle:
     timeout-per-shutdown-phase: 30s
@@ -70,32 +94,6 @@ spring:
     properties:
       hibernate:
         dialect: org.hibernate.dialect.MySQL8Dialect
-  # === Phase 2 任务 #58：Spring Cloud Alibaba / Sentinel 配置 ===
-  cloud:
-    # Sentinel 控制台地址（规则推送 + 监控），与 docker-compose sentinel-dashboard 对齐
-    sentinel:
-      transport:
-        dashboard: ${NEX_SENTINEL_DASHBOARD:localhost:8858}
-        # 客户端与 Sentinel Dashboard 通信端口（默认 8719，按服务递增；bridge 用 8721）
-        port: ${NEX_SENTINEL_CLIENT_PORT:8721}
-      # 取消懒加载，启动即向 Dashboard 注册
-      eager: true
-      # Sentinel 数据源：从 Nacos 订阅规则（nexus-sentinel-rules.yaml）
-      datasource:
-        ds1:
-          nacos:
-            server-addr: ${NEX_NACOS_SERVER:localhost:8848}
-            namespace: ${NEX_NACOS_NAMESPACE:dev}
-            group-id: NEXUS_GROUP
-            data-id: nexus-sentinel-rules.yaml
-            rule-type: flow
-    # Spring Cloud LoadBalancer 配置（替代已废弃的 Ribbon）
-    loadbalancer:
-      ribbon:
-        enabled: false
-      cache:
-        enabled: true
-        ttl: 30s
 
 # === OpenFeign 配置（设计文档 §4.4.2，预留 bridge 调用其他微服务的能力） ===
 feign:

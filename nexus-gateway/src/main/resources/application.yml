@@ -41,6 +41,51 @@ spring:
             refresh: true
         file-extension: yaml
         refresh-enabled: true
+    # Sentinel 控制台地址（规则推送 + 监控），与 docker-compose sentinel-dashboard 对齐
+    sentinel:
+      transport:
+        dashboard: ${NEX_SENTINEL_DASHBOARD:localhost:8858}
+        # 客户端与控制台心跳间隔（毫秒），默认 10s
+        heartbeat-interval-ms: 10000
+      # 熔断降级后快速失败，不打印日志风暴
+      log:
+        switch-pattern: false
+    # Spring Cloud LoadBalancer 配置（替代已废弃的 Ribbon）
+    loadbalancer:
+      ribbon:
+        enabled: false
+      cache:
+        enabled: true
+        ttl: 30s
+    # OpenFeign 客户端配置（设计文档 §4.4.2）
+    # 超时按服务敏感度区分：signing-service 5s（签名+广播允许较长）、wallet-service 3s（地址工具轻量）
+    openfeign:
+      client:
+        config:
+          default:
+            connect-timeout: 3000
+            read-timeout: 10000
+            logger-level: BASIC
+          # 签名服务：签名 + 广播，允许较长读超时（5s）
+          nexus-signing-service:
+            connect-timeout: 2000
+            read-timeout: 5000
+          # 钱包管理服务：地址工具/提现审批，轻量调用（3s）
+          nexus-wallet-service:
+            connect-timeout: 2000
+            read-timeout: 3000
+          # 跨链桥：跨链操作允许最长
+          nexus-bridge:
+            connect-timeout: 3000
+            read-timeout: 15000
+      # 启用 Sentinel 作为 Feign 的熔断器（fallback 类 Phase 2 #61 补全）
+      circuitbreaker:
+        enabled: true
+      compression:
+        request:
+          enabled: true
+        response:
+          enabled: true
 
   # === Phase 3 任务 #61：优雅停机等待时长（设计文档 §4.6.2） ===
   lifecycle:
@@ -96,55 +141,8 @@ spring:
 
 
   # === Phase 1 任务 #55：Spring Cloud Alibaba / OpenFeign 配置 ===
-  # Resilience4j 已移除（build.gradle 删除依赖），熔断/限流改由 Sentinel 承担。
-  # Nacos discovery/config 的 server-addr/namespace/group 在 bootstrap.yml 声明；
-  # 此处补充 Sentinel transport（控制台地址）与 OpenFeign 客户端超时/重试配置。
-  cloud:
-    # Sentinel 控制台地址（规则推送 + 监控），与 docker-compose sentinel-dashboard 对齐
-    sentinel:
-      transport:
-        dashboard: ${NEX_SENTINEL_DASHBOARD:localhost:8858}
-        # 客户端与控制台心跳间隔（毫秒），默认 10s
-        heartbeat-interval-ms: 10000
-      # 熔断降级后快速失败，不打印日志风暴
-      log:
-        switch-pattern: false
-    # Spring Cloud LoadBalancer 配置（替代已废弃的 Ribbon）
-    loadbalancer:
-      ribbon:
-        enabled: false
-      cache:
-        enabled: true
-        ttl: 30s
-    # OpenFeign 客户端配置（设计文档 §4.4.2）
-    # 超时按服务敏感度区分：signing-service 5s（签名+广播允许较长）、wallet-service 3s（地址工具轻量）
-    openfeign:
-      client:
-        config:
-          default:
-            connect-timeout: 3000
-            read-timeout: 10000
-            logger-level: BASIC
-          # 签名服务：签名 + 广播，允许较长读超时（5s）
-          nexus-signing-service:
-            connect-timeout: 2000
-            read-timeout: 5000
-          # 钱包管理服务：地址工具/提现审批，轻量调用（3s）
-          nexus-wallet-service:
-            connect-timeout: 2000
-            read-timeout: 3000
-          # 跨链桥：跨链操作允许最长
-          nexus-bridge:
-            connect-timeout: 3000
-            read-timeout: 15000
-      # 启用 Sentinel 作为 Feign 的熔断器（fallback 类 Phase 2 #61 补全）
-      circuitbreaker:
-        enabled: true
-      compression:
-        request:
-          enabled: true
-        response:
-          enabled: true
+  # nacos / sentinel / loadbalancer / openfeign 全部合并到上方单一 spring.cloud 块
+  #（2026-09-12 修复：两个 cloud 键导致 YAML duplicate key → 启动失败）。
 
 # === REQ-14 安全加固：Feign 服务间调用启用 TLS（mTLS） ===
 # 通过 JDK 系统属性注入信任库与密钥库，所有 Feign 调用（OkHttp/ClientHttpRequestFactory）
