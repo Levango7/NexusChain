@@ -95,7 +95,13 @@ dependencies {
     runtimeOnly 'io.jsonwebtoken:jjwt-jackson:0.12.6'
 
     // === P3 高#8（任务 #375）：数据库迁移 + 驱动（与 nexus-wallet-service 既有写法对齐） ===
-    // Flyway 10.x（Boot 3.3.13 BOM 管理），10.x 需数据库专用模块
+    // Flyway 11.x（Boot 4.0.8 BOM 管理 11.14.1）；H2 支持内置于 flyway-core
+    //（org/flywaydb/core/internal/database/h2/，2026-09-12 实证——中央仓库
+    // 无 flyway-database-h2 制品，勿加）
+    // 2026-09-12 Boot4 兼容批 10c 修复：Boot 4 把 Flyway 自动配置拆到
+    // spring-boot-flyway 模块——裸 flyway-core 不触发迁移（零日志静默跳过，
+    // 全栈演练实证）。改用 starter（= flyway-core + spring-boot-flyway）。
+    implementation 'org.springframework.boot:spring-boot-starter-flyway'
     implementation 'org.flywaydb:flyway-core'
     implementation 'org.flywaydb:flyway-mysql'
     // H2 内存数据库（dev/test profile）
@@ -104,8 +110,9 @@ dependencies {
     runtimeOnly 'com.mysql:mysql-connector-j'
 
     // === Micrometer Tracing + Zipkin（Phase 3 任务 #61，设计文档 §4.3.1） ===
-    // SpringBoot 3.2.5 BOM 管理版本（micrometer-tracing 1.2.5 + zipkin-reporter-brave 2.16.4）
-    // W3C traceparent 格式跨服务传播，Zipkin 上报，Feign 自动埋点
+    // Boot 4 拆分后 Tracer 自动配置在独立模块（kind 全栈演练实证：tracing jar
+    // 8 个全在但 Tracer bean 不装配 → MpcSigner 注入失败）。BOM 管理版本 4.0.8。
+    implementation 'org.springframework.boot:spring-boot-micrometer-tracing'
     implementation 'io.micrometer:micrometer-tracing-bridge-brave'
     implementation 'io.zipkin.reporter2:zipkin-reporter-brave'
     implementation 'io.github.openfeign:feign-micrometer'
@@ -130,6 +137,8 @@ dependencies {
 
     // === Sentinel 熔断 / 限流 ===
     implementation 'com.alibaba.cloud:spring-cloud-starter-alibaba-sentinel'
+    // 2026-09-12 Boot4 兼容批：Sentinel Nacos 数据源（application.yml 的 spring.cloud.sentinel.datasource.ds1 引用 NacosDataSource——`Boot 4`下不再传递引入，缺失 = NoClassDefFoundError 启动失败，全栈演练实证）
+    implementation 'com.alibaba.csp:sentinel-datasource-nacos'
 
     // === Seata 分布式事务（Phase 3 任务 #61） ===
     // SCA 2023.0.1.0 BOM 管理 seata-spring-boot-starter 版本（2.0.0），设计文档 §4.1 / §4.2.2

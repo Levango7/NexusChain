@@ -19,11 +19,38 @@ server:
       timeout: 30m
 
 spring:
-  # === Phase 3 任务 #61：优雅停机等待时长（设计文档 §4.6.2） ===
-  lifecycle:
-    timeout-per-shutdown-phase: 30s
-  # Sentinel 集成（设计文档 §4.3）
+  application:
+    name: nexus-signing-service
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:dev}
+  # === Nacos 服务发现 + 配置中心（2026-09-12 迁移：bootstrap.yml → application.yml） ===
+  # Boot 4 + Spring Cloud 2025 下 bootstrap context 默认关闭，bootstrap.yml 的
+  # spring.cloud.* 属性 main context 读不到 → discovery 不装配（kind 全栈演练
+  # 实证）。迁到 application.yml 后 main context 可见即装配。bootstrap.yml 已退役。
   cloud:
+    nacos:
+      discovery:
+        server-addr: ${NEX_NACOS_SERVER:localhost:8848}
+        namespace: ${NEX_NACOS_NAMESPACE:dev}
+        group: ${NEX_NACOS_GROUP:NEXUS_GROUP}
+        cluster-name: ${NEX_NACOS_CLUSTER:DEFAULT}
+        metadata:
+          version: ${NEX_SERVICE_VERSION:2.1.0}
+          region: ${NEX_REGION:cn-east-1}
+      config:
+        server-addr: ${NEX_NACOS_SERVER:localhost:8848}
+        namespace: ${NEX_NACOS_NAMESPACE:dev}
+        group: ${NEX_NACOS_GROUP:NEXUS_GROUP}
+        shared-configs:
+          - data-id: nexus-common.yaml
+            group: NEXUS_GROUP
+            refresh: true
+          - data-id: nexus-sentinel-rules.yaml
+            group: NEXUS_GROUP
+            refresh: true
+        file-extension: yaml
+        refresh-enabled: true
+    # Sentinel 集成（设计文档 §4.3）—— 与 nacos 同属 spring.cloud
     sentinel:
       transport:
         dashboard: ${NEX_SENTINEL_DASHBOARD:localhost:8858}
@@ -40,6 +67,9 @@ spring:
             group-id: NEXUS_GROUP
             data-id: nexus-sentinel-rules.yaml
             rule-type: flow
+  # === Phase 3 任务 #61：优雅停机等待时长（设计文档 §4.6.2） ===
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
   # === P3 审批持久化（optional-improvements 高#8）：数据库持久化 ===
   # 生产 MySQL；dev/test profile 由 application-dev.yml / application-test.yml 覆盖为 H2
   datasource:

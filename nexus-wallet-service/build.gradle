@@ -94,8 +94,8 @@ dependencies {
     runtimeOnly 'org.postgresql:postgresql:42.7.12'
 
     // === Micrometer Tracing + Zipkin（Phase 3 任务 #61，设计文档 §4.3.1） ===
-    // SpringBoot 3.2.5 BOM 管理版本（micrometer-tracing 1.2.5 + zipkin-reporter-brave 2.16.4）
-    // W3C traceparent 格式跨服务传播，Zipkin 上报，Feign 自动埋点
+    // Boot 4 拆分后 Tracer 自动配置在独立模块（同 signing-service 修复）
+    implementation 'org.springframework.boot:spring-boot-micrometer-tracing'
     implementation 'io.micrometer:micrometer-tracing-bridge-brave'
     implementation 'io.zipkin.reporter2:zipkin-reporter-brave'
     implementation 'io.github.openfeign:feign-micrometer'
@@ -123,6 +123,8 @@ dependencies {
 
     // === Sentinel 熔断 / 限流 ===
     implementation 'com.alibaba.cloud:spring-cloud-starter-alibaba-sentinel'
+    // 2026-09-12 Boot4 兼容批：Sentinel Nacos 数据源（application.yml 的 spring.cloud.sentinel.datasource.ds1 引用 NacosDataSource——`Boot 4`下不再传递引入，缺失 = NoClassDefFoundError 启动失败，全栈演练实证）
+    implementation 'com.alibaba.csp:sentinel-datasource-nacos'
 
     // === Seata 分布式事务（Phase 3 任务 #61） ===
     // SCA 2023.0.1.0 BOM 管理 seata-spring-boot-starter 版本（2.0.0），设计文档 §4.1 / §4.2.2

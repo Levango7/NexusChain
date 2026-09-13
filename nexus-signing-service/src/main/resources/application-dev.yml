@@ -10,3 +10,11 @@ spring:
     username: sa
     password:
     driver-class-name: org.h2.Driver
+  # Seata 排除（2026-09-12 B5/10e 对齐 gateway dev profile）：dev 环境无 Seata TC
+  # server，SeataAutoConfiguration 连 127.0.0.1:8091 失败会阻断启动（全栈演练实证）。
+  # 生产环境走 application-prod.yml 启用 Seata。
+  autoconfigure:
+    exclude:
+      - org.apache.seata.spring.boot.autoconfigure.SeataAutoConfiguration
+      - org.apache.seata.spring.boot.autoconfigure.SeataDataSourceAutoConfiguration
+      - com.alibaba.cloud.seata.SeataAutoConfiguration
