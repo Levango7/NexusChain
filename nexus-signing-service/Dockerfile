@@ -54,12 +54,24 @@ RUN ./gradlew :nexus-signing-service:bootJar --no-daemon -x test
 RUN find /workspace/nexus-signing-service/build/libs -name '*.jar' ! -name '*-plain.jar' \
     -exec cp {} /workspace/app.jar \;
 
+# === Stage 1.5: directory builder（2026-09-14 10b 目录预建） ===
+# /var/log/nexus：prod logback 的 JSON+audit 文件（logback-spring.xml:38,60）
+# /app/leveldb：Leveldb.java:40 user.dir/leveldb，@PostConstruct 无条件打开，
+# 目录不存在即启动失败（演练 CrashLoop 实证）。.keep 占位使空目录可被 COPY 携带。
+FROM busybox:1.36.1 AS dir-builder
+RUN mkdir -p /var/log/nexus /app/leveldb && \
+    touch /var/log/nexus/.keep /app/leveldb/.keep && \
+    chown -R 65532:65532 /var/log/nexus /app/leveldb
+
 # === Stage 2: runtime (distroless nonroot) ===
 # gcr.io/distroless/java17-debian13:nonroot 默认用户 nonroot (UID=65532)
 # 无 shell / 无 curl / 无包管理器，攻击面最小，满足非 root 要求
 FROM gcr.io/distroless/java17-debian13:nonroot
 WORKDIR /app
 COPY --from=builder /workspace/app.jar app.jar
+# 预建目录（属主 nonroot；详见 dir-builder 阶段注释）
+COPY --chown=nonroot:nonroot --from=dir-builder /var/log/nexus /var/log/nexus
+COPY --chown=nonroot:nonroot --from=dir-builder /app/leveldb /app/leveldb
 # busybox 静态二进制（~1.2MB，无动态依赖）：仅用于 compose healthcheck（wget）。
 # distroless 无 curl/wget/shell，注入单个静态 busybox 提供 wget 子命令，
 # 不引入 shell 与包管理器，保持最小攻击面（DAST 修复 2026-08-28）。

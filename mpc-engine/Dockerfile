@@ -41,7 +41,12 @@ RUN cargo build --release --features tls
 FROM debian:bookworm-slim
 
 # ca-certificates 便于出站 HTTPS（如拉取参与方元数据）；glibc 与 rust:1.80(bookworm) 一致。
+# apt-get upgrade -y（2026-09-14）：base 镜像重建滞后 DSA 数天~数周，窗口期内
+# Trivy DB 已收录新 CVE 而镜像包未更新（mpc-engine/zk 双双被 libpcre2-8-0
+# CVE-2026-86145/89161 HIGH 阻断实证）。构建期全量 point-release 升级让
+# "重建镜像"本身成为安全闭环，避免逐 CVE 改 Dockerfile 的跑步机。
 RUN apt-get update \
+    && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 

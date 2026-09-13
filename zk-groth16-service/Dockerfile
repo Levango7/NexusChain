@@ -12,7 +12,9 @@ WORKDIR /src/zk-groth16-service
 RUN cargo build --release
 
 FROM debian:bookworm-slim
-RUN apt-get update -qq && apt-get install -y -qq ca-certificates && rm -rf /var/lib/apt/lists/*
+# apt-get upgrade -y（2026-09-14）：闭 base 镜像重建滞后的 CVE 窗口期
+#（libpcre2-8-0 CVE-2026-86145/89161 HIGH 阻断实证，见 mpc-engine 同批注释）
+RUN apt-get update -qq && apt-get upgrade -y -qq && apt-get install -y -qq ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY --from=build /src/zk-groth16-service/target/release/zk-groth16-service /usr/local/bin/zk-groth16-service
 # 可信设置目录（外部仪式产出经卷挂载或 API 导入）
 RUN mkdir -p /setup && chmod 0700 /setup
