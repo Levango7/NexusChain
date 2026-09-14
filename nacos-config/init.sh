@@ -64,38 +64,75 @@ for i in $(seq 1 30); do
   sleep 1
 done
 
-# 2. 创建 namespace（幂等：先查列表，已存在则跳过）
+# 2. 创建 namespace（幂等：先查列表，已存在则跳过。
+#    注意 v3 list 响应字段是 "namespace"，不是 "namespaceId"——
+#    2026-09-14 实测：{"code":0,"data":[{"namespace":"public",...}]}）
 echo "[2/5] 创建 namespace..."
+ns_exists() {
+  curl -sf "${AUTH[@]}" "${BASE}/nacos/v3/admin/core/namespace/list" 2>/dev/null \
+    | grep -q "\"namespace\":\"${1}\""
+}
 create_namespace() {
   local id="$1" name="$2" desc="$3"
-  if curl -sf "${AUTH[@]}" "${BASE}/nacos/v3/admin/core/namespace/list" 2>/dev/null \
-      | grep -q "\"namespaceId\":\"${id}\""; then
+  if ns_exists "${id}"; then
     echo "  namespace ${id} 已存在，跳过"
     return
   fi
-  curl -sf -X POST "${AUTH[@]}" "${BASE}/nacos/v3/admin/core/namespace" \
+  # POST 容忍重复报错（并发/幂等），以最终 list 结果为准
+  curl -s -X POST "${AUTH[@]}" "${BASE}/nacos/v3/admin/core/namespace" \
     --data-urlencode "namespaceId=${id}" \
     --data-urlencode "namespaceName=${name}" \
-    --data-urlencode "namespaceDesc=${desc}" >/dev/null
-  echo "  namespace ${id} (${name}) 创建成功"
+    --data-urlencode "namespaceDesc=${desc}" >/dev/null || true
+  if ns_exists "${id}"; then
+    echo "  namespace ${id} (${name}) 创建成功"
+  else
+    echo "  [ERROR] namespace ${id} 创建失败"
+    exit 1
+  fi
+}
+
+# 2b. 鉴权用户引导（Nacos 3.x 开启鉴权后，客户端 gRPC naming 通道需要
+#     用户名/密码登录——identity header 只覆盖 admin API，服务注册不走它，
+#     2026-09-14 演练实证 ErrCode:403 "User not found"）。
+#     admin 初始化是一次性的（state.auth_admin_request=true 时才需要）；
+#     服务统一用内置 ROLE_ADMIN 的 nacos 用户注册（3.1.2 的 /v3/auth/role
+#     授权接口存在 200-空响应不生效的缺陷，≥3.2.4 修复——自建低权用户
+#     需等升级后再启用）。
+NACOS_ADMIN_PASSWORD="${NACOS_ADMIN_PASSWORD:-NexusAdmin2026}"
+bootstrap_auth_user() {
+  local admin_req
+  admin_req=$(curl -sf "${AUTH[@]}" "${BASE}/nacos/v3/admin/core/state" 2>/dev/null \
+    | grep -o '"auth_admin_request":"true"' || true)
+  if [ -z "${admin_req}" ]; then
+    echo "  admin 用户已初始化，跳过"
+    return
+  fi
+  curl -s -X POST "${AUTH[@]}" "${BASE}/nacos/v3/auth/user/admin" \
+    --data-urlencode "password=${NACOS_ADMIN_PASSWORD}" >/dev/null || true
+  echo "  admin 用户(nacos) 初始化完成"
 }
 
 create_namespace "dev"  "开发环境" "NexusChain 开发环境命名空间"
 create_namespace "test" "测试环境" "NexusChain 测试环境命名空间"
 # prod 使用默认 public namespace，不单独创建
 
-# 3-5. 配置发布（v3 admin/core/config：dataId/groupName/namespaceId——
-#      注意参数名与 v1 的 group/tenant 不同）+ 读回校验
+# 2b. 鉴权用户引导（幂等；客户端 gRPC 注册需要用户名/密码）
+echo "[2b/5] 鉴权用户引导..."
+bootstrap_auth_user
+
+# 3-5. 配置发布（v3 admin API：config 走 /admin/cs/*（cs=config service），
+#      namespace 走 /admin/core/*；v3 参数名 groupName/namespaceId 与 v1 的
+#      group/tenant 不同）+ 读回校验
 publish_config() {
   local dataId="$1" file="$2" ns="$3" grp="${4:-${GROUP}}" type="${5:-yaml}"
   if [ ! -f "${file}" ]; then
     echo "  [WARN] ${file} 不存在，跳过 ${dataId}"
     return
   fi
-  local content code body
+  local content code
   content="$(cat "${file}")"
   code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${AUTH[@]}" \
-    "${BASE}/nacos/v3/admin/core/config" \
+    "${BASE}/nacos/v3/admin/cs/config" \
     --data-urlencode "dataId=${dataId}" \
     --data-urlencode "groupName=${grp}" \
     --data-urlencode "namespaceId=${ns}" \
@@ -107,7 +144,7 @@ publish_config() {
   fi
   # 读回校验：v1 时代存在"返回 true 读回 404"的假成功，发布后必须验证可读
   code=$(curl -s -o /dev/null -w "%{http_code}" "${AUTH[@]}" \
-    "${BASE}/nacos/v3/admin/core/config?dataId=${dataId}&groupName=${grp}&namespaceId=${ns}")
+    "${BASE}/nacos/v3/admin/cs/config?dataId=${dataId}&groupName=${grp}&namespaceId=${ns}")
   if [ "${code}" != "200" ]; then
     echo "  [ERROR] ${dataId} (ns=${ns}) 发布后读回 http=${code}（假成功防护触发）"
     exit 1
@@ -134,7 +171,7 @@ publish_placeholder() {
   local content code
   content="$(printf '# %s 私有配置占位\nspring:\n  application:\n    name: %s\n' "${service}" "${service}")"
   code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${AUTH[@]}" \
-    "${BASE}/nacos/v3/admin/core/config" \
+    "${BASE}/nacos/v3/admin/cs/config" \
     --data-urlencode "dataId=${service}.yaml" \
     --data-urlencode "groupName=${GROUP}" \
     --data-urlencode "namespaceId=${ns}" \
