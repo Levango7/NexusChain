@@ -46,6 +46,13 @@ services:
       # 同时注入 nexus-signing-service（HS256 共享密钥，application.yml:246）。
       # 仅限本地 dev，生产经 SealedSecret/环境注入真实密钥（backlog #2）。
       - JWT_SECRET=${NEX_DEV_JWT_SECRET:-nexus-dev-only-jwt-secret-0123456789abcdef}
+      # 10a 收尾（2026-09-14）：dev 开启 Nacos discovery（application-dev.yml
+      # 的 NEX_NACOS_ENABLED 门控）；凭证与 compose nacos 的 NACOS_AUTH_ENABLE=true
+      # 对应（admin 用户由 nacos-config/init.sh 的 [2b] 步骤幂等初始化）
+      - NEX_NACOS_ENABLED=true
+      - NEX_NACOS_SERVER=nexus-nacos:8848
+      - NEX_NACOS_USERNAME=${NACOS_ADMIN_USER:-nacos}
+      - NEX_NACOS_PASSWORD=${NACOS_ADMIN_PASSWORD:-NexusAdmin2026}
     depends_on:
       nexus-core:
         condition: service_healthy
@@ -102,6 +109,10 @@ services:
     environment:
       - SPRING_PROFILES_ACTIVE=dev
       - NEX_NACOS_SERVER=nexus-nacos:8848
+      # 10a 收尾（2026-09-14）：Nacos 3.x 鉴权凭证（gRPC 注册通道）——
+      # 与 compose nacos 的 NACOS_AUTH_ENABLE=true 对应
+      - NEX_NACOS_USERNAME=${NACOS_ADMIN_USER:-nacos}
+      - NEX_NACOS_PASSWORD=${NACOS_ADMIN_PASSWORD:-NexusAdmin2026}
       - NEX_SEATA_SERVER=nexus-seata-server:8091
       - NEX_ZIPKIN_ENDPOINT=http://nexus-zipkin:9411/api/v2/spans
       # 10g（2026-09-14）：与 nexus-gateway 共享同一 dev JWT 密钥——signing
@@ -159,6 +170,9 @@ services:
     environment:
       - SPRING_PROFILES_ACTIVE=dev
       - NEX_NACOS_SERVER=nexus-nacos:8848
+      # 10a 收尾（2026-09-14）：Nacos 3.x 鉴权凭证（gRPC 注册通道）
+      - NEX_NACOS_USERNAME=${NACOS_ADMIN_USER:-nacos}
+      - NEX_NACOS_PASSWORD=${NACOS_ADMIN_PASSWORD:-NexusAdmin2026}
       - NEX_SEATA_SERVER=nexus-seata-server:8091
       - NEX_ZIPKIN_ENDPOINT=http://nexus-zipkin:9411/api/v2/spans
     depends_on:
@@ -184,6 +198,11 @@ services:
     environment:
       # REQ-33/P2: dev compose 应使用 dev profile，prod profile 留给 docker-compose.prod.yml
       - SPRING_PROFILES_ACTIVE=dev
+      # 10a 收尾（2026-09-14）：bridge 补 Nacos 地址 + 3.x 鉴权凭证（gRPC
+      # 注册通道；此前 env 缺失，靠 application.yml 默认 localhost 连不上）
+      - NEX_NACOS_SERVER=nexus-nacos:8848
+      - NEX_NACOS_USERNAME=${NACOS_ADMIN_USER:-nacos}
+      - NEX_NACOS_PASSWORD=${NACOS_ADMIN_PASSWORD:-NexusAdmin2026}
     depends_on:
       nexus-core:
         condition: service_healthy

@@ -13,10 +13,11 @@ management:
   health:
     redis:
       enabled: false
-    # discoveryComposite 报 UNKNOWN（Discovery Client not initialized），
-    # 不影响整体状态（UNKNOWN 不导致 DOWN），但禁用以清洁健康响应。
+    # discovery 健康指标与下方 spring.cloud.nacos.discovery.enabled 同门控：
+    # NEX_NACOS_ENABLED=true 时（dev compose / kind 演练）恢复真值上报，
+    # 未设置时（纯本地 bootRun，无 Nacos）保持关闭避免 UNKNOWN 噪音。
     discovery:
-      enabled: false
+      enabled: ${NEX_NACOS_ENABLED:false}
 
 spring:
   datasource:
@@ -57,22 +58,19 @@ spring:
       - com.alibaba.cloud.nacos.NacosConfigAutoConfiguration
       - com.alibaba.cloud.nacos.client.NacosConfigBootstrapAutoConfiguration
 
-  # Dev/DAST 环境 Nacos 完全禁用：
-  # docker-compose.yml 未为 gateway 设置 NEX_NACOS_SERVER=nexus-nacos:8848，
-  # 默认 localhost:8848 在容器内不可达。即使禁用注册和 config loading，
-  # Nacos discovery client 仍尝试连接 localhost:8848 导致：
-  #   1. 启动延迟（连接超时重试）
-  #   2. NacosDiscoveryHealthIndicator 报告 DOWN → /actuator/health 返回 503
-  # 完全禁用 discovery.enabled=false 避免 Nacos client 初始化和健康检查失败。
-  # 生产环境通过 docker-compose.prod.yml 设置正确的 Nacos 地址并启用。
+  # Nacos discovery 门控（2026-09-14 10a 收尾）：dev profile 此前硬编码
+  # enabled=false——compose 无 Nacos 时代的遗留开关，全栈演练暴露为
+  # "Discovery Client not initialized"（Backlog 10a 的 gateway 侧真根因；
+  # PR #8 已修活 signing，gateway 因本开关仍关闭）。现改为 env 门控：
+  #   NEX_NACOS_ENABLED=true（dev compose / kind 演练已设置）→ 启用发现+注册
+  #   未设置（纯本地 bootRun，无 Nacos）→ 保持禁用，避免连接超时拖慢启动
   cloud:
     nacos:
       discovery:
-        enabled: false
-        register-enabled: false
-      # 禁用 Nacos config loading：bootstrap-dev.yml 的 enabled=false 可能
-      # 在 Spring Cloud 2025.1 中不被 bootstrap context 读取（bootstrap 已废弃）。
-      # 在 application-dev.yml 中重复设置确保生效。
+        enabled: ${NEX_NACOS_ENABLED:false}
+        register-enabled: ${NEX_NACOS_ENABLED:false}
+      # 禁用 Nacos config loading：dev 环境不拉取共享配置（nexus-common 等
+      # 由各服务自带默认值兜底），生产 prod profile 启用。
       config:
         enabled: false
     # Sentinel transport 也尝试连接 localhost:8858（sentinel-dashboard），
@@ -101,9 +99,6 @@ nexus:
     skip-confirmation: true
   consortium:
     skip-confirmation: true
-  # Dev/DAST 环境禁用 Nacos 服务发现（见上方 spring.cloud.nacos.discovery.enabled: false）
-  nacos:
-    enabled: false
   # Dev/DAST 环境无下游服务（signing-service, wallet-service, chain node），
   # 自定义 HealthIndicator 探测这些服务会报 DOWN → /actuator/health 返回 503。
   # 禁用下游健康指标，仅保留标准健康指标（ping, db, diskSpace）。

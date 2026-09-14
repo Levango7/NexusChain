@@ -28,6 +28,9 @@ spring:
         namespace: ${NEX_NACOS_NAMESPACE:dev}
         group: ${NEX_NACOS_GROUP:NEXUS_GROUP}
         cluster-name: ${NEX_NACOS_CLUSTER:DEFAULT}
+        # Nacos 3.x 鉴权客户端凭证（gRPC naming 登录路径，2026-09-14 演练实证）
+        username: ${NEX_NACOS_USERNAME:}
+        password: ${NEX_NACOS_PASSWORD:}
         metadata:
           version: ${NEX_SERVICE_VERSION:2.1.0}
           region: ${NEX_REGION:cn-east-1}
@@ -35,6 +38,8 @@ spring:
         server-addr: ${NEX_NACOS_SERVER:localhost:8848}
         namespace: ${NEX_NACOS_NAMESPACE:dev}
         group: ${NEX_NACOS_GROUP:NEXUS_GROUP}
+        username: ${NEX_NACOS_USERNAME:}
+        password: ${NEX_NACOS_PASSWORD:}
         shared-configs:
           - data-id: nexus-common.yaml
             group: NEXUS_GROUP
