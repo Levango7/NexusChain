@@ -79,6 +79,12 @@ jobs:
           k6 version
 
       - name: 启动 NexusChain 服务（docker-compose）
+        # PR #11（2026-09-14）：冒烟环境不跑 nacos/init.sh 完整栈——
+        # NEX_DEV_NACOS_ENABLED=false 关闭 gateway 的 Nacos discovery 门控
+        # （compose 默认 true，供本地完整栈用），否则 gateway 注册重试阻塞
+        # 启动（首跑实证 7 分钟未就绪）。bridge 无该门控不受影响。
+        env:
+          NEX_DEV_NACOS_ENABLED: 'false'
         run: |
           docker compose up -d nexus-gateway nexus-bridge
           # 等待 gateway 就绪（最长 120s）

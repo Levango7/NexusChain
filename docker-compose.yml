@@ -48,8 +48,11 @@ services:
       - JWT_SECRET=${NEX_DEV_JWT_SECRET:-nexus-dev-only-jwt-secret-0123456789abcdef}
       # 10a 收尾（2026-09-14）：dev 开启 Nacos discovery（application-dev.yml
       # 的 NEX_NACOS_ENABLED 门控）；凭证与 compose nacos 的 NACOS_AUTH_ENABLE=true
-      # 对应（admin 用户由 nacos-config/init.sh 的 [2b] 步骤幂等初始化）
-      - NEX_NACOS_ENABLED=true
+      # 对应（admin 用户由 nacos-config/init.sh 的 [2b] 步骤幂等初始化）。
+      # NEX_DEV_NACOS_ENABLED 可覆盖：k6 PR 冒烟（performance-test.yml 只起
+      # gateway+bridge，不跑 init.sh/无完整栈）设为 false 避免 gateway 阻塞
+      # 在 Nacos 注册重试——2026-09-14 PR #11 首跑实证（7 分钟未就绪）。
+      - NEX_NACOS_ENABLED=${NEX_DEV_NACOS_ENABLED:-true}
       - NEX_NACOS_SERVER=nexus-nacos:8848
       - NEX_NACOS_USERNAME=${NACOS_ADMIN_USER:-nacos}
       - NEX_NACOS_PASSWORD=${NACOS_ADMIN_PASSWORD:-NexusAdmin2026}
