@@ -148,8 +148,17 @@ public class GrpcMpcCryptoEngine implements MpcCryptoEngine {
     @Value("${mpc.engine.host:localhost}")
     private String host;
 
-    /** 引擎 gRPC 端口。 */
-    @Value("${mpc.engine.port:50051}")
+    /**
+     * 引擎 gRPC 端口。
+     * <p>2026-09-14 K8s 演练实证修复：裸 {@code ${mpc.engine.port:50051}} 会被
+     * Spring relaxed binding 绑到 K8s 注入的 {@code MPC_ENGINE_PORT} 环境变量
+     * （K8s 为 Service {@code mpc-engine} 的命名端口 grpc 生成的 Docker-link
+     * 风格变量，值为 {@code tcp://<svc-ip>:50051}）——非纯数字导致
+     * NumberFormatException 启动失败。占位符默认值仍会被注入变量穿透（内层
+     * ${mpc.engine.port} 单独解析时命中 env），故外层键不嵌套内层键、
+     * 直接给数字默认；需要覆盖时设 {@code NEX_MPC_ENGINE_PORT} env。</p>
+     */
+    @Value("${nexus.mpc.engine.port:50051}")
     private int port;
 
     /** 单次 RPC deadline 超时（毫秒）。 */
