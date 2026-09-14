@@ -124,8 +124,12 @@ public class MpcEngineRouter {
     @Value("${mpc.engine.host:localhost}")
     private String host;
 
-    /** 引擎 gRPC 端口（单端点模式，向后兼容）。 */
-    @Value("${mpc.engine.port:50051}")
+    /** 引擎 gRPC 端口（单端点模式，向后兼容）。
+     * <p>同 GrpcMpcCryptoEngine.port 的 K8s 注入冲突修复（2026-09-14）：
+     * K8s Service mpc-engine 命名端口注入 MPC_ENGINE_PORT=tcp://<ip>:<port>，
+     * relaxed binding 命中裸 mpc.engine.port 键导致 NumberFormatException。
+     * 显式 NEX_ 前缀键优先生效（env NEX_MPC_ENGINE_PORT）。</p> */
+    @Value("${nexus.mpc.engine.port:${mpc.engine.port:50051}}")
     private int port;
 
     /** 单次 RPC deadline 超时（毫秒）。 */
