@@ -14,9 +14,9 @@
  *   GET  /api/crosschain      — 获取跨链交易列表
  */
 
-import express, { Request, Response } from 'express';
-import cors from 'cors';
-import { NexusChainRpcClient } from './rpc.js';
+import express, { Request, Response } from "express";
+import cors from "cors";
+import { NexusChainRpcClient } from "./rpc.js";
 
 /** 服务监听端口 */
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
@@ -27,7 +27,7 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
  * 故默认 http://localhost:19585/rpc；生产通过 NEXUS_RPC_URL 覆盖
  * （如 k8s 内 http://nexus-core:19585/rpc）。
  */
-const RPC_URL = process.env.NEXUS_RPC_URL ?? 'http://localhost:19585/rpc';
+const RPC_URL = process.env.NEXUS_RPC_URL ?? "http://localhost:19585/rpc";
 
 /** Express 应用实例 */
 const app = express();
@@ -46,14 +46,14 @@ app.use(express.json());
  * 查询参数：limit（默认 20）
  * 返回最新区块列表
  */
-app.get('/api/blocks', async (req: Request, res: Response) => {
+app.get("/api/blocks", async (req: Request, res: Response) => {
   try {
     const limit = Math.min(parseInt(req.query.limit as string, 10) || 20, 100);
     const blocks = await rpcClient.getLatestBlocks(limit);
     res.json(blocks);
   } catch (err) {
-    console.error('获取区块列表失败:', err);
-    res.status(500).json({ error: '获取区块列表失败' });
+    console.error("获取区块列表失败:", err);
+    res.status(500).json({ error: "获取区块列表失败" });
   }
 });
 
@@ -61,20 +61,20 @@ app.get('/api/blocks', async (req: Request, res: Response) => {
  * GET /api/blocks/:height
  * 返回指定高度的区块详情
  */
-app.get('/api/blocks/:height', async (req: Request, res: Response) => {
+app.get("/api/blocks/:height", async (req: Request, res: Response) => {
   try {
     const height = parseInt(req.params.height, 10);
     if (isNaN(height)) {
-      return res.status(400).json({ error: '无效的区块高度' });
+      return res.status(400).json({ error: "无效的区块高度" });
     }
     const block = await rpcClient.getBlockByHeight(height);
     if (!block) {
-      return res.status(404).json({ error: '区块不存在' });
+      return res.status(404).json({ error: "区块不存在" });
     }
     res.json(block);
   } catch (err) {
-    console.error('获取区块详情失败:', err);
-    res.status(500).json({ error: '获取区块详情失败' });
+    console.error("获取区块详情失败:", err);
+    res.status(500).json({ error: "获取区块详情失败" });
   }
 });
 
@@ -85,7 +85,7 @@ app.get('/api/blocks/:height', async (req: Request, res: Response) => {
  * 查询参数：limit、address（按地址过滤）
  * 返回最新交易列表
  */
-app.get('/api/tx', async (req: Request, res: Response) => {
+app.get("/api/tx", async (req: Request, res: Response) => {
   try {
     const limit = Math.min(parseInt(req.query.limit as string, 10) || 20, 100);
     const address = req.query.address as string | undefined;
@@ -94,8 +94,8 @@ app.get('/api/tx', async (req: Request, res: Response) => {
       : await rpcClient.getLatestTransactions(limit);
     res.json(transactions);
   } catch (err) {
-    console.error('获取交易列表失败:', err);
-    res.status(500).json({ error: '获取交易列表失败' });
+    console.error("获取交易列表失败:", err);
+    res.status(500).json({ error: "获取交易列表失败" });
   }
 });
 
@@ -103,16 +103,16 @@ app.get('/api/tx', async (req: Request, res: Response) => {
  * GET /api/tx/:hash
  * 返回指定交易哈希的交易详情
  */
-app.get('/api/tx/:hash', async (req: Request, res: Response) => {
+app.get("/api/tx/:hash", async (req: Request, res: Response) => {
   try {
     const tx = await rpcClient.getTransactionByHash(req.params.hash);
     if (!tx) {
-      return res.status(404).json({ error: '交易不存在' });
+      return res.status(404).json({ error: "交易不存在" });
     }
     res.json(tx);
   } catch (err) {
-    console.error('获取交易详情失败:', err);
-    res.status(500).json({ error: '获取交易详情失败' });
+    console.error("获取交易详情失败:", err);
+    res.status(500).json({ error: "获取交易详情失败" });
   }
 });
 
@@ -122,7 +122,7 @@ app.get('/api/tx/:hash', async (req: Request, res: Response) => {
  * GET /api/address/:addr
  * 返回地址余额、交易数等信息
  */
-app.get('/api/address/:addr', async (req: Request, res: Response) => {
+app.get("/api/address/:addr", async (req: Request, res: Response) => {
   try {
     const address = req.params.addr;
     const balance = await rpcClient.getBalance(address);
@@ -133,8 +133,8 @@ app.get('/api/address/:addr', async (req: Request, res: Response) => {
       txCount,
     });
   } catch (err) {
-    console.error('获取地址信息失败:', err);
-    res.status(500).json({ error: '获取地址信息失败' });
+    console.error("获取地址信息失败:", err);
+    res.status(500).json({ error: "获取地址信息失败" });
   }
 });
 
@@ -144,13 +144,13 @@ app.get('/api/address/:addr', async (req: Request, res: Response) => {
  * GET /api/contracts
  * 返回已部署的 WASM 智能合约列表
  */
-app.get('/api/contracts', async (_req: Request, res: Response) => {
+app.get("/api/contracts", async (_req: Request, res: Response) => {
   try {
     const contracts = await rpcClient.getContractList();
     res.json(contracts);
   } catch (err) {
-    console.error('获取合约列表失败:', err);
-    res.status(500).json({ error: '获取合约列表失败' });
+    console.error("获取合约列表失败:", err);
+    res.status(500).json({ error: "获取合约列表失败" });
   }
 });
 
@@ -158,16 +158,16 @@ app.get('/api/contracts', async (_req: Request, res: Response) => {
  * GET /api/contracts/:addr
  * 返回指定合约的代码与元信息
  */
-app.get('/api/contracts/:addr', async (req: Request, res: Response) => {
+app.get("/api/contracts/:addr", async (req: Request, res: Response) => {
   try {
     const contract = await rpcClient.getContract(req.params.addr);
     if (!contract) {
-      return res.status(404).json({ error: '合约不存在' });
+      return res.status(404).json({ error: "合约不存在" });
     }
     res.json(contract);
   } catch (err) {
-    console.error('获取合约详情失败:', err);
-    res.status(500).json({ error: '获取合约详情失败' });
+    console.error("获取合约详情失败:", err);
+    res.status(500).json({ error: "获取合约详情失败" });
   }
 });
 
@@ -177,13 +177,13 @@ app.get('/api/contracts/:addr', async (req: Request, res: Response) => {
  * GET /api/node/status
  * 返回当前节点同步状态、最新高度、peers 等信息
  */
-app.get('/api/node/status', async (_req: Request, res: Response) => {
+app.get("/api/node/status", async (_req: Request, res: Response) => {
   try {
     const status = await rpcClient.getNodeStatus();
     res.json(status);
   } catch (err) {
-    console.error('获取节点状态失败:', err);
-    res.status(500).json({ error: '获取节点状态失败' });
+    console.error("获取节点状态失败:", err);
+    res.status(500).json({ error: "获取节点状态失败" });
   }
 });
 
@@ -194,22 +194,22 @@ app.get('/api/node/status', async (_req: Request, res: Response) => {
  * 查询参数：limit、status
  * 返回跨链交易列表
  */
-app.get('/api/crosschain', async (req: Request, res: Response) => {
+app.get("/api/crosschain", async (req: Request, res: Response) => {
   try {
     const limit = Math.min(parseInt(req.query.limit as string, 10) || 20, 100);
     const status = req.query.status as string | undefined;
     const txs = await rpcClient.getCrossChainTransactions(limit, status);
     res.json(txs);
   } catch (err) {
-    console.error('获取跨链交易失败:', err);
-    res.status(500).json({ error: '获取跨链交易失败' });
+    console.error("获取跨链交易失败:", err);
+    res.status(500).json({ error: "获取跨链交易失败" });
   }
 });
 
 // ---- 健康检查 ----
 
-app.get('/health', (_req: Request, res: Response) => {
-  res.json({ status: 'ok', timestamp: Date.now() });
+app.get("/health", (_req: Request, res: Response) => {
+  res.json({ status: "ok", timestamp: Date.now() });
 });
 
 // ---- 启动服务器 ----

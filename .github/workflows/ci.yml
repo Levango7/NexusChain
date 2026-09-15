@@ -79,6 +79,21 @@ jobs:
         working-directory: nexus-explorer/frontend
         run: npm run verify:build
 
+      # BFF（nexus-explorer/backend）此前无 tsconfig.json、lint 脚本无 eslint
+      # 依赖与配置 —— 实机运行 `npm run lint` 返回 exit 2，`npm run build`
+      # 因缺 tsconfig 必然失败。2026-09-16 审查已补齐，此处纳入门禁。
+      - name: BFF typecheck
+        working-directory: nexus-explorer/backend
+        run: npm run typecheck
+
+      - name: BFF lint
+        working-directory: nexus-explorer/backend
+        run: npm run lint
+
+      - name: BFF build
+        working-directory: nexus-explorer/backend
+        run: npm run build
+
   # ============================================================
   # 构建 & 测试 & 覆盖率
   # ============================================================
