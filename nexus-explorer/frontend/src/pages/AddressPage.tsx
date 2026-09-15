@@ -28,7 +28,10 @@ const AddressPage: React.FC = () => {
     if (!addr) return;
     (async () => {
       try {
-        const acc = await api.getAccount(addr).catch(err => { console.error('API请求失败:', err); return null; });
+        const acc = await api.getAccount(addr).catch((err) => {
+          console.error("API请求失败:", err);
+          return null;
+        });
         setAccount(acc);
         if (!acc) setError(t("address.notFound"));
       } catch (err) {
@@ -66,9 +69,7 @@ const AddressPage: React.FC = () => {
             </div>
             <div>
               <div className="text-xs text-muted">{t("address.transactions")}</div>
-              <div className="text-lg font-mono text-fg mt-1">
-                {orDash(account.txCount)}
-              </div>
+              <div className="text-lg font-mono text-fg mt-1">{orDash(account.txCount)}</div>
             </div>
           </div>
         )}

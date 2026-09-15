@@ -68,18 +68,21 @@ const OrchestrationDashboard: React.FC = () => {
       // Sequential awaits so the first 401 short-circuits the rest instead
       // of being masked by Promise.all's allSettled-like error semantics.
       // 注意：不传 merchantId —— 服务端按认证商户强制过滤。
-      const pRes = await authenticatedRequest<PaymentListResponse>(
-        "/api/v1/payments?limit=20",
-        { method: "GET", apiKey, apiSecret },
-      );
-      const cRes = await authenticatedRequest<ConnectorDto[]>(
-        "/api/v1/payments/connectors",
-        { method: "GET", apiKey, apiSecret },
-      );
-      const rRes = await authenticatedRequest<RoutingRuleDto[]>(
-        "/api/v1/payments/routing-rules",
-        { method: "GET", apiKey, apiSecret },
-      );
+      const pRes = await authenticatedRequest<PaymentListResponse>("/api/v1/payments?limit=20", {
+        method: "GET",
+        apiKey,
+        apiSecret,
+      });
+      const cRes = await authenticatedRequest<ConnectorDto[]>("/api/v1/payments/connectors", {
+        method: "GET",
+        apiKey,
+        apiSecret,
+      });
+      const rRes = await authenticatedRequest<RoutingRuleDto[]>("/api/v1/payments/routing-rules", {
+        method: "GET",
+        apiKey,
+        apiSecret,
+      });
 
       if (seq !== fetchSeq.current) return; // 旧响应晚到，丢弃
 
@@ -147,40 +150,36 @@ const OrchestrationDashboard: React.FC = () => {
   return (
     <div className="min-h-screen bg-bg text-fg">
       <PageHeader maxWidth="max-w-6xl" innerClassName="justify-between gap-4">
-          <div className="flex items-center gap-3 min-w-0">
-            <Link
-              to="/"
-              className="flex items-center gap-1 text-accent hover:text-accent-hover text-sm shrink-0 transition-colors duration-base ease-standard focus:outline-none focus-visible:shadow-focus"
-            >
-              <ArrowLeft size={14} />
-              {t("orchestration.back")}
-            </Link>
-            <span className="text-xs text-muted font-mono truncate hidden sm:inline">
-              {t("orchestration.title")}
-            </span>
-          </div>
-          <div
-            className="flex gap-1 shrink-0"
-            role="tablist"
-            aria-label={t("orchestration.title")}
+        <div className="flex items-center gap-3 min-w-0">
+          <Link
+            to="/"
+            className="flex items-center gap-1 text-accent hover:text-accent-hover text-sm shrink-0 transition-colors duration-base ease-standard focus:outline-none focus-visible:shadow-focus"
           >
-            {TABS.map((tabName) => (
-              <button
-                key={tabName}
-                type="button"
-                role="tab"
-                aria-selected={tab === tabName}
-                onClick={() => setTab(tabName)}
-                className={`px-3 py-1.5 rounded-sm text-xs font-medium transition-colors duration-base ease-standard focus:outline-none focus-visible:shadow-focus ${
-                  tab === tabName
-                    ? "bg-accent-solid text-accent-on"
-                    : "text-fg-2 hover:text-fg hover:bg-accent-soft"
-                }`}
-              >
-                {TAB_LABEL[tabName]}
-              </button>
-            ))}
-          </div>
+            <ArrowLeft size={14} />
+            {t("orchestration.back")}
+          </Link>
+          <span className="text-xs text-muted font-mono truncate hidden sm:inline">
+            {t("orchestration.title")}
+          </span>
+        </div>
+        <div className="flex gap-1 shrink-0" role="tablist" aria-label={t("orchestration.title")}>
+          {TABS.map((tabName) => (
+            <button
+              key={tabName}
+              type="button"
+              role="tab"
+              aria-selected={tab === tabName}
+              onClick={() => setTab(tabName)}
+              className={`px-3 py-1.5 rounded-sm text-xs font-medium transition-colors duration-base ease-standard focus:outline-none focus-visible:shadow-focus ${
+                tab === tabName
+                  ? "bg-accent-solid text-accent-on"
+                  : "text-fg-2 hover:text-fg hover:bg-accent-soft"
+              }`}
+            >
+              {TAB_LABEL[tabName]}
+            </button>
+          ))}
+        </div>
       </PageHeader>
 
       <main className="max-w-6xl mx-auto px-4 py-6">
@@ -253,20 +252,13 @@ const OrchestrationDashboard: React.FC = () => {
               {t("orchestration.connectors")}
             </h2>
             {connectors.length === 0 && (
-              <p className="text-muted text-sm col-span-full">
-                {t("orchestration.noConnectors")}
-              </p>
+              <p className="text-muted text-sm col-span-full">{t("orchestration.noConnectors")}</p>
             )}
             {connectors.map((c) => (
               <div key={c.id} className="bg-surface border border-border rounded-lg p-4">
                 <div className="flex items-center justify-between gap-3">
-                  <span className="font-medium text-sm text-fg truncate">
-                    {c.display_name}
-                  </span>
-                  <Badge
-                    tone={c.active ? "success" : "neutral"}
-                    icon={null}
-                  >
+                  <span className="font-medium text-sm text-fg truncate">{c.display_name}</span>
+                  <Badge tone={c.active ? "success" : "neutral"} icon={null}>
                     {c.active
                       ? t("orchestration.connectorStateActive")
                       : t("orchestration.connectorStateInactive")}

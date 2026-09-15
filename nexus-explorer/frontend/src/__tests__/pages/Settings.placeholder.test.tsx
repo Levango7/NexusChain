@@ -22,12 +22,14 @@ import Settings from "../../pages/Settings";
 function ensureLocalStorage() {
   const store = new Map<string, string>();
   const ls = {
-    getItem: (key: string) => store.has(key) ? store.get(key)! : null,
+    getItem: (key: string) => (store.has(key) ? store.get(key)! : null),
     setItem: (key: string, value: string) => store.set(key, String(value)),
     removeItem: (key: string) => store.delete(key),
     clear: () => store.clear(),
     key: (i: number) => Array.from(store.keys())[i] ?? null,
-    get length() { return store.size; },
+    get length() {
+      return store.size;
+    },
   };
   Object.defineProperty(globalThis, "localStorage", {
     value: ls,
@@ -55,12 +57,14 @@ function AuthProbe() {
 
 function renderSettings() {
   return render(
-    <MemoryRouter>
-      <AuthProvider>
-        <AuthProbe />
-        <Settings />
-      </AuthProvider>
-    </MemoryRouter> as ReactNode,
+    (
+      <MemoryRouter>
+        <AuthProvider>
+          <AuthProbe />
+          <Settings />
+        </AuthProvider>
+      </MemoryRouter>
+    ) as ReactNode,
   );
 }
 
@@ -236,9 +240,9 @@ describe("Settings 占位符碰撞测试（P2-D3 修复）", () => {
 
     // 取消不应清除
     await user.click(screen.getByRole("button", { name: /取消/ }));
-    expect(
-      (screen.queryByLabelText(/API Secret/i) as HTMLInputElement | null)?.value,
-    ).toBe(SECRET_MASK);
+    expect((screen.queryByLabelText(/API Secret/i) as HTMLInputElement | null)?.value).toBe(
+      SECRET_MASK,
+    );
 
     // 再次打开并确认
     await user.click(screen.getByRole("button", { name: /清除凭证/ }));

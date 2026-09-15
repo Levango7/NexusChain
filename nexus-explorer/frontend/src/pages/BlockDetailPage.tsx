@@ -51,8 +51,7 @@ const BlockDetailPage: React.FC = () => {
         title={
           block ? (
             <>
-              {t("block.title")}{" "}
-              <span className="text-accent font-mono">#{block.height}</span>
+              {t("block.title")} <span className="text-accent font-mono">#{block.height}</span>
             </>
           ) : undefined
         }
@@ -65,10 +64,7 @@ const BlockDetailPage: React.FC = () => {
   // 已移除 size / difficulty —— core 的 JSON-RPC 桥接不返回这两个字段，
   // 此前直接渲染导致页面出现字面量 "undefined"（`大小undefined 字节难度undefined`）。
   const rows: [string, React.ReactNode][] = [
-    [
-      t("block.height"),
-      <span className="font-mono text-accent">{orDash(block.height)}</span>,
-    ],
+    [t("block.height"), <span className="font-mono text-accent">{orDash(block.height)}</span>],
     [t("block.hash"), <code className="break-all text-xs text-fg">{orDash(block.hash)}</code>],
     [
       t("block.parentHash"),
@@ -83,8 +79,7 @@ const BlockDetailPage: React.FC = () => {
     <DetailPageLayout
       title={
         <>
-          {t("block.title")}{" "}
-          <span className="text-accent font-mono">#{block.height}</span>
+          {t("block.title")} <span className="text-accent font-mono">#{block.height}</span>
         </>
       }
       backLabel={t("block.back")}

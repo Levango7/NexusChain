@@ -24,9 +24,7 @@ export interface CardProps {
   /** 内边距紧凑模式（p-3 而非 p-5）。 */
   compact?: boolean;
   /** 点击回调（interactive=true 时生效）。鼠标与键盘激活共用。 */
-  onClick?: (
-    e: React.MouseEvent<HTMLDivElement> | React.KeyboardEvent<HTMLDivElement>,
-  ) => void;
+  onClick?: (e: React.MouseEvent<HTMLDivElement> | React.KeyboardEvent<HTMLDivElement>) => void;
 }
 
 export const Card: React.FC<CardProps> = ({
@@ -76,22 +74,14 @@ export const Card: React.FC<CardProps> = ({
       {hasHeader && (
         <div className="flex items-start justify-between mb-3">
           <div>
-            {title && (
-              <h3 className="text-sm font-semibold text-fg leading-tight">
-                {title}
-              </h3>
-            )}
-            {subtitle && (
-              <p className="text-xs text-muted mt-0.5">{subtitle}</p>
-            )}
+            {title && <h3 className="text-sm font-semibold text-fg leading-tight">{title}</h3>}
+            {subtitle && <p className="text-xs text-muted mt-0.5">{subtitle}</p>}
           </div>
           {actions && <div className="flex items-center gap-2">{actions}</div>}
         </div>
       )}
       {children}
-      {footer && (
-        <div className="mt-4 pt-3 border-t border-border-soft">{footer}</div>
-      )}
+      {footer && <div className="mt-4 pt-3 border-t border-border-soft">{footer}</div>}
     </div>
   );
 };

@@ -25,12 +25,7 @@
 
 /** 支付状态（`OrchPaymentStatus` 枚举名）。 */
 export type OrchestrationPaymentStatus =
-  | "PENDING"
-  | "PROCESSING"
-  | "SUCCEEDED"
-  | "FAILED"
-  | "EXPIRED"
-  | string;
+  "PENDING" | "PROCESSING" | "SUCCEEDED" | "FAILED" | "EXPIRED" | string;
 
 /** 单笔编排支付（`toResponse`，snake_case）。 */
 export interface OrchestratedPaymentDto {

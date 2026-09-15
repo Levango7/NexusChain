@@ -19,8 +19,7 @@
  */
 
 /** 把 CSS 变量名转成 Tailwind 可用的 alpha 占位形式。 */
-const alpha = (varName: string): string =>
-  `rgb(var(--${varName}-rgb) / <alpha-value>)`;
+const alpha = (varName: string): string => `rgb(var(--${varName}-rgb) / <alpha-value>)`;
 
 /* ----------------------------- 颜色体系 ----------------------------- */
 export const color = {

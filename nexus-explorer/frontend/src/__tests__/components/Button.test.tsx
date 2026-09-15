@@ -112,19 +112,13 @@ describe("Button 组件", () => {
   });
 
   it("应该渲染 leadingIcon", () => {
-    render(
-      <Button leadingIcon={<span data-testid="leading-icon">★</span>}>
-        With Icon
-      </Button>,
-    );
+    render(<Button leadingIcon={<span data-testid="leading-icon">★</span>}>With Icon</Button>);
     expect(screen.getByTestId("leading-icon")).toBeInTheDocument();
   });
 
   it("应该渲染 trailingIcon", () => {
     render(
-      <Button trailingIcon={<span data-testid="trailing-icon">→</span>}>
-        With Trailing
-      </Button>,
+      <Button trailingIcon={<span data-testid="trailing-icon">→</span>}>With Trailing</Button>,
     );
     expect(screen.getByTestId("trailing-icon")).toBeInTheDocument();
   });

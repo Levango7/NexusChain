@@ -1,0 +1,8 @@
+# Prettier 忽略清单
+dist/
+coverage/
+node_modules/
+package-lock.json
+
+# Markdown 不纳入格式化：文档的换行是手写排版，自动重排会产生无意义的巨大 diff
+*.md

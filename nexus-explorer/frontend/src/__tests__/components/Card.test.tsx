@@ -25,11 +25,7 @@ describe("Card 组件", () => {
   });
 
   it("应该渲染 actions 操作区", () => {
-    render(
-      <Card actions={<button data-testid="card-action">操作</button>}>
-        内容
-      </Card>,
-    );
+    render(<Card actions={<button data-testid="card-action">操作</button>}>内容</Card>);
     expect(screen.getByTestId("card-action")).toBeInTheDocument();
   });
 
@@ -86,9 +82,7 @@ describe("Card 组件", () => {
   it("interactive=false 点击时不应触发 onClick", async () => {
     const user = userEvent.setup();
     const handleClick = vi.fn();
-    const { container } = render(
-      <Card onClick={handleClick}>不可点击</Card>,
-    );
+    const { container } = render(<Card onClick={handleClick}>不可点击</Card>);
     await user.click(container.firstChild as HTMLElement);
     expect(handleClick).not.toHaveBeenCalled();
   });
@@ -102,9 +96,7 @@ describe("Card 组件", () => {
   });
 
   it("应该支持 ReactNode 类型的 title", () => {
-    render(
-      <Card title={<span data-testid="node-title">节点标题</span>}>内容</Card>,
-    );
+    render(<Card title={<span data-testid="node-title">节点标题</span>}>内容</Card>);
     expect(screen.getByTestId("node-title")).toBeInTheDocument();
   });
 });

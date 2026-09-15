@@ -1,15 +1,14 @@
 import type { BlockInfo, TransactionInfo, AccountInfo, ChainStatus } from "../types";
-import {
-  AUTH_HEADERS,
-  buildAuthHeaders,
-  isProtectedPath,
-} from "./auth";
+import { AUTH_HEADERS, buildAuthHeaders, isProtectedPath } from "./auth";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:3000";
 const GATEWAY_BASE = import.meta.env.VITE_GATEWAY_BASE ?? "http://localhost:8080";
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  constructor(
+    public status: number,
+    message: string,
+  ) {
     super(message);
     this.name = "ApiError";
   }
@@ -46,19 +45,13 @@ function assertShape<T>(value: unknown, required: readonly string[], label: stri
     }
     const missing = required.filter((k) => !(k in (item as Record<string, unknown>)));
     if (missing.length > 0) {
-      throw new ApiError(
-        0,
-        `${label}: 响应缺少字段 [${missing.join(", ")}]（后端契约可能已变更）`,
-      );
+      throw new ApiError(0, `${label}: 响应缺少字段 [${missing.join(", ")}]（后端契约可能已变更）`);
     }
   }
   return value as T;
 }
 
-async function request<T>(
-  path: string,
-  requiredFields?: readonly string[],
-): Promise<T> {
+async function request<T>(path: string, requiredFields?: readonly string[]): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
@@ -126,8 +119,7 @@ export async function authenticatedRequest<T>(
 
   // The gateway signs the raw body bytes. We serialise once and reuse the
   // string for both signing and the fetch body to guarantee byte-equality.
-  const bodyString =
-    body !== undefined && body !== null ? JSON.stringify(body) : "";
+  const bodyString = body !== undefined && body !== null ? JSON.stringify(body) : "";
 
   // Sign the path as-is (with query string) — the gateway's
   // RequestSignatureInterceptor uses request.getRequestURI() which excludes
@@ -193,8 +185,7 @@ export const api = {
   // Blocks
   getBlocks: (limit = 20) =>
     request<BlockInfo[]>(`/api/blocks?limit=${limit}`, REQUIRED_FIELDS.block),
-  getBlock: (height: number) =>
-    request<BlockInfo>(`/api/blocks/${height}`, REQUIRED_FIELDS.block),
+  getBlock: (height: number) => request<BlockInfo>(`/api/blocks/${height}`, REQUIRED_FIELDS.block),
 
   // Transactions
   getTransactions: (limit = 20) =>

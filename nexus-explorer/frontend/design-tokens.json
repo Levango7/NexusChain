@@ -1,19 +1,55 @@
 {
+  "$comment": "机器可读设计令牌。与 src/styles/tokens.css 手工同步 —— tokens.css 是权威来源（source of truth）。任何色值改动必须同时更新两处，并重跑 WCAG 对比度核算（见 DESIGN.md §2.4）。2026-09-16 审查修复：新增 -rgb 通道令牌（Tailwind alpha 合成必需）、拆分 accent/accent-solid、拆分语义浅底 *-soft、新增 border-strong 与 danger-solid。",
   "color": {
-    "bg": { "value": "#0A0C10", "type": "color" },
-    "surface": { "value": "#111418", "type": "color" },
-    "surface-2": { "value": "#161A20", "type": "color" },
-    "border": { "value": "#232830", "type": "color" },
-    "border-soft": { "value": "#1A1E24", "type": "color" },
-    "fg": { "value": "#E6E9EF", "type": "color" },
-    "fg-2": { "value": "#AEB4C0", "type": "color" },
-    "muted": { "value": "#8B93A1", "type": "color" },
-    "accent": { "value": "#5B6CF0", "type": "color" },
-    "accent-on": { "value": "#FFFFFF", "type": "color" },
-    "accent-soft": { "value": "rgba(91,108,240,0.12)", "type": "color" },
-    "success": { "value": "#34D399", "type": "color" },
-    "warn": { "value": "#FBBF24", "type": "color" },
-    "danger": { "value": "#F87171", "type": "color" }
+    "bg": { "value": "#0A0C10", "rgb": "10 12 16", "type": "color" },
+    "surface": { "value": "#111418", "rgb": "17 20 24", "type": "color" },
+    "surface-2": { "value": "#161A20", "rgb": "22 26 32", "type": "color" },
+    "border": { "value": "#232830", "rgb": "35 40 48", "type": "color" },
+    "border-soft": { "value": "#1A1E24", "rgb": "26 30 36", "type": "color" },
+    "border-strong": { "value": "#5A6370", "rgb": "90 99 112", "type": "color", "role": "可交互控件边界（WCAG 1.4.11 3:1）" },
+    "fg": { "value": "#E6E9EF", "rgb": "230 233 239", "type": "color" },
+    "fg-2": { "value": "#AEB4C0", "rgb": "174 180 192", "type": "color" },
+    "muted": { "value": "#8B93A1", "rgb": "139 147 161", "type": "color" },
+    "accent": { "value": "#8B96FF", "rgb": "139 150 255", "type": "color", "role": "品牌文字/链接/激活（对暗背景 ≥4.5:1）" },
+    "accent-solid": { "value": "#4B5AE0", "rgb": "75 90 224", "type": "color", "role": "品牌实底（配 accent-on ≥4.5:1）" },
+    "accent-solid-hover": { "value": "#4050CE", "rgb": "64 80 206", "type": "color" },
+    "accent-solid-active": { "value": "#3543B8", "rgb": "53 67 184", "type": "color" },
+    "accent-on": { "value": "#FFFFFF", "rgb": "255 255 255", "type": "color" },
+    "accent-soft": { "value": "#1B2033", "rgb": "27 32 51", "type": "color" },
+    "success": { "value": "#34D399", "rgb": "52 211 153", "type": "color" },
+    "success-soft": { "value": "#16312B", "rgb": "22 49 43", "type": "color" },
+    "warn": { "value": "#FBBF24", "rgb": "251 191 36", "type": "color" },
+    "warn-soft": { "value": "#342E1A", "rgb": "52 46 26", "type": "color" },
+    "danger": { "value": "#F87171", "rgb": "248 113 113", "type": "color" },
+    "danger-soft": { "value": "#342225", "rgb": "52 34 37", "type": "color" },
+    "danger-solid": { "value": "#B91C1C", "rgb": "185 28 28", "type": "color" },
+    "danger-on": { "value": "#FFFFFF", "rgb": "255 255 255", "type": "color" }
+  },
+  "colorLight": {
+    "$comment": "[data-theme='light'] 覆盖值",
+    "bg": { "value": "#F7F8FA", "rgb": "247 248 250", "type": "color" },
+    "surface": { "value": "#FFFFFF", "rgb": "255 255 255", "type": "color" },
+    "surface-2": { "value": "#F1F3F7", "rgb": "241 243 247", "type": "color" },
+    "border": { "value": "#E5E7EB", "rgb": "229 231 235", "type": "color" },
+    "border-soft": { "value": "#EEF0F4", "rgb": "238 240 244", "type": "color" },
+    "border-strong": { "value": "#828C99", "rgb": "130 140 153", "type": "color" },
+    "fg": { "value": "#0F172A", "rgb": "15 23 42", "type": "color" },
+    "fg-2": { "value": "#334155", "rgb": "51 65 85", "type": "color" },
+    "muted": { "value": "#5A6472", "rgb": "90 100 114", "type": "color" },
+    "accent": { "value": "#4338CA", "rgb": "67 56 202", "type": "color" },
+    "accent-solid": { "value": "#4338CA", "rgb": "67 56 202", "type": "color" },
+    "accent-solid-hover": { "value": "#3730A3", "rgb": "55 48 163", "type": "color" },
+    "accent-solid-active": { "value": "#2E2882", "rgb": "46 40 130", "type": "color" },
+    "accent-on": { "value": "#FFFFFF", "rgb": "255 255 255", "type": "color" },
+    "accent-soft": { "value": "#EEF0FD", "rgb": "238 240 253", "type": "color" },
+    "success": { "value": "#036B4E", "rgb": "3 107 78", "type": "color" },
+    "success-soft": { "value": "#E3F3EC", "rgb": "227 243 236", "type": "color" },
+    "warn": { "value": "#92400E", "rgb": "146 64 14", "type": "color" },
+    "warn-soft": { "value": "#FBEFDD", "rgb": "251 239 221", "type": "color" },
+    "danger": { "value": "#B91C1C", "rgb": "185 28 28", "type": "color" },
+    "danger-soft": { "value": "#F9D5D3", "rgb": "249 213 211", "type": "color" },
+    "danger-solid": { "value": "#B91C1C", "rgb": "185 28 28", "type": "color" },
+    "danger-on": { "value": "#FFFFFF", "rgb": "255 255 255", "type": "color" }
   },
   "font": {
     "family": {
@@ -32,9 +68,14 @@
       "4xl": { "value": "2.5rem", "type": "dimension" }
     },
     "weight": {
-      "read": { "value": "400", "type": "fontWeight" },
-      "emphasize": { "value": "510", "type": "fontWeight" },
-      "announce": { "value": "590", "type": "fontWeight" }
+      "$comment": "2026-09-16 裁定为 Tailwind 内置档位，取代原 510/590（非标准值在字体缺失时回退）",
+      "regular": { "value": "400", "type": "fontWeight" },
+      "medium": { "value": "500", "type": "fontWeight" },
+      "semibold": { "value": "600", "type": "fontWeight" },
+      "bold": { "value": "700", "type": "fontWeight" }
+    },
+    "letterSpacing": {
+      "caps": { "value": "0.06em", "type": "dimension", "role": "ALL CAPS 小标签" }
     }
   },
   "radius": {
@@ -56,15 +97,29 @@
   },
   "shadow": {
     "ring": { "value": "0 0 0 1px var(--border)", "type": "boxShadow" },
-    "raised": { "value": "0 1px 2px rgba(0,0,0,0.4), 0 8px 24px rgba(0,0,0,0.25)", "type": "boxShadow" }
+    "raised": { "value": "0 1px 2px rgba(0,0,0,0.4), 0 8px 24px rgba(0,0,0,0.25)", "type": "boxShadow" },
+    "focus": { "value": "0 0 0 2px var(--bg), 0 0 0 4px var(--accent)", "type": "boxShadow" }
   },
   "motion": {
     "fast": { "value": "150ms", "type": "duration" },
     "base": { "value": "200ms", "type": "duration" },
     "ease-standard": { "value": "cubic-bezier(0.2,0,0,1)", "type": "cubicBezier" }
   },
+  "zIndex": {
+    "base": { "value": "0", "type": "number" },
+    "sticky": { "value": "10", "type": "number" },
+    "dropdown": { "value": "20", "type": "number" },
+    "modal": { "value": "50", "type": "number" },
+    "toast": { "value": "60", "type": "number" }
+  },
+  "size": {
+    "touchTarget": {
+      "min": { "value": "44px", "type": "dimension", "role": "DESIGN.md §8 / WCAG 2.5.5 AAA" },
+      "compact": { "value": "36px", "type": "dimension", "role": "sm 按钮；满足 WCAG 2.2 SC 2.5.8 AA 的 24px" }
+    }
+  },
   "icon": {
-    "library": { "value": "lucide-react@0.460.0", "type": "string" },
+    "library": { "value": "lucide-react", "type": "string", "$comment": "必须使用精确版本号，不用 ^ 浮动范围" },
     "size": {
       "inline": { "value": "16px", "type": "dimension" },
       "button": { "value": "20px", "type": "dimension" },

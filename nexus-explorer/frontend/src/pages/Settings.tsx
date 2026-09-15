@@ -120,14 +120,14 @@ const Settings: React.FC = () => {
   return (
     <div className="min-h-screen bg-bg text-fg">
       <PageHeader maxWidth="max-w-4xl" innerClassName="gap-4">
-          <Link
-            to="/"
-            className="flex items-center gap-1 text-accent hover:text-accent-hover text-sm transition-colors duration-base ease-standard focus:outline-none focus-visible:shadow-focus"
-          >
-            <ArrowLeft size={14} />
-            {t("settings.back")}
-          </Link>
-          <h1 className="text-sm font-semibold text-fg-2">{t("settings.title")}</h1>
+        <Link
+          to="/"
+          className="flex items-center gap-1 text-accent hover:text-accent-hover text-sm transition-colors duration-base ease-standard focus:outline-none focus-visible:shadow-focus"
+        >
+          <ArrowLeft size={14} />
+          {t("settings.back")}
+        </Link>
+        <h1 className="text-sm font-semibold text-fg-2">{t("settings.title")}</h1>
       </PageHeader>
 
       <main className="max-w-4xl mx-auto px-4 py-6 space-y-6">
@@ -137,9 +137,7 @@ const Settings: React.FC = () => {
             <div>
               <h2 className="text-base font-semibold text-fg">{t("settings.authStatus")}</h2>
               <p className="text-xs text-muted mt-1">
-                {isAuthenticated
-                  ? t("settings.authConfigured")
-                  : t("settings.authNotConfigured")}
+                {isAuthenticated ? t("settings.authConfigured") : t("settings.authNotConfigured")}
               </p>
             </div>
             {isAuthenticated ? (
@@ -188,17 +186,12 @@ const Settings: React.FC = () => {
         {/* 凭证输入表单 */}
         <Card>
           <h2 className="text-base font-semibold text-fg mb-1">{t("settings.credentialConfig")}</h2>
-          <p className="text-xs text-muted mb-4">
-            {t("settings.credentialHint")}
-          </p>
+          <p className="text-xs text-muted mb-4">{t("settings.credentialHint")}</p>
 
           <form onSubmit={handleSave} className="space-y-4">
             {/* API Key */}
             <div>
-              <label
-                htmlFor="api-key"
-                className="block text-xs font-medium text-fg-2 mb-1.5"
-              >
+              <label htmlFor="api-key" className="block text-xs font-medium text-fg-2 mb-1.5">
                 {t("settings.apiKeyLabel")}
               </label>
               <input
@@ -211,17 +204,12 @@ const Settings: React.FC = () => {
                 spellCheck={false}
                 className="w-full bg-surface border border-border rounded-md px-3 py-2 text-sm text-fg placeholder-muted focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent/30 transition-colors duration-base ease-standard font-mono"
               />
-              <p className="text-xs text-muted mt-1">
-                {t("settings.apiKeyHeader")}
-              </p>
+              <p className="text-xs text-muted mt-1">{t("settings.apiKeyHeader")}</p>
             </div>
 
             {/* API Secret */}
             <div>
-              <label
-                htmlFor="api-secret"
-                className="block text-xs font-medium text-fg-2 mb-1.5"
-              >
+              <label htmlFor="api-secret" className="block text-xs font-medium text-fg-2 mb-1.5">
                 {t("settings.apiSecretLabel")}
               </label>
               <div className="relative">
@@ -249,9 +237,7 @@ const Settings: React.FC = () => {
                   {showSecret ? <EyeOff size={16} /> : <Eye size={16} />}
                 </button>
               </div>
-              <p className="text-xs text-muted mt-1">
-                {t("settings.secretHint")}
-              </p>
+              <p className="text-xs text-muted mt-1">{t("settings.secretHint")}</p>
             </div>
 
             {/* 错误提示 */}
@@ -324,12 +310,7 @@ const Settings: React.FC = () => {
             >
               {t("common.cancel")}
             </Button>
-            <Button
-              type="button"
-              variant="danger"
-              size="md"
-              onClick={handleClearConfirmed}
-            >
+            <Button type="button" variant="danger" size="md" onClick={handleClearConfirmed}>
               {t("settings.confirmClearOk")}
             </Button>
           </>

@@ -25,8 +25,7 @@ import { Loader2 } from "lucide-react";
 export type ButtonVariant = "primary" | "secondary" | "danger" | "ghost";
 export type ButtonSize = "sm" | "md" | "lg";
 
-export interface ButtonProps
-  extends React.ButtonHTMLAttributes<HTMLButtonElement> {
+export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: ButtonVariant;
   size?: ButtonSize;
   /** 左侧图标（lucide-react Icon 组件，已应用 size）。 */
@@ -51,8 +50,7 @@ const VARIANT_CLASS: Record<ButtonVariant, string> = {
     "bg-transparent text-accent border border-accent hover:bg-accent-soft focus-visible:shadow-focus",
   danger:
     "bg-danger-solid text-danger-on hover:opacity-90 active:opacity-80 focus-visible:shadow-focus",
-  ghost:
-    "bg-surface-2 text-fg hover:bg-accent-soft hover:text-accent focus-visible:shadow-focus",
+  ghost: "bg-surface-2 text-fg hover:bg-accent-soft hover:text-accent focus-visible:shadow-focus",
 };
 
 const SIZE_CLASS: Record<ButtonSize, string> = {
@@ -94,11 +92,7 @@ export const Button: React.FC<ButtonProps> = ({
       aria-busy={loading || undefined}
       {...rest}
     >
-      {loading ? (
-        <Loader2 size={16} className="animate-spin" aria-hidden="true" />
-      ) : (
-        leadingIcon
-      )}
+      {loading ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : leadingIcon}
       {loading && loadingLabel !== undefined ? loadingLabel : children}
       {!loading && trailingIcon}
     </button>

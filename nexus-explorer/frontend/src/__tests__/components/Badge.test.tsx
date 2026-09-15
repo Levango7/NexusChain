@@ -72,10 +72,7 @@ describe("Badge 组件", () => {
   it("success/warning/danger 默认渲染图标（不依赖颜色传达状态）", () => {
     for (const tone of ["success", "warning", "danger"] as const) {
       const { container, unmount } = render(<Badge tone={tone}>x</Badge>);
-      expect(
-        container.querySelector("svg"),
-        `tone=${tone} 应默认渲染图标`,
-      ).not.toBeNull();
+      expect(container.querySelector("svg"), `tone=${tone} 应默认渲染图标`).not.toBeNull();
       unmount();
     }
   });

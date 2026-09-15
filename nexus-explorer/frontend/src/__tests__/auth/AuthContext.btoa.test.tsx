@@ -2,11 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { act } from "@testing-library/react";
 import { render } from "../test-utils";
 import type { ReactNode } from "react";
-import {
-  AuthProvider,
-  API_KEY_STORAGE_KEY,
-  API_SECRET_STORAGE_KEY,
-} from "../../auth/AuthContext";
+import { AuthProvider, API_KEY_STORAGE_KEY, API_SECRET_STORAGE_KEY } from "../../auth/AuthContext";
 import { useAuth } from "../../auth/useAuth";
 
 /**
@@ -29,12 +25,14 @@ import { useAuth } from "../../auth/useAuth";
 function ensureLocalStorage() {
   const store = new Map<string, string>();
   const ls = {
-    getItem: (key: string) => store.has(key) ? store.get(key)! : null,
+    getItem: (key: string) => (store.has(key) ? store.get(key)! : null),
     setItem: (key: string, value: string) => store.set(key, String(value)),
     removeItem: (key: string) => store.delete(key),
     clear: () => store.clear(),
     key: (i: number) => Array.from(store.keys())[i] ?? null,
-    get length() { return store.size; },
+    get length() {
+      return store.size;
+    },
   };
   Object.defineProperty(globalThis, "localStorage", {
     value: ls,
@@ -74,9 +72,11 @@ function renderAuthProvider() {
   });
 
   const view = render(
-    <AuthProvider>
-      <ProbeComponent onReady={(api) => onReady(api)} />
-    </AuthProvider> as ReactNode,
+    (
+      <AuthProvider>
+        <ProbeComponent onReady={(api) => onReady(api)} />
+      </AuthProvider>
+    ) as ReactNode,
   );
 
   return {

@@ -184,3 +184,7 @@ replay_pid*.log
 nexus-explorer/frontend/dist/
 nexus-explorer/backend/dist/
 nexus-devtools/dist/
+
+# 前端测试覆盖率产物与 Vite 临时配置（2026-09-16 审查修复）
+nexus-explorer/frontend/coverage/
+*.timestamp-*.mjs

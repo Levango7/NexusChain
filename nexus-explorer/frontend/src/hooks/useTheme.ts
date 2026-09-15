@@ -47,7 +47,11 @@ function applyTheme(theme: Theme): void {
   }
 }
 
-export function useTheme(): { theme: Theme; toggleTheme: () => void; setTheme: (t: Theme) => void } {
+export function useTheme(): {
+  theme: Theme;
+  toggleTheme: () => void;
+  setTheme: (t: Theme) => void;
+} {
   const [theme, setThemeState] = useState<Theme>(resolveInitialTheme);
 
   useEffect(() => {

@@ -24,10 +24,7 @@ interface ErrorBoundaryState {
   error: Error | null;
 }
 
-export class ErrorBoundary extends React.Component<
-  ErrorBoundaryProps,
-  ErrorBoundaryState
-> {
+export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
   state: ErrorBoundaryState = { error: null };
 
   static getDerivedStateFromError(error: Error): ErrorBoundaryState {
@@ -55,14 +52,8 @@ export class ErrorBoundary extends React.Component<
         className="flex flex-col items-center justify-center py-12 px-4 text-center"
         role="alert"
       >
-        <AlertTriangle
-          size={32}
-          strokeWidth={1.5}
-          className="mb-3 text-warn opacity-80"
-        />
-        <p className="text-sm font-medium text-fg mb-1">
-          {i18n.t("common.pageError")}
-        </p>
+        <AlertTriangle size={32} strokeWidth={1.5} className="mb-3 text-warn opacity-80" />
+        <p className="text-sm font-medium text-fg mb-1">{i18n.t("common.pageError")}</p>
         <p className="text-xs text-muted mb-4 max-w-md break-all">
           {error.message || i18n.t("common.unknownError")}
         </p>

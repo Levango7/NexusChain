@@ -53,13 +53,7 @@ export function buildCanonicalString(
   path: string,
   body?: string,
 ): string {
-  return (
-    (timestamp ?? "") +
-    (nonce ?? "") +
-    (method ?? "") +
-    (path ?? "") +
-    (body ?? "")
-  );
+  return (timestamp ?? "") + (nonce ?? "") + (method ?? "") + (path ?? "") + (body ?? "");
 }
 
 /**
@@ -102,11 +96,7 @@ export async function signRequest(params: SignRequestParams): Promise<string> {
     false,
     ["sign"],
   );
-  const signatureBuf = await crypto.subtle.sign(
-    "HMAC",
-    key,
-    encoder.encode(canonical),
-  );
+  const signatureBuf = await crypto.subtle.sign("HMAC", key, encoder.encode(canonical));
   const signature = bufferToHex(signatureBuf);
 
   return signature;
@@ -164,11 +154,7 @@ export async function buildAuthHeaders(
     false,
     ["sign"],
   );
-  const signatureBuf = await crypto.subtle.sign(
-    "HMAC",
-    key,
-    encoder.encode(canonical),
-  );
+  const signatureBuf = await crypto.subtle.sign("HMAC", key, encoder.encode(canonical));
   const signature = bufferToHex(signatureBuf);
 
   return {

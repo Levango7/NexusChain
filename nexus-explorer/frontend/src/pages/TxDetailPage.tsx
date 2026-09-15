@@ -53,11 +53,7 @@ const TxDetailPage: React.FC = () => {
   }
 
   const statusTone: BadgeTone =
-    tx.status === "success"
-      ? "success"
-      : tx.status === "failed"
-        ? "danger"
-        : "warning";
+    tx.status === "success" ? "success" : tx.status === "failed" ? "danger" : "warning";
 
   // 字段与后端 toRpcTransaction 严格对齐（2026-09-16 审查 P0/P1 修复）：
   // 已移除 type / typeName / fee / nonce —— core 的 JSON-RPC 桥接不返回这些字段。
@@ -102,10 +98,7 @@ const TxDetailPage: React.FC = () => {
         {orDash(tx.to)}
       </Link>,
     ],
-    [
-      t("tx.amount"),
-      <span className="text-success font-medium">{orDash(tx.amount)} NEX</span>,
-    ],
+    [t("tx.amount"), <span className="text-success font-medium">{orDash(tx.amount)} NEX</span>],
     [t("tx.timestamp"), formatAbsoluteTime(tx.timestamp, i18n.language)],
   ];
 
