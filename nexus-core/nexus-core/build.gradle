@@ -282,6 +282,17 @@ jar {
         attributes 'Main-Class': mainClassName
         attributes 'Class-Path': '. ' + configurations.runtimeClasspath.collect { 'lib/' + it.getName() }.join(' ')
     }
+    // 排除 Spring Boot 应用配置文件（2026-09-14 kind 演练实证修复）：
+    // core 被 wallet/signing 等服务经 nexus-sdk:java 传递依赖为库，jar 根上的
+    // application.properties（server.port=19585）会被服务侧 Spring Boot 的
+    // config data 加载链命中——.properties 优先级高于服务自身 application.yml，
+    // wallet 的 8083 被 core 的 19585 覆盖（Tomcat http-nio-19585 实证）。
+    // core 独立运行形态（Dockerfile 源码全量构建 / bootRun）不受影响。
+    exclude 'application.properties'
+    exclude 'application-local.properties'
+    exclude 'application.yml'
+    exclude 'application-*.yml'
+    exclude 'application-*.properties'
 }
 
 // create a single Jar with all dependencies

@@ -253,7 +253,12 @@ mpc:
     distributed-mode: ${NEX_MPC_ENGINE_DISTRIBUTED:false}
     # 引擎 gRPC 主机（单端点模式，endpoints 为空时使用，向后兼容）
     host: ${NEX_MPC_ENGINE_HOST:localhost}
-    # 引擎 gRPC 端口（Rust tonic server 默认 50051）
+    # 引擎 gRPC 端口（Rust tonic server 默认 50051）。
+    # 2026-09-14 K8s 演练实证修复：本键值在 K8s 下被 Service mpc-engine 命名端口
+    # 注入的 MPC_ENGINE_PORT=tcp://<ip>:50051 环境变量覆盖（SystemEnvironment
+    # 属性源优先于 application.yml）——@Value 绑定解析到 'tcp://...' 报
+    # NumberFormatException。Java 侧 @Value 已改读 nexus.mpc.engine.port
+    #（env NEX_MPC_ENGINE_PORT），此键保留供其他消费方，但 env 注入不再穿透。
     port: ${NEX_MPC_ENGINE_PORT:50051}
     # 单次 RPC deadline 超时（毫秒）。DKG/Sign 涉及多轮 P2P 交互，需较长超时。
     deadline-timeout: ${NEX_MPC_ENGINE_DEADLINE:30000}
