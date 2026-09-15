@@ -100,7 +100,13 @@ colors: { surface: "rgb(var(--surface-rgb) / <alpha-value>)" }
 - 半透明 banner：`bg-{tone}/10` 叠 `--bg` 后的合成底
 - 可交互控件边界：`--border-strong` on `--surface` / `--bg`
 
-**改动任何色值后必须重跑对比度核算**，不得凭观感判断。
+**改动任何色值后必须重跑对比度核算**，不得凭观感判断：
+
+```bash
+npm run verify:contrast    # 解析 tokens.css 实际值，校验 70 组组合
+```
+
+该脚本已接入 `npm run check` 与 CI，色值一旦低于阈值即阻断构建。
 
 ## 3. Typography Rules
 - 字体栈：`--font-display` / `--font-body` = `"Inter", "Noto Sans SC", system-ui, sans-serif`；`--font-mono` = `"JetBrains Mono", "Fira Code", monospace`（哈希/地址专用）。
