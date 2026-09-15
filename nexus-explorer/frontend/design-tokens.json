@@ -6,12 +6,27 @@
     "surface-2": { "value": "#161A20", "rgb": "22 26 32", "type": "color" },
     "border": { "value": "#232830", "rgb": "35 40 48", "type": "color" },
     "border-soft": { "value": "#1A1E24", "rgb": "26 30 36", "type": "color" },
-    "border-strong": { "value": "#5A6370", "rgb": "90 99 112", "type": "color", "role": "可交互控件边界（WCAG 1.4.11 3:1）" },
+    "border-strong": {
+      "value": "#5A6370",
+      "rgb": "90 99 112",
+      "type": "color",
+      "role": "可交互控件边界（WCAG 1.4.11 3:1）"
+    },
     "fg": { "value": "#E6E9EF", "rgb": "230 233 239", "type": "color" },
     "fg-2": { "value": "#AEB4C0", "rgb": "174 180 192", "type": "color" },
     "muted": { "value": "#8B93A1", "rgb": "139 147 161", "type": "color" },
-    "accent": { "value": "#8B96FF", "rgb": "139 150 255", "type": "color", "role": "品牌文字/链接/激活（对暗背景 ≥4.5:1）" },
-    "accent-solid": { "value": "#4B5AE0", "rgb": "75 90 224", "type": "color", "role": "品牌实底（配 accent-on ≥4.5:1）" },
+    "accent": {
+      "value": "#8B96FF",
+      "rgb": "139 150 255",
+      "type": "color",
+      "role": "品牌文字/链接/激活（对暗背景 ≥4.5:1）"
+    },
+    "accent-solid": {
+      "value": "#4B5AE0",
+      "rgb": "75 90 224",
+      "type": "color",
+      "role": "品牌实底（配 accent-on ≥4.5:1）"
+    },
     "accent-solid-hover": { "value": "#4050CE", "rgb": "64 80 206", "type": "color" },
     "accent-solid-active": { "value": "#3543B8", "rgb": "53 67 184", "type": "color" },
     "accent-on": { "value": "#FFFFFF", "rgb": "255 255 255", "type": "color" },
