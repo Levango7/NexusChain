@@ -9,7 +9,10 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "lint": "eslint src --ext .ts,.tsx",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "verify:build": "node scripts/verify-build-artifacts.mjs",
+    "check": "npm run lint && npm run test && npm run build && npm run verify:build"
   },
   "dependencies": {
     "i18next": "^26.4.0",

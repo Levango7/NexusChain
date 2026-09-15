@@ -1,10 +1,13 @@
+/* 设计令牌必须在 @tailwind 指令之前引入。
+ * CSS 规范要求 @import 位于所有其他语句（@charset / 空 @layer 除外）之前；
+ * 置于 @tailwind 之后会被构建器判定为非法顺序并丢弃该 import，
+ * 导致全部 --x / --x-rgb 变量未注入产物、所有颜色工具类失效。
+ * 详见 2026-09-16 修复记录。 */
+@import "./styles/tokens.css";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-
-/* 引入设计令牌（CSS 变量定义来源）。
- * tokens.ts 同步提供 JS 侧类型安全访问 + Tailwind 主题映射。 */
-@import "./styles/tokens.css";
 
 html,
 body,
