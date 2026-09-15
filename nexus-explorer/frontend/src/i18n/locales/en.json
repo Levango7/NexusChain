@@ -81,7 +81,10 @@
     "errSecretEmpty": "API Secret cannot be empty",
     "errKeyLength": "API Key must be at least 8 characters",
     "errSecretLength": "API Secret must be at least 16 characters (HMAC-SHA256 security requirement)",
-    "errSaveFailed": "Failed to save credentials"
+    "errSaveFailed": "Failed to save credentials",
+    "confirmClearTitle": "Clear credentials?",
+    "confirmClearBody": "You will need to re-enter the API Key and API Secret to use payment orchestration again. This cannot be undone.",
+    "confirmClearOk": "Clear"
   },
   "orchestration": {
     "title": "Payment Orchestration",
@@ -93,7 +96,24 @@
     "noPayments": "No payments yet.",
     "connectors": "Payment Connectors",
     "routingRules": "Routing Rules",
-    "requestFailed": "Request failed ({{status}}): {{message}}"
+    "requestFailed": "Request failed ({{status}}): {{message}}",
+    "tabPayments": "Payments",
+    "tabConnectors": "Connectors",
+    "tabRules": "Rules",
+    "noConnectors": "No connectors registered.",
+    "noRules": "No routing rules.",
+    "connectorMeta": "ID: {{id}} · Type: {{type}} · Fee: {{fee}} bps",
+    "connectorStateActive": "active",
+    "connectorStateInactive": "inactive",
+    "currencies": "Currencies",
+    "currenciesAll": "ALL",
+    "ruleMeta": "Connectors: {{connectors}} · Priority: {{priority}}",
+    "fieldId": "Payment ID",
+    "fieldConnector": "Connector",
+    "fieldCreatedAt": "Created",
+    "fieldAmount": "Amount",
+    "back": "Back",
+    "goToSettings": "Go to Settings"
   },
   "block": {
     "title": "Block",

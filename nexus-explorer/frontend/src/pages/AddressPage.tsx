@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { api } from "../api/client";
 import type { AccountInfo } from "../types";
 import { DetailPageLayout } from "../components/ui";
+import { orDash } from "../utils/value";
 
 /**
  * AddressPage — 地址详情页。
@@ -53,23 +54,20 @@ const AddressPage: React.FC = () => {
         <div className="text-xs text-muted mb-1">{t("address.address")}</div>
         <code className="text-sm text-fg break-all">{addr}</code>
         {account && (
-          <div className="grid grid-cols-3 gap-4 mt-4 pt-4 border-t border-border-soft">
+          // 响应式（2026-09-16 审查 P1）：窄屏单列堆叠，≥sm 起两列。
+          // 已移除 nonce 展示 —— 后端 GET /api/address/:addr 只返回
+          // { address, balance, txCount }，nonce 此前恒为 undefined（渲染为空白）。
+          <div className="grid grid-cols-1 gap-4 mt-4 pt-4 border-t border-border-soft sm:grid-cols-2">
             <div>
               <div className="text-xs text-muted">{t("address.balance")}</div>
               <div className="text-lg font-semibold text-success mt-1">
-                {account.balance}
-              </div>
-            </div>
-            <div>
-              <div className="text-xs text-muted">{t("address.nonce")}</div>
-              <div className="text-lg font-mono text-fg mt-1">
-                {account.nonce}
+                {orDash(account.balance)}
               </div>
             </div>
             <div>
               <div className="text-xs text-muted">{t("address.transactions")}</div>
               <div className="text-lg font-mono text-fg mt-1">
-                {account.txCount}
+                {orDash(account.txCount)}
               </div>
             </div>
           </div>

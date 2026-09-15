@@ -23,8 +23,10 @@ export interface CardProps {
   className?: string;
   /** 内边距紧凑模式（p-3 而非 p-5）。 */
   compact?: boolean;
-  /** 点击回调（interactive=true 时生效）。 */
-  onClick?: (e: React.MouseEvent<HTMLDivElement>) => void;
+  /** 点击回调（interactive=true 时生效）。鼠标与键盘激活共用。 */
+  onClick?: (
+    e: React.MouseEvent<HTMLDivElement> | React.KeyboardEvent<HTMLDivElement>,
+  ) => void;
 }
 
 export const Card: React.FC<CardProps> = ({
@@ -42,7 +44,7 @@ export const Card: React.FC<CardProps> = ({
     "bg-surface border border-border rounded-lg",
     compact ? "p-3" : "p-5",
     interactive
-      ? "cursor-pointer hover:border-accent hover:bg-surface-2 transition-colors duration-base ease-standard"
+      ? "cursor-pointer hover:border-accent hover:bg-surface-2 transition-colors duration-base ease-standard focus:outline-none focus-visible:shadow-focus"
       : "",
     className,
   ]
@@ -55,6 +57,19 @@ export const Card: React.FC<CardProps> = ({
     <div
       className={base}
       onClick={interactive ? onClick : undefined}
+      // 键盘激活（2026-09-16 审查 P1 修复）：interactive 时设了 role="button"
+      // 与 tabIndex=0，但此前没有键盘处理 —— 键盘用户可聚焦却无法激活。
+      // 与 HomePage 手写的 Enter/Space 处理保持一致。
+      onKeyDown={
+        interactive
+          ? (e: React.KeyboardEvent<HTMLDivElement>) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onClick?.(e);
+              }
+            }
+          : undefined
+      }
       role={interactive ? "button" : undefined}
       tabIndex={interactive ? 0 : undefined}
     >

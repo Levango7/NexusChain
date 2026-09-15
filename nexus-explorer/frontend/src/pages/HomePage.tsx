@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useNavigate, Link } from "react-router-dom";
-import { Search, Settings as SettingsIcon, AlertCircle } from "lucide-react";
+import { Search, Settings as SettingsIcon, AlertCircle, GitBranch } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api/client";
 import type { BlockInfo, TransactionInfo, ChainStatus } from "../types";
 import { Loading } from "../components/ui";
+import { formatRelativeTime } from "../utils/time";
+import { PageHeader } from "../components/layout/PageHeader";
 
 /**
  * HomePage — 区块浏览器首页。
@@ -17,7 +19,7 @@ import { Loading } from "../components/ui";
  *   - Loading 文案替换为 <Loading /> 组件
  */
 const HomePage: React.FC = () => {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const [blocks, setBlocks] = useState<BlockInfo[]>([]);
   const [transactions, setTransactions] = useState<TransactionInfo[]>([]);
@@ -78,17 +80,11 @@ const HomePage: React.FC = () => {
     else navigate(`/address/${q}`);
   };
 
-  const formatTime = (ts: number) => {
-    const diff = Math.floor(Date.now() / 1000 - ts);
-    if (diff < 60) return `${diff}s ago`;
-    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-    return `${Math.floor(diff / 3600)}h ago`;
-  };
+  const formatTime = (ts: number) => formatRelativeTime(ts, i18n.language);
 
   return (
     <div className="min-h-screen bg-bg text-fg">
-      <header className="border-b border-border bg-surface/80 backdrop-blur sticky top-0 z-sticky">
-        <div className="max-w-6xl mx-auto px-4 h-14 flex items-center justify-between">
+      <PageHeader maxWidth="max-w-6xl" innerClassName="justify-between">
           <div
             className="flex items-center gap-2 cursor-pointer"
             role="button"
@@ -107,17 +103,20 @@ const HomePage: React.FC = () => {
           </div>
           <div className="flex items-center gap-4">
             {status && (
-              // 响应式补丁（质量审查 B6）：窄屏隐藏链状态细节（sm:）防挤压
-              // logo 区；<md 只保留块高与 live 标识，peers 细节 md: 起展示
+              // 响应式补丁（质量审查 B6）：窄屏隐藏链状态细节（sm:）防挤压 logo 区。
+              //
+              // 2026-09-16 审查修复：
+              //  - status.height → status.latestHeight（后端 doGetNodeStatus 输出
+              //    latestHeight；此前读 height 恒为 undefined，toLocaleString()
+              //    抛 TypeError 导致整页被 ErrorBoundary 替换）
+              //  - 移除 peers 展示：core 侧 peers 为桩值（恒 0），展示它等同于
+              //    展示假数据；待 core 暴露真实运行态后再加回
               <div className="flex items-center gap-4 text-xs text-fg-2">
                 <span className="hidden sm:inline">
                   {t("home.height")}:{" "}
                   <span className="text-fg font-mono">
-                    {status.height.toLocaleString()}
+                    {status.latestHeight.toLocaleString()}
                   </span>
-                </span>
-                <span className="hidden md:inline">
-                  {t("home.peers")}: <span className="text-fg">{status.peers}</span>
                 </span>
                 <span className="flex items-center gap-1">
                   <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse" />
@@ -125,6 +124,14 @@ const HomePage: React.FC = () => {
                 </span>
               </div>
             )}
+            <Link
+              to="/orchestration"
+              aria-label={t("nav.orchestration")}
+              className="flex items-center gap-1 text-muted hover:text-accent text-xs transition-colors duration-base ease-standard focus:outline-none focus-visible:shadow-focus"
+            >
+              <GitBranch size={16} />
+              <span className="hidden sm:inline">{t("nav.orchestration")}</span>
+            </Link>
             <Link
               to="/settings"
               aria-label={t("home.settings")}
@@ -134,8 +141,7 @@ const HomePage: React.FC = () => {
               <span className="hidden sm:inline">{t("nav.settings")}</span>
             </Link>
           </div>
-        </div>
-      </header>
+      </PageHeader>
 
       <div className="max-w-6xl mx-auto px-4 pt-8 pb-4">
         <form onSubmit={handleSearch} className="relative">

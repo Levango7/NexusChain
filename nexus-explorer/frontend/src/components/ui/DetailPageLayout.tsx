@@ -2,6 +2,7 @@ import React from "react";
 import { Link } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
 import { Loading } from "./Loading";
+import { PageHeader } from "../layout/PageHeader";
 
 /**
  * DetailPageLayout — 详情页通用布局骨架。
@@ -64,8 +65,7 @@ export const DetailPageLayout: React.FC<DetailPageLayoutProps> = ({
 
   return (
     <div className="min-h-screen bg-bg text-fg">
-      <header className="border-b border-border bg-surface/80 backdrop-blur sticky top-0 z-sticky">
-        <div className="max-w-4xl mx-auto px-4 h-14 flex items-center gap-4">
+      <PageHeader maxWidth="max-w-4xl" innerClassName="gap-4">
           <Link
             to="/"
             className="flex items-center gap-1 text-accent hover:text-accent-hover text-sm transition-colors duration-base ease-standard focus:outline-none focus-visible:shadow-focus"
@@ -74,8 +74,7 @@ export const DetailPageLayout: React.FC<DetailPageLayoutProps> = ({
             {backLabel}
           </Link>
           {title && <h1 className="text-sm font-semibold text-fg-2">{title}</h1>}
-        </div>
-      </header>
+      </PageHeader>
       <main className={mainClassName}>{children}</main>
     </div>
   );

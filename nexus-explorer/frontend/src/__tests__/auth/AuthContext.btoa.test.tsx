@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { act } from "@testing-library/react";
-import { render, screen } from "../test-utils";
+import { render } from "../test-utils";
 import type { ReactNode } from "react";
 import {
   AuthProvider,

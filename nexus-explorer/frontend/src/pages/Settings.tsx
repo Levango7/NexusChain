@@ -4,7 +4,8 @@ import { ArrowLeft, Eye, EyeOff, CheckCircle2, AlertCircle, Trash2 } from "lucid
 import { useTranslation } from "react-i18next";
 import { useAuth } from "../auth/useAuth";
 import { useTheme } from "../hooks/useTheme";
-import { Button, Card } from "../components/ui";
+import { Button, Card, Modal } from "../components/ui";
+import { PageHeader } from "../components/layout/PageHeader";
 
 /**
  * Secret 视觉掩码：仅用于在输入框中遮蔽已存在的 secret，不参与逻辑判断。
@@ -44,6 +45,8 @@ const Settings: React.FC = () => {
   const [showSecret, setShowSecret] = useState<boolean>(false);
   const [saved, setSaved] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  // 清除凭证是破坏性操作（清空后需重新输入 API Key/Secret），故加二次确认。
+  const [confirmClearOpen, setConfirmClearOpen] = useState<boolean>(false);
 
   // 初始化输入框：显示当前已存储的凭证（apiKey 明文，secret 用占位符）
   useEffect(() => {
@@ -92,13 +95,18 @@ const Settings: React.FC = () => {
     [keyInput, secretInput, secretIsPlaceholder, apiSecret, setCredentials, t],
   );
 
-  const handleClear = useCallback(() => {
+  /**
+   * 实际执行清除（由确认对话框触发）。
+   * 破坏性操作加二次确认：清空后必须重新输入 API Key/Secret 才能恢复认证。
+   */
+  const handleClearConfirmed = useCallback(() => {
     clearCredentials();
     setKeyInput("");
     setSecretInput("");
     setSecretIsPlaceholder(false);
     setSaved(false);
     setError(null);
+    setConfirmClearOpen(false);
   }, [clearCredentials]);
 
   const handleSecretFocus = useCallback(() => {
@@ -111,8 +119,7 @@ const Settings: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-bg text-fg">
-      <header className="border-b border-border bg-surface/80 backdrop-blur sticky top-0 z-sticky">
-        <div className="max-w-4xl mx-auto px-4 h-14 flex items-center gap-4">
+      <PageHeader maxWidth="max-w-4xl" innerClassName="gap-4">
           <Link
             to="/"
             className="flex items-center gap-1 text-accent hover:text-accent-hover text-sm transition-colors duration-base ease-standard focus:outline-none focus-visible:shadow-focus"
@@ -121,8 +128,7 @@ const Settings: React.FC = () => {
             {t("settings.back")}
           </Link>
           <h1 className="text-sm font-semibold text-fg-2">{t("settings.title")}</h1>
-        </div>
-      </header>
+      </PageHeader>
 
       <main className="max-w-4xl mx-auto px-4 py-6 space-y-6">
         {/* 当前认证状态 */}
@@ -279,7 +285,7 @@ const Settings: React.FC = () => {
                 type="button"
                 variant="ghost"
                 size="md"
-                onClick={handleClear}
+                onClick={() => setConfirmClearOpen(true)}
                 disabled={!isAuthenticated && !keyInput && !secretInput}
                 leadingIcon={<Trash2 size={14} />}
               >
@@ -301,6 +307,36 @@ const Settings: React.FC = () => {
           </ul>
         </Card>
       </main>
+
+      {/* 清除凭证二次确认（破坏性操作：清空后必须重新输入 API Key/Secret 才能恢复认证） */}
+      <Modal
+        open={confirmClearOpen}
+        onClose={() => setConfirmClearOpen(false)}
+        title={t("settings.confirmClearTitle")}
+        maxWidth="max-w-sm"
+        footer={
+          <>
+            <Button
+              type="button"
+              variant="ghost"
+              size="md"
+              onClick={() => setConfirmClearOpen(false)}
+            >
+              {t("common.cancel")}
+            </Button>
+            <Button
+              type="button"
+              variant="danger"
+              size="md"
+              onClick={handleClearConfirmed}
+            >
+              {t("settings.confirmClearOk")}
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm text-fg-2">{t("settings.confirmClearBody")}</p>
+      </Modal>
     </div>
   );
 };

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import userEvent from "@testing-library/user-event";
 import { act, waitFor } from "@testing-library/react";
 import { render, screen } from "../test-utils";
@@ -226,9 +226,23 @@ describe("Settings 占位符碰撞测试（P2-D3 修复）", () => {
       expect(secretInput?.value).toBe(SECRET_MASK);
     });
 
-    // 点击清除
+    // 点击清除 → 弹出二次确认（2026-09-16 审查：破坏性操作加确认）
     const clearButton = screen.getByRole("button", { name: /清除凭证/ });
     await user.click(clearButton);
+
+    // 确认对话框应出现
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toBeInTheDocument();
+
+    // 取消不应清除
+    await user.click(screen.getByRole("button", { name: /取消/ }));
+    expect(
+      (screen.queryByLabelText(/API Secret/i) as HTMLInputElement | null)?.value,
+    ).toBe(SECRET_MASK);
+
+    // 再次打开并确认
+    await user.click(screen.getByRole("button", { name: /清除凭证/ }));
+    await user.click(await screen.findByRole("button", { name: /确认清除/ }));
 
     // 清除后 secret 输入框应为空
     await waitFor(() => {

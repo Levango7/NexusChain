@@ -4,6 +4,8 @@ import { useTranslation } from "react-i18next";
 import { api } from "../api/client";
 import type { TransactionInfo } from "../types";
 import { DetailPageLayout, Badge, type BadgeTone } from "../components/ui";
+import { orDash } from "../utils/value";
+import { formatAbsoluteTime } from "../utils/time";
 
 /**
  * TxDetailPage — 交易详情页。
@@ -16,7 +18,7 @@ import { DetailPageLayout, Badge, type BadgeTone } from "../components/ui";
  *   - P1: 复用 DetailPageLayout 提取的 header + loading + error 骨架
  */
 const TxDetailPage: React.FC = () => {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { hash } = useParams<{ hash: string }>();
   const [tx, setTx] = useState<TransactionInfo | null>(null);
   const [loading, setLoading] = useState(true);
@@ -57,26 +59,30 @@ const TxDetailPage: React.FC = () => {
         ? "danger"
         : "warning";
 
+  // 字段与后端 toRpcTransaction 严格对齐（2026-09-16 审查 P0/P1 修复）：
+  // 已移除 type / typeName / fee / nonce —— core 的 JSON-RPC 桥接不返回这些字段。
+  // 此前 `{tx.fee} NEX` 因 React 把 undefined 渲染为空串，页面显示为
+  // 「手续费 NEX」（数值空白），用户无法区分「手续费为 0」与「字段缺失」。
   const rows: [string, React.ReactNode][] = [
-    [t("tx.txHash"), <code className="break-all text-xs text-fg">{tx.txHash}</code>],
+    [t("tx.txHash"), <code className="break-all text-xs text-fg">{orDash(tx.txHash)}</code>],
     [
       t("tx.status"),
-      <Badge tone={statusTone} solid>
-        {tx.status.toUpperCase()}
+      <Badge tone={statusTone} outlined>
+        {String(orDash(tx.status)).toUpperCase()}
       </Badge>,
     ],
     [
       t("tx.block"),
-      <Link
-        to={`/block/${tx.blockHeight}`}
-        className="text-accent hover:text-accent-hover hover:underline font-mono"
-      >
-        #{tx.blockHeight}
-      </Link>,
-    ],
-    [
-      t("tx.type"),
-      <span className="text-fg-2">{tx.typeName || t("tx.typeFallback", { type: tx.type })}</span>,
+      tx.blockHeight != null ? (
+        <Link
+          to={`/block/${tx.blockHeight}`}
+          className="text-accent hover:text-accent-hover hover:underline font-mono"
+        >
+          #{tx.blockHeight}
+        </Link>
+      ) : (
+        "—"
+      ),
     ],
     [
       t("tx.from"),
@@ -84,7 +90,7 @@ const TxDetailPage: React.FC = () => {
         to={`/address/${tx.from}`}
         className="text-accent hover:text-accent-hover hover:underline break-all text-xs"
       >
-        {tx.from}
+        {orDash(tx.from)}
       </Link>,
     ],
     [
@@ -93,28 +99,27 @@ const TxDetailPage: React.FC = () => {
         to={`/address/${tx.to}`}
         className="text-accent hover:text-accent-hover hover:underline break-all text-xs"
       >
-        {tx.to}
+        {orDash(tx.to)}
       </Link>,
     ],
     [
       t("tx.amount"),
-      <span className="text-success font-medium">{tx.amount} NEX</span>,
+      <span className="text-success font-medium">{orDash(tx.amount)} NEX</span>,
     ],
-    [t("tx.fee"), <span className="text-fg-2">{tx.fee} NEX</span>],
-    [t("tx.nonce"), <span className="font-mono text-fg-2">{tx.nonce}</span>],
-    [t("tx.timestamp"), new Date(tx.timestamp * 1000).toLocaleString()],
+    [t("tx.timestamp"), formatAbsoluteTime(tx.timestamp, i18n.language)],
   ];
 
   return (
     <DetailPageLayout title={t("tx.title")} backLabel={t("tx.back")}>
       <div className="bg-surface border border-border rounded-lg divide-y divide-border-soft">
         {rows.map(([label, value]) => (
+          // 响应式（2026-09-16 审查 P1）：窄屏单列堆叠，≥sm 起恢复 4 列布局
           <div
             key={label}
-            className="px-5 py-3 grid grid-cols-4 gap-2 text-sm"
+            className="px-5 py-3 grid grid-cols-1 gap-1 text-sm sm:grid-cols-4 sm:gap-2"
           >
             <span className="text-muted">{label}</span>
-            <span className="col-span-3 text-fg">{value}</span>
+            <span className="text-fg sm:col-span-3">{value}</span>
           </div>
         ))}
       </div>
