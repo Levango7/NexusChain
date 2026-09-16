@@ -77,6 +77,48 @@ for (const t of ["bg", "surface", "accent", "accent-solid", "fg", "muted", "succ
 // 亮色主题块必须存在
 report(/\[data-theme=["']?light["']?\]/.test(css), "[data-theme=light] 主题块");
 
+/* ---------- 2.5 CSS 变量引用完整性（var() 解析守卫） ---------- */
+console.log("\n── var() 引用完整性 ──");
+/**
+ * 仅「令牌已注入」还不够：若某处引用了不存在的变量名，`var(--x)` 会解析为空，
+ * 表现与「令牌未注入」完全一致（颜色全部失效），但令牌计数检查发现不了。
+ * 这里做引用 → 定义的闭环校验，等价于在浏览器里确认 var() 能解析出值。
+ */
+{
+  // 只校验**项目自定义令牌**。`--tw-*` 是 Tailwind 内部变量，由其自身保证：
+  // 例如未被使用的默认 `.shadow` 类里会出现 `var(--tw-shadow-color)`，而该变量
+  // 只在配合 `shadow-{color}` 工具类时才被定义 —— 属于 Tailwind 的正常设计，
+  // 不应计入失败（若不过滤会产生误报）。
+  const isProjectToken = (name) => !name.startsWith("--tw-");
+  const defined = new Set(
+    [...css.matchAll(/(--[a-z0-9-]+)\s*:/g)].map((m) => m[1]).filter(isProjectToken),
+  );
+  // 只校验产物中真正出现的 var() 引用；忽略带 fallback 的 var(--x, ...)
+  const referenced = new Set(
+    [...css.matchAll(/var\(\s*(--[a-z0-9-]+)\s*\)/g)]
+      .map((m) => m[1])
+      .filter(isProjectToken),
+  );
+  const dangling = [...referenced].filter((name) => !defined.has(name)).sort();
+  console.log(`  产物中定义变量 ${defined.size} 个，var() 引用 ${referenced.size} 个`);
+  if (dangling.length > 0) {
+    for (const name of dangling) {
+      report(false, `var(${name}) 无对应定义`, "→ 该引用会解析为空，颜色失效");
+    }
+  } else {
+    report(true, "所有 var() 引用均有对应定义");
+  }
+  // 抽查关键变量确实有值（非空）
+  for (const key of ["--surface-rgb", "--accent-rgb", "--bg-rgb", "--fg-rgb"]) {
+    const m = css.match(new RegExp(`${key}\\s*:\\s*([^;}]+)`));
+    report(
+      !!m && m[1].trim().length > 0,
+      `${key} 有非空值`,
+      m ? `= ${m[1].trim()}` : "",
+    );
+  }
+}
+
 /* ---------- 3. 源码中实际使用的类必须生成（缺陷类型 2、3） ---------- */
 console.log("\n── 源码类名 → 产物规则 ──");
 
