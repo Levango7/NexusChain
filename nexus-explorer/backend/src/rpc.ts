@@ -92,6 +92,9 @@ export class NexusChainRpcClient {
   private readonly url: string;
   private requestId: number = 0;
 
+  /** 单次 RPC 调用超时（毫秒）。见 call() 中的说明。 */
+  private static readonly REQUEST_TIMEOUT_MS = 8_000;
+
   constructor(url: string) {
     this.url = url;
   }
@@ -110,10 +113,14 @@ export class NexusChainRpcClient {
       params,
     };
 
+    // P1（2026-09-17 修复）：原实现无超时 —— core 侧挂起时该请求会无限期占用
+    // 连接与事件循环，BFF 的并发能力被逐条耗尽，最终整体不可用（且前端表现为
+    // 永久 Loading）。8s 对同集群 RPC 足够宽裕。
     const res = await fetch(this.url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(reqBody),
+      signal: AbortSignal.timeout(NexusChainRpcClient.REQUEST_TIMEOUT_MS),
     });
 
     if (!res.ok) {

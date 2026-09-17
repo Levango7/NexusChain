@@ -85,7 +85,11 @@ public class MerchantServiceImpl implements MerchantService {
                     k.setActive(false);
                     merchantRepository.save(merchant);
                 });
-        log.info("API key revoked: merchantId={}, apiKey={}", merchantId, apiKey);
+        // P1（2026-09-17 修复）：原实现把 apiKey 明文写入日志 —— 日志聚合/归档
+        // 系统一旦被读取，等于泄露可用凭据（吊销日志同样包含可关联的 key 值）。
+        // 改用 LogSanitizer.maskKey 完全脱敏，仅保留长度用于排查。
+        log.info("API key revoked: merchantId={}, apiKey={}",
+                merchantId, org.nexus.gateway.util.LogSanitizer.maskKey(apiKey));
     }
 
     @Override

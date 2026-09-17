@@ -35,8 +35,34 @@ const app = express();
 /** RPC 客户端 */
 const rpcClient = new NexusChainRpcClient(RPC_URL);
 
-// 中间件
-app.use(cors());
+/**
+ * CORS 白名单（P1，2026-09-17 修复）。
+ *
+ * 原实现 `app.use(cors())` 允许**任意源**跨站访问本 BFF 的全部接口。
+ * 该 BFF 暴露区块/交易/地址查询，虽为公开数据，但开放 CORS 会让任意第三方
+ * 站点在用户浏览器中直接读取响应（可被用于流量探测与数据聚合），
+ * 也掩盖了真实调用方。改为显式白名单：由 `CORS_ALLOWED_ORIGINS`
+ * （逗号分隔）提供，默认仅本地前端开发源。
+ */
+const CORS_ALLOWED_ORIGINS = (
+  process.env.CORS_ALLOWED_ORIGINS ?? 'http://localhost:5173'
+)
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // 无 Origin 头：同源请求或服务端到服务端调用，放行
+      if (!origin) return callback(null, true);
+      // 未命中白名单：不放行（不抛错，避免 500；浏览器侧会拦截响应）
+      return callback(null, CORS_ALLOWED_ORIGINS.includes(origin));
+    },
+    // 本 BFF 不依赖 Cookie 鉴权（凭据由调用方显式放在请求头），故关闭凭证
+    credentials: false,
+  }),
+);
 app.use(express.json());
 
 // ---- 路由：区块 ----

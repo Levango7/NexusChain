@@ -3,6 +3,7 @@ package org.nexus.gateway.event;
 import org.nexus.gateway.config.GatewayConfig;
 import org.nexus.gateway.model.PaymentOrder;
 import org.nexus.gateway.repository.PaymentOrderRepository;
+import org.nexus.gateway.webhook.WebhookUrlValidator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -39,6 +40,15 @@ public class PaymentEventListener {
     private final RestTemplate restTemplate;
     private final GatewayConfig gatewayConfig;
     private final PaymentOrderRepository orderRepository;
+    /**
+     * P1（2026-09-17 修复）：商户 notifyUrl 的出站 SSRF 校验器。
+     *
+     * <p>该校验器早已存在（2026-08-29 审计引入），但此前**只被
+     * WebhookDeliveryService 使用**，本类（另一条回调投递链路）绕过了它 ——
+     * 商户下单时可填任意 notifyUrl，网关会直接对其发起出站请求，
+     * 构成 SSRF（探测内网 / 云元数据 169.254.169.254 / 触发内网写操作）。</p>
+     */
+    private final WebhookUrlValidator urlValidator;
 
     /** Deterministic (sorted-key) JSON mapper; must match WebhookController's canonical form. */
     private static final ObjectMapper CANONICAL_MAPPER = new ObjectMapper()
@@ -46,17 +56,17 @@ public class PaymentEventListener {
 
     @Autowired
     public PaymentEventListener(GatewayConfig gatewayConfig, RestTemplate restTemplate,
-                                PaymentOrderRepository orderRepository) {
+                                PaymentOrderRepository orderRepository,
+                                WebhookUrlValidator urlValidator) {
         this.gatewayConfig = gatewayConfig;
         this.restTemplate = restTemplate;
         this.orderRepository = orderRepository;
+        this.urlValidator = urlValidator;
     }
 
     /** 测试用兼容构造器：保留无连接池 RestTemplate。 */
     public PaymentEventListener(GatewayConfig gatewayConfig, PaymentOrderRepository orderRepository) {
-        this.gatewayConfig = gatewayConfig;
-        this.orderRepository = orderRepository;
-        this.restTemplate = new RestTemplate();
+        this(gatewayConfig, new RestTemplate(), orderRepository, new WebhookUrlValidator());
     }
 
     @Async
@@ -104,7 +114,17 @@ public class PaymentEventListener {
                         .map(PaymentOrder::getNotifyUrl)
                         .orElse(null);
                 if (notifyUrl != null && !notifyUrl.isBlank()) {
-                    return notifyUrl;
+                    // P1（2026-09-17 修复）：notifyUrl 完全由商户提供，投递前必须做
+                    // SSRF 校验。非法（内网 / 保留地址 / 非 http(s)）时不投递到该地址，
+                    // 回退到运维配置的 callback-url —— 该地址受信，且失败会记录 WARN 便于发现。
+                    try {
+                        urlValidator.validate(notifyUrl);
+                        return notifyUrl;
+                    } catch (IllegalArgumentException e) {
+                        log.warn("Rejected merchant notifyUrl for webhook delivery, orderId={}, "
+                                + "reason={} — falling back to configured callback-url",
+                                orderId, e.getMessage());
+                    }
                 }
             } catch (RuntimeException e) {
                 log.warn("Failed to load order notifyUrl for webhook delivery, orderId={}, "
