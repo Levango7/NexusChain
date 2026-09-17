@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 
+import java.time.Duration;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -80,8 +81,14 @@ class RatelimitTest {
 
     // === RedisRateLimiter ===
 
+    /**
+     * P1（2026-09-17 契约变更）：原实现为「INCR → 若返回 1 再 EXPIRE」两条命令，
+     * 非原子 —— 若在两者之间进程崩溃，key 将不带 TTL 永久存在，该客户端被永久限流。
+     * 现改为「SET NX EX 创建即带 TTL」。
+     * 本用例断言随之调整：不再期望显式 expire（TTL 由 setIfAbsent 原子设置）。
+     */
     @Test
-    @DisplayName("RedisRateLimiter: 首次 increment=1 设置 expire，返回 true")
+    @DisplayName("RedisRateLimiter: 以 SET NX EX 原子设置 TTL，返回 true")
     void redisRateLimiter_firstAcquire() {
         StringRedisTemplate redis = mock(StringRedisTemplate.class);
         ValueOperations<String, String> ops = mock(ValueOperations.class);
@@ -90,6 +97,29 @@ class RatelimitTest {
 
         RedisRateLimiter limiter = new RedisRateLimiter(redis);
         assertTrue(limiter.tryAcquire("k1"));
+
+        // 创建 key 与设置 TTL 必须是单条原子命令
+        verify(ops).setIfAbsent("nexus:ratelimit:k1", "0", Duration.ofSeconds(60));
+        // TTL 已由 setIfAbsent 保证，无需额外 expire（getExpire 返回 null → 不触发修复分支）
+        verify(redis, never()).expire(anyString(), anyLong(), any(TimeUnit.class));
+    }
+
+    /**
+     * 修复分支：修复前遗留的「存在但无 TTL」key（getExpire 返回 -1）应被补设 TTL，
+     * 使受影响客户端能自行恢复，无需人工清理 Redis。
+     */
+    @Test
+    @DisplayName("RedisRateLimiter: 遗留无 TTL key 应被补设 TTL")
+    void redisRateLimiter_repairsLegacyKeyWithoutTtl() {
+        StringRedisTemplate redis = mock(StringRedisTemplate.class);
+        ValueOperations<String, String> ops = mock(ValueOperations.class);
+        when(redis.opsForValue()).thenReturn(ops);
+        when(ops.increment("nexus:ratelimit:k1")).thenReturn(5L);
+        when(redis.getExpire("nexus:ratelimit:k1", TimeUnit.SECONDS)).thenReturn(-1L);
+
+        RedisRateLimiter limiter = new RedisRateLimiter(redis);
+        assertTrue(limiter.tryAcquire("k1"));
+
         verify(redis).expire("nexus:ratelimit:k1", 60, TimeUnit.SECONDS);
     }
 
