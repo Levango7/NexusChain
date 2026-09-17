@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 import org.nexus.gateway.config.GatewayConfig;
 import org.nexus.gateway.orchestration.connector.ConnectorRegistry;
 import org.nexus.gateway.orchestration.connector.PaymentConnector;
+import org.nexus.gateway.orchestration.connector.PspTargetPolicy;
 import org.nexus.gateway.orchestration.routing.RoutingEngine;
 import org.nexus.gateway.orchestration.routing.RoutingRule;
 import org.nexus.gateway.orchestration.routing.RoutingStrategy;
@@ -33,6 +34,7 @@ class PaymentOrchestrationControllerConnectorApiTest {
     private OrchestrationService orchestrationService;
     private ConnectorRegistry registry;
     private RoutingEngine routingEngine;
+    private PspTargetPolicy pspTargetPolicy;
     private PaymentOrchestrationController controller;
 
     @BeforeEach
@@ -44,8 +46,12 @@ class PaymentOrchestrationControllerConnectorApiTest {
         // Top2 IDOR 加固：Controller 构造函数新增 MerchantOwnershipGuard 参数。
         // 本测试聚焦 routing-rules/connectors 运营配置面（不做商户归属校验），
         // guard 仅是被注入的依赖，不会被这些用例触达。
+        // P0（2026-09-17）：注入显式策略。环境变量白名单仅含 PSP_X_API_KEY；
+        // host 白名单含测试域名——命中白名单即跳过 DNS 解析，
+        // 使单元测试不依赖网络，也不会因 .example 保留域不可解析而失败。
+        pspTargetPolicy = new PspTargetPolicy("PSP_X_API_KEY", "api.pspx.example,d.example");
         controller = new PaymentOrchestrationController(orchestrationService, registry, routingEngine,
-                new org.nexus.gateway.security.MerchantOwnershipGuard());
+                new org.nexus.gateway.security.MerchantOwnershipGuard(), pspTargetPolicy);
     }
 
     // === PUT /routing-rules/{id} ===
@@ -191,5 +197,95 @@ class PaymentOrchestrationControllerConnectorApiTest {
 
         assertEquals(404, resp.getStatusCode().value());
         verify(registry, never()).unregister(any(String.class));
+    }
+
+    // === P0 安全加固（2026-09-17）：环境变量外泄 + SSRF ===
+
+    @Test
+    @DisplayName("POST connectors: api_key_env 不在白名单 -> 400（阻断任意环境变量外泄）")
+    void apiKeyEnvOutsideAllowlistReturns400() {
+        when(registry.get("psp-evil")).thenReturn(Optional.empty());
+
+        Map<String, Object> body = Map.of(
+                "id", "psp-evil",
+                "type", "http_psp",
+                "base_url", "https://api.pspx.example",
+                // 未在白名单内的环境变量名（典型攻击目标）
+                "api_key_env", "AWS_SECRET_ACCESS_KEY");
+
+        ResponseEntity<Map<String, Object>> resp = controller.registerConnector(body);
+
+        assertEquals(400, resp.getStatusCode().value());
+        verify(registry, never()).register(any(PaymentConnector.class));
+    }
+
+    @Test
+    @DisplayName("POST connectors: 白名单为空时 api_key_env 一律拒绝（默认关闭）")
+    void apiKeyEnvRejectedWhenAllowlistEmpty() {
+        PaymentOrchestrationController strict = new PaymentOrchestrationController(
+                orchestrationService, registry, routingEngine,
+                new org.nexus.gateway.security.MerchantOwnershipGuard(),
+                new PspTargetPolicy("", ""));   // 两个白名单均为空
+
+        when(registry.get("psp-y")).thenReturn(Optional.empty());
+        ResponseEntity<Map<String, Object>> resp = strict.registerConnector(Map.of(
+                "id", "psp-y", "type", "http_psp",
+                "base_url", "https://api.pspx.example",
+                "api_key_env", "PSP_X_API_KEY"));
+
+        assertEquals(400, resp.getStatusCode().value());
+        verify(registry, never()).register(any(PaymentConnector.class));
+    }
+
+    @Test
+    @DisplayName("POST connectors: 云元数据地址 169.254.169.254 -> 400（SSRF 拦截）")
+    void cloudMetadataAddressReturns400() {
+        PaymentOrchestrationController noHostAllowlist = new PaymentOrchestrationController(
+                orchestrationService, registry, routingEngine,
+                new org.nexus.gateway.security.MerchantOwnershipGuard(),
+                new PspTargetPolicy("", ""));   // 未配 host 白名单 → 走地址段校验
+
+        when(registry.get("psp-meta")).thenReturn(Optional.empty());
+        ResponseEntity<Map<String, Object>> resp = noHostAllowlist.registerConnector(Map.of(
+                "id", "psp-meta", "type", "http_psp",
+                "base_url", "http://169.254.169.254/latest/meta-data"));
+
+        assertEquals(400, resp.getStatusCode().value());
+        verify(registry, never()).register(any(PaymentConnector.class));
+    }
+
+    @Test
+    @DisplayName("POST connectors: 回环地址与 file: 协议 -> 400")
+    void loopbackAndFileSchemeReturn400() {
+        PaymentOrchestrationController c = new PaymentOrchestrationController(
+                orchestrationService, registry, routingEngine,
+                new org.nexus.gateway.security.MerchantOwnershipGuard(),
+                new PspTargetPolicy("", ""));
+
+        when(registry.get("lp")).thenReturn(Optional.empty());
+        when(registry.get("fl")).thenReturn(Optional.empty());
+
+        assertEquals(400, c.registerConnector(Map.of(
+                "id", "lp", "type", "http_psp", "base_url", "http://127.0.0.1:8080"))
+                .getStatusCode().value());
+
+        assertEquals(400, c.registerConnector(Map.of(
+                "id", "fl", "type", "http_psp", "base_url", "file:///etc/passwd"))
+                .getStatusCode().value());
+
+        verify(registry, never()).register(any(PaymentConnector.class));
+    }
+
+    @Test
+    @DisplayName("POST connectors: host 未命中白名单 -> 400")
+    void hostOutsideAllowlistReturns400() {
+        when(registry.get("psp-other")).thenReturn(Optional.empty());
+
+        ResponseEntity<Map<String, Object>> resp = controller.registerConnector(Map.of(
+                "id", "psp-other", "type", "http_psp",
+                "base_url", "https://attacker.example.com"));   // 不在白名单
+
+        assertEquals(400, resp.getStatusCode().value());
+        verify(registry, never()).register(any(PaymentConnector.class));
     }
 }

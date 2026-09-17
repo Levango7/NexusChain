@@ -11,6 +11,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import io.micrometer.tracing.Tracer;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
@@ -164,7 +165,12 @@ class OrchestrationE2ETest {
     @org.junit.jupiter.api.Order(21)
     @DisplayName("Add custom routing rule")
     void addRoutingRule() throws Exception {
+        // P0（2026-09-17）：路由规则写入端点已加 @PreAuthorize("hasRole('ADMIN')")。
+        // 注意不能用 @WithMockUser —— 本类启用了完整安全过滤器链，
+        // SecurityContextHolderFilter 会用（空的）请求上下文覆盖它，
+        // 必须用请求后置处理器显式注入身份（与 V2ApiIntegrationTest 一致）。
         mockMvc.perform(post("/api/v1/payments/routing-rules")
+                .with(user("admin").roles("ADMIN"))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""
                     {
@@ -184,7 +190,8 @@ class OrchestrationE2ETest {
     @org.junit.jupiter.api.Order(22)
     @DisplayName("Delete routing rule")
     void deleteRoutingRule() throws Exception {
-        mockMvc.perform(delete("/api/v1/payments/routing-rules/test-rule-usd"))
+        mockMvc.perform(delete("/api/v1/payments/routing-rules/test-rule-usd")
+                .with(user("admin").roles("ADMIN")))
                 .andExpect(status().isNoContent());
     }
 

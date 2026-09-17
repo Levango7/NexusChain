@@ -3,12 +3,14 @@ package org.nexus.gateway.orchestration.controller;
 import org.nexus.gateway.orchestration.connector.ConnectorHealth;
 import org.nexus.gateway.orchestration.connector.ConnectorRegistry;
 import org.nexus.gateway.orchestration.connector.PaymentConnector;
+import org.nexus.gateway.orchestration.connector.PspTargetPolicy;
 import org.nexus.gateway.orchestration.connectors.DynamicHttpPspConnector;
 import org.nexus.gateway.orchestration.model.OrchestratedPayment;
 import org.nexus.gateway.orchestration.routing.RoutingEngine;
 import org.nexus.gateway.orchestration.routing.RoutingRule;
 import org.nexus.gateway.orchestration.service.OrchestrationService;
 import org.nexus.gateway.security.MerchantOwnershipGuard;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.data.domain.Page;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -38,14 +40,22 @@ public class PaymentOrchestrationController {
     private final RoutingEngine routingEngine;
     private final MerchantOwnershipGuard ownershipGuard;
 
+    /**
+     * P0（2026-09-17）：动态 PSP 连接器的目标地址与凭据引用策略。
+     * 负责拦截环境变量外泄与 SSRF，见 {@link PspTargetPolicy}。
+     */
+    private final PspTargetPolicy pspTargetPolicy;
+
     public PaymentOrchestrationController(OrchestrationService orchestrationService,
                                           ConnectorRegistry connectorRegistry,
                                           RoutingEngine routingEngine,
-                                          MerchantOwnershipGuard ownershipGuard) {
+                                          MerchantOwnershipGuard ownershipGuard,
+                                          PspTargetPolicy pspTargetPolicy) {
         this.orchestrationService = orchestrationService;
         this.connectorRegistry = connectorRegistry;
         this.routingEngine = routingEngine;
         this.ownershipGuard = ownershipGuard;
+        this.pspTargetPolicy = pspTargetPolicy;
     }
 
     // === Payment CRUD ===
@@ -148,12 +158,14 @@ public class PaymentOrchestrationController {
         return ResponseEntity.ok(routingEngine.getRules());
     }
 
+    @PreAuthorize("hasRole('ADMIN')")
     @PostMapping("/routing-rules")
     public ResponseEntity<RoutingRule> addRule(@RequestBody RoutingRule rule) {
         routingEngine.addRule(rule);
         return ResponseEntity.status(HttpStatus.CREATED).body(rule);
     }
 
+    @PreAuthorize("hasRole('ADMIN')")
     @PutMapping("/routing-rules/{id}")
     public ResponseEntity<RoutingRule> updateRule(@PathVariable String id,
                                                   @RequestBody RoutingRule body) {
@@ -172,6 +184,7 @@ public class PaymentOrchestrationController {
         return ResponseEntity.ok(body);
     }
 
+    @PreAuthorize("hasRole('ADMIN')")
     @DeleteMapping("/routing-rules/{id}")
     public ResponseEntity<Void> deleteRule(@PathVariable String id) {
         routingEngine.removeRule(id);
@@ -186,6 +199,7 @@ public class PaymentOrchestrationController {
     /** 动态注册的连接器 id 集合（区分 204 动态注销 / 404 未知） */
     private final Set<String> dynamicConnectors = Collections.synchronizedSet(new HashSet<>());
 
+    @PreAuthorize("hasRole('ADMIN')")
     @PostMapping("/connectors")
     public ResponseEntity<Map<String, Object>> registerConnector(@RequestBody Map<String, Object> body) {
         String id = body.get("id") == null ? null : String.valueOf(body.get("id")).trim();
@@ -204,13 +218,21 @@ public class PaymentOrchestrationController {
         // 201：构造动态 HTTP PSP 连接器并注册
         String displayName = body.get("display_name") == null ? id : String.valueOf(body.get("display_name"));
         String baseUrl = body.get("base_url") == null ? "" : String.valueOf(body.get("base_url"));
-        // 审计修复：base_url 校验（SSRF 面收窄）。原实现接受任意字符串并作为
-        // DynamicHttpPspConnector 的请求目标——认证后的调用方可让网关向任意
-        // 地址（含内网/file: 等）发起 POST。现强制 http/https + 非空 host。
-        if (!isValidHttpBaseUrl(baseUrl)) {
+        // P0（2026-09-17 修复）：base_url 必须指向**公网** http(s) 地址。
+        // 原 isValidHttpBaseUrl 仅校验 scheme + host，放行 127.0.0.1 / 10.x /
+        // 169.254.169.254（云元数据）等内网目标，构成 SSRF。
+        if (!pspTargetPolicy.isAllowedBaseUrl(baseUrl)) {
             return ResponseEntity.badRequest().build();
         }
-        String apiKeyEnv = body.get("api_key_env") == null ? null : String.valueOf(body.get("api_key_env"));
+        String apiKeyEnv = body.get("api_key_env") == null ? null
+                : String.valueOf(body.get("api_key_env")).trim();
+        // P0（2026-09-17 修复）：api_key_env 必须命中配置白名单。
+        // 否则调用方可指定任意环境变量名，让网关把其值以 Authorization: Bearer
+        // 发往自己控制的 base_url —— 即任意环境变量外泄（数据库口令 / 签名密钥 /
+        // 云凭证）。默认白名单为空 = 全部拒绝。
+        if (apiKeyEnv != null && !apiKeyEnv.isEmpty() && !pspTargetPolicy.isAllowedApiKeyEnv(apiKeyEnv)) {
+            return ResponseEntity.badRequest().build();
+        }
         @SuppressWarnings("unchecked")
         Set<String> currencies = body.get("currencies") instanceof java.util.List
                 ? new java.util.HashSet<>((java.util.List<String>) body.get("currencies"))
@@ -229,24 +251,7 @@ public class PaymentOrchestrationController {
         return ResponseEntity.status(HttpStatus.CREATED).body(resp);
     }
 
-    /**
-     * base_url 合法性校验（审计修复辅助）：必须为合法的 http/https URL
-     * 且 host 非空。拦截 file:/ftp:/内网探测等非 PSP 目标。
-     */
-    private static boolean isValidHttpBaseUrl(String baseUrl) {
-        if (baseUrl == null || baseUrl.isBlank()) {
-            return false;
-        }
-        try {
-            java.net.URI uri = java.net.URI.create(baseUrl);
-            String scheme = uri.getScheme();
-            return ("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme))
-                    && uri.getHost() != null && !uri.getHost().isBlank();
-        } catch (IllegalArgumentException e) {
-            return false;
-        }
-    }
-
+    @PreAuthorize("hasRole('ADMIN')")
     @DeleteMapping("/connectors/{id}")
     public ResponseEntity<Void> unregisterConnector(@PathVariable String id) {
         // 403：核心连接器受保护，不可动态注销
