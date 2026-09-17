@@ -12,6 +12,7 @@ import org.nexus.gateway.repository.RefundRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -92,14 +93,29 @@ public class CompensationService {
     private final ChainRpcClient chainRpcClient;
     private final SettlementBatchRepository settlementBatchRepository;
 
+    /**
+     * 自身代理引用（P1，2026-09-17 修复）。
+     *
+     * <p>{@link #handleOneRefund} 标注了 {@code REQUIRES_NEW}，但此前由同类内的
+     * {@link #handlePendingRefunds} 以 {@code this.handleOneRefund(...)} 调用 ——
+     * Spring 的 {@code @Transactional} 依赖代理，自调用绕过代理，
+     * <b>新事务从未创建</b>，导致该方法内「退款单状态更新」与「订单状态更新」
+     * 不在同一事务中，中途失败会留下不一致状态。</p>
+     *
+     * <p>改为经自身代理调用。{@code @Lazy} 用于打破构造期的自引用环。</p>
+     */
+    private final CompensationService self;
+
     public CompensationService(RefundRepository refundRepository,
                                PaymentOrderRepository paymentOrderRepository,
                                ChainRpcClient chainRpcClient,
-                               SettlementBatchRepository settlementBatchRepository) {
+                               SettlementBatchRepository settlementBatchRepository,
+                               @Lazy CompensationService self) {
         this.refundRepository = refundRepository;
         this.paymentOrderRepository = paymentOrderRepository;
         this.chainRpcClient = chainRpcClient;
         this.settlementBatchRepository = settlementBatchRepository;
+        this.self = self;
     }
 
     /**
@@ -131,7 +147,9 @@ public class CompensationService {
         int processed = 0;
         for (Refund refund : pendingRefunds) {
             try {
-                handleOneRefund(refund);
+                // 经自身代理调用，使 handleOneRefund 的 REQUIRES_NEW 真正生效
+                //（自调用 this.handleOneRefund 会绕过代理，新事务不创建）
+                self.handleOneRefund(refund);
                 processed++;
             } catch (RuntimeException e) {
                 // 单条记录处理失败不影响其他记录，记录日志后继续
