@@ -153,9 +153,21 @@ public class JdbcPaymentStateStore implements PaymentStateStore {
             replayKeyCache.put(kind, set);
             return Collections.unmodifiableCollection(set);
         } catch (RuntimeException e) {
-            log.warn("JdbcPaymentStateStore: failed to load replay keys for kind={}: {}",
-                    kind, e.getMessage());
-            return Collections.emptyList();
+            // 安全修复（2026-09-17）：原实现此处返回 Collections.emptyList()，
+            // 语义为「该方向没有任何已消费键」—— 而调用方
+            // PaymentTransactionProcessor.restoreConsumedReplayKeys()（@PostConstruct）
+            // 正是靠这份数据在重启后重建内存重放守卫。返回空集 = 守卫从空集启动，
+            // 已消费的 LOCK/MINT/BURN 键全部"复活"，同一桥交易可被重复入账
+            // （双花 / 重复铸币）。数据库短暂故障不应等价于"关闭重放保护"。
+            //
+            // 改为 fail-closed：向上抛出，使启动/恢复流程显式失败，
+            // 由运维在重放保护完整之前不放行跨链交易。
+            log.error("JdbcPaymentStateStore: failed to load replay keys for kind={} — "
+                    + "refusing to report an empty set (would disable replay protection): {}",
+                    kind, e.getMessage(), e);
+            throw new IllegalStateException(
+                    "Unable to load consumed replay keys for kind=" + kind
+                            + "; replay protection cannot be established", e);
         }
     }
 }
