@@ -19,6 +19,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import io.micrometer.tracing.Tracer;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -192,12 +194,12 @@ public class TxController {
                                        HttpServletRequest request) throws IOException {
         // 校验审批服务可用
         if (signingApprovalService == null) {
-            return fail("Approval service is not available");
+            return failResponse(HttpStatus.SERVICE_UNAVAILABLE, "Approval service is not available");
         }
         // 查询审批请求
         SigningApprovalRequest approvalRequest = signingApprovalService.getRequest(approvalId);
         if (approvalRequest == null) {
-            return fail("Approval request not found: " + approvalId);
+            return failResponse(HttpStatus.NOT_FOUND, "Approval request not found: " + approvalId);
         }
         // 校验审批状态为 APPROVED
         if (approvalRequest.getStatus() != SigningApprovalRequest.Status.APPROVED) {
@@ -357,14 +359,16 @@ public class TxController {
             if (prikey == null || prikey.isBlank()) {
                 span.attr("signing.error", "no_signing_key").error(null);
                 auditSignFailure(actor, sourceIp, "no_signing_key", amount);
-                return fail("No signing key available: wallet.keystore.json is not configured");
+                return failResponse(HttpStatus.INTERNAL_SERVER_ERROR,
+                        "No signing key available: wallet.keystore.json is not configured");
             }
             String platformPubkey = platformKeystore.getPubkey();
             if (platformPubkey == null || platformPubkey.isBlank()
                     || !platformPubkey.equalsIgnoreCase(fromPubkey)) {
                 span.attr("signing.error", "pubkey_mismatch").error(null);
                 auditSignFailure(actor, sourceIp, "pubkey_mismatch", amount);
-                return fail("fromPubkey does not match the platform keystore public key; "
+                return failResponse(HttpStatus.BAD_REQUEST,
+                        "fromPubkey does not match the platform keystore public key; "
                         + "caller-supplied private keys are no longer accepted");
             }
 
@@ -374,7 +378,7 @@ public class TxController {
             if(WalletUtils.verifyAddress(address)!=0){
                 span.attr("signing.error", "address_invalid").error(null);
                 auditSignFailure(actor, sourceIp, "address_invalid", amount);
-                return fail("Address Error");
+                return failResponse(HttpStatus.BAD_REQUEST, "Address Error");
             }
             span.attr("signing.from.address", address);
             long maxnonce=noncePool.getMaxNonce(address);
@@ -385,7 +389,7 @@ public class TxController {
                 if(Code==5000){
                     span.attr("signing.error", "nonce_fetch_failed").error(null);
                     auditSignFailure(actor, sourceIp, "nonce_fetch_failed", amount);
-                    return fail("Error");
+                    return failResponse(HttpStatus.BAD_GATEWAY, "Error");
                 }
                 long dbnonce= getnonoce != null && getnonoce.has("data") ? getnonoce.get("data").getAsLong() : 0;
                 nownonce=dbnonce;
@@ -397,7 +401,7 @@ public class TxController {
             if (data == null || data.isEmpty() || !data.has("data")){
                 span.attr("signing.error", "tx_build_failed").error(null);
                 auditSignFailure(actor, sourceIp, "tx_build_failed", amount);
-                return fail("Error");
+                return failResponse(HttpStatus.INTERNAL_SERVER_ERROR, "Error");
             }else {
                 // 直接返回 ObjectNode（Jackson 原生序列化），不再经 Gson 反射转 HashMap——
                 // 旧实现会把 ObjectNode 序列化成 _children/_nodeFactory 内部字段，
@@ -480,6 +484,21 @@ public class TxController {
         result.setStatusCode(5000);
         result.setMessage(message);
         return JsonUtil.GSON.fromJson(JsonUtil.GSON.toJson(result), HashMap.class);
+    }
+
+    /**
+     * P0（2026-09-17 修复）：业务失败返回**非 2xx** HTTP 状态码，同时保留旧响应体
+     * （{@code statusCode=5000} + {@code message}）以兼容既有客户端。
+     *
+     * <p>原实现所有失败路径统一返回 HTTP 200，仅靠响应体 statusCode 区分成败。
+     * 调用方（网关、对账任务、任何按 HTTP 状态判定的客户端）会把
+     * 「无签名密钥」「公钥不匹配」「地址错误」等资金相关失败误判为成功。</p>
+     *
+     * @param status  与失败语义对应的 HTTP 状态码
+     * @param message 失败原因（写入响应体 message）
+     */
+    private ResponseEntity<Object> failResponse(HttpStatus status, String message) {
+        return ResponseEntity.status(status).body(fail(message));
     }
 
     /**

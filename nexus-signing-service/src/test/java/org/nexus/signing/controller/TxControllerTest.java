@@ -69,7 +69,7 @@ public class TxControllerTest {
                         .param("toPubkeyHash", "bb")
                         .param("amount", "100")
                         .param("prikey", "attacker-supplied-plaintext-private-key"))
-                .andExpect(status().isOk())
+                .andExpect(status().isInternalServerError())
                 .andExpect(jsonPath("$.statusCode").value(5000.0))
                 .andExpect(jsonPath("$.message", containsString("No signing key available")));
     }
@@ -86,7 +86,7 @@ public class TxControllerTest {
                         .param("toPubkeyHash", "bb")
                         .param("amount", "100")
                         .param("prikey", "attacker-supplied-plaintext-private-key"))
-                .andExpect(status().isOk())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.statusCode").value(5000.0))
                 .andExpect(jsonPath("$.message", containsString("fromPubkey does not match the platform keystore")));
     }
@@ -108,7 +108,7 @@ public class TxControllerTest {
                         .param("amount", "100")
                         .param("keystoreJson", keystoreJson)
                         .param("password", password))
-                .andExpect(status().isOk())
+                .andExpect(status().isInternalServerError())
                 .andExpect(jsonPath("$.statusCode").value(5000.0))
                 .andExpect(jsonPath("$.message", containsString("No signing key available")));
     }
