@@ -32,8 +32,26 @@ import java.util.UUID;
  * @author Christopher Smith
  *
  */
-@Cacheable("base58uuid")
 public class Base58UUID {
+
+    /**
+     * UUID → Base58 编码。
+     *
+     * <p>P1（2026-09-17 审查修正）：{@code @Cacheable} 原被标注在**类**上。
+     * Spring 的 {@code @Cacheable} 是<b>方法级</b>注解，标在类上不产生任何效果
+     * （类级共享缓存配置应使用 {@code @CacheConfig}）—— 即该缓存从未生效过。
+     * 现移到方法上，使注解语义正确。</p>
+     *
+     * <p>⚠️ 注意：即便位置正确，本缓存**当前仍不生效**，原因有二：</p>
+     * <ol>
+     *   <li>全仓无 {@code @EnableCaching}，Spring 未创建缓存基础设施；</li>
+     *   <li>本类在全仓<b>无任何调用方</b>（引入的库文件），且调用方若以
+     *       {@code new Base58UUID()} 使用也不会经过代理。</li>
+     * </ol>
+     * <p>因此该注解目前仅表达「此方法可安全缓存」的意图（方法为纯函数，
+     * 同输入必得同输出），不构成实际缓存。若后续启用缓存，无需改动本类。</p>
+     */
+    @Cacheable("base58uuid")
     public String encode(UUID uuid) {
         // 50-50 chance that the UUID's high {@code long} value will be negative, so just preemptively
         // pad the byte buffer we'll be encoding from

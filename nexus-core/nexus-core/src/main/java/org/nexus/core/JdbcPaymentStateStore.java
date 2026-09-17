@@ -26,11 +26,42 @@ public class JdbcPaymentStateStore implements PaymentStateStore {
 
     private static final Logger log = LoggerFactory.getLogger(JdbcPaymentStateStore.class);
 
+    /**
+     * 内存缓存 TTL（P1，2026-09-17 修复）。
+     *
+     * <p>原实现为 4 个裸 {@code ConcurrentHashMap}，存在两个问题：</p>
+     * <ol>
+     *   <li><b>无 TTL</b>：条目永不过期。多副本部署时，实例 A 写库并更新自己的缓存，
+     *       实例 B 的缓存<b>永远不会失效</b>，会持续返回过期的通道/仓位/跨链终局状态 ——
+     *       对共识与终局类状态而言这是正确性问题，而非单纯性能问题。</li>
+     *   <li><b>无容量上限</b>：通道/仓位/跨链交易数量随时间增长，缓存无界膨胀 → 内存泄漏。</li>
+     * </ol>
+     *
+     * <p>改用 Guava {@code CacheBuilder}（Guava 已是本模块依赖，无需新增依赖），
+     * 同时施加 {@code expireAfterWrite} 与 {@code maximumSize}：
+     * 过期后回源查库，从而把跨实例可见性延迟限制在一个 TTL 窗口内。</p>
+     *
+     * <p>重放键缓存同样加 TTL 是安全的 —— {@link #getAllConsumedReplayKeys} 在缓存
+     * 未命中时会回退查库，因此不会因过期而丢失重放保护。</p>
+     */
+    private static final long CACHE_TTL_MINUTES = 5L;
+
+    /** 单个缓存的最大条目数，防止无界增长。 */
+    private static final long CACHE_MAX_SIZE = 10_000L;
+
     private final JdbcTemplate jdbc;
-    private final Map<String, PaymentChannel> channelCache = new ConcurrentHashMap<>();
-    private final Map<String, StableCoinPosition> positionCache = new ConcurrentHashMap<>();
-    private final Map<String, BridgeTransaction> bridgeCache = new ConcurrentHashMap<>();
-    private final Map<String, java.util.Set<String>> replayKeyCache = new ConcurrentHashMap<>();
+    private final com.google.common.cache.Cache<String, PaymentChannel> channelCache = newCache();
+    private final com.google.common.cache.Cache<String, StableCoinPosition> positionCache = newCache();
+    private final com.google.common.cache.Cache<String, BridgeTransaction> bridgeCache = newCache();
+    private final com.google.common.cache.Cache<String, java.util.Set<String>> replayKeyCache = newCache();
+
+    /** 构造带 TTL 与容量上限的缓存实例。 */
+    private static <K, V> com.google.common.cache.Cache<K, V> newCache() {
+        return com.google.common.cache.CacheBuilder.newBuilder()
+                .maximumSize(CACHE_MAX_SIZE)
+                .expireAfterWrite(CACHE_TTL_MINUTES, java.util.concurrent.TimeUnit.MINUTES)
+                .build();
+    }
 
     public JdbcPaymentStateStore(JdbcTemplate jdbc) {
         this.jdbc = jdbc;
@@ -68,10 +99,10 @@ public class JdbcPaymentStateStore implements PaymentStateStore {
     }
 
     @Override
-    public PaymentChannel getChannel(String id) { return channelCache.get(id); }
+    public PaymentChannel getChannel(String id) { return channelCache.getIfPresent(id); }
 
     @Override
-    public Collection<PaymentChannel> getAllChannels() { return Collections.unmodifiableCollection(channelCache.values()); }
+    public Collection<PaymentChannel> getAllChannels() { return Collections.unmodifiableCollection(channelCache.asMap().values()); }
 
     @Override
     public void putPosition(String id, StableCoinPosition pos) {
@@ -82,10 +113,10 @@ public class JdbcPaymentStateStore implements PaymentStateStore {
     }
 
     @Override
-    public StableCoinPosition getPosition(String id) { return positionCache.get(id); }
+    public StableCoinPosition getPosition(String id) { return positionCache.getIfPresent(id); }
 
     @Override
-    public Collection<StableCoinPosition> getAllPositions() { return Collections.unmodifiableCollection(positionCache.values()); }
+    public Collection<StableCoinPosition> getAllPositions() { return Collections.unmodifiableCollection(positionCache.asMap().values()); }
 
     @Override
     public void putBridgeTx(String id, BridgeTransaction tx) {
@@ -96,21 +127,21 @@ public class JdbcPaymentStateStore implements PaymentStateStore {
     }
 
     @Override
-    public BridgeTransaction getBridgeTx(String id) { return bridgeCache.get(id); }
+    public BridgeTransaction getBridgeTx(String id) { return bridgeCache.getIfPresent(id); }
 
     @Override
-    public Collection<BridgeTransaction> getAllBridgeTxs() { return Collections.unmodifiableCollection(bridgeCache.values()); }
+    public Collection<BridgeTransaction> getAllBridgeTxs() { return Collections.unmodifiableCollection(bridgeCache.asMap().values()); }
 
     @Override
     public void putConsumedReplayKey(String kind, String keyHex) {
         jdbc.update("MERGE INTO bridge_replay_keys KEY(kind, key_hex) VALUES(?,?)", kind, keyHex);
-        replayKeyCache.computeIfAbsent(kind, k -> ConcurrentHashMap.newKeySet()).add(keyHex);
+        replayKeyCache.asMap().computeIfAbsent(kind, k -> ConcurrentHashMap.newKeySet()).add(keyHex);
     }
 
     @Override
     public Collection<String> getAllConsumedReplayKeys(String kind) {
         // 缓存命中则直接返回；否则回退查库（进程重启后的恢复路径）。
-        Collection<String> cached = replayKeyCache.get(kind);
+        Collection<String> cached = replayKeyCache.getIfPresent(kind);
         if (cached != null && !cached.isEmpty()) {
             return Collections.unmodifiableCollection(cached);
         }

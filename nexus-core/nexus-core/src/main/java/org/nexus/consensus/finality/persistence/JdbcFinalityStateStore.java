@@ -28,7 +28,23 @@ public class JdbcFinalityStateStore implements FinalityStateStore {
 
     private final JdbcTemplate jdbc;
 
-    /** 启动时从库重建的缓存（读路径不触库） */
+    /**
+     * 启动时从库重建的缓存（读路径不触库）。
+     *
+     * <p>⚠️ <b>禁止为这两个缓存添加 TTL</b>（2026-09-17 审查明确记录）。</p>
+     *
+     * <p>它们与 {@code JdbcPaymentStateStore} 中的缓存<b>性质不同</b>：后者是
+     * 可过期的旁路缓存（未命中会回源查库），而本类持有的是<b>启动时加载的终局
+     * 状态快照</b>，{@link #isFinalized} 与 {@link #getVotes} 均<b>不回源查库</b>。
+     * 若加上 TTL，条目过期后已终局的检查点会被判为「未终局」，进而可能被重复
+     * 终局或拒绝合法终局 —— 这是<b>共识安全违规</b>，而非性能退化。</p>
+     *
+     * <p>已知局限（本次未修，需架构决策）：多副本部署下缺乏跨实例失效机制 ——
+     * 实例 A 终局某检查点后，实例 B 的内存快照不会更新，B 将持续认为该检查点
+     * 未终局。可选方案：① 订阅终局事件做增量更新；② 定时 {@code reload()}；
+     * ③ 读路径改为查库 + 本地缓存。三者各有代价，需结合部署形态决定，
+     * 故不在本次修复范围内。</p>
+     */
     private final Map<String, Set<String>> voteCache = new ConcurrentHashMap<>();
     private final Map<String, Boolean> finalizedCache = new ConcurrentHashMap<>();
 
