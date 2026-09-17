@@ -129,7 +129,18 @@ public class BridgeSagaCoordinator {
      * @param mintRequest 铸造请求（lockTxId 在 lock 完成后由协调器填入）
      * @return 锁定交易（步骤 1 结果，含最终状态）
      */
-    @Transactional
+    // P0（2026-09-17 修复）：此处**不得**标注 @Transactional。
+    //
+    // 原实现在本方法上加了 @Transactional，于是 mint 失败路径里写入的
+    // COMPENSATING 状态、补偿记录（payload.compensation）与最终 FAILED 状态，
+    // 会被紧随其后的 `throw new BridgeException(...)` 一并回滚 ——
+    // 结果是：源链 lock 已发生，而「需要解锁」这一事实没有任何持久化痕迹，
+    // 异步对账任务（扫 FAILED 列表）永远看不到它，资金滞留且无审计线索。
+    //
+    // 跨链流程本就无法用单个数据库事务保证原子性：lock 已在链上生效，
+    // 数据库回滚并不能撤销它。Saga 的正确语义是「状态机 + 持久化日志 +
+    // 补偿」，每一步状态都必须独立提交。故移除方法级事务，
+    // 让每次 sagaRepository.save() 各自提交。
     public BridgeTransaction executeLockMint(LockRequest lockRequest, MintRequest mintRequest) {
         SagaInstance saga = createSaga(SAGA_LOCK_MINT, lockRequest, null);
         try {
@@ -242,7 +253,10 @@ public class BridgeSagaCoordinator {
      * @param unlockRequest 解锁请求（burnTxId 在 burn 完成后由协调器填入）
      * @return 销毁交易（步骤 1 结果，含最终状态）
      */
-    @Transactional
+    // P0（2026-09-17 修复）：同 executeLockMint，不得标注 @Transactional。
+    // burn 已在链上生效，unlock 失败时写入的重试上下文（payload.compensation）
+    // 与 FAILED 状态若被回滚，retryFailedSagas() 就再也扫不到这笔待重试的解锁，
+    // 用户资产将永久锁定。
     public BridgeTransaction executeBurnUnlock(BurnRequest burnRequest, UnlockRequest unlockRequest) {
         SagaInstance saga = createSaga(SAGA_BURN_UNLOCK, burnRequest, null);
         try {
