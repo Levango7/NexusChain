@@ -58,6 +58,13 @@ jobs:
           ./gradlew wrapper --gradle-version 8.14 --gradle-distribution-url https://mirrors.huaweicloud.com/gradle/gradle-8.14-bin.zip --network-timeout 600000
           git diff --exit-code gradle/wrapper/
 
+      # 版权头合规门禁（2026-09-17 立即项 #1）：LGPL 派生范围声明 + 越界 GNU 许可头防护。
+      # 背景：nexus-core 为上游 java-nexuscore 的 LGPL-3.0 派生代码（166 个 Java 文件带
+      # LGPL 头 + nexus-core/LICENSE 为 LGPL 全文），而整仓此前仅声明 Apache-2.0。
+      # 声明与范围清单见 NOTICE / docs/licensing.md。
+      - name: 版权头合规检查 (license headers)
+        run: bash scripts/check-license-headers.sh
+
       - name: 编译 (compileJava + compileTestJava)
         run: ./gradlew compileJava compileTestJava --no-daemon
 

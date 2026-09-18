@@ -23,4 +23,15 @@ public class InMemoryIdempotencyStore implements IdempotencyStore {
     public void put(String idempotencyKey, String value) {
         store.put(idempotencyKey, value);
     }
+
+    @Override
+    public boolean putIfAbsent(String idempotencyKey, String value) {
+        // ConcurrentHashMap.putIfAbsent 本身即原子（CAS 语义）
+        return store.putIfAbsent(idempotencyKey, value) == null;
+    }
+
+    @Override
+    public void remove(String idempotencyKey) {
+        store.remove(idempotencyKey);
+    }
 }

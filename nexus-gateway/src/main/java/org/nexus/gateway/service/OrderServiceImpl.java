@@ -43,52 +43,99 @@ public class OrderServiceImpl implements OrderService {
         this.idempotencyStore = idempotencyStore;
     }
 
+    /**
+     * 幂等键的「创建中」占位值（P1，2026-09-17）。
+     *
+     * <p>与真实订单主键（纯数字）在形态上可区分，因此读取时能判定
+     * 「已有订单」还是「仍在创建中」。</p>
+     */
+    private static final String IN_FLIGHT = "__IN_FLIGHT__";
+
+    /**
+     * 由幂等映射值解析出订单；占位值、空值、非数字值均返回 null。
+     */
+    private PaymentOrder loadOrderByIdempotencyValue(String value) {
+        if (value == null || IN_FLIGHT.equals(value)) {
+            return null;
+        }
+        try {
+            return orderRepository.findById(Long.parseLong(value)).orElse(null);
+        } catch (NumberFormatException e) {
+            log.warn("Idempotency store holds a non-numeric value, ignoring: {}", value);
+            return null;
+        }
+    }
+
     @Override
     @Transactional
     public PaymentOrder createOrder(CreateOrderRequest request) {
         // Idempotency check: if the same key was used before, return the existing order
         String idempotencyKey = request.getIdempotencyKey();
-        if (idempotencyKey != null && !idempotencyKey.isEmpty()) {
-            String existingId = idempotencyStore.get(idempotencyKey);
-            if (existingId != null) {
-                java.util.Optional<PaymentOrder> existing = orderRepository.findById(Long.parseLong(existingId));
-                if (existing.isPresent()) {
-                    log.info("Idempotent hit: key={}, orderId={}", idempotencyKey, existingId);
-                    return existing.get();
+        boolean hasKey = idempotencyKey != null && !idempotencyKey.isEmpty();
+
+        // P1（2026-09-17 修复）：原实现为 get → 创建 → put 的 check-then-act，
+        // 并发下两个相同 idempotencyKey 的请求会同时读到 null 并各自建单，
+        // 幂等完全失效（产生重复订单）。现改为「原子占位 → 创建 → 回填」。
+        if (hasKey) {
+            // 快路径：已有完成映射
+            PaymentOrder done = loadOrderByIdempotencyValue(idempotencyStore.get(idempotencyKey));
+            if (done != null) {
+                log.info("Idempotent hit: key={}, orderId={}", idempotencyKey, done.getId());
+                return done;
+            }
+            // 原子占位：只有胜者获得创建权
+            if (!idempotencyStore.putIfAbsent(idempotencyKey, IN_FLIGHT)) {
+                // 竞争失败。对手可能刚完成（读到真实 id），也可能仍在创建中。
+                PaymentOrder other = loadOrderByIdempotencyValue(idempotencyStore.get(idempotencyKey));
+                if (other != null) {
+                    log.info("Idempotent hit after race: key={}, orderId={}", idempotencyKey, other.getId());
+                    return other;
                 }
+                // 仍在创建中：拒绝并让调用方重试，绝不放行第二次创建
+                throw new IllegalStateException(
+                        "Duplicate order request in flight for idempotencyKey=" + idempotencyKey);
             }
         }
 
-        PaymentOrder order = new PaymentOrder();
-        order.setOrderNo(generateOrderNo());
-        order.setMerchantId(Long.parseLong(request.getMerchantId()));
-        // P4-T6 多租户改造：从 TenantContext 填充 tenantId 实现数据隔离
-        order.setTenantId(org.nexus.gateway.tenant.TenantContext.getCurrentTenantId());
-        order.setAmount(request.getAmount());
-        order.setTokenSymbol(request.getTokenSymbol() != null ? request.getTokenSymbol() : "NEX");
-        order.setDescription(request.getDescription());
-        order.setPayerAddress(request.getPayerAddress());
-        // A1 修复（2026-08-31 交付前审计）：持久化商户通知 URL。
-        // 此前 CreateOrderRequest.notifyUrl 必填但从未落库——支付完成通知
-        // 无从投递到商户端点（主链路商户通知死功能）。
-        order.setNotifyUrl(request.getNotifyUrl());
-        order.setPayeeAddress(resolveSettlementAddress(request.getMerchantId()));
-        order.setCheckoutToken(UUID.randomUUID().toString().replace("-", ""));
-        order.setStatus(PaymentOrder.OrderStatus.PENDING);
+        try {
+            PaymentOrder order = new PaymentOrder();
+            order.setOrderNo(generateOrderNo());
+            order.setMerchantId(Long.parseLong(request.getMerchantId()));
+            // P4-T6 多租户改造：从 TenantContext 填充 tenantId 实现数据隔离
+            order.setTenantId(org.nexus.gateway.tenant.TenantContext.getCurrentTenantId());
+            order.setAmount(request.getAmount());
+            order.setTokenSymbol(request.getTokenSymbol() != null ? request.getTokenSymbol() : "NEX");
+            order.setDescription(request.getDescription());
+            order.setPayerAddress(request.getPayerAddress());
+            // A1 修复（2026-08-31 交付前审计）：持久化商户通知 URL。
+            // 此前 CreateOrderRequest.notifyUrl 必填但从未落库——支付完成通知
+            // 无从投递到商户端点（主链路商户通知死功能）。
+            order.setNotifyUrl(request.getNotifyUrl());
+            order.setPayeeAddress(resolveSettlementAddress(request.getMerchantId()));
+            order.setCheckoutToken(UUID.randomUUID().toString().replace("-", ""));
+            order.setStatus(PaymentOrder.OrderStatus.PENDING);
 
-        int expiryMinutes = request.getExpiryMinutes() != null
-                ? request.getExpiryMinutes()
-                : gatewayConfig.getCheckout().getOrderExpiryMinutes();
-        order.setExpiresAt(LocalDateTime.now().plusMinutes(expiryMinutes));
+            int expiryMinutes = request.getExpiryMinutes() != null
+                    ? request.getExpiryMinutes()
+                    : gatewayConfig.getCheckout().getOrderExpiryMinutes();
+            order.setExpiresAt(LocalDateTime.now().plusMinutes(expiryMinutes));
 
-        PaymentOrder saved = orderRepository.save(order);
-        // Store idempotency mapping
-        if (idempotencyKey != null && !idempotencyKey.isEmpty()) {
-            idempotencyStore.put(idempotencyKey, String.valueOf(saved.getId()));
+            PaymentOrder saved = orderRepository.save(order);
+            // Store idempotency mapping
+            if (idempotencyKey != null && !idempotencyKey.isEmpty()) {
+                idempotencyStore.put(idempotencyKey, String.valueOf(saved.getId()));
+            }
+
+            log.info("Order created: orderNo={}, merchantId={}, amount={}", saved.getOrderNo(), saved.getMerchantId(), saved.getAmount());
+            return saved;
+        } catch (RuntimeException e) {
+            // P1（2026-09-17）：创建失败必须释放占位，否则该 idempotencyKey
+            // 永久停留在 IN_FLIGHT，使用同一 key 的后续请求全部被拒且无法自愈。
+            if (hasKey) {
+                idempotencyStore.remove(idempotencyKey);
+            }
+            throw e;
         }
-
-        log.info("Order created: orderNo={}, merchantId={}, amount={}", saved.getOrderNo(), saved.getMerchantId(), saved.getAmount());
-        return saved;
     }
 
     @Override

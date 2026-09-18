@@ -1,0 +1,60 @@
+NexusChain
+Copyright (c) 2026 NexusChain contributors
+
+本产品包含按模块划分的多份许可。**整仓并非单一 Apache-2.0**，
+各模块的适用许可如下（取证与依据见 docs/licensing.md）。
+
+===============================================================================
+1. Apache License 2.0（根 LICENSE）
+===============================================================================
+
+适用于除下方第 2 节所列路径以外的全部原创内容，包括但不限于：
+nexus-gateway、nexus-bridge、nexus-signing-service、nexus-wallet-service、
+nexus-api-gateway、nexus-sdk（Java/TypeScript/Python/Go）、nexus-common、
+nexus-settlement、nexus-compliance、nexus-analytics、nexus-oracle、
+mpc-engine、zk-groth16-service、nexus-explorer、nexus-devtools、
+deploy/ 与 docs/ 下的部署与文档资产。
+
+完整许可文本见根目录 LICENSE 文件。
+
+===============================================================================
+2. GNU Lesser General Public License v3.0 or later（nexus-core 等派生部分）
+===============================================================================
+
+下列路径的文件带有上游 LGPL-3.0-or-later 版权头，属 LGPL-3.0 派生作品，
+**不适用 Apache-2.0**：
+
+  * nexus-core/nexus-core/src/**            （LGPL 头文件约 162 个 Java 源文件）
+  * nexus-consortium/consortium/src/**      （LGPL 头文件 4 个 Java 源文件）
+
+完整许可文本见 nexus-core/LICENSE（GNU LESSER GENERAL PUBLIC LICENSE
+Version 3, 29 June 2007）。
+
+处理义务（LGPL-3.0 §4/§5 摘要，非法律意见）：
+  1. 保留版权声明与许可声明（本文件 + 源码文件头 + nexus-core/LICENSE 即为此目的）；
+  2. 分发时提供对应源代码；
+  3. 修改过的 LGPL 文件须显著标注修改；
+  4. 若以库形式链接，需保证接收方可替换 LGPL 部分（本仓为同仓源码交付，通常自动满足）。
+
+**重要**：本仓 nexus-core 为上游项目 `java-nexuscore`（文件头署名）
+的派生/改名版本。任何对外交付、商业化售卖或尽调前，
+必须按 docs/licensing.md 的清单完成许可合规审查，
+并按项目管理要求评估是否需要 clean-room 重写 LGPL 部分。
+
+===============================================================================
+3. 第三方依赖与内嵌资产
+===============================================================================
+
+* Java/Gradle 依赖：许可由各自 Maven 坐标声明（Apache-2.0 / MIT / EPL / GPL 等）。
+* Rust crates：许可见各 Cargo.toml（`multi-party-ecdsa` 为 **GPL-3.0-or-later**，
+  以独立进程 + gRPC 边界使用；`cggmp21` 为 MIT OR Apache-2.0）。
+* nexus-core/src/main/java/org/nexus/tools/ 下存在历史内嵌第三方 JS
+  （hashes.js / sha3.js / nacl.min.js / base-x.js / base58.js），
+  为上游遗留资产、当前构建不使用，清理前请勿再分发。
+
+===============================================================================
+4. 本文件维护约定
+===============================================================================
+
+新增带 GPL/LGPL/AGPL 头文件时，必须同步更新本文件与 docs/licensing.md，
+否则 CI 的 `scripts/check-license-headers.sh` 会失败（门禁见 .github/workflows/ci.yml）。

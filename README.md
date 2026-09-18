@@ -4,7 +4,11 @@ NexusChain 是一个**基于自研区块链的支付编排平台（Payment Orche
 
 > **定位**：区块链是底层结算基础设施，不是产品本身。产品价值在于统一支付 API、启发式路由与清结算。
 
-**当前版本**：v2.40.0（2026-08-26，技术债B2一致性加固——Guava 33.x CVE修复+Mockito统一BOM 5.x+老JSON库迁移Jackson+core依赖管理规范化）
+> **版本口径（2026-09-17 修复漂移）**：构建侧单一来源为根 `build.gradle` 的 `version`（当前 `2.50.0`）
+> 与 `nexus-core/nexus-core/src/main/resources/version.properties`；发布说明单一来源为 [CHANGELOG](CHANGELOG.md)
+> （最新条目 `[2.50.0] - 2026-09-07`，其后存在 tag `v2.50.1`）。
+> 本处此前硬编码"当前版本：v2.40.0"，与构建/CHANGELOG/ tag 不一致（审计发现），现改为不再硬编码版本号。
+> 最近一次**详细**发布说明为 v2.40.0（2026-08-26，技术债B2一致性加固——Guava 33.x CVE修复+Mockito统一BOM 5.x+老JSON库迁移Jackson+core依赖管理规范化）
 
 ## 快速开始
 
@@ -105,6 +109,19 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
 
 ### MPC 多方签名（v2.0.0-rc1 真实化）
 
+> **默认运行态声明（2026-09-17 代码取证）**：开箱默认路径是 **GG20 可信协调器（单进程持有全部份额）**，
+> **不是**分布式门限签名。依据：
+> 1. `nexus-signing-service/src/main/resources/application.yml` 中 `mpc.engine.cggmp-enabled` 默认 **false**、
+>    `mpc.engine.distributed-mode` 默认 **false**；
+> 2. 路径选择逻辑 `ColdWalletMultiSigService.selectActiveEngine()` 在 `false` 时返回 GG20 引擎（类注释亦如此声明）；
+> 3. GG20 签名在协调进程内一次性执行全部签名方（`mpc-engine/src/sign.rs` 日志 "trusted-coordinator, in-process"）。
+>
+> CGGMP21 分散式路径**已实现但需显式开启**，且其 **sign 阶段消息转发尚未实现**
+> （`mpc-engine/src/server.rs` 对分布式 sign relay 返回 not-available；`mpc-engine/src/distributed.rs` 模块头
+> 说明上游消息类型私有）。
+> **对外材料不得表述为"已启用分布式门限签名/2-of-3 MPC 门限安全"**；退役旧路径的计划见
+> [docs/plan/PLAN-001-gg20-retirement.md](docs/plan/PLAN-001-gg20-retirement.md)（状态：设计稿，**未实施**）。
+
 - **Rust `mpc-engine`**：已接入 ZenGo-X/KZen `multi-party-ecdsa` 0.8.1 crate，实现**真实 GG20 门限 ECDSA**（真实 Paillier、Feldman VSS、MtA、ZK 证明，产出可被标准 secp256k1 验证的签名）。
 - **Java MPC 传输层**：`GrpcMpcTransportStub` + `MpcTransportGrpcServer` 实现**真实 gRPC over HTTP/2** 传输，支持 P2P 消息路由。
 - **部署模型限制（诚实声明，2026-08-31 交付前审计补强）**：当前为「可信协调器」模型，**在密码学意义上不等价于分布式门限签名**，交付材料不得宣称"2-of-3 MPC 门限安全"：
@@ -194,7 +211,16 @@ v2.0.0-rc1 候选版本已完成安全审计，审计报告见 [docs/audit/v2.0.
 
 ## 许可证
 
-[Apache License 2.0](LICENSE)
+**分模块声明（整仓不是单一许可）**：
+
+| 范围 | 许可 |
+|------|------|
+| 根 [LICENSE](LICENSE) —— gateway / bridge / signing-service / wallet-service / api-gateway / sdk（Java·TS·Python·Go）/ settlement / compliance / analytics / oracle / mpc-engine / zk-groth16-service / explorer / devtools | Apache License 2.0 |
+| `nexus-core/nexus-core/src/**`、`nexus-consortium/consortium/src/**`（4 文件） | **GNU LGPL-3.0-or-later**（上游 `java-nexuscore` 派生；许可全文见 [`nexus-core/LICENSE`](nexus-core/LICENSE)） |
+
+对外交付 / 商业化售卖 / 尽调前请先阅读 [NOTICE](NOTICE) 与 [docs/licensing.md](docs/licensing.md)
+（后者含**未完成**的合规待办：法务确认、LGPL 范围保留 vs clean-room 重写决策、依赖许可清单化）。
+CI 门禁：`scripts/check-license-headers.sh` —— 新增越界的 GPL/LGPL/AGPL 头文件会使构建失败。
 
 ## 文档
 

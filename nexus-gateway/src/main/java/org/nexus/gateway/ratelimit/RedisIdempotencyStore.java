@@ -31,4 +31,18 @@ public class RedisIdempotencyStore implements IdempotencyStore {
     public void put(String idempotencyKey, String value) {
         redisTemplate.opsForValue().set(PREFIX + idempotencyKey, value, TTL_HOURS, TimeUnit.HOURS);
     }
+
+    @Override
+    public boolean putIfAbsent(String idempotencyKey, String value) {
+        // Redis SET NX EX：单条命令完成「不存在则写入 + 设置 TTL」，天然原子。
+        // 返回 null 表示未写入（key 已存在）。
+        Boolean written = redisTemplate.opsForValue()
+                .setIfAbsent(PREFIX + idempotencyKey, value, TTL_HOURS, TimeUnit.HOURS);
+        return Boolean.TRUE.equals(written);
+    }
+
+    @Override
+    public void remove(String idempotencyKey) {
+        redisTemplate.delete(PREFIX + idempotencyKey);
+    }
 }

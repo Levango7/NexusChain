@@ -78,3 +78,20 @@ paths = [
 #     （git log -S 全历史零命中验证）
 #   - 重写后全部 commit SHA 变化，旧豁免已随 SHA 失效，整块移除
 # 备份：重写前镜像存于仓库外（NexusChain-pre-rewrite.git，HEAD 9e932dc）。
+
+# === 自定义规则（2026-09-17，立即项 #2：硬编码静态凭据设防）===
+# 背景：审计发现两处随源码入库的静态凭据，gitleaks **默认规则集均未命中**：
+#   1) nexus-core/.../command/RpcInterceptor.java
+#        `if (token.equals("NUMtD0dEXungVX7eLuXkEurH5BCJzw")) return true;`   ← 明文令牌
+#   2) nexus-core/.../controller/PoolController.java
+#        `if(!token.equals("a772c260ae19e8972f1da3af77492fdb6b40f34a9b34b4a9021ecfd900f21e53"))` ← 摘要常量
+# 两处均已改为配置注入 + 常量时间比较 + fail-closed（见上述类注释与
+# application.properties 的「安全配置补全」节）。
+# 本规则针对该反模式设防：名为 token/apikey/secret/password 等的变量
+# **直接与字符串字面量 equals**（正确做法是配置/密钥管理 + 常量时间比较）。
+# 存量校验（2026-09-17）：git grep 该模式全仓 0 命中，不会产生误报。
+[[rules]]
+id = "nexus-hardcoded-token-literal"
+description = "硬编码静态凭据：token/apikey/secret/password 等变量与字符串字面量直接 equals 比较（应改为配置注入 + 常量时间比较）"
+regex = '''(?i)\b(token|tokenhash|hash|digest|shahash|api_?key|apikey|secret|passwd|password|credential)\s*\.\s*equals\s*\(\s*"[^"\s]{8,}"\s*\)'''
+tags = ["nexus", "credential"]

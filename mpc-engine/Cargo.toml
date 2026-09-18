@@ -27,9 +27,16 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # 版本 0.8.1 依赖 curv-kzen 0.9 / kzen-paillier 0.4.2 / sha2 0.9 / secp256k1 0.20，
 # 此处显式声明同版本以让 cargo 统一解析。
 #
-# v2.2.0 阶段二（2026-09-01）：**分布式路径已迁移至 cggmp21**（见下）。
+# v2.2.0 阶段二（2026-09-01）：分布式 sign 路径的实现引擎为 cggmp21（见下）。
+# **注意（2026-09-17 审计核实）：该路径默认关闭**——Java 侧 `mpc.engine.cggmp-enabled`
+# 默认 false（nexus-signing-service/src/main/resources/application.yml），
+# 故开箱运行态仍是本 crate 对应的「单进程可信协调器 GG20」路径；
+# 且分布式 sign 阶段的消息转发尚未实现（src/server.rs 对该 RPC 返回
+# not-available，见 src/distributed.rs 模块头说明）。
+# 不得据此声明"已启用分布式门限签名"。
 # multi-party-ecdsa 保留给单进程可信协调器路径（gg20.rs/sign.rs/aggregate.rs，
-# Java E2E 与集成测试依赖），两条路径并存直至协调器路径退役。
+# Java E2E 与集成测试依赖），两条路径并存直至协调器路径退役
+# （退役设计见 docs/plan/PLAN-001-gg20-retirement.md，状态：设计稿，未实施）。
 multi-party-ecdsa = "0.8.1"
 curv-kzen = "0.9"
 paillier = { version = "0.4.2", package = "kzen-paillier" }
