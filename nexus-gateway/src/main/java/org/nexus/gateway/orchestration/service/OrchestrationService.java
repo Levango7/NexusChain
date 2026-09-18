@@ -20,7 +20,6 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -111,7 +110,23 @@ public class OrchestrationService {
                 webhookDispatcher, riskService, tracer, null, null);
     }
 
-    @Transactional
+    // P1（2026-09-17 修复）：此处**不得**标注 @Transactional。
+    //
+    // 原实现在整个 createPayment 上加了 @Transactional，而方法体内包含
+    // 连接器 failover 循环（connector.createPayment(req) —— 对 PSP 的外部 HTTP 调用，
+    // 失败时逐个重试）。于是数据库连接与事务被持有到全部外部调用结束，
+    // 单次请求可能占用数秒至数十秒：
+    //   · 连接池被长事务占满 → 并发能力随 PSP 延迟劣化
+    //   · 部分数据库下还会持有行锁，阻塞同商户的其他写操作
+    //
+    // 移除后，每次 repo.save() 由 Spring Data 自身的事务独立提交，
+    // 事务边界收缩为「单次写库」，不再跨越任何网络 I/O。
+    //
+    // 为何不会削弱一致性：本方法内除 repo.save()（数据库）外，
+    // idempotencyStore.record() 走 Redis、webhookDispatcher.dispatch() 为异步投递，
+    // 两者本就**不受数据库事务管辖**（Redis 写入不会随 DB 回滚而撤销）。
+    // 即「save + record 原子」这一保证在原实现下也并不存在，
+    // 因此移除外层事务不改变任何真实的原子性语义。
     public OrchestratedPayment createPayment(Long merchantId, long amount, String currency,
                                               String description, String notifyUrl,
                                               String preferredConnector, String metadata,
@@ -284,7 +299,10 @@ public class OrchestrationService {
         return repo.findByMerchantId(merchantId, pr);
     }
 
-    @Transactional
+    // P1（2026-09-17 修复）：同 createPayment，此处不得标注 @Transactional。
+    // 方法体内 connector.queryPayment(...)（第 324 行）是对 PSP 的外部 HTTP 调用，
+    // 原实现将其包在事务中 → 事务持有数据库连接等待网络往返。
+    // 移除后 repo.save() 由 Spring Data 自身事务独立提交，事务不跨越网络 I/O。
     public OrchestratedPayment refreshStatus(String paymentId) {
         // P3-T5：支付状态刷新 span（payment.status.refresh）
         try (BusinessSpan span = BusinessSpan.start(tracer, "payment.status.refresh")
@@ -320,10 +338,15 @@ public class OrchestrationService {
     }
 
     /**
-     * Persist the payment within the surrounding transaction, record the idempotency
-     * mapping (if a request_id was supplied), and dispatch the merchant webhook for
-     * the resulting status. The webhook dispatch is asynchronous and de-duplicated
-     * inside {@link OrchestrationWebhookDispatcher}.
+     * Persist the payment, record the idempotency mapping (if a request_id was
+     * supplied), and dispatch the merchant webhook for the resulting status.
+     * The webhook dispatch is asynchronous and de-duplicated inside
+     * {@link OrchestrationWebhookDispatcher}.
+     *
+     * <p>P1（2026-09-17）：原注释为 "within the surrounding transaction"，
+     * 但 createPayment / refreshStatus 已移除方法级 @Transactional
+     * （避免事务跨越 PSP 外部 HTTP 调用），故此处不再有外层事务。
+     * {@code repo.save()} 由 Spring Data 自身事务独立提交。</p>
      */
     private void persist(String requestId, OrchestratedPayment payment) {
         OrchestratedPayment saved = repo.save(payment);
