@@ -5,6 +5,10 @@ import React from "react";
  *
  * 引用 design tokens 的 accent 色 + motion；尊重 prefers-reduced-motion
  * （tokens.css 已统一禁用动画）。
+ *
+ * 2026-09-16 审查清理：同文件内的 `Skeleton` 组件在生产代码中零引用，
+ * 且其 `variant` 参数存在死分支（`variant === "rect" ? rounded : rounded`
+ * 两分支返回相同值，rect/text 无区别）。已整体删除。
  */
 export interface LoadingProps {
   /** 尺寸（像素）。 */
@@ -54,44 +58,5 @@ export const Loading: React.FC<LoadingProps> = ({
     {label && <span className="text-sm">{label}</span>}
   </div>
 );
-
-/**
- * Skeleton — 骨架屏占位。
- *
- * 用于表格 / 卡片 / 详情页首屏加载，避免空白闪烁。
- */
-export interface SkeletonProps {
-  /** 形状。 */
-  variant?: "text" | "rect" | "circle";
-  /** 宽度 Tailwind 类（默认 w-full）。 */
-  width?: string;
-  /** 高度 Tailwind 类（默认 h-4）。 */
-  height?: string;
-  /** 圆角（仅 rect 生效，默认 rounded-sm）。 */
-  rounded?: string;
-  /** 额外 className。 */
-  className?: string;
-}
-
-export const Skeleton: React.FC<SkeletonProps> = ({
-  variant = "text",
-  width = "w-full",
-  height = "h-4",
-  rounded = "rounded-sm",
-  className = "",
-}) => {
-  const shape =
-    variant === "circle"
-      ? "rounded-full"
-      : variant === "rect"
-        ? rounded
-        : rounded;
-  return (
-    <div
-      className={`${width} ${height} ${shape} bg-surface-2 animate-pulse ${className}`}
-      aria-hidden="true"
-    />
-  );
-};
 
 export default Loading;

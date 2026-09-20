@@ -1,39 +1,94 @@
 /* NexusChain Explorer — Design Tokens (CSS variable source of truth)
  * 暗色优先（dark-first）。浅色由 [data-theme='light'] 覆盖。
- * 配套：design-tokens.json（机器可读） / tailwind.config.ts（theme.extend 引用本文件变量）
- * 前端在 main.tsx 中 import 本文件，并移除 index.html 的 Tailwind Play CDN。
+ * 配套：design-tokens.json（机器可读） / tailwind.config.js（theme.extend 引用本文件变量）
+ *
+ * ── 双形式令牌约定（重要）──────────────────────────────────────────────
+ * 每个颜色同时导出两种形式：
+ *   --x        : 十六进制字面量，供原生 CSS 直接使用（如 border: 1px solid var(--border)）
+ *   --x-rgb    : 空格分隔的 RGB 通道，供 Tailwind 的 `rgb(var(--x-rgb) / <alpha-value>)` 使用
+ *
+ * 为什么必须提供 --x-rgb：
+ *   Tailwind v3 对无法解析为具体色值的 token（如 `var(--surface)`）不会做 alpha 合成，
+ *   `bg-surface/80` 这类透明度修饰符会被静默丢弃（类不生成）。改用通道形式后，
+ *   `bg-surface/80` / `bg-success/15` / `border-danger/30` 等均能正常生成。
+ *
+ * 对比度：本文件全部前景/背景组合已按 WCAG 2.1 AA 核算（正文 4.5:1 / UI 组件 3:1），
+ *   覆盖 text-x on bg|surface|surface-2、实底按钮、Badge 浅底、banner 半透明底。
+ *   核算脚本见仓库修复记录；改动任何色值后必须重跑。
+ * ────────────────────────────────────────────────────────────────────
  */
 
 :root,
-:root[data-theme='dark'] {
+:root[data-theme="dark"] {
   /* Surface */
-  --bg: #0A0C10;
+  --bg: #0a0c10;
+  --bg-rgb: 10 12 16;
   --surface: #111418;
-  --surface-2: #161A20;
+  --surface-rgb: 17 20 24;
+  --surface-2: #161a20;
+  --surface-2-rgb: 22 26 32;
   --border: #232830;
-  --border-soft: #1A1E24;
+  --border-rgb: 35 40 48;
+  --border-soft: #1a1e24;
+  --border-soft-rgb: 26 30 36;
+  /* 可交互控件边界（输入框 / 下拉 / 未聚焦按钮），满足 WCAG 1.4.11 的 3:1。
+     装饰性分隔仍用 --border。 */
+  --border-strong: #5a6370;
+  --border-strong-rgb: 90 99 112;
 
   /* Foreground */
-  --fg: #E6E9EF;
-  --fg-2: #AEB4C0;
-  --muted: #8B93A1; /* 已提亮以满足 4.5:1 对比度（原 gray-500 约 4.27:1） */
+  --fg: #e6e9ef;
+  --fg-rgb: 230 233 239;
+  --fg-2: #aeb4c0;
+  --fg-2-rgb: 174 180 192;
+  --muted: #8b93a1;
+  --muted-rgb: 139 147 161;
 
-  /* Brand accent（保留靛蓝家族，但收进 token；每屏强调使用 ≤2 处） */
-  --accent: #5B6CF0;
-  --accent-hover: color-mix(in srgb, var(--accent) 88%, black);
-  --accent-active: color-mix(in srgb, var(--accent) 80%, black);
-  --accent-on: #FFFFFF;
-  --accent-soft: rgba(91, 108, 240, 0.12); /* hover 背景 / 焦点环底 */
+  /* Brand —— 文字/链接色（对暗背景需 ≥4.5:1，故提亮） */
+  --accent: #8b96ff;
+  --accent-rgb: 139 150 255;
+  /* Brand —— 实底背景色（配 --accent-on 白字需 ≥4.5:1，故比文字色更深）。
+     两者必须分离：同一值无法同时满足「暗背景上的亮文字」与「白字下的暗底」。 */
+  --accent-solid: #4b5ae0;
+  --accent-solid-rgb: 75 90 224;
+  --accent-solid-hover: #4050ce;
+  --accent-solid-hover-rgb: 64 80 206;
+  --accent-solid-active: #3543b8;
+  --accent-solid-active-rgb: 53 67 184;
+  --accent-on: #ffffff;
+  --accent-on-rgb: 255 255 255;
+  --accent-soft: #1b2033; /* hover 背景 / Badge primary 浅底 */
+  --accent-soft-rgb: 27 32 51;
 
-  /* Semantic */
-  --success: #34D399;
-  --warn: #FBBF24;
-  --danger: #F87171;
+  /* Semantic —— 文字色 */
+  --success: #34d399;
+  --success-rgb: 52 211 153;
+  --warn: #fbbf24;
+  --warn-rgb: 251 191 36;
+  --danger: #f87171;
+  --danger-rgb: 248 113 113;
+
+  /* Semantic —— 浅底（Badge）。独立取值而非文字色 alpha 稀释：
+     稀释法在浅色主题下会让底色趋近文字色，对比度反而随不透明度升高而恶化。 */
+  --success-soft: #16312b;
+  --success-soft-rgb: 22 49 43;
+  --warn-soft: #342e1a;
+  --warn-soft-rgb: 52 46 26;
+  --danger-soft: #342225;
+  --danger-soft-rgb: 52 34 37;
+
+  /* Semantic —— 实底（破坏性操作按钮） */
+  --danger-solid: #b91c1c;
+  --danger-solid-rgb: 185 28 28;
+  --danger-on: #ffffff;
+  --danger-on-rgb: 255 255 255;
 
   /* Typography */
   --font-display: "Inter", "Noto Sans SC", system-ui, sans-serif;
   --font-body: "Inter", "Noto Sans SC", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", "Fira Code", monospace;
+  /* ALL CAPS 小标签字距（DESIGN.md §3：0.06em） */
+  --tracking-caps: 0.06em;
 
   /* Radius */
   --radius-sm: 8px;
@@ -53,27 +108,66 @@
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
 }
 
-:root[data-theme='light'] {
-  --bg: #F7F8FA;
-  --surface: #FFFFFF;
-  --surface-2: #F1F3F7;
-  --border: #E5E7EB;
-  --border-soft: #EEF0F4;
+:root[data-theme="light"] {
+  /* Surface */
+  --bg: #f7f8fa;
+  --bg-rgb: 247 248 250;
+  --surface: #ffffff;
+  --surface-rgb: 255 255 255;
+  --surface-2: #f1f3f7;
+  --surface-2-rgb: 241 243 247;
+  --border: #e5e7eb;
+  --border-rgb: 229 231 235;
+  --border-soft: #eef0f4;
+  --border-soft-rgb: 238 240 244;
+  --border-strong: #828c99;
+  --border-strong-rgb: 130 140 153;
 
-  --fg: #0F172A;
+  /* Foreground */
+  --fg: #0f172a;
+  --fg-rgb: 15 23 42;
   --fg-2: #334155;
-  --muted: #64748B;
+  --fg-2-rgb: 51 65 85;
+  --muted: #5a6472;
+  --muted-rgb: 90 100 114;
 
-  --accent: #5B6CF0;
-  --accent-hover: color-mix(in srgb, var(--accent) 90%, black);
-  --accent-active: color-mix(in srgb, var(--accent) 82%, black);
-  --accent-on: #FFFFFF;
-  --accent-soft: rgba(91, 108, 240, 0.10);
+  /* Brand */
+  --accent: #4338ca;
+  --accent-rgb: 67 56 202;
+  --accent-solid: #4338ca;
+  --accent-solid-rgb: 67 56 202;
+  --accent-solid-hover: #3730a3;
+  --accent-solid-hover-rgb: 55 48 163;
+  --accent-solid-active: #2e2882;
+  --accent-solid-active-rgb: 46 40 130;
+  --accent-on: #ffffff;
+  --accent-on-rgb: 255 255 255;
+  --accent-soft: #eef0fd;
+  --accent-soft-rgb: 238 240 253;
 
-  --success: #059669;
-  --warn: #D97706;
-  --danger: #DC2626;
+  /* Semantic —— 文字色 */
+  --success: #036b4e;
+  --success-rgb: 3 107 78;
+  --warn: #92400e;
+  --warn-rgb: 146 64 14;
+  --danger: #b91c1c;
+  --danger-rgb: 185 28 28;
 
+  /* Semantic —— 浅底 */
+  --success-soft: #e3f3ec;
+  --success-soft-rgb: 227 243 236;
+  --warn-soft: #fbefdd;
+  --warn-soft-rgb: 251 239 221;
+  --danger-soft: #f9d5d3;
+  --danger-soft-rgb: 249 213 211;
+
+  /* Semantic —— 实底 */
+  --danger-solid: #b91c1c;
+  --danger-solid-rgb: 185 28 28;
+  --danger-on: #ffffff;
+  --danger-on-rgb: 255 255 255;
+
+  /* Elevation */
   --elev-ring: 0 0 0 1px var(--border);
   --elev-raised: 0 1px 2px rgba(15, 23, 42, 0.06), 0 8px 24px rgba(15, 23, 42, 0.08);
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);

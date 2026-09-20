@@ -10,8 +10,7 @@ import { DetailPageLayout } from "../../components/ui/DetailPageLayout";
  *
  * 注意：DetailPageLayout 内部使用 <Link>，需要 <MemoryRouter> 包裹。
  */
-const renderWithRouter = (ui: React.ReactElement) =>
-  render(<MemoryRouter>{ui}</MemoryRouter>);
+const renderWithRouter = (ui: React.ReactElement) => render(<MemoryRouter>{ui}</MemoryRouter>);
 
 describe("DetailPageLayout 组件", () => {
   it("loading=true 时应该渲染 Loading 占位", () => {

@@ -1,15 +1,14 @@
 import type { BlockInfo, TransactionInfo, AccountInfo, ChainStatus } from "../types";
-import {
-  AUTH_HEADERS,
-  buildAuthHeaders,
-  isProtectedPath,
-} from "./auth";
+import { AUTH_HEADERS, buildAuthHeaders, isProtectedPath } from "./auth";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:3000";
 const GATEWAY_BASE = import.meta.env.VITE_GATEWAY_BASE ?? "http://localhost:8080";
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  constructor(
+    public status: number,
+    message: string,
+  ) {
     super(message);
     this.name = "ApiError";
   }
@@ -21,18 +20,55 @@ export class ApiError extends Error {
  *
  * 超时兜底（质量审查 2026-09-10）：裸 fetch 无 timeout——后端挂起时首页
  * 永远 Loading（且 10s 轮询会堆积请求）。8s 超时对局域/公网 BFF 均宽裕。
+ *
+ * 运行时字段校验（2026-09-16 审查 P0）：`request<T>()` 本质是**类型断言**，
+ * 无运行时校验 —— 后端字段名一变，类型系统不会报错，页面会拿到 `undefined`
+ * 并在渲染期崩溃（实例：`status.height.toLocaleString()` 导致首页整页被
+ * ErrorBoundary 替换）。故对每个端点声明必需字段，缺失即抛出可诊断的错误，
+ * 把「静默渲染 undefined」提前为「明确的契约错误」。
  */
 const REQUEST_TIMEOUT_MS = 8_000;
 
-async function request<T>(path: string): Promise<T> {
+/**
+ * 断言响应对象包含指定字段。
+ *
+ * @param value   响应体（数组时逐元素检查）
+ * @param required 必需字段名
+ * @param label   错误信息中显示的端点标识
+ */
+function assertShape<T>(value: unknown, required: readonly string[], label: string): T {
+  const items: unknown[] = Array.isArray(value) ? value : [value];
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    if (item === null || typeof item !== "object") {
+      throw new ApiError(0, `${label}: 响应第 ${i} 项不是对象`);
+    }
+    const missing = required.filter((k) => !(k in (item as Record<string, unknown>)));
+    if (missing.length > 0) {
+      throw new ApiError(0, `${label}: 响应缺少字段 [${missing.join(", ")}]（后端契约可能已变更）`);
+    }
+  }
+  return value as T;
+}
+
+async function request<T>(path: string, requiredFields?: readonly string[]): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   if (!res.ok) {
     throw new ApiError(res.status, `Request failed: ${res.status} ${res.statusText}`);
   }
-  return res.json();
+  const body: unknown = await res.json();
+  return requiredFields ? assertShape<T>(body, requiredFields, path) : (body as T);
 }
+
+/** 各端点的必需字段（与后端实际返回对齐，见 types/index.ts 的来源注释）。 */
+const REQUIRED_FIELDS = {
+  chainStatus: ["chainId", "latestHeight", "latestHash", "peers", "version"],
+  block: ["height", "hash", "parentHash", "timestamp", "txCount", "proposer"],
+  transaction: ["txHash", "blockHeight", "from", "to", "amount", "status", "timestamp"],
+  account: ["address", "balance", "txCount"],
+} as const;
 
 export interface AuthenticatedRequestOptions {
   /** HTTP method. Defaults to "GET". */
@@ -83,8 +119,7 @@ export async function authenticatedRequest<T>(
 
   // The gateway signs the raw body bytes. We serialise once and reuse the
   // string for both signing and the fetch body to guarantee byte-equality.
-  const bodyString =
-    body !== undefined && body !== null ? JSON.stringify(body) : "";
+  const bodyString = body !== undefined && body !== null ? JSON.stringify(body) : "";
 
   // Sign the path as-is (with query string) — the gateway's
   // RequestSignatureInterceptor uses request.getRequestURI() which excludes
@@ -148,18 +183,22 @@ export async function authenticatedRequest<T>(
 
 export const api = {
   // Blocks
-  getBlocks: (limit = 20) => request<BlockInfo[]>(`/api/blocks?limit=${limit}`),
-  getBlock: (height: number) => request<BlockInfo>(`/api/blocks/${height}`),
+  getBlocks: (limit = 20) =>
+    request<BlockInfo[]>(`/api/blocks?limit=${limit}`, REQUIRED_FIELDS.block),
+  getBlock: (height: number) => request<BlockInfo>(`/api/blocks/${height}`, REQUIRED_FIELDS.block),
 
   // Transactions
-  getTransactions: (limit = 20) => request<TransactionInfo[]>(`/api/tx?limit=${limit}`),
-  getTransaction: (hash: string) => request<TransactionInfo>(`/api/tx/${hash}`),
+  getTransactions: (limit = 20) =>
+    request<TransactionInfo[]>(`/api/tx?limit=${limit}`, REQUIRED_FIELDS.transaction),
+  getTransaction: (hash: string) =>
+    request<TransactionInfo>(`/api/tx/${hash}`, REQUIRED_FIELDS.transaction),
 
   // Account
-  getAccount: (address: string) => request<AccountInfo>(`/api/address/${address}`),
+  getAccount: (address: string) =>
+    request<AccountInfo>(`/api/address/${address}`, REQUIRED_FIELDS.account),
 
   // Chain status
-  getStatus: () => request<ChainStatus>(`/api/node/status`),
+  getStatus: () => request<ChainStatus>(`/api/node/status`, REQUIRED_FIELDS.chainStatus),
 };
 
 export { AUTH_HEADERS, isProtectedPath };

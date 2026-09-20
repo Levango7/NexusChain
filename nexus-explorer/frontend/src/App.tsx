@@ -32,14 +32,8 @@ const App: React.FC = () => (
     <BrowserRouter>
       <Routes>
         <Route path="/" element={withBoundary(<HomePage />)} />
-        <Route
-          path="/orchestration"
-          element={withBoundary(<OrchestrationDashboard />)}
-        />
-        <Route
-          path="/block/:height"
-          element={withBoundary(<BlockDetailPage />)}
-        />
+        <Route path="/orchestration" element={withBoundary(<OrchestrationDashboard />)} />
+        <Route path="/block/:height" element={withBoundary(<BlockDetailPage />)} />
         <Route path="/tx/:hash" element={withBoundary(<TxDetailPage />)} />
         <Route path="/address/:addr" element={withBoundary(<AddressPage />)} />
         <Route path="/settings" element={withBoundary(<Settings />)} />

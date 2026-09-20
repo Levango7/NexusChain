@@ -23,7 +23,7 @@ export interface RpcTransaction {
   from: string;
   to: string;
   amount: string;
-  status: 'success' | 'failed' | 'pending';
+  status: "success" | "failed" | "pending";
   timestamp: number;
   data?: string;
 }
@@ -61,7 +61,7 @@ export interface RpcCrossChainTx {
   sourceChain: string;
   targetChain: string;
   amount: string;
-  status: 'pending' | 'confirmed' | 'failed';
+  status: "pending" | "confirmed" | "failed";
   timestamp: number;
   from: string;
   to: string;
@@ -69,7 +69,7 @@ export interface RpcCrossChainTx {
 
 /** JSON-RPC 请求体 */
 interface JsonRpcRequest {
-  jsonrpc: '2.0';
+  jsonrpc: "2.0";
   id: number;
   method: string;
   params: unknown[];
@@ -77,7 +77,7 @@ interface JsonRpcRequest {
 
 /** JSON-RPC 响应体 */
 interface JsonRpcResponse<T> {
-  jsonrpc: '2.0';
+  jsonrpc: "2.0";
   id: number;
   result?: T;
   error?: { code: number; message: string; data?: unknown };
@@ -107,7 +107,7 @@ export class NexusChainRpcClient {
    */
   private async call<T>(method: string, params: unknown[] = []): Promise<T> {
     const reqBody: JsonRpcRequest = {
-      jsonrpc: '2.0',
+      jsonrpc: "2.0",
       id: ++this.requestId,
       method,
       params,
@@ -117,8 +117,8 @@ export class NexusChainRpcClient {
     // 连接与事件循环，BFF 的并发能力被逐条耗尽，最终整体不可用（且前端表现为
     // 永久 Loading）。8s 对同集群 RPC 足够宽裕。
     const res = await fetch(this.url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(reqBody),
       signal: AbortSignal.timeout(NexusChainRpcClient.REQUEST_TIMEOUT_MS),
     });
@@ -127,14 +127,19 @@ export class NexusChainRpcClient {
       throw new Error(`RPC HTTP 错误: ${res.status} ${res.statusText}`);
     }
 
-    const data: JsonRpcResponse<T> = await res.json();
+    // res.json() 在 undici（@types/node 提供的 fetch）下返回 unknown，
+    // 需要显式断言为 JSON-RPC 响应形状。下方对 data.error / data.result
+    // 均有运行时判空，故断言风险可控。
+    // （2026-09-16 审查：引入 tsconfig 后该隐式 any 赋值在 strict 下报错，
+    //   原实现依赖 fetch 类型宽松才得以编译。）
+    const data = (await res.json()) as JsonRpcResponse<T>;
 
     if (data.error) {
       throw new Error(`RPC 错误 [${data.error.code}]: ${data.error.message}`);
     }
 
     if (data.result === undefined) {
-      throw new Error('RPC 返回结果为空');
+      throw new Error("RPC 返回结果为空");
     }
 
     return data.result;
@@ -145,50 +150,42 @@ export class NexusChainRpcClient {
    * @param limit 返回数量上限
    */
   async getLatestBlocks(limit: number = 20): Promise<RpcBlock[]> {
-    return this.call<RpcBlock[]>('nexus_getLatestBlocks', [limit]);
+    return this.call<RpcBlock[]>("nexus_getLatestBlocks", [limit]);
   }
 
   /**
    * 按高度获取区块详情
    */
   async getBlockByHeight(height: number): Promise<RpcBlock | null> {
-    return this.call<RpcBlock | null>('nexus_getBlockByHeight', [height]);
+    return this.call<RpcBlock | null>("nexus_getBlockByHeight", [height]);
   }
 
   /**
    * 获取最新交易列表
    */
   async getLatestTransactions(limit: number = 20): Promise<RpcTransaction[]> {
-    return this.call<RpcTransaction[]>('nexus_getLatestTransactions', [limit]);
+    return this.call<RpcTransaction[]>("nexus_getLatestTransactions", [limit]);
   }
 
   /**
    * 按哈希获取交易详情
    */
   async getTransactionByHash(hash: string): Promise<RpcTransaction | null> {
-    return this.call<RpcTransaction | null>('nexus_getTransactionByHash', [hash]);
+    return this.call<RpcTransaction | null>("nexus_getTransactionByHash", [hash]);
   }
 
   /**
    * 按地址获取相关交易列表
    */
-  async getTransactionsByAddress(
-    address: string,
-    limit: number = 20
-  ): Promise<RpcTransaction[]> {
-    return this.call<RpcTransaction[]>('nexus_getTransactionsByAddress', [
-      address,
-      limit,
-    ]);
+  async getTransactionsByAddress(address: string, limit: number = 20): Promise<RpcTransaction[]> {
+    return this.call<RpcTransaction[]>("nexus_getTransactionsByAddress", [address, limit]);
   }
 
   /**
    * 获取地址 NEX 余额
    */
   async getBalance(address: string): Promise<string> {
-    const result = await this.call<{ balance: string }>('nexus_getBalance', [
-      address,
-    ]);
+    const result = await this.call<{ balance: string }>("nexus_getBalance", [address]);
     return result.balance;
   }
 
@@ -196,10 +193,7 @@ export class NexusChainRpcClient {
    * 获取地址交易计数
    */
   async getTransactionCount(address: string): Promise<number> {
-    const result = await this.call<{ count: number }>(
-      'nexus_getTransactionCount',
-      [address]
-    );
+    const result = await this.call<{ count: number }>("nexus_getTransactionCount", [address]);
     return result.count;
   }
 
@@ -207,21 +201,21 @@ export class NexusChainRpcClient {
    * 获取已部署合约列表
    */
   async getContractList(): Promise<RpcContract[]> {
-    return this.call<RpcContract[]>('nexus_getContractList', []);
+    return this.call<RpcContract[]>("nexus_getContractList", []);
   }
 
   /**
    * 获取指定合约详情
    */
   async getContract(address: string): Promise<RpcContract | null> {
-    return this.call<RpcContract | null>('nexus_getContract', [address]);
+    return this.call<RpcContract | null>("nexus_getContract", [address]);
   }
 
   /**
    * 获取节点状态信息
    */
   async getNodeStatus(): Promise<RpcNodeStatus> {
-    return this.call<RpcNodeStatus>('nexus_getNodeStatus', []);
+    return this.call<RpcNodeStatus>("nexus_getNodeStatus", []);
   }
 
   /**
@@ -229,13 +223,7 @@ export class NexusChainRpcClient {
    * @param limit 返回数量上限
    * @param status 可选状态过滤
    */
-  async getCrossChainTransactions(
-    limit: number = 20,
-    status?: string
-  ): Promise<RpcCrossChainTx[]> {
-    return this.call<RpcCrossChainTx[]>('nexus_getCrossChainTransactions', [
-      limit,
-      status ?? null,
-    ]);
+  async getCrossChainTransactions(limit: number = 20, status?: string): Promise<RpcCrossChainTx[]> {
+    return this.call<RpcCrossChainTx[]>("nexus_getCrossChainTransactions", [limit, status ?? null]);
   }
 }

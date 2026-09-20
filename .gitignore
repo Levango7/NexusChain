@@ -182,3 +182,15 @@ build-logs*.txt
 trivy-*.log
 hs_err_pid*.log
 replay_pid*.log
+
+# 前端构建产物不入库（2026-09-16 审查修复）
+# 背景：nexus-explorer/frontend/dist 此前被 git 跟踪，且产物早于主题改造
+# （产物 JS 中无 nexus-theme / modal-title 标记），与源码不一致却看似权威。
+# 构建产物应始终由 CI 生成，不入库。
+nexus-explorer/frontend/dist/
+nexus-explorer/backend/dist/
+nexus-devtools/dist/
+
+# 前端测试覆盖率产物与 Vite 临时配置（2026-09-16 审查修复）
+nexus-explorer/frontend/coverage/
+*.timestamp-*.mjs

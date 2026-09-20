@@ -81,7 +81,10 @@
     "errSecretEmpty": "API Secret 不能为空",
     "errKeyLength": "API Key 长度至少 8 字符",
     "errSecretLength": "API Secret 长度至少 16 字符（HMAC-SHA256 安全要求）",
-    "errSaveFailed": "保存凭证失败"
+    "errSaveFailed": "保存凭证失败",
+    "confirmClearTitle": "确认清除凭证？",
+    "confirmClearBody": "清除后需重新输入 API Key 与 API Secret 才能继续使用支付编排功能。此操作不可撤销。",
+    "confirmClearOk": "确认清除"
   },
   "orchestration": {
     "title": "支付编排",
@@ -93,7 +96,24 @@
     "noPayments": "暂无支付记录",
     "connectors": "支付连接器",
     "routingRules": "路由规则",
-    "requestFailed": "请求失败 ({{status}}): {{message}}"
+    "requestFailed": "请求失败 ({{status}}): {{message}}",
+    "tabPayments": "支付",
+    "tabConnectors": "连接器",
+    "tabRules": "规则",
+    "noConnectors": "暂无已注册连接器",
+    "noRules": "暂无路由规则",
+    "connectorMeta": "ID：{{id}} · 类型：{{type}} · 费率：{{fee}} bps",
+    "connectorStateActive": "启用",
+    "connectorStateInactive": "停用",
+    "currencies": "币种",
+    "currenciesAll": "全部",
+    "ruleMeta": "连接器：{{connectors}} · 优先级：{{priority}}",
+    "fieldId": "支付号",
+    "fieldConnector": "连接器",
+    "fieldCreatedAt": "创建时间",
+    "fieldAmount": "金额",
+    "back": "返回",
+    "goToSettings": "前往设置"
   },
   "block": {
     "title": "区块",
