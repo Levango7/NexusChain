@@ -161,7 +161,7 @@ subprojects {
     //   slf4j/jackson → nexus-core；leveldb/netty/grpc/protobuf/postgresql/
     //   hibernateValidator → core 与 signing-service 各自消费。
     // mockito 已不再由根注入：TD-06 移除 subprojects 强制注入，各模块统一走
-    // Boot 3.2.5 BOM 管理（解析为 mockito-core 5.2.0），消除三代并存。
+    // 各自的 Boot BOM 管理（Boot 4.0.8，2026-09 Boot4 兼容批后），消除三代并存。
     ext {
 
         slf4jVersion = '2.0.16'

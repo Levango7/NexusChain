@@ -14,8 +14,6 @@ import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * A2: Request signature verification interceptor.
@@ -53,14 +51,47 @@ public class RequestSignatureInterceptor implements HandlerInterceptor {
     private final String signingSecret;
 
     /**
-     * Nonce -> expiry (ms). Entries older than the replay window are evicted lazily.
-     * NOTE: in a multi-instance deployment this must be backed by shared storage
-     * (e.g. Redis SET NX with TTL); in-memory is acceptable for single-instance MVP.
+     * 是否接受 v1（无分隔符拼接）签名。默认 true（兼容期）；生产迁移完成后置
+     * {@code false} 仅接受 v2（长度前缀 canonical，抗字段边界碰撞）。
+     * 短期项 #4（2026-09-17）。
      */
-    private final Map<String, Long> seenNonces = new ConcurrentHashMap<>();
+    private final boolean legacySignatureEnabled;
+
+    /**
+     * 防重放 nonce 存储（短期项 #4b）。prod profile 注入 Redis 版
+     * （多副本共享、fail-closed）；其余 profile 内存版；无 bean 时内存兜底。
+     */
+    private final ReplayNonceStore nonceStore;
 
     public RequestSignatureInterceptor(@Value("${nexus.security.requestSigningSecret:}") String signingSecret) {
+        this(signingSecret, true);
+    }
+
+    /**
+     * 测试/显式注入构造器：可直接指定是否接受 v1 签名（内存 nonce 存储）。
+     *
+     * @param signingSecret           HMAC 共享密钥
+     * @param legacySignatureEnabled  兼容期是否接受 v1 拼接签名
+     */
+    public RequestSignatureInterceptor(String signingSecret, boolean legacySignatureEnabled) {
         this.signingSecret = signingSecret == null ? "" : signingSecret;
+        this.legacySignatureEnabled = legacySignatureEnabled;
+        this.nonceStore = new InMemoryReplayNonceStore();
+    }
+
+    /**
+     * Spring 装配构造器：prod profile 注入 Redis 版 nonce 存储
+     * （多副本共享），其余 profile 内存版；无 bean 时内存兜底。
+     */
+    @org.springframework.beans.factory.annotation.Autowired
+    public RequestSignatureInterceptor(
+            @Value("${nexus.security.requestSigningSecret:}") String signingSecret,
+            @Value("${nexus.security.signature-legacy-enabled:true}") boolean legacySignatureEnabled,
+            org.springframework.beans.factory.ObjectProvider<ReplayNonceStore> nonceStoreProvider) {
+        this.signingSecret = signingSecret == null ? "" : signingSecret;
+        this.legacySignatureEnabled = legacySignatureEnabled;
+        ReplayNonceStore provided = nonceStoreProvider.getIfAvailable();
+        this.nonceStore = provided != null ? provided : new InMemoryReplayNonceStore();
     }
 
     @Override
@@ -89,16 +120,14 @@ public class RequestSignatureInterceptor implements HandlerInterceptor {
             return reject(response, 40103, "Request timestamp expired (5min window)");
         }
 
-        // Nonce uniqueness (anti-replay).
+        // Nonce uniqueness (anti-replay). 存储注入（短期项 #4b）：prod=Redis 共享，
+        // 其余=内存；Redis 故障时 fail-closed（register 返回 false = 视为重放拒绝）。
         if (isBlank(nonce)) {
             return reject(response, 40104, "Missing nonce header");
         }
-        long expiry = now + MAX_AGE_MS;
-        Long previous = seenNonces.put(nonce, expiry);
-        if (previous != null && previous > now) {
+        if (!nonceStore.register(nonce, MAX_AGE_MS)) {
             return reject(response, 40106, "Replayed nonce");
         }
-        evictExpiredNonces(now);
 
         // Resolve server-side shared secret. Fail closed if unconfigured.
         if (signingSecret.isEmpty()) {
@@ -106,13 +135,25 @@ public class RequestSignatureInterceptor implements HandlerInterceptor {
             return reject(response, 40105, "Signature verification unavailable");
         }
 
-        // Canonical request: timestamp + nonce + method + path + body.
+        // Canonical request: v2（长度前缀）优先；v1（无分隔符拼接）仅在兼容期接受。
         String method = request.getMethod();
         String path = request.getRequestURI();
         String body = readBody(request);
-        String expected = computeSignature(timestamp, nonce, method, path, body, signingSecret);
+        boolean signatureOk;
+        if (signature.startsWith("v2:")) {
+            signatureOk = constantTimeEquals(
+                    computeSignatureV2(timestamp, nonce, method, path, body, signingSecret), signature);
+        } else {
+            if (!legacySignatureEnabled) {
+                log.warn("Rejected v1 (delimiter-free concatenation) request signature — "
+                        + "signature-legacy-enabled=false; migrate clients to v2 canonical (length-prefixed)");
+                return reject(response, 40108, "Legacy signature format rejected (v2 required)");
+            }
+            signatureOk = constantTimeEquals(
+                    computeSignature(timestamp, nonce, method, path, body, signingSecret), signature);
+        }
 
-        if (!constantTimeEquals(expected, signature)) {
+        if (!signatureOk) {
             return reject(response, 40107, "Signature mismatch");
         }
         return true;
@@ -133,10 +174,6 @@ public class RequestSignatureInterceptor implements HandlerInterceptor {
             return new String(cached, StandardCharsets.UTF_8);
         }
         return "";
-    }
-
-    private void evictExpiredNonces(long now) {
-        seenNonces.entrySet().removeIf(e -> e.getValue() < now);
     }
 
     private boolean reject(HttpServletResponse response, int code, String message) throws IOException {
@@ -172,9 +209,13 @@ public class RequestSignatureInterceptor implements HandlerInterceptor {
     }
 
     /**
-     * Compute HMAC-SHA256 signature for a request.
+     * Compute HMAC-SHA256 signature for a request（v1 拼接协议，向后兼容）.
      * Used by SDK clients to sign outgoing requests. Canonical form:
      *   timestamp + nonce + method + path + body
+     *
+     * <p><b>v1 协议缺陷（2026-09-17 短期项 #4）</b>：字段无分隔符拼接，
+     * 字段边界可平移产生碰撞。新签名方应使用 {@link #computeSignatureV2}；
+     * 本方法仅在服务端 {@code nexus.security.signature-legacy-enabled=true}（兼容期）仍被接受。</p>
      */
     public static String computeSignature(String timestamp, String nonce, String method, String path, String body, String secret) {
         try {
@@ -186,11 +227,52 @@ public class RequestSignatureInterceptor implements HandlerInterceptor {
             Mac mac = Mac.getInstance("HmacSHA256");
             mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
             byte[] hash = mac.doFinal(payload.getBytes(StandardCharsets.UTF_8));
-            StringBuilder sb = new StringBuilder();
-            for (byte b : hash) sb.append(String.format("%02x", b));
-            return sb.toString();
+            return toHex(hash);
         } catch (java.security.GeneralSecurityException e) {
             throw new RuntimeException("Signature computation failed", e);
         }
+    }
+
+    /**
+     * v2 canonical 签名：字段带长度前缀，消除字段边界歧义。
+     * canonical = "NXC2|" + len(ts)+":"+ts + "|" + len(nonce)+":"+nonce + "|" + len(method)+":"+method
+     *   + "|" + len(path)+":"+path + "|" + len(body)+":"+body
+     * 长度按 UTF-8 字节计，保证多语言实现字节级一致。任一字段变化（含 null↔""）
+     * 均改变 canonical 串，无法通过移动字段边界构造碰撞。
+     *
+     * @return "v2:" + lowerHex(HMAC-SHA256(canonical, secret))
+     */
+    public static String computeSignatureV2(String timestamp, String nonce, String method, String path, String body, String secret) {
+        try {
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+            byte[] hash = mac.doFinal(canonicalV2(timestamp, nonce, method, path, body).getBytes(StandardCharsets.UTF_8));
+            return "v2:" + toHex(hash);
+        } catch (java.security.GeneralSecurityException e) {
+            throw new RuntimeException("Signature computation failed", e);
+        }
+    }
+
+    /** v2 canonical 串（签名输入），供 SDK / 测试对照实现。 */
+    public static String canonicalV2(String timestamp, String nonce, String method, String path, String body) {
+        StringBuilder sb = new StringBuilder(64);
+        sb.append("NXC2|");
+        appendField(sb, timestamp);
+        appendField(sb, nonce);
+        appendField(sb, method);
+        appendField(sb, path);
+        appendField(sb, body);
+        return sb.toString();
+    }
+
+    private static void appendField(StringBuilder sb, String value) {
+        String v = value == null ? "" : value;
+        sb.append(v.getBytes(StandardCharsets.UTF_8).length).append(':').append(v).append('|');
+    }
+
+    private static String toHex(byte[] bytes) {
+        StringBuilder sb = new StringBuilder(bytes.length * 2);
+        for (byte b : bytes) sb.append(String.format("%02x", b));
+        return sb.toString();
     }
 }

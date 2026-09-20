@@ -158,4 +158,68 @@ class WebhookSignatureServiceTest {
         assertEquals(sig.toLowerCase(), sig, "Signature should be lowercase hex");
         assertTrue(sig.matches("[0-9a-f]{64}"), "Signature should be 64 hex chars");
     }
+
+    // ===== v2 签名（短期项 #4c：绑定 deliveryId + timestamp，防重放）=====
+
+    @Test
+    @DisplayName("signV2: 前缀 v2: 且确定性")
+    void signV2_deterministic() {
+        Map<String, Object> payload = samplePayload();
+        String s1 = service.signV2(payload, SECRET, "dlv_001", "2026-09-17T12:00:00Z");
+        String s2 = service.signV2(payload, SECRET, "dlv_001", "2026-09-17T12:00:00Z");
+        assertTrue(s1.startsWith("v2:"), "v2 签名应带 v2: 前缀");
+        assertEquals(s1, s2, "相同输入产生相同 v2 签名");
+        assertEquals(3 + 64, s1.length(), "v2: + 64 hex");
+    }
+
+    @Test
+    @DisplayName("signV2: 绑定 deliveryId 与 timestamp（任一变化签名不同）")
+    void signV2_bindsDeliveryIdAndTimestamp() {
+        Map<String, Object> payload = samplePayload();
+        String base = service.signV2(payload, SECRET, "dlv_001", "2026-09-17T12:00:00Z");
+        assertNotEquals(base, service.signV2(payload, SECRET, "dlv_002", "2026-09-17T12:00:00Z"),
+                "deliveryId 变化必须改变签名（v1 无此性质，可无限重放）");
+        assertNotEquals(base, service.signV2(payload, SECRET, "dlv_001", "2026-09-17T12:00:01Z"),
+                "timestamp 变化必须改变签名");
+        // 同 payload 不同 deliveryId → 接收方可按 deliveryId 幂等去重
+        assertNotEquals(
+                service.signV2(payload, SECRET, "dlv_a", "2026-09-17T12:00:00Z"),
+                service.signV2(payload, SECRET, "dlv_b", "2026-09-17T12:00:00Z"));
+    }
+
+    @Test
+    @DisplayName("verifyV2: 正确签名 true；换 deliveryId/timestamp 签名 false；v1 签名 false")
+    void verifyV2_correctAndTampered() {
+        Map<String, Object> payload = samplePayload();
+        String sig = service.signV2(payload, SECRET, "dlv_001", "2026-09-17T12:00:00Z");
+        assertTrue(service.verifyV2(payload, SECRET, sig, "dlv_001", "2026-09-17T12:00:00Z"));
+        // 篡改 deliveryId / timestamp（重放场景）→ 拒绝
+        assertFalse(service.verifyV2(payload, SECRET, sig, "dlv_001", "2026-09-17T12:00:01Z"),
+                "时间戳被篡改的 v2 签名必须拒绝");
+        assertFalse(service.verifyV2(payload, SECRET, sig, "dlv_evil", "2026-09-17T12:00:00Z"),
+                "deliveryId 被篡改的 v2 签名必须拒绝");
+        // v1 签名不能通过 v2 验证
+        assertFalse(service.verifyV2(payload, SECRET, service.sign(payload, SECRET), "dlv_001", "2026-09-17T12:00:00Z"));
+        // v2 签名不能通过 v1 验证（前缀不同）
+        assertFalse(service.verify(payload, SECRET, sig));
+    }
+
+    @Test
+    @DisplayName("signV2: 空 secret 返回空串；verifyV2 空/非法签名返回 false")
+    void signV2_emptySecretAndInvalidSignature() {
+        Map<String, Object> payload = samplePayload();
+        assertEquals("", service.signV2(payload, "", "dlv_001", "t"));
+        assertEquals("", service.signV2(payload, null, "dlv_001", "t"));
+        assertFalse(service.verifyV2(payload, SECRET, null, "dlv_001", "t"));
+        assertFalse(service.verifyV2(payload, SECRET, "", "dlv_001", "t"));
+        assertFalse(service.verifyV2(payload, SECRET, "v2:deadbeef", "dlv_001", "t"));
+        assertFalse(service.verifyV2(payload, "", service.signV2(payload, SECRET, "d", "t"), "d", "t"));
+    }
+
+    @Test
+    @DisplayName("canonicalV2: 长度前缀确定性快照")
+    void canonicalV2_snapshot() {
+        String c = WebhookSignatureService.canonicalV2("dlv_001", "2026-09-17T12:00:00Z", "{\"a\":1}");
+        assertEquals("NXCW|7:dlv_001|20:2026-09-17T12:00:00Z|7:{\"a\":1}|", c);
+    }
 }

@@ -35,41 +35,28 @@ public class PoolController {
     private static final Logger logger = LoggerFactory.getLogger(PoolController.class);
 
     /**
-     * 池管理端点令牌校验的期望摘要（sha3-256 的 hex 小写）。
-     *
-     * <p><b>S-2 修复（2026-09-17 交付前审计）</b>：{@code /deletePendpool} 与
-     * {@code /updatePtNonce} 原本把该期望值硬编码在源码里
-     * （{@code "a772c260ae19e8972f1da3af77492fdb6b40f34a9b34b4a9021ecfd900f21e53"}）——
-     * 随源码公开、无法轮换，且无配置化审计痕迹。现改为配置注入
-     * （{@code nexus.pool.admin-token-sha3} / 环境变量 {@code NEXUS_POOL_ADMIN_TOKEN_SHA3}）：
-     * <b>未配置时一律拒绝（fail-closed）</b>，配置后可按需轮换。</p>
-     *
-     * <p>迁移：把旧期望摘要通过该配置注入即可保持既有调用方可用；
-     * 但旧值已进入 git 历史，建议轮换为新令牌后再对外提供服务。</p>
+     * Configurable SHA3-256 verifier for the legacy pool-management token.
+     * A public digest is not the original credential; external configuration enables rotation.
+     * Missing or malformed configuration disables these management operations.
      */
     @Value("${nexus.pool.admin-token-sha3:}")
     private String adminTokenSha3;
 
-    /**
-     * 校验调用方给出的 {@code tokenhash} 派生摘要是否为合法的池管理令牌。
-     *
-     * <p>判定与历史实现保持一致：{@code sha3_256(hexDecode(tokenhash))} 的 hex 小写形式
-     * 等于配置的期望摘要。比较使用常量时间实现（避免时序侧信道），
-     * 配置缺失时直接拒绝（fail-closed）。</p>
-     *
-     * @param tokenHashSha3Hex 调用方 tokenhash 经 sha3-256 后的 hex（大小写不敏感）
-     * @return 合法返回 {@code true}
-     */
-    private boolean isPoolAdminToken(String tokenHashSha3Hex) {
-        if (adminTokenSha3 == null || adminTokenSha3.isEmpty()) {
-            logger.warn("pool admin endpoint rejected: nexus.pool.admin-token-sha3 is not configured (fail-closed)");
+    private boolean isPoolAdminToken(String tokenHash) {
+        if (adminTokenSha3 == null || !adminTokenSha3.trim().matches("[0-9a-fA-F]{64}")) {
+            logger.warn("Pool management rejected: token verifier is missing or malformed");
             return false;
         }
-        String expected = adminTokenSha3.trim().toLowerCase(Locale.ROOT);
-        String actual = tokenHashSha3Hex == null ? "" : tokenHashSha3Hex.toLowerCase(Locale.ROOT);
-        return org.nexus.util.Arrays.constantTimeAreEqual(
-                expected.getBytes(java.nio.charset.StandardCharsets.UTF_8),
-                actual.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        if (tokenHash == null || tokenHash.isBlank()) {
+            return false;
+        }
+        try {
+            byte[] expected = Hex.decodeHex(adminTokenSha3.trim());
+            byte[] actual = SHA3Utility.sha3256(Hex.decodeHex(tokenHash));
+            return java.security.MessageDigest.isEqual(expected, actual);
+        } catch (DecoderException e) {
+            return false;
+        }
     }
 
     @Autowired
@@ -251,10 +238,7 @@ public class PoolController {
     public Object deletePendpool(@RequestParam("tokenhash") String tokenhash,
                                  @RequestParam("txhash") String txhash){
         try {
-            byte[] hash=Hex.decodeHex(tokenhash.toCharArray());
-            byte[] shahash=SHA3Utility.sha3256(hash);
-            String token=Hex.encodeHexString(shahash);
-            if(!isPoolAdminToken(token)){
+            if(!isPoolAdminToken(tokenhash)){
                 return APIResult.newFailResult(5000,"Token check but");
             }
             TransPool transPool=peningTransPool.getPoolTranHash(Hex.decodeHex(txhash.toCharArray()));
@@ -275,17 +259,14 @@ public class PoolController {
     public Object updatePtNonce(@RequestParam("tokenhash") String tokenhash, @RequestParam("address") String address,
                                 @RequestParam("nonce") long nonce, @RequestParam("state") int state){
         try{
-            byte[] hash=Hex.decodeHex(tokenhash.toCharArray());
-            byte[] shahash=SHA3Utility.sha3256(hash);
-            String token=Hex.encodeHexString(shahash);
-            if(!isPoolAdminToken(token)){
+            if(!isPoolAdminToken(tokenhash)){
                 return APIResult.newFailResult(5000,"Token check but");
             }
             byte[] pubkeyhash=KeystoreAction.addressToPubkeyHash(address);
             PendingNonce pendingNonce=new PendingNonce(nonce,state);
             peningTransPool.updatePtNone(Hex.encodeHexString(pubkeyhash),pendingNonce);
             return APIResult.newFailResult(2000,"SUCCESS");
-        }catch (RuntimeException | org.apache.commons.codec.DecoderException e){
+        }catch (RuntimeException e){
             return APIResult.newFailResult(5000,"Address error");
         }
     }

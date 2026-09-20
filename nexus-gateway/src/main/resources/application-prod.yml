@@ -81,3 +81,17 @@ logging:
     org.nexus: INFO
     org.hibernate.SQL: WARN
     com.zaxxer.hikari: INFO
+
+# === Redis 连接（短期项 #4b：防重放 nonce 多副本共享）===
+# 默认仅注入连接参数；是否启用由 nexus.security.replay-store 决定
+# （NEXUS_REPLAY_STORE=redis 时 RequestSignatureInterceptor 使用共享 nonce 表）。
+# 未启用时本节不生效（幂等 store 仍走 DB，行为不变）。
+spring.data.redis:
+  host: ${NEX_REDIS_HOST:redis}
+  port: ${NEX_REDIS_PORT:6379}
+  password: ${NEX_REDIS_PASSWORD:}
+  database: ${NEX_REDIS_DATABASE:0}
+  timeout: 3000
+
+nexus.security:
+  replay-store: ${NEXUS_REPLAY_STORE:memory}

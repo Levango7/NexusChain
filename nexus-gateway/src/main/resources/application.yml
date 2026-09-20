@@ -262,6 +262,15 @@ nexus:
     # 生产环境通过 NEXUS_REQUEST_SIGNING_SECRET 环境变量注入（sandbox/test profile 已配置）。
     # 占位符默认空串：未注入时验签失败由调用方显式感知，避免静默放行。
     request-signing-secret: ${NEXUS_REQUEST_SIGNING_SECRET:}
+    # === 短期项 #4（2026-09-17）：v2 canonical 签名（长度前缀，抗字段边界碰撞）===
+    # true（默认，兼容期）：同时接受 v1（无分隔符拼接）与 v2（"v2:" 前缀）签名；
+    # false（生产迁移完成后）：仅接受 v2。客户端 SDK 默认产出 v2。
+    signature-legacy-enabled: ${NEXUS_SIGNATURE_LEGACY_ENABLED:true}
+    # === 短期项 #4b（2026-09-17）：防重放 nonce 存储 ===
+    # memory（默认）：进程内 ConcurrentHashMap，单实例语义；
+    # redis：多副本共享（SET NX+TTL），需同时配好 spring.data.redis 连接
+    #        （prod 由 NEX_REDIS_* 注入）。Redis 故障时 fail-closed（视为重放拒绝）。
+    replay-store: ${NEXUS_REPLAY_STORE:memory}
 
   # === P0-3a：PSP 真实 API 配置（Stripe / Adyen） ===
   # 默认 enabled=false 保持向后兼容：未注入 apiKey 时各 Connector 自动走 dry-run。
@@ -295,6 +304,11 @@ nexus:
     # NEX_WEBHOOK_SECRET 时为空 → 验签必然失败（fail-closed），强制部署方注入。
     # dev/sandbox profile 由各 profile 文件提供明确的开发值。
     callback-secret: ${NEX_WEBHOOK_SECRET:}
+    # === 短期项 #4c（2026-09-17）：webhook v2 签名（绑定 deliveryId+timestamp，防重放）===
+    # 投递侧已默认产出 v2；本开关控制"接收侧"（/api/v1/webhooks/chain-events）：
+    # false（默认，兼容期）：同时接受 v1（仅 payload）与 v2；
+    # true（生产迁移完成后）：仅接受 v2（v1 可无限重放，不具新鲜度）。
+    require-v2: ${NEXUS_WEBHOOK_REQUIRE_V2:false}
     # === P4-T5：Webhook 重试与死信队列增强 ===
     # 死信队列存储：kafka（生产，默认）| memory（测试/无 Kafka broker 环境）
     dlq:

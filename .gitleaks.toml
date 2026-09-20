@@ -81,17 +81,26 @@ paths = [
 
 # === 自定义规则（2026-09-17，立即项 #2：硬编码静态凭据设防）===
 # 背景：审计发现两处随源码入库的静态凭据，gitleaks **默认规则集均未命中**：
-#   1) nexus-core/.../command/RpcInterceptor.java
-#        `if (token.equals("NUMtD0dEXungVX7eLuXkEurH5BCJzw")) return true;`   ← 明文令牌
-#   2) nexus-core/.../controller/PoolController.java
-#        `if(!token.equals("a772c260ae19e8972f1da3af77492fdb6b40f34a9b34b4a9021ecfd900f21e53"))` ← 摘要常量
+#   1) nexus-core/.../command/RpcInterceptor.java —— 孵化 RPC 令牌以明文字面量
+#      与请求头比较（具体字面量已从本文件注释中移除，见 git 历史）；
+#   2) nexus-core/.../controller/PoolController.java —— 池管理令牌的 sha3 摘要
+#      常量随源码入库（同上）。
 # 两处均已改为配置注入 + 常量时间比较 + fail-closed（见上述类注释与
 # application.properties 的「安全配置补全」节）。
 # 本规则针对该反模式设防：名为 token/apikey/secret/password 等的变量
 # **直接与字符串字面量 equals**（正确做法是配置/密钥管理 + 常量时间比较）。
-# 存量校验（2026-09-17）：git grep 该模式全仓 0 命中，不会产生误报。
+# 注意：本规则会命中 git 历史中的旧实现（全历史扫描见下 allowlist 说明）。
 [[rules]]
 id = "nexus-hardcoded-token-literal"
 description = "硬编码静态凭据：token/apikey/secret/password 等变量与字符串字面量直接 equals 比较（应改为配置注入 + 常量时间比较）"
 regex = '''(?i)\b(token|tokenhash|hash|digest|shahash|api_?key|apikey|secret|passwd|password|credential)\s*\.\s*equals\s*\(\s*"[^"\s]{8,}"\s*\)'''
 tags = ["nexus", "credential"]
+
+# 仅豁免上述两个**已移除**的历史字面量（它们在 git 历史中已公开、当前代码已改配置注入）。
+# 精确到这两个值：任何"新"硬编码令牌不匹配此白名单，仍会被上面的规则拦下。
+[rules.allowlist]
+description = "历史已移除的两处静态凭据字面量（防全历史扫描对已修复 commit 报警）"
+regexes = [
+    '''NUMtD0dEXungVX7eLuXkEurH5BCJzw''',
+    '''a772c260ae19e8972f1da3af77492fdb6b40f34a9b34b4a9021ecfd900f21e53''',
+]

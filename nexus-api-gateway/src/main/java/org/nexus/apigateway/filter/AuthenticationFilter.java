@@ -138,6 +138,14 @@ public class AuthenticationFilter implements GlobalFilter, Ordered {
     private boolean legacyHeadersEnabled;
 
     /**
+     * 是否接受 v1（无分隔符拼接）签名。默认 true（兼容期）；生产迁移完成后置
+     * {@code false} 仅接受 v2（长度前缀 canonical，抗字段边界碰撞）。
+     * 短期项 #4（2026-09-17）。
+     */
+    @Value("${nexus.api-gateway.auth.signature-legacy-enabled:true}")
+    private boolean signatureLegacyEnabled;
+
+    /**
      * Nonce -> expiry(ms)。已过期的 entry 惰性驱逐。
      * <p>单实例 MVP 使用内存 Map；多实例部署需替换为 Redis SET NX + TTL 共享存储。</p>
      */
@@ -204,9 +212,9 @@ public class AuthenticationFilter implements GlobalFilter, Ordered {
         final String nonce = ah.nonce;
         return readAndCacheBody(exchange).flatMap(cached -> {
             String body = cached.body();
-            // 签名验证
-            if (!verifyHmac(timestamp, nonce, method, path, body, signature)) {
-                log.warn("鉴权失败：HMAC 签名不匹配，path={}, method={}, legacy={}", path, method, legacy);
+            // 签名验证（v2 长度前缀优先；v1 拼接仅在兼容期接受）
+            if (!verifyHmac(apiKey, timestamp, nonce, method, path, body, signature)) {
+                log.warn("鉴权失败：HMAC 签名不匹配（或 v1 签名在 signature-legacy-enabled=false 时被拒），path={}, method={}, legacy={}", path, method, legacy);
                 return reject(exchange, "invalid signature");
             }
             // Nonce 防重放：新协议要求 nonce 必填；兼容期旧头无 nonce 字段，跳过防重放检查
@@ -317,18 +325,35 @@ public class AuthenticationFilter implements GlobalFilter, Ordered {
     /**
      * 验证 HMAC-SHA256 签名。
      *
+     * <p><b>v2 协议（短期项 #4，2026-09-17）</b>：签名头以 {@code "v2:"} 前缀标识
+     * 长度前缀 canonical（字段边界不可平移），并将 API Key 纳入签名——消除 v1 的
+     * 两个缺陷：无分隔符碰撞、签名与 API Key 解绑。v1 拼接签名仅在
+     * {@code signature-legacy-enabled=true}（兼容期）被接受。</p>
+     *
+     * @param apiKey    已鉴权的 API Key（v2 签名输入的一部分）
      * @param timestamp 客户端时间戳
      * @param nonce     客户端 nonce（兼容期旧头可能为 null）
      * @param method    HTTP 方法
      * @param path      请求路径
      * @param body      请求体字符串
-     * @param signature 客户端签名（小写十六进制）
+     * @param signature 客户端签名（小写十六进制；v2 带 {@code v2:} 前缀）
      * @return true 若签名匹配
      */
-    private boolean verifyHmac(String timestamp, String nonce, String method, String path, String body, String signature) {
-        // 签名串：timestamp + nonce + method + path + body（直接拼接，与 nexus-gateway 一致）
-        String payload = nullToEmpty(timestamp) + nullToEmpty(nonce)
-                + nullToEmpty(method) + nullToEmpty(path) + (body != null ? body : "");
+    private boolean verifyHmac(String apiKey, String timestamp, String nonce, String method, String path, String body, String signature) {
+        String payload;
+        if (signature != null && signature.startsWith("v2:")) {
+            // v2：NXC2|len:apiKey|len:ts|len:nonce|len:method|len:path|len:body（长度=UTF-8 字节数）
+            payload = canonicalV2(apiKey, timestamp, nonce, method, path, body);
+            signature = signature.substring(3);
+        } else {
+            if (!signatureLegacyEnabled) {
+                log.warn("拒绝 v1（无分隔符拼接）签名：signature-legacy-enabled=false，请客户端迁移至 v2 canonical");
+                return false;
+            }
+            // v1 签名串：timestamp + nonce + method + path + body（直接拼接，向后兼容）
+            payload = nullToEmpty(timestamp) + nullToEmpty(nonce)
+                    + nullToEmpty(method) + nullToEmpty(path) + (body != null ? body : "");
+        }
         try {
             Mac mac = Mac.getInstance(HMAC_ALGORITHM);
             SecretKeySpec keySpec = new SecretKeySpec(hmacSecret.getBytes(StandardCharsets.UTF_8), HMAC_ALGORITHM);
@@ -341,6 +366,24 @@ public class AuthenticationFilter implements GlobalFilter, Ordered {
             log.debug("HMAC 计算异常", e);
             return false;
         }
+    }
+
+    /** v2 canonical 串（与 nexus-gateway RequestSignatureInterceptor.canonicalV2 等值，多其一 apiKey 字段）。 */
+    static String canonicalV2(String apiKey, String timestamp, String nonce, String method, String path, String body) {
+        StringBuilder sb = new StringBuilder(64);
+        sb.append("NXC2|");
+        appendField(sb, apiKey);
+        appendField(sb, timestamp);
+        appendField(sb, nonce);
+        appendField(sb, method);
+        appendField(sb, path);
+        appendField(sb, body);
+        return sb.toString();
+    }
+
+    private static void appendField(StringBuilder sb, String value) {
+        String v = value == null ? "" : value;
+        sb.append(v.getBytes(StandardCharsets.UTF_8).length).append(':').append(v).append('|');
     }
 
     /** 字节数组 → 小写十六进制字符串（与 nexus-gateway computeSignature 一致）。 */

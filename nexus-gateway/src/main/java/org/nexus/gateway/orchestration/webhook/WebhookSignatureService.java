@@ -41,6 +41,12 @@ public class WebhookSignatureService {
     /** 签名请求头名称。 */
     public static final String SIGNATURE_HEADER = "X-NexusChain-Signature";
 
+    /** v2 签名配套：投递 ID 请求头（与签名绑定）。 */
+    public static final String DELIVERY_ID_HEADER = "X-NexusChain-Delivery-Id";
+
+    /** v2 签名配套：时间戳请求头（与签名绑定；接收方可据此判新鲜度）。 */
+    public static final String TIMESTAMP_HEADER = "X-NexusChain-Timestamp";
+
     /** 确定性（sorted-key）JSON mapper，保证签名对称。 */
     private static final ObjectMapper CANONICAL_MAPPER = new ObjectMapper()
             .configure(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS, true);
@@ -82,6 +88,62 @@ public class WebhookSignatureService {
             return "";
         }
         return computeHmacHex(payloadJson, secret);
+    }
+
+    // ==================== v2 签名（短期项 #4c，2026-09-17）====================
+
+    /**
+     * v2 签名：绑定 deliveryId + 时间戳 + canonical payload。
+     *
+     * <p><b>动机</b>：v1 签名仅覆盖 payload，接收方无法判新鲜度——同一
+     * payload+签名可被无限重放。v2 把投递 ID 与时间戳纳入签名
+     * （canonical = "NXCW|" + len:deliveryId + "|" + len:timestamp + "|" + len:json），
+     * 接收方可校验时间戳头与签名一致，并按自身策略拒绝过期投递。</p>
+     *
+     * <p>长度按 UTF-8 字节计；timestamp 须传"随请求头原样发送的字符串"，
+     * 保证发送方签名与接收方验证字节级一致。</p>
+     *
+     * @return "v2:" + hex 编码签名；secret 为空返回空字符串
+     */
+    public String signV2(Map<String, Object> payload, String secret, String deliveryId, String timestamp) {
+        if (payload == null) {
+            throw new IllegalArgumentException("payload must not be null");
+        }
+        if (secret == null || secret.isEmpty()) {
+            return "";
+        }
+        return "v2:" + computeHmacHex(canonicalV2(deliveryId, timestamp, canonicalize(payload)), secret);
+    }
+
+    /**
+     * 验证 v2 签名（须与 {@link #DELIVERY_ID_HEADER} / {@link #TIMESTAMP_HEADER}
+     * 头中收到的值配合使用）。
+     */
+    public boolean verifyV2(Map<String, Object> payload, String secret, String signature,
+                            String deliveryId, String timestamp) {
+        if (signature == null || !signature.startsWith("v2:")) {
+            return false;
+        }
+        String expected = signV2(payload, secret, deliveryId, timestamp);
+        if (expected.isEmpty()) {
+            return false;
+        }
+        return constantTimeEquals(expected, signature);
+    }
+
+    /** v2 canonical（签名输入），供发送方/测试对照。 */
+    static String canonicalV2(String deliveryId, String timestamp, String canonicalJson) {
+        StringBuilder sb = new StringBuilder(64);
+        sb.append("NXCW|");
+        appendField(sb, deliveryId);
+        appendField(sb, timestamp);
+        appendField(sb, canonicalJson);
+        return sb.toString();
+    }
+
+    private static void appendField(StringBuilder sb, String value) {
+        String v = value == null ? "" : value;
+        sb.append(v.getBytes(StandardCharsets.UTF_8).length).append(':').append(v).append('|');
     }
 
     /**

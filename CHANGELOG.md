@@ -2,6 +2,79 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [Unreleased]
+
+### 交付前审计整改（立即项 + 短期项，2026-09-17）
+
+#### Fixed（安全）
+
+- **移除两处硬编码静态凭据（S-1/S-2，立即项）**：
+  - `RpcInterceptor`（保护 `/NexusChainCore/*`）：明文令牌与请求头直接
+    `equals` 比较（随源码公开、无法轮换）→ 配置注入
+    `nexus.security.rpc-incubate-token`（env `NEXUS_RPC_INCUBATE_TOKEN`）+
+    常量时间比较 + **fail-closed**（未配置=拒绝全部请求）；
+    新增 `RpcInterceptorTest`（5 用例）。
+  - `PoolController`（`/deletePendpool`、`/updatePtNonce`）：sha3-256 摘要
+    常量硬编码 → 配置注入 `nexus.pool.admin-token-sha3`
+    （env `NEXUS_POOL_ADMIN_TOKEN_SHA3`）+ 格式校验（64 hex）+
+    `MessageDigest.isEqual` 常量时间比较 + fail-closed；
+    新增 `PoolControllerAdminTokenTest`（5 用例，含"拒绝路径零池操作"）。
+  - 两处旧字面量仍在 git 历史中（已视为泄露），须注入新随机值轮换。
+- **请求签名协议 v1 无分隔符碰撞（短期项 #4）**：v1 canonical 为
+  `ts+nonce+method+path+body` 直接拼接，字段边界可平移产生同签名。
+  新增 **v2 canonical**（长度前缀 `NXC2|len:field|...`，UTF-8 字节数，
+  多语言字节级一致），签名头带 `v2:` 前缀；兼容开关
+  `nexus.security.signature-legacy-enabled`（gateway）/
+  `nexus.api-gateway.auth.signature-legacy-enabled`（api-gateway），
+  默认 true 兼容期，false 时仅接受 v2。api-gateway 侧 v2 同时**绑定
+  API Key**（v1 签名与 API Key 解绑）。两侧服务端 + TS 前端 + k6 工具
+  已全部切换为产出 v2；新增 v1 碰撞回归测试（v1 下 `("12","34")` 与
+  `("123","4")` 同签名，v2 区分）。
+- **Webhook 签名无新鲜度（短期项 #4c）**：v1 签名仅覆盖 payload，同一
+  payload+签名可无限重放。新增 **v2 webhook 签名**（绑定
+  `X-NexusChain-Delivery-Id` + `X-NexusChain-Timestamp` + canonical
+  payload，`NXCW|len:...`）；`WebhookDeliveryService`/`PaymentEventListener`
+  投递侧默认产出 v2（重试共用 deliveryId、按次重签）；
+  `/api/v1/webhooks/chain-events` 接收侧 v1/v2 双接受，开关
+  `nexus.webhook.require-v2`（默认 false，置 true 拒绝 v1）。
+- **`nexus-core` 关键安全配置不可从 git 复现（附带修复）**：
+  `nexus.security.jwt.*` 此前仅存在于未被跟踪的 application.yml
+  （.gitignore 排除），全新 clone 启动即 fail-closed 失败。补入
+  tracked 的 `application.properties`（语义不变，仍须环境变量注入）。
+
+#### Added
+
+- **许可合规披露（立即项 #1）**：新增 `NOTICE`（分模块许可声明）与
+  `docs/licensing.md`（证据与待办清单）；README 许可证章节改为分模块
+  声明。核心事实：`nexus-core/LICENSE` 为 LGPL v3 全文、166 个 Java 文件
+  带 LGPL 头（162 core + 4 consortium）、多处 package.json 声明 MIT。
+  **注意：这是声明盘点而非合规结论**——法务确认、clean-room 重写决策、
+  依赖许可清单化仍为待办（见 docs/licensing.md §5）。
+- **CI 门禁**：`scripts/check-license-headers.sh`（声明存在性 +
+  GNU 系许可头越界防护，POSIX sh 兼容）接入 ci.yml；
+  gitleaks 新增 `nexus-hardcoded-token-literal` 规则（token/apikey/
+  secret 等与字符串字面量直接 equals 的反模式；精确豁免两个已移除的
+  历史字面量以防全历史扫描对已修复 commit 报警——对新值仍生效）；
+  explorer 前端测试（vitest，98 用例）与 tsc 类型检查接入 ci.yml
+  （此前前端回归零 CI 保护）。
+
+#### Removed
+
+- `nexus-explorer/frontend/dist/**` 出库（3 个已跟踪构建产物
+  `git rm --cached`）并加入 .gitignore；vite timestamp 临时文件同忽略。
+
+#### Docs
+
+- README：移除硬编码"当前版本 v2.40.0"（构建侧单一来源为根 build.gradle
+  的 version=2.50.0，发布说明见 CHANGELOG）；MPC 默认运行态声明
+  （默认 GG20 可信协调器；CGGMP21 需显式开启）；
+  `PLAN-001-gg20-retirement` 入库（状态：设计稿未实施）。
+- 纠正评估报告三处过时结论：`extract_private_share` 已拒绝跨方提取；
+  CGGMP21 sign 转发已实现（`cg_start_sign`/`cg_relay_*`/`sign_sync`，
+  distributed.rs 的限制属旧 GG20 阶段一）；"托管为模拟"已被链上执行
+  通道取代（DefaultCustodyService fail-closed）。
+- 根/nexus-core build.gradle 清理 Boot 3.2.5 陈旧注释（现 4.0.8）。
+
 ## [2.50.0] - 2026-09-07
 
 ### K 批发布闭环（PLAN-002——可上 K8s 生产的基础设施就绪）

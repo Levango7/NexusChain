@@ -310,6 +310,10 @@ public class WebhookDeliveryService {
 
     /**
      * 构建投递请求头（含签名）。
+     *
+     * <p>短期项 #4c（2026-09-17）：签名升级为 v2——绑定 deliveryId + 时间戳 +
+     * canonical payload，接收方可校验时间戳头与签名一致并拒绝过期重放。
+     * 每次投递/重试按当次时间戳重签（时间戳头与签名严格一致）。</p>
      */
     private HttpHeaders buildHeaders(WebhookDeliveryRecord record, Map<String, Object> payload) {
         HttpHeaders headers = new HttpHeaders();
@@ -318,9 +322,15 @@ public class WebhookDeliveryService {
         Object event = payload.get("event");
         headers.set("X-NexusChain-Event", event != null ? String.valueOf(event) : "unknown");
         headers.set("X-NexusChain-Payment-Id", record.getPaymentId());
-        headers.set("X-NexusChain-Timestamp", Instant.now().toString());
+        // v2：时间戳先入头，再参与签名（保证接收方按头验证字节级一致）
+        String timestamp = Instant.now().toString();
+        headers.set("X-NexusChain-Timestamp", timestamp);
         headers.set("X-NexusChain-Delivery-Id", record.getDeliveryId());
-        if (record.getSignature() != null && !record.getSignature().isEmpty()) {
+        String v2Signature = signatureService.signV2(payload, signingSecret, record.getDeliveryId(), timestamp);
+        if (!v2Signature.isEmpty()) {
+            headers.set(WebhookSignatureService.SIGNATURE_HEADER, v2Signature);
+        } else if (record.getSignature() != null && !record.getSignature().isEmpty()) {
+            // signingSecret 未配置（如独立测试环境）：退回创建时记录的 v1 签名（fail-safe，不无签名裸投）
             headers.set(WebhookSignatureService.SIGNATURE_HEADER, record.getSignature());
         }
         return headers;

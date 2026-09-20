@@ -100,7 +100,7 @@ class WebhookDeliveryServiceTest {
     }
 
     @Test
-    @DisplayName("deliver: 携带 X-NexusChain-Signature 请求头")
+    @DisplayName("deliver: 携带 v2 X-NexusChain-Signature 请求头（绑定 deliveryId+timestamp）")
     void deliver_carriesSignatureHeader() {
         when(repository.findByPaymentIdAndStatus(anyString(), anyString()))
                 .thenReturn(Optional.empty());
@@ -118,11 +118,15 @@ class WebhookDeliveryServiceTest {
         HttpEntity<Map<String, Object>> entity = captor.getValue();
         String signature = entity.getHeaders().getFirst(WebhookSignatureService.SIGNATURE_HEADER);
         assertNotNull(signature, "Signature header should be present");
-        assertEquals(64, signature.length(), "Signature should be 64 hex chars");
+        assertTrue(signature.startsWith("v2:"), "短期项 #4c：投递签名应为 v2（绑定 deliveryId+timestamp）");
 
-        // 验证签名正确性
-        String expectedSig = signatureService.sign(payload, SECRET);
-        assertEquals(expectedSig, signature);
+        // v2 签名与头中的 deliveryId/timestamp 严格一致（接收方可按头验证）
+        String deliveryId = entity.getHeaders().getFirst(WebhookSignatureService.DELIVERY_ID_HEADER);
+        String timestamp = entity.getHeaders().getFirst(WebhookSignatureService.TIMESTAMP_HEADER);
+        assertNotNull(deliveryId, "v2 签名必须携带 Delivery-Id 头");
+        assertNotNull(timestamp, "v2 签名必须携带 Timestamp 头");
+        String expectedSig = signatureService.signV2(payload, SECRET, deliveryId, timestamp);
+        assertEquals(expectedSig, signature, "v2 签名应与按头重算结果一致");
     }
 
     @Test

@@ -1,17 +1,26 @@
 /**
  * Request signing utilities for the NexusChain gateway.
  *
- * Mirrors the canonical-string and HMAC-SHA256 scheme enforced server-side by
- * {@code org.nexus.gateway.security.RequestSignatureInterceptor}:
+ * Mirrors the HMAC-SHA256 scheme enforced server-side by
+ * {@code org.nexus.gateway.security.RequestSignatureInterceptor}.
  *
- *   canonical = timestamp + nonce + method + path + body
- *   signature = lowerHex( HMAC-SHA256(canonical, secret) )
+ * Two protocol versions exist:
+ *   v1 (legacy, delimiter-free concatenation):
+ *       canonical = timestamp + nonce + method + path + body
+ *       signature = lowerHex( HMAC-SHA256(canonical, secret) )
+ *     — 字段边界可平移碰撞（短期项 #4 记录的缺陷）。仅兼容期服务端接受。
+ *   v2 (length-prefixed canonical, collision-proof):
+ *       canonical = "NXC2|" + len(ts)+":"+ts + "|" + len(nonce)+":"+nonce
+ *                 + "|" + len(method)+":"+method + "|" + len(path)+":"+path
+ *                 + "|" + len(body)+":"+body
+ *       signature = "v2:" + lowerHex( HMAC-SHA256(canonical, secret) )
+ *     — 长度按 UTF-8 字节计，多语言字节级一致。新客户端默认应产出 v2。
  *
  * Headers injected on protected (/api/v1/payments/**) endpoints:
  *   - X-NexusChain-ApiKey
  *   - X-NexusChain-Timestamp   (unix millis, string)
  *   - X-NexusChain-Nonce       (unique per request)
- *   - X-NexusChain-Signature   (hex lowercase)
+ *   - X-NexusChain-Signature   ("v2:" + hex lowercase)
  *
  * The signing is performed with the Web Crypto API (crypto.subtle), which is
  * asynchronous — every signer here returns a Promise.
@@ -41,7 +50,7 @@ export interface SignRequestParams {
 /**
  * Compute the canonical request string used by the gateway.
  *
- *   canonical = timestamp + nonce + method + path + body
+ *   canonical = timestamp + nonce + method + path + body   （v1，legacy）
  *
  * Order and empty-string handling must match
  * {@code RequestSignatureInterceptor.computeSignature} byte-for-byte.
@@ -60,6 +69,25 @@ export function buildCanonicalString(
     (path ?? "") +
     (body ?? "")
   );
+}
+
+/**
+ * Compute the v2 length-prefixed canonical string (collision-proof).
+ * Lengths are UTF-8 byte counts; must match
+ * {@code RequestSignatureInterceptor.canonicalV2} byte-for-byte.
+ */
+export function buildCanonicalStringV2(
+  timestamp: string,
+  nonce: string,
+  method: string,
+  path: string,
+  body?: string,
+): string {
+  const field = (v: string | undefined): string => {
+    const s = v ?? "";
+    return `${new TextEncoder().encode(s).length}:${s}|`;
+  };
+  return "NXC2|" + field(timestamp) + field(nonce) + field(method) + field(path) + field(body);
 }
 
 /**
@@ -89,7 +117,7 @@ export async function signRequest(params: SignRequestParams): Promise<string> {
 
   const timestamp = generateTimestamp();
   const nonce = generateNonce();
-  const canonical = buildCanonicalString(timestamp, nonce, method, path, body);
+  const canonical = buildCanonicalStringV2(timestamp, nonce, method, path, body);
 
   // Import the secret as an HMAC key once per call. Web Crypto re-derives
   // the key schedule internally; for high-volume callers a cached CryptoKey
@@ -109,7 +137,7 @@ export async function signRequest(params: SignRequestParams): Promise<string> {
   );
   const signature = bufferToHex(signatureBuf);
 
-  return signature;
+  return "v2:" + signature;
 }
 
 /** Current time as a unix-millis string (matches gateway's Long.parseLong). */
@@ -154,7 +182,7 @@ export async function buildAuthHeaders(
 
   const timestamp = generateTimestamp();
   const nonce = generateNonce();
-  const canonical = buildCanonicalString(timestamp, nonce, method, path, body);
+  const canonical = buildCanonicalStringV2(timestamp, nonce, method, path, body);
 
   const encoder = new TextEncoder();
   const key = await crypto.subtle.importKey(
@@ -169,7 +197,7 @@ export async function buildAuthHeaders(
     key,
     encoder.encode(canonical),
   );
-  const signature = bufferToHex(signatureBuf);
+  const signature = "v2:" + bufferToHex(signatureBuf);
 
   return {
     [AUTH_HEADERS.API_KEY]: apiKey,

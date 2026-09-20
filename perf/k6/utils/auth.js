@@ -7,9 +7,11 @@
  *       头：X-NexusChain-ApiKey
  *   - nexus-gateway/.../RequestSignatureInterceptor.java
  *       头：X-NexusChain-Timestamp / X-NexusChain-Nonce / X-NexusChain-Signature
- *       签名载荷：timestamp + nonce + method + path + body
- *       算法：HMAC-SHA256，输出 hex(lowercase)
+ *       v2 签名载荷（短期项 #4）："NXC2|" + len(ts)+":"+ts + "|" + len(nonce)+":"+nonce
+ *           + "|" + len(method)+":"+method + "|" + len(path)+":"+path + "|" + len(body)+":"+body
+ *       算法：HMAC-SHA256，输出 "v2:" + hex(lowercase)
  *       时间窗：±5min；Nonce 不可重放
+ *       （v1 无分隔符拼接已在服务端标记为 legacy；本工具产出 v2。）
  *
  * k6 内置 crypto/hmac 模块（k6 ≥ 0.43）；如运行旧版 k6，可改用 k6 crypto 的
  * hmac 简化 API。本实现兼容 k6 0.43+ 的 `hmac("sha256", key, msg, "hex")`。
@@ -92,8 +94,13 @@ export function buildAuthHeaders(method, path, body) {
   const timestamp = Date.now().toString();
   const nonce = genNonce();
   const safeBody = body || "";
-  const payload = timestamp + nonce + method + path + safeBody;
-  const signature = hmacSha256Hex(SIGNING_SECRET, payload);
+  // v2 canonical（长度前缀，UTF-8 字节数；与服务端 canonicalV2 字节级一致）。
+  // 注意：k6 的 JS 运行时（goja）无 TextEncoder——用 unescape/encodeURIComponent
+  // 推导 UTF-8 字节长度（经典 JS 技巧，k6 兼容）。
+  const utf8Len = (s) => unescape(encodeURIComponent(s)).length;
+  const field = (v) => `${utf8Len(v)}:${v}|`;
+  const payload = "NXC2|" + field(timestamp) + field(nonce) + field(method) + field(path) + field(safeBody);
+  const signature = "v2:" + hmacSha256Hex(SIGNING_SECRET, payload);
 
   return {
     [HEADER_API_KEY]: API_KEY,

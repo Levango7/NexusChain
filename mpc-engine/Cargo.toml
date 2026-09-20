@@ -22,18 +22,17 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # === 阈值签名密码学库（真实 GG18/GG20 门限 ECDSA）===
 # ZenGo-X/KZen multi-party-ecdsa：GG18/GG20 ECDSA 阈值签名的成熟 Rust 实现
 # （真实 Paillier 密钥、Feldman VSS、MtA、ZK 证明，非模拟）。
-# 许可证 GPL-3.0-or-later。mpc-engine 作为独立进程经 gRPC 与外界通信，
-# GPL 传染性限于本二进制，不影响仓库其余 Apache-2.0 组件（进程隔离）。
+# 许可证声明 GPL-3.0-or-later。分发本二进制与组合交付物前须审查对应义务；
+# 独立进程和 gRPC 接口不单独构成法律上的免责依据，见 NOTICE。
 # 版本 0.8.1 依赖 curv-kzen 0.9 / kzen-paillier 0.4.2 / sha2 0.9 / secp256k1 0.20，
 # 此处显式声明同版本以让 cargo 统一解析。
 #
 # v2.2.0 阶段二（2026-09-01）：分布式 sign 路径的实现引擎为 cggmp21（见下）。
 # **注意（2026-09-17 审计核实）：该路径默认关闭**——Java 侧 `mpc.engine.cggmp-enabled`
-# 默认 false（nexus-signing-service/src/main/resources/application.yml），
-# 故开箱运行态仍是本 crate 对应的「单进程可信协调器 GG20」路径；
-# 且分布式 sign 阶段的消息转发尚未实现（src/server.rs 对该 RPC 返回
-# not-available，见 src/distributed.rs 模块头说明）。
-# 不得据此声明"已启用分布式门限签名"。
+# 默认 false（nexus-signing-service/src/main/resources/application.yml）。
+# 默认 GG20 可信协调器持有全量份额；实际部署可覆盖该开关启用 CGGMP21。
+# CGGMP21 已实现 cg_start_sign、cg_relay_publish/cg_relay_pull 和 sign_sync；
+# distributed.rs 的阶段一 sign relay 限制属于旧 GG20，不能用于否定 CGGMP21。
 # multi-party-ecdsa 保留给单进程可信协调器路径（gg20.rs/sign.rs/aggregate.rs，
 # Java E2E 与集成测试依赖），两条路径并存直至协调器路径退役
 # （退役设计见 docs/plan/PLAN-001-gg20-retirement.md，状态：设计稿，未实施）。

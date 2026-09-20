@@ -85,6 +85,9 @@ nexus:
       replay-window-ms: 300000
       # 兼容期：是否接受旧 X-Nexus-* 头（deprecated）。迁移完成后置 false
       legacy-headers-enabled: ${NEX_AUTH_LEGACY_HEADERS:true}
+      # 短期项 #4（2026-09-17）：v2 canonical 签名（长度前缀 + 绑定 API Key）。
+      # true（默认，兼容期）：同时接受 v1 与 v2；false（迁移完成后）：仅接受 v2。
+      signature-legacy-enabled: ${NEX_SIGNATURE_LEGACY_ENABLED:true}
 
     # === 限流配置（RateLimitFilter） ===
     ratelimit:

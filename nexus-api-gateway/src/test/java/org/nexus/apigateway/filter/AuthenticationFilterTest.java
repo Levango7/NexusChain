@@ -37,6 +37,8 @@ class AuthenticationFilterTest {
         setField(filter, "maxTimestampSkewSeconds", 300L);
         setField(filter, "replayWindowMs", 300_000L);
         setField(filter, "legacyHeadersEnabled", true);
+        // v1 拼接签名在单元测试（无 Spring 注入）中默认 legacy=false，须显式打开兼容期
+        setField(filter, "signatureLegacyEnabled", true);
         // 清空 nonce 缓存（每次测试独立）
         clearNonceCache(filter);
     }
@@ -323,9 +325,9 @@ class AuthenticationFilterTest {
         String nonce = "nonce-reflect";
         String sig = hmacHex(payload(ts, nonce, "GET", "/api/v1/payments", ""));
         Method m = AuthenticationFilter.class.getDeclaredMethod(
-                "verifyHmac", String.class, String.class, String.class, String.class, String.class, String.class);
+                "verifyHmac", String.class, String.class, String.class, String.class, String.class, String.class, String.class);
         m.setAccessible(true);
-        assertTrue((Boolean) m.invoke(filter, ts, nonce, "GET", "/api/v1/payments", "", sig),
+        assertTrue((Boolean) m.invoke(filter, VALID_KEY, ts, nonce, "GET", "/api/v1/payments", "", sig),
                 "hex 签名应验证通过");
     }
 
@@ -340,9 +342,50 @@ class AuthenticationFilterTest {
         byte[] hash = mac.doFinal(payload(ts, nonce, "GET", "/api/v1/payments", "").getBytes(StandardCharsets.UTF_8));
         String b64Sig = java.util.Base64.getEncoder().encodeToString(hash);
         Method m = AuthenticationFilter.class.getDeclaredMethod(
-                "verifyHmac", String.class, String.class, String.class, String.class, String.class, String.class);
+                "verifyHmac", String.class, String.class, String.class, String.class, String.class, String.class, String.class);
         m.setAccessible(true);
-        assertFalse((Boolean) m.invoke(filter, ts, nonce, "GET", "/api/v1/payments", "", b64Sig),
+        assertFalse((Boolean) m.invoke(filter, VALID_KEY, ts, nonce, "GET", "/api/v1/payments", "", b64Sig),
                 "Base64 签名应被拒绝（统一为 hex）");
+    }
+
+    // ===== v2 canonical（短期项 #4：长度前缀 + 绑定 API Key）=====
+
+    @Test
+    void verifyHmac_v2_bindsApiKey() throws Exception {
+        long now = System.currentTimeMillis();
+        String ts = String.valueOf(now);
+        String nonce = "nonce-v2";
+        String canonical = AuthenticationFilter.canonicalV2(VALID_KEY, ts, nonce, "GET", "/api/v1/payments", "");
+        String sig = "v2:" + hmacHex(canonical);
+        Method m = AuthenticationFilter.class.getDeclaredMethod(
+                "verifyHmac", String.class, String.class, String.class, String.class, String.class, String.class, String.class);
+        m.setAccessible(true);
+        assertTrue((Boolean) m.invoke(filter, VALID_KEY, ts, nonce, "GET", "/api/v1/payments", "", sig),
+                "v2 签名应验证通过");
+        // 同一签名换 API Key → 必须失败（v2 把 apiKey 绑进签名，v1 无此性质）
+        assertFalse((Boolean) m.invoke(filter, "other-api-key", ts, nonce, "GET", "/api/v1/payments", "", sig),
+                "v2 签名必须绑定 API Key");
+    }
+
+    @Test
+    void verifyHmac_v2_noBoundaryCollision() {
+        // v2 canonical：字段边界平移不再产生同一串
+        assertNotEquals(
+                AuthenticationFilter.canonicalV2(VALID_KEY, "12", "34", "GET", "/p", ""),
+                AuthenticationFilter.canonicalV2(VALID_KEY, "123", "4", "GET", "/p", ""));
+    }
+
+    @Test
+    void verifyHmac_legacyDisabled_rejectsV1() throws Exception {
+        setField(filter, "signatureLegacyEnabled", false);
+        long now = System.currentTimeMillis();
+        String ts = String.valueOf(now);
+        String nonce = "nonce-legacy-off";
+        String sig = hmacHex(payload(ts, nonce, "GET", "/api/v1/payments", ""));
+        Method m = AuthenticationFilter.class.getDeclaredMethod(
+                "verifyHmac", String.class, String.class, String.class, String.class, String.class, String.class, String.class);
+        m.setAccessible(true);
+        assertFalse((Boolean) m.invoke(filter, VALID_KEY, ts, nonce, "GET", "/api/v1/payments", "", sig),
+                "signature-legacy-enabled=false 时 v1 必须拒绝");
     }
 }

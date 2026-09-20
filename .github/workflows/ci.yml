@@ -152,6 +152,20 @@ jobs:
             --tests "org.nexus.bridge.safety.DefaultInsuranceFundTest" \
             --no-daemon
 
+      # 短期项 #5（2026-09-17）：explorer 前端进入 CI 门禁。
+      # 此前 10 个 vitest 测试文件（93 用例）没有任何 CI job 执行——
+      # 前端回归零保护（审计发现）。此处与 SDK TS job 同用 Node 22。
+      - name: Explorer Frontend tests (vitest)
+        working-directory: nexus-explorer/frontend
+        run: |
+          npm ci --no-audit --no-fund
+          npm run test
+
+      # 短期项 #5 附带：explorer 前端 TS 类型检查（build 依赖 tsc）
+      - name: Explorer Frontend type-check (tsc)
+        working-directory: nexus-explorer/frontend
+        run: npm run build
+
       # P2-C6: Rust 测试（mpc-engine）
       # 通过 dtolnay/rust-toolchain@stable 显式安装 Rust 工具链，作为强制门禁。
       - name: Setup Rust toolchain

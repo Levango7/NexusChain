@@ -116,10 +116,11 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
 > 2. 路径选择逻辑 `ColdWalletMultiSigService.selectActiveEngine()` 在 `false` 时返回 GG20 引擎（类注释亦如此声明）；
 > 3. GG20 签名在协调进程内一次性执行全部签名方（`mpc-engine/src/sign.rs` 日志 "trusted-coordinator, in-process"）。
 >
-> CGGMP21 分散式路径**已实现但需显式开启**，且其 **sign 阶段消息转发尚未实现**
-> （`mpc-engine/src/server.rs` 对分布式 sign relay 返回 not-available；`mpc-engine/src/distributed.rs` 模块头
-> 说明上游消息类型私有）。
-> **对外材料不得表述为"已启用分布式门限签名/2-of-3 MPC 门限安全"**；退役旧路径的计划见
+> CGGMP21 路径已包含 `cg_start_sign`、`cg_relay_publish`、`cg_relay_pull`
+> （`mpc-engine/src/server.rs`）以及 `sign_sync`（`mpc-engine/src/cggmp.rs`）。
+> 旧 `distributed.rs` 所述 sign relay 限制属于 GG20 阶段一路径，**不适用于 CGGMP21**。
+> 基础配置默认关闭 CGGMP21，不代表所有部署均未启用；实际能力需核对部署覆盖值和端到端测试。
+> 旧路径退役设计见
 > [docs/plan/PLAN-001-gg20-retirement.md](docs/plan/PLAN-001-gg20-retirement.md)（状态：设计稿，**未实施**）。
 
 - **Rust `mpc-engine`**：已接入 ZenGo-X/KZen `multi-party-ecdsa` 0.8.1 crate，实现**真实 GG20 门限 ECDSA**（真实 Paillier、Feldman VSS、MtA、ZK 证明，产出可被标准 secp256k1 验证的签名）。

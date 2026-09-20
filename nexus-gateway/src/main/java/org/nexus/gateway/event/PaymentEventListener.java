@@ -136,6 +136,9 @@ public class PaymentEventListener {
 
     /**
      * Send webhook callback to the merchant's notify URL with HMAC signature.
+     *
+     * <p>短期项 #4c（2026-09-17）：签名升级为 v2——绑定 deliveryId + 时间戳 +
+     * canonical payload（接收方可校验时间戳头并拒绝过期重放）。</p>
      */
     private void sendWebhook(Long merchantId, Map<String, Object> payload) {
         String callbackUrl = resolveCallbackUrl((Long) payload.get("orderId"));
@@ -146,6 +149,8 @@ public class PaymentEventListener {
             return;
         }
 
+        // 同一事件的首次投递与全部重试共用 deliveryId（接收方可幂等去重）
+        String deliveryId = java.util.UUID.randomUUID().toString().replace("-", "");
         try {
             // Sign the deterministic, sorted-key canonical form so verification
             // (WebhookController.canonicalize) produces an identical string.
@@ -153,9 +158,13 @@ public class PaymentEventListener {
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
 
-            // Sign the payload with HMAC-SHA256
+            // v2 签名：时间戳先入头再参与签名（与接收端验证字节级一致）
             if (secret != null && !secret.isEmpty()) {
-                String signature = computeSignature(canonical, secret);
+                String timestamp = java.time.Instant.now().toString();
+                headers.set("X-NexusChain-Timestamp", timestamp);
+                headers.set("X-NexusChain-Delivery-Id", deliveryId);
+                String signature = "v2:" + computeSignature(
+                        canonicalV2(deliveryId, timestamp, canonical), secret);
                 headers.set("X-NexusChain-Signature", signature);
             }
             headers.set("X-NexusChain-Event", (String) payload.get("eventType"));
@@ -167,7 +176,7 @@ public class PaymentEventListener {
                     merchantId, payload.get("eventType"), resp.getStatusCode().value());
         } catch (RuntimeException e) {
             log.error("Webhook delivery failed: merchant={}, error={}", merchantId, e.getMessage());
-            retryWebhook(callbackUrl, payload, secret, 1);
+            retryWebhook(callbackUrl, payload, secret, deliveryId, 1);
         }
     }
 
@@ -175,7 +184,7 @@ public class PaymentEventListener {
     /**
      * Retry webhook delivery with exponential backoff (max 3 attempts).
      */
-    private void retryWebhook(String url, Map<String, Object> payload, String secret, int attempt) {
+    private void retryWebhook(String url, Map<String, Object> payload, String secret, String deliveryId, int attempt) {
         if (attempt > 3) {
             log.error("Webhook delivery permanently failed after 3 retries, url={}", url);
             return;
@@ -185,7 +194,12 @@ public class PaymentEventListener {
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
             if (secret != null && !secret.isEmpty()) {
-                headers.set("X-NexusChain-Signature", computeSignature(canonicalize(payload), secret));
+                // v2：重试沿用同一 deliveryId、按当次时间戳重签
+                String timestamp = java.time.Instant.now().toString();
+                headers.set("X-NexusChain-Timestamp", timestamp);
+                headers.set("X-NexusChain-Delivery-Id", deliveryId);
+                headers.set("X-NexusChain-Signature", "v2:" + computeSignature(
+                        canonicalV2(deliveryId, timestamp, canonicalize(payload)), secret));
             }
             HttpEntity<Map<String, Object>> request = new HttpEntity<>(payload, headers);
             restTemplate.postForEntity(url, request, String.class);
@@ -194,7 +208,7 @@ public class PaymentEventListener {
             Thread.currentThread().interrupt();
         } catch (RuntimeException e) {
             log.warn("Webhook retry attempt {} failed: {}", attempt, e.getMessage());
-            retryWebhook(url, payload, secret, attempt + 1);
+            retryWebhook(url, payload, secret, deliveryId, attempt + 1);
         }
     }
     private String computeSignature(String payload, String secret) {
@@ -210,6 +224,24 @@ public class PaymentEventListener {
         } catch (java.security.GeneralSecurityException e) {
             throw new RuntimeException("Failed to compute webhook signature", e);
         }
+    }
+
+    /**
+     * v2 canonical（短期项 #4c）：与 WebhookSignatureService.canonicalV2 同构。
+     * NXCW|len:deliveryId|len:timestamp|len:canonicalJson（长度 = UTF-8 字节数）。
+     */
+    private static String canonicalV2(String deliveryId, String timestamp, String canonicalJson) {
+        StringBuilder sb = new StringBuilder(64);
+        sb.append("NXCW|");
+        appendField(sb, deliveryId);
+        appendField(sb, timestamp);
+        appendField(sb, canonicalJson);
+        return sb.toString();
+    }
+
+    private static void appendField(StringBuilder sb, String value) {
+        String v = value == null ? "" : value;
+        sb.append(v.getBytes(StandardCharsets.UTF_8).length).append(':').append(v).append('|');
     }
 
     /**

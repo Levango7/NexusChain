@@ -12,9 +12,10 @@ ext['tomcat.version'] = '11.0.25'
 
 // TD-17（tech-debt-audit）：core 非 Boot 应用（无 Boot 插件），但长期硬编码
 // starter-* 与 spring-context/test 版本，与微服务群的版本来源脱节。此处导入
-// Boot 3.2.5 BOM 作为依赖版本单一来源；因未应用 Boot 插件（SpringBootPlugin
-// 类不在 classpath），直接使用 BOM 坐标字符串。core 保持 application 插件 +
-// mainClass=org.nexus.Start 的非 Boot 应用性质不变。
+// Boot BOM 作为依赖版本单一来源（Boot4 兼容批后为 4.0.8，与全部微服务一致）；
+// 因未应用 Boot 插件（SpringBootPlugin 类不在 classpath），直接使用 BOM 坐标
+// 字符串。core 保持 application 插件 + mainClass=org.nexus.Start 的非 Boot
+// 应用性质不变。
 // 注意：显式声明版本的依赖（如 jackson ${jacksonVersion}=2.15.4、slf4j 2.0.16）
 // 优先于 BOM 管理值，语义不变；BOM 仅对去版本号声明生效。
 dependencyManagement {

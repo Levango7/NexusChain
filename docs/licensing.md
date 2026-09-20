@@ -1,6 +1,9 @@
 # 许可合规说明（Licensing）
 
-> **建立日期**：2026-09-17（交付前静态取证审计发现"整仓声明 Apache-2.0，但 nexus-core 为 LGPL 派生"）
+> **修订说明（2026-09-17）**：本文是仓库声明盘点，不是法律意见或合规认证。
+> 文件头匹配不能证明整个目录均属 LGPL；仅凭进程隔离不能判定 GPL 义务范围。
+> 保留文件级许可和 MIT 组件声明，不通过新增 NOTICE 给现有代码重新许可。
+>
 > **状态**：Active —— 合规声明已落盘；**clean-room 重写 / 法务确认仍为待办**（见 §5）
 > **原则**：结论全部附文件与行号证据，可复核。本文档只陈述仓库内可取证的事实，不构成法律意见。
 
@@ -47,13 +50,12 @@ nexus-consortium/consortium/src/
 
 | 路径 | 许可 | 依据 |
 |---|---|---|
-| `nexus-core/nexus-core/src/**` | **LGPL-3.0-or-later** | 文件头 + `nexus-core/LICENSE` |
-| `nexus-consortium/consortium/src/**`（4 文件） | **LGPL-3.0-or-later** | 文件头 |
-| 其余全部原创模块 | Apache-2.0 | 根 `LICENSE` |
-| `mpc-engine`（Rust） | Apache-2.0（本仓文件）；依赖 `multi-party-ecdsa` = **GPL-3.0-or-later** | `mpc-engine/Cargo.toml` 注释自述"GPL 传染性限于本二进制，进程隔离" |
-| `zk-groth16-service`（Rust） | 见其 Cargo.toml（arkworks 链路） | — |
-| `nexus-core/src/main/java/org/nexus/tools/**` 内嵌 JS（`hashes.js` 61KB / `sha3.js` 22KB / `nacl.min.js` 19KB / `base-x.js` / `base58.js`） | **未标注**，上游遗留，构建不使用 | 见 NOTICE §3 |
-| `nexus-explorer`（前端） | `package.json` 声明 MIT；根 LICENSE 为 Apache-2.0 —— **两处不一致，待统一** | `nexus-explorer/frontend/package.json` `"license": "MIT"` |
+| 根 `LICENSE` | Apache-2.0 文本；不覆盖更具体的文件/组件声明 | 根许可 |
+| `nexus-core/nexus-core/src/` 中匹配文件头的 162 个 Java 文件 | LGPL-3.0-or-later 文件头 | 文件头 + `nexus-core/LICENSE`；不据此判整个目录 |
+| `nexus-consortium/consortium/src/` 中匹配文件头的 4 个 Java 文件 | LGPL-3.0-or-later 文件头 | 保留声明，来源/结合关系待核实 |
+| `mpc-engine` | 本地包声明 Apache-2.0；manifest 注释记录 GPL 依赖 | `Cargo.toml`；分发义务须结合解析依赖与交付形式审查 |
+| `nexus-explorer`（根/前端/后端）、`nexus-devtools`、TS SDK | MIT 组件声明 | 各 `package.json`；与根许可不同不必然冲突 |
+| `nexus-core/nexus-core/src/main/java/org/nexus/tools/` 内嵌 JS | 须逐文件盘点原始声明和实际交付关系 | 未证明“全部无许可”或“构建不使用”，不得如此表述 |
 
 ## 4. 注意事项（对工程操作的影响）
 

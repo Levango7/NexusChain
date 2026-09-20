@@ -40,9 +40,9 @@ public class RpcInterceptor implements HandlerInterceptor {
     /**
      * 孵化（incubate）RPC 共享令牌，保护 {@code /NexusChainCore/*}（见 WebSecurityConfig）。
      *
-     * <p><b>S-1 修复（2026-09-17 交付前审计）</b>：原实现把令牌明文硬编码在本类中
-     * （{@code if (token.equals("NUMtD0..."))}），任何能读到源码/反编译 jar 的人都可直接调用，
-     * 且无法轮换。现改为配置注入（{@code nexus.security.rpc-incubate-token} /
+     * <p><b>S-1 修复（2026-09-17 交付前审计）</b>：原实现把令牌以<b>字符串字面量</b>与
+     * 请求头直接比较（该字面量随源码入库，任何能读到源码/反编译 jar 的人都可直接调用，
+     * 且无法轮换）。现改为配置注入（{@code nexus.security.rpc-incubate-token} /
      * 环境变量 {@code NEXUS_RPC_INCUBATE_TOKEN}）+ 常量时间比较 + <b>fail-closed</b>：
      * 未配置时拒绝一切请求，需显式注入令牌才放行。</p>
      *

@@ -78,7 +78,9 @@ public class WebhookController {
     @PostMapping("/chain-events")
     public ResponseEntity<String> handleChainEvent(
             @RequestBody Map<String, Object> payload,
-            @RequestHeader(value = "X-NexusChain-Signature", required = false) String signature) {
+            @RequestHeader(value = "X-NexusChain-Signature", required = false) String signature,
+            @RequestHeader(value = "X-NexusChain-Delivery-Id", required = false) String deliveryId,
+            @RequestHeader(value = "X-NexusChain-Timestamp", required = false) String webhookTimestamp) {
 
         // Verify callback signature. FAIL-CLOSED: this endpoint drives payment
         // confirmation (a financial state change), yet is excluded from API-key
@@ -96,8 +98,28 @@ public class WebhookController {
             log.warn("Missing webhook signature header");
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Missing signature");
         }
-        String expectedSig = computeSignature(canonicalize(payload), secret);
-        if (!constantTimeEquals(expectedSig, signature)) {
+        // 短期项 #4c（2026-09-17）：v2 签名绑定 deliveryId + 时间戳（防重放）。
+        // v2 必须携带配套头并验证；v1（仅 payload）默认兼容接受，requireV2=true 时拒绝。
+        String canonical = canonicalize(payload);
+        boolean signatureValid;
+        if (signature.startsWith("v2:")) {
+            if (deliveryId == null || deliveryId.isEmpty()
+                    || webhookTimestamp == null || webhookTimestamp.isEmpty()) {
+                log.warn("v2 webhook signature present but delivery-id/timestamp headers missing");
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Missing delivery metadata");
+            }
+            String expected = "v2:" + computeSignature(
+                    canonicalV2(deliveryId, webhookTimestamp, canonical), secret);
+            signatureValid = constantTimeEquals(expected, signature);
+        } else {
+            if (requireV2) {
+                log.warn("Rejected v1 (payload-only) webhook signature — nexus.webhook.require-v2=true");
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Legacy signature rejected (v2 required)");
+            }
+            String expected = computeSignature(canonical, secret);
+            signatureValid = constantTimeEquals(expected, signature);
+        }
+        if (!signatureValid) {
             log.warn("Invalid webhook signature received");
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Invalid signature");
         }
@@ -194,6 +216,13 @@ public class WebhookController {
     }
 
     /**
+     * 是否强制 v2 webhook 签名（短期项 #4c）。默认 false（兼容期同时接受 v1/v2）；
+     * 生产迁移完成后置 true 仅接受 v2（v1 仅覆盖 payload、可无限重放）。
+     */
+    @org.springframework.beans.factory.annotation.Value("${nexus.webhook.require-v2:false}")
+    private boolean requireV2;
+
+    /**
      * Compute HMAC-SHA256 signature for the payload.
      */
     private String computeSignature(String payload, String secret) {
@@ -209,6 +238,24 @@ public class WebhookController {
         } catch (java.security.GeneralSecurityException e) {
             throw new RuntimeException("Failed to compute webhook signature", e);
         }
+    }
+
+    /**
+     * v2 canonical（短期项 #4c）：与 WebhookSignatureService.canonicalV2 同构。
+     * NXCW|len:deliveryId|len:timestamp|len:canonicalJson（长度 = UTF-8 字节数）。
+     */
+    private static String canonicalV2(String deliveryId, String timestamp, String canonicalJson) {
+        StringBuilder sb = new StringBuilder(64);
+        sb.append("NXCW|");
+        appendField(sb, deliveryId);
+        appendField(sb, timestamp);
+        appendField(sb, canonicalJson);
+        return sb.toString();
+    }
+
+    private static void appendField(StringBuilder sb, String value) {
+        String v = value == null ? "" : value;
+        sb.append(v.getBytes(StandardCharsets.UTF_8).length).append(':').append(v).append('|');
     }
 
     /**
