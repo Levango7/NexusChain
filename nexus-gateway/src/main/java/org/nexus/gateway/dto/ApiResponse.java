@@ -1,7 +1,5 @@
 package org.nexus.gateway.dto;
 
-import java.util.UUID;
-
 /**
  * Unified API response envelope.
  * All gateway endpoints return this structure for consistent client handling.
@@ -19,11 +17,18 @@ public class ApiResponse<T> {
     /** Response payload */
     private T data;
 
-    /** Distributed trace ID for cross-module debugging */
+    /**
+     * 分布式追踪 ID，用于跨模块排查。
+     *
+     * <p>P1 #22a（2026-09-21 修复）：此前恒为 {@code UUID.randomUUID()}，
+     * 与链路系统无任何关联 —— 调用方拿它在日志里<b>查不到东西</b>。
+     * 现改为读取 MDC 中的真实 traceId（见 {@link org.nexus.gateway.util.TraceIdSupport}），
+     * 仅在无 tracing 上下文时回退为随机关联 ID。</p>
+     */
     private String traceId;
 
     public ApiResponse() {
-        this.traceId = UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+        this.traceId = org.nexus.gateway.util.TraceIdSupport.currentTraceId();
     }
 
     // --- Factory methods ---

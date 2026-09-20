@@ -3,7 +3,6 @@ package org.nexus.gateway.apiversion;
 import com.fasterxml.jackson.annotation.JsonInclude;
 
 import java.util.Map;
-import java.util.UUID;
 
 /**
  * v2 API 统一错误响应（P4-T7）。
@@ -65,8 +64,16 @@ public final class V2ErrorResponse {
         return new V2ErrorResponse(new ErrorBody(code, message, details, traceId));
     }
 
+    /**
+     * 取当前请求的真实追踪 ID。
+     *
+     * <p>P1 #22a（2026-09-21 修复）：此前恒为 {@code UUID.randomUUID()}，
+     * 而本类 javadoc 却声称 traceId「与 Micrometer Tracing 对齐」——
+     * <b>文档与实现不符</b>。调用方拿该 ID 在链路系统中查不到任何东西。
+     * 现改为读取 MDC 中的真实 traceId，仅在无 tracing 上下文时回退。</p>
+     */
     private static String newTraceId() {
-        return UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+        return org.nexus.gateway.util.TraceIdSupport.currentTraceId();
     }
 
     public ErrorBody getError() {
