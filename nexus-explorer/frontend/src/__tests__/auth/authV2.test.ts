@@ -24,17 +24,23 @@ describe("v2 canonical（短期项 #4）", () => {
   it("v2 canonical 确定性快照（与 Java canonicalV2 同构）", () => {
     // 与 Java 端 canonicalV2 输出逐字节一致：NXC2|len:field|...
     // （{"amount":100} 为 14 字节；/api/v1/payments 为 16 字节）
-    const c = buildCanonicalStringV2("1700000000000", "nonce-1", "POST", "/api/v1/payments", "{\"amount\":100}");
-    expect(c).toBe(
-      "NXC2|13:1700000000000|7:nonce-1|4:POST|16:/api/v1/payments|14:{\"amount\":100}|",
+    const c = buildCanonicalStringV2(
+      "1700000000000",
+      "nonce-1",
+      "POST",
+      "/api/v1/payments",
+      '{"amount":100}',
     );
+    expect(c).toBe('NXC2|13:1700000000000|7:nonce-1|4:POST|16:/api/v1/payments|14:{"amount":100}|');
   });
 
   it("null/undefined body 与空串在 canonical 中一致", () => {
     expect(buildCanonicalStringV2("1", "n", "GET", "/p", undefined)).toBe(
       buildCanonicalStringV2("1", "n", "GET", "/p", ""),
     );
-    expect(buildCanonicalStringV2("1", "n", "GET", "/p", undefined)).toBe("NXC2|1:1|1:n|3:GET|2:/p|0:|");
+    expect(buildCanonicalStringV2("1", "n", "GET", "/p", undefined)).toBe(
+      "NXC2|1:1|1:n|3:GET|2:/p|0:|",
+    );
   });
 
   it("多字节字符按 UTF-8 字节数计长（与 Java 服务端一致）", () => {
