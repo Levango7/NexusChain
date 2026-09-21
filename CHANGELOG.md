@@ -66,6 +66,31 @@
   **本地 A/B 实证**（无需 Docker，直接跑 thin jar）：
   无配置时精确复现该占位符错误；配置就位后该错误消失。
 
+  **CI 复核（本轮修复后）**：`nexus-core 状态: running, 退出码: 0` ——
+  nexus-core 已从「启动即崩」转为**正常运行**，该修复在真实 CI 中生效。
+  DAST 链路的下一处阻塞见下节。
+
+#### Known issue（DAST 下一处阻塞：seata 镜像标签不存在）
+
+  上述修复后，`seata-server` 成为 DAST 链路的下一个阻塞点：
+  ```
+  seata-server Error manifest for seataio/seata-server:2.5.0
+    not found: manifest unknown
+  → gateway 启动超时，跳过 DAST
+  ```
+  gateway 依赖 Seata TC（127.0.0.1:8091），seata 起不来则 gateway 不健康，
+  ZAP 无法扫描。
+
+  变更史：`2.0.0` → `2.1.0` → **`2.5.0`**（提交 `85cc9cf`，为对齐
+  `SCA 2025.1.0.0 seata-spring-boot-starter 2.5.0` 而同步升级）。
+  **属同一类问题：版本号跟着 Java 侧对齐升级，但未验证镜像标签是否真实存在。**
+  注：Seata 2.5.0 本身是真实发布（GitHub `apache/incubator-seata` 有 `v2.5.0`），
+  不存在的只是**该 Docker 镜像标签**。
+
+  待办：确认 `seataio/seata-server` 在 Docker Hub 上实际可用的标签后修正。
+  （本次环境直连 Docker Hub 不可达、镜像源均需鉴权，未能核实，
+  故**未做猜测性修改** —— 猜错会把问题推得更深。）
+
 #### Added（防回归）
 
 - **代码卫生棘轮门禁**：`scripts/check-code-hygiene.py` +
