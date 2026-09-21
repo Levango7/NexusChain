@@ -120,7 +120,7 @@ ext {
     scastleVersion = '1.58.0.0'
     hibernateValidatorVersion = '8.0.1.Final'
     junitVersion = '4.13.2'
-    bouncyCastleVersion = '1.84'
+    bouncyCastleVersion = '1.85'
     blstVersion = '0.3.11'
     nettyVersion = '4.1.115.Final'
     grpcVersion = '1.75.0'

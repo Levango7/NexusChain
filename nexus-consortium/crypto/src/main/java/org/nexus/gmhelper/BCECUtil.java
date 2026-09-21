@@ -32,7 +32,7 @@ import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.bouncycastle.jce.spec.ECNamedCurveSpec;
 import org.bouncycastle.jce.spec.ECParameterSpec;
 import org.bouncycastle.math.ec.ECCurve;
-import org.bouncycastle.pqc.legacy.math.linearalgebra.ByteUtils;
+import org.bouncycastle.util.encoders.Hex;
 import org.bouncycastle.util.io.pem.PemObject;
 import org.bouncycastle.util.io.pem.PemReader;
 import org.bouncycastle.util.io.pem.PemWriter;
@@ -121,7 +121,7 @@ public class BCECUtil {
 
     public static ECPublicKeyParameters createECPublicKeyParameters(String xHex, String yHex,
         ECCurve curve, ECDomainParameters domainParameters) {
-        return createECPublicKeyParameters(ByteUtils.fromHexString(xHex), ByteUtils.fromHexString(yHex),
+        return createECPublicKeyParameters(Hex.decode(xHex), Hex.decode(yHex),
             curve, domainParameters);
     }
 

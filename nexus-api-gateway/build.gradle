@@ -84,7 +84,7 @@ dependencies {
     implementation 'org.apache.httpcomponents.core5:httpcore5-h2:5.4.3'
     // P4-A：Spring Cloud/网关依赖传递引入 bcprov-jdk18on 1.81（CVE-2025-14813 CRITICAL，
     // GOSTCTR 实现缺陷），显式声明 1.81.1 强制升级消除
-    implementation 'org.bouncycastle:bcprov-jdk18on:1.81.1'
+    implementation 'org.bouncycastle:bcprov-jdk18on:1.85'
 
     // === Spring Cloud LoadBalancer（Gateway 路由 lb:// 协议依赖） ===
     implementation 'org.springframework.cloud:spring-cloud-starter-loadbalancer'

@@ -23,7 +23,7 @@ dependencies {
     // 与微服务群（BOM 2.15.4）及 nexus-core（根 ext 2.15.4）对齐，消除三轨并存。
     implementation 'com.fasterxml.jackson.core:jackson-databind'
     implementation 'org.apache.httpcomponents:httpclient:4.5.14'
-    implementation 'org.bouncycastle:bcprov-jdk18on:1.78'
+    implementation 'org.bouncycastle:bcprov-jdk18on:1.85'
     // Reuse nexus-core keystore/crypto/util classes (org.nexus.keystore.*)
     implementation project(':nexus-core:nexus-core')
 

@@ -187,7 +187,7 @@ dependencies {
     //     用于聚合签名后对 (r, s) 做 secp256k1 ECDSA verify against joint publicKey。
     //     P4-A（2026-08-29）：1.78 存在 CVE-2025-14813（CRITICAL，GOSTCTR 实现缺陷），
     //     升级至 1.81.1（与 nexus-bridge / nexus-api-gateway 对齐）。 ===
-    implementation 'org.bouncycastle:bcprov-jdk18on:1.81.1'
+    implementation 'org.bouncycastle:bcprov-jdk18on:1.85'
 
     // === 测试 ===
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
