@@ -1,8 +1,21 @@
 package org.nexus.gateway.dto;
 
 /**
- * Unified API response envelope.
- * All gateway endpoints return this structure for consistent client handling.
+ * 统一响应信封（**错误路径**使用）。
+ *
+ * <p>⚠️ 2026-09-21 更正：此前 javadoc 写的是
+ * "All gateway endpoints return this structure for consistent client handling"
+ * —— <b>与实现不符</b>。实际只有<b>错误响应</b>经由
+ * {@code GlobalExceptionHandler} 返回本结构；<b>成功响应</b>返回裸资源
+ * （如 {@code ResponseEntity<PaymentOrder>}），这是刻意约定。</p>
+ *
+ * <p>该约定由前端 {@code nexus-explorer/frontend/src/api/client.ts} 依赖：
+ * 成功路径直接 {@code JSON.parse(text) as T}（第 181 行），
+ * 错误路径才按 {@code {code, message}} 解包（第 163 行）。
+ * 因此<b>不应</b>为"统一"而给成功响应套信封 —— 那会直接打挂前端。</p>
+ *
+ * <p>各响应结构的定位：错误 → 本类（v1）；成功 → 裸资源；
+ * v2 端点错误 → {@link org.nexus.gateway.apiversion.V2ErrorResponse}。</p>
  *
  * @param <T> payload type
  */

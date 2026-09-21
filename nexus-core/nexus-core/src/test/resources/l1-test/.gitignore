@@ -3,4 +3,9 @@ node_modules/
 cache/
 artifacts/
 deployed-address.json
+# 部署产物（由 scripts/deploy-*.js 每次运行时重写，含 deployedAt 时间戳）。
+# 2026-09-21：这两个此前被遗漏，导致每次跑 Hardhat 集成测试都会把
+# src/test/resources 下的产物改脏，进而污染工作区、易被误提交。
+deployed-bridge.json
+deployed-governance.json
 *.log
