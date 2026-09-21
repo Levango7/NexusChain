@@ -35,9 +35,13 @@ import org.nexus.pool.PeningTransPool;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Component
 public class StatetreeUpdate implements ApplicationListener<NewBestBlockEvent> {
+
+    private static final Logger log = LoggerFactory.getLogger(StatetreeUpdate.class);
     @Autowired
     MerkleRule merkleRule;
 
@@ -85,7 +89,7 @@ public class StatetreeUpdate implements ApplicationListener<NewBestBlockEvent> {
             // CRITICAL FIX: previously returned silently without publishing any event,
             // causing StateDB.writeBlock's while(pendingBlock != null) to spin forever
             // holding the global write lock -> node permanently stuck.
-            e.printStackTrace();
+            log.error("StatetreeUpdate: uncaught exception", e);
             ctx.publishEvent(new AccountUpdateFailedEvent(this, b,
                     "state tree update failed: " + e.getMessage()));
             return;

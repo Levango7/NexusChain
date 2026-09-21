@@ -27,9 +27,13 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Component
 public class IncubatorDB {
+
+    private static final Logger log = LoggerFactory.getLogger(IncubatorDB.class);
 
     @Autowired
     private JdbcTemplate tmpl;
@@ -89,7 +93,7 @@ public class IncubatorDB {
             String sql = "insert into incubator_state VALUES(?,?,?,?,?,?,?,?,?,?)";
             return tmpl.update(sql, new Object[]{incubator.getId(), incubator.getShare_pubkeyhash(), incubator.getPubkeyhash(), incubator.getTxid_issue(), incubator.getHeight(), incubator.getCost(), incubator.getInterest_amount(), incubator.getShare_pubkeyhash(), incubator.getLast_blockheight_interest(), incubator.getLast_blockheight_share()});
         } catch (RuntimeException e) {
-            e.printStackTrace();
+            log.error("IncubatorDB: uncaught exception", e);
             return 0;
         }
     }
@@ -99,7 +103,7 @@ public class IncubatorDB {
             String sql = "insert into incubator_state(id,share_pubkeyhash,pubkeyhash,txid_issue,height,cost,interest_amount,share_amount,last_blockheight_interest,last_blockheight_share) VALUES(?,?,?,?,?,?,?,?,?,?) on conflict(id) do nothing";
             return tmpl.batchUpdate(sql, Object);
         } catch (RuntimeException e) {
-            e.printStackTrace();
+            log.error("IncubatorDB: uncaught exception", e);
             return null;
         }
     }

@@ -12,9 +12,13 @@ import org.nexus.p2p.NexusChainOuterClass;
 
 import java.util.List;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Component
 public class MerkleTreeManager {
+
+    private static final Logger log = LoggerFactory.getLogger(MerkleTreeManager.class);
 
     private MerkleTreeCache cache;
 
@@ -63,7 +67,7 @@ public class MerkleTreeManager {
                     cache.removeBlock(blockHash);
                 }
             } catch (DecoderException e) {
-                e.printStackTrace();
+                log.error("MerkleTreeManager: uncaught exception", e);
             }
         }
     }

@@ -6,7 +6,9 @@ import java.util.List;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.commons.cli.*;
+import lombok.extern.slf4j.Slf4j;
 
+@Slf4j
 //  运行使用 gradle runTestCommunicationTool -PappArgs="-c /media/sf_consortium/consortium/src/main/resources/local/main"
 public class TestCommunicationTool {
 
@@ -65,7 +67,7 @@ public class TestCommunicationTool {
             bos.close();
             return data;
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("TestCommunicationTool: uncaught exception", e);
         }
         return null;
     }

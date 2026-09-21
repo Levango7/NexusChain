@@ -6,6 +6,7 @@ import org.springframework.http.server.ServerHttpRequest;
 import org.springframework.http.server.ServerHttpResponse;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseBodyAdvice;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * Global rest response body json formatter
@@ -22,6 +23,7 @@ import org.springframework.web.servlet.mvc.method.annotation.ResponseBodyAdvice;
  *
  * byte[] or String will be ignored
  */
+@Slf4j
 @RestControllerAdvice
 public class CommonAdvice implements ResponseBodyAdvice {
     @Override
@@ -40,7 +42,7 @@ public class CommonAdvice implements ResponseBodyAdvice {
         try{
             return Response.newSuccessFul(body);
         }catch (Exception e){
-            e.printStackTrace();
+            log.error("CommonAdvice: uncaught exception", e);
             return Response.Code.INTERNAL_ERROR.message;
         }
     }

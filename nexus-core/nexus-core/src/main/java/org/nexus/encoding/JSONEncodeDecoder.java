@@ -38,9 +38,13 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Component
 public class JSONEncodeDecoder implements CoreTypesEncoder, CoreTypesDecoder {
+
+    private static final Logger log = LoggerFactory.getLogger(JSONEncodeDecoder.class);
     public static class BytesSerializer extends StdSerializer<byte[]> {
 
         private static final long serialVersionUID = -5510353102817291511L;
@@ -86,7 +90,7 @@ public class JSONEncodeDecoder implements CoreTypesEncoder, CoreTypesDecoder {
             mapper.registerModule(module);
             return mapper.writeValueAsBytes(object);
         } catch (RuntimeException | com.fasterxml.jackson.core.JsonProcessingException e) {
-            e.printStackTrace();
+            log.error("JSONEncodeDecoder: uncaught exception", e);
         }
         return null;
     }
@@ -103,7 +107,7 @@ public class JSONEncodeDecoder implements CoreTypesEncoder, CoreTypesDecoder {
             mapper.enable(JsonParser.Feature.ALLOW_COMMENTS);
             return mapper.readValue(encoded, valueType);
         } catch (RuntimeException | java.io.IOException e) {
-            e.printStackTrace();
+            log.error("JSONEncodeDecoder: uncaught exception", e);
             return null;
         }
     }
@@ -159,7 +163,7 @@ public class JSONEncodeDecoder implements CoreTypesEncoder, CoreTypesDecoder {
                 res.add(Hex.decodeHex(s.toCharArray()));
             }
         } catch (RuntimeException | org.apache.commons.codec.DecoderException e) {
-            e.printStackTrace();
+            log.error("JSONEncodeDecoder: uncaught exception", e);
         }
         return res;
     }

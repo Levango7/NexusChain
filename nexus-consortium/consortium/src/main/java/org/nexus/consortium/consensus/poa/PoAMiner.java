@@ -141,7 +141,7 @@ public class PoAMiner implements Miner {
             listeners.forEach(l -> l.onBlockMined(b));
             Assert.isTrue(b.getHash().equals(new HexBytes(PoAUtils.getHash(b))), "block hash is equal");
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("PoAMiner: uncaught exception", e);
         }
     }
 

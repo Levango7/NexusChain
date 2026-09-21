@@ -8,8 +8,12 @@ import org.nexus.p2p.NexusChainOuterClass;
 
 import java.io.File;
 import java.util.concurrent.Executor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class GRPCTestTool {
+
+    private static final Logger log = LoggerFactory.getLogger(GRPCTestTool.class);
     public static final Executor EXECUTOR = command -> new Thread(command).start();
     private static Peer SELF;
 
@@ -17,7 +21,7 @@ public class GRPCTestTool {
         try {
             SELF = Peer.newPeer("nexus://00383e950edf55b4d34a3ece5973917edbed42a88d5873dfe18fa83b5e5eb63c04a02eb68766b4acd7a412549a58c12bad9719ee9fd7670297f9083adb4c72c5@192.168.1.142:9235");
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("GRPCTestTool: uncaught exception", e);
         }
     }
 
@@ -49,7 +53,7 @@ public class GRPCTestTool {
                         System.out.println(new Payload(msg).getBlocks().getBlocksList().size());
                         FileUtils.writeByteArrayToFile(new File("c:\\Users\\Sal\\bin.rpc"), msg.toByteArray());
                     } catch (Exception e) {
-                        e.printStackTrace();
+                        log.error("GRPCTestTool: uncaught exception", e);
                     }
                 }
         );

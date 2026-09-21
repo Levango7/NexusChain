@@ -10,7 +10,9 @@ import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import lombok.extern.slf4j.Slf4j;
 
+@Slf4j
 
 public class WebSocketPeerServer extends AbstractPeerServer {
     private static class Server extends WebSocketServer {
@@ -49,7 +51,7 @@ public class WebSocketPeerServer extends AbstractPeerServer {
                 Message msg = Message.parseFrom(message);
                 ch.message(msg);
             } catch (InvalidProtocolBufferException e) {
-                e.printStackTrace();
+                log.error("WebSocketPeerServer: uncaught exception", e);
             }
 
         }

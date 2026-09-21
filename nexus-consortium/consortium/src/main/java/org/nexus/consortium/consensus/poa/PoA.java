@@ -220,7 +220,7 @@ public class PoA implements ConsensusEngine, PeerServerListener {
                 try {
                     server.broadcast(Start.MAPPER.writeValueAsBytes(block));
                 } catch (JsonProcessingException e) {
-                    e.printStackTrace();
+                    log.error("PoA: uncaught exception", e);
                 }
             }
 

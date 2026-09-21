@@ -40,9 +40,13 @@ import org.nexus.keystore.crypto.*;
 import java.io.*;
 import java.security.SecureRandom;
 import java.util.Arrays;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 
 public class KeystoreAction {
+
+    private static final Logger log = LoggerFactory.getLogger(KeystoreAction.class);
     public String address;
     public Crypto crypto;
     private static final int saltLength = 32;
@@ -165,10 +169,10 @@ public class KeystoreAction {
             Keystore ks = KeystoreAction.unmarshal(str);
             return Hex.encodeHexString(KeystoreAction.decrypt(ks, password));
         } catch (FileNotFoundException e) {
-            e.printStackTrace();
+            log.error("KeystoreAction: uncaught exception", e);
             return "";
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("KeystoreAction: uncaught exception", e);
             return "";
         }
     }
@@ -184,10 +188,10 @@ public class KeystoreAction {
             Keystore ks = KeystoreAction.unmarshal(str);
             return Hex.encodeHexString(KeystoreAction.decrypt(ks, password));
         } catch (FileNotFoundException e) {
-            e.printStackTrace();
+            log.error("KeystoreAction: uncaught exception", e);
             return "";
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("KeystoreAction: uncaught exception", e);
             return "";
         }
     }

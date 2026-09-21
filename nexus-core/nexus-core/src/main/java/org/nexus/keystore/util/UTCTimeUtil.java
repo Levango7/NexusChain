@@ -24,8 +24,12 @@ import java.text.SimpleDateFormat;
 import java.util.Calendar;
 import java.util.Date;
 import java.util.TimeZone;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class UTCTimeUtil {
+
+    private static final Logger log = LoggerFactory.getLogger(UTCTimeUtil.class);
     private static DateFormat format = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss") ;
 
     /**
@@ -56,7 +60,7 @@ public class UTCTimeUtil {
             return date;
         }catch(ParseException e)
         {
-            e.printStackTrace() ;
+            log.error("UTCTimeUtil: uncaught exception", e);
         }
         return null ;
 
@@ -73,7 +77,7 @@ public class UTCTimeUtil {
         try {
             utcDate = format.parse(utcTime);
         } catch (ParseException e) {
-            e.printStackTrace();
+            log.error("UTCTimeUtil: uncaught exception", e);
         }
         format.setTimeZone(TimeZone.getDefault());
         Date locatlDate = null;

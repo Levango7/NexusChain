@@ -3,7 +3,9 @@ package org.nexus.consortium.net;
 import lombok.AllArgsConstructor;
 import org.java_websocket.WebSocket;
 import org.nexus.consortium.proto.Message;
+import lombok.extern.slf4j.Slf4j;
 
+@Slf4j
 @AllArgsConstructor
 public class WebSocketChannelOut implements ChannelOut{
     private WebSocket conn;
@@ -13,7 +15,7 @@ public class WebSocketChannelOut implements ChannelOut{
         try {
             conn.send(message.toByteArray());
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("WebSocketChannelOut: uncaught exception", e);
         }
     }
 
@@ -22,7 +24,7 @@ public class WebSocketChannelOut implements ChannelOut{
         try {
             conn.close();
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("WebSocketChannelOut: uncaught exception", e);
         }
     }
 }

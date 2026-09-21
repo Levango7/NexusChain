@@ -20,10 +20,14 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 
 @Component
 public class ProposersFactory extends EraLinkedStateFactory<ProposersState> {
+
+    private static final Logger log = LoggerFactory.getLogger(ProposersFactory.class);
     private static final JSONEncodeDecoder codec = new JSONEncodeDecoder();
     private static final int POW_WAIT_FACTOR = 3;
     private static final Set<String> WHITE_LIST = Stream.of(
@@ -83,7 +87,7 @@ public class ProposersFactory extends EraLinkedStateFactory<ProposersState> {
                 URI uri = new URI(v);
                 return Hex.encodeHexString(KeystoreAction.addressToPubkeyHash(uri.getRawUserInfo()));
             } catch (RuntimeException | java.net.URISyntaxException e) {
-                e.printStackTrace();
+                log.error("ProposersFactory: uncaught exception", e);
             }
             return null;
         }).collect(Collectors.toList());

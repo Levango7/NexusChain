@@ -42,8 +42,12 @@ import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class Transaction {
+
+    private static final Logger log = LoggerFactory.getLogger(Transaction.class);
 
     public static Integer getTypeFromInput(String s) {
         // 默认是转账
@@ -339,7 +343,7 @@ public class Transaction {
                 return payloadproto.getType();
             }
         } catch (InvalidProtocolBufferException e) {
-            e.printStackTrace();
+            log.error("Transaction: uncaught exception", e);
             return 0;
         }
         return 0;

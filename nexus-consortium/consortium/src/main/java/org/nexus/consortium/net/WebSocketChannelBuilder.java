@@ -11,6 +11,8 @@ import java.net.URI;
 import java.nio.ByteBuffer;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
+import lombok.extern.slf4j.Slf4j;
+@Slf4j
 
 public class WebSocketChannelBuilder implements ChannelBuilder {
     @Override
@@ -22,7 +24,7 @@ public class WebSocketChannelBuilder implements ChannelBuilder {
             client.connectBlocking(1, TimeUnit.SECONDS);
             return Optional.of(client.getChannel());
         }catch (Exception e){
-            e.printStackTrace();
+            log.error("WebSocketChannelBuilder: uncaught exception", e);
             return Optional.empty();
         }
     }
@@ -61,7 +63,7 @@ public class WebSocketChannelBuilder implements ChannelBuilder {
             try {
                 this.channel.message(Message.parseFrom(bytes));
             } catch (InvalidProtocolBufferException e) {
-                e.printStackTrace();
+                log.error("WebSocketChannelBuilder: uncaught exception", e);
             }
         }
 

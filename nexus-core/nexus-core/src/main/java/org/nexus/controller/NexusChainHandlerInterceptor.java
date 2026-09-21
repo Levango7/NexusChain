@@ -9,9 +9,13 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.io.PrintWriter;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Component
 public class NexusChainHandlerInterceptor implements HandlerInterceptor {
+
+    private static final Logger log = LoggerFactory.getLogger(NexusChainHandlerInterceptor.class);
 
     @Autowired
     IpcConfig ipcConfig;
@@ -26,7 +30,7 @@ public class NexusChainHandlerInterceptor implements HandlerInterceptor {
             out.write("rpc is Intercepted");
             out.flush();
         } catch (IOException e) {
-            e.printStackTrace();
+            log.error("NexusChainHandlerInterceptor: uncaught exception", e);
         }
         return false;
     }

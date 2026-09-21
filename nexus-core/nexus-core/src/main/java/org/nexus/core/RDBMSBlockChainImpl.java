@@ -353,9 +353,9 @@ public class RDBMSBlockChainImpl implements NexusChainBlockChain {
                 writeHeader(block);
                 writeBody(block);
             } catch (RuntimeException e) {
-                e.printStackTrace();
+                logger.error("RDBMSBlockChainImpl: uncaught exception", e);
                 status.setRollbackOnly();
-                e.printStackTrace();
+                logger.error("RDBMSBlockChainImpl: uncaught exception", e);
                 return false;
             }
             return true;
