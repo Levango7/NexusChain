@@ -15,3 +15,12 @@ services:
   nexus-gateway:
     environment:
       - SERVER_PORT=8080
+      # 2026-09-22：DAST 环境关闭 Nacos 服务发现与注册。
+      # 基础 docker-compose.yml 中 NEX_NACOS_ENABLED 默认为 true
+      # （dev compose / kind 演练需要），而 nexus-gateway 的
+      # application-dev.yml 用它同时门控 discovery.enabled 与 register-enabled。
+      # DAST 只需要 gateway 在 8080 提供 HTTP 供 ZAP 扫描，不需要注册到 Nacos；
+      # 实测开启时 gateway 卡在 NacosNamingService.registerInstance 的 gRPC
+      # 重试上，8080 始终不监听，健康检查 180s 超时 → DAST 从未真正扫描。
+      # 该开关仅作用于本 override 文件，不影响 dev / prod。
+      - NEX_NACOS_ENABLED=false
