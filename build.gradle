@@ -22,9 +22,32 @@ allprojects {
     version = '2.50.0'
 
     repositories {
+        // 权威源优先；镜像仅用于加速与容错
         mavenCentral()
-        maven { url 'https://repo.spring.io/plugins-release' }
-        maven { url 'https://maven.aliyun.com/nexus/content/groups/public/' }
+        maven {
+            name = 'springPluginsRelease'
+            url = 'https://repo.spring.io/plugins-release'
+        }
+        // 2026-09-21：仓库一律**命名**。匿名仓库报错时只显示 "Repository maven"，
+        // 无法定位是哪个源。实测一次 CI 失败正因此难以定位：
+        //   "Repository maven is disabled due to earlier error below:
+        //    Could not GET https://maven.aliyun.com/.../reactor-test-3.8.7.module
+        //      -> 502 Bad Gateway"
+        // 根因：Gradle 在仓库返回 5xx 后会禁用该仓库且**不回退**，
+        // 单点镜像故障会打死整个构建（表现为 `Build & Test` 偶发失败，非代码缺陷）。
+        // 故增加两个独立镜像以提高容错。
+        maven {
+            name = 'aliyunPublic'
+            url = 'https://maven.aliyun.com/nexus/content/groups/public/'
+        }
+        maven {
+            name = 'tencentPublic'
+            url = 'https://mirrors.cloud.tencent.com/nexus/repository/maven-public/'
+        }
+        maven {
+            name = 'huaweiPublic'
+            url = 'https://repo.huaweicloud.com/repository/maven/'
+        }
     }
 }
 

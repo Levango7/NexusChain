@@ -4,6 +4,99 @@
 
 ## [Unreleased]
 
+### 长期失败的 CI 门禁整改（2026-09-21）
+
+> 起因：排查「一直红但没人管」的 CI 作业。结论是**三个安全/质量门禁
+> 长期失效且无人处理**，其中两处藏有真实漏洞。此前所有审查报告均未覆盖
+> 这一类问题 —— 它们只查代码，没查「CI 上那些一直红的东西在报什么」。
+
+#### Fixed（安全 · 由长期失败的 CI 查出）
+
+- **`nexus-signing-service` 镜像含 CRITICAL CVE（Trivy，连续失败 8 天）**：
+  `org.bouncycastle:bcprov-jdk18on` 1.81.1 命中
+  **CVE-2026-8763（CRITICAL，Name Constraints bypass via trailing dot）**
+  与 CVE-2026-13506（HIGH，DoS via lazy ASN.1 sequence），修复版 1.85。
+  升级至 **1.85**。
+  顺带发现版本治理混乱：全仓 BC 版本**四种并存**（1.78 / 1.81.1 / 1.84），
+  属性名大小写亦不一致（`bouncycastleVersion` vs `bouncyCastleVersion`）；
+  **1.84 同样低于修复版**，nexus-core 亦受影响（未被该 Trivy job 覆盖）。
+  已统一 6 处声明至 1.85。
+  **API 适配**：1.85 移除
+  `org.bouncycastle.pqc.legacy.math.linearalgebra.ByteUtils`，
+  `nexus-consortium/crypto` 的 `BCECUtil` 改用等价的
+  `org.bouncycastle.util.encoders.Hex.decode(...)`。
+- **`mpc-engine` 依赖含 TLS 漏洞（Cargo Audit，长期失败）**：
+  `rustls` 0.23.43 命中 **RUSTSEC-2026-0285**（5.3 medium，
+  TLS 1.3 handshake messages incorrectly accepted across encryption level
+  boundaries），修复版 >=0.23.45。rustls 为传递依赖（经 reqwest /
+  hyper-rustls），故以 `cargo update -p rustls` 收敛至 **0.23.45**，
+  仅改 `Cargo.lock`。
+
+#### Fixed（CI 可靠性）
+
+- **Maven 镜像单点故障打死整个构建**：`Build & Test` 偶发失败，
+  根因是 Gradle 在仓库返回 5xx 后**禁用该仓库且不回退** ——
+  实测一次失败为 `maven.aliyun.com` 返回 **502 Bad Gateway**，
+  而报错只显示匿名的 `Repository maven`，无法定位是哪个源。
+  修复：① 所有仓库**显式命名**（`aliyunPublic` / `tencentPublic` /
+  `huaweiPublic` / `springPluginsRelease`），错误信息可直接定位；
+  ② 增加两个独立备用镜像，降低单点故障影响。涉及 `settings.gradle`
+  与 `build.gradle`。
+
+#### Fixed（DAST 门禁实际未在工作）
+
+- **DAST（OWASP ZAP）从未真正扫描过任何东西**：
+  容器内 `nexus-core` 启动即失败 ——
+  `PlaceholderResolutionException: Could not resolve placeholder
+  'transaction.day.count'`（`org.nexus.Start.main`）。
+  根因：`nexus-core/build.gradle` 的 `jar` 任务为修复另一个问题
+  （core 作为**库**被 wallet/signing 经 nexus-sdk 传递依赖时，
+  其 `application.properties` 进入服务侧 config data 加载链，
+  用 `server.port=19585` 覆盖对方端口）而显式
+  `exclude 'application.properties'` /
+  `exclude 'application-local.properties'`；但该处注释断言
+  「core 独立运行形态（Dockerfile 源码全量构建）不受影响」**与事实不符** ——
+  Dockerfile 执行的正是 `:nexus-core:nexus-core:jar`，
+  即容器用的正是那个不含任何配置的 jar。
+  修复（保持 jar 的「库友好」属性，改为给容器单独提供配置）：
+  ① Dockerfile builder 阶段导出两个 properties 到 `appconfig/`，
+  runtime 阶段 COPY 到 `/app/config/`；
+  ② `docker-compose.yml` 的 `nexus-core` 增加
+  `SPRING_CONFIG_ADDITIONAL_LOCATION=optional:file:/app/config/`。
+  **本地 A/B 实证**（无需 Docker，直接跑 thin jar）：
+  无配置时精确复现该占位符错误；配置就位后该错误消失。
+
+#### Added（防回归）
+
+- **代码卫生棘轮门禁**：`scripts/check-code-hygiene.py` +
+  `scripts/code-hygiene-baseline.txt` + `ci.yml` 的 `code-hygiene` job。
+  拦截新增的 `printStackTrace()` / `System.out.print*` / 空 catch。
+  历史违规（49 条）记入基线**不阻断**，**新增违规立即失败**。
+  基线键为「路径 + 规则 + 归一化源码行」而非「路径:行号」，
+  故行位移不产生误报。`System.out` 对 `examples/`、`tools/`、`test/`
+  路径设白名单（示例代码本就该打印到控制台）。
+
+#### Changed（日志卫生）
+
+- **`printStackTrace()` → logger**（19 文件 / 26 处）：
+  `printStackTrace` 绕过日志框架（无级别/时间戳/logger 名），
+  与 traceId 无法关联，日志系统中检索不到。
+- **`nexus-core` 日志补 traceId**：其余服务模块
+  （gateway / bridge / signing / wallet / api-gateway）的 logback
+  pattern 均已含 `%X{traceId}`，**仅 nexus-core 例外**。
+  已在 `logback.xml` / `logback-detailed.xml` 共 4 处 pattern 补
+  `[%X{traceId:-},%X{spanId:-}]`，与其余模块保持同一约定。
+- **已有 logger 的文件中 `System.out.print*` → logger**（7 文件 / 11 处）。
+  其余 67 处位于无 logger 的加密/编码核心，**未动** ——
+  为其注入 logger 需引入新依赖（实测 `nexus-consortium/common`
+  无 slf4j，注入 `@Slf4j` 直接编译失败），收益不抵风险；
+  改由上述棘轮门禁防止新增。
+- **`PoAMiner` 中断被吞导致挖矿线程无法停止**：
+  `while(true)` 循环内 `catch (Exception ignored) {}` 吞掉
+  `InterruptedException` 且不恢复中断标志，`thread.interrupt()`
+  无法停止该线程（线程泄漏、无法优雅停机）。
+  已改为恢复中断标志并退出循环。
+
 ### 交付前审计整改（立即项 + 短期项，2026-09-17）
 
 #### Fixed（安全）

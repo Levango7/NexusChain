@@ -64,6 +64,35 @@ RUN find /workspace/nexus-core/nexus-core/build/libs -maxdepth 1 -name '*.jar' !
 # 复制依赖 lib/ 目录
 RUN cp -r /workspace/nexus-core/nexus-core/build/libs/lib /workspace/lib
 
+# 2026-09-21 DAST 修复：导出应用配置文件到独立目录
+# ---------------------------------------------------------------------------
+# 背景：nexus-core/build.gradle 的 jar 任务显式 `exclude 'application.properties'`
+# 与 `exclude 'application-local.properties'`，原因是 core 被 wallet/signing 等
+# 服务经 nexus-sdk:java 传递依赖为**库**时，jar 根上的 application.properties
+# 会进入服务侧 Spring Boot 的 config data 加载链，用 core 的 server.port=19585
+# 覆盖掉服务自身端口（Tomcat http-nio-19585 实证）。
+#
+# 但该修复的注释断言「core 独立运行形态（Dockerfile 源码全量构建）不受影响」
+# **与事实不符** —— 本 Dockerfile 恰恰执行 `:nexus-core:nexus-core:jar`，
+# 即容器使用的正是那个**不含任何配置**的 jar。后果（CI 实测）：
+#   PlaceholderResolutionException: Could not resolve placeholder
+#     'transaction.day.count'  at org.nexus.Start.main
+# 容器内 nexus-core 启动即失败，DAST 门禁从未真正扫描过任何东西。
+#
+# 修法：jar 继续保持「库友好」（不把配置塞回 jar，避免重新引入端口覆盖），
+# 改为在镜像内单独携带配置文件，运行时经 SPRING_CONFIG_ADDITIONAL_LOCATION
+# 显式加载（见 docker-compose.yml 的 nexus-core 服务）。
+# 必须与 jar 任务的 exclude 列表**逐项对应**（共 5 个模式）：
+#   application.properties / application-local.properties / application.yml /
+#   application-*.yml / application-*.properties
+# 其中 application.yml 不可省略 —— 其头部注释明确写明它「提供默认值
+# （被 properties 中的 ${...} 占位符引用）」，缺失会导致占位符解析失败。
+# （该遗漏由 scripts/check-packaging-consistency.py 在本轮校验中发现。）
+RUN mkdir -p /workspace/appconfig && \
+    cd /workspace/nexus-core/nexus-core/src/main/resources && \
+    cp application.properties application-local.properties application.yml /workspace/appconfig/ && \
+    ls -l /workspace/appconfig/
+
 # 诊断：验证 thin jar 和依赖
 RUN echo "=== thin jar 检查 org/nexus/Start.class ===" && \
     (jar tf /workspace/app.jar | grep "org/nexus/Start.class" || echo "NOT FOUND IN THIN JAR") && \
@@ -95,6 +124,9 @@ WORKDIR /app
 COPY --from=builder /workspace/app.jar app.jar
 # 外部依赖：Class-Path manifest 中 lib/*.jar 相对路径，WORKDIR=/app 解析为 /app/lib/
 COPY --from=builder /workspace/lib lib/
+# 应用配置（2026-09-21 DAST 修复）：jar 内不含配置（见 builder 阶段说明），
+# 单独携带并由 SPRING_CONFIG_ADDITIONAL_LOCATION 加载。
+COPY --from=builder /workspace/appconfig config/
 # busybox 静态二进制（~1.2MB，无动态依赖）：仅用于 compose healthcheck（wget）。
 # distroless 无 curl/wget/shell，注入单个静态 busybox 提供 wget 子命令，
 # 不引入 shell 与包管理器，保持最小攻击面（DAST 修复 2026-08-28）。

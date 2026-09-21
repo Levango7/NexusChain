@@ -2,7 +2,22 @@ pluginManagement {
     repositories {
         gradlePluginPortal()
         mavenCentral()
-        maven { url 'https://maven.aliyun.com/nexus/content/groups/public/' }
+        // 2026-09-21：仓库一律**命名**。匿名仓库报错时只显示 "Repository maven"，
+        // 无法定位是哪个源出了问题；命名后错误信息可直接指向具体镜像。
+        maven {
+            name = 'aliyunPublic'
+            url = 'https://maven.aliyun.com/nexus/content/groups/public/'
+        }
+        // 备用镜像：Gradle 在仓库返回 5xx 后会**禁用该仓库且不回退**，
+        // 单点镜像故障（实测 aliyun 502 Bad Gateway）会打死整个构建。
+        maven {
+            name = 'tencentPublic'
+            url = 'https://mirrors.cloud.tencent.com/nexus/repository/maven-public/'
+        }
+        maven {
+            name = 'huaweiPublic'
+            url = 'https://repo.huaweicloud.com/repository/maven/'
+        }
     }
 }
 

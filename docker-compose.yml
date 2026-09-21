@@ -87,6 +87,15 @@ services:
       - SPRING_DATASOURCE_URL=jdbc:postgresql://nexus-pgsql:5432/nexuschain
       - SPRING_DATASOURCE_USERNAME=nexus
       - SPRING_DATASOURCE_PASSWORD=nexus123
+      # 2026-09-21 DAST 修复：jar 内不含 application*.properties
+      # （nexus-core/build.gradle 的 jar 任务显式 exclude，避免 core 作为库
+      # 被 wallet/signing 传递依赖时用自身 server.port=19585 覆盖对方端口）。
+      # 故容器须从镜像内 /app/config 显式加载，否则 core 启动即失败：
+      #   PlaceholderResolutionException: 'transaction.day.count'
+      #   at org.nexus.Start.main  → DAST 门禁形同虚设。
+      # 用 optional: 前缀：目录缺失时降级而非直接启动失败，避免把一个
+      # 配置问题放大成 CrashLoop。
+      - SPRING_CONFIG_ADDITIONAL_LOCATION=optional:file:/app/config/
     depends_on:
       nexus-pgsql:
         condition: service_healthy

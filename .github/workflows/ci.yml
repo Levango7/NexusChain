@@ -56,6 +56,17 @@ jobs:
       - name: 代码卫生棘轮检查（新增 printStackTrace / System.out / 空 catch）
         run: python scripts/check-code-hygiene.py
 
+      # 打包一致性（2026-09-21 新增）
+      # 背景：nexus-core 的 jar 任务排除了 application*.properties/yml
+      # （为避免 core 作为库时污染下游服务的配置链），但其注释断言
+      # 「core 独立运行形态（Dockerfile 源码全量构建）不受影响」**与事实不符**
+      # —— Dockerfile 用的正是那个 jar。后果：容器内 nexus-core 启动即失败
+      # （PlaceholderResolutionException: 'transaction.day.count'），
+      # DAST 门禁因此从未真正扫描过任何东西。
+      # 这类「A 处修复破坏 B 处」的缺陷单文件静态检查看不出，需跨文件校验。
+      - name: 打包一致性检查（jar 排除配置 → 容器必须另行提供）
+        run: python scripts/check-packaging-consistency.py
+
   # ============================================================
   # Explorer 前端门禁（2026-09-16 审查新增）
   # ------------------------------------------------------------
