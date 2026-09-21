@@ -36,6 +36,19 @@ public class TenantApiKeyCache {
     /** 默认 TTL：5 分钟。 */
     static final long DEFAULT_TTL_MILLIS = 5 * 60 * 1000L;
 
+    /**
+     * 条目数上限（P2，2026-09-21 修复）。
+     *
+     * <p>此前仅有 TTL、**无容量上限**。TTL 是读时惰性过期：若某 API Key 写入后
+     * 再无请求命中，其条目不会被清除；且负缓存（Optional.empty()）同样占位。
+     * 长期运行下条目数随「出现过的不同 API Key 数量」单调增长 → 内存无界膨胀。
+     * 与 {@code JdbcPaymentStateStore} 的同类缺陷一致。</p>
+     *
+     * <p>本模块未引入 Guava，故不新增依赖，采用零依赖的近似 LRU 淘汰：
+     * 达到上限时先清已过期条目，仍超限则淘汰最旧的一条。</p>
+     */
+    static final int MAX_ENTRIES = 10_000;
+
     private final long ttlMillis;
     private final Map<String, CacheEntry> cache = new ConcurrentHashMap<>();
 
@@ -88,8 +101,32 @@ public class TenantApiKeyCache {
         if (apiKey == null || apiKey.isEmpty()) {
             return;
         }
+        // P2（2026-09-21）：写入前确保不超上限，避免无界增长
+        if (cache.size() >= MAX_ENTRIES) {
+            evictExpired();
+            if (cache.size() >= MAX_ENTRIES) {
+                evictOldest();
+            }
+        }
         cache.put(apiKey, new CacheEntry(tenant, System.currentTimeMillis()));
     }
+
+    /** 清除所有已过期条目。 */
+    private void evictExpired() {
+        long now = System.currentTimeMillis();
+        cache.entrySet().removeIf(e -> now - e.getValue().cachedAt > ttlMillis);
+    }
+
+    /** 淘汰最旧的一条（近似 LRU）。 */
+    private void evictOldest() {
+        cache.entrySet().stream()
+                .min(java.util.Comparator.comparingLong(e -> e.getValue().cachedAt))
+                .ifPresent(oldest -> {
+                    cache.remove(oldest.getKey(), oldest.getValue());
+                    log.warn("TenantApiKeyCache at capacity ({}), evicted oldest entry", MAX_ENTRIES);
+                });
+    }
+
 
     /**
      * 主动失效单个 API Key 的缓存。

@@ -91,7 +91,13 @@ public class DefaultTenantService implements TenantService {
         Tenant existing = tenantRepository.findByTenantId(tenantId)
                 .orElseThrow(() -> new IllegalArgumentException("Tenant not found: " + tenantId));
         existing.setConfig(config);
-        return tenantRepository.save(existing);
+        Tenant saved = tenantRepository.save(existing);
+        // P2 修复（2026-09-21）：本方法此前**未失效缓存**，而同类其余变更方法
+        // （updateTenant / suspendTenant / terminateTenant）均调用了 invalidate。
+        // 缓存存的是完整 Tenant（含 config），故配置变更后最长一个 TTL 内，
+        // 认证链路仍会读到**旧配置** —— 例如已收紧的配额/策略不生效。
+        apiKeyCache.invalidate(saved.getApiKey());
+        return saved;
     }
 
     @Override
