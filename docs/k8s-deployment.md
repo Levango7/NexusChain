@@ -426,7 +426,7 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: seata
-          image: seataio/seata-server:2.0.0
+          image: apache/seata-server:2.5.0
           ports:
             - containerPort: 8091
               name: tc

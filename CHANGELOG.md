@@ -70,7 +70,7 @@
   nexus-core 已从「启动即崩」转为**正常运行**，该修复在真实 CI 中生效。
   DAST 链路的下一处阻塞见下节。
 
-#### Known issue（DAST 下一处阻塞：seata 镜像标签不存在）
+#### Fixed（Seata 镜像仓库过时：seataio → apache）
 
   上述修复后，`seata-server` 成为 DAST 链路的下一个阻塞点：
   ```
@@ -78,18 +78,25 @@
     not found: manifest unknown
   → gateway 启动超时，跳过 DAST
   ```
-  gateway 依赖 Seata TC（127.0.0.1:8091），seata 起不来则 gateway 不健康，
-  ZAP 无法扫描。
 
-  变更史：`2.0.0` → `2.1.0` → **`2.5.0`**（提交 `85cc9cf`，为对齐
-  `SCA 2025.1.0.0 seata-spring-boot-starter 2.5.0` 而同步升级）。
-  **属同一类问题：版本号跟着 Java 侧对齐升级，但未验证镜像标签是否真实存在。**
-  注：Seata 2.5.0 本身是真实发布（GitHub `apache/incubator-seata` 有 `v2.5.0`），
-  不存在的只是**该 Docker 镜像标签**。
+  根因（**不是版本号错，是镜像仓库名过时**）：
+  Seata 捐赠给 Apache 后镜像迁至 **`apache/seata-server`** 命名空间；
+  旧仓库 `seataio/seata-server` 的最高标签只有 `2.0.0`
+  （`latest` 指向 `1.8.0.2`），**`2.1.0` 与 `2.5.0` 均不存在** ——
+  即此前变更史 `2.0.0 → 2.1.0 → 2.5.0` 中，后两步指向的都是不存在的镜像。
+  而 `apache/seata-server` **确有 `2.5.0`**（另有 2.6.0 / 2.7.0），
+  恰好与 Java 侧 `seata-spring-boot-starter 2.5.0` 对齐。
+  佐证：Java 侧包名早已是 `org.apache.seata.*` ——
+  **镜像命名空间滞后于代码**。
 
-  待办：确认 `seataio/seata-server` 在 Docker Hub 上实际可用的标签后修正。
-  （本次环境直连 Docker Hub 不可达、镜像源均需鉴权，未能核实，
-  故**未做猜测性修改** —— 猜错会把问题推得更深。）
+  修复：`docker-compose.yml`、`docker-compose.prod.yml`、
+  `docs/k8s-deployment.md` 共 3 处改为 `apache/seata-server:2.5.0`
+  （k8s 文档原为 `seataio/seata-server:2.0.0`，一并修正）。
+
+  核实途径（值得记录）：本环境 `curl` 直连 Docker Hub 返回 000（不可达），
+  国内镜像源的 tags/list 与 manifests 接口均返回 401 需鉴权 ——
+  最终经 **WebFetch 走 Docker Hub v2 API** 取得确凿标签清单后才落笔。
+  **在拿到确凿数据前未做猜测性改动**（猜错会把问题推得更深）。
 
 #### Added（防回归）
 

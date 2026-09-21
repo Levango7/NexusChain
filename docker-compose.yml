@@ -293,12 +293,20 @@ services:
     restart: unless-stopped
 
   # === 分布式事务协调器 ===
+  # 2026-09-22 修正镜像仓库：seataio/seata-server → **apache/seata-server**。
+  # Seata 捐赠给 Apache 后镜像迁至 apache 命名空间；旧仓库 seataio 的最高
+  # 标签只有 2.0.0（latest 指向 1.8.0.2），**2.1.0 / 2.5.0 均不存在**。
+  # 实测 CI 报错：
+  #   manifest for seataio/seata-server:2.5.0 not found: manifest unknown
+  # 而 apache/seata-server 确有 2.5.0（另有 2.6.0 / 2.7.0 等），
+  # 与 Java 侧 seata-spring-boot-starter 2.5.0 版本对齐。
+  # 注：Java 侧包名早已是 org.apache.seata.*，镜像命名空间滞后于代码。
   # Seata Server 2.5.0，TC（Transaction Coordinator）角色。
   # 注册到 Nacos（复用 nexus-nacos），配置中心指向 Nacos（namespace=dev, group=SEATA_GROUP）。
   # 开发环境 STORE_MODE=file（生产环境建议 db 模式 + MySQL 持久化）。
   # 版本对齐设计文档 §4.2.1：与 SCA 2025.1.0.0 seata-spring-boot-starter 2.5.0 兼容。
   seata-server:
-    image: seataio/seata-server:2.5.0
+    image: apache/seata-server:2.5.0
     container_name: nexus-seata-server
     ports:
       - '8091:8091'    # Seata Server TC 端口（client 通过此端口注册分支事务）

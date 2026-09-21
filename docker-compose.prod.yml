@@ -299,7 +299,7 @@ services:
   # === 分布式事务协调器（Seata 2.5.0） ===
   # REQ-36/T36.4: 配置加密 key 用占位符
   seata:
-    image: seataio/seata-server:2.5.0
+    image: apache/seata-server:2.5.0
     container_name: nexus-seata-prod
     expose: ['8091', '7091']
     environment:
