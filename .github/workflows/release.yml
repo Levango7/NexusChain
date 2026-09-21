@@ -33,6 +33,10 @@ on:
 
 env:
   REGISTRY: ghcr.io
+  # ⚠️ 不要用于 GHCR 镜像/OCI 地址：GHCR 要求仓库名全小写，而本值为
+  # `${{ github.repository }}`（含大写，如 Levango7/NexusChain）。
+  # 需小写化后用各 job 内 `steps.prefix.outputs.value`（见 build-images /
+  # helm-publish）。保留此项仅为向下兼容，勿新增引用。
   IMAGE_PREFIX: ${{ github.repository }}
 
 permissions:
@@ -52,6 +56,10 @@ jobs:
     timeout-minutes: ${{ matrix.timeout-minutes || 10 }}
     env:
       REGISTRY: ghcr.io
+      # ⚠️ 不要用于 GHCR 镜像/OCI 地址：GHCR 要求仓库名全小写，而本值为
+      # `${{ github.repository }}`（含大写，如 Levango7/NexusChain）。
+      # 需小写化后用各 job 内 `steps.prefix.outputs.value`（见 build-images /
+      # helm-publish）。保留此项仅为向下兼容，勿新增引用。
       IMAGE_PREFIX: ${{ github.repository }}
     strategy:
       fail-fast: false
@@ -79,6 +87,19 @@ jobs:
       - name: Checkout 代码
         uses: actions/checkout@v4
 
+      # 2026-09-22 修复：GHCR 要求镜像仓库名**全小写**。
+      # 此前直接用 `${{ github.repository }}`（本仓库为 `Levango7/NexusChain`，
+      # 含大写），docker buildx 报：
+      #   invalid tag "ghcr.io/Levango7/NexusChain/nexus-compliance:v2.50.1":
+      #   repository name must be lowercase
+      # 即 **v2.50.0 / v2.50.1 两次发布均未产出任何镜像**（每次约 40 秒即失败，
+      # 从未真正构建与推送）。
+      # GitHub Actions 表达式无 lower() 函数，故用 bash 的 ${VAR,,} 转小写，
+      # 经 step outputs 传递，避免硬编码仓库名（fork/重命名仍可用）。
+      - name: 计算镜像仓库前缀（GHCR 要求全小写）
+        id: prefix
+        run: echo "value=${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -93,9 +114,9 @@ jobs:
           file: ./${{ matrix.module }}/Dockerfile
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.module }}:${{ github.ref_name }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.module }}:latest
-            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.module }}:staging
+            ${{ env.REGISTRY }}/${{ steps.prefix.outputs.value }}/${{ matrix.module }}:${{ github.ref_name }}
+            ${{ env.REGISTRY }}/${{ steps.prefix.outputs.value }}/${{ matrix.module }}:latest
+            ${{ env.REGISTRY }}/${{ steps.prefix.outputs.value }}/${{ matrix.module }}:staging
 
   # ============================================================
   # 2. 创建 GitHub Release（从 CHANGELOG.md 提取对应版本段落）
@@ -155,6 +176,12 @@ jobs:
         with:
           version: 'v3.14.0'
 
+      # 2026-09-22 修复：与 build-images 同一根因 —— GHCR OCI 仓库名
+      # 必须全小写，此处原直接用 `${{ github.repository }}`（含大写）。
+      - name: 计算镜像仓库前缀（GHCR 要求全小写）
+        id: prefix
+        run: echo "value=${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
       - name: Login to GHCR OCI Registry
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ${{ env.REGISTRY }} --username ${{ github.actor }} --password-stdin
@@ -165,7 +192,7 @@ jobs:
           # helm package：版本号去掉 v 前缀（Chart version 不含 v 前缀）
           CHART_VERSION_NUM="${CHART_VERSION#v}"
           helm package deploy/helm/ --version "${CHART_VERSION_NUM}" --app-version "${CHART_VERSION_NUM}" --destination ./chart-package
-          helm push "./chart-package/nexus-chain-${CHART_VERSION_NUM}.tgz" "oci://${{ env.REGISTRY }}/${{ github.repository }}/charts"
+          helm push "./chart-package/nexus-chain-${CHART_VERSION_NUM}.tgz" "oci://${{ env.REGISTRY }}/${{ steps.prefix.outputs.value }}/charts"
 
   # ============================================================
   # 4. 自动部署至 staging 环境
