@@ -103,7 +103,7 @@ public class GRpcDebugTool {
                 continue;
             }
             if(line.equals("self")){
-                System.out.println(server.getSelf());
+                log.info(String.valueOf(server.getSelf()));
                 continue;
             }
             if(line.equals("trusted")){

@@ -92,7 +92,7 @@ public class UTCTimeUtil {
         String a = utcToLocalLong(UTCTimeStr);
 
 
-        System.out.println(UTCTimeStr);
-        System.out.println(utcToLocalLong(UTCTimeStr));
+        log.info(UTCTimeStr);
+        log.info(utcToLocalLong(UTCTimeStr));
     }*/
 }

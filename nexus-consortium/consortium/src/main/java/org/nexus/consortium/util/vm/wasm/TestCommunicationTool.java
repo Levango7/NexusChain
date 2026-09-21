@@ -21,7 +21,7 @@ public class TestCommunicationTool {
         if (line.getOptionValue("cmd") != null && !line.getOptionValue("cmd").equals("")) {
             cmd = line.getOptionValue("cmd");
         } else {
-            System.out.println("Cmd Command is empty");
+            log.info("Cmd Command is empty");
             return;
         }
         Runtime run = Runtime.getRuntime();
@@ -47,7 +47,7 @@ public class TestCommunicationTool {
         BufferedReader br = new BufferedReader(new InputStreamReader(ins));
         String s;
         while ((s = br.readLine()) != null)
-            System.out.println(s);
+            log.info(s);
 
     }
 

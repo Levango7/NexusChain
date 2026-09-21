@@ -325,6 +325,6 @@ public class KeystoreAction {
     }
 
     public static void main(String[] args){
-        System.out.println(Hex.encodeHexString(addressToPubkeyHash("1L3zkde4kSpfd1L7NYmNYSBf1Bvh6fZLk")));
+        log.info(Hex.encodeHexString(addressToPubkeyHash("1L3zkde4kSpfd1L7NYmNYSBf1Bvh6fZLk")));
     }
 }

@@ -204,8 +204,8 @@ public class JSONEncodeDecoder implements CoreTypesEncoder, CoreTypesDecoder {
     public static void main(String[] args) {
         JSONEncodeDecoder codec = new JSONEncodeDecoder();
         String encoded = new String(codec.encodePacket(new Packet(codec.encodeTransactions(Collections.singletonList(new Transaction())), 8)));
-        System.out.println(encoded);
+        log.info(encoded);
         Packet packet = codec.decode(encoded.getBytes(), Packet.class);
-        System.out.println(packet == null);
+        log.info(String.valueOf(packet == null));
     }
 }

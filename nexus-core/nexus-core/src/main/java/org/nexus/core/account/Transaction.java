@@ -610,7 +610,7 @@ public class Transaction {
                 "    \"blockHeight\" : 0\n" +
                 "  }";
         Transaction tx = new JSONEncodeDecoder().decodeTransaction(json.getBytes());
-        System.out.println(tx.getHashHexString());
+        log.info(tx.getHashHexString());
     }
 
 }

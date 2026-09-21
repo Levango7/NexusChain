@@ -36,7 +36,7 @@ public class GRPCTestTool {
         GRPCClient client = new GRPCClient(SELF).withExecutor(EXECUTOR);
         client.dialWithTTL("192.168.1.44", 9585, 1, msg)
         .thenAccept((m) -> {
-            System.out.println(m.toString());
+            log.info(m.toString());
         });
     }
 
@@ -50,7 +50,7 @@ public class GRPCTestTool {
                         .build(),
                 (msg, err) -> {
                     try {
-                        System.out.println(new Payload(msg).getBlocks().getBlocksList().size());
+                        log.info(String.valueOf(new Payload(msg).getBlocks().getBlocksList().size()));
                         FileUtils.writeByteArrayToFile(new File("c:\\Users\\Sal\\bin.rpc"), msg.toByteArray());
                     } catch (Exception e) {
                         log.error("GRPCTestTool: uncaught exception", e);
