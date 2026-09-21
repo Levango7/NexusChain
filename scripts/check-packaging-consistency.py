@@ -38,13 +38,36 @@ from __future__ import annotations
 import io
 import os
 import re
+import subprocess
 import sys
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+
+def is_tracked(path: str) -> bool:
+    """判断文件是否被 git 跟踪。
+
+    用于区分「配置被有意排除出仓库」与「配置文件缺失」：
+    被 .gitignore 忽略的文件在 CI 构建上下文里不存在，不应作为要求项。
+    """
+    try:
+        r = subprocess.run(
+            ['git', 'ls-files', '--error-unmatch', path],
+            cwd=REPO_ROOT,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return r.returncode == 0
+    except OSError:
+        return True  # 无 git 可用时不做排除，保持严格
+
 # 被检查的模块：模块目录 -> (build.gradle, Dockerfile)
+# 模块名 -> (build.gradle, Dockerfile, 资源目录)
 MODULES = [
-    ('nexus-core', 'nexus-core/nexus-core/build.gradle', 'nexus-core/Dockerfile'),
+    ('nexus-core',
+     'nexus-core/nexus-core/build.gradle',
+     'nexus-core/Dockerfile',
+     'nexus-core/nexus-core/src/main/resources'),
 ]
 
 COMPOSE_FILES = ['docker-compose.yml']
@@ -63,7 +86,7 @@ def main() -> int:
     failures = []
     checks = 0
 
-    for name, gradle_rel, dockerfile_rel in MODULES:
+    for name, gradle_rel, dockerfile_rel, res_dir in MODULES:
         gradle = read(gradle_rel)
         if not gradle:
             continue
@@ -96,7 +119,20 @@ def main() -> int:
         ]
         code = '\n'.join(code_lines)
 
+        # 只要求**被 git 跟踪**的具体配置文件。
+        # 2026-09-21 教训：初版把 application.yml 也纳入要求，但该文件
+        # 被 .gitignore:162 显式忽略（属「P0/密钥管理修复：保护生产配置」，
+        # 防止含明文凭据的配置入库），**从未进过 git** ——
+        # 于是 CI 构建时 `cp` 直接失败（cannot stat），等于禁止了一个
+        # 根本拿不到的文件。故此处按 git 跟踪状态过滤。
         concrete = [f for f in excluded if '*' not in f]
+        tracked = [f for f in concrete if is_tracked(os.path.join(res_dir, f))]
+        untracked = [f for f in concrete if f not in tracked]
+        if untracked:
+            print('  · 以下被排除项未被 git 跟踪，容器构建不可用，故不要求：%s'
+                  % ', '.join(untracked))
+
+        concrete = tracked
         missing = [f for f in concrete if f not in code]
         if missing:
             failures.append(

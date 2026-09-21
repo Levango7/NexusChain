@@ -82,15 +82,22 @@ RUN cp -r /workspace/nexus-core/nexus-core/build/libs/lib /workspace/lib
 # 修法：jar 继续保持「库友好」（不把配置塞回 jar，避免重新引入端口覆盖），
 # 改为在镜像内单独携带配置文件，运行时经 SPRING_CONFIG_ADDITIONAL_LOCATION
 # 显式加载（见 docker-compose.yml 的 nexus-core 服务）。
-# 必须与 jar 任务的 exclude 列表**逐项对应**（共 5 个模式）：
-#   application.properties / application-local.properties / application.yml /
-#   application-*.yml / application-*.properties
-# 其中 application.yml 不可省略 —— 其头部注释明确写明它「提供默认值
-# （被 properties 中的 ${...} 占位符引用）」，缺失会导致占位符解析失败。
-# （该遗漏由 scripts/check-packaging-consistency.py 在本轮校验中发现。）
+# 只拷贝**被 git 跟踪**的配置文件，即：
+#   application.properties / application-local.properties
+#
+# 2026-09-21 修正：初版把 application.yml 也列入了拷贝清单，导致 CI 构建
+# 直接失败：`cp: cannot stat 'application.yml': No such file or directory`。
+# 原因：.gitignore:162 有 `**/src/main/resources/application.yml`，属
+# 「P0/密钥管理修复：保护生产配置」的一部分（防止含明文凭据的配置被提交），
+# 该文件**从未进过 git**，因此 CI 的构建上下文里不存在它。
+#
+# 已本地实证：仅两个 properties 即可正常启动 ——
+# 占位符错误 0 次，日志中 application.yml 出现 0 次，
+# 应用顺利通过全部配置解析（仅在需要 Postgres 时停下，CI 由 compose 提供）。
+# 故 application.yml 对启动并非必需，不得纳入镜像构建。
 RUN mkdir -p /workspace/appconfig && \
     cd /workspace/nexus-core/nexus-core/src/main/resources && \
-    cp application.properties application-local.properties application.yml /workspace/appconfig/ && \
+    cp application.properties application-local.properties /workspace/appconfig/ && \
     ls -l /workspace/appconfig/
 
 # 诊断：验证 thin jar 和依赖
