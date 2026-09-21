@@ -21,6 +21,42 @@ env:
 
 jobs:
   # ============================================================
+  # 代码卫生棘轮门禁（2026-09-21 审查新增）
+  # ------------------------------------------------------------
+  # 背景：审查记录了三类日志卫生缺陷 —— printStackTrace() 绕过日志框架
+  # （无级别/时间戳/logger 名，与 traceId 无法关联）、System.out.print*
+  # 写 stdout、以及空 catch 静默吞异常。
+  #
+  # 为什么不一次性清零：其中相当一部分位于加密/编码核心
+  # （Ed25519 / SHA3Utility / Uint256 等）。批量重构这些文件的风险高于
+  # 收益 —— 可能改变异常传播路径，且为其注入 logger 需引入新依赖
+  # （实测：nexus-consortium/common 无 slf4j，注入 @Slf4j 直接编译失败）。
+  #
+  # 因此采用**棘轮**策略：
+  #   · 历史违规记入 scripts/code-hygiene-baseline.txt，不阻断构建
+  #   · 任何**新增**违规立即失败
+  #   · 基线只应收缩；修完历史违规后运行
+  #     `python scripts/check-code-hygiene.py --update-baseline`
+  #
+  # 本 job 无外部依赖（纯 Python 3 标准库），秒级完成。
+  # ============================================================
+  code-hygiene:
+    name: Code Hygiene (ratchet gate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 代码卫生棘轮检查（新增 printStackTrace / System.out / 空 catch）
+        run: python scripts/check-code-hygiene.py
+
+  # ============================================================
   # Explorer 前端门禁（2026-09-16 审查新增）
   # ------------------------------------------------------------
   # 背景：nexus-explorer 此前在全部 workflow 中出现 0 次 —— 前端与其 BFF

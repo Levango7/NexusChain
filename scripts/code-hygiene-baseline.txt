@@ -1,0 +1,56 @@
+# 代码卫生基线（棘轮门禁，由 scripts/check-code-hygiene.py 生成）
+#
+# 格式：<相对路径>|<规则>|<归一化源码行>
+# 此文件中的条目**不阻断**构建；任何不在此文件中的新违规会失败。
+# 修完历史违规后运行：python scripts/check-code-hygiene.py --update-baseline
+# 基线只应收缩，不应增长 —— 增长意味着新增了违规。
+#
+nexus-consortium/common/src/main/java/org/nexus/common/InMemoryStateFactory.java|printStackTrace|e.printStackTrace();
+nexus-consortium/common/src/main/java/org/nexus/common/InMemoryStateTree.java|printStackTrace|e.printStackTrace();
+nexus-consortium/consortium/src/main/java/org/nexus/consortium/consensus/poa/PoAConstants.java|SystemOut|System.out.println(new String(BigEndian.encodeInt32(BLOCK_VERSION)));
+nexus-consortium/consortium/src/main/java/org/nexus/consortium/net/GRpcDebugTool.java|SystemOut|cache.blocked.keySet().forEach(x -> System.out.println(x.encodeURI() + " " + x.score));
+nexus-consortium/consortium/src/main/java/org/nexus/consortium/net/GRpcDebugTool.java|SystemOut|cache.getPeers().forEach(x -> System.out.println(x.encodeURI() + " " + x.score));
+nexus-consortium/consortium/src/main/java/org/nexus/consortium/net/GRpcDebugTool.java|SystemOut|for(int i = 0; i < 2000; i++) System.out.println();
+nexus-consortium/consortium/src/main/java/org/nexus/consortium/net/PeerImpl.java|SystemOut|System.out.println(p);
+nexus-consortium/consortium/src/main/java/org/nexus/consortium/net/PeerImpl.java|SystemOut|System.out.println(p2);
+nexus-consortium/consortium/src/main/java/org/nexus/consortium/net/Util.java|SystemOut|System.out.println(externalIp());
+nexus-consortium/consortium/src/main/java/org/nexus/consortium/util/RLPList.java|SystemOut|System.out.print("[");
+nexus-consortium/consortium/src/main/java/org/nexus/consortium/util/RLPList.java|SystemOut|System.out.print("]");
+nexus-consortium/consortium/src/main/java/org/nexus/consortium/util/RLPList.java|SystemOut|System.out.print(hex + ", ");
+nexus-core/nexus-core/src/main/java/org/nexus/consensus/pow/EconomicModel.java|SystemOut|System.out.println(reward * 1.0 / NEX);
+nexus-core/nexus-core/src/main/java/org/nexus/core/TransactionPool.java|SystemOut|System.out.println(pol.has(t1.getHashHexString()));
+nexus-core/nexus-core/src/main/java/org/nexus/core/TransactionPool.java|SystemOut|System.out.println(pol.poll().getFee());
+nexus-core/nexus-core/src/main/java/org/nexus/core/TransactionPool.java|SystemOut|System.out.println(pol.size());
+nexus-core/nexus-core/src/main/java/org/nexus/core/incubator/RateTable.java|SystemOut|System.out.println(days);
+nexus-core/nexus-core/src/main/java/org/nexus/crypto/ed25519/Ed25519.java|SystemOut|System.out.println(pubk.verify("abc".getBytes(), prik.sign("abc".getBytes())));
+nexus-core/nexus-core/src/main/java/org/nexus/encoding/BigEndian.java|SystemOut|System.out.println(Hex.encodeHex(encodeUint16(MAX_UINT_16)));
+nexus-core/nexus-core/src/main/java/org/nexus/encoding/BigEndian.java|SystemOut|System.out.println(Hex.encodeHexString(BigEndian.encodeUint256(BigEndian.decodeUint256(
+nexus-core/nexus-core/src/main/java/org/nexus/encoding/Uint256.java|SystemOut|System.out.println(Uint256.fromEncoded(Hex.decodeHex("0000000000010000000000000000000000000000000000000000000000000000".toCharArray())).compareTo(
+nexus-core/nexus-core/src/main/java/org/nexus/keystore/crypto/SHA3Utility.java|SystemOut|System.out.println(org.apache.commons.codec.binary.Hex.encodeHexString(keccak256("abc".getBytes())));
+nexus-core/nexus-core/src/main/java/org/nexus/keystore/util/LargeNumCalculation.java|SystemOut|System.out.println(b3);
+nexus-core/nexus-core/src/main/java/org/nexus/keystore/util/LargeNumCalculation.java|SystemOut|System.out.println(str);
+nexus-core/nexus-core/src/main/java/org/nexus/keystore/util/LargeNumCalculation.java|SystemOut|System.out.println(valAdd(valLeft,16,valRight,2));
+nexus-core/nexus-core/src/main/java/org/nexus/keystore/util/LargeNumCalculation.java|SystemOut|System.out.println(valDivide(valLeft,16,valRight,2));
+nexus-core/nexus-core/src/main/java/org/nexus/keystore/util/LargeNumCalculation.java|SystemOut|System.out.println(valMultiply(valLeft,16,valRight,2));
+nexus-core/nexus-core/src/main/java/org/nexus/keystore/util/LargeNumCalculation.java|SystemOut|System.out.println(valSubtract(valLeft,16,valRight,2));
+nexus-core/nexus-core/src/main/java/org/nexus/keystore/util/PrincipalUtil.java|SystemOut|System.out.println(hashSet.size());
+nexus-core/nexus-core/src/main/java/org/nexus/keystore/util/PrincipalUtil.java|SystemOut|System.out.println(l2-l1);
+nexus-core/nexus-core/src/main/java/org/nexus/pool/AdoptTransPool.java|SystemOut|System.out.println("");
+nexus-core/nexus-core/src/main/java/org/nexus/pool/AdoptTransPool.java|SystemOut|System.out.println("Key:"+entry.getKey()+"---->Value:"+entry.getValue());
+nexus-core/nexus-core/src/main/java/org/nexus/pool/AdoptTransPool.java|SystemOut|System.out.println("size:"+lits.size());
+nexus-core/nexus-core/src/main/java/org/nexus/pool/AdoptTransPool.java|SystemOut|System.out.println(jsonObject);
+nexus-core/nexus-core/src/main/java/org/nexus/pool/AdoptTransPool.java|SystemOut|System.out.println(transPool.getTransaction());
+nexus-core/nexus-core/src/main/java/org/nexus/protobuf/GenerateClass.java|SystemOut|System.out.println(process.waitFor() == 0 ? "完成" : "protoc 执行失败");
+nexus-core/nexus-core/src/main/java/org/nexus/protobuf/tcp/command/CommandCode.java|SystemOut|System.out.println("key:"+i+"--->value:"+intToTypeMap.get(i));
+nexus-core/nexus-core/src/main/java/org/nexus/sync/Utils.java|SystemOut|System.out.println(
+nexus-core/nexus-core/src/main/java/org/nexus/sync/Utils.java|SystemOut|System.out.println(encodeBlock(b).getSerializedSize() * 1.0 / (1 << 10));
+nexus-core/nexus-core/src/main/java/org/nexus/util/CopyrightUtil.java|SystemOut|System.out.println(" "+f);
+nexus-core/nexus-core/src/main/java/org/nexus/util/CopyrightUtil.java|SystemOut|System.out.println(" "+w);
+nexus-core/nexus-core/src/main/java/org/nexus/util/CopyrightUtil.java|SystemOut|System.out.println("JAVA源代码错误个数 "+wrong.size());
+nexus-core/nexus-core/src/main/java/org/nexus/util/CopyrightUtil.java|SystemOut|System.out.println("为 "+count+" 个添加");
+nexus-core/nexus-core/src/main/java/org/nexus/util/CopyrightUtil.java|SystemOut|System.out.println("处理失败个数 "+fail.size());
+nexus-core/nexus-core/src/main/java/org/nexus/util/CopyrightUtil.java|SystemOut|System.out.println(path.getAbsolutePath());
+nexus-core/nexus-core/src/main/java/org/nexus/util/RLPList.java|SystemOut|System.out.print("[");
+nexus-core/nexus-core/src/main/java/org/nexus/util/RLPList.java|SystemOut|System.out.print("]");
+nexus-core/nexus-core/src/main/java/org/nexus/util/RLPList.java|SystemOut|System.out.print(hex + ", ");
+nexus-sdk/java/src/main/java/org/nexus/sdk/wallet/TxUtils.java|printStackTrace|e.printStackTrace();
