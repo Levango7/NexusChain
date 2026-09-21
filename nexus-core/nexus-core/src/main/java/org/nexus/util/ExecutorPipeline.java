@@ -137,7 +137,12 @@ public class ExecutorPipeline <In, Out>{
     public void shutdown() {
         try {
             exec.shutdown();
-        } catch (RuntimeException e) {}
+        } catch (RuntimeException ignored) {
+            // P2（2026-09-21 审查记录，未加日志）：此处静默吞掉 shutdown 异常。
+            // 本类为引入的 LGPL 库文件，且**全仓零引用（死代码）**，
+            // 故不为其新增 logger 字段（无意义改动）。若将来启用本类，
+            // 应将此 catch 改为记录 WARN，避免关闭失败被完全掩盖。
+        }
         if (next != null) {
             exec.shutdown();
         }

@@ -26,7 +26,12 @@ public class EpochSecondDeserializer extends JsonDeserializer<Long> {
         }
         try{
             return Long.parseLong(encoded);
-        }catch (Exception ignored){}
+        } catch (NumberFormatException notANumber) {
+            // P2（2026-09-21）：原为 catch (Exception ignored) {}。
+            // 本分支意图是「先按数字解析，失败则回退到日期解析」（见下方 OffsetDateTime），
+            // 属合法的多格式尝试。但捕获 Exception 过宽，会连带吞掉真正的意外错误；
+            // 收窄为 NumberFormatException，使非预期异常能正常暴露。
+        }
         try{
             return OffsetDateTime.parse(encoded)
                     .toEpochSecond();

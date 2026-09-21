@@ -97,7 +97,18 @@ public class PoAMiner implements Miner {
                 tryMine();
                 try {
                     TimeUnit.SECONDS.sleep(poAConfig.getBlockInterval());
-                }catch (Exception ignored){}
+                } catch (InterruptedException ie) {
+                    // P2 修复（2026-09-21）：原为 catch (Exception ignored) {} —— 吞掉中断，
+                    // 而本循环是 while(true)。后果：调用 thread.interrupt() 无法停止挖矿线程
+                    // （中断标志被清除且循环继续），线程泄漏、节点无法优雅停机。
+                    // 正确做法：恢复中断标志并跳出循环。
+                    Thread.currentThread().interrupt();
+                    log.info("PoA miner interrupted, exiting mining loop");
+                    return;
+                } catch (RuntimeException e) {
+                    // 睡眠本身不会抛 RuntimeException，但保留兜底并留痕，不再静默
+                    log.warn("PoA miner sleep failed unexpectedly: {}", e.getMessage(), e);
+                }
             }
         });
         thread.start();

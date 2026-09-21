@@ -70,7 +70,11 @@ public class ProtoChannel implements Channel {
         listeners = null;
         try{
             out.close();
-        }catch (Exception ignore){}
+        } catch (Exception closeEx) {
+            // P2（2026-09-21）：原为 catch (Exception ignore) {}（静默）。
+            // 关闭流失败通常无碍，但静默会掩盖「句柄未释放」类问题，故留痕。
+            log.debug("Failed to close ProtoChannel output stream: {}", closeEx.getMessage());
+        }
     }
 
     public void write(Message message) {

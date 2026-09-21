@@ -80,7 +80,13 @@ public class PoA implements ConsensusEngine, PeerServerListener {
             String schema = "";
             try{
                 schema = mapper.writeValueAsProperties(new PoAConfig()).toString();
-            }catch (Exception ignored){};
+            } catch (Exception schemaEx) {
+                // P2（2026-09-21）：原为 catch (Exception ignored) {};（静默 + 多余分号）。
+                // 此处为错误路径上的「尽力构造 schema 用于报错信息」，失败可接受，
+                // 但不应静默——留痕以便区分「配置真错」与「schema 构造失败」。
+                log.debug("Failed to build PoAConfig schema for error message: {}",
+                        schemaEx.getMessage());
+            }
             throw new ConsensusEngineLoadException(
                     "load properties failed :" + properties.toString() + " expecting " + schema
             );
