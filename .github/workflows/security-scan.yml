@@ -188,6 +188,11 @@ jobs:
   # （continue-on-error 不改运行逻辑，仅不阻塞 workflow 结论）。
   # 失效点监控：Trivy fs/image 扫描仍覆盖 Gradle 依赖漏洞（唯一来源差异为
   # OWASP 的 NVD CPE 数据库），key 到位前以 Trivy 为准。
+  #
+  # 2026-09-21 补充：本 job 缺 key 时**约 5 秒内快速失败并给出明确指引**
+  # （见下方 `if [[ -z "$NVD_API_KEY" ]]` 守卫），是刻意设计而非缺陷 ——
+  # 与其静默跳过让人误以为扫过了，不如明确报错。configure 步骤与常见误解
+  # 见 docs/dependency-check-update-policy.md「NVD API Key 配置」一节。
   # ============================================================
   owasp-dependency-check:
     name: OWASP Dependency-Check
