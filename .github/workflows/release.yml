@@ -11,24 +11,35 @@ on:
   push:
     tags:
       - 'v*.*.*'
-  # Task 284：手动触发回滚流程（不触发正常发布 jobs，由各 job 的 if 条件隔离）
+  # 手动触发：两种用途，由 dry_run 区分
+  #   · dry_run=true  → **试跑发布链路**：构建并推送镜像到 :dryrun 标签，
+  #                     不创建 GitHub Release、不发 Helm chart、不部署。
+  #                     用于在正式打 tag 前验证 build-images 能真正跑通
+  #                     （2026-09-22 新增：该链路此前从未成功过，
+  #                      仅做静态校验不足以证明可用）。
+  #   · dry_run=false → 回滚流程（Task 284），需填 target_version 等。
   workflow_dispatch:
     inputs:
+      dry_run:
+        description: '试跑发布链路（推 :dryrun 镜像，不建 Release / 不部署）'
+        required: false
+        type: boolean
+        default: false
       target_version:
-        description: '回滚目标版本号（git tag，如 v2.2.1）'
-        required: true
+        description: '回滚目标版本号（git tag，如 v2.2.1）；dry_run=true 时忽略'
+        required: false
         type: string
       environment:
-        description: '回滚目标环境'
-        required: true
+        description: '回滚目标环境；dry_run=true 时忽略'
+        required: false
         type: choice
-        default: 'production'
+        default: 'staging'
         options:
           - staging
           - production
       reason:
-        description: '回滚原因（将记录到回滚日志）'
-        required: true
+        description: '回滚原因；dry_run=true 时忽略'
+        required: false
         type: string
 
 env:
@@ -49,7 +60,8 @@ jobs:
   # ============================================================
   build-images:
     name: Build Images (${{ matrix.module }})
-    if: github.event_name == 'push'
+    # 正式发布（push tag）或试跑（workflow_dispatch + dry_run=true）
+    if: github.event_name == 'push' || inputs.dry_run
     runs-on: ubuntu-latest
     # P0 审计修复：移除 continue-on-error。原先任一镜像构建失败不阻断发布，
     # 会产出"部分缺失镜像"的 release 并照常部署；现在构建失败即终止发布流程。
@@ -107,7 +119,19 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # 试跑：只推 :dryrun 一个标签 —— 既不占用正式版本号，
+      # 又能完整验证「标签合法性 + GHCR 认证 + 推送权限」这条此前一直失败的路径。
+      - name: Build and push image（试跑：仅 :dryrun）
+        if: inputs.dry_run
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./${{ matrix.module }}/Dockerfile
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ steps.prefix.outputs.value }}/${{ matrix.module }}:dryrun
+
       - name: Build and push image（tag = git tag 版本号）
+        if: github.event_name == 'push'
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -123,7 +147,8 @@ jobs:
   # ============================================================
   github-release:
     name: GitHub Release
-    if: github.event_name == 'push'
+    # 试跑不创建 Release（避免产出指向 :dryrun 镜像的正式 Release）
+    if: github.event_name == 'push' && !inputs.dry_run
     needs: build-images
     runs-on: ubuntu-latest
     steps:
@@ -133,15 +158,28 @@ jobs:
           fetch-depth: 0
 
       # 从 CHANGELOG.md 提取当前 tag 对应版本段落，避免 Release body 包含全量历史。
-      # CHANGELOG.md 格式：## [2.2.2] - 2026-08-18
-      # awk 逻辑：匹配 ## [${VERSION#v}] 时开始打印，遇到下一个 ## [ 时退出。
+      # CHANGELOG.md 格式：## [2.50.2] - 2026-09-22
+      #
+      # 2026-09-22 修复：原实现为
+      #   awk "/## \[${V}\]/{flag=1} /## \[/{if(flag)exit} flag"
+      # 该写法**恒返回空**——匹配到目标行时设 flag=1，但**同一行也命中
+      # 第二个模式 `/## \[/`**，随即 exit，一行都没输出。
+      # 实测 2.50.2 / 2.50.0 / 2.40.0 **三个版本均提取 0 字节**，
+      # 于是每次都走下面的兜底分支、把**整份 CHANGELOG** 当作 Release body。
+      # 因发布流水线此前从未成功过，该缺陷一直未被发现。
+      #
+      # 改用 index() 做前缀判断，既修掉上述逻辑错误，也避免正则转义问题。
       - name: Extract version changelog
         run: |
           VERSION="${{ github.ref_name }}"
-          # 去掉 v 前缀（tag 形如 v2.2.2，CHANGELOG 中为 2.2.2）
+          # 去掉 v 前缀（tag 形如 v2.50.2，CHANGELOG 中为 2.50.2）
           VERSION_NUM="${VERSION#v}"
           echo ">>> Extracting changelog for version ${VERSION_NUM}"
-          awk "/## \[${VERSION_NUM}\]/{flag=1} /## \[/{if(flag)exit} flag" CHANGELOG.md > version_changelog.md
+          awk -v v="${VERSION_NUM}" '
+            index($0, "## [" v "]") == 1 { f = 1; print; next }
+            f && index($0, "## [") == 1 { exit }
+            f { print }
+          ' CHANGELOG.md > version_changelog.md
           echo ">>> Extracted changelog (head):"
           head -20 version_changelog.md
           # 兜底：若未提取到内容（版本号不匹配），使用全量 CHANGELOG 并告警
@@ -164,7 +202,7 @@ jobs:
   # ============================================================
   helm-publish:
     name: Helm Chart Publish
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && !inputs.dry_run
     needs: build-images
     runs-on: ubuntu-latest
     steps:
@@ -199,7 +237,7 @@ jobs:
   # ============================================================
   deploy-staging:
     name: Deploy to Staging
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && !inputs.dry_run
     needs: [github-release, helm-publish]
     runs-on: ubuntu-latest
     environment: staging
@@ -247,7 +285,7 @@ jobs:
   # ============================================================
   deploy-prod:
     name: Deploy to Production
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && !inputs.dry_run
     needs: deploy-staging
     runs-on: ubuntu-latest
     # environment: production 触发 GitHub environment protection
@@ -310,7 +348,8 @@ jobs:
   # ---------------------------------------------------------------------------
   rollback:
     name: Rollback (${{ github.event.inputs.environment }})
-    if: github.event_name == 'workflow_dispatch'
+    # 仅手动触发且**非试跑**时执行回滚
+    if: github.event_name == 'workflow_dispatch' && !inputs.dry_run
     runs-on: ubuntu-latest
     # environment 用动态值：production 回滚会触发 environment protection（required reviewers approval）
     environment: ${{ github.event.inputs.environment }}

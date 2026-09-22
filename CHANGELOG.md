@@ -2,7 +2,11 @@
 
 本文件记录 NexusChain 各版本的变更。
 
-## [Unreleased]
+## [2.50.2] - 2026-09-22
+
+> 本版本为 **v2.50.0 / v2.50.1 之后的首次真正发布**。
+> 此前两次打 tag 的发布流水线均在约 40 秒内失败，**未产出任何镜像与
+> GitHub Release**（`gh release list` 为空）。根因见下方「发布流水线」一节。
 
 ### 长期失败的 CI 门禁整改（2026-09-21）
 
@@ -97,6 +101,44 @@
   国内镜像源的 tags/list 与 manifests 接口均返回 401 需鉴权 ——
   最终经 **WebFetch 走 Docker Hub v2 API** 取得确凿标签清单后才落笔。
   **在拿到确凿数据前未做猜测性改动**（猜错会把问题推得更深）。
+
+#### Fixed（发布流水线从未成功过）
+
+  按「长期失败的 CI 里藏着真问题」的思路，把排查**扩展到全部 5 个 workflow**
+  （此前只查了 `ci.yml` 与 `security-scan.yml`），在 `release.yml` 命中：
+
+  ```
+  ERROR: failed to build: invalid tag
+    "ghcr.io/Levango7/NexusChain/nexus-compliance:v2.50.1":
+    repository name must be lowercase
+  ```
+
+  GHCR 要求仓库名**全小写**，而 workflow 直接用 `${{ github.repository }}`
+  （本仓库 `Levango7/NexusChain` 含大写）。
+  → **v2.50.0 / v2.50.1 两次发布均未产出任何镜像与 GitHub Release**
+  （`gh release list` 为空可证）。
+
+  **关键判据**：两次运行都只跑约 **40 秒**即失败 ——
+  发布流水线 40 秒失败，说明根本没跑到构建阶段。
+
+  修复：GitHub Actions 表达式无 `lower()`，故在 `build-images` 与
+  `helm-publish` 两个 job 内各加一步，用 bash `${GITHUB_REPOSITORY,,}`
+  转小写并经 step outputs 传递；docker tags（3 个）与 helm push 的 OCI
+  地址共用该值。不硬编码仓库名，fork / 重命名仍可用。
+  `IMAGE_PREFIX` 已无引用，加显式警告注释避免将来误用。
+
+  同时新增 **试跑能力**（`workflow_dispatch` + `dry_run=true`）：
+  构建并推送镜像到 `:dryrun` 标签，不创建 Release、不发 chart、不部署。
+  理由：该链路此前从未成功过，仅做静态校验（YAML 解析 + 小写转换实测）
+  不足以证明可用；先试跑再正式打 tag。
+
+  顺带修复 Release body 的 CHANGELOG 提取（同一处长期潜伏缺陷）：
+  原实现 `awk "/## \[${V}\]/{flag=1} /## \[/{if(flag)exit} flag"` **恒返回空** ——
+  匹配目标行时设 `flag=1`，但**同一行也命中第二个模式**，随即 `exit`。
+  实测 `2.50.2` / `2.50.0` / `2.40.0` **三个版本均提取 0 字节**，
+  于是每次都走兜底分支、把**整份 CHANGELOG** 当 Release body。
+  改用 `index()` 前缀判断，实测三版本分别提取 13523 / 4362 / 5780 字节，
+  首行均为对应版本标题。
 
 #### Added（防回归）
 
