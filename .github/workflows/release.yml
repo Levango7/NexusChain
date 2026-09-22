@@ -65,7 +65,12 @@ jobs:
     runs-on: ubuntu-latest
     # P0 审计修复：移除 continue-on-error。原先任一镜像构建失败不阻断发布，
     # 会产出"部分缺失镜像"的 release 并照常部署；现在构建失败即终止发布流程。
-    timeout-minutes: ${{ matrix.timeout-minutes || 10 }}
+    #
+    # 2026-09-22：默认超时 10 → 20 分钟。v2.50.2 首次正式发布时
+    # nexus-wallet-service 构建在 10 分钟处被 cancel（试跑同一镜像仅 2m33s，
+    # 说明是构建耗时的方差，非代码问题）；10 分钟上限对含依赖下载的
+    # Docker 构建过紧，一旦超时会导致整条发布链（Release / chart / 部署）全部跳过。
+    timeout-minutes: ${{ matrix.timeout-minutes || 20 }}
     env:
       REGISTRY: ghcr.io
       # ⚠️ 不要用于 GHCR 镜像/OCI 地址：GHCR 要求仓库名全小写，而本值为
@@ -92,9 +97,9 @@ jobs:
           - zk-groth16-service
         include:
           - module: mpc-engine
-            timeout-minutes: 15
+            timeout-minutes: 25
           - module: zk-groth16-service
-            timeout-minutes: 15
+            timeout-minutes: 25
     steps:
       - name: Checkout 代码
         uses: actions/checkout@v4
