@@ -250,17 +250,35 @@ jobs:
       - name: Checkout 代码
         uses: actions/checkout@v4
 
+      # 2026-09-22：未配置 KUBE_CONFIG_STAGING 时**明确跳过**而非失败。
+      # 现状：该 secret 尚未配置（暂无 staging 集群），此前每次发布都在此
+      # 报 "Kubernetes cluster unreachable"（空 kubeconfig → helm 连 localhost:8080），
+      # 使发布流水线恒红、掩盖真实问题。
+      # 语义区分：**未配置 → 跳过并告警**（不是失败）；**已配置但部署失败 → 仍然失败**。
+      - name: 检查部署凭据是否配置
+        id: creds
+        run: |
+          if [ -z "${{ secrets.KUBE_CONFIG_STAGING }}" ]; then
+            echo "::warning::未配置 secrets.KUBE_CONFIG_STAGING —— 跳过 staging 部署（发布产物已产出，仅未部署）。配置该 secret 后自动恢复部署。"
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Setup Helm
+        if: steps.creds.outputs.configured == 'true'
         uses: azure/setup-helm@v4
         with:
           version: 'v3.14.0'
 
       - name: Configure kubeconfig
+        if: steps.creds.outputs.configured == 'true'
         run: |
           mkdir -p $HOME/.kube
           echo "${{ secrets.KUBE_CONFIG_STAGING }}" | base64 -d > $HOME/.kube/config
 
       - name: Helm upgrade --install（staging）
+        if: steps.creds.outputs.configured == 'true'
         run: |
           CHART_VERSION="${{ github.ref_name }}"
           CHART_VERSION_NUM="${CHART_VERSION#v}"
@@ -300,17 +318,32 @@ jobs:
       - name: Checkout 代码
         uses: actions/checkout@v4
 
+      # 2026-09-22：与 deploy-staging 同策略 —— 未配置凭据则跳过并告警，
+      # 不把一个"尚未配置"的状态渲染成"部署失败"。
+      - name: 检查部署凭据是否配置
+        id: creds
+        run: |
+          if [ -z "${{ secrets.KUBE_CONFIG_PROD }}" ]; then
+            echo "::warning::未配置 secrets.KUBE_CONFIG_PROD —— 跳过 prod 部署（发布产物已产出，仅未部署）。"
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Setup Helm
+        if: steps.creds.outputs.configured == 'true'
         uses: azure/setup-helm@v4
         with:
           version: 'v3.14.0'
 
       - name: Configure kubeconfig
+        if: steps.creds.outputs.configured == 'true'
         run: |
           mkdir -p $HOME/.kube
           echo "${{ secrets.KUBE_CONFIG_PROD }}" | base64 -d > $HOME/.kube/config
 
       - name: Helm upgrade --install（prod）
+        if: steps.creds.outputs.configured == 'true'
         run: |
           CHART_VERSION="${{ github.ref_name }}"
           CHART_VERSION_NUM="${CHART_VERSION#v}"

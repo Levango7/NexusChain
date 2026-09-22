@@ -2,6 +2,28 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [Unreleased]
+
+### v2.50.2 发布后的收尾修复（2026-09-22）
+
+#### Fixed
+
+- **构建超时 10 → 20 分钟**：v2.50.2 首次正式发布时，
+  `Build Images (nexus-wallet-service)` 在 10 分钟处被 cancel
+  （`The operation was canceled.`）—— 触达 `timeout-minutes: 10` 上限，
+  **非构建错误**（同一镜像在试跑中仅 2m33s）。
+  该 job 超时导致后续 `github-release` / `helm-publish` / `deploy-*`
+  全部跳过，整条发布链无产出。默认超时改为 20 分钟，
+  `mpc-engine` / `zk-groth16-service` 由 15 改为 25 分钟。
+- **部署 job 未配置凭据时改为「跳过 + 告警」**：
+  `deploy-staging` / `deploy-prod` 在未配置
+  `secrets.KUBE_CONFIG_STAGING` / `KUBE_CONFIG_PROD` 时，
+  原先会执行空 kubeconfig 并报
+  `Kubernetes cluster unreachable`，使每次发布恒红。
+  现改为：**未配置 → 跳过并打印告警**（发布产物照常产出）；
+  **已配置但部署失败 → 仍然失败**。
+  语义区分「尚未配置」与「部署失败」，避免后者被前者的噪音掩盖。
+
 ## [2.50.2] - 2026-09-22
 
 > 本版本为 **v2.50.0 / v2.50.1 之后的首次真正发布**。
