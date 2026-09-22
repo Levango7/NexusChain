@@ -514,7 +514,23 @@ public class CggmpMpcE2EClusterTest {
             }
             states = next;
         }
-        throw new AssertionError(phase + " stuck after 200 rounds");
+        // 2026-09-22：失败信息补充各参与方状态。
+        // 背景：本断言在 CI 上偶发失败（"stuck after 200 rounds"）——
+        // 同一提交前后两次运行均通过，属抖动而非稳定缺陷。但原信息只说
+        // "卡住"，无法判断是某一方未完成、还是消息未投递（outgoing 非空
+        // 但无人消费）。此处打出每方的 finished / outgoing 计数，
+        // 使下次复现可直接定位参与方与消息堆积点。
+        // 注意：**仅增加诊断，未改动轮次预算与收敛逻辑** ——
+        // 在没有确凿证据前提高轮次上限只会掩盖问题。
+        StringBuilder diag = new StringBuilder();
+        for (int i = 0; i < states.size(); i++) {
+            CgPumpResult st = states.get(i);
+            diag.append("\n  party=").append(parties[i])
+                    .append(" finished=").append(st.isFinished())
+                    .append(" outgoing=")
+                    .append(st.getOutgoing() == null ? 0 : st.getOutgoing().size());
+        }
+        throw new AssertionError(phase + " stuck after 200 rounds; 各方状态:" + diag);
     }
 
     /** sign 阶段 relay 循环：仅 signers 参与拉取/pump（非签名方持份额不动作）。 */
