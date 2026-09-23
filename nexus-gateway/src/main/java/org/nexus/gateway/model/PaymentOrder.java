@@ -95,6 +95,16 @@ public class PaymentOrder {
     @Column(name = "checkout_token", unique = true, length = 128)
     private String checkoutToken;
 
+    /**
+     * 扫码支付令牌（扫码支付功能）。
+     *
+     * <p>创建订单时自动生成（UUID 去横线），用于生成支付二维码内容中的 token 参数。
+     * 扫码支付时校验此 token 与二维码中的 token 一致，防止二维码伪造。
+     * 与 checkoutToken 独立，互不影响。</p>
+     */
+    @Column(name = "qr_code_token", unique = true, length = 128)
+    private String qrCodeToken;
+
     /** Order expiry time. */
     @Column(name = "expires_at", nullable = false)
     private LocalDateTime expiresAt;
@@ -176,6 +186,9 @@ public class PaymentOrder {
 
     public String getCheckoutToken() { return checkoutToken; }
     public void setCheckoutToken(String checkoutToken) { this.checkoutToken = checkoutToken; }
+
+    public String getQrCodeToken() { return qrCodeToken; }
+    public void setQrCodeToken(String qrCodeToken) { this.qrCodeToken = qrCodeToken; }
 
     public LocalDateTime getExpiresAt() { return expiresAt; }
     public void setExpiresAt(LocalDateTime expiresAt) { this.expiresAt = expiresAt; }

@@ -34,6 +34,22 @@
         .order-info { font-size: 12px; color: #9ca3af; margin-top: 8px; }
         .qr-section { margin: 24px 0; }
         .qr-section canvas { border: 8px solid #f3f4f6; border-radius: 12px; }
+        .qr-section img { border: 8px solid #f3f4f6; border-radius: 12px; width: 200px; height: 200px; }
+        .qr-tab-row { display: flex; gap: 8px; margin: 16px 0 8px; }
+        .qr-tab {
+            flex: 1;
+            padding: 8px 12px;
+            border: 1px solid #d1d5db;
+            border-radius: 8px;
+            background: #fff;
+            font-size: 13px;
+            color: #374151;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .qr-tab.active { background: #4f46e5; color: #fff; border-color: #4f46e5; }
+        .qr-tab:hover:not(.active) { border-color: #4f46e5; color: #4f46e5; }
+        .qr-hint { font-size: 12px; color: #6b7280; margin-top: 8px; }
         .address-box {
             background: #f9fafb;
             border: 1px solid #e5e7eb;
@@ -85,8 +101,16 @@
         .status-bar.info { display: block; background: #dbeafe; color: #1e40af; }
         .timer { font-size: 12px; color: #9ca3af; margin-top: 16px; }
         .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #92400e; border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: middle; margin-right: 6px; }
+        .spinner-green { border-color: #065f46; border-top-color: transparent; }
         @keyframes spin { to { transform: rotate(360deg); } }
         .hidden { display: none; }
+        .scan-status { margin-top: 16px; padding: 16px; border-radius: 12px; display: none; }
+        .scan-status.waiting { display: block; background: #fef3c7; color: #92400e; }
+        .scan-status.paying { display: block; background: #dbeafe; color: #1e40af; }
+        .scan-status.success { display: block; background: #d1fae5; color: #065f46; }
+        .scan-status.failed { display: block; background: #fee2e2; color: #991b1b; }
+        .scan-icon { font-size: 32px; margin-bottom: 8px; }
+        .divider { border-top: 1px solid #e5e7eb; margin: 24px 0; }
     </style>
 </head>
 <body>
@@ -107,19 +131,39 @@
                 <div class="order-info" id="descLine"></div>
             </div>
 
-            <div class="qr-section">
-                <canvas id="qrCanvas"></canvas>
+            <!-- 扫码支付标签页 -->
+            <div class="qr-tab-row">
+                <div class="qr-tab active" id="tabScan" onclick="switchTab('scan')">扫码支付</div>
+                <div class="qr-tab" id="tabManual" onclick="switchTab('manual')">手动支付</div>
             </div>
 
-            <div class="address-label">收款地址</div>
-            <div class="address-box" id="payeeAddress">-</div>
+            <!-- 扫码支付区域 -->
+            <div id="scanSection">
+                <div class="qr-section">
+                    <img id="qrImage" alt="支付二维码" class="hidden">
+                    <canvas id="qrCanvas" class="hidden"></canvas>
+                </div>
+                <div class="qr-hint" id="qrHint">请使用 NexusChain 钱包 App 扫码支付</div>
 
-            <div class="input-group">
-                <label for="payerInput">您的钱包地址</label>
-                <input type="text" id="payerInput" placeholder="输入您的 NEX 钱包地址">
+                <!-- 扫码支付状态展示 -->
+                <div class="scan-status" id="scanStatus">
+                    <div class="scan-icon" id="scanIcon"></div>
+                    <div id="scanStatusText"></div>
+                </div>
             </div>
 
-            <button class="btn-pay" id="payBtn" onclick="confirmPay()">确认支付</button>
+            <!-- 手动支付区域 -->
+            <div id="manualSection" class="hidden">
+                <div class="address-label">收款地址</div>
+                <div class="address-box" id="payeeAddress">-</div>
+
+                <div class="input-group">
+                    <label for="payerInput">您的钱包地址</label>
+                    <input type="text" id="payerInput" placeholder="输入您的 NEX 钱包地址">
+                </div>
+
+                <button class="btn-pay" id="payBtn" onclick="confirmPay()">确认支付</button>
+            </div>
 
             <div class="status-bar" id="statusBar"></div>
             <div class="timer" id="timerLine"></div>
@@ -137,6 +181,8 @@ let checkoutToken = null;
 let orderData = null;
 let pollInterval = null;
 let expiryTimer = null;
+let qrContent = null;
+let currentTab = 'scan';
 
 // Parse token from URL
 (function init() {
@@ -151,7 +197,6 @@ let expiryTimer = null;
 
 async function loadOrder() {
     try {
-        // Use the checkout token to get order info via a dedicated API
         const res = await fetch(API_BASE + '/api/v1/checkout/info?token=' + encodeURIComponent(checkoutToken));
         if (!res.ok) {
             showError('订单不存在或已过期');
@@ -177,11 +222,8 @@ function renderOrder() {
         document.getElementById('descLine').textContent = orderData.description;
     }
 
-    // Generate QR code with payment info
-    const qrData = 'nexus:' + orderData.payeeAddress + '?amount=' + orderData.amount + '&token=' + checkoutToken;
-    QRCode.toCanvas(document.getElementById('qrCanvas'), qrData, { width: 180, margin: 1 }, function(err) {
-        if (err) console.error('QR generation failed:', err);
-    });
+    // 尝试从后端 API 获取二维码图片（扫码支付）
+    loadQrCode();
 
     // Start expiry countdown
     if (orderData.expiresAt) {
@@ -192,14 +234,84 @@ function renderOrder() {
     startPolling();
 }
 
+async function loadQrCode() {
+    try {
+        // 调用扫码支付 API 生成二维码
+        const res = await fetch(API_BASE + '/api/v1/qr/generate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ orderId: orderData.id })
+        });
+
+        if (res.ok) {
+            const data = await res.json();
+            if (data.qrImage) {
+                // 显示后端生成的 Base64 二维码图片
+                const img = document.getElementById('qrImage');
+                img.src = 'data:image/png;base64,' + data.qrImage;
+                img.classList.remove('hidden');
+                document.getElementById('qrCanvas').classList.add('hidden');
+                qrContent = data.qrContent;
+                showScanStatus('waiting', '📱', '等待扫码支付...');
+                return;
+            }
+        }
+        // 后端 API 不可用时，使用前端 JS 库生成二维码（降级方案）
+        generateFrontendQrCode();
+    } catch (e) {
+        // 网络错误时降级到前端生成
+        generateFrontendQrCode();
+    }
+}
+
+function generateFrontendQrCode() {
+    // 降级方案：使用前端 qrcode.js 库生成二维码
+    const qrData = 'nexus:pay?orderId=' + orderData.id + '&token=' + (orderData.qrCodeToken || checkoutToken) + '&amount=' + orderData.amount + '&symbol=' + (orderData.tokenSymbol || 'NEX') + '&payee=' + orderData.payeeAddress;
+    qrContent = qrData;
+    const canvas = document.getElementById('qrCanvas');
+    canvas.classList.remove('hidden');
+    document.getElementById('qrImage').classList.add('hidden');
+    QRCode.toCanvas(canvas, qrData, { width: 200, margin: 1 }, function(err) {
+        if (err) {
+            console.error('QR generation failed:', err);
+            setStatus('error', '二维码生成失败，请使用手动支付');
+        }
+    });
+    showScanStatus('waiting', '📱', '等待扫码支付...');
+}
+
+function switchTab(tab) {
+    currentTab = tab;
+    if (tab === 'scan') {
+        document.getElementById('tabScan').classList.add('active');
+        document.getElementById('tabManual').classList.remove('active');
+        document.getElementById('scanSection').classList.remove('hidden');
+        document.getElementById('manualSection').classList.add('hidden');
+    } else {
+        document.getElementById('tabScan').classList.remove('active');
+        document.getElementById('tabManual').classList.add('active');
+        document.getElementById('scanSection').classList.add('hidden');
+        document.getElementById('manualSection').classList.remove('hidden');
+    }
+}
+
+function showScanStatus(type, icon, text) {
+    const status = document.getElementById('scanStatus');
+    status.className = 'scan-status ' + type;
+    document.getElementById('scanIcon').textContent = icon;
+    document.getElementById('scanStatusText').textContent = text;
+}
+
 function startCountdown(expiresAt) {
     expiryTimer = setInterval(function() {
         const remaining = expiresAt - new Date();
         if (remaining <= 0) {
             clearInterval(expiryTimer);
+            clearInterval(pollInterval);
             document.getElementById('timerLine').textContent = '订单已过期';
             document.getElementById('payBtn').disabled = true;
             setStatus('error', '订单已过期，请返回商户重新下单');
+            showScanStatus('failed', '⏰', '订单已过期');
             return;
         }
         const mins = Math.floor(remaining / 60000);
@@ -218,11 +330,21 @@ function startPolling() {
                 clearInterval(pollInterval);
                 clearInterval(expiryTimer);
                 setStatus('success', '支付成功！交易哈希: ' + (data.chainTxHash || '-'));
+                showScanStatus('success', '✅', '支付成功！交易哈希: ' + (data.chainTxHash || '-'));
                 document.getElementById('payBtn').disabled = true;
                 document.getElementById('payBtn').textContent = '已完成';
+            } else if (data.status === 'PAYING') {
+                showScanStatus('paying', '⏳', '支付处理中，等待链上确认...');
+            } else if (data.status === 'FAILED') {
+                showScanStatus('failed', '❌', '支付失败: ' + (data.message || '请重试'));
+            } else if (data.status === 'EXPIRED') {
+                clearInterval(pollInterval);
+                clearInterval(expiryTimer);
+                showScanStatus('failed', '⏰', '订单已过期');
+                setStatus('error', '订单已过期，请返回商户重新下单');
             }
         } catch (e) { /* ignore polling errors */ }
-    }, 5000);
+    }, 3000);
 }
 
 async function confirmPay() {
@@ -247,8 +369,10 @@ async function confirmPay() {
 
         if (result.status === 'PENDING' || result.status === 'PAYING') {
             setStatus('pending', '<span class="spinner"></span>等待链上确认，请向收款地址转账 ' + orderData.amount + ' NEX');
+            showScanStatus('paying', '⏳', '支付处理中，等待链上确认...');
         } else if (result.status === 'FAILED') {
             setStatus('error', result.message || '支付失败');
+            showScanStatus('failed', '❌', result.message || '支付失败');
             btn.disabled = false;
             btn.textContent = '确认支付';
         }

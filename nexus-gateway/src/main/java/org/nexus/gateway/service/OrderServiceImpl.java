@@ -113,6 +113,8 @@ public class OrderServiceImpl implements OrderService {
             order.setNotifyUrl(request.getNotifyUrl());
             order.setPayeeAddress(resolveSettlementAddress(request.getMerchantId()));
             order.setCheckoutToken(UUID.randomUUID().toString().replace("-", ""));
+            // 扫码支付：生成 qrCodeToken，用于二维码安全校验
+            order.setQrCodeToken(UUID.randomUUID().toString().replace("-", ""));
             order.setStatus(PaymentOrder.OrderStatus.PENDING);
 
             int expiryMinutes = request.getExpiryMinutes() != null
