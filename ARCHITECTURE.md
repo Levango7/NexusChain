@@ -121,27 +121,39 @@ Blockchain is the foundational settlement layer — not the product itself. On t
 ## Architecture Layers
 
 ```text
-┌─────────────────────────────────────────────────────────────────┐
-│                       Application Layer                          │
-│   nexus-explorer │ nexus-devtools │ Merchant Portal             │
-├─────────────────────────────────────────────────────────────────┤
-│                       Service Layer                              │
-│   nexus-gateway │ nexus-bridge │ nexus-signing-service          │
-│   nexus-wallet-service                                           │
-├─────────────────────────────────────────────────────────────────┤
-│                   API Gateway Layer (统一入口)                    │
-│   nexus-api-gateway (Spring Cloud Gateway, Nacos 路由)            │
-├─────────────────────────────────────────────────────────────────┤
-│              Mid-Service Layer (编排支撑，进程内库)               │
+┌─────────────────────────────────────────────────────────────────────┐
+│                       Application Layer                              │
+│   nexus-explorer │ nexus-devtools │ Merchant Portal │ Developer Portal │
+├─────────────────────────────────────────────────────────────────────┤
+│                       Service Layer                                  │
+│   nexus-gateway │ nexus-bridge │ nexus-signing-service               │
+│   nexus-wallet-service                                               │
+│                                                                       │
+│   nexus-gateway 内部包（Wave 1-6 新增高亮）：                         │
+│   ┌─ orchestration (编排核心 + connectors: wechat/alipay)  ────────┐ │
+│   ├─ qr │ split │ settlement │ limit           (Wave 1: 支付核心)  │ │
+│   ├─ risk                                       (Wave 2: 风控体系)  │ │
+│   ├─ dashboard │ reconciliation │ sandbox      (Wave 4: 商户服务)  │ │
+│   ├─ alert │ ops │ sla │ logging │ resilience │ fallback           │ │
+│   │                                             (Wave 5: 运维可靠性)│ │
+│   ├─ apikey │ webhook │ developer │ apiversion │ export             │ │
+│   │                                             (Wave 6: 开放平台)  │ │
+│   └─ controller │ service │ model │ dto │ repository │ ... (基础)  │ │
+│   └───────────────────────────────────────────────────────────────┘ │
+├─────────────────────────────────────────────────────────────────────┤
+│                   API Gateway Layer (统一入口)                        │
+│   nexus-api-gateway (Spring Cloud Gateway, Nacos 路由)                │
+├─────────────────────────────────────────────────────────────────────┤
+│              Mid-Service Layer (编排支撑，进程内库)                   │
 │   nexus-settlement │ nexus-compliance │ nexus-analytics │ nexus-oracle │
-├─────────────────────────────────────────────────────────────────┤
-│                       SDK / Integration                          │
+├─────────────────────────────────────────────────────────────────────┤
+│                       SDK / Integration                              │
 │   nexus-sdk (Java/JS) │ nexus-common (shared tracing) │ nexus-rpc-doc │
-├─────────────────────────────────────────────────────────────────┤
-│                    Infrastructure Layer                          │
-│   nexus-core (consensus, P2P, storage, VM)                       │
-│   nexus-consortium (governance, permissioning)                   │
-└─────────────────────────────────────────────────────────────────┘
+├─────────────────────────────────────────────────────────────────────┤
+│                    Infrastructure Layer                              │
+│   nexus-core (consensus, P2P, storage, VM)                           │
+│   nexus-consortium (governance, permissioning)                       │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 ### 集成方式
@@ -152,9 +164,63 @@ Blockchain is the foundational settlement layer — not the product itself. On t
 - `nexus-api-gateway` → `nexus-gateway` / `nexus-signing-service` / `nexus-wallet-service` / `nexus-bridge`：**Spring Cloud Gateway 路由**（Nacos 服务发现，lb:// 协议，统一鉴权/限流/CORS）
 - `nexus-bridge`：**独立 Spring Boot 应用**（链上执行，Web3j 适配多链）
 
+### nexus-gateway 包结构
+
+`nexus-gateway` 是支付编排的核心模块，包结构如下（`org.nexus.gateway`）：
+
+| 包 | 职责 | Wave |
+|---|------|------|
+| `orchestration` | 支付编排核心（connector 注册/路由/服务/结算/webhook） | 基础 |
+| `orchestration.connector` | Connector 动态注册（ConnectorConfig 持久化、ConnectorFactory 工厂模式） | Wave 3 |
+| `orchestration.connectors` | 具体 Connector 实现（chain/consortium/adyen/stripe/http_psp/mock/wechat/alipay） | Wave 3 |
+| `controller` | REST API 端点（v1 + v2 版本） | 基础 |
+| `service` | 核心业务服务 | 基础 |
+| `model` | 领域模型与实体 | 基础 |
+| `dto` | 数据传输对象 | 基础 |
+| `repository` | JPA 数据访问层 | 基础 |
+| `event` | 事件驱动（Spring ApplicationEvent + 事件溯源） | 基础 |
+| `config` | Spring 配置类 | 基础 |
+| `security` | 安全配置与鉴权 | 基础 |
+| `interceptor` | 请求拦截器 | 基础 |
+| `async` | 异步处理 | 基础 |
+| `audit` | 审计日志 | 基础 |
+| `clearing` | 清算逻辑 | 基础 |
+| `compliance` | 合规集成 | 基础 |
+| `currency` | 币种处理 | 基础 |
+| `execution` | 执行引擎 | 基础 |
+| `ratelimit` | 速率限制 | 基础 |
+| `refund` | 退款处理 | 基础 |
+| `subscription` | 订阅/周期计费 | 基础 |
+| `tenant` | 多租户 | 基础 |
+| `client` | 客户端适配 | 基础 |
+| `util` | 工具类 | 基础 |
+| `observability` | 可观测性 | 基础 |
+| `qr` | 扫码支付（QrCodeService 生成/解析、QrPaymentController） | Wave 1 |
+| `split` | 分账/分润（SplitRule FIXED+RATIO、SplitOrder、SplitService） | Wave 1 |
+| `settlement` | 灵活结算周期（MerchantSettlementConfig、T0/T1/T2/T3/CUSTOM） | Wave 1 |
+| `limit` | 业务级限额（MerchantLimitConfig 单笔/日/月、LimitCheckService） | Wave 1 |
+| `risk` | 风控体系（评分引擎、设备指纹、风控事件流） | Wave 2 |
+| `dashboard` | 商户门户仪表盘（交易汇总/结算/渠道/风控 5 聚合端点） | Wave 4 |
+| `reconciliation` | 对账文件标准化（CSV/JSON 生成/下载） | Wave 4 |
+| `sandbox` | API 沙箱增强（模拟支付/重置/测试数据） | Wave 4 |
+| `alert` | 告警系统（AlertRule + AlertEngine + 3 渠道通知） | Wave 5 |
+| `ops` | 运维管理 API（配置/缓存/线程池/连接池/监控） | Wave 5 |
+| `sla` | SLA/SLO 监控（4 种 SLA 类型 + 报告 + 仪表盘） | Wave 5 |
+| `logging` | 结构化日志增强（JSON + 脱敏 + 采样 + MDC） | Wave 5 |
+| `resilience` | 熔断降级（ConnectorCircuitBreaker + ResilienceMetrics） | Wave 5 |
+| `fallback` | 降级路由（FallbackRouter） | Wave 5 |
+| `apikey` | API Key 生命周期（创建/轮换/撤销/验证 + 权限范围） | Wave 6 |
+| `webhook` | Webhook 订阅管理（事件过滤 + 签名密钥 + 订阅配置） | Wave 6 |
+| `developer` | 开发者门户（API 文档 + 代码示例 + SDK + 测试场景） | Wave 6 |
+| `apiversion` | API 版本治理（废弃策略 + Sunset 头 + 迁移指南） | Wave 6 |
+| `export` | 开放数据导出（异步 CSV/JSON + 文件下载 + 过期清理） | Wave 6 |
+| `health` | 健康检查端点 | Wave 5 |
+
 ## Payment Orchestration Roadmap
 
 ### 已交付（Delivered）
+
+**基础设施与核心能力：**
 
 - 双链 acquiring：gateway 路由至 `nexus-core`（公链结算主网）与 `nexus-consortium`（联盟侧链）
 - 多通道路由（7 connector）：chain(core) / consortium / adyen / stripe / http_psp(通用REST适配) / mock(sandbox) / oracle 喂价适配器
@@ -170,6 +236,32 @@ Blockchain is the foundational settlement layer — not the product itself. On t
 - L2 Rollup 扩容方案（自 v1.3.0，Optimistic + ZK Groth16，欺诈证明/挑战窗口/slashing）
 - 链上治理执行（自 v1.3.0，提案 → 国库 → 链上动作，参数化治理 + commit-reveal + 守护人）
 - MPC 多签协议（GG18/GG20 阈值签名，v2.0.0-rc1 真实 GG20 可信协调器模型）
+
+**Payment Orchestration Wave 1-6（2026-09-22 ~ 2026-09-24）：**
+
+- **扫码支付**（Wave 1）：QrCodeService 二维码生成/解析，QrPaymentController 扫码支付 API（`qr` 包）
+- **分账/分润体系**（Wave 1）：SplitRule（FIXED+RATIO 规则）+ SplitOrder + SplitService + SplitController（`split` 包）
+- **灵活结算周期**（Wave 1）：MerchantSettlementConfig + SettlementCycleService（T0/T1/T2/T3/CUSTOM）（`settlement` 包）
+- **业务级限额策略**（Wave 1）：MerchantLimitConfig（单笔/日/月限额）+ LimitCheckService + LimitController（`limit` 包）
+- **风控评分引擎**（Wave 2）：RiskScoringRule 接口 + DefaultRiskScoreEngine + 3 个规则实现（金额/频率/黑名单）（`risk` 包）
+- **设备指纹/反欺诈**（Wave 2）：DeviceFingerprint 指纹采集/匹配/风险标记（`risk` 包）
+- **风控事件流**（Wave 2）：RiskEvent 事件记录/查询/API + RiskEventController（`risk` 包）
+- **微信支付 Connector**（Wave 3）：WeChatPayConnector（Native/JSAPI，dry-run 模式，60bps）（`orchestration/connectors` 包）
+- **支付宝 Connector**（Wave 3）：AlipayConnector（当面付/网页支付，dry-run 模式，38bps）（`orchestration/connectors` 包）
+- **动态注册增强**（Wave 3）：ConnectorConfig 持久化 + ConnectorFactory 工厂模式 + ConnectorConfigService（`orchestration/connector` 包）
+- **商户门户仪表盘**（Wave 4）：MerchantDashboardController + MerchantDashboardService（交易汇总/结算状态/渠道分布/风控摘要 5 个聚合端点）（`dashboard` 包）
+- **对账文件标准化**（Wave 4）：ReconciliationFileService（CSV/JSON 对账文件生成/下载）+ ReconciliationFileController（`reconciliation` 包）
+- **API 沙箱增强**（Wave 4）：SandboxController + SandboxSimulationService（模拟支付/重置/测试数据生成）（`sandbox` 包）
+- **告警系统**（Wave 5）：AlertRule + AlertEngine + 3 渠道通知器（日志/Webhook/邮件）（`alert` 包）
+- **运维管理 API**（Wave 5）：OpsController（配置/缓存/线程池/连接池/系统监控）（`ops` 包）
+- **SLA/SLO 监控**（Wave 5）：SlaTarget + SlaMonitorService + SlaReportService（4 种 SLA 类型 + 报告生成 + 仪表盘）（`sla` 包）
+- **结构化日志增强**（Wave 5）：SensitiveDataFilter + LogSamplingFilter + BusinessLogContext（JSON 格式 + 敏感脱敏 + 采样 + MDC 上下文）（`logging` 包）
+- **熔断降级增强**（Wave 5）：ConnectorCircuitBreaker + FallbackRouter + ResilienceMetrics（Connector 级熔断 + 降级路由 + 指标暴露）（`resilience` + `fallback` 包）
+- **API Key 生命周期管理**（Wave 6）：ApiKey + ApiKeyService（创建/轮换/撤销/验证 + 权限范围）+ ApiKeyController（`apikey` 包）
+- **Webhook 订阅管理**（Wave 6）：WebhookSubscription + WebhookSubscriptionService + Controller（事件类型过滤 + 签名密钥 + 订阅配置）（`webhook` 包）
+- **开发者门户 API**（Wave 6）：DeveloperPortalService + DeveloperPortalController（API 文档元数据 + 代码示例 + SDK 信息 + 测试场景）（`developer` 包）
+- **API 版本治理**（Wave 6）：ApiVersionPolicy + ApiVersionDeprecationService + DeprecationFilter（废弃策略 + Sunset 头 + 迁移指南）（`apiversion` 包）
+- **开放数据导出**（Wave 6）：DataExportRequest + DataExportService（异步 CSV/JSON 导出 + 文件下载 + 过期清理）+ Controller（`export` 包）
 
 ### 进行中（In Progress）
 

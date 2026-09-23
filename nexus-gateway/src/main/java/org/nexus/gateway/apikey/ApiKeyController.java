@@ -115,7 +115,9 @@ public class ApiKeyController {
     @PostMapping("/{keyId}/rotate")
     public ResponseEntity<Map<String, Object>> rotateApiKey(HttpServletRequest request,
                                                              @PathVariable String keyId) {
-        requireTenantId(request); // 确保租户上下文存在
+        String merchantId = requireTenantId(request); // 确保租户上下文存在
+        // P0-2：验证 keyId 属于当前租户
+        verifyKeyOwnership(keyId, merchantId);
         ApiKeyService.CreateApiKeyResult result = apiKeyService.rotateApiKey(keyId);
         return ResponseEntity.status(HttpStatus.CREATED).body(result.toResponseMap());
     }
@@ -133,7 +135,9 @@ public class ApiKeyController {
     public ResponseEntity<Map<String, Object>> revokeApiKey(HttpServletRequest request,
                                                              @PathVariable String keyId,
                                                              @RequestBody(required = false) RevokeApiKeyRequest body) {
-        requireTenantId(request);
+        String merchantId = requireTenantId(request);
+        // P0-2：验证 keyId 属于当前租户
+        verifyKeyOwnership(keyId, merchantId);
         String reason = (body != null) ? body.getReason() : null;
         ApiKey revoked = apiKeyService.revokeApiKey(keyId, reason);
         return ResponseEntity.ok(toDetailMap(revoked));
@@ -150,6 +154,21 @@ public class ApiKeyController {
             throw new IllegalStateException("租户上下文未设置 — 请确保请求携带有效的 X-Tenant-Api-Key 头");
         }
         return tenantId.toString();
+    }
+
+    /**
+     * P0-2：验证 keyId 属于当前租户，防止跨商户操作。
+     *
+     * @param keyId      API Key 公开标识
+     * @param merchantId 当前认证租户 ID
+     */
+    private void verifyKeyOwnership(String keyId, String merchantId) {
+        List<ApiKey> keys = apiKeyService.listApiKeys(merchantId);
+        boolean owned = keys.stream().anyMatch(k -> k.getKeyId().equals(keyId));
+        if (!owned) {
+            throw new org.springframework.security.access.AccessDeniedException(
+                    "Access denied: API Key " + keyId + " does not belong to the authenticated merchant");
+        }
     }
 
     /**

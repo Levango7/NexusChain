@@ -164,10 +164,19 @@ public class AlertEngine {
     /**
      * 触发告警：创建 AlertEvent，发送通知，记录冷却时间。
      *
+     * <p>P1-5 修复：在 triggerAlert 中做幂等检查，再次验证冷却状态，
+     * 确保同一规则在短时间内不会重复触发告警。</p>
+     *
      * @param rule 满足条件的规则
      * @param currentValue 当前指标值
      */
     void triggerAlert(AlertRule rule, double currentValue) {
+        // P1-5：幂等检查 — 再次验证冷却状态，防止 checkRule 和 triggerAlert 之间的竞态条件
+        if (isInCooldown(rule)) {
+            log.debug("Rule '{}' entered cooldown before trigger, skipping duplicate alert", rule.getName());
+            return;
+        }
+
         AlertEvent event = new AlertEvent();
         event.setRuleName(rule.getName());
         event.setMetricName(rule.getMetricName());

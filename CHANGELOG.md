@@ -4,6 +4,46 @@
 
 ## [Unreleased]
 
+### Payment Orchestration Wave 1-6（2026-09-22 ~ 2026-09-24）
+
+#### Wave 1: 支付核心
+- **扫码支付**：QrCodeService 二维码生成+解析，QrPaymentController 扫码支付 API
+- **分账/分润**：SplitRule(FIXED/RATIO) + SplitOrder + SplitService + SplitController
+- **灵活结算周期**：MerchantSettlementConfig + SettlementCycleService（T0/T1/T2/T3/CUSTOM）
+- **业务级限额**：MerchantLimitConfig + LimitCheckService + LimitController
+
+#### Wave 2: 风控体系
+- **评分引擎**：RiskScoringRule 接口 + DefaultRiskScoreEngine + 3 个规则实现
+- **设备指纹**：DeviceFingerprint 实体 + DeviceFingerprintService
+- **风控事件流**：RiskEvent + RiskEventService + RiskEventController
+
+#### Wave 3: 渠道扩展
+- **微信支付**：WeChatPayConnector（Native/JSAPI，dry-run，60bps）
+- **支付宝**：AlipayConnector（当面付/网页支付，dry-run，38bps）
+- **动态注册**：ConnectorConfig 持久化 + ConnectorFactory + ConnectorConfigService
+
+#### Wave 4: 商户服务
+- **仪表盘**：MerchantDashboardController + MerchantDashboardService（5 个聚合端点）
+- **对账文件**：ReconciliationFileService（CSV/JSON）+ ReconciliationFileController
+- **沙箱增强**：SandboxController + SandboxSimulationService
+
+#### Wave 5: 运维与可靠性
+- **告警系统**：AlertRule + AlertEngine + 3 渠道通知器（日志/Webhook/邮件）
+- **运维 API**：OpsController（配置/缓存/线程池/连接池/系统监控）
+- **SLA 监控**：SlaTarget + SlaMonitorService + SlaReportService（4 种 SLA 类型）
+- **结构化日志**：SensitiveDataFilter + LogSamplingFilter + BusinessLogContext
+- **熔断降级**：ConnectorCircuitBreaker + FallbackRouter + ResilienceMetrics
+
+#### Wave 6: 开放平台
+- **API Key 管理**：ApiKey + ApiKeyService（创建/轮换/撤销/验证）+ ApiKeyController
+- **Webhook 订阅**：WebhookSubscription + WebhookSubscriptionService + Controller
+- **开发者门户**：DeveloperPortalService + DeveloperPortalController（API 文档/代码示例/SDK）
+- **API 版本治理**：ApiVersionPolicy + ApiVersionDeprecationService + DeprecationFilter
+- **数据导出**：DataExportRequest + DataExportService（异步 CSV/JSON）+ Controller
+
+#### Flyway Migrations
+- V19~V35：17 个新增 migration（finality_status/qr_code_token/split_tables/settlement_config/limit_configs/device_fingerprints/risk_events/connector_configs/reconciliation_file_records/alert_rules/alert_events/sla_targets/sla_measurements/api_keys/webhook_subscriptions/api_version_policies/data_export_requests）
+
 ### v2.50.2 发布后的收尾修复（2026-09-22）
 
 #### Fixed

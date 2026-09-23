@@ -1,0 +1,97 @@
+{
+  "title": {
+    "text": "NexusChain 支付业务流程图",
+    "subtext": "完整支付流程：创建订单 → 风控 → 路由 → Connector → 执行 → 结算 → Webhook",
+    "left": "center",
+    "top": 10,
+    "textStyle": { "fontSize": 22, "fontWeight": "bold", "color": "#1a1a2e" },
+    "subtextStyle": { "fontSize": 13, "color": "#666" }
+  },
+  "tooltip": { "trigger": "item", "formatter": "{b}" },
+  "legend": {
+    "data": ["主流程", "风控子步骤", "路由子步骤", "Connector子步骤", "Webhook子步骤"],
+    "top": 55,
+    "left": "center",
+    "orient": "horizontal",
+    "itemWidth": 14,
+    "itemHeight": 14,
+    "textStyle": { "fontSize": 12 }
+  },
+  "animationDuration": 1500,
+  "animationEasingUpdate": "quinticInOut",
+  "series": [{
+    "type": "graph",
+    "layout": "none",
+    "symbolSize": 40,
+    "roam": true,
+    "draggable": true,
+    "focusNodeAdjacency": true,
+    "label": {
+      "show": true,
+      "position": "bottom",
+      "fontSize": 11,
+      "color": "#333",
+      "fontWeight": "bold"
+    },
+    "edgeSymbol": ["none", "arrow"],
+    "edgeSymbolSize": [0, 8],
+    "itemStyle": { "shadowBlur": 8, "shadowColor": "rgba(0,0,0,0.15)" },
+    "lineStyle": { "color": "#aaa", "width": 1.5, "curveness": 0.1, "opacity": 0.8 },
+    "emphasis": {
+      "lineStyle": { "width": 3, "color": "#e74c3c" },
+      "itemStyle": { "shadowBlur": 15 }
+    },
+    "categories": [
+      { "name": "主流程" },
+      { "name": "风控子步骤" },
+      { "name": "路由子步骤" },
+      { "name": "Connector子步骤" },
+      { "name": "Webhook子步骤" }
+    ],
+    "data": [
+      {"id":"step1","name":"1. 商户创建订单","x":80,"y":400,"category":0,"symbolSize":48,"itemStyle":{"color":"#e74c3c"}},
+      {"id":"step2","name":"2. 风控检查","x":320,"y":400,"category":0,"symbolSize":48,"itemStyle":{"color":"#e74c3c"}},
+      {"id":"step3","name":"3. 路由选择","x":580,"y":400,"category":0,"symbolSize":48,"itemStyle":{"color":"#e74c3c"}},
+      {"id":"step4","name":"4. Connector调用","x":840,"y":400,"category":0,"symbolSize":48,"itemStyle":{"color":"#e74c3c"}},
+      {"id":"step5","name":"5. 支付执行","x":1080,"y":400,"category":0,"symbolSize":48,"itemStyle":{"color":"#e74c3c"}},
+      {"id":"step6","name":"6. 结果返回","x":1300,"y":400,"category":0,"symbolSize":48,"itemStyle":{"color":"#e74c3c"}},
+      {"id":"step7","name":"7. 结算/分账","x":1520,"y":400,"category":0,"symbolSize":48,"itemStyle":{"color":"#e74c3c"}},
+      {"id":"step8","name":"8. Webhook通知","x":1740,"y":400,"category":0,"symbolSize":48,"itemStyle":{"color":"#e74c3c"}},
+
+      {"id":"limit_check","name":"限额检查","x":320,"y":250,"category":1,"symbolSize":32,"itemStyle":{"color":"#8e44ad"}},
+      {"id":"score_check","name":"评分检查","x":320,"y":330,"category":1,"symbolSize":32,"itemStyle":{"color":"#8e44ad"}},
+      {"id":"device_fingerprint","name":"设备指纹","x":320,"y":490,"category":1,"symbolSize":32,"itemStyle":{"color":"#8e44ad"}},
+
+      {"id":"connector_route","name":"Connector路由","x":580,"y":250,"category":2,"symbolSize":32,"itemStyle":{"color":"#2980b9"}},
+      {"id":"circuit_breaker","name":"熔断降级","x":580,"y":490,"category":2,"symbolSize":32,"itemStyle":{"color":"#2980b9"}},
+
+      {"id":"wechat_connector","name":"微信Connector","x":840,"y":250,"category":3,"symbolSize":32,"itemStyle":{"color":"#27ae60"}},
+      {"id":"alipay_connector","name":"支付宝Connector","x":840,"y":490,"category":3,"symbolSize":32,"itemStyle":{"color":"#27ae60"}},
+
+      {"id":"subscription_mgr","name":"订阅管理","x":1740,"y":250,"category":4,"symbolSize":32,"itemStyle":{"color":"#f39c12"}},
+      {"id":"signature_verify","name":"签名验证","x":1740,"y":490,"category":4,"symbolSize":32,"itemStyle":{"color":"#f39c12"}}
+    ],
+    "links": [
+      {"source":"step1","target":"step2","label":{"show":true,"formatter":"创建","fontSize":10,"color":"#e74c3c"}},
+      {"source":"step2","target":"limit_check","label":{"show":false},"lineStyle":{"type":"dashed"}},
+      {"source":"step2","target":"score_check","label":{"show":false},"lineStyle":{"type":"dashed"}},
+      {"source":"step2","target":"device_fingerprint","label":{"show":false},"lineStyle":{"type":"dashed"}},
+      {"source":"limit_check","target":"step3","label":{"show":true,"formatter":"通过","fontSize":9,"color":"#8e44ad"}},
+      {"source":"score_check","target":"step3","label":{"show":true,"formatter":"通过","fontSize":9,"color":"#8e44ad"}},
+      {"source":"device_fingerprint","target":"step3","label":{"show":true,"formatter":"通过","fontSize":9,"color":"#8e44ad"}},
+      {"source":"step3","target":"connector_route","label":{"show":false},"lineStyle":{"type":"dashed"}},
+      {"source":"step3","target":"circuit_breaker","label":{"show":false},"lineStyle":{"type":"dashed"}},
+      {"source":"connector_route","target":"step4","label":{"show":true,"formatter":"选中","fontSize":9,"color":"#2980b9"}},
+      {"source":"circuit_breaker","target":"step4","label":{"show":true,"formatter":"降级","fontSize":9,"color":"#2980b9"}},
+      {"source":"step4","target":"wechat_connector","label":{"show":false},"lineStyle":{"type":"dashed"}},
+      {"source":"step4","target":"alipay_connector","label":{"show":false},"lineStyle":{"type":"dashed"}},
+      {"source":"wechat_connector","target":"step5","label":{"show":true,"formatter":"调用","fontSize":9,"color":"#27ae60"}},
+      {"source":"alipay_connector","target":"step5","label":{"show":true,"formatter":"调用","fontSize":9,"color":"#27ae60"}},
+      {"source":"step5","target":"step6","label":{"show":true,"formatter":"执行","fontSize":10,"color":"#e74c3c"}},
+      {"source":"step6","target":"step7","label":{"show":true,"formatter":"返回","fontSize":10,"color":"#e74c3c"}},
+      {"source":"step7","target":"step8","label":{"show":true,"formatter":"触发","fontSize":10,"color":"#e74c3c"}},
+      {"source":"step8","target":"subscription_mgr","label":{"show":false},"lineStyle":{"type":"dashed"}},
+      {"source":"step8","target":"signature_verify","label":{"show":false},"lineStyle":{"type":"dashed"}}
+    ]
+  }]
+}

@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.List;
@@ -101,12 +102,17 @@ public class SettlementEventCollector {
      * <p>DB 模式：查询全部 PENDING 后删除（取出即清空，语义与内存模式一致）；
      * 内存模式：快照 + 清空 staging 列表。</p>
      *
+     * <p>P1-1 修复：使用 @Transactional + PESSIMISTIC_WRITE 锁确保查询和删除原子执行，
+     * 防止查询和删除之间新插入的订单被误删。</p>
+     *
      * @return 当前 PENDING 订单（调用后不再可见）
      */
+    @Transactional
     public List<ClearingOrder> drainStaging() {
         if (clearingOrderRepository != null) {
+            // P1-1：使用悲观写锁查询，确保查询和删除在同一事务中原子执行
             List<ClearingOrder> pending =
-                    clearingOrderRepository.findByStatus(ClearingOrder.OrderStatus.PENDING);
+                    clearingOrderRepository.findByStatusForUpdate(ClearingOrder.OrderStatus.PENDING);
             clearingOrderRepository.deleteAll(pending);
             return pending;
         }

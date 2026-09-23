@@ -1,0 +1,102 @@
+{
+  "title": {
+    "text": "NexusChain 运维监控拓扑图",
+    "subtext": "告警系统 / SLA监控 / 熔断降级 / 运维API / 结构化日志",
+    "left": "center",
+    "top": 10,
+    "textStyle": { "fontSize": 22, "fontWeight": "bold", "color": "#1a1a2e" },
+    "subtextStyle": { "fontSize": 13, "color": "#666" }
+  },
+  "tooltip": { "trigger": "item", "formatter": "{b}" },
+  "legend": {
+    "data": ["告警系统", "SLA监控", "熔断降级", "运维API", "结构化日志"],
+    "top": 55,
+    "left": "center",
+    "orient": "horizontal",
+    "itemWidth": 14,
+    "itemHeight": 14,
+    "textStyle": { "fontSize": 12 }
+  },
+  "animationDuration": 1500,
+  "animationEasingUpdate": "quinticInOut",
+  "series": [{
+    "type": "graph",
+    "layout": "none",
+    "symbolSize": 40,
+    "roam": true,
+    "draggable": true,
+    "focusNodeAdjacency": true,
+    "label": {
+      "show": true,
+      "position": "bottom",
+      "fontSize": 11,
+      "color": "#333",
+      "fontWeight": "bold"
+    },
+    "edgeSymbol": ["none", "arrow"],
+    "edgeSymbolSize": [0, 8],
+    "itemStyle": { "shadowBlur": 8, "shadowColor": "rgba(0,0,0,0.15)" },
+    "lineStyle": { "color": "#aaa", "width": 1.5, "curveness": 0.15, "opacity": 0.8 },
+    "emphasis": {
+      "lineStyle": { "width": 3, "color": "#e74c3c" },
+      "itemStyle": { "shadowBlur": 15 }
+    },
+    "categories": [
+      { "name": "告警系统" },
+      { "name": "SLA监控" },
+      { "name": "熔断降级" },
+      { "name": "运维API" },
+      { "name": "结构化日志" }
+    ],
+    "data": [
+      {"id":"alert_engine","name":"AlertEngine","x":250,"y":200,"category":0,"symbolSize":50,"itemStyle":{"color":"#c0392b"}},
+      {"id":"log_notifier","name":"日志通知器","x":100,"y":80,"category":0,"symbolSize":32,"itemStyle":{"color":"#c0392b"}},
+      {"id":"webhook_notifier","name":"Webhook通知器","x":250,"y":80,"category":0,"symbolSize":32,"itemStyle":{"color":"#c0392b"}},
+      {"id":"email_notifier","name":"邮件通知器","x":400,"y":80,"category":0,"symbolSize":32,"itemStyle":{"color":"#c0392b"}},
+
+      {"id":"sla_monitor","name":"SlaMonitorService","x":700,"y":200,"category":1,"symbolSize":50,"itemStyle":{"color":"#2980b9"}},
+      {"id":"availability_sla","name":"可用性SLA","x":550,"y":80,"category":1,"symbolSize":32,"itemStyle":{"color":"#2980b9"}},
+      {"id":"latency_sla","name":"延迟SLA","x":650,"y":80,"category":1,"symbolSize":32,"itemStyle":{"color":"#2980b9"}},
+      {"id":"throughput_sla","name":"吞吐量SLA","x":750,"y":80,"category":1,"symbolSize":32,"itemStyle":{"color":"#2980b9"}},
+      {"id":"error_rate_sla","name":"错误率SLA","x":850,"y":80,"category":1,"symbolSize":32,"itemStyle":{"color":"#2980b9"}},
+
+      {"id":"circuit_breaker","name":"CircuitBreaker","x":1100,"y":200,"category":2,"symbolSize":44,"itemStyle":{"color":"#e67e22"}},
+      {"id":"fallback_router","name":"FallbackRouter","x":1280,"y":200,"category":2,"symbolSize":44,"itemStyle":{"color":"#e67e22"}},
+      {"id":"backup_connector","name":"备选Connector","x":1460,"y":200,"category":2,"symbolSize":44,"itemStyle":{"color":"#e67e22"}},
+
+      {"id":"config_mgmt","name":"配置管理","x":150,"y":450,"category":3,"symbolSize":32,"itemStyle":{"color":"#27ae60"}},
+      {"id":"cache_mgmt","name":"缓存管理","x":300,"y":450,"category":3,"symbolSize":32,"itemStyle":{"color":"#27ae60"}},
+      {"id":"thread_pool","name":"线程池监控","x":450,"y":450,"category":3,"symbolSize":32,"itemStyle":{"color":"#27ae60"}},
+      {"id":"conn_pool","name":"连接池监控","x":600,"y":450,"category":3,"symbolSize":32,"itemStyle":{"color":"#27ae60"}},
+      {"id":"system_monitor","name":"系统监控","x":750,"y":450,"category":3,"symbolSize":32,"itemStyle":{"color":"#27ae60"}},
+
+      {"id":"data_masking","name":"脱敏处理","x":950,"y":450,"category":4,"symbolSize":32,"itemStyle":{"color":"#9b59b6"}},
+      {"id":"sampling_ctrl","name":"采样控制","x":1100,"y":450,"category":4,"symbolSize":32,"itemStyle":{"color":"#9b59b6"}},
+      {"id":"mdc_context","name":"MDC上下文","x":1250,"y":450,"category":4,"symbolSize":32,"itemStyle":{"color":"#9b59b6"}}
+    ],
+    "links": [
+      {"source":"alert_engine","target":"log_notifier","label":{"show":true,"formatter":"通知","fontSize":9,"color":"#c0392b"}},
+      {"source":"alert_engine","target":"webhook_notifier","label":{"show":true,"formatter":"通知","fontSize":9,"color":"#c0392b"}},
+      {"source":"alert_engine","target":"email_notifier","label":{"show":true,"formatter":"通知","fontSize":9,"color":"#c0392b"}},
+
+      {"source":"sla_monitor","target":"availability_sla","label":{"show":true,"formatter":"监控","fontSize":9,"color":"#2980b9"}},
+      {"source":"sla_monitor","target":"latency_sla","label":{"show":true,"formatter":"监控","fontSize":9,"color":"#2980b9"}},
+      {"source":"sla_monitor","target":"throughput_sla","label":{"show":true,"formatter":"监控","fontSize":9,"color":"#2980b9"}},
+      {"source":"sla_monitor","target":"error_rate_sla","label":{"show":true,"formatter":"监控","fontSize":9,"color":"#2980b9"}},
+
+      {"source":"circuit_breaker","target":"fallback_router","label":{"show":true,"formatter":"触发","fontSize":9,"color":"#e67e22"}},
+      {"source":"fallback_router","target":"backup_connector","label":{"show":true,"formatter":"路由","fontSize":9,"color":"#e67e22"}},
+
+      {"source":"sla_monitor","target":"alert_engine","label":{"show":true,"formatter":"超阈值告警","fontSize":9,"color":"#c0392b"},"lineStyle":{"type":"dashed","width":2}},
+      {"source":"circuit_breaker","target":"alert_engine","label":{"show":true,"formatter":"熔断告警","fontSize":9,"color":"#c0392b"},"lineStyle":{"type":"dashed","width":2}},
+
+      {"source":"data_masking","target":"alert_engine","label":{"show":true,"formatter":"日志驱动","fontSize":9,"color":"#9b59b6"},"lineStyle":{"type":"dashed"}},
+      {"source":"sampling_ctrl","target":"alert_engine","label":{"show":false},"lineStyle":{"type":"dashed","color":"#9b59b6"}},
+      {"source":"mdc_context","target":"alert_engine","label":{"show":false},"lineStyle":{"type":"dashed","color":"#9b59b6"}},
+
+      {"source":"system_monitor","target":"sla_monitor","label":{"show":true,"formatter":"数据采集","fontSize":9,"color":"#27ae60"},"lineStyle":{"type":"dashed"}},
+      {"source":"thread_pool","target":"circuit_breaker","label":{"show":true,"formatter":"状态检测","fontSize":9,"color":"#27ae60"},"lineStyle":{"type":"dashed"}},
+      {"source":"conn_pool","target":"circuit_breaker","label":{"show":false},"lineStyle":{"type":"dashed","color":"#27ae60"}}
+    ]
+  }]
+}

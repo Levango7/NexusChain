@@ -1,0 +1,174 @@
+{
+  "title": {
+    "text": "NexusChain 系统架构图",
+    "subtext": "5层架构 + nexus-gateway 15个新增包 (Wave 1-6)",
+    "left": "center",
+    "top": 10,
+    "textStyle": { "fontSize": 22, "fontWeight": "bold", "color": "#1a1a2e" },
+    "subtextStyle": { "fontSize": 13, "color": "#666" }
+  },
+  "tooltip": {
+    "trigger": "item",
+    "formatter": "{b}"
+  },
+  "legend": {
+    "data": [
+      "Infrastructure Layer", "SDK/Integration Layer", "Mid-Service Layer",
+      "API Gateway Layer", "Application Layer",
+      "Wave 1: qr/split/settlement/limit", "Wave 2: risk",
+      "Wave 3: connectors/connector", "Wave 4: dashboard/reconciliation/sandbox",
+      "Wave 5: alert/ops/sla/logging/resilience", "Wave 6: apikey/webhook/developer/apiversion/export"
+    ],
+    "top": 55,
+    "left": "center",
+    "orient": "horizontal",
+    "itemWidth": 14,
+    "itemHeight": 14,
+    "textStyle": { "fontSize": 11 },
+    "pageButtonItemStyle": { "color": "#666" }
+  },
+  "animationDuration": 1500,
+  "animationEasingUpdate": "quinticInOut",
+  "series": [{
+    "type": "graph",
+    "layout": "none",
+    "symbolSize": 38,
+    "roam": true,
+    "draggable": true,
+    "focusNodeAdjacency": true,
+    "label": {
+      "show": true,
+      "position": "bottom",
+      "fontSize": 10,
+      "color": "#333",
+      "fontWeight": "bold"
+    },
+    "edgeSymbol": ["none", "arrow"],
+    "edgeSymbolSize": [0, 7],
+    "itemStyle": {
+      "shadowBlur": 8,
+      "shadowColor": "rgba(0,0,0,0.15)"
+    },
+    "lineStyle": {
+      "color": "#aaa",
+      "width": 1.2,
+      "curveness": 0.15,
+      "opacity": 0.7
+    },
+    "emphasis": {
+      "lineStyle": { "width": 3, "color": "#e74c3c" },
+      "itemStyle": { "shadowBlur": 15 }
+    },
+    "categories": [
+      { "name": "Infrastructure Layer" },
+      { "name": "SDK/Integration Layer" },
+      { "name": "Mid-Service Layer" },
+      { "name": "API Gateway Layer" },
+      { "name": "Application Layer" },
+      { "name": "Wave 1: qr/split/settlement/limit" },
+      { "name": "Wave 2: risk" },
+      { "name": "Wave 3: connectors/connector" },
+      { "name": "Wave 4: dashboard/reconciliation/sandbox" },
+      { "name": "Wave 5: alert/ops/sla/logging/resilience" },
+      { "name": "Wave 6: apikey/webhook/developer/apiversion/export" }
+    ],
+    "data": [
+      {"id":"nexus-core","name":"nexus-core","x":520,"y":1040,"category":0,"symbolSize":48,"itemStyle":{"color":"#2c3e50"}},
+      {"id":"nexus-consortium","name":"nexus-consortium","x":820,"y":1040,"category":0,"symbolSize":48,"itemStyle":{"color":"#2c3e50"}},
+
+      {"id":"nexus-sdk","name":"nexus-sdk","x":400,"y":880,"category":1,"symbolSize":42,"itemStyle":{"color":"#3498db"}},
+      {"id":"nexus-common","name":"nexus-common","x":650,"y":880,"category":1,"symbolSize":42,"itemStyle":{"color":"#3498db"}},
+      {"id":"nexus-rpc-doc","name":"nexus-rpc-doc","x":900,"y":880,"category":1,"symbolSize":42,"itemStyle":{"color":"#3498db"}},
+
+      {"id":"nexus-settlement","name":"nexus-settlement","x":300,"y":720,"category":2,"symbolSize":42,"itemStyle":{"color":"#1abc9c"}},
+      {"id":"nexus-compliance","name":"nexus-compliance","x":520,"y":720,"category":2,"symbolSize":42,"itemStyle":{"color":"#1abc9c"}},
+      {"id":"nexus-analytics","name":"nexus-analytics","x":740,"y":720,"category":2,"symbolSize":42,"itemStyle":{"color":"#1abc9c"}},
+      {"id":"nexus-oracle","name":"nexus-oracle","x":960,"y":720,"category":2,"symbolSize":42,"itemStyle":{"color":"#1abc9c"}},
+
+      {"id":"nexus-api-gateway","name":"nexus-api-gateway","x":650,"y":560,"category":3,"symbolSize":50,"itemStyle":{"color":"#e67e22"}},
+
+      {"id":"nexus-gateway","name":"nexus-gateway","x":350,"y":400,"category":4,"symbolSize":52,"itemStyle":{"color":"#e74c3c"}},
+      {"id":"nexus-bridge","name":"nexus-bridge","x":600,"y":400,"category":4,"symbolSize":42,"itemStyle":{"color":"#e74c3c"}},
+      {"id":"nexus-signing-service","name":"nexus-signing-service","x":850,"y":400,"category":4,"symbolSize":42,"itemStyle":{"color":"#e74c3c"}},
+      {"id":"nexus-wallet-service","name":"nexus-wallet-service","x":1100,"y":400,"category":4,"symbolSize":42,"itemStyle":{"color":"#e74c3c"}},
+
+      {"id":"qr","name":"qr","x":120,"y":300,"category":5,"symbolSize":28,"itemStyle":{"color":"#9b59b6"}},
+      {"id":"split","name":"split","x":220,"y":300,"category":5,"symbolSize":28,"itemStyle":{"color":"#9b59b6"}},
+      {"id":"settlement","name":"settlement","x":320,"y":300,"category":5,"symbolSize":28,"itemStyle":{"color":"#9b59b6"}},
+      {"id":"limit","name":"limit","x":420,"y":300,"category":5,"symbolSize":28,"itemStyle":{"color":"#9b59b6"}},
+
+      {"id":"risk","name":"risk","x":170,"y":250,"category":6,"symbolSize":28,"itemStyle":{"color":"#8e44ad"}},
+
+      {"id":"connectors","name":"connectors","x":120,"y":200,"category":7,"symbolSize":28,"itemStyle":{"color":"#2980b9"}},
+      {"id":"connector","name":"connector","x":220,"y":200,"category":7,"symbolSize":28,"itemStyle":{"color":"#2980b9"}},
+
+      {"id":"dashboard","name":"dashboard","x":120,"y":150,"category":8,"symbolSize":28,"itemStyle":{"color":"#27ae60"}},
+      {"id":"reconciliation","name":"reconciliation","x":220,"y":150,"category":8,"symbolSize":28,"itemStyle":{"color":"#27ae60"}},
+      {"id":"sandbox","name":"sandbox","x":320,"y":150,"category":8,"symbolSize":28,"itemStyle":{"color":"#27ae60"}},
+
+      {"id":"alert","name":"alert","x":80,"y":100,"category":9,"symbolSize":28,"itemStyle":{"color":"#c0392b"}},
+      {"id":"ops","name":"ops","x":170,"y":100,"category":9,"symbolSize":28,"itemStyle":{"color":"#c0392b"}},
+      {"id":"sla","name":"sla","x":260,"y":100,"category":9,"symbolSize":28,"itemStyle":{"color":"#c0392b"}},
+      {"id":"logging","name":"logging","x":350,"y":100,"category":9,"symbolSize":28,"itemStyle":{"color":"#c0392b"}},
+      {"id":"resilience","name":"resilience","x":440,"y":100,"category":9,"symbolSize":28,"itemStyle":{"color":"#c0392b"}},
+
+      {"id":"apikey","name":"apikey","x":80,"y":50,"category":10,"symbolSize":28,"itemStyle":{"color":"#f39c12"}},
+      {"id":"webhook","name":"webhook","x":170,"y":50,"category":10,"symbolSize":28,"itemStyle":{"color":"#f39c12"}},
+      {"id":"developer","name":"developer","x":260,"y":50,"category":10,"symbolSize":28,"itemStyle":{"color":"#f39c12"}},
+      {"id":"apiversion","name":"apiversion","x":350,"y":50,"category":10,"symbolSize":28,"itemStyle":{"color":"#f39c12"}},
+      {"id":"export","name":"export","x":440,"y":50,"category":10,"symbolSize":28,"itemStyle":{"color":"#f39c12"}}
+    ],
+    "links": [
+      {"source":"nexus-gateway","target":"nexus-api-gateway","label":{"show":true,"formatter":"HTTP RPC","fontSize":9,"color":"#e67e22"}},
+      {"source":"nexus-bridge","target":"nexus-api-gateway","label":{"show":true,"formatter":"HTTP RPC","fontSize":9,"color":"#e67e22"}},
+      {"source":"nexus-signing-service","target":"nexus-api-gateway","label":{"show":true,"formatter":"HTTP RPC","fontSize":9,"color":"#e67e22"}},
+      {"source":"nexus-wallet-service","target":"nexus-api-gateway","label":{"show":true,"formatter":"HTTP RPC","fontSize":9,"color":"#e67e22"}},
+
+      {"source":"nexus-api-gateway","target":"nexus-settlement","label":{"show":true,"formatter":"Gateway路由","fontSize":9,"color":"#1abc9c"}},
+      {"source":"nexus-api-gateway","target":"nexus-compliance","label":{"show":true,"formatter":"Gateway路由","fontSize":9,"color":"#1abc9c"}},
+      {"source":"nexus-api-gateway","target":"nexus-analytics","label":{"show":true,"formatter":"Gateway路由","fontSize":9,"color":"#1abc9c"}},
+      {"source":"nexus-api-gateway","target":"nexus-oracle","label":{"show":true,"formatter":"Gateway路由","fontSize":9,"color":"#1abc9c"}},
+
+      {"source":"nexus-settlement","target":"nexus-sdk","label":{"show":true,"formatter":"HTTP RPC","fontSize":9,"color":"#3498db"}},
+      {"source":"nexus-compliance","target":"nexus-sdk","label":{"show":true,"formatter":"HTTP RPC","fontSize":9,"color":"#3498db"}},
+      {"source":"nexus-analytics","target":"nexus-common","label":{"show":true,"formatter":"HTTP RPC","fontSize":9,"color":"#3498db"}},
+      {"source":"nexus-oracle","target":"nexus-sdk","label":{"show":true,"formatter":"HTTP RPC","fontSize":9,"color":"#3498db"}},
+
+      {"source":"nexus-sdk","target":"nexus-core","label":{"show":true,"formatter":"HTTP RPC","fontSize":9,"color":"#2c3e50"}},
+      {"source":"nexus-common","target":"nexus-core","label":{"show":true,"formatter":"composite build","fontSize":9,"color":"#2c3e50"}},
+      {"source":"nexus-rpc-doc","target":"nexus-core","label":{"show":true,"formatter":"HTTP RPC","fontSize":9,"color":"#2c3e50"}},
+      {"source":"nexus-sdk","target":"nexus-consortium","label":{"show":true,"formatter":"HTTP RPC","fontSize":9,"color":"#2c3e50"}},
+
+      {"source":"qr","target":"nexus-gateway","label":{"show":false},"lineStyle":{"type":"dashed","color":"#9b59b6"}},
+      {"source":"split","target":"nexus-gateway","label":{"show":false},"lineStyle":{"type":"dashed","color":"#9b59b6"}},
+      {"source":"settlement","target":"nexus-gateway","label":{"show":false},"lineStyle":{"type":"dashed","color":"#9b59b6"}},
+      {"source":"limit","target":"nexus-gateway","label":{"show":false},"lineStyle":{"type":"dashed","color":"#9b59b6"}},
+      {"source":"risk","target":"nexus-gateway","label":{"show":false},"lineStyle":{"type":"dashed","color":"#8e44ad"}},
+      {"source":"connectors","target":"nexus-gateway","label":{"show":false},"lineStyle":{"type":"dashed","color":"#2980b9"}},
+      {"source":"connector","target":"nexus-gateway","label":{"show":false},"lineStyle":{"type":"dashed","color":"#2980b9"}},
+      {"source":"dashboard","target":"nexus-gateway","label":{"show":false},"lineStyle":{"type":"dashed","color":"#27ae60"}},
+      {"source":"reconciliation","target":"nexus-gateway","label":{"show":false},"lineStyle":{"type":"dashed","color":"#27ae60"}},
+      {"source":"sandbox","target":"nexus-gateway","label":{"show":false},"lineStyle":{"type":"dashed","color":"#27ae60"}},
+      {"source":"alert","target":"nexus-gateway","label":{"show":false},"lineStyle":{"type":"dashed","color":"#c0392b"}},
+      {"source":"ops","target":"nexus-gateway","label":{"show":false},"lineStyle":{"type":"dashed","color":"#c0392b"}},
+      {"source":"sla","target":"nexus-gateway","label":{"show":false},"lineStyle":{"type":"dashed","color":"#c0392b"}},
+      {"source":"logging","target":"nexus-gateway","label":{"show":false},"lineStyle":{"type":"dashed","color":"#c0392b"}},
+      {"source":"resilience","target":"nexus-gateway","label":{"show":false},"lineStyle":{"type":"dashed","color":"#c0392b"}},
+      {"source":"apikey","target":"nexus-gateway","label":{"show":false},"lineStyle":{"type":"dashed","color":"#f39c12"}},
+      {"source":"webhook","target":"nexus-gateway","label":{"show":false},"lineStyle":{"type":"dashed","color":"#f39c12"}},
+      {"source":"developer","target":"nexus-gateway","label":{"show":false},"lineStyle":{"type":"dashed","color":"#f39c12"}},
+      {"source":"apiversion","target":"nexus-gateway","label":{"show":false},"lineStyle":{"type":"dashed","color":"#f39c12"}},
+      {"source":"export","target":"nexus-gateway","label":{"show":false},"lineStyle":{"type":"dashed","color":"#f39c12"}},
+
+      {"source":"risk","target":"limit","label":{"show":false},"lineStyle":{"color":"#8e44ad","width":1}},
+      {"source":"connectors","target":"risk","label":{"show":false},"lineStyle":{"color":"#2980b9","width":1}},
+      {"source":"connector","target":"connectors","label":{"show":false},"lineStyle":{"color":"#2980b9","width":1}},
+      {"source":"resilience","target":"connector","label":{"show":false},"lineStyle":{"color":"#c0392b","width":1}},
+      {"source":"alert","target":"sla","label":{"show":false},"lineStyle":{"color":"#c0392b","width":1}},
+      {"source":"webhook","target":"apikey","label":{"show":false},"lineStyle":{"color":"#f39c12","width":1}},
+      {"source":"developer","target":"apikey","label":{"show":false},"lineStyle":{"color":"#f39c12","width":1}},
+      {"source":"export","target":"reconciliation","label":{"show":false},"lineStyle":{"color":"#f39c12","width":1}},
+      {"source":"dashboard","target":"reconciliation","label":{"show":false},"lineStyle":{"color":"#27ae60","width":1}}
+    ]
+  }]
+}

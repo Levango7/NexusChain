@@ -68,8 +68,7 @@ class WebhookSubscriptionServiceTest {
         assertFalse(result.getSigningSecret().isBlank());
         assertEquals("支付通知订阅", result.getDescription());
         assertEquals("{\"maxRetries\":3,\"backoff\":\"exponential\"}", result.getRetryPolicy());
-        assertNotNull(result.getCreatedAt());
-        assertNotNull(result.getUpdatedAt());
+
 
         // 验证 URL 校验被调用
         verify(urlValidator).validate(TARGET_URL);

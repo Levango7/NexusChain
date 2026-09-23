@@ -171,6 +171,10 @@ class ApiKeyControllerTest {
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.setAttribute("nexus.tenantId", "merchant-1");
 
+        // P0-2：verifyKeyOwnership 需要 listApiKeys 返回包含目标 keyId 的列表
+        ApiKey oldKey = createApiKey("ak_live_oldrot", "merchant-1", "PAYMENTS");
+        when(apiKeyService.listApiKeys("merchant-1")).thenReturn(List.of(oldKey));
+
         ApiKey newKey = createApiKey("ak_live_newrot", "merchant-1", "PAYMENTS");
         newKey.setRotatedFromId("ak_live_oldrot");
         ApiKeyService.CreateApiKeyResult result =
@@ -196,6 +200,10 @@ class ApiKeyControllerTest {
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.setAttribute("nexus.tenantId", "merchant-1");
 
+        // P0-2：verifyKeyOwnership 需要 listApiKeys 返回包含目标 keyId 的列表
+        ApiKey existingKey = createApiKey("ak_live_rev001", "merchant-1", "PAYMENTS");
+        when(apiKeyService.listApiKeys("merchant-1")).thenReturn(List.of(existingKey));
+
         ApiKey revokedKey = createApiKey("ak_live_rev001", "merchant-1", "PAYMENTS");
         revokedKey.setStatus(ApiKeyStatus.REVOKED);
         revokedKey.setRevokedReason("安全泄露");
@@ -220,6 +228,10 @@ class ApiKeyControllerTest {
     void revokeApiKeyWithNullBody() {
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.setAttribute("nexus.tenantId", "merchant-1");
+
+        // P0-2：verifyKeyOwnership 需要 listApiKeys 返回包含目标 keyId 的列表
+        ApiKey existingKey = createApiKey("ak_live_rev002", "merchant-1", "PAYMENTS");
+        when(apiKeyService.listApiKeys("merchant-1")).thenReturn(List.of(existingKey));
 
         ApiKey revokedKey = createApiKey("ak_live_rev002", "merchant-1", "PAYMENTS");
         revokedKey.setStatus(ApiKeyStatus.REVOKED);

@@ -9,6 +9,7 @@ import ch.qos.logback.core.encoder.LayoutWrappingEncoder;
 import ch.qos.logback.core.filter.Filter;
 import ch.qos.logback.core.spi.FilterReply;
 import net.logstash.logback.encoder.LogstashEncoder;
+import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Configuration;
@@ -39,6 +40,8 @@ import java.util.List;
 @Configuration
 @EnableConfigurationProperties(StructuredLogProperties.class)
 public class StructuredLogConfig {
+
+    private static final Logger log = LoggerFactory.getLogger(StructuredLogConfig.class);
 
     private final StructuredLogProperties properties;
 
@@ -142,7 +145,14 @@ public class StructuredLogConfig {
                 MaskingLayout maskingLayout = new MaskingLayout(originalLayout, sensitiveFilter);
                 maskingLayout.setContext(loggerContext);
                 maskingLayout.start();
-                lwe.setLayout(maskingLayout);
+                try {
+                    lwe.setLayout(maskingLayout);
+                } catch (UnsupportedOperationException e) {
+                    // logback 1.5+ 不允许对 PatternLayoutEncoder 调用 setLayout()，
+                    // 跳过脱敏 Layout 注入（敏感数据脱敏功能在此 encoder 上不可用）
+                    log.warn("无法为 encoder {} 注入脱敏 Layout（logback 1.5+ 限制）: {}",
+                            encoder.getClass().getSimpleName(), e.getMessage());
+                }
             }
         } else if (encoder instanceof LogstashEncoder) {
             // LogstashEncoder 内部使用 LogstashLayout，通过反射获取并替换

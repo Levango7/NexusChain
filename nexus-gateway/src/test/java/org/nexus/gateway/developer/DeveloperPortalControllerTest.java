@@ -43,8 +43,8 @@ class DeveloperPortalControllerTest {
     @Test
     @DisplayName("GET /api/v1/developer/api-catalog/{endpoint} — 已知端点 200")
     void getApiEndpoint_knownEndpoint() throws Exception {
-        // 使用完整路径作为 endpoint 参数（Spring 会将 /api/v1/orders 编码为路径段）
-        mockMvc.perform(get("/api/v1/developer/api-catalog//api/v1/orders"))
+        // 使用单段路径 'orders'，Controller 的 normalizeEndpointPath 会还原为 /api/v1/orders
+        mockMvc.perform(get("/api/v1/developer/api-catalog/orders"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.path").value("/api/v1/orders"))
                 .andExpect(jsonPath("$.method").value("POST"));

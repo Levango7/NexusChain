@@ -60,6 +60,7 @@ class DataExportServiceTest {
         riskEventRepository = mock(RiskEventRepository.class);
         webhookDeliveryRepository = mock(WebhookDeliveryRepository.class);
         objectMapper = new ObjectMapper();
+        objectMapper.findAndRegisterModules(); // 注册 JSR310 (LocalDateTime/Instant 等序列化支持)
 
         dataExportService = new DataExportService(
                 exportRequestRepository,

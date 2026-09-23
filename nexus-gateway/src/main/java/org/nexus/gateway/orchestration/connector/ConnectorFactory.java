@@ -133,6 +133,8 @@ public class ConnectorFactory {
 
     /**
      * 通过反射设置 private 字段值（包括 @Value 注解字段）。
+     *
+     * <p>P1-2 修复：反射设置失败时抛出 RuntimeException，阻止 Connector 在配置不完整的情况下被创建和使用。</p>
      */
     private void setField(Object target, String fieldName, Object value) {
         try {
@@ -140,7 +142,10 @@ public class ConnectorFactory {
             field.setAccessible(true);
             field.set(target, value);
         } catch (NoSuchFieldException | IllegalAccessException e) {
-            log.warn("Failed to set field '{}' on {}: {}", fieldName, target.getClass().getSimpleName(), e.getMessage());
+            // P1-2：配置字段设置失败是严重错误，不能静默忽略
+            throw new RuntimeException(
+                    "Failed to set field '" + fieldName + "' on " + target.getClass().getSimpleName()
+                            + " — Connector configuration is incomplete: " + e.getMessage(), e);
         }
     }
 

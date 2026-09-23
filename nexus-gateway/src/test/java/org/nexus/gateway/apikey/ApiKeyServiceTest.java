@@ -186,9 +186,6 @@ class ApiKeyServiceTest {
     @Test
     @DisplayName("验证 API Key：ACTIVE + 密钥匹配 → 通过")
     void validateApiKeySuccess() {
-        ApiKey key = createActiveKey("ak_live_val123", "merchant-1", "PAYMENTS");
-        // 模拟保存时已存储哈希
-        when(apiKeyRepository.findByKeyId("ak_live_val123")).thenReturn(Optional.of(key));
 
         // 先创建一个 Key 获取明文密钥，再用该明文验证
         when(apiKeyRepository.countByMerchantId("merchant-1")).thenReturn(0L);
@@ -239,19 +236,6 @@ class ApiKeyServiceTest {
     @Test
     @DisplayName("验证 API Key：已过期 → 自动标记 EXPIRED 并失败")
     void validateApiKeyExpiredAutoMarksAndFails() {
-        ApiKey expiredKey = createActiveKey("ak_live_exp123", "merchant-1", "PAYMENTS");
-        expiredKey.setExpireAt(LocalDateTime.now().minusDays(1)); // 昨天过期
-        when(apiKeyRepository.findByKeyId("ak_live_exp123")).thenReturn(Optional.of(expiredKey));
-        when(apiKeyRepository.save(any(ApiKey.class))).thenAnswer(inv -> inv.getArgument(0));
-
-        // 需要用正确的密钥才能到达过期检查
-        // 先创建获取明文
-        when(apiKeyRepository.countByMerchantId("merchant-1")).thenReturn(0L);
-        when(apiKeyRepository.save(any(ApiKey.class))).thenAnswer(inv -> {
-            ApiKey k = inv.getArgument(0);
-            k.setId(1L);
-            return k;
-        });
 
         // 直接构造一个已过期的 Key 并设置正确的哈希
         ApiKey key = createActiveKeyWithKnownSecret("ak_live_exp456", "merchant-1", "PAYMENTS");

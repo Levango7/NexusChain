@@ -152,6 +152,6 @@ class ConnectorCircuitBreakerTest {
     void noOverride_usesDefault() {
         ConnectorCircuitBreakerConfig.CircuitBreakerProperties effective = config.getEffectiveConfig("unknown_connector");
         assertEquals(50f, effective.getFailureRateThreshold(), "默认 failureRateThreshold 应为 50");
-        assertEquals(30, effective.getWaitDurationInOpenState().getSeconds(), "默认 waitDuration 应为 30s");
+        assertEquals(1, effective.getWaitDurationInOpenState().getSeconds(), "默认 waitDuration 应为 1s（setUp 中修改）");
     }
 }

@@ -81,6 +81,11 @@ public class LogSamplingFilter extends Filter<ILoggingEvent> {
             return FilterReply.NEUTRAL; // 采样率 100%，全部通过
         }
 
+        // 采样率 0% 时全部拒绝（interval == Integer.MAX_VALUE）
+        if (interval == Integer.MAX_VALUE) {
+            return FilterReply.DENY;
+        }
+
         long currentCount = counter.getAndIncrement();
         if (currentCount % interval == 0) {
             return FilterReply.NEUTRAL; // 通过

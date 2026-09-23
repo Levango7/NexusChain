@@ -47,6 +47,9 @@ public class LimitCheckService {
      * <p>任一校验失败立即返回，不再继续后续校验。
      * 无限额配置时返回 passed()。</p>
      *
+     * <p>P1-4 修复：一次性加载 MerchantLimitConfig 和日/月交易数据后复用，
+     * 避免冗余数据库查询（从最多 5 次降至 3 次）。</p>
+     *
      * @param merchantId        商户 ID
      * @param transactionAmount 待检查的交易金额
      * @return 限额检查结果
@@ -62,6 +65,19 @@ public class LimitCheckService {
             return LimitCheckResult.passed();
         }
 
+        // P1-4：一次性加载日/月交易数据，避免冗余查询
+        LocalDateTime todayStart = LocalDate.now().atStartOfDay();
+        LocalDateTime tomorrowStart = todayStart.plusDays(1);
+        LocalDateTime monthStart = YearMonth.now().atDay(1).atStartOfDay();
+        LocalDateTime nextMonthStart = monthStart.plusMonths(1);
+
+        List<PaymentOrder> dailyOrders = paymentOrderRepository
+                .findByMerchantIdAndStatusAndPaidAtBetween(
+                        merchantId, PaymentOrder.OrderStatus.PAID, todayStart, tomorrowStart);
+        List<PaymentOrder> monthlyOrders = paymentOrderRepository
+                .findByMerchantIdAndStatusAndPaidAtBetween(
+                        merchantId, PaymentOrder.OrderStatus.PAID, monthStart, nextMonthStart);
+
         // 1. 单笔最小金额校验
         LimitCheckResult singleResult = checkSingleTransactionLimit(config, transactionAmount);
         if (!singleResult.isPassed()) {
@@ -69,25 +85,25 @@ public class LimitCheckService {
         }
 
         // 3. 日累计金额校验
-        LimitCheckResult dailyAmountResult = checkDailyAmountLimit(config, merchantId, transactionAmount);
+        LimitCheckResult dailyAmountResult = checkDailyAmountLimit(config, sumAmounts(dailyOrders), transactionAmount);
         if (!dailyAmountResult.isPassed()) {
             return dailyAmountResult;
         }
 
         // 4. 日交易笔数校验
-        LimitCheckResult dailyCountResult = checkDailyCountLimit(config, merchantId);
+        LimitCheckResult dailyCountResult = checkDailyCountLimit(config, dailyOrders.size());
         if (!dailyCountResult.isPassed()) {
             return dailyCountResult;
         }
 
         // 5. 月累计金额校验
-        LimitCheckResult monthlyAmountResult = checkMonthlyAmountLimit(config, merchantId, transactionAmount);
+        LimitCheckResult monthlyAmountResult = checkMonthlyAmountLimit(config, sumAmounts(monthlyOrders), transactionAmount);
         if (!monthlyAmountResult.isPassed()) {
             return monthlyAmountResult;
         }
 
         // 6. 月交易笔数校验
-        LimitCheckResult monthlyCountResult = checkMonthlyCountLimit(config, merchantId);
+        LimitCheckResult monthlyCountResult = checkMonthlyCountLimit(config, monthlyOrders.size());
         if (!monthlyCountResult.isPassed()) {
             return monthlyCountResult;
         }
@@ -162,16 +178,16 @@ public class LimitCheckService {
             return LimitCheckResult.passed();
         }
 
-        return checkDailyAmountLimit(config, merchantId, newAmount);
+        return checkDailyAmountLimit(config, getDailyAccumulatedAmount(merchantId), newAmount);
     }
 
-    private LimitCheckResult checkDailyAmountLimit(MerchantLimitConfig config, Long merchantId,
+    private LimitCheckResult checkDailyAmountLimit(MerchantLimitConfig config, BigDecimal currentAccumulated,
                                                     BigDecimal newAmount) {
         if (config.getDailyAccumulatedMaxAmount() == null) {
             return LimitCheckResult.passed();
         }
 
-        BigDecimal currentAccumulated = getDailyAccumulatedAmount(merchantId);
+
         BigDecimal projectedTotal = currentAccumulated.add(newAmount);
 
         if (projectedTotal.compareTo(config.getDailyAccumulatedMaxAmount()) > 0) {
@@ -204,15 +220,14 @@ public class LimitCheckService {
             return LimitCheckResult.passed();
         }
 
-        return checkDailyCountLimit(config, merchantId);
+        return checkDailyCountLimit(config, getDailyTransactionCount(merchantId));
     }
 
-    private LimitCheckResult checkDailyCountLimit(MerchantLimitConfig config, Long merchantId) {
+    private LimitCheckResult checkDailyCountLimit(MerchantLimitConfig config, int currentCount) {
         if (config.getDailyMaxTransactionCount() == null) {
             return LimitCheckResult.passed();
         }
 
-        int currentCount = getDailyTransactionCount(merchantId);
 
         if (currentCount >= config.getDailyMaxTransactionCount()) {
             return LimitCheckResult.failed(
@@ -243,16 +258,15 @@ public class LimitCheckService {
             return LimitCheckResult.passed();
         }
 
-        return checkMonthlyAmountLimit(config, merchantId, newAmount);
+        return checkMonthlyAmountLimit(config, getMonthlyAccumulatedAmount(merchantId), newAmount);
     }
 
-    private LimitCheckResult checkMonthlyAmountLimit(MerchantLimitConfig config, Long merchantId,
+    private LimitCheckResult checkMonthlyAmountLimit(MerchantLimitConfig config, BigDecimal currentAccumulated,
                                                       BigDecimal newAmount) {
         if (config.getMonthlyAccumulatedMaxAmount() == null) {
             return LimitCheckResult.passed();
         }
 
-        BigDecimal currentAccumulated = getMonthlyAccumulatedAmount(merchantId);
         BigDecimal projectedTotal = currentAccumulated.add(newAmount);
 
         if (projectedTotal.compareTo(config.getMonthlyAccumulatedMaxAmount()) > 0) {
@@ -283,15 +297,13 @@ public class LimitCheckService {
             return LimitCheckResult.passed();
         }
 
-        return checkMonthlyCountLimit(config, merchantId);
+        return checkMonthlyCountLimit(config, getMonthlyTransactionCount(merchantId));
     }
 
-    private LimitCheckResult checkMonthlyCountLimit(MerchantLimitConfig config, Long merchantId) {
+    private LimitCheckResult checkMonthlyCountLimit(MerchantLimitConfig config, int currentCount) {
         if (config.getMonthlyMaxTransactionCount() == null) {
             return LimitCheckResult.passed();
         }
-
-        int currentCount = getMonthlyTransactionCount(merchantId);
 
         if (currentCount >= config.getMonthlyMaxTransactionCount()) {
             return LimitCheckResult.failed(
@@ -302,6 +314,19 @@ public class LimitCheckService {
         }
 
         return LimitCheckResult.passed();
+    }
+
+    /**
+     * P1-4：从订单列表中累计金额（复用已加载的数据，避免冗余查询）。
+     */
+    private BigDecimal sumAmounts(List<PaymentOrder> orders) {
+        BigDecimal total = BigDecimal.ZERO;
+        for (PaymentOrder order : orders) {
+            if (order.getAmount() != null) {
+                total = total.add(order.getAmount());
+            }
+        }
+        return total;
     }
 
     /**

@@ -1,8 +1,10 @@
 package org.nexus.gateway.export;
 
+import jakarta.servlet.http.HttpServletRequest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.nexus.gateway.security.MerchantOwnershipGuard;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 
@@ -22,18 +24,27 @@ import static org.mockito.Mockito.*;
  *
  * <p>覆盖创建导出请求、列出导出请求、查看导出状态、下载导出文件、
  * 删除导出请求等 API 端点场景。</p>
+ *
+ * <p>P0-1 修复后：所有端点需要 MerchantOwnershipGuard 校验，
+ * 测试中 mock guard 始终返回 MERCHANT_ID 以通过校验。</p>
  */
 class DataExportControllerTest {
 
     private DataExportService dataExportService;
+    private MerchantOwnershipGuard ownershipGuard;
     private DataExportController dataExportController;
+    private HttpServletRequest httpRequest;
 
     private static final Long MERCHANT_ID = 500L;
 
     @BeforeEach
     void setUp() {
         dataExportService = mock(DataExportService.class);
-        dataExportController = new DataExportController(dataExportService);
+        ownershipGuard = mock(MerchantOwnershipGuard.class);
+        httpRequest = mock(HttpServletRequest.class);
+        // P0-1：mock guard 始终返回 MERCHANT_ID，校验通过
+        when(ownershipGuard.requireMerchantId(httpRequest)).thenReturn(MERCHANT_ID);
+        dataExportController = new DataExportController(dataExportService, ownershipGuard);
     }
 
     // ==================== POST /api/v1/data-exports ====================
@@ -54,7 +65,7 @@ class DataExportControllerTest {
         when(dataExportService.createExportRequest(any(), any(), any(), any(), any(), any()))
                 .thenReturn(request);
 
-        ResponseEntity<DataExportRequest> response = dataExportController.createExport(body);
+        ResponseEntity<DataExportRequest> response = dataExportController.createExport(body, httpRequest);
 
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertNotNull(response.getBody());
@@ -80,7 +91,7 @@ class DataExportControllerTest {
         when(dataExportService.createExportRequest(any(), any(), any(), any(), any(), any()))
                 .thenReturn(request);
 
-        ResponseEntity<DataExportRequest> response = dataExportController.createExport(body);
+        ResponseEntity<DataExportRequest> response = dataExportController.createExport(body, httpRequest);
 
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertNotNull(response.getBody());
@@ -102,7 +113,7 @@ class DataExportControllerTest {
                 .thenReturn(List.of(r1, r2));
 
         ResponseEntity<List<DataExportRequest>> response =
-                dataExportController.listExports(MERCHANT_ID);
+                dataExportController.listExports(MERCHANT_ID, httpRequest);
 
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertNotNull(response.getBody());
@@ -116,7 +127,7 @@ class DataExportControllerTest {
                 .thenReturn(List.of());
 
         ResponseEntity<List<DataExportRequest>> response =
-                dataExportController.listExports(MERCHANT_ID);
+                dataExportController.listExports(MERCHANT_ID, httpRequest);
 
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertNotNull(response.getBody());
@@ -134,7 +145,7 @@ class DataExportControllerTest {
 
         when(dataExportService.getExportRequest(1L)).thenReturn(Optional.of(request));
 
-        ResponseEntity<DataExportRequest> response = dataExportController.getExport(1L);
+        ResponseEntity<DataExportRequest> response = dataExportController.getExport(1L, httpRequest);
 
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertNotNull(response.getBody());
@@ -146,7 +157,7 @@ class DataExportControllerTest {
     void getExportNotFoundReturns404() {
         when(dataExportService.getExportRequest(999L)).thenReturn(Optional.empty());
 
-        ResponseEntity<DataExportRequest> response = dataExportController.getExport(999L);
+        ResponseEntity<DataExportRequest> response = dataExportController.getExport(999L, httpRequest);
 
         assertEquals(HttpStatus.NOT_FOUND, response.getStatusCode());
     }
@@ -164,7 +175,7 @@ class DataExportControllerTest {
         when(dataExportService.downloadExport(1L))
                 .thenReturn(Optional.of("test,csv,data".getBytes()));
 
-        ResponseEntity<byte[]> response = dataExportController.downloadExport(1L);
+        ResponseEntity<byte[]> response = dataExportController.downloadExport(1L, httpRequest);
 
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertNotNull(response.getBody());
@@ -184,7 +195,7 @@ class DataExportControllerTest {
         when(dataExportService.downloadExport(2L))
                 .thenReturn(Optional.of("{\"data\":[]}".getBytes()));
 
-        ResponseEntity<byte[]> response = dataExportController.downloadExport(2L);
+        ResponseEntity<byte[]> response = dataExportController.downloadExport(2L, httpRequest);
 
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertNotNull(response.getBody());
@@ -196,7 +207,7 @@ class DataExportControllerTest {
     void downloadExportNotFoundReturns404() {
         when(dataExportService.getExportRequest(999L)).thenReturn(Optional.empty());
 
-        ResponseEntity<byte[]> response = dataExportController.downloadExport(999L);
+        ResponseEntity<byte[]> response = dataExportController.downloadExport(999L, httpRequest);
 
         assertEquals(HttpStatus.NOT_FOUND, response.getStatusCode());
     }
@@ -210,7 +221,7 @@ class DataExportControllerTest {
 
         when(dataExportService.getExportRequest(1L)).thenReturn(Optional.of(request));
 
-        ResponseEntity<byte[]> response = dataExportController.downloadExport(1L);
+        ResponseEntity<byte[]> response = dataExportController.downloadExport(1L, httpRequest);
 
         assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
     }
@@ -225,7 +236,7 @@ class DataExportControllerTest {
         when(dataExportService.getExportRequest(1L)).thenReturn(Optional.of(request));
         when(dataExportService.downloadExport(1L)).thenReturn(Optional.empty());
 
-        ResponseEntity<byte[]> response = dataExportController.downloadExport(1L);
+        ResponseEntity<byte[]> response = dataExportController.downloadExport(1L, httpRequest);
 
         assertEquals(HttpStatus.NOT_FOUND, response.getStatusCode());
     }
@@ -235,9 +246,13 @@ class DataExportControllerTest {
     @Test
     @DisplayName("deleteExport — 删除成功返回 204")
     void deleteExportSuccessReturns204() {
+        DataExportRequest request = createRequest(1L, MERCHANT_ID,
+                DataExportType.TRANSACTIONS, DataExportFormat.CSV);
+
+        when(dataExportService.getExportRequest(1L)).thenReturn(Optional.of(request));
         when(dataExportService.deleteExport(1L)).thenReturn(true);
 
-        ResponseEntity<Void> response = dataExportController.deleteExport(1L);
+        ResponseEntity<Void> response = dataExportController.deleteExport(1L, httpRequest);
 
         assertEquals(HttpStatus.NO_CONTENT, response.getStatusCode());
     }
@@ -245,9 +260,9 @@ class DataExportControllerTest {
     @Test
     @DisplayName("deleteExport — 请求不存在时返回 404")
     void deleteExportNotFoundReturns404() {
-        when(dataExportService.deleteExport(999L)).thenReturn(false);
+        when(dataExportService.getExportRequest(999L)).thenReturn(Optional.empty());
 
-        ResponseEntity<Void> response = dataExportController.deleteExport(999L);
+        ResponseEntity<Void> response = dataExportController.deleteExport(999L, httpRequest);
 
         assertEquals(HttpStatus.NOT_FOUND, response.getStatusCode());
     }

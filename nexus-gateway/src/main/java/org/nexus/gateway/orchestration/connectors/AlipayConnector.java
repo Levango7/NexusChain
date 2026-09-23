@@ -11,6 +11,9 @@ import org.springframework.http.*;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
 
+import java.io.UnsupportedEncodingException;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -84,15 +87,13 @@ public class AlipayConnector implements PaymentConnector {
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
 
-            // 构建支付宝当面付预下单请求参数
-            // 支付宝使用统一网关，通过 method 参数区分接口
-            String body = String.format(
-                    "app_id=%s&method=alipay.trade.precreate&sign_type=RSA2" +
-                    "&out_trade_no=%s&total_amount=%s&subject=%s",
-                    appId,
-                    request.getPaymentId(),
-                    String.valueOf(request.getAmount()),
-                    request.getDescription() != null ? request.getDescription() : "NexusChain Payment");
+            // P0-5：所有用户提供的参数值做 URL 编码，防止表单参数注入
+            String description = request.getDescription() != null ? request.getDescription() : "NexusChain Payment";
+            String body = "app_id=" + urlEncode(appId)
+                    + "&method=alipay.trade.precreate&sign_type=RSA2"
+                    + "&out_trade_no=" + urlEncode(request.getPaymentId())
+                    + "&total_amount=" + urlEncode(String.valueOf(request.getAmount()))
+                    + "&subject=" + urlEncode(description);
 
             HttpEntity<String> entity = new HttpEntity<>(body, headers);
             ResponseEntity<Map> resp = restTemplate.postForEntity(apiBaseUrl, entity, Map.class);
@@ -130,9 +131,10 @@ public class AlipayConnector implements PaymentConnector {
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
 
-            String body = String.format(
-                    "app_id=%s&method=alipay.trade.query&sign_type=RSA2&out_trade_no=%s",
-                    appId, connectorPaymentId);
+            // P0-5：URL 编码防止注入
+            String body = "app_id=" + urlEncode(appId)
+                    + "&method=alipay.trade.query&sign_type=RSA2"
+                    + "&out_trade_no=" + urlEncode(connectorPaymentId);
 
             HttpEntity<String> entity = new HttpEntity<>(body, headers);
             ResponseEntity<Map> resp = restTemplate.postForEntity(apiBaseUrl, entity, Map.class);
@@ -141,6 +143,8 @@ public class AlipayConnector implements PaymentConnector {
                 String tradeStatus = String.valueOf(resp.getBody().getOrDefault("trade_status", ""));
                 PaymentStatus mapped = mapAlipayStatus(tradeStatus);
                 localState.put(connectorPaymentId, mapped);
+                // P1-3：终态清理 localState，防止内存泄漏
+                cleanupTerminalState(connectorPaymentId, mapped);
                 return mapped;
             }
         } catch (RuntimeException e) {
@@ -161,10 +165,11 @@ public class AlipayConnector implements PaymentConnector {
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
 
-            String body = String.format(
-                    "app_id=%s&method=alipay.trade.refund&sign_type=RSA2" +
-                    "&out_trade_no=%s&refund_amount=%s",
-                    appId, connectorPaymentId, String.valueOf(amount));
+            // P0-5：URL 编码防止注入
+            String body = "app_id=" + urlEncode(appId)
+                    + "&method=alipay.trade.refund&sign_type=RSA2"
+                    + "&out_trade_no=" + urlEncode(connectorPaymentId)
+                    + "&refund_amount=" + urlEncode(String.valueOf(amount));
 
             HttpEntity<String> entity = new HttpEntity<>(body, headers);
             ResponseEntity<Map> resp = restTemplate.postForEntity(apiBaseUrl, entity, Map.class);
@@ -197,9 +202,10 @@ public class AlipayConnector implements PaymentConnector {
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
 
-            String body = String.format(
-                    "app_id=%s&method=alipay.trade.query&sign_type=RSA2&out_trade_no=health_check_dummy",
-                    appId);
+            // P0-5：URL 编码防止注入
+            String body = "app_id=" + urlEncode(appId)
+                    + "&method=alipay.trade.query&sign_type=RSA2"
+                    + "&out_trade_no=health_check_dummy";
 
             HttpEntity<String> entity = new HttpEntity<>(body, headers);
             restTemplate.postForEntity(apiBaseUrl, entity, Map.class);
@@ -233,5 +239,35 @@ public class AlipayConnector implements PaymentConnector {
             case "TRADE_REFUND" -> PaymentStatus.REFUNDED;
             default -> PaymentStatus.FAILED; // fail-closed
         };
+    }
+
+    /**
+     * P0-5：URL 编码辅助方法，确保表单参数值经过编码，防止注入。
+     */
+    private String urlEncode(String value) {
+        if (value == null) {
+            return "";
+        }
+        try {
+            return URLEncoder.encode(value, StandardCharsets.UTF_8.name());
+        } catch (UnsupportedEncodingException e) {
+            // UTF-8 一定存在，不会走到这里
+            return URLEncoder.encode(value);
+        }
+    }
+
+    /**
+     * P1-3：支付进入终态后清理 localState 条目，防止内存泄漏。
+     *
+     * @param connectorPaymentId 连接器支付 ID
+     * @param status             当前支付状态
+     */
+    private void cleanupTerminalState(String connectorPaymentId, PaymentStatus status) {
+        if (status == PaymentStatus.SUCCEEDED
+                || status == PaymentStatus.FAILED
+                || status == PaymentStatus.REFUNDED
+                || status == PaymentStatus.CANCELLED) {
+            localState.remove(connectorPaymentId);
+        }
     }
 }

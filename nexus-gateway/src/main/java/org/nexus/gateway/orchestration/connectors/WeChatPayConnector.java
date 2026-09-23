@@ -11,6 +11,7 @@ import org.springframework.http.*;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -46,6 +47,8 @@ public class WeChatPayConnector implements PaymentConnector {
 
     private final RestTemplate restTemplate;
     private final Map<String, PaymentStatus> localState = new ConcurrentHashMap<>();
+    // P0-4：使用 ObjectMapper 安全构建 JSON，防止注入
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Autowired
     public WeChatPayConnector(RestTemplate restTemplate) {
@@ -83,11 +86,19 @@ public class WeChatPayConnector implements PaymentConnector {
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
 
-            // 构建微信支付 Native 下单请求体
+            // P0-4：使用 ObjectMapper 安全构建 JSON，防止 description 注入
             String description = request.getDescription() != null ? request.getDescription() : "";
-            String json = String.format(
-                "{\"appid\":\"%s\",\"mch_id\":\"%s\",\"out_trade_no\":\"%s\",\"description\":\"%s\",\"amount\":{\"total\":%d,\"currency\":\"CNY\"}}",
-                appId, mchId, request.getPaymentId(), description, request.getAmount());
+            Map<String, Object> requestBody = new LinkedHashMap<>();
+            requestBody.put("appid", appId);
+            requestBody.put("mch_id", mchId);
+            requestBody.put("out_trade_no", request.getPaymentId());
+            requestBody.put("description", description);
+            Map<String, Object> amount = new LinkedHashMap<>();
+            amount.put("total", request.getAmount());
+            amount.put("currency", "CNY");
+            requestBody.put("amount", amount);
+
+            String json = objectMapper.writeValueAsString(requestBody);
 
             HttpEntity<String> entity = new HttpEntity<>(json, headers);
             ResponseEntity<Map> resp = restTemplate.postForEntity(apiBase + "/pay/native", entity, Map.class);
@@ -111,7 +122,7 @@ public class WeChatPayConnector implements PaymentConnector {
                 return result;
             }
             return ConnectorPaymentResult.fail("WeChat Pay returned empty response");
-        } catch (RuntimeException e) {
+        } catch (Exception e) {
             log.error("[WeChat] createPayment failed: {}", e.getMessage());
             return ConnectorPaymentResult.fail("WeChat Pay error: " + e.getMessage());
         }
@@ -126,9 +137,12 @@ public class WeChatPayConnector implements PaymentConnector {
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
 
-            String json = String.format(
-                "{\"appid\":\"%s\",\"mch_id\":\"%s\",\"out_trade_no\":\"%s\"}",
-                appId, mchId, connectorPaymentId);
+            // P0-4：使用 ObjectMapper 安全构建 JSON
+            Map<String, Object> queryBody = new LinkedHashMap<>();
+            queryBody.put("appid", appId);
+            queryBody.put("mch_id", mchId);
+            queryBody.put("out_trade_no", connectorPaymentId);
+            String json = objectMapper.writeValueAsString(queryBody);
 
             HttpEntity<String> entity = new HttpEntity<>(json, headers);
             ResponseEntity<Map> resp = restTemplate.postForEntity(apiBase + "/pay/orderquery", entity, Map.class);
@@ -137,10 +151,12 @@ public class WeChatPayConnector implements PaymentConnector {
                 String tradeState = String.valueOf(resp.getBody().getOrDefault("trade_state", "UNKNOWN"));
                 PaymentStatus mapped = mapWeChatStatus(tradeState);
                 localState.put(connectorPaymentId, mapped);
+                // P1-3：终态清理 localState，防止内存泄漏
+                cleanupTerminalState(connectorPaymentId, mapped);
                 log.info("[WeChat] queryPayment: out_trade_no={} trade_state={} -> {}", connectorPaymentId, tradeState, mapped);
                 return mapped;
             }
-        } catch (RuntimeException e) {
+        } catch (Exception e) {
             log.warn("[WeChat] queryPayment failed for {}: {}", connectorPaymentId, e.getMessage());
         }
         return localState.getOrDefault(connectorPaymentId, PaymentStatus.FAILED);
@@ -156,9 +172,16 @@ public class WeChatPayConnector implements PaymentConnector {
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
 
-            String json = String.format(
-                "{\"appid\":\"%s\",\"mch_id\":\"%s\",\"out_trade_no\":\"%s\",\"refund_amount\":{\"total\":%d,\"currency\":\"CNY\"}}",
-                appId, mchId, connectorPaymentId, amount);
+            // P0-4：使用 ObjectMapper 安全构建 JSON
+            Map<String, Object> refundBody = new LinkedHashMap<>();
+            refundBody.put("appid", appId);
+            refundBody.put("mch_id", mchId);
+            refundBody.put("out_trade_no", connectorPaymentId);
+            Map<String, Object> refundAmount = new LinkedHashMap<>();
+            refundAmount.put("total", amount);
+            refundAmount.put("currency", "CNY");
+            refundBody.put("refund_amount", refundAmount);
+            String json = objectMapper.writeValueAsString(refundBody);
 
             HttpEntity<String> entity = new HttpEntity<>(json, headers);
             ResponseEntity<Map> resp = restTemplate.postForEntity(apiBase + "/secapi/pay/refund", entity, Map.class);
@@ -170,7 +193,7 @@ public class WeChatPayConnector implements PaymentConnector {
                 return ConnectorRefundResult.ok(refundId);
             }
             return ConnectorRefundResult.fail("WeChat Pay refund returned empty response");
-        } catch (RuntimeException e) {
+        } catch (Exception e) {
             log.error("[WeChat] refund failed for {}: {}", connectorPaymentId, e.getMessage());
             return ConnectorRefundResult.fail("WeChat Pay refund error: " + e.getMessage());
         }
@@ -187,14 +210,17 @@ public class WeChatPayConnector implements PaymentConnector {
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
 
-            String json = String.format(
-                "{\"appid\":\"%s\",\"mch_id\":\"%s\",\"out_trade_no\":\"health_check_probe\"}",
-                appId, mchId);
+            // P0-4：使用 ObjectMapper 安全构建 JSON
+            Map<String, Object> healthBody = new LinkedHashMap<>();
+            healthBody.put("appid", appId);
+            healthBody.put("mch_id", mchId);
+            healthBody.put("out_trade_no", "health_check_probe");
+            String json = objectMapper.writeValueAsString(healthBody);
 
             HttpEntity<String> entity = new HttpEntity<>(json, headers);
             restTemplate.postForEntity(apiBase + "/pay/orderquery", entity, Map.class);
             return ConnectorHealth.up(getId(), System.currentTimeMillis() - start);
-        } catch (RuntimeException e) {
+        } catch (Exception e) {
             return ConnectorHealth.down(getId(), e.getMessage());
         }
     }
@@ -223,5 +249,20 @@ public class WeChatPayConnector implements PaymentConnector {
             case "PAYERROR" -> PaymentStatus.FAILED;
             default -> PaymentStatus.FAILED; // fail-closed
         };
+    }
+
+    /**
+     * P1-3：支付进入终态后清理 localState 条目，防止内存泄漏。
+     *
+     * @param connectorPaymentId 连接器支付 ID
+     * @param status             当前支付状态
+     */
+    private void cleanupTerminalState(String connectorPaymentId, PaymentStatus status) {
+        if (status == PaymentStatus.SUCCEEDED
+                || status == PaymentStatus.FAILED
+                || status == PaymentStatus.REFUNDED
+                || status == PaymentStatus.CANCELLED) {
+            localState.remove(connectorPaymentId);
+        }
     }
 }

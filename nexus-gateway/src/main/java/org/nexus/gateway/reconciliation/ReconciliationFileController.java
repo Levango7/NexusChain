@@ -1,5 +1,7 @@
 package org.nexus.gateway.reconciliation;
 
+import jakarta.servlet.http.HttpServletRequest;
+import org.nexus.gateway.security.MerchantOwnershipGuard;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -15,6 +17,8 @@ import java.util.Optional;
  *
  * <p>提供日度/月度对账文件生成、文件历史查询、文件详情查看和文件下载端点。
  * 所有端点要求 MERCHANT 或 ADMIN 角色权限。</p>
+ *
+ * <p>P1-6 修复：下载端点添加商户归属校验，防止跨商户下载对账文件。</p>
  */
 @RestController
 @RequestMapping("/api/v1/reconciliation")
@@ -22,9 +26,12 @@ import java.util.Optional;
 public class ReconciliationFileController {
 
     private final ReconciliationFileService reconciliationFileService;
+    private final MerchantOwnershipGuard ownershipGuard;
 
-    public ReconciliationFileController(ReconciliationFileService reconciliationFileService) {
+    public ReconciliationFileController(ReconciliationFileService reconciliationFileService,
+                                        MerchantOwnershipGuard ownershipGuard) {
         this.reconciliationFileService = reconciliationFileService;
+        this.ownershipGuard = ownershipGuard;
     }
 
     /**
@@ -103,18 +110,26 @@ public class ReconciliationFileController {
      * <p>根据文件记录的 fileType 字段返回 CSV 或 JSON 格式内容。
      * 文件内容在下载时重新生成，确保数据始终最新。</p>
      *
-     * @param fileId 文件记录 ID
+     * <p>P1-6：验证文件记录属于当前认证商户。</p>
+     *
+     * @param fileId      文件记录 ID
+     * @param httpRequest HTTP 请求
      * @return 文件内容（CSV 或 JSON）
      */
     @GetMapping("/download/{fileId}")
-    public ResponseEntity<String> downloadFile(@PathVariable Long fileId) {
+    public ResponseEntity<String> downloadFile(@PathVariable Long fileId,
+                                               HttpServletRequest httpRequest) {
+        Long callerMerchantId = ownershipGuard.requireMerchantId(httpRequest);
         Optional<ReconciliationFileRecord> recordOpt = reconciliationFileService.getFileRecord(fileId);
         if (recordOpt.isEmpty()) {
             return ResponseEntity.notFound().build();
         }
 
         ReconciliationFileRecord record = recordOpt.get();
-        String content = reconciliationFileService.getFileContent(record);
+        // P1-6：验证文件归属
+        ownershipGuard.requireOwned(callerMerchantId, record.getMerchantId(), "reconciliation-file", fileId);
+
+        String content = reconciliationFileService.getFileContent(record, callerMerchantId);
 
         HttpHeaders headers = new HttpHeaders();
         String filename = "reconciliation_" + record.getPeriodType().toLowerCase()

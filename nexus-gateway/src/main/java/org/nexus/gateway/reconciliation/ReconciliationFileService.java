@@ -242,10 +242,23 @@ public class ReconciliationFileService {
      * <p>文件内容不持久化到数据库，下载时根据元数据重新生成。
      * 根据记录的 fileType 字段决定生成 CSV 或 JSON 格式。</p>
      *
-     * @param record 文件记录
+     * <p>P1-6 修复：添加 callerMerchantId 参数，验证文件记录属于当前商户，
+     * 防止跨商户下载对账文件。</p>
+     *
+     * @param record           文件记录
+     * @param callerMerchantId 当前认证商户 ID
      * @return 文件内容字符串
+     * @throws org.nexus.gateway.security.MerchantOwnershipException 如果文件不属于当前商户
      */
-    public String getFileContent(ReconciliationFileRecord record) {
+    public String getFileContent(ReconciliationFileRecord record, Long callerMerchantId) {
+        // P1-6：验证文件归属
+        if (callerMerchantId != null && record.getMerchantId() != null
+                && !callerMerchantId.equals(record.getMerchantId())) {
+            throw new org.nexus.gateway.security.MerchantOwnershipException(
+                    "Access denied: reconciliation file " + record.getId()
+                            + " does not belong to the authenticated merchant");
+        }
+
         LocalDateTime periodStartDt = record.getPeriodStart().atStartOfDay();
         LocalDateTime periodEndDt = record.getPeriodEnd().plusDays(1).atStartOfDay();
 
@@ -262,6 +275,16 @@ public class ReconciliationFileService {
             return generateCsvContent(record.getMerchantId(), orders,
                     record.getPeriodStart(), record.getPeriodEnd());
         }
+    }
+
+    /**
+     * 根据文件记录重新生成文件内容（无商户校验，仅内部调用或测试使用）。
+     *
+     * @param record 文件记录
+     * @return 文件内容字符串
+     */
+    public String getFileContent(ReconciliationFileRecord record) {
+        return getFileContent(record, null);
     }
 
     // --- 内部方法 ---
