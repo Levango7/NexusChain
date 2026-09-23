@@ -58,7 +58,7 @@ class SettlementEventCollectorTest {
         assertEquals("0xpayer", order.getPayerAddress());
         assertEquals("0xpayee", order.getPayeeAddress());
         assertEquals(ClearingOrder.OrderStatus.PENDING, order.getStatus());
-        assertEquals("T0", order.getSettlementCycle());
+        assertEquals("T1", order.getSettlementCycle());
         assertNotNull(order.getCreatedAt());
     }
 

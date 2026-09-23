@@ -40,8 +40,8 @@ public class SettlementEventCollector {
 
     private static final Logger log = LoggerFactory.getLogger(SettlementEventCollector.class);
 
-    /** 默认结算周期（T+0，可按商户/产品线配置扩展） */
-    private static final String DEFAULT_SETTLEMENT_CYCLE = "T0";
+        /** 默认结算周期（无 SettlementCycleService 时回退，更安全的默认值） */
+    private static final String DEFAULT_SETTLEMENT_CYCLE = "T1";
 
     /** 内存模式暂存（DB 模式下不使用） */
     private final List<ClearingOrder> stagingOrders = new CopyOnWriteArrayList<>();
@@ -49,20 +49,27 @@ public class SettlementEventCollector {
     /** 清算订单仓储（null 则走内存模式） */
     private final ClearingOrderRepository clearingOrderRepository;
 
+    /** 结算周期服务（null 则回退默认 T1，保证纯单测兼容） */
+    private final SettlementCycleService settlementCycleService;
+
     /** 纯内存构造器（既有测试 new SettlementEventCollector() 走此路径） */
     public SettlementEventCollector() {
-        this(null);
+        this(null, null);
     }
 
     /**
-     * 持久化构造器。repository 由 Spring 容器提供；
+     * 持久化构造器。repository 与 cycleService 由 Spring 容器提供；
      * {@code required=false} 保证无 JPA 环境的装配不失败。
      *
      * @param clearingOrderRepository 清算订单仓储（null 时回退内存模式）
+     * @param settlementCycleService  结算周期服务（null 时回退默认 T1）
      */
     @Autowired
-    public SettlementEventCollector(@Autowired(required = false) ClearingOrderRepository clearingOrderRepository) {
+    public SettlementEventCollector(
+            @Autowired(required = false) ClearingOrderRepository clearingOrderRepository,
+            @Autowired(required = false) SettlementCycleService settlementCycleService) {
         this.clearingOrderRepository = clearingOrderRepository;
+        this.settlementCycleService = settlementCycleService;
     }
 
     /**
@@ -136,9 +143,20 @@ public class SettlementEventCollector {
         order.setCostBps(event.getCostBps());
         order.setPayerAddress(event.getPayerAddress());
         order.setPayeeAddress(event.getPayeeAddress());
-        order.setSettlementCycle(DEFAULT_SETTLEMENT_CYCLE);
+        order.setSettlementCycle(resolveCycle(event.getMerchantId()));
         order.setStatus(ClearingOrder.OrderStatus.PENDING);
         order.setCreatedAt(event.getOccurredAt() != null ? event.getOccurredAt() : Instant.now());
         return order;
+    }
+
+    /**
+     * 解析结算周期：优先使用 SettlementCycleService（按商户配置），
+     * 无 service 时回退默认 T1（更安全的默认值）。
+     */
+    private String resolveCycle(Long merchantId) {
+        if (settlementCycleService != null && merchantId != null) {
+            return settlementCycleService.resolveSettlementCycle(merchantId);
+        }
+        return DEFAULT_SETTLEMENT_CYCLE;
     }
 }

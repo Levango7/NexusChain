@@ -198,8 +198,11 @@ public class DefaultSettlementService implements SettlementService {
         LocalDateTime start = switch (period) {
             case T0 -> now.toLocalDate().atStartOfDay();
             case T1 -> now.toLocalDate().minusDays(1).atStartOfDay();
+            case T2 -> now.toLocalDate().minusDays(2).atStartOfDay();
+            case T3 -> now.toLocalDate().minusDays(3).atStartOfDay();
             case WEEKLY -> now.minusDays(7);
             case MONTHLY -> now.minusDays(30);
+            case CUSTOM -> now.minusDays(1); // CUSTOM 默认按 T1 窗口，实际天数由 SettlementCycleService 管理
         };
         return new LocalDateTime[]{start, end};
     }
