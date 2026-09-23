@@ -3,6 +3,10 @@ package org.nexus.gateway.orchestration.connectors;
 import org.nexus.gateway.client.ConsortiumRpcClient;
 import org.nexus.gateway.config.GatewayConfig;
 import org.nexus.gateway.orchestration.connector.*;
+import org.nexus.gateway.orchestration.settlement.ConsortiumFinalityPolicy;
+import org.nexus.gateway.orchestration.settlement.FinalityPolicy;
+import org.nexus.gateway.orchestration.settlement.FinalityService;
+import org.nexus.gateway.model.FinalityStatus;
 import org.nexus.sdk.client.feign.SigningServiceFeignClient;
 import org.nexus.sdk.client.feign.SigningResponses;
 import org.nexus.sdk.client.feign.WalletMgmtFeignClient;
@@ -60,6 +64,9 @@ public class ConsortiumConnector implements PaymentConnector {
     /** 可选依赖：nexus-oracle 价格适配器，用于法币→链上币换算。未装配时为 null。 */
     private final OraclePriceAdapter oraclePriceAdapter;
 
+    /** 缓存的最终性策略实例，避免每次 queryPayment 轮询时重复创建。 */
+    private final ConsortiumFinalityPolicy finalityPolicy;
+
     private final Map<String, PaymentStatus> pendingPayments = new ConcurrentHashMap<>();
     private final Map<String, String> txHashMap = new ConcurrentHashMap<>();
     /** payee (merchant) pubkeyHash per connectorPaymentId, for confirmation/refund. */
@@ -87,11 +94,8 @@ public class ConsortiumConnector implements PaymentConnector {
         this.walletMgmtClient = walletMgmtClient;
         this.gatewayConfig = gatewayConfig;
         this.oraclePriceAdapter = oraclePriceAdapter;
+        this.finalityPolicy = new ConsortiumFinalityPolicy(consortiumRpc);
     }
-
-    /**
-     * 兼容构造函数：无价格预言机，保留以兼容既有单元测试（4 参数构造）。
-     */
     public ConsortiumConnector(ConsortiumRpcClient consortiumRpc,
                                SigningServiceFeignClient signingServiceClient,
                                WalletMgmtFeignClient walletMgmtClient,
@@ -186,21 +190,54 @@ public class ConsortiumConnector implements PaymentConnector {
         if (cached == null) return PaymentStatus.FAILED;
         if (cached != PaymentStatus.PROCESSING) return cached;
 
-        // Poll consortium chain for confirmation
+        // Poll consortium chain for confirmation via FinalityPolicy
         String txHash = txHashMap.get(connectorPaymentId);
         if (txHash != null) {
-            try {
-                boolean confirmed = consortiumRpc.isTransactionConfirmed(txHash);
-                if (confirmed) {
-                    pendingPayments.put(connectorPaymentId, PaymentStatus.SUCCEEDED);
-                    log.info("Consortium payment confirmed: {}", connectorPaymentId);
-                    return PaymentStatus.SUCCEEDED;
+            FinalityPolicy policy = getFinalityPolicy();
+            if (policy != null) {
+                try {
+                    FinalityService.FinalityInfo info = policy.evaluateFinality(txHash);
+                    PaymentStatus mapped = mapFinalityToPaymentStatus(info.status());
+                    if (mapped == PaymentStatus.SUCCEEDED) {
+                        pendingPayments.put(connectorPaymentId, PaymentStatus.SUCCEEDED);
+                        log.info("Consortium payment confirmed (finality={}): {}", info.status(), connectorPaymentId);
+                    }
+                    return mapped;
+                } catch (RuntimeException e) {
+                    log.warn("Failed to evaluate consortium finality: {}", e.getMessage());
                 }
-            } catch (RuntimeException e) {
-                log.warn("Failed to query consortium confirmation: {}", e.getMessage());
+            } else {
+                // Fallback: legacy confirmation check when FinalityPolicy unavailable
+                try {
+                    boolean confirmed = consortiumRpc.isTransactionConfirmed(txHash);
+                    if (confirmed) {
+                        pendingPayments.put(connectorPaymentId, PaymentStatus.SUCCEEDED);
+                        log.info("Consortium payment confirmed (legacy): {}", connectorPaymentId);
+                        return PaymentStatus.SUCCEEDED;
+                    }
+                } catch (RuntimeException e) {
+                    log.warn("Failed to query consortium confirmation: {}", e.getMessage());
+                }
             }
         }
         return PaymentStatus.PROCESSING;
+    }
+
+    /**
+     * 将 {@link FinalityStatus} 映射为 {@link PaymentStatus}。
+     *
+     * <ul>
+     *   <li>FINALIZED → SUCCEEDED</li>
+     *   <li>FINALIZING → PROCESSING</li>
+     *   <li>OPTIMISTIC → PROCESSING</li>
+     *   <li>UNKNOWN → PROCESSING（继续等待）</li>
+     * </ul>
+     */
+    private PaymentStatus mapFinalityToPaymentStatus(FinalityStatus finalityStatus) {
+        return switch (finalityStatus) {
+            case FINALIZED -> PaymentStatus.SUCCEEDED;
+            case FINALIZING, OPTIMISTIC, UNKNOWN -> PaymentStatus.PROCESSING;
+        };
     }
 
     @Override
@@ -251,6 +288,11 @@ public class ConsortiumConnector implements PaymentConnector {
 
     @Override
     public Set<String> supportedCurrencies() { return Set.of("NEX"); }
+
+    @Override
+    public FinalityPolicy getFinalityPolicy() {
+        return finalityPolicy;
+    }
 
     @Override
     public int feeBasisPoints() { return 2; }

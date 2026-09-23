@@ -8,6 +8,8 @@ import org.nexus.gateway.orchestration.connector.ConnectorPaymentResult;
 import org.nexus.gateway.orchestration.connector.ConnectorRefundResult;
 import org.nexus.gateway.orchestration.connector.PaymentConnector;
 import org.nexus.gateway.orchestration.connector.PaymentStatus;
+import org.nexus.gateway.orchestration.settlement.FinalityPolicy;
+import org.nexus.gateway.orchestration.settlement.PspFinalityPolicy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -86,6 +88,11 @@ public class DynamicHttpPspConnector implements PaymentConnector {
 
     @Override
     public Set<String> supportedCurrencies() { return currencies; }
+
+    @Override
+    public FinalityPolicy getFinalityPolicy() {
+        return new PspFinalityPolicy();
+    }
 
     @Override
     public int feeBasisPoints() { return feeBps; }

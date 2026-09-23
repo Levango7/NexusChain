@@ -2,6 +2,7 @@ package org.nexus.gateway.orchestration.settlement;
 
 import org.junit.jupiter.api.Test;
 import org.nexus.gateway.client.ChainRpcClient;
+import org.nexus.gateway.model.FinalityStatus;
 
 import java.util.Map;
 

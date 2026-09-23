@@ -1,5 +1,6 @@
 package org.nexus.gateway.orchestration.settlement;
 
+import org.nexus.gateway.model.FinalityStatus;
 import org.nexus.gateway.client.ChainRpcClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -57,6 +58,13 @@ public class FinalityService {
         this.chainRpc = chainRpc;
         this.blocksToFinalize = blocksToFinalize;
         this.epochLength = epochLength > 0 ? epochLength : 32;
+    }
+
+    /**
+     * 返回最终化所需的最小确认数（供 {@link FinalityPolicy} 实现获取阈值）。
+     */
+    public long getBlocksToFinalize() {
+        return blocksToFinalize;
     }
 
     /**

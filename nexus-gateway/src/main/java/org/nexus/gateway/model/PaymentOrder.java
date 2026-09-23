@@ -8,8 +8,10 @@ import java.time.LocalDateTime;
  * Payment order entity representing a single payment request from a merchant.
  *
  * <p>An order transitions through the following lifecycle:
- * {@code PENDING -> PAYING -> PAID} or {@code PENDING -> EXPIRED},
- * and may transition to {@code REFUNDED} after a successful refund.</p>
+ * {@code PENDING -> PAYING -> SUBMITTED -> PAID} or {@code PENDING -> EXPIRED},
+ * and may transition to {@code REFUNDED} after a successful refund.
+ * A {@code PAID} order may transition to {@code REORGED} if its block is reorged,
+ * then back to {@code PAID} (re-confirmed) or {@code FAILED} (unrecoverable).</p>
  */
 @Entity
 @Table(name = "payment_orders")
@@ -77,6 +79,18 @@ public class PaymentOrder {
     @Column(name = "status", nullable = false, length = 32)
     private OrderStatus status = OrderStatus.PENDING;
 
+    /**
+     * On-chain finality status (NexFinality double-layer confirmation model).
+     *
+     * <p>Orthogonal to {@link #status} (business state machine), this field tracks
+     * the degree of irreversibility of the underlying chain transaction.
+     * Allowed {@code null} for backward compatibility with pre-existing data
+     * that predates the finality model.</p>
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "finality_status", length = 32)
+    private FinalityStatus finalityStatus;
+
     /** Checkout token for cashier redirect URL. */
     @Column(name = "checkout_token", unique = true, length = 128)
     private String checkoutToken;
@@ -114,7 +128,7 @@ public class PaymentOrder {
     // --- Enumerations ---
 
     public enum OrderStatus {
-        PENDING, PAYING, PAID, EXPIRED, REFUNDED, FAILED, REFUND_PENDING
+        PENDING, PAYING, SUBMITTED, PAID, REORGED, EXPIRED, REFUNDED, FAILED, REFUND_PENDING
     }
 
     // --- Getters and Setters ---
@@ -154,6 +168,11 @@ public class PaymentOrder {
 
     public OrderStatus getStatus() { return status; }
     public void setStatus(OrderStatus status) { this.status = status; }
+
+    public FinalityStatus getFinalityStatus() { return finalityStatus; }
+    public void setFinalityStatus(FinalityStatus finalityStatus) {
+        this.finalityStatus = finalityStatus;
+    }
 
     public String getCheckoutToken() { return checkoutToken; }
     public void setCheckoutToken(String checkoutToken) { this.checkoutToken = checkoutToken; }

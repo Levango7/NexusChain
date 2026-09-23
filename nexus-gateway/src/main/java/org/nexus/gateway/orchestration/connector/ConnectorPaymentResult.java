@@ -1,5 +1,8 @@
 package org.nexus.gateway.orchestration.connector;
 
+import org.nexus.gateway.model.FinalityStatus;
+import org.nexus.gateway.model.SubmissionStatus;
+
 /**
  * Result returned by a connector after creating a payment.
  *
@@ -7,6 +10,10 @@ package org.nexus.gateway.orchestration.connector;
  * 内部测量后回填（典型来源：调用 RPC/PSP 的端到端耗时、connector 的费率基点）。
  * 调用方（如 {@code OrchestrationService}）若发现字段为 0，可作为兜底用外层
  * 计时填充；多数场景下 connector 已经报告了真实值。</p>
+ *
+ * <p><b>最终性字段</b>（Step 1 新增）：{@link #submissionStatus} 描述交易提交阶段，
+ * {@link #finalityStatus} 描述最终性程度。{@code ok()} 工厂方法默认设置
+ * {@code submissionStatus = SUBMITTED, finalityStatus = OPTIMISTIC}。</p>
  */
 public class ConnectorPaymentResult {
     private boolean success;
@@ -19,12 +26,18 @@ public class ConnectorPaymentResult {
     private long latencyMs;
     /** 本次支付成本（basis points），0 表示 connector 未回填（fallback: connector.feeBasisPoints()）。 */
     private int costBps;
+    /** 交易提交状态（SIGNING/SUBMITTED/INCLUDED/REORGED/REJECTED），默认 SUBMITTED。 */
+    private SubmissionStatus submissionStatus;
+    /** 最终性状态（OPTIMISTIC/FINALIZING/FINALIZED/UNKNOWN），默认 OPTIMISTIC。 */
+    private FinalityStatus finalityStatus;
 
     public static ConnectorPaymentResult ok(String connectorPaymentId, PaymentStatus status) {
         ConnectorPaymentResult r = new ConnectorPaymentResult();
         r.success = true;
         r.connectorPaymentId = connectorPaymentId;
         r.status = status;
+        r.submissionStatus = SubmissionStatus.SUBMITTED;
+        r.finalityStatus = FinalityStatus.OPTIMISTIC;
         return r;
     }
 
@@ -39,6 +52,8 @@ public class ConnectorPaymentResult {
         r.success = false;
         r.status = PaymentStatus.FAILED;
         r.errorMessage = errorMessage;
+        r.submissionStatus = SubmissionStatus.REJECTED;
+        r.finalityStatus = FinalityStatus.UNKNOWN;
         return r;
     }
 
@@ -58,6 +73,22 @@ public class ConnectorPaymentResult {
         return this;
     }
 
+    /**
+     * 链式填充交易提交状态。
+     */
+    public ConnectorPaymentResult withSubmissionStatus(SubmissionStatus submissionStatus) {
+        this.submissionStatus = submissionStatus;
+        return this;
+    }
+
+    /**
+     * 链式填充最终性状态。
+     */
+    public ConnectorPaymentResult withFinalityStatus(FinalityStatus finalityStatus) {
+        this.finalityStatus = finalityStatus;
+        return this;
+    }
+
     public boolean isSuccess() { return success; }
     public void setSuccess(boolean success) { this.success = success; }
     public String getConnectorPaymentId() { return connectorPaymentId; }
@@ -74,4 +105,8 @@ public class ConnectorPaymentResult {
     public void setLatencyMs(long latencyMs) { this.latencyMs = latencyMs; }
     public int getCostBps() { return costBps; }
     public void setCostBps(int costBps) { this.costBps = costBps; }
+    public SubmissionStatus getSubmissionStatus() { return submissionStatus; }
+    public void setSubmissionStatus(SubmissionStatus submissionStatus) { this.submissionStatus = submissionStatus; }
+    public FinalityStatus getFinalityStatus() { return finalityStatus; }
+    public void setFinalityStatus(FinalityStatus finalityStatus) { this.finalityStatus = finalityStatus; }
 }

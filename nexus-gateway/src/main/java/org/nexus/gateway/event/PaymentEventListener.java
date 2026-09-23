@@ -2,11 +2,14 @@ package org.nexus.gateway.event;
 
 import org.nexus.gateway.config.GatewayConfig;
 import org.nexus.gateway.model.PaymentOrder;
+import org.nexus.gateway.orchestration.settlement.FinalityLevelUtils;
+import org.nexus.gateway.model.FinalityStatus;
 import org.nexus.gateway.repository.PaymentOrderRepository;
 import org.nexus.gateway.webhook.WebhookUrlValidator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.event.EventListener;
 import org.springframework.http.*;
 import org.springframework.scheduling.annotation.Async;
@@ -37,6 +40,7 @@ public class PaymentEventListener {
 
     private static final Logger log = LoggerFactory.getLogger(PaymentEventListener.class);
 
+
     private final RestTemplate restTemplate;
     private final GatewayConfig gatewayConfig;
     private final PaymentOrderRepository orderRepository;
@@ -49,6 +53,8 @@ public class PaymentEventListener {
      * 构成 SSRF（探测内网 / 云元数据 169.254.169.254 / 触发内网写操作）。</p>
      */
     private final WebhookUrlValidator urlValidator;
+    /** Step 3：Webhook 投递最终性阈值，默认 OPTIMISTIC（向后兼容）。 */
+    private final String finalityThreshold;
 
     /** Deterministic (sorted-key) JSON mapper; must match WebhookController's canonical form. */
     private static final ObjectMapper CANONICAL_MAPPER = new ObjectMapper()
@@ -57,16 +63,18 @@ public class PaymentEventListener {
     @Autowired
     public PaymentEventListener(GatewayConfig gatewayConfig, RestTemplate restTemplate,
                                 PaymentOrderRepository orderRepository,
-                                WebhookUrlValidator urlValidator) {
+                                WebhookUrlValidator urlValidator,
+                                @Value("${nexus.webhook.finality-threshold:OPTIMISTIC}") String finalityThreshold) {
         this.gatewayConfig = gatewayConfig;
         this.restTemplate = restTemplate;
         this.orderRepository = orderRepository;
         this.urlValidator = urlValidator;
+        this.finalityThreshold = finalityThreshold;
     }
 
-    /** 测试用兼容构造器：保留无连接池 RestTemplate。 */
+    /** 测试用兼容构造器：保留无连接池 RestTemplate，finalityThreshold 默认 OPTIMISTIC。 */
     public PaymentEventListener(GatewayConfig gatewayConfig, PaymentOrderRepository orderRepository) {
-        this(gatewayConfig, new RestTemplate(), orderRepository, new WebhookUrlValidator());
+        this(gatewayConfig, new RestTemplate(), orderRepository, new WebhookUrlValidator(), "OPTIMISTIC");
     }
 
     @Async
@@ -80,6 +88,8 @@ public class PaymentEventListener {
         payload.put("chainTxHash", event.getChainTxHash());
         payload.put("payerAddress", event.getPayerAddress());
         payload.put("amount", event.getAmount());
+        payload.put("finalityStatus", event.getFinalityStatus() != null
+                ? event.getFinalityStatus().name() : "UNKNOWN");
         payload.put("timestamp", System.currentTimeMillis());
 
         sendWebhook(event.getMerchantId(), payload);
@@ -141,6 +151,14 @@ public class PaymentEventListener {
      * canonical payload（接收方可校验时间戳头并拒绝过期重放）。</p>
      */
     private void sendWebhook(Long merchantId, Map<String, Object> payload) {
+        // Step 3：投递前检查 finalityStatus 是否达到阈值
+        String finalityStatusStr = (String) payload.get("finalityStatus");
+        if (finalityStatusStr != null && shouldSuppressByFinality(finalityStatusStr)) {
+            log.info("Webhook skipped: finalityStatus={} below threshold={} for merchant={}",
+                    finalityStatusStr, finalityThreshold, merchantId);
+            return;
+        }
+
         String callbackUrl = resolveCallbackUrl((Long) payload.get("orderId"));
         String secret = gatewayConfig.getWebhook().getCallbackSecret();
 
@@ -254,5 +272,15 @@ public class PaymentEventListener {
         } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
             throw new RuntimeException("Failed to canonicalize webhook payload", e);
         }
+    }
+
+    // ─── Step 3：FinalityStatus 阈值检查（委托 FinalityLevelUtils） ─────────
+
+    /**
+     * 判断给定 finalityStatus 字符串是否应抑制 Webhook 投递。
+     * fail-open 原则：未知状态不抑制（避免阻断合法通知）。
+     */
+    private boolean shouldSuppressByFinality(String finalityStatusStr) {
+        return FinalityLevelUtils.shouldSuppress(finalityStatusStr, finalityThreshold);
     }
 }

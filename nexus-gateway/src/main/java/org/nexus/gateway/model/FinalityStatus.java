@@ -1,4 +1,4 @@
-package org.nexus.gateway.orchestration.settlement;
+package org.nexus.gateway.model;
 
 /**
  * 支付最终性状态（NexFinality 双层确认模型的网关侧体现）。

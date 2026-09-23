@@ -16,7 +16,7 @@ import org.nexus.gateway.dto.CreateOrderRequest;
 import org.nexus.gateway.dto.PaymentResult;
 import org.nexus.gateway.model.PaymentOrder;
 import org.nexus.gateway.orchestration.settlement.FinalityService;
-import org.nexus.gateway.orchestration.settlement.FinalityStatus;
+import org.nexus.gateway.model.FinalityStatus;
 import org.nexus.gateway.security.MerchantOwnershipException;
 import org.nexus.gateway.security.MerchantOwnershipGuard;
 import org.slf4j.Logger;

@@ -3,6 +3,10 @@ package org.nexus.gateway.orchestration.connectors;
 import org.nexus.gateway.client.ChainRpcClient;
 import org.nexus.gateway.config.GatewayConfig;
 import org.nexus.gateway.orchestration.connector.*;
+import org.nexus.gateway.orchestration.settlement.ChainFinalityPolicy;
+import org.nexus.gateway.orchestration.settlement.FinalityPolicy;
+import org.nexus.gateway.orchestration.settlement.FinalityService;
+import org.nexus.gateway.model.FinalityStatus;
 import org.nexus.sdk.client.feign.SigningServiceFeignClient;
 import org.nexus.sdk.client.feign.SigningResponses;
 import org.nexus.sdk.client.feign.WalletMgmtFeignClient;
@@ -60,6 +64,12 @@ public class ChainConnector implements PaymentConnector {
     /** 可选依赖：nexus-oracle 价格适配器，用于法币→链上币换算。未装配时为 null。 */
     private final OraclePriceAdapter oraclePriceAdapter;
 
+    /** 最终性推导服务，用于查询链上交易的最终性状态。兼容构造器时为 null。 */
+    private final FinalityService finalityService;
+
+    /** 缓存的最终性策略实例，避免每次 queryPayment 轮询时重复创建。 */
+    private final ChainFinalityPolicy finalityPolicy;
+
     private final Map<String, PaymentStatus> pendingPayments = new ConcurrentHashMap<>();
     private final Map<String, String> txHashMap = new ConcurrentHashMap<>();
     /** payee (merchant) pubkeyHash per connectorPaymentId, for confirmation/refund. */
@@ -68,35 +78,50 @@ public class ChainConnector implements PaymentConnector {
     private final Map<String, String> payerHashMap = new ConcurrentHashMap<>();
 
     /**
-     * 主构造函数：Spring 装配时使用，注入可选的 {@link OraclePriceAdapter}。
+     * 主构造函数：Spring 装配时使用，注入可选的 {@link OraclePriceAdapter} 和 {@link FinalityService}。
      *
      * @param chainRpc              链 RPC 客户端
      * @param signingServiceClient  签名服务 Feign 客户端
      * @param walletMgmtClient      钱包管理服务 Feign 客户端
      * @param gatewayConfig         网关配置
      * @param oraclePriceAdapter    价格预言机适配器（可选，可为 null）
+     * @param finalityService       最终性推导服务（可选，可为 null）
      */
     @Autowired
     public ChainConnector(ChainRpcClient chainRpc,
                           SigningServiceFeignClient signingServiceClient,
                           WalletMgmtFeignClient walletMgmtClient,
                           GatewayConfig gatewayConfig,
-                          @Autowired(required = false) OraclePriceAdapter oraclePriceAdapter) {
+                          @Autowired(required = false) OraclePriceAdapter oraclePriceAdapter,
+                          @Autowired(required = false) FinalityService finalityService) {
         this.chainRpc = chainRpc;
         this.signingServiceClient = signingServiceClient;
         this.walletMgmtClient = walletMgmtClient;
         this.gatewayConfig = gatewayConfig;
         this.oraclePriceAdapter = oraclePriceAdapter;
+        this.finalityService = finalityService;
+        this.finalityPolicy = finalityService != null ? new ChainFinalityPolicy(finalityService) : null;
     }
 
     /**
-     * 兼容构造函数：无价格预言机，保留以兼容既有单元测试（4 参数构造）。
+     * 兼容构造函数：无最终性服务，保留以兼容既有单元测试（5 参数构造）。
+     */
+    public ChainConnector(ChainRpcClient chainRpc,
+                          SigningServiceFeignClient signingServiceClient,
+                          WalletMgmtFeignClient walletMgmtClient,
+                          GatewayConfig gatewayConfig,
+                          OraclePriceAdapter oraclePriceAdapter) {
+        this(chainRpc, signingServiceClient, walletMgmtClient, gatewayConfig, oraclePriceAdapter, null);
+    }
+
+    /**
+     * 兼容构造函数：无价格预言机和最终性服务，保留以兼容既有单元测试（4 参数构造）。
      */
     public ChainConnector(ChainRpcClient chainRpc,
                           SigningServiceFeignClient signingServiceClient,
                           WalletMgmtFeignClient walletMgmtClient,
                           GatewayConfig gatewayConfig) {
-        this(chainRpc, signingServiceClient, walletMgmtClient, gatewayConfig, null);
+        this(chainRpc, signingServiceClient, walletMgmtClient, gatewayConfig, null, null);
     }
 
     @Override
@@ -186,21 +211,54 @@ public class ChainConnector implements PaymentConnector {
         if (cached == null) return PaymentStatus.FAILED;
         if (cached != PaymentStatus.PROCESSING) return cached;
 
-        // Poll chain for confirmation
+        // Poll chain for confirmation via FinalityPolicy
         String txHash = txHashMap.get(connectorPaymentId);
         if (txHash != null) {
-            try {
-                boolean confirmed = chainRpc.isTransactionConfirmed(txHash);
-                if (confirmed) {
-                    pendingPayments.put(connectorPaymentId, PaymentStatus.SUCCEEDED);
-                    log.info("Chain payment confirmed: {}", connectorPaymentId);
-                    return PaymentStatus.SUCCEEDED;
+            FinalityPolicy policy = getFinalityPolicy();
+            if (policy != null) {
+                try {
+                    FinalityService.FinalityInfo info = policy.evaluateFinality(txHash);
+                    PaymentStatus mapped = mapFinalityToPaymentStatus(info.status());
+                    if (mapped == PaymentStatus.SUCCEEDED) {
+                        pendingPayments.put(connectorPaymentId, PaymentStatus.SUCCEEDED);
+                        log.info("Chain payment confirmed (finality={}): {}", info.status(), connectorPaymentId);
+                    }
+                    return mapped;
+                } catch (RuntimeException e) {
+                    log.warn("Failed to evaluate finality: {}", e.getMessage());
                 }
-            } catch (RuntimeException e) {
-                log.warn("Failed to query chain confirmation: {}", e.getMessage());
+            } else {
+                // Fallback: legacy confirmation check when FinalityPolicy unavailable
+                try {
+                    boolean confirmed = chainRpc.isTransactionConfirmed(txHash);
+                    if (confirmed) {
+                        pendingPayments.put(connectorPaymentId, PaymentStatus.SUCCEEDED);
+                        log.info("Chain payment confirmed (legacy): {}", connectorPaymentId);
+                        return PaymentStatus.SUCCEEDED;
+                    }
+                } catch (RuntimeException e) {
+                    log.warn("Failed to query chain confirmation: {}", e.getMessage());
+                }
             }
         }
         return PaymentStatus.PROCESSING;
+    }
+
+    /**
+     * 将 {@link FinalityStatus} 映射为 {@link PaymentStatus}。
+     *
+     * <ul>
+     *   <li>FINALIZED → SUCCEEDED</li>
+     *   <li>FINALIZING → PROCESSING</li>
+     *   <li>OPTIMISTIC → PROCESSING</li>
+     *   <li>UNKNOWN → PROCESSING（继续等待）</li>
+     * </ul>
+     */
+    private PaymentStatus mapFinalityToPaymentStatus(FinalityStatus finalityStatus) {
+        return switch (finalityStatus) {
+            case FINALIZED -> PaymentStatus.SUCCEEDED;
+            case FINALIZING, OPTIMISTIC, UNKNOWN -> PaymentStatus.PROCESSING;
+        };
     }
 
     @Override
@@ -251,6 +309,11 @@ public class ChainConnector implements PaymentConnector {
 
     @Override
     public Set<String> supportedCurrencies() { return Set.of("NEX"); }
+
+    @Override
+    public FinalityPolicy getFinalityPolicy() {
+        return finalityPolicy;
+    }
 
     @Override
     public int feeBasisPoints() { return 5; }

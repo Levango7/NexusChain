@@ -34,6 +34,8 @@ import org.nexus.gateway.event.PaymentConfirmedEvent;
 import org.nexus.gateway.security.KeyManager;
 import org.nexus.gateway.event.RefundCompletedEvent;
 import org.nexus.gateway.model.OrderStateMachine;
+import org.nexus.gateway.orchestration.settlement.FinalityService;
+import org.nexus.gateway.model.FinalityStatus;
 import org.nexus.gateway.execution.ExecutionRequest;
 import org.nexus.gateway.execution.OnChainResult;
 import org.nexus.gateway.execution.ThreePhaseExecutionTemplate;
@@ -73,6 +75,8 @@ public class PaymentServiceImpl implements PaymentService {
     private final ThreePhaseExecutionTemplate threePhaseTemplate;
     /** WalletUtils.addressToPubkeyHash 的 bean 包装（Spring Boot 4.0 MockedStatic 兼容） */
     private final WalletAddressHelper walletAddressHelper;
+    /** 支付最终性推导服务（NexFinality 网关侧原型）。可为 null（测试环境降级）。 */
+    private final FinalityService finalityService;
 
     @Autowired
     public PaymentServiceImpl(PaymentOrderRepository orderRepository,
@@ -87,7 +91,8 @@ public class PaymentServiceImpl implements PaymentService {
                               ComplianceService complianceService,
                               Tracer tracer,
                               ThreePhaseExecutionTemplate threePhaseTemplate,
-                              WalletAddressHelper walletAddressHelper) {
+                              WalletAddressHelper walletAddressHelper,
+                              @Autowired(required = false) FinalityService finalityService) {
         this.orderRepository = orderRepository;
         this.refundRepository = refundRepository;
         this.gatewayConfig = gatewayConfig;
@@ -101,6 +106,7 @@ public class PaymentServiceImpl implements PaymentService {
         this.tracer = tracer;
         this.threePhaseTemplate = threePhaseTemplate;
         this.walletAddressHelper = walletAddressHelper;
+        this.finalityService = finalityService;
     }
 
     /**
@@ -123,7 +129,7 @@ public class PaymentServiceImpl implements PaymentService {
                               ComplianceService complianceService) {
         this(orderRepository, refundRepository, gatewayConfig, chainRpcClient,
                 signingServiceClient, walletMgmtClient, eventPublisher, keyManager,
-                riskService, complianceService, null, null, null);
+                riskService, complianceService, null, null, null, null);
     }
 
     /**
@@ -142,7 +148,7 @@ public class PaymentServiceImpl implements PaymentService {
                               Tracer tracer) {
         this(orderRepository, refundRepository, gatewayConfig, chainRpcClient,
                 signingServiceClient, walletMgmtClient, eventPublisher, keyManager,
-                riskService, complianceService, tracer, null, null);
+                riskService, complianceService, tracer, null, null, null);
     }
 
     @Override
@@ -365,15 +371,28 @@ public class PaymentServiceImpl implements PaymentService {
             order.setChainTxHash(chainTxHash);
             OrderStateMachine.transition(order, PaymentOrder.OrderStatus.PAID);
             order.setPaidAt(LocalDateTime.now());
+
+            // 关联最终性状态（NexFinality 双层确认模型）
+            if (finalityService != null) {
+                FinalityService.FinalityInfo finalityInfo = finalityService.getFinality(chainTxHash);
+                order.setFinalityStatus(finalityInfo.status());
+            } else {
+                // finalityService 未注入（兼容构造器/测试环境）：最终性未知，
+                // 使用 UNKNOWN 而非 OPTIMISTIC 以避免误导下游 webhook 投递系统。
+                order.setFinalityStatus(FinalityStatus.UNKNOWN);
+            }
+
             orderRepository.save(order);
 
             log.info("Payment confirmed: orderNo={}, txHash={}", order.getOrderNo(), chainTxHash);
             confirmSpan.attr("payment.status", "PAID").success();
 
             // Publish event for async webhook notification
+            // Step 3：携带 finalityStatus，使 Webhook 投递链路可基于最终性级别决定是否通知
             eventPublisher.publishEvent(new PaymentConfirmedEvent(
                     this, order.getId(), order.getOrderNo(), order.getMerchantId(),
-                    chainTxHash, order.getPayerAddress(), order.getAmount().toPlainString()));
+                    chainTxHash, order.getPayerAddress(), order.getAmount().toPlainString(),
+                    order.getFinalityStatus()));
 
             // Publish PaymentCompletedEvent for nexus-analytics collection.
             // currency is filled with the order token symbol (chain-side unit);

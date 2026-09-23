@@ -1,6 +1,8 @@
 package org.nexus.gateway.orchestration.connectors;
 
 import org.nexus.gateway.orchestration.connector.*;
+import org.nexus.gateway.orchestration.settlement.FinalityPolicy;
+import org.nexus.gateway.orchestration.settlement.MockFinalityPolicy;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
@@ -56,6 +58,11 @@ public class MockConnector implements PaymentConnector {
 
     @Override
     public Set<String> supportedCurrencies() { return Set.of(); }
+
+    @Override
+    public FinalityPolicy getFinalityPolicy() {
+        return new MockFinalityPolicy();
+    }
 
     @Override
     public int feeBasisPoints() { return 0; }

@@ -1,6 +1,8 @@
 package org.nexus.gateway.orchestration.connectors;
 
 import org.nexus.gateway.orchestration.connector.*;
+import org.nexus.gateway.orchestration.settlement.FinalityPolicy;
+import org.nexus.gateway.orchestration.settlement.PspFinalityPolicy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -144,6 +146,11 @@ public class AdyenConnector implements PaymentConnector {
 
     @Override
     public Set<String> supportedCurrencies() { return Set.of(); }
+
+    @Override
+    public FinalityPolicy getFinalityPolicy() {
+        return new PspFinalityPolicy();
+    }
 
     @Override
     public int feeBasisPoints() { return 250; } // ~2.5% + fixed

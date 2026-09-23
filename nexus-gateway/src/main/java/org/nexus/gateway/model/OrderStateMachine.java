@@ -7,8 +7,10 @@ import java.util.*;
  *
  * Valid transitions:
  *   PENDING        -> PAYING, EXPIRED, FAILED (risk/compliance rejection)
- *   PAYING         -> PAID, FAILED, EXPIRED
- *   PAID           -> REFUND_PENDING, REFUNDED
+ *   PAYING         -> SUBMITTED, PAID, FAILED, EXPIRED
+ *   SUBMITTED      -> PAID (chain confirmation), FAILED (rejected), EXPIRED (timeout)
+ *   PAID           -> REORGED (block reorg), REFUND_PENDING, REFUNDED
+ *   REORGED        -> PAID (re-confirmed), FAILED (unrecoverable)
  *   REFUND_PENDING -> REFUNDED (chain transfer succeeded)
  *   REFUND_PENDING -> PAID (chain transfer failed, allow retry)
  *   EXPIRED        -> (terminal)
@@ -27,13 +29,24 @@ public final class OrderStateMachine {
                 PaymentOrder.OrderStatus.FAILED
         ));
         map.put(PaymentOrder.OrderStatus.PAYING, EnumSet.of(
+                PaymentOrder.OrderStatus.SUBMITTED,
+                PaymentOrder.OrderStatus.PAID,
+                PaymentOrder.OrderStatus.FAILED,
+                PaymentOrder.OrderStatus.EXPIRED
+        ));
+        map.put(PaymentOrder.OrderStatus.SUBMITTED, EnumSet.of(
                 PaymentOrder.OrderStatus.PAID,
                 PaymentOrder.OrderStatus.FAILED,
                 PaymentOrder.OrderStatus.EXPIRED
         ));
         map.put(PaymentOrder.OrderStatus.PAID, EnumSet.of(
+                PaymentOrder.OrderStatus.REORGED,
                 PaymentOrder.OrderStatus.REFUND_PENDING,
                 PaymentOrder.OrderStatus.REFUNDED
+        ));
+        map.put(PaymentOrder.OrderStatus.REORGED, EnumSet.of(
+                PaymentOrder.OrderStatus.PAID,
+                PaymentOrder.OrderStatus.FAILED
         ));
         map.put(PaymentOrder.OrderStatus.REFUND_PENDING, EnumSet.of(
                 PaymentOrder.OrderStatus.REFUNDED,

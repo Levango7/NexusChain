@@ -62,4 +62,14 @@ public interface PaymentConnector {
     default int feeBasisPoints() {
         return 0;
     }
+
+    /**
+     * 返回该 connector 的最终性策略。默认 null 表示无策略（兼容既有实现）。
+     * Connector 实现可覆盖此方法以提供通道特定的最终性判定逻辑。
+     *
+     * @return 最终性策略实例，或 null（无策略）
+     */
+    default org.nexus.gateway.orchestration.settlement.FinalityPolicy getFinalityPolicy() {
+        return null;
+    }
 }

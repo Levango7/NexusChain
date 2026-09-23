@@ -2,6 +2,8 @@ package org.nexus.gateway.orchestration.webhook;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.nexus.gateway.orchestration.settlement.FinalityLevelUtils;
+import org.nexus.gateway.model.FinalityStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -62,6 +64,7 @@ public class WebhookDeliveryService {
 
     private static final Logger log = LoggerFactory.getLogger(WebhookDeliveryService.class);
 
+
     private final WebhookDeliveryRepository repository;
     private final WebhookRetryService retryService;
     private final WebhookSignatureService signatureService;
@@ -74,6 +77,8 @@ public class WebhookDeliveryService {
      * 无状态组件，通过构造器注入以便测试可 mock（避免 DNS 解析的环境依赖）。
      */
     private final WebhookUrlValidator urlValidator;
+    /** Step 3：Webhook 投递最终性阈值，默认 OPTIMISTIC（向后兼容）。 */
+    private final String finalityThreshold;
 
     @Autowired
     public WebhookDeliveryService(
@@ -84,7 +89,8 @@ public class WebhookDeliveryService {
             org.springframework.web.client.RestTemplate restTemplate,
             com.fasterxml.jackson.databind.ObjectMapper objectMapper,
             @Value("${nexus.webhook.callback-secret:}") String signingSecret,
-            WebhookUrlValidator urlValidator) {
+            WebhookUrlValidator urlValidator,
+            @Value("${nexus.webhook.finality-threshold:OPTIMISTIC}") String finalityThreshold) {
         this.repository = repository;
         this.retryService = retryService;
         this.signatureService = signatureService;
@@ -93,9 +99,10 @@ public class WebhookDeliveryService {
         this.signingSecret = signingSecret;
         this.objectMapper = objectMapper;
         this.urlValidator = urlValidator;
+        this.finalityThreshold = finalityThreshold;
     }
 
-    /** 测试构造器：可注入 RestTemplate + UrlValidator。 */
+    /** 测试构造器：可注入 RestTemplate + UrlValidator，finalityThreshold 默认 OPTIMISTIC。 */
     public WebhookDeliveryService(
             WebhookDeliveryRepository repository,
             WebhookRetryService retryService,
@@ -112,6 +119,7 @@ public class WebhookDeliveryService {
         this.signingSecret = signingSecret;
         this.objectMapper = new ObjectMapper();
         this.urlValidator = urlValidator;
+        this.finalityThreshold = "OPTIMISTIC";
     }
 
     /**
@@ -140,6 +148,14 @@ public class WebhookDeliveryService {
 
         // SSRF 防护：投递前校验回调 URL（非法/内网地址抛异常 → 事务回滚，不落投递记录）
         urlValidator.validate(notifyUrl);
+
+        // Step 3：投递前检查 finalityStatus 是否达到阈值
+        String finalityStatusStr = (String) payload.get("finalityStatus");
+        if (finalityStatusStr != null && shouldSuppressByFinality(finalityStatusStr)) {
+            log.info("Webhook suppressed: finalityStatus={} below threshold={} for paymentId={}",
+                    finalityStatusStr, finalityThreshold, paymentId);
+            return null;
+        }
 
         // 去重：同一支付 + 同一状态事件只投递一次
         WebhookDeliveryRecord existing = repository
@@ -356,5 +372,15 @@ public class WebhookDeliveryService {
     private static String truncate(String s, int maxLen) {
         if (s == null) return null;
         return s.length() <= maxLen ? s : s.substring(0, maxLen);
+    }
+
+    // ─── Step 3：FinalityStatus 阈值检查（委托 FinalityLevelUtils） ─────────
+
+    /**
+     * 判断给定 finalityStatus 字符串是否应抑制 Webhook 投递。
+     * fail-open 原则：未知状态不抑制（避免阻断合法通知）。
+     */
+    private boolean shouldSuppressByFinality(String finalityStatusStr) {
+        return FinalityLevelUtils.shouldSuppress(finalityStatusStr, finalityThreshold);
     }
 }
