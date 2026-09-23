@@ -22,6 +22,14 @@ public interface SplitOrderRepository extends JpaRepository<SplitOrder, Long> {
     List<SplitOrder> findByOrderId(String orderId);
 
     /**
+     * 按商户 ID 查询分账明细。
+     *
+     * @param merchantId 商户 ID
+     * @return 分账明细列表
+     */
+    List<SplitOrder> findByMerchantId(Long merchantId);
+
+    /**
      * 按支付 ID 查询分账明细。
      *
      * @param paymentId 支付 ID（PaymentOrder.id）

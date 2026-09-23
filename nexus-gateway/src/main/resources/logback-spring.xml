@@ -1,50 +1,93 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!--
+    任务 #28：结构化日志增强
+    - dev/sandbox：控制台人类可读格式（带颜色），文件按天滚动保留30天
+    - prod：JSON 格式输出（LogstashEncoder），包含 timestamp/level/logger/message/thread/traceId/spanId
+    - 文件输出：按天滚动，保留30天
+    - SensitiveDataFilter / LogSamplingFilter 由 StructuredLogConfig 编程式注入
+-->
 <configuration>
+    <!-- 默认属性 -->
+    <property name="LOG_PATH" value="${LOG_PATH:-/var/log/nexus}" />
+    <property name="LOG_FILE" value="${LOG_FILE:-gateway}" />
+
     <!--
-        P3-T5：trace_id / span_id MDC 注入
-        Micrometer Tracing 自动将 traceId / spanId 写入 SLF4J MDC，
-        日志 pattern 通过 %X{traceId} / %X{spanId} 引用。
-        Loki + Promtail 通过提取 trace_id 标签实现 trace ↔ log 联动。
+        dev / sandbox profile：人类可读格式 + 控制台输出 + 文件滚动
     -->
     <springProfile name="dev | sandbox">
         <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
             <encoder>
-                <pattern>%d{HH:mm:ss.SSS} [%thread] [%X{traceId:-},%X{spanId:-}] %-5level %logger{36} - %msg%n</pattern>
+                <pattern>%d{HH:mm:ss.SSS} %highlight(%-5level) [%thread] [%X{traceId:-},%X{spanId:-}] %cyan(%logger{36}) - %msg%n</pattern>
             </encoder>
         </appender>
+
+        <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+            <file>${LOG_PATH}/${LOG_FILE}.log</file>
+            <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+                <fileNamePattern>${LOG_PATH}/${LOG_FILE}.%d{yyyy-MM-dd}.log</fileNamePattern>
+                <maxHistory>30</maxHistory>
+                <totalSizeCap>10GB</totalSizeCap>
+            </rollingPolicy>
+            <encoder>
+                <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] [%X{traceId:-},%X{spanId:-}] %-5level %logger{36} - %msg%n</pattern>
+            </encoder>
+        </appender>
+
         <root level="INFO">
             <appender-ref ref="CONSOLE" />
+            <appender-ref ref="FILE" />
         </root>
     </springProfile>
 
+    <!--
+        prod profile：JSON 结构化输出 + 文件按天滚动保留30天
+    -->
     <springProfile name="prod">
-        <!-- JSON structured output for log aggregation (ELK/Loki) -->
-        <appender name="JSON_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-            <file>/var/log/nexus/gateway.json</file>
-            <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
-                <fileNamePattern>/var/log/nexus/gateway.%d{yyyy-MM-dd}.json</fileNamePattern>
-                <maxHistory>30</maxHistory>
-            </rollingPolicy>
+        <!-- JSON 控制台输出（容器环境 stdout 采集） -->
+        <appender name="JSON_CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
             <encoder class="net.logstash.logback.encoder.LogstashEncoder">
-                <!-- P3-T5：trace_id / span_id MDC 字段包含，供 Loki 提取打标签 -->
                 <includeMdcKeyName>traceId</includeMdcKeyName>
                 <includeMdcKeyName>spanId</includeMdcKeyName>
                 <includeMdcKeyName>merchantId</includeMdcKeyName>
-                <!-- 自定义字段：trace_id / span_id（与 Loki pipeline_stages 对齐） -->
+                <includeMdcKeyName>orderId</includeMdcKeyName>
+                <includeMdcKeyName>paymentId</includeMdcKeyName>
+                <includeMdcKeyName>connectorType</includeMdcKeyName>
                 <customFields>{"service":"nexus-gateway","namespace":"nexus"}</customFields>
             </encoder>
         </appender>
 
-        <!-- Separate audit log (append-only, never deleted) -->
-        <appender name="AUDIT_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-            <file>/var/log/nexus/audit.json</file>
+        <!-- JSON 文件输出，按天滚动，保留30天 -->
+        <appender name="JSON_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+            <file>${LOG_PATH}/${LOG_FILE}.json</file>
             <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
-                <fileNamePattern>/var/log/nexus/audit.%d{yyyy-MM-dd}.json</fileNamePattern>
-                <maxHistory>365</maxHistory>
+                <fileNamePattern>${LOG_PATH}/${LOG_FILE}.%d{yyyy-MM-dd}.json</fileNamePattern>
+                <maxHistory>30</maxHistory>
+                <totalSizeCap>50GB</totalSizeCap>
             </rollingPolicy>
             <encoder class="net.logstash.logback.encoder.LogstashEncoder">
                 <includeMdcKeyName>traceId</includeMdcKeyName>
                 <includeMdcKeyName>spanId</includeMdcKeyName>
+                <includeMdcKeyName>merchantId</includeMdcKeyName>
+                <includeMdcKeyName>orderId</includeMdcKeyName>
+                <includeMdcKeyName>paymentId</includeMdcKeyName>
+                <includeMdcKeyName>connectorType</includeMdcKeyName>
+                <customFields>{"service":"nexus-gateway","namespace":"nexus"}</customFields>
+            </encoder>
+        </appender>
+
+        <!-- 审计日志（append-only，保留365天） -->
+        <appender name="AUDIT_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+            <file>${LOG_PATH}/audit.json</file>
+            <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+                <fileNamePattern>${LOG_PATH}/audit.%d{yyyy-MM-dd}.json</fileNamePattern>
+                <maxHistory>365</maxHistory>
+                <totalSizeCap>20GB</totalSizeCap>
+            </rollingPolicy>
+            <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+                <includeMdcKeyName>traceId</includeMdcKeyName>
+                <includeMdcKeyName>spanId</includeMdcKeyName>
+                <includeMdcKeyName>merchantId</includeMdcKeyName>
+                <includeMdcKeyName>orderId</includeMdcKeyName>
             </encoder>
         </appender>
 
@@ -53,6 +96,7 @@
         </logger>
 
         <root level="INFO">
+            <appender-ref ref="JSON_CONSOLE" />
             <appender-ref ref="JSON_FILE" />
         </root>
     </springProfile>

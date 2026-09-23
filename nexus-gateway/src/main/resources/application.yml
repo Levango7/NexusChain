@@ -177,6 +177,15 @@ nexus:
   # Token symbol used across the platform
   token-symbol: NEX
 
+  # === 任务 #26：运维管理 API 配置 ===
+  # OpsController / OpsService 的行为开关与缓存/线程池监控参数
+  ops:
+    enabled: true
+    cache:
+      names: connectorConfigs,merchantLimits,settlementConfigs
+    threadpool:
+      monitor-enabled: true
+
   # === REQ-15 安全加固：CORS allowedOrigins 外部化 ===
   # 禁止硬编码 "*"，避免任意跨域请求。逗号分隔的 origin 列表。
   # 默认值为生产 explorer 域名，确保未注入时也不会开放给任意站点。
@@ -401,6 +410,17 @@ nexus:
     # 默认手续费率（基点 bps，100 = 1%）
     default-fee-rate-bps: 100
 
+  # === 任务 #30：API Key 生命周期管理 ===
+  # ApiKeyService 读取此配置控制 Key 的默认过期天数、每租户最大 Key 数量、
+  # 密钥随机字节长度。生产环境可通过环境变量覆盖。
+  api-key:
+    # 默认过期天数（创建时未指定 expireDays 时使用）
+    default-expire-days: 90
+    # 每租户最大 Key 数量（超过需先撤销或轮换旧 Key）
+    max-keys-per-merchant: 10
+    # 密钥随机字节长度（Base64 编码后约 44 字符）
+    secret-length-bytes: 32
+
   # === P2-F3：三阶段执行补偿模式 ===
   # 事务边界补偿模式重设计：所有链上副作用操作统一为三阶段
   # （落库 PENDING → 链上执行 → 更新 CONFIRMED/FAILED），
@@ -431,11 +451,100 @@ nexus:
     # 单次 handlePendingRefunds 处理的记录数上限（避免一次处理过多记录占用连接池）
     batch-size: 100
 
+  # === 任务 #29：Connector 级熔断降级增强 ===
+  # 细粒度熔断策略配置 + 降级路由 + Connector 级熔断器。
+  # 与现有 resilience4j: 节共存：resilience4j 管理对链节点的 HTTP 调用，
+  # 此处管理 Connector（支付通道）级别的熔断与降级路由。
+  resilience:
+    # Connector 级熔断器配置：默认参数 + 按 connector 类型独立覆盖
+    connector:
+      default:
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 30s
+        sliding-window-size: 10
+        minimum-number-of-calls: 5
+      instances:
+        chain:
+          failure-rate-threshold: 30
+          wait-duration-in-open-state: 60s
+        consortium:
+          failure-rate-threshold: 40
+        stripe:
+          failure-rate-threshold: 60
+          wait-duration-in-open-state: 20s
+    # 降级路由策略：主 Connector 熔断时按列表顺序选择备选 Connector
+    fallback:
+      chain: ["consortium", "mock"]
+      consortium: ["chain", "mock"]
+      stripe: ["adyen", "http_psp", "mock"]
+      adyen: ["stripe", "http_psp", "mock"]
+      wechat: ["alipay", "http_psp", "mock"]
+      alipay: ["wechat", "http_psp", "mock"]
+
+  # === 任务 #27：SLA/SLO 监控配置 ===
+  # SlaMonitorService 定时从 MeterRegistry 读取指标数据，按 SlaTarget 定义计算
+  # 实际指标值（可用性/延迟/吞吐量/错误率），与目标值比较生成 SlaMeasurement 记录，
+  # 未达标时发布 SlaBreachEvent 事件。
+  sla:
+    enabled: true
+    monitor:
+      # 监控检查间隔（秒），默认 300 秒（5 分钟）
+      check-interval-seconds: 300
+    # 默认 SLA 目标（首次启动时自动创建）
+    default-targets:
+      - name: "Payment API Availability"
+        metric-name: "nexus.payments"
+        target-value: 99.9
+        target-type: AVAILABILITY
+        window-minutes: 60
+      - name: "Payment Latency P99"
+        metric-name: "nexus.payment.latency"
+        target-value: 5000
+        target-type: LATENCY
+        window-minutes: 60
+
+  # === 任务 #34：开放数据导出配置 ===
+  # DataExportService 异步导出 CSV/JSON 文件，DataExportTaskRunner 定时扫描 PENDING 请求。
+  data-export:
+    enabled: true
+    storage-path: ${NEX_EXPORT_PATH:data/exports}
+    max-concurrent-exports: 3
+    file-retention-days: 7
+    max-records-per-export: 100000
+
+  # === 任务 #25：告警系统配置 ===
+  # AlertEngine 定时扫描 AlertRule，从 MeterRegistry 读取指标值与阈值比较，
+  # 满足条件时通过 AlertNotifier（日志/Webhook/邮件）发送通知。
+  alert:
+    enabled: true
+    engine:
+      check-interval-seconds: 30
+    webhook:
+      enabled: false
+      url: ${NEX_ALERT_WEBHOOK_URL:}
+    email:
+      enabled: false
+      recipients: ${NEX_ALERT_EMAIL_RECIPIENTS:}
+
 logging:
   level:
     org.nexus: INFO
     org.springframework.web: INFO
     org.hibernate.SQL: WARN
+  # === 任务 #28：结构化日志增强 ===
+  structured:
+    enabled: true
+    format: json  # json | text（dev/sandbox 由 logback-spring.xml 覆盖为人类可读格式）
+  sensitive:
+    enabled: true
+    fields: password,secret,apiKey,api_key,privateKey,private_key,token,hmac,signature,mchId,appId
+    mask-pattern: "****"
+  sampling:
+    enabled: true
+    rate: 0.1
+    loggers:
+      - "org.springframework.web.filter"
+      - "org.nexus.gateway.interceptor"
 
 # Resilience4j circuit breaker / retry configuration
 # Phase 1 任务 #55：保留（管理对链节点直接 HTTP 调用的熔断/重试，与 Sentinel 共存。

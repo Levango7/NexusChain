@@ -17,6 +17,14 @@ public interface RefundRepository extends JpaRepository<Refund, Long> {
     List<Refund> findByOrderId(Long orderId);
 
     /**
+     * 按商户 ID 查询退款记录。
+     *
+     * @param merchantId 商户 ID
+     * @return 退款记录列表
+     */
+    List<Refund> findByMerchantId(Long merchantId);
+
+    /**
      * S3 修复（2026-08-31 交付前审计）：订单已发起（PENDING/EXECUTING/COMPLETED）
      * 退款总额——直通退款路径的累计额度校验依据。
      *
