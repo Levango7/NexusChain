@@ -1,5 +1,7 @@
 package org.nexus.gateway.orchestration.controller;
 
+import org.nexus.gateway.orchestration.connector.ConnectorConfig;
+import org.nexus.gateway.orchestration.connector.ConnectorConfigService;
 import org.nexus.gateway.orchestration.connector.ConnectorHealth;
 import org.nexus.gateway.orchestration.connector.ConnectorRegistry;
 import org.nexus.gateway.orchestration.connector.PaymentConnector;
@@ -46,16 +48,24 @@ public class PaymentOrchestrationController {
      */
     private final PspTargetPolicy pspTargetPolicy;
 
+    /**
+     * 动态注册 Connector 配置服务 — 提供持久化 CRUD 和启动恢复。
+     * 用于 wechat/alipay 类型的动态注册（http_psp 类型仍走原有逻辑以保持兼容）。
+     */
+    private final ConnectorConfigService connectorConfigService;
+
     public PaymentOrchestrationController(OrchestrationService orchestrationService,
                                           ConnectorRegistry connectorRegistry,
                                           RoutingEngine routingEngine,
                                           MerchantOwnershipGuard ownershipGuard,
-                                          PspTargetPolicy pspTargetPolicy) {
+                                          PspTargetPolicy pspTargetPolicy,
+                                          ConnectorConfigService connectorConfigService) {
         this.orchestrationService = orchestrationService;
         this.connectorRegistry = connectorRegistry;
         this.routingEngine = routingEngine;
         this.ownershipGuard = ownershipGuard;
         this.pspTargetPolicy = pspTargetPolicy;
+        this.connectorConfigService = connectorConfigService;
     }
 
     // === Payment CRUD ===
@@ -204,45 +214,133 @@ public class PaymentOrchestrationController {
     public ResponseEntity<Map<String, Object>> registerConnector(@RequestBody Map<String, Object> body) {
         String id = body.get("id") == null ? null : String.valueOf(body.get("id")).trim();
         String type = body.get("type") == null ? null : String.valueOf(body.get("type")).trim();
-        // 400：空 id 或非法 type（仅支持 http_psp 动态注册）
+        // 400：空 id 或非法 type
         if (id == null || id.isEmpty()) {
             return ResponseEntity.badRequest().build();
         }
-        if (!"http_psp".equals(type)) {
+        // 支持的类型：http_psp, wechat, alipay
+        if (!"http_psp".equals(type) && !"wechat".equals(type) && !"alipay".equals(type)) {
             return ResponseEntity.badRequest().build();
         }
         // 409：id 已存在（registry 中存在或本控制器已动态注册）
         if (connectorRegistry.get(id).isPresent() || dynamicConnectors.contains(id)) {
             return ResponseEntity.status(HttpStatus.CONFLICT).build();
         }
-        // 201：构造动态 HTTP PSP 连接器并注册
+
         String displayName = body.get("display_name") == null ? id : String.valueOf(body.get("display_name"));
-        String baseUrl = body.get("base_url") == null ? "" : String.valueOf(body.get("base_url"));
-        // P0（2026-09-17 修复）：base_url 必须指向**公网** http(s) 地址。
-        // 原 isValidHttpBaseUrl 仅校验 scheme + host，放行 127.0.0.1 / 10.x /
-        // 169.254.169.254（云元数据）等内网目标，构成 SSRF。
-        if (!pspTargetPolicy.isAllowedBaseUrl(baseUrl)) {
-            return ResponseEntity.badRequest().build();
-        }
-        String apiKeyEnv = body.get("api_key_env") == null ? null
-                : String.valueOf(body.get("api_key_env")).trim();
-        // P0（2026-09-17 修复）：api_key_env 必须命中配置白名单。
-        // 否则调用方可指定任意环境变量名，让网关把其值以 Authorization: Bearer
-        // 发往自己控制的 base_url —— 即任意环境变量外泄（数据库口令 / 签名密钥 /
-        // 云凭证）。默认白名单为空 = 全部拒绝。
-        if (apiKeyEnv != null && !apiKeyEnv.isEmpty() && !pspTargetPolicy.isAllowedApiKeyEnv(apiKeyEnv)) {
-            return ResponseEntity.badRequest().build();
-        }
         @SuppressWarnings("unchecked")
         Set<String> currencies = body.get("currencies") instanceof java.util.List
                 ? new java.util.HashSet<>((java.util.List<String>) body.get("currencies"))
                 : Set.of();
         int feeBps = body.get("fee_bps") instanceof Number ? ((Number) body.get("fee_bps")).intValue() : 0;
 
+        if ("http_psp".equals(type)) {
+            return registerHttpPspConnector(id, type, displayName, body, currencies, feeBps);
+        } else if ("wechat".equals(type)) {
+            return registerWeChatConnector(id, type, displayName, body, currencies, feeBps);
+        } else {
+            return registerAlipayConnector(id, type, displayName, body, currencies, feeBps);
+        }
+    }
+
+    /**
+     * 注册 http_psp 类型连接器（保持原有逻辑，使用 PspTargetPolicy 校验）。
+     */
+    private ResponseEntity<Map<String, Object>> registerHttpPspConnector(
+            String id, String type, String displayName,
+            Map<String, Object> body, Set<String> currencies, int feeBps) {
+        String baseUrl = body.get("base_url") == null ? "" : String.valueOf(body.get("base_url"));
+        if (!pspTargetPolicy.isAllowedBaseUrl(baseUrl)) {
+            return ResponseEntity.badRequest().build();
+        }
+        String apiKeyEnv = body.get("api_key_env") == null ? null
+                : String.valueOf(body.get("api_key_env")).trim();
+        if (apiKeyEnv != null && !apiKeyEnv.isEmpty() && !pspTargetPolicy.isAllowedApiKeyEnv(apiKeyEnv)) {
+            return ResponseEntity.badRequest().build();
+        }
+
         DynamicHttpPspConnector connector = new DynamicHttpPspConnector(
                 id, displayName, baseUrl, apiKeyEnv, currencies, feeBps);
         connectorRegistry.register(connector);
         dynamicConnectors.add(id);
+
+        Map<String, Object> resp = new LinkedHashMap<>();
+        resp.put("id", id);
+        resp.put("type", type);
+        resp.put("status", "registered");
+        return ResponseEntity.status(HttpStatus.CREATED).body(resp);
+    }
+
+    /**
+     * 注册 wechat 类型连接器（通过 ConnectorConfigService 持久化，跳过 PspTargetPolicy 校验）。
+     *
+     * <p>敏感信息策略：api_key_env 引用环境变量名，实际值通过 System.getenv() 解析。</p>
+     */
+    private ResponseEntity<Map<String, Object>> registerWeChatConnector(
+            String id, String type, String displayName,
+            Map<String, Object> body, Set<String> currencies, int feeBps) {
+        String appId = body.get("app_id") == null ? "" : String.valueOf(body.get("app_id")).trim();
+        String mchId = body.get("mch_id") == null ? "" : String.valueOf(body.get("mch_id")).trim();
+        String apiKeyEnv = body.get("api_key_env") == null ? null
+                : String.valueOf(body.get("api_key_env")).trim();
+
+        ConnectorConfig config = new ConnectorConfig();
+        config.setId(id);
+        config.setType(type);
+        config.setDisplayName(displayName);
+        config.setAppId(appId);
+        config.setMchId(mchId);
+        config.setApiKeyEnv(apiKeyEnv);
+        config.setCurrencies(String.join(",", currencies));
+        config.setFeeBps(feeBps);
+        config.setActive(true);
+
+        try {
+            connectorConfigService.registerConfig(config);
+            dynamicConnectors.add(id);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().build();
+        }
+
+        Map<String, Object> resp = new LinkedHashMap<>();
+        resp.put("id", id);
+        resp.put("type", type);
+        resp.put("status", "registered");
+        return ResponseEntity.status(HttpStatus.CREATED).body(resp);
+    }
+
+    /**
+     * 注册 alipay 类型连接器（通过 ConnectorConfigService 持久化，跳过 PspTargetPolicy 校验）。
+     *
+     * <p>敏感信息策略：merchant_private_key_env 和 alipay_public_key_env 引用环境变量名，
+     * 实际值通过 System.getenv() 解析。</p>
+     */
+    private ResponseEntity<Map<String, Object>> registerAlipayConnector(
+            String id, String type, String displayName,
+            Map<String, Object> body, Set<String> currencies, int feeBps) {
+        String appId = body.get("app_id") == null ? "" : String.valueOf(body.get("app_id")).trim();
+        String merchantPrivateKeyEnv = body.get("merchant_private_key_env") == null ? null
+                : String.valueOf(body.get("merchant_private_key_env")).trim();
+        String alipayPublicKeyEnv = body.get("alipay_public_key_env") == null ? null
+                : String.valueOf(body.get("alipay_public_key_env")).trim();
+
+        ConnectorConfig config = new ConnectorConfig();
+        config.setId(id);
+        config.setType(type);
+        config.setDisplayName(displayName);
+        config.setAppId(appId);
+        config.setMerchantPrivateKey(merchantPrivateKeyEnv);
+        config.setAlipayPublicKey(alipayPublicKeyEnv);
+        config.setCurrencies(String.join(",", currencies));
+        config.setFeeBps(feeBps);
+        config.setActive(true);
+
+        try {
+            connectorConfigService.registerConfig(config);
+            dynamicConnectors.add(id);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().build();
+        }
 
         Map<String, Object> resp = new LinkedHashMap<>();
         resp.put("id", id);
@@ -263,6 +361,8 @@ public class PaymentOrchestrationController {
         if (dynamicConnectors.contains(id)) {
             connectorRegistry.unregister(id);
             dynamicConnectors.remove(id);
+            // 同时从数据库删除持久化配置（wechat/alipay 类型）
+            connectorConfigService.unregisterConfig(id);
             return ResponseEntity.noContent().build();
         }
         // 404：未知连接器（非核心、未动态注册）

@@ -292,6 +292,18 @@ nexus:
       merchant-account: ${NEX_PSP_ADYEN_MERCHANT_ACCOUNT:}
       # Adyen Webhook HMAC Key，用于 AdyenWebhookVerifier 验证 AdditionalData.hmacSignature
       hmac-key: ${NEX_PSP_ADYEN_HMAC_KEY:}
+    wechat:
+      enabled: ${NEX_PSP_WECHAT_ENABLED:false}
+      app-id: ${NEX_PSP_WECHAT_APP_ID:}
+      mch-id: ${NEX_PSP_WECHAT_MCH_ID:}
+      api-key: ${NEX_PSP_WECHAT_API_KEY:}
+      api-base-url: https://api.mch.weixin.qq.com
+    alipay:
+      enabled: ${NEX_PSP_ALIPAY_ENABLED:false}
+      app-id: ${NEX_PSP_ALIPAY_APP_ID:}
+      merchant-private-key: ${NEX_PSP_ALIPAY_MERCHANT_PRIVATE_KEY:}
+      alipay-public-key: ${NEX_PSP_ALIPAY_PUBLIC_KEY:}
+      api-base-url: https://openapi.alipay.com/gateway.do
 
   # Webhook callback configuration
   webhook:

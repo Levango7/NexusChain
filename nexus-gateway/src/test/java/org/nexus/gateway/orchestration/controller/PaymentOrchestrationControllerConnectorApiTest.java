@@ -4,6 +4,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.nexus.gateway.config.GatewayConfig;
+import org.nexus.gateway.orchestration.connector.ConnectorConfigService;
 import org.nexus.gateway.orchestration.connector.ConnectorRegistry;
 import org.nexus.gateway.orchestration.connector.PaymentConnector;
 import org.nexus.gateway.orchestration.connector.PspTargetPolicy;
@@ -35,6 +36,7 @@ class PaymentOrchestrationControllerConnectorApiTest {
     private ConnectorRegistry registry;
     private RoutingEngine routingEngine;
     private PspTargetPolicy pspTargetPolicy;
+    private ConnectorConfigService connectorConfigService;
     private PaymentOrchestrationController controller;
 
     @BeforeEach
@@ -50,8 +52,10 @@ class PaymentOrchestrationControllerConnectorApiTest {
         // host 白名单含测试域名——命中白名单即跳过 DNS 解析，
         // 使单元测试不依赖网络，也不会因 .example 保留域不可解析而失败。
         pspTargetPolicy = new PspTargetPolicy("PSP_X_API_KEY", "api.pspx.example,d.example");
+        connectorConfigService = mock(ConnectorConfigService.class);
         controller = new PaymentOrchestrationController(orchestrationService, registry, routingEngine,
-                new org.nexus.gateway.security.MerchantOwnershipGuard(), pspTargetPolicy);
+                new org.nexus.gateway.security.MerchantOwnershipGuard(), pspTargetPolicy,
+                connectorConfigService);
     }
 
     // === PUT /routing-rules/{id} ===
@@ -225,7 +229,8 @@ class PaymentOrchestrationControllerConnectorApiTest {
         PaymentOrchestrationController strict = new PaymentOrchestrationController(
                 orchestrationService, registry, routingEngine,
                 new org.nexus.gateway.security.MerchantOwnershipGuard(),
-                new PspTargetPolicy("", ""));   // 两个白名单均为空
+                new PspTargetPolicy("", ""),   // 两个白名单均为空
+                connectorConfigService);
 
         when(registry.get("psp-y")).thenReturn(Optional.empty());
         ResponseEntity<Map<String, Object>> resp = strict.registerConnector(Map.of(
@@ -243,7 +248,8 @@ class PaymentOrchestrationControllerConnectorApiTest {
         PaymentOrchestrationController noHostAllowlist = new PaymentOrchestrationController(
                 orchestrationService, registry, routingEngine,
                 new org.nexus.gateway.security.MerchantOwnershipGuard(),
-                new PspTargetPolicy("", ""));   // 未配 host 白名单 → 走地址段校验
+                new PspTargetPolicy("", ""),   // 未配 host 白名单 → 走地址段校验
+                connectorConfigService);
 
         when(registry.get("psp-meta")).thenReturn(Optional.empty());
         ResponseEntity<Map<String, Object>> resp = noHostAllowlist.registerConnector(Map.of(
@@ -260,7 +266,8 @@ class PaymentOrchestrationControllerConnectorApiTest {
         PaymentOrchestrationController c = new PaymentOrchestrationController(
                 orchestrationService, registry, routingEngine,
                 new org.nexus.gateway.security.MerchantOwnershipGuard(),
-                new PspTargetPolicy("", ""));
+                new PspTargetPolicy("", ""),
+                connectorConfigService);
 
         when(registry.get("lp")).thenReturn(Optional.empty());
         when(registry.get("fl")).thenReturn(Optional.empty());
