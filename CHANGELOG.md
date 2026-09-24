@@ -44,6 +44,45 @@
 #### Flyway Migrations
 - V19~V35：17 个新增 migration（finality_status/qr_code_token/split_tables/settlement_config/limit_configs/device_fingerprints/risk_events/connector_configs/reconciliation_file_records/alert_rules/alert_events/sla_targets/sla_measurements/api_keys/webhook_subscriptions/api_version_policies/data_export_requests）
 
+### Payment Orchestration Wave 7-9（2026-09-24 ~ 2026-09-25）
+
+#### Wave 7: 渠道对接框架完善 + 自动对账与差错处理 + 商户入驻流程
+- **微信支付回调签名验证**：WeChatPaySignatureUtil（微信支付回调 HMAC-SHA256 签名验证工具）
+- **支付宝回调签名验证**：AlipaySignatureUtil（支付宝回调 RSA2 签名验证工具）
+- **统一回调入口控制器**：PaymentCallbackController（渠道回调统一入口，支持微信/支付宝回调路由）
+- **回调服务层**：PaymentCallbackService（回调统一处理与分发，签名验证 → 订单状态更新 → 事件发布）
+- **自动对账引擎**：ReconciliationEngine（自动比对渠道账单与本地订单，差异自动识别与标记）
+- **差错处理服务**：DiscrepancyResolutionService（差错自动分类：短款/长款/金额不符，自动处理流程）
+- **挂账账户**：SuspenseAccount（差错资金暂存账户，确保资金可审计可追溯）
+- **商户入驻申请**：MerchantApplication（商户入驻申请实体，含资质信息/营业执照/审核状态）
+- **商户审核服务**：MerchantReviewService（商户资质审核流程，自动化初审 + 人工复审闭环）
+- **商户入驻控制器**：MerchantOnboardingController（商户入驻 API：申请提交/状态查询/审核操作）
+
+#### Wave 8: 风控体系深化 + Webhook可靠性增强 + 分账/限额策略扩展
+- **风控评分权重配置**：RiskScoreWeightConfig（风控评分权重可配置化，支持动态调整各规则权重）
+- **风控规则链服务**：RiskRuleChainService（风控规则链式执行，多规则组合决策，短路/全量评估模式）
+- **风控阈值动态调整**：RiskThresholdAdjustmentService（风控阈值根据交易量/时段/渠道动态调整）
+- **Webhook 重试策略**：WebhookRetryPolicy（可配置重试次数/间隔/指数退避策略，按事件类型差异化配置）
+- **Webhook 死信队列**：WebhookDeadLetterQueue（投递失败事件进入死信队列，支持手动重投与自动清理）
+- **Webhook 投递追踪**：WebhookDeliveryTracker（投递全链路追踪，状态可视化，投递成功率统计）
+- **阶梯分账规则**：TieredSplitRule（阶梯式分账规则，按金额区间配置不同分账比例）
+- **延迟分账服务**：DelayedSplitService（延迟分账执行，满足担保交易等场景，支持条件触发释放）
+- **分账执行调度器**：SplitExecutionScheduler（分账任务定时调度，支持条件触发与定时执行）
+- **渠道级限额配置**：ChannelLimitConfig（按渠道独立配置限额，差异化风控策略）
+- **动态限额调整**：DynamicLimitAdjustmentService（根据实时交易数据动态调整限额阈值）
+- **限额阈值告警**：LimitThresholdAlertService（限额接近阈值时自动告警通知，预警式风控）
+
+#### Wave 9: 告警/运维深化 + 差错资金处理 + 链上结算确认
+- **告警聚合服务**：AlertAggregationService（同类告警自动聚合，减少告警风暴，按时间窗口/规则维度聚合）
+- **告警抑制服务**：AlertSuppressionService（重复告警抑制，避免告警疲劳，可配置抑制规则与持续时间）
+- **告警升级服务**：AlertEscalationService（告警按严重度/持续时间自动升级通知渠道，日志 → Webhook → 邮件 → SMS）
+- **人工差错处理工作流**：ManualResolutionWorkflow（人工差错处理审批工作流，支持挂账资金手动调拨/退款/补账）
+- **挂账账户对账**：SuspenseAccountReconciliation（挂账账户定期对账，确保挂账资金可追溯无遗漏）
+- **差错处理审计**：DiscrepancyResolutionAudit（差错处理全流程审计日志，合规留痕，操作可回溯）
+- **链上结算确认服务**：ChainSettlementConfirmationService（链上结算确认，监控链上确认数，确保结算最终性可验证）
+- **结算确认记录**：SettlementConfirmationRecord（结算确认持久化记录，含区块高度/交易哈希/确认状态/确认时间）
+- **结算最终性验证**：SettlementFinalityVerifier（结算最终性验证器，链上确认数达标校验，不达标自动告警）
+
 ### v2.50.2 发布后的收尾修复（2026-09-22）
 
 #### Fixed

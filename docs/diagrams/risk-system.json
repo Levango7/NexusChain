@@ -1,0 +1,118 @@
+{
+  "title": {
+    "text": "NexusChain 风控体系图",
+    "subtext": "RiskRuleConfig(enabled/priority/threshold/action) → 10个评分规则 → RuleCompositionService(AND/OR+优先级) → RiskActionExecutor(ALERT/BLOCK/MANUAL_REVIEW/CAPTURE) → RiskActionRecord",
+    "left": "center",
+    "top": 10,
+    "textStyle": { "fontSize": 22, "fontWeight": "bold", "color": "#1a1a2e" },
+    "subtextStyle": { "fontSize": 12, "color": "#666" }
+  },
+  "tooltip": { "trigger": "item", "formatter": "{b}" },
+  "legend": {
+    "data": [
+      "规则配置层 (DB驱动)",
+      "评分规则层 (10个规则)",
+      "规则组合层 (AND/OR)",
+      "处置层 (4种动作)",
+      "记录层"
+    ],
+    "top": 55,
+    "left": "center",
+    "orient": "horizontal",
+    "itemWidth": 14,
+    "itemHeight": 14,
+    "textStyle": { "fontSize": 12 }
+  },
+  "animationDuration": 1500,
+  "animationEasingUpdate": "quinticInOut",
+  "series": [{
+    "type": "graph",
+    "layout": "none",
+    "symbolSize": 40,
+    "roam": true,
+    "draggable": true,
+    "focusNodeAdjacency": true,
+    "label": {
+      "show": true,
+      "position": "bottom",
+      "fontSize": 10,
+      "color": "#333",
+      "fontWeight": "bold"
+    },
+    "edgeSymbol": ["none", "arrow"],
+    "edgeSymbolSize": [0, 7],
+    "itemStyle": { "shadowBlur": 8, "shadowColor": "rgba(0,0,0,0.15)" },
+    "lineStyle": { "color": "#aaa", "width": 1.2, "curveness": 0.15, "opacity": 0.7 },
+    "emphasis": {
+      "lineStyle": { "width": 3, "color": "#e74c3c" },
+      "itemStyle": { "shadowBlur": 15 }
+    },
+    "categories": [
+      { "name": "规则配置层 (DB驱动)" },
+      { "name": "评分规则层 (10个规则)" },
+      { "name": "规则组合层 (AND/OR)" },
+      { "name": "处置层 (4种动作)" },
+      { "name": "记录层" }
+    ],
+    "data": [
+      {"id":"risk_rule_config","name":"RiskRuleConfig","x":540,"y":80,"category":0,"symbolSize":52,"itemStyle":{"color":"#7f8c8d"}},
+
+      {"id":"amount_score","name":"AmountScoreRule","x":80,"y":220,"category":1,"symbolSize":30,"itemStyle":{"color":"#8e44ad"}},
+      {"id":"velocity_score","name":"VelocityScoreRule","x":290,"y":220,"category":1,"symbolSize":30,"itemStyle":{"color":"#8e44ad"}},
+      {"id":"blacklist_score","name":"BlacklistScoreRule","x":500,"y":220,"category":1,"symbolSize":30,"itemStyle":{"color":"#8e44ad"}},
+      {"id":"ip_score","name":"IpScoreRule","x":710,"y":220,"category":1,"symbolSize":30,"itemStyle":{"color":"#8e44ad"}},
+      {"id":"region_score","name":"RegionScoreRule","x":920,"y":220,"category":1,"symbolSize":30,"itemStyle":{"color":"#8e44ad"}},
+      {"id":"time_score","name":"TimeScoreRule","x":80,"y":330,"category":1,"symbolSize":30,"itemStyle":{"color":"#8e44ad"}},
+      {"id":"merchant_history_score","name":"MerchantHistoryScoreRule","x":290,"y":330,"category":1,"symbolSize":30,"itemStyle":{"color":"#8e44ad"}},
+      {"id":"channel_score","name":"ChannelScoreRule","x":500,"y":330,"category":1,"symbolSize":30,"itemStyle":{"color":"#8e44ad"}},
+      {"id":"device_cluster_score","name":"DeviceClusterScoreRule","x":710,"y":330,"category":1,"symbolSize":30,"itemStyle":{"color":"#8e44ad"}},
+      {"id":"transaction_pattern_score","name":"TransactionPatternScoreRule","x":920,"y":330,"category":1,"symbolSize":30,"itemStyle":{"color":"#8e44ad"}},
+
+      {"id":"rule_composition","name":"RuleCompositionService","x":540,"y":480,"category":2,"symbolSize":52,"itemStyle":{"color":"#2980b9"}},
+
+      {"id":"risk_action_executor","name":"RiskActionExecutor","x":540,"y":640,"category":3,"symbolSize":52,"itemStyle":{"color":"#e74c3c"}},
+      {"id":"action_alert","name":"ALERT","x":180,"y":790,"category":3,"symbolSize":32,"itemStyle":{"color":"#e74c3c"}},
+      {"id":"action_block","name":"BLOCK","x":420,"y":790,"category":3,"symbolSize":32,"itemStyle":{"color":"#e74c3c"}},
+      {"id":"action_manual_review","name":"MANUAL_REVIEW","x":660,"y":790,"category":3,"symbolSize":32,"itemStyle":{"color":"#e74c3c"}},
+      {"id":"action_capture","name":"CAPTURE","x":900,"y":790,"category":3,"symbolSize":32,"itemStyle":{"color":"#e74c3c"}},
+
+      {"id":"risk_action_record","name":"RiskActionRecord","x":540,"y":940,"category":4,"symbolSize":48,"itemStyle":{"color":"#27ae60"}}
+    ],
+    "links": [
+      {"source":"risk_rule_config","target":"amount_score","label":{"show":false},"lineStyle":{"type":"dashed","color":"#7f8c8d"}},
+      {"source":"risk_rule_config","target":"velocity_score","label":{"show":false},"lineStyle":{"type":"dashed","color":"#7f8c8d"}},
+      {"source":"risk_rule_config","target":"blacklist_score","label":{"show":false},"lineStyle":{"type":"dashed","color":"#7f8c8d"}},
+      {"source":"risk_rule_config","target":"ip_score","label":{"show":false},"lineStyle":{"type":"dashed","color":"#7f8c8d"}},
+      {"source":"risk_rule_config","target":"region_score","label":{"show":false},"lineStyle":{"type":"dashed","color":"#7f8c8d"}},
+      {"source":"risk_rule_config","target":"time_score","label":{"show":false},"lineStyle":{"type":"dashed","color":"#7f8c8d"}},
+      {"source":"risk_rule_config","target":"merchant_history_score","label":{"show":false},"lineStyle":{"type":"dashed","color":"#7f8c8d"}},
+      {"source":"risk_rule_config","target":"channel_score","label":{"show":false},"lineStyle":{"type":"dashed","color":"#7f8c8d"}},
+      {"source":"risk_rule_config","target":"device_cluster_score","label":{"show":false},"lineStyle":{"type":"dashed","color":"#7f8c8d"}},
+      {"source":"risk_rule_config","target":"transaction_pattern_score","label":{"show":false},"lineStyle":{"type":"dashed","color":"#7f8c8d"}},
+
+      {"source":"amount_score","target":"rule_composition","label":{"show":false},"lineStyle":{"color":"#8e44ad","width":1}},
+      {"source":"velocity_score","target":"rule_composition","label":{"show":false},"lineStyle":{"color":"#8e44ad","width":1}},
+      {"source":"blacklist_score","target":"rule_composition","label":{"show":false},"lineStyle":{"color":"#8e44ad","width":1}},
+      {"source":"ip_score","target":"rule_composition","label":{"show":false},"lineStyle":{"color":"#8e44ad","width":1}},
+      {"source":"region_score","target":"rule_composition","label":{"show":false},"lineStyle":{"color":"#8e44ad","width":1}},
+      {"source":"time_score","target":"rule_composition","label":{"show":false},"lineStyle":{"color":"#8e44ad","width":1}},
+      {"source":"merchant_history_score","target":"rule_composition","label":{"show":false},"lineStyle":{"color":"#8e44ad","width":1}},
+      {"source":"channel_score","target":"rule_composition","label":{"show":false},"lineStyle":{"color":"#8e44ad","width":1}},
+      {"source":"device_cluster_score","target":"rule_composition","label":{"show":false},"lineStyle":{"color":"#8e44ad","width":1}},
+      {"source":"transaction_pattern_score","target":"rule_composition","label":{"show":false},"lineStyle":{"color":"#8e44ad","width":1}},
+
+      {"source":"rule_composition","target":"risk_action_executor","label":{"show":true,"formatter":"组合评分结果","fontSize":10,"color":"#2980b9"},"lineStyle":{"width":2.5,"color":"#2980b9"}},
+
+      {"source":"risk_action_executor","target":"action_alert","label":{"show":true,"formatter":"低风险","fontSize":9,"color":"#e74c3c"},"lineStyle":{"color":"#e74c3c"}},
+      {"source":"risk_action_executor","target":"action_block","label":{"show":true,"formatter":"高风险","fontSize":9,"color":"#e74c3c"},"lineStyle":{"color":"#e74c3c"}},
+      {"source":"risk_action_executor","target":"action_manual_review","label":{"show":true,"formatter":"待定","fontSize":9,"color":"#e74c3c"},"lineStyle":{"color":"#e74c3c"}},
+      {"source":"risk_action_executor","target":"action_capture","label":{"show":true,"formatter":"确认欺诈","fontSize":9,"color":"#e74c3c"},"lineStyle":{"color":"#e74c3c"}},
+
+      {"source":"action_alert","target":"risk_action_record","label":{"show":false},"lineStyle":{"type":"dashed","color":"#27ae60"}},
+      {"source":"action_block","target":"risk_action_record","label":{"show":false},"lineStyle":{"type":"dashed","color":"#27ae60"}},
+      {"source":"action_manual_review","target":"risk_action_record","label":{"show":false},"lineStyle":{"type":"dashed","color":"#27ae60"}},
+      {"source":"action_capture","target":"risk_action_record","label":{"show":false},"lineStyle":{"type":"dashed","color":"#27ae60"}},
+      {"source":"risk_action_executor","target":"risk_action_record","label":{"show":true,"formatter":"落库记录","fontSize":9,"color":"#27ae60"},"lineStyle":{"type":"dashed","color":"#27ae60"}}
+    ]
+  }]
+}

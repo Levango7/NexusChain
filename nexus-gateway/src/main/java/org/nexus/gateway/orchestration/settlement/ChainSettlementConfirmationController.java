@@ -29,17 +29,10 @@ import java.util.Optional;
 public class ChainSettlementConfirmationController {
 
     private final ChainSettlementConfirmationService confirmationService;
-    private final SettlementConfirmationRecordRepository repository;
-
-    public ChainSettlementConfirmationService getService() {
-        return confirmationService;
-    }
 
     public ChainSettlementConfirmationController(
-            ChainSettlementConfirmationService confirmationService,
-            SettlementConfirmationRecordRepository repository) {
+            ChainSettlementConfirmationService confirmationService) {
         this.confirmationService = confirmationService;
-        this.repository = repository;
     }
 
     /**
@@ -74,12 +67,9 @@ public class ChainSettlementConfirmationController {
 
         PageRequest pageRequest = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"));
 
-        Page<SettlementConfirmationRecord> records;
-        if (status != null) {
-            records = repository.findByStatus(status, pageRequest);
-        } else {
-            records = repository.findAll(pageRequest);
-        }
+        // P1-2：数据访问下沉到 Service，Controller 不再直接依赖 Repository
+        Page<SettlementConfirmationRecord> records =
+                confirmationService.listConfirmations(status, pageRequest);
 
         return ResponseEntity.ok(records);
     }
@@ -93,7 +83,7 @@ public class ChainSettlementConfirmationController {
     @Operation(summary = "Manually trigger a retry for settlement confirmation")
     @PostMapping("/{paymentId}/retry")
     public ResponseEntity<SettlementConfirmationRecord> retryConfirmation(@PathVariable String paymentId) {
-        if (!repository.existsByPaymentId(paymentId)) {
+        if (!confirmationService.existsByPaymentId(paymentId)) {
             return ResponseEntity.notFound().build();
         }
 

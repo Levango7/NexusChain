@@ -1,5 +1,10 @@
 package org.nexus.gateway.orchestration.controller;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import org.nexus.gateway.orchestration.connectors.AlipaySignatureUtil;
 import org.nexus.gateway.orchestration.connectors.WeChatPaySignatureUtil;
 import org.nexus.gateway.orchestration.model.OrchPaymentStatus;
@@ -12,10 +17,9 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import jakarta.servlet.http.HttpServletRequest;
 import java.time.Instant;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 支付渠道异步回调通知接收控制器 — 微信支付 / 支付宝。
@@ -37,6 +41,9 @@ public class PaymentCallbackController {
 
     private static final Logger log = LoggerFactory.getLogger(PaymentCallbackController.class);
 
+    /** 复用线程安全的 ObjectMapper 解析回调 JSON（P1-7）。 */
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+
     private final PaymentCallbackService callbackService;
 
     @Value("${nexus.connectors.wechat.api-key:}")
@@ -45,8 +52,17 @@ public class PaymentCallbackController {
     @Value("${nexus.connectors.alipay.alipay-public-key:}")
     private String alipayPublicKey;
 
-    /** 幂等去重缓存：key = paymentId + ":" + notificationId */
-    private final Set<String> processedNotifications = ConcurrentHashMap.newKeySet();
+    /**
+     * 幂等去重缓存：key = paymentId + ":" + notificationId。
+     *
+     * <p>P0-2 修复：原 ConcurrentHashMap.newKeySet() 无界增长，长期运行会 OOM。
+     * 改为 Caffeine 有界缓存：最大 10 万条，写入后 24 小时过期。
+     * 支付回调的去重窗口远小于 24 小时，超期条目可安全淘汰。</p>
+     */
+    private final Cache<String, Boolean> processedNotifications = Caffeine.newBuilder()
+            .maximumSize(100_000)
+            .expireAfterWrite(24, TimeUnit.HOURS)
+            .build();
 
     public PaymentCallbackController(PaymentCallbackService callbackService) {
         this.callbackService = callbackService;
@@ -83,26 +99,30 @@ public class PaymentCallbackController {
 
         log.info("[WeChat Callback] 收到微信支付回调通知");
 
-        // 1. 验签：检查必要头是否存在
+        // 1. 验签前置检查：密钥未配置时禁止处理回调（P0-1 安全修复）
+        // 原实现仅 log.warn 后跳过验签继续处理，等同于关闭验签，存在伪造回调漏洞。
+        // 现改为直接拒绝，避免在配置缺失时放行未验签的支付状态变更。
+        if (wechatApiV3Key == null || wechatApiV3Key.isBlank()) {
+            log.error("[WeChat Callback] APIv3 密钥未配置，拒绝处理回调（防止伪造通知）");
+            return failResponse("APIv3 密钥未配置，拒绝回调");
+        }
+
+        // 2. 验签：检查必要头是否存在
         if (timestamp == null || nonce == null || signature == null) {
             log.warn("[WeChat Callback] 缺少必要的签名头");
             return failResponse("缺少必要的签名头");
         }
 
-        // 2. 验签：使用 HMAC-SHA256 验证签名
-        if (wechatApiV3Key == null || wechatApiV3Key.isBlank()) {
-            log.warn("[WeChat Callback] APIv3 密钥未配置，跳过验签（dry-run 模式）");
-        } else {
-            boolean verified = WeChatPaySignatureUtil.verifyCallbackSignature(
-                    timestamp, nonce, body, signature, wechatApiV3Key);
-            if (!verified) {
-                log.warn("[WeChat Callback] 验签失败");
-                return failResponse("验签失败");
-            }
-            log.info("[WeChat Callback] 验签通过");
+        // 3. 验签：使用 HMAC-SHA256 验证签名
+        boolean verified = WeChatPaySignatureUtil.verifyCallbackSignature(
+                timestamp, nonce, body, signature, wechatApiV3Key);
+        if (!verified) {
+            log.warn("[WeChat Callback] 验签失败");
+            return failResponse("验签失败");
         }
+        log.info("[WeChat Callback] 验签通过");
 
-        // 3. 解析回调内容（简化解析，不引入完整 JSON 解析器）
+        // 4. 解析回调内容（P1-7：使用 Jackson 安全解析，替代脆弱的字符串搜索）
         // 微信 V3 回调体格式：{"id":"...","event_type":"TRANSACTION.SUCCESS",
         //   "resource":{"ciphertext":"...","nonce":"...","associated_data":"..."}}
         // 解密后包含 out_trade_no、transaction_id、trade_state 等
@@ -117,19 +137,19 @@ public class PaymentCallbackController {
             return failResponse("无法提取 out_trade_no");
         }
 
-        // 4. 幂等处理：paymentId + notificationId 去重
+        // 5. 幂等处理：paymentId + notificationId 去重
         String dedupKey = outTradeNo + ":" + (notificationId != null ? notificationId : transactionId);
-        if (processedNotifications.contains(dedupKey)) {
+        if (processedNotifications.getIfPresent(dedupKey) != null) {
             log.info("[WeChat Callback] 通知已处理过，幂等返回成功: {}", dedupKey);
             return successResponse();
         }
 
-        // 5. 更新支付订单状态
+        // 6. 更新支付订单状态
         Optional<OrchestratedPayment> paymentOpt = callbackService.findById(outTradeNo);
         if (paymentOpt.isEmpty()) {
             log.warn("[WeChat Callback] 支付订单不存在: {}", outTradeNo);
             // 微信要求：即使订单不存在也应返回 200，否则微信会持续重试
-            processedNotifications.add(dedupKey);
+            processedNotifications.put(dedupKey, Boolean.TRUE);
             return successResponse();
         }
 
@@ -144,7 +164,7 @@ public class PaymentCallbackController {
             log.info("[WeChat Callback] 支付订单状态更新: {} -> {}", outTradeNo, newStatus);
         }
 
-        processedNotifications.add(dedupKey);
+        processedNotifications.put(dedupKey, Boolean.TRUE);
         return successResponse();
     }
 
@@ -165,19 +185,22 @@ public class PaymentCallbackController {
 
         log.info("[Alipay Callback] 收到支付宝回调通知");
 
-        // 1. 验签
+        // 1. 验签前置检查：公钥未配置时禁止处理回调（P0-1 安全修复）
+        // 原实现仅 log.warn 后跳过验签继续处理，等同于关闭验签，存在伪造回调漏洞。
         if (alipayPublicKey == null || alipayPublicKey.isBlank()) {
-            log.warn("[Alipay Callback] 支付宝公钥未配置，跳过验签（dry-run 模式）");
-        } else {
-            boolean verified = AlipaySignatureUtil.verifyCallbackSignature(params, alipayPublicKey);
-            if (!verified) {
-                log.warn("[Alipay Callback] 验签失败");
-                return ResponseEntity.status(HttpStatus.OK).body("fail");
-            }
-            log.info("[Alipay Callback] 验签通过");
+            log.error("[Alipay Callback] 支付宝公钥未配置，拒绝处理回调（防止伪造通知）");
+            return ResponseEntity.status(HttpStatus.OK).body("fail");
         }
 
-        // 2. 解析关键字段
+        // 2. 验签
+        boolean verified = AlipaySignatureUtil.verifyCallbackSignature(params, alipayPublicKey);
+        if (!verified) {
+            log.warn("[Alipay Callback] 验签失败");
+            return ResponseEntity.status(HttpStatus.OK).body("fail");
+        }
+        log.info("[Alipay Callback] 验签通过");
+
+        // 3. 解析关键字段
         String outTradeNo = params.get("out_trade_no");
         String tradeNo = params.get("trade_no");
         String tradeStatus = params.get("trade_status");
@@ -188,18 +211,18 @@ public class PaymentCallbackController {
             return ResponseEntity.status(HttpStatus.OK).body("fail");
         }
 
-        // 3. 幂等处理：paymentId + notifyId 去重
+        // 4. 幂等处理：paymentId + notifyId 去重
         String dedupKey = outTradeNo + ":" + (notifyId != null ? notifyId : tradeNo);
-        if (processedNotifications.contains(dedupKey)) {
+        if (processedNotifications.getIfPresent(dedupKey) != null) {
             log.info("[Alipay Callback] 通知已处理过，幂等返回成功: {}", dedupKey);
             return ResponseEntity.status(HttpStatus.OK).body("success");
         }
 
-        // 4. 更新支付订单状态
+        // 5. 更新支付订单状态
         Optional<OrchestratedPayment> paymentOpt = callbackService.findById(outTradeNo);
         if (paymentOpt.isEmpty()) {
             log.warn("[Alipay Callback] 支付订单不存在: {}", outTradeNo);
-            processedNotifications.add(dedupKey);
+            processedNotifications.put(dedupKey, Boolean.TRUE);
             return ResponseEntity.status(HttpStatus.OK).body("success");
         }
 
@@ -214,26 +237,39 @@ public class PaymentCallbackController {
             log.info("[Alipay Callback] 支付订单状态更新: {} -> {}", outTradeNo, newStatus);
         }
 
-        processedNotifications.add(dedupKey);
+        processedNotifications.put(dedupKey, Boolean.TRUE);
         return ResponseEntity.status(HttpStatus.OK).body("success");
     }
 
     // ==================== 辅助方法 ====================
 
     /**
-     * 从 JSON 字符串中提取指定 key 的值（简化解析，避免引入完整 JSON 解析器）。
-     * 仅适用于简单扁平 JSON，不处理嵌套对象。
+     * 从 JSON 字符串中提取指定 key 的值。
+     *
+     * <p>P1-7 修复：原实现使用字符串查找 {@code "key":"value"} 模式，
+     * 无法正确处理转义、空格、嵌套同名 key 等情况，且可能被恶意构造的
+     * JSON 绕过。改用 Jackson {@link ObjectMapper} + {@link JsonNode} 做结构解析，
+     * 解析失败时安全返回 null（不抛异常中断回调处理）。</p>
+     *
+     * @param json JSON 字符串
+     * @param key  待提取的字段名
+     * @return 字段的文本值；不存在或解析失败时返回 null
      */
     private String extractJsonValue(String json, String key) {
-        if (json == null || json.isEmpty()) return null;
-        // 简化提取：查找 "key":"value" 模式
-        String pattern = "\"" + key + "\":\"";
-        int start = json.indexOf(pattern);
-        if (start < 0) return null;
-        start += pattern.length();
-        int end = json.indexOf("\"", start);
-        if (end < 0) return null;
-        return json.substring(start, end);
+        if (json == null || json.isEmpty()) {
+            return null;
+        }
+        try {
+            JsonNode root = OBJECT_MAPPER.readTree(json);
+            JsonNode node = root.get(key);
+            if (node == null || node.isNull()) {
+                return null;
+            }
+            return node.asText();
+        } catch (JsonProcessingException e) {
+            log.warn("[Payment Callback] JSON 解析失败，字段 '{}' 提取跳过: {}", key, e.getOriginalMessage());
+            return null;
+        }
     }
 
     /**

@@ -33,6 +33,7 @@ import static org.springframework.security.test.web.servlet.request.SecurityMock
 @ActiveProfiles("sandbox")
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 @WithMockUser(username = "admin", roles = {"ADMIN", "OPERATOR"})
+@Tag("integration")
 class GatewayCoreIntegrationTest {
 
     @Autowired

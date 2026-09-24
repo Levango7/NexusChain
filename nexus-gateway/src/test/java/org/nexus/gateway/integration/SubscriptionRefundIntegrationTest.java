@@ -35,6 +35,7 @@ import java.time.LocalDateTime;
 @ActiveProfiles("sandbox")
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 @WithMockUser(username = "admin", roles = {"ADMIN", "OPERATOR"})
+@Tag("integration")
 class SubscriptionRefundIntegrationTest {
 
     @Autowired

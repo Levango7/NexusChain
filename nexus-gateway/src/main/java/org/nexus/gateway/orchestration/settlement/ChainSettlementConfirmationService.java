@@ -5,6 +5,8 @@ import org.nexus.gateway.model.FinalityStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -375,6 +377,39 @@ public class ChainSettlementConfirmationService {
     @Transactional(readOnly = true)
     public Optional<SettlementConfirmationRecord> getConfirmation(String paymentId) {
         return repository.findByPaymentId(paymentId);
+    }
+
+    /**
+     * 分页查询确认记录（供 REST API 调用）。
+     *
+     * <p>P1-2 架构修复：原 Controller 直接调用 {@code repository.findByStatus/findAll}，
+     * 现下沉到本服务，Controller 不再依赖 Repository。</p>
+     *
+     * @param status   可选状态过滤；为 null 时查询全部
+     * @param pageable 分页参数
+     * @return 确认记录分页结果
+     */
+    @Transactional(readOnly = true)
+    public Page<SettlementConfirmationRecord> listConfirmations(SettlementConfirmationStatus status,
+                                                                Pageable pageable) {
+        if (status != null) {
+            return repository.findByStatus(status, pageable);
+        }
+        return repository.findAll(pageable);
+    }
+
+    /**
+     * 判断指定支付 ID 是否已存在确认记录（供 REST API 调用）。
+     *
+     * <p>P1-2 架构修复：原 Controller 直接调用 {@code repository.existsByPaymentId}，
+     * 现下沉到本服务。</p>
+     *
+     * @param paymentId 支付 ID
+     * @return true 表示已存在
+     */
+    @Transactional(readOnly = true)
+    public boolean existsByPaymentId(String paymentId) {
+        return repository.existsByPaymentId(paymentId);
     }
 
     /**

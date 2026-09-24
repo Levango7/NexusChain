@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
@@ -21,21 +22,24 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * {@link AlertController} 单元测试 — 使用 MockMvc + Mockito（standaloneSetup，无 Spring 上下文）。
  *
  * <p>覆盖告警规则 CRUD 和告警事件查询/解决的完整 API 流程。</p>
+ *
+ * <p>P1-1 架构修复后，Controller 依赖 {@link AlertRuleService} / {@link AlertEventService}
+ * 而非 Repository，测试改为 mock 这两个 Service。</p>
  */
 class AlertControllerTest {
 
     private MockMvc mockMvc;
     private ObjectMapper objectMapper;
 
-    private AlertRuleRepository ruleRepository;
-    private AlertEventRepository eventRepository;
+    private AlertRuleService ruleService;
+    private AlertEventService eventService;
 
     @BeforeEach
     void setUp() {
-        ruleRepository = mock(AlertRuleRepository.class);
-        eventRepository = mock(AlertEventRepository.class);
+        ruleService = mock(AlertRuleService.class);
+        eventService = mock(AlertEventService.class);
 
-        AlertController controller = new AlertController(ruleRepository, eventRepository);
+        AlertController controller = new AlertController(ruleService, eventService);
         mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
         objectMapper = new ObjectMapper();
     }
@@ -50,7 +54,7 @@ class AlertControllerTest {
         AlertRule rule2 = createRule(2L, "low-confirmations", "nexus.payments.confirmed",
                 AlertRule.Condition.LT, 5, AlertRule.Severity.WARN);
 
-        when(ruleRepository.findAll()).thenReturn(List.of(rule1, rule2));
+        when(ruleService.findAll()).thenReturn(List.of(rule1, rule2));
 
         mockMvc.perform(get("/api/v1/alerts/rules"))
                 .andExpect(status().isOk())
@@ -70,8 +74,8 @@ class AlertControllerTest {
         AlertRule savedRule = createRule(1L, "new-alert", "nexus.test.metric",
                 AlertRule.Condition.GT, 100, AlertRule.Severity.WARN);
 
-        when(ruleRepository.existsByName("new-alert")).thenReturn(false);
-        when(ruleRepository.save(any(AlertRule.class))).thenReturn(savedRule);
+        when(ruleService.existsByName("new-alert")).thenReturn(false);
+        when(ruleService.save(any(AlertRule.class))).thenReturn(savedRule);
 
         mockMvc.perform(post("/api/v1/alerts/rules")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -87,7 +91,7 @@ class AlertControllerTest {
         AlertRule newRule = createRule(null, "existing-alert", "nexus.test.metric",
                 AlertRule.Condition.GT, 100, AlertRule.Severity.WARN);
 
-        when(ruleRepository.existsByName("existing-alert")).thenReturn(true);
+        when(ruleService.existsByName("existing-alert")).thenReturn(true);
 
         mockMvc.perform(post("/api/v1/alerts/rules")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -100,13 +104,14 @@ class AlertControllerTest {
     @Test
     @DisplayName("PUT /rules/{id} — 更新规则成功 -> 200")
     void updateRule_success() throws Exception {
-        AlertRule existing = createRule(1L, "old-name", "nexus.test.metric",
-                AlertRule.Condition.GT, 10, AlertRule.Severity.WARN);
         AlertRule updates = createRule(null, "new-name", "nexus.test.metric",
                 AlertRule.Condition.LT, 5, AlertRule.Severity.CRITICAL);
 
-        when(ruleRepository.findById(1L)).thenReturn(Optional.of(existing));
-        when(ruleRepository.save(any(AlertRule.class))).thenAnswer(inv -> inv.getArgument(0));
+        // Service.update 返回合并后的实体
+        AlertRule updated = createRule(1L, "new-name", "nexus.test.metric",
+                AlertRule.Condition.LT, 5, AlertRule.Severity.CRITICAL);
+
+        when(ruleService.update(eq(1L), any(AlertRule.class))).thenReturn(Optional.of(updated));
 
         mockMvc.perform(put("/api/v1/alerts/rules/1")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -120,7 +125,7 @@ class AlertControllerTest {
     @Test
     @DisplayName("PUT /rules/{id} — 规则不存在 -> 404")
     void updateRule_notFound() throws Exception {
-        when(ruleRepository.findById(999L)).thenReturn(Optional.empty());
+        when(ruleService.update(eq(999L), any(AlertRule.class))).thenReturn(Optional.empty());
 
         AlertRule updates = createRule(null, "name", "metric",
                 AlertRule.Condition.GT, 1, AlertRule.Severity.WARN);
@@ -136,23 +141,23 @@ class AlertControllerTest {
     @Test
     @DisplayName("DELETE /rules/{id} — 删除成功 -> 204")
     void deleteRule_success() throws Exception {
-        when(ruleRepository.existsById(1L)).thenReturn(true);
+        when(ruleService.existsById(1L)).thenReturn(true);
 
         mockMvc.perform(delete("/api/v1/alerts/rules/1"))
                 .andExpect(status().isNoContent());
 
-        verify(ruleRepository).deleteById(1L);
+        verify(ruleService).deleteById(1L);
     }
 
     @Test
     @DisplayName("DELETE /rules/{id} — 规则不存在 -> 404")
     void deleteRule_notFound() throws Exception {
-        when(ruleRepository.existsById(999L)).thenReturn(false);
+        when(ruleService.existsById(999L)).thenReturn(false);
 
         mockMvc.perform(delete("/api/v1/alerts/rules/999"))
                 .andExpect(status().isNotFound());
 
-        verify(ruleRepository, never()).deleteById(any());
+        verify(ruleService, never()).deleteById(any());
     }
 
     // === GET /api/v1/alerts/events ===
@@ -165,7 +170,7 @@ class AlertControllerTest {
         AlertEvent event2 = createEvent(2L, "low-confirmations", "nexus.payments.confirmed",
                 3.0, 5.0, AlertRule.Severity.WARN);
 
-        when(eventRepository.findByTimestampAfterOrderByTimestampDesc(any(LocalDateTime.class)))
+        when(eventService.findRecentEvents(any(LocalDateTime.class)))
                 .thenReturn(List.of(event1, event2));
 
         mockMvc.perform(get("/api/v1/alerts/events"))
@@ -181,9 +186,10 @@ class AlertControllerTest {
     void resolveEvent_success() throws Exception {
         AlertEvent event = createEvent(1L, "failed-payments", "nexus.payments.failed",
                 15.0, 10.0, AlertRule.Severity.CRITICAL);
+        event.setResolved(true);
+        event.setResolvedAt(LocalDateTime.now());
 
-        when(eventRepository.findById(1L)).thenReturn(Optional.of(event));
-        when(eventRepository.save(any(AlertEvent.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(eventService.resolve(1L)).thenReturn(Optional.of(event));
 
         mockMvc.perform(post("/api/v1/alerts/events/1/resolve"))
                 .andExpect(status().isOk())
@@ -193,7 +199,7 @@ class AlertControllerTest {
     @Test
     @DisplayName("POST /events/{id}/resolve — 事件不存在 -> 404")
     void resolveEvent_notFound() throws Exception {
-        when(eventRepository.findById(999L)).thenReturn(Optional.empty());
+        when(eventService.resolve(999L)).thenReturn(Optional.empty());
 
         mockMvc.perform(post("/api/v1/alerts/events/999/resolve"))
                 .andExpect(status().isNotFound());

@@ -1,6 +1,7 @@
 package org.nexus.gateway.security;
 
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -41,6 +42,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest
 @AutoConfigureMockMvc
 @ActiveProfiles("sandbox")
+@Tag("integration")
 @DisplayName("商户管理端点 JWT 鉴权闭环（死端点修复验证）")
 class MerchantAdminJwtAuthIT {
 

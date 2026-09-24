@@ -109,16 +109,17 @@ public class AlertSuppressionService {
 
     /**
      * 清理所有已过期的抑制记录。
+     *
+     * <p>P1-6 修复：原实现在遍历 entrySet 时调用 {@code activeSuppressions.remove(key)}，
+     * 依赖 ConcurrentHashMap 弱一致性，且删除逻辑与遍历耦合。改用
+     * {@code entrySet().removeIf(...)} 原子化移除已过期条目，行为更明确、清理更彻底。</p>
      */
     public void cleanupExpiredSuppressions() {
         LocalDateTime now = LocalDateTime.now();
-        int removed = 0;
-        for (Map.Entry<String, LocalDateTime> entry : activeSuppressions.entrySet()) {
-            if (!now.isBefore(entry.getValue())) {
-                activeSuppressions.remove(entry.getKey());
-                removed++;
-            }
-        }
+        // 统计清理前大小，用于计算移除数量（ConcurrentHashMap 的 removeIf 不返回计数）
+        int before = activeSuppressions.size();
+        activeSuppressions.entrySet().removeIf(entry -> !now.isBefore(entry.getValue()));
+        int removed = before - activeSuppressions.size();
         if (removed > 0) {
             log.info("Cleaned up {} expired suppression records", removed);
         }

@@ -22,19 +22,22 @@ import java.util.List;
  *   <li>GET    /api/v1/alerts/events — 列出最近告警事件</li>
  *   <li>POST   /api/v1/alerts/events/{id}/resolve — 标记告警已解决</li>
  * </ul>
+ *
+ * <p>P1-1 架构修复：Controller 不再直接依赖 Repository，
+ * 数据访问统一委托给 {@link AlertRuleService} / {@link AlertEventService}。</p>
  */
 @RestController
 @RequestMapping("/api/v1/alerts")
 @Tag(name = "Alerts", description = "Alert rule management and alert event queries")
 public class AlertController {
 
-    private final AlertRuleRepository ruleRepository;
-    private final AlertEventRepository eventRepository;
+    private final AlertRuleService ruleService;
+    private final AlertEventService eventService;
 
-    public AlertController(AlertRuleRepository ruleRepository,
-                           AlertEventRepository eventRepository) {
-        this.ruleRepository = ruleRepository;
-        this.eventRepository = eventRepository;
+    public AlertController(AlertRuleService ruleService,
+                           AlertEventService eventService) {
+        this.ruleService = ruleService;
+        this.eventService = eventService;
     }
 
     // === Alert Rule CRUD ===
@@ -47,7 +50,7 @@ public class AlertController {
     @Operation(summary = "List all alert rules")
     @GetMapping("/rules")
     public ResponseEntity<List<AlertRule>> listRules() {
-        return ResponseEntity.ok(ruleRepository.findAll());
+        return ResponseEntity.ok(ruleService.findAll());
     }
 
     /**
@@ -59,10 +62,10 @@ public class AlertController {
     @Operation(summary = "Create a new alert rule")
     @PostMapping("/rules")
     public ResponseEntity<AlertRule> createRule(@RequestBody AlertRule rule) {
-        if (rule.getName() != null && ruleRepository.existsByName(rule.getName())) {
+        if (rule.getName() != null && ruleService.existsByName(rule.getName())) {
             return ResponseEntity.status(HttpStatus.CONFLICT).build();
         }
-        AlertRule saved = ruleRepository.save(rule);
+        AlertRule saved = ruleService.save(rule);
         return ResponseEntity.status(HttpStatus.CREATED).body(saved);
     }
 
@@ -76,12 +79,8 @@ public class AlertController {
     @Operation(summary = "Update an existing alert rule")
     @PutMapping("/rules/{id}")
     public ResponseEntity<AlertRule> updateRule(@PathVariable Long id, @RequestBody AlertRule rule) {
-        return ruleRepository.findById(id)
-                .map(existing -> {
-                    applyUpdates(existing, rule);
-                    AlertRule saved = ruleRepository.save(existing);
-                    return ResponseEntity.ok(saved);
-                })
+        return ruleService.update(id, rule)
+                .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
     }
 
@@ -94,10 +93,10 @@ public class AlertController {
     @Operation(summary = "Delete an alert rule")
     @DeleteMapping("/rules/{id}")
     public ResponseEntity<Void> deleteRule(@PathVariable Long id) {
-        if (!ruleRepository.existsById(id)) {
+        if (!ruleService.existsById(id)) {
             return ResponseEntity.notFound().build();
         }
-        ruleRepository.deleteById(id);
+        ruleService.deleteById(id);
         return ResponseEntity.noContent().build();
     }
 
@@ -112,7 +111,7 @@ public class AlertController {
     @GetMapping("/events")
     public ResponseEntity<List<AlertEvent>> listEvents() {
         LocalDateTime since = LocalDateTime.now().minusHours(24);
-        return ResponseEntity.ok(eventRepository.findByTimestampAfterOrderByTimestampDesc(since));
+        return ResponseEntity.ok(eventService.findRecentEvents(since));
     }
 
     /**
@@ -124,40 +123,8 @@ public class AlertController {
     @Operation(summary = "Mark an alert event as resolved")
     @PostMapping("/events/{id}/resolve")
     public ResponseEntity<AlertEvent> resolveEvent(@PathVariable Long id) {
-        return eventRepository.findById(id)
-                .map(event -> {
-                    event.setResolved(true);
-                    event.setResolvedAt(LocalDateTime.now());
-                    AlertEvent saved = eventRepository.save(event);
-                    return ResponseEntity.ok(saved);
-                })
+        return eventService.resolve(id)
+                .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
-    }
-
-    // === Private helpers ===
-
-    /**
-     * 将请求体中的字段应用到已有实体（部分更新）。
-     */
-    private void applyUpdates(AlertRule existing, AlertRule updates) {
-        if (updates.getName() != null) {
-            existing.setName(updates.getName());
-        }
-        if (updates.getMetricName() != null) {
-            existing.setMetricName(updates.getMetricName());
-        }
-        if (updates.getCondition() != null) {
-            existing.setCondition(updates.getCondition());
-        }
-        existing.setThreshold(updates.getThreshold());
-        existing.setWindowMinutes(updates.getWindowMinutes());
-        existing.setCooldownMinutes(updates.getCooldownMinutes());
-        existing.setEnabled(updates.isEnabled());
-        if (updates.getSeverity() != null) {
-            existing.setSeverity(updates.getSeverity());
-        }
-        if (updates.getDescription() != null) {
-            existing.setDescription(updates.getDescription());
-        }
     }
 }

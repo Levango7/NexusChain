@@ -30,6 +30,7 @@ import static org.springframework.security.test.web.servlet.request.SecurityMock
 @AutoConfigureMockMvc
 @ActiveProfiles("sandbox")
 @WithMockUser(username = "admin", roles = {"ADMIN", "OPERATOR"})
+@Tag("integration")
 @DisplayName("Stress Test: Concurrent Order Creation")
 class OrderConcurrencyStressTest {
 

@@ -46,6 +46,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @ActiveProfiles({"test", "sandbox"})
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 @Import(PaymentE2EIntegrationTest.TestSecurityConfig.class)
+@Tag("integration")
 class PaymentE2EIntegrationTest {
 
     /**

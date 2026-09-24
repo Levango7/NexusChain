@@ -1,7 +1,7 @@
 {
   "title": {
     "text": "NexusChain 运维监控拓扑图",
-    "subtext": "告警系统 / SLA监控 / 熔断降级 / 运维API / 结构化日志",
+    "subtext": "告警系统 / SLA监控 / 熔断降级 / 运维API / 结构化日志 + Wave 9 告警深化",
     "left": "center",
     "top": 10,
     "textStyle": { "fontSize": 22, "fontWeight": "bold", "color": "#1a1a2e" },
@@ -9,7 +9,7 @@
   },
   "tooltip": { "trigger": "item", "formatter": "{b}" },
   "legend": {
-    "data": ["告警系统", "SLA监控", "熔断降级", "运维API", "结构化日志"],
+    "data": ["告警系统", "SLA监控", "熔断降级", "运维API", "结构化日志", "告警深化 (Wave 9)"],
     "top": 55,
     "left": "center",
     "orient": "horizontal",
@@ -46,7 +46,8 @@
       { "name": "SLA监控" },
       { "name": "熔断降级" },
       { "name": "运维API" },
-      { "name": "结构化日志" }
+      { "name": "结构化日志" },
+      { "name": "告警深化 (Wave 9)" }
     ],
     "data": [
       {"id":"alert_engine","name":"AlertEngine","x":250,"y":200,"category":0,"symbolSize":50,"itemStyle":{"color":"#c0392b"}},
@@ -72,7 +73,11 @@
 
       {"id":"data_masking","name":"脱敏处理","x":950,"y":450,"category":4,"symbolSize":32,"itemStyle":{"color":"#9b59b6"}},
       {"id":"sampling_ctrl","name":"采样控制","x":1100,"y":450,"category":4,"symbolSize":32,"itemStyle":{"color":"#9b59b6"}},
-      {"id":"mdc_context","name":"MDC上下文","x":1250,"y":450,"category":4,"symbolSize":32,"itemStyle":{"color":"#9b59b6"}}
+      {"id":"mdc_context","name":"MDC上下文","x":1250,"y":450,"category":4,"symbolSize":32,"itemStyle":{"color":"#9b59b6"}},
+
+      {"id":"alert_aggregation","name":"AlertAggregationService","x":220,"y":680,"category":5,"symbolSize":46,"itemStyle":{"color":"#d35400"}},
+      {"id":"alert_suppression","name":"AlertSuppressionService","x":520,"y":680,"category":5,"symbolSize":46,"itemStyle":{"color":"#d35400"}},
+      {"id":"alert_escalation","name":"AlertEscalationService","x":820,"y":680,"category":5,"symbolSize":46,"itemStyle":{"color":"#d35400"}}
     ],
     "links": [
       {"source":"alert_engine","target":"log_notifier","label":{"show":true,"formatter":"通知","fontSize":9,"color":"#c0392b"}},
@@ -96,7 +101,14 @@
 
       {"source":"system_monitor","target":"sla_monitor","label":{"show":true,"formatter":"数据采集","fontSize":9,"color":"#27ae60"},"lineStyle":{"type":"dashed"}},
       {"source":"thread_pool","target":"circuit_breaker","label":{"show":true,"formatter":"状态检测","fontSize":9,"color":"#27ae60"},"lineStyle":{"type":"dashed"}},
-      {"source":"conn_pool","target":"circuit_breaker","label":{"show":false},"lineStyle":{"type":"dashed","color":"#27ae60"}}
+      {"source":"conn_pool","target":"circuit_breaker","label":{"show":false},"lineStyle":{"type":"dashed","color":"#27ae60"}},
+
+      {"source":"alert_engine","target":"alert_aggregation","label":{"show":true,"formatter":"原始告警流入","fontSize":9,"color":"#d35400"},"lineStyle":{"type":"solid","width":2,"color":"#d35400"}},
+      {"source":"alert_aggregation","target":"alert_suppression","label":{"show":true,"formatter":"规则名+级别+5min窗口分组","fontSize":9,"color":"#d35400"},"lineStyle":{"type":"solid","width":2,"color":"#d35400"}},
+      {"source":"alert_suppression","target":"alert_escalation","label":{"show":true,"formatter":"父告警抑制子告警","fontSize":9,"color":"#d35400"},"lineStyle":{"type":"solid","width":2,"color":"#d35400"}},
+      {"source":"alert_escalation","target":"webhook_notifier","label":{"show":true,"formatter":"升级通知","fontSize":9,"color":"#d35400"},"lineStyle":{"type":"dashed","color":"#d35400"}},
+      {"source":"alert_escalation","target":"email_notifier","label":{"show":true,"formatter":"升级通知","fontSize":9,"color":"#d35400"},"lineStyle":{"type":"dashed","color":"#d35400"}},
+      {"source":"alert_escalation","target":"alert_engine","label":{"show":true,"formatter":"超时未解决自动升级严重级别","fontSize":9,"color":"#d35400"},"lineStyle":{"type":"dashed","width":2,"color":"#d35400"}}
     ]
   }]
 }

@@ -134,6 +134,11 @@ dependencies {
     implementation 'com.fasterxml.jackson.core:jackson-databind'
     implementation 'org.apache.commons:commons-lang3'
 
+    // === P0-2 内存安全：有界本地缓存 ===
+    // PaymentCallbackController 幂等去重缓存由无界 Set 改为 Caffeine 有界缓存，
+    // 防止长期运行 OOM。3.1.8 为当前稳定版，兼容 JDK 17。
+    implementation 'com.github.ben-manes.caffeine:caffeine:3.1.8'
+
     // === 扫码支付：ZXing 二维码生成 ===
     implementation 'com.google.zxing:core:3.5.3'
     implementation 'com.google.zxing:javase:3.5.3'
@@ -171,8 +176,29 @@ dependencies {
 }
 
 test {
-    useJUnitPlatform()
+    useJUnitPlatform {
+        // CI 修复（task #57）：排除 @Tag("integration") 标注的集成测试，
+        // 这些测试需要 Nacos/Kafka/Redis 等运行中的基础设施服务，
+        // 在 CI 环境中因缺少这些服务而失败，不属于代码缺陷。
+        // 集成测试通过 integrationTest task 单独执行。
+        excludeTags 'integration'
+    }
     finalizedBy jacocoTestReport
+}
+
+// CI 修复（task #57）：集成测试 task —— 只运行 @Tag("integration") 标注的测试。
+// 这些测试需要 Nacos/Kafka/Redis 等基础设施服务，在 CI 中默认不执行。
+// 可通过 `./gradlew :nexus-gateway:integrationTest` 手动触发，
+// 或在具备基础设施的环境中运行。
+task integrationTest(type: Test) {
+    useJUnitPlatform {
+        includeTags 'integration'
+    }
+    shouldRunAfter test
+    // 集成测试不强制覆盖率门禁（jacocoTestReport 仍生成但不阻断）
+    jacoco {
+        enabled = true
+    }
 }
 
 jacoco {

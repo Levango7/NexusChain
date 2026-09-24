@@ -1,6 +1,7 @@
 package org.nexus.gateway.repository;
 
 import io.micrometer.tracing.Tracer;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.nexus.gateway.MerchantService;
 import org.nexus.gateway.model.Merchant;
@@ -28,6 +29,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 // {"test","sandbox"}），此处对齐该约定：test 提供 H2 数据源，sandbox 提供所需 bean。
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @ActiveProfiles({"test", "sandbox"})
+@Tag("integration")
 @Transactional
 class MerchantApiKeyLookupTest {
 

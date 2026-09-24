@@ -13,11 +13,11 @@ CREATE TABLE tiered_split_rules (
     tier_order INT NOT NULL DEFAULT 0,
     created_at TIMESTAMP(6) NOT NULL,
     updated_at TIMESTAMP(6) NOT NULL,
-    version BIGINT
+    version BIGINT,
+    UNIQUE KEY uk_tiered_split_merchant_order (merchant_id, tier_order)
 );
 
 CREATE INDEX idx_tiered_split_rules_merchant ON tiered_split_rules(merchant_id, active);
-CREATE INDEX idx_tiered_split_rules_tier_order ON tiered_split_rules(merchant_id, tier_order);
 
 -- 2. 延迟分账订单表
 CREATE TABLE delayed_split_orders (
@@ -42,6 +42,7 @@ CREATE TABLE delayed_split_orders (
 );
 
 CREATE INDEX idx_delayed_split_orders_merchant ON delayed_split_orders(merchant_id);
+CREATE INDEX idx_delayed_split_orders_payment ON delayed_split_orders(payment_id);
 CREATE INDEX idx_delayed_split_orders_order ON delayed_split_orders(order_id);
 CREATE INDEX idx_delayed_split_orders_status ON delayed_split_orders(delay_status);
 CREATE INDEX idx_delayed_split_orders_scheduled ON delayed_split_orders(delay_status, scheduled_at);

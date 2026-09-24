@@ -1,14 +1,15 @@
 package org.nexus.settlement.risk.rules;
 
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import org.nexus.settlement.risk.RiskScoringRule;
 import org.nexus.settlement.risk.RiskTransaction;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 速度评分规则。
@@ -37,8 +38,22 @@ public class VelocityScoreRule implements RiskScoringRule {
     /** 1小时毫秒数 */
     private static final long ONE_HOUR_MILLIS = 3_600_000L;
 
-    /** 每个主体的交易时间戳列表（subject -> 交易时间戳列表） */
-    private final Map<String, List<Long>> transactionRecords = new ConcurrentHashMap<>();
+    /**
+     * 每个主体的交易时间戳列表（subject -> 交易时间戳列表）。
+     *
+     * <p>P1-5 修复：原为无界的 ConcurrentHashMap，长期运行下不再交易的 subject
+     * 记录会永久驻留导致内存泄漏。改用 Caffeine 自动过期缓存：
+     * <ul>
+     *   <li>{@code expireAfterAccess(1, HOURS)}：subject 超过 1 小时无新交易即自动淘汰，
+     *       而评分仅依赖最近 1 小时窗口内的记录，淘汰不影响评分正确性；</li>
+     *   <li>{@code maximumSize(100_000)}：兜底上限，防止突发大量 subject 撑爆内存。</li>
+     * </ul>
+     * </p>
+     */
+    private final Cache<String, List<Long>> transactionRecords = Caffeine.newBuilder()
+            .expireAfterAccess(1, TimeUnit.HOURS)
+            .maximumSize(100_000)
+            .build();
 
     @Override
     public String getRuleId() {
@@ -71,7 +86,7 @@ public class VelocityScoreRule implements RiskScoringRule {
 
         long now = System.currentTimeMillis();
 
-        List<Long> records = transactionRecords.computeIfAbsent(subject, k -> new ArrayList<>());
+        List<Long> records = transactionRecords.get(subject, k -> new ArrayList<>());
 
         // 先记录当前交易时间戳
         synchronized (records) {
@@ -131,6 +146,6 @@ public class VelocityScoreRule implements RiskScoringRule {
      * 清空所有交易记录（主要用于测试）。
      */
     public void clearRecords() {
-        transactionRecords.clear();
+        transactionRecords.invalidateAll();
     }
 }

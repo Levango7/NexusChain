@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NexusChain 对账与差错处理流程图</title>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #f5f5f5; font-family: 'Segoe UI', sans-serif; }
+    #chart { width: 100%; height: 100vh; }
+    .header { position: fixed; top: 0; left: 0; right: 0; background: #1a1a2e; color: #fff; padding: 8px 20px; z-index: 100; display: flex; justify-content: space-between; align-items: center; }
+    .header h1 { font-size: 16px; font-weight: 600; }
+    .header .badge { background: #16a085; padding: 2px 10px; border-radius: 12px; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>NexusChain 对账与差错处理流程图</h1>
+    <span class="badge">对账引擎 + 差错处理 + 挂账 (Wave 7/9)</span>
+  </div>
+  <div id="chart" style="padding-top: 40px;"></div>
+  <script>
+    const option = {
+      "title": {
+        "text": "NexusChain 对账与差错处理流程图",
+        "subtext": "ReconciliationEngine 自动比对 → ReconciliationDiffReport → ReconciliationDiscrepancy(长款/短款/金额不一致/状态不一致) → DiscrepancyResolutionService → SuspenseAccount / ManualResolutionWorkflow",
+        "left": "center", "top": 50,
+        "textStyle": { "fontSize": 22, "fontWeight": "bold", "color": "#1a1a2e" },
+        "subtextStyle": { "fontSize": 12, "color": "#666" }
+      },
+      "tooltip": { "trigger": "item", "formatter": "{b}" },
+      "legend": {
+        "data": [
+          "数据源",
+          "对账引擎",
+          "差异报告",
+          "差错分类 (4类)",
+          "差错处理",
+          "挂账 (SuspenseAccount)",
+          "人工处理流程"
+        ],
+        "top": 100, "left": "center", "orient": "horizontal",
+        "itemWidth": 14, "itemHeight": 14, "textStyle": { "fontSize": 12 }
+      },
+      "animationDuration": 1500,
+      "animationEasingUpdate": "quinticInOut",
+      "series": [{
+        "type": "graph", "layout": "none", "symbolSize": 40,
+        "roam": true, "draggable": true, "focusNodeAdjacency": true,
+        "label": { "show": true, "position": "bottom", "fontSize": 10, "color": "#333", "fontWeight": "bold" },
+        "edgeSymbol": ["none", "arrow"], "edgeSymbolSize": [0, 7],
+        "itemStyle": { "shadowBlur": 8, "shadowColor": "rgba(0,0,0,0.15)" },
+        "lineStyle": { "color": "#aaa", "width": 1.3, "curveness": 0.15, "opacity": 0.75 },
+        "emphasis": { "lineStyle": { "width": 3, "color": "#e74c3c" }, "itemStyle": { "shadowBlur": 15 } },
+        "categories": [
+          { "name": "数据源" },
+          { "name": "对账引擎" },
+          { "name": "差异报告" },
+          { "name": "差错分类 (4类)" },
+          { "name": "差错处理" },
+          { "name": "挂账 (SuspenseAccount)" },
+          { "name": "人工处理流程" }
+        ],
+        "data": [
+          {"id":"channel_file","name":"渠道对账文件","x":380,"y":60,"category":0,"symbolSize":40,"itemStyle":{"color":"#7f8c8d"}},
+          {"id":"internal_ledger","name":"内部账","x":760,"y":60,"category":0,"symbolSize":40,"itemStyle":{"color":"#7f8c8d"}},
+          {"id":"reconciliation_engine","name":"ReconciliationEngine","x":570,"y":190,"category":1,"symbolSize":54,"itemStyle":{"color":"#2980b9"}},
+          {"id":"diff_report","name":"ReconciliationDiffReport","x":570,"y":320,"category":2,"symbolSize":48,"itemStyle":{"color":"#16a085"}},
+          {"id":"discrepancy","name":"ReconciliationDiscrepancy","x":570,"y":450,"category":3,"symbolSize":48,"itemStyle":{"color":"#e67e22"}},
+          {"id":"overage","name":"长款","x":180,"y":580,"category":3,"symbolSize":34,"itemStyle":{"color":"#e67e22"}},
+          {"id":"shortage","name":"短款","x":440,"y":580,"category":3,"symbolSize":34,"itemStyle":{"color":"#e67e22"}},
+          {"id":"amount_mismatch","name":"金额不一致","x":700,"y":580,"category":3,"symbolSize":34,"itemStyle":{"color":"#e67e22"}},
+          {"id":"status_mismatch","name":"状态不一致","x":960,"y":580,"category":3,"symbolSize":34,"itemStyle":{"color":"#e67e22"}},
+          {"id":"resolution_service","name":"DiscrepancyResolutionService","x":570,"y":720,"category":4,"symbolSize":52,"itemStyle":{"color":"#8e44ad"}},
+          {"id":"auto_rule","name":"自动处理规则","x":380,"y":860,"category":4,"symbolSize":36,"itemStyle":{"color":"#8e44ad"}},
+          {"id":"manual_intervention","name":"人工干预","x":760,"y":860,"category":4,"symbolSize":36,"itemStyle":{"color":"#8e44ad"}},
+          {"id":"suspense_account","name":"SuspenseAccount","x":380,"y":1000,"category":5,"symbolSize":46,"itemStyle":{"color":"#c0392b"}},
+          {"id":"status_pending","name":"PENDING","x":180,"y":1140,"category":5,"symbolSize":32,"itemStyle":{"color":"#c0392b"}},
+          {"id":"status_resolved","name":"RESOLVED","x":380,"y":1140,"category":5,"symbolSize":32,"itemStyle":{"color":"#c0392b"}},
+          {"id":"status_written_off","name":"WRITTEN_OFF","x":580,"y":1140,"category":5,"symbolSize":32,"itemStyle":{"color":"#c0392b"}},
+          {"id":"manual_workflow","name":"ManualResolutionWorkflow","x":860,"y":1000,"category":6,"symbolSize":46,"itemStyle":{"color":"#27ae60"}},
+          {"id":"wf_submit","name":"提交方案","x":720,"y":1140,"category":6,"symbolSize":32,"itemStyle":{"color":"#27ae60"}},
+          {"id":"wf_approve","name":"审批通过","x":880,"y":1140,"category":6,"symbolSize":32,"itemStyle":{"color":"#27ae60"}},
+          {"id":"wf_reject","name":"审批拒绝","x":1040,"y":1140,"category":6,"symbolSize":32,"itemStyle":{"color":"#27ae60"}},
+          {"id":"wf_writeoff","name":"核销","x":880,"y":1270,"category":6,"symbolSize":36,"itemStyle":{"color":"#27ae60"}}
+        ],
+        "links": [
+          {"source":"channel_file","target":"reconciliation_engine","label":{"show":true,"formatter":"渠道对账文件","fontSize":9,"color":"#2980b9"},"lineStyle":{"color":"#2980b9"}},
+          {"source":"internal_ledger","target":"reconciliation_engine","label":{"show":true,"formatter":"内部账","fontSize":9,"color":"#2980b9"},"lineStyle":{"color":"#2980b9"}},
+          {"source":"reconciliation_engine","target":"diff_report","label":{"show":true,"formatter":"自动比对","fontSize":10,"color":"#16a085"},"lineStyle":{"width":2.5,"color":"#16a085"}},
+          {"source":"diff_report","target":"discrepancy","label":{"show":true,"formatter":"输出差异项","fontSize":10,"color":"#e67e22"},"lineStyle":{"width":2.5,"color":"#e67e22"}},
+          {"source":"discrepancy","target":"overage","label":{"show":true,"formatter":"分类","fontSize":9,"color":"#e67e22"},"lineStyle":{"color":"#e67e22"}},
+          {"source":"discrepancy","target":"shortage","label":{"show":true,"formatter":"分类","fontSize":9,"color":"#e67e22"},"lineStyle":{"color":"#e67e22"}},
+          {"source":"discrepancy","target":"amount_mismatch","label":{"show":true,"formatter":"分类","fontSize":9,"color":"#e67e22"},"lineStyle":{"color":"#e67e22"}},
+          {"source":"discrepancy","target":"status_mismatch","label":{"show":true,"formatter":"分类","fontSize":9,"color":"#e67e22"},"lineStyle":{"color":"#e67e22"}},
+          {"source":"overage","target":"resolution_service","label":{"show":false},"lineStyle":{"color":"#8e44ad","width":1}},
+          {"source":"shortage","target":"resolution_service","label":{"show":false},"lineStyle":{"color":"#8e44ad","width":1}},
+          {"source":"amount_mismatch","target":"resolution_service","label":{"show":false},"lineStyle":{"color":"#8e44ad","width":1}},
+          {"source":"status_mismatch","target":"resolution_service","label":{"show":false},"lineStyle":{"color":"#8e44ad","width":1}},
+          {"source":"resolution_service","target":"auto_rule","label":{"show":true,"formatter":"自动处理规则","fontSize":10,"color":"#8e44ad"},"lineStyle":{"width":2,"color":"#8e44ad"}},
+          {"source":"resolution_service","target":"manual_intervention","label":{"show":true,"formatter":"人工干预","fontSize":10,"color":"#8e44ad"},"lineStyle":{"width":2,"color":"#8e44ad"}},
+          {"source":"auto_rule","target":"suspense_account","label":{"show":true,"formatter":"自动挂账","fontSize":9,"color":"#c0392b"},"lineStyle":{"color":"#c0392b"}},
+          {"source":"manual_intervention","target":"manual_workflow","label":{"show":true,"formatter":"转人工处理","fontSize":9,"color":"#27ae60"},"lineStyle":{"color":"#27ae60"}},
+          {"source":"suspense_account","target":"status_pending","label":{"show":true,"formatter":"初始状态","fontSize":9,"color":"#c0392b"},"lineStyle":{"color":"#c0392b"}},
+          {"source":"status_pending","target":"status_resolved","label":{"show":true,"formatter":"对平","fontSize":9,"color":"#c0392b"},"lineStyle":{"color":"#c0392b"}},
+          {"source":"status_pending","target":"status_written_off","label":{"show":true,"formatter":"核销","fontSize":9,"color":"#c0392b"},"lineStyle":{"color":"#c0392b"}},
+          {"source":"manual_workflow","target":"wf_submit","label":{"show":true,"formatter":"提交方案","fontSize":9,"color":"#27ae60"},"lineStyle":{"color":"#27ae60"}},
+          {"source":"wf_submit","target":"wf_approve","label":{"show":true,"formatter":"审批通过","fontSize":9,"color":"#27ae60"},"lineStyle":{"color":"#27ae60"}},
+          {"source":"wf_submit","target":"wf_reject","label":{"show":true,"formatter":"审批拒绝","fontSize":9,"color":"#27ae60"},"lineStyle":{"color":"#27ae60"}},
+          {"source":"wf_approve","target":"wf_writeoff","label":{"show":true,"formatter":"核销","fontSize":9,"color":"#27ae60"},"lineStyle":{"color":"#27ae60"}},
+          {"source":"wf_reject","target":"wf_submit","label":{"show":true,"formatter":"退回重提","fontSize":9,"color":"#e74c3c"},"lineStyle":{"type":"dashed","color":"#e74c3c"}},
+          {"source":"wf_writeoff","target":"status_resolved","label":{"show":true,"formatter":"回写对平","fontSize":9,"color":"#16a085"},"lineStyle":{"type":"dashed","color":"#16a085"}}
+        ]
+      }]
+    };
+    const chart = echarts.init(document.getElementById('chart'), null, { renderer: 'canvas' });
+    chart.setOption(option);
+    window.addEventListener('resize', () => chart.resize());
+  </script>
+</body>
+</html>

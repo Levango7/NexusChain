@@ -1,7 +1,7 @@
 {
   "title": {
     "text": "NexusChain 系统架构图",
-    "subtext": "5层架构 + nexus-gateway 15个新增包 (Wave 1-6)",
+    "subtext": "5层架构 + nexus-gateway 24个新增包 (Wave 1-9)",
     "left": "center",
     "top": 10,
     "textStyle": { "fontSize": 22, "fontWeight": "bold", "color": "#1a1a2e" },
@@ -17,7 +17,10 @@
       "API Gateway Layer", "Application Layer",
       "Wave 1: qr/split/settlement/limit", "Wave 2: risk",
       "Wave 3: connectors/connector", "Wave 4: dashboard/reconciliation/sandbox",
-      "Wave 5: alert/ops/sla/logging/resilience", "Wave 6: apikey/webhook/developer/apiversion/export"
+      "Wave 5: alert/ops/sla/logging/resilience", "Wave 6: apikey/webhook/developer/apiversion/export",
+      "Wave 7: channel-signing/callback/onchain-settlement",
+      "Wave 8: alert-aggregation/alert-suppression/alert-escalation",
+      "Wave 9: risk-config/reconciliation-engine/error-handling/suspense-account"
     ],
     "top": 55,
     "left": "center",
@@ -70,7 +73,10 @@
       { "name": "Wave 3: connectors/connector" },
       { "name": "Wave 4: dashboard/reconciliation/sandbox" },
       { "name": "Wave 5: alert/ops/sla/logging/resilience" },
-      { "name": "Wave 6: apikey/webhook/developer/apiversion/export" }
+      { "name": "Wave 6: apikey/webhook/developer/apiversion/export" },
+      { "name": "Wave 7: channel-signing/callback/onchain-settlement" },
+      { "name": "Wave 8: alert-aggregation/alert-suppression/alert-escalation" },
+      { "name": "Wave 9: risk-config/reconciliation-engine/error-handling/suspense-account" }
     ],
     "data": [
       {"id":"nexus-core","name":"nexus-core","x":520,"y":1040,"category":0,"symbolSize":48,"itemStyle":{"color":"#2c3e50"}},
@@ -116,7 +122,20 @@
       {"id":"webhook","name":"webhook","x":170,"y":50,"category":10,"symbolSize":28,"itemStyle":{"color":"#f39c12"}},
       {"id":"developer","name":"developer","x":260,"y":50,"category":10,"symbolSize":28,"itemStyle":{"color":"#f39c12"}},
       {"id":"apiversion","name":"apiversion","x":350,"y":50,"category":10,"symbolSize":28,"itemStyle":{"color":"#f39c12"}},
-      {"id":"export","name":"export","x":440,"y":50,"category":10,"symbolSize":28,"itemStyle":{"color":"#f39c12"}}
+      {"id":"export","name":"export","x":440,"y":50,"category":10,"symbolSize":28,"itemStyle":{"color":"#f39c12"}},
+
+      {"id":"channel-signing","name":"channel-signing","x":540,"y":300,"category":11,"symbolSize":28,"itemStyle":{"color":"#16a085"}},
+      {"id":"callback","name":"callback","x":640,"y":300,"category":11,"symbolSize":28,"itemStyle":{"color":"#16a085"}},
+      {"id":"onchain-settlement","name":"onchain-settlement","x":740,"y":300,"category":11,"symbolSize":28,"itemStyle":{"color":"#16a085"}},
+
+      {"id":"alert-aggregation","name":"alert-aggregation","x":540,"y":100,"category":12,"symbolSize":28,"itemStyle":{"color":"#d35400"}},
+      {"id":"alert-suppression","name":"alert-suppression","x":640,"y":100,"category":12,"symbolSize":28,"itemStyle":{"color":"#d35400"}},
+      {"id":"alert-escalation","name":"alert-escalation","x":740,"y":100,"category":12,"symbolSize":28,"itemStyle":{"color":"#d35400"}},
+
+      {"id":"risk-config","name":"risk-config","x":270,"y":250,"category":13,"symbolSize":28,"itemStyle":{"color":"#7f8c8d"}},
+      {"id":"reconciliation-engine","name":"reconciliation-engine","x":420,"y":150,"category":13,"symbolSize":28,"itemStyle":{"color":"#7f8c8d"}},
+      {"id":"error-handling","name":"error-handling","x":520,"y":150,"category":13,"symbolSize":28,"itemStyle":{"color":"#7f8c8d"}},
+      {"id":"suspense-account","name":"suspense-account","x":620,"y":150,"category":13,"symbolSize":28,"itemStyle":{"color":"#7f8c8d"}}
     ],
     "links": [
       {"source":"nexus-gateway","target":"nexus-api-gateway","label":{"show":true,"formatter":"HTTP RPC","fontSize":9,"color":"#e67e22"}},
@@ -160,6 +179,19 @@
       {"source":"apiversion","target":"nexus-gateway","label":{"show":false},"lineStyle":{"type":"dashed","color":"#f39c12"}},
       {"source":"export","target":"nexus-gateway","label":{"show":false},"lineStyle":{"type":"dashed","color":"#f39c12"}},
 
+      {"source":"channel-signing","target":"nexus-gateway","label":{"show":false},"lineStyle":{"type":"dashed","color":"#16a085"}},
+      {"source":"callback","target":"nexus-gateway","label":{"show":false},"lineStyle":{"type":"dashed","color":"#16a085"}},
+      {"source":"onchain-settlement","target":"nexus-gateway","label":{"show":false},"lineStyle":{"type":"dashed","color":"#16a085"}},
+
+      {"source":"alert-aggregation","target":"alert","label":{"show":false},"lineStyle":{"type":"dashed","color":"#d35400"}},
+      {"source":"alert-suppression","target":"alert","label":{"show":false},"lineStyle":{"type":"dashed","color":"#d35400"}},
+      {"source":"alert-escalation","target":"alert","label":{"show":false},"lineStyle":{"type":"dashed","color":"#d35400"}},
+
+      {"source":"risk-config","target":"risk","label":{"show":false},"lineStyle":{"type":"dashed","color":"#7f8c8d"}},
+      {"source":"reconciliation-engine","target":"reconciliation","label":{"show":false},"lineStyle":{"type":"dashed","color":"#7f8c8d"}},
+      {"source":"error-handling","target":"reconciliation","label":{"show":false},"lineStyle":{"type":"dashed","color":"#7f8c8d"}},
+      {"source":"suspense-account","target":"settlement","label":{"show":false},"lineStyle":{"type":"dashed","color":"#7f8c8d"}},
+
       {"source":"risk","target":"limit","label":{"show":false},"lineStyle":{"color":"#8e44ad","width":1}},
       {"source":"connectors","target":"risk","label":{"show":false},"lineStyle":{"color":"#2980b9","width":1}},
       {"source":"connector","target":"connectors","label":{"show":false},"lineStyle":{"color":"#2980b9","width":1}},
@@ -168,7 +200,14 @@
       {"source":"webhook","target":"apikey","label":{"show":false},"lineStyle":{"color":"#f39c12","width":1}},
       {"source":"developer","target":"apikey","label":{"show":false},"lineStyle":{"color":"#f39c12","width":1}},
       {"source":"export","target":"reconciliation","label":{"show":false},"lineStyle":{"color":"#f39c12","width":1}},
-      {"source":"dashboard","target":"reconciliation","label":{"show":false},"lineStyle":{"color":"#27ae60","width":1}}
+      {"source":"dashboard","target":"reconciliation","label":{"show":false},"lineStyle":{"color":"#27ae60","width":1}},
+
+      {"source":"channel-signing","target":"connectors","label":{"show":false},"lineStyle":{"color":"#16a085","width":1}},
+      {"source":"callback","target":"webhook","label":{"show":false},"lineStyle":{"color":"#16a085","width":1}},
+      {"source":"onchain-settlement","target":"settlement","label":{"show":false},"lineStyle":{"color":"#16a085","width":1}},
+      {"source":"risk-config","target":"risk","label":{"show":false},"lineStyle":{"color":"#7f8c8d","width":1}},
+      {"source":"reconciliation-engine","target":"error-handling","label":{"show":false},"lineStyle":{"color":"#7f8c8d","width":1}},
+      {"source":"error-handling","target":"suspense-account","label":{"show":false},"lineStyle":{"color":"#7f8c8d","width":1}}
     ]
   }]
 }

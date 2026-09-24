@@ -7,14 +7,14 @@ CREATE TABLE settlement_confirmation_records (
     tx_hash VARCHAR(128) NOT NULL,
     confirmations BIGINT NOT NULL DEFAULT 0,
     required_confirmations BIGINT NOT NULL,
-    status VARCHAR(16) NOT NULL DEFAULT 'PENDING',
+    status VARCHAR(32) NOT NULL DEFAULT 'PENDING',
     confirmed_at TIMESTAMP(6),
     created_at TIMESTAMP(6) NOT NULL,
     last_checked_at TIMESTAMP(6),
     retry_count INT NOT NULL DEFAULT 0,
     error_message VARCHAR(1024),
     version BIGINT
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE INDEX idx_scr_payment_id ON settlement_confirmation_records(payment_id);
 CREATE INDEX idx_scr_tx_hash ON settlement_confirmation_records(tx_hash);

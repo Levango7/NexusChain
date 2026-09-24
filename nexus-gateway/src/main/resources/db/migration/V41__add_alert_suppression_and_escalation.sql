@@ -13,9 +13,8 @@ CREATE TABLE alert_aggregations (
     window_end TIMESTAMP(6) NOT NULL,
     aggregated_at TIMESTAMP(6) NOT NULL,
     notified BOOLEAN NOT NULL DEFAULT FALSE
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-CREATE INDEX idx_alert_aggregations_key ON alert_aggregations(aggregation_key);
 CREATE INDEX idx_alert_aggregations_rule ON alert_aggregations(rule_name);
 CREATE INDEX idx_alert_aggregations_notified ON alert_aggregations(notified, window_end);
 CREATE INDEX idx_alert_aggregations_severity ON alert_aggregations(rule_name, severity);
@@ -30,7 +29,7 @@ CREATE TABLE alert_suppression_rules (
     created_at TIMESTAMP(6) NOT NULL,
     updated_at TIMESTAMP(6) NOT NULL,
     CONSTRAINT uk_suppression_parent_child UNIQUE (parent_rule_name, child_rule_name)
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE INDEX idx_alert_suppression_rules_parent ON alert_suppression_rules(parent_rule_name, enabled);
 CREATE INDEX idx_alert_suppression_rules_child ON alert_suppression_rules(child_rule_name, enabled);
@@ -46,8 +45,7 @@ CREATE TABLE alert_escalation_rules (
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMP(6) NOT NULL,
     updated_at TIMESTAMP(6) NOT NULL
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-CREATE INDEX idx_alert_escalation_rules_name ON alert_escalation_rules(rule_name);
 CREATE INDEX idx_alert_escalation_rules_severity ON alert_escalation_rules(from_severity, enabled);
 CREATE INDEX idx_alert_escalation_rules_enabled ON alert_escalation_rules(enabled);

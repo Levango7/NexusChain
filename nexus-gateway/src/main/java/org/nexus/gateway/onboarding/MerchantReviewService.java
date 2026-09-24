@@ -1,5 +1,8 @@
 package org.nexus.gateway.onboarding;
 
+import jakarta.validation.constraints.Email;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import org.nexus.gateway.apikey.ApiKeyService;
 import org.nexus.gateway.clearing.SettlementPeriod;
 import org.nexus.gateway.limit.MerchantLimitConfig;
@@ -428,17 +431,44 @@ public class MerchantReviewService {
 
     /**
      * 入驻申请请求 DTO。
+     *
+     * <p>P1-3：添加 Bean Validation 注解，由 Controller 的 {@code @Valid} 触发，
+     * 在进入业务逻辑前拦截缺失/非法参数。</p>
      */
     public static class ApplicationRequest {
 
+        @NotBlank(message = "merchantName must not be blank")
+        @Size(max = 128, message = "merchantName must not exceed 128 characters")
         private String merchantName;
+
+        @NotBlank(message = "contactName must not be blank")
+        @Size(max = 64, message = "contactName must not exceed 64 characters")
         private String contactName;
+
+        @NotBlank(message = "contactEmail must not be blank")
+        @Email(message = "contactEmail must be a valid email address")
+        @Size(max = 128, message = "contactEmail must not exceed 128 characters")
         private String contactEmail;
+
+        @NotBlank(message = "contactPhone must not be blank")
+        @Size(max = 32, message = "contactPhone must not exceed 32 characters")
         private String contactPhone;
+
+        @NotBlank(message = "businessType must not be blank")
+        @Size(max = 64, message = "businessType must not exceed 64 characters")
         private String businessType;
+
+        @NotBlank(message = "businessLicenseNo must not be blank")
+        @Size(max = 128, message = "businessLicenseNo must not exceed 128 characters")
         private String businessLicenseNo;
+
+        @Size(max = 512, message = "businessLicenseUrl must not exceed 512 characters")
         private String businessLicenseUrl;
+
+        @Size(max = 512, message = "websiteUrl must not exceed 512 characters")
         private String websiteUrl;
+
+        @Size(max = 1024, message = "description must not exceed 1024 characters")
         private String description;
 
         public String getMerchantName() { return merchantName; }

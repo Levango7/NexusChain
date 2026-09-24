@@ -129,7 +129,7 @@ Blockchain is the foundational settlement layer — not the product itself. On t
 │   nexus-gateway │ nexus-bridge │ nexus-signing-service               │
 │   nexus-wallet-service                                               │
 │                                                                       │
-│   nexus-gateway 内部包（Wave 1-6 新增高亮）：                         │
+│   nexus-gateway 内部包（Wave 1-9 新增高亮）：                         │
 │   ┌─ orchestration (编排核心 + connectors: wechat/alipay)  ────────┐ │
 │   ├─ qr │ split │ settlement │ limit           (Wave 1: 支付核心)  │ │
 │   ├─ risk                                       (Wave 2: 风控体系)  │ │
@@ -138,6 +138,10 @@ Blockchain is the foundational settlement layer — not the product itself. On t
 │   │                                             (Wave 5: 运维可靠性)│ │
 │   ├─ apikey │ webhook │ developer │ apiversion │ export             │ │
 │   │                                             (Wave 6: 开放平台)  │ │
+│   ├─ onboarding │ orchestration.service        (Wave 7: 入驻+回调)  │ │
+│   ├─ reconciliation(扩展) │ split(扩展) │ limit(扩展)              │ │
+│   │                                             (Wave 7/8: 对账+策略)│ │
+│   ├─ alert(扩展) │ orchestration.settlement    (Wave 9: 告警+结算)  │ │
 │   └─ controller │ service │ model │ dto │ repository │ ... (基础)  │ │
 │   └───────────────────────────────────────────────────────────────┘ │
 ├─────────────────────────────────────────────────────────────────────┤
@@ -172,7 +176,7 @@ Blockchain is the foundational settlement layer — not the product itself. On t
 |---|------|------|
 | `orchestration` | 支付编排核心（connector 注册/路由/服务/结算/webhook） | 基础 |
 | `orchestration.connector` | Connector 动态注册（ConnectorConfig 持久化、ConnectorFactory 工厂模式） | Wave 3 |
-| `orchestration.connectors` | 具体 Connector 实现（chain/consortium/adyen/stripe/http_psp/mock/wechat/alipay） | Wave 3 |
+| `orchestration.connectors` | 具体 Connector 实现（chain/consortium/adyen/stripe/http_psp/mock/wechat/alipay）；Wave 7 扩展：WeChatPaySignatureUtil + AlipaySignatureUtil + PaymentCallbackController（渠道回调签名验证与回调入口） | Wave 3/7 |
 | `controller` | REST API 端点（v1 + v2 版本） | 基础 |
 | `service` | 核心业务服务 | 基础 |
 | `model` | 领域模型与实体 | 基础 |
@@ -196,14 +200,14 @@ Blockchain is the foundational settlement layer — not the product itself. On t
 | `util` | 工具类 | 基础 |
 | `observability` | 可观测性 | 基础 |
 | `qr` | 扫码支付（QrCodeService 生成/解析、QrPaymentController） | Wave 1 |
-| `split` | 分账/分润（SplitRule FIXED+RATIO、SplitOrder、SplitService） | Wave 1 |
+| `split` | 分账/分润（SplitRule FIXED+RATIO、SplitOrder、SplitService）；Wave 8 扩展：TieredSplitRule（阶梯分账规则）+ DelayedSplitService（延迟分账服务） | Wave 1/8 |
 | `settlement` | 灵活结算周期（MerchantSettlementConfig、T0/T1/T2/T3/CUSTOM） | Wave 1 |
-| `limit` | 业务级限额（MerchantLimitConfig 单笔/日/月、LimitCheckService） | Wave 1 |
+| `limit` | 业务级限额（MerchantLimitConfig 单笔/日/月、LimitCheckService）；Wave 8 扩展：ChannelLimitConfig（渠道级限额配置）+ DynamicLimitAdjustmentService（动态限额调整） | Wave 1/8 |
 | `risk` | 风控体系（评分引擎、设备指纹、风控事件流） | Wave 2 |
 | `dashboard` | 商户门户仪表盘（交易汇总/结算/渠道/风控 5 聚合端点） | Wave 4 |
-| `reconciliation` | 对账文件标准化（CSV/JSON 生成/下载） | Wave 4 |
+| `reconciliation` | 对账文件标准化（CSV/JSON 生成/下载）；Wave 7/9 扩展：ReconciliationEngine（自动对账引擎）+ DiscrepancyResolutionService（差错处理服务）+ SuspenseAccount（挂账账户）+ ManualResolutionWorkflow（人工差错处理工作流） | Wave 4/7/9 |
 | `sandbox` | API 沙箱增强（模拟支付/重置/测试数据） | Wave 4 |
-| `alert` | 告警系统（AlertRule + AlertEngine + 3 渠道通知） | Wave 5 |
+| `alert` | 告警系统（AlertRule + AlertEngine + 3 渠道通知）；Wave 9 扩展：AlertAggregationService（告警聚合）+ AlertSuppressionService（告警抑制）+ AlertEscalationService（告警升级） | Wave 5/9 |
 | `ops` | 运维管理 API（配置/缓存/线程池/连接池/监控） | Wave 5 |
 | `sla` | SLA/SLO 监控（4 种 SLA 类型 + 报告 + 仪表盘） | Wave 5 |
 | `logging` | 结构化日志增强（JSON + 脱敏 + 采样 + MDC） | Wave 5 |
@@ -215,6 +219,9 @@ Blockchain is the foundational settlement layer — not the product itself. On t
 | `apiversion` | API 版本治理（废弃策略 + Sunset 头 + 迁移指南） | Wave 6 |
 | `export` | 开放数据导出（异步 CSV/JSON + 文件下载 + 过期清理） | Wave 6 |
 | `health` | 健康检查端点 | Wave 5 |
+| `onboarding` | 商户入驻流程（MerchantApplication + MerchantReviewService + MerchantOnboardingController） | Wave 7 |
+| `orchestration.service` | 回调服务层（PaymentCallbackService，渠道回调统一处理与分发） | Wave 7 |
+| `orchestration.settlement` | 链上结算确认（ChainSettlementConfirmationService + SettlementConfirmationRecord） | Wave 9 |
 
 ## Payment Orchestration Roadmap
 
@@ -262,6 +269,38 @@ Blockchain is the foundational settlement layer — not the product itself. On t
 - **开发者门户 API**（Wave 6）：DeveloperPortalService + DeveloperPortalController（API 文档元数据 + 代码示例 + SDK 信息 + 测试场景）（`developer` 包）
 - **API 版本治理**（Wave 6）：ApiVersionPolicy + ApiVersionDeprecationService + DeprecationFilter（废弃策略 + Sunset 头 + 迁移指南）（`apiversion` 包）
 - **开放数据导出**（Wave 6）：DataExportRequest + DataExportService（异步 CSV/JSON 导出 + 文件下载 + 过期清理）+ Controller（`export` 包）
+
+**Payment Orchestration Wave 7-9（2026-09-24 ~ 2026-09-25）：**
+
+- **渠道回调签名验证**（Wave 7）：WeChatPaySignatureUtil（微信支付回调签名验证）+ AlipaySignatureUtil（支付宝回调签名验证）（`orchestration.connectors` 包）
+- **统一回调入口**（Wave 7）：PaymentCallbackController（渠道回调统一入口控制器）+ PaymentCallbackService（回调服务层，统一处理与分发）（`orchestration.service` 包）
+- **自动对账引擎**（Wave 7）：ReconciliationEngine（自动比对渠道账单与本地订单，差异自动识别）（`reconciliation` 包）
+- **差错处理服务**（Wave 7）：DiscrepancyResolutionService（差错自动分类与处理流程）（`reconciliation` 包）
+- **挂账账户**（Wave 7）：SuspenseAccount（差错资金暂存与追踪，确保资金可审计）（`reconciliation` 包）
+- **商户入驻申请**（Wave 7）：MerchantApplication（商户入驻申请实体，含资质信息与审核状态）（`onboarding` 包）
+- **商户审核服务**（Wave 7）：MerchantReviewService（商户资质审核流程，自动化初审 + 人工复审）（`onboarding` 包）
+- **商户入驻控制器**（Wave 7）：MerchantOnboardingController（商户入驻 API 端点，申请提交/状态查询/审核操作）（`onboarding` 包）
+- **风控评分权重配置**（Wave 8）：RiskScoreWeightConfig（风控评分权重可配置化，支持动态调整规则权重）（`risk` 包）
+- **风控规则链服务**（Wave 8）：RiskRuleChainService（风控规则链式执行，多规则组合决策）（`risk` 包）
+- **风控阈值动态调整**（Wave 8）：RiskThresholdAdjustmentService（风控阈值根据交易量/时段动态调整）（`risk` 包）
+- **Webhook 重试策略**（Wave 8）：WebhookRetryPolicy（可配置重试次数/间隔/退避策略）（`webhook` 包）
+- **Webhook 死信队列**（Wave 8）：WebhookDeadLetterQueue（投递失败事件进入死信队列，支持手动重投）（`webhook` 包）
+- **Webhook 投递追踪**（Wave 8）：WebhookDeliveryTracker（投递全链路追踪，状态可视化）（`webhook` 包）
+- **阶梯分账规则**（Wave 8）：TieredSplitRule（阶梯式分账规则，按金额区间配置不同分账比例）（`split` 包）
+- **延迟分账服务**（Wave 8）：DelayedSplitService（延迟分账执行，满足担保交易等场景）（`split` 包）
+- **分账执行调度器**（Wave 8）：SplitExecutionScheduler（分账任务定时调度，支持条件触发与定时执行）（`split` 包）
+- **渠道级限额配置**（Wave 8）：ChannelLimitConfig（按渠道独立配置限额，差异化风控）（`limit` 包）
+- **动态限额调整**（Wave 8）：DynamicLimitAdjustmentService（根据实时交易数据动态调整限额阈值）（`limit` 包）
+- **限额阈值告警**（Wave 8）：LimitThresholdAlertService（限额接近阈值时自动告警通知）（`limit` 包）
+- **告警聚合服务**（Wave 9）：AlertAggregationService（同类告警自动聚合，减少告警风暴）（`alert` 包）
+- **告警抑制服务**（Wave 9）：AlertSuppressionService（重复告警抑制，避免告警疲劳）（`alert` 包）
+- **告警升级服务**（Wave 9）：AlertEscalationService（告警按严重度/持续时间自动升级通知渠道）（`alert` 包）
+- **人工差错处理工作流**（Wave 9）：ManualResolutionWorkflow（人工差错处理审批工作流，支持挂账资金手动调拨）（`reconciliation` 包）
+- **挂账账户对账**（Wave 9）：SuspenseAccountReconciliation（挂账账户定期对账，确保挂账资金可追溯）（`reconciliation` 包）
+- **差错处理审计**（Wave 9）：DiscrepancyResolutionAudit（差错处理全流程审计日志，合规留痕）（`reconciliation` 包）
+- **链上结算确认服务**（Wave 9）：ChainSettlementConfirmationService（链上结算确认，确保结算最终性可验证）（`orchestration.settlement` 包）
+- **结算确认记录**（Wave 9）：SettlementConfirmationRecord（结算确认持久化记录，含区块高度/交易哈希/确认状态）（`orchestration.settlement` 包）
+- **结算最终性验证**（Wave 9）：SettlementFinalityVerifier（结算最终性验证器，链上确认数达标校验）（`orchestration.settlement` 包）
 
 ### 进行中（In Progress）
 

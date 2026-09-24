@@ -1,5 +1,6 @@
 package org.nexus.gateway.onboarding;
 
+import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -36,12 +37,15 @@ public class MerchantOnboardingController {
     /**
      * 提交入驻申请。
      *
+     * <p>P1-3：参数 DTO 已加 Bean Validation 注解，此处通过 {@code @Valid} 触发校验，
+     * 校验失败由全局异常处理器返回 400。</p>
+     *
      * @param request 申请信息
      * @return 创建的申请记录（201）
      */
     @PostMapping("/apply")
     public ResponseEntity<MerchantApplication> apply(
-            @RequestBody MerchantReviewService.ApplicationRequest request) {
+            @Valid @RequestBody MerchantReviewService.ApplicationRequest request) {
         MerchantApplication application = reviewService.submitApplication(request);
         return ResponseEntity.status(HttpStatus.CREATED).body(application);
     }
@@ -86,15 +90,24 @@ public class MerchantOnboardingController {
     /**
      * 列出待审核申请。
      *
+     * <p>P1-4：{@code ApplicationStatus.valueOf} 对非法值会抛
+     * {@link IllegalArgumentException}（原先导致 500）。现捕获并返回 400 Bad Request。</p>
+     *
      * @param status 申请状态筛选（可选，默认 PENDING）
-     * @return 申请列表
+     * @return 申请列表，或状态非法时的 400
      */
     @GetMapping("/applications")
     @PreAuthorize("hasRole('ADMIN')")
-    public ResponseEntity<List<MerchantApplication>> listApplications(
+    public ResponseEntity<?> listApplications(
             @RequestParam(required = false) String status) {
         if (status != null && !status.isBlank()) {
-            ApplicationStatus statusEnum = ApplicationStatus.valueOf(status.toUpperCase());
+            ApplicationStatus statusEnum;
+            try {
+                statusEnum = ApplicationStatus.valueOf(status.toUpperCase());
+            } catch (IllegalArgumentException e) {
+                return ResponseEntity.badRequest()
+                        .body(Map.of("error", "Invalid status: " + status));
+            }
             return ResponseEntity.ok(reviewService.listApplicationsByStatus(statusEnum));
         }
         return ResponseEntity.ok(reviewService.listPendingApplications());

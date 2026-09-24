@@ -35,6 +35,7 @@ import static org.junit.jupiter.api.Assertions.*;
 @ActiveProfiles("sandbox")
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 @WithMockUser(username = "admin", roles = {"ADMIN", "OPERATOR"})
+@Tag("integration")
 @DisplayName("v2 API 集成测试")
 class V2ApiIntegrationTest {
 

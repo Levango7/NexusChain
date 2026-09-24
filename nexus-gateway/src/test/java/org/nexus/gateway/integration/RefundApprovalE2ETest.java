@@ -42,6 +42,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @AutoConfigureMockMvc
 @ActiveProfiles({"test", "sandbox"})
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
+@Tag("integration")
 class RefundApprovalE2ETest {
 
     private static final String MERCHANT_ATTR = MerchantOwnershipGuard.MERCHANT_ID_ATTR;

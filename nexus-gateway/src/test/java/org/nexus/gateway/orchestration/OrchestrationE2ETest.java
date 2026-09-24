@@ -34,6 +34,7 @@ import static org.mockito.Mockito.when;
 @AutoConfigureMockMvc
 @ActiveProfiles("sandbox")
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
+@Tag("integration")
 class OrchestrationE2ETest {
 
     @Autowired

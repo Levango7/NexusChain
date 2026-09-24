@@ -1,7 +1,7 @@
 {
   "title": {
     "text": "NexusChain 支付业务流程图",
-    "subtext": "完整支付流程：创建订单 → 风控 → 路由 → Connector → 执行 → 结算 → Webhook",
+    "subtext": "完整支付流程：创建订单 → 风控 → 路由 → Connector → 签名验证 → 执行 → 回调处理 → 链上结算确认 → Webhook",
     "left": "center",
     "top": 10,
     "textStyle": { "fontSize": 22, "fontWeight": "bold", "color": "#1a1a2e" },
@@ -9,7 +9,7 @@
   },
   "tooltip": { "trigger": "item", "formatter": "{b}" },
   "legend": {
-    "data": ["主流程", "风控子步骤", "路由子步骤", "Connector子步骤", "Webhook子步骤"],
+    "data": ["主流程", "风控子步骤", "路由子步骤", "Connector子步骤", "签名验证子步骤", "回调处理子步骤", "链上结算子步骤", "Webhook子步骤"],
     "top": 55,
     "left": "center",
     "orient": "horizontal",
@@ -46,6 +46,9 @@
       { "name": "风控子步骤" },
       { "name": "路由子步骤" },
       { "name": "Connector子步骤" },
+      { "name": "签名验证子步骤" },
+      { "name": "回调处理子步骤" },
+      { "name": "链上结算子步骤" },
       { "name": "Webhook子步骤" }
     ],
     "data": [
@@ -53,10 +56,11 @@
       {"id":"step2","name":"2. 风控检查","x":320,"y":400,"category":0,"symbolSize":48,"itemStyle":{"color":"#e74c3c"}},
       {"id":"step3","name":"3. 路由选择","x":580,"y":400,"category":0,"symbolSize":48,"itemStyle":{"color":"#e74c3c"}},
       {"id":"step4","name":"4. Connector调用","x":840,"y":400,"category":0,"symbolSize":48,"itemStyle":{"color":"#e74c3c"}},
-      {"id":"step5","name":"5. 支付执行","x":1080,"y":400,"category":0,"symbolSize":48,"itemStyle":{"color":"#e74c3c"}},
-      {"id":"step6","name":"6. 结果返回","x":1300,"y":400,"category":0,"symbolSize":48,"itemStyle":{"color":"#e74c3c"}},
-      {"id":"step7","name":"7. 结算/分账","x":1520,"y":400,"category":0,"symbolSize":48,"itemStyle":{"color":"#e74c3c"}},
-      {"id":"step8","name":"8. Webhook通知","x":1740,"y":400,"category":0,"symbolSize":48,"itemStyle":{"color":"#e74c3c"}},
+      {"id":"step5","name":"5. 渠道签名验证","x":1080,"y":400,"category":0,"symbolSize":48,"itemStyle":{"color":"#e74c3c"}},
+      {"id":"step6","name":"6. 支付执行","x":1300,"y":400,"category":0,"symbolSize":48,"itemStyle":{"color":"#e74c3c"}},
+      {"id":"step7","name":"7. 回调处理","x":1520,"y":400,"category":0,"symbolSize":48,"itemStyle":{"color":"#e74c3c"}},
+      {"id":"step8","name":"8. 链上结算确认","x":1740,"y":400,"category":0,"symbolSize":48,"itemStyle":{"color":"#e74c3c"}},
+      {"id":"step9","name":"9. Webhook通知","x":1960,"y":400,"category":0,"symbolSize":48,"itemStyle":{"color":"#e74c3c"}},
 
       {"id":"limit_check","name":"限额检查","x":320,"y":250,"category":1,"symbolSize":32,"itemStyle":{"color":"#8e44ad"}},
       {"id":"score_check","name":"评分检查","x":320,"y":330,"category":1,"symbolSize":32,"itemStyle":{"color":"#8e44ad"}},
@@ -68,8 +72,17 @@
       {"id":"wechat_connector","name":"微信Connector","x":840,"y":250,"category":3,"symbolSize":32,"itemStyle":{"color":"#27ae60"}},
       {"id":"alipay_connector","name":"支付宝Connector","x":840,"y":490,"category":3,"symbolSize":32,"itemStyle":{"color":"#27ae60"}},
 
-      {"id":"subscription_mgr","name":"订阅管理","x":1740,"y":250,"category":4,"symbolSize":32,"itemStyle":{"color":"#f39c12"}},
-      {"id":"signature_verify","name":"签名验证","x":1740,"y":490,"category":4,"symbolSize":32,"itemStyle":{"color":"#f39c12"}}
+      {"id":"sign_verify","name":"签名校验","x":1080,"y":250,"category":4,"symbolSize":32,"itemStyle":{"color":"#16a085"}},
+      {"id":"cert_validate","name":"证书验证","x":1080,"y":490,"category":4,"symbolSize":32,"itemStyle":{"color":"#16a085"}},
+
+      {"id":"callback_verify","name":"回调签名验证","x":1520,"y":250,"category":5,"symbolSize":32,"itemStyle":{"color":"#d35400"}},
+      {"id":"idempotent_check","name":"幂等性检查","x":1520,"y":490,"category":5,"symbolSize":32,"itemStyle":{"color":"#d35400"}},
+
+      {"id":"onchain_confirm","name":"链上确认","x":1740,"y":250,"category":6,"symbolSize":32,"itemStyle":{"color":"#1abc9c"}},
+      {"id":"finality_check","name":"最终性判定","x":1740,"y":490,"category":6,"symbolSize":32,"itemStyle":{"color":"#1abc9c"}},
+
+      {"id":"subscription_mgr","name":"订阅管理","x":1960,"y":250,"category":7,"symbolSize":32,"itemStyle":{"color":"#f39c12"}},
+      {"id":"signature_verify","name":"签名验证","x":1960,"y":490,"category":7,"symbolSize":32,"itemStyle":{"color":"#f39c12"}}
     ],
     "links": [
       {"source":"step1","target":"step2","label":{"show":true,"formatter":"创建","fontSize":10,"color":"#e74c3c"}},
@@ -87,11 +100,26 @@
       {"source":"step4","target":"alipay_connector","label":{"show":false},"lineStyle":{"type":"dashed"}},
       {"source":"wechat_connector","target":"step5","label":{"show":true,"formatter":"调用","fontSize":9,"color":"#27ae60"}},
       {"source":"alipay_connector","target":"step5","label":{"show":true,"formatter":"调用","fontSize":9,"color":"#27ae60"}},
-      {"source":"step5","target":"step6","label":{"show":true,"formatter":"执行","fontSize":10,"color":"#e74c3c"}},
-      {"source":"step6","target":"step7","label":{"show":true,"formatter":"返回","fontSize":10,"color":"#e74c3c"}},
-      {"source":"step7","target":"step8","label":{"show":true,"formatter":"触发","fontSize":10,"color":"#e74c3c"}},
-      {"source":"step8","target":"subscription_mgr","label":{"show":false},"lineStyle":{"type":"dashed"}},
-      {"source":"step8","target":"signature_verify","label":{"show":false},"lineStyle":{"type":"dashed"}}
+
+      {"source":"step5","target":"sign_verify","label":{"show":false},"lineStyle":{"type":"dashed"}},
+      {"source":"step5","target":"cert_validate","label":{"show":false},"lineStyle":{"type":"dashed"}},
+      {"source":"sign_verify","target":"step6","label":{"show":true,"formatter":"验证通过","fontSize":9,"color":"#16a085"}},
+      {"source":"cert_validate","target":"step6","label":{"show":true,"formatter":"验证通过","fontSize":9,"color":"#16a085"}},
+
+      {"source":"step6","target":"step7","label":{"show":true,"formatter":"执行","fontSize":10,"color":"#e74c3c"}},
+
+      {"source":"step7","target":"callback_verify","label":{"show":false},"lineStyle":{"type":"dashed"}},
+      {"source":"step7","target":"idempotent_check","label":{"show":false},"lineStyle":{"type":"dashed"}},
+      {"source":"callback_verify","target":"step8","label":{"show":true,"formatter":"验证通过","fontSize":9,"color":"#d35400"}},
+      {"source":"idempotent_check","target":"step8","label":{"show":true,"formatter":"幂等","fontSize":9,"color":"#d35400"}},
+
+      {"source":"step8","target":"onchain_confirm","label":{"show":false},"lineStyle":{"type":"dashed"}},
+      {"source":"step8","target":"finality_check","label":{"show":false},"lineStyle":{"type":"dashed"}},
+      {"source":"onchain_confirm","target":"step9","label":{"show":true,"formatter":"确认","fontSize":9,"color":"#1abc9c"}},
+      {"source":"finality_check","target":"step9","label":{"show":true,"formatter":"最终性","fontSize":9,"color":"#1abc9c"}},
+
+      {"source":"step9","target":"subscription_mgr","label":{"show":false},"lineStyle":{"type":"dashed"}},
+      {"source":"step9","target":"signature_verify","label":{"show":false},"lineStyle":{"type":"dashed"}}
     ]
   }]
 }
