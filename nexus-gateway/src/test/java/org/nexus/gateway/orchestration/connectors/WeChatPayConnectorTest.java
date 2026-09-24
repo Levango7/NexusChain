@@ -8,9 +8,7 @@ import org.nexus.gateway.orchestration.connector.ConnectorPaymentResult;
 import org.nexus.gateway.orchestration.connector.ConnectorRefundResult;
 import org.nexus.gateway.orchestration.connector.PaymentStatus;
 import org.nexus.gateway.orchestration.settlement.PspFinalityPolicy;
-import org.springframework.http.HttpEntity;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
+import org.springframework.http.*;
 import org.springframework.web.client.RestTemplate;
 
 import java.lang.reflect.Field;
@@ -23,8 +21,11 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
- * {@link WeChatPayConnector} 单元测试：覆盖 dry-run（无 apiKey）与 real（有 apiKey + mock
- * RestTemplate）两条路径，包含支付创建、查询、退款、健康检查与微信支付状态映射。
+ * {@link WeChatPayConnector} 单元测试：覆盖 dry-run（sandbox=true 或 apiV3Key 为空）与
+ * real（sandbox=false + apiV3Key + mock RestTemplate）两条路径，包含支付创建、查询、
+ * 关单、退款、健康检查与微信支付状态映射。
+ *
+ * <p>Wave 7-A2 更新：适配 sandbox 配置项和 V3 API 调用框架。</p>
  */
 class WeChatPayConnectorTest {
 
@@ -42,6 +43,15 @@ class WeChatPayConnectorTest {
         RestTemplate rt = mock(RestTemplate.class);
         setField(c, "restTemplate", rt);
         return rt;
+    }
+
+    /** 配置为 real 模式：sandbox=false + apiV3Key 设置 */
+    private void setRealMode(WeChatPayConnector c) throws Exception {
+        setField(c, "sandbox", false);
+        setField(c, "apiV3Key", "test_api_v3_key");
+        setField(c, "apiKey", "api_key_123");
+        setField(c, "appId", "wx_test");
+        setField(c, "mchId", "mch_test");
     }
 
     private ConnectorPaymentRequest sampleRequest() {
@@ -100,7 +110,7 @@ class WeChatPayConnectorTest {
         assertFalse(c.isActive());
     }
 
-    // ---------- dry-run mode (apiKey blank) ----------
+    // ---------- dry-run mode (sandbox=true 默认) ----------
 
     @Test
     @DisplayName("dry-run createPayment 返回成功")
@@ -117,6 +127,15 @@ class WeChatPayConnectorTest {
         WeChatPayConnector c = newConnector();
         ConnectorPaymentResult r = c.createPayment(sampleRequest());
         assertTrue(r.getConnectorPaymentId().startsWith("wechat_dryrun_"));
+    }
+
+    @Test
+    @DisplayName("dry-run createPayment 返回模拟扫码链接")
+    void dryRun_createPayment_redirectUrl() {
+        WeChatPayConnector c = newConnector();
+        ConnectorPaymentResult r = c.createPayment(sampleRequest());
+        assertNotNull(r.getRedirectUrl());
+        assertTrue(r.getRedirectUrl().startsWith("weixin://wxpay/bizpayurl?pr=dryrun_"));
     }
 
     @Test
@@ -145,6 +164,16 @@ class WeChatPayConnectorTest {
     }
 
     @Test
+    @DisplayName("dry-run closePayment 返回 true 并设置 CANCELLED")
+    void dryRun_closePayment() {
+        WeChatPayConnector c = newConnector();
+        ConnectorPaymentResult created = c.createPayment(sampleRequest());
+        boolean closed = c.closePayment(created.getConnectorPaymentId());
+        assertTrue(closed);
+        assertEquals(PaymentStatus.CANCELLED, c.queryPayment(created.getConnectorPaymentId()));
+    }
+
+    @Test
     @DisplayName("dry-run healthCheck 返回 UP")
     void dryRun_healthCheck_up() throws Exception {
         WeChatPayConnector c = newConnector();
@@ -162,18 +191,16 @@ class WeChatPayConnectorTest {
         assertFalse(h.isHealthy());
     }
 
-    // ---------- 状态映射测试 ----------
+    // ---------- 状态映射测试（real mode + exchange mock） ----------
 
     @Test
     @DisplayName("状态映射：SUCCESS → SUCCEEDED")
     void mapStatus_success() throws Exception {
         WeChatPayConnector c = newConnector();
-        setField(c, "apiKey", "api_key_123");
-        setField(c, "appId", "wx_test");
-        setField(c, "mchId", "mch_test");
+        setRealMode(c);
         RestTemplate rt = injectRestTemplate(c);
 
-        when(rt.postForEntity(anyString(), any(HttpEntity.class), eq(Map.class)))
+        when(rt.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
                 .thenReturn(new ResponseEntity<>(
                         Map.of("trade_state", "SUCCESS"),
                         HttpStatus.OK));
@@ -186,12 +213,10 @@ class WeChatPayConnectorTest {
     @DisplayName("状态映射：NOTPAY → PROCESSING")
     void mapStatus_notpay() throws Exception {
         WeChatPayConnector c = newConnector();
-        setField(c, "apiKey", "api_key_123");
-        setField(c, "appId", "wx_test");
-        setField(c, "mchId", "mch_test");
+        setRealMode(c);
         RestTemplate rt = injectRestTemplate(c);
 
-        when(rt.postForEntity(anyString(), any(HttpEntity.class), eq(Map.class)))
+        when(rt.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
                 .thenReturn(new ResponseEntity<>(
                         Map.of("trade_state", "NOTPAY"),
                         HttpStatus.OK));
@@ -204,12 +229,10 @@ class WeChatPayConnectorTest {
     @DisplayName("状态映射：CLOSED → CANCELLED")
     void mapStatus_closed() throws Exception {
         WeChatPayConnector c = newConnector();
-        setField(c, "apiKey", "api_key_123");
-        setField(c, "appId", "wx_test");
-        setField(c, "mchId", "mch_test");
+        setRealMode(c);
         RestTemplate rt = injectRestTemplate(c);
 
-        when(rt.postForEntity(anyString(), any(HttpEntity.class), eq(Map.class)))
+        when(rt.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
                 .thenReturn(new ResponseEntity<>(
                         Map.of("trade_state", "CLOSED"),
                         HttpStatus.OK));
@@ -222,12 +245,10 @@ class WeChatPayConnectorTest {
     @DisplayName("状态映射：PAYERROR → FAILED")
     void mapStatus_payerror() throws Exception {
         WeChatPayConnector c = newConnector();
-        setField(c, "apiKey", "api_key_123");
-        setField(c, "appId", "wx_test");
-        setField(c, "mchId", "mch_test");
+        setRealMode(c);
         RestTemplate rt = injectRestTemplate(c);
 
-        when(rt.postForEntity(anyString(), any(HttpEntity.class), eq(Map.class)))
+        when(rt.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
                 .thenReturn(new ResponseEntity<>(
                         Map.of("trade_state", "PAYERROR"),
                         HttpStatus.OK));
@@ -240,12 +261,10 @@ class WeChatPayConnectorTest {
     @DisplayName("状态映射：未知状态 → FAILED (fail-closed)")
     void mapStatus_unknown() throws Exception {
         WeChatPayConnector c = newConnector();
-        setField(c, "apiKey", "api_key_123");
-        setField(c, "appId", "wx_test");
-        setField(c, "mchId", "mch_test");
+        setRealMode(c);
         RestTemplate rt = injectRestTemplate(c);
 
-        when(rt.postForEntity(anyString(), any(HttpEntity.class), eq(Map.class)))
+        when(rt.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
                 .thenReturn(new ResponseEntity<>(
                         Map.of("trade_state", "WEIRD_STATUS"),
                         HttpStatus.OK));
@@ -254,15 +273,13 @@ class WeChatPayConnectorTest {
         assertEquals(PaymentStatus.FAILED, s);
     }
 
-    // ---------- real mode (apiKey set + mock RestTemplate) ----------
+    // ---------- real mode (sandbox=false + apiV3Key + mock RestTemplate) ----------
 
     @Test
     @DisplayName("real createPayment: 返回 code_url 设置为 redirectUrl")
     void real_createPayment_codeUrl() throws Exception {
         WeChatPayConnector c = newConnector();
-        setField(c, "apiKey", "api_key_123");
-        setField(c, "appId", "wx_test");
-        setField(c, "mchId", "mch_test");
+        setRealMode(c);
         RestTemplate rt = injectRestTemplate(c);
 
         when(rt.postForEntity(anyString(), any(HttpEntity.class), eq(Map.class)))
@@ -280,9 +297,7 @@ class WeChatPayConnectorTest {
     @DisplayName("real createPayment: 空 body -> fail")
     void real_createPayment_emptyBody() throws Exception {
         WeChatPayConnector c = newConnector();
-        setField(c, "apiKey", "api_key_123");
-        setField(c, "appId", "wx_test");
-        setField(c, "mchId", "mch_test");
+        setRealMode(c);
         RestTemplate rt = injectRestTemplate(c);
 
         when(rt.postForEntity(anyString(), any(HttpEntity.class), eq(Map.class)))
@@ -296,9 +311,7 @@ class WeChatPayConnectorTest {
     @DisplayName("real createPayment: RestTemplate 抛异常 -> fail")
     void real_createPayment_exception() throws Exception {
         WeChatPayConnector c = newConnector();
-        setField(c, "apiKey", "api_key_123");
-        setField(c, "appId", "wx_test");
-        setField(c, "mchId", "mch_test");
+        setRealMode(c);
         RestTemplate rt = injectRestTemplate(c);
 
         when(rt.postForEntity(anyString(), any(HttpEntity.class), eq(Map.class)))
@@ -312,12 +325,10 @@ class WeChatPayConnectorTest {
     @DisplayName("real queryPayment: 空 body -> 回退 localState FAILED")
     void real_queryPayment_emptyBody() throws Exception {
         WeChatPayConnector c = newConnector();
-        setField(c, "apiKey", "api_key_123");
-        setField(c, "appId", "wx_test");
-        setField(c, "mchId", "mch_test");
+        setRealMode(c);
         RestTemplate rt = injectRestTemplate(c);
 
-        when(rt.postForEntity(anyString(), any(HttpEntity.class), eq(Map.class)))
+        when(rt.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
                 .thenReturn(new ResponseEntity<>((Map) null, HttpStatus.OK));
 
         PaymentStatus s = c.queryPayment("pay_unknown");
@@ -328,12 +339,10 @@ class WeChatPayConnectorTest {
     @DisplayName("real queryPayment: RestTemplate 抛异常 -> 回退 localState FAILED")
     void real_queryPayment_exception() throws Exception {
         WeChatPayConnector c = newConnector();
-        setField(c, "apiKey", "api_key_123");
-        setField(c, "appId", "wx_test");
-        setField(c, "mchId", "mch_test");
+        setRealMode(c);
         RestTemplate rt = injectRestTemplate(c);
 
-        when(rt.postForEntity(anyString(), any(HttpEntity.class), eq(Map.class)))
+        when(rt.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
                 .thenThrow(new RuntimeException("network error"));
 
         PaymentStatus s = c.queryPayment("pay_unknown");
@@ -341,16 +350,14 @@ class WeChatPayConnectorTest {
     }
 
     @Test
-    @DisplayName("real refund: 返回非空 body -> ok")
+    @DisplayName("real refund: 返回 refund_id -> ok")
     void real_refund_success() throws Exception {
         WeChatPayConnector c = newConnector();
-        setField(c, "apiKey", "api_key_123");
-        setField(c, "appId", "wx_test");
-        setField(c, "mchId", "mch_test");
+        setRealMode(c);
         RestTemplate rt = injectRestTemplate(c);
 
         when(rt.postForEntity(anyString(), any(HttpEntity.class), eq(Map.class)))
-                .thenReturn(new ResponseEntity<>(Map.of("refund_id", "r_123"), HttpStatus.OK));
+                .thenReturn(new ResponseEntity<>(Map.of("refund_id", "r_123", "refund_status", "SUCCESS"), HttpStatus.OK));
 
         ConnectorRefundResult r = c.refund("pay_1", 1000L);
         assertTrue(r.isSuccess());
@@ -361,9 +368,7 @@ class WeChatPayConnectorTest {
     @DisplayName("real refund: 空 body -> fail")
     void real_refund_emptyBody() throws Exception {
         WeChatPayConnector c = newConnector();
-        setField(c, "apiKey", "api_key_123");
-        setField(c, "appId", "wx_test");
-        setField(c, "mchId", "mch_test");
+        setRealMode(c);
         RestTemplate rt = injectRestTemplate(c);
 
         when(rt.postForEntity(anyString(), any(HttpEntity.class), eq(Map.class)))
@@ -377,9 +382,7 @@ class WeChatPayConnectorTest {
     @DisplayName("real refund: RestTemplate 抛异常 -> fail")
     void real_refund_exception() throws Exception {
         WeChatPayConnector c = newConnector();
-        setField(c, "apiKey", "api_key_123");
-        setField(c, "appId", "wx_test");
-        setField(c, "mchId", "mch_test");
+        setRealMode(c);
         RestTemplate rt = injectRestTemplate(c);
 
         when(rt.postForEntity(anyString(), any(HttpEntity.class), eq(Map.class)))
@@ -390,16 +393,42 @@ class WeChatPayConnectorTest {
     }
 
     @Test
-    @DisplayName("healthCheck: enabled + apiKey + postForEntity 成功 -> up")
-    void healthCheck_real_up() throws Exception {
+    @DisplayName("real closePayment: postForEntity 成功 -> true")
+    void real_closePayment_success() throws Exception {
         WeChatPayConnector c = newConnector();
-        setField(c, "enabled", true);
-        setField(c, "apiKey", "api_key_123");
-        setField(c, "appId", "wx_test");
-        setField(c, "mchId", "mch_test");
+        setRealMode(c);
         RestTemplate rt = injectRestTemplate(c);
 
         when(rt.postForEntity(anyString(), any(HttpEntity.class), eq(Map.class)))
+                .thenReturn(new ResponseEntity<>(Map.of(), HttpStatus.OK));
+
+        boolean closed = c.closePayment("pay_1");
+        assertTrue(closed);
+    }
+
+    @Test
+    @DisplayName("real closePayment: RestTemplate 抛异常 -> false")
+    void real_closePayment_exception() throws Exception {
+        WeChatPayConnector c = newConnector();
+        setRealMode(c);
+        RestTemplate rt = injectRestTemplate(c);
+
+        when(rt.postForEntity(anyString(), any(HttpEntity.class), eq(Map.class)))
+                .thenThrow(new RuntimeException("network error"));
+
+        boolean closed = c.closePayment("pay_1");
+        assertFalse(closed);
+    }
+
+    @Test
+    @DisplayName("healthCheck: enabled + real mode + exchange 成功 -> up")
+    void healthCheck_real_up() throws Exception {
+        WeChatPayConnector c = newConnector();
+        setRealMode(c);
+        setField(c, "enabled", true);
+        RestTemplate rt = injectRestTemplate(c);
+
+        when(rt.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
                 .thenReturn(new ResponseEntity<>(Map.of(), HttpStatus.OK));
 
         ConnectorHealth h = c.healthCheck();
@@ -408,16 +437,14 @@ class WeChatPayConnectorTest {
     }
 
     @Test
-    @DisplayName("healthCheck: enabled + apiKey + postForEntity 异常 -> down")
+    @DisplayName("healthCheck: enabled + real mode + exchange 异常 -> down")
     void healthCheck_real_down() throws Exception {
         WeChatPayConnector c = newConnector();
+        setRealMode(c);
         setField(c, "enabled", true);
-        setField(c, "apiKey", "api_key_123");
-        setField(c, "appId", "wx_test");
-        setField(c, "mchId", "mch_test");
         RestTemplate rt = injectRestTemplate(c);
 
-        when(rt.postForEntity(anyString(), any(HttpEntity.class), eq(Map.class)))
+        when(rt.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
                 .thenThrow(new RuntimeException("network error"));
 
         ConnectorHealth h = c.healthCheck();

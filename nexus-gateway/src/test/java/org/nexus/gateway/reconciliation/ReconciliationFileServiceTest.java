@@ -26,6 +26,8 @@ class ReconciliationFileServiceTest {
 
     private PaymentOrderRepository paymentOrderRepository;
     private ReconciliationFileRecordRepository fileRecordRepository;
+    private ReconciliationEngine reconciliationEngine;
+    private DiscrepancyResolutionService discrepancyResolutionService;
     private ReconciliationFileService reconciliationFileService;
 
     private static final Long MERCHANT_ID = 500L;
@@ -34,8 +36,11 @@ class ReconciliationFileServiceTest {
     void setUp() {
         paymentOrderRepository = mock(PaymentOrderRepository.class);
         fileRecordRepository = mock(ReconciliationFileRecordRepository.class);
+        reconciliationEngine = mock(ReconciliationEngine.class);
+        discrepancyResolutionService = mock(DiscrepancyResolutionService.class);
         reconciliationFileService = new ReconciliationFileService(
-                paymentOrderRepository, fileRecordRepository);
+                paymentOrderRepository, fileRecordRepository,
+                reconciliationEngine, discrepancyResolutionService);
     }
 
     // ==================== generateDailyFile ====================

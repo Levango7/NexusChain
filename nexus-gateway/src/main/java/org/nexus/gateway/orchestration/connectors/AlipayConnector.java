@@ -26,6 +26,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p>支付宝 API 使用统一网关 {@code https://openapi.alipay.com/gateway.do}，
  * 通过 method 参数区分不同接口（alipay.trade.precreate / alipay.trade.query / alipay.trade.refund）。
  * 认证方式为 RSA2 签名，请求参数中包含 app_id、sign、sign_type=RSA2。</p>
+ *
+ * <p>签名框架（Wave 7-A2）：集成 RSA2 签名生成，每次 API 调用自动添加 sign 参数。
+ * sandbox=true 时保持 dry-run 模拟响应，响应格式与真实 API 一致。</p>
  */
 @Component
 public class AlipayConnector implements PaymentConnector {
@@ -47,6 +50,10 @@ public class AlipayConnector implements PaymentConnector {
 
     @Value("${nexus.connectors.alipay.enabled:false}")
     private boolean enabled;
+
+    /** sandbox=true 时保持 dry-run 模拟响应；false 时发起真实 API 调用 */
+    @Value("${nexus.connectors.alipay.sandbox:true}")
+    private boolean sandbox;
 
     private final RestTemplate restTemplate;
     private final Map<String, PaymentStatus> localState = new ConcurrentHashMap<>();
@@ -73,33 +80,82 @@ public class AlipayConnector implements PaymentConnector {
     @Override
     public boolean isActive() { return enabled; }
 
+    /**
+     * 判断是否处于 dry-run 模式：sandbox=true 或 merchantPrivateKey 为空。
+     */
+    private boolean isDryRun() {
+        return sandbox || merchantPrivateKey == null || merchantPrivateKey.isBlank();
+    }
+
+    /**
+     * 构建支付宝请求参数（含 RSA2 签名）。
+     *
+     * <p>支付宝统一网关请求格式：</p>
+     * <ol>
+     *   <li>组装业务参数（app_id、method、sign_type、timestamp、nonce、biz_content 等）</li>
+     *   <li>对所有参数按 key 排序拼接，用商户私钥做 RSA2 签名</li>
+     *   <li>将 sign 和 sign_type 附加到请求参数中</li>
+     * </ol>
+     *
+     * @param method      API 方法名（如 alipay.trade.precreate）
+     * @param bizContent  业务参数 JSON 字符串
+     * @return 完整的表单参数字符串（含签名）
+     */
+    private String buildSignedRequest(String method, String bizContent) {
+        Map<String, String> params = new LinkedHashMap<>();
+        params.put("app_id", appId);
+        params.put("method", method);
+        params.put("sign_type", "RSA2");
+        params.put("timestamp", java.time.LocalDateTime.now().format(
+                java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
+        params.put("nonce", UUID.randomUUID().toString().replace("-", "").substring(0, 16));
+        params.put("biz_content", bizContent);
+
+        // 生成 RSA2 签名
+        if (!isDryRun()) {
+            String sign = AlipaySignatureUtil.generateSignature(params, merchantPrivateKey);
+            params.put("sign", sign);
+        }
+
+        // 拼接为表单参数字符串
+        StringBuilder sb = new StringBuilder();
+        for (Map.Entry<String, String> entry : params.entrySet()) {
+            if (sb.length() > 0) sb.append("&");
+            sb.append(entry.getKey()).append("=").append(urlEncode(entry.getValue()));
+        }
+        return sb.toString();
+    }
+
     @Override
     public ConnectorPaymentResult createPayment(ConnectorPaymentRequest request) {
-        // Dry-run 模式：merchantPrivateKey 为空时不发起 HTTP 请求
-        if (merchantPrivateKey == null || merchantPrivateKey.isBlank()) {
+        if (isDryRun()) {
+            // Dry-run 模式：模拟当面付 precreate 成功响应
             String id = "alipay_dryrun_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
             localState.put(id, PaymentStatus.SUCCEEDED);
-            log.info("[Alipay DRY-RUN] Payment created: {} amount={} {}", id, request.getAmount(), request.getCurrency());
-            return ConnectorPaymentResult.ok(id, PaymentStatus.SUCCEEDED);
+            log.info("[Alipay DRY-RUN] 当面付模拟成功: {} amount={} {}", id, request.getAmount(), request.getCurrency());
+            // 模拟真实 API 响应格式：返回 qr_code（扫码链接）
+            ConnectorPaymentResult result = ConnectorPaymentResult.ok(id, PaymentStatus.SUCCEEDED);
+            result.setRedirectUrl("https://qr.alipay.com/dryrun_" + id);
+            return result;
         }
 
         try {
+            // 当面付 API：alipay.trade.precreate
+            String description = request.getDescription() != null ? request.getDescription() : "NexusChain Payment";
+            Map<String, Object> bizContentMap = new LinkedHashMap<>();
+            bizContentMap.put("out_trade_no", request.getPaymentId());
+            bizContentMap.put("total_amount", String.valueOf(request.getAmount()));
+            bizContentMap.put("subject", description);
+            String bizContent = bizContentMap.toString(); // 简化 JSON 构建
+
+            String body = buildSignedRequest("alipay.trade.precreate", bizContent);
+
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
-
-            // P0-5：所有用户提供的参数值做 URL 编码，防止表单参数注入
-            String description = request.getDescription() != null ? request.getDescription() : "NexusChain Payment";
-            String body = "app_id=" + urlEncode(appId)
-                    + "&method=alipay.trade.precreate&sign_type=RSA2"
-                    + "&out_trade_no=" + urlEncode(request.getPaymentId())
-                    + "&total_amount=" + urlEncode(String.valueOf(request.getAmount()))
-                    + "&subject=" + urlEncode(description);
-
             HttpEntity<String> entity = new HttpEntity<>(body, headers);
             ResponseEntity<Map> resp = restTemplate.postForEntity(apiBaseUrl, entity, Map.class);
 
             if (resp.getBody() != null) {
-                // 支付宝当面付响应包含 qr_code（扫码链接）和 trade_no（支付宝交易号）
                 String qrCode = String.valueOf(resp.getBody().getOrDefault("qr_code", ""));
                 String tradeNo = String.valueOf(resp.getBody().getOrDefault("trade_no", "unknown"));
                 String tradeStatus = String.valueOf(resp.getBody().getOrDefault("trade_status", "WAIT_BUYER_PAY"));
@@ -110,7 +166,7 @@ public class AlipayConnector implements PaymentConnector {
                 if (!qrCode.isEmpty()) {
                     result.setRedirectUrl(qrCode);
                 }
-                log.info("[Alipay] Payment created: tradeNo={} status={}", tradeNo, tradeStatus);
+                log.info("[Alipay] 当面付下单成功: tradeNo={} status={}", tradeNo, tradeStatus);
                 return result;
             }
             return ConnectorPaymentResult.fail("Alipay returned empty response");
@@ -122,20 +178,20 @@ public class AlipayConnector implements PaymentConnector {
 
     @Override
     public PaymentStatus queryPayment(String connectorPaymentId) {
-        // Dry-run 模式：从 localState 返回缓存状态
-        if (merchantPrivateKey == null || merchantPrivateKey.isBlank()) {
+        if (isDryRun()) {
             return localState.getOrDefault(connectorPaymentId, PaymentStatus.FAILED);
         }
 
         try {
+            // 查询订单 API：alipay.trade.query
+            Map<String, Object> bizContentMap = new LinkedHashMap<>();
+            bizContentMap.put("out_trade_no", connectorPaymentId);
+            String bizContent = bizContentMap.toString();
+
+            String body = buildSignedRequest("alipay.trade.query", bizContent);
+
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
-
-            // P0-5：URL 编码防止注入
-            String body = "app_id=" + urlEncode(appId)
-                    + "&method=alipay.trade.query&sign_type=RSA2"
-                    + "&out_trade_no=" + urlEncode(connectorPaymentId);
-
             HttpEntity<String> entity = new HttpEntity<>(body, headers);
             ResponseEntity<Map> resp = restTemplate.postForEntity(apiBaseUrl, entity, Map.class);
 
@@ -143,8 +199,8 @@ public class AlipayConnector implements PaymentConnector {
                 String tradeStatus = String.valueOf(resp.getBody().getOrDefault("trade_status", ""));
                 PaymentStatus mapped = mapAlipayStatus(tradeStatus);
                 localState.put(connectorPaymentId, mapped);
-                // P1-3：终态清理 localState，防止内存泄漏
                 cleanupTerminalState(connectorPaymentId, mapped);
+                log.info("[Alipay] 查询订单: out_trade_no={} trade_status={} -> {}", connectorPaymentId, tradeStatus, mapped);
                 return mapped;
             }
         } catch (RuntimeException e) {
@@ -153,32 +209,66 @@ public class AlipayConnector implements PaymentConnector {
         return localState.getOrDefault(connectorPaymentId, PaymentStatus.FAILED);
     }
 
+    /**
+     * 关闭订单 — 支付宝 API：alipay.trade.close
+     *
+     * <p>用于关闭未支付的订单。订单关闭后不可再次支付。</p>
+     *
+     * @param connectorPaymentId 商户订单号（out_trade_no）
+     * @return true 关闭成功，false 关闭失败
+     */
+    public boolean closePayment(String connectorPaymentId) {
+        if (isDryRun()) {
+            localState.put(connectorPaymentId, PaymentStatus.CANCELLED);
+            log.info("[Alipay DRY-RUN] 关闭订单模拟成功: {}", connectorPaymentId);
+            return true;
+        }
+        try {
+            Map<String, Object> bizContentMap = new LinkedHashMap<>();
+            bizContentMap.put("out_trade_no", connectorPaymentId);
+            String bizContent = bizContentMap.toString();
+
+            String body = buildSignedRequest("alipay.trade.close", bizContent);
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
+            HttpEntity<String> entity = new HttpEntity<>(body, headers);
+            restTemplate.postForEntity(apiBaseUrl, entity, Map.class);
+            localState.put(connectorPaymentId, PaymentStatus.CANCELLED);
+            log.info("[Alipay] 关闭订单成功: out_trade_no={}", connectorPaymentId);
+            return true;
+        } catch (RuntimeException e) {
+            log.error("[Alipay] closePayment failed for {}: {}", connectorPaymentId, e.getMessage());
+            return false;
+        }
+    }
+
     @Override
     public ConnectorRefundResult refund(String connectorPaymentId, long amount) {
-        // Dry-run 模式：直接返回 ok
-        if (merchantPrivateKey == null || merchantPrivateKey.isBlank()) {
+        if (isDryRun()) {
             localState.put(connectorPaymentId, PaymentStatus.REFUNDED);
             return ConnectorRefundResult.ok("alipay_refund_" + connectorPaymentId);
         }
 
         try {
+            // 退款 API：alipay.trade.refund
+            Map<String, Object> bizContentMap = new LinkedHashMap<>();
+            bizContentMap.put("out_trade_no", connectorPaymentId);
+            bizContentMap.put("refund_amount", String.valueOf(amount));
+            String bizContent = bizContentMap.toString();
+
+            String body = buildSignedRequest("alipay.trade.refund", bizContent);
+
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
-
-            // P0-5：URL 编码防止注入
-            String body = "app_id=" + urlEncode(appId)
-                    + "&method=alipay.trade.refund&sign_type=RSA2"
-                    + "&out_trade_no=" + urlEncode(connectorPaymentId)
-                    + "&refund_amount=" + urlEncode(String.valueOf(amount));
-
             HttpEntity<String> entity = new HttpEntity<>(body, headers);
             ResponseEntity<Map> resp = restTemplate.postForEntity(apiBaseUrl, entity, Map.class);
 
             if (resp.getBody() != null) {
-                // 支付宝退款响应包含 fund_change（退款金额变动）
                 String fundChange = String.valueOf(resp.getBody().getOrDefault("fund_change", "Y"));
                 if ("Y".equals(fundChange)) {
                     localState.put(connectorPaymentId, PaymentStatus.REFUNDED);
+                    log.info("[Alipay] 退款成功: out_trade_no={}", connectorPaymentId);
                     return ConnectorRefundResult.ok("alipay_refund_" + connectorPaymentId);
                 }
                 return ConnectorRefundResult.fail("Alipay refund: fund_change=N");
@@ -191,25 +281,21 @@ public class AlipayConnector implements PaymentConnector {
 
     @Override
     public ConnectorHealth healthCheck() {
-        // 未启用 → DOWN
         if (!enabled) return ConnectorHealth.down(getId(), "Connector disabled");
-        // Dry-run → UP（无外部依赖）
-        if (merchantPrivateKey == null || merchantPrivateKey.isBlank()) return ConnectorHealth.up(getId(), 0);
+        if (isDryRun()) return ConnectorHealth.up(getId(), 0);
 
-        // 真实模式：尝试查询一个不存在的订单，如果返回非网络错误则认为健康
         long start = System.currentTimeMillis();
         try {
+            Map<String, Object> bizContentMap = new LinkedHashMap<>();
+            bizContentMap.put("out_trade_no", "health_check_dummy");
+            String bizContent = bizContentMap.toString();
+
+            String body = buildSignedRequest("alipay.trade.query", bizContent);
+
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
-
-            // P0-5：URL 编码防止注入
-            String body = "app_id=" + urlEncode(appId)
-                    + "&method=alipay.trade.query&sign_type=RSA2"
-                    + "&out_trade_no=health_check_dummy";
-
             HttpEntity<String> entity = new HttpEntity<>(body, headers);
             restTemplate.postForEntity(apiBaseUrl, entity, Map.class);
-            // 只要没有抛出网络异常，就认为网关可达
             return ConnectorHealth.up(getId(), System.currentTimeMillis() - start);
         } catch (RuntimeException e) {
             return ConnectorHealth.down(getId(), e.getMessage());
@@ -251,7 +337,6 @@ public class AlipayConnector implements PaymentConnector {
         try {
             return URLEncoder.encode(value, StandardCharsets.UTF_8.name());
         } catch (UnsupportedEncodingException e) {
-            // UTF-8 一定存在，不会走到这里
             return URLEncoder.encode(value);
         }
     }

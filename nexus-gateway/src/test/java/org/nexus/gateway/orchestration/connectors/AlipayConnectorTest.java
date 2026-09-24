@@ -1,5 +1,6 @@
 package org.nexus.gateway.orchestration.connectors;
 
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.nexus.gateway.orchestration.connector.ConnectorHealth;
@@ -15,6 +16,9 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.client.RestTemplate;
 
 import java.lang.reflect.Field;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.util.Base64;
 import java.util.Map;
 import java.util.Set;
 
@@ -24,10 +28,25 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
- * {@link AlipayConnector} 单元测试：覆盖 dry-run（无 merchantPrivateKey）与 real（有 key + mock
- * RestTemplate）两条路径，包含支付创建、查询、退款、健康检查与支付宝状态映射。
+ * {@link AlipayConnector} 单元测试：覆盖 dry-run（sandbox=true 或 merchantPrivateKey 为空）与
+ * real（sandbox=false + 真实 RSA 密钥 + mock RestTemplate）两条路径，包含支付创建、查询、
+ * 关单、退款、健康检查与支付宝状态映射。
+ *
+ * <p>Wave 7-A2 更新：适配 sandbox 配置项和 RSA2 签名框架。
+ * real mode 测试使用动态生成的 RSA 密钥对，模拟商户私钥。</p>
  */
 class AlipayConnectorTest {
+
+    private static String testPrivateKeyBase64;
+
+    @BeforeAll
+    static void generateKeyPair() throws Exception {
+        KeyPairGenerator keyGen = KeyPairGenerator.getInstance("RSA");
+        keyGen.initialize(2048);
+        KeyPair keyPair = keyGen.generateKeyPair();
+        testPrivateKeyBase64 = Base64.getEncoder().encodeToString(
+                keyPair.getPrivate().getEncoded());
+    }
 
     private AlipayConnector newConnector() {
         return new AlipayConnector();
@@ -43,6 +62,13 @@ class AlipayConnectorTest {
         RestTemplate rt = mock(RestTemplate.class);
         setField(c, "restTemplate", rt);
         return rt;
+    }
+
+    /** 配置为 real 模式：sandbox=false + 真实 RSA 私钥 */
+    private void setRealMode(AlipayConnector c) throws Exception {
+        setField(c, "sandbox", false);
+        setField(c, "merchantPrivateKey", testPrivateKeyBase64);
+        setField(c, "appId", "test_app");
     }
 
     private ConnectorPaymentRequest sampleRequest() {
@@ -70,7 +96,18 @@ class AlipayConnectorTest {
         assertTrue(r.getConnectorPaymentId().startsWith("alipay_dryrun_"));
     }
 
-    // ---------- 3. Dry-run 模式 queryPayment 返回缓存状态 ----------
+    // ---------- 3. Dry-run 模式 createPayment 返回模拟扫码链接 ----------
+
+    @Test
+    @DisplayName("dry-run createPayment: 返回模拟 qr_code 链接")
+    void dryRun_createPayment_qrCode() {
+        AlipayConnector c = newConnector();
+        ConnectorPaymentResult r = c.createPayment(sampleRequest());
+        assertNotNull(r.getRedirectUrl());
+        assertTrue(r.getRedirectUrl().startsWith("https://qr.alipay.com/dryrun_"));
+    }
+
+    // ---------- 4. Dry-run 模式 queryPayment 返回缓存状态 ----------
 
     @Test
     @DisplayName("dry-run queryPayment: 已创建 -> SUCCEEDED；未知 -> FAILED")
@@ -81,7 +118,7 @@ class AlipayConnectorTest {
         assertEquals(PaymentStatus.FAILED, c.queryPayment("unknown"));
     }
 
-    // ---------- 4. Dry-run 模式 refund 返回成功 ----------
+    // ---------- 5. Dry-run 模式 refund 返回成功 ----------
 
     @Test
     @DisplayName("dry-run refund: 返回 ok")
@@ -93,7 +130,19 @@ class AlipayConnectorTest {
         assertTrue(r.getRefundId().startsWith("alipay_refund_"));
     }
 
-    // ---------- 5. Dry-run 模式 healthCheck 返回 UP ----------
+    // ---------- 6. Dry-run 模式 closePayment ----------
+
+    @Test
+    @DisplayName("dry-run closePayment: 返回 true")
+    void dryRun_closePayment() {
+        AlipayConnector c = newConnector();
+        ConnectorPaymentResult created = c.createPayment(sampleRequest());
+        boolean closed = c.closePayment(created.getConnectorPaymentId());
+        assertTrue(closed);
+        assertEquals(PaymentStatus.CANCELLED, c.queryPayment(created.getConnectorPaymentId()));
+    }
+
+    // ---------- 7. Dry-run 模式 healthCheck 返回 UP ----------
 
     @Test
     @DisplayName("dry-run healthCheck: enabled + 无 key -> UP")
@@ -105,7 +154,7 @@ class AlipayConnectorTest {
         assertEquals(0L, h.getLatencyMs());
     }
 
-    // ---------- 6. enabled=false 时 isActive 返回 false ----------
+    // ---------- 8. enabled=false 时 isActive 返回 false ----------
 
     @Test
     @DisplayName("isActive: enabled=false -> false")
@@ -114,7 +163,7 @@ class AlipayConnectorTest {
         assertFalse(c.isActive());
     }
 
-    // ---------- 7. enabled=false 时 healthCheck 返回 DOWN ----------
+    // ---------- 9. enabled=false 时 healthCheck 返回 DOWN ----------
 
     @Test
     @DisplayName("healthCheck: enabled=false -> DOWN")
@@ -124,7 +173,7 @@ class AlipayConnectorTest {
         assertFalse(h.isHealthy());
     }
 
-    // ---------- 8. getId 返回 "alipay" ----------
+    // ---------- 10. getId 返回 "alipay" ----------
 
     @Test
     @DisplayName("getId: 返回 'alipay'")
@@ -133,7 +182,7 @@ class AlipayConnectorTest {
         assertEquals("alipay", c.getId());
     }
 
-    // ---------- 9. getType 返回 "http_psp" ----------
+    // ---------- 11. getType 返回 "http_psp" ----------
 
     @Test
     @DisplayName("getType: 返回 'http_psp'")
@@ -142,7 +191,7 @@ class AlipayConnectorTest {
         assertEquals("http_psp", c.getType());
     }
 
-    // ---------- 10. getDisplayName 返回正确名称 ----------
+    // ---------- 12. getDisplayName 返回正确名称 ----------
 
     @Test
     @DisplayName("getDisplayName: 返回 'Alipay (当面付/网页支付)'")
@@ -151,7 +200,7 @@ class AlipayConnectorTest {
         assertEquals("Alipay (当面付/网页支付)", c.getDisplayName());
     }
 
-    // ---------- 11. feeBasisPoints 返回 38 ----------
+    // ---------- 13. feeBasisPoints 返回 38 ----------
 
     @Test
     @DisplayName("feeBasisPoints: 返回 38")
@@ -160,7 +209,7 @@ class AlipayConnectorTest {
         assertEquals(38, c.feeBasisPoints());
     }
 
-    // ---------- 12. supportedCurrencies 返回 Set.of("CNY") ----------
+    // ---------- 14. supportedCurrencies 返回 Set.of("CNY") ----------
 
     @Test
     @DisplayName("supportedCurrencies: 返回 Set.of('CNY')")
@@ -169,7 +218,7 @@ class AlipayConnectorTest {
         assertEquals(Set.of("CNY"), c.supportedCurrencies());
     }
 
-    // ---------- 13. getFinalityPolicy 返回 PspFinalityPolicy 实例 ----------
+    // ---------- 15. getFinalityPolicy 返回 PspFinalityPolicy 实例 ----------
 
     @Test
     @DisplayName("getFinalityPolicy: 返回 PspFinalityPolicy 实例")
@@ -180,14 +229,13 @@ class AlipayConnectorTest {
         assertInstanceOf(PspFinalityPolicy.class, policy);
     }
 
-    // ---------- 14. 状态映射：TRADE_SUCCESS → SUCCEEDED ----------
+    // ---------- 16. 状态映射：TRADE_SUCCESS → SUCCEEDED ----------
 
     @Test
     @DisplayName("状态映射: TRADE_SUCCESS -> SUCCEEDED")
     void mapStatus_tradeSuccess() throws Exception {
         AlipayConnector c = newConnector();
-        setField(c, "merchantPrivateKey", "test_key");
-        setField(c, "appId", "test_app");
+        setRealMode(c);
         RestTemplate rt = injectRestTemplate(c);
 
         when(rt.postForEntity(anyString(), any(HttpEntity.class), eq(Map.class)))
@@ -201,14 +249,13 @@ class AlipayConnectorTest {
         assertEquals("https://qr.example.com", r.getRedirectUrl());
     }
 
-    // ---------- 15. 状态映射：WAIT_BUYER_PAY → PROCESSING ----------
+    // ---------- 17. 状态映射：WAIT_BUYER_PAY → PROCESSING ----------
 
     @Test
     @DisplayName("状态映射: WAIT_BUYER_PAY -> PROCESSING")
     void mapStatus_waitBuyerPay() throws Exception {
         AlipayConnector c = newConnector();
-        setField(c, "merchantPrivateKey", "test_key");
-        setField(c, "appId", "test_app");
+        setRealMode(c);
         RestTemplate rt = injectRestTemplate(c);
 
         when(rt.postForEntity(anyString(), any(HttpEntity.class), eq(Map.class)))
@@ -220,14 +267,13 @@ class AlipayConnectorTest {
         assertEquals(PaymentStatus.PROCESSING, r.getStatus());
     }
 
-    // ---------- 16. 状态映射：TRADE_CLOSED → CANCELLED ----------
+    // ---------- 18. 状态映射：TRADE_CLOSED → CANCELLED ----------
 
     @Test
     @DisplayName("状态映射: TRADE_CLOSED -> CANCELLED")
     void mapStatus_tradeClosed() throws Exception {
         AlipayConnector c = newConnector();
-        setField(c, "merchantPrivateKey", "test_key");
-        setField(c, "appId", "test_app");
+        setRealMode(c);
         RestTemplate rt = injectRestTemplate(c);
 
         when(rt.postForEntity(anyString(), any(HttpEntity.class), eq(Map.class)))
@@ -239,14 +285,13 @@ class AlipayConnectorTest {
         assertEquals(PaymentStatus.CANCELLED, r.getStatus());
     }
 
-    // ---------- 17. 状态映射：TRADE_REFUND → REFUNDED ----------
+    // ---------- 19. 状态映射：TRADE_REFUND → REFUNDED ----------
 
     @Test
     @DisplayName("状态映射: TRADE_REFUND -> REFUNDED")
     void mapStatus_tradeRefund() throws Exception {
         AlipayConnector c = newConnector();
-        setField(c, "merchantPrivateKey", "test_key");
-        setField(c, "appId", "test_app");
+        setRealMode(c);
         RestTemplate rt = injectRestTemplate(c);
 
         when(rt.postForEntity(anyString(), any(HttpEntity.class), eq(Map.class)))
@@ -258,14 +303,13 @@ class AlipayConnectorTest {
         assertEquals(PaymentStatus.REFUNDED, r.getStatus());
     }
 
-    // ---------- 18. 状态映射：未知状态 → FAILED (fail-closed) ----------
+    // ---------- 20. 状态映射：未知状态 → FAILED (fail-closed) ----------
 
     @Test
     @DisplayName("状态映射: 未知状态 -> FAILED (fail-closed)")
     void mapStatus_unknown() throws Exception {
         AlipayConnector c = newConnector();
-        setField(c, "merchantPrivateKey", "test_key");
-        setField(c, "appId", "test_app");
+        setRealMode(c);
         RestTemplate rt = injectRestTemplate(c);
 
         when(rt.postForEntity(anyString(), any(HttpEntity.class), eq(Map.class)))
@@ -283,8 +327,7 @@ class AlipayConnectorTest {
     @DisplayName("状态映射: TRADE_FINISHED -> SUCCEEDED")
     void mapStatus_tradeFinished() throws Exception {
         AlipayConnector c = newConnector();
-        setField(c, "merchantPrivateKey", "test_key");
-        setField(c, "appId", "test_app");
+        setRealMode(c);
         RestTemplate rt = injectRestTemplate(c);
 
         when(rt.postForEntity(anyString(), any(HttpEntity.class), eq(Map.class)))
@@ -302,8 +345,7 @@ class AlipayConnectorTest {
     @DisplayName("real queryPayment: TRADE_SUCCESS -> SUCCEEDED 并更新 localState")
     void real_queryPayment_success() throws Exception {
         AlipayConnector c = newConnector();
-        setField(c, "merchantPrivateKey", "test_key");
-        setField(c, "appId", "test_app");
+        setRealMode(c);
         RestTemplate rt = injectRestTemplate(c);
 
         when(rt.postForEntity(anyString(), any(HttpEntity.class), eq(Map.class)))
@@ -321,8 +363,7 @@ class AlipayConnectorTest {
     @DisplayName("real queryPayment: 异常 -> 回退 localState FAILED")
     void real_queryPayment_exception() throws Exception {
         AlipayConnector c = newConnector();
-        setField(c, "merchantPrivateKey", "test_key");
-        setField(c, "appId", "test_app");
+        setRealMode(c);
         RestTemplate rt = injectRestTemplate(c);
 
         when(rt.postForEntity(anyString(), any(HttpEntity.class), eq(Map.class)))
@@ -338,8 +379,7 @@ class AlipayConnectorTest {
     @DisplayName("real refund: fund_change=Y -> ok")
     void real_refund_success() throws Exception {
         AlipayConnector c = newConnector();
-        setField(c, "merchantPrivateKey", "test_key");
-        setField(c, "appId", "test_app");
+        setRealMode(c);
         RestTemplate rt = injectRestTemplate(c);
 
         when(rt.postForEntity(anyString(), any(HttpEntity.class), eq(Map.class)))
@@ -357,8 +397,7 @@ class AlipayConnectorTest {
     @DisplayName("real refund: fund_change=N -> fail")
     void real_refund_fundChangeN() throws Exception {
         AlipayConnector c = newConnector();
-        setField(c, "merchantPrivateKey", "test_key");
-        setField(c, "appId", "test_app");
+        setRealMode(c);
         RestTemplate rt = injectRestTemplate(c);
 
         when(rt.postForEntity(anyString(), any(HttpEntity.class), eq(Map.class)))
@@ -376,8 +415,7 @@ class AlipayConnectorTest {
     @DisplayName("real refund: 异常 -> fail")
     void real_refund_exception() throws Exception {
         AlipayConnector c = newConnector();
-        setField(c, "merchantPrivateKey", "test_key");
-        setField(c, "appId", "test_app");
+        setRealMode(c);
         RestTemplate rt = injectRestTemplate(c);
 
         when(rt.postForEntity(anyString(), any(HttpEntity.class), eq(Map.class)))
@@ -387,15 +425,44 @@ class AlipayConnectorTest {
         assertFalse(r.isSuccess());
     }
 
+    // ---------- 补充：real closePayment ----------
+
+    @Test
+    @DisplayName("real closePayment: postForEntity 成功 -> true")
+    void real_closePayment_success() throws Exception {
+        AlipayConnector c = newConnector();
+        setRealMode(c);
+        RestTemplate rt = injectRestTemplate(c);
+
+        when(rt.postForEntity(anyString(), any(HttpEntity.class), eq(Map.class)))
+                .thenReturn(new ResponseEntity<>(Map.of(), HttpStatus.OK));
+
+        boolean closed = c.closePayment("t1");
+        assertTrue(closed);
+    }
+
+    @Test
+    @DisplayName("real closePayment: 异常 -> false")
+    void real_closePayment_exception() throws Exception {
+        AlipayConnector c = newConnector();
+        setRealMode(c);
+        RestTemplate rt = injectRestTemplate(c);
+
+        when(rt.postForEntity(anyString(), any(HttpEntity.class), eq(Map.class)))
+                .thenThrow(new RuntimeException("network error"));
+
+        boolean closed = c.closePayment("t1");
+        assertFalse(closed);
+    }
+
     // ---------- 补充：real healthCheck 成功 → UP ----------
 
     @Test
-    @DisplayName("healthCheck: enabled + key + 请求成功 -> UP")
+    @DisplayName("healthCheck: enabled + real mode + 请求成功 -> UP")
     void healthCheck_real_up() throws Exception {
         AlipayConnector c = newConnector();
+        setRealMode(c);
         setField(c, "enabled", true);
-        setField(c, "merchantPrivateKey", "test_key");
-        setField(c, "appId", "test_app");
         RestTemplate rt = injectRestTemplate(c);
 
         when(rt.postForEntity(anyString(), any(HttpEntity.class), eq(Map.class)))
@@ -409,12 +476,11 @@ class AlipayConnectorTest {
     // ---------- 补充：real healthCheck 异常 → DOWN ----------
 
     @Test
-    @DisplayName("healthCheck: enabled + key + 异常 -> DOWN")
+    @DisplayName("healthCheck: enabled + real mode + 异常 -> DOWN")
     void healthCheck_real_down() throws Exception {
         AlipayConnector c = newConnector();
+        setRealMode(c);
         setField(c, "enabled", true);
-        setField(c, "merchantPrivateKey", "test_key");
-        setField(c, "appId", "test_app");
         RestTemplate rt = injectRestTemplate(c);
 
         when(rt.postForEntity(anyString(), any(HttpEntity.class), eq(Map.class)))
@@ -430,8 +496,7 @@ class AlipayConnectorTest {
     @DisplayName("real createPayment: 空 body -> fail")
     void real_createPayment_emptyBody() throws Exception {
         AlipayConnector c = newConnector();
-        setField(c, "merchantPrivateKey", "test_key");
-        setField(c, "appId", "test_app");
+        setRealMode(c);
         RestTemplate rt = injectRestTemplate(c);
 
         when(rt.postForEntity(anyString(), any(HttpEntity.class), eq(Map.class)))
@@ -447,8 +512,7 @@ class AlipayConnectorTest {
     @DisplayName("real createPayment: 异常 -> fail")
     void real_createPayment_exception() throws Exception {
         AlipayConnector c = newConnector();
-        setField(c, "merchantPrivateKey", "test_key");
-        setField(c, "appId", "test_app");
+        setRealMode(c);
         RestTemplate rt = injectRestTemplate(c);
 
         when(rt.postForEntity(anyString(), any(HttpEntity.class), eq(Map.class)))

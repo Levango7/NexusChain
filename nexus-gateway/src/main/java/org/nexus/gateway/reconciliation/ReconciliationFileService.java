@@ -4,6 +4,7 @@ import org.nexus.gateway.model.PaymentOrder;
 import org.nexus.gateway.repository.PaymentOrderRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -23,18 +24,28 @@ import java.util.stream.Collectors;
  * <p>CSV 格式遵循标准支付对账格式：注释行以 {@code #} 开头，包含头部元信息、
  * 列标题、数据行和尾部汇总。JSON 格式包含 metadata、transactions、summary
  * 三个结构化部分。</p>
+ *
+ * <p>集成 {@link ReconciliationEngine} 支持自动对账：生成对账文件后可调用
+ * {@link #runReconciliation} 比对渠道对账文件与内部交易记录，自动发现并分类差异，
+ * 持久化差错记录到 {@code reconciliation_discrepancies} 表。</p>
  */
 @Service
 public class ReconciliationFileService {
 
     private final PaymentOrderRepository paymentOrderRepository;
     private final ReconciliationFileRecordRepository fileRecordRepository;
+    private final ReconciliationEngine reconciliationEngine;
+    private final DiscrepancyResolutionService discrepancyResolutionService;
 
     @Autowired
     public ReconciliationFileService(PaymentOrderRepository paymentOrderRepository,
-                                     ReconciliationFileRecordRepository fileRecordRepository) {
+                                     ReconciliationFileRecordRepository fileRecordRepository,
+                                     ReconciliationEngine reconciliationEngine,
+                                     DiscrepancyResolutionService discrepancyResolutionService) {
         this.paymentOrderRepository = paymentOrderRepository;
         this.fileRecordRepository = fileRecordRepository;
+        this.reconciliationEngine = reconciliationEngine;
+        this.discrepancyResolutionService = discrepancyResolutionService;
     }
 
     /**
@@ -285,6 +296,101 @@ public class ReconciliationFileService {
      */
     public String getFileContent(ReconciliationFileRecord record) {
         return getFileContent(record, null);
+    }
+
+    // --- 自动对账集成 ---
+
+    /**
+     * 执行自动对账：比对渠道对账文件内容与内部交易记录。
+     *
+     * <p>解析渠道提供的 CSV 对账文件内容，与内部 PaymentOrder 记录比对，
+     * 生成差异报告并持久化所有差错记录。同时更新对账文件记录的匹配数和差错数。</p>
+     *
+     * @param merchantId       商户 ID
+     * @param channelCsvContent 渠道对账文件 CSV 内容
+     * @param date             对账日期
+     * @return 对账差异报告
+     */
+    @Transactional
+    public ReconciliationDiffReport runDailyReconciliation(Long merchantId,
+                                                            String channelCsvContent,
+                                                            LocalDate date) {
+        // 生成内部对账文件记录
+        ReconciliationFileRecord fileRecord = generateDailyFile(merchantId, date);
+
+        // 查询内部交易记录
+        LocalDateTime dayStart = date.atStartOfDay();
+        LocalDateTime dayEnd = date.plusDays(1).atStartOfDay();
+        List<PaymentOrder> internalOrders = paymentOrderRepository.findByMerchantId(merchantId).stream()
+                .filter(o -> o.getCreatedAt() != null
+                        && !o.getCreatedAt().isBefore(dayStart)
+                        && o.getCreatedAt().isBefore(dayEnd))
+                .collect(Collectors.toList());
+
+        // 解析渠道对账文件
+        List<ChannelRecord> channelRecords = reconciliationEngine.parseCsvContent(channelCsvContent);
+
+        // 执行比对
+        ReconciliationDiffReport report = reconciliationEngine.reconcile(
+                merchantId, channelRecords, internalOrders, fileRecord.getId());
+
+        // 持久化差错记录
+        if (report.getDiscrepancies() != null && !report.getDiscrepancies().isEmpty()) {
+            discrepancyResolutionService.saveDiscrepancies(report.getDiscrepancies());
+        }
+
+        // 更新对账文件记录的匹配数和差错数
+        fileRecord.setMatchedCount(report.getMatchedCount());
+        fileRecord.setDiscrepancyCount(report.getDiscrepancies() != null
+                ? report.getDiscrepancies().size() : 0);
+        fileRecordRepository.save(fileRecord);
+
+        return report;
+    }
+
+    /**
+     * 执行自动对账：使用已有对账文件记录，比对渠道对账文件内容与内部交易记录。
+     *
+     * @param reconciliationFileId 对账文件记录 ID
+     * @param channelCsvContent    渠道对账文件 CSV 内容
+     * @return 对账差异报告
+     */
+    @Transactional
+    public ReconciliationDiffReport runReconciliation(Long reconciliationFileId,
+                                                      String channelCsvContent) {
+        ReconciliationFileRecord fileRecord = fileRecordRepository.findById(reconciliationFileId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Reconciliation file not found: " + reconciliationFileId));
+
+        // 查询内部交易记录
+        LocalDateTime periodStartDt = fileRecord.getPeriodStart().atStartOfDay();
+        LocalDateTime periodEndDt = fileRecord.getPeriodEnd().plusDays(1).atStartOfDay();
+        List<PaymentOrder> internalOrders = paymentOrderRepository
+                .findByMerchantId(fileRecord.getMerchantId()).stream()
+                .filter(o -> o.getCreatedAt() != null
+                        && !o.getCreatedAt().isBefore(periodStartDt)
+                        && o.getCreatedAt().isBefore(periodEndDt))
+                .collect(Collectors.toList());
+
+        // 解析渠道对账文件
+        List<ChannelRecord> channelRecords = reconciliationEngine.parseCsvContent(channelCsvContent);
+
+        // 执行比对
+        ReconciliationDiffReport report = reconciliationEngine.reconcile(
+                fileRecord.getMerchantId(), channelRecords, internalOrders, fileRecord.getId());
+
+        // 持久化差错记录
+        if (report.getDiscrepancies() != null && !report.getDiscrepancies().isEmpty()) {
+            discrepancyResolutionService.saveDiscrepancies(report.getDiscrepancies());
+        }
+
+        // 更新对账文件记录的匹配数和差错数
+        fileRecord.setMatchedCount(report.getMatchedCount());
+        fileRecord.setDiscrepancyCount(report.getDiscrepancies() != null
+                ? report.getDiscrepancies().size() : 0);
+        fileRecordRepository.save(fileRecord);
+
+        return report;
     }
 
     // --- 内部方法 ---
