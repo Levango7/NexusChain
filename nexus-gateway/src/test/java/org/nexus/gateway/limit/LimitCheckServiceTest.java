@@ -25,6 +25,7 @@ class LimitCheckServiceTest {
 
     private MerchantLimitConfigRepository limitConfigRepository;
     private PaymentOrderRepository paymentOrderRepository;
+    private ChannelLimitConfigRepository channelLimitConfigRepository;
     private LimitCheckService limitCheckService;
 
     private static final Long MERCHANT_ID = 500L;
@@ -33,7 +34,8 @@ class LimitCheckServiceTest {
     void setUp() {
         limitConfigRepository = mock(MerchantLimitConfigRepository.class);
         paymentOrderRepository = mock(PaymentOrderRepository.class);
-        limitCheckService = new LimitCheckService(limitConfigRepository, paymentOrderRepository);
+        channelLimitConfigRepository = mock(ChannelLimitConfigRepository.class);
+        limitCheckService = new LimitCheckService(limitConfigRepository, paymentOrderRepository, channelLimitConfigRepository);
     }
 
     // ==================== checkLimits ====================
@@ -539,5 +541,293 @@ class LimitCheckServiceTest {
         order.setMerchantId(MERCHANT_ID);
         order.setPaidAt(LocalDateTime.now());
         return order;
+    }
+
+    // ==================== 年度限额检查 ====================
+
+    @Test
+    @DisplayName("checkAnnualSingleLimit：金额 > annualSingleLimit -> failed(ANNUAL_SINGLE)")
+    void checkAnnualSingleLimitExceeds() {
+        MerchantLimitConfig config = new MerchantLimitConfig();
+        config.setMerchantId(MERCHANT_ID);
+        config.setActive(true);
+        config.setAnnualSingleLimit(new BigDecimal("100000"));
+
+        when(limitConfigRepository.findByMerchantId(MERCHANT_ID)).thenReturn(Optional.of(config));
+
+        LimitCheckResult result = limitCheckService.checkAnnualSingleLimit(MERCHANT_ID, new BigDecimal("200000"));
+
+        assertFalse(result.isPassed());
+        assertEquals("ANNUAL_SINGLE", result.getViolationType());
+    }
+
+    @Test
+    @DisplayName("checkAnnualSingleLimit：金额 <= annualSingleLimit -> passed")
+    void checkAnnualSingleLimitWithinRange() {
+        MerchantLimitConfig config = new MerchantLimitConfig();
+        config.setMerchantId(MERCHANT_ID);
+        config.setActive(true);
+        config.setAnnualSingleLimit(new BigDecimal("100000"));
+
+        when(limitConfigRepository.findByMerchantId(MERCHANT_ID)).thenReturn(Optional.of(config));
+
+        LimitCheckResult result = limitCheckService.checkAnnualSingleLimit(MERCHANT_ID, new BigDecimal("50000"));
+
+        assertTrue(result.isPassed());
+    }
+
+    @Test
+    @DisplayName("checkAnnualSingleLimit：无 annualSingleLimit 配置 -> passed")
+    void checkAnnualSingleLimitNoConfig() {
+        MerchantLimitConfig config = new MerchantLimitConfig();
+        config.setMerchantId(MERCHANT_ID);
+        config.setActive(true);
+
+        when(limitConfigRepository.findByMerchantId(MERCHANT_ID)).thenReturn(Optional.of(config));
+
+        LimitCheckResult result = limitCheckService.checkAnnualSingleLimit(MERCHANT_ID, new BigDecimal("999999"));
+
+        assertTrue(result.isPassed());
+    }
+
+    @Test
+    @DisplayName("checkAnnualCumulativeLimit：累计 + 新金额 > annualCumulativeLimit -> failed(ANNUAL_CUMULATIVE)")
+    void checkAnnualCumulativeLimitExceeds() {
+        MerchantLimitConfig config = new MerchantLimitConfig();
+        config.setMerchantId(MERCHANT_ID);
+        config.setActive(true);
+        config.setAnnualCumulativeLimit(new BigDecimal("500000"));
+
+        when(limitConfigRepository.findByMerchantId(MERCHANT_ID)).thenReturn(Optional.of(config));
+
+        PaymentOrder paidOrder = createPaidOrder(new BigDecimal("400000"));
+        when(paymentOrderRepository.findByMerchantIdAndStatusAndPaidAtBetween(
+                eq(MERCHANT_ID), eq(PaymentOrder.OrderStatus.PAID), any(LocalDateTime.class), any(LocalDateTime.class)))
+                .thenReturn(List.of(paidOrder));
+
+        LimitCheckResult result = limitCheckService.checkAnnualCumulativeLimit(MERCHANT_ID, new BigDecimal("200000"));
+
+        assertFalse(result.isPassed());
+        assertEquals("ANNUAL_CUMULATIVE", result.getViolationType());
+    }
+
+    @Test
+    @DisplayName("checkAnnualCumulativeLimit：累计 + 新金额 <= annualCumulativeLimit -> passed")
+    void checkAnnualCumulativeLimitWithinRange() {
+        MerchantLimitConfig config = new MerchantLimitConfig();
+        config.setMerchantId(MERCHANT_ID);
+        config.setActive(true);
+        config.setAnnualCumulativeLimit(new BigDecimal("500000"));
+
+        when(limitConfigRepository.findByMerchantId(MERCHANT_ID)).thenReturn(Optional.of(config));
+
+        PaymentOrder paidOrder = createPaidOrder(new BigDecimal("300000"));
+        when(paymentOrderRepository.findByMerchantIdAndStatusAndPaidAtBetween(
+                eq(MERCHANT_ID), eq(PaymentOrder.OrderStatus.PAID), any(LocalDateTime.class), any(LocalDateTime.class)))
+                .thenReturn(List.of(paidOrder));
+
+        LimitCheckResult result = limitCheckService.checkAnnualCumulativeLimit(MERCHANT_ID, new BigDecimal("200000"));
+
+        assertTrue(result.isPassed());
+    }
+
+    @Test
+    @DisplayName("checkLimits：综合检查 — 年单笔超限 -> failed(ANNUAL_SINGLE)")
+    void checkLimitsAnnualSingleFails() {
+        MerchantLimitConfig config = new MerchantLimitConfig();
+        config.setMerchantId(MERCHANT_ID);
+        config.setActive(true);
+        config.setSingleTransactionMaxAmount(new BigDecimal("1000000"));
+        config.setAnnualSingleLimit(new BigDecimal("50000"));
+
+        when(limitConfigRepository.findByMerchantId(MERCHANT_ID)).thenReturn(Optional.of(config));
+        when(paymentOrderRepository.findByMerchantIdAndStatusAndPaidAtBetween(
+                eq(MERCHANT_ID), eq(PaymentOrder.OrderStatus.PAID), any(LocalDateTime.class), any(LocalDateTime.class)))
+                .thenReturn(List.of());
+
+        LimitCheckResult result = limitCheckService.checkLimits(MERCHANT_ID, new BigDecimal("100000"));
+
+        assertFalse(result.isPassed());
+        assertEquals("ANNUAL_SINGLE", result.getViolationType());
+    }
+
+    @Test
+    @DisplayName("checkLimits：综合检查 — 年累计超限 -> failed(ANNUAL_CUMULATIVE)")
+    void checkLimitsAnnualCumulativeFails() {
+        MerchantLimitConfig config = new MerchantLimitConfig();
+        config.setMerchantId(MERCHANT_ID);
+        config.setActive(true);
+        config.setSingleTransactionMaxAmount(new BigDecimal("1000000"));
+        config.setAnnualCumulativeLimit(new BigDecimal("500000"));
+
+        when(limitConfigRepository.findByMerchantId(MERCHANT_ID)).thenReturn(Optional.of(config));
+
+        PaymentOrder paidOrder = createPaidOrder(new BigDecimal("400000"));
+        when(paymentOrderRepository.findByMerchantIdAndStatusAndPaidAtBetween(
+                eq(MERCHANT_ID), eq(PaymentOrder.OrderStatus.PAID), any(LocalDateTime.class), any(LocalDateTime.class)))
+                .thenReturn(List.of(paidOrder));
+
+        LimitCheckResult result = limitCheckService.checkLimits(MERCHANT_ID, new BigDecimal("200000"));
+
+        assertFalse(result.isPassed());
+        assertEquals("ANNUAL_CUMULATIVE", result.getViolationType());
+    }
+
+    @Test
+    @DisplayName("getAnnualAccumulatedAmount：正确计算当年累计")
+    void getAnnualAccumulatedAmountCorrect() {
+        PaymentOrder order1 = createPaidOrder(new BigDecimal("100000"));
+        PaymentOrder order2 = createPaidOrder(new BigDecimal("200000"));
+
+        when(paymentOrderRepository.findByMerchantIdAndStatusAndPaidAtBetween(
+                eq(MERCHANT_ID), eq(PaymentOrder.OrderStatus.PAID), any(LocalDateTime.class), any(LocalDateTime.class)))
+                .thenReturn(List.of(order1, order2));
+
+        BigDecimal total = limitCheckService.getAnnualAccumulatedAmount(MERCHANT_ID);
+
+        assertEquals(new BigDecimal("300000"), total);
+    }
+
+    // ==================== 渠道限额检查 ====================
+
+    @Test
+    @DisplayName("checkChannelLimits：无渠道配置 -> passed")
+    void checkChannelLimitsNoConfig() {
+        when(channelLimitConfigRepository.findByMerchantIdAndChannelType(
+                MERCHANT_ID, ChannelLimitConfig.ChannelType.ALIPAY))
+                .thenReturn(Optional.empty());
+
+        LimitCheckResult result = limitCheckService.checkChannelLimits(
+                MERCHANT_ID, ChannelLimitConfig.ChannelType.ALIPAY, new BigDecimal("1000"));
+
+        assertTrue(result.isPassed());
+    }
+
+    @Test
+    @DisplayName("checkChannelLimits：渠道单笔超限 -> failed(CHANNEL_SINGLE)")
+    void checkChannelLimitsSingleExceeds() {
+        ChannelLimitConfig config = new ChannelLimitConfig();
+        config.setMerchantId(MERCHANT_ID);
+        config.setChannelType(ChannelLimitConfig.ChannelType.ALIPAY);
+        config.setActive(true);
+        config.setSingleLimit(new BigDecimal("5000"));
+
+        when(channelLimitConfigRepository.findByMerchantIdAndChannelType(
+                MERCHANT_ID, ChannelLimitConfig.ChannelType.ALIPAY))
+                .thenReturn(Optional.of(config));
+
+        LimitCheckResult result = limitCheckService.checkChannelLimits(
+                MERCHANT_ID, ChannelLimitConfig.ChannelType.ALIPAY, new BigDecimal("10000"));
+
+        assertFalse(result.isPassed());
+        assertEquals("CHANNEL_SINGLE", result.getViolationType());
+    }
+
+    @Test
+    @DisplayName("checkChannelLimits：渠道单笔限额内 -> passed")
+    void checkChannelLimitsSingleWithinRange() {
+        ChannelLimitConfig config = new ChannelLimitConfig();
+        config.setMerchantId(MERCHANT_ID);
+        config.setChannelType(ChannelLimitConfig.ChannelType.ALIPAY);
+        config.setActive(true);
+        config.setSingleLimit(new BigDecimal("10000"));
+
+        when(channelLimitConfigRepository.findByMerchantIdAndChannelType(
+                MERCHANT_ID, ChannelLimitConfig.ChannelType.ALIPAY))
+                .thenReturn(Optional.of(config));
+        when(paymentOrderRepository.findByMerchantIdAndStatusAndPaidAtBetween(
+                eq(MERCHANT_ID), eq(PaymentOrder.OrderStatus.PAID), any(LocalDateTime.class), any(LocalDateTime.class)))
+                .thenReturn(List.of());
+
+        LimitCheckResult result = limitCheckService.checkChannelLimits(
+                MERCHANT_ID, ChannelLimitConfig.ChannelType.ALIPAY, new BigDecimal("5000"));
+
+        assertTrue(result.isPassed());
+    }
+
+    @Test
+    @DisplayName("checkChannelLimits：渠道日累计超限 -> failed(CHANNEL_DAILY)")
+    void checkChannelLimitsDailyExceeds() {
+        ChannelLimitConfig config = new ChannelLimitConfig();
+        config.setMerchantId(MERCHANT_ID);
+        config.setChannelType(ChannelLimitConfig.ChannelType.WECHAT);
+        config.setActive(true);
+        config.setSingleLimit(new BigDecimal("100000"));
+        config.setDailyCumulativeLimit(new BigDecimal("5000"));
+
+        when(channelLimitConfigRepository.findByMerchantIdAndChannelType(
+                MERCHANT_ID, ChannelLimitConfig.ChannelType.WECHAT))
+                .thenReturn(Optional.of(config));
+
+        PaymentOrder paidOrder = createPaidOrder(new BigDecimal("4000"));
+        when(paymentOrderRepository.findByMerchantIdAndStatusAndPaidAtBetween(
+                eq(MERCHANT_ID), eq(PaymentOrder.OrderStatus.PAID), any(LocalDateTime.class), any(LocalDateTime.class)))
+                .thenReturn(List.of(paidOrder));
+
+        LimitCheckResult result = limitCheckService.checkChannelLimits(
+                MERCHANT_ID, ChannelLimitConfig.ChannelType.WECHAT, new BigDecimal("2000"));
+
+        assertFalse(result.isPassed());
+        assertEquals("CHANNEL_DAILY", result.getViolationType());
+    }
+
+    @Test
+    @DisplayName("checkChannelLimits：渠道月累计超限 -> failed(CHANNEL_MONTHLY)")
+    void checkChannelLimitsMonthlyExceeds() {
+        ChannelLimitConfig config = new ChannelLimitConfig();
+        config.setMerchantId(MERCHANT_ID);
+        config.setChannelType(ChannelLimitConfig.ChannelType.BANK_CARD);
+        config.setActive(true);
+        config.setSingleLimit(new BigDecimal("100000"));
+        config.setMonthlyCumulativeLimit(new BigDecimal("50000"));
+
+        when(channelLimitConfigRepository.findByMerchantIdAndChannelType(
+                MERCHANT_ID, ChannelLimitConfig.ChannelType.BANK_CARD))
+                .thenReturn(Optional.of(config));
+
+        PaymentOrder paidOrder = createPaidOrder(new BigDecimal("40000"));
+        when(paymentOrderRepository.findByMerchantIdAndStatusAndPaidAtBetween(
+                eq(MERCHANT_ID), eq(PaymentOrder.OrderStatus.PAID), any(LocalDateTime.class), any(LocalDateTime.class)))
+                .thenReturn(List.of(paidOrder));
+
+        LimitCheckResult result = limitCheckService.checkChannelLimits(
+                MERCHANT_ID, ChannelLimitConfig.ChannelType.BANK_CARD, new BigDecimal("20000"));
+
+        assertFalse(result.isPassed());
+        assertEquals("CHANNEL_MONTHLY", result.getViolationType());
+    }
+
+    @Test
+    @DisplayName("createOrUpdateChannelLimitConfig：创建新渠道限额配置 — 成功")
+    void createOrUpdateChannelLimitConfigNew() {
+        when(channelLimitConfigRepository.findByMerchantIdAndChannelType(
+                MERCHANT_ID, ChannelLimitConfig.ChannelType.ALIPAY))
+                .thenReturn(Optional.empty());
+        when(channelLimitConfigRepository.save(any(ChannelLimitConfig.class))).thenAnswer(inv -> {
+            ChannelLimitConfig config = inv.getArgument(0);
+            config.setId(1L);
+            return config;
+        });
+
+        ChannelLimitConfig config = limitCheckService.createOrUpdateChannelLimitConfig(
+                MERCHANT_ID, ChannelLimitConfig.ChannelType.ALIPAY,
+                new BigDecimal("10000"), new BigDecimal("50000"), new BigDecimal("500000"));
+
+        assertNotNull(config);
+        assertEquals(MERCHANT_ID, config.getMerchantId());
+        assertEquals(ChannelLimitConfig.ChannelType.ALIPAY, config.getChannelType());
+        assertEquals(new BigDecimal("10000"), config.getSingleLimit());
+        assertEquals(new BigDecimal("50000"), config.getDailyCumulativeLimit());
+        assertEquals(new BigDecimal("500000"), config.getMonthlyCumulativeLimit());
+        assertTrue(config.isActive());
+    }
+
+    @Test
+    @DisplayName("createOrUpdateChannelLimitConfig：negative singleLimit -> 抛出异常")
+    void createOrUpdateChannelLimitConfigNegativeValue() {
+        assertThrows(IllegalArgumentException.class, () ->
+                limitCheckService.createOrUpdateChannelLimitConfig(
+                        MERCHANT_ID, ChannelLimitConfig.ChannelType.ALIPAY,
+                        new BigDecimal("-1"), null, null));
     }
 }

@@ -41,6 +41,14 @@ public class MerchantLimitConfig {
     @Column(name = "monthly_accumulated_max_amount", precision = 36, scale = 8)
     private BigDecimal monthlyAccumulatedMaxAmount;
 
+    /** 年单笔最大金额，{@code null} 表示无限制。 */
+    @Column(name = "annual_single_limit", precision = 36, scale = 8)
+    private BigDecimal annualSingleLimit;
+
+    /** 年累计最大金额，{@code null} 表示无限制。 */
+    @Column(name = "annual_cumulative_limit", precision = 36, scale = 8)
+    private BigDecimal annualCumulativeLimit;
+
     /** 日最大交易笔数，{@code null} 表示无限制。 */
     @Column(name = "daily_max_transaction_count")
     private Integer dailyMaxTransactionCount;
@@ -102,6 +110,16 @@ public class MerchantLimitConfig {
     public BigDecimal getMonthlyAccumulatedMaxAmount() { return monthlyAccumulatedMaxAmount; }
     public void setMonthlyAccumulatedMaxAmount(BigDecimal monthlyAccumulatedMaxAmount) {
         this.monthlyAccumulatedMaxAmount = monthlyAccumulatedMaxAmount;
+    }
+
+    public BigDecimal getAnnualSingleLimit() { return annualSingleLimit; }
+    public void setAnnualSingleLimit(BigDecimal annualSingleLimit) {
+        this.annualSingleLimit = annualSingleLimit;
+    }
+
+    public BigDecimal getAnnualCumulativeLimit() { return annualCumulativeLimit; }
+    public void setAnnualCumulativeLimit(BigDecimal annualCumulativeLimit) {
+        this.annualCumulativeLimit = annualCumulativeLimit;
     }
 
     public Integer getDailyMaxTransactionCount() { return dailyMaxTransactionCount; }

@@ -36,4 +36,14 @@ public interface WebhookDeliveryRepository extends JpaRepository<WebhookDelivery
 
     /** 按支付 ID + 状态查询（去重：同一支付同一状态只投递一次）。 */
     Optional<WebhookDeliveryRecord> findByPaymentIdAndStatus(String paymentId, String status);
+
+    /**
+     * 按 deliveryId + eventId 查询（Wave 8-A5 幂等校验）。
+     * eventId 存储在 payload 的 "event" 字段中，此处通过 deliveryId 关联查询。
+     */
+    Optional<WebhookDeliveryRecord> findByDeliveryIdAndPaymentId(String deliveryId, String paymentId);
+
+    /** 查询已成功投递的记录（幂等校验：避免重复投递）。 */
+    Optional<WebhookDeliveryRecord> findByPaymentIdAndStatusAndDeliveryId(
+            String paymentId, String status, String deliveryId);
 }

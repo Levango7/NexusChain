@@ -50,14 +50,15 @@ import java.util.UUID;
  *
  * <p>设计要点：
  * <ul>
- *   <li>幂等：同一支付 + 同一状态只投递一次（通过 deliveryId 去重）</li>
+ *   <li>幂等（Wave 8-A5 增强）：同一支付 + 同一状态事件只投递一次（通过 deliveryId + eventId 去重）</li>
+ *   <li>At-least-once 投递保证（Wave 8-A5）：投递前检查是否已成功投递，避免重复投递；投递失败自动触发重试</li>
  *   <li>可观测：每次投递/重试/死信都更新数据库记录，便于查询</li>
  *   <li>解耦：{@link WebhookRetryService}（重试策略）、{@link WebhookSignatureService}（签名）、
  *       {@link DeadLetterSender}（死信队列）均可独立替换</li>
  *   <li>测试友好：构造器注入所有依赖，便于 Mock</li>
  * </ul>
  *
- * @since Phase 4 - P4-T5 Webhook 重试与死信队列增强
+ * @since Phase 4 - P4-T5 Webhook 重试与死信队列增强 / Wave 8-A5 幂等校验增强
  */
 @Service
 public class WebhookDeliveryService {
@@ -163,6 +164,15 @@ public class WebhookDeliveryService {
         if (existing != null) {
             log.debug("Webhook dedup: already delivered paymentId={} status={}", paymentId, statusEvent);
             return existing;
+        }
+
+        // Wave 8-A5 幂等校验：基于 deliveryId + eventId 去重
+        // eventId 即 payload 中的 "event" 字段值（如 "payment.succeeded"）
+        String eventId = payload.get("event") != null ? String.valueOf(payload.get("event")) : statusEvent;
+        if (isAlreadyDelivered(paymentId, eventId)) {
+            log.info("Webhook idempotent skip: paymentId={}, eventId={} already delivered successfully",
+                    paymentId, eventId);
+            return null;
         }
 
         // 创建投递记录
@@ -382,5 +392,61 @@ public class WebhookDeliveryService {
      */
     private boolean shouldSuppressByFinality(String finalityStatusStr) {
         return FinalityLevelUtils.shouldSuppress(finalityStatusStr, finalityThreshold);
+    }
+
+    // ─── Wave 8-A5：幂等校验 + At-least-once 投递保证 ──────────────────────
+
+    /**
+     * 幂等校验：检查同一 paymentId + eventId 是否已成功投递过。
+     *
+     * <p>At-least-once 投递保证的核心：投递前检查是否已有 DELIVERED 状态的记录，
+     * 若已成功投递则跳过，避免重复投递。投递失败后由 {@link #executeWithRetry}
+     * 自动触发重试流程，确保消息至少投递一次。
+     *
+     * @param paymentId 支付 ID
+     * @param eventId   事件 ID（payload 中的 "event" 字段值）
+     * @return {@code true} 若已成功投递过（应跳过）；{@code false} 若未投递过（可投递）
+     */
+    public boolean isAlreadyDelivered(String paymentId, String eventId) {
+        // 查找该 paymentId + eventId 对应的 DELIVERED 记录
+        // eventId 在 payload JSON 中，通过 findByPaymentIdAndStatus 查询（status=event）
+        WebhookDeliveryRecord delivered = repository
+                .findByPaymentIdAndStatus(paymentId, eventId).orElse(null);
+        if (delivered != null && delivered.getStatus() == WebhookDeliveryStatus.DELIVERED) {
+            log.debug("Idempotent check: paymentId={}, eventId={} already DELIVERED (deliveryId={})",
+                    paymentId, eventId, delivered.getDeliveryId());
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * At-least-once 投递保证：投递失败后自动触发重试流程。
+     *
+     * <p>此方法为 {@link #executeWithRetry} 的公开入口，供外部调度器
+     * （如定时任务、消息队列消费者）在检测到失败投递后调用，确保消息至少投递一次。
+     *
+     * @param deliveryId 投递 ID
+     * @return 投递记录（最终状态：DELIVERED 或 DEAD_LETTER）；若记录不存在返回 null
+     */
+    public WebhookDeliveryRecord retryDelivery(String deliveryId) {
+        WebhookDeliveryRecord record = repository.findById(deliveryId).orElse(null);
+        if (record == null) {
+            log.warn("Retry delivery: record not found, deliveryId={}", deliveryId);
+            return null;
+        }
+
+        // 幂等校验：若已成功投递，不再重试
+        if (record.getStatus() == WebhookDeliveryStatus.DELIVERED) {
+            log.info("Retry delivery skipped: already DELIVERED, deliveryId={}", deliveryId);
+            return record;
+        }
+
+        // 状态转为 RETRYING
+        record.setStatus(WebhookDeliveryStatus.RETRYING);
+        record = repository.save(record);
+
+        Map<String, Object> payload = deserializePayload(record.getPayload());
+        return executeWithRetry(record, payload);
     }
 }

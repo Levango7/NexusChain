@@ -24,6 +24,7 @@ class SplitServiceTest {
 
     private SplitRuleRepository splitRuleRepository;
     private SplitOrderRepository splitOrderRepository;
+    private TieredSplitRuleRepository tieredSplitRuleRepository;
     private MerchantOwnershipGuard ownershipGuard;
     private SplitService splitService;
 
@@ -34,8 +35,9 @@ class SplitServiceTest {
     void setUp() {
         splitRuleRepository = mock(SplitRuleRepository.class);
         splitOrderRepository = mock(SplitOrderRepository.class);
+        tieredSplitRuleRepository = mock(TieredSplitRuleRepository.class);
         ownershipGuard = mock(MerchantOwnershipGuard.class);
-        splitService = new SplitService(splitRuleRepository, splitOrderRepository, ownershipGuard);
+        splitService = new SplitService(splitRuleRepository, splitOrderRepository, tieredSplitRuleRepository, ownershipGuard);
     }
 
     // ==================== createSplitRule ====================
@@ -356,5 +358,198 @@ class SplitServiceTest {
 
         assertThrows(IllegalArgumentException.class, () ->
                 splitService.deactivateSplitRule(1L, MERCHANT_ID));
+    }
+
+    // ==================== 阶梯分账 ====================
+
+    @Test
+    @DisplayName("createTieredSplitRule：创建阶梯分账规则 — 成功")
+    void createTieredSplitRuleSuccess() {
+        when(tieredSplitRuleRepository.findByMerchantIdAndActiveTrueOrderByTierOrderAsc(MERCHANT_ID))
+                .thenReturn(List.of());
+        when(tieredSplitRuleRepository.save(any(TieredSplitRule.class))).thenAnswer(inv -> {
+            TieredSplitRule rule = inv.getArgument(0);
+            rule.setId(1L);
+            return rule;
+        });
+
+        TieredSplitRule rule = splitService.createTieredSplitRule(
+                MERCHANT_ID, RECEIVER_ADDR,
+                BigDecimal.ZERO, new BigDecimal("1000"),
+                new BigDecimal("1000"), "0-1000元区间分账10%");
+
+        assertNotNull(rule);
+        assertEquals(MERCHANT_ID, rule.getMerchantId());
+        assertEquals(RECEIVER_ADDR, rule.getReceiverAddress());
+        assertEquals(BigDecimal.ZERO, rule.getTierMinAmount());
+        assertEquals(new BigDecimal("1000"), rule.getTierMaxAmount());
+        assertEquals(new BigDecimal("1000"), rule.getSplitRatio());
+        assertTrue(rule.isActive());
+        assertEquals(0, rule.getTierOrder());
+    }
+
+    @Test
+    @DisplayName("createTieredSplitRule：splitRatio > 10000 — 抛出异常")
+    void createTieredSplitRuleRatioExceedsMax() {
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () ->
+                splitService.createTieredSplitRule(
+                        MERCHANT_ID, RECEIVER_ADDR,
+                        BigDecimal.ZERO, new BigDecimal("1000"),
+                        new BigDecimal("10001"), "超额"));
+
+        assertTrue(ex.getMessage().contains("must be <= 10000"));
+    }
+
+    @Test
+    @DisplayName("createTieredSplitRule：tierMaxAmount <= tierMinAmount — 抛出异常")
+    void createTieredSplitRuleInvalidTierRange() {
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () ->
+                splitService.createTieredSplitRule(
+                        MERCHANT_ID, RECEIVER_ADDR,
+                        new BigDecimal("1000"), new BigDecimal("500"),
+                        new BigDecimal("1000"), "无效区间"));
+
+        assertTrue(ex.getMessage().contains("tierMaxAmount must be > tierMinAmount"));
+    }
+
+    @Test
+    @DisplayName("createTieredSplitRule：区间重叠 — 抛出异常")
+    void createTieredSplitRuleOverlap() {
+        TieredSplitRule existing = new TieredSplitRule();
+        existing.setId(1L);
+        existing.setTierMinAmount(BigDecimal.ZERO);
+        existing.setTierMaxAmount(new BigDecimal("1000"));
+
+        when(tieredSplitRuleRepository.findByMerchantIdAndActiveTrueOrderByTierOrderAsc(MERCHANT_ID))
+                .thenReturn(List.of(existing));
+
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () ->
+                splitService.createTieredSplitRule(
+                        MERCHANT_ID, RECEIVER_ADDR,
+                        new BigDecimal("500"), new BigDecimal("1500"),
+                        new BigDecimal("800"), "重叠区间"));
+
+        assertTrue(ex.getMessage().contains("overlaps"));
+    }
+
+    @Test
+    @DisplayName("calculateTieredSplits：匹配第一阶梯（0-1000元，10%）— 金额正确")
+    void calculateTieredSplitsFirstTier() {
+        TieredSplitRule rule1 = new TieredSplitRule();
+        rule1.setId(1L);
+        rule1.setReceiverAddress(RECEIVER_ADDR);
+        rule1.setTierMinAmount(BigDecimal.ZERO);
+        rule1.setTierMaxAmount(new BigDecimal("1000"));
+        rule1.setSplitRatio(new BigDecimal("1000")); // 10%
+        rule1.setTierOrder(0);
+
+        TieredSplitRule rule2 = new TieredSplitRule();
+        rule2.setId(2L);
+        rule2.setReceiverAddress(RECEIVER_ADDR);
+        rule2.setTierMinAmount(new BigDecimal("1000"));
+        rule2.setTierMaxAmount(new BigDecimal("10000"));
+        rule2.setSplitRatio(new BigDecimal("800")); // 8%
+        rule2.setTierOrder(1);
+
+        when(tieredSplitRuleRepository.findByMerchantIdAndActiveTrueOrderByTierOrderAsc(MERCHANT_ID))
+                .thenReturn(List.of(rule1, rule2));
+
+        List<SplitOrder> splits = splitService.calculateTieredSplits(
+                "ORD-001", 1001L, MERCHANT_ID, new BigDecimal("500"));
+
+        assertEquals(1, splits.size());
+        // 500 * 1000 / 10000 = 50
+        assertEquals(new BigDecimal("50.00000000"), splits.get(0).getAmount());
+        assertEquals(SplitRule.SplitType.RATIO, splits.get(0).getSplitType());
+    }
+
+    @Test
+    @DisplayName("calculateTieredSplits：匹配第二阶梯（1000-10000元，8%）— 金额正确")
+    void calculateTieredSplitsSecondTier() {
+        TieredSplitRule rule1 = new TieredSplitRule();
+        rule1.setId(1L);
+        rule1.setReceiverAddress(RECEIVER_ADDR);
+        rule1.setTierMinAmount(BigDecimal.ZERO);
+        rule1.setTierMaxAmount(new BigDecimal("1000"));
+        rule1.setSplitRatio(new BigDecimal("1000")); // 10%
+        rule1.setTierOrder(0);
+
+        TieredSplitRule rule2 = new TieredSplitRule();
+        rule2.setId(2L);
+        rule2.setReceiverAddress(RECEIVER_ADDR);
+        rule2.setTierMinAmount(new BigDecimal("1000"));
+        rule2.setTierMaxAmount(new BigDecimal("10000"));
+        rule2.setSplitRatio(new BigDecimal("800")); // 8%
+        rule2.setTierOrder(1);
+
+        when(tieredSplitRuleRepository.findByMerchantIdAndActiveTrueOrderByTierOrderAsc(MERCHANT_ID))
+                .thenReturn(List.of(rule1, rule2));
+
+        List<SplitOrder> splits = splitService.calculateTieredSplits(
+                "ORD-001", 1001L, MERCHANT_ID, new BigDecimal("5000"));
+
+        assertEquals(1, splits.size());
+        // 5000 * 800 / 10000 = 400
+        assertEquals(new BigDecimal("400.00000000"), splits.get(0).getAmount());
+    }
+
+    @Test
+    @DisplayName("calculateTieredSplits：匹配最高阶梯（10000+元，5%，无上限）— 金额正确")
+    void calculateTieredSplitsTopTierNoUpperBound() {
+        TieredSplitRule rule = new TieredSplitRule();
+        rule.setId(1L);
+        rule.setReceiverAddress(RECEIVER_ADDR);
+        rule.setTierMinAmount(new BigDecimal("10000"));
+        rule.setTierMaxAmount(null); // 无上限
+        rule.setSplitRatio(new BigDecimal("500")); // 5%
+        rule.setTierOrder(0);
+
+        when(tieredSplitRuleRepository.findByMerchantIdAndActiveTrueOrderByTierOrderAsc(MERCHANT_ID))
+                .thenReturn(List.of(rule));
+
+        List<SplitOrder> splits = splitService.calculateTieredSplits(
+                "ORD-001", 1001L, MERCHANT_ID, new BigDecimal("50000"));
+
+        assertEquals(1, splits.size());
+        // 50000 * 500 / 10000 = 2500
+        assertEquals(new BigDecimal("2500.00000000"), splits.get(0).getAmount());
+    }
+
+    @Test
+    @DisplayName("calculateTieredSplits：无阶梯规则时返回空列表")
+    void calculateTieredSplitsNoRulesReturnsEmpty() {
+        when(tieredSplitRuleRepository.findByMerchantIdAndActiveTrueOrderByTierOrderAsc(MERCHANT_ID))
+                .thenReturn(List.of());
+
+        List<SplitOrder> splits = splitService.calculateTieredSplits(
+                "ORD-001", 1001L, MERCHANT_ID, new BigDecimal("1000"));
+
+        assertNotNull(splits);
+        assertTrue(splits.isEmpty());
+    }
+
+    @Test
+    @DisplayName("TieredSplitRule.matchesTier：金额在区间内 — 返回 true")
+    void tieredSplitRuleMatchesTier() {
+        TieredSplitRule rule = new TieredSplitRule();
+        rule.setTierMinAmount(new BigDecimal("1000"));
+        rule.setTierMaxAmount(new BigDecimal("10000"));
+
+        assertTrue(rule.matchesTier(new BigDecimal("5000")));
+        assertTrue(rule.matchesTier(new BigDecimal("1000"))); // 左闭
+        assertFalse(rule.matchesTier(new BigDecimal("10000"))); // 右开
+        assertFalse(rule.matchesTier(new BigDecimal("500")));
+    }
+
+    @Test
+    @DisplayName("TieredSplitRule.matchesTier：无上限区间 — 金额 >= tierMin 时返回 true")
+    void tieredSplitRuleMatchesTierNoUpperBound() {
+        TieredSplitRule rule = new TieredSplitRule();
+        rule.setTierMinAmount(new BigDecimal("10000"));
+        rule.setTierMaxAmount(null);
+
+        assertTrue(rule.matchesTier(new BigDecimal("10000")));
+        assertTrue(rule.matchesTier(new BigDecimal("999999")));
+        assertFalse(rule.matchesTier(new BigDecimal("5000")));
     }
 }

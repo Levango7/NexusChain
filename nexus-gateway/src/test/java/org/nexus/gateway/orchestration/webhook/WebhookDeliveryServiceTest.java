@@ -24,13 +24,16 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /**
- * {@link WebhookDeliveryService} 单元测试（P4-T5）。
+ * {@link WebhookDeliveryService} 单元测试（P4-T5 / Wave 8-A5 增强）。
  *
  * <p>验证核心投递流程：
  * <ul>
  *   <li>成功投递：状态 DELIVERED</li>
  *   <li>重试耗尽：状态 DEAD_LETTER，发送到 DLQ</li>
  *   <li>幂等去重：同一 paymentId + statusEvent 不重复投递</li>
+ *   <li>Wave 8-A5 幂等校验：基于 deliveryId + eventId 去重</li>
+ *   <li>Wave 8-A5 At-least-once：投递失败后自动触发重试</li>
+ *   <li>Wave 8-A5 retryDelivery：手动重试入口</li>
  *   <li>空 notifyUrl：跳过投递</li>
  *   <li>HMAC 签名：请求头携带 X-NexusChain-Signature</li>
  *   <li>重投：从死信消息重新投递</li>
@@ -58,8 +61,8 @@ class WebhookDeliveryServiceTest {
         dlqService = new InMemoryDeadLetterQueueService();
         restTemplate = mock(RestTemplate.class);
 
-        // retryService 默认配置：max 8 次，awaitRetry 立即返回（不阻塞测试）
-        when(retryService.getMaxRetries()).thenReturn(8);
+        // retryService 默认配置：max 5 次，awaitRetry 立即返回（不阻塞测试）
+        when(retryService.getMaxRetries()).thenReturn(5);
         when(retryService.awaitRetry(anyInt())).thenReturn(true);
 
         // repository.save 默认返回原记录（模拟 JPA save）
@@ -120,7 +123,6 @@ class WebhookDeliveryServiceTest {
         assertNotNull(signature, "Signature header should be present");
         assertTrue(signature.startsWith("v2:"), "短期项 #4c：投递签名应为 v2（绑定 deliveryId+timestamp）");
 
-        // v2 签名与头中的 deliveryId/timestamp 严格一致（接收方可按头验证）
         String deliveryId = entity.getHeaders().getFirst(WebhookSignatureService.DELIVERY_ID_HEADER);
         String timestamp = entity.getHeaders().getFirst(WebhookSignatureService.TIMESTAMP_HEADER);
         assertNotNull(deliveryId, "v2 签名必须携带 Delivery-Id 头");
@@ -143,13 +145,13 @@ class WebhookDeliveryServiceTest {
 
         assertNotNull(result);
         assertEquals(WebhookDeliveryStatus.DEAD_LETTER, result.getStatus());
-        assertEquals(8, result.getAttemptCount(), "Should attempt 9 times (0-8)");
+        assertEquals(5, result.getAttemptCount(), "Should attempt 6 times (0-5)");
         assertNotNull(result.getDeadLetteredAt());
         assertEquals(1, dlqService.size(), "Should send 1 message to DLQ");
 
         DeadLetterMessage dlqMsg = dlqService.listMessages().get(0);
         assertEquals("pay_002", dlqMsg.getPaymentId());
-        assertEquals(8, dlqMsg.getRetryCount());
+        assertEquals(5, dlqMsg.getRetryCount());
         assertNotNull(dlqMsg.getFailureReason());
     }
 
@@ -232,7 +234,7 @@ class WebhookDeliveryServiceTest {
                 "{\"event\":\"payment.succeeded\",\"payment_id\":\"pay_replay\",\"amount\":10000,\"currency\":\"NEX\"}",
                 "sig123",
                 "Connection refused",
-                8,
+                5,
                 Instant.now().minusSeconds(300),
                 Instant.now(),
                 Instant.now()
@@ -269,5 +271,148 @@ class WebhookDeliveryServiceTest {
         assertEquals(WebhookDeliveryStatus.DEAD_LETTER, result.getStatus());
         assertNotNull(result.getLastError());
         assertTrue(result.getLastError().contains("500"));
+    }
+
+    // ─── Wave 8-A5 新增测试：幂等校验 + At-least-once ──────────────────────
+
+    @Test
+    @DisplayName("isAlreadyDelivered: 已成功投递的记录返回 true")
+    void isAlreadyDelivered_alreadyDelivered_returnsTrue() {
+        WebhookDeliveryRecord delivered = new WebhookDeliveryRecord();
+        delivered.setDeliveryId("d1");
+        delivered.setPaymentId("pay_001");
+        delivered.setStatus(WebhookDeliveryStatus.DELIVERED);
+        when(repository.findByPaymentIdAndStatus("pay_001", "payment.succeeded"))
+                .thenReturn(Optional.of(delivered));
+
+        assertTrue(deliveryService.isAlreadyDelivered("pay_001", "payment.succeeded"));
+    }
+
+    @Test
+    @DisplayName("isAlreadyDelivered: 未投递的记录返回 false")
+    void isAlreadyDelivered_notDelivered_returnsFalse() {
+        when(repository.findByPaymentIdAndStatus("pay_001", "payment.succeeded"))
+                .thenReturn(Optional.empty());
+
+        assertFalse(deliveryService.isAlreadyDelivered("pay_001", "payment.succeeded"));
+    }
+
+    @Test
+    @DisplayName("isAlreadyDelivered: RETRYING 状态的记录返回 false（未成功投递）")
+    void isAlreadyDelivered_retryingStatus_returnsFalse() {
+        WebhookDeliveryRecord retrying = new WebhookDeliveryRecord();
+        retrying.setDeliveryId("d1");
+        retrying.setPaymentId("pay_001");
+        retrying.setStatus(WebhookDeliveryStatus.RETRYING);
+        when(repository.findByPaymentIdAndStatus("pay_001", "payment.succeeded"))
+                .thenReturn(Optional.of(retrying));
+
+        assertFalse(deliveryService.isAlreadyDelivered("pay_001", "payment.succeeded"));
+    }
+
+    @Test
+    @DisplayName("isAlreadyDelivered: DEAD_LETTER 状态的记录返回 false（未成功投递）")
+    void isAlreadyDelivered_deadLetterStatus_returnsFalse() {
+        WebhookDeliveryRecord deadLetter = new WebhookDeliveryRecord();
+        deadLetter.setDeliveryId("d1");
+        deadLetter.setPaymentId("pay_001");
+        deadLetter.setStatus(WebhookDeliveryStatus.DEAD_LETTER);
+        when(repository.findByPaymentIdAndStatus("pay_001", "payment.succeeded"))
+                .thenReturn(Optional.of(deadLetter));
+
+        assertFalse(deliveryService.isAlreadyDelivered("pay_001", "payment.succeeded"));
+    }
+
+    @Test
+    @DisplayName("deliver: 幂等校验跳过已成功投递的 eventId")
+    void deliver_idempotentSkip_alreadyDeliveredEvent() {
+        // 第一次查询（findByPaymentIdAndStatus）返回空（没有已投递记录）
+        // 但第二次查询（幂等校验 isAlreadyDelivered）返回 DELIVERED 记录
+        WebhookDeliveryRecord delivered = new WebhookDeliveryRecord();
+        delivered.setDeliveryId("d_existing");
+        delivered.setPaymentId("pay_007");
+        delivered.setStatus(WebhookDeliveryStatus.DELIVERED);
+
+        when(repository.findByPaymentIdAndStatus(eq("pay_007"), eq("payment.succeeded")))
+                .thenReturn(Optional.empty())       // 第一次：去重检查（没有已投递记录）
+                .thenReturn(Optional.of(delivered)); // 第二次：幂等校验（发现已成功投递）
+
+        WebhookDeliveryRecord result = deliveryService.deliver(
+                "pay_007", 1001L, "https://merchant.example/webhook",
+                samplePayload(), "payment.succeeded");
+
+        assertNull(result, "Should skip delivery when already delivered (idempotent)");
+        verify(restTemplate, never()).exchange(anyString(), any(HttpMethod.class), any(HttpEntity.class), any(Class.class));
+    }
+
+    @Test
+    @DisplayName("retryDelivery: 手动重试失败投递，成功后状态 DELIVERED")
+    void retryDelivery_success() {
+        WebhookDeliveryRecord failedRecord = new WebhookDeliveryRecord();
+        failedRecord.setDeliveryId("d_retry_001");
+        failedRecord.setPaymentId("pay_retry");
+        failedRecord.setMerchantId(1001L);
+        failedRecord.setNotifyUrl("https://merchant.example/webhook");
+        failedRecord.setPayload("{\"event\":\"payment.succeeded\",\"payment_id\":\"pay_retry\"}");
+        failedRecord.setSignature("sig123");
+        failedRecord.setStatus(WebhookDeliveryStatus.RETRYING);
+        failedRecord.setAttemptCount(2);
+
+        when(repository.findById("d_retry_001")).thenReturn(Optional.of(failedRecord));
+        when(restTemplate.exchange(anyString(), any(HttpMethod.class), any(HttpEntity.class), any(Class.class)))
+                .thenReturn(new ResponseEntity<>("{}", HttpStatus.OK));
+
+        WebhookDeliveryRecord result = deliveryService.retryDelivery("d_retry_001");
+
+        assertNotNull(result);
+        assertEquals(WebhookDeliveryStatus.DELIVERED, result.getStatus());
+    }
+
+    @Test
+    @DisplayName("retryDelivery: 记录不存在返回 null")
+    void retryDelivery_notFound_returnsNull() {
+        when(repository.findById("nonexistent")).thenReturn(Optional.empty());
+
+        assertNull(deliveryService.retryDelivery("nonexistent"));
+    }
+
+    @Test
+    @DisplayName("retryDelivery: 已 DELIVERED 的记录跳过重试")
+    void retryDelivery_alreadyDelivered_skips() {
+        WebhookDeliveryRecord delivered = new WebhookDeliveryRecord();
+        delivered.setDeliveryId("d_delivered");
+        delivered.setStatus(WebhookDeliveryStatus.DELIVERED);
+
+        when(repository.findById("d_delivered")).thenReturn(Optional.of(delivered));
+
+        WebhookDeliveryRecord result = deliveryService.retryDelivery("d_delivered");
+
+        assertNotNull(result);
+        assertEquals(WebhookDeliveryStatus.DELIVERED, result.getStatus());
+        verify(restTemplate, never()).exchange(anyString(), any(HttpMethod.class), any(HttpEntity.class), any(Class.class));
+    }
+
+    @Test
+    @DisplayName("retryDelivery: 重试耗尽后转入死信队列")
+    void retryDelivery_retryExhausted_deadLettered() {
+        WebhookDeliveryRecord failedRecord = new WebhookDeliveryRecord();
+        failedRecord.setDeliveryId("d_retry_fail");
+        failedRecord.setPaymentId("pay_retry_fail");
+        failedRecord.setMerchantId(1001L);
+        failedRecord.setNotifyUrl("https://merchant.example/webhook");
+        failedRecord.setPayload("{\"event\":\"payment.succeeded\",\"payment_id\":\"pay_retry_fail\"}");
+        failedRecord.setSignature("sig123");
+        failedRecord.setStatus(WebhookDeliveryStatus.RETRYING);
+        failedRecord.setAttemptCount(2);
+
+        when(repository.findById("d_retry_fail")).thenReturn(Optional.of(failedRecord));
+        when(restTemplate.exchange(anyString(), any(HttpMethod.class), any(HttpEntity.class), any(Class.class)))
+                .thenThrow(new RuntimeException("Connection refused"));
+
+        WebhookDeliveryRecord result = deliveryService.retryDelivery("d_retry_fail");
+
+        assertNotNull(result);
+        assertEquals(WebhookDeliveryStatus.DEAD_LETTER, result.getStatus());
+        assertEquals(1, dlqService.size(), "Should send to DLQ");
     }
 }
