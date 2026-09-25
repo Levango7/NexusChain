@@ -72,6 +72,38 @@ HIGH 修复：
 - **H-2/H-3**：FundReportService 使用 ObjectMapper 序列化 JSON，新增 escapeCsvField 方法转义 CSV 特殊字符
 - **H-6/H-7**：FundTransferController/ReserveFundController 添加 parseAccountType 辅助方法，处理 AccountType.valueOf 非法输入
 
+**代码审查 MEDIUM 修复（commit `6dbd72e`，2026-09-26）— 安全/输入验证/事务安全**
+
+安全修复：
+- RiskLinkController / ReconciliationLinkController 添加 @PreAuthorize（类级 + approve/reject 端点限制 ADMIN 角色）
+- FundTransferController / ReserveFundController / AutoWithdrawController / FundReportController / FundDashboardController 添加类级 @PreAuthorize("isAuthenticated()")
+- reviewerId / approvedBy 改为从 SecurityContext 获取，防止伪造
+
+功能缺陷修复：
+- RiskAccountLinkListener.determineFreezeAmount 实现余额查询，修复冻结联动失效
+- TransactionAuditService 审计按 auditDate 过滤差错记录，设置缺失的统计字段
+- LargeTransactionInterceptionListener 使用 orderNo 作为 riskEventId，修复幂等检查跳过
+
+事务安全修复：
+- RiskAccountLinkService.execute* 方法重构：外层不带 @Transactional + 内层 doExecute* + REQUIRES_NEW 失败记录
+- FundDashboardService 缓存：HashMap → ConcurrentHashMap，添加大小限制
+
+输入验证修复：
+- AccountService.creditOnPayment/debitOnRefund 添加金额校验
+- AccountService.changeStatus 添加状态转换合法性校验（CLOSED 不可回退）
+- Controller Map<String,Object> 请求体添加 null 检查
+- FundReportController 分页参数添加上限，FundDashboardController 趋势天数添加上限
+
+性能修复：
+- LargeTransactionInterceptionService 幂等检查改为 findByRiskEventId 直接查询
+- ReconciliationAdjustmentService N+1 查询优化为批量查询
+- BalanceAlertNotifier 重试简化：最大 2 次，固定 1 秒退避
+
+代码质量修复：
+- TransferRuleEventListener 删除与 FundTransferService 重复的方法，改为委托调用
+- ClearingSettlementRecord 添加 @Version 乐观锁
+- CollectionStrategyService 使用常量替代硬编码字符串
+
 ### Payment Orchestration Wave 10（2026-09-25）
 
 #### Wave 10: P0 核心资金能力
