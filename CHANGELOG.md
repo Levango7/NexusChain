@@ -4,6 +4,66 @@
 
 ## [Unreleased]
 
+### Payment Orchestration Wave 10（2026-09-25）
+
+#### Wave 10: P0 核心资金能力
+
+**资金账户体系（`account` 包）**
+- **商户虚拟账户**：MerchantAccount 实体，支持 BALANCE（可用余额）/FROZEN（冻结资金）/RESERVE（备付金）三种账户类型，使用 @Version 乐观锁保证并发安全
+- **账户流水审计**：AccountTransaction 不可篡改审计流水，记录每笔余额变更的操作前/后余额，确保资金可追溯
+- **账户服务**：AccountService 提供充值（deposit）、提现（withdraw）、冻结（freeze）、解冻（unfreeze）、转账（transfer）、余额查询（getBalance）、支付联动入账（creditOnPayment）、退款联动扣减（debitOnRefund）
+- **账户 API**：AccountController REST API（余额查询/充值/提现/冻结/解冻/流水查询），所有端点均配置 @PreAuthorize 权限控制
+- **余额变更事件**：AccountBalanceChangedEvent 供清算引擎/对账模块/分账模块消费
+
+**分布式事务框架（`transaction` 包）**
+- **TCC 事务管理器**：TccTransactionManager 实现 Try/Confirm/Cancel 三阶段编排，支持重试和幂等
+- **SAGA 事务管理器**：SagaTransactionManager 实现编排式 SAGA，支持逆向补偿
+- **事务日志**：TransactionLog 持久化事务步骤日志，供恢复调度器使用
+- **超时恢复调度**：TransactionRecoveryScheduler 定时扫描超时事务，标记 FAILED 状态
+- **TCC Action 接口**：TccAction 定义 Try/Confirm/Cancel 三个阶段的参与者接口
+
+**交易撤销与冲正（`voidreversal` 包）**
+- **当日撤销**：VoidService 实现撤销窗口检查（T+1 日 24:00 前），联动 AccountService 扣减商户余额
+- **隔日冲正**：ReversalService 实现隔日冲正，联动 AccountService 调整余额
+- **自动冲正调度**：AutoReversalScheduler 定时扫描异常订单触发自动冲正
+- **撤销/冲正 API**：VoidReversalController REST API（创建/查询/审批/拒绝），审批端点配置 @PreAuthorize("hasRole('ADMIN')")
+- **撤销/冲正事件**：OrderVoidedEvent/OrderReversedEvent
+
+**担保交易/预授权（`escrow` 包）**
+- **担保交易**：EscrowTransaction 完整生命周期（CREATED→FUNDED→CONFIRMED→RELEASED/REFUNDED），通过 AccountService 冻结/解冻/转入资金
+- **预授权**：PreAuthTransaction 完整生命周期（AUTHORIZED→CAPTURED/VOIDED），支持部分扣款和撤销释放
+- **超时自动处理**：EscrowTimeoutScheduler 定时扫描超时担保交易（自动确认）和超时预授权（自动释放）
+- **担保交易 API**：EscrowController REST API（创建/查询/确认收货/退款/预授权创建/扣款/撤销），退款端点配置 @PreAuthorize("hasRole('ADMIN')")
+- **状态变更事件**：EscrowStatusChangedEvent/PreAuthStatusChangedEvent
+
+**现有文件修改**
+- **PaymentEventListener**：集成 AccountService，支付确认时 creditOnPayment() 增加商户余额，退款时 debitOnRefund() 扣减商户余额
+- **PaymentServiceImpl**：集成 TccTransactionManager，支付确认流程使用 TCC 分布式事务保障
+- **PaymentOrder.OrderStatus**：扩展 VOIDED/REVERSED 状态
+- **OrderStateMachine**：扩展 PAID→VOIDED、PAID→REVERSED 状态转换
+- **ArchitectureRulesTest**：添加 account↔event 循环依赖豁免（AccountBalanceChangedEvent 继承 PaymentEvent + PaymentEventListener 注入 AccountService）
+
+**Flyway Migrations**
+- V44：merchant_accounts 表（商户虚拟账户）
+- V45：account_transactions 表（账户流水审计）
+- V46：transaction_logs 表（分布式事务日志）
+- V47：void_requests + reversal_requests 表（撤销/冲正请求）
+- V48：escrow_transactions + preauth_transactions 表（担保交易/预授权）
+- V49：payment_orders 表 status 字段扩展（VOIDED/REVERSED）
+
+**代码审查修复**
+- 三个新增 Controller（AccountController/VoidReversalController/EscrowController）全部添加 @PreAuthorize 权限控制
+- AccountController 添加 NumberFormatException/NullPointerException 异常处理器
+- VoidService 修复撤销与退款互斥校验逻辑顺序（退款状态检查移至 PAID 状态检查之前）
+- MerchantAccountRepository 修复 findByAccountIdForUpdate 方法名不符合 Spring Data JPA 命名约定的问题（改为 @Query + findLockedByAccountId）
+
+**已知待优化项（代码审查识别，后续迭代处理）**
+- 撤销/冲正使用 withdraw() 而非专用反向操作类型（AccountOperationType.VOID_REVERSE 已定义但未使用）
+- 乐观锁重试与 @Transactional 事务边界冲突（重试需在新事务中执行）
+- TransactionRecoveryScheduler 仅标记状态不执行实际恢复操作
+- PaymentEventListener 账户联动失败被静默吞掉（需引入告警机制）
+- EscrowController 缺少 fundEscrow 端点（担保交易创建后无法触发 FUNDED 状态）
+
 ### Payment Orchestration Wave 1-6（2026-09-22 ~ 2026-09-24）
 
 #### Wave 1: 支付核心

@@ -138,7 +138,11 @@ public class PaymentOrder {
     // --- Enumerations ---
 
     public enum OrderStatus {
-        PENDING, PAYING, SUBMITTED, PAID, REORGED, EXPIRED, REFUNDED, FAILED, REFUND_PENDING
+        PENDING, PAYING, SUBMITTED, PAID, REORGED, EXPIRED, REFUNDED, FAILED, REFUND_PENDING,
+        /** 已撤销 — 当日撤销成功（T+1 日 24:00 前），终态 */
+        VOIDED,
+        /** 已冲正 — 隔日冲正成功（已结算交易），终态 */
+        REVERSED
     }
 
     // --- Getters and Setters ---

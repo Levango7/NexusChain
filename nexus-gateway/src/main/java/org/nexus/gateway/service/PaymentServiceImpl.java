@@ -39,10 +39,15 @@ import org.nexus.gateway.model.FinalityStatus;
 import org.nexus.gateway.execution.ExecutionRequest;
 import org.nexus.gateway.execution.OnChainResult;
 import org.nexus.gateway.execution.ThreePhaseExecutionTemplate;
+import org.nexus.gateway.transaction.TccAction;
+import org.nexus.gateway.transaction.TccTransactionManager;
+import org.nexus.gateway.transaction.TransactionContext;
 import org.nexus.analytics.event.PaymentCompletedEvent;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDateTime;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -77,6 +82,8 @@ public class PaymentServiceImpl implements PaymentService {
     private final WalletAddressHelper walletAddressHelper;
     /** 支付最终性推导服务（NexFinality 网关侧原型）。可为 null（测试环境降级）。 */
     private final FinalityService finalityService;
+    /** TCC 分布式事务管理器（Wave 10）。可为 null（测试环境降级）。 */
+    private final TccTransactionManager tccTransactionManager;
 
     @Autowired
     public PaymentServiceImpl(PaymentOrderRepository orderRepository,
@@ -92,7 +99,8 @@ public class PaymentServiceImpl implements PaymentService {
                               Tracer tracer,
                               ThreePhaseExecutionTemplate threePhaseTemplate,
                               WalletAddressHelper walletAddressHelper,
-                              @Autowired(required = false) FinalityService finalityService) {
+                              @Autowired(required = false) FinalityService finalityService,
+                              @Autowired(required = false) TccTransactionManager tccTransactionManager) {
         this.orderRepository = orderRepository;
         this.refundRepository = refundRepository;
         this.gatewayConfig = gatewayConfig;
@@ -107,6 +115,7 @@ public class PaymentServiceImpl implements PaymentService {
         this.threePhaseTemplate = threePhaseTemplate;
         this.walletAddressHelper = walletAddressHelper;
         this.finalityService = finalityService;
+        this.tccTransactionManager = tccTransactionManager;
     }
 
     /**
@@ -129,7 +138,7 @@ public class PaymentServiceImpl implements PaymentService {
                               ComplianceService complianceService) {
         this(orderRepository, refundRepository, gatewayConfig, chainRpcClient,
                 signingServiceClient, walletMgmtClient, eventPublisher, keyManager,
-                riskService, complianceService, null, null, null, null);
+                riskService, complianceService, null, null, null, null, null);
     }
 
     /**
@@ -148,7 +157,7 @@ public class PaymentServiceImpl implements PaymentService {
                               Tracer tracer) {
         this(orderRepository, refundRepository, gatewayConfig, chainRpcClient,
                 signingServiceClient, walletMgmtClient, eventPublisher, keyManager,
-                riskService, complianceService, tracer, null, null, null);
+                riskService, complianceService, tracer, null, null, null, null);
     }
 
     @Override
@@ -369,6 +378,99 @@ public class PaymentServiceImpl implements PaymentService {
             }
 
             order.setChainTxHash(chainTxHash);
+
+            // === Wave 10: TCC 分布式事务包裹支付确认 ===
+            // Try：锁定订单状态（PAYING → SUBMITTED）
+            // Confirm：确认支付（SUBMITTED → PAID），发布事件
+            // Cancel：释放锁定（SUBMITTED → FAILED）
+            if (tccTransactionManager != null) {
+                Map<String, Object> payload = new HashMap<>();
+                payload.put("orderId", orderId);
+                payload.put("orderNo", order.getOrderNo());
+                payload.put("merchantId", order.getMerchantId());
+                payload.put("chainTxHash", chainTxHash);
+                payload.put("businessReference", order.getOrderNo());
+
+                TransactionContext tccCtx = TransactionContext.create(
+                        "confirmPayment", payload, order.getTenantId());
+
+                final PaymentOrder tccOrder = order;
+                final String tccChainTxHash = chainTxHash;
+                final BusinessSpan tccConfirmSpan = confirmSpan;
+
+                TccAction paymentConfirmAction = new TccAction() {
+                    @Override
+                    public boolean tryAction(TransactionContext ctx) {
+                        // Try：锁定订单状态（PAYING → SUBMITTED）
+                        OrderStateMachine.transition(tccOrder, PaymentOrder.OrderStatus.SUBMITTED);
+                        orderRepository.save(tccOrder);
+                        log.info("TCC Try: order locked, orderNo={}", tccOrder.getOrderNo());
+                        return true;
+                    }
+
+                    @Override
+                    public void confirmAction(TransactionContext ctx) {
+                        // Confirm：确认支付（SUBMITTED → PAID）
+                        OrderStateMachine.transition(tccOrder, PaymentOrder.OrderStatus.PAID);
+                        tccOrder.setPaidAt(LocalDateTime.now());
+
+                        // 关联最终性状态
+                        if (finalityService != null) {
+                            FinalityService.FinalityInfo finalityInfo = finalityService.getFinality(tccChainTxHash);
+                            tccOrder.setFinalityStatus(finalityInfo.status());
+                        } else {
+                            tccOrder.setFinalityStatus(FinalityStatus.UNKNOWN);
+                        }
+
+                        orderRepository.save(tccOrder);
+                        log.info("TCC Confirm: payment confirmed, orderNo={}, txHash={}",
+                                tccOrder.getOrderNo(), tccChainTxHash);
+
+                        // 发布支付确认事件
+                        eventPublisher.publishEvent(new PaymentConfirmedEvent(
+                                this, tccOrder.getId(), tccOrder.getOrderNo(), tccOrder.getMerchantId(),
+                                tccChainTxHash, tccOrder.getPayerAddress(),
+                                tccOrder.getAmount().toPlainString(),
+                                tccOrder.getFinalityStatus()));
+
+                        // 发布 PaymentCompletedEvent 供 analytics 采集
+                        eventPublisher.publishEvent(new PaymentCompletedEvent(
+                                this,
+                                tccOrder.getId(),
+                                tccOrder.getAmount(),
+                                tccOrder.getTokenSymbol(),
+                                "NEXUS-CORE",
+                                tccOrder.getMerchantId(),
+                                tccChainTxHash,
+                                tccOrder.getPayerAddress(),
+                                tccOrder.getPayeeAddress(),
+                                Instant.now(),
+                                0L,
+                                0));
+                    }
+
+                    @Override
+                    public void cancelAction(TransactionContext ctx) {
+                        // Cancel：释放锁定（SUBMITTED → FAILED）
+                        OrderStateMachine.transition(tccOrder, PaymentOrder.OrderStatus.FAILED);
+                        orderRepository.save(tccOrder);
+                        log.warn("TCC Cancel: order released, orderNo={}", tccOrder.getOrderNo());
+                    }
+                };
+
+                boolean tccResult = tccTransactionManager.execute(paymentConfirmAction, tccCtx);
+
+                if (tccResult) {
+                    tccConfirmSpan.attr("payment.status", "PAID").success();
+                    return PaymentResult.success(order.getOrderNo(), chainTxHash, order.getPaidAt());
+                } else {
+                    tccConfirmSpan.attr("payment.status", "FAILED").error(null);
+                    return PaymentResult.failed(order.getOrderNo(),
+                            "Payment confirmation failed in TCC transaction");
+                }
+            }
+
+            // === 非 TCC 模式（测试环境/降级）：保持原有逻辑 ===
             OrderStateMachine.transition(order, PaymentOrder.OrderStatus.PAID);
             order.setPaidAt(LocalDateTime.now());
 

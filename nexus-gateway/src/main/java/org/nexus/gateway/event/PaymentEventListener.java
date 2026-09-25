@@ -1,5 +1,6 @@
 package org.nexus.gateway.event;
 
+import org.nexus.gateway.account.AccountService;
 import org.nexus.gateway.config.GatewayConfig;
 import org.nexus.gateway.model.PaymentOrder;
 import org.nexus.gateway.orchestration.settlement.FinalityLevelUtils;
@@ -20,6 +21,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
@@ -56,6 +58,15 @@ public class PaymentEventListener {
     /** Step 3：Webhook 投递最终性阈值，默认 OPTIMISTIC（向后兼容）。 */
     private final String finalityThreshold;
 
+    /**
+     * Wave 10：账户服务 — 支付确认联动余额增加，退款联动余额减少。
+     *
+     * <p>注入 {@link AccountService}，在监听到 {@link PaymentConfirmedEvent} 时
+     * 调用 {@code creditOnPayment()} 增加商户余额，在监听到 {@link RefundCompletedEvent}
+     * 时调用 {@code debitOnRefund()} 扣减商户余额。</p>
+     */
+    private final AccountService accountService;
+
     /** Deterministic (sorted-key) JSON mapper; must match WebhookController's canonical form. */
     private static final ObjectMapper CANONICAL_MAPPER = new ObjectMapper()
             .configure(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS, true);
@@ -64,23 +75,37 @@ public class PaymentEventListener {
     public PaymentEventListener(GatewayConfig gatewayConfig, RestTemplate restTemplate,
                                 PaymentOrderRepository orderRepository,
                                 WebhookUrlValidator urlValidator,
+                                AccountService accountService,
                                 @Value("${nexus.webhook.finality-threshold:OPTIMISTIC}") String finalityThreshold) {
         this.gatewayConfig = gatewayConfig;
         this.restTemplate = restTemplate;
         this.orderRepository = orderRepository;
         this.urlValidator = urlValidator;
+        this.accountService = accountService;
         this.finalityThreshold = finalityThreshold;
     }
 
     /** 测试用兼容构造器：保留无连接池 RestTemplate，finalityThreshold 默认 OPTIMISTIC。 */
     public PaymentEventListener(GatewayConfig gatewayConfig, PaymentOrderRepository orderRepository) {
-        this(gatewayConfig, new RestTemplate(), orderRepository, new WebhookUrlValidator(), "OPTIMISTIC");
+        this(gatewayConfig, new RestTemplate(), orderRepository, new WebhookUrlValidator(), null, "OPTIMISTIC");
     }
 
     @Async
     @EventListener
     public void onPaymentConfirmed(PaymentConfirmedEvent event) {
         log.info("Event received: {} order={}", event.getEventType(), event.getOrderNo());
+
+        // Wave 10：支付确认联动商户余额增加
+        try {
+            if (accountService != null && event.getAmount() != null) {
+                BigDecimal amount = new BigDecimal(event.getAmount());
+                accountService.creditOnPayment(event.getMerchantId(), amount, event.getOrderNo());
+            }
+        } catch (Exception e) {
+            log.error("支付确认联动余额增加失败: orderNo={}, merchantId={}, error={}",
+                    event.getOrderNo(), event.getMerchantId(), e.getMessage(), e);
+        }
+
         Map<String, Object> payload = new HashMap<>();
         payload.put("eventType", event.getEventType());
         payload.put("orderId", event.getOrderId());
@@ -99,6 +124,18 @@ public class PaymentEventListener {
     @EventListener
     public void onRefundCompleted(RefundCompletedEvent event) {
         log.info("Event received: {} order={} refund={}", event.getEventType(), event.getOrderNo(), event.getRefundNo());
+
+        // Wave 10：退款联动商户余额扣减
+        try {
+            if (accountService != null && event.getAmount() != null) {
+                BigDecimal amount = new BigDecimal(event.getAmount());
+                accountService.debitOnRefund(event.getMerchantId(), amount, event.getRefundNo());
+            }
+        } catch (Exception e) {
+            log.error("退款联动余额扣减失败: refundNo={}, merchantId={}, error={}",
+                    event.getRefundNo(), event.getMerchantId(), e.getMessage(), e);
+        }
+
         Map<String, Object> payload = new HashMap<>();
         payload.put("eventType", event.getEventType());
         payload.put("orderId", event.getOrderId());

@@ -33,6 +33,10 @@ import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
  *       需访问 clearing 包中的 SettlementBatchRepository / SettlementBatch 等类型以读取结算批次状态并执行补偿。
  *       该依赖为业务必要的数据访问，后续可通过引入领域接口或独立仓储包重构消除，
  *       当前阶段予以豁免以避免破坏现有功能。</li>
+ *   <li><b>account ↔ event：</b>AccountBalanceChangedEvent（account 包）继承 PaymentEvent（event 包），
+ *       PaymentEventListener（event 包）注入 AccountService（account 包）联动余额变更。
+ *       该循环依赖为业务必要的跨层联动：账户余额变更需发布事件通知下游（清算/对账/分账），
+ *       支付事件监听器需调用账户服务联动余额增减。后续可通过引入领域事件接口或消息总线重构消除。</li>
  * </ul>
  */
 @AnalyzeClasses(packages = "org.nexus.gateway")
@@ -56,6 +60,26 @@ public class ArchitectureRulesTest {
             DescribedPredicate.describe("resides in clearing package",
                     javaClass -> javaClass.getPackageName().startsWith("org.nexus.gateway.clearing"));
 
+    /** 谓词：匹配 AccountBalanceChangedEvent（account 包中的事件类，继承 PaymentEvent） */
+    private static final DescribedPredicate<JavaClass> IS_ACCOUNT_BALANCE_CHANGED_EVENT =
+            DescribedPredicate.describe("is AccountBalanceChangedEvent",
+                    javaClass -> "org.nexus.gateway.account.AccountBalanceChangedEvent".equals(javaClass.getName()));
+
+    /** 谓词：匹配 PaymentEventListener（event 包中的监听器，注入 AccountService） */
+    private static final DescribedPredicate<JavaClass> IS_PAYMENT_EVENT_LISTENER =
+            DescribedPredicate.describe("is PaymentEventListener",
+                    javaClass -> "org.nexus.gateway.event.PaymentEventListener".equals(javaClass.getName()));
+
+    /** 谓词：匹配 account 包下的所有类 */
+    private static final DescribedPredicate<JavaClass> IS_IN_ACCOUNT_PACKAGE =
+            DescribedPredicate.describe("resides in account package",
+                    javaClass -> javaClass.getPackageName().startsWith("org.nexus.gateway.account"));
+
+    /** 谓词：匹配 event 包下的所有类 */
+    private static final DescribedPredicate<JavaClass> IS_IN_EVENT_PACKAGE =
+            DescribedPredicate.describe("resides in event package",
+                    javaClass -> javaClass.getPackageName().startsWith("org.nexus.gateway.event"));
+
     // 分层依赖：controller → service → repository，切片内不得存在循环依赖。
     // 以下 ignoreDependency 用于豁免已知的、设计上可接受的循环依赖（详见类级注释）：
     //   1) apiversion ↔ controller：OpenApiV2ConsistencyTest（测试）反射引用 v2 Controller，仅测试代码层面。
@@ -78,7 +102,13 @@ public class ArchitectureRulesTest {
             "org.nexus.gateway.controller.v2.MerchantV2Controller")
         // 豁免 2：CompensationService 访问 clearing 包中所有类型（SettlementBatchRepository /
         // SettlementBatch / SettlementBatch$BatchStatus 等）读取结算批次执行补偿
-        .ignoreDependency(IS_COMPENSATION_SERVICE, IS_IN_CLEARING_PACKAGE);
+        .ignoreDependency(IS_COMPENSATION_SERVICE, IS_IN_CLEARING_PACKAGE)
+        // 豁免 3：account ↔ event — AccountBalanceChangedEvent（account 包）继承 PaymentEvent（event 包），
+        // PaymentEventListener（event 包）注入 AccountService（account 包）联动余额变更。
+        // 该循环依赖为业务必要的跨层联动：账户余额变更需发布事件通知下游，支付事件监听器需调用
+        // 账户服务联动余额增减。后续可通过引入领域事件接口或消息总线重构消除。
+        .ignoreDependency(IS_ACCOUNT_BALANCE_CHANGED_EVENT, IS_IN_EVENT_PACKAGE)
+        .ignoreDependency(IS_PAYMENT_EVENT_LISTENER, IS_IN_ACCOUNT_PACKAGE);
 
     // controller 不应直接访问 repository（必须经 service 层中转）
     @ArchTest

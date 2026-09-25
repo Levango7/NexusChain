@@ -142,6 +142,7 @@ Blockchain is the foundational settlement layer — not the product itself. On t
 │   ├─ reconciliation(扩展) │ split(扩展) │ limit(扩展)              │ │
 │   │                                             (Wave 7/8: 对账+策略)│ │
 │   ├─ alert(扩展) │ orchestration.settlement    (Wave 9: 告警+结算)  │ │
+│   ├─ account │ transaction │ voidreversal │ escrow (Wave 10: 资金) │ │
 │   └─ controller │ service │ model │ dto │ repository │ ... (基础)  │ │
 │   └───────────────────────────────────────────────────────────────┘ │
 ├─────────────────────────────────────────────────────────────────────┤
@@ -222,6 +223,10 @@ Blockchain is the foundational settlement layer — not the product itself. On t
 | `onboarding` | 商户入驻流程（MerchantApplication + MerchantReviewService + MerchantOnboardingController） | Wave 7 |
 | `orchestration.service` | 回调服务层（PaymentCallbackService，渠道回调统一处理与分发） | Wave 7 |
 | `orchestration.settlement` | 链上结算确认（ChainSettlementConfirmationService + SettlementConfirmationRecord） | Wave 9 |
+| `account` | 资金账户体系（MerchantAccount + AccountTransaction + AccountService + AccountController，BALANCE/FROZEN/RESERVE 三类型账户，充值/提现/冻结/解冻/转账/余额查询） | Wave 10 |
+| `transaction` | 分布式事务框架（TccTransactionManager + SagaTransactionManager + TransactionLog + TransactionRecoveryScheduler，Try/Confirm/Cancel + 编排式补偿 + 超时恢复） | Wave 10 |
+| `voidreversal` | 交易撤销与冲正（VoidRequest + ReversalRequest + VoidService + ReversalService + AutoReversalScheduler + VoidReversalController，当日撤销 + 隔日冲正 + 自动冲正） | Wave 10 |
+| `escrow` | 担保交易/预授权（EscrowTransaction + PreAuthTransaction + EscrowService + PreAuthService + EscrowTimeoutScheduler + EscrowController，担保交易完整流程 + 预授权冻结/扣款/撤销） | Wave 10 |
 
 ## Payment Orchestration Roadmap
 
@@ -301,6 +306,17 @@ Blockchain is the foundational settlement layer — not the product itself. On t
 - **链上结算确认服务**（Wave 9）：ChainSettlementConfirmationService（链上结算确认，确保结算最终性可验证）（`orchestration.settlement` 包）
 - **结算确认记录**（Wave 9）：SettlementConfirmationRecord（结算确认持久化记录，含区块高度/交易哈希/确认状态）（`orchestration.settlement` 包）
 - **结算最终性验证**（Wave 9）：SettlementFinalityVerifier（结算最终性验证器，链上确认数达标校验）（`orchestration.settlement` 包）
+
+**Payment Orchestration Wave 10（2026-09-25）：**
+
+- **资金账户体系**（Wave 10）：MerchantAccount（BALANCE/FROZEN/RESERVE 三类型虚拟账户）+ AccountTransaction（不可篡改审计流水）+ AccountService（充值/提现/冻结/解冻/转账/余额查询/支付联动入账/退款联动扣减）+ AccountController（REST API）+ AccountBalanceChangedEvent（`account` 包）
+- **分布式事务框架**（Wave 10）：TccTransactionManager（Try/Confirm/Cancel 三阶段 + 重试 + 幂等）+ SagaTransactionManager（编排式 + 补偿）+ TransactionLog（事务日志持久化）+ TransactionRecoveryScheduler（超时恢复调度）+ TccAction 接口（`transaction` 包）
+- **交易撤销与冲正**（Wave 10）：VoidRequest（当日撤销请求）+ ReversalRequest（隔日冲正请求）+ VoidService（撤销窗口检查 + 联动 AccountService）+ ReversalService（冲正联动 AccountService）+ AutoReversalScheduler（自动冲正调度）+ VoidReversalController（REST API）+ OrderVoidedEvent/OrderReversedEvent（`voidreversal` 包）
+- **担保交易/预授权**（Wave 10）：EscrowTransaction（担保交易完整生命周期 CREATED→FUNDED→CONFIRMED→RELEASED/REFUNDED）+ PreAuthTransaction（预授权 AUTHORIZED→CAPTURED/VOIDED）+ EscrowService + PreAuthService + EscrowTimeoutScheduler（超时自动确认/释放）+ EscrowController（REST API）+ EscrowStatusChangedEvent/PreAuthStatusChangedEvent（`escrow` 包）
+- **支付确认联动余额**（Wave 10）：PaymentEventListener 集成 AccountService，支付确认时 creditOnPayment() 增加商户余额，退款时 debitOnRefund() 扣减商户余额
+- **TCC 事务集成**（Wave 10）：PaymentServiceImpl 集成 TccTransactionManager，支付确认流程使用 TCC 分布式事务保障
+- **订单状态扩展**（Wave 10）：PaymentOrder.OrderStatus 新增 VOIDED/REVERSED，OrderStateMachine 新增 PAID→VOIDED/PAID→REVERSED 转换
+- **Flyway Migrations**（Wave 10）：V44~V49（merchant_accounts/account_transactions/transaction_logs/void_reversal_tables/escrow_preauth_tables/order_status_extension）
 
 ### 进行中（In Progress）
 

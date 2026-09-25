@@ -9,13 +9,15 @@ import java.util.*;
  *   PENDING        -> PAYING, EXPIRED, FAILED (risk/compliance rejection)
  *   PAYING         -> SUBMITTED, PAID, FAILED, EXPIRED
  *   SUBMITTED      -> PAID (chain confirmation), FAILED (rejected), EXPIRED (timeout)
- *   PAID           -> REORGED (block reorg), REFUND_PENDING, REFUNDED
+ *   PAID           -> REORGED (block reorg), REFUND_PENDING, REFUNDED, VOIDED (same-day void), REVERSED (next-day reversal)
  *   REORGED        -> PAID (re-confirmed), FAILED (unrecoverable)
  *   REFUND_PENDING -> REFUNDED (chain transfer succeeded)
  *   REFUND_PENDING -> PAID (chain transfer failed, allow retry)
  *   EXPIRED        -> (terminal)
  *   REFUNDED       -> (terminal)
  *   FAILED         -> PENDING (retry)
+ *   VOIDED         -> (terminal)
+ *   REVERSED       -> (terminal)
  */
 public final class OrderStateMachine {
 
@@ -42,7 +44,9 @@ public final class OrderStateMachine {
         map.put(PaymentOrder.OrderStatus.PAID, EnumSet.of(
                 PaymentOrder.OrderStatus.REORGED,
                 PaymentOrder.OrderStatus.REFUND_PENDING,
-                PaymentOrder.OrderStatus.REFUNDED
+                PaymentOrder.OrderStatus.REFUNDED,
+                PaymentOrder.OrderStatus.VOIDED,
+                PaymentOrder.OrderStatus.REVERSED
         ));
         map.put(PaymentOrder.OrderStatus.REORGED, EnumSet.of(
                 PaymentOrder.OrderStatus.PAID,
@@ -57,6 +61,8 @@ public final class OrderStateMachine {
         ));
         map.put(PaymentOrder.OrderStatus.EXPIRED, EnumSet.noneOf(PaymentOrder.OrderStatus.class));
         map.put(PaymentOrder.OrderStatus.REFUNDED, EnumSet.noneOf(PaymentOrder.OrderStatus.class));
+        map.put(PaymentOrder.OrderStatus.VOIDED, EnumSet.noneOf(PaymentOrder.OrderStatus.class));
+        map.put(PaymentOrder.OrderStatus.REVERSED, EnumSet.noneOf(PaymentOrder.OrderStatus.class));
         TRANSITIONS = Collections.unmodifiableMap(map);
     }
 
