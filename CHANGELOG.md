@@ -51,18 +51,45 @@
 - V48：escrow_transactions + preauth_transactions 表（担保交易/预授权）
 - V49：payment_orders 表 status 字段扩展（VOIDED/REVERSED）
 
-**代码审查修复**
+**代码审查初始修复**
 - 三个新增 Controller（AccountController/VoidReversalController/EscrowController）全部添加 @PreAuthorize 权限控制
 - AccountController 添加 NumberFormatException/NullPointerException 异常处理器
 - VoidService 修复撤销与退款互斥校验逻辑顺序（退款状态检查移至 PAID 状态检查之前）
 - MerchantAccountRepository 修复 findByAccountIdForUpdate 方法名不符合 Spring Data JPA 命名约定的问题（改为 @Query + findLockedByAccountId）
 
-**已知待优化项（代码审查识别，后续迭代处理）**
-- 撤销/冲正使用 withdraw() 而非专用反向操作类型（AccountOperationType.VOID_REVERSE 已定义但未使用）
-- 乐观锁重试与 @Transactional 事务边界冲突（重试需在新事务中执行）
-- TransactionRecoveryScheduler 仅标记状态不执行实际恢复操作
-- PaymentEventListener 账户联动失败被静默吞掉（需引入告警机制）
-- EscrowController 缺少 fundEscrow 端点（担保交易创建后无法触发 FUNDED 状态）
+**待优化项修复（commit `b615fe8`，2026-09-25）— 32 个代码审查问题全部修复**
+
+CRITICAL 修复：
+- **C-5**：VoidService.approveVoid() 改用 `accountService.voidReverse()` 替代 `withdraw()`，ReversalService.approveReversal() 改用 `accountService.reversalAdjust()` 替代 `withdraw()`，确保生成 VOID_REVERSE/REVERSAL_ADJUST 类型审计流水
+
+HIGH 修复：
+- **H-1**：创建 `OptimisticLockRetryTemplate`（util 包），使用 TransactionTemplate 实现每次乐观锁重试在新事务中执行，避免在 rollback-only 事务中重试永远失败。AccountService 移除 @Transactional 注解，改用 OptimisticLockRetryTemplate 管理事务，MAX_RETRY 从 1 改为 3
+- **H-5**：TccTransactionManager 添加 `retryConfirm()`/`retryCancel()` public 方法（REQUIRES_NEW 事务），SagaTransactionManager 添加 `retryCompensate()` public 方法，TransactionRecoveryScheduler 注入两者实现实际恢复操作
+- **H-10**：创建 `AccountLinkageFailedEvent`（event 包），PaymentEventListener catch 块中发布告警事件，账户联动失败不阻断 webhook 投递
+
+MEDIUM 修复：
+- **M-2**：AccountService 抽取 `debitAccount()` 私有方法供 withdraw/voidReverse/reversalAdjust 共用，通过 operationType 参数区分操作类型
+- **M-4**：创建 `VoidReversalException`（voidreversal 包）携带 errorCode 字段，替代字符串匹配的错误码映射方式。VoidService/ReversalService 校验异常改用 VoidReversalException
+- **M-5/M-6**：EscrowTimeoutScheduler 改用 Repository 超时查询方法（findByStatusAndFundedAtBefore / findByStatusAndAuthorizedAtBefore），避免内存全量扫描
+- **M-7**：TransactionLog errorMessage 字段长度从 512 扩展为 2048
+- **M-9/M-10**：AccountService 余额变更日志降级为 DEBUG 级别；账户编号生成使用完整 UUID 替代截取前 8 位
+
+LOW 修复：
+- **L-1/L-4**：AccountService MAX_RETRY 从 1 改为 3；创建 `AccountBalanceNegativeEvent`（account 包），余额为负时发布告警事件
+- **L-2/L-5**：AutoReversalScheduler 查询条件修正（使用 createdAt 而非 expiresAt）；OrderStateMachine 添加 REFUND_PENDING → VOIDED 状态转换
+- **L-3**：TransactionRecoveryScheduler 实现实际恢复操作（注入 TccTransactionManager 和 SagaTransactionManager，调用 retry 方法）
+- **L-6**：EscrowTransaction 添加 `refundToBuyerAddress` @Transient 字段，EscrowServiceImpl.refundEscrow() 修正退款地址逻辑；EscrowController 添加 fundEscrow 端点
+
+新增文件：
+- `OptimisticLockRetryTemplate.java` — 乐观锁重试模板（TransactionTemplate + 新事务重试）
+- `AccountBalanceNegativeEvent.java` — 余额负数告警事件
+- `VoidReversalException.java` — 撤销/冲正业务异常（携带 errorCode）
+- `AccountLinkageFailedEvent.java` — 账户联动失败告警事件
+
+测试修复：
+- `AccountServiceTest`：添加 PlatformTransactionManager mock 适配 AccountService 新构造器（4 参数）
+- `VoidServiceTest`：异常断言从 IllegalStateException 改为 VoidReversalException；mock 从 withdraw 改为 voidReverse（3 参数含 voidNo）
+- `ReversalServiceTest`：异常断言从 IllegalStateException 改为 VoidReversalException；mock 从 withdraw 改为 reversalAdjust（3 参数含 reversalNo）
 
 ### Payment Orchestration Wave 1-6（2026-09-22 ~ 2026-09-24）
 
