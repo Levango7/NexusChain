@@ -21,6 +21,7 @@ import java.util.Map;
  * <ul>
  *   <li>POST /api/v1/escrow — 创建担保交易</li>
  *   <li>GET /api/v1/escrow/{orderId} — 查询担保交易状态</li>
+ *   <li>POST /api/v1/escrow/{escrowNo}/fund — 买家付款</li>
  *   <li>POST /api/v1/escrow/{escrowNo}/confirm — 确认收货</li>
  *   <li>POST /api/v1/escrow/{escrowNo}/refund — 退款</li>
  * </ul>
@@ -137,6 +138,39 @@ public class EscrowController {
             return errorResponse(HttpStatus.NOT_FOUND, "ESCROW_NOT_FOUND", e.getMessage());
         } catch (IllegalStateException e) {
             return errorResponse(HttpStatus.BAD_REQUEST, "ESCROW_FROZEN", e.getMessage());
+        }
+    }
+
+    /**
+     * 买家付款 — 资金冻结到担保账户（CREATED → FUNDED）。
+     *
+     * <p>请求体（可选）：</p>
+     * <pre>
+     * {
+     *   "payerAddress": String (可选，默认使用创建担保交易时的买家地址)
+     * }
+     * </pre>
+     */
+    @PostMapping("/escrow/{escrowNo}/fund")
+    @PreAuthorize("hasRole('MERCHANT') or hasRole('ADMIN')")
+    public ResponseEntity<Map<String, Object>> fundEscrow(@PathVariable String escrowNo,
+                                                           @RequestBody(required = false) Map<String, Object> request) {
+        try {
+            String payerAddress = request != null ? (String) request.get("payerAddress") : null;
+
+            EscrowTransaction escrow = escrowService.fundEscrow(escrowNo, payerAddress);
+
+            Map<String, Object> response = new LinkedHashMap<>();
+            response.put("escrowNo", escrow.getEscrowNo());
+            response.put("status", escrow.getStatus().name());
+            response.put("amount", escrow.getAmount());
+            response.put("fundedAt", escrow.getFundedAt());
+
+            return ResponseEntity.ok(response);
+        } catch (IllegalArgumentException e) {
+            return errorResponse(HttpStatus.NOT_FOUND, "ESCROW_NOT_FOUND", e.getMessage());
+        } catch (IllegalStateException e) {
+            return errorResponse(HttpStatus.BAD_REQUEST, "ESCROW_INVALID_STATE", e.getMessage());
         }
     }
 

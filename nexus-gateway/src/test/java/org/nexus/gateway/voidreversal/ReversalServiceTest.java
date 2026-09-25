@@ -64,17 +64,17 @@ class ReversalServiceTest {
     }
 
     @Test
-    @DisplayName("requestReversal: non-PAID order throws IllegalStateException")
+    @DisplayName("requestReversal: non-PAID order throws VoidReversalException")
     void requestReversal_nonPaidOrder_throws() {
         sampleOrder.setStatus(PaymentOrder.OrderStatus.PENDING);
         when(paymentOrderRepository.findById(1L)).thenReturn(Optional.of(sampleOrder));
 
-        assertThrows(IllegalStateException.class,
+        assertThrows(VoidReversalException.class,
                 () -> reversalService.requestReversal(1L, "reason", "operator-1"));
     }
 
     @Test
-    @DisplayName("requestReversal: existing PENDING reversal throws IllegalStateException")
+    @DisplayName("requestReversal: existing PENDING reversal throws VoidReversalException")
     void requestReversal_existingPending_throws() {
         ReversalRequest existing = new ReversalRequest();
         existing.setStatus(ReversalStatus.PENDING);
@@ -82,12 +82,12 @@ class ReversalServiceTest {
         when(paymentOrderRepository.findById(1L)).thenReturn(Optional.of(sampleOrder));
         when(reversalRequestRepository.findByOrderId(1L)).thenReturn(List.of(existing));
 
-        assertThrows(IllegalStateException.class,
+        assertThrows(VoidReversalException.class,
                 () -> reversalService.requestReversal(1L, "reason", "operator-1"));
     }
 
     @Test
-    @DisplayName("requestReversal: existing COMPLETED reversal throws IllegalStateException")
+    @DisplayName("requestReversal: existing COMPLETED reversal throws VoidReversalException")
     void requestReversal_existingCompleted_throws() {
         ReversalRequest existing = new ReversalRequest();
         existing.setStatus(ReversalStatus.COMPLETED);
@@ -95,7 +95,7 @@ class ReversalServiceTest {
         when(paymentOrderRepository.findById(1L)).thenReturn(Optional.of(sampleOrder));
         when(reversalRequestRepository.findByOrderId(1L)).thenReturn(List.of(existing));
 
-        assertThrows(IllegalStateException.class,
+        assertThrows(VoidReversalException.class,
                 () -> reversalService.requestReversal(1L, "reason", "operator-1"));
     }
 
@@ -140,7 +140,7 @@ class ReversalServiceTest {
         ReversalRequest req = createPendingReversal();
         when(reversalRequestRepository.findById(1L)).thenReturn(Optional.of(req));
         when(paymentOrderRepository.findById(1L)).thenReturn(Optional.of(sampleOrder));
-        when(accountService.withdraw(100L, new BigDecimal("1000")))
+        when(accountService.reversalAdjust(100L, new BigDecimal("1000"), "RV001"))
                 .thenThrow(new IllegalStateException("余额不足"));
         when(reversalRequestRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
 
@@ -205,7 +205,7 @@ class ReversalServiceTest {
 
         when(reversalRequestRepository.findById(1L)).thenReturn(Optional.of(req));
         when(paymentOrderRepository.findById(1L)).thenReturn(Optional.of(sampleOrder));
-        when(accountService.withdraw(100L, new BigDecimal("1000"))).thenReturn(account);
+        when(accountService.reversalAdjust(100L, new BigDecimal("1000"), "RV001")).thenReturn(account);
         when(paymentOrderRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
         when(reversalRequestRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
 

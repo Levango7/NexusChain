@@ -199,14 +199,19 @@ public class EscrowServiceImpl implements EscrowService {
 
             EscrowStatus fromStatus = escrow.getStatus();
 
-            // 解冻担保账户中的资金退回买家（资金回到商户 BALANCE 账户，由商户退给买家）
+            // M-6-fix: 退款语义修正 — 资金解冻回商户 BALANCE 账户，待商户退回买家
+            // 当前系统没有买家虚拟账户，退款操作先解冻回商户，由商户线下退回买家
+            // 记录买家退回地址，在日志和事件中明确标注资金流向
+            escrow.setRefundToBuyerAddress(escrow.getBuyerAddress());
+
             accountService.unfreeze(escrow.getMerchantId(), escrow.getAmount());
 
             escrow.setStatus(EscrowStatus.REFUNDED);
             escrow = escrowRepository.save(escrow);
 
-            log.info("担保交易退款成功: escrowNo={}, merchantId={}, amount={}",
-                    escrowNo, escrow.getMerchantId(), escrow.getAmount());
+            log.info("担保交易退款: escrowNo={}, merchantId={}, amount={}, refundToBuyerAddress={}, " +
+                            "备注: 资金已解冻回商户BALANCE账户，待商户退回买家",
+                    escrowNo, escrow.getMerchantId(), escrow.getAmount(), escrow.getRefundToBuyerAddress());
 
             publishStatusChangedEvent(escrow, fromStatus, EscrowStatus.REFUNDED);
             return escrow;

@@ -60,7 +60,7 @@ public class TransactionLog {
     private String payload;
 
     /** 错误信息（步骤失败时记录） */
-    @Column(name = "error_message", length = 512)
+    @Column(name = "error_message", length = 2048)
     private String errorMessage;
 
     /** 多租户隔离键 */

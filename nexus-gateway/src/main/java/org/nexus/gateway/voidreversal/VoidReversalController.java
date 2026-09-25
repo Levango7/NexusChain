@@ -74,10 +74,13 @@ public class VoidReversalController {
             log.warn("创建撤销请求失败（参数错误）: {}", e.getMessage());
             return ResponseEntity.badRequest().body(errorResponse("INVALID_REQUEST", e.getMessage()));
 
+        } catch (VoidReversalException e) {
+            log.warn("创建撤销请求失败（业务规则）: errorCode={}, {}", e.getErrorCode(), e.getMessage());
+            return ResponseEntity.badRequest().body(errorResponse(e.getErrorCode(), e.getMessage()));
+
         } catch (IllegalStateException e) {
             log.warn("创建撤销请求失败（业务规则）: {}", e.getMessage());
-            String errorCode = mapVoidErrorCode(e.getMessage());
-            return ResponseEntity.badRequest().body(errorResponse(errorCode, e.getMessage()));
+            return ResponseEntity.badRequest().body(errorResponse("VOID_REQUEST_FAILED", e.getMessage()));
         }
     }
 
@@ -176,10 +179,13 @@ public class VoidReversalController {
             log.warn("创建冲正请求失败（参数错误）: {}", e.getMessage());
             return ResponseEntity.badRequest().body(errorResponse("INVALID_REQUEST", e.getMessage()));
 
+        } catch (VoidReversalException e) {
+            log.warn("创建冲正请求失败（业务规则）: errorCode={}, {}", e.getErrorCode(), e.getMessage());
+            return ResponseEntity.badRequest().body(errorResponse(e.getErrorCode(), e.getMessage()));
+
         } catch (IllegalStateException e) {
             log.warn("创建冲正请求失败（业务规则）: {}", e.getMessage());
-            String errorCode = mapReversalErrorCode(e.getMessage());
-            return ResponseEntity.badRequest().body(errorResponse(errorCode, e.getMessage()));
+            return ResponseEntity.badRequest().body(errorResponse("REVERSAL_REQUEST_FAILED", e.getMessage()));
         }
     }
 
@@ -297,35 +303,5 @@ public class VoidReversalController {
         return response;
     }
 
-    /**
-     * 根据错误消息映射撤销相关的错误码。
-     */
-    private String mapVoidErrorCode(String message) {
-        if (message.contains("超过撤销窗口")) {
-            return "VOID_WINDOW_EXPIRED";
-        }
-        if (message.contains("已有退款")) {
-            return "ALREADY_REFUNDED";
-        }
-        if (message.contains("已有进行中或已完成的撤销请求")) {
-            return "ALREADY_VOIDED";
-        }
-        if (message.contains("订单状态非 PAID")) {
-            return "INVALID_ORDER_STATUS";
-        }
-        return "VOID_REQUEST_FAILED";
-    }
 
-    /**
-     * 根据错误消息映射冲正相关的错误码。
-     */
-    private String mapReversalErrorCode(String message) {
-        if (message.contains("已有进行中或已完成的冲正请求")) {
-            return "ALREADY_REVERSED";
-        }
-        if (message.contains("订单状态非 PAID")) {
-            return "INVALID_ORDER_STATUS";
-        }
-        return "REVERSAL_REQUEST_FAILED";
-    }
 }

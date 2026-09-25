@@ -11,6 +11,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.EventListener;
 import org.springframework.http.*;
 import org.springframework.scheduling.annotation.Async;
@@ -67,6 +68,14 @@ public class PaymentEventListener {
      */
     private final AccountService accountService;
 
+    /**
+     * H-10 修复：事件发布器，用于在账户联动失败时发布 {@link AccountLinkageFailedEvent} 告警事件。
+     *
+     * <p>联动失败不阻断 webhook 投递，但通过发布告警事件使运维/补偿系统能自动感知
+     * 并处理账户联动异常，确保资金账务最终一致。</p>
+     */
+    private final ApplicationEventPublisher eventPublisher;
+
     /** Deterministic (sorted-key) JSON mapper; must match WebhookController's canonical form. */
     private static final ObjectMapper CANONICAL_MAPPER = new ObjectMapper()
             .configure(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS, true);
@@ -76,18 +85,20 @@ public class PaymentEventListener {
                                 PaymentOrderRepository orderRepository,
                                 WebhookUrlValidator urlValidator,
                                 AccountService accountService,
+                                ApplicationEventPublisher eventPublisher,
                                 @Value("${nexus.webhook.finality-threshold:OPTIMISTIC}") String finalityThreshold) {
         this.gatewayConfig = gatewayConfig;
         this.restTemplate = restTemplate;
         this.orderRepository = orderRepository;
         this.urlValidator = urlValidator;
         this.accountService = accountService;
+        this.eventPublisher = eventPublisher;
         this.finalityThreshold = finalityThreshold;
     }
 
     /** 测试用兼容构造器：保留无连接池 RestTemplate，finalityThreshold 默认 OPTIMISTIC。 */
     public PaymentEventListener(GatewayConfig gatewayConfig, PaymentOrderRepository orderRepository) {
-        this(gatewayConfig, new RestTemplate(), orderRepository, new WebhookUrlValidator(), null, "OPTIMISTIC");
+        this(gatewayConfig, new RestTemplate(), orderRepository, new WebhookUrlValidator(), null, null, "OPTIMISTIC");
     }
 
     @Async
@@ -104,6 +115,10 @@ public class PaymentEventListener {
         } catch (Exception e) {
             log.error("支付确认联动余额增加失败: orderNo={}, merchantId={}, error={}",
                     event.getOrderNo(), event.getMerchantId(), e.getMessage(), e);
+            // H-10 修复：发布账户联动失败告警事件，供告警/补偿系统消费
+            publishLinkageFailedEvent(event.getMerchantId(), event.getOrderNo(),
+                    event.getAmount(), e.getMessage(),
+                    AccountLinkageFailedEvent.LinkageType.CREDIT_ON_PAYMENT);
         }
 
         Map<String, Object> payload = new HashMap<>();
@@ -134,6 +149,10 @@ public class PaymentEventListener {
         } catch (Exception e) {
             log.error("退款联动余额扣减失败: refundNo={}, merchantId={}, error={}",
                     event.getRefundNo(), event.getMerchantId(), e.getMessage(), e);
+            // H-10 修复：发布账户联动失败告警事件，供告警/补偿系统消费
+            publishLinkageFailedEvent(event.getMerchantId(), event.getRefundNo(),
+                    event.getAmount(), e.getMessage(),
+                    AccountLinkageFailedEvent.LinkageType.DEBIT_ON_REFUND);
         }
 
         Map<String, Object> payload = new HashMap<>();
@@ -146,6 +165,42 @@ public class PaymentEventListener {
         payload.put("timestamp", System.currentTimeMillis());
 
         sendWebhook(event.getMerchantId(), payload);
+    }
+
+    /**
+     * H-10 修复：发布账户联动失败告警事件。
+     *
+     * <p>当 accountService 联动调用抛异常时，除了 log.error 外还发布
+     * {@link AccountLinkageFailedEvent}，供告警/补偿系统消费。联动失败不阻断
+     * webhook 投递，但必须留下告警痕迹以确保资金账务最终一致。</p>
+     *
+     * @param merchantId       商户 ID
+     * @param businessReference 业务凭证（orderNo 或 refundNo）
+     * @param amount           联动金额
+     * @param failureReason    失败原因
+     * @param linkageType      联动类型（CREDIT_ON_PAYMENT / DEBIT_ON_REFUND）
+     */
+    private void publishLinkageFailedEvent(Long merchantId, String businessReference,
+                                            String amount, String failureReason,
+                                            AccountLinkageFailedEvent.LinkageType linkageType) {
+        if (eventPublisher == null) {
+            log.warn("ApplicationEventPublisher not available, cannot publish AccountLinkageFailedEvent: "
+                    + "merchantId={}, businessReference={}, linkageType={}",
+                    merchantId, businessReference, linkageType);
+            return;
+        }
+        try {
+            AccountLinkageFailedEvent alertEvent = new AccountLinkageFailedEvent(
+                    this, merchantId, businessReference, amount, failureReason, linkageType);
+            eventPublisher.publishEvent(alertEvent);
+            log.warn("Published AccountLinkageFailedEvent: merchantId={}, businessReference={}, "
+                    + "linkageType={}, failureReason={}",
+                    merchantId, businessReference, linkageType, failureReason);
+        } catch (Exception publishEx) {
+            log.error("Failed to publish AccountLinkageFailedEvent: merchantId={}, "
+                    + "businessReference={}, linkageType={}, publishError={}",
+                    merchantId, businessReference, linkageType, publishEx.getMessage(), publishEx);
+        }
     }
 
     /**

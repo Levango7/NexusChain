@@ -54,7 +54,7 @@ public class AutoReversalScheduler {
     public void scanTimeoutOrders() {
         LocalDateTime cutoff = LocalDateTime.now().minusMinutes(PAYING_TIMEOUT_MINUTES);
         List<PaymentOrder> timeoutOrders =
-                paymentOrderRepository.findByStatusAndExpiresAtBefore(PaymentOrder.OrderStatus.PAYING, cutoff);
+                paymentOrderRepository.findByStatusAndCreatedAtBefore(PaymentOrder.OrderStatus.PAYING, cutoff);
 
         if (timeoutOrders.isEmpty()) {
             return;

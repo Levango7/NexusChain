@@ -21,6 +21,9 @@ import java.util.List;
  * </ul>
  *
  * <p>超时阈值：TCC 事务 30 秒，SAGA 事务 60 秒。</p>
+ *
+ * <p>恢复操作通过 TccTransactionManager 和 SagaTransactionManager 的 public 恢复方法执行。
+ * 如果 action/step 不在注册表中（例如服务重启后），则降级为仅标记 FAILED 状态。</p>
  */
 @Component
 public class TransactionRecoveryScheduler {
@@ -33,9 +36,15 @@ public class TransactionRecoveryScheduler {
     private static final int SAGA_TIMEOUT_SECONDS = 60;
 
     private final TransactionLogRepository transactionLogRepository;
+    private final TccTransactionManager tccTransactionManager;
+    private final SagaTransactionManager sagaTransactionManager;
 
-    public TransactionRecoveryScheduler(TransactionLogRepository transactionLogRepository) {
+    public TransactionRecoveryScheduler(TransactionLogRepository transactionLogRepository,
+                                        TccTransactionManager tccTransactionManager,
+                                        SagaTransactionManager sagaTransactionManager) {
         this.transactionLogRepository = transactionLogRepository;
+        this.tccTransactionManager = tccTransactionManager;
+        this.sagaTransactionManager = sagaTransactionManager;
     }
 
     /**
@@ -94,58 +103,78 @@ public class TransactionRecoveryScheduler {
     }
 
     /**
-     * 恢复 TCC 事务 TRY 超时：标记为 FAILED，等待人工处理或自动 Cancel。
+     * 恢复 TCC 事务 TRY 超时：执行 Cancel 操作（释放预留资源）。
+     *
+     * <p>TRY 超时意味着资源预留可能已成功但未记录，或执行中崩溃。
+     * 安全策略：调用 TccTransactionManager.retryCancel 执行 Cancel 操作。
+     * 如果 Cancel 成功，更新状态为 SUCCESS（已取消）；如果失败，标记为 FAILED。</p>
      *
      * @param txLog 超时的事务日志
      */
     private void recoverTccTryTimeout(TransactionLog txLog) {
-        // Try 超时意味着资源预留可能已成功但未记录，或执行中崩溃
-        // 安全策略：标记为 FAILED，由运维确认后决定 Cancel 或重试
-        txLog.setStepStatus(TransactionStepStatus.FAILED);
-        txLog.setErrorMessage("TRY phase timeout, auto-recovered");
-        transactionLogRepository.save(txLog);
-        log.info("TCC TRY timeout recovered: txId={}", txLog.getTransactionId());
+        boolean recovered = tccTransactionManager.retryCancel(txLog);
+        if (recovered) {
+            log.info("TCC TRY timeout recovered (Cancel succeeded): txId={}", txLog.getTransactionId());
+        } else {
+            log.warn("TCC TRY timeout recovery failed (Cancel failed or action not in registry): txId={}",
+                    txLog.getTransactionId());
+        }
     }
 
     /**
-     * 恢复 TCC 事务 CONFIRM 超时：标记为 FAILED，等待恢复重试。
+     * 恢复 TCC 事务 CONFIRM 超时：重试 Confirm 操作。
+     *
+     * <p>CONFIRM 超时意味着 Try 已成功但 Confirm 未完成。
+     * 安全策略：调用 TccTransactionManager.retryConfirm 重试 Confirm 操作。
+     * 如果 Confirm 成功，更新状态为 SUCCESS；如果失败，标记为 FAILED。</p>
      *
      * @param txLog 超时的事务日志
      */
     private void recoverTccConfirmTimeout(TransactionLog txLog) {
-        // Confirm 超时意味着 Try 已成功但 Confirm 未完成
-        // 安全策略：标记为 FAILED，由恢复调度器后续重试 Confirm
-        txLog.setStepStatus(TransactionStepStatus.FAILED);
-        txLog.setErrorMessage("CONFIRM phase timeout, pending retry");
-        transactionLogRepository.save(txLog);
-        log.info("TCC CONFIRM timeout recovered: txId={}", txLog.getTransactionId());
+        boolean recovered = tccTransactionManager.retryConfirm(txLog);
+        if (recovered) {
+            log.info("TCC CONFIRM timeout recovered (Confirm succeeded): txId={}", txLog.getTransactionId());
+        } else {
+            log.warn("TCC CONFIRM timeout recovery failed (Confirm failed or action not in registry): txId={}",
+                    txLog.getTransactionId());
+        }
     }
 
     /**
-     * 恢复 SAGA 事务 PENDING 超时：标记为 FAILED，等待补偿。
+     * 恢复 SAGA 事务 PENDING 超时：触发补偿流程。
+     *
+     * <p>SAGA 步骤 PENDING 超时意味着步骤执行中崩溃。
+     * 安全策略：调用 SagaTransactionManager.retryCompensate 触发逆向补偿。</p>
      *
      * @param txLog 超时的事务日志
      */
     private void recoverSagaPendingTimeout(TransactionLog txLog) {
-        // SAGA 步骤 PENDING 超时意味着步骤执行中崩溃
-        // 安全策略：标记为 FAILED，触发逆向补偿
-        txLog.setStepStatus(TransactionStepStatus.FAILED);
-        txLog.setErrorMessage("SAGA step timeout, auto-recovered");
-        transactionLogRepository.save(txLog);
-        log.info("SAGA PENDING timeout recovered: txId={}", txLog.getTransactionId());
+        boolean recovered = sagaTransactionManager.retryCompensate(txLog);
+        if (recovered) {
+            log.info("SAGA PENDING timeout recovered (compensation succeeded): txId={}",
+                    txLog.getTransactionId());
+        } else {
+            log.warn("SAGA PENDING timeout recovery failed (compensation failed or steps not in registry): txId={}",
+                    txLog.getTransactionId());
+        }
     }
 
     /**
-     * 恢复 SAGA 事务 COMPENSATE 超时：标记为 FAILED，等待重试。
+     * 恢复 SAGA 事务 COMPENSATE 超时：重试补偿操作。
+     *
+     * <p>补偿超时意味着补偿执行中崩溃。
+     * 安全策略：调用 SagaTransactionManager.retryCompensate 重试补偿操作。</p>
      *
      * @param txLog 超时的事务日志
      */
     private void recoverSagaCompensateTimeout(TransactionLog txLog) {
-        // 补偿超时意味着补偿执行中崩溃
-        // 安全策略：标记为 FAILED，由恢复调度器后续重试补偿
-        txLog.setStepStatus(TransactionStepStatus.FAILED);
-        txLog.setErrorMessage("COMPENSATE phase timeout, pending retry");
-        transactionLogRepository.save(txLog);
-        log.info("SAGA COMPENSATE timeout recovered: txId={}", txLog.getTransactionId());
+        boolean recovered = sagaTransactionManager.retryCompensate(txLog);
+        if (recovered) {
+            log.info("SAGA COMPENSATE timeout recovered (compensation succeeded): txId={}",
+                    txLog.getTransactionId());
+        } else {
+            log.warn("SAGA COMPENSATE timeout recovery failed (compensation failed or steps not in registry): txId={}",
+                    txLog.getTransactionId());
+        }
     }
 }

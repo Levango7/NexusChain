@@ -78,12 +78,12 @@ public class VoidService {
         // 校验撤销与退款互斥：已有退款的订单不能撤销（先于 PAID 状态校验，给出明确错误信息）
         if (order.getStatus() == PaymentOrder.OrderStatus.REFUND_PENDING
                 || order.getStatus() == PaymentOrder.OrderStatus.REFUNDED) {
-            throw new IllegalStateException("已有退款的订单不能撤销: orderId=" + orderId);
+            throw new VoidReversalException("REFUND_EXISTS", "已有退款的订单不能撤销: orderId=" + orderId);
         }
 
         // 校验订单状态必须为 PAID
         if (order.getStatus() != PaymentOrder.OrderStatus.PAID) {
-            throw new IllegalStateException(
+            throw new VoidReversalException("ORDER_NOT_PAID",
                     "订单状态非 PAID，无法撤销: orderId=" + orderId + ", status=" + order.getStatus());
         }
 
@@ -96,8 +96,9 @@ public class VoidService {
             if (existing.getStatus() == VoidStatus.PENDING
                     || existing.getStatus() == VoidStatus.APPROVED
                     || existing.getStatus() == VoidStatus.COMPLETED) {
-                throw new IllegalStateException("订单已有进行中或已完成的撤销请求: orderId=" + orderId
-                        + ", voidNo=" + existing.getVoidNo() + ", status=" + existing.getStatus());
+                throw new VoidReversalException("VOID_REQUEST_EXISTS",
+                        "订单已有进行中或已完成的撤销请求: orderId=" + orderId
+                                + ", voidNo=" + existing.getVoidNo() + ", status=" + existing.getStatus());
             }
         }
 
@@ -163,10 +164,11 @@ public class VoidService {
             // 再次校验撤销窗口
             assertVoidWindow(order);
 
-            // 调用 AccountService 扣减商户余额（反向操作）
+            // 调用 AccountService 撤销扣减商户余额（反向操作）
             // 撤销 = 支付的反向操作，支付时 CREDIT 余额增加，撤销时 DEBIT 余额减少
-            MerchantAccount account = accountService.withdraw(
-                    voidRequest.getMerchantId(), voidRequest.getAmount());
+            // 使用 voidReverse 而非 withdraw，确保生成 VOID_REVERSE 类型流水便于审计追溯
+            MerchantAccount account = accountService.voidReverse(
+                    voidRequest.getMerchantId(), voidRequest.getAmount(), voidRequest.getVoidNo());
 
             // 更新订单状态为 VOIDED
             OrderStateMachine.transition(order, PaymentOrder.OrderStatus.VOIDED);
@@ -190,8 +192,16 @@ public class VoidService {
 
             return voidRequest;
 
-        } catch (IllegalStateException e) {
+        } catch (VoidReversalException e) {
             // 余额不足等业务异常 → 标记为 FAILED
+            voidRequest.setStatus(VoidStatus.FAILED);
+            voidRequest.setCompletedAt(LocalDateTime.now());
+            voidRequest = voidRequestRepository.save(voidRequest);
+            log.error("撤销执行失败: voidNo={}, orderId={}, errorCode={}, error={}",
+                    voidRequest.getVoidNo(), voidRequest.getOrderId(), e.getErrorCode(), e.getMessage());
+            return voidRequest;
+        } catch (IllegalStateException e) {
+            // 其他 IllegalStateException（如 OrderStateMachine 转换异常）→ 标记为 FAILED
             voidRequest.setStatus(VoidStatus.FAILED);
             voidRequest.setCompletedAt(LocalDateTime.now());
             voidRequest = voidRequestRepository.save(voidRequest);
@@ -274,7 +284,7 @@ public class VoidService {
      */
     private void assertVoidWindow(PaymentOrder order) {
         if (order.getPaidAt() == null) {
-            throw new IllegalStateException("订单未支付，无法撤销: orderId=" + order.getId());
+            throw new VoidReversalException("ORDER_NOT_PAID", "订单未支付，无法撤销: orderId=" + order.getId());
         }
 
         LocalDate paidDate = order.getPaidAt().toLocalDate();
@@ -282,7 +292,7 @@ public class VoidService {
         LocalDateTime voidCutoff = voidDeadline.atTime(23, 59, 59); // T+1 日 24:00
 
         if (LocalDateTime.now().isAfter(voidCutoff)) {
-            throw new IllegalStateException(
+            throw new VoidReversalException("VOID_WINDOW_EXPIRED",
                     "超过撤销窗口，请发起冲正: orderId=" + order.getId()
                             + ", paidAt=" + order.getPaidAt()
                             + ", voidCutoff=" + voidCutoff);

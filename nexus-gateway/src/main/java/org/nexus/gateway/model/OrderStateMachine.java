@@ -13,6 +13,7 @@ import java.util.*;
  *   REORGED        -> PAID (re-confirmed), FAILED (unrecoverable)
  *   REFUND_PENDING -> REFUNDED (chain transfer succeeded)
  *   REFUND_PENDING -> PAID (chain transfer failed, allow retry)
+ *   REFUND_PENDING -> VOIDED (same-day void of order with pending refund)
  *   EXPIRED        -> (terminal)
  *   REFUNDED       -> (terminal)
  *   FAILED         -> PENDING (retry)
@@ -54,7 +55,8 @@ public final class OrderStateMachine {
         ));
         map.put(PaymentOrder.OrderStatus.REFUND_PENDING, EnumSet.of(
                 PaymentOrder.OrderStatus.REFUNDED,
-                PaymentOrder.OrderStatus.PAID
+                PaymentOrder.OrderStatus.PAID,
+                PaymentOrder.OrderStatus.VOIDED
         ));
         map.put(PaymentOrder.OrderStatus.FAILED, EnumSet.of(
                 PaymentOrder.OrderStatus.PENDING

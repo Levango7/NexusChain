@@ -64,48 +64,48 @@ class VoidServiceTest {
     }
 
     @Test
-    @DisplayName("requestVoid: non-PAID order throws IllegalStateException")
+    @DisplayName("requestVoid: non-PAID order throws VoidReversalException")
     void requestVoid_nonPaidOrder_throws() {
         sampleOrder.setStatus(PaymentOrder.OrderStatus.PENDING);
         when(paymentOrderRepository.findById(1L)).thenReturn(Optional.of(sampleOrder));
 
-        assertThrows(IllegalStateException.class,
+        assertThrows(VoidReversalException.class,
                 () -> voidService.requestVoid(1L, "reason", "operator-1"));
     }
 
     @Test
-    @DisplayName("requestVoid: order with REFUND_PENDING status throws IllegalStateException")
+    @DisplayName("requestVoid: order with REFUND_PENDING status throws VoidReversalException")
     void requestVoid_refundPendingOrder_throws() {
         sampleOrder.setStatus(PaymentOrder.OrderStatus.REFUND_PENDING);
         when(paymentOrderRepository.findById(1L)).thenReturn(Optional.of(sampleOrder));
 
-        assertThrows(IllegalStateException.class,
+        assertThrows(VoidReversalException.class,
                 () -> voidService.requestVoid(1L, "reason", "operator-1"));
     }
 
     @Test
-    @DisplayName("requestVoid: order with REFUNDED status throws IllegalStateException")
+    @DisplayName("requestVoid: order with REFUNDED status throws VoidReversalException")
     void requestVoid_refundedOrder_throws() {
         sampleOrder.setStatus(PaymentOrder.OrderStatus.REFUNDED);
         when(paymentOrderRepository.findById(1L)).thenReturn(Optional.of(sampleOrder));
 
-        assertThrows(IllegalStateException.class,
+        assertThrows(VoidReversalException.class,
                 () -> voidService.requestVoid(1L, "reason", "operator-1"));
     }
 
     @Test
-    @DisplayName("requestVoid: past void window throws IllegalStateException")
+    @DisplayName("requestVoid: past void window throws VoidReversalException")
     void requestVoid_pastVoidWindow_throws() {
         // paidAt is 3 days ago, past the T+1 void window
         sampleOrder.setPaidAt(LocalDateTime.now().minusDays(3));
         when(paymentOrderRepository.findById(1L)).thenReturn(Optional.of(sampleOrder));
 
-        assertThrows(IllegalStateException.class,
+        assertThrows(VoidReversalException.class,
                 () -> voidService.requestVoid(1L, "reason", "operator-1"));
     }
 
     @Test
-    @DisplayName("requestVoid: existing PENDING void request throws IllegalStateException")
+    @DisplayName("requestVoid: existing PENDING void request throws VoidReversalException")
     void requestVoid_existingPendingRequest_throws() {
         VoidRequest existing = new VoidRequest();
         existing.setStatus(VoidStatus.PENDING);
@@ -113,12 +113,12 @@ class VoidServiceTest {
         when(paymentOrderRepository.findById(1L)).thenReturn(Optional.of(sampleOrder));
         when(voidRequestRepository.findByOrderId(1L)).thenReturn(List.of(existing));
 
-        assertThrows(IllegalStateException.class,
+        assertThrows(VoidReversalException.class,
                 () -> voidService.requestVoid(1L, "reason", "operator-1"));
     }
 
     @Test
-    @DisplayName("requestVoid: existing COMPLETED void request throws IllegalStateException")
+    @DisplayName("requestVoid: existing COMPLETED void request throws VoidReversalException")
     void requestVoid_existingCompletedRequest_throws() {
         VoidRequest existing = new VoidRequest();
         existing.setStatus(VoidStatus.COMPLETED);
@@ -126,7 +126,7 @@ class VoidServiceTest {
         when(paymentOrderRepository.findById(1L)).thenReturn(Optional.of(sampleOrder));
         when(voidRequestRepository.findByOrderId(1L)).thenReturn(List.of(existing));
 
-        assertThrows(IllegalStateException.class,
+        assertThrows(VoidReversalException.class,
                 () -> voidService.requestVoid(1L, "reason", "operator-1"));
     }
 
@@ -184,7 +184,7 @@ class VoidServiceTest {
         VoidRequest voidReq = createPendingVoidRequest();
         when(voidRequestRepository.findById(1L)).thenReturn(Optional.of(voidReq));
         when(paymentOrderRepository.findById(1L)).thenReturn(Optional.of(sampleOrder));
-        when(accountService.withdraw(100L, new BigDecimal("1000")))
+        when(accountService.voidReverse(100L, new BigDecimal("1000"), "VD001"))
                 .thenThrow(new IllegalStateException("余额不足"));
         when(voidRequestRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
 
@@ -224,7 +224,7 @@ class VoidServiceTest {
 
         when(voidRequestRepository.findById(1L)).thenReturn(Optional.of(voidReq));
         when(paymentOrderRepository.findById(1L)).thenReturn(Optional.of(sampleOrder));
-        when(accountService.withdraw(100L, new BigDecimal("1000"))).thenReturn(account);
+        when(accountService.voidReverse(100L, new BigDecimal("1000"), "VD001")).thenReturn(account);
         when(paymentOrderRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
         when(voidRequestRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
 

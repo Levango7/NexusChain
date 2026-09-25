@@ -1,12 +1,14 @@
 package org.nexus.gateway.account;
 
 import org.nexus.gateway.tenant.TenantContext;
+import org.nexus.gateway.util.OptimisticLockRetryTemplate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.util.LinkedHashMap;
@@ -23,6 +25,8 @@ import java.util.UUID;
  *   <li>{@link #getOrCreateAccount} — 获取或创建商户账户（BALANCE/FROZEN/RESERVE）</li>
  *   <li>{@link #deposit} — 充值（管理员操作，余额增加）</li>
  *   <li>{@link #withdraw} — 提现（余额减少）</li>
+ *   <li>{@link #voidReverse} — 撤销扣减（撤销交易后余额回滚）</li>
+ *   <li>{@link #reversalAdjust} — 冲正调整（冲正交易后余额调整）</li>
  *   <li>{@link #freeze} — 冻结金额（BALANCE → FROZEN）</li>
  *   <li>{@link #unfreeze} — 解冻金额（FROZEN → BALANCE）</li>
  *   <li>{@link #transfer} — 转账（账户间资金转移）</li>
@@ -31,30 +35,33 @@ import java.util.UUID;
  *   <li>{@link #debitOnRefund} — 退款联动余额减少</li>
  * </ul>
  *
- * <p>并发安全：使用 {@code @Version} 乐观锁，余额变更冲突时自动重试一次。
- * 余额变更与流水写入在同一数据库事务中，保证原子性。</p>
+ * <p>并发安全：使用 {@code @Version} 乐观锁，余额变更冲突时自动重试（最多 3 次）。
+ * 每次重试在独立的新事务中执行，避免 rollback-only 事务中重试失败的问题。
+ * （来源经验：2026-09-25-optimistic-lock-retry-transactional-boundary-conflict）</p>
  *
  * <p>每个余额变更操作都生成 {@link AccountTransaction} 流水记录，
- * 并发布 {@link AccountBalanceChangedEvent} 事件供下游消费。</p>
+ * 并发布 {@link AccountBalanceChangedEvent} 事件供下游消费。
+ * 退款导致余额为负时额外发布 {@link AccountBalanceNegativeEvent} 告警事件。</p>
  */
 @Service
 public class AccountService {
 
     private static final Logger log = LoggerFactory.getLogger(AccountService.class);
 
-    /** 乐观锁冲突时最大重试次数 */
-    private static final int MAX_RETRY = 1;
-
     private final MerchantAccountRepository accountRepository;
     private final AccountTransactionRepository transactionRepository;
     private final ApplicationEventPublisher eventPublisher;
+    private final OptimisticLockRetryTemplate optimisticLockRetryTemplate;
 
     public AccountService(MerchantAccountRepository accountRepository,
                           AccountTransactionRepository transactionRepository,
-                          ApplicationEventPublisher eventPublisher) {
+                          ApplicationEventPublisher eventPublisher,
+                          PlatformTransactionManager transactionManager) {
         this.accountRepository = accountRepository;
         this.transactionRepository = transactionRepository;
         this.eventPublisher = eventPublisher;
+        TransactionTemplate transactionTemplate = new TransactionTemplate(transactionManager);
+        this.optimisticLockRetryTemplate = new OptimisticLockRetryTemplate(transactionTemplate, 3);
     }
 
     // === 账户管理 ===
@@ -112,13 +119,12 @@ public class AccountService {
      * @throws IllegalArgumentException 金额 <= 0
      * @throws IllegalStateException 账户已冻结或已关闭
      */
-    @Transactional
     public MerchantAccount deposit(Long merchantId, BigDecimal amount, String relatedOrderId) {
         if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
             throw new IllegalArgumentException("充值金额必须大于 0");
         }
 
-        return executeWithRetry(() -> {
+        return optimisticLockRetryTemplate.execute(() -> {
             MerchantAccount account = getOrCreateAccount(merchantId, AccountType.BALANCE);
             assertAccountOperable(account);
 
@@ -132,7 +138,7 @@ public class AccountService {
 
             publishBalanceChangedEvent(account, AccountOperationType.DEPOSIT, amount, balanceBefore, balanceAfter);
 
-            log.info("充值成功: merchantId={}, amount={}, balanceAfter={}",
+            log.debug("充值成功: merchantId={}, amount={}, balanceAfter={}",
                     merchantId, amount, balanceAfter);
             return account;
         });
@@ -150,33 +156,94 @@ public class AccountService {
      * @throws IllegalStateException 账户已冻结或已关闭
      * @throws IllegalStateException 余额不足
      */
-    @Transactional
     public MerchantAccount withdraw(Long merchantId, BigDecimal amount) {
+        return debitAccount(merchantId, amount, "WITHDRAW", AccountOperationType.WITHDRAW);
+    }
+
+    // === 撤销扣减 ===
+
+    /**
+     * 撤销扣减 — 撤销交易后从商户账户扣减余额。
+     *
+     * <p>使用 {@link AccountOperationType#VOID_REVERSE} 操作类型，生成 DEBIT 方向流水。
+     * 与 {@link #withdraw} 的区别仅在于 operationType 不同，便于审计追溯和风控规则区分。
+     * （来源经验：2026-09-25-financial-operation-reuse-wrong-account-type-audit-trail）</p>
+     *
+     * @param merchantId 商户 ID
+     * @param amount 扣减金额（必须 > 0）
+     * @param voidNo 撤销编号（关联凭证）
+     * @return 扣减后的账户
+     * @throws IllegalArgumentException 金额 <= 0
+     * @throws IllegalStateException 账户已冻结或已关闭
+     * @throws IllegalStateException 余额不足
+     */
+    public MerchantAccount voidReverse(Long merchantId, BigDecimal amount, String voidNo) {
+        return debitAccount(merchantId, amount, voidNo, AccountOperationType.VOID_REVERSE);
+    }
+
+    // === 冲正调整 ===
+
+    /**
+     * 冲正调整 — 冲正交易后对商户账户余额进行调整扣减。
+     *
+     * <p>使用 {@link AccountOperationType#REVERSAL_ADJUST} 操作类型，生成 DEBIT 方向流水。
+     * 与 {@link #withdraw} 的区别仅在于 operationType 不同，便于审计追溯和风控规则区分。
+     * （来源经验：2026-09-25-financial-operation-reuse-wrong-account-type-audit-trail）</p>
+     *
+     * @param merchantId 商户 ID
+     * @param amount 调整金额（必须 > 0）
+     * @param reversalNo 冲正编号（关联凭证）
+     * @return 调整后的账户
+     * @throws IllegalArgumentException 金额 <= 0
+     * @throws IllegalStateException 账户已冻结或已关闭
+     * @throws IllegalStateException 余额不足
+     */
+    public MerchantAccount reversalAdjust(Long merchantId, BigDecimal amount, String reversalNo) {
+        return debitAccount(merchantId, amount, reversalNo, AccountOperationType.REVERSAL_ADJUST);
+    }
+
+    // === 扣减私有方法 ===
+
+    /**
+     * 扣减账户余额的通用私有方法 — 供 withdraw/voidReverse/reversalAdjust 共用。
+     *
+     * <p>逻辑：余额校验 → 乐观锁重试 → 扣减余额 → 记录 DEBIT 流水 → 发布事件。
+     * 不同操作类型通过 operationType 参数区分，确保审计追溯和风控规则正确。
+     * （来源经验：2026-09-25-financial-operation-reuse-wrong-account-type-audit-trail）</p>
+     *
+     * @param merchantId 商户 ID
+     * @param amount 扣减金额（必须 > 0）
+     * @param reference 关联业务凭证
+     * @param operationType 操作类型（WITHDRAW/VOID_REVERSE/REVERSAL_ADJUST）
+     * @return 扣减后的账户
+     */
+    private MerchantAccount debitAccount(Long merchantId, BigDecimal amount, String reference,
+                                          AccountOperationType operationType) {
         if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
-            throw new IllegalArgumentException("提现金额必须大于 0");
+            throw new IllegalArgumentException("扣减金额必须大于 0");
         }
 
-        return executeWithRetry(() -> {
+        return optimisticLockRetryTemplate.execute(() -> {
             MerchantAccount account = getOrCreateAccount(merchantId, AccountType.BALANCE);
             assertAccountOperable(account);
 
             BigDecimal balanceBefore = account.getBalance();
             if (balanceBefore.compareTo(amount) < 0) {
                 throw new IllegalStateException(
-                        "余额不足: 当前余额=" + balanceBefore + ", 提现金额=" + amount);
+                        "余额不足: 当前余额=" + balanceBefore + ", 扣减金额=" + amount);
             }
 
             BigDecimal balanceAfter = balanceBefore.subtract(amount);
             account.setBalance(balanceAfter);
             account = accountRepository.save(account);
 
-            recordTransaction(account, AccountOperationType.WITHDRAW, TransactionDirection.DEBIT,
-                    amount, balanceBefore, balanceAfter, "WITHDRAW");
+            recordTransaction(account, operationType, TransactionDirection.DEBIT,
+                    amount, balanceBefore, balanceAfter, reference);
 
-            publishBalanceChangedEvent(account, AccountOperationType.WITHDRAW, amount, balanceBefore, balanceAfter);
+            publishBalanceChangedEvent(account, operationType, amount, balanceBefore, balanceAfter);
 
-            log.info("提现成功: merchantId={}, amount={}, balanceAfter={}",
-                    merchantId, amount, balanceAfter);
+            log.debug("扣减成功: merchantId={}, operationType={}, amount={}, balanceAfter={}",
+                    merchantId, operationType, amount, balanceAfter);
             return account;
         });
     }
@@ -200,13 +267,12 @@ public class AccountService {
      * @throws IllegalArgumentException 金额 <= 0
      * @throws IllegalStateException 余额不足或账户不可操作
      */
-    @Transactional
     public MerchantAccount freeze(Long merchantId, BigDecimal amount, String reason) {
         if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
             throw new IllegalArgumentException("冻结金额必须大于 0");
         }
 
-        return executeWithRetry(() -> {
+        return optimisticLockRetryTemplate.execute(() -> {
             MerchantAccount balanceAccount = getOrCreateAccount(merchantId, AccountType.BALANCE);
             MerchantAccount frozenAccount = getOrCreateAccount(merchantId, AccountType.FROZEN);
             assertAccountOperable(balanceAccount);
@@ -236,7 +302,7 @@ public class AccountService {
 
             publishBalanceChangedEvent(balanceAccount, AccountOperationType.FREEZE, amount, balanceBefore, balanceAfter);
 
-            log.info("冻结成功: merchantId={}, amount={}, balanceAfter={}, frozenAfter={}",
+            log.debug("冻结成功: merchantId={}, amount={}, balanceAfter={}, frozenAfter={}",
                     merchantId, amount, balanceAfter, frozenAfter);
             return balanceAccount;
         });
@@ -253,13 +319,12 @@ public class AccountService {
      * @throws IllegalArgumentException 金额 <= 0
      * @throws IllegalStateException 冻结余额不足或账户不可操作
      */
-    @Transactional
     public MerchantAccount unfreeze(Long merchantId, BigDecimal amount) {
         if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
             throw new IllegalArgumentException("解冻金额必须大于 0");
         }
 
-        return executeWithRetry(() -> {
+        return optimisticLockRetryTemplate.execute(() -> {
             MerchantAccount frozenAccount = getOrCreateAccount(merchantId, AccountType.FROZEN);
             MerchantAccount balanceAccount = getOrCreateAccount(merchantId, AccountType.BALANCE);
             assertAccountOperable(balanceAccount);
@@ -289,7 +354,7 @@ public class AccountService {
 
             publishBalanceChangedEvent(balanceAccount, AccountOperationType.UNFREEZE, amount, balanceBefore, balanceAfter);
 
-            log.info("解冻成功: merchantId={}, amount={}, balanceAfter={}, frozenAfter={}",
+            log.debug("解冻成功: merchantId={}, amount={}, balanceAfter={}, frozenAfter={}",
                     merchantId, amount, balanceAfter, frozenAfter);
             return balanceAccount;
         });
@@ -310,7 +375,6 @@ public class AccountService {
      * @throws IllegalArgumentException 金额 <= 0 或账户不存在
      * @throws IllegalStateException 余额不足或账户不可操作
      */
-    @Transactional
     public MerchantAccount transfer(String fromAccountId, String toAccountId, BigDecimal amount) {
         if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
             throw new IllegalArgumentException("转账金额必须大于 0");
@@ -319,7 +383,7 @@ public class AccountService {
             throw new IllegalArgumentException("转出和转入账户不能相同");
         }
 
-        return executeWithRetry(() -> {
+        return optimisticLockRetryTemplate.execute(() -> {
             MerchantAccount fromAccount = accountRepository.findByAccountId(fromAccountId)
                     .orElseThrow(() -> new IllegalArgumentException("转出账户不存在: " + fromAccountId));
             MerchantAccount toAccount = accountRepository.findByAccountId(toAccountId)
@@ -352,7 +416,7 @@ public class AccountService {
 
             publishBalanceChangedEvent(fromAccount, AccountOperationType.TRANSFER, amount, fromBefore, fromAfter);
 
-            log.info("转账成功: from={}, to={}, amount={}, fromAfter={}, toAfter={}",
+            log.debug("转账成功: from={}, to={}, amount={}, fromAfter={}, toAfter={}",
                     fromAccountId, toAccountId, amount, fromAfter, toAfter);
             return fromAccount;
         });
@@ -401,7 +465,6 @@ public class AccountService {
      * @param orderNo 订单号（幂等键）
      * @return 充值后的账户
      */
-    @Transactional
     public MerchantAccount creditOnPayment(Long merchantId, BigDecimal amount, String orderNo) {
         // 幂等检查：同一 orderNo 不重复入账
         List<AccountTransaction> existing = transactionRepository.findByReference(orderNo);
@@ -411,7 +474,7 @@ public class AccountService {
                     .orElse(null);
         }
 
-        return executeWithRetry(() -> {
+        return optimisticLockRetryTemplate.execute(() -> {
             MerchantAccount account = getOrCreateAccount(merchantId, AccountType.BALANCE);
             assertAccountOperable(account);
 
@@ -425,7 +488,7 @@ public class AccountService {
 
             publishBalanceChangedEvent(account, AccountOperationType.PAYMENT, amount, balanceBefore, balanceAfter);
 
-            log.info("支付入账成功: merchantId={}, orderNo={}, amount={}, balanceAfter={}",
+            log.debug("支付入账成功: merchantId={}, orderNo={}, amount={}, balanceAfter={}",
                     merchantId, orderNo, amount, balanceAfter);
             return account;
         });
@@ -444,7 +507,6 @@ public class AccountService {
      * @param refundNo 退款编号（幂等键）
      * @return 扣减后的账户
      */
-    @Transactional
     public MerchantAccount debitOnRefund(Long merchantId, BigDecimal amount, String refundNo) {
         // 幂等检查：同一 refundNo 不重复扣减
         List<AccountTransaction> existing = transactionRepository.findByReference(refundNo);
@@ -454,16 +516,18 @@ public class AccountService {
                     .orElse(null);
         }
 
-        return executeWithRetry(() -> {
+        return optimisticLockRetryTemplate.execute(() -> {
             MerchantAccount account = getOrCreateAccount(merchantId, AccountType.BALANCE);
             assertAccountOperable(account);
 
             BigDecimal balanceBefore = account.getBalance();
             BigDecimal balanceAfter = balanceBefore.subtract(amount);
-            // 退款允许余额暂时为负（触发预警），但记录日志
+            // 退款允许余额暂时为负（触发预警），记录日志并发布告警事件
             if (balanceAfter.compareTo(BigDecimal.ZERO) < 0) {
                 log.warn("退款后余额为负: merchantId={}, refundNo={}, balanceAfter={}",
                         merchantId, refundNo, balanceAfter);
+                publishBalanceNegativeEvent(account, AccountOperationType.REFUND,
+                        amount, balanceBefore, balanceAfter, refundNo);
             }
             account.setBalance(balanceAfter);
             account = accountRepository.save(account);
@@ -473,7 +537,7 @@ public class AccountService {
 
             publishBalanceChangedEvent(account, AccountOperationType.REFUND, amount, balanceBefore, balanceAfter);
 
-            log.info("退款扣减成功: merchantId={}, refundNo={}, amount={}, balanceAfter={}",
+            log.debug("退款扣减成功: merchantId={}, refundNo={}, amount={}, balanceAfter={}",
                     merchantId, refundNo, amount, balanceAfter);
             return account;
         });
@@ -526,10 +590,11 @@ public class AccountService {
     }
 
     /**
-     * 生成流水编号：AT{timestamp}{random}。
+     * 生成流水编号：AT{timestamp}{full-uuid}。
+     * 使用完整 32 字符 UUID（去掉连字符），避免短 UUID 碰撞。
      */
     private String generateTxNo() {
-        return "AT" + System.currentTimeMillis() + UUID.randomUUID().toString().substring(0, 8);
+        return "AT" + System.currentTimeMillis() + UUID.randomUUID().toString().replace("-", "");
     }
 
     /**
@@ -544,27 +609,14 @@ public class AccountService {
     }
 
     /**
-     * 带乐观锁重试的操作执行器。
-     *
-     * <p>当 {@code ObjectOptimisticLockingFailureException} 发生时，自动重试一次。
-     * 重试仍失败则抛出原始异常。</p>
-     *
-     * @param action 要执行的操作
-     * @return 操作结果
+     * 发布余额负数告警事件 — 供告警系统消费。
      */
-    private <T> T executeWithRetry(java.util.function.Supplier<T> action) {
-        int attempts = 0;
-        while (true) {
-            try {
-                return action.get();
-            } catch (ObjectOptimisticLockingFailureException e) {
-                attempts++;
-                if (attempts > MAX_RETRY) {
-                    log.error("乐观锁冲突，重试 {} 次后仍失败", MAX_RETRY, e);
-                    throw e;
-                }
-                log.warn("乐观锁冲突，正在重试 (attempt={})", attempts);
-            }
-        }
+    private void publishBalanceNegativeEvent(MerchantAccount account, AccountOperationType operationType,
+                                              BigDecimal amount, BigDecimal balanceBefore, BigDecimal balanceAfter,
+                                              String triggerReference) {
+        AccountBalanceNegativeEvent event = new AccountBalanceNegativeEvent(
+                this, account.getMerchantId(), account.getAccountId(),
+                operationType, amount, balanceBefore, balanceAfter, triggerReference);
+        eventPublisher.publishEvent(event);
     }
 }

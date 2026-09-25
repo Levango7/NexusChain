@@ -78,6 +78,14 @@ public class EscrowTransaction {
     @Column(name = "released_at")
     private LocalDateTime releasedAt;
 
+    /**
+     * 退款买家退回地址 — M-6-fix: 记录退款时买家的退回地址。
+     * 不持久化到数据库，仅用于退款事件和日志中标注资金流向。
+     * 退款时从 buyerAddress 获取，明确标注"资金已解冻回商户，待商户退回买家"。
+     */
+    @Transient
+    private String refundToBuyerAddress;
+
     @PrePersist
     protected void onCreate() {
         this.createdAt = LocalDateTime.now();
@@ -135,4 +143,7 @@ public class EscrowTransaction {
 
     public LocalDateTime getReleasedAt() { return releasedAt; }
     public void setReleasedAt(LocalDateTime releasedAt) { this.releasedAt = releasedAt; }
+
+    public String getRefundToBuyerAddress() { return refundToBuyerAddress; }
+    public void setRefundToBuyerAddress(String refundToBuyerAddress) { this.refundToBuyerAddress = refundToBuyerAddress; }
 }

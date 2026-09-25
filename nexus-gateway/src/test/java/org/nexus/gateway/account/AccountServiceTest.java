@@ -8,6 +8,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.transaction.PlatformTransactionManager;
 
 import java.math.BigDecimal;
 import java.util.Collections;
@@ -29,6 +30,7 @@ class AccountServiceTest {
     @Mock private MerchantAccountRepository accountRepository;
     @Mock private AccountTransactionRepository transactionRepository;
     @Mock private ApplicationEventPublisher eventPublisher;
+    @Mock private PlatformTransactionManager transactionManager;
 
     private AccountService accountService;
 
@@ -37,7 +39,7 @@ class AccountServiceTest {
 
     @BeforeEach
     void setUp() {
-        accountService = new AccountService(accountRepository, transactionRepository, eventPublisher);
+        accountService = new AccountService(accountRepository, transactionRepository, eventPublisher, transactionManager);
 
         balanceAccount = new MerchantAccount();
         balanceAccount.setId(1L);

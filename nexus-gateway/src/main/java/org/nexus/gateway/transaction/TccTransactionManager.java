@@ -1,13 +1,17 @@
 package org.nexus.gateway.transaction;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * TCC 事务管理器 — 编排 Try/Confirm/Cancel 三个阶段的执行。
@@ -36,6 +40,9 @@ public class TccTransactionManager {
     private final TransactionLogRepository transactionLogRepository;
     private final ObjectMapper objectMapper;
 
+    /** TccAction 注册表：以 transactionId 为 key，供恢复调度器查找 action 执行恢复操作 */
+    private final ConcurrentHashMap<String, TccAction> actionRegistry = new ConcurrentHashMap<>();
+
     public TccTransactionManager(TransactionLogRepository transactionLogRepository,
                                   ObjectMapper objectMapper) {
         this.transactionLogRepository = transactionLogRepository;
@@ -51,9 +58,12 @@ public class TccTransactionManager {
      * @param ctx 事务上下文
      * @return {@code true} 事务成功（Try + Confirm 均成功）；{@code false} 事务失败（Try 失败或 Cancel 成功）
      */
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public boolean execute(TccAction action, TransactionContext ctx) {
         String txId = ctx.getTransactionId();
+
+        // 注册 action 以供恢复调度器使用（超时事务恢复时通过 transactionId 查找）
+        actionRegistry.put(txId, action);
 
         // 幂等校验：若该事务已有 SUCCESS 日志，直接返回成功
         List<TransactionLog> existingLogs = transactionLogRepository
@@ -82,7 +92,10 @@ public class TccTransactionManager {
             tryLog.setStepStatus(TransactionStepStatus.FAILED);
             tryLog.setErrorMessage(e.getMessage());
             transactionLogRepository.save(tryLog);
-            executeCancel(action, ctx);
+            boolean cancelResult = executeCancel(action, ctx);
+            if (cancelResult) {
+                actionRegistry.remove(txId);
+            }
             return false;
         }
 
@@ -90,7 +103,10 @@ public class TccTransactionManager {
             log.warn("TCC Try phase failed: txId={}", txId);
             tryLog.setStepStatus(TransactionStepStatus.FAILED);
             transactionLogRepository.save(tryLog);
-            executeCancel(action, ctx);
+            boolean cancelResult = executeCancel(action, ctx);
+            if (cancelResult) {
+                actionRegistry.remove(txId);
+            }
             return false;
         }
 
@@ -98,7 +114,12 @@ public class TccTransactionManager {
         transactionLogRepository.save(tryLog);
 
         // === Confirm 阶段 ===
-        return executeConfirm(action, ctx);
+        boolean result = executeConfirm(action, ctx);
+        // 事务正常完成后从注册表中移除 action（超时事务的 action 保留供恢复调度器使用）
+        if (result) {
+            actionRegistry.remove(txId);
+        }
+        return result;
     }
 
     /**
@@ -137,6 +158,7 @@ public class TccTransactionManager {
                     transactionLogRepository.save(confirmLog);
                     // Confirm 失败后不执行 Cancel（Try 已成功，Cancel 无法回滚已预留资源）
                     // 标记为 FAILED，由恢复调度器后续重试 Confirm
+                    // action 保留在注册表中供恢复调度器使用
                     log.error("TCC Confirm phase exhausted retries: txId={}", txId);
                     return false;
                 }
@@ -150,8 +172,9 @@ public class TccTransactionManager {
      *
      * @param action TCC 动作
      * @param ctx 事务上下文
+     * @return {@code true} Cancel 成功；{@code false} Cancel 失败
      */
-    private void executeCancel(TccAction action, TransactionContext ctx) {
+    private boolean executeCancel(TccAction action, TransactionContext ctx) {
         String txId = ctx.getTransactionId();
 
         TransactionLog cancelLog = createLog(ctx, TransactionType.TCC, "cancel",
@@ -170,7 +193,7 @@ public class TccTransactionManager {
                 transactionLogRepository.save(failedLog);
 
                 log.info("TCC transaction cancelled: txId={}", txId);
-                return;
+                return true;
             } catch (Exception e) {
                 log.warn("TCC Cancel phase failed (attempt {}/{}): txId={}, error={}",
                         attempt, MAX_RETRY, txId, e.getMessage());
@@ -180,10 +203,11 @@ public class TccTransactionManager {
                     transactionLogRepository.save(cancelLog);
                     // Cancel 失败由恢复调度器后续重试
                     log.error("TCC Cancel phase exhausted retries: txId={}", txId);
-                    return;
+                    return false;
                 }
             }
         }
+        return false;
     }
 
     /**
@@ -215,5 +239,115 @@ public class TccTransactionManager {
         }
 
         return logEntry;
+    }
+
+    // === 恢复调度器调用的 public 方法 ===
+
+    /**
+     * 重试 Confirm 操作（供 TransactionRecoveryScheduler 调用）。
+     *
+     * <p>当 TCC 事务的 CONFIRM 阶段超时后，恢复调度器调用此方法重试 Confirm。
+     * 从 actionRegistry 中查找原始 TccAction，重建事务上下文，执行 confirmAction。</p>
+     *
+     * @param txLog 超时的事务日志
+     * @return {@code true} 恢复成功；{@code false} 恢复失败（action 不在注册表中或 confirm 执行失败）
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public boolean retryConfirm(TransactionLog txLog) {
+        String txId = txLog.getTransactionId();
+        TccAction action = actionRegistry.get(txId);
+        if (action == null) {
+            log.warn("TCC retryConfirm: action not found in registry (service may have restarted), txId={}", txId);
+            txLog.setStepStatus(TransactionStepStatus.FAILED);
+            txLog.setErrorMessage("CONFIRM retry failed: action not in registry");
+            transactionLogRepository.save(txLog);
+            return false;
+        }
+
+        TransactionContext ctx = rebuildContext(txLog);
+        try {
+            action.confirmAction(ctx);
+            txLog.setStepStatus(TransactionStepStatus.SUCCESS);
+            transactionLogRepository.save(txLog);
+
+            // 记录事务整体成功
+            TransactionLog successLog = createLog(ctx, TransactionType.TCC, "completed",
+                    2, TransactionStepStatus.SUCCESS, action.getParticipantId());
+            transactionLogRepository.save(successLog);
+
+            // 恢复成功后从注册表中移除 action
+            actionRegistry.remove(txId);
+            log.info("TCC retryConfirm succeeded: txId={}", txId);
+            return true;
+        } catch (Exception e) {
+            log.warn("TCC retryConfirm failed: txId={}, error={}", txId, e.getMessage());
+            txLog.setStepStatus(TransactionStepStatus.FAILED);
+            txLog.setErrorMessage("CONFIRM retry failed: " + e.getMessage());
+            transactionLogRepository.save(txLog);
+            return false;
+        }
+    }
+
+    /**
+     * 重试 Cancel 操作（供 TransactionRecoveryScheduler 调用）。
+     *
+     * <p>当 TCC 事务的 TRY 阶段超时后，恢复调度器调用此方法执行 Cancel（释放预留资源）。
+     * 从 actionRegistry 中查找原始 TccAction，重建事务上下文，执行 cancelAction。</p>
+     *
+     * @param txLog 超时的事务日志
+     * @return {@code true} 恢复成功；{@code false} 恢复失败
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public boolean retryCancel(TransactionLog txLog) {
+        String txId = txLog.getTransactionId();
+        TccAction action = actionRegistry.get(txId);
+        if (action == null) {
+            log.warn("TCC retryCancel: action not found in registry (service may have restarted), txId={}", txId);
+            txLog.setStepStatus(TransactionStepStatus.FAILED);
+            txLog.setErrorMessage("CANCEL retry failed: action not in registry");
+            transactionLogRepository.save(txLog);
+            return false;
+        }
+
+        TransactionContext ctx = rebuildContext(txLog);
+        try {
+            action.cancelAction(ctx);
+            txLog.setStepStatus(TransactionStepStatus.SUCCESS);
+            transactionLogRepository.save(txLog);
+
+            // 记录事务整体失败（已补偿）
+            TransactionLog failedLog = createLog(ctx, TransactionType.TCC, "cancelled",
+                    2, TransactionStepStatus.FAILED, action.getParticipantId());
+            transactionLogRepository.save(failedLog);
+
+            // 恢复成功后从注册表中移除 action
+            actionRegistry.remove(txId);
+            log.info("TCC retryCancel succeeded: txId={}", txId);
+            return true;
+        } catch (Exception e) {
+            log.warn("TCC retryCancel failed: txId={}, error={}", txId, e.getMessage());
+            txLog.setStepStatus(TransactionStepStatus.FAILED);
+            txLog.setErrorMessage("CANCEL retry failed: " + e.getMessage());
+            transactionLogRepository.save(txLog);
+            return false;
+        }
+    }
+
+    /**
+     * 从 TransactionLog 重建 TransactionContext。
+     *
+     * @param txLog 事务日志
+     * @return 重建的事务上下文
+     */
+    private TransactionContext rebuildContext(TransactionLog txLog) {
+        Map<String, Object> payload = null;
+        if (txLog.getPayload() != null) {
+            try {
+                payload = objectMapper.readValue(txLog.getPayload(), new TypeReference<Map<String, Object>>() {});
+            } catch (JsonProcessingException e) {
+                log.warn("Failed to deserialize payload for txId={}: {}", txLog.getTransactionId(), e.getMessage());
+            }
+        }
+        return new TransactionContext(txLog.getTransactionId(), txLog.getStepName(), payload, txLog.getTenantId());
     }
 }

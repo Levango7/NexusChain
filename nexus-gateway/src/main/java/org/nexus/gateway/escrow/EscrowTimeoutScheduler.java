@@ -25,6 +25,11 @@ public class EscrowTimeoutScheduler {
 
     private static final Logger log = LoggerFactory.getLogger(EscrowTimeoutScheduler.class);
 
+    /** 默认超时自动确认天数（与 EscrowTransaction.autoConfirmDays 默认值一致） */
+    private static final int DEFAULT_AUTO_CONFIRM_DAYS = 7;
+    /** 默认超时自动释放天数（与 PreAuthTransaction.autoReleaseDays 默认值一致） */
+    private static final int DEFAULT_AUTO_RELEASE_DAYS = 3;
+
     private final EscrowTransactionRepository escrowRepository;
     private final PreAuthTransactionRepository preauthRepository;
     private final EscrowService escrowService;
@@ -48,25 +53,20 @@ public class EscrowTimeoutScheduler {
      */
     @Scheduled(fixedDelay = 300000) // 5 分钟
     public void autoConfirmEscrow() {
-        LocalDateTime now = LocalDateTime.now();
-        List<EscrowTransaction> fundedEscrows = escrowRepository.findByStatus(EscrowStatus.FUNDED);
+        // M-5-fix: 改用 Repository 超时查询方法，避免加载所有 FUNDED 记录到内存
+        LocalDateTime cutoff = LocalDateTime.now().minusDays(DEFAULT_AUTO_CONFIRM_DAYS);
+        List<EscrowTransaction> timedOut = escrowRepository.findByStatusAndFundedAtBefore(
+                EscrowStatus.FUNDED, cutoff);
 
         int processed = 0;
-        for (EscrowTransaction escrow : fundedEscrows) {
-            if (escrow.getFundedAt() == null) {
-                continue;
-            }
-
-            LocalDateTime deadline = escrow.getFundedAt().plusDays(escrow.getAutoConfirmDays());
-            if (now.isAfter(deadline)) {
-                try {
-                    escrowService.confirmEscrow(escrow.getEscrowNo());
-                    processed++;
-                    log.info("担保交易超时自动确认: escrowNo={}, fundedAt={}, autoConfirmDays={}",
-                            escrow.getEscrowNo(), escrow.getFundedAt(), escrow.getAutoConfirmDays());
-                } catch (Exception e) {
-                    log.error("担保交易超时自动确认失败: escrowNo={}", escrow.getEscrowNo(), e);
-                }
+        for (EscrowTransaction escrow : timedOut) {
+            try {
+                escrowService.confirmEscrow(escrow.getEscrowNo());
+                processed++;
+                log.info("担保交易超时自动确认: escrowNo={}, fundedAt={}, autoConfirmDays={}",
+                        escrow.getEscrowNo(), escrow.getFundedAt(), escrow.getAutoConfirmDays());
+            } catch (Exception e) {
+                log.error("担保交易超时自动确认失败: escrowNo={}", escrow.getEscrowNo(), e);
             }
         }
 
@@ -83,25 +83,20 @@ public class EscrowTimeoutScheduler {
      */
     @Scheduled(fixedDelay = 300000) // 5 分钟
     public void autoReleasePreAuth() {
-        LocalDateTime now = LocalDateTime.now();
-        List<PreAuthTransaction> authorizedPreauths = preauthRepository.findByStatus(PreAuthStatus.AUTHORIZED);
+        // M-5-fix: 改用 Repository 超时查询方法，避免加载所有 AUTHORIZED 记录到内存
+        LocalDateTime cutoff = LocalDateTime.now().minusDays(DEFAULT_AUTO_RELEASE_DAYS);
+        List<PreAuthTransaction> timedOut = preauthRepository.findByStatusAndAuthorizedAtBefore(
+                PreAuthStatus.AUTHORIZED, cutoff);
 
         int processed = 0;
-        for (PreAuthTransaction preauth : authorizedPreauths) {
-            if (preauth.getAuthorizedAt() == null) {
-                continue;
-            }
-
-            LocalDateTime deadline = preauth.getAuthorizedAt().plusDays(preauth.getAutoReleaseDays());
-            if (now.isAfter(deadline)) {
-                try {
-                    preAuthService.voidPreAuth(preauth.getPreauthNo());
-                    processed++;
-                    log.info("预授权超时自动释放: preauthNo={}, authorizedAt={}, autoReleaseDays={}",
-                            preauth.getPreauthNo(), preauth.getAuthorizedAt(), preauth.getAutoReleaseDays());
-                } catch (Exception e) {
-                    log.error("预授权超时自动释放失败: preauthNo={}", preauth.getPreauthNo(), e);
-                }
+        for (PreAuthTransaction preauth : timedOut) {
+            try {
+                preAuthService.voidPreAuth(preauth.getPreauthNo());
+                processed++;
+                log.info("预授权超时自动释放: preauthNo={}, authorizedAt={}, autoReleaseDays={}",
+                        preauth.getPreauthNo(), preauth.getAuthorizedAt(), preauth.getAutoReleaseDays());
+            } catch (Exception e) {
+                log.error("预授权超时自动释放失败: preauthNo={}", preauth.getPreauthNo(), e);
             }
         }
 

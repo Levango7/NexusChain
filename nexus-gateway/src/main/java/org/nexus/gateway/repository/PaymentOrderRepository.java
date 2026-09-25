@@ -40,6 +40,18 @@ public interface PaymentOrderRepository extends JpaRepository<PaymentOrder, Long
     List<PaymentOrder> findByStatusAndExpiresAtBefore(PaymentOrder.OrderStatus status, LocalDateTime cutoff);
 
     /**
+     * 按状态和创建时间查询 — 查找指定状态且创建时间早于 cutoff 的订单。
+     *
+     * <p>用于自动冲正调度器：查找 PAYING 状态且 createdAt 早于 30 分钟前的订单，
+     * 即 PAYING 状态持续时间超过 30 分钟的异常订单。</p>
+     *
+     * @param status 订单状态
+     * @param cutoff 创建时间截止点
+     * @return 匹配的订单列表
+     */
+    List<PaymentOrder> findByStatusAndCreatedAtBefore(PaymentOrder.OrderStatus status, LocalDateTime cutoff);
+
+    /**
      * Sum order amounts for a merchant paid within the given window.
      * Used by the risk service to enforce daily/monthly merchant limits.
      * Includes PAID and PAYING orders so in-flight payments count against the limit.

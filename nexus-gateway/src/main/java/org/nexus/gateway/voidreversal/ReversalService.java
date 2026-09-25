@@ -131,9 +131,10 @@ public class ReversalService {
                 return reversalRequest;
             }
 
-            // 调用 AccountService 扣减商户余额（反向调整）
-            MerchantAccount account = accountService.withdraw(
-                    reversalRequest.getMerchantId(), reversalRequest.getAmount());
+            // 调用 AccountService 冲正调整商户余额（反向调整）
+            // 使用 reversalAdjust 而非 withdraw，确保生成 REVERSAL_ADJUST 类型流水便于审计追溯
+            MerchantAccount account = accountService.reversalAdjust(
+                    reversalRequest.getMerchantId(), reversalRequest.getAmount(), reversalRequest.getReversalNo());
 
             // 更新订单状态为 REVERSED
             OrderStateMachine.transition(order, PaymentOrder.OrderStatus.REVERSED);
@@ -157,8 +158,16 @@ public class ReversalService {
 
             return reversalRequest;
 
-        } catch (IllegalStateException e) {
+        } catch (VoidReversalException e) {
             // 余额不足等业务异常 → 标记为 FAILED
+            reversalRequest.setStatus(ReversalStatus.FAILED);
+            reversalRequest.setCompletedAt(LocalDateTime.now());
+            reversalRequest = reversalRequestRepository.save(reversalRequest);
+            log.error("冲正执行失败: reversalNo={}, orderId={}, errorCode={}, error={}",
+                    reversalRequest.getReversalNo(), reversalRequest.getOrderId(), e.getErrorCode(), e.getMessage());
+            return reversalRequest;
+        } catch (IllegalStateException e) {
+            // 其他 IllegalStateException（如 OrderStateMachine 转换异常）→ 标记为 FAILED
             reversalRequest.setStatus(ReversalStatus.FAILED);
             reversalRequest.setCompletedAt(LocalDateTime.now());
             reversalRequest = reversalRequestRepository.save(reversalRequest);
@@ -246,7 +255,7 @@ public class ReversalService {
 
         // 校验订单状态必须为 PAID
         if (order.getStatus() != PaymentOrder.OrderStatus.PAID) {
-            throw new IllegalStateException(
+            throw new VoidReversalException("ORDER_NOT_PAID",
                     "订单状态非 PAID，无法冲正: orderId=" + orderId + ", status=" + order.getStatus());
         }
 
@@ -256,8 +265,9 @@ public class ReversalService {
             if (existing.getStatus() == ReversalStatus.PENDING
                     || existing.getStatus() == ReversalStatus.APPROVED
                     || existing.getStatus() == ReversalStatus.COMPLETED) {
-                throw new IllegalStateException("订单已有进行中或已完成的冲正请求: orderId=" + orderId
-                        + ", reversalNo=" + existing.getReversalNo() + ", status=" + existing.getStatus());
+                throw new VoidReversalException("REVERSAL_ALREADY_PROCESSED",
+                        "订单已有进行中或已完成的冲正请求: orderId=" + orderId
+                                + ", reversalNo=" + existing.getReversalNo() + ", status=" + existing.getStatus());
             }
         }
 
