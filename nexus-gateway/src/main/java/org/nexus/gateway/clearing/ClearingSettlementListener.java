@@ -44,8 +44,7 @@ public class ClearingSettlementListener {
             log.info("清算入账完成: batchNo={}, success={}, fail={}",
                     result.getBatchNo(), result.getSuccessCount(), result.getFailCount());
         } catch (Exception e) {
-            log.error("清算入账事件处理失败: batchNo={}, error={}",
-                    event.getBatchNo(), e.getMessage(), e);
+            log.error("清算入账事件处理失败: batchNo={}", event.getBatchNo(), e);
         }
     }
 }

@@ -157,6 +157,8 @@ class FundDashboardServiceTest {
         tx2.setReference("WD-001");
         tx2.setCreatedAt(LocalDateTime.now());
 
+        when(accountRepository.findByMerchantIdAndAccountType(100L, AccountType.BALANCE))
+                .thenReturn(Optional.of(balanceAccount));
         when(transactionRepository.findByAccountIdOrderByCreatedAtDesc("MA100BALANCE"))
                 .thenReturn(List.of(tx1, tx2));
 
@@ -263,9 +265,9 @@ class FundDashboardServiceTest {
         // 返回同一缓存对象
         assertSame(firstResult, secondResult);
 
-        // repository 方法调用次数：第一次构建时 getFundOverview + getAnomalyMonitor 各调一次 BALANCE
-        // 第二次走缓存不再调用，所以 BALANCE=2, FROZEN=1, RESERVE=1
-        verify(accountRepository, times(2)).findByMerchantIdAndAccountType(100L, AccountType.BALANCE);
+        // repository 方法调用次数：第一次构建时 getFundOverview + getRecentTransactions + getAnomalyMonitor 各调一次 BALANCE
+        // 第二次走缓存不再调用，所以 BALANCE=3, FROZEN=1, RESERVE=1
+        verify(accountRepository, times(3)).findByMerchantIdAndAccountType(100L, AccountType.BALANCE);
         verify(accountRepository, times(1)).findByMerchantIdAndAccountType(100L, AccountType.FROZEN);
         verify(accountRepository, times(1)).findByMerchantIdAndAccountType(100L, AccountType.RESERVE);
     }
@@ -283,8 +285,7 @@ class FundDashboardServiceTest {
                 .thenReturn(Optional.empty());
         when(transactionRepository.findByMerchantIdAndCreatedAtBetween(eq(999L), any(LocalDateTime.class), any(LocalDateTime.class)))
                 .thenReturn(Collections.emptyList());
-        when(transactionRepository.findByAccountIdOrderByCreatedAtDesc("MA999BALANCE"))
-                .thenReturn(Collections.emptyList());
+
         when(transactionRepository.findByMerchantIdOrderByCreatedAtDesc(eq(999L), any(PageRequest.class)))
                 .thenReturn(new PageImpl<>(Collections.emptyList()));
 

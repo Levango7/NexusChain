@@ -31,6 +31,7 @@ import java.util.stream.Collectors;
  */
 @RestController
 @RequestMapping("/api/v1/fund-transfers")
+@PreAuthorize("isAuthenticated()")
 @Tag(name = "FundTransfer", description = "资金调拨管理：调拨规则/手动调拨/归集策略")
 public class FundTransferController {
 
@@ -134,6 +135,9 @@ public class FundTransferController {
     public ResponseEntity<Map<String, Object>> manualTransfer(@RequestBody ManualTransferRequest body) {
         if (body.getReference() == null || body.getReference().isBlank()) {
             throw new IllegalArgumentException("reference 不能为空");
+        }
+        if (body.getAmount() == null || body.getAmount().isBlank()) {
+            throw new IllegalArgumentException("amount 不能为空");
         }
         BigDecimal amount = new BigDecimal(body.getAmount());
         var account = fundTransferService.manualTransfer(

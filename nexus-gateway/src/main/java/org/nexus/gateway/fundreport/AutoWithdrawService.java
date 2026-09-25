@@ -233,7 +233,7 @@ public class AutoWithdrawService {
             log.info("自动提现成功: merchantId={}, amount={}, balanceAfter={}",
                     rule.getMerchantId(), withdrawAmount, updatedAccount.getBalance());
 
-        } catch (IllegalStateException e) {
+        } catch (Exception e) {
             log.error("自动提现执行失败: merchantId={}, error={}", rule.getMerchantId(), e.getMessage());
             result.put("reason", "EXECUTION_FAILED");
             result.put("error", e.getMessage());
@@ -259,13 +259,17 @@ public class AutoWithdrawService {
      * 禁用商户的自动提现规则。
      *
      * @param ruleId 规则 ID
+     * @param merchantId 商户 ID（用于验证规则归属）
      * @return 禁用后的规则
-     * @throws IllegalArgumentException 规则不存在
+     * @throws IllegalArgumentException 规则不存在或不属于该商户
      */
     @Transactional
-    public AutoWithdrawRule disableAutoWithdraw(Long ruleId) {
+    public AutoWithdrawRule disableAutoWithdraw(Long ruleId, Long merchantId) {
         AutoWithdrawRule rule = ruleRepository.findById(ruleId)
                 .orElseThrow(() -> new IllegalArgumentException("自动提现规则不存在: " + ruleId));
+        if (!rule.getMerchantId().equals(merchantId)) {
+            throw new IllegalArgumentException("自动提现规则不属于该商户: ruleId=" + ruleId + ", merchantId=" + merchantId);
+        }
         rule.setEnabled(false);
         return ruleRepository.save(rule);
     }

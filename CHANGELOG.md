@@ -4,6 +4,74 @@
 
 ## [Unreleased]
 
+### Payment Orchestration Wave 11（2026-09-26）
+
+#### Wave 11: 资金管理生态综合方案
+
+**资金调拨与清算结算集成（`fundtransfer` / `clearing` / `reserve` 包）**
+- **资金调拨规则**：TransferRule 实体，支持 MANUAL/AUTO/COLLECTION 三种触发类型，FIXED/RATIO 两种金额类型；FundTransferService 实现调拨执行与审批流；TransferRuleEventListener 监听支付确认事件自动触发调拨
+- **归集策略**：CollectionStrategy 实体，支持商户资金自动归集到指定账户；CollectionStrategyService 管理归集策略生命周期
+- **清算结算记录**：ClearingSettlementRecord 实体，记录清算批次与结算状态（PENDING/BOOKED/FAILED）；ClearingSettlementService 实现清算批次结算执行；ClearingSettlementListener 监听清算批次完成事件触发结算
+- **结算划转服务**：SettlementTransferService 实现结算资金从清算账户到商户账户的划转；SettlementTransferScheduler 定时调度待执行结算划转
+- **备付金管理**：ReserveConfig 实体配置备付金比例与阈值；ReserveFundService 实现备付金自动扣留与释放；ReserveMonitorScheduler 监控备付金充足率并告警
+
+**对账与资金账户联动（`reconciliation.link` 包）**
+- **对账调整服务**：ReconciliationAdjustment 实体，支持 DEBIT/CREDIT 两种调整类型与 PENDING/APPROVED/REJECTED 审批状态；ReconciliationAdjustmentService 实现调整审批流与账户联动
+- **挂账核销服务**：SuspenseWriteoffService 实现挂账资金核销，联动 AccountService 完成余额调整
+- **交易审计服务**：TransactionAuditRecord 实体记录审计追踪信息；TransactionAuditService 管理审计记录查询与归档；TransactionAuditScheduler 定时归档过期审计记录
+- **对账联动控制器**：ReconciliationLinkController REST API（调整创建/审批/查询/挂账核销/审计查询）
+
+**风控与资金账户联动（`risk.link` 包）**
+- **风控账户联动**：RiskAccountLinkRecord 实体记录风控联动操作；RiskAccountLinkService 实现风控触发账户冻结/解冻/限制，通过 AccountService.changeStatus() 统一修改账户状态；RiskAccountLinkListener 监听风控事件自动触发联动
+- **余额告警**：BalanceAlertConfig 实体配置告警阈值与级别（INFO/WARNING/CRITICAL）；BalanceAlertService 实现余额监控与告警触发；BalanceAlertNotifier 多渠道通知；BalanceAlertScheduler 定时扫描触发告警；BalanceAlertController REST API（配置管理/告警查询）
+- **大额交易拦截**：LargeTransactionInterception 实体记录拦截信息与状态（PENDING/APPROVED/REJECTED/TIMEOUT）；LargeTransactionInterceptionService 实现拦截审批流；LargeTransactionTimeoutScheduler 定时处理超时拦截
+
+**商户资金管理增强（`fundreport` 包）**
+- **自动提现规则**：AutoWithdrawRule 实体配置自动提现条件与频率（DAILY/WEEKLY/MONTHLY/THRESHOLD）；AutoWithdrawService 实现自动提现触发与执行；AutoWithdrawScheduler 定时调度自动提现
+- **资金报表**：FundReport 实体支持 BALANCE/FLOW/PROFIT_LOSS 三种报表类型与 CSV/JSON 两种格式；FundReportService 使用 ObjectMapper 序列化 JSON、escapeCsvField 方法转义 CSV 特殊字符
+- **资金仪表盘**：FundDashboardService 提供商户资金概览、余额趋势、收支明细、预警信息等多维度聚合视图
+
+**基础设施层修改**
+- **AccountOperationType 扩展**：新增 CLEARING_CREDIT/COLLECTION_DEBIT/RESERVE_FREEZE/RESERVE_RELEASE/ADJUSTMENT_DEBIT/ADJUSTMENT_CREDIT/SUSPENSE_WRITEOFF/AUTO_WITHDRAW 8 种操作类型
+- **AccountService 增强**：新增 creditOnClearing()（清算入账，幂等检查移入 OptimisticLockRetryTemplate 内部解决 TOCTOU 竞态）、depositWithType()/withdrawWithType()（带操作类型标记的存取款）、changeStatus()（统一账户状态变更入口，供风控联动调用）
+- **MerchantAccount 扩展**：新增 alertFlag 字段标记告警状态
+
+**Flyway Migrations**
+- V50：transfer_rules 表（资金调拨规则）
+- V51：collection_strategies 表（归集策略）
+- V52：reserve_configs 表（备付金配置）
+- V53：reconciliation_adjustments 表（对账调整）
+- V54：balance_alert_configs 表（余额告警配置）
+- V55：auto_withdraw_rules 表（自动提现规则）
+- V56：risk_account_link_records 表（风控账户联动记录）
+- V57：large_transaction_interceptions 表（大额交易拦截）
+- V58：fund_reports 表（资金报表）
+- V59：clearing_settlement_records 表（清算结算记录）
+- V60：account_transactions 表 operation_type 字段扩展
+- V61：merchant_accounts 表 alert_flag 字段扩展
+- V62：transaction_audit_records 表（交易审计记录）
+
+**单元测试**
+- ClearingSettlementServiceTest（4 个测试）
+- FundDashboardServiceTest（6 个测试）
+- FundTransferServiceTest
+- ReconciliationAdjustmentServiceTest（5 个测试）
+- RiskAccountLinkServiceTest
+- AccountServiceWave11Test
+
+**代码审查修复（commit `cb30500`）— 4 CRITICAL + 7 HIGH 问题**
+
+CRITICAL 修复：
+- **C-1**：AccountService.creditOnClearing/creditOnPayment/debitOnRefund 幂等检查移入 OptimisticLockRetryTemplate.execute 内部，消除 TOCTOU 竞态条件
+- **C-2**：FundTransferController 手动调拨添加 reference 非空校验
+- **C-3**：BalanceAlertController 添加 @PreAuthorize 权限控制
+- **C-4**：RiskAccountLinkService.executeStatusChange 改为调用 AccountService.changeStatus()，不再直接修改账户状态
+
+HIGH 修复：
+- **H-1**：ClearingSettlementListener 移除 @Async，改为同步事件处理（与 @Transactional 事务一致性）
+- **H-2/H-3**：FundReportService 使用 ObjectMapper 序列化 JSON，新增 escapeCsvField 方法转义 CSV 特殊字符
+- **H-6/H-7**：FundTransferController/ReserveFundController 添加 parseAccountType 辅助方法，处理 AccountType.valueOf 非法输入
+
 ### Payment Orchestration Wave 10（2026-09-25）
 
 #### Wave 10: P0 核心资金能力

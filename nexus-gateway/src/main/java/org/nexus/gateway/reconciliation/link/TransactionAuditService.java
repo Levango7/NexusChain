@@ -121,12 +121,15 @@ public class TransactionAuditService {
         record.setAuditDirection(TransactionAuditRecord.AuditDirection.FORWARD);
         record.setExecutedAt(LocalDateTime.now());
 
-        // 查询审计日期范围内的差错记录
+        // 查询审计日期范围内的差错记录（当天 00:00:00 ~ 23:59:59）
+        LocalDateTime rangeStart = auditDate.atStartOfDay();
+        LocalDateTime rangeEnd = auditDate.atTime(23, 59, 59);
         List<ReconciliationDiscrepancy> discrepancies;
         if (merchantId != null) {
-            discrepancies = discrepancyRepository.findByMerchantId(merchantId);
+            discrepancies = discrepancyRepository.findByMerchantIdAndCreatedAtBetween(
+                    merchantId, rangeStart, rangeEnd);
         } else {
-            discrepancies = discrepancyRepository.findAll();
+            discrepancies = discrepancyRepository.findByCreatedAtBetween(rangeStart, rangeEnd);
         }
 
         // 统计正向差异：短款（内部有渠道无）和金额不一致
@@ -140,6 +143,12 @@ public class TransactionAuditService {
                         || d.getDiscrepancyType() == ReconciliationDiscrepancy.DiscrepancyType.AMOUNT_MISMATCH)
                 .map(d -> d.getAmountDiff() != null ? d.getAmountDiff() : BigDecimal.ZERO)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        // 设置关键字段：内部侧总交易数和正向匹配数
+        record.setInternalTotalCount((long) discrepancies.size());
+        record.setChannelTotalCount((long) discrepancies.size());
+        long forwardMatchedCount = discrepancies.size() - forwardDiscrepancyCount;
+        record.setForwardMatchedCount(Math.max(forwardMatchedCount, 0L));
 
         record.setDiscrepancyCount(forwardDiscrepancyCount);
         record.setDiscrepancyAmount(forwardDiscrepancyAmount);
@@ -164,12 +173,15 @@ public class TransactionAuditService {
         record.setAuditDirection(TransactionAuditRecord.AuditDirection.REVERSE);
         record.setExecutedAt(LocalDateTime.now());
 
-        // 查询差错记录
+        // 查询审计日期范围内的差错记录（当天 00:00:00 ~ 23:59:59）
+        LocalDateTime rangeStart = auditDate.atStartOfDay();
+        LocalDateTime rangeEnd = auditDate.atTime(23, 59, 59);
         List<ReconciliationDiscrepancy> discrepancies;
         if (merchantId != null) {
-            discrepancies = discrepancyRepository.findByMerchantId(merchantId);
+            discrepancies = discrepancyRepository.findByMerchantIdAndCreatedAtBetween(
+                    merchantId, rangeStart, rangeEnd);
         } else {
-            discrepancies = discrepancyRepository.findAll();
+            discrepancies = discrepancyRepository.findByCreatedAtBetween(rangeStart, rangeEnd);
         }
 
         // 统计反向差异：长款（渠道有内部无）和金额不一致
@@ -183,6 +195,12 @@ public class TransactionAuditService {
                         || d.getDiscrepancyType() == ReconciliationDiscrepancy.DiscrepancyType.AMOUNT_MISMATCH)
                 .map(d -> d.getAmountDiff() != null ? d.getAmountDiff() : BigDecimal.ZERO)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        // 设置关键字段：渠道侧总交易数和反向匹配数
+        record.setInternalTotalCount((long) discrepancies.size());
+        record.setChannelTotalCount((long) discrepancies.size());
+        long reverseMatchedCount = discrepancies.size() - reverseDiscrepancyCount;
+        record.setReverseMatchedCount(Math.max(reverseMatchedCount, 0L));
 
         record.setDiscrepancyCount(reverseDiscrepancyCount);
         record.setDiscrepancyAmount(reverseDiscrepancyAmount);

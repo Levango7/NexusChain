@@ -3,6 +3,7 @@ package org.nexus.gateway.reconciliation;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 /**
@@ -31,4 +32,11 @@ public interface ReconciliationDiscrepancyRepository
     /** 按商户 ID 和处置规则查询 */
     List<ReconciliationDiscrepancy> findByMerchantIdAndResolutionType(
             Long merchantId, ReconciliationDiscrepancy.ResolutionType resolutionType);
+
+    /** 按创建时间范围查询所有差错 */
+    List<ReconciliationDiscrepancy> findByCreatedAtBetween(LocalDateTime start, LocalDateTime end);
+
+    /** 按商户 ID 和创建时间范围查询差错 */
+    List<ReconciliationDiscrepancy> findByMerchantIdAndCreatedAtBetween(
+            Long merchantId, LocalDateTime start, LocalDateTime end);
 }

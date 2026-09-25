@@ -11,7 +11,7 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
-import java.math.RoundingMode;
+
 import java.util.List;
 
 /**
@@ -85,12 +85,12 @@ public class TransferRuleEventListener {
 
         // 检查阈值条件
         BigDecimal balance = fromAccount.getBalance();
-        if (!checkThreshold(balance, rule)) {
+        if (!fundTransferService.checkThreshold(balance, rule)) {
             return;
         }
 
         // 计算调拨金额
-        BigDecimal transferAmount = calculateTransferAmount(balance, rule);
+        BigDecimal transferAmount = fundTransferService.calculateTransferAmount(balance, rule);
         if (transferAmount.compareTo(BigDecimal.ZERO) <= 0) {
             return;
         }
@@ -105,38 +105,5 @@ public class TransferRuleEventListener {
                 rule.getToAccountType(),
                 transferAmount,
                 "RULE_" + rule.getRuleCode());
-    }
-
-    /**
-     * 检查余额是否满足阈值条件。
-     */
-    private boolean checkThreshold(BigDecimal balance, TransferRule rule) {
-        if (rule.getThresholdAmount() == null) {
-            return false;
-        }
-        String direction = rule.getThresholdDirection();
-        if ("ABOVE".equalsIgnoreCase(direction)) {
-            return balance.compareTo(rule.getThresholdAmount()) >= 0;
-        } else if ("BELOW".equalsIgnoreCase(direction)) {
-            return balance.compareTo(rule.getThresholdAmount()) <= 0;
-        }
-        return false;
-    }
-
-    /**
-     * 根据规则计算调拨金额。
-     */
-    private BigDecimal calculateTransferAmount(BigDecimal balance, TransferRule rule) {
-        return switch (rule.getTransferAmountType()) {
-            case FIXED -> rule.getTransferAmount() != null ? rule.getTransferAmount() : BigDecimal.ZERO;
-            case PERCENTAGE -> {
-                if (rule.getTransferPercentage() == null) {
-                    yield BigDecimal.ZERO;
-                }
-                yield balance.multiply(rule.getTransferPercentage())
-                        .divide(new BigDecimal("100"), 0, RoundingMode.DOWN);
-            }
-            case ALL -> balance;
-        };
     }
 }

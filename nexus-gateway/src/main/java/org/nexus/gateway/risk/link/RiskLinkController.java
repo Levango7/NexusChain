@@ -7,6 +7,8 @@ import org.nexus.gateway.security.MerchantOwnershipGuard;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
@@ -28,6 +30,7 @@ import java.util.Map;
  */
 @RestController
 @RequestMapping("/api/v1/risk/link")
+@PreAuthorize("hasRole('ADMIN') or hasRole('MERCHANT')")
 @Tag(name = "Risk Link", description = "风控联动：冻结/解冻/大额交易审核")
 public class RiskLinkController {
 
@@ -61,7 +64,14 @@ public class RiskLinkController {
             HttpServletRequest httpRequest) {
         Long merchantId = ownershipGuard.requireMerchantId(httpRequest);
         String riskEventId = (String) body.get("riskEventId");
-        BigDecimal amount = new BigDecimal(body.get("amount").toString());
+        if (riskEventId == null || riskEventId.isBlank()) {
+            return ResponseEntity.badRequest().build();
+        }
+        Object amountRaw = body.get("amount");
+        if (amountRaw == null) {
+            return ResponseEntity.badRequest().build();
+        }
+        BigDecimal amount = new BigDecimal(amountRaw.toString());
         String reason = (String) body.get("reason");
 
         RiskAccountLinkRecord record = linkService.executeFreeze(riskEventId, merchantId, amount, reason);
@@ -82,7 +92,14 @@ public class RiskLinkController {
             HttpServletRequest httpRequest) {
         Long merchantId = ownershipGuard.requireMerchantId(httpRequest);
         String riskEventId = (String) body.get("riskEventId");
-        BigDecimal amount = new BigDecimal(body.get("amount").toString());
+        if (riskEventId == null || riskEventId.isBlank()) {
+            return ResponseEntity.badRequest().build();
+        }
+        Object amountRaw = body.get("amount");
+        if (amountRaw == null) {
+            return ResponseEntity.badRequest().build();
+        }
+        BigDecimal amount = new BigDecimal(amountRaw.toString());
         String reason = (String) body.get("reason");
 
         RiskAccountLinkRecord record = linkService.executeUnfreeze(riskEventId, merchantId, amount, reason);
@@ -103,7 +120,19 @@ public class RiskLinkController {
             HttpServletRequest httpRequest) {
         Long merchantId = ownershipGuard.requireMerchantId(httpRequest);
         String riskEventId = (String) body.get("riskEventId");
-        LinkAction linkAction = LinkAction.valueOf((String) body.get("linkAction"));
+        if (riskEventId == null || riskEventId.isBlank()) {
+            return ResponseEntity.badRequest().build();
+        }
+        String linkActionStr = (String) body.get("linkAction");
+        if (linkActionStr == null || linkActionStr.isBlank()) {
+            return ResponseEntity.badRequest().build();
+        }
+        LinkAction linkAction;
+        try {
+            linkAction = LinkAction.valueOf(linkActionStr);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().build();
+        }
         String reason = (String) body.get("reason");
 
         RiskAccountLinkRecord record = linkService.executeStatusChange(riskEventId, merchantId, linkAction, reason);
@@ -130,21 +159,25 @@ public class RiskLinkController {
     /**
      * 审核通过 — 放行大额交易。
      *
+     * <p>reviewerId 从 SecurityContext 获取当前认证用户，防止伪造。</p>
+     *
      * @param interceptionId 拦截记录 ID
-     * @param body            请求体（reviewerId, reviewComment）
+     * @param body            请求体（reviewComment）
      * @param httpRequest     HTTP 请求
      * @return 更新后的拦截记录
      */
     @Operation(summary = "审核通过大额交易")
+    @PreAuthorize("hasRole('ADMIN')")
     @PostMapping("/interceptions/{interceptionId}/approve")
     public ResponseEntity<LargeTransactionInterception> approveInterception(
             @PathVariable String interceptionId,
             @RequestBody Map<String, Object> body,
             HttpServletRequest httpRequest) {
         ownershipGuard.requireMerchantId(httpRequest);
-        Long reviewerId = body.get("reviewerId") != null
-                ? Long.valueOf(body.get("reviewerId").toString())
-                : null;
+        Long reviewerId = resolveReviewerId();
+        if (reviewerId == null) {
+            return ResponseEntity.badRequest().build();
+        }
         String reviewComment = (String) body.get("reviewComment");
 
         LargeTransactionInterception record = interceptionService.approve(interceptionId, reviewerId, reviewComment);
@@ -154,24 +187,56 @@ public class RiskLinkController {
     /**
      * 审核驳回 — 阻断大额交易。
      *
+     * <p>reviewerId 从 SecurityContext 获取当前认证用户，防止伪造。</p>
+     *
      * @param interceptionId 拦截记录 ID
-     * @param body            请求体（reviewerId, reviewComment）
+     * @param body            请求体（reviewComment）
      * @param httpRequest     HTTP 请求
      * @return 更新后的拦截记录
      */
     @Operation(summary = "审核驳回大额交易")
+    @PreAuthorize("hasRole('ADMIN')")
     @PostMapping("/interceptions/{interceptionId}/reject")
     public ResponseEntity<LargeTransactionInterception> rejectInterception(
             @PathVariable String interceptionId,
             @RequestBody Map<String, Object> body,
             HttpServletRequest httpRequest) {
         ownershipGuard.requireMerchantId(httpRequest);
-        Long reviewerId = body.get("reviewerId") != null
-                ? Long.valueOf(body.get("reviewerId").toString())
-                : null;
+        Long reviewerId = resolveReviewerId();
+        if (reviewerId == null) {
+            return ResponseEntity.badRequest().build();
+        }
         String reviewComment = (String) body.get("reviewComment");
 
         LargeTransactionInterception record = interceptionService.reject(interceptionId, reviewerId, reviewComment);
         return ResponseEntity.ok(record);
+    }
+
+    // ==================== 内部方法 ====================
+
+    /**
+     * 从 SecurityContext 获取当前认证用户的 ID 作为 reviewerId。
+     *
+     * <p>优先从 JWT subject 解析为 Long。如果无法获取认证用户或解析失败，返回 null。</p>
+     *
+     * @return 当前认证用户 ID，或 null
+     */
+    private Long resolveReviewerId() {
+        var authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null || !authentication.isAuthenticated()) {
+            log.warn("审核操作无法获取认证用户，SecurityContext 中无 Authentication");
+            return null;
+        }
+        String name = authentication.getName();
+        if (name == null || name.isBlank()) {
+            log.warn("审核操作无法获取认证用户名，Authentication.name 为空");
+            return null;
+        }
+        try {
+            return Long.valueOf(name);
+        } catch (NumberFormatException e) {
+            log.warn("认证用户名无法解析为 Long: {}", name);
+            return null;
+        }
     }
 }

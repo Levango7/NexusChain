@@ -14,7 +14,7 @@ import java.math.BigDecimal;
  *   <li>余额脱敏：仅保留后 4 位，前缀替换为 ****</li>
  *   <li>按配置的通知渠道依次发送（WEBHOOK → EMAIL → SMS）</li>
  *   <li>主渠道发送失败时自动切换备用渠道</li>
- *   <li>每个渠道最多重试 3 次（指数退避）</li>
+ *   <li>每个渠道最多重试 2 次（固定 1 秒退避）</li>
  * </ol>
  */
 @Component
@@ -22,7 +22,11 @@ public class BalanceAlertNotifier {
 
     private static final Logger log = LoggerFactory.getLogger(BalanceAlertNotifier.class);
 
-    private static final int MAX_RETRIES = 3;
+    /** 最大重试次数（简化为 2 次，减少线程池占用） */
+    private static final int MAX_RETRIES = 2;
+
+    /** 固定退避时间（毫秒），不再指数增长 */
+    private static final long RETRY_BACKOFF_MS = 1000;
 
     /**
      * 发送预警通知 — 余额脱敏 + 重试 + 备用渠道。
@@ -84,6 +88,9 @@ public class BalanceAlertNotifier {
     /**
      * 按渠道发送通知，带重试逻辑。
      *
+     * <p>重试策略：最多 {@value #MAX_RETRIES} 次，固定 {@value #RETRY_BACKOFF_MS}ms 退避。
+     * 相比指数退避，固定退避减少线程池占用时间。</p>
+     *
      * @param channel       通知渠道
      * @param merchantId    商户 ID
      * @param level         预警级别
@@ -102,7 +109,7 @@ public class BalanceAlertNotifier {
                         channel, merchantId, level, attempt, e.getMessage());
                 if (attempt < MAX_RETRIES) {
                     try {
-                        Thread.sleep((long) Math.pow(2, attempt) * 1000);
+                        Thread.sleep(RETRY_BACKOFF_MS);
                     } catch (InterruptedException ie) {
                         Thread.currentThread().interrupt();
                         break;

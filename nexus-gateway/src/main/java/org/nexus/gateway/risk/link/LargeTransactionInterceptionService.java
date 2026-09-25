@@ -58,13 +58,11 @@ public class LargeTransactionInterceptionService {
                                                     BigDecimal threshold, String riskEventId) {
         // 幂等检查：同一 riskEventId 已存在拦截记录
         if (riskEventId != null) {
-            List<LargeTransactionInterception> existing = interceptionRepository.findByMerchantId(merchantId);
-            for (LargeTransactionInterception record : existing) {
-                if (riskEventId.equals(record.getRiskEventId())) {
-                    log.info("大额交易拦截已存在（幂等跳过）: riskEventId={}, merchantId={}",
-                            riskEventId, merchantId);
-                    return record;
-                }
+            Optional<LargeTransactionInterception> existing = interceptionRepository.findByRiskEventId(riskEventId);
+            if (existing.isPresent()) {
+                log.info("大额交易拦截已存在（幂等跳过）: riskEventId={}, merchantId={}",
+                        riskEventId, merchantId);
+                return existing.get();
             }
         }
 

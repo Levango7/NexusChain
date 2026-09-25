@@ -40,6 +40,14 @@ public interface LargeTransactionInterceptionRepository extends JpaRepository<La
     List<LargeTransactionInterception> findByInterceptionStatus(InterceptionStatus status);
 
     /**
+     * 按风控事件 ID 查询拦截记录 — 用于幂等检查。
+     *
+     * @param riskEventId 风控事件 ID
+     * @return 拦截记录（可能为空）
+     */
+    Optional<LargeTransactionInterception> findByRiskEventId(String riskEventId);
+
+    /**
      * 查询已超时但尚未升级告警的拦截记录 — 供定时任务使用。
      *
      * @param status    拦截状态（PENDING_REVIEW）

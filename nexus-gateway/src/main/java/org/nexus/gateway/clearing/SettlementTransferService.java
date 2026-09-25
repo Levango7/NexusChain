@@ -82,7 +82,8 @@ public class SettlementTransferService {
         record = recordRepository.save(record);
 
         try {
-            String reference = "STL_" + batchNo + "_" + merchantId;
+            String reference = "STL_" + batchNo + "_" + merchantId
+                    + "_" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
 
             if ("CREDIT".equalsIgnoreCase(direction)) {
                 // 入账：商户余额增加

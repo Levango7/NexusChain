@@ -160,11 +160,11 @@ public class CollectionStrategyService {
                 ? strategy.getMinRetainAmount() : BigDecimal.ZERO;
 
         return switch (strategy.getCollectionType()) {
-            case "FULL" -> {
+            case CollectionStrategy.COLLECTION_TYPE_FULL -> {
                 BigDecimal available = balance.subtract(minRetain);
                 yield available.compareTo(BigDecimal.ZERO) > 0 ? available : BigDecimal.ZERO;
             }
-            case "PERCENTAGE" -> {
+            case CollectionStrategy.COLLECTION_TYPE_PERCENTAGE -> {
                 if (strategy.getCollectionPercentage() == null) {
                     yield BigDecimal.ZERO;
                 }
@@ -176,7 +176,7 @@ public class CollectionStrategyService {
                 }
                 yield amount.compareTo(BigDecimal.ZERO) > 0 ? amount : BigDecimal.ZERO;
             }
-            case "FIXED" -> {
+            case CollectionStrategy.COLLECTION_TYPE_FIXED -> {
                 if (strategy.getCollectionAmount() == null) {
                     yield BigDecimal.ZERO;
                 }
@@ -301,15 +301,15 @@ public class CollectionStrategyService {
         if (strategy.getCollectionType() == null) {
             throw new IllegalArgumentException("归集类型不能为空");
         }
-        if (!"FULL".equals(strategy.getCollectionType())
-                && !"PERCENTAGE".equals(strategy.getCollectionType())
-                && !"FIXED".equals(strategy.getCollectionType())) {
+        if (!CollectionStrategy.COLLECTION_TYPE_FULL.equals(strategy.getCollectionType())
+                && !CollectionStrategy.COLLECTION_TYPE_PERCENTAGE.equals(strategy.getCollectionType())
+                && !CollectionStrategy.COLLECTION_TYPE_FIXED.equals(strategy.getCollectionType())) {
             throw new IllegalArgumentException("归集类型必须为 FULL/PERCENTAGE/FIXED");
         }
-        if ("FIXED".equals(strategy.getCollectionType()) && strategy.getCollectionAmount() == null) {
+        if (CollectionStrategy.COLLECTION_TYPE_FIXED.equals(strategy.getCollectionType()) && strategy.getCollectionAmount() == null) {
             throw new IllegalArgumentException("FIXED 类型必须指定固定金额");
         }
-        if ("PERCENTAGE".equals(strategy.getCollectionType()) && strategy.getCollectionPercentage() == null) {
+        if (CollectionStrategy.COLLECTION_TYPE_PERCENTAGE.equals(strategy.getCollectionType()) && strategy.getCollectionPercentage() == null) {
             throw new IllegalArgumentException("PERCENTAGE 类型必须指定百分比");
         }
     }

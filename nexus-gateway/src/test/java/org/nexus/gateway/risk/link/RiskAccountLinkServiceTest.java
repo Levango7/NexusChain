@@ -41,8 +41,13 @@ class RiskAccountLinkServiceTest {
     private static final String REASON = "风控冻结";
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws Exception {
         riskAccountLinkService = new RiskAccountLinkService(linkRecordRepository, accountService, accountRepository);
+
+        // 设置 self-injection proxy（单元测试中无 Spring 代理，直接设置为自身）
+        java.lang.reflect.Field selfField = RiskAccountLinkService.class.getDeclaredField("self");
+        selfField.setAccessible(true);
+        selfField.set(riskAccountLinkService, riskAccountLinkService);
 
         balanceAccount = new MerchantAccount();
         balanceAccount.setId(1L);

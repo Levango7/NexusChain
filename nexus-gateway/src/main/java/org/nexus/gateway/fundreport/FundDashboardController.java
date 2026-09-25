@@ -22,6 +22,7 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/v1/fund-dashboard")
 @Tag(name = "FundDashboard", description = "资金管理仪表盘：资金概览/流水趋势/收支明细/异常监控")
+@PreAuthorize("isAuthenticated()")
 public class FundDashboardController {
 
     private static final Logger log = LoggerFactory.getLogger(FundDashboardController.class);
@@ -74,6 +75,8 @@ public class FundDashboardController {
     public List<Map<String, Object>> getTransactionTrend(
             @PathVariable Long merchantId,
             @RequestParam(defaultValue = "7") int days) {
+        // 趋势天数上限验证
+        days = Math.min(days, 90);
         return fundDashboardService.getTransactionTrend(merchantId, days);
     }
 

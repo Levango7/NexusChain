@@ -24,6 +24,15 @@ import java.util.List;
 @Table(name = "collection_strategies")
 public class CollectionStrategy {
 
+    /** 归集类型：全额归集 */
+    public static final String COLLECTION_TYPE_FULL = "FULL";
+
+    /** 归集类型：按百分比归集 */
+    public static final String COLLECTION_TYPE_PERCENTAGE = "PERCENTAGE";
+
+    /** 归集类型：固定金额归集 */
+    public static final String COLLECTION_TYPE_FIXED = "FIXED";
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;

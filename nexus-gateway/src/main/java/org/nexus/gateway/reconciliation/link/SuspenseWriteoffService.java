@@ -260,9 +260,9 @@ public class SuspenseWriteoffService {
     }
 
     /**
-     * 设置自动核销金额阈值（主要用于测试）。
+     * 设置自动核销金额阈值（主要用于测试，package-private 防止外部修改）。
      */
-    public void setAutoWriteoffThreshold(BigDecimal autoWriteoffThreshold) {
+    void setAutoWriteoffThreshold(BigDecimal autoWriteoffThreshold) {
         this.autoWriteoffThreshold = autoWriteoffThreshold;
     }
 }

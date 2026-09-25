@@ -466,6 +466,10 @@ public class AccountService {
      * @return 充值后的账户
      */
     public MerchantAccount creditOnPayment(Long merchantId, BigDecimal amount, String orderNo) {
+        if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException("支付金额必须大于 0");
+        }
+
         return optimisticLockRetryTemplate.execute(() -> {
             // 幂等检查：同一 orderNo 不重复入账（移入事务内避免 TOCTOU 竞态）
             List<AccountTransaction> existing = transactionRepository.findByReference(orderNo);
@@ -508,6 +512,10 @@ public class AccountService {
      * @return 扣减后的账户
      */
     public MerchantAccount debitOnRefund(Long merchantId, BigDecimal amount, String refundNo) {
+        if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException("退款金额必须大于 0");
+        }
+
         return optimisticLockRetryTemplate.execute(() -> {
             // 幂等检查：同一 refundNo 不重复扣减（移入事务内避免 TOCTOU 竞态）
             List<AccountTransaction> existing = transactionRepository.findByReference(refundNo);
@@ -608,6 +616,13 @@ public class AccountService {
     public MerchantAccount changeStatus(Long merchantId, AccountType accountType, AccountStatus targetStatus) {
         MerchantAccount account = accountRepository.findByMerchantIdAndAccountType(merchantId, accountType)
                 .orElseGet(() -> getOrCreateAccount(merchantId, accountType));
+
+        // 状态转换合法性校验：CLOSED 状态不允许转回 ACTIVE 或 FROZEN
+        if (account.getStatus() == AccountStatus.CLOSED && targetStatus != AccountStatus.CLOSED) {
+            throw new IllegalArgumentException(
+                    "已关闭的账户不允许变更为其他状态: " + account.getAccountId());
+        }
+
         account.setStatus(targetStatus);
         account = accountRepository.save(account);
         log.info("账户状态变更: merchantId={}, accountType={}, targetStatus={}",

@@ -3,6 +3,7 @@ package org.nexus.gateway.reconciliation.link;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -38,6 +39,9 @@ public interface ReconciliationAdjustmentRepository
 
     /** 按幂等键（reference）查询 — 用于幂等检查 */
     Optional<ReconciliationAdjustment> findByReference(String reference);
+
+    /** 批量按幂等键（reference）查询 — 用于 N+1 查询优化 */
+    List<ReconciliationAdjustment> findByReferenceIn(Collection<String> references);
 
     /** 查询未执行的调整记录 */
     List<ReconciliationAdjustment> findByExecutedFalse();

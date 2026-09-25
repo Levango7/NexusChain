@@ -16,6 +16,8 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * 对账差异调整服务。
@@ -91,11 +93,18 @@ public class ReconciliationAdjustmentService {
 
         List<ReconciliationAdjustment> adjustments = new ArrayList<>();
 
+        // 批量构建幂等键并一次性查询已存在的 reference，避免 N+1 查询
+        List<String> references = diffReport.getDiscrepancies().stream()
+                .map(d -> buildReference(d, reconciliationFileId))
+                .collect(Collectors.toList());
+        Set<String> existingReferences = adjustmentRepository.findByReferenceIn(references).stream()
+                .map(ReconciliationAdjustment::getReference)
+                .collect(Collectors.toSet());
+
         for (ReconciliationDiscrepancy discrepancy : diffReport.getDiscrepancies()) {
-            // 幂等检查：同一差错不重复创建调整记录
+            // 幂等检查：同一差错不重复创建调整记录（使用批量查询结果）
             String reference = buildReference(discrepancy, reconciliationFileId);
-            Optional<ReconciliationAdjustment> existing = adjustmentRepository.findByReference(reference);
-            if (existing.isPresent()) {
+            if (existingReferences.contains(reference)) {
                 log.info("调整记录已存在（幂等跳过）: reference={}", reference);
                 continue;
             }
@@ -394,9 +403,9 @@ public class ReconciliationAdjustmentService {
     }
 
     /**
-     * 设置自动审批金额阈值（主要用于测试）。
+     * 设置自动审批金额阈值（主要用于测试，package-private 防止外部修改）。
      */
-    public void setAutoApproveThreshold(BigDecimal autoApproveThreshold) {
+    void setAutoApproveThreshold(BigDecimal autoApproveThreshold) {
         this.autoApproveThreshold = autoApproveThreshold;
     }
 }

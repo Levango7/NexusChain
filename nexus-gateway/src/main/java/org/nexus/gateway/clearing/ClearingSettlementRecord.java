@@ -77,6 +77,11 @@ public class ClearingSettlementRecord {
     @Column(name = "tenant_id", length = 64)
     private String tenantId;
 
+    /** 乐观锁版本号 */
+    @Version
+    @Column(name = "version")
+    private Long version;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
@@ -141,6 +146,9 @@ public class ClearingSettlementRecord {
 
     public String getTenantId() { return tenantId; }
     public void setTenantId(String tenantId) { this.tenantId = tenantId; }
+
+    public Long getVersion() { return version; }
+    public void setVersion(Long version) { this.version = version; }
 
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }

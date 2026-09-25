@@ -70,13 +70,18 @@ public class LargeTransactionInterceptionListener {
                 event.getMerchantId(), amount, defaultThreshold, opType);
 
         try {
+            // 使用订单号作为 riskEventId，确保幂等检查生效
+            String riskEventId = event.getOrderNo() != null
+                    ? "LTI-" + event.getOrderNo()
+                    : "LTI-" + event.getMerchantId() + "-" + System.currentTimeMillis();
+
             interceptionService.intercept(
                     event.getMerchantId(),
                     event.getOrderNo(),
                     amount,
                     null,
                     defaultThreshold,
-                    null
+                    riskEventId
             );
         } catch (Exception e) {
             log.error("大额交易拦截失败: merchantId={}, amount={}, error={}",

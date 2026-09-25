@@ -15,6 +15,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 资金管理仪表盘服务 — 商户资金概览与监控。
@@ -34,6 +35,9 @@ public class FundDashboardService {
     /** 缓存有效期：30 秒 */
     private static final long CACHE_TTL_MS = 30_000L;
 
+    /** 缓存最大条目数，超过时清除全部缓存防止内存泄漏 */
+    private static final int CACHE_MAX_SIZE = 1000;
+
     /** 近期收支明细最大返回条数 */
     private static final int RECENT_DETAIL_LIMIT = 20;
 
@@ -44,7 +48,7 @@ public class FundDashboardService {
     private final AccountTransactionRepository transactionRepository;
 
     /** 仪表盘缓存：merchantId → (缓存数据, 过期时间) */
-    private final Map<Long, CacheEntry> dashboardCache = new HashMap<>();
+    private final Map<Long, CacheEntry> dashboardCache = new ConcurrentHashMap<>();
 
     public FundDashboardService(MerchantAccountRepository accountRepository,
                                  AccountTransactionRepository transactionRepository) {
@@ -88,7 +92,11 @@ public class FundDashboardService {
         dashboard.put("anomalyMonitor", getAnomalyMonitor(merchantId));
         dashboard.put("generatedAt", LocalDateTime.now());
 
-        // 写入缓存
+        // 写入缓存（超过最大条目数时清除全部缓存，防止内存泄漏）
+        if (dashboardCache.size() >= CACHE_MAX_SIZE) {
+            log.info("仪表盘缓存超过最大条目数 {}，清除全部缓存", CACHE_MAX_SIZE);
+            dashboardCache.clear();
+        }
         dashboardCache.put(merchantId, new CacheEntry(dashboard));
         log.debug("仪表盘数据已缓存: merchantId={}", merchantId);
 
@@ -195,9 +203,17 @@ public class FundDashboardService {
      * 获取近期收支明细 — 最近 20 条流水记录。
      */
     public List<Map<String, Object>> getRecentTransactions(Long merchantId) {
-        List<AccountTransaction> transactions =
-                transactionRepository.findByAccountIdOrderByCreatedAtDesc(
-                        "MA" + merchantId + AccountType.BALANCE.name());
+        // 通过 Repository 查询获取 accountId，避免硬编码格式与 AccountService 逻辑重复
+        Optional<MerchantAccount> balanceAccount =
+                accountRepository.findByMerchantIdAndAccountType(merchantId, AccountType.BALANCE);
+
+        List<AccountTransaction> transactions;
+        if (balanceAccount.isPresent()) {
+            transactions = transactionRepository.findByAccountIdOrderByCreatedAtDesc(
+                    balanceAccount.get().getAccountId());
+        } else {
+            transactions = Collections.emptyList();
+        }
 
         // 如果通过 accountId 查不到，则通过 merchantId 查
         if (transactions.isEmpty()) {

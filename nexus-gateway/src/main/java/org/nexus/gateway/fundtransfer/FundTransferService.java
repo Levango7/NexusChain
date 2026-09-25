@@ -163,7 +163,7 @@ public class FundTransferService {
     /**
      * 检查余额是否满足阈值条件。
      */
-    private boolean checkThreshold(BigDecimal balance, TransferRule rule) {
+    public boolean checkThreshold(BigDecimal balance, TransferRule rule) {
         if (rule.getThresholdAmount() == null) {
             return false;
         }
@@ -179,7 +179,7 @@ public class FundTransferService {
     /**
      * 根据规则计算调拨金额。
      */
-    private BigDecimal calculateTransferAmount(BigDecimal balance, TransferRule rule) {
+    public BigDecimal calculateTransferAmount(BigDecimal balance, TransferRule rule) {
         return switch (rule.getTransferAmountType()) {
             case FIXED -> rule.getTransferAmount() != null ? rule.getTransferAmount() : BigDecimal.ZERO;
             case PERCENTAGE -> {

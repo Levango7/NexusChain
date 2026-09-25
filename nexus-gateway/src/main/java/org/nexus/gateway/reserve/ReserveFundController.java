@@ -31,6 +31,7 @@ import java.util.stream.Collectors;
  */
 @RestController
 @RequestMapping("/api/v1/reserve")
+@PreAuthorize("isAuthenticated()")
 @Tag(name = "ReserveFund", description = "备付金管理：配置/余额查询/补充/监控预警")
 public class ReserveFundController {
 
@@ -119,6 +120,9 @@ public class ReserveFundController {
     public ResponseEntity<Map<String, Object>> manualReplenish(
             @PathVariable Long merchantId,
             @RequestBody ReplenishRequest body) {
+        if (body.getAmount() == null || body.getAmount().isBlank()) {
+            throw new IllegalArgumentException("amount 不能为空");
+        }
         BigDecimal amount = new BigDecimal(body.getAmount());
         AccountType fromAccountType = body.getFromAccountType() != null
                 ? parseAccountType(body.getFromAccountType())

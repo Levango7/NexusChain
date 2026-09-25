@@ -14,6 +14,7 @@ import org.nexus.gateway.reconciliation.ReconciliationDiscrepancy;
 import org.springframework.context.ApplicationEventPublisher;
 
 import java.math.BigDecimal;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 
@@ -62,7 +63,7 @@ class ReconciliationAdjustmentServiceTest {
         ReconciliationDiffReport diffReport = new ReconciliationDiffReport();
         diffReport.setDiscrepancies(List.of(discrepancy));
 
-        when(adjustmentRepository.findByReference(any())).thenReturn(Optional.empty());
+        when(adjustmentRepository.findByReferenceIn(any())).thenReturn(Collections.emptyList());
         when(adjustmentRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
 
         List<ReconciliationAdjustment> result = adjustmentService.processDiffReport(100L, diffReport, 1L);
@@ -100,7 +101,7 @@ class ReconciliationAdjustmentServiceTest {
         ReconciliationDiffReport diffReport = new ReconciliationDiffReport();
         diffReport.setDiscrepancies(List.of(discrepancy));
 
-        when(adjustmentRepository.findByReference(any())).thenReturn(Optional.empty());
+        when(adjustmentRepository.findByReferenceIn(any())).thenReturn(Collections.emptyList());
         when(adjustmentRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
 
         List<ReconciliationAdjustment> result = adjustmentService.processDiffReport(100L, diffReport, 1L);
@@ -189,7 +190,7 @@ class ReconciliationAdjustmentServiceTest {
         ReconciliationDiffReport diffReport = new ReconciliationDiffReport();
         diffReport.setDiscrepancies(List.of(discrepancy));
 
-        when(adjustmentRepository.findByReference(any())).thenReturn(Optional.empty());
+        when(adjustmentRepository.findByReferenceIn(any())).thenReturn(Collections.emptyList());
         when(adjustmentRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
 
         List<ReconciliationAdjustment> result = adjustmentService.processDiffReport(100L, diffReport, 1L);

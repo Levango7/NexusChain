@@ -4,6 +4,9 @@ import org.nexus.gateway.reconciliation.SuspenseAccount;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDate;
@@ -25,6 +28,7 @@ import java.util.Map;
  */
 @RestController
 @RequestMapping("/api/reconciliation/link")
+@PreAuthorize("hasRole('ADMIN') or hasRole('MERCHANT')")
 public class ReconciliationLinkController {
 
     private static final Logger log = LoggerFactory.getLogger(ReconciliationLinkController.class);
@@ -96,10 +100,11 @@ public class ReconciliationLinkController {
      * 审批通过调整记录。
      */
     @PostMapping("/adjustments/{id}/approve")
+    @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ReconciliationAdjustment> approveAdjustment(
             @PathVariable Long id,
             @RequestBody Map<String, String> body) {
-        String approvedBy = body.get("approvedBy");
+        String approvedBy = getCurrentUser();
         if (approvedBy == null || approvedBy.isBlank()) {
             return ResponseEntity.badRequest().build();
         }
@@ -116,11 +121,12 @@ public class ReconciliationLinkController {
      * 审批拒绝调整记录。
      */
     @PostMapping("/adjustments/{id}/reject")
+    @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ReconciliationAdjustment> rejectAdjustment(
             @PathVariable Long id,
             @RequestBody Map<String, String> body) {
-        String rejectedBy = body.get("rejectedBy");
-        String reason = body.get("reason");
+        String rejectedBy = getCurrentUser();
+        String reason = body != null ? body.get("reason") : null;
         if (rejectedBy == null || rejectedBy.isBlank()) {
             return ResponseEntity.badRequest().build();
         }
@@ -139,6 +145,7 @@ public class ReconciliationLinkController {
      * 自动核销挂账（金额 ≤ 阈值）。
      */
     @PostMapping("/suspense/{id}/auto-writeoff")
+    @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<SuspenseAccount> autoWriteoff(@PathVariable Long id) {
         try {
             return ResponseEntity.ok(suspenseWriteoffService.autoWriteoff(id));
@@ -153,11 +160,12 @@ public class ReconciliationLinkController {
      * 人工核销挂账。
      */
     @PostMapping("/suspense/{id}/manual-writeoff")
+    @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<SuspenseAccount> manualWriteoff(
             @PathVariable Long id,
             @RequestBody Map<String, String> body) {
-        String approvedBy = body.get("approvedBy");
-        String resolutionNote = body.get("resolutionNote");
+        String approvedBy = getCurrentUser();
+        String resolutionNote = body != null ? body.get("resolutionNote") : null;
         if (approvedBy == null || approvedBy.isBlank()) {
             return ResponseEntity.badRequest().build();
         }
@@ -223,9 +231,13 @@ public class ReconciliationLinkController {
      * 手动触发审计。
      */
     @PostMapping("/audit/execute")
+    @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<List<TransactionAuditRecord>> executeAudit(
             @RequestBody Map<String, Object> body) {
         try {
+            if (body == null) {
+                return ResponseEntity.badRequest().build();
+            }
             String auditDateStr = (String) body.get("auditDate");
             Long merchantId = body.get("merchantId") != null
                     ? Long.valueOf(body.get("merchantId").toString()) : null;
@@ -240,5 +252,20 @@ public class ReconciliationLinkController {
             log.error("手动触发审计失败: error={}", e.getMessage(), e);
             return ResponseEntity.internalServerError().build();
         }
+    }
+
+    // --- 内部方法 ---
+
+    /**
+     * 从 SecurityContext 获取当前认证用户名，防止请求体伪造身份。
+     *
+     * @return 当前认证用户名，如果无认证信息则返回 null
+     */
+    private String getCurrentUser() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null || !authentication.isAuthenticated()) {
+            return null;
+        }
+        return authentication.getName();
     }
 }

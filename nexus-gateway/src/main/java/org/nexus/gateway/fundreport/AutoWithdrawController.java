@@ -23,6 +23,7 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/v1/auto-withdraw")
 @Tag(name = "AutoWithdraw", description = "自动提现管理：规则配置/查询/禁用")
+@PreAuthorize("isAuthenticated()")
 public class AutoWithdrawController {
 
     private static final Logger log = LoggerFactory.getLogger(AutoWithdrawController.class);
@@ -46,6 +47,20 @@ public class AutoWithdrawController {
     public ResponseEntity<Map<String, Object>> configureAutoWithdraw(
             @PathVariable Long merchantId,
             @RequestBody ConfigureRequest body) {
+
+        // 输入验证：frequency 和 threshold 不能为空
+        if (body.getFrequency() == null) {
+            Map<String, Object> error = new LinkedHashMap<>();
+            error.put("code", "INVALID_PARAMETER");
+            error.put("message", "提现频率不能为空");
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+        }
+        if (body.getThreshold() == null) {
+            Map<String, Object> error = new LinkedHashMap<>();
+            error.put("code", "INVALID_PARAMETER");
+            error.put("message", "触发阈值不能为空");
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+        }
 
         WithdrawFrequency frequency = WithdrawFrequency.valueOf(body.getFrequency());
         BigDecimal threshold = new BigDecimal(body.getThreshold());
@@ -87,9 +102,11 @@ public class AutoWithdrawController {
      */
     @Operation(summary = "禁用自动提现规则")
     @PreAuthorize("hasRole('ADMIN')")
-    @PostMapping("/disable/{ruleId}")
-    public ResponseEntity<Map<String, Object>> disableAutoWithdraw(@PathVariable Long ruleId) {
-        AutoWithdrawRule rule = autoWithdrawService.disableAutoWithdraw(ruleId);
+    @PostMapping("/{merchantId}/disable/{ruleId}")
+    public ResponseEntity<Map<String, Object>> disableAutoWithdraw(
+            @PathVariable Long merchantId,
+            @PathVariable Long ruleId) {
+        AutoWithdrawRule rule = autoWithdrawService.disableAutoWithdraw(ruleId, merchantId);
 
         Map<String, Object> result = toRuleMap(rule);
         return ResponseEntity.ok(result);

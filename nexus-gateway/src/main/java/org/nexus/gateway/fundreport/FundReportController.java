@@ -23,6 +23,7 @@ import java.util.Optional;
 @RestController
 @RequestMapping("/api/v1/fund-reports")
 @Tag(name = "FundReport", description = "资金报表管理：日报/周报/月报生成与查询")
+@PreAuthorize("isAuthenticated()")
 public class FundReportController {
 
     private static final Logger log = LoggerFactory.getLogger(FundReportController.class);
@@ -46,6 +47,20 @@ public class FundReportController {
     public ResponseEntity<Map<String, Object>> generateReport(
             @PathVariable Long merchantId,
             @RequestBody GenerateReportRequest body) {
+
+        // 输入验证：reportType 和 reportFormat 不能为空
+        if (body.getReportType() == null) {
+            Map<String, Object> error = new LinkedHashMap<>();
+            error.put("code", "INVALID_PARAMETER");
+            error.put("message", "报表类型不能为空");
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+        }
+        if (body.getReportFormat() == null) {
+            Map<String, Object> error = new LinkedHashMap<>();
+            error.put("code", "INVALID_PARAMETER");
+            error.put("message", "报表格式不能为空");
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+        }
 
         ReportType reportType = ReportType.valueOf(body.getReportType());
         ReportFormat reportFormat = ReportFormat.valueOf(body.getReportFormat());
@@ -80,6 +95,9 @@ public class FundReportController {
             @PathVariable Long merchantId,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
+
+        // 分页参数上限验证
+        size = Math.min(size, 100);
 
         Page<FundReport> reportPage = fundReportService.getReports(merchantId, page, size);
 
