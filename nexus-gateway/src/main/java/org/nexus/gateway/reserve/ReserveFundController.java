@@ -121,7 +121,7 @@ public class ReserveFundController {
             @RequestBody ReplenishRequest body) {
         BigDecimal amount = new BigDecimal(body.getAmount());
         AccountType fromAccountType = body.getFromAccountType() != null
-                ? AccountType.valueOf(body.getFromAccountType())
+                ? parseAccountType(body.getFromAccountType())
                 : AccountType.BALANCE;
 
         var account = reserveFundService.manualReplenish(merchantId, amount, fromAccountType);
@@ -211,6 +211,18 @@ public class ReserveFundController {
     }
 
     // === 内部方法 ===
+
+    /**
+     * 安全解析 AccountType — 将 valueOf 的 IllegalArgumentException 转换为友好消息。
+     */
+    private AccountType parseAccountType(String value) {
+        try {
+            return AccountType.valueOf(value);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("无效的账户类型: " + value
+                    + "，有效值为: BALANCE, FROZEN, RESERVE");
+        }
+    }
 
     private ReserveConfig buildReserveConfig(ReserveConfigRequest body) {
         ReserveConfig config = new ReserveConfig();

@@ -132,11 +132,14 @@ public class FundTransferController {
     @PreAuthorize("hasRole('ADMIN')")
     @PostMapping("/manual")
     public ResponseEntity<Map<String, Object>> manualTransfer(@RequestBody ManualTransferRequest body) {
+        if (body.getReference() == null || body.getReference().isBlank()) {
+            throw new IllegalArgumentException("reference 不能为空");
+        }
         BigDecimal amount = new BigDecimal(body.getAmount());
         var account = fundTransferService.manualTransfer(
                 body.getMerchantId(),
-                AccountType.valueOf(body.getFromAccountType()),
-                AccountType.valueOf(body.getToAccountType()),
+                parseAccountType(body.getFromAccountType()),
+                parseAccountType(body.getToAccountType()),
                 amount,
                 body.getReference());
 
@@ -278,6 +281,18 @@ public class FundTransferController {
     }
 
     // === 内部方法 ===
+
+    /**
+     * 安全解析 AccountType — 将 valueOf 的 IllegalArgumentException 转换为友好消息。
+     */
+    private AccountType parseAccountType(String value) {
+        try {
+            return AccountType.valueOf(value);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("无效的账户类型: " + value
+                    + "，有效值为: BALANCE, FROZEN, RESERVE");
+        }
+    }
 
     private TransferRule buildTransferRule(TransferRuleRequest body) {
         TransferRule rule = new TransferRule();

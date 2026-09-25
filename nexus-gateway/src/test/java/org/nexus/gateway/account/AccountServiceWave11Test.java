@@ -112,8 +112,6 @@ class AccountServiceWave11Test {
     @Test
     @DisplayName("creditOnClearing: 金额 <= 0 抛出 IllegalArgumentException")
     void creditOnClearing_zeroAmount_throwsIllegalArgumentException() {
-        when(transactionRepository.findByReference("CLEARING-003"))
-                .thenReturn(Collections.emptyList());
 
         assertThrows(IllegalArgumentException.class,
                 () -> accountService.creditOnClearing(100L, BigDecimal.ZERO, "CLEARING-003"));

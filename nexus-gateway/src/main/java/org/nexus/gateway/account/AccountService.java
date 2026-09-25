@@ -466,15 +466,15 @@ public class AccountService {
      * @return 充值后的账户
      */
     public MerchantAccount creditOnPayment(Long merchantId, BigDecimal amount, String orderNo) {
-        // 幂等检查：同一 orderNo 不重复入账
-        List<AccountTransaction> existing = transactionRepository.findByReference(orderNo);
-        if (!existing.isEmpty()) {
-            log.info("支付入账已存在（幂等跳过）: orderNo={}", orderNo);
-            return accountRepository.findByMerchantIdAndAccountType(merchantId, AccountType.BALANCE)
-                    .orElse(null);
-        }
-
         return optimisticLockRetryTemplate.execute(() -> {
+            // 幂等检查：同一 orderNo 不重复入账（移入事务内避免 TOCTOU 竞态）
+            List<AccountTransaction> existing = transactionRepository.findByReference(orderNo);
+            if (!existing.isEmpty()) {
+                log.info("支付入账已存在（幂等跳过）: orderNo={}", orderNo);
+                return accountRepository.findByMerchantIdAndAccountType(merchantId, AccountType.BALANCE)
+                        .orElse(null);
+            }
+
             MerchantAccount account = getOrCreateAccount(merchantId, AccountType.BALANCE);
             assertAccountOperable(account);
 
@@ -508,15 +508,15 @@ public class AccountService {
      * @return 扣减后的账户
      */
     public MerchantAccount debitOnRefund(Long merchantId, BigDecimal amount, String refundNo) {
-        // 幂等检查：同一 refundNo 不重复扣减
-        List<AccountTransaction> existing = transactionRepository.findByReference(refundNo);
-        if (!existing.isEmpty()) {
-            log.info("退款扣减已存在（幂等跳过）: refundNo={}", refundNo);
-            return accountRepository.findByMerchantIdAndAccountType(merchantId, AccountType.BALANCE)
-                    .orElse(null);
-        }
-
         return optimisticLockRetryTemplate.execute(() -> {
+            // 幂等检查：同一 refundNo 不重复扣减（移入事务内避免 TOCTOU 竞态）
+            List<AccountTransaction> existing = transactionRepository.findByReference(refundNo);
+            if (!existing.isEmpty()) {
+                log.info("退款扣减已存在（幂等跳过）: refundNo={}", refundNo);
+                return accountRepository.findByMerchantIdAndAccountType(merchantId, AccountType.BALANCE)
+                        .orElse(null);
+            }
+
             MerchantAccount account = getOrCreateAccount(merchantId, AccountType.BALANCE);
             assertAccountOperable(account);
 
@@ -560,19 +560,19 @@ public class AccountService {
      * @throws IllegalStateException 账户已冻结或已关闭
      */
     public MerchantAccount creditOnClearing(Long merchantId, BigDecimal amount, String clearingOrderId) {
-        // 幂等检查：同一 clearingOrderId 不重复入账
-        List<AccountTransaction> existing = transactionRepository.findByReference(clearingOrderId);
-        if (!existing.isEmpty()) {
-            log.info("清算入账已存在（幂等跳过）: clearingOrderId={}", clearingOrderId);
-            return accountRepository.findByMerchantIdAndAccountType(merchantId, AccountType.BALANCE)
-                    .orElse(null);
-        }
-
         if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
             throw new IllegalArgumentException("清算金额必须大于 0");
         }
 
         return optimisticLockRetryTemplate.execute(() -> {
+            // 幂等检查：同一 clearingOrderId 不重复入账（移入事务内避免 TOCTOU 竞态）
+            List<AccountTransaction> existing = transactionRepository.findByReference(clearingOrderId);
+            if (!existing.isEmpty()) {
+                log.info("清算入账已存在（幂等跳过）: clearingOrderId={}", clearingOrderId);
+                return accountRepository.findByMerchantIdAndAccountType(merchantId, AccountType.BALANCE)
+                        .orElse(null);
+            }
+
             MerchantAccount account = getOrCreateAccount(merchantId, AccountType.BALANCE);
             assertAccountOperable(account);
 
@@ -590,6 +590,29 @@ public class AccountService {
                     merchantId, clearingOrderId, amount, balanceAfter);
             return account;
         });
+    }
+
+    // === 状态变更 ===
+
+    /**
+     * 变更账户状态 — 供风控联动等场景使用，确保状态变更通过 AccountService 统一管理。
+     *
+     * <p>状态变更在调用者的事务上下文中执行（不开启独立事务），
+     * 保证与联动记录在同一事务中提交或回滚。</p>
+     *
+     * @param merchantId 商户 ID
+     * @param accountType 账户类型
+     * @param targetStatus 目标状态
+     * @return 变更后的账户
+     */
+    public MerchantAccount changeStatus(Long merchantId, AccountType accountType, AccountStatus targetStatus) {
+        MerchantAccount account = accountRepository.findByMerchantIdAndAccountType(merchantId, accountType)
+                .orElseGet(() -> getOrCreateAccount(merchantId, accountType));
+        account.setStatus(targetStatus);
+        account = accountRepository.save(account);
+        log.info("账户状态变更: merchantId={}, accountType={}, targetStatus={}",
+                merchantId, accountType, targetStatus);
+        return account;
     }
 
     // === 自定义操作类型存款 ===

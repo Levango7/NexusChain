@@ -3,14 +3,14 @@ package org.nexus.gateway.clearing;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.event.EventListener;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
 /**
  * 清算结算事件监听器 — 监听 {@link ClearingBatchCompletedEvent} 自动触发清算入账。
  *
  * <p>当清算批次完成时，自动调用 {@link ClearingSettlementService#processClearingBatch}
- * 将清算结果写入商户余额。使用 {@code @Async} 异步执行，联动失败不阻断主流程。</p>
+ * 将清算结果写入商户余额。使用同步事件处理，确保与主事务在同一上下文中执行，
+ * 主事务回滚时入账操作也一并回滚。</p>
  */
 @Component
 public class ClearingSettlementListener {
@@ -24,13 +24,13 @@ public class ClearingSettlementListener {
     }
 
     /**
-     * 监听清算批次完成事件 — 异步执行清算入账。
+     * 监听清算批次完成事件 — 同步执行清算入账。
      *
-     * <p>联动失败不阻断主流程，仅记录日志。</p>
+     * <p>同步处理确保与主事务在同一上下文中执行，主事务回滚时入账操作也一并回滚。
+     * 联动失败仅记录日志，不阻断主流程。</p>
      *
      * @param event 清算批次完成事件
      */
-    @Async
     @EventListener
     public void onClearingBatchCompleted(ClearingBatchCompletedEvent event) {
         try {

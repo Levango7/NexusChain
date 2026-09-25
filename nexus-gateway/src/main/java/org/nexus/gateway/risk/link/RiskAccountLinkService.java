@@ -209,18 +209,14 @@ public class RiskAccountLinkService {
 
         try {
             AccountStatus targetStatus = mapLinkActionToStatus(linkAction);
-            // 变更 BALANCE 账户状态
-            MerchantAccount balanceAccount = accountService.getOrCreateAccount(merchantId, AccountType.BALANCE);
-            balanceAccount.setStatus(targetStatus);
-            accountRepository.save(balanceAccount);
+            // 变更 BALANCE 账户状态（通过 AccountService 统一管理）
+            accountService.changeStatus(merchantId, AccountType.BALANCE, targetStatus);
 
             // 变更 FROZEN 账户状态（如果存在）
             Optional<MerchantAccount> frozenAccount = accountRepository
                     .findByMerchantIdAndAccountType(merchantId, AccountType.FROZEN);
-            frozenAccount.ifPresent(account -> {
-                account.setStatus(targetStatus);
-                accountRepository.save(account);
-            });
+            frozenAccount.ifPresent(account ->
+                    accountService.changeStatus(merchantId, AccountType.FROZEN, targetStatus));
 
             record.setExecutionStatus(ExecutionStatus.SUCCESS);
             record.setCompletedAt(LocalDateTime.now());

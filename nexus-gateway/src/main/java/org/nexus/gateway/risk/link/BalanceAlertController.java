@@ -7,6 +7,7 @@ import org.nexus.gateway.security.MerchantOwnershipGuard;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
@@ -49,6 +50,7 @@ public class BalanceAlertController {
      * @return 预警配置
      */
     @Operation(summary = "配置余额预警阈值")
+    @PreAuthorize("hasRole('ADMIN') or hasRole('MERCHANT')")
     @PostMapping("/config")
     public ResponseEntity<BalanceAlertConfig> configureAlert(
             @RequestBody Map<String, Object> body,
@@ -73,6 +75,7 @@ public class BalanceAlertController {
      * @return 预警配置（可能为空）
      */
     @Operation(summary = "查询余额预警配置")
+    @PreAuthorize("hasRole('ADMIN') or hasRole('MERCHANT')")
     @GetMapping("/config")
     public ResponseEntity<BalanceAlertConfig> getAlertConfig(HttpServletRequest httpRequest) {
         Long merchantId = ownershipGuard.requireMerchantId(httpRequest);
@@ -86,6 +89,7 @@ public class BalanceAlertController {
      * @return 当前预警级别（null 表示正常）
      */
     @Operation(summary = "手动触发余额预警检查")
+    @PreAuthorize("hasRole('ADMIN') or hasRole('MERCHANT')")
     @PostMapping("/check")
     public ResponseEntity<Map<String, Object>> checkBalanceAlert(HttpServletRequest httpRequest) {
         Long merchantId = ownershipGuard.requireMerchantId(httpRequest);

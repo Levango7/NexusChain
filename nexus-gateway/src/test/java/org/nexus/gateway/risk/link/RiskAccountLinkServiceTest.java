@@ -170,12 +170,8 @@ class RiskAccountLinkServiceTest {
     void executeStatusChange_statusFrozen_setsAccountFrozen() {
         when(linkRecordRepository.findByRiskEventIdAndLinkAction(RISK_EVENT_ID, LinkAction.STATUS_FROZEN))
                 .thenReturn(Optional.empty());
-        when(accountService.getOrCreateAccount(MERCHANT_ID, AccountType.BALANCE))
-                .thenReturn(balanceAccount);
         when(accountRepository.findByMerchantIdAndAccountType(MERCHANT_ID, AccountType.FROZEN))
                 .thenReturn(Optional.of(frozenAccount));
-        when(accountRepository.save(any(MerchantAccount.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
         when(linkRecordRepository.save(any(RiskAccountLinkRecord.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
@@ -186,11 +182,8 @@ class RiskAccountLinkServiceTest {
         assertEquals(LinkAction.STATUS_FROZEN, result.getLinkAction());
         assertEquals(ExecutionStatus.SUCCESS, result.getExecutionStatus());
 
-        assertEquals(AccountStatus.FROZEN, balanceAccount.getStatus());
-        assertEquals(AccountStatus.FROZEN, frozenAccount.getStatus());
-
-        verify(accountRepository).save(balanceAccount);
-        verify(accountRepository).save(frozenAccount);
+        verify(accountService).changeStatus(MERCHANT_ID, AccountType.BALANCE, AccountStatus.FROZEN);
+        verify(accountService).changeStatus(MERCHANT_ID, AccountType.FROZEN, AccountStatus.FROZEN);
     }
 
     @Test
@@ -198,12 +191,8 @@ class RiskAccountLinkServiceTest {
     void executeStatusChange_statusClosed_setsAccountClosed() {
         when(linkRecordRepository.findByRiskEventIdAndLinkAction(RISK_EVENT_ID, LinkAction.STATUS_CLOSED))
                 .thenReturn(Optional.empty());
-        when(accountService.getOrCreateAccount(MERCHANT_ID, AccountType.BALANCE))
-                .thenReturn(balanceAccount);
         when(accountRepository.findByMerchantIdAndAccountType(MERCHANT_ID, AccountType.FROZEN))
                 .thenReturn(Optional.of(frozenAccount));
-        when(accountRepository.save(any(MerchantAccount.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
         when(linkRecordRepository.save(any(RiskAccountLinkRecord.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
@@ -214,11 +203,8 @@ class RiskAccountLinkServiceTest {
         assertEquals(LinkAction.STATUS_CLOSED, result.getLinkAction());
         assertEquals(ExecutionStatus.SUCCESS, result.getExecutionStatus());
 
-        assertEquals(AccountStatus.CLOSED, balanceAccount.getStatus());
-        assertEquals(AccountStatus.CLOSED, frozenAccount.getStatus());
-
-        verify(accountRepository).save(balanceAccount);
-        verify(accountRepository).save(frozenAccount);
+        verify(accountService).changeStatus(MERCHANT_ID, AccountType.BALANCE, AccountStatus.CLOSED);
+        verify(accountService).changeStatus(MERCHANT_ID, AccountType.FROZEN, AccountStatus.CLOSED);
     }
 
     @Test
@@ -230,12 +216,8 @@ class RiskAccountLinkServiceTest {
 
         when(linkRecordRepository.findByRiskEventIdAndLinkAction(RISK_EVENT_ID, LinkAction.STATUS_RESTORED))
                 .thenReturn(Optional.empty());
-        when(accountService.getOrCreateAccount(MERCHANT_ID, AccountType.BALANCE))
-                .thenReturn(balanceAccount);
         when(accountRepository.findByMerchantIdAndAccountType(MERCHANT_ID, AccountType.FROZEN))
                 .thenReturn(Optional.of(frozenAccount));
-        when(accountRepository.save(any(MerchantAccount.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
         when(linkRecordRepository.save(any(RiskAccountLinkRecord.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
@@ -246,11 +228,8 @@ class RiskAccountLinkServiceTest {
         assertEquals(LinkAction.STATUS_RESTORED, result.getLinkAction());
         assertEquals(ExecutionStatus.SUCCESS, result.getExecutionStatus());
 
-        assertEquals(AccountStatus.ACTIVE, balanceAccount.getStatus());
-        assertEquals(AccountStatus.ACTIVE, frozenAccount.getStatus());
-
-        verify(accountRepository).save(balanceAccount);
-        verify(accountRepository).save(frozenAccount);
+        verify(accountService).changeStatus(MERCHANT_ID, AccountType.BALANCE, AccountStatus.ACTIVE);
+        verify(accountService).changeStatus(MERCHANT_ID, AccountType.FROZEN, AccountStatus.ACTIVE);
     }
 
     @Test
@@ -276,7 +255,7 @@ class RiskAccountLinkServiceTest {
         assertEquals(LinkAction.STATUS_CLOSED, result.getLinkAction());
 
         // 确保不重复执行状态变更操作
-        verify(accountService, never()).getOrCreateAccount(any(), any());
+        verify(accountService, never()).changeStatus(any(), any(), any());
         verify(accountRepository, never()).save(any(MerchantAccount.class));
         verify(linkRecordRepository).save(any(RiskAccountLinkRecord.class));
     }

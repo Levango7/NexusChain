@@ -10,6 +10,8 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -44,11 +46,14 @@ public class FundReportService {
 
     private final FundReportRepository reportRepository;
     private final AccountTransactionRepository transactionRepository;
+    private final ObjectMapper objectMapper;
 
     public FundReportService(FundReportRepository reportRepository,
-                              AccountTransactionRepository transactionRepository) {
+                              AccountTransactionRepository transactionRepository,
+                              ObjectMapper objectMapper) {
         this.reportRepository = reportRepository;
         this.transactionRepository = transactionRepository;
+        this.objectMapper = objectMapper;
     }
 
     // === 生成报表 ===
@@ -225,23 +230,25 @@ public class FundReportService {
     /**
      * 生成 CSV 格式报表内容。
      *
-     * <p>账户编号脱敏：仅保留后 4 位，前缀 ****。</p>
+     * <p>账户编号脱敏：仅保留后 4 位，前缀 ****。
+     * 字段值按 RFC 4180 规范转义：包含逗号、换行符、双引号时用双引号包裹，
+     * 内部双引号用两个双引号表示。</p>
      */
     private String generateCsvContent(List<AccountTransaction> transactions) {
         StringBuilder sb = new StringBuilder();
         sb.append(CSV_HEADER).append("\n");
 
         for (AccountTransaction tx : transactions) {
-            sb.append(tx.getTxNo()).append(",")
-                    .append(maskAccountId(tx.getAccountId())).append(",")
-                    .append(tx.getMerchantId()).append(",")
-                    .append(tx.getOperationType()).append(",")
-                    .append(tx.getDirection()).append(",")
-                    .append(tx.getAmount()).append(",")
-                    .append(tx.getBalanceBefore()).append(",")
-                    .append(tx.getBalanceAfter()).append(",")
-                    .append(tx.getReference()).append(",")
-                    .append(tx.getCreatedAt())
+            sb.append(escapeCsvField(tx.getTxNo())).append(",")
+                    .append(escapeCsvField(maskAccountId(tx.getAccountId()))).append(",")
+                    .append(escapeCsvField(String.valueOf(tx.getMerchantId()))).append(",")
+                    .append(escapeCsvField(String.valueOf(tx.getOperationType()))).append(",")
+                    .append(escapeCsvField(String.valueOf(tx.getDirection()))).append(",")
+                    .append(escapeCsvField(String.valueOf(tx.getAmount()))).append(",")
+                    .append(escapeCsvField(String.valueOf(tx.getBalanceBefore()))).append(",")
+                    .append(escapeCsvField(String.valueOf(tx.getBalanceAfter()))).append(",")
+                    .append(escapeCsvField(tx.getReference())).append(",")
+                    .append(escapeCsvField(String.valueOf(tx.getCreatedAt())))
                     .append("\n");
         }
 
@@ -249,9 +256,24 @@ public class FundReportService {
     }
 
     /**
+     * RFC 4180 CSV 字段转义 — 包含逗号、换行符、双引号时用双引号包裹，
+     * 内部双引号用两个双引号表示。
+     */
+    private String escapeCsvField(String value) {
+        if (value == null) {
+            return "";
+        }
+        if (value.contains(",") || value.contains("\n") || value.contains("\r") || value.contains("\"")) {
+            return "\"" + value.replace("\"", "\"\"") + "\"";
+        }
+        return value;
+    }
+
+    /**
      * 生成 JSON 格式报表内容。
      *
-     * <p>包含报表摘要和流水明细。账户编号脱敏：仅保留后 4 位，前缀 ****。</p>
+     * <p>包含报表摘要和流水明细。账户编号脱敏：仅保留后 4 位，前缀 ****。
+     * 使用 Jackson ObjectMapper 序列化，确保特殊字符正确转义，防止 JSON 注入。</p>
      */
     private String generateJsonContent(List<AccountTransaction> transactions,
                                         LocalDateTime periodStart, LocalDateTime periodEnd) {
@@ -271,43 +293,44 @@ public class FundReportService {
             }
         }
 
-        StringBuilder sb = new StringBuilder();
-        sb.append("{");
-        sb.append("\"summary\":{");
-        sb.append("\"totalTransactions\":").append(transactions.size()).append(",");
-        sb.append("\"totalCredit\":").append(totalCredit).append(",");
-        sb.append("\"totalDebit\":").append(totalDebit).append(",");
-        sb.append("\"creditCount\":").append(creditCount).append(",");
-        sb.append("\"debitCount\":").append(debitCount).append(",");
-        sb.append("\"netFlow\":").append(totalCredit.subtract(totalDebit));
-        sb.append("},");
-        sb.append("\"period\":{");
-        sb.append("\"start\":\"").append(periodStart).append("\",");
-        sb.append("\"end\":\"").append(periodEnd).append("\"");
-        sb.append("},");
-        sb.append("\"transactions\":[");
+        Map<String, Object> reportData = new LinkedHashMap<>();
+        Map<String, Object> summary = new LinkedHashMap<>();
+        summary.put("totalTransactions", transactions.size());
+        summary.put("totalCredit", totalCredit);
+        summary.put("totalDebit", totalDebit);
+        summary.put("creditCount", creditCount);
+        summary.put("debitCount", debitCount);
+        summary.put("netFlow", totalCredit.subtract(totalDebit));
+        reportData.put("summary", summary);
 
-        for (int i = 0; i < transactions.size(); i++) {
-            AccountTransaction tx = transactions.get(i);
-            if (i > 0) {
-                sb.append(",");
-            }
-            sb.append("{");
-            sb.append("\"txNo\":\"").append(tx.getTxNo()).append("\",");
-            sb.append("\"accountId\":\"").append(maskAccountId(tx.getAccountId())).append("\",");
-            sb.append("\"merchantId\":").append(tx.getMerchantId()).append(",");
-            sb.append("\"operationType\":\"").append(tx.getOperationType()).append("\",");
-            sb.append("\"direction\":\"").append(tx.getDirection()).append("\",");
-            sb.append("\"amount\":").append(tx.getAmount()).append(",");
-            sb.append("\"balanceBefore\":").append(tx.getBalanceBefore()).append(",");
-            sb.append("\"balanceAfter\":").append(tx.getBalanceAfter()).append(",");
-            sb.append("\"reference\":\"").append(tx.getReference()).append("\",");
-            sb.append("\"createdAt\":\"").append(tx.getCreatedAt()).append("\"");
-            sb.append("}");
+        Map<String, Object> period = new LinkedHashMap<>();
+        period.put("start", periodStart.toString());
+        period.put("end", periodEnd.toString());
+        reportData.put("period", period);
+
+        List<Map<String, Object>> txList = new ArrayList<>();
+        for (AccountTransaction tx : transactions) {
+            Map<String, Object> txMap = new LinkedHashMap<>();
+            txMap.put("txNo", tx.getTxNo());
+            txMap.put("accountId", maskAccountId(tx.getAccountId()));
+            txMap.put("merchantId", tx.getMerchantId());
+            txMap.put("operationType", tx.getOperationType());
+            txMap.put("direction", tx.getDirection());
+            txMap.put("amount", tx.getAmount());
+            txMap.put("balanceBefore", tx.getBalanceBefore());
+            txMap.put("balanceAfter", tx.getBalanceAfter());
+            txMap.put("reference", tx.getReference());
+            txMap.put("createdAt", tx.getCreatedAt());
+            txList.add(txMap);
         }
+        reportData.put("transactions", txList);
 
-        sb.append("]}");
-        return sb.toString();
+        try {
+            return objectMapper.writeValueAsString(reportData);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            log.error("JSON 序列化失败", e);
+            throw new IllegalStateException("报表 JSON 生成失败: " + e.getMessage(), e);
+        }
     }
 
     /**
