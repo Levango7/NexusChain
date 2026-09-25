@@ -45,6 +45,14 @@ public interface MerchantAccountRepository extends JpaRepository<MerchantAccount
     List<MerchantAccount> findByMerchantId(Long merchantId);
 
     /**
+     * 按账户类型查询所有账户。
+     *
+     * @param accountType 账户类型
+     * @return 账户列表
+     */
+    List<MerchantAccount> findByAccountType(AccountType accountType);
+
+    /**
      * 按账户状态查询。
      *
      * @param status 账户状态

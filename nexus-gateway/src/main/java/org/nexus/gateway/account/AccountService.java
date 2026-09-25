@@ -543,6 +543,149 @@ public class AccountService {
         });
     }
 
+    // === 清算入账 ===
+
+    /**
+     * 清算入账 — 清算结算后商户余额增加。
+     *
+     * <p>由清算模块在完成清算后调用，使用 {@link AccountOperationType#CLEARING_SETTLE} 操作类型。
+     * clearingOrderId 作为幂等键（reference），确保同一清算订单不重复入账。
+     * 账户冻结时拒绝入账。</p>
+     *
+     * @param merchantId 商户 ID
+     * @param amount 清算金额（必须 > 0）
+     * @param clearingOrderId 清算订单号（幂等键）
+     * @return 入账后的账户
+     * @throws IllegalArgumentException 金额 <= 0
+     * @throws IllegalStateException 账户已冻结或已关闭
+     */
+    public MerchantAccount creditOnClearing(Long merchantId, BigDecimal amount, String clearingOrderId) {
+        // 幂等检查：同一 clearingOrderId 不重复入账
+        List<AccountTransaction> existing = transactionRepository.findByReference(clearingOrderId);
+        if (!existing.isEmpty()) {
+            log.info("清算入账已存在（幂等跳过）: clearingOrderId={}", clearingOrderId);
+            return accountRepository.findByMerchantIdAndAccountType(merchantId, AccountType.BALANCE)
+                    .orElse(null);
+        }
+
+        if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException("清算金额必须大于 0");
+        }
+
+        return optimisticLockRetryTemplate.execute(() -> {
+            MerchantAccount account = getOrCreateAccount(merchantId, AccountType.BALANCE);
+            assertAccountOperable(account);
+
+            BigDecimal balanceBefore = account.getBalance();
+            BigDecimal balanceAfter = balanceBefore.add(amount);
+            account.setBalance(balanceAfter);
+            account = accountRepository.save(account);
+
+            recordTransaction(account, AccountOperationType.CLEARING_SETTLE, TransactionDirection.CREDIT,
+                    amount, balanceBefore, balanceAfter, clearingOrderId);
+
+            publishBalanceChangedEvent(account, AccountOperationType.CLEARING_SETTLE, amount, balanceBefore, balanceAfter);
+
+            log.debug("清算入账成功: merchantId={}, clearingOrderId={}, amount={}, balanceAfter={}",
+                    merchantId, clearingOrderId, amount, balanceAfter);
+            return account;
+        });
+    }
+
+    // === 自定义操作类型存款 ===
+
+    /**
+     * 自定义操作类型存款 — 支持指定操作类型的余额增加操作。
+     *
+     * <p>通用存款方法，调用方通过 operationType 参数指定具体的操作类型
+     * （如 CLEARING_SETTLE、RECON_ADJUST、SUSPENSE_WRITEOFF 等）。
+     * 复用 optimisticLockRetryTemplate 和 recordTransaction 逻辑。
+     * （来源经验：2026-09-25-financial-operation-reuse-wrong-account-type-audit-trail）</p>
+     *
+     * @param merchantId 商户 ID
+     * @param amount 存款金额（必须 > 0）
+     * @param reference 关联业务凭证
+     * @param operationType 操作类型
+     * @return 存款后的账户
+     * @throws IllegalArgumentException 金额 <= 0
+     * @throws IllegalStateException 账户已冻结或已关闭
+     */
+    public MerchantAccount depositWithType(Long merchantId, BigDecimal amount, String reference,
+                                            AccountOperationType operationType) {
+        if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException("存款金额必须大于 0");
+        }
+
+        return optimisticLockRetryTemplate.execute(() -> {
+            MerchantAccount account = getOrCreateAccount(merchantId, AccountType.BALANCE);
+            assertAccountOperable(account);
+
+            BigDecimal balanceBefore = account.getBalance();
+            BigDecimal balanceAfter = balanceBefore.add(amount);
+            account.setBalance(balanceAfter);
+            account = accountRepository.save(account);
+
+            recordTransaction(account, operationType, TransactionDirection.CREDIT,
+                    amount, balanceBefore, balanceAfter, reference);
+
+            publishBalanceChangedEvent(account, operationType, amount, balanceBefore, balanceAfter);
+
+            log.debug("自定义类型存款成功: merchantId={}, operationType={}, amount={}, balanceAfter={}",
+                    merchantId, operationType, amount, balanceAfter);
+            return account;
+        });
+    }
+
+    // === 自定义操作类型取款 ===
+
+    /**
+     * 自定义操作类型取款 — 支持指定操作类型的余额减少操作。
+     *
+     * <p>通用取款方法，调用方通过 operationType 参数指定具体的操作类型
+     * （如 AUTO_WITHDRAW、RECON_ADJUST、SUSPENSE_WRITEOFF 等）。
+     * 余额不足时拒绝并抛出异常。复用 optimisticLockRetryTemplate 和 recordTransaction 逻辑。
+     * （来源经验：2026-09-25-financial-operation-reuse-wrong-account-type-audit-trail）</p>
+     *
+     * @param merchantId 商户 ID
+     * @param amount 取款金额（必须 > 0）
+     * @param reference 关联业务凭证
+     * @param operationType 操作类型
+     * @return 取款后的账户
+     * @throws IllegalArgumentException 金额 <= 0
+     * @throws IllegalStateException 账户已冻结或已关闭
+     * @throws IllegalStateException 余额不足
+     */
+    public MerchantAccount withdrawWithType(Long merchantId, BigDecimal amount, String reference,
+                                             AccountOperationType operationType) {
+        if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException("取款金额必须大于 0");
+        }
+
+        return optimisticLockRetryTemplate.execute(() -> {
+            MerchantAccount account = getOrCreateAccount(merchantId, AccountType.BALANCE);
+            assertAccountOperable(account);
+
+            BigDecimal balanceBefore = account.getBalance();
+            if (balanceBefore.compareTo(amount) < 0) {
+                throw new IllegalStateException(
+                        "余额不足: 当前余额=" + balanceBefore + ", 取款金额=" + amount);
+            }
+
+            BigDecimal balanceAfter = balanceBefore.subtract(amount);
+            account.setBalance(balanceAfter);
+            account = accountRepository.save(account);
+
+            recordTransaction(account, operationType, TransactionDirection.DEBIT,
+                    amount, balanceBefore, balanceAfter, reference);
+
+            publishBalanceChangedEvent(account, operationType, amount, balanceBefore, balanceAfter);
+
+            log.debug("自定义类型取款成功: merchantId={}, operationType={}, amount={}, balanceAfter={}",
+                    merchantId, operationType, amount, balanceAfter);
+            return account;
+        });
+    }
+
     // === 内部方法 ===
 
     /**

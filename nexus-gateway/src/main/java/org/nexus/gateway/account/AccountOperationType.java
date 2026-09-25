@@ -34,5 +34,21 @@ public enum AccountOperationType {
     /** 预授权扣款 — 预授权捕获扣款 */
     PREAUTH_CAPTURE,
     /** 预授权释放 — 预授权释放冻结金额 */
-    PREAUTH_RELEASE
+    PREAUTH_RELEASE,
+    /** 清算入账 — 清算结算后商户余额增加（CREDIT） */
+    CLEARING_SETTLE,
+    /** 结算划拨 — 结算资金双向转移（CREDIT/DEBIT） */
+    SETTLEMENT_TRANSFER,
+    /** 对账差异调整 — 对账发现差异后余额调整（CREDIT/DEBIT） */
+    RECON_ADJUST,
+    /** 挂账核销 — 挂账资金核销处理（CREDIT/DEBIT） */
+    SUSPENSE_WRITEOFF,
+    /** 风控冻结 — 风控触发冻结金额（DEBIT+CREDIT） */
+    RISK_FREEZE,
+    /** 风控解冻 — 风控触发解冻金额（DEBIT+CREDIT） */
+    RISK_UNFREEZE,
+    /** 自动提现 — 系统自动触发提现（DEBIT） */
+    AUTO_WITHDRAW,
+    /** 备付金补充 — 备付金账户资金补充（DEBIT+CREDIT） */
+    RESERVE_REPLENISH
 }

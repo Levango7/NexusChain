@@ -47,6 +47,10 @@ public class MerchantAccount {
     @Column(name = "status", nullable = false, length = 32)
     private AccountStatus status = AccountStatus.ACTIVE;
 
+    /** 预警级别：NULL(正常)/WARNING(预警)/CRITICAL(严重)/EMERGENCY(紧急) */
+    @Column(name = "alert_flag", length = 32)
+    private String alertFlag;
+
     /** 多租户隔离键 */
     @Column(name = "tenant_id", length = 64)
     private String tenantId;
@@ -99,6 +103,9 @@ public class MerchantAccount {
 
     public AccountStatus getStatus() { return status; }
     public void setStatus(AccountStatus status) { this.status = status; }
+
+    public String getAlertFlag() { return alertFlag; }
+    public void setAlertFlag(String alertFlag) { this.alertFlag = alertFlag; }
 
     public String getTenantId() { return tenantId; }
     public void setTenantId(String tenantId) { this.tenantId = tenantId; }
