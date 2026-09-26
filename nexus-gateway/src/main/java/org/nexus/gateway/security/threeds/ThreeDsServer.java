@@ -3,6 +3,9 @@ package org.nexus.gateway.security.threeds;
 import org.nexus.gateway.model.PaymentOrder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.security.SecureRandom;
@@ -38,10 +41,25 @@ public class ThreeDsServer {
 
     private final RiskAssessor riskAssessor;
     private final SecureRandom secureRandom = new SecureRandom();
+    private boolean simulatedChallengeEnabled = true; // 默认启用模拟验证
 
+    @Autowired
     public ThreeDsServer(RiskAssessor riskAssessor) {
         this.riskAssessor = riskAssessor;
     }
+
+    /** 测试用构造器：显式指定模拟 Challenge 验证开关 */
+    public ThreeDsServer(RiskAssessor riskAssessor, boolean simulatedChallengeEnabled) {
+        this.riskAssessor = riskAssessor;
+        this.simulatedChallengeEnabled = simulatedChallengeEnabled;
+    }
+
+    /** 生产环境通过配置注入：设为 false 时模拟 Challenge 验证被禁用 */
+    @Value("${nexus.3ds.simulated-challenge-enabled:true}")
+    public void setSimulatedChallengeEnabled(boolean enabled) {
+        this.simulatedChallengeEnabled = enabled;
+    }
+
 
     /**
      * 发起 3DS 认证 — 模拟 ACS 的风险评估与认证决策。
@@ -173,8 +191,16 @@ public class ThreeDsServer {
 
     /**
      * 模拟验证挑战结果 — 6 位数字且非全零视为通过。
+     *
+     * <p><b>安全警告</b>：此验证逻辑仅为模拟实现，接受任意 6 位非零数字。
+     * 生产环境必须设置 {@code nexus.3ds.simulated-challenge-enabled=false} 并对接真实 ACS，
+     * 由真实 ACS 验证 OTP/生物识别等挑战结果。</p>
      */
     private boolean validateChallengeResult(String challengeResult) {
+        if (!simulatedChallengeEnabled) {
+            log.warn("模拟 Challenge 验证已禁用，需对接真实 ACS 验证");
+            return false;
+        }
         if (challengeResult == null || challengeResult.length() != 6) {
             return false;
         }

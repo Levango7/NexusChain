@@ -35,6 +35,7 @@ public class PaymentPasswordInterceptor implements HandlerInterceptor {
 
     private static final String PAYMENT_PASSWORD_HEADER = "X-Payment-Password";
     private static final String MERCHANT_ID_ATTR = "nexus.merchantId";
+    private static final String TENANT_ID_ATTR = "nexus.tenantId";
 
     /**
      * 需要支付密码验证的端点路径。
@@ -60,12 +61,13 @@ public class PaymentPasswordInterceptor implements HandlerInterceptor {
             return true;
         }
 
-        // 从 ApiKeyInterceptor 设置的请求属性获取商户 ID
+        // 从 ApiKeyInterceptor 设置的请求属性获取商户 ID 和租户 ID
         Long merchantId = resolveMerchantId(request);
         if (merchantId == null) {
             // ApiKeyInterceptor 未通过则不会到达此处，但防御性处理
             return true;
         }
+        String tenantId = resolveTenantId(request);
 
         // 商户未设置支付密码时跳过验证（渐进式启用）
         if (!passwordService.isPasswordSet(merchantId)) {
@@ -80,7 +82,7 @@ public class PaymentPasswordInterceptor implements HandlerInterceptor {
 
         // 验证密码
         PaymentPasswordService.PasswordVerifyResult result =
-                passwordService.verifyPassword(merchantId, password, null);
+                passwordService.verifyPassword(merchantId, password, tenantId);
 
         switch (result.getStatus()) {
             case SUCCESS -> { return true; }
@@ -127,6 +129,17 @@ public class PaymentPasswordInterceptor implements HandlerInterceptor {
             } catch (NumberFormatException ignored) {
                 return null;
             }
+        }
+        return null;
+    }
+
+    /**
+     * 从请求属性解析租户 ID。
+     */
+    private String resolveTenantId(HttpServletRequest request) {
+        Object attr = request.getAttribute(TENANT_ID_ATTR);
+        if (attr instanceof String text && !text.isBlank()) {
+            return text.trim();
         }
         return null;
     }

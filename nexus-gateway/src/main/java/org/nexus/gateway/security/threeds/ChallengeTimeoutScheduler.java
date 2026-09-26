@@ -28,28 +28,47 @@ public class ChallengeTimeoutScheduler {
     private static final long SCAN_INTERVAL_MS = 30_000;
 
     private final ThreeDsAuthRecordRepository authRecordRepository;
+    private final ThreeDsConfigService configService;
     private final ApplicationEventPublisher eventPublisher;
 
     public ChallengeTimeoutScheduler(ThreeDsAuthRecordRepository authRecordRepository,
+                                     ThreeDsConfigService configService,
                                      ApplicationEventPublisher eventPublisher) {
         this.authRecordRepository = authRecordRepository;
+        this.configService = configService;
         this.eventPublisher = eventPublisher;
     }
 
     /**
      * 定时扫描超时的 Challenge 认证。
      *
-     * <p>查询所有 INITIATED 状态且发起时间早于当前时间减去默认超时时间（5 分钟）的认证记录，
-     * 将其标记为 TIMEOUT 状态，并发布认证完成事件。</p>
+     * <p>查询所有 INITIATED 状态的认证记录，按各自租户/商户配置的 challengeTimeoutSeconds
+     * 判断是否超时，将超时记录标记为 TIMEOUT 状态并发布认证完成事件。</p>
      */
     @Scheduled(fixedDelay = SCAN_INTERVAL_MS)
     @Transactional
     public void checkChallengeTimeout() {
-        LocalDateTime cutoff = LocalDateTime.now().minusSeconds(
+        // 查询所有 INITIATED 状态记录（使用最长超时时间作为查询上限）
+        LocalDateTime maxCutoff = LocalDateTime.now().minusSeconds(
                 ThreeDsConfigService.DEFAULT_CHALLENGE_TIMEOUT_SECONDS);
+        List<ThreeDsAuthRecord> candidateRecords =
+                authRecordRepository.findByAuthStatusAndInitiatedAtBefore(AuthStatus.INITIATED, maxCutoff);
 
-        List<ThreeDsAuthRecord> timedOutRecords =
-                authRecordRepository.findByAuthStatusAndInitiatedAtBefore(AuthStatus.INITIATED, cutoff);
+        if (candidateRecords.isEmpty()) {
+            return;
+        }
+
+        LocalDateTime now = LocalDateTime.now();
+        List<ThreeDsAuthRecord> timedOutRecords = new java.util.ArrayList<>();
+
+        // 按各自租户/商户配置的超时时间逐条判断
+        for (ThreeDsAuthRecord record : candidateRecords) {
+            ThreeDsConfig config = configService.getConfig(record.getTenantId(), record.getMerchantId());
+            LocalDateTime cutoff = now.minusSeconds(config.getChallengeTimeoutSeconds());
+            if (record.getInitiatedAt().isBefore(cutoff)) {
+                timedOutRecords.add(record);
+            }
+        }
 
         if (timedOutRecords.isEmpty()) {
             return;
@@ -58,13 +77,15 @@ public class ChallengeTimeoutScheduler {
         log.info("发现 {} 条超时的 3DS Challenge 认证记录", timedOutRecords.size());
 
         for (ThreeDsAuthRecord record : timedOutRecords) {
+            ThreeDsConfig config = configService.getConfig(record.getTenantId(), record.getMerchantId());
+            int timeoutSeconds = config.getChallengeTimeoutSeconds();
+
             // 标记为超时
             record.setAuthStatus(AuthStatus.TIMEOUT);
             record.setTransStatus(TransStatus.N); // 超时视为未认证
-            record.setCompletedAt(LocalDateTime.now());
+            record.setCompletedAt(now);
             record.setErrorCode("3DS_CHALLENGE_TIMEOUT");
-            record.setErrorDetail("Challenge 认证超时，超过 "
-                    + ThreeDsConfigService.DEFAULT_CHALLENGE_TIMEOUT_SECONDS + " 秒未完成");
+            record.setErrorDetail("Challenge 认证超时，超过 " + timeoutSeconds + " 秒未完成");
             authRecordRepository.save(record);
 
             // 发布认证完成事件（超时 = 认证失败），联动风控系统

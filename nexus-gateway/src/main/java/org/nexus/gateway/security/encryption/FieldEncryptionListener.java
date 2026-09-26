@@ -43,8 +43,8 @@ public class FieldEncryptionListener {
 
     private static final String ENCRYPTION_MARKER_PREFIX = "ENC:";
 
-    /** 反射缓存：类 → 字段名 → Field 对象 */
-    private final Map<Class<?>, Map<String, Field>> fieldCache = new ConcurrentHashMap<>();
+    /** 反射缓存：类 → 字段名 → Field 对象（用 Optional 包装，避免 ConcurrentHashMap null value 问题） */
+    private final Map<Class<?>, Map<String, java.util.Optional<Field>>> fieldCache = new ConcurrentHashMap<>();
 
     @Autowired
     private EncryptionService encryptionService;
@@ -115,9 +115,22 @@ public class FieldEncryptionListener {
                 continue;
             }
 
-            // 生成或获取 DEK
-            byte[] dek = keyManagementService.generateDek();
-            byte[] encryptedDek = keyManagementService.encryptDek(dek, kekVersion);
+            // 获取或创建 DEK（同一 tenant+field+kekVersion 复用同一 DEK，避免配对不一致）
+            byte[] dek;
+            byte[] encryptedDek;
+            EncryptionKeyMetadata existingMetadata = metadataRepository
+                    .findByTenantIdAndFieldNameAndKekVersion(tenantId, fieldName, kekVersion)
+                    .orElse(null);
+            if (existingMetadata != null) {
+                // 复用已有 DEK：解密获取明文 DEK
+                dek = keyManagementService.decryptDekCached(
+                        existingMetadata.getId(), existingMetadata.getEncryptedDek(), kekVersion);
+                encryptedDek = existingMetadata.getEncryptedDek();
+            } else {
+                // 首次加密：生成新 DEK
+                dek = keyManagementService.generateDek();
+                encryptedDek = keyManagementService.encryptDek(dek, kekVersion);
+            }
 
             // 加密字段
             EncryptedField encrypted = encryptionService.encrypt(plaintext, dek);
@@ -300,12 +313,13 @@ public class FieldEncryptionListener {
                         try {
                             Field field = searchType.getDeclaredField(fn);
                             field.setAccessible(true);
-                            return field;
+                            return java.util.Optional.of(field);
                         } catch (NoSuchFieldException e) {
                             searchType = searchType.getSuperclass();
                         }
                     }
-                    return null;
-                });
+                    return java.util.Optional.empty(); // 字段不存在
+                })
+                .orElse(null);
     }
 }

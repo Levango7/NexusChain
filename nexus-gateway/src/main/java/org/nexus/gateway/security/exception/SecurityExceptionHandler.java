@@ -61,6 +61,12 @@ public class SecurityExceptionHandler {
         body.put("code", e.getErrorCode());
         body.put("message", e.getMessage());
         body.put("timestamp", Instant.now().toString());
-        return ResponseEntity.status(HttpStatus.valueOf(e.getHttpStatus())).body(body);
+        HttpStatus status;
+        try {
+            status = HttpStatus.valueOf(e.getHttpStatus());
+        } catch (IllegalArgumentException ex) {
+            status = HttpStatus.INTERNAL_SERVER_ERROR;
+        }
+        return ResponseEntity.status(status).body(body);
     }
 }

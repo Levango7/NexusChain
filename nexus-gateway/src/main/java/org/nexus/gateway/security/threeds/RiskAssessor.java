@@ -97,7 +97,8 @@ public class RiskAssessor {
             return false;
         }
         // 模拟：订单号哈希值模 10 < 3 视为高频（约 30% 概率）
-        int hash = Math.abs(paymentOrder.getOrderNo().hashCode());
+        // 使用位掩码清除符号位，避免 Math.abs(Integer.MIN_VALUE) 溢出问题
+        int hash = paymentOrder.getOrderNo().hashCode() & 0x7FFFFFFF;
         return hash % 10 < 3;
     }
 

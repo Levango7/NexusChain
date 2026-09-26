@@ -125,9 +125,11 @@ public class SecondFactorService {
      * @param code       验证码
      */
     private void simulateSend(Long merchantId, FactorType factorType, String code) {
+        // 安全要求：日志中不得记录明文 OTP 验证码（CWE-532）
+        // 生产环境应替换为真实的短信/邮件发送实现
         switch (factorType) {
-            case OTP -> log.info("[SIMULATE SMS] OTP code for merchant {}: {}", merchantId, code);
-            case EMAIL -> log.info("[SIMULATE EMAIL] OTP code for merchant {}: {}", merchantId, code);
+            case OTP -> log.info("[SIMULATE SMS] OTP code sent to merchant {} (code masked)", merchantId);
+            case EMAIL -> log.info("[SIMULATE EMAIL] OTP code sent to merchant {} (code masked)", merchantId);
             case TOTP -> log.info("[TOTP] No delivery needed for merchant {} (client-side generation)", merchantId);
         }
     }

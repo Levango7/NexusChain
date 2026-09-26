@@ -9,7 +9,7 @@ CREATE TABLE encryption_key_metadata (
     kek_version             INT           NOT NULL COMMENT 'KEK 版本号',
     encrypted_dek           VARBINARY(512) NOT NULL COMMENT 'KEK 加密后的 DEK',
     iv                      VARBINARY(12) NOT NULL COMMENT '初始化向量 (96-bit)',
-    auth_tag                VARBINARY(16) NOT NULL COMMENT 'GCM 认证标签 (128-bit)',
+    auth_tag                VARBINARY(16) NULL DEFAULT NULL COMMENT 'GCM 认证标签 (128-bit)，GCM 模式下 auth tag 包含在 encrypted_dek 密文末尾',
     created_at              TIMESTAMP(6)  NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
     rotated_at              TIMESTAMP(6)  NULL DEFAULT NULL COMMENT 'DEK 轮换时间',
     status                  VARCHAR(16)   NOT NULL DEFAULT 'ACTIVE' COMMENT '状态: ACTIVE/ARCHIVED',
