@@ -81,7 +81,7 @@ public class ConnectorFactory {
      * apiKey（从 apiKeyEnv 环境变量解析）、appId、mchId、enabled=true、apiBase。</p>
      */
     private PaymentConnector createWeChat(ConnectorConfig config) {
-        WeChatPayConnector connector = new WeChatPayConnector(restTemplate);
+        WeChatPayConnector connector = new WeChatPayConnector();
 
         // apiKey：从 apiKeyEnv 引用的环境变量中解析实际值
         String apiKey = resolveEnvVar(config.getApiKeyEnv());
@@ -104,7 +104,7 @@ public class ConnectorFactory {
      * enabled=true、apiBaseUrl。</p>
      */
     private PaymentConnector createAlipay(ConnectorConfig config) {
-        AlipayConnector connector = new AlipayConnector(restTemplate);
+        AlipayConnector connector = new AlipayConnector();
 
         // merchantPrivateKey 和 alipayPublicKey：从环境变量引用中解析实际值
         String merchantPrivateKey = resolveEnvVar(config.getMerchantPrivateKey());
@@ -113,7 +113,7 @@ public class ConnectorFactory {
         setField(connector, "merchantPrivateKey", merchantPrivateKey);
         setField(connector, "alipayPublicKey", alipayPublicKey);
         setField(connector, "enabled", true);
-        setField(connector, "apiBaseUrl", "https://openapi.alipay.com/gateway.do");
+        setField(connector, "apiBaseUrl", "https://openapi-sandbox.dl.alipaydev.com/gateway.do");
 
         log.info("Created dynamic AlipayConnector: id={}, appId={}",
                 config.getId(), config.getAppId());

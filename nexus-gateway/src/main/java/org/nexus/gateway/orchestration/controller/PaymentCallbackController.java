@@ -7,6 +7,7 @@ import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import org.nexus.gateway.orchestration.connectors.AlipaySignatureUtil;
 import org.nexus.gateway.orchestration.connectors.WeChatPaySignatureUtil;
+import org.nexus.gateway.orchestration.connectors.WeChatPlatformCertificateManager;
 import org.nexus.gateway.orchestration.model.OrchPaymentStatus;
 import org.nexus.gateway.orchestration.model.OrchestratedPayment;
 import org.nexus.gateway.orchestration.service.PaymentCallbackService;
@@ -45,6 +46,7 @@ public class PaymentCallbackController {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private final PaymentCallbackService callbackService;
+    private final WeChatPlatformCertificateManager certificateManager;
 
     @Value("${nexus.connectors.wechat.api-key:}")
     private String wechatApiV3Key;
@@ -64,8 +66,10 @@ public class PaymentCallbackController {
             .expireAfterWrite(24, TimeUnit.HOURS)
             .build();
 
-    public PaymentCallbackController(PaymentCallbackService callbackService) {
+    public PaymentCallbackController(PaymentCallbackService callbackService,
+                                      WeChatPlatformCertificateManager certificateManager) {
         this.callbackService = callbackService;
+        this.certificateManager = certificateManager;
     }
 
     // ==================== 微信支付回调 ====================
@@ -81,13 +85,15 @@ public class PaymentCallbackController {
      *   <li>Wechatpay-Serial：证书序列号</li>
      * </ul>
      *
-     * <p>验签通过后，解析请求体中的 out_trade_no（对应 paymentId）和 transaction_id，
-     * 更新支付订单状态。</p>
+     * <p>验签流程：使用微信平台证书公钥做 RSA-SHA256 验签（替代原 HMAC-SHA256），
+     * 验签通过后使用 AES-256-GCM 解密 resource.ciphertext，从解密后的 JSON 中
+     * 提取 out_trade_no（对应 paymentId）和 transaction_id，更新支付订单状态。</p>
      *
-     * @param body      回调请求体（JSON）
-     * @param timestamp Wechatpay-Timestamp 头
-     * @param nonce     Wechatpay-Nonce 头
-     * @param signature Wechatpay-Signature 头
+     * @param body           回调请求体（JSON）
+     * @param timestamp      Wechatpay-Timestamp 头
+     * @param nonce          Wechatpay-Nonce 头
+     * @param signature      Wechatpay-Signature 头
+     * @param wechatpaySerial Wechatpay-Serial 头（平台证书序列号）
      * @return 微信要求的响应：成功返回 200 + {"code":"SUCCESS"}，失败返回对应错误
      */
     @PostMapping("/wechat")
@@ -95,13 +101,13 @@ public class PaymentCallbackController {
             @RequestBody String body,
             @RequestHeader(value = "Wechatpay-Timestamp", required = false) String timestamp,
             @RequestHeader(value = "Wechatpay-Nonce", required = false) String nonce,
-            @RequestHeader(value = "Wechatpay-Signature", required = false) String signature) {
+            @RequestHeader(value = "Wechatpay-Signature", required = false) String signature,
+            @RequestHeader(value = "Wechatpay-Serial", required = false) String wechatpaySerial) {
 
         log.info("[WeChat Callback] 收到微信支付回调通知");
 
         // 1. 验签前置检查：密钥未配置时禁止处理回调（P0-1 安全修复）
-        // 原实现仅 log.warn 后跳过验签继续处理，等同于关闭验签，存在伪造回调漏洞。
-        // 现改为直接拒绝，避免在配置缺失时放行未验签的支付状态变更。
+        // APIv3 密钥是 AES-256-GCM 解密 resource 的必需配置，缺失时拒绝处理。
         if (wechatApiV3Key == null || wechatApiV3Key.isBlank()) {
             log.error("[WeChat Callback] APIv3 密钥未配置，拒绝处理回调（防止伪造通知）");
             return failResponse("APIv3 密钥未配置，拒绝回调");
@@ -113,24 +119,65 @@ public class PaymentCallbackController {
             return failResponse("缺少必要的签名头");
         }
 
-        // 3. 验签：使用 HMAC-SHA256 验证签名
-        boolean verified = WeChatPaySignatureUtil.verifyCallbackSignature(
-                timestamp, nonce, body, signature, wechatApiV3Key);
+        // 3. 验签：使用微信平台证书公钥做 RSA-SHA256 验签
+        String platformPublicKey = certificateManager.getPlatformPublicKey(wechatpaySerial);
+        if (platformPublicKey == null) {
+            // 无可用平台证书时，尝试获取任意有效证书
+            platformPublicKey = certificateManager.getAnyValidPlatformPublicKey();
+        }
+        if (platformPublicKey == null) {
+            log.error("[WeChat Callback] 无可用的微信平台证书，拒绝处理回调");
+            return failResponse("无可用平台证书，拒绝回调");
+        }
+        boolean verified = WeChatPaySignatureUtil.verifyCallbackSignatureWithPlatformCert(
+                timestamp, nonce, body, signature, platformPublicKey);
         if (!verified) {
-            log.warn("[WeChat Callback] 验签失败");
+            log.warn("[WeChat Callback] 验签失败（RSA-SHA256，平台证书）");
             return failResponse("验签失败");
         }
-        log.info("[WeChat Callback] 验签通过");
+        log.info("[WeChat Callback] 验签通过（RSA-SHA256，平台证书）");
 
-        // 4. 解析回调内容（P1-7：使用 Jackson 安全解析，替代脆弱的字符串搜索）
-        // 微信 V3 回调体格式：{"id":"...","event_type":"TRANSACTION.SUCCESS",
-        //   "resource":{"ciphertext":"...","nonce":"...","associated_data":"..."}}
-        // 解密后包含 out_trade_no、transaction_id、trade_state 等
-        // 此处简化处理：从 body 中提取关键字段
-        String outTradeNo = extractJsonValue(body, "out_trade_no");
-        String transactionId = extractJsonValue(body, "transaction_id");
-        String tradeState = extractJsonValue(body, "trade_state");
-        String notificationId = extractJsonValue(body, "id");
+        // 4. 解析回调体并解密 resource.ciphertext（AES-256-GCM）
+        String notificationId;
+        String outTradeNo;
+        String transactionId;
+        String tradeState;
+        try {
+            JsonNode bodyNode = OBJECT_MAPPER.readTree(body);
+            notificationId = bodyNode.path("id").asText();
+
+            // 从 resource 字段提取加密数据
+            JsonNode resourceNode = bodyNode.path("resource");
+            String ciphertext = resourceNode.path("ciphertext").asText();
+            String resourceNonce = resourceNode.path("nonce").asText();
+            String associatedData = resourceNode.path("associated_data").asText();
+
+            if (ciphertext.isEmpty() || resourceNonce.isEmpty()) {
+                log.warn("[WeChat Callback] resource 字段缺失或格式不合法");
+                return failResponse("resource 字段缺失");
+            }
+
+            // AES-256-GCM 解密
+            String decryptedJson;
+            try {
+                decryptedJson = WeChatPaySignatureUtil.decryptResource(
+                        ciphertext, resourceNonce, associatedData, wechatApiV3Key);
+            } catch (RuntimeException e) {
+                log.warn("[WeChat Callback] AES-256-GCM 解密失败: {}", e.getMessage());
+                return failResponse("解密失败");
+            }
+
+            log.info("[WeChat Callback] AES-256-GCM 解密成功，提取业务字段");
+
+            // 从解密后的 JSON 中提取业务字段
+            JsonNode decryptedNode = OBJECT_MAPPER.readTree(decryptedJson);
+            outTradeNo = decryptedNode.path("out_trade_no").asText();
+            transactionId = decryptedNode.path("transaction_id").asText();
+            tradeState = decryptedNode.path("trade_state").asText();
+        } catch (JsonProcessingException e) {
+            log.warn("[WeChat Callback] JSON 解析失败: {}", e.getOriginalMessage());
+            return failResponse("JSON 解析失败");
+        }
 
         if (outTradeNo == null || outTradeNo.isEmpty()) {
             log.warn("[WeChat Callback] 无法提取 out_trade_no");
@@ -186,7 +233,6 @@ public class PaymentCallbackController {
         log.info("[Alipay Callback] 收到支付宝回调通知");
 
         // 1. 验签前置检查：公钥未配置时禁止处理回调（P0-1 安全修复）
-        // 原实现仅 log.warn 后跳过验签继续处理，等同于关闭验签，存在伪造回调漏洞。
         if (alipayPublicKey == null || alipayPublicKey.isBlank()) {
             log.error("[Alipay Callback] 支付宝公钥未配置，拒绝处理回调（防止伪造通知）");
             return ResponseEntity.status(HttpStatus.OK).body("fail");
@@ -241,36 +287,27 @@ public class PaymentCallbackController {
         return ResponseEntity.status(HttpStatus.OK).body("success");
     }
 
-    // ==================== 辅助方法 ====================
+    // ==================== 异常处理 ====================
 
     /**
-     * 从 JSON 字符串中提取指定 key 的值。
+     * 全局异常处理：fail-closed 守卫。
      *
-     * <p>P1-7 修复：原实现使用字符串查找 {@code "key":"value"} 模式，
-     * 无法正确处理转义、空格、嵌套同名 key 等情况，且可能被恶意构造的
-     * JSON 绕过。改用 Jackson {@link ObjectMapper} + {@link JsonNode} 做结构解析，
-     * 解析失败时安全返回 null（不抛异常中断回调处理）。</p>
+     * <p>含 fail-closed 守卫的 Controller 必须声明 ExceptionHandler，
+     * 确保未预期异常不会泄露堆栈信息，返回 403 Forbidden（非 500），
+     * 响应体仅含简短 message。</p>
      *
-     * @param json JSON 字符串
-     * @param key  待提取的字段名
-     * @return 字段的文本值；不存在或解析失败时返回 null
+     * <p>来源：2026-09-16-fail-closed-guard-exception-handler-completeness</p>
      */
-    private String extractJsonValue(String json, String key) {
-        if (json == null || json.isEmpty()) {
-            return null;
-        }
-        try {
-            JsonNode root = OBJECT_MAPPER.readTree(json);
-            JsonNode node = root.get(key);
-            if (node == null || node.isNull()) {
-                return null;
-            }
-            return node.asText();
-        } catch (JsonProcessingException e) {
-            log.warn("[Payment Callback] JSON 解析失败，字段 '{}' 提取跳过: {}", key, e.getOriginalMessage());
-            return null;
-        }
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<Map<String, Object>> handleException(Exception e) {
+        log.error("[Payment Callback] 未预期异常，fail-closed 拒绝处理: {}", e.getMessage());
+        Map<String, Object> resp = new LinkedHashMap<>();
+        resp.put("code", "FAIL");
+        resp.put("message", "处理异常，拒绝回调");
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(resp);
     }
+
+    // ==================== 辅助方法 ====================
 
     /**
      * 微信支付 trade_state 映射到 OrchPaymentStatus。

@@ -22,7 +22,7 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <p>支持 Native（扫码支付）和 JSAPI 两种支付方式，默认使用 Native。</p>
  *
- * <p>签名框架（Wave 7-A2）：集成 V3 HMAC-SHA256 签名，每次 API 调用自动添加
+ * <p>签名框架（Wave 13）：集成 V3 RSA-SHA256 签名（商户私钥），每次 API 调用自动添加
  * Authorization 头。sandbox=true 时保持 dry-run 模拟响应，响应格式与真实 API 一致。</p>
  *
  * <p>性能优化（任务 #310）：注入共享的连接池化 RestTemplate。</p>
@@ -60,19 +60,27 @@ public class WeChatPayConnector implements PaymentConnector {
     @Value("${nexus.connectors.wechat.cert-serial-no:}")
     private String certSerialNo;
 
+    /** 商户私钥（PEM 格式，不含 BEGIN/END 标记），用于 RSA-SHA256 签名 */
+    @Value("${nexus.connectors.wechat.merchant-private-key:}")
+    private String merchantPrivateKey;
+
     private final RestTemplate restTemplate;
+    private final WeChatPlatformCertificateManager certificateManager;
     private final Map<String, PaymentStatus> localState = new ConcurrentHashMap<>();
     // P0-4：使用 ObjectMapper 安全构建 JSON，防止注入
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Autowired
-    public WeChatPayConnector(RestTemplate restTemplate) {
+    public WeChatPayConnector(RestTemplate restTemplate,
+                              WeChatPlatformCertificateManager certificateManager) {
         this.restTemplate = restTemplate;
+        this.certificateManager = certificateManager;
     }
 
     /** 测试用兼容构造器。 */
     public WeChatPayConnector() {
         this.restTemplate = new RestTemplate();
+        this.certificateManager = null; // 测试用，dry-run 模式不需要
     }
 
     @Override
@@ -88,10 +96,11 @@ public class WeChatPayConnector implements PaymentConnector {
     public boolean isActive() { return enabled; }
 
     /**
-     * 判断是否处于 dry-run 模式：sandbox=true 或 apiV3Key 为空。
+     * 判断是否处于 dry-run 模式：sandbox=true 或 apiV3Key/商户私钥为空。
      */
     private boolean isDryRun() {
-        return sandbox || apiV3Key == null || apiV3Key.isBlank();
+        return sandbox || apiV3Key == null || apiV3Key.isBlank()
+                || merchantPrivateKey == null || merchantPrivateKey.isBlank();
     }
 
     /**
@@ -100,21 +109,20 @@ public class WeChatPayConnector implements PaymentConnector {
      * <p>格式：WECHATPAY2-SHA256-RSA2048 mchid="...",nonce_str="...",timestamp="...",
      * serial_no="...",signature="..."</p>
      *
-     * <p>注意：V3 正式签名使用 RSA-SHA256（商户私钥签名），此处简化为 HMAC-SHA256
-     * （使用 APIv3 密钥），在获得真实商户证书后切换即可。</p>
+     * <p>使用 RSA-SHA256 签名算法（商户私钥签名），符合微信支付 V3 官方规范。</p>
      */
     private String buildAuthorization(String method, String url, String body) {
         String timestamp = String.valueOf(System.currentTimeMillis() / 1000);
         String nonceStr = UUID.randomUUID().toString().replace("-", "");
-        String signKey = (apiV3Key != null && !apiV3Key.isBlank()) ? apiV3Key : apiKey;
-        String signature = WeChatPaySignatureUtil.generateSignature(
-                method, url, timestamp, nonceStr, body, signKey);
+        String signature = WeChatPaySignatureUtil.generateRsaSignature(
+                method, url, timestamp, nonceStr, body, merchantPrivateKey);
+
+        log.debug("[WeChat] 签名算法=RSA-SHA256, signature前16字符={}",
+                signature.length() > 16 ? signature.substring(0, 16) : signature);
 
         return String.format(
                 "WECHATPAY2-SHA256-RSA2048 mchid=\"%s\",nonce_str=\"%s\",timestamp=\"%s\",serial_no=\"%s\",signature=\"%s\"",
-                mchId, nonceStr, timestamp,
-                (certSerialNo != null && !certSerialNo.isBlank()) ? certSerialNo : "DUMMY_SERIAL",
-                signature);
+                mchId, nonceStr, timestamp, certSerialNo, signature);
     }
 
     /**
@@ -292,6 +300,10 @@ public class WeChatPayConnector implements PaymentConnector {
         if (isDryRun()) return ConnectorHealth.up(getId(), 0); // dry-run always healthy
         long start = System.currentTimeMillis();
         try {
+            // 检查平台证书是否需要刷新
+            if (certificateManager != null && certificateManager.needsRefresh()) {
+                certificateManager.fetchPlatformCertificates();
+            }
             // 微信支付无标准健康端点，尝试查询一个不存在的订单
             String apiPath = "/v3/pay/transactions/out-trade-no/health_check_probe?mchid=" + mchId;
             HttpHeaders headers = buildSignedHeaders("GET", apiPath, "");

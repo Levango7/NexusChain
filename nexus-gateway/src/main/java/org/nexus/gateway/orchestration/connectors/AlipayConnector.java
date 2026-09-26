@@ -1,5 +1,7 @@
 package org.nexus.gateway.orchestration.connectors;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.nexus.gateway.orchestration.connector.*;
 import org.nexus.gateway.orchestration.settlement.FinalityPolicy;
 import org.nexus.gateway.orchestration.settlement.PspFinalityPolicy;
@@ -23,7 +25,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * Requires: nexus.connectors.alipay.app-id + merchant-private-key + alipay-public-key in config.
  * In sandbox mode without a real key, operates in dry-run (simulates success).
  *
- * <p>支付宝 API 使用统一网关 {@code https://openapi.alipay.com/gateway.do}，
+ * <p>支付宝 API 使用统一网关 {@code https://openapi-sandbox.dl.alipaydev.com/gateway.do}，
  * 通过 method 参数区分不同接口（alipay.trade.precreate / alipay.trade.query / alipay.trade.refund）。
  * 认证方式为 RSA2 签名，请求参数中包含 app_id、sign、sign_type=RSA2。</p>
  *
@@ -34,7 +36,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class AlipayConnector implements PaymentConnector {
 
     private static final Logger log = LoggerFactory.getLogger(AlipayConnector.class);
-    private static final String DEFAULT_ALIPAY_API_BASE = "https://openapi.alipay.com/gateway.do";
+    private static final String DEFAULT_ALIPAY_API_BASE = "https://openapi-sandbox.dl.alipaydev.com/gateway.do";
 
     @Value("${nexus.connectors.alipay.app-id:}")
     private String appId;
@@ -45,7 +47,7 @@ public class AlipayConnector implements PaymentConnector {
     @Value("${nexus.connectors.alipay.alipay-public-key:}")
     private String alipayPublicKey;
 
-    @Value("${nexus.connectors.alipay.api-base-url:https://openapi.alipay.com/gateway.do}")
+    @Value("${nexus.connectors.alipay.api-base-url:https://openapi-sandbox.dl.alipaydev.com/gateway.do}")
     private String apiBaseUrl = DEFAULT_ALIPAY_API_BASE;
 
     @Value("${nexus.connectors.alipay.enabled:false}")
@@ -56,16 +58,19 @@ public class AlipayConnector implements PaymentConnector {
     private boolean sandbox;
 
     private final RestTemplate restTemplate;
+    private final ObjectMapper objectMapper;
     private final Map<String, PaymentStatus> localState = new ConcurrentHashMap<>();
 
     @Autowired
-    public AlipayConnector(RestTemplate restTemplate) {
+    public AlipayConnector(RestTemplate restTemplate, ObjectMapper objectMapper) {
         this.restTemplate = restTemplate;
+        this.objectMapper = objectMapper;
     }
 
     /** 测试用兼容构造器。 */
     public AlipayConnector() {
         this.restTemplate = new RestTemplate();
+        this.objectMapper = new ObjectMapper();
     }
 
     @Override
@@ -144,9 +149,16 @@ public class AlipayConnector implements PaymentConnector {
             String description = request.getDescription() != null ? request.getDescription() : "NexusChain Payment";
             Map<String, Object> bizContentMap = new LinkedHashMap<>();
             bizContentMap.put("out_trade_no", request.getPaymentId());
-            bizContentMap.put("total_amount", String.valueOf(request.getAmount()));
+            // 支付宝 total_amount 要求元为单位的小数字符串，如 "0.01"
+            bizContentMap.put("total_amount", formatAmount(request.getAmount()));
             bizContentMap.put("subject", description);
-            String bizContent = bizContentMap.toString(); // 简化 JSON 构建
+            String bizContent;
+            try {
+                bizContent = objectMapper.writeValueAsString(bizContentMap);
+            } catch (JsonProcessingException e) {
+                log.error("[Alipay] bizContent 序列化失败: {}", e.getMessage());
+                return ConnectorPaymentResult.fail("bizContent序列化失败");
+            }
 
             String body = buildSignedRequest("alipay.trade.precreate", bizContent);
 
@@ -186,7 +198,13 @@ public class AlipayConnector implements PaymentConnector {
             // 查询订单 API：alipay.trade.query
             Map<String, Object> bizContentMap = new LinkedHashMap<>();
             bizContentMap.put("out_trade_no", connectorPaymentId);
-            String bizContent = bizContentMap.toString();
+            String bizContent;
+            try {
+                bizContent = objectMapper.writeValueAsString(bizContentMap);
+            } catch (JsonProcessingException e) {
+                log.error("[Alipay] bizContent 序列化失败: {}", e.getMessage());
+                return PaymentStatus.FAILED;
+            }
 
             String body = buildSignedRequest("alipay.trade.query", bizContent);
 
@@ -226,7 +244,13 @@ public class AlipayConnector implements PaymentConnector {
         try {
             Map<String, Object> bizContentMap = new LinkedHashMap<>();
             bizContentMap.put("out_trade_no", connectorPaymentId);
-            String bizContent = bizContentMap.toString();
+            String bizContent;
+            try {
+                bizContent = objectMapper.writeValueAsString(bizContentMap);
+            } catch (JsonProcessingException e) {
+                log.error("[Alipay] bizContent 序列化失败: {}", e.getMessage());
+                return false;
+            }
 
             String body = buildSignedRequest("alipay.trade.close", bizContent);
 
@@ -254,8 +278,14 @@ public class AlipayConnector implements PaymentConnector {
             // 退款 API：alipay.trade.refund
             Map<String, Object> bizContentMap = new LinkedHashMap<>();
             bizContentMap.put("out_trade_no", connectorPaymentId);
-            bizContentMap.put("refund_amount", String.valueOf(amount));
-            String bizContent = bizContentMap.toString();
+            bizContentMap.put("refund_amount", formatAmount(amount));
+            String bizContent;
+            try {
+                bizContent = objectMapper.writeValueAsString(bizContentMap);
+            } catch (JsonProcessingException e) {
+                log.error("[Alipay] bizContent 序列化失败: {}", e.getMessage());
+                return ConnectorRefundResult.fail("bizContent序列化失败");
+            }
 
             String body = buildSignedRequest("alipay.trade.refund", bizContent);
 
@@ -288,7 +318,13 @@ public class AlipayConnector implements PaymentConnector {
         try {
             Map<String, Object> bizContentMap = new LinkedHashMap<>();
             bizContentMap.put("out_trade_no", "health_check_dummy");
-            String bizContent = bizContentMap.toString();
+            String bizContent;
+            try {
+                bizContent = objectMapper.writeValueAsString(bizContentMap);
+            } catch (JsonProcessingException e) {
+                log.error("[Alipay] bizContent 序列化失败: {}", e.getMessage());
+                return ConnectorHealth.down(getId(), "bizContent序列化失败");
+            }
 
             String body = buildSignedRequest("alipay.trade.query", bizContent);
 
@@ -312,6 +348,17 @@ public class AlipayConnector implements PaymentConnector {
 
     @Override
     public int feeBasisPoints() { return 38; } // 支付宝费率约 0.38%
+
+    /**
+     * 将金额（分）转换为支付宝要求的元格式字符串。
+     * 支付宝 total_amount 必须为字符串，如 "0.01"。
+     *
+     * @param amountInCents 金额（分）
+     * @return 元格式字符串，如 "0.01"
+     */
+    private String formatAmount(long amountInCents) {
+        return String.format("%.2f", amountInCents / 100.0);
+    }
 
     /**
      * 将支付宝交易状态映射到 PaymentStatus 枚举。
