@@ -62,7 +62,7 @@ class RatelimitTest {
         when(redis.opsForValue()).thenReturn(ops);
         when(ops.get("nexus:idempotency:k1")).thenReturn("v1");
 
-        RedisIdempotencyStore store = new RedisIdempotencyStore(redis);
+        RedisIdempotencyStore store = new RedisIdempotencyStore(redis, 24);
         assertEquals("v1", store.get("k1"));
     }
 
@@ -73,7 +73,7 @@ class RatelimitTest {
         ValueOperations<String, String> ops = mock(ValueOperations.class);
         when(redis.opsForValue()).thenReturn(ops);
 
-        RedisIdempotencyStore store = new RedisIdempotencyStore(redis);
+        RedisIdempotencyStore store = new RedisIdempotencyStore(redis, 24);
         store.put("k1", "v1");
 
         verify(ops).set("nexus:idempotency:k1", "v1", 24, TimeUnit.HOURS);

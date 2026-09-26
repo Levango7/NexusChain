@@ -43,10 +43,14 @@ public class RequestSignatureInterceptor implements HandlerInterceptor {
 
     private static final Logger log = LoggerFactory.getLogger(RequestSignatureInterceptor.class);
 
-    private static final long MAX_AGE_MS = 5 * 60 * 1000L; // 5 minutes
     private static final String TIMESTAMP_HEADER = "X-NexusChain-Timestamp";
     private static final String NONCE_HEADER = "X-NexusChain-Nonce";
     private static final String SIGNATURE_HEADER = "X-NexusChain-Signature";
+
+    /** 防重放窗口（毫秒），默认 3 分钟，范围 1~5 分钟。Wave 12 决策5：从硬编码改为配置注入。 */
+    private final long replayWindowMs;
+    /** nonce 最小长度（字节），默认 16 字节（128 位）。 */
+    private final int nonceMinLengthBytes;
 
     private final String signingSecret;
 
@@ -64,7 +68,7 @@ public class RequestSignatureInterceptor implements HandlerInterceptor {
     private final ReplayNonceStore nonceStore;
 
     public RequestSignatureInterceptor(@Value("${nexus.security.requestSigningSecret:}") String signingSecret) {
-        this(signingSecret, true);
+        this(signingSecret, true, 180000L, 16);
     }
 
     /**
@@ -74,8 +78,23 @@ public class RequestSignatureInterceptor implements HandlerInterceptor {
      * @param legacySignatureEnabled  兼容期是否接受 v1 拼接签名
      */
     public RequestSignatureInterceptor(String signingSecret, boolean legacySignatureEnabled) {
+        this(signingSecret, legacySignatureEnabled, 180000L, 16);
+    }
+
+    /**
+     * 测试/显式注入构造器：可指定防重放窗口和 nonce 最小长度。
+     *
+     * @param signingSecret           HMAC 共享密钥
+     * @param legacySignatureEnabled  兼容期是否接受 v1 拼接签名
+     * @param replayWindowMs          防重放窗口（毫秒）
+     * @param nonceMinLengthBytes     nonce 最小长度（字节）
+     */
+    public RequestSignatureInterceptor(String signingSecret, boolean legacySignatureEnabled,
+                                        long replayWindowMs, int nonceMinLengthBytes) {
         this.signingSecret = signingSecret == null ? "" : signingSecret;
         this.legacySignatureEnabled = legacySignatureEnabled;
+        this.replayWindowMs = Math.max(60000L, Math.min(300000L, replayWindowMs));
+        this.nonceMinLengthBytes = Math.max(16, nonceMinLengthBytes);
         this.nonceStore = new InMemoryReplayNonceStore();
     }
 
@@ -87,9 +106,13 @@ public class RequestSignatureInterceptor implements HandlerInterceptor {
     public RequestSignatureInterceptor(
             @Value("${nexus.security.requestSigningSecret:}") String signingSecret,
             @Value("${nexus.security.signature-legacy-enabled:true}") boolean legacySignatureEnabled,
+            @Value("${nexus.security.replay-window-ms:180000}") long replayWindowMs,
+            @Value("${nexus.security.nonce-min-length-bytes:16}") int nonceMinLengthBytes,
             org.springframework.beans.factory.ObjectProvider<ReplayNonceStore> nonceStoreProvider) {
         this.signingSecret = signingSecret == null ? "" : signingSecret;
         this.legacySignatureEnabled = legacySignatureEnabled;
+        this.replayWindowMs = Math.max(60000L, Math.min(300000L, replayWindowMs));
+        this.nonceMinLengthBytes = Math.max(16, nonceMinLengthBytes);
         ReplayNonceStore provided = nonceStoreProvider.getIfAvailable();
         this.nonceStore = provided != null ? provided : new InMemoryReplayNonceStore();
     }
@@ -116,8 +139,8 @@ public class RequestSignatureInterceptor implements HandlerInterceptor {
             return reject(response, 40102, "Invalid timestamp header");
         }
         long now = System.currentTimeMillis();
-        if (Math.abs(now - ts) > MAX_AGE_MS) {
-            return reject(response, 40103, "Request timestamp expired (5min window)");
+        if (Math.abs(now - ts) > replayWindowMs) {
+            return reject(response, 40103, "Request timestamp expired (" + (replayWindowMs / 1000) + "s window)");
         }
 
         // Nonce uniqueness (anti-replay). 存储注入（短期项 #4b）：prod=Redis 共享，
@@ -125,7 +148,12 @@ public class RequestSignatureInterceptor implements HandlerInterceptor {
         if (isBlank(nonce)) {
             return reject(response, 40104, "Missing nonce header");
         }
-        if (!nonceStore.register(nonce, MAX_AGE_MS)) {
+        // nonce 长度校验（Wave 12 §5.2.1-2）：UTF-8 字节长度须 ≥ nonceMinLengthBytes
+        int nonceByteLength = nonce.getBytes(StandardCharsets.UTF_8).length;
+        if (nonceByteLength < nonceMinLengthBytes) {
+            return reject(response, 40109, "Nonce too short (min " + nonceMinLengthBytes + " bytes)");
+        }
+        if (!nonceStore.register(nonce, replayWindowMs)) {
             return reject(response, 40106, "Replayed nonce");
         }
 

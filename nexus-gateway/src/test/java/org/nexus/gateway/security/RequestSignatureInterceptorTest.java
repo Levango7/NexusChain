@@ -88,7 +88,7 @@ class RequestSignatureInterceptorTest {
         MockHttpServletRequest req = new MockHttpServletRequest("POST", "/api/v1/payments");
         req.addHeader("X-NexusChain-Signature", "wrong-sig");
         req.addHeader("X-NexusChain-Timestamp", String.valueOf(now));
-        req.addHeader("X-NexusChain-Nonce", "nonce-1");
+        req.addHeader("X-NexusChain-Nonce", "nonce-1-12345678");
         MockHttpServletResponse resp = new MockHttpServletResponse();
         assertFalse(interceptor.preHandle(req, resp, null));
         assertEquals(401, resp.getStatus());
@@ -98,7 +98,7 @@ class RequestSignatureInterceptorTest {
     @DisplayName("preHandle: 合法签名通过")
     void validSignature_passes() throws Exception {
         String ts = String.valueOf(now);
-        String nonce = "nonce-ok";
+        String nonce = "nonce-ok-12345678";
         String method = "POST";
         String path = "/api/v1/payments";
         String body = "{\"amount\":100}";
@@ -123,7 +123,7 @@ class RequestSignatureInterceptorTest {
     @DisplayName("preHandle: 相同 nonce 二次请求被拒（重放保护）")
     void replayedNonce_rejected() throws Exception {
         String ts = String.valueOf(now);
-        String nonce = "nonce-replay";
+        String nonce = "nonce-replay-1234";
         String method = "POST";
         String path = "/api/v1/payments";
         String body = "{}";
@@ -159,7 +159,7 @@ class RequestSignatureInterceptorTest {
         MockHttpServletRequest req = new MockHttpServletRequest("POST", "/api/v1/payments");
         req.addHeader("X-NexusChain-Signature", "sig");
         req.addHeader("X-NexusChain-Timestamp", String.valueOf(now));
-        req.addHeader("X-NexusChain-Nonce", "nonce-x");
+        req.addHeader("X-NexusChain-Nonce", "nonce-x-12345678");
         MockHttpServletResponse resp = new MockHttpServletResponse();
         assertFalse(noSecret.preHandle(req, resp, null));
         assertEquals(401, resp.getStatus());
@@ -198,7 +198,7 @@ class RequestSignatureInterceptorTest {
     @DisplayName("v2: 签名头带 v2: 前缀并被服务端接受")
     void v2Signature_accepted() throws Exception {
         String ts = String.valueOf(now);
-        String nonce = "nonce-v2";
+        String nonce = "nonce-v2-12345678";
         String sig = RequestSignatureInterceptor.computeSignatureV2(ts, nonce, "POST", "/api/v1/payments", "{}", SECRET);
         assertTrue(sig.startsWith("v2:"));
         MockHttpServletRequest req = new MockHttpServletRequest("POST", "/api/v1/payments");
@@ -221,9 +221,9 @@ class RequestSignatureInterceptorTest {
         MockHttpServletRequest r1 = new MockHttpServletRequest("POST", "/api/v1/payments");
         r1.setContent(body.getBytes());
         r1.addHeader("X-NexusChain-Signature",
-                RequestSignatureInterceptor.computeSignature(ts, "nonce-legacy-1", "POST", "/api/v1/payments", body, SECRET));
+                RequestSignatureInterceptor.computeSignature(ts, "nonce-legacy-1234", "POST", "/api/v1/payments", body, SECRET));
         r1.addHeader("X-NexusChain-Timestamp", ts);
-        r1.addHeader("X-NexusChain-Nonce", "nonce-legacy-1");
+        r1.addHeader("X-NexusChain-Nonce", "nonce-legacy-1234");
         ContentCachingRequestWrapper w1 = new ContentCachingRequestWrapper(r1, 1024);
         w1.getContentAsByteArray();
         assertFalse(strict.preHandle(w1, new MockHttpServletResponse(), null), "legacy-disabled 时 v1 必须拒绝");
@@ -231,9 +231,9 @@ class RequestSignatureInterceptorTest {
         MockHttpServletRequest r2 = new MockHttpServletRequest("POST", "/api/v1/payments");
         r2.setContent(body.getBytes());
         r2.addHeader("X-NexusChain-Signature",
-                RequestSignatureInterceptor.computeSignatureV2(ts, "nonce-v2-2", "POST", "/api/v1/payments", body, SECRET));
+                RequestSignatureInterceptor.computeSignatureV2(ts, "nonce-v2-2-123456", "POST", "/api/v1/payments", body, SECRET));
         r2.addHeader("X-NexusChain-Timestamp", ts);
-        r2.addHeader("X-NexusChain-Nonce", "nonce-v2-2");
+        r2.addHeader("X-NexusChain-Nonce", "nonce-v2-2-123456");
         ContentCachingRequestWrapper w2 = new ContentCachingRequestWrapper(r2, 1024);
         w2.getContentAsByteArray();
         assertTrue(strict.preHandle(w2, new MockHttpServletResponse(), null), "legacy-disabled 时 v2 仍应接受");
