@@ -175,6 +175,12 @@ dependencies {
     testImplementation 'org.wiremock:wiremock-standalone:3.5.2'
 }
 
+// === SandboxCallbackCertInitializer 需要 sun.security.x509 创建自签名 X.509 证书 ===
+// Java 17 强封装需显式导出内部包。仅在 sandbox profile 下使用，不影响生产代码。
+bootRun {
+    jvmArgs = ['--add-exports', 'java.base/sun.security.x509=ALL-UNNAMED']
+}
+
 test {
     useJUnitPlatform {
         // CI 修复（task #57）：排除 @Tag("integration") 标注的集成测试，

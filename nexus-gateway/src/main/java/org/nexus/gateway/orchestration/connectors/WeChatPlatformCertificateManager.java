@@ -17,9 +17,12 @@ import java.security.cert.X509Certificate;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -297,6 +300,35 @@ public class WeChatPlatformCertificateManager {
         List<WeChatPlatformCertificate> certs = certificateRepository.findByStatusAndExpireTimeAfter(
                 CertificateStatus.ACTIVE, Instant.now().plus(1, ChronoUnit.HOURS));
         return certs.isEmpty();
+    }
+
+    /**
+     * 获取当前活跃的平台证书列表（用于健康检查展示）。
+     *
+     * <p>返回证书序列号和有效期信息，不返回证书内容（安全考虑）。
+     * 仅返回 ACTIVE 状态的证书，按过期时间降序排列（最新过期的在前）。</p>
+     *
+     * @return 证书信息列表，每项包含 serialNo/effectiveTime/expireTime/status
+     */
+    public List<Map<String, Object>> getActiveCertificates() {
+        List<WeChatPlatformCertificate> certs = certificateRepository
+                .findByStatusOrderByExpireTimeDesc(CertificateStatus.ACTIVE);
+
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (WeChatPlatformCertificate cert : certs) {
+            Map<String, Object> info = new LinkedHashMap<>();
+            info.put("serialNo", cert.getSerialNo());
+            info.put("effectiveTime", cert.getEffectiveTime() != null
+                    ? cert.getEffectiveTime().toString() : null);
+            info.put("expireTime", cert.getExpireTime() != null
+                    ? cert.getExpireTime().toString() : null);
+            info.put("status", cert.getStatus() != null
+                    ? cert.getStatus().name() : null);
+            result.add(info);
+        }
+
+        log.debug("[WeChatCert] 活跃证书列表查询: {} 张", result.size());
+        return result;
     }
 
     /**
