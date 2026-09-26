@@ -4,6 +4,74 @@
 
 ## [Unreleased]
 
+### Payment Orchestration Wave 12（2026-09-26）
+
+#### Wave 12: 支付安全增强 — 加密/防重放/3DS/支付密码
+
+**交易加密增强（`security.encryption` 包）**
+- **密钥管理服务**：KeyManagementService 实现 KEK/DEK 两层密钥架构，AES-256-GCM 加密，SecureRandom CSPRNG 生成密钥，fail-closed 策略（KEK 不可用时拒绝写入）
+- **加密服务**：EncryptionService 使用 AES-256-GCM（96-bit IV + 128-bit auth tag），每次加密生成唯一 IV
+- **字段加密监听器**：FieldEncryptionListener 通过 JPA @PrePersist/@PreUpdate/@PostLoad 实现透明字段加密/解密，加密标记格式 `ENC:<kekVersion>:<ivBase64>:<ciphertextBase64>`，渐进式迁移支持旧数据
+- **密钥轮换调度器**：KeyRotationScheduler 实现渐进式 DEK 迁移，支持断点续传、双版本并存、归档检查
+- **加密配置服务**：EncryptionConfigService 管理租户/商户级加密策略配置
+
+**3D Secure 2.0（`security.threeds` 包）**
+- **模拟 ACS**：ThreeDsServer 实现 EMVCo 3DS 2.0 规范中的 ACS 决策逻辑——Frictionless/Challenge 流程、风险阈值判断、Challenge URL 生成
+- **3DS 认证服务**：ThreeDsService 编排完整 3DS 认证流程（initiateAuth/completeAuth/getAuthStatus），认证完成时发布 ThreeDsAuthCompletedEvent 事件联动风控系统
+- **风险评估器**：RiskAssessor 基于交易金额、设备指纹、交易频率、商户历史输出 0-100 风险分数
+- **Challenge 超时调度器**：ChallengeTimeoutScheduler 每 30 秒扫描超时 Challenge 认证，按租户配置的超时时间判断
+- **3DS 配置服务**：ThreeDsConfigService 两级回退策略（商户级 → 租户级 → 默认值），默认 3DS 未启用
+
+**支付密码验证（`security.password` 包）**
+- **支付密码服务**：PaymentPasswordService 使用 bcrypt（cost=10）哈希存储，失败计数+自动锁定，密码过期检查，密码历史重复检查
+- **二次验证服务**：SecondFactorService 生成 6 位 OTP，bcrypt 哈希存储，5 分钟过期，验证后标记 consumed
+- **支付密码拦截器**：PaymentPasswordInterceptor 对支付确认/退款端点拦截验证，渐进式启用（商户未设置密码时跳过）
+- **密码历史服务**：PasswordHistoryService 记录密码变更历史，isPlaintextInHistory 正确使用 bcrypt matches 比对
+- **密码安全配置**：PasswordSecurityConfigService 管理密码复杂度策略（最小长度、大小写/数字/特殊字符要求、过期天数、最大失败次数、锁定时长）
+
+**防重放攻击（`security.replay` 包）**
+- **Nonce 长度校验器**：NonceLengthValidator 校验 nonce ≥ 16 字节（128 位）
+- **幂等性键校验器**：IdempotencyKeyValidator 校验幂等性键 ≥ 8 字节，格式 `^[a-zA-Z0-9-]+$`
+- **防重放配置服务**：ReplayProtectionConfigService 管理防重放参数（nonce 最小长度、幂等性键最小长度、重放窗口时间）
+- **RequestSignatureInterceptor 增强**：replayWindowMs 从硬编码改为 @Value 配置注入（默认 3min），nonceMinLengthBytes 默认 16 字节
+
+**横切安全组件（`security.exception` / `security.audit` 包）**
+- **安全异常体系**：SecurityException 基类 + 5 个子类（EncryptionException/KeyVersionUnavailableException/PasswordValidationException/ThreeDsException/IdempotencyKeyException），SecurityExceptionHandler 全局异常处理器
+- **安全审计服务**：SecurityAuditService 使用专用 Logger "SECURITY_AUDIT" 记录审计日志，SecurityMetricsRecorder Prometheus 指标
+- **安全事件**：4 个 Spring ApplicationEvent（ThreeDsAuthCompletedEvent/PaymentPasswordLockedEvent/KeyRotationCompletedEvent/ReplayInterceptionEvent）
+
+**REST API**
+- EncryptionController / ReplayProtectionController / ThreeDsController / PaymentPasswordController
+
+**Flyway Migrations**
+- V63：encryption_key_metadata + encryption_configs 表 + payment_orders 扩展
+- V64：replay_protection_configs + replay_interception_stats 表
+- V65：three_ds_configs + three_ds_auth_records 表
+- V66：merchant_payment_passwords + password_history + password_security_configs + second_factor_records 表
+
+**单元测试（commit `bec2a5a`）— 16 个测试文件 / 5013 行**
+- EncryptionServiceTest / KeyManagementServiceTest / EncryptionConfigServiceTest / FieldEncryptionListenerTest
+- RiskAssessorTest / ThreeDsServerTest / ThreeDsServiceTest / ThreeDsConfigServiceTest
+- PaymentPasswordServiceTest / PasswordSecurityConfigServiceTest / SecondFactorServiceTest / PasswordHistoryServiceTest
+- NonceLengthValidatorTest / IdempotencyKeyValidatorTest / ReplayProtectionConfigServiceTest
+- SecurityExceptionHandlerTest / SecurityAuditServiceTest
+
+**代码审查修复（commit `6d2ffa0`）— 7 HIGH + 3 MEDIUM 问题**
+
+HIGH 修复：
+- **S.LOG.01**：SecondFactorService 日志中移除明文 OTP 验证码（CWE-532）
+- **S.AUTH.01**：ThreeDsServer 添加 `nexus.3ds.simulated-challenge-enabled` 配置开关，生产环境可禁用模拟 Challenge 验证（CWE-287）
+- **G.RUL.01**：FieldEncryptionListener 修复 DEK 配对不一致——同一 tenant+field+kekVersion 复用已有 DEK，而非每次生成新 DEK
+- **G.RUL.02**：FieldEncryptionListener 修复反射缓存 null 值 bug——使用 `Optional<Field>` 包装避免 ConcurrentHashMap null value 问题
+- **G.RUL.03**：PaymentPasswordInterceptor 修复 tenantId=null——从请求属性 `nexus.tenantId` 获取租户 ID，不再使用默认安全配置
+- **G.RUL.05**：PasswordHistoryService.isPasswordInHistory 标记为 `@Deprecated`，引导使用 isPlaintextInHistory
+- **G.RUL.06**：RiskAssessor 修复 `Math.abs(Integer.MIN_VALUE)` 溢出——改用 `hashCode() & 0x7FFFFFFF` 位掩码
+
+MEDIUM 修复：
+- **G.RUL.08**：ChallengeTimeoutScheduler 改为按租户/商户配置的 challengeTimeoutSeconds 判断超时，不再使用硬编码默认值
+- **G.RUL.10**：SecurityExceptionHandler 添加 HttpStatus.valueOf 范围校验，无效状态码时回退为 500
+- **G.RUL.12**：V63 迁移 auth_tag 列改为 `NULL DEFAULT NULL`，与 GCM 模式下 auth tag 包含在密文末尾的设计一致
+
 ### Payment Orchestration Wave 11（2026-09-26）
 
 #### Wave 11: 资金管理生态综合方案
