@@ -90,15 +90,15 @@ public class ReconciliationDiscrepancy {
     private String transactionId;
 
     /** 渠道侧金额 */
-    @Column(name = "channel_amount", precision = 36, scale = 0)
+    @Column(name = "channel_amount", precision = 36, scale = 2)
     private BigDecimal channelAmount;
 
     /** 内部侧金额 */
-    @Column(name = "internal_amount", precision = 36, scale = 0)
+    @Column(name = "internal_amount", precision = 36, scale = 2)
     private BigDecimal internalAmount;
 
     /** 金额差异（channelAmount - internalAmount 的绝对值） */
-    @Column(name = "amount_diff", precision = 36, scale = 0)
+    @Column(name = "amount_diff", precision = 36, scale = 2)
     private BigDecimal amountDiff;
 
     /** 渠道侧状态 */

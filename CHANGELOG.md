@@ -4,6 +4,113 @@
 
 ## [Unreleased]
 
+### Payment Orchestration Wave 15（2026-09-27）
+
+#### Wave 15: 对账系统增强 — 规则配置/对账单下载/自动补偿/T+1 报表
+
+**规则配置与状态映射（`reconciliation.rule` 包）**
+- **规则配置实体**：ReconciliationRuleConfig 支持多级配置（全局/渠道/商户/商户+渠道），按优先级解析
+- **规则配置服务**：ReconciliationRuleConfigService 提供规则 CRUD 与多级优先级解析
+- **状态映射服务**：StatusMappingService 通过 JSON 配置实现渠道状态到内部状态的映射
+- **对账引擎增强**：ReconciliationEngine 支持配置驱动的金额容差、时间窗口、状态映射，新增 TIME_MISMATCH 差异检测
+
+**对账单下载（`reconciliation.bill` 包）**
+- **下载代理**：BillDownloadProxy 统一编排微信/支付宝对账单下载，支持 dry-run/real 模式
+- **微信客户端**：WeChatBillDownloadClient + WeChatBillParser 解析
+- **支付宝客户端**：AlipayBillDownloadClient + AlipayBillParser 解析
+- **下载结果**：BillDownloadResult 封装下载与解析结果
+
+**自动补偿（`reconciliation.compensation` 包）**
+- **补偿服务**：AutoCompensationService 实现 LONG_AMOUNT→REFUND、SHORT_AMOUNT→INTERNAL_ADJUST，幂等，sandbox 执行
+- **补偿记录**：CompensationRecord + CompensationRecordRepository 持久化补偿记录
+
+**T+1 报表（`reconciliation.report` 包）**
+- **报表服务**：ReconciliationReportService 生成包含差异/补偿/挂账的 JSON 报表
+- **报表模型**：ReconciliationReportContent + ReconciliationReportRecord + ReconciliationReportRecordRepository
+
+**REST API**
+- ReconciliationRuleController / BillDownloadController / CompensationController / ReconciliationReportController
+
+**Flyway Migrations**
+- V81：reconciliation_rule_configs 表
+- V82：compensation_records 表
+- V83：reconciliation_report_records 表
+
+**单元测试**
+- 5 个新增测试类 + ReconciliationEngineTest 更新：ReconciliationRuleConfigServiceTest / StatusMappingServiceTest / BillDownloadProxyTest / AutoCompensationServiceTest / ReconciliationReportServiceTest
+
+#### Wave 15 安全与质量修复：P0 IDOR + P1 缺陷
+
+**P0 安全（5 个 IDOR 漏洞修复）**
+- ReconciliationRuleController / BillDownloadController / CompensationController / ReconciliationReportController 全部端点添加 MerchantOwnershipGuard 商户归属校验（requireMerchantId + requireOwned）
+- CompensationController.executeAllPending 改为只执行当前商户（新增 AutoCompensationService.executeAllPendingByMerchant + CompensationRecordRepository.findByMerchantIdAndStatus）
+- 移除 X-Operator 头 defaultValue="system"（防权限绕过）
+
+**P1 功能缺陷（4 项）**
+- AlipayBillDownloadClient 日志占位符 `{5}`→`{}`
+- ReconciliationReportService 补偿/挂账查询添加日期范围过滤（新增 findByMerchantIdAndCreatedAtBetween）
+- ReconciliationDiscrepancy 金额精度 scale=0→2
+- SuspenseAccount 金额精度 scale=0→2
+
+**验证**
+- 编译 BUILD SUCCESSFUL
+- 对账模块 115 个单元测试全部通过
+
+### Payment Orchestration Wave 14（2026-09-27）
+
+#### Wave 14: Sandbox E2E 验证基础设施
+
+**沙箱配置**
+- **配置校验器**：SandboxConfigValidator + SandboxStartupRunner，启动时校验沙箱参数
+- **配置检查接口**：SandboxConfigCheckController（@Profile sandbox）
+
+**健康检查**
+- **健康检查控制器**：SandboxHealthController 检查连接器可达性与证书状态
+
+**回调模拟器**
+- **控制器/服务**：CallbackSimulatorController + CallbackSimulatorService
+- **密钥与证书**：SandboxCallbackKeys + SandboxCallbackCertInitializer（AES-GCM 加密、RSA-SHA256 签名、构造器注入）
+
+**Mock 服务器**
+- WeChatMockServer + AlipayMockServer（WireMock）
+- WeChatCallbackSimulator + AlipayCallbackSimulator
+
+**测试工具与 E2E 测试**
+- TestKeyPairGenerator + TestPlatformCertificateFactory
+- E2E 测试：WeChatPay / Alipay / WeChatCallback / AlipayCallback / ChannelErrorHandling（fail-closed）
+
+**配置**
+- application-sandbox.yml（sandbox=true，dry-run）+ application.yml 渠道默认值
+- 代码审查修复：所有 bean 加 @Profile(sandbox)、显式 import、sandbox=true 语义
+
+### Payment Orchestration Wave 13（2026-09-27）
+
+#### Wave 13: 渠道沙箱集成 — 微信 RSA-SHA256/AES-GCM + 支付宝 JSON 序列化
+
+**核心修正**
+- WeChatPaySignatureUtil：HMAC-SHA256 → RSA-SHA256（商户私钥签名）
+- WeChatPaySignatureUtil：新增 AES-256-GCM 解密 resource.ciphertext
+- WeChatPaySignatureUtil：新增平台证书 RSA-SHA256 回调验签
+- WeChatPayConnector：buildAuthorization 使用 generateRsaSignature()
+- WeChatPayConnector：isDryRun 检查 merchantPrivateKey
+- PaymentCallbackController：微信回调验签升级为平台证书 RSA-SHA256
+- PaymentCallbackController：微信回调解密使用 AES-256-GCM
+- PaymentCallbackController：新增 Wechatpay-Serial 请求头
+- AlipayConnector：bizContent Map.toString() → ObjectMapper.writeValueAsString()
+- AlipayConnector：新增 formatAmount() 分→元转换
+- AlipayConnector：默认网关改为沙箱地址
+- ConnectorFactory：适配新构造器签名
+
+**新增组件**
+- WeChatPlatformCertificateManager：平台证书获取+缓存+轮换
+- WeChatPlatformCertificate：JPA 实体 + CertificateStatus 枚举
+- WeChatPlatformCertificateRepository：JPA 仓储
+- V71 Flyway 迁移：wechat_platform_certificates 表
+
+**测试与文档**
+- 4 个测试文件，91 tests 全部通过
+- wave13-sandbox-configuration-guide.md 配置指南
+
 ### Payment Orchestration Wave 12（2026-09-26）
 
 #### Wave 12: 支付安全增强 — 加密/防重放/3DS/支付密码

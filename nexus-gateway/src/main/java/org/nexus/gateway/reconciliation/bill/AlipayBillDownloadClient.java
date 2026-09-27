@@ -79,7 +79,7 @@ public class AlipayBillDownloadClient {
         // 1. 调用 alipay.data.dataservice.bill.downloadurl.query 获取下载链接
         String downloadUrl = fetchDownloadUrl(billDate);
         if (downloadUrl == null) {
-            log.error("[AlipayBill] 获取下载链接失败: billDate={5}", billDate);
+            log.error("[AlipayBill] 获取下载链接失败: billDate={}", billDate);
             return "";
         }
 

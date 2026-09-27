@@ -72,11 +72,13 @@ class ReconciliationReportServiceTest {
         compensation.setAmount(new BigDecimal("1.00"));
         compensation.setStatus(CompensationRecord.CompensationStatus.SUCCESS);
 
-        when(compensationRepository.findByMerchantId(MERCHANT_ID))
+        when(compensationRepository.findByMerchantIdAndCreatedAtBetween(
+                eq(MERCHANT_ID), any(), any()))
                 .thenReturn(List.of(compensation));
 
         // 准备挂账数据
-        when(suspenseRepository.findByMerchantId(MERCHANT_ID))
+        when(suspenseRepository.findByMerchantIdAndCreatedAtBetween(
+                eq(MERCHANT_ID), any(), any()))
                 .thenReturn(List.of());
 
         // 保存报表时返回带 ID 的记录
@@ -107,9 +109,11 @@ class ReconciliationReportServiceTest {
         when(discrepancyRepository.findByMerchantIdAndCreatedAtBetween(
                 eq(MERCHANT_ID), any(), any()))
                 .thenReturn(List.of());
-        when(compensationRepository.findByMerchantId(MERCHANT_ID))
+        when(compensationRepository.findByMerchantIdAndCreatedAtBetween(
+                eq(MERCHANT_ID), any(), any()))
                 .thenReturn(List.of());
-        when(suspenseRepository.findByMerchantId(MERCHANT_ID))
+        when(suspenseRepository.findByMerchantIdAndCreatedAtBetween(
+                eq(MERCHANT_ID), any(), any()))
                 .thenReturn(List.of());
         when(reportRepository.save(any())).thenAnswer(inv -> {
             ReconciliationReportRecord saved = inv.getArgument(0);

@@ -62,7 +62,7 @@ public class SuspenseAccount {
     private Long merchantId;
 
     /** 挂账金额 */
-    @Column(name = "amount", nullable = false, precision = 36, scale = 0)
+    @Column(name = "amount", nullable = false, precision = 36, scale = 2)
     private BigDecimal amount;
 
     /** 差错类型 */

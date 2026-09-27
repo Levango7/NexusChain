@@ -82,11 +82,11 @@ public class ReconciliationReportService {
 
         // 查询补偿记录
         List<CompensationRecord> compensations =
-                compensationRepository.findByMerchantId(merchantId);
+                compensationRepository.findByMerchantIdAndCreatedAtBetween(merchantId, periodStart, periodEnd);
 
         // 查询挂账记录
         List<SuspenseAccount> suspenseAccounts =
-                suspenseRepository.findByMerchantId(merchantId);
+                suspenseRepository.findByMerchantIdAndCreatedAtBetween(merchantId, periodStart, periodEnd);
 
         // 构建报表内容
         ReconciliationReportContent content = buildReportContent(

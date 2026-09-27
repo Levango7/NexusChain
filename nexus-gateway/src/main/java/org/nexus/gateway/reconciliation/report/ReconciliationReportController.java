@@ -1,5 +1,7 @@
 package org.nexus.gateway.reconciliation.report;
 
+import jakarta.servlet.http.HttpServletRequest;
+import org.nexus.gateway.security.MerchantOwnershipGuard;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
@@ -10,6 +12,8 @@ import java.util.List;
 
 /**
  * 对账报表 REST API。
+ *
+ * <p>P0-4 修复：所有端点添加商户归属校验，防止 IDOR 攻击。</p>
  *
  * <p>接口列表：</p>
  * <ul>
@@ -25,33 +29,50 @@ public class ReconciliationReportController {
     private static final Logger log = LoggerFactory.getLogger(ReconciliationReportController.class);
 
     private final ReconciliationReportService reportService;
+    private final MerchantOwnershipGuard ownershipGuard;
 
-    public ReconciliationReportController(ReconciliationReportService reportService) {
+    public ReconciliationReportController(ReconciliationReportService reportService,
+                                          MerchantOwnershipGuard ownershipGuard) {
         this.reportService = reportService;
+        this.ownershipGuard = ownershipGuard;
     }
 
     /**
      * 查询报表记录。
+     *
+     * <p>P0-4：报表必须属于当前认证商户。</p>
      */
     @GetMapping("/{id}")
-    public ResponseEntity<ReconciliationReportRecord> getReport(@PathVariable Long id) {
+    public ResponseEntity<ReconciliationReportRecord> getReport(@PathVariable Long id,
+                                                                HttpServletRequest httpRequest) {
+        Long callerMerchantId = ownershipGuard.requireMerchantId(httpRequest);
         return reportService.getReport(id)
-                .map(ResponseEntity::ok)
+                .map(report -> {
+                    ownershipGuard.requireOwned(callerMerchantId, report.getMerchantId(), "report", id);
+                    return ResponseEntity.ok(report);
+                })
                 .orElse(ResponseEntity.notFound().build());
     }
 
     /**
      * 查询商户的报表列表（按生成时间倒序）。
+     *
+     * <p>P0-4：请求的 merchantId 必须与认证上下文一致。</p>
      */
     @GetMapping("/merchant/{merchantId}")
     public ResponseEntity<List<ReconciliationReportRecord>> getReportsByMerchant(
-            @PathVariable Long merchantId) {
+            @PathVariable Long merchantId,
+            HttpServletRequest httpRequest) {
+        Long callerMerchantId = ownershipGuard.requireMerchantId(httpRequest);
+        ownershipGuard.requireOwned(callerMerchantId, merchantId, "merchant", merchantId);
         List<ReconciliationReportRecord> reports = reportService.getReportsByMerchant(merchantId);
         return ResponseEntity.ok(reports);
     }
 
     /**
      * 生成对账报表。
+     *
+     * <p>P0-4：请求体中的 merchantId 必须与认证上下文一致。</p>
      *
      * <p>请求体示例：
      * <pre>
@@ -63,12 +84,17 @@ public class ReconciliationReportController {
      * </pre>
      * </p>
      *
-     * @param request 生成请求
+     * @param request     生成请求
+     * @param httpRequest HTTP 请求（用于获取认证上下文）
      * @return 生成的报表记录
      */
     @PostMapping("/generate")
     public ResponseEntity<ReconciliationReportRecord> generateReport(
-            @RequestBody GenerateReportRequest request) {
+            @RequestBody GenerateReportRequest request,
+            HttpServletRequest httpRequest) {
+        Long callerMerchantId = ownershipGuard.requireMerchantId(httpRequest);
+        ownershipGuard.requireOwned(callerMerchantId, request.getMerchantId(), "report", request.getMerchantId());
+
         log.info("[ReportController] 生成报表请求: merchantId={}, reportDate={}, channelType={}",
                 request.getMerchantId(), request.getReportDate(), request.getChannelType());
 

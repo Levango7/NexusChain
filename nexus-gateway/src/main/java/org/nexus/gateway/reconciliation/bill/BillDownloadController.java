@@ -1,5 +1,7 @@
 package org.nexus.gateway.reconciliation.bill;
 
+import jakarta.servlet.http.HttpServletRequest;
+import org.nexus.gateway.security.MerchantOwnershipGuard;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
@@ -14,6 +16,8 @@ import java.util.Map;
  *
  * <p>提供对账单下载触发接口，支持按渠道类型和日期下载对账单。</p>
  *
+ * <p>P0-2 修复：downloadBill 端点添加商户归属校验，防止 IDOR 攻击。</p>
+ *
  * <p>接口列表：</p>
  * <ul>
  *   <li>{@code POST /api/reconciliation/bills/download} — 下载指定渠道和日期的对账单</li>
@@ -27,13 +31,18 @@ public class BillDownloadController {
     private static final Logger log = LoggerFactory.getLogger(BillDownloadController.class);
 
     private final BillDownloadProxy billDownloadProxy;
+    private final MerchantOwnershipGuard ownershipGuard;
 
-    public BillDownloadController(BillDownloadProxy billDownloadProxy) {
+    public BillDownloadController(BillDownloadProxy billDownloadProxy,
+                                  MerchantOwnershipGuard ownershipGuard) {
         this.billDownloadProxy = billDownloadProxy;
+        this.ownershipGuard = ownershipGuard;
     }
 
     /**
      * 下载对账单。
+     *
+     * <p>P0-2：请求体中的 merchantId 必须与认证上下文一致。</p>
      *
      * <p>请求体示例：
      * <pre>
@@ -45,11 +54,16 @@ public class BillDownloadController {
      * </pre>
      * </p>
      *
-     * @param request 下载请求参数
+     * @param request     下载请求参数
+     * @param httpRequest HTTP 请求（用于获取认证上下文）
      * @return 下载结果
      */
     @PostMapping("/download")
-    public ResponseEntity<BillDownloadResult> downloadBill(@RequestBody BillDownloadRequest request) {
+    public ResponseEntity<BillDownloadResult> downloadBill(@RequestBody BillDownloadRequest request,
+                                                            HttpServletRequest httpRequest) {
+        Long callerMerchantId = ownershipGuard.requireMerchantId(httpRequest);
+        ownershipGuard.requireOwned(callerMerchantId, request.getMerchantId(), "bill-download", request.getMerchantId());
+
         log.info("[BillDownloadController] 收到下载请求: channelType={}, merchantId={}, billDate={}",
                 request.getChannelType(), request.getMerchantId(), request.getBillDate());
 
@@ -72,6 +86,8 @@ public class BillDownloadController {
 
     /**
      * 查询渠道是否为 dry-run 模式。
+     *
+     * <p>纯渠道查询，无商户数据，不需要归属校验。</p>
      *
      * @param channelType 渠道类型
      * @return dry-run 状态

@@ -3,6 +3,7 @@ package org.nexus.gateway.reconciliation;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 /**
@@ -16,6 +17,9 @@ public interface SuspenseAccountRepository
 
     /** 按商户 ID 查询所有挂账 */
     List<SuspenseAccount> findByMerchantId(Long merchantId);
+
+    /** 按商户 ID 和创建时间范围查询挂账记录 */
+    List<SuspenseAccount> findByMerchantIdAndCreatedAtBetween(Long merchantId, LocalDateTime start, LocalDateTime end);
 
     /** 按挂账状态查询 */
     List<SuspenseAccount> findByStatus(SuspenseAccount.SuspenseStatus status);

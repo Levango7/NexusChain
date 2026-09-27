@@ -181,6 +181,27 @@ public class AutoCompensationService {
                 .toList();
     }
 
+    /**
+     * 批量执行指定商户的 PENDING 状态补偿记录。
+     *
+     * <p>P0-3：只执行当前认证商户的补偿，防止跨商户操作。</p>
+     *
+     * @param merchantId 商户 ID
+     * @return 执行结果列表
+     */
+    @Transactional
+    public List<CompensationRecord> executeAllPendingByMerchant(Long merchantId) {
+        List<CompensationRecord> pendingRecords = compensationRepository
+                .findByMerchantIdAndStatus(merchantId, CompensationRecord.CompensationStatus.PENDING);
+
+        log.info("[AutoCompensation] 批量执行商户 {} 的 {} 条 PENDING 补偿记录",
+                merchantId, pendingRecords.size());
+
+        return pendingRecords.stream()
+                .map(r -> executeCompensation(r.getId()))
+                .toList();
+    }
+
     // ==================== 查询 ====================
 
     /**
