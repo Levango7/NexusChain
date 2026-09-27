@@ -1,11 +1,15 @@
 package org.nexus.gateway.reconciliation;
 
 import org.nexus.gateway.model.PaymentOrder;
+import org.nexus.gateway.reconciliation.rule.ReconciliationRuleConfig;
+import org.nexus.gateway.reconciliation.rule.ReconciliationRuleConfigService;
+import org.nexus.gateway.reconciliation.rule.StatusMappingService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -33,23 +37,45 @@ import java.util.stream.Collectors;
 @Service
 public class ReconciliationEngine {
 
-    /** 金额容差（默认 0.01 元） */
+    /** 金额容差（默认 0.01 元，作为 fallback） */
     @Value("${reconciliation.amount.tolerance:0.01}")
-    private BigDecimal amountTolerance;
+    private BigDecimal defaultAmountTolerance;
+
+    /** 默认时间窗口（分钟） */
+    @Value("${reconciliation.time.window.minutes:5}")
+    private int defaultTimeWindowMinutes;
+
+    private final ReconciliationRuleConfigService ruleConfigService;
+    private final StatusMappingService statusMappingService;
+
+    public ReconciliationEngine(ReconciliationRuleConfigService ruleConfigService,
+                                 StatusMappingService statusMappingService) {
+        this.ruleConfigService = ruleConfigService;
+        this.statusMappingService = statusMappingService;
+    }
 
     /**
-     * 执行对账比对。
+     * 执行对账比对（带渠道类型，支持配置驱动的容差/时间窗口/状态映射）。
      *
      * @param merchantId      商户 ID
+     * @param channelType     渠道类型（WECHAT / ALIPAY，可为 null 表示通用对账）
      * @param channelRecords  渠道对账文件中的交易记录列表
      * @param internalOrders  内部交易记录列表（从 PaymentOrderRepository 查询）
      * @param reconciliationFileId 关联的对账文件记录 ID（可为 null）
      * @return 对账差异报告
      */
     public ReconciliationDiffReport reconcile(Long merchantId,
-                                              List<ChannelRecord> channelRecords,
-                                              List<PaymentOrder> internalOrders,
-                                              Long reconciliationFileId) {
+                                               String channelType,
+                                               List<ChannelRecord> channelRecords,
+                                               List<PaymentOrder> internalOrders,
+                                               Long reconciliationFileId) {
+        // 解析配置
+        ReconciliationRuleConfig config = ruleConfigService.resolveConfig(merchantId, channelType);
+        BigDecimal amountTolerance = config.getAmountTolerance() != null
+                ? config.getAmountTolerance() : defaultAmountTolerance;
+        int timeWindowMinutes = config.getTimeWindowMinutes() != null
+                ? config.getTimeWindowMinutes() : defaultTimeWindowMinutes;
+        String statusMappingJson = config.getStatusMappingJson();
         ReconciliationDiffReport report = new ReconciliationDiffReport();
         report.setReconciledAt(LocalDateTime.now());
         report.setTotalInternal(internalOrders != null ? internalOrders.size() : 0);
@@ -105,9 +131,10 @@ public class ReconciliationEngine {
                     }
                 } else {
                     matchedTransactionIds.add(txnId);
-                    // 双方都有，比对金额、状态、信息
+                    // 双方都有，比对金额、状态、时间、信息
                     ReconciliationDiscrepancy discrepancy = compareMatched(
-                            merchantId, reconciliationFileId, channelRecord, internalOrder);
+                            merchantId, reconciliationFileId, channelRecord, internalOrder,
+                            amountTolerance, timeWindowMinutes, statusMappingJson);
                     if (discrepancy == null) {
                         matchedCount++;
                     } else {
@@ -152,14 +179,20 @@ public class ReconciliationEngine {
     }
 
     /**
-     * 比对双方都存在的交易记录，判断金额/状态/信息是否一致。
+     * 比对双方都存在的交易记录，判断金额/状态/时间/信息是否一致。
      *
+     * @param amountTolerance   金额容差
+     * @param timeWindowMinutes 时间窗口（分钟）
+     * @param statusMappingJson 状态映射 JSON
      * @return null 表示完全匹配，否则返回差异记录
      */
     private ReconciliationDiscrepancy compareMatched(Long merchantId,
-                                                     Long reconciliationFileId,
-                                                     ChannelRecord channelRecord,
-                                                     PaymentOrder internalOrder) {
+                                                      Long reconciliationFileId,
+                                                      ChannelRecord channelRecord,
+                                                      PaymentOrder internalOrder,
+                                                      BigDecimal amountTolerance,
+                                                      int timeWindowMinutes,
+                                                      String statusMappingJson) {
         String txnId = channelRecord.getTransactionId();
 
         BigDecimal channelAmount = channelRecord.getAmount();
@@ -178,18 +211,31 @@ public class ReconciliationEngine {
             amountDiff = channelAmount != null ? channelAmount : internalAmount;
         }
 
-        // 状态比对
+        // 状态比对（使用状态映射）
         String channelStatus = channelRecord.getStatus();
+        // 将渠道状态映射为内部状态后再比较
+        String mappedChannelStatus = statusMappingService.mapToInternalStatus(statusMappingJson, channelStatus);
         String internalStatus = internalOrder.getStatus() != null
                 ? internalOrder.getStatus().name() : null;
-        boolean statusMismatch = !Objects.equals(channelStatus, internalStatus);
+        boolean statusMismatch = !Objects.equals(mappedChannelStatus, internalStatus);
 
-        // 如果金额和状态都匹配，视为完全匹配
-        if (!amountMismatch && !statusMismatch) {
+        // 时间比对（使用配置的时间窗口）
+        boolean timeMismatch = false;
+        long timeDiffMinutes = 0;
+        if (channelRecord.getPaidAt() != null && internalOrder.getPaidAt() != null) {
+            timeDiffMinutes = Math.abs(ChronoUnit.MINUTES.between(
+                    channelRecord.getPaidAt(), internalOrder.getPaidAt()));
+            if (timeDiffMinutes > timeWindowMinutes) {
+                timeMismatch = true;
+            }
+        }
+
+        // 如果金额、状态和时间都匹配，视为完全匹配
+        if (!amountMismatch && !statusMismatch && !timeMismatch) {
             return null;
         }
 
-        // 确定差异类型：金额不一致优先，其次状态不一致
+        // 确定差异类型：金额不一致优先，其次状态不一致，再次时间不一致
         ReconciliationDiscrepancy.DiscrepancyType type;
         String description;
 
@@ -198,10 +244,17 @@ public class ReconciliationEngine {
             description = "Amount mismatch: channel=" + channelAmount
                     + ", internal=" + internalAmount
                     + ", diff=" + amountDiff;
-        } else {
+        } else if (statusMismatch) {
             type = ReconciliationDiscrepancy.DiscrepancyType.STATUS_MISMATCH;
             description = "Status mismatch: channel=" + channelStatus
+                    + " (mapped=" + mappedChannelStatus + ")"
                     + ", internal=" + internalStatus;
+        } else {
+            type = ReconciliationDiscrepancy.DiscrepancyType.TIME_MISMATCH;
+            description = "Time mismatch: channel=" + channelRecord.getPaidAt()
+                    + ", internal=" + internalOrder.getPaidAt()
+                    + ", diffMinutes=" + timeDiffMinutes
+                    + ", window=" + timeWindowMinutes;
         }
 
         ReconciliationDiscrepancy discrepancy = new ReconciliationDiscrepancy();
@@ -326,16 +379,16 @@ public class ReconciliationEngine {
     }
 
     /**
-     * 获取当前金额容差配置。
+     * 获取默认金额容差配置。
      */
     public BigDecimal getAmountTolerance() {
-        return amountTolerance;
+        return defaultAmountTolerance;
     }
 
     /**
-     * 设置金额容差（主要用于测试）。
+     * 设置默认金额容差（主要用于测试）。
      */
     public void setAmountTolerance(BigDecimal amountTolerance) {
-        this.amountTolerance = amountTolerance;
+        this.defaultAmountTolerance = amountTolerance;
     }
 }

@@ -332,7 +332,7 @@ public class ReconciliationFileService {
 
         // 执行比对
         ReconciliationDiffReport report = reconciliationEngine.reconcile(
-                merchantId, channelRecords, internalOrders, fileRecord.getId());
+                merchantId, null, channelRecords, internalOrders, fileRecord.getId());
 
         // 持久化差错记录
         if (report.getDiscrepancies() != null && !report.getDiscrepancies().isEmpty()) {
@@ -377,7 +377,7 @@ public class ReconciliationFileService {
 
         // 执行比对
         ReconciliationDiffReport report = reconciliationEngine.reconcile(
-                fileRecord.getMerchantId(), channelRecords, internalOrders, fileRecord.getId());
+                fileRecord.getMerchantId(), null, channelRecords, internalOrders, fileRecord.getId());
 
         // 持久化差错记录
         if (report.getDiscrepancies() != null && !report.getDiscrepancies().isEmpty()) {

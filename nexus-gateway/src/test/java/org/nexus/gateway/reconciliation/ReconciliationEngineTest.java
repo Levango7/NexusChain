@@ -1,15 +1,21 @@
 package org.nexus.gateway.reconciliation;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.nexus.gateway.model.PaymentOrder;
+import org.nexus.gateway.reconciliation.rule.ReconciliationRuleConfig;
+import org.nexus.gateway.reconciliation.rule.ReconciliationRuleConfigRepository;
+import org.nexus.gateway.reconciliation.rule.ReconciliationRuleConfigService;
+import org.nexus.gateway.reconciliation.rule.StatusMappingService;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
 
 /**
  * ReconciliationEngine 单元测试。
@@ -20,12 +26,17 @@ import static org.junit.jupiter.api.Assertions.*;
 class ReconciliationEngineTest {
 
     private ReconciliationEngine engine;
+    private ReconciliationRuleConfigService ruleConfigService;
+    private StatusMappingService statusMappingService;
 
     private static final Long MERCHANT_ID = 500L;
 
     @BeforeEach
     void setUp() {
-        engine = new ReconciliationEngine();
+        ReconciliationRuleConfigRepository repository = mock(ReconciliationRuleConfigRepository.class);
+        ruleConfigService = new ReconciliationRuleConfigService(repository);
+        statusMappingService = new StatusMappingService(new ObjectMapper());
+        engine = new ReconciliationEngine(ruleConfigService, statusMappingService);
         engine.setAmountTolerance(new BigDecimal("0.01"));
     }
 
@@ -39,7 +50,7 @@ class ReconciliationEngineTest {
                 PaymentOrder.OrderStatus.PAID);
 
         ReconciliationDiffReport report = engine.reconcile(
-                MERCHANT_ID, List.of(channelRecord), List.of(internalOrder), null);
+                MERCHANT_ID, null, List.of(channelRecord), List.of(internalOrder), null);
 
         assertEquals(1, report.getMatchedCount());
         assertEquals(0, report.getMismatchedCount());
@@ -58,7 +69,7 @@ class ReconciliationEngineTest {
         ChannelRecord channelRecord = createChannelRecord("ORD-001", new BigDecimal("100"), "PAID");
 
         ReconciliationDiffReport report = engine.reconcile(
-                MERCHANT_ID, List.of(channelRecord), List.of(), null);
+                MERCHANT_ID, null, List.of(channelRecord), List.of(), null);
 
         assertEquals(0, report.getMatchedCount());
         assertEquals(1, report.getExtraCount());
@@ -84,7 +95,7 @@ class ReconciliationEngineTest {
                 PaymentOrder.OrderStatus.PAID);
 
         ReconciliationDiffReport report = engine.reconcile(
-                MERCHANT_ID, List.of(), List.of(internalOrder), null);
+                MERCHANT_ID, null, List.of(), List.of(internalOrder), null);
 
         assertEquals(0, report.getMatchedCount());
         assertEquals(0, report.getExtraCount());
@@ -110,7 +121,7 @@ class ReconciliationEngineTest {
                 PaymentOrder.OrderStatus.PAID);
 
         ReconciliationDiffReport report = engine.reconcile(
-                MERCHANT_ID, List.of(channelRecord), List.of(internalOrder), null);
+                MERCHANT_ID, null, List.of(channelRecord), List.of(internalOrder), null);
 
         assertEquals(0, report.getMatchedCount());
         assertEquals(1, report.getMismatchedCount());
@@ -133,7 +144,7 @@ class ReconciliationEngineTest {
                 PaymentOrder.OrderStatus.PAID);
 
         ReconciliationDiffReport report = engine.reconcile(
-                MERCHANT_ID, List.of(channelRecord), List.of(internalOrder), null);
+                MERCHANT_ID, null, List.of(channelRecord), List.of(internalOrder), null);
 
         assertEquals(1, report.getMatchedCount());
         assertEquals(0, report.getMismatchedCount());
@@ -150,7 +161,7 @@ class ReconciliationEngineTest {
                 PaymentOrder.OrderStatus.PENDING);
 
         ReconciliationDiffReport report = engine.reconcile(
-                MERCHANT_ID, List.of(channelRecord), List.of(internalOrder), null);
+                MERCHANT_ID, null, List.of(channelRecord), List.of(internalOrder), null);
 
         assertEquals(0, report.getMatchedCount());
         assertEquals(1, report.getMismatchedCount());
@@ -169,25 +180,21 @@ class ReconciliationEngineTest {
     @Test
     @DisplayName("reconcile — 混合场景：1匹配 + 1长款 + 1短款 + 1金额不一致")
     void reconcileMixedScenario() {
-        // 匹配的交易
         ChannelRecord chMatched = createChannelRecord("ORD-001", new BigDecimal("100"), "PAID");
         PaymentOrder intMatched = createPaymentOrder("ORD-001", new BigDecimal("100"),
                 PaymentOrder.OrderStatus.PAID);
 
-        // 长款：渠道有内部无
         ChannelRecord chLong = createChannelRecord("ORD-002", new BigDecimal("200"), "PAID");
 
-        // 短款：内部有渠道无
         PaymentOrder intShort = createPaymentOrder("ORD-003", new BigDecimal("300"),
                 PaymentOrder.OrderStatus.PAID);
 
-        // 金额不一致
         ChannelRecord chMismatch = createChannelRecord("ORD-004", new BigDecimal("400"), "PAID");
         PaymentOrder intMismatch = createPaymentOrder("ORD-004", new BigDecimal("450"),
                 PaymentOrder.OrderStatus.PAID);
 
         ReconciliationDiffReport report = engine.reconcile(
-                MERCHANT_ID,
+                MERCHANT_ID, null,
                 List.of(chMatched, chLong, chMismatch),
                 List.of(intMatched, intShort, intMismatch),
                 null);
@@ -207,7 +214,7 @@ class ReconciliationEngineTest {
     @DisplayName("reconcile — 双方都为空时返回零差异")
     void reconcileBothEmptyReturnsZero() {
         ReconciliationDiffReport report = engine.reconcile(
-                MERCHANT_ID, List.of(), List.of(), null);
+                MERCHANT_ID, null, List.of(), List.of(), null);
 
         assertEquals(0, report.getMatchedCount());
         assertEquals(0, report.getMismatchedCount());
@@ -222,7 +229,7 @@ class ReconciliationEngineTest {
     @DisplayName("reconcile — null 输入安全处理")
     void reconcileNullInputsHandledSafely() {
         ReconciliationDiffReport report = engine.reconcile(
-                MERCHANT_ID, null, null, null);
+                MERCHANT_ID, null, null, null, null);
 
         assertEquals(0, report.getMatchedCount());
         assertTrue(report.getDiscrepancies().isEmpty());
@@ -278,23 +285,19 @@ class ReconciliationEngineTest {
     @Test
     @DisplayName("reconcile — 差异金额汇总正确计算")
     void reconcileTotalDiscrepancyAmountCalculatedCorrectly() {
-        // 长款 100
         ChannelRecord chLong = createChannelRecord("ORD-001", new BigDecimal("100"), "PAID");
-        // 短款 200
         PaymentOrder intShort = createPaymentOrder("ORD-002", new BigDecimal("200"),
                 PaymentOrder.OrderStatus.PAID);
-        // 金额不一致，差异 5
         ChannelRecord chMismatch = createChannelRecord("ORD-003", new BigDecimal("300"), "PAID");
         PaymentOrder intMismatch = createPaymentOrder("ORD-003", new BigDecimal("305"),
                 PaymentOrder.OrderStatus.PAID);
 
         ReconciliationDiffReport report = engine.reconcile(
-                MERCHANT_ID,
+                MERCHANT_ID, null,
                 List.of(chLong, chMismatch),
                 List.of(intShort, intMismatch),
                 null);
 
-        // 长款 100 + 短款 200 + 金额差异 5 = 305
         assertEquals(new BigDecimal("305"), report.getTotalDiscrepancyAmount());
     }
 

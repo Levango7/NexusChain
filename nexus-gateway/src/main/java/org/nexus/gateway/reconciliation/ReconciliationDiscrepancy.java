@@ -26,6 +26,8 @@ public class ReconciliationDiscrepancy {
         AMOUNT_MISMATCH,
         /** 状态不一致：双方都有但状态不同 */
         STATUS_MISMATCH,
+        /** 时间不一致：双方都有但交易时间超出容差窗口 */
+        TIME_MISMATCH,
         /** 信息不一致：双方都有但其他信息不同 */
         INFO_MISMATCH
     }
