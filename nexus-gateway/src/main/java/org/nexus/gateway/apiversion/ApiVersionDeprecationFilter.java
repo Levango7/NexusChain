@@ -76,30 +76,19 @@ public class ApiVersionDeprecationFilter implements Filter {
         ApiVersionPolicy.VersionStatus status = deprecationService.checkVersionStatus(versionLabel);
 
         switch (status) {
-            case ACTIVE:
-                // 正常版本，继续处理
-                chain.doFilter(request, response);
-                break;
-
-            case DEPRECATED:
-                // 废弃版本：添加通知头，继续处理请求
+            // 废弃版本：添加通知头，继续处理请求
+            case DEPRECATED -> {
                 applyDeprecationHeaders(httpResponse, versionLabel);
                 chain.doFilter(request, response);
-                break;
-
-            case SUNSET:
-                // 日落版本：返回 410 Gone + 迁移指南
-                handleSunset(httpResponse, versionLabel);
-                break;
-
-            case RETIRED:
-                // 退役版本：返回 404 Not Found
-                handleRetired(httpResponse, versionLabel);
-                break;
-
-            default:
-                chain.doFilter(request, response);
-                break;
+            }
+            // 日落版本：返回 410 Gone + 迁移指南
+            case SUNSET -> handleSunset(httpResponse, versionLabel);
+            // 退役版本：返回 404 Not Found
+            case RETIRED -> handleRetired(httpResponse, versionLabel);
+            // ACTIVE 与将来可能新增的状态一律放行——与改造前
+            // （ACTIVE 分支 + default 分支同为 chain.doFilter）语义等价，
+            // 版本治理只在明确标记 DEPRECATED/SUNSET/RETIRED 时才拦流量。
+            default -> chain.doFilter(request, response);
         }
     }
 
@@ -186,7 +175,7 @@ public class ApiVersionDeprecationFilter implements Filter {
         String body = "{\"error\":{\"code\":\"VERSION_RETIRED\",\"message\":\"API version "
                 + versionLabel + " has been retired and is no longer available\"}}";
 
-        response.getWriter().write(body.toString());
+        response.getWriter().write(body);
         log.warn("Request to retired version {} rejected with 404 Not Found", versionLabel);
     }
 

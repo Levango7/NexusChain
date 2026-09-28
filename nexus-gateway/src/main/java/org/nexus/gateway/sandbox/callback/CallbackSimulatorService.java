@@ -25,6 +25,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ThreadLocalRandom;
 
 /**
  * 回调模拟器服务 — 构造模拟回调通知并发送到内部回调端点。
@@ -166,7 +167,8 @@ public class CallbackSimulatorService {
         params.put("out_trade_no", outTradeNo);
         params.put("trade_no", "alipay_tx_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16));
         params.put("trade_status", tradeStatus);
-        params.put("notify_id", String.valueOf(System.currentTimeMillis()) + (int) (Math.random() * 10000));
+        params.put("notify_id", String.valueOf(System.currentTimeMillis())
+                + ThreadLocalRandom.current().nextInt(10000));
 
         // 2. 使用商户私钥对业务参数生成 RSA2 签名
         String sign = AlipaySignatureUtil.generateSignature(
