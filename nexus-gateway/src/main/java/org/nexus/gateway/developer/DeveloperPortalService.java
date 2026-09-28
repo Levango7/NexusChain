@@ -1,5 +1,6 @@
 package org.nexus.gateway.developer;
 
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -12,6 +13,11 @@ import java.util.*;
  * <p>API 端点元数据硬编码在 Service 中（API 变化不频繁），
  * 代码示例基于模板字符串生成，测试请求仅在 sandbox 模式下代理执行。</p>
  */
+@SuppressFBWarnings(
+    value = "VA_FORMAT_STRING_USES_NEWLINE",
+    justification = "本类的 generate*Code 模板产出的是展示给开发者的 curl/多语言源码样例，"
+        + "其中的换行属于样例数据而非运行时消息；改用 %n 会在 Windows 上产出 \\r\\n，"
+        + "使同一段样例在不同平台生成不同文本，破坏样例的跨平台确定性")
 @Service
 public class DeveloperPortalService {
 
