@@ -11,6 +11,7 @@ import io.grpc.MethodDescriptor;
 import io.grpc.StatusRuntimeException;
 import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
 import io.grpc.netty.shaded.io.netty.handler.ssl.SslContext;
+import org.nexus.signing.mpc.crypto.grpc.MpcCryptoServiceGrpc;
 import org.nexus.signing.mpc.transport.GrpcTlsContextFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -47,11 +48,13 @@ import java.util.concurrent.TimeUnit;
  * <h2>向后兼容</h2>
  * <ul>
  *   <li>当 {@code mpc.engine.endpoints} 未配置（空）时，回退到
- *       {@code mpc.engine.host:port} 单端点模式，行为与原 {@link GrpcMpcCryptoEngine} 一致</li>
+ *       {@code mpc.engine.host:port} 单端点模式，行为与原 {@link GrpcMpcCryptoEngine} 一致
+ *       （仅 {@code distributed-mode=false}，即 dev 默认）</li>
  *   <li>当 {@code mpc.engine.endpoints} 仅配置一个端点时，所有 partyIndex
  *       均路由到该端点（等价于单端点模式）</li>
- *   <li>当 {@code partyIndex} 超出端点列表长度时，回退到端点 0（容错，
- *       并记录警告日志）</li>
+ *   <li>当 {@code partyIndex} 超出端点列表长度时，{@code distributed-mode=false} 回退到
+ *       端点 0（容错，并记录警告日志）；{@code distributed-mode=true}（prod）fail-closed
+ *       抛异常，杜绝错误路由到非本方份额（见 {@link #getChannel(int)}）</li>
  * </ul>
  *
  * <h2>配置</h2>
@@ -156,6 +159,17 @@ public class MpcEngineRouter {
     /** gRPC 应用层认证 token（MPC-P1-05）。 */
     @Value("${mpc.engine.auth-token:}")
     private String authToken;
+
+    /**
+     * TLS 主机名校验覆盖（P0-1 集群路径）。
+     *
+     * <p>mpc-engine 证书 SAN 为 localhost/127.0.0.1（generate-certs.sh 约定，
+     * Pod DNS 名不进 SAN），生产 K8s 客户端连 {@code mpc-engine-N:50051} 时
+     * 需覆盖为证书内主机名，与集群 E2E 客户端同语义。默认空 = 不覆盖
+     * （证书 SAN 与连接地址一致的环境无需设置）。</p>
+     */
+    @Value("${mpc.engine.tls.override-authority:}")
+    private String tlsOverrideAuthority;
 
     /** 已建立的 channel 列表（与 endpoints 顺序对齐，索引 = partyIndex）。 */
     private final List<ManagedChannel> channels = new ArrayList<>();
@@ -322,6 +336,62 @@ public class MpcEngineRouter {
     }
 
     /**
+     * 为指定 partyIndex 创建附加 Bearer auth 的 blocking stub（P0-1 集群路径）。
+     *
+     * <p>统一在此处绑定 channel + 认证拦截器：CGGMP21 客户端工厂
+     * （{@code MpcCggmpClusterConfig}）按方取 stub，避免认证逻辑重复实现。</p>
+     *
+     * @param partyIndex MPC 参与方索引（0-based；分布式模式下超界 fail-closed）
+     * @return 已附加认证（若配置了 auth-token）的 blocking stub
+     * @throws IllegalStateException channel 未建立或已关闭
+     */
+    public MpcCryptoServiceGrpc.MpcCryptoServiceBlockingStub newBlockingStub(int partyIndex) {
+        ManagedChannel channel = getChannel(partyIndex);
+        if (channel == null || channel.isShutdown()) {
+            throw new IllegalStateException(
+                    "MpcEngineRouter: no channel for partyIndex=" + partyIndex
+                            + " (endpoint=" + getEndpointDescription(partyIndex)
+                            + "); check mpc.engine.endpoints config and engine process");
+        }
+        MpcCryptoServiceGrpc.MpcCryptoServiceBlockingStub stub =
+                MpcCryptoServiceGrpc.newBlockingStub(channel);
+        ClientInterceptor authInterceptor = buildAuthInterceptorOrNull();
+        return authInterceptor != null ? stub.withInterceptors(authInterceptor) : stub;
+    }
+
+    /**
+     * 构建 Bearer token 认证 interceptor（MPC-P1-05）。
+     *
+     * <p>与 {@code GrpcMpcCryptoEngine} 同契约：auth-token 为空返回 null
+     * （无认证，仅限开发）。</p>
+     */
+    private ClientInterceptor buildAuthInterceptorOrNull() {
+        if (authToken == null || authToken.isEmpty()) {
+            log.warn("MpcEngineRouter: auth token empty — gRPC calls unauthenticated. "
+                    + "NOT for production; set mpc.engine.auth-token (MPC-P1-05)");
+            return null;
+        }
+        Metadata authMetadata = new Metadata();
+        authMetadata.put(AUTHORIZATION_METADATA_KEY, BEARER_PREFIX + authToken);
+        return new ClientInterceptor() {
+            @Override
+            public <ReqT, RespT> ClientCall<ReqT, RespT> interceptCall(
+                    MethodDescriptor<ReqT, RespT> method,
+                    CallOptions callOptions,
+                    Channel next) {
+                return new ForwardingClientCall.SimpleForwardingClientCall<ReqT, RespT>(
+                        next.newCall(method, callOptions)) {
+                    @Override
+                    public void start(Listener<RespT> responseListener, Metadata headers) {
+                        headers.merge(authMetadata);
+                        super.start(responseListener, headers);
+                    }
+                };
+            }
+        };
+    }
+
+    /**
      * 检查路由器是否已初始化且至少有一个有效 channel。
      *
      * @return {@code true} 若已初始化且至少有一个非 null channel
@@ -364,7 +434,12 @@ public class MpcEngineRouter {
     }
 
     /**
-     * 构建 gRPC channel（含 mTLS + Bearer token interceptor）。
+     * 构建 gRPC channel（含 mTLS + keepalive + 可选主机名覆盖）。
+     *
+     * <p>keepalive 修复（2026-09-06 CI 实证，ab91ea5 轮）：默认 30s idle 会关闭
+     * 空闲连接——CGGMP21 阶段间隙（keygen→aux 约 30s）后首个 RPC 落在已关连接
+     * 上报 HTTP status 200/UNKNOWN（请求实际已到引擎但响应回传失败）。显式
+     * keepalive + 禁 idle 修复；</p>
      *
      * @param epHost       端点主机
      * @param epPort       端点端口
@@ -375,7 +450,17 @@ public class MpcEngineRouter {
         NettyChannelBuilder builder = NettyChannelBuilder
                 .forAddress(epHost, epPort)
                 .enableRetry()
-                .maxRetryAttempts(3);
+                .maxRetryAttempts(3)
+                .keepAliveTime(10, TimeUnit.SECONDS)
+                .keepAliveTimeout(5, TimeUnit.SECONDS)
+                .keepAliveWithoutCalls(true)
+                .idleTimeout(TimeUnit.DAYS.toSeconds(1), TimeUnit.SECONDS);
+
+        if (tlsOverrideAuthority != null && !tlsOverrideAuthority.isEmpty()) {
+            builder.overrideAuthority(tlsOverrideAuthority);
+            log.info("MpcEngineRouter: TLS authority overridden to '{}' for {}:{}",
+                    tlsOverrideAuthority, epHost, epPort);
+        }
 
         if (usePlaintext || sslContext == null) {
             builder.usePlaintext();

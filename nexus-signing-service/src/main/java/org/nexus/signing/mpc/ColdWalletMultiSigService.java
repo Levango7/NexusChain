@@ -270,9 +270,13 @@ public class ColdWalletMultiSigService {
 
         // CGGMP21 路径：单方调用即可（r/s 在 mpc-engine 进程内已产出）
         if (engine instanceof CggmpMpcCryptoEngine) {
-            // 本方索引：取第一位参与方（H 批：单进程 = 单方，partyIndex=0）
+            // P0-1：引擎会话 ID 必须钱包维度（keygen 与签名一致）——引擎按
+            // session_id 从磁盘恢复份额；转账级随机 UUID 无对应份额会直接
+            // 报 "key_share missing"。转账 sessionId 仅用于本服务记账。
+            String engineSessionId = CggmpMpcCryptoEngine.walletSessionId(wallet.getWalletId());
+            // 本方索引：Model A 单进程驱动全部参与方，partyIndex 不参与路由
             int partyIndex = 0;
-            SignRequest req = new SignRequest(sessionId, publicKey,
+            SignRequest req = new SignRequest(engineSessionId, publicKey,
                     "cggmp-share-not-needed", messageHashHex, partyIndex, peerEndpoints);
             SignResponse resp = engine.sign(req);
             if (!resp.isSuccess()) {
@@ -288,7 +292,8 @@ public class ColdWalletMultiSigService {
             }
             // 记录 r||s 拼接（语义=完整签名）—— 与 GG20 aggregate 行为对齐
             session.recordSignatureShare("cggmp-aggregated", sig);
-            log.info("CGGMP21 sign done: session={}, sig.len={}", sessionId, sig.length());
+            log.info("CGGMP21 sign done: session={}, engineSession={}, sig.len={}",
+                    sessionId, engineSessionId, sig.length());
             return;
         }
 

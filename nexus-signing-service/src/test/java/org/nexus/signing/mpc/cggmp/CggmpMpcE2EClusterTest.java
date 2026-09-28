@@ -7,9 +7,18 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.nexus.signing.mpc.crypto.AggregateRequest;
+import org.nexus.signing.mpc.crypto.AggregateResponse;
+import org.nexus.signing.mpc.crypto.DkgRequest;
+import org.nexus.signing.mpc.crypto.DkgResponse;
+import org.nexus.signing.mpc.crypto.MpcEngineRouter;
+import org.nexus.signing.mpc.crypto.SignRequest;
+import org.nexus.signing.mpc.crypto.SignResponse;
 import org.nexus.signing.mpc.crypto.grpc.MpcCryptoServiceGrpc;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.io.File;
 import java.io.IOException;
@@ -28,8 +37,12 @@ import java.util.stream.Collectors;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
  * I 批端到端集成测试：CGGMP21 路径 Java 客户端 → 3 进程 mpc-engine。
@@ -455,6 +468,155 @@ public class CggmpMpcE2EClusterTest {
         CgStatus st = partyClients.get(0).status(sid);
         assertTrue(st.isHasKeyShare(), "key_share should exist after assemble");
         log.info("J batch full pipeline PASSED: keygen→aux→assemble→sign→verify, sid={}", sid);
+    }
+
+    // ============================================================
+    // P0-1：生产路径 E2E（MpcEngineRouter → CggmpMpcCryptoEngine → 集群驱动）
+    // ============================================================
+
+    /**
+     * P0-1 生产路径 E2E（B2 验收口径：3 节点 2-of-3 真实签名 + 无单进程全份额路径）。
+     *
+     * <p>与上方用例的差异：不手工拼 client/orchestrator，而是走**生产装配链**——
+     * {@link MpcEngineRouter}（多端点 + mTLS + Bearer + overrideAuthority +
+     * keepalive，绕开手工 channel 的同款配置）→ {@link MpcCggmpClusterConfig}
+     * （cggmp-enabled=true 的 fail-closed 装配）→ {@link CggmpClusterSessionDriver}
+     * → {@link CggmpMpcCryptoEngine}（SPI 入口，签名方 = signers="0,1"）。</p>
+     *
+     * <p>断言链：</p>
+     * <ol>
+     *   <li>份额隔离——每节点 {@code cggmp/<sid>/keyshare.bin} 存在、NXC1 信封、
+     *       三节点密文两两不同；无 GG20 全量快照 {@code session-<sid>.json} /
+     *       {@code my-share-<sid>.json}（B2"无单进程全份额路径"）</li>
+     *   <li>2-of-3 签名 → aggregate 拆 r/s → verify 通过 + 篡改拒绝</li>
+     *   <li>同 wallet session 二次签名——份额复用（"keygen 一次、长期签名"）
+     *       且 eid 序号递增（ExecutionId 唯一性契约）</li>
+     * </ol>
+     */
+    @Test
+    @DisplayName("P0-1 生产路径：Router→CggmpMpcCryptoEngine 2-of-3 + 份额隔离 + 份额复用")
+    void cggmpE2EProductionPath() throws Exception {
+        // ---------- 生产装配：MpcEngineRouter（3 端点，生产同款 TLS/认证配置） ----------
+        MpcEngineRouter router = new MpcEngineRouter();
+        ReflectionTestUtils.setField(router, "endpoints",
+                "127.0.0.1:50051,127.0.0.1:50052,127.0.0.1:50053");
+        ReflectionTestUtils.setField(router, "distributedMode", true);
+        ReflectionTestUtils.setField(router, "usePlaintext", false);
+        ReflectionTestUtils.setField(router, "tlsTrustCertPath",
+                certsDir.resolve("ca.crt").toString());
+        ReflectionTestUtils.setField(router, "tlsClientCertPath",
+                certsDir.resolve("node1.crt").toString());
+        ReflectionTestUtils.setField(router, "tlsClientKeyPath",
+                certsDir.resolve("node1.key").toString());
+        ReflectionTestUtils.setField(router, "tlsOverrideAuthority", "localhost");
+        ReflectionTestUtils.setField(router, "authToken", "nexus-mpc-test-token");
+        router.init();
+        assertEquals(3, router.getEndpointCount(), "3 端点应全部建链");
+
+        // ---------- 生产 bean：MpcCggmpClusterConfig（cggmp-enabled=true fail-closed） ----------
+        MpcCggmpClusterConfig clusterConfig = new MpcCggmpClusterConfig(router);
+        ReflectionTestUtils.setField(clusterConfig, "cggmpDeadlineMs", DEADLINE_MS);
+        ReflectionTestUtils.setField(clusterConfig, "cggmpEnabled", true);
+        CggmpClusterSessionDriver driver = clusterConfig.cggmpClusterSessionDriver();
+        assertNotNull(driver, "3 端点应装配出集群驱动");
+        assertEquals(3, driver.parties());
+
+        // ---------- 生产 SPI：CggmpMpcCryptoEngine（signers="0,1" = 2-of-3） ----------
+        @SuppressWarnings("unchecked")
+        ObjectProvider<CggmpClusterSessionDriver> provider = mock(ObjectProvider.class);
+        when(provider.getIfAvailable()).thenReturn(driver);
+        CggmpMpcCryptoEngine engine = new CggmpMpcCryptoEngine(provider);
+        ReflectionTestUtils.setField(engine, "cggmpEnabled", true);
+        ReflectionTestUtils.setField(engine, "signersConfig", "0,1");
+
+        try {
+            String walletId = "wallet-p01-" + System.currentTimeMillis();
+            String sid = CggmpMpcCryptoEngine.walletSessionId(walletId);
+            assertTrue(sid.matches("[0-9a-zA-Z-]+"), "session id 字符集: " + sid);
+
+            // ---------- dkg = keygen → aux → assemble ×3 ----------
+            DkgResponse dkg = engine.dkg(new DkgRequest(sid, 2, 3, 0, "secp256k1", List.of()));
+            assertTrue(dkg.isSuccess(), "dkg failed: " + dkg.getError());
+            String aggPk = dkg.getPublicKey();
+            assertEquals(66, aggPk.length(), "聚合公钥 = 压缩 SEC1 33 字节 hex");
+            assertNull(dkg.getKeyShare(), "份额不得离开引擎进程（恒 null）");
+            assertTrue(driver.status(sid).isHasKeyShare(), "assemble 后 key_share 应存在");
+
+            // ---------- 份额隔离（B2：无单进程全份额路径） ----------
+            List<String> shareDigests = new ArrayList<>();
+            for (int i = 1; i <= 3; i++) {
+                Path sessionsDir = dataDir.resolve("node" + i).resolve("sessions");
+                Path keyshare = sessionsDir.resolve("cggmp").resolve(sid).resolve("keyshare.bin");
+                assertTrue(Files.isRegularFile(keyshare),
+                        "node" + i + " keyshare.bin 应存在: " + keyshare);
+                byte[] magic = new byte[4];
+                try (InputStream in = Files.newInputStream(keyshare)) {
+                    assertEquals(4, in.read(magic), "keyshare 头部读取");
+                }
+                assertEquals("NXC1", new String(magic, StandardCharsets.US_ASCII),
+                        "node" + i + " keyshare 应为 NXC1 加密信封");
+                shareDigests.add(java.util.HexFormat.of().formatHex(
+                        sha256(Files.readAllBytes(keyshare))));
+                // GG20 全量会话快照（D 批 LocalKey 落盘命名）不得出现
+                assertFalse(Files.exists(sessionsDir.resolve("session-" + sid + ".json")),
+                        "node" + i + " 不得有 GG20 全量会话快照 session-" + sid + ".json");
+                assertFalse(Files.exists(sessionsDir.resolve("my-share-" + sid + ".json")),
+                        "node" + i + " 不得有 GG20 份额文件 my-share-" + sid + ".json");
+            }
+            assertNotEquals(shareDigests.get(0), shareDigests.get(1),
+                    "node1/node2 份额密文不得相同（无全量份额复制）");
+            assertNotEquals(shareDigests.get(1), shareDigests.get(2),
+                    "node2/node3 份额密文不得相同（无全量份额复制）");
+            assertNotEquals(shareDigests.get(0), shareDigests.get(2),
+                    "node1/node3 份额密文不得相同（无全量份额复制）");
+
+            // ---------- 2-of-3 签名 → aggregate 拆 r/s → verify ----------
+            byte[] msgHash1 = sha256("p01-production-path".getBytes(StandardCharsets.UTF_8));
+            String hashHex1 = java.util.HexFormat.of().formatHex(msgHash1);
+            SignResponse sign1 = engine.sign(
+                    new SignRequest(sid, aggPk, "", hashHex1, 0, List.of()));
+            assertTrue(sign1.isSuccess(), "sign failed: " + sign1.getError());
+            String concat1 = sign1.getPartialSignature();
+            assertEquals(128, concat1.length(), "r||s = 64 字节 hex");
+
+            AggregateResponse agg1 = engine.aggregate(
+                    new AggregateRequest(sid, aggPk, hashHex1, List.of(concat1)));
+            assertTrue(agg1.isSuccess(), "aggregate failed: " + agg1.getError());
+            assertEquals(concat1.substring(0, 64), agg1.getR(), "r 拆分");
+            assertEquals(concat1.substring(64), agg1.getS(), "s 拆分");
+
+            CgVerifyResult ok1 = driver.verify(
+                    sid, hexToBytes(agg1.getR()), hexToBytes(agg1.getS()), msgHash1);
+            assertTrue(ok1.isSuccess(), "verify rpc failed: " + ok1.getError());
+            assertTrue(ok1.isValid(), "2-of-3 生产路径签名必须验签通过");
+
+            byte[] tamperedR = hexToBytes(agg1.getR());
+            tamperedR[0] ^= 0xFF;
+            CgVerifyResult bad = driver.verify(sid, tamperedR, hexToBytes(agg1.getS()), msgHash1);
+            assertTrue(bad.isSuccess(), "verify(tampered) rpc failed: " + bad.getError());
+            assertFalse(bad.isValid(), "篡改签名必须拒绝");
+
+            assertTrue(engine.healthCheck(), "healthCheck 应通过（集群在线）");
+
+            // ---------- 份额复用：同 wallet session 二次签名（eid 序号递增） ----------
+            byte[] msgHash2 = sha256("p01-second-tx".getBytes(StandardCharsets.UTF_8));
+            String hashHex2 = java.util.HexFormat.of().formatHex(msgHash2);
+            SignResponse sign2 = engine.sign(
+                    new SignRequest(sid, aggPk, "", hashHex2, 0, List.of()));
+            assertTrue(sign2.isSuccess(), "second sign failed: " + sign2.getError());
+            String concat2 = sign2.getPartialSignature();
+            assertEquals(128, concat2.length(), "第二笔 r||s = 64 字节 hex");
+            assertNotEquals(concat1, concat2, "不同消息的签名不得相同");
+            CgVerifyResult ok2 = driver.verify(sid,
+                    hexToBytes(concat2.substring(0, 64)),
+                    hexToBytes(concat2.substring(64)), msgHash2);
+            assertTrue(ok2.isSuccess(), "verify#2 rpc failed: " + ok2.getError());
+            assertTrue(ok2.isValid(), "第二笔签名必须验签通过（同份额复用）");
+
+            log.info("P0-1 生产路径 E2E PASSED: wallet={}, sid={}, aggPk={}", walletId, sid, aggPk);
+        } finally {
+            router.shutdown();
+        }
     }
 
     /** 0..n-1 全体参与方索引。 */
