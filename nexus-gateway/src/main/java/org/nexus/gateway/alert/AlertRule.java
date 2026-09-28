@@ -58,7 +58,7 @@ public class AlertRule {
 
     /** 比较条件。 */
     @Enumerated(EnumType.STRING)
-    @Column(name = "condition", nullable = false, length = 8)
+    @Column(name = "match_condition", nullable = false, length = 8)
     private Condition condition;
 
     /** 阈值，指标值与此值比较。 */
