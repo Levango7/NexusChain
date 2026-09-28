@@ -67,6 +67,15 @@ jobs:
       - name: 打包一致性检查（jar 排除配置 → 容器必须另行提供）
         run: python scripts/check-packaging-consistency.py
 
+      # 版本口径一致性（2026-09-28 新增）
+      # 背景：版本号漂移已发生三次——README 头注停在 2.50.0；v2.50.2 发版时
+      # version.properties 仍为 2.50.0 导致 jar 名错位；2026-09-17 审计发现
+      # README 硬编码 v2.40.0。build.gradle 与 version.properties 必须同步
+      # 修改（见 version.properties 内注释），README 版本口径头注必须包含
+      # 当前版本号。
+      - name: 版本口径一致性检查（build.gradle / version.properties / README）
+        run: bash scripts/check-version-consistency.sh
+
   # ============================================================
   # Explorer 前端门禁（2026-09-16 审查新增）
   # ------------------------------------------------------------

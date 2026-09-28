@@ -4,6 +4,115 @@
 
 ## [Unreleased]
 
+### Payment Orchestration Wave 16（2026-09-28）
+
+#### Wave 15 遗留修复：对账端点迁移至 /api/v1 + 版本口径 CI 门禁
+
+**对账端点路径迁移（Wave 15 P1 隐患修复）**
+- **问题**：Wave 15 的 4 个受 MerchantOwnershipGuard 保护的控制器挂在 `/api/reconciliation/**`，
+  该前缀不在 `ApiKeyInterceptor`（仅拦 `/api/v1/**`、`/api/v2/**`）拦截范围内，
+  `nexus.merchantId` 属性永远不会被设置，guard fail-closed 后端点实际不可达（secure but dead）。
+- **迁移**：ReconciliationRuleController / BillDownloadController / CompensationController /
+  ReconciliationReportController → `/api/v1/reconciliation/{rules|bills|compensations|reports}`，
+  guard 从此拿到真实商户上下文，IDOR 防护真正生效。
+- **不动项**：ReconciliationLinkController 保持 `/api/reconciliation/link`——它是
+  JWT + `@PreAuthorize` 角色鉴权模型（不依赖 ApiKeyInterceptor，本就可达），
+  迁移反而会被 ApiKeyInterceptor 拦掉 JWT-only 调用。
+- **破坏性变更提示**：4 个对账端点路径变更，且从"实际不可达"变为"要求商户 API Key 认证"。
+
+**版本口径 CI 门禁（README 头注第三次漂移修复）**
+- 新增 `scripts/check-version-consistency.sh` 并接入 ci.yml code-hygiene job：
+  断言根 `build.gradle` 的 `version` 与 `nexus-core` `version.properties` 的 `versionNumber`
+  一致（v2.50.2 曾因后者滞后导致 jar 名错位），且 README 版本口径头注包含当前版本号
+  （头注曾停在 2.50.0）。CHANGELOG 允许滞后于 tag（v2.50.1 无条目先例），不做强等校验。
+- README 版本口径头注更新至当前事实（2.50.2 / Wave 1-16 Unreleased）。
+
+#### Wave 16: 路由增强 — 多目标策略/渠道健康度/降级路由/跨渠道补偿/A-B 实验/决策审计/商户画像/异常监控
+
+**模块一：多目标路由策略（`routing.strategy` 包）**
+- **策略配置实体**：RoutingStrategyConfig（V84 `routing_strategy_configs`）+ RoutingRuleEntity 新增 `strategy_config_id` 列
+- **评分服务**：MultiObjectiveRoutingService — `MULTI_OBJECTIVE` 策略按
+  `wCost*cost + wSuccess*success + wLatency*latency + wRisk*risk` 评分降序；
+  cost/latency 在候选间线性归一，success 取 MetricsCollector 窗口成功率（无样本中性 0.5），
+  risk 取 ChannelHealthService.errorRateScore
+- **权重解析**：DB 配置（priority 降序第一条条件命中）→ `nexus.routing.strategy.default-*-weight`；
+  权重 JSON 归一化到 sum=1，无可识别键视为非法跳过
+- **热加载**：快照 TTL 缓存（`hot-reload-interval` 默认 5s），刷新失败保留旧快照，`evictCache()` 手动触发
+- **RoutingEngine 接入**：`resolveByRule` 穷举 switch 补齐 `MULTI_OBJECTIVE` case（此前骨架枚举已加值导致编译失败）；评分服务缺省时退化为 PRIORITY 顺序
+- **REST**：RoutingStrategyConfigController（`/api/v1/routing/strategy-configs`，平台级配置）
+
+**模块二：渠道健康度（`routing.health` 包）**
+- **历史实体**：ChannelHealthHistory（V85 `channel_health_history`）+ ConnectorConfig 新增 `max_concurrent` 列
+- **评分服务**：ChannelHealthService — 四维评分：successRate（无样本 0.5）、latency（`1 - avgLatencyMs/5000`）、
+  errorRate（按连续失败桶线性衰减，5 桶归零）、capacity（`max_concurrent` 未配置中性 0.5，与 V85 迁移注释一致）
+- **等级分类**：≥0.70 HEALTHY / ≥0.40 DEGRADED / 否则 UNHEALTHY；权重取 `nexus.routing.health.*-weight` 归一化
+- **定时任务**：5min 采样落历史、1h 保留期清理（`history-retention-days` 默认 30）
+- **REST**：ChannelHealthController（`/api/v1/routing/health`）
+
+**模块三：降级路由 + 跨渠道补偿（`routing.fallback` 包）**
+- **降级配置**：FallbackRouteConfig（V86 `fallback_route_configs`）— 商户级优先于全局级，priority 降序，
+  条件匹配复用 RoutingRule 语义（currency/amount_gte/amount_lte）
+- **RoutingEngine 接入**：规则解析结果为单候选时，按商户降级配置追加备选链（多候选规则自带顺序，尊重之）
+- **补偿路由**：CompensationRoutingRecord（V87 `compensation_routing_records`，compensation_id 幂等唯一）
+  + CompensationRoutingService — route()（PENDING/FAILED 落库）→ complete()（SUCCESS/FAILED/TIMEOUT 回填），
+  attempt_no 按支付递增；与 Wave 15 AutoCompensationService 的集成点（传补偿记录 id 关联）已文档化
+- **REST**：FallbackRouteController / CompensationRoutingController（商户资源全部过 MerchantOwnershipGuard）
+
+**模块四：路由 A/B 实验（`routing.experiment` 包）**
+- **实验实体**：RoutingExperiment（V88 `routing_experiments`）+ 状态机 CREATED→RUNNING⇄PAUSED→COMPLETED/TERMINATED
+- **分流**：paymentId+experimentId 稳定哈希（`String.hashCode` 跨 JVM 一致）映射 [0,100) 桶位，
+  实验组按 weight 累积占桶、余量归对照组；`activeAssignment()` 供引擎钩子
+- **RoutingEngine 接入**：实验组命中时按组 `connectorIds` 重排候选（组外保持原相对顺序追加）；对照组沿用规则结果但记录归属
+- **统计与显著性**：进程内每组计数（成功率/延迟/成本）；SUCCESS_RATE 目标用两比例 z 检验
+  （正态近似 + Abramowitz-Stegun erf 近似），p < `significance-threshold` 判定 WINNER；
+  LATENCY/COST 仅报告均值（诚实降级，不做显著性判定）；任一组样本 < `min-sample-size` → INSUFFICIENT_SAMPLE
+- **REST**：RoutingExperimentController（`/api/v1/routing/experiments`，CRUD/生命周期/分流/回填/评估）
+
+**模块五：路由决策审计（`routing.audit` 包）**
+- **审计实体**：RoutingDecisionRecord（V89 `routing_decision_records`，decision_id `rd_{UUID}` 唯一）
+- **审计服务**：RoutingAuditService — 记录输入/命中规则/策略/候选/评分/决策/实验归属；
+  `async-write`（默认 true）经单线程 daemon executor 异步落库，写入失败仅 warn 不阻断支付主路径；
+  支付完成后回填 outcome（SUCCESS/FAILURE）；1h 保留期清理（默认 90 天）
+- **RoutingEngine 接入**：新增 `resolveDetailed(RoutingContext)` 全量决策流（返回 RoutingDecision 含审计元数据）；
+  仅 `paymentId` 非空的支付链路落审计；OrchestrationService 已切换至该入口并在成功/全部失败时回填 outcome
+- **RoutingContext 扩展**：新增 `paymentId` 字段（null = 非支付链路）+ `ofPayment()`/`withProfile()` 工厂
+- **REST**：RoutingDecisionAuditController（`/api/v1/routing/decisions`，按决策/支付/商户查询，商户资源过 guard）
+
+**模块六：商户路由画像（`routing.profile` 包）**
+- **画像实体**：MerchantRoutingProfile（V90 `merchant_routing_profiles`）+ Merchant 新增 `industry` 列（入驻审核通过时回填）
+- **解析服务**：MerchantRoutingProfileService — 商户级 > 行业级 > 默认画像；
+  金额分层（自定义 [min,max) 区间规则优先，回退全局 small/large 阈值）、
+  高峰时段（自定义窗口优先支持跨零点，回退全局 09:00-22:00）、
+  connector 偏好/排除（`{"preferred":[],"excluded":[]}`）
+- **ResolvedRoutingProfile**：不可变解析结果（经 `RoutingContext.profile` 传递，避免包循环依赖）
+- **RoutingEngine 接入**：resolveDetailed 前解析画像注入上下文；多目标评分消费排除/偏好（偏好 +0.05 固定加成）
+- **REST**：MerchantRoutingProfileController（`/api/v1/routing/profiles`，商户资源过 guard）
+
+**模块七：路由监控与异常检测（`routing.monitor` 包）**
+- **监控服务**：RoutingMonitorService — Micrometer 计数器 `nexus_routing_decisions_total{strategy}` /
+  `nexus_routing_anomalies_total{type}`（Registry 缺失静默降级）；
+  EMA 基线（α=0.2，≥10 样本才参与对比）检测成功率骤降（>0.20）/延迟尖峰（>+0.50）/连续失败（≥5 桶），
+  异常落 ERROR/WARN 日志 + 内存最近 100 条
+- **配置注册**：RoutingWave16Config（`@EnableConfigurationProperties(RoutingWave16Properties)`）
+
+**等价性保证**
+- 各模块 `enabled=false` 或对应 Bean 缺省（测试/裁剪）时行为退化为 Wave 15；
+- 既有四策略（PRIORITY/WEIGHT/COST/EXPLICIT）与 AI 路由（P4-T4）路径未改动；
+- RoutingEngine 保留全部旧构造器签名，既有测试 `new RoutingEngine(registry, cfg)` 兼容。
+
+**已知边界（诚实声明）**
+- `nexus.routing.fallback.max-retries/retry-backoff/retry-timeout/total-timeout` 为配置面预留：
+  重试语义由既有 failover 循环承担，本 Wave 未改动主支付路径重试行为；
+- 实验组运行期统计不跨重启持久化（跨重启统计为后续项）；capacity 维度暂以配置存在性计分（在途并发追踪为后续项）；
+- RoutingRuleEntity.`strategy_config_id` 为规则级配置关联占位（多目标权重实际按条件+priority 解析）。
+
+**单元测试**
+- 6 个新增测试类：MultiObjectiveRoutingServiceTest / ChannelHealthServiceTest / FallbackRouteServiceTest
+  （含 CompensationRoutingServiceTest）/ RoutingExperimentServiceTest / RoutingAuditServiceTest /
+  MerchantRoutingProfileServiceTest / RoutingMonitorServiceTest / RoutingEngineWave16Test，
+  覆盖权重解析归一化、评分排序、画像排除/偏好、降级链解析、补偿幂等与状态机、
+  确定性分流、z 检验数学、审计异步写入与 outcome 回填、EMA 异常检测收敛、引擎集成与 Wave 15 等价性。
+
 ### Payment Orchestration Wave 15（2026-09-27）
 
 #### Wave 15: 对账系统增强 — 规则配置/对账单下载/自动补偿/T+1 报表

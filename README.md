@@ -4,11 +4,13 @@ NexusChain 是一个**基于自研区块链的支付编排平台（Payment Orche
 
 > **定位**：区块链是底层结算基础设施，不是产品本身。产品价值在于统一支付 API、启发式路由与清结算。
 
-> **版本口径（2026-09-17 修复漂移）**：构建侧单一来源为根 `build.gradle` 的 `version`（当前 `2.50.0`）
-> 与 `nexus-core/nexus-core/src/main/resources/version.properties`；发布说明单一来源为 [CHANGELOG](CHANGELOG.md)
-> （最新条目 `[2.50.0] - 2026-09-07`，其后存在 tag `v2.50.1`）。
-> 本处此前硬编码"当前版本：v2.40.0"，与构建/CHANGELOG/ tag 不一致（审计发现），现改为不再硬编码版本号。
-> 最近一次**详细**发布说明为 v2.40.0（2026-08-26，技术债B2一致性加固——Guava 33.x CVE修复+Mockito统一BOM 5.x+老JSON库迁移Jackson+core依赖管理规范化）
+> **版本口径（2026-09-28 第三次修复漂移，CI 门禁化）**：构建侧**双源**为根 `build.gradle` 的 `version`
+> 与 `nexus-core/nexus-core/src/main/resources/version.properties` 的 `versionNumber`（当前均为 `2.50.2`；
+> 发版时**两处都要改**——v2.50.2 曾因 version.properties 滞后导致 jar 名错位）；
+> 发布说明单一来源为 [CHANGELOG](CHANGELOG.md)（最新条目 `[2.50.2] - 2026-09-22`，
+> master 在其上携带 [Unreleased] 的 Payment Orchestration Wave 1-16）。
+> 本头注的准确性由 CI 门禁 `scripts/check-version-consistency.sh` 保护：
+> build.gradle / version.properties / 本头注三处任一失配将直接导致 CI 失败。
 
 ## 快速开始
 
