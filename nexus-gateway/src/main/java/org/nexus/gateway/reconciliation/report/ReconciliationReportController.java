@@ -17,13 +17,18 @@ import java.util.List;
  *
  * <p>接口列表：</p>
  * <ul>
- *   <li>{@code GET /api/reconciliation/reports/{id}} — 查询报表记录</li>
- *   <li>{@code GET /api/reconciliation/reports/merchant/{merchantId}} — 查询商户报表列表</li>
- *   <li>{@code POST /api/reconciliation/reports/generate} — 生成对账报表</li>
+ *   <li>{@code GET /api/v1/reconciliation/reports/{id}} — 查询报表记录</li>
+ *   <li>{@code GET /api/v1/reconciliation/reports/merchant/{merchantId}} — 查询商户报表列表</li>
+ *   <li>{@code POST /api/v1/reconciliation/reports/generate} — 生成对账报表</li>
  * </ul>
+ *
+ * <p>2026-09-28 路径迁移：/api/reconciliation/reports → /api/v1/reconciliation/reports
+ * （原路径不在 ApiKeyInterceptor 拦截范围，MerchantOwnershipGuard fail-closed 不可达）。
+ * 注：同族 ReconciliationLinkController（JWT + @PreAuthorize 鉴权，不依赖
+ * ApiKeyInterceptor）保持原路径不动。</p>
  */
 @RestController
-@RequestMapping("/api/reconciliation/reports")
+@RequestMapping("/api/v1/reconciliation/reports")
 public class ReconciliationReportController {
 
     private static final Logger log = LoggerFactory.getLogger(ReconciliationReportController.class);

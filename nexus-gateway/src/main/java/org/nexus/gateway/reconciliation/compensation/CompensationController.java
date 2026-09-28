@@ -16,15 +16,18 @@ import java.util.List;
  *
  * <p>接口列表：</p>
  * <ul>
- *   <li>{@code GET /api/reconciliation/compensations/{id}} — 查询单条补偿记录</li>
- *   <li>{@code GET /api/reconciliation/compensations/discrepancy/{discrepancyId}} — 按差错ID查询补偿</li>
- *   <li>{@code GET /api/reconciliation/compensations/merchant/{merchantId}} — 查询商户补偿记录</li>
- *   <li>{@code POST /api/reconciliation/compensations/{id}/execute} — 执行补偿</li>
- *   <li>{@code POST /api/reconciliation/compensations/execute-all-pending} — 批量执行当前商户的PENDING补偿</li>
+ *   <li>{@code GET /api/v1/reconciliation/compensations/{id}} — 查询单条补偿记录</li>
+ *   <li>{@code GET /api/v1/reconciliation/compensations/discrepancy/{discrepancyId}} — 按差错ID查询补偿</li>
+ *   <li>{@code GET /api/v1/reconciliation/compensations/merchant/{merchantId}} — 查询商户补偿记录</li>
+ *   <li>{@code POST /api/v1/reconciliation/compensations/{id}/execute} — 执行补偿</li>
+ *   <li>{@code POST /api/v1/reconciliation/compensations/execute-all-pending} — 批量执行当前商户的PENDING补偿</li>
  * </ul>
+ *
+ * <p>2026-09-28 路径迁移：/api/reconciliation/compensations → /api/v1/reconciliation/compensations
+ * （原路径不在 ApiKeyInterceptor 拦截范围，MerchantOwnershipGuard fail-closed 不可达）。</p>
  */
 @RestController
-@RequestMapping("/api/reconciliation/compensations")
+@RequestMapping("/api/v1/reconciliation/compensations")
 public class CompensationController {
 
     private static final Logger log = LoggerFactory.getLogger(CompensationController.class);

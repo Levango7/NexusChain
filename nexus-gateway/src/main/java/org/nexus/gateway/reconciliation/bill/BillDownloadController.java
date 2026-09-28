@@ -20,12 +20,15 @@ import java.util.Map;
  *
  * <p>接口列表：</p>
  * <ul>
- *   <li>{@code POST /api/reconciliation/bills/download} — 下载指定渠道和日期的对账单</li>
- *   <li>{@code GET /api/reconciliation/bills/dry-run/{channelType}} — 查询渠道是否为 dry-run 模式</li>
+ *   <li>{@code POST /api/v1/reconciliation/bills/download} — 下载指定渠道和日期的对账单</li>
+ *   <li>{@code GET /api/v1/reconciliation/bills/dry-run/{channelType}} — 查询渠道是否为 dry-run 模式</li>
  * </ul>
+ *
+ * <p>2026-09-28 路径迁移：/api/reconciliation/bills → /api/v1/reconciliation/bills
+ * （原路径不在 ApiKeyInterceptor 拦截范围，MerchantOwnershipGuard fail-closed 不可达）。</p>
  */
 @RestController
-@RequestMapping("/api/reconciliation/bills")
+@RequestMapping("/api/v1/reconciliation/bills")
 public class BillDownloadController {
 
     private static final Logger log = LoggerFactory.getLogger(BillDownloadController.class);

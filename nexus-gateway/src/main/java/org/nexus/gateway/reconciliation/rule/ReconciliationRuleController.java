@@ -21,17 +21,22 @@ import java.util.Map;
  *
  * <p>接口列表：</p>
  * <ul>
- *   <li>{@code GET /api/reconciliation/rules} — 查询当前商户的所有规则配置</li>
- *   <li>{@code GET /api/reconciliation/rules/{id}} — 查询单个规则配置</li>
- *   <li>{@code GET /api/reconciliation/rules/merchant/{merchantId}} — 查询商户的所有配置</li>
- *   <li>{@code GET /api/reconciliation/rules/resolve} — 按优先级解析规则配置</li>
- *   <li>{@code POST /api/reconciliation/rules} — 创建规则配置</li>
- *   <li>{@code PUT /api/reconciliation/rules/{id}} — 更新规则配置</li>
- *   <li>{@code DELETE /api/reconciliation/rules/{id}} — 删除规则配置</li>
+ *   <li>{@code GET /api/v1/reconciliation/rules} — 查询当前商户的所有规则配置</li>
+ *   <li>{@code GET /api/v1/reconciliation/rules/{id}} — 查询单个规则配置</li>
+ *   <li>{@code GET /api/v1/reconciliation/rules/merchant/{merchantId}} — 查询商户的所有配置</li>
+ *   <li>{@code GET /api/v1/reconciliation/rules/resolve} — 按优先级解析规则配置</li>
+ *   <li>{@code POST /api/v1/reconciliation/rules} — 创建规则配置</li>
+ *   <li>{@code PUT /api/v1/reconciliation/rules/{id}} — 更新规则配置</li>
+ *   <li>{@code DELETE /api/v1/reconciliation/rules/{id}} — 删除规则配置</li>
  * </ul>
+ *
+ * <p>2026-09-28 路径迁移：/api/reconciliation/rules → /api/v1/reconciliation/rules。
+ * 原路径不在 ApiKeyInterceptor（/api/v1/**、/api/v2/**）拦截范围内，
+ * {@link MerchantOwnershipGuard} 拿不到 {@code nexus.merchantId} 属性而
+ * fail-closed，端点实际不可达（secure but dead）。</p>
  */
 @RestController
-@RequestMapping("/api/reconciliation/rules")
+@RequestMapping("/api/v1/reconciliation/rules")
 public class ReconciliationRuleController {
 
     private static final Logger log = LoggerFactory.getLogger(ReconciliationRuleController.class);
