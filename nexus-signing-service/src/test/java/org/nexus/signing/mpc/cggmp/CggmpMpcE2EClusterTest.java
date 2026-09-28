@@ -105,9 +105,11 @@ public class CggmpMpcE2EClusterTest {
     private static Path dataDir;
     private static Path certsDir;
 
-    // C 批：60s → 120s。CI 共享 runner 首次冷启动（JIT/磁盘 IO）慢于本地，
-    // 实测 I 批 keygen 端到端 <1s，但端口就绪与进程拉起在 runner 上留倍数余量。
-    private static final long DEADLINE_MS = 120_000L;
+    // C 批：60s → 120s；P0-1 后再放宽到 300s。本地实测含 aux 的用例耗时
+    // 66.3s / 103.7s（两轮波动 ±36%），而 CI 的 ubuntu-latest 只有 2 vCPU 却要跑
+    // 3 个引擎进程 + 无 daemon 的 JVM，120s 余量不足（run #327 触顶失败，#326 侥幸通过）。
+    // 抬高上限只增加失败延迟，不改变 happy path 耗时。
+    private static final long DEADLINE_MS = 300_000L;
 
     private static Path engineBinary;
     private static final List<Process> engines = new ArrayList<>();
@@ -268,7 +270,7 @@ public class CggmpMpcE2EClusterTest {
             }
             List<CgPumpResult> keygenResults = new ArrayList<>();
             for (int i = 0; i < n; i++) {
-                CgPumpResult r = keygenFutures.get(i).get(240, java.util.concurrent.TimeUnit.SECONDS);
+                CgPumpResult r = keygenFutures.get(i).get(360, java.util.concurrent.TimeUnit.SECONDS);
                 assertTrue(r.isSuccess(), "keygen party " + i + " failed: " + r.getError());
                 assertTrue(r.isFinished(), "keygen party " + i + " not finished");
                 keygenResults.add(r);
@@ -408,7 +410,7 @@ public class CggmpMpcE2EClusterTest {
             }
             auxStates = new ArrayList<>();
             for (int i = 0; i < n; i++) {
-                CgPumpResult r = auxFutures.get(i).get(240, java.util.concurrent.TimeUnit.SECONDS);
+                CgPumpResult r = auxFutures.get(i).get(360, java.util.concurrent.TimeUnit.SECONDS);
                 assertTrue(r.isSuccess(), "start aux party " + i + " failed: " + r.getError());
                 auxStates.add(r);
             }
