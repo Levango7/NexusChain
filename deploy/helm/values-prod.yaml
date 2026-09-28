@@ -125,6 +125,11 @@ nexus-signing-service:
     NEX_MPC_ENGINE_DISTRIBUTED: "true"
     NEX_MPC_ENGINE_CGGMP_ENABLED: "true"
     NEX_MPC_ENGINE_CGGMP_SIGNERS: "0,1"
+    # 单 RPC deadline 300s（application.yml 默认 120s）。理由：aux 首轮 Paillier
+    # 安全素数生成慢机每方可达 ~80s（application.yml:294 注释），而 2-of-3 要三方
+    # 并发跑在同一批 2 vCPU Pod 上；CI 实测同一用例本地 66~104s 波动、共享 runner
+    # 上 120s 已触顶失败（run #327）。只影响失败延迟，不影响正常耗时。
+    NEX_MPC_ENGINE_CGGMP_DEADLINE_MS: "300000"
     NEX_MPC_ENGINE_TLS_OVERRIDE_AUTHORITY: "localhost"
   extraVolumes:
     - name: mpc-certs
