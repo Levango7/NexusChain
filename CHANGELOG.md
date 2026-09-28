@@ -2,7 +2,10 @@
 
 本文件记录 NexusChain 各版本的变更。
 
-## [Unreleased]
+## [2.51.0] - 2026-09-28
+
+> Payment Orchestration Wave 1-16（2026-09-22 ~ 2026-09-28）：支付编排能力十连发。
+> 本节归档自 [Unreleased]；另含 Wave 15 遗留修复（对账端点迁移 /api/v1 + 版本口径 CI 门禁）。
 
 ### Payment Orchestration Wave 16（2026-09-28）
 

@@ -18,11 +18,14 @@ plugins {
 allprojects {
     group = 'org.nexus'
     // 2026-08-29 审计对齐：此前 2.30.0 与 README/CHANGELOG 的 v2.40.0 漂移。
-    // 建议后续由 release.yml 从 CHANGELOG 自动同步此版本号，避免再次失配。
+    // 建议后续由 release.yml 从 CHANGELOG 自动同步此号，避免再次失配。
     // 2026-09-22：2.50.0 → 2.50.2。此前 v2.50.1 tag 已存在但从未成功发布
     // （发布流水线因 GHCR 仓库名大写问题失败），且 CHANGELOG 无 2.50.1 小节；
     // 本次以 2.50.2 作为首个真正产出制品的版本。
-    version = '2.50.2'
+    // 2026-09-28：2.50.2 → 2.51.0（Payment Orchestration Wave 1-16）。
+    // 与 version.properties / README 头注的一致性由 CI 门禁
+    // scripts/check-version-consistency.sh 保护。
+    version = '2.51.0'
 
     repositories {
         // 权威源优先；镜像仅用于加速与容错
