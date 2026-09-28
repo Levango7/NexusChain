@@ -664,8 +664,8 @@ jobs:
   # ------------------------------------------------------------
   # 目的：在 CI 阶段验证各模块的 Flyway 迁移脚本可顺序应用、无语法/冲突错误，
   #       避免迁移缺陷流入 staging/prod。
-  # 实现：启动 MySQL 8.0 service container，对每个含 db/migration 的模块
-  #       使用 Flyway 9 官方镜像执行 migrate（每模块独立 schema，互不干扰）。
+  # 实现：启动 MySQL 8.0 service container，对清单内的 MySQL 模块
+  #       使用 Flyway 11 官方镜像执行 migrate（每模块独立 schema，互不干扰）。
   # 触发：与 build-and-test 并行，仅依赖源码中的迁移脚本，不依赖编译产物。
   # ============================================================
   flyway-migration-check:
@@ -719,10 +719,14 @@ jobs:
           #      依赖 flyway-database-postgresql），本预检 job 的 service container 是
           #      MySQL 8.0，方言不匹配无法迁移验证——从 MySQL 预检列表移除，
           #      consortium 的 PG 迁移验证在 PostgreSQL 环境（本地/部署流水线）进行。
+          # 2026-09-29 增补：nexus-signing-service 亦为 MySQL 模块（application.yml
+          # jdbc:mysql），此前遗漏未纳入预检；本地以 flyway:11 + MySQL 8.0 实测
+          # V1__init_signing_approval_table.sql 可通过，纳入清单防止后续迁移漂移。
           declare -a MODULES=(
             "nexus-gateway:nexus-gateway/src/main/resources/db/migration"
             "nexus-wallet-service:nexus-wallet-service/src/main/resources/db/migration"
             "nexus-bridge:nexus-bridge/src/main/resources/db/migration"
+            "nexus-signing-service:nexus-signing-service/src/main/resources/db/migration"
           )
           for ENTRY in "${MODULES[@]}"; do
             MODULE_NAME="${ENTRY%%:*}"
