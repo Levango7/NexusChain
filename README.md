@@ -43,8 +43,9 @@ NexusChain 是一个**基于自研区块链的支付编排平台（Payment Orche
 ./gradlew testAll
 
 # 仅网关（沙箱模式，零外部依赖）
-cd nexus-gateway
-./gradlew bootRun --args="--spring.profiles.active=sandbox"
+# 注意：须在仓库根目录执行——nexus-gateway/ 内的独立构建不可用
+# （gateway build.gradle 引用根构建子项目 :nexus-common / :nexus-sdk:java）
+./gradlew :nexus-gateway:bootRun --args="--spring.profiles.active=sandbox"
 ```
 
 ### Docker 一键启动

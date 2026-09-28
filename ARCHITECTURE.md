@@ -394,8 +394,9 @@ Blockchain is the foundational settlement layer — not the product itself. On t
 
 ```bash
 # Prerequisites: JDK 17+
-cd nexus-gateway
-./gradlew bootRun --args="--spring.profiles.active=sandbox"
+# 注意：须在仓库根目录执行——nexus-gateway/ 内的独立构建不可用
+# （gateway build.gradle 引用根构建子项目 :nexus-common / :nexus-sdk:java）
+./gradlew :nexus-gateway:bootRun --args="--spring.profiles.active=sandbox"
 
 # Or use the demo orchestrator:
 cd demo
