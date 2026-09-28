@@ -123,6 +123,18 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
 > （`mpc-engine/src/server.rs`）以及 `sign_sync`（`mpc-engine/src/cggmp.rs`）。
 > 旧 `distributed.rs` 所述 sign relay 限制属于 GG20 阶段一路径，**不适用于 CGGMP21**。
 > 基础配置默认关闭 CGGMP21，不代表所有部署均未启用；实际能力需核对部署覆盖值和端到端测试。
+>
+> **生产路径已显式启用分布式 CGGMP21（P0-1，2026-09-29 代码取证）**：
+> `deploy/helm/values-prod.yaml`（signing-service）注入 `NEX_MPC_ENGINE_DISTRIBUTED=true`
+> + `NEX_MPC_ENGINE_CGGMP_ENABLED=true` + `NEX_MPC_ENGINE_CGGMP_SIGNERS=0,1`（2-of-3）
+> + `NEX_MPC_ENGINE_TLS_OVERRIDE_AUTHORITY=localhost`；engine endpoints 指向 3 个
+> mpc-engine StatefulSet 逐 Pod headless DNS，mTLS 证书经 `nexus-mpc-certs` Secret 注入。
+> 该路径下：`distributed-mode=true` 强制 endpoints ≥3 且 partyIndex 超界 fail-closed
+> （抛异常，不回退端点 0；`MpcEngineRouter.java:192-205,294-305`）；份额加密驻留各引擎
+> 进程（NXC1 信封），signing-service 不持有任何份额。生产路径 2-of-3 真实签名 E2E
+> （含份额隔离断言：三节点 keyshare.bin SHA-256 两两不同、无 GG20 快照残留）见
+> `CggmpMpcE2EClusterTest#cggmpE2EProductionPath`，由 `mpc-java-cluster-e2e` CI job
+> 无条件回归（`.github/workflows/ci.yml:453`）。
 > 旧路径退役设计见
 > [docs/plan/PLAN-001-gg20-retirement.md](docs/plan/PLAN-001-gg20-retirement.md)（状态：设计稿，**未实施**）。
 

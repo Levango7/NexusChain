@@ -51,7 +51,9 @@
 `DkgRequest / SignResponse / AggregateRequest / AggregateResponse / DkgResponse` **保留**！原因：
 - `CggmpMpcCryptoEngine` 仍实现 `MpcCryptoEngine` SPI、SPI 入口参数/返回就是这 3 个 DTO
 - `ColdWalletMultiSigService` / `DefaultMpcService` 调用 SPI 时用这些 DTO
-- SPI 内部委托给 `MpcCggmpOrchestrator`（用 `Cg*Request` 实际发请求）
+- SPI 内部委托给 `CggmpClusterSessionDriver`（单进程驱动全部 n 个引擎端点，用 `Cg*Request` 实际发请求）。
+  P0-1 分布式化后：装配由 `MpcCggmpClusterConfig` 提供（@Bean `cggmpClusterSessionDriver`），
+  `MpcCggmpOrchestratorConfig` 已删除；`MpcCggmpOrchestrator` 类当前仅测试引用，生产路径不经过它。
 
 退役 5 个 Rust 文件后，proto 里这 3 个 DTO 退化为"Java SPI 内部数据结构"——但仍需保留（H 批设计就是这么做的）。
 
@@ -92,7 +94,8 @@ nexus-signing-service/src/test/java/org/nexus/signing/mpc/MpcMultiHostTlsTest.ja
 ### 3.3 不动
 
 - `nexus-sdk/common/protobuf/conpay.proto:183` 的 `SignRequest` — 不同 proto（SDK 服务端的 conpay 服务，非 mpc ），名字撞但 namespace 隔离
-- `MpcCggmpClient` 全部 / `CggmpMpcCryptoEngine` 全部 / `MpcCggmpOrchestrator` 全部 / `CggmpMpcE2EClusterTest` 全部 — CGGMP21 路径，保持
+- `MpcCggmpClient` 全部 / `CggmpMpcCryptoEngine` 全部 / `CggmpClusterSessionDriver` 全部 / `MpcCggmpClusterConfig` 全部 / `CggmpMpcE2EClusterTest` 全部 — CGGMP21 路径，保持
+- `MpcCggmpOrchestrator`（main 定义、仅测试引用）— 不在退役范围内，保持现状
 - proto 的 `DkgRequest` / `SignRequest` / `AggregateRequest` DTO 定义 — SPI 桥接仍需
 
 ## 4. 实施顺序（最小风险滚动）

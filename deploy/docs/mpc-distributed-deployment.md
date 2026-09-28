@@ -233,6 +233,10 @@ initContainer 调用 `gen-peers-sh` 脚本，根据 `replicaCount` 和 `POD_ORDI
 ### 6.1 配置
 
 signing-service 通过 `MpcEngineRouter` 按 `partyIndex` 路由到对应 mpc-engine 节点。
+P0-1 起生产（`values-prod.yaml`）强制**分布式 CGGMP21** 路径：单个 signing-service
+进程为每方持有一个客户端（各绑独立端点、协调器 = endpoint 0），驱动 keygen →
+aux → assemble → sign 全流水线；私钥份额加密后永驻各引擎进程磁盘，signing-service
+不持有任何份额（B2："无单进程全份额路径"）。
 
 代码示例：signing-service application.yml 配置（YAML）
 
@@ -241,6 +245,13 @@ mpc:
   engine:
     # 多端点配置（逗号分隔，优先于 host:port）
     endpoints: mpc-engine-0.mpc-engine-headless:50051,mpc-engine-1.mpc-engine-headless:50051,mpc-engine-2.mpc-engine-headless:50051
+    # P0-1：强制分布式（endpoints 必须 >=3；partyIndex 超界 fail-closed）
+    distributed-mode: true
+    # P0-1：CGGMP21 路径（原生 t-of-n；cggmp-enabled=true 时集群不完整拒绝启动）
+    cggmp-enabled: true
+    cggmp:
+      deadline-ms: 120000        # 单 RPC deadline（aux 安全素数生成慢）
+      signers: "0,1"             # 2-of-3 签名方集合；空 = 全体参与方
     # 向后兼容：endpoints 为空时使用 host:port
     host: localhost
     port: 50051
@@ -250,16 +261,26 @@ mpc:
       trust-cert-path: /etc/mpc/certs/ca/CA.pem
       client-cert-path: /etc/mpc/certs/node-A/cert.pem
       client-key-path: /etc/mpc/certs/node-A/key.pem
+      # 证书 SAN 约定 = localhost（scripts/generate-certs.sh，Pod DNS 名不进 SAN）；
+      # 若改用含 Pod DNS SAN 的证书，置空本项
+      override-authority: localhost
     auth-token: ${NEX_MPC_ENGINE_AUTH_TOKEN}
 ```
+
+Helm 侧对应 env 键（`deploy/helm/values-prod.yaml`）：
+`NEX_MPC_ENGINE_DISTRIBUTED` / `NEX_MPC_ENGINE_CGGMP_ENABLED` /
+`NEX_MPC_ENGINE_CGGMP_SIGNERS` / `NEX_MPC_ENGINE_TLS_OVERRIDE_AUTHORITY`；
+`NEX_MPC_ENGINE_AUTH_TOKEN` 经 `<chart>-secret`（envFrom）注入，禁止明文入仓。
 
 ### 6.2 路由逻辑
 
 - `partyIndex=0` → `mpc-engine-0.mpc-engine-headless:50051`
 - `partyIndex=1` → `mpc-engine-1.mpc-engine-headless:50051`
 - `partyIndex=2` → `mpc-engine-2.mpc-engine-headless:50051`
-- `partyIndex` 超出范围 → 回退到 endpoint 0（容错）
-- `endpoints` 为空 → 回退到 `host:port` 单端点（向后兼容）
+- `partyIndex` 超出范围 → `distributed-mode=true` 时 **fail-closed 抛错**（不回退，
+  防路由到他方份额）；`false`（dev）回退到 endpoint 0（容错）
+- `endpoints` 为空或 <3 → `distributed-mode=true` 时**启动失败**（拒绝单进程全份额路径）；
+  `false` 回退到 `host:port` 单端点（向后兼容）
 
 ## 第7章 跨 Pod gRPC + mTLS 验证
 

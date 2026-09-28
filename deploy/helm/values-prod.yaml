@@ -111,6 +111,21 @@ nexus-signing-service:
     NEX_MPC_ENGINE_TLS_TRUST_CERT: "/etc/mpc/certs/ca/CA.pem"
     NEX_MPC_ENGINE_TLS_CLIENT_CERT: "/etc/mpc/certs/node-A/cert.pem"
     NEX_MPC_ENGINE_TLS_CLIENT_KEY: "/etc/mpc/certs/node-A/key.pem"
+    # P0-1（B2 验收：无单进程全份额路径）——生产强制分布式 CGGMP21：
+    #   distributed-mode=true：endpoints 必须 >=3，partyIndex 超界 fail-closed
+    #     （不再回退端点 0，杜绝错误路由）；
+    #   cggmp-enabled=true：编排层走 CGGMP21 原生 t-of-n，份额加密驻留各引擎
+    #     进程（NXC1），signing-service 不持有任何份额；
+    #   cggmp.signers=0,1：2-of-3 签名方集合（容忍 1 方离线）；
+    #   tls.override-authority=localhost：证书 SAN 约定 = localhost
+    #     （mpc-engine/scripts/generate-certs.sh；Pod DNS 名不进 SAN）。
+    #     若运维改用含 Pod DNS SAN 的证书，本项须置空。
+    # 另需 NEX_MPC_ENGINE_AUTH_TOKEN（与 mpc-engine 的 MPC_AUTH_TOKEN 同值），
+    # 经 <chart>-secret（envFrom secretRef）注入，禁止明文入仓。
+    NEX_MPC_ENGINE_DISTRIBUTED: "true"
+    NEX_MPC_ENGINE_CGGMP_ENABLED: "true"
+    NEX_MPC_ENGINE_CGGMP_SIGNERS: "0,1"
+    NEX_MPC_ENGINE_TLS_OVERRIDE_AUTHORITY: "localhost"
   extraVolumes:
     - name: mpc-certs
       secret:
