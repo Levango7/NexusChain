@@ -12,6 +12,8 @@ import org.nexus.gateway.orchestration.connector.*;
 import org.nexus.gateway.orchestration.model.OrchPaymentStatus;
 import org.nexus.gateway.orchestration.model.OrchestratedPayment;
 import org.nexus.gateway.orchestration.repository.OrchestratedPaymentRepository;
+import org.nexus.gateway.orchestration.routing.RoutingContext;
+import org.nexus.gateway.orchestration.routing.RoutingDecision;
 import org.nexus.gateway.orchestration.routing.RoutingEngine;
 import org.nexus.gateway.orchestration.routing.ai.MetricsCollector;
 import org.nexus.gateway.risk.PaymentRequest;
@@ -56,6 +58,17 @@ class OrchestrationServiceTest {
                 applicationEventPublisher);
     }
 
+    /**
+     * Wave 16：OrchestrationService 已切换至 resolveDetailed(RoutingContext)，
+     * 本测试文件的引擎 stub 统一经由该工厂方法构造决策结果。
+     * 注意：不得在 thenReturn 参数位置调用 mock 方法（会破坏 Mockito 全局 stubbing 状态），
+     * 故 candidateIds 恒为空列表（被测断言只关心 connectors）。
+     */
+    private static RoutingDecision w16(List<PaymentConnector> connectors) {
+        return new RoutingDecision(connectors, "test-rule", "PRIORITY",
+                List.of(), new java.util.LinkedHashMap<>(), null, null, null);
+    }
+
     // === createPayment: 幂等重放 ===
 
     @Test
@@ -82,7 +95,7 @@ class OrchestrationServiceTest {
         when(connector.getId()).thenReturn("chain");
         when(connector.createPayment(any())).thenReturn(
                 ConnectorPaymentResult.ok("c-1", PaymentStatus.SUCCEEDED, "0xTx"));
-        when(routingEngine.resolve("NEX", 1000, null)).thenReturn(List.of(connector));
+        when(routingEngine.resolveDetailed(any())).thenReturn(w16(List.of(connector)));
         when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         OrchestratedPayment result = service.createPayment(100L, 1000, "NEX", "d",
@@ -103,7 +116,7 @@ class OrchestrationServiceTest {
                 null, null, null, null);
 
         assertEquals(OrchPaymentStatus.FAILED, result.getStatus());
-        verify(routingEngine, never()).resolve(any(), anyLong(), any());
+        verify(routingEngine, never()).resolveDetailed(any());
     }
 
     @Test
@@ -126,7 +139,7 @@ class OrchestrationServiceTest {
         when(connector.getId()).thenReturn("chain");
         when(connector.createPayment(any())).thenReturn(
                 ConnectorPaymentResult.ok("c-1", PaymentStatus.PROCESSING, "0xTx"));
-        when(routingEngine.resolve("NEX", 1000, null)).thenReturn(List.of(connector));
+        when(routingEngine.resolveDetailed(any())).thenReturn(w16(List.of(connector)));
         when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         OrchestratedPayment result = service.createPayment(100L, 1000, "NEX", "d",
@@ -141,7 +154,7 @@ class OrchestrationServiceTest {
     @DisplayName("createPayment: 路由返回空列表 -> FAILED")
     void createPayment_noConnectors() {
         when(riskService.evaluatePayment(any())).thenReturn(RiskDecision.APPROVED);
-        when(routingEngine.resolve("NEX", 1000, null)).thenReturn(List.of());
+        when(routingEngine.resolveDetailed(any())).thenReturn(w16(List.of()));
         when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         OrchestratedPayment result = service.createPayment(100L, 1000, "NEX", "d",
@@ -160,7 +173,7 @@ class OrchestrationServiceTest {
         when(connector.getId()).thenReturn("chain");
         when(connector.createPayment(any())).thenReturn(
                 ConnectorPaymentResult.ok("c-1", PaymentStatus.SUCCEEDED, "0xTx"));
-        when(routingEngine.resolve("NEX", 1000, "chain")).thenReturn(List.of(connector));
+        when(routingEngine.resolveDetailed(any())).thenReturn(w16(List.of(connector)));
         when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         OrchestratedPayment result = service.createPayment(100L, 1000, "NEX", "d",
@@ -183,7 +196,7 @@ class OrchestrationServiceTest {
         when(connector.getId()).thenReturn("chain");
         when(connector.createPayment(any())).thenReturn(
                 ConnectorPaymentResult.ok("c-1", PaymentStatus.PROCESSING, "0xTx"));
-        when(routingEngine.resolve("NEX", 1000, null)).thenReturn(List.of(connector));
+        when(routingEngine.resolveDetailed(any())).thenReturn(w16(List.of(connector)));
         when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         OrchestratedPayment result = service.createPayment(100L, 1000, "NEX", "d",
@@ -206,7 +219,7 @@ class OrchestrationServiceTest {
         when(c2.getId()).thenReturn("consortium");
         when(c2.createPayment(any())).thenReturn(
                 ConnectorPaymentResult.ok("c-2", PaymentStatus.PROCESSING, "0xTx2"));
-        when(routingEngine.resolve("NEX", 1000, null)).thenReturn(List.of(c1, c2));
+        when(routingEngine.resolveDetailed(any())).thenReturn(w16(List.of(c1, c2)));
         when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         OrchestratedPayment result = service.createPayment(100L, 1000, "NEX", "d",
@@ -227,7 +240,7 @@ class OrchestrationServiceTest {
         when(c2.getId()).thenReturn("consortium");
         when(c2.createPayment(any())).thenReturn(
                 ConnectorPaymentResult.ok("c-2", PaymentStatus.PROCESSING, "0xTx2"));
-        when(routingEngine.resolve("NEX", 1000, null)).thenReturn(List.of(c1, c2));
+        when(routingEngine.resolveDetailed(any())).thenReturn(w16(List.of(c1, c2)));
         when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         OrchestratedPayment result = service.createPayment(100L, 1000, "NEX", "d",
@@ -247,7 +260,7 @@ class OrchestrationServiceTest {
         PaymentConnector c2 = mock(PaymentConnector.class);
         when(c2.getId()).thenReturn("consortium");
         when(c2.createPayment(any())).thenReturn(ConnectorPaymentResult.fail("down2"));
-        when(routingEngine.resolve("NEX", 1000, null)).thenReturn(List.of(c1, c2));
+        when(routingEngine.resolveDetailed(any())).thenReturn(w16(List.of(c1, c2)));
         when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         OrchestratedPayment result = service.createPayment(100L, 1000, "NEX", "d",
@@ -264,7 +277,7 @@ class OrchestrationServiceTest {
         when(connector.getId()).thenReturn("stripe");
         when(connector.createPayment(any())).thenReturn(
                 ConnectorPaymentResult.ok("c-1", PaymentStatus.PROCESSING, "0xTx"));
-        when(routingEngine.resolve("USD", 1000, "stripe")).thenReturn(List.of(connector));
+        when(routingEngine.resolveDetailed(any())).thenReturn(w16(List.of(connector)));
         when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         OrchestratedPayment result = service.createPayment(100L, 1000, "USD", "d",
@@ -287,7 +300,7 @@ class OrchestrationServiceTest {
             Thread.sleep(15);
             return ConnectorPaymentResult.ok("c-1", PaymentStatus.SUCCEEDED, "0xTx");
         });
-        when(routingEngine.resolve("NEX", 1000, null)).thenReturn(List.of(connector));
+        when(routingEngine.resolveDetailed(any())).thenReturn(w16(List.of(connector)));
         when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         OrchestratedPayment result = service.createPayment(100L, 1000, "NEX", "d",
@@ -315,7 +328,7 @@ class OrchestrationServiceTest {
                     .withLatencyMs(42L)
                     .withCostBps(7); // 注意：7 != feeBasisPoints(2)，应被保留
         });
-        when(routingEngine.resolve("NEX", 1000, null)).thenReturn(List.of(connector));
+        when(routingEngine.resolveDetailed(any())).thenReturn(w16(List.of(connector)));
         when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         OrchestratedPayment result = service.createPayment(100L, 1000, "NEX", "d",
@@ -338,7 +351,7 @@ class OrchestrationServiceTest {
         when(fallback.feeBasisPoints()).thenReturn(2);
         when(fallback.createPayment(any())).thenReturn(
                 ConnectorPaymentResult.ok("c-2", PaymentStatus.SUCCEEDED, "0xTx2"));
-        when(routingEngine.resolve("NEX", 1000, null)).thenReturn(List.of(connector, fallback));
+        when(routingEngine.resolveDetailed(any())).thenReturn(w16(List.of(connector, fallback)));
         when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         OrchestratedPayment result = service.createPayment(100L, 1000, "NEX", "d",
@@ -364,7 +377,7 @@ class OrchestrationServiceTest {
         when(c2.feeBasisPoints()).thenReturn(2);
         when(c2.createPayment(any())).thenReturn(
                 ConnectorPaymentResult.ok("c-2", PaymentStatus.SUCCEEDED, "0xTx2"));
-        when(routingEngine.resolve("NEX", 1000, null)).thenReturn(List.of(c1, c2));
+        when(routingEngine.resolveDetailed(any())).thenReturn(w16(List.of(c1, c2)));
         when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         OrchestratedPayment result = service.createPayment(100L, 1000, "NEX", "d",
@@ -384,7 +397,7 @@ class OrchestrationServiceTest {
         when(connector.feeBasisPoints()).thenReturn(5);
         when(connector.createPayment(any())).thenReturn(
                 ConnectorPaymentResult.ok("c-1", PaymentStatus.SUCCEEDED, "0xTx"));
-        when(routingEngine.resolve("NEX", 1000, null)).thenReturn(List.of(connector));
+        when(routingEngine.resolveDetailed(any())).thenReturn(w16(List.of(connector)));
         when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
         doThrow(new RuntimeException("metrics down"))
                 .when(metricsCollector).record(anyString(), anyBoolean(), anyLong(), anyInt());
@@ -409,7 +422,7 @@ class OrchestrationServiceTest {
         when(connector.createPayment(any())).thenReturn(
                 ConnectorPaymentResult.ok("c-1", PaymentStatus.SUCCEEDED, "0xTx")
                         .withLatencyMs(42L).withCostBps(8));
-        when(routingEngine.resolve("NEX", 1000, null)).thenReturn(List.of(connector));
+        when(routingEngine.resolveDetailed(any())).thenReturn(w16(List.of(connector)));
         when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         OrchestratedPayment result = service.createPayment(100L, 1000, "NEX", "d",
