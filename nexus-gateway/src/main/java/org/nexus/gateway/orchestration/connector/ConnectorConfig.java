@@ -64,6 +64,10 @@ public class ConnectorConfig {
     @Column(name = "fee_bps")
     private int feeBps;
 
+    /** 渠道最大并发容量（Wave 16 模块二 V85），NULL = 未配置（健康度 capacityScore 取中性 0.5）。 */
+    @Column(name = "max_concurrent")
+    private Integer maxConcurrent;
+
     @Column(name = "active", nullable = false)
     private boolean active = true;
 
@@ -119,6 +123,9 @@ public class ConnectorConfig {
 
     public int getFeeBps() { return feeBps; }
     public void setFeeBps(int feeBps) { this.feeBps = feeBps; }
+
+    public Integer getMaxConcurrent() { return maxConcurrent; }
+    public void setMaxConcurrent(Integer maxConcurrent) { this.maxConcurrent = maxConcurrent; }
 
     public boolean isActive() { return active; }
     public void setActive(boolean active) { this.active = active; }

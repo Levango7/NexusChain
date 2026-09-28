@@ -41,6 +41,14 @@ public class Merchant {
     @Column(name = "verification_status", nullable = false, length = 32)
     private VerificationStatus verificationStatus = VerificationStatus.PENDING;
 
+    /**
+     * 行业分类（Wave 16 模块六 V90）：E_COMMERCE / DIGITAL_SERVICES / PHYSICAL_RETAIL /
+     * SERVICES / GAMING / FINANCE / TRAVEL / OTHER。入驻审核通过时从
+     * MerchantApplication.businessType 回填；行业级路由画像据此解析。
+     */
+    @Column(name = "industry", length = 32)
+    private String industry;
+
     /** API keys associated with this merchant. */
     @JsonIgnore
     @OneToMany(mappedBy = "merchant", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
@@ -147,6 +155,9 @@ public class Merchant {
 
     public String getSettlementAddress() { return settlementAddress; }
     public void setSettlementAddress(String settlementAddress) { this.settlementAddress = settlementAddress; }
+
+    public String getIndustry() { return industry; }
+    public void setIndustry(String industry) { this.industry = industry; }
 
     public VerificationStatus getVerificationStatus() { return verificationStatus; }
     public void setVerificationStatus(VerificationStatus verificationStatus) { this.verificationStatus = verificationStatus; }

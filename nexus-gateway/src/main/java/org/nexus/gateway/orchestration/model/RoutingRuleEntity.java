@@ -56,6 +56,15 @@ public class RoutingRuleEntity {
     @Column(nullable = false)
     private int priority;
 
+    /**
+     * 关联 routing_strategy_configs.id（Wave 16 模块一 V84），NULL = 使用默认权重。
+     * 仅 MULTI_OBJECTIVE 策略消费；多目标权重实际解析由
+     * {@code MultiObjectiveRoutingService} 按条件+priority 热加载完成，
+     * 本列保留规则级覆盖入口（当前为配置关联占位，未参与解析）。
+     */
+    @Column(name = "strategy_config_id")
+    private Long strategyConfigId;
+
     @Column(nullable = false, updatable = false)
     private Instant createdAt;
 
@@ -87,6 +96,8 @@ public class RoutingRuleEntity {
     public void setConnectorsCsv(String connectorsCsv) { this.connectorsCsv = connectorsCsv; }
     public int getPriority() { return priority; }
     public void setPriority(int priority) { this.priority = priority; }
+    public Long getStrategyConfigId() { return strategyConfigId; }
+    public void setStrategyConfigId(Long strategyConfigId) { this.strategyConfigId = strategyConfigId; }
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }

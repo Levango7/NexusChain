@@ -5,6 +5,8 @@ import org.nexus.gateway.orchestration.connector.*;
 import org.nexus.gateway.orchestration.model.OrchPaymentStatus;
 import org.nexus.gateway.orchestration.model.OrchestratedPayment;
 import org.nexus.gateway.orchestration.repository.OrchestratedPaymentRepository;
+import org.nexus.gateway.orchestration.routing.RoutingContext;
+import org.nexus.gateway.orchestration.routing.RoutingDecision;
 import org.nexus.gateway.orchestration.routing.RoutingEngine;
 import org.nexus.gateway.orchestration.routing.ai.MetricsCollector;
 import org.nexus.gateway.risk.PaymentRequest;
@@ -191,14 +193,21 @@ public class OrchestrationService {
 
             payment.setStatus(OrchPaymentStatus.CREATED);
 
-            // P3-T5：路由决策 span（payment.route）
+            // P3-T5：路由决策 span（payment.route）。Wave 16：走 resolveDetailed 全量决策流
+            // （MULTI_OBJECTIVE 评分 / 降级链 / A/B 实验分流 / 决策审计），decisionId 供
+            // 支付完成后回填 outcome（engine 内部完成审计，本类只透传）。
             List<PaymentConnector> connectors;
+            String routeDecisionId;
             try (BusinessSpan routeSpan = BusinessSpan.start(tracer, "payment.route")
                     .attr("payment.id", paymentId)
                     .attr("payment.currency", currency)
                     .attr("payment.amount", amount)) {
-                connectors = routingEngine.resolve(currency, amount, preferredConnector);
-                routeSpan.attr("payment.route.strategy", payment.getRoutingStrategy())
+                RoutingDecision routeDecision = routingEngine.resolveDetailed(
+                        RoutingContext.ofPayment(paymentId, merchantId,
+                                BigDecimal.valueOf(amount), currency, preferredConnector));
+                connectors = routeDecision.connectors();
+                routeDecisionId = routeDecision.decisionId();
+                routeSpan.attr("payment.route.strategy", routeDecision.strategy())
                         .attr("payment.route.connectors", connectors.stream()
                                 .map(PaymentConnector::getId).toList().toString());
             }
@@ -260,6 +269,7 @@ public class OrchestrationService {
                                 paymentId, connector.getId(), result.getStatus(),
                                 result.getLatencyMs(), result.getCostBps());
                         recordConnectorOutcome(connector.getId(), true, result.getLatencyMs(), result.getCostBps());
+                        routingEngine.recordRouteOutcome(routeDecisionId, true);
                         publishPaymentCompleted(payment, result.getTransactionHash(),
                                 result.getLatencyMs(), result.getCostBps());
                         rootSpan.attr("payment.connector.id", connector.getId())
@@ -282,6 +292,7 @@ public class OrchestrationService {
             payment.setStatus(OrchPaymentStatus.FAILED);
             persist(requestId, payment);
             log.error("All connectors failed for payment {}", paymentId);
+            routingEngine.recordRouteOutcome(routeDecisionId, false);
             rootSpan.attr("payment.status", "FAILED").error(null);
             return payment;
         }
