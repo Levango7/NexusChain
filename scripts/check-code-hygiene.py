@@ -17,6 +17,10 @@
       · 任何**新增**违规立即失败
       · 修掉的历史违规会让基线收缩，不允许再回弹
 
+    扫描口径：Java 文本块（三引号定界）内的内容是字符串字面量而非可执行
+    代码，不参与扫描——Developer Portal 生成的示例代码里的 System.out
+    属此类误报（2026-09-29 消除）。
+
 用法
     python scripts/check-code-hygiene.py                  # 检查（CI 用）
     python scripts/check-code-hygiene.py --update-baseline # 基线收缩（修完后）
@@ -63,6 +67,42 @@ def is_commented(line: str) -> bool:
     return bool(RE_COMMENT_PREFIX.match(line))
 
 
+def split_text_blocks(line: str, in_text_block: bool):
+    """按 Java 文本块定界符（未转义的 \"\"\"）切分源码行。
+
+    返回 (代码段列表, 行末是否仍在文本块内)。文本块内容不是可执行代码，
+    调用方只扫描代码段。反斜杠转义的 \\\" 不计为定界符。
+    """
+    positions = []
+    i, n = 0, len(line)
+    while i <= n - 3:
+        if line.startswith('"""', i):
+            backslashes = 0
+            j = i - 1
+            while j >= 0 and line[j] == '\\':
+                backslashes += 1
+                j -= 1
+            if backslashes % 2 == 0:
+                positions.append(i)
+                i += 3
+                continue
+        i += 1
+
+    segments = []
+    cursor = 0
+    for p in positions:
+        segments.append(line[cursor:p])
+        cursor = p + 3
+    segments.append(line[cursor:])
+
+    inside = in_text_block
+    code_segments = [seg for idx, seg in enumerate(segments)
+                     if (idx % 2 == 0) != inside]
+    if len(positions) % 2 == 1:
+        inside = not inside
+    return code_segments, inside
+
+
 def normalize(line: str) -> str:
     """把源码行归一化，作为基线键的一部分（与行号无关，避免行位移造成误报）。"""
     return re.sub(r'\s+', ' ', line.strip())
@@ -77,15 +117,18 @@ def scan_file(path: str):
         return []
 
     findings = []
+    in_text_block = False
     for raw in content.splitlines():
-        if is_commented(raw):
-            continue
-        if RE_PRINT_STACK_TRACE.search(raw):
-            findings.append((RULE_PRINT_STACK_TRACE, normalize(raw)))
-        if RE_SYSTEM_OUT.search(raw) and not any(a in '/' + rel for a in SYSTEM_OUT_ALLOWLIST):
-            findings.append((RULE_SYSTEM_OUT, normalize(raw)))
-        if RE_EMPTY_CATCH.search(raw):
-            findings.append((RULE_EMPTY_CATCH, normalize(raw)))
+        segments, in_text_block = split_text_blocks(raw, in_text_block)
+        for seg in segments:
+            if is_commented(seg):
+                continue
+            if RE_PRINT_STACK_TRACE.search(seg):
+                findings.append((RULE_PRINT_STACK_TRACE, normalize(seg)))
+            if RE_SYSTEM_OUT.search(seg) and not any(a in '/' + rel for a in SYSTEM_OUT_ALLOWLIST):
+                findings.append((RULE_SYSTEM_OUT, normalize(seg)))
+            if RE_EMPTY_CATCH.search(seg):
+                findings.append((RULE_EMPTY_CATCH, normalize(seg)))
     return findings
 
 
