@@ -111,7 +111,12 @@ tools.jackson.core:jackson-databind | CVE-2026-68497 | HIGH | fixed | 3.1.5 | 3.
   `org.springframework.boot:spring-boot-jackson:4.0.8 → tools.jackson:jackson-bom:3.1.5
   → tools.jackson.core:jackson-databind:3.1.5`，即由 Spring Boot BOM 管理，不是直接依赖。
 
-正确修法（**尚未实施，需按项目既有机制**）：参照 `build.gradle:206-210` 处理 Tomcat 的先例
+**已实施**（commit `72876c9`）：在根 `build.gradle` 的 ext 块加
+`set('jackson-bom.version', '3.1.6')`，实测 `:nexus-core:dependencies` 解析为
+`tools.jackson.core:jackson-databind:3.1.5 -> 3.1.6` 且 `jackson-core:3.1.6`（同 BOM 对齐，
+无 databind/core 错配），`:nexus-core:compileJava` exit=0。
+最终确认以重跑的镜像扫描为准（run `36597539567`），不看"版本号变了"。
+原先设想的"正确修法（尚未实施）"表述如下，保留作决策依据：参照 `build.gradle:206-210` 处理 Tomcat 的先例
 （"Spring Boot BOM 管理解析为 11.0.24——此处 override 到 11.0.25，可修复一律升级不用 ignore"），
 给 `tools.jackson.core` 做同样的版本覆盖到 **3.1.6**（含 `jackson-core`，避免 databind/core 错配），
 或在依赖管理里对该 BOM 条目做 substitution。抬完后必须**重跑镜像扫描**确认 5 条 HIGH 归零，
