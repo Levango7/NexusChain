@@ -10,7 +10,8 @@ spring:
   main:
     allow-bean-definition-overriding: true
   datasource:
-    url: jdbc:h2:mem:nexus_sandbox;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    # MODE=MySQL：ShedLock usingDbTime() 发 TIMESTAMPADD(MICROSECOND, …)，H2 原生模式不认（dev/test 均已开）
+    url: jdbc:h2:mem:nexus_sandbox;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE;MODE=MySQL
     username: sa
     password:
     driver-class-name: org.h2.Driver
@@ -24,6 +25,13 @@ spring:
         dialect: org.hibernate.dialect.H2Dialect
   flyway:
     enabled: false
+  # ddl-auto 只建 @Entity 表；shedlock 是 ShedLock 的契约表、无 JPA 实体，
+  # 调度器启动期首个任务打它即 Table not found，异常经请求链冒泡成端点 500。
+  # 与 application-dev.yml 同款处置（mode: embedded 只对嵌入式库生效）。
+  sql:
+    init:
+      mode: embedded
+      schema-locations: classpath:db/shedlock-init.sql
   h2:
     console:
       enabled: true
