@@ -219,9 +219,14 @@ subprojects {
     // 的官方覆盖机制（先例见 nexus-gateway/build.gradle:14 的 tomcat.version；
     // 那里已实测 resolutionStrategy force 对 Boot BOM 无效）。
     // 属性名取自 spring-boot-dependencies:4.0.8 pom：
-    //   jackson-2-bom.version = 2.21.5 → com.fasterxml.jackson（2.x 线，本 CVE 命中）
-    //   jackson-bom.version   = 3.1.5  → tools.jackson（Jackson 3 线，本 CVE 未命中，不动）
+    //   jackson-2-bom.version = 2.21.5 → com.fasterxml.jackson（2.x 线）
+    //   jackson-bom.version   = 3.1.5  → tools.jackson（Jackson 3 线）
+    // CVE-2026-68497 同时命中这两条坐标（Trivy 给的修复线：2.x 为 2.18.10/2.21.6/2.22.2，
+    // Jackson 3 为 3.1.6/3.2.2）。2026-09-29 实测：只提 2.x 那一拨，六个镜像仍红——
+    // 阻断 finding 变成 tools.jackson.core:jackson-databind 3.1.5（run 36597047157 日志）。
+    // 两条都必须提，取各自同 minor 的补丁版以免跨线行为变化。
     ext['jackson-2-bom.version'] = '2.21.6'
+    ext['jackson-bom.version'] = '3.1.6'
 
     // B1 baseline (2026-08-03): NO global forced test deps.
     // Historically this block injected `junit:junit:4.13.2` and
