@@ -30,6 +30,14 @@ CVE-2026-66046
 # 不可信 XML）；Debian 发布修复后移除。
 CVE-2026-76956
 CVE-2026-76957
+# 2026-09-29 Trivy DB 增补：libexpat1 2.8.3-1~deb13u1 再新增 1 项
+# （CVE-2026-93990，Malformed UTF-16 输入导致的 XML Injection，HIGH）——
+# Debian 侧状态 affected、无 Fixed Version，豁免依据与上面三条完全一致
+# （Java 服务不解析不可信 XML 流）；Debian 发布修复后移除。
+# 取证：本地对刷新后的 gcr.io/distroless/java17-debian13:nonroot 做
+# --vuln-type os 扫描 = Total: 1 HIGH，即此条；CI 侧同时表现为 10/12 Java
+# 模块镜像扫描红、2 个 bookworm-slim 的 Rust 模块绿。
+CVE-2026-93990
 
 # --- debian:bookworm-slim（Rust 模块镜像）---
 # zlib1g 1.2.13: integer overflow in inflate.c（CVE-2023-45853）— will_not_fix。
