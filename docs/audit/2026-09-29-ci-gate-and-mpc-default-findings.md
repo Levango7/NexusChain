@@ -1,0 +1,83 @@
+# 现状核验记录：CI 门禁约束力与 MPC 默认口径（2026-09-29）
+
+> 触发：用户要求全面检索项目现状。本文只记**有出处**的结论；未确认项单列，不当作结论。
+> 方法：直接读代码/工作流 + 子代理并行盘点后由本人复核承重条目（复核推翻过 1 条子代理结论，见 §5）。
+
+## 1. 已修：安全门禁不在 PR 上运行（结构性风险）
+
+核验到的事实：`security-scan.yml` 原先只有 `push: master` + 周一 cron + `workflow_dispatch`
+三个触发器，**没有 `pull_request`**。后果是 gitleaks（密钥泄露）、Trivy fs（依赖漏洞）、
+SpotBugs/FindSecBugs、cargo-audit 全部只在代码**已合入 master 之后**才可能报红，
+对合并决策零约束力。
+
+本次改动（`.github/workflows/security-scan.yml`）：
+
+- 新增 `pull_request: branches: [master]`；
+- 为控制 PR 时长，给三个"重"job 加 `if: github.event_name != 'pull_request'`：
+  `trivy-docker-scan`（需构建镜像矩阵）、`owasp-dependency-check`、`dast-zap-baseline`（需起栈）。
+
+净效果：**轻且高信号的（gitleaks / SpotBugs / cargo-audit / Trivy fs）在 PR 阻断**；
+镜像与 DAST 仍在 push/cron。
+
+## 2. 未修，需产品口径决策：MPC 头牌能力默认关闭
+
+- 引擎是真密码学实现（Rust sidecar）：`mpc-engine/Cargo.toml` 依赖
+  `multi-party-ecdsa 0.8.1`（KZen GG18/GG20）与 `cggmp21 0.6.3`（features 含 `state-machine`）；
+  GG20 走真实 `MessageA/MessageB(MtA)`、`DLogProof`（`mpc-engine/src/gg20.rs:22-36`），
+  CGGMP21 走真实轮次状态机（`src/cggmp.rs:312,332,359`），份额 AES-GCM 加密落盘
+  （`src/persistence.rs`）。全仓 Rust 侧 `todo!/unimplemented!` 检索为空。
+- **但两处默认值是关的**：
+  - `nexus-signing-service/src/main/resources/application.yml:291`
+    `cggmp-enabled: ${NEX_MPC_ENGINE_CGGMP_ENABLED:false}`
+  - 同文件 `:306` `real-grpc-enabled: ${NEX_MPC_TRANSPORT_GRPC:false}`，
+    由 `.../mpc/GrpcMpcTransportStub.java:124` 回落到 `InMemoryMpcTransport()`。
+- 只有 `deploy/helm/values-prod.yaml:126` 将 CGGMP 置 `"true"`。
+
+含义（这是事实陈述，不是缺陷判定）：**除 prod 之外，默认/dev/staging 路径不走 CGGMP21
+原生 t-of-n，P2P 份额传输走进程内存兜底**。
+
+未决策点：这是否是有意分层（prod 才要真阈值签名）？
+- 若有意 → 建议在 README/部署文档明示"dev/staging 的 MPC 非真阈值路径"，避免误读为全环境等价；
+- 若无意 → 需要把默认改为按 profile 分级并让 CI 覆盖真实路径。
+
+**我没有替这个决定加门禁**：在没有口径前把"prod 必须开 CGGMP"写成 CI 规则，
+等于用我的假设替代产品决策。配置漂移校验的既有正主是
+`.github/workflows/k8s-sync-check.yml`（PR 触发，比对 `deploy/k8s/` 与 Helm 渲染，
+附带 helm lint + kubeconform），若确定要加，应加在那里而非新建工作流。
+
+## 3. 未修，且我刻意没碰：gateway 集成测试永不阻断
+
+`nexus-gateway` 的 `integrationTest` 步骤带 `continue-on-error: true`（`.github/workflows/ci.yml:219-221`），
+注释自述原因是 CI 环境缺 Nacos/Kafka/Redis。后果是这组测试**结构上不可能阻断合并**，
+其"通过"不构成证据。正确修法是让 CI 起所需基础设施后转为阻断，或明确它只在本地跑——
+二者都比现状好，但都需要改 `ci.yml`。
+
+**为何本次不动**：工作树里已有一处**非我所作的未提交改动** `.github/workflows/ci.yml`
+（新增 `gateway-context-smoke` job，单独跑 `PaymentE2EIntegrationTest`，方向与本条一致）。
+在他人/另一会话在途改动上再叠一层同文件修改，会把责任边界搞混。留待其落地后处理。
+
+## 4. 规模基线（实测，供后续对照）
+
+- Java 主源码 **1673** 文件 / 测试 **660** 文件（`src/main/java` vs `src/test/java`，排除 `build/`）；
+- Rust **30** 文件（`mpc-engine` + `zk-groth16-service`，均不参与 Gradle 构建，经 Docker/Helm 部署）；
+- 厚模块：gateway 680、core 416、consortium 170、signing 99、bridge 80；
+- 库形态模块（0 controller、0 `@SpringBootApplication`）：settlement / compliance / analytics / oracle；
+- 被显式排除构建：`nexus-explorer`、`nexus-devtools`、`demo`（`settings.gradle:77-78`）；
+  `nexus-rpc-doc` 仅剩 README（`settings.gradle:29-31`）。
+- 文档侧已自我纠偏：`README.md:104` 起专设"避免宣称能力 >> 实际能力"章节，
+  `:108-110` 将 explorer 明确降为"MVP 骨架、非生产级"，并指出仓库内大量文件是 `node_modules`。
+
+## 5. 我推翻的一条结论（防止被当依据）
+
+有子代理判定 `ci.yml:855` 的 `... | tee hardhat-e2e-output.log` 因"GitHub 默认 bash 不带
+pipefail"而使该步"结构上不可能失败"。**此结论不成立**：GitHub Actions 在 Linux 上 `run`
+的默认 shell 是 `bash --noprofile --norc -eo pipefail`，`tee` 不会吞掉上游退出码；
+同文件 `:814` 亦声明该 job 为强制门禁。要证实只能观察一次真实失败，我不据此改动任何东西。
+
+## 6. 未确认清单（不下结论）
+
+- 分支保护里哪些 check 是 required（仓库内无该配置，仅 GitHub 设置可见）；
+  故 §1 的"PR 阻断"在平台层面是否真的拦住合并，尚未验证。
+- `nexus-settlement`/`compliance`/`oracle` 的 JPA 建表方式（有 JPA starter 但未见 `db/migration` 目录）。
+- CI 引用的 `secrets.PERF_API_KEY` 是否已在仓库配置。
+- `demo/`、`deploy/kind/`、`deploy/scripts/*` 无任何 CI 引用，只能人工本地跑——其"可用性"未经 CI 证明。
