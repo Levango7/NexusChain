@@ -28,6 +28,11 @@ plugins {
     id 'io.spring.dependency-management' version '1.1.4'
 }
 
+// CVE-2026-68497（HIGH）：本模块是 composite build（独立构建根），拿不到根
+// build.gradle 的 ext，jackson 全靠 Boot 4.0.8 BOM 解析为 2.21.5（仍在受影响区间）。
+// 修复线 2.21.6，覆盖机制同 nexus-gateway/build.gradle:14 的 tomcat.version 先例。
+ext['jackson-2-bom.version'] = '2.21.6'
+
 group = 'org.nexus'
 version = '2.30.0'
 

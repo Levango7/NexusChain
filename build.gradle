@@ -200,7 +200,11 @@ subprojects {
         nettyVersion = '4.1.115.Final'
         grpcVersion = '1.75.0'
         protobufVersion = '3.25.5'
-        jacksonVersion = '2.18.8'
+        // CVE-2026-68497（HIGH，CPU DoS via unbounded numeric parsing）：受影响面覆盖
+        // 2.18.8（本变量旧值）与 2.21.5（Boot 4.0.8 BOM 默认值），Trivy 给的修复线是
+        // 2.18.10 / 2.21.6 / 2.22.2。取 2.21.6 而非 2.18.11：显式声明与 BOM 管理两条路
+        // 径落在同一版本，消除"core 钉 2.18.x、gateway 走 BOM 2.21.x"的双轨。
+        jacksonVersion = '2.21.6'
         guavaVersion = '33.4.8-jre'
         // Tomcat embed-core 11.0.24 有 3 个新 CVE（CVE-2026-65182 CRITICAL
         // 安全约束绕过 / CVE-2026-65905 HIGH DIGEST 重放 / CVE-2026-68525 HIGH
@@ -209,6 +213,15 @@ subprojects {
         tomcatVersion = '11.0.25'
 
     }
+
+    // 去版本号的 jackson 声明（gateway/bridge/sdk-java 等）由 BOM 决定，光改上面的
+    // jacksonVersion 移不动它们。ext['<BOM 属性名>'] 是 io.spring.dependency-management
+    // 的官方覆盖机制（先例见 nexus-gateway/build.gradle:14 的 tomcat.version；
+    // 那里已实测 resolutionStrategy force 对 Boot BOM 无效）。
+    // 属性名取自 spring-boot-dependencies:4.0.8 pom：
+    //   jackson-2-bom.version = 2.21.5 → com.fasterxml.jackson（2.x 线，本 CVE 命中）
+    //   jackson-bom.version   = 3.1.5  → tools.jackson（Jackson 3 线，本 CVE 未命中，不动）
+    ext['jackson-2-bom.version'] = '2.21.6'
 
     // B1 baseline (2026-08-03): NO global forced test deps.
     // Historically this block injected `junit:junit:4.13.2` and

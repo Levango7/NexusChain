@@ -150,8 +150,9 @@ dependencies {
 
     // === Jackson（WalletUtils / TxUtils 依赖） ===
     // P4-A（2026-08-29）：2.15.4 存在 CVE-2026-54512/54513（HIGH，任意代码执行/
-    // 安全绕过），升级至 2.18.8（与根 build.gradle ext.jacksonVersion 对齐）
-    implementation 'com.fasterxml.jackson.core:jackson-databind:2.18.8'
+    // 安全绕过）。此前硬编码 2.18.8 与根 ext 对齐；CVE-2026-68497 后改回引用
+    // ${jacksonVersion}，消除"根改了这个模块静默滞后"的双源。
+    implementation "com.fasterxml.jackson.core:jackson-databind:${jacksonVersion}"
 
     // === Resilience4j（与 Sentinel 共存，迁移期保留） ===
     // 升级修复（task #395）：resilience4j-spring-boot3 的 SpringBoot3Verifier 在启动时
