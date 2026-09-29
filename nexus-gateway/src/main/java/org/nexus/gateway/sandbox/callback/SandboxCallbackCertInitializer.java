@@ -18,7 +18,8 @@ import java.security.KeyPairGenerator;
 import java.security.PrivateKey;
 import java.security.cert.X509Certificate;
 import java.time.Instant;
-import java.time.temporal.ChronoUnit;
+import java.time.ZoneOffset;
+import java.time.ZonedDateTime;
 import java.util.Base64;
 import java.util.Optional;
 import java.util.UUID;
@@ -148,7 +149,7 @@ public class SandboxCallbackCertInitializer implements ApplicationRunner {
         cert.setSerialNo(serialNo);
         cert.setCertificateContent(pemContent);
         cert.setEffectiveTime(Instant.now());
-        cert.setExpireTime(Instant.now().plus(CERT_VALIDITY_YEARS, ChronoUnit.YEARS));
+        cert.setExpireTime(certificateExpireTime());
         cert.setFetchedAt(Instant.now());
         cert.setStatus(CertificateStatus.ACTIVE);
 
@@ -213,7 +214,7 @@ public class SandboxCallbackCertInitializer implements ApplicationRunner {
 
             // 构造 CertificateValidity
             java.util.Date notBefore = java.util.Date.from(Instant.now());
-            java.util.Date notAfter = java.util.Date.from(Instant.now().plus(CERT_VALIDITY_YEARS, ChronoUnit.YEARS));
+            java.util.Date notAfter = java.util.Date.from(certificateExpireTime());
             Object certValidity = certValidityClass.getConstructor(java.util.Date.class, java.util.Date.class)
                     .newInstance(notBefore, notAfter);
 
@@ -322,5 +323,21 @@ public class SandboxCallbackCertInitializer implements ApplicationRunner {
         }
         sb.append("-----END CERTIFICATE-----\n");
         return sb.toString();
+    }
+
+    /**
+     * 证书到期时间 = 当前时刻 + {@code CERT_VALIDITY_YEARS} 年。
+     *
+     * <p>不能用 {@code Instant.plus(n, ChronoUnit.YEARS)}：{@code Instant} 只支持
+     * 时长型单位，年/月属日历型，会抛 {@link java.time.temporal.UnsupportedTemporalTypeException}
+     * （此即本类原先在 sandbox profile 下启动即崩的原因）。须经 {@link ZonedDateTime}
+     * 做日历运算再折回 {@code Instant}，并显式固定 UTC 偏移以免随系统时区浮动。</p>
+     *
+     * @return 到期时刻
+     */
+    private static Instant certificateExpireTime() {
+        return ZonedDateTime.now(ZoneOffset.UTC)
+                .plusYears(CERT_VALIDITY_YEARS)
+                .toInstant();
     }
 }
