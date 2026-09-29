@@ -167,7 +167,7 @@ dependencies {
     // === Jackson（WalletUtils / TxUtils 依赖） ===
     // P4-A（2026-08-29）：2.15.4 存在 CVE-2026-54512/54513（HIGH，任意代码执行/
     // 安全绕过），升级至 2.18.8（与根 build.gradle ext.jacksonVersion 对齐）
-    implementation 'com.fasterxml.jackson.core:jackson-databind:2.18.8'
+    implementation "com.fasterxml.jackson.core:jackson-databind:${jacksonVersion}"
 
     // === Phase 4 任务 #79：MPC 密码学引擎 gRPC 客户端（审计报告 §4.1 方案 A） ===
     // Rust multi-party-ecdsa 引擎作为独立进程，signing-service 通过 gRPC 调用。
