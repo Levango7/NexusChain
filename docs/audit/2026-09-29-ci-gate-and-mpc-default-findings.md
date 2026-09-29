@@ -16,8 +16,18 @@ SpotBugs/FindSecBugs、cargo-audit 全部只在代码**已合入 master 之后**
 - 为控制 PR 时长，给三个"重"job 加 `if: github.event_name != 'pull_request'`：
   `trivy-docker-scan`（需构建镜像矩阵）、`owasp-dependency-check`、`dast-zap-baseline`（需起栈）。
 
-净效果：**轻且高信号的（gitleaks / SpotBugs / cargo-audit / Trivy fs）在 PR 阻断**；
+净效果：**轻且高信号的（gitleaks / SpotBugs / cargo-audit / Trivy fs）在 PR 执行**；
 镜像与 DAST 仍在 push/cron。
+
+**已验证**（PR #14，2026-09-29）：checks 结果 13 pass / 5 skipping / 0 fail，
+其中 `Gitleaks Secret Scan`、`Cargo Audit`、`SAST - SpotBugs`、`Trivy Filesystem Scan` 在 PR 上运行，
+`Trivy Docker Image Scan`、`OWASP Dependency-Check`、`DAST - OWASP ZAP Baseline` 显示 skipping ——
+与改动预期一致。
+
+**但"阻断"这个词需要降级为"暴露"**：实测 `gh api repos/Levango7/NexusChain/branches/master/protection`
+返回 `Branch not protected (404)`，即 **master 没有开分支保护，仓库内不存在任何 required check**。
+所以门禁目前只能在合并**之前**把失败显示出来，**拦不住**合并或直接 push master。
+要让它真正有约束力，需要仓库设置层面启用保护并勾选这些 check（非代码可改，需人工操作）。
 
 ## 2. 未修，需产品口径决策：MPC 头牌能力默认关闭
 
@@ -76,8 +86,8 @@ pipefail"而使该步"结构上不可能失败"。**此结论不成立**：GitHu
 
 ## 6. 未确认清单（不下结论）
 
-- 分支保护里哪些 check 是 required（仓库内无该配置，仅 GitHub 设置可见）；
-  故 §1 的"PR 阻断"在平台层面是否真的拦住合并，尚未验证。
+- ~~分支保护里哪些 check 是 required~~ —— **已查实：master 未启用分支保护**（见 §1），
+  因此当前无任何 required check。
 - `nexus-settlement`/`compliance`/`oracle` 的 JPA 建表方式（有 JPA starter 但未见 `db/migration` 目录）。
 - CI 引用的 `secrets.PERF_API_KEY` 是否已在仓库配置。
 - `demo/`、`deploy/kind/`、`deploy/scripts/*` 无任何 CI 引用，只能人工本地跑——其"可用性"未经 CI 证明。
