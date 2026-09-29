@@ -122,6 +122,12 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
 > CGGMP21 路径已包含 `cg_start_sign`、`cg_relay_publish`、`cg_relay_pull`
 > （`mpc-engine/src/server.rs`）以及 `sign_sync`（`mpc-engine/src/cggmp.rs`）。
 > 旧 `distributed.rs` 所述 sign relay 限制属于 GG20 阶段一路径，**不适用于 CGGMP21**。
+
+> **传输层默认态补充（2026-09-29 代码取证）**：除引擎路径外，P2P 份额传输默认也是
+> **进程内**实现：`application.yml` 中 `mpc.transport.real-grpc-enabled` 默认 **false**，
+> 此时 `GrpcMpcTransportStub` 回落到 `InMemoryMpcTransport`（跨方消息不离开本进程）。
+> 真实 gRPC+mTLS 传输需显式开启（`deploy/helm/values-prod.yaml` 置 `"true"`）。
+> 因此"多引擎分布式签名"的完整验证要求 `cggmp-enabled` 与 `real-grpc-enabled` **两者同时为 true**。
 > 基础配置默认关闭 CGGMP21，不代表所有部署均未启用；实际能力需核对部署覆盖值和端到端测试。
 >
 > **生产路径已显式启用分布式 CGGMP21（P0-1，2026-09-29 代码取证）**：
