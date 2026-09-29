@@ -20,7 +20,9 @@ import java.util.regex.Pattern;
  *
  * <p>脱敏规则：</p>
  * <ul>
- *   <li>值长度 > 12：保留前4位 + **** + 后4位（如 {@code sk_live_abcdef1234567890} → {@code sk_l****7890}）</li>
+ *   <li>值长度 > 12：保留前4位 + **** + 后4位（如 {@code abcd1234efgh5678} → {@code abcd****5678}）
+ *       —— 示例刻意用无意义字符；写成 {@code sk_live_...} 这类真实密钥形态会被
+ *       Trivy/gitleaks 等密钥扫描器误判为凭证泄漏</li>
  *   <li>值长度 <= 12：全部替换为 ****</li>
  * </ul>
  *
