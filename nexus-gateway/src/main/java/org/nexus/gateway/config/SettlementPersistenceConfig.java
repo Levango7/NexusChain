@@ -17,12 +17,20 @@ import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
  * <ul>
  *   <li>{@link EntityScan}：{@code org.nexus.gateway} 全包（既有实体——
  *       显式声明会替代默认扫描，必须覆盖 gateway 全部实体包）+
- *       settlement 的 {@code clearing}（ClearingOrder）与
- *       {@code reconciliation}（SettlementRecord）</li>
+ *       {@code org.nexus.settlement} 全包</li>
  *   <li>{@link EnableJpaRepositories}：{@code org.nexus.gateway} 全包
  *       （repository/orchestration/clearing/tenant/subscription/risk/refund 等
- *       15+ 既有仓储）+ settlement 两个仓库包</li>
+ *       15+ 既有仓储）+ {@code org.nexus.settlement} 全包</li>
  * </ul>
+ *
+ * <p>settlement 侧一律用<b>父包整包扫描</b>而非逐包白名单：启动类的组件扫描
+ * 本就是 {@code org.nexus.settlement} 全包，白名单比它窄就会装配出"Service 建得出来、
+ * 它的 Repository 建不出来"的半成品容器。2026-09 的实证教训：白名单只登记了
+ * {@code clearing}/{@code reconciliation}，settlement 后续新增的
+ * {@code risk.action}、{@code risk.composition}、{@code risk.config} 三个含实体与仓储的包
+ * 全部漏扫，导致 gateway 启动即失败（{@code RiskActionExecutor} 缺
+ * {@code RiskActionRecordRepository}），而该缺陷因集成测试被 {@code @Tag("integration")}
+ * 排除在 CI test 任务外，只有 DAST job 才暴露。</p>
  * 使 gateway 容器装配 settlement 的 JPA 实体/仓储，
  * 供 SettlementEventCollector / InMemoryChainRecordSource /
  * InMemoryBankRecordSource / DefaultClearingEngine 的可选注入消费。</p>
@@ -33,13 +41,11 @@ import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 @Configuration
 @EnableJpaRepositories(basePackages = {
         "org.nexus.gateway",
-        "org.nexus.settlement.clearing",
-        "org.nexus.settlement.reconciliation"
+        "org.nexus.settlement"
 })
 @EntityScan(basePackages = {
         "org.nexus.gateway",
-        "org.nexus.settlement.clearing",
-        "org.nexus.settlement.reconciliation"
+        "org.nexus.settlement"
 })
 public class SettlementPersistenceConfig {
 }
