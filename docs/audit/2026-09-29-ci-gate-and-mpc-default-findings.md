@@ -91,3 +91,32 @@ pipefail"而使该步"结构上不可能失败"。**此结论不成立**：GitHu
 - `nexus-settlement`/`compliance`/`oracle` 的 JPA 建表方式（有 JPA starter 但未见 `db/migration` 目录）。
 - CI 引用的 `secrets.PERF_API_KEY` 是否已在仓库配置。
 - `demo/`、`deploy/kind/`、`deploy/scripts/*` 无任何 CI 引用，只能人工本地跑——其"可用性"未经 CI 证明。
+
+## 7. 更正：jackson 抬版修错了坐标（commit f9efc8b 的结论作废）
+
+`f9efc8b` 的提交信息写"消除 master 恒红的 CVE-2026-68497"，**该结论错误**，特此更正。
+
+在分支 `ci/pr-security-gates` 上 `workflow_dispatch` 跑完整安全扫描（run `36591223183`，
+含 PR 上必跳过的镜像扫描）后，扫描表实读到：
+
+```
+tools.jackson.core:jackson-databind | CVE-2026-68497 | HIGH | fixed | 3.1.5 | 3.2.2, 3.1.6
+```
+
+- 受影响坐标是 **Jackson 3 的 `tools.jackson.core:jackson-databind`，装在 3.1.5，修复线 3.1.6 / 3.2.2**；
+- 告警文案里出现的 `com.fasterxml.jackson.core/jackson-databind` 只是 **vendor 别名**，
+  我据此误判成 Jackson 2，于是抬了 `2.18.8 → 2.18.10` —— 对这条 CVE **完全无效**；
+- 结果：5 条 open HIGH 仍在，镜像扫描仍 5 红（另出现 `Gitleaks Secret Scan` 红，原因未查）。
+- 来源链（实测 `gradlew :nexus-core:nexus-core:dependencies`）：
+  `org.springframework.boot:spring-boot-jackson:4.0.8 → tools.jackson:jackson-bom:3.1.5
+  → tools.jackson.core:jackson-databind:3.1.5`，即由 Spring Boot BOM 管理，不是直接依赖。
+
+正确修法（**尚未实施，需按项目既有机制**）：参照 `build.gradle:206-210` 处理 Tomcat 的先例
+（"Spring Boot BOM 管理解析为 11.0.24——此处 override 到 11.0.25，可修复一律升级不用 ignore"），
+给 `tools.jackson.core` 做同样的版本覆盖到 **3.1.6**（含 `jackson-core`，避免 databind/core 错配），
+或在依赖管理里对该 BOM 条目做 substitution。抬完后必须**重跑镜像扫描**确认 5 条 HIGH 归零，
+不能只看"版本号变了"。
+
+保留项：Jackson 2 的 `2.18.10` 与去掉两处硬编码（signing:170、wallet:154 改回
+`${jacksonVersion}`）仍是有效改良——它压住了传递依赖想要的 2.19.1，而 2.19.0–2.21.5
+同样在该 CVE 的 Jackson 2 受影响范围内。但**它不是这 5 条红的原因**，不计为修复。
