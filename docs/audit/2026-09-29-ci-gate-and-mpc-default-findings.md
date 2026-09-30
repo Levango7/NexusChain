@@ -189,4 +189,65 @@ DTLS 握手重传路径，故按 `.trivyignore` 开头原则（只豁免上游�
 
 **本轮结束后 master 侧仍红的项**：`OWASP Dependency-Check`（缺 `NVD_API_KEY` secret，
 仓库设置层面动作，非代码可改）——这是唯一非代码可闭合的红。
+**（已于 2026-10-01 闭合：key 已配置且实测有效，阻断语义已恢复，见 §10。）**
+
+## 10. 追加：OWASP DC 的 NVD key 实测 + 阻断语义恢复 + 「空心绿」取证（2026-10-01）
+
+**背景**：§9 末记录的「master 侧唯一非代码可闭合的红 = OWASP Dependency-Check（缺
+`NVD_API_KEY`）」已于本轮闭合。
+
+**动作与证据**
+
+| 项 | 事实 |
+|----|------|
+| secret | `NVD_API_KEY` 由 owner 于 2026-09-30 创建（`gh secret list` 实测 `total_count: 1`，`updated_at 2026-09-30T22:11:42Z`） |
+| 对照 run | push run `36780102329` 的 OWASP job：`started 22:10:35Z` / `completed 22:10:42Z`（**7 秒**）→ 失败 |
+| **失败真实原因** | **竞态**：job 启动（22:10:35Z）比 secret 创建（22:11:42Z）**早 67 秒**，读到的仍是空串 → 命中 `if [[ -z "$NVD_API_KEY" ]]` 守卫。**不是 key 无效**（当时一度被误记为"key 无效"） |
+| 复核 run | `workflow_dispatch` run `36784537663`（key 已在库）：`22:31:36Z → 22:51:48Z`，**20 分 12 秒**，结论 `success` |
+| 库连通性证据 | 报告 `scanInfo.dataSource`：`NVD API Last Checked = 2026-09-30T22:51:36Z`；engine `13.0.0` |
+| 处置 | 摘除 `security-scan.yml` 该 job 的 `continue-on-error: true`，恢复 `--failOnCVSS=9` 阻断语义 |
+
+**判定逻辑**：缺 key 时该 job 约 5~7 秒即 `exit 1`；本次运行 **20 分 12 秒**且报告里留下 NVD
+拉取时间戳 —— 两侧互证 key 有效、且确实在用 NVD 库（而非同名不同源的库）。
+
+**⚠️ 本轮最重要的发现：这个绿是「空心绿」（检测力为零）**
+
+解析 run `36784537663` 的 `dependency-check-report.json`：
+
+| 指标 | 实测值 |
+|------|--------|
+| `dependencies` 条目数 | 54 |
+| 构成 | `.js` 37 / `.json` 15 / `.jar` 2（仅 `gradle-wrapper.jar`） |
+| **取得 CPE（`packages`）** | **0 / 54** |
+| `vulnerabilities` | 0 |
+| JVM 侧 | **未解析 Gradle 依赖图**（只有 wrapper jar） |
+
+单个依赖对象的字段集合实测为
+`isVirtual | fileName | filePath | md5 | sha1 | sha256 | evidenceCollected` ——
+**连 `packages` 字段都不存在**（未识别出任何组件）。故该 job 的绿只说明
+「NVD 库拉通了 + 提交物里没有可识别的组件漏洞」，**不说明 JVM 依赖无漏洞**。
+
+**覆盖来源澄清（纠正旧文档表述）**
+`docs/dependency-check-update-policy.md` 原文称「Trivy 的 fs 与镜像扫描**仍覆盖 Gradle 依赖
+漏洞**」——**fs 侧不成立**：
+- Trivy 对 Java 只识别 `pom.xml`(Maven) 与 `gradle.lockfile`；本仓库 `git ls-files` 显示
+  **两者均不存在**（仅有 6 个位于 build 缓存内的 `pom.xml`，未跟踪）；
+- Trivy **不解析 `build.gradle`**（仓库跟踪 **19 个** `build.gradle`，不在其识别范围）。
+
+→ JVM 依赖的**唯一真实门禁是 Trivy 镜像扫描的 `Java (jar)` 层**（run `36780102329` 实测：
+nexus-core 由 `Java (jar) Total: 4 (HIGH: 4)` 转 success，即 jackson `2.21.7/3.1.7` 在该层验证）；
+**未被打进任何镜像的依赖（如仅测试期使用）当前无人覆盖**。
+
+**本轮落地的防误读措施**：`security-scan.yml` 新增「扫描覆盖度自检」步骤（`if: always()`），
+每次运行把「条目数 / 已识别（CPE 或漏洞 ID）数 / 漏洞数 / 条目类型分布 / NVD API Last Checked」
+打印到日志与 Job Summary；覆盖度为零时发 `::warning::` 而**不失败**（扫描器能力不足属待升级项，
+不应表现成"门禁抓到漏洞"）。政策文档同步改写（含"命中 CVSS≥9 时的处置顺序"与 suppressions 用法）。
+
+**未修缺口（需决策）**
+1. **`owasp/dependency-check:latest` 未钉 digest**：浮动 tag → 每次运行可能拉到不同引擎版本，
+   门禁结果不可复现，与本仓库"禁止浮动引用"的供应链原则冲突（该原则此前只约束
+   `Dependency-Check_Action` 的 commit SHA，自 2026-09-10 改用 `docker run` 后**约束落空**）。
+   建议：钉 digest + 纳入季度更新流程，或显式承认该例外并记录理由。
+2. **Gradle 依赖图未解析**（本 job 检测力为 0 的根因）：升级路径见
+   `docs/dependency-check-update-policy.md`「升级为『真覆盖』的前置条件」。
 

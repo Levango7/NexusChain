@@ -36,6 +36,35 @@
   代码读的是 `spring.data.redis.*`；`NEX_REDIS_*` 只注入在 nexus-api-gateway chart）。
 - 取证与启用前最小动作清单见 `docs/audit/2026-09-29-ci-gate-and-mpc-default-findings.md` §8。
 
+### 安全门禁：OWASP Dependency-Check 恢复阻断 + 「空心绿」实测（2026-10-01）
+
+**`NVD_API_KEY` 到位与阻断语义恢复**
+- owner 于 2026-09-30 配置仓库 secret `NVD_API_KEY`；`workflow_dispatch` run `36784537663`
+  从 22:31:36Z 跑到 22:51:48Z（**20 分 12 秒**）并 `success`，报告 `scanInfo.dataSource` 记
+  `NVD API Last Checked = 2026-09-30T22:51:36Z`（engine 13.0.0）——既证 key 有效，也证它
+  确实在用 NVD 库。据此摘除该 job 的 `continue-on-error: true`，恢复 `--failOnCVSS=9` 阻断语义。
+- 此前"OWASP job 7 秒失败"的**真实原因是竞态**：该 run 的 job `started 22:10:35Z /
+  completed 22:10:42Z`，而 secret 创建于 `22:11:42Z`（**晚 67 秒**），并非 key 无效。
+
+**⚠️ 覆盖度实录：本 job 目前是「空心绿」**
+- 解析 run `36784537663` 的 `dependency-check-report.json`：`dependencies` 54 条 =
+  `.js` 37 / `.json` 15 / `.jar` 2（仅 `gradle-wrapper.jar`），**取得 CPE 的条目 0/54、
+  `vulnerabilities` 0**，依赖对象字段里连 `packages` 都不存在 —— 即**未解析 Gradle 依赖图，
+  对 jackson 这类 JVM 依赖没有任何检测力**。它的"绿" ≠ "依赖无漏洞"。
+- 新增「扫描覆盖度自检」步骤（`if: always()`）：每次运行把条目数 / 已识别（CPE 或漏洞 ID）数 /
+  漏洞数 / 条目类型分布 / `NVD API Last Checked` 打印到日志与 Job Summary；覆盖度为零时发
+  `::warning::` 但**不失败**（扫描器能力不足是待升级项，不应表现成"门禁抓到漏洞"）。
+- **覆盖来源纠正**：旧文档称「Trivy 的 fs 与镜像扫描仍覆盖 Gradle 依赖漏洞」——**fs 侧不成立**：
+  Trivy 对 Java 只识别 `pom.xml`(Maven) 与 `gradle.lockfile`，本仓库 `git ls-files` 显示两者
+  **均不存在**，且 Trivy **不解析 `build.gradle`**（仓库跟踪 19 个）。JVM 依赖的**唯一真实门禁
+  是 Trivy 镜像扫描的 `Java (jar)` 层**（run `36780102329`：nexus-core 由 4 条 HIGH 转 success）。
+  未被打进任何镜像的依赖（如仅测试期使用）**当前无人覆盖**。
+
+**未修缺口（待决策，取证见 `docs/audit/2026-09-29-ci-gate-and-mpc-default-findings.md` §10）**
+- `owasp/dependency-check:latest` **未钉 digest**：浮动 tag 意味着每次运行可能拉到不同引擎版本，
+  门禁结果不可复现，与本仓库"禁止浮动引用"的供应链原则相冲突（该原则此前只约束 Action 的 commit
+  SHA，自 2026-09-10 改用 `docker run` 后约束落空）。
+
 
 ## [2.51.0] - 2026-09-28
 
