@@ -65,6 +65,46 @@
   门禁结果不可复现，与本仓库"禁止浮动引用"的供应链原则相冲突（该原则此前只约束 Action 的 commit
   SHA，自 2026-09-10 改用 `docker run` 后约束落空）。
 
+### 阻断修复：required check「永不上报」死锁 —— k6 Smoke Test (PR)（2026-10-01，PR #16）
+
+**现象（实证）**：PR #16 的 18 个 check **全部完成且 0 失败**，`gh pr merge --squash` 仍被拒：
+`X Pull request Levango7/NexusChain#16 is not mergeable: the base branch policy prohibits the merge.`
+
+**根因（两层叠加）**
+1. `performance-test.yml` 的 `pull_request` 触发带 `paths` 白名单
+   （`nexus-gateway/**`、`nexus-bridge/**`、`perf/k6/**`、该文件自身）；
+2. master 分支保护把 `k6 Smoke Test (PR)` 列为 **required check**，且 `enforce_admins=true`。
+
+→ PR #16 只改 `.github/workflows/security-scan.yml` / `CHANGELOG.md` / `docs/**`，**不匹配任何 paths**
+→ 该 workflow **根本不触发** → **check 从未上报** → GitHub 只能永远等待 → `mergeStateStatus` 恒为
+`BLOCKED`；且保护项对管理员同样生效，`--admin` **也绕不过**（`gh` 提示 "add the `--admin` flag"，
+实测仍被拒）。
+
+**对照证据**：PR #15（含 `nexus-gateway/**` 改动）的 `k6 Smoke Test (PR)` = `SUCCESS` 且成功合并；
+PR #16 的 rollup 里**根本没有这一项** → 不是偶发，而是「不碰那四条路径的 PR **必然合不进去**」的
+**结构性死锁**（纯文档 / 纯 CHANGELOG / 纯其它 workflow 的 PR 全部中招）。
+
+**修法**（`.github/workflows/performance-test.yml`）
+- **删除 `paths` 白名单** → workflow 每次 PR 都启动，required check **必然上报**；
+- 新增 `判断变更相关性（决定是否实跑）`（`id: relevance`，**不带 `if`、永远执行**）：
+  `git diff --name-only <base>...HEAD` 命中相关性正则才实跑；不相关则秒过并以 **success** 结束
+  （不白烧 30 分钟），Job Summary 写明决策与理由；
+- 判定失败（如取不到 base）**倾向于实跑**（保守方向）；`workflow_dispatch` 视为显式意图 → 实跑；
+- 4 个重步骤由 `if: steps.relevance.outputs.run == 'true'` 守卫，收尾步骤用
+  `always() && steps.relevance.outputs.run == 'true'`；
+- `actions/checkout` 补 `fetch-depth: 0`（浅克隆会让 `git diff <base>...HEAD` 直接失败）；
+- **刻意不改 job 名**：`k6 Smoke Test (PR)` 必须与 required check 名逐字一致，否则保护项永远无法满足。
+
+**验证**（新增 `notes/nexus-validation/validate-perf-workflow.py`，本会话实跑全绿）
+YAML 结构断言（无 paths 过滤 / check 名未变 / 守卫齐全 / 步骤顺序）+ `bash -n` 语法检查 +
+**在临时 git 仓库里真跑该脚本的四用例**：doc-only → `run=false`、`nexus-gateway/**` → `run=true`、
+base 无效 → `run=true`（保守实跑）、workflow_dispatch → `run=true`；并断言**每例退出码必须为 0**
+（防"最后一条命令非零 → 步骤判定失败"这类陷阱）。
+
+**同类风险排查**：全仓仅 2 个 workflow 带 path 过滤 —— `k8s-sync-check.yml`（**非** required check，
+无害）与本文件；其余 5 个 required check 的 workflow 均无过滤，故本项是唯一死锁源。
+
+
 
 ## [2.51.0] - 2026-09-28
 

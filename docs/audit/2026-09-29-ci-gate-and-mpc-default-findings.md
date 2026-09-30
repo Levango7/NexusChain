@@ -251,3 +251,58 @@ nexus-core 由 `Java (jar) Total: 4 (HIGH: 4)` 转 success，即 jackson `2.21.7
 2. **Gradle 依赖图未解析**（本 job 检测力为 0 的根因）：升级路径见
    `docs/dependency-check-update-policy.md`「升级为『真覆盖』的前置条件」。
 
+## 11. 追加：required check「永不上报」死锁 —— k6 Smoke Test (PR)（2026-10-01，PR #16 实证）
+
+**发现路径**：PR #16 由受守卫的 watcher 自动 squash 合并时，**18 个 check 全部 `COMPLETED`、0 失败、
+0 未完成**，却返回：
+
+```
+X Pull request Levango7/NexusChain#16 is not mergeable: the base branch policy prohibits the merge.
+To have the pull request merged after all the requirements have been met, add the `--auto` flag.
+To use administrator privileges to immediately merge the pull request, add the `--admin` flag.
+```
+
+**取证（逐步排除）**
+
+| 检查项 | 实测 | 结论 |
+|--------|------|------|
+| 是否缺 reviewer 审批 | `required_pull_request_reviews` = **none** | 不是审批问题 |
+| 是否管理员可绕过 | `enforce_admins.enabled` = **true** | **`--admin` 也不行** |
+| required checks 清单（7 项） | Build & Test / Gitleaks / Trivy FS / SAST / Cargo Audit / Code Hygiene / **k6 Smoke Test (PR)** | 其中 6 项在 PR #16 里均为 `SUCCESS` |
+| PR #16 的 check rollup | 18 项，**没有 `k6 Smoke Test (PR)`** | 该 check **从未上报** |
+| 分支上实际启动的 workflow | `gh run list --branch ci/owasp-dc-blocking` 只有 2 个（Security Scan、CI/CD Pipeline） | `performance-test.yml` **没被触发** |
+| 触发条件 | `pull_request.paths = [nexus-gateway/**, nexus-bridge/**, perf/k6/**, .github/workflows/performance-test.yml]` | 而 PR #16 只改 `security-scan.yml`/`CHANGELOG.md`/`docs/**` → **不匹配** |
+| 对照 | PR #15（改了 `nexus-gateway/**`）的 `k6 Smoke Test (PR)` = `SUCCESS`，正常合并 | 差异由 paths 匹配与否解释，非偶发 |
+
+**机理**：GitHub 对 required check 的判定是「**必须存在一个针对该 head 的、结论为成功的 check run**」。
+workflow 因 `paths` 过滤未启动 → **没有 check run** → 状态永远停在 "Expected — Waiting for status to
+be reported" → `mergeStateStatus` 恒为 `BLOCKED`。由于 `enforce_admins=true`，**任何身份都无法绕过**。
+
+**影响面（结构性，非本 PR 特有）**：凡「变更集不触碰那四条路径」的 PR 都**永远合不进去** ——
+纯文档、纯 CHANGELOG、其它 workflow 的改动全部中招；且失败信息 ("base branch policy prohibits the
+merge") 完全不提示是哪个 check 缺失，排查成本高。
+
+**修复**（`performance-test.yml`，同一 PR 内）
+- 删除 `paths` 白名单 → workflow 每次都启动、check 必上报；
+- 新增 `id: relevance` 步骤（**无 `if`，永远执行**）：用
+  `git diff --name-only "${{ github.event.pull_request.base.sha }}...HEAD"` 判定相关性；
+  不相关 → 后续重步骤跳过、job 仍 `success`（30 分钟开销降为秒级）；
+  判定失败 → **倾向于实跑**（保守）；`workflow_dispatch` → 实跑；
+- 4 个重步骤加 `if: steps.relevance.outputs.run == 'true'`；收尾步骤
+  `always() && steps.relevance.outputs.run == 'true'`；
+- `checkout` 补 `fetch-depth: 0`（浅克隆会让上述 diff 失败）；
+- **job 名不动**（required check 名必须逐字一致）。
+
+**验证方法（可复现）**：`notes/nexus-validation/validate-perf-workflow.py` ——
+① YAML 结构断言（`pull_request` 无 `paths`/`paths-ignore`、job 名未变、守卫与步骤顺序正确）；
+② `bash -n` 语法检查；③ **在临时 git 仓库真跑脚本**四用例并断言退出码为 0：
+doc-only → `run=false`、`nexus-gateway/**` → `run=true`、无效 base → `run=true`、dispatch → `run=true`。
+
+**留下的通用规则（后续新建门禁必须遵守）**
+1. **列为 required check 的 workflow 不得使用 `paths`/`paths-ignore` 过滤**；
+2. 同理**不要**把 required check 放在「可能被 job 级 `if` 跳过」的 job 上 —— skipped 的 check
+   能否满足保护项属 GitHub 隐式语义，不应依赖；
+3. 分支保护启用 `enforce_admins` 后**没有逃生舱**：门禁自身的可满足性必须先被验证，
+   否则会把整个仓库的合并能力一起锁死。
+
+
