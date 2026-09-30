@@ -16,8 +16,9 @@ ext['tomcat.version'] = '11.0.25'
 // 因未应用 Boot 插件（SpringBootPlugin 类不在 classpath），直接使用 BOM 坐标
 // 字符串。core 保持 application 插件 + mainClass=org.nexus.Start 的非 Boot
 // 应用性质不变。
-// 注意：显式声明版本的依赖（如 jackson ${jacksonVersion}=2.15.4、slf4j 2.0.16）
+// 注意：显式声明版本的依赖（如 jackson ${jacksonVersion}、slf4j 2.0.16）
 // 优先于 BOM 管理值，语义不变；BOM 仅对去版本号声明生效。
+// jackson 版本单源于根 build.gradle 的 ext.jacksonVersion，此处不写死数值以免漂移。
 dependencyManagement {
     imports {
         mavenBom 'org.springframework.boot:spring-boot-dependencies:4.0.8'

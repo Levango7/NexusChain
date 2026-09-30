@@ -97,3 +97,16 @@ CVE-2026-16742
 # 修复随 cggmp24 v0.7.0-alpha.2 API 变更发布）——cggmp24 v0.7 正式版发布后
 # 迁移并移除本豁免。
 CVE-2025-66017
+# --- 2026-10-01 增补（master push run 36773548701 镜像扫描）---
+# openssl / libssl3 3.0.22-1~deb12u1：CVE-2026-84782（compat-openssl: DTLS 握手重传导致
+# 信息泄露，HIGH）。Debian bookworm 侧状态 **affected、无 Fixed Version**（fix_deferred 类），
+# 与本源文件开头的处置原则一致：仅豁免「上游无可用修复版本」的项。
+# 暴露面论证：本条落在 debian:bookworm-slim 基础镜像（Rust 模块 mpc-engine /
+# zk-groth16-service），两个服务均不提供 DTLS 监听端点（gRPC over TCP + ZK 证明服务），
+# 攻击者无法触发 DTLS 握手重传路径；待 Debian 发布修复版本后随基础镜像升级移除本条。
+# 取证：同一轮扫描 mpc-engine:scan (debian 12.15) 与 zk-groth16 镜像均为
+# Total: 2 (HIGH: 2) —— 两条即 libssl3 与其符号链接项 openssl 的同一条 CVE，
+# 无其他 OS/库 finding；Java 模块镜像（distroless java17-debian13，debian 13.7）
+# OS 层为 Total: 0，不涉及本条。
+CVE-2026-84782
+

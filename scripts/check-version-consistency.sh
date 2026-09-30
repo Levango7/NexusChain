@@ -11,7 +11,10 @@
 # 本门禁断言（CHANGELOG 允许滞后于 tag —— v2.50.1 无条目先例，不做强等校验）：
 #   1. 根 build.gradle 的 version == nexus-core version.properties 的 versionNumber
 #      （发版时两处都要改，见 version.properties 内注释）；
-#   2. README.md 的版本口径头注包含当前版本号（防止头注再次停在旧版本）。
+#   2. README.md 的版本口径头注包含当前版本号（防止头注再次停在旧版本）；
+#   3. README.md 正文不得出现与当前版本不一致的「当前 vX.Y.Z」式硬编码声明
+#      （上一条断言只保证头注含当前版本，对正文里的第二处硬编码完全无感——
+#       2026-09-29 实测：头注已是 2.51.0，正文历史摘要段仍写「当前 v2.40.0」）。
 #
 # 运行：bash scripts/check-version-consistency.sh
 # ============================================================================
@@ -37,6 +40,17 @@ fi
 
 if ! grep -q "$GRADLE_VERSION" README.md; then
     fail "README.md 版本口径头注未包含当前版本 $GRADLE_VERSION —— 头注漂移（第三次先例：头注停在 2.50.0）"
+fi
+
+# 断言 3：正文的「当前 vX.Y.Z」式声明必须等于当前版本。
+# 只写"引用头注/CHANGELOG"而不落数值，才是能长期成立的口径；此断言负责把
+# 重新写死数值的做法拦下来。
+STALE_CLAIMS=$(grep -nE "当前 ?v?[0-9]+\.[0-9]+\.[0-9]+" README.md | grep -v "$GRADLE_VERSION" || true)
+if [ -n "$STALE_CLAIMS" ]; then
+    echo "FAIL: README 正文存在与当前版本 $GRADLE_VERSION 不一致的「当前 vX.Y.Z」硬编码声明：" >&2
+    echo "$STALE_CLAIMS" >&2
+    echo "处置：改为引用文件开头「版本口径」头注或 CHANGELOG，不要在正文写死数值。" >&2
+    exit 1
 fi
 
 echo "OK: 版本口径一致 ($GRADLE_VERSION)"

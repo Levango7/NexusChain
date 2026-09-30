@@ -125,3 +125,68 @@ tools.jackson.core:jackson-databind | CVE-2026-68497 | HIGH | fixed | 3.1.5 | 3.
 保留项：Jackson 2 的 `2.18.10` 与去掉两处硬编码（signing:170、wallet:154 改回
 `${jacksonVersion}`）仍是有效改良——它压住了传递依赖想要的 2.19.1，而 2.19.0–2.21.5
 同样在该 CVE 的 Jackson 2 受影响范围内。但**它不是这 5 条红的原因**，不计为修复。
+## 8. 部署前置条件：Redis 重放存储（2026-10-01 代码取证，未实施）
+
+`NEXUS_REPLAY_STORE=redis` 是**唯一**能让多副本 gateway 共享防重放 nonce 表的开关
+（`RedisReplayNonceStore` 类注释 `:14-15`：Helm 生产 gateway `minReplicas: 2`，
+进程内表在 5 分钟窗口内允许跨 Pod 重放）。但打开它有两个必须先处理的前提：
+
+**（a）fail-closed 语义 = 未联通就是全量拒绝，不是降级**
+`nexus-gateway/.../security/RedisReplayNonceStore.java:48-51` 捕获 Redis 异常后返回 false，
+即「视为重放，拒绝」。所以**没有先验证连通性就打开开关**，表现是 gateway 上所有带签名
+请求被拒（对外等于挂掉），而不是退回内存表。
+
+**（b）Helm 注入的键与代码读取的键不是同一个**
+- 代码读 `spring.data.redis.*`（`application-prod.yml:89-94`，env `NEX_REDIS_HOST/PORT/PASSWORD/DATABASE`）；
+  同样读该键的还有 `ratelimit/RedisRateLimiter.java`、`ratelimit/RedisIdempotencyStore.java`、
+  `orchestration/service/OrchestrationWebhookDispatcher.java`。
+- 而 nexus-gateway chart 注入的是 `SPRING_REDIS_HOST/PORT`
+  （`deploy/helm/charts/nexus-gateway/templates/deployment.yaml:101-106`）——relaxed binding 下落到
+  **旧键 `spring.redis.host`**，本仓库 `nexus-gateway/src/main` 内无任何消费方（`git grep` 零命中）。
+  于是 `global.infrastructure.redis.host` 的取值**影响不到** gateway 进程。
+- 反向也错位：真正的 `NEX_REDIS_*` 只注入在
+  `deploy/helm/charts/nexus-api-gateway/templates/deployment.yaml:91-93`，而重放存储/限流/幂等的代码
+  在 **nexus-gateway** 模块 → 该 chart 缺此 env 时走 `application-prod.yml:90` 的默认值 `redis`
+  （集群内同名地址），与 values 配置无关。
+- 文档侧同口径：`deploy/helm/README.md:117,244`、`docs/k8s-deployment.md:358` 都把
+  `SPRING_REDIS_HOST/PORT` 记为「Redis 地址（限流用）」，与代码实际读取的键不一致。
+
+**启用前的最小动作（部署侧，非代码可验证）**：① 确认 Service/DNS 名与 `NEX_REDIS_HOST` 一致；
+② Pod 内用同一凭据 `redis-cli SET/GET nexus:replay-nonce:probe` 验证读写与 ACL；
+③ 观察 `Replay nonce store (redis) unavailable` 日志为 0 后再灰度开开关；
+④ 预演回滚（置回 `memory`），并知悉回滚即重新暴露跨 Pod 重放窗口。
+若要设防，正主工作流是 `.github/workflows/k8s-sync-check.yml`（已做 Helm 渲染 + kubeconform 比对），
+可加「`replay-store=redis` 时必须有对应连接 env」的渲染期校验，而不是等运行期 fail-closed 暴露。
+
+**边界**：以上均为读代码/模板得到的确定事实；「prod 是否真连得上该地址」**未经运行验证**，
+故本书记前置条件，不下「可用/不可用」结论。
+
+## 9. 追加：09-30 第二波 CVE（PR #15 续追，2026-10-01）
+
+**Jackson 第二波（CVE-2026-91776 / CVE-2026-91777）**：Trivy 库在 09-30 增补的这两条，
+命中的正是上一轮 `CVE-2026-68497` 的**修复版本身**（`com.fasterxml...:jackson-databind 2.21.6`
+与 `tools.jackson...:jackson-databind 3.1.6`），修复线：2.x 为 `2.18.11 / 2.21.7 / 2.22.3`、
+Jackson 3 为 `3.1.7 / 3.2.3`。取证：master push run `36773548701` 的
+`Trivy Docker Image Scan (nexus-core)` 日志 `nexus-core:scan` 段 —— OS 层 `debian 13.7` 为
+`Total: 0`，`Java (jar)` 段为 `Total: 4 (HIGH: 4)`，全部为该两条 CVE。
+处置（同 68497 先例，升级消除而非 ignore）：根 `build.gradle` `jacksonVersion 2.21.6→2.21.7`、
+`ext['jackson-2-bom.version'] 2.21.7`、`ext['jackson-bom.version'] 3.1.7`；
+`nexus-api-gateway/build.gradle` 的**独立 ext 副本**同步抬（composite build 不随根自动跟随，
+这是该副本第二次需要手工同步 —— 结构性隐患，见下）。
+
+**结构性隐患（建议后续处理）**：同一组 BOM 属性在**两处**声明（根 + `nexus-api-gateway` 的
+composite build）。任一处漏改，对应镜像会"静默滞后"到下一轮镜像扫描才暴露。可考虑让
+`nexus-api-gateway` 从根读取（如 `gradle.properties` 或 `-P` 传入），或加一条 CI 断言
+两处取值一致（正主工作流：`ci.yml` 的 code-hygiene job）。
+
+**libssl3 CVE-2026-84782（无修复版本，已按惯例豁免）**：`openssl` / `libssl3`
+`3.0.22-1~deb12u1`（`debian:bookworm-slim` → mpc-engine / zk-groth16-service 两个 Rust 镜像）
+状态为 **affected、无 Fixed Version**。两镜像扫描均为 `Total: 2 (HIGH: 2)`，两条即
+libssl3 与其符号链接项 openssl 的同一条 CVE；两个服务不提供 DTLS 监听端点，无法触发
+DTLS 握手重传路径，故按 `.trivyignore` 开头原则（只豁免上游无修复版本项）加豁免，
+待 Debian 出修复版随基础镜像升级移除。Java 模块镜像（distroless java17-debian13）OS 层为 0，
+不涉及。
+
+**本轮结束后 master 侧仍红的项**：`OWASP Dependency-Check`（缺 `NVD_API_KEY` secret，
+仓库设置层面动作，非代码可改）——这是唯一非代码可闭合的红。
+
