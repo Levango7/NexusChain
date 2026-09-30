@@ -131,7 +131,10 @@ dependencies {
     implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.6.0'
 
     // Utilities
-    implementation 'com.fasterxml.jackson.core:jackson-databind'
+    // 原为无版本声明，由 Spring Boot BOM 解析为 2.21.5（落在 CVE-2026-68497 的
+    // >= 2.19.0, < 2.21.6 范围内）。改为引用根 ext 的单一来源，与其它模块一致；
+    // 注意 ext.jacksonVersion 不是 Boot 的 BOM 属性，不引用则 pin 对本模块无效。
+    implementation "com.fasterxml.jackson.core:jackson-databind:${jacksonVersion}"
     implementation 'org.apache.commons:commons-lang3'
 
     // === P0-2 内存安全：有界本地缓存 ===

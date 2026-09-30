@@ -2,6 +2,41 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [Unreleased]
+
+### CI 门禁与安全修复（2026-09-30 ~ 10-01，PR #14 已合并）
+
+**gitleaks 豁免失效根因（P2-C7）**
+- **根因**：自定义规则 `nexus-hardcoded-token-literal` 的正则用了**捕获组** `(token|hash|...)`——
+  gitleaks 取第一个捕获组作为 secret，于是 secret 变成**变量名本身**（`token` → entropy 2.321928=log2(5)、
+  `hash` → 1.500000，与 CI run 313 日志一致，日志中被 REDACTED 的正是变量名）。
+  后果：`[rules.allowlist]` 里按字面量写的豁免拿 secret（=变量名）去匹配，**永远匹配不上**，
+  豁免形同不存在 → 全历史扫描持续报 13 条。改为非捕获组 `(?:...)` 后 secret = 整条匹配（含字面量），
+  豁免真正生效；**检测能力未削弱**（新硬编码探针实测仍被拦下）。
+- **配套教训**：豁免文件**不得内含密钥材料**。把 Stripe 假夹具字面量写进 `.gitleaks.toml` 后，
+  Trivy fs 的密钥扫描把该文件自身判为 `CRITICAL: Stripe (stripe-secret-token)`，反而打红了
+  「CRITICAL,HIGH 阻断」步骤（CI run 36767107602 实证）。改用字符类 + 词边界：
+  `\bsk_live_[a-z0-9]{16}\b`（真实 key 为 `sk_live_` + 24 位以上，在 16 位处无词边界，不被误伤）。
+- **验证**：本地 `gitleaks detect` 全历史 **509 commits / 34.6 MB → no leaks found**；
+  CI `Gitleaks Secret Scan` 在 PR 路径与全历史 `workflow_dispatch` 路径均绿。
+
+**Trivy fs 新暴露的 npm 依赖 CVE（vendor 工具锁文件）**
+- `nexus-core/src/main/java/org/nexus/tools/{,cmd-monitor/}yarn.lock`：axios `0.33.0 → 0.34.0`
+  （CVE-2026-101909）、brace-expansion `1.1.18 → 1.1.20`（CVE-2026-102276 / CVE-2026-102278），
+  取各自最低可用修复版本，不跨大版本。
+- **性质判定**：09-29 同一 job 为 success 且仅 `Total: 0`，09-30 复扫新增该 3 条 ——
+  属 Trivy 漏洞库更新带来的新红（master 侧同样会红），非本次改动引入。
+- **完整性核验**：registry 元数据与本地对 tarball 实算的 sha1/sha512 三源一致；
+  两处 lock 以 `yarn install --frozen-lockfile` 严格模式复验通过。
+
+**部署前置条件：Redis 重放存储（未实施，属部署侧动作）**
+- `NEXUS_REPLAY_STORE=redis` 启用后为 **fail-closed**（Redis 异常 = 视为重放拒绝）：
+  未先联通 Redis 就打开开关，会让所有带签名请求被拒（对外表现为 gateway 全面不可用），而非退回内存表。
+- 且 Helm 与代码的 Redis 键不一致（`SPRING_REDIS_HOST` 落到 `spring.redis.host`，
+  代码读的是 `spring.data.redis.*`；`NEX_REDIS_*` 只注入在 nexus-api-gateway chart）。
+- 取证与启用前最小动作清单见 `docs/audit/2026-09-29-ci-gate-and-mpc-default-findings.md` §8。
+
+
 ## [2.51.0] - 2026-09-28
 
 > Payment Orchestration Wave 1-16（2026-09-22 ~ 2026-09-28）：支付编排能力十连发。
