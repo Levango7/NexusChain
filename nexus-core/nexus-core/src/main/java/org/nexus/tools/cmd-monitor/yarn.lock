@@ -45,9 +45,9 @@ bignumber.js@^9.0.0:
   integrity sha512-Ko0uX15oIUS7wJ3Rb30Fs6SkVbLmPBAKdlm7q9+ak9bbIeFf0MwuBsQV6z7+X768/cHsfg+WlysDWJcmthjsjQ==
 
 brace-expansion@^1.1.7:
-  version "1.1.19"
-  resolved "https://registry.npmjs.org/brace-expansion/-/brace-expansion-1.1.19.tgz#c71503a186dd2b3b74b4b56675a8dfa1754c47ec"
-  integrity sha512-LIhWrVWxvCzgwzHCzK9Q+upu8lOZ7rmYha2CtlT0RDOKgw7Dcgp0YQePPrOVBDxHnQfeIWi16/+fa1R0+cbR7A==
+  version "1.1.20"
+  resolved "https://registry.npmjs.org/brace-expansion/-/brace-expansion-1.1.20.tgz#6e1f1179d50e3e4b3d8a76205dba0efd899210c2"
+  integrity sha512-5/qk29RyvatwgzNMrvGjkIhKYzpJ0OUnPK+9TU+zS/CMJqzmb+UD0irWu42JfpUvO636fxd8IstgiydZRM/76A==
   dependencies:
     balanced-match "^1.0.0"
     concat-map "0.0.1"
