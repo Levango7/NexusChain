@@ -57,10 +57,24 @@ regexes = [
     # 代码标识符误报：generic-api-key 规则将类型名/参数名误判为密钥
     '''X509Certificate''',
     '''Groth16VerifyingKey''',
+    # --- 2026-10-01 CI run #313 全历史扫描剩余 9 条误报（精准值豁免，非整文件放行）---
+    # SensitiveDataFilterTest 的 Stripe 假夹具（实测仓库内仅这两个值，共出现 10 处测试输入；
+    # 真实 Stripe secret 为 sk_live_ + 24 位以上，此处为 16 位人工拼写串）
+    '''sk_live_abcdef1234567890''',
+    '''pk_live_abcdef1234567890''',
+    # DeveloperPortalService 开发者门户文档占位符（实测 11 处全是 YOUR_API_KEY 字面占位，
+    # 供前端/SDK 文档复制使用，非凭据）
+    '''YOUR_API_KEY''',
 ]
 
 # === 2. 测试数据 / 测试代码（非生产文件）===
 paths = [
+    # --- 2026-10-01：调试临时文件（1e14397 已从仓库删除，但其 blob 仍留在历史 commit 中，
+    # 全历史扫描（CI gitleaks-action / 本地 gitleaks detect）必然命中，故按路径豁免）---
+    #   .tmp-gitleaks-probe/Probe.java —— 本次排查 gitleaks 豁免语义时自建的一次性探针
+    #   _hmacprobe.ps1 —— 早期 HMAC 联调脚本，内含本地生成的临时 cpk_ 测试密钥（非生产凭据）
+    '''\.tmp-gitleaks-probe/''',
+    '''_hmacprobe\.ps1''',
     '''src/test/resources/dbdump/''',
     '''src/test/resources/db/''',
     '''newanalogTest''',
@@ -93,7 +107,15 @@ paths = [
 [[rules]]
 id = "nexus-hardcoded-token-literal"
 description = "硬编码静态凭据：token/apikey/secret/password 等变量与字符串字面量直接 equals 比较（应改为配置注入 + 常量时间比较）"
-regex = '''(?i)\b(token|tokenhash|hash|digest|shahash|api_?key|apikey|secret|passwd|password|credential)\s*\.\s*equals\s*\(\s*"[^"\s]{8,}"\s*\)'''
+# 2026-10-01 修复（实测根因）：原正则用捕获组 (token|hash|...) —— gitleaks 取**第一个
+# 捕获组**作为 secret，于是 secret 变成变量名本身（token → entropy 2.321928=log2(5)、
+# hash → 1.500000，与 CI run #313 日志一致，日志里被 REDACTED 的也是变量名而非字面量）。
+# 因此 [rules.allowlist] 中用字面量写的 regexes 拿 secret（=变量名）去匹配，**永远匹配不上**，
+# 豁免形同不存在 —— RpcInterceptor/PoolController 的历史字面量在 CI 与本地全历史扫描中
+# 持续报红，即由此而来。
+# 改为非捕获组 (?:...) 后 secret = 整条匹配文本（含字面量），豁免才真正生效；
+# 且不削弱检测能力：新硬编码探针 ZZZNEWSECRET1234567890 实测仍被拦下。
+regex = '''(?i)\b(?:token|tokenhash|hash|digest|shahash|api_?key|apikey|secret|passwd|password|credential)\s*\.\s*equals\s*\(\s*"[^"\s]{8,}"\s*\)'''
 tags = ["nexus", "credential"]
 
 # 仅豁免上述两个**已移除**的历史字面量（它们在 git 历史中已公开、当前代码已改配置注入）。
@@ -103,4 +125,10 @@ description = "历史已移除的两处静态凭据字面量（防全历史扫�
 regexes = [
     '''NUMtD0dEXungVX7eLuXkEurH5BCJzw''',
     '''a772c260ae19e8972f1da3af77492fdb6b40f34a9b34b4a9021ecfd900f21e53''',
+    # a7a897f 的 Javadoc 里以**缩写形式**引用了旧代码作为 S-1 修复说明：
+    #   {@code if (token.equals("NUMtD0..."))}
+    # 这不是凭据（HEAD 已无任何形式的该令牌），但全历史扫描仍会命中该注释行，
+    # 故用该已轮换令牌的唯一前缀同时覆盖"全称"与"缩写"两种出现形式。
+    # 前缀取自一次性轮换令牌自身，新的真实密钥不会以此开头 → 不构成漏检口子。
+    '''NUMtD0''',
 ]
