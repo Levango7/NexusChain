@@ -204,7 +204,13 @@ subprojects {
         // >= 2.19.0, < 2.21.6（修复版分别为 2.18.10、2.21.6）。取 2.21.6 而非 2.18.10：
         // nexus-gateway 经 Boot BOM 实际解析到 2.21.5，压到 2.18.10 属跨 minor 降级，
         // 可能移除 gateway 已使用的 2.21 API —— 用升级消除 CVE，不拿功能风险换告警清零。
-        jacksonVersion = '2.21.6'
+        // 2026-10-01 续追（Trivy 库 09-30 增补的第二波）：CVE-2026-91776 / CVE-2026-91777
+        // 命中 com.fasterxml.jackson.core:jackson-databind 2.21.6 与 tools.jackson.core:jackson-databind
+        // 3.1.6 —— 即上一轮 68497 的修复版本身；修复线 2.x 为 2.18.11/2.21.7/2.22.3、
+        // Jackson 3 为 3.1.7/3.2.3。故本变量续升到 2.21.7（同 minor 补丁线，不跨线）。
+        // 取证：master push run 36773548701 镜像扫描 nexus-core:scan Java(jar) = Total: 4 HIGH，
+        // 全部为该两条 CVE（OS 层 debian 13.7 为 Total: 0）。
+        jacksonVersion = '2.21.7'
         guavaVersion = '33.4.8-jre'
         // Tomcat embed-core 11.0.24 有 3 个新 CVE（CVE-2026-65182 CRITICAL
         // 安全约束绕过 / CVE-2026-65905 HIGH DIGEST 重放 / CVE-2026-68525 HIGH
@@ -235,8 +241,10 @@ subprojects {
     // Jackson 3 为 3.1.6/3.2.2）。2026-09-29 实测：只提 2.x 那一拨，六个镜像仍红——
     // 阻断 finding 变成 tools.jackson.core:jackson-databind 3.1.5（run 36597047157 日志）。
     // 两条都必须提，取各自同 minor 的补丁版以免跨线行为变化。
-    ext['jackson-2-bom.version'] = '2.21.6'
-    ext['jackson-bom.version'] = '3.1.6'
+    // 2026-10-01 续追 CVE-2026-91776 / CVE-2026-91777（第二波，详见上方同批注释）：
+    // 两条坐标一起抬（只抬一条会留下另一条继续红），2.21.6→2.21.7、3.1.6→3.1.7。
+    ext['jackson-2-bom.version'] = '2.21.7'
+    ext['jackson-bom.version'] = '3.1.7'
 
     // B1 baseline (2026-08-03): NO global forced test deps.
     // Historically this block injected `junit:junit:4.13.2` and

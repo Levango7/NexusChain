@@ -161,3 +161,32 @@ tools.jackson.core:jackson-databind | CVE-2026-68497 | HIGH | fixed | 3.1.5 | 3.
 **边界**：以上均为读代码/模板得到的确定事实；「prod 是否真连得上该地址」**未经运行验证**，
 故本书记前置条件，不下「可用/不可用」结论。
 
+## 9. 追加：09-30 第二波 CVE（PR #15 续追，2026-10-01）
+
+**Jackson 第二波（CVE-2026-91776 / CVE-2026-91777）**：Trivy 库在 09-30 增补的这两条，
+命中的正是上一轮 `CVE-2026-68497` 的**修复版本身**（`com.fasterxml...:jackson-databind 2.21.6`
+与 `tools.jackson...:jackson-databind 3.1.6`），修复线：2.x 为 `2.18.11 / 2.21.7 / 2.22.3`、
+Jackson 3 为 `3.1.7 / 3.2.3`。取证：master push run `36773548701` 的
+`Trivy Docker Image Scan (nexus-core)` 日志 `nexus-core:scan` 段 —— OS 层 `debian 13.7` 为
+`Total: 0`，`Java (jar)` 段为 `Total: 4 (HIGH: 4)`，全部为该两条 CVE。
+处置（同 68497 先例，升级消除而非 ignore）：根 `build.gradle` `jacksonVersion 2.21.6→2.21.7`、
+`ext['jackson-2-bom.version'] 2.21.7`、`ext['jackson-bom.version'] 3.1.7`；
+`nexus-api-gateway/build.gradle` 的**独立 ext 副本**同步抬（composite build 不随根自动跟随，
+这是该副本第二次需要手工同步 —— 结构性隐患，见下）。
+
+**结构性隐患（建议后续处理）**：同一组 BOM 属性在**两处**声明（根 + `nexus-api-gateway` 的
+composite build）。任一处漏改，对应镜像会"静默滞后"到下一轮镜像扫描才暴露。可考虑让
+`nexus-api-gateway` 从根读取（如 `gradle.properties` 或 `-P` 传入），或加一条 CI 断言
+两处取值一致（正主工作流：`ci.yml` 的 code-hygiene job）。
+
+**libssl3 CVE-2026-84782（无修复版本，已按惯例豁免）**：`openssl` / `libssl3`
+`3.0.22-1~deb12u1`（`debian:bookworm-slim` → mpc-engine / zk-groth16-service 两个 Rust 镜像）
+状态为 **affected、无 Fixed Version**。两镜像扫描均为 `Total: 2 (HIGH: 2)`，两条即
+libssl3 与其符号链接项 openssl 的同一条 CVE；两个服务不提供 DTLS 监听端点，无法触发
+DTLS 握手重传路径，故按 `.trivyignore` 开头原则（只豁免上游无修复版本项）加豁免，
+待 Debian 出修复版随基础镜像升级移除。Java 模块镜像（distroless java17-debian13）OS 层为 0，
+不涉及。
+
+**本轮结束后 master 侧仍红的项**：`OWASP Dependency-Check`（缺 `NVD_API_KEY` secret，
+仓库设置层面动作，非代码可改）——这是唯一非代码可闭合的红。
+

@@ -32,8 +32,12 @@ plugins {
 // build.gradle 的 ext，jackson 全靠 Boot 4.0.8 BOM 解析为 2.21.5 / tools.jackson 3.1.5
 // （两条坐标都在受影响区间，实测只提 2.x 仍红）。覆盖机制同 nexus-gateway/build.gradle:14
 // 的 tomcat.version 先例。
-ext['jackson-2-bom.version'] = '2.21.6'
-ext['jackson-bom.version'] = '3.1.6'
+// 2026-10-01 续追（第二波）：CVE-2026-91776 / CVE-2026-91777 命中上一轮的修复版
+// 2.21.6 / 3.1.6 本身（master push run 36773548701 镜像扫描），本模块同样要抬到
+// 2.21.7 / 3.1.7 —— composite build 的 ext 副本不会随根 build.gradle 自动跟随，
+// 这是本模块第二次需要手工同步（根改而此处不改时，该镜像会静默滞后）。
+ext['jackson-2-bom.version'] = '2.21.7'
+ext['jackson-bom.version'] = '3.1.7'
 
 group = 'org.nexus'
 version = '2.30.0'
