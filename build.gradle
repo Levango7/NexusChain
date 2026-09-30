@@ -200,13 +200,25 @@ subprojects {
         nettyVersion = '4.1.115.Final'
         grpcVersion = '1.75.0'
         protobufVersion = '3.25.5'
-        jacksonVersion = '2.18.8'
+        // CVE-2026-68497 在 Jackson 2 线上有两段受影响范围：>= 2.14.0, < 2.18.10 与
+        // >= 2.19.0, < 2.21.6（修复版分别为 2.18.10、2.21.6）。取 2.21.6 而非 2.18.10：
+        // nexus-gateway 经 Boot BOM 实际解析到 2.21.5，压到 2.18.10 属跨 minor 降级，
+        // 可能移除 gateway 已使用的 2.21 API —— 用升级消除 CVE，不拿功能风险换告警清零。
+        jacksonVersion = '2.21.6'
         guavaVersion = '33.4.8-jre'
         // Tomcat embed-core 11.0.24 有 3 个新 CVE（CVE-2026-65182 CRITICAL
         // 安全约束绕过 / CVE-2026-65905 HIGH DIGEST 重放 / CVE-2026-68525 HIGH
         // FORM 认证绕过），修复版 11.0.25。Spring Boot 4.0.8 BOM 管理解析为
         // 11.0.24——此处 override 到 11.0.25（可修复一律升级，不用 ignore）。
         tomcatVersion = '11.0.25'
+        // CVE-2026-68497（HIGH）：受影响坐标是 Jackson 3 的
+        // tools.jackson.core:jackson-databind，镜像内实装 3.1.5，修复版 3.1.6/3.2.2
+        // （扫描表直读；告警里的 com.fasterxml 只是 vendor 别名）。该版本由
+        // spring-boot-jackson:4.0.8 → tools.jackson:jackson-bom:3.1.5 管理，
+        // 因此走 io.spring.dependency-management 的 BOM 属性覆盖（同 tomcat 先例：
+        // 根 resolutionStrategy force 对 Boot BOM 无效，模块注释已实测）。
+        // 与 jacksonVersion（Jackson 2 线，2.18.10）是两套坐标，互不替代。
+        set('jackson-bom.version', '3.1.6')
 
     }
 

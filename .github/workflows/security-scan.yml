@@ -17,6 +17,11 @@ name: NexusChain Security Scan
 on:
   push:
     branches: [master]
+  # 门禁前移（2026-09-29）：原先只有 push master + 周 cron —— 密钥泄露/依赖漏洞要等合进
+  # master 才被发现，对合并零约束力。现 PR 也跑轻量子集并阻断；重子集（镜像扫描矩阵、
+  # ZAP DAST、OWASP DC）见各自 if，仍只在 push/cron 执行以控制 PR 时长。
+  pull_request:
+    branches: [master]
   schedule:
     # 每周一 03:00 UTC（北京时间周一 11:00）
     - cron: '0 3 * * 1'
@@ -112,6 +117,7 @@ jobs:
   # 2. Trivy Docker 镜像扫描
   # ============================================================
   trivy-docker-scan:
+    if: github.event_name != 'pull_request'  # PR 不跑（需构建镜像/起栈，成本高）
     name: Trivy Docker Image Scan (${{ matrix.module }})
     runs-on: ubuntu-latest
     permissions:
@@ -195,6 +201,7 @@ jobs:
   # 见 docs/dependency-check-update-policy.md「NVD API Key 配置」一节。
   # ============================================================
   owasp-dependency-check:
+    if: github.event_name != 'pull_request'  # PR 不跑（需构建镜像/起栈，成本高）
     name: OWASP Dependency-Check
     runs-on: ubuntu-latest
     continue-on-error: true
@@ -415,6 +422,7 @@ jobs:
   # continue-on-error: DAST 不阻断流水线（gateway 依赖可能无法在 CI 完整启动）
   # ============================================================
   dast-zap-baseline:
+    if: github.event_name != 'pull_request'  # PR 不跑（需构建镜像/起栈，成本高）
     name: DAST - OWASP ZAP Baseline (gateway)
     runs-on: ubuntu-latest
     permissions:
