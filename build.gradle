@@ -13,6 +13,17 @@
 // 排除：测试代码（spotbugsTest.enabled=false）、protobuf 生成代码
 plugins {
     id 'com.github.spotbugs' version '5.1.5' apply false
+    // 2026-10-01（PR #17）：SCA = OWASP Dependency-Check **官方 Gradle 插件**。
+    // 版本钉死 13.0.0（连带 org.owasp:dependency-check-core:13.0.0，插件 POM 实测）；
+    // 12.1.0+ 是 NVD API 变更后的强制下限。该插件**只发布在 Gradle Plugin Portal**
+    // （自 11.0.0 起不再发 Maven Central）——settings.gradle 的 pluginManagement
+    // 已首位声明 gradlePluginPortal()，故此处按 id 解析即可。
+    // **刻意 apply false**：仅当显式传 -PowaspScan 时才 apply（理由见下方 SCA 段落）。
+    // 若不这样，DC 插件会把 dependencyCheck* 接到 `check` 任务上（官方文档明示
+    // check.dependsOn dependencyCheckAnalyze/Aggregate），而 ci.yml 的 Build & Test
+    // 跑 `./gradlew check` 且**没有** NVD_API_KEY → 2400 个测试的 job 会额外触发
+    // 20 分钟 NVD 全量下载并失败。
+    id 'org.owasp.dependencycheck' version '13.0.0' apply false
 }
 
 allprojects {
@@ -267,6 +278,78 @@ subprojects {
         options.author = true
         options.header = project.name
         options.addStringOption('-quiet')
+    }
+}
+
+// === SCA: OWASP Dependency-Check（真实依赖图，2026-10-01 / PR #17） ===
+// -----------------------------------------------------------------------------
+// 为什么必须换成官方 Gradle 插件（而不是继续 `docker run … --scan .`）：
+//   旧做法只做**文件级**识别。本仓库提交物里既没有 gradle.lockfile 也没有被跟踪的
+//   pom.xml，而 Trivy 不解析 build.gradle → 实测 dependency-check-report.json 里
+//   dependencies=54 条全是 .js/.json/gradle-wrapper.jar，**CPE 命中 0/54**，
+//   jackson 这类 JVM 依赖从未被任何门禁真正分析过（「空心绿」根因）。
+//   取证：docs/audit/2026-09-29-ci-gate-and-mpc-default-findings.md §10。
+//   官方插件在 configuration 阶段读取**已解析的依赖图**（GAV 坐标），交给同一个
+//   DC 引擎做 CPE/NVD 比对 —— 这才是"真覆盖"。
+//
+// 为什么用条件 apply：
+//   官方文档明示插件会把 check 接到 dependencyCheckAnalyze/Aggregate 上
+//   （"check.dependsOn dependencyCheckAnalyze"）。本仓库 ci.yml 的 Build & Test
+//   执行 `./gradlew check`（2400+ 测试）且**没有** NVD_API_KEY —— 无条件 apply 会让
+//   那个 job 额外触发 20 分钟 NVD 全量下载并以"缺 key"失败。故这里把插件应用收窄到
+//   显式开关：`./gradlew dependencyCheckAggregate -PowaspScan`（CI 的 OWASP job 与本地排查）。
+//   其余一切 Gradle 调用（check / test / build / spotbugsAll…）**完全不受影响**。
+//
+// 版本与来源：13.0.0（连带 dependency-check-core:13.0.0，/POM 实测）钉死在 plugins{} 块；
+//   该插件只发布在 Gradle Plugin Portal（settings.gradle pluginManagement 已声明）。
+// -----------------------------------------------------------------------------
+if (project.hasProperty('owaspScan')) {
+    apply plugin: 'org.owasp.dependencycheck'
+
+    dependencyCheck {
+        // 只扫"会随产物发布"的运行时依赖集（implementation/runtimeOnly/api 的传递闭包）。
+        // compileOnly/annotationProcessor 属构建期工具，不随产物发布，纳入只会制造噪声。
+        // 用**显式白名单**而非默认全扫，是为了让"到底扫了哪些配置"可审计。
+        scanConfigurations = ['runtimeClasspath']
+
+        // 聚合扫描：一次覆盖所有子模块，产出单份报告（便于 CI 解析与归档）
+        formats = ['HTML', 'JSON']
+        outputDirectory = layout.buildDirectory.dir('reports/dependency-check')
+
+        // 阻断阈值与旧 docker CLI 的 --failOnCVSS=9 对齐。
+        // 注意插件默认值是 **11**（CVSS 上限 10）＝永不失败 —— 不改就是"接了门禁却不拦"。
+        failBuildOnCVSS = 9.0f
+
+        // 误报出口：确认为误报时写 suppressions 并附到期时间（用法见
+        // docs/dependency-check-update-policy.md；文件不得内含真实密钥材料）
+        suppressionFiles = [project.file('config/dependency-check-suppressions.xml').absolutePath]
+
+        analyzers {
+            // 只保留 NVD（+ DC 官方 hosted suppressions）这一条数据源。
+            // NodeAudit/RetireJS 对本仓库无消费点（无 JS 运行时依赖）；
+            // OSS Index 匿名访问会限流、KEV 需额外拉 CISA 源 —— 三者都是"多一个
+            // 联网失败面"，会让 failOnError=true（默认）的门禁随机变红。
+            nodeAuditEnabled = false
+            ossIndexEnabled = false
+            retirejs { enabled = false }
+            kev { enabled = false }
+        }
+
+        nvd {
+            // API key **只从环境变量**读取（CI 由 secrets 注入 env）。
+            // 绝不用 -PnvdApiKey 传参：那会进进程参数与 CI 日志。
+            def key = System.getenv('NVD_API_KEY')
+            if (key) { apiKey = key }
+            // 带 key 时的官方建议请求间隔，避免触发 NVD 限流
+            delay = 8000
+        }
+
+        data {
+            // 显式数据目录（默认在 Gradle user home 下，这里写出来便于审计与后续缓存）：
+            // 首次全量拉取 NVD 约 20 分钟，7 天内复用只需数秒。
+            // 注：CI 目前**未**缓存该目录（体积大），实测占用后可再评估。
+            directory = new File(gradle.gradleUserHomeDir, 'dependency-check-data').absolutePath
+        }
     }
 }
 
