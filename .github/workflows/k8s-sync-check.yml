@@ -35,9 +35,9 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Setup Helm
-        # azure/setup-helm 使用主版本标签 v4
+        # azure/setup-helm 使用主版本标签 v5
         # TODO: 如需供应链强一致，可钉到具体 commit sha
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@v5
         with:
           version: 'v3.14.0'
 
