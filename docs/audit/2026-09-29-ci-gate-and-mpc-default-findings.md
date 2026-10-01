@@ -523,8 +523,58 @@ CVE 描述给出的修复线都在 **4.1.133/135/137.Final**（或 4.2.13/15/17.
 **同一次 dispatch 里出现与本次改动无关的红（必须区分，避免误判）**
 run `36842401445` 中 Trivy 镜像扫描 `mpc-engine` / `zk-groth16-service` 同样为红，但这两个模块是
 **纯 Rust（有 `Cargo.toml`、无 `build.gradle`）**，与本次 JVM 依赖抬版**无因果关系**；
-master 基线 run `36799326089`（01:04Z）该两项为 success → 属**新出现的独立问题**，
+（另：`36799326089` 是**另一个 workflow**（NexusChain CI/CD Pipeline）的 run，勿混引。
+master 安全扫描基线 run `36799326118`（01:04Z）里这两项均为 success，
+且该 run 的红是 `Docker Build & Push (nexus-oracle)` —— 与本主题无关。）
 本 PR 不含 Rust 侧改动，另行排查（不在 SCA 整改范围内）。
+
+### 13.10 改前红 / 改后绿（同一门禁、同一批依赖）+ 一次闪断的判定（2026-10-01）
+
+**对照证据（两个 run 的依赖树只差 PR #18 本身）**
+
+| 维度 | 改前：master `dee3f5d`（不含 #18） | 改后：`fix/sca-critical-deps` `aae5d3a`（含 #18） |
+|------|-----------------------------------|--------------------------------------------------|
+| run / job | `36856139060` / `110348949388` | `36842401445` / `110304350054` |
+| 「运行 OWASP DC」步骤 | **failure**（`failBuildOnCVSS=9.0f` 被 13 个 CRITICAL 触发） | **success** |
+| 「覆盖度自检」步骤 | success（红**不是**能力回退造成） | success |
+| 墙钟 | 46m05s（11:33:46Z→12:19:51Z） | 3h03m（09:23:25Z→12:26:53Z，与左列 run 并发抢 NVD 配额） |
+
+**改后报告实测（下载 artifact `owasp-dependency-check-report` 独立复算）**
+
+```
+dependencies=250  含漏洞条目=53  去重 CVE=3
+按严重度: {'MEDIUM': 53}          ← CRITICAL 0 / HIGH 0
+覆盖度: 240/250 = 96%（与改前持平 —— 未用「扫不到」换绿）
+dataSource NVD API Last Checked = 2026-10-01T12:26:34Z
+四个目标制品：netty-all-4.1.115 / kotlin-stdlib-2.2.21 / tomcat-embed-core-11.0.24 → 0 次 ✓
+              quartz-2.3.2 → 条目在、CVE 数 0（抑制生效）✓
+```
+
+⇒ §13.5 的 13 个 CRITICAL **连同 45 条 HIGH 一并清零**；剩余 **3 个 MEDIUM CVE**
+（`CVE-2023-0833` = okhttp `logging-interceptor 4.9.0`、`CVE-2025-48924` = `commons-lang3 3.12.0`、
+`CVE-2026-89044` = netty `4.2.x` 系列），非阻断，另按模块分批处置。
+
+**一次闪断的判定（记录在案，避免下次误判为「抬版引入」）**
+
+强推后首个 run `36859632865` 的 `Build & Test` 在 `:nexus-signing-service:test` 失败：
+`GrpcMpcTransportStubTest.testRealGrpcBroadcast()` → `java.io.IOException`，
+`Caused by: io.grpc.netty.shaded.io.netty.channel.unix.Errors$NativeIoException`。
+判为**既有闪断**的两条硬依据：① 异常类型位于 **gRPC 自带 shaded netty**（`io.grpc.netty.shaded.*`）
+命名空间，与本次抬版的坐标 `io.netty:netty-all` **不是同一制品**（`nexus-signing-service`
+依赖的是 `io.grpc:grpc-netty-shaded`）；② 同一棵树在 rebase 前的 run 中全绿，
+**原样重跑即通过**（同 run 内 `--failed` 重跑结果 success）。⇒ 属真实 unix socket 测试的
+稳定性问题，应单独修（不在 SCA 整改范围）。
+
+### 13.11 「永远上报」试运行（2026-10-01 ~ 2026-10-15）
+
+本 job 从「PR 一律跳过」改为「同仓库 PR 真跑」（fork PR 仍跳过、如实显示 `skipped`），
+并新增按 ISO 周轮换的 NVD 漏洞库缓存。动机、触发矩阵、成本实测、评估项、两条出口与
+逐字回退步骤见 `docs/dependency-check-update-policy.md` 的「永远上报试运行」小节。
+
+一句话理由：**「能不能设为 required check」缺的是 PR 上的成本/稳定性数据，不是判断力**；
+而 §13.6 的「不能设为 required」担心，现已被实测部分推翻 —— 本 job 在 PR 路径下会以
+`skipped` **上报**（`OWASP Dependency-Check = COMPLETED/SKIPPED`，见 PR #18 的 checks），
+并非「永不上报」；「skipped 在 branch protection 下是否阻合并」留作评估项 5 实测。
 
 
 
