@@ -14,6 +14,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Random;
+import java.util.function.IntSupplier;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -184,33 +186,78 @@ class SandboxSimulationServiceTest {
         }
     }
 
-    @Test
-    @DisplayName("generateTestData - 生成的订单状态分布合理")
-    void generateTestData_statusDistributionIsReasonable() {
+    /**
+     * 入库桩：save() 回填 id 后返回同一对象（与既有用例保持一致）。
+     */
+    private void stubSaveReturnsInput() {
         when(paymentOrderRepository.save(any(PaymentOrder.class))).thenAnswer(inv -> {
             PaymentOrder order = inv.getArgument(0);
             order.setId(System.nanoTime());
             return order;
         });
+    }
 
-        // Generate a large enough sample for statistical validity
-        List<PaymentOrder> orders = sandboxSimulationService.generateTestData(MERCHANT_ID, 100);
+    /**
+     * 边界探测 roll 源：每 8 次依次给出 0/69/70/84/85/94/95/99，
+     * 恰好覆盖 70/15/10/5 四个分段的两端（段内最后一位与下一段第一位）。
+     */
+    private static IntSupplier boundaryRolls() {
+        int[] rolls = {0, 69, 70, 84, 85, 94, 95, 99};
+        return new IntSupplier() {
+            private int index = 0;
+
+            @Override
+            public int getAsInt() {
+                return rolls[index++ % rolls.length];
+            }
+        };
+    }
+
+    @Test
+    @DisplayName("generateTestData - 状态分段边界映射确定（roll=0/69/70/84/85/94/95/99）")
+    void generateTestData_statusBucketsMatchDocumentedBoundaries() {
+        stubSaveReturnsInput();
+        SandboxSimulationService deterministicService = new SandboxSimulationService(
+                paymentOrderRepository, merchantService, boundaryRolls());
+
+        // 80 = 10 轮边界序列 → 每段各出现 20 次（2 个 roll × 10 轮）
+        List<PaymentOrder> orders = deterministicService.generateTestData(MERCHANT_ID, 80);
+
+        assertEquals(80, orders.size());
+        assertEquals(20, orders.stream()
+                .filter(o -> o.getStatus() == PaymentOrder.OrderStatus.PAID).count());
+        assertEquals(20, orders.stream()
+                .filter(o -> o.getStatus() == PaymentOrder.OrderStatus.PENDING).count());
+        assertEquals(20, orders.stream()
+                .filter(o -> o.getStatus() == PaymentOrder.OrderStatus.FAILED).count());
+        assertEquals(20, orders.stream()
+                .filter(o -> o.getStatus() == PaymentOrder.OrderStatus.REFUNDED).count());
+    }
+
+    @Test
+    @DisplayName("generateTestData - 大样本分布落在 70/15/10/5 容忍区间（固定种子，确定性）")
+    void generateTestData_statusDistributionIsReasonable() {
+        stubSaveReturnsInput();
+        // 固定种子：断言结果确定，消除原实现 ~0.59%（0.95^100）的随机翻车概率
+        Random seededRolls = new Random(20261001L);
+        SandboxSimulationService deterministicService = new SandboxSimulationService(
+                paymentOrderRepository, merchantService, () -> seededRolls.nextInt(100));
+
+        int sampleSize = 10_000;
+        List<PaymentOrder> orders = deterministicService.generateTestData(MERCHANT_ID, sampleSize);
 
         long paidCount = orders.stream().filter(o -> o.getStatus() == PaymentOrder.OrderStatus.PAID).count();
         long pendingCount = orders.stream().filter(o -> o.getStatus() == PaymentOrder.OrderStatus.PENDING).count();
         long failedCount = orders.stream().filter(o -> o.getStatus() == PaymentOrder.OrderStatus.FAILED).count();
         long refundedCount = orders.stream().filter(o -> o.getStatus() == PaymentOrder.OrderStatus.REFUNDED).count();
 
-        // PAID should be the majority (~70%), so at least 50%
-        assertTrue(paidCount >= 50, "PAID should be majority, got: " + paidCount);
-        // PENDING should be ~15%, at least 5%
-        assertTrue(pendingCount >= 5, "PENDING should be non-trivial, got: " + pendingCount);
-        // FAILED should be ~10%, at least 2%
-        assertTrue(failedCount >= 2, "FAILED should be present, got: " + failedCount);
-        // REFUNDED should be ~5%, at least 1
-        assertTrue(refundedCount >= 1, "REFUNDED should be present, got: " + refundedCount);
-        // Total should sum to 100
-        assertEquals(100, paidCount + pendingCount + failedCount + refundedCount);
+        // 四类状态之和必须覆盖整个样本
+        assertEquals(sampleSize, paidCount + pendingCount + failedCount + refundedCount);
+        // 容忍区间：PAID ~70%、PENDING ~15%、FAILED ~10%、REFUNDED ~5%
+        assertTrue(paidCount >= 6500 && paidCount <= 7500, "PAID should be ~70%, got: " + paidCount);
+        assertTrue(pendingCount >= 1000 && pendingCount <= 2000, "PENDING should be ~15%, got: " + pendingCount);
+        assertTrue(failedCount >= 600 && failedCount <= 1400, "FAILED should be ~10%, got: " + failedCount);
+        assertTrue(refundedCount >= 300 && refundedCount <= 800, "REFUNDED should be ~5%, got: " + refundedCount);
     }
 
     // ==================== resetSandboxData ====================

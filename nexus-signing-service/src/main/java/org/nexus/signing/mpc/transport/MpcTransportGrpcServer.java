@@ -125,7 +125,7 @@ public class MpcTransportGrpcServer {
      * 构造 gRPC server（含 mTLS 配置，MPC-P0-02 修复）。
      *
      * @param transportStub     本地 transport stub，收到的消息将投递到它的邮箱
-     * @param port              绑定端口（&gt; 0）
+     * @param port              绑定端口（1..65535；传 0 表示由内核分配空闲临时端口）
      * @param usePlaintext      是否使用明文传输（开发环境）
      * @param tlsTrustCertPath  mTLS 信任证书路径（PEM，验证客户端证书），可为 null
      * @param tlsServerCertPath mTLS 服务端证书路径（PEM），可为 null
@@ -150,7 +150,7 @@ public class MpcTransportGrpcServer {
      * {@code usePlaintext=false} 时记录 WARN 日志。</p>
      *
      * @param transportStub     本地 transport stub，收到的消息将投递到它的邮箱
-     * @param port              绑定端口（&gt; 0）
+     * @param port              绑定端口（1..65535；传 0 表示由内核分配空闲临时端口）
      * @param usePlaintext      是否使用明文传输（开发环境）
      * @param tlsTrustCertPath  mTLS 信任证书路径（PEM，验证客户端证书），可为 null
      * @param tlsServerCertPath mTLS 服务端证书路径（PEM），可为 null
@@ -165,7 +165,11 @@ public class MpcTransportGrpcServer {
                                   String tlsServerKeyPath,
                                   String authToken) {
         this.transportStub = Objects.requireNonNull(transportStub, "transportStub");
-        if (port <= 0 || port > 65535) {
+        // port == 0 表示"由内核分配空闲临时端口"（Netty/gRPC 的 forPort(0) 语义，
+        // 与 Spring Boot server.port=0 同一惯例），供测试并发运行避免固定端口
+        // 冲突（绑定冲突 / TIME_WAIT 导致的 NativeIoException）；
+        // 生产配置始终注入具体端口，故仅拒绝负数与越界值。
+        if (port < 0 || port > 65535) {
             throw new IllegalArgumentException("invalid port: " + port);
         }
         this.port = port;
@@ -187,7 +191,7 @@ public class MpcTransportGrpcServer {
      * <p>保留此构造函数以兼容现有测试代码。新代码应使用含 TLS 参数的构造函数。</p>
      *
      * @param transportStub 本地 transport stub，收到的消息将投递到它的邮箱
-     * @param port          绑定端口（&gt; 0）
+     * @param port          绑定端口（1..65535；传 0 表示由内核分配空闲临时端口）
      * @param usePlaintext  是否使用明文传输（开发环境）
      */
     public MpcTransportGrpcServer(GrpcMpcTransportStub transportStub,
@@ -253,7 +257,7 @@ public class MpcTransportGrpcServer {
         server = builder.build().start();
 
         log.info("MpcTransportGrpcServer started on port {} (plaintext={}, tls={}, authToken={})",
-                port, usePlaintext, tlsEnabled,
+                getPort(), usePlaintext, tlsEnabled,
                 authToken != null && !authToken.isEmpty() ? "enabled" : "disabled");
     }
 
@@ -266,12 +270,14 @@ public class MpcTransportGrpcServer {
         if (server == null || server.isShutdown()) {
             return;
         }
+        // 必须在 shutdown 之前读取端口：gRPC 终止后 Server.getPort() 会抛 ISE
+        int stoppedPort = getPort();
         try {
             server.shutdown().awaitTermination(5, TimeUnit.SECONDS);
-            log.info("MpcTransportGrpcServer stopped on port {}", port);
+            log.info("MpcTransportGrpcServer stopped on port {}", stoppedPort);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            log.warn("MpcTransportGrpcServer stop interrupted on port {}", port);
+            log.warn("MpcTransportGrpcServer stop interrupted on port {}", stoppedPort);
         }
     }
 
@@ -283,10 +289,21 @@ public class MpcTransportGrpcServer {
     }
 
     /**
-     * @return 绑定端口
+     * @return 绑定端口；server 启动后返回内核实际分配的监听端口
+     *         （构造入参 {@code port=0} 时由内核分配空闲端口，供测试内嵌 server
+     *         使用以避免固定端口冲突导致的 flaky）；
+     *         server 尚未启动或已终止时回退为构造入参
      */
     public int getPort() {
-        return port;
+        if (server == null) {
+            return port;
+        }
+        try {
+            return server.getPort();
+        } catch (IllegalStateException e) {
+            // gRPC 在 server 未启动/已终止时抛 ISE("Server not started")，回退构造入参
+            return port;
+        }
     }
 
     // =========================================================================

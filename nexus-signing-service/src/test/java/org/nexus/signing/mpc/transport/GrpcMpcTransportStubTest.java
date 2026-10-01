@@ -28,8 +28,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 public class GrpcMpcTransportStubTest {
 
-    /** 测试用 gRPC server 端口（避免与生产端口冲突）。 */
-    private static final int TEST_SERVER_PORT = 51090;
+    /**
+     * 测试用 gRPC server 端口：0 = 由内核分配空闲端口。
+     *
+     * <p>此前固定占用 51090–51093，真实 gRPC 用例偶发
+     * {@code NativeIoException}（bind 失败：端口被占用/未及时释放），
+     * 表现为 {@code testRealGrpcBroadcast} 等用例 flaky。改为临时端口后
+     * 通过 {@link MpcTransportGrpcServer#getPort()} 读回实际监听端口。</p>
+     */
+    private static final int TEST_SERVER_PORT = 0;
 
     private GrpcMpcTransportStub stub = new GrpcMpcTransportStub();
     private MpcTransportGrpcServer server;
@@ -114,10 +121,11 @@ public class GrpcMpcTransportStubTest {
         realGrpcStub = new GrpcMpcTransportStub(true, 5000, true);
         server = new MpcTransportGrpcServer(realGrpcStub, TEST_SERVER_PORT, true);
         server.start();
+        int port = server.getPort(); // 内核实际分配的监听端口
 
         // 创建指向本地 server 的 participant
         List<MpcParticipant> participants = List.of(
-                new MpcParticipant("local", "localhost:" + TEST_SERVER_PORT, "pk-local"));
+                new MpcParticipant("local", "localhost:" + port, "pk-local"));
 
         realGrpcStub.connect(participants);
         assertTrue(realGrpcStub.isConnected(), "should be connected");
@@ -134,13 +142,14 @@ public class GrpcMpcTransportStubTest {
     public void testRealGrpcSendAndReceive() throws Exception {
         // 启动内嵌 gRPC server
         realGrpcStub = new GrpcMpcTransportStub(true, 5000, true);
-        server = new MpcTransportGrpcServer(realGrpcStub, TEST_SERVER_PORT + 1, true);
+        server = new MpcTransportGrpcServer(realGrpcStub, TEST_SERVER_PORT, true);
         server.start();
+        int port = server.getPort(); // 内核实际分配的监听端口
 
         // 创建指向本地 server 的 participant（模拟对端）
         List<MpcParticipant> participants = List.of(
-                new MpcParticipant("self", "localhost:" + (TEST_SERVER_PORT + 1), "pk-self"),
-                new MpcParticipant("peer", "localhost:" + (TEST_SERVER_PORT + 1), "pk-peer"));
+                new MpcParticipant("self", "localhost:" + port, "pk-self"),
+                new MpcParticipant("peer", "localhost:" + port, "pk-peer"));
 
         realGrpcStub.connect(participants);
 
@@ -163,13 +172,14 @@ public class GrpcMpcTransportStubTest {
     @Test
     public void testRealGrpcBroadcast() throws Exception {
         realGrpcStub = new GrpcMpcTransportStub(true, 5000, true);
-        server = new MpcTransportGrpcServer(realGrpcStub, TEST_SERVER_PORT + 2, true);
+        server = new MpcTransportGrpcServer(realGrpcStub, TEST_SERVER_PORT, true);
         server.start();
+        int port = server.getPort(); // 内核实际分配的监听端口
 
         List<MpcParticipant> participants = List.of(
-                new MpcParticipant("p1", "localhost:" + (TEST_SERVER_PORT + 2), "pk1"),
-                new MpcParticipant("p2", "localhost:" + (TEST_SERVER_PORT + 2), "pk2"),
-                new MpcParticipant("p3", "localhost:" + (TEST_SERVER_PORT + 2), "pk3"));
+                new MpcParticipant("p1", "localhost:" + port, "pk1"),
+                new MpcParticipant("p2", "localhost:" + port, "pk2"),
+                new MpcParticipant("p3", "localhost:" + port, "pk3"));
 
         realGrpcStub.connect(participants);
 
@@ -190,11 +200,12 @@ public class GrpcMpcTransportStubTest {
     @Test
     public void testRealGrpcClose() throws Exception {
         realGrpcStub = new GrpcMpcTransportStub(true, 5000, true);
-        server = new MpcTransportGrpcServer(realGrpcStub, TEST_SERVER_PORT + 3, true);
+        server = new MpcTransportGrpcServer(realGrpcStub, TEST_SERVER_PORT, true);
         server.start();
+        int port = server.getPort(); // 内核实际分配的监听端口
 
         List<MpcParticipant> participants = List.of(
-                new MpcParticipant("p1", "localhost:" + (TEST_SERVER_PORT + 3), "pk1"));
+                new MpcParticipant("p1", "localhost:" + port, "pk1"));
         realGrpcStub.connect(participants);
         assertTrue(realGrpcStub.isConnected());
         assertEquals(1, realGrpcStub.getChannels().size());
