@@ -200,13 +200,18 @@ jobs:
   # ⚠️ 覆盖度边界（2026-10-01 实测，**勿高估本 job**）：同一份报告
   # dependencies = 54 条，构成为 37 个 .js + 15 个 .json + 2 个
   # gradle-wrapper.jar；**CPE（packages）命中 0 / 54、vulnerabilities 0**。
-  # 即本 job 当前只做「文件级识别」，**不解析 Gradle 依赖图**，对 jackson
+  # 即旧的 docker 做法只做「文件级识别」，**不解析 Gradle 依赖图**，对 jackson
   # 这类 JVM 依赖没有检测力——它的"绿"≠"JVM 依赖无漏洞"。
-  # JVM 依赖的真实覆盖由 Trivy 镜像扫描的 `Java (jar)` 层承担
-  # （2026-10-01 run 36780102329 实测：nexus-core 镜像由 4 条 HIGH 转 success）。
-  # 故下方增补「扫描覆盖度自检」步骤，把"空心绿"在 CI 界面显式打印，
-  # 避免后人把绿读成"扫过了没问题"；升级为真覆盖的路径见
-  # docs/dependency-check-update-policy.md。
+  #
+  # === 2026-10-01（PR #17）：已升级为**真覆盖** ===
+  # 本 job 改用 **官方 org.owasp.dependencycheck Gradle 插件（13.0.0）**运行
+  # `./gradlew dependencyCheckAggregate -PowaspScan`：插件在 configuration 阶段读取
+  # **已解析的依赖图**（GAV 坐标：runtimeClasspath 的传递闭包），交给同一个 DC 引擎
+  # 做 CPE/NVD 比对 —— 这才是"扫到了 JVM 依赖"，而不是"扫到了仓库里的文件"。
+  # 由此一并消解旧做法的一个供应链缺口：不再有浮动 `owasp/dependency-check:latest`
+  # 镜像标签，引擎版本由**钉死的插件版本**（→ dependency-check-core:13.0.0）决定。
+  # 覆盖度自检随之下调为"与真覆盖匹配"的语义：条目数/已识别数仍打印，
+  # 但**覆盖度为 0 直接判失败**（不再是 warning）——能力回退不允许以绿色示人。
   #
   # 2026-09-21 保留：本 job 缺 key 时**约 5 秒内快速失败并给出明确指引**
   # （见下方 `if [[ -z "$NVD_API_KEY" ]]` 守卫），是刻意设计而非缺陷 ——
@@ -222,70 +227,72 @@ jobs:
       - name: Checkout 代码
         uses: actions/checkout@v4
 
-      # OWASP Dependency-Check Action 钉版本 sha（供应链安全）
-      # 版本：1.1.0（最新稳定 release，2021-04-28 发布）
-      # commit sha：75ba02d6183445fe0761d26e836bde58b1560600
-      # 更新策略：季度更新，需安全负责人审批（见 docs/dependency-check-update-policy.md）
-      # 切勿改用 @main 或 @latest——存在供应链攻击风险
-      # 2026-08-28 修复：该 Action 合法输入仅 project/path/format/others；
-      # 此前误用 scan/args（GitHub 报 "Unexpected input(s) 'scan'"，且必需的 path
-      # 缺失导致 step 失败）。Action 自身已硬编码 --noupdate 与
-      # --out /github/workspace/reports，故 others 只传补充参数。
-      - name: 运行 OWASP Dependency-Check
-        # 2026-09-10 修复：Dependency-Check_Action 的 `others` input 经
-        # action.yml 的 `- '${{ inputs.others }}'` 单引号拼接——含空格的整串
-        # 会作为【一个 argv】传给 CLI（2026-08-29 已知坑，当时只把
-        # --failOnCVSS 改单 token 绕过；2026-09-05 增补
-        # --disableNodeAudit --disableYarnAudit 后三个 flag 拼成单 token
-        # 全部失效——NodeAuditAnalyzer 照跑，在 explorer 前端的 npm
-        # workspace 聚合 lock 上 Invalid payload 恒红，CI run 34535536040
-        # 实证）。Action 无多参数 input，弃用 Action 改直接 docker run
-        # 官方镜像（owasp/dependency-check），参数完全可控。
-        # 注：首推镜像名误写 owaspdependencycheck/...（Docker Hub 不存在，
-        # run 34538063764 实证 pull access denied），更正为官方 owasp/*。
+      - name: Setup JDK 17
+        # PR #17：改用官方 Gradle 插件后，本 job 需要 JDK 17 + Gradle。
+        # cache: gradle 用 setup-java 内置缓存（与 ci.yml 的 Build & Test 同一模式）。
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: gradle
+
+      # 历史沿革（保留备查，勿照抄）：2021~2026-08 用 Dependency-Check_Action
+      # （钉 commit sha 75ba02d6…），但其 `others` input 经 action.yml 单引号拼接会把
+      # 多参数合成**一个 argv**（2026-08-29 / 09-05 两轮实证）；2026-09-10 改直接
+      # `docker run owasp/dependency-check`。2026-10-01（PR #17）再改为**官方 Gradle
+      # 插件**：前两者都只能做文件级识别，对本仓库 JVM 依赖的检测力为 0（审计 §10）。
+      - name: 运行 OWASP Dependency-Check（官方 Gradle 插件：真实依赖图 + NVD）
+        id: owasp_scan
+        # 2026-10-01（PR #17）取代 `docker run owasp/dependency-check --scan .`：
+        # 旧做法只做**文件级**识别 —— 本仓库既无 gradle.lockfile 也无被跟踪的
+        # pom.xml，且 Trivy 不解析 build.gradle（19 个），实测 CPE 命中 0/54，
+        # jackson 这类 JVM 依赖从未被任何门禁真正分析过（审计 §10「空心绿」）。
+        # 官方插件读取**已解析的依赖图**（runtimeClasspath 的 GAV 传递闭包），
+        # 交给同一个 DC 引擎做 CPE/NVD 比对 → 真覆盖。
+        # 供应链：插件版本 13.0.0 钉在根 build.gradle 的 plugins{}（连带
+        # dependency-check-core:13.0.0），浮动 `:latest` 镜像标签随之消失。
+        # -PowaspScan 才会 apply 该插件 —— 否则 `./gradlew check` 会被挂上 DC 任务，
+        # 而 Build & Test 无 NVD key 且会多出 20 分钟 NVD 全量下载（见 build.gradle 注释）。
         env:
           # secrets 经 env 中转（2026-09-10）：直接在 if 里插值 secrets
           # 不存在时会以空串参与表达式，曾以空 key 触发
           # "Invalid API Key, length of 0"（run 34541005008 实证）
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
         run: |
-          # 官方镜像以非 root 运行，无法自建输出目录——宿主侧预创建并放权
-          mkdir -p reports && chmod 777 reports
-          # NVD 2023-12 起强制 API key（run 34541896852 实证：匿名+限速参数
-          # 仍被 NVD 拒绝，客户端报 'Invalid API Key, length of 0'）——
-          # --nvdApiDelay 只是限速参数，无 key 连 403 都过不去。
-          # 必须配置仓库 secret NVD_API_KEY（申请：https://nvd.nist.gov/developers）。
+          # NVD 2023-12 起强制 API key（run 34541896852 实证：匿名+限速参数仍被
+          # NVD 拒绝，客户端报 'Invalid API Key, length of 0'）。必须配置仓库 secret
+          # NVD_API_KEY（申请：https://nvd.nist.gov/developers，免费）。
           if [[ -z "$NVD_API_KEY" ]]; then
             echo "::error::缺少 NVD_API_KEY secret——NVD 已强制 API key，匿名无法拉取漏洞库。请到 https://nvd.nist.gov/developers 申请（免费）并配置到仓库 secrets。"
             exit 1
           fi
-          docker run --rm \
-            -v "$PWD:/src:rw" -w /src \
-            owasp/dependency-check:latest \
-            --project NexusChain \
-            --scan . \
-            --format HTML --format JSON \
-            --out ./reports \
-            --failOnCVSS=9 \
-            --disableNodeAudit \
-            --disableYarnAudit \
-            --nvdApiKey="$NVD_API_KEY"
-          ls -la reports/dependency-check-report.html
+          sed -i 's/\r$//' gradlew
+          chmod +x gradlew
+          # 首次运行需全量拉取 NVD（约 20 分钟；有 key 时受 nvd.delay=8000ms 限速）。
+          # 报告输出：build/reports/dependency-check/dependency-check-report.{json,html}
+          ./gradlew dependencyCheckAggregate -PowaspScan --no-daemon --stacktrace
+          ls -la build/reports/dependency-check/
 
-      # 2026-10-01 新增：扫描覆盖度自检（"空心绿"可见化）
-      # 本 job 的绿可能来自「什么都没识别出来」（CPE 命中 0），而不是「没有漏洞」。
-      # 该步骤解析 JSON 报告并显式打印覆盖度（同时写入 Job Summary）；覆盖度为零
-      # 时发 ::warning:: 而**不失败**——扫描器能力不足是待升级项（见
-      # docs/dependency-check-update-policy.md），不该表现成"门禁抓到漏洞"。
-      # 任一上层步骤失败时本步骤仍执行（if: always()），此时报告可能不存在，
-      # 按"无法评估覆盖度"如实报告。
+      # 2026-10-01（PR #16 引入 → PR #17 语义收紧）：扫描覆盖度自检。
+      # 目的：让"绿"永远不可能是「什么都没识别出来」造成的。
+      # 语义变化（PR #17，配合改用官方 Gradle 插件做真覆盖）：
+      #   旧——覆盖度 0 只发 ::warning::（当时确实没有能力，属待升级项）；
+      #   新——**覆盖度 0 直接 ::error:: + 非零退出**：既然门禁已能解析依赖图，
+      #       再出现 0 条/0 已识别就说明能力回退（配置或数据源坏了），不允许以绿色示人。
+      #       注意：升级为失败的只有「覆盖度」，**不是「漏洞数」**。
+      # 任一上层步骤失败时本步骤仍执行（if: always()），此时报告可能不存在：
+      # 上一步已让 job 红，这里如实报告即可；仅当上一步自称成功却没产出报告时才额外报错。
       - name: 扫描覆盖度自检（空心绿可见化）
         if: always()
+        env:
+          # 传入扫描步骤的结论：用于区分"报告缺失=上一步失败"与"自称成功却没报告"
+          DC_STEP_OUTCOME: ${{ steps.owasp_scan.outcome }}
         run: |
           python3 - <<'PYEOF'
-          import json, os, pathlib
+          import json, os, pathlib, sys
 
-          REPORT = pathlib.Path("reports/dependency-check-report.json")
+          REPORT = pathlib.Path("build/reports/dependency-check/dependency-check-report.json")
+          fail = False
           summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
           lines = []
 
@@ -294,8 +301,14 @@ jobs:
               lines.append(msg)
 
           if not REPORT.is_file():
-              emit("::warning::未生成 dependency-check-report.json——无法评估扫描覆盖度"
-                   "（上层步骤是否失败？若为缺 key/网络失败，请查上一步日志）。")
+              if os.environ.get("DC_STEP_OUTCOME") == "success":
+                  emit("::error::扫描步骤自称成功，但未产出 "
+                       "build/reports/dependency-check/dependency-check-report.json "
+                       "→ 视为扫描未真正执行（门禁不得以空结果通过）。")
+                  fail = True
+              else:
+                  emit("::warning::未生成 dependency-check-report.json——无法评估扫描覆盖度"
+                       f"（扫描步骤结论 = {os.environ.get('DC_STEP_OUTCOME')}，详见上一步日志）。")
           else:
               rep = json.loads(REPORT.read_text(encoding="utf-8"))
               deps = rep.get("dependencies") or []
@@ -315,21 +328,32 @@ jobs:
               if scan_info:
                   emit("漏洞库状态：" + "；".join(f"{k}={v}" for k, v in scan_info.items()))
               if not deps:
-                  emit("::warning::扫描条目数为 0——本次未分析到任何文件，绿无意义。")
+                  emit("::error::扫描条目数为 0——**未解析到任何依赖**，覆盖度为 0，绿无意义"
+                       "（检查根 build.gradle 的 dependencyCheck.scanConfigurations 与 -PowaspScan 是否生效）。")
+                  fail = True
               elif not identified:
-                  emit("::warning::已识别组件 0 —— 本次未取得任何可比对的 CPE 包坐标，"
-                       "即本 job 对依赖漏洞的实际检测力为 0（Gradle 依赖图未被解析）。"
-                       "JVM 依赖请以 Trivy 镜像扫描的 `Java (jar)` 结果为准；"
-                       "升级路径见 docs/dependency-check-update-policy.md。")
+                  emit("::error::已识别组件 0 —— 已解析到依赖，却未取得任何可比对的 CPE 包坐标，"
+                       "即对依赖漏洞的实际检测力为 0（NVD 库未生效 / CPE 匹配失败）。"
+                       "**这不是'没有漏洞'，是扫描能力回退**，必须修复后才能恢复绿色。")
+                  fail = True
               else:
                   emit(f"覆盖度：{len(identified)}/{len(deps)} 条取得 CPE/漏洞 ID，可参与 NVD 比对。")
+                  # 「识别率」是能力指标（不是漏洞指标）：偏低说明依赖图中大量条目
+                  # 无法映射到 CPE，属待改进项——先只告警，不阻断。
+                  if len(identified) * 2 < len(deps):
+                      emit(f"::warning::CPE 识别率偏低（{len(identified)}/{len(deps)} < 50%）——"
+                           "覆盖虽非 0，但大量条目无法参与 NVD 比对，建议排查坐标/版本缺失。")
 
           if summary_path:
               with open(summary_path, "a", encoding="utf-8") as fh:
                   fh.write("\n### OWASP Dependency-Check 覆盖度自检\n\n")
                   for line in lines:
                       # summary 里去掉 annotation 前缀（那只是给 CI 日志用的）
-                      fh.write(f"- {line.replace('::warning::', '⚠️ ')}\n")
+                      fh.write("- " + line.replace('::error::', '❌ ').replace('::warning::', '⚠️ ') + "\n")
+
+          if fail:
+              print("::error::覆盖度自检未通过：本次扫描不构成有效覆盖（见上方 ❌ 说明）。")
+              sys.exit(1)
           PYEOF
 
       - name: 上传 OWASP 报告
@@ -337,11 +361,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: owasp-dependency-check-report
+          # PR #17：报告路径随「官方 Gradle 插件 + 聚合任务」迁到根项目 build 目录
           path: |
-            reports/dependency-check-report.html
-            reports/dependency-check-report.json
-            **/dependency-check-report.html
-            **/dependency-check-report.json
+            build/reports/dependency-check/dependency-check-report.html
+            build/reports/dependency-check/dependency-check-report.json
           if-no-files-found: ignore
           retention-days: 30
 

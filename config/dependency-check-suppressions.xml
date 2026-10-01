@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  NexusChain — OWASP Dependency-Check 误报抑制文件
+
+  谁在消费：根 build.gradle 的 dependencyCheck.suppressionFiles（PR #17 起改用官方
+  Gradle 插件做**依赖图**扫描，路径由此固定为 config/dependency-check-suppressions.xml）。
+
+  使用纪律（与 docs/dependency-check-update-policy.md 一致，勿只改这里）：
+    1. **先升级，再抑制**：能通过升级依赖消除的告警一律升级，不允许顺手 suppress；
+    2. 每条 <suppress> 必须写明 notes（为什么是误报/为什么暂不可修）与 until（到期待复核），
+       until 由季度更新流程复核，过期条目必须删除或续期并留证据；
+    3. **不要在 notes 或 regex 里写入任何真实密钥/凭据字面量** —— 本文件会被 Trivy 的
+       密钥扫描器扫到，写进去会把"豁免"变成"新红"（2026-09-30 在 .gitleaks.toml 上
+       已经踩过一次，CI run 36767107602 实证）。
+
+  当前规则数：0（2026-10-01 首次接入依赖图扫描时的基线为空）。
+-->
+<suppressions xmlns="https://jeremylong.github.io/DependencyCheck/dependency-suppression.1.3.xsd">
+
+    <!--
+      示例（勿删除注释结构，按需在下方追加；<packageUrl>/<gav>/<cve> 任选其一作为匹配条件）：
+
+      <suppress until="2027-01-31Z">
+        <notes><![CDATA[
+        误报依据：<paste 证据 / 上游 issue / 复现说明>
+        为何不升级：<例如 上游无修复版 / 升级会跨大版本引入行为变更>
+        ]]></notes>
+        <packageUrl regex="true">^pkg:maven/com\.example/example-lib@.*$</packageUrl>
+        <cve>CVE-XXXX-YYYY</cve>
+      </suppress>
+    -->
+
+</suppressions>

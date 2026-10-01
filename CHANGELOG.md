@@ -65,6 +65,80 @@
   门禁结果不可复现，与本仓库"禁止浮动引用"的供应链原则相冲突（该原则此前只约束 Action 的 commit
   SHA，自 2026-09-10 改用 `docker run` 后约束落空）。
 
+### OWASP DC 迁移到官方 Gradle 插件：把「空心绿」换成真依赖图覆盖（2026-10-01，PR #17）
+
+**根因与修法（承接上节「未修缺口」）**
+- 空心绿不是"少配一个参数"，而是**扫描对象选错**：docker 路径对 `build.gradle` 项目只能做
+  文件级识别（54 条里 0 条取得 CPE）。门禁需要的输入是**解析后的依赖坐标（GAV）**，
+  而这只在构建期能拿到。
+- 引入官方插件 `org.owasp.dependencycheck 13.0.0`：`plugins{}` 中 `apply false` +
+  `if (project.hasProperty('owaspScan'))` 才 apply；扫描 `runtimeClasspath`（19 个模块的运行时
+  依赖图）；HTML+JSON 报告；`failBuildOnCVSS = 9.0f`；抑制基线
+  `config/dependency-check-suppressions.xml`（当前为空 + 策略头）；分析器只留 NVD
+  （nodeAudit / OSS Index / retire.js / KEV 全关，控制时长与鉴权成本）。
+- CI：OWASP job 加 `Setup JDK 17`，命令换成
+  `./gradlew dependencyCheckAggregate -PowaspScan --no-daemon --stacktrace`；
+  `NVD_API_KEY` 经 `env:` 注入（**不进命令行**，避免 key 出现在进程表/日志）；
+  报告路径迁到 `build/reports/dependency-check/`，上传路径同步。
+
+**实跑结果（dispatch run `36803239132`，真实 `NVD_API_KEY`）**
+- 覆盖从 **0/54 条可取 CPE** 抬到 **242/252 条（96%）**，并**立刻报出 141 条漏洞**
+  （CRITICAL 19 / HIGH 45 / MEDIUM 75 / LOW 2 → 去重 **13 个 CRITICAL CVE**）。
+  job 因此变**红**：`failBuildOnCVSS=9.0f` 按设计触发 —— **首次 red 是预期结果，不是迁移失败**。
+- 「扫描覆盖度自检」步骤 `success`（覆盖度非 0）→ 现在**"绿"与"红"都由真实数据决定**。
+- 13 个 CRITICAL 的模块级溯源见审计 §13.4，四类根因（审计 §13.5）：
+  ① `nexus-sdk/java` 漏了 `ext['tomcat.version']`（真缺陷，**图像扫描结构上看不到**）；
+  ② `netty-all 4.1.115` 显式钉版过旧（7 条，升 4.1.137.Final 即可，不跨 minor 线）；
+  ③ `kotlin-stdlib 2.2.21` 传递未纳管（修复 2.4.20）；
+  ④ `quartz 2.3.2` 的 CVE-2023-39017 描述指向 **`quartz-jobs`** 组件（classpath 上只有 quartz 核心）
+     → **CPE 过度匹配**，按"不可修"走证据化抑制。
+- **最有价值的一条**：`tomcat-embed-core 11.0.24` 只出现在 `nexus-sdk/java` 的 runtimeClasspath；
+  它是 `java-library`（**不产出镜像**），而 tomcat 覆盖只在 5 个模块里生效
+  （`io.spring.dependency-management` 的 `ext[...]` **不跨模块传播**）
+  → **镜像扫描永远看不到这个缺陷**。
+- 本 PR **不夹带生产依赖升版**（netty/kotlin 属独立整改 PR），只交付"看得见"的能力。
+
+**为什么必须用 `-PowaspScan` 开关（刻意的，不是遗漏）**
+- 插件会把 `dependencyCheckAnalyze`/`Aggregate` 挂到 `check` 上；而 `ci.yml` 的
+  **Build & Test** 跑 `./gradlew check` 且**没有** `NVD_API_KEY` —— 若插件默认 apply，
+  该 job 会被拖去下载约 20 分钟 NVD 库并失败（**每次 PR 时长翻倍且必然红**）。
+- 本地三断言（`verify-owasp-gradle.ps1`）：`help` → `exit 0` 且 **dependencyCheck 命中 0**；
+  `dependencyCheckAggregate -PowaspScan --dry-run` → `exit 0`（聚合任务存在，DSL 全键被接受）；
+  **`check --dry-run` → `exit 0` 且 dependencyCheck 命中 0**（Build & Test 未被污染）。
+- **两个失效方向都是响的**：去掉开关 → 任务不存在 → `dependencyCheckAggregate` 报 task not
+  found，job 立刻红（而非"跳过扫描却绿"）；去掉门控 → `check` 拉 NVD → Build & Test 剧慢/红。
+
+**覆盖度自检语义收紧：覆盖度 0 由「告警」改为「失败」**
+- 前提变了：门禁已能解析依赖图，再出现 0 覆盖就说明**能力回退**（配置或数据源坏了），
+  不允许以绿色示人。
+- 新判定：报告缺失且扫描步骤自称 `success` → **失败**；条目数 0 → **失败**；已识别（CPE/漏洞
+  ID）0 → **失败**；识别率 < 50%（非 0）→ 仅告警；扫描步骤本身已失败导致报告缺失 → 仅告警
+  （job 已红，不重复制造噪声）。
+- **边界**：失败的是**覆盖度**，不是漏洞数 —— 自检不会因"发现漏洞"而红（那是
+  `failBuildOnCVSS` 的职责），它保证的是"绿 ≠ 什么都没扫到"。
+- 工作流层验证：`validate-owasp-gradle-workflow.py`（YAML 结构断言 + heredoc 提取后
+  `ast.parse` + **5 个真实行为用例**：正常 / 0 依赖 / 0 已识别 / 自称成功却无报告 /
+  上一步失败后无报告）全部通过。
+
+**结构性发现：该 job 无法（也不应）被设为 required check（与上节 §11 同类陷阱）**
+- 该 job 的 `if: github.event_name != 'pull_request'` 意味着**在任何 PR 上都不上报**；
+  若把它加进 branch protection 的 required checks，会**精确复现 §11 的死锁**（PR 永久
+  `BLOCKED`，且 `enforce_admins=true` 下 `--admin` 也绕不过）。
+- 唯一可行路径是复刻 §11 的修法（PR 上总是上报 + 相关性门控决定是否实跑，不相关则秒过），
+  代价是 NVD 冷启动 ~20 分钟会落在 PR 首次运行上 —— **需产品口径确认**，故本 PR 不动保护规则。
+
+**未关闭项（诚实记录）**
+1. **非 required check**：见上，当前只阻断 `push master` / cron / dispatch 路径，不阻断 PR；
+2. **未启用 Gradle 依赖校验**（`git grep verification-metadata` 无命中）→ 插件 jar 及传递依赖
+   **哈希未固定**：精确版本号防"版本漂移"，不防"同版本替换产物"；
+3. **NVD 数据目录是否命中 CI 缓存未配置**（`data.directory` 指向 `GRADLE_USER_HOME/...`，
+   但未加 `actions/cache`）→ 冷启动可能重复下载（时间成本，非正确性问题）；
+4. **仅 NVD 分析器** → npm 侧依赖不在本 job 覆盖范围（仍靠 Trivy fs 的 `yarn.lock`）。
+
+详见审计 `docs/audit/2026-09-29-ci-gate-and-mpc-default-findings.md` §13 与
+`docs/dependency-check-update-policy.md`（已按插件路径整体改写）。
+
+
 ### 阻断修复：required check「永不上报」死锁 —— k6 Smoke Test (PR)（2026-10-01，PR #16）
 
 **现象（实证）**：PR #16 的 18 个 check **全部完成且 0 失败**，`gh pr merge --squash` 仍被拒：
