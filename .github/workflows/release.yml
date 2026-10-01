@@ -194,7 +194,7 @@ jobs:
           fi
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
           name: Release ${{ github.ref_name }}
@@ -215,7 +215,7 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Setup Helm
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@v5
         with:
           version: 'v3.14.0'
 
@@ -267,7 +267,7 @@ jobs:
 
       - name: Setup Helm
         if: steps.creds.outputs.configured == 'true'
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@v5
         with:
           version: 'v3.14.0'
 
@@ -332,7 +332,7 @@ jobs:
 
       - name: Setup Helm
         if: steps.creds.outputs.configured == 'true'
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@v5
         with:
           version: 'v3.14.0'
 
@@ -398,7 +398,7 @@ jobs:
           fetch-depth: 0
 
       - name: Setup Helm
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@v5
         with:
           version: 'v3.14.0'
 
