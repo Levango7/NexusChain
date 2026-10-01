@@ -10,6 +10,15 @@ plugins {
 // Spring Boot BOM 无效，已实测）。
 ext['tomcat.version'] = '11.0.25'
 
+// CVE-2026-53914（CRITICAL，CVSS 9.8）：kotlin-stdlib / -jdk7 / -jdk8 由**传递依赖**引入
+// （本模块经 web3j→okhttp 一类路径），首次依赖图扫描（run 36803239132）实测 2.2.21 命中，
+// 修复版 **2.4.20**。走 io.spring.dependency-management 的 BOM 属性覆盖
+// （同 tomcat 先例：根 resolutionStrategy force 对 Boot BOM 无效，已实测）；
+// kotlin-stdlib 保持向后兼容，跨 minor 抬版的运行时风险低。
+// 若该属性名在 Boot 4.0.8 的 BOM 中不是 kotlin.version，则本条不生效 —— 由
+// `dependencyInsight --dependency kotlin-stdlib` 实测复核（见 PR 验证清单）。
+ext['kotlin.version'] = '2.4.20'
+
 // TD-17（tech-debt-audit）：core 非 Boot 应用（无 Boot 插件），但长期硬编码
 // starter-* 与 spring-context/test 版本，与微服务群的版本来源脱节。此处导入
 // Boot BOM 作为依赖版本单一来源（Boot4 兼容批后为 4.0.8，与全部微服务一致）；
@@ -123,7 +132,10 @@ ext {
     junitVersion = '4.13.2'
     bouncyCastleVersion = '1.85'
     blstVersion = '0.3.11'
-    nettyVersion = '4.1.115.Final'
+    // 2026-10-01（SCA 整改）：4.1.115.Final → 4.1.137.Final，理由与 CVE 清单见根
+    // build.gradle 的同名变量注释（7 个 CRITICAL，修复线 4.1.133/135/137.Final）。
+    // 注意：**每个模块各自消费**该变量（根 ext 不强制注入子项目），两处必须同步。
+    nettyVersion = '4.1.137.Final'
     grpcVersion = '1.75.0'
     protobufVersion = '3.25.5'
     // jacksonVersion managed by Spring Boot BOM

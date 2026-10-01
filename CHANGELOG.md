@@ -65,6 +65,35 @@
   门禁结果不可复现，与本仓库"禁止浮动引用"的供应链原则相冲突（该原则此前只约束 Action 的 commit
   SHA，自 2026-09-10 改用 `docker run` 后约束落空）。
 
+### SCA 整改：处置首次依赖图扫描报出的 13 个 CRITICAL（2026-10-01，PR #18）
+
+**来源**：PR #17 换用依赖图扫描后，dispatch run `36803239132` 首跑即报 141 条漏洞
+（去重 **13 个 CRITICAL CVE** 落在 7 个制品）。本节按「**可修一律升级、不可修才抑制**」逐条处置。
+
+| 制品 | 处置 | CVE | 依据 |
+|------|------|-----|------|
+| `netty-all 4.1.115.Final` | → **4.1.137.Final** | 2026-45674/47691（10.0）、42579/42581/42584/56820/75595 | CVE 描述给出的修复线（4.1.133/135/137.Final）内最高补丁版，**同 minor 不跨线** |
+| `kotlin-stdlib(-jdk7/-jdk8) 2.2.21` | → **2.4.20** | CVE-2026-53914（9.8） | CVE 声明的修复版；传递依赖，须显式纳管 |
+| `tomcat-embed-core/-websocket 11.0.24` | → **11.0.25** | 2026-65637/65905、65182/68525 | 与仓库既有 5 个模块 `ext['tomcat.version']` 目标值一致（该版本实测零漏洞） |
+| `quartz 2.3.2` | **证据化抑制**（唯一"不可修"） | CVE-2023-39017 | CVE 属于 **quartz-jobs** 制品，依赖图中无该制品 → CPE 过度匹配 |
+
+**落地要点（两个机制不能混用）**
+- `build.gradle`（根 `ext`）+ `nexus-core/…/build.gradle`：`nettyVersion` **两处同步**
+  （各模块各自消费，根 ext 不注入子项目）；
+- `nexus-core`：`ext['kotlin.version'] = '2.4.20'`（BOM 属性覆盖，同 tomcat/jackson 先例）；
+- `nexus-sdk/java`：新增 Gradle `constraints{}`（tomcat 11.0.25 + kotlin 2.4.20）—— 该模块
+  **未应用** `io.spring.dependency-management`，`ext[...]` 对它**无效**；它也正是审计 §13.5①
+  那个"**不产出镜像 → 镜像扫描结构上看不到**"的模块；
+- `dependencyInsight --configuration runtimeClasspath` 实测：`netty-all 4.1.115.Final → 4.1.137.Final`、
+  `kotlin-stdlib 2.2.21 → 2.4.20`（jdk7/jdk8 一并）、`tomcat-embed-core 11.0.24 → 11.0.25`。
+
+**同为 dispatch 红但与本次改动无关（避免误判）**：Trivy 镜像扫描 `mpc-engine` / `zk-groth16-service`
+是**纯 Rust 模块**（`Cargo.toml`，无 `build.gradle`），与 JVM 依赖抬版无因果关系；master 基线
+run `36799326089`（01:04Z）该项为 success → 属独立的新问题，另行排查。
+
+**未纳入本 PR（诚实记录）**：其余 HIGH 45 / MEDIUM 75 未处置（非阻断项，应按模块分批整改）；
+`netty-all` 属"全家桶"制品，改用具体 netty 模块是依赖结构重构；仍无 `verification-metadata.xml`。
+
 ### OWASP DC 迁移到官方 Gradle 插件：把「空心绿」换成真依赖图覆盖（2026-10-01，PR #17）
 
 **根因与修法（承接上节「未修缺口」）**

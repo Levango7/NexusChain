@@ -13,9 +13,29 @@
        密钥扫描器扫到，写进去会把"豁免"变成"新红"（2026-09-30 在 .gitleaks.toml 上
        已经踩过一次，CI run 36767107602 实证）。
 
-  当前规则数：0（2026-10-01 首次接入依赖图扫描时的基线为空）。
+  当前规则数：1（2026-10-01 首条：quartz 的 NVD CPE 过度匹配，证据见条目 notes）。
 -->
 <suppressions xmlns="https://jeremylong.github.io/DependencyCheck/dependency-suppression.1.3.xsd">
+
+    <!--
+      2026-10-01：首次依赖图扫描（run 36803239132，审计 §13.4/§13.5④）发现的唯一一条
+      「不可修」告警 —— 注意这不是"顺手豁免"，而是被扫描的 CVE 与 classpath 上的制品不匹配。
+    -->
+    <suppress until="2027-01-31Z">
+        <notes><![CDATA[
+        误报依据：CVE-2023-39017 的受影响范围明确限定在 **quartz-jobs** 制品
+        （组件 org.quartz.jobs.ee.jms.SendQueueMessageJob），而本仓库依赖的是
+        org.quartz-scheduler:quartz（核心）—— run 36803239132 的依赖图里**没有 quartz-jobs
+        制品**（报告只列出 quartz-2.3.2.jar，packages 为 pkg:maven/org.quartz-scheduler/quartz@2.3.2）
+        → 可利用组件不在 classpath 上，属 NVD 对该坐标的 CPE 过度匹配。
+        为何不升级：升级 quartz 无法消除这条匹配（匹配对象是 CPE 的 quartz 坐标本身），
+        该 CVE 的修复路径是 quartz-jobs 的版本，而该制品从未被引入。
+        复核方式（季度复核）：确认 quartz-jobs 仍未进入任何模块的 runtimeClasspath；
+        **一旦引入 quartz-jobs，必须删除本条**并按修复版升级。
+        ]]></notes>
+        <packageUrl regex="true">^pkg:maven/org\.quartz-scheduler/quartz@.*$</packageUrl>
+        <cve>CVE-2023-39017</cve>
+    </suppress>
 
     <!--
       示例（勿删除注释结构，按需在下方追加；<packageUrl>/<gav>/<cve> 任选其一作为匹配条件）：

@@ -487,4 +487,44 @@ CVE 描述给出的修复线都在 **4.1.133/135/137.Final**（或 4.2.13/15/17.
 其中一个还是**镜像扫描结构上永远看不到的库模块缺陷**。这说明：门禁的"绿"必须先证明
 **它有能力变红**，否则绿只是"没在看"。
 
+### 13.9 整改实施（PR #18，2026-10-01）
+
+按 §13.5 的四类根因逐条处置，原则：**可修一律升级，不可修才抑制**。
+
+| # | 制品 | 处置 | 落地位置 |
+|---|------|------|---------|
+| ① | `netty-all 4.1.115.Final` | → **4.1.137.Final**（清 7 个 CRITICAL） | 根 `build.gradle` 的 `ext.nettyVersion` + `nexus-core/…/build.gradle`（**两处各自消费，必须同步**） |
+| ② | `kotlin-stdlib(-jdk7/-jdk8) 2.2.21` | → **2.4.20**（CVE-2026-53914） | nexus-core：`ext['kotlin.version']`；`nexus-sdk/java`：Gradle `constraints{}` |
+| ③ | `tomcat-embed-core/-websocket 11.0.24` | → **11.0.25** | `nexus-sdk/java` 新增 `constraints{}`（该模块**未应用** dependency-management 插件，`ext[...]` 对它无效） |
+| ④ | `quartz 2.3.2` / CVE-2023-39017 | **证据化抑制**（`until="2027-01-31Z"` + 复核方式） | `config/dependency-check-suppressions.xml` |
+
+**本地实证（`dependencyInsight --configuration runtimeClasspath`，改后实测）**
+
+| 项目 | 依赖 | 解析结果 |
+|------|------|---------|
+| nexus-core | `io.netty:netty-all` | 4.1.115.Final → **4.1.137.Final**（selected by rule） |
+| nexus-core | `org.jetbrains.kotlin:kotlin-stdlib` | 2.2.21 → **2.4.20**（selected by rule） |
+| nexus-core | `kotlin-stdlib-jdk7` / `-jdk8` | 1.8.0 / 1.4.10 → **2.4.20** |
+| nexus-sdk/java | `org.apache.tomcat.embed:tomcat-embed-core` | 11.0.24 → **11.0.25** |
+| nexus-sdk/java | `kotlin-stdlib-jdk8` | 1.4.10 / 1.8.0 / 1.8.21 / 1.9.10 → **2.4.20** |
+
+**两条可复用的纪律**
+
+1. **只写仓库源里真实存在的版本号**：三个目标版本落地前都在 Maven Central 元数据核对过
+   （`netty-all 4.1.137.Final` ✓、`kotlin-stdlib-jdk7 2.4.20` ✓、`tomcat-embed-core 11.0.25` ✓）。
+   注意 `netty-all 4.1.138.Final`、`tomcat-embed-core 11.0.26` 也已存在 —— 此处**刻意**取
+   CVE 描述给出的修复版（可追溯"为什么是这个版本"），tomcat 还刻意与仓库既有 5 个模块的
+   目标值一致（避免同一制品出现两个版本）。
+2. **`ext['x.version']`（BOM 属性覆盖）与 Gradle `constraints{}` 不是同一机制**：
+   前者只对**应用了 `io.spring.dependency-management` 的项目**生效；未应用该插件的模块
+   （如 `nexus-sdk/java`，只用 `platform(...)`）必须用原生 `constraints{}` —— 这也是
+   §13.5① 那个"漏一个模块"缺陷容易复发的机制原因。
+
+**同一次 dispatch 里出现与本次改动无关的红（必须区分，避免误判）**
+run `36842401445` 中 Trivy 镜像扫描 `mpc-engine` / `zk-groth16-service` 同样为红，但这两个模块是
+**纯 Rust（有 `Cargo.toml`、无 `build.gradle`）**，与本次 JVM 依赖抬版**无因果关系**；
+master 基线 run `36799326089`（01:04Z）该两项为 success → 属**新出现的独立问题**，
+本 PR 不含 Rust 侧改动，另行排查（不在 SCA 整改范围内）。
+
+
 

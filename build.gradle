@@ -208,7 +208,14 @@ subprojects {
         postgresqlVersion = '42.7.12'
         leveldbVersion = '0.12'
         hibernateValidatorVersion = '8.0.1.Final'
-        nettyVersion = '4.1.115.Final'
+        // 2026-10-01（SCA 整改）：OWASP DC 插件首次真扫描发现 4.1.115.Final 命中 **7 个 CRITICAL**
+        // （CVE-2026-45674 / 47691 CVSS 10.0；42579 / 42581 / 42584 / 56820 / 75595 CVSS 9.1~9.8），
+        // CVE 描述给出的修复线为 4.1.133 / 135 / 137.Final（次线 4.2.13 / 15 / 17.Final）。
+        // 取 **4.1.137.Final**：修复线内最高补丁版，**不跨 minor 线**（代码与文档 javadoc 链接
+        // 均按 4.1 API 写），且 4.1.138.Final 与 4.2.x 未被 NVD 判定为必要 —— 用 CVE 声明的
+        // 修复版本，让"为什么是这个版本"可被直接追溯。
+        // 取证：run 36803239132 报告 netty-all-4.1.115.Final（见审计 §13.4）。
+        nettyVersion = '4.1.137.Final'
         grpcVersion = '1.75.0'
         protobufVersion = '3.25.5'
         // CVE-2026-68497 在 Jackson 2 线上有两段受影响范围：>= 2.14.0, < 2.18.10 与
