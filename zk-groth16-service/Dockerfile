@@ -11,7 +11,10 @@ COPY . .
 WORKDIR /src/zk-groth16-service
 RUN cargo build --release
 
-FROM debian:bookworm-slim
+# 2026-10-01：bookworm-slim → trixie-slim（CVE-2026-103111 在 bookworm 无修复版本，
+# trixie-security 10.46-1~deb13u3 已修复，DSA-6530-1；依据与兼容性论证见
+# mpc-engine/Dockerfile 同批注释）
+FROM debian:trixie-slim
 # apt-get upgrade -y（2026-09-14）：闭 base 镜像重建滞后的 CVE 窗口期
 #（libpcre2-8-0 CVE-2026-86145/89161 HIGH 阻断实证，见 mpc-engine 同批注释）
 RUN apt-get update -qq && apt-get upgrade -y -qq && apt-get install -y -qq ca-certificates && rm -rf /var/lib/apt/lists/*

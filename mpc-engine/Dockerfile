@@ -38,9 +38,19 @@ WORKDIR /app/mpc-engine
 RUN cargo build --release --features tls
 
 # === 运行阶段 ===
-FROM debian:bookworm-slim
+# 2026-10-01：debian:bookworm-slim → debian:trixie-slim（debian 13）。
+# 触发：libpcre2-8-0 / CVE-2026-103111（PCRE2 < 10.49，JIT + 攻击者可控正则时越界写，
+# HIGH）在 bookworm 无修复版本（bookworm-security 10.42-1+deb12u1 = vulnerable），
+# 而 trixie-security 10.46-1~deb13u3 已 fixed（DSA-6530-1，
+# 见 https://security-tracker.debian.org/tracker/CVE-2026-103111）。
+# 因存在上游修复版本，按 .trivyignore 处置原则不做豁免，改用基础镜像迁移消除；
+# 与 Java 模块 2026-09-05 debian12→debian13 迁移批同源。
+# 兼容性论证：二进制由 bookworm 系构建阶段产出、动态链接 glibc（trixie 侧 2.41
+# 向后兼容）；TLS 走 rustls/ring（纯 Rust，Cargo.lock 无 openssl-sys），
+# 不受 trixie libssl3 → libssl3t64 改名影响。
+FROM debian:trixie-slim
 
-# ca-certificates 便于出站 HTTPS（如拉取参与方元数据）；glibc 与 rust:1.80(bookworm) 一致。
+# ca-certificates 便于出站 HTTPS（如拉取参与方元数据）。
 # apt-get upgrade -y（2026-09-14）：base 镜像重建滞后 DSA 数天~数周，窗口期内
 # Trivy DB 已收录新 CVE 而镜像包未更新（mpc-engine/zk 双双被 libpcre2-8-0
 # CVE-2026-86145/89161 HIGH 阻断实证）。构建期全量 point-release 升级让

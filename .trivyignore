@@ -109,4 +109,15 @@ CVE-2025-66017
 # 无其他 OS/库 finding；Java 模块镜像（distroless java17-debian13，debian 13.7）
 # OS 层为 Total: 0，不涉及本条。
 CVE-2026-84782
+# --- 2026-10-01 增补（master push run 36879404370 镜像扫描）---
+# libpcre2-8-0 / CVE-2026-103111（PCRE2 < 10.49：JIT + 攻击者可控正则时越界写，HIGH）。
+# **本条不豁免** —— Debian 存在上游修复版本，按本源文件处置原则（仅豁免上游无修复
+# 版本项、避免用 ignore 掩盖可修复漏洞）必须通过升级消除。
+# 处置：mpc-engine / zk-groth16-service 运行阶段基础镜像
+# debian:bookworm-slim → debian:trixie-slim（同批 PR）。
+# 取证：bookworm-security 10.42-1+deb12u1 = vulnerable（无 Fixed Version，故 Trivy
+# 报 status=affected）；trixie-security 10.46-1~deb13u3 = fixed（DSA-6530-1）。
+# https://security-tracker.debian.org/tracker/CVE-2026-103111
+# 说明：迁移后本源文件内 openssl/libssl3 等 bookworm 专有豁免条目对新镜像不再命中
+# （Trivy 对未命中的 ignore 条目静默忽略，无副作用）。
 
