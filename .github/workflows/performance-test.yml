@@ -11,15 +11,23 @@ name: NexusChain Performance Test
 #   - 完整压测需手动触发 + 注入 staging 凭据，避免误压生产
 #   - 结果以 JSON artifact 归档 14 天
 #   - 不修改任何 Java 源代码 / build.gradle / application.yml / deploy/
+#
+# 2026-10-01 修复（PR #16 实证的死锁）：
+#   原先 pull_request 带 paths 白名单（nexus-gateway/nexus-bridge/perf/k6/本文件），
+#   而 master 分支保护把 `k6 Smoke Test (PR)` 列为 required check。两者叠加 →
+#   「不碰这四条路径」的 PR（纯文档 / 纯 CHANGELOG / 其它 workflow）**根本不触发
+#   本 workflow** → check 从未上报 → GitHub 永远等待 → mergeStateStatus 恒为 BLOCKED；
+#   且保护项 enforce_admins=true，**管理员也无法用 --admin 绕过**（PR #16 实测：
+#   18 个 check 全绿、0 失败，仍报 "the base branch policy prohibits the merge"）。
+#   修法：**删掉 paths 白名单**，让本 job 每次都上报；是否真的跑下沉到
+#   「判断变更相关性」步骤 → 不相关时秒过并记 success（不占 30 分钟），
+#   相关时照旧全量冒烟。**切勿**改回 paths 过滤（那是本次死锁的直接成因）；
+#   也不要改成 job 级 if：job 被 skipped 时该 check 只以 skipped 上报，能否满足
+#   required check 取决于 GitHub 的隐式语义，不应依赖——让 job 每次都真跑最稳。
 
 on:
   pull_request:
     branches: [master]
-    paths:
-      - "nexus-gateway/**"
-      - "nexus-bridge/**"
-      - "perf/k6/**"
-      - ".github/workflows/performance-test.yml"
   workflow_dispatch:
     inputs:
       mode:
@@ -56,9 +64,55 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout 代码
+        # 2026-10-01：fetch-depth 0——下方相关性判断需要与 base 做 diff；
+        # 默认浅克隆（仅 1 个 commit）会让 `git diff <base>...HEAD` 直接失败。
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 2026-10-01 新增：决定本次是否真的需要跑冒烟。
+      # 本步骤**必须永远执行**（它是 required check 的"上报锚点"）：workflow 已去掉
+      # paths 白名单，check 每次都出现；不相关时后续重步骤被跳过，job 仍以 success 结束。
+      # 判定失败时**倾向于实跑**（保守：宁可多跑一次，也不放过未验证的变更）。
+      - name: 判断变更相关性（决定是否实跑）
+        id: relevance
+        run: |
+          set -uo pipefail
+          RELEVANT='^(nexus-gateway/|nexus-bridge/|perf/k6/|\.github/workflows/performance-test\.yml$)'
+          run=true
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+            if CHANGED="$(git diff --name-only "$BASE...HEAD" 2>/dev/null)"; then
+              echo "本次 PR 变更文件："
+              echo "$CHANGED"
+              if echo "$CHANGED" | grep -qE "$RELEVANT"; then
+                echo "::notice::变更涉及被测组件 → 执行 k6 冒烟实跑"
+              else
+                run=false
+                echo "::notice::变更未涉及 nexus-gateway/nexus-bridge/perf/k6 → 按设计不实跑；本 required check 仍记为 success，避免悬空 check 卡死合并"
+              fi
+            else
+              echo "::warning::无法计算变更集（base=$BASE）→ 保守起见按相关处理，执行实跑"
+            fi
+          else
+            echo "::notice::非 pull_request 事件（${{ github.event_name }}）→ 手动触发即显式意图，执行实跑"
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          if [ "$run" = "true" ]; then
+            DECISION="实跑冒烟测试"
+          else
+            DECISION="跳过实跑（变更不相关，check 记 success）"
+          fi
+          {
+            echo "### k6 冒烟决策：$DECISION"
+            echo ""
+            echo "- 事件：\`${{ github.event_name }}\`"
+            echo "- 相关性规则：\`nexus-gateway/**\`、\`nexus-bridge/**\`、\`perf/k6/**\`、本工作流文件"
+            echo "- 说明：本 job 是 master 的 required check，**必须上报**；不相关时以 success 结束，避免悬空 check 永久阻塞 PR。"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Setup JDK 17
+        if: steps.relevance.outputs.run == 'true'
         uses: actions/setup-java@v4
         with:
           java-version: '17'
@@ -66,6 +120,7 @@ jobs:
           cache: gradle
 
       - name: 安装 k6
+        if: steps.relevance.outputs.run == 'true'
         # 2026-09-10 修复：原走 apt 源 + gpg keyserver（keyserver.ubuntu.com
         # 从 GitHub runner 访问持续 No data——PR #4 两轮实证），改用官方
         # GitHub releases 直装二进制（无 gpg keyserver 依赖）。
@@ -79,6 +134,7 @@ jobs:
           k6 version
 
       - name: 启动 NexusChain 服务（docker-compose）
+        if: steps.relevance.outputs.run == 'true'
         # PR #11（2026-09-14）：冒烟环境不跑 nacos/init.sh 完整栈——
         # NEX_DEV_NACOS_ENABLED=false 关闭 gateway 的 Nacos discovery 门控
         # （compose 默认 true，供本地完整栈用），否则 gateway 注册重试阻塞
@@ -98,6 +154,7 @@ jobs:
           curl -sf http://localhost:8080/actuator/health || (echo "gateway 未就绪" && exit 1)
 
       - name: 运行 k6 冒烟测试（连通性）
+        if: steps.relevance.outputs.run == 'true'
         # 2026-09-10 定界（第 5 轮实证后）：4 个业务场景（payment/bridge/webhook）
         # 全部需要真实商户凭证——供给链为 register（公开）→ api-keys（需 ADMIN
         # JWT），PR 冒烟环境无法自助完成，伪造凭证必然 401。PR 场景降为
@@ -148,7 +205,8 @@ jobs:
           exit $ok
 
       - name: 上传冒烟结果
-        if: always()
+        # 2026-10-01：追加 relevance 条件——跳过的步骤不应上传（空目录），保持一致
+        if: always() && steps.relevance.outputs.run == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: k6-smoke-results
@@ -157,7 +215,7 @@ jobs:
           retention-days: 14
 
       - name: 关停服务
-        if: always()
+        if: always() && steps.relevance.outputs.run == 'true'
         run: docker compose down || true
 
   # ============================================================

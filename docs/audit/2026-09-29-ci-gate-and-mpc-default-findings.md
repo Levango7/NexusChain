@@ -189,4 +189,160 @@ DTLS 握手重传路径，故按 `.trivyignore` 开头原则（只豁免上游�
 
 **本轮结束后 master 侧仍红的项**：`OWASP Dependency-Check`（缺 `NVD_API_KEY` secret，
 仓库设置层面动作，非代码可改）——这是唯一非代码可闭合的红。
+**（已于 2026-10-01 闭合：key 已配置且实测有效，阻断语义已恢复，见 §10。）**
+
+## 10. 追加：OWASP DC 的 NVD key 实测 + 阻断语义恢复 + 「空心绿」取证（2026-10-01）
+
+**背景**：§9 末记录的「master 侧唯一非代码可闭合的红 = OWASP Dependency-Check（缺
+`NVD_API_KEY`）」已于本轮闭合。
+
+**动作与证据**
+
+| 项 | 事实 |
+|----|------|
+| secret | `NVD_API_KEY` 由 owner 于 2026-09-30 创建（`gh secret list` 实测 `total_count: 1`，`updated_at 2026-09-30T22:11:42Z`） |
+| 对照 run | push run `36780102329` 的 OWASP job：`started 22:10:35Z` / `completed 22:10:42Z`（**7 秒**）→ 失败 |
+| **失败真实原因** | **竞态**：job 启动（22:10:35Z）比 secret 创建（22:11:42Z）**早 67 秒**，读到的仍是空串 → 命中 `if [[ -z "$NVD_API_KEY" ]]` 守卫。**不是 key 无效**（当时一度被误记为"key 无效"） |
+| 复核 run | `workflow_dispatch` run `36784537663`（key 已在库）：`22:31:36Z → 22:51:48Z`，**20 分 12 秒**，结论 `success` |
+| 库连通性证据 | 报告 `scanInfo.dataSource`：`NVD API Last Checked = 2026-09-30T22:51:36Z`；engine `13.0.0` |
+| 处置 | 摘除 `security-scan.yml` 该 job 的 `continue-on-error: true`，恢复 `--failOnCVSS=9` 阻断语义 |
+
+**判定逻辑**：缺 key 时该 job 约 5~7 秒即 `exit 1`；本次运行 **20 分 12 秒**且报告里留下 NVD
+拉取时间戳 —— 两侧互证 key 有效、且确实在用 NVD 库（而非同名不同源的库）。
+
+**⚠️ 本轮最重要的发现：这个绿是「空心绿」（检测力为零）**
+
+解析 run `36784537663` 的 `dependency-check-report.json`：
+
+| 指标 | 实测值 |
+|------|--------|
+| `dependencies` 条目数 | 54 |
+| 构成 | `.js` 37 / `.json` 15 / `.jar` 2（仅 `gradle-wrapper.jar`） |
+| **取得 CPE（`packages`）** | **0 / 54** |
+| `vulnerabilities` | 0 |
+| JVM 侧 | **未解析 Gradle 依赖图**（只有 wrapper jar） |
+
+单个依赖对象的字段集合实测为
+`isVirtual | fileName | filePath | md5 | sha1 | sha256 | evidenceCollected` ——
+**连 `packages` 字段都不存在**（未识别出任何组件）。故该 job 的绿只说明
+「NVD 库拉通了 + 提交物里没有可识别的组件漏洞」，**不说明 JVM 依赖无漏洞**。
+
+**覆盖来源澄清（纠正旧文档表述）**
+`docs/dependency-check-update-policy.md` 原文称「Trivy 的 fs 与镜像扫描**仍覆盖 Gradle 依赖
+漏洞**」——**fs 侧不成立**：
+- Trivy 对 Java 只识别 `pom.xml`(Maven) 与 `gradle.lockfile`；本仓库 `git ls-files` 显示
+  **两者均不存在**（仅有 6 个位于 build 缓存内的 `pom.xml`，未跟踪）；
+- Trivy **不解析 `build.gradle`**（仓库跟踪 **19 个** `build.gradle`，不在其识别范围）。
+
+→ JVM 依赖的**唯一真实门禁是 Trivy 镜像扫描的 `Java (jar)` 层**（run `36780102329` 实测：
+nexus-core 由 `Java (jar) Total: 4 (HIGH: 4)` 转 success，即 jackson `2.21.7/3.1.7` 在该层验证）；
+**未被打进任何镜像的依赖（如仅测试期使用）当前无人覆盖**。
+
+**本轮落地的防误读措施**：`security-scan.yml` 新增「扫描覆盖度自检」步骤（`if: always()`），
+每次运行把「条目数 / 已识别（CPE 或漏洞 ID）数 / 漏洞数 / 条目类型分布 / NVD API Last Checked」
+打印到日志与 Job Summary；覆盖度为零时发 `::warning::` 而**不失败**（扫描器能力不足属待升级项，
+不应表现成"门禁抓到漏洞"）。政策文档同步改写（含"命中 CVSS≥9 时的处置顺序"与 suppressions 用法）。
+
+**未修缺口（需决策）**
+1. **`owasp/dependency-check:latest` 未钉 digest**：浮动 tag → 每次运行可能拉到不同引擎版本，
+   门禁结果不可复现，与本仓库"禁止浮动引用"的供应链原则冲突（该原则此前只约束
+   `Dependency-Check_Action` 的 commit SHA，自 2026-09-10 改用 `docker run` 后**约束落空**）。
+   建议：钉 digest + 纳入季度更新流程，或显式承认该例外并记录理由。
+2. **Gradle 依赖图未解析**（本 job 检测力为 0 的根因）：升级路径见
+   `docs/dependency-check-update-policy.md`「升级为『真覆盖』的前置条件」。
+
+## 11. 追加：required check「永不上报」死锁 —— k6 Smoke Test (PR)（2026-10-01，PR #16 实证）
+
+**发现路径**：PR #16 由受守卫的 watcher 自动 squash 合并时，**18 个 check 全部 `COMPLETED`、0 失败、
+0 未完成**，却返回：
+
+```
+X Pull request Levango7/NexusChain#16 is not mergeable: the base branch policy prohibits the merge.
+To have the pull request merged after all the requirements have been met, add the `--auto` flag.
+To use administrator privileges to immediately merge the pull request, add the `--admin` flag.
+```
+
+**取证（逐步排除）**
+
+| 检查项 | 实测 | 结论 |
+|--------|------|------|
+| 是否缺 reviewer 审批 | `required_pull_request_reviews` = **none** | 不是审批问题 |
+| 是否管理员可绕过 | `enforce_admins.enabled` = **true** | **`--admin` 也不行** |
+| required checks 清单（7 项） | Build & Test / Gitleaks / Trivy FS / SAST / Cargo Audit / Code Hygiene / **k6 Smoke Test (PR)** | 其中 6 项在 PR #16 里均为 `SUCCESS` |
+| PR #16 的 check rollup | 18 项，**没有 `k6 Smoke Test (PR)`** | 该 check **从未上报** |
+| 分支上实际启动的 workflow | `gh run list --branch ci/owasp-dc-blocking` 只有 2 个（Security Scan、CI/CD Pipeline） | `performance-test.yml` **没被触发** |
+| 触发条件 | `pull_request.paths = [nexus-gateway/**, nexus-bridge/**, perf/k6/**, .github/workflows/performance-test.yml]` | 而 PR #16 只改 `security-scan.yml`/`CHANGELOG.md`/`docs/**` → **不匹配** |
+| 对照 | PR #15（改了 `nexus-gateway/**`）的 `k6 Smoke Test (PR)` = `SUCCESS`，正常合并 | 差异由 paths 匹配与否解释，非偶发 |
+
+**机理**：GitHub 对 required check 的判定是「**必须存在一个针对该 head 的、结论为成功的 check run**」。
+workflow 因 `paths` 过滤未启动 → **没有 check run** → 状态永远停在 "Expected — Waiting for status to
+be reported" → `mergeStateStatus` 恒为 `BLOCKED`。由于 `enforce_admins=true`，**任何身份都无法绕过**。
+
+**影响面（结构性，非本 PR 特有）**：凡「变更集不触碰那四条路径」的 PR 都**永远合不进去** ——
+纯文档、纯 CHANGELOG、其它 workflow 的改动全部中招；且失败信息 ("base branch policy prohibits the
+merge") 完全不提示是哪个 check 缺失，排查成本高。
+
+**修复**（`performance-test.yml`，同一 PR 内）
+- 删除 `paths` 白名单 → workflow 每次都启动、check 必上报；
+- 新增 `id: relevance` 步骤（**无 `if`，永远执行**）：用
+  `git diff --name-only "${{ github.event.pull_request.base.sha }}...HEAD"` 判定相关性；
+  不相关 → 后续重步骤跳过、job 仍 `success`（30 分钟开销降为秒级）；
+  判定失败 → **倾向于实跑**（保守）；`workflow_dispatch` → 实跑；
+- 4 个重步骤加 `if: steps.relevance.outputs.run == 'true'`；收尾步骤
+  `always() && steps.relevance.outputs.run == 'true'`；
+- `checkout` 补 `fetch-depth: 0`（浅克隆会让上述 diff 失败）；
+- **job 名不动**（required check 名必须逐字一致）。
+
+**验证方法（可复现）**：`notes/nexus-validation/validate-perf-workflow.py` ——
+① YAML 结构断言（`pull_request` 无 `paths`/`paths-ignore`、job 名未变、守卫与步骤顺序正确）；
+② `bash -n` 语法检查；③ **在临时 git 仓库真跑脚本**四用例并断言退出码为 0：
+doc-only → `run=false`、`nexus-gateway/**` → `run=true`、无效 base → `run=true`、dispatch → `run=true`。
+
+**留下的通用规则（后续新建门禁必须遵守）**
+1. **列为 required check 的 workflow 不得使用 `paths`/`paths-ignore` 过滤**；
+2. 同理**不要**把 required check 放在「可能被 job 级 `if` 跳过」的 job 上 —— skipped 的 check
+   能否满足保护项属 GitHub 隐式语义，不应依赖；
+3. 分支保护启用 `enforce_admins` 后**没有逃生舱**：门禁自身的可满足性必须先被验证，
+   否则会把整个仓库的合并能力一起锁死。
+
+## 12. 追加：Build & Test 的「定时炸弹」测试 —— required check 从 2026-10-01T00:00Z 起永久红（2026-10-01）
+
+**发现路径**：PR #16 修完 k6 悬空 check 后，`Build & Test (JDK 17 / ubuntu-latest)` 转为 `FAILURE`，
+watcher 按守卫规则拒绝合并。该 job 是 required check → **全仓合并能力再次被锁死**。
+
+**取证（逐层排除 flaky 假设）**
+
+| 步骤 | 实测 | 推论 |
+|------|------|------|
+| 失败测试 | `DataExportServiceTest > processExport — WEBHOOK_DELIVERIES 类型 CSV 导出成功 FAILED`，`AssertionFailedError` at `DataExportServiceTest.java:293`；CI `2408 tests completed, 1 failed` | 单点失败 |
+| 断言内容 | 第 293 行 = `assertEquals(1, request.getRecordCount())`；**紧邻的第 292 行 `assertEquals(COMPLETED, request.getStatus())` 通过** | 非异常路径（异常会把状态置 FAILED）→ 只可能是 `recordCount` 被设成 **0**（记录被过滤） |
+| 是否本次改动引入 | 本 PR 只改 `.github/workflows/performance-test.yml` / `CHANGELOG.md` / `docs/**`，**未触任何 Java**；同分支上一 SHA 同一 job 为 success | 与本次改动无关 |
+| 两次运行时间 | 成功 `2026-09-30T23:16Z`；失败 `2026-10-01T00:05Z` | 指向"时间相关" |
+
+**定因（代码取证）**
+
+- 测试第 **625** 行：`delivery.setCreatedAt(java.time.Instant.now());`
+- 服务端 `DataExportService.queryDataForExport()` 的 `WEBHOOK_DELIVERIES` 分支**按请求窗口过滤**：
+  `!w.getCreatedAt().isBefore(dateFrom.atZone(UTC).toInstant()) && !…isAfter(dateTo…)`
+- 测试第 **275** 行写死的窗口：`dateTo = LocalDateTime.of(2026, 9, 30, 23, 59)`（UTC 转换）
+
+→ `Instant.now()` 一旦越过 `2026-09-30T23:59Z`，记录即被过滤 → `recordCount = 0` → 断言必失败。
+**这是定时炸弹而非随机 flaky**：自 **2026-10-01T00:00Z** 起该 required check 会**永久红**。
+
+**同类风险排查**：全仓仅 3 个测试使用写死的 `2026-09-30` 窗口
+（`DataExportControllerTest` / `DataExportServiceTest` / `ReconciliationFileServiceTest`），
+其中**只有 `DataExportServiceTest` 同时用 `.now()` 造记录时间戳** → 与"只红 1 个测试"一致，无其它同类炸弹。
+（`ChainSettlementConfirmationServiceTest` 等使用 `Instant.now().minus(35, MINUTES)` 这类**相对**窗口，本质不同。）
+
+**修法（仅测试，不动生产代码）**
+`createWebhookDelivery(...)` 的 `createdAt` 由隐式 `Instant.now()` 改为**显式入参**，
+调用处传入窗口内的固定时刻（`2026-09-15T12:00Z`）→ 断言与运行时钟解耦。
+
+**验证（本地实跑）**
+`./gradlew :nexus-gateway:test --tests '*DataExportServiceTest*'` ——
+修前 **BUILD FAILED in 3m 10s**（同一行 293、`24 tests completed, 1 failed`）；
+修后 **BUILD SUCCESSFUL in 2m 9s**。
+
+**留下的通用规则**：凡"按时间窗口过滤"的断言，测试数据的时间戳**必须**用固定值或**相对**偏移，
+**禁止** `now()` 搭配写死的过去窗口 —— 否则到期即全仓不可合并，且报错信息完全不指向门禁可操作性。
 
