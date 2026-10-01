@@ -42,7 +42,7 @@ jobs:
   # ============================================================
   code-hygiene:
     name: Code Hygiene (ratchet gate)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:
       - name: Checkout 代码
@@ -96,7 +96,7 @@ jobs:
   # ============================================================
   explorer-frontend:
     name: Explorer Frontend (lint / test / build / artifacts)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     defaults:
       run:
@@ -462,7 +462,7 @@ jobs:
   # ============================================================
   mpc-java-cluster-e2e:
     name: MPC Java Cluster E2E (CGGMP21 3-node)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: build-and-test
     timeout-minutes: 45
     steps:
@@ -543,7 +543,7 @@ jobs:
   # ============================================================
   mpc-kind-smoke:
     name: MPC Kind Smoke (mpc-engine chart on K8s)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: build-and-test
     timeout-minutes: 50
     steps:
@@ -680,7 +680,7 @@ jobs:
   # ============================================================
   flyway-migration-check:
     name: Flyway 迁移预检
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     services:
       mysql:
         image: mysql:8.0
@@ -773,7 +773,7 @@ jobs:
   # ============================================================
   hardhat-e2e:
     name: Hardhat L1/L2 E2E (Node 22)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # 观察模式已毕业（2026-08-30 首轮真实执行：33 用例运行/0 失败，
     # 5 类全部真实执行——治理 12/桥 4/校验管道 11/L2↔L1 6；其余 13 用例为
     # 环境断言下的合法 assumeTrue 跳过），转为强制门禁。
@@ -822,7 +822,7 @@ jobs:
     name: Docker Build & Push (${{ matrix.module }})
     needs: build-and-test
     if: github.ref == 'refs/heads/master' && github.event_name == 'push'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # GHCR 推送需要 packages: write 权限（默认 GITHUB_TOKEN 无此权限，
     # 导致 "denied: installation not allowed to Create organization package"）。
     permissions:
