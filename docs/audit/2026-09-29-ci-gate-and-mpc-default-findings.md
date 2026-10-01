@@ -346,3 +346,145 @@ watcher 按守卫规则拒绝合并。该 job 是 required check → **全仓合
 **留下的通用规则**：凡"按时间窗口过滤"的断言，测试数据的时间戳**必须**用固定值或**相对**偏移，
 **禁止** `now()` 搭配写死的过去窗口 —— 否则到期即全仓不可合并，且报错信息完全不指向门禁可操作性。
 
+## 13. 追加：OWASP DC 迁到官方 Gradle 插件（真依赖图）+ 覆盖度自检失败化（2026-10-01，PR #17）
+
+**背景**：§10 取证了 docker 路径的「空心绿」（54 条目 / **0** 条取得 CPE）。§13 记录把扫描对象
+换成**解析后的依赖坐标（GAV）**的迁移、实跑证据，以及**第一次真扫描立刻暴露的 13 个 CRITICAL**
+及其模块级根因。
+
+### 13.1 改动（PR #17）
+
+| 文件 | 改动 |
+|------|------|
+| `build.gradle` | `plugins{}` 声明 `org.owasp.dependencycheck:13.0.0` **apply false**；`if (project.hasProperty('owaspScan'))` 内才 `apply plugin`，配置 `scanConfigurations=['runtimeClasspath']`、HTML+JSON、`failBuildOnCVSS=9.0f`、`suppressionFiles`、仅 NVD 分析器、`nvd.apiKey←env`、`nvd.delay=8000`、`data.directory→GRADLE_USER_HOME/dependency-check-data` |
+| `.github/workflows/security-scan.yml` | OWASP job 加 `Setup JDK 17`；`./gradlew dependencyCheckAggregate -PowaspScan --no-daemon --stacktrace`；key 走 `env:`（**不进命令行**）；报告路径迁到 `build/reports/dependency-check/`；**覆盖度自检由 warning 收紧为 error** |
+| `config/dependency-check-suppressions.xml` | 新增空基线 + 策略头（显式指定，非自动加载） |
+
+**为什么必须用 `-PowaspScan` 开关（本地三断言，`verify-owasp-gradle.ps1`）**
+
+| 断言 | 结果 | 含义 |
+|------|------|------|
+| `gradlew help` | `exit 0`、`dependencyCheck` 命中 **0** 次 | 插件可解析，且**不给开关时不生效** |
+| `dependencyCheckAggregate -PowaspScan --dry-run` | `exit 0`、聚合任务存在 | DSL 全键被接受，任务真实存在 |
+| **`gradlew check --dry-run`** | `exit 0`、`dependencyCheck` 命中 **0** 次 | **Build & Test 不会被拖去下 NVD** |
+
+两个失效方向都是**响的**：去掉开关 → 任务不存在 → job 立刻红；去掉 `hasProperty` 门控 →
+`check` 拉 ~20 分钟 NVD → `Build & Test`（required check）剧慢且因缺 key 而红。**不是静默跳过。**
+
+### 13.2 实跑证据（run `36803239132`，`workflow_dispatch` @ `ci/owasp-gradle-plugin` = `a8da204`）
+
+| 项 | 实测 |
+|----|------|
+| workflow 结论 / OWASP job | `failure`（**只有扫描步骤红**） |
+| `运行 OWASP Dependency-Check` 步骤 | **`failure`** = `failBuildOnCVSS=9.0f` 被 13 个 CRITICAL 触发（**门禁按设计工作**） |
+| `扫描覆盖度自检` 步骤 | `success`（覆盖度非 0 → 不再报空心绿） |
+| `上传 OWASP 报告` | `success`；artifact `owasp-dependency-check-report`（JSON **4,127,760 B**） |
+| NVD 数据源 | `NVD API Last Checked = 2026-10-01T02:38:53Z`（key 在插件路径下同样有效） |
+| 报告位置 | `build/reports/dependency-check/dependency-check-report.{html,json}` |
+
+### 13.3 覆盖度对比：门禁是否真的「看得见」了
+
+| 指标 | 旧 docker（run `36784537663`） | 新插件（run `36803239132`） |
+|------|------------------------------|----------------------------|
+| `dependencies` 条目 | 54 | **252** |
+| 构成 | `.js 37 / .json 15 / .jar 2` | **`.jar 242 / .dll 9 / .json 1`** |
+| **取得 CPE（已识别）** | **0 / 54** | **242 / 252**（96%） |
+| `vulnerabilities` | **0** | **141**（59 个依赖） |
+| 严重度 | — | **CRITICAL 19 / HIGH 45 / MEDIUM 75 / LOW 2** |
+| 覆盖对象 | 仓库里的**文件**（含 37 个 `.js`） | **19 个 Gradle 模块的 runtimeClasspath** |
+| 报告覆盖的模块引用 | — | `nexus-core:runtimeClasspath`、`java:runtimeClasspath`（= `nexus-sdk/java`）、`nexus-sdk` |
+
+**结论**：旧路径对 JVM 依赖的**检测力为 0**（0 条可取 CPE），新路径**能报出真实依赖漏洞** ——
+这正是「空心绿」与「真门禁」的分界。**0 → 242 条已识别**是本次迁移唯一重要的指标。
+
+### 13.4 第一次真扫描立刻暴露的 13 个 CRITICAL（去重）+ 模块级溯源
+
+`failBuildOnCVSS=9.0f` 触发项（19 条原始记录 → 去重 **13 个 CVE**，落在 **7 个制品**）：
+
+| CVE | CVSS | 制品 | 修复版本（CVE 描述直读） |
+|-----|------|------|------------------------|
+| CVE-2026-45674 / 47691 | **10.0** | `netty-all-4.1.115.Final` | 4.1.135.Final / 4.2.15.Final |
+| CVE-2026-42579 / 42581 / 42584 | 9.8 / 9.8 / 9.1 | `netty-all-4.1.115.Final` | 4.1.133.Final / 4.2.13.Final |
+| CVE-2026-56820 / 75595 | 9.1 / 9.1 | `netty-all-4.1.115.Final` | 4.1.137.Final / 4.2.17.Final |
+| CVE-2026-53914 | 9.8 | `kotlin-stdlib(-jdk7/-jdk8)-2.2.21` | **2.4.20** |
+| CVE-2026-65637 / 65905 | 9.8 / 9.8 | `tomcat-embed-core/-websocket-11.0.24` | **11.0.25** |
+| CVE-2026-65182 / 68525 | 9.1 / 9.1 | `tomcat-embed-core/-websocket-11.0.24` | **11.0.25** |
+| CVE-2023-39017 | 9.8 | `quartz-2.3.2` | 描述指向 **`quartz-jobs`** 组件（见 13.5-④） |
+
+**溯源（`dependencies[].projectReferences`）—— 泄漏点只有两个 runtimeClasspath：**
+
+| 制品（严重度） | 出现的模块 |
+|----------------|-----------|
+| `tomcat-embed-core-11.0.24`（CRITICAL/HIGH/MEDIUM） | **`java:runtimeClasspath`**（`nexus-sdk/java`） |
+| `tomcat-embed-core-11.0.25`（**无**） | `nexus-core:runtimeClasspath` |
+| `netty-all-4.1.115.Final`（CRITICAL…） | `nexus-core:runtimeClasspath` |
+| `netty-all-4.2.17.Final`（仅 MEDIUM） | `java:runtimeClasspath` |
+| `kotlin-stdlib(-jdk7/-jdk8)-2.2.21`（CRITICAL） | `java` + `nexus-core` |
+| `quartz-2.3.2`（CRITICAL） | `nexus-core:runtimeClasspath` |
+
+### 13.5 根因分类：**不是「全都没修」**，而是四种不同性质的问题
+
+① **模块级 BOM 覆盖漏了一个模块（真缺陷，且图像扫描结构上看不到）**
+`nexus-sdk/java` 是 `java-library`（**不产出镜像**），仓库的 tomcat 修复
+（`ext['tomcat.version'] = '11.0.25'`）只加在 `nexus-gateway` / `nexus-bridge` /
+`nexus-wallet-service` / `nexus-signing-service` / `nexus-core` **5 个模块**里 ——
+`io.spring.dependency-management` 的 `ext[...]` 覆盖是**项目局部**的，不跨模块传播，
+所以 sdk/java 按自己导入的 Boot 4.0.8 BOM 解析回 **11.0.24**。
+**Trivy 扫的是镜像**，而这个模块**没有镜像** → 该缺陷对镜像扫描**结构上不可见**。
+→ 修法：给 `nexus-sdk/java` 补同一条 `ext['tomcat.version'] = '11.0.25'`（零风险，与既有 5 处一致）。
+
+② **显式钉版过旧（真缺陷，可升级）**
+`nettyVersion = '4.1.115.Final'` 在根 `build.gradle:211` 与
+`nexus-core/nexus-core/build.gradle:126` 两处硬编码 → 7 个 CVE。
+CVE 描述给出的修复线都在 **4.1.133/135/137.Final**（或 4.2.13/15/17.Final）——
+升到 **4.1.137.Final 即同时清掉全部 7 条**，且**不跨 minor 线**（代码/文档按 4.1 API 写）。
+旁证：`nexus-sdk/java` 的 runtimeClasspath 里**已经**有 `netty-all-4.2.17.Final`（仅剩 1 条 MEDIUM）
+→ 说明修复版本完全可用，只是 nexus-core 这条线没跟上。
+
+③ **传递依赖未纳管（真缺陷，需显式约束）**
+`kotlin-stdlib(-jdk7/-jdk8) 2.2.21` 由传递路径引入（两个模块都有），修复版 **2.4.20**（跨 minor，
+但 kotlin stdlib 向后兼容、风险低）。→ 修法：显式约束/`ext['kotlin.version']` 抬到 2.4.20，
+**不要**靠"没人报"忽略。
+
+④ **CPE 过度匹配（误报，证据充分）**
+`quartz-2.3.2` 命中的 **CVE-2023-39017**，描述明确是
+「**quartz-jobs** 2.3.2 and below … **`org.quartz.jobs.ee.jms.SendQueueMessageJob`**」——
+而仓库依赖的是 **`org.quartz-scheduler:quartz`（核心）**，报告里**没有 `quartz-jobs` 制品**。
+→ 该 CVE 的可利用组件**不在 classpath 上**。按仓库既有口径（"可修复一律升级，不用 ignore"）
+这条属于**不可修**（不是版本问题），走 `suppressions.xml` + **证据 + 到期日**，并写清理由。
+
+### 13.6 结构性发现（再次出现）：这个 job **不能**设为 required check
+
+该 job 的 `if: github.event_name != 'pull_request'`（成本高，PR 不跑）意味着
+**在任何 PR 上都不会上报**。若把它加进 branch protection 的 required checks，
+就会**精确复现 §11 的「永不上报」死锁**：required check 永不出现 → PR 永久 `BLOCKED`，
+且 `enforce_admins=true` 下 `--admin` 也无法绕过。
+
+唯一可行路径 = 复刻 §11 的修法：让该 job 在 PR 路径上**总是上报**（不设 `paths`/job 级 `if`），
+把重活（NVD 下载 + 扫描）放到**相关性判断之后**按需执行；代价是 NVD 冷启动 ~20 分钟
+会落在 PR 首次运行上 —— **需产品口径确认**，本次未动分支保护。
+
+**补充通用规则（接 §11 第 3 条）**
+4. **"能不能当 required check"由「是否在所有 PR 上上报」决定，与"门禁重不重要"无关** ——
+   高成本门禁（镜像/SCA 全量扫描）天然倾向用 `if`/`paths` 省算力，而这**恰好**使它不可被设为
+   required；需要它成为硬门禁时，必须改成**总是上报 + 内部相关性门控**，而不是靠加保护项施压。
+
+### 13.7 未关闭项（诚实记录）
+
+1. **13 个 CRITICAL 待整改**（13.5 的 ①②③④ 四项）—— 本 PR 只交付**看得见**的能力，
+   不夹带生产依赖升版；整改应独立成 PR（netty/kotlin 升版 + sdk/java 补覆盖 + quartz 证据化抑制）；
+2. **本 job 仍非 required check**（13.6）；
+3. **未启用 Gradle 依赖校验**（仓库无 `verification-metadata.xml`）→ 插件 jar 及传递依赖
+   **哈希未固定**；精确版本挡"版本漂移"，挡不住"同版本被替换产物"；
+4. **NVD 数据目录未接 CI 缓存**（`data.directory` 指向 `GRADLE_USER_HOME/...`，无 `actions/cache`）
+   → 冷启动可能重复下载（时间成本，非正确性问题）；
+5. **仅 NVD 分析器** → npm 侧（`nexus-core` 的 Hardhat/`yarn.lock`）不在本 job 覆盖范围，
+   仍由 Trivy fs 承担；本次报告里 `.json ×1` 即为该侧残留信号，不应解读为"npm 已覆盖"。
+
+### 13.8 这次迁移真正的价值（一句话）
+
+**同一个仓库、同一批依赖，换扫描对象后，从「0 条可取 CPE」变成「242 条已识别 + 13 个 CRITICAL」，**
+其中一个还是**镜像扫描结构上永远看不到的库模块缺陷**。这说明：门禁的"绿"必须先证明
+**它有能力变红**，否则绿只是"没在看"。
+
+
