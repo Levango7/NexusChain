@@ -18,6 +18,25 @@ repositories {
 }
 
 dependencies {
+    // === 2026-10-01 SCA 整改（OWASP DC 插件首次真扫描，审计 §13.4/§13.5①）===
+    // 本模块是 java-library（**不产出镜像**）→ Trivy **镜像**扫描结构上看不到它的依赖；
+    // 而 io.spring.dependency-management 的 ext['tomcat.version'] 覆盖**只在本项目内生效、
+    // 不跨模块传播**（5 个微服务模块各自声明，本模块此前漏了），本模块按自己导入的
+    // Boot BOM 解析回 tomcat-embed-core 11.0.24（含 4 个 CRITICAL/HIGH CVE）。
+    // 这里用 Gradle 原生约束（platform 与 constraints 同属"软/首选"约束，冲突时**取高版本**）
+    // 显式抬版；tomcat 目标值与其它 5 个模块保持一致，避免同一制品出现两个版本。
+    constraints {
+        // CVE-2026-65637 / 65905（CVSS 9.8）+ CVE-2026-65182 / 68525：11.0.24 → 11.0.25
+        // （该版本在 nexus-core 的 runtimeClasspath 实测为**零漏洞**，见 run 36803239132 报告）
+        implementation 'org.apache.tomcat.embed:tomcat-embed-core:11.0.25'
+        implementation 'org.apache.tomcat.embed:tomcat-embed-websocket:11.0.25'
+        // CVE-2026-53914（CRITICAL，CVSS 9.8）：kotlin-stdlib 传递引入 2.2.21 → 2.4.20（修复版）；
+        // jdk7/jdk8 是 kotlin 的别名制品，坐标不同、必须一并约束，否则仍会各报一条。
+        implementation 'org.jetbrains.kotlin:kotlin-stdlib:2.4.20'
+        implementation 'org.jetbrains.kotlin:kotlin-stdlib-jdk7:2.4.20'
+        implementation 'org.jetbrains.kotlin:kotlin-stdlib-jdk8:2.4.20'
+    }
+
     // TD-04（tech-debt-audit）：jackson-databind 移除硬编码 2.14.2，改由下方
     // implementation platform 引入的 Spring Boot 3.2.5 BOM 管理（解析为 2.15.4），
     // 与微服务群（BOM 2.15.4）及 nexus-core（根 ext 2.15.4）对齐，消除三轨并存。
