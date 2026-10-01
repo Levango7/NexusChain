@@ -46,10 +46,10 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout 代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
@@ -103,10 +103,10 @@ jobs:
         working-directory: nexus-explorer
     steps:
       - name: Checkout 代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Node 22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '22'
           cache: npm
@@ -167,10 +167,10 @@ jobs:
         os: [ubuntu-latest]
     steps:
       - name: Checkout 代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup JDK 17 (Amazon Corretto)
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           java-version: '17'
           distribution: 'corretto'
@@ -325,8 +325,10 @@ jobs:
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          working-directory: mpc-engine
           # 显式安装 rustfmt 与 clippy 组件，供下方格式检查与 lint 门禁使用。
+          # 注：working-directory 不是本 action 的有效输入（工具链为全局安装，
+          # 各步骤以自身的 working-directory 键控制 cwd），移除以消除 runner
+          # "Unexpected input(s)" 警告（CI annotation 曾双报：该警告 + exit code 1）。
           components: rustfmt,clippy
 
       # 安装 protoc（Protocol Buffers 编译器）——prost-build 在 cargo clippy/test 编译时需要。
@@ -412,7 +414,7 @@ jobs:
         run: ./gradlew jacocoTestReport --no-daemon
 
       - name: 上传覆盖率到 Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./nexus-gateway/build/reports/jacoco/test/jacocoTestReport.xml,./nexus-bridge/build/reports/jacoco/test/jacocoTestReport.xml,./nexus-core/nexus-core/build/reports/jacoco/test/jacocoTestReport.xml,./nexus-signing-service/build/reports/jacoco/test/jacocoTestReport.xml,./nexus-wallet-service/build/reports/jacoco/test/jacocoTestReport.xml,./nexus-sdk/java/build/reports/jacoco/test/jacocoTestReport.xml
@@ -421,7 +423,7 @@ jobs:
 
       - name: 上传 JaCoCo HTML 报告
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: jacoco-reports-${{ matrix.os }}
           path: |
@@ -431,7 +433,7 @@ jobs:
           retention-days: 14
 
       - name: 上传 JAR 构建产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: jar-artifacts-${{ matrix.os }}
           path: |
@@ -465,10 +467,10 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Checkout 代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup JDK 17 (Amazon Corretto)
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           java-version: '17'
           distribution: 'corretto'
@@ -517,7 +519,7 @@ jobs:
 
       - name: Upload engine logs on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mpc-cluster-e2e-logs
           path: |
@@ -546,7 +548,7 @@ jobs:
     timeout-minutes: 50
     steps:
       - name: Checkout 代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -694,7 +696,7 @@ jobs:
           --health-retries=10
     steps:
       - name: Checkout 代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: 等待 MySQL 就绪
         run: |
@@ -778,17 +780,17 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout 代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup JDK 17 (Amazon Corretto)
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           java-version: '17'
           distribution: 'corretto'
           cache: gradle
 
       - name: Setup Node 22 (Hardhat EDR 兼容 LTS)
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '22'
           cache: npm
@@ -864,7 +866,7 @@ jobs:
             timeout-minutes: 25
     steps:
       - name: Checkout 代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Compute lowercase image prefix
         id: img_prefix
@@ -874,14 +876,14 @@ jobs:
         run: echo "prefix=${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           # 所有模块 Dockerfile 均从 repo 根目录 COPY（gradlew/build.gradle/
           # settings.gradle/gradle/ 及 project() 依赖模块），故 context 必须为根。

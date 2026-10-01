@@ -20,7 +20,7 @@ on:
       - 'deploy/helm/**'
 
 # 最小权限原则：本 workflow 仅读取仓库代码并产出 artifact，无需写权限。
-# actions/upload-artifact@v4 在限制范围内可正常上传（其使用 actions 内部 token）。
+# actions/upload-artifact@v7 在限制范围内可正常上传（其使用 actions 内部 token）。
 permissions:
   contents: read
 
@@ -31,8 +31,8 @@ jobs:
     steps:
       - name: Checkout 代码
         # GitHub 官方 action，使用主版本标签 v4（官方供应链可信）
-        # 如需进一步钉 sha：actions/checkout@v4 → 查询对应 commit sha
-        uses: actions/checkout@v4
+        # 如需进一步钉 sha：actions/checkout@v5 → 查询对应 commit sha
+        uses: actions/checkout@v5
 
       - name: Setup Helm
         # azure/setup-helm 使用主版本标签 v4
@@ -308,7 +308,7 @@ jobs:
       - name: 上传对比报告
         if: always()
         # GitHub 官方 action，使用主版本标签 v4
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: k8s-sync-report
           path: |
