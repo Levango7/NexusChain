@@ -278,8 +278,14 @@ class DataExportServiceTest {
                 DataExportType.WEBHOOK_DELIVERIES, DataExportFormat.CSV,
                 dateFrom, dateTo);
 
+        // 2026-10-01 修复（定时炸弹）：记录时间戳必须落在下方 dateFrom/dateTo 窗口内。
+        // 原实现（helper 内写死 Instant.now()）在 2026-10-01T00:00Z 之后必然越出
+        // [2026-09-01, 2026-09-30T23:59Z] → queryDataForExport 过滤掉该记录 →
+        // recordCount=0 → 下方第 293 行断言必失败（CI run 36794064247 与本地复现一致）。
+        // 现改为显式传入窗口内的固定时刻，使断言与运行时钟无关。
         WebhookDeliveryRecord delivery = createWebhookDelivery("DEL-001", "PAY-001",
-                MERCHANT_ID, "http://example.com/webhook");
+                MERCHANT_ID, "http://example.com/webhook",
+                LocalDateTime.of(2026, 9, 15, 12, 0).toInstant(java.time.ZoneOffset.UTC));
 
         when(exportRequestRepository.findById(1L)).thenReturn(Optional.of(request));
         when(exportRequestRepository.save(any(DataExportRequest.class)))
@@ -613,8 +619,19 @@ class DataExportServiceTest {
         return event;
     }
 
+    /**
+     * 构造 webhook 投递记录。
+     *
+     * <p>2026-10-01 修复：`createdAt` 改为**显式入参**。此前这里写死 `Instant.now()`，
+     * 而 {@code DataExportService.queryDataForExport()} 的 WEBHOOK_DELIVERIES 分支会按
+     * 请求的 [dateFrom, dateTo] 窗口过滤 createdAt；本测试类把窗口写死为
+     * 2026-09-01 ~ 2026-09-30T23:59Z，于是 2026-10-01T00:00Z 之后该记录必然被过滤 →
+     * recordCount=0 → 断言必失败（required check `Build & Test` 永久红，全仓无法合并）。
+     * 改为入参后断言与运行时钟解耦。</p>
+     */
     private WebhookDeliveryRecord createWebhookDelivery(String deliveryId, String paymentId,
-                                                         Long merchantId, String notifyUrl) {
+                                                         Long merchantId, String notifyUrl,
+                                                         java.time.Instant createdAt) {
         WebhookDeliveryRecord delivery = new WebhookDeliveryRecord();
         delivery.setDeliveryId(deliveryId);
         delivery.setPaymentId(paymentId);
@@ -622,7 +639,7 @@ class DataExportServiceTest {
         delivery.setNotifyUrl(notifyUrl);
         delivery.setPayload("{}");
         delivery.setAttemptCount(1);
-        delivery.setCreatedAt(java.time.Instant.now());
+        delivery.setCreatedAt(createdAt);
         return delivery;
     }
 

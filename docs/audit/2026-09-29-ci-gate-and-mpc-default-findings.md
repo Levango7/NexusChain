@@ -305,4 +305,44 @@ doc-only → `run=false`、`nexus-gateway/**` → `run=true`、无效 base → `
 3. 分支保护启用 `enforce_admins` 后**没有逃生舱**：门禁自身的可满足性必须先被验证，
    否则会把整个仓库的合并能力一起锁死。
 
+## 12. 追加：Build & Test 的「定时炸弹」测试 —— required check 从 2026-10-01T00:00Z 起永久红（2026-10-01）
+
+**发现路径**：PR #16 修完 k6 悬空 check 后，`Build & Test (JDK 17 / ubuntu-latest)` 转为 `FAILURE`，
+watcher 按守卫规则拒绝合并。该 job 是 required check → **全仓合并能力再次被锁死**。
+
+**取证（逐层排除 flaky 假设）**
+
+| 步骤 | 实测 | 推论 |
+|------|------|------|
+| 失败测试 | `DataExportServiceTest > processExport — WEBHOOK_DELIVERIES 类型 CSV 导出成功 FAILED`，`AssertionFailedError` at `DataExportServiceTest.java:293`；CI `2408 tests completed, 1 failed` | 单点失败 |
+| 断言内容 | 第 293 行 = `assertEquals(1, request.getRecordCount())`；**紧邻的第 292 行 `assertEquals(COMPLETED, request.getStatus())` 通过** | 非异常路径（异常会把状态置 FAILED）→ 只可能是 `recordCount` 被设成 **0**（记录被过滤） |
+| 是否本次改动引入 | 本 PR 只改 `.github/workflows/performance-test.yml` / `CHANGELOG.md` / `docs/**`，**未触任何 Java**；同分支上一 SHA 同一 job 为 success | 与本次改动无关 |
+| 两次运行时间 | 成功 `2026-09-30T23:16Z`；失败 `2026-10-01T00:05Z` | 指向"时间相关" |
+
+**定因（代码取证）**
+
+- 测试第 **625** 行：`delivery.setCreatedAt(java.time.Instant.now());`
+- 服务端 `DataExportService.queryDataForExport()` 的 `WEBHOOK_DELIVERIES` 分支**按请求窗口过滤**：
+  `!w.getCreatedAt().isBefore(dateFrom.atZone(UTC).toInstant()) && !…isAfter(dateTo…)`
+- 测试第 **275** 行写死的窗口：`dateTo = LocalDateTime.of(2026, 9, 30, 23, 59)`（UTC 转换）
+
+→ `Instant.now()` 一旦越过 `2026-09-30T23:59Z`，记录即被过滤 → `recordCount = 0` → 断言必失败。
+**这是定时炸弹而非随机 flaky**：自 **2026-10-01T00:00Z** 起该 required check 会**永久红**。
+
+**同类风险排查**：全仓仅 3 个测试使用写死的 `2026-09-30` 窗口
+（`DataExportControllerTest` / `DataExportServiceTest` / `ReconciliationFileServiceTest`），
+其中**只有 `DataExportServiceTest` 同时用 `.now()` 造记录时间戳** → 与"只红 1 个测试"一致，无其它同类炸弹。
+（`ChainSettlementConfirmationServiceTest` 等使用 `Instant.now().minus(35, MINUTES)` 这类**相对**窗口，本质不同。）
+
+**修法（仅测试，不动生产代码）**
+`createWebhookDelivery(...)` 的 `createdAt` 由隐式 `Instant.now()` 改为**显式入参**，
+调用处传入窗口内的固定时刻（`2026-09-15T12:00Z`）→ 断言与运行时钟解耦。
+
+**验证（本地实跑）**
+`./gradlew :nexus-gateway:test --tests '*DataExportServiceTest*'` ——
+修前 **BUILD FAILED in 3m 10s**（同一行 293、`24 tests completed, 1 failed`）；
+修后 **BUILD SUCCESSFUL in 2m 9s**。
+
+**留下的通用规则**：凡"按时间窗口过滤"的断言，测试数据的时间戳**必须**用固定值或**相对**偏移，
+**禁止** `now()` 搭配写死的过去窗口 —— 否则到期即全仓不可合并，且报错信息完全不指向门禁可操作性。
 

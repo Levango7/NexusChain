@@ -104,6 +104,36 @@ base 无效 → `run=true`（保守实跑）、workflow_dispatch → `run=true`�
 **同类风险排查**：全仓仅 2 个 workflow 带 path 过滤 —— `k8s-sync-check.yml`（**非** required check，
 无害）与本文件；其余 5 个 required check 的 workflow 均无过滤，故本项是唯一死锁源。
 
+### 阻断修复：Build & Test 的「定时炸弹」测试（2026-10-01，PR #16）
+
+**现象**：修完 k6 悬空 check 后，required check `Build & Test (JDK 17 / ubuntu-latest)` 变红：
+`DataExportServiceTest > processExport — WEBHOOK_DELIVERIES 类型 CSV 导出成功 FAILED`
+（`AssertionFailedError` at `DataExportServiceTest.java:293`，CI 侧 `2408 tests completed, 1 failed`）。
+
+**为什么不是 flaky（取证链）**
+- 失败的断言是 `assertEquals(1, request.getRecordCount())`，而**紧邻的第 292 行
+  `assertEquals(COMPLETED, request.getStatus())` 是通过的** → 排除异常路径（异常会把状态置
+  FAILED）→ 只可能是记录被过滤掉、`recordCount` 被设成 **0**；
+- 本 PR **未改任何 Java**，且同分支上一 SHA 的同一 job 为 success；
+- 测试第 625 行写死 `delivery.setCreatedAt(java.time.Instant.now())`，而
+  `DataExportService.queryDataForExport()` 的 WEBHOOK_DELIVERIES 分支会**按请求窗口过滤**
+  `createdAt`（`!isBefore(dateFrom) && !isAfter(dateTo)`，UTC 转换），窗口在测试第 275 行写死为
+  `2026-09-01 ~ 2026-09-30T23:59Z`；
+- 两次运行时间戳：成功 `2026-09-30T23:16Z`（`now()` 落在窗口内）、失败 `2026-10-01T00:05Z`
+  （`now()` 已越界）→ **从 2026-10-01T00:00Z 起该 required check 会永久红**，全仓再次无法合并。
+
+**修法**（仅测试，不动生产代码）：`createWebhookDelivery(...)` 的 `createdAt` 改为**显式入参**，
+调用处传入窗口内的固定时刻 `2026-09-15T12:00Z` → 断言与运行时钟解耦。
+
+**验证（本地实跑，非推断）**
+- 修前：`./gradlew :nexus-gateway:test --tests '*DataExportServiceTest*'` → **BUILD FAILED in 3m 10s**，
+  失败点 `DataExportServiceTest.java:293`，`24 tests completed, 1 failed`（与 CI 同一处）；
+- 修后：同命令 → **BUILD SUCCESSFUL in 2m 9s**。
+
+**同类风险排查**：全仓仅 3 个测试使用写死的 `2026-09-30` 窗口
+（`DataExportControllerTest` / `DataExportServiceTest` / `ReconciliationFileServiceTest`），
+其中**只有本测试同时用 `.now()` 造记录时间戳**（其余如 `ChainSettlementConfirmationServiceTest`
+用的是 `now().minus(35, MINUTES)` 这类**相对**窗口，不受时钟漂移影响）→ 与"只红 1 个测试"一致，无其它同类炸弹。
 
 
 ## [2.51.0] - 2026-09-28
