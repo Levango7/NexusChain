@@ -6,6 +6,7 @@ import org.nexus.gateway.model.PaymentOrder;
 import org.nexus.gateway.repository.PaymentOrderRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
@@ -14,8 +15,10 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.function.IntSupplier;
 
 /**
  * Sandbox simulation service for local development and testing.
@@ -46,15 +49,46 @@ public class SandboxSimulationService {
     private final MerchantService merchantService;
 
     /**
+     * Source of the 0–99 status roll used by {@link #randomOrderStatus()}.
+     *
+     * <p>Production wiring uses {@link ThreadLocalRandom}. Tests inject a
+     * deterministic source (seeded or boundary-cycling) so the documented
+     * 70/15/10/5 distribution is asserted deterministically instead of
+     * statistically — the previous random assertion had a ~0.59%
+     * (0.95^100) failure probability per run.</p>
+     */
+    private final IntSupplier statusRollSource;
+
+    /**
      * Constructor-based injection of dependencies.
+     *
+     * <p>{@code @Autowired} is required because the test-only constructor below
+     * also exists; without it Spring cannot choose a candidate when the
+     * {@code sandbox} profile is active.</p>
      *
      * @param paymentOrderRepository repository for payment order persistence
      * @param merchantService        service for merchant registration and API key management
      */
+    @Autowired
     public SandboxSimulationService(PaymentOrderRepository paymentOrderRepository,
                                      MerchantService merchantService) {
+        this(paymentOrderRepository, merchantService,
+                () -> ThreadLocalRandom.current().nextInt(100));
+    }
+
+    /**
+     * Test-only constructor: injects a deterministic 0–99 roll source.
+     *
+     * @param paymentOrderRepository repository for payment order persistence
+     * @param merchantService        service for merchant registration and API key management
+     * @param statusRollSource       supplies the 0–99 roll consumed by {@link #randomOrderStatus()}
+     */
+    SandboxSimulationService(PaymentOrderRepository paymentOrderRepository,
+                             MerchantService merchantService,
+                             IntSupplier statusRollSource) {
         this.paymentOrderRepository = paymentOrderRepository;
         this.merchantService = merchantService;
+        this.statusRollSource = Objects.requireNonNull(statusRollSource, "statusRollSource");
     }
 
     /**
@@ -275,7 +309,7 @@ public class SandboxSimulationService {
      * ~70% PAID, ~15% PENDING, ~10% FAILED, ~5% REFUNDED.
      */
     private PaymentOrder.OrderStatus randomOrderStatus() {
-        int roll = ThreadLocalRandom.current().nextInt(100);
+        int roll = statusRollSource.getAsInt();
         if (roll < 70) {
             return PaymentOrder.OrderStatus.PAID;
         } else if (roll < 85) {
