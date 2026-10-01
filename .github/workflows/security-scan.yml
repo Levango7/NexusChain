@@ -218,7 +218,21 @@ jobs:
   # 与其静默跳过让人误以为扫过了，不如明确报错。
   # ============================================================
   owasp-dependency-check:
-    if: github.event_name != 'pull_request'  # PR 不跑（需构建镜像/起栈，成本高）
+    # ⚠️ 「永远上报」试运行（TEMP：2026-10-01 起，评估截止 2026-10-15）——
+    # 目的：实测本 job 在 **PR 上真跑并上报真实状态** 的成本 / 稳定性 / 误报，为
+    # 「是否设为 required check」提供数据（审计 §13.10、策略文档「永远上报试运行」小节）。
+    # 语义：
+    #   - 同仓库 PR：真跑全量扫描（依赖图 + NVD）→ 门禁结论在**并进 master 之前**就可见；
+    #   - fork PR：仍**跳过**（无 NVD_API_KEY secret，5 秒硬红会被误读为代码问题），
+    #     缺口在 checks 列表里如实显示为 skipped（**不伪装成绿**）；
+    #   - push master / 周 cron / workflow_dispatch：与以前一致。
+    # 回退（评估不通过时逐字还原）：
+    #   1) 把下面 if 改回单行 `if: github.event_name != 'pull_request'  # PR 不跑`；
+    #   2) 删除紧随 Setup JDK 之后的「计算 NVD 缓存键」「缓存 NVD 漏洞库」两步；
+    #   3) 同步策略文档「执行位置」表项。步骤见 docs/dependency-check-update-policy.md。
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
     name: OWASP Dependency-Check
     runs-on: ubuntu-latest
     permissions:
@@ -235,6 +249,24 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
           cache: gradle
+
+      # === 「永远上报」试运行配套（TEMP，2026-10-01 ~ 2026-10-15，见 job 级注释）===
+      # 缓存 NVD 漏洞库目录（根 build.gradle：dependencyCheck.data.directory =
+      # GRADLE_USER_HOME/dependency-check-data）。不缓存时每次全量拉取：2026-10-01 实测
+      # 冷启动 46m05s（独占）~ 3h03m（与 master 侧扫描并发抢 NVD 配额）——PR 上不可接受；
+      # 命中缓存后变为**增量更新**（build.gradle 注释原文：7 天内复用只需数秒）。
+      # key 按 ISO 周轮换 → 一周至多一条，避免仓库 10GB 缓存被单一 job 挤满；
+      # restore-keys 允许跨周命中上一周的库作为增量基线（未命中则退化为全量，语义不变）。
+      - name: 计算 NVD 缓存键（按 ISO 周轮换）
+        id: dc_week
+        run: echo "week=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
+
+      - name: 缓存 NVD 漏洞库（dependency-check-data）
+        uses: actions/cache@v4
+        with:
+          path: ~/.gradle/dependency-check-data
+          key: dc-nvd-data-${{ runner.os }}-${{ steps.dc_week.outputs.week }}
+          restore-keys: dc-nvd-data-${{ runner.os }}-
 
       # 历史沿革（保留备查，勿照抄）：2021~2026-08 用 Dependency-Check_Action
       # （钉 commit sha 75ba02d6…），但其 `others` input 经 action.yml 单引号拼接会把

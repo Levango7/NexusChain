@@ -4,6 +4,25 @@
 
 ## [Unreleased]
 
+### OWASP Dependency-Check「永远上报」试运行（2026-10-01 起，TEMP 至 2026-10-15）
+
+- **触发变更**：`owasp-dependency-check` job 由「**PR 一律跳过**」改为**同仓库 PR 真跑**
+  （fork PR 仍跳过 —— 无 `NVD_API_KEY` secret，5 秒硬红会被误读成代码问题；缺口在
+  checks 列表里如实显示为 `skipped`，不伪装成绿）。`push master` / 周 cron /
+  `workflow_dispatch` 行为不变。
+- **配套：NVD 漏洞库缓存**（新增两步）：缓存 `~/.gradle/dependency-check-data`，key 按
+  ISO 周轮换（一周至多一条，避免挤满仓库 10GB 缓存），跨周命中上一周的库作为增量基线。
+  依据：2026-10-01 冷启动实测 **46m05s**（独占）~ **3h03m**（与 master 侧扫描并发抢
+  NVD 配额），不缓存则在 PR 上不可接受；缓存后为增量更新（`build.gradle` 注释：
+  7 天内复用只需数秒）。
+- **为什么是试运行而不是直接设为 required**：本 job 原 `if: github.event_name != 'pull_request'`
+  使它在 PR 路径下**不上报结果**，直接设为 required check 会复现审计 §11 的「永不上报」死锁；
+  而 PR #18 的 checks 列表已实测证明它会以 `skipped` 上报（**不是"永不上报"**）。缺的是
+  **PR 上真跑的成本/稳定性数据**，故先试运行、按期评估，再二选一（保留+设 required / 逐字回退）。
+- **评估项、两条出口与回退步骤**：见 `docs/dependency-check-update-policy.md`
+  「永远上报试运行」小节；实测对照与闪断记录见审计 §13.10–13.11。
+- **不变式**：不改 branch protection；不弱化 `failBuildOnCVSS=9.0f`；不批量豁免。
+
 ### CI 门禁与安全修复（2026-09-30 ~ 10-01，PR #14 已合并）
 
 **gitleaks 豁免失效根因（P2-C7）**

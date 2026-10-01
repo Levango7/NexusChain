@@ -16,7 +16,7 @@
 | 引擎内核 | `dependency-check-core:13.0.0`（由插件 POM 传递） |
 | 扫描对象 | 解析后的依赖图坐标（`scanConfigurations = ['runtimeClasspath']`），**不再**是归档文件级识别 |
 | 生效条件 | 必须显式传 `-PowaspScan`（理由见下） |
-| 执行位置 | `.github/workflows/security-scan.yml` 的 `owasp-dependency-check` job（`workflow_dispatch` / `push master` / 周 cron；**PR 不跑**，成本高） |
+| 执行位置 | `.github/workflows/security-scan.yml` 的 `owasp-dependency-check` job（`workflow_dispatch` / `push master` / 周 cron；**同仓库 PR 也跑** —— 「永远上报」试运行，2026-10-01 ~ 2026-10-15，见下文专节） |
 | 阻断阈值 | `failBuildOnCVSS = 9.0f`（CRITICAL 才红） |
 | 抑制基线 | `config/dependency-check-suppressions.xml` |
 | 报告 | `build/reports/dependency-check/dependency-check-report.{html,json}` |
@@ -106,6 +106,48 @@ id 'org.owasp.dependencycheck' version '[13,)'
       （2026-10-01 起为 0 时该步骤**会失败**，见下节）
 - [ ] artifact `owasp-dependency-check-report` 可下载，HTML + JSON 齐备
 - [ ] 本文档已同步更新
+
+### 「永远上报」试运行（TEMP：2026-10-01 ~ 2026-10-15）
+
+**为什么试**：本 job 原本只在 `push master` / 周 cron / `workflow_dispatch` 上产生结论 ——
+PR 路径下它**不产出任何结论**（`if: github.event_name != 'pull_request'`）。因此它**不能被设为
+required check**：会复现审计 §11 的「永不上报」死锁。而「能不能设为 required」这个决定，缺的
+正是 **PR 上真跑的成本与稳定性数据**，不是判断力 —— 所以先试运行，再用数据定去留。
+
+> 已有的事实（PR #18 的 checks 列表实测）：本 job 在 PR 路径下会以 **`skipped` 上报**
+> （`OWASP Dependency-Check = COMPLETED/SKIPPED`），**不是「永不上报」** —— §13.6 的担心
+> 需要按「skipped 在 branch protection 下算不算通过」重新实测，不能预设结论（见评估项 5）。
+
+**试运行期间的触发矩阵**
+
+| 触发 | 是否扫描 | checks 列表里的表现 |
+|------|----------|---------------------|
+| 同仓库 PR（head 在 `Levango7/NexusChain`） | ✅ 真跑全量（依赖图 + NVD） | 真实结论（绿/红都可见） |
+| fork PR | ❌ 跳过（无 `NVD_API_KEY` secret） | `skipped`（如实显示，**不伪装成绿**） |
+| `push master` / 周 cron / `workflow_dispatch` | ✅ 真跑（与以前一致） | 真实结论 |
+
+**成本（2026-10-01 实测）**：冷启动 **46m05s**（独占）~ **3h03m**（与 master 侧扫描并发抢
+NVD 配额）。因此试运行**必须**配套「缓存 NVD 漏洞库目录」两步（`~/.gradle/dependency-check-data`，
+key 按 ISO 周轮换）——命中缓存后是**增量更新**，不是重新全量拉取。
+
+**评估项（2026-10-15 前逐项记录结论）**
+
+| # | 指标 | 通过线 |
+|---|------|--------|
+| 1 | 同仓库 PR 上 DC job 的墙钟时间（冷/热缓存） | 热缓存 ≤ 10 分钟 |
+| 2 | 失败是否可归因（真漏洞 / NVD 侧网络或配额） | 网络类失败偶发，且日志可区分 |
+| 3 | 缓存命中与体积 | 未把仓库 10GB 缓存挤满 |
+| 4 | 与 push/cron 运行的 NVD 配额互相挤占 | 不出现「两份都退化成小时级」 |
+| 5 | fork PR 的 `skipped` 在 branch protection 下是否阻合并 | **必须实测**（不预设） |
+
+**两条出口（评估后二选一，并把结论写回本文件）**
+
+- **(a) 保留**：去掉 TEMP 标记，并把本 job 加入 required checks —— 这才是「永远上报」的目的
+  （在 PR 阶段就拦住 SCA 回归）。加入前先解决评估项 5（fork PR 的 `skipped` 语义）；
+- **(b) 回退**：按 job 注释逐字还原 `if:` 并删掉两步缓存，回到「只在 push/cron 上跑」；
+  回退时**必须**在同一处记录「为什么没能成为 required check」，避免下次从头讨论一遍。
+
+**试运行不做的事**：不改 branch protection；不弱化 `failBuildOnCVSS = 9.0f`；不批量豁免。
 
 ## NVD API Key 配置（✅ 已完成，job 已恢复阻断语义）
 
