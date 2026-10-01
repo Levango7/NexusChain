@@ -102,7 +102,7 @@ jobs:
             timeout-minutes: 25
     steps:
       - name: Checkout 代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       # 2026-09-22 修复：GHCR 要求镜像仓库名**全小写**。
       # 此前直接用 `${{ github.repository }}`（本仓库为 `Levango7/NexusChain`，
@@ -118,7 +118,7 @@ jobs:
         run: echo "value=${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -128,7 +128,7 @@ jobs:
       # 又能完整验证「标签合法性 + GHCR 认证 + 推送权限」这条此前一直失败的路径。
       - name: Build and push image（试跑：仅 :dryrun）
         if: inputs.dry_run
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ./${{ matrix.module }}/Dockerfile
@@ -137,7 +137,7 @@ jobs:
 
       - name: Build and push image（tag = git tag 版本号）
         if: github.event_name == 'push'
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ./${{ matrix.module }}/Dockerfile
@@ -158,7 +158,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout 代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -212,7 +212,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout 代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Helm
         uses: azure/setup-helm@v4
@@ -248,7 +248,7 @@ jobs:
     environment: staging
     steps:
       - name: Checkout 代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       # 2026-09-22：未配置 KUBE_CONFIG_STAGING 时**明确跳过**而非失败。
       # 现状：该 secret 尚未配置（暂无 staging 集群），此前每次发布都在此
@@ -316,7 +316,7 @@ jobs:
     environment: production
     steps:
       - name: Checkout 代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       # 2026-09-22：与 deploy-staging 同策略 —— 未配置凭据则跳过并告警，
       # 不把一个"尚未配置"的状态渲染成"部署失败"。
@@ -393,7 +393,7 @@ jobs:
     environment: ${{ github.event.inputs.environment }}
     steps:
       - name: Checkout 代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 

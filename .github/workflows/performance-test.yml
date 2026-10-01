@@ -66,7 +66,7 @@ jobs:
       - name: Checkout 代码
         # 2026-10-01：fetch-depth 0——下方相关性判断需要与 base 做 diff；
         # 默认浅克隆（仅 1 个 commit）会让 `git diff <base>...HEAD` 直接失败。
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -113,7 +113,7 @@ jobs:
 
       - name: Setup JDK 17
         if: steps.relevance.outputs.run == 'true'
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           java-version: '17'
           distribution: 'corretto'
@@ -207,7 +207,7 @@ jobs:
       - name: 上传冒烟结果
         # 2026-10-01：追加 relevance 条件——跳过的步骤不应上传（空目录），保持一致
         if: always() && steps.relevance.outputs.run == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: k6-smoke-results
           path: perf/k6/results/
@@ -231,7 +231,7 @@ jobs:
       BASE_URL_BRIDGE: ${{ github.event.inputs.target == 'staging' && 'https://staging-bridge.nexuschain.io' || 'http://localhost:8084' }}
     steps:
       - name: Checkout 代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: 安装 k6
         # 2026-09-10 修复：同 smoke-test——gpg keyserver 不可达，改 GitHub releases 直装
@@ -283,7 +283,7 @@ jobs:
 
       - name: 上传完整压测结果
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: k6-full-results-${{ github.run_id }}
           path: perf/k6/results/full-*.json
