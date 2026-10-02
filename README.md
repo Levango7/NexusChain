@@ -5,10 +5,10 @@ NexusChain 是一个**基于自研区块链的支付编排平台（Payment Orche
 > **定位**：区块链是底层结算基础设施，不是产品本身。产品价值在于统一支付 API、启发式路由与清结算。
 
 > **版本口径（2026-09-28 第三次修复漂移，CI 门禁化）**：构建侧**双源**为根 `build.gradle` 的 `version`
-> 与 `nexus-core/nexus-core/src/main/resources/version.properties` 的 `versionNumber`（当前均为 `2.51.0`；
+> 与 `nexus-core/nexus-core/src/main/resources/version.properties` 的 `versionNumber`（当前均为 `2.51.1`；
 > 发版时**两处都要改**——v2.50.2 曾因 version.properties 滞后导致 jar 名错位）；
-> 发布说明单一来源为 [CHANGELOG](CHANGELOG.md)（最新条目 `[2.51.0] - 2026-09-28`，
-> 即 Payment Orchestration Wave 1-16）。
+> 发布说明单一来源为 [CHANGELOG](CHANGELOG.md)（最新条目 `[2.51.1] - 2026-10-02`，
+> 即安全加固批次）。
 > 本头注的准确性由 CI 门禁 `scripts/check-version-consistency.sh` 保护：
 > build.gradle / version.properties / 本头注三处任一失配将直接导致 CI 失败。
 
