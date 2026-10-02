@@ -7,7 +7,7 @@ name: NexusChain CI/CD Pipeline
 # 流程：编译 → 测试 → 覆盖率报告 → Codecov 上传 → JAR 产物上传 → Docker 构建/推送
 #
 # 注：CI 运行于 Linux runner，使用 ./gradlew（Windows 本地开发用 gradlew.bat）。
-#     matrix.os 可扩展为 [ubuntu-latest, windows-latest] 做跨 OS 验证。
+#     matrix.os 可扩展为 [ubuntu-26.04, windows-latest] 做跨 OS 验证。
 
 on:
   push:
@@ -163,8 +163,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 可扩展为 [ubuntu-latest, windows-latest] 做跨 OS 验证
-        os: [ubuntu-latest]
+        # 可扩展为 [ubuntu-26.04, windows-latest] 做跨 OS 验证
+        os: [ubuntu-26.04]
     steps:
       - name: Checkout 代码
         uses: actions/checkout@v5

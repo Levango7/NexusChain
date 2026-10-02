@@ -33,7 +33,7 @@ jobs:
   # ============================================================
   trivy-fs-scan:
     name: Trivy Filesystem Scan + SBOM
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
       security-events: write   # 上传 SARIF 到 Security tab 所需
@@ -119,7 +119,7 @@ jobs:
   trivy-docker-scan:
     if: github.event_name != 'pull_request'  # PR 不跑（需构建镜像/起栈，成本高）
     name: Trivy Docker Image Scan (${{ matrix.module }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
       security-events: write
@@ -234,7 +234,7 @@ jobs:
       github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository
     name: OWASP Dependency-Check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
     steps:
@@ -409,7 +409,7 @@ jobs:
   # ============================================================
   sast-spotbugs:
     name: SAST - SpotBugs + FindSecBugs
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
     steps:
@@ -490,7 +490,7 @@ jobs:
   # ============================================================
   cargo-audit:
     name: Cargo Audit (Rust deps)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
     # B1 修复（2026-08-31 交付前审计）：摘除 continue-on-error。
@@ -521,7 +521,7 @@ jobs:
   # ============================================================
   gitleaks-scan:
     name: Gitleaks Secret Scan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
       security-events: write
@@ -550,7 +550,7 @@ jobs:
   dast-zap-baseline:
     if: github.event_name != 'pull_request'  # PR 不跑（需构建镜像/起栈，成本高）
     name: DAST - OWASP ZAP Baseline (gateway)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
     # B1 修复（2026-08-31 交付前审计）：摘除 continue-on-error。
@@ -653,7 +653,7 @@ jobs:
   # ============================================================
   security-issue-triage:
     name: Security Issue Triage
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: [trivy-fs-scan]
     # 审计修复：原条件 result == 'success' 使 triage 只在扫描【通过】时运行——
     # 有 CRITICAL/HIGH 时 job 失败反而跳过建 Issue，无漏洞时又无漏可报，

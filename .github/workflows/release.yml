@@ -62,7 +62,7 @@ jobs:
     name: Build Images (${{ matrix.module }})
     # 正式发布（push tag）或试跑（workflow_dispatch + dry_run=true）
     if: github.event_name == 'push' || inputs.dry_run
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # P0 审计修复：移除 continue-on-error。原先任一镜像构建失败不阻断发布，
     # 会产出"部分缺失镜像"的 release 并照常部署；现在构建失败即终止发布流程。
     #
@@ -155,7 +155,7 @@ jobs:
     # 试跑不创建 Release（避免产出指向 :dryrun 镜像的正式 Release）
     if: github.event_name == 'push' && !inputs.dry_run
     needs: build-images
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - name: Checkout 代码
         uses: actions/checkout@v5
@@ -209,7 +209,7 @@ jobs:
     name: Helm Chart Publish
     if: github.event_name == 'push' && !inputs.dry_run
     needs: build-images
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - name: Checkout 代码
         uses: actions/checkout@v5
@@ -244,7 +244,7 @@ jobs:
     name: Deploy to Staging
     if: github.event_name == 'push' && !inputs.dry_run
     needs: [github-release, helm-publish]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     environment: staging
     steps:
       - name: Checkout 代码
@@ -310,7 +310,7 @@ jobs:
     name: Deploy to Production
     if: github.event_name == 'push' && !inputs.dry_run
     needs: deploy-staging
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # environment: production 触发 GitHub environment protection
     # required reviewers ≥ 2 人 approval（在仓库 Settings → Environments 配置）
     environment: production
@@ -388,7 +388,7 @@ jobs:
     name: Rollback (${{ github.event.inputs.environment }})
     # 仅手动触发且**非试跑**时执行回滚
     if: github.event_name == 'workflow_dispatch' && !inputs.dry_run
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # environment 用动态值：production 回滚会触发 environment protection（required reviewers approval）
     environment: ${{ github.event.inputs.environment }}
     steps:

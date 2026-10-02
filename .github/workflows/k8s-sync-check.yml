@@ -27,7 +27,7 @@ permissions:
 jobs:
   helm-lint-and-sync:
     name: Helm Lint + K8s Sync Check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - name: Checkout 代码
         # GitHub 官方 action，使用主版本标签 v4（官方供应链可信）
