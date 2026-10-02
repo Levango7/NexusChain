@@ -4,7 +4,8 @@ name: NexusChain Release & Deploy
 # REQ-03 / T03：tag-based 发布与部署 workflow
 # 触发：推送 v*.*.* 格式的 git tag
 # 流程：build-images → github-release → helm-publish → deploy-staging → deploy-prod
-# prod 部署需 GitHub environment protection（required reviewers ≥ 2 人 approval）
+# prod 部署需 GitHub environment protection（production 环境 required reviewer，
+# 2026-10-02 配置：单人仓库现状配 1 人 Levango7，第二维护者加入后补至 2 人）
 # ============================================================================
 
 on:
@@ -312,7 +313,8 @@ jobs:
     needs: deploy-staging
     runs-on: ubuntu-26.04
     # environment: production 触发 GitHub environment protection
-    # required reviewers ≥ 2 人 approval（在仓库 Settings → Environments 配置）
+    # required reviewer 已配置（2026-10-02：1 人 Levango7，can_admins_bypass=true
+    # 保留紧急通道；单人仓库不启用 prevent_self_review 否则无人可批）
     environment: production
     steps:
       - name: Checkout 代码

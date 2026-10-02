@@ -2,7 +2,12 @@
 
 本文件记录 NexusChain 各版本的变更。
 
-## [Unreleased]
+## [2.51.1] - 2026-10-02
+
+> 安全加固批次：OWASP Dependency-Check 从「纸面扫描」转为真实依赖图扫描并清偿首批 13 个 CRITICAL；
+> CI 底座现代化（Node 24 / Ubuntu 26.04 / 安全门禁前移 PR）；flaky 清偿 ×3；基础镜像与 jackson CVE 追平。
+> 发版同时 production 环境首次配置 required reviewer——此前 deploy-prod 审批门形同虚设
+> （环境未配保护规则，v2.51.0 曾未经审批直接部署）。
 
 ### Ubuntu 26.04 全量切换 + required check 死锁修复 + Docker 依赖下载韧性（2026-10-02）
 
@@ -353,6 +358,25 @@ base 无效 → `run=true`（保守实跑）、workflow_dispatch → `run=true`�
 （`DataExportControllerTest` / `DataExportServiceTest` / `ReconciliationFileServiceTest`），
 其中**只有本测试同时用 `.now()` 造记录时间戳**（其余如 `ChainSettlementConfirmationServiceTest`
 用的是 `now().minus(35, MINUTES)` 这类**相对**窗口，不受时钟漂移影响）→ 与"只红 1 个测试"一致，无其它同类炸弹。
+
+### 发版当日收尾（2026-10-02，PR #28 之后）
+
+- **治理时间窗口 flaky 修复（PR #28，`a75216b`）**：根因为 `GovernanceTest` 以
+  `Duration.ofMillis(50)` 真实时钟窗口 + `Thread.sleep(120)` 等待——高负载 runner 上
+  调度延迟超窗即败。修复：`DefaultGovernanceService` 注入 `Clock`（`@Autowired` 构造器
+  委托 `systemUTC()`，3 处 `Instant.now()` → `Instant.now(clock)`），测试侧新增
+  `MutableClock` 显式推进，消除 8 处「真实时钟 + 毫秒窗口 + sleep」模式。
+  验证：本地 `:nexus-oracle:test` 全量 20 类 / 276 用例 0 失败（3m17s），PR CI 全绿。
+  **边界（如实声明）**：CI artifact 无测试报告，未能直接证明失败即发生在这几个用例——
+  修复针对已证实的 flaky 模式，有效性以后续 master 不再复现为准确证。
+- **测试结果 XML artifact**（ci.yml）：新增 `test-results-*` 常态上传（`if: always()`，
+  `**/build/test-results/test/*.xml`，保留 14 天）——失败用例名与断言正文直接可取，
+  固化 #28 的取证断链教训。
+- **production 环境审批门生效**：required reviewer Levango7（单人仓库现状配 1 人，
+  第二维护者加入后补至 2 人；`can_admins_bypass=true` 保留紧急通道；不启用
+  `prevent_self_review`——单人仓库会死锁）。**本版本 deploy-prod 将首次真正等待人工审批。**
+- **release.yml 文档对齐**：两处「required reviewers ≥ 2 人」注释改为反映现实
+  （1 人配置 + 后续计划），消除宣称与配置不符。
 
 
 ## [2.51.0] - 2026-09-28

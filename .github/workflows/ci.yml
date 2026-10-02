@@ -436,6 +436,21 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+      # 测试结果 XML（flaky 取证）：PR #28 教训——治理窗口 flaky 定位时 artifact
+      # 只有 jacoco 报告，失败用例名拿不到，只能靠代码模式推断。XML 里每条
+      # <testcase> 带 classname/name/failure 正文，直接可得「哪个用例在哪个
+      # 断言上失败」。if: always() 保证红跑也上传；XML 紧凑，14 天保留足够
+      # 覆盖一次 flaky 的取证窗口。
+      - name: 上传测试结果 XML（flaky 取证）
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results-${{ matrix.os }}
+          path: |
+            **/build/test-results/test/*.xml
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: 上传 JAR 构建产物
         uses: actions/upload-artifact@v7
         with:
