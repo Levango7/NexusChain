@@ -7,7 +7,7 @@ name: NexusChain CI/CD Pipeline
 # 流程：编译 → 测试 → 覆盖率报告 → Codecov 上传 → JAR 产物上传 → Docker 构建/推送
 #
 # 注：CI 运行于 Linux runner，使用 ./gradlew（Windows 本地开发用 gradlew.bat）。
-#     matrix.os 可扩展为 [ubuntu-latest, windows-latest] 做跨 OS 验证。
+#     matrix.os 可扩展为 [ubuntu-26.04, windows-latest] 做跨 OS 验证。
 
 on:
   push:
@@ -42,7 +42,7 @@ jobs:
   # ============================================================
   code-hygiene:
     name: Code Hygiene (ratchet gate)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:
       - name: Checkout 代码
@@ -96,7 +96,7 @@ jobs:
   # ============================================================
   explorer-frontend:
     name: Explorer Frontend (lint / test / build / artifacts)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     defaults:
       run:
@@ -158,13 +158,14 @@ jobs:
   # 构建 & 测试 & 覆盖率
   # ============================================================
   build-and-test:
-    name: Build & Test (JDK 17 / ${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        # 可扩展为 [ubuntu-latest, windows-latest] 做跨 OS 验证
-        os: [ubuntu-latest]
+    # check 名称必须完全固定：分支保护按 context 名精确匹配。两个坑都实测过 ——
+    # ① 名称含 matrix.os 变量，runner 漂移后名称跟着变；
+    # ② 即使名称写死，只要 job 带 matrix，GitHub 仍会自动追加 "(matrix 值)" 后缀
+    #    （实测上报为 "Build & Test (JDK 17) (ubuntu-26.04)"）。
+    # 两者都会让 required check「永不上报」→ master 上所有 PR 永久 blocked。
+    # 故本 job 不使用 matrix；将来若需跨 OS 验证，另建独立 job 并各用固定名称。
+    name: Build & Test (JDK 17)
+    runs-on: ubuntu-26.04
     steps:
       - name: Checkout 代码
         uses: actions/checkout@v5
@@ -465,7 +466,7 @@ jobs:
   # ============================================================
   mpc-java-cluster-e2e:
     name: MPC Java Cluster E2E (CGGMP21 3-node)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: build-and-test
     timeout-minutes: 45
     steps:
@@ -546,7 +547,7 @@ jobs:
   # ============================================================
   mpc-kind-smoke:
     name: MPC Kind Smoke (mpc-engine chart on K8s)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: build-and-test
     timeout-minutes: 50
     steps:
@@ -683,7 +684,7 @@ jobs:
   # ============================================================
   flyway-migration-check:
     name: Flyway 迁移预检
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     services:
       mysql:
         image: mysql:8.0
@@ -776,7 +777,7 @@ jobs:
   # ============================================================
   hardhat-e2e:
     name: Hardhat L1/L2 E2E (Node 22)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # 观察模式已毕业（2026-08-30 首轮真实执行：33 用例运行/0 失败，
     # 5 类全部真实执行——治理 12/桥 4/校验管道 11/L2↔L1 6；其余 13 用例为
     # 环境断言下的合法 assumeTrue 跳过），转为强制门禁。
@@ -825,7 +826,7 @@ jobs:
     name: Docker Build & Push (${{ matrix.module }})
     needs: build-and-test
     if: github.ref == 'refs/heads/master' && github.event_name == 'push'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # GHCR 推送需要 packages: write 权限（默认 GITHUB_TOKEN 无此权限，
     # 导致 "denied: installation not allowed to Create organization package"）。
     permissions:
