@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+### Node 26 采纳决策仓库侧自动化（2026-10-02）
+
+- 新增 `.github/workflows/node26-adoption.yml`：PR #25（Node 22→26 试验跑）的到期采纳决策
+  做进 GitHub 定时 workflow——**跑在 GitHub 调度器上，不依赖任何本地机器在线**。
+  决策规则与人工口径一致（无新增裁量）：2026-10-28/29 窗口内**实时**核实 Node 26 已升格 LTS
+  （nodejs.org/dist/index.json 的 lts 字段，非仅信计划日期；官方 schedule.json 实证升格日 2026-10-28）
+  且 PR #25 全 checks 绿 → 自动 squash 合并（分支保护/required checks 仍兜底）；
+  任一条件不满足 → PR 留证据评论不合并；PR 已关闭 → no-op。manual dispatch 供演练与重试。
+  采纳落地后本文件随任意 PR 删除（头部注释即说明）。本机侧 cron 因会话绑定限制无法建立，
+  仓库侧方案更可靠。
+
 ### MPC 分层口径决策 + 门禁固化（2026-10-02）
 
 > 固化审计 2026-09-29 §2 的「未决策点」。**决策：有意分层，三级阶梯**——
