@@ -4,6 +4,47 @@
 
 ## [Unreleased]
 
+### CI 收尾：codecov v7 清除最后一条 node20 残留 + 今日四 PR 补录对账（2026-10-01，本 PR）
+
+**codecov v5 → v7**
+- `codecov-action@v5` 为 composite action，其**内部**钉了 `actions/github-script@60a0d…`（node20，
+  OIDC token 获取步骤）——本仓库无任何文件引用 github-script、无配置可规避（`CC_USE_OIDC=false`
+  时该内部步骤仍执行）。codecov v6/v7 内部已改钉 `github-script@ed59741… # v8.0.0`（实测
+  `runs.using: node24`），故升 v7 即消除该残留，无需等上游另行发版。
+- `token/files/fail_ci_if_error/verbose` 四输入经 v7 `action.yml` 核实仍然有效；v7 为当前 latest（v7.1.1）。
+
+**对账补录（CHANGELOG 此前缺失以下已合并项，即「changelog 与 master 不一致」的修复）**
+1. **① OWASP DC 升格 required check**（2026-10-01，owner 批准，非 PR 变更）：经窄接口
+   `PATCH /branches/master/protection/required_status_checks` 增列为第 8 个 required check，
+   `strict=false` 与既有 7 项逐一保留；预检 forks=0 / rulesets=0。首批实测（PR #20/#21/分支
+   dispatch）DC 全绿，热缓存 52–59s（冷 48m20s 代价已记录于评估记录）。**下方试运行条目中
+   「不改 branch protection」的不变式自此作废**（已在原文标注）。
+2. **② Rust 运行时镜像双红清除（PR #20）**：`libpcre2-8-0 / CVE-2026-103111`（HIGH）同时命中
+   mpc-engine 与 zk-groth16-service；bookworm 分支无修复版、trixie 有（DSA-6530-1）→ 按本仓库
+   `.trivyignore` 处置原则（不豁免可修复项）迁移运行阶段基础镜像 bookworm-slim → trixie-slim
+   （两服务 TLS 走 rustls/ring、无 openssl-sys，不受 libssl3→libssl3t64 改名影响）。验证：分支
+   dispatch run `36909790734` 19/19 全绿；master push `36913902801` 12/12 镜像扫描全绿，其后
+   `36932259309` 复验持续全绿。
+3. **③ 两个 flaky 根除（PR #21）**：`GrpcMpcTransportStubTest` 固定端口 51090–51093 → `port=0`
+   内核分配 + `getPort()` 读回（端口校验放宽为 `port<0`；`getPort()` 加未启动/已终止回退；
+   `stop()` 于 shutdown 前取端口——gRPC 终止后 `ServerImpl.getPort()` 抛 `Already terminated`）；
+   `SandboxSimulationServiceTest` 注入 `IntSupplier statusRollSource`（生产 `@Autowired` 构造
+   语义不变），断言改确定性（边界序列 0/69/70/84/85/94/95/99×80 单四状态各 20；固定种子
+   10k 样本 + 容忍区间），消除 0.95^100≈0.59%/次的统计翻车。本地两模块 BUILD SUCCESSFUL；
+   PR 全量 CI 绿；master CI/CD 两连绿（39m15s / 39m38s）。
+4. **④ Actions Node 20→24 迁移（PR #22 + #23，共 14 个 action 版本）**：依据各 job annotation
+   点名清单 + **每个目标 tag 的 `action.yml` `runs.using` 逐个实测**（实测抓到 upload@v5、
+   download@v5/v6、build-push@v6、setup-python@v5 仍为 node20 的坑）——checkout v5、setup-java v5、
+   setup-node v5、setup-python v6、upload-artifact v7、download-artifact v7、cache v5、codecov v5、
+   docker/login v4、docker/build-push v7、codeql/upload-sarif v4、gitleaks v3、azure/setup-helm v5、
+   softprops/gh-release v3；附带移除 `dtolnay/rust-toolchain` 步骤的无效 `working-directory` 输入。
+   验证：合并后 master Security Scan annotations 清零（19/19 全绿，Gitleaks job 实测仅剩
+   ubuntu-26 预告）。
+5. **已知后续（记录在案，另行处置）**：`ubuntu-latest` 将于 2026-10-19 起滚动迁移 Ubuntu 26.04
+   （11-19 完成，runner-images#14748）；Node 26 将于 2026-10-28 转 LTS——两项均以预演 PR 先行
+   取证；docker 内 gradle 无依赖缓存的结构性脆弱点（Maven Central 瞬时抖动曾打红 gateway 镜像
+   构建，单点重跑即恢复）待专项整改。
+
 ### OWASP Dependency-Check「永远上报」试运行（2026-10-01 起，TEMP 至 2026-10-15）
 
 - **触发变更**：`owasp-dependency-check` job 由「**PR 一律跳过**」改为**同仓库 PR 真跑**
@@ -21,7 +62,8 @@
   **PR 上真跑的成本/稳定性数据**，故先试运行、按期评估，再二选一（保留+设 required / 逐字回退）。
 - **评估项、两条出口与回退步骤**：见 `docs/dependency-check-update-policy.md`
   「永远上报试运行」小节；实测对照与闪断记录见审计 §13.10–13.11。
-- **不变式**：不改 branch protection；不弱化 `failBuildOnCVSS=9.0f`；不批量豁免。
+- **不变式**：~~不改 branch protection~~（**2026-10-01 更新**：经 owner 批准，DC 已升格为第 8 个
+  required check，见上方「CI 收尾」条目；其余两条不变式仍有效）；不弱化 `failBuildOnCVSS=9.0f`；不批量豁免。
 
 ### CI 门禁与安全修复（2026-09-30 ~ 10-01，PR #14 已合并）
 
