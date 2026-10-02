@@ -158,7 +158,11 @@ jobs:
   # 构建 & 测试 & 覆盖率
   # ============================================================
   build-and-test:
-    name: Build & Test (JDK 17 / ${{ matrix.os }})
+    # check 名称**不得**包含 matrix 变量：分支保护按 context 名精确匹配，
+    # 一旦 runner 版本漂移（ubuntu-latest → 26.04），实际上报的 check 名随之改变，
+    # 而 required check 仍写着旧名 → 「永不上报」→ master 上所有 PR 永久 blocked。
+    # runner 版本只由 runs-on 决定，不进名称。
+    name: Build & Test (JDK 17)
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
