@@ -38,6 +38,12 @@ jobs:
         # 如需进一步钉 sha：actions/checkout@v5 → 查询对应 commit sha
         uses: actions/checkout@v5
 
+      # MPC 分层口径断言（2026-10-02 决策落地，依据审计 2026-09-29 §2）：
+      # staging 不得静默退回进程内传输；prod 不得静默退回 GG20/进程内。
+      # 放在本 workflow（而非新建）——配置漂移校验的正主在这里（审计原文建议）。
+      - name: MPC 分层口径断言（staging/prod 真实路径不得降级）
+        run: bash scripts/check-mpc-tier-policy.sh
+
       - name: Setup Helm
         # azure/setup-helm 使用主版本标签 v5
         # TODO: 如需供应链强一致，可钉到具体 commit sha

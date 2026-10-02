@@ -144,6 +144,18 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
 > 旧路径退役设计见
 > [docs/plan/PLAN-001-gg20-retirement.md](docs/plan/PLAN-001-gg20-retirement.md)（状态：设计稿，**未实施**）。
 
+> **MPC 分层口径（2026-10-02 决策，固化审计 2026-09-29 §2 的「待决」）**：
+> 默认关闭**不是缺陷，是有意的三级阶梯**——
+> ① **dev/默认**（application.yml）：`real-grpc-enabled=false` + `cggmp-enabled=false`，
+> InMemoryMpcTransport + GG20 可信协调器（零外部依赖，单测/本地开发用）；
+> ② **staging**：`NEX_MPC_TRANSPORT_GRPC=true`（真实 gRPC+mTLS，拓扑同 prod 的 3 引擎+证书），
+> 协议层仍走 GG20（CGGMP21 未开——staging 未配 keyshare 供给；升级需先配齐再翻转）；
+> ③ **prod**：transport + distributed-mode + cggmp-enabled 全开，全分布式 CGGMP21 2-of-3。
+> 即：**dev/staging 的 MPC 并非真阈值签名路径，与 prod 不等价**——需要真阈值签名的验证一律看
+> `CggmpMpcE2EClusterTest` 与 prod 配置。该阶梯由 CI 门禁
+> `scripts/check-mpc-tier-policy.sh`（k8s-sync-check workflow）固化：staging 不得静默退回
+> 进程内传输，prod 不得静默退回 GG20/进程内。
+
 - **Rust `mpc-engine`**：已接入 ZenGo-X/KZen `multi-party-ecdsa` 0.8.1 crate，实现**真实 GG20 门限 ECDSA**（真实 Paillier、Feldman VSS、MtA、ZK 证明，产出可被标准 secp256k1 验证的签名）。
 - **Java MPC 传输层**：`GrpcMpcTransportStub` + `MpcTransportGrpcServer` 实现**真实 gRPC over HTTP/2** 传输，支持 P2P 消息路由。
 - **部署模型限制（诚实声明，2026-08-31 交付前审计补强）**：当前为「可信协调器」模型，**在密码学意义上不等价于分布式门限签名**，交付材料不得宣称"2-of-3 MPC 门限安全"：
