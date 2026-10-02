@@ -24,7 +24,7 @@ USER root
 WORKDIR /workspace
 
 # 分层缓存优化：先 COPY Gradle wrapper 与根构建配置
-COPY gradlew gradlew.bat build.gradle settings.gradle ./
+COPY gradlew gradlew.bat build.gradle settings.gradle gradle.properties ./
 COPY gradle ./gradle
 
 # COPY 依赖模块源码（composite build includeBuild 链）
@@ -41,7 +41,8 @@ COPY nexus-api-gateway ./nexus-api-gateway
 
 # 构建 plain jar（bootJar disabled，jar.archiveClassifier=''）
 # 跳过测试与 jacoco 报告，加速构建
-RUN ./gradlew :nexus-analytics:jar --no-daemon -x test -x jacocoTestReport
+RUN ./gradlew :nexus-analytics:jar --no-daemon -x test -x jacocoTestReport \
+    || { echo "[retry] 首次构建失败（疑似 Maven Central 瞬时抖动），30s 后重试一次"; sleep 30; ./gradlew :nexus-analytics:jar --no-daemon -x test -x jacocoTestReport; }
 
 # 提取 plain jar 并重命名为 app.jar
 RUN find /workspace/nexus-analytics/build/libs -name '*.jar' \

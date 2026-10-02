@@ -4,6 +4,61 @@
 
 ## [Unreleased]
 
+### Ubuntu 26.04 全量切换 + required check 死锁修复 + Docker 依赖下载韧性（2026-10-02）
+
+#### ① Ubuntu 26.04 全量切换（PR #26，已合并 `9da6307`）
+
+- 背景：runner-images#14748 —— `ubuntu-latest` 自 **2026-10-19** 起滚动迁移 26.04，**11-19 完成**。
+- **修正原预演 PR 的覆盖缺口**：原 PR #26 只改了 ci.yml 的 7 处直接 `runs-on`，
+  而 `build-and-test` 走 `${{ matrix.os }}`（其 `matrix.os` 仍写死 `[ubuntu-latest]`），
+  其余 4 个工作流共 17 个 job 亦未覆盖 → 合计**只钉了 7 个、漏了 18 个**。
+  半钉状态会给出「已消除滚动期不确定性」的错觉，而最重的 job 恰未被覆盖。
+- 补全后**全部 25 个 job** 统一 `ubuntu-26.04`：
+  ci.yml 8（含 build-and-test）+ security-scan 8 + release 6 + performance-test 2 + k8s-sync-check 1。
+- **26.04 实测全绿**：`Build & Test (JDK 17)` **19m10s**（快于 24.04 的 22m25s）、
+  MPC Java Cluster E2E (CGGMP21 3-node)、MPC Kind Smoke、Trivy 镜像扫描 ×12 模块、
+  DAST ZAP Baseline、Gitleaks / SAST / Cargo Audit / OWASP DC / k6 Smoke ——
+  master `9da6307` **未完成 0 项**。
+
+#### ② required check「永不上报」死锁修复（P0，由 ① 暴露）
+
+- **问题**：分支保护 required context 为 `Build & Test (JDK 17 / ubuntu-latest)`，
+  而 job 名含 `${{ matrix.os }}`。改 `matrix.os` 后实际上报名变为 `.../ubuntu-26.04`
+  → **与 required 名不再匹配 → PR blocked；若直接合并，master 上该 check 将永不上报，
+  所有 PR 永久卡死**（与审计 §11 记录的 k6「永不上报」同类）。
+- **两层坑（均实测才暴露）**：
+  1. `name:` 含 matrix 变量 → 名称随 runner 版本漂移；
+  2. **即使 `name:` 写死，只要 job 带 matrix，GitHub 仍会自动追加 `(matrix 值)` 后缀**
+     —— 实测上报为 `Build & Test (JDK 17) (ubuntu-26.04)`。
+- **修复**：job 名称固定为 `Build & Test (JDK 17)` 并**去掉 matrix**（直接 `runs-on: ubuntu-26.04`），
+  check 名与 runner 版本彻底解耦；分支保护 required contexts 同步更新（其余 7 项不变）。
+- **附带教训**：更新 required status checks 的 API 是 **`PATCH` 而非 `PUT`**；
+  用 `PUT` 返回 404，极易误判为「权限不足」或「分支保护走 ruleset」。
+
+#### ③ Docker 内 gradle 依赖下载韧性（本 PR）
+
+- **背景**：见本文件上文「已知后续」记录的脆弱点 —— docker 内 gradle 无依赖缓存，
+  Maven Central 瞬时抖动曾打红 gateway 镜像构建，表现为「单点重跑即恢复」。
+- **根因补充**：各模块 Dockerfile 的 COPY 列表**从未包含 `gradle.properties`**，
+  容器内连 `org.gradle.jvmargs` 都未生效，更无任何 HTTP 重试配置。
+- **修复**：
+  1. `gradle.properties` 新增 HTTP 韧性配置：`max.retries=10`、`initial.backoff=1000ms`、
+     `connectionTimeout` / `socketTimeout=120s`（Gradle 默认 3 次 / 30s，不足以覆盖抖动窗口）；
+  2. 10 个 Java Dockerfile 的 COPY 列表补 `gradle.properties`，使上述配置在容器内真正生效；
+  3. 10 个 Dockerfile 的 gradle 构建命令加**一次自动重试**（失败 → 30s → 重试），
+     把原先的「人工重跑」变成「自动重试」。
+- **诚实边界（未根治）**：容器内仍需联网下载依赖。BuildKit cache mount 的内容
+  **不随 `cache-to: type=gha` 导出**，在 GitHub Actions（每次全新 runner）上不跨 run 持久化，
+  故未采用。根治路径为「CI 预构建 JAR + Docker 仅 COPY」，代价是需放开 `.dockerignore` 的
+  `**/build/` 与 `*.jar`、并改变本地 `docker build` 流程（须先 `./gradlew bootJar`），另行评估。
+
+#### ④ 遗留状态更新
+
+- **Node 26（PR #25）**：保持 open，**待 2026-10-28 LTS 升格当天合并**；
+  分支 `ci/node26-trial` 需先 rebase 到含本 PR 的 master（ci.yml 已被 #26 改动）。
+- **`k8s-sync-check.yml` 的 26.04 实测**：其触发条件限定 `deploy/k8s|helm/**` 路径变更，
+  #26 只动 `.github/` 故未触发；本 PR 已为其补 `workflow_dispatch` 以便手动取证。
+
 ### CI 收尾：codecov v7 清除最后一条 node20 残留 + 今日四 PR 补录对账（2026-10-01，本 PR）
 
 **codecov v5 → v7**

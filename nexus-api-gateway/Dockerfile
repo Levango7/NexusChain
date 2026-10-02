@@ -21,7 +21,7 @@ USER root
 WORKDIR /workspace
 
 # 分层缓存优化：先 COPY Gradle wrapper 与根构建配置（变更频率低，命中缓存）
-COPY gradlew gradlew.bat build.gradle settings.gradle ./
+COPY gradlew gradlew.bat build.gradle settings.gradle gradle.properties ./
 COPY gradle ./gradle
 
 # COPY 依赖模块源码（composite build includeBuild）
@@ -42,7 +42,8 @@ COPY nexus-api-gateway ./nexus-api-gateway
 
 # 构建 fat jar：根构建上下文通过 includeBuild 解析 nexus-api-gateway
 # 跳过测试与 jacoco 报告，加速构建
-RUN ./gradlew :nexus-api-gateway:bootJar --no-daemon -x test -x jacocoTestReport
+RUN ./gradlew :nexus-api-gateway:bootJar --no-daemon -x test -x jacocoTestReport \
+    || { echo "[retry] 首次构建失败（疑似 Maven Central 瞬时抖动），30s 后重试一次"; sleep 30; ./gradlew :nexus-api-gateway:bootJar --no-daemon -x test -x jacocoTestReport; }
 
 # 提取 fat jar（排除 *-plain.jar 普通 jar，api-gateway jar.archiveClassifier='plain'）
 RUN find /workspace/nexus-api-gateway/build/libs -name '*.jar' ! -name '*-plain.jar' \
