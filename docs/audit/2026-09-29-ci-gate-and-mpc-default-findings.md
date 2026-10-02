@@ -55,6 +55,15 @@ SpotBugs/FindSecBugs、cargo-audit 全部只在代码**已合入 master 之后**
 `.github/workflows/k8s-sync-check.yml`（PR 触发，比对 `deploy/k8s/` 与 Helm 渲染，
 附带 helm lint + kubeconform），若确定要加，应加在那里而非新建工作流。
 
+> **→ 已决策（2026-10-02，取「若有意」出口）**：核实 staging 也已置
+> `NEX_MPC_TRANSPORT_GRPC=true`（P0-10「同 values-prod 接入」注释佐证），
+> 分层判定为**有意三级阶梯**：dev=进程内+GG20 / staging=真实 gRPC+GG20
+> （keyshare 供给未配，CGGMP21 留关）/ prod=全分布式 CGGMP21。
+> 出口动作已全部落地：README「MPC 分层口径」段明示非等价性；
+> 门禁按上文建议加在 k8s-sync-check（`scripts/check-mpc-tier-policy.sh`：
+> staging 断言 transport=true，prod 断言 transport+cggmp=true，K8s 静态清单断言
+> transport=true）。staging 未来升 CGGMP21 的前置（keyshare 供给）已在脚本头注释记录。
+
 ## 3. 未修，且我刻意没碰：gateway 集成测试永不阻断
 
 `nexus-gateway` 的 `integrationTest` 步骤带 `continue-on-error: true`（`.github/workflows/ci.yml:219-221`），

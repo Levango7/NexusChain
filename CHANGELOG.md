@@ -2,6 +2,22 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [Unreleased]
+
+### MPC 分层口径决策 + 门禁固化（2026-10-02）
+
+> 固化审计 2026-09-29 §2 的「未决策点」。**决策：有意分层，三级阶梯**——
+> dev=进程内传输+GG20 协调器 / staging=真实 gRPC+mTLS+GG20（拓扑同 prod，
+> CGGMP21 因 keyshare 供给未配而留关）/ prod=全分布式 CGGMP21 2-of-3。
+> 取审计文档「若有意」出口：不改任何默认值（零行为变更），文档明示 + 门禁固化。
+
+- **新门禁**：`scripts/check-mpc-tier-policy.sh` 接入 k8s-sync-check workflow——
+  staging 断言 `NEX_MPC_TRANSPORT_GRPC=true`；prod 断言 transport + cggmp-enabled 双 true；
+  K8s 静态清单（25-signing.yml）断言 transport=true。**支付系统的阈值签名路径不允许无声降级。**
+- **README**：新增「MPC 分层口径」段——明示 dev/staging 的 MPC 并非真阈值签名路径、
+  与 prod 不等价；staging 升级 CGGMP21 的前置条件（keyshare 供给）已记录。
+- **审计文档 §2**：补「已决策」批注（决策依据 + 出口动作 + 前置条件），闭环该未决项。
+
 ## [2.51.1] - 2026-10-02
 
 > 安全加固批次：OWASP Dependency-Check 从「纸面扫描」转为真实依赖图扫描并清偿首批 13 个 CRITICAL；
