@@ -18,6 +18,10 @@ on:
     paths:
       - 'deploy/k8s/**'
       - 'deploy/helm/**'
+  # 手动触发（2026-10-02 新增）：本 workflow 的 paths 过滤使其在「只改 .github/」的
+  # PR 上不会运行 —— Ubuntu 26.04 迁移预演（PR #26）因此无法取到本 job 的实测数据。
+  # 补 workflow_dispatch 后可在任意 runner 版本上单独取证 helm lint + kubeconform。
+  workflow_dispatch:
 
 # 最小权限原则：本 workflow 仅读取仓库代码并产出 artifact，无需写权限。
 # actions/upload-artifact@v7 在限制范围内可正常上传（其使用 actions 内部 token）。

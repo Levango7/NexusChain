@@ -20,7 +20,7 @@ USER root
 WORKDIR /workspace
 
 # 分层缓存优化：先 COPY Gradle wrapper 与根构建配置（变更频率低，命中缓存）
-COPY gradlew gradlew.bat build.gradle settings.gradle ./
+COPY gradlew gradlew.bat build.gradle settings.gradle gradle.properties ./
 COPY gradle ./gradle
 
 # COPY 依赖模块源码（project() 引用 + composite build includeBuild）
@@ -40,7 +40,8 @@ COPY nexus-wallet-service ./nexus-wallet-service
 
 # 构建 fat jar：wallet-service bootJar enabled (archiveClassifier='')
 # 跳过测试与 jacoco 报告，加速构建
-RUN ./gradlew :nexus-wallet-service:bootJar --no-daemon -x test
+RUN ./gradlew :nexus-wallet-service:bootJar --no-daemon -x test \
+    || { echo "[retry] 首次构建失败（疑似 Maven Central 瞬时抖动），30s 后重试一次"; sleep 30; ./gradlew :nexus-wallet-service:bootJar --no-daemon -x test; }
 
 # 提取 fat jar（排除 *-plain.jar 普通 jar，wallet-service jar.archiveClassifier='plain'）
 RUN find /workspace/nexus-wallet-service/build/libs -name '*.jar' ! -name '*-plain.jar' \

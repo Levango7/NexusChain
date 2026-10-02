@@ -27,7 +27,7 @@ WORKDIR /workspace
 
 # 分层缓存优化：先 COPY 根 Gradle wrapper 与根构建配置（变更频率低，命中缓存）
 # 构建上下文为 repo 根目录，COPY 路径相对于根
-COPY gradlew gradlew.bat build.gradle settings.gradle ./
+COPY gradlew gradlew.bat build.gradle settings.gradle gradle.properties ./
 COPY gradle ./gradle
 
 # COPY 依赖模块源码（project() 引用 + composite build includeBuild）
@@ -54,7 +54,8 @@ COPY nexus-wallet-service ./nexus-wallet-service
 # copyDependencies 任务：复制所有外部依赖 jar 到 build/libs/lib/
 # 跳过测试与 jacoco 报告，加速构建
 # TRAVIS_BRANCH=master 让 build.gradle 的 gitCurBranch() 不调用 git（gradle 镜像无 git）
-RUN TRAVIS_BRANCH=master ./gradlew :nexus-core:nexus-core:jar :nexus-core:nexus-core:copyDependencies --no-daemon -x test -x jacocoTestReport
+RUN TRAVIS_BRANCH=master ./gradlew :nexus-core:nexus-core:jar :nexus-core:nexus-core:copyDependencies --no-daemon -x test -x jacocoTestReport \
+    || { echo "[retry] 首次构建失败（疑似 Maven Central 瞬时抖动），30s 后重试一次"; sleep 30; TRAVIS_BRANCH=master ./gradlew :nexus-core:nexus-core:jar :nexus-core:nexus-core:copyDependencies --no-daemon -x test -x jacocoTestReport; }
 
 # 提取 thin jar（排除 fat jar *-all.jar）并重命名为 app.jar
 # 嵌套项目 build 目录：nexus-core/nexus-core/build/libs/

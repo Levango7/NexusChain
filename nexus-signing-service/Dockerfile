@@ -26,7 +26,7 @@ USER root
 WORKDIR /workspace
 
 # 分层缓存优化：先 COPY Gradle wrapper 与根构建配置（变更频率低，命中缓存）
-COPY gradlew gradlew.bat build.gradle settings.gradle ./
+COPY gradlew gradlew.bat build.gradle settings.gradle gradle.properties ./
 COPY gradle ./gradle
 
 # COPY 依赖模块源码（project() 引用 + composite build includeBuild）
@@ -48,7 +48,8 @@ COPY nexus-signing-service ./nexus-signing-service
 # protobuf-gradle-plugin 在 bootJar 之前自动执行 generateProto 任务，
 # 下载 protoc:3.22.2 + protoc-gen-grpc-java:1.54.0 并生成 Java stub。
 # 跳过测试与 jacoco 报告，加速构建
-RUN ./gradlew :nexus-signing-service:bootJar --no-daemon -x test
+RUN ./gradlew :nexus-signing-service:bootJar --no-daemon -x test \
+    || { echo "[retry] 首次构建失败（疑似 Maven Central 瞬时抖动），30s 后重试一次"; sleep 30; ./gradlew :nexus-signing-service:bootJar --no-daemon -x test; }
 
 # 提取 fat jar（排除 *-plain.jar 普通 jar，signing-service jar.archiveClassifier='plain'）
 RUN find /workspace/nexus-signing-service/build/libs -name '*.jar' ! -name '*-plain.jar' \
