@@ -5,6 +5,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.math.BigInteger;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
@@ -48,6 +49,18 @@ public class DefaultGovernanceService implements GovernanceService {
     private final GovernableParameterRegistry parameterRegistry;
 
     /**
+     * 时钟源。生产用 {@link Clock#systemUTC()}，测试注入可控时钟。
+     *
+     * <p>引入原因（2026-10-02）：本类的时间判定（投票窗口 / 执行延迟）此前直接调用
+     * {@code Instant.now()}，迫使测试只能用「真实时钟 + 毫秒级窗口」驱动
+     * （如 {@code Duration.ofMillis(50)} 后立即投票、再 {@code Thread.sleep(120)}）。
+     * 在高负载 CI runner 上，两次调用之间的调度延迟可能超过 50ms → 投票落在窗口外
+     * → {@code :nexus-oracle:test} 间歇性失败（同一 commit 两次运行一败一成，已实测）。
+     * 注入时钟后测试可精确推进时间，无需 sleep、无竞态。</p>
+     */
+    private final Clock clock;
+
+    /**
      * 默认构造器：内部创建 {@link DefaultGovernableParameterRegistry}。
      *
      * <p>保留无参构造以兼容直接 {@code new} 实例化的场景（如单元测试）。
@@ -63,8 +76,21 @@ public class DefaultGovernanceService implements GovernanceService {
      */
     @Autowired
     public DefaultGovernanceService(GovernableParameterRegistry parameterRegistry) {
+        this(parameterRegistry, Clock.systemUTC());
+    }
+
+    /**
+     * 测试专用构造器：注入可控时钟，使时间窗口判定可精确推进（无需 sleep）。
+     *
+     * <p>包级可见：仅同包测试使用，避免污染 Spring 装配（{@code @Autowired} 仍在上一个构造器）。</p>
+     *
+     * @param parameterRegistry 可治理参数注册表
+     * @param clock             时钟源；传 {@code null} 回退为 {@link Clock#systemUTC()}
+     */
+    DefaultGovernanceService(GovernableParameterRegistry parameterRegistry, Clock clock) {
         this.parameterRegistry = parameterRegistry != null
                 ? parameterRegistry : new DefaultGovernableParameterRegistry();
+        this.clock = clock != null ? clock : Clock.systemUTC();
     }
 
     @Override
@@ -89,7 +115,7 @@ public class DefaultGovernanceService implements GovernanceService {
         }
 
         proposal.setProposalId("PROP-" + UUID.randomUUID().toString().replace("-", ""));
-        Instant now = Instant.now();
+        Instant now = Instant.now(clock);
         if (proposal.getVotingStart() == null) {
             proposal.setVotingStart(now);
         }
@@ -151,7 +177,7 @@ public class DefaultGovernanceService implements GovernanceService {
         // 校验执行延迟
         Instant votingEnd = proposal.getVotingStart().plus(proposal.getVotingPeriod());
         Instant executableAt = votingEnd.plus(proposal.getExecutionDelay());
-        if (Instant.now().isBefore(executableAt)) {
+        if (Instant.now(clock).isBefore(executableAt)) {
             log.debug("Execute rejected: execution delay not elapsed, executableAt={}", executableAt);
             return false;
         }
@@ -314,7 +340,7 @@ public class DefaultGovernanceService implements GovernanceService {
             return;
         }
         Instant votingEnd = proposal.getVotingStart().plus(proposal.getVotingPeriod());
-        if (Instant.now().isBefore(votingEnd)) {
+        if (Instant.now(clock).isBefore(votingEnd)) {
             return;
         }
         Map<Vote.Option, BigInteger> tally = voteTally.getOrDefault(

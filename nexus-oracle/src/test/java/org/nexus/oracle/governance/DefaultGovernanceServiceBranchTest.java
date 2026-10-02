@@ -23,10 +23,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class DefaultGovernanceServiceBranchTest {
 
     private DefaultGovernanceService governance;
+    private MutableClock clock;
 
     @BeforeEach
     void setUp() {
-        governance = new DefaultGovernanceService();
+        clock = new MutableClock(Instant.parse("2026-01-01T00:00:00Z"));
+        governance = new DefaultGovernanceService(new DefaultGovernableParameterRegistry(), clock);
     }
 
     // ---------- createProposal 非法入参 ----------
@@ -156,7 +158,7 @@ class DefaultGovernanceServiceBranchTest {
     void executeProposal_parameterChangeWithParams_shouldApply() throws Exception {
         // 使用注入的 registry 构造 governance
         DefaultGovernableParameterRegistry registry = new DefaultGovernableParameterRegistry();
-        DefaultGovernanceService g = new DefaultGovernanceService(registry);
+        DefaultGovernanceService g = new DefaultGovernanceService(registry, clock);
 
         Proposal p = Proposal.builder()
                 .title("param-change")
@@ -168,7 +170,7 @@ class DefaultGovernanceServiceBranchTest {
                 .build();
         g.createProposal(p);
         g.vote(p.getProposalId(), Vote.builder().voter("v").option(Vote.Option.YES).weight(BigInteger.TEN).build());
-        Thread.sleep(120);
+        clock.advance(Duration.ofMillis(120));
 
         assertTrue(g.executeProposal(p.getProposalId()));
         assertEquals("0.05", registry.getParameter("feeRate"));
@@ -202,7 +204,7 @@ class DefaultGovernanceServiceBranchTest {
             public void restore(java.util.Map<String, Object> snapshot) {
             }
         };
-        DefaultGovernanceService g = new DefaultGovernanceService(rejecting);
+        DefaultGovernanceService g = new DefaultGovernanceService(rejecting, clock);
 
         Proposal p = Proposal.builder()
                 .title("bad-param")
@@ -214,7 +216,7 @@ class DefaultGovernanceServiceBranchTest {
                 .build();
         g.createProposal(p);
         g.vote(p.getProposalId(), Vote.builder().voter("v").option(Vote.Option.YES).weight(BigInteger.TEN).build());
-        Thread.sleep(120);
+        clock.advance(Duration.ofMillis(120));
 
         assertFalse(g.executeProposal(p.getProposalId()));
     }
@@ -232,7 +234,7 @@ class DefaultGovernanceServiceBranchTest {
         governance.createProposal(p);
         governance.vote(p.getProposalId(),
                 Vote.builder().voter("v").option(Vote.Option.YES).weight(BigInteger.TEN).build());
-        Thread.sleep(120);
+        clock.advance(Duration.ofMillis(120));
 
         // PASSED 但执行延迟未到
         assertEquals(ProposalState.PASSED, governance.getProposalState(p.getProposalId()));
@@ -268,7 +270,7 @@ class DefaultGovernanceServiceBranchTest {
 
     @Test
     void constructor_nullRegistry_shouldFallbackToDefault() {
-        DefaultGovernanceService g = new DefaultGovernanceService((GovernableParameterRegistry) null);
+        DefaultGovernanceService g = new DefaultGovernanceService((GovernableParameterRegistry) null, clock);
         // 创建并执行一个空参数的 PARAMETER_CHANGE 提案应成功
         Proposal p = Proposal.builder()
                 .title("t")
@@ -280,11 +282,7 @@ class DefaultGovernanceServiceBranchTest {
         g.createProposal(p);
         g.vote(p.getProposalId(),
                 Vote.builder().voter("v").option(Vote.Option.YES).weight(BigInteger.TEN).build());
-        try {
-            Thread.sleep(120);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
+        clock.advance(Duration.ofMillis(120));
         assertTrue(g.executeProposal(p.getProposalId()));
     }
 
@@ -296,12 +294,12 @@ class DefaultGovernanceServiceBranchTest {
                 .type(Proposal.Type.PARAMETER_CHANGE)
                 .proposer("p")
                 .votingPeriod(Duration.ofDays(7))
-                .votingStart(Instant.now())
+                .votingStart(clock.instant())
                 .build();
         return governance.createProposal(p);
     }
 
-    private Proposal createVoteAndClose(Proposal.Type type, Vote.Option option) throws InterruptedException {
+    private Proposal createVoteAndClose(Proposal.Type type, Vote.Option option) {
         Proposal p = Proposal.builder()
                 .title("t")
                 .type(type)
@@ -312,7 +310,7 @@ class DefaultGovernanceServiceBranchTest {
         governance.createProposal(p);
         governance.vote(p.getProposalId(),
                 Vote.builder().voter("v1").option(option).weight(BigInteger.TEN).build());
-        Thread.sleep(120);
+        clock.advance(Duration.ofMillis(120));
         return p;
     }
 }

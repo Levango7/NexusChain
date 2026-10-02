@@ -23,11 +23,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class DefaultTreasuryBranchTest {
 
     private DefaultGovernanceService governance;
+    private MutableClock clock;
     private DefaultTreasury treasury;
 
     @BeforeEach
     void setUp() {
-        governance = new DefaultGovernanceService();
+        clock = new MutableClock(Instant.parse("2026-01-01T00:00:00Z"));
+        governance = new DefaultGovernanceService(new DefaultGovernableParameterRegistry(), clock);
         treasury = new DefaultTreasury(governance);
     }
 
@@ -86,7 +88,7 @@ class DefaultTreasuryBranchTest {
                 .type(Proposal.Type.TREASURY_SPEND)
                 .proposer("p")
                 .votingPeriod(Duration.ofDays(7))
-                .votingStart(Instant.now())
+                .votingStart(clock.instant())
                 .build();
         governance.createProposal(p);
 
@@ -144,13 +146,13 @@ class DefaultTreasuryBranchTest {
         governance.createProposal(p);
         governance.vote(p.getProposalId(),
                 Vote.builder().voter("v").option(Vote.Option.YES).weight(BigInteger.TEN).build());
-        Thread.sleep(120);
+        clock.advance(Duration.ofMillis(120));
         governance.executeProposal(p.getProposalId());
 
         assertTrue(treasury.spend(new BigDecimal("100"), "to", p.getProposalId()));
     }
 
-    private Proposal createPassedTreasuryProposal() throws InterruptedException {
+    private Proposal createPassedTreasuryProposal() {
         Proposal p = Proposal.builder()
                 .title("t")
                 .type(Proposal.Type.TREASURY_SPEND)
@@ -161,7 +163,7 @@ class DefaultTreasuryBranchTest {
         governance.createProposal(p);
         governance.vote(p.getProposalId(),
                 Vote.builder().voter("v").option(Vote.Option.YES).weight(BigInteger.TEN).build());
-        Thread.sleep(120);
+        clock.advance(Duration.ofMillis(120));
         governance.getProposalState(p.getProposalId());
         return p;
     }
