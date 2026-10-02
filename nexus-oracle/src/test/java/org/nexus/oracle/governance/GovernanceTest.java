@@ -20,11 +20,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class GovernanceTest {
 
     private DefaultGovernanceService governance;
+    private MutableClock clock;
     private DefaultTreasury treasury;
 
     @BeforeEach
     void setUp() {
-        governance = new DefaultGovernanceService();
+        clock = new MutableClock(Instant.parse("2026-01-01T00:00:00Z"));
+        governance = new DefaultGovernanceService(new DefaultGovernableParameterRegistry(), clock);
         treasury = new DefaultTreasury(governance);
     }
 
@@ -43,7 +45,7 @@ class GovernanceTest {
 
     @Test
     void createProposal_shouldAssignIdAndActiveState() {
-        Proposal created = newProposal(Proposal.Type.PARAMETER_CHANGE, Duration.ofDays(7), Instant.now());
+        Proposal created = newProposal(Proposal.Type.PARAMETER_CHANGE, Duration.ofDays(7), clock.instant());
 
         assertNotNull(created.getProposalId());
         assertTrue(created.getProposalId().startsWith("PROP-"));
@@ -53,7 +55,7 @@ class GovernanceTest {
     @Test
     void createProposal_futureVotingStart_shouldBePending() {
         Proposal created = newProposal(Proposal.Type.PARAMETER_CHANGE,
-                Duration.ofDays(7), Instant.now().plusSeconds(3600));
+                Duration.ofDays(7), clock.instant().plusSeconds(3600));
 
         assertEquals(ProposalState.PENDING, created.getState());
     }
@@ -66,7 +68,7 @@ class GovernanceTest {
 
     @Test
     void vote_activeProposal_shouldCount() {
-        Proposal created = newProposal(Proposal.Type.PARAMETER_CHANGE, Duration.ofDays(7), Instant.now());
+        Proposal created = newProposal(Proposal.Type.PARAMETER_CHANGE, Duration.ofDays(7), clock.instant());
         Vote vote = Vote.builder().voter("voter-1").option(Vote.Option.YES)
                 .weight(BigInteger.valueOf(100)).build();
 
@@ -77,7 +79,7 @@ class GovernanceTest {
 
     @Test
     void vote_duplicateVoter_shouldReject() {
-        Proposal created = newProposal(Proposal.Type.PARAMETER_CHANGE, Duration.ofDays(7), Instant.now());
+        Proposal created = newProposal(Proposal.Type.PARAMETER_CHANGE, Duration.ofDays(7), clock.instant());
         Vote vote = Vote.builder().voter("voter-1").option(Vote.Option.YES).build();
 
         assertTrue(governance.vote(created.getProposalId(), vote));
@@ -87,7 +89,7 @@ class GovernanceTest {
     @Test
     void vote_pendingProposal_shouldReject() {
         Proposal created = newProposal(Proposal.Type.PARAMETER_CHANGE,
-                Duration.ofDays(7), Instant.now().plusSeconds(3600));
+                Duration.ofDays(7), clock.instant().plusSeconds(3600));
         Vote vote = Vote.builder().voter("voter-1").option(Vote.Option.YES).build();
 
         assertFalse(governance.vote(created.getProposalId(), vote));
@@ -97,12 +99,12 @@ class GovernanceTest {
      * 创建提案 → 窗口内投票 → 等待窗口结束，返回已推进状态的提案。
      * 用于模拟「投票结束并按计票结果定状态」的场景。
      */
-    private Proposal createVoteAndClose(Proposal.Type type, Vote.Option option) throws InterruptedException {
-        // 投票期 50ms：创建后立即投票（窗口内），随后等待窗口结束
-        Proposal created = newProposal(type, Duration.ofMillis(50), Instant.now());
+    private Proposal createVoteAndClose(Proposal.Type type, Vote.Option option) {
+        // 投票期 50ms：创建后立即投票（窗口内），随后推进时钟越过窗口终点
+        Proposal created = newProposal(type, Duration.ofMillis(50), clock.instant());
         governance.vote(created.getProposalId(),
                 Vote.builder().voter("v1").option(option).weight(BigInteger.TEN).build());
-        Thread.sleep(120);
+        clock.advance(Duration.ofMillis(120));
         return created;
     }
 
@@ -131,7 +133,7 @@ class GovernanceTest {
 
     @Test
     void executeProposal_notPassed_shouldReject() {
-        Proposal created = newProposal(Proposal.Type.PARAMETER_CHANGE, Duration.ofDays(7), Instant.now());
+        Proposal created = newProposal(Proposal.Type.PARAMETER_CHANGE, Duration.ofDays(7), clock.instant());
         assertFalse(governance.executeProposal(created.getProposalId()));
     }
 
