@@ -158,17 +158,14 @@ jobs:
   # 构建 & 测试 & 覆盖率
   # ============================================================
   build-and-test:
-    # check 名称**不得**包含 matrix 变量：分支保护按 context 名精确匹配，
-    # 一旦 runner 版本漂移（ubuntu-latest → 26.04），实际上报的 check 名随之改变，
-    # 而 required check 仍写着旧名 → 「永不上报」→ master 上所有 PR 永久 blocked。
-    # runner 版本只由 runs-on 决定，不进名称。
+    # check 名称必须完全固定：分支保护按 context 名精确匹配。两个坑都实测过 ——
+    # ① 名称含 matrix.os 变量，runner 漂移后名称跟着变；
+    # ② 即使名称写死，只要 job 带 matrix，GitHub 仍会自动追加 "(matrix 值)" 后缀
+    #    （实测上报为 "Build & Test (JDK 17) (ubuntu-26.04)"）。
+    # 两者都会让 required check「永不上报」→ master 上所有 PR 永久 blocked。
+    # 故本 job 不使用 matrix；将来若需跨 OS 验证，另建独立 job 并各用固定名称。
     name: Build & Test (JDK 17)
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        # 可扩展为 [ubuntu-26.04, windows-latest] 做跨 OS 验证
-        os: [ubuntu-26.04]
+    runs-on: ubuntu-26.04
     steps:
       - name: Checkout 代码
         uses: actions/checkout@v5
