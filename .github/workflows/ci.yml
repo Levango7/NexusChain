@@ -105,10 +105,13 @@ jobs:
       - name: Checkout 代码
         uses: actions/checkout@v5
 
-      - name: Setup Node 22
+      # Node 26 兼容性预演（trial）：原 '22'（Maintenance LTS，EOL 2027-04）→ '26'。
+      # 26 线 LTS 升格日 = 2026-10-28（endoflife.date）；本 PR 仅提前取数——
+      # 全绿则 10-28 后采纳，红则 master 保持 22 不动。详见 PR 描述。
+      - name: Setup Node 26 (trial)
         uses: actions/setup-node@v5
         with:
-          node-version: '22'
+          node-version: '26'
           cache: npm
           cache-dependency-path: nexus-explorer/package-lock.json
 
@@ -808,10 +811,12 @@ jobs:
           distribution: 'corretto'
           cache: gradle
 
-      - name: Setup Node 22 (Hardhat EDR 兼容 LTS)
+      # Node 26 兼容性预演（trial）：原 '22' 为「Hardhat EDR 兼容 LTS」选型——
+      # 跨大版本必须实测 EDR 兼容性；26 线 LTS 升格日 = 2026-10-28。见 PR 描述。
+      - name: Setup Node 26 (trial, 原 Hardhat EDR 兼容 LTS 22)
         uses: actions/setup-node@v5
         with:
-          node-version: '22'
+          node-version: '26'
           cache: npm
           cache-dependency-path: nexus-core/nexus-core/src/test/resources/l1-test/package-lock.json
 
