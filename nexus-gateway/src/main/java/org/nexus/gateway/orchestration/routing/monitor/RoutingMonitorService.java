@@ -1,6 +1,7 @@
 package org.nexus.gateway.orchestration.routing.monitor;
 
 import io.micrometer.core.instrument.MeterRegistry;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.nexus.gateway.config.RoutingWave16Properties;
 import org.nexus.gateway.orchestration.routing.ai.ConnectorMetrics;
 import org.nexus.gateway.orchestration.routing.ai.MetricsCollector;
@@ -93,8 +94,13 @@ public class RoutingMonitorService {
 
     // ==================== 异常检测 ====================
 
-    /** 定时异常检测（每 30s，对齐 anomaly-detection-interval 默认值）。 */
+    /**
+     * 定时异常检测（每 30s，对齐 anomaly-detection-interval 默认值）。
+     * ShedLock：多实例仅一个执行检测（ADR-034 §2 阻塞项清偿）——EMA 基线是
+     * 进程内状态，多实例各自检测会产生重复告警记录。
+     */
     @Scheduled(fixedDelayString = "PT30S", initialDelay = 45000)
+    @SchedulerLock(name = "routingMonitorAnomaly", lockAtMostFor = "PT1M", lockAtLeastFor = "PT15S")
     public void checkAnomalies() {
         if (!properties.getMonitor().isEnabled() || metricsCollector == null) return;
         for (ConnectorMetrics metrics : metricsCollector.metricsAll()) {

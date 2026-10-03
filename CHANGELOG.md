@@ -4,6 +4,23 @@
 
 ## [Unreleased]
 
+### Wave 16 边界收尾 + 路线图建档（2026-10-03 第二批）
+
+- **SchedulerLock 补挂（ADR-034 §2 阻塞项清偿）**：Wave 16 引入的 4 个 `@Scheduled` 任务
+  （渠道健康采样/历史清理/审计清理/异常检测）此前未挂分布式锁——多实例部署会重复执行
+  （采样重复落库、清理/检测重复跑）。现按 ReconciliationTask 既有模式补
+  `@SchedulerLock`（锁名与 lockAtMostFor/lockAtLeastFor 按任务周期定制）。
+- **实验统计跨重启持久化（V91 `routing_experiment_stats`，Wave 16 已知边界清偿）**：
+  `RoutingExperimentService.recordOutcome` 增 write-through——DB 原子累加
+  （`UPDATE ... SET x = x + :n`，行缺则插入）；启动时全量回灌为进程内基线——
+  **重启/部署不再清零 A/B 实验样本积累**。仓库未注入时退化纯内存（原行为），
+  持久化失败仅告警不阻断（可用性优先）。测试覆盖回灌续算/写穿累加/失败降级/无仓库退化。
+- **docs/roadmap-next.md 建档**：后续作战图——桶 A（现在能做：严格计数器/规则级权重/
+  capacity 实值化/explorer）、桶 B（日历自动：OWASP 10-15/Node 26 10-28）、
+  桶 C（前置挡住：GG20 退役需 3-5 天窗口/容量首跑需 staging 凭据链/HA 2/3 步需上线决策/
+  渠道与存管需持牌路径），每项标注前置与解法。
+- 分支卫生：本地 8 个 + 远端 4 个已合并战役分支清理（提交级证据：内容均经 PR 合入 master）。
+
 ### 工程内清单清偿批次（2026-10-03）：风控毫秒级 / 资金守恒不变量 / 容量阶梯 / ADR-033+034
 
 **风控毫秒级（用户定夺：想办法做到毫秒级，不抄蚂蚁）**

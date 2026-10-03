@@ -6,6 +6,7 @@ import org.nexus.gateway.config.RoutingWave16Properties;
 import org.nexus.gateway.orchestration.routing.RoutingJsonCodec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -40,14 +41,54 @@ public class RoutingExperimentService {
 
     private final RoutingExperimentRepository repository;
     private final RoutingWave16Properties properties;
+    /**
+     * 统计持久化仓库（V91 边界收尾）。**nullable**：未注入时退化为纯内存统计
+     * （单测/裁剪场景），行为与原实现一致；注入时 recordOutcome 走 write-through
+     * 累加、启动回灌基线——重启不清零 A/B 样本积累。
+     */
+    private final RoutingExperimentStatRepository statRepository;
 
     /** 每组运行期统计：key = experimentId + "|" + groupId。 */
     private final Map<String, GroupStats> stats = new ConcurrentHashMap<>();
 
+    @Autowired
     public RoutingExperimentService(RoutingExperimentRepository repository,
-                                    RoutingWave16Properties properties) {
+                                    RoutingWave16Properties properties,
+                                    @Autowired(required = false) RoutingExperimentStatRepository statRepository) {
         this.repository = repository;
         this.properties = properties;
+        this.statRepository = statRepository;
+        loadPersistedStats();
+    }
+
+    /** 测试兼容构造器（无持久化——纯内存统计，原行为）。 */
+    public RoutingExperimentService(RoutingExperimentRepository repository,
+                                    RoutingWave16Properties properties) {
+        this(repository, properties, null);
+    }
+
+    /**
+     * 启动回灌：把持久化的累加值装回进程内计数器，作为继续累计的基线。
+     * DB 不可用时告警降级为空基线继续运行（可用性优先，同 RoutingEngine 持久化语义）。
+     */
+    private void loadPersistedStats() {
+        if (statRepository == null) return;
+        try {
+            for (RoutingExperimentStat row : statRepository.findAll()) {
+                GroupStats s = stats.computeIfAbsent(row.getExperimentId() + "|" + row.getGroupId(),
+                        k -> new GroupStats());
+                s.count.set(row.getEventCount());
+                s.successes.set(row.getSuccessCount());
+                s.totalLatency.set(row.getTotalLatencyMs());
+                s.totalCost.set(row.getTotalCostBps());
+            }
+            if (!stats.isEmpty()) {
+                log.info("RoutingExperimentService: restored {} persisted group stats", stats.size());
+            }
+        } catch (RuntimeException e) {
+            log.warn("RoutingExperimentService: persisted stats load failed, "
+                    + "starting from empty baseline: {}", e.getMessage());
+        }
     }
 
     // ==================== 模型 ====================
@@ -174,6 +215,34 @@ public class RoutingExperimentService {
         if (success) s.successes.incrementAndGet();
         s.totalLatency.addAndGet(Math.max(0, latencyMs));
         s.totalCost.addAndGet(Math.max(0, costBps));
+        persistOutcome(experimentId, groupId, success, Math.max(0, latencyMs), Math.max(0, costBps));
+    }
+
+    /**
+     * write-through 持久化（V91）：原子 UPDATE 累加，行不存在则插入。
+     * synchronized 防插入竞态（实验流量低频，争用可忽略）；DB 异常仅告警——
+     * 持久化失败不阻断进程内统计与路由（统计准确性受损但服务可用，可用性优先）。
+     */
+    private synchronized void persistOutcome(String experimentId, String groupId,
+                                             boolean success, long latencyMs, long costBps) {
+        if (statRepository == null) return;
+        try {
+            int updated = statRepository.accumulate(experimentId, groupId,
+                    success ? 1 : 0, latencyMs, costBps);
+            if (updated == 0) {
+                RoutingExperimentStat row = new RoutingExperimentStat();
+                row.setExperimentId(experimentId);
+                row.setGroupId(groupId);
+                row.setEventCount(1);
+                row.setSuccessCount(success ? 1 : 0);
+                row.setTotalLatencyMs(latencyMs);
+                row.setTotalCostBps(costBps);
+                statRepository.save(row);
+            }
+        } catch (RuntimeException e) {
+            log.warn("RoutingExperimentService: stats persist failed for {}/{}: {}",
+                    experimentId, groupId, e.getMessage());
+        }
     }
 
     /**

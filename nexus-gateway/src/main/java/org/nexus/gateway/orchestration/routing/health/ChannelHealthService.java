@@ -6,6 +6,7 @@ import org.nexus.gateway.orchestration.connector.ConnectorRegistry;
 import org.nexus.gateway.orchestration.connector.PaymentConnector;
 import org.nexus.gateway.orchestration.routing.ai.ConnectorMetrics;
 import org.nexus.gateway.orchestration.routing.ai.MetricsCollector;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -159,8 +160,10 @@ public class ChannelHealthService {
     /**
      * 定时采样（每 5 分钟，对齐 history-sampling-interval 默认值）。
      * {@code nexus.routing.health.enabled=false} 时不采样。
+     * ShedLock：多实例部署时同一采样窗仅一个实例落历史（ADR-034 §2 阻塞项清偿）。
      */
     @Scheduled(fixedDelayString = "PT5M", initialDelay = 60000)
+    @SchedulerLock(name = "channelHealthSample", lockAtMostFor = "PT5M", lockAtLeastFor = "PT1M")
     public void sampleAll() {
         if (!properties.getHealth().isEnabled()) return;
         for (String connectorId : observedConnectorIds()) {
@@ -190,8 +193,10 @@ public class ChannelHealthService {
 
     /**
      * 保留期清理（每小时）：删除超过 history-retention-days 的历史样本。
+     * ShedLock：多实例仅一个执行清理（ADR-034 §2）。
      */
     @Scheduled(fixedDelayString = "PT1H", initialDelay = 300000)
+    @SchedulerLock(name = "channelHealthPurge", lockAtMostFor = "PT10M", lockAtLeastFor = "PT1M")
     @Transactional
     public void purgeExpiredHistory() {
         if (!properties.getHealth().isEnabled()) return;
