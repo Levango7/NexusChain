@@ -31,17 +31,38 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "压测模式 (smoke | full)"
+        description: "压测模式 (smoke | full | capacity)"
         required: true
         default: "smoke"
         type: choice
-        options: [smoke, full]
+        options: [smoke, full, capacity]
       target:
         description: "目标环境 (local | staging)"
         required: true
         default: "staging"
         type: choice
         options: [local, staging]
+      # === 容量画像参数（mode=capacity 时生效，2026-10-03 新增） ===
+      cap_start_rps:
+        description: "容量阶梯起始 RPS"
+        required: false
+        default: "50"
+        type: string
+      cap_step_rps:
+        description: "容量阶梯步进 RPS"
+        required: false
+        default: "50"
+        type: string
+      cap_step_count:
+        description: "容量阶梯级数"
+        required: false
+        default: "6"
+        type: string
+      cap_step_duration:
+        description: "每级持续时长（如 1m / 30s）"
+        required: false
+        default: "1m"
+        type: string
 
 env:
   SMOKE_VUS: "5"
@@ -303,3 +324,71 @@ jobs:
           echo "| webhook-delivery | 500 | <1s | full-webhook-delivery.json |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "详见 artifact: k6-full-results-${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY
+
+  # ============================================================
+  # 容量画像（Capacity Profile）：仅手动触发 — RPS 阶梯爬升找拐点（2026-10-03）
+  # ------------------------------------------------------------
+  # 与 full 的区别：full 验证「定负载下 SLA 达标」；capacity 画「拐点在哪」——
+  # ramping-arrival-rate 按 RPS 供压、VU 自动扩缩，观察 P95/P99 与错误率从哪级
+  # 开始劣化。阈值为宽松护栏（错误率<10%），过载段劣化是数据不是失败。
+  # 结果 summary JSON 归档 artifact + Job Summary 表格；拐点成因定位交给
+  # 服务端指标（Grafana dashboard 与本跑并行观察）。
+  # ============================================================
+  capacity-baseline:
+    name: k6 Capacity Baseline
+    runs-on: ubuntu-26.04
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'capacity'
+    timeout-minutes: 45
+    env:
+      BASE_URL_GATEWAY: ${{ github.event.inputs.target == 'staging' && 'https://staging-gateway.nexuschain.io' || 'http://localhost:8080' }}
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v5
+
+      - name: 安装 k6
+        run: |
+          K6_VERSION="v0.54.0"
+          curl -sL --retry 3 --fail \
+            "https://github.com/grafana/k6/releases/download/${K6_VERSION}/k6-${K6_VERSION}-linux-amd64.tar.gz" \
+            -o /tmp/k6.tar.gz
+          tar -xzf /tmp/k6.tar.gz -C /tmp
+          sudo install -m 0755 /tmp/k6-${K6_VERSION}-linux-amd64/k6 /usr/local/bin/k6
+          k6 version
+
+      - name: 校验凭据
+        run: |
+          if [[ -z "$API_KEY" || -z "$SIGNING_SECRET" ]]; then
+            echo "::error::容量画像打的是业务路径（POST /api/v1/payments），需要 PERF_API_KEY / PERF_SIGNING_SECRET secrets"
+            exit 1
+          fi
+
+      - name: 运行容量阶梯（RPS 爬升找拐点）
+        run: |
+          k6 run --out json=perf/k6/results/capacity-run.json \
+            --summary-export=perf/k6/results/capacity-summary.json \
+            -e API_KEY="$API_KEY" -e SIGNING_SECRET="$SIGNING_SECRET" \
+            -e BASE_URL_GATEWAY="$BASE_URL_GATEWAY" \
+            -e CAP_START_RPS="${{ github.event.inputs.cap_start_rps || '50' }}" \
+            -e CAP_STEP_RPS="${{ github.event.inputs.cap_step_rps || '50' }}" \
+            -e CAP_STEP_COUNT="${{ github.event.inputs.cap_step_count || '6' }}" \
+            -e CAP_STEP_DURATION="${{ github.event.inputs.cap_step_duration || '1m' }}" \
+            perf/k6/capacity.js
+
+      - name: 上传容量基线
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: k6-capacity-baseline-${{ github.run_id }}
+          path: perf/k6/results/capacity-*.json
+          if-no-files-found: ignore
+          retention-days: 90
+
+      - name: 汇总报告
+        if: always()
+        run: |
+          echo "## k6 容量画像基线" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- 目标：\`${{ github.event.inputs.target }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- 阶梯：起始 \`${{ github.event.inputs.cap_start_rps || '50' }}\` RPS，步进 \`${{ github.event.inputs.cap_step_rps || '50' }}\` × \`${{ github.event.inputs.cap_step_count || '6' }}\` 级，每级 \`${{ github.event.inputs.cap_step_duration || '1m' }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- 读法：从 summary 的各级 P95/P99/错误率找**拐点**（延迟曲线弯折处）；成因定位看服务端 Grafana 指标" >> $GITHUB_STEP_SUMMARY
+          echo "- 基线归档 90 天：artifact \`k6-capacity-baseline-${{ github.run_id }}\`（对比后续改造的容量回归）" >> $GITHUB_STEP_SUMMARY
