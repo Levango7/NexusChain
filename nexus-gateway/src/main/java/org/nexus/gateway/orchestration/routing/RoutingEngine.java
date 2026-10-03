@@ -390,7 +390,7 @@ public class RoutingEngine {
         }
         try {
             MultiObjectiveRoutingService.MultiObjectiveDecision decision =
-                    multiObjectiveRoutingService.decide(ctx, candidates);
+                    multiObjectiveRoutingService.decide(ctx, candidates, rule.getStrategyConfigId());
             List<PaymentConnector> ordered = new ArrayList<>();
             for (String id : decision.orderedIds()) {
                 candidates.stream().filter(c -> c.getId().equals(id)).findFirst().ifPresent(ordered::add);
@@ -587,12 +587,13 @@ public class RoutingEngine {
         e.setStrategy(rule.getStrategy().name());
         e.setConnectorsCsv(String.join(",", rule.getConnectors()));
         e.setPriority(rule.getPriority());
+        e.setStrategyConfigId(rule.getStrategyConfigId());
         return e;
     }
 
     /** 持久化实体 → 领域规则 */
     private RoutingRule fromEntity(RoutingRuleEntity e) {
-        return new RoutingRule(
+        RoutingRule rule = new RoutingRule(
                 e.getId(),
                 e.getName(),
                 RoutingRuleEntity.fromConditionsJson(e.getConditionsJson()),
@@ -600,6 +601,8 @@ public class RoutingEngine {
                 List.of(e.getConnectorsCsv() == null || e.getConnectorsCsv().isBlank()
                         ? new String[0] : e.getConnectorsCsv().split(",")),
                 e.getPriority());
+        rule.setStrategyConfigId(e.getStrategyConfigId());
+        return rule;
     }
 
     /**
