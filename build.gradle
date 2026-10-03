@@ -36,9 +36,11 @@ allprojects {
     // 2026-09-28：2.50.2 → 2.51.0（Payment Orchestration Wave 1-16）。
     // 2026-10-02：2.51.0 → 2.51.1（安全加固批次：OWASP DC 真扫描 13 CRITICAL 清偿 /
     // trixie-slim / jackson CVE / Node 24 + Ubuntu 26.04 / flaky 清偿）。
+    // 2026-10-03：2.51.1 → 2.51.2（可靠性收尾：SchedulerLock 补挂 / 实验统计 V91
+    // 持久化 / 规则级路由权重钉死 / roadmap-next 建档）。
     // 与 version.properties / README 头注的一致性由 CI 门禁
     // scripts/check-version-consistency.sh 保护。
-    version = '2.51.1'
+    version = '2.51.2'
 
     repositories {
         // 权威源优先；镜像仅用于加速与容错
