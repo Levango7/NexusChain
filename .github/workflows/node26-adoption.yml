@@ -1,0 +1,98 @@
+name: Node 26 LTS Adoption
+
+# ============================================================================
+# PR #25（Node 22→26 试验跑）的到期采纳决策——仓库侧定时执行
+# ----------------------------------------------------------------------------
+# 背景：Node 26 官方 LTS 升格日 = 2026-10-28（nodejs/release schedule.json
+# 实证：v26 start 2026-05-05 / lts 2026-10-28）。此前的口径是「采纳决策待
+# 2026-10-28」；本机侧定时提醒受会话绑定限制无法建立，故把决策做进仓库：
+# 跑在 GitHub 调度器上，不依赖任何本地机器在线。
+#
+# 决策规则（与人工口径完全一致，无新增裁量）：
+#   1. 实时核实 Node 26 已升格 LTS（nodejs.org/dist/index.json 的 lts 字段，
+#      而非仅信计划日期）；
+#   2. 已升格 且 PR #25 全部 checks 绿 → squash 合并（分支保护/required
+#      checks 仍然兜底——本 job 只是执行既有规则的最后一击）；
+#   3. 任一条件不满足 → 在 PR #25 留证据评论，不合并；
+#   4. PR 已合并/关闭 → no-op 退出。
+#
+# 一次性设计：日期守卫（2026-10-28/29 两天各试一次，覆盖升格时差；
+# manual dispatch 不受守卫限制，供提前演练与事后重试）。
+# 采纳落地后本文件可随任意 PR 删除（本注释即删除说明）。
+# ============================================================================
+
+on:
+  schedule:
+    - cron: '20 2 28-29 10 *'   # 10:20 (UTC+8)；日期守卫保证仅 2026 年生效
+  workflow_dispatch:
+
+permissions:
+  contents: write        # squash 合并产生提交
+  pull-requests: write   # 评论 + 合并 PR #25
+
+jobs:
+  evaluate:
+    name: Node 26 LTS 采纳决策（PR #25）
+    runs-on: ubuntu-26.04
+    env:
+      REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      # 单判定步骤：依次过日期守卫 → PR 状态 → LTS 实时状态，
+      # 任一不过则留言（如适用）并置 GO=0；全过置 GO=1。
+      - name: 前置判定（日期守卫 / PR 状态 / Node 26 LTS 实时核验）
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            TODAY=$(date -u +%F)
+            case "$TODAY" in
+              2026-10-28|2026-10-29) echo "日期守卫通过：$TODAY" ;;
+              *) echo "GO=0" >> "$GITHUB_ENV"; echo "今日 $TODAY 非决策窗口，no-op"; exit 0 ;;
+            esac
+          fi
+          STATE=$(gh pr view 25 --repo "$REPO" --json state --jq .state)
+          echo "PR #25 state=$STATE"
+          if [ "$STATE" != "OPEN" ]; then
+            echo "GO=0" >> "$GITHUB_ENV"; echo "PR #25 已 $STATE，采纳流程早已结束，no-op"; exit 0
+          fi
+          LTS_COUNT=$(curl -fsSL https://nodejs.org/dist/index.json \
+            | jq '[.[] | select(.version | startswith("v26.")) | select(.lts != false)] | length')
+          echo "Node 26 带 LTS 标记的版本数：$LTS_COUNT"
+          if [ "$LTS_COUNT" = "0" ]; then
+            gh pr comment 25 --repo "$REPO" --body \
+              "⏳ **Node 26 尚未升格 LTS**（nodejs.org/dist/index.json 实时核验：无带 LTS 标记的 v26 版本；官方计划升格日 2026-10-28）。采纳决策延期，升格窗口次日自动重试。"
+            echo "GO=0" >> "$GITHUB_ENV"; exit 0
+          fi
+          echo "GO=1" >> "$GITHUB_ENV"
+
+      - name: checks 核验 + 条件合并
+        if: env.GO == '1'
+        run: |
+          set -euo pipefail
+          FAILED=$(gh pr view 25 --repo "$REPO" --json statusCheckRollup \
+            --jq '[.statusCheckRollup[] | select(.conclusion == "FAILURE")] | length')
+          PENDING=$(gh pr view 25 --repo "$REPO" --json statusCheckRollup \
+            --jq '[.statusCheckRollup[] | select(.status != "COMPLETED")] | length')
+          if [ "$FAILED" != "0" ]; then
+            {
+              echo "❌ **Node 26 已升格 LTS，但 PR #25 有 ${FAILED} 项 checks 红，不合并：**"
+              gh pr view 25 --repo "$REPO" --json statusCheckRollup \
+                --jq '.statusCheckRollup[] | select(.conclusion == "FAILURE") | "- \(.name)"'
+            } > /tmp/red.md
+            gh pr comment 25 --repo "$REPO" --body-file /tmp/red.md
+            exit 1
+          fi
+          if [ "$PENDING" != "0" ]; then
+            gh pr comment 25 --repo "$REPO" --body \
+              "⏳ Node 26 已升格 LTS，但 PR #25 尚有 ${PENDING} 项 checks 未完成。升格窗口次日自动重试；如需立即处理可 workflow_dispatch 重跑本 job。"
+            exit 0
+          fi
+          echo "条件齐备：LTS 已升格 + checks 全绿，执行 squash 合并"
+          if gh pr merge 25 --repo "$REPO" --squash --delete-branch \
+              --subject "ci(node): Node 26 采纳——LTS 2026-10-28 已升格 + PR #25 全 checks 绿 (#25)"; then
+            echo "✅ PR #25 已合并，Node 26 采纳完成。本 workflow 可随下次 PR 删除。"
+          else
+            gh pr comment 25 --repo "$REPO" --body \
+              "⚠️ Node 26 已 LTS 且 checks 全绿，但自动合并失败（可能为分支保护/权限原因）。请人工执行：\`gh pr merge 25 --squash --delete-branch\`"
+            exit 1
+          fi
