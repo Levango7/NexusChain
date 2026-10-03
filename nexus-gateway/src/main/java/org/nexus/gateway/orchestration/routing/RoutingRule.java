@@ -13,6 +13,13 @@ public class RoutingRule {
     private RoutingStrategy strategy;
     private List<String> connectors;
     private int priority;
+    /**
+     * 规则级多目标权重固定（Wave 16 模块一占位的消费落地，2026-10-03）：
+     * 指向 routing_strategy_configs.id 时，MULTI_OBJECTIVE 评分**固定用该配置的权重**，
+     * 绕过「条件+priority」解析链（允许运营把某条规则的调权钉死，不受全局链影响）；
+     * null = 走全局解析链（既有行为）。
+     */
+    private Long strategyConfigId;
 
     public RoutingRule() {}
 
@@ -49,4 +56,6 @@ public class RoutingRule {
     public void setConnectors(List<String> connectors) { this.connectors = connectors; }
     public int getPriority() { return priority; }
     public void setPriority(int priority) { this.priority = priority; }
+    public Long getStrategyConfigId() { return strategyConfigId; }
+    public void setStrategyConfigId(Long strategyConfigId) { this.strategyConfigId = strategyConfigId; }
 }

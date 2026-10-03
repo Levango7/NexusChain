@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+### 规则级路由权重钉死（2026-10-03 第三批，桶 A4）
+
+- **`strategy_config_id` 占位转正**：RoutingRule 携带规则级 `strategy_config_id`（RoutingRuleEntity
+  双向映射贯通）——MULTI_OBJECTIVE 评分时若规则钉死了配置 id，**固定用该配置的权重，
+  绕过「条件+priority」全局解析链**（允许运营把单条规则的调权钉死，不受全局链变化影响）。
+- **pinned TTL 缓存**（与快照链同 TTL、双检单飞、负结果也缓存——坏引用不至于每笔支付打一次 DB）；
+  配置缺失/禁用/权重非法 → 告警**诚实降级**回全局链（坏引用不炸路由）；
+  CRUD `evictCache` 联动清 pinned 缓存（改权重对规则引用立即生效）。
+- 测试：pinned 压过条件链 / 缺失与禁用降级 / evict 联动 + 引擎端到端（规则带 id → 低费率必胜）。
+- roadmap-next 更新：A3 修正为需产品口径拍板（滚动 24h vs 自然日——现口径为滚动窗，
+  计数器天然按自然日分桶，语义不等价不可擅自改）；A4 标记完成。
+
 ### Wave 16 边界收尾 + 路线图建档（2026-10-03 第二批）
 
 - **SchedulerLock 补挂（ADR-034 §2 阻塞项清偿）**：Wave 16 引入的 4 个 `@Scheduled` 任务

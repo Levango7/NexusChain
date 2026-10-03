@@ -91,6 +91,48 @@ class RoutingEngineWave16Test {
     }
 
     @Test
+    @DisplayName("MULTI_OBJECTIVE 规则: strategy_config_id 钉死权重——规则引用优先于全局链")
+    void multiObjectivePinnedConfigOverrides() {
+        RoutingStrategyConfigRepository strategyRepo = mock(RoutingStrategyConfigRepository.class);
+        // 全局链放一个 SUCCESS_RATE 独大的高优先级配置（若走链，无指标时打平不重排）
+        org.nexus.gateway.orchestration.routing.strategy.RoutingStrategyConfig chainConfig =
+                new org.nexus.gateway.orchestration.routing.strategy.RoutingStrategyConfig();
+        chainConfig.setId(1L);
+        chainConfig.setName("chain");
+        chainConfig.setEnabled(true);
+        chainConfig.setObjectiveWeightsJson("{\"SUCCESS_RATE\":1000}");
+        chainConfig.setPriority(100);
+        when(strategyRepo.findByEnabledTrueOrderByPriorityDesc()).thenReturn(List.of(chainConfig));
+        // 规则钉死 id=9：COST 独大（低费率必胜）
+        org.nexus.gateway.orchestration.routing.strategy.RoutingStrategyConfig pinned =
+                new org.nexus.gateway.orchestration.routing.strategy.RoutingStrategyConfig();
+        pinned.setId(9L);
+        pinned.setName("pinned");
+        pinned.setEnabled(true);
+        pinned.setObjectiveWeightsJson("{\"COST\":1000}");
+        when(strategyRepo.findById(9L)).thenReturn(Optional.of(pinned));
+        MultiObjectiveRoutingService multiObjective =
+                new MultiObjectiveRoutingService(strategyRepo, properties);
+
+        PaymentConnector cheap = connector("cheap", true, 1);
+        PaymentConnector pricey = connector("pricey", true, 5000);
+        when(registry.get("cheap")).thenReturn(Optional.of(cheap));
+        when(registry.get("pricey")).thenReturn(Optional.of(pricey));
+
+        RoutingEngine engine = new RoutingEngine(registry, cfg, null, null,
+                multiObjective, null, null, null, null, null, properties);
+        RoutingRule pinnedRule = new RoutingRule("pinned", "pinned rule",
+                java.util.Map.of("currency", "USD"),
+                RoutingStrategy.MULTI_OBJECTIVE, List.of("pricey", "cheap"), 20);
+        pinnedRule.setStrategyConfigId(9L);
+        engine.addRule(pinnedRule);
+
+        List<PaymentConnector> result = engine.resolve("USD", 1000, null);
+        assertEquals("cheap", result.get(0).getId(),
+                "钉死 COST 独大权重时低费率候选必须胜出（走全局 SUCCESS_RATE 链则不会）");
+    }
+
+    @Test
     @DisplayName("MULTI_OBJECTIVE: 评分服务缺失时退化为规则顺序（PRIORITY 语义）")
     void multiObjectiveWithoutServiceKeepsRuleOrder() {
         PaymentConnector cheap = connector("cheap", true, 10);

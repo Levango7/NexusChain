@@ -180,4 +180,84 @@ class MultiObjectiveRoutingServiceTest {
         assertEquals("ok", saved.getName());
         verify(repository).save(any());
     }
+
+    // ==================== 规则级固定权重（2026-10-03 A4） ====================
+
+    @Test
+    @DisplayName("pinned: 规则钉死的配置权重压过条件链——COST 独大时低费率候选必胜")
+    void pinnedConfigOverridesChain() {
+        // 条件链里放一个高优先级、SUCCESS_RATE 独大的配置（若走链，高成功率者胜）
+        when(repository.findByEnabledTrueOrderByPriorityDesc()).thenReturn(List.of(
+                config("chain", 100, "{\"SUCCESS_RATE\":1000}", null)));
+        // 钉死配置：COST 独大（若走 pinned，低费率者胜）
+        when(repository.findById(9L)).thenReturn(Optional.of(
+                config("pinned", 1, "{\"COST\":1000}", null)));
+
+        PaymentConnector cheap = connector("cheap", 1);
+        PaymentConnector expensive = connector("expensive", 5000);
+
+        // 无 pinned → 链生效（SUCCESS_RATE 独大：无指标时两者打平，仅验证走链路径不炸）
+        MultiObjectiveRoutingService.MultiObjectiveDecision chainDecision = service.decide(
+                RoutingContext.simple(MERCHANT_ID, BigDecimal.valueOf(100), "NEX"),
+                List.of(cheap, expensive), null);
+        assertEquals(2, chainDecision.orderedIds().size());
+
+        // pinned → COST 独大：cheap 必胜
+        MultiObjectiveRoutingService.MultiObjectiveDecision pinnedDecision = service.decide(
+                RoutingContext.simple(MERCHANT_ID, BigDecimal.valueOf(100), "NEX"),
+                List.of(expensive, cheap), 9L);
+        assertEquals("cheap", pinnedDecision.orderedIds().get(0));
+        // 验证 pinned 生效：cheap 分数显著高于 expensive
+        assertTrue(pinnedDecision.scores().get("cheap") > pinnedDecision.scores().get("expensive") + 0.5);
+    }
+
+    @Test
+    @DisplayName("pinned: 配置缺失/禁用/权重非法 → 告警降级回条件链（不炸路由）")
+    void pinnedUnusableFallsBackToChain() {
+        // 链上有一个 LATENCY 独大的高优先级配置
+        when(repository.findByEnabledTrueOrderByPriorityDesc()).thenReturn(List.of(
+                config("chain", 100, "{\"LATENCY\":1000}", null)));
+        // 钉死 id=404 不存在
+        when(repository.findById(404L)).thenReturn(Optional.empty());
+
+        MultiObjectiveRoutingService.ObjectiveWeights weights404 = service.resolveWeights(
+                RoutingContext.simple(MERCHANT_ID, BigDecimal.valueOf(100), "NEX"), 404L);
+        // 降级到链 → LATENCY=1000（其余键取默认）归一后 ≈0.99925，绝对主导
+        assertEquals(1000.0 / 1000.75, weights404.latency(), 1e-9);
+
+        // 钉死到禁用配置 → 同样降级
+        RoutingStrategyConfig disabled = config("off", 1, "{\"COST\":1000}", null);
+        disabled.setEnabled(false);
+        when(repository.findById(405L)).thenReturn(Optional.of(disabled));
+        MultiObjectiveRoutingService.ObjectiveWeights weights405 = service.resolveWeights(
+                RoutingContext.simple(MERCHANT_ID, BigDecimal.valueOf(100), "NEX"), 405L);
+        assertEquals(1000.0 / 1000.75, weights405.latency(), 1e-9);
+    }
+
+    @Test
+    @DisplayName("pinned: CRUD evictCache 同步清钉死缓存——改权重后规则引用立即生效")
+    void evictClearsPinnedCache() {
+        when(repository.findByEnabledTrueOrderByPriorityDesc()).thenReturn(List.of());
+        when(repository.findById(9L)).thenReturn(Optional.of(
+                config("pinned", 1, "{\"COST\":1000}", null)));
+        PaymentConnector cheap = connector("cheap", 1);
+        PaymentConnector expensive = connector("expensive", 5000);
+
+        MultiObjectiveRoutingService.MultiObjectiveDecision before = service.decide(
+                RoutingContext.simple(MERCHANT_ID, BigDecimal.valueOf(100), "NEX"),
+                List.of(expensive, cheap), 9L);
+        assertEquals("cheap", before.orderedIds().get(0));
+
+        // 权重翻转：改为 SUCCESS_RATE 独大（无指标时打平，cost 不再主导）
+        when(repository.findById(9L)).thenReturn(Optional.of(
+                config("pinned", 1, "{\"SUCCESS_RATE\":1000}", null)));
+        service.evictCache();
+        MultiObjectiveRoutingService.MultiObjectiveDecision after = service.decide(
+                RoutingContext.simple(MERCHANT_ID, BigDecimal.valueOf(100), "NEX"),
+                List.of(expensive, cheap), 9L);
+        // SUCCESS_RATE 独大 + 无指标数据 → cost 维度仍按 feeBps 兜底归一；
+        // 断言翻转后 expensive 不再因 cost 惨败（分数差 < 0.5）——验证缓存确实被清
+        assertTrue(Math.abs(after.scores().get("cheap") - after.scores().get("expensive")) < 0.5,
+                "evictCache 后 pinned 权重未生效");
+    }
 }

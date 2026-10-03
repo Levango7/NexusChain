@@ -21,6 +21,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 多目标路由策略服务（Wave 16 模块一）。
@@ -74,6 +75,14 @@ public class MultiObjectiveRoutingService {
     private record ResolvedConfig(ObjectiveWeights weights, Map<String, String> conditions) {
     }
 
+    /**
+     * 规则级固定配置的缓存条目（2026-10-03 A4）。config 为 null 表示
+     * 「不可用」（缺失/禁用/权重非法）——负结果同样缓存一个 TTL，
+     * 防止坏引用导致每笔 MULTI_OBJECTIVE 支付都打一次 findById。
+     */
+    private record PinnedEntry(ResolvedConfig config, long expiresAtMillis) {
+    }
+
     private final RoutingStrategyConfigRepository repository;
     private final RoutingWave16Properties properties;
 
@@ -84,6 +93,8 @@ public class MultiObjectiveRoutingService {
     private volatile List<ResolvedConfig> snapshot = List.of();
     private volatile long lastRefreshNanos = 0L;
     private final Object refreshLock = new Object();
+    /** 规则级固定配置缓存：configId → PinnedEntry（TTL 与快照链一致；读锁外，写锁内）。 */
+    private final Map<Long, PinnedEntry> pinnedCache = new ConcurrentHashMap<>();
 
     @Autowired
     public MultiObjectiveRoutingService(RoutingStrategyConfigRepository repository,
@@ -112,13 +123,24 @@ public class MultiObjectiveRoutingService {
      * @return 评分明细与降序结果；策略未启用或候选 ≤ 1 时 scores 为空、orderedIds 为原顺序
      */
     public MultiObjectiveDecision decide(RoutingContext ctx, List<PaymentConnector> candidates) {
+        return decide(ctx, candidates, null);
+    }
+
+    /**
+     * 多目标决策（规则级固定权重版，2026-10-03 A4）。
+     *
+     * @param strategyConfigId 规则钉死的 routing_strategy_configs.id；null = 走全局
+     *                          「条件+priority」解析链（既有行为）
+     */
+    public MultiObjectiveDecision decide(RoutingContext ctx, List<PaymentConnector> candidates,
+                                         Long strategyConfigId) {
         if (!properties.getStrategy().isEnabled() || candidates.size() <= 1) {
             List<String> ids = candidates.stream().map(PaymentConnector::getId).toList();
             return new MultiObjectiveDecision(new LinkedHashMap<>(), ids);
         }
 
         List<PaymentConnector> adjusted = applyProfileAdjustments(ctx, candidates);
-        ObjectiveWeights weights = resolveWeights(ctx);
+        ObjectiveWeights weights = resolveWeights(ctx, strategyConfigId);
         LinkedHashMap<String, Double> totals = new LinkedHashMap<>();
         for (PaymentConnector c : adjusted) {
             totals.put(c.getId(), scoreCandidate(c, adjusted, weights));
@@ -137,14 +159,72 @@ public class MultiObjectiveRoutingService {
         return new MultiObjectiveDecision(totals, List.copyOf(ordered));
     }
 
-    /** 解析生效权重（DB 热加载 → 默认权重）。 */
+    /** 解析生效权重（全局链 → 默认权重）。 */
     public ObjectiveWeights resolveWeights(RoutingContext ctx) {
+        return resolveWeights(ctx, null);
+    }
+
+    /**
+     * 解析生效权重（规则级固定版，2026-10-03 A4）。
+     * strategyConfigId 非空且该配置可用（存在/enabled/权重合法）→ 固定用之，
+     * 绕过条件链；不可用 → 告警并回退全局链（诚实降级，不让坏引用炸路由）。
+     */
+    public ObjectiveWeights resolveWeights(RoutingContext ctx, Long strategyConfigId) {
+        if (strategyConfigId != null) {
+            ResolvedConfig pinned = pinnedConfig(strategyConfigId);
+            if (pinned != null) {
+                return pinned.weights();
+            }
+            log.warn("Pinned strategy config {} unusable (missing/disabled/invalid weights), "
+                    + "falling back to global chain", strategyConfigId);
+        }
         for (ResolvedConfig config : snapshot()) {
             if (matches(config.conditions(), ctx)) {
                 return config.weights();
             }
         }
         return defaultWeights();
+    }
+
+    /**
+     * 规则级固定配置解析（TTL 缓存，负结果也缓存——坏引用不至于每笔支付打一次 DB）。
+     * 双检模式与快照链一致：锁外读 + 锁内刷新，同 configId 并发回源合并为一次。
+     */
+    private ResolvedConfig pinnedConfig(Long configId) {
+        long ttl = ttlMillis();
+        long now = System.currentTimeMillis();
+        PinnedEntry entry = pinnedCache.get(configId);
+        if (entry != null && now < entry.expiresAtMillis()) {
+            return entry.config();
+        }
+        synchronized (refreshLock) {
+            entry = pinnedCache.get(configId);
+            now = System.currentTimeMillis();
+            if (entry != null && now < entry.expiresAtMillis()) {
+                return entry.config();
+            }
+            ResolvedConfig resolved = null;
+            try {
+                resolved = repository.findById(configId)
+                        .filter(RoutingStrategyConfig::isEnabled)
+                        .map(config -> {
+                            ObjectiveWeights weights = parseWeights(config.getObjectiveWeightsJson());
+                            return weights == null ? null
+                                    : new ResolvedConfig(weights,
+                                            RoutingJsonCodec.fromJsonToMap(config.getConditionsJson()));
+                        })
+                        .orElse(null);
+            } catch (RuntimeException e) {
+                log.warn("Pinned strategy config {} load failed, degrading to chain: {}",
+                        configId, e.getMessage());
+            }
+            pinnedCache.put(configId, new PinnedEntry(resolved, System.currentTimeMillis() + ttl));
+            return resolved;
+        }
+    }
+
+    private long ttlMillis() {
+        return parseTtl(properties.getStrategy().getHotReloadInterval()).toMillis();
     }
 
     // ==================== 评分内部 ====================
@@ -242,10 +322,11 @@ public class MultiObjectiveRoutingService {
         return snapshot;
     }
 
-    /** 强制刷新（配置变更后可手动触发）。 */
+    /** 强制刷新（配置变更后可手动触发；同时清规则级固定配置缓存——引用方立即看到新权重）。 */
     public void evictCache() {
         synchronized (refreshLock) {
             refreshSnapshot();
+            pinnedCache.clear();
             lastRefreshNanos = System.nanoTime();
         }
     }
