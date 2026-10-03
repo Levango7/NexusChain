@@ -33,7 +33,8 @@ class DefaultPaymentRiskServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new DefaultPaymentRiskService(riskProfileRepository, riskEngine, orderRepository);
+        // 第 4 参 MeterRegistry 为 null：测试环境无 Micrometer 时计时降级 no-op（2026-10-03 毫秒级改造新增）
+        service = new DefaultPaymentRiskService(riskProfileRepository, riskEngine, orderRepository, null);
     }
 
     // === evaluatePayment ===
