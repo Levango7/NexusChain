@@ -31,6 +31,20 @@
 - `perf/k6/docker-compose.capacity.yml`：主机 8080 被占用时的 gateway 重映射 override
   （独立 project 名 `nexuschain-perf`，不污染其它栈）——本地 L3 容量拐点实测的起栈配方。
 
+### 本地容量首跑与实测基线（2026-10-03）
+
+- **首份有效 L3 容量基线**（本地单机 + Docker：gateway dev profile + mock connector，k6 容器，
+  阶梯 20→180 RPS×8 级）：25,817 请求 **99.94% 成功**、p50 5.7ms/p90 13.1ms/**p95 21.8ms**、
+  **测试范围内无拐点**（曲线到 180 RPS 全程平坦）。数据与复现配方见 perf/k6/README §2.1.1。
+- **容量工具链修复与增强**：`capacity.js` 请求体 `JSON.stringify`（对象直传被 k6 当 form 编码
+  ——首跑 100% 被拒根因）；多密钥轮换支持（dev `InMemoryRateLimiter` 300 次/分钟/key 硬编码，
+  单 key 仅 5 rps——`seed-multi-keys.ps1` 批量签发 + 按 VU 覆写密钥头，签名 canonical 不含 key）；
+  `docker-compose.capacity.yml` 起栈 override（端口重映射用 `!override` 标签避免合并语义踩坑；
+  `JAVA_TOOL_OPTIONS` 系统属性注入验签全局密钥——camelCase `@Value` 与 kebab yml 键的绑定歧义
+  使 env 形式不可用，属实测发现的口径缺口，备忘于 README）。
+- **过程发现（已记录，未改产品代码）**：dev/sandbox 的 `InMemoryRateLimiter` 配额硬编码不可配
+  （容量实测需多 key 绕过）；`InMemoryRateLimiter` 类 Javadoc 的「60/min」与常量 300 不符（文档漂移）。
+
 ## [2.51.2] - 2026-10-03
 
 > 可靠性收尾批次：Wave 16 定时任务分布式锁补挂（多副本真 bug）、A/B 实验统计跨重启持久化、

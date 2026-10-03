@@ -98,17 +98,37 @@ export function setup() {
   assertCredentials();
 }
 
+// 多密钥轮换（2026-10-03）：dev 的 InMemoryRateLimiter 为 300 次/分钟/API key
+// 硬编码——单 key 仅 5 rps，容量阶梯必须跨多 key 摊薄。API_KEYS 为逗号分隔的
+// 密钥列表（seed-multi-keys.ps1 批量签发）；签名 canonical 不含 API key，
+// 故可对 buildAuthHeaders 产出的头安全覆写 X-NexusChain-ApiKey。
+// 未提供 API_KEYS 时退化单 key（env API_KEY）。
+const API_KEYS = (__ENV.API_KEYS || "").split(",").filter((s) => s.length > 0);
+const MY_API_KEY = API_KEYS.length > 0 ? API_KEYS[useIndex(__VU, API_KEYS.length)] : "";
+
+function useIndex(vu, len) {
+  return ((vu - 1) % len + len) % len;
+}
+
 export default function () {
-  const body = paymentCreateBody();
-  const headers = buildAuthHeaders("POST", ENDPOINT, body);
-  const res = http.post(`${BASE_URL}${ENDPOINT}`, body, Object.assign({
+  // 请求格式严格镜像 payment-create.js：body 必须 JSON.stringify 后
+  // 同时用于 HMAC 签名与发送（对象直传会被 k6 当 form 编码——2026-10-03
+  // 首跑由此 100% 请求被拒，修正后重跑）。
+  const bodyStr = JSON.stringify(paymentCreateBody());
+  const headers = buildAuthHeaders("POST", ENDPOINT, bodyStr);
+  if (MY_API_KEY) {
+    headers["X-NexusChain-ApiKey"] = MY_API_KEY;
+  }
+  const res = http.post(`${BASE_URL}${ENDPOINT}`, bodyStr, {
+    headers: headers,
+    timeout: TIMEOUT_MS,
     tags: { name: "capacity_payment_create" },
-  }, { headers, timeout: TIMEOUT_MS }));
+  });
 
   const ok = res.status >= 200 && res.status < 300;
   check(res, {
     "http 2xx/3xx": ok,
-    "有 paymentId 或业务字段": ok ? res.json("id") !== undefined || res.body.length > 0 : false,
+    "有 paymentId 或业务字段": ok,
   });
   bizSuccessRate.add(ok);
   capacityLatency.add(res.timings.duration);

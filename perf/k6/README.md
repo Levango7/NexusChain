@@ -98,6 +98,41 @@ k6 version
   `CAP_START_RPS/CAP_STEP_RPS/CAP_STEP_COUNT` 调大即是同一套脚本；
 - L3 基线归档 90 天（`k6-capacity-baseline-*` artifact），用于改造前后的容量回归对比。
 
+### 2.1.1 首次本地实测基线（2026-10-03，L3 第一份有效数据）
+
+**环境**：单台 Windows 主机 / Docker Desktop；nexus-gateway（dev profile + 内存库 + mock connector）
++ k6 容器（`host.docker.internal`）；阶梯 20→180 RPS × 8 级 × 30s（+30s 预热）。
+
+**结果**：
+
+| 指标 | 数值 |
+| --- | --- |
+| 总请求 | 25,817（285s 阶梯） |
+| 成功率 | **99.94%**（13 个瞬态失败，0.05%） |
+| 延迟 | p50 5.7ms / p90 13.1ms / **p95 21.8ms** / max 2.15s |
+| 拐点 | **测试范围内未见**——曲线到 180 RPS 全程平坦（本机上限高于测试范围） |
+| 客户端 | 丢迭代 132（0.46/s），k6 侧无瓶颈 |
+
+**复现配方（踩坑备忘，全部实测踩过）**：
+
+1. **请求体必须 `JSON.stringify`** 后同时用于 HMAC 签名与发送——对象直传会被 k6
+   当 form 编码（首跑 100% 被拒的根因）；
+2. **验签全局密钥**：dev profile 默认空 = fail-closed 全拒（401/40105）。
+   用 `JAVA_TOOL_OPTIONS=-Dnexus.security.requestSigningSecret=<值>` 注入
+   （**系统属性精确命中**，绕开 camelCase `@Value` 与 kebab yml 键的绑定歧义——
+   `NEXUS_REQUEST_SIGNING_SECRET` env 形式实测未被解析到）；k6 侧同值作 SIGNING_SECRET
+   （**非** seed 脚本输出的商户级密钥——验签只认全局密钥）；
+3. **商户限流**：dev 的 `InMemoryRateLimiter` 硬编码 300 次/分钟/API key（=5 rps）。
+   阶梯压测必须多 key 轮换：`seed-multi-keys.ps1` 批量签发（本基线用 40 把），
+   `capacity.js` 按 `__VU` 轮换并在 buildAuthHeaders 后覆写 `X-NexusChain-ApiKey`
+   （签名 canonical 不含 API key，头可安全覆写）；
+4. **compose 起栈**：`docker-compose.capacity.yml` override 重映射 18080
+   （8080 常被占用）；`ports` 必须用 `!override` 标签（默认合并语义会保留 base 映射照样撞端口）；
+   dev profile 用内存库——**每次重建容器后需重新 seed**（数据不持久）。
+
+**下一步**：阶梯上限提到 400+ RPS 定位真实拐点；staging 基线待 `PERF_API_KEY/PERF_SIGNING_SECRET`
+secrets 配齐后 dispatch `mode=capacity`（工具链已就绪）。
+
 ## 3. 运行压测
 
 ### 3.1 准备凭据
