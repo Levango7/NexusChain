@@ -2,6 +2,49 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [Unreleased]
+
+### 限额严格计数器落地（2026-10-03 第四批，桶 A3——口径拍板后实施）
+
+> **⚠️ 行为变更明示**：日/月限额窗口口径从「滚动 24h / 滚动 30 天」改为
+> 「自然日 / 自然月」（行业惯例——商户平台限额均为自然日；自然日也是计数器
+> 天然分桶）。成员集不变（仅 PAID+PAYING）。切换部署时累计从零开始
+> （新口径下等价于窗口重置）。
+
+- **V92 `risk_limit_accruals`**：每 (商户, 窗口类型, 窗口键) 一行 O(1) 精确累计，
+  原子 `UPDATE ... + :delta`（可负），替代原 O(订单量) 的 `sumMerchantAmountSince` SUM 聚合。
+- **`OrderStateMachine` 咽喉钩子**（20 处调用点零改动）：全部订单状态变更本就收敛于
+  `transition()` 单一方法——挂 `TransitionHook` 观察进出成员集：进入 +amount、
+  离开 −amount（覆盖 PAID→REFUND_PENDING / PAID→REORGED / FAILED→PENDING 重试回路等
+  全部出边），**可逆守恒**：累计恒等于「窗口内处于成员集状态的订单金额之和」。
+- **`RiskLimitAccrualService`**：钩子实现 + 自注册/自注销（Spring 生命周期）+ 评估读取
+  （O(1) 索引读、**零查询滞后**——原 TTL 缓存的 5s 滞后窗随之消解，缓存保留用于摊薄读频）。
+  首插竞态由唯一约束 + 重试兜底；记账失败仅告警（偏差方向分析见服务头注——save 前记账
+  失败方向为限额偏紧=fail-safe）。
+- **`DefaultPaymentRiskService`**：评估改接计数器；**未注入时自动退化滚动 SUM**
+  （向后兼容旧装配/单测）。
+- 测试：成员集判定（与 SUM 状态过滤严格一致）/ 进-移-出守恒 / 重试回路可逆 /
+  首插竞态 / 钩子生命周期 / 评估接线（计数器被消费、SUM 零调用）+ 存量 75 风控测试全绿。
+
+### 本地容量首跑基础设施（2026-10-03）
+
+- `perf/k6/docker-compose.capacity.yml`：主机 8080 被占用时的 gateway 重映射 override
+  （独立 project 名 `nexuschain-perf`，不污染其它栈）——本地 L3 容量拐点实测的起栈配方。
+
+### 本地容量首跑与实测基线（2026-10-03）
+
+- **首份有效 L3 容量基线**（本地单机 + Docker：gateway dev profile + mock connector，k6 容器，
+  阶梯 20→180 RPS×8 级）：25,817 请求 **99.94% 成功**、p50 5.7ms/p90 13.1ms/**p95 21.8ms**、
+  **测试范围内无拐点**（曲线到 180 RPS 全程平坦）。数据与复现配方见 perf/k6/README §2.1.1。
+- **容量工具链修复与增强**：`capacity.js` 请求体 `JSON.stringify`（对象直传被 k6 当 form 编码
+  ——首跑 100% 被拒根因）；多密钥轮换支持（dev `InMemoryRateLimiter` 300 次/分钟/key 硬编码，
+  单 key 仅 5 rps——`seed-multi-keys.ps1` 批量签发 + 按 VU 覆写密钥头，签名 canonical 不含 key）；
+  `docker-compose.capacity.yml` 起栈 override（端口重映射用 `!override` 标签避免合并语义踩坑；
+  `JAVA_TOOL_OPTIONS` 系统属性注入验签全局密钥——camelCase `@Value` 与 kebab yml 键的绑定歧义
+  使 env 形式不可用，属实测发现的口径缺口，备忘于 README）。
+- **过程发现（已记录，未改产品代码）**：dev/sandbox 的 `InMemoryRateLimiter` 配额硬编码不可配
+  （容量实测需多 key 绕过）；`InMemoryRateLimiter` 类 Javadoc 的「60/min」与常量 300 不符（文档漂移）。
+
 ## [2.51.2] - 2026-10-03
 
 > 可靠性收尾批次：Wave 16 定时任务分布式锁补挂（多副本真 bug）、A/B 实验统计跨重启持久化、

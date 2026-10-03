@@ -1,0 +1,22 @@
+# 本地容量画像专用 compose override（2026-10-03）
+# 用途：主机 8080 端口被 WSL relay 占用时，把 gateway 重映射到 18080，
+#       供 perf/k6/capacity.js 做本地 L3 容量拐点实测。
+# 用法：
+#   docker compose -f docker-compose.yml -f perf/k6/docker-compose.capacity.yml \
+#     -p nexuschain-perf up -d nexus-gateway
+#   环境变量 NEX_DEV_NACOS_ENABLED=false 跳过 Nacos 注册门控（同 CI k6 冒烟配方）
+# 注意：compose 对 ports 是**合并**语义——不加 !override 会同时保留 base 的
+#       8080 映射并照样撞端口（2026-10-03 实测踩坑）。!override 需 compose v2.24+。
+services:
+  nexus-gateway:
+    ports: !override
+      - '127.0.0.1:18080:8080'
+    environment:
+      # 请求验签全局密钥（interceptor @Value("${nexus.security.requestSigningSecret:}")）——
+      # dev profile 默认空=fail-closed 全拒（401/40105，2026-10-03 实测）。
+      # 注入方式用 **系统属性**（-D 精确名称命中，绕开 camelCase @Value 与
+      # kebab yml 键之间的宽松绑定歧义——env 形式 NEXUS_REQUEST_SIGNING_SECRET
+      # 在本容器实测未被 @Value 解析到，教训记录）。
+      # 值取 sandbox 同款；k6 侧用同一值作 SIGNING_SECRET（非 seed 脚本输出的
+      # 商户级密钥——验签只认全局密钥）。
+      - JAVA_TOOL_OPTIONS=-Dnexus.security.requestSigningSecret=${NEX_CAP_SIGNING_SECRET:-sandbox-signing-secret-do-not-use-in-prod} -Dnexus.tenant.default-rate-limit-per-second=100000 -Dnexus.tenant.default-rate-limit-per-minute=6000000
