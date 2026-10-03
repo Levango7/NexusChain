@@ -1,5 +1,8 @@
 package org.nexus.gateway.model;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.util.*;
 
 /**
@@ -19,8 +22,28 @@ import java.util.*;
  *   FAILED         -> PENDING (retry)
  *   VOIDED         -> (terminal)
  *   REVERSED       -> (terminal)
+ *
+ * <p><b>状态变更咽喉钩子（2026-10-03 A3）</b>：全部订单状态变更收敛于
+ * {@link #transition}——风控限额累加器（{@code RiskLimitAccrualService}）
+ * 在此挂单一钩子即可精确追踪「PAID+PAYING 成员集」的进出，无需触碰
+ * 20 处调用点或散落的 save。钩子异常只告警不阻断（状态机本体可用性优先；
+ * 累加误差方向为偏紧=fail-safe，见 {@code RiskLimitAccrualService} 头注）。</p>
  */
 public final class OrderStateMachine {
+
+    private static final Logger log = LoggerFactory.getLogger(OrderStateMachine.class);
+
+    /** 状态变更观察钩子（风控累加；Spring 启动注入，测试可替换/清除）。 */
+    public interface TransitionHook {
+        void onTransition(PaymentOrder order, PaymentOrder.OrderStatus from, PaymentOrder.OrderStatus to);
+    }
+
+    private static volatile TransitionHook hook;
+
+    /** 注入/清除钩子（Spring 生命周期调用；测试直接调用以隔离）。 */
+    public static void setHook(TransitionHook transitionHook) {
+        hook = transitionHook;
+    }
 
     private static final Map<PaymentOrder.OrderStatus, Set<PaymentOrder.OrderStatus>> TRANSITIONS;
 
@@ -91,6 +114,18 @@ public final class OrderStateMachine {
                             current, target, order.getOrderNo()));
         }
         order.setStatus(target);
+
+        // 咽喉钩子：状态已变更、save 由调用方随后执行——钩子先于 save 记账，
+        // 若 save 失败则累加偏多（限额偏紧=fail-safe 方向，服务头注有分析）。
+        TransitionHook h = hook;
+        if (h != null) {
+            try {
+                h.onTransition(order, current, target);
+            } catch (RuntimeException e) {
+                log.warn("Order transition hook failed (accrual may drift tight): {} -> {} (orderNo={}): {}",
+                        current, target, order.getOrderNo(), e.getMessage());
+            }
+        }
     }
 
     /**

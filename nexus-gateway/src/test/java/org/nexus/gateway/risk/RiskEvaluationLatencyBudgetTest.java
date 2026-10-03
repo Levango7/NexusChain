@@ -42,7 +42,7 @@ class RiskEvaluationLatencyBudgetTest {
 
     @BeforeEach
     void setUp() {
-        service = new DefaultPaymentRiskService(riskProfileRepository, riskEngine, orderRepository, null);
+        service = new DefaultPaymentRiskService(riskProfileRepository, riskEngine, orderRepository, null, null);
         profile = new RiskProfile();
         profile.setMerchantId(MERCHANT_ID);
         profile.setBlacklisted(false);

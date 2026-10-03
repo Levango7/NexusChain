@@ -33,8 +33,9 @@ class DefaultPaymentRiskServiceTest {
 
     @BeforeEach
     void setUp() {
-        // 第 4 参 MeterRegistry 为 null：测试环境无 Micrometer 时计时降级 no-op（2026-10-03 毫秒级改造新增）
-        service = new DefaultPaymentRiskService(riskProfileRepository, riskEngine, orderRepository, null);
+        // 第 4 参=accrualService null（退化滚动 SUM 旧口径，本文件全部用例按旧语义断言）；
+        // 第 5 参=MeterRegistry null（无计时）。自然日计数器路径见 RiskLimitAccrualServiceTest。
+        service = new DefaultPaymentRiskService(riskProfileRepository, riskEngine, orderRepository, null, null);
     }
 
     // === evaluatePayment ===

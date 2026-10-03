@@ -1,0 +1,13 @@
+# 本地容量画像专用 compose override（2026-10-03）
+# 用途：主机 8080 端口被 WSL relay 占用时，把 gateway 重映射到 18080，
+#       供 perf/k6/capacity.js 做本地 L3 容量拐点实测。
+# 用法：
+#   docker compose -f docker-compose.yml -f perf/k6/docker-compose.capacity.yml \
+#     -p nexuschain-perf up -d nexus-gateway
+#   环境变量 NEX_DEV_NACOS_ENABLED=false 跳过 Nacos 注册门控（同 CI k6 冒烟配方）
+# 注意：compose 对 ports 是**合并**语义——不加 !override 会同时保留 base 的
+#       8080 映射并照样撞端口（2026-10-03 实测踩坑）。!override 需 compose v2.24+。
+services:
+  nexus-gateway:
+    ports: !override
+      - '127.0.0.1:18080:8080'
