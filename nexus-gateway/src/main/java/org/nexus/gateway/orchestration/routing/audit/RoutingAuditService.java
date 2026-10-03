@@ -1,6 +1,7 @@
 package org.nexus.gateway.orchestration.routing.audit;
 
 import jakarta.annotation.PreDestroy;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.nexus.gateway.config.RoutingWave16Properties;
 import org.nexus.gateway.orchestration.routing.RoutingJsonCodec;
 import org.slf4j.Logger;
@@ -159,8 +160,11 @@ public class RoutingAuditService {
 
     // ==================== 清理 ====================
 
-    /** 保留期清理（每小时）。 */
+    /**
+     * 保留期清理（每小时）。ShedLock：多实例仅一个执行（ADR-034 §2 阻塞项清偿）。
+     */
     @Scheduled(fixedDelayString = "PT1H", initialDelay = 900000)
+    @SchedulerLock(name = "routingAuditPurge", lockAtMostFor = "PT10M", lockAtLeastFor = "PT1M")
     @Transactional
     public void purgeExpired() {
         if (!properties.getAudit().isEnabled()) return;
