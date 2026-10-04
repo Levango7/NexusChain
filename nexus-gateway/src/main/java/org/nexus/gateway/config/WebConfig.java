@@ -111,7 +111,14 @@ public class WebConfig implements WebMvcConfigurer {
         // P1-3 安全加固：HMAC 签名拦截器扩展到退款与订单确认端点，防止未签名请求
         // 篡改退款审批或订单状态。
         registry.addInterceptor(requestSignatureInterceptor)
-                .addPathPatterns("/api/v1/payments/**", "/api/v1/refunds/**", "/api/v1/orders/**");
+                .addPathPatterns(
+                        // v1 资金端点
+                        "/api/v1/payments/**", "/api/v1/refunds/**", "/api/v1/orders/**",
+                        // 安全修复（2026-10-05）：v2 资金端点此前仅过 ApiKey，缺 HMAC
+                        // 签名与防重放。/api/v2/payments/batch（批量建单）与
+                        // /api/v2/orders/**（建单 / pay / refund）均为资金写操作，
+                        // 必须与 v1 同等要求请求签名。
+                        "/api/v2/payments/**", "/api/v2/orders/**");
 
         // === P4-T6 多租户改造：租户 API Key 鉴权 + 租户级限流 ===
         // 顺序：先鉴权（填充 TenantContext），再限流（按租户配额判定）
