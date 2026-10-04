@@ -213,8 +213,19 @@ public class PaymentServiceImpl implements PaymentService {
         return result;
     }
 
+    /**
+     * 确认支付。
+     *
+     * <p>事务边界说明（§8.1.2 修复）：本方法<strong>不标注</strong> {@code @Transactional}，
+     * 与 {@link #refund} 保持一致——支付确认的事务边界由 TCC 模板
+     * （{@code TccTransactionManager.execute}，{@code REQUIRES_NEW}）独占。
+     * 若外层再开启 Spring 事务，则 TCC 的 Try/Confirm 各阶段会在独立事务中
+     * merge 外层持久化上下文加载的同一 {@code @Version} {@code PaymentOrder}，
+     * 由于 JPA merge 不回写原 detached 对象的 version，第二次 save 会以过期
+     * version 生成 UPDATE（影响 0 行），抛出 {@code StaleObjectStateException}，
+     * 最终以 {@code UnexpectedRollbackException} 返回 500。</p>
+     */
     @Override
-    @Transactional
     public PaymentResult confirmPayment(Long orderId, String chainTxHash) {
         // P3-T5：支付确认主 span（payment.confirm）
         try (BusinessSpan confirmSpan = BusinessSpan.start(tracer, "payment.confirm")
@@ -383,6 +394,12 @@ public class PaymentServiceImpl implements PaymentService {
             // Try：锁定订单状态（PAYING → SUBMITTED）
             // Confirm：确认支付（SUBMITTED → PAID），发布事件
             // Cancel：释放锁定（SUBMITTED → FAILED）
+            //
+            // §8.1.2 修复：TCC 各阶段在 REQUIRES_NEW 独立事务中执行，不能跨事务边界
+            // 复用外层加载的 detached PaymentOrder 实例——JPA merge 不会把新的 version
+            // 回写到原对象，第二次 save 会用过期 version 生成 UPDATE（影响 0 行），
+            // 触发 StaleObjectStateException。因此每个阶段都按 id 重新加载订单，
+            // 操作当前持久化上下文内的托管实例，并加入幂等守卫。
             if (tccTransactionManager != null) {
                 Map<String, Object> payload = new HashMap<>();
                 payload.put("orderId", orderId);
@@ -394,7 +411,7 @@ public class PaymentServiceImpl implements PaymentService {
                 TransactionContext tccCtx = TransactionContext.create(
                         "confirmPayment", payload, order.getTenantId());
 
-                final PaymentOrder tccOrder = order;
+                final Long tccOrderId = orderId;
                 final String tccChainTxHash = chainTxHash;
                 final BusinessSpan tccConfirmSpan = confirmSpan;
 
@@ -402,7 +419,15 @@ public class PaymentServiceImpl implements PaymentService {
                     @Override
                     public boolean tryAction(TransactionContext ctx) {
                         // Try：锁定订单状态（PAYING → SUBMITTED）
+                        PaymentOrder tccOrder = orderRepository.findById(tccOrderId)
+                                .orElseThrow(() -> new IllegalArgumentException(
+                                        "Order not found in TCC try: " + tccOrderId));
+                        // 幂等：已确认的订单无需再次锁定
+                        if (tccOrder.getStatus() == PaymentOrder.OrderStatus.PAID) {
+                            return true;
+                        }
                         OrderStateMachine.transition(tccOrder, PaymentOrder.OrderStatus.SUBMITTED);
+                        tccOrder.setChainTxHash(tccChainTxHash);
                         orderRepository.save(tccOrder);
                         log.info("TCC Try: order locked, orderNo={}", tccOrder.getOrderNo());
                         return true;
@@ -411,8 +436,19 @@ public class PaymentServiceImpl implements PaymentService {
                     @Override
                     public void confirmAction(TransactionContext ctx) {
                         // Confirm：确认支付（SUBMITTED → PAID）
+                        PaymentOrder tccOrder = orderRepository.findById(tccOrderId)
+                                .orElseThrow(() -> new IllegalArgumentException(
+                                        "Order not found in TCC confirm: " + tccOrderId));
+                        // 幂等：Confirm 重试（最多 3 次）或重复确认时直接返回，
+                        // 避免 PAID → PAID 非法状态转换导致重试放大失败。
+                        if (tccOrder.getStatus() == PaymentOrder.OrderStatus.PAID) {
+                            log.info("TCC Confirm: order already PAID, skipping, orderNo={}",
+                                    tccOrder.getOrderNo());
+                            return;
+                        }
                         OrderStateMachine.transition(tccOrder, PaymentOrder.OrderStatus.PAID);
                         tccOrder.setPaidAt(LocalDateTime.now());
+                        tccOrder.setChainTxHash(tccChainTxHash);
 
                         // 关联最终性状态
                         if (finalityService != null) {
@@ -452,6 +488,12 @@ public class PaymentServiceImpl implements PaymentService {
                     @Override
                     public void cancelAction(TransactionContext ctx) {
                         // Cancel：释放锁定（SUBMITTED → FAILED）
+                        PaymentOrder tccOrder = orderRepository.findById(tccOrderId).orElse(null);
+                        if (tccOrder == null
+                                || tccOrder.getStatus() != PaymentOrder.OrderStatus.SUBMITTED) {
+                            // 幂等：无可释放的锁定
+                            return;
+                        }
                         OrderStateMachine.transition(tccOrder, PaymentOrder.OrderStatus.FAILED);
                         orderRepository.save(tccOrder);
                         log.warn("TCC Cancel: order released, orderNo={}", tccOrder.getOrderNo());
@@ -461,8 +503,14 @@ public class PaymentServiceImpl implements PaymentService {
                 boolean tccResult = tccTransactionManager.execute(paymentConfirmAction, tccCtx);
 
                 if (tccResult) {
+                    // 重新加载以返回已确认订单的最新状态与 txHash
+                    PaymentOrder confirmedOrder = orderRepository.findById(orderId).orElse(order);
                     tccConfirmSpan.attr("payment.status", "PAID").success();
-                    return PaymentResult.success(order.getOrderNo(), chainTxHash, order.getPaidAt());
+                    return PaymentResult.success(
+                            confirmedOrder.getOrderNo(),
+                            confirmedOrder.getChainTxHash() != null
+                                    ? confirmedOrder.getChainTxHash() : chainTxHash,
+                            confirmedOrder.getPaidAt());
                 } else {
                     tccConfirmSpan.attr("payment.status", "FAILED").error(null);
                     return PaymentResult.failed(order.getOrderNo(),

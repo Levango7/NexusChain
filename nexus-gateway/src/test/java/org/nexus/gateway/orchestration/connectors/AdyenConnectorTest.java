@@ -73,8 +73,9 @@ class AdyenConnectorTest {
 
     @Test
     @DisplayName("dry-run createPayment: SUCCEEDED + adyen_dryrun_ 前缀")
-    void dryRun_createPayment() {
+    void dryRun_createPayment() throws Exception {
         AdyenConnector c = newConnector();
+        setField(c, "dryRun", true);
         ConnectorPaymentResult r = c.createPayment(sampleRequest());
         assertTrue(r.isSuccess());
         assertEquals(PaymentStatus.SUCCEEDED, r.getStatus());
@@ -83,8 +84,9 @@ class AdyenConnectorTest {
 
     @Test
     @DisplayName("dry-run queryPayment: 已创建 -> SUCCEEDED；未知 -> FAILED")
-    void dryRun_queryPayment() {
+    void dryRun_queryPayment() throws Exception {
         AdyenConnector c = newConnector();
+        setField(c, "dryRun", true);
         ConnectorPaymentResult created = c.createPayment(sampleRequest());
         assertEquals(PaymentStatus.SUCCEEDED, c.queryPayment(created.getConnectorPaymentId()));
         assertEquals(PaymentStatus.FAILED, c.queryPayment("unknown"));
@@ -92,8 +94,9 @@ class AdyenConnectorTest {
 
     @Test
     @DisplayName("dry-run refund: ok + adyen_refund_ 前缀")
-    void dryRun_refund() {
+    void dryRun_refund() throws Exception {
         AdyenConnector c = newConnector();
+        setField(c, "dryRun", true);
         ConnectorPaymentResult created = c.createPayment(sampleRequest());
         ConnectorRefundResult r = c.refund(created.getConnectorPaymentId(), 1000L);
         assertTrue(r.isSuccess());
@@ -113,9 +116,39 @@ class AdyenConnectorTest {
     void healthCheck_enabledDryRun() throws Exception {
         AdyenConnector c = newConnector();
         setField(c, "enabled", true);
+        setField(c, "dryRun", true);
         ConnectorHealth h = c.healthCheck();
         assertTrue(h.isHealthy());
         assertEquals(0L, h.getLatencyMs());
+    }
+
+    // ---------- fail-closed (no apiKey, dry-run disabled) ----------
+
+    @Test
+    @DisplayName("fail-closed createPayment: 无 apiKey 且 dry-run=false -> fail（不再静默成功）")
+    void failClosed_createPayment_noKey() {
+        AdyenConnector c = newConnector();
+        ConnectorPaymentResult r = c.createPayment(sampleRequest());
+        assertFalse(r.isSuccess());
+        assertNotNull(r.getErrorMessage());
+    }
+
+    @Test
+    @DisplayName("fail-closed refund: 无 apiKey 且 dry-run=false -> fail")
+    void failClosed_refund_noKey() {
+        AdyenConnector c = newConnector();
+        ConnectorRefundResult r = c.refund("ref1", 1000L);
+        assertFalse(r.isSuccess());
+        assertNotNull(r.getErrorMessage());
+    }
+
+    @Test
+    @DisplayName("fail-closed healthCheck: enabled + 无 apiKey + dry-run=false -> down")
+    void failClosed_healthCheck_noKey() throws Exception {
+        AdyenConnector c = newConnector();
+        setField(c, "enabled", true);
+        ConnectorHealth h = c.healthCheck();
+        assertFalse(h.isHealthy());
     }
 
     // ---------- real mode (apiKey set + mock RestTemplate) ----------

@@ -31,10 +31,10 @@ import static org.mockito.Mockito.when;
  */
 class HttpPspConnectorTest {
 
-    /** dry-run connector (no apiKey). */
+    /** dry-run connector: apiKey=null but dry-run explicitly enabled. */
     private HttpPspConnector dryRunConnector() {
         return new HttpPspConnector("psp1", "My PSP", "https://api.psp.example",
-                null, 150, Set.of("USD", "EUR", "NEX"));
+                null, 150, Set.of("USD", "EUR", "NEX"), true, new RestTemplate());
     }
 
     /** real-mode connector with mocked RestTemplate injected. */
@@ -120,6 +120,27 @@ class HttpPspConnectorTest {
         assertTrue(h.isHealthy());
         assertEquals("psp1", h.getConnectorId());
         assertTrue(h.getLatencyMs() >= 0);
+    }
+
+    // ---------- fail-closed (no apiKey, dry-run disabled) ----------
+
+    @Test
+    @DisplayName("fail-closed createPayment: apiKey=null 且 dry-run=false -> fail（不再静默成功）")
+    void failClosed_createPayment_noKey() {
+        HttpPspConnector c = new HttpPspConnector("psp1", "My PSP", "https://api.psp.example",
+                null, 150, Set.of("USD"));
+        ConnectorPaymentResult r = c.createPayment(sampleRequest());
+        assertFalse(r.isSuccess());
+        assertNotNull(r.getErrorMessage());
+    }
+
+    @Test
+    @DisplayName("fail-closed healthCheck: apiKey=null 且 dry-run=false -> down")
+    void failClosed_healthCheck_noKey() {
+        HttpPspConnector c = new HttpPspConnector("psp1", "My PSP", "https://api.psp.example",
+                null, 150, Set.of("USD"));
+        ConnectorHealth h = c.healthCheck();
+        assertFalse(h.isHealthy());
     }
 
     // ---------- real mode (apiKey set + mock RestTemplate) ----------
@@ -267,7 +288,7 @@ class HttpPspConnectorTest {
     @DisplayName("baseUrl 末尾的 / 会被规范化")
     void baseUrl_trailingSlashNormalized() {
         HttpPspConnector c = new HttpPspConnector("psp1", "My PSP", "https://api.psp.example/",
-                null, 100, Set.of("USD"));
+                null, 100, Set.of("USD"), true, new RestTemplate());
         // 内部 baseUrl 已去除末尾 /；通过 dry-run createPayment 间接验证不会抛异常
         ConnectorPaymentResult r = c.createPayment(sampleRequest());
         assertTrue(r.isSuccess());

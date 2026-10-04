@@ -48,7 +48,7 @@ class WeChatPayE2ETest {
         // 2. 动态生成 RSA-2048 密钥对，模拟商户私钥
         keyPairGenerator = new TestKeyPairGenerator();
 
-        // 3. 创建 connector（无参构造器，默认 sandbox=true / dry-run 模式）
+        // 3. 创建 connector（无参构造器下 @Value 不生效，下方显式注入字段配置 real mode）
         connector = new WeChatPayConnector();
 
         // 4. 通过反射注入字段，配置为 real mode

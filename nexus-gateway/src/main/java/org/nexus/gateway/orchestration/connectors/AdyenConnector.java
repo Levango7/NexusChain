@@ -17,7 +17,9 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * Adyen Payment Connector - integrates with Adyen's /payments API.
  * Requires: nexus.connectors.adyen.api-key + merchant-account in config.
- * In sandbox mode without a real key, operates in dry-run (simulates success).
+ *
+ * <p><b>凭证与 dry-run（安全）</b>：默认 {@code nexus.connectors.adyen.dry-run=false}，
+ * 缺失 api-key 一律 fail-closed；仅显式开启 dry-run（sandbox profile）时才允许模拟成功。</p>
  *
  * <p>性能优化（任务 #310）：注入共享的连接池化 RestTemplate。</p>
  */
@@ -26,6 +28,8 @@ public class AdyenConnector implements PaymentConnector {
 
     private static final Logger log = LoggerFactory.getLogger(AdyenConnector.class);
     private static final String ADYEN_API_BASE = "https://checkout-test.adyen.com/v71";
+    private static final String CREDENTIALS_MISSING =
+            "Adyen connector misconfigured: api-key missing and dry-run disabled";
 
     @Value("${nexus.connectors.adyen.api-key:}")
     private String apiKey;
@@ -35,6 +39,13 @@ public class AdyenConnector implements PaymentConnector {
 
     @Value("${nexus.connectors.adyen.enabled:false}")
     private boolean enabled;
+
+    /**
+     * dry-run 显式开关（默认 false）。仅当显式开启时，缺失 api-key 才允许模拟成功；
+     * 生产必须保持 false，缺失凭证一律 fail-closed。
+     */
+    @Value("${nexus.connectors.adyen.dry-run:false}")
+    private boolean dryRun;
 
     private final RestTemplate restTemplate;
     private final Map<String, PaymentStatus> localState = new ConcurrentHashMap<>();
@@ -63,11 +74,15 @@ public class AdyenConnector implements PaymentConnector {
 
     @Override
     public ConnectorPaymentResult createPayment(ConnectorPaymentRequest request) {
-        if (apiKey == null || apiKey.isBlank()) {
+        if (isDryRun()) {
             String id = "adyen_dryrun_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
             localState.put(id, PaymentStatus.SUCCEEDED);
             log.info("[Adyen DRY-RUN] Payment created: {} amount={} {}", id, request.getAmount(), request.getCurrency());
             return ConnectorPaymentResult.ok(id, PaymentStatus.SUCCEEDED);
+        }
+        if (!hasCredentials()) {
+            log.error("[Adyen] api-key 缺失且 dry-run 已关闭，拒绝创建支付（fail-closed）");
+            return ConnectorPaymentResult.fail(CREDENTIALS_MISSING);
         }
 
         try {
@@ -104,9 +119,13 @@ public class AdyenConnector implements PaymentConnector {
 
     @Override
     public ConnectorRefundResult refund(String connectorPaymentId, long amount) {
-        if (apiKey == null || apiKey.isBlank()) {
+        if (isDryRun()) {
             localState.put(connectorPaymentId, PaymentStatus.REFUNDED);
             return ConnectorRefundResult.ok("adyen_refund_" + connectorPaymentId);
+        }
+        if (!hasCredentials()) {
+            log.error("[Adyen] api-key 缺失且 dry-run 已关闭，拒绝退款（fail-closed）");
+            return ConnectorRefundResult.fail(CREDENTIALS_MISSING);
         }
         try {
             HttpHeaders headers = new HttpHeaders();
@@ -130,7 +149,8 @@ public class AdyenConnector implements PaymentConnector {
     @Override
     public ConnectorHealth healthCheck() {
         if (!enabled) return ConnectorHealth.down(getId(), "Connector disabled");
-        if (apiKey == null || apiKey.isBlank()) return ConnectorHealth.up(getId(), 0);
+        if (isDryRun()) return ConnectorHealth.up(getId(), 0);
+        if (!hasCredentials()) return ConnectorHealth.down(getId(), "misconfigured: api-key missing and dry-run disabled");
         long start = System.currentTimeMillis();
         try {
             HttpHeaders headers = new HttpHeaders();
@@ -154,6 +174,16 @@ public class AdyenConnector implements PaymentConnector {
 
     @Override
     public int feeBasisPoints() { return 250; } // ~2.5% + fixed
+
+    /** dry-run 是否被显式开启。 */
+    private boolean isDryRun() {
+        return dryRun;
+    }
+
+    /** 是否具备真实调用所需凭证。 */
+    private boolean hasCredentials() {
+        return apiKey != null && !apiKey.isBlank();
+    }
 
     private PaymentStatus mapAdyenResult(String resultCode) {
         return switch (resultCode) {

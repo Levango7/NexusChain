@@ -47,6 +47,13 @@ class WeChatPayConnectorTest {
         return new WeChatPayConnector();
     }
 
+    /** dry-run connector: sandbox=true（无外部 API 调用）。 */
+    private WeChatPayConnector dryRunConnector() throws Exception {
+        WeChatPayConnector c = new WeChatPayConnector();
+        setField(c, "sandbox", true);
+        return c;
+    }
+
     private void setField(Object target, String name, Object value) throws Exception {
         Field f = target.getClass().getDeclaredField(name);
         f.setAccessible(true);
@@ -123,23 +130,23 @@ class WeChatPayConnectorTest {
 
     @Test
     @DisplayName("dry-run createPayment：返回成功（SUCCEEDED）")
-    void dryRun_createPayment_success() {
-        ConnectorPaymentResult r = newConnector().createPayment(sampleRequest());
+    void dryRun_createPayment_success() throws Exception {
+        ConnectorPaymentResult r = dryRunConnector().createPayment(sampleRequest());
         assertTrue(r.isSuccess());
         assertEquals(PaymentStatus.SUCCEEDED, r.getStatus());
     }
 
     @Test
     @DisplayName("dry-run createPayment：connectorPaymentId 以 wechat_dryrun_ 前缀")
-    void dryRun_createPayment_idFormat() {
-        ConnectorPaymentResult r = newConnector().createPayment(sampleRequest());
+    void dryRun_createPayment_idFormat() throws Exception {
+        ConnectorPaymentResult r = dryRunConnector().createPayment(sampleRequest());
         assertTrue(r.getConnectorPaymentId().startsWith("wechat_dryrun_"));
     }
 
     @Test
     @DisplayName("dry-run createPayment：返回模拟扫码链接")
-    void dryRun_createPayment_redirectUrl() {
-        ConnectorPaymentResult r = newConnector().createPayment(sampleRequest());
+    void dryRun_createPayment_redirectUrl() throws Exception {
+        ConnectorPaymentResult r = dryRunConnector().createPayment(sampleRequest());
         assertNotNull(r.getRedirectUrl());
         assertTrue(r.getRedirectUrl().startsWith("weixin://wxpay/bizpayurl?pr=dryrun_"));
     }
@@ -148,24 +155,24 @@ class WeChatPayConnectorTest {
 
     @Test
     @DisplayName("dry-run queryPayment：已创建订单返回 SUCCEEDED")
-    void dryRun_queryPayment_cached() {
-        WeChatPayConnector c = newConnector();
+    void dryRun_queryPayment_cached() throws Exception {
+        WeChatPayConnector c = dryRunConnector();
         ConnectorPaymentResult created = c.createPayment(sampleRequest());
         assertEquals(PaymentStatus.SUCCEEDED, c.queryPayment(created.getConnectorPaymentId()));
     }
 
     @Test
     @DisplayName("dry-run queryPayment：未知 ID 返回 FAILED")
-    void dryRun_queryPayment_unknown() {
-        assertEquals(PaymentStatus.FAILED, newConnector().queryPayment("unknown"));
+    void dryRun_queryPayment_unknown() throws Exception {
+        assertEquals(PaymentStatus.FAILED, dryRunConnector().queryPayment("unknown"));
     }
 
     // ==================== Dry-run 模式：退款 ====================
 
     @Test
     @DisplayName("dry-run refund：返回成功，refundId 以 wechat_refund_ 前缀")
-    void dryRun_refund_success() {
-        WeChatPayConnector c = newConnector();
+    void dryRun_refund_success() throws Exception {
+        WeChatPayConnector c = dryRunConnector();
         ConnectorPaymentResult created = c.createPayment(sampleRequest());
         ConnectorRefundResult r = c.refund(created.getConnectorPaymentId(), 1000L);
         assertTrue(r.isSuccess());
@@ -177,7 +184,7 @@ class WeChatPayConnectorTest {
     @Test
     @DisplayName("dry-run healthCheck：enabled=true 时返回 UP")
     void dryRun_healthCheck_up() throws Exception {
-        WeChatPayConnector c = newConnector();
+        WeChatPayConnector c = dryRunConnector();
         setField(c, "enabled", true);
         ConnectorHealth h = c.healthCheck();
         assertTrue(h.isHealthy());
@@ -194,30 +201,27 @@ class WeChatPayConnectorTest {
     // ==================== isDryRun 逻辑测试 ====================
 
     @Test
-    @DisplayName("isDryRun：merchantPrivateKey 为空时返回 true（dry-run 模式）")
-    void isDryRun_emptyPrivateKey() throws Exception {
+    @DisplayName("fail-closed：sandbox=false 且 merchantPrivateKey 为空 -> 拒绝（不再静默成功）")
+    void failClosed_emptyPrivateKey() throws Exception {
         WeChatPayConnector c = newConnector();
-        // 默认 sandbox=true，所以 isDryRun 为 true
-        // 设置 sandbox=false 但 merchantPrivateKey 为空
         setField(c, "sandbox", false);
         setField(c, "apiV3Key", "test_key");
-        // merchantPrivateKey 默认为空字符串
-        // isDryRun() 是 private 方法，通过 createPayment 的 dry-run 行为间接验证
+        // merchantPrivateKey 默认为空字符串 -> 凭证不全，必须 fail-closed
         ConnectorPaymentResult r = c.createPayment(sampleRequest());
-        assertTrue(r.isSuccess());
-        assertTrue(r.getConnectorPaymentId().startsWith("wechat_dryrun_"));
+        assertFalse(r.isSuccess());
+        assertNotNull(r.getErrorMessage());
     }
 
     @Test
-    @DisplayName("isDryRun：apiV3Key 为空时返回 true（dry-run 模式）")
-    void isDryRun_emptyApiV3Key() throws Exception {
+    @DisplayName("fail-closed：sandbox=false 且 apiV3Key 为空 -> 拒绝（不再静默成功）")
+    void failClosed_emptyApiV3Key() throws Exception {
         WeChatPayConnector c = newConnector();
         setField(c, "sandbox", false);
         setField(c, "merchantPrivateKey", testPrivateKeyBase64);
-        // apiV3Key 默认为空字符串
+        // apiV3Key 默认为空字符串 -> 凭证不全，必须 fail-closed
         ConnectorPaymentResult r = c.createPayment(sampleRequest());
-        assertTrue(r.isSuccess());
-        assertTrue(r.getConnectorPaymentId().startsWith("wechat_dryrun_"));
+        assertFalse(r.isSuccess());
+        assertNotNull(r.getErrorMessage());
     }
 
     @Test
@@ -458,8 +462,8 @@ class WeChatPayConnectorTest {
 
     @Test
     @DisplayName("dry-run closePayment：返回 true 并设置 CANCELLED")
-    void dryRun_closePayment() {
-        WeChatPayConnector c = newConnector();
+    void dryRun_closePayment() throws Exception {
+        WeChatPayConnector c = dryRunConnector();
         ConnectorPaymentResult created = c.createPayment(sampleRequest());
         boolean closed = c.closePayment(created.getConnectorPaymentId());
         assertTrue(closed);

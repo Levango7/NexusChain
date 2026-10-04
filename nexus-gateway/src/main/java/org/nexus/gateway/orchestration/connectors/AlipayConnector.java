@@ -23,14 +23,17 @@ import java.util.concurrent.ConcurrentHashMap;
  * Alipay Payment Connector - integrates with Alipay's OpenAPI.
  * Supports: 当面付 (Face-to-face / precreate) and 网页支付 (web payment).
  * Requires: nexus.connectors.alipay.app-id + merchant-private-key + alipay-public-key in config.
- * In sandbox mode without a real key, operates in dry-run (simulates success).
+ *
+ * <p><b>凭证与 dry-run（安全）</b>：默认 {@code nexus.connectors.alipay.sandbox=false}，
+ * 此时缺 app-id / merchant-private-key 一律 fail-closed；仅显式设置 sandbox=true
+ * （sandbox profile）才走 dry-run 模拟。生产环境严禁开启 sandbox。</p>
  *
  * <p>支付宝 API 使用统一网关 {@code https://openapi-sandbox.dl.alipaydev.com/gateway.do}，
  * 通过 method 参数区分不同接口（alipay.trade.precreate / alipay.trade.query / alipay.trade.refund）。
  * 认证方式为 RSA2 签名，请求参数中包含 app_id、sign、sign_type=RSA2。</p>
  *
  * <p>签名框架（Wave 7-A2）：集成 RSA2 签名生成，每次 API 调用自动添加 sign 参数。
- * sandbox=true 时保持 dry-run 模拟响应，响应格式与真实 API 一致。</p>
+ * sandbox=true 时走 dry-run 模拟响应，响应格式与真实 API 一致（默认 false）。</p>
  */
 @Component
 public class AlipayConnector implements PaymentConnector {
@@ -53,8 +56,11 @@ public class AlipayConnector implements PaymentConnector {
     @Value("${nexus.connectors.alipay.enabled:false}")
     private boolean enabled;
 
-    /** sandbox=true 时保持 dry-run 模拟响应；false 时发起真实 API 调用 */
-    @Value("${nexus.connectors.alipay.sandbox:true}")
+    /**
+     * dry-run 显式开关（默认 false）。true 时模拟成功、不发真实 API；
+     * 生产必须保持 false，缺失凭证一律 fail-closed。
+     */
+    @Value("${nexus.connectors.alipay.sandbox:false}")
     private boolean sandbox;
 
     private final RestTemplate restTemplate;
@@ -86,10 +92,16 @@ public class AlipayConnector implements PaymentConnector {
     public boolean isActive() { return enabled; }
 
     /**
-     * 判断是否处于 dry-run 模式：sandbox=true 或 merchantPrivateKey 为空。
+     * dry-run 仅在显式 sandbox=true 时启用；不再因缺失密钥自动降级为模拟成功。
      */
     private boolean isDryRun() {
-        return sandbox || merchantPrivateKey == null || merchantPrivateKey.isBlank();
+        return sandbox;
+    }
+
+    /** 是否具备真实调用所需凭证。 */
+    private boolean hasCredentials() {
+        return appId != null && !appId.isBlank()
+                && merchantPrivateKey != null && !merchantPrivateKey.isBlank();
     }
 
     /**
@@ -142,6 +154,10 @@ public class AlipayConnector implements PaymentConnector {
             ConnectorPaymentResult result = ConnectorPaymentResult.ok(id, PaymentStatus.SUCCEEDED);
             result.setRedirectUrl("https://qr.alipay.com/dryrun_" + id);
             return result;
+        }
+        if (!hasCredentials()) {
+            log.error("[Alipay] app-id/merchant-private-key 缺失且 sandbox 已关闭，拒绝创建支付（fail-closed）");
+            return ConnectorPaymentResult.fail("Alipay connector misconfigured: credentials missing and sandbox disabled");
         }
 
         try {

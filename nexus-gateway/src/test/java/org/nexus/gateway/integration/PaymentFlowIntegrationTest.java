@@ -26,7 +26,6 @@ import static org.springframework.security.test.web.servlet.request.SecurityMock
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 @WithMockUser(username = "admin", roles = {"ADMIN", "OPERATOR"})
 @Tag("integration")
-@Tag("knownRed") // 2026-09-29 实测：Step 6 /orders/{id}/confirm 500，payment_orders UPDATE 影响 0 行；CI 与本机同样红，未定位
 class PaymentFlowIntegrationTest {
 
     @Autowired private MockMvc mockMvc;

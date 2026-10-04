@@ -50,6 +50,13 @@ class AlipayConnectorTest {
         return new AlipayConnector();
     }
 
+    /** dry-run connector: sandbox=true（无外部 API 调用）。 */
+    private AlipayConnector dryRunConnector() throws Exception {
+        AlipayConnector c = new AlipayConnector();
+        setField(c, "sandbox", true);
+        return c;
+    }
+
     private void setField(Object target, String name, Object value) throws Exception {
         Field f = target.getClass().getDeclaredField(name);
         f.setAccessible(true);
@@ -77,23 +84,23 @@ class AlipayConnectorTest {
 
     @Test
     @DisplayName("dry-run createPayment：返回 SUCCEEDED")
-    void dryRun_createPayment_success() {
-        ConnectorPaymentResult r = newConnector().createPayment(sampleRequest());
+    void dryRun_createPayment_success() throws Exception {
+        ConnectorPaymentResult r = dryRunConnector().createPayment(sampleRequest());
         assertTrue(r.isSuccess());
         assertEquals(PaymentStatus.SUCCEEDED, r.getStatus());
     }
 
     @Test
     @DisplayName("dry-run createPayment：connectorPaymentId 以 alipay_dryrun_ 前缀")
-    void dryRun_createPayment_idFormat() {
-        ConnectorPaymentResult r = newConnector().createPayment(sampleRequest());
+    void dryRun_createPayment_idFormat() throws Exception {
+        ConnectorPaymentResult r = dryRunConnector().createPayment(sampleRequest());
         assertTrue(r.getConnectorPaymentId().startsWith("alipay_dryrun_"));
     }
 
     @Test
     @DisplayName("dry-run createPayment：返回模拟 qr_code 链接")
-    void dryRun_createPayment_qrCode() {
-        ConnectorPaymentResult r = newConnector().createPayment(sampleRequest());
+    void dryRun_createPayment_qrCode() throws Exception {
+        ConnectorPaymentResult r = dryRunConnector().createPayment(sampleRequest());
         assertNotNull(r.getRedirectUrl());
         assertTrue(r.getRedirectUrl().startsWith("https://qr.alipay.com/dryrun_"));
     }
@@ -102,8 +109,8 @@ class AlipayConnectorTest {
 
     @Test
     @DisplayName("dry-run queryPayment：已创建 → SUCCEEDED；未知 → FAILED")
-    void dryRun_queryPayment_cachedState() {
-        AlipayConnector c = newConnector();
+    void dryRun_queryPayment_cachedState() throws Exception {
+        AlipayConnector c = dryRunConnector();
         ConnectorPaymentResult created = c.createPayment(sampleRequest());
         assertEquals(PaymentStatus.SUCCEEDED, c.queryPayment(created.getConnectorPaymentId()));
         assertEquals(PaymentStatus.FAILED, c.queryPayment("unknown"));
@@ -113,12 +120,22 @@ class AlipayConnectorTest {
 
     @Test
     @DisplayName("dry-run refund：返回 ok，refundId 以 alipay_refund_ 前缀")
-    void dryRun_refund_success() {
-        AlipayConnector c = newConnector();
+    void dryRun_refund_success() throws Exception {
+        AlipayConnector c = dryRunConnector();
         ConnectorPaymentResult created = c.createPayment(sampleRequest());
         ConnectorRefundResult r = c.refund(created.getConnectorPaymentId(), 1000L);
         assertTrue(r.isSuccess());
         assertTrue(r.getRefundId().startsWith("alipay_refund_"));
+    }
+
+    // ==================== Fail-closed 模式（sandbox=false 且无凭证）====================
+
+    @Test
+    @DisplayName("fail-closed createPayment：sandbox=false 且无 app-id/私钥 -> fail（不再静默成功）")
+    void failClosed_createPayment_noCredentials() {
+        ConnectorPaymentResult r = newConnector().createPayment(sampleRequest());
+        assertFalse(r.isSuccess());
+        assertNotNull(r.getErrorMessage());
     }
 
     // ==================== formatAmount 分→元转换 ====================
@@ -180,11 +197,11 @@ class AlipayConnectorTest {
 
     @Test
     @DisplayName("dry-run createPayment：不进入真实 API 路径，不调用 ObjectMapper 序列化 bizContent")
-    void dryRun_createPayment_noObjectMapperCall() {
+    void dryRun_createPayment_noObjectMapperCall() throws Exception {
         // dry-run 模式下 createPayment 直接返回模拟响应，不进入 try 块中的真实 API 路径
         // 因此不会调用 objectMapper.writeValueAsString()
         // 验证方式：dry-run createPayment 不应抛出任何 JsonProcessingException
-        AlipayConnector c = newConnector();
+        AlipayConnector c = dryRunConnector();
         ConnectorPaymentResult r = c.createPayment(sampleRequest());
         assertTrue(r.isSuccess());
         // 如果 ObjectMapper 被调用且出错，会返回 fail 结果
@@ -196,7 +213,7 @@ class AlipayConnectorTest {
     @Test
     @DisplayName("dry-run healthCheck：enabled=true → UP")
     void dryRun_healthCheck_up() throws Exception {
-        AlipayConnector c = newConnector();
+        AlipayConnector c = dryRunConnector();
         setField(c, "enabled", true);
         ConnectorHealth h = c.healthCheck();
         assertTrue(h.isHealthy());
@@ -384,8 +401,8 @@ class AlipayConnectorTest {
 
     @Test
     @DisplayName("dry-run closePayment：返回 true 并设置 CANCELLED")
-    void dryRun_closePayment() {
-        AlipayConnector c = newConnector();
+    void dryRun_closePayment() throws Exception {
+        AlipayConnector c = dryRunConnector();
         ConnectorPaymentResult created = c.createPayment(sampleRequest());
         boolean closed = c.closePayment(created.getConnectorPaymentId());
         assertTrue(closed);
