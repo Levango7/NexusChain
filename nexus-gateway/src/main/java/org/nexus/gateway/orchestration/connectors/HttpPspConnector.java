@@ -28,11 +28,10 @@ import java.util.concurrent.ConcurrentHashMap;
  *   <li>{@code GET  {baseUrl}/health} — liveness probe; 2xx ⇒ UP, otherwise DOWN</li>
  * </ul></p>
  *
- * <h2>Dry-run fallback</h2>
- * When {@code apiKey} is null or blank, the connector operates in <b>dry-run</b> mode:
- * no HTTP call is made, a synthetic id is generated and {@link PaymentStatus#PROCESSING}
- * is recorded. This preserves backward compatibility with deployments that have not
- * yet injected PSP credentials (see {@code nexus.connectors.*} in application.yml).
+ * <h2>Dry-run fallback（显式开关，默认关闭）</h2>
+ * dry-run 仅在构造时显式传入 {@code dryRun=true} 时启用：不发 HTTP，生成合成 id 并记录
+ * {@link PaymentStatus#PROCESSING}。默认 {@code dryRun=false}，此时 apiKey 为空一律
+ * <b>fail-closed</b>，避免“未配置密钥却支付成功”的静默假成功。
  */
 public class HttpPspConnector implements PaymentConnector {
 
@@ -45,24 +44,36 @@ public class HttpPspConnector implements PaymentConnector {
     private final int feeBps;
     private final Set<String> currencies;
     private final RestTemplate restTemplate;
+    private final boolean dryRun;
     private final Map<String, PaymentStatus> payments = new ConcurrentHashMap<>();
     private volatile boolean active = true;
 
     public HttpPspConnector(String id, String displayName, String baseUrl, String apiKey, int feeBps, Set<String> currencies) {
-        this(id, displayName, baseUrl, apiKey, feeBps, currencies, new RestTemplate());
+        this(id, displayName, baseUrl, apiKey, feeBps, currencies, false, new RestTemplate());
     }
 
     /**
      * Constructor with explicit RestTemplate — primarily for unit tests to inject a mock.
+     * dry-run 默认关闭（fail-closed）。
      */
     public HttpPspConnector(String id, String displayName, String baseUrl, String apiKey,
                             int feeBps, Set<String> currencies, RestTemplate restTemplate) {
+        this(id, displayName, baseUrl, apiKey, feeBps, currencies, false, restTemplate);
+    }
+
+    /**
+     * Full constructor. {@code dryRun=true} 时才允许在 apiKey 为空时模拟成功
+     * （sandbox/单测）；默认 false 表示无凭证一律 fail-closed。
+     */
+    public HttpPspConnector(String id, String displayName, String baseUrl, String apiKey,
+                            int feeBps, Set<String> currencies, boolean dryRun, RestTemplate restTemplate) {
         this.id = id;
         this.displayName = displayName;
         this.baseUrl = baseUrl == null ? "" : baseUrl.replaceAll("/$", "");
         this.apiKey = apiKey;
         this.feeBps = feeBps;
         this.currencies = currencies;
+        this.dryRun = dryRun;
         this.restTemplate = restTemplate;
     }
 
@@ -81,12 +92,16 @@ public class HttpPspConnector implements PaymentConnector {
     public void setActive(boolean active) { this.active = active; }
 
     /**
-     * @return true when apiKey is null/blank — connector makes no HTTP calls and
-     *         simulates success. Used by both production (sandbox without credentials)
-     *         and the test suite.
+     * @return true only when dry-run was explicitly enabled at construction.
+     *         开启了 dry-run 才允许无 HTTP 模拟成功；否则无凭证必须 fail-closed。
      */
     private boolean isDryRun() {
-        return apiKey == null || apiKey.isBlank();
+        return dryRun;
+    }
+
+    /** 是否具备真实调用所需凭证。 */
+    private boolean hasCredentials() {
+        return apiKey != null && !apiKey.isBlank();
     }
 
     @Override
@@ -98,6 +113,10 @@ public class HttpPspConnector implements PaymentConnector {
             log.info("HTTP PSP [{}] (dry-run) payment created: {} amount={} {}",
                     id, connectorPaymentId, request.getAmount(), request.getCurrency());
             return ConnectorPaymentResult.ok(connectorPaymentId, PaymentStatus.PROCESSING);
+        }
+        if (!hasCredentials()) {
+            log.error("HTTP PSP [{}] apiKey 缺失且 dry-run 已关闭，拒绝创建支付（fail-closed）", id);
+            return ConnectorPaymentResult.fail("PSP [" + id + "] misconfigured: apiKey missing and dry-run disabled");
         }
 
         try {
@@ -134,6 +153,10 @@ public class HttpPspConnector implements PaymentConnector {
         if (isDryRun()) {
             return payments.getOrDefault(connectorPaymentId, PaymentStatus.FAILED);
         }
+        if (!hasCredentials()) {
+            log.error("HTTP PSP [{}] apiKey 缺失且 dry-run 已关闭，无法查询（fail-closed）", id);
+            return PaymentStatus.FAILED;
+        }
         try {
             HttpHeaders headers = jsonHeadersWithAuth();
             HttpEntity<Void> entity = new HttpEntity<>(headers);
@@ -161,6 +184,10 @@ public class HttpPspConnector implements PaymentConnector {
             }
             return ConnectorRefundResult.fail("Payment not found at PSP");
         }
+        if (!hasCredentials()) {
+            log.error("HTTP PSP [{}] apiKey 缺失且 dry-run 已关闭，拒绝退款（fail-closed）", id);
+            return ConnectorRefundResult.fail("PSP [" + id + "] misconfigured: apiKey missing and dry-run disabled");
+        }
         try {
             HttpHeaders headers = jsonHeadersWithAuth();
             String body = String.format("{\"amount\":%d}", amount);
@@ -183,8 +210,11 @@ public class HttpPspConnector implements PaymentConnector {
     @Override
     public ConnectorHealth healthCheck() {
         if (isDryRun()) {
-            // Dry-run always healthy (no external dependency)
+            // Dry-run: 无外部依赖，视为健康
             return ConnectorHealth.up(id, 0);
+        }
+        if (!hasCredentials()) {
+            return ConnectorHealth.down(id, "misconfigured: apiKey missing and dry-run disabled");
         }
         long start = System.currentTimeMillis();
         try {

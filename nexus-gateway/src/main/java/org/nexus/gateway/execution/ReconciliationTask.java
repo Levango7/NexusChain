@@ -2,6 +2,7 @@ package org.nexus.gateway.execution;
 
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.nexus.gateway.client.ChainRpcClient;
+import org.nexus.gateway.model.OrderStateMachine;
 import org.nexus.gateway.model.PaymentOrder;
 import org.nexus.gateway.model.Refund;
 import org.nexus.gateway.repository.PaymentOrderRepository;
@@ -264,7 +265,7 @@ public class ReconciliationTask {
                 // 同步更新订单状态
                 paymentOrderRepository.findById(refund.getOrderId()).ifPresent(order -> {
                     if (order.getStatus() == PaymentOrder.OrderStatus.REFUND_PENDING) {
-                        order.setStatus(PaymentOrder.OrderStatus.REFUNDED);
+                        OrderStateMachine.transition(order, PaymentOrder.OrderStatus.REFUNDED);
                         paymentOrderRepository.save(order);
                     }
                 });

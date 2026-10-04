@@ -18,12 +18,15 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * WeChat Pay Connector - integrates with WeChat Pay's Native (扫码) and JSAPI APIs.
  * Requires: nexus.connectors.wechat.api-key + app-id + mch-id in config.
- * In sandbox mode without a real key, operates in dry-run (simulates success).
+ *
+ * <p><b>凭证与 dry-run（安全）</b>：默认 {@code nexus.connectors.wechat.sandbox=false}，
+ * 此时缺 app-id/mch-id/api-v3-key/merchant-private-key 一律 fail-closed；仅显式设置
+ * sandbox=true（sandbox profile）才走 dry-run 模拟。生产环境严禁开启 sandbox。</p>
  *
  * <p>支持 Native（扫码支付）和 JSAPI 两种支付方式，默认使用 Native。</p>
  *
  * <p>签名框架（Wave 13）：集成 V3 RSA-SHA256 签名（商户私钥），每次 API 调用自动添加
- * Authorization 头。sandbox=true 时保持 dry-run 模拟响应，响应格式与真实 API 一致。</p>
+ * Authorization 头。sandbox=true 时走 dry-run 模拟响应，响应格式与真实 API 一致（默认 false）。</p>
  *
  * <p>性能优化（任务 #310）：注入共享的连接池化 RestTemplate。</p>
  */
@@ -48,8 +51,11 @@ public class WeChatPayConnector implements PaymentConnector {
     @Value("${nexus.connectors.wechat.api-base-url:https://api.mch.weixin.qq.com}")
     private String apiBase = DEFAULT_WECHAT_API_BASE;
 
-    /** sandbox=true 时保持 dry-run 模拟响应；false 时发起真实 API 调用 */
-    @Value("${nexus.connectors.wechat.sandbox:true}")
+    /**
+     * dry-run 显式开关（默认 false）。true 时模拟成功、不发真实 API；
+     * 生产必须保持 false，缺失凭证一律 fail-closed。
+     */
+    @Value("${nexus.connectors.wechat.sandbox:false}")
     private boolean sandbox;
 
     /** APIv3 密钥，用于 HMAC-SHA256 签名（与 api-key 可以相同或不同） */
@@ -96,11 +102,18 @@ public class WeChatPayConnector implements PaymentConnector {
     public boolean isActive() { return enabled; }
 
     /**
-     * 判断是否处于 dry-run 模式：sandbox=true 或 apiV3Key/商户私钥为空。
+     * dry-run 仅在显式 sandbox=true 时启用；不再因缺失密钥自动降级为模拟成功。
      */
     private boolean isDryRun() {
-        return sandbox || apiV3Key == null || apiV3Key.isBlank()
-                || merchantPrivateKey == null || merchantPrivateKey.isBlank();
+        return sandbox;
+    }
+
+    /** 是否具备真实调用所需凭证（V3：appid + mchid + apiV3Key + 商户私钥）。 */
+    private boolean hasCredentials() {
+        return appId != null && !appId.isBlank()
+                && mchId != null && !mchId.isBlank()
+                && apiV3Key != null && !apiV3Key.isBlank()
+                && merchantPrivateKey != null && !merchantPrivateKey.isBlank();
     }
 
     /**
@@ -149,6 +162,10 @@ public class WeChatPayConnector implements PaymentConnector {
             ConnectorPaymentResult result = ConnectorPaymentResult.ok(id, PaymentStatus.SUCCEEDED);
             result.setRedirectUrl("weixin://wxpay/bizpayurl?pr=dryrun_" + id);
             return result;
+        }
+        if (!hasCredentials()) {
+            log.error("[WeChat] app-id/mch-id/api-v3-key/merchant-private-key 缺失且 sandbox 已关闭，拒绝创建支付（fail-closed）");
+            return ConnectorPaymentResult.fail("WeChat connector misconfigured: credentials missing and sandbox disabled");
         }
 
         try {

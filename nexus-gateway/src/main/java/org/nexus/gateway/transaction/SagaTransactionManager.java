@@ -17,6 +17,18 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * SAGA 事务管理器 — 编排式补偿事务。
  *
+ * <p><b>⚠️ 接入状态（2026-10-05 实测）：本管理器当前<b>未接入任何生产业务流程</b>。</b>
+ * {@link #execute} 的全部调用方均在测试代码内（{@code SagaTransactionManagerTest}）；
+ * 生产路径的补偿事务目前<b>全部由 TCC 承担</b>（{@code TccTransactionManager}）。
+ * 唯一的生产引用是 {@code TransactionRecoveryScheduler} 调用 {@link #retryCompensate}
+ * 重试补偿——但由于没有任何流程会创建 SAGA 类型的 {@code TransactionLog}，
+ * 该恢复分支实际为空转。</p>
+ *
+ * <p><b>处置建议（待 owner 定夺）</b>：若为预留能力，应在此明确标注并在
+ * {@code TransactionRecoveryScheduler} 的 SAGA 分支加说明；若已被 TCC 取代，
+ * 应删除本类及其测试与恢复分支（约 412 行 + 测试）。现状"代码在跑、路径空转、
+ * 无文档说明"是维护成本最高的形态。</p>
+ *
  * <p>中心化编排步骤执行和补偿，而非事件 choreography 方式，便于追踪和恢复。</p>
  *
  * <p>执行流程：</p>

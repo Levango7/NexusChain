@@ -106,13 +106,18 @@ nexus:
   keystore:
     encryption-key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 
-  # === Wave 14 Task 1：微信/支付宝渠道沙箱配置 ===
-  # sandbox profile 下启用微信/支付宝渠道，sandbox=true 表示走 dry-run 模拟模式（无外部 API 调用）。
-  # 如需测试真实沙箱 API，通过环境变量 NEX_PSP_WECHAT_SANDBOX=false 显式覆盖。
+  # === Wave 14 Task 1：PSP 渠道沙箱配置 ===
+  # dry-run / sandbox 为显式开关，默认 profile 一律关闭（缺凭证 fail-closed）。
+  # 仅在本 sandbox profile 显式开启，使集成测试在无真实 PSP 凭证时仍可跑通。
+  # 如需测试真实沙箱 API，通过环境变量（如 NEX_PSP_WECHAT_SANDBOX=false）显式覆盖。
   connectors:
+    stripe:
+      dry-run: true   # true = dry-run 模拟模式（仅 sandbox profile）
+    adyen:
+      dry-run: true
     wechat:
       enabled: true
-      sandbox: true  # true = dry-run 模拟模式（sandbox profile 默认）
+      sandbox: true   # true = dry-run 模拟模式（仅 sandbox profile）
     alipay:
       enabled: true
       sandbox: true

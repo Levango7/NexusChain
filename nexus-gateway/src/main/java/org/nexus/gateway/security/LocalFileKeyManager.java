@@ -32,7 +32,11 @@ import java.util.concurrent.ConcurrentHashMap;
  * 启动时校验密钥非空且长度为 32 字节，否则抛 {@link IllegalStateException} 让应用快速失败。</p>
  */
 @Component
-@Profile({"dev", "prod"})
+// prod profile 使用 VaultKeyManager（NEX_MASTER_KEY / KMS）。原
+// @Profile({"dev", "prod"}) 会让 prod 下同时存在本类与 VaultKeyManager 两个
+// KeyManager 候选（无 @Primary → 注入歧义），且本类构造要求
+// NEX_LOCAL_KEYSTORE_KEY，会导致 prod 启动失败。
+@Profile("dev")
 public class LocalFileKeyManager implements KeyManager {
 
     private static final Logger log = LoggerFactory.getLogger(LocalFileKeyManager.class);

@@ -54,9 +54,14 @@ class StripeConnectorWireMockTest {
     }
 
     private StripeConnector newConnector(String apiKey, boolean enabled) throws Exception {
+        return newConnector(apiKey, enabled, false);
+    }
+
+    private StripeConnector newConnector(String apiKey, boolean enabled, boolean dryRun) throws Exception {
         StripeConnector c = new StripeConnector();
         setField(c, "apiKey", apiKey);
         setField(c, "enabled", enabled);
+        setField(c, "dryRun", dryRun);
         setField(c, "apiBase", apiBase);
         return c;
     }
@@ -76,7 +81,7 @@ class StripeConnectorWireMockTest {
     @Test
     @DisplayName("dry-run: apiKey 为空时不发 HTTP，返回 pi_dryrun_ 前缀 + SUCCEEDED")
     void dryRun_noHttpCall() throws Exception {
-        StripeConnector c = newConnector("", true);
+        StripeConnector c = newConnector("", true, true);
         ConnectorPaymentResult r = c.createPayment(sampleRequest());
 
         assertTrue(r.isSuccess());
@@ -89,11 +94,21 @@ class StripeConnectorWireMockTest {
     @Test
     @DisplayName("dry-run healthCheck: enabled=true + apiKey 空 -> up（不调 /account）")
     void dryRun_healthCheck_up() throws Exception {
-        StripeConnector c = newConnector("", true);
+        StripeConnector c = newConnector("", true, true);
         ConnectorHealth h = c.healthCheck();
         assertTrue(h.isHealthy());
         assertEquals(0L, h.getLatencyMs());
         wireMock.verify(0, WireMock.anyRequestedFor(WireMock.urlPathMatching("/v1/account")));
+    }
+
+    @Test
+    @DisplayName("fail-closed: 无 apiKey 且 dry-run=false -> fail 且不发 HTTP（不再静默成功）")
+    void failClosed_noHttpCall() throws Exception {
+        StripeConnector c = newConnector("", true, false);
+        ConnectorPaymentResult r = c.createPayment(sampleRequest());
+        assertFalse(r.isSuccess());
+        assertNotNull(r.getErrorMessage());
+        wireMock.verify(0, WireMock.anyRequestedFor(WireMock.anyUrl()));
     }
 
     // ---------- real mode: createPayment ----------

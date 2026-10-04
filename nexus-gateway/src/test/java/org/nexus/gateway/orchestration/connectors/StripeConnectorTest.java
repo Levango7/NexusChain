@@ -76,8 +76,9 @@ class StripeConnectorTest {
 
     @Test
     @DisplayName("dry-run createPayment: SUCCEEDED + pi_dryrun_ 前缀")
-    void dryRun_createPayment() {
+    void dryRun_createPayment() throws Exception {
         StripeConnector c = newConnector();
+        setField(c, "dryRun", true);
         ConnectorPaymentResult r = c.createPayment(sampleRequest());
         assertTrue(r.isSuccess());
         assertEquals(PaymentStatus.SUCCEEDED, r.getStatus());
@@ -86,8 +87,9 @@ class StripeConnectorTest {
 
     @Test
     @DisplayName("dry-run queryPayment: 已创建 -> SUCCEEDED；未知 -> FAILED")
-    void dryRun_queryPayment() {
+    void dryRun_queryPayment() throws Exception {
         StripeConnector c = newConnector();
+        setField(c, "dryRun", true);
         ConnectorPaymentResult created = c.createPayment(sampleRequest());
         assertEquals(PaymentStatus.SUCCEEDED, c.queryPayment(created.getConnectorPaymentId()));
         assertEquals(PaymentStatus.FAILED, c.queryPayment("unknown"));
@@ -95,8 +97,9 @@ class StripeConnectorTest {
 
     @Test
     @DisplayName("dry-run refund: ok + re_dryrun_ 前缀")
-    void dryRun_refund() {
+    void dryRun_refund() throws Exception {
         StripeConnector c = newConnector();
+        setField(c, "dryRun", true);
         ConnectorPaymentResult created = c.createPayment(sampleRequest());
         ConnectorRefundResult r = c.refund(created.getConnectorPaymentId(), 1000L);
         assertTrue(r.isSuccess());
@@ -117,10 +120,31 @@ class StripeConnectorTest {
     void healthCheck_enabledDryRun() throws Exception {
         StripeConnector c = newConnector();
         setField(c, "enabled", true);
-        // apiKey 默认空 -> dry-run
+        // apiKey 默认空 + dry-run 显式开启 -> up
+        setField(c, "dryRun", true);
         ConnectorHealth h = c.healthCheck();
         assertTrue(h.isHealthy());
         assertEquals(0L, h.getLatencyMs());
+    }
+
+    // ---------- fail-closed (no apiKey, dry-run disabled) ----------
+
+    @Test
+    @DisplayName("fail-closed createPayment: 无 apiKey 且 dry-run=false -> fail（不再静默成功）")
+    void failClosed_createPayment_noKey() {
+        StripeConnector c = newConnector();
+        ConnectorPaymentResult r = c.createPayment(sampleRequest());
+        assertFalse(r.isSuccess());
+        assertNotNull(r.getErrorMessage());
+    }
+
+    @Test
+    @DisplayName("fail-closed healthCheck: enabled + 无 apiKey + dry-run=false -> down")
+    void failClosed_healthCheck_noKey() throws Exception {
+        StripeConnector c = newConnector();
+        setField(c, "enabled", true);
+        ConnectorHealth h = c.healthCheck();
+        assertFalse(h.isHealthy());
     }
 
     // ---------- real mode (apiKey set + mock RestTemplate) ----------

@@ -11,6 +11,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import io.micrometer.tracing.Tracer;
+import org.nexus.gateway.integration.SignedRequests;
 
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
@@ -135,6 +136,7 @@ class V2ApiIntegrationTest {
         String body = "{\"merchantId\":\"" + merchantId + "\",\"amount\":100000,"
                 + "\"description\":\"v2 test order 1\",\"notifyUrl\":\"http://cb.test\"}";
         MvcResult result = mockMvc.perform(post("/api/v2/orders")
+                        .with(SignedRequests.sandbox())
                         .header("X-NexusChain-ApiKey", apiKey)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
@@ -149,6 +151,7 @@ class V2ApiIntegrationTest {
         String body2 = "{\"merchantId\":\"" + merchantId + "\",\"amount\":200000,"
                 + "\"description\":\"v2 test order 2\",\"notifyUrl\":\"http://cb.test\"}";
         MvcResult r2 = mockMvc.perform(post("/api/v2/orders")
+                        .with(SignedRequests.sandbox())
                         .header("X-NexusChain-ApiKey", apiKey)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body2))
@@ -163,6 +166,7 @@ class V2ApiIntegrationTest {
     @DisplayName("v2 查询订单详情（字段筛选 fields=id,amount,status）")
     void v2GetOrderWithFields() throws Exception {
         mockMvc.perform(get("/api/v2/orders/" + order1Id + "?fields=id,amount,status")
+                        .with(SignedRequests.sandbox())
                         .header("X-NexusChain-ApiKey", apiKey))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").exists())
@@ -177,6 +181,7 @@ class V2ApiIntegrationTest {
     @DisplayName("v2 查询订单详情 - 未知字段 → 400 + INVALID_FIELDS")
     void v2GetOrderWithInvalidFields() throws Exception {
         mockMvc.perform(get("/api/v2/orders/" + order1Id + "?fields=id,nonexistent")
+                        .with(SignedRequests.sandbox())
                         .header("X-NexusChain-ApiKey", apiKey))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("INVALID_FIELDS"))
@@ -189,6 +194,7 @@ class V2ApiIntegrationTest {
     @DisplayName("v2 订单不存在 → 404 + ORDER_NOT_FOUND + 统一错误格式")
     void v2OrderNotFound() throws Exception {
         mockMvc.perform(get("/api/v2/orders/999999")
+                        .with(SignedRequests.sandbox())
                         .header("X-NexusChain-ApiKey", apiKey))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("ORDER_NOT_FOUND"))
@@ -202,6 +208,7 @@ class V2ApiIntegrationTest {
     @DisplayName("v2 订单列表（游标分页首页）")
     void v2ListOrdersFirstPage() throws Exception {
         mockMvc.perform(get("/api/v2/orders?pageSize=10")
+                        .with(SignedRequests.sandbox())
                         .header("X-NexusChain-ApiKey", apiKey))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data").isArray())
@@ -215,6 +222,7 @@ class V2ApiIntegrationTest {
     @DisplayName("v2 订单列表（字段筛选 + 商户过滤）")
     void v2ListOrdersWithFieldsAndMerchant() throws Exception {
         mockMvc.perform(get("/api/v2/orders?fields=id,status&merchantId=" + merchantId + "&pageSize=10")
+                        .with(SignedRequests.sandbox())
                         .header("X-NexusChain-ApiKey", apiKey))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data").isArray())
@@ -228,6 +236,7 @@ class V2ApiIntegrationTest {
     @DisplayName("v2 订单列表 - 无效游标 → 400 + INVALID_CURSOR")
     void v2ListOrdersInvalidCursor() throws Exception {
         mockMvc.perform(get("/api/v2/orders?cursor=!!!invalid!!!")
+                        .with(SignedRequests.sandbox())
                         .header("X-NexusChain-ApiKey", apiKey))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("INVALID_CURSOR"));
@@ -242,6 +251,7 @@ class V2ApiIntegrationTest {
                 + "{\"merchantId\":" + merchantId + ",\"amount\":20000,\"notifyUrl\":\"http://cb.test\"}"
                 + "],\"onFailure\":\"ALL_OR_NOTHING\"}";
         mockMvc.perform(post("/api/v2/payments/batch")
+                        .with(SignedRequests.sandbox())
                         .header("X-NexusChain-ApiKey", apiKey)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
@@ -258,6 +268,7 @@ class V2ApiIntegrationTest {
     @DisplayName("v2 批量创建支付 - 空列表 → 400")
     void v2BatchCreatePaymentsEmptyList() throws Exception {
         mockMvc.perform(post("/api/v2/payments/batch")
+                        .with(SignedRequests.sandbox())
                         .header("X-NexusChain-ApiKey", apiKey)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"payments\":[]}"))
@@ -271,6 +282,7 @@ class V2ApiIntegrationTest {
     void v2HeaderVersionNegotiation() throws Exception {
         // 即使路径是 /api/v2/*，显式发送 Header 也应一致
         mockMvc.perform(get("/api/v2/merchants/" + merchantId)
+                        .with(SignedRequests.sandbox())
                         .header("X-NexusChain-ApiKey", apiKey)
                         .header("X-NexusChain-API-Version", "2"))
                 .andExpect(status().isOk())

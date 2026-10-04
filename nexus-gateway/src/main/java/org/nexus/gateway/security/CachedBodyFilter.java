@@ -11,7 +11,8 @@ import java.io.IOException;
 import java.util.List;
 
 /**
- * Wraps incoming requests to HMAC-signed endpoints (/api/v1/payments|refunds|orders/**)
+ * Wraps incoming requests to HMAC-signed endpoints
+ * (/api/v1/payments|refunds|orders/**, /api/v2/payments|orders/**)
  * in a {@link RepeatableReadRequestWrapper} so that the RequestSignatureInterceptor can
  * read the request body (needed for the HMAC over method+path+body) and the controller
  * can still deserialize the same bytes via @RequestBody afterwards.
@@ -30,7 +31,12 @@ public class CachedBodyFilter extends OncePerRequestFilter {
     private static final List<String> SIGNED_PATH_PREFIXES = List.of(
             "/api/v1/payments",
             "/api/v1/refunds",
-            "/api/v1/orders");
+            "/api/v1/orders",
+            // 安全修复（2026-10-05）：与 WebConfig 签名拦截器路径保持同步，
+            // 覆盖 v2 资金端点。否则 POST 体不会缓存 → 服务端按空体计算
+            // canonical 签名 → 所有带体请求 401（见类注释的同步要求）。
+            "/api/v2/payments",
+            "/api/v2/orders");
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {

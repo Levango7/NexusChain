@@ -282,7 +282,8 @@ nexus:
     replay-store: ${NEXUS_REPLAY_STORE:memory}
 
   # === P0-3a：PSP 真实 API 配置（Stripe / Adyen） ===
-  # 默认 enabled=false 保持向后兼容：未注入 apiKey 时各 Connector 自动走 dry-run。
+  # 安全（fail-closed）：dry-run 为显式开关且默认 false。未注入 apiKey 时各 Connector
+  # 一律拒绝交易（fail-closed），绝不静默模拟成功；仅 sandbox profile 显式开启 dry-run。
   # 生产环境通过环境变量 / Nacos 注入 apiKey / webhookSecret / hmacKey，不落明文配置。
   connectors:
     stripe:
@@ -290,6 +291,8 @@ nexus:
       enabled: ${NEX_PSP_STRIPE_ENABLED:false}
       # Stripe Secret API Key（sk_live_xxx / sk_test_xxx），通过环境变量注入
       api-key: ${NEX_PSP_STRIPE_API_KEY:}
+      # dry-run 显式开关（默认 false）。生产必须保持 false：缺 api-key 一律 fail-closed
+      dry-run: ${NEX_PSP_STRIPE_DRY_RUN:false}
       # Webhook 签名密钥（whsec_xxx），用于 StripeWebhookVerifier 验证 Stripe-Signature 头
       webhook-secret: ${NEX_PSP_STRIPE_WEBHOOK_SECRET:}
     adyen:
@@ -297,13 +300,17 @@ nexus:
       enabled: ${NEX_PSP_ADYEN_ENABLED:false}
       # Adyen Checkout API Key（X-API-Key 头），通过环境变量注入
       api-key: ${NEX_PSP_ADYEN_API_KEY:}
+      # dry-run 显式开关（默认 false）。生产必须保持 false：缺 api-key 一律 fail-closed
+      dry-run: ${NEX_PSP_ADYEN_DRY_RUN:false}
       # Adyen Merchant Account Code（请求体 merchantAccount 字段）
       merchant-account: ${NEX_PSP_ADYEN_MERCHANT_ACCOUNT:}
       # Adyen Webhook HMAC Key，用于 AdyenWebhookVerifier 验证 AdditionalData.hmacSignature
       hmac-key: ${NEX_PSP_ADYEN_HMAC_KEY:}
     wechat:
       enabled: ${NEX_PSP_WECHAT_ENABLED:false}
-      sandbox: ${NEX_PSP_WECHAT_SANDBOX:true}
+      # 安全：sandbox(=dry-run) 默认 false。生产缺凭证一律 fail-closed；
+      # 仅 sandbox profile / 本地联调显式置 true（NEX_PSP_WECHAT_SANDBOX=true）。
+      sandbox: ${NEX_PSP_WECHAT_SANDBOX:false}
       app-id: ${NEX_PSP_WECHAT_APP_ID:}
       mch-id: ${NEX_PSP_WECHAT_MCH_ID:}
       api-v3-key: ${NEX_PSP_WECHAT_API_V3_KEY:}
@@ -312,7 +319,9 @@ nexus:
       api-base-url: ${NEX_PSP_WECHAT_API_BASE_URL:https://api.mch.weixin.qq.com}
     alipay:
       enabled: ${NEX_PSP_ALIPAY_ENABLED:false}
-      sandbox: ${NEX_PSP_ALIPAY_SANDBOX:true}
+      # 安全：sandbox(=dry-run) 默认 false。生产缺凭证一律 fail-closed；
+      # 仅 sandbox profile / 本地联调显式置 true（NEX_PSP_ALIPAY_SANDBOX=true）。
+      sandbox: ${NEX_PSP_ALIPAY_SANDBOX:false}
       app-id: ${NEX_PSP_ALIPAY_APP_ID:}
       merchant-private-key: ${NEX_PSP_ALIPAY_MERCHANT_PRIVATE_KEY:}
       alipay-public-key: ${NEX_PSP_ALIPAY_PUBLIC_KEY:}
