@@ -58,7 +58,11 @@ public class TccTransactionManager {
      * @param ctx 事务上下文
      * @return {@code true} 事务成功（Try + Confirm 均成功）；{@code false} 事务失败（Try 失败或 Cancel 成功）
      */
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    // 事务传播曾是 REQUIRES_NEW：内层提交后，外层事务（PaymentServiceImpl.confirmPayment 是
+    // @Transactional）里的同一个 PaymentOrder 实例仍是旧 @Version，外层提交再刷一次即
+    // UPDATE ... where id=? and version=? 命中 0 行 → confirm 恒 500（knownRed 三例根因）。
+    // try 与 confirm 本就一次 execute 内完成，改用默认 REQUIRED 与外层同事务。
+    @Transactional
     public boolean execute(TccAction action, TransactionContext ctx) {
         String txId = ctx.getTransactionId();
 

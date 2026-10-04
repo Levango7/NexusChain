@@ -211,8 +211,9 @@ task integrationTest(type: Test) {
 }
 
 // 上下文冒烟（CI 阻断用）：@SpringBootTest 全上下文装配，但只跑**不依赖外部中间件**的那部分。
-// 与 integrationTest 的唯一差别是 excludeTags 'knownRed'——三个已知红用例挂在该标签上，
+// 与 integrationTest 的唯一差别是 excludeTags 'knownRed'——无法当场修的红用例挂该标签隔离出门禁，
 // 修好后摘标签即自动回到门禁里，无需改本任务或 CI 配置。
+// 当前 knownRed 为空（confirm/refund 端点 500 三例已于 2026-10-04 修根因并摘标签）。
 // 存在理由：test 任务 excludeTags 'integration' + CI 步骤 continue-on-error 两道兜底，
 // 使"gateway 装配不出来 / 端点装配后才 500"这类缺陷在 CI 上完全不可见
 // （先例：settlement risk.* 三包未入仓储扫描白名单 → 启动即崩，存活约 4 天且全绿）。

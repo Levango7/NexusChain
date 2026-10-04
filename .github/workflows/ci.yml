@@ -217,15 +217,15 @@ jobs:
       # 背景：nexus-gateway/build.gradle 的 test 任务 excludeTags 'integration'，本步骤又挂
       # continue-on-error，两道兜底叠加使 gateway 装配类缺陷在 CI 上完全不可见。先例：
       # settlement 的 risk.* 三个新包未入仓储扫描白名单 → 启动即崩，存活约 4 天且全绿。
-      # contextSmokeTest = integrationTest 去掉 @Tag("knownRed")，实测 7 类 / 47 用例全绿，
+      # contextSmokeTest = integrationTest 去掉 @Tag("knownRed")（当前 knownRed 为空，
+      # confirm/refund 500 三例已于 2026-10-04 修根因并摘标签），实测 10 类全绿，
       # 不依赖 Nacos/Kafka/Redis（H2 + @MockitoBean 即可装配整个 GatewayApplication）。
-      # 原注释"这些测试需要基础设施、不属于代码缺陷"经实测不成立：10 个类里只有 3 个红，
-      # 且红因是 product 侧 500，不是缺服务。
+      # 原注释"这些测试需要基础设施、不属于代码缺陷"经实测不成立：红因是 product 侧 500，不是缺服务。
       - name: Gateway 上下文冒烟（全上下文装配，阻断）
         run: ./gradlew :nexus-gateway:contextSmokeTest --no-daemon
 
-      # 全量 integrationTest 保留为观察位：3 个 knownRed 用例（confirm/refund 端点 500）
-      # 在这里仍然报出来，但不阻断——摘掉 continue-on-error 的前提是它们被修好并摘标签。
+      # 全量 integrationTest 保留为观察位：knownRed 当前为空，本步与冒烟覆盖同一集合；
+      # 将来若把某个红用例挂上 knownRed 从阻断门禁隔离，它仍会在这里报出来（不阻断）。
       - name: 集成测试全量（含 knownRed，观察不阻断）
         run: ./gradlew :nexus-gateway:integrationTest --no-daemon
         continue-on-error: true
