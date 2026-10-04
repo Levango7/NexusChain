@@ -840,7 +840,7 @@ NexusChain 是一个**基于自研区块链的支付编排平台（Payment Orche
 |---------|------|---------|
 | 架构设计 | ⭐⭐⭐⭐⭐ | 15 个微服务模块清晰分层，完整可观测性 + 多维度部署 |
 | 代码质量 | ⭐⭐⭐⭐⭐ | Rust 成熟密码学依赖 + 7 个 zeroize 结构体 + 77 处 SecureRandom + 10+ 静态分析工具 |
-| 测试覆盖 | ⭐⭐⭐⭐½ | 455 测试文件 / 2491 用例 / 5 种测试类型，12 个失败待修复 |
+| 测试覆盖 | ⭐⭐⭐⭐½ | 455 测试文件 / 2491 用例 / 5 种测试类型；gateway 已 0 失败（2026-10-05），signing-service 有 3 例 MPC 多主机环境测试失败待修 |
 | 安全性 | ⭐⭐⭐⭐½ | 第 16 轮修复全部 SECURITY HIGH + 8 维度 CI 安全扫描，gRPC mTLS 待加强 |
 | 工程化 | ⭐⭐⭐⭐⭐ | 10 阶段 CI/CD + 8 维度安全扫描 + 四生态 Dependabot + 完善文档 |
 | **总体** | **⭐⭐⭐⭐½（4.5/5）** | 生产就绪度高，剩余 12 个测试失败 + gRPC mTLS 为主要待改进项 |
@@ -855,7 +855,11 @@ NexusChain 是一个**基于自研区块链的支付编排平台（Payment Orche
 - ✅ **测试覆盖**：2491 用例 + 关键安全不变量门禁
 - ✅ **可观测性**：OTel + Jaeger + Loki + Prometheus + Grafana 5 仪表盘
 - ✅ **部署体系**：K8s + Helm + Istio + Docker Compose 多维度支持
-- ✅ **测试全绿**：12 个 gateway 测试失败已全部修复（2026-10-05，v2.51.3 复验 §8.1.1–§8.1.5 全绿）
+- ⚠️ **测试状态（2026-10-05 实测，原"测试全绿"表述不准确已修正）**：gateway 已 0 失败
+  （原 12 例 knownRed 修复，§8.1.1–§8.1.5 全绿）；但 signing-service 有 **3 例 MPC 多主机
+  （WSL）环境测试失败**（`MpcMultiHostEngineTest` ×2、`MpcMultiHostTlsTest` ×1，判据为
+  "node-C-wsl 应产出公钥"），另有 **8 个模块无测试结果落盘**（core / wallet / compliance /
+  analytics / consortium / sdk / mpc-engine / zk-groth16）——**"全量测试全绿"不成立**
 - ✅ **传输安全**：gRPC 应用层 mTLS 已实现（MPC-P0-02：`use-plaintext` 默认 false；`mpc-engine` `MtlsConfig` + tonic `tls` feature；2026-10-05 复验）
 - ✅ **MPC 部署**：prod 路径已启用全分布式 CGGMP21 2-of-3（`CggmpMpcE2EClusterTest`，signing-service 不持份额）；dev/staging 为分层降级；2026-10-05 复验
 

@@ -23,11 +23,22 @@ import java.util.*;
  *   VOIDED         -> (terminal)
  *   REVERSED       -> (terminal)
  *
- * <p><b>状态变更咽喉钩子（2026-10-03 A3）</b>：全部订单状态变更收敛于
- * {@link #transition}——风控限额累加器（{@code RiskLimitAccrualService}）
- * 在此挂单一钩子即可精确追踪「PAID+PAYING 成员集」的进出，无需触碰
- * 20 处调用点或散落的 save。钩子异常只告警不阻断（状态机本体可用性优先；
- * 累加误差方向为偏紧=fail-safe，见 {@code RiskLimitAccrualService} 头注）。</p>
+ * <p><b>状态变更咽喉钩子（2026-10-03 A3；2026-10-05 修订口径）</b>：订单状态变更
+ * 应统一经由 {@link #transition}——风控限额累加器（{@code RiskLimitAccrualService}）
+ * 在此挂单一钩子，追踪「PAID+PAYING 成员集」的进出，避免在调用点散落记账逻辑。
+ * 钩子异常只告警不阻断（状态机本体可用性优先）。</p>
+ *
+ * <p><b>收敛现状（2026-10-05 实测；原文"全部收敛"不实，已修正）</b>：
+ * 受守卫的 {@link #transition} 调用 <b>19 处</b>；直接 {@code setStatus} 绕过守卫
+ * <b>10 处</b>，其中 <b>3 处在生产路径</b>——{@code CompensationService}（×2）与
+ * {@code ReconciliationTask}（×1），已于 2026-10-05 全部改为 {@code transition}。
+ * 其余 7 处为沙箱模拟（{@code SandboxSimulationService} ×6，非资金路径）与
+ * 订单新建时的初始赋值（{@code OrderServiceImpl}，无前态、不构成状态转换）。</p>
+ *
+ * <p><b>⚠️ 误差方向提醒</b>：本类曾称"累加误差方向为偏紧=fail-safe"——该结论
+ * <b>仅适用于钩子抛异常</b>的情形。若因绕过 {@link #transition} 而<b>钩子根本未被
+ * 触发</b>，"进入成员集"的转换（如 REFUND_PENDING→PAID）会漏记 +amount，方向为
+ * <b>偏松（fail-unsafe）</b>，即可能放行超额交易。两种情形的误差方向相反，不可混用。</p>
  */
 public final class OrderStateMachine {
 

@@ -7,11 +7,18 @@ import java.time.LocalDateTime;
 /**
  * Payment order entity representing a single payment request from a merchant.
  *
- * <p>An order transitions through the following lifecycle:
- * {@code PENDING -> PAYING -> SUBMITTED -> PAID} or {@code PENDING -> EXPIRED},
- * and may transition to {@code REFUNDED} after a successful refund.
- * A {@code PAID} order may transition to {@code REORGED} if its block is reorged,
- * then back to {@code PAID} (re-confirmed) or {@code FAILED} (unrecoverable).</p>
+ * <p>完整生命周期（11 个状态，权威定义见 {@link OrderStateMachine} 的转换表；
+ * 本注释原仅列 5 个，2026-10-05 补全）：</p>
+ * <ul>
+ *   <li>{@code PENDING -> PAYING -> SUBMITTED -> PAID}（正常路径）或 {@code PENDING -> EXPIRED}</li>
+ *   <li>{@code PAID -> REORGED}（区块重组）→ 回到 {@code PAID}（重新确认）或 {@code FAILED}（不可恢复）</li>
+ *   <li>{@code PAID -> REFUND_PENDING -> REFUNDED}（退款成功）；{@code REFUND_PENDING -> PAID}
+ *       （退款失败回滚，允许重试）</li>
+ *   <li>{@code PAID -> VOIDED}（当日撤销，T+1 日 24:00 前，终态）</li>
+ *   <li>{@code PAID -> REVERSED}（隔日冲正已结算交易，终态）</li>
+ *   <li>{@code FAILED -> PENDING}（唯一的重试复活路径）</li>
+ * </ul>
+ * <p>终态：{@code EXPIRED} / {@code REFUNDED} / {@code VOIDED} / {@code REVERSED}。</p>
  */
 @Entity
 @Table(name = "payment_orders")

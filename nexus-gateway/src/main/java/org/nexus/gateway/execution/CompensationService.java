@@ -4,6 +4,7 @@ import org.nexus.gateway.client.ChainRpcClient;
 import org.nexus.gateway.clearing.SettlementBatch;
 import org.nexus.gateway.clearing.SettlementBatchRepository;
 
+import org.nexus.gateway.model.OrderStateMachine;
 import org.nexus.gateway.model.PaymentOrder;
 import org.nexus.gateway.model.Refund;
 import org.nexus.gateway.repository.PaymentOrderRepository;
@@ -215,7 +216,7 @@ public class CompensationService {
         // 同步更新订单状态为 REFUNDED
         paymentOrderRepository.findById(refund.getOrderId()).ifPresent(order -> {
             if (order.getStatus() == PaymentOrder.OrderStatus.REFUND_PENDING) {
-                order.setStatus(PaymentOrder.OrderStatus.REFUNDED);
+                OrderStateMachine.transition(order, PaymentOrder.OrderStatus.REFUNDED);
                 paymentOrderRepository.save(order);
                 log.info("Order {} transitioned to REFUNDED for refund {}",
                         order.getOrderNo(), refund.getRefundNo());
@@ -243,7 +244,11 @@ public class CompensationService {
         //    refund 失败 → 资金未转出，无需链上补偿，仅需数据库状态回滚
         paymentOrderRepository.findById(refund.getOrderId()).ifPresent(order -> {
             if (order.getStatus() == PaymentOrder.OrderStatus.REFUND_PENDING) {
-                order.setStatus(PaymentOrder.OrderStatus.PAID);
+                // 2026-10-05 修复（R1）：本转换 REFUND_PENDING -> PAID 是「进入」风控成员集
+                // （PAID+PAYING，见 RiskLimitAccrualService#counted）。此前直接 setStatus 会
+                // 绕过 OrderStateMachine 的 TransitionHook → 该商户累计金额少计一笔 →
+                // 限额判定偏松（fail-unsafe，可能放行超额交易）。必须走 transition。
+                OrderStateMachine.transition(order, PaymentOrder.OrderStatus.PAID);
                 paymentOrderRepository.save(order);
                 log.info("Compensation: order {} rolled back to PAID (refund {} failed, no on-chain transfer)",
                         order.getOrderNo(), refund.getRefundNo());
