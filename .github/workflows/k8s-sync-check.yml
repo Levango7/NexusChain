@@ -38,6 +38,29 @@ jobs:
         # 如需进一步钉 sha：actions/checkout@v5 → 查询对应 commit sha
         uses: actions/checkout@v5
 
+      # Python 版本口径（2026-10-06 新增，全仓统一 3.14）：
+      # 本 job 此前**无 setup-python**，直接依赖 runner 预装的 python3：
+      #   · 「PrometheusRule 静态校验」用 python3 -c "import yaml; ..."
+      #   · 「SealedSecret 模式渲染断言」用 python3 heredoc 做正则断言
+      # 后者是**门禁断言**（断言失败即 exit 1），却跑在**版本不受控**的解释器上——
+      # runner 镜像升级会静默改变行为，而同仓 ci.yml 的 build-and-test 已钉 3.14，
+      # 形成跨 workflow 的解释器分裂。现显式钉 3.14，与全仓其余 Python 调用同口径。
+      # 选用 '3.14'（不带补丁号）：自动跟进最新安全补丁（当前 3.14.8），
+      # 且 3.14 处于 bugfix 维护期、支持至 2030-10（PEP 745）。
+      # **必须**置于首次 Python 调用步骤之前，否则 python3 仍解析到 runner 预装版本。
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
+      # 依赖说明（2026-10-06 核实）：下方 python3 -c "import yaml" 需要 PyYAML。
+      # setup-python 装的是**裸解释器**、不含 PyYAML；此前能跑通是因为 ubuntu runner
+      # 镜像**预装**了 python3-yaml（apt）。钉版本后该隐式依赖消失，故在此显式安装，
+      # 把「靠镜像预装」变成「靠 workflow 声明」——否则本步骤会以
+      # ModuleNotFoundError 失败，而失败原因与被校验的 YAML 无关（误报）。
+      - name: Install PyYAML（PrometheusRule YAML 解析用）
+        run: python -m pip install --disable-pip-version-check --quiet "PyYAML>=6.0"
+
       # MPC 分层口径断言（2026-10-02 决策落地，依据审计 2026-09-29 §2）：
       # staging 不得静默退回进程内传输；prod 不得静默退回 GG20/进程内。
       # 放在本 workflow（而非新建）——配置漂移校验的正主在这里（审计原文建议）。

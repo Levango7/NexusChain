@@ -241,6 +241,17 @@ jobs:
       - name: Checkout 代码
         uses: actions/checkout@v5
 
+      # Python 版本口径（2026-10-06 新增，全仓统一 3.14）：
+      # 本 job 的「扫描覆盖度自检」用 python3 heredoc 解析 dependency-check JSON，
+      # 且该步骤是**门禁断言**（覆盖度为 0 时 ::error:: + sys.exit(1)）——
+      # 此前无 setup-python，跑在 runner **预装**的 python3 上，版本随镜像漂移，
+      # 与 ci.yml 已钉的 3.14 不一致。现统一钉 3.14，消除跨 workflow 解释器分裂。
+      # 该脚本仅用标准库（json/os/pathlib/sys），无需额外 pip 安装。
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
       - name: Setup JDK 17
         # PR #17：改用官方 Gradle 插件后，本 job 需要 JDK 17 + Gradle。
         # cache: gradle 用 setup-java 内置缓存（与 ci.yml 的 Build & Test 同一模式）。
@@ -666,6 +677,17 @@ jobs:
     steps:
       - name: Checkout 代码
         uses: actions/checkout@v5
+
+      # Python 版本口径（2026-10-06 新增，全仓统一 3.14）：
+      # 本 job 用 python3 跑 scripts/security/trivy-to-issues.py 自动建 Issue——
+      # 此前无 setup-python，跑在 runner **预装**的 python3 上，版本随镜像漂移；
+      # 本 job 在 push/cron 路径上**无人值守**，镜像升级导致的行为变化不会被及时发现。
+      # 现统一钉 3.14。该脚本仅用标准库（argparse/json/os/subprocess/sys/datetime），
+      # 无需额外 pip 安装；它调用的 gh CLI 由 ubuntu runner 预装，与本步骤无关。
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
 
       - name: 下载 Trivy 报告
         uses: actions/download-artifact@v7
