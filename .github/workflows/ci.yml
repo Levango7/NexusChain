@@ -309,6 +309,18 @@ jobs:
           npm install
           npm run test:ts
 
+      # DevTools CLI 构建 + 冒烟（2026-10-06）：nexus-devtools 此前全目录无
+      # tsconfig.json——`npm run build`（tsc）只打印帮助并以退出码 1 结束，
+      # bin 声明的 dist/index.js 从未能生成（发布交付物不可构建；该包亦 0 锁
+      # 文件、0 CI 覆盖）。补 tsconfig + 锁文件后纳入 CI；npm ci 同时验证
+      # engine-strict 的第 3 个（此前唯一无 CI 环节的）安装点。
+      - name: DevTools CLI build + smoke
+        working-directory: nexus-devtools
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+          node dist/index.js --help > /dev/null
+
       # ③ helm charts 门禁（2026-09-05）：lint + template 渲染 umbrella 与全部
       # 子 chart，防止部署资产腐化（此前 chart 改坏要到真部署时才发现）。
       # runner 预装 helm 3.x；模板无 required 硬约束，默认值可完整渲染。
