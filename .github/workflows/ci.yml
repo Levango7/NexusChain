@@ -441,13 +441,26 @@ jobs:
       # <testcase> 带 classname/name/failure 正文，直接可得「哪个用例在哪个
       # 断言上失败」。if: always() 保证红跑也上传；XML 紧凑，14 天保留足够
       # 覆盖一次 flaky 的取证窗口。
+      #
+      # 覆盖面（2026-10-05 修正）：此前只匹配 [test]/*.xml 单层目录，于是
+      # ① nexus-integrationTest（同模块内名为 integrationTest → 落在
+      #    build/test-results/integrationTest/）②contextSmokeTest（落在
+      #    build/test-results/contextSmokeTest/）③composite build 的 4 个
+      #    includeBuild 模块（settlement/compliance/analytics/oracle，其
+      #    build 目录不在根 project 下，需 build/ 或 module/build/ 前缀）
+      # 三类结果**全部拿不到**。本 job 已在跑这些任务（见上方各 step），
+      # 却因 glob 未覆盖而无法取证——「跑了但查不到」比「没跑」更难排查。
+      # 现改为 **/build/test-results/**/*.xml 递归匹配任意任务目录名；
+      # 另补 nexus-core/nexus-core/build/... 前缀，覆盖 Hardhat E2E 在
+      # build-and-test 内以 --tests 跑出的那一批（其报告落该路径）。
       - name: 上传测试结果 XML（flaky 取证）
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: test-results-${{ matrix.os }}
           path: |
-            **/build/test-results/test/*.xml
+            **/build/test-results/**/*.xml
+            nexus-core/nexus-core/build/test-results/**/*.xml
           if-no-files-found: ignore
           retention-days: 14
 
@@ -535,6 +548,22 @@ jobs:
             --no-daemon
         env:
           MPC_ENGINE_BIN: ${{ github.workspace }}/mpc-engine/target/release/mpc-engine
+
+      # 测试结果 XML（2026-10-05 新增）：本 job 独立于 build-and-test，
+      # 此前的工件上传只覆盖 build-and-test job——mpc-java-cluster-e2e 只在
+      # **失败时** 传日志（mpc-cluster-e2e-logs），成功路径零 XML 落盘。
+      # 后果：CGGMP21 keygen 集群回归到底跑了几个用例、是否发生 assumeTrue
+      # 静默跳过，**无法从工件侧核实**——只能翻运行日志。
+      # 与 build-and-test 同口径：if: always() + 递归 glob，红绿均留证。
+      - name: 上传测试结果 XML（集群回归取证）
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results-mpc-cluster-e2e
+          path: |
+            **/build/test-results/**/*.xml
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Upload engine logs on failure
         if: failure()
@@ -677,16 +706,20 @@ jobs:
         if: failure()
         run: |
           kubectl get all,pvc -n nexus || true
-          kubectl describe pod -n nexus mpc-engine-0 || true
-          for p in 0 1 2; do
-            echo "=== init-config mpc-engine-$p ==="
-            kubectl logs -n nexus mpc-engine-$p -c init-config || true
-            echo "=== init-tls mpc-engine-$p ==="
-            kubectl logs -n nexus mpc-engine-$p -c init-tls || true
-            echo "=== mpc-engine-$p main ==="
-            kubectl logs -n nexus mpc-engine-$p -c mpc-engine || true
-          done
-          helm get all mpc -n nexus || true
+
+      # 测试结果 XML（2026-10-05 新增）：本 job 不含 Java 测试（K8s 冒烟），
+      # 但 helm/kind 步骤若中途改为跑断言型检查，XML 通道预留并可空跑
+      # （if-no-files-found: ignore）。保持与其余 job 一致的上传口径，避免
+      # 后续新增测试任务时再次漏挂工件。
+      - name: 上传测试结果 XML（如存在）
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results-mpc-kind-smoke
+          path: |
+            **/build/test-results/**/*.xml
+          if-no-files-found: ignore
+          retention-days: 14
 
   # ============================================================
   # Flyway 数据库迁移预检（Task 284）
@@ -833,6 +866,23 @@ jobs:
           # 台账自约束（docs/testing/skipped-tests.md §5.4）：CI 须报告跳过数
           echo "===== Hardhat E2E 跳过/执行统计 ====="
           grep -cE "Skipped|skipped" hardhat-e2e-output.log || echo "0 skipped lines"
+
+      # 测试结果 XML（2026-10-05 新增）：本 job 的 5 个集成测试类此前零工件——
+      # 那批测试的显著特征是 **assumeTrue 优雅跳过**（Hardhat 节点起不来即整类跳过），
+      # 因此「跳过 vs 真跑」的区分是这一类门禁的核心风险。XML 的 <testcase>
+      # 带 <skipped/> 标记，是审计 skipped-tests.md 台账的**唯一机器可读来源**
+      # （此前只能靠 grep 运行日志的 Skipped 字样，脆弱且不可复核）。
+      # 同时上传 tee 出来的原始日志，两相对照。
+      - name: 上传测试结果 XML + 运行日志（Hardhat E2E 取证）
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results-hardhat-e2e
+          path: |
+            nexus-core/nexus-core/build/test-results/**/*.xml
+            hardhat-e2e-output.log
+          if-no-files-found: ignore
+          retention-days: 14
 
   # ============================================================
   # CD：master 分支构建并推送 Docker 镜像到 GitHub Container Registry
