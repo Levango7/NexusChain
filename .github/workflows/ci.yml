@@ -48,10 +48,22 @@ jobs:
       - name: Checkout 代码
         uses: actions/checkout@v5
 
+      # Python 版本口径（2026-10-06 统一）：全仓 Python 调用统一钉 **3.14**。
+      # 此前本 job 用 setup-python@v6 装 3.12，而 build-and-test 里的
+      # cargo-test-to-junit.py / test_nexus_sdk.py 用的是 runner **预装**的
+      # python3 —— 两个 job 的 Python **来源不同、版本不受控**：
+      #   · code-hygiene      → /opt/hostedtoolcache/Python/3.12.14/x64
+      #   · build-and-test    → runner 自带 python3（版本随镜像漂移）
+      # 后果：同仓两套解释器，一处通过不保证另一处通过；runner 镜像升级
+      # 会静默改变 build-and-test 的行为（无 setup 步骤 → 无版本锚点）。
+      # 现统一为 3.14：当前稳定主版本，且为全仓选中版本的下界。
+      # 选用 '3.14'（不带补丁号）而非 '3.14.8'：让 setup-python 自动跟进
+      # 最新安全补丁，避免钉死补丁号后漏掉 CVE 修复。
+      # 新增 Python 调用步骤时：**必须**同时加本步骤，不得依赖 runner 预装。
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
-          python-version: '3.12'
+          python-version: '3.14'
 
       - name: 代码卫生棘轮检查（新增 printStackTrace / System.out / 空 catch）
         run: python scripts/check-code-hygiene.py
@@ -176,6 +188,17 @@ jobs:
           java-version: '17'
           distribution: 'corretto'
           cache: gradle
+
+      # Python 版本口径（2026-10-06 新增）：本 job 此前**无 setup-python**，
+      # 直接依赖 runner 预装的 python3。这里跑着 SDK Python 回归
+      # （tests/test_nexus_sdk.py）与 Rust 测试 XML 转换
+      # （scripts/cargo-test-to-junit.py），两者都因此**没有版本锚点** ——
+      # runner 镜像升级会静默改变行为，且与 code-hygiene job 的 3.12 不一致。
+      # 现显式钉 3.14，与 code-hygiene job 同版本，消除跨 job 解释器分裂。
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
 
       - name: Ensure gradlew is LF
         run: |
