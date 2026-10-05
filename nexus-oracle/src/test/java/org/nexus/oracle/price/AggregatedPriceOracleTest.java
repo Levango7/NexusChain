@@ -66,11 +66,40 @@ class AggregatedPriceOracleTest {
 
     @Test
     void getPrice_noAvailableSource_shouldReturnZero() {
-        // 未注入任何静态价格，三个源均不可用
-        PriceEntry entry = oracle.getPrice("BTC");
+        // 2026-10-05 修复（消除网络可达性依赖的 flaky）：
+        // 原实现复用 setUp 里的真实 feed，隐含前提是「本机访问不到
+        // api.binance.com / api.coingecko.com」。该前提不成立时用例即红：
+        // CI runner（海外）能 ping 通 → isAvailable()=true → getPrice 真抓到
+        // BTC 报价 → 断言 price==0 失败（CI 实测 AggregatedPriceOracleTest.java:72
+        // AssertionFailedError；本机因网络不通而"恰好"通过）。
+        // 现改为显式注入「恒不可用」的 stub，不触网、结果确定。
+        AggregatedPriceOracle offlineOracle = new AggregatedPriceOracle(
+                List.of(unavailableFeed("down-a"), unavailableFeed("down-b"), unavailableFeed("down-c")));
+
+        PriceEntry entry = offlineOracle.getPrice("BTC");
 
         assertEquals(0, BigDecimal.ZERO.compareTo(entry.getPrice()));
         assertEquals(0.0, entry.getConfidence(), 0.01);
+    }
+
+    /** 构造恒不可用的价格源，用于验证「无可用源」路径且不产生网络调用。 */
+    private static PriceFeed unavailableFeed(String name) {
+        return new PriceFeed() {
+            @Override
+            public String sourceName() {
+                return name;
+            }
+
+            @Override
+            public BigDecimal fetch(String asset) {
+                return null;
+            }
+
+            @Override
+            public boolean isAvailable() {
+                return false;
+            }
+        };
     }
 
     @Test
