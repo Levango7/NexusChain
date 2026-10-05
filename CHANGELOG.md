@@ -22,6 +22,26 @@
   合并 PR #25」；决策提前落地后该 workflow 失去意义，按其自带删除说明移除）。
 - `docs/roadmap-next.md` 桶 B 对应条目标记为已提前完成。
 
+### Node 口径统一：engines 收紧 + engine-strict + .nvmrc（2026-10-06）
+
+- **engines 统一为 `>=24.0.0 <27.0.0`**（6 处 package.json：`nexus-sdk` 根/`typescript`、
+  `nexus-devtools`、`nexus-explorer` 根/`backend`/`frontend`）。此前 16/18 两档且均无
+  上界——既不代表真实下限（CI 实跑 26），也拦不住大版本跃迁。
+- **engine-strict 生效**：`nexus-explorer`/`nexus-sdk`/`nexus-devtools` 三个项目根各加
+  `.npmrc`（`engine-strict=true`），Node 不符由 warning 升级为**安装失败**。位置经实测
+  确定（2026-10-06）：npm 只读「项目根」.npmrc——workspace 子目录（`frontend`/`backend`/
+  `typescript`）内同名文件被忽略、仓库根放 .npmrc 对子项目安装无效（此前全仓 0 个
+  .npmrc，engines 为纯装饰字段）。
+- 仓库根新增 `.nvmrc`（`26`），与 CI `node-version: '26'` 对齐。
+
+### 版本口径门禁：CHANGELOG 重复条目修复 + 唯一性断言（2026-10-06）
+
+- 修复重复 `## [2.51.3]` 条目：2026-08-29 审计修复段（实际随 v2.50.0 发布，
+  f47f62da 为 v2.50.0 tag 祖先）被 v2.51.3 发版准备（6d71d48）的全局替换误改名，
+  现归并入 [2.50.0] 节并附条目归属修正注记。
+- `scripts/check-version-consistency.sh` 新增断言 4：CHANGELOG 版本条目 `## [x]`
+  （含 [Unreleased]）不得重复——阴性对照（注入合成重复条目）实测可拦截。
+
 ### 限额严格计数器落地（2026-10-03 第四批，桶 A3——口径拍板后实施）
 
 > **⚠️ 行为变更明示**：日/月限额窗口口径从「滚动 24h / 滚动 30 天」改为
@@ -1423,9 +1443,12 @@ Scan / Pipeline 全绿，commit 82eb96a）。
     MpcEngineNotReady 表达式过宽 / 块高告警缺失的替代信号说明）
   - kustomize.md 诚实标注当前定位（GitOps 预备设施，非实际部署路径）
 
-## [2.51.3] - 2026-10-04
-
 ### 2026-08-29 审计修复（交付就绪度审计发现项）
+
+> **条目归属修正（2026-10-06）**：本节原被误标为 `## [2.51.3] - 2026-10-04`
+> ——v2.51.3 发版准备（6d71d48）对历史遗留的第二个 `## [Unreleased]` 头做了
+> 全局替换，误将其一并改名。这些修复实际随 v2.50.0 发布（f47f62da 为 v2.50.0
+> tag 祖先），现归并入本节；已加版本条目唯一性门禁（check-version-consistency.sh 断言 4）。
 
 #### Fixed
 

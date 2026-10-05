@@ -7,6 +7,8 @@
 #   ② v2.50.2 发版时 version.properties 仍是 2.50.0，导致 jar 名错位
 #      （见 version.properties 内 2026-09-22 注释）；
 #   ③ 2026-09-17 审计发现 README 硬编码 v2.40.0 与构建/CHANGELOG 不一致。
+#   ④ v2.51.3 发版准备（6d71d48）对历史遗留的第二个 `## [Unreleased]` 头做全局
+#      替换，产生重复的 `## [2.51.3]` 条目（2026-10-06 发现，本次修复）。
 #
 # 本门禁断言（CHANGELOG 允许滞后于 tag —— v2.50.1 无条目先例，不做强等校验）：
 #   1. 根 build.gradle 的 version == nexus-core version.properties 的 versionNumber
@@ -14,7 +16,9 @@
 #   2. README.md 的版本口径头注包含当前版本号（防止头注再次停在旧版本）；
 #   3. README.md 正文不得出现与当前版本不一致的「当前 vX.Y.Z」式硬编码声明
 #      （上一条断言只保证头注含当前版本，对正文里的第二处硬编码完全无感——
-#       2026-09-29 实测：头注已是 2.51.0，正文历史摘要段仍写「当前 v2.40.0」）。
+#       2026-09-29 实测：头注已是 2.51.0，正文历史摘要段仍写「当前 v2.40.0」）；
+#   4. CHANGELOG 的版本条目 `## [x]`（含 [Unreleased]）不得重复——重复即意味着
+#      发版替换或人工编辑误伤了历史条目（先例见背景④）。
 #
 # 运行：bash scripts/check-version-consistency.sh
 # ============================================================================
@@ -52,5 +56,15 @@ if [ -n "$STALE_CLAIMS" ]; then
     echo "处置：改为引用文件开头「版本口径」头注或 CHANGELOG，不要在正文写死数值。" >&2
     exit 1
 fi
+
+# 断言 4：CHANGELOG 版本条目（## [x]）唯一性。
+CHANGELOG_DUP=$(grep -oE '^## \[[^]]+\]' CHANGELOG.md | sort | uniq -d || true)
+if [ -n "$CHANGELOG_DUP" ]; then
+    echo "FAIL: CHANGELOG 存在重复版本条目：" >&2
+    echo "$CHANGELOG_DUP" >&2
+    echo "处置：把重复段归并进其实际所属的版本节（内容不得删除），每个版本号恰好一条。" >&2
+    exit 1
+fi
+echo "CHANGELOG 版本条目 = $(grep -cE '^## \[' CHANGELOG.md) 条（无重复）"
 
 echo "OK: 版本口径一致 ($GRADLE_VERSION)"
