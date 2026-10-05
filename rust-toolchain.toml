@@ -1,0 +1,28 @@
+# Rust 工具链锚定（2026-10-06 新增）
+# ---------------------------------------------------------------------------
+# 背景：本仓 CI 此前用 `dtolnay/rust-toolchain@stable`（4 处：ci.yml ×3 +
+# security-scan.yml ×1）——`@stable` 是**浮动**标签，每次运行都拉当时最新的
+# stable。后果：rustc 小版本升级会引入新的 clippy lint（尤其 `-D warnings`
+# 下），CI 可能在**没有任何代码改动**的情况下变红，且本地与 CI 的工具链
+# 可能不同（本地 rustup 版本各异），形成「偶发红 + 无法复现」的典型形态。
+#
+# 本文件（rustup 原生识别的工具链声明）把「用哪个 Rust」从 action 参数
+# 变成**仓库内可版本化的声明**：
+#   · 本地：rustup 进入目录即自动切到该 channel（无需手动 rustup default）；
+#   · CI ：dtolnay/rust-toolchain 会读取本文件（其 action 逻辑优先采用
+#          rust-toolchain.toml 的 channel），与本地一致。
+# 从而消除「本地绿 / CI 红」的工具链漂移。
+#
+# 选型：stable（非 nightly——本仓无 nightly 特性需求）。
+# 记录基线程：1.99.0（2026-09-28 发布，写入本注释时点的 stable）。
+# 使用 `channel = "stable"` 而非 `"1.99.0"` 的理由：仓内 3 个 crate 均为
+# 常规依赖（tonic/prost/ark-*/axum），不需要「钉死到具体补丁号」的极端可
+# 复现性；用 channel="stable" 可继续获得安全与性能补丁，同时把**漂移点
+# 收敛到唯一一处声明**，并让本地/CI 口径一致。若日后需完全确定复现（如
+# 发布取证），把 channel 改成具体版本号即可，改动面仅此一行。
+#
+# 注意：本文件同时是 `cargo` 的 toolchain 解析入口，勿在子目录另建
+# rust-toolchain.toml（会覆盖本文件，造成多口径）。
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]

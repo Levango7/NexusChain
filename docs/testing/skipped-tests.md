@@ -39,6 +39,8 @@ NexusChain v2.0.0-rc1 当前共有 **9 个被跳过的测试**，分布在 4 个
 **跳过原因**：Hardhat EDR（Ethereum Development Runtime）与 Node.js v25 不兼容，本地环境无法启动 Hardhat 节点完成 L1 合约部署
 **启用条件**：将 Node.js 降级至 v20 LTS 或 v22 LTS；或等待 Hardhat EDR 发布支持 Node v25 的版本；启用后须验证 `L2Bridge.sol` 合约部署与 5 项端到端流程
 
+> **更新（2026-10-06）**：本条记录的是**本地开发环境**在 Node v25 下的跳过。CI 侧早已用独立 job 真实执行（见 §7 末注），且该 job 于 2026-10-06 由 Node 22 升级至 **Node 26**——PR #25 试验跑实测 `node v26.10.0` 下 33 用例真实执行、0 失败，证明 **EDR 对 26 兼容**（原「不兼容」结论只对 v25 成立，勿向 26 类推）。本地若仍遇跳过，属本地未装 Node 26 或 Hardhat 节点启动失败，非本台账所述版本不兼容。
+
 表：L2L1EndToEndTest 跳过测试方法
 
 | # | 测试方法 | 验证内容 |
@@ -124,7 +126,7 @@ NexusChain v2.0.0-rc1 当前共有 **9 个被跳过的测试**，分布在 4 个
 **当前状态**：已纳入常规 `test` 门禁，本地全绿。
 **同步更新（2026-08-30 第二批）**：WalletControllerIT 亦解除排除——同为 test profile 的 H2 自包含 MockMvc 设计。其 403 根因（JWT 过滤器链下 spring-security-test 桥接失效，经诊断用例实证 authInContext=null）以 `@AutoConfigureMockMvc(addFilters=false)` + `@WithMockUser` 组合解决：绕过 servlet filter chain，方法级 @PreAuthorize 由 AOP 承担正常鉴权。鉴权链语义由 SecurityConfig/JwtAuthenticationFilter 单测覆盖，本测试聚焦 HTTP 契约。7 用例全绿，纳入常规门禁。
 
-另：Hardhat L1/L2 E2E（5 测试类/46 用例）已以独立 CI job 纳入（Node 22 LTS，首轮 continue-on-error 观察模式）——本台账 §2.1 的"CI 中不可运行"状态就此变更：CI 环境具备运行条件，跳过仅发生在环境故障时（自适应 assumeTrue）。
+另：Hardhat L1/L2 E2E（5 测试类/46 用例）已以独立 CI job 纳入（首轮 continue-on-error 观察模式；运行时 2026-10-06 由 Node 22 LTS 升至 **Node 26**）——本台账 §2.1 的"CI 中不可运行"状态就此变更：CI 环境具备运行条件，跳过仅发生在环境故障时（自适应 assumeTrue）。
 
 ---
 

@@ -117,10 +117,20 @@ jobs:
       - name: Checkout 代码
         uses: actions/checkout@v5
 
-      - name: Setup Node 22
+      # Node 26 采纳（2026-10-06 决策，依据 PR #25 实测数据，提前于官方 LTS 升格日）：
+      # ─ 实证：PR #25 试验跑（run 37073643914）本 job 实测 `node: v26.10.0`，
+      #   lint / vitest / tsc build / 产物校验全绿（39s），无行为漂移。
+      # ─ 为何不等 2026-10-28 LTS 升格：Node 官方 schedule.json 显示
+      #   v24(Krypton) 于 2026-10-20 转 Maintenance、v22(Jod) 早已于 2025-10-21
+      #   转 Maintenance。即「先跳 24 过渡」会落入一个 8 天后即进维护期的版本，
+      #   是比直接上 26 更差的选择；而 22 现处维护期（仅安全补丁）无长期价值。
+      # ─ 为何 26 的 Current 身份可接受：本仓 Node 用途仅为构建/测试工具链
+      #   （vitest/tsc/hardhat），非生产运行时产物；且已由本 job + Hardhat job
+      #   双线实测通过。升级更早 = 更早暴露 breaking、更早淘汰旧路径。
+      - name: Setup Node 26
         uses: actions/setup-node@v5
         with:
-          node-version: '22'
+          node-version: '26'
           cache: npm
           cache-dependency-path: nexus-explorer/package-lock.json
 
@@ -332,7 +342,7 @@ jobs:
 
       # 短期项 #5（2026-09-17）：explorer 前端进入 CI 门禁。
       # 此前 10 个 vitest 测试文件（93 用例）没有任何 CI job 执行——
-      # 前端回归零保护（审计发现）。此处与 SDK TS job 同用 Node 22。
+      # 前端回归零保护（审计发现）。此处与其余 Node job 同用 Node 26。
       - name: Explorer Frontend tests (vitest)
         working-directory: nexus-explorer/frontend
         run: |
@@ -345,7 +355,11 @@ jobs:
         run: npm run build
 
       # P2-C6: Rust 测试（mpc-engine）
-      # 通过 dtolnay/rust-toolchain@stable 显式安装 Rust 工具链，作为强制门禁。
+      # 通过 dtolnay/rust-toolchain 安装 Rust 工具链，作为强制门禁。
+      # 工具链口径由仓根 `rust-toolchain.toml` 声明（2026-10-06 新增）——
+      # 本 action 会读取该文件的 channel，故本地 rustup 与 CI 用同一 channel，
+      # 消除「本地绿 / CI 红」的漂移。此处 `@stable` 仅为 action 自身的解析
+      # 入口，实际版本以 rust-toolchain.toml 为准。
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -886,13 +900,13 @@ jobs:
   # BridgeFullLifecycle/PaymentFlow/ValidationPipeline，46 用例）此前仅在
   # 本地手动运行——测试自带 assumeTrue 优雅跳过，CI 中装了 Node 也从未
   # 显式执行，属"影子测试资产"。
-  # 环境：Node 22 LTS（Hardhat EDR 与 Node 25 不兼容，见 docs/testing/
-  # skipped-tests.md §2.1）+ JDK 17。测试基类自适应：npm install →
-  # 启动 npx hardhat node → 部署合约，任一步失败即整类跳过（不红）。
+  # 环境：Node 26（2026-10-06 由 22 升级，见下方 Setup 步骤注释）+ JDK 17。
+  # 测试基类自适应：npm install → 启动 npx hardhat node → 部署合约，
+  # 任一步失败即整类跳过（不红）。
   # 该 job 已为强制门禁（2026-08-30 首轮真实执行毕业，无 continue-on-error 遮错；原观察模式注释已废弃）。
   # ============================================================
   hardhat-e2e:
-    name: Hardhat L1/L2 E2E (Node 22)
+    name: Hardhat L1/L2 E2E (Node 26)
     runs-on: ubuntu-26.04
     # 观察模式已毕业（2026-08-30 首轮真实执行：33 用例运行/0 失败，
     # 5 类全部真实执行——治理 12/桥 4/校验管道 11/L2↔L1 6；其余 13 用例为
@@ -909,10 +923,18 @@ jobs:
           distribution: 'corretto'
           cache: gradle
 
-      - name: Setup Node 22 (Hardhat EDR 兼容 LTS)
+      # Node 26 采纳（2026-10-06）：本步骤原是「Node 22（Hardhat EDR 兼容 LTS）」——
+      # 22 是为规避 EDR 兼容问题特意选的。但台账 docs/testing/skipped-tests.md §2.1
+      # 记的**是 Node v25** 不兼容，从未验证过 26；交叉大版本不能靠类推。
+      # PR #25 试验跑（run 37073643914）已实测：node v26.10.0 下本 job
+      # BUILD SUCCESSFUL，33 用例真实执行（L2L1↔L1 6 / 链上治理 6 / 治理执行器 6 /
+      # 桥全生命周期 4 / 校验管道 11），与 2026-08-30 毕业时数字一致 → 无回归。
+      # 唯一的 grep "Skipped" 计数为 1，经查是**测试名** burnReplayIsSkipped 的
+      # 假阳性，非真实跳过（5 个测试类均真实执行）。故 22→26 成立，采用 26。
+      - name: Setup Node 26 (Hardhat EDR 实测兼容)
         uses: actions/setup-node@v5
         with:
-          node-version: '22'
+          node-version: '26'
           cache: npm
           cache-dependency-path: nexus-core/nexus-core/src/test/resources/l1-test/package-lock.json
 

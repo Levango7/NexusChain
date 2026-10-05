@@ -25,7 +25,7 @@
 | 事项 | 触发 | 机制 |
 |---|---|---|
 | OWASP DC「永远上报」试运行转正/回退 | 2026-10-15 | 本机 cron（automation-f4591a0d），按 docs/dependency-check-update-policy.md 两条出口 |
-| Node 26 采纳（PR #25 合并） | 2026-10-28/29 | 仓库侧 workflow `node26-adoption.yml`（LTS 实时核验+全绿自动 squash 合并，已 dispatch 演练验证） |
+| ~~Node 26 采纳（PR #25 合并）~~ | ~~2026-10-28/29~~ **已提前于 2026-10-06 完成** | 原计划等 LTS 升格日；实测 PR #25 全绿（Hardhat 33 用例真跑）后判定无必要再等——v22 已处维护期、v24 将于 10-20 转维护期，等待只会更差。已直接改 ci.yml 落地并删除 `node26-adoption.yml` |
 | 下一版发布（v2.51.2/2.52.0） | 桶 A 攒够一批后 | tag→流水线（prod 审批门已生效） |
 
 ## 桶 C：被前置条件挡住（解决不了，等条件）
