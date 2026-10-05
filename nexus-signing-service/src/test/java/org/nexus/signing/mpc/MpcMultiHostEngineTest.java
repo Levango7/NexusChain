@@ -31,22 +31,41 @@ class MpcMultiHostEngineTest {
 
     @BeforeAll
     static void checkEngines() {
-        boolean anyUp = false;
+        boolean anyPlaintextEngine = false;
         for (String[] n : NODES) {
-            if (engineReachable(n[1], Integer.parseInt(n[2]))) {
-                anyUp = true;
+            if (plaintextEngineUp(n[1], Integer.parseInt(n[2]))) {
+                anyPlaintextEngine = true;
             }
         }
-        org.junit.jupiter.api.Assumptions.assumeTrue(anyUp,
-                "无引擎运行，跳过三节点验证（需 Docker 双容器 + WSL 引擎）");
+        org.junit.jupiter.api.Assumptions.assumeTrue(anyPlaintextEngine,
+                "三节点上不是明文 MPC 引擎，跳过（本用例要求明文栈：不带 --config、MPC_REQUIRE_TLS=false）");
     }
 
-    private static boolean engineReachable(String host, int port) {
-        try (java.net.Socket s = new java.net.Socket()) {
-            s.connect(new java.net.InetSocketAddress(host, port), 3000);
-            return true;
+    /**
+     * 判据必须是「端口上真跑着明文的 MPC 引擎」，不能只看 TCP 可连通——
+     * 2026-10-04 实测：OpsMesh 的 alert-svc 容器占了 50053，纯 TCP 探测把三个用例全带进假红。
+     * 做法：明文通道发一次最轻的 gRPC 调用；客户端把异常吞成失败响应，
+     * 因此看返回的 error——含 UNAVAILABLE 表示"连不上/不是 gRPC 服务"，其余（服务端校验、
+     * 内部错误）说明引擎在应答。
+     */
+    private static boolean plaintextEngineUp(String host, int port) {
+        GrpcMpcCryptoEngine engine = new GrpcMpcCryptoEngine();
+        try {
+            setField(engine, "host", host);
+            setField(engine, "port", port);
+            setField(engine, "deadlineTimeoutMillis", 3_000L);
+            setField(engine, "usePlaintext", true);
+            engine.init();
+            SignResponse probe = engine.sign(new SignRequest("probe", "", "", "", 0, java.util.List.of()));
+            String err = probe == null || probe.getError() == null ? "" : probe.getError();
+            // UNIMPLEMENTED 也算"不是我们的引擎"：端口上的其它 gRPC 服务不会实现本仓方法
+            return !err.contains("UNAVAILABLE") && !err.contains("UNIMPLEMENTED");
+        } catch (IllegalArgumentException e) {
+            return false;
         } catch (Exception e) {
             return false;
+        } finally {
+            try { engine.shutdown(); } catch (Exception ignore) { }
         }
     }
 
@@ -70,7 +89,7 @@ class MpcMultiHostEngineTest {
     void allThreeHosts_runDkgAndSign() throws Exception {
         int ok = 0;
         for (String[] n : NODES) {
-            if (!engineReachable(n[1], Integer.parseInt(n[2]))) {
+            if (!plaintextEngineUp(n[1], Integer.parseInt(n[2]))) {
                 log.warn("{} 引擎不可达，跳过", n[0]);
                 continue;
             }
@@ -100,7 +119,7 @@ class MpcMultiHostEngineTest {
         String[] pubs = new String[3];
         for (int i = 0; i < NODES.length; i++) {
             String[] n = NODES[i];
-            if (!engineReachable(n[1], Integer.parseInt(n[2]))) {
+            if (!plaintextEngineUp(n[1], Integer.parseInt(n[2]))) {
                 log.warn("{} 不可达，份额隔离验证跳过该节点", n[0]);
                 continue;
             }

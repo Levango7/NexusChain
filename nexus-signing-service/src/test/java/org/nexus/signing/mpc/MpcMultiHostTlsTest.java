@@ -36,24 +36,42 @@ class MpcMultiHostTlsTest {
 
     @BeforeAll
     static void checkEngines() {
-        boolean anyUp = false;
+        boolean anyTlsEngine = false;
         for (String[] n : NODES) {
-            if (engineReachable(n[1], Integer.parseInt(n[2]))) {
-                anyUp = true;
+            if (tlsEngineUp(n[1], Integer.parseInt(n[2]))) {
+                anyTlsEngine = true;
             }
         }
-        org.junit.jupiter.api.Assumptions.assumeTrue(anyUp,
-                "无引擎运行，跳过 mTLS 三节点验证");
+        org.junit.jupiter.api.Assumptions.assumeTrue(anyTlsEngine,
+                "三节点上不是 mTLS MPC 引擎，跳过（本用例要求 mTLS 栈：mpc-certs 布局 + MPC_REQUIRE_TLS=true）");
     }
 
-    private static boolean engineReachable(String host, int port) {
-        try (java.net.Socket s = new java.net.Socket()) {
-            s.connect(new java.net.InetSocketAddress(host, port), 3000);
-            return true;
+    /**
+     * 判据同 MpcMultiHostEngineTest：必须是**本仓 CA 签发、能应答 gRPC 的 mTLS 引擎**，
+     * 不能只看端口有监听——否则任何占端口的服务都会把用例带进假红。
+     */
+    private static boolean tlsEngineUp(String host, int port) {
+        GrpcMpcCryptoEngine engine = new GrpcMpcCryptoEngine();
+        try {
+            setField(engine, "host", host);
+            setField(engine, "port", port);
+            setField(engine, "deadlineTimeoutMillis", 3_000L);
+            setField(engine, "usePlaintext", false);
+            setField(engine, "tlsTrustCertPath", CERT_DIR + "/ca/CA.pem");
+            setField(engine, "tlsClientCertPath", CERT_DIR + "/node-A/cert.pem");
+            setField(engine, "tlsClientKeyPath", CERT_DIR + "/node-A/key.pem");
+            engine.init();
+            SignResponse probe = engine.sign(new SignRequest("tls-probe", "", "", "", 0, java.util.List.of()));
+            String err = probe == null || probe.getError() == null ? "" : probe.getError();
+            // UNIMPLEMENTED 也算"不是我们的引擎"：端口上的其它 gRPC 服务不会实现本仓方法
+            return !err.contains("UNAVAILABLE") && !err.contains("UNIMPLEMENTED");
         } catch (Exception e) {
             return false;
+        } finally {
+            try { engine.shutdown(); } catch (Exception ignore) { }
         }
     }
+
 
     /** 以 mTLS 构造引擎客户端（trust=CA，client=本节点证书）。 */
     private static GrpcMpcCryptoEngine newTlsEngine(String host, int port, String clientName) throws Exception {
@@ -79,7 +97,7 @@ class MpcMultiHostTlsTest {
     void allThreeTlsHosts_runDkgAndSign() throws Exception {
         int ok = 0;
         for (String[] n : NODES) {
-            if (!engineReachable(n[1], Integer.parseInt(n[2]))) {
+            if (!tlsEngineUp(n[1], Integer.parseInt(n[2]))) {
                 log.warn("{} 不可达，跳过", n[0]);
                 continue;
             }
