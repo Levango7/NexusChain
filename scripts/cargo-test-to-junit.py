@@ -44,11 +44,19 @@ def strip_ansi(text: str) -> str:
     return RE_ANSI.sub("", text)
 
 
-# `test <name> ... ok` / `... FAILED` / `... ignored`
-# 注意：name 允许含空格——doc-test 形如 `test src/lib.rs - foo (line 10) ... ok`。
-# 用贪婪匹配到最后一个 ` ... ` 之前，避免把状态词吃进 name。
+# `test <name> ... ok` / `... FAILED` / `... ignored` / `... ignored, <原因>`
+#
+# 注意两处必须容忍的变体（均为**实测**踩到的静默失配）：
+#   1. name 允许含空格——doc-test 形如 `test src/lib.rs - foo (line 10) ... ok`
+#   2. 状态后可跟说明文字——`#[ignore = "原因"]` 输出为
+#      `test foo ... ignored, 需多节点环境：先启动集群`
+#      （ignored 后是 `, ` + 自由文本，**不是行尾**）
+# 若不允许变体 2，所有带 reason 的 #[ignore] 用例会被整体丢弃，
+# 表现为 `tests` 计数偏低且 skipped 恒为 0 —— 与 ANSI 同类的**静默欠计数**。
+# 说明文字用 `(?P<reason>, .*)?` 捕获，供 <skipped> 携带原因。
 RE_TEST_LINE = re.compile(
-    r"^test (?P<name>.+?) \.\.\. (?P<status>ok|FAILED|ignored|bench)\s*$"
+    r"^test (?P<name>.+?) \.\.\. (?P<status>ok|FAILED|ignored|bench)"
+    r"(?P<reason>, .*)?\s*$"
 )
 # `running 5 tests`（每个 test binary 一段；重名 binary 会重复出现）
 RE_RUNNING = re.compile(r"^running (?P<n>\d+) tests?$")
@@ -70,6 +78,7 @@ class Case:
     name: str
     status: str  # ok | FAILED | ignored
     message: str = ""
+    reason: str = ""  # ignored 的原因（来自 `#[ignore = "..."]`）
 
 
 @dataclass
@@ -120,7 +129,10 @@ def parse(text: str) -> list[SuiteRun]:
         if m and current is not None:
             name, status = m.group("name"), m.group("status")
             msg = fail_detail.get(name, "") if status == "FAILED" else ""
-            current.cases.append(Case(name=name, status=status, message=msg))
+            reason = (m.group("reason") or "").lstrip(", ").strip()
+            current.cases.append(
+                Case(name=name, status=status, message=msg, reason=reason)
+            )
             continue
 
         m = RE_RESULT.match(line)
@@ -174,7 +186,13 @@ def to_junit(runs: list[SuiteRun], suite_name: str) -> str:
                 out.append("    </testcase>")
             elif case.status == "ignored":
                 out.append(f"    <testcase {attrs}>")
-                out.append("      <skipped/>")
+                if case.reason:
+                    # 携带 #[ignore = "原因"] 的文本，使跳过原因可取证
+                    out.append(
+                        f'      <skipped message="{html.escape(case.reason)}"/>'
+                    )
+                else:
+                    out.append("      <skipped/>")
                 out.append("    </testcase>")
             else:
                 out.append(f"    <testcase {attrs}/>")
