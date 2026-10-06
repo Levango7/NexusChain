@@ -19,19 +19,39 @@ import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
- * 最终性投票广播器（ADR-030 M_net 占位实现）。
+ * 最终性投票广播器（ADR-030 M_net）。
  *
  * <p>职责：</p>
  * <ul>
  *   <li>把 {@link Vote} 序列化为可被 P2P 消费的载荷（{@link FinalityVoteCodec}）</li>
- *   <li>通过事件总线广播（{@link FinalityVoteBroadcastEvent}），与现有 gRPC/P2P 解耦</li>
- *   <li>接收端（{@linkplain #onVoteReceived(Vote) 对端投递接口}）反序列化并提交 {@link FinalityGadget}</li>
+ *   <li>节点内分发：事件总线（{@link FinalityVoteBroadcastEvent}）+ {@link VoteListener}</li>
+ *   <li>跨节点分发：{@code sendOverP2P()} 经 {@code PeerServer.broadcast} 推送</li>
+ *   <li>接收端（{@code onVoteReceived(byte[])}）反序列化并提交 {@link FinalityGadget}</li>
  * </ul>
  *
- * <p><b>注意</b>：当前实现使用进程内事件总线作为中继（单节点/测试用），
- * 真正接入 P2P gossip 需等待 proto 工具链（protoc 3.22.2）就位，
- * 见 {@code docs/adr/ADR-031-finality-p2p-integration.md}（下一步 ADR）。
- * 语义已冻结：载荷格式一致，后续仅替换投递机制。</p>
+ * <p><b>更正（2026-10-07 复核）</b>：本类原注释写"当前实现使用进程内事件总线作为中继，
+ * 真正接入 P2P gossip 需等待 proto 工具链（protoc 3.22.2）就位，见
+ * {@code docs/adr/ADR-031-finality-p2p-integration.md}"——两处都已过期：
+ * <ol>
+ *   <li>P2P 投递<b>两侧都已接线</b>：发送侧 {@code broadcast() → sendOverP2P()}
+ *       把投票封装成 {@code Transactions(TransactionType.VOTE)} 复用交易通道
+ *       （见本类 {@code sendOverP2P()}）；接收侧 {@code SyncManager.onTransactions()}
+ *       以 {@link FinalityVoteP2PCodec#isVotePayload(byte[])} 为唯一分流点后回调
+ *       {@code onVoteReceived(byte[])}。"等 protoc 就位"这个前提本身也不成立：
+ *       生成物 {@code NexusChainOuterClass.java} 已直接入库
+ *       （{@code src/main/java/org/nexus/p2p/}），构建侧只有 {@code protobuf-java} 运行时依赖
+ *       （{@code nexus-core/nexus-core/build.gradle:204}），**没有 protobuf 代码生成插件**，
+ *       protoc 从不在构建路径上。</li>
+ *   <li>被引用的那份 ADR 文件名不存在；实际记录在同一编号下：
+ *       {@code docs/adr/ADR-031-nexfinality-engineering-decisions.md}
+ *       （其中"复用 TRANSACTIONS 通道、靠魔数区分投票"即本类的语义代价）。</li>
+ * </ol>
+ *
+ * <p><b>仍然属实的那半句，别读错</b>：{@code peerServer} 为空时 {@code sendOverP2P()} 静默跳过，
+ * 只剩进程内事件总线——而两个测试（{@code FinalityVoteBroadcasterTest}、
+ * {@code FinalityEndToEndIntegrationTest}）用的都是不带 {@code PeerServer} 的两参构造器，
+ * 全仓也没有任何测试触达 {@code onTransactions}/{@code sendOverP2P}。
+ * 也就是说：<b>跨节点真实投递目前无测试覆盖</b>，"已接线"不等于"已验证"。</p>
  */
 @Component
 @ConditionalOnProperty(name = "nexus.consensus.mode", havingValue = "pos")
