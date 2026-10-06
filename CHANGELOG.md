@@ -30,6 +30,15 @@
   `toolchain/targets/target/components`。run 37387904585 两个 job 的 annotation 实测都是
   `Unexpected input(s) 'working-directory'`。`build-and-test` 处早已移除，这两处补齐。
   工具链是全局安装，真正需要目录的 cargo 步骤各自带 `working-directory: mpc-engine`（未受影响）。
+- **拆掉一颗 10-15 会自锁的雷**（`docs/dependency-check-update-policy.md`）：该文件的出口 (a)
+  写着「把 OWASP DC 加入 required checks」，但实测它**早已在 required 列表里**
+  （`branches/master/protection/required_status_checks` 返回 8 条，含 `OWASP Dependency-Check`），
+  而 `security-scan.yml:233-235` 的 `if` 是 `event != pull_request || head.repo == github.repository`。
+  两者叠加的后果是：**10-15 若按出口 (b) 把 `if` 还原成只 `!= pull_request`，PR 上该 required check
+  就永远不会上报，所有 PR 卡在 "Expected — Waiting for status to be reported"**。
+  已在文中补 ⚠ 块写清：走 (b) 必须同批把该 job 移出 required；走 (a) 要处理 fork PR
+  今天就已经会 skip（同一位置卡死）的问题。本 PR 只改文档，不动 branch protection、不动那个 `if`
+  ——**转正还是回退是 10-15 的决策，不替用户做**。
 
 ### Node 运行时 22 → 26 采纳（2026-10-06，提前于官方 LTS 升格日决策）
 

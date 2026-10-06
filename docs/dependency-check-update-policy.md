@@ -142,10 +142,32 @@ key 按 ISO 周轮换）——命中缓存后是**增量更新**，不是重新�
 
 **两条出口（评估后二选一，并把结论写回本文件）**
 
+> **⚠ 2026-10-06 实测更正：前提已经变了，照下面原文执行会把所有 PR 锁死。**
+> 上面 (a) 写「把本 job 加入 required checks」，但**它现在已经在 required 列表里了**——
+> `gh api repos/Levango7/NexusChain/branches/master/protection/required_status_checks`
+> 实测 8 条，含 `OWASP Dependency-Check`（另 7 条：Gitleaks / Trivy fs / SpotBugs /
+> Cargo Audit / Code Hygiene / k6 Smoke / Build & Test）。
+> 而 `security-scan.yml:233-235` 的当前 `if` 是
+> `event != pull_request || head.repo.full_name == github.repository`——
+> **required × 该 job 在 PR 上不报 = GitHub 永远停在 "Expected — Waiting for status to be reported"**，
+> PR 无法合并。由此：
+>
+> - 走 **(b) 回退**（把 `if` 还原成只 `!= pull_request`）时，**必须在同一次操作里把
+>   `OWASP Dependency-Check` 从 required checks 移除**，否则 10-15 之后所有 PR 卡死。
+>   两个动作要么同批做，要么先撤 required 再撤 `if`。
+> - 走 **(a) 保留**时，仍要处理评估项 5：**fork PR 现在同样会 skip**
+>   （`head.repo.full_name != github.repository`），那种 PR 今天就已经会卡在同一个位置。
+> - 本仓历史上已经因这个组合红过一次：PR #51/#52 的 `Trivy Filesystem Scan + SBOM`
+>   在缺 proxy-addr 修复的分支上判红，说明 required 列表是真拦的。
+>
+> 另注：上面「试运行不做的事：不改 branch protection」这句仍然成立——
+> 正因为试运行期间没改 protection，才出现了"required 列表比 workflow 的 if 更宽"的错位。
+
 - **(a) 保留**：去掉 TEMP 标记，并把本 job 加入 required checks —— 这才是「永远上报」的目的
   （在 PR 阶段就拦住 SCA 回归）。加入前先解决评估项 5（fork PR 的 `skipped` 语义）；
 - **(b) 回退**：按 job 注释逐字还原 `if:` 并删掉两步缓存，回到「只在 push/cron 上跑」；
   回退时**必须**在同一处记录「为什么没能成为 required check」，避免下次从头讨论一遍。
+  **并且必须同时把本 job 移出 required checks（见上方 ⚠ 块）。**
 
 **试运行不做的事**：不改 branch protection；不弱化 `failBuildOnCVSS = 9.0f`；不批量豁免。
 
