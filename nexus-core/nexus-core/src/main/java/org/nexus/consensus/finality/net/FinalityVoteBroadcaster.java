@@ -36,7 +36,9 @@ import java.util.concurrent.CopyOnWriteArrayList;
  *   <li>P2P 投递<b>两侧都已接线</b>：发送侧 {@code broadcast() → sendOverP2P()}
  *       把投票封装成 {@code Transactions(TransactionType.VOTE)} 复用交易通道
  *       （见本类 {@code sendOverP2P()}）；接收侧 {@code SyncManager.onTransactions()}
- *       以 {@link FinalityVoteP2PCodec#isVotePayload(byte[])} 为唯一分流点后回调
+ *       先分流验证人集合载荷（{@code ValidatorSetCodec.isValidatorSetPayload}），
+ *       再按 {@code TransactionType.VOTE} +
+ *       {@link FinalityVoteP2PCodec#isVotePayload(byte[])} 判定后回调
  *       {@code onVoteReceived(byte[])}。"等 protoc 就位"这个前提本身也不成立：
  *       生成物 {@code NexusChainOuterClass.java} 已直接入库
  *       （{@code src/main/java/org/nexus/p2p/}），构建侧只有 {@code protobuf-java} 运行时依赖
