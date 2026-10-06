@@ -116,6 +116,14 @@ tools.jackson.core:jackson-databind | CVE-2026-68497 | HIGH | fixed | 3.1.5 | 3.
 - 告警文案里出现的 `com.fasterxml.jackson.core/jackson-databind` 只是 **vendor 别名**，
   我据此误判成 Jackson 2，于是抬了 `2.18.8 → 2.18.10` —— 对这条 CVE **完全无效**；
 - 结果：5 条 open HIGH 仍在，镜像扫描仍 5 红（另出现 `Gitleaks Secret Scan` 红，原因未查）。
+  **2026-10-06 收口**：该项已不再复现——本仓 `workflow_dispatch`（`fetch-depth: 0`，全历史）
+  的 run 37414095658 里 `Gitleaks Secret Scan = success`。仓内可见的处置轨迹是
+  `e1794e14`（08-31，两个已轮换 JWT 密钥从全部历史 blob 替换为 `REDACTED-ROTATED-JWT-SECRET`，
+  重写前 HEAD 备份在 `F:\Nexus\_backup\NexusChain-pre-rewrite.git`）与
+  `7320dc0`（10-01，"gitleaks 豁免根因修复"）。**只记到"现象消失 + 有这两笔处置"为止**，
+  不再往前推"是哪一笔让它变绿"——当时那条红我没有留下日志。
+  仍留在的口径差异是结构性的：`pull_request` 只扫 PR 内 commit、`push` 只扫推送范围，
+  全历史只在 schedule/dispatch 才扫得到，所以"PR 上 gitleaks 绿"不等于历史无泄漏。
 - 来源链（实测 `gradlew :nexus-core:nexus-core:dependencies`）：
   `org.springframework.boot:spring-boot-jackson:4.0.8 → tools.jackson:jackson-bom:3.1.5
   → tools.jackson.core:jackson-databind:3.1.5`，即由 Spring Boot BOM 管理，不是直接依赖。
