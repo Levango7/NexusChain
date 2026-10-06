@@ -97,7 +97,7 @@ total open alerts: 870      （全部 tool=Trivy，全部 most_recent_instance.r
 | **react-router-dom** | 6.30.4 | **6.30.6** | `nexus-explorer/package-lock.json` | 1 | **本 PR 已升**（`frontend/package.json` 声明 `^6.26.0`，属范围内补丁） |
 | react-router | 6.30.4 | 7.18.0 | 根 + `frontend/` 两份 lockfile | 4 | 已随之到 6.30.6；CVE-2026-53669/53666 要 **v7** 才闭合 → 大版本迁移，另案 |
 | @remix-run/router | 1.23.3 | 1.23.4 | 根 lockfile | — | 随 react-router 6.30.6 联动，非独立告警 |
-| libpng16-16t64 | 1.6.48-1+deb13u5 | deb13u6 | 10 个镜像 | 10 | **仓库代码改不到**：基础镜像层。要么等 distroless/`debian13` 出 u6，要么在 Dockerfile 里显式 `apt-get install libpng16-16t64=...` 并纳入构建可复现性评审 |
+| libpng16-16t64 | 1.6.48-1+deb13u5 | deb13u6 | 10 个镜像 | 10 | **仓库代码改不到**：基础镜像层。**2026-10-07 用当日 Trivy DB 实测**：Debian 侧修复版 `1.6.48-1+deb13u6` 已在库里（见 §6），而 `gcr.io/distroless/java17-debian13:nonroot` 仍带 `deb13u5` → 阻塞点从"等 Debian 出补丁"收窄为**等 distroless 同步**；镜像里也没有可用的显式安装路径（distroless 无 apt/shell），所以仓库侧唯一动作是等 tag 刷新后重跑构建 |
 | **com.mchange:c3p0** | 0.12.0 | 0.14.0 | core、gateway 镜像 | 2 | **已由 PR #54 抬到 0.14.0**。来源已查清：`nexus-core/nexus-core/build.gradle:265` **显式声明**（接在他们 0.9.5.4→0.12.0 的既有修复注释后面续追）。实测源码对 `com.mchange` **零 import**——它是 `org.quartz-scheduler:quartz` 的运行时数据源池供给，**不是可删的未使用依赖**（删了是运行时炸，不是编译期炸） |
 | **commons-lang3** | 3.12.0 | 3.18.0 | core、api-gateway | 2 | **已由 PR #54 治根**。来源：全仓三处声明、**两个真值**——`nexus-core/nexus-core/build.gradle:159` 与 `nexus-api-gateway/build.gradle:107` 硬编码 `3.12.0`，而 `nexus-gateway/build.gradle:138` 是无版本声明、由 Boot 4.0.8 BOM 解析成 **3.19.0**。改法是两处去掉硬编码交 BOM（与 gateway 同口径），不是再钉一个新字面量。实测两棵树解析 3.19.0、`3.12.0` 归零 |
 | httpclient5 | 5.5.2 | 5.6.3 | gateway 镜像内 `app/app.jar/BOOT-INF/lib/httpclient5-5.5.2.jar` | 1 | **BOM 层取舍，写法已备好但我不推**（#1732，CVE-2026-64607，MEDIUM）。来源：`nacos-client:3.1.1 → httpclient5:5.4.4 -> 5.5.2`，`spring-boot-dependencies:4.0.8` pom 第 75 行有 `<httpclient5.version>5.5.2</httpclient5.version>` → 覆盖写法是 `ext['httpclient5.version'] = '5.6.3'`（与 PR #14/#15 的 `ext['jackson-2-bom.version']` 同一机制，已验证有效）。**活路径确认**：gateway 默认注册 Nacos（`nexus-gateway/src/main/resources/application.yml:250-251 nacos.enabled: true`，dev compose `NEX_NACOS_ENABLED=${NEX_DEV_NACOS_ENABLED:-true}`，`docker-compose.yml:55`）。**为什么不单方推**：唯一能抓回归的门禁 `Build & Test` 里既没有 Nacos 也没有 Kafka（CI 全文只有一个 `services:` 块 = Flyway 用的 MySQL 8.0，`ci.yml:818`；kind 冒烟 `ci.yml:665` 明确写"Nacos/PG/Redis 等基础设施 kind 内不具备"；性能冒烟 `performance-test.yml:164` 反过来把 Nacos 门控关掉）→ 推上去必然是"全绿但未验证"。要落地就得配一次带 Nacos 的全栈冒烟再合。 |
@@ -249,3 +249,96 @@ gh api "repos/Levango7/NexusChain/code-scanning/alerts?state=open&per_page=100" 
 - 镜像腿的模块在 `most_recent_instance.environment`（形如 `{"module":"nexus-gateway"}`），
   仓库腿的对象在 `most_recent_instance.location.path`。
 - 扫描腿用 `most_recent_instance.analysis_key` 尾段区分 `trivy-docker-scan` / `trivy-fs-scan`。
+
+## 6. `.trivyignore` 豁免清单的时效实测（2026-10-07，本机当日 DB）
+
+此前 §3 结尾那句"835 条无上游修复版本"和一个长期挂着的口头结论——
+「`.trivyignore` 那批豁免的时效性没核验过」——**今天有了硬数据**。
+本机已有 `ghcr.io/aquasecurity/trivy:0.74.0`（与文件头注释用的同一版本），
+当日的 vuln DB 从 `public.ecr.aws/aquasecurity/trivy-db:2` 拉下来
+（默认 `mirror.gcr.io` 在本网络直接 connection refused，这是复现时唯一要改的变量）。
+
+**方法**（两条命令，扫的是两个**在用的运行阶段基础镜像**，不是仓库构建物）：
+
+```bash
+# 注意：mirror.gcr.io 不可达时必须换 DB 源；--input 走 docker save 的 tar，
+#       避免给容器挂 docker.sock。Git Bash 下要 MSYS_NO_PATHCONV=1，否则 /out/... 会被改写成 Windows 路径。
+docker save -o a.tar gcr.io/distroless/java17-debian13:nonroot
+MSYS_NO_PATHCONV=1 docker run --rm \
+  -e TRIVY_DB_REPOSITORY=public.ecr.aws/aquasecurity/trivy-db:2 \
+  -v "$PWD/trivy-cache:/root/.cache/trivy" -v "$PWD:/out" \
+  ghcr.io/aquasecurity/trivy:latest --quiet image --input /out/a.tar \
+  --format json --output /out/scan.json --vuln-type os --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+```
+
+取证的镜像与日期（数字是**条件量**，换一天 DB 就可能不同）：
+`gcr.io/distroless/java17-debian13:nonroot` = debian **13.6** / `JAVA_VERSION=17.0.20.1`；
+`debian:trixie-slim` = debian **13.7**（构建于 2026-10-05）；扫描时刻 2026-10-06T18:25Z。
+
+### 6.1 结论一：没有一条豁免在掩盖"其实能修"的漏洞
+
+25 条逐条对表：**仍被命中且上游已有 Fixed Version 的条目 = 0**。
+文件头的处置原则（只豁免"上游无可用修复版本"的系统包）在 2026-10-07 这天**成立**。
+这同时说明 §3 那句"835 条无修复版本"的方向是对的，但它跟着 DB 日期漂——
+见 6.3，同一批里已经有三项变绿了。
+
+### 6.2 结论二：13 条豁免在两个在用镜像里都命中不了（作用域已失效）
+
+| 命中的那 12 条 | 两处都无命中的 13 条 |
+|---|---|
+| java13：`66046 / 76956 / 76957 / 93990`（libexpat1 四条）、`76642 / 78408 / 78409 / 78410`（util-linux 四条，两侧都命中）<br>trixie：`9538`、`54369`、`69720`、上面那四条 util-linux | `45853`(zlib)、`53613`、`53615`、`13221`、`42496`、`8376`、`42497`、`48962`、`57432`、`57433`、`41992`(gzip)、`84782`(libssl3)、`2025-66017`(cggmp21) |
+
+**为什么恰好是这 13 条**：它们的注释都钉在 **`debian:bookworm-slim`（Rust 模块镜像）** 这一节，
+而 `mpc-engine/Dockerfile:41`、`zk-groth16-service/Dockerfile:14` 记着 2026-10-01
+已把运行阶段整批迁到 `debian:trixie-slim`（治 `CVE-2026-103111`）。bookworm 版本的
+perl-base / gzip / zlib1g / libacl1 / libtinfo6 / libssl3 在 trixie 里要么不存在、
+要么换了包名（`libssl3 → libssl3t64`），所以这些豁免**已无对象**。
+`CVE-2026-84782` 尤其讽刺：它是 **10-01 同一天**加进来的（取证写的是 "mpc-engine:scan (debian 12.15)"），
+而 12.15 正是同批被 trixie 换掉的那个镜像。
+
+**两条如实的限制**：
+1. `CVE-2025-66017`（cggmp21 crate）**不在此实测覆盖范围内**——我用的是 `--vuln-type os`，
+   应用层 Rust 依赖要走 `cargo audit`/`--vuln-type vulnerability`。它出现在"无命中"列里
+   **是我扫描口径的产物，不是豁免失效的证据**，别据此删它。
+2. 扫基础镜像 ≠ 扫构建产物。Rust 运行镜像是 `trixie-slim` + COPY 二进制 + `busybox` dir-builder
+   （`mpc-engine/Dockerfile:51`、`:49`），OS 包层与 `trixie-slim` 一致，但对 `busybox`
+   这一层本次没单独核。
+
+**因此本轮不删条目**（本仓有过前科：`45853` 在 09-05 迁移批被当"作用域不适用"删掉，
+CI run 33966509897 又实证它在 bookworm-slim 上仍匹配而补回）。改做两件更稳的事：
+在失效条目注释上标日期与实测结论，**并把"豁免是否还有效"变成 CI 可见的复核**（见 §7）。
+
+### 6.3 结论三：同一天里已有 3 条从"等上游"变成"等镜像刷新"
+
+未豁免、但在当日 DB 里**已有修复版**的（即基础镜像落后一版）：
+
+```
+libc6 / libc-bin @ 2.41-12+deb13u3   CVE-2026-5450、CVE-2026-5928  → 2.41-12+deb13u4
+libpng16-16t64 @ 1.6.48-1+deb13u5    CVE-2026-46675               → 1.6.48-1+deb13u6
+```
+
+`trixie-slim`（13.7）侧为 **0 项**——它比 distroless 的 13.6 新，已经带上 u4。
+所以这三条的阻塞点是 **distroless 同步节奏**，不是 Debian 补丁；
+对本仓的意义是：等 `java17-debian13` 刷新后重跑构建即可自动消掉，
+不需要任何人现在改代码。反过来也印证 §3 的口径必须带日期：**"无上游修复版本"是会过期的判断**。
+
+## 7. 把"豁免已失效"变成 CI 可见（本节所述复核已落地为 `trivyignore-staleness` job）
+
+6.2 的根因不是有人写错，而是**每条豁免的删除条件（"Debian 发布修复后移除"）在 CI 里没有任何观测点**：
+镜像扫描的两步都带 `trivyignores: .trivyignore`，被豁免的 finding 根本不出现，
+所以"上游出了补丁"这件事在绿色流水线里是隐形的。
+
+已补的观测点（`.github/workflows/security-scan.yml` 的 **`trivyignore-staleness`** job +
+`scripts/check-trivyignore-staleness.py`）：对两个**在用的运行阶段基础镜像**各扫一次
+（**不带白名单**，`--vuln-type` 默认覆盖 OS 与库层），把 `.trivyignore` 逐条对表后报
+`::warning::`——「已出现 Fixed Version → 该移除豁免」/「本次所有被扫镜像都无命中 → 作用域可能已失效」。
+按 6.2 的现状，它会立刻亮出那 13 条失效标记。
+
+三点设计取舍都写在脚本头注释里，复述于此以免后人不解：
+1. **不阻断**（`exit 0`）：豁免失效不是本仓的代码缺陷，把它做成红门禁 = 让上游 DB 的波动
+   随机挡住合并（这与 Corps 那次"critical 红因其实是公告库更新"同型，属自伤）；
+2. **扫浮动 tag 而非构建产物**：`FROM gcr.io/distroless/java17-debian13:nonroot`、
+   `FROM debian:trixie-slim` 与 Dockerfile 用的是同一个浮动引用；
+   **钉 digest 会把这个 job 存在的意义冻结掉**（它就是要看上游有没有追上）；
+3. **它管不到应用层依赖**（如 `CVE-2025-66017` 的 cggmp21 crate）——那类豁免仍由
+   cargo-audit 那条腿负责，脚本对"无命中"的措辞因此刻意留了余地。
