@@ -186,43 +186,28 @@ bootRun {
 
 test {
     useJUnitPlatform {
-        // CI 修复（task #57）：排除 @Tag("integration") 标注的集成测试，
-        // 这些测试需要 Nacos/Kafka/Redis 等运行中的基础设施服务，
-        // 在 CI 环境中因缺少这些服务而失败，不属于代码缺陷。
-        // 集成测试通过 integrationTest task 单独执行。
+        // 集成测试交给 integrationTest 单独执行，目的是让 `./gradlew check` 保持快。
+        // 不要照抄旧注释理解成「它们需要 Nacos/Kafka/Redis 所以必红」——实测不成立：
+        // run 37387904585（master ebd9949）的 build-and-test job 没有任何 services: 容器，
+        // 该 10 类 / 67 用例照样全绿（H2 + @MockitoBean 即可装配整个 GatewayApplication）。
         excludeTags 'integration'
     }
     finalizedBy jacocoTestReport
 }
 
-// CI 修复（task #57）：集成测试 task —— 只运行 @Tag("integration") 标注的测试。
-// 这些测试需要 Nacos/Kafka/Redis 等基础设施服务，在 CI 中默认不执行。
-// 可通过 `./gradlew :nexus-gateway:integrationTest` 手动触发，
-// 或在具备基础设施的环境中运行。
+// 集成测试 task —— 只运行 @Tag("integration") 标注的测试，CI 里**阻断执行**
+// （见 .github/workflows/ci.yml「Gateway 集成测试」步骤）。
+// 2026-10-06 收敛：这里原本还有一个 contextSmokeTest（= 本任务去掉 @Tag("knownRed")），
+// 配一条 continue-on-error 的全量观察步。knownRed 标签清空后两者选择集完全相同
+// （同为 10 类 / 67 用例），等于同一段测试在 CI 跑两遍、第二遍的结果不判定。
+// 现只保留本任务作为唯一门禁。将来若确有已知红用例，用 @Disabled("原因 + 工单号")
+// 承载——它会在 CI 汇总里以 skipped 计数可见，而不是"跑了但没人看"。
 task integrationTest(type: Test) {
     useJUnitPlatform {
         includeTags 'integration'
     }
     shouldRunAfter test
     // 集成测试不强制覆盖率门禁（jacocoTestReport 仍生成但不阻断）
-    jacoco {
-        enabled = true
-    }
-}
-
-// 上下文冒烟（CI 阻断用）：@SpringBootTest 全上下文装配，但只跑**不依赖外部中间件**的那部分。
-// 与 integrationTest 的唯一差别是 excludeTags 'knownRed'——该标签是"已知红"用例的隔离机制。
-// 原挂在该标签上的三个用例（confirm/refund 乐观锁 500，§8.1.2）已于 2026-10-05 修复并摘除标签；
-// excludeTags 'knownRed' 保留作为后续已知红用例的兜底通道，无需改本任务或 CI 配置。
-// 存在理由：test 任务 excludeTags 'integration' + CI 步骤 continue-on-error 两道兜底，
-// 使"gateway 装配不出来 / 端点装配后才 500"这类缺陷在 CI 上完全不可见
-// （先例：settlement risk.* 三包未入仓储扫描白名单 → 启动即崩，存活约 4 天且全绿）。
-task contextSmokeTest(type: Test) {
-    useJUnitPlatform {
-        includeTags 'integration'
-        excludeTags 'knownRed'
-    }
-    shouldRunAfter test
     jacoco {
         enabled = true
     }

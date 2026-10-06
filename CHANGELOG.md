@@ -4,6 +4,33 @@
 
 ## [2.51.3] - 2026-10-04
 
+### 门禁收敛：gateway 集成测试合并为单条阻断 + 台账口径修正（2026-10-06）
+
+- **合并重复门禁**：`ci.yml` 原有两步——`contextSmokeTest`（阻断）+ `integrationTest`
+  （`continue-on-error: true` 观察位）。`knownRed` 标签清空后两者选择集**完全相同**：
+  run 37387904585 实测各自 10 类 / 67 用例 / 0 红（解析 `build/test-results/{contextSmokeTest,integrationTest}/TEST-*.xml`）。
+  即同一段测试在 CI 跑两遍（约 2 分钟），且第二遍结果不判定。现只留一条阻断的
+  `:nexus-gateway:integrationTest`，并删除 `nexus-gateway/build.gradle` 里的
+  `contextSmokeTest` 任务。将来若确有已知红用例，用 `@Disabled("原因 + 工单号")`
+  承载（CI 汇总里以 skipped 可见），不再恢复"跑了但不判定"的观察位。
+- **纠正三条被实测推翻的说法**（都来自我自己早先写的注释/文档）：
+  1. `ci.yml`「contextSmokeTest 实测 7 类 / 47 用例」→ 实际 10 类 / 67 用例。
+  2. `ci.yml` 与 `build.gradle`「集成测试需 Nacos/Kafka/Redis，缺服务而红，不属于代码缺陷」
+     → 该 job 无 `services:` 容器（`ci.yml` 里唯一的 services 块在第 818 行的别的 job），
+     67 用例照样全绿；当初 3 例红是 product 侧 TCC 事务边界缺陷（PR #40 已修），**是代码缺陷**。
+  3. `nexus-gateway/README.md`「211 个测试类 / 约 2,480 个用例」→ 实测单元 241 类 / 2,442 用例、
+     集成 10 类 / 67 用例。
+- **账本回写**：`docs/audit/project-assessment-report.md` 里「signing-service 有 3 例 MPC 多主机
+  环境测试失败待修」已被 PR #43（传输感知判据）解决——本次同一 run 的 XML 显示
+  `MpcMultiHostEngineTest` 2 例 + `MpcMultiHostTlsTest` 1 例为 **skipped**、
+  `MpcMultiHostDeploymentTest` 7 例 passed、0 failure；「8 个模块无测试结果落盘」也已过期
+  （13 个 Gradle 模块均有 XML）。同时补一条警示：CI 上是 skipped，**不等于多主机链路被验证过**。
+- **消除两条长期 CI 告警**：`mpc-java-cluster-e2e` 与 `mpc-kind-smoke` 的
+  `dtolnay/rust-toolchain` 步骤仍带 `working-directory`，而该 action 的有效输入只有
+  `toolchain/targets/target/components`。run 37387904585 两个 job 的 annotation 实测都是
+  `Unexpected input(s) 'working-directory'`。`build-and-test` 处早已移除，这两处补齐。
+  工具链是全局安装，真正需要目录的 cargo 步骤各自带 `working-directory: mpc-engine`（未受影响）。
+
 ### Node 运行时 22 → 26 采纳（2026-10-06，提前于官方 LTS 升格日决策）
 
 - **变更**：`ci.yml` 两处 `node-version: '22'` → `'26'`（Explorer Frontend 段、
