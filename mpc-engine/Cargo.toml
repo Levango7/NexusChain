@@ -78,7 +78,11 @@ round-based = { version = "0.1", features = ["dev"] }
 # 内部仍绑定 0.20 API，会导致版本分裂。故在 multi-party-ecdsa 升级至支持
 # secp256k1 0.29+ 的版本之前，此处保持 0.20 不变。
 # REQ-26/P2 延后：需 multi-party-ecdsa 上游发布兼容 secp256k1 0.29+ 的新版本后方可升级，
-# 当前 0.8.1 为最新可用版本。详见 spec.md REQ-26。
+# 当前 0.8.1 为最新可用版本。
+# 勘误（2026-10-07）：此处原文写"详见 spec.md REQ-26"，但本仓并不跟踪 spec.md
+# （`git ls-files | grep -E '(^|/)spec\.md$'` 为空，`git grep REQ-26 -- docs` 也为空）——
+# REQ-26 是审计会话里的编号，不是可查的工单。升级前置条件以上述注释为准，别再按一个
+# 不存在的文档去找它。
 secp256k1 = { version = "0.20", features = ["global-context"] }
 hex = "0.4"
 sha2 = "0.9"

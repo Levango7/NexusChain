@@ -7,7 +7,7 @@
 ### SCA 落地：commons-lang3 / c3p0 / x/crypto 三处来源查证后修复 + 一条密钥残留清除（2026-10-06）
 
 先跑 `gradlew …:dependencies --configuration runtimeClasspath` 把来源查清，再决定改法
-（不等修复的留给决策，理由见 `docs/audit/2026-10-06-open-alert-triage.md`）：
+（不等修复的逐条给了前置条件，见本条末尾「未做」段——这里不引用尚未入库的文档路径）：
 
 - **`org.apache.commons:commons-lang3`**：全仓三处声明、**两个真值**——
   `nexus-core/nexus-core/build.gradle:159` 与 `nexus-api-gateway/build.gradle:107` 硬编码 `3.12.0`，
@@ -42,11 +42,26 @@ gateway **241 类 / 2442 用例 / 0 失败 / 0 skip**；`./gradlew -p nexus-api-
 → BUILD SUCCESSFUL（28s），**2 类 / 24 用例 / 0 失败**；
 `go build ./... = 0`、`go vet ./... = 0`、`go test ./nexus/ = ok`（0.707s）。
 
-**未做（留决策，前置条件写进分诊文档）**：`httpclient5`（BOM 管，nacos-client 索要 5.4.4
-被 BOM 抬到 5.5.2，抬到 5.6.3 等于让 nacos 跑在 Boot 未测过的 HTTP 客户端上）、
-`at.yawk.lz4:lz4-java`（kafka-clients 4.1.2 的传递依赖，要动就得动 kafka-clients）、
-`qs 6.16.0`（express 写死 `~6.15.1`，要 `overrides`）、`moment`/`brace-expansion`
-（`src/main/java/**/tools/` 下的 yarn.lock，需 yarn 重解析）、5 个 Rust major（密码学路径）。
+**未做（每条都给了判定，不再是"待拍板"；2026-10-07 复核后收口）**：
+
+- `httpclient5` 5.5.2→5.6.3、`at.yawk.lz4:lz4-java` 1.10.1→1.11.1：**是活路径**
+  （gateway `application.yml:250-251` 默认 `nacos.enabled=true`；
+  `deploy/kafka/kafka-client-config.yaml:59` 配了 `compression.type: lz4`）。
+  覆盖写法已备好（BOM 有 `<httpclient5.version>`，lz4 无属性行→抬 `kafka.version` 或显式声明该坐标）。
+  **不推的理由是验证面不是判定**：CI 唯一的 `services:` 是 Flyway 用的 MySQL，没有 Nacos/Kafka，
+  推上去必然"全绿但未验证"→ 需先排一次带 Nacos + Kafka 的全栈冒烟。
+- `qs` 6.15.3→6.16.0（4 条）：**判定不可达，不做 `overrides`**。两个 CVE 分别要
+  `qs.parse(comma+throwOnLimitExceeded)` 与 `qs.stringify` 处理攻击者可控键；本仓零处直接调用 `qs`、
+  零处 `query parser` 覆盖，唯一两个消费者（express 4.22.2 / body-parser 1.20.6）只做 `parse`
+  且不传这些选项；且 explorer/demo 这两棵 npm 树不进任何镜像。
+- `moment` 2.30.1→2.31.0、`brace-expansion` 1.1.20→1.1.21（3 条）：**告警记在一棵没人安装的树上**。
+  该工具（`src/main/java/**/tools/cmd-monitor`）的构建路径是 `npm install` 且无 `package-lock.json`，
+  npm 不读 `yarn.lock`；registry 上这两个包的最新值恰是告警要求的修复版。手改 v1 lock 只抹记账、不改产物。
+- 5 个 Rust major（`secp256k1` / `rand` / `curve25519-dalek` / `serde_with` / `tracing-subscriber`）：
+  **上游版本集合阻塞**——反向依赖实测父包全是 `curv-kzen` / `cggmp21` 系 / `ark-relations`
+  （根因见 `mpc-engine/Cargo.toml:27`），仓库侧无可操作点。
+  另：`mpc-engine/Cargo.toml` 原注释把 secp256k1 待办挂在"spec.md REQ-26"上，
+  而本仓从不跟踪 spec.md（本次已就地勘误，改为以前置条件注释为准）。
 
 ### Node 运行时 22 → 26 采纳（2026-10-06，提前于官方 LTS 升格日决策）
 
