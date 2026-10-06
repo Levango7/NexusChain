@@ -93,14 +93,21 @@ master 631357a（PR #8 Boot4 兼容批）合并后，Security Scan 出现 3 个�
   4. init.sh v3 全绿（含读回校验）
   5. seed-perf-credentials 跑通并打一发真实 k6 冒烟（10g 实证）
 - ~~产出：docs/deploy/fullstack-drill-report-2026-09-14.md（增量报告）~~
-  **2026-10-07 复核：该产出从未入库，Phase B 按记录口径属"未闭环"**。取证三条：
+  **2026-10-07 复核：该产出从未入库，Phase B 按记录口径属"未闭环"**。取证四条：
   1. `git log --all --oneline -- docs/deploy/fullstack-drill-report-2026-09-14.md` **0 命中**
      （任何分支都没有新增/删除记录，即从未写过，不是"写了被删"）；
   2. 本仓唯一的演练报告是 `docs/deploy/fullstack-drill-report-2026-09-12.md`，
      那是**上一次**演练（六个发现），不含上面 1–5 项验收；
   3. 五项验收的关键词（`seed-perf-credentials` / `init.sh v3` / `emptyDir` /
      `Discovery Client` / `Feign 服务名互调`）在 `CHANGELOG.md` 里**零命中**，
-     在 docs 下只出现在本 ADR 自身的计划文字里。
+     在 docs 下只出现在本 ADR 自身的计划文字里；
+  4. **更深一层：这套演练资产根本不在版本控制里**，所以"重跑一次"在当前环境不可执行。
+     前置那行写的 `F:\Nexus\build\`（`Dockerfile.java-drill`、`fullstack-drill-{infra,gateway,services}.yaml`、
+     `nacos-init-v3.sh`、探测脚本组——清单见 `docs/deploy/fullstack-drill-report-2026-09-12.md:100-106`）
+     在本机**已不存在**（`ls F:/Nexus/build/` = No such file or directory），而
+     `git ls-files | grep -iE "drill"` 只有 `deploy/kind/{README.md,kind-config.yaml}` 与这份 09-12 报告。
+     即：**Phase B 未闭环的直接原因就是它的工具链是一次性外部目录**——先把它入库，
+     "重跑演练"才成为任何人可执行的动作。
   这不是"文档没跟上代码"，而是**验证闭环没落**：第 2 项（gateway→signing 真实 Feign 互调）
   本 ADR 自己写明是 Boot4 批的最终验收标尺，此前只验到"编译 + 启动"层。
   若某次会话真跑过演练，请把结果补成 09-14 之后的增量报告并在本行标注，
