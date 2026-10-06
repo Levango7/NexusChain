@@ -12,7 +12,7 @@ use ark_std::rand::{rngs::StdRng, SeedableRng};
 use ark_snark::SNARK;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// 存储目录环境变量。
 const SETUP_DIR_ENV: &str = "GROTH16_SETUP_DIR";
@@ -41,6 +41,33 @@ fn fingerprint_dir(fp: &str) -> PathBuf {
 
 fn pk_path(fp: &str) -> PathBuf { fingerprint_dir(fp).join("pk.bin") }
 fn vk_path(fp: &str) -> PathBuf { fingerprint_dir(fp).join("vk.bin") }
+
+/// 同进程内的临时文件序号（与 pid 一起保证并发写不撞同一个 .tmp）。
+static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// 原子落盘：写同目录临时文件 → 设权限 → `rename` 覆盖目标。
+///
+/// 为什么不能直接 `fs::write`：`load_or_setup` 用 `pk_file.exists()` 判定"setup 已就绪"，
+/// 而 `fs::write` 是就地截断+写入。进程在写入中途被 kill（CI 超时 / OOM / Ctrl-C，
+/// pk 有 2.6 KB 但同电路更大时是 MB 级）就会留下一个"存在但截断"的 pk.bin，
+/// 之后每次加载都 `deserialize_uncompressed` 失败——且不会自愈，因为存在性检查
+/// 永远命中，除非人工删文件。rename 在同一文件系统内是原子的：观察者要么看到旧内容
+/// 要么看到完整新内容，不存在半截态。
+fn atomic_write(path: &Path, bytes: &[u8], mode: u32) -> eyre::Result<()> {
+    let seq = TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mut tmp_os = path.as_os_str().to_os_string();
+    tmp_os.push(format!(".tmp-{}-{}", std::process::id(), seq));
+    let tmp = PathBuf::from(tmp_os);
+    // 权限先于 rename：文件一经可见就是最终权限（pk 需 0600，否则有一个可被
+    // 同机其他用户读到的窗口）。
+    fs::write(&tmp, bytes).map_err(|e| eyre::eyre!("cannot write setup temp file {:?}: {e}", tmp))?;
+    let _ = fs::set_permissions(&tmp, fs::Permissions::from_mode(mode));
+    if let Err(e) = fs::rename(&tmp, path) {
+        let _ = fs::remove_file(&tmp);
+        return Err(eyre::eyre!("cannot persist setup file {:?}: {e}", path));
+    }
+    Ok(())
+}
 
 /// 幂等 setup：磁盘已有则加载，否则确定性生成并落盘（0700 权限）。
 pub fn load_or_setup<E: Pairing>(circuit_json: &str, circuit: impl Clone + ark_relations::r1cs::ConstraintSynthesizer<E::ScalarField>)
@@ -80,10 +107,8 @@ where
     pk.serialize_uncompressed(&mut pk_buf)?;
     let mut vk_buf = Vec::new();
     vk.serialize_uncompressed(&mut vk_buf)?;
-    fs::write(&pk_file, pk_buf)?;
-    fs::write(&vk_file, vk_buf)?;
-    let _ = fs::set_permissions(&pk_file, fs::Permissions::from_mode(0o600));
-    let _ = fs::set_permissions(&vk_file, fs::Permissions::from_mode(0o644));
+    atomic_write(&pk_file, &pk_buf, 0o600)?;
+    atomic_write(&vk_file, &vk_buf, 0o644)?;
     tracing::info!(fingerprint = %fp, "setup generated (deterministic) and persisted");
     Ok((pk, vk))
 }
@@ -158,10 +183,8 @@ pub fn import_external_setup(fp: &str, pk_hex: &str, vk_hex: &str) -> eyre::Resu
     let _ = fs::set_permissions(&dir, fs::Permissions::from_mode(0o700));
     let pk_bytes = hex::decode(pk_hex).map_err(|e| eyre::eyre!("bad pk hex: {e}"))?;
     let vk_bytes = hex::decode(vk_hex).map_err(|e| eyre::eyre!("bad vk hex: {e}"))?;
-    fs::write(pk_path(fp), &pk_bytes)?;
-    fs::write(vk_path(fp), &vk_bytes)?;
-    let _ = fs::set_permissions(&pk_path(fp), fs::Permissions::from_mode(0o600));
-    let _ = fs::set_permissions(&vk_path(fp), fs::Permissions::from_mode(0o644));
+    atomic_write(&pk_path(fp), &pk_bytes, 0o600)?;
+    atomic_write(&vk_path(fp), &vk_bytes, 0o644)?;
     tracing::info!(fingerprint = %fp, "external ceremony setup imported ({} bytes pk, {} bytes vk)",
         pk_bytes.len(), vk_bytes.len());
     Ok(())
@@ -175,4 +198,39 @@ where
     let mut buf = Vec::new();
     ark_serialize::CanonicalSerialize::serialize_uncompressed(pk, &mut buf)?;
     Ok(hex::encode(buf))
+}
+
+#[cfg(test)]
+mod atomic_write_tests {
+    use super::*;
+
+    /// 原子写的两条契约：读回必等于写入内容、且不留残余临时文件。
+    /// 用 `temp_dir()` 下的独立子目录，不碰 `groth16-setup/` 里入库的仪式产物。
+    #[test]
+    fn atomic_write_is_complete_and_leaves_no_temp() {
+        let dir = std::env::temp_dir().join(format!("nexus-zk-atomic-{}", std::process::id()));
+        fs::create_dir_all(&dir).expect("create temp test dir");
+        let target = dir.join("payload.bin");
+
+        for round in 0..32usize {
+            let payload: Vec<u8> = (0..(4096 + round * 64)).map(|i| (i % 251) as u8).collect();
+            atomic_write(&target, &payload, 0o600).expect("atomic_write");
+            let read_back = fs::read(&target).expect("read back");
+            assert_eq!(
+                read_back, payload,
+                "第 {} 轮读回内容与写入不一致，原子写契约被破坏",
+                round
+            );
+        }
+
+        let leftovers: Vec<String> = fs::read_dir(&dir)
+            .expect("read test dir")
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains(".tmp-"))
+            .collect();
+        assert!(leftovers.is_empty(), "临时文件未随 rename 清理：{:?}", leftovers);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
 }
