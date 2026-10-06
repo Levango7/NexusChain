@@ -29,6 +29,29 @@
   `resolved` 改写成镜像域名（镜像域名进仓会让 CI/其他环境的 `npm ci` 依赖该镜像可达）。
   本批 lockfile 用 `--registry=https://registry.npmjs.org` 生成，`resolved` 全部保持官方域名。
 
+### open 告警分诊台账入库 + explorer react-router 升到 6.30.6（2026-10-06）
+
+- 新增 `docs/audit/2026-10-06-open-alert-triage.md`：Security tab 现存 **870 条 open
+  Trivy 告警**（docker 腿 849 / fs 腿 21；MEDIUM 532 / LOW 323 / UNKNOWN 15），
+  去重后只有 **149 个 (包, CVE) 发现 / 92 个 CVE**——平均每条被 12 个镜像各记一次，
+  仅 `libc6` + `libc-bin` 就占 504 条（58%）。**835 条上游尚无修复版本**，
+  35 条有修复版本，且**全部不阻断**（阻断腿只看 CRITICAL/HIGH）。逐族处置见该文件 §3。
+  同时记录两处结构性问题：SARIF 未按 severity 收敛导致噪声压过信号；
+  `nexus-explorer` 与 `nexus-explorer/frontend` **两份 lockfile 已漂移**
+  （同一依赖 react-router 一个 6.30.4、另一个 6.30.6）。
+- 账本 `project-assessment-report.md` §7.2 表后补上该实测口径。
+- 依赖：`nexus-explorer/package-lock.json` 的 react-router / react-router-dom
+  6.30.4 → 6.30.6（`frontend/package.json` 声明 `^6.26.0`，范围内补丁；
+  `@remix-run/router` 随之 1.23.3 → 1.23.4）。闭 CVE-2026-53668；
+  CVE-2026-53669/53666 需 react-router v7，属大版本迁移，另案。
+- 本机验证：`npm ci` exit 0，explorer 9 条门禁逐条 exit 0
+  （frontend format:check / lint / test:coverage 14 files passed / build /
+  verify:build / verify:contrast，backend typecheck / lint / build）。
+- **明确不做的**（理由与前置条件都写进分诊文档，而不是默默留在告警池里）：
+  `qs` 6.15.3→6.16.0（express 写死 `~6.15.1`，需 `overrides` 改写上游约束）、
+  4 个 Java 传递依赖（先跑 dependency tree 定来源）、
+  5 个 Rust major（密码学路径，不能只改数字）、两处 vendored yarn.lock（需 yarn 重解析）。
+
 ### Node 运行时 22 → 26 采纳（2026-10-06，提前于官方 LTS 升格日决策）
 
 - **变更**：`ci.yml` 两处 `node-version: '22'` → `'26'`（Explorer Frontend 段、

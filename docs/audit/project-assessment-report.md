@@ -639,6 +639,17 @@ NexusChain 是一个**基于自研区块链的支付编排平台（Payment Orche
 | 依赖更新 | Dependabot | 每周 | 创建 PR | 自动 PR + label |
 | Issue 分诊 | GitHub Issue 自动创建 | 扫描后 | SLA 跟踪 | label + 去重 |
 
+> **Security tab 的真实负载（2026-10-06 实测，见
+> [`2026-10-06-open-alert-triage.md`](2026-10-06-open-alert-triage.md)）**：上表两条
+> "SARIF → Security tab" 腿以 `CRITICAL,HIGH,MEDIUM,LOW` 全量上传，master 上现存
+> **870 条 open 告警**，去重后其实只有 **149 个 (包, CVE) 发现 / 92 个 CVE**——平均每条被
+> 12 个镜像各记一次，`libc6` + `libc-bin` 两个 Debian 系统包就占 504 条（58%）。
+> 其中 **835 条上游尚无修复版本**、只有 **35 条有可用修复版本**，且**全部不阻断 CI**
+> （阻断腿只看 CRITICAL/HIGH）。此前会话里"只剩 4 条 open medium"的口径是错的——
+> 当时只读了 API 的第一页就下了总数结论。
+> 逐族处置、以及两处结构性问题（噪声压过信号、explorer 存在两份已漂移的 lockfile）
+> 记在分诊文档里。
+
 ### 7.3 依赖管理
 
 表：Dependabot 配置表（源自 .github/dependabot.yml，142 行）
