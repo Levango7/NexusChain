@@ -4,6 +4,50 @@
 
 ## [2.51.3] - 2026-10-04
 
+### SCA 落地：commons-lang3 / c3p0 / x/crypto 三处来源查证后修复 + 一条密钥残留清除（2026-10-06）
+
+先跑 `gradlew …:dependencies --configuration runtimeClasspath` 把来源查清，再决定改法
+（不等修复的留给决策，理由见 `docs/audit/2026-10-06-open-alert-triage.md`）：
+
+- **`org.apache.commons:commons-lang3`**：全仓三处声明、**两个真值**——
+  `nexus-core/nexus-core/build.gradle:159` 与 `nexus-api-gateway/build.gradle:107` 硬编码 `3.12.0`，
+  而 `nexus-gateway/build.gradle:138` 是无版本声明、由 Boot 4.0.8 BOM 解析成 **3.19.0**。
+  Trivy 报的 CVE-2025-48924（修复线 3.18.0）正是那两处硬编码带进 core / api-gateway 镜像的。
+  修法取"去掉硬编码、交 BOM 管"（与 gateway:138 同一口径），而不是把字面量再钉一个新数字——
+  钉数字下次还得手工跟。实测两处均解析为 `3.19.0`，两棵依赖树里 `3.12.0` 归零。
+  api-gateway 是 composite build（独立构建根），确认其 `plugins {}` 里有
+  `org.springframework.boot` 4.0.8 + `io.spring.dependency-management`，BOM 可用才这么改。
+- **`com.mchange:c3p0`**：`nexus-core/nexus-core/build.gradle:265` 从 0.12.0 → **0.14.0**
+  （Trivy 给的修复线；这是他们既有安全修复链的续追——原注释已记 0.9.5.4→0.12.0 治 CVE-2026-27830）。
+  同时查清一件事：**源码里对 `com.mchange` 零 import**（实测 `git grep`），它是
+  `org.quartz-scheduler:quartz` 的运行时数据源池供给——**不能当"未使用依赖"删**，
+  删了是运行时炸不是编译期炸。这点写进注释防止下一个人误删。
+- **`golang.org/x/crypto`**：`nexus-sdk/go` v0.55.0 → **v0.56.0**（闭 CVE-2026-78662 / 56855）。
+  **代价要说清**：x/crypto v0.56.0 自身 `go.mod` 声明 `go=1.26.0`，`go get` 因此把本模块的
+  go 指令从 1.25.0 抬到 **1.26.0**。本仓 CI 的 `SDK Go regression` 步骤**没有任何 setup-go**
+  （实测 `git grep setup-go .github/workflows/` 零命中），用的是 runner 预装 Go——
+  预装版本若更低会走 GOTOOLCHAIN 自动下载（多一次网络拉取），而"Go SDK 的最低版本承诺"
+  也被顺带抬高。若不接受这个代价，退路是留在 0.55.0 并把那两条 MEDIUM 挂账
+  （同包另有一条 GO-2026-5932 **上游无修复版本**，升不升都在）。
+- **`nexus-core/.../util/JWTUtil.java:149-155`**：删掉一段**注释掉的 main 演示块**，
+  里面写死了一枚 2019-02 的示例 JWT。它长期挂着 code-scanning 告警 #138（Trivy `jwt-token`
+  规则，MEDIUM），也是 870 条 open 里**唯一一条非依赖类**告警。
+  删注释块是零行为变更（实测 `compileJava` BUILD SUCCESSFUL）。
+  **注意：这不等于密钥消失**——该 token 仍在 git 历史里，本次只是让在用源码不再携带它、
+  并清掉那条永久告警。当年那把 HS256 签名 key 是否还在任何环境使用，属轮换决策，留给主导方。
+
+**验证（本机，全部实际执行）**：`:nexus-core:nexus-core:test` + `:nexus-gateway:test`
+→ BUILD SUCCESSFUL（5m23s），逐棵解析 XML：core **148 类 / 1511 用例 / 0 失败 / 31 skip**、
+gateway **241 类 / 2442 用例 / 0 失败 / 0 skip**；`./gradlew -p nexus-api-gateway test`
+→ BUILD SUCCESSFUL（28s），**2 类 / 24 用例 / 0 失败**；
+`go build ./... = 0`、`go vet ./... = 0`、`go test ./nexus/ = ok`（0.707s）。
+
+**未做（留决策，前置条件写进分诊文档）**：`httpclient5`（BOM 管，nacos-client 索要 5.4.4
+被 BOM 抬到 5.5.2，抬到 5.6.3 等于让 nacos 跑在 Boot 未测过的 HTTP 客户端上）、
+`at.yawk.lz4:lz4-java`（kafka-clients 4.1.2 的传递依赖，要动就得动 kafka-clients）、
+`qs 6.16.0`（express 写死 `~6.15.1`，要 `overrides`）、`moment`/`brace-expansion`
+（`src/main/java/**/tools/` 下的 yarn.lock，需 yarn 重解析）、5 个 Rust major（密码学路径）。
+
 ### Node 运行时 22 → 26 采纳（2026-10-06，提前于官方 LTS 升格日决策）
 
 - **变更**：`ci.yml` 两处 `node-version: '22'` → `'26'`（Explorer Frontend 段、
