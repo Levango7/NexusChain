@@ -40,15 +40,41 @@ total open alerts: 870      （全部 tool=Trivy，全部 most_recent_instance.r
 
 ## 2. 按记录对象
 
+镜像腿（`trivy-docker-scan`，849 条，按 `environment.module` 计）：
+
 ```
 121  mpc-engine            121  zk-groth16-service
  64  nexus-gateway          62  nexus-core            61  nexus-api-gateway
  60  ×7（wallet/signing/bridge/compliance/settlement/oracle/analytics）
-  5  nexus-explorer/package-lock.json   4  mpc-engine/Cargo.lock
-  3  nexus-sdk/go/go.mod    1  nexus-explorer/frontend/package-lock.json 等
 ```
 
+仓库腿（`trivy-fs-scan`，21 条，按 `location.path` 逐条实测）：
+
+```
+ 5  nexus-explorer/package-lock.json        4  mpc-engine/Cargo.lock
+ 3  nexus-sdk/go/go.mod                     2  demo/package-lock.json
+ 2  nexus-explorer/frontend/package-lock.json
+ 2  …/org/nexus/tools/cmd-monitor/yarn.lock 1  …/org/nexus/tools/yarn.lock
+ 1  zk-groth16-service/Cargo.lock
+ 1  nexus-core/nexus-core/src/main/java/org/nexus/util/JWTUtil.java  ← 唯一一条"非依赖"类
+```
+
+那 1 条是 `nexus-core/.../util/JWTUtil.java:149-155` 里**一段注释掉的 `main` 演示块**写死了
+一枚 2019-02 的示例 JWT，命中 Trivy `jwt-token` 规则（MEDIUM，alert #138）。
+**已由 PR #54 删除该注释块**（零行为变更，`compileJava` 实测通过）。
+但它**不等于密钥消失**：token 仍在 git 历史里，当年那把 HS256 签名 key 是否还在
+任何环境使用属**轮换决策**，未由工具侧代做。
+
+> 附：那两份 `tools/**` 下的 yarn.lock 属于**运维小工具**，实测
+> `git grep -l "org/nexus/tools" -- '*.gradle' '*.yml' '*.sh' '*.json'` **零命中**——
+> 没有任何 Gradle/CI 脚本引用它们，所以 3 条相关告警（moment / brace-expansion）
+> 既不影响构建产物也进不了镜像；真正待议的是"JS 工具为什么放在 Java 源码树里"这个形态问题。
+
 ## 3. 逐族处置（只列有上游修复版本的 35 条）
+
+> **处置进度（2026-10-06 同日更新）**：加粗的 4 行已落地——react-router/-dom 由**本 PR** 治，
+> c3p0 / commons-lang3 / x/crypto 由 **PR #54** 治（都在来源查清之后动手）。
+> 余下 12 行是"能治但需要决策"或"仓库改不到"，每行都写了前置条件，不再只是挂着编号。
 
 | 包 | 现装 | 修复版 | 位置 | 条 | 处置与理由 |
 |---|---|---|---|---|---|
@@ -56,14 +82,14 @@ total open alerts: 870      （全部 tool=Trivy，全部 most_recent_instance.r
 | react-router | 6.30.4 | 7.18.0 | 根 + `frontend/` 两份 lockfile | 4 | 已随之到 6.30.6；CVE-2026-53669/53666 要 **v7** 才闭合 → 大版本迁移，另案 |
 | @remix-run/router | 1.23.3 | 1.23.4 | 根 lockfile | — | 随 react-router 6.30.6 联动，非独立告警 |
 | libpng16-16t64 | 1.6.48-1+deb13u5 | deb13u6 | 10 个镜像 | 10 | **仓库代码改不到**：基础镜像层。要么等 distroless/`debian13` 出 u6，要么在 Dockerfile 里显式 `apt-get install libpng16-16t64=...` 并纳入构建可复现性评审 |
-| com.mchange:c3p0 | 0.12.0 | 0.14.0 | core、gateway 镜像 | 2 | 0.12.0 是 2009 年前的坐标形态，几乎一定是**传递依赖**。先跑 `gradlew :模块:dependencies` 定来源，再决定 force / exclude / 升上游。不盲改 |
-| commons-lang3 | 3.12.0 | 3.18.0 | core、api-gateway | 2 | 同上，且版本大概率由 Spring Boot BOM 统管——改它要动 BOM override |
-| httpclient5 | 5.5.2 | 5.6.3 | gateway | 1 | 同上（BOM 管理范围内） |
-| at.yawk.lz4:lz4-java | 1.10.1 | 1.11.1 | gateway | 1 | 同上；`at.yawk` 是第三方 republish 坐标，需要先确认它是谁带进来的 |
+| **com.mchange:c3p0** | 0.12.0 | 0.14.0 | core、gateway 镜像 | 2 | **已由 PR #54 抬到 0.14.0**。来源已查清：`nexus-core/nexus-core/build.gradle:265` **显式声明**（接在他们 0.9.5.4→0.12.0 的既有修复注释后面续追）。实测源码对 `com.mchange` **零 import**——它是 `org.quartz-scheduler:quartz` 的运行时数据源池供给，**不是可删的未使用依赖**（删了是运行时炸，不是编译期炸） |
+| **commons-lang3** | 3.12.0 | 3.18.0 | core、api-gateway | 2 | **已由 PR #54 治根**。来源：全仓三处声明、**两个真值**——`nexus-core/nexus-core/build.gradle:159` 与 `nexus-api-gateway/build.gradle:107` 硬编码 `3.12.0`，而 `nexus-gateway/build.gradle:138` 是无版本声明、由 Boot 4.0.8 BOM 解析成 **3.19.0**。改法是两处去掉硬编码交 BOM（与 gateway 同口径），不是再钉一个新字面量。实测两棵树解析 3.19.0、`3.12.0` 归零 |
+| httpclient5 | 5.5.2 | 5.6.3 | gateway | 1 | **留决策**：BOM 管的——实测依赖树 `…alibaba.nacos:nacos-client:3.1.1 → httpclient5:5.4.4 -> 5.5.2`，且 `spring-boot-dependencies:4.0.8` 有 `httpclient5:5.5.2 (c)` 约束。抬到 5.6.3 等于让 nacos 客户端跑在 Boot 未测过的 HTTP 客户端上，属 BOM 层决策 |
+| at.yawk.lz4:lz4-java | 1.10.1 | 1.11.1 | gateway | 1 | **留决策**：来源是 `spring-kafka:4.0.7 → kafka-clients:4.1.2 → at.yawk.lz4:lz4-java:1.10.1`，即 Kafka 客户端的传递依赖。要动就得动 kafka-clients（同 BOM 层），单点 force 一个 lz4 会把 kafka 放进未测组合 |
 | qs | 6.15.3 | 6.16.0 | demo + explorer lockfile | 4 | express 写死 `"qs": "~6.15.1"`，6.16.0 **不在其范围内** → 只能 `overrides` 覆盖上游约束。这属于"我方改写库作者声明的约束"，需拍板，本次不做 |
-| golang.org/x/crypto | 0.55.0 | 0.56.0 | `nexus-sdk/go/go.mod` | 2 | 范围内小版本，可 `go get` 升；注意同包另有 1 条 `GO-2026-5932` **无修复版本**，升完仍 open |
-| brace-expansion | 1.1.20 | 1.1.21 | `nexus-core/nexus-core/src/main/java/org/nexus/tools/yarn.lock`、`.../tools/cmd-monitor/yarn.lock` | 2 | 手改 yarn.lock 需 yarn 重新解析（不是改数字）。更根本的问题见 §4.2 |
-| moment | 2.30.1 | 2.31.0 | `.../tools/cmd-monitor/yarn.lock` | 1 | 同上 |
+| **golang.org/x/crypto** | 0.55.0 | 0.56.0 | `nexus-sdk/go/go.mod` | 2 | **已由 PR #54 升**。代价如实记：x/crypto v0.56.0 自身 `go.mod` 声明 `go=1.26.0`，`go get` 因此把本模块 go 指令 1.25.0 → **1.26.0**；而 CI 的 `SDK Go regression` **没有任何 setup-go**（`git grep setup-go` 零命中），用 runner 预装 Go，低版本会走 `GOTOOLCHAIN=auto` 现场下载。同包那条 `GO-2026-5932` 仍**无修复版本**，升完还在 |
+| brace-expansion | 1.1.20 | 1.1.21 | `…/org/nexus/tools/yarn.lock`、`…/tools/cmd-monitor/yarn.lock` | 2 | **留决策**：手改 yarn.lock 需 yarn 重新解析（不是改数字）。这两份属运维小工具、无任何 Gradle/CI 引用（见 §2 附注），不进构建也不进镜像，所以优先级低于上面几项；真正的待议点是"JS 工具放在 Java 源码树里"这个形态 |
+| moment | 2.30.1 | 2.31.0 | `…/tools/cmd-monitor/yarn.lock` | 1 | 同上 |
 | serde_with | 2.3.3 | 3.21.0 | `mpc-engine/Cargo.lock` | 1 | **major**，牵 cggmp21 依赖树 |
 | tracing-subscriber | 0.2.25 | 0.3.20 | `zk-groth16-service/Cargo.lock` | 1 | major（LOW） |
 | rand | 0.7.3 | 0.8.6 / 0.9.3 / 0.10.1 | `mpc-engine/Cargo.lock` | 1 | major，密码学路径，须与上游 crate 一起评估（LOW） |

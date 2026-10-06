@@ -49,7 +49,9 @@
   verify:build / verify:contrast，backend typecheck / lint / build）。
 - **明确不做的**（理由与前置条件都写进分诊文档，而不是默默留在告警池里）：
   `qs` 6.15.3→6.16.0（express 写死 `~6.15.1`，需 `overrides` 改写上游约束）、
-  4 个 Java 传递依赖（先跑 dependency tree 定来源）、
+  依赖来源已跑 `gradlew …:dependencies` 查清（2026-10-06 同日）：其中 **c3p0 与 commons-lang3
+  已由 PR #54 落地**，`httpclient5`（nacos-client 经 Boot BOM 管）与 `lz4-java`
+  （kafka-clients 传递）留在 BOM 层决策；x/crypto 也在 #54 升（代价：SDK go 指令被抬到 1.26）。
   5 个 Rust major（密码学路径，不能只改数字）、两处 vendored yarn.lock（需 yarn 重解析）。
 
 ### Node 运行时 22 → 26 采纳（2026-10-06，提前于官方 LTS 升格日决策）
