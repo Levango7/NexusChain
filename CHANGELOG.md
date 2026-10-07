@@ -67,6 +67,20 @@
 - `scripts/check-version-consistency.sh` 新增断言 4：CHANGELOG 版本条目 `## [x]`
   （含 [Unreleased]）不得重复——阴性对照（注入合成重复条目）实测可拦截。
 
+### DevTools CLI：构建修复 + 锁文件 + CI 接入（2026-10-06）
+
+- **构建修复**：`nexus-devtools` 此前全目录无 `tsconfig.json`——`npm run build`
+  （`tsc`）只打印帮助且退出码 1，bin 声明的 `dist/index.js` 从未能生成。补
+  `tsconfig.json`（nodenext / strict）后 `tsc` 零错误通过，产物含 shebang 入口。
+- **运行时缺陷修复**：`RustCompiler.findWasmFile` 的回退搜索此前用 CJS
+  `require('node:fs')`——ESM 运行时无 `require` 全局（Node 26 实测），异常被
+  原地 catch 吞掉、回退实际从未生效；改为顶层 import `readdirSync`。
+- **锁文件**：新增 `package-lock.json`（lockfileVersion 3；resolved 统一
+  registry.npmjs.org，与 nexus-explorer 锁文件同口径），`npm ci` 可复现安装。
+- **CI 接入**：Build & Test 新增 `DevTools CLI build + smoke`——`npm ci` + `tsc`
+  构建 + `node dist/index.js --help` 冒烟；同时覆盖 engine-strict 的第 3 个
+  （此前唯一无 CI 环节的）安装点。
+
 ### 限额严格计数器落地（2026-10-03 第四批，桶 A3——口径拍板后实施）
 
 > **⚠️ 行为变更明示**：日/月限额窗口口径从「滚动 24h / 滚动 30 天」改为

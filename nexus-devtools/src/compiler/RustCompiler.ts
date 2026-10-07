@@ -7,7 +7,7 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { existsSync, mkdirSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import type { WasmCompiler, CompileResult } from './WasmCompiler.js';
 
@@ -119,9 +119,10 @@ export class RustCompiler implements WasmCompiler {
     }
 
     // 回退：在输出目录中搜索任意 .wasm
+    // （2026-10-06 修复：原实现为 CJS `require('node:fs')`——在 ESM 运行时
+    //   根本没有 require 全局，异常被本 catch 吞掉，回退搜索实际从未生效）
     try {
-      const { readdirSync } = require('node:fs');
-      const files = readdirSync(outputPath) as string[];
+      const files = readdirSync(outputPath);
       const wasm = files.find((f) => f.endsWith('.wasm'));
       if (wasm) return join(outputPath, wasm);
     } catch {
