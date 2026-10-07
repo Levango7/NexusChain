@@ -698,10 +698,13 @@ NexusChain 是一个**基于自研区块链的支付编排平台（Payment Orche
 ### 8.1 基于 12 个 gateway 测试失败的改进
 
 > **复验状态（2026-10-05，v2.51.3）**：本节 12 个失败用例已全部转绿。
-> `:nexus-gateway:test`（ArchitectureRulesTest 3/3）与 `:nexus-gateway:contextSmokeTest`
+> `:nexus-gateway:test`（ArchitectureRulesTest 3/3）与 `:nexus-gateway:integrationTest`
 > （GatewayCoreIntegrationTest 6/6、PaymentFlowIntegrationTest 8/8、
 > SubscriptionRefundIntegrationTest 6/6、PaymentE2EIntegrationTest 6/6、
 > RefundApprovalE2ETest 6/6、OrderConcurrencyStressTest 1/1）均 0 失败。
+> （2026-10-06 更正：此条原记作 `contextSmokeTest`——该任务与 `integrationTest` 在
+> knownRed 清空后选择集完全相同，run 37387904585 实测各 10 类 / 67 用例 / 0 红，
+> 已合并为 `integrationTest` 单条阻断门禁。）
 > §8.1.1–§8.1.5 的原始定位与建议保留作历史记录，实际修复情况见各小节「修复记录」。
 
 #### 8.1.1 修复架构循环依赖（1 个失败）
@@ -727,7 +730,7 @@ NexusChain 是一个**基于自研区块链的支付编排平台（Payment Orche
   1) 移除 `confirmPayment` 的 `@Transactional`，事务边界交由 TCC 模板独占（与
   `refund` 结构对齐）；2) TCC 的 Try/Confirm/Cancel 各阶段按 id 重新加载订单，
   只操作当前持久化上下文内的托管实例；3) 为 Try/Confirm/Cancel 增加幂等守卫。
-  三个原 `@Tag("knownRed")` 用例已摘除标签并纳入 `contextSmokeTest` 门禁，全部通过。
+  三个原 `@Tag("knownRed")` 用例已摘除标签并纳入 `integrationTest` 阻断门禁，全部通过。
 
 #### 8.1.3 修复路由未找到问题（1 个失败）
 
@@ -840,7 +843,7 @@ NexusChain 是一个**基于自研区块链的支付编排平台（Payment Orche
 |---------|------|---------|
 | 架构设计 | ⭐⭐⭐⭐⭐ | 15 个微服务模块清晰分层，完整可观测性 + 多维度部署 |
 | 代码质量 | ⭐⭐⭐⭐⭐ | Rust 成熟密码学依赖 + 7 个 zeroize 结构体 + 77 处 SecureRandom + 10+ 静态分析工具 |
-| 测试覆盖 | ⭐⭐⭐⭐½ | 455 测试文件 / 2491 用例 / 5 种测试类型；gateway 已 0 失败（2026-10-05），signing-service 有 3 例 MPC 多主机环境测试失败待修 |
+| 测试覆盖 | ⭐⭐⭐⭐½ | 455 测试文件 / 2491 用例 / 5 种测试类型；gateway 0 失败、signing-service MPC 多主机 0 失败（2026-10-06 复验：判据改为传输感知，无引擎时转 skip 而非红） |
 | 安全性 | ⭐⭐⭐⭐½ | 第 16 轮修复全部 SECURITY HIGH + 8 维度 CI 安全扫描，gRPC mTLS 待加强 |
 | 工程化 | ⭐⭐⭐⭐⭐ | 10 阶段 CI/CD + 8 维度安全扫描 + 四生态 Dependabot + 完善文档 |
 | **总体** | **⭐⭐⭐⭐½（4.5/5）** | 生产就绪度高，剩余 12 个测试失败 + gRPC mTLS 为主要待改进项 |
@@ -855,11 +858,18 @@ NexusChain 是一个**基于自研区块链的支付编排平台（Payment Orche
 - ✅ **测试覆盖**：2491 用例 + 关键安全不变量门禁
 - ✅ **可观测性**：OTel + Jaeger + Loki + Prometheus + Grafana 5 仪表盘
 - ✅ **部署体系**：K8s + Helm + Istio + Docker Compose 多维度支持
-- ⚠️ **测试状态（2026-10-05 实测，原"测试全绿"表述不准确已修正）**：gateway 已 0 失败
-  （原 12 例 knownRed 修复，§8.1.1–§8.1.5 全绿）；但 signing-service 有 **3 例 MPC 多主机
-  （WSL）环境测试失败**（`MpcMultiHostEngineTest` ×2、`MpcMultiHostTlsTest` ×1，判据为
-  "node-C-wsl 应产出公钥"），另有 **8 个模块无测试结果落盘**（core / wallet / compliance /
-  analytics / consortium / sdk / mpc-engine / zk-groth16）——**"全量测试全绿"不成立**
+- ✅ **测试状态（2026-10-06 复验，run 37387904585 @ `ebd9949`；下方 2026-10-05 判定已被推翻）**：
+  gateway **0 失败**（原 12 例 knownRed 修复，§8.1.1–§8.1.5 全绿；集成门禁实测 10 类 / 67 用例 0 红）。
+  signing-service MPC 多主机 **0 失败**——`MpcMultiHostEngineTest`（2 例）与 `MpcMultiHostTlsTest`（1 例）
+  的判据已从"TCP 端口可连通"改为"该传输模式的本仓引擎在应答"（PR #43），无 WSL 引擎时转 **skipped**
+  而非红；`MpcMultiHostDeploymentTest` 7 例 passed。
+  原「8 个模块无测试结果落盘」同样过期：本次 `test-results-*` 工件里 13 个 Gradle 模块均有 XML
+  （gateway 261 / core 148 / signing 77 / sdk 56 / consortium 54 / settlement 34 / oracle 20 /
+  analytics 17 / wallet 12 / compliance 6 / common 3 / bridge 2 / api-gateway 2 个文件），
+  `mpc-engine`、`zk-groth16-service` 是 Rust，走独立 job 的 `rust-test-logs-*` 文本日志。
+  **注意别把这条读成"多主机链路已验证"**：CI 上它是 skipped，真正跑通需要本机起引擎
+  （明文 2/0、mTLS 1/0 已于 2026-10-05 在本机三节点集群实测过，取证过程见
+  `docs/audit/2026-09-29-ci-gate-and-mpc-default-findings.md`）。
 - ✅ **传输安全**：gRPC 应用层 mTLS 已实现（MPC-P0-02：`use-plaintext` 默认 false；`mpc-engine` `MtlsConfig` + tonic `tls` feature；2026-10-05 复验）
 - ✅ **MPC 部署**：prod 路径已启用全分布式 CGGMP21 2-of-3（`CggmpMpcE2EClusterTest`，signing-service 不持份额）；dev/staging 为分层降级；2026-10-05 复验
 
