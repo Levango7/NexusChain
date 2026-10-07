@@ -4,6 +4,60 @@
 
 ## [2.51.3] - 2026-10-04
 
+### open 告警分诊台账入库 + explorer react-router 升到 6.30.6（2026-10-06）
+
+- 新增 `docs/audit/2026-10-06-open-alert-triage.md`：Security tab 现存 **870 条 open
+  Trivy 告警**（docker 腿 849 / fs 腿 21；MEDIUM 532 / LOW 323 / UNKNOWN 15），
+  去重后只有 **149 个 (包, CVE) 发现 / 92 个 CVE**——平均每条被 12 个镜像各记一次，
+  仅 `libc6` + `libc-bin` 就占 504 条（58%）。**835 条上游尚无修复版本**，
+  35 条有修复版本，且**全部不阻断**（阻断腿只看 CRITICAL/HIGH）。逐族处置见该文件 §3。
+  同时记录两处结构性问题：SARIF 未按 severity 收敛导致噪声压过信号；
+  `nexus-explorer` 与 `nexus-explorer/frontend` **两份 lockfile 已漂移**
+  （同一依赖 react-router 一个 6.30.4、另一个 6.30.6）。
+- 账本 `project-assessment-report.md` §7.2 表后补上该实测口径。
+- 依赖：`nexus-explorer/package-lock.json` 的 react-router / react-router-dom
+  6.30.4 → 6.30.6（`frontend/package.json` 声明 `^6.26.0`，范围内补丁；
+  `@remix-run/router` 随之 1.23.3 → 1.23.4）。闭 CVE-2026-53668；
+  CVE-2026-53669/53666 需 react-router v7，属大版本迁移，另案。
+- 本机验证：`npm ci` exit 0，explorer 9 条门禁逐条 exit 0
+  （frontend format:check / lint / test:coverage 14 files passed / build /
+  verify:build / verify:contrast，backend typecheck / lint / build）。
+- **明确不做的**（理由与前置条件都写进分诊文档，而不是默默留在告警池里）：
+  `qs` 6.15.3→6.16.0（express 写死 `~6.15.1`，需 `overrides` 改写上游约束）、
+  依赖来源已跑 `gradlew …:dependencies` 查清（2026-10-06 同日）：其中 **c3p0 与 commons-lang3
+  已由 PR #54 落地**，`httpclient5`（nacos-client 经 Boot BOM 管）与 `lz4-java`
+  （kafka-clients 传递）留在 BOM 层决策；x/crypto 也在 #54 升（代价：SDK go 指令被抬到 1.26）。
+  5 个 Rust major（密码学路径，不能只改数字）、两处 vendored yarn.lock（需 yarn 重解析）。
+
+### 生产编排凭据改 fail-closed：`docker-compose.prod.yml` 禁用占位默认值（2026-10-06）
+
+- **问题**：该文件 20 处基础设施凭据写成 `${VAR:-CHANGE_ME_*}`，语义是"**没给就用占位值**"。
+  少设任何一个变量都不会失败，而是**用一份写在公开仓库里的占位口令把"生产"栈起来**——
+  其中 `MPC_STORAGE_KEY` 是 mpc-engine 份额落盘（AES-GCM）的加密主钥，占位值等于
+  门限密钥材料被可预测密钥保护；还包括 `POSTGRES_PASSWORD`、`REDIS_PASSWORD`、
+  `NACOS_AUTH_TOKEN`、`GRAFANA_ADMIN_PASSWORD` 等 15 个变量。
+  文件头注释原本还写着"凭据用占位符，外部化注入"——意图是外部注入，实现却是静默兜底。
+- **这不是新决策，是本仓既有决策的漏项**：`docs/adr/mpc-zero-key-fail-closed.md`（C9，2026-09-12）
+  已经把 Rust 引擎与 Helm 路径改成"缺真密钥即拒绝启动（CrashLoop 可见）而不是用错密钥起来"，
+  `JWTUtil.init()` 也是空密钥拒绝启动。三条路径里**只有 compose prod 文件还留着 fail-open**，
+  且实测**没有任何 CI job 引用该文件**（`git grep docker-compose.prod.yml -- .github/` 零命中），
+  所以这个口子不会自己被发现。
+- **变更**：20 处插值改为 required-with-error 形式（未注入即在插值阶段报错退出），
+  错误信息带上变量名与"禁止占位默认值"；新增 `.env.prod.example` 列全 15 个必填变量
+  （该文件已在 `.gitignore:148` 覆盖 `.env.prod`，操作者按例复制填写不会被误提交）。
+- **本机双向验证（不是改完就宣称）**：
+  `docker compose -f docker-compose.prod.yml --env-file <空文件> config -q` → **exit 1**，
+  逐条报 `required variable GRAFANA_ADMIN_USER is missing a value: prod 必需：禁止占位默认值`
+  （MPC/PG/Redis/Nacos/Seata/Sentinel/Grafana 全都在列）；
+  同一文件喂 15 个变量 → **exit 0**，`config --services` 解析出 **18 个服务**，编排本身没被改坏。
+- **保留的兼容项**：文件头 `version: '3.8'` 未删——compose v2 会忽略它并打一条 obsolete 警告，
+  但仓内文档（`docs/真机构建联调清单.md:161` 写的是
+  `docker-compose -f docker-compose.prod.yml up -d --build`，v1 连字符写法），
+  v1 需要该键。留键的代价是一行无害警告，删键的代价是可能打断既有运维习惯，不值得。
+- **未改的部分（有意）**：dev 编排 `docker-compose.yml` 的 `${NEX_DEV_JWT_SECRET:-nexus-dev-only-...}`
+  与 `${NACOS_ADMIN_PASSWORD:-NexusAdmin2026}` 保留默认值——该文件服务本地 sandbox/dev，
+  变量名里就写着 `DEV`，便利性是它的设计目标；真正会被人当生产用的只有 `.prod.yml`。
+
 ### SCA 落地：commons-lang3 / c3p0 / x/crypto 三处来源查证后修复 + 一条密钥残留清除（2026-10-06）
 
 先跑 `gradlew …:dependencies --configuration runtimeClasspath` 把来源查清，再决定改法
