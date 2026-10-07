@@ -4,6 +4,31 @@
 
 ## [2.51.3] - 2026-10-04
 
+### 依赖安全：proxy-addr 2.0.7 → 2.0.8（2026-10-06，清 CRITICAL CVE-2026-90711）
+
+- **变更**：`nexus-explorer/package-lock.json`、`demo/package-lock.json` 两处传递依赖
+  （express 声明 `"proxy-addr": "~2.0.7"`）由 2.0.7 提到 2.0.8，`npm update proxy-addr
+  --package-lock-only` 生成，属范围内补丁升级、无 API 变更。
+- **触发证据**：run 37406668327 的 `Trivy Filesystem Scan + SBOM` 步骤以
+  `--severity CRITICAL,HIGH --exit-code 1` 判红，表格中两条 CRITICAL 全部是
+  `proxy-addr 2.0.7 → fixed 2.0.8`，目标文件恰为上述两份 lockfile
+  （`demo/package-lock.json (npm)` Total: 1 CRITICAL、
+  `nexus-explorer/package-lock.json (npm)` Total: 1 CRITICAL）。
+- **这是 master 级问题，不是 PR #49 自带**：两条 2.0.7 记录在 `ebd9949` 的
+  lockfile 里就存在（`nexus-explorer:5798`、`demo:596`），任何改动这两个目录的
+  PR 都会撞上；下一次 master push 同样会红。
+- **顺带修掉一处口径漂移**：explorer 根 lockfile 的 `packages.*.engines` 仍写着
+  `>=18.0.0`，与 #48 改过的 `package.json`（`>=24.0.0 <27.0.0`）不一致——
+  lockfile 未随 package.json 重新生成。本次 `npm update` 自然把它同步了（3 处）。
+- **本机验证**：`npm ci` 两项目均通过，实装版本 2.0.8（读 `node_modules/proxy-addr/package.json`）；
+  explorer 9 条门禁全绿（frontend `format:check`/`lint`/`test:coverage` 14 files passed/
+  `build`/`verify:build`/`verify:contrast`，backend `typecheck`/`lint`/`build`，各自 exit 0）；
+  demo 无测试脚本，改跑运行冒烟：`PORT=3111 node server.js` 起服，`/api/status` 与 `/height`
+  均 HTTP 200 且有 JSON 正文。
+- **注**：本机全局 `~/.npmrc` 指向 `registry.npmmirror.com`，直接跑 npm 会把 lockfile 的
+  `resolved` 改写成镜像域名（镜像域名进仓会让 CI/其他环境的 `npm ci` 依赖该镜像可达）。
+  本批 lockfile 用 `--registry=https://registry.npmjs.org` 生成，`resolved` 全部保持官方域名。
+
 ### Node 运行时 22 → 26 采纳（2026-10-06，提前于官方 LTS 升格日决策）
 
 - **变更**：`ci.yml` 两处 `node-version: '22'` → `'26'`（Explorer Frontend 段、
