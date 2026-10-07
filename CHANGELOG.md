@@ -4,6 +4,31 @@
 
 ## [2.51.3] - 2026-10-04
 
+### 依赖许可扫描接入 CI + 发现 5 个 GPL-3.0 系 crate（2026-10-07，报告制）
+
+- **补齐缺口**：`docs/licensing.md` §4.3 自述"CI 没有 license 扫描器"——本次接入
+  `scripts/check-license-policy.py` + CI job `依赖许可证策略（报告制）`。
+- **覆盖边界（诚实标注）**：npm ✅（解析 5 个 `package-lock.json` 的 `license` 字段，
+  离线确定，1716/1724 含字段）；Rust ✅（解析 `Cargo.lock` + crates.io 许可，
+  带可提交缓存 `scripts/rust-license-cache.json` 使 CI 离线可复现）；
+  **Java/Gradle ❌ 未覆盖**（无锁文件，需解析已解析依赖树，另行评估）——
+  报告里显式标注，不假装全覆盖。
+- **首扫结果**：2073 个组件 → 强传染 **5** / 弱传染 34 / 未识别 17 / 宽松 2017。
+- **🔴 关键发现（严重性高于此前记录）**：`mpc-engine/Cargo.lock` 传递引入
+  **5 个 GPL-3.0 系 crate**——`multi-party-ecdsa 0.8.1`(GPL-3.0-or-later)、
+  `centipede 0.3.0`、`bulletproof-kzen 1.2.0`、`round-based 0.1.7`、`zk-paillier 0.4.3`。
+  **GPL 强传染**：Rust 静态链接进同一二进制，分发通常要求整体以 GPL-3.0 授权并提供源码；
+  上游无商业/双许可选项且已停止维护。此前只记录了 LGPL 派生（LGPL 允许闭源，GPL 不允许）。
+- **为何报告制不阻断**：存量即有 5 个 GPL 组件，直接阻断会让 CI 立刻常红，
+  而"红"应表达"新引入违规"而非"存量待决策"。与 OWASP DC「永远上报」试运行、
+  `Trivy 豁免时效复核（不阻断）` 同款：先取证 → 拍板 → 后转阻断。
+  转阻断的前提是 `docs/licensing.md` §5 第一条（GPL 处置三选一）已落地。
+- **同步更新**：`NOTICE` §4（列出 5 个 crate 与实证日期）、`docs/licensing.md`
+  §3 表格 / §4.3 / §5（新增最高优先级决策项）/ §6（维护约定）。
+- **顺带修正**：`security-scan.yml` 中 `trivyignore-staleness` job 的
+  `python-version: '3.12'` → `'3.14'`（该 job 由 #53 新增时引入，违反 #45 建立的
+  全仓 3.14 统一口径；本次一并消除，避免"同仓两套解释器"）。
+
 ### 门禁收敛：gateway 集成测试合并为单条阻断 + 台账口径修正（2026-10-06）
 
 - **合并重复门禁**：`ci.yml` 原有两步——`contextSmokeTest`（阻断）+ `integrationTest`

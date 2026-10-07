@@ -18,10 +18,18 @@ replace upstream notices, or certify distribution compliance.
    nexus-devtools and nexus-sdk/typescript declare MIT. Do not override these
    declarations simply because the root license is Apache-2.0.
 
-4. mpc-engine/Cargo.toml declares Apache-2.0 for the local package and documents
-   multi-party-ecdsa as GPL-3.0-or-later and cggmp21 as MIT OR Apache-2.0.
-   Resolved dependencies and distribution obligations require review. A separate
-   process or gRPC interface alone does not establish a legal GPL exemption.
+4. mpc-engine/Cargo.toml declares Apache-2.0 for the local package. Its resolved
+   dependency graph (Cargo.lock) contains FIVE GPL-3.0-family crates, verified
+   against crates.io on 2026-10-07 by scripts/check-license-policy.py:
+   multi-party-ecdsa 0.8.1 (GPL-3.0-or-later), centipede 0.3.0 (GPL-3.0),
+   bulletproof-kzen 1.2.0 (GPL-3.0), round-based 0.1.7 (GPL-3.0),
+   zk-paillier 0.4.3 (GPL-3.0-or-later). cggmp21 is MIT OR Apache-2.0.
+   GPL-3.0 is a strong copyleft license: Rust statically links these crates into
+   the same binary, so distribution ordinarily requires licensing the combined
+   work under GPL-3.0 and providing corresponding source. The upstream
+   multi-party-ecdsa project offers no commercial/dual-license option and is
+   declared unmaintained. A separate process or gRPC interface alone does not
+   establish a legal GPL exemption. Distribution obligations require review.
 
 5. Retain existing source and dependency notices. Before distribution, review
    provenance, modifications, resolved dependency licenses, required license
