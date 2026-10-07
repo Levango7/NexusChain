@@ -244,7 +244,10 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
-          python-version: '3.12'
+          # 2026-10-07 修正：本处原为 '3.12'（由 #53 新增该 job 时引入），
+          # 与全仓 Python 3.14 统一口径（#45）不一致。本 job 只做 JSON 解析，
+          # 升到 3.14 无兼容风险；统一后可避免"同一仓两套解释器"。
+          python-version: '3.14'
 
       - name: 逐条对表 .trivyignore（A 应移除 / B 作用域存疑 / C 仍成立）
         # 脚本恒返回 0（除输入本身有问题），所以这里不写 continue-on-error：
@@ -254,6 +257,53 @@ jobs:
             --ignore .trivyignore \
             --scan "java17-debian13=trivy-staleness-java17-debian13.json" \
             --scan "trixie-slim=trivy-staleness-trixie-slim.json"
+
+  # ============================================================
+  # 依赖许可证策略扫描（2026-10-07 新增，**报告制**）
+  # -----------------------------------------------------------------------------
+  # 补齐 `docs/licensing.md` §4.3 自述的缺口：此前 CI 只有 Trivy（漏洞）/
+  # gitleaks（密钥）/ OWASP DC（漏洞，**非许可**），**没有任何许可扫描器**。
+  # 后果：新增 copyleft 依赖不会有任何门禁提示。
+  #
+  # 为什么必须报告制（不阻断）：本次首扫即发现 **5 个 GPL-3.0 系 crate**
+  # （multi-party-ecdsa / centipede / bulletproof-kzen / round-based /
+  # zk-paillier，均经 mpc-engine 传递引入）。若直接阻断，CI 会立刻常红，
+  # 而"红"应表达"新引入的违规"，不是"存量待决策项"。故与 OWASP DC
+  # 「永远上报」试运行、本文件 `Trivy 豁免时效复核（不阻断）` 同款处理：
+  # **先取证、再拍板、后转阻断**（转阻断的前提是 licensing.md §5 的
+  # "保留 LGPL/GPL 派生 vs 替换依赖"决策已落地）。
+  #
+  # 覆盖边界（诚实标注，勿高估）：
+  #   · npm  — ✅ 解析全部 package-lock.json 的 license 字段（离线、确定）
+  #   · Rust — ✅ 解析 Cargo.lock + crates.io 许可（带可提交缓存，离线可复现）
+  #   · Java — ❌ **未覆盖**（Gradle 无锁文件，需解析已解析依赖树，另行评估）
+  # 脚本本身对未覆盖项会在报告里显式标注，不假装全覆盖。
+  # ============================================================
+  license-policy:
+    name: 依赖许可证策略（报告制）
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
+      - name: 许可证策略扫描（报告制，不阻断）
+        # 脚本默认 exit 0（report-only）。加 --strict 才会在发现强传染许可时
+        # 返回 1——待 licensing.md §5 决策落地后再切。
+        run: python3 scripts/check-license-policy.py --out-dir build/license-report
+
+      - name: 上传许可证报告（取证）
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: license-policy-report
+          path: build/license-report/
+          retention-days: 30
 
   # ============================================================
   # 3. OWASP Dependency-Check（NVD CPE 视角，与 Trivy 互补）
