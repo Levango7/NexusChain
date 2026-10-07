@@ -165,7 +165,7 @@ SDK 对外提供 Java / TypeScript / Python / Go 四语言接入。
 # 仓库根目录执行
 ./gradlew :nexus-gateway:build            # 编译 + 单元测试 + 覆盖率门禁
 ./gradlew :nexus-gateway:test             # 仅单元测试（默认排除 @Tag("integration")）
-./gradlew :nexus-gateway:integrationTest  # 集成测试（需 Nacos / Redis 等基础设施）
+./gradlew :nexus-gateway:integrationTest  # 集成测试（10 类 / 67 用例，H2 + @MockitoBean，无需外部中间件）
 ./gradlew :nexus-gateway:bootJar          # 构建可执行 jar（nexus-gateway/build/libs/）
 ```
 
@@ -190,10 +190,14 @@ SDK 对外提供 Java / TypeScript / Python / Go 四语言接入。
 
 ## 测试与质量门禁
 
-- 规模：**211 个测试类 / 约 2,480 个用例**（`src/test`）。
-- 集成测试策略：默认 `test` 任务排除 `@Tag("integration")`（依赖外部基础设施），经 `:nexus-gateway:integrationTest` 单独执行。
+- 规模（run 37387904585 @ `ebd9949` 实测）：`test` 单元任务 **241 类 / 2,442 用例**（0 跳过），
+  `integrationTest` **10 类 / 67 用例**。
+- 集成测试策略：默认 `test` 任务排除 `@Tag("integration")`，经 `:nexus-gateway:integrationTest`
+  单独执行。拆分只为了单元任务跑得快——这批集成用例并不依赖外部中间件（H2 + `@MockitoBean`
+  即可装配整个 `GatewayApplication`），在 CI 里同 job、无 `services:` 容器下阻断执行且全绿。
 - JaCoCo 门禁：BUNDLE 指令覆盖率 ≥ **0.30**；`org.nexus.gateway.orchestration` 包 ≥ **0.60**。
-- CI：根 `ci.yml` 的 `build-and-test` job 以 `gradlew check` 全量执行（含覆盖率门禁）。
+- CI：根 `ci.yml` 的 `build-and-test` job 以 `gradlew check` 全量执行（含覆盖率门禁），
+  另有一条阻断的 `:nexus-gateway:integrationTest` 步骤。
 
 ## 相关文档
 
