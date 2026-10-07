@@ -104,7 +104,11 @@ dependencies {
     implementation 'org.springframework.cloud:spring-cloud-starter-bootstrap'
 
     // === 工具库 ===
-    implementation 'org.apache.commons:commons-lang3:3.12.0'
+    // 去掉硬编码 3.12.0：本模块用 org.springframework.boot 插件 4.0.8 + dependency-management，
+    // Boot BOM 会把 commons-lang3 管到 3.19.0（实测），与根构建其它模块一致。
+    // 原先这里是全仓两处旧钉之一（另一处 nexus-core/nexus-core/build.gradle:159），
+    // Trivy 镜像扫描报的 CVE-2025-48924（< 3.18.0）正来自这两个镜像。
+    implementation 'org.apache.commons:commons-lang3'
     // HMAC 签名验证使用 JDK 内置 javax.crypto，无需额外依赖
 
     // === 测试 ===
