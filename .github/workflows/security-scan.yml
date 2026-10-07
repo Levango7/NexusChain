@@ -497,7 +497,8 @@ jobs:
   # 4.5 Rust 依赖安全扫描：cargo audit（P2-C7）
   # -----------------------------------------------------------------------------
   # cargo audit 检查 mpc-engine Cargo.lock 中依赖是否有已知漏洞（RustSec advisory DB）
-  # continue-on-error: Rust 工具链可能未预装，不阻断 Java/Gradle 安全扫描
+  # 现状（与下方 B1 说明一致，勿再写回"不阻断"）：本 job **阻断**，工具链由 job 自己装，
+  # 装不上就是红；豁免走 .cargo/audit.toml 逐项附依据，不靠 continue-on-error 静默放行。
   # ============================================================
   cargo-audit:
     name: Cargo Audit (Rust deps)
@@ -556,7 +557,11 @@ jobs:
   # 运行 ZAP 基线扫描（被动扫描，不发起攻击 payload）
   # 目标：http://localhost:8080（nexus-gateway API 端点）
   # 产出：HTML + XML + JSON 报告
-  # continue-on-error: DAST 不阻断流水线（gateway 依赖可能无法在 CI 完整启动）
+  # 现状（与下方 B1 说明一致，勿再写回"不阻断"）：本 job **阻断**（continue-on-error 已摘）。
+  # 但它在 PR 事件上**不跑**（下面 if != pull_request），且**不在 required 清单里**——
+  # 这两点必须一起看：若将来把 DAST 加入 required 而 `if` 还在，PR 就会永远停在
+  # "Expected — Waiting"（本仓 OWASP DC 那颗雷的同一形态，见
+  # docs/dependency-check-update-policy.md 的 ⚠ 块）。
   # ============================================================
   dast-zap-baseline:
     if: github.event_name != 'pull_request'  # PR 不跑（需构建镜像/起栈，成本高）
