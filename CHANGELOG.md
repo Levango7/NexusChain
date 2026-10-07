@@ -4,6 +4,96 @@
 
 ## [2.51.3] - 2026-10-04
 
+### 门禁收敛：gateway 集成测试合并为单条阻断 + 台账口径修正（2026-10-06）
+
+- **合并重复门禁**：`ci.yml` 原有两步——`contextSmokeTest`（阻断）+ `integrationTest`
+  （`continue-on-error: true` 观察位）。`knownRed` 标签清空后两者选择集**完全相同**：
+  run 37387904585 实测各自 10 类 / 67 用例 / 0 红（解析 `build/test-results/{contextSmokeTest,integrationTest}/TEST-*.xml`）。
+  即同一段测试在 CI 跑两遍（约 2 分钟），且第二遍结果不判定。现只留一条阻断的
+  `:nexus-gateway:integrationTest`，并删除 `nexus-gateway/build.gradle` 里的
+  `contextSmokeTest` 任务。将来若确有已知红用例，用 `@Disabled("原因 + 工单号")`
+  承载（CI 汇总里以 skipped 可见），不再恢复"跑了但不判定"的观察位。
+- **纠正三条被实测推翻的说法**（都来自我自己早先写的注释/文档）：
+  1. `ci.yml`「contextSmokeTest 实测 7 类 / 47 用例」→ 实际 10 类 / 67 用例。
+  2. `ci.yml` 与 `build.gradle`「集成测试需 Nacos/Kafka/Redis，缺服务而红，不属于代码缺陷」
+     → 该 job 无 `services:` 容器（`ci.yml` 里唯一的 services 块在第 818 行的别的 job），
+     67 用例照样全绿；当初 3 例红是 product 侧 TCC 事务边界缺陷（PR #40 已修），**是代码缺陷**。
+  3. `nexus-gateway/README.md`「211 个测试类 / 约 2,480 个用例」→ 实测单元 241 类 / 2,442 用例、
+     集成 10 类 / 67 用例。
+- **账本回写**：`docs/audit/project-assessment-report.md` 里「signing-service 有 3 例 MPC 多主机
+  环境测试失败待修」已被 PR #43（传输感知判据）解决——本次同一 run 的 XML 显示
+  `MpcMultiHostEngineTest` 2 例 + `MpcMultiHostTlsTest` 1 例为 **skipped**、
+  `MpcMultiHostDeploymentTest` 7 例 passed、0 failure；「8 个模块无测试结果落盘」也已过期
+  （13 个 Gradle 模块均有 XML）。同时补一条警示：CI 上是 skipped，**不等于多主机链路被验证过**。
+- **消除两条长期 CI 告警**：`mpc-java-cluster-e2e` 与 `mpc-kind-smoke` 的
+  `dtolnay/rust-toolchain` 步骤仍带 `working-directory`，而该 action 的有效输入只有
+  `toolchain/targets/target/components`。run 37387904585 两个 job 的 annotation 实测都是
+  `Unexpected input(s) 'working-directory'`。`build-and-test` 处早已移除，这两处补齐。
+  工具链是全局安装，真正需要目录的 cargo 步骤各自带 `working-directory: mpc-engine`（未受影响）。
+- **拆掉一颗 10-15 会自锁的雷**（`docs/dependency-check-update-policy.md`）：该文件的出口 (a)
+  写着「把 OWASP DC 加入 required checks」，但实测它**早已在 required 列表里**
+  （`branches/master/protection/required_status_checks` 返回 8 条，含 `OWASP Dependency-Check`），
+  而 `security-scan.yml:233-235` 的 `if` 是 `event != pull_request || head.repo == github.repository`。
+  两者叠加的后果是：**10-15 若按出口 (b) 把 `if` 还原成只 `!= pull_request`，PR 上该 required check
+  就永远不会上报，所有 PR 卡在 "Expected — Waiting for status to be reported"**。
+  已在文中补 ⚠ 块写清：走 (b) 必须同批把该 job 移出 required；走 (a) 要处理 fork PR
+  今天就已经会 skip（同一位置卡死）的问题。本 PR 只改文档，不动 branch protection、不动那个 `if`
+  ——**转正还是回退是 10-15 的决策，不替用户做**。
+
+### 依赖安全：proxy-addr 2.0.7 → 2.0.8（2026-10-06，清 CRITICAL CVE-2026-90711）
+
+- **变更**：`nexus-explorer/package-lock.json`、`demo/package-lock.json` 两处传递依赖
+  （express 声明 `"proxy-addr": "~2.0.7"`）由 2.0.7 提到 2.0.8，`npm update proxy-addr
+  --package-lock-only` 生成，属范围内补丁升级、无 API 变更。
+- **触发证据**：run 37406668327 的 `Trivy Filesystem Scan + SBOM` 步骤以
+  `--severity CRITICAL,HIGH --exit-code 1` 判红，表格中两条 CRITICAL 全部是
+  `proxy-addr 2.0.7 → fixed 2.0.8`，目标文件恰为上述两份 lockfile
+  （`demo/package-lock.json (npm)` Total: 1 CRITICAL、
+  `nexus-explorer/package-lock.json (npm)` Total: 1 CRITICAL）。
+- **这是 master 级问题，不是 PR #49 自带**：两条 2.0.7 记录在 `ebd9949` 的
+  lockfile 里就存在（`nexus-explorer:5798`、`demo:596`），任何改动这两个目录的
+  PR 都会撞上；下一次 master push 同样会红。
+- **顺带修掉一处口径漂移**：explorer 根 lockfile 的 `packages.*.engines` 仍写着
+  `>=18.0.0`，与 #48 改过的 `package.json`（`>=24.0.0 <27.0.0`）不一致——
+  lockfile 未随 package.json 重新生成。本次 `npm update` 自然把它同步了（3 处）。
+- **本机验证**：`npm ci` 两项目均通过，实装版本 2.0.8（读 `node_modules/proxy-addr/package.json`）；
+  explorer 9 条门禁全绿（frontend `format:check`/`lint`/`test:coverage` 14 files passed/
+  `build`/`verify:build`/`verify:contrast`，backend `typecheck`/`lint`/`build`，各自 exit 0）；
+  demo 无测试脚本，改跑运行冒烟：`PORT=3111 node server.js` 起服，`/api/status` 与 `/height`
+  均 HTTP 200 且有 JSON 正文。
+- **注**：本机全局 `~/.npmrc` 指向 `registry.npmmirror.com`，直接跑 npm 会把 lockfile 的
+  `resolved` 改写成镜像域名（镜像域名进仓会让 CI/其他环境的 `npm ci` 依赖该镜像可达）。
+  本批 lockfile 用 `--registry=https://registry.npmjs.org` 生成，`resolved` 全部保持官方域名。
+
+### 生产编排凭据改 fail-closed：`docker-compose.prod.yml` 禁用占位默认值（2026-10-06）
+
+- **问题**：该文件 20 处基础设施凭据写成 `${VAR:-CHANGE_ME_*}`，语义是"**没给就用占位值**"。
+  少设任何一个变量都不会失败，而是**用一份写在公开仓库里的占位口令把"生产"栈起来**——
+  其中 `MPC_STORAGE_KEY` 是 mpc-engine 份额落盘（AES-GCM）的加密主钥，占位值等于
+  门限密钥材料被可预测密钥保护；还包括 `POSTGRES_PASSWORD`、`REDIS_PASSWORD`、
+  `NACOS_AUTH_TOKEN`、`GRAFANA_ADMIN_PASSWORD` 等 15 个变量。
+  文件头注释原本还写着"凭据用占位符，外部化注入"——意图是外部注入，实现却是静默兜底。
+- **这不是新决策，是本仓既有决策的漏项**：`docs/adr/mpc-zero-key-fail-closed.md`（C9，2026-09-12）
+  已经把 Rust 引擎与 Helm 路径改成"缺真密钥即拒绝启动（CrashLoop 可见）而不是用错密钥起来"，
+  `JWTUtil.init()` 也是空密钥拒绝启动。三条路径里**只有 compose prod 文件还留着 fail-open**，
+  且实测**没有任何 CI job 引用该文件**（`git grep docker-compose.prod.yml -- .github/` 零命中），
+  所以这个口子不会自己被发现。
+- **变更**：20 处插值改为 required-with-error 形式（未注入即在插值阶段报错退出），
+  错误信息带上变量名与"禁止占位默认值"；新增 `.env.prod.example` 列全 15 个必填变量
+  （该文件已在 `.gitignore:148` 覆盖 `.env.prod`，操作者按例复制填写不会被误提交）。
+- **本机双向验证（不是改完就宣称）**：
+  `docker compose -f docker-compose.prod.yml --env-file <空文件> config -q` → **exit 1**，
+  逐条报 `required variable GRAFANA_ADMIN_USER is missing a value: prod 必需：禁止占位默认值`
+  （MPC/PG/Redis/Nacos/Seata/Sentinel/Grafana 全都在列）；
+  同一文件喂 15 个变量 → **exit 0**，`config --services` 解析出 **18 个服务**，编排本身没被改坏。
+- **保留的兼容项**：文件头 `version: '3.8'` 未删——compose v2 会忽略它并打一条 obsolete 警告，
+  但仓内文档（`docs/真机构建联调清单.md:161` 写的是
+  `docker-compose -f docker-compose.prod.yml up -d --build`，v1 连字符写法），
+  v1 需要该键。留键的代价是一行无害警告，删键的代价是可能打断既有运维习惯，不值得。
+- **未改的部分（有意）**：dev 编排 `docker-compose.yml` 的 `${NEX_DEV_JWT_SECRET:-nexus-dev-only-...}`
+  与 `${NACOS_ADMIN_PASSWORD:-NexusAdmin2026}` 保留默认值——该文件服务本地 sandbox/dev，
+  变量名里就写着 `DEV`，便利性是它的设计目标；真正会被人当生产用的只有 `.prod.yml`。
+
 ### SCA 落地：commons-lang3 / c3p0 / x/crypto 三处来源查证后修复 + 一条密钥残留清除（2026-10-06）
 
 先跑 `gradlew …:dependencies --configuration runtimeClasspath` 把来源查清，再决定改法
