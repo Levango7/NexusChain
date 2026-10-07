@@ -156,7 +156,11 @@ dependencies {
     implementation "org.slf4j:slf4j-api:${slf4jVersion}"
     implementation "com.fasterxml.jackson.core:jackson-databind:${jacksonVersion}"
     implementation "org.apache.commons:commons-collections4:4.4"
-    implementation "org.apache.commons:commons-lang3:3.12.0"
+    // commons-lang3 去掉硬编码版本，交 Boot 4.0.8 BOM 管理（实测解析为 3.19.0，
+    // 与 nexus-gateway/build.gradle:138 的同库声明一致）。原先此处钉 3.12.0 是全仓
+    // 仅两处旧钉之一（另一处 nexus-api-gateway/build.gradle:107），Trivy 镜像扫描
+    // 报的 CVE-2025-48924（< 3.18.0）就来自这两处；BOM 线 3.19.0 本身已越线。
+    implementation "org.apache.commons:commons-lang3"
     implementation 'org.apache.commons:commons-math3:3.6.1'
     implementation "commons-codec:commons-codec:1.15"
     // TD-17：spring-context/spring-test 去版本号交 Boot BOM 管理（Boot 3.2.5 → Spring Framework 6.1.6，数值不变），
@@ -260,9 +264,15 @@ dependencies {
     }
     // Trivy 安全修复（thin jar + lib/ 方案后 Trivy 可扫描独立依赖 jar）：
     // - c3p0 0.9.5.4 → 0.12.0：CVE-2026-27830 Arbitrary Code Execution
+    //   → 0.14.0：CVE-2026-55223（Trivy 给出的修复线是 0.14.0，本条是 0.12.0 之后新出现的
+    //   一枚，2026-10-03 起在 nexus-core / nexus-gateway 两个镜像的 library 记录上 open）
     // - mchange-commons-java 0.2.15 → 0.6.0：CVE-2026-27727 + CVE-2026-55153 RCE
     // - okhttp 4.9.0 → 4.12.0：CVE-2021-0341 信息泄露
-    implementation 'com.mchange:c3p0:0.12.0'
+    // 说明：c3p0 在本仓源码里**没有任何 import**（实测 `grep -r com.mchange src/` 零命中），
+    // 它是 org.quartz-scheduler:quartz 的数据源池运行时供给（QuartzAutoConfiguration
+    // 配 DataSource 时需要池实现）。因此不能当"未使用依赖"直接删——删了是运行时炸，
+    // 不是编译期炸。这里只按 Trivy 给的修复线抬版本。
+    implementation 'com.mchange:c3p0:0.14.0'
     implementation 'com.mchange:mchange-commons-java:0.6.0'
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
     // REQ-11/P2: jjwt 升级到 0.12.x 获取安全修复

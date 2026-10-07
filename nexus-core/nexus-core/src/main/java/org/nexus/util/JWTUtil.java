@@ -145,12 +145,4 @@ public class JWTUtil {
         }
         return true;
     }
-
-//    public static void main(String[] args) {
-//        long exp = 3600000;//过期时间为1h
-//        System.out.println("create:"+createJWT(exp));
-//
-//        boolean claims = JWTUtil.parseJWT("eyJhbGciOiJIUzI1NiJ9.eyJqdGkiOiIxIiwiaWF0IjoxNTcyNDE2MTYwLCJzdWIiOiJKV1RUb2tlbiIsImlzcyI6ImFkbWluIiwiZXhwIjoxNTcyNDE5NzYwfQ.oBfuzZVRxiDXiMOGBYdHHKHDJzu9P4Kdb-zdtaD-Jvo");
-//        System.out.println(claims);
-//    }
 }
