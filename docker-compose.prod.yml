@@ -7,7 +7,11 @@ version: '3.8'
 # 与 docker-compose.yml（dev）的差异：
 #   1. 端口用 expose（不绑定宿主机），由前置负载均衡/Ingress 暴露
 #   2. SPRING_PROFILES_ACTIVE=prod
-#   3. 基础设施凭据用占位符（CHANGE_ME_*），外部化注入
+#   3. 基础设施凭据**全部必填**（compose 的 required-with-error 形式）：未注入即直接报错退出。
+#      2026-10-06 改动：原先是"没给就用 CHANGE_ME_* 占位默认值"——少设一个变量不会失败，
+#      而是**用一份公开的占位口令把"生产"栈起来**（含 MPC_STORAGE_KEY 这份门限密钥
+#      的落盘加密主钥）。现在改为 fail-closed，与本仓 JWTUtil.init() 的
+#      "空值拒绝启动"同一口径。15 个必填变量清单见 `.env.prod.example`。
 #   4. restart: always（生产自愈）
 #
 # 端口约定（与各服务 application.yml server.port 对齐）：
@@ -178,8 +182,8 @@ services:
       - MPC_PARTY_INDEX=0
       - MPC_PARTY_ID=party-0
       - MPC_PEERS=party-1@mpc-engine-1:50051,party-2@mpc-engine-2:50051
-      - MPC_STORAGE_KEY=${MPC_STORAGE_KEY:-CHANGE_ME_MPC_STORAGE_KEY}
-      - MPC_AUTH_TOKEN=${MPC_AUTH_TOKEN:-CHANGE_ME_MPC_AUTH_TOKEN}
+      - MPC_STORAGE_KEY=${MPC_STORAGE_KEY:?prod 必需：禁止占位默认值}
+      - MPC_AUTH_TOKEN=${MPC_AUTH_TOKEN:?prod 必需：禁止占位默认值}
       - MPC_REQUIRE_AUTH=true
     volumes:
       - mpc-certs:/etc/mpc/certs:ro
@@ -199,8 +203,8 @@ services:
       - MPC_PARTY_INDEX=1
       - MPC_PARTY_ID=party-1
       - MPC_PEERS=party-0@mpc-engine-0:50051,party-2@mpc-engine-2:50051
-      - MPC_STORAGE_KEY=${MPC_STORAGE_KEY:-CHANGE_ME_MPC_STORAGE_KEY}
-      - MPC_AUTH_TOKEN=${MPC_AUTH_TOKEN:-CHANGE_ME_MPC_AUTH_TOKEN}
+      - MPC_STORAGE_KEY=${MPC_STORAGE_KEY:?prod 必需：禁止占位默认值}
+      - MPC_AUTH_TOKEN=${MPC_AUTH_TOKEN:?prod 必需：禁止占位默认值}
       - MPC_REQUIRE_AUTH=true
     volumes:
       - mpc-certs:/etc/mpc/certs:ro
@@ -220,8 +224,8 @@ services:
       - MPC_PARTY_INDEX=2
       - MPC_PARTY_ID=party-2
       - MPC_PEERS=party-0@mpc-engine-0:50051,party-1@mpc-engine-1:50051
-      - MPC_STORAGE_KEY=${MPC_STORAGE_KEY:-CHANGE_ME_MPC_STORAGE_KEY}
-      - MPC_AUTH_TOKEN=${MPC_AUTH_TOKEN:-CHANGE_ME_MPC_AUTH_TOKEN}
+      - MPC_STORAGE_KEY=${MPC_STORAGE_KEY:?prod 必需：禁止占位默认值}
+      - MPC_AUTH_TOKEN=${MPC_AUTH_TOKEN:?prod 必需：禁止占位默认值}
       - MPC_REQUIRE_AUTH=true
     volumes:
       - mpc-certs:/etc/mpc/certs:ro
@@ -279,11 +283,11 @@ services:
       - JVM_XMN=128m
       # prod 认证开启（凭据通过环境变量注入，禁止硬编码）
       - NACOS_AUTH_ENABLE=true
-      - NACOS_AUTH_IDENTITY_KEY=${NACOS_AUTH_IDENTITY_KEY:-CHANGE_ME_NACOS_KEY}
-      - NACOS_AUTH_IDENTITY_VALUE=${NACOS_AUTH_IDENTITY_VALUE:-CHANGE_ME_NACOS_VALUE}
-      - NACOS_AUTH_TOKEN=${NACOS_AUTH_TOKEN:-CHANGE_ME_NACOS_TOKEN}
-      - NACOS_USERNAME=${NACOS_USERNAME:-CHANGE_ME_NACOS_USER}
-      - NACOS_PASSWORD=${NACOS_PASSWORD:-CHANGE_ME_NACOS_PASS}
+      - NACOS_AUTH_IDENTITY_KEY=${NACOS_AUTH_IDENTITY_KEY:?prod 必需：禁止占位默认值}
+      - NACOS_AUTH_IDENTITY_VALUE=${NACOS_AUTH_IDENTITY_VALUE:?prod 必需：禁止占位默认值}
+      - NACOS_AUTH_TOKEN=${NACOS_AUTH_TOKEN:?prod 必需：禁止占位默认值}
+      - NACOS_USERNAME=${NACOS_USERNAME:?prod 必需：禁止占位默认值}
+      - NACOS_PASSWORD=${NACOS_PASSWORD:?prod 必需：禁止占位默认值}
     volumes:
       - nacos-logs:/home/nacos/logs
     healthcheck:
@@ -309,7 +313,7 @@ services:
       - SEATA_STORE_DB_DRIVER_CLASS_NAME=org.postgresql.Driver
       - SEATA_STORE_DB_URL=jdbc:postgresql://postgres:5432/seata
       - SEATA_STORE_DB_USER=${POSTGRES_USER:-nexus}
-      - SEATA_STORE_DB_PASSWORD=${POSTGRES_PASSWORD:-CHANGE_ME}
+      - SEATA_STORE_DB_PASSWORD=${POSTGRES_PASSWORD:?prod 必需：禁止占位默认值}
       - SEATA_REGISTRY_NAME=nacos
       - SEATA_REGISTRY_NACOS_SERVER_ADDR=nacos:8848
       - SEATA_REGISTRY_NACOS_NAMESPACE=prod
@@ -320,7 +324,7 @@ services:
       - SEATA_CONFIG_NACOS_NAMESPACE=prod
       - SEATA_CONFIG_NACOS_GROUP=SEATA_GROUP
       # 配置加密 key（占位符外部化）
-      - SEATA_CONFIG_KEY=${SEATA_CONFIG_KEY:-CHANGE_ME_SEATA_KEY}
+      - SEATA_CONFIG_KEY=${SEATA_CONFIG_KEY:?prod 必需：禁止占位默认值}
     depends_on:
       nacos:
         condition: service_healthy
@@ -356,8 +360,8 @@ services:
     environment:
       - JAVA_OPTS=-Dserver.port=8080 -Dcsp.sentinel.dashboard.server=localhost:8080 -Dproject.name=nexus-sentinel-dashboard
       # Sentinel Dashboard 登录凭据（占位符外部化，禁止默认 nacos/nacos）
-      - SENTINEL_USERNAME=${SENTINEL_USERNAME:-CHANGE_ME_SENTINEL_USER}
-      - SENTINEL_PASSWORD=${SENTINEL_PASSWORD:-CHANGE_ME_SENTINEL_PASS}
+      - SENTINEL_USERNAME=${SENTINEL_USERNAME:?prod 必需：禁止占位默认值}
+      - SENTINEL_PASSWORD=${SENTINEL_PASSWORD:?prod 必需：禁止占位默认值}
     volumes:
       - sentinel-logs:/root/logs
     depends_on:
@@ -378,10 +382,10 @@ services:
     expose: ['5432']
     environment:
       - POSTGRES_DB=nexuschain
-      - POSTGRES_USER=${POSTGRES_USER:-CHANGE_ME_PG_USER}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-CHANGE_ME_PG_PASS}
+      - POSTGRES_USER=${POSTGRES_USER:?prod 必需：禁止占位默认值}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?prod 必需：禁止占位默认值}
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-CHANGE_ME_PG_USER} -d nexuschain']
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:?prod 必需：禁止占位默认值} -d nexuschain']
       interval: 10s
       timeout: 5s
       retries: 5
@@ -395,7 +399,7 @@ services:
     image: redis:7-alpine
     expose: ['6379']
     environment:
-      - REDIS_PASSWORD=${REDIS_PASSWORD:-CHANGE_ME_REDIS_PASS}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?prod 必需：禁止占位默认值}
     entrypoint:
       - /bin/sh
       - -c
@@ -425,8 +429,8 @@ services:
     image: grafana/grafana:10.4.0
     expose: ['3000']
     environment:
-      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-CHANGE_ME_GRAFANA_USER}
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-CHANGE_ME_GRAFANA_PASS}
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:?prod 必需：禁止占位默认值}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?prod 必需：禁止占位默认值}
     volumes:
       - grafana-data:/var/lib/grafana
     restart: always
