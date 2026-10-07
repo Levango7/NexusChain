@@ -4,6 +4,29 @@
 
 ## [2.51.3] - 2026-10-04
 
+### zk setup 落盘改原子写（2026-10-06，消除半截 pk.bin 被当成就绪缓存）
+
+- **变更**：`setup_store.rs` 的 `load_or_setup` 与 `import_external_setup` 不再用
+  `fs::write` 就地覆盖 `pk.bin`/`vk.bin`，改为「同目录临时文件 → 设权限 → `fs::rename`」。
+  权限设在 rename 之前，文件一经可见即最终权限（pk 0600），不留 0644 窗口。
+- **机制**：`load_or_setup` 用 `pk_file.exists()` 判定「setup 已就绪」，而 `fs::write`
+  是 open-truncate + 写入。并发读者（同进程其他测试线程、或重启后的进程）在这个窗口里
+  能读到 0 字节或截断内容；截断文件因「存在」而被永久当成有效缓存复用，之后每次
+  `deserialize_uncompressed` 都失败，不自愈，只能人工删文件。同 crate 里
+  `persist_tests` / `persist_tests2` / `ceremony_tests` 用**同一份 `demo_json()`** →
+  同一指纹 → 同一个 `pk.bin`，而 `cargo test` 默认多线程并行，ceremony 用例还会
+  `import_external_setup` 覆写这个共享文件。
+- **取证（本机 WSL rustc 1.98.0，一写四读 5 秒竞态探针）**：
+  `fs::write` 模式读回长度不符的次数 —— 2672 B：1,969,671 次；200 KB：946,247 次；
+  2 MB：596,631 次。tmp+rename 模式：三档均 **0** 次。
+- **诚实边界**：机制已被上面的探针实证，但**真实 `cargo test` 里我没复现出来**——
+  冷启动（每轮先删 `groth16-setup`）连跑 30 轮 × 新旧两版，两版都是 30/30 通过。
+  CI 那次抖动仍是单次观察。所以这条定级为「机制实证 + 现象未复现」的预防性加固。
+- **新增用例**：`atomic_write_tests::atomic_write_is_complete_and_leaves_no_temp`
+  （32 轮写读回全等 + 目录内无 `.tmp-` 残留；跑在 `temp_dir()` 下，不碰入库的仪式产物）。
+  本机 `cargo test` = 10 passed / 0 failed；`cargo clippy --all-targets` 告警数
+  由旧版 23 降至 21（未新增）。
+
 ### 依赖安全：proxy-addr 2.0.7 → 2.0.8（2026-10-06，清 CRITICAL CVE-2026-90711）
 
 - **变更**：`nexus-explorer/package-lock.json`、`demo/package-lock.json` 两处传递依赖
