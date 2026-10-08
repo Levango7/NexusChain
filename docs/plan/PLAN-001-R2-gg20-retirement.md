@@ -1,9 +1,22 @@
 # PLAN-001-R2：GG20 旧路径退役（合并单批——CGGMP21 独占）
 
-状态：**设计稿 R2，待审核**（按惯例通过后实施）
-日期：2026-09-08
+状态：**✅ 已于 2026-10-08 实施完成**（单批原子落地；实施记录见文末 §实施记录）
+日期：2026-09-08（设计）；2026-10-08（实施）
 作废前版：PLAN-001 v1（"分两步"方案）——5 轮迭代失败 + force-push 撤回后证伪，
 v1 的致命假设错误："单点删 proto RPC 会让 Java 业务侧编译断"（grep 实证见 §2.3）。
+
+> **实施偏差记录（2026-10-08）**：R2 撰写于 2026-09-07，此后代码演进使两处前提变化——
+> 1. **Java 手术面小于预估**：P0-1 之后 `CggmpMpcCryptoEngine` 已实现与 GG20 完全相同的
+>    `MpcCryptoEngine` SPI（`dkg`/`sign`/`aggregate` 同签名 DTO），故 DTO 与 SPI 接口**全部保留**，
+>    无需"用 Cg* 原生接口重建"；Java 侧仅删 `GrpcMpcCryptoEngine` + GG20 测试 +
+>    `ColdWalletMultiSigService` 单引擎化 + 注释引用清理。
+> 2. **R2 遗漏的三个 RPC**：阶段一分散式 `RelayDkgMessage`/`RelaySignMessage`/`DistStatus`
+>    实现在 `server.rs`（而非只在 distributed.rs），随 `distributed.rs` 删除必须一并移除
+>    （grep 实证：无任何 Java 调用方）。
+> 3. **`session.rs` 一并删除**：其唯一消费者是被删的 GG20 `Dkg`/`Sign` handler
+>    （MPC-P2-F5 协调器转发身份绑定），随拓扑消亡成为死代码。
+> 4. 额外清理：GG20 独用依赖 `secp256k1 0.20`/`sha2 0.9`/`rand 0.7`（改 `rand_core`）/dev-dep `nix`。
+> 5. `docs/plan/PLAN-001-gg20-retirement.md`（v1）保留为历史记录，不再维护。
 
 ## 1. 结论性修订（v1 教训 → R2 决策）
 
@@ -126,3 +139,40 @@ GG20 仅经 `GrpcMpcCryptoEngine` 供 DefaultMpcService 回退）。因此退役
 
 **若审核通过** → 按 §3 单批开工；**若延后** → GG20 退役冻结，双栈并存
 （当前 CI 全绿、无功能缺陷），产能转向其他方向。
+
+---
+
+## 8. 实施记录（2026-10-08）
+
+**决策落点**（对 §7 三问的回答）：
+1. 影响面接受——单批原子落地，本机可完整验证（Rust 工具链 + Gradle 均在手）。
+2. `MpcCryptoEngine` 接口**保留**（与 §7 倾向相反）：SPI 是 `DefaultMpcService` 的注入点
+   与测试 mock 面，且 `CggmpMpcCryptoEngine` 早已实现它；删接口收益小、改动面大。
+3. 实施价值兑现为许可证解结（GPL-3.0 系依赖清零，见下），非仅"结构性改善"。
+
+**改动清单**：
+- Rust：`git rm` 7 文件（`gg20/dkg/sign/aggregate/distributed/session.rs` + `tests/integration_test.rs`，
+  约 3.9k 行）；`lib.rs`/`server.rs`/`main.rs`/`persistence.rs`/`cggmp.rs`/`cggmp_state.rs` 清理；
+  `Cargo.toml` 去 7 个 GG20 独用依赖 + dev-dep；proto 删 6 RPC + 11 message。
+- proto 双副本（Rust/Java）消息与 RPC 集一致性已 diff 校验。
+- Java：`git rm` 7 文件（`GrpcMpcCryptoEngine` + 6 个 GG20 测试/桩）；
+  `ColdWalletMultiSigService` 单引擎化（`selectActiveEngine` 仅 CGGMP21，GG20 回退分支删除）；
+  `MultiNodeMpcMockTest` mock 类型随迁；29 处注释/javadoc 引用清理。
+- CI：`build-and-test` 的 `integration_test` 步骤 → 四个 `cggmp_*` 进程内 E2E 步骤；
+  `MpcEndToEndTest` 步骤删除（真实集群回归由 `mpc-java-cluster-e2e` job 承担）。
+- 文档：README MPC 章节重写（默认态=无真实引擎/skeleton，prod=全分布式 CGGMP21）、
+  NOTICE §4 / docs/licensing.md §5 记 GPL 处置完成、`tests/README.md` 重写、
+  application.yml 注释、本文件状态。
+
+**验证证据（2026-10-08 本机）**：
+- `cargo check --all-targets`（含/不含 `--features tls`）+ `cargo clippy --all-targets --features tls`：零警告通过。
+- `cargo test --features tls`：**41 用例全绿**（34 lib 单测 + `cggmp_dkg_sim` 3 +
+  `cggmp_threshold_e2e`/`cggmp_rpc_e2e`/`cggmp_persistence_recovery` 各 1，
+  三个协议 E2E 各 ~100s）。
+- `Cargo.lock`：−940 行；`multi-party-ecdsa`/`centipede`/`bulletproof-kzen`/`zk-paillier`/
+  `kzen-paillier`/`curv-kzen` 归零，`round-based` 仅剩 0.4.1（MIT/Apache）。
+- Java：`compileJava` + 受影响测试（见 PR CI）。
+
+**遗留（本次不做）**：`sha2_010` 别名可改回 `sha2`（依赖树已无第二版本）；
+`MpcEngineRouter` 的 `distributed-mode` 语义（现服务 CGGMP 集群通道）留待后续清理批次；
+`deploy/docs/mpc-distributed-deployment.md` 的 GG18/GG20 措辞随下次部署文档修订更新。

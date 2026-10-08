@@ -9,10 +9,10 @@ NexusChain 是一个**基于自研区块链的支付编排平台（Payment Orche
 > 沙箱/仿真态对外展示，生产资金操作由持牌交付方在其合规主体下运行。
 
 > **版本口径（2026-09-28 第三次修复漂移，CI 门禁化）**：构建侧**双源**为根 `build.gradle` 的 `version`
-> 与 `nexus-core/nexus-core/src/main/resources/version.properties` 的 `versionNumber`（当前均为 `2.51.3`；
+> 与 `nexus-core/nexus-core/src/main/resources/version.properties` 的 `versionNumber`（当前均为 `2.52.0`；
 > 发版时**两处都要改**——v2.50.2 曾因 version.properties 滞后导致 jar 名错位）；
-> 发布说明单一来源为 [CHANGELOG](CHANGELOG.md)（最新条目 `[2.51.3] - 2026-10-04`，
-> 即限额严格计数器与容量基线批次）。
+> 发布说明单一来源为 [CHANGELOG](CHANGELOG.md)（最新条目 `[2.52.0] - 2026-10-08`，
+> 即 GG20 退役 / CGGMP21 独占 / GPL-3.0 系依赖清零批次）。
 > 本头注的准确性由 CI 门禁 `scripts/check-version-consistency.sh` 保护：
 > build.gradle / version.properties / 本头注三处任一失配将直接导致 CI 失败。
 
@@ -114,18 +114,22 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
 - **未具备**：完整的区块/交易/地址详情数据接入、链上状态实时订阅、图表可视化、监控告警前端。此前模块清单"可用"标注与实际情况不符，已修正。
 - **演进**：列入后续迭代，功能范围需另行立项评审。
 
-### MPC 多方签名（v2.0.0-rc1 真实化）
+### MPC 多方签名（CGGMP21 门限 ECDSA；GG20 已退役 2026-10-08）
 
-> **默认运行态声明（2026-09-17 代码取证）**：开箱默认路径是 **GG20 可信协调器（单进程持有全部份额）**，
-> **不是**分布式门限签名。依据：
-> 1. `nexus-signing-service/src/main/resources/application.yml` 中 `mpc.engine.cggmp-enabled` 默认 **false**、
->    `mpc.engine.distributed-mode` 默认 **false**；
-> 2. 路径选择逻辑 `ColdWalletMultiSigService.selectActiveEngine()` 在 `false` 时返回 GG20 引擎（类注释亦如此声明）；
-> 3. GG20 签名在协调进程内一次性执行全部签名方（`mpc-engine/src/sign.rs` 日志 "trusted-coordinator, in-process"）。
->
-> CGGMP21 路径已包含 `cg_start_sign`、`cg_relay_publish`、`cg_relay_pull`
-> （`mpc-engine/src/server.rs`）以及 `sign_sync`（`mpc-engine/src/cggmp.rs`）。
-> 旧 `distributed.rs` 所述 sign relay 限制属于 GG20 阶段一路径，**不适用于 CGGMP21**。
+> **GG20 退役完成（PLAN-001-R2，2026-10-08）**：GG20 可信协调器路径整体删除
+> （Rust `mpc-engine/src/{gg20,dkg,sign,aggregate,distributed,session}.rs` 与
+> Java `GrpcMpcCryptoEngine`，以及 proto 的 Dkg/Sign/Aggregate/Relay*/DistStatus
+> 六个 RPC）——CGGMP21 是**唯一**的门限签名路径。随之一并消除的还有 GPL-3.0 系
+> 依赖（`multi-party-ecdsa`/`centipede`/`bulletproof-kzen`/`round-based@0.1`/
+> `zk-paillier`），`mpc-engine` 依赖树现为 MIT/Apache 系。设计与实施记录见
+> [docs/plan/PLAN-001-gg20-retirement.md](docs/plan/PLAN-001-gg20-retirement.md)。
+
+> **默认运行态声明（2026-10-08 代码取证）**：`mpc.engine.cggmp-enabled` 默认 **false**
+> 时**没有任何真实引擎**——`ColdWalletMultiSigService.selectActiveEngine()` 返回 null，
+> 冷钱包转账降级为 **FROZEN skeleton 记账流程**（`FROZEN-` 占位份额，非真实签名，
+> 仅供本地/沙箱跑通流程）。真实门限签名要求 `cggmp-enabled=true` + 3 端点集群
+> （见下「生产路径」）。与 GG20 时代的差异：那时 `false` 会回退到可信协调器路径，
+> 该回退已随 GG20 消失——现在是 fail-closed 的「要么真实、要么明确的不真实」。
 
 > **传输层默认态补充（2026-09-29 代码取证）**：除引擎路径外，P2P 份额传输默认也是
 > **进程内**实现：`application.yml` 中 `mpc.transport.real-grpc-enabled` 默认 **false**，
@@ -145,29 +149,26 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
 > （含份额隔离断言：三节点 keyshare.bin SHA-256 两两不同、无 GG20 快照残留）见
 > `CggmpMpcE2EClusterTest#cggmpE2EProductionPath`，由 `mpc-java-cluster-e2e` CI job
 > 无条件回归（`.github/workflows/ci.yml:453`）。
-> 旧路径退役设计见
-> [docs/plan/PLAN-001-gg20-retirement.md](docs/plan/PLAN-001-gg20-retirement.md)（状态：设计稿，**未实施**）。
+> 旧路径退役已于 2026-10-08 实施完成（PLAN-001-R2）：
+> [docs/plan/PLAN-001-gg20-retirement.md](docs/plan/PLAN-001-gg20-retirement.md)。
 
-> **MPC 分层口径（2026-10-02 决策，固化审计 2026-09-29 §2 的「待决」）**：
+> **MPC 分层口径（2026-10-02 决策；2026-10-08 随 GG20 退役更新）**：
 > 默认关闭**不是缺陷，是有意的三级阶梯**——
 > ① **dev/默认**（application.yml）：`real-grpc-enabled=false` + `cggmp-enabled=false`，
-> InMemoryMpcTransport + GG20 可信协调器（零外部依赖，单测/本地开发用）；
+> InMemoryMpcTransport + **无真实引擎（FROZEN skeleton 记账）**（零外部依赖，单测/本地开发用）；
 > ② **staging**：`NEX_MPC_TRANSPORT_GRPC=true`（真实 gRPC+mTLS，拓扑同 prod 的 3 引擎+证书），
-> 协议层仍走 GG20（CGGMP21 未开——staging 未配 keyshare 供给；升级需先配齐再翻转）；
+> 但 **CGGMP21 未开**（staging keyshare 供给未配）——即 staging 目前**同样没有真实签名引擎**，
+> 升级路径：配齐 keyshare 供给后置 `NEX_MPC_ENGINE_CGGMP_ENABLED=true`；
 > ③ **prod**：transport + distributed-mode + cggmp-enabled 全开，全分布式 CGGMP21 2-of-3。
 > 即：**dev/staging 的 MPC 并非真阈值签名路径，与 prod 不等价**——需要真阈值签名的验证一律看
 > `CggmpMpcE2EClusterTest` 与 prod 配置。该阶梯由 CI 门禁
 > `scripts/check-mpc-tier-policy.sh`（k8s-sync-check workflow）固化：staging 不得静默退回
-> 进程内传输，prod 不得静默退回 GG20/进程内。
+> 进程内传输，prod 不得静默退回非分布式/进程内。
 
-- **Rust `mpc-engine`**：已接入 ZenGo-X/KZen `multi-party-ecdsa` 0.8.1 crate，实现**真实 GG20 门限 ECDSA**（真实 Paillier、Feldman VSS、MtA、ZK 证明，产出可被标准 secp256k1 验证的签名）。
+- **Rust `mpc-engine`**：CGGMP21（LFDT-Lockness `cggmp21` 0.6.3，Kudelski 审计）实现**真实 t-of-n 门限 ECDSA**（keygen → aux_info（Paillier）→ sign，产出可被标准 secp256k1 验证的签名）；驱动线程 actor 模型，协议消息经协调器**字节管道**中转（协调器不理解、不落盘、不修改消息，不含任何份额）。
 - **Java MPC 传输层**：`GrpcMpcTransportStub` + `MpcTransportGrpcServer` 实现**真实 gRPC over HTTP/2** 传输，支持 P2P 消息路由。
-- **部署模型限制（诚实声明，2026-08-31 交付前审计补强）**：当前为「可信协调器」模型，**在密码学意义上不等价于分布式门限签名**，交付材料不得宣称"2-of-3 MPC 门限安全"：
-  1. 全部 n 方私钥份额与 Paillier 解密密钥驻留**同一进程**（`gg20.rs` DkgSession 同时持有全量份额；`set_my_identity` 只标记本方身份，不清除他方份额）；
-  2. 协调器模式回退分支允许**跨方提取任意份额**（`dkg.rs` `extract_private_share` 失败后直接返回 `shared_keys[party_index]`，调用方传任意 party_index 即得对应方份额）——签名协议真实（数学正确），但访问控制是单进程信任边界；
-  3. 份额加密落盘的 storage_key 此前三方共用硬编码值（S4 修复：集群脚本与 node.toml 模板已改为 `MPC_STORAGE_KEY` 环境变量/一次性随机密钥），密钥轮换未实现版本化（`load_storage_key_for_version` 忽略版本号）。
-
-  **门限容错属性失效**（进程被攻破即等价单点签名）。完全分散式部署（t-of-n 方被攻破不泄露私钥）为 v2.2.0 演进目标；份额的 ZK 范围证明校验亦未接入（`MpcSignatureAggregator` TODO，聚合前仅格式校验，依赖最终 ECDSA 整体验签兜底）。
+- **份额隔离（诚实声明，2026-10-08）**：CGGMP21 路径下各引擎进程独立持有份额（NXC1 信封 AES-256-GCM 加密落盘），signing-service 不持有任何份额；GG20 时代「全部 n 方份额驻留同一进程、协调器可跨方提取任意份额」的缺陷**随该路径代码一并消失**——不再是「访问控制靠单进程信任边界」。
+  **残余诚实声明**：`cggmp-enabled=false`（dev/默认/staging 现状）时没有真实引擎，冷钱包走 FROZEN skeleton 记账（占位份额、非真实签名）；份额的 ZK 范围证明校验未接入 Java 聚合层（`MpcSignatureAggregator` TODO，依赖最终 ECDSA 整体验签兜底）；落盘密钥轮换未实现版本化（`load_storage_key_for_version` 当前忽略版本号，单密钥运行）。
 - **编译状态**：已完成编译验证（`mpc-engine/target/release/mpc-engine` 产物存在；README 早期"未编译"声明过时，2026-08-27 核实）。
 - **传输安全**：gRPC mTLS 已实现（MPC-P0-02 修复，use-plaintext 默认 false）。
 

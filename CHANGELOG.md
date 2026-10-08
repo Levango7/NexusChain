@@ -2,6 +2,53 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [2.52.0] - 2026-10-08
+
+### GG20 退役：CGGMP21 独占 + GPL-3.0 系依赖清零（PLAN-001-R2）
+
+**破坏性变更**：MPC 密码学引擎的 GG20 可信协调器路径整体删除，CGGMP21 成为唯一
+门限签名路径；`MpcCryptoService` 的 6 个 GG20 RPC 从 proto 移除（Rust 与 Java 两副本同步）。
+
+- **Rust（mpc-engine）**：删除 `gg20.rs` / `dkg.rs` / `sign.rs` / `aggregate.rs` /
+  `distributed.rs` / `session.rs` 六模块（~3.9k 行）与 `tests/integration_test.rs`；
+  `server.rs` 服务面收缩为 `HealthCheck` + 11 个 `Cg*` RPC；`main.rs` 去掉协调器转发
+  装配（`is_coordinator`/`forward_tls_config`）；`persistence.rs` 删除 GG20 三类落盘产物
+  （`persist_session` / `MyShareRecord` / `persist_my_share`；**存量旧文件不再被任何代码
+  路径读取**，不做迁移）；低9 的 0600 权限加固改挂 CGGMP21 份额落盘路径。
+- **proto（双副本同步）**：删 6 个 RPC（Dkg / Sign / Aggregate / RelayDkgMessage /
+  RelaySignMessage / DistStatus）与 11 个 message；两副本的消息/RPC 集一致性已 diff 校验。
+- **Java（nexus-signing-service）**：删 `GrpcMpcCryptoEngine` 及 6 个 GG20 测试/桩
+  （`GrpcMpcCryptoEngineTest` / `GrpcMpcCryptoEngineTlsConfigTest` / `MockMpcCryptoStubFactory` /
+  `MpcEndToEndTest` / `MpcMultiHostEngineTest` / `MpcMultiHostTlsTest`）；
+  `ColdWalletMultiSigService` 单引擎化（`selectActiveEngine` 仅 CGGMP21，GG20 回退分支删除）；
+  `MpcCryptoEngine` SPI 与 DTO 保留（CGGMP21 实现沿用同一契约），29 处注释/javadoc 引用清理。
+- **许可证（本次核心收益）**：`Cargo.lock` 移除 5 个 GPL-3.0 系 crate——
+  `multi-party-ecdsa 0.8.1` / `centipede 0.3.0` / `bulletproof-kzen 1.2.0` /
+  `round-based 0.1.7` / `zk-paillier 0.4.3`，连同 GG20 独用依赖（`curv-kzen`、
+  `kzen-paillier`、`secp256k1 0.20`、`sha2 0.9`、`rand 0.7`→改 `rand_core`、dev-dep `nix`）
+  一并清除；lock 文件 −940 行，`round-based` 仅剩 0.4.1（MIT/Apache）。
+  扫描器复跑实证：**强传染（GPL/AGPL）5 → 0**（组件 2073→1997）。
+  `NOTICE` §4 与 `docs/licensing.md` §5 记处置完成（路径 B：退役触达路径）。
+  **强弱之别（诚实标注）**：cggmp21 链路仍带 LGPL-3.0+ 弱传染组件
+  （`rug`/`gmp-mpfr-sys`，GMP 系）——LGPL 允许闭源使用但有声明/重链接义务，
+  与本条 GPL 处置无关，仍按既有 LGPL 决策项单独处理。
+- **运行时语义（fail-closed，须周知）**：`mpc.engine.cggmp-enabled=false`（dev/默认/
+  staging 现状）时**没有任何真实引擎**——冷钱包降级 FROZEN skeleton 记账（占位份额，
+  非真实签名）；GG20 时代「false 则回退可信协调器」的第二路径已不存在。prod 路径不变
+  （transport + distributed-mode + cggmp-enabled 全开 = 全分布式 CGGMP21 2-of-3）。
+  `scripts/check-mpc-tier-policy.sh` 对 staging 未开 CGGMP21 打出 WARN（非 FAIL）。
+- **CI**：`build-and-test` 的 `integration_test`（GG20 3 节点集群）步骤 → 四个
+  `cggmp_*` 进程内协议 E2E 步骤（keygen/aux/sign/恢复，带 JUnit XML 同口径）；
+  `MpcEndToEndTest` 步骤删除——真实多进程集群回归由既有 `mpc-java-cluster-e2e` job
+  （`CggmpMpcE2EClusterTest`）承担。
+- **文档**：README「MPC 多方签名」章节重写（默认态=无真实引擎/skeleton、份额隔离诚实声明
+  更新）；`mpc-engine/tests/README.md` 重写；`application.yml` 的 `cggmp-enabled` 注释更新；
+  `docs/roadmap-next.md` C1 完成归档。
+- **本机验证证据**：`cargo check --all-targets`（含/不含 `--features tls`）与
+  `cargo clippy --all-targets --features tls` 零警告；`cargo test --features tls`
+  **41 用例全绿**（34 lib 单测 + `cggmp_dkg_sim` 3 + 三个协议 E2E 各 1，各 ~100s）。
+  实施记录与偏差说明：`docs/plan/PLAN-001-R2-gg20-retirement.md` §8。
+
 ## [2.51.3] - 2026-10-04
 
 ### 依赖许可扫描接入 CI + 发现 5 个 GPL-3.0 系 crate（2026-10-07，报告制）
