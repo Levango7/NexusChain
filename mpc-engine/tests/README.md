@@ -1,198 +1,81 @@
-# MPC 多节点集成测试
+# mpc-engine 集成测试
 
-本目录包含 NexusChain mpc-engine 的多节点端到端集成测试，验证 GG20 DKG、阈值签名、节点恢复与 mTLS 握手在 3 节点分布式部署下的正确性。
+本目录包含 CGGMP21 门限签名的端到端集成测试。
 
-## 目录结构
+> **GG20 退役说明（2026-10-08，PLAN-001-R2）**：原 `integration_test.rs`
+> （GG20 3 节点集群 DKG/Sign/恢复/mTLS 五用例）随 GG20 路径一并删除。
+> 真实多进程集群 E2E 现由 Java 侧 `CggmpMpcE2EClusterTest` 承担（见下）。
 
-```
-mpc-engine/
-├── scripts/
-│   ├── generate-certs.sh       # mTLS 证书生成脚本（CA + 3 节点证书）
-│   └── start-mpc-cluster.sh    # 3 节点集群启动/停止脚本
-├── config/
-│   ├── node1.toml              # 节点 1 配置模板（人类可读）
-│   ├── node2.toml
-│   ├── node3.toml
-│   └── nodeN.json              # 运行时实际加载的配置（由脚本自动生成）
-├── certs/                      # mTLS 证书输出目录
-│   ├── ca.crt / ca.key
-│   ├── node1.crt / node1.key
-│   ├── node2.crt / node2.key
-│   └── node3.crt / node3.key
-├── data/
-│   └── nodeN/sessions/         # 各节点会话快照（AES-256-GCM 加密）
-├── logs/
-│   └── nodeN.log               # 各节点运行日志
-└── tests/
-    ├── integration_test.rs     # 集成测试（5 个用例，均 #[ignore]）
-    └── README.md               # 本文件
-```
+## 测试套件（进程内，`cargo test`）
 
-## 环境要求
-
-### 必需
-
-| 依赖 | 版本 | 用途 |
-|------|------|------|
-| Linux / WSL2 | — | secp256k1 / kzen-paillier 原生库编译需要 gcc + dlltool |
-| rustc + cargo | 1.70+ | Rust 工具链 |
-| gcc | 4.8+ | C 编译器（链接原生库） |
-| openssl | 1.1.1+ | 证书生成 |
-| protoc | 3.0+ | gRPC stub 生成（build.rs） |
-
-### 可选
-
-| 依赖 | 用途 |
-|------|------|
-| grpcurl | 健康检查（gRPC 协议层）；缺失时退化为 TCP 端口探测 |
-| nc (netcat) | TCP 端口探测回退方案 |
-
-### Windows 限制
-
-**Windows 环境无法运行本测试套件**：
-
-- `multi-party-ecdsa` / `curv-kzen` / `kzen-paillier` 依赖 C 原生扩展，编译需要 `gcc.exe` + `dlltool.exe`
-- Windows MSVC 工具链不提供 `dlltool`，GNU 工具链需手动安装 MinGW + binutils
-- `test_node_recovery` 使用 `nix` crate 发送 SIGTERM 信号，仅 Unix 可用
-
-**解决方案**：在 WSL2 / Docker Linux 容器中运行。
-
-## 运行步骤
-
-### 1. 启动 MPC 集群
+| 文件 | 验证内容 |
+|------|----------|
+| `cggmp_dkg_sim.rs` | 三方 keygen 仿真：批量 `IncompleteKeyShare` 产出与 `validate` 通过 |
+| `cggmp_threshold_e2e.rs` | 三方 keygen → aux → assembleShare → **2-of-3 sign** → 验签里程碑 |
+| `cggmp_rpc_e2e.rs` | 进程内起 3 个 tonic server，经 `MpcCryptoService` RPC 面（`Cg*` + relay）跑全链路 |
+| `cggmp_persistence_recovery.rs` | 份额落盘（NXC1 信封）→ "重启"（同 StorageCtx 新实例）→ 恢复 → 签名 |
 
 ```bash
 cd mpc-engine
-
-# 前台启动（Ctrl+C 停止）
-bash scripts/start-mpc-cluster.sh
-
-# 或后台启动（daemon 模式）
-bash scripts/start-mpc-cluster.sh -d
+cargo test --features tls --test cggmp_dkg_sim --test cggmp_threshold_e2e \
+  --test cggmp_rpc_e2e --test cggmp_persistence_recovery
 ```
 
-脚本执行流程：
+CI：`build-and-test` job 的「MPC CGGMP21 E2E (in-process protocol tests)」步骤
+（`.github/workflows/ci.yml`）；lib 单测见「Rust tests (mpc-engine, lib)」步骤。
 
-1. 检查 `certs/` 下 mTLS 证书，缺失则调用 `generate-certs.sh` 生成
-2. 编译 mpc-engine（`cargo build --features tls --release`）
-3. 生成节点 JSON 配置（`config/nodeN.json`，从 TOML 模板等价转换）
-4. 启动 3 个节点子进程，分别监听 50051/50052/50053
-5. 健康检查等待所有节点就绪（最多 30 秒）
-6. 输出节点 PID 与日志路径
+**运行时长提示**：aux_info 的 Paillier 安全素数生成是重活——三个协议 E2E
+各约 1-2 分钟（debug 构建本机实测 ~100s/套件），CI 会随缓存波动。
 
-### 2. 运行集成测试
+## 真实多进程集群 E2E（Java 侧，CI 独立 job）
+
+`nexus-signing-service` 的 `CggmpMpcE2EClusterTest` 在 JVM 内拉起 3 个
+mpc-engine 子进程（经 `MPC_ENGINE_BIN` 指定二进制），走真实 gRPC + mTLS
+完成生产路径 2-of-3 签名（含份额隔离断言）。
+
+- CI job：`mpc-java-cluster-e2e`（`.github/workflows/ci.yml`）
+- 该 job 流程：build mpc-engine（release + tls）→ `start-mpc-cluster.sh --setup-only`
+  生成证书与节点配置 → `./gradlew :nexus-signing-service:test -PincludeClusterE2E
+  --tests "....CggmpMpcE2EClusterTest"`
+
+## 集群脚本（手动验证用）
 
 ```bash
-# 运行所有集成测试
-cargo test --features tls --test integration_test -- --ignored
-
-# 运行单个测试
-cargo test --features tls --test integration_test -- --ignored test_dkg_3_nodes
-cargo test --features tls --test integration_test -- --ignored test_sign_2_of_3
-cargo test --features tls --test integration_test -- --ignored test_sign_wrong_threshold
-cargo test --features tls --test integration_test -- --ignored test_node_recovery
-cargo test --features tls --test integration_test -- --ignored test_mtls_handshake
-
-# 显示测试输出（println!）
-cargo test --features tls --test integration_test -- --ignored --nocapture
+cd mpc-engine
+bash scripts/start-mpc-cluster.sh --setup-only  # 只生成 certs/ 与 config/nodeN.json
+bash scripts/start-mpc-cluster.sh -d            # 起 3 节点（50051-50053）
+bash scripts/start-mpc-cluster.sh -k            # 停止
 ```
 
-**`--ignored` 是必须的**：所有测试标注了 `#[ignore]`，因它们需要多节点环境，不应在常规 `cargo test` 中触发。
-
-### 3. 停止集群
-
-```bash
-bash scripts/start-mpc-cluster.sh -k
-```
-
-或前台模式下按 `Ctrl+C`。
-
-## 测试用例
-
-| 测试 | 验证内容 | 预期结果 |
-|------|----------|----------|
-| `test_dkg_3_nodes` | 3 节点 DKG，各节点获得一致聚合公钥 | 公钥一致，份额隔离，proof 非空 |
-| `test_sign_2_of_3` | 2 节点协作签名，签名可由公钥验证 | ECDSA verify(msg, r‖s, Q) = true |
-| `test_sign_wrong_threshold` | 1 节点签名（低于 threshold=2）应失败 | Aggregate 返回 success=false |
-| `test_node_recovery` | 节点重启后从 WAL 恢复会话 | 重启后签名成功 |
-| `test_mtls_handshake` | mTLS 双向证书握手验证 | 合法证书成功，无证书被拒绝 |
-
-## 配置文件说明
-
-### TOML 模板（`config/nodeN.toml`）
-
-人类可读的配置模板，包含完整字段注释。**mpc-engine 当前实现使用 JSON 格式**（`PartyConfig` + `serde_json`），TOML 仅作为模板参考。
-
-### JSON 配置（`config/nodeN.json`）
-
-运行时实际加载的配置，由 `start-mpc-cluster.sh` 自动生成（若不存在）。字段与 `PartyConfig` 结构对齐：
-
-```json
-{
-  "party_index": 0,
-  "party_id": "party-0",
-  "listen_addr": "127.0.0.1:50051",
-  "peers": [
-    {"party_index": 1, "party_id": "party-1", "endpoint": "https://127.0.0.1:50052"},
-    {"party_index": 2, "party_id": "party-2", "endpoint": "https://127.0.0.1:50053"}
-  ],
-  "storage_key": "4242...4242",
-  "storage_key_version": 1,
-  "storage_key_source": "plain",
-  "tls_cert": "certs/node1.crt",
-  "tls_key": "certs/node1.key",
-  "tls_ca": "certs/ca.crt"
-}
-```
+配置文件：`config/nodeN.toml` 为人类可读模板；`config/nodeN.json` 是运行时实际
+加载的 `PartyConfig`（由脚本生成）。存储密钥经 `MPC_STORAGE_KEY` 注入，证书由
+`scripts/generate-certs.sh` 生成（CA + 3 节点，SAN=localhost/127.0.0.1）。
 
 ## 已知限制
 
-1. **Windows 不支持**：缺 gcc/dlltool，无法编译原生库；`test_node_recovery` 需 Unix 信号
-2. **mTLS 域名**：证书 SAN 包含 `localhost` + `127.0.0.1`，仅适用于本地验证；生产环境需包含实际域名
-3. **storage_key**：测试用固定密钥 `4242...4242`，生产环境必须从 KMS / 环境变量读取
-4. **gRPC auth**：测试用固定 token `nexus-mpc-test-token`，生产环境需强随机 token
-5. **节点恢复测试**：`test_node_recovery` 会停止并重启 node3，需确保集群由 `start-mpc-cluster.sh` 启动（依赖 PID 文件）
-6. **健康检查回退**：无 grpcurl 时退化为 TCP 端口探测，仅验证端口监听不验证 gRPC 协议
+1. **TLS SAN**：测试证书仅含 `localhost` + `127.0.0.1`，K8s 内连接引擎 Pod DNS 时
+   客户端需 `NEX_MPC_ENGINE_TLS_OVERRIDE_AUTHORITY=localhost`（与生产 values 一致）。
+2. **storage_key**：集群脚本生成一次性随机密钥（`MPC_STORAGE_KEY` 环境变量）；
+   生产必须接 KMS/Secret，测试占位值不得复用。
+3. **gRPC auth**：集群脚本 token 为测试值；生产需强随机 `MPC_AUTH_TOKEN`（两端一致）。
+4. **Windows 本地构建**：cggmp21 链路依赖 rug/GMP，需 MSYS2（`m4`+`make`+`gcc`）；
+   Git Bash 下 MSVC linker 会被 `/usr/bin/link` 遮蔽，改用
+   `cargo +stable-x86_64-pc-windows-gnu`（CI 在 Linux，无此问题）。
+5. **健康检查**：`grpcurl -plaintext 127.0.0.1:50051 nexus.mpc.MpcCryptoService/HealthCheck`
+   可手工探活；无 grpcurl 时可用 `ss -tlnp | grep 50051` 粗查端口。
 
 ## 故障排查
 
-### 节点启动失败
-
 ```bash
-# 查看节点日志
+# 节点日志 / 编译日志
 tail -100 logs/node1.log
-tail -100 logs/node2.log
-tail -100 logs/node3.log
-
-# 查看编译日志
 tail -100 logs/build.log
-```
 
-### 健康检查超时
-
-```bash
-# 检查端口监听
-ss -tlnp | grep -E '5005[123]'
-
-# 手动 gRPC 调用
-grpcurl -plaintext 127.0.0.1:50051 nexus.mpc.MpcCryptoService/HealthCheck
-```
-
-### 证书问题
-
-```bash
-# 重新生成证书
+# 证书问题
 bash scripts/generate-certs.sh -f
-
-# 验证证书
 openssl verify -CAfile certs/ca.crt certs/node1.crt
 openssl x509 -in certs/node1.crt -text -noout | grep -A2 "Subject Alternative Name"
-```
 
-### 端口占用
-
-```bash
-# 查看占用进程
+# 端口占用
 lsof -i :50051
-# 修改 config/nodeN.toml 中的 listen_addr 与端口
 ```

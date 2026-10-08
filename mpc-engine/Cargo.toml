@@ -2,11 +2,10 @@
 name = "mpc-engine"
 version = "0.1.0"
 edition = "2021"
-description = "NexusChain MPC 密码学引擎（GG18/GG20 DKG/Sign/Aggregate），审计报告 §4.1 方案 A"
+description = "NexusChain MPC 密码学引擎（CGGMP21 门限 ECDSA：keygen/aux/sign）"
 license = "Apache-2.0"
 
-# P2-T4：lib target 暴露 proto 模块，供 tests/integration_test.rs 集成测试引用
-# （此前缺失导致集成测试编译失败：cannot find module or crate `mpc_engine`）。
+# lib target 暴露全部业务模块，供 tests/cggmp_*.rs 集成测试引用。
 [lib]
 name = "mpc_engine"
 path = "src/lib.rs"
@@ -19,91 +18,42 @@ eyre = "0.6"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# === 阈值签名密码学库（真实 GG18/GG20 门限 ECDSA）===
-# ZenGo-X/KZen multi-party-ecdsa：GG18/GG20 ECDSA 阈值签名的成熟 Rust 实现
-# （真实 Paillier 密钥、Feldman VSS、MtA、ZK 证明，非模拟）。
-# 许可证声明 GPL-3.0-or-later。分发本二进制与组合交付物前须审查对应义务；
-# 独立进程和 gRPC 接口不单独构成法律上的免责依据，见 NOTICE。
-# 版本 0.8.1 依赖 curv-kzen 0.9 / kzen-paillier 0.4.2 / sha2 0.9 / secp256k1 0.20，
-# 此处显式声明同版本以让 cargo 统一解析。
-#
-# v2.2.0 阶段二（2026-09-01）：分布式 sign 路径的实现引擎为 cggmp21（见下）。
-# **注意（2026-09-17 审计核实）：该路径默认关闭**——Java 侧 `mpc.engine.cggmp-enabled`
-# 默认 false（nexus-signing-service/src/main/resources/application.yml）。
-# 默认 GG20 可信协调器持有全量份额；实际部署可覆盖该开关启用 CGGMP21。
-# CGGMP21 已实现 cg_start_sign、cg_relay_publish/cg_relay_pull 和 sign_sync；
-# distributed.rs 的阶段一 sign relay 限制属于旧 GG20，不能用于否定 CGGMP21。
-# multi-party-ecdsa 保留给单进程可信协调器路径（gg20.rs/sign.rs/aggregate.rs，
-# Java E2E 与集成测试依赖），两条路径并存直至协调器路径退役
-# （退役设计见 docs/plan/PLAN-001-gg20-retirement.md，状态：设计稿，未实施）。
-multi-party-ecdsa = "0.8.1"
-curv-kzen = "0.9"
-paillier = { version = "0.4.2", package = "kzen-paillier" }
-zk-paillier = "0.4.3"
-
-# === v2.2.0 阶段二：CGGMP21（分布式 sign 路径引擎）===
+# === 门限签名密码学库（唯一路径：CGGMP21）===
 # LFDT-Lockness/cggmp21 0.6.3：state-of-art 门限 ECDSA（Kudelski 审计）。
-# 关键优势（阶段一用 GG20 无法做到的）：
+# 关键能力（旧 GG20 路径无法做到的）：
 #   1. 全部协议消息类型 pub（keygen ThresholdMsg/signing Msg/AuxOnlyMsg）——
 #      分布式转发的前提（GG20 的 OfflineProtocolMessage 是 crate 私有）
-#   2. 原生 t-of-n 门限（签名恰好 t 方；GG20 是 t+1 的怪癖语义）
-#   3. 活跃维护（0.6.3 发布于 2025-11；multi-party-ecdsa 0.8.1 停更于 2023-06）
-# 许可证 MIT OR Apache-2.0（比 GPL 的 multi-party-ecdsa 更宽松）。
-# features：state-machine = 同步状态机包装（wrap_protocol）；curve-secp256k1 = 曲线。
+#   2. 原生 t-of-n 门限（签名恰好 t 方）
+#   3. 活跃维护；许可证 MIT OR Apache-2.0
 # 依赖链注意：crates.io 锁定 paillier-zk 0.4.3 → fast-paillier 0.1.1 → rug/GMP
 # 硬依赖（Windows 本地构建需 MSYS2 m4+make；Linux CI 直接可用）。
 # 依赖策略：cggmp21 自带 generic-ec/round-based 0.4.x（其 re-export 即可用），
-# 不在此显式声明版本以免与旧 GG20 路径的 round-based 0.1 冲突——两条协议栈
-# 的依赖在树中按 major 版本隔离共存。
+# 不在此显式声明版本。
+#
+# **GG20 退役（PLAN-001-R2，2026-10-08）**：GG20 可信协调器路径及其 GPL-3.0 系
+# crate（multi-party-ecdsa / centipede / bulletproof-kzen / round-based 0.1 /
+# zk-paillier）已从依赖树整体删除——本 crate 现无 GPL/AGPL 依赖。
 cggmp21 = { version = "0.6.3", features = ["state-machine", "curve-secp256k1"] }
-# sha2 0.10：cggmp21 依赖 digest 0.10 trait（GenericArray 等新 API），与 mpc-engine
-# 旧锁定的 sha2 0.9（GG20 路径）不兼容。以别名引入供 cggmp.rs 专用；旧 sha2 0.9
-# 保留给 GG20 路径不变（package 名 sha2 不变 = 旧路径不感知）。
+# sha2 0.10：cggmp21 依赖 digest 0.10 trait（GenericArray 等新 API）。
+# 别名 sha2_010 为历史命名（退役前用于与 GG20 系的 sha2 0.9 隔离）——
+# 依赖树中现已无第二个 sha2 版本，可择机在后续清理批次改回 `sha2`。
 sha2_010 = { package = "sha2", version = "0.10" }
-# rand_core：cggmp21 链路使用（cggmp21-keygen re-export）。与 mpc-engine 已有
-# rand 0.7 同 crate 名冲突——以别名引入供 cggmp.rs 专用。
-rand_core = "0.6"
+# rand_core：cggmp21 链路（keygen rng）与 persistence nonce 生成使用。
+# features=["getrandom"]：提供 OsRng（密码学随机源）。
+rand_core = { version = "0.6", features = ["getrandom"] }
 
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-# v2.2.0 分散式（真门限安全）：round_based 0.1 保留给 GG20 单进程路径的
-# Simulation 测试驱动（multi-party-ecdsa 0.8.1 消息层）。
-round-based = { version = "0.1", features = ["dev"] }
-# secp256k1 版本锁定 0.20：multi-party-ecdsa 0.8.1 / curv-kzen 0.9 依赖
-# secp256k1 0.20 的 API。曾尝试升级至 0.29，但 0.29 存在 breaking API 变更：
-#   1) `secp256k1::Signature` 不再从 crate 根导出（需改用 `secp256k1::ecdsa::Signature`）；
-#   2) `Secp256k1::verify()` 被移除，替换为 `verify_ecdsa()`；
-#   3) `Message::from_slice` 被弃用（改用 `from_digest_slice`）。
-# 升级 0.29 需同步重写 gg20.rs 的 secp256k1 调用，且 multi-party-ecdsa 0.8.1
-# 内部仍绑定 0.20 API，会导致版本分裂。故在 multi-party-ecdsa 升级至支持
-# secp256k1 0.29+ 的版本之前，此处保持 0.20 不变。
-# REQ-26/P2 延后：需 multi-party-ecdsa 上游发布兼容 secp256k1 0.29+ 的新版本后方可升级，
-# 当前 0.8.1 为最新可用版本。
-# 勘误（2026-10-07）：此处原文写"详见 spec.md REQ-26"，但本仓并不跟踪 spec.md
-# （`git ls-files | grep -E '(^|/)spec\.md$'` 为空，`git grep REQ-26 -- docs` 也为空）——
-# REQ-26 是审计会话里的编号，不是可查的工单。升级前置条件以上述注释为准，别再按一个
-# 不存在的文档去找它。
-secp256k1 = { version = "0.20", features = ["global-context"] }
 hex = "0.4"
-sha2 = "0.9"
 
-# === MPC-P1-05 安全止血：会话落盘 AES-256-GCM 加密 ===
-# aes-gcm 0.10：AES-256-GCM AEAD（认证加密），用于加密 DKG 会话快照
-# （含全部 n 方私钥份额，明文落盘可被任意提取）。密钥从 MPC_STORAGE_KEY 环境变量读取。
-# rand 0.7：生成 GCM nonce（12 字节密码学随机数）。
-# 版本 0.7 与 curv-kzen 0.9 / multi-party-ecdsa 0.8.1 依赖一致，避免引入
-# rand 0.8（其 getrandom 0.2 + windows-sys 0.61 在 Windows GNU 工具链需 dlltool）。
+# === MPC-P1-05 安全止血：份额落盘 AES-256-GCM 加密 ===
+# aes-gcm 0.10：AES-256-GCM AEAD（认证加密），用于加密 CGGMP21 协议产物
+# （含私钥份额，明文落盘可被任意提取）。密钥从 MPC_STORAGE_KEY 环境变量读取。
 aes-gcm = "0.10"
-rand = "0.7"
 
 # === 密钥材料安全擦除（zeroize）===
-# zeroize 1.8：提供 Zeroize trait 与派生宏，用于在密钥材料（私钥份额、
-# 加密密钥、签名份额等）离开作用域前将其内存清零，防止残余密钥被
-# 内存转储/冷启动攻击提取。启用 derive feature 以支持 #[derive(Zeroize)]。
-# 关键结构体（SharedKeysSerde、MyShareRecord、PeerConfig、PartyConfig 等）
-# 派生 Zeroize；含第三方密码学类型（curv-kzen Scalar/Point、
-# multi-party-ecdsa Keys/SignatureRecid）的结构体（DkgSession、
-# Gg20SignOutput、SignCache）手动实现 best-effort zeroize。
+# zeroize 1.8：提供 Zeroize trait 与派生宏，用于在密钥材料（storage_key 等）
+# 离开作用域前将其内存清零，防止残余密钥被内存转储/冷启动攻击提取。
 zeroize = { version = "1.8", features = ["derive"] }
 
 [build-dependencies]
@@ -112,14 +62,11 @@ tonic-build = "0.12"
 [features]
 tls = ["tonic/tls"]
 
-# === 集成测试依赖（tests/integration_test.rs）===
-# nix：Unix 信号（SIGTERM）+ unistd::Pid，用于 test_node_recovery 停止 node3 子进程
-# 仅 Linux/WSL 可用，Windows 上 test_node_recovery 会被 #[cfg(not(unix))] panic
+# === 集成测试依赖（tests/cggmp_*.rs）===
 # serial_test：persistence 测试家族依赖全局 MPC_STORAGE_KEY_VERSION env，
-# 并行测试下 set/remove 交错导致 flaky（v2.2.0 分散式测试引入时序扰动后暴露
-# 的存量缺陷）。#[serial] 标记 env 竞态用例。
+# 并行测试下 set/remove 交错导致 flaky。#[serial] 标记 env 竞态用例。
 [dev-dependencies]
-nix = { version = "0.27", features = ["signal", "process"] }
 serial_test = "3"
-# F 批：tests/cggmp_rpc_e2e.rs 进程内 tonic server 需要 TcpListenerStream
+# cggmp_rpc_e2e.rs / cggmp_persistence_recovery.rs 进程内 tonic server 需要
+# TcpListenerStream。
 tokio-stream = { version = "0.1", features = ["net"] }

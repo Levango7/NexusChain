@@ -18,18 +18,26 @@ replace upstream notices, or certify distribution compliance.
    nexus-devtools and nexus-sdk/typescript declare MIT. Do not override these
    declarations simply because the root license is Apache-2.0.
 
-4. mpc-engine/Cargo.toml declares Apache-2.0 for the local package. Its resolved
-   dependency graph (Cargo.lock) contains FIVE GPL-3.0-family crates, verified
-   against crates.io on 2026-10-07 by scripts/check-license-policy.py:
-   multi-party-ecdsa 0.8.1 (GPL-3.0-or-later), centipede 0.3.0 (GPL-3.0),
-   bulletproof-kzen 1.2.0 (GPL-3.0), round-based 0.1.7 (GPL-3.0),
-   zk-paillier 0.4.3 (GPL-3.0-or-later). cggmp21 is MIT OR Apache-2.0.
-   GPL-3.0 is a strong copyleft license: Rust statically links these crates into
-   the same binary, so distribution ordinarily requires licensing the combined
-   work under GPL-3.0 and providing corresponding source. The upstream
-   multi-party-ecdsa project offers no commercial/dual-license option and is
-   declared unmaintained. A separate process or gRPC interface alone does not
-   establish a legal GPL exemption. Distribution obligations require review.
+4. mpc-engine/Cargo.toml declares Apache-2.0 for the local package. Until
+   2026-10-08 its resolved dependency graph (Cargo.lock) contained FIVE
+   GPL-3.0-family crates, verified against crates.io on 2026-10-07 by
+   scripts/check-license-policy.py: multi-party-ecdsa 0.8.1 (GPL-3.0-or-later),
+   centipede 0.3.0 (GPL-3.0), bulletproof-kzen 1.2.0 (GPL-3.0),
+   round-based 0.1.7 (GPL-3.0), zk-paillier 0.4.3 (GPL-3.0-or-later).
+   Those crates were reachable only through the GG20 trusted-coordinator
+   signing path. On 2026-10-08 that path was retired and removed
+   (docs/plan/PLAN-001-R2-gg20-retirement.md): the Rust sources that used them,
+   the GG20 gRPC surface, and the corresponding Java client were deleted, and
+   the dependencies were dropped from Cargo.toml. Re-verification with
+   scripts/check-license-policy.py on the post-retirement lockfile reports no
+   GPL/AGPL-family crates in mpc-engine; cggmp21 (MIT OR Apache-2.0) is the
+   sole threshold-signature stack. This entry is retained as a change record.
+   Note the distinction: the cggmp21 chain still brings LGPL-3.0-or-later
+   components (rug, gmp-mpfr-sys), which permit proprietary use under
+   conditions but carry their own notice/relinking obligations - those remain
+   open and are tracked in docs/licensing.md section 5.
+   If the dependency graph changes again, re-run the scanner and review before
+   distribution.
 
 5. Retain existing source and dependency notices. Before distribution, review
    provenance, modifications, resolved dependency licenses, required license

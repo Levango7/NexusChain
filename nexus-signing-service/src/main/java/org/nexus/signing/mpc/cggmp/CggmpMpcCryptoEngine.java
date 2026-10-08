@@ -77,10 +77,11 @@ public class CggmpMpcCryptoEngine implements MpcCryptoEngine {
                     + "(production: 3 nodes, mpc.engine.distributed-mode=true)";
 
     /**
-     * CGGMP21 路径开关（H 批新增）。
+     * CGGMP21 引擎开关。
      *
-     * <p>{@code true} — 编排层走 CGGMP21 路径；{@code false} — 编排层回退到
-     * GG20 路径（GrpcMpcCryptoEngine）。</p>
+     * <p>{@code true} — 编排层启用真实 MPC 引擎（CGGMP21 集群）；
+     * {@code false}（默认）— 引擎上下文不装配，编排层降级为
+     * FROZEN skeleton 记账流程（GG20 退役后无第二路径可回退）。</p>
      */
     @Value("${mpc.engine.cggmp-enabled:false}")
     private boolean cggmpEnabled;

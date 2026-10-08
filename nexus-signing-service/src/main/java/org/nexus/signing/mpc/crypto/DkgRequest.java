@@ -8,10 +8,9 @@ import java.util.Objects;
  * DKG（分布式密钥生成）请求 DTO。
  *
  * <p>纯 Java POJO，不依赖 gRPC 生成类，解耦编排层与传输层。
- * {@link GrpcMpcCryptoEngine} 负责将本 DTO 转换为 protobuf 生成类
- * {@code org.nexus.signing.mpc.crypto.grpc.DkgRequest} 并发起 gRPC 调用。</p>
+ * SPI 实现（{@code CggmpMpcCryptoEngine}）负责将本 DTO 映射为引擎调用。</p>
  *
- * <p>对应审计报告 §4.1 方案 A：Rust multi-party-ecdsa 引擎 DKG 阶段。</p>
+ * <p>对应审计报告 §4.1 方案 A：Rust CGGMP21 引擎 keygen 阶段。</p>
  *
  * <p>不可变值对象。</p>
  */

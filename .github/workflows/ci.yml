@@ -333,14 +333,13 @@ jobs:
           helm lint deploy/helm
           helm template t-umbrella deploy/helm > /dev/null
 
-      # P2-C6: 三个关键回归测试门禁（双花防御 / 桥资金守恒 / 门限签名）
+      # MPC-P2-C6: 三个关键回归测试门禁（双花防御 / 桥资金守恒 / 门限签名）
       # 这些测试覆盖核心安全不变量，单独显式执行以确保被运行（即使其他测试被 skip）。
       # - ReplayProtectionTest：跨链消息重放保护（双花防御核心）
       # - DefaultInsuranceFundTest：保险基金账本守恒（桥资金守恒）
-      # - MpcEndToEndTest：MPC 门限签名端到端（t-of-n 阈值签名正确性）——
-      #   时序修正（2026-08-30 审计）：此前在本步骤执行，位于 Rust 3 节点集群
-      #   启动【之前】，assumeTrue(healthy) 恒 false → CI 中此"关键门禁"实际
-      #   永远静默跳过。现移至下方 "MPC distributed E2E" 集群启动之后执行。
+      # - 门限签名端到端：GG20 退役（PLAN-001-R2，2026-10-08）后由独立 job
+      #   `mpc-java-cluster-e2e` 的 CGGMP21 集群回归承担（真实 3 进程 keygen），
+      #   本 job 内不再有 GG20 MpcEndToEndTest 可跑。
       - name: 关键回归测试（双花防御 / 桥资金守恒）
         run: |
           ./gradlew :nexus-bridge:test \
@@ -434,35 +433,23 @@ jobs:
             || echo "::warning::cargo-test-to-junit.py 转换失败（mpc-engine lib），XML 缺失但不阻断门禁"
           exit $rc
 
-      # MPC-B2-T2: 分布式 E2E（3 节点集群）——ubuntu runner + openssl + protoc
-      # （tonic_build 需系统 protoc）+ cargo test --features tls --test integration_test。
-      # start-mpc-cluster.sh -d 自动生成 mTLS 证书、编译并后台启动 3 节点（50051-50053）。
-      # JUnit XML 转换同上；${PIPESTATUS[0]} 同样用于防止 tee 吞掉失败。
-      - name: MPC distributed E2E (3-node cluster)
+      # CGGMP21 协议 E2E（进程内，GG20 退役后取代原 3 节点集群 integration_test）：
+      # keygen→aux→assemble→2-of-3 sign→验签 全链路在进程内跑通（无需外部集群，
+      # 无证书/端口依赖）；恢复 E2E 覆盖份额落盘→重启→恢复→签名。
+      # 真实多进程集群 E2E 由独立 job `mpc-java-cluster-e2e` 承担。
+      # JUnit XML 转换同上；${PIPESTATUS[0]} 用于防止 tee 吞掉失败。
+      - name: MPC CGGMP21 E2E (in-process protocol tests)
         working-directory: mpc-engine
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq protobuf-compiler openssl
-          bash scripts/start-mpc-cluster.sh -d
-          trap 'bash scripts/start-mpc-cluster.sh -k' EXIT
           mkdir -p build/test-results/rust
-          cargo test --features tls --test integration_test 2>&1 \
-            | tee build/test-results/rust/raw-integration.log
+          cargo test --features tls --test cggmp_dkg_sim --test cggmp_threshold_e2e \
+            --test cggmp_rpc_e2e --test cggmp_persistence_recovery --no-fail-fast 2>&1 \
+            | tee build/test-results/rust/raw-cggmp-e2e.log
           rc=${PIPESTATUS[0]}
-          python3 ../scripts/cargo-test-to-junit.py build/test-results/rust/raw-integration.log \
-            -o build/test-results/rust/mpc-engine-integration.xml --suite mpc-engine-integration \
-            || echo "::warning::cargo-test-to-junit.py 转换失败（mpc-engine integration），XML 缺失但不阻断门禁"
+          python3 ../scripts/cargo-test-to-junit.py build/test-results/rust/raw-cggmp-e2e.log \
+            -o build/test-results/rust/mpc-engine-cggmp-e2e.xml --suite mpc-engine-cggmp-e2e \
+            || echo "::warning::cargo-test-to-junit.py 转换失败（mpc-engine cggmp e2e），XML 缺失但不阻断门禁"
           exit $rc
-
-      # MPC Java E2E（时序修正后移到此处）：Rust 3 节点集群已由上一步启动，
-      # MpcEndToEndTest 的 assumeTrue(healthy) 现在实际可达——真实执行
-      # DKG→Sign→Aggregate→ECDSA 验签的门限签名 Java 侧回归。
-      # 集群由上方 trap 在 job 结束时统一清理，此处无需重复。
-      - name: MPC Java E2E (MpcEndToEndTest, after cluster start)
-        run: |
-          ./gradlew :nexus-signing-service:test \
-            --tests "org.nexus.signing.mpc.MpcEndToEndTest" \
-            --no-daemon
 
       # P2-C7 / ZK-A1-R5(a): zk-groth16-service 单测（bridge 动态电路 + 仪式导入回归）
       # 复用上方已安装的 Rust 工具链；bridge.rs 内含 #[cfg(test)] 单测（真实 Groth16 往返）。

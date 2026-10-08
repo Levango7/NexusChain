@@ -1,98 +1,44 @@
-//! gRPC 服务端实现：实现 `MpcCryptoService` trait，
-//! 将 Dkg/Sign/Aggregate/HealthCheck 四个 RPC 委托给对应模块。
+//! gRPC 服务端实现：实现 `MpcCryptoService` trait。
 //!
-//! v1.9.2：接入真实 GG20 门限 ECDSA（`gg20` 模块），并与 nexus-signing-service
-//! 的 Java proto 契约（`nexus.mpc` 包、hex 字符串编码、HealthCheck）完全对齐。
+//! **GG20 退役后（PLAN-001-R2）**：CGGMP21 是唯一的门限签名路径。服务面 =
+//! `HealthCheck` + 11 个 `Cg*` RPC（keygen/aux/sign 生命周期、消息中转、
+//! 验签、状态查询）。GG20 时代的 `Dkg`/`Sign`/`Aggregate` 可信协调器 RPC
+//! 与阶段一分散式 `RelayDkgMessage`/`RelaySignMessage`/`DistStatus` RPC
+//! 已随对应密码学模块一并删除。
 //!
-//! **MPC-P2-F5 分布式安全模型**：
-//!   * 私钥份额隔离：DKG 响应只返回本方份额（`extract_private_share` 限制 `party_index`）。
-//!   * session_id 身份绑定：`SessionManager` 在 DKG 创建 session 时绑定调用方 `party_id`，
-//!     后续 Sign/Aggregate 校验调用方身份一致。
+//! **安全模型（CGGMP21）**：
+//!   * 私钥份额驻留引擎进程：`CgAssembleShare` 后份额只在驱动线程内，任何
+//!     RPC 响应都不携带份额（对比 GG20 时代 Dkg 响应返回本方份额）。
 //!   * gRPC 强制 mTLS：Server 端要求客户端证书（`tls_authority_root`），
 //!     Client 端加载自己的证书并验证 server 证书（见 `MtlsConfig`）。
 //!   * AuthInterceptor（MPC-P1-05）保留，作为应用层 Bearer token 认证补充。
 
-use std::collections::HashMap;
-// std::sync::Mutex safe: lock not held across .await point.
-// run_dkg/run_sign/run_aggregate 均为同步函数（pub fn，非 async fn），
-// 在 async RPC 方法中同步调用，锁的获取与释放在同步代码段内完成，不跨 .await。
-use std::sync::Mutex;
-
 use tonic::{Request, Response, Status};
 
-use crate::aggregate;
 use crate::cggmp::CgMessage;
 use crate::cggmp_state::{CgDriverHandle, DriverCommand, DriverReply};
-use crate::dkg;
-use crate::gg20::{DkgSession, SignCache};
 use crate::proto::mpc_crypto::*;
-use crate::session::SessionManager;
-use crate::sign;
 
 /// gRPC 服务实现体。
 ///
-/// 持有三级缓存：
-///   * `sessions`：session_id -> DKG 会话（各方密钥材料）
-///   * `sign_runs`：session_id -> 一次完整 GG20 签名运行结果
-///   * `session_mgr`：session_id -> 调用方身份绑定（MPC-P2-F5）
+/// 仅持有 CGGMP21 驱动线程 actor 句柄：全部 `Cg*` RPC 经 `CgDriverHandle`
+/// 信封指令转发到驱动线程执行（状态机 !Send——独占线程是 E 批确立的硬约束）。
 ///
-/// 注：不派生 Debug，因缓存内含第三方密码学库类型，未必实现 Debug。
+/// 注：不派生 Debug，因句柄内含第三方密码学库状态，未必实现 Debug。
 pub struct MpcCryptoServiceImpl {
-    pub sessions: Mutex<HashMap<String, DkgSession>>,
-    pub sign_runs: Mutex<HashMap<String, SignCache>>,
-    /// MPC-P2-F5: session_id 调用方身份绑定。
-    pub session_mgr: SessionManager,
-    /// MPC-P2-F5: 本方 party_id（来自 PartyConfig，用于 session 身份绑定）。
-    /// 空字符串表示未配置（兼容旧模式，不启用身份绑定）。
-    pub my_party_id: String,
-    /// 协调器转发：true 表示此节点是 DKG/Sign 协调器（party_index=0）。
-    pub is_coordinator: bool,
-    /// 客户端 TLS 配置，用于转发 gRPC 调用到协调器。
-    #[cfg(feature = "tls")]
-    pub forward_tls_config: Option<tonic::transport::ClientTlsConfig>,
-    /// Auth token，用于转发 gRPC 调用。
-    pub auth_token: String,
-    /// v2.2.0 分散式注册表（真门限安全，阶段一：DKG 份额隔离 + 消息转发）。
-    pub dist: crate::distributed::DistRegistry,
-    /// v2.2.0 阶段二 F 批：CGGMP21 驱动线程 actor 句柄（!Send 状态机独占线程）。
-    /// `global()` 进程单例——clone 廉价（信封通道 + Arc relay 池）。
+    /// CGGMP21 驱动线程 actor 句柄（`global()` 进程单例；clone 廉价）。
     pub cg_driver: CgDriverHandle,
 }
 
 impl Default for MpcCryptoServiceImpl {
     fn default() -> Self {
         Self {
-            sessions: Mutex::new(HashMap::new()),
-            sign_runs: Mutex::new(HashMap::new()),
-            session_mgr: SessionManager::new(),
-            my_party_id: String::new(),
-            is_coordinator: true,
-            #[cfg(feature = "tls")]
-            forward_tls_config: None,
-            auth_token: String::new(),
-            dist: crate::distributed::DistRegistry::new(),
             cg_driver: CgDriverHandle::global(),
         }
     }
 }
 
 impl MpcCryptoServiceImpl {
-    /// 创建带本方 party_id 的服务实例（MPC-P2-F5 分布式模式）。
-    pub fn with_party_id(my_party_id: String) -> Self {
-        Self {
-            sessions: Mutex::new(HashMap::new()),
-            sign_runs: Mutex::new(HashMap::new()),
-            session_mgr: SessionManager::new(),
-            my_party_id,
-            is_coordinator: true,
-            #[cfg(feature = "tls")]
-            forward_tls_config: None,
-            auth_token: String::new(),
-            dist: crate::distributed::DistRegistry::new(),
-            cg_driver: CgDriverHandle::global(),
-        }
-    }
-
     /// 创建带**独立** CGGMP 驱动线程的服务实例（F 批）。
     ///
     /// `CgDriverHandle::global()` 是进程单例——**一个引擎进程只代表一个
@@ -103,15 +49,6 @@ impl MpcCryptoServiceImpl {
     /// 实证：三方变一方，200 轮空转）。
     pub fn with_independent_cggmp_driver() -> Self {
         Self {
-            sessions: Mutex::new(HashMap::new()),
-            sign_runs: Mutex::new(HashMap::new()),
-            session_mgr: SessionManager::new(),
-            my_party_id: String::new(),
-            is_coordinator: true,
-            #[cfg(feature = "tls")]
-            forward_tls_config: None,
-            auth_token: String::new(),
-            dist: crate::distributed::DistRegistry::new(),
             cg_driver: CgDriverHandle::start(),
         }
     }
@@ -123,54 +60,8 @@ impl MpcCryptoServiceImpl {
         storage: Option<crate::cggmp_state::StorageCtx>,
     ) -> Self {
         Self {
-            sessions: Mutex::new(HashMap::new()),
-            sign_runs: Mutex::new(HashMap::new()),
-            session_mgr: SessionManager::new(),
-            my_party_id: String::new(),
-            is_coordinator: true,
-            #[cfg(feature = "tls")]
-            forward_tls_config: None,
-            auth_token: String::new(),
-            dist: crate::distributed::DistRegistry::new(),
             cg_driver: CgDriverHandle::start_with_storage(storage),
         }
-    }
-
-    /// 创建分布式配置的服务实例（MPC-P2-F5 协调器转发模式）。
-    ///
-    /// `is_coordinator` 为 true 时此节点作为协调器（party_index=0）本地执行 DKG/Sign；
-    /// 为 false 时非协调器节点将 DKG/Sign 请求转发到协调器（peer_endpoints[0]）。
-    pub fn with_distributed_config(
-        my_party_id: String,
-        is_coordinator: bool,
-        #[cfg(feature = "tls")] forward_tls_config: Option<tonic::transport::ClientTlsConfig>,
-        auth_token: String,
-    ) -> Self {
-        Self {
-            sessions: Mutex::new(HashMap::new()),
-            sign_runs: Mutex::new(HashMap::new()),
-            session_mgr: SessionManager::new(),
-            my_party_id,
-            is_coordinator,
-            #[cfg(feature = "tls")]
-            forward_tls_config,
-            auth_token,
-            dist: crate::distributed::DistRegistry::new(),
-            cg_driver: CgDriverHandle::global(),
-        }
-    }
-
-    /// MPC-P2-F5: 校验调用方身份与 session 绑定一致。
-    ///
-    /// `my_party_id` 为空时跳过校验（兼容旧模式）；非空时严格校验。
-    fn check_session_identity(&self, session_id: &str, party_index: usize) -> Result<(), Status> {
-        if self.my_party_id.is_empty() {
-            return Ok(()); // 兼容旧模式：未配置 party_id，跳过身份绑定
-        }
-        self.session_mgr
-            .verify_caller(session_id, &self.my_party_id, party_index)
-            .map(|_| ())
-            .map_err(|e| Status::permission_denied(format!("session identity check failed: {e}")))
     }
 
     // ---- F 批辅助：CGGMP proto ↔ 内部类型互转 + driver 桥接 + 回执映射 ----
@@ -292,252 +183,10 @@ impl MpcCryptoServiceImpl {
             ))),
         }
     }
-
-    /// 协调器转发：将 DKG 请求转发到协调器节点（peer_endpoints[0]）。
-    ///
-    /// 非协调器节点在本地无缓存会话时调用此方法，将请求转发给协调器，
-    /// 由协调器执行完整 GG20 DKG 并返回对应 party_index 的份额。
-    async fn forward_dkg(
-        &self,
-        req: &DkgRequest,
-        auth_header: Option<&tonic::metadata::MetadataValue<tonic::metadata::Ascii>>,
-    ) -> Result<Response<DkgResponse>, Status> {
-        let coordinator_endpoint = req
-            .peer_endpoints
-            .first()
-            .ok_or_else(|| Status::internal("no coordinator endpoint"))?;
-
-        let channel = self.connect_to_coordinator(coordinator_endpoint).await?;
-        let mut client =
-            crate::proto::mpc_crypto::mpc_crypto_service_client::MpcCryptoServiceClient::new(
-                channel,
-            );
-
-        let mut forward_req = Request::new(req.clone());
-        if let Some(auth) = auth_header {
-            forward_req
-                .metadata_mut()
-                .insert("authorization", auth.clone());
-        }
-
-        client.dkg(forward_req).await
-    }
-
-    /// 协调器转发：将 Sign 请求转发到协调器节点（peer_endpoints[0]）。
-    ///
-    /// 非协调器节点在本地无缓存签名运行时调用此方法，将请求转发给协调器。
-    async fn forward_sign(
-        &self,
-        req: &SignRequest,
-        auth_header: Option<&tonic::metadata::MetadataValue<tonic::metadata::Ascii>>,
-    ) -> Result<Response<SignResponse>, Status> {
-        let coordinator_endpoint = req
-            .peer_endpoints
-            .first()
-            .ok_or_else(|| Status::internal("no coordinator endpoint"))?;
-
-        let channel = self.connect_to_coordinator(coordinator_endpoint).await?;
-        let mut client =
-            crate::proto::mpc_crypto::mpc_crypto_service_client::MpcCryptoServiceClient::new(
-                channel,
-            );
-
-        let mut forward_req = Request::new(req.clone());
-        if let Some(auth) = auth_header {
-            forward_req
-                .metadata_mut()
-                .insert("authorization", auth.clone());
-        }
-
-        client.sign(forward_req).await
-    }
-
-    /// 建立到协调器节点的 gRPC Channel。
-    ///
-    /// 当 `forward_tls_config` 已配置时启用 mTLS；否则使用明文连接。
-    async fn connect_to_coordinator(
-        &self,
-        endpoint_str: &str,
-    ) -> Result<tonic::transport::Channel, Status> {
-        let endpoint: tonic::transport::Endpoint = endpoint_str.parse().map_err(|e| {
-            Status::internal(format!(
-                "invalid coordinator endpoint '{}': {}",
-                endpoint_str, e
-            ))
-        })?;
-
-        #[cfg(feature = "tls")]
-        {
-            if let Some(tls) = &self.forward_tls_config {
-                let endpoint = endpoint
-                    .tls_config(tls.clone())
-                    .map_err(|e| Status::internal(format!("TLS config: {}", e)))?;
-                return endpoint
-                    .connect()
-                    .await
-                    .map_err(|e| Status::internal(format!("connect to coordinator: {}", e)));
-            }
-        }
-
-        endpoint
-            .connect()
-            .await
-            .map_err(|e| Status::internal(format!("connect to coordinator: {}", e)))
-    }
 }
 
 #[tonic::async_trait]
 impl mpc_crypto_service_server::MpcCryptoService for MpcCryptoServiceImpl {
-    /// 分布式密钥生成。
-    async fn dkg(&self, req: Request<DkgRequest>) -> Result<Response<DkgResponse>, Status> {
-        // MPC-P1-05: 记录调用方身份（peer_addr），便于审计追溯
-        let peer = req
-            .remote_addr()
-            .map(|a| a.to_string())
-            .unwrap_or_else(|| "unknown".to_string());
-        let auth_header = req.metadata().get("authorization").cloned();
-        let req_inner = req.into_inner();
-        tracing::info!(
-            session_id = %req_inner.session_id,
-            threshold = req_inner.threshold,
-            total_parties = req_inner.total_parties,
-            party_index = req_inner.party_index,
-            peer = %peer,
-            "rpc Dkg (MPC-P1-05: caller identity logged, MPC-P2-F5: distributed security)"
-        );
-
-        // 协调器转发：非协调器节点在无缓存会话时转发到协调器
-        if !self.is_coordinator
-            && req_inner.party_index != 0
-            && !req_inner.peer_endpoints.is_empty()
-        {
-            let has_session = {
-                let guard = self
-                    .sessions
-                    .lock()
-                    .map_err(|e| Status::internal(format!("lock: {e}")))?;
-                guard.contains_key(&req_inner.session_id)
-            };
-            if !has_session {
-                tracing::info!(session_id = %req_inner.session_id, "forwarding DKG to coordinator");
-                return self.forward_dkg(&req_inner, auth_header.as_ref()).await;
-            }
-        }
-
-        // 中10: 在 DKG（创建新 session 的入口）触发过期清理，回收 Closed/超时 session。
-        // 选择在 DKG 触发而非 Sign/Aggregate：DKG 是 session 生命周期的起点，
-        // 在此处清理可避免创建新 session 时被过期 session 占用配额（与中11 max_sessions 协同）。
-        let reaped = self.session_mgr.cleanup_expired_sessions();
-        if reaped > 0 {
-            tracing::info!(
-                reaped,
-                "中10: expired sessions reaped before creating new session"
-            );
-        }
-
-        // MPC-P2-F5: 创建 session 并绑定调用方身份（my_party_id 非空时）
-        // 跳过转发请求的 identity binding（协调器处理转发请求时 party_index != 0）
-        let is_forwarded = self.is_coordinator && req_inner.party_index != 0;
-        if !is_forwarded
-            && !self.my_party_id.is_empty()
-            && !req_inner.session_id.is_empty()
-            && req_inner.party_index >= 0
-        {
-            self.session_mgr
-                .create_session(
-                    &req_inner.session_id,
-                    &self.my_party_id,
-                    req_inner.party_index as usize,
-                )
-                .map_err(|e| {
-                    Status::permission_denied(format!("session identity binding failed: {e}"))
-                })?;
-        }
-
-        let resp = dkg::run_dkg(&self.sessions, req_inner)
-            .map_err(|e| Status::internal(format!("dkg: {e}")))?;
-        Ok(Response::new(resp))
-    }
-
-    /// 部分签名。
-    async fn sign(&self, req: Request<SignRequest>) -> Result<Response<SignResponse>, Status> {
-        // MPC-P1-05: 记录调用方身份
-        let peer = req
-            .remote_addr()
-            .map(|a| a.to_string())
-            .unwrap_or_else(|| "unknown".to_string());
-        let auth_header = req.metadata().get("authorization").cloned();
-        let req_inner = req.into_inner();
-        tracing::info!(
-            session_id = %req_inner.session_id,
-            party_index = req_inner.party_index,
-            peer = %peer,
-            "rpc Sign (MPC-P1-05: caller identity logged, MPC-P2-F5: identity check)"
-        );
-
-        // 协调器转发：非协调器节点在无缓存签名运行时转发到协调器
-        if !self.is_coordinator
-            && req_inner.party_index != 0
-            && !req_inner.peer_endpoints.is_empty()
-        {
-            let has_sign_run = {
-                let guard = self
-                    .sign_runs
-                    .lock()
-                    .map_err(|e| Status::internal(format!("lock: {e}")))?;
-                guard.contains_key(&req_inner.session_id)
-            };
-            if !has_sign_run {
-                tracing::info!(session_id = %req_inner.session_id, "forwarding Sign to coordinator");
-                return self.forward_sign(&req_inner, auth_header.as_ref()).await;
-            }
-        }
-
-        // MPC-P2-F5: 校验调用方身份与 session 绑定一致
-        // 保存 session_id 供状态转换使用（req 会被 move 进 run_sign）
-        let session_id = req_inner.session_id.clone();
-        // 跳过转发请求的 identity check（协调器处理转发请求时 party_index != 0）
-        let is_forwarded = self.is_coordinator && req_inner.party_index != 0;
-        if !is_forwarded && req_inner.party_index >= 0 {
-            self.check_session_identity(&req_inner.session_id, req_inner.party_index as usize)?;
-        }
-
-        let resp = sign::run_sign(&self.sessions, &self.sign_runs, req_inner)
-            .map_err(|e| Status::internal(format!("sign: {e}")))?;
-
-        // MPC-P2-F5: 状态转换 DkgReady -> SignReady（resp.success 时）
-        if resp.success {
-            let _ = self
-                .session_mgr
-                .transition(&session_id, crate::session::SessionState::SignReady);
-        }
-
-        Ok(Response::new(resp))
-    }
-
-    /// 签名聚合。
-    async fn aggregate(
-        &self,
-        req: Request<AggregateRequest>,
-    ) -> Result<Response<AggregateResponse>, Status> {
-        // MPC-P1-05: 记录调用方身份
-        let peer = req
-            .remote_addr()
-            .map(|a| a.to_string())
-            .unwrap_or_else(|| "unknown".to_string());
-        let req = req.into_inner();
-        tracing::info!(
-            session_id = %req.session_id,
-            shares = req.partial_signatures.len(),
-            peer = %peer,
-            "rpc Aggregate (MPC-P1-05: caller identity logged)"
-        );
-
-        let resp = aggregate::run_aggregate(&self.sign_runs, req)
-            .map_err(|e| Status::internal(format!("aggregate: {e}")))?;
-        Ok(Response::new(resp))
-    }
-
     /// 健康检查（对齐 Java 契约 HealthCheck RPC）。
     async fn health_check(
         &self,
@@ -546,92 +195,6 @@ impl mpc_crypto_service_server::MpcCryptoService for MpcCryptoServiceImpl {
         Ok(Response::new(HealthCheckResponse {
             healthy: true,
             status: format!("mpc-engine {}", env!("CARGO_PKG_VERSION")),
-        }))
-    }
-
-    // ==================== v2.2.0 分散式（真门限安全，阶段一） ====================
-    // 以下三个 RPC 实现 DKG 份额隔离：协调器只做消息转发（relay_*），
-    // 任何一方（含协调器）都无法接触他方份额。
-
-    /// 各方向协调器发布 DKG 协议消息；协调器落入转发池供其他方拉取。
-    ///
-    /// 安全属性：协调器不理解、不落盘、不修改 payload（纯管道）；
-    /// 消息内容是 round_based::Msg<keygen::ProtocolMessage> 的 JSON——
-    /// 含本方 Paillier 公钥材料/VSS 承诺，不含任何私钥份额。
-    async fn relay_dkg_message(
-        &self,
-        req: Request<DistDkgMessage>,
-    ) -> Result<Response<RelayAck>, Status> {
-        use crate::distributed::DistMessage;
-        let m = req.into_inner();
-        let msg = DistMessage {
-            sender: u16::try_from(m.sender_index)
-                .map_err(|_| Status::invalid_argument("sender_index overflow"))?,
-            receiver: if m.receiver_index == 0 {
-                None
-            } else {
-                Some(
-                    u16::try_from(m.receiver_index)
-                        .map_err(|_| Status::invalid_argument("receiver_index overflow"))?,
-                )
-            },
-            payload_json: m.payload_json,
-        };
-        // 基本载荷校验（fail-closed：非 JSON 直接拒绝，防垃圾灌池）
-        if serde_json::from_str::<serde_json::Value>(&msg.payload_json).is_err() {
-            return Ok(Response::new(RelayAck {
-                success: false,
-                error: "payload_json is not valid JSON".to_string(),
-            }));
-        }
-        let before = self.dist.relay_publish(&m.session_id, vec![msg]);
-        tracing::info!(
-            session_id = %m.session_id,
-            sender = m.sender_index,
-            queue_len = before + 1,
-            "v2.2.0 dist: DKG message relayed (coordinator is a byte pipe)"
-        );
-        Ok(Response::new(RelayAck {
-            success: true,
-            error: String::new(),
-        }))
-    }
-
-    /// sign 阶段一不做转发（上游 OfflineProtocolMessage 私有，见
-    /// distributed.rs 模块头"范围"）——预留 RPC 返回明确的 not-implemented。
-    async fn relay_sign_message(
-        &self,
-        _req: Request<DistSignMessage>,
-    ) -> Result<Response<RelayAck>, Status> {
-        Ok(Response::new(RelayAck {
-            success: false,
-            error: "distributed sign relay is not available in stage 1 \
-                     (upstream OfflineProtocolMessage is crate-private; see distributed.rs)"
-                .to_string(),
-        }))
-    }
-
-    /// 查询本节点分散式 DKG 进度（轮次/完成态）。
-    async fn dist_status(
-        &self,
-        req: Request<DistStatusRequest>,
-    ) -> Result<Response<DistStatusResponse>, Status> {
-        let sid = req.into_inner().session_id;
-        let (round, finished) = self
-            .dist
-            .dkg_with::<(u16, bool)>(&sid, |s| match s {
-                Some(st) => (st.current_round(), st.is_finished()),
-                None => (0, false),
-            })
-            .map_err(|e| Status::internal(format!("dist registry lock: {e}")))?;
-        Ok(Response::new(DistStatusResponse {
-            current_round: u32::from(round),
-            finished,
-            error: if self.dist.dkg_exists(&sid) {
-                String::new()
-            } else {
-                "no distributed DKG state for this session".to_string()
-            },
         }))
     }
 

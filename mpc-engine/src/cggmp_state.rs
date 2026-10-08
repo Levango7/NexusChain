@@ -33,12 +33,11 @@
 //! 6. `VerifySignature`：聚合公钥本地验签（信任根基与分布式路径一致——
 //!    审计 S4 修复同款原则：不信任调用方传入的验签公钥）
 //!
-//! ## 与 distributed.rs（阶段一 GG20）的关系
+//! ## 与 GG20 阶段一（已退役）的关系
 //!
-//! 阶段一 GG20 分散式 DKG 保留（Java E2E 依赖），CGGMP21 为并行演进路径；
-//! 协调器路径（sign.rs/aggregate.rs）按 Cargo.toml 规划终将退役。本模块
-//! 只实现引擎内部驱动与测试验证，RPC 接线（relay_sign_message 等真实化）
-//! 是下一批工作。
+//! 阶段一 GG20 分散式 DKG 及其注册表（distributed.rs）与协调器路径
+//! （sign.rs/aggregate.rs）已于 2026-10-08 随 GG20 退役（PLAN-001-R2）
+//! 一并删除；本模块是引擎内部驱动层，RPC 接线见 server.rs 的 11 个 `Cg*` RPC。
 
 use std::collections::HashMap;
 use std::sync::mpsc::{channel, Sender};
@@ -833,7 +832,7 @@ fn data_to_sign(message_hash: [u8; 32]) -> DataToSign<Secp256k1> {
 
 /// CGGMP21 协调器 relay 池（发布/拉取消息——协调器是字节管道）。
 ///
-/// 与 distributed.rs 的 DistRegistry.relays 同构但 0-based：
+/// 0-based 三元组：
 ///   * `pool`：session_id → 待转发消息（`CgMessage` 0-based 三元组）
 ///   * `consumed`：`session:my_index` → 已消费**队列索引**集合（幂等拉取）
 ///
@@ -883,11 +882,10 @@ impl CgRelayPool {
 
     /// 拉取并消费本方尚未见过的消息（幂等——重复拉取不重复消费）。
     ///
-    /// **按接收方过滤（F 批修正——GG20 relay_pull 同款缺陷的修复）**：
+    /// **按接收方过滤（F 批修正）**：
     /// 广播（receiver=None）对所有非 sender 方可拉；p2p（receiver=Some(idx)）
     /// **仅目标方 idx 可拉**——否则非目标方会把定向消息喂给状态机造成
-    /// round mismatch（distributed.rs 的 relay_pull 只排除自发不按 receiver
-    /// 过滤，该缺陷因无调用方从未暴露；本池随 F 批 e2e 修复）。
+    /// round mismatch。
     pub fn pull(&self, session_id: &str, my_index: u16) -> Vec<CgMessage> {
         let relays = match self.pool.lock() {
             Ok(g) => g,

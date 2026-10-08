@@ -284,10 +284,11 @@ mpc:
     # Authorization: Bearer <token> 头，供 mpc-engine 的 AuthInterceptor 校验。
     # 生产环境必须设置，且与 mpc-engine 的 MPC_AUTH_TOKEN 环境变量一致。
     auth-token: ${NEX_MPC_ENGINE_AUTH_TOKEN:}
-    # H 批：启用 CGGMP21 分散式门限签名路径（F 批 RPC + G 批客户端）。
-    # true：编排层走 CGGMP21 路径（原生 t-of-n，无 GG20 t+1 怪癖）；
-    # 需完整分布式集群（>=2 端点，生产 3 节点），否则启动 fail-closed。
-    # false（默认）：编排层走 GG20 路径（GrpcMpcCryptoEngine，可信协调器模式）。
+    # CGGMP21 门限签名引擎开关（GG20 退役后唯一真实引擎路径）。
+    # true：编排层启用真实 MPC 引擎（需完整分布式集群：>=2 端点，生产 3 节点；
+    # 集群不完整时启动 fail-closed）；
+    # false（默认）：不装配引擎，冷钱包降级为 FROZEN skeleton 记账流程
+    # ——GG20 退役后不再有"回退到可信协调器"的第二路径（fail-closed 语义）。
     cggmp-enabled: ${NEX_MPC_ENGINE_CGGMP_ENABLED:false}
     # P0-1：CGGMP21 集群路径参数（cggmp-enabled=true 时生效）
     cggmp:

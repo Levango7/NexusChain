@@ -14,7 +14,7 @@ import java.util.Objects;
  * gRPC mTLS（双向 TLS）配置构建工具（MPC-P0-02 修复）。
  *
  * <p>提供统一的 {@link SslContext} 构建方法，供 gRPC 客户端
- * （{@link GrpcMpcCryptoEngine} / {@link GrpcMpcTransportStub}）与
+ * （{@link GrpcMpcTransportStub} / CGGMP21 集群通道）与
  * gRPC 服务端（{@link MpcTransportGrpcServer}）共用。</p>
  *
  * <h2>配置项</h2>
@@ -44,7 +44,6 @@ import java.util.Objects;
  * <h2>线程安全</h2>
  * <p>本类仅提供静态工厂方法，无共享状态，线程安全。</p>
  *
- * @see GrpcMpcCryptoEngine
  * @see GrpcMpcTransportStub
  * @see MpcTransportGrpcServer
  */

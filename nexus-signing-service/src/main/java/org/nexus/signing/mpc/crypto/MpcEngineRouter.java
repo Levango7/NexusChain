@@ -28,7 +28,7 @@ import java.util.concurrent.TimeUnit;
 /**
  * MPC 引擎多端点路由器（P0-1 Task 239：分散式部署）。
  *
- * <p>将 {@link GrpcMpcCryptoEngine} 从单端点升级为多端点路由：
+ * <p>把引擎客户端从单端点升级为多端点路由：
  * 支持配置逗号分隔的 {@code mpc.engine.endpoints}（host:port 列表），
  * 按 {@code partyIndex} 路由到对应节点的 gRPC channel。</p>
  *
@@ -48,7 +48,7 @@ import java.util.concurrent.TimeUnit;
  * <h2>向后兼容</h2>
  * <ul>
  *   <li>当 {@code mpc.engine.endpoints} 未配置（空）时，回退到
- *       {@code mpc.engine.host:port} 单端点模式，行为与原 {@link GrpcMpcCryptoEngine} 一致
+ *       {@code mpc.engine.host:port} 单端点模式，行为与原单端点客户端一致
  *       （仅 {@code distributed-mode=false}，即 dev 默认）</li>
  *   <li>当 {@code mpc.engine.endpoints} 仅配置一个端点时，所有 partyIndex
  *       均路由到该端点（等价于单端点模式）</li>
@@ -83,7 +83,7 @@ import java.util.concurrent.TimeUnit;
  * <p>由 Spring 容器管理：{@link PostConstruct} 为所有端点建立 channel，
  * {@link PreDestroy} 优雅关闭所有 channel。</p>
  *
- * @see GrpcMpcCryptoEngine
+ * @see org.nexus.signing.mpc.cggmp.MpcCggmpClusterConfig
  * @since 2.2.0
  */
 @Component
@@ -128,7 +128,7 @@ public class MpcEngineRouter {
     private String host;
 
     /** 引擎 gRPC 端口（单端点模式，向后兼容）。
-     * <p>同 GrpcMpcCryptoEngine.port 的 K8s 注入冲突修复（2026-09-14）：
+     * <p>K8s 注入冲突修复（2026-09-14）：
      * K8s Service mpc-engine 命名端口注入 MPC_ENGINE_PORT=tcp://<ip>:<port>，
      * relaxed binding 命中裸 mpc.engine.port 键导致 NumberFormatException。
      * 占位符嵌套默认值仍被 env 穿透，故不嵌套、直接数字默认；
@@ -362,7 +362,7 @@ public class MpcEngineRouter {
     /**
      * 构建 Bearer token 认证 interceptor（MPC-P1-05）。
      *
-     * <p>与 {@code GrpcMpcCryptoEngine} 同契约：auth-token 为空返回 null
+     * <p>与该引擎客户端同契约：auth-token 为空返回 null
      * （无认证，仅限开发）。</p>
      */
     private ClientInterceptor buildAuthInterceptorOrNull() {

@@ -1,6 +1,6 @@
 # mpc-engine 子 chart 默认 values
 # ============================================================================
-# MPC 密码学引擎（Rust tss-lib / multi-party-ecdsa）分散式部署
+# MPC 密码学引擎（Rust cggmp21，CGGMP21 门限 ECDSA）分散式部署
 #   - StatefulSet 3 副本，每副本通过 pod ordinal 自动分配 party_index
 #   - Headless Service 供 Pod 间 gRPC + mTLS 互连
 #   - ConfigMap 注入 node.json 配置模板（每副本读取自己的 party 配置）

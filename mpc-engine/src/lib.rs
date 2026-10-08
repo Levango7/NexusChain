@@ -17,6 +17,10 @@
 //! **v2.2.0 F 批（模块声明自 bin 迁入）**：全部业务模块迁到 lib（main.rs
 //! 薄壳化），tests/cggmp_rpc_e2e.rs 经 `mpc_engine::server` 起进程内 tonic
 //! server 完成 RPC 面验收——不再复制业务模块树。
+//!
+//! **GG20 退役（PLAN-001-R2）**：`gg20`/`dkg`/`sign`/`aggregate`/`distributed`/
+//! `session` 六个模块随 GG20 可信协调器路径一并删除——CGGMP21（`cggmp` +
+//! `cggmp_state`）是唯一门限签名路径，依赖树中不再有 GPL-3.0 系 crate。
 
 // gRPC 服务方法返回 Result<_, tonic::Status>，tonic::Status 为 176 字节，
 // 触发 clippy::result_large_err（perf lint，阈值 128 字节）。
@@ -25,16 +29,10 @@
 // dead_code：部分工具函数/结构体在 tls feature 未启用时未使用，属条件编译正常现象。
 #![allow(clippy::result_large_err, dead_code, clippy::needless_range_loop)]
 
-pub mod aggregate;
 pub mod cggmp;
 // E 批：CGGMP21 会话驱动层——驱动线程 actor（!Send 状态机独占线程）。
 pub mod cggmp_state;
 pub mod config;
-pub mod distributed;
-pub mod dkg;
-pub mod gg20;
 pub mod persistence;
 pub mod proto;
 pub mod server;
-pub mod session;
-pub mod sign;
