@@ -1,42 +1,29 @@
-//! MPC 会话持久化（方案 A 多进程缺口 1：dkg 份额落盘，重启后 Sign 可恢复）。
+//! MPC 会话持久化：CGGMP21 协议产物（keygen 中间态 / 完整 KeyShare）的
+//! 加密落盘与恢复。
 //!
-//! DkgSession（serde 序列化，注释明确"序列化存储供 Sign 阶段重建"）——
-//! DKG 完成后落盘到 `MPC_ENGINE_SESSION_DIR`（默认 `./mpc-sessions`），
-//! Sign 时内存缺失则从盘恢复。
-//!
-//! **MPC-P1-05 安全止血**：会话快照含全部 n 方私钥份额，明文 JSON 落盘可被
-//! 任意进程/用户读取并提取任意方私钥份额。现改为落盘前用 **AES-256-GCM**
-//! 认证加密，密钥从环境变量 `MPC_STORAGE_KEY` 读取（hex 编码的 32 字节）。
-//! 文件格式：`nonce(12B) || ciphertext`，GCM 自带完整性校验防篡改。
+//! **MPC-P1-05 + 中12 加密信封**：落盘前用 **AES-256-GCM** 认证加密，密钥从
+//! 环境变量 `MPC_STORAGE_KEY` 读取（hex 编码的 32 字节）。文件格式：
+//! `MAGIC("NXC1") || version(4B LE) || nonce(12B) || ciphertext`，GCM 自带
+//! 完整性校验防篡改；密钥版本号支持轮换（旧格式无头视为版本 1）。
 //! 引擎侧隔离进程持有密钥材料不跨进程传输（方案 A"份额只在参与者进程"语义）。
 //!
-//! **MPC-P2-F5 分布式安全模型**：
-//!   * `persist_session`：保留全量会话加密落盘（兼容可信协调器模式，run_sign 需全量份额）。
-//!   * `persist_my_share`：**只加密存储本方私钥份额**（`my_private_share`），
-//!     聚合公钥与各方可验证公钥明文存储（验签所需，非私钥材料）。
-//!   * `MyShareRecord`：本方份额持久化记录（私钥份额加密，公钥材料明文）。
+//! **GG20 退役（PLAN-001-R2）**：GG20 时代的三类落盘产物——`persist_session`
+//! 全量会话快照、`persist_my_share` 本方份额隔离记录（`MyShareRecord`）——
+//! 随 GG20 路径一并删除。**存量旧文件不再被任何代码路径读取**（CGGMP21 路径
+//! 重新生成份额），不做迁移；如需清理可手工删除会话目录下的
+//! `session-*.json` / `my-share-*.json`。
 //!
 //! **S4-a 修复（session_id 路径穿越净化）**：RPC 原始 session_id 在拼接落盘
 //! 文件名前一律经 `sanitize_session_id` 净化（仅保留 [A-Za-z0-9-_]），
 //! 产物被约束为会话目录内的单文件名——封堵 `../` 逃逸、Windows 盘符冒号、
-//! UNC 前缀与嵌套分隔符；persist/load/remove 三入口共用同一净化函数，
-//! 读写闭环一致（原 distributed.rs 私有实现提升为共享）。
+//! UNC 前缀与嵌套分隔符；persist/load 两入口共用同一净化函数，读写闭环一致。
 
-use crate::gg20::DkgSession;
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
 use eyre::eyre;
-use rand::rngs::OsRng;
-use rand::RngCore;
-use serde::{Deserialize, Serialize};
-// zeroize：密钥材料安全擦除。MyShareRecord 派生 Zeroize，
-// 在加密的私钥份额密文与公钥材料 hex 离开作用域前擦除内存。
+use rand_core::{OsRng, RngCore};
 use std::fs;
 use std::path::{Path, PathBuf};
-use zeroize::Zeroize;
-
-/// 会话目录环境变量。
-const SESSION_DIR_ENV: &str = "MPC_ENGINE_SESSION_DIR";
 
 /// AES-256-GCM 密钥环境变量名（MPC-P1-05）。
 const STORAGE_KEY_ENV: &str = "MPC_STORAGE_KEY";
@@ -59,7 +46,7 @@ const KEY_LEN: usize = 32;
 /// 加密文件新格式：`MAGIC(4B) || version(4B LE) || nonce(12B) || ciphertext`。
 /// 旧格式（无版本号）：`nonce(12B) || ciphertext`，解密时检测无 MAGIC 前缀则视为版本 1。
 ///
-/// `pub(crate)`：distributed.rs 的加密落盘测试断言魔数前缀。
+/// `pub(crate)`：cggmp_state 落盘路径与本模块测试断言魔数前缀。
 pub(crate) const KEY_VERSION_MAGIC: &[u8; 4] = b"NXC1";
 
 /// 中12: 密钥版本号文件头长度（MAGIC 4B + version 4B LE）。
@@ -68,26 +55,15 @@ const KEY_VERSION_HEADER_LEN: usize = 8;
 /// 中12: 默认密钥版本号（旧文件无版本头时视为此版本）。
 const DEFAULT_KEY_VERSION: u32 = 1;
 
-/// 获取会话目录（可配置，默认 ./mpc-sessions）。
-pub fn session_dir() -> PathBuf {
-    std::env::var(SESSION_DIR_ENV)
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("./mpc-sessions"))
-}
-
 /// S4-a: session_id 文件名安全化（仅保留 [A-Za-z0-9-_]，其余字符替换为 '_'）。
 ///
-/// **修复背景**：dkg.rs 可信协调器路径把 RPC 原始 `session_id` 直接传给
-/// `persist_session`/`load_session`，而旧 `session_path` 用 `format!` 无净化
-/// 拼接文件名——含 `../` 的 session_id 可穿越会话目录逃逸写任意路径。
-/// 净化后产物只含安全字符集，`session_dir().join(sanitized)` 必然落在
-/// 会话目录内的单文件名（无 `/`、`\`、盘符冒号、UNC 前缀），穿越被结构性封堵。
+/// **修复背景**：GG20 可信协调器路径曾把 RPC 原始 `session_id` 直接拼入
+/// 落盘文件名——含 `../` 的 session_id 可穿越会话目录逃逸写任意路径。
+/// 净化后产物只含安全字符集，`base_dir.join(sanitized)` 必然落在会话目录内
+/// 的单文件名（无 `/`、`\`、盘符冒号、UNC 前缀），穿越被结构性封堵。
+/// CGGMP21 落盘路径（`cggmp_share_path`）复用本函数。
 ///
-/// 实现与 distributed.rs v2.2.0 分散式路径的私有 `sanitize_session_id`
-/// 逐字符策略一致——原实现提升至此作为共享实现，distributed.rs 改为复用，
-/// 消除两处独立维护的净化逻辑漂移风险。
-///
-/// `pub(crate)`：distributed.rs 的分散式落盘路径与本模块测试复用。
+/// `pub(crate)`：cggmp 落盘路径与本模块测试复用。
 pub(crate) fn sanitize_session_id(session_id: &str) -> String {
     session_id
         .chars()
@@ -101,17 +77,6 @@ pub(crate) fn sanitize_session_id(session_id: &str) -> String {
         .collect()
 }
 
-fn session_path(session_id: &str) -> PathBuf {
-    // S4-a: 净化后拼接——封堵 `../` 穿越与非法文件名字符
-    session_dir().join(format!("session-{}.json", sanitize_session_id(session_id)))
-}
-
-/// MPC-P2-F5: 本方份额持久化文件路径（与全量会话文件分离）。
-fn my_share_path(session_id: &str) -> PathBuf {
-    // S4-a: 净化后拼接——封堵 `../` 穿越与非法文件名字符
-    session_dir().join(format!("my-share-{}.json", sanitize_session_id(session_id)))
-}
-
 /// 低9: 设置文件权限为 0600（仅所有者可读写），Unix 特有。
 ///
 /// Windows 上此函数为空操作（`#[cfg(not(unix))]`），因 Unix 权限模型不适用。
@@ -121,7 +86,7 @@ fn my_share_path(session_id: &str) -> PathBuf {
 /// 0600 = rw-------（所有者读写，组与其他无任何权限）。
 /// 防止其他用户/进程读取加密文件（虽然文件已加密，但权限收紧是纵深防御）。
 ///
-/// `pub(crate)`：distributed.rs 的 v2.2.0 份额落盘加密（阶段二接入）复用此函数。
+/// `pub(crate)`：CGGMP21 份额落盘路径（`persist_cggmp_blob`）复用此函数。
 #[cfg(unix)]
 pub(crate) fn set_secure_permissions(path: &Path) {
     use std::os::unix::fs::PermissionsExt;
@@ -181,7 +146,7 @@ fn load_storage_key() -> eyre::Result<[u8; KEY_LEN]> {
 /// 输出格式：`nonce(12B) || ciphertext`（GCM tag 内嵌于 ciphertext 尾部）。
 /// nonce 使用 `OsRng` 密码学随机数生成器生成。
 ///
-/// `pub(crate)`：distributed.rs 的 v2.2.0 份额落盘加密复用。
+/// `pub(crate)`：CGGMP21 份额落盘路径（persist_cggmp_blob）复用此原语。
 pub(crate) fn aes_encrypt(plaintext: &[u8], key: &[u8; KEY_LEN]) -> eyre::Result<Vec<u8>> {
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
     let mut nonce_bytes = [0u8; NONCE_LEN];
@@ -222,7 +187,7 @@ pub(crate) fn aes_decrypt(data: &[u8], key: &[u8; KEY_LEN]) -> eyre::Result<Vec<
 /// `version` 为密钥版本号，用于密钥轮换：新文件用当前版本加密，
 /// 旧文件由解密方根据版本号选择对应密钥。
 ///
-/// `pub(crate)`：distributed.rs 的 v2.2.0 份额落盘加密复用。
+/// `pub(crate)`：CGGMP21 份额落盘路径（persist_cggmp_blob）复用此原语。
 pub(crate) fn aes_encrypt_with_version(
     plaintext: &[u8],
     key: &[u8; KEY_LEN],
@@ -246,7 +211,7 @@ pub(crate) fn aes_encrypt_with_version(
 /// 返回 `(version, plaintext)`。调用方根据 version 选择对应密钥
 /// （当前实现仍用单一 `MPC_STORAGE_KEY`，完整多密钥支持标注 TODO）。
 ///
-/// `pub(crate)`：distributed.rs 的 v2.2.0 份额落盘解密复用。
+/// `pub(crate)`：CGGMP21 份额读取路径（load_cggmp_blob）复用此原语。
 pub(crate) fn aes_decrypt_with_version(
     data: &[u8],
     key: &[u8; KEY_LEN],
@@ -296,231 +261,10 @@ fn current_storage_key_version() -> u32 {
         .unwrap_or(DEFAULT_KEY_VERSION)
 }
 
-/// 持久化 DKG 会话（份额材料落盘，重启可恢复）。
-///
-/// **MPC-P1-05**：落盘前用 AES-256-GCM 加密，密钥从 `MPC_STORAGE_KEY` 读取。
-/// 文件内容为 `nonce(12B) || ciphertext`，非明文 JSON。
-///
-/// 注：此函数保留全量会话加密落盘（兼容可信协调器模式，run_sign 需全量份额）。
-/// **MPC-P2-F5**：分布式安全模式应优先使用 `persist_my_share`，只存本方份额。
-pub fn persist_session(session_id: &str, session: &DkgSession) -> eyre::Result<()> {
-    let dir = session_dir();
-    fs::create_dir_all(&dir)
-        .map_err(|e| eyre!("cannot create session dir {}: {e}", dir.display()))?;
-    let json =
-        serde_json::to_vec_pretty(session).map_err(|e| eyre!("session serialize failed: {e}"))?;
-    // MPC-P1-05: AES-256-GCM 加密后落盘（防明文份额泄露）
-    // 中12: 加密时在文件头写入当前密钥版本号，支持密钥轮换
-    let key = load_storage_key()?;
-    let version = current_storage_key_version();
-    let encrypted = aes_encrypt_with_version(&json, &key, version)?;
-    let path = session_path(session_id);
-    fs::write(&path, encrypted)
-        .map_err(|e| eyre!("cannot write session {}: {e}", path.display()))?;
-    // 低9: 设置 0600 权限（仅所有者可读写，Unix 特有，Windows 空操作）
-    set_secure_permissions(&path);
-    tracing::info!(
-        session_id = %session_id,
-        path = %path.display(),
-        encrypted_bytes = json.len(),
-        key_version = version,
-        "dkg session persisted (AES-256-GCM encrypted, MPC-P1-05, 中12: key version {} in file header)",
-        version
-    );
-
-    // MPC-P2-F5: 同时持久化本方份额隔离记录（只含本方私钥份额 + 公钥材料明文）
-    if let Err(e) = persist_my_share(session_id, session) {
-        tracing::warn!(
-            session_id = %session_id,
-            error = %e,
-            "MPC-P2-F5: persist_my_share failed (full session still persisted for compatibility)"
-        );
-    }
-
-    Ok(())
-}
-
-/// 从盘恢复会话（供 Sign 阶段使用）。
-///
-/// **MPC-P1-05**：读盘后用 AES-256-GCM 解密，密钥从 `MPC_STORAGE_KEY` 读取。
-/// 解密失败（密钥不匹配/文件篡改）返回错误。
-pub fn load_session(session_id: &str) -> eyre::Result<Option<DkgSession>> {
-    let path = session_path(session_id);
-    if !Path::new(&path).exists() {
-        return Ok(None);
-    }
-    let bytes =
-        fs::read(&path).map_err(|e| eyre!("cannot read session {}: {e}", path.display()))?;
-    // MPC-P1-05: AES-256-GCM 解密
-    // 中12: 从文件头读取密钥版本号，按版本号选择密钥（当前单密钥，多密钥 TODO）
-    let key = load_storage_key()?;
-    let (version, plaintext) = aes_decrypt_with_version(&bytes, &key)?;
-    let session: DkgSession =
-        serde_json::from_slice(&plaintext).map_err(|e| eyre!("session deserialize failed: {e}"))?;
-    tracing::info!(
-        session_id = %session_id,
-        key_version = version,
-        "dkg session restored from disk (decrypted, MPC-P1-05, 中12: key version {} from file header)",
-        version
-    );
-    Ok(Some(session))
-}
-
-/// 删除会话（密钥轮换/清理）。
-pub fn remove_session(session_id: &str) {
-    let path = session_path(session_id);
-    if path.exists() {
-        let _ = fs::remove_file(&path);
-        tracing::info!(session_id = %session_id, "dkg session removed");
-    }
-    // MPC-P2-F5: 同时删除本方份额记录
-    let my_path = my_share_path(session_id);
-    if my_path.exists() {
-        let _ = fs::remove_file(&my_path);
-        tracing::info!(session_id = %session_id, "MPC-P2-F5: my-share record removed");
-    }
-}
-
-// =========================================================================
-// MPC-P2-F5: 本方份额隔离持久化
-// =========================================================================
-
-/// MPC-P2-F5: 本方份额持久化记录。
-///
-/// **私钥材料**（`my_private_share`）：AES-256-GCM 加密存储，只含本方私钥份额。
-/// **公钥材料**（明文存储，验签所需，非私钥）：
-///   * `aggregate_public_key`：聚合公钥（hex）
-///   * `party_public_keys`：各方可验证公钥（hex）
-///   * `vss_scheme`、`dlog_proofs`：VSS 方案与 DLog 证明（验签用）
-///
-/// **密钥材料安全擦除**：派生 `Zeroize`。所有字段（`Vec<u8>`、`String`、`usize`、
-/// `u16`）均实现 `Zeroize`，派生后调用 `zeroize()` 将加密的私钥份额密文、
-/// 聚合公钥 hex、各方可验证公钥 hex 等内存清零。调用方可显式调用 `zeroize()`
-/// 或派生 `ZeroizeOnDrop` 在离开作用域时自动擦除。
-#[derive(Clone, Serialize, Deserialize, Zeroize)]
-pub struct MyShareRecord {
-    /// 本方索引。
-    pub my_party_index: usize,
-    /// 本方标识（人类可读）。
-    #[serde(default)]
-    pub my_party_id: String,
-    /// 加密后的本方私钥份额（`nonce(12B) || ciphertext`，AES-256-GCM）。
-    pub encrypted_private_share: Vec<u8>,
-    /// 聚合公钥（hex 编码，明文存储——验签所需，非私钥材料）。
-    pub aggregate_public_key: String,
-    /// 各方可验证公钥（hex 编码数组，明文存储——验签所需）。
-    pub party_public_keys: Vec<String>,
-    /// DKG 参数（threshold, share_count）。
-    pub threshold: u16,
-    pub share_count: u16,
-}
-
-/// MPC-P2-F5: 只持久化本方私钥份额（加密）+ 公钥材料（明文）。
-///
-/// 与 `persist_session`（全量会话加密落盘）不同，此函数只存储本方私钥份额，
-/// 其他方的私钥份额不落盘。聚合公钥与各方可验证公钥明文存储（验签所需）。
-///
-/// 文件格式：JSON（`MyShareRecord`），其中 `encrypted_private_share` 字段为
-/// `nonce(12B) || ciphertext`（AES-256-GCM 加密的本方份额 JSON）。
-pub fn persist_my_share(session_id: &str, session: &DkgSession) -> eyre::Result<()> {
-    let dir = session_dir();
-    fs::create_dir_all(&dir)
-        .map_err(|e| eyre!("cannot create session dir {}: {e}", dir.display()))?;
-
-    // 提取本方私钥份额（必须已设置 my_private_share）
-    let my_share = session.my_private_share.as_ref().ok_or_else(|| {
-        eyre!(
-            "MPC-P2-F5: cannot persist_my_share — my_private_share not set \
-             (call DkgSession::set_my_identity first)"
-        )
-    })?;
-
-    // 加密本方私钥份额
-    // 中12: 加密时在文件头写入当前密钥版本号
-    let key = load_storage_key()?;
-    let version = current_storage_key_version();
-    let share_json = serde_json::to_vec_pretty(my_share)
-        .map_err(|e| eyre!("my_private_share serialize failed: {e}"))?;
-    let encrypted_share = aes_encrypt_with_version(&share_json, &key, version)?;
-
-    // 公钥材料明文（hex 编码）
-    let aggregate_public_key = crate::gg20::hex_point(&session.y_sum);
-    let party_public_keys: Vec<String> =
-        session.pk_vec.iter().map(crate::gg20::hex_point).collect();
-
-    let record = MyShareRecord {
-        my_party_index: session.my_party_index,
-        my_party_id: String::new(), // 由上层填充（PartyConfig.party_id）
-        encrypted_private_share: encrypted_share,
-        aggregate_public_key,
-        party_public_keys,
-        threshold: session.params.threshold,
-        share_count: session.params.share_count,
-    };
-
-    let json = serde_json::to_vec_pretty(&record)
-        .map_err(|e| eyre!("MyShareRecord serialize failed: {e}"))?;
-    let path = my_share_path(session_id);
-    fs::write(&path, json).map_err(|e| eyre!("cannot write my-share {}: {e}", path.display()))?;
-    // 低9: 设置 0600 权限（仅所有者可读写，Unix 特有，Windows 空操作）
-    set_secure_permissions(&path);
-
-    tracing::info!(
-        session_id = %session_id,
-        path = %path.display(),
-        my_party_index = record.my_party_index,
-        party_public_keys_count = record.party_public_keys.len(),
-        key_version = version,
-        "MPC-P2-F5: my private share persisted (AES-256-GCM encrypted, 中12: key version {}), \
-         public keys stored in plaintext (for verification)",
-        version
-    );
-    Ok(())
-}
-
-/// MPC-P2-F5: 从盘加载本方份额记录。
-///
-/// 返回 `MyShareRecord`（含加密的本方份额与明文公钥材料）。
-/// 解密本方份额需调用 `decrypt_my_share`。
-pub fn load_my_share(session_id: &str) -> eyre::Result<Option<MyShareRecord>> {
-    let path = my_share_path(session_id);
-    if !Path::new(&path).exists() {
-        return Ok(None);
-    }
-    let bytes =
-        fs::read(&path).map_err(|e| eyre!("cannot read my-share {}: {e}", path.display()))?;
-    let record: MyShareRecord = serde_json::from_slice(&bytes)
-        .map_err(|e| eyre!("MyShareRecord deserialize failed: {e}"))?;
-    tracing::info!(
-        session_id = %session_id,
-        my_party_index = record.my_party_index,
-        "MPC-P2-F5: my-share record loaded from disk"
-    );
-    Ok(Some(record))
-}
-
-/// MPC-P2-F5: 解密本方私钥份额。
-///
-/// 从 `MyShareRecord.encrypted_private_share` 解密出 `SharedKeysSerde`。
-/// 中12: 从密文头读取密钥版本号，按版本号选择密钥（当前单密钥，多密钥 TODO）。
-pub fn decrypt_my_share(record: &MyShareRecord) -> eyre::Result<crate::gg20::SharedKeysSerde> {
-    let key = load_storage_key()?;
-    let (version, plaintext) = aes_decrypt_with_version(&record.encrypted_private_share, &key)?;
-    let share: crate::gg20::SharedKeysSerde = serde_json::from_slice(&plaintext)
-        .map_err(|e| eyre!("my_private_share deserialize failed: {e}"))?;
-    tracing::debug!(
-        key_version = version,
-        "中12: my-share decrypted with key version {} (from ciphertext header)",
-        version
-    );
-    Ok(share)
-}
-
 // =========================================================================
 // CGGMP21 份额持久化（PLAN-cggmp-keyshare-persistence，K 批前置）
 // =========================================================================
-// 与 D 批 LocalKey 落盘（distributed.rs）同一 NXC1 信封：
-// `MAGIC("NXC1") || version(4B LE) || nonce(12B) || GCM ciphertext`。
+// NXC1 信封：`MAGIC("NXC1") || version(4B LE) || nonce(12B) || GCM ciphertext`。
 // 明文是 cggmp.rs 的 serde JSON（encode_incomplete / encode_key_share——
 // 后者调用方必须先经 sanitize_for_disk 清洗 crt/multiexp）。
 //
@@ -559,6 +303,9 @@ pub(crate) fn persist_cggmp_blob(
     }
     let blob = aes_encrypt_with_version(plaintext, key, key_version)?;
     fs::write(&path, &blob).map_err(|e| eyre!("cggmp persist: write {}: {e}", path.display()))?;
+    // 低9: 设置 0600 权限（仅所有者可读写，Unix 特有，Windows 空操作）——
+    // GG20 会话文件退役后，此纵深防御沿用至 CGGMP21 份额落盘路径。
+    set_secure_permissions(&path);
     tracing::info!(
         session_id = %session_id,
         kind = kind,
@@ -620,20 +367,6 @@ mod tests {
                 std::env::set_var(STORAGE_KEY_ENV, key_hex);
             }
         });
-    }
-
-    #[test]
-    fn persist_and_restore_round_trip() {
-        ensure_test_key();
-        // 使用真实 DKG 会话验证序列化往返
-        let (_, _, session) = crate::gg20::run_keygen(1, 2).expect("GG20 DKG failed");
-        let id = "persist-test-1";
-        persist_session(id, &session).expect("persist");
-        let restored = load_session(id).expect("load").expect("some");
-        assert_eq!(restored.params.threshold, session.params.threshold);
-        assert_eq!(restored.params.share_count, session.params.share_count);
-        assert_eq!(restored.y_sum, session.y_sum, "聚合公钥应一致");
-        remove_session(id);
     }
 
     // ---- CGGMP21 blob API（PLAN-cggmp-keyshare-persistence §3.5）----
@@ -735,23 +468,14 @@ mod tests {
         );
     }
 
-    #[test]
-    fn load_missing_returns_none() {
-        ensure_test_key();
-        let r = load_session("no-such-session").expect("no error");
-        assert!(r.is_none());
-    }
-
     // ===== S4-a: session_id 路径穿越净化回归 =====
 
     /// S4-a 核心不变量：净化学不改变文件名安全性——任意 session_id
-    /// （含 `../`、盘符、UNC、分隔符）经 session_path/my_share_path 产出的
-    /// 路径必须仍落在会话目录内（parent == session_dir），且文件名不含
-    /// 路径分隔符。
+    /// （含 `../`、盘符、UNC、分隔符）经 cggmp_share_path 产出的
+    /// 路径必须仍落在 base_dir 内，且文件名不含路径分隔符。
     #[test]
-    fn session_path_never_escapes_session_dir() {
-        ensure_test_key();
-        let dir = session_dir();
+    fn cggmp_share_path_never_escapes_base_dir() {
+        let base = std::path::Path::new("/tmp/s4a-base");
         for evil in [
             "../evil",
             "../../etc/passwd",
@@ -764,12 +488,12 @@ mod tests {
             ".",
             "con", // Windows 保留名（sanitize 不处理，但也不含分隔符）
         ] {
-            for path in [session_path(evil), my_share_path(evil)] {
-                assert_eq!(
-                    path.parent()
-                        .unwrap_or_else(|| panic!("no parent for {evil}")),
-                    dir,
-                    "S4-a: sanitized path for {evil:?} must stay inside session dir"
+            for kind in ["keyshare", "incomplete"] {
+                let path = cggmp_share_path(base, evil, kind);
+                assert!(
+                    path.starts_with(base),
+                    "S4-a: sanitized path for {evil:?} must stay under base: {}",
+                    path.display()
                 );
                 let file_name = path
                     .file_name()
@@ -781,29 +505,6 @@ mod tests {
                 );
             }
         }
-    }
-
-    /// 攻击语义闭环：persist/load/remove 用同一原始（恶意）session_id，
-    /// 读写删必须命中同一净化文件——穿越不成立且功能不回归。
-    #[test]
-    fn persist_load_remove_round_trip_with_traversal_session_id() {
-        ensure_test_key();
-        let (_, _, session) = crate::gg20::run_keygen(1, 2).expect("GG20 DKG failed");
-        let evil_id = "../../escape/attack";
-        persist_session(evil_id, &session).expect("persist");
-        // 逃逸目标路径不应存在（穿越被封堵）
-        assert!(
-            !session_dir()
-                .join("../../escape")
-                .join("session-attack.json")
-                .exists(),
-            "S4-a: traversal must not create files outside session dir"
-        );
-        // 同一原始 id 可读回（净化闭环一致）
-        let restored = load_session(evil_id).expect("load").expect("some");
-        assert_eq!(restored.params.threshold, session.params.threshold);
-        remove_session(evil_id);
-        assert!(load_session(evil_id).expect("load").is_none());
     }
 
     #[test]
@@ -818,93 +519,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn encrypted_file_is_not_plaintext() {
-        ensure_test_key();
-        // 验证落盘文件不是明文 JSON（应含版本号头 + nonce 前缀 + 密文）
-        let (_, _, session) = crate::gg20::run_keygen(1, 2).expect("GG20 DKG failed");
-        let id = "persist-enc-test-1";
-        persist_session(id, &session).expect("persist");
-        let path = session_path(id);
-        let raw = std::fs::read(&path).expect("read raw");
-        // 文件不应以 JSON 明文标志 "{" 开头，应以 MAGIC "NXC1" 开头（中12 版本号头）
-        assert!(
-            !raw.starts_with(b"{"),
-            "session file should be encrypted, not plaintext JSON (MPC-P1-05)"
-        );
-        assert!(
-            raw.starts_with(KEY_VERSION_MAGIC),
-            "中12: session file should start with version header magic 'NXC1'"
-        );
-        assert!(
-            raw.len() > KEY_VERSION_HEADER_LEN + NONCE_LEN,
-            "encrypted file should be longer than header + nonce"
-        );
-        remove_session(id);
-    }
-
-    #[test]
-    fn decrypt_with_wrong_key_fails() {
-        ensure_test_key();
-        let (_, _, session) = crate::gg20::run_keygen(1, 2).expect("GG20 DKG failed");
-        let id = "persist-wrong-key-test-1";
-        persist_session(id, &session).expect("persist");
-        // 用错误密钥解密应失败（GCM 完整性校验）
-        // 中12: 文件现在有版本号头，用 aes_decrypt_with_version 解密
-        let wrong_key = [0xAAu8; KEY_LEN];
-        let raw = std::fs::read(session_path(id)).expect("read raw");
-        let result = aes_decrypt_with_version(&raw, &wrong_key);
-        assert!(
-            result.is_err(),
-            "decrypt with wrong key should fail (GCM integrity)"
-        );
-        remove_session(id);
-    }
-
     // ===== 中12: 密钥版本号文件头 =====
-
-    #[test]
-    fn encrypted_file_has_version_header_magic() {
-        ensure_test_key();
-        let (_, _, session) = crate::gg20::run_keygen(1, 2).expect("GG20 DKG failed");
-        let id = "persist-version-header-test";
-        persist_session(id, &session).expect("persist");
-        let raw = std::fs::read(session_path(id)).expect("read raw");
-        // 新格式应以 MAGIC "NXC1" 开头
-        assert!(
-            raw.starts_with(KEY_VERSION_MAGIC),
-            "中12: encrypted file should start with magic 'NXC1', got: {:?}",
-            &raw[..4.min(raw.len())]
-        );
-        assert!(raw.len() > KEY_VERSION_HEADER_LEN + NONCE_LEN);
-        remove_session(id);
-    }
-
-    #[test]
-    #[serial_test::serial]
-    fn version_header_records_current_version() {
-        ensure_test_key();
-        // 设置版本号为 7
-        // SAFETY: 测试单线程，Once 保护
-        unsafe {
-            std::env::set_var(STORAGE_KEY_VERSION_ENV, "7");
-        }
-        let (_, _, session) = crate::gg20::run_keygen(1, 2).expect("GG20 DKG failed");
-        let id = "persist-version-7-test";
-        persist_session(id, &session).expect("persist");
-        let raw = std::fs::read(session_path(id)).expect("read raw");
-        // 读取文件头版本号
-        let version = u32::from_le_bytes([raw[4], raw[5], raw[6], raw[7]]);
-        assert_eq!(version, 7, "中12: file header should record version 7");
-        // load_session 应能解密并返回版本号
-        let restored = load_session(id).expect("load").expect("some");
-        assert_eq!(restored.params.threshold, session.params.threshold);
-        remove_session(id);
-        // 清理版本号环境变量
-        unsafe {
-            std::env::remove_var(STORAGE_KEY_VERSION_ENV);
-        }
-    }
 
     #[test]
     fn aes_decrypt_with_version_handles_old_format() {
@@ -976,57 +591,5 @@ mod tests {
         unsafe {
             std::env::remove_var(STORAGE_KEY_VERSION_ENV);
         }
-    }
-
-    #[test]
-    fn persist_my_share_only_stores_my_share() {
-        ensure_test_key();
-        let (_, _, mut session) = crate::gg20::run_keygen(1, 3).expect("GG20 DKG failed");
-        // 设置本方身份为 party 1
-        session.set_my_identity(1).expect("set identity");
-
-        let id = "persist-my-share-test-1";
-        persist_my_share(id, &session).expect("persist_my_share");
-
-        // 加载记录
-        let record = load_my_share(id).expect("load").expect("some");
-        assert_eq!(record.my_party_index, 1);
-        assert_eq!(record.party_public_keys.len(), 3, "应存储全部 3 方公钥");
-        assert!(!record.aggregate_public_key.is_empty());
-
-        // 解密本方份额
-        let my_share = decrypt_my_share(&record).expect("decrypt");
-        assert_eq!(
-            my_share.x_i,
-            session.my_private_share.as_ref().unwrap().x_i,
-            "解密的本方份额应与原始一致"
-        );
-
-        // 验证 my-share 文件不包含其他方的份额（只有加密的 my_private_share）
-        let raw = std::fs::read(my_share_path(id)).expect("read raw");
-        let raw_str = String::from_utf8_lossy(&raw);
-        // 应包含 aggregate_public_key（明文）但不包含 shared_keys 数组
-        assert!(raw_str.contains("aggregate_public_key"));
-        assert!(
-            !raw_str.contains("shared_keys"),
-            "my-share 文件不应包含 shared_keys 数组"
-        );
-
-        remove_session(id);
-    }
-
-    #[test]
-    fn persist_my_share_without_identity_fails() {
-        ensure_test_key();
-        let (_, _, session) = crate::gg20::run_keygen(1, 2).expect("GG20 DKG failed");
-        // 不调用 set_my_identity，my_private_share 为 None
-        let id = "persist-my-share-fail-test";
-        let result = persist_my_share(id, &session);
-        assert!(result.is_err(), "未设置 my_private_share 应失败");
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("my_private_share not set"));
-        remove_session(id);
     }
 }

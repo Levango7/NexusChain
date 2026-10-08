@@ -161,7 +161,7 @@ public class CggmpMpcE2EClusterTest {
         waitForPort(50053, 5_000);
         log.info("3 mpc-engine nodes up: 127.0.0.1:50051,50052,50053");
 
-        // 建 3 个 mTLS channel（用项目自带 GrpcTlsContextFactory，与生产 GrpcMpcCryptoEngine 一致）
+        // 建 3 个 mTLS channel（用项目自带 GrpcTlsContextFactory，与生产集群通道一致）
         // 证书路径：<mpc-engine>/certs/{nodeN.crt, nodeN.key, ca.crt}
         // domain_name 匹配证书 SAN = localhost
         Path certDir = certsDir;
@@ -175,7 +175,7 @@ public class CggmpMpcE2EClusterTest {
             String nodeName = "node" + (i + 1);
             String clientCertPath = certDir.resolve(nodeName + ".crt").toString();
             String clientKeyPath = certDir.resolve(nodeName + ".key").toString();
-            // 复用生产代码的 mTLS 工厂（与 GrpcMpcCryptoEngine 同源）
+            // 复用生产代码的 mTLS 工厂（与生产集群通道同源）
             io.grpc.netty.shaded.io.netty.handler.ssl.SslContext clientSsl =
                     org.nexus.signing.mpc.transport.GrpcTlsContextFactory.buildClientSslContext(
                             trustCertPath, clientCertPath, clientKeyPath);

@@ -5,13 +5,14 @@ import java.util.Objects;
 /**
  * DKG（分布式密钥生成）响应 DTO。
  *
- * <p>纯 Java POJO，不依赖 gRPC 生成类。由 {@link GrpcMpcCryptoEngine}
- * 从 protobuf 响应 {@code DkgResponse} 转换而来。</p>
+ * <p>纯 Java POJO，不依赖 gRPC 生成类。由 SPI 实现（{@code CggmpMpcCryptoEngine}）
+ * 从引擎响应映射而来。</p>
  *
  * <p>字段语义：</p>
  * <ul>
  *   <li>{@code publicKey} — 聚合公钥（hex 编码的曲线点），可公开</li>
- *   <li>{@code keyShare} — 本节点密钥份额（加密后的 hex），永不明文离开引擎进程</li>
+ *   <li>{@code keyShare} — 本节点密钥份额（加密后的 hex），永不明文离开引擎进程；
+ *       CGGMP21 路径恒为 null（份额驻留引擎，响应不携带）</li>
  *   <li>{@code proof} — DKG 正确性 ZK 证明（hex）</li>
  * </ul>
  *

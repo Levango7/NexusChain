@@ -42,7 +42,7 @@ public class MpcCggmpClientTest {
     @BeforeEach
     void setUp() {
         stub = mock(MpcCryptoServiceGrpc.MpcCryptoServiceBlockingStub.class);
-        // withDeadlineAfter 自返回（与 GrpcMpcCryptoEngineTest 范式一致）
+        // withDeadlineAfter 自返回（Mockito 深桩范式）
         when(stub.withDeadlineAfter(anyLong(), any())).thenReturn(stub);
         client = new MpcCggmpClient(stub, 30_000L);
     }

@@ -18,7 +18,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * 不需要真实 gRPC/Docker/Rust 引擎，纯 Java 沙箱验证部署逻辑正确性。
  *
  * <p>与 {@link MpcShareDistributionTest}（份额分布逻辑）和
- * {@link MpcMultiHostEngineTest}（真实 gRPC 连通性）互补：
+ * CGGMP21 集群测试（真实 gRPC 连通性）互补：
  * 本测试验证多主机**部署编排**的正确性。
  *
  * @since 2.14.0

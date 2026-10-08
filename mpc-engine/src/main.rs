@@ -1,12 +1,14 @@
 //! mpc-engine 入口：初始化日志、读取配置、启动 tonic gRPC 服务端。
 //!
-//! **MPC-P2-F5 分布式安全模型**：
-//!   * 各方独立进程：每个 mpc-engine 进程代表一个 MPC 参与方，持有 `PartyConfig`。
+//! **每方独立进程（每 party 一进程，K8s StatefulSet 3 副本）**：
 //!   * 配置来源：`--config <path>` 命令行参数或 `MPC_CONFIG_PATH` 环境变量，
 //!     指向 JSON 格式的 `PartyConfig` 文件。
 //!   * gRPC 强制 mTLS：Server 端加载 TLS 证书 + 要求客户端证书（`tls_authority_root`）。
 //!   * 私钥份额本地加密存储：`MPC_STORAGE_KEY` 从配置文件 `storage_key` 字段读取。
-//!   * session_id 身份绑定：`SessionManager` 在 DKG 创建 session 时绑定调用方 `party_id`。
+//!
+//! **GG20 退役后（PLAN-001-R2）**：CGGMP21 是唯一门限签名路径；GG20 时代的
+//! 协调器转发模式（`is_coordinator`/`forward_tls_config`）随 `Dkg`/`Sign`
+//! RPC 一并删除——服务实现仅需 `CgDriverHandle` 进程单例。
 //!
 //! 兼容旧模式：未提供 `--config` 且 `MPC_CONFIG_PATH` 未设置时，回退到环境变量配置
 //! （`MPC_ENGINE_HOST`/`MPC_ENGINE_PORT`/`MPC_TLS_CERT_PATH`/`MPC_TLS_KEY_PATH` 等），
@@ -110,24 +112,20 @@ async fn main() -> eyre::Result<()> {
 
     // === 配置读取 ===
     // 优先使用 PartyConfig.listen_addr；否则回退到环境变量
-    let (bind, my_party_id): (SocketAddr, String) = match &party_config {
-        Some(cfg) => {
-            let bind: SocketAddr = cfg
-                .listen_addr
-                .parse()
-                .map_err(|e| eyre::eyre!("invalid listen_addr '{}': {e}", cfg.listen_addr))?;
-            (bind, cfg.party_id.clone())
-        }
+    let bind: SocketAddr = match &party_config {
+        Some(cfg) => cfg
+            .listen_addr
+            .parse()
+            .map_err(|e| eyre::eyre!("invalid listen_addr '{}': {e}", cfg.listen_addr))?,
         None => {
             let host = std::env::var("MPC_ENGINE_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
             let port: u16 = std::env::var("MPC_ENGINE_PORT")
                 .unwrap_or_else(|_| "50051".to_string())
                 .parse()
                 .map_err(|e| eyre::eyre!("invalid MPC_ENGINE_PORT: {e}"))?;
-            let bind: SocketAddr = format!("{host}:{port}")
+            format!("{host}:{port}")
                 .parse()
-                .map_err(|e| eyre::eyre!("invalid bind address {host}:{port}: {e}"))?;
-            (bind, String::new())
+                .map_err(|e| eyre::eyre!("invalid bind address {host}:{port}: {e}"))?
         }
     };
 
@@ -204,45 +202,9 @@ async fn main() -> eyre::Result<()> {
     }
 
     // === 启动 gRPC 服务端 ===
-    // MPC-P2-F5: 分布式配置——传递 is_coordinator + forward_tls_config + auth_token
-    let is_coordinator = party_config
-        .as_ref()
-        .map(|cfg| cfg.party_index == 0)
-        .unwrap_or(true);
-
-    #[cfg(feature = "tls")]
-    let forward_tls_config = if let Some(cfg) = &party_config {
-        let cert = std::fs::read(&cfg.tls_cert).ok();
-        let key = std::fs::read(&cfg.tls_key).ok();
-        let ca = std::fs::read(&cfg.tls_ca).ok();
-        match (cert, key, ca) {
-            (Some(c), Some(k), Some(a)) => {
-                let identity = tonic::transport::Identity::from_pem(c, k);
-                let ca_cert = tonic::transport::Certificate::from_pem(a);
-                Some(
-                    tonic::transport::ClientTlsConfig::new()
-                        .identity(identity)
-                        .ca_certificate(ca_cert)
-                        .domain_name("localhost"),
-                )
-            }
-            _ => None,
-        }
-    } else {
-        None
-    };
-
-    let svc = if !my_party_id.is_empty() {
-        MpcCryptoServiceImpl::with_distributed_config(
-            my_party_id.clone(),
-            is_coordinator,
-            #[cfg(feature = "tls")]
-            forward_tls_config,
-            auth_token.clone(),
-        )
-    } else {
-        MpcCryptoServiceImpl::default()
-    };
+    // GG20 退役后（PLAN-001-R2）：服务实现仅持有 CGGMP21 驱动线程句柄
+    // （`CgDriverHandle::global()` 进程单例）——协调器转发模式随 GG20 路径删除。
+    let svc = MpcCryptoServiceImpl::default();
     let server = proto::mpc_crypto::mpc_crypto_service_server::MpcCryptoServiceServer::new(svc);
     // tonic 0.12：AuthInterceptor 经 Server::builder().layer(...) 注入（生成的 server 无 interceptor 方法）
     let auth_layer = tonic::service::interceptor(AuthInterceptor::new(auth_token));

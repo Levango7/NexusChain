@@ -1,15 +1,15 @@
-//! v2.2.0 阶段二：CGGMP21 分散式门限签名（keygen + aux_info + sign 全链路）。
+//! CGGMP21 分散式门限签名（keygen + aux_info + sign 全链路）——唯一签名路径。
 //!
-//! ## 为什么迁移（阶段一的阻塞已解除）
+//! ## 为什么迁移（GG20 退役前因）
 //!
-//! 阶段一用 multi-party-ecdsa 0.8.1（GG20）只做到 DKG 分散式——sign 阶段的
+//! 旧路径用 multi-party-ecdsa 0.8.1（GG20）只做到 DKG 分散式——sign 阶段的
 //! `OfflineProtocolMessage` 是 crate 私有，消息无法转发。CGGMP21 0.6.3
 //! （LFDT-Lockness，Kudelski 审计）把全部协议消息类型暴露为 pub
 //! （`keygen::ThresholdMsg` / `signing::msg::Msg` / `key_refresh::AuxOnlyMsg`），
-//! **sign 分散式因此可行**。协议栈语义更正：原生 t-of-n 门限（签名恰好 t 方，
-//! 不再有 GG20 的 t+1 怪癖）。
+//! **sign 分散式因此可行**。协议栈语义更正：原生 t-of-n 门限（签名恰好 t 方）。
+//! **GG20 路径已于 2026-10-08 退役（PLAN-001-R2）**——GPL-3.0 系依赖随其清除。
 //!
-//! ## 架构（与阶段一一致）
+//! ## 架构
 //!
 //! - 各方本地跑同步状态机（`state-machine` feature 的 `wrap_protocol` 包装），
 //!   协调器是纯字节管道（`CgMessage.payload_json` = 消息的 serde JSON；
@@ -27,11 +27,11 @@
 //! （协调器是纯字节管道，不参与 eid 构造，只在分发时保证各节点收到
 //! 完全相同的字节序列）。
 //!
-//! ## 依赖隔离说明
+//! ## 依赖说明
 //!
-//! cggmp21 系（round-based 0.4 / generic-ec 0.4 / sha2 0.10 / rug-GMP）
-//! 与 GG20 系（round-based 0.1 / curv / sha2 0.9）按 major 版本在依赖树中
-//! 共存；本模块只触 cggmp21 系类型（sha2_010 别名隔离），不与旧路径交叉。
+//! 只用 cggmp21 系（round-based 0.4 / generic-ec 0.4 / sha2 0.10 / rug-GMP）；
+//! `sha2_010` 别名为历史命名（退役前用于与 GG20 系的 sha2 0.9 隔离），
+//! 现在依赖树中已无第二个 sha2 版本。
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -114,8 +114,8 @@ pub fn decode_incomplete(bytes: &[u8]) -> eyre::Result<IncompleteKeyShare<Secp25
 // 通用驱动：任意 CGGMP21 同步状态机的消息泵
 // =========================================================================
 
-/// 一条跨进程协议消息（与 distributed.rs 的 DistMessage 同构——
-/// sender/receiver/payload_json 三元组，payload 是 `Msg` 的 serde JSON）。
+/// 一条跨进程协议消息（sender/receiver/payload_json 三元组，
+/// payload 是 `Msg` 的 serde JSON）。
 ///
 /// round_based 0.4 跨进程消息包装是 `Incoming<M>` / `Outgoing<M>`，含
 /// sender/receiver 与消息体 `M`。本结构序列化 `Incoming<M>` 即可走

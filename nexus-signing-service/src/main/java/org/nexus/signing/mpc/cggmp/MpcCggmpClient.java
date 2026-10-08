@@ -44,17 +44,17 @@ import java.util.concurrent.TimeUnit;
  *
  * <h2>异常处理</h2>
  * <p>gRPC 传输层失败（{@link StatusRuntimeException}）一律转为
- * {@code success=false} 的 DTO（不抛异常），与 {@code GrpcMpcCryptoEngine}
- * 风格一致——编排层据此做熔断 / 重试。</p>
+ * {@code success=false} 的 DTO（不抛异常），与 SPI 契约
+ * （{@code MpcCryptoEngine}）一致——编排层据此做熔断 / 重试。</p>
  */
 public final class MpcCggmpClient {
 
     private static final Logger log = LoggerFactory.getLogger(MpcCggmpClient.class);
 
-    /** MPC 协议支持的最大参与方数（与 GrpcMpcCryptoEngine 对齐）。 */
+    /** MPC 协议支持的最大参与方数（与引擎契约对齐）。 */
     private static final int MAX_PARTY_INDEX = 255;
 
-    /** session_id 最大长度（与 GrpcMpcCryptoEngine 对齐）。 */
+    /** session_id 最大长度（与引擎契约对齐）。 */
     private static final int MAX_SESSION_ID_LENGTH = 128;
 
     private final MpcCryptoServiceGrpc.MpcCryptoServiceBlockingStub stub;
@@ -410,7 +410,7 @@ public final class MpcCggmpClient {
     }
 
     // ============================================================
-    // 参数校验（与 GrpcMpcCryptoEngine 一致）
+    // 参数校验（与引擎契约一致）
     // ============================================================
 
     private static void validateSessionId(String sessionId) {

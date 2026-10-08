@@ -6,9 +6,9 @@ package org.nexus.signing.mpc.crypto;
  * <p>解耦 Java 编排层（{@code org.nexus.signing.mpc.*}：MpcSigner /
  * MpcSignatureAggregator / MpcKeyGeneration 等）与底层密码学实现。</p>
  *
- * <p>审计报告 §4.1 方案 A：Rust multi-party-ecdsa 引擎作为独立进程运行，
- * signing-service 通过 gRPC 调用。本接口的参考实现为
- * {@link GrpcMpcCryptoEngine}（gRPC stub 客户端）。</p>
+ * <p>审计报告 §4.1 方案 A：Rust mpc-engine 作为独立进程运行，signing-service
+ * 通过 gRPC 调用。GG20 退役（PLAN-001-R2，2026-10-08）后本接口的生产实现为
+ * {@code CggmpMpcCryptoEngine}（CGGMP21 集群驱动；原 GG20 gRPC 实现已删除）。</p>
  *
  * <p>未来可注入其他实现（如 in-process Java 引擎、mock 测试引擎），
  * 编排层无需修改。SPI 风格：编排层仅依赖本接口，实现通过 Spring
@@ -16,7 +16,7 @@ package org.nexus.signing.mpc.crypto;
  *
  * <h2>方法语义</h2>
  * <ul>
- *   <li>{@link #dkg} — 分布式密钥生成（GG18/GG20 第 1 阶段），产出聚合公钥 + 本节点密钥份额</li>
+ *   <li>{@link #dkg} — 分布式密钥生成（CGGMP21 keygen），产出聚合公钥（份额驻留引擎进程）</li>
  *   <li>{@link #sign} — 部分签名（每个参与方本地执行签名轮次），产出部分签名 s_i</li>
  *   <li>{@link #aggregate} — 聚合 t 个部分签名为最终 ECDSA 签名 (r, s)</li>
  *   <li>{@link #healthCheck} — 引擎健康检查，用于启动探针与运行时熔断</li>
@@ -29,7 +29,7 @@ package org.nexus.signing.mpc.crypto;
  * 实现应在底层失败时返回 {@code success=false} 的响应对象，而非抛出异常；
  * 仅在不可恢复的传输层错误（如 channel 关闭）时抛出 {@link RuntimeException}。
  *
- * @see GrpcMpcCryptoEngine
+ * @see org.nexus.signing.mpc.cggmp.CggmpMpcCryptoEngine
  * @see DkgRequest
  * @see DkgResponse
  * @see SignRequest

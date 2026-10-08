@@ -37,7 +37,7 @@ import java.util.stream.Collectors;
  *
  * <p>本类负责 <b>编排</b>（会话生命周期、持久化、传输、轮次同步、签名验证），
  * 不实现任何密码学原语。密码学由注入的 {@link MpcCryptoEngine} 完成
- * （参考实现 {@code GrpcMpcCryptoEngine} 通过 gRPC 调用 Rust multi-party-ecdsa 引擎，
+ * （生产实现 {@code CggmpMpcCryptoEngine} 通过 gRPC 调用 Rust CGGMP21 引擎，
  * 审计报告 §4.1 方案 A）。</p>
  *
  * <h2>三个核心编排方法</h2>
@@ -57,7 +57,6 @@ import java.util.stream.Collectors;
  * {@link #sessionBarriers} 用 {@link ConcurrentHashMap} 保护。</p>
  *
  * @see MpcCryptoEngine
- * @see GrpcMpcCryptoEngine
  */
 @Service
 public class DefaultMpcService implements MpcService {

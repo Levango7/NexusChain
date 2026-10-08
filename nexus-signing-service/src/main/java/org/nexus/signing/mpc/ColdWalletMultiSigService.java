@@ -5,7 +5,6 @@ import org.nexus.signing.controller.NodeController;
 import org.nexus.signing.mpc.cggmp.CggmpMpcCryptoEngine;
 import org.nexus.signing.mpc.crypto.AggregateRequest;
 import org.nexus.signing.mpc.crypto.AggregateResponse;
-import org.nexus.signing.mpc.crypto.MpcCryptoEngine;
 import org.nexus.signing.mpc.crypto.SignRequest;
 import org.nexus.signing.mpc.crypto.SignResponse;
 import org.slf4j.Logger;
@@ -33,12 +32,10 @@ import java.util.stream.Collectors;
  * Cold-wallet multi-sig transfer service orchestrating the full MPC signing
  * flow for cold-wallet withdrawals.
  *
- * <p>v2.2.0 H 批：编排层支持 CGGMP21 路径切换。
- * 通过 {@code mpc.engine.cggmp-enabled} 配置选择：</p>
- * <ul>
- *   <li>{@code true} — 走 {@link CggmpMpcCryptoEngine}（CGGMP21 路径）</li>
- *   <li>{@code false}（默认）— 走 {@link MpcCryptoEngine}（GG20 路径）</li>
- * </ul>
+ * <p>GG20 退役后（PLAN-001-R2，2026-10-08）：真实 MPC 引擎只有
+ * {@link CggmpMpcCryptoEngine} 一条路径——{@code mpc.engine.cggmp-enabled}
+ * 不再选择"用哪条路径"，而是"是否启用真实引擎"（false 时降级为
+ * FROZEN skeleton 记账流程，供无集群的本地/沙箱环境使用）。</p>
  */
 @Service
 public class ColdWalletMultiSigService {
@@ -57,11 +54,7 @@ public class ColdWalletMultiSigService {
     private final MpcApprovalPolicy approvalPolicy;
     private final NodeController nodeController;
 
-    /** GG20 路径引擎（P5-T3）。H 批：路径选择为 CGGMP 关闭时使用。 */
-    @Autowired(required = false)
-    private MpcCryptoEngine mpcCryptoEngine;
-
-    /** CGGMP21 路径引擎（H 批新增）。 */
+    /** CGGMP21 路径引擎（唯一真实 MPC 引擎；GG20 退役后无第二实现）。 */
     @Autowired(required = false)
     private CggmpMpcCryptoEngine cggmpEngine;
 
@@ -74,27 +67,22 @@ public class ColdWalletMultiSigService {
         this.aggregator = Objects.requireNonNull(aggregator, "aggregator");
         this.approvalPolicy = Objects.requireNonNull(approvalPolicy, "approvalPolicy");
         this.nodeController = Objects.requireNonNull(nodeController, "nodeController");
-        log.info("ColdWalletMultiSigService initialised (H batch: cggmp engine path selectable)");
+        log.info("ColdWalletMultiSigService initialised (CGGMP21 single-engine path)");
     }
 
     /**
-     * 选择当前真实 MPC 引擎（GG20 或 CGGMP21）。
+     * 选择当前真实 MPC 引擎（GG20 退役后唯一候选：CGGMP21）。
      *
-     * <p>H 批路径选择：</p>
      * <ol>
-     *   <li>CGGMP21 路径（{@link CggmpMpcCryptoEngine#isCggmpEnabled()} true
-     *       且注入可用且 healthCheck 通过）→ 返回 cggmpEngine</li>
-     *   <li>GG20 路径（{@link MpcCryptoEngine} 注入可用且 healthCheck 通过）
-     *       → 返回 mpcCryptoEngine</li>
-     *   <li>都不可用 → 返回 null（走 FROZEN skeleton）</li>
+     *   <li>{@link CggmpMpcCryptoEngine#isCggmpEnabled()} true 且注入可用
+     *       且 healthCheck 通过 → 返回该引擎</li>
+     *   <li>否则返回 null（走 FROZEN skeleton 记账流程——fail-closed：
+     *       集群不可用时绝不伪造真实签名）</li>
      * </ol>
      */
-    private MpcCryptoEngine selectActiveEngine() {
+    private CggmpMpcCryptoEngine selectActiveEngine() {
         if (cggmpEngine != null && cggmpEngine.isCggmpEnabled() && cggmpEngine.healthCheck()) {
             return cggmpEngine;
-        }
-        if (mpcCryptoEngine != null && mpcCryptoEngine.healthCheck()) {
-            return mpcCryptoEngine;
         }
         return null;
     }
@@ -207,14 +195,13 @@ public class ColdWalletMultiSigService {
             }
         }
 
-        // P5-T3 + H 批：选择当前真实引擎（GG20 or CGGMP21）
-        MpcCryptoEngine engine = selectActiveEngine();
+        // GG20 退役后唯一真实引擎：CGGMP21（健康检查失败 → null → skeleton）
+        CggmpMpcCryptoEngine engine = selectActiveEngine();
         if (engine != null && wallet != null && wallet.getPublicKey() != null) {
             try {
-                runRealMpcSign(session, wallet, shares, engine);
-                log.info("Participant signing complete for session {} (real MPC engine: {})",
-                        sessionId,
-                        engine instanceof CggmpMpcCryptoEngine ? "CGGMP21" : "GG20");
+                runRealMpcSign(session, wallet, engine);
+                log.info("Participant signing complete for session {} (real MPC engine: CGGMP21)",
+                        sessionId);
                 return;
             } catch (MpcProtocolException e) {
                 session.markFailed(e.getReason(), e.getMessage(), e.getBlamedParticipant());
@@ -241,20 +228,15 @@ public class ColdWalletMultiSigService {
     }
 
     /**
-     * 使用真实 MPC 引擎执行签名（P5-T3 + H 批路径选择）。
+     * 使用真实 MPC 引擎执行签名（CGGMP21 唯一路径）。
      *
-     * <p>路径选择：</p>
-     * <ul>
-     *   <li>CGGMP21 路径 — {@link CggmpMpcCryptoEngine#sign} 单方调用即产
-     *       完整 (r, s)，填 partialSignature 字段为 r||s 拼接（64 字节 hex）</li>
-     *   <li>GG20 路径 — 各方调一次 engine.sign，产 partialSig 收集
-     *       （与原 P5-T3 行为一致）</li>
-     * </ul>
+     * <p>CGGMP21 路径 — {@link CggmpMpcCryptoEngine#sign} 单方调用即产
+     * 完整 (r, s)，填 partialSignature 字段为 r||s 拼接（64 字节 hex）；
+     * 驱动方持有全部参与方（Model A），partyIndex 不参与路由。</p>
      */
     private void runRealMpcSign(MpcSigningSession session,
-                                MpcWallet wallet,
-                                List<MpcKeyShare> shares,
-                                MpcCryptoEngine engine) {
+                               MpcWallet wallet,
+                               CggmpMpcCryptoEngine engine) {
         String sessionId = session.getSessionId();
         String publicKey = wallet.getPublicKey();
         String messageHashHex = sha256Hex(session.getTxDataHex());
@@ -263,72 +245,34 @@ public class ColdWalletMultiSigService {
                 .map(MpcParticipant::getEndpoint)
                 .collect(Collectors.toList());
 
-        log.info("Real MPC sign: session={}, participants={}, path={}, publicKey={}...",
+        log.info("Real MPC sign: session={}, participants={}, path=CGGMP21, publicKey={}...",
                 sessionId, session.getParticipants().size(),
-                engine instanceof CggmpMpcCryptoEngine ? "CGGMP21" : "GG20",
                 publicKey.substring(0, Math.min(20, publicKey.length())));
 
-        // CGGMP21 路径：单方调用即可（r/s 在 mpc-engine 进程内已产出）
-        if (engine instanceof CggmpMpcCryptoEngine) {
-            // P0-1：引擎会话 ID 必须钱包维度（keygen 与签名一致）——引擎按
-            // session_id 从磁盘恢复份额；转账级随机 UUID 无对应份额会直接
-            // 报 "key_share missing"。转账 sessionId 仅用于本服务记账。
-            String engineSessionId = CggmpMpcCryptoEngine.walletSessionId(wallet.getWalletId());
-            // 本方索引：Model A 单进程驱动全部参与方，partyIndex 不参与路由
-            int partyIndex = 0;
-            SignRequest req = new SignRequest(engineSessionId, publicKey,
-                    "cggmp-share-not-needed", messageHashHex, partyIndex, peerEndpoints);
-            SignResponse resp = engine.sign(req);
-            if (!resp.isSuccess()) {
-                throw new MpcProtocolException(
-                        MpcProtocolException.Reason.INVALID_SHARE,
-                        "CGGMP21 sign failed: " + resp.getError());
-            }
-            String sig = resp.getPartialSignature();
-            if (sig == null) {
-                throw new MpcProtocolException(
-                        MpcProtocolException.Reason.INVALID_SHARE,
-                        "CGGMP21 sign returned null signature");
-            }
-            // 记录 r||s 拼接（语义=完整签名）—— 与 GG20 aggregate 行为对齐
-            session.recordSignatureShare("cggmp-aggregated", sig);
-            log.info("CGGMP21 sign done: session={}, engineSession={}, sig.len={}",
-                    sessionId, engineSessionId, sig.length());
-            return;
+        // P0-1：引擎会话 ID 必须钱包维度（keygen 与签名一致）——引擎按
+        // session_id 从磁盘恢复份额；转账级随机 UUID 无对应份额会直接
+        // 报 "key_share missing"。转账 sessionId 仅用于本服务记账。
+        String engineSessionId = CggmpMpcCryptoEngine.walletSessionId(wallet.getWalletId());
+        // 本方索引：Model A 单进程驱动全部参与方，partyIndex 不参与路由
+        int partyIndex = 0;
+        SignRequest req = new SignRequest(engineSessionId, publicKey,
+                "cggmp-share-not-needed", messageHashHex, partyIndex, peerEndpoints);
+        SignResponse resp = engine.sign(req);
+        if (!resp.isSuccess()) {
+            throw new MpcProtocolException(
+                    MpcProtocolException.Reason.INVALID_SHARE,
+                    "CGGMP21 sign failed: " + resp.getError());
         }
-
-        // GG20 路径：每方各调一次 sign
-        for (int i = 0; i < session.getParticipants().size(); i++) {
-            MpcParticipant p = session.getParticipants().get(i);
-            MpcKeyShare share = findShare(shares, p.getParticipantId());
-            if (share == null) {
-                throw new MpcProtocolException(
-                        MpcProtocolException.Reason.ILLEGAL_STATE,
-                        "no key share for participant " + p.getParticipantId());
-            }
-
-            SignRequest req = new SignRequest(sessionId, publicKey,
-                    share.getPrivateShareHex(), messageHashHex, i, peerEndpoints);
-            SignResponse resp = engine.sign(req);
-            if (!resp.isSuccess()) {
-                throw new MpcProtocolException(
-                        MpcProtocolException.Reason.INVALID_SHARE,
-                        "MPC sign failed for participant " + p.getParticipantId()
-                                + ": " + resp.getError());
-            }
-            session.recordSignatureShare(p.getParticipantId(), resp.getPartialSignature());
-            log.debug("GG20 sign party {} done: {}", i, p.getParticipantId());
+        String sig = resp.getPartialSignature();
+        if (sig == null) {
+            throw new MpcProtocolException(
+                    MpcProtocolException.Reason.INVALID_SHARE,
+                    "CGGMP21 sign returned null signature");
         }
-        session.markAggregating();
-    }
-
-    private static MpcKeyShare findShare(List<MpcKeyShare> shares, String participantId) {
-        for (MpcKeyShare s : shares) {
-            if (s.getParticipantId().equals(participantId)) {
-                return s;
-            }
-        }
-        return null;
+        // 记录 r||s 拼接（语义=完整签名）
+        session.recordSignatureShare("cggmp-aggregated", sig);
+        log.info("CGGMP21 sign done: session={}, engineSession={}, sig.len={}",
+                sessionId, engineSessionId, sig.length());
     }
 
     private static String sha256Hex(String input) {
@@ -360,13 +304,11 @@ public class ColdWalletMultiSigService {
         String jointPublicKeyHex = wallet != null ? wallet.getPublicKey() : "FROZEN-joint-pk";
 
         String signatureHex;
-        MpcCryptoEngine engine = selectActiveEngine();
+        CggmpMpcCryptoEngine engine = selectActiveEngine();
         try {
             if (engine != null && wallet != null && wallet.getPublicKey() != null) {
                 signatureHex = runRealMpcAggregate(session, wallet, engine);
-                log.info("Real MPC aggregate complete for session {} (path={})",
-                        sessionId,
-                        engine instanceof CggmpMpcCryptoEngine ? "CGGMP21" : "GG20");
+                log.info("Real MPC aggregate complete for session {} (path=CGGMP21)", sessionId);
             } else {
                 signatureHex = aggregator.aggregate(session, jointPublicKeyHex);
             }
@@ -399,7 +341,7 @@ public class ColdWalletMultiSigService {
 
     private String runRealMpcAggregate(MpcSigningSession session,
                                        MpcWallet wallet,
-                                       MpcCryptoEngine engine) {
+                                       CggmpMpcCryptoEngine engine) {
         String sessionId = session.getSessionId();
         String publicKey = wallet.getPublicKey();
         String messageHashHex = sha256Hex(session.getTxDataHex());
@@ -411,9 +353,8 @@ public class ColdWalletMultiSigService {
                     "no partial signatures to aggregate for session " + sessionId);
         }
 
-        log.info("Real MPC aggregate: session={}, partialSignatures={}, path={}",
-                sessionId, partialSignatures.size(),
-                engine instanceof CggmpMpcCryptoEngine ? "CGGMP21" : "GG20");
+        log.info("Real MPC aggregate: session={}, partialSignatures={}, path=CGGMP21",
+                sessionId, partialSignatures.size());
 
         AggregateRequest req = new AggregateRequest(sessionId, publicKey,
                 messageHashHex, partialSignatures);

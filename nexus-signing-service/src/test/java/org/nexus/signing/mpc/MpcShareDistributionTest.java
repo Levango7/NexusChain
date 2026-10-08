@@ -11,7 +11,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * 联合公钥一致，私钥份额不泄露，阈值签名可用，节点故障后份额安全。
  *
  * <p>纯 Java 沙箱模拟，不需要真实 MPC 引擎或 Docker 容器。
- * 与 {@link MpcMultiHostEngineTest}（需真实 Docker 引擎）互补：
+ * 与 CGGMP21 集群测试（需真实引擎）互补：
  * 本测试验证份额分布的逻辑正确性，后者验证多主机 gRPC 连通性。
  *
  * @since 2.11.0
