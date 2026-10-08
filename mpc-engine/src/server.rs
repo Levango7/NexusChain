@@ -183,7 +183,6 @@ impl MpcCryptoServiceImpl {
             ))),
         }
     }
-
 }
 
 #[tonic::async_trait]
