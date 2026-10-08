@@ -39,6 +39,16 @@ CVE-2026-76957
 # 模块镜像扫描红、2 个 bookworm-slim 的 Rust 模块绿。
 CVE-2026-93990
 
+# 2026-10-08 Trivy DB 增补：libexpat1 2.8.3-1~deb13u1 新增 1 项
+# （CVE-2026-77214，XML_ParseBuffer 堆缓冲越读导致信息泄露，HIGH）——
+# Debian 侧状态 affected、**无 Fixed Version**，豁免依据与上面四条完全一致
+# （Java 服务不解析不可信 XML；expat 只在 distroless 基础镜像的 OS 层，Java 侧
+# XML 解析走 JVM 自带实现，不触达 libexpat）；Debian 发布修复版后随基础镜像
+# 升级移除本条（已被 trivyignore-staleness job 纳入时效复核）。
+# 取证：2026-10-08 master 安全扫描 run 37837187246 —— 10/12 Java 模块镜像
+# 同时红灯，唯一阻断 finding 即本条（OS 层 Total: 1；各镜像 Java(jar) 层 0）。
+CVE-2026-77214
+
 # --- debian:bookworm-slim（Rust 模块镜像）---
 # ⚠ 本节作用域已于 2026-10-01 整体下线：mpc-engine/Dockerfile:51 与
 #   zk-groth16-service/Dockerfile:17 的运行阶段从 debian:bookworm-slim 迁到
