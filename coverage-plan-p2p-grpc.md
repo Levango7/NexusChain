@@ -2,6 +2,11 @@
 
 > 分析人：分析师(覆盖率) ｜ 任务 ID：230 ｜ 日期：2026-08-18
 > 目标：`org.nexus.p2p`（0% → 50%+）、`org.nexus.signing.mpc.crypto.grpc`（0% → 50%+）
+> **状态：历史计划（2026-08-18），部分内容已作废。** GG20 退役（2026-10-08，PLAN-001-R2）已删除
+> `GrpcMpcCryptoEngine` 及其全部测试（含本计划提到的 `GrpcMpcCryptoEngineTlsConfigTest`、
+> `MockMpcCryptoStubFactory`）——本文件中与该类相关的补测项不再适用。仍有效的部分：生成代码排除策略
+> （`nexus-signing-service/build.gradle` 的 jacoco 排除，其注释仍引用本文件 §4.1）。
+
 
 ## 第1章 关键事实澄清（结论依据）
 

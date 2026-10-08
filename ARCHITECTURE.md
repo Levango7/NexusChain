@@ -50,7 +50,7 @@ Blockchain is the foundational settlement layer — not the product itself. On t
 | nexus-exchange-wallet | Exchange/custodial wallet（已移除，v1.4.0 拆分到 signing-service/wallet-service） | Removed |
 | nexus-signing-service | 签名服务独立部署（PoC，HTTP 调用） | Active — PoC |
 | nexus-wallet-service | 钱包管理服务独立部署（PoC，HTTP 调用） | Active — PoC |
-| mpc-engine | Rust gRPC MPC 密码学引擎 | **已实现 — GG20 门限 ECDSA（DKG/Sign/Aggregate/Verify），3/3 E2E 测试通过**（见 README 成熟度声明） |
+| mpc-engine | Rust gRPC MPC 密码学引擎 | **已实现 — CGGMP21 门限 ECDSA（keygen/aux/sign/verify，11 个 `Cg*` RPC）；GG20 路径已于 2026-10-08 退役（CGGMP21 独占，依赖树无 GPL）**（见 README 成熟度声明） |
 | nexus-settlement | 清结算与风控（复式记账、对账、资金归集、风控规则链） | Active — 库（gateway 进程内消费） |
 | nexus-compliance | 合规与身份（KYC/AML/DID/信誉评分） | Active — 库（gateway 进程内消费） |
 | nexus-analytics | 数据智能（交易图谱、链上监控、告警、BI、导出） | Active — 库（gateway 进程内消费，事件驱动） |
@@ -247,7 +247,7 @@ Blockchain is the foundational settlement layer — not the product itself. On t
 - PoS 共识（替换/增强现有 DPoS，自 v1.2.3，实证出块/验签/罚没/同步已闭环）
 - L2 Rollup 扩容方案（自 v1.3.0，Optimistic + ZK Groth16，欺诈证明/挑战窗口/slashing）
 - 链上治理执行（自 v1.3.0，提案 → 国库 → 链上动作，参数化治理 + commit-reveal + 守护人）
-- MPC 多签协议（GG18/GG20 阈值签名，v2.0.0-rc1 真实 GG20 可信协调器模型）
+- MPC 多签协议（CGGMP21 阈值签名，原生 t-of-n；GG20 可信协调器路径已于 2026-10-08 退役——见 README「MPC 多方签名」）
 
 **Payment Orchestration Wave 1-6（2026-09-22 ~ 2026-09-24）：**
 

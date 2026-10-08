@@ -91,9 +91,9 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
 | `nexus-compliance` | 合规：KYC、AML 筛查、DID、信誉评分 | 完整（库形态，由 gateway 内嵌，不独立部署） |
 | `nexus-analytics` | 数据分析：交易图谱、监控告警、统计、导出 | 完整（库形态，由 gateway 内嵌，不独立部署） |
 | `nexus-oracle` | 预言机：多源价格聚合、链上治理、可验证随机数 | 完整（库形态，由 gateway 内嵌，不独立部署；治理执行已修复：GOV-P0-01 事件源白名单 + 审计日志持久化） |
-| `nexus-signing-service` | 签名服务：交易签名编排、MPC 传输层 | 编排完整，MPC 真实 GG20（可信协调器模型） |
+| `nexus-signing-service` | 签名服务：交易签名编排、MPC 传输层 | 编排完整，MPC 真实 CGGMP21 门限签名（GG20 已退役 2026-10-08，见下「MPC 多方签名」） |
 | `nexus-wallet-service` | 钱包服务：白名单、冷热托管、审批流 | 白名单/审批完整，托管为模拟 |
-| `mpc-engine` | Rust gRPC MPC 密码学引擎 | **真实 GG20（multi-party-ecdsa），可信协调器模型** |
+| `mpc-engine` | Rust gRPC MPC 密码学引擎 | **真实 CGGMP21 门限 ECDSA（`cggmp21` 0.6.3）；GG20 路径已退役，依赖树无 GPL** |
 | `nexus-explorer` | React + TS 区块浏览器 | **MVP 骨架**（约 40 个前端源文件，见成熟度声明） |
 | `nexus-sdk` | 四语言 SDK：Java 全能力；TS/Python/Go 真实 RPC 契约实现（链/钱包/交易查询、跨链桥、地址校验、提交走 wallet-service） | **四语言全部可用**（2026-09-01 v2.2.0 补真，36 用例全绿，见 nexus-sdk/README） |
 | `nexus-rpc-doc` | RPC API 文档 | 参考 |
@@ -211,7 +211,7 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
 
 依据 [ADR-001](docs/adr/ADR-001-research-layer-freeze.md)，研究层模块经历「冻结 → Phase 5 真实化 → 条件解冻」过程：
 
-- **mpc-engine**：**已解冻**（真实 GG20，可信协调器模型限制）
+- **mpc-engine**：**已解冻**（真实 CGGMP21 门限 ECDSA——keygen/aux/sign 全链路 + 驱动线程 actor + 字节管道协调器；原「可信协调器持有全量份额」限制随 GG20 路径退役消失，2026-10-08）
 - **nexus-core L2 ZK 证明系统**：**已解冻**（方案 C 已实现：`zk-groth16-service`（Rust arkworks，BN254 配对验证）+ Java fail-closed 对接；本地 Schnorr 仅作未配置远程服务时的降级路径）
 - **nexus-core L2 L1 合约交互**：**条件解冻**（Hardhat 环境就绪，EDR 兼容性待解决）
 - **nexus-oracle 治理执行**：**已解冻**（GOV-P0-01 事件源白名单 + 审计日志持久化已修复）
