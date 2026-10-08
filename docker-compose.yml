@@ -142,6 +142,22 @@ services:
       - NEX_MPC_ENGINE_TLS_TRUST_CERT=/etc/mpc/certs/ca/CA.pem
       - NEX_MPC_ENGINE_TLS_CLIENT_CERT=/etc/mpc/certs/node-A/cert.pem
       - NEX_MPC_ENGINE_TLS_CLIENT_KEY=/etc/mpc/certs/node-A/key.pem
+      # === 2026-10-08：沙箱升到全分布式 CGGMP21（与 prod 同口径）===
+      # GG20 退役后 cggmp-enabled=false 意味着「没有真实引擎」（冷钱包降级
+      # FROZEN skeleton 记账）。沙箱作为 staging 等价形态，此处显式打开：
+      #   · DISTRIBUTED=true：endpoints 必须 >=3，partyIndex 超界 fail-closed
+      #   · CGGMP_ENABLED=true：编排层走 CGGMP21 原生 t-of-n
+      #   · CGGMP_SIGNERS=0,1：2-of-3 签名方集合（容忍 1 方离线）
+      #   · TLS_OVERRIDE_AUTHORITY=localhost：证书 SAN 约定（gen-mpc-certs.sh）
+      #   · DEADLINE_MS=300000：aux 首轮 Paillier 安全素数生成慢（与 prod 同值）
+      # 前置：3 个引擎须已装配 PartyConfig（真 mTLS + 份额落盘），且对应钱包
+      # 已跑过 DKG 仪式（scripts/mpc-wallet-ceremony.py）——否则签名会以
+      # "key_share missing" / 集群不完整 fail-closed 报错（不静默降级）。
+      - NEX_MPC_ENGINE_DISTRIBUTED=true
+      - NEX_MPC_ENGINE_CGGMP_ENABLED=true
+      - NEX_MPC_ENGINE_CGGMP_SIGNERS=0,1
+      - NEX_MPC_ENGINE_CGGMP_DEADLINE_MS=300000
+      - NEX_MPC_ENGINE_TLS_OVERRIDE_AUTHORITY=localhost
     depends_on:
       nacos:
         condition: service_healthy
@@ -382,21 +398,20 @@ services:
       - '127.0.0.1:50051:50051'    # gRPC，仅本机访问（容器间用服务名 mpc-engine-0:50051）
     environment:
       - RUST_LOG=info
-      - MPC_ENGINE_HOST=0.0.0.0
-      - MPC_ENGINE_PORT=50051
-      # P0-1: party_index 通过环境变量注入（0/1/2 对应 3 副本 ordinal）
-      - MPC_PARTY_INDEX=0
-      - MPC_PARTY_ID=party-0
-      # P0-1: peers 列表（排除本节点的其他参与方端点）
-      - MPC_PEERS=party-1@mpc-engine-1:50051,party-2@mpc-engine-2:50051
-      # MPC-P1-05 安全止血：会话落盘 AES-256-GCM 加密密钥
-      # P0-8 加固：开发默认值内联，生产必须通过环境变量覆盖或使用 docker-compose.prod.yml
-      - MPC_STORAGE_KEY=${MPC_STORAGE_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
-      # MPC-P1-05: gRPC Bearer token 认证
-      - MPC_AUTH_TOKEN=${MPC_AUTH_TOKEN:-dev-mpc-engine-token-change-in-prod}  # P0-8: dev default; override in prod
+      # === 2026-10-08 CGGMP21 装配：PartyConfig 为唯一事实源 ===
+      # 身份/监听/peers/TLS 三件套全部由 /app/config/node.json 提供（由
+      # scripts/gen-mpc-engine-configs.sh 生成，含份额落盘密钥；生产经 Secret）。
+      # config 模式隐含 MPC_REQUIRE_TLS=true，且**要求客户端证书**（真 mTLS），
+      # 证书缺失/校验失败一律拒启或拒连（fail-closed，不降级明文）。
+      - MPC_CONFIG_PATH=/app/config/node.json
+      # 份额落盘（NXC1 信封 AES-256-GCM）：不设则 keygen 产出只在内存，
+      # 引擎重启即丢——重启后签名会报 "key_share missing"。
+      - MPC_ENGINE_SESSION_DIR=/app/data/sessions
+      # gRPC Bearer token 认证（应用层，与 mTLS 叠加；生产经 Secret 注入）
+      - MPC_AUTH_TOKEN=${MPC_AUTH_TOKEN:-dev-mpc-engine-token-change-in-prod}
       - MPC_REQUIRE_AUTH=true
     volumes:
-      # 每节点挂载独立证书（node-A/B/C）+ 共享 CA
+      - ./mpc-certs/config/node0.json:/app/config/node.json:ro
       - ./mpc-certs/ca:/etc/mpc/tls/ca:ro
       - ./mpc-certs/node-A:/etc/mpc/tls/node:ro
       - mpc-engine-0-data:/app/data
@@ -413,16 +428,20 @@ services:
       - '127.0.0.1:50052:50051'    # 宿主机 50052 → 容器内 50051
     environment:
       - RUST_LOG=info
-      - MPC_ENGINE_HOST=0.0.0.0
-      - MPC_ENGINE_PORT=50051
-      - MPC_PARTY_INDEX=1
-      - MPC_PARTY_ID=party-1
-      - MPC_PEERS=party-0@mpc-engine-0:50051,party-2@mpc-engine-2:50051
-      # P0-8 加固：开发默认值内联，生产必须通过环境变量覆盖或使用 docker-compose.prod.yml
-      - MPC_STORAGE_KEY=${MPC_STORAGE_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
-      - MPC_AUTH_TOKEN=${MPC_AUTH_TOKEN:-dev-mpc-engine-token-change-in-prod}  # P0-8: dev default; override in prod
+      # === 2026-10-08 CGGMP21 装配：PartyConfig 为唯一事实源 ===
+      # 身份/监听/peers/TLS 三件套全部由 /app/config/node.json 提供（由
+      # scripts/gen-mpc-engine-configs.sh 生成，含份额落盘密钥；生产经 Secret）。
+      # config 模式隐含 MPC_REQUIRE_TLS=true，且**要求客户端证书**（真 mTLS），
+      # 证书缺失/校验失败一律拒启或拒连（fail-closed，不降级明文）。
+      - MPC_CONFIG_PATH=/app/config/node.json
+      # 份额落盘（NXC1 信封 AES-256-GCM）：不设则 keygen 产出只在内存，
+      # 引擎重启即丢——重启后签名会报 "key_share missing"。
+      - MPC_ENGINE_SESSION_DIR=/app/data/sessions
+      # gRPC Bearer token 认证（应用层，与 mTLS 叠加；生产经 Secret 注入）
+      - MPC_AUTH_TOKEN=${MPC_AUTH_TOKEN:-dev-mpc-engine-token-change-in-prod}
       - MPC_REQUIRE_AUTH=true
     volumes:
+      - ./mpc-certs/config/node1.json:/app/config/node.json:ro
       - ./mpc-certs/ca:/etc/mpc/tls/ca:ro
       - ./mpc-certs/node-B:/etc/mpc/tls/node:ro
       - mpc-engine-1-data:/app/data
@@ -439,16 +458,20 @@ services:
       - '127.0.0.1:50053:50051'    # 宿主机 50053 → 容器内 50051
     environment:
       - RUST_LOG=info
-      - MPC_ENGINE_HOST=0.0.0.0
-      - MPC_ENGINE_PORT=50051
-      - MPC_PARTY_INDEX=2
-      - MPC_PARTY_ID=party-2
-      - MPC_PEERS=party-0@mpc-engine-0:50051,party-1@mpc-engine-1:50051
-      # P0-8 加固：开发默认值内联，生产必须通过环境变量覆盖或使用 docker-compose.prod.yml
-      - MPC_STORAGE_KEY=${MPC_STORAGE_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
-      - MPC_AUTH_TOKEN=${MPC_AUTH_TOKEN:-dev-mpc-engine-token-change-in-prod}  # P0-8: dev default; override in prod
+      # === 2026-10-08 CGGMP21 装配：PartyConfig 为唯一事实源 ===
+      # 身份/监听/peers/TLS 三件套全部由 /app/config/node.json 提供（由
+      # scripts/gen-mpc-engine-configs.sh 生成，含份额落盘密钥；生产经 Secret）。
+      # config 模式隐含 MPC_REQUIRE_TLS=true，且**要求客户端证书**（真 mTLS），
+      # 证书缺失/校验失败一律拒启或拒连（fail-closed，不降级明文）。
+      - MPC_CONFIG_PATH=/app/config/node.json
+      # 份额落盘（NXC1 信封 AES-256-GCM）：不设则 keygen 产出只在内存，
+      # 引擎重启即丢——重启后签名会报 "key_share missing"。
+      - MPC_ENGINE_SESSION_DIR=/app/data/sessions
+      # gRPC Bearer token 认证（应用层，与 mTLS 叠加；生产经 Secret 注入）
+      - MPC_AUTH_TOKEN=${MPC_AUTH_TOKEN:-dev-mpc-engine-token-change-in-prod}
       - MPC_REQUIRE_AUTH=true
     volumes:
+      - ./mpc-certs/config/node2.json:/app/config/node.json:ro
       - ./mpc-certs/ca:/etc/mpc/tls/ca:ro
       - ./mpc-certs/node-C:/etc/mpc/tls/node:ro
       - mpc-engine-2-data:/app/data

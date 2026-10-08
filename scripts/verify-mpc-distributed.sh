@@ -23,6 +23,11 @@
 #   - curl（前置检查）
 #   - grpcurl（可选；缺失时步骤 3 退化提示，以步骤 2 的 TCP 探测为准）
 #   - MPC_AUTH_TOKEN（可选）：引擎开启 Bearer 认证时导出，供 grpcurl 携带
+#   - 证书（mTLS 引擎必需）：默认 ./mpc-certs（gen-mpc-certs.sh 产物），
+#     可用 CERTS_DIR 覆盖；引擎未开 gRPC 反射，故须带 -proto
+#     （默认 mpc-engine/proto/mpc_crypto.proto，可用 PROTO_FILE 覆盖）。
+#     明文引擎（无证书的本地调试）加 --plaintext。
+#   - 钱包份额：签名流程前须先跑 scripts/mpc-wallet-ceremony.py（keyshare 供给）。
 #
 # 退出码：
 #   0 — 验证成功
@@ -55,6 +60,7 @@ SIGNING_PORT=8082
 SKIP_START=false
 HEALTH_ONLY=false
 CLEANUP=false
+PLAINTEXT=false
 
 usage() {
     cat <<EOF
@@ -69,6 +75,7 @@ EOF
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --skip-start)  SKIP_START=true; shift ;;
+        --plaintext)   PLAINTEXT=true; shift ;;
         --health-only) HEALTH_ONLY=true; shift ;;
         --cleanup)     CLEANUP=true; shift ;;
         -h|--help)     usage; exit 0 ;;
@@ -181,6 +188,24 @@ if [ -n "${MPC_AUTH_TOKEN:-}" ]; then
     AUTH_ARGS=(-H "authorization: Bearer ${MPC_AUTH_TOKEN}")
 fi
 
+# gRPC 参数：默认 mTLS（CERTS_DIR 默认 ./mpc-certs）+ proto 定义
+# （引擎未开 gRPC 反射，grpcurl 必须 -proto 才能调用方法——2026-10-08 实测）
+CERTS_DIR="${CERTS_DIR:-./mpc-certs}"
+PROTO_FILE="${PROTO_FILE:-mpc-engine/proto/mpc_crypto.proto}"
+GRPC_ARGS=()
+if ${PLAINTEXT}; then
+    GRPC_ARGS=(-plaintext)
+else
+    if [ ! -f "${CERTS_DIR}/ca/CA.pem" ]; then
+        err "缺 ${CERTS_DIR}/ca/CA.pem —— 先跑 bash scripts/gen-mpc-certs.sh，或加 --plaintext"
+        exit 1
+    fi
+    GRPC_ARGS=(-cacert "${CERTS_DIR}/ca/CA.pem"
+               -cert "${CERTS_DIR}/node-A/cert.pem" -key "${CERTS_DIR}/node-A/key.pem"
+               -authority localhost)
+fi
+GRPC_ARGS+=(-proto "${PROTO_FILE}")
+
 probe_engine() {
     local name="$1" port="$2"
     if ! command -v grpcurl >/dev/null 2>&1; then
@@ -189,7 +214,7 @@ probe_engine() {
     fi
     # HealthCheck（引擎进程存活）
     local hc
-    hc=$(grpcurl -plaintext "${AUTH_ARGS[@]}" "127.0.0.1:${port}" \
+    hc=$(grpcurl "${GRPC_ARGS[@]}" "${AUTH_ARGS[@]}" "127.0.0.1:${port}" \
         nexus.mpc.MpcCryptoService/HealthCheck -d '{}' 2>&1) || true
     if ! echo "${hc}" | grep -qE '"healthy"[: ]+true'; then
         fail "${name}: HealthCheck 未通过：${hc}"
@@ -197,7 +222,7 @@ probe_engine() {
     fi
     # CgStatus（CGGMP21 驱动线程可用；未知 session 返回 success=true）
     local st
-    st=$(grpcurl -plaintext "${AUTH_ARGS[@]}" "127.0.0.1:${port}" \
+    st=$(grpcurl "${GRPC_ARGS[@]}" "${AUTH_ARGS[@]}" "127.0.0.1:${port}" \
         nexus.mpc.MpcCryptoService/CgStatus \
         -d "{\"session_id\": \"verify-probe-$(date +%s)-\"}" 2>&1) || true
     if echo "${st}" | grep -qE '"success"[: ]+true'; then

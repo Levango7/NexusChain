@@ -416,3 +416,47 @@ bash scripts/verify-mpc-distributed.sh --cleanup
 4. **证书轮换**：节点证书有效期 825 天，CA 证书 10 年，需定期轮换
 5. **NetworkPolicy**：启用 `global.networkPolicy.enabled` 限制只有 signing-service 可访问 mpc-engine
 6. **podAntiAffinity**：`mode=hard` 强制 3 副本调度到不同 Node，避免单 Node 故障丢多方
+
+## 第11章 钱包份额仪式（keyshare 供给）— 部署后必做
+
+CGGMP21 的**份额只在引擎进程内**（NXC1 信封加密落盘到 `MPC_ENGINE_SESSION_DIR`），
+Java 侧不持份额。因此**每个钱包在首次签名前必须跑一次 DKG 仪式**：
+
+```
+keygen(t-of-n) → aux_info(Paillier) → assembleShare → 各引擎落盘 KeyShare
+```
+
+未跑仪式的钱包在签名时以 `key_share missing` fail-closed 报错——**这是设计，不静默降级**。
+
+### 11.1 执行
+
+```bash
+python3 scripts/mpc-wallet-ceremony.py   --wallet <walletId>   --endpoints mpc-engine-0.mpc-engine-headless:50051,mpc-engine-1.mpc-engine-headless:50051,mpc-engine-2.mpc-engine-headless:50051   --cacert <CA.pem> --client-cert <client.pem> --client-key <key.pem>   --token "$MPC_AUTH_TOKEN"   --sign-probe            # 仪式后当场做一次 2-of-3 签名 + 引擎侧验签
+```
+
+- 会话 ID 由钱包派生（`cw-` + SHA-256(walletId) 前 16 字节 hex），与 Java
+  `CggmpMpcCryptoEngine.walletSessionId` 逐字节一致——签名时按同一 ID 找回份额。
+- `--sign-probe` 成功（`验签 valid=true`）即证明该钱包已可用。
+- 日常健康探针（不重跑仪式）：`--sign-only --sign-probe`。
+
+### 11.2 中断与恢复（重要）
+
+- 仪式中断后，该 session 在**引擎内存**里停在半程（半程状态**不落盘**）；
+- 同 session 重跑会被 Start 守卫幂等跳过而卡住（`--counter` 递增也不例外）——
+  **恢复办法：重启引擎进程**（盘上只保留完整产物），再跑一次仪式即可续上
+  （keygen 从 `incomplete.bin` 恢复，不重跑素数生成）；
+- 生产建议：仪式中断后若无法重启引擎，改用新钱包 ID 重新走（旧 session 无份额、无残留风险）。
+
+### 11.3 staging 升级到 CGGMP21 的前置清单（2026-10-08 起 staging 与 prod 同口径）
+
+| # | 前置 | 校验 |
+|---|---|---|
+| 1 | `mpc-engine` 3 副本 Running，PVC 已挂 `/app/sessions` | `kubectl -n <ns> get sts mpc-engine`；Pod env `MPC_ENGINE_SESSION_DIR=/app/sessions` |
+| 2 | Secret `mpc-engine-secret`（`storage-key` / `storage-key-version` / `auth-token`） | `kubectl -n <ns> get secret mpc-engine-secret -o jsonpath='{.data}'` |
+| 3 | Secret `mpc-engine-tls`（每 Pod `node-{0,1,2}.tls.crt/key` + `ca.tls.crt`） | 引擎日志 `mTLS enabled (server requires client certificate)` |
+| 4 | Secret `nexus-mpc-certs`（signing-service 客户端证书 + CA） | signing-service Pod 就绪（`optional: false` 挂载） |
+| 5 | signing-service env：`DISTRIBUTED/CGGMP_ENABLED/CGGMP_SIGNERS/DEADLINE_MS/TLS_OVERRIDE_AUTHORITY` | `helm -n <ns> get values nexuschain`；CI 门禁 `scripts/check-mpc-tier-policy.sh` 硬断言 |
+| 6 | **每个钱包跑过仪式**（第 11.1 节） | 仪式输出 `验签 valid=true` |
+
+缺任一前置即 **fail-closed**：signing-service 装配期拒起（集群不完整）或签名报
+`key_share missing`——不会退化成 skeleton 记账。

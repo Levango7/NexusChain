@@ -79,12 +79,34 @@ nexus-signing-service:
     enabled: true
     minAvailable: 1
   # P0-10 审计修复：接入 mpc-engine（同 values-prod.yaml，证书来自 nexus-mpc-certs Secret）
+  # === 2026-10-08：staging 升到全分布式 CGGMP21（与 prod 同口径，GG20 已退役）===
+  # 此前 staging 只开传输层、协议层无真实引擎（cggmp-enabled=false ⇒ 冷钱包走
+  # FROZEN skeleton 记账）。现对齐 prod：transport + distributed + cggmp 全开。
+  # **集群前置（部署前必须齐备，否则 signing-service 启动 fail-closed 拒起）**：
+  #   1. mpc-engine chart 已部署且 3 副本 Running（nodes 有 PVC，MPC_ENGINE_SESSION_DIR
+  #      指向 /app/sessions ⇒ 份额落盘）；
+  #   2. Secret：`mpc-engine-secret`（storage-key / storage-key-version / auth-token，
+  #      经 sealed-secrets 或等价机制注入）与 `mpc-engine-tls`（每 Pod 证书；
+  #      用 chart values `secrets.tlsCerts` 或 operator 预置——见
+  #      docs/runbooks/sealed-secrets.md 与 deploy/k8s/SECRET-MANAGEMENT.md）；
+  #   3. `nexus-mpc-certs`（signing-service 客户端证书 + CA，本文件下方挂载）；
+  #   4. **每钱包跑过 DKG 仪式**（keyshare 供给）：
+  #      python3 scripts/mpc-wallet-ceremony.py --wallet <walletId>   #        --endpoints mpc-engine-0.mpc-engine-headless:50051,...   #        --cacert <CA.pem> --client-cert <cert.pem> --client-key <key.pem> --token <MPC_AUTH_TOKEN>
+  #      未跑仪式的钱包在签名时以 "key_share missing" fail-closed（不静默降级）。
   extraEnv:
     NEX_MPC_TRANSPORT_GRPC: "true"
     NEX_MPC_ENGINE_ENDPOINTS: "mpc-engine-0.mpc-engine-headless:50051,mpc-engine-1.mpc-engine-headless:50051,mpc-engine-2.mpc-engine-headless:50051"
     NEX_MPC_ENGINE_TLS_TRUST_CERT: "/etc/mpc/certs/ca/CA.pem"
     NEX_MPC_ENGINE_TLS_CLIENT_CERT: "/etc/mpc/certs/node-A/cert.pem"
     NEX_MPC_ENGINE_TLS_CLIENT_KEY: "/etc/mpc/certs/node-A/key.pem"
+    # 与 prod 同值同语义（阈值/签名方集合/超时口径一致，staging 才有等价性）
+    NEX_MPC_ENGINE_DISTRIBUTED: "true"
+    NEX_MPC_ENGINE_CGGMP_ENABLED: "true"
+    NEX_MPC_ENGINE_CGGMP_SIGNERS: "0,1"
+    NEX_MPC_ENGINE_CGGMP_DEADLINE_MS: "300000"
+    NEX_MPC_ENGINE_TLS_OVERRIDE_AUTHORITY: "localhost"
+    # 另需 NEX_MPC_ENGINE_AUTH_TOKEN（与 mpc-engine 的 MPC_AUTH_TOKEN 同值），
+    # 经 <chart>-secret（envFrom secretRef）注入，禁止明文入仓。"
   extraVolumes:
     - name: mpc-certs
       secret:
@@ -94,6 +116,16 @@ nexus-signing-service:
     - name: mpc-certs
       mountPath: /etc/mpc/certs
       readOnly: true
+
+# -- mpc-engine（MPC 密码学引擎；GG20 退役后 staging 与 prod 同为全 CGGMP21）
+# staging 的引擎密钥同样经 Secret 注入（禁止明文入仓）：
+#   · 推荐：sealed-secrets（与 prod 同机制）——sealedSecretName 置 mpc-engine-secret；
+#   · 冒烟/临时环境：可临时走 chart 明文 stringData 模式，但**不得提交真实密钥**。
+# 证书：secrets.tlsCerts（每 Pod node-{0,1,2} 证书）或 operator 预置 mpc-engine-tls；
+# 缺失时引擎因 MPC_REQUIRE_TLS=true 拒启（fail-closed，不会静默明文）。
+mpc-engine:
+  secrets:
+    sealedSecretName: mpc-engine-secret
 
 nexus-wallet-service:
   replicaCount: 2

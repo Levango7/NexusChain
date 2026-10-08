@@ -7,8 +7,8 @@
 #   MPC「头牌能力默认关闭」经核实为**有意分层**，三级阶梯：
 #     · dev/默认（application.yml）：real-grpc-enabled=false + cggmp-enabled=false
 #       —— InMemoryMpcTransport + **无真实引擎（FROZEN skeleton 记账）**，零外部依赖；
-#     · staging：NEX_MPC_TRANSPORT_GRPC=true（真实 gRPC+mTLS 传输，拓扑同 prod）
-#       —— CGGMP21 未开（staging keyshare 供给未配），**同样没有真实签名引擎**；
+#     · staging：NEX_MPC_TRANSPORT_GRPC=true + distributed + cggmp-enabled 全开
+#       —— 2026-10-08 起与 prod 同为**全分布式 CGGMP21**（此前只开传输层）；
 #     · prod：transport + distributed-mode + cggmp-enabled 全开
 #       —— 全分布式 CGGMP21 2-of-3。
 #   本门禁把该口径固化为断言：staging 不得静默退回进程内传输；prod 不得
@@ -17,8 +17,7 @@
 #   **GG20 退役后**不存在"退回 GG20"状态（代码已删）——cggmp-enabled=false
 #   即无真实引擎，故 staging 缺 cggmp-enabled 时下方打 WARN 而非 FAIL（属待升级项）。
 #
-#   若 staging 要升级到 CGGMP21：先配齐 staging 的 keyshare 供给，
-#   置 NEX_MPC_ENGINE_CGGMP_ENABLED=true，并把下方 WARN 升级为 assert_env 断言。
+#   （2026-10-08 已完成 staging 升级：硬断言见文件末；前置清单见 values-staging.yaml）
 #
 # 运行：bash scripts/check-mpc-tier-policy.sh（由 k8s-sync-check.yml 调用）
 # ============================================================================
@@ -52,14 +51,14 @@ fi
 echo "OK  k8s 静态清单: NEX_MPC_TRANSPORT_GRPC = true"
 
 # staging 的 CGGMP21 开关：GG20 退役后这是"是否有真实引擎"的开关。
-# 未开 = staging 走 FROZEN skeleton 记账（非真实签名）——属已记录待升级项，
-# 打 WARN 不 FAIL（升级前置=staging keyshare 供给，见文件头注释）。
-staging_cggmp=$(grep -E "^[[:space:]]*NEX_MPC_ENGINE_CGGMP_ENABLED:" deploy/helm/values-staging.yaml \
-    | head -1 | sed "s/.*:[[:space:]]*//" || true)
-if [ "$staging_cggmp" != "\"true\"" ] && [ "$staging_cggmp" != "true" ]; then
-    echo "WARN staging: NEX_MPC_ENGINE_CGGMP_ENABLED 未置 true（当前='${staging_cggmp:-<未设置>}'）——staging 无真实 MPC 引擎（FROZEN skeleton 记账）。升级前置=配齐 staging keyshare 供给后置 true 并升级本 WARN 为断言（PLAN-001-R2 退役后口径）" >&2
-else
-    echo "OK  staging: NEX_MPC_ENGINE_CGGMP_ENABLED = true"
-fi
+# 2026-10-08：staging 已升级为全分布式 CGGMP21（与 prod 同口径）——
+# 本项由 WARN **升级为硬断言**：staging 不得再无声退回 skeleton 记账。
+# 前置清单（部署前须齐备，见 values-staging.yaml 同批注释）：
+#   mpc-engine 3 副本（PVC 落盘）+ mpc-engine-secret（storage-key/auth-token）
+#   + mpc-engine-tls（每 Pod 证书）+ nexus-mpc-certs（signing-service 客户端证书）
+#   + 每钱包 DKG 仪式（scripts/mpc-wallet-ceremony.py，keyshare 供给）。
+assert_env deploy/helm/values-staging.yaml NEX_MPC_ENGINE_CGGMP_ENABLED true "staging"
+assert_env deploy/helm/values-staging.yaml NEX_MPC_ENGINE_CGGMP_SIGNERS '"0,1"' "staging"
+assert_env deploy/helm/values-staging.yaml NEX_MPC_ENGINE_DISTRIBUTED true "staging"
 
-echo "OK: MPC 分层口径一致（dev=进程内+无真实引擎 / staging=真实 gRPC+无真实引擎（待升级 CGGMP21）/ prod=全分布式 CGGMP21）"
+echo "OK: MPC 分层口径一致（dev=进程内+无真实引擎（skeleton 记账）/ staging=全分布式 CGGMP21 / prod=全分布式 CGGMP21）"
