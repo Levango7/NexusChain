@@ -378,17 +378,20 @@ kubectl get pdb -n nexus mpc-engine
 - 双节点故障：无法签名（t=2 不满足），需恢复至少 1 个故障节点
 - StatefulSet 滚动更新：`partition` 策略控制更新速率，避免同时下线多个副本
 
-## 第9章 端到端验证脚本
+## 第9章 部署就绪验证
 
-使用 `scripts/verify-mpc-distributed.sh` 执行完整端到端验证：
+使用 `scripts/verify-mpc-distributed.sh` 验证集群部署（3 节点 TCP 就绪 +
+gRPC `HealthCheck` + `CgStatus` 驱动线程探测）。**协议级 E2E**（keygen→aux→sign→
+验签的真实 2-of-3）由 Java 侧 `CggmpMpcE2EClusterTest` 承担（CI job
+`mpc-java-cluster-e2e`），shell 脚本不重复驱动多轮协议。
 
-命令示例：端到端验证
+命令示例：部署就绪验证
 
 ```bash
-# 完整验证（启动→健康检查→DKG→Sign→验证签名）
+# 完整验证（启动→TCP 就绪→CGGMP21 就绪探测）
 bash scripts/verify-mpc-distributed.sh
 
-# 仅健康检查
+# 仅 TCP 健康检查
 bash scripts/verify-mpc-distributed.sh --health-only
 
 # 跳过启动（假设集群已运行）
@@ -396,6 +399,13 @@ bash scripts/verify-mpc-distributed.sh --skip-start
 
 # 验证后清理
 bash scripts/verify-mpc-distributed.sh --cleanup
+```
+
+协议级 E2E（可选，需 JDK + 本机 mpc-engine 二进制）：
+
+```bash
+./gradlew :nexus-signing-service:test -PincludeClusterE2E \
+  --tests "org.nexus.signing.mpc.cggmp.CggmpMpcE2EClusterTest"
 ```
 
 ## 第10章 安全注意事项

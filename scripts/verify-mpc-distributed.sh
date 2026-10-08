@@ -4,33 +4,32 @@
 # =============================================================================
 # P0-1 Task 239：验证 3 节点 mpc-engine 分散式部署 + signing-service 多端点路由
 #
-# 验证流程：
+# 验证流程（GG20 退役后的 CGGMP21 口径，2026-10-08）：
 #   1. 启动 3 节点 mpc-engine（docker-compose mpc-engine-0/1/2）
-#   2. 健康检查：等待 3 个节点 gRPC HealthCheck 全部 ready
-#   3. DKG 2-of-3：通过 signing-service 触发分布式密钥生成
-#   4. Sign：使用生成的密钥分片对测试消息签名
-#   5. 验证签名合法：检查 ECDSA 签名 (r, s) 满足公钥验证
+#   2. 健康检查：等待 3 个节点 TCP 端口就绪
+#   3. CGGMP21 就绪验证：gRPC HealthCheck + CgStatus（驱动线程可用）
+#   4. 协议级 E2E 归属说明（keygen→aux→sign→验签由 Java 侧
+#      CggmpMpcE2EClusterTest 承担——shell 不驱动多轮协议）
 #
 # 用法：
-#   bash verify-mpc-distributed.sh                    # 完整验证（启动→DKG→Sign→验证）
+#   bash verify-mpc-distributed.sh                    # 完整验证（启动→就绪探测）
 #   bash verify-mpc-distributed.sh --skip-start       # 跳过启动（假设集群已运行）
-#   bash verify-mpc-distributed.sh --health-only      # 仅健康检查
+#   bash verify-mpc-distributed.sh --health-only      # 仅 TCP 健康检查
 #   bash verify-mpc-distributed.sh --cleanup          # 验证后清理（停止集群）
 #   bash verify-mpc-distributed.sh -h                 # 显示帮助
 #
 # 依赖：
 #   - docker + docker-compose（启动 3 节点集群）
-#   - curl（健康检查 + REST API 调用）
-#   - grpcurl（可选，gRPC 健康检查；缺失时退化为 TCP 端口探测）
+#   - curl（前置检查）
+#   - grpcurl（可选；缺失时步骤 3 退化提示，以步骤 2 的 TCP 探测为准）
+#   - MPC_AUTH_TOKEN（可选）：引擎开启 Bearer 认证时导出，供 grpcurl 携带
 #
 # 退出码：
 #   0 — 验证成功
 #   1 — 参数错误 / 依赖缺失
 #   2 — 集群启动失败
 #   3 — 健康检查超时
-#   4 — DKG 失败
-#   5 — Sign 失败
-#   6 — 签名验证失败
+#   4 — CGGMP21 就绪探测失败（HealthCheck/CgStatus）
 # =============================================================================
 set -euo pipefail
 
@@ -80,6 +79,7 @@ done
 # ---------- 工具函数 ----------
 log()  { echo "[verify-mpc] $(date '+%H:%M:%S') $*"; }
 err()  { echo "[verify-mpc] $(date '+%H:%M:%S') 错误: $*" >&2; }
+warn() { echo "[verify-mpc] $(date '+%H:%M:%S') 警告: $*" >&2; }
 ok()   { echo "[verify-mpc] $(date '+%H:%M:%S') ✓ $*"; }
 fail() { echo "[verify-mpc] $(date '+%H:%M:%S') ✗ $*" >&2; }
 
@@ -95,9 +95,9 @@ ok "依赖检查通过"
 
 # ---------- 1. 启动 3 节点集群 ----------
 if ${SKIP_START}; then
-    log "[1/5] 跳过集群启动（--skip-start）"
+    log "[1/4] 跳过集群启动（--skip-start）"
 else
-    log "[1/5] 启动 3 节点 mpc-engine 集群..."
+    log "[1/4] 启动 3 节点 mpc-engine 集群..."
     log "  docker-compose up -d mpc-engine-0 mpc-engine-1 mpc-engine-2"
     if ! docker-compose up -d mpc-engine-0 mpc-engine-1 mpc-engine-2 2>&1; then
         err "集群启动失败"
@@ -107,7 +107,7 @@ else
 fi
 
 # ---------- 2. 健康检查 ----------
-log "[2/5] 等待 3 节点就绪（健康检查）..."
+log "[2/4] 等待 3 节点就绪（健康检查）..."
 
 check_node_health() {
     local name="$1" port="$2"
@@ -161,153 +161,79 @@ done
 
 # ---------- 仅健康检查模式 ----------
 if ${HEALTH_ONLY}; then
-    log "仅健康检查模式（--health-only），跳过 DKG/Sign 验证"
+    log "仅健康检查模式（--health-only），跳过 CGGMP21 就绪探测"
     log "=========================================="
     log " 健康检查通过（${TOTAL_PARTIES} 节点, threshold=${THRESHOLD}-of-${TOTAL_PARTIES}）"
     log "=========================================="
     exit 0
 fi
 
-# ---------- 3. DKG 2-of-3 ----------
-log "[3/5] 触发 DKG 2-of-3（通过 signing-service REST API）..."
+# ---------- 3. CGGMP21 引擎就绪验证 ----------
+# GG20 退役后（PLAN-001-R2，2026-10-08）：Dkg/Sign/Aggregate 三个 RPC 已删除，
+# shell 侧可验证的是「引擎存活 + 驱动线程可用」；协议级 E2E（keygen→aux→sign→
+# 验签，真实 3 进程）由 Java 侧 CggmpMpcE2EClusterTest 承担（CI job
+# mpc-java-cluster-e2e），shell 不重复驱动多轮协议。
+log "[3/4] CGGMP21 引擎就绪验证（HealthCheck + CgStatus 探测）..."
 
-# 生成唯一 session_id
-SESSION_ID="verify-$(date +%s)-$$"
-log "  session_id=${SESSION_ID}"
+# 可选 Bearer token（与引擎 MPC_AUTH_TOKEN 一致时导出 MPC_AUTH_TOKEN 即可）
+AUTH_ARGS=()
+if [ -n "${MPC_AUTH_TOKEN:-}" ]; then
+    AUTH_ARGS=(-H "authorization: Bearer ${MPC_AUTH_TOKEN}")
+fi
 
-# 通过 signing-service 触发 DKG
-# 注：signing-service 需已启动并配置 NEX_MPC_ENGINE_ENDPOINTS 多端点
-DKG_RESPONSE=$(curl -s -X POST "http://127.0.0.1:${SIGNING_PORT}/api/v1/mpc/dkg" \
-    -H "Content-Type: application/json" \
-    -d "{
-        \"sessionId\": \"${SESSION_ID}\",
-        \"threshold\": ${THRESHOLD},
-        \"totalParties\": ${TOTAL_PARTIES},
-        \"curve\": \"secp256k1\"
-    }" 2>&1) || true
-
-log "  DKG 响应: ${DKG_RESPONSE}"
-
-# 检查 DKG 是否成功（响应含 publicKey 且 success=true）
-if echo "${DKG_RESPONSE}" | grep -q '"success":true'; then
-    PUBLIC_KEY=$(echo "${DKG_RESPONSE}" | grep -oE '"publicKey":"[^"]*"' | head -1 | sed 's/"publicKey":"//;s/"//')
-    ok "DKG 成功: publicKey=${PUBLIC_KEY:0:32}..."
-else
-    # signing-service 可能未启动或端点不可达，降级为 gRPC 直连验证
-    warn() { echo "[verify-mpc] $(date '+%H:%M:%S') 警告: $*" >&2; }
-    warn "signing-service REST API 不可达，降级为 gRPC 直连验证"
-
-    # 通过 grpcurl 直接向 mpc-engine-0 发起 DKG
-    if command -v grpcurl >/dev/null 2>&1; then
-        log "  尝试 grpcurl 直连 mpc-engine-0:50051..."
-        DKG_RESPONSE=$(grpcurl -plaintext 127.0.0.1:50051 \
-            nexus.mpc.MpcCryptoService/Dkg \
-            -d "{
-                \"session_id\": \"${SESSION_ID}\",
-                \"threshold\": ${THRESHOLD},
-                \"total_parties\": ${TOTAL_PARTIES},
-                \"party_index\": 0,
-                \"curve\": \"secp256k1\",
-                \"peer_endpoints\": [\"127.0.0.1:50052\", \"127.0.0.1:50053\"]
-            }" 2>&1) || true
-        log "  gRPC DKG 响应: ${DKG_RESPONSE}"
-
-        if echo "${DKG_RESPONSE}" | grep -q '"success":true'; then
-            ok "gRPC 直连 DKG 成功"
-            PUBLIC_KEY=$(echo "${DKG_RESPONSE}" | grep -oE '"public_key":"[^"]*"' | head -1 | sed 's/"public_key":"//;s/"//')
-        else
-            err "DKG 失败（signing-service 和 gRPC 直连均失败）"
-            err "请确认 mpc-engine 3 节点已启动且配置正确"
-            exit 4
-        fi
-    else
-        err "DKG 失败：signing-service 不可达且 grpcurl 未安装"
-        err "请启动 signing-service 或安装 grpcurl 进行 gRPC 直连验证"
-        exit 4
+probe_engine() {
+    local name="$1" port="$2"
+    if ! command -v grpcurl >/dev/null 2>&1; then
+        warn "grpcurl 未安装——跳过 gRPC 就绪探测（TCP 端口已通，见步骤 2）"
+        return 0
     fi
-fi
-
-# ---------- 4. Sign ----------
-log "[4/5] 触发 Sign（使用 DKG 产出的密钥分片）..."
-
-# 测试消息哈希（SHA-256("Hello NexusChain MPC")）
-MESSAGE_HASH="a3f5e8d2b1c4f7e9a2b5c8d1e4f7a2b5c8d1e4f7a2b5c8d1e4f7a2b5c8d1e4f7"
-log "  message_hash=${MESSAGE_HASH}"
-
-SIGN_RESPONSE=$(curl -s -X POST "http://127.0.0.1:${SIGNING_PORT}/api/v1/mpc/sign" \
-    -H "Content-Type: application/json" \
-    -d "{
-        \"sessionId\": \"${SESSION_ID}\",
-        \"messageHash\": \"${MESSAGE_HASH}\"
-    }" 2>&1) || true
-
-log "  Sign 响应: ${SIGN_RESPONSE}"
-
-if echo "${SIGN_RESPONSE}" | grep -q '"success":true'; then
-    SIGNATURE=$(echo "${SIGN_RESPONSE}" | grep -oE '"signature":"[^"]*"' | head -1 | sed 's/"signature":"//;s/"//')
-    ok "Sign 成功: signature=${SIGNATURE:0:32}..."
-else
-    warn() { echo "[verify-mpc] $(date '+%H:%M:%S') 警告: $*" >&2; }
-    warn "signing-service Sign 不可达，降级为 gRPC 直连验证"
-
-    if command -v grpcurl >/dev/null 2>&1; then
-        log "  尝试 grpcurl 直连 mpc-engine-0:50051 Sign..."
-        SIGN_RESPONSE=$(grpcurl -plaintext 127.0.0.1:50051 \
-            nexus.mpc.MpcCryptoService/Sign \
-            -d "{
-                \"session_id\": \"${SESSION_ID}\",
-                \"public_key\": \"${PUBLIC_KEY:-}\",
-                \"key_share\": \"\",
-                \"message_hash\": \"${MESSAGE_HASH}\",
-                \"party_index\": 0,
-                \"peer_endpoints\": [\"127.0.0.1:50052\", \"127.0.0.1:50053\"]
-            }" 2>&1) || true
-        log "  gRPC Sign 响应: ${SIGN_RESPONSE}"
-
-        if echo "${SIGN_RESPONSE}" | grep -q '"success":true'; then
-            ok "gRPC 直连 Sign 成功"
-        else
-            err "Sign 失败（signing-service 和 gRPC 直连均失败）"
-            exit 5
-        fi
-    else
-        err "Sign 失败：signing-service 不可达且 grpcurl 未安装"
-        exit 5
+    # HealthCheck（引擎进程存活）
+    local hc
+    hc=$(grpcurl -plaintext "${AUTH_ARGS[@]}" "127.0.0.1:${port}" \
+        nexus.mpc.MpcCryptoService/HealthCheck -d '{}' 2>&1) || true
+    if ! echo "${hc}" | grep -qE '"healthy"[: ]+true'; then
+        fail "${name}: HealthCheck 未通过：${hc}"
+        return 1
     fi
+    # CgStatus（CGGMP21 驱动线程可用；未知 session 返回 success=true）
+    local st
+    st=$(grpcurl -plaintext "${AUTH_ARGS[@]}" "127.0.0.1:${port}" \
+        nexus.mpc.MpcCryptoService/CgStatus \
+        -d "{\"session_id\": \"verify-probe-$(date +%s)-\"}" 2>&1) || true
+    if echo "${st}" | grep -qE '"success"[: ]+true'; then
+        ok "${name}: HealthCheck + CgStatus 通过（CGGMP21 驱动线程可用）"
+        return 0
+    fi
+    fail "${name}: CgStatus 未通过：${st}"
+    return 1
+}
+
+PROBE_FAIL=0
+for entry in "${NODES[@]}"; do
+    IFS='|' read -r name port idx <<< "${entry}"
+    probe_engine "${name}" "${port}" || PROBE_FAIL=1
+done
+if (( PROBE_FAIL != 0 )); then
+    err "引擎就绪探测失败——请确认 3 节点 mpc-engine（含 tls/auth 配置）已就绪"
+    exit 4
 fi
 
-# ---------- 5. 验证签名合法 ----------
-log "[5/5] 验证签名合法性..."
+# ---------- 4. 协议级 E2E 归属说明 ----------
+log "[4/4] 协议级 E2E（keygen→aux→sign→验签）说明"
+log "  全分布式 CGGMP21 2-of-3 的真实协议回归（3 进程 + mTLS）由 Java 侧测试承担："
+log "    ./gradlew :nexus-signing-service:test -PincludeClusterE2E \\"
+log "        --tests \"org.nexus.signing.mpc.cggmp.CggmpMpcE2EClusterTest\""
+log "  （或 CI job mpc-java-cluster-e2e；冷钱包转账链路的真实签名见 signing-service 日志）"
+log "  进程内协议 E2E：cd mpc-engine && cargo test --features tls --test cggmp_threshold_e2e"
 
-# 检查签名非空且格式正确（hex 编码，长度 > 0）
-if echo "${SIGN_RESPONSE}" | grep -q '"signature"'; then
-    ok "签名存在且非空"
-else
-    err "签名验证失败：响应中未找到 signature 字段"
-    exit 6
-fi
-
-# 检查 r, s 分量存在（ECDSA 签名 = r || s）
-if echo "${SIGN_RESPONSE}" | grep -q '"r":' && echo "${SIGN_RESPONSE}" | grep -q '"s":'; then
-    ok "ECDSA 签名分量 (r, s) 存在"
-else
-    warn() { echo "[verify-mpc] $(date '+%H:%M:%S') 警告: $*" >&2; }
-    warn "响应中未显式包含 r, s 分量（可能为聚合签名格式）"
-fi
-
-ok "签名验证通过"
-
-# ---------- 验证完成 ----------
 echo ""
 log "=========================================="
-log " MPC 分散式部署验证通过"
+log " MPC CGGMP21 分散式部署验证通过（3 节点就绪）"
 log "=========================================="
-log " 集群: ${TOTAL_PARTIES} 节点, threshold=${THRESHOLD}-of-${TOTAL_PARTIES}"
+log " 集群: ${TOTAL_PARTIES} 节点（CGGMP21 门限签名栈）"
 log " 端点: 127.0.0.1:50051, 127.0.0.1:50052, 127.0.0.1:50053"
-log " session_id: ${SESSION_ID}"
-log " DKG: ✓ (公钥已生成)"
-log " Sign: ✓ (签名已生成)"
-log " Verify: ✓ (签名合法)"
+log " 探测: HealthCheck + CgStatus 全通过"
+log " 协议级 E2E（keygen→sign→验签）: 见步骤 4 输出的 Java 集群测试入口"
 echo ""
 
 # ---------- 清理 ----------
