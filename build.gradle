@@ -41,7 +41,7 @@ allprojects {
     // 与 version.properties / README 头注的一致性由 CI 门禁
     // scripts/check-version-consistency.sh 保护。
     // 2026-10-04：2.51.2 → 2.51.3（限额严格计数器自然日/月口径 + 本地容量首跑基线）。
-    version = '2.52.0'
+    version = '2.52.1'
 
     repositories {
         // 权威源优先；镜像仅用于加速与容错
@@ -268,6 +268,27 @@ subprojects {
     // 两条坐标一起抬（只抬一条会留下另一条继续红），2.21.6→2.21.7、3.1.6→3.1.7。
     ext['jackson-2-bom.version'] = '2.21.7'
     ext['jackson-bom.version'] = '3.1.7'
+
+    // CVE-2026-106451（HIGH：lz4-java 临时文件处理不当导致任意代码执行）命中
+    // at.yawk.lz4:lz4-java 1.10.1 —— **kafka-clients 的传递依赖，不由 Spring Boot
+    // BOM 管理**，故 ext['…'] 属性覆盖（jackson 那套）对它无效；用解析层 useVersion
+    // 定点抬版（只改这一个坐标，不碰整棵树）。
+    // 版本选择：Trivy 给出的 Fixed Version = **1.11.4**（同 minor 线最近补丁版，
+    // 不跨到 1.12.0，避免不必要的跨线行为变化）。
+    // 取证：master push run 37817229721 → Trivy Docker Image Scan (nexus-gateway)
+    // 步骤「Trivy 镜像扫描（CRITICAL,HIGH 阻断）」报 Java(jar) Total: 1（OS 层 0）：
+    // `at.yawk.lz4:lz4-java (app.jar) 1.10.1 → fixed 1.11.4`；来源链
+    // `org.springframework.kafka:spring-kafka → org.apache.kafka:kafka-clients:4.1.2`。
+    // 处置原则同本源其他覆盖：**可修复一律升级，不用 ignore**（.trivyignore 只留
+    // 上游无修复版本项）。
+    configurations.all {
+        resolutionStrategy.eachDependency { details ->
+            if (details.requested.group == 'at.yawk.lz4'
+                    && details.requested.name == 'lz4-java') {
+                details.useVersion '1.11.4'
+            }
+        }
+    }
 
     // B1 baseline (2026-08-03): NO global forced test deps.
     // Historically this block injected `junit:junit:4.13.2` and

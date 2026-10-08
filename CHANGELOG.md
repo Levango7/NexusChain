@@ -2,6 +2,28 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [2.52.1] - 2026-10-08
+
+### 安全修复：nexus-gateway 镜像 HIGH CVE（lz4-java 1.10.1 → 1.11.4）
+
+- **发现（非本次 MPC 改动引起）**：v2.52.0 合并后的 master 安全扫描（run 37817229721）
+  报红——`Trivy Docker Image Scan (nexus-gateway)` 阻断步骤命中 **CVE-2026-106451**
+  （HIGH：lz4-java 临时文件处理不当导致任意代码执行），坐标
+  `at.yawk.lz4:lz4-java` **1.10.1**（app.jar），来源链
+  `org.springframework.kafka:spring-kafka → org.apache.kafka:kafka-clients:4.1.2`。
+  属 Trivy DB 新增条目对存量依赖的漂移命中（PR 路径镜像扫描 skipped，故 PR CI 未暴露；
+  OS 层 Total: 0，仅 Java(jar) 1 条）。
+- **修复**：按本源处置原则「**可修复一律升级，不用 ignore**」抬到 Trivy 给出的
+  Fixed Version **1.11.4**（同 minor 线最近补丁版，不跨 1.12.0）：
+  - 根 `build.gradle`（`subprojects`）：`resolutionStrategy.eachDependency` 定点抬版
+    ——该坐标不由 Spring Boot BOM 管理，jackson 那套 `ext[...]` 属性覆盖对它是空转；
+  - `nexus-analytics/build.gradle`：改用 **dependencyConstraint**——analytics 是
+    composite build 的 included build（`settings.gradle` includeBuild），根 `subprojects`
+    覆盖不达；库模块用约束可随 Gradle Module Metadata 传播到消费方 runtime 解析。
+- **验证**：`./gradlew :nexus-gateway:dependencies` 与 `:nexus-analytics:dependencies`
+  实测 `at.yawk.lz4:lz4-java:1.10.1 -> 1.11.4`；master 合并后镜像扫描转绿。
+- **说明**：v2.52.0 已发布的 nexus-gateway 镜像携带 1.10.1，由本补丁版取代其生产部署。
+
 ## [2.52.0] - 2026-10-08
 
 ### GG20 退役：CGGMP21 独占 + GPL-3.0 系依赖清零（PLAN-001-R2）

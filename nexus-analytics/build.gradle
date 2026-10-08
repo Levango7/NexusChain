@@ -31,6 +31,17 @@ dependencies {
     annotationProcessor 'org.projectlombok:lombok:1.18.32'
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     testImplementation 'com.h2database:h2:2.2.224'
+
+    // CVE-2026-106451（HIGH：lz4-java 临时文件处理不当导致任意代码执行）：
+    // spring-kafka → kafka-clients 传递引入 at.yawk.lz4:lz4-java 1.10.1，修复版 1.11.4。
+    // 本模块是**库**（被其他应用消费），此处用 dependencyConstraint 而非仅本地
+    // resolutionStrategy——约束会随 Gradle Module Metadata 传播到消费方，
+    // 让消费方的 runtime 解析同样抬到 1.11.4（取证：master run 37817229721
+    // nexus-gateway 镜像 Java(jar) Total: 1；根构建 subprojects 覆盖不达
+    // composite build 的 included build，见 settings.gradle includeBuild）。
+    constraints {
+        implementation 'at.yawk.lz4:lz4-java:1.11.4'
+    }
 }
 
 test {
