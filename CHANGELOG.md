@@ -34,6 +34,11 @@
 - **影响面（诚实声明）**：签名语义变更——**v2.54.1 之前产出的签名对标准外部验签者无效**。
   本仓无集群在运行（`KUBE_CONFIG_*` 未配置），已产出的签名只存在于本地/CI 测试会话，
   无在网资产受影响；**keyshare 不受影响**（密钥材料与摘要口径无关），升级后重新签名即可。
+- **为什么长期没被发现（三处"看不见"叠加）**：① 引擎自验与签名同源（同一构造）；
+  ② 生产签名路径 `CggmpMpcCryptoEngine.aggregate` **不做任何验签**——`ColdWalletMultiSigService`
+  全类零 `verify` 调用，坏签名会一路流到链节点才被拒（本批补上"外部视角"这一环）；
+  ③ 唯一会验签的 Java 路径 `DefaultMpcService.aggregate`（z 取原摘要）对真实集群签名**必抛**，
+  但它当前**无生产调用方**（只有单测，且单测用自洽桩签名）⇒ 修复前它是一颗哑弹。
 - **协议文档**：两份 `mpc_crypto.proto` 的 `message_hash` 注释写清口径
   （"引擎直接作 z、不再二次哈希；即应填 SHA-256(msg) 本身"），消掉这个歧义的复发土壤；
   `deploy/docs/mpc-distributed-deployment.md` 新增 §7.4 摘要口径与历史坑。
