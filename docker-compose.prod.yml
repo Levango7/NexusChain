@@ -182,7 +182,11 @@ services:
   #   mpc-engine-2 → party_index=2, 证书 node-C
   # 三节点共享 nexus-net 网络，通过服务名互连
   mpc-engine-0:
-    build: ./mpc-engine
+    # 构建上下文 = 仓库根（同 docker-compose.yml 的说明：Dockerfile 依赖
+    # /app/mpc-engine 路径布局；context 给子目录会构建失败）
+    build:
+      context: .
+      dockerfile: mpc-engine/Dockerfile
     expose: ['50051']
     environment:
       - RUST_LOG=info
@@ -208,7 +212,11 @@ services:
     restart: always
 
   mpc-engine-1:
-    build: ./mpc-engine
+    # 构建上下文 = 仓库根（同 docker-compose.yml 的说明：Dockerfile 依赖
+    # /app/mpc-engine 路径布局；context 给子目录会构建失败）
+    build:
+      context: .
+      dockerfile: mpc-engine/Dockerfile
     expose: ['50051']
     environment:
       - RUST_LOG=info
@@ -234,7 +242,11 @@ services:
     restart: always
 
   mpc-engine-2:
-    build: ./mpc-engine
+    # 构建上下文 = 仓库根（同 docker-compose.yml 的说明：Dockerfile 依赖
+    # /app/mpc-engine 路径布局；context 给子目录会构建失败）
+    build:
+      context: .
+      dockerfile: mpc-engine/Dockerfile
     expose: ['50051']
     environment:
       - RUST_LOG=info
