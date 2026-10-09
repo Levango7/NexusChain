@@ -145,6 +145,17 @@ public class CggmpMpcE2EClusterTest {
      * （{@code bash scripts/gen-mpc-engine-configs.sh --layout native --base-port 51051 -o <dir>}）。
      */
     private static int[] ports;
+    /**
+     * party_index → 节点配置文件（**按内容发现**，2026-10-09 CI 回归修复）。
+     *
+     * <p>为什么不能按文件名猜：CI 用的 {@code start-mpc-cluster.sh --setup-only} 产出
+     * **1-based 文件名 + 0-based party_index**（{@code node1.json} 内是 {@code party_index=0}）；
+     * 而 {@code gen-mpc-engine-configs.sh} 产出 0-based 文件名（{@code node0.json}=party0）。
+     * 曾按"优先 node{i}.json"解析 → party 1/2 取到 node1/node2（实为 party 0/1）→
+     * 同一引擎被驱动两次 → 状态机报 {@code AttemptToOverwriteReceivedMsg}，CI 5/5 全红
+     * （本机用 0-based 配置集恰好看不出）。现一律**读文件里的 party_index**，两种命名都对。</p>
+     */
+    private static java.util.Map<Integer, Path> nodeConfigs;
 
     @BeforeAll
     static void startCluster() throws Exception {
@@ -161,8 +172,9 @@ public class CggmpMpcE2EClusterTest {
         certsDir = resolveDir("MPC_CERTS_DIR", "certs");
         Files.createDirectories(logDir);
         // 起 3 个 mpc-engine 子进程（端口由 nodeN.json listen_addr 决定）
+        nodeConfigs = discoverNodeConfigs(configDir);
         for (int i = 1; i <= 3; i++) {
-            Path configPath = resolveNodeConfig(configDir, i - 1);
+            Path configPath = resolveNodeConfig(i - 1);
             ProcessBuilder pb = new ProcessBuilder(
                     engineBinary.toString(), "--config", configPath.toString())
                     .redirectErrorStream(true)
@@ -950,39 +962,69 @@ public class CggmpMpcE2EClusterTest {
      * 不再硬编码——见 {@link #ports} 字段注释）。
      */
     /**
-     * 定位某参与方的节点配置：兼容两种命名约定（2026-10-09）。
-     * <ul>
-     *   <li><b>0-based</b> {@code node0.json..node{n-1}.json}——CGGMP21 语义
-     *       （party_index 0-based），由 {@code scripts/gen-mpc-engine-configs.sh} 产出；</li>
-     *   <li><b>1-based</b> {@code node1.json..node{n}.json}——CI 用的
-     *       {@code mpc-engine/scripts/start-mpc-cluster.sh --setup-only} 产出。</li>
-     * </ul>
-     * 两者内容等价（仅文件名编号不同）；本测试均可直接驱动，运维用任一生成器都行。
+     * 扫描 {@code node*.json}，按**内容 party_index** 建立索引（兼容两种命名约定）。
      *
-     * @param partyIndex 参与方索引（0-based）
-     * @return 存在的配置文件路径
-     * @throws IllegalStateException 两种命名都不存在
+     * <p>命名风险见 {@link #nodeConfigs} 注释：文件名编号在不同生成器下相差 1，
+     * 只有文件内容的 {@code party_index} 是权威。若配置里没有该字段（异常配置），
+     * 退回"文件名数字 - 1 = party_index"的历史约定并告警。</p>
      */
-    private static Path resolveNodeConfig(Path configDir, int partyIndex) {
-        Path zeroBased = configDir.resolve("node" + partyIndex + ".json");
-        if (Files.isRegularFile(zeroBased)) {
-            return zeroBased;
+    private static java.util.Map<Integer, Path> discoverNodeConfigs(Path configDir) throws IOException {
+        java.util.Map<Integer, Path> byParty = new java.util.LinkedHashMap<>();
+        java.util.List<Path> files;
+        try (java.util.stream.Stream<Path> stream = Files.list(configDir)) {
+            files = stream
+                    .filter(p -> p.getFileName().toString().matches("node\\d+\\.json"))
+                    .sorted()
+                    .collect(Collectors.toList());
         }
-        Path oneBased = configDir.resolve("node" + (partyIndex + 1) + ".json");
-        if (Files.isRegularFile(oneBased)) {
-            return oneBased;
+        com.fasterxml.jackson.databind.ObjectMapper mapper =
+                new com.fasterxml.jackson.databind.ObjectMapper();
+        java.util.List<Path> withoutIndex = new ArrayList<>();
+        for (Path p : files) {
+            com.fasterxml.jackson.databind.JsonNode root = mapper.readTree(p.toFile());
+            if (root.hasNonNull("party_index")) {
+                byParty.put(root.get("party_index").asInt(), p);
+            } else {
+                withoutIndex.add(p);
+            }
         }
-        throw new IllegalStateException("node config missing for party " + partyIndex
-                + ": tried " + zeroBased + " (0-based; scripts/gen-mpc-engine-configs.sh)"
-                + " and " + oneBased + " (1-based; scripts/start-mpc-cluster.sh --setup-only)");
+        for (Path p : withoutIndex) {
+            int num = Integer.parseInt(p.getFileName().toString().replaceAll("\\D", ""));
+            int party = Math.max(0, num - 1);
+            log.warn("node config {} 无 party_index 字段，按历史约定推断为 party {}（请修正配置）",
+                    p.getFileName(), party);
+            byParty.putIfAbsent(party, p);
+        }
+        if (byParty.size() < 3) {
+            throw new IllegalStateException("expected >=3 node configs under " + configDir
+                    + ", found " + byParty.size() + " (keys=" + byParty.keySet() + "); "
+                    + "run scripts/gen-mpc-engine-configs.sh --layout native or "
+                    + "mpc-engine/scripts/start-mpc-cluster.sh --setup-only");
+        }
+        log.info("node configs discovered by party_index: {}", byParty);
+        return byParty;
     }
 
+    /** 取某参与方的配置（{@link #nodeConfigs} 必须已由 {@code @BeforeAll} 初始化）。 */
+    private static Path resolveNodeConfig(int partyIndex) {
+        Path p = nodeConfigs.get(partyIndex);
+        if (p == null) {
+            throw new IllegalStateException("no node config for party " + partyIndex
+                    + " (discovered: " + nodeConfigs.keySet() + ")");
+        }
+        return p;
+    }
+
+    /**
+     * 从各方 {@code nodeN.json} 的 listen_addr 解析引擎端口（与配置集同源，
+     * 不再硬编码——见 {@link #ports} 字段注释）。
+     */
     private static int[] resolveEnginePorts(Path configDir) throws Exception {
         com.fasterxml.jackson.databind.ObjectMapper mapper =
                 new com.fasterxml.jackson.databind.ObjectMapper();
         int[] resolved = new int[3];
         for (int i = 0; i < 3; i++) {
-            Path cfg = resolveNodeConfig(configDir, i);
+            Path cfg = resolveNodeConfig(i);
             com.fasterxml.jackson.databind.JsonNode root = mapper.readTree(cfg.toFile());
             String listen = root.path("listen_addr").asText("");
             int colon = listen.lastIndexOf(':');
@@ -996,6 +1038,7 @@ public class CggmpMpcE2EClusterTest {
         return resolved;
     }
 
+    /** 等待某端口可连（引擎就绪探测）；超时抛 {@link IllegalStateException}。 */
     private static int waitForPort(int port, long timeoutMs) throws InterruptedException {
         long deadline = System.currentTimeMillis() + timeoutMs;
         while (System.currentTimeMillis() < deadline) {
