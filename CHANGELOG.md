@@ -2,6 +2,49 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [2.54.0] - 2026-10-09
+
+### MPC 冷钱包 HTTP 入口层：把业务链接出去（+ 两处编排缺陷修复）
+
+**背景（审计发现）**：GG20 退役后，CGGMP21 的两条业务段在代码上完整、却**没有任何
+HTTP 入口**——`MpcService.generateKeyShare`（DKG 仪式编排）与 `ColdWalletMultiSigService`
+的 `initMultiSigTransfer / participantSign / aggregateAndBroadcast` **零生产调用方**
+（只有单测）。即"转账 → MPC 签名 → 上链"这条业务链**不是没测，而是没接出去**。
+本批接线，并修掉接线过程中暴露的两处编排缺陷。
+
+- **新增入口层 `MpcColdWalletController`（`/api/v1/mpc/**` 六端点）**：
+  `POST /wallets`（建钱包 = 跑 DKG 仪式并登记聚合公钥；幂等；集群不可用 → 409 fail-closed）、
+  `GET /wallets/{id}`、`POST /cold-wallet/transfers`（受理：审批法定数 + 地址白名单；
+  集群不可用 → **503**，绝不降级 skeleton）、`.../{sid}/sign`、`.../{sid}/broadcast`、
+  `GET .../{sid}`（状态/失败原因/链上哈希）。鉴权沿用 `SecurityRoles`
+  （建钱包 ADMIN / 转账 SIGNER / 查询 READ）。响应沿用模块既有 `{statusCode,message,data}` 信封。
+- **新增 `MpcEngineParticipants`**：把 `mpc.engine.endpoints` 翻译成参与方列表
+  （CGGMP21 下"参与方 = 引擎端点"），供 DKG 编排与审批法定数计数；类注释明确
+  **加密阈值 t 与业务审批法定数是两个维度**（勿混）。
+- **修复①（编排必失败缺陷）**：`DefaultMpcService.generateKeyShare` 无条件构造
+  `MpcKeyShare(..., response.getKeyShare(), ...)`，而 CGGMP21 路径 `keyShare` 恒 null
+  （份额驻留引擎）→ **NPE**，即 DKG 编排对唯一存活路径必然失败。现按模型分支：
+  份额非空才落盘；CGGMP21 路径跳过并记日志、返回空份额列表（Java 侧不持份额的
+  安全属性，不是缺陷）。
+- **修复②（状态保真）**：`ColdWalletMultiSigService` 的 CGGMP21 签名分支补
+  `markAggregating()`——此前签完状态仍读 PENDING（GG20 时代会推进到 AGGREGATING）。
+- **异常语义**：`GlobalExceptionHandler` 新增 `MpcProtocolException` 映射
+  （ILLEGAL_ARGUMENT→400 / TIMEOUT→504 / 其余→409），此前被 500 兜底吞成
+  "Internal error"，客户端拿不到可判定语义。
+- **测试**：
+  - 新增 `CggmpMpcE2EClusterTest#coldWalletBusinessChainE2E`（集群 E2E 门禁内）：
+    真实 3 引擎上跑 **DKG 编排 → 受理 → 签名 → 广播 → 状态**，并断言
+    `generateKeyShare` 返回聚合公钥且**本地份额为空**（修复①的回归门禁）；
+  - 新增 `MpcColdWalletControllerTest`（10 例，普通 CI）：幂等、参数校验、
+    集群不可用 503/409、签名/广播/状态透传、启动回灌等；
+  - **集群测试端口参数化**：不再硬编码 50051-50053，改从 `nodeN.json` 的
+    `listen_addr` 解析，并兼容 0-based（`gen-mpc-engine-configs.sh`）与
+    1-based（`start-mpc-cluster.sh`）两种命名——本机/WSL 得以运行
+    （此前 50053 常被占用）。
+- **本地实证（2026-10-09，本机 release 引擎 + 真 mTLS）**：整套集群 E2E
+  **5/5 通过**（3m55s），端口解析为 `[51051,51052,51053]`；
+  业务链用例日志：`冷钱包业务链 E2E PASSED: wallet=wallet-biz-…, transferSid=…, aggPk=029810eb…`。
+
 ## [2.53.1] - 2026-10-09
 
 ### 修复：compose 引擎链路两处存量缺陷（镜像构建上下文 + 落盘目录属主）

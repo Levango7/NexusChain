@@ -14,6 +14,21 @@ import org.nexus.signing.mpc.crypto.DkgResponse;
 import org.nexus.signing.mpc.crypto.MpcEngineRouter;
 import org.nexus.signing.mpc.crypto.SignRequest;
 import org.nexus.signing.mpc.crypto.SignResponse;
+import org.nexus.signing.controller.NodeController;
+import org.nexus.signing.mpc.ColdWalletMultiSigService;
+import org.nexus.signing.mpc.DefaultMpcService;
+import org.nexus.signing.mpc.MpcApprovalPolicy;
+import org.nexus.signing.mpc.MpcKeyGeneration;
+import org.nexus.signing.mpc.MpcParticipant;
+import org.nexus.signing.mpc.MpcSignatureAggregator;
+import org.nexus.signing.mpc.MpcSigner;
+import org.nexus.signing.mpc.MpcWallet;
+import org.nexus.signing.mpc.ThresholdPolicy;
+import org.nexus.signing.mpc.persistence.MpcKeyShareStore;
+import org.nexus.signing.mpc.persistence.MpcSessionRepository;
+import org.nexus.signing.mpc.persistence.MpcWalletRepository;
+import org.nexus.signing.mpc.router.MessageRouter;
+import org.nexus.signing.mpc.transport.MpcTransport;
 import org.nexus.signing.mpc.crypto.grpc.MpcCryptoServiceGrpc;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -42,6 +57,10 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -118,6 +137,25 @@ public class CggmpMpcE2EClusterTest {
     private static MpcCggmpClient coordinatorClient;
     private static final List<MpcCggmpOrchestrator> orchestrators = new ArrayList<>();
     private static int port1;
+    /**
+     * 三个引擎的 host 端口——**从各自 nodeN.json 的 listen_addr 解析**（2026-10-09）。
+     * 此前硬编码 50051-50053，导致本机/WSL 无法运行本测试（50053 常被其他服务占用）
+     * 且与 {@code MPC_CONFIG_DIR} 指向的自定义配置集不一致。现与配置同源：
+     * 用新生成器产出 51051+ 的配置集即可在任意空闲端口段运行
+     * （{@code bash scripts/gen-mpc-engine-configs.sh --layout native --base-port 51051 -o <dir>}）。
+     */
+    private static int[] ports;
+    /**
+     * party_index → 节点配置文件（**按内容发现**，2026-10-09 CI 回归修复）。
+     *
+     * <p>为什么不能按文件名猜：CI 用的 {@code start-mpc-cluster.sh --setup-only} 产出
+     * **1-based 文件名 + 0-based party_index**（{@code node1.json} 内是 {@code party_index=0}）；
+     * 而 {@code gen-mpc-engine-configs.sh} 产出 0-based 文件名（{@code node0.json}=party0）。
+     * 曾按"优先 node{i}.json"解析 → party 1/2 取到 node1/node2（实为 party 0/1）→
+     * 同一引擎被驱动两次 → 状态机报 {@code AttemptToOverwriteReceivedMsg}，CI 5/5 全红
+     * （本机用 0-based 配置集恰好看不出）。现一律**读文件里的 party_index**，两种命名都对。</p>
+     */
+    private static java.util.Map<Integer, Path> nodeConfigs;
 
     @BeforeAll
     static void startCluster() throws Exception {
@@ -134,12 +172,9 @@ public class CggmpMpcE2EClusterTest {
         certsDir = resolveDir("MPC_CERTS_DIR", "certs");
         Files.createDirectories(logDir);
         // 起 3 个 mpc-engine 子进程（端口由 nodeN.json listen_addr 决定）
+        nodeConfigs = discoverNodeConfigs(configDir);
         for (int i = 1; i <= 3; i++) {
-            Path configPath = configDir.resolve("node" + i + ".json");
-            if (!Files.isRegularFile(configPath)) {
-                throw new IllegalStateException(
-                        "node config missing: " + configPath + " (run scripts/start-mpc-cluster.sh first)");
-            }
+            Path configPath = resolveNodeConfig(i - 1);
             ProcessBuilder pb = new ProcessBuilder(
                     engineBinary.toString(), "--config", configPath.toString())
                     .redirectErrorStream(true)
@@ -156,10 +191,11 @@ public class CggmpMpcE2EClusterTest {
             drainStdout(p, "node" + i);
         }
         // 等 3 个端口起来
-        port1 = waitForPort(50051, 15_000);
-        waitForPort(50052, 5_000);
-        waitForPort(50053, 5_000);
-        log.info("3 mpc-engine nodes up: 127.0.0.1:50051,50052,50053");
+        ports = resolveEnginePorts(configDir);
+        port1 = waitForPort(ports[0], 15_000);
+        waitForPort(ports[1], 5_000);
+        waitForPort(ports[2], 5_000);
+        log.info("3 mpc-engine nodes up: 127.0.0.1:{}", ports[0] + "," + ports[1] + "," + ports[2]);
 
         // 建 3 个 mTLS channel（用项目自带 GrpcTlsContextFactory，与生产集群通道一致）
         // 证书路径：<mpc-engine>/certs/{nodeN.crt, nodeN.key, ca.crt}
@@ -169,7 +205,6 @@ public class CggmpMpcE2EClusterTest {
             throw new IllegalStateException("certs dir not found: " + certDir);
         }
         String trustCertPath = certDir.resolve("ca.crt").toString();
-        int[] ports = {50051, 50052, 50053};
         for (int i = 0; i < ports.length; i++) {
             int port = ports[i];
             String nodeName = "node" + (i + 1);
@@ -500,8 +535,7 @@ public class CggmpMpcE2EClusterTest {
     void cggmpE2EProductionPath() throws Exception {
         // ---------- 生产装配：MpcEngineRouter（3 端点，生产同款 TLS/认证配置） ----------
         MpcEngineRouter router = new MpcEngineRouter();
-        ReflectionTestUtils.setField(router, "endpoints",
-                "127.0.0.1:50051,127.0.0.1:50052,127.0.0.1:50053");
+        ReflectionTestUtils.setField(router, "endpoints", endpointSpec());
         ReflectionTestUtils.setField(router, "distributedMode", true);
         ReflectionTestUtils.setField(router, "usePlaintext", false);
         ReflectionTestUtils.setField(router, "tlsTrustCertPath",
@@ -742,6 +776,135 @@ public class CggmpMpcE2EClusterTest {
     }
 
     // ============================================================
+    // 冷钱包业务链 E2E（2026-10-09 入口层配套）
+    // ============================================================
+
+    /**
+     * 冷钱包业务链端到端：真实引擎集群上跑 **DKG 编排（{@link DefaultMpcService#generateKeyShare}）
+     * → 转账受理 → MPC 签名 → 聚合广播 → 状态查询**。
+     *
+     * <p>覆盖两条此前从未被运行的业务段：</p>
+     * <ol>
+     *   <li>{@code generateKeyShare} 对 CGGMP21 的「无份额」路径——该路径此前无条件
+     *       构造 {@code MpcKeyShare} 会抛 NPE（CGGMP21 份额驻留引擎、DkgResponse.keyShare
+     *       恒 null），即 DKG 编排对唯一存活路径必然失败；本用例是该修复的回归门禁；</li>
+     *   <li>{@link ColdWalletMultiSigService} 的 init/sign/broadcast/status——
+     *       审计发现其「零调用方、无 HTTP 入口」（业务链没接出去），本批接出并在此实测。</li>
+     * </ol>
+     *
+     * <p>边界（有意 mock，避免重复覆盖）：审批策略行为（{@link MpcApprovalPolicy}）与
+     * 链上节点 RPC（{@link NodeController}）——两者各有独立单测；本用例只保证
+     * 「编排层 ↔ 真实密码学引擎」的接线正确、签名真的产出于集群。</p>
+     */
+    @Test
+    @DisplayName("冷钱包业务链：DKG 编排 → 受理 → 签名 → 广播 → 状态（真实 3 引擎集群）")
+    void coldWalletBusinessChainE2E() throws Exception {
+        // ---------- 生产装配（与 P0-1 用例同款）：Router → ClusterConfig → Driver → Engine ----------
+        MpcEngineRouter router = new MpcEngineRouter();
+        ReflectionTestUtils.setField(router, "endpoints", endpointSpec());
+        ReflectionTestUtils.setField(router, "distributedMode", true);
+        ReflectionTestUtils.setField(router, "usePlaintext", false);
+        ReflectionTestUtils.setField(router, "tlsTrustCertPath",
+                certsDir.resolve("ca.crt").toString());
+        ReflectionTestUtils.setField(router, "tlsClientCertPath",
+                certsDir.resolve("node1.crt").toString());
+        ReflectionTestUtils.setField(router, "tlsClientKeyPath",
+                certsDir.resolve("node1.key").toString());
+        ReflectionTestUtils.setField(router, "tlsOverrideAuthority", "localhost");
+        ReflectionTestUtils.setField(router, "authToken", "nexus-mpc-test-token");
+        router.init();
+
+        MpcCggmpClusterConfig clusterConfig = new MpcCggmpClusterConfig(router);
+        ReflectionTestUtils.setField(clusterConfig, "cggmpDeadlineMs", DEADLINE_MS);
+        ReflectionTestUtils.setField(clusterConfig, "cggmpEnabled", true);
+        CggmpClusterSessionDriver driver = clusterConfig.cggmpClusterSessionDriver();
+        assertNotNull(driver, "3 端点应装配出集群驱动");
+
+        @SuppressWarnings("unchecked")
+        ObjectProvider<CggmpClusterSessionDriver> driverProvider = mock(ObjectProvider.class);
+        when(driverProvider.getIfAvailable()).thenReturn(driver);
+        CggmpMpcCryptoEngine engine = new CggmpMpcCryptoEngine(driverProvider);
+        ReflectionTestUtils.setField(engine, "cggmpEnabled", true);
+        ReflectionTestUtils.setField(engine, "signersConfig", "0,1");
+
+        // ---------- 参与方（= 3 引擎端点；CGGMP21 下 publicKeyShareHex 无意义，恒空串） ----------
+        List<MpcParticipant> participants = new ArrayList<>();
+        for (int i = 0; i < 3; i++) {
+            participants.add(new MpcParticipant("party-" + i, "127.0.0.1:" + ports[i], ""));
+        }
+        List<MpcParticipant> online = participants.stream()
+                .map(p -> p.withOnline(true))
+                .collect(Collectors.toList());
+
+        // ---------- DefaultMpcService：非 MPC 依赖 mock（持久化/传输/路由不参与本链断言） ----------
+        DefaultMpcService mpcService = new DefaultMpcService(
+                engine,
+                mock(MpcSessionRepository.class),
+                mock(MpcWalletRepository.class),
+                mock(MpcKeyShareStore.class),
+                mock(MpcTransport.class),
+                mock(MessageRouter.class));
+
+        String walletId = "wallet-biz-" + System.currentTimeMillis();
+        String sid = CggmpMpcCryptoEngine.walletSessionId(walletId);
+
+        // ---------- 1. DKG 编排（曾因 keyShare==null 必抛 NPE；本组断言即回归门禁） ----------
+        MpcKeyGeneration.DkgResult dkg = mpcService.generateKeyShare(
+                sid, 2, 3, 0, participants.get(0).getParticipantId(), "secp256k1", participants);
+        assertNotNull(dkg.getJointPublicKeyHex(), "DKG 应返回聚合公钥");
+        assertEquals(66, dkg.getJointPublicKeyHex().length(), "聚合公钥 = 压缩 SEC1 33 字节 hex");
+        assertTrue(dkg.getShares().isEmpty(), "CGGMP21 份额驻留引擎进程，Java 侧不得持有");
+        assertTrue(driver.status(sid).isHasKeyShare(), "集群侧 key_share 应已装配");
+
+        // ---------- 2. 冷钱包编排：受理 → 签名 → 广播（审批策略 / 节点 RPC 为 mock） ----------
+        MpcApprovalPolicy policy = mock(MpcApprovalPolicy.class);
+        when(policy.canSign(any(), anyList())).thenReturn(true);
+        when(policy.isAddressWhitelisted(anyString())).thenReturn(true);
+        when(policy.getColdWalletPolicy()).thenReturn(new ThresholdPolicy(2, 3));
+
+        NodeController node = mock(NodeController.class);
+        com.google.gson.JsonObject rpcOk = new com.google.gson.JsonObject();
+        rpcOk.addProperty("code", 2000);
+        String expectedTxHash = "0xE2E" + walletId;
+        rpcOk.addProperty("data", expectedTxHash);
+        when(node.sendTransaction(anyString())).thenReturn(rpcOk);
+
+        ColdWalletMultiSigService service = new ColdWalletMultiSigService(
+                mock(MpcSigner.class), mock(MpcSignatureAggregator.class), policy, node);
+        ReflectionTestUtils.setField(service, "cggmpEngine", engine);
+
+        MpcWallet wallet = new MpcWallet();
+        wallet.setWalletId(walletId);
+        wallet.setThreshold(2);
+        wallet.setParticipants(participants.stream()
+                .map(MpcParticipant::getParticipantId)
+                .collect(Collectors.toList()));
+        wallet.setPublicKey(dkg.getJointPublicKeyHex());
+        service.registerWallet(wallet);
+
+        String transferSid = service.initMultiSigTransfer(walletId,
+                "0xFrom" + walletId, "0xTo" + walletId,
+                new java.math.BigDecimal("1.5"), "USDT", "req-e2e-" + walletId, online);
+        assertNotNull(transferSid, "受理应返回转账会话 ID");
+        assertEquals(ColdWalletMultiSigService.TransferStatus.PENDING,
+                service.getSessionStatus(transferSid), "受理后应为 PENDING");
+
+        service.participantSign(transferSid);   // 真实 CGGMP21 2-of-3：引擎内产出 r||s
+        assertEquals(ColdWalletMultiSigService.TransferStatus.SIGNING,
+                service.getSessionStatus(transferSid), "签名后应进入 SIGNING（AGGREGATING）");
+
+        String txHash = service.aggregateAndBroadcast(transferSid);
+        assertEquals(expectedTxHash, txHash, "应返回节点 RPC 的链上哈希");
+        assertEquals(ColdWalletMultiSigService.TransferStatus.COMPLETED,
+                service.getSessionStatus(transferSid), "广播后应 COMPLETED");
+        assertNull(service.getFailureReason(transferSid), "成功路径不应有失败原因");
+        verify(node).sendTransaction(anyString());
+
+        log.info("冷钱包业务链 E2E PASSED: wallet={}, transferSid={}, aggPk={}..., txHash={}",
+                walletId, transferSid, dkg.getJointPublicKeyHex().substring(0, 16), txHash);
+    }
+
+    // ============================================================
     // 工具
     // ============================================================
 
@@ -782,6 +945,100 @@ public class CggmpMpcE2EClusterTest {
         return java.util.HexFormat.of().parseHex(hex);
     }
 
+    /** 端点串（与 {@link #ports} 同源）：{@code 127.0.0.1:p0,127.0.0.1:p1,127.0.0.1:p2}。 */
+    private static String endpointSpec() {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < ports.length; i++) {
+            if (i > 0) {
+                sb.append(',');
+            }
+            sb.append("127.0.0.1:").append(ports[i]);
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 从 {@code nodeN.json} 的 listen_addr 解析三个引擎端口（与配置集同源，
+     * 不再硬编码——见 {@link #ports} 字段注释）。
+     */
+    /**
+     * 扫描 {@code node*.json}，按**内容 party_index** 建立索引（兼容两种命名约定）。
+     *
+     * <p>命名风险见 {@link #nodeConfigs} 注释：文件名编号在不同生成器下相差 1，
+     * 只有文件内容的 {@code party_index} 是权威。若配置里没有该字段（异常配置），
+     * 退回"文件名数字 - 1 = party_index"的历史约定并告警。</p>
+     */
+    private static java.util.Map<Integer, Path> discoverNodeConfigs(Path configDir) throws IOException {
+        java.util.Map<Integer, Path> byParty = new java.util.LinkedHashMap<>();
+        java.util.List<Path> files;
+        try (java.util.stream.Stream<Path> stream = Files.list(configDir)) {
+            files = stream
+                    .filter(p -> p.getFileName().toString().matches("node\\d+\\.json"))
+                    .sorted()
+                    .collect(Collectors.toList());
+        }
+        com.fasterxml.jackson.databind.ObjectMapper mapper =
+                new com.fasterxml.jackson.databind.ObjectMapper();
+        java.util.List<Path> withoutIndex = new ArrayList<>();
+        for (Path p : files) {
+            com.fasterxml.jackson.databind.JsonNode root = mapper.readTree(p.toFile());
+            if (root.hasNonNull("party_index")) {
+                byParty.put(root.get("party_index").asInt(), p);
+            } else {
+                withoutIndex.add(p);
+            }
+        }
+        for (Path p : withoutIndex) {
+            int num = Integer.parseInt(p.getFileName().toString().replaceAll("\\D", ""));
+            int party = Math.max(0, num - 1);
+            log.warn("node config {} 无 party_index 字段，按历史约定推断为 party {}（请修正配置）",
+                    p.getFileName(), party);
+            byParty.putIfAbsent(party, p);
+        }
+        if (byParty.size() < 3) {
+            throw new IllegalStateException("expected >=3 node configs under " + configDir
+                    + ", found " + byParty.size() + " (keys=" + byParty.keySet() + "); "
+                    + "run scripts/gen-mpc-engine-configs.sh --layout native or "
+                    + "mpc-engine/scripts/start-mpc-cluster.sh --setup-only");
+        }
+        log.info("node configs discovered by party_index: {}", byParty);
+        return byParty;
+    }
+
+    /** 取某参与方的配置（{@link #nodeConfigs} 必须已由 {@code @BeforeAll} 初始化）。 */
+    private static Path resolveNodeConfig(int partyIndex) {
+        Path p = nodeConfigs.get(partyIndex);
+        if (p == null) {
+            throw new IllegalStateException("no node config for party " + partyIndex
+                    + " (discovered: " + nodeConfigs.keySet() + ")");
+        }
+        return p;
+    }
+
+    /**
+     * 从各方 {@code nodeN.json} 的 listen_addr 解析引擎端口（与配置集同源，
+     * 不再硬编码——见 {@link #ports} 字段注释）。
+     */
+    private static int[] resolveEnginePorts(Path configDir) throws Exception {
+        com.fasterxml.jackson.databind.ObjectMapper mapper =
+                new com.fasterxml.jackson.databind.ObjectMapper();
+        int[] resolved = new int[3];
+        for (int i = 0; i < 3; i++) {
+            Path cfg = resolveNodeConfig(i);
+            com.fasterxml.jackson.databind.JsonNode root = mapper.readTree(cfg.toFile());
+            String listen = root.path("listen_addr").asText("");
+            int colon = listen.lastIndexOf(':');
+            if (colon < 0 || colon == listen.length() - 1) {
+                throw new IllegalStateException(
+                        "invalid listen_addr in " + cfg + ": '" + listen + "'");
+            }
+            resolved[i] = Integer.parseInt(listen.substring(colon + 1).trim());
+        }
+        log.info("engine ports resolved from configs: {}", java.util.Arrays.toString(resolved));
+        return resolved;
+    }
+
+    /** 等待某端口可连（引擎就绪探测）；超时抛 {@link IllegalStateException}。 */
     private static int waitForPort(int port, long timeoutMs) throws InterruptedException {
         long deadline = System.currentTimeMillis() + timeoutMs;
         while (System.currentTimeMillis() < deadline) {

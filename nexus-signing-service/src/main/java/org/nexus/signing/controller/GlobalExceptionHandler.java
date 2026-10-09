@@ -69,6 +69,24 @@ public class GlobalExceptionHandler {
         return body(HttpStatus.BAD_REQUEST, BIZ_BAD_REQUEST, e.getMessage());
     }
 
+    /**
+     * MPC 协议/业务规则拒绝（2026-10-09 入口层配套）：{@code MpcProtocolException}
+     * 此前落入 Exception 兜底被报 500 "Internal error"，丢掉 reason（未知钱包、
+     * 审批法定数未达、地址不在白名单、会话状态非法、超时等）——客户端拿不到可判定
+     * 的失败语义。现按 reason 映射：ILLEGAL_ARGUMENT→400、TIMEOUT→504、
+     * 其余（QUORUM_NOT_REACHED/ILLEGAL_STATE/INVALID_SHARE/…）→409（不自动重试）。
+     */
+    @ExceptionHandler(org.nexus.signing.mpc.MpcProtocolException.class)
+    public ResponseEntity<Object> handleMpcProtocol(org.nexus.signing.mpc.MpcProtocolException e) {
+        HttpStatus status = switch (e.getReason()) {
+            case ILLEGAL_ARGUMENT -> HttpStatus.BAD_REQUEST;
+            case TIMEOUT -> HttpStatus.GATEWAY_TIMEOUT;
+            default -> HttpStatus.CONFLICT;
+        };
+        log.warn("MPC protocol rejection ({}): {}", e.getReason(), e.getMessage());
+        return body(status, BIZ_FAIL, "MPC " + e.getReason() + ": " + e.getMessage());
+    }
+
     /** 兜底（500）：完整堆栈进服务端日志，响应只留摘要（不泄漏内部细节）。 */
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Object> handleGeneric(Exception e) {

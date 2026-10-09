@@ -9,10 +9,10 @@ NexusChain 是一个**基于自研区块链的支付编排平台（Payment Orche
 > 沙箱/仿真态对外展示，生产资金操作由持牌交付方在其合规主体下运行。
 
 > **版本口径（2026-09-28 第三次修复漂移，CI 门禁化）**：构建侧**双源**为根 `build.gradle` 的 `version`
-> 与 `nexus-core/nexus-core/src/main/resources/version.properties` 的 `versionNumber`（当前均为 `2.53.1`；
+> 与 `nexus-core/nexus-core/src/main/resources/version.properties` 的 `versionNumber`（当前均为 `2.54.0`；
 > 发版时**两处都要改**——v2.50.2 曾因 version.properties 滞后导致 jar 名错位）；
-> 发布说明单一来源为 [CHANGELOG](CHANGELOG.md)（最新条目 `[2.53.1] - 2026-10-09`，
-> 即 staging 升全分布式 CGGMP21 + 钱包份额仪式 + compose 引擎链路修复批次）。
+> 发布说明单一来源为 [CHANGELOG](CHANGELOG.md)（最新条目 `[2.54.0] - 2026-10-09`，
+> 即 MPC 冷钱包 HTTP 入口层（业务链接出）+ DKG 编排 NPE 修复批次）。
 > 本头注的准确性由 CI 门禁 `scripts/check-version-consistency.sh` 保护：
 > build.gradle / version.properties / 本头注三处任一失配将直接导致 CI 失败。
 
@@ -167,6 +167,23 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
 > staging 不得静默退回进程内传输或 skeleton，prod 不得静默退回非分布式/进程内
 > （staging 的 CGGMP21 开关已由 WARN 升为**硬断言**）。
 
+- **冷钱包 HTTP 入口（2026-10-09 新增）**：此前 CGGMP21 的 DKG 仪式与冷钱包多签编排
+  **没有任何 HTTP 入口**（`MpcService.generateKeyShare` 与 `ColdWalletMultiSigService` 的
+  init/sign/broadcast 只有测试调用方——业务链"没接出去"）。现由 `MpcColdWalletController`
+  接出（`/api/v1/mpc/**`，鉴权：建钱包 `ROLE_ADMIN` / 转账三类 `ROLE_SIGNER` / 查询 `ROLE_READ`）：
+
+  | 方法 | 路径 | 说明 |
+  |---|---|---|
+  | POST | `/api/v1/mpc/wallets` | 建钱包 = 跑 DKG 仪式（keygen→aux→assemble），登记聚合公钥；幂等；集群不可用 → 409 fail-closed |
+  | GET | `/api/v1/mpc/wallets/{walletId}` | 查钱包 |
+  | POST | `/api/v1/mpc/cold-wallet/transfers` | 受理转账（审批法定数 + 地址白名单校验）；集群不可用 → **503**（不降级 skeleton） |
+  | POST | `/api/v1/mpc/cold-wallet/transfers/{sid}/sign` | MPC 签名（引擎内产出 r‖s 并内部验签） |
+  | POST | `/api/v1/mpc/cold-wallet/transfers/{sid}/broadcast` | 聚合 + 上链广播，返回 txHash |
+  | GET | `/api/v1/mpc/cold-wallet/transfers/{sid}` | 状态/失败原因/链上哈希 |
+
+  **keyshare 供给两条等价路径**：① 业务侧走上面 `POST /wallets`（经 Java 驱动引擎跑仪式）；
+  ② 集群运维侧走 `scripts/mpc-wallet-ceremony.py`（不经 signing-service，纯 grpcurl）。
+  两者会话 ID 同源（`cw-` + SHA-256(walletId)/16），可混用。
 - **本地沙箱（docker-compose）**：3 个引擎以 **PartyConfig 真 mTLS** 装配（配置由
   `scripts/gen-mpc-engine-configs.sh` 生成，证书 `scripts/gen-mpc-certs.sh`）+ 份额落盘卷；
   signing-service 侧 CGGMP21 全开。端到端实证（2026-10-08 本机）：三引擎 mTLS → 仪式

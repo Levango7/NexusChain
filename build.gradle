@@ -41,7 +41,7 @@ allprojects {
     // 与 version.properties / README 头注的一致性由 CI 门禁
     // scripts/check-version-consistency.sh 保护。
     // 2026-10-04：2.51.2 → 2.51.3（限额严格计数器自然日/月口径 + 本地容量首跑基线）。
-    version = '2.53.1'
+    version = '2.54.0'
 
     repositories {
         // 权威源优先；镜像仅用于加速与容错
