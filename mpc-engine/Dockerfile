@@ -69,7 +69,16 @@ COPY --from=builder /app/mpc-engine/target/release/mpc-engine /usr/local/bin/mpc
 
 # 工作目录归属非 root 用户，确保运行时可写日志/临时文件
 WORKDIR /home/mpc
-RUN chown -R mpc:mpc /home/mpc
+# 份额落盘目录（NXC1 信封）预建并归属 mpc——**关键**：named volume / PVC 首次
+# 使用时 Docker/K8s 会把镜像内的目录内容与属主复制进卷；若目录不存在，卷由
+# root 创建，非 root 进程写入即 Permission denied，keygen 会在落盘阶段失败
+# （`keygen share persist failed`，2026-10-08 compose 沙箱实测）。
+# 三个路径覆盖三种挂载约定：
+#   /app/data/sessions  —— docker-compose.yml / .prod.yml（卷挂 /app/data）
+#   /app/sessions       —— helm chart（PVC 挂 /app/sessions；K8s 侧另有 fsGroup=1000 兜底）
+#   /home/mpc/sessions  —— 手工 docker run 的默认友好路径（/home/mpc 已归属 mpc）
+RUN mkdir -p /app/data/sessions /app/sessions /home/mpc/sessions \
+    && chown -R mpc:mpc /home/mpc /app
 
 EXPOSE 50051
 ENV RUST_LOG=info \

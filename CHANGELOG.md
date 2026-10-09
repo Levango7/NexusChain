@@ -2,6 +2,35 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [2.53.1] - 2026-10-09
+
+### 修复：compose 引擎链路两处存量缺陷（镜像构建上下文 + 落盘目录属主）
+
+发现路径：v2.53.0 之后做"沙箱链路端到端实证"（容器化引擎）时暴露——**两处缺陷叠加
+导致 docker-compose 的 mpc-engine 服务此前既构建不出镜像、也存不住份额**。
+
+- **① 构建上下文错位**：`mpc-engine/Dockerfile` 依赖**仓库根**上下文
+  （`COPY . .` → `WORKDIR /app/mpc-engine`）；CI 用 `context: .` + `file: ./mpc-engine/Dockerfile`
+  正确，但 `docker-compose.yml` 写 `context: ./mpc-engine`、`docker-compose.prod.yml` 写
+  `build: ./mpc-engine`——cargo 向上发现工作区把产物落 `/app/target`，最终
+  `COPY --from=builder /app/mpc-engine/target/release/mpc-engine` 报 `not found`
+  （**镜像根本构建失败**）。修：六处 build 块统一为 `context: .` +
+  `dockerfile: mpc-engine/Dockerfile`（与其余服务同形态）。
+- **② 落盘目录属主**：镜像以非 root `mpc(1000)` 运行，而 compose 的 named volume 挂在
+  `/app/data`、镜像内**无此目录** ⇒ Docker 以 root 建卷，引擎写 `/app/data/sessions`
+  被拒——keygen 密码学上完成却在落盘阶段失败：
+  `pump Keygen ...: keygen share persist failed`（**份额存不住、重启即丢**）。
+  K8s 侧靠 chart 的 `fsGroup: 1000` 兜住，故 kind 冒烟未暴露。修：镜像内预建
+  `/app/data/sessions`、`/app/sessions`、`/home/mpc/sessions` 并 `chown mpc:mpc`
+  （新卷首次使用继承镜像属主；三路径覆盖 compose / chart / 手工 docker run 三种挂载约定）。
+- **沙箱链路端到端实证（本次，容器化）**：三容器以 PartyConfig 真 mTLS 起服 →
+  仪式（keygen 聚合公钥三方一致 → aux → assemble → 三方 has_key_share=true）→
+  2-of-3 签名 + 引擎侧验签 `valid=true` → **重启 mpc-engine-1 容器后冷启动签名成功**
+  （日志 `cggmp share persisted` → `cggmp share loaded from disk`）。
+- **影响面**：compose 沙箱/本地私有化交付的引擎链路；已发布镜像（含 v2.53.0）在
+  "卷挂 /app/data" 形态下同样存不住份额，本补丁版镜像修复。**K8s 生产路径不受影响**
+  （chart 的 fsGroup 已兜底）。
+
 ## [2.53.0] - 2026-10-08
 
 ### staging 升级为全分布式 CGGMP21 + 钱包份额仪式（keyshare 供给）落地

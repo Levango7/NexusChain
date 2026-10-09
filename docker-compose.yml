@@ -391,8 +391,14 @@ services:
   #     容器间通信走 nexus-net 网络的 50051 端口（每容器内部均监听 50051）。
   mpc-engine-0:
     build:
-      context: ./mpc-engine
-      dockerfile: Dockerfile
+      # 构建上下文必须是**仓库根**：mpc-engine/Dockerfile 执行 `COPY . .` →
+      # `WORKDIR /app/mpc-engine` → `cargo build`，产物落 /app/mpc-engine/target；
+      # 若上下文给 ./mpc-engine，cargo 会向上找到 /app/Cargo.toml 把产物落 /app/target，
+      # 最终 `COPY --from=builder /app/mpc-engine/target/release/mpc-engine` 必然
+      # "not found"（2026-10-08 实测：compose 链路此前根本构建不出镜像）。
+      # 与其余服务（nexus-gateway 等）及 CI（context: . + file: ./mpc-engine/Dockerfile）一致。
+      context: .
+      dockerfile: mpc-engine/Dockerfile
     container_name: nexus-mpc-engine-0
     ports:
       - '127.0.0.1:50051:50051'    # gRPC，仅本机访问（容器间用服务名 mpc-engine-0:50051）
@@ -421,8 +427,14 @@ services:
 
   mpc-engine-1:
     build:
-      context: ./mpc-engine
-      dockerfile: Dockerfile
+      # 构建上下文必须是**仓库根**：mpc-engine/Dockerfile 执行 `COPY . .` →
+      # `WORKDIR /app/mpc-engine` → `cargo build`，产物落 /app/mpc-engine/target；
+      # 若上下文给 ./mpc-engine，cargo 会向上找到 /app/Cargo.toml 把产物落 /app/target，
+      # 最终 `COPY --from=builder /app/mpc-engine/target/release/mpc-engine` 必然
+      # "not found"（2026-10-08 实测：compose 链路此前根本构建不出镜像）。
+      # 与其余服务（nexus-gateway 等）及 CI（context: . + file: ./mpc-engine/Dockerfile）一致。
+      context: .
+      dockerfile: mpc-engine/Dockerfile
     container_name: nexus-mpc-engine-1
     ports:
       - '127.0.0.1:50052:50051'    # 宿主机 50052 → 容器内 50051
@@ -451,8 +463,14 @@ services:
 
   mpc-engine-2:
     build:
-      context: ./mpc-engine
-      dockerfile: Dockerfile
+      # 构建上下文必须是**仓库根**：mpc-engine/Dockerfile 执行 `COPY . .` →
+      # `WORKDIR /app/mpc-engine` → `cargo build`，产物落 /app/mpc-engine/target；
+      # 若上下文给 ./mpc-engine，cargo 会向上找到 /app/Cargo.toml 把产物落 /app/target，
+      # 最终 `COPY --from=builder /app/mpc-engine/target/release/mpc-engine` 必然
+      # "not found"（2026-10-08 实测：compose 链路此前根本构建不出镜像）。
+      # 与其余服务（nexus-gateway 等）及 CI（context: . + file: ./mpc-engine/Dockerfile）一致。
+      context: .
+      dockerfile: mpc-engine/Dockerfile
     container_name: nexus-mpc-engine-2
     ports:
       - '127.0.0.1:50053:50051'    # 宿主机 50053 → 容器内 50051
