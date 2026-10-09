@@ -2,6 +2,52 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [2.53.0] - 2026-10-08
+
+### staging 升级为全分布式 CGGMP21 + 钱包份额仪式（keyshare 供给）落地
+
+**背景**：GG20 退役（v2.52.0）后 `cggmp-enabled=false` 不再意味着"回退协调器"而是
+"没有真实引擎"——staging 因此退化为 FROZEN skeleton 记账，三级阶梯缺了一级；
+且**钱包份额（keyshare）在代码里根本没有供给入口**（无 REST、无脚本），任何真实
+部署都无法让钱包签得出来。本次把这两件事一并补齐并**本地端到端实证**。
+
+- **staging 升到全分布式 CGGMP21（与 prod 同口径）**：`deploy/helm/values-staging.yaml`
+  补齐 `DISTRIBUTED / CGGMP_ENABLED / CGGMP_SIGNERS=0,1 / CGGMP_DEADLINE_MS=300000 /
+  TLS_OVERRIDE_AUTHORITY=localhost` + `mpc-engine` 段（SealedSecret 约定），并列出
+  部署前置清单（见 `deploy/docs/mpc-distributed-deployment.md` 第 11.3 节）。
+  CI 门禁 `scripts/check-mpc-tier-policy.sh` 的 staging 项由 **WARN 升为硬断言**。
+- **新增 `scripts/mpc-wallet-ceremony.py`（keyshare 供给的唯一入口）**：
+  对 3 引擎跑 keygen→aux→assemble（grpcurl + 严格对齐 Java
+  `CggmpClusterSessionDriver` 的 publish→pull→pump 时序；publish/pull 打协调器、
+  Start/Pump 打各自引擎）；`--sign-probe` 当场做 t-of-n 签名 + 引擎侧验签；
+  `--sign-only` 为日常探针（不重跑仪式、冷启动从盘恢复）。会话 ID 与 Java
+  `walletSessionId` 逐字节一致（`cw-` + SHA-256(walletId)/16）。
+- **新增 `scripts/gen-mpc-engine-configs.sh`**：生成引擎 PartyConfig
+  （compose 容器路径 / native 主机路径两布局）——真 mTLS 三件套 + 份额落盘
+  + party_index/peers，把"引擎怎么装配才安全"从口头约定变成一条命令。
+- **沙箱（docker-compose）真 mTLS 装配**：3 个引擎改走 `MPC_CONFIG_PATH`
+  （PartyConfig 模式隐含 `MPC_REQUIRE_TLS=true` 且**要求客户端证书**），
+  新增 `MPC_ENGINE_SESSION_DIR=/app/data/sessions`（此前只有卷没有 env ⇒
+  份额根本不落盘），signing-service 补 CGGMP21 开关组；`docker compose config` 通过。
+- **运维脚本同步**：`scripts/verify-mpc-distributed.sh` 的 grpcurl 探测补 `-proto`
+  （引擎未开 gRPC 反射，原写法必失败——潜在缺陷）与 mTLS 证书参数；
+  `scripts/deploy-mpc-engine.sh` 头部从"GG20 协调器模型"改写为 CGGMP21 语义
+  （每进程 = 一参与方；份额供给见仪式脚本）。
+- **本地端到端证据（2026-10-08，本机 Windows + release 引擎）**：
+  ① 三引擎以 PartyConfig 起服，日志 `mTLS enabled (server requires client certificate)`；
+  ② 仪式成功：keygen 聚合公钥三方一致 → aux → assemble，三方 `has_key_share=true`；
+  ③ **2-of-3 签名 + 引擎侧验签 `valid=true`**；
+  ④ **杀掉签名方引擎进程后重启，仅凭磁盘份额签名成功**（日志 `cggmp share loaded from disk`），
+     证明份额落盘/冷恢复闭环；
+  ⑤ 三引擎 `keyshare.bin` 同尺寸（8788B）但 SHA-256 两两不同——**份额隔离实证**；
+  ⑥ 仪式中断恢复路径实证：重启引擎后同 session 重跑即续上（keygen 从
+     `incomplete.bin` 恢复，不重跑素数生成）。
+- **已知限制（两条，已写入部署文档第 11.2 节）**：
+  ① 仪式中断后 session 在引擎内存停在半程（半程态不落盘），同 session 重跑会被
+     Start 幂等守卫跳过而卡住 ⇒ 恢复 = 重启引擎；**`--counter` 递增不会重跑协议**
+     （守卫只认 session，与"counter = 重试序号"的设计注释存在偏差，属后续改进项）；
+  ② 引擎未开 gRPC 反射，grpcurl 侧工具一律须带 `-proto`。
+
 ## [2.52.1] - 2026-10-08
 
 ### 安全修复：nexus-gateway 镜像 HIGH CVE（lz4-java 1.10.1 → 1.11.4）

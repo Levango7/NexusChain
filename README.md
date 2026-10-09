@@ -9,10 +9,10 @@ NexusChain 是一个**基于自研区块链的支付编排平台（Payment Orche
 > 沙箱/仿真态对外展示，生产资金操作由持牌交付方在其合规主体下运行。
 
 > **版本口径（2026-09-28 第三次修复漂移，CI 门禁化）**：构建侧**双源**为根 `build.gradle` 的 `version`
-> 与 `nexus-core/nexus-core/src/main/resources/version.properties` 的 `versionNumber`（当前均为 `2.52.1`；
+> 与 `nexus-core/nexus-core/src/main/resources/version.properties` 的 `versionNumber`（当前均为 `2.53.0`；
 > 发版时**两处都要改**——v2.50.2 曾因 version.properties 滞后导致 jar 名错位）；
-> 发布说明单一来源为 [CHANGELOG](CHANGELOG.md)（最新条目 `[2.52.1] - 2026-10-08`，
-> 即 GG20 退役 / CGGMP21 独占 / GPL-3.0 系依赖清零 + lz4-java CVE 修复批次）。
+> 发布说明单一来源为 [CHANGELOG](CHANGELOG.md)（最新条目 `[2.53.0] - 2026-10-08`，
+> 即 staging 升全分布式 CGGMP21 + 钱包份额仪式（keyshare 供给）批次）。
 > 本头注的准确性由 CI 门禁 `scripts/check-version-consistency.sh` 保护：
 > build.gradle / version.properties / 本头注三处任一失配将直接导致 CI 失败。
 
@@ -152,19 +152,27 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
 > 旧路径退役已于 2026-10-08 实施完成（PLAN-001-R2）：
 > [docs/plan/PLAN-001-gg20-retirement.md](docs/plan/PLAN-001-gg20-retirement.md)。
 
-> **MPC 分层口径（2026-10-02 决策；2026-10-08 随 GG20 退役更新）**：
+> **MPC 分层口径（2026-10-02 决策；2026-10-08 两轮更新：GG20 退役 + staging 升级）**：
 > 默认关闭**不是缺陷，是有意的三级阶梯**——
 > ① **dev/默认**（application.yml）：`real-grpc-enabled=false` + `cggmp-enabled=false`，
 > InMemoryMpcTransport + **无真实引擎（FROZEN skeleton 记账）**（零外部依赖，单测/本地开发用）；
-> ② **staging**：`NEX_MPC_TRANSPORT_GRPC=true`（真实 gRPC+mTLS，拓扑同 prod 的 3 引擎+证书），
-> 但 **CGGMP21 未开**（staging keyshare 供给未配）——即 staging 目前**同样没有真实签名引擎**，
-> 升级路径：配齐 keyshare 供给后置 `NEX_MPC_ENGINE_CGGMP_ENABLED=true`；
+> ② **staging**：**2026-10-08 起升级为全分布式 CGGMP21**（transport + distributed +
+> cggmp-enabled 全开，与 prod 同口径同阈值）——此前只开传输层、协议层无真实引擎；
 > ③ **prod**：transport + distributed-mode + cggmp-enabled 全开，全分布式 CGGMP21 2-of-3。
-> 即：**dev/staging 的 MPC 并非真阈值签名路径，与 prod 不等价**——需要真阈值签名的验证一律看
-> `CggmpMpcE2EClusterTest` 与 prod 配置。该阶梯由 CI 门禁
-> `scripts/check-mpc-tier-policy.sh`（k8s-sync-check workflow）固化：staging 不得静默退回
-> 进程内传输，prod 不得静默退回非分布式/进程内。
+> **keyshare 供给（两级共同前置）**：钱包要能签名，必须先跑一次 DKG 仪式
+> （keygen→aux→assemble；份额落在各引擎进程的 `MPC_ENGINE_SESSION_DIR`，**Java 侧不持份额**）：
+> `python3 scripts/mpc-wallet-ceremony.py --wallet <walletId> ...`（加 `--sign-probe` 可当场验签）。
+> 未跑仪式的钱包在签名时以 `key_share missing` fail-closed——这是设计，不是缺陷。
+> 该阶梯由 CI 门禁 `scripts/check-mpc-tier-policy.sh`（k8s-sync-check workflow）固化：
+> staging 不得静默退回进程内传输或 skeleton，prod 不得静默退回非分布式/进程内
+> （staging 的 CGGMP21 开关已由 WARN 升为**硬断言**）。
 
+- **本地沙箱（docker-compose）**：3 个引擎以 **PartyConfig 真 mTLS** 装配（配置由
+  `scripts/gen-mpc-engine-configs.sh` 生成，证书 `scripts/gen-mpc-certs.sh`）+ 份额落盘卷；
+  signing-service 侧 CGGMP21 全开。端到端实证（2026-10-08 本机）：三引擎 mTLS → 仪式
+  （keygen/aux/assemble，聚合公钥三方一致）→ 2-of-3 签名 + 引擎侧验签 `valid=true`
+  → **重启签名方进程后仅凭磁盘份额再签成功**（日志 `cggmp share loaded from disk`）
+  → 三引擎 `keyshare.bin` 同尺寸但 SHA-256 两两不同（份额隔离）。
 - **Rust `mpc-engine`**：CGGMP21（LFDT-Lockness `cggmp21` 0.6.3，Kudelski 审计）实现**真实 t-of-n 门限 ECDSA**（keygen → aux_info（Paillier）→ sign，产出可被标准 secp256k1 验证的签名）；驱动线程 actor 模型，协议消息经协调器**字节管道**中转（协调器不理解、不落盘、不修改消息，不含任何份额）。
 - **Java MPC 传输层**：`GrpcMpcTransportStub` + `MpcTransportGrpcServer` 实现**真实 gRPC over HTTP/2** 传输，支持 P2P 消息路由。
 - **份额隔离（诚实声明，2026-10-08）**：CGGMP21 路径下各引擎进程独立持有份额（NXC1 信封 AES-256-GCM 加密落盘），signing-service 不持有任何份额；GG20 时代「全部 n 方份额驻留同一进程、协调器可跨方提取任意份额」的缺陷**随该路径代码一并消失**——不再是「访问控制靠单进程信任边界」。

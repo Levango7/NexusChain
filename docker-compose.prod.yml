@@ -70,6 +70,15 @@ services:
       - NEX_MPC_ENGINE_TLS_TRUST_CERT=/etc/mpc/certs/ca/CA.pem
       - NEX_MPC_ENGINE_TLS_CLIENT_CERT=/etc/mpc/certs/node-A/cert.pem
       - NEX_MPC_ENGINE_TLS_CLIENT_KEY=/etc/mpc/certs/node-A/key.pem
+      # === 2026-10-08：GG20 退役后本栈同为全分布式 CGGMP21（与 helm prod 同口径）===
+      # 前置：三引擎以 PartyConfig 装配（scripts/gen-mpc-engine-configs.sh
+      # --layout compose-prod 生成 ./mpc-certs/config-prod/nodeN.json，其中含
+      # 份额落盘密钥）+ 每钱包跑过 DKG 仪式（scripts/mpc-wallet-ceremony.py）。
+      - NEX_MPC_ENGINE_DISTRIBUTED=true
+      - NEX_MPC_ENGINE_CGGMP_ENABLED=true
+      - NEX_MPC_ENGINE_CGGMP_SIGNERS=0,1
+      - NEX_MPC_ENGINE_CGGMP_DEADLINE_MS=300000
+      - NEX_MPC_ENGINE_TLS_OVERRIDE_AUTHORITY=localhost
     volumes:
       - mpc-certs:/etc/mpc/certs:ro
     depends_on:
@@ -185,7 +194,12 @@ services:
       - MPC_STORAGE_KEY=${MPC_STORAGE_KEY:?prod 必需：禁止占位默认值}
       - MPC_AUTH_TOKEN=${MPC_AUTH_TOKEN:?prod 必需：禁止占位默认值}
       - MPC_REQUIRE_AUTH=true
+      # 2026-10-08：PartyConfig 为唯一装配源（真 mTLS + 身份/peers）；
+      # 份额落盘到 /app/data/sessions（持久卷；不设则 keygen 产出只在内存）。
+      - MPC_CONFIG_PATH=/app/config/node.json
+      - MPC_ENGINE_SESSION_DIR=/app/data/sessions
     volumes:
+      - ./mpc-certs/config-prod/node0.json:/app/config/node.json:ro
       - mpc-certs:/etc/mpc/certs:ro
       - mpc-engine-0-data:/app/data
     depends_on:
@@ -206,7 +220,12 @@ services:
       - MPC_STORAGE_KEY=${MPC_STORAGE_KEY:?prod 必需：禁止占位默认值}
       - MPC_AUTH_TOKEN=${MPC_AUTH_TOKEN:?prod 必需：禁止占位默认值}
       - MPC_REQUIRE_AUTH=true
+      # 2026-10-08：PartyConfig 为唯一装配源（真 mTLS + 身份/peers）；
+      # 份额落盘到 /app/data/sessions（持久卷；不设则 keygen 产出只在内存）。
+      - MPC_CONFIG_PATH=/app/config/node.json
+      - MPC_ENGINE_SESSION_DIR=/app/data/sessions
     volumes:
+      - ./mpc-certs/config-prod/node1.json:/app/config/node.json:ro
       - mpc-certs:/etc/mpc/certs:ro
       - mpc-engine-1-data:/app/data
     depends_on:
@@ -227,7 +246,12 @@ services:
       - MPC_STORAGE_KEY=${MPC_STORAGE_KEY:?prod 必需：禁止占位默认值}
       - MPC_AUTH_TOKEN=${MPC_AUTH_TOKEN:?prod 必需：禁止占位默认值}
       - MPC_REQUIRE_AUTH=true
+      # 2026-10-08：PartyConfig 为唯一装配源（真 mTLS + 身份/peers）；
+      # 份额落盘到 /app/data/sessions（持久卷；不设则 keygen 产出只在内存）。
+      - MPC_CONFIG_PATH=/app/config/node.json
+      - MPC_ENGINE_SESSION_DIR=/app/data/sessions
     volumes:
+      - ./mpc-certs/config-prod/node2.json:/app/config/node.json:ro
       - mpc-certs:/etc/mpc/certs:ro
       - mpc-engine-2-data:/app/data
     depends_on:
