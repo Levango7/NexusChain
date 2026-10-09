@@ -130,7 +130,9 @@ message CgStartSignRequest {
   uint32 my_index_in_signers = 3;
   // 本批签名方在 keygen 时的原始 0-based 索引（恰好 t 个）
   repeated uint32 signers_at_keygen = 4;
-  // 32 字节消息哈希（原始字节非 hex——与 CGGMP21 DataToSign 对齐）
+  // 32 字节消息摘要（原始字节，非 hex）：引擎**直接**以它作 ECDSA 的 z
+  // （mod n 归约），不再做二次哈希——即此处应填 SHA-256(msg) 本身。
+  // （2026-10-09 修复前引擎会再哈希一层，任何标准外部验签者必拒。）
   bytes message_hash = 5;
 }
 
@@ -147,7 +149,8 @@ message CgVerifyRequest {
   string session_id = 1;
   bytes signature_r = 2;  // 32 字节
   bytes signature_s = 3;  // 32 字节
-  bytes message_hash = 4; // 32 字节
+  // 32 字节；语义同 CgStartSignRequest.message_hash（直接作 z，不再二次哈希）
+  bytes message_hash = 4;
 }
 
 message CgVerifyResponse {

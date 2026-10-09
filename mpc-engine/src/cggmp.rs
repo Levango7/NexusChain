@@ -376,14 +376,17 @@ pub fn sign_state_machine<'a>(
 }
 
 fn build_data_to_sign(message_hash: [u8; 32]) -> eyre::Result<DataToSign<Secp256k1>> {
-    // DataToSign::from_digest 接受 D: Digest——喂一个 sha2_010 哈希实例
-    // （已用 final 32 字节）。注意：CGGMP21 文档明示 from_digest 会再执行
-    // `mod curve order`（内部 Scalar::from_be_bytes_mod_order），所以这里传
-    // 的是"原始 32 字节"，会被再 mod q，与"已 mod q 的标量"在数值上等价。
-    use sha2_010::Digest;
-    let mut hasher = CgSha::new();
-    hasher.update(message_hash);
-    Ok(DataToSign::from_digest::<CgSha>(hasher))
+    // 入参已是对外约定好的消息摘要（SHA-256(msg) 的 32 字节）。ECDSA 的 z 就是
+    // 该摘要按 mod n 归约——与标准验签 u1 = z·s⁻¹ 里的 z 逐位一致。
+    //
+    // 旧实现走 `from_digest(CgSha::new().update(message_hash))`：`from_digest`
+    // 内部还会 `finalize()` 一次，等于对摘要又做了一遍 SHA-256。签名因此覆盖
+    // SHA256(SHA256(msg))——引擎自验（同一构造）通过、任何按标准算摘要的外部
+    // 验签者（链节点、Java 验签器）一律拒绝。2026-10-09 由"真实 HTTP 广播 +
+    // 节点侧验签"的 E2E 暴露，公钥恢复法定位（签名只在该双哈希摘要下成立）。
+    Ok(DataToSign::from_scalar(
+        cggmp21::generic_ec::Scalar::from_be_bytes_mod_order(message_hash),
+    ))
 }
 
 /// 进程级 RNG。

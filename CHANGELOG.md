@@ -2,6 +2,55 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [2.54.1] - 2026-10-09
+
+### 修复：引擎把待签摘要又哈希了一层（外部验签必拒的密码学缺陷）+ E2E 广播段换真实节点
+
+**发现路径（价值最大的一条）**：v2.54.0 的冷钱包业务链 E2E 里"广播"一段是 mock
+`NodeController`——只断言"调用发生过"，**签名本身能否被链节点验签不在断言范围内**。
+本批按"广播段换成真实节点"要求改造：测试内以 JDK `HttpServer` 起链节点桩，按生产请求形态
+接 `POST /sendTransaction`（form `traninfo=<r‖s>`），并**在节点侧用聚合公钥独立验签**——
+不通过就回 `code=5000` 拒上链。**换真节点的第一次运行即红**：引擎产出的签名在节点侧验签失败。
+
+**根因（三种独立方法交叉定位）**：`mpc-engine/src/cggmp.rs::build_data_to_sign` 用
+`DataToSign::from_digest::<CgSha>(hasher)` 构造 z，而 `from_digest` **内部还会 `finalize()` 一次**
+——即对调用方已给的 32 字节摘要**又做了一遍 SHA-256**。于是：
+
+- 引擎实际签的是 `SHA256(SHA256(msg))`；
+- 引擎自验（`cggmp_state.rs::data_to_sign` 是**同款构造**）自然通过 ⇒ Rust 侧 41 个测试全绿，
+  **缺陷长期隐形**；
+- 任何按标准算 `SHA256(msg)` 的外部验签者（链节点、`DefaultMpcService#verifyEcdsaSignature`）
+  一律拒绝。README 中「产出可被标准 secp256k1 验证的签名」这句此前**不成立**。
+
+定位方法（留档）：① 引擎侧 `CgVerifySignature` 对该哈希 true、换错哈希 false ⇒ 哈希确被采纳；
+② Java 侧规范算法（u1/u2 手写）与纯 Python 独立实现对同一 (r,s,Q,z) 结论一致（均判无效）；
+③ **公钥恢复**：`Q = r⁻¹(s·R − z·G)` 遍历 R 的两种 y 极性、逐候选摘要试算——签名**只在**
+`z = SHA256(SHA256(txData))` 下得到 DKG 返回的聚合公钥，根因锁死。
+
+- **修复**：两处构造改为 `DataToSign::from_scalar(Scalar::from_be_bytes_mod_order(message_hash))`
+  ——摘要**直接**作 z（mod n 归约，与标准验签 `u1 = z·s⁻¹` 逐位一致）：
+  `cggmp.rs::build_data_to_sign`（签名）与 `cggmp_state.rs::data_to_sign`（引擎自验）。
+  **两处必须同改**，否则自验会与生产签名口径分叉（正是本缺陷能潜伏的原因）。
+- **影响面（诚实声明）**：签名语义变更——**v2.54.1 之前产出的签名对标准外部验签者无效**。
+  本仓无集群在运行（`KUBE_CONFIG_*` 未配置），已产出的签名只存在于本地/CI 测试会话，
+  无在网资产受影响；**keyshare 不受影响**（密钥材料与摘要口径无关），升级后重新签名即可。
+- **协议文档**：两份 `mpc_crypto.proto` 的 `message_hash` 注释写清口径
+  （"引擎直接作 z、不再二次哈希；即应填 SHA-256(msg) 本身"），消掉这个歧义的复发土壤；
+  `deploy/docs/mpc-distributed-deployment.md` 新增 §7.4 摘要口径与历史坑。
+- **测试升级（本批主交付）**：`CggmpMpcE2EClusterTest#coldWalletBusinessChainE2E` 的广播段
+  改为**真实 HTTP + 节点侧验签**（不再 mock `NodeController`）：
+  - 节点桩用聚合公钥按仓库规范算法（与 `DefaultMpcService#verifyEcdsaSignature` 同一数学，
+    刻意不用 BC `ECDSASigner` 以免引入"验签库自身行为"变量）独立验签，通过才回 `code=2000`；
+  - 业务链因此形成**密码学闭环**：Java 编排 → 3 引擎 MPC 签名 → HTTP 广播 → 节点验签；
+  - 追加交叉断言：同一 r/s 引擎侧用同一摘要通过、**换错摘要必须拒绝**——钉住"签名绑定消息"，
+    即本缺陷的回归门禁。
+- **本地实证（2026-10-09，release 引擎 + 真 mTLS，双布局）**：
+  - 1-based 布局（`MPC_CONFIG_DIR=mpc-certs/e2e/config-1based`，CI 同款命名）**5/5 通过**
+    （tests=5 skipped=0 failures=0），日志 `冷钱包业务链 E2E PASSED: … nodeSideVerify=true`，
+    节点侧零拒绝；
+  - 0-based 布局（`gen-mpc-engine-configs.sh` 命名 + `certs-flat`）**5/5 通过**（同上）。
+  Rust 侧：41/41 测试、`clippy --all-targets --features tls -- -D warnings`、`cargo fmt` 全绿。
+
 ## [2.54.0] - 2026-10-09
 
 ### MPC 冷钱包 HTTP 入口层：把业务链接出去（+ 两处编排缺陷修复）

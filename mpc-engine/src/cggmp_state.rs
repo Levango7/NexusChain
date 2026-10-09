@@ -49,7 +49,6 @@ use cggmp21::security_level::SecurityLevel128;
 use cggmp21::signing::DataToSign;
 use cggmp21::supported_curves::Secp256k1;
 use cggmp21::{IncompleteKeyShare, KeyShare};
-use sha2_010::Sha256 as CgSha;
 
 use crate::cggmp::{
     aux_info_state_machine, keygen_state_machine, pump, sign_state_machine, CgAuxMsg, CgKeygenMsg,
@@ -818,12 +817,9 @@ fn rebuild_signature(
     }
 }
 
-/// 消息哈希 → DataToSign（与 cggmp::build_data_to_sign 同一 mod-order 语义）。
+/// 消息哈希 → DataToSign（与 cggmp::build_data_to_sign 同一语义：摘要直接作 z）。
 fn data_to_sign(message_hash: [u8; 32]) -> DataToSign<Secp256k1> {
-    use sha2_010::Digest;
-    let mut hasher = CgSha::new();
-    hasher.update(message_hash);
-    DataToSign::from_digest::<CgSha>(hasher)
+    DataToSign::from_scalar(Scalar::from_be_bytes_mod_order(message_hash))
 }
 
 // =========================================================================
