@@ -350,6 +350,20 @@ curl -X POST http://<signing-service>:8082/api/v1/mpc/sign \
 # 期望响应：{"success":true,"signature":"...","r":"...","s":"..."}
 ```
 
+### 7.4 摘要口径（唯一口径，2026-10-09 修复后）
+
+`messageHash` / `message_hash` 一律是**消息的 SHA-256 原值**（32 字节）：引擎把它
+**直接**作为 ECDSA 的 z（mod n 归约），不再二次哈希。外部验签者按
+`u1 = z·s⁻¹`、`u2 = r·s⁻¹`、`R = u1·G + u2·Q`（判 `R.x mod n == r`）即可验签——
+与链节点、`DefaultMpcService#verifyEcdsaSignature` 同一算法。
+**业务链实证**：`CggmpMpcE2EClusterTest#coldWalletBusinessChainE2E` 在真实 3 引擎上以
+真实 HTTP 广播，链节点桩用聚合公钥独立验签通过才接受上链。
+
+> 历史坑（v2.54.1 修复）：引擎曾用 `DataToSign::from_digest` 构造 z，而该 API 内部会
+> 再 `finalize()` 一次 ⇒ 实际签的是 `SHA256(SHA256(msg))`，任何标准外部验签者必拒
+> （引擎自验用同一构造，所以长期隐形）。**v2.54.1 之前产出的签名对标准验签者无效，
+> 升级后需重新签名。**
+
 ## 第8章 监控与运维
 
 ### 8.1 Prometheus 指标

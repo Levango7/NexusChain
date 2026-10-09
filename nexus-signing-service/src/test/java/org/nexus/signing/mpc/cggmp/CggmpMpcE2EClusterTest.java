@@ -14,21 +14,24 @@ import org.nexus.signing.mpc.crypto.DkgResponse;
 import org.nexus.signing.mpc.crypto.MpcEngineRouter;
 import org.nexus.signing.mpc.crypto.SignRequest;
 import org.nexus.signing.mpc.crypto.SignResponse;
-import org.nexus.signing.controller.NodeController;
-import org.nexus.signing.mpc.ColdWalletMultiSigService;
-import org.nexus.signing.mpc.DefaultMpcService;
-import org.nexus.signing.mpc.MpcApprovalPolicy;
-import org.nexus.signing.mpc.MpcKeyGeneration;
-import org.nexus.signing.mpc.MpcParticipant;
-import org.nexus.signing.mpc.MpcSignatureAggregator;
-import org.nexus.signing.mpc.MpcSigner;
-import org.nexus.signing.mpc.MpcWallet;
-import org.nexus.signing.mpc.ThresholdPolicy;
-import org.nexus.signing.mpc.persistence.MpcKeyShareStore;
-import org.nexus.signing.mpc.persistence.MpcSessionRepository;
-import org.nexus.signing.mpc.persistence.MpcWalletRepository;
-import org.nexus.signing.mpc.router.MessageRouter;
-import org.nexus.signing.mpc.transport.MpcTransport;
+import org.bouncycastle.asn1.x9.ECNamedCurveTable;
+import org.bouncycastle.asn1.x9.X9ECParameters;
+import org.bouncycastle.math.ec.ECPoint;
+import org.nexus.signing.controller.NodeController;
+import org.nexus.signing.mpc.ColdWalletMultiSigService;
+import org.nexus.signing.mpc.DefaultMpcService;
+import org.nexus.signing.mpc.MpcApprovalPolicy;
+import org.nexus.signing.mpc.MpcKeyGeneration;
+import org.nexus.signing.mpc.MpcParticipant;
+import org.nexus.signing.mpc.MpcSignatureAggregator;
+import org.nexus.signing.mpc.MpcSigner;
+import org.nexus.signing.mpc.MpcWallet;
+import org.nexus.signing.mpc.ThresholdPolicy;
+import org.nexus.signing.mpc.persistence.MpcKeyShareStore;
+import org.nexus.signing.mpc.persistence.MpcSessionRepository;
+import org.nexus.signing.mpc.persistence.MpcWalletRepository;
+import org.nexus.signing.mpc.router.MessageRouter;
+import org.nexus.signing.mpc.transport.MpcTransport;
 import org.nexus.signing.mpc.crypto.grpc.MpcCryptoServiceGrpc;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -36,6 +39,7 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.io.File;
+import java.math.BigInteger;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -57,10 +61,10 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyList;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.verify;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -792,9 +796,11 @@ public class CggmpMpcE2EClusterTest {
      *       审计发现其「零调用方、无 HTTP 入口」（业务链没接出去），本批接出并在此实测。</li>
      * </ol>
      *
-     * <p>边界（有意 mock，避免重复覆盖）：审批策略行为（{@link MpcApprovalPolicy}）与
-     * 链上节点 RPC（{@link NodeController}）——两者各有独立单测；本用例只保证
-     * 「编排层 ↔ 真实密码学引擎」的接线正确、签名真的产出于集群。</p>
+     * <p>边界（有意 mock，避免重复覆盖）：仅**审批策略行为**（{@link MpcApprovalPolicy}，
+     * 有独立单测）。**广播段为真实 HTTP**：{@link NodeController} 按生产代码发
+     * {@code POST /sendTransaction}，测试内起"链节点"桩（{@link StubChainNode}）并在
+     * 节点侧用聚合公钥独立验签——业务链跑通即蕴含"MPC 签名可被链节点验签"。
+     * 真链上打包/共识仍需真实节点环境。</p>
      */
     @Test
     @DisplayName("冷钱包业务链：DKG 编排 → 受理 → 签名 → 广播 → 状态（真实 3 引擎集群）")
@@ -856,52 +862,224 @@ public class CggmpMpcE2EClusterTest {
         assertTrue(dkg.getShares().isEmpty(), "CGGMP21 份额驻留引擎进程，Java 侧不得持有");
         assertTrue(driver.status(sid).isHasKeyShare(), "集群侧 key_share 应已装配");
 
-        // ---------- 2. 冷钱包编排：受理 → 签名 → 广播（审批策略 / 节点 RPC 为 mock） ----------
+        // ---------- 2. 冷钱包编排：受理 → 签名 → 广播 ----------
+        // 广播段为**真实 HTTP**（2026-10-09 起不再是 mock）：NodeController 按生产代码
+        // 发 POST /sendTransaction，测试内以 JDK HttpServer 起"链节点"桩，并在**节点侧**
+        // 用聚合公钥独立验签——只有验签通过才回 code=2000。即
+        //   "Java 编排 → 引擎 MPC 签名 → HTTP 广播 → 节点验签" 形成密码学闭环。
+        // （真链上打包/共识仍需真实节点环境；本桩不实现交易池/出块。）
         MpcApprovalPolicy policy = mock(MpcApprovalPolicy.class);
         when(policy.canSign(any(), anyList())).thenReturn(true);
         when(policy.isAddressWhitelisted(anyString())).thenReturn(true);
         when(policy.getColdWalletPolicy()).thenReturn(new ThresholdPolicy(2, 3));
 
-        NodeController node = mock(NodeController.class);
-        com.google.gson.JsonObject rpcOk = new com.google.gson.JsonObject();
-        rpcOk.addProperty("code", 2000);
+        // 转账要素提取为变量：节点桩按同一算式复算待签数据哈希（与服务 buildTransactionHex 同式）
+        String fromAddress = "0xFrom" + walletId;
+        String toAddress = "0xTo" + walletId;
+        java.math.BigDecimal amount = new java.math.BigDecimal("1.5");
+        String asset = "USDT";
+        String requestId = "req-e2e-" + walletId;
         String expectedTxHash = "0xE2E" + walletId;
-        rpcOk.addProperty("data", expectedTxHash);
-        when(node.sendTransaction(anyString())).thenReturn(rpcOk);
+        byte[] expectedMessageHash = java.security.MessageDigest.getInstance("SHA-256").digest(
+                ("TX:" + fromAddress + ":" + toAddress + ":" + amount + ":" + asset + ":" + requestId)
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
-        ColdWalletMultiSigService service = new ColdWalletMultiSigService(
-                mock(MpcSigner.class), mock(MpcSignatureAggregator.class), policy, node);
-        ReflectionTestUtils.setField(service, "cggmpEngine", engine);
+        try (StubChainNode stubNode = new StubChainNode(
+                dkg.getJointPublicKeyHex(), expectedMessageHash, expectedTxHash)) {
+            NodeController node = new NodeController();
+            ReflectionTestUtils.setField(node, "ip", "127.0.0.1:" + stubNode.port());
 
-        MpcWallet wallet = new MpcWallet();
-        wallet.setWalletId(walletId);
-        wallet.setThreshold(2);
-        wallet.setParticipants(participants.stream()
-                .map(MpcParticipant::getParticipantId)
-                .collect(Collectors.toList()));
-        wallet.setPublicKey(dkg.getJointPublicKeyHex());
-        service.registerWallet(wallet);
+            ColdWalletMultiSigService service = new ColdWalletMultiSigService(
+                    mock(MpcSigner.class), mock(MpcSignatureAggregator.class), policy, node);
+            ReflectionTestUtils.setField(service, "cggmpEngine", engine);
 
-        String transferSid = service.initMultiSigTransfer(walletId,
-                "0xFrom" + walletId, "0xTo" + walletId,
-                new java.math.BigDecimal("1.5"), "USDT", "req-e2e-" + walletId, online);
-        assertNotNull(transferSid, "受理应返回转账会话 ID");
-        assertEquals(ColdWalletMultiSigService.TransferStatus.PENDING,
-                service.getSessionStatus(transferSid), "受理后应为 PENDING");
+            MpcWallet wallet = new MpcWallet();
+            wallet.setWalletId(walletId);
+            wallet.setThreshold(2);
+            wallet.setParticipants(participants.stream()
+                    .map(MpcParticipant::getParticipantId)
+                    .collect(Collectors.toList()));
+            wallet.setPublicKey(dkg.getJointPublicKeyHex());
+            service.registerWallet(wallet);
 
-        service.participantSign(transferSid);   // 真实 CGGMP21 2-of-3：引擎内产出 r||s
-        assertEquals(ColdWalletMultiSigService.TransferStatus.SIGNING,
-                service.getSessionStatus(transferSid), "签名后应进入 SIGNING（AGGREGATING）");
+            String transferSid = service.initMultiSigTransfer(walletId,
+                    fromAddress, toAddress, amount, asset, requestId, online);
+            assertNotNull(transferSid, "受理应返回转账会话 ID");
+            assertEquals(ColdWalletMultiSigService.TransferStatus.PENDING,
+                    service.getSessionStatus(transferSid), "受理后应为 PENDING");
 
-        String txHash = service.aggregateAndBroadcast(transferSid);
-        assertEquals(expectedTxHash, txHash, "应返回节点 RPC 的链上哈希");
-        assertEquals(ColdWalletMultiSigService.TransferStatus.COMPLETED,
-                service.getSessionStatus(transferSid), "广播后应 COMPLETED");
-        assertNull(service.getFailureReason(transferSid), "成功路径不应有失败原因");
-        verify(node).sendTransaction(anyString());
+            service.participantSign(transferSid);   // 真实 CGGMP21 2-of-3：引擎内产出 r||s
+            assertEquals(ColdWalletMultiSigService.TransferStatus.SIGNING,
+                    service.getSessionStatus(transferSid), "签名后应进入 SIGNING（AGGREGATING）");
 
-        log.info("冷钱包业务链 E2E PASSED: wallet={}, transferSid={}, aggPk={}..., txHash={}",
-                walletId, transferSid, dkg.getJointPublicKeyHex().substring(0, 16), txHash);
+            String txHash = service.aggregateAndBroadcast(transferSid);
+            assertEquals(expectedTxHash, txHash, "应返回节点接口的链上哈希");
+            assertEquals(ColdWalletMultiSigService.TransferStatus.COMPLETED,
+                    service.getSessionStatus(transferSid), "广播后应 COMPLETED");
+            assertNull(service.getFailureReason(transferSid), "成功路径不应有失败原因");
+
+            // 广播段证据：真实 HTTP 命中一次 + 节点侧用聚合公钥验签通过
+            assertEquals(1, stubNode.hits(), "广播应命中节点 /sendTransaction 恰好一次");
+            assertTrue(stubNode.lastSignatureValid(),
+                    "节点侧必须用聚合公钥验签通过（ECDSA/secp256k1 密码学闭环）");
+
+            // 交叉对照：同一 r/s 在引擎侧用同一摘要应通过、换错摘要必须拒绝。
+            // 这条同时钉住"签名确实绑定消息"——2026-10-09 修引擎双重哈希前，
+            // 引擎实际签 SHA256(SHA256(tx))，引擎自验通过而外部验签必拒。
+            String sigHex = stubNode.lastTraninfo();
+            byte[] rBytes = hexToBytes(sigHex.substring(0, 64));
+            byte[] sBytes = hexToBytes(sigHex.substring(64));
+            byte[] wrongHash = new byte[32];
+            Arrays.fill(wrongHash, (byte) 0x11);
+            assertTrue(driver.verify(sid, rBytes, sBytes, expectedMessageHash).isValid(),
+                    "引擎侧用同一摘要应验签通过（同一 z 口径）");
+            assertFalse(driver.verify(sid, rBytes, sBytes, wrongHash).isValid(),
+                    "引擎侧换错摘要必须拒绝（防'签名不绑定消息'回归）");
+
+            log.info("冷钱包业务链 E2E PASSED: wallet={}, transferSid={}, aggPk={}..., txHash={}, "
+                            + "nodeSideVerify={}",
+                    walletId, transferSid, dkg.getJointPublicKeyHex().substring(0, 16), txHash,
+                    stubNode.lastSignatureValid());
+        }
+    }
+
+    /**
+     * "链节点"桩：真实 HTTP + 节点侧验签（2026-10-09）。
+     *
+     * <p>只实现被测链路需要的一个端点：{@code POST /sendTransaction}（form 参数
+     * {@code traninfo=<签名 hex>}，与生产 {@link NodeController} 的请求形态一致）。
+     * 收到后用**聚合公钥**独立验签（ECDSA/secp256k1，BouncyCastle）：
+     * 通过 → {@code {"code":2000,"data":"<txHash>"}}；不通过 → {@code code=5000}。
+     * 因此"业务链跑完"蕴含"MPC 签名能被链节点验签"——这正是真链上打包前的第一道关。</p>
+     *
+     * <p>不实现（需真实节点环境）：交易池、出块/共识、状态机更新。</p>
+     */
+    private static final class StubChainNode implements AutoCloseable {
+
+        private final com.sun.net.httpserver.HttpServer server;
+        private final String expectedAggPkHex;
+        private final byte[] expectedMessageHash;
+        private final String txHash;
+        private final java.util.concurrent.atomic.AtomicInteger hits =
+                new java.util.concurrent.atomic.AtomicInteger();
+        private volatile boolean lastSignatureValid;
+        private volatile String lastTraninfo;
+
+        StubChainNode(String expectedAggPkHex, byte[] expectedMessageHash, String txHash)
+                throws IOException {
+            this.expectedAggPkHex = expectedAggPkHex;
+            this.expectedMessageHash = expectedMessageHash;
+            this.txHash = txHash;
+            this.server = com.sun.net.httpserver.HttpServer.create(
+                    new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+            this.server.createContext("/sendTransaction", this::handleSendTransaction);
+            this.server.start();
+        }
+
+        int port() {
+            return server.getAddress().getPort();
+        }
+
+        int hits() {
+            return hits.get();
+        }
+
+        boolean lastSignatureValid() {
+            return lastSignatureValid;
+        }
+
+        String lastTraninfo() {
+            return lastTraninfo;
+        }
+
+        private void handleSendTransaction(com.sun.net.httpserver.HttpExchange ex)
+                throws IOException {
+            hits.incrementAndGet();
+            String body = new String(ex.getRequestBody().readAllBytes(),
+                    java.nio.charset.StandardCharsets.UTF_8);
+            String traninfo = null;
+            for (String kv : body.split("&")) {
+                int eq = kv.indexOf('=');
+                if (eq > 0 && "traninfo".equals(kv.substring(0, eq))) {
+                    traninfo = java.net.URLDecoder.decode(kv.substring(eq + 1),
+                            java.nio.charset.StandardCharsets.UTF_8);
+                }
+            }
+            lastTraninfo = traninfo;
+            lastSignatureValid = verifySignature(traninfo);
+
+            String json;
+            if (lastSignatureValid) {
+                json = "{\"code\":2000,\"message\":\"ok\",\"data\":\"" + txHash + "\"}";
+            } else {
+                // 节点侧拒绝：长度非法 / 聚合公钥不可用 / ECDSA 验签不过——都不接受上链
+                json = "{\"code\":5000,\"message\":\"bad signature\",\"data\":null}";
+                log.warn("[stub-node] 拒绝广播：签名未通过聚合公钥验签（traninfo.len={}）",
+                        traninfo == null ? -1 : traninfo.length());
+            }
+            byte[] out = json.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            ex.getResponseHeaders().add("Content-Type", "application/json");
+            ex.sendResponseHeaders(200, out.length);
+            try (java.io.OutputStream os = ex.getResponseBody()) {
+                os.write(out);
+            }
+        }
+
+        /**
+         * 节点侧验签（签名 = r||s 64 字节 hex，消息 = 待签数据哈希 32 字节）。
+         *
+         * <p>用**仓库规范算法**（与 {@code DefaultMpcService#verifyEcdsaSignature} 同一数学：
+         * u1 = z·s⁻¹, u2 = r·s⁻¹, R = u1·G + u2·Q, 判 R.x mod n == r），含公钥在曲线上、
+         * r/s 范围检查。刻意不用 BC 的 {@code ECDSASigner}：那会引入"验签库自身行为"
+         * 这一变量；手写算法与生产验签实现逐行对齐，失败时也能打印中间量定位。</p>
+         */
+        private boolean verifySignature(String signatureHex) {
+            if (signatureHex == null || signatureHex.length() != 128) {
+                return false;
+            }
+            try {
+                X9ECParameters params = ECNamedCurveTable.getByName("secp256k1");
+                BigInteger n = params.getN();
+                ECPoint q = params.getCurve().decodePoint(hexToBytes(expectedAggPkHex));
+                if (!q.isValid() || q.isInfinity()) {
+                    log.warn("stub chain node: aggregate public key invalid/at infinity");
+                    return false;
+                }
+                BigInteger r = new BigInteger(1, hexToBytes(signatureHex.substring(0, 64)));
+                BigInteger s = new BigInteger(1, hexToBytes(signatureHex.substring(64)));
+                BigInteger z = new BigInteger(1, expectedMessageHash);
+                if (r.signum() <= 0 || r.compareTo(n) >= 0 || s.signum() <= 0 || s.compareTo(n) >= 0) {
+                    return false;
+                }
+                BigInteger sInv = s.modInverse(n);
+                BigInteger u1 = z.multiply(sInv).mod(n);
+                BigInteger u2 = r.multiply(sInv).mod(n);
+                ECPoint bigR = org.bouncycastle.math.ec.ECAlgorithms
+                        .sumOfTwoMultiplies(params.getG(), u1, q, u2).normalize();
+                if (bigR.isInfinity()) {
+                    return false;
+                }
+                BigInteger rPrime = bigR.getAffineXCoord().toBigInteger().mod(n);
+                boolean ok = rPrime.equals(r);
+                if (!ok) {
+                    // 典型成因：z 口径不符（引擎把摘要又哈希了一遍 → 见 mpc-engine
+                    // cggmp.rs::build_data_to_sign 的 2026-10-09 修复）或 r/s 被篡改
+                    log.warn("[stub-node] ECDSA 验签不通过：z={} r={} s={} r'x mod n={}",
+                            java.util.HexFormat.of().formatHex(expectedMessageHash),
+                            String.format("%064x", r), String.format("%064x", s),
+                            String.format("%064x", rPrime));
+                }
+                return ok;
+            } catch (RuntimeException e) {
+                log.warn("stub chain node: signature parse/verify error: {}", e.getMessage());
+                return false;
+            }
+        }
+
+        @Override
+        public void close() {
+            server.stop(0);
+        }
     }
 
     // ============================================================
