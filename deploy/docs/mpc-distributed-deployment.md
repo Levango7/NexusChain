@@ -437,6 +437,11 @@ python3 scripts/mpc-wallet-ceremony.py   --wallet <walletId>   --endpoints mpc-e
 - 会话 ID 由钱包派生（`cw-` + SHA-256(walletId) 前 16 字节 hex），与 Java
   `CggmpMpcCryptoEngine.walletSessionId` 逐字节一致——签名时按同一 ID 找回份额。
 - `--sign-probe` 成功（`验签 valid=true`）即证明该钱包已可用。
+
+> **等价替代（2026-10-09）**：signing-service 现暴露 `POST /api/v1/mpc/wallets`
+> （`ROLE_ADMIN`）——经 Java 驱动层跑同一条 keygen→aux→assemble 并登记钱包，
+> 会话 ID 同源（`cw-` + SHA-256(walletId)/16），与本脚本产出的份额完全互通。
+> 业务侧建钱包走 HTTP；集群运维侧（signing-service 未起/只在引擎侧操作）走本脚本。
 - 日常健康探针（不重跑仪式）：`--sign-only --sign-probe`。
 
 ### 11.2 中断与恢复（重要）

@@ -175,14 +175,28 @@ public class DefaultMpcService implements MpcService {
                     "DKG engine failed: " + response.getError());
         }
 
-        // 4. 创建并加密存储本节点密钥份额
-        //    publicShareHex 暂用聚合公钥（DkgResponse 未返回 per-participant publicShare）
-        MpcKeyShare keyShare = new MpcKeyShare(
-                participantId,
-                response.getKeyShare(),
-                response.getPublicKey(),
-                null);
-        keyShareStore.save(keyShare);
+        // 4. 本节点份额落盘——两条密码学模型的语义不同（2026-10-09 修 NPE）：
+        //    · GG20（已退役）：DkgResponse.keyShare 携带本方份额 → 加密落盘；
+        //    · CGGMP21（当前唯一路径）：份额**驻留各引擎进程**（NXC1 信封），
+        //      Java 侧不持有任何份额 ⇒ keyShare 恒 null，**不落盘、不返回**
+        //      （这正是"signing-service 不持份额"的安全属性，不是缺陷）。
+        //    此前无条件 `new MpcKeyShare(..., response.getKeyShare(), ...)` 会在
+        //    CGGMP21 路径抛 NullPointerException（privateShareHex requireNonNull）——
+        //    即 DKG 编排对唯一存活路径**必然失败**；入口层接线时实测暴露并在此修复。
+        List<MpcKeyShare> shares = List.of();
+        String engineShare = response.getKeyShare();
+        if (engineShare != null && !engineShare.isBlank()) {
+            MpcKeyShare keyShare = new MpcKeyShare(
+                    participantId,
+                    engineShare,
+                    response.getPublicKey(),
+                    null);
+            keyShareStore.save(keyShare);
+            shares = List.of(keyShare);
+        } else {
+            log.info("DKG: engine returned no key share — CGGMP21 份额驻留引擎进程（Java 不持份额），"
+                    + "跳过本地份额落盘: session={}", sessionId);
+        }
 
         // 5. 更新 session 状态为 COMPLETED
         session.setStatus(MpcSignSession.SessionStatus.COMPLETED);
@@ -190,13 +204,13 @@ public class DefaultMpcService implements MpcService {
         session.setCompletedAt(LocalDateTime.now());
         sessionRepository.save(session);
 
-        log.info("DKG orchestration complete: session={}, publicKey={}",
-                sessionId, response.getPublicKey());
+        log.info("DKG orchestration complete: session={}, publicKey={}, localShares={}",
+                sessionId, response.getPublicKey(), shares.size());
 
         // 6. 返回 DkgResult
         return new MpcKeyGeneration.DkgResult(
                 response.getPublicKey(),
-                List.of(keyShare),
+                shares,
                 LocalDateTime.now());
     }
 

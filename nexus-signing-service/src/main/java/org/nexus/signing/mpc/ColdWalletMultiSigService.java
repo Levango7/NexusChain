@@ -269,8 +269,10 @@ public class ColdWalletMultiSigService {
                     MpcProtocolException.Reason.INVALID_SHARE,
                     "CGGMP21 sign returned null signature");
         }
-        // 记录 r||s 拼接（语义=完整签名）
+        // 记录 r||s 拼接（语义=完整签名），并推进会话状态
+        // （与 GG20 时代行为对齐：签完进入 AGGREGATING/SIGNING，而非停在 PENDING）
         session.recordSignatureShare("cggmp-aggregated", sig);
+        session.markAggregating();
         log.info("CGGMP21 sign done: session={}, engineSession={}, sig.len={}",
                 sessionId, engineSessionId, sig.length());
     }
