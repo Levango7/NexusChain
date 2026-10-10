@@ -55,6 +55,15 @@ public class BridgeServiceImpl implements BridgeService {
     private final PlatformTransactionManager transactionManager;
     /** Micrometer Tracer：P3-T5 业务 span 注入。可为 null（测试环境降级 no-op）。 */
     private final Tracer tracer;
+
+    /**
+     * 链上执行器（P0 修复 2026-10-09，可空）。
+     *
+     * <p>{@code null} = 旧装配（单测/嵌入式）：mint/unlock 保持历史行为（不广播）。
+     * Spring 运行时恒注入（{@code @Component}），因此生产不会走 null 分支：
+     * 目标链不可上链时按 {@code mockMode} fail-closed 拒绝，而不是静默标成功。</p>
+     */
+    private final org.nexus.bridge.handler.BridgeOnChainExecutor onChainExecutor;
     private final AtomicReference<BridgeState> bridgeState = new AtomicReference<>(BridgeState.ACTIVE);
     private final AtomicLong dailyUsed = new AtomicLong(0);
     private volatile long dailyResetTime = System.currentTimeMillis();
@@ -165,7 +174,7 @@ public class BridgeServiceImpl implements BridgeService {
      * 原地置 FAILED 并保存，事件发布为空操作。</p>
      */
     public BridgeServiceImpl(BridgeConfig config, BridgeTransactionRepository txRepository) {
-        this(config, txRepository, null, null, null);
+        this(config, txRepository, null, null, null, null);
     }
 
     /**
@@ -174,17 +183,20 @@ public class BridgeServiceImpl implements BridgeService {
      * @param eventPublisher    桥事件发布器（可为 {@code null}）
      * @param transactionManager 事务管理器，用于以 REQUIRES_NEW 持久化 FAILED 状态
      * @param tracer            Micrometer Tracer（可为 {@code null}，测试降级 no-op）
+     * @param onChainExecutor   链上执行器；{@code null} = 旧装配（不广播，mint/unlock 走历史路径）
      */
     @Autowired
     public BridgeServiceImpl(BridgeConfig config, BridgeTransactionRepository txRepository,
                              ApplicationEventPublisher eventPublisher,
                              PlatformTransactionManager transactionManager,
-                             Tracer tracer) {
+                             Tracer tracer,
+                             org.nexus.bridge.handler.BridgeOnChainExecutor onChainExecutor) {
         this.config = config;
         this.txRepository = txRepository;
         this.eventPublisher = eventPublisher;
         this.transactionManager = transactionManager;
         this.tracer = tracer;
+        this.onChainExecutor = onChainExecutor;
     }
 
     /**
@@ -193,7 +205,7 @@ public class BridgeServiceImpl implements BridgeService {
     public BridgeServiceImpl(BridgeConfig config, BridgeTransactionRepository txRepository,
                              ApplicationEventPublisher eventPublisher,
                              PlatformTransactionManager transactionManager) {
-        this(config, txRepository, eventPublisher, transactionManager, null);
+        this(config, txRepository, eventPublisher, transactionManager, null, null);
     }
 
 
@@ -330,6 +342,28 @@ public class BridgeServiceImpl implements BridgeService {
                 }
 
                 span.attr("bridge.valid.signers", validSigners.size());
+
+                // P0 修复（2026-10-09）：真实广播 —— 此前直接标 MINTED 且 targetTxHash 恒 null
+                // （"报告已铸造但链上什么都没发生"）。executor 为 null = 旧装配（单测/嵌入式）保持历史行为；
+                // Spring 运行时恒注入：目标链不可上链且非 mockMode 时**拒绝**（fail-closed）。
+                if (onChainExecutor != null) {
+                    java.util.Optional<String> onChainHash =
+                            onChainExecutor.broadcastMint(lockTx.getTargetChainId(), request, lockTx);
+                    if (onChainHash.isEmpty()) {
+                        if (!config.isMockMode()) {
+                            String reason = "On-chain mint unavailable on chain "
+                                    + lockTx.getTargetChainId()
+                                    + " (relayer credentials/contract not configured); refusing to mark MINTED";
+                            fail(lockTx, reason);
+                            throw new BridgeException(reason);
+                        }
+                        log.warn("[mint] MOCK MODE: 标记 MINTED 但未真实上链 (chain={}, txId={})",
+                                lockTx.getTargetChainId(), lockTx.getTxId());
+                    } else {
+                        lockTx.setTargetTxHash(onChainHash.get());
+                        span.attr("bridge.target.tx.hash", onChainHash.get());
+                    }
+                }
 
                 lockTx.setStatus(BridgeTxStatus.MINTED);
                 lockTx.setValidatorIds(new HashSet<>(validSigners));
@@ -469,6 +503,26 @@ public class BridgeServiceImpl implements BridgeService {
                 }
 
                 span.attr("bridge.valid.signers", validSigners.size());
+
+                // P0 修复（2026-10-09）：真实广播（同 mint 语义）；不可上链且非 mockMode → 拒绝
+                if (onChainExecutor != null) {
+                    java.util.Optional<String> onChainHash =
+                            onChainExecutor.broadcastUnlock(burnTx.getTargetChainId(), request, burnTx);
+                    if (onChainHash.isEmpty()) {
+                        if (!config.isMockMode()) {
+                            String reason = "On-chain unlock unavailable on chain "
+                                    + burnTx.getTargetChainId()
+                                    + " (relayer credentials/contract not configured); refusing to mark UNLOCKED";
+                            fail(burnTx, reason);
+                            throw new BridgeException(reason);
+                        }
+                        log.warn("[unlock] MOCK MODE: 标记 UNLOCKED 但未真实上链 (chain={}, txId={})",
+                                burnTx.getTargetChainId(), burnTx.getTxId());
+                    } else {
+                        burnTx.setTargetTxHash(onChainHash.get());
+                        span.attr("bridge.target.tx.hash", onChainHash.get());
+                    }
+                }
 
                 burnTx.setStatus(BridgeTxStatus.UNLOCKED);
                 burnTx.setValidatorIds(new HashSet<>(validSigners));
