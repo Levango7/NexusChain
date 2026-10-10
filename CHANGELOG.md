@@ -2,6 +2,32 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [2.55.1] - 2026-10-09
+
+### 修复：微信对账单下载使用真实 RSA 签名（替换 signature="placeholder"）
+
+**背景**：`WeChatBillDownloadClient.buildAuthHeaders` 把 Authorization 头里的 `signature`
+硬编码为 `"placeholder"` —— 真实模式（`sandbox=false` 且配置商户私钥）下**必被微信拒绝**，
+且异常被 catch 吞成"空对账单"。后果：v2.55.0 刚接上的自动对账闭环在真实模式下会**全部
+fail-closed 跳过**（拿不到账单 → 每商户每渠道都跳过），"日终对账"形同没接。
+
+- 改用商户 RSA 私钥按 V3 规范签名（`SHA256withRSA` over
+  `method
+url
+timestamp
+nonce
+body
+`），与回调验签侧共用同一签名工具
+  `WeChatPaySignatureUtil.generateRsaSignature`；
+- **fail-closed**：签名失败抛 `IllegalStateException` → 上层返回空内容 → 对账跳过该商户，
+  绝不发送未签名请求、也不伪造内容；
+- 顺带修掉该文件一处历史乱码注释。
+
+**测试**：新增 `WeChatBillSigningTest`（2 例回归门禁）
+① Authorization 头携带**可被商户公钥验回的 RSA 真签名**且非 placeholder
+（临时生成 2048 位密钥对自签自验，校验 5 字段结构与 mchid/serial_no）；
+② 私钥缺失时 fail-closed 抛错（拒绝发送未签名请求）。
+
 ## [2.55.0] - 2026-10-09
 
 ### 打通编排支付主链 + 资金/运营闭环四连修（P0 批次）
