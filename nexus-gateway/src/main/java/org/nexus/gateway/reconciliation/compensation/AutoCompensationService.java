@@ -325,11 +325,20 @@ public class AutoCompensationService {
      */
     private void executeRealCompensation(CompensationRecord record) {
         if (record.getCompensationType() == CompensationRecord.CompensationType.REFUND) {
-            // 防重复动账：长款已由 ReconciliationAdjustmentService 的 CREDIT_ADJUST 处理
+            // 业务决策（2026-10-11 已拍板）：长款走**渠道退款**——平台是中间机构，
+            // 非自有资金应原路退回，而非计入商户余额。
+            //
+            // 落地前置未齐，故仍 fail-closed 拒绝（不动账、不伪造成功）：
+            //   ① 差错记录（ReconciliationDiscrepancy）**没有渠道归属字段**，无法判定
+            //      wechat/alipay/其它，也就无法选连接器；
+            //   ② 渠道退款接口与凭证未接入（需要"原渠道交易号 + 商户退款单号 + 退款金额"）。
+            //   ③ 与自动对账路径的冲突仍需业务确认：ReconciliationAdjustmentService 对
+            //      同一 LONG_AMOUNT 会做 CREDIT_ADJUST（给商户加钱）——若两者同跑将双向动账。
+            //      渠道退款落地时必须同时关闭/改造该路径（见 PR #69 讨论）。
             throw new IllegalStateException(
-                    "长款(REFUND)补偿拒绝执行：该差错类型已被对账自动调账服务按 CREDIT_ADJUST（商户加钱）处理，"
-                            + "为避免同一差错双向动账，渠道退款路径需业务拍板后再启用（请人工核对 discrepancyId="
-                            + record.getDiscrepancyId() + "）");
+                    "长款渠道退款暂不可执行（决策已定为渠道退款，缺前置）：差错记录无渠道归属字段 + "
+                            + "渠道退款接口/凭证未接入；且需先与自动调账路径(CREDIT_ADJUST)互斥。"
+                            + "请人工核对 discrepancyId=" + record.getDiscrepancyId());
         }
 
         if (accountService == null) {

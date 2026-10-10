@@ -151,7 +151,10 @@ class AutoCompensationRealExecTest {
         CompensationRecord result = svc.executeCompensation(RECORD_ID);
 
         assertEquals(CompensationRecord.CompensationStatus.FAILED, result.getStatus());
-        assertTrue(result.getFailureReason().contains("拒绝执行"), result.getFailureReason());
+        // 业务决策（2026-10-11）：长款走渠道退款；但前置未齐（无渠道归属字段 + 退款接口未接入）
+        // 且需先与自动调账路径(CREDIT_ADJUST)互斥 → 现阶段 fail-closed 拒绝、零资金动作。
+        assertTrue(result.getFailureReason().contains("渠道退款"), result.getFailureReason());
+        assertTrue(result.getFailureReason().contains("缺前置"), result.getFailureReason());
         assertTrue(result.getFailureReason().contains("CREDIT_ADJUST"), result.getFailureReason());
         verifyNoInteractions(accountService);
         assertNull(result.getChannelRefundRef(), "不得留下任何渠道退款引用");
