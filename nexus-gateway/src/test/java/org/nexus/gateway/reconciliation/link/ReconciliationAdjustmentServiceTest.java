@@ -180,12 +180,16 @@ class ReconciliationAdjustmentServiceTest {
     void processDiffReport_amountOver1000_pendingApprovalNotAutoApproved() {
         // 默认阈值 1000 元（在 setUp 中设置），金额 1500 > 1000
 
-        // 构造 LONG_AMOUNT 差错：渠道有 1500 元，内部无记录 → 长款 1500 元
+        // 构造 AMOUNT_MISMATCH 差错：渠道 1500 / 内部 0 → 差额 1500 元
+        // （注：2026-10-11 决策后 LONG_AMOUNT 已被本服务跳过，超阈值用例改用差额类型；
+        //  LONG_AMOUNT 的跳过行为由 processDiffReport_longAmount_skipped 专门钉住）
         ReconciliationDiscrepancy discrepancy = new ReconciliationDiscrepancy();
         discrepancy.setId(3L);
-        discrepancy.setDiscrepancyType(ReconciliationDiscrepancy.DiscrepancyType.LONG_AMOUNT);
+        discrepancy.setDiscrepancyType(ReconciliationDiscrepancy.DiscrepancyType.AMOUNT_MISMATCH);
         discrepancy.setTransactionId("TXN-003");
         discrepancy.setChannelAmount(new BigDecimal("1500"));
+        discrepancy.setInternalAmount(BigDecimal.ZERO);
+        discrepancy.setAmountDiff(new BigDecimal("1500"));
 
         ReconciliationDiffReport diffReport = new ReconciliationDiffReport();
         diffReport.setDiscrepancies(List.of(discrepancy));
@@ -200,10 +204,34 @@ class ReconciliationAdjustmentServiceTest {
         // 金额超过 1000 元，不能自动审批，必须是 PENDING_APPROVAL
         assertEquals(ApprovalStatus.PENDING_APPROVAL, adjustment.getApprovalStatus());
         assertEquals(new BigDecimal("1500"), adjustment.getAmount());
-        // LONG_AMOUNT → CREDIT_ADJUST
+        // AMOUNT_MISMATCH（渠道>内部）→ CREDIT_ADJUST
         assertEquals(AdjustmentType.CREDIT_ADJUST, adjustment.getAdjustmentType());
 
         // 超过阈值的记录不应自动执行资金调整
+        verify(accountService, never()).depositWithType(any(), any(), any(), any());
+        verify(accountService, never()).withdrawWithType(any(), any(), any(), any());
+    }
+
+    // ==================== 业务决策门禁：长款不再自动调账（避免与渠道退款双向动账） ====================
+
+    @Test
+    @DisplayName("processDiffReport: LONG_AMOUNT 被跳过 —— 不创建调整记录、零资金动作（2026-10-11 决策）")
+    void processDiffReport_longAmount_skipped() {
+        ReconciliationDiscrepancy discrepancy = new ReconciliationDiscrepancy();
+        discrepancy.setId(9L);
+        discrepancy.setDiscrepancyType(ReconciliationDiscrepancy.DiscrepancyType.LONG_AMOUNT);
+        discrepancy.setTransactionId("TXN-LONG-1");
+        discrepancy.setChannelAmount(new BigDecimal("500"));
+
+        ReconciliationDiffReport diffReport = new ReconciliationDiffReport();
+        diffReport.setDiscrepancies(List.of(discrepancy));
+
+        when(adjustmentRepository.findByReferenceIn(any())).thenReturn(Collections.emptyList());
+
+        List<ReconciliationAdjustment> result = adjustmentService.processDiffReport(100L, diffReport, 1L);
+
+        assertTrue(result.isEmpty(), "长款不应产生自动调账记录（改由渠道退款路径处理）");
+        verify(adjustmentRepository, never()).save(any());
         verify(accountService, never()).depositWithType(any(), any(), any(), any());
         verify(accountService, never()).withdrawWithType(any(), any(), any(), any());
     }

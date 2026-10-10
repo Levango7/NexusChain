@@ -2,6 +2,30 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [2.58.0] - 2026-10-11
+
+### 长款渠道退款落地（第 1/3 步）：与自动调账互斥，同一差错不再双向动账
+
+**背景**：2026-10-11 决策「长款走**渠道退款**」（平台是中间机构，非自有资金原路退回）后，
+必须先拆掉与之冲突的旧行为 —— `ReconciliationAdjustmentService` 对同一 `LONG_AMOUNT`
+会做 **CREDIT_ADJUST（给商户加钱）**（v2.55.0 起由事件驱动自动执行），
+与补偿侧即将接线的渠道退款构成**同一差错双向动账**。
+
+- `ReconciliationAdjustmentService.processDiffReport`：`LONG_AMOUNT` **跳过**
+  （不改商户余额、不创建调整记录）；长款的唯一处理入口收敛为渠道退款路径。
+  `determineAdjustmentType` 的 `LONG_AMOUNT` 分支降级为**不可达的防御性兜底**（注释说明）。
+- **过渡期语义（fail-closed）**：补偿侧渠道退款尚未接线（缺渠道归属字段 + 退款接口），
+  自动侧已停手 ⇒ 净效果是「长款不动账且可见地失败」，而不是「两个方向各动一次」。
+- **测试**：新增 `processDiffReport_longAmount_skipped` 门禁（零调整记录 + 零资金动作）；
+  原「金额超阈值 → PENDING_APPROVAL」用例改用 `AMOUNT_MISMATCH`（保持原测试意图，
+  不再依赖已停用的 LONG_AMOUNT 行为）。
+
+**余量（本批第 2/3、3/3 步，下一窗口）**：
+② `reconciliation_discrepancies` 补**渠道归属**字段（`channel_type` + 迁移 + 引擎填充）——
+   现状无该字段，无法判定 wechat/alipay，也就无法选连接器；
+③ **渠道退款接口接线**（按原渠道交易号原路退回 + 商户退款单号 + 幂等），
+   接通后长款才真正闭环（届时补偿侧 REFUND 从"拒绝"改为"执行"）。
+
 ## [2.57.0] - 2026-10-11
 
 ### 补偿资金路径真实化：内部调账接通账本 + 长款双重动账防护
