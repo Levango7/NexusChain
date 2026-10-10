@@ -1,5 +1,6 @@
 package org.nexus.gateway.reconciliation.bill;
 
+import org.nexus.gateway.orchestration.connectors.WeChatPaySignatureUtil;
 import org.nexus.gateway.reconciliation.ChannelRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -159,7 +160,7 @@ public class WeChatBillDownloadClient {
     }
 
     /**
-     * 构建微信支付 V3 API �( Authorization 头。
+     * 构建微信支付 V3 API 的 Authorization 头。
      *
      * <p>格式：WECHATPAY2-SHA256-RSA2048 包含 mchid, serial_no, timestamp, nonce_str, signature</p>
      */
@@ -167,9 +168,20 @@ public class WeChatBillDownloadClient {
         String timestamp = String.valueOf(System.currentTimeMillis() / 1000);
         String nonceStr = UUID.randomUUID().toString().replace("-", "");
 
-        // 签名串格式：method\nurl\n(timestamp)\nnonce_str\nbody\n
-        // GET 请求 body 为空
-        String signContent = method + "\n" + urlPath + "\n" + timestamp + "\n" + nonceStr + "\n";
+        // P0 修复（2026-10-09）：此前 signature 硬编码 "placeholder" —— 真实模式下必被
+        // 微信拒绝（失败被 catch 吞成空对账单），日终对账永远拿不到真实账单。
+        // 现以商户 RSA 私钥按 V3 规范签名（SHA256withRSA，签名串 method\nurl\ntimestamp\nnonce\nbody\n），
+        // 与回调验签侧共用同一签名工具。
+        // 签名失败 fail-closed：抛 IllegalStateException → 上层返回空内容 → 对账跳过该商户，
+        // 绝不发送未签名请求、也不伪造内容。
+        final String signature;
+        try {
+            signature = WeChatPaySignatureUtil.generateRsaSignature(
+                    method, urlPath, timestamp, nonceStr, "", merchantPrivateKey);
+        } catch (RuntimeException e) {
+            throw new IllegalStateException(
+                    "[WeChatBill] 商户私钥签名失败，拒绝发送未签名请求: " + e.getMessage(), e);
+        }
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
@@ -179,7 +191,7 @@ public class WeChatBillDownloadClient {
                         "serial_no=\"" + certSerialNo + "\"," +
                         "timestamp=\"" + timestamp + "\"," +
                         "nonce_str=\"" + nonceStr + "\"," +
-                        "signature=\"placeholder\"");
+                        "signature=\"" + signature + "\"");
 
         return headers;
     }
