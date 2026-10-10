@@ -2,6 +2,70 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [2.55.0] - 2026-10-09
+
+### 打通编排支付主链 + 资金/运营闭环四连修（P0 批次）
+
+**背景**：一次面向"没打通的链路"的全面盘点（三路只读审计：支付主链断点 / 运营就绪度 /
+台账真实性）发现四类问题，全部属于"代码在、链路没接出去"。本批逐一修复。
+
+#### ① 编排支付主链根本付不出去（P0，资金链路）
+
+`OrchestrationService.createPayment` 构造 `ConnectorPaymentRequest` 时**从不设置收/付款地址**，
+`OrchestratedPayment` 实体与 HTTP API 也都没有这两个字段 —— 而 chain/consortium 连接器第一步就是
+`WalletUtils.addressToPubkeyHash(payeeAddress)`：地址缺失 → `"invalid payee address"` →
+路由 failover 静默落到 `MockConnector`（`mock_tx_*` 假哈希 + 直接 SUCCEEDED）。
+即"真实链上支付从未跑通，且失败会伪装成功"。
+
+- `OrchestratedPayment` 新增 `payerAddress` / `payeeAddress`（迁移 `V93__orchestrated_payments_addresses.sql`）；
+- `OrchestrationService.createPayment` 新增 10 参重载（地址透传 + 持久化），8 参旧签名保留（兼容）；
+- `PaymentOrchestrationController` 读取 `payer_address` / `payee_address` 并随响应返回。
+
+#### ② MockConnector 生产闸门（P0，假成功风险）
+
+`MockConnector` 此前**无任何 Profile 保护**、`isActive()` 恒 true，而 `RoutingEngine` 的默认兜底
+规则把所有币种指向 `["mock","chain"]` —— 生产环境只要某币种没有更高优先级规则就会命中 mock。
+
+- 加 `@Profile("!prod")`：生产上下文不再注册 mock → 路由候选自动跳过 → **fail-closed**
+  （支付失败，而非假成功）。staging 保留（k6 容量测试以 mock 为目标）、dev/sandbox/test 保留（E2E 依赖）。
+
+#### ③ 回调幂等从"单 Pod 内存"改为"跨副本共享"
+
+`PaymentCallbackController` 去重此前用进程内 Caffeine，而网关生产 `minReplicas: 2`
+—— 同一通知的渠道重试落到另一 Pod 会被重复处理。
+
+- 改用共享 `IdempotencyStore`（prod=Redis 24h TTL；dev/sandbox=进程内）；语义为
+  **原子占位（`putIfAbsent`）+ 处理失败 `remove` 释放**（渠道重试可重放，通知不会被永久吞掉）；
+- 3 参构造由 Spring 注入共享 store，2 参构造保留（单测/兼容）。
+
+#### ④ 对账自动化闭环（此前只有零件，没有传动）
+
+组件齐全但三处断开：**日终对账没有任何生产触发点**（`runDailyReconciliation` 只有单测调用方）、
+**`ReconciliationDiffReportEvent` / `DiscrepancyResolvedEvent` 只有监听器没有发布方**
+（"对账 → 自动调账 → 挂账核销"是死代码）。
+
+- 新增 `DailyReconciliationScheduler`：每日（默认 02:30，cron 可配）遍历商户 × 渠道
+  （默认 WECHAT,ALIPAY）下载对账单 → `runDailyReconciliation`；ShedLock 多副本安全；
+  **fail-closed**（对账单为空/下载失败 → 跳过，绝不用空账单误判单边）；单商户异常隔离；
+  开关 `nexus.reconciliation.daily.enabled`（默认 true）。
+- `ReconciliationFileService` 在两处对账方法完成后发布 `ReconciliationDiffReportEvent`（有差异时）；
+- `DiscrepancyResolutionService` 在 `resolveDiscrepancy` 与 `autoResolve`（RESOLVED 分支）发布
+  `DiscrepancyResolvedEvent` → 挂账自动核销联动激活。
+
+#### 测试（新增 14 例回归门禁）
+
+| 测试类 | 新增 | 覆盖 |
+|---|---|---|
+| `OrchestrationServiceTest` | 2 | 地址透传到连接器 + 持久化；8 参旧签名兼容（null 地址） |
+| `MockConnectorTest` | 1 | `@Profile("!prod")` 反射闸门（防误删） |
+| `PaymentCallbackControllerTest` | 2 | 两副本共享 store 跨实例幂等；处理失败释放占位可重放 |
+| `ReconciliationFileServiceTest` | 2 | 有差异发布事件；无差异不发布（避免异步空转） |
+| `DiscrepancyResolvedEventPublishTest` | 3 | 人工解决/自动解决发布；转人工不发布 |
+| `DailyReconciliationSchedulerTest` | 4 | 正常闭环；空账单跳过；异常隔离；开关关闭 |
+
+**本地验证**：`org.nexus.gateway.orchestration.* + reconciliation.* + sandbox.*` 全包回归
+**72 个测试类 / 830 用例 / 0 失败 / 0 跳过**（含 sandbox 集成 E2E 与回调 E2E）。
+
 ## [2.54.1] - 2026-10-09
 
 ### 修复：引擎把待签摘要又哈希了一层（外部验签必拒的密码学缺陷）+ E2E 广播段换真实节点

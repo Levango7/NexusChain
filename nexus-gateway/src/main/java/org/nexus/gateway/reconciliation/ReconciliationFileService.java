@@ -37,15 +37,35 @@ public class ReconciliationFileService {
     private final ReconciliationEngine reconciliationEngine;
     private final DiscrepancyResolutionService discrepancyResolutionService;
 
-    @Autowired
+    /**
+     * 事件发布器（P0 修复 2026-10-09）。
+     *
+     * <p>此前 {@code ReconciliationDiffReportEvent} 只有监听器、没有发布方 ——
+     * "对账 → 自动调账 → 挂账核销"链路是死代码（监听器永远等不到事件）。
+     * 现对账完成后在此发布，事件驱动链路才真正激活。</p>
+     */
+    private final org.springframework.context.ApplicationEventPublisher eventPublisher;
+
+    /** 测试便捷构造：无事件发布器（退化为不发布，与旧行为一致）。 */
     public ReconciliationFileService(PaymentOrderRepository paymentOrderRepository,
                                      ReconciliationFileRecordRepository fileRecordRepository,
                                      ReconciliationEngine reconciliationEngine,
                                      DiscrepancyResolutionService discrepancyResolutionService) {
+        this(paymentOrderRepository, fileRecordRepository, reconciliationEngine,
+                discrepancyResolutionService, null);
+    }
+
+    @Autowired
+    public ReconciliationFileService(PaymentOrderRepository paymentOrderRepository,
+                                     ReconciliationFileRecordRepository fileRecordRepository,
+                                     ReconciliationEngine reconciliationEngine,
+                                     DiscrepancyResolutionService discrepancyResolutionService,
+                                     org.springframework.context.ApplicationEventPublisher eventPublisher) {
         this.paymentOrderRepository = paymentOrderRepository;
         this.fileRecordRepository = fileRecordRepository;
         this.reconciliationEngine = reconciliationEngine;
         this.discrepancyResolutionService = discrepancyResolutionService;
+        this.eventPublisher = eventPublisher;
     }
 
     /**
@@ -345,6 +365,10 @@ public class ReconciliationFileService {
                 ? report.getDiscrepancies().size() : 0);
         fileRecordRepository.save(fileRecord);
 
+        // 发布对账差异报告事件（P0 修复：此前只有监听器没有发布方，链路为死代码）。
+        // 监听器 @Async 处理：容差内自动调账 / 超容差建待审批记录 / 挂账核销。
+        publishDiffReportEvent(merchantId, report, fileRecord.getId());
+
         return report;
     }
 
@@ -390,7 +414,29 @@ public class ReconciliationFileService {
                 ? report.getDiscrepancies().size() : 0);
         fileRecordRepository.save(fileRecord);
 
+        // 发布对账差异报告事件（P0 修复：与 runDailyReconciliation 同款）
+        publishDiffReportEvent(fileRecord.getMerchantId(), report, fileRecord.getId());
+
         return report;
+    }
+
+    /**
+     * 发布对账差异报告事件（P0 修复 2026-10-09）。
+     *
+     * <p>监听器 {@code ReconciliationAdjustmentListener} 是 {@code @Async}——
+     * 事件仅携带报告对象与 ID，异步处理在独立事务中重新加载/操作数据，
+     * 因此本方法在事务内直接发布即可（与 AccountService 的事件发布模式一致）。
+     * 无发布器（单测直接构造）时静默跳过。</p>
+     */
+    private void publishDiffReportEvent(Long merchantId, ReconciliationDiffReport report,
+                                         Long reconciliationFileId) {
+        if (eventPublisher == null || report == null || report.getDiscrepancies() == null
+                || report.getDiscrepancies().isEmpty()) {
+            return;
+        }
+        eventPublisher.publishEvent(
+                new org.nexus.gateway.reconciliation.link.ReconciliationDiffReportEvent(
+                        merchantId, report, reconciliationFileId));
     }
 
     // --- 内部方法 ---

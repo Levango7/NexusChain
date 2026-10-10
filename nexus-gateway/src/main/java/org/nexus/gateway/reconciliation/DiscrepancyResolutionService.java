@@ -27,13 +27,30 @@ public class DiscrepancyResolutionService {
 
     private final ReconciliationDiscrepancyRepository discrepancyRepository;
 
+    /**
+     * 事件发布器（P0 修复 2026-10-09，可空）。
+     *
+     * <p>差错解决后发布 {@code DiscrepancyResolvedEvent} 供
+     * {@code ReconciliationAdjustmentListener} 联动核销挂账。空（单测直接构造）时静默跳过。</p>
+     */
+    private final org.springframework.context.ApplicationEventPublisher eventPublisher;
+
     /** 金额容差（默认 0.01 元），容差范围内的差错可自动解决 */
     @Value("${reconciliation.amount.tolerance:0.01}")
     private BigDecimal amountTolerance;
 
+    /** 测试便捷构造：无事件发布器（退化为不发布，与旧行为一致）。 */
     public DiscrepancyResolutionService(
             ReconciliationDiscrepancyRepository discrepancyRepository) {
+        this(discrepancyRepository, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public DiscrepancyResolutionService(
+            ReconciliationDiscrepancyRepository discrepancyRepository,
+            org.springframework.context.ApplicationEventPublisher eventPublisher) {
         this.discrepancyRepository = discrepancyRepository;
+        this.eventPublisher = eventPublisher;
     }
 
     /**
@@ -106,7 +123,16 @@ public class DiscrepancyResolutionService {
                 break;
         }
 
-        return discrepancyRepository.save(discrepancy);
+        ReconciliationDiscrepancy saved = discrepancyRepository.save(discrepancy);
+
+        // 自动解决同样是与"解决"等价的状态终态：发布事件供挂账核销联动（P0 修复）
+        if (saved.getStatus() == ReconciliationDiscrepancy.DiscrepancyStatus.RESOLVED
+                && eventPublisher != null) {
+            eventPublisher.publishEvent(
+                    new org.nexus.gateway.reconciliation.link.DiscrepancyResolvedEvent(
+                            saved, saved.getResolutionNote()));
+        }
+        return saved;
     }
 
     /**
@@ -174,7 +200,17 @@ public class DiscrepancyResolutionService {
         discrepancy.setStatus(ReconciliationDiscrepancy.DiscrepancyStatus.RESOLVED);
         discrepancy.setResolutionNote(resolutionNote);
         discrepancy.setResolvedAt(LocalDateTime.now());
-        return discrepancyRepository.save(discrepancy);
+        ReconciliationDiscrepancy saved = discrepancyRepository.save(discrepancy);
+
+        // 发布差错已解决事件（P0 修复 2026-10-09）：此前该事件只有监听器没有发布方，
+        // "差错解决 → 挂账自动核销"联动为死代码。监听器 @Async 用 discrepancy 的 ID
+        // 反查挂账记录并核销，因此事务内直接发布即可。
+        if (eventPublisher != null) {
+            eventPublisher.publishEvent(
+                    new org.nexus.gateway.reconciliation.link.DiscrepancyResolvedEvent(
+                            saved, resolutionNote));
+        }
+        return saved;
     }
 
     /**

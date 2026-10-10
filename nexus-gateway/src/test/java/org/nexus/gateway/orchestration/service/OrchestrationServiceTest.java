@@ -579,4 +579,55 @@ class OrchestrationServiceTest {
         p.setCreatedAt(Instant.now());
         return p;
     }
+
+    // === createPayment: 收/付款地址透传（P0 修复 2026-10-09 回归门禁） ===
+
+    @Test
+    @DisplayName("createPayment: 收/付款地址透传到连接器请求并持久化到支付单")
+    void createPayment_addressesPropagatedToConnectorAndPersisted() {
+        when(riskService.evaluatePayment(any())).thenReturn(RiskDecision.APPROVED);
+        PaymentConnector connector = mock(PaymentConnector.class);
+        when(connector.getId()).thenReturn("chain");
+        when(connector.createPayment(any())).thenReturn(
+                ConnectorPaymentResult.ok("c-1", PaymentStatus.PROCESSING, "0xTx"));
+        when(routingEngine.resolveDetailed(any())).thenReturn(w16(List.of(connector)));
+        when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        OrchestratedPayment result = service.createPayment(100L, 1000, "NEX", "d",
+                null, null, null, null, "0xPayer", "0xPayee");
+
+        // 回归门禁：此前 ConnectorPaymentRequest 从不带地址，chain/consortium
+        // 连接器必然 "invalid payee address" 并静默落到 mock（假成功）。
+        ArgumentCaptor<ConnectorPaymentRequest> captor =
+                ArgumentCaptor.forClass(ConnectorPaymentRequest.class);
+        verify(connector).createPayment(captor.capture());
+        assertEquals("0xPayer", captor.getValue().getPayerAddress());
+        assertEquals("0xPayee", captor.getValue().getPayeeAddress());
+
+        // 地址随支付单持久化（审计/对账可回溯）
+        assertEquals("0xPayer", result.getPayerAddress());
+        assertEquals("0xPayee", result.getPayeeAddress());
+    }
+
+    @Test
+    @DisplayName("createPayment: 8 参重载（无地址）仍可用，连接器收到 null 地址")
+    void createPayment_legacyOverloadWithoutAddresses() {
+        when(riskService.evaluatePayment(any())).thenReturn(RiskDecision.APPROVED);
+        PaymentConnector connector = mock(PaymentConnector.class);
+        when(connector.getId()).thenReturn("chain");
+        when(connector.createPayment(any())).thenReturn(
+                ConnectorPaymentResult.ok("c-1", PaymentStatus.PROCESSING, "0xTx"));
+        when(routingEngine.resolveDetailed(any())).thenReturn(w16(List.of(connector)));
+        when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        OrchestratedPayment result = service.createPayment(100L, 1000, "NEX", "d",
+                null, null, null, null);
+
+        ArgumentCaptor<ConnectorPaymentRequest> captor =
+                ArgumentCaptor.forClass(ConnectorPaymentRequest.class);
+        verify(connector).createPayment(captor.capture());
+        assertNull(captor.getValue().getPayerAddress());
+        assertNull(captor.getValue().getPayeeAddress());
+        assertNull(result.getPayeeAddress());
+    }
 }

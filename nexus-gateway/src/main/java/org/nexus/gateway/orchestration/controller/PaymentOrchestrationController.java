@@ -80,6 +80,10 @@ public class PaymentOrchestrationController {
         String notifyUrl = body.containsKey("notify_url") ? String.valueOf(body.get("notify_url")) : null;
         String metadata = body.containsKey("metadata") ? String.valueOf(body.get("metadata")) : null;
         String requestId = body.containsKey("request_id") ? String.valueOf(body.get("request_id")) : null;
+        // P0 修复（2026-10-09）：链上支付必需的两端地址。此前完全没被读取，
+        // 导致 chain/consortium 连接器永远拿不到收款地址（必失败后静默落到 mock）。
+        String payerAddress = body.containsKey("payer_address") ? String.valueOf(body.get("payer_address")) : null;
+        String payeeAddress = body.containsKey("payee_address") ? String.valueOf(body.get("payee_address")) : null;
 
         String preferredConnector = null;
         if (body.containsKey("routing")) {
@@ -90,7 +94,8 @@ public class PaymentOrchestrationController {
         }
 
         OrchestratedPayment payment = orchestrationService.createPayment(
-                merchantId, amount, currency, description, notifyUrl, preferredConnector, metadata, requestId);
+                merchantId, amount, currency, description, notifyUrl, preferredConnector, metadata, requestId,
+                payerAddress, payeeAddress);
 
         return ResponseEntity.status(HttpStatus.CREATED).body(toResponse(payment));
     }
@@ -382,6 +387,8 @@ public class PaymentOrchestrationController {
         m.put("connector_payment_id", p.getConnectorPaymentId());
         m.put("transaction_hash", p.getTransactionHash());
         m.put("routing_strategy", p.getRoutingStrategy());
+        m.put("payer_address", p.getPayerAddress());
+        m.put("payee_address", p.getPayeeAddress());
         m.put("latency_ms", p.getLatencyMs());
         m.put("cost_bps", p.getCostBps());
         m.put("created_at", p.getCreatedAt() != null ? p.getCreatedAt().toString() : null);

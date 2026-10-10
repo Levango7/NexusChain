@@ -484,4 +484,99 @@ class PaymentCallbackControllerTest {
             assertEquals("fail", resp.getBody());
         }
     }
+
+    // ==================== P0 修复回归：幂等去重跨副本（共享存储） ====================
+
+    @Test
+    @DisplayName("微信回调：两个副本共享 store — 跨实例幂等（模拟多 Pod 同一通知）")
+    void wechatCallback_dedupAcrossReplicas_sharesStore() throws Exception {
+        PaymentCallbackService svc = mock(PaymentCallbackService.class);
+        WeChatPlatformCertificateManager certMgr = mock(WeChatPlatformCertificateManager.class);
+
+        // 模拟两副本：各自一个 Controller 实例，但共享同一 IdempotencyStore
+        // （prod=Redis 同一实例；此前是各自进程内 Caffeine → 跨 Pod 去重失效）
+        org.nexus.gateway.ratelimit.InMemoryIdempotencyStore sharedStore =
+                new org.nexus.gateway.ratelimit.InMemoryIdempotencyStore();
+        PaymentCallbackController podA = new PaymentCallbackController(svc, certMgr, sharedStore);
+        PaymentCallbackController podB = new PaymentCallbackController(svc, certMgr, sharedStore);
+        setField(podA, "wechatApiV3Key", "test_wechat_v3_key");
+        setField(podB, "wechatApiV3Key", "test_wechat_v3_key");
+
+        when(certMgr.getPlatformPublicKey(anyString())).thenReturn("test_platform_public_key");
+
+        OrchestratedPayment payment = new OrchestratedPayment();
+        payment.setId("pay_shared");
+        payment.setStatus(OrchPaymentStatus.PROCESSING);
+        when(svc.findById("pay_shared")).thenReturn(Optional.of(payment));
+        when(svc.save(any())).thenReturn(payment);
+
+        String body = wechatCallbackBody("evt_shared", "pay_shared", "SUCCESS");
+
+        try (MockedStatic<WeChatPaySignatureUtil> mocked = mockStatic(WeChatPaySignatureUtil.class)) {
+            mocked.when(() -> WeChatPaySignatureUtil.verifyCallbackSignatureWithPlatformCert(
+                    anyString(), anyString(), anyString(), anyString(), anyString())).thenReturn(true);
+            mocked.when(() -> WeChatPaySignatureUtil.decryptResource(
+                    anyString(), anyString(), anyString(), anyString())).thenReturn(
+                    decryptedResourceJson("pay_shared", "wx_tx_shared", "SUCCESS"));
+
+            // 副本 A 处理成功
+            ResponseEntity<Map<String, Object>> respA = podA.wechatCallback(
+                    body, "1700000000", "nonce123", "sig", "cert_serial_001");
+            assertEquals("SUCCESS", respA.getBody().get("code"));
+            verify(svc, times(1)).save(any());
+
+            // 副本 B 收到同一通知（渠道重试落到另一 Pod）：共享 store 命中 → 幂等，不再处理
+            ResponseEntity<Map<String, Object>> respB = podB.wechatCallback(
+                    body, "1700000000", "nonce123", "sig", "cert_serial_001");
+            assertEquals("SUCCESS", respB.getBody().get("code"));
+            verify(svc, times(1)).save(any());
+        }
+    }
+
+    @Test
+    @DisplayName("微信回调：处理抛异常时释放幂等占位 — 渠道重试可重放")
+    void wechatCallback_processingFailureReleasesClaim() throws Exception {
+        PaymentCallbackService svc = mock(PaymentCallbackService.class);
+        WeChatPlatformCertificateManager certMgr = mock(WeChatPlatformCertificateManager.class);
+        PaymentCallbackController controller = wechatControllerWithKey(svc, certMgr);
+
+        when(certMgr.getPlatformPublicKey(anyString())).thenReturn("test_platform_public_key");
+
+        // 两次调用返回各自独立的支付对象：复用同一实例时，第一次已把状态改成
+        // SUCCEEDED（save 前赋值），重试会因"状态已一致"跳过 save，掩盖断言意图。
+        OrchestratedPayment first = new OrchestratedPayment();
+        first.setId("pay_retry");
+        first.setStatus(OrchPaymentStatus.PROCESSING);
+        OrchestratedPayment second = new OrchestratedPayment();
+        second.setId("pay_retry");
+        second.setStatus(OrchPaymentStatus.PROCESSING);
+        when(svc.findById("pay_retry"))
+                .thenReturn(Optional.of(first), Optional.of(second));
+        // 第一次 save 抛异常；第二次成功
+        when(svc.save(any()))
+                .thenThrow(new RuntimeException("db down"))
+                .thenReturn(second);
+
+        String body = wechatCallbackBody("evt_retry", "pay_retry", "SUCCESS");
+
+        try (MockedStatic<WeChatPaySignatureUtil> mocked = mockStatic(WeChatPaySignatureUtil.class)) {
+            mocked.when(() -> WeChatPaySignatureUtil.verifyCallbackSignatureWithPlatformCert(
+                    anyString(), anyString(), anyString(), anyString(), anyString())).thenReturn(true);
+            mocked.when(() -> WeChatPaySignatureUtil.decryptResource(
+                    anyString(), anyString(), anyString(), anyString())).thenReturn(
+                    decryptedResourceJson("pay_retry", "wx_tx_retry", "SUCCESS"));
+
+            // 第一次：处理失败 → 异常上抛（@ExceptionHandler 兜底为 fail-closed 响应）
+            assertThrows(RuntimeException.class, () -> controller.wechatCallback(
+                    body, "1700000000", "nonce123", "sig", "cert_serial_001"));
+
+            // 第二次（渠道重试）：占位已释放 → 重新进入处理。findById 第二次被调用
+            // 即证明未被幂等短路（若占位未释放，第二次会提前 return，findById 只有 1 次）。
+            ResponseEntity<Map<String, Object>> resp = controller.wechatCallback(
+                    body, "1700000000", "nonce123", "sig", "cert_serial_001");
+            assertEquals("SUCCESS", resp.getBody().get("code"));
+            verify(svc, times(2)).findById("pay_retry");
+            verify(svc, times(2)).save(any());
+        }
+    }
 }

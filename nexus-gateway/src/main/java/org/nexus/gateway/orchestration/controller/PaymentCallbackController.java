@@ -3,16 +3,17 @@ package org.nexus.gateway.orchestration.controller;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.github.benmanes.caffeine.cache.Cache;
-import com.github.benmanes.caffeine.cache.Caffeine;
 import org.nexus.gateway.orchestration.connectors.AlipaySignatureUtil;
 import org.nexus.gateway.orchestration.connectors.WeChatPaySignatureUtil;
 import org.nexus.gateway.orchestration.connectors.WeChatPlatformCertificateManager;
 import org.nexus.gateway.orchestration.model.OrchPaymentStatus;
 import org.nexus.gateway.orchestration.model.OrchestratedPayment;
 import org.nexus.gateway.orchestration.service.PaymentCallbackService;
+import org.nexus.gateway.ratelimit.IdempotencyStore;
+import org.nexus.gateway.ratelimit.InMemoryIdempotencyStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -20,7 +21,6 @@ import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
 import java.util.*;
-import java.util.concurrent.TimeUnit;
 
 /**
  * 支付渠道异步回调通知接收控制器 — 微信支付 / 支付宝。
@@ -55,21 +55,39 @@ public class PaymentCallbackController {
     private String alipayPublicKey;
 
     /**
-     * 幂等去重缓存：key = paymentId + ":" + notificationId。
+     * 回调幂等去重存储：key = outTradeNo + ":" + (notificationId|tradeNo)。
      *
-     * <p>P0-2 修复：原 ConcurrentHashMap.newKeySet() 无界增长，长期运行会 OOM。
-     * 改为 Caffeine 有界缓存：最大 10 万条，写入后 24 小时过期。
-     * 支付回调的去重窗口远小于 24 小时，超期条目可安全淘汰。</p>
+     * <p><b>P0 修复（2026-10-09）：从进程内 Caffeine 改为共享 {@link IdempotencyStore}。</b>
+     * 背景：网关生产 {@code minReplicas: 2}，同一通知的两次投递（渠道重试）可能落到
+     * 不同 Pod —— 进程内缓存各自为空，重复通知会被重复处理（重复置状态、重复触发
+     * 下游动作）。共享存储（prod=Redis 24h TTL / dev·sandbox=进程内）使去重跨副本成立。</p>
+     *
+     * <p>占位语义为「先原子占位、失败释放」：{@code putIfAbsent} 抢到才处理，处理异常时
+     * {@code remove} 释放以便渠道重试重放；未抢到 = 已处理或处理中 → 幂等返回。</p>
      */
-    private final Cache<String, Boolean> processedNotifications = Caffeine.newBuilder()
-            .maximumSize(100_000)
-            .expireAfterWrite(24, TimeUnit.HOURS)
-            .build();
+    private final IdempotencyStore dedupStore;
 
+    /** 去重键前缀：与受理幂等键（request_id）共用同一 store，前缀隔离命名空间。 */
+    private static final String DEDUP_PREFIX = "cb:";
+
+    /**
+     * 测试便捷构造：使用进程内 store。
+     *
+     * <p>Spring 运行时走 3 参构造（{@code @Autowired}）注入共享 store；
+     * 单测直接 {@code new} 时退化为进程内，与旧行为一致。</p>
+     */
     public PaymentCallbackController(PaymentCallbackService callbackService,
                                       WeChatPlatformCertificateManager certificateManager) {
+        this(callbackService, certificateManager, new InMemoryIdempotencyStore());
+    }
+
+    @Autowired
+    public PaymentCallbackController(PaymentCallbackService callbackService,
+                                      WeChatPlatformCertificateManager certificateManager,
+                                      IdempotencyStore dedupStore) {
         this.callbackService = callbackService;
         this.certificateManager = certificateManager;
+        this.dedupStore = dedupStore;
     }
 
     // ==================== 微信支付回调 ====================
@@ -184,35 +202,41 @@ public class PaymentCallbackController {
             return failResponse("无法提取 out_trade_no");
         }
 
-        // 5. 幂等处理：paymentId + notificationId 去重
-        String dedupKey = outTradeNo + ":" + (notificationId != null ? notificationId : transactionId);
-        if (processedNotifications.getIfPresent(dedupKey) != null) {
+        // 5. 幂等占位（P0 修复：共享 store + 原子占位，跨副本安全）
+        //    抢到位 = 本副本处理；未抢到 = 已处理/处理中 → 幂等返回成功（渠道重试安全）
+        String dedupKey = DEDUP_PREFIX + outTradeNo + ":"
+                + (notificationId != null ? notificationId : transactionId);
+        if (!dedupStore.putIfAbsent(dedupKey, "1")) {
             log.info("[WeChat Callback] 通知已处理过，幂等返回成功: {}", dedupKey);
             return successResponse();
         }
 
         // 6. 更新支付订单状态
-        Optional<OrchestratedPayment> paymentOpt = callbackService.findById(outTradeNo);
-        if (paymentOpt.isEmpty()) {
-            log.warn("[WeChat Callback] 支付订单不存在: {}", outTradeNo);
-            // 微信要求：即使订单不存在也应返回 200，否则微信会持续重试
-            processedNotifications.put(dedupKey, Boolean.TRUE);
-            return successResponse();
-        }
-
-        OrchestratedPayment payment = paymentOpt.get();
-        OrchPaymentStatus newStatus = mapWeChatTradeState(tradeState);
-        if (newStatus != null && payment.getStatus() != newStatus) {
-            payment.setStatus(newStatus);
-            if (newStatus == OrchPaymentStatus.SUCCEEDED && payment.getConfirmedAt() == null) {
-                payment.setConfirmedAt(Instant.now());
+        try {
+            Optional<OrchestratedPayment> paymentOpt = callbackService.findById(outTradeNo);
+            if (paymentOpt.isEmpty()) {
+                log.warn("[WeChat Callback] 支付订单不存在: {}", outTradeNo);
+                // 微信要求：即使订单不存在也应返回 200，否则微信会持续重试。
+                // 占位保留（不重放）——与旧语义一致。
+                return successResponse();
             }
-            callbackService.save(payment);
-            log.info("[WeChat Callback] 支付订单状态更新: {} -> {}", outTradeNo, newStatus);
-        }
 
-        processedNotifications.put(dedupKey, Boolean.TRUE);
-        return successResponse();
+            OrchestratedPayment payment = paymentOpt.get();
+            OrchPaymentStatus newStatus = mapWeChatTradeState(tradeState);
+            if (newStatus != null && payment.getStatus() != newStatus) {
+                payment.setStatus(newStatus);
+                if (newStatus == OrchPaymentStatus.SUCCEEDED && payment.getConfirmedAt() == null) {
+                    payment.setConfirmedAt(Instant.now());
+                }
+                callbackService.save(payment);
+                log.info("[WeChat Callback] 支付订单状态更新: {} -> {}", outTradeNo, newStatus);
+            }
+            return successResponse();
+        } catch (RuntimeException e) {
+            // 处理失败释放占位：渠道重试可重放（否则该通知被永久吞掉）
+            dedupStore.remove(dedupKey);
+            throw e;
+        }
     }
 
     // ==================== 支付宝回调 ====================
@@ -257,34 +281,38 @@ public class PaymentCallbackController {
             return ResponseEntity.status(HttpStatus.OK).body("fail");
         }
 
-        // 4. 幂等处理：paymentId + notifyId 去重
-        String dedupKey = outTradeNo + ":" + (notifyId != null ? notifyId : tradeNo);
-        if (processedNotifications.getIfPresent(dedupKey) != null) {
+        // 4. 幂等占位（P0 修复：共享 store + 原子占位，跨副本安全）
+        String dedupKey = DEDUP_PREFIX + outTradeNo + ":" + (notifyId != null ? notifyId : tradeNo);
+        if (!dedupStore.putIfAbsent(dedupKey, "1")) {
             log.info("[Alipay Callback] 通知已处理过，幂等返回成功: {}", dedupKey);
             return ResponseEntity.status(HttpStatus.OK).body("success");
         }
 
         // 5. 更新支付订单状态
-        Optional<OrchestratedPayment> paymentOpt = callbackService.findById(outTradeNo);
-        if (paymentOpt.isEmpty()) {
-            log.warn("[Alipay Callback] 支付订单不存在: {}", outTradeNo);
-            processedNotifications.put(dedupKey, Boolean.TRUE);
-            return ResponseEntity.status(HttpStatus.OK).body("success");
-        }
-
-        OrchestratedPayment payment = paymentOpt.get();
-        OrchPaymentStatus newStatus = mapAlipayTradeStatus(tradeStatus);
-        if (newStatus != null && payment.getStatus() != newStatus) {
-            payment.setStatus(newStatus);
-            if (newStatus == OrchPaymentStatus.SUCCEEDED && payment.getConfirmedAt() == null) {
-                payment.setConfirmedAt(Instant.now());
+        try {
+            Optional<OrchestratedPayment> paymentOpt = callbackService.findById(outTradeNo);
+            if (paymentOpt.isEmpty()) {
+                log.warn("[Alipay Callback] 支付订单不存在: {}", outTradeNo);
+                // 占位保留（不重放）——与旧语义一致
+                return ResponseEntity.status(HttpStatus.OK).body("success");
             }
-            callbackService.save(payment);
-            log.info("[Alipay Callback] 支付订单状态更新: {} -> {}", outTradeNo, newStatus);
-        }
 
-        processedNotifications.put(dedupKey, Boolean.TRUE);
-        return ResponseEntity.status(HttpStatus.OK).body("success");
+            OrchestratedPayment payment = paymentOpt.get();
+            OrchPaymentStatus newStatus = mapAlipayTradeStatus(tradeStatus);
+            if (newStatus != null && payment.getStatus() != newStatus) {
+                payment.setStatus(newStatus);
+                if (newStatus == OrchPaymentStatus.SUCCEEDED && payment.getConfirmedAt() == null) {
+                    payment.setConfirmedAt(Instant.now());
+                }
+                callbackService.save(payment);
+                log.info("[Alipay Callback] 支付订单状态更新: {} -> {}", outTradeNo, newStatus);
+            }
+            return ResponseEntity.status(HttpStatus.OK).body("success");
+        } catch (RuntimeException e) {
+            // 处理失败释放占位：渠道重试可重放（否则该通知被永久吞掉）
+            dedupStore.remove(dedupKey);
+            throw e;
+        }
     }
 
     // ==================== 异常处理 ====================
