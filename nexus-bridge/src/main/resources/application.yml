@@ -143,9 +143,24 @@ nexus:
     #   - 302a300506032b6570032100xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
     # EVM 兼容链 RPC 端点配置（Web3j HttpService 连接地址）
     # 生产环境应通过环境变量 / 配置中心注入，避免硬编码
+    # P0 修复（2026-10-09）：以下字段此前**没有任何类绑定**（配置写着、代码没读），
+    # 导致桥的链上执行子系统从未装配：mint/unlock 只改库并标 MINTED/UNLOCKED，
+    # targetTxHash 恒 null（"报告已铸造但链上什么都没发生"）。现由
+    # BridgeChainProperties 绑定 + BridgeOnChainExecutor 装配 handler 真广播。
+    # 就绪判据 = rpc-endpoint + contract-address + relayer-private-key 三者齐备；
+    # 缺任一 → 该链不可上链 → mock-mode=false 时 mint/unlock **拒绝**（fail-closed）。
     ethereum:
-      rpc-endpoint: https://mainnet.infura.io/v3/YOUR_PROJECT_ID
+      rpc-endpoint: ${NEX_BRIDGE_ETH_RPC:https://mainnet.infura.io/v3/YOUR_PROJECT_ID}
       chain-id: "0x1"
+      # 数值 chainId（EIP-155 签名用）
+      evm-chain-id: 1
+      # 桥合约地址（BridgeSource；target-contract-address 缺省回退本值）
+      contract-address: ${NEX_BRIDGE_ETH_CONTRACT:}
+      target-contract-address: ${NEX_BRIDGE_ETH_TARGET_CONTRACT:}
+      # NEX 代币合约地址
+      nexus-token-address: ${NEX_BRIDGE_ETH_TOKEN:}
+      # 中继者 EVM 私钥（hex）——生产经环境变量/密钥管理注入，禁止硬编码提交
+      relayer-private-key: ${NEX_BRIDGE_RELAYER_KEY:}
     bsc:
       rpc-endpoint: https://bsc-dataseed.binance.org
       chain-id: "0x38"

@@ -33,7 +33,13 @@ import static org.springframework.security.test.web.servlet.request.SecurityMock
  * 签名者 ID 即白名单中的公钥十六进制（见 application-test.yml 的
  * {@code nexus.bridge.validator-public-keys}）。</p>
  */
-@SpringBootTest
+@SpringBootTest(properties = {
+        // P0 修复（2026-10-09）：桥 mint/unlock 现在要求"真实上链或显式 mock 模式"——
+        // 无中继者凭证（rpc/合约/私钥三者齐备）时 fail-closed 拒绝，不再静默标 MINTED。
+        // 本集成测试在 CI 无真链凭证，故显式开 mock 模式继续验证链上/链下链路编排；
+        // "不可上链 → 拒绝"的 fail-closed 契约由 BridgeOnChainExecutionTest 覆盖。
+        "nexus.bridge.mock-mode=true"
+})
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)

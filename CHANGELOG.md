@@ -2,6 +2,39 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [2.56.0] - 2026-10-09
+
+### 打通桥的链上执行链路：mint/unlock 真广播 + 不可上链时 fail-closed
+
+**背景（审计发现）**：跨链桥的链上执行子系统 —— `AbstractBridgeHandler` 系
+（含 `submitContractCall` / `eth_sendRawTransaction` 真实现）、`Ethereum/BSC/Avalanche/Solana`
+四个 handler 与四个 adapter —— **零生产调用方**（4 个 handler 都不是 Spring bean），
+且配套配置 `nexus.bridge.{ethereum,bsc,polygon,avalanche}` 的 `rpc-endpoint`/`chain-id`
+**没有任何类绑定**（又一处"配置写着、代码没读"）。后果：桥的 `mint`/`unlock` 只改数据库并
+直接标 `MINTED`/`UNLOCKED`、**`targetTxHash` 恒为 null** —— "报告已铸造，但目标链上
+什么都没发生"。这是资金链路里最后一条完全没通的路。
+
+- **新增 `BridgeChainProperties`**：绑定既有链配置，并补上链上执行必需字段
+  `evm-chain-id` / `contract-address` / `target-contract-address` / `nexus-token-address` /
+  `relayer-private-key`（生产经环境变量 `NEX_BRIDGE_RELAYER_KEY` 注入，**禁止硬编码**）；
+  提供 `isOnChainReady()`（rpc + 合约 + 私钥三者齐备）作为唯一就绪判据。
+- **新增 `BridgeOnChainExecutor`**：按链装配 handler 并在 mint/unlock 时**真广播**、取回链上
+  交易哈希；装配失败（如私钥非 hex）记 ERROR 后视为不可上链（fail-closed，不静默）。
+  **覆盖范围诚实声明**：当前仅装配 `ethereum` —— 只有 `EthereumBridgeHandler` 支持凭证签名，
+  BSC/Avalanche/Solana 的 handler 尚无凭证构造路径（已写入类注释，作为后续项）。
+- **`BridgeServiceImpl.mint`/`unlock` 挂钩**：
+  - 广播成功 → 真哈希写入 `targetTxHash`（此前恒 null，状态"已铸造"无法核验）；
+  - 不可上链且 `mockMode=false` → **拒绝**（置 FAILED + 抛 `BridgeException`），
+    不再把"未上链"静默标成成功；
+  - `mockMode=true` → 放行但记 warn，且**不写假哈希**（不伪造链上事实）；
+  - `executor == null`（旧装配/嵌入式单测）→ 保持历史行为（Spring 运行时恒注入，生产不会走此分支）。
+
+**测试**：新增 `BridgeOnChainExecutionTest` 9 例 —— executor 配置判定（未配置 / 非 eth 链 /
+齐备 / 非法私钥视为不可上链）与服务挂钩（fail-closed 拒绝、真哈希落库、mock 放行、
+unlock fail-closed、null executor 兼容）；`BridgeFullChainIntegrationTest` 按新契约显式
+开 mock 模式（CI 无真链凭证），fail-closed 契约由新单测覆盖。`nexus-bridge` 全包
+**583 用例 0 失败**。
+
 ## [2.55.1] - 2026-10-09
 
 ### 修复：微信对账单下载使用真实 RSA 签名（替换 signature="placeholder"）
