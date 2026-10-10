@@ -109,6 +109,17 @@ public class ReconciliationAdjustmentService {
                 continue;
             }
 
+            // 业务决策（2026-10-11）：长款走**渠道退款** —— 平台是中间机构，非自有资金
+            // 应原路退回，而不是计入商户余额。故本服务**不再**对 LONG_AMOUNT 做
+            // CREDIT_ADJUST（旧行为：商户加钱）：否则与补偿侧的渠道退款路径
+            // （AutoCompensationService 的 REFUND 类型）会对同一差错**双向动账**。
+            // 长款的唯一处理入口 = 渠道退款（落地中）；在此期间两侧都不动账（fail-closed）。
+            if (discrepancy.getDiscrepancyType() == ReconciliationDiscrepancy.DiscrepancyType.LONG_AMOUNT) {
+                log.info("长款(LONG_AMOUNT)改由渠道退款路径处理，本服务跳过（避免双向动账）: discrepancyId={}",
+                        discrepancy.getId());
+                continue;
+            }
+
             // 根据差错类型确定调整方向和金额
             AdjustmentType adjustmentType = determineAdjustmentType(discrepancy);
             BigDecimal adjustmentAmount = determineAdjustmentAmount(discrepancy);
@@ -319,7 +330,8 @@ public class ReconciliationAdjustmentService {
      *
      * <p>映射规则：
      * <ul>
-     *   <li>LONG_AMOUNT（长款）→ CREDIT_ADJUST（渠道多收，商户加钱）</li>
+     *   <li>LONG_AMOUNT（长款）→ <b>本服务已跳过</b>（2026-10-11 决策：长款走渠道退款，
+     *       不再给商户加钱，避免与补偿侧双向动账；见 {@code processDiffReport} 中的跳过分支）</li>
      *   <li>SHORT_AMOUNT（短款）→ DEBIT_ADJUST（内部多记，商户扣钱）</li>
      *   <li>AMOUNT_MISMATCH → 根据金额差异方向判断</li>
      *   <li>STATUS_MISMATCH / INFO_MISMATCH → 不产生资金调整</li>
@@ -329,7 +341,9 @@ public class ReconciliationAdjustmentService {
     private AdjustmentType determineAdjustmentType(ReconciliationDiscrepancy discrepancy) {
         switch (discrepancy.getDiscrepancyType()) {
             case LONG_AMOUNT:
-                // 长款：渠道有但内部无，商户应加钱
+                // 防御性分支：正常流程中 LONG_AMOUNT 已在 processDiffReport 被跳过
+                // （2026-10-11 决策：长款走渠道退款）。此处保留 CREDIT_ADJUST 仅作兜底，
+                // 且由于上游跳过，实际不会被执行。
                 return AdjustmentType.CREDIT_ADJUST;
             case SHORT_AMOUNT:
                 // 短款：内部有但渠道无，商户应扣钱
