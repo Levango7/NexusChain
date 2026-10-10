@@ -9,10 +9,10 @@ NexusChain 是一个**基于自研区块链的支付编排平台（Payment Orche
 > 沙箱/仿真态对外展示，生产资金操作由持牌交付方在其合规主体下运行。
 
 > **版本口径（2026-09-28 第三次修复漂移，CI 门禁化）**：构建侧**双源**为根 `build.gradle` 的 `version`
-> 与 `nexus-core/nexus-core/src/main/resources/version.properties` 的 `versionNumber`（当前均为 `2.55.1`；
+> 与 `nexus-core/nexus-core/src/main/resources/version.properties` 的 `versionNumber`（当前均为 `2.56.0`；
 > 发版时**两处都要改**——v2.50.2 曾因 version.properties 滞后导致 jar 名错位）；
-> 发布说明单一来源为 [CHANGELOG](CHANGELOG.md)（最新条目 `[2.55.1] - 2026-10-09`，
-> 即微信对账单下载真实 RSA 签名修复——它让 v2.55.0 接入的自动对账闭环在真实模式下可用）。
+> 发布说明单一来源为 [CHANGELOG](CHANGELOG.md)（最新条目 `[2.56.0] - 2026-10-09`，
+> 即桥链上执行接线：mint/unlock 真广播 + 不可上链时 fail-closed）。
 > 本头注的准确性由 CI 门禁 `scripts/check-version-consistency.sh` 保护：
 > build.gradle / version.properties / 本头注三处任一失配将直接导致 CI 失败。
 
