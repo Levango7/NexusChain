@@ -82,4 +82,17 @@ class MockConnectorTest {
         assertEquals("mock", h.getConnectorId());
         assertEquals(1L, h.getLatencyMs());
     }
+
+    @Test
+    @DisplayName("生产闸门：@Profile(\"!prod\") — prod 上下文不得注册 mock 连接器")
+    void profileExcludesProd() {
+        // P0 修复回归门禁（2026-10-09）：mock 连接器恒 SUCCEEDED 并返回 mock_tx_* 假哈希。
+        // 若它在 prod 注册，路由兜底规则会命中它 → "支付从未上链却报告成功"。
+        // 本断言钉住 @Profile 排除 prod；一旦被误删（如重构注解），测试立刻红。
+        org.springframework.context.annotation.Profile profile =
+                MockConnector.class.getAnnotation(org.springframework.context.annotation.Profile.class);
+        assertNotNull(profile, "MockConnector 必须带 @Profile 注解（生产闸门）");
+        assertTrue(java.util.Arrays.asList(profile.value()).contains("!prod"),
+                "MockConnector 的 @Profile 必须排除 prod，实际=" + java.util.Arrays.toString(profile.value()));
+    }
 }

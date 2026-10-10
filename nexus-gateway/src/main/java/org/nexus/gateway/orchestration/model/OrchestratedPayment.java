@@ -68,6 +68,20 @@ public class OrchestratedPayment {
     @Column(length = 1024)
     private String metadata;
 
+    /**
+     * 付款方地址（链上支付必需；法币渠道可空）。
+     *
+     * <p>P0 修复（2026-10-09）：经编排链调用 chain/consortium 连接器时，
+     * Connector 需要收款地址才能构造链上交易——此前该字段从未被传递，
+     * 导致任何真实链上支付必失败（invalid payee address）。</p>
+     */
+    @Column(name = "payer_address", length = 128)
+    private String payerAddress;
+
+    /** 收款方地址（链上支付必需；法币渠道可空）。见 {@link #payerAddress} 说明。 */
+    @Column(name = "payee_address", length = 128)
+    private String payeeAddress;
+
     @Column(nullable = false)
     private Instant createdAt;
 
@@ -114,6 +128,10 @@ public class OrchestratedPayment {
     public void setRoutingStrategy(String routingStrategy) { this.routingStrategy = routingStrategy; }
     public String getMetadata() { return metadata; }
     public void setMetadata(String metadata) { this.metadata = metadata; }
+    public String getPayerAddress() { return payerAddress; }
+    public void setPayerAddress(String payerAddress) { this.payerAddress = payerAddress; }
+    public String getPayeeAddress() { return payeeAddress; }
+    public void setPayeeAddress(String payeeAddress) { this.payeeAddress = payeeAddress; }
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
     public Instant getConfirmedAt() { return confirmedAt; }

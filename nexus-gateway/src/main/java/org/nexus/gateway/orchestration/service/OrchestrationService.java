@@ -129,10 +129,37 @@ public class OrchestrationService {
     // 两者本就**不受数据库事务管辖**（Redis 写入不会随 DB 回滚而撤销）。
     // 即「save + record 原子」这一保证在原实现下也并不存在，
     // 因此移除外层事务不改变任何真实的原子性语义。
+    /**
+     * 受理支付（兼容重载）：不含链上收/付款地址，等价于传 null。
+     *
+     * <p>链上支付请用 {@link #createPayment(Long, long, String, String, String, String, String, String, String, String)}
+     * ——法币渠道不需要地址，链渠道（chain/consortium）没有收款地址必然失败。</p>
+     */
     public OrchestratedPayment createPayment(Long merchantId, long amount, String currency,
                                               String description, String notifyUrl,
                                               String preferredConnector, String metadata,
                                               String requestId) {
+        return createPayment(merchantId, amount, currency, description, notifyUrl,
+                preferredConnector, metadata, requestId, null, null);
+    }
+
+    /**
+     * 受理支付（P0 修复 2026-10-09：补收/付款地址透传）。
+     *
+     * <p>此前该方法没有地址参数，构造 {@link ConnectorPaymentRequest} 时不带地址，
+     * 而 chain/consortium 连接器第一件事就是 {@code addressToPubkeyHash(payeeAddress)}
+     * ——地址缺失 → 返回 "invalid payee address" → 路由 failover 静默落到 mock 连接器
+     * （返回 {@code mock_tx_*} 假哈希并标记 SUCCEEDED）。即"真实链上支付从未跑通过，
+     * 且失败会伪装成成功"。现地址随支付单持久化并透传到每个候选连接器。</p>
+     *
+     * @param payerAddress 付款方地址（链上支付必填；法币渠道可空）
+     * @param payeeAddress 收款方地址（链上支付必填；法币渠道可空）
+     */
+    public OrchestratedPayment createPayment(Long merchantId, long amount, String currency,
+                                              String description, String notifyUrl,
+                                              String preferredConnector, String metadata,
+                                              String requestId,
+                                              String payerAddress, String payeeAddress) {
         // P3-T5：支付创建主 span（payment.create），覆盖整个支付全链路
         try (BusinessSpan rootSpan = BusinessSpan.start(tracer, "payment.create")
                 .attr("payment.merchant.id", merchantId)
@@ -173,6 +200,8 @@ public class OrchestrationService {
             payment.setNotifyUrl(notifyUrl);
             payment.setMetadata(metadata);
             payment.setRequestId(requestId);
+            payment.setPayerAddress(payerAddress);
+            payment.setPayeeAddress(payeeAddress);
             payment.setRoutingStrategy(preferredConnector != null ? "explicit" : "priority");
 
             if (riskDecision == RiskDecision.REJECTED || riskDecision == RiskDecision.FROZEN) {
@@ -221,7 +250,11 @@ public class OrchestrationService {
             }
 
             // Try connectors in order (failover)
+            // P0 修复（2026-10-09）：收/付款地址必须随请求透传——chain/consortium
+            // 连接器依赖 payeeAddress 构造链上交易，缺失即 "invalid payee address"。
             ConnectorPaymentRequest req = new ConnectorPaymentRequest(paymentId, amount, currency, description);
+            req.setPayerAddress(payerAddress);
+            req.setPayeeAddress(payeeAddress);
             for (PaymentConnector connector : connectors) {
                 // P3-T5：连接器提交 span（payment.connector.submit）
                 try (BusinessSpan connSpan = BusinessSpan.start(tracer, "payment.connector.submit")

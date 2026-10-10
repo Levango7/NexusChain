@@ -452,6 +452,20 @@ nexus:
       # 链上广播 + 入池通常 <10s，30s 留充足余量。超时后标记 FAILED 触发补偿。
       phase2-timeout-seconds: 30
 
+  # === P0 修复（v2.55.0）：日终对账自动化 ===
+  # 组件（账单下载/解析/比对/差错/自动调账/挂账核销）此前齐全，但 runDailyReconciliation
+  # 没有任何生产触发点——本调度器补上"自动触发"这一环，形成完整闭环。
+  # fail-closed：对账单为空/下载失败 → 跳过（绝不用空账单误判单边）；
+  # 多副本安全：ShedLock；单商户异常隔离不阻断全量。
+  reconciliation:
+    daily:
+      # 开关（资金安全动作，默认开）
+      enabled: true
+      # cron（Spring 6 六字段：秒 分 时 日 月 周）；渠道对账单通常凌晨可用
+      cron: "0 30 2 * * *"
+      # 参与自动对账的渠道（逗号分隔）
+      channels: WECHAT,ALIPAY
+
   # 低5/低6 改进：执行补偿模式参数
   # 独立配置命名空间，与 gatewayservice.execution 互补，供 ThreePhaseExecutionTemplate
   # 与 CompensationService 读取（也通过 @Value 默认值兜底，未配置时使用 30s / 100）。

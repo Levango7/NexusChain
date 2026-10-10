@@ -381,4 +381,67 @@ class ReconciliationFileServiceTest {
         order.setTokenSymbol("NEX");
         return order;
     }
+
+    // ==================== P0 修复回归：对账差异报告事件发布 ====================
+
+    @Test
+    @DisplayName("runDailyReconciliation — 有差异时发布 ReconciliationDiffReportEvent（此前无发布方）")
+    void runDailyReconciliation_publishesDiffReportEvent() {
+        org.springframework.context.ApplicationEventPublisher publisher =
+                mock(org.springframework.context.ApplicationEventPublisher.class);
+        ReconciliationFileService serviceWithPublisher = new ReconciliationFileService(
+                paymentOrderRepository, fileRecordRepository,
+                reconciliationEngine, discrepancyResolutionService, publisher);
+
+        LocalDate date = LocalDate.of(2026, 10, 8);
+        ReconciliationFileRecord record = new ReconciliationFileRecord();
+        record.setId(77L);
+        record.setMerchantId(MERCHANT_ID);
+        when(fileRecordRepository.save(any(ReconciliationFileRecord.class))).thenReturn(record);
+        when(paymentOrderRepository.findByMerchantId(MERCHANT_ID)).thenReturn(List.of());
+        when(reconciliationEngine.parseCsvContent(anyString())).thenReturn(List.of());
+
+        ReconciliationDiffReport report = new ReconciliationDiffReport();
+        report.setMatchedCount(3);
+        ReconciliationDiscrepancy d = new ReconciliationDiscrepancy();
+        d.setDiscrepancyType(ReconciliationDiscrepancy.DiscrepancyType.SHORT_AMOUNT);
+        report.setDiscrepancies(List.of(d));
+        when(reconciliationEngine.reconcile(any(), any(), any(), any(), any())).thenReturn(report);
+
+        serviceWithPublisher.runDailyReconciliation(MERCHANT_ID, "# header\n", date);
+
+        org.mockito.ArgumentCaptor<Object> captor =
+                org.mockito.ArgumentCaptor.forClass(Object.class);
+        verify(publisher).publishEvent(captor.capture());
+        assertTrue(captor.getValue()
+                        instanceof org.nexus.gateway.reconciliation.link.ReconciliationDiffReportEvent,
+                "应发布 ReconciliationDiffReportEvent，实际=" + captor.getValue().getClass());
+    }
+
+    @Test
+    @DisplayName("runDailyReconciliation — 无差异时不发布事件（避免空转异步处理）")
+    void runDailyReconciliation_noDiscrepancies_noEvent() {
+        org.springframework.context.ApplicationEventPublisher publisher =
+                mock(org.springframework.context.ApplicationEventPublisher.class);
+        ReconciliationFileService serviceWithPublisher = new ReconciliationFileService(
+                paymentOrderRepository, fileRecordRepository,
+                reconciliationEngine, discrepancyResolutionService, publisher);
+
+        LocalDate date = LocalDate.of(2026, 10, 8);
+        ReconciliationFileRecord record = new ReconciliationFileRecord();
+        record.setId(78L);
+        record.setMerchantId(MERCHANT_ID);
+        when(fileRecordRepository.save(any(ReconciliationFileRecord.class))).thenReturn(record);
+        when(paymentOrderRepository.findByMerchantId(MERCHANT_ID)).thenReturn(List.of());
+        when(reconciliationEngine.parseCsvContent(anyString())).thenReturn(List.of());
+
+        ReconciliationDiffReport report = new ReconciliationDiffReport();
+        report.setMatchedCount(5);
+        report.setDiscrepancies(List.of());
+        when(reconciliationEngine.reconcile(any(), any(), any(), any(), any())).thenReturn(report);
+
+        serviceWithPublisher.runDailyReconciliation(MERCHANT_ID, "# header\n", date);
+
+        verify(publisher, never()).publishEvent(any(Object.class));
+    }
 }
