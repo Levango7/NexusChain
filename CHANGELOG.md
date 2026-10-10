@@ -2,6 +2,40 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [2.57.0] - 2026-10-11
+
+### 补偿资金路径真实化：内部调账接通账本 + 长款双重动账防护
+
+**背景**：`AutoCompensationService.executeRealCompensation` 此前直接抛
+`UnsupportedOperationException`（TODO「接真实渠道退款接口和内部调账接口」）—— 即
+"对账差错 → 资金补偿"链路在**真实模式下从未真正执行过**（sandbox 写 `SIMULATED_*` 引用，
+真实模式永远 FAILED）。
+
+- **INTERNAL_ADJUST（内部调账）真实实现**：调 `AccountService.depositWithType` /
+  `withdrawWithType`（`operationType=RECON_ADJUST`，reference `AUTO_COMP_<记录ID>`，
+  可追溯）；**方向严格沿用自动对账路径的权威映射**
+  （`ReconciliationAdjustmentService#determineAdjustmentType`）：短款 → 扣账；
+  金额不一致 → 渠道金额 > 内部则加钱、否则扣账；其余（含长款）→ 加钱。
+  方向不在本服务重新发明，避免出现第二套语义。
+- **REFUND（长款）显式拒绝 + 双重动账防护**：审计发现**同一差错类型在两处语义相反** ——
+  `ReconciliationAdjustmentService` 判「渠道多收 → 商户**加钱**（CREDIT_ADJUST）」
+  （v2.55.0 起经事件驱动自动执行），而本服务原判「→ 渠道**退款**（REFUND）」。
+  两者若都执行，同一差错会被**双向动账**。故本路径拒绝执行并给出明确原因
+  （落 FAILED、零资金动作、不留下任何退款引用），渠道退款的真实语义**待业务拍板后再启用**。
+- **fail-closed**：账本服务未注入（旧装配/单测）→ 拒绝执行，不静默成功。
+
+**测试**：新增 `AutoCompensationRealExecTest` **6 例**（短款扣账 / 差额加钱 / 差额扣账 /
+长款拒绝且零资金动作 / 账本缺失 fail-closed / sandbox 不受影响）；
+`reconciliation` 包 **134 用例 0 失败**。
+
+**同批勘测结论（不在本批实现，需拍板）**：
+- 审计清单中的「提现失败释放冻结资金」**前提不成立** —— 仓库内不存在冻结/持有状态
+  （wallet `CustodyBalanceEntity` 无 frozen 列；提现审批全程不动资金，扣款发生在执行阶段），
+  照原文实现会写出虚假"解冻"逻辑。
+- 真问题另有一处：`AutoWithdrawService`（网关"自动提现"）**只扣商户账本余额、不做任何出款动作**
+  （不调 wallet-service、不发链上交易）—— 属产品级语义缺口（是否接真实出款需拍板），
+  未擅自实现，已在 CHANGELOG 与代码注释留档。
+
 ## [2.56.0] - 2026-10-09
 
 ### 打通桥的链上执行链路：mint/unlock 真广播 + 不可上链时 fail-closed

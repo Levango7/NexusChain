@@ -46,10 +46,29 @@ public class AutoCompensationService {
     private final CompensationRecordRepository compensationRepository;
     private final ReconciliationDiscrepancyRepository discrepancyRepository;
 
+    /**
+     * 商户账本服务（内部调账用；可空 = 旧装配/单测）。
+     *
+     * <p>P0 修复（2026-10-11）：真实模式的 INTERNAL_ADJUST 此前直接抛
+     * {@code UnsupportedOperationException}（"差错 → 补偿"链路从未真正执行过）。
+     * 现按 {@code ReconciliationAdjustmentService} 的**权威方向映射**调账：
+     * 短款 → 扣账（DEBIT）、金额不一致 → 按差额方向。方向映射不在此处重新发明。</p>
+     */
+    private final org.nexus.gateway.account.AccountService accountService;
+
+    /** 测试便捷构造：无账本服务（真实模式将被 fail-closed 拒绝）。 */
     public AutoCompensationService(CompensationRecordRepository compensationRepository,
                                     ReconciliationDiscrepancyRepository discrepancyRepository) {
+        this(compensationRepository, discrepancyRepository, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public AutoCompensationService(CompensationRecordRepository compensationRepository,
+                                    ReconciliationDiscrepancyRepository discrepancyRepository,
+                                    org.nexus.gateway.account.AccountService accountService) {
         this.compensationRepository = compensationRepository;
         this.discrepancyRepository = discrepancyRepository;
+        this.accountService = accountService;
     }
 
     // ==================== 自动补偿创建 ====================
@@ -281,12 +300,95 @@ public class AutoCompensationService {
     }
 
     /**
-     * 真实模式执行补偿（预留接口，当前未实现具体逻辑）。
+     * 真实模式执行补偿（P0 修复 2026-10-11）。
+     *
+     * <h3>INTERNAL_ADJUST（内部调账）—— 真实实现</h3>
+     * <p>按 {@code ReconciliationAdjustmentService} 的**权威方向映射**调商户账本
+     * （该服务是自动对账路径的执行者，方向语义以它为准，此处不重新发明）：</p>
+     * <ul>
+     *   <li>SHORT_AMOUNT（短款：内部多记）→ 扣账（{@code withdrawWithType}）</li>
+     *   <li>AMOUNT_MISMATCH → 渠道金额 &gt; 内部金额 → 加钱；否则扣钱</li>
+     *   <li>其余（含 LONG_AMOUNT）→ 加钱（长款=渠道多收，商户应加钱）</li>
+     * </ul>
+     * <p>金额沿用 {@link #determineCompensationAmount}（与调账服务的金额口径一致）；
+     * 操作类型 {@code RECON_ADJUST}，reference {@code AUTO_COMP_<补偿记录ID>}（可追溯、可幂等）。</p>
+     *
+     * <h3>REFUND（渠道退款）—— 显式拒绝，防重复动账</h3>
+     * <p>{@code LONG_AMOUNT} 在本服务被映射为 REFUND，但同一类型在自动对账路径
+     * （{@code ReconciliationAdjustmentService}）已被映射为 <b>CREDIT_ADJUST（商户加钱）</b>
+     * —— 两者语义相反。若此处再走"渠道退款"，同一差错会被**双向动账**。
+     * 因此本路径拒绝执行并给出明确原因（落 FAILED，可人工核对），
+     * 渠道退款的真实实现需先由业务拍板"长款究竟加钱还是退款"。</p>
+     *
+     * <h3>fail-closed</h3>
+     * <p>账本服务未注入（旧装配/单测）→ 拒绝执行，不静默成功。</p>
      */
     private void executeRealCompensation(CompensationRecord record) {
-        // TODO: 接入真实渠道退款接口和内部调账接口
-        // 当前阶段所有环境均为 sandbox，此处不会被执行
-        throw new UnsupportedOperationException("真实模式补偿执行尚未实现");
+        if (record.getCompensationType() == CompensationRecord.CompensationType.REFUND) {
+            // 业务决策（2026-10-11 已拍板）：长款走**渠道退款**——平台是中间机构，
+            // 非自有资金应原路退回，而非计入商户余额。
+            //
+            // 落地前置未齐，故仍 fail-closed 拒绝（不动账、不伪造成功）：
+            //   ① 差错记录（ReconciliationDiscrepancy）**没有渠道归属字段**，无法判定
+            //      wechat/alipay/其它，也就无法选连接器；
+            //   ② 渠道退款接口与凭证未接入（需要"原渠道交易号 + 商户退款单号 + 退款金额"）。
+            //   ③ 与自动对账路径的冲突仍需业务确认：ReconciliationAdjustmentService 对
+            //      同一 LONG_AMOUNT 会做 CREDIT_ADJUST（给商户加钱）——若两者同跑将双向动账。
+            //      渠道退款落地时必须同时关闭/改造该路径（见 PR #69 讨论）。
+            throw new IllegalStateException(
+                    "长款渠道退款暂不可执行（决策已定为渠道退款，缺前置）：差错记录无渠道归属字段 + "
+                            + "渠道退款接口/凭证未接入；且需先与自动调账路径(CREDIT_ADJUST)互斥。"
+                            + "请人工核对 discrepancyId=" + record.getDiscrepancyId());
+        }
+
+        if (accountService == null) {
+            throw new IllegalStateException(
+                    "内部调账补偿拒绝执行：AccountService 未注入（fail-closed，不静默成功）");
+        }
+
+        ReconciliationDiscrepancy discrepancy = discrepancyRepository
+                .findById(record.getDiscrepancyId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "内部调账补偿拒绝执行：关联差错不存在 discrepancyId=" + record.getDiscrepancyId()));
+
+        BigDecimal amount = record.getAmount();
+        if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalStateException(
+                    "内部调账补偿拒绝执行：金额非法 amount=" + amount);
+        }
+
+        String reference = "AUTO_COMP_" + record.getId();
+        if (shouldCredit(discrepancy)) {
+            accountService.depositWithType(record.getMerchantId(), amount, reference,
+                    org.nexus.gateway.account.AccountOperationType.RECON_ADJUST);
+            log.info("[AutoCompensation] 真实调账（加钱）成功: recordId={}, merchantId={}, amount={}",
+                    record.getId(), record.getMerchantId(), amount);
+        } else {
+            accountService.withdrawWithType(record.getMerchantId(), amount, reference,
+                    org.nexus.gateway.account.AccountOperationType.RECON_ADJUST);
+            log.info("[AutoCompensation] 真实调账（扣钱）成功: recordId={}, merchantId={}, amount={}",
+                    record.getId(), record.getMerchantId(), amount);
+        }
+        record.setAccountTransactionRef(reference);
+    }
+
+    /**
+     * 方向判定 —— 与 {@code ReconciliationAdjustmentService#determineAdjustmentType} 严格同款。
+     *
+     * <p>短款 → 扣账；金额不一致 → 渠道 &gt; 内部则加钱、否则扣账；其余（长款等）→ 加钱。</p>
+     */
+    private boolean shouldCredit(ReconciliationDiscrepancy discrepancy) {
+        switch (discrepancy.getDiscrepancyType()) {
+            case SHORT_AMOUNT:
+                return false;
+            case AMOUNT_MISMATCH:
+                if (discrepancy.getChannelAmount() != null && discrepancy.getInternalAmount() != null) {
+                    return discrepancy.getChannelAmount().compareTo(discrepancy.getInternalAmount()) > 0;
+                }
+                return true;
+            default:
+                return true;
+        }
     }
 
     /**
