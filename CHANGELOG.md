@@ -2,6 +2,37 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [2.60.0] - 2026-10-11
+
+### 长款渠道退款落地（第 3/3 步）：按渠道交易号原路退回 —— 长款闭环打通
+
+**背景**：前两步已把"互斥"（不再给商户加钱）与"渠道归属"（差错带 `channel_type`）落地；
+本步补上**执行出口**。勘测发现现有连接器的 `refund()` 都把标识当 **商户订单号
+（`out_trade_no`）**用，而对账长款手里只有**渠道侧交易号**（对账单解析所得）——
+两者不是一回事，原路退回必须按渠道交易号发起。
+
+- **新增 `ChannelRefundService`**：按渠道交易号原路退回。
+  - **WECHAT 已实现**：微信 V3 `POST /v3/refund/domestic/refunds`，请求体
+    `{transaction_id, out_refund_no, amount:{refund,total,currency}}`（金额元→分），
+    Authorization 用商户 RSA 私钥签名（复用与回调验签同一签名工具）；
+  - **ALIPAY 未接入 → fail-closed**：`alipay.trade.refund` 按 `trade_no` 退款属独立批次，
+    显式报错而不是猜；
+  - **dry-run**（sandbox 或私钥未配置）：返回模拟退款单号，**不发起真实请求**。
+- **`AutoCompensationService` REFUND 分支从"拒绝"改为真执行**：
+  取差错的 `channelType` + `transactionId` + `channelAmount` 发起退款；
+  **幂等键 = `AUTO_REFUND_<补偿记录ID>`**（同一补偿可重跑不会重复退）；
+  渠道/交易号缺失、渠道不支持、接口失败 → 异常上抛置 FAILED（绝不伪造成功）。
+- **互斥保证**（1/3 步已完成，本步与之配套）：`ReconciliationAdjustmentService`
+  不再对 `LONG_AMOUNT` 做 CREDIT_ADJUST，因此这里执行退款时**不会双向动账**。
+
+**测试**：`ChannelRefundServiceTest` 5 例（dry-run / 缺渠道 / 缺交易号 / 支付宝未接 / 未知渠道）；
+`AutoCompensationRealExecTest` 增补 2 例（渠道服务缺失 fail-closed、渠道退款成功落单号且
+**不碰商户账本**）——合计 **20 用例 0 失败**。
+
+**长款闭环至此打通**：对账发现长款 → 差错带渠道归属 → 补偿记录生成 → 按渠道交易号原路退回 →
+幂等可重跑。剩余的口径问题只剩一个：**存量差错无渠道归属**（V94 之前的数据），
+按"缺渠道归属"人工核对处理，不猜。
+
 ## [2.59.0] - 2026-10-11
 
 ### 长款渠道退款落地（第 2/3 步）：差错记录补「渠道归属」（V94 + 全链打标）

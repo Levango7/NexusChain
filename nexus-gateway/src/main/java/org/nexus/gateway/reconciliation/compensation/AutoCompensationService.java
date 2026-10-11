@@ -56,19 +56,36 @@ public class AutoCompensationService {
      */
     private final org.nexus.gateway.account.AccountService accountService;
 
-    /** 测试便捷构造：无账本服务（真实模式将被 fail-closed 拒绝）。 */
+    /**
+     * 渠道原路退回服务（P0 修复 2026-10-11，可空）。
+     *
+     * <p>长款走渠道退款的执行出口：按渠道交易号原路退回（见 {@link ChannelRefundService}）。
+     * null（旧装配/单测）时真实模式拒绝执行，不静默成功。</p>
+     */
+    private final ChannelRefundService channelRefundService;
+
+    /** 测试便捷构造：无账本、无渠道退款服务（真实模式将被 fail-closed 拒绝）。 */
     public AutoCompensationService(CompensationRecordRepository compensationRepository,
                                     ReconciliationDiscrepancyRepository discrepancyRepository) {
-        this(compensationRepository, discrepancyRepository, null);
+        this(compensationRepository, discrepancyRepository, null, null);
+    }
+
+    /** 测试构造：有账本、无渠道退款服务。 */
+    public AutoCompensationService(CompensationRecordRepository compensationRepository,
+                                    ReconciliationDiscrepancyRepository discrepancyRepository,
+                                    org.nexus.gateway.account.AccountService accountService) {
+        this(compensationRepository, discrepancyRepository, accountService, null);
     }
 
     @org.springframework.beans.factory.annotation.Autowired
     public AutoCompensationService(CompensationRecordRepository compensationRepository,
                                     ReconciliationDiscrepancyRepository discrepancyRepository,
-                                    org.nexus.gateway.account.AccountService accountService) {
+                                    org.nexus.gateway.account.AccountService accountService,
+                                    ChannelRefundService channelRefundService) {
         this.compensationRepository = compensationRepository;
         this.discrepancyRepository = discrepancyRepository;
         this.accountService = accountService;
+        this.channelRefundService = channelRefundService;
     }
 
     // ==================== 自动补偿创建 ====================
@@ -327,18 +344,35 @@ public class AutoCompensationService {
         if (record.getCompensationType() == CompensationRecord.CompensationType.REFUND) {
             // 业务决策（2026-10-11 已拍板）：长款走**渠道退款**——平台是中间机构，
             // 非自有资金应原路退回，而非计入商户余额。
+            // 3/3 步：按"渠道归属 + 渠道交易号"真实发起原路退回
+            // （互斥已在 1/3 步完成：ReconciliationAdjustmentService 不再对 LONG_AMOUNT 做
+            //  CREDIT_ADJUST，不会与这里双向动账）。
             //
-            // 落地前置未齐，故仍 fail-closed 拒绝（不动账、不伪造成功）：
-            //   ① 差错记录（ReconciliationDiscrepancy）**没有渠道归属字段**，无法判定
-            //      wechat/alipay/其它，也就无法选连接器；
-            //   ② 渠道退款接口与凭证未接入（需要"原渠道交易号 + 商户退款单号 + 退款金额"）。
-            //   ③ 与自动对账路径的冲突仍需业务确认：ReconciliationAdjustmentService 对
-            //      同一 LONG_AMOUNT 会做 CREDIT_ADJUST（给商户加钱）——若两者同跑将双向动账。
-            //      渠道退款落地时必须同时关闭/改造该路径（见 PR #69 讨论）。
-            throw new IllegalStateException(
-                    "长款渠道退款暂不可执行（决策已定为渠道退款，缺前置）：差错记录无渠道归属字段 + "
-                            + "渠道退款接口/凭证未接入；且需先与自动调账路径(CREDIT_ADJUST)互斥。"
-                            + "请人工核对 discrepancyId=" + record.getDiscrepancyId());
+            // fail-closed 边界：渠道缺失 / 交易号缺失 / 渠道不支持 / 接口失败 → 异常上抛，
+            // 由 executeCompensation 捕获置 FAILED 并记录原因（绝不伪造成功）。
+            if (channelRefundService == null) {
+                throw new IllegalStateException(
+                        "长款渠道退款拒绝执行：ChannelRefundService 未注入（fail-closed，不静默成功）");
+            }
+            ReconciliationDiscrepancy discrepancyRefund = discrepancyRepository
+                    .findById(record.getDiscrepancyId())
+                    .orElseThrow(() -> new IllegalStateException(
+                            "长款渠道退款拒绝执行：关联差错不存在 discrepancyId="
+                                    + record.getDiscrepancyId()));
+
+            // 幂等键：同一补偿记录派生同一商户退款单号 → 补偿可重跑不会重复退
+            String outRefundNo = "AUTO_REFUND_" + record.getId();
+            String refundRef = channelRefundService.refundByChannelTransaction(
+                    discrepancyRefund.getChannelType(),
+                    discrepancyRefund.getTransactionId(),
+                    discrepancyRefund.getChannelAmount(),
+                    record.getAmount(),
+                    outRefundNo);
+            record.setChannelRefundRef(refundRef);
+            log.info("[AutoCompensation] 长款渠道退款成功: recordId={}, channel={}, channelTxId={}, refundRef={}",
+                    record.getId(), discrepancyRefund.getChannelType(),
+                    discrepancyRefund.getTransactionId(), refundRef);
+            return;
         }
 
         if (accountService == null) {
