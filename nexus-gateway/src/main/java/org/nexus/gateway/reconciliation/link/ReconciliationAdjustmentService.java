@@ -54,6 +54,14 @@ public class ReconciliationAdjustmentService {
     private final AccountService accountService;
     private final ApplicationEventPublisher eventPublisher;
 
+    /** 审计（P0 修复 2026-10-11，setter 注入）：调账是资金动作，必须可追查。 */
+    private org.nexus.gateway.audit.AuditLogService auditLogService;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setAuditLogService(org.nexus.gateway.audit.AuditLogService auditLogService) {
+        this.auditLogService = auditLogService;
+    }
+
     public ReconciliationAdjustmentService(
             ReconciliationAdjustmentRepository adjustmentRepository,
             AccountService accountService,
@@ -280,9 +288,30 @@ public class ReconciliationAdjustmentService {
             adjustment.setExecuted(true);
             adjustment.setExecutedAt(LocalDateTime.now());
             adjustmentRepository.save(adjustment);
+
+            // 审计（P0 修复 2026-10-11）：资金调整必须可追查——哪笔差错、往哪个方向、多少钱
+            if (auditLogService != null) {
+                try {
+                    auditLogService.recordAdjust(adjustment.getMerchantId(), reference,
+                            adjustment.getAdjustmentType() == AdjustmentType.CREDIT_ADJUST
+                                    ? "RECON_ADJUST_CREDIT" : "RECON_ADJUST_DEBIT",
+                            adjustment.getAmount() == null ? null : adjustment.getAmount().toPlainString());
+                } catch (RuntimeException e) {
+                    log.warn("Recon adjust audit write failed (ignored): id={}, error={}",
+                            adjustment.getId(), e.getMessage());
+                }
+            }
         } catch (Exception e) {
             log.error("对账调整执行失败: adjustmentId={}, merchantId={}, amount={}, error={}",
                     adjustment.getId(), adjustment.getMerchantId(), adjustment.getAmount(), e.getMessage(), e);
+            if (auditLogService != null) {
+                try {
+                    auditLogService.recordAdjust(adjustment.getMerchantId(), reference,
+                            "RECON_ADJUST_FAILED", null);
+                } catch (RuntimeException ignored) {
+                    // 审计失败绝不影响原异常抛出
+                }
+            }
             throw e;
         }
     }
