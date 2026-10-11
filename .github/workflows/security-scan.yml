@@ -32,6 +32,7 @@ jobs:
   # 1. Trivy 文件系统扫描（Gradle 依赖 + 源码配置）+ CycloneDX SBOM
   # ============================================================
   trivy-fs-scan:
+    timeout-minutes: 15  # 观测峰值 1.1 min
     name: Trivy Filesystem Scan + SBOM
     runs-on: ubuntu-26.04
     permissions:
@@ -117,6 +118,7 @@ jobs:
   # 2. Trivy Docker 镜像扫描
   # ============================================================
   trivy-docker-scan:
+    timeout-minutes: 30  # 观测峰值 5.5 min；含新增重试余量
     if: github.event_name != 'pull_request'  # PR 不跑（需构建镜像/起栈，成本高）
     name: Trivy Docker Image Scan (${{ matrix.module }})
     runs-on: ubuntu-26.04
@@ -148,8 +150,24 @@ jobs:
         # 所有模块统一用 repo 根目录作构建上下文（-f 指定 Dockerfile 路径）。
         # Java 模块需根级 gradlew/build.gradle/project() 依赖；
         # Rust 模块 Dockerfile 内 COPY . . 后 WORKDIR 切到子目录。
+        #
+        # 2026-10-11 韧性加固：基础镜像拉取走 Docker Hub 认证端点 auth.docker.io，
+        # 该端点会瞬时不可用（实测 master d194fabe：`failed to fetch oauth token:
+        # unexpected status from POST request to https://auth.docker.io/token`），
+        # docker build 立即 exit 1 → 12 个矩阵 job 中的 2 个变红。此失败与代码/CVE
+        # 无关，属基础设施抖动，却会污染「红 = 代码问题」这一信号。
+        # 故对构建加**有界重试**（3 次 / 间隔 15s）；3 次仍失败才判真实失败。
         run: |
-          docker build -t ${{ matrix.module }}:scan -f ./${{ matrix.module }}/Dockerfile .
+          for attempt in 1 2 3; do
+            if docker build -t ${{ matrix.module }}:scan -f ./${{ matrix.module }}/Dockerfile .; then
+              echo "::notice::docker build 成功（第 ${attempt} 次尝试）"
+              exit 0
+            fi
+            echo "::warning::docker build 第 ${attempt} 次失败（疑似 registry 抖动），15s 后重试"
+            sleep 15
+          done
+          echo "::error::docker build 连续 3 次失败——判定为真实失败"
+          exit 1
 
       - name: Trivy 镜像扫描 → SARIF
         # 钉 commit sha 提升供应链安全（v0.20.0 → b2933f565dbc598b29947660e66259e3c7bc8561）
@@ -202,6 +220,7 @@ jobs:
   #     所以脚本对"无命中"只说"作用域存疑"，不说"请删除"。
   # ============================================================
   trivyignore-staleness:
+    timeout-minutes: 15  # 观测峰值 1.2 min
     name: Trivy 豁免时效复核（不阻断）
     runs-on: ubuntu-26.04
     # 与上面 2. 的镜像矩阵不同，本 job **在 PR 上也跑**：它不构建仓库镜像，只拉两个
@@ -340,6 +359,7 @@ jobs:
   # 与其静默跳过让人误以为扫过了，不如明确报错。
   # ============================================================
   owasp-dependency-check:
+    timeout-minutes: 25  # 观测峰值 7.4 min
     # ⚠️ 「永远上报」试运行（TEMP：2026-10-01 起，评估截止 2026-10-15）——
     # 目的：实测本 job 在 **PR 上真跑并上报真实状态** 的成本 / 稳定性 / 误报，为
     # 「是否设为 required check」提供数据（审计 §13.10、策略文档「永远上报试运行」小节）。
@@ -541,6 +561,7 @@ jobs:
   # 排除测试代码（spotbugsTest.enabled=false）和 protobuf 生成代码
   # ============================================================
   sast-spotbugs:
+    timeout-minutes: 15  # 观测峰值 2.6 min
     name: SAST - SpotBugs + FindSecBugs
     runs-on: ubuntu-26.04
     permissions:
@@ -623,6 +644,7 @@ jobs:
   # 装不上就是红；豁免走 .cargo/audit.toml 逐项附依据，不靠 continue-on-error 静默放行。
   # ============================================================
   cargo-audit:
+    timeout-minutes: 15  # 观测峰值 3.3 min
     name: Cargo Audit (Rust deps)
     runs-on: ubuntu-26.04
     permissions:
@@ -654,6 +676,7 @@ jobs:
   # 失败即阻断流水线（exit-code 1），防止密钥泄漏合入 master
   # ============================================================
   gitleaks-scan:
+    timeout-minutes: 10  # 观测峰值 0.2 min
     name: Gitleaks Secret Scan
     runs-on: ubuntu-26.04
     permissions:
@@ -686,6 +709,7 @@ jobs:
   # docs/dependency-check-update-policy.md 的 ⚠ 块）。
   # ============================================================
   dast-zap-baseline:
+    timeout-minutes: 25  # 观测峰值 7.7 min
     if: github.event_name != 'pull_request'  # PR 不跑（需构建镜像/起栈，成本高）
     name: DAST - OWASP ZAP Baseline (gateway)
     runs-on: ubuntu-26.04
@@ -790,6 +814,7 @@ jobs:
   # SLA：P0(CRITICAL) 24h / P1(HIGH) 7d / P2(MEDIUM) 30d（见 docs/security-sla.md）
   # ============================================================
   security-issue-triage:
+    timeout-minutes: 10  # 观测峰值 0.1 min
     name: Security Issue Triage
     runs-on: ubuntu-26.04
     needs: [trivy-fs-scan]

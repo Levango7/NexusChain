@@ -152,6 +152,7 @@ jobs:
   # 2. 创建 GitHub Release（从 CHANGELOG.md 提取对应版本段落）
   # ============================================================
   github-release:
+    timeout-minutes: 10  # 观测峰值 0.2 min
     name: GitHub Release
     # 试跑不创建 Release（避免产出指向 :dryrun 镜像的正式 Release）
     if: github.event_name == 'push' && !inputs.dry_run
@@ -207,6 +208,7 @@ jobs:
   # 3. 打包并推送 Helm Chart 至 GHCR OCI Registry
   # ============================================================
   helm-publish:
+    timeout-minutes: 15  # 观测峰值 0.1 min
     name: Helm Chart Publish
     if: github.event_name == 'push' && !inputs.dry_run
     needs: build-images
@@ -242,6 +244,7 @@ jobs:
   # 4. 自动部署至 staging 环境
   # ============================================================
   deploy-staging:
+    timeout-minutes: 30  # 观测 0.1 min（多为 dry-run），留足真实部署余量
     name: Deploy to Staging
     if: github.event_name == 'push' && !inputs.dry_run
     needs: [github-release, helm-publish]
@@ -308,6 +311,7 @@ jobs:
   # 5. 部署至 prod 环境（需 GitHub environment protection approval）
   # ============================================================
   deploy-prod:
+    timeout-minutes: 30  # 同上
     name: Deploy to Production
     if: github.event_name == 'push' && !inputs.dry_run
     needs: deploy-staging
@@ -387,6 +391,7 @@ jobs:
   #           如需回退 schema 须由 DBA 介入执行 flyway undo 或手动恢复，并评估数据兼容性。
   # ---------------------------------------------------------------------------
   rollback:
+    timeout-minutes: 30  # 无历史数据，取宽裕值
     name: Rollback (${{ github.event.inputs.environment }})
     # 仅手动触发且**非试跑**时执行回滚
     if: github.event_name == 'workflow_dispatch' && !inputs.dry_run
