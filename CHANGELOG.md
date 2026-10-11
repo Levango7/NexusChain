@@ -2,6 +2,29 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [2.64.0] - 2026-10-11
+
+### 审计埋点扩展到四条资金主路径（v2.63.0 声明余量的兑现）
+
+v2.63.0 只把**支付确认**接进审计，本批把资金动作面补齐：
+
+| 路径 | 埋点 | 关键事件 |
+|---|---|---|
+| **退款** | `DefaultRefundApprovalService` 4 个节点 | `REFUND_APPROVED` / `REFUND_REJECTED` / `REFUND_EXECUTED`（带 txHash）/ `REFUND_EXECUTION_FAILED` |
+| **对账调账** | `ReconciliationAdjustmentService.executeAdjustment` 成功/失败 | `RECON_ADJUST_CREDIT` / `RECON_ADJUST_DEBIT` / `RECON_ADJUST_FAILED`，带 `RECON_ADJ_<id>` 引用（与账本流水可交叉核对） |
+| **自动出款** | `AutoWithdrawService` 三段式各节点 | `AUTO_WITHDRAW_EXECUTED`（带 payoutRef）/ `AUTO_WITHDRAW_PAYOUT_FAILED_REFUNDED` / `AUTO_WITHDRAW_NO_PAYOUT_ACCOUNT` |
+| **渠道退款** | `ChannelRefundService` 调用点 | `CHANNEL_REFUND_EXECUTED`，带渠道 + 渠道交易号 + 退款单号（资金出口可追查） |
+
+**共同设计（三条不变量）**：
+
+1. **旁路**：审计写失败（如 DB 抖动）**绝不阻断资金流程**——退款/出款/调账都try-catch 兜住并 WARN 留痕；
+2. **可交叉核对**：调账写 `RECON_ADJ_<id>`、退款写 order、渠道退款带渠道交易号——审计事件和账本流水能对上；
+3. **fail-closed 也留痕**：`AUTO_WITHDRAW_NO_PAYOUT_ACCOUNT` 这类"因缺出款账户而拒绝扣账"的事件同样落审计（风控/合规复盘要看到"系统拒绝过什么"）。
+
+**诚实声明（未做）**：wallet-service（提现审批与执行侧）**没有接入审计**——它是独立模块，没有审计设施；跨服务审计需要事件总线或独立审计表，属"审计基础设施跨服务"独立课题，未在本批过度设计。当前提现侧的凭证仍只有其自身日志。
+
+**测试**：新增 `MoneyPathAuditTest` **5 例**（四条路径各一例 + **旁路属性**：落库失败不得阻断调用方）；`audit` + `refund` 相关包 **29 例全过、无回归**。
+
 ## [2.63.1] - 2026-10-11
 
 ### 紧急修复：两处构造器装配缺陷导致网关在 compose 里起不来（CI k6 冒烟三连红）

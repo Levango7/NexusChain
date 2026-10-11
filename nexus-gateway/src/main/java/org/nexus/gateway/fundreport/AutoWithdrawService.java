@@ -51,6 +51,26 @@ public class AutoWithdrawService {
     private final MerchantPayoutAccountService payoutAccountService;
     private final PayoutExecutor payoutExecutor;
 
+    /** 审计（P0 修复 2026-10-11，setter 注入）：出款是资金动作。 */
+    private org.nexus.gateway.audit.AuditLogService auditLogService;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setAuditLogService(org.nexus.gateway.audit.AuditLogService auditLogService) {
+        this.auditLogService = auditLogService;
+    }
+
+    /** 写出款审计（旁路，失败不影响业务流程）。 */
+    private void audit(String action, Long merchantId, String detail) {
+        if (auditLogService == null) {
+            return;
+        }
+        try {
+            auditLogService.recordPayout(merchantId, action, detail);
+        } catch (RuntimeException e) {
+            log.warn("Payout audit write failed (ignored): action={}, error={}", action, e.getMessage());
+        }
+    }
+
     /**
      * 唯一构造器（2026-10-11：删除 3 参兼容重载）。
      *
@@ -248,6 +268,8 @@ public class AutoWithdrawService {
                 log.warn("自动提现跳过：商户无生效出款账户（不扣账，fail-closed）: merchantId={}",
                         rule.getMerchantId());
                 result.put("reason", "NO_PAYOUT_ACCOUNT");
+                audit("AUTO_WITHDRAW_NO_PAYOUT_ACCOUNT", rule.getMerchantId(),
+                        "amount=" + withdrawAmount.toPlainString());
                 return result;
             }
         }
@@ -272,6 +294,8 @@ public class AutoWithdrawService {
                             rule.getMerchantId(), withdrawAmount, e.getMessage());
                     result.put("reason", "PAYOUT_FAILED_REFUNDED");
                     result.put("error", e.getMessage());
+                    audit("AUTO_WITHDRAW_PAYOUT_FAILED_REFUNDED", rule.getMerchantId(),
+                            "amount=" + withdrawAmount.toPlainString() + ", refunded=true");
                     return result;
                 }
             }
@@ -290,6 +314,8 @@ public class AutoWithdrawService {
 
             log.info("自动提现成功: merchantId={}, amount={}, balanceAfter={}, payoutRef={}",
                     rule.getMerchantId(), withdrawAmount, updatedAccount.getBalance(), payoutRef);
+            audit("AUTO_WITHDRAW_EXECUTED", rule.getMerchantId(),
+                    "amount=" + withdrawAmount.toPlainString() + ", payoutRef=" + payoutRef);
 
         } catch (Exception e) {
             log.error("自动提现执行失败: merchantId={}, error={}", rule.getMerchantId(), e.getMessage());

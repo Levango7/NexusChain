@@ -93,6 +93,67 @@ public class AuditLogService {
         record(event);
     }
 
+    /**
+     * 记录退款审计（P0 修复 2026-10-11）。
+     *
+     * <p>退款是资金出账，四个关键节点都要留痕：审批通过 / 审批拒绝 / 执行成功（含链上
+     * 哈希，资金出口可追查）/ 执行失败（资金操作失败同样要留痕）。</p>
+     *
+     * @param orderId 订单号（资源标识）
+     * @param action  动作：REFUND_APPROVED / REFUND_REJECTED / REFUND_EXECUTED /
+     *                REFUND_EXECUTION_FAILED
+     * @param detail  附加信息（审批人 / txHash / 错误摘要）
+     */
+    /**
+     * 记录调账审计（P0 修复 2026-10-11）。
+     *
+     * @param merchantId 商户 ID
+     * @param reference  幂等引用（RECON_ADJ_<id>，与账本流水一致，可交叉核对）
+     * @param action     RECON_ADJUST_CREDIT（加钱）/ RECON_ADJUST_DEBIT（扣钱）/ RECON_ADJUST_FAILED
+     * @param amount     金额（失败时可为 null）
+     */
+    /** 记录出款审计（P0 修复 2026-10-11，含"无出款账户而拒绝扣账"的 fail-closed 事件）。 */
+    public void recordPayout(Long merchantId, String action, String detail) {
+        AuditEvent event = new AuditEvent();
+        event.setActor("system");
+        event.setAction(action);
+        event.setResource("merchant:" + merchantId);
+        event.setDetail(detail);
+        event.setMerchantId(merchantId);
+        record(event);
+    }
+
+    /** 记录渠道退款审计（P0 修复 2026-10-11：原路退回的资金出口必须可追查）。 */
+    public void recordChannelRefund(Long merchantId, String channelType, String channelTxId,
+                                     String amount, String refundRef) {
+        AuditEvent event = new AuditEvent();
+        event.setActor("system");
+        event.setAction("CHANNEL_REFUND_EXECUTED");
+        event.setResource("channel:" + channelType + ":" + channelTxId);
+        event.setDetail("amount=" + amount + ", refundRef=" + refundRef);
+        event.setMerchantId(merchantId);
+        record(event);
+    }
+
+    public void recordAdjust(Long merchantId, String reference, String action, String amount) {
+        AuditEvent event = new AuditEvent();
+        event.setActor("system");
+        event.setAction(action);
+        event.setResource("adjustment:" + reference);
+        event.setDetail("amount=" + amount);
+        event.setMerchantId(merchantId);
+        record(event);
+    }
+
+    public void recordRefund(String orderId, String action, String detail) {
+        AuditEvent event = new AuditEvent();
+        event.setActor("system");
+        event.setAction(action);
+        event.setResource("order:" + orderId);
+        event.setDetail(detail);
+        record(event);
+    }
+
     public void recordKeyAccess(Long merchantId, String operation, String ip) {
         AuditEvent event = new AuditEvent();
         event.setActor("merchant:" + merchantId);

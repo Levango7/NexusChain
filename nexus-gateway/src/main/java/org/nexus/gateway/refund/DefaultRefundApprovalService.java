@@ -56,6 +56,19 @@ public class DefaultRefundApprovalService implements RefundApprovalService {
                 DEFAULT_PLATFORM_REFUND_ADDRESS);
     }
 
+    /**
+     * 审计（P0 修复 2026-10-11，setter 注入）。
+     *
+     * <p>退款是资金出账，必须可追查（谁批的、哪笔单、多少金额、是否已上链）。
+     * 用 setter 注入：本类已有两个构造器，再加参数会重蹈"多构造器"的坑。</p>
+     */
+    private org.nexus.gateway.audit.AuditLogService auditLogService;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setAuditLogService(org.nexus.gateway.audit.AuditLogService auditLogService) {
+        this.auditLogService = auditLogService;
+    }
+
     @Autowired
     public DefaultRefundApprovalService(RefundRequestRepository refundRequestRepository,
                                         PaymentOrderRepository paymentOrderRepository,
@@ -137,6 +150,7 @@ public class DefaultRefundApprovalService implements RefundApprovalService {
 
         RefundRequest saved = refundRequestRepository.save(request);
         log.info("Refund approved: refundId={}, approver={}", refundId, approverId);
+        audit("REFUND_APPROVED", saved, "approver=" + approverId);
         return saved;
     }
 
@@ -159,6 +173,7 @@ public class DefaultRefundApprovalService implements RefundApprovalService {
         RefundRequest saved = refundRequestRepository.save(request);
         log.info("Refund rejected: refundId={}, approver={}, reason={}",
                 refundId, approverId, saved.getRejectionReason());
+        audit("REFUND_REJECTED", saved, "approver=" + approverId);
         return saved;
     }
 
@@ -195,10 +210,12 @@ public class DefaultRefundApprovalService implements RefundApprovalService {
             paymentOrderRepository.save(order);
 
             log.info("Refund executed: refundId={}, txHash={}", refundId, txHash);
+            audit("REFUND_EXECUTED", request, "txHash=" + txHash);
         } catch (RuntimeException e) {
             request.setStatus(RefundRequest.RefundStatus.FAILED);
             request.setRejectionReason("execution failed: " + e.getMessage());
             log.error("Refund execution failed: refundId={}", refundId, e);
+            audit("REFUND_EXECUTION_FAILED", request, "error=" + e.getMessage());
         }
         return refundRequestRepository.save(request);
     }
@@ -209,6 +226,19 @@ public class DefaultRefundApprovalService implements RefundApprovalService {
             throw new IllegalArgumentException("refundId is required");
         }
         return refundRequestRepository.findById(refundId).orElse(null);
+    }
+
+    /** 写审计（旁路：任何异常都不得阻断退款流程）。 */
+    private void audit(String action, RefundRequest request, String detail) {
+        if (auditLogService == null || request == null) {
+            return;
+        }
+        try {
+            auditLogService.recordRefund(String.valueOf(request.getOrderId()), action, detail);
+        } catch (RuntimeException e) {
+            log.warn("Refund audit write failed (ignored): action={}, refundId={}, error={}",
+                    action, request.getId(), e.getMessage());
+        }
     }
 
     /**

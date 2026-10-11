@@ -64,6 +64,14 @@ public class AutoCompensationService {
      */
     private final ChannelRefundService channelRefundService;
 
+    /** 审计（P0 修复 2026-10-11，setter 注入）。 */
+    private org.nexus.gateway.audit.AuditLogService auditLogService;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setAuditLogService(org.nexus.gateway.audit.AuditLogService auditLogService) {
+        this.auditLogService = auditLogService;
+    }
+
     /** 测试便捷构造：无账本、无渠道退款服务（真实模式将被 fail-closed 拒绝）。 */
     public AutoCompensationService(CompensationRecordRepository compensationRepository,
                                     ReconciliationDiscrepancyRepository discrepancyRepository) {
@@ -372,6 +380,17 @@ public class AutoCompensationService {
             log.info("[AutoCompensation] 长款渠道退款成功: recordId={}, channel={}, channelTxId={}, refundRef={}",
                     record.getId(), discrepancyRefund.getChannelType(),
                     discrepancyRefund.getTransactionId(), refundRef);
+            if (auditLogService != null) {
+                try {
+                    auditLogService.recordChannelRefund(record.getMerchantId(),
+                            discrepancyRefund.getChannelType(),
+                            discrepancyRefund.getTransactionId(),
+                            record.getAmount() == null ? null : record.getAmount().toPlainString(),
+                            refundRef);
+                } catch (RuntimeException ignored) {
+                    // 审计失败不阻断资金操作
+                }
+            }
             return;
         }
 
