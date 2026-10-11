@@ -2,6 +2,35 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [2.59.0] - 2026-10-11
+
+### 长款渠道退款落地（第 2/3 步）：差错记录补「渠道归属」（V94 + 全链打标）
+
+**背景**：长款走渠道退款（用户 2026-10-11 决策：平台是中间机构，非自有资金原路退回）
+必须知道"从哪来"，否则选不了连接器、也无法按原渠道交易号原路退回。
+勘测发现这条链**断在三处**：`ReconciliationDiscrepancy` 没有渠道字段；
+`ReconciliationEngine.reconcile()` 虽已接收 `channelType`（用于解析对账规则）却**不落盘到差错上**；
+调用方 `ReconciliationFileService` 对 `reconcile()` **一律传 `null`**。
+
+- **实体 + 迁移 V94**：`reconciliation_discrepancies` 新增 `channel_type`
+  （WECHAT/ALIPAY；NULL = 存量/未标注）。存量数据无法回溯（编码时已丢弃），置 NULL。
+- **引擎打标**：`createDiscrepancy(...)` 新增 `channelType` 参数并写入差错
+  （长款/短款两个构造点都打标）。
+- **服务透传**：`runDailyReconciliation` / `runReconciliation` 新增 `channelType` 参数
+  （保留 3 参/2 参兼容重载），并把渠道传给 `reconcile()`（此前两处硬编码 `null`）。
+- **调度器接上**：`DailyReconciliationScheduler` 把每轮循环里的渠道随对账一起传下去
+  （原本只用了下载、对账时丢弃）。
+- **未标注语义（fail-closed）**：`channelType == null` 视为"缺渠道归属"——
+  渠道退款**不得**凭猜测执行（人工核对）。
+
+**测试**：新增 2 例（引擎对长/短款都打标；`null` 时保持 `null`）；修正
+`DailyReconciliationSchedulerTest` 两例断言（调度器现在传渠道）；
+`reconciliation` 包 **137 用例 0 失败**。
+
+**余量（第 3/3 步）**：`AutoCompensationService` 的 REFUND 分支改为真执行——
+按 `channelType` 选连接器、按 `transactionId`（渠道交易号）原路退回，
+reference 用 `AUTO_REFUND_<补偿记录ID>` 保证幂等；仍不可用时保持 fail-closed。
+
 ## [2.58.0] - 2026-10-11
 
 ### 长款渠道退款落地（第 1/3 步）：与自动调账互斥，同一差错不再双向动账

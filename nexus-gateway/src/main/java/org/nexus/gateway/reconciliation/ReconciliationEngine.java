@@ -124,7 +124,7 @@ public class ReconciliationEngine {
                     ReconciliationDiscrepancy discrepancy = createDiscrepancy(
                             merchantId, reconciliationFileId,
                             ReconciliationDiscrepancy.DiscrepancyType.LONG_AMOUNT,
-                            txnId, channelRecord, null);
+                            txnId, channelRecord, null, channelType);
                     discrepancies.add(discrepancy);
                     if (channelRecord.getAmount() != null) {
                         totalDiscrepancyAmount = totalDiscrepancyAmount.add(channelRecord.getAmount());
@@ -160,7 +160,7 @@ public class ReconciliationEngine {
                 ReconciliationDiscrepancy discrepancy = createDiscrepancy(
                         merchantId, reconciliationFileId,
                         ReconciliationDiscrepancy.DiscrepancyType.SHORT_AMOUNT,
-                        orderNo, null, order);
+                        orderNo, null, order, channelType);
                 discrepancies.add(discrepancy);
                 if (order.getAmount() != null) {
                     totalDiscrepancyAmount = totalDiscrepancyAmount.add(order.getAmount());
@@ -288,12 +288,14 @@ public class ReconciliationEngine {
                                                         ReconciliationDiscrepancy.DiscrepancyType type,
                                                         String transactionId,
                                                         ChannelRecord channelRecord,
-                                                        PaymentOrder internalOrder) {
+                                                        PaymentOrder internalOrder,
+                                                        String channelType) {
         ReconciliationDiscrepancy discrepancy = new ReconciliationDiscrepancy();
         discrepancy.setMerchantId(merchantId);
         discrepancy.setReconciliationFileId(reconciliationFileId);
         discrepancy.setDiscrepancyType(type);
         discrepancy.setTransactionId(transactionId);
+        discrepancy.setChannelType(channelType);
         discrepancy.setStatus(ReconciliationDiscrepancy.DiscrepancyStatus.DISCOVERED);
 
         if (type == ReconciliationDiscrepancy.DiscrepancyType.LONG_AMOUNT) {

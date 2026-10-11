@@ -126,7 +126,7 @@ public class DailyReconciliationScheduler {
                     }
 
                     ReconciliationDiffReport report = reconciliationFileService.runDailyReconciliation(
-                            merchantId, download.getRawContent(), billDate);
+                            merchantId, download.getRawContent(), billDate, channel);
                     ok++;
                     log.info("[DailyReconciliation] 对账完成: merchantId={}, channel={}, date={}, "
                                     + "matched={}, discrepancies={}, dryRun={}",

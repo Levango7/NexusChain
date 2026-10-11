@@ -89,6 +89,19 @@ public class ReconciliationDiscrepancy {
     @Column(name = "transaction_id", nullable = false, length = 64)
     private String transactionId;
 
+    /**
+     * 渠道归属（P0 修复 2026-10-11）。
+     *
+     * <p>长款走渠道退款（平台是中间机构）必须知道"从哪来"，否则无法选连接器、
+     * 无法按原渠道交易号原路退回。此前该字段不存在：{@code reconcile()} 虽说收了
+     * channelType（用于解析对账规则）却不落盘到差错上，调用方还一律传 null。</p>
+     *
+     * <p>NULL 的处理：存量行与"未标注"一律视为**缺渠道归属**——渠道退款不得执行
+     * （fail-closed，人工核对），而不是猜一个渠道动钱。</p>
+     */
+    @Column(name = "channel_type", length = 16)
+    private String channelType;
+
     /** 渠道侧金额 */
     @Column(name = "channel_amount", precision = 36, scale = 2)
     private BigDecimal channelAmount;
@@ -169,6 +182,8 @@ public class ReconciliationDiscrepancy {
 
     public String getTransactionId() { return transactionId; }
     public void setTransactionId(String transactionId) { this.transactionId = transactionId; }
+    public String getChannelType() { return channelType; }
+    public void setChannelType(String channelType) { this.channelType = channelType; }
 
     public BigDecimal getChannelAmount() { return channelAmount; }
     public void setChannelAmount(BigDecimal channelAmount) { this.channelAmount = channelAmount; }
