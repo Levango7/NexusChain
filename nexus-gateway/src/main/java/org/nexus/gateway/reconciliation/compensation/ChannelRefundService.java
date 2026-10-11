@@ -29,9 +29,9 @@ import java.util.UUID;
  * <ul>
  *   <li><b>WECHAT</b>：已实现 —— 微信 V3 {@code POST /v3/refund/domestic/refunds}，
  *       按 {@code transaction_id} 退款，{@code out_refund_no} 由调用方给定（幂等键）。</li>
- *   <li><b>ALIPAY</b>：<b>fail-closed</b> —— 支付宝 {@code alipay.trade.refund} 的
- *       按 {@code trade_no} 退款尚未接入（需复用/搬移连接器的 RSA 请求组装，属独立批次），
- *       本服务显式报错而不是猜。</li>
+ *   <li><b>ALIPAY</b>：{@code alipay.trade.refund} 按 {@code trade_no} 原路退回，
+ *       {@code out_request_no} 即调用方给定的幂等键；RSA2 签名复用与支付连接器同一签名
+ *       工具（{@code AlipaySignatureUtil}）——<b>不依赖连接器</b>，保持对账模块边界。</li>
  * </ul>
  *
  * <h2>幂等</h2>
@@ -66,6 +66,17 @@ public class ChannelRefundService {
 
     @Value("${nexus.connectors.wechat.sandbox:false}")
     private boolean sandbox;
+
+    // ---- 支付宝原路退回（P0 补齐 2026-10-11）----
+    @Value("${nexus.connectors.alipay.app-id:}")
+    private String alipayAppId;
+
+    /** 商户 RSA 私钥（RSA2 签名）；生产经环境变量注入，禁止硬编码。 */
+    @Value("${nexus.connectors.alipay.merchant-private-key:}")
+    private String alipayPrivateKey;
+
+    @Value("${nexus.connectors.alipay.api-base-url:https://openapi.alipay.com/gateway.do}")
+    private String alipayApiBase;
 
     private final RestTemplate restTemplate;
 
@@ -104,9 +115,7 @@ public class ChannelRefundService {
             case CHANNEL_WECHAT:
                 return wechatRefundByTxId(channelTxId, totalAmount, refundAmount, outRefundNo);
             case CHANNEL_ALIPAY:
-                throw new IllegalStateException(
-                        "支付宝原路退回尚未接入（alipay.trade.refund 按 trade_no 退款属独立批次）——"
-                                + "请人工核对后走运营退款流程（fail-closed）");
+                return alipayRefundByTradeNo(channelTxId, totalAmount, refundAmount, outRefundNo);
             default:
                 throw new IllegalStateException("渠道退款拒绝执行：不支持的渠道类型 " + channelType);
         }
@@ -156,6 +165,88 @@ public class ChannelRefundService {
             throw new IllegalStateException(
                     "微信按交易号退款失败: channelTxId=" + channelTxId + ", error=" + e.getMessage(), e);
         }
+    }
+
+    // ==================== 支付宝：按 trade_no 原路退回 ====================
+
+    private String alipayRefundByTradeNo(String tradeNo, BigDecimal totalAmount,
+                                          BigDecimal refundAmount, String outRequestNo) {
+        if (alipayPrivateKey == null || alipayPrivateKey.isBlank()) {
+            throw new IllegalStateException(
+                    "支付宝原路退回拒绝执行：商户私钥未配置（fail-closed，不发起未签名请求）");
+        }
+
+        Map<String, Object> biz = new LinkedHashMap<>();
+        biz.put("trade_no", tradeNo);
+        biz.put("refund_amount", formatAmount(refundAmount));
+        biz.put("out_request_no", outRequestNo);
+
+        Map<String, String> params = new LinkedHashMap<>();
+        params.put("app_id", alipayAppId);
+        params.put("method", "alipay.trade.refund");
+        params.put("sign_type", "RSA2");
+        params.put("timestamp", java.time.LocalDateTime.now().format(
+                java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
+        params.put("nonce", UUID.randomUUID().toString().replace("-", "").substring(0, 16));
+        try {
+            params.put("biz_content",
+                    new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(biz));
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new IllegalStateException("支付宝退款 bizContent 序列化失败: " + e.getMessage(), e);
+        }
+        // RSA2 签名：与支付连接器同一签名工具（不引入第二套实现）
+        params.put("sign", org.nexus.gateway.orchestration.connectors.AlipaySignatureUtil
+                .generateSignature(params, alipayPrivateKey));
+
+        StringBuilder body = new StringBuilder();
+        for (Map.Entry<String, String> e : params.entrySet()) {
+            if (body.length() > 0) {
+                body.append('&');
+            }
+            body.append(e.getKey()).append('=')
+                    .append(java.net.URLEncoder.encode(e.getValue(),
+                            java.nio.charset.StandardCharsets.UTF_8));
+        }
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
+        try {
+            ResponseEntity<Map> resp = restTemplate.postForEntity(
+                    alipayApiBase, new HttpEntity<>(body.toString(), headers), Map.class);
+            Map<?, ?> root = resp.getBody();
+            if (root == null) {
+                throw new IllegalStateException("支付宝退款响应为空");
+            }
+            Object refund = root.get("alipay_trade_refund_response");
+            if (!(refund instanceof Map)) {
+                throw new IllegalStateException("支付宝退款响应缺少 alipay_trade_refund_response");
+            }
+            @SuppressWarnings("unchecked")
+            Map<String, Object> r = (Map<String, Object>) refund;
+            String code = String.valueOf(r.get("code"));
+            if (!"10000".equals(code)) {
+                throw new IllegalStateException("支付宝退款返回非成功: code=" + code + ", sub_msg="
+                        + r.get("sub_msg"));
+            }
+            // 幂等：同一 out_request_no 重复调用支付宝返回同一 buyer_logon_id/资金流水
+            String refundId = String.valueOf(r.getOrDefault("trade_no", tradeNo));
+            log.info("[ChannelRefund] 支付宝按 trade_no 退回成功: tradeNo={}, outRequestNo={}",
+                    tradeNo, outRequestNo);
+            return refundId;
+        } catch (IllegalStateException e) {
+            throw e;
+        } catch (RuntimeException e) {
+            throw new IllegalStateException(
+                    "支付宝按 trade_no 退回失败: tradeNo=" + tradeNo + ", error=" + e.getMessage(), e);
+        }
+    }
+
+    /** 金额按"元"序列化（支付宝 refund_amount 要求两位小数，如 12.34）。 */
+    private static String formatAmount(BigDecimal amount) {
+        if (amount == null) {
+            throw new IllegalStateException("退款金额为空（fail-closed）");
+        }
+        return amount.setScale(2, java.math.RoundingMode.HALF_UP).toPlainString();
     }
 
     /** 元 → 分（微信金额单位为分，接口要求整数）。 */

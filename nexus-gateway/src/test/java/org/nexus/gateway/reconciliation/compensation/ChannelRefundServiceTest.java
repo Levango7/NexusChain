@@ -62,13 +62,35 @@ class ChannelRefundServiceTest {
     }
 
     @Test
-    @DisplayName("fail-closed：支付宝原路退回尚未接入 → 明确报错（不猜）")
-    void alipayNotWired_failsClosed() throws Exception {
+    @DisplayName("fail-closed：支付宝无商户私钥 → 明确报错（不发起未签名请求）")
+    void alipayNoPrivateKey_failsClosed() throws Exception {
         ChannelRefundService svc = newService(false);
         IllegalStateException ex = assertThrows(IllegalStateException.class, () ->
                 svc.refundByChannelTransaction("ALIPAY", "ALI_TX_1",
                         new BigDecimal("100.00"), new BigDecimal("100.00"), "R1"));
-        assertTrue(ex.getMessage().contains("尚未接入"), ex.getMessage());
+        assertTrue(ex.getMessage().contains("私钥"), ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("支付宝：未配置商户私钥 → fail-closed（不发起未签名请求）")
+    void alipay_noPrivateKey_failsClosed() throws Exception {
+        ChannelRefundService svc = newService(false);
+        // alipayPrivateKey 未设置（默认空）
+        IllegalStateException ex = assertThrows(IllegalStateException.class, () ->
+                svc.refundByChannelTransaction("ALIPAY", "ALI_TX_1",
+                        new BigDecimal("100.00"), new BigDecimal("100.00"), "R1"));
+        assertTrue(ex.getMessage().contains("私钥未配置"), ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("支付宝：渠道大小写不敏感（alipay/ALIPAY 同一路径）")
+    void alipay_caseInsensitive() throws Exception {
+        ChannelRefundService svc = newService(false);
+        // 小写 alipay 应同样走到支付宝分支（同样因缺私钥 fail-closed，但错误信息证明分支命中）
+        IllegalStateException ex = assertThrows(IllegalStateException.class, () ->
+                svc.refundByChannelTransaction("alipay", "ALI_TX_1",
+                        new BigDecimal("100.00"), new BigDecimal("100.00"), "R1"));
+        assertTrue(ex.getMessage().contains("私钥"), ex.getMessage());
     }
 
     @Test
