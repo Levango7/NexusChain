@@ -2,6 +2,81 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [2.63.1] - 2026-10-11
+
+### 紧急修复：两处构造器装配缺陷导致网关在 compose 里起不来（CI k6 冒烟三连红）
+
+**现象**：PR #73 的 `Performance Test`（k6 冒烟，起 compose 栈）**连挂三次**，失败点清一色
+`gateway 未已绪`。本地单测/sandbox 上下文全绿，所以不是"测试没覆盖"，而是**启动路径没被覆盖**。
+
+**根因（两类，均已修）**：
+
+1. **致命版** —— `AutoWithdrawService` 同时存在 3 参与 5 参两个构造器且**都没有 @Autowired**：
+   Spring 去找默认（无参）构造器 → `BeanCreationException: No default constructor found`
+   → **整个网关上下文起不来**。本地用 `@ActiveProfiles("dev")` 精确复现（与 compose 同启动路径）。
+   修法：删掉多余的 3 参兼容重载，回归**单构造器**（对 Spring 最 robust 的形态）。
+2. **静默版** —— `AuditLogService` 也有两个构造器且无 @Autowired：Spring 选中**无参**那个
+   → `auditEventRepository` 永不注入 → 审计**静默退回"只写日志"**（比致命版更危险：不报错）。
+   修法：给仓储构造器显式 @Autowired。
+
+**教训（已固化为常驻门禁）**：「Bean 被创建」≠「依赖注入成功」；且 **sandbox profile 的
+Spring 上下文根本没有实例化这些 Bean**（所以本地 32 例全过却没暴露）。
+
+- 新增 `WiringEffectivenessGuardTest`（**dev profile 全上下文 + 3 条反射断言，先 unwrap CGLIB
+  代理再读字段**）：出款接线（payoutExecutor/payoutAccountService）、补偿执行出口
+  （accountService/channelRefundService）、审计落库（auditEventRepository）三处依赖
+  **必须真的注入**，缺一个就红。
+- 顺带记录一个探测坑：CGLIB 代理实例与 target 是两个对象，字段只活在 target 上，
+  直接对代理反射会读到 null 而误判"没注入"。
+
+## [2.63.0] - 2026-10-11
+
+### 审计落库（第 2 件 / 收官批）：审计事件进库 + 资金主链路开始写审计
+
+**背景（审计发现）**：审计此前**只写 `AUDIT` logger**（logback 落 `audit.json` 文件）——
+既不落库、也不可查询，`AuditEvent` 还是普通 POJO；且调用方只有 2 处（合规服务 + 一个
+死代码调度），**支付/退款/提现等资金主链路零覆盖**。资金纠纷时"谁在什么时候动了钱"
+根本无从查起。
+
+- **迁移 V96 + 实体 + 仓储**：新增 `audit_events` 表（append-only：只插入、不改不删），
+  字段与日志事件对齐（seq / 时间 / actor / action / resource / detail / ip / merchantId），
+  带 merchant、action、时间三索引。
+- **`AuditLogService` 双写**：保持 logger 那份不变（作为备份），**同时追加落库**；
+  **失败语义**：落库失败**不阻断业务流程**（审计是旁路），但必须 ERROR 留痕——绝不静默吞掉。
+- **资金主链路开始写审计**：`PaymentServiceImpl.confirmPayment` 成功后记录
+  `PAYMENT_CONFIRMED`（哪笔订单、哪个链上交易、哪个商户）；用 setter 注入
+  （不动构造函数签名，避免波及既有测试）。
+- **诚实声明**：本批只接通资金主链路的**支付确认**这一段；退款/提现/调账的审计埋点
+  在下一批补（同一机制，逐段接）。
+
+**测试**：新增 `AuditLogServicePersistTest` **3 例**（落库 / 失败不阻断但不假装成功 /
+无仓储仅日志）；原 5 例审计测试无回归。
+
+## [2.62.0] - 2026-10-11
+
+### 出款去向模型接线：自动提现从"只扣账不出款"改为"有去向才扣账、出款失败必退回"
+
+**背景**：网关"自动提现"（`AutoWithdrawService`）此前**只扣商户账本余额、没有任何出款动作**
+——"余额被扣但钱没离开平台"，交易对手收不到钱。这是资金语义缺口，不是缺一个退款接口。
+
+本批把它改成**三段式**（资金动作与出款去向绑定）：
+
+1. **先解析生效出款账户**：商户没有 ACTIVE 的出款账户 → **直接跳过、不扣账**
+   （fail-closed；此前是无条件扣账）；
+2. **扣账 → 登记出款任务**：账本扣减后调可插拔 `PayoutExecutor`（默认人工打款台账，
+   同 reference 幂等——不会重复打款）；
+3. **出款失败 → 原额退回商户余额**（`RECON_ADJUST` 冲正），**规则不推进**
+   （下周期可重试），不会出现"钱扣了、没出去、还不认账"。
+
+配套：结果里新增 `payoutRef` / `payoutAccountType`，让出款去向与凭据可追溯。
+
+**红线延续**：出款去向仍由 `MerchantPayoutAccountService` 的护栏约束
+（平台结算账户必须持牌主体、户名不一致拒绝）——**平台方个人账户不得作为出款通道**（二清）。
+
+**测试**：新增 `AutoWithdrawPayoutWiringTest` **3 例**（无生效账户→零扣账 /
+出款失败→原额退回且规则不推进 / 正常路径→扣账+出款+规则推进）。
+`AutoWithdrawService` 此前**没有任何测试覆盖**，本批一并补上门禁。
+
 ## [2.61.0] - 2026-10-11
 
 ### 出款去向模型（第 3 件 · 地基）：每商户绑定结算账户 + 可插拔执行器 + 二清红线护栏
