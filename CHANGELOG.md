@@ -2,6 +2,27 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [2.65.0] - 2026-10-11
+
+### 存量差错的渠道归属补录 + 运营待办队列
+
+**背景（勘误后的事实）**：差错的人工处置出口**原本就已存在**（`DiscrepancyResolutionController`
+的 `investigate` / `resolve` / `escalate` 三端点）——先前的说法不准确，此处更正。真正缺的是**一样**：
+V94 之前落库的差错**没有渠道归属**（`channel_type` NULL），渠道退款路径对它们永久 fail-closed；
+运营看着对账单知道是微信却**没有出口把结论告诉系统**——只能永远人工处理，自动退款永远用不上。
+
+- **`annotateChannelType`（服务）**：补录渠道归属，两条硬约束：
+  1. **仅允许 null → 有值**：已有归属**拒绝覆盖** —— 改错渠道会让退款**退错对象**，比"退不了"更严重；
+  2. 取值只接受 `WECHAT` / `ALIPAY`（与 `ChannelRefundService` 支持范围严格一致），其他值拒绝而不猜。
+  人工数据修正**写审计**（`DISCREPANCY_CHANNEL_ANNOTATED`）。
+- **运营待办队列**：`findByChannelTypeIsNull()` + `GET /api/v1/reconciliation/discrepancies/unattributed`
+  —— 直接给出"待补录清单"，补一条即解锁一条自动退款路径。
+- **端点**：`POST /{discrepancyId}/channel?channelType=`，与既有 investigate/resolve/escalate 同风格；
+  补录与队列均限 `ROLE_ADMIN`（数据修正面比只读面更敏感）。
+
+**测试**：新增 `DiscrepancyChannelAnnotationTest` **5 例**（补录成功并大写归一 / **拒绝覆盖已有归属** /
+拒绝不支持渠道与 null / 差错不存在 / 待办队列）；`reconciliation` 包 **150 例全过**。
+
 ## [2.64.2] - 2026-10-11
 
 ### 审计查询端点补 Web 层验证 + 两处真缺陷修复（405 语义 / 分页响应形态）

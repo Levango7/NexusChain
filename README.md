@@ -9,7 +9,7 @@ NexusChain 是一个**基于自研区块链的支付编排平台（Payment Orche
 > 沙箱/仿真态对外展示，生产资金操作由持牌交付方在其合规主体下运行。
 
 > **版本口径（2026-09-28 第三次修复漂移，CI 门禁化）**：构建侧**双源**为根 `build.gradle` 的 `version`
-> 与 `nexus-core/nexus-core/src/main/resources/version.properties` 的 `versionNumber`（当前均为 `2.64.2`；
+> 与 `nexus-core/nexus-core/src/main/resources/version.properties` 的 `versionNumber`（当前均为 `2.65.0`；
 > 发版时**两处都要改**——v2.50.2 曾因 version.properties 滞后导致 jar 名错位）；
 > 发布说明单一来源为 [CHANGELOG](CHANGELOG.md)（最新条目 `[2.58.0] - 2026-10-11`，
 > 即出款去向模型接线：自动提现从「只扣账不出款」改为「有去向才扣账、出款失败必退回」）。

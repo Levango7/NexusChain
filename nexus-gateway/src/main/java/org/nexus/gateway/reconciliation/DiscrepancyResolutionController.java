@@ -102,6 +102,43 @@ public class DiscrepancyResolutionController {
     }
 
     /**
+     * 待补渠道归属的差错列表（运营工作队列，P1 修复 2026-10-11）。
+     *
+     * <p>V94 之前落库的差错没有渠道归属，渠道退款路径对它们 fail-closed；
+     * 本端点给运营一个"待办清单"，逐个补录后即可走自动退款。</p>
+     */
+    @GetMapping("/unattributed")
+    @org.springframework.security.access.prepost.PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<List<ReconciliationDiscrepancy>> listUnattributed() {
+        return ResponseEntity.ok(resolutionService.findWithoutChannelAttribution());
+    }
+
+    /**
+     * 补录差错的渠道归属（P1 修复 2026-10-11）。
+     *
+     * <p><b>仅允许 null → 有值</b>（已有归属拒绝覆盖，防止把已归因的差错改错渠道——
+     * 那会让退款退错对象，比"退不了"更严重）；取值只接受 WECHAT / ALIPAY。属人工数据修正，
+     * 每次补录写审计。</p>
+     *
+     * @param discrepancyId 差错 ID
+     * @param channelType   渠道类型（WECHAT / ALIPAY）
+     */
+    @PostMapping("/{discrepancyId}/channel")
+    @org.springframework.security.access.prepost.PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<ReconciliationDiscrepancy> annotateChannel(
+            @PathVariable Long discrepancyId,
+            @RequestParam String channelType) {
+        try {
+            return ResponseEntity.ok(
+                    resolutionService.annotateChannelType(discrepancyId, channelType));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.notFound().build();
+        } catch (IllegalStateException e) {
+            return ResponseEntity.badRequest().build();
+        }
+    }
+
+    /**
      * 解决差错（状态流转：INVESTIGATING/DISCOVERED → RESOLVED）。
      *
      * @param discrepancyId 差错记录 ID

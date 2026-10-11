@@ -25,6 +25,17 @@ import java.util.Optional;
 @Service
 public class DiscrepancyResolutionService {
 
+    private static final org.slf4j.Logger log =
+            org.slf4j.LoggerFactory.getLogger(DiscrepancyResolutionService.class);
+
+    /** 审计（P1 修复 2026-10-11，setter 注入）：人工补录渠道归属属数据修正，必须留痕。 */
+    private org.nexus.gateway.audit.AuditLogService auditLogService;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setAuditLogService(org.nexus.gateway.audit.AuditLogService auditLogService) {
+        this.auditLogService = auditLogService;
+    }
+
     private final ReconciliationDiscrepancyRepository discrepancyRepository;
 
     /**
@@ -223,6 +234,68 @@ public class DiscrepancyResolutionService {
      * @return 更新后的差错记录
      * @throws IllegalStateException 如果差错状态不允许此流转
      */
+    /**
+     * 补录差错渠道归属（P1 修复 2026-10-11）。
+     *
+     * <p><b>为什么需要</b>：V94 之前落库的差错没有 {@code channel_type}，渠道退款路径
+     * 对它们 fail-closed——运营看着对账单知道是微信/支付宝，却没有出口把结论告诉系统。</p>
+     *
+     * <p><b>两条硬约束</b>：</p>
+     * <ol>
+     *   <li>**仅允许 null → 有值**：已有归属的记录拒绝覆盖（防止把已归因的差错改错渠道，
+     *       那会让退款退错对象——比"退不了"更严重）；</li>
+     *   <li>取值只接受 WECHAT / ALIPAY（与 {@code ChannelRefundService} 的支持范围一致），
+     *       其他值拒绝而不是猜。</li>
+     * </ol>
+     * <p>每次补录都写审计（人工数据修正必须留痕）。</p>
+     *
+     * @param discrepancyId 差错 ID
+     * @param channelType   渠道类型（WECHAT / ALIPAY）
+     * @return 更新后的差错
+     * @throws IllegalArgumentException 差错不存在
+     * @throws IllegalStateException    已有归属 / 渠道值不受支持
+     */
+    @Transactional
+    public ReconciliationDiscrepancy annotateChannelType(Long discrepancyId, String channelType) {
+        ReconciliationDiscrepancy discrepancy = findDiscrepancyById(discrepancyId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Discrepancy not found: " + discrepancyId));
+
+        String channel = channelType == null ? "" : channelType.trim().toUpperCase();
+        if (!"WECHAT".equals(channel) && !"ALIPAY".equals(channel)) {
+            throw new IllegalStateException(
+                    "不支持的渠道类型（仅 WECHAT / ALIPAY）: " + channelType);
+        }
+        String existing = discrepancy.getChannelType();
+        if (existing != null && !existing.isBlank()) {
+            throw new IllegalStateException(
+                    "差错已有渠道归属，拒绝覆盖: discrepancyId=" + discrepancyId
+                            + ", existing=" + existing);
+        }
+
+        discrepancy.setChannelType(channel);
+        ReconciliationDiscrepancy saved = discrepancyRepository.save(discrepancy);
+
+        if (auditLogService != null) {
+            try {
+                auditLogService.recordAdjust(discrepancy.getMerchantId(),
+                        "DISCREPANCY_" + discrepancyId,
+                        "DISCREPANCY_CHANNEL_ANNOTATED", "channel=" + channel);
+            } catch (RuntimeException e) {
+                log.warn("Channel annotation audit write failed (ignored): id={}, error={}",
+                        discrepancyId, e.getMessage());
+            }
+        }
+        log.info("[Discrepancy] 渠道归属补录: id={}, channel={}", discrepancyId, channel);
+        return saved;
+    }
+
+    /** 待补渠道归属的差错（运营工作队列）。 */
+    @Transactional(readOnly = true)
+    public List<ReconciliationDiscrepancy> findWithoutChannelAttribution() {
+        return discrepancyRepository.findByChannelTypeIsNull();
+    }
+
     @Transactional
     public ReconciliationDiscrepancy escalateDiscrepancy(Long discrepancyId, String escalationNote) {
         ReconciliationDiscrepancy discrepancy = findDiscrepancyById(discrepancyId)
