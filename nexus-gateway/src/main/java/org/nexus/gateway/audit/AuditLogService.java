@@ -36,11 +36,14 @@ public class AuditLogService {
     private final Map<Long, WindowCounter> frequencyTracker = new ConcurrentHashMap<>();
     private static final int ANOMALY_THRESHOLD = 100; // ops per minute
 
-    /** 兼容构造（无仓储）：仅写日志（旧行为）。 */
+    /** 兼容构造（无仓储）：仅写日志（旧行为；单测用）。 */
     public AuditLogService() {
         this(null);
     }
 
+    /** 主构造器：必须显式 @Autowired——否则多构造器下 Spring 选无参那个，
+     *  仓储永不注入、审计静默退回"只写日志"（2026-10-11 同类坑第二处）。 */
+    @org.springframework.beans.factory.annotation.Autowired
     public AuditLogService(AuditEventRepository auditEventRepository) {
         this.auditEventRepository = auditEventRepository;
     }

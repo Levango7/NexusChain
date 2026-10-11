@@ -2,6 +2,33 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [2.63.1] - 2026-10-11
+
+### 紧急修复：两处构造器装配缺陷导致网关在 compose 里起不来（CI k6 冒烟三连红）
+
+**现象**：PR #73 的 `Performance Test`（k6 冒烟，起 compose 栈）**连挂三次**，失败点清一色
+`gateway 未已绪`。本地单测/sandbox 上下文全绿，所以不是"测试没覆盖"，而是**启动路径没被覆盖**。
+
+**根因（两类，均已修）**：
+
+1. **致命版** —— `AutoWithdrawService` 同时存在 3 参与 5 参两个构造器且**都没有 @Autowired**：
+   Spring 去找默认（无参）构造器 → `BeanCreationException: No default constructor found`
+   → **整个网关上下文起不来**。本地用 `@ActiveProfiles("dev")` 精确复现（与 compose 同启动路径）。
+   修法：删掉多余的 3 参兼容重载，回归**单构造器**（对 Spring 最 robust 的形态）。
+2. **静默版** —— `AuditLogService` 也有两个构造器且无 @Autowired：Spring 选中**无参**那个
+   → `auditEventRepository` 永不注入 → 审计**静默退回"只写日志"**（比致命版更危险：不报错）。
+   修法：给仓储构造器显式 @Autowired。
+
+**教训（已固化为常驻门禁）**：「Bean 被创建」≠「依赖注入成功」；且 **sandbox profile 的
+Spring 上下文根本没有实例化这些 Bean**（所以本地 32 例全过却没暴露）。
+
+- 新增 `WiringEffectivenessGuardTest`（**dev profile 全上下文 + 3 条反射断言，先 unwrap CGLIB
+  代理再读字段**）：出款接线（payoutExecutor/payoutAccountService）、补偿执行出口
+  （accountService/channelRefundService）、审计落库（auditEventRepository）三处依赖
+  **必须真的注入**，缺一个就红。
+- 顺带记录一个探测坑：CGLIB 代理实例与 target 是两个对象，字段只活在 target 上，
+  直接对代理反射会读到 null 而误判"没注入"。
+
 ## [2.63.0] - 2026-10-11
 
 ### 审计落库（第 2 件 / 收官批）：审计事件进库 + 资金主链路开始写审计

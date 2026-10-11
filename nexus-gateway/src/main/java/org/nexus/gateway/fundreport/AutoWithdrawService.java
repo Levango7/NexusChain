@@ -51,12 +51,16 @@ public class AutoWithdrawService {
     private final MerchantPayoutAccountService payoutAccountService;
     private final PayoutExecutor payoutExecutor;
 
-    public AutoWithdrawService(AutoWithdrawRuleRepository ruleRepository,
-                                AccountService accountService,
-                                MerchantAccountRepository accountRepository) {
-        this(ruleRepository, accountService, accountRepository, null, null);
-    }
-
+    /**
+     * 唯一构造器（2026-10-11：删除 3 参兼容重载）。
+     *
+     * <p>该类曾同时存在 3 参与 5 参两个构造器：即便 5 参上有 @Autowired，Spring 6
+     * 在部分情形下仍选 3 参（依赖目标类型尚未就绪时）→ 出款接线静默失效；
+     * 而"多构造器无 @Autowired"的形态更会让上下文直接起不来
+     * （CI k6 冒烟三连红的根因：No default constructor found）。
+     * <b>单构造器类对 Spring 是最 robust 的形态</b>；出款依赖（账户服务 + 执行器）
+     * 是必须项，不应有"可缺省"的重载。</p>
+     */
     public AutoWithdrawService(AutoWithdrawRuleRepository ruleRepository,
                                 AccountService accountService,
                                 MerchantAccountRepository accountRepository,
