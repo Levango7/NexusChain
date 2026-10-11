@@ -281,7 +281,7 @@ fn cggmp_share_path(base_dir: &std::path::Path, session_id: &str, kind: &str) ->
         .join(format!("{kind}.bin"))
 }
 
-/// 持久化一个 CGGMP21 协议产物（加密 + 原子性由调用方保证单写者——驱动线程独占）。
+/// 持久化一个 CGGMP21 协议产物（AES-256-GCM 加密 + **原子落盘**）。
 ///
 /// `kind` 仅允许 `incomplete` / `keyshare`（白名单，防拼接逃逸）。
 /// `base_dir` 传入会话根目录（生产 = `MPC_ENGINE_SESSION_DIR`）。
@@ -302,10 +302,56 @@ pub(crate) fn persist_cggmp_blob(
             .map_err(|e| eyre!("cggmp persist: create dir {}: {e}", parent.display()))?;
     }
     let blob = aes_encrypt_with_version(plaintext, key, key_version)?;
-    fs::write(&path, &blob).map_err(|e| eyre!("cggmp persist: write {}: {e}", path.display()))?;
-    // 低9: 设置 0600 权限（仅所有者可读写，Unix 特有，Windows 空操作）——
-    // GG20 会话文件退役后，此纵深防御沿用至 CGGMP21 份额落盘路径。
-    set_secure_permissions(&path);
+    // 原子落盘（2026-10-12 核验修复）：原实现 `fs::write` 原地覆盖目标文件，
+    // 进程在 write 中途崩溃 / 磁盘写满会产生"截断或半写"的份额文件。
+    // `load_cggmp_blob` 会 fail-closed 拒签（不会产生错误签名），但份额本身
+    // 不可恢复——无备份、无回滚，只能重新 keygen。
+    // 改为同目录临时文件 -> 设 0600 -> write_all + sync_all -> rename 覆盖：
+    // rename 在同一目录（同一文件系统）上是原子的，任何时刻的读者只会看到
+    // 旧的完整文件或新的完整文件，不存在中间态。
+    {
+        use std::io::Write;
+
+        // 临时文件与目标同目录（同文件系统）——跨文件系统 rename 会退化为拷贝。
+        let mut tmp_name = path.file_name().unwrap_or_default().to_os_string();
+        tmp_name.push(format!(".tmp-{}", std::process::id()));
+        let tmp_path = path.with_file_name(tmp_name);
+
+        let mut file = fs::File::create(&tmp_path)
+            .map_err(|e| eyre!("cggmp persist: create tmp {}: {e}", tmp_path.display()))?;
+        // 低9: 设置 0600 权限（仅所有者可读写，Unix 特有，Windows 空操作）——
+        // GG20 会话文件退役后，此纵深防御沿用至 CGGMP21 份额落盘路径。
+        // 先设权限再写内容：避免"内容已落盘、权限仍是默认值"的窗口。
+        set_secure_permissions(&tmp_path);
+
+        let write_result = file.write_all(&blob).and_then(|()| file.sync_all());
+        drop(file);
+        if let Err(e) = write_result {
+            // best-effort 清理半写临时文件，避免残留堆积。
+            let _ = fs::remove_file(&tmp_path);
+            return Err(eyre!(
+                "cggmp persist: write tmp {}: {e}",
+                tmp_path.display()
+            ));
+        }
+
+        if let Err(e) = fs::rename(&tmp_path, &path) {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(eyre!(
+                "cggmp persist: rename {} -> {}: {e}",
+                tmp_path.display(),
+                path.display()
+            ));
+        }
+
+        // 目录项持久化（best-effort）：rename 成功后补一次目录 fsync，确保
+        // "重命名"本身在崩溃后仍然可见；部分平台/文件系统不支持则忽略。
+        if let Some(parent) = path.parent() {
+            if let Ok(dir) = fs::File::open(parent) {
+                let _ = dir.sync_all();
+            }
+        }
+    }
     tracing::info!(
         session_id = %session_id,
         kind = kind,
