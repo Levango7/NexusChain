@@ -323,4 +323,41 @@ class ReconciliationEngineTest {
         order.setCreatedAt(LocalDateTime.of(2026, 9, 23, 10, 0));
         return order;
     }
+
+    // ==================== P0 修复（2026-10-11）：差错必须带上渠道归属 ====================
+
+    @Test
+    @DisplayName("reconcile — 差错打上 channelType（长款/短款都带）")
+    void reconcile_stampsChannelTypeOnDiscrepancies() {
+        ChannelRecord channelRecord = createChannelRecord("ORD-LONG", new BigDecimal("100"), "PAID");
+        PaymentOrder internalShort = createPaymentOrder("ORD-SHORT", new BigDecimal("50"),
+                PaymentOrder.OrderStatus.PAID);
+
+        List<ChannelRecord> channelRecords =
+                new java.util.ArrayList<>(List.of(channelRecord));
+        List<PaymentOrder> internalOrders =
+                new java.util.ArrayList<>(List.of(internalShort));
+
+        ReconciliationDiffReport report = engine.reconcile(
+                MERCHANT_ID, "WECHAT", channelRecords, internalOrders, null);
+
+        assertEquals(2, report.getDiscrepancies().size(), "应产生长款 + 短款两条差错");
+        assertTrue(report.getDiscrepancies().stream()
+                        .allMatch(d -> "WECHAT".equals(d.getChannelType())),
+                "每条差错都必须带 channelType，实际=" + report.getDiscrepancies().stream()
+                        .map(ReconciliationDiscrepancy::getChannelType).toList());
+    }
+
+    @Test
+    @DisplayName("reconcile — channelType=null 时差错不带渠道（存量/未标注语义）")
+    void reconcile_nullChannelType_staysNull() {
+        ChannelRecord channelRecord = createChannelRecord("ORD-LONG2", new BigDecimal("100"), "PAID");
+
+        ReconciliationDiffReport report = engine.reconcile(
+                MERCHANT_ID, null, List.of(channelRecord), List.of(), null);
+
+        assertEquals(1, report.getDiscrepancies().size());
+        assertNull(report.getDiscrepancies().get(0).getChannelType(),
+                "未标注渠道时应为 null（调用方按缺渠道归属 fail-closed）");
+    }
 }

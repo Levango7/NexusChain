@@ -80,10 +80,13 @@ class DailyReconciliationSchedulerTest {
 
         scheduler.runDailyReconciliation();
 
+        // P0 修复（2026-10-11）：渠道必须随对账一起传下去（差错要带渠道归属）
         verify(reconciliationFileService).runDailyReconciliation(
-                eq(MERCHANT_A), eq("csv-wechat"), eq(LocalDate.now().minusDays(1)));
+                eq(MERCHANT_A), eq("csv-wechat"), eq(LocalDate.now().minusDays(1)), eq("WECHAT"));
         verify(reconciliationFileService).runDailyReconciliation(
-                eq(MERCHANT_A), eq("csv-alipay"), eq(LocalDate.now().minusDays(1)));
+                eq(MERCHANT_A), eq("csv-alipay"), eq(LocalDate.now().minusDays(1)), eq("ALIPAY"));
+        verify(reconciliationFileService, never()).runDailyReconciliation(
+                eq(MERCHANT_A), anyString(), any(), isNull());
     }
 
     @Test
@@ -97,7 +100,8 @@ class DailyReconciliationSchedulerTest {
 
         assertDoesNotThrow(() -> scheduler.runDailyReconciliation());
 
-        verify(reconciliationFileService, never()).runDailyReconciliation(any(), anyString(), any());
+        verify(reconciliationFileService, never()).runDailyReconciliation(
+                any(), anyString(), any(), any());
     }
 
     @Test
@@ -116,7 +120,8 @@ class DailyReconciliationSchedulerTest {
         assertDoesNotThrow(() -> scheduler.runDailyReconciliation());
 
         // 商户 B 仍被处理（A 的异常被隔离）
-        verify(reconciliationFileService).runDailyReconciliation(eq(MERCHANT_B), anyString(), any());
+        verify(reconciliationFileService).runDailyReconciliation(
+                eq(MERCHANT_B), anyString(), any(), eq("WECHAT"));
     }
 
     @Test

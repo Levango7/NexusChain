@@ -141,8 +141,8 @@ class AutoCompensationRealExecTest {
     // ==================== REFUND（长款）：显式拒绝，防双向动账 ====================
 
     @Test
-    @DisplayName("真实模式 · 长款(REFUND) → 拒绝执行并说明原因（防与 CREDIT_ADJUST 双向动账）")
-    void realMode_longAmountRefund_refusedToAvoidDoubleMovement() throws Exception {
+    @DisplayName("真实模式 · 长款(REFUND)：渠道退款服务缺失 → fail-closed（不静默成功）")
+    void realMode_longAmountRefund_noServiceFailsClosed() throws Exception {
         AutoCompensationService svc = service(accountService, false);
         discrepancy(ReconciliationDiscrepancy.DiscrepancyType.LONG_AMOUNT, new BigDecimal("100.00"), null);
         CompensationRecord record = pendingRecord(
@@ -151,13 +151,37 @@ class AutoCompensationRealExecTest {
         CompensationRecord result = svc.executeCompensation(RECORD_ID);
 
         assertEquals(CompensationRecord.CompensationStatus.FAILED, result.getStatus());
-        // 业务决策（2026-10-11）：长款走渠道退款；但前置未齐（无渠道归属字段 + 退款接口未接入）
-        // 且需先与自动调账路径(CREDIT_ADJUST)互斥 → 现阶段 fail-closed 拒绝、零资金动作。
-        assertTrue(result.getFailureReason().contains("渠道退款"), result.getFailureReason());
-        assertTrue(result.getFailureReason().contains("缺前置"), result.getFailureReason());
-        assertTrue(result.getFailureReason().contains("CREDIT_ADJUST"), result.getFailureReason());
+        assertTrue(result.getFailureReason().contains("ChannelRefundService"), result.getFailureReason());
         verifyNoInteractions(accountService);
         assertNull(result.getChannelRefundRef(), "不得留下任何渠道退款引用");
+    }
+
+    @Test
+    @DisplayName("真实模式 · 长款(REFUND)：渠道退款成功 → 落退款单号并 SUCCESS")
+    void realMode_longAmountRefund_success() throws Exception {
+        ReconciliationDiscrepancy d = discrepancy(
+                ReconciliationDiscrepancy.DiscrepancyType.LONG_AMOUNT, new BigDecimal("100.00"), null);
+        d.setChannelType("WECHAT");
+        d.setTransactionId("WX_TX_123");
+        CompensationRecord record = pendingRecord(
+                CompensationRecord.CompensationType.REFUND, new BigDecimal("100.00"));
+
+        ChannelRefundService refundService = mock(ChannelRefundService.class);
+        when(refundService.refundByChannelTransaction(eq("WECHAT"), eq("WX_TX_123"),
+                eq(new BigDecimal("100.00")), eq(new BigDecimal("100.00")),
+                eq("AUTO_REFUND_" + RECORD_ID))).thenReturn("5000000036");
+
+        AutoCompensationService svc = new AutoCompensationService(
+                compensationRepository, discrepancyRepository, accountService, refundService);
+        setField(svc, "autoEnabled", true);
+        setField(svc, "sandbox", false);
+
+        CompensationRecord result = svc.executeCompensation(RECORD_ID);
+
+        assertEquals(CompensationRecord.CompensationStatus.SUCCESS, result.getStatus());
+        assertEquals("5000000036", result.getChannelRefundRef(), "渠道退款单号必须落库");
+        // 长款走渠道退款，绝不动商户账本
+        verifyNoInteractions(accountService);
     }
 
     // ==================== fail-closed ====================

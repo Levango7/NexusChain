@@ -2,6 +2,96 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [2.61.0] - 2026-10-11
+
+### 出款去向模型（第 3 件 · 地基）：每商户绑定结算账户 + 可插拔执行器 + 二清红线护栏
+
+**背景**：网关"自动提现"（`AutoWithdrawService`）此前**只扣商户账本余额、没有任何出款动作**
+（不调 wallet-service、不发链上交易）——"余额被扣但钱没离开平台"，交易对手收不到钱；
+且资金去向完全没有模型（出款到哪、谁批的、是否有效，均无落点）。
+
+本批建立地基（不改动现有扣账行为，避免高风险变更；接线在下批）：
+
+- **迁移 V95 + 实体 + 仓储 + 服务 `MerchantPayoutAccountService`**：
+  商户出款账户绑定（BANK_CARD / ALIPAY / PLATFORM_SETTLEMENT），
+  状态机 `PENDING_VERIFY → ACTIVE / DISABLED`，核验后才可作出款去向。
+- **合规护栏（二清红线，代码级拒绝）**：
+  ① `PLATFORM_SETTLEMENT` 必须 `complianceEntity=true`（持牌主体）才允许绑定——
+     平台方不得以自有账户收商户款并对外出款；
+  ② 户名与商户主体不一致 → 拒绝绑定（防绑他人账户）；
+  ③ 解析不到生效账户 → `Optional.empty()`，调用方必须 fail-closed（不出款）。
+- **可插拔 `PayoutExecutor` 接口 + 默认 `ManualPayoutExecutor`**：
+  人工打款执行器把"应付 + 待打款"登记成台账任务（运营线下用**持牌方对公账户**打款、
+  回填流水号核销），同一 reference **幂等**（不重复登记/打款）。
+  接口文档写死三形态（人工 → 银行代付 → 渠道转账）与红线（禁用平台个人账户）。
+
+**测试**：`PayoutAccountAndExecutorTest` **8 例**（绑定进待核验 / 非持牌主体绑平台账户被拒 /
+持牌主体可绑 / 户名不一致被拒 / 无生效账户返回 empty / 状态机 / 人工执行器幂等 /
+账户未生效 fail-closed）。
+
+**下一批（接线）**：`AutoWithdrawService` 改为"先解析生效出款账户 → 登记出款任务 →
+再扣账；失败则退回余额"，把"只扣账不出款"补成"可见、可核销、可追责"。
+
+## [2.60.0] - 2026-10-11
+
+### 长款渠道退款落地（第 3/3 步）：按渠道交易号原路退回 —— 长款闭环打通
+
+**背景**：前两步已把"互斥"（不再给商户加钱）与"渠道归属"（差错带 `channel_type`）落地；
+本步补上**执行出口**。勘测发现现有连接器的 `refund()` 都把标识当 **商户订单号
+（`out_trade_no`）**用，而对账长款手里只有**渠道侧交易号**（对账单解析所得）——
+两者不是一回事，原路退回必须按渠道交易号发起。
+
+- **新增 `ChannelRefundService`**：按渠道交易号原路退回。
+  - **WECHAT 已实现**：微信 V3 `POST /v3/refund/domestic/refunds`，请求体
+    `{transaction_id, out_refund_no, amount:{refund,total,currency}}`（金额元→分），
+    Authorization 用商户 RSA 私钥签名（复用与回调验签同一签名工具）；
+  - **ALIPAY 未接入 → fail-closed**：`alipay.trade.refund` 按 `trade_no` 退款属独立批次，
+    显式报错而不是猜；
+  - **dry-run**（sandbox 或私钥未配置）：返回模拟退款单号，**不发起真实请求**。
+- **`AutoCompensationService` REFUND 分支从"拒绝"改为真执行**：
+  取差错的 `channelType` + `transactionId` + `channelAmount` 发起退款；
+  **幂等键 = `AUTO_REFUND_<补偿记录ID>`**（同一补偿可重跑不会重复退）；
+  渠道/交易号缺失、渠道不支持、接口失败 → 异常上抛置 FAILED（绝不伪造成功）。
+- **互斥保证**（1/3 步已完成，本步与之配套）：`ReconciliationAdjustmentService`
+  不再对 `LONG_AMOUNT` 做 CREDIT_ADJUST，因此这里执行退款时**不会双向动账**。
+
+**测试**：`ChannelRefundServiceTest` 5 例（dry-run / 缺渠道 / 缺交易号 / 支付宝未接 / 未知渠道）；
+`AutoCompensationRealExecTest` 增补 2 例（渠道服务缺失 fail-closed、渠道退款成功落单号且
+**不碰商户账本**）——合计 **20 用例 0 失败**。
+
+**长款闭环至此打通**：对账发现长款 → 差错带渠道归属 → 补偿记录生成 → 按渠道交易号原路退回 →
+幂等可重跑。剩余的口径问题只剩一个：**存量差错无渠道归属**（V94 之前的数据），
+按"缺渠道归属"人工核对处理，不猜。
+
+## [2.59.0] - 2026-10-11
+
+### 长款渠道退款落地（第 2/3 步）：差错记录补「渠道归属」（V94 + 全链打标）
+
+**背景**：长款走渠道退款（用户 2026-10-11 决策：平台是中间机构，非自有资金原路退回）
+必须知道"从哪来"，否则选不了连接器、也无法按原渠道交易号原路退回。
+勘测发现这条链**断在三处**：`ReconciliationDiscrepancy` 没有渠道字段；
+`ReconciliationEngine.reconcile()` 虽已接收 `channelType`（用于解析对账规则）却**不落盘到差错上**；
+调用方 `ReconciliationFileService` 对 `reconcile()` **一律传 `null`**。
+
+- **实体 + 迁移 V94**：`reconciliation_discrepancies` 新增 `channel_type`
+  （WECHAT/ALIPAY；NULL = 存量/未标注）。存量数据无法回溯（编码时已丢弃），置 NULL。
+- **引擎打标**：`createDiscrepancy(...)` 新增 `channelType` 参数并写入差错
+  （长款/短款两个构造点都打标）。
+- **服务透传**：`runDailyReconciliation` / `runReconciliation` 新增 `channelType` 参数
+  （保留 3 参/2 参兼容重载），并把渠道传给 `reconcile()`（此前两处硬编码 `null`）。
+- **调度器接上**：`DailyReconciliationScheduler` 把每轮循环里的渠道随对账一起传下去
+  （原本只用了下载、对账时丢弃）。
+- **未标注语义（fail-closed）**：`channelType == null` 视为"缺渠道归属"——
+  渠道退款**不得**凭猜测执行（人工核对）。
+
+**测试**：新增 2 例（引擎对长/短款都打标；`null` 时保持 `null`）；修正
+`DailyReconciliationSchedulerTest` 两例断言（调度器现在传渠道）；
+`reconciliation` 包 **137 用例 0 失败**。
+
+**余量（第 3/3 步）**：`AutoCompensationService` 的 REFUND 分支改为真执行——
+按 `channelType` 选连接器、按 `transactionId`（渠道交易号）原路退回，
+reference 用 `AUTO_REFUND_<补偿记录ID>` 保证幂等；仍不可用时保持 fail-closed。
+
 ## [2.58.0] - 2026-10-11
 
 ### 长款渠道退款落地（第 1/3 步）：与自动调账互斥，同一差错不再双向动账

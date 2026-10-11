@@ -331,10 +331,26 @@ public class ReconciliationFileService {
      * @param date             对账日期
      * @return 对账差异报告
      */
-    @Transactional
+    /** 兼容重载：未指定渠道（等价于 channelType=null，差错缺渠道归属）。 */
     public ReconciliationDiffReport runDailyReconciliation(Long merchantId,
                                                             String channelCsvContent,
                                                             LocalDate date) {
+        return runDailyReconciliation(merchantId, channelCsvContent, date, null);
+    }
+
+    /**
+     * 每日对账（P0 修复 2026-10-11：新增 channelType 参数）。
+     *
+     * <p>此前该参数不存在、且调用方对 {@code reconcile()} 一律传 null——差错因此
+     * 没有任何渠道归属，长款要走渠道退款时无法判定"从哪来"。</p>
+     *
+     * @param channelType 渠道类型（WECHAT / ALIPAY）；null = 未标注（差错按"缺渠道归属"处理）
+     */
+    @Transactional
+    public ReconciliationDiffReport runDailyReconciliation(Long merchantId,
+                                                            String channelCsvContent,
+                                                            LocalDate date,
+                                                            String channelType) {
         // 生成内部对账文件记录
         ReconciliationFileRecord fileRecord = generateDailyFile(merchantId, date);
 
@@ -352,7 +368,7 @@ public class ReconciliationFileService {
 
         // 执行比对
         ReconciliationDiffReport report = reconciliationEngine.reconcile(
-                merchantId, null, channelRecords, internalOrders, fileRecord.getId());
+                merchantId, channelType, channelRecords, internalOrders, fileRecord.getId());
 
         // 持久化差错记录
         if (report.getDiscrepancies() != null && !report.getDiscrepancies().isEmpty()) {
@@ -379,9 +395,19 @@ public class ReconciliationFileService {
      * @param channelCsvContent    渠道对账文件 CSV 内容
      * @return 对账差异报告
      */
-    @Transactional
+    /** 兼容重载：未指定渠道。 */
     public ReconciliationDiffReport runReconciliation(Long reconciliationFileId,
                                                       String channelCsvContent) {
+        return runReconciliation(reconciliationFileId, channelCsvContent, null);
+    }
+
+    /**
+     * 对账（P0 修复 2026-10-11：新增 channelType 参数，语义同 {@link #runDailyReconciliation}）。
+     */
+    @Transactional
+    public ReconciliationDiffReport runReconciliation(Long reconciliationFileId,
+                                                      String channelCsvContent,
+                                                      String channelType) {
         ReconciliationFileRecord fileRecord = fileRecordRepository.findById(reconciliationFileId)
                 .orElseThrow(() -> new IllegalArgumentException(
                         "Reconciliation file not found: " + reconciliationFileId));
@@ -401,7 +427,7 @@ public class ReconciliationFileService {
 
         // 执行比对
         ReconciliationDiffReport report = reconciliationEngine.reconcile(
-                fileRecord.getMerchantId(), null, channelRecords, internalOrders, fileRecord.getId());
+                fileRecord.getMerchantId(), channelType, channelRecords, internalOrders, fileRecord.getId());
 
         // 持久化差错记录
         if (report.getDiscrepancies() != null && !report.getDiscrepancies().isEmpty()) {
