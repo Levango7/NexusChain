@@ -29,7 +29,47 @@ import java.util.stream.Collectors;
  * 不得以任何占位串冒充链上交易哈希。接入链上转账后，再用真实交易哈希回填。</p>
  */
 @Service
+    /**
+     * ⚠️ 平行实现警示（2026-10-11 审计结论 + 防误接闸门）
+     *
+     * <p><b>本类不是权威结算路径。</b>本仓存在两套并行结算实现：</p>
+     * <ul>
+     *   <li><b>权威（活的）</b>：{@code settlement} 包 —— {@code SettlementScheduler}
+     *       （每 3 分钟）→ {@code SettlementEventCollector.drainStaging()} →
+     *       {@code org.nexus.settlement.clearing.ClearingEngine.batchClear()}；
+     *       且已接入 {@code SettlementCycleService}（每商户 T+N 周期配置生效）。</li>
+     *   <li><b>本类（死的）</b>：按商户 + 周期窗口另建 {@code SettlementBatch}
+     *       （{@code settlement_batches} 表）并调用同一 ClearingEngine。</li>
+     * </ul>
+     *
+     * <p><b>为什么给它加闸门而不是加触发器</b>：两者结算的是同一批 {@code PaymentOrder}。
+     * 给本类接上调度/入口 = 造出第三条竞争路径 → <b>商户被重复结算</b>（真金白银的 bug）。
+     * 故默认 {@code nexus.clearing.legacy-batch-settlement.enabled=false}：
+     * 任何人误接本类都会**立刻抛错**，而不是静默重复出款。</p>
+     *
+     * <p>如需启用（例如按商户批量结算的明确产品需求），必须先与权威路径做互斥设计
+     * （同一订单只能进一套结算），再显式打开开关。</p>
+     */
 public class DefaultSettlementService implements SettlementService {
+    /**
+     * 防误接闸门（2026-10-11）。默认关闭：见类级 javadoc 的"平行实现警示"。
+     * 误接本类会立刻抛错，避免与权威结算路径重复结算。
+     */
+    @org.springframework.beans.factory.annotation.Value(
+            "${nexus.clearing.legacy-batch-settlement.enabled:false}")
+    private boolean legacyBatchSettlementEnabled;
+
+    /** 闸门：未显式启用时拒绝执行（fail-closed，防重复结算）。 */
+    private void requireLegacyEnabled() {
+        if (!legacyBatchSettlementEnabled) {
+            throw new IllegalStateException(
+                    "查询/执行结算批次已被禁用（防重复结算）：本类是与 settlement 包并行的旧实现，"
+                            + "权威路径为 SettlementScheduler + ClearingEngine.batchClear（已接入每商户 T+N 周期）。"
+                            + "如确需启用，请先与权威路径做互斥设计，再置 "
+                            + "nexus.clearing.legacy-batch-settlement.enabled=true");
+        }
+    }
+
 
     private static final Logger log = LoggerFactory.getLogger(DefaultSettlementService.class);
 
@@ -79,6 +119,7 @@ public class DefaultSettlementService implements SettlementService {
 
     @Override
     public SettlementBatch createSettlementBatch(Long merchantId, SettlementPeriod period) {
+        requireLegacyEnabled();
         if (merchantId == null || period == null) {
             throw new IllegalArgumentException("merchantId and period are required");
         }
@@ -131,6 +172,7 @@ public class DefaultSettlementService implements SettlementService {
      */
     @Override
     public SettlementBatch executeSettlement(Long batchId) {
+        requireLegacyEnabled();
         SettlementBatch batch = batchRepository.findById(batchId)
                 .orElseThrow(() -> new IllegalArgumentException("Settlement batch not found: " + batchId));
 

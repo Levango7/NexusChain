@@ -18,6 +18,15 @@ public interface ReconciliationDiscrepancyRepository
     /** 按商户 ID 查询所有差错 */
     List<ReconciliationDiscrepancy> findByMerchantId(Long merchantId);
 
+    /**
+     * 待补渠道归属的差错（P1 修复 2026-10-11）。
+     *
+     * <p>V94 之前落库的差错没有 {@code channel_type}（编码时未采集），渠道退款路径对它们
+     * 永久 fail-closed。本查询即运营的"待补录工作队列"。</p>
+     */
+    List<ReconciliationDiscrepancy> findByChannelTypeIsNull();
+
+
     /** 按商户 ID 和差错状态查询 */
     List<ReconciliationDiscrepancy> findByMerchantIdAndStatus(
             Long merchantId, ReconciliationDiscrepancy.DiscrepancyStatus status);

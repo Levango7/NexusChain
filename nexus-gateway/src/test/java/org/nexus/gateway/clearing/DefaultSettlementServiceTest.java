@@ -34,8 +34,14 @@ class DefaultSettlementServiceTest {
     private DefaultSettlementService service;
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws Exception {
         service = new DefaultSettlementService(batchRepository, orderRepository, clearingEngine, merchantService);
+        // 本类默认带"防误接闸门"（默认关闭，防与权威结算路径重复结算）——
+        // 单测显式打开，验证方法本身行为；闸门本身的生效性由下方 gate 用例单独钉住。
+        java.lang.reflect.Field gate = DefaultSettlementService.class
+                .getDeclaredField("legacyBatchSettlementEnabled");
+        gate.setAccessible(true);
+        gate.set(service, true);
     }
 
     // === createSettlementBatch ===
@@ -265,5 +271,23 @@ class DefaultSettlementServiceTest {
         b.setWindowStart(LocalDateTime.now().minusDays(1));
         b.setWindowEnd(LocalDateTime.now());
         return b;
+    }
+
+    // ==================== 防误接闸门（P0 修复 2026-10-11） ====================
+
+    @Test
+    @DisplayName("闸门：未显式启用时拒绝执行（防与权威结算路径重复结算）")
+    void gate_disabled_refusesExecution() throws Exception {
+        DefaultSettlementService gated = new DefaultSettlementService(
+                batchRepository, orderRepository, clearingEngine, merchantService);
+        // 闸门保持默认（false），模拟"有人把本类接进调度"的场景
+
+        IllegalStateException ex1 = assertThrows(IllegalStateException.class,
+                () -> gated.createSettlementBatch(1L, SettlementPeriod.T1));
+        assertTrue(ex1.getMessage().contains("防重复结算"), ex1.getMessage());
+
+        IllegalStateException ex2 = assertThrows(IllegalStateException.class,
+                () -> gated.executeSettlement(1L));
+        assertTrue(ex2.getMessage().contains("防重复结算"), ex2.getMessage());
     }
 }

@@ -2,6 +2,53 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [2.65.1] - 2026-10-11
+
+### 结算"缺触发器"实为"平行实现"：给死代码加防误接闸门（不做触发器）
+
+**审计结论修正**：原计划给 `clearing/DefaultSettlementService.createSettlementBatch` /
+`executeSettlement`（零生产调用方）**加调度触发器**。动手前核实发现——**结算并不缺触发器，
+而是存在两套并行实现**：
+
+| 路径 | 状态 | 数据/引擎 |
+|---|---|---|
+| `settlement` 包：`SettlementScheduler`（每 3 分钟）→ `SettlementEventCollector.drainStaging()` → `org.nexus.settlement.clearing.ClearingEngine.batchClear()` | **权威（活的）**；且已接入 `SettlementCycleService`（每商户 T+N 周期配置**生效**） | `org.nexus.settlement.clearing.SettlementBatch` |
+| `clearing` 包：`DefaultSettlementService`（按商户 + 周期窗口） | **死代码**（零调用方，仅单测） | `org.nexus.gateway.clearing.SettlementBatch`（`settlement_batches` 表） |
+
+**为什么不能加触发器**：两者结算的是**同一批 `PaymentOrder`**。给死的那条接上调度 = 造出
+第三条竞争路径 → **商户被重复结算**（真金白银的 bug，且比"不结算"更难发现）。
+
+- **改加闸门**：`nexus.clearing.legacy-batch-settlement.enabled`（默认 **false**）——
+  误接本类会**立刻抛错**（`IllegalStateException`，信息里写明权威路径与互斥前提），
+  而不是静默重复出款。
+- **类级 javadoc 写入"平行实现警示"**：标注谁是权威、谁是死代码、复用前必须先做互斥设计。
+- **测试**：`DefaultSettlementServiceTest` 显式开闸（25 个既有调用点零改动）+ 新增闸门门禁用例
+  （未启用时两个方法都拒绝）；`clearing` 包 21 例全过。
+
+**教训（本会话第三次命中同型）**：报"零调用方的功能"之前，先确认**它是不是被另一条平行实现替代了**
+——否则"补触发"就是"补出重复出款"。前两例：长款的双向动账、提现"冻结"状态其实不存在。
+
+## [2.65.0] - 2026-10-11
+
+### 存量差错的渠道归属补录 + 运营待办队列
+
+**背景（勘误后的事实）**：差错的人工处置出口**原本就已存在**（`DiscrepancyResolutionController`
+的 `investigate` / `resolve` / `escalate` 三端点）——先前的说法不准确，此处更正。真正缺的是**一样**：
+V94 之前落库的差错**没有渠道归属**（`channel_type` NULL），渠道退款路径对它们永久 fail-closed；
+运营看着对账单知道是微信却**没有出口把结论告诉系统**——只能永远人工处理，自动退款永远用不上。
+
+- **`annotateChannelType`（服务）**：补录渠道归属，两条硬约束：
+  1. **仅允许 null → 有值**：已有归属**拒绝覆盖** —— 改错渠道会让退款**退错对象**，比"退不了"更严重；
+  2. 取值只接受 `WECHAT` / `ALIPAY`（与 `ChannelRefundService` 支持范围严格一致），其他值拒绝而不猜。
+  人工数据修正**写审计**（`DISCREPANCY_CHANNEL_ANNOTATED`）。
+- **运营待办队列**：`findByChannelTypeIsNull()` + `GET /api/v1/reconciliation/discrepancies/unattributed`
+  —— 直接给出"待补录清单"，补一条即解锁一条自动退款路径。
+- **端点**：`POST /{discrepancyId}/channel?channelType=`，与既有 investigate/resolve/escalate 同风格；
+  补录与队列均限 `ROLE_ADMIN`（数据修正面比只读面更敏感）。
+
+**测试**：新增 `DiscrepancyChannelAnnotationTest` **5 例**（补录成功并大写归一 / **拒绝覆盖已有归属** /
+拒绝不支持渠道与 null / 差错不存在 / 待办队列）；`reconciliation` 包 **150 例全过**。
+
 ## [2.64.2] - 2026-10-11
 
 ### 审计查询端点补 Web 层验证 + 两处真缺陷修复（405 语义 / 分页响应形态）
