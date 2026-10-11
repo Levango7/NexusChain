@@ -135,7 +135,14 @@ jobs:
           cache-dependency-path: nexus-explorer/package-lock.json
 
       - name: 安装依赖
-        run: npm ci --no-audit --no-fund
+        # 2026-10-11 韧性：npm registry 瞬时不可用（5xx / 超时）会直接失败，非代码问题。
+        run: |
+          for attempt in 1 2 3; do
+            if npm ci --no-audit --no-fund; then exit 0; fi
+            echo "::warning::npm ci 第 ${attempt} 次失败（疑似 registry 抖动），15s 后重试"
+            sleep 15
+          done
+          echo "::error::npm ci 连续 3 次失败"; exit 1
 
       - name: Prettier 格式检查
         working-directory: nexus-explorer/frontend
@@ -180,6 +187,7 @@ jobs:
   # 构建 & 测试 & 覆盖率
   # ============================================================
   build-and-test:
+    timeout-minutes: 60  # 观测 15.9–35.4 min（近 10 次）
     # check 名称必须完全固定：分支保护按 context 名精确匹配。两个坑都实测过 ——
     # ① 名称含 matrix.os 变量，runner 漂移后名称跟着变；
     # ② 即使名称写死，只要 job 带 matrix，GitHub 仍会自动追加 "(matrix 值)" 后缀
@@ -379,9 +387,14 @@ jobs:
       # 安装 protoc（Protocol Buffers 编译器）——prost-build 在 cargo clippy/test 编译时需要。
       # 必须在 clippy/test 之前安装，否则 build script 报 "Could not find protoc"。
       - name: Install protoc for Rust build scripts
+        # 2026-10-11 韧性：apt 镜像/网络抖动是 GitHub runner 常见瞬时失败，非代码问题。
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq protobuf-compiler
+          for attempt in 1 2 3; do
+            if sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler; then exit 0; fi
+            echo "::warning::apt 安装 protoc 第 ${attempt} 次失败，15s 后重试"
+            sleep 15
+          done
+          echo "::error::apt 安装 protoc 连续 3 次失败"; exit 1
 
       # C 批：Rust 编译缓存（Cargo registry + target 增量产物）。两个 Rust 工程
       # 各自独立缓存（workspaces 按 Cargo.lock 指纹 keying），命中后
@@ -593,9 +606,14 @@ jobs:
       # protoc 供 mpc-engine build.rs（prost-build）；openssl 供证书生成
       # （runner 预装，显式列出以保证）。
       - name: Install GMP toolchain + protoc
+        # 2026-10-11 韧性：apt 镜像/网络抖动是 GitHub runner 常见瞬时失败，非代码问题。
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq libgmp-dev libmpfr-dev m4 protobuf-compiler openssl
+          for attempt in 1 2 3; do
+            if sudo apt-get update -qq && sudo apt-get install -y -qq libgmp-dev libmpfr-dev m4 protobuf-compiler openssl; then exit 0; fi
+            echo "::warning::apt 安装 GMP 工具链 第 ${attempt} 次失败，15s 后重试"
+            sleep 15
+          done
+          echo "::error::apt 安装 GMP 工具链 连续 3 次失败"; exit 1
 
       - name: Setup Rust toolchain
         # `working-directory` 不是本 action 的有效输入（valid inputs: toolchain /
@@ -687,9 +705,14 @@ jobs:
 
       # GMP 工具链：cggmp21 rug 硬依赖（gmp/mpfr + m4）+ protoc（prost-build）
       - name: Install GMP toolchain + protoc
+        # 2026-10-11 韧性：apt 镜像/网络抖动是 GitHub runner 常见瞬时失败，非代码问题。
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq libgmp-dev libmpfr-dev m4 protobuf-compiler openssl
+          for attempt in 1 2 3; do
+            if sudo apt-get update -qq && sudo apt-get install -y -qq libgmp-dev libmpfr-dev m4 protobuf-compiler openssl; then exit 0; fi
+            echo "::warning::apt 安装 GMP 工具链 第 ${attempt} 次失败，15s 后重试"
+            sleep 15
+          done
+          echo "::error::apt 安装 GMP 工具链 连续 3 次失败"; exit 1
 
       - name: Rust build cache (mpc-engine)
         uses: Swatinem/rust-cache@v2
@@ -825,6 +848,7 @@ jobs:
   # 触发：与 build-and-test 并行，仅依赖源码中的迁移脚本，不依赖编译产物。
   # ============================================================
   flyway-migration-check:
+    timeout-minutes: 10  # 观测峰值 0.9 min
     name: Flyway 迁移预检
     runs-on: ubuntu-26.04
     services:
