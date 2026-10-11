@@ -12,7 +12,9 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 审计事件查询 REST API（P0 修复 2026-10-11）。
@@ -64,13 +66,27 @@ public class AuditEventController {
         return ResponseEntity.ok(repository.findByEventTimeBetween(from, to));
     }
 
-    /** 分页兜底视图（数据量大时用；default size=50 防误拉全表）。 */
+    /**
+     * 分页兜底视图（数据量大时用；default size=50 防误拉全表）。
+     *
+     * <p>刻意**不直接返回 {@code Page}**：序列化 Page 依赖 Spring Data 的 Jackson 模块，
+     * 且与仓库既有列表响应风格（显式 {@code data/total/page/limit}，见
+     * {@code PaymentOrchestrationController.listPayments}）不一致。</p>
+     */
     @GetMapping
-    public ResponseEntity<Page<AuditEventEntity>> recent(
+    public ResponseEntity<Map<String, Object>> recent(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "50") int size) {
         int safeSize = Math.min(Math.max(size, 1), 200);
-        return ResponseEntity.ok(repository.findAll(
-                PageRequest.of(Math.max(page, 0), safeSize, Sort.by(Sort.Direction.DESC, "eventTime"))));
+        int safePage = Math.max(page, 0);
+        Page<AuditEventEntity> result = repository.findAll(
+                PageRequest.of(safePage, safeSize, Sort.by(Sort.Direction.DESC, "eventTime")));
+
+        Map<String, Object> resp = new LinkedHashMap<>();
+        resp.put("data", result.getContent());
+        resp.put("total", result.getTotalElements());
+        resp.put("page", safePage);
+        resp.put("limit", safeSize);
+        return ResponseEntity.ok(resp);
     }
 }

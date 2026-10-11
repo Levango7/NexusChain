@@ -52,6 +52,21 @@ public class GlobalExceptionHandler {
                 .body(ApiResponse.error(ErrorCode.ACCESS_DENIED.getCode(), ErrorCode.ACCESS_DENIED.getMessage()));
     }
 
+    /**
+     * 方法不允许（405，P1 修复 2026-10-11）。
+     *
+     * <p>此前未显式处理：{@code HttpRequestMethodNotSupportedException} 被下面的兜底
+     * {@code Exception} 处理器吞成 **500**——语义错误（"只读端点被 POST"应回 405，
+     * 让调用方明确知道是方法问题，而不是"服务端炸了"）。</p>
+     */
+    @ExceptionHandler(org.springframework.web.HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ApiResponse<Void>> handleMethodNotSupported(
+            org.springframework.web.HttpRequestMethodNotSupportedException e) {
+        log.warn("Method not allowed: {}", e.getMessage());
+        return ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED)
+                .body(ApiResponse.error(ErrorCode.BAD_REQUEST.getCode(), "method not allowed"));
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiResponse<Void>> handleGeneric(Exception e) {
         log.error("Unhandled exception", e);
