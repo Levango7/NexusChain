@@ -48,13 +48,25 @@ public class AutoWithdrawService {
     private final AutoWithdrawRuleRepository ruleRepository;
     private final AccountService accountService;
     private final MerchantAccountRepository accountRepository;
+    private final MerchantPayoutAccountService payoutAccountService;
+    private final PayoutExecutor payoutExecutor;
 
     public AutoWithdrawService(AutoWithdrawRuleRepository ruleRepository,
                                 AccountService accountService,
                                 MerchantAccountRepository accountRepository) {
+        this(ruleRepository, accountService, accountRepository, null, null);
+    }
+
+    public AutoWithdrawService(AutoWithdrawRuleRepository ruleRepository,
+                                AccountService accountService,
+                                MerchantAccountRepository accountRepository,
+                                MerchantPayoutAccountService payoutAccountService,
+                                PayoutExecutor payoutExecutor) {
         this.ruleRepository = ruleRepository;
         this.accountService = accountService;
         this.accountRepository = accountRepository;
+        this.payoutAccountService = payoutAccountService;
+        this.payoutExecutor = payoutExecutor;
     }
 
     // === 配置自动提现 ===
@@ -215,11 +227,50 @@ public class AutoWithdrawService {
         }
 
         // 5. 执行提现
+        // P0 修复（2026-10-11）：此前这里只扣账本余额、没有任何出款动作——"余额被扣但钱没离开
+        // 平台"，交易对手收不到钱。现改为三段式：
+        //   ① 先解析生效的出款去向账户（没有 → **不扣账**，fail-closed）；
+        //   ② 扣账 + 登记出款任务（可插拔执行器，默认人工打款台账）；
+        //   ③ 出款失败 → **把已扣余额退回**（补偿），规则不标记为已执行。
+        // 注：出款去向不得使用平台方个人账户（二清红线）——账户绑定侧的护栏见
+        // MerchantPayoutAccountService。
         String reference = "AUTO_WITHDRAW_" + LocalDate.now() + "_" + rule.getId();
+
+        MerchantPayoutAccount payoutAccount = null;
+        if (payoutAccountService != null) {
+            payoutAccount = payoutAccountService.resolveActiveAccount(rule.getMerchantId())
+                    .orElse(null);
+            if (payoutAccount == null) {
+                log.warn("自动提现跳过：商户无生效出款账户（不扣账，fail-closed）: merchantId={}",
+                        rule.getMerchantId());
+                result.put("reason", "NO_PAYOUT_ACCOUNT");
+                return result;
+            }
+        }
+
         try {
             MerchantAccount updatedAccount = accountService.withdrawWithType(
                     rule.getMerchantId(), withdrawAmount, reference,
                     AccountOperationType.AUTO_WITHDRAW);
+
+            // ② 登记出款任务（出款去向已知；执行器失败 → ③ 补偿）
+            String payoutRef = null;
+            if (payoutExecutor != null) {
+                try {
+                    payoutRef = payoutExecutor.pay(rule.getMerchantId(), payoutAccount,
+                            withdrawAmount, reference);
+                } catch (RuntimeException e) {
+                    // 出款失败：把已扣余额退回商户，规则不推进（可下周期重试）
+                    accountService.depositWithType(rule.getMerchantId(), withdrawAmount,
+                            "AUTO_WITHDRAW_ROLLBACK_" + reference,
+                            AccountOperationType.RECON_ADJUST);
+                    log.error("自动提现已扣账但出款失败，已退回余额: merchantId={}, amount={}, error={}",
+                            rule.getMerchantId(), withdrawAmount, e.getMessage());
+                    result.put("reason", "PAYOUT_FAILED_REFUNDED");
+                    result.put("error", e.getMessage());
+                    return result;
+                }
+            }
 
             // 更新规则的最后执行时间
             rule.setLastExecutedAt(LocalDateTime.now());
@@ -229,9 +280,12 @@ public class AutoWithdrawService {
             result.put("withdrawAmount", withdrawAmount);
             result.put("reference", reference);
             result.put("balanceAfter", updatedAccount.getBalance());
+            result.put("payoutRef", payoutRef);
+            result.put("payoutAccountType",
+                    payoutAccount != null ? payoutAccount.getAccountType().name() : null);
 
-            log.info("自动提现成功: merchantId={}, amount={}, balanceAfter={}",
-                    rule.getMerchantId(), withdrawAmount, updatedAccount.getBalance());
+            log.info("自动提现成功: merchantId={}, amount={}, balanceAfter={}, payoutRef={}",
+                    rule.getMerchantId(), withdrawAmount, updatedAccount.getBalance(), payoutRef);
 
         } catch (Exception e) {
             log.error("自动提现执行失败: merchantId={}, error={}", rule.getMerchantId(), e.getMessage());
