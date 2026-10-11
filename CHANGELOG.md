@@ -2,6 +2,26 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [2.67.1] - 2026-10-11
+
+### 热→冷归集补上多签审批闸门（此前"无审批即可转出冷钱包资金"）
+
+**问题（v2.0.0 起挂着的 TODO 被审计坐实）**：`DefaultFundSweepService.transferToCold()`
+带注释 `TODO(v2.0.0): 冷钱包转移需多签审批`，但实现是**直接 `bookTransfer` 把热钱包全部余额
+转到冷钱包**——即**热钱包资金可被无审批地转出**，而 `MultiSigApprovalService` 全类零调用方
+（审批服务建好了、闸门没接上）。
+
+- **无审批面默认拒绝**：`transferToCold()` 在**装配了审批服务**（生产）时直接抛错，
+  并把正确姿势写进错误信息（先申请/审批 `orderId=COLD_TRANSFER`，再调审批版）。
+- **新增审批版 `transferToCold(String approvalId)`**，两道校验：
+  1. 审批单状态必须 **APPROVED**；
+  2. 审批**用途**（`orderId`）必须是 `COLD_TRANSFER` —— 防止"拿一笔无关的审批去挪冷钱包资金"
+     （这是审批类闸门最常见的绕过方式）。
+- **兼容**：未装配审批服务（旧装配/单测）时保持历史行为；Spring 运行时恒注入 ⇒ 生产必过闸门。
+
+**测试**：新增 `FundSweepMultiSigGateTest` **5 例**（无审批面拒绝 / 未批准拒绝 / **用途不符拒绝** /
+正路执行 / 旧装配兼容）；`nexus-settlement` **全包 315 例 0 失败**。
+
 ## [2.67.0] - 2026-10-11
 
 ### 跨服务审计补齐：wallet-service 自带审计表（提现四个节点落库）
