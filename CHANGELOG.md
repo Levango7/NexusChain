@@ -2,6 +2,35 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [2.67.0] - 2026-10-11
+
+### 跨服务审计补齐：wallet-service 自带审计表（提现四个节点落库）
+
+**背景（此前的诚实声明）**：v2.63.x 的审计只覆盖网关侧四条资金主路径；**wallet-service
+（提现审批与执行）没有接入**——它是独立模块、独立库（`nexus_wallet`），网关的 `audit_events`
+覆盖不到它。当时记为"需架构级决策（事件总线或独立审计表）"。
+
+**本批决策（选了最小架构代价的那条）**：**不引入事件总线**（Kafka/outbox 都是新设施与运维面），
+改为**本模块自带审计表**——与网关侧同构、同命名风格，运维心智一致。
+
+- **迁移 V4 + `WalletAuditEvent` + 仓储 + `WalletAuditService`**：
+  `wallet_audit_events`（append-only；H2-MODE=MySQL 兼容 DDL，与 V3 同风格）。
+- **接入提现四个关键节点**：`WITHDRAWAL_REQUESTED`（含所需审批人数）/
+  `WITHDRAWAL_APPROVED`（含实际审批人数）/ `WITHDRAWAL_EXECUTED`（**带链上哈希**，
+  资金出口可追查）/ `WITHDRAWAL_FAILED`（带失败原因）。
+- **两条刻意的安全属性**：
+  1. **旁路铁律**：审计写失败（DB 抖动/表缺失）**绝不向上抛**——提现流程不能因审计故障卡死。
+     服务内 try-catch + WARN，调用点再兜一层。
+  2. **setter 注入**（`@Autowired(required=false)`）而非加构造参数：该服务已有两个构造器，
+     再加参数会重蹈 v2.63.1 的 `No default constructor found` 事故。
+
+**测试**：新增 `WalletAuditServiceTest` **4 例**（执行事件字段完整 / 失败事件带原因 /
+**旁路铁律：落库失败不抛** / 空字段容忍）；`nexus-wallet-service` **全包 191 例 0 失败**
+（含 Flyway V4 在 H2-MODE=MySQL 下成功建表、`ddl-auto=validate` 通过 ⇒ 迁移与实体一致）。
+
+**至此审计覆盖面**：网关侧（支付确认/退款/调账/出款/渠道退款）+ 钱包侧（提现请求/审批/执行/失败）
+——**四条资金主路径 + 提现出口全部可查**。
+
 ## [2.66.1] - 2026-10-11
 
 ### 桥的链上执行覆盖从 1 条链扩到 3 条（BSC / Avalanche 凭证路径补齐）
