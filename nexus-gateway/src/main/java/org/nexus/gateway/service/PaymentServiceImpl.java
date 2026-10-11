@@ -4,6 +4,7 @@ import org.nexus.gateway.PaymentService;
 import org.nexus.gateway.client.ChainRpcClient;
 import org.nexus.gateway.client.OnChainTransaction;
 import org.nexus.gateway.compliance.AmlResult;
+import org.nexus.gateway.audit.AuditLogService;
 import org.nexus.gateway.compliance.ComplianceService;
 import org.nexus.gateway.compliance.KycStatus;
 import org.nexus.gateway.config.GatewayConfig;
@@ -74,6 +75,19 @@ public class PaymentServiceImpl implements PaymentService {
     private final KeyManager keyManager;
     private final PaymentRiskService riskService;
     private final ComplianceService complianceService;
+
+    /**
+     * 审计（P0 修复 2026-10-11，setter 注入）。
+     *
+     * <p>资金主链路的确认/退款必须落审计（此前只有日志文件、且主链路零覆盖）。
+     * 用 setter 注入而非构造函数：避免动构造签名波及既有测试。</p>
+     */
+    private AuditLogService auditLogService;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setAuditLogService(AuditLogService auditLogService) {
+        this.auditLogService = auditLogService;
+    }
     /** Micrometer Tracer：P3-T5 业务 span 注入。可为 null（测试环境降级 no-op）。 */
     private final Tracer tracer;
     /** P2-F3：三阶段执行模板（落库 PENDING → 链上执行 → 更新 CONFIRMED/FAILED） */
@@ -560,6 +574,12 @@ public class PaymentServiceImpl implements PaymentService {
                     Instant.now(),
                     0L,
                     0));
+
+            // 审计（P0 修复 2026-10-11）：资金入账必须可追查 —— 谁、哪笔订单、哪个链上交易
+            if (auditLogService != null) {
+                auditLogService.recordPayment(order.getMerchantId(), order.getOrderNo(),
+                        "PAYMENT_CONFIRMED", null);
+            }
 
             return PaymentResult.success(order.getOrderNo(), chainTxHash, order.getPaidAt());
         }
