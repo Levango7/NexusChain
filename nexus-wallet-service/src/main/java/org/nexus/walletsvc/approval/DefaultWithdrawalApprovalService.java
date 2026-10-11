@@ -86,6 +86,20 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
     private final String platformWalletAddress;
     private final WithdrawalRequestRepository withdrawalRequestRepository;
     private final WithdrawalApproverRepository withdrawalApproverRepository;
+
+    /**
+     * 审计（P0 补齐 2026-10-11，setter 注入）。
+     *
+     * <p>提现是钱包侧唯一的资金出口，四个关键节点都要留痕（请求/审批/执行/失败）。
+     * 用 setter 注入：本类已有两个构造器，再加参数会重蹈"多构造器"的坑
+     * （2026-10-11 网关侧 `No default constructor found` 事故）。</p>
+     */
+    private org.nexus.walletsvc.audit.WalletAuditService walletAuditService;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setWalletAuditService(org.nexus.walletsvc.audit.WalletAuditService walletAuditService) {
+        this.walletAuditService = walletAuditService;
+    }
     /** P2-F3：三阶段执行模板（落库 PENDING → 链上签名广播 → 更新 EXECUTED/FAILED） */
     private final ThreePhaseExecutionTemplate threePhaseTemplate;
 
@@ -162,6 +176,7 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
         WithdrawalRequestEntity entity = WithdrawalRequestMapper.toEntity(request);
         WithdrawalRequestEntity saved = withdrawalRequestRepository.save(entity);
 
+        audit("WITHDRAWAL_REQUESTED", entity, "requiredApprovers=" + saved.getRequiredApprovers());
         log.info("Withdrawal requested: requestId={}, to={}, amount={}, requiredApprovers={}",
                 saved.getRequestId(), to, amount, saved.getRequiredApprovers());
         // 新建请求无审批人，返回空 approvers 列表
@@ -198,6 +213,7 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
         if (newCount >= entity.getRequiredApprovers()) {
             entity.setStatus(WithdrawalRequest.WithdrawalStatus.APPROVED);
             log.info("Withdrawal approved: requestId={}, approvers={}", approvalId, newCount);
+            audit("WITHDRAWAL_APPROVED", entity, "approvers=" + newCount);
         } else {
             log.info("Withdrawal approval recorded: requestId={}, approver={}, count={}/{}",
                     approvalId, approverId, newCount, entity.getRequiredApprovers());
@@ -315,11 +331,13 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
                         e.setExecutedAt(LocalDateTime.now());
                         log.info("Withdrawal executed via signing-service: requestId={}, txHash={}",
                                 approvalId, onChainResult.getTxHash());
+                        audit("WITHDRAWAL_EXECUTED", e, "txHash=" + onChainResult.getTxHash());
                     } else {
                         e.setStatus(WithdrawalRequest.WithdrawalStatus.FAILED);
                         e.setRejectionReason(onChainResult.getError());
                         log.error("Withdrawal execution failed: requestId={}, reason={}",
                                 approvalId, onChainResult.getError());
+                        audit("WITHDRAWAL_FAILED", e, "error=" + onChainResult.getError());
                     }
                     withdrawalRequestRepository.save(e);
                 });
@@ -411,5 +429,18 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
                 .map(entity -> WithdrawalRequestMapper.toDto(
                         entity, withdrawalApproverRepository.findByRequestId(entity.getRequestId())))
                 .collect(Collectors.toList());
+    }
+
+    /** 写审计（旁路：WalletAuditService 自身已吞异常，这里再兜一层，确保主流程不受影响）。 */
+    private void audit(String action, WithdrawalRequestEntity entity, String detail) {
+        if (walletAuditService == null || entity == null) {
+            return;
+        }
+        try {
+            walletAuditService.record(action, entity.getRequestId(), entity.getToAddress(),
+                    entity.getAmount(), entity.getCurrency(), detail);
+        } catch (RuntimeException ignored) {
+            // 审计绝不影响资金流程
+        }
     }
 }

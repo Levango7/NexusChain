@@ -9,7 +9,7 @@ NexusChain 是一个**基于自研区块链的支付编排平台（Payment Orche
 > 沙箱/仿真态对外展示，生产资金操作由持牌交付方在其合规主体下运行。
 
 > **版本口径（2026-09-28 第三次修复漂移，CI 门禁化）**：构建侧**双源**为根 `build.gradle` 的 `version`
-> 与 `nexus-core/nexus-core/src/main/resources/version.properties` 的 `versionNumber`（当前均为 `2.65.1`；
+> 与 `nexus-core/nexus-core/src/main/resources/version.properties` 的 `versionNumber`（当前均为 `2.67.0`；
 > 发版时**两处都要改**——v2.50.2 曾因 version.properties 滞后导致 jar 名错位）；
 > 发布说明单一来源为 [CHANGELOG](CHANGELOG.md)（最新条目 `[2.58.0] - 2026-10-11`，
 > 即出款去向模型接线：自动提现从「只扣账不出款」改为「有去向才扣账、出款失败必退回」）。
@@ -194,6 +194,21 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
   **写入侧覆盖四条资金主路径**：支付确认 / 退款（审批·执行·失败）/ 对账调账（加·扣·失败）/
   自动出款（执行·失败已退回·无出款账户被拒）/ 渠道退款（微信按 `transaction_id`、
   支付宝按 `trade_no` 原路退回）。**审计为旁路**：写失败绝不阻断资金流程。
+
+- **出款账户（结算账户）管理入口（2026-10-11 补齐）**：自动提现的闸门是"**无生效出款账户就拒绝扣账**"
+  （v2.62.0），但绑定入口此前缺失 ⇒ 该功能实际不可用。现补上（**一律 `ROLE_ADMIN`**——
+  出款去向是最敏感的资金出口配置）：
+
+  | 方法 | 路径 | 说明 |
+  |---|---|---|
+  | POST | `/api/v1/payout-accounts` | 绑定出款账户（进 `PENDING_VERIFY`，需核验） |
+  | GET | `/api/v1/payout-accounts/{merchantId}` | 列出该商户账户（含待核验/停用） |
+  | POST | `/api/v1/payout-accounts/{id}/activate` | 核验通过 → 生效（方可作为出款去向） |
+  | POST | `/api/v1/payout-accounts/{id}/disable` | 停用（留痕，不物理删除） |
+
+  **合规护栏（服务层强制，端点原样透传原因）**：`PLATFORM_SETTLEMENT` 必须持牌主体
+  （`complianceEntity=true`）——平台方不得以自有账户收商户款并对外出款（**二清红线**）；
+  户名必须与商户主体一致（防绑他人账户）。
 
   **keyshare 供给两条等价路径**：① 业务侧走上面 `POST /wallets`（经 Java 驱动引擎跑仪式）；
   ② 集群运维侧走 `scripts/mpc-wallet-ceremony.py`（不经 signing-service，纯 grpcurl）。

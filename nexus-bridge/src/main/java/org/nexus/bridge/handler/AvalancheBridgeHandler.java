@@ -7,6 +7,8 @@ import org.nexus.bridge.LockRequest;
 import org.nexus.bridge.MintRequest;
 import org.nexus.bridge.UnlockRequest;
 import org.nexus.bridge.model.BridgeTransaction;
+import org.nexus.bridge.keyvault.KeyVault;
+import org.web3j.crypto.Credentials;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.web3j.protocol.Web3j;
@@ -78,6 +80,9 @@ public class AvalancheBridgeHandler extends AbstractBridgeHandler {
     /** Avalanche C-Chain 桥合约地址。 */
     private String contractAddress;
 
+    /** 目标链桥合约（未配置回退 contractAddress，见全参构造器）。 */
+    private String targetContractAddress;
+
     /** NEX 代币合约地址。 */
     private String nexusTokenAddress;
 
@@ -94,6 +99,35 @@ public class AvalancheBridgeHandler extends AbstractBridgeHandler {
      */
     public AvalancheBridgeHandler(BridgeConfig config) {
         super(config);
+    }
+
+    /**
+     * 全参数构造器（支持真实交易发送，2026-10-11 补齐）。
+     *
+     * <p>此前本类只有 (config) 与 (config, contractAddress, nexusTokenAddress, rpcEndpoint)
+     * 两个构造器——**无法注入 Credentials**，于是无论怎么配置都只能走
+     * submitContractCall 的"无凭证"分支（非 mock 模式直接抛 CHAIN_EXECUTION_UNAVAILABLE）。
+     * 本构造器与 EthereumBridgeHandler 同参数序，使桥的链上执行覆盖从 1 条链扩到多条。</p>
+     *
+     * <p>Avalanche 侧四种操作共用同一桥合约（contractAddress）；targetContractAddress
+     * 仅为与 Ethereum 形态对齐保留，未配置即回退 contractAddress。</p>
+     */
+    public AvalancheBridgeHandler(org.nexus.bridge.BridgeConfig config, String sourceContractAddress,
+                  String targetContractAddress, String nexusTokenAddress,
+                  String rpcEndpoint, Credentials credentials,
+                  Long evmChainId, KeyVault keyVault, String relayerValidatorId) {
+        super(config);
+        this.contractAddress = sourceContractAddress;
+        this.targetContractAddress = targetContractAddress != null && !targetContractAddress.isBlank()
+                ? targetContractAddress : sourceContractAddress;
+        this.nexusTokenAddress = nexusTokenAddress;
+        this.rpcEndpoint = rpcEndpoint;
+        this.credentials = credentials;
+        this.evmChainId = evmChainId != null
+                ? java.math.BigInteger.valueOf(evmChainId)
+                : java.math.BigInteger.valueOf(43114);
+        this.keyVault = keyVault;
+        this.relayerValidatorId = relayerValidatorId;
     }
 
     /**

@@ -2,6 +2,81 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [2.67.0] - 2026-10-11
+
+### 跨服务审计补齐：wallet-service 自带审计表（提现四个节点落库）
+
+**背景（此前的诚实声明）**：v2.63.x 的审计只覆盖网关侧四条资金主路径；**wallet-service
+（提现审批与执行）没有接入**——它是独立模块、独立库（`nexus_wallet`），网关的 `audit_events`
+覆盖不到它。当时记为"需架构级决策（事件总线或独立审计表）"。
+
+**本批决策（选了最小架构代价的那条）**：**不引入事件总线**（Kafka/outbox 都是新设施与运维面），
+改为**本模块自带审计表**——与网关侧同构、同命名风格，运维心智一致。
+
+- **迁移 V4 + `WalletAuditEvent` + 仓储 + `WalletAuditService`**：
+  `wallet_audit_events`（append-only；H2-MODE=MySQL 兼容 DDL，与 V3 同风格）。
+- **接入提现四个关键节点**：`WITHDRAWAL_REQUESTED`（含所需审批人数）/
+  `WITHDRAWAL_APPROVED`（含实际审批人数）/ `WITHDRAWAL_EXECUTED`（**带链上哈希**，
+  资金出口可追查）/ `WITHDRAWAL_FAILED`（带失败原因）。
+- **两条刻意的安全属性**：
+  1. **旁路铁律**：审计写失败（DB 抖动/表缺失）**绝不向上抛**——提现流程不能因审计故障卡死。
+     服务内 try-catch + WARN，调用点再兜一层。
+  2. **setter 注入**（`@Autowired(required=false)`）而非加构造参数：该服务已有两个构造器，
+     再加参数会重蹈 v2.63.1 的 `No default constructor found` 事故。
+
+**测试**：新增 `WalletAuditServiceTest` **4 例**（执行事件字段完整 / 失败事件带原因 /
+**旁路铁律：落库失败不抛** / 空字段容忍）；`nexus-wallet-service` **全包 191 例 0 失败**
+（含 Flyway V4 在 H2-MODE=MySQL 下成功建表、`ddl-auto=validate` 通过 ⇒ 迁移与实体一致）。
+
+**至此审计覆盖面**：网关侧（支付确认/退款/调账/出款/渠道退款）+ 钱包侧（提现请求/审批/执行/失败）
+——**四条资金主路径 + 提现出口全部可查**。
+
+## [2.66.1] - 2026-10-11
+
+### 桥的链上执行覆盖从 1 条链扩到 3 条（BSC / Avalanche 凭证路径补齐）
+
+**背景**：v2.56.0 把桥的链上执行接通了，但**只有 ethereum**——因为只有
+`EthereumBridgeHandler` 有带 `Credentials` 的构造器；`BSCBridgeHandler` /
+`AvalancheBridgeHandler` 只有 `(config)` 与 `(config, contract, token, rpc)` 两种，
+**无法注入签名凭证** ⇒ 无论怎么配置都只能走 `submitContractCall` 的"无凭证"分支
+（非 mock 模式直接抛 `CHAIN_EXECUTION_UNAVAILABLE`）。
+
+- **两个 handler 各补全参构造器**（与 `EthereumBridgeHandler` 同参数序）+ `targetContractAddress`
+  字段（未配置回退 `contractAddress`）。二者本已复用共享的 `submitContractCall`——
+  **凭证非空即 `eth_sendRawTransaction`**，因此补构造器即完成能力补齐（无需改交易逻辑）。
+- **执行器注册表扩为多链**：`EVM_SIGNING_CHAINS = {ethereum, bsc, avalanche}`，
+  按链名从 `BridgeChainProperties` 取配置并装配对应 handler（链名大小写不敏感）。
+  **Solana 仍未接入**（非 EVM，签名与交易构造是另一套）——已写入类注释与测试门禁。
+
+**测试**：`BridgeOnChainExecutionTest` 更新 + 扩充（原"bsc 不可上链"断言已过时，改为
+**bsc/avalanche 可上链 + 大小写不敏感 + Solana 仍不可上链**）；`nexus-bridge` 该测试 10 例全过。
+
+## [2.66.0] - 2026-10-11
+
+### 出款账户管理入口补齐：让"自动提现"这个功能真的能用
+
+**问题（本会话第四次命中同型）**：v2.61.0 建了出款账户模型、v2.62.0 把"**无生效出款账户就拒绝
+扣账**"的闸门接进自动提现——但 `MerchantPayoutAccountService` 的
+`bind` / `activate` / `disable` **没有任何调用方、也没有控制器**：
+
+⇒ 商户**无法绑定出款账户** ⇒ `resolveActiveAccount` 恒为空 ⇒ 闸门**正确地拒绝了一切，
+包括这个功能本身** ⇒ 自动提现**永远不会执行**。即"模型齐全、入口缺失"的典型。
+
+- **新增 `PayoutAccountController`**（`/api/v1/payout-accounts/**`）：
+  绑定 → `PENDING_VERIFY`；`activate` 核验通过 → `ACTIVE`（方可用于出款）；`disable` 停用（留痕）；
+  `GET` 列出该商户全部账户（含待核验/停用，便于运营核对）。
+- **权限一律 `ROLE_ADMIN`**：出款去向是资金出口配置，属最敏感数据面；当前 `MerchantOwnershipGuard`
+  未覆盖本模块，若开放 MERCHANT 自助绑定必须先做按商户主体的归属校验（已写入类注释，属后续项）。
+- **合规护栏原样透传**：`PLATFORM_SETTLEMENT` 必须持牌主体（**二清红线**）、户名须与商户主体一致
+  ——端点把服务层拒绝原因以 400 + `error` 返回，运营看得懂为什么被拒。
+
+**测试**：新增 `PayoutAccountControllerWebTest` **5 例**（绑定成功 / **合规护栏违反 → 400 且透传二清原因** /
+列表 / activate / disable）；`fundreport` 包 22 例全过。
+
+**勘误**：本批同时修正我在"结算批次"批次中的自我评价——连续第 4 次证明：**"零调用方"的功能
+未必是"忘了接"，也可能是"入口从未存在"**，必须逐个确认再动手（前三次：长款双向动账、
+提现"冻结"不存在、结算平行实现）。
+
 ## [2.65.1] - 2026-10-11
 
 ### 结算"缺触发器"实为"平行实现"：给死代码加防误接闸门（不做触发器）

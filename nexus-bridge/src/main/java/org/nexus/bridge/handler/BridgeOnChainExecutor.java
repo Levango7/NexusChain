@@ -34,11 +34,13 @@ import java.util.concurrent.ConcurrentHashMap;
  *   <li>{@code nexus.bridge.<chain>.relayer-private-key}（中继者 EVM 私钥，env 注入）</li>
  * </ol>
  *
- * <h2>当前覆盖范围（诚实声明）</h2>
- * <p>仅有 {@link EthereumBridgeHandler} 支持凭证签名（真发交易）；
- * {@code BSCBridgeHandler}/{@code AvalancheBridgeHandler}/{@code SolanaBridgeHandler}
- * 尚无凭证构造路径，因此本执行器目前只装配 <b>ethereum</b>，其余链返回
- * {@link Optional#empty()}（由调用方按 {@code mockMode} 决定 fail-closed 或放行）。</p>
+ * <h2>当前覆盖范围（2026-10-11 扩展）</h2>
+ * <p>支持凭证签名（真发交易）的链：<b>ethereum / bsc / avalanche</b>
+ * —— 三者皆为 EVM 且共用 {@code AbstractBridgeHandler.submitContractCall}
+ * （credentials 非空即 {@code eth_sendRawTransaction}）。
+ * {@code SolanaBridgeHandler} 仍未接入（非 EVM，签名与交易构造是另一套）。</p>
+ * <p>未配置凭证的链返回 {@link Optional#empty()}（由调用方按 {@code mockMode}
+ * 决定 fail-closed 或放行）。</p>
  *
  * <h2>失败语义</h2>
  * <p>广播失败（RPC 不可达 / 合约调用失败 / 私钥非法）→ 异常向上抛，
@@ -49,8 +51,9 @@ public class BridgeOnChainExecutor {
 
     private static final Logger log = LoggerFactory.getLogger(BridgeOnChainExecutor.class);
 
-    /** 目前唯一支持真实签名广播的链（见类注释"覆盖范围"）。 */
-    private static final String EVM_SIGNING_CHAIN = "ethereum";
+    /** 支持真实签名广播的链（EVM 系；Solana 未接入——非 EVM，签名与交易构造另一套）。 */
+    private static final java.util.Set<String> EVM_SIGNING_CHAINS =
+            java.util.Set.of("ethereum", "bsc", "avalanche");
 
     private final BridgeConfig config;
     private final BridgeChainProperties chainProperties;
@@ -117,38 +120,62 @@ public class BridgeOnChainExecutor {
      * 由调用方按 {@code mockMode} fail-closed，避免"配置错但静默成功"。</p>
      */
     private Optional<AbstractBridgeHandler> resolveHandler(String chainId) {
-        if (chainId == null || !EVM_SIGNING_CHAIN.equalsIgnoreCase(chainId)) {
+        if (chainId == null) {
             return Optional.empty();
         }
-        BridgeChainProperties.Chain chain = chainProperties.getEthereum();
-        if (chain == null || !chain.isOnChainReady()) {
+        String chain = chainId.trim().toLowerCase();
+        if (!EVM_SIGNING_CHAINS.contains(chain)) {
+            return Optional.empty();
+        }
+        BridgeChainProperties.Chain props = chainPropertiesFor(chain);
+        if (props == null || !props.isOnChainReady()) {
             return Optional.empty();
         }
         try {
-            return Optional.of(handlers.computeIfAbsent(EVM_SIGNING_CHAIN, k -> build(chain)));
+            return Optional.of(handlers.computeIfAbsent(chain, k -> build(chain, props)));
         } catch (RuntimeException e) {
             log.error("[BridgeOnChain] 装配 {} handler 失败（视为不可上链，fail-closed）: {}",
-                    EVM_SIGNING_CHAIN, e.getMessage());
+                    chain, e.getMessage());
             return Optional.empty();
         }
     }
 
-    private AbstractBridgeHandler build(BridgeChainProperties.Chain chain) {
-        Credentials credentials = Credentials.create(chain.getRelayerPrivateKey());
-        String targetContract = chain.getTargetContractAddress() != null
-                && !chain.getTargetContractAddress().isBlank()
-                ? chain.getTargetContractAddress()
-                : chain.getContractAddress();
-        log.info("[BridgeOnChain] 装配 ethereum handler: rpc={}, contract={}, targetContract={}, evmChainId={}",
-                chain.getRpcEndpoint(), chain.getContractAddress(), targetContract, chain.getEvmChainId());
-        return new EthereumBridgeHandler(config,
-                chain.getContractAddress(),
-                targetContract,
-                chain.getNexusTokenAddress(),
-                chain.getRpcEndpoint(),
-                credentials,
-                chain.getEvmChainId(),
-                null,
-                null);
+    /** 链名 → 配置（bsc / avalanche 的 getter 已存在于 BridgeChainProperties）。 */
+    private BridgeChainProperties.Chain chainPropertiesFor(String chain) {
+        switch (chain) {
+            case "ethereum":
+                return chainProperties.getEthereum();
+            case "bsc":
+                return chainProperties.getBsc();
+            case "avalanche":
+                return chainProperties.getAvalanche();
+            default:
+                return null;
+        }
+    }
+
+    private AbstractBridgeHandler build(String chain, BridgeChainProperties.Chain props) {
+        Credentials credentials = Credentials.create(props.getRelayerPrivateKey());
+        String targetContract = props.getTargetContractAddress() != null
+                && !props.getTargetContractAddress().isBlank()
+                ? props.getTargetContractAddress()
+                : props.getContractAddress();
+        log.info("[BridgeOnChain] 装配 {} handler: rpc={}, contract={}, targetContract={}, evmChainId={}",
+                chain, props.getRpcEndpoint(), props.getContractAddress(), targetContract,
+                props.getEvmChainId());
+        switch (chain) {
+            case "bsc":
+                return new BSCBridgeHandler(config, props.getContractAddress(), targetContract,
+                        props.getNexusTokenAddress(), props.getRpcEndpoint(), credentials,
+                        props.getEvmChainId(), null, null);
+            case "avalanche":
+                return new AvalancheBridgeHandler(config, props.getContractAddress(), targetContract,
+                        props.getNexusTokenAddress(), props.getRpcEndpoint(), credentials,
+                        props.getEvmChainId(), null, null);
+            default:
+                return new EthereumBridgeHandler(config, props.getContractAddress(), targetContract,
+                        props.getNexusTokenAddress(), props.getRpcEndpoint(), credentials,
+                        props.getEvmChainId(), null, null);
+        }
     }
 }
