@@ -88,8 +88,9 @@ class AuditEventControllerTest {
     void recent_clampsPageSize() {
         when(repository.findAll(any(Pageable.class)))
                 .thenReturn(new PageImpl<>(List.of()));
-        ResponseEntity<Page<AuditEventEntity>> resp = controller.recent(0, 10000);
-        assertEquals(0, resp.getBody().getTotalElements());
+        ResponseEntity<java.util.Map<String, Object>> resp = controller.recent(0, 10000);
+        assertEquals(0L, resp.getBody().get("total"));
+        assertEquals(200, resp.getBody().get("limit"));
         ArgumentCaptor<Pageable> c = ArgumentCaptor.forClass(Pageable.class);
         verify(repository).findAll(c.capture());
         assertEquals(200, c.getValue().getPageSize(), "size=10000 应被夹到 200");

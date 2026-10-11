@@ -2,6 +2,28 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [2.64.2] - 2026-10-11
+
+### 审计查询端点补 Web 层验证 + 两处真缺陷修复（405 语义 / 分页响应形态）
+
+**背景**：v2.64.1 的审计查询端点只有 mock 仓储的单元测试——"端点在 HTTP 层真能被调用、
+返回的 JSON 形态正确、只读契约成立"都没验证过。本批补 Web 层测试（standalone MockMvc +
+生产同款 `GlobalExceptionHandler`），一补就抓出两个真问题：
+
+1. **405 被吞成 500**（真缺陷）：`GlobalExceptionHandler` 只有兜底 `Exception` 处理器，
+   `HttpRequestMethodNotSupportedException` 被它接走并返回 **500**——"只读端点被 POST"
+   该回 405，让调用方知道是方法问题而不是"服务端炸了"。已补显式映射 → 405。
+2. **分页响应形态不合仓库惯例**（设计缺陷）：`GET /api/v1/audit/events` 原本直接返回
+   Spring Data 的 `Page`——序列化依赖 Spring Data 的 Jackson 模块，且与仓库既有列表风格
+   （显式 `data/total/page/limit`，见 `PaymentOrchestrationController.listPayments`）不一致。
+   已改为同款显式字段（`data`/`total`/`page`/`limit`）。
+
+**另**：README 补**审计与对账查询入口表**（4 个端点 + 写入侧覆盖的四条资金主路径与渠道口径），
+此前这些端点在文档里查不到，运维发现不了。
+
+**测试**：新增 `AuditEventControllerWebTest` **6 例**（三视图返回 JSON / 时间窗参数非法 → 4xx /
+分页视图 / **只读契约：POST → 405**）；`audit` 包 25 例全过。
+
 ## [2.64.1] - 2026-10-11
 
 ### 支付宝原路退回接入 + 审计查询端点（审计从"只写"变成"可查"）

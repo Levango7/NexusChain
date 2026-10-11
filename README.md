@@ -9,7 +9,7 @@ NexusChain 是一个**基于自研区块链的支付编排平台（Payment Orche
 > 沙箱/仿真态对外展示，生产资金操作由持牌交付方在其合规主体下运行。
 
 > **版本口径（2026-09-28 第三次修复漂移，CI 门禁化）**：构建侧**双源**为根 `build.gradle` 的 `version`
-> 与 `nexus-core/nexus-core/src/main/resources/version.properties` 的 `versionNumber`（当前均为 `2.64.1`；
+> 与 `nexus-core/nexus-core/src/main/resources/version.properties` 的 `versionNumber`（当前均为 `2.64.2`；
 > 发版时**两处都要改**——v2.50.2 曾因 version.properties 滞后导致 jar 名错位）；
 > 发布说明单一来源为 [CHANGELOG](CHANGELOG.md)（最新条目 `[2.58.0] - 2026-10-11`，
 > 即出款去向模型接线：自动提现从「只扣账不出款」改为「有去向才扣账、出款失败必退回」）。
@@ -180,6 +180,20 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
   | POST | `/api/v1/mpc/cold-wallet/transfers/{sid}/sign` | MPC 签名（引擎内产出 r‖s 并内部验签） |
   | POST | `/api/v1/mpc/cold-wallet/transfers/{sid}/broadcast` | 聚合 + 上链广播，返回 txHash |
   | GET | `/api/v1/mpc/cold-wallet/transfers/{sid}` | 状态/失败原因/链上哈希 |
+
+- **审计与对账查询入口（2026-10-11 新增/补全）**：资金操作全部写审计（`audit_events` 表，
+  append-only），并提供只读查询面（`ROLE_MERCHANT` / `ROLE_ADMIN`）：
+
+  | 方法 | 路径 | 说明 |
+  |---|---|---|
+  | GET | `/api/v1/audit/events/merchant/{merchantId}` | 按商户查审计（倒序） |
+  | GET | `/api/v1/audit/events/action/{action}` | 按动作查（如 `CHANNEL_REFUND_EXECUTED` / `AUTO_WITHDRAW_EXECUTED`） |
+  | GET | `/api/v1/audit/events/window?from=&to=` | 按时间窗查（ISO-8601） |
+  | GET | `/api/v1/audit/events?page=&size=` | 分页视图（size 夹 1..200） |
+
+  **写入侧覆盖四条资金主路径**：支付确认 / 退款（审批·执行·失败）/ 对账调账（加·扣·失败）/
+  自动出款（执行·失败已退回·无出款账户被拒）/ 渠道退款（微信按 `transaction_id`、
+  支付宝按 `trade_no` 原路退回）。**审计为旁路**：写失败绝不阻断资金流程。
 
   **keyshare 供给两条等价路径**：① 业务侧走上面 `POST /wallets`（经 Java 驱动引擎跑仪式）；
   ② 集群运维侧走 `scripts/mpc-wallet-ceremony.py`（不经 signing-service，纯 grpcurl）。
