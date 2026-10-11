@@ -2,6 +2,26 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [2.66.1] - 2026-10-11
+
+### 桥的链上执行覆盖从 1 条链扩到 3 条（BSC / Avalanche 凭证路径补齐）
+
+**背景**：v2.56.0 把桥的链上执行接通了，但**只有 ethereum**——因为只有
+`EthereumBridgeHandler` 有带 `Credentials` 的构造器；`BSCBridgeHandler` /
+`AvalancheBridgeHandler` 只有 `(config)` 与 `(config, contract, token, rpc)` 两种，
+**无法注入签名凭证** ⇒ 无论怎么配置都只能走 `submitContractCall` 的"无凭证"分支
+（非 mock 模式直接抛 `CHAIN_EXECUTION_UNAVAILABLE`）。
+
+- **两个 handler 各补全参构造器**（与 `EthereumBridgeHandler` 同参数序）+ `targetContractAddress`
+  字段（未配置回退 `contractAddress`）。二者本已复用共享的 `submitContractCall`——
+  **凭证非空即 `eth_sendRawTransaction`**，因此补构造器即完成能力补齐（无需改交易逻辑）。
+- **执行器注册表扩为多链**：`EVM_SIGNING_CHAINS = {ethereum, bsc, avalanche}`，
+  按链名从 `BridgeChainProperties` 取配置并装配对应 handler（链名大小写不敏感）。
+  **Solana 仍未接入**（非 EVM，签名与交易构造是另一套）——已写入类注释与测试门禁。
+
+**测试**：`BridgeOnChainExecutionTest` 更新 + 扩充（原"bsc 不可上链"断言已过时，改为
+**bsc/avalanche 可上链 + 大小写不敏感 + Solana 仍不可上链**）；`nexus-bridge` 该测试 10 例全过。
+
 ## [2.66.0] - 2026-10-11
 
 ### 出款账户管理入口补齐：让"自动提现"这个功能真的能用

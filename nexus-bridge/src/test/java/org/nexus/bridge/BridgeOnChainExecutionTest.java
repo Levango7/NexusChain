@@ -14,6 +14,7 @@ import java.security.Signature;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Optional;
@@ -78,15 +79,27 @@ class BridgeOnChainExecutionTest {
     }
 
     @Test
-    @DisplayName("executor：非 ethereum 链暂不支持真广播（BSC/Avalanche handler 无凭证路径）")
-    void executor_unsupportedChain_unavailable() {
+    @DisplayName("executor：支持链扩到 ethereum/bsc/avalanche（2026-10-11 补齐凭证构造器后）")
+    void executor_evmChains_supported() {
         BridgeChainProperties props = new BridgeChainProperties();
-        props.getBsc().setRpcEndpoint("https://bsc.example");
-        props.getBsc().setContractAddress("0xBridge");
-        props.getBsc().setRelayerPrivateKey(TEST_EVM_KEY);
+        for (BridgeChainProperties.Chain c : List.of(props.getBsc(), props.getAvalanche())) {
+            c.setRpcEndpoint("https://evm.example");
+            c.setContractAddress("0xBridge");
+            c.setRelayerPrivateKey(TEST_EVM_KEY);
+        }
         BridgeOnChainExecutor executor = new BridgeOnChainExecutor(config, props);
-        assertFalse(executor.isOnChainAvailable("bsc"),
-                "BSC handler 无凭证构造路径，应判为不可上链（诚实覆盖范围）");
+
+        assertTrue(executor.isOnChainAvailable("bsc"), "BSC 应有凭证构造路径");
+        assertTrue(executor.isOnChainAvailable("avalanche"), "Avalanche 应有凭证构造路径");
+        assertTrue(executor.isOnChainAvailable("BSC"), "链名大小写不敏感");
+    }
+
+    @Test
+    @DisplayName("executor：Solana 仍未接入（非 EVM）→ 不可上链")
+    void executor_solana_unavailable() {
+        BridgeOnChainExecutor executor = new BridgeOnChainExecutor(config, new BridgeChainProperties());
+        assertFalse(executor.isOnChainAvailable("solana"),
+                "Solana 非 EVM，签名与交易构造是另一套，尚未接入");
     }
 
     @Test
