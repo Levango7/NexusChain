@@ -148,8 +148,24 @@ jobs:
         # 所有模块统一用 repo 根目录作构建上下文（-f 指定 Dockerfile 路径）。
         # Java 模块需根级 gradlew/build.gradle/project() 依赖；
         # Rust 模块 Dockerfile 内 COPY . . 后 WORKDIR 切到子目录。
+        #
+        # 2026-10-11 韧性加固：基础镜像拉取走 Docker Hub 认证端点 auth.docker.io，
+        # 该端点会瞬时不可用（实测 master d194fabe：`failed to fetch oauth token:
+        # unexpected status from POST request to https://auth.docker.io/token`），
+        # docker build 立即 exit 1 → 12 个矩阵 job 中的 2 个变红。此失败与代码/CVE
+        # 无关，属基础设施抖动，却会污染「红 = 代码问题」这一信号。
+        # 故对构建加**有界重试**（3 次 / 间隔 15s）；3 次仍失败才判真实失败。
         run: |
-          docker build -t ${{ matrix.module }}:scan -f ./${{ matrix.module }}/Dockerfile .
+          for attempt in 1 2 3; do
+            if docker build -t ${{ matrix.module }}:scan -f ./${{ matrix.module }}/Dockerfile .; then
+              echo "::notice::docker build 成功（第 ${attempt} 次尝试）"
+              exit 0
+            fi
+            echo "::warning::docker build 第 ${attempt} 次失败（疑似 registry 抖动），15s 后重试"
+            sleep 15
+          done
+          echo "::error::docker build 连续 3 次失败——判定为真实失败"
+          exit 1
 
       - name: Trivy 镜像扫描 → SARIF
         # 钉 commit sha 提升供应链安全（v0.20.0 → b2933f565dbc598b29947660e66259e3c7bc8561）

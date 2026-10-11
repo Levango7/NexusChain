@@ -701,7 +701,19 @@ jobs:
         run: cargo build --release --features tls
 
       - name: Build mpc-engine image
-        run: docker build -t mpc-engine:kind-smoke -f mpc-engine/Dockerfile .
+        # 2026-10-11 韧性加固：与 security-scan.yml 的镜像构建同款——Docker Hub
+        # 认证端点瞬时不可用会让 docker build 直接 exit 1（非代码问题）。
+        # 加有界重试（3 次 / 间隔 15s）。
+        run: |
+          for attempt in 1 2 3; do
+            if docker build -t mpc-engine:kind-smoke -f mpc-engine/Dockerfile .; then
+              exit 0
+            fi
+            echo "::warning::docker build 第 ${attempt} 次失败（疑似 registry 抖动），15s 后重试"
+            sleep 15
+          done
+          echo "::error::docker build 连续 3 次失败"
+          exit 1
 
       # kind 3 节点集群：StatefulSet 反亲和（podAntiAffinity hard）要求
       # 3 副本可调度到不同 Node——3 worker 验证该约束在真实拓扑下成立
