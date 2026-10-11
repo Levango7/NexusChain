@@ -2,6 +2,32 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [2.64.1] - 2026-10-11
+
+### 支付宝原路退回接入 + 审计查询端点（审计从"只写"变成"可查"）
+
+**① 支付宝原路退回（长款闭环补全）**
+
+`ChannelRefundService` 此前只通微信；本次接入 `alipay.trade.refund` 按 **trade_no**
+（渠道交易号）原路退回，`out_request_no` 作为幂等键。RSA2 签名**复用支付连接器同一签名
+工具**（`AlipaySignatureUtil`），不引入第二套签名实现，也不让对账模块反向依赖连接器。
+fail-closed 边界保持：未配商户私钥 → 拒绝发起未签名请求（不再像之前那样"未接入"直接报错）。
+
+**② `audit_events` 查询端点（v2.63.x 写入侧的收尾）**
+
+审计落库后一直"只能写、不能查"——资金纠纷时运维仍要 gzip 日志。新增
+`AuditEventController`（`GET /api/v1/audit/events/**`）：
+
+- **三视图**：按商户 / 按动作（如 `CHANNEL_REFUND_EXECUTED`）/ 按时间窗（ISO-8601）；
+- **分页兜底**：size 夹到 1..200、page 夹到 ≥0，防一次拉全表；
+- **只读**：审计表 append-only，控制器不提供任何改/删接口；
+- **权限从严**：`@PreAuthorize("hasRole('MERCHANT') or hasRole('ADMIN')")`，与
+  `DiscrepancyResolutionController` 同款（审计含资金操作明细，属敏感数据）。
+
+**测试**：`ChannelRefundServiceTest` +2（支付宝缺私钥 fail-closed、大小写不敏感）+ 1 例改写；
+`AuditEventControllerTest` **6 例**（三视图 / 时间窗参数错 / size 夹取 / page 夹取）。
+`audit` 包 14 例、`compensation` 包 22 例全过。
+
 ## [2.64.0] - 2026-10-11
 
 ### 审计埋点扩展到四条资金主路径（v2.63.0 声明余量的兑现）
@@ -24,7 +50,6 @@ v2.63.0 只把**支付确认**接进审计，本批把资金动作面补齐：
 **诚实声明（未做）**：wallet-service（提现审批与执行侧）**没有接入审计**——它是独立模块，没有审计设施；跨服务审计需要事件总线或独立审计表，属"审计基础设施跨服务"独立课题，未在本批过度设计。当前提现侧的凭证仍只有其自身日志。
 
 **测试**：新增 `MoneyPathAuditTest` **5 例**（四条路径各一例 + **旁路属性**：落库失败不得阻断调用方）；`audit` + `refund` 相关包 **29 例全过、无回归**。
-
 ## [2.63.1] - 2026-10-11
 
 ### 紧急修复：两处构造器装配缺陷导致网关在 compose 里起不来（CI k6 冒烟三连红）
