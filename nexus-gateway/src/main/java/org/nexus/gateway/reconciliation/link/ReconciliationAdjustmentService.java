@@ -4,6 +4,7 @@ import org.nexus.gateway.account.AccountOperationType;
 import org.nexus.gateway.account.AccountService;
 import org.nexus.gateway.reconciliation.ReconciliationDiffReport;
 import org.nexus.gateway.reconciliation.ReconciliationDiscrepancy;
+import org.nexus.gateway.reconciliation.ReconciliationDiscrepancyRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -60,6 +61,18 @@ public class ReconciliationAdjustmentService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     public void setAuditLogService(org.nexus.gateway.audit.AuditLogService auditLogService) {
         this.auditLogService = auditLogService;
+    }
+
+    /**
+     * 差错仓库（P1-3 修复 2026-10-12）。
+     *
+     * <p>用 setter 注入而非构造器参数：不破坏既有构造器签名与单测。</p>
+     */
+    private ReconciliationDiscrepancyRepository discrepancyRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setDiscrepancyRepository(ReconciliationDiscrepancyRepository discrepancyRepository) {
+        this.discrepancyRepository = discrepancyRepository;
     }
 
     public ReconciliationAdjustmentService(
@@ -289,6 +302,11 @@ public class ReconciliationAdjustmentService {
             adjustment.setExecutedAt(LocalDateTime.now());
             adjustmentRepository.save(adjustment);
 
+            // P1-3 修复（2026-10-12）：动账后把关联差错置 RESOLVED，否则差错永停 DISCOVERED。
+            // 刻意放在同一事务内：回写失败则连同资金调整一起回滚——宁可整体重试，
+            // 也不留「钱动了、差错仍显示未处理」的不一致状态。
+            markDiscrepancyResolved(adjustment);
+
             // 审计（P0 修复 2026-10-11）：资金调整必须可追查——哪笔差错、往哪个方向、多少钱
             if (auditLogService != null) {
                 try {
@@ -314,6 +332,32 @@ public class ReconciliationAdjustmentService {
             }
             throw e;
         }
+    }
+
+    /**
+     * 把关联差错置为 {@code RESOLVED}（P1-3 修复 2026-10-12）。
+     *
+     * <p>语义与 {@code AutoCompensationService.updateDiscrepancyStatus} 保持一致
+     * （同样的目标状态、时间戳与 resolutionNote 风格），使两条处理路径在差错台账上
+     * 呈现一致。已是 RESOLVED 的差错不重复写，避免覆盖人工填写的 resolutionNote。</p>
+     *
+     * <p>未注入 {@code discrepancyRepository} 时跳过（保持既有单测可直接构造）。</p>
+     */
+    private void markDiscrepancyResolved(ReconciliationAdjustment adjustment) {
+        if (discrepancyRepository == null || adjustment.getDiscrepancyId() == null) {
+            return;
+        }
+        discrepancyRepository.findById(adjustment.getDiscrepancyId()).ifPresent(d -> {
+            if (d.getStatus() == ReconciliationDiscrepancy.DiscrepancyStatus.RESOLVED) {
+                return;
+            }
+            d.setStatus(ReconciliationDiscrepancy.DiscrepancyStatus.RESOLVED);
+            d.setResolvedAt(LocalDateTime.now());
+            d.setResolutionNote("Auto-adjusted: " + adjustment.getAdjustmentType()
+                    + ", amount=" + adjustment.getAmount());
+            discrepancyRepository.save(d);
+            log.info("差错已标记为 RESOLVED（自动调账闭环）: discrepancyId={}", d.getId());
+        });
     }
 
     /**
