@@ -1,5 +1,6 @@
 package org.nexus.gateway.fundreport;
 
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -20,6 +21,16 @@ import java.util.List;
  *
  * <p>幂等控制：AutoWithdrawService.executeAutoWithdraw 内部基于 lastExecutedAt
  * 判断当前周期是否已执行，确保即使调度器重复触发也不会重复提现。</p>
+ *
+ * <p><strong>2026-10-12 加固（出款双链审计发现）</strong>：</p>
+ * <ul>
+ *   <li><b>ShedLock 补挂</b>：原实现既无 {@code @SchedulerLock} 也无开关 —— 多副本部署时
+ *       每个实例都会在 02:00 全量扫一遍规则；规则级 {@code lastExecutedAt} 判重是
+ *       「读-判-写」非原子（第二个实例可能先通过判断再扣账），而这里动的是资金。
+ *       现按 {@code SettlementScheduler} 同款加锁（锁持久化在 shedlock 表）。</li>
+ *   <li><b>总开关</b>：{@code nexus.auto-withdraw.enabled}（默认 true，保持既有行为）——
+ *       停用自动提现不必改库或重配规则，是运维应急手段。</li>
+ * </ul>
  */
 @Component
 public class AutoWithdrawScheduler {
@@ -28,6 +39,13 @@ public class AutoWithdrawScheduler {
 
     private final AutoWithdrawRuleRepository ruleRepository;
     private final AutoWithdrawService autoWithdrawService;
+
+    /**
+     * 自动提现总开关（默认 true）。用字段注入而非构造器参数：保留既有 2 参构造器签名，
+     * 不影响直接 {@code new} 的测试与既有装配。
+     */
+    @org.springframework.beans.factory.annotation.Value("${nexus.auto-withdraw.enabled:true}")
+    private boolean enabled = true;
 
     public AutoWithdrawScheduler(AutoWithdrawRuleRepository ruleRepository,
                                   AutoWithdrawService autoWithdrawService) {
@@ -42,7 +60,12 @@ public class AutoWithdrawScheduler {
      * 单条规则执行失败不影响其他规则。</p>
      */
     @Scheduled(cron = "0 0 2 * * *")
+    @SchedulerLock(name = "autoWithdrawDaily", lockAtMostFor = "PT15M", lockAtLeastFor = "PT30S")
     public void executeDailyAutoWithdraw() {
+        if (!enabled) {
+            log.info("自动提现已停用（nexus.auto-withdraw.enabled=false），跳过每日调度");
+            return;
+        }
         log.info("每日自动提现调度开始: {}", LocalDateTime.now());
         executeByFrequency(WithdrawFrequency.DAILY);
     }
@@ -51,7 +74,12 @@ public class AutoWithdrawScheduler {
      * 每周自动提现调度 — 每周一 02:30 执行。
      */
     @Scheduled(cron = "0 30 2 * * MON")
+    @SchedulerLock(name = "autoWithdrawWeekly", lockAtMostFor = "PT15M", lockAtLeastFor = "PT30S")
     public void executeWeeklyAutoWithdraw() {
+        if (!enabled) {
+            log.info("自动提现已停用（nexus.auto-withdraw.enabled=false），跳过每周调度");
+            return;
+        }
         log.info("每周自动提现调度开始: {}", LocalDateTime.now());
         executeByFrequency(WithdrawFrequency.WEEKLY);
     }
@@ -60,7 +88,12 @@ public class AutoWithdrawScheduler {
      * 每月自动提现调度 — 每月 1 日 03:00 执行。
      */
     @Scheduled(cron = "0 0 3 1 * *")
+    @SchedulerLock(name = "autoWithdrawMonthly", lockAtMostFor = "PT15M", lockAtLeastFor = "PT30S")
     public void executeMonthlyAutoWithdraw() {
+        if (!enabled) {
+            log.info("自动提现已停用（nexus.auto-withdraw.enabled=false），跳过每月调度");
+            return;
+        }
         log.info("每月自动提现调度开始: {}", LocalDateTime.now());
         executeByFrequency(WithdrawFrequency.MONTHLY);
     }

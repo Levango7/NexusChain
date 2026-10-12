@@ -54,8 +54,19 @@ public class WithdrawalRequest {
     /** Timestamp when the request was executed on-chain. */
     private LocalDateTime executedAt;
 
+    /**
+     * 提现请求状态。
+     *
+     * <p>{@code EXECUTING}（2026-10-12 新增）：执行方在调用签名/广播**之前**用一条条件
+     * UPDATE 把 {@code APPROVED → EXECUTING} 抢占下来（数据库行级锁互斥）。这样并发或
+     * 重复的 execute 调用只有一个能继续，其余在抢占处即被拒绝 —— 修复此前"两个并发
+     * 调用都能通过 APPROVED 检查、各自触发一次签名广播"的重复出款缺陷（乐观锁
+     * {@code @Version} 只在写回时才冲突，那时链上已经广播，来不及了）。</p>
+     *
+     * <p>持久化为字符串（{@code @Enumerated(STRING)}），故插入枚举值不需要数据库迁移。</p>
+     */
     public enum WithdrawalStatus {
-        PENDING, APPROVED, REJECTED, EXECUTED, FAILED
+        PENDING, APPROVED, EXECUTING, REJECTED, EXECUTED, FAILED
     }
 
     // --- Getters and Setters ---

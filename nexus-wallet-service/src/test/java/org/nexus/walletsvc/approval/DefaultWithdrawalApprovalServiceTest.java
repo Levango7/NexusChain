@@ -36,6 +36,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -118,6 +119,22 @@ class DefaultWithdrawalApprovalServiceTest {
             requestStore.put(entity.getRequestId(), entity);
             return entity;
         });
+
+        // ---- 原子状态抢占（2026-10-12）：模拟「条件 UPDATE」语义 ----
+        // 只在当前状态等于 from 时改为 to 并返回 1，否则返回 0（与数据库行级锁下的
+        // `UPDATE ... WHERE status = :from` 一致）。execute 路径依赖它做并发互斥。
+        when(withdrawalRequestRepository.compareAndSetStatus(anyString(), any(), any()))
+                .thenAnswer(inv -> {
+                    String requestId = inv.getArgument(0);
+                    WithdrawalRequest.WithdrawalStatus from = inv.getArgument(1);
+                    WithdrawalRequest.WithdrawalStatus to = inv.getArgument(2);
+                    WithdrawalRequestEntity e = requestStore.get(requestId);
+                    if (e != null && e.getStatus() == from) {
+                        e.setStatus(to);
+                        return 1;
+                    }
+                    return 0;
+                });
 
         // ---- Mock WithdrawalApproverRepository ----
         when(withdrawalApproverRepository.findByRequestId(anyString())).thenAnswer(inv -> {
@@ -476,13 +493,61 @@ class DefaultWithdrawalApprovalServiceTest {
     void execute_pendingRequestThrows() {
         WithdrawalRequest request = service.requestWithdrawal(
                 WHITELISTED_ADDR, new BigDecimal("100"), "NEX");
-        // 未审批，状态为 PENDING
+        // 未审批，状态为 PENDING → 原子抢占失败（0 行）
 
         IllegalStateException ex = assertThrows(
                 IllegalStateException.class,
                 () -> service.executeApprovedWithdrawal(request.getRequestId()));
-        assertTrue(ex.getMessage().contains("not approved"));
+        // 2026-10-12：错误文案由 "not approved" 改为 "not claimable"（抢占语义）
+        assertTrue(ex.getMessage().contains("not claimable"));
+        assertTrue(ex.getMessage().contains("PENDING"));
         // 未触发签名服务
+        verify(signingServiceClient, never()).signTransfer(any(), any(), any());
+    }
+
+    /**
+     * 重复执行同一笔已成功的提现：第二次必须被抢占拦下，且**不得**再次广播。
+     *
+     * <p>回归门禁（2026-10-12）：原实现只判 APPROVED，两个并发/重复调用都能各自触发
+     * 一次 signing 广播 —— 同一笔提现可能被放款两次。</p>
+     */
+    @Test
+    void execute_duplicateAfterSuccess_rejectedWithoutSecondBroadcast() {
+        WithdrawalRequest request = service.requestWithdrawal(
+                WHITELISTED_ADDR, new BigDecimal("100"), "NEX");
+        service.approve(request.getRequestId(), "approver-1");
+        when(signingServiceClient.signTransfer(any(), any(), any())).thenReturn(okResp("0xdup"));
+
+        WithdrawalRequest first = service.executeApprovedWithdrawal(request.getRequestId());
+        assertEquals(WithdrawalRequest.WithdrawalStatus.EXECUTED, first.getStatus());
+
+        assertThrows(IllegalStateException.class,
+                () -> service.executeApprovedWithdrawal(request.getRequestId()));
+
+        // 关键断言：只广播过一次
+        verify(signingServiceClient, times(1)).signTransfer(any(), any(), any());
+        assertEquals(WithdrawalRequest.WithdrawalStatus.EXECUTED,
+                requestStore.get(request.getRequestId()).getStatus());
+    }
+
+    /**
+     * 并发场景：另一实例已抢占到 EXECUTING（本实例读到的还是 APPROVED）时，
+     * 抢占必须失败并**不触碰**签名服务。
+     */
+    @Test
+    void execute_whenAlreadyClaimedByConcurrentExecutor_rejectedWithoutBroadcast() {
+        WithdrawalRequest request = service.requestWithdrawal(
+                WHITELISTED_ADDR, new BigDecimal("100"), "NEX");
+        service.approve(request.getRequestId(), "approver-1");
+
+        // 模拟「另一个执行方已把状态推进到 EXECUTING」：此时条件 UPDATE 会拿到 0 行
+        requestStore.get(request.getRequestId())
+                .setStatus(WithdrawalRequest.WithdrawalStatus.EXECUTING);
+
+        IllegalStateException ex = assertThrows(IllegalStateException.class,
+                () -> service.executeApprovedWithdrawal(request.getRequestId()));
+        assertTrue(ex.getMessage().contains("not claimable"));
+        assertTrue(ex.getMessage().contains("EXECUTING"));
         verify(signingServiceClient, never()).signTransfer(any(), any(), any());
     }
 

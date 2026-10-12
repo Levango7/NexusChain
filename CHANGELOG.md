@@ -2,6 +2,47 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [2.71.0] - 2026-10-12
+
+### 出款双链审计的三项修复（并发重复广播 / 多副本重复出款 / 户名护栏失效）+ 资金出口边界声明
+
+**背景**：v2.70.0 同批完成的出款双链只读审计（gateway 商户结算出款 vs wallet-service 托管提现）
+确认两链在存储/引用命名空间/执行路径上**相互隔离**、不存在"同一笔钱被记两次"的直接代码路径，
+但列出 9 项隐患。本批修其中 3 项（都与"重复动钱"或"护栏失效"直接相关），其余 6 项如实留在文档里。
+
+- **① 提现执行并发重复广播（链 B，真金白银）**：`DefaultWithdrawalApprovalService.executeApprovedWithdrawal`
+  原先只做"读 → 判 `status == APPROVED`"，两个并发/重复调用都能通过，随后**各自**调
+  signing-service 广播 ⇒ 同一笔提现可能放款两次；乐观锁 `@Version` 只在阶段 3 写回时才冲突
+  （那时链上已广播，拦不住）。修法：进入执行前用条件 UPDATE 把 `APPROVED → EXECUTING`
+  **原子抢占**（`WithdrawalRequestRepository.compareAndSetStatus`，数据库行级锁保证只有一个调用
+  拿到 1 行），抢不到的调用直接抛错、不触碰签名服务。SDK 枚举新增 `EXECUTING`
+  （字符串持久化，无需数据库迁移）。
+  测试：`execute_duplicateAfterSuccess_rejectedWithoutSecondBroadcast`（只广播一次）+
+  `execute_whenAlreadyClaimedByConcurrentExecutor_rejectedWithoutBroadcast`（抢占失败即不广播）。
+  **事务边界踩坑记录**：抢占用的 `@Modifying` 批量 UPDATE 要求活动事务，而
+  `executeApprovedWithdrawal` 只有 Seata 的 `@GlobalTransactional` —— CI 集成测试不启 Seata
+  ⇒ 无事务 ⇒ `TransactionRequiredException`（首跑 Build & Test 因此变红）。
+  `@Transactional` 加在**仓储方法**上而非服务方法上：服务方法紧接着要调 signing-service 广播，
+  整方法包本地事务会让「数据库事务跨越网络调用」并长时间持锁；仓储级事务保证抢占**即时提交**。
+- **② 自动提现调度无锁无开关（链 A，多副本重复出款）**：`AutoWithdrawScheduler` 三个 `@Scheduled`
+  既无 `@SchedulerLock` 也无开关 —— 多副本部署时每个实例都在 02:00 全量扫规则；规则级
+  `lastExecutedAt` 判重是"读-判-写"非原子，而这里动的是资金。修法：按 `SettlementScheduler`
+  同款补锁（`autoWithdrawDaily/Weekly/Monthly`，锁持久化在 shedlock 表）+ 新增总开关
+  `nexus.auto-withdraw.enabled`（默认 true，行为不变，供运维应急停用）。
+- **③ 出款户名一致性护栏在生产恒被跳过（链 A 的二清环节）**：`MerchantPayoutAccountService`
+  的户名校验依赖可选的 `merchantNameResolver`，而**生产没有任何 Bean 提供它** ⇒
+  「户名必须与商户主体名一致」形同虚设（与类注释自相矛盾）。修法：新增
+  `MerchantRepository` 注入作为生产路径（merchant 表由网关承载，同模块不构成循环依赖），
+  护栏真正生效。测试：`bind_usesMerchantRepository_rejectsMismatch`（仅注入仓储时户名不符仍被拒）。
+- **新增交付文档 [`docs/money-outlet-boundary.md`](docs/money-outlet-boundary.md)**：两条出款链的
+  边界声明（业务语义/入口/审批/账本/链上动作/审计表/幂等命名对照表 + 5 条不变量 +
+  9 项风险现状与建议 + 改动检查清单）。客户尽调必问"你们有几条出款链、谁批、怎么对账"，
+  而此前仓库里**没有任何**此类声明（审计明确核实）。
+
+**未做（留在文档 §3 风险表，含建议方案）**：`custody/rebalance` 绕过审批、
+`withdrawFromCold` 一次调用两次链上动作、提现不校验托管余额、大额提现在 signing 侧转人工后
+被 wallet 误置 FAILED、人工出款台账未落库（重启失忆）、`SettlementTransfer` DEBIT 分支缺闸门。
+
 ## [2.70.0] - 2026-10-12
 
 ### 生产数据库族对齐 MySQL 8（安装阻断级修复）+ 出款双链只读审计

@@ -275,9 +275,27 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
         }
         WithdrawalRequestEntity entity = withdrawalRequestRepository.findByRequestId(approvalId)
                 .orElseThrow(() -> new IllegalArgumentException("withdrawal request not found: " + approvalId));
-        if (entity.getStatus() != WithdrawalRequest.WithdrawalStatus.APPROVED) {
-            throw new IllegalStateException("request is not approved: status=" + entity.getStatus());
+
+        // 原子抢占（2026-10-12 修复「并发/重复执行导致重复广播」）：
+        // 原实现是「读 → 判 status == APPROVED」，两个并发调用都能通过，随后**各自**调用
+        // signing-service 完成一次签名广播 ⇒ 同一笔提现可能被放款两次。乐观锁 @Version 只在
+        // 阶段3写回时才冲突，而那时链上已广播，拦不住。
+        // 现在改成条件 UPDATE（APPROVED → EXECUTING）抢占：数据库行级锁保证只有一个调用
+        // 拿到 1 行；其余拿到 0 行的直接抛错返回，不触碰 signing-service。
+        int claimed = withdrawalRequestRepository.compareAndSetStatus(
+                approvalId,
+                WithdrawalRequest.WithdrawalStatus.APPROVED,
+                WithdrawalRequest.WithdrawalStatus.EXECUTING);
+        if (claimed != 1) {
+            WithdrawalRequest.WithdrawalStatus current = withdrawalRequestRepository
+                    .findByRequestId(approvalId)
+                    .map(WithdrawalRequestEntity::getStatus)
+                    .orElse(null);
+            throw new IllegalStateException(
+                    "withdrawal is not claimable (concurrent execution or wrong status): status=" + current);
         }
+        // 让内存实体与库内状态一致（批量 UPDATE 绕过了持久化上下文；阶段3会再覆盖为 EXECUTED/FAILED）
+        entity.setStatus(WithdrawalRequest.WithdrawalStatus.EXECUTING);
 
         // P2-F3：使用三阶段执行模板
         // 如果 threePhaseTemplate 为 null（测试构造器），降级为内联三阶段逻辑
