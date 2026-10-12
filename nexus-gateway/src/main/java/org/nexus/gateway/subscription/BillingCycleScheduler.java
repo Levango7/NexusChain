@@ -32,13 +32,23 @@ public class BillingCycleScheduler {
 
     private static final Logger log = LoggerFactory.getLogger(BillingCycleScheduler.class);
 
+    /**
+     * 单次扫描耗时的告警阈值 = {@code @SchedulerLock(lockAtMostFor = "PT30M")} 的 2/3。
+     * 超过它就说明"锁可能在扫描跑完之前先过期"，届时第二副本可进入同一次扫描 ——
+     * 这正是要提前看见的信号，而不是等它变成重复扣款。
+     */
+    private static final long SWEEP_WARN_AFTER_MS = 20 * 60 * 1000L;
+
     private final SubscriptionRepository subscriptionRepository;
     private final SubscriptionService subscriptionService;
+    private final SubscriptionProperties properties;
 
     public BillingCycleScheduler(SubscriptionRepository subscriptionRepository,
-                                 SubscriptionService subscriptionService) {
+                                 SubscriptionService subscriptionService,
+                                 SubscriptionProperties properties) {
         this.subscriptionRepository = subscriptionRepository;
         this.subscriptionService = subscriptionService;
+        this.properties = properties;
     }
 
     /**
@@ -55,6 +65,7 @@ public class BillingCycleScheduler {
     @SchedulerLock(name = "billingCycleSweep", lockAtMostFor = "PT30M", lockAtLeastFor = "PT1M")
     @Transactional
     public void processDueSubscriptions() {
+        long startNanos = System.nanoTime();
         LocalDateTime now = LocalDateTime.now();
         log.debug("Billing cycle scheduler triggered at {}", now);
 
@@ -64,10 +75,40 @@ public class BillingCycleScheduler {
         // 2. 处理到期扣款
         int billingProcessed = processDueBillingCycles(now);
 
+        long elapsedMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(
+                System.nanoTime() - startNanos);
         if (trialConverted > 0 || billingProcessed > 0) {
-            log.info("Billing cycle completed: trialConverted={}, billingProcessed={}",
-                    trialConverted, billingProcessed);
+            log.info("Billing cycle completed: trialConverted={}, billingProcessed={}, elapsedMs={}",
+                    trialConverted, billingProcessed, elapsedMs);
         }
+        // 锁顶穿预警：本次扫描已经接近 @SchedulerLock 的 lockAtMostFor(30 分钟)。
+        // 顶穿后锁提前释放、第二副本可以进入同一次扫描，而本副本的账期推进要到
+        // 提交才可见 ⇒ 重复扣款窗口从"推断"变成"现实"。宁可这里吵，也不要静默。
+        if (elapsedMs > SWEEP_WARN_AFTER_MS) {
+            log.warn("Billing sweep approaching lock expiry: elapsedMs={} > warnAfterMs={} "
+                            + "(lockAtMostFor=PT30M); 请调低 nexus.subscription.billing-sweep-batch-limit "
+                            + "或缩短扣款链超时，否则同一次扫描可能跨副本重复扣款: trialConverted={}, billingProcessed={}",
+                    elapsedMs, SWEEP_WARN_AFTER_MS, trialConverted, billingProcessed);
+        }
+    }
+
+    /**
+     * 按配置上限截断，并在截断时打 WARN（剩余顺延到下一轮）。
+     *
+     * <p>{@code limit <= 0} 表示<b>显式关闭限流</b>（全量处理）—— 不能把它当成
+     * "处理 0 条"，那等于静默丢单。</p>
+     *
+     * <p>未超限时返回原列表本身，不给调用方引入新的空/异常分支。</p>
+     */
+    private List<Subscription> capSweep(List<Subscription> candidates, String phase) {
+        int limit = properties.getBillingSweepBatchLimit();
+        if (limit <= 0 || candidates.size() <= limit) {
+            return candidates;
+        }
+        log.warn("Billing sweep truncated: phase={}, candidates={}, limit={}, deferred={} —— "
+                        + "顺延到下一轮扫描（每小时一次）",
+                phase, candidates.size(), limit, candidates.size() - limit);
+        return candidates.subList(0, limit);
     }
 
     /**
@@ -77,8 +118,8 @@ public class BillingCycleScheduler {
      * @return 转正的订阅数
      */
     private int processTrialConversions(LocalDateTime now) {
-        List<Subscription> trialSubs = subscriptionRepository.findByStatusAndNextChargeAtBefore(
-                SubscriptionStatus.TRIAL, now);
+        List<Subscription> trialSubs = capSweep(subscriptionRepository.findByStatusAndNextChargeAtBefore(
+                SubscriptionStatus.TRIAL, now), "trialConversion");
         int converted = 0;
         for (Subscription sub : trialSubs) {
             try {
@@ -100,8 +141,8 @@ public class BillingCycleScheduler {
      * @return 处理的订阅数（含成功与失败）
      */
     private int processDueBillingCycles(LocalDateTime now) {
-        List<Subscription> dueSubs = subscriptionRepository.findByStatusInAndNextChargeAtBefore(
-                List.of(SubscriptionStatus.ACTIVE, SubscriptionStatus.PAST_DUE), now);
+        List<Subscription> dueSubs = capSweep(subscriptionRepository.findByStatusInAndNextChargeAtBefore(
+                List.of(SubscriptionStatus.ACTIVE, SubscriptionStatus.PAST_DUE), now), "billingCycle");
         int processed = 0;
         for (Subscription sub : dueSubs) {
             try {

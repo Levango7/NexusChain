@@ -25,12 +25,15 @@ class BillingCycleSchedulerTest {
 
     @Mock private SubscriptionRepository subscriptionRepository;
     @Mock private SubscriptionService subscriptionService;
+    // 用真实配置对象而不是 mock：默认 billingSweepBatchLimit=200，既有用例的候选数
+    // 都远小于它 ⇒ 限流不改变它们的行为；新增用例再按需调小。
+    private SubscriptionProperties properties = new SubscriptionProperties();
 
     private BillingCycleScheduler scheduler;
 
     @BeforeEach
     void setUp() {
-        scheduler = new BillingCycleScheduler(subscriptionRepository, subscriptionService);
+        scheduler = new BillingCycleScheduler(subscriptionRepository, subscriptionService, properties);
     }
 
     private Subscription trialSubscription(String subId) {
@@ -192,5 +195,45 @@ class BillingCycleSchedulerTest {
 
         // 不抛异常即可验证 @Scheduled 入口可调用
         scheduler.processDueSubscriptions();
+    }
+
+    @Test
+    @DisplayName("单次扫描超过上限：截断到 batchLimit，剩余顺延下一轮")
+    void sweepTruncatesAtBatchLimit() {
+        properties.setBillingSweepBatchLimit(3);
+        when(subscriptionRepository.findByStatusAndNextChargeAtBefore(
+                eq(SubscriptionStatus.TRIAL), any()))
+                .thenReturn(List.of());
+        when(subscriptionRepository.findByStatusInAndNextChargeAtBefore(
+                eq(List.of(SubscriptionStatus.ACTIVE, SubscriptionStatus.PAST_DUE)), any()))
+                .thenReturn(java.util.stream.IntStream.rangeClosed(1, 5)
+                        .mapToObj(i -> activeSubscription("SUB-many-" + i))
+                        .toList());
+        when(subscriptionService.processBillingCycle(anyString())).thenReturn("0xTxHash");
+
+        int processed = scheduler.runOnce();
+
+        assertEquals(3, processed, "候选 5 条、上限 3 ⇒ 本轮只处理 3 条");
+        verify(subscriptionService, times(3)).processBillingCycle(anyString());
+    }
+
+    @Test
+    @DisplayName("batchLimit=0 表示不限流（显式关掉护栏的出口）")
+    void batchLimitZeroMeansUnbounded() {
+        properties.setBillingSweepBatchLimit(0);
+        when(subscriptionRepository.findByStatusAndNextChargeAtBefore(
+                eq(SubscriptionStatus.TRIAL), any()))
+                .thenReturn(List.of());
+        when(subscriptionRepository.findByStatusInAndNextChargeAtBefore(
+                eq(List.of(SubscriptionStatus.ACTIVE, SubscriptionStatus.PAST_DUE)), any()))
+                .thenReturn(java.util.stream.IntStream.rangeClosed(1, 5)
+                        .mapToObj(i -> activeSubscription("SUB-unlimited-" + i))
+                        .toList());
+        when(subscriptionService.processBillingCycle(anyString())).thenReturn("0xTxHash");
+
+        int processed = scheduler.runOnce();
+
+        assertEquals(5, processed, "上限为 0 时不得静默丢单，必须全量处理");
+        verify(subscriptionService, times(5)).processBillingCycle(anyString());
     }
 }

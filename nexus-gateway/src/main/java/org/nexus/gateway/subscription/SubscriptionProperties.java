@@ -22,6 +22,21 @@ public class SubscriptionProperties {
     /** 周期扣款调度 cron 表达式。 */
     private String billingCycleCron = "0 0 * * * *";
 
+    /**
+     * 单次扫描处理的最大订阅数（2026-10-13 新增，可观测性护栏）。
+     *
+     * <p>背景：扫描原本是"取多少扣多少"的全量循环，而每次扣款最坏耗时 =
+     * failover 链上连接器数 × read-timeout（{@code application.yml} 配到 15s）。
+     * 一旦到期订阅数增长到几十~上百，单次扫描就可能逼近
+     * {@code @SchedulerLock(lockAtMostFor = "PT30M")} —— 锁过期后第二副本即可进入，
+     * 而第一副本尚未提交、账期未推进，重复扣款窗口就从推断变成现实。</p>
+     *
+     * <p>本字段把"会不会顶穿锁"变成可配置、可观测的量：超限时按上限截断并打
+     * WARN（剩余顺延到下一轮），同时记录单次扫描耗时。截断是**有意的降级**：
+     * 宁可晚一小时扣某批订阅，也不要跨副本重复扣同一批。</p>
+     */
+    private int billingSweepBatchLimit = 200;
+
     /** Dunning 策略配置。 */
     private Dunning dunning = new Dunning();
 
@@ -78,6 +93,9 @@ public class SubscriptionProperties {
 
     public String getBillingCycleCron() { return billingCycleCron; }
     public void setBillingCycleCron(String billingCycleCron) { this.billingCycleCron = billingCycleCron; }
+
+    public int getBillingSweepBatchLimit() { return billingSweepBatchLimit; }
+    public void setBillingSweepBatchLimit(int billingSweepBatchLimit) { this.billingSweepBatchLimit = billingSweepBatchLimit; }
 
     public Dunning getDunning() { return dunning; }
     public void setDunning(Dunning dunning) { this.dunning = dunning; }
