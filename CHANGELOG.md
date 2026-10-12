@@ -2,6 +2,46 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [2.72.0] - 2026-10-12
+
+### 制裁名单离线包导入（OFAC/UN 官方格式）+ LGPL 交付声明 + 安装预演资源评估
+
+**背景**：v2.68.0 给制裁名单做了"能导入"的入口（文件加载 + 管理端点 + 审计），但两点没闭合：
+① 加载器只会"一行一条、含逗号取首列"——而真实名单是**官方固定格式**（OFAC SDN 是 CSV，
+姓名在 `SDN_Name` 列；UN 综合名单是 XML，姓/名拆在 `FIRST_NAME`/`SECOND_NAME`），
+用"取首列"喂进去拿到的是**一列 ID 而不是姓名** ⇒ 名单看起来加载了、**永远匹配不到人**；
+② 审计写是写了，但 `SanctionListController.audit()` 把 detail 参数丢弃、actor 恒为 `system`
+——监管要的"**谁**在什么时候往名单里加了**谁**"两处都缺。
+
+- **① 离线包解析器**（`nexus-compliance` 新增 `SanctionListPackParser`）：
+  **OFAC_CSV**（逐字符 CSV 解析支持引号内逗号；按 `SDN_Name` 定位列，无表头时按官方列序；`-0-` 占位跳过）、
+  **UN_XML**（INDIVIDUAL 的 FIRST/SECOND/THIRD_NAME 拼接 + ENTITY_NAME；**别名不入名单**避免误伤同名）、
+  **LINES** 兜底（与旧行为兼容）。XML 走 JDK DOM 并**关闭 DTD 与外部实体**
+  （`disallow-doctype-decl` + 安全处理模式）——名单文件来自客户/外网，不设防就是 XXE 入口。
+  `loadFromFile` 改为按格式自动识别（客户把 OFAC CSV 直接放到配置路径即可用）。
+- **② 导入端点**（`POST /api/v1/compliance/sanction-list/import`，`ROLE_ADMIN`）：
+  支持**裸体直传**（`curl --data-binary @sdn.csv "…/import?source=OFAC_SDN&version=…"`，运维最省事）、
+  **JSON**（`content` 或 `path`）、**服务器本地文件**；`mode=append`（默认）/`mode=replace`（显式）；
+  **解析出 0 条即 400 且名单不变**（fail-closed，绝不"用空包把名单清空"）；内容上限 20MB。
+- **③ 版本台账**（新表 `sanction_list_imports` + V97 迁移 + 端点 `GET /imports`）：
+  每次导入记 source/version/格式/模式/条目数/跳过数/替换移除数/导入后总数/**内容 SHA-256**/操作人，
+  回答合规尽调那句"当前生效的名单是哪个版本、从哪来、谁导的"。
+- **④ 审计修正**：改用 `AuditLogService.record(AuditEvent)`，**携带操作人**（JWT 主体，
+  无认证上下文回落 `system`）与**具体条目/版本明细**；条约 20 行的 detail 形如
+  `source=…, version=…, format=…, mode=…, parsed=…, added=…, removed=…, sha256=…`。
+- **文档**：新增 [`docs/licensing-lgpl-declaration.md`](docs/licensing-lgpl-declaration.md)
+  （对外版 LGPL 声明：事实/义务/三条交付姿态 A/B/C/物料清单/不做什么，**明示不是法律意见**）与
+  [`docs/install-rehearsal-resources.md`](docs/install-rehearsal-resources.md)
+  （安装预演资源需求：L1/L2/L3 三档规格、鱼骨、本机差距与三条路径、每轮固定清单）。
+
+**测试**：`SanctionListPackParserTest`（6 例：OFAC 取列/无表头列序/UN 三段名与别名排除/XXE 拒绝/纯文本兜底/空内容）
++ `SanctionListImportWebTest`（6 例：裸体直传导入且落审计与台账/空包 400 且名单不变/replace 移除数/
+JSON 形态与缺 source 400/台账查询/单条增删审计带明细）；本地两模块对应测试全绿。
+
+**诚实声明**：① 名单数据本身仍需人工/外部提供（本批给的是**解析与导入机制**，不内置任何名单）；
+② LGPL 的满足方式（材料形态）需法务确认，且"动态库替换"方案（姿态 B）尚未实测；
+③ 安装预演（L1–L3）本身未跑——资源需求与清单已落文档，等机器余量或客户环境。
+
 ## [2.71.0] - 2026-10-12
 
 ### 出款双链审计的三项修复（并发重复广播 / 多副本重复出款 / 户名护栏失效）+ 资金出口边界声明
