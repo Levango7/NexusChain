@@ -264,13 +264,17 @@ public class AutoCompensationService {
      *
      * <p>笔数/总额按**自然日**统计（{@code createdAt} 落在当日区间），
      * 复用已有的 {@code findByMerchantIdAndCreatedAtBetween}，不新增仓库方法。</p>
+     *
+     * <p>未配置（{@code null} 或 ≤0）的上限**不参与拦截**——避免"字段默认 0 导致全部拒绝"
+     * 的隐形陷阱（非 Spring 上下文 / 显式置 0 时都会命中）。</p>
      */
     private String checkCompensationCaps(ReconciliationDiscrepancy discrepancy) {
         BigDecimal amount = discrepancy.getChannelAmount();
         if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
             return "补偿金额缺失或非正数";
         }
-        if (autoMaxAmount != null && amount.compareTo(autoMaxAmount) > 0) {
+        if (autoMaxAmount != null && autoMaxAmount.signum() > 0
+                && amount.compareTo(autoMaxAmount) > 0) {
             return "单笔金额 " + amount.toPlainString() + " 超过上限 " + autoMaxAmount.toPlainString();
         }
         if (discrepancy.getMerchantId() == null) {
@@ -281,14 +285,15 @@ public class AutoCompensationService {
         List<CompensationRecord> today = compensationRepository
                 .findByMerchantIdAndCreatedAtBetween(discrepancy.getMerchantId(), dayStart, dayStart.plusDays(1));
 
-        if (today.size() >= dailyMaxCount) {
+        if (dailyMaxCount > 0 && today.size() >= dailyMaxCount) {
             return "当日补偿笔数 " + today.size() + " 已达上限 " + dailyMaxCount;
         }
 
         BigDecimal todayTotal = today.stream()
                 .map(r -> r.getAmount() == null ? BigDecimal.ZERO : r.getAmount())
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
-        if (dailyMaxTotal != null && todayTotal.add(amount).compareTo(dailyMaxTotal) > 0) {
+        if (dailyMaxTotal != null && dailyMaxTotal.signum() > 0
+                && todayTotal.add(amount).compareTo(dailyMaxTotal) > 0) {
             return "当日累计 " + todayTotal.toPlainString() + " + 本笔 " + amount.toPlainString()
                     + " 超过上限 " + dailyMaxTotal.toPlainString();
         }

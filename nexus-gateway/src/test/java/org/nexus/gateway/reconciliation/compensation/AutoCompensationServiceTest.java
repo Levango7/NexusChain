@@ -8,10 +8,12 @@ import org.nexus.gateway.reconciliation.ReconciliationDiscrepancyRepository;
 
 import java.lang.reflect.Field;
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /**
@@ -183,6 +185,141 @@ class AutoCompensationServiceTest {
         when(compensationRepository.findById(999L)).thenReturn(Optional.empty());
 
         assertThrows(IllegalArgumentException.class, () -> service.executeCompensation(999L));
+    }
+
+    // ==================== 人工入口（2026-10-12 新增） ====================
+
+    private void setCaps(String maxAmount, int maxCount, String maxTotal) throws Exception {
+        setField(service, "autoMaxAmount", maxAmount == null ? null : new BigDecimal(maxAmount));
+        setField(service, "dailyMaxCount", maxCount);
+        setField(service, "dailyMaxTotal", maxTotal == null ? null : new BigDecimal(maxTotal));
+    }
+
+    @Test
+    @DisplayName("人工入口 — 长款未超限：创建 REFUND 补偿")
+    void manualEntryLongAmountCreatesRefund() throws Exception {
+        setCaps("1000", 20, "10000");
+        ReconciliationDiscrepancy d = createDiscrepancy(
+                ReconciliationDiscrepancy.DiscrepancyType.LONG_AMOUNT, new BigDecimal("300.00"), null);
+        when(discrepancyRepository.findById(DISCREPANCY_ID)).thenReturn(Optional.of(d));
+        when(compensationRepository.findByMerchantIdAndCreatedAtBetween(eq(MERCHANT_ID), any(), any()))
+                .thenReturn(List.of());
+        when(compensationRepository.existsByDiscrepancyId(DISCREPANCY_ID)).thenReturn(false);
+        when(compensationRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        Optional<CompensationRecord> result = service.createCompensationForDiscrepancyId(DISCREPANCY_ID);
+
+        assertTrue(result.isPresent());
+        assertEquals(CompensationRecord.CompensationType.REFUND, result.get().getCompensationType());
+        assertEquals(new BigDecimal("300.00"), result.get().getAmount());
+        assertEquals(CompensationRecord.CompensationStatus.PENDING, result.get().getStatus());
+    }
+
+    @Test
+    @DisplayName("人工入口 — 短款被拒绝（防与自动调账对同一差错二次扣账）")
+    void manualEntryRejectsShortAmount() throws Exception {
+        setCaps("1000", 20, "10000");
+        ReconciliationDiscrepancy d = createDiscrepancy(
+                ReconciliationDiscrepancy.DiscrepancyType.SHORT_AMOUNT, null, new BigDecimal("200.00"));
+        when(discrepancyRepository.findById(DISCREPANCY_ID)).thenReturn(Optional.of(d));
+
+        Optional<CompensationRecord> result = service.createCompensationForDiscrepancyId(DISCREPANCY_ID);
+
+        assertTrue(result.isEmpty());
+        verify(compensationRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("人工入口 — 单笔超限：拒绝并转 MANUAL_REVIEW")
+    void manualEntryRejectsOverSingleCap() throws Exception {
+        setCaps("1000", 20, "10000");
+        ReconciliationDiscrepancy d = createDiscrepancy(
+                ReconciliationDiscrepancy.DiscrepancyType.LONG_AMOUNT, new BigDecimal("1000.01"), null);
+        when(discrepancyRepository.findById(DISCREPANCY_ID)).thenReturn(Optional.of(d));
+
+        Optional<CompensationRecord> result = service.createCompensationForDiscrepancyId(DISCREPANCY_ID);
+
+        assertTrue(result.isEmpty());
+        assertEquals(ReconciliationDiscrepancy.ResolutionType.MANUAL_REVIEW, d.getResolutionType());
+        verify(compensationRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("人工入口 — 当日笔数超限：拒绝")
+    void manualEntryRejectsOverDailyCount() throws Exception {
+        setCaps("1000", 2, "10000");
+        ReconciliationDiscrepancy d = createDiscrepancy(
+                ReconciliationDiscrepancy.DiscrepancyType.LONG_AMOUNT, new BigDecimal("100.00"), null);
+        when(discrepancyRepository.findById(DISCREPANCY_ID)).thenReturn(Optional.of(d));
+        when(compensationRepository.findByMerchantIdAndCreatedAtBetween(eq(MERCHANT_ID), any(), any()))
+                .thenReturn(List.of(new CompensationRecord(), new CompensationRecord()));
+
+        Optional<CompensationRecord> result = service.createCompensationForDiscrepancyId(DISCREPANCY_ID);
+
+        assertTrue(result.isEmpty());
+        verify(compensationRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("人工入口 — 当日累计超限：拒绝")
+    void manualEntryRejectsOverDailyTotal() throws Exception {
+        setCaps("1000", 20, "1000");
+        ReconciliationDiscrepancy d = createDiscrepancy(
+                ReconciliationDiscrepancy.DiscrepancyType.LONG_AMOUNT, new BigDecimal("600.00"), null);
+        when(discrepancyRepository.findById(DISCREPANCY_ID)).thenReturn(Optional.of(d));
+        CompensationRecord old = new CompensationRecord();
+        old.setAmount(new BigDecimal("500.00"));
+        when(compensationRepository.findByMerchantIdAndCreatedAtBetween(eq(MERCHANT_ID), any(), any()))
+                .thenReturn(List.of(old));
+
+        Optional<CompensationRecord> result = service.createCompensationForDiscrepancyId(DISCREPANCY_ID);
+
+        assertTrue(result.isEmpty());
+        verify(compensationRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("人工入口 — 已有补偿记录：幂等跳过")
+    void manualEntryIdempotent() throws Exception {
+        setCaps("1000", 20, "10000");
+        ReconciliationDiscrepancy d = createDiscrepancy(
+                ReconciliationDiscrepancy.DiscrepancyType.LONG_AMOUNT, new BigDecimal("100.00"), null);
+        when(discrepancyRepository.findById(DISCREPANCY_ID)).thenReturn(Optional.of(d));
+        when(compensationRepository.findByMerchantIdAndCreatedAtBetween(eq(MERCHANT_ID), any(), any()))
+                .thenReturn(List.of());
+        when(compensationRepository.existsByDiscrepancyId(DISCREPANCY_ID)).thenReturn(true);
+
+        assertTrue(service.createCompensationForDiscrepancyId(DISCREPANCY_ID).isEmpty());
+        verify(compensationRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("人工入口 — 差错不存在：返回空")
+    void manualEntryMissingDiscrepancy() {
+        when(discrepancyRepository.findById(999L)).thenReturn(Optional.empty());
+        assertTrue(service.createCompensationForDiscrepancyId(999L).isEmpty());
+    }
+
+    @Test
+    @DisplayName("人工入口 — 上限未配置（null/0）不拦截，避免默认 0 全拒")
+    void manualEntryCapsUnsetDoesNotBlock() {
+        // setUp 未设置上限字段：autoMaxAmount=null、dailyMaxCount=0、dailyMaxTotal=null
+        ReconciliationDiscrepancy d = createDiscrepancy(
+                ReconciliationDiscrepancy.DiscrepancyType.LONG_AMOUNT, new BigDecimal("999999.00"), null);
+        when(discrepancyRepository.findById(DISCREPANCY_ID)).thenReturn(Optional.of(d));
+        when(compensationRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        assertTrue(service.createCompensationForDiscrepancyId(DISCREPANCY_ID).isPresent());
+    }
+
+    @Test
+    @DisplayName("merchantIdOfDiscrepancy — 返回差错归属商户")
+    void merchantIdOfDiscrepancyReturnsOwner() {
+        ReconciliationDiscrepancy d = createDiscrepancy(
+                ReconciliationDiscrepancy.DiscrepancyType.LONG_AMOUNT, new BigDecimal("1.00"), null);
+        when(discrepancyRepository.findById(DISCREPANCY_ID)).thenReturn(Optional.of(d));
+
+        assertEquals(Optional.of(MERCHANT_ID), service.merchantIdOfDiscrepancy(DISCREPANCY_ID));
     }
 
     // ==================== 辅助方法 ====================
