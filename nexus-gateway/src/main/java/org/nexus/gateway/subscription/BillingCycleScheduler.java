@@ -1,5 +1,6 @@
 package org.nexus.gateway.subscription;
 
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -51,6 +52,7 @@ public class BillingCycleScheduler {
      * 与配置中的默认值一致。</p>
      */
     @Scheduled(cron = "0 0 * * * *")
+    @SchedulerLock(name = "billingCycleSweep", lockAtMostFor = "PT30M", lockAtLeastFor = "PT1M")
     @Transactional
     public void processDueSubscriptions() {
         LocalDateTime now = LocalDateTime.now();
