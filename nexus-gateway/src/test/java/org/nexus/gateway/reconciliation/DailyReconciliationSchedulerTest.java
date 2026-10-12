@@ -105,6 +105,23 @@ class DailyReconciliationSchedulerTest {
     }
 
     @Test
+    @DisplayName("fail-closed：对账单为 dry-run/模拟数据 → 跳过对账（不得用假账单驱动真实动账）")
+    void runDaily_dryRunBill_skipsReconciliation() throws Exception {
+        when(merchantRepository.findAll()).thenReturn(List.of(merchant(MERCHANT_A)));
+        // isDryRun=true 的账单：内容非空（3 条 mock 订单），会穿透"空账单"检查
+        when(billDownloadProxy.downloadBill(eq("WECHAT"), eq(MERCHANT_A), anyString()))
+                .thenReturn(BillDownloadResult.success("WECHAT", MERCHANT_A,
+                        LocalDate.now().minusDays(1).toString(),
+                        "mock_wx_order_001,100.00,SUCCESS,2026-10-11T10:00:00+08:00,CNY",
+                        List.of(), true));
+
+        assertDoesNotThrow(() -> scheduler.runDailyReconciliation());
+
+        verify(reconciliationFileService, never()).runDailyReconciliation(
+                any(), anyString(), any(), any());
+    }
+
+    @Test
     @DisplayName("隔离性：单商户对账异常不阻断其余商户")
     void runDaily_singleMerchantFailure_doesNotBlockOthers() throws Exception {
         setField(scheduler, "channelsCsv", "WECHAT");
