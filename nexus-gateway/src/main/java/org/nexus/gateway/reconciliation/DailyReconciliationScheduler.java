@@ -125,6 +125,20 @@ public class DailyReconciliationScheduler {
                         continue;
                     }
 
+                    // fail-closed（2026-10-12 核验修复）：**空**账单已挡，但**模拟**账单此前未挡。
+                    // WeChatBillDownloadClient / AlipayBillDownloadClient 在 isDryRun()
+                    // （sandbox=true 或私钥未配）时返回 buildMockCsvData() 的 3 条硬编码假账单；
+                    // 内容非空 ⇒ 穿透上面的空值检查 ⇒ 商户真实交易全被判 SHORT_AMOUNT
+                    // ⇒ ReconciliationAdjustmentService 自动 DEBIT_ADJUST 扣商户钱。
+                    // dryRun 标记此前只用于一条日志，此处改为门禁。
+                    if (download.isDryRun()) {
+                        log.error("[DailyReconciliation] 对账单为 dry-run/模拟数据，拒绝用于比对: "
+                                        + "merchantId={}, channel={}, date={}",
+                                merchantId, channel, billDate);
+                        skipped++;
+                        continue;
+                    }
+
                     ReconciliationDiffReport report = reconciliationFileService.runDailyReconciliation(
                             merchantId, download.getRawContent(), billDate, channel);
                     ok++;
