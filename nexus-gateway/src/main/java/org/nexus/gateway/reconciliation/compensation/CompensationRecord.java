@@ -25,8 +25,18 @@ public class CompensationRecord {
         PENDING,
         /** 执行中 */
         EXECUTING,
-        /** 成功 */
+        /** 成功（**真实执行**，资金已动） */
         SUCCESS,
+        /**
+         * 模拟执行成功（sandbox 模式，**资金未动**）。
+         *
+         * <p>2026-10-12 新增：此前 sandbox 执行也记 {@link #SUCCESS}，与真实执行在数据上
+         * 无法区分——运营看到 SUCCESS 会以为商户已补偿，实际资金未动。单列一态让数据不再
+         * 撒谎：补偿统计（{@code ReconciliationReportService} 只计 SUCCESS）与差错闭环
+         * （{@code AutoCompensationService#updateDiscrepancyStatus} 只认 SUCCESS）
+         * 都自然排除模拟态。</p>
+         */
+        SIMULATED,
         /** 失败 */
         FAILED
     }

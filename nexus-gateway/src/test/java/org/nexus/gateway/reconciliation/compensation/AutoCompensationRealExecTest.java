@@ -28,7 +28,7 @@ import static org.mockito.Mockito.*;
  *   <li>REFUND（长款）**显式拒绝** —— 同一差错类型已被自动调账服务按 CREDIT_ADJUST 处理，
  *       再走渠道退款会造成双向动账；</li>
  *   <li>账本服务缺失 → fail-closed（不静默成功）；</li>
- *   <li>sandbox 模式不受影响（仍为模拟执行）。</li>
+ *   <li>sandbox 模式仍为模拟执行（不触碰账本），但状态记为 {@code SIMULATED} 而非 SUCCESS。</li>
  * </ol>
  */
 class AutoCompensationRealExecTest {
@@ -203,7 +203,7 @@ class AutoCompensationRealExecTest {
     // ==================== sandbox 不受影响 ====================
 
     @Test
-    @DisplayName("sandbox 模式 → 仍为模拟执行，不触碰账本")
+    @DisplayName("sandbox 模式 → 仍为模拟执行，不触碰账本，且记为 SIMULATED")
     void sandboxMode_stillSimulates() throws Exception {
         AutoCompensationService svc = service(accountService, true);
         discrepancy(ReconciliationDiscrepancy.DiscrepancyType.SHORT_AMOUNT, null, new BigDecimal("100.00"));
@@ -212,7 +212,7 @@ class AutoCompensationRealExecTest {
 
         CompensationRecord result = svc.executeCompensation(RECORD_ID);
 
-        assertEquals(CompensationRecord.CompensationStatus.SUCCESS, result.getStatus());
+        assertEquals(CompensationRecord.CompensationStatus.SIMULATED, result.getStatus());
         verifyNoInteractions(accountService);
         assertTrue(result.getAccountTransactionRef().startsWith("SIMULATED_ADJ_"),
                 "sandbox 应写模拟引用，实际=" + result.getAccountTransactionRef());

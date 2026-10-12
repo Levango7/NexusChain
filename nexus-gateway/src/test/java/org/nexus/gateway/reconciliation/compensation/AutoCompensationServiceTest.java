@@ -143,8 +143,8 @@ class AutoCompensationServiceTest {
     // ==================== 执行补偿 ====================
 
     @Test
-    @DisplayName("executeCompensation — sandbox 模式模拟执行成功")
-    void executeCompensationSandboxSuccess() {
+    @DisplayName("executeCompensation — sandbox 模式记为 SIMULATED（不得记 SUCCESS）")
+    void executeCompensationSandboxMarksSimulated() {
         CompensationRecord record = new CompensationRecord();
         record.setId(1L);
         record.setDiscrepancyId(DISCREPANCY_ID);
@@ -159,9 +159,29 @@ class AutoCompensationServiceTest {
         // sandbox 默认为 true，模拟执行
         CompensationRecord result = service.executeCompensation(1L);
 
-        assertEquals(CompensationRecord.CompensationStatus.SUCCESS, result.getStatus());
+        assertEquals(CompensationRecord.CompensationStatus.SIMULATED, result.getStatus());
         assertNotNull(result.getExecutedAt());
         assertNotNull(result.getChannelRefundRef());
+    }
+
+    @Test
+    @DisplayName("executeCompensation — 模拟执行不闭环差错（SIMULATED 不算已处理）")
+    void sandboxExecutionDoesNotResolveDiscrepancy() {
+        CompensationRecord record = new CompensationRecord();
+        record.setId(1L);
+        record.setDiscrepancyId(DISCREPANCY_ID);
+        record.setMerchantId(MERCHANT_ID);
+        record.setCompensationType(CompensationRecord.CompensationType.REFUND);
+        record.setAmount(new BigDecimal("100.00"));
+        record.setStatus(CompensationRecord.CompensationStatus.PENDING);
+
+        when(compensationRepository.findById(1L)).thenReturn(Optional.of(record));
+        when(compensationRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        CompensationRecord result = service.executeCompensation(1L);
+
+        assertEquals(CompensationRecord.CompensationStatus.SIMULATED, result.getStatus());
+        verify(discrepancyRepository, never()).save(any());
     }
 
     @Test

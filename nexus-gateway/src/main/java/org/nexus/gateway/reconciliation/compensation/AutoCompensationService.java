@@ -345,7 +345,11 @@ public class AutoCompensationService {
                 executeRealCompensation(record);
             }
 
-            record.setStatus(CompensationRecord.CompensationStatus.SUCCESS);
+            // 2026-10-12：模拟执行不得记 SUCCESS——否则数据无法区分"真补偿"与"假补偿"。
+            // SIMULATED 会被补偿统计与差错闭环自然排除（二者都只认 SUCCESS）。
+            record.setStatus(sandbox
+                    ? CompensationRecord.CompensationStatus.SIMULATED
+                    : CompensationRecord.CompensationStatus.SUCCESS);
             record.setExecutedAt(LocalDateTime.now());
         } catch (Exception e) {
             log.error("[AutoCompensation] 补偿执行失败: id={}, error={}", compensationId, e.getMessage(), e);
@@ -602,6 +606,8 @@ public class AutoCompensationService {
      * 更新关联差错的状态。
      */
     private void updateDiscrepancyStatus(CompensationRecord record) {
+        // 只认 SUCCESS（真实执行）：SIMULATED 表示资金未动，**不得**把差错闭环——
+        // 否则一次模拟运行就会把真实差错标成"已处理"，掩盖未补偿的商户。
         if (record.getStatus() == CompensationRecord.CompensationStatus.SUCCESS) {
             discrepancyRepository.findById(record.getDiscrepancyId()).ifPresent(d -> {
                 d.setStatus(ReconciliationDiscrepancy.DiscrepancyStatus.RESOLVED);
