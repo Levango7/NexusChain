@@ -133,19 +133,43 @@ public class MerchantPayoutAccountService {
     /**
      * 取商户主体名（用于户名一致性校验）。
      *
-     * <p>当前 merchant 表由网关自身的 Merchant 实体承载，但 fundreport 包不直接依赖
-     * 校验模块的仓储（避免循环依赖），故以注入的解析器为准；未配置时跳过校验
-     * （fail-open 仅在"无法取得商户名"时，其余护栏仍生效）。</p>
+     * <p>解析顺序（2026-10-12 修 fail-open）：</p>
+     * <ol>
+     *   <li>显式注入的 {@code merchantNameResolver}（测试用，优先级更高）</li>
+     *   <li>网关自身的 {@code MerchantRepository}（生产路径：merchant 表由网关承载，
+     *       fundreport 包直接读仓储不构成循环依赖）</li>
+     * </ol>
+     *
+     * <p>此前只有第 1 条且生产**没有任何 Bean 提供它**，于是「户名必须与商户主体名一致」
+     * 这条二清护栏**恒被跳过**（与类注释自相矛盾）。现在生产会真正取到商户名并比对；
+     * 只有两者都不可用（如纯单测未设置解析器）时才跳过。</p>
      */
     private String resolveMerchantName(Long merchantId) {
-        return merchantNameResolver == null ? null : merchantNameResolver.apply(merchantId);
+        if (merchantNameResolver != null) {
+            return merchantNameResolver.apply(merchantId);
+        }
+        if (merchantRepository != null && merchantId != null) {
+            return merchantRepository.findById(merchantId)
+                    .map(org.nexus.gateway.model.Merchant::getMerchantName)
+                    .orElse(null);
+        }
+        return null;
     }
 
-    /** 商户主体名解析器（由配置类注入；测试可置 null 跳过校验）。 */
+    /** 商户主体名解析器（由配置类或测试注入；与 repository 二选一，优先级更高）。 */
     private java.util.function.Function<Long, String> merchantNameResolver;
+
+    /** 生产路径的商户名来源（网关自身的 merchant 表）。 */
+    private org.nexus.gateway.repository.MerchantRepository merchantRepository;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     public void setMerchantNameResolver(java.util.function.Function<Long, String> resolver) {
         this.merchantNameResolver = resolver;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setMerchantRepository(
+            org.nexus.gateway.repository.MerchantRepository merchantRepository) {
+        this.merchantRepository = merchantRepository;
     }
 }

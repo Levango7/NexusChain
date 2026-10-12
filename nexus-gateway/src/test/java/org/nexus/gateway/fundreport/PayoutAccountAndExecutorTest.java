@@ -110,6 +110,37 @@ class MerchantPayoutAccountServiceTest {
         MerchantPayoutAccount disabled = service.disable(1L);
         assertFalse(disabled.isActive(), "停用后不可再作出款去向");
     }
+
+    /**
+     * 户名一致性护栏的**生产路径**（2026-10-12 回归门禁）。
+     *
+     * <p>此前该护栏只在测试手工调用 {@code setMerchantNameResolver} 时才生效，生产
+     * 没有任何 Bean 提供解析器 ⇒ 校验恒被跳过（与类注释「户名必须一致」矛盾）。
+     * 现在生产走 {@code MerchantRepository} 取商户名，本用例钉住「无解析器也能拦住户名不符」。</p>
+     */
+    @Test
+    @DisplayName("户名一致性（生产路径）：仅注入 MerchantRepository 时，户名不符仍被拒绝")
+    void bind_usesMerchantRepository_rejectsMismatch() {
+        org.nexus.gateway.repository.MerchantRepository merchantRepository =
+                mock(org.nexus.gateway.repository.MerchantRepository.class);
+        org.nexus.gateway.model.Merchant merchant = new org.nexus.gateway.model.Merchant();
+        merchant.setMerchantName("商户口径公司");
+        when(merchantRepository.findById(MERCHANT_ID)).thenReturn(Optional.of(merchant));
+
+        // 只注入仓储、**不**注入 resolver —— 模拟生产装配
+        MerchantPayoutAccountService prodPathService =
+                new MerchantPayoutAccountService(repository);
+        prodPathService.setMerchantRepository(merchantRepository);
+
+        assertThrows(IllegalArgumentException.class, () -> prodPathService.bind(MERCHANT_ID,
+                MerchantPayoutAccount.AccountType.BANK_CARD, "6222****8888", "别人的账户名", false));
+
+        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        MerchantPayoutAccount ok = prodPathService.bind(MERCHANT_ID,
+                MerchantPayoutAccount.AccountType.BANK_CARD, "6222****8888", "商户口径公司", false);
+        assertEquals(MerchantPayoutAccount.AccountStatus.PENDING_VERIFY, ok.getStatus());
+        verify(merchantRepository, atLeastOnce()).findById(MERCHANT_ID);
+    }
 }
 
 /**
