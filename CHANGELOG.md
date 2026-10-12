@@ -19,6 +19,11 @@
   （字符串持久化，无需数据库迁移）。
   测试：`execute_duplicateAfterSuccess_rejectedWithoutSecondBroadcast`（只广播一次）+
   `execute_whenAlreadyClaimedByConcurrentExecutor_rejectedWithoutBroadcast`（抢占失败即不广播）。
+  **事务边界踩坑记录**：抢占用的 `@Modifying` 批量 UPDATE 要求活动事务，而
+  `executeApprovedWithdrawal` 只有 Seata 的 `@GlobalTransactional` —— CI 集成测试不启 Seata
+  ⇒ 无事务 ⇒ `TransactionRequiredException`（首跑 Build & Test 因此变红）。
+  `@Transactional` 加在**仓储方法**上而非服务方法上：服务方法紧接着要调 signing-service 广播，
+  整方法包本地事务会让「数据库事务跨越网络调用」并长时间持锁；仓储级事务保证抢占**即时提交**。
 - **② 自动提现调度无锁无开关（链 A，多副本重复出款）**：`AutoWithdrawScheduler` 三个 `@Scheduled`
   既无 `@SchedulerLock` 也无开关 —— 多副本部署时每个实例都在 02:00 全量扫规则；规则级
   `lastExecutedAt` 判重是"读-判-写"非原子，而这里动的是资金。修法：按 `SettlementScheduler`

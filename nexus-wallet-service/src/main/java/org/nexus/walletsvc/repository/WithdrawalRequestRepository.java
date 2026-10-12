@@ -49,7 +49,15 @@ public interface WithdrawalRequestRepository extends JpaRepository<WithdrawalReq
      *
      * <p>{@code clearAutomatically + flushAutomatically}：批量 UPDATE 绕过持久化上下文，
      * 清空后让后续 {@code save()} 走 merge，避免读到陈旧状态。</p>
+     *
+     * <p><b>为什么这里必须有 {@code @Transactional}</b>：{@code @Modifying} 批量操作要求活动事务，
+     * 而调用它的 {@code executeApprovedWithdrawal} 只有 Seata 的 {@code @GlobalTransactional}
+     * （CI 集成测试不启 Seata ⇒ 无事务 ⇒ {@code TransactionRequiredException}）。
+     * 放在仓储方法上而不是服务方法上是有意的：服务方法里紧接着要调 signing-service 广播，
+     * 若把整个方法包进本地事务会让「数据库事务跨越网络调用」、长时间持锁；
+     * 仓储级事务保证抢占**立即提交**（并发调用方马上能看到 EXECUTING）。</p>
      */
+    @org.springframework.transaction.annotation.Transactional
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("UPDATE WithdrawalRequestEntity r SET r.status = :to "
             + "WHERE r.requestId = :requestId AND r.status = :from")
