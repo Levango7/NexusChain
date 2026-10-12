@@ -190,6 +190,19 @@ public class DefaultSubscriptionService implements SubscriptionService {
             return null;
         }
 
+        // P1（2026-10-13）：账期守卫必须长在服务自己身上，不能只靠调用方筛选。
+        // 扣款是不可逆的真实动账（ChargeExecutor → connector.createPayment），而调度侧
+        // 的 findByStatusInAndNextChargeAtBefore 只是"读的时候到期"：多副本同一分钟各扫一遍
+        // （prod nexus-gateway.replicaCount=3）、或将来新增手工触发入口时，两个调用方都会
+        // 拿着同一份"已到期"快照各扣一次。这里重读实体上的 nextChargeAt —— 同一次扫描内
+        // 先跑完的那笔会把账期推进并写回，后跑的那条就会被这道校验挡下。
+        LocalDateTime chargeDueAt = sub.getNextChargeAt();
+        if (chargeDueAt != null && chargeDueAt.isAfter(LocalDateTime.now())) {
+            log.info("Billing cycle skipped: not yet due (server-side guard): subId={}, nextChargeAt={}",
+                    subscriptionId, chargeDueAt);
+            return null;
+        }
+
         // 应用待生效的降级
         applyPendingDowngradeIfAny(sub);
 
