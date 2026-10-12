@@ -69,7 +69,16 @@ public class SanctionListController {
      */
     private SanctionListImportRepository importRepository;
 
-    /** 3 参构造器（既有 standalone MockMvc 测试按此装配）。 */
+    /**
+     * Spring 装配用的构造器（**必须显式标 {@code @Autowired}**）。
+     *
+     * <p>本类现在有两个构造器（这个 + 4 参完整构造器）。按 2026-10-11 网关侧事故的教训：
+     * 多构造器且都无 {@code @Autowired} 时，Spring 会去找**无参构造器** ⇒
+     * {@code NoSuchMethodException} —— 本次正是被 {@code WiringEffectivenessGuardTest}
+     * 在 CI 上抓到的（连带 k6 冒烟"gateway 未就绪"）。只标这一个，让 Spring 有唯一候选；
+     * 第三参的 {@code required=false} 保持审计服务可缺省。</p>
+     */
+    @Autowired
     public SanctionListController(InMemorySanctionListChecker checker,
                                    SanctionListStartupLoader loader,
                                    @Autowired(required = false) AuditLogService auditLogService) {
@@ -77,11 +86,9 @@ public class SanctionListController {
     }
 
     /**
-     * 完整构造器（2026-10-12 新增台账仓储）。
+     * 完整构造器（台账仓储一并注入；测试直接 {@code new} 用这个）。
      *
-     * <p>刻意保留 3 参构造器并让它委托：加参数会重蹈"多构造器无 @Autowired ⇒ Spring
-     * 选不中默认构造器"的坑（2026-10-11 网关侧 {@code No default constructor found} 事故）。
-     * Spring 只把 {@code @Autowired(required=false)} 的那个当候选，另一条是普通重载。</p>
+     * <p>刻意**不**标 {@code @Autowired}：Spring 的注入点是上面那个。</p>
      */
     public SanctionListController(InMemorySanctionListChecker checker,
                                    SanctionListStartupLoader loader,
