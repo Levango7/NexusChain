@@ -56,6 +56,13 @@ class OrchestrationServiceTest {
         service = new OrchestrationService(repo, routingEngine, connectorRegistry,
                 idempotencyStore, webhookDispatcher, riskService, null, metricsCollector,
                 applicationEventPublisher);
+        // P1-1（2026-10-12）配套改动：createPayment 现在必须**先原子占位**才走渠道。
+        // 本类的 store 是 mock，putIfAbsent 语义未定义 ⇒ 默认返回 false 会被判成
+        // "他人在途"而对 req-3 抛 IllegalStateException（409）。这里让占位默认放行；
+        // 占位与并发的真实语义由 OrchestrationIdempotencyConcurrencyTest 用
+        // 真实 InMemoryIdempotencyStore（CHM CAS）覆盖，不在这里用 mock 假装验过。
+        // 必须 lenient()：本类多数用例根本不进占位分支，严格桩会因未使用而报错。
+        lenient().when(idempotencyStore.tryClaim(anyString())).thenReturn(true);
     }
 
     /**

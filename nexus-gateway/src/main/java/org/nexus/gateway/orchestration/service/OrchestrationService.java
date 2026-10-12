@@ -160,6 +160,9 @@ public class OrchestrationService {
                                               String preferredConnector, String metadata,
                                               String requestId,
                                               String payerAddress, String payeeAddress) {
+        // 抢到占位才走到动账；catch 子句据此决定是否需要释放（声明在 try 之外，
+        // 否则 catch 看不到作用域内的局部变量）。
+        boolean claimed = false;
         // P3-T5：支付创建主 span（payment.create），覆盖整个支付全链路
         try (BusinessSpan rootSpan = BusinessSpan.start(tracer, "payment.create")
                 .attr("payment.merchant.id", merchantId)
@@ -179,6 +182,32 @@ public class OrchestrationService {
                                 .attr("payment.idempotent", true);
                         return existing;
                     }
+                    // 映射在、记录不可见（需带外删除才会出现）：沿用原行为继续建单，
+                    // 不在此占位 —— 该分支不属于本次并发窗口修复的范围。
+                } else if (!idempotencyStore.tryClaim(requestId)) {
+                    // P1（2026-10-12）：原先是入口 checkDuplicate（读）+ persist 内
+                    // record（写），而 persist 在渠道调用**之后** —— 并发两个同
+                    // requestId 双双读到 null，各自调一次渠道；走 ChainConnector 即
+                    // 链上真实转账两次。占位提前到渠道之前，由底层 putIfAbsent
+                    // （Redis SET NX / CHM CAS）一次性裁决，与 OrderServiceImpl:87、
+                    // PaymentCallbackController:209 已有的原子语义对齐。
+                    String racedPaymentId = idempotencyStore.checkDuplicate(requestId);
+                    OrchestratedPayment raced = racedPaymentId == null
+                            ? null : repo.findById(racedPaymentId).orElse(null);
+                    if (raced != null) {
+                        log.info("Idempotent replay after race: requestId={} -> paymentId={}",
+                                requestId, racedPaymentId);
+                        rootSpan.attr("payment.id", racedPaymentId)
+                                .attr("payment.idempotent", true);
+                        return raced;
+                    }
+                    // 对手仍持占位（还没落库）：拒绝，绝不再次动账。
+                    // GlobalExceptionHandler:25-28 把 IllegalStateException 映射为 409，
+                    // 调用方用同一 requestId 重试即可拿到胜者结果。
+                    throw new IllegalStateException(
+                            "Duplicate payment request in flight for requestId=" + requestId);
+                } else {
+                    claimed = true;
                 }
             }
 
@@ -328,6 +357,20 @@ public class OrchestrationService {
             routingEngine.recordRouteOutcome(routeDecisionId, false);
             rootSpan.attr("payment.status", "FAILED").error(null);
             return payment;
+        } catch (RuntimeException e) {
+            // P1（2026-10-12）：占位之后任何异常都必须释放，否则该 requestId 永久停在
+            // IN_FLIGHT —— 后续同 key 请求一律 409 且无法自愈（OrderServiceImpl:133-140
+            // 同日同款缺陷的处置）。释放失败不吞原异常：原判错更该被调用方看到。
+            // 四条正常出口（风控拒绝 / 无连接器 / 渠道成功 / 全渠道失败）都经
+            // persist() 把占位换成真实 paymentId，故此处只会见到异常路径。
+            if (claimed) {
+                try {
+                    idempotencyStore.releaseClaim(requestId);
+                } catch (RuntimeException releaseFailure) {
+                    e.addSuppressed(releaseFailure);
+                }
+            }
+            throw e;
         }
     }
 
