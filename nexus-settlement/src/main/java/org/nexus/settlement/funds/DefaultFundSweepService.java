@@ -51,6 +51,17 @@ public class DefaultFundSweepService implements FundSweepService {
     private final BigDecimal coldThreshold;
     private final OnChainExecutionChannel executionChannel;
 
+    /**
+     * 多签审批服务（P0 修复 2026-10-11，可空）。
+     *
+     * <p>{@code null} = 旧装配/单测（保持历史行为）；Spring 运行时恒注入 ⇒
+     * 生产的热→冷转移**必须**携带已批准的 approvalId。</p>
+     */
+    private final MultiSigApprovalService multiSigApprovalService;
+
+    /** 冷钱包转移的审批用途标识（审批单 orderId 必须等于此值，防挪用其他审批）。 */
+    public static final String COLD_TRANSFER_APPROVAL_SCOPE = "COLD_TRANSFER";
+
     /** 已登记的归集订单（供 autoSweep 扫描） */
     private final List<CollectionOrder> orders = new CopyOnWriteArrayList<>();
 
@@ -64,13 +75,22 @@ public class DefaultFundSweepService implements FundSweepService {
         this(ledger, coldThreshold, new SandboxOnChainExecutionChannel());
     }
 
-    @Autowired
+    /** 测试便捷构造：无审批服务（保持历史行为）。 */
     public DefaultFundSweepService(Ledger ledger,
                                    @org.springframework.beans.factory.annotation.Value("${nexus.settlement.cold-threshold:10000}") BigDecimal coldThreshold,
                                    OnChainExecutionChannel executionChannel) {
+        this(ledger, coldThreshold, executionChannel, null);
+    }
+
+    @Autowired
+    public DefaultFundSweepService(Ledger ledger,
+                                   @org.springframework.beans.factory.annotation.Value("${nexus.settlement.cold-threshold:10000}") BigDecimal coldThreshold,
+                                   OnChainExecutionChannel executionChannel,
+                                   MultiSigApprovalService multiSigApprovalService) {
         this.ledger = ledger;
         this.coldThreshold = coldThreshold != null ? coldThreshold : DEFAULT_COLD_THRESHOLD;
         this.executionChannel = executionChannel;
+        this.multiSigApprovalService = multiSigApprovalService;
     }
 
     /**
@@ -154,14 +174,63 @@ public class DefaultFundSweepService implements FundSweepService {
         return settled;
     }
 
+    /**
+     * 无审批面的热→冷转移（P0 修复 2026-10-11：**默认拒绝**）。
+     *
+     * <p>此前本方法带 {@code TODO(v2.0.0): 冷钱包转移需多签审批} 并**直接转账** ——
+     * 即"热钱包资金可被无审批地转出"。现：装配了审批服务（生产）时直接拒绝，
+     * 强制调用方走 {@link #transferToCold(String)} 并携带已批准的审批单。</p>
+     *
+     * <p>{@code multiSigApprovalService == null}（旧装配/单测）时保持历史行为。</p>
+     */
     @Override
     public int transferToCold() {
+        if (multiSigApprovalService != null) {
+            throw new IllegalStateException(
+                    "冷钱包转移需多签审批（fail-closed）：请先经 MultiSigApprovalService 申请并审批"
+                            + "（orderId=" + COLD_TRANSFER_APPROVAL_SCOPE
+                            + "），再调用 transferToCold(approvalId)");
+        }
+        return doTransfer();
+    }
+
+    /**
+     * 多签审批版热→冷转移（P0 修复 2026-10-11）。
+     *
+     * <p>两道校验：① 审批单状态 APPROVED；② 审批用途（orderId）必须是
+     * {@link #COLD_TRANSFER_APPROVAL_SCOPE} —— 防止"拿一笔无关的审批去挪冷钱包资金"。</p>
+     */
+    @Override
+    public int transferToCold(String approvalId) {
+        if (multiSigApprovalService == null) {
+            throw new IllegalStateException(
+                    "冷钱包转移拒绝执行：多签审批服务未装配（fail-closed，不静默跳过审批）");
+        }
+        if (approvalId == null || approvalId.isBlank()) {
+            throw new IllegalStateException("冷钱包转移拒绝执行：缺少 approvalId");
+        }
+        if (!multiSigApprovalService.isApproved(approvalId)) {
+            throw new IllegalStateException(
+                    "冷钱包转移拒绝执行：审批未通过或不存在 approvalId=" + approvalId);
+        }
+        MultiSigApprovalService.ApprovalRequest approval =
+                multiSigApprovalService.getStatus(approvalId);
+        if (approval == null || !COLD_TRANSFER_APPROVAL_SCOPE.equals(approval.getOrderId())) {
+            throw new IllegalStateException(
+                    "冷钱包转移拒绝执行：审批用途不符（须 orderId=" + COLD_TRANSFER_APPROVAL_SCOPE
+                            + ", 实际=" + (approval == null ? "null" : approval.getOrderId()) + "）");
+        }
+        log.info("transferToCold approved: approvalId={}", approvalId);
+        return doTransfer();
+    }
+
+    /** 实际转账（两条入口共用；未达阈值返回 0）。 */
+    private int doTransfer() {
         BigDecimal hotBalance = ledger.balanceOf(HOT_WALLET);
         if (hotBalance.compareTo(coldThreshold) < 0) {
             log.debug("transferToCold skipped: hotBalance={} < threshold={}", hotBalance, coldThreshold);
             return 0;
         }
-        // TODO(v2.0.0): 冷钱包转移需多签审批，接入审批流后补充 — tracked in v2.0.0 roadmap
         ledger.bookTransfer(HOT_WALLET, COLD_WALLET, hotBalance, "COLD_TRANSFER");
         log.info("transferToCold completed: amount={}", hotBalance);
         return 1;
