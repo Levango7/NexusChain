@@ -13,7 +13,10 @@ metadata:
   namespace: nexus
 data:
   SPRING_PROFILES_ACTIVE: "prod"
-  SPRING_DATASOURCE_URL: "jdbc:postgresql://postgres:5432/nexus_gateway"
+  # 2026-10-12：**移除** SPRING_DATASOURCE_URL —— 该 ConfigMap 被多个服务 envFrom 注入，
+  # 写死一个库名会让 wallet/bridge/signing 全部连到 nexus_gateway 库（Hibernate validate 必炸）。
+  # 各服务改用自身 application-prod.yml / application.yml 的默认值
+  # （jdbc:mysql://mysql:3306/<本服务库>?…），需要覆盖时由运维按服务单独注入 NEX_DB_URL。
   SPRING_REDIS_HOST: "redis"
   NEXUS_CHAIN_RPC_URL: "http://nexus-core-0.nexus-core:19585"
   NEXUS_WALLET_BASE_URL: "http://nexus-gateway:8080"

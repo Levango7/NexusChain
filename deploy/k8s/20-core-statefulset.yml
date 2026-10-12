@@ -72,6 +72,8 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
+            # 2026-10-12 更正：core **确实**需要 PG（链状态 JDBC 存储：RDBMSBlockChainImpl +
+            # ddl.sql，schema 用 bytea / 双引号标识符）。业务库已切 MySQL，core 例外保留 PG。
             - name: DATA_SOURCE_URL
               value: "jdbc:postgresql://postgres:5432/nexus_core"
             - name: DB_USERNAME

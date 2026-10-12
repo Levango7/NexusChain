@@ -52,8 +52,8 @@ kubectl apply -f /tmp/nexus-secrets.yml && rm /tmp/nexus-secrets.yml
 
 | 键 | 用途 | 要求 |
 |----|------|------|
-| `NEX_DB_USERNAME` | PostgreSQL 用户名 | 建议不要用 `postgres` 超级用户 |
-| `NEX_DB_PASSWORD` | PostgreSQL 密码 | 强随机密码，定期轮换 |
+| `NEX_DB_USERNAME` | MySQL 用户名（2026-10-12 起数据库族为 MySQL 8） | 生产建议按库分账号，勿用 `root` |
+| `NEX_DB_PASSWORD` | MySQL 密码（同时作为内置 MySQL StatefulSet 的 root 口令） | 强随机密码，定期轮换 |
 | `NEX_MASTER_KEY` | 主密钥（AES-256） | **必须 32 字节 BASE64**，用于钱包密钥加密 |
 | `NEX_WEBHOOK_SECRET` | Webhook 回调签名密钥 | 网关与商户共享，强随机字符串 |
 

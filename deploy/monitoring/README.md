@@ -474,7 +474,7 @@ kubectl -n monitoring logs -l app.kubernetes.io/name=grafana -c grafana-sc-dashb
 - Helm Chart：`deploy/helm/`
 - ServiceMonitor 模板：`deploy/helm/charts/<service>/templates/servicemonitor.yaml`
 - 全局 values：`deploy/helm/values.yaml`（`global.serviceMonitor` 段）
-- 既有监控层：`deploy/k8s/40-monitoring.yml`（postgres/redis exporter、既有 ServiceMonitor）
+- 既有监控层：`deploy/k8s/40-monitoring.yml`（mysql/redis exporter、既有 ServiceMonitor）
 - 密钥管理：`deploy/k8s/SECRET-MANAGEMENT.md`
 
 ## 第12章 注意事项

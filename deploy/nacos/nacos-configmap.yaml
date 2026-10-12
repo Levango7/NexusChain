@@ -45,16 +45,18 @@ data:
     # 集群配置文件路径
     nacos.member.list=/home/nacos/conf/cluster.conf
 
-    #---------- 外接 PostgreSQL 数据源 ----------
-    # 使用 PostgreSQL 作为配置/服务发现的持久化存储
-    # 注意：Nacos 2.3.2 内置 Derby，HA 模式必须外接 DB
-    spring.datasource.platform=postgresql
+    #---------- 外接 MySQL 数据源 ----------
+    # 2026-10-12：PostgreSQL → MySQL（与全栈数据库族一致）。
+    # 额外收益：Nacos 2.x/3.x 的**外接数据源原生就是 MySQL**，PostgreSQL 反而需要额外
+    # 数据源插件（nacos-postgresql-datasource-plugin），属自找的集成风险。
+    # 注意：Nacos 内置 Derby，HA 模式必须外接 DB。
+    spring.datasource.platform=mysql
     db.num=1
-    db.url.0=jdbc:postgresql://postgres.nexus.svc.cluster.local:5432/nacos_config?connectTimeout=5000&socketTimeout=30000&retries=3
+    db.url.0=jdbc:mysql://mysql.nexus.svc.cluster.local:3306/nacos_config?characterEncoding=utf8&connectTimeout=5000&socketTimeout=30000&autoReconnect=true&useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true
     db.user.0=${DB_USER}
     db.password.0=${DB_PASSWORD}
     # 连接池配置
-    db.pool.config.driverClassName=org.postgresql.Driver
+    db.pool.config.driverClassName=com.mysql.cj.jdbc.Driver
     db.pool.config.initialSize=10
     db.pool.config.maxActive=50
     db.pool.config.minIdle=5

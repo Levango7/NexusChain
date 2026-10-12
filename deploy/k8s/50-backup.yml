@@ -1,14 +1,16 @@
 # ============================================================================
 # NexusChain 数据备份层
-# 作用：每日对 PostgreSQL 做逻辑备份（pg_dump），保留 7 天，存入独立 PVC。
+# 作用：每日对 MySQL 做逻辑备份（mysqldump），保留 7 天，存入独立 PVC。
 #       另附「按需恢复 Job」模板（默认注释，手动启用）。
-# 注意：此为逻辑备份，非 PITR；如需时间点恢复请额外配置 WAL 归档。
+# 注意：此为逻辑备份，非 PITR；如需时间点恢复请额外配置 binlog 归档。
+# 2026-10-12：业务库 PostgreSQL → MySQL（原 pg_dump / postgres:16-alpine）；
+#            core 的 PG 链库另由下方 nexus-pg-core-backup 备份（两者共用同一 PVC）
 # ============================================================================
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: nexus-pg-backup
+  name: nexus-mysql-backup
   namespace: nexus
 spec:
   accessModes: ["ReadWriteOnce"]
@@ -19,7 +21,7 @@ spec:
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: nexus-pg-backup
+  name: nexus-mysql-backup
   namespace: nexus
 spec:
   schedule: "0 2 * * *"          # 每日 02:00
@@ -31,7 +33,86 @@ spec:
       template:
         metadata:
           labels:
-            app: nexus-pg-backup
+            app: nexus-mysql-backup
+        spec:
+          automountServiceAccountToken: false
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: backup
+              image: mysql:8.0
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: [ALL]
+                seccompProfile:
+                  type: RuntimeDefault
+              env:
+                - name: MYSQL_HOST
+                  value: "mysql"
+                - name: MYSQL_PORT
+                  value: "3306"
+                # 备份用 root（需要 LOCK TABLES/RELOAD 等跨库权限）；
+                # 若改用通用账号 nexus，需额外授予 SELECT, LOCK TABLES, SHOW VIEW, EVENT, TRIGGER
+                - name: MYSQL_USER
+                  value: "root"
+                - name: MYSQL_PWD
+                  valueFrom:
+                    secretKeyRef:
+                      name: nexus-secrets
+                      key: NEX_DB_PASSWORD
+              volumeMounts:
+                - name: backup
+                  mountPath: /backup
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -e
+                  DATE=$(date +%Y%m%d-%H%M%S)
+                  # REQ-30/P2: 数据库列表与 deploy/scripts/backup-mysql.sh 保持一致
+                  # 共享配置：deploy/config/backup-databases.txt
+                  echo ">>> [${DATE}] 开始备份 nexus_gateway / nexus_wallet / nexus_signing / nexus_bridge / seata"
+                  for DB in nexus_gateway nexus_wallet nexus_signing nexus_bridge seata; do
+                    mysqldump --single-transaction --routines --triggers \
+                      -h "${MYSQL_HOST}" -P "${MYSQL_PORT}" -u "${MYSQL_USER}" "${DB}" \
+                      | gzip > "/backup/${DB}-${DATE}.sql.gz"
+                    echo "    ${DB} -> /backup/${DB}-${DATE}.sql.gz"
+                  done
+                  echo ">>> 清理 7 天前的备份"
+                  find /backup -name '*.sql.gz' -mtime +7 -delete
+                  echo ">>> 备份完成，当前留存："
+                  ls -lh /backup
+              resources:
+                requests: { memory: "128Mi", cpu: "100m" }
+                limits:   { memory: "512Mi", cpu: "500m" }
+          volumes:
+            - name: backup
+              persistentVolumeClaim:
+                claimName: nexus-mysql-backup
+---
+# === PostgreSQL 备份（**仅供 core**，2026-10-12 新增）===
+# 业务库（gateway/wallet/signing/bridge/seata）在 MySQL 侧备份（上方 CronJob）；
+# core 的链状态库仍在 PG（ddl.sql 为 PG 方言），故单独一份 pg_dump Job。
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: nexus-pg-core-backup
+  namespace: nexus
+spec:
+  schedule: "30 2 * * *"          # 每日 02:30（与 MySQL 备份错开）
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: nexus-pg-core-backup
         spec:
           automountServiceAccountToken: false
           restartPolicy: OnFailure
@@ -53,6 +134,8 @@ spec:
                   value: "postgres"
                 - name: PGPORT
                   value: "5432"
+                - name: PGDATABASE
+                  value: "nexus_core"
                 - name: PGUSER
                   valueFrom:
                     secretKeyRef:
@@ -72,17 +155,9 @@ spec:
                 - |
                   set -e
                   DATE=$(date +%Y%m%d-%H%M%S)
-                  # REQ-30/P2: 数据库列表与 deploy/scripts/backup-postgres.sh 保持一致
-                  # 共享配置：deploy/config/backup-databases.txt
-                  echo ">>> [${DATE}] 开始备份 nexus_gateway / nexus_core / nexus_bridge / nexus_wallet"
-                  for DB in nexus_gateway nexus_core nexus_bridge nexus_wallet; do
-                    pg_dump --format=custom --no-owner "dbname=${DB}" \
-                      | gzip > "/backup/${DB}-${DATE}.sql.gz"
-                    echo "    ${DB} -> /backup/${DB}-${DATE}.sql.gz"
-                  done
-                  echo ">>> 清理 7 天前的备份"
-                  find /backup -name '*.sql.gz' -mtime +7 -delete
-                  echo ">>> 备份完成，当前留存："
+                  echo ">>> [${DATE}] 备份 core 链库（PG）"
+                  pg_dump --format=custom --no-owner --dbname=nexus_core | gzip > "/backup/nexus_core-${DATE}.pgdump.gz"
+                  find /backup -name '*.pgdump.gz' -mtime +7 -delete
                   ls -lh /backup
               resources:
                 requests: { memory: "128Mi", cpu: "100m" }
@@ -90,14 +165,14 @@ spec:
           volumes:
             - name: backup
               persistentVolumeClaim:
-                claimName: nexus-pg-backup
+                claimName: nexus-mysql-backup
 ---
 # ============================================================================
 # 按需恢复 Job 模板（默认不启用）
 # 用法：把上方 CronJob 这段复制出来改成 Job，并把 RESTORE_FILE 指向具体备份文件，
 #       或将 SCHEDULE 去掉、把 kind 改为 Job 后 kubectl apply。
-# 示例（手动恢复 nexus_core）：
-#   kubectl create job --from=cronjob/nexus-pg-backup nexus-pg-restore -n nexus
+# 示例（手动恢复 nexus_gateway）：
+#   kubectl create job --from=cronjob/nexus-mysql-backup nexus-mysql-restore -n nexus
 #   然后进容器执行：
-#   gunzip -c /backup/nexus_core-YYYYMMDD-HHMMSS.sql.gz | pg_restore -d nexus_core --clean --if-exists
+#   gunzip -c /backup/nexus_gateway-YYYYMMDD-HHMMSS.sql.gz | mysql -h mysql -u root -p"$MYSQL_PWD" nexus_gateway
 # ============================================================================

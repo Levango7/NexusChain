@@ -1,31 +1,39 @@
 # =============================================================================
-# nexus-wallet-service 生产环境配置（P2-T8：数据库生产化，H2 → PostgreSQL 16）
+# nexus-wallet-service 生产环境配置（数据库生产化：MySQL 8 家族）
 # =============================================================================
 #
 # 激活方式：SPRING_PROFILES_ACTIVE=prod
 #
+# ⚠️ 2026-10-12 修正（安装阻断级）：本文件原指向 **PostgreSQL 16 + db/migration-pg**，
+#    而 db/migration-pg **冻结在 V3**（维护中的 db/migration 已到 V4，含
+#    `wallet_audit_events`），叠加 ddl-auto=validate ⇒ 该 profile 在 PG 上
+#    **无法启动**（校验报 missing table [wallet_audit_events]）。
+#    同时它与仓库已决方向矛盾：ADR-033（2026-10-03 Accepted）定的是
+#    **OceanBase 社区版（MySQL 模式）**，且 bridge / signing-service 在 prod 下
+#    本来就走 MySQL，全仓唯一被维护的迁移集是 `db/migration`（MySQL）。
+#    故 prod 数据源对齐 MySQL 家族；PG 目录保留但不再被引用（见其 DEPRECATED.md）。
+#
 # 设计要点：
-#   * 数据源指向 PostgreSQL 16 实例（容器名 postgres，库 nexus_wallet）
+#   * 数据源指向 MySQL 8 实例（容器名 mysql，库 nexus_wallet）
 #   * 用户名 / 密码从环境变量读取，禁止硬编码（K8s Secret / docker-compose env 注入）
 #   * HikariCP 连接池参数与 gateway 对齐（20 连接上限 + 泄漏检测）
-#   * Flyway 指向 PostgreSQL 专用迁移目录 classpath:db/migration/postgresql
-#     （原 db/migration 保留 MySQL/H2 语法，供 dev profile 使用）
-#   * Hibernate dialect 切换为 PostgreSQLDialect，ddl-auto=validate（Flyway 管 schema）
+#   * Flyway 指向 `db/migration`（**唯一**被维护的迁移集）
+#   * Hibernate dialect = MySQLDialect，ddl-auto=validate（Flyway 管 schema）
 #
-# 相关文档：docs/database-production.md
+# 相关文档：docs/database-production.md、docs/adr/ADR-033-database-evolution-oceanbase.md
 
 spring:
-  # === PostgreSQL 16 生产数据源 ===
+  # === MySQL 8 生产数据源 ===
   # 库名 nexus_wallet 与 gateway 的 nexus_gateway 库独立（设计文档 §4.1）
   datasource:
-    url: ${NEX_DB_URL:jdbc:postgresql://postgres:5432/nexus_wallet}
+    url: ${NEX_DB_URL:jdbc:mysql://mysql:3306/nexus_wallet?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=UTC}
     username: ${NEX_DB_USERNAME:nexus_wallet}
     password: ${NEX_DB_PASSWORD:${DB_PASSWORD}}
-    driver-class-name: org.postgresql.Driver
+    driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
       # === HikariCP 连接池参数（生产调优，与 gateway 对齐） ===
       # maximum-pool-size=20：单服务最大连接数。wallet-service 提现审批 QPS 较低，
-      #   20 连接满足峰值需求，PostgreSQL max_connections=100 余量充足
+      #   20 连接满足峰值需求，MySQL max_connections=151 余量充足
       maximum-pool-size: 20
       # minimum-idle=5：最小空闲连接，避免冷启动建连开销
       minimum-idle: 5
@@ -40,7 +48,7 @@ spring:
       # 连接池名称（便于日志 / 监控识别）
       pool-name: nexus-wallet-hikari
 
-  # === JPA / Hibernate（PostgreSQL 方言） ===
+  # === JPA / Hibernate（MySQL 方言） ===
   jpa:
     hibernate:
       # validate：Flyway 管理 schema，Hibernate 仅校验 Entity 与表结构一致
@@ -49,8 +57,8 @@ spring:
     open-in-view: false
     properties:
       hibernate:
-        # PostgreSQL 16 方言
-        dialect: org.hibernate.dialect.PostgreSQLDialect
+        # MySQL 方言（OceanBase MySQL 模式同族）
+        dialect: org.hibernate.dialect.MySQLDialect
         format_sql: false
         # 生产环境 JDBC 批处理优化（提现审批批量查询场景）
         jdbc:
@@ -59,12 +67,10 @@ spring:
         order_inserts: true
         order_updates: true
 
-  # === Flyway 迁移（PostgreSQL 专用脚本目录） ===
-  # locations 指向 db/migration-pg（与 dev profile 的 db/migration 平级隔离，
-  # 避免 Flyway classpath scanner 递归扫描子目录导致版本号冲突）
+  # === Flyway 迁移（唯一维护集：db/migration，MySQL 方言） ===
   flyway:
     enabled: true
-    locations: classpath:db/migration-pg
+    locations: classpath:db/migration
     # baseline-on-migrate=true：非空库自动 baseline
     baseline-on-migrate: true
     baseline-version: 0

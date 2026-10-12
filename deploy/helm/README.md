@@ -113,7 +113,7 @@ helm uninstall nexus-chain -n nexus
 | `NEX_SEATA_SERVER` | seata.host:tcPort | Seata TC 地址 |
 | `NEX_SENTINEL_SERVER` | sentinel.host:port | Sentinel 控制台地址 |
 | `NEX_ZIPKIN_ENDPOINT` | zipkin.host:port | Zipkin 链路追踪端点 |
-| `SPRING_DATASOURCE_URL` | postgres.host:port/db | JDBC 数据源 URL |
+| `SPRING_DATASOURCE_URL` | mysql.host:port/db | JDBC 数据源 URL（MySQL 8 / OceanBase MySQL 模式） |
 | `SPRING_REDIS_HOST/PORT` | redis.host:port | Redis 地址 |
 
 ### 探针
@@ -240,7 +240,7 @@ nexus-gateway:
 | `dependencies.seata` | `false` | API Gateway 不参与 TCC 事务 |
 | `dependencies.sentinel` | `false` | 不依赖 Sentinel |
 | `dependencies.zipkin` | `true` | 注入 `NEX_ZIPKIN_ENDPOINT` |
-| `dependencies.postgres` | `false` | 无业务数据库 |
+| `dependencies.mysql` | `false` | 无业务数据库 |
 | `dependencies.redis` | `true` | 注入 `SPRING_REDIS_HOST/PORT`（限流用） |
 | `extraEnv` | `{}` | 额外环境变量（如 `NEX_AUTH_ENABLED`、`NEX_API_KEYS`） |
 | `resources.requests` | `256Mi / 250m` | 资源 requests（WebFlux IO 密集，内存占用低） |

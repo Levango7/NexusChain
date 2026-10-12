@@ -1,7 +1,7 @@
 # ============================================================================
 # NexusChain 网络策略基线（零信任东西向流量）
 # 默认拒绝命名空间内全部入站，再按需放行：
-#   1) 命名空间内互访（gateway↔core↔postgres↔redis）
+#   1) 命名空间内互访（gateway↔core↔mysql↔redis）
 #   2) 外部经 ingress-nginx 到 gateway:8080
 #   3) 外部验证者到 core P2P:9585（按需放开 CIDR）
 # 说明：仅限制 Ingress；Egress 保持默认放行（镜像拉取 / 出站 P2P 不受影响）。

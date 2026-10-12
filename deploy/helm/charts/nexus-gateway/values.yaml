@@ -44,7 +44,11 @@ dependencies:
   seata: true
   sentinel: true
   zipkin: true
-  postgres: true
+  # 2026-10-12：MySQL 8（原 postgres）。库名显式写出，与
+  # deploy/config/init-mysql-dbs.sh 及该服务 application-prod.yml 的默认库名一致
+  # （不能用 Chart 名推导：nexus-signing-service 会推出 nexus_signing_service）。
+  mysql: true
+  mysqlDatabase: nexus_gateway
   redis: true
 
 # -- 额外环境变量（键值对，注入容器 env）
@@ -241,9 +245,9 @@ global:
     zipkin:
       port: 9411
       host: zipkin.nexus.svc.cluster.local
-    postgres:
-      port: 5432
-      host: postgres.nexus.svc.cluster.local
+    mysql:
+      port: 3306
+      host: mysql.nexus.svc.cluster.local
     redis:
       port: 6379
       host: redis.nexus.svc.cluster.local

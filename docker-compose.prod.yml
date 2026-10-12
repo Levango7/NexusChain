@@ -11,14 +11,15 @@ version: '3.8'
 #      2026-10-06 改动：原先是"没给就用 CHANGE_ME_* 占位默认值"——少设一个变量不会失败，
 #      而是**用一份公开的占位口令把"生产"栈起来**（含 MPC_STORAGE_KEY 这份门限密钥
 #      的落盘加密主钥）。现在改为 fail-closed，与本仓 JWTUtil.init() 的
-#      "空值拒绝启动"同一口径。15 个必填变量清单见 `.env.prod.example`。
+#      "空值拒绝启动"同一口径。必填变量清单见 `.env.prod.example`（2026-10-12 起
+#      数据库族改为 MySQL：POSTGRES_USER/POSTGRES_PASSWORD 由 MYSQL_* 取代）。
 #   4. restart: always（生产自愈）
 #
 # 端口约定（与各服务 application.yml server.port 对齐）：
 #   gateway:8080 / signing:8082 / wallet:8083 / bridge:8084 / api-gateway:8085
 #   core:19585 / mpc:50051 / zk:50061(gRPC)+50062(HTTP)
 #   nacos:8848 / sentinel:8858 / seata:8091+7091 / zipkin:9411
-#   postgres:5432 / redis:6379 / prometheus:9090 / grafana:3000
+#   mysql:3306（业务库）/ postgres:5432（仅供 core）/ redis:6379 / prometheus:9090 / grafana:3000
 # ============================================================================
 
 services:
@@ -28,6 +29,12 @@ services:
     expose: ['8080']
     environment:
       - SPRING_PROFILES_ACTIVE=prod
+      # 2026-10-12：DB 家族对齐 MySQL 8（原为 PostgreSQL，与 prod profile 的
+      # db/migration-pg 一起构成"起不来"的组合：迁移冻结在 V17 而 ddl-auto=validate）。
+      # 库名 = nexus_gateway（与 wallet 的 nexus_wallet 独立）。
+      - NEX_DB_URL=jdbc:mysql://mysql:3306/nexus_gateway?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=UTC
+      - NEX_DB_USERNAME=nexus_gateway
+      - NEX_DB_PASSWORD=${MYSQL_PASSWORD:?prod 必需：禁止占位默认值}
     healthcheck:
       test: ['CMD', '/busybox', 'wget', '-q', '-O', '/dev/null', 'http://localhost:8080/actuator/health']
       interval: 30s
@@ -40,6 +47,8 @@ services:
         condition: service_healthy
       nacos:
         condition: service_healthy
+      mysql:
+        condition: service_healthy
 
   nexus-core:
     build: ./nexus-core
@@ -50,7 +59,15 @@ services:
       timeout: 10s
       retries: 5
       start_period: 60s
-    restart: always
+    environment:
+      # 2026-10-12 更正：core **确实**需要关系库 —— 它没有 JPA/Flyway，但有 PG 方言的
+      # JDBC 链存储（RDBMSBlockChainImpl + resources/ddl.sql，schema 用 bytea 与双引号
+      # 标识符，见 ddl.sql）。故全栈 DB 族切 MySQL 时 **core 例外，仍用 PostgreSQL**：
+      # 把 core 迁到 MySQL 需重写 ddl.sql（bytea→VARBINARY/BLOB）+ 核实 JDBC 读写路径，
+      # 属独立批次（已在 CHANGELOG「未做」中列明）。
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/nexus_core
+      - SPRING_DATASOURCE_USERNAME=${POSTGRES_USER:-nexus}
+      - SPRING_DATASOURCE_PASSWORD=${POSTGRES_PASSWORD:?prod 必需：禁止占位默认值}
     depends_on:
       postgres:
         condition: service_healthy
@@ -64,6 +81,13 @@ services:
       - NEX_NACOS_SERVER=nacos:8848
       - NEX_SEATA_SERVER=seata:8091
       - NEX_ZIPKIN_ENDPOINT=http://zipkin:9411/api/v2/spans
+      # 2026-10-12：本服务无 prod profile（走 application.yml 默认，DB 默认即 MySQL），
+      # 但默认值指向 `localhost:3306`（容器内=自身）⇒ 生产必须显式注入服务名。
+      # 默认 URL 还带 requireSSL=true + classpath JKS 信任库，故此处整体覆盖为集群内连接
+      # （客户若要求库连接 TLS，改这一行的 useSSL/sslMode 参数即可）。
+      - NEX_DB_URL=jdbc:mysql://mysql:3306/nexus_signing?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=UTC
+      - NEX_DB_USERNAME=nexus_signing
+      - NEX_DB_PASSWORD=${MYSQL_PASSWORD:?prod 必需：禁止占位默认值}
       # P0-1 Task 239: MPC 多端点路由（逗号分隔的 host:port 列表）
       - NEX_MPC_ENGINE_ENDPOINTS=mpc-engine-0:50051,mpc-engine-1:50051,mpc-engine-2:50051
       # mTLS 证书路径（生产通过 Secret / 挂载卷注入）
@@ -90,7 +114,7 @@ services:
         condition: service_started
       mpc-engine-2:
         condition: service_started
-      postgres:
+      mysql:
         condition: service_healthy
       nacos:
         condition: service_healthy
@@ -113,10 +137,16 @@ services:
       - NEX_NACOS_SERVER=nacos:8848
       - NEX_SEATA_SERVER=seata:8091
       - NEX_ZIPKIN_ENDPOINT=http://zipkin:9411/api/v2/spans
+      # 2026-10-12：DB 家族对齐 MySQL 8（原 PG + db/migration-pg 冻结在 V3，
+      # 与 prod profile 的 ddl-auto=validate 组合会导致启动即失败：
+      # missing table [wallet_audit_events]）。库名 nexus_wallet（与 gateway 独立）。
+      - NEX_DB_URL=jdbc:mysql://mysql:3306/nexus_wallet?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=UTC
+      - NEX_DB_USERNAME=nexus_wallet
+      - NEX_DB_PASSWORD=${MYSQL_PASSWORD:?prod 必需：禁止占位默认值}
     depends_on:
       nexus-core:
         condition: service_healthy
-      postgres:
+      mysql:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -138,10 +168,17 @@ services:
     expose: ['8084']
     environment:
       - SPRING_PROFILES_ACTIVE=prod
+      # 2026-10-12：同 signing-service —— 无 prod profile、默认 URL 指向 localhost，
+      # 此处显式注入服务名与库；默认 URL 的 requireSSL + JKS 信任库一并覆盖。
+      - NEX_DB_URL=jdbc:mysql://mysql:3306/nexus_bridge?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=UTC
+      - NEX_DB_USERNAME=nexus_bridge
+      - NEX_DB_PASSWORD=${MYSQL_PASSWORD:?prod 必需：禁止占位默认值}
     depends_on:
       nexus-core:
         condition: service_healthy
       nacos:
+        condition: service_healthy
+      mysql:
         condition: service_healthy
     healthcheck:
       test: ['CMD', '/busybox', 'wget', '-q', '-O', '/dev/null', 'http://localhost:8084/api/v1/bridge/status']
@@ -369,10 +406,14 @@ services:
       - SEATA_PORT=8091
       - STORE_MODE=db
       # P1-7: 生产环境使用 DB 存储事务日志（替代 file 模式，避免单点丢失）
-      - SEATA_STORE_DB_DRIVER_CLASS_NAME=org.postgresql.Driver
-      - SEATA_STORE_DB_URL=jdbc:postgresql://postgres:5432/seata
-      - SEATA_STORE_DB_USER=${POSTGRES_USER:-nexus}
-      - SEATA_STORE_DB_PASSWORD=${POSTGRES_PASSWORD:?prod 必需：禁止占位默认值}
+      # 2026-10-12：随全栈 DB 家族对齐改为 MySQL（原 PostgreSQL 驱动 +
+      # jdbc:postgresql://postgres:5432/seata）。Seata 2.x 的 db 模式首次启动会自动
+      # 执行其内置 mysql 建表脚本（global_table/branch_table/lock_table/distributed_lock），
+      # 故只需保证 seata 库存在（见 deploy/config/init-mysql-dbs.sql）。
+      - SEATA_STORE_DB_DRIVER_CLASS_NAME=com.mysql.cj.jdbc.Driver
+      - SEATA_STORE_DB_URL=jdbc:mysql://mysql:3306/seata?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=UTC
+      - SEATA_STORE_DB_USER=${MYSQL_USER:-nexus}
+      - SEATA_STORE_DB_PASSWORD=${MYSQL_PASSWORD:?prod 必需：禁止占位默认值}
       - SEATA_REGISTRY_NAME=nacos
       - SEATA_REGISTRY_NACOS_SERVER_ADDR=nacos:8848
       - SEATA_REGISTRY_NACOS_NAMESPACE=prod
@@ -428,27 +469,61 @@ services:
         condition: service_healthy
     restart: always
 
-  # === 数据库（Postgres 16-alpine，REQ-28 与 dev 统一） ===
-  # P1-7: Seata DB 存储模式需独立 seata 数据库。
-  #   创建方式：挂载 init 脚本至 /docker-entrypoint-initdb.d/，例如：
-  #     volumes:
-  #       - ./deploy/config/init-seata-db.sql:/docker-entrypoint-initdb.d/init-seata-db.sql:ro
-  #   init-seata-db.sql 内容：CREATE DATABASE seata;
-  #   （也可由运维手动执行：psql -U <user> -c "CREATE DATABASE seata;"）
+  # === PostgreSQL 16（**仅供 core**：链状态 JDBC 存储为 PG 方言，见 core 段注释） ===
+  # 业务库（gateway/wallet/signing/bridge/seata/Nacos）已全部切到下面的 MySQL。
+  # core 的 DB 迁移（ddl.sql bytea → MySQL 类型）为独立批次，完成前保留此服务。
   postgres:
     image: postgres:16-alpine
     volumes: [pgdata:/var/lib/postgresql/data]
     expose: ['5432']
     environment:
-      - POSTGRES_DB=nexuschain
+      - POSTGRES_DB=nexus_core
       - POSTGRES_USER=${POSTGRES_USER:?prod 必需：禁止占位默认值}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?prod 必需：禁止占位默认值}
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:?prod 必需：禁止占位默认值} -d nexuschain']
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:?prod 必需：禁止占位默认值} -d nexus_core']
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 10s
+    restart: always
+
+  # === 数据库（MySQL 8.0，业务库；2026-10-12 由 PostgreSQL 16 切换而来） ===
+  # 为什么切：① ADR-033（2026-10-03 Accepted）定的是 **OceanBase（MySQL 模式）** 方向，
+  #   全仓唯一被维护的迁移集是 `db/migration`（MySQL 方言，gateway V1..V96）；
+  #   ② bridge / signing-service 的默认数据源本来就是 MySQL，只有 gateway/wallet
+  #   的 prod profile 还指向 PG——那套 `db/migration-pg` 冻结在 V17/V3 且配
+  #   ddl-auto=validate ⇒ 该 profile 在 PG 上**启动即失败**（缺表/缺列）；
+  #   ③ CI 的 MySQL 用例用的是 mysql:8.0，与本地安装预演同版本。
+  # 客户若使用 OceanBase（MySQL 模式），把各服务 NEX_DB_URL 指过去即可（同族方言）。
+  #
+  # 初始化：四个业务库 + seata 库由 init 脚本建（幂等；seata 的**表**由 Seata 自己建）。
+  #   挂载 deploy/config/init-mysql-dbs.sql 到 /docker-entrypoint-initdb.d/。
+  mysql:
+    image: mysql:8.0
+    volumes:
+      - mysqldata:/var/lib/mysql
+      # initdb 脚本只在**数据目录为空**时执行一次（named volume 首次创建时）；
+      # 客户自建实例可手工执行同一份脚本（见文件头注释）
+      - ./deploy/config/init-mysql-dbs.sh:/docker-entrypoint-initdb.d/init-mysql-dbs.sh:ro
+    expose: ['3306']
+    command:
+      # utf8mb4：中文/emoji 与审计明细文本必须；时区固定 UTC 与 NEX_DB_URL 的 serverTimezone 对齐
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-time-zone=+00:00
+    environment:
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD:?prod 必需：禁止占位默认值}
+      # 业务账号：各库专用账号由 init 脚本按库授权（nexus_gateway / nexus_wallet /
+      # nexus_signing / nexus_bridge）；此处只建一个通用账号供 seata 与运维使用
+      - MYSQL_USER=${MYSQL_USER:-nexus}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:?prod 必需：禁止占位默认值}
+    healthcheck:
+      test: ['CMD-SHELL', 'mysqladmin ping -h 127.0.0.1 -u root -p"$${MYSQL_ROOT_PASSWORD}" --silent']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     restart: always
 
   # === 缓存（Redis 7） ===
@@ -495,7 +570,9 @@ services:
     restart: always
 
 volumes:
+  # pgdata：core 专用（链状态 PG）；mysqldata：业务库 MySQL（2026-10-12 新增）
   pgdata:
+  mysqldata:
   nacos-logs:
   sentinel-logs:
   zk-groth16-setup:

@@ -23,7 +23,9 @@ genesisConfigMap: nexus-genesis
 existingSecret: nexus-secrets
 
 env:
-  DATA_SOURCE_URL: "jdbc:postgresql://postgres:5432/nexus_core"
+  # 2026-10-12 更正：core **确实**需要 PG（链状态 JDBC 存储，ddl.sql 为 PG 方言）。
+  # 业务库已切 MySQL，core 例外保留 PG —— 详见 docker-compose.prod.yml 的 core 段注释。
+  DATA_SOURCE_URL: "jdbc:postgresql://postgres.nexus.svc.cluster.local:5432/nexus_core"
   P2P_MODE: "grpc"
   ENABLE_MINING: "true"
   ENABLE_DISCOVERY: "true"

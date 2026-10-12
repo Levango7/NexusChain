@@ -1,7 +1,7 @@
 # Nacos HA 集群 StatefulSet 部署配置
 #
 # 部署模式：3 节点 HA 集群（Raft 协议选主）
-# 后端存储：外接 PostgreSQL（复用 deploy/k8s/30-infrastructure.yml 中的 postgres）
+# 后端存储：外接 MySQL（复用 deploy/k8s/30-infrastructure.yml 中的 mysql，2026-10-12 由 PG 切换）
 # 持久化：每节点 PVC 20Gi（数据）+ 5Gi（日志）
 # 资源配置：每节点 2 GiB memory + 1 CPU
 #
@@ -25,7 +25,7 @@ metadata:
   annotations:
     # 标注 HA 部署模式，便于运维识别
     nexuschain.io/ha-mode: "raft-3nodes"
-    nexuschain.io/storage-backend: "postgresql"
+    nexuschain.io/storage-backend: "mysql"
 spec:
   serviceName: nacos-headless
   replicas: 3
@@ -73,8 +73,8 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       initContainers:
-        # 初始化容器：等待 PostgreSQL 就绪后再启动 Nacos
-        - name: wait-for-postgres
+        # 初始化容器：等待 MySQL 就绪后再启动 Nacos（2026-10-12：原 wait-for-postgres）
+        - name: wait-for-mysql
           image: busybox:1.36
           securityContext:
             allowPrivilegeEscalation: false
@@ -87,12 +87,12 @@ spec:
             - sh
             - -c
             - |
-              echo "等待 PostgreSQL 就绪..."
-              until nc -z postgres 5432; do
-                echo "PostgreSQL 未就绪，5s 后重试..."
+              echo "等待 MySQL 就绪..."
+              until nc -z mysql 3306; do
+                echo "MySQL 未就绪，5s 后重试..."
                 sleep 5
               done
-              echo "PostgreSQL 已就绪，启动 Nacos..."
+              echo "MySQL 已就绪，启动 Nacos..."
           resources:
             requests:
               memory: "32Mi"
@@ -132,9 +132,9 @@ spec:
             # 集群节点地址：通过 Headless Service 解析自身 Pod 域名
             - name: NACOS_SERVER_ADDR
               value: "$(POD_ID).nacos-headless.nexus.svc.cluster.local"
-            # 外接 PostgreSQL 数据源
+            # 外接 MySQL 数据源（2026-10-12）
             - name: SPRING_DATASOURCE_PLATFORM
-              value: "postgresql"
+              value: "mysql"
             - name: NACOS_AUTH_ENABLE
               value: "true"
             # 数据库连接（从 Secret 读取，避免明文）
