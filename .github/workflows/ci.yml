@@ -1039,7 +1039,7 @@ jobs:
       # max-parallel: 4 控制并发，避免触发 GitHub Actions 并发限额
       max-parallel: 4
       matrix:
-        # REQ-02: 全部 12 个含 Dockerfile 的模块
+        # REQ-02: 全部 13 个含 Dockerfile 的模块
         module:
           - nexus-core
           - nexus-gateway
@@ -1053,6 +1053,9 @@ jobs:
           - nexus-oracle
           - mpc-engine
           - zk-groth16-service
+          # 2026-10-12 新增：区块浏览器镜像（Express BFF 同源托管前端产物）。
+          # 仅 master push 触发（本 job 的 if 条件），不影响 PR 检查集。
+          - nexus-explorer
         # Rust 多阶段构建耗时较长，单独放宽 timeout（wrapper 下载 + cargo 全量编译）
         include:
           - module: mpc-engine

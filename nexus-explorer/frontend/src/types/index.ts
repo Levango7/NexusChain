@@ -6,6 +6,10 @@
  *   BlockInfo       ← nexus-core/…/controller/JsonRpcController#toRpcBlock
  *   TransactionInfo ← nexus-core/…/controller/JsonRpcController#toRpcTransaction
  *   AccountInfo     ← nexus-explorer/backend/src/index.ts  GET /api/address/:addr
+ *   ContractInfo    ← nexus-explorer/backend/src/rpc.ts#RpcContract
+ *                     （BFF 对 core `nexus_getContractList` / `nexus_getContract` 纯透传）
+ *   CrossChainTransfer ← nexus-explorer/backend/src/rpc.ts#RpcCrossChainTx
+ *                     （BFF 对 core `nexus_getCrossChainTransactions` 纯透传）
  * ────────────────────────────────────────────────────────────────────────
  *
  * ⚠️ 后端（nexus-explorer/backend）对 core 的 RPC 结果**纯透传**，不做字段映射。
@@ -83,4 +87,43 @@ export interface AccountInfo {
   address: string;
   balance: string;
   txCount: number;
+}
+
+/**
+ * 智能合约（`GET /api/contracts`、`GET /api/contracts/:addr`）。
+ *
+ * `abi` 在 core 侧为**可选**：当前 `nexus_getContract` 不返回该字段，
+ * 故类型标为可选且 UI 必须容忍缺失（不得渲染出字面量 "undefined"）。
+ */
+export interface ContractInfo {
+  /** 合约地址。 */
+  address: string;
+  /** 部署者地址。 */
+  creator: string;
+  /** WASM 字节码哈希（十六进制）。 */
+  codeHash: string;
+  /** WASM 字节码本体（十六进制），可能很长 —— UI 需截断展示。 */
+  wasmCode: string;
+  /** 部署时间，Unix 秒。 */
+  createdAt: number;
+  /** ABI 描述；core 侧当前不返回。 */
+  abi?: unknown;
+}
+
+/**
+ * 跨链交易（`GET /api/crosschain`）。
+ *
+ * 来源链 / 目标链目前为字符串标识（如 `"nexus"` / `"ethereum"`），
+ * `amount` 与其他金额字段一致以字符串返回。
+ */
+export interface CrossChainTransfer {
+  txId: string;
+  sourceChain: string;
+  targetChain: string;
+  amount: string;
+  status: "pending" | "confirmed" | "failed";
+  /** 发起时间，Unix 秒。 */
+  timestamp: number;
+  from: string;
+  to: string;
 }

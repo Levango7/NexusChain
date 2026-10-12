@@ -24,6 +24,8 @@
     "transactions": "Transactions",
     "addresses": "Addresses",
     "orchestration": "Orchestration",
+    "contracts": "Contracts",
+    "crosschain": "Cross-chain",
     "settings": "Settings"
   },
   "home": {
@@ -161,5 +163,39 @@
     "balance": "Balance",
     "nonce": "Nonce",
     "transactions": "Transactions"
+  },
+  "contracts": {
+    "title": "Contracts",
+    "back": "Back",
+    "loading": "Loading contracts...",
+    "loadFailed": "Failed to load contracts",
+    "notFound": "Contract not found",
+    "empty": "No contracts deployed yet",
+    "total": "{{n}} contract(s)",
+    "view": "View contract {{address}}",
+    "address": "Contract Address",
+    "creator": "Creator",
+    "codeHash": "Code Hash",
+    "createdAt": "Deployed At",
+    "code": "Contract Code",
+    "codeExpand": "Show full code",
+    "codeCollapse": "Collapse code",
+    "codeTruncated": "Showing first 200 characters ({{len}} characters total)",
+    "abi": "ABI",
+    "abiUnavailable": "ABI is not provided by the node"
+  },
+  "crosschain": {
+    "title": "Cross-chain Transfers",
+    "back": "Back",
+    "loading": "Loading cross-chain transfers...",
+    "loadFailed": "Failed to load cross-chain transfers",
+    "empty": "No cross-chain transfers",
+    "filterLabel": "Filter by status",
+    "filterAll": "All",
+    "status": {
+      "pending": "Pending",
+      "confirmed": "Confirmed",
+      "failed": "Failed"
+    }
   }
 }

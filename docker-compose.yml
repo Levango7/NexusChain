@@ -244,6 +244,35 @@ services:
       retries: 3
       start_period: 30s
 
+  # === 区块浏览器（对外展示面） ===
+  # 2026-10-12 新增：explorer 此前只有源码（两个 Node workspace），既无 Dockerfile
+  # 也不在 compose 内 —— 「对外展示面」在部署层面并不存在，只能本机 npm run dev。
+  # 单容器：Express BFF 同时托管前端产物与 /api/**（同源，见 nexus-explorer/Dockerfile）。
+  # 端口：宿主 3001 → 容器 3000（宿主 3000 常被本地工具占用，如 Grafana/其它 dev server）。
+  nexus-explorer:
+    build:
+      context: .
+      dockerfile: nexus-explorer/Dockerfile
+    container_name: nexus-explorer
+    ports:
+      - '127.0.0.1:3001:3000'
+    environment:
+      # 容器内 core 的地址是服务名（默认 localhost:19585 会指向容器自身，链数据恒不可达）
+      - NEXUS_RPC_URL=http://nexus-core:19585/rpc
+      # 同源托管下前端走相对路径 /api/**，无需 CORS；白名单仅保留 Vite dev server
+      - CORS_ALLOWED_ORIGINS=http://localhost:5173
+    depends_on:
+      nexus-core:
+        condition: service_healthy
+    healthcheck:
+      # node:24-alpine 自带 busybox wget
+      test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:3000/health']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
   # === 服务发现 + 配置中心 ===
   # Nacos 3.1.2 standalone 模式，嵌入式 derby 持久化（开发环境，不依赖外部 MySQL）。
   # 生产环境请使用 docker-compose.prod.yml 中的 Nacos 集群 + MySQL 持久化方案。

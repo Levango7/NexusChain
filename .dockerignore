@@ -52,8 +52,15 @@ jdk-provision/
 # === AI agent 工作产物（非源码） ===
 .codeartsdoer/
 
-# === Node.js 子项目（不纳入 Gradle 构建，无需 COPY） ===
-nexus-explorer/
+# === Node.js 子项目 ===
+# nexus-explorer 有独立 Dockerfile（2026-10-12 新增，构建上下文 = repo 根），
+# 故源码**必须**进入上下文；但本地 node_modules / dist 体积大且是陈旧产物，
+# 必须排除（否则 COPY nexus-explorer/ 会把宿主机上的旧 dist 带进镜像，
+# 与镜像内构建结果混淆）。nexus-devtools / nexus-js-sdk 仍不纳入。
+nexus-explorer/node_modules/
+nexus-explorer/**/node_modules/
+nexus-explorer/frontend/dist/
+nexus-explorer/backend/dist/
 nexus-devtools/
 nexus-js-sdk/
 

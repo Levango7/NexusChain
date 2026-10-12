@@ -57,7 +57,7 @@ permissions:
 
 jobs:
   # ============================================================
-  # 1. 构建并推送全部 12 个 Docker 镜像（tag = git tag 版本号）
+  # 1. 构建并推送全部 13 个 Docker 镜像（tag = git tag 版本号）
   # ============================================================
   build-images:
     name: Build Images (${{ matrix.module }})
@@ -96,6 +96,9 @@ jobs:
           - nexus-oracle
           - mpc-engine
           - zk-groth16-service
+          # 2026-10-12 新增：对外展示面（Express BFF 同源托管前端产物）。
+          # 该镜像此前不存在 —— explorer 只有源码，发布链里没有它。
+          - nexus-explorer
         include:
           - module: mpc-engine
             timeout-minutes: 25

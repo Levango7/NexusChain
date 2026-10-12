@@ -24,6 +24,8 @@
     "transactions": "交易",
     "addresses": "地址",
     "orchestration": "支付编排",
+    "contracts": "合约",
+    "crosschain": "跨链",
     "settings": "设置"
   },
   "home": {
@@ -161,5 +163,39 @@
     "balance": "余额",
     "nonce": "随机数",
     "transactions": "交易数"
+  },
+  "contracts": {
+    "title": "智能合约",
+    "back": "返回",
+    "loading": "加载合约中...",
+    "loadFailed": "加载合约失败",
+    "notFound": "未找到合约",
+    "empty": "暂无已部署合约",
+    "total": "{{n}} 个合约",
+    "view": "查看合约 {{address}}",
+    "address": "合约地址",
+    "creator": "部署者",
+    "codeHash": "代码哈希",
+    "createdAt": "部署时间",
+    "code": "合约代码",
+    "codeExpand": "展开完整代码",
+    "codeCollapse": "收起代码",
+    "codeTruncated": "仅显示前 200 个字符（完整长度 {{len}} 字符）",
+    "abi": "ABI",
+    "abiUnavailable": "节点未提供该合约的 ABI"
+  },
+  "crosschain": {
+    "title": "跨链交易",
+    "back": "返回",
+    "loading": "加载跨链交易中...",
+    "loadFailed": "加载跨链交易失败",
+    "empty": "暂无跨链交易",
+    "filterLabel": "按状态筛选",
+    "filterAll": "全部",
+    "status": {
+      "pending": "待确认",
+      "confirmed": "已确认",
+      "failed": "失败"
+    }
   }
 }

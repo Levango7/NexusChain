@@ -12,14 +12,33 @@
  *   GET  /api/contracts/:addr — 获取合约详情
  *   GET  /api/node/status     — 获取节点状态
  *   GET  /api/crosschain      — 获取跨链交易列表
+ *
+ * 静态资源（2026-10-12 新增）：当 `FRONTEND_DIR` 指向已构建的前端产物时，
+ * 本服务同时托管该目录（单容器部署形态，见 nexus-explorer/Dockerfile）。
  */
 
 import express, { Request, Response } from "express";
 import cors from "cors";
+import { existsSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { NexusChainRpcClient } from "./rpc.js";
 
 /** 服务监听端口 */
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+
+/**
+ * 前端构建产物目录（可选）。
+ *
+ * 默认回落到 monorepo 内的 `frontend/dist`（本地 `npm run build:frontend` 之后
+ * 即可用 `npm start --workspace @nexus/explorer-backend` 单进程联调）；
+ * 容器镜像里由 Dockerfile 显式设为 `/app/frontend/dist`。
+ * 目录不存在时**静默跳过**静态托管 —— 后端独立运行时不应因此启动失败
+ * （开发态通常只用 Vite dev server 代理 /api）。
+ */
+const FRONTEND_DIR = process.env.FRONTEND_DIR
+  ? resolve(process.env.FRONTEND_DIR)
+  : resolve(dirname(fileURLToPath(import.meta.url)), "../../frontend/dist");
 
 /**
  * nexus-core 节点 JSON-RPC 地址
@@ -238,9 +257,45 @@ app.get("/health", (_req: Request, res: Response) => {
   res.json({ status: "ok", timestamp: Date.now() });
 });
 
+// ---- 前端静态资源（单容器部署形态） ----
+
+const indexHtml = join(FRONTEND_DIR, "index.html");
+const servingFrontend = existsSync(indexHtml);
+
+if (servingFrontend) {
+  app.use(express.static(FRONTEND_DIR));
+
+  /**
+   * SPA 兜底：前端用 BrowserRouter，`/crosschain`、`/contracts/0xab…` 这类
+   * 深链由浏览器直接请求时服务端并没有对应文件，必须回落 index.html，
+   * 否则刷新子页面即 404（前端路由「看起来能用」、刷新就坏）。
+   *
+   * 判定顺序很关键：
+   *   1. 只兜底 GET（POST /api/... 未匹配路由应走 404，不能被吞成 HTML）
+   *   2. 带扩展名的路径视为静态资源请求（缺失即 404，不回落 —— 否则
+   *      资源 404 会变成「返回 HTML 的 200」，脚本解析失败且难以排查）
+   *   3. /api/ 与 /health 前缀一律放行给后续处理（防 API 404 被吞）
+   */
+  app.use((req: Request, res: Response, next) => {
+    if (req.method !== "GET") return next();
+    const path = req.path;
+    if (path.startsWith("/api/") || path === "/health") return next();
+    if (/\.[a-zA-Z0-9]+$/.test(path)) return next();
+    res.sendFile(indexHtml);
+  });
+} else {
+  console.warn(
+    `未找到前端产物（${indexHtml}）—— 仅提供 API。` +
+      `执行 npm run build:frontend 或设置 FRONTEND_DIR 以启用页面托管。`,
+  );
+}
+
 // ---- 启动服务器 ----
 
 app.listen(PORT, () => {
   console.log(`NexusChain Explorer 后端已启动: http://localhost:${PORT}`);
   console.log(`RPC 节点地址: ${RPC_URL}`);
+  if (servingFrontend) {
+    console.log(`前端产物目录: ${FRONTEND_DIR}`);
+  }
 });
