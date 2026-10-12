@@ -457,6 +457,14 @@ nexus:
   # 没有任何生产触发点——本调度器补上"自动触发"这一环，形成完整闭环。
   # fail-closed：对账单为空/下载失败 → 跳过（绝不用空账单误判单边）；
   # 多副本安全：ShedLock；单商户异常隔离不阻断全量。
+  # === 制裁名单数据入口（P0 补齐 2026-10-11） ===
+  # AML 筛查结构早已接好，但名单此前没有数据入口（addEntry 零调用方）⇒ 筛查恒为空。
+  # 配置本路径后，应用启动时自动加载名单文件（一行一条，'#' 起注释行、空行忽略；
+  # 含逗号时取第一列，兼容 CSV 名单）。
+  # 运营亦可随时 POST /api/v1/compliance/sanction-list/reload 重载，或用管理端点增删条目。
+  compliance:
+    sanction-list-path: ${NEXUS_SANCTION_LIST_PATH:}
+
   reconciliation:
     daily:
       # 开关（资金安全动作，默认开）
