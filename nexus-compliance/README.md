@@ -39,6 +39,20 @@
   - `screenUser(userId)` → `ScreeningResult`
 - `SanctionListChecker`
   - `check(nameOrAddress)` → `SanctionHit[]`
+- 名单数据入口（2026-10-11 起，**离线包优先**；2026-10-12 补官方格式解析）：
+  - **离线包解析**：`SanctionListPackParser.parse(content, format)`
+    —— 支持 **OFAC SDN CSV**（按 `SDN_Name` 取姓名、`-0-` 占位跳过、支持引号内逗号）、
+    **UN 综合名单 XML**（FIRST/SECOND/THIRD_NAME 拼接 + ENTITY_NAME；别名不入名单）、
+    纯文本兜底；XML 已关 DTD/外部实体（XXE 防护）。
+  - **加载**：`InMemorySanctionListChecker.loadFromFile(path)`（按格式自动识别、追加语义）、
+    `addEntries(...)`（批量）、`replaceAll(...)`（整体替换，仅显式场景）。
+  - **HTTP 入口**（`nexus-gateway` 的 `SanctionListController`，一律 `ROLE_ADMIN`）：
+    `GET|POST|DELETE /api/v1/compliance/sanction-list`（查/单条增/单条删）、
+    `POST …/reload`（按配置路径重载）、
+    **`POST …/import`**（离线包导入：裸体直传 / JSON / 服务器本地文件；`mode=append|replace`；
+    解析 0 条 → 400 且名单不变）、
+    **`GET …/imports`**（版本台账：来源/版本/格式/条目数/SHA-256/操作人）。
+  - 每次变更写审计（含操作人与条目/版本明细）；导入另落 `sanction_list_imports` 台账（V97）。
 - 骨架实现：`DefaultAmlService`（`@Service`）
 
 ### identity（去中心化身份）
