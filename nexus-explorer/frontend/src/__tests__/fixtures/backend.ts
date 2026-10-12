@@ -10,6 +10,8 @@
  *   RPC_BLOCK        ← nexus-core/…/controller/JsonRpcController#toRpcBlock
  *   RPC_TRANSACTION  ← nexus-core/…/controller/JsonRpcController#toRpcTransaction
  *   ACCOUNT_INFO     ← nexus-explorer/backend/src/index.ts  GET /api/address/:addr
+ *   CONTRACT_INFO    ← nexus-explorer/backend/src/rpc.ts#RpcContract
+ *   CROSSCHAIN_TX    ← nexus-explorer/backend/src/rpc.ts#RpcCrossChainTx
  *   ORCH_*           ← nexus-gateway/…/PaymentOrchestrationController
  */
 
@@ -47,6 +49,29 @@ export const ACCOUNT_INFO = {
   address: "NEXaddress",
   balance: "1000",
   txCount: 5,
+} as const;
+
+/* ---------- 合约 / 跨链（BFF 对 core RPC 纯透传，camelCase）---------- */
+
+export const CONTRACT_INFO = {
+  address: "NEXcontractAddress",
+  creator: "NEXcreatorAddress",
+  codeHash: "ab".repeat(32),
+  // 注意：core 当前**不返回** abi 字段 —— 夹具刻意保持缺失，
+  // 以便测试断言「无 ABI 时 UI 给出说明而非空白」。
+  wasmCode: "0061736d01000000",
+  createdAt: 1757000000,
+} as const;
+
+export const CROSSCHAIN_TX = {
+  txId: "xchain-0001",
+  sourceChain: "nexus",
+  targetChain: "ethereum",
+  amount: "50",
+  status: "confirmed",
+  timestamp: 1757000000,
+  from: "NEXfromAddress",
+  to: "0x00000000000000000000000000000000000000ff",
 } as const;
 
 /* ---------- gateway 编排端点（snake_case）---------- */

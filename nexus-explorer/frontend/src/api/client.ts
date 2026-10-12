@@ -1,4 +1,11 @@
-import type { BlockInfo, TransactionInfo, AccountInfo, ChainStatus } from "../types";
+import type {
+  BlockInfo,
+  TransactionInfo,
+  AccountInfo,
+  ChainStatus,
+  ContractInfo,
+  CrossChainTransfer,
+} from "../types";
 import { AUTH_HEADERS, buildAuthHeaders, isProtectedPath } from "./auth";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:3000";
@@ -68,6 +75,9 @@ const REQUIRED_FIELDS = {
   block: ["height", "hash", "parentHash", "timestamp", "txCount", "proposer"],
   transaction: ["txHash", "blockHeight", "from", "to", "amount", "status", "timestamp"],
   account: ["address", "balance", "txCount"],
+  // 合约：abi 为可选字段（core 当前不返回），故不列入必需字段。
+  contract: ["address", "creator", "codeHash", "wasmCode", "createdAt"],
+  crossChain: ["txId", "sourceChain", "targetChain", "amount", "status", "timestamp", "from", "to"],
 } as const;
 
 export interface AuthenticatedRequestOptions {
@@ -199,6 +209,18 @@ export const api = {
 
   // Chain status
   getStatus: () => request<ChainStatus>(`/api/node/status`, REQUIRED_FIELDS.chainStatus),
+
+  // Contracts（已部署的 WASM 合约）
+  getContracts: () => request<ContractInfo[]>(`/api/contracts`, REQUIRED_FIELDS.contract),
+  getContract: (address: string) =>
+    request<ContractInfo>(`/api/contracts/${address}`, REQUIRED_FIELDS.contract),
+
+  // Cross-chain（跨链桥交易）
+  getCrossChain: (limit = 20, status?: string) =>
+    request<CrossChainTransfer[]>(
+      `/api/crosschain?limit=${limit}${status ? `&status=${status}` : ""}`,
+      REQUIRED_FIELDS.crossChain,
+    ),
 };
 
 export { AUTH_HEADERS, isProtectedPath };

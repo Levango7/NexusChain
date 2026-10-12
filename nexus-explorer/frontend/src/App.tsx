@@ -5,6 +5,9 @@ import HomePage from "./pages/HomePage";
 import BlockDetailPage from "./pages/BlockDetailPage";
 import TxDetailPage from "./pages/TxDetailPage";
 import AddressPage from "./pages/AddressPage";
+import ContractsPage from "./pages/ContractsPage";
+import ContractPage from "./pages/ContractPage";
+import CrossChainPage from "./pages/CrossChainPage";
 import Settings from "./pages/Settings";
 import { ErrorBoundary } from "./components/ui";
 
@@ -26,6 +29,8 @@ const withBoundary = (element: React.ReactElement): React.ReactElement => (
  *
  * P2-D3: 新增 /settings 路由，提供运行时 API 凭证配置入口。
  * P1   : 路由级 ErrorBoundary 包裹，隔离单页渲染错误。
+ * 2026-10-12: 新增 /contracts、/contracts/:addr、/crosschain —— README 承诺的
+ *             「合约查看 / 跨链交易追踪」此前在后端可用但前端零消费（不可达）。
  */
 const App: React.FC = () => (
   <ErrorBoundary>
@@ -33,6 +38,9 @@ const App: React.FC = () => (
       <Routes>
         <Route path="/" element={withBoundary(<HomePage />)} />
         <Route path="/orchestration" element={withBoundary(<OrchestrationDashboard />)} />
+        <Route path="/contracts" element={withBoundary(<ContractsPage />)} />
+        <Route path="/contracts/:addr" element={withBoundary(<ContractPage />)} />
+        <Route path="/crosschain" element={withBoundary(<CrossChainPage />)} />
         <Route path="/block/:height" element={withBoundary(<BlockDetailPage />)} />
         <Route path="/tx/:hash" element={withBoundary(<TxDetailPage />)} />
         <Route path="/address/:addr" element={withBoundary(<AddressPage />)} />

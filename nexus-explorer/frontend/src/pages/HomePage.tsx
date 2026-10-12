@@ -1,6 +1,13 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useNavigate, Link } from "react-router-dom";
-import { Search, Settings as SettingsIcon, AlertCircle, GitBranch } from "lucide-react";
+import {
+  Search,
+  Settings as SettingsIcon,
+  AlertCircle,
+  GitBranch,
+  FileCode2,
+  ArrowLeftRight,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api/client";
 import type { BlockInfo, TransactionInfo, ChainStatus } from "../types";
@@ -132,6 +139,22 @@ const HomePage: React.FC = () => {
           >
             <GitBranch size={16} />
             <span className="hidden sm:inline">{t("nav.orchestration")}</span>
+          </Link>
+          <Link
+            to="/contracts"
+            aria-label={t("nav.contracts")}
+            className="flex items-center gap-1 text-muted hover:text-accent text-xs transition-colors duration-base ease-standard focus:outline-none focus-visible:shadow-focus"
+          >
+            <FileCode2 size={16} />
+            <span className="hidden sm:inline">{t("nav.contracts")}</span>
+          </Link>
+          <Link
+            to="/crosschain"
+            aria-label={t("nav.crosschain")}
+            className="flex items-center gap-1 text-muted hover:text-accent text-xs transition-colors duration-base ease-standard focus:outline-none focus-visible:shadow-focus"
+          >
+            <ArrowLeftRight size={16} />
+            <span className="hidden sm:inline">{t("nav.crosschain")}</span>
           </Link>
           <Link
             to="/settings"

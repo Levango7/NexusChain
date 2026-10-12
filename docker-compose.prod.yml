@@ -174,6 +174,29 @@ services:
       start_period: 40s
     restart: always
 
+  # === 区块浏览器（对外展示面，端口 3000） ===
+  # 2026-10-12 新增。单容器：Express BFF 同源托管前端产物 + /api/** 查询接口
+  # （见 nexus-explorer/Dockerfile；前端 API 基址编译期留空 → 相对路径，无需跨源配置）。
+  # 需要 repo 根上下文（COPY nexus-explorer/ 的两个 workspace）。
+  nexus-explorer:
+    build:
+      context: .
+      dockerfile: nexus-explorer/Dockerfile
+    expose: ['3000']
+    environment:
+      # 容器内 core 的地址是服务名；缺省 localhost:19585 会指向容器自身 → 全部查询 500
+      - NEXUS_RPC_URL=http://nexus-core:19585/rpc
+    depends_on:
+      nexus-core:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:3000/health']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: always
+
   # ==================== 密码学服务 ====================
   # === MPC 引擎（Rust，gRPC 50051，3 节点分散式部署） ===
   # P0-1 Task 239：从单节点升级为 3 节点分散式（2-of-3 阈值签名）

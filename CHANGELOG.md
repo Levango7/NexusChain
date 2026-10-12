@@ -2,6 +2,43 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [2.69.0] - 2026-10-12
+
+### 区块浏览器补齐合约/跨链页面 + 容器化部署路径（对外展示面从「有源码」到「能部署」）
+
+**问题（两条并行的交付缺口）**：
+
+1. **后端有能力、用户不可达**——README「功能」清单从首版起就承诺「合约查看 / 跨链交易追踪」，
+   后端 `GET /api/contracts`、`GET /api/crosschain` 也一直可用，但前端**零消费**：
+   无页面、无路由、无入口（与 2026-09-16 审查发现的 `/orchestration` 零入口同类缺陷——
+   「端点/路由存在」不等于「用户可达」）。
+2. **部署不出来**——`nexus-explorer/` 没有 Dockerfile、被根级 `.dockerignore` 整体排除、
+   compose 与发布镜像矩阵里都没有它。所谓「对外展示面」只存在于本机的 `npm run dev`。
+
+- **前端页面**：新增 `ContractsPage`（`/contracts`）、`ContractPage`（`/contracts/:addr`：wasmCode
+  截断+展开、`abi` 缺失时**显式说明**而非留白）、`CrossChainPage`（`/crosschain`：状态筛选走服务端、
+  手动刷新、竞态守卫）；首页页头补两个入口（`routes.test.tsx` 的路由可达性守卫要求「路由必须有入口」）。
+- **契约纪律**：`types/` 补 `ContractInfo` / `CrossChainTransfer`（注释标注字段来源：BFF 对 core RPC 纯透传），
+  `api/client.ts` 补三个方法与**必需字段断言**（缺字段抛契约错误，不渲染 `undefined`）。
+- **i18n / 测试**：zh/en 双语键补齐；`ExplorerContractPages.test.tsx` **12 例**（列表/详情/深链/空态/错误态/
+  超长代码展开/ABI 有与无/状态筛选/未知状态回落）；前端合计 **132 例 / 15 文件**全绿；
+  覆盖率基线随之上调（Stmts 58→63、Lines 60→66、Funcs 58→63、Branch 50→57，实测 64.83/67.05/64.70/58.66）。
+- **后端静态托管**：Express 增加前端产物托管 + **SPA 兜底**（`FRONTEND_DIR` 可配，目录缺失只提供 API、
+  不阻断启动）。兜底三条判定：仅 GET、带扩展名视为资源请求（缺失即 404，**不**回落成「HTML 的 200」）、
+  `/api/` 与 `/health` 前缀放行（防 API 404 被吞）。
+- **部署路径**：新增 `nexus-explorer/Dockerfile`（多阶段；构建期 `VITE_API_BASE=""` ⇒ 前端请求走**相对路径**，
+  同源零配置；运行镜像只装 backend workspace 生产依赖，node_modules 84MB→28MB，镜像 276MB）；
+  接入 dev compose（宿主 `127.0.0.1:3001`）与 prod compose（`expose 3000`，接前置 LB/Ingress）；
+  发布链镜像矩阵 12→13（`ci.yml` master push、`release.yml` tag）；
+  根级 `.dockerignore` 由「整体排除 nexus-explorer」改为「排除 node_modules/dist、放行源码」。
+- **实测取证**：镜像构建通过；容器内 `/health` 200、`/` 与深链 `/crosschain`、`/contracts/NEXabc` 均 200 HTML、
+  缺失资源 404、`/api/blocks` 保持 JSON 500（**未被 SPA 兜底吞成 HTML**）、镜像内置 HEALTHCHECK 报 healthy；
+  前端 `npm run check`（format/lint/test/build/产物校验/对比度校验）全绿。
+
+**诚实声明（未做）**：K8s/Helm 部署形态——`deploy/helm/charts/` 无 explorer 子 chart、`deploy/k8s/` 无对应静态清单，
+两者必须同步落地（否则 `k8s-sync-check` 判定双路径漂移），故当前容器化路径 = compose；
+链上状态实时订阅（现为 10s 轮询）与图表可视化；合约 `abi` 数据源（core 不返回，UI 显式说明）。
+
 ## [2.68.0] - 2026-10-11
 
 ### 制裁名单数据入口（AML 筛查从"空壳"变成真能拦人）

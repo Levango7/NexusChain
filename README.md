@@ -9,10 +9,10 @@ NexusChain 是一个**基于自研区块链的支付编排平台（Payment Orche
 > 沙箱/仿真态对外展示，生产资金操作由持牌交付方在其合规主体下运行。
 
 > **版本口径（2026-09-28 第三次修复漂移，CI 门禁化）**：构建侧**双源**为根 `build.gradle` 的 `version`
-> 与 `nexus-core/nexus-core/src/main/resources/version.properties` 的 `versionNumber`（当前均为 `2.68.0`；
+> 与 `nexus-core/nexus-core/src/main/resources/version.properties` 的 `versionNumber`（当前均为 `2.69.0`；
 > 发版时**两处都要改**——v2.50.2 曾因 version.properties 滞后导致 jar 名错位）；
-> 发布说明单一来源为 [CHANGELOG](CHANGELOG.md)（最新条目 `[2.58.0] - 2026-10-11`，
-> 即出款去向模型接线：自动提现从「只扣账不出款」改为「有去向才扣账、出款失败必退回」）。
+> 发布说明单一来源为 [CHANGELOG](CHANGELOG.md)（最新条目 `[2.69.0] - 2026-10-12`，
+> 即区块浏览器补齐合约/跨链页面 + 容器化部署路径：对外展示面从「有源码」到「能部署」）。
 > 本头注的准确性由 CI 门禁 `scripts/check-version-consistency.sh` 保护：
 > build.gradle / version.properties / 本头注三处任一失配将直接导致 CI 失败。
 
@@ -94,7 +94,7 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
 | `nexus-signing-service` | 签名服务：交易签名编排、MPC 传输层 | 编排完整，MPC 真实 CGGMP21 门限签名（GG20 已退役 2026-10-08，见下「MPC 多方签名」） |
 | `nexus-wallet-service` | 钱包服务：白名单、冷热托管、审批流 | 白名单/审批完整，托管为模拟 |
 | `mpc-engine` | Rust gRPC MPC 密码学引擎 | **真实 CGGMP21 门限 ECDSA（`cggmp21` 0.6.3）；GG20 路径已退役，依赖树无 GPL** |
-| `nexus-explorer` | React + TS 区块浏览器 | **MVP 骨架**（约 40 个前端源文件，见成熟度声明） |
+| `nexus-explorer` | React + TS 区块浏览器 | 六个数据面全部接入 core RPC（区块/交易/地址/合约/跨链/节点状态）；**已容器化**（单容器 BFF 同源托管，见成熟度声明） |
 | `nexus-sdk` | 四语言 SDK：Java 全能力；TS/Python/Go 真实 RPC 契约实现（链/钱包/交易查询、跨链桥、地址校验、提交走 wallet-service） | **四语言全部可用**（2026-09-01 v2.2.0 补真，36 用例全绿，见 nexus-sdk/README） |
 | `nexus-rpc-doc` | RPC API 文档 | 参考 |
 
@@ -107,12 +107,23 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
 
 为避免"宣称能力 >> 实际能力"，以下组件的真实状态如实标注。**v2.0.0-rc1 已完成 Phase 5 真实化改造**，各组件状态如下：
 
-### 区块浏览器（nexus-explorer，P6 诚实声明 2026-08-27）
+### 区块浏览器（nexus-explorer）
 
-- **状态：MVP 骨架，非生产级**。`nexus-explorer/frontend/src` 真实源码约 **40 个文件**（26 tsx + 10 ts + 2 json + 2 css）；`backend/src` 仅 2 个文件。仓库统计中的大量文件为 `node_modules` 依赖，**不代表产品功能**。
-- **已具备**：基础页面骨架、i18n 框架（7 页面翻译替换）、4 个基础组件测试（Button/Card/Modal/Badge，57 用例）。
-- **未具备**：完整的区块/交易/地址详情数据接入、链上状态实时订阅、图表可视化、监控告警前端。此前模块清单"可用"标注与实际情况不符，已修正。
-- **演进**：列入后续迭代，功能范围需另行立项评审。
+- **状态（2026-10-12 复核）：六个数据面全部真实接入，可容器化部署；仍未做链上实时订阅与图表可视化。**
+- **已具备**：
+  - 页面/路由 9 条，全部消费真实后端端点：区块列表与详情、交易列表与详情、地址（余额/交易数）、
+    **合约列表与详情**（`/contracts`、`/contracts/:addr`）、**跨链交易追踪**（`/crosschain`，含状态筛选）、
+    节点状态（首页页头）、支付编排控制台（`/orchestration`，需商户凭证）。
+  - 契约纪律：`types/` 与后端字段**逐字对齐且标注来源**，`api/client.ts` 对每个端点声明必需字段
+    （缺字段抛契约错误，而非渲染 `undefined`）；路由可达性由 `routes.test.tsx` 守卫（页面不可达即红）。
+  - 测试与门禁：页面级测试 + 组件测试 + 构建产物校验（设计令牌注入/工具类生成）+ 对比度校验（WCAG AA）。
+  - **部署形态**：`nexus-explorer/Dockerfile`（多阶段，单容器 = Express BFF 同源托管前端产物 + `/api/**`），
+    已接入 dev/prod compose 与发布链（`release.yml` / `ci.yml` 镜像矩阵）。
+- **未具备（诚实声明）**：链上状态实时订阅（当前为 10s 轮询）、图表可视化、监控告警前端、
+  K8s/Helm 部署形态（`deploy/helm/charts/` 无 explorer 子 chart，`deploy/k8s/` 无静态清单——
+  两者须同步落地，否则 `k8s-sync-check` 会判定双路径漂移）、合约 `abi` 数据源（core 不返回，UI 显式说明）。
+- **历史**：2026-08-27 曾标注「MVP 骨架（约 40 个前端源文件）」；该口径在 2026-09-16 数据接入审查
+  与 2026-10-12 合约/跨链页补齐后均已过期，本段为最新口径。
 
 ### MPC 多方签名（CGGMP21 门限 ECDSA；GG20 已退役 2026-10-08）
 
