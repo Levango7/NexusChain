@@ -474,6 +474,21 @@ nexus:
       # 参与自动对账的渠道（逗号分隔）
       channels: WECHAT,ALIPAY
 
+    # === 补偿执行（2026-10-12 显式声明） ===
+    # 此前这五个键**只存在于 Java @Value 兜底**、未在 yml 出现 ⇒ 运维看不见，
+    # 且 sandbox 兜底为 true 会造成"记录显示成功但资金未动"。现全部显式化。
+    compensation:
+      # 执行模式：false = 真实执行（安全默认）；true = 模拟执行并标 SUCCESS（仅 sandbox/单测）
+      sandbox: false
+      # 是否允许**自动**创建补偿记录；人工入口 POST /discrepancy/{id}/compensate 不受此开关约束
+      auto-enabled: true
+      # 单笔补偿金额上限（与 reconciliation.adjustment.auto-approve-threshold 同口径）
+      auto-max-amount: 1000
+      # 每商户每日补偿笔数上限（防"化整为零"绕开人工复核）
+      daily-max-count: 20
+      # 每商户每日补偿总额上限
+      daily-max-total: 10000
+
   # 低5/低6 改进：执行补偿模式参数
   # 独立配置命名空间，与 gatewayservice.execution 互补，供 ThreePhaseExecutionTemplate
   # 与 CompensationService 读取（也通过 @Value 默认值兜底，未配置时使用 30s / 100）。

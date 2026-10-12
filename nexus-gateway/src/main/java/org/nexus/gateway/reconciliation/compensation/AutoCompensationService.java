@@ -40,8 +40,32 @@ public class AutoCompensationService {
     @Value("${nexus.reconciliation.compensation.auto-enabled:true}")
     private boolean autoEnabled;
 
-    @Value("${nexus.reconciliation.compensation.sandbox:true}")
+    /**
+     * 执行模式开关。
+     *
+     * <p>安全修复（2026-10-12）：默认由 {@code true} 改为 {@code false}，并在
+     * application.yml 显式声明。原默认 {@code true} 且未在 yml 出现 ⇒ 隐形开关：
+     * 运维打开补偿后以为在真实执行，实际走 {@code simulateExecution} 并标记 SUCCESS——
+     * "记录显示成功但资金未动"。需要模拟时请显式置 true（sandbox profile / 单测）。</p>
+     */
+    @Value("${nexus.reconciliation.compensation.sandbox:false}")
     private boolean sandbox;
+
+    /**
+     * 单笔补偿金额上限（2026-10-12 新增，默认 1000）。
+     *
+     * <p>与 {@code reconciliation.adjustment.auto-approve-threshold} 同口径，避免两套数字。</p>
+     */
+    @Value("${nexus.reconciliation.compensation.auto-max-amount:1000}")
+    private BigDecimal autoMaxAmount;
+
+    /** 每商户每日补偿笔数上限（2026-10-12 新增，默认 20）——堵"化整为零"绕开人工复核。 */
+    @Value("${nexus.reconciliation.compensation.daily-max-count:20}")
+    private int dailyMaxCount;
+
+    /** 每商户每日补偿总额上限（2026-10-12 新增，默认 10000）。 */
+    @Value("${nexus.reconciliation.compensation.daily-max-total:10000}")
+    private BigDecimal dailyMaxTotal;
 
     private final CompensationRecordRepository compensationRepository;
     private final ReconciliationDiscrepancyRepository discrepancyRepository;
@@ -158,6 +182,136 @@ public class AutoCompensationService {
                 .toList();
     }
 
+    // ==================== 人工入口（2026-10-12 新增） ====================
+
+    /**
+     * 取差错归属商户（人工入口做归属校验用）。
+     *
+     * <p>放在服务侧而非让控制器直接注入差错仓库：控制器构造器保持不变，
+     * 既有 Web 测试无需改动。</p>
+     */
+    public Optional<Long> merchantIdOfDiscrepancy(Long discrepancyId) {
+        if (discrepancyId == null) {
+            return Optional.empty();
+        }
+        return discrepancyRepository.findById(discrepancyId)
+                .map(ReconciliationDiscrepancy::getMerchantId);
+    }
+
+    /**
+     * 人工发起补偿（按差错 ID 创建补偿记录，供运营对**长款**发起渠道原路退回）。
+     *
+     * <p>为什么需要它：自动创建路径无生产调用方 ⇒ 补偿能力整体不可达，长款在生产
+     * 既不被调账也不被退款。本方法把人工入口接上。</p>
+     *
+     * <p><b>只对 LONG_AMOUNT 开放</b>：短款/金额不符已由
+     * {@code ReconciliationAdjustmentService} 自动调账处理，再建补偿会对同一差错
+     * 二次动账（与 #70 消除的"双向动账"同类）。</p>
+     *
+     * <p>上限（超限一律不建记录并转 MANUAL_REVIEW，不静默跳过）：
+     * 单笔 ≤ {@code auto-max-amount}；该商户当日笔数 ≤ {@code daily-max-count}；
+     * 当日总额 + 本笔 ≤ {@code daily-max-total}。</p>
+     *
+     * <p>刻意不复用 {@link #createCompensationForDiscrepancy}：后者受 {@code auto-enabled}
+     * 开关约束，而人工入口是运营的显式动作，不应被"自动补偿开关"关掉。</p>
+     *
+     * @return 创建的补偿记录；不存在/非长款/已存在/超限时为空
+     */
+    @Transactional
+    public Optional<CompensationRecord> createCompensationForDiscrepancyId(Long discrepancyId) {
+        if (discrepancyId == null) {
+            return Optional.empty();
+        }
+        ReconciliationDiscrepancy discrepancy = discrepancyRepository.findById(discrepancyId).orElse(null);
+        if (discrepancy == null) {
+            log.warn("[AutoCompensation] 人工入口：差错不存在 discrepancyId={}", discrepancyId);
+            return Optional.empty();
+        }
+
+        if (discrepancy.getDiscrepancyType() != ReconciliationDiscrepancy.DiscrepancyType.LONG_AMOUNT) {
+            log.info("[AutoCompensation] 人工入口仅对长款开放，跳过: type={}, discrepancyId={}",
+                    discrepancy.getDiscrepancyType(), discrepancyId);
+            return Optional.empty();
+        }
+
+        String rejectReason = checkCompensationCaps(discrepancy);
+        if (rejectReason != null) {
+            markManualReview(discrepancy, rejectReason);
+            return Optional.empty();
+        }
+
+        if (compensationRepository.existsByDiscrepancyId(discrepancy.getId())) {
+            log.info("[AutoCompensation] 人工入口：差错已有补偿记录，跳过 discrepancyId={}", discrepancy.getId());
+            return Optional.empty();
+        }
+
+        CompensationRecord record = new CompensationRecord();
+        record.setDiscrepancyId(discrepancy.getId());
+        record.setMerchantId(discrepancy.getMerchantId());
+        record.setCompensationType(CompensationRecord.CompensationType.REFUND);
+        record.setAmount(discrepancy.getChannelAmount());
+        record.setTransactionId(discrepancy.getTransactionId());
+        record.setStatus(CompensationRecord.CompensationStatus.PENDING);
+
+        CompensationRecord saved = compensationRepository.save(record);
+        log.info("[AutoCompensation] 人工入口创建补偿记录: id={}, discrepancyId={}, amount={}",
+                saved.getId(), saved.getDiscrepancyId(), saved.getAmount());
+        return Optional.of(saved);
+    }
+
+    /**
+     * 校验补偿上限。通过返回 {@code null}；不通过返回拒绝原因。
+     *
+     * <p>笔数/总额按**自然日**统计（{@code createdAt} 落在当日区间），
+     * 复用已有的 {@code findByMerchantIdAndCreatedAtBetween}，不新增仓库方法。</p>
+     *
+     * <p>未配置（{@code null} 或 ≤0）的上限**不参与拦截**——避免"字段默认 0 导致全部拒绝"
+     * 的隐形陷阱（非 Spring 上下文 / 显式置 0 时都会命中）。</p>
+     */
+    private String checkCompensationCaps(ReconciliationDiscrepancy discrepancy) {
+        BigDecimal amount = discrepancy.getChannelAmount();
+        if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
+            return "补偿金额缺失或非正数";
+        }
+        if (autoMaxAmount != null && autoMaxAmount.signum() > 0
+                && amount.compareTo(autoMaxAmount) > 0) {
+            return "单笔金额 " + amount.toPlainString() + " 超过上限 " + autoMaxAmount.toPlainString();
+        }
+        if (discrepancy.getMerchantId() == null) {
+            return "差错缺少商户归属";
+        }
+
+        LocalDateTime dayStart = LocalDateTime.now().toLocalDate().atStartOfDay();
+        List<CompensationRecord> today = compensationRepository
+                .findByMerchantIdAndCreatedAtBetween(discrepancy.getMerchantId(), dayStart, dayStart.plusDays(1));
+
+        if (dailyMaxCount > 0 && today.size() >= dailyMaxCount) {
+            return "当日补偿笔数 " + today.size() + " 已达上限 " + dailyMaxCount;
+        }
+
+        BigDecimal todayTotal = today.stream()
+                .map(r -> r.getAmount() == null ? BigDecimal.ZERO : r.getAmount())
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        if (dailyMaxTotal != null && dailyMaxTotal.signum() > 0
+                && todayTotal.add(amount).compareTo(dailyMaxTotal) > 0) {
+            return "当日累计 " + todayTotal.toPlainString() + " + 本笔 " + amount.toPlainString()
+                    + " 超过上限 " + dailyMaxTotal.toPlainString();
+        }
+        return null;
+    }
+
+    /**
+     * 超限转人工复核：把差错标为 {@code MANUAL_REVIEW}，避免"静默跳过"。
+     *
+     * <p>实体在事务内由 {@code findById} 加载，属受管状态，置字段即由脏检查落库，
+     * 无需显式 save。</p>
+     */
+    private void markManualReview(ReconciliationDiscrepancy discrepancy, String reason) {
+        log.warn("[AutoCompensation] 补偿超限，转人工复核: discrepancyId={}, reason={}",
+                discrepancy.getId(), reason);
+        discrepancy.setResolutionType(ReconciliationDiscrepancy.ResolutionType.MANUAL_REVIEW);
+    }
+
     // ==================== 补偿执行 ====================
 
     /**
@@ -191,7 +345,11 @@ public class AutoCompensationService {
                 executeRealCompensation(record);
             }
 
-            record.setStatus(CompensationRecord.CompensationStatus.SUCCESS);
+            // 2026-10-12：模拟执行不得记 SUCCESS——否则数据无法区分"真补偿"与"假补偿"。
+            // SIMULATED 会被补偿统计与差错闭环自然排除（二者都只认 SUCCESS）。
+            record.setStatus(sandbox
+                    ? CompensationRecord.CompensationStatus.SIMULATED
+                    : CompensationRecord.CompensationStatus.SUCCESS);
             record.setExecutedAt(LocalDateTime.now());
         } catch (Exception e) {
             log.error("[AutoCompensation] 补偿执行失败: id={}, error={}", compensationId, e.getMessage(), e);
@@ -448,6 +606,8 @@ public class AutoCompensationService {
      * 更新关联差错的状态。
      */
     private void updateDiscrepancyStatus(CompensationRecord record) {
+        // 只认 SUCCESS（真实执行）：SIMULATED 表示资金未动，**不得**把差错闭环——
+        // 否则一次模拟运行就会把真实差错标成"已处理"，掩盖未补偿的商户。
         if (record.getStatus() == CompensationRecord.CompensationStatus.SUCCESS) {
             discrepancyRepository.findById(record.getDiscrepancyId()).ifPresent(d -> {
                 d.setStatus(ReconciliationDiscrepancy.DiscrepancyStatus.RESOLVED);
