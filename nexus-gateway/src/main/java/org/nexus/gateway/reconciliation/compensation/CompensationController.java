@@ -8,6 +8,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Optional;
 
 /**
  * 补偿记录 REST API。
@@ -116,6 +117,38 @@ public class CompensationController {
         } catch (IllegalArgumentException e) {
             return ResponseEntity.notFound().build();
         }
+    }
+
+    /**
+     * 人工发起补偿（2026-10-12 新增）：按差错 ID 为**长款**创建渠道原路退回补偿记录。
+     *
+     * <p>为什么需要人工入口：自动创建路径无生产调用方 ⇒ 长款在生产既不被调账也不被退款。
+     * 长款的资金要**离开平台**原路退回，风险等级不同于内部调账，故保留人工触发；
+     * 创建后仍需显式调用 {@code POST /{id}/execute} 才真正退款。</p>
+     *
+     * <p>P0-3：先按差错归属做商户校验，再落库。返回 422 表示未创建
+     * （非长款 / 已有补偿 / 超限转人工）。</p>
+     */
+    @PostMapping("/discrepancy/{discrepancyId}/compensate")
+    public ResponseEntity<CompensationRecord> createCompensationForDiscrepancy(
+            @PathVariable Long discrepancyId,
+            HttpServletRequest httpRequest) {
+        Long callerMerchantId = ownershipGuard.requireMerchantId(httpRequest);
+
+        Long ownerMerchantId = autoCompensationService.merchantIdOfDiscrepancy(discrepancyId).orElse(null);
+        if (ownerMerchantId == null) {
+            return ResponseEntity.notFound().build();
+        }
+        ownershipGuard.requireOwned(callerMerchantId, ownerMerchantId, "discrepancy", discrepancyId);
+
+        log.info("[CompensationController] 人工发起补偿: discrepancyId={}", discrepancyId);
+        Optional<CompensationRecord> created =
+                autoCompensationService.createCompensationForDiscrepancyId(discrepancyId);
+        if (created.isEmpty()) {
+            // 非长款 / 已有补偿 / 超限转人工——明确告知"没建成"，不假装成功
+            return ResponseEntity.unprocessableEntity().build();
+        }
+        return ResponseEntity.ok(created.get());
     }
 
     /**
