@@ -1080,7 +1080,31 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push image
+      # ============================================================
+      # 2026-10-12 韧性：镜像构建/推送改为「有界重试 + 显式裁决」。
+      #
+      # 实证（master push run 37986212517，2026-10-09）：12 个 Docker Build & Push
+      # 与 MPC Kind Smoke 同批全红，唯一根因是 Docker Hub 匿名拉取被限流 ——
+      # 日志原文 `429 Too Many Requests`（registry-1.docker.io 的 busybox:1.36.1、
+      # rust:1.88 manifest），而同 run 的 Build & Test / MPC 集群 E2E / Flyway /
+      # Hardhat / Code Hygiene 全绿 ⇒ 红的不是代码，是取基础镜像这一步。
+      # 本 matrix 此前已限 max-parallel: 4 仍整片红 ⇒ 不是我们自己并发过猛，
+      # 而是**匿名配额按出口 IP 共享**（同一批 GitHub hosted runner 用户共用）。
+      #
+      # 覆盖范围（诚实说明）：重试能扛住突发限流与瞬时 5xx；若撞上是 6 小时
+      # **配额耗尽**，180s 退避也不够 —— 根治需要给 docker.io 配访问凭据
+      # （认证额度按账号计，不再与陌生 runner 共享），或把基础镜像改经
+      # GHCR/ECR 中转。仓库当前 secrets 只有 NVD_API_KEY，故本 PR 不引入
+      # "凭据存在才启用"的空跑步骤（CI 里永不执行的断言等于没有断言）。
+      #
+      # 语义不变量：三条 attempt 全失败才判红（下方裁决步骤），**不挂
+      # continue-on-error** —— 该 job 在 B2 审计时已特意摘掉 continue-on-error，
+      # 就是为了不让 master 带着残缺镜像集前进（见上方注释）。三步 `with:`
+      # 必须逐字一致，改动时三处一起改。
+      # ============================================================
+      - name: Build and push image (attempt 1)
+        id: push1
+        continue-on-error: true
         uses: docker/build-push-action@v7
         with:
           # 所有模块 Dockerfile 均从 repo 根目录 COPY（gradlew/build.gradle/
@@ -1092,3 +1116,53 @@ jobs:
           tags: |
             ${{ env.REGISTRY }}/${{ steps.img_prefix.outputs.prefix }}/${{ matrix.module }}:latest
             ${{ env.REGISTRY }}/${{ steps.img_prefix.outputs.prefix }}/${{ matrix.module }}:${{ github.sha }}
+
+      - name: 重试退避（60s）
+        if: steps.push1.outcome == 'failure'
+        run: sleep 60
+
+      - name: Build and push image (attempt 2)
+        id: push2
+        if: steps.push1.outcome == 'failure'
+        continue-on-error: true
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./${{ matrix.module }}/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ steps.img_prefix.outputs.prefix }}/${{ matrix.module }}:latest
+            ${{ env.REGISTRY }}/${{ steps.img_prefix.outputs.prefix }}/${{ matrix.module }}:${{ github.sha }}
+
+      - name: 重试退避（120s）
+        if: steps.push1.outcome == 'failure' && steps.push2.outcome == 'failure'
+        run: sleep 120
+
+      - name: Build and push image (attempt 3)
+        id: push3
+        if: steps.push1.outcome == 'failure' && steps.push2.outcome == 'failure'
+        continue-on-error: true
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./${{ matrix.module }}/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ steps.img_prefix.outputs.prefix }}/${{ matrix.module }}:latest
+            ${{ env.REGISTRY }}/${{ steps.img_prefix.outputs.prefix }}/${{ matrix.module }}:${{ github.sha }}
+
+      # 裁决：三个 outcome 里有一个 success 才算成；全败必须判红。
+      # 用 outcome（真实结果）而不是 conclusion（被 continue-on-error 洗成 success）。
+      - name: 裁决（三次皆失败才红）
+        if: always()
+        run: |
+          ok=0
+          for o in "${{ steps.push1.outcome }}" "${{ steps.push2.outcome }}" "${{ steps.push3.outcome }}"; do
+            if [ "$o" = "success" ]; then ok=1; fi
+          done
+          if [ "$ok" = "1" ]; then
+            echo "镜像构建推送成功（attempt1=${{ steps.push1.outcome }} attempt2=${{ steps.push2.outcome }} attempt3=${{ steps.push3.outcome }}）"
+            exit 0
+          fi
+          echo "::error::docker build/push 连续 3 次失败（attempt1=${{ steps.push1.outcome }} attempt2=${{ steps.push2.outcome }} attempt3=${{ steps.push3.outcome }}）。若三次都是 429 Too Many Requests，则属 Docker Hub 匿名配额耗尽而非代码问题 —— 处置：给 docker.io 配访问凭据（认证额度按账号计），或把 busybox/gradle/rust/debian/node 等基础镜像改经 GHCR/ECR 中转。"
+          exit 1
