@@ -2,6 +2,31 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [2.68.0] - 2026-10-11
+
+### 制裁名单数据入口（AML 筛查从"空壳"变成真能拦人）
+
+**问题（审计清单里的"数据侧空壳"）**：AML 筛查结构早已接好
+（`DefaultAmlService.screen` → `SanctionListChecker.check`），但——
+`InMemorySanctionListChecker.addEntry` **全仓零调用方**，默认条目集合为空
+⇒ `check()` **恒返回空** ⇒ 筛查**形同虚设**（结构在、数据没有）。
+
+- **文件加载**（`loadFromFile`）：一行一条，`#` 注释行/空行忽略，含逗号取第一列（兼容 CSV 名单）；
+  **追加语义**（不清空运行时手工条目）；文件缺失/不可读 → WARN 且**不阻断启动**。
+- **启动加载器**（`SanctionListStartupLoader`）：应用就绪时自动读
+  `nexus.compliance.sanction-list-path`（env `NEXUS_SANCTION_LIST_PATH`）。
+  **显式告警两条**："未配置路径"与"名单仍为空"都记 WARN——空名单=筛查无效，必须看得见。
+- **管理端点**（`SanctionListController`，`/api/v1/compliance/sanction-list/**`，**一律 `ROLE_ADMIN`**）：
+  查看（条目数/是否空/快照）、追加、移除、**从文件重载**；**增/删/重载全部写审计**
+  （合规数据变更必须留痕——监管复盘要能看到"谁在什么时候往名单里加了谁"）。
+
+**测试**：`SanctionListLoadTest` **5 例**（加载后真能命中 / CSV 取首列 / 追加语义 /
+缺文件不阻断且空名单可判定 / 空名单不误命中）+ `SanctionListControllerWebTest` **5 例**
+（增删查重载可用 + 空 entry → 400）；`nexus-compliance` 全包 44 例全过。
+
+**诚实声明（未做）**：**名单数据本身仍需人工/外部提供**——本批只提供**真实入口与加载机制**，
+不内置任何制裁名单（OFAC/UN 清单的格式解析与定期同步属独立批次，需外部数据源与合规口径确认）。
+
 ## [2.67.1] - 2026-10-11
 
 ### 热→冷归集补上多签审批闸门（此前"无审批即可转出冷钱包资金"）
