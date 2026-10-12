@@ -1,3 +1,8 @@
+---
+# === PostgreSQL 16（**仅供 core**）===
+# core 的链状态 JDBC 存储是 PG 方言（bytea / 双引号标识符，见
+# nexus-core/.../resources/ddl.sql），故全栈切 MySQL 时 core 例外保留 PG。
+# core 迁 MySQL（重写 ddl.sql + 核实 JDBC 读写）为独立批次。
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -14,11 +19,9 @@ spec:
       labels:
         app: postgres
     spec:
-      # 数据库不调用 K8s API
       automountServiceAccountToken: false
       securityContext:
-        # postgres:16-alpine 镜像默认以 UID 70 运行（已是 non-root），
-        # 不设 runAsUser 以保留镜像内置用户，仅强制非root + 收紧 capabilities
+        # postgres:16-alpine 镜像默认以 UID 70 运行（已是 non-root）
         runAsNonRoot: true
         seccompProfile:
           type: RuntimeDefault
@@ -28,13 +31,14 @@ spec:
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
-              drop:
-                - ALL
+              drop: [ALL]
             seccompProfile:
               type: RuntimeDefault
           ports:
             - containerPort: 5432
           env:
+            - name: POSTGRES_DB
+              value: "nexus_core"
             - name: POSTGRES_USER
               valueFrom:
                 secretKeyRef:
@@ -45,26 +49,20 @@ spec:
                 secretKeyRef:
                   name: nexus-secrets
                   key: NEX_DB_PASSWORD
-            - name: POSTGRES_MULTIPLE_DATABASES
-              value: "nexus_gateway,nexus_core,nexus_bridge"
           resources:
-            requests:
-              memory: "256Mi"
-              cpu: "250m"
-            limits:
-              memory: "1Gi"
-              cpu: "1000m"
+            requests: { memory: "256Mi", cpu: "250m" }
+            limits:   { memory: "1Gi", cpu: "1000m" }
           volumeMounts:
             - name: pgdata
               mountPath: /var/lib/postgresql/data
           livenessProbe:
             exec:
-              command: ["pg_isready", "-U", "nexus"]
+              command: ["pg_isready", "-U", "nexus", "-d", "nexus_core"]
             initialDelaySeconds: 30
             periodSeconds: 10
           readinessProbe:
             exec:
-              command: ["pg_isready", "-U", "nexus"]
+              command: ["pg_isready", "-U", "nexus", "-d", "nexus_core"]
             initialDelaySeconds: 10
             periodSeconds: 10
   volumeClaimTemplates:
@@ -86,6 +84,149 @@ spec:
     app: postgres
   ports:
     - port: 5432
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mysql-init
+  namespace: nexus
+data:
+  # ⚠️ 本文件是 deploy/config/init-mysql-dbs.sh 的**内联副本**（K8s ConfigMap 需自包含）。
+  #   改任何一侧都必须同步另一侧 —— 两侧不一致会导致「compose 装出来的库」与
+  #   「K8s 装出来的库」账号/授权不同，这类差异在联调阶段极难发现。
+  init-mysql-dbs.sh: |
+    #!/bin/sh
+    set -eu
+    : "${MYSQL_ROOT_PASSWORD:?需要 MYSQL_ROOT_PASSWORD}"
+    : "${MYSQL_PASSWORD:?需要 MYSQL_PASSWORD}"
+    mysql -uroot -p"${MYSQL_ROOT_PASSWORD}" <<SQL
+    CREATE DATABASE IF NOT EXISTS nexus_gateway CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    CREATE DATABASE IF NOT EXISTS nexus_wallet  CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    CREATE DATABASE IF NOT EXISTS nexus_signing CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    CREATE DATABASE IF NOT EXISTS nexus_bridge  CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    CREATE DATABASE IF NOT EXISTS seata         CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    CREATE USER IF NOT EXISTS 'nexus_gateway'@'%' IDENTIFIED BY '${MYSQL_PASSWORD}';
+    CREATE USER IF NOT EXISTS 'nexus_wallet'@'%'  IDENTIFIED BY '${MYSQL_PASSWORD}';
+    CREATE USER IF NOT EXISTS 'nexus_signing'@'%' IDENTIFIED BY '${MYSQL_PASSWORD}';
+    CREATE USER IF NOT EXISTS 'nexus_bridge'@'%'  IDENTIFIED BY '${MYSQL_PASSWORD}';
+    CREATE USER IF NOT EXISTS 'nexus'@'%'         IDENTIFIED BY '${MYSQL_PASSWORD}';
+    GRANT ALL PRIVILEGES ON nexus_gateway.* TO 'nexus_gateway'@'%';
+    GRANT ALL PRIVILEGES ON nexus_wallet.*  TO 'nexus_wallet'@'%';
+    GRANT ALL PRIVILEGES ON nexus_signing.* TO 'nexus_signing'@'%';
+    GRANT ALL PRIVILEGES ON nexus_bridge.*  TO 'nexus_bridge'@'%';
+    GRANT ALL PRIVILEGES ON nexus_gateway.* TO 'nexus'@'%';
+    GRANT ALL PRIVILEGES ON nexus_wallet.*  TO 'nexus'@'%';
+    GRANT ALL PRIVILEGES ON nexus_signing.* TO 'nexus'@'%';
+    GRANT ALL PRIVILEGES ON nexus_bridge.*  TO 'nexus'@'%';
+    GRANT ALL PRIVILEGES ON seata.*         TO 'nexus'@'%';
+    -- 监控导出器需要全局 PROCESS/REPLICATION CLIENT（mysqld-exporter 的部分指标）
+    GRANT PROCESS, REPLICATION CLIENT ON *.* TO 'nexus'@'%';
+    FLUSH PRIVILEGES;
+    SQL
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mysql
+  namespace: nexus
+spec:
+  serviceName: mysql
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mysql
+  template:
+    metadata:
+      labels:
+        app: mysql
+    spec:
+      # 数据库不调用 K8s API
+      automountServiceAccountToken: false
+      securityContext:
+        # ⚠️ mysql:8.0 官方镜像的 entrypoint 需要**以 root 启动**（初始化数据目录后再 setuid 到
+        #   mysql UID 999），因此这里不能像 postgres 那样设 runAsNonRoot: true（会启动即失败）。
+        #   数据卷用 fsGroup 保证可写；容器内进程最终以非 root 运行。
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: mysql
+          image: mysql:8.0
+          # 字符集/时区与 deploy/config/init-mysql-dbs.sh、各服务 NEX_DB_URL 的
+          # serverTimezone=UTC 保持一致
+          args:
+            - --character-set-server=utf8mb4
+            - --collation-server=utf8mb4_unicode_ci
+            - --default-time-zone=+00:00
+          securityContext:
+            allowPrivilegeEscalation: true
+            seccompProfile:
+              type: RuntimeDefault
+          ports:
+            - containerPort: 3306
+          env:
+            # 该 Secret 口令同时作为 root 与业务账号口令（内置演练库的取舍：
+            # 少一个必填 secret key = 少一处安装失败点）。生产安装若使用**外部**
+            # MySQL/OceanBase，应把各服务 SPRING_DATASOURCE_URL 指向外部实例，
+            # 不启用本 StatefulSet。
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: nexus-secrets
+                  key: NEX_DB_PASSWORD
+            - name: MYSQL_USER
+              value: nexus
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: nexus-secrets
+                  key: NEX_DB_PASSWORD
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
+          volumeMounts:
+            - name: mysqldata
+              mountPath: /var/lib/mysql
+            # init 脚本仅在数据目录为空（首次启动）时执行
+            - name: mysql-init
+              mountPath: /docker-entrypoint-initdb.d
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "mysqladmin ping -h 127.0.0.1 -u root -p\"$MYSQL_ROOT_PASSWORD\" --silent"]
+            initialDelaySeconds: 40
+            periodSeconds: 10
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "mysqladmin ping -h 127.0.0.1 -u root -p\"$MYSQL_ROOT_PASSWORD\" --silent"]
+            initialDelaySeconds: 15
+            periodSeconds: 10
+      volumes:
+        - name: mysql-init
+          configMap:
+            name: mysql-init
+  volumeClaimTemplates:
+    - metadata:
+        name: mysqldata
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 20Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql
+  namespace: nexus
+spec:
+  selector:
+    app: mysql
+  ports:
+    - port: 3306
 ---
 apiVersion: apps/v1
 kind: Deployment

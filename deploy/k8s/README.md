@@ -6,7 +6,7 @@
 
 ```bash
 kubectl apply -f 00-namespace-config.yml   # namespace + ConfigMap + Secret
-kubectl apply -f 30-infrastructure.yml     # postgres / redis / nacos 等基础设施
+kubectl apply -f 30-infrastructure.yml     # mysql / redis 等基础设施
 kubectl apply -f 20-core-statefulset.yml   # 链节点
 kubectl apply -f 10-gateway.yml            # 支付网关
 kubectl apply -f 40-monitoring.yml         # 监控

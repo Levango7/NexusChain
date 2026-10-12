@@ -85,8 +85,8 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- printf "http://%s:%s/api/v2/spans" .Values.global.infrastructure.zipkin.host (toString .Values.global.infrastructure.zipkin.port) -}}
 {{- end -}}
 
-{{- define "nexus-chain.postgresHost" -}}
-{{- printf "%s:%s" .Values.global.infrastructure.postgres.host (toString .Values.global.infrastructure.postgres.port) -}}
+{{- define "nexus-chain.mysqlHost" -}}
+{{- printf "%s:%s" .Values.global.infrastructure.mysql.host (toString .Values.global.infrastructure.mysql.port) -}}
 {{- end -}}
 
 {{- define "nexus-chain.redisHost" -}}

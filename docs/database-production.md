@@ -1,141 +1,135 @@
-# 数据库生产化指南（P2-T8：H2 → PostgreSQL 16）
+# 数据库生产化指南（生产族：MySQL 8 / OceanBase MySQL 模式）
 
-> **版本**：v2.0.0 Phase 2 生产就绪  
-> **任务**：P2-T8 数据库生产化  
-> **适用服务**：nexus-gateway、nexus-wallet-service  
-> **数据库**：PostgreSQL 16  
-> **连接池**：HikariCP（Spring Boot 默认）  
-> **迁移工具**：Flyway 9.22.3（Spring Boot 3.2.5 BOM 管理）
+> **版本**：v2.69.0+（2026-10-12 修正）
+> **适用服务**：nexus-gateway、nexus-wallet-service（有 Flyway 的服务）
+> **数据库**：**MySQL 8.0（同族可选 OceanBase 社区版 MySQL 模式）**
+> **连接池**：HikariCP（Spring Boot 默认）
+> **迁移工具**：Flyway（Spring Boot BOM 管理）
+>
+> ## ⚠️ 2026-10-12 重要修正（安装阻断级）
+>
+> 本文档原先描述的是 **PostgreSQL 16** 生产路径，与仓库现实矛盾，已修正为 MySQL 家族：
+>
+> 1. **原 prod profile 根本起不来**：gateway / wallet-service 的 `application-prod.yml`
+>    指向 `classpath:db/migration-pg`，而该目录**冻结在 V17 / V3**（维护中的
+>    `db/migration` 已到 V96 / V4），叠加 `ddl-auto=validate` ⇒ 启动即
+>    `Schema-validation: missing table/column`。
+> 2. **与已决方向相反**：ADR-033（2026-10-03 Accepted）定的是
+>    **OceanBase 社区版（MySQL 模式）**，且全仓唯一被维护的迁移集就是 MySQL 方言的
+>    `db/migration`；bridge / signing-service 在 prod 下本来就走 MySQL。
+> 3. **现在的口径**：prod 数据源 = MySQL 8（外部实例或自带 `mysql:8.0` 容器），
+>    Flyway 走 `db/migration`（**唯一**维护集），`db/migration-pg` 保留但不再被任何
+>    profile 引用（见该目录 `DEPRECATED.md`）。
+>
+> 下文凡涉及 PostgreSQL 的章节（安装、调优、语法转换）均已改写或标注为历史；
+> 若发现残留的 PG 说法，以本节为准。
 
 ## 第1章 部署架构
 
 ### 1.1 整体架构
 
-图：数据库部署架构图
+```
+┌─────────────────┐     ┌─────────────────┐    ┌──────────────────┐
+│  nexus-gateway  │     │nexus-wallet-svc │    │ nx-signing-svc   │
+│  (HikariCP 20)  │     │  (HikariCP 20)  │    │  (桥/钱包同族)    │
+└────────┬────────┘     └────────┬────────┘    └────────┬─────────┘
+         │ jdbc:mysql://mysql:3306/nexus_gateway  │ /nexus_wallet │ /nexus_signing
+         ▼                         ▼                         ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                MySQL 8.0（单实例；客户可用 OceanBase）              │
+│  ┌───────────────┐ ┌──────────────┐ ┌───────────┐ ┌───────────┐  │
+│  │ nexus_gateway │ │ nexus_wallet │ │nexus_sig..│ │nexus_bridge│ │
+│  │  V1..V96      │ │  V1..V4      │ │  V1       │ │  V1..V4   │  │
+│  └───────────────┘ └──────────────┘ └───────────┘ └───────────┘  │
+│  另：seata 库（TC 事务日志，表由 Seata 自建）                       │
+│  max_connections=151, innodb_buffer_pool_size=25% 物理内存         │
+└──────────────────────────────────────────────────────────────────┘
+```
 
-```
-┌─────────────────┐     ┌─────────────────┐
-│  nexus-gateway  │     │nexus-wallet-svc │
-│  (HikariCP 20)  │     │  (HikariCP 20)  │
-└────────┬────────┘     └────────┬────────┘
-         │ jdbc:postgresql         │ jdbc:postgresql
-         │ :5432/nexus_gateway     │ :5432/nexus_wallet
-         ▼                         ▼
-┌─────────────────────────────────────────────┐
-│          PostgreSQL 16 (单实例)              │
-│  ┌───────────────┐  ┌──────────────────┐   │
-│  │ nexus_gateway │  │   nexus_wallet   │   │
-│  │   (库)        │  │      (库)        │   │
-│  │  V1-V7 迁移   │  │   V1-V3 迁移     │   │
-│  └───────────────┘  └──────────────────┘   │
-│  max_connections=100, shared_buffers=256MB │
-└─────────────────────────────────────────────┘
-```
+**core（链节点）例外，仍用 PostgreSQL**：core 没有 JPA/Flyway，但有**PG 方言的 JDBC 链存储**
+（`RDBMSBlockChainImpl` + `nexus-core/src/main/resources/ddl.sql`：`bytea` 类型、双引号标识符），
+故全栈业务库切 MySQL 时 core 保留 PG。core 迁 MySQL 需重写 `ddl.sql` 并核实 JDBC 读写路径
+（独立批次）。**因此客户安装需要准备两个实例**：MySQL 8（业务五库）+ PostgreSQL 16（`nexus_core`）。
 
 ### 1.2 库划分
 
-表：数据库划分对照表
+| 库名 | 归属服务 | Flyway 迁移版本 | 说明 |
+|------|----------|----------------|------|
+| `nexus_gateway` | nexus-gateway | V1..V96 | 商户、订单、退款、订阅、编排支付、风控、清结算、对账差错、出款账户、审计事件（全新库 97 张表，含 `flyway_schema_history`） |
+| `nexus_wallet` | nexus-wallet-service | V1..V4 | 托管余额、地址白名单、提现审批/审批人、审计事件（全新库 7 张表） |
+| `nexus_signing` | nexus-signing-service | V1 | 签名服务（TCC undo_log 等） |
+| `nexus_bridge` | nexus-bridge | V1..V4 | 跨链桥交易 |
+| `seata` | Seata TC | （Seata 自建） | `global_table`/`branch_table`/`lock_table`/`distributed_lock` |
 
-| 库名 | 归属服务 | Flyway 迁移版本 | 业务表数量 | 说明 |
-|------|----------|----------------|-----------|------|
-| `nexus_gateway` | nexus-gateway | V1-V7 | 8 张业务表 + undo_log | 商户、订单、退款、订阅、编排、风控、结算、退款审批 |
-| `nexus_wallet` | nexus-wallet-service | V1-V3 | 4 张业务表 + undo_log | 托管余额、地址白名单、提现审批、审批人 |
-
-两库独立部署，避免单库故障扩散，便于按服务维度做备份和扩容。
+建库建账号脚本：`deploy/config/init-mysql-dbs.sh`（compose 首次启动自动执行；
+K8s 侧见 `deploy/k8s/30-infrastructure.yml` 的 `mysql-init` ConfigMap —— **两处内容必须一致**）。
 
 ### 1.3 Profile 与数据源映射
-
-表：Spring Profile 与数据源映射对照表
 
 | Profile | 数据源 | Flyway locations | 用途 |
 |---------|--------|------------------|------|
 | `dev` | H2 内存（MODE=MySQL） | `classpath:db/migration` | 本地开发、单元测试 |
-| `prod` | PostgreSQL 16 | `classpath:db/migration-pg` | 生产部署 |
-| 默认（无 profile） | MySQL 8.x | `classpath:db/migration` | K8s 环境变量注入场景 |
+| `prod` | **MySQL 8**（`NEX_DB_URL` 覆盖） | `classpath:db/migration` | 生产部署（**与 dev 同一套迁移**） |
+| 默认（无 profile，如 bridge/signing/core） | MySQL 8.x | `classpath:db/migration` | 容器/K8s 环境变量注入场景 |
 
-## 第2章 PostgreSQL 16 安装与配置
+> 三行指向**同一套**迁移脚本是本轮对齐的直接收益：dev/CI 跑过的语句就是生产跑的语句，
+> 不再存在"PG 版迁移一年没人跑过"的漂移面。
+
+## 第2章 MySQL 8 安装与配置
 
 ### 2.1 Docker 部署（推荐）
 
-命令示例：Docker 部署 PostgreSQL 16
-
 ```bash
 docker run -d \
-  --name nexus-postgres \
-  -e POSTGRES_USER=postgres \
-  -e POSTGRES_PASSWORD=${POSTGRES_SUPERUSER_PASSWORD} \
-  -e POSTGRES_DB=postgres \
-  -p 5432:5432 \
-  -v pgdata:/var/lib/postgresql/data \
-  -v ./deploy/scripts/init-postgres.sql:/docker-entrypoint-initdb.d/init.sql:ro \
-  postgres:16-alpine
+  --name nexus-mysql \
+  -e MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD} \
+  -e MYSQL_USER=nexus -e MYSQL_PASSWORD=${MYSQL_PASSWORD} \
+  -p 3306:3306 \
+  -v mysqldata:/var/lib/mysql \
+  -v ./deploy/config/init-mysql-dbs.sh:/docker-entrypoint-initdb.d/init-mysql-dbs.sh:ro \
+  mysql:8.0 \
+  --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --default-time-zone=+00:00
 ```
 
-### 2.2 初始化脚本
+初始化脚本只在**数据目录为空**（首次启动）时执行；已初始化的实例要补建库/账号，
+可手工执行同一份脚本（`sh deploy/config/init-mysql-dbs.sh`，需先导出 `MYSQL_*` 变量）。
 
-`deploy/scripts/init-postgres.sql` 创建应用库和账号（生产环境账号最小权限原则）：
+### 2.2 初始化脚本做了什么
 
-SQL：初始化数据库和账号
+`deploy/config/init-mysql-dbs.sh`：
 
 ```sql
--- 创建应用库（nexus_gateway / nexus_wallet）
-CREATE DATABASE nexus_gateway ENCODING 'UTF8' LC_COLLATE 'C' LC_CTYPE 'C';
-CREATE DATABASE nexus_wallet  ENCODING 'UTF8' LC_COLLATE 'C' LC_CTYPE 'C';
-
--- 创建应用账号（禁止使用 superuser 连接应用库）
-CREATE USER nexus_gateway WITH PASSWORD '${NEXUS_GATEWAY_DB_PASSWORD}';
-CREATE USER nexus_wallet  WITH PASSWORD '${NEXUS_WALLET_DB_PASSWORD}';
-
--- 授权（仅授予对应库的所有权限，跨库无权限）
-GRANT ALL PRIVILEGES ON DATABASE nexus_gateway TO nexus_gateway;
-GRANT ALL PRIVILEGES ON DATABASE nexus_wallet  TO nexus_wallet;
-
--- 连接数限制（防应用连接泄漏拖垮整个 PG 实例）
-ALTER USER nexus_gateway CONNECTION LIMIT 30;
-ALTER USER nexus_wallet  CONNECTION LIMIT 30;
+-- 五个库（四个业务库 + seata），全部 utf8mb4/utf8mb4_unicode_ci
+CREATE DATABASE IF NOT EXISTS nexus_gateway ...;  -- 另有 wallet/signing/bridge/seata
+-- 每库一个专用账号（最小权限，只授权本库）+ 通用账号 nexus（seata 与运维用，五库授权）
+-- 监控导出器所需最小全局权限：PROCESS, REPLICATION CLIENT（仅授予 nexus）
 ```
 
-### 2.3 PostgreSQL 关键参数调优
+**账号口径**：`nexus_gateway` 只能访问 `nexus_gateway` 库（`SHOW GRANTS` 可验证）；
+生产请按需为每个账号设置 `CONNECTION LIMIT` 或在实例层限流（MySQL 8 无 per-user
+`CONNECTION LIMIT`，可用 `max_user_connections` 资源限制实现）。
 
-表：PostgreSQL 关键参数说明表
+### 2.3 MySQL 关键参数
 
 | 参数 | 推荐值 | 说明 |
 |------|--------|------|
-| `max_connections` | 100 | gateway(20) + wallet(20) + 监控/备份(10) + 余量(50) |
-| `shared_buffers` | 256MB | 总内存的 25%，PG 共享内存缓冲池 |
-| `effective_cache_size` | 768MB | 总内存的 75%，告知查询规划器操作系统缓存大小 |
-| `work_mem` | 4MB | 单查询排序/哈希内存，避免溢出到磁盘 |
-| `maintenance_work_mem` | 64MB | VACUUM / CREATE INDEX 内存 |
-| `wal_buffers` | 16MB | WAL 日志缓冲区 |
-| `checkpoint_completion_target` | 0.9 | 检查点平滑分布 |
-| `random_page_cost` | 1.1 | SSD 存储随机读成本（默认 4.0 针对机械盘） |
-| `idle_in_transaction_session_timeout` | 60000 | 空闲事务超时 60s（ms），防止长事务阻塞 VACUUM |
-| `statement_timeout` | 30000 | 单语句超时 30s（ms），防止慢查询拖垮连接池 |
-| `log_min_duration_statement` | 1000 | 慢查询日志阈值 1s（ms） |
+| `max_connections` | 151（默认） | gateway(20) + wallet(20) + signing/bridge + seata + 运维余量 |
+| `innodb_buffer_pool_size` | 物理内存 50–70% | InnoDB 缓冲池（最重要的一项） |
+| `innodb_flush_log_at_trx_commit` | 1 | 金融场景必须为 1（每次提交刷盘，崩溃不丢已提交事务） |
+| `sync_binlog` | 1 | 同上，配合 binlog 归档/主从 |
+| `character_set_server` / `collation_server` | utf8mb4 / utf8mb4_unicode_ci | 中文与审计明细必须 |
+| `default_time_zone` | `+00:00` | 与各服务 `serverTimezone=UTC` 严格一致（不一致会导致时间字段偏移） |
+| `long_query_time` | 1 | 慢查询日志阈值（秒） |
+| `innodb_print_all_deadlocks` | 1 | 死锁全量落错误日志（资金类表并发冲突排查） |
 
-### 2.4 docker-compose.prod.yml 更新
+> 迁移实测（2026-10-12）：全新 MySQL 8.0 上 gateway 83 个迁移脚本 20 秒跑完到 v96、
+> wallet 4 个脚本 <1 秒；唯一告警是 `Integer display width is deprecated`
+> （`TINYINT(1)` 等写法，MySQL 8 仍接受）。
 
-将 `postgres:15-alpine` 升级为 `postgres:16-alpine`：
+### 2.4 docker-compose.prod.yml 片段（现行）
 
-配置：docker-compose.prod.yml（PostgreSQL 16 片段）
-
-```yaml
-postgres:
-  image: postgres:16-alpine
-  environment:
-    - POSTGRES_USER=postgres
-    - POSTGRES_PASSWORD=${POSTGRES_SUPERUSER_PASSWORD}
-    - POSTGRES_DB=postgres
-  volumes:
-    - pgdata:/var/lib/postgresql/data
-    - ./deploy/scripts/init-postgres.sql:/docker-entrypoint-initdb.d/init.sql:ro
-  expose: ['5432']
-  healthcheck:
-    test: ['CMD-SHELL', 'pg_isready -U postgres']
-    interval: 10s
-    retries: 5
-  restart: always
-```
+见仓库 `docker-compose.prod.yml` 的 `mysql` 服务（含 init 脚本挂载、utf8mb4/UTC 参数、
+`mysqladmin ping` 健康检查）与四个应用服务的 `NEX_DB_URL` 注入。
 
 ## 第3章 HikariCP 连接池配置
 
@@ -166,7 +160,7 @@ PostgreSQL `max_connections=100` 下的连接分配：
 | 监控 / 备份 / DBA | 10 | ~5 | 5 |
 | **合计** | **50** | **30** | **50** |
 
-余量 50 连接用于：PG 维护会话（VACUUM、CREATE INDEX）、pg_dump 备份、Prometheus postgres_exporter、DBA 排障。
+余量连接用于：MySQL 维护会话（OPTIMIZE/ALTER、备份）、mysqld-exporter、DBA 排障。
 
 ### 3.3 连接池监控指标
 
@@ -225,29 +219,24 @@ groups:
 
 ```
 nexus-gateway/src/main/resources/db/
-├── migration/                        # MySQL/H2 语法（dev profile）
+├── migration/                        # MySQL 方言 —— **唯一维护集**（dev/CI/prod 全用这一套）
 │   ├── V1__init_schema.sql
-│   ├── V2__performance_indexes.sql
-│   ├── V3__orchestration_tables.sql
-│   ├── V4__request_id_unique.sql
-│   ├── V5__risk_settlement_tables.sql
-│   ├── V6__refund_approval_tables.sql
-│   └── V7__add_undo_log.sql
-└── migration-pg/                     # PostgreSQL 专用（prod profile）
-    ├── V1__init_schema.sql
-    ├── V2__performance_indexes.sql
-    ├── V3__orchestration_tables.sql
-    ├── V4__request_id_unique.sql
-    ├── V5__risk_settlement_tables.sql
-    ├── V6__refund_approval_tables.sql
-    └── V7__add_undo_log.sql
+│   ├── ...
+│   ├── V93__orchestrated_payments_addresses.sql
+│   ├── V94__reconciliation_discrepancy_channel_type.sql
+│   ├── V95__merchant_payout_accounts.sql
+│   └── V96__audit_events.sql
+└── migration-pg/                     # ⚠️ 已废弃（DEPRECATED.md）：冻结在 V17，无任何 profile 引用
 ```
 
-> **重要**：`migration-pg` 与 `migration` 平级（非子目录），因为 Flyway 9.x 的 classpath scanner 会递归扫描子目录，若 `migration-pg` 放在 `migration/` 下会导致版本号冲突（`Found more than one migration with version N`）。
+> **2026-10-12**：`migration-pg` 曾是 prod profile 的迁移集，但长期无人维护（冻结在 V17/V3）
+> 且与 ADR-033 的 MySQL 方向相反 ⇒ 已从 prod profile 摘除，保留目录仅供历史查阅。
+> **不要再向 `migration-pg` 添加迁移**；新迁移一律进 `db/migration`。
 
-### 4.2 MySQL → PostgreSQL 语法转换对照
+### 4.2 （历史）MySQL → PostgreSQL 语法转换对照
 
-表：MySQL 到 PostgreSQL 语法转换对照表
+> **本节已作废**（2026-10-12 数据库族回退为 MySQL）。保留仅作历史参考：
+> 它记录的是当年"迁到 PG"时的写法，现在**没有任何迁移走这条路**。
 
 | MySQL 语法 | PostgreSQL 语法 | 说明 |
 |-----------|----------------|------|
@@ -260,9 +249,6 @@ nexus-gateway/src/main/resources/db/
 | `ENGINE=InnoDB` | （删除） | PostgreSQL 无存储引擎概念 |
 | `DEFAULT CHARSET=utf8mb4` | （删除） | 字符集在 initdb --encoding=UTF8 设置 |
 | `COMMENT '...'`（内联） | `COMMENT ON COLUMN tbl.col IS '...'` | 或直接用 SQL 行注释 |
-| `BOOLEAN` / `TRUE` / `FALSE` | （不变） | PostgreSQL 原生支持 |
-| `DECIMAL(36,18)` | （不变） | 标准 SQL，PostgreSQL 原生支持 |
-| `TIMESTAMP` | （不变） | 标准 SQL，PostgreSQL 原生支持 |
 
 ### 4.3 迁移脚本编写规范
 
@@ -270,7 +256,9 @@ nexus-gateway/src/main/resources/db/
 2. **幂等性**：`CREATE TABLE/INDEX` 加 `IF NOT EXISTS`，`ALTER TABLE ADD COLUMN` 加 `IF NOT EXISTS`
 3. **可逆性**：每个 V<n> 应有对应的 U<n> 回滚脚本（生产环境禁用 Flyway clean）
 4. **大小**：单脚本 < 500 行，大变更拆分为多个版本
-5. **测试**：新脚本需在本地 PostgreSQL 实例验证后再合入
+5. **测试**：新脚本需在**真实 MySQL 8**（或 H2 MODE=MySQL 单测 + 一次真库预演）验证后再合入；
+   本仓 2026-10-12 的安装预演配方（docker 起 mysql:8.0 + flyway CLI 直跑某服务的
+   `db/migration` 目录）可直接复用
 
 ### 4.4 Flyway 命令
 
@@ -280,12 +268,12 @@ nexus-gateway/src/main/resources/db/
 # 查看迁移状态
 flyway -url=jdbc:postgresql://localhost:5432/nexus_gateway \
        -user=nexus_gateway -password=${DB_PASSWORD} \
-       -locations=classpath:db/migration-pg info
+       -locations=filesystem:<模块>/src/main/resources/db/migration info
 
 # 执行迁移
 flyway -url=jdbc:postgresql://localhost:5432/nexus_gateway \
        -user=nexus_gateway -password=${DB_PASSWORD} \
-       -locations=classpath:db/migration-pg migrate
+       -locations=filesystem:<模块>/src/main/resources/db/migration migrate
 
 # 验证迁移（CI/CD 门禁）
 flyway -url=jdbc:postgresql://localhost:5432/nexus_gateway \
@@ -305,23 +293,23 @@ flyway -url=jdbc:postgresql://localhost:5432/nexus_gateway \
 
 | 备份类型 | 频率 | 保留时长 | 工具 | 存储位置 |
 |---------|------|---------|------|---------|
-| 全量备份 | 每日 02:00 | 30 天 | `pg_dump --format=custom` | S3 (nexus-backups/pg/) |
+| 全量备份 | 每日 02:00 | 30 天 | `mysqldump --single-transaction` | S3 (nexus-backups/mysql/) |
 | WAL 归档 | 实时 | 7 天 | `archive_command` | S3 (nexus-backups/pg/wal/) |
 | 跨月备份 | 每月 1 日 | 12 个月 | 全量备份的副本 | S3 (nexus-backups/pg/monthly/) |
 
 ### 5.2 备份脚本
 
-见 `deploy/scripts/backup-postgres.sh`，功能：
-- `pg_dump --format=custom --compress=9` 压缩备份（custom 格式支持并行恢复和选择性恢复）
+见 `deploy/scripts/backup-mysql.sh`，功能：
+- `mysqldump --single-transaction --routines --triggers` + gzip（InnoDB 一致性快照，不锁表）
 - 上传 S3（AWS CLI，启用服务器端加密 SSE-KMS）
 - 保留 30 天，超期自动删除（S3 Lifecycle Policy 或脚本清理）
 - 备份完成写入 `nexus-backup-metrics` 文件供监控
 
 ### 5.3 恢复脚本
 
-见 `deploy/scripts/restore-postgres.sh`，功能：
+见 `deploy/scripts/restore-mysql.sh`，功能：
 - 从 S3 下载指定日期的备份文件
-- `pg_restore --clean --if-exists` 恢复（先删后建，幂等）
+- 默认 `DROP DATABASE` 后重建再导入（保证「恢复=回到备份点」）；`--suffix` 可恢复到新库人工切换
 - 支持指定库（`nexus_gateway` / `nexus_wallet` / `all`）
 - 恢复后自动运行 `flyway validate` 校验 schema 一致性
 
@@ -345,7 +333,7 @@ docker run -d --name pg-restore-test \
 命令示例：从 S3 恢复 2026-08-08 的备份
 
 ```bash
-./deploy/scripts/restore-postgres.sh \
+./deploy/scripts/restore-mysql.sh \
   --date 2026-08-08 \
   --database nexus_gateway \
   --target-host localhost:5433 \
@@ -386,7 +374,7 @@ WHERE m.id IS NULL;
 | 指标 | 目标 | 说明 |
 |------|------|------|
 | RPO（恢复点目标） | < 5 分钟 | WAL 归档实时上传，最多丢失 5 分钟数据 |
-| RTO（恢复时间目标） | < 30 分钟 | 下载备份 + pg_restore + 应用重启 |
+| RTO（恢复时间目标） | < 30 分钟 | 下载备份 + mysql 导入 + 应用重启 |
 
 ## 第7章 连接池监控
 
@@ -443,7 +431,7 @@ postgres_exporter:
 如生产环境 PostgreSQL 出现严重问题需紧急回滚到 H2：
 
 1. 切换 `SPRING_PROFILES_ACTIVE=dev`（使用 H2 + 原 `db/migration`）
-2. 从 PostgreSQL 导出数据：`pg_dump --data-only --column-inserts`
+2. （历史）从 PostgreSQL 导出数据：`pg_dump --data-only --column-inserts`
 3. 转换为 H2 兼容 INSERT 语句（注意 BOOLEAN / TIMESTAMP 格式）
 4. 通过 H2 Console 导入数据
 

@@ -60,6 +60,11 @@ global:
     zipkin:
       port: 9411
       host: zipkin.nexus.svc.cluster.local
+    # 2026-10-12：业务库 PostgreSQL → MySQL 8（族对齐见 ADR-033 与各服务 application-prod.yml）
+    mysql:
+      port: 3306
+      host: mysql.nexus.svc.cluster.local
+    # core 专用（链状态 JDBC 存储为 PG 方言，故例外保留）
     postgres:
       port: 5432
       host: postgres.nexus.svc.cluster.local

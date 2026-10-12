@@ -2,6 +2,95 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [2.70.0] - 2026-10-12
+
+### 生产数据库族对齐 MySQL 8（安装阻断级修复）+ 出款双链只读审计
+
+**问题（客户安装前必须修的"起不来"级别）**：只有 `nexus-gateway` 与 `nexus-wallet-service`
+声明了 `application-prod.yml`，而这两个文件的 prod 数据源指向 **PostgreSQL 16 +
+`classpath:db/migration-pg`**；该目录**冻结在 V17 / V3**（维护中的 `db/migration` 已到
+**V96 / V4**），叠加 `ddl-auto: validate` ⇒ **prod profile 在 PG 上启动即失败**
+（缺 `orchestrated_payments`/`merchant_payout_accounts`/`audit_events` 等表与
+`wallet_audit_events`）。同仓位还有：`nexus-bridge`/`nexus-signing-service` 的默认数据源
+本来就是 **MySQL**（无 prod profile 覆盖）、ADR-033（2026-10-03 Accepted）已定
+**OceanBase 社区版（MySQL 模式）** 方向、CI 的 MySQL 用例用 `mysql:8.0`
+——全仓唯一被维护的迁移集是 MySQL 方言的 `db/migration`。
+
+- **应用侧**：`nexus-gateway` / `nexus-wallet-service` 的 `application-prod.yml` 改为
+  **MySQL 8**（驱动 `com.mysql.cj.jdbc.Driver`、方言 `MySQLDialect`、默认 URL
+  `jdbc:mysql://mysql:3306/<库>?...&serverTimezone=UTC`），Flyway 改指 `db/migration`
+  ——**dev / CI / prod 从此共用同一套迁移脚本**，漂移面消失。
+- **compose**：`docker-compose.prod.yml` 的 `postgres` 服务换成 **`mysql:8.0`**
+  （utf8mb4 + `default-time-zone=+00:00` + `mysqladmin ping` 健康检查 + init 脚本挂载）；
+  四个应用服务注入 `NEX_DB_URL`/`NEX_DB_USERNAME`/`NEX_DB_PASSWORD`（原先 signing/bridge
+  **没有任何 DB env**，容器内会去连 `localhost:3306` ⇒ 生产必挂）；Seata 存储改 MySQL 驱动与 URL。
+  **core 例外保留 PostgreSQL**（见下方"更正"）。
+- **建库脚本**：新增 `deploy/config/init-mysql-dbs.sh`（五库 gateway/wallet/signing/bridge/seata
+  + 每库专用最小权限账号 + 通用账号 `nexus` + 监控导出器所需 `PROCESS, REPLICATION CLIENT`），
+  幂等、可手工执行；`deploy/config/backup-databases.txt` 去掉无库的 `nexus_core`、
+  补 `nexus_signing`/`seata`。
+- **Helm（发布链实际走的路径）**：`dependencies.postgres` → `dependencies.mysql`，
+  `infrastructure.postgres` → `infrastructure.mysql`（并保留 `infrastructure.postgres` 供 core 用），
+  四个 chart 的 `SPRING_DATASOURCE_URL` 构造改为 MySQL URL，并新增**显式库名**
+  `dependencies.mysqlDatabase`（原推导 `replace "-" "_" .Chart.Name` 会把 signing 推成
+  `nexus_signing_service`，与 compose/init 脚本的 `nexus_signing` 不一致）。
+- **K8s 静态清单**：`30-infrastructure.yml` 的 Postgres StatefulSet/Service → **MySQL 8
+  StatefulSet + `mysql-init` ConfigMap + Service**（含"官方镜像 entrypoint 需 root 启动，
+  故不设 runAsNonRoot"的说明）；**Postgres StatefulSet/Service 保留但收窄为"仅供 core"**；
+  `40-monitoring.yml` 的 postgres-exporter → **mysqld-exporter**（端口 9187→9104、DSN 格式、
+  ServiceMonitor/规则名），PG 侧保留 postgres-exporter 供 core 的库；`50-backup.yml` 的
+  `pg_dump`（四库） → **`mysqldump`（五库）+ 单独的 PG 备份 Job（仅 nexus_core）**；
+  `00-namespace-config.yml` 移除共享 `SPRING_DATASOURCE_URL`（写死一个库名会让
+  wallet/bridge/signing 全连到 `nexus_gateway` 库）；Nacos HA 的外接存储由 PG → **MySQL**
+  （Nacos 原生数据源就是 MySQL，PG 反而要额外插件）。
+- **脚本**：`deploy/scripts/backup-postgres.sh` / `restore-postgres.sh` →
+  **`backup-mysql.sh` / `restore-mysql.sh`**（保留原 CLI 接口：`--database`/`--retention`/
+  `--date`/`--target-host`；恢复默认先 DROP 再建以回到备份点，`--suffix` 可恢复到新库）。
+- **文档**：`docs/database-production.md` 改写为 MySQL 族口径（含修正说明、库划分、
+  profile 映射、MySQL 参数、迁移目录现状），并将 PG 语法对照表标注为历史；
+  `db/migration-pg/` 两处新增 `DEPRECATED.md`（冻结版本、无引用、及"何时才该重启 PG 路径"的判据）。
+
+**实测取证（本机真机预演，非纸面）**：
+- 全新 **MySQL 8.0** 容器 + `init-mysql-dbs.sh`：五库与账号创建成功、`nexus_gateway`
+  账号仅能访问本库（最小权限可验证）。
+- Flyway 直跑：gateway `db/migration` **83 个脚本 20 秒到 v96**（全新库 97 张表，含
+  `orchestrated_payments`/`merchant_payout_accounts`/`audit_events`）；wallet **4 个脚本到 v4**
+  （含此前 PG 侧缺失的 `wallet_audit_events`）。
+- **wallet-service 以 prod profile 真启动成功**：Flyway 校验通过 → Hibernate
+  `ddl-auto: validate` 通过 → `Started WalletServiceApplication in 25.282 seconds` →
+  `/actuator/health` 返回 `{"status":"UP"}`（200）→ 业务端点返 403（鉴权拦截，**不是 500**）。
+- `helm lint` 通过；`helm template` 渲染出四条正确 URL（`…:3306/nexus_gateway|nexus_wallet|nexus_signing|nexus_bridge`）；
+  `docker compose config` 对 dev/prod 两份编排均通过（prod 需 15 个必填变量，已同步 `.env.prod.example`）。
+
+**同批完成的审计（只读，产出下一批工作项）**：对「两条出款链」做了三路只读审计
+（gateway `AutoWithdrawService` 商户结算出款 vs wallet-service `DefaultWithdrawalApprovalService`
+托管提现）。结论：**两链在存储/引用命名空间/执行路径上相互隔离**（不同库不同表、
+无共享幂等键、无监听器桥接、无生产互调）——**不存在"同一笔钱被记两次"的直接代码路径**；
+但扫出 8 项真隐患，按风险排序进入 v2.71.0：①`custody/rebalance` 可**绕过审批**做冷→热链上转账
+②`withdrawFromCold` 一次调用=两次链上动作（零生产入口的雷）③提现审批链**不校验托管余额**
+④提现 execute 存在**并发重复广播**窗口 ⑤大额提现（≥10000）在 signing 侧转人工审批后
+wallet 直接置 FAILED（两条审批流未打通）⑥`AutoWithdrawScheduler` 无 ShedLock、无开关
+（多副本重复出款）⑦出款户名一致性校验因 resolver 无生产 Bean 而**恒跳过**（fail-open）
+⑧`ManualPayoutExecutor` 的"台账"只在内存（重启失忆、无核销端点）。
+
+**⚠️ 本批过程中的一次自我更正（值得留痕）**：初稿把 `nexus-core` 的 DB 依赖判为
+"上游模板遗留的幽灵依赖"并删掉了它的数据源接线——**这是错的**。core 没有 JPA/Flyway，
+但有 **PG 方言的 JDBC 链存储**（`RDBMSBlockChainImpl` + `resources/ddl.sql`：`bytea` 类型、
+双引号标识符）。已按证据改为：**core 例外保留 PostgreSQL**（compose/K8s/helm 三处的接线全部恢复），
+并在三处注释里写明原因与后续路径。教训：**"没有 JPA 实体" ≠ "不用数据库"**——
+判据要看 `ddl.sql`/`JdbcTemplate`/`DataSource` 的真实使用，不能只看 ORM 层。
+
+**诚实声明（未做）**：
+① **core 迁 MySQL 未做**（需重写 `ddl.sql`（`bytea`→`VARBINARY/BLOB`、标识符引号）+ 核实
+JDBC 读写路径 + core 冷启动/区块读写验证）——故当前安装形态是**双库**：MySQL 8（业务）
++ PostgreSQL 16（仅 core）。这条直接影响客户安装的环境准备清单，已同步进
+`docs/database-production.md`。
+② gateway 的**整包启动**未在本机复现（本机可用内存不足，Gradle daemon 被 OOM 杀掉两次）；
+其 schema 层已在真 MySQL 8 验证（83 脚本 → v96）。整栈联调（gateway 启动 +
+Seata/Redis/Nacos 协同）列入 **B1 真实安装验证**（客户窗口 1 个月内）。
+③ K8s 静态清单的 **kubeconform/PrometheusRule** 校验未在本机跑（工具链缺失），
+以 `k8s-sync-check` workflow 为准。
+
 ## [2.69.0] - 2026-10-12
 
 ### 区块浏览器补齐合约/跨链页面 + 容器化部署路径（对外展示面从「有源码」到「能部署」）

@@ -76,20 +76,27 @@ deploy/nacos/
 
 ### 3.2 依赖组件
 
-- **PostgreSQL**：已部署（复用 `deploy/k8s/30-infrastructure.yml` 中的 postgres）
+- **MySQL 8**：已部署（复用 `deploy/k8s/30-infrastructure.yml` 中的 mysql；2026-10-12 由 PostgreSQL 切换）
 - **nexus namespace**：已创建（`deploy/k8s/00-namespace-config.yml`）
 - **nexus-secrets Secret**：已创建，包含 `NEX_DB_USERNAME` / `NEX_DB_PASSWORD`
 
-### 3.3 PostgreSQL 数据库初始化
+### 3.3 MySQL 数据库初始化
 
-Nacos 外接 PostgreSQL 需要预先创建数据库 `nacos_config`：
+Nacos 外接 MySQL 需要预先创建数据库 `nacos_config`（compose 的 `init-mysql-dbs.sh` 与
+K8s 的 `mysql-init` ConfigMap 均已包含，且给通用账号 `nexus` 授权）：
 
 ```sql
--- 命令示例：创建 Nacos 配置数据库
-CREATE DATABASE nacos_config WITH ENCODING 'UTF8';
+CREATE DATABASE IF NOT EXISTS nacos_config CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 ```
 
-Nacos 首次启动时会自动创建表结构（`config_info` / `config_info_beta` / `his_config_info` / `tenant_info` 等）。
+⚠️ **表结构需手工导入**（Nacos 不会自建外接库的表）：把 `mysql-schema.sql` 导入该库
+（可从 Nacos 发行包里取：`conf/mysql-schema.sql`，版本须与镜像 `nacos/nacos-server:v3.1.2` 匹配）：
+
+```bash
+kubectl exec -i -n nexus sts/mysql -- sh -c   'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" nacos_config' < mysql-schema.sql
+```
+
+（此前 PG 版本文档写的是"首次启动会自动建表"，那只在 **Derby 内置库**模式下成立。）
 
 ---
 
@@ -100,9 +107,9 @@ Nacos 首次启动时会自动创建表结构（`config_info` / `config_info_bet
 ```bash
 # 命令示例：Nacos HA 部署（按顺序执行）
 
-# 1. 确认 namespace + PostgreSQL 已就绪
+# 1. 确认 namespace + MySQL 已就绪
 kubectl get namespace nexus
-kubectl get sts postgres -n nexus
+kubectl get sts mysql -n nexus \n  && kubectl exec -n nexus sts/mysql -- mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e "SHOW DATABASES"
 
 # 2. 部署 Nacos ConfigMap
 kubectl apply -f deploy/nacos/nacos-configmap.yaml
@@ -249,15 +256,15 @@ kubectl rollout status sts/nacos -n nexus
 ### 6.4 备份与恢复
 
 ```bash
-# 命令示例：备份 Nacos 配置（通过 PostgreSQL 备份）
+# 命令示例：备份 Nacos 配置（2026-10-12 起通过 MySQL 备份）
 
-# 1. 备份 PostgreSQL nacos_config 数据库
-kubectl exec -n nexus sts/postgres -- \
-  pg_dump -U nexus nacos_config > nacos-config-backup-$(date +%Y%m%d).sql
+# 1. 备份 MySQL nacos_config 数据库
+kubectl exec -n nexus sts/mysql -- \
+  mysqldump -unexus -p"$NEX_DB_PASSWORD" --single-transaction nacos_config > nacos-config-backup-$(date +%Y%m%d).sql
 
 # 2. 恢复
 cat nacos-config-backup-YYYYMMDD.sql | \
-  kubectl exec -i -n nexus sts/postgres -- psql -U nexus nacos_config
+  kubectl exec -i -n nexus sts/mysql -- mysql -unexus -p"$NEX_DB_PASSWORD" nacos_config
 ```
 
 ---
@@ -346,8 +353,8 @@ annotations:
 # 1. 查看 Pod 事件
 kubectl describe pod nacos-0 -n nexus
 
-# 2. 查看 initContainer 日志（PostgreSQL 连接失败）
-kubectl logs nacos-0 -n nexus -c wait-for-postgres
+# 2. 查看 initContainer 日志（MySQL 连接失败）
+kubectl logs nacos-0 -n nexus -c wait-for-mysql
 
 # 3. 查看 Nacos 容器日志
 kubectl logs nacos-0 -n nexus -c nacos

@@ -94,9 +94,9 @@ spec:
             - name: NEX_ZIPKIN_ENDPOINT
               value: {{ printf "http://%s:%s/api/v2/spans" .Values.global.infrastructure.zipkin.host (toString .Values.global.infrastructure.zipkin.port) | quote }}
             {{- end }}
-            {{- if .Values.dependencies.postgres }}
+            {{- if .Values.dependencies.mysql }}
             - name: SPRING_DATASOURCE_URL
-              value: {{ printf "jdbc:postgresql://%s:%s/%s" .Values.global.infrastructure.postgres.host (toString .Values.global.infrastructure.postgres.port) (replace "-" "_" .Chart.Name) | quote }}
+              value: {{ printf "jdbc:mysql://%s:%s/%s?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=UTC" .Values.global.infrastructure.mysql.host (toString .Values.global.infrastructure.mysql.port) (.Values.dependencies.mysqlDatabase | default (replace "-" "_" .Chart.Name)) | quote }}
             {{- end }}
             {{- if .Values.dependencies.redis }}
             - name: SPRING_REDIS_HOST

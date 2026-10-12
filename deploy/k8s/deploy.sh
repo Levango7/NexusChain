@@ -22,13 +22,13 @@ kubectl create configmap nexus-genesis \
   --dry-run=client -o yaml | kubectl apply -f -
 echo "[2/12] Genesis ConfigMap"
 
-# 3. Infrastructure (PostgreSQL + Redis)
+# 3. Infrastructure (MySQL + Redis)
 kubectl apply -f "$DIR/30-infrastructure.yml"
-echo "[3/12] Infrastructure (PostgreSQL + Redis)"
+echo "[3/12] Infrastructure (MySQL 8 + Redis)"
 
 # Wait for infra to be ready
-echo "Waiting for PostgreSQL..."
-kubectl wait --for=condition=ready pod -l app=postgres -n nexus --timeout=120s 2>/dev/null || true
+echo "Waiting for MySQL..."
+kubectl wait --for=condition=ready pod -l app=mysql -n nexus --timeout=180s 2>/dev/null || true
 echo "Waiting for Redis..."
 kubectl wait --for=condition=ready pod -l app=redis -n nexus --timeout=60s 2>/dev/null || true
 

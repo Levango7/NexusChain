@@ -1,13 +1,16 @@
 # ============================================================================
 # NexusChain 备份数据库列表（共享配置，REQ-30/P2）
 # 用法：
-#   - backup-postgres.sh 启动时读取本文件（每行一个库名，# 开头为注释）
+#   - backup-mysql.sh 启动时读取本文件（每行一个库名，# 开头为注释）
 #   - K8s 50-backup.yml CronJob 通过 ConfigMap 注入本文件
 # 修改本文件后需同步：
-#   1. deploy/scripts/backup-postgres.sh 默认 DATABASES 数组
+#   1. deploy/scripts/backup-mysql.sh 默认 DATABASES 数组
 #   2. deploy/k8s/50-backup.yml CronJob command 中的 for DB in ... 列表
 # ============================================================================
+# 2026-10-12：nexus_core 移除（core 是链节点，链数据在 LevelDB，无关系库）；
+#           补 nexus_signing / seata（DB 家族切 MySQL 后纳入备份范围）
 nexus_gateway
-nexus_core
-nexus_bridge
 nexus_wallet
+nexus_signing
+nexus_bridge
+seata

@@ -46,7 +46,7 @@ dependencies:
   seata: false
   sentinel: false
   zipkin: true
-  postgres: false
+  mysql: false
   redis: true
 
 # -- 额外环境变量（键值对，注入容器 env）
@@ -244,9 +244,9 @@ global:
     zipkin:
       port: 9411
       host: zipkin.nexus.svc.cluster.local
-    postgres:
-      port: 5432
-      host: postgres.nexus.svc.cluster.local
+    mysql:
+      port: 3306
+      host: mysql.nexus.svc.cluster.local
     redis:
       port: 6379
       host: redis.nexus.svc.cluster.local
