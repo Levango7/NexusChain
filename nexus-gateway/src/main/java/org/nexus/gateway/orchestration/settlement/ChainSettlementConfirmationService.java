@@ -1,5 +1,6 @@
 package org.nexus.gateway.orchestration.settlement;
 
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.nexus.gateway.client.ChainRpcClient;
 import org.nexus.gateway.model.FinalityStatus;
 import org.slf4j.Logger;
@@ -34,6 +35,14 @@ import java.util.Optional;
  *
  * <p>超时处理：确认超过指定时间（默认 30 分钟）未达到所需确认数时，
  * 自动触发告警 + 重试查询；重试次数超过上限（默认 3 次）后标记为 FAILED。</p>
+ *
+ * <p><b>多副本注意（2026-10-13）</b>：{@link #scanPendingConfirmations()} 整体是<b>一个</b>
+ * {@code @Transactional}，内层 {@link #checkConfirmation} / {@link #handleConfirmationTimeout}
+ * 各自 {@code @Transactional} 只是加入同一批；{@link SettlementConfirmationRecord} 带
+ * {@code @Version} ⇒ prod {@code replicaCount=3} 三副本并发扫同一批 PENDING 时，
+ * 输者抛 {@code ObjectOptimisticLockingFailureException} 会把本 tick 整批记录的合法状态迁移
+ * 一起回滚（下一 tick 自愈），并对同一批制造 3× 链上 RPC fan-out。<b>此路径不动钱</b>——
+ * 上锁是为了消除状态抖动与外部负载，不是防双付。</p>
  *
  * @since Wave 9-C1-1 链上结算确认
  */
@@ -278,6 +287,7 @@ public class ChainSettlementConfirmationService {
      * 并检查是否超时需要调用 {@link #handleConfirmationTimeout(String)}。</p>
      */
     @Scheduled(fixedDelayString = "${nexus.settlement.scan-interval-ms:30000}")
+    @SchedulerLock(name = "chainSettlementConfirmationScan", lockAtMostFor = "PT5M", lockAtLeastFor = "PT30S")
     @Transactional
     public void scanPendingConfirmations() {
         List<SettlementConfirmationRecord> pendingRecords =

@@ -5,6 +5,7 @@ import io.micrometer.core.instrument.Measurement;
 import io.micrometer.core.instrument.Meter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -27,6 +28,14 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <p>冷却机制：同一规则在 {@code cooldownMinutes} 内不重复触发。
  * 冷却状态维护在内存 {@link ConcurrentHashMap} 中，重启后重置。</p>
+ *
+ * <p><b>多副本注意（2026-10-13）</b：{@code lastTriggeredMap} 是<b>每 JVM 一份</b>，
+ * 跨副本零去重 ⇒ prod {@code replicaCount=3} 同刻三副本各自读到"未在冷却"，
+ * 各自 INSERT 一条 {@link AlertEvent}（该实体无 {@code @Version}、{@code alert_events} 表无唯一键）；
+ * 通知渠道一旦从 log-only 占位转真，同一事件即被 3× 触发。
+ * 因此 {@link #checkAlerts()} 挂 {@code @SchedulerLock}：把扫描入口在多副本间串行，
+ * 恢复冷却"跨 tick 至多一次"的原意。持久去重应走 {@code alert_events} 上加唯一键或
+ * 把冷却迁到共享存储 —— 那是后续项。</p>
  */
 @Service
 @ConditionalOnProperty(name = "nexus.alert.enabled", havingValue = "true", matchIfMissing = true)
@@ -63,6 +72,7 @@ public class AlertEngine {
      */
     @Scheduled(fixedDelayString = "${nexus.alert.engine.check-interval-seconds:30}000",
                initialDelayString = "30000")
+    @SchedulerLock(name = "alertEngineSweep", lockAtMostFor = "PT2M", lockAtLeastFor = "PT15S")
     @Transactional
     public void checkAlerts() {
         List<AlertRule> rules = ruleRepository.findByEnabledTrue();

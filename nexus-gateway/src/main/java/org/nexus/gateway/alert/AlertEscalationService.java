@@ -1,5 +1,6 @@
 package org.nexus.gateway.alert;
 
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -25,6 +26,12 @@ import java.util.List;
  *   <li>升级：更新告警事件的 severity 为 toSeverity，发送升级通知</li>
  * </ul>
  * </p>
+ *
+ * <p><b>多副本注意（2026-10-13）</b>：扫描判据来自共享 DB 的未解决事件，三副本同时读到同一批行
+ * 并都判定需升级；{@code escalate()} 对 {@code message} 做的是
+ * {@code message += " [ESCALATED...]"} 的<b>非幂等字符串追加</b>，而 {@link AlertEvent} 无
+ * {@code @Version} ⇒ 升级说明会被追加三遍、升级通知对同一事件发 3 次。
+ * 故 {@link #checkEscalations()} 挂 {@code @SchedulerLock} 让多副本串行。</p>
  */
 @Service
 @ConditionalOnProperty(name = "nexus.alert.enabled", havingValue = "true", matchIfMissing = true)
@@ -50,6 +57,7 @@ public class AlertEscalationService {
      * <p>固定延迟执行，间隔 60 秒，初始延迟 60 秒。</p>
      */
     @Scheduled(fixedDelayString = "60000", initialDelayString = "60000")
+    @SchedulerLock(name = "alertEscalationSweep", lockAtMostFor = "PT3M", lockAtLeastFor = "PT30S")
     @Transactional
     public void checkEscalations() {
         List<AlertEvent> unresolvedEvents = eventRepository.findByResolvedFalseOrderByTimestampDesc();
