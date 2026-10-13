@@ -1,5 +1,6 @@
 package org.nexus.gateway.subscription;
 
+import org.nexus.gateway.subscription.claim.SubscriptionChargeClaimService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -31,17 +32,20 @@ public class DefaultSubscriptionService implements SubscriptionService {
     private final ChargeExecutor chargeExecutor;
     private final DunningManager dunningManager;
     private final ProrationCalculator prorationCalculator;
+    private final SubscriptionChargeClaimService chargeClaimService;
 
     public DefaultSubscriptionService(SubscriptionRepository subscriptionRepository,
                                       SubscriptionPlanRepository planRepository,
                                       ChargeExecutor chargeExecutor,
                                       DunningManager dunningManager,
-                                      ProrationCalculator prorationCalculator) {
+                                      ProrationCalculator prorationCalculator,
+                                      SubscriptionChargeClaimService chargeClaimService) {
         this.subscriptionRepository = subscriptionRepository;
         this.planRepository = planRepository;
         this.chargeExecutor = chargeExecutor;
         this.dunningManager = dunningManager;
         this.prorationCalculator = prorationCalculator;
+        this.chargeClaimService = chargeClaimService;
     }
 
     @Override

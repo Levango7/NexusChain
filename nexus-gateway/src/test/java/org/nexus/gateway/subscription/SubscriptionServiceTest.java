@@ -7,6 +7,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.nexus.gateway.subscription.claim.SubscriptionChargeClaimService;
 import org.springframework.context.ApplicationEventPublisher;
 
 import java.math.BigDecimal;
@@ -30,6 +31,7 @@ class SubscriptionServiceTest {
     @Mock private SubscriptionPlanRepository planRepository;
     @Mock private ChargeExecutor chargeExecutor;
     @Mock private ApplicationEventPublisher eventPublisher;
+    @Mock private SubscriptionChargeClaimService chargeClaimService;
 
     private DunningManager dunningManager;
     private ProrationCalculator prorationCalculator;
@@ -40,8 +42,11 @@ class SubscriptionServiceTest {
         SubscriptionProperties properties = new SubscriptionProperties();
         dunningManager = new DunningManager(eventPublisher, properties);
         prorationCalculator = new ProrationCalculator();
+        // 本类关注订阅生命周期行为，默认放行认领（并发裁决本身由 SubscriptionChargeClaimGuardTest
+        // 与 SubscriptionChargeClaimSchemaIT 覆盖）。lenient 以免"不触及扣款的用例"被严格桩判未用。
+        lenient().when(chargeClaimService.tryClaim(any(), any())).thenReturn(true);
         service = new DefaultSubscriptionService(subscriptionRepository, planRepository,
-                chargeExecutor, dunningManager, prorationCalculator);
+                chargeExecutor, dunningManager, prorationCalculator, chargeClaimService);
     }
 
     private SubscriptionPlan plan(String planId, BigDecimal amount, BillingPeriod period, int trialDays) {
