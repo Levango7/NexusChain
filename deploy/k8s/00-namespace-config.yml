@@ -18,8 +18,14 @@ data:
   # 各服务改用自身 application-prod.yml / application.yml 的默认值
   # （jdbc:mysql://mysql:3306/<本服务库>?…），需要覆盖时由运维按服务单独注入 NEX_DB_URL。
   SPRING_REDIS_HOST: "redis"
-  NEXUS_CHAIN_RPC_URL: "http://nexus-core-0.nexus-core:19585"
-  NEXUS_WALLET_BASE_URL: "http://nexus-gateway:8080"
+  # L3 预演复验缺陷 #46：键名与应用读取的占位符必须逐字一致——
+  # 应用侧 application.yml 是 ${NEX_CHAIN_RPC_URL:...}（NEX_ 前缀），
+  # 此前误写 NEXUS_CHAIN_RPC_URL → 恒回落 localhost:19585 → chainNode 健康项
+  # DOWN → /actuator/health 503 → liveness 反复杀 Pod。
+  NEX_CHAIN_RPC_URL: "http://nexus-core-0.nexus-core:19585"
+  # 注：应用侧 nexus.exchange-wallet.base-url 目前**没有** env 占位符
+  # （硬编码 localhost:8081），此键暂无消费者；待该属性环境变量化后启用。
+  # NEXUS_WALLET_BASE_URL: "http://nexus-gateway:8080"
 ---
 # ⚠️ Secret 硬化须知（生产必读）：
 # 1. 下方 stringData 仅为仓库占位模板，明文提交属正常脚手架做法，

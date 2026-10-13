@@ -99,6 +99,20 @@ spec:
             - name: NEX_ZIPKIN_ENDPOINT
               value: {{ printf "http://%s:%s/api/v2/spans" .Values.global.infrastructure.zipkin.host (toString .Values.global.infrastructure.zipkin.port) | quote }}
             {{- end }}
+            # L3 预演复验缺陷 #45：chainNode 健康指示器默认探 http://localhost:19585
+            # → 容器内恒 DOWN → /actuator/health 503 → liveness 反复杀 Pod
+            # （两副本交替重启的"抖动"真因；dev compose 早有 NEX_CHAIN_RPC_URL，
+            #  chart 漏了）。
+            - name: NEX_CHAIN_RPC_URL
+              # 注意：default 必须在 toString **之前**（toString nil → "<nil>" 非空，
+              # default 不再兜底；实测渲染出 http://nexus-core:<nil> → Bad authority）。
+              value: {{ printf "http://nexus-core:%s" (.Values.global.infrastructure.chainNodePort | default "19585" | toString) | quote }}
+            # L3 预演复验缺陷 #47：signingServiceHealth 探针打
+            # /api/v1/transfers/capability（@PreAuthorize hasRole('READ')），
+            # 而网关服务令牌默认只有 SIGNING_SERVICE → 403 → 健康聚合恒 DOWN →
+            # liveness 反复杀 Pod（与 chainNode 叠加成"两副本交替抖动"）。
+            - name: JWT_SERVICE_ROLES
+              value: "SIGNING_SERVICE,READ"
             # L3 预演复验缺陷 #43：事件溯源/死信队列默认 store=kafka（matchIfMissing=true），
             # 而 K8s 参考交付**不含 Kafka** → KafkaTemplate bean 缺失、网关起不来
             # （dev/sandbox profile 早有同款 memory 开关，prod 漏了）。
