@@ -26,7 +26,7 @@ spring:
   # === MySQL 8 生产数据源 ===
   # 库名 nexus_wallet 与 gateway 的 nexus_gateway 库独立（设计文档 §4.1）
   datasource:
-    url: ${NEX_DB_URL:jdbc:mysql://mysql:3306/nexus_wallet?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=UTC}
+    url: ${NEX_DB_URL:jdbc:mysql://mysql:3306/nexus_wallet?useUnicode=true&characterEncoding=utf-8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC}
     username: ${NEX_DB_USERNAME:nexus_wallet}
     password: ${NEX_DB_PASSWORD:${DB_PASSWORD}}
     driver-class-name: com.mysql.cj.jdbc.Driver

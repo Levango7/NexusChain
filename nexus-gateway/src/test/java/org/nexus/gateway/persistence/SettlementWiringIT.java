@@ -5,6 +5,7 @@ import org.nexus.gateway.config.SettlementPersistenceConfig;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
 import org.springframework.test.context.ContextConfiguration;
+import org.springframework.test.context.TestPropertySource;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
@@ -25,6 +26,10 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
  */
 @DataJpaTest
 @ContextConfiguration(classes = {SettlementPersistenceConfig.class})
+// L3 预演（缺陷 #20 连带，2026-10-13）：Boot 4 的 spring-boot-starter-flyway 补齐后
+// @DataJpaTest slice 也会加载 Flyway 自动配置，全量 MySQL 迁移在 H2 上解析失败；
+// 本测试按类注释口径只用 Hibernate create-drop 建表，显式关闭 Flyway。
+@TestPropertySource(properties = "spring.flyway.enabled=false")
 class SettlementWiringIT {
 
     /** 接线验证 1：settlement ClearingOrderRepository 经生产 config 装配 */

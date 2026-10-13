@@ -1,5 +1,5 @@
 # ServiceMonitor：Prometheus 抓取 mpc-engine gRPC 指标
-{{- if .Values.serviceMonitor.enabled }}
+{{- if and (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1") .Values.serviceMonitor.enabled }}
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:

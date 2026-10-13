@@ -16,6 +16,11 @@ global:
   # -- 命名空间（umbrella templates/namespace.yaml 创建）
   namespace: nexus
 
+  # -- 是否由本 chart 创建命名空间。
+  #    纯 Helm 路径保持 true；若 infra 清单（deploy/k8s/00-namespace-config.yml）
+  #    已预建同名 ns，Helm 归属校验会拒绝整单安装 → 传 false（L3 缺陷 #11）。
+  createNamespace: true
+
   # -- 镜像仓库基址，子 chart 拼接 /<serviceName>:<tag>
   imageRegistry: ghcr.io/levango7/nexuschain
 
@@ -31,8 +36,11 @@ global:
     #   email: ""
 
   # -- Spring profile，注入 SPRING_PROFILES_ACTIVE
-  #   留空则回退到 global.env
-  springProfile: ""
+  #    L3 预演（缺陷 #17）：应用侧只随包发布 dev/prod/test 三个 profile（无 staging）。
+  #    此前默认回退 global.env=staging → 应用落到 base application.yml（dev 口径：
+  #    MySQL8Dialect 类名已不存在 / TLS keystore 前置 / baseline 截断 V1 等）而整组起不来。
+  #    K8s 交付路径显式默认 prod profile。
+  springProfile: prod
 
   # -- 服务名标签键，用于 NetworkPolicy / ServiceMonitor selector
   appLabelKey: app.kubernetes.io/name

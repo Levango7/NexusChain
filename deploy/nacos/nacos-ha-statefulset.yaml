@@ -64,6 +64,13 @@ spec:
               topologyKey: kubernetes.io/hostname
       # 优雅终止：给 Nacos 时间让 Raft 重新选主
       terminationGracePeriodSeconds: 30
+      # 2026-10-13 L3 预演修正（缺陷⑥，经典 K8s 坑）：默认 kubelet 会为**同命名空间
+      # 每个 Service** 注入一组环境变量（形如 `NACOS_CONSOLE_PORT=tcp://10.96.x.x:8848`）。
+      # Spring 的松散绑定把这些变量视为配置项（NACOS_CONSOLE_PORT → nacos.console.port），
+      # 而 Nacos 3.x 的 Console 上下文又把 server.port 与它绑定 ⇒ 拿 "tcp://IP:port"
+      # 去转 Integer ⇒ NumberFormatException ⇒ 启动失败。
+      # 关掉 Service 链接注入即根治（本 Pod 不依赖这些注入变量做服务发现）。
+      enableServiceLinks: false
       securityContext:
         # nacos/nacos-server:v3.1.2 镜像默认以 UID 1000 运行（non-root）
         runAsNonRoot: true
@@ -137,6 +144,34 @@ spec:
               value: "mysql"
             - name: NACOS_AUTH_ENABLE
               value: "true"
+            # 2026-10-13 L3 预演修正（缺陷①）：镜像 bin/docker-startup.sh 对这三个变量做
+            # **非空校验**，缺任一直接 `exit 255`（容器起不来）。此前清单只给了 AUTH_ENABLE，
+            # 而把 token/identity 写在 application.properties 的 ${VAR:default} 占位里——
+            # 占位符是 Nacos 进程启动后才解析的，管不了 shell 阶段的校验。
+            # 值来自 nexus-secrets（键名与 prod compose 的 NACOS_AUTH_* 环境变量同名）。
+            - name: NACOS_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: nexus-secrets
+                  key: NACOS_AUTH_TOKEN
+            - name: NACOS_AUTH_IDENTITY_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: nexus-secrets
+                  key: NACOS_AUTH_IDENTITY_KEY
+            - name: NACOS_AUTH_IDENTITY_VALUE
+              valueFrom:
+                secretKeyRef:
+                  name: nexus-secrets
+                  key: NACOS_AUTH_IDENTITY_VALUE
+            # 2026-10-13 L3 预演修正（缺陷②）：集群节点列表改由启动脚本生成。
+            # 原实现把 cluster.conf 以**只读** ConfigMap 挂载，而脚本 `print_servers`
+            # 需要**写**该文件（清单注释所称的"initContainer 动态生成"实际并不存在）
+            # ⇒ 写入失败、Raft 集群列表仍是 configmap 里的占位 IP 192.168.0.x。
+            # 改为给 NACOS_SERVERS（官方 docker 集群模式口径，端口用主端口 8848），
+            # 让脚本写进容器可写层的 cluster.conf。
+            - name: NACOS_SERVERS
+              value: "nacos-0.nacos-headless.nexus.svc.cluster.local:8848 nacos-1.nacos-headless.nexus.svc.cluster.local:8848 nacos-2.nacos-headless.nexus.svc.cluster.local:8848"
             # 数据库连接（从 Secret 读取，避免明文）
             - name: DB_USER
               valueFrom:
@@ -160,6 +195,9 @@ spec:
               mountPath: /home/nacos/conf/application.properties
               subPath: application.properties
               readOnly: true
+            # cluster.conf 由 ConfigMap 只读提供（内容为真实的 Headless DNS 成员表）。
+            # 启动脚本会尝试重写该文件并报 "Read-only file system"——**可容忍**：
+            # 文件内容已正确，脚本不因该失败中止（无 set -e）。
             - name: nacos-cluster-conf
               mountPath: /home/nacos/conf/cluster.conf
               subPath: cluster.conf
@@ -168,10 +206,15 @@ spec:
               mountPath: /home/nacos/logs
             - name: nacos-data
               mountPath: /home/nacos/data
+          # 2026-10-13 L3 预演修正（缺陷⑦）：探针路径原为 v1 时代写法
+          # `/nacos/v1/console/health/liveness`——Nacos 3.1.2 上该端点已 **410 Gone**，
+          # 探针永远失败 ⇒ Pod 永不 Ready（容器本身是健康的）。
+          # 本仓 docker-compose.yml 早已实测出可用探针（v3 admin API，见其注释），
+          # 此处与 compose 对齐为 /nacos/v3/admin/core/state。
           # 启动探针：Nacos 启动较慢，给 180s 缓冲
           startupProbe:
             httpGet:
-              path: /nacos/v1/console/health/liveness
+              path: /nacos/v3/admin/core/state
               port: 8848
             initialDelaySeconds: 10
             periodSeconds: 10
@@ -180,7 +223,7 @@ spec:
           # 存活探针：Raft 选主失败会触发重启
           livenessProbe:
             httpGet:
-              path: /nacos/v1/console/health/liveness
+              path: /nacos/v3/admin/core/state
               port: 8848
             periodSeconds: 10
             timeoutSeconds: 5
@@ -188,7 +231,7 @@ spec:
           # 就绪探针：仅当节点可读写时才接流量
           readinessProbe:
             httpGet:
-              path: /nacos/v1/console/health/readiness
+              path: /nacos/v3/admin/core/state
               port: 8848
             periodSeconds: 5
             timeoutSeconds: 3

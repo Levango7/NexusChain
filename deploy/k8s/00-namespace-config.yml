@@ -39,7 +39,16 @@ stringData:
   NEX_DB_PASSWORD: "CHANGE_ME_IN_PRODUCTION"
   NEX_MASTER_KEY: "BASE64_ENCODED_32_BYTE_AES_KEY_HERE"
   NEX_WEBHOOK_SECRET: "CHANGE_ME_WEBHOOK_SECRET"
+  # Nacos 鉴权三键（2026-10-13 L3 预演补：nacos-ha-statefulset 的启动脚本**强制校验**
+  # 它们非空，缺任一容器 exit 255；NACOS_AUTH_TOKEN 须为 **Base64** 字符串）
+  NACOS_AUTH_TOKEN: "CHANGE_ME_BASE64_32BYTE_KEY"
+  NACOS_AUTH_IDENTITY_KEY: "CHANGE_ME_NACOS_IDENTITY_KEY"
+  NACOS_AUTH_IDENTITY_VALUE: "CHANGE_ME_NACOS_IDENTITY_VALUE"
   # 审计修复：Redis 启用 requirepass（30-infrastructure.yml）。
   # 所有业务 Pod 经 envFrom: nexus-secrets 自动获得该变量，
   # Spring Data Redis 按 SPRING_DATA_REDIS_PASSWORD 读取认证。
   SPRING_DATA_REDIS_PASSWORD: "CHANGE_ME_REDIS_PASSWORD"
+  # API Gateway 商户 API Key 白名单（2026-10-13 L3 预演缺陷 #18：api-gateway 的
+  # ${NEX_API_KEYS} 无默认值，chart envFrom nexus-secrets 注入；缺失则启动即
+  # PlaceholderResolutionException。逗号分隔）。
+  NEX_API_KEYS: "CHANGE_ME_MERCHANT_API_KEYS_COMMA_SEPARATED"

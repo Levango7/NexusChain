@@ -44,7 +44,11 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-security'
 
     // Database
-    // Flyway 10.x（Boot 3.3.13 BOM 管理），10.x 需数据库专用模块
+    // Flyway 11.x（Boot 4.0.8 BOM 管理），11.x 需数据库专用模块
+    // L3 预演缺陷 #20（2026-10-13）：Boot 4 起自动配置模块从 spring-boot-autoconfigure
+    // 拆到独立 spring-boot-flyway；只引 flyway-core 时**迁移静默不执行**（零日志），
+    // 直到 ddl-auto=validate 报第一张缺表才暴露。必须用 starter。
+    implementation 'org.springframework.boot:spring-boot-starter-flyway'
     implementation 'org.flywaydb:flyway-core'
     implementation 'org.flywaydb:flyway-mysql'
     implementation 'org.flywaydb:flyway-database-postgresql'

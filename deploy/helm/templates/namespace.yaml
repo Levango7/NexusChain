@@ -1,4 +1,9 @@
 # Namespace：由 umbrella 统一创建，子 chart 不再创建
+# L3 预演修复（缺陷 #11）：命名空间可能已由 deploy/k8s/00-namespace-config.yml 预建
+# （基础设施清单先行路径）。届时此处再渲染 Namespace 会触发 Helm 归属校验失败
+# （missing meta.helm.sh/release-* 注解），安装被整单拒绝。此时传
+# --set global.createNamespace=false 跳过（或按 docs 用 kubectl 打归属注解采纳）。
+{{- if .Values.global.createNamespace }}
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -8,3 +13,4 @@ metadata:
     app.kubernetes.io/part-of: {{ default "nexus" .Values.global.partOfLabel }}
     # NetworkPolicy default-deny 依赖此标签（K8s 1.21+ 自动打）
     kubernetes.io/metadata.name: {{ include "nexus-chain.namespace" . }}
+{{- end }}

@@ -208,3 +208,6 @@ nexus-explorer/frontend/coverage/
 # CI 的 k8s-sync-check 会自行执行 helm dependency build。
 deploy/helm/Chart.lock
 deploy/helm/charts/*.tgz
+
+# Seata TC 封装镜像的驱动 jar（构建前置，见 deploy/seata/Dockerfile）
+deploy/seata/lib/*.jar

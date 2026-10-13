@@ -100,6 +100,11 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{ .Chart.Name }}-config
+            # L3 缺陷 #15b：共享凭据库（nexus-secrets，SECRET-MANAGEMENT.md 唯一钥匙库：
+            # NEX_DB_*/NEX_MASTER_KEY/NEX_WEBHOOK_SECRET）。放在本服务 secret 之前，
+            # 同名键以后者为准 → 仍可按服务覆盖。
+            - secretRef:
+                name: nexus-secrets
             - secretRef:
                 name: {{ .Chart.Name }}-secret
           resources:

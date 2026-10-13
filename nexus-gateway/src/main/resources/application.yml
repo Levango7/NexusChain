@@ -132,12 +132,16 @@ spring:
     open-in-view: false
     properties:
       hibernate:
-        dialect: org.hibernate.dialect.MySQL8Dialect
+        dialect: org.hibernate.dialect.MySQLDialect
         format_sql: true
 
   flyway:
     enabled: true
     locations: classpath:db/migration
+    # L3 预演（缺陷 #16）：安装脚本预建 undo_log 后库非空，baseline 版本必须为 0，
+    # 否则 baseline 落在 V1 → V1 建表被跳过（prod profile 已同口径）
+    baseline-on-migrate: true
+    baseline-version: 0
 
   jackson:
     default-property-inclusion: non_null

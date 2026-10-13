@@ -9,7 +9,9 @@ global:
   env: staging
   namespace: nexus-staging
   imagePullPolicy: IfNotPresent
-  springProfile: staging
+  # L3 预演（缺陷 #17）：应用侧只发布 dev/prod/test profile，无 application-staging.yml；
+  # staging **环境**（副本/资源/tag 不同）照样用 prod profile 启动应用。
+  springProfile: prod
   serviceMonitor:
     enabled: true
   networkPolicy:

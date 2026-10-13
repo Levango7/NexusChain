@@ -4,7 +4,7 @@
 # application.properties 开放 management.endpoints=health,prometheus；
 # CoreMetricsConfig 注册 nexuschain_block_height gauge。
 # actuator 与 RPC 同端口（19585）——headless Service 的 rpc 端口直接抓。
-{{- if and .Values.global.serviceMonitor.enabled .Values.serviceMonitor.enabled }}
+{{- if and (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1") .Values.global.serviceMonitor.enabled .Values.serviceMonitor.enabled }}
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:

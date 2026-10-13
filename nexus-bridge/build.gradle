@@ -62,6 +62,10 @@ dependencies {
     // C 批（2026-09-08）：/actuator/prometheus 指标输出——供 ServiceMonitor 抓取
     //（actuator 只给端点框架，registry-prometheus 才给 Prometheus 格式数据）
     implementation 'io.micrometer:micrometer-registry-prometheus'
+    // L3 预演缺陷 #21（2026-10-13）：logback-spring.xml 的 JSON_FILE appender 用
+    // LogstashEncoder，但本模块缺该依赖 → logback 配置即报 ClassNotFound，
+    // 应用连启动日志都出不来（与 gateway 的 7.4 对齐）。
+    implementation 'net.logstash.logback:logstash-logback-encoder:7.4'
 
     // === P0-6 安全加固：Spring Security 方法级鉴权 ===
     // 引入 spring-boot-starter-security 启用 @PreAuthorize 方法级鉴权，

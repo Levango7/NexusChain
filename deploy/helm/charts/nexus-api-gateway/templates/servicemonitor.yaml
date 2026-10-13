@@ -1,7 +1,7 @@
 ﻿# ServiceMonitor：Prometheus Operator 抓取配置
 # 前置（应用侧）：需引入 micrometer-registry-prometheus 并暴露 /actuator/prometheus
 # 启用条件：global.serviceMonitor.enabled AND 本服务 serviceMonitor.enabled
-{{- if and .Values.global.serviceMonitor.enabled .Values.serviceMonitor.enabled }}
+{{- if and (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1") .Values.global.serviceMonitor.enabled .Values.serviceMonitor.enabled }}
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
