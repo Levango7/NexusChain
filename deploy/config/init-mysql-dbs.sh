@@ -31,6 +31,37 @@ CREATE DATABASE IF NOT EXISTS nexus_wallet  CHARACTER SET utf8mb4 COLLATE utf8mb
 CREATE DATABASE IF NOT EXISTS nexus_signing CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE DATABASE IF NOT EXISTS nexus_bridge  CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE DATABASE IF NOT EXISTS seata         CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+-- 2026-10-13 L3 预演发现：Nacos HA 的外接库此前**没人建**（README 声称已含，实际漏了）
+CREATE DATABASE IF NOT EXISTS nacos_config CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- 2026-10-13 L3 预演（缺陷 #16）：Seata AT 模式 undo_log 必须**先于应用首启**存在。
+-- Seata 的 DataSourceProxy 在 Spring Bean 初始化阶段即校验该表（早于 Flyway 迁移执行），
+-- 空库首次启动必然报 "in AT mode, undo_log table not exist" —— 鸡生蛋死锁。
+-- 安装期先建（IF NOT EXISTS 与 gateway V7 / wallet V3 迁移幂等共存）。
+CREATE TABLE IF NOT EXISTS nexus_gateway.undo_log (
+    branch_id BIGINT NOT NULL, xid VARCHAR(128) NOT NULL, context VARCHAR(128) NOT NULL,
+    rollback_info LONGBLOB NOT NULL, log_status INT NOT NULL,
+    log_created DATETIME(6) NOT NULL, log_modified DATETIME(6) NOT NULL,
+    UNIQUE KEY ux_undo_log (xid, branch_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS nexus_wallet.undo_log (
+    branch_id BIGINT NOT NULL, xid VARCHAR(128) NOT NULL, context VARCHAR(128) NOT NULL,
+    rollback_info LONGBLOB NOT NULL, log_status INT NOT NULL,
+    log_created DATETIME(6) NOT NULL, log_modified DATETIME(6) NOT NULL,
+    UNIQUE KEY ux_undo_log (xid, branch_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS nexus_signing.undo_log (
+    branch_id BIGINT NOT NULL, xid VARCHAR(128) NOT NULL, context VARCHAR(128) NOT NULL,
+    rollback_info LONGBLOB NOT NULL, log_status INT NOT NULL,
+    log_created DATETIME(6) NOT NULL, log_modified DATETIME(6) NOT NULL,
+    UNIQUE KEY ux_undo_log (xid, branch_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS nexus_bridge.undo_log (
+    branch_id BIGINT NOT NULL, xid VARCHAR(128) NOT NULL, context VARCHAR(128) NOT NULL,
+    rollback_info LONGBLOB NOT NULL, log_status INT NOT NULL,
+    log_created DATETIME(6) NOT NULL, log_modified DATETIME(6) NOT NULL,
+    UNIQUE KEY ux_undo_log (xid, branch_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE USER IF NOT EXISTS 'nexus_gateway'@'%' IDENTIFIED BY '${MYSQL_PASSWORD}';
 CREATE USER IF NOT EXISTS 'nexus_wallet'@'%'  IDENTIFIED BY '${MYSQL_PASSWORD}';
@@ -48,6 +79,7 @@ GRANT ALL PRIVILEGES ON nexus_wallet.*  TO 'nexus'@'%';
 GRANT ALL PRIVILEGES ON nexus_signing.* TO 'nexus'@'%';
 GRANT ALL PRIVILEGES ON nexus_bridge.*  TO 'nexus'@'%';
 GRANT ALL PRIVILEGES ON seata.*         TO 'nexus'@'%';
+GRANT ALL PRIVILEGES ON nacos_config.*  TO 'nexus'@'%';
 -- 监控导出器需要全局 PROCESS/REPLICATION CLIENT（mysqld-exporter 的部分指标依赖）
 GRANT PROCESS, REPLICATION CLIENT ON *.* TO 'nexus'@'%';
 

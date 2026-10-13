@@ -98,7 +98,11 @@ spring:
     show-sql: false
     properties:
       hibernate:
-        dialect: org.hibernate.dialect.MySQL8Dialect
+        dialect: org.hibernate.dialect.MySQLDialect
+  # L3 预演（缺陷 #22）备注：本模块**没有** Flyway 依赖，schema 由 ddl-auto=update 维护；
+  # resources/db/migration/V0..V4 是**未接线**的死文件（写了迁移但永远不会执行）。
+  # 迁移到 Flyway 管理（加 spring-boot-starter-flyway + ddl-auto=validate）需先核对
+  # V0..V4 与实体的完整差异，属后续批次。
 
 # === OpenFeign 配置（设计文档 §4.4.2，预留 bridge 调用其他微服务的能力） ===
 feign:

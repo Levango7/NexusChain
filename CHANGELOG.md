@@ -2,6 +2,90 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [2.73.0] - 2026-10-13
+
+### L3 安装预演（kind 4 节点 + helm 全栈）——23 项安装/启动缺陷修复
+
+**背景**：按 [`docs/install-rehearsal-resources.md`](docs/install-rehearsal-resources.md) 的 L3 档
+（1 control-plane + 3 worker、7–9GB）在真实 K8s 上走完整安装路径：`kind` 建集群 → K8s 基础设施清单
+→ `helm install` 全栈 7 chart。**基础设施 7/7 Ready（mysql/postgres/redis/nacos×3/seata）**；
+应用层逐层剥出 23 项缺陷（多数在"没人真装过"的路径上潜伏），本版全部修复并对可在本机复验的部分现场验证。
+安装路径此前**从未端到端跑通过**——这不是回归，是首次真实暴露。
+
+**helm/chart 路径**
+- **#10 ServiceMonitor CRD 未守卫**：umbrella 默认 `global.serviceMonitor.enabled=true`，7 个 chart
+  无条件渲染 `monitoring.coreos.com/v1` 对象 → 未装 Prometheus Operator 的集群 **`helm install` 直接拒绝整单**
+  （`no matches for kind "ServiceMonitor"`）。7 处模板加 `.Capabilities.APIVersions.Has` 守卫。
+- **#10b 陈旧 `charts/*.tgz` 干扰**：`.gitignore` 声明 tgz 为 `helm dependency build` 产物，但本地残留的
+  2.50.0 tgz 与展开目录并存时 helm **可能取 tgz** → 改目录（含全部 9 处修复）对渲染无效。
+  预演中已把陈旧 tgz 移出；`Chart.yaml` 的 `file://charts/<name>` 依赖在目录存在时即满足，无需 tgz。
+- **#11 namespace 归属冲突**：chart 无条件创建 `nexus` ns，而基础设施清单
+  （`00-namespace-config.yml`）先建了它 → Helm 归属校验失败拒绝整单。新增
+  `global.createNamespace`（默认 true；清单先行路径传 false）。
+- **#15a JDBC URL 缺 `allowPublicKeyRetrieval=true`**：MySQL 8 默认 `caching_sha2_password`，
+  非 TLS 连接首次完整认证必须允许取服务端公钥，否则 `Public Key Retrieval is not allowed`
+  ——5 个 chart 的 `SPRING_DATASOURCE_URL`、compose 五处 URL、4 个 prod/base yml 与
+  `nacos-config/seata-server.properties` 全量补齐（与 `nacos-configmap.yaml` 既有口径一致）。
+- **#15b 共享凭据库未被应用 Pod 引用**：5 个 chart 的 `envFrom` 只挂本服务 secret
+  （默认空），`nexus-secrets`（SECRET-MANAGEMENT.md 的**唯一**钥匙库：NEX_DB_*/NEX_MASTER_KEY/
+  NEX_WEBHOOK_SECRET）无人引用 → 应用以缺凭据状态启动。5 处 `envFrom` 增加 `nexus-secrets`
+  （放在本服务 secret **之前**，同名键仍可按服务覆盖）。
+- **#17 profile 解析**：chart 默认 `global.env: staging` 而应用侧只发布 dev/prod/test
+  → 整组应用落到 **base application.yml**（dev 口径）启动。umbrella `values.yaml` 与
+  `values-staging.yaml` 显式 `springProfile: prod`；base yml 里 Hibernate 5 遗留的
+  `MySQL8Dialect`（Boot 4/Hibernate 6 已无此类）修为 `MySQLDialect`（gateway/bridge）。
+
+**K8s 清单路径（deploy/k8s）**
+- **Nacos HA**：`nacos_config` 库与授权此前**没人建**（README 声称已含）；Nacos 3.x
+  **主/控制台端口拆分**（`nacos.server.main.port=8848` + `nacos.console.port=8080`，
+  原 `server.port` 写法使 8848 端起 console 路由）；`nacos.core.member.lookup.type=file` +
+  cluster.conf 真实成员（原 `nacos.member.list` 已废弃）；`NACOS_AUTH_*` 三键由启动脚本强制校验
+  （缺任一 exit 255）→ `nexus-secrets` 补齐；配置常驻卷改回只读（启动脚本写 cluster.conf 冲突）；
+  `enableServiceLinks: false`（防 Spring 宽松绑定吞 Service 环境变量）；探针改 Nacos 3.1.2 可用路径
+  （`/nacos/v1/*` 已 410 Gone → `/nacos/v3/admin/core/state`）。
+- **#13 Seata TC 清单缺失**：应用侧 `SeataAutoConfiguration` 在 Bean 初始化即强连 TC
+  （`GlobalTransactionScanner.afterPropertiesSet`），TC 不可达**整组 5 个应用 CrashLoop**——
+  而 `deploy/k8s` 没有 Seata 清单。新增 `31-seata.yml`（MySQL db 存储 + 集群 DNS）。
+- **#14 Seata 官方镜像缺 MySQL 驱动**：`apache/seata-server:2.5.0` 的 Jib 镜像无
+  `lib/jdbc` 目录，db 模式启动即 `ShouldNeverHappenException: cannot find jdbc folder`
+  （compose 同图同病）。新增 `deploy/seata/Dockerfile` 封装镜像：驱动放入 **`/lib/jdbc/`**
+  （实测：镜像 JVM 参数为 `-Dapp.home=/ -Dbasedir=/ -Dloader.path=/lib`，seata 按根 `lib/jdbc` 扫描）；
+  compose 的 seata 服务同步改用该镜像（build + image）。驱动 jar 体积原因不入库，Dockerfile 注释了
+  两条获取途径（Maven Central / 从本仓应用镜像 BOOT-INF/lib 解出，版本严格一致）。
+- **#16 undo_log 鸡生蛋**：Seata AT 的 `DataSourceProxy` 在 Flyway **之前**校验 `undo_log`
+  → 空库首启必失败；而预建 `undo_log` 又让库"非空"，Flyway `baseline-on-migrate` 默认在 **V1** 截断
+  → V1 建表被跳过、V2 种子数据失败。治本两层：①`init-mysql-dbs.sh`（+ K8s ConfigMap 副本）安装期
+  预建四业务库 `undo_log`（`IF NOT EXISTS`，与迁移幂等共存）；②全服务 Flyway 统一
+  `baseline-version: 0`（"非空即 baseline@0、V1.. 全部应用"）。signing/bridge 补上缺失的
+  `undo_log` 迁移（V2/V4）。
+- **#19 core genesis ConfigMap 无出处**：chart 与 StatefulSet 都挂 `nexus-genesis`，
+  但**两条路径都没有创建它的文件**、runbook 亦无该步骤 → core 永久 `FailedMount`。
+  新增 `05-core-genesis.yml`（内容源为既有 `genesis.json`/`validators.json`，生产需替换验证人公钥）。
+- **#18 API Gateway 无 Key**：`${NEX_API_KEYS}` 无默认值且无人注入 → 启动即
+  `PlaceholderResolutionException`；`nexus-secrets` 增加该键（占位）。
+- **postgres/redis 运行身份**：`runAsNonRoot` 与空 `Config.User` 冲突（镜像默认 uid 70/999），
+  补 uid/gid/fsGroup 与 root initContainer chown（postgres 数据卷）。
+
+**应用配置/构建**
+- **#20 gateway Flyway 静默失效（最深的坑）**：Spring Boot 4 起自动配置移到独立
+  `spring-boot-flyway` 模块；gateway **只引了 `flyway-core`** → 迁移零日志静默不执行，
+  直到 `ddl-auto=validate` 报第一张缺表（`missing table [account_transactions]`）才暴露。
+  wallet/signing 早已有注释与 starter，gateway 漏网 → 补 `spring-boot-starter-flyway`。
+- **#21 bridge logback**：`logback-spring.xml` 用 `LogstashEncoder` 但 build.gradle 无
+  `logstash-logback-encoder` → logback 配置即 ClassNotFound，应用连日志都出不来 → 补 7.4 依赖。
+- **#22 bridge 迁移未接线**：bridge **无 Flyway 依赖**（schema 靠 `ddl-auto: update`），
+  `db/migration/V0..V4` 是从不执行的死文件——已在配置处写明，迁移到 Flyway 管理列入后续批次
+  （需先核对 V0..V4 与实体差异）。
+
+**状态**：基础设施 7/7 Ready 已现场验证；应用层修复中 #15a/#15b/#17（chart/清单层、
+对现镜像即时生效）已用 `helm upgrade` 部署验证到"成功连库/迁移执行"阶段；#20/#21 与
+四服务 base/prod 配置修正属**镜像内**内容，需下一轮镜像构建后复验。
+已知未闭合：Nacos 3.x 客户端凭据注入（wallet 注册 401 `User not found`）、core 日志目录
+（`./logs` 无写权限）、mpc-engine 密钥走 SealedSecret 生产路径的端到端演练。
+
+**测试**：CI 全量（gateway 新增 starter 会让其集成测试**首次真正执行 Flyway**，
+属预期行为面扩大）；新增迁移 `signing V2`/`bridge V4` 走 H2 兼容写法。
+
 ## [2.72.0] - 2026-10-12
 
 ### 制裁名单离线包导入（OFAC/UN 官方格式）+ LGPL 交付声明 + 安装预演资源评估

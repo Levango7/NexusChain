@@ -32,7 +32,7 @@ services:
       # 2026-10-12：DB 家族对齐 MySQL 8（原为 PostgreSQL，与 prod profile 的
       # db/migration-pg 一起构成"起不来"的组合：迁移冻结在 V17 而 ddl-auto=validate）。
       # 库名 = nexus_gateway（与 wallet 的 nexus_wallet 独立）。
-      - NEX_DB_URL=jdbc:mysql://mysql:3306/nexus_gateway?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=UTC
+      - NEX_DB_URL=jdbc:mysql://mysql:3306/nexus_gateway?useUnicode=true&characterEncoding=utf-8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
       - NEX_DB_USERNAME=nexus_gateway
       - NEX_DB_PASSWORD=${MYSQL_PASSWORD:?prod 必需：禁止占位默认值}
     healthcheck:
@@ -85,7 +85,7 @@ services:
       # 但默认值指向 `localhost:3306`（容器内=自身）⇒ 生产必须显式注入服务名。
       # 默认 URL 还带 requireSSL=true + classpath JKS 信任库，故此处整体覆盖为集群内连接
       # （客户若要求库连接 TLS，改这一行的 useSSL/sslMode 参数即可）。
-      - NEX_DB_URL=jdbc:mysql://mysql:3306/nexus_signing?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=UTC
+      - NEX_DB_URL=jdbc:mysql://mysql:3306/nexus_signing?useUnicode=true&characterEncoding=utf-8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
       - NEX_DB_USERNAME=nexus_signing
       - NEX_DB_PASSWORD=${MYSQL_PASSWORD:?prod 必需：禁止占位默认值}
       # P0-1 Task 239: MPC 多端点路由（逗号分隔的 host:port 列表）
@@ -140,7 +140,7 @@ services:
       # 2026-10-12：DB 家族对齐 MySQL 8（原 PG + db/migration-pg 冻结在 V3，
       # 与 prod profile 的 ddl-auto=validate 组合会导致启动即失败：
       # missing table [wallet_audit_events]）。库名 nexus_wallet（与 gateway 独立）。
-      - NEX_DB_URL=jdbc:mysql://mysql:3306/nexus_wallet?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=UTC
+      - NEX_DB_URL=jdbc:mysql://mysql:3306/nexus_wallet?useUnicode=true&characterEncoding=utf-8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
       - NEX_DB_USERNAME=nexus_wallet
       - NEX_DB_PASSWORD=${MYSQL_PASSWORD:?prod 必需：禁止占位默认值}
     depends_on:
@@ -170,7 +170,7 @@ services:
       - SPRING_PROFILES_ACTIVE=prod
       # 2026-10-12：同 signing-service —— 无 prod profile、默认 URL 指向 localhost，
       # 此处显式注入服务名与库；默认 URL 的 requireSSL + JKS 信任库一并覆盖。
-      - NEX_DB_URL=jdbc:mysql://mysql:3306/nexus_bridge?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=UTC
+      - NEX_DB_URL=jdbc:mysql://mysql:3306/nexus_bridge?useUnicode=true&characterEncoding=utf-8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
       - NEX_DB_USERNAME=nexus_bridge
       - NEX_DB_PASSWORD=${MYSQL_PASSWORD:?prod 必需：禁止占位默认值}
     depends_on:
@@ -399,7 +399,12 @@ services:
   # === 分布式事务协调器（Seata 2.5.0） ===
   # REQ-36/T36.4: 配置加密 key 用占位符
   seata:
-    image: apache/seata-server:2.5.0
+    # L3 缺陷 #14：官方 apache/seata-server 镜像不含 MySQL 驱动，STORE_MODE=db
+    # 会因缺 lib/jdbc 直接启动失败（caused-by: cannot find jdbc folder）。
+    # 统一改用本仓封装镜像（deploy/seata/Dockerfile 把驱动放入 /lib/jdbc/）。
+    image: nexuschain/seata-server:2.5.0-mysqldrv
+    build:
+      context: ./deploy/seata
     container_name: nexus-seata-prod
     expose: ['8091', '7091']
     environment:
@@ -411,7 +416,7 @@ services:
       # 执行其内置 mysql 建表脚本（global_table/branch_table/lock_table/distributed_lock），
       # 故只需保证 seata 库存在（见 deploy/config/init-mysql-dbs.sql）。
       - SEATA_STORE_DB_DRIVER_CLASS_NAME=com.mysql.cj.jdbc.Driver
-      - SEATA_STORE_DB_URL=jdbc:mysql://mysql:3306/seata?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=UTC
+      - SEATA_STORE_DB_URL=jdbc:mysql://mysql:3306/seata?useUnicode=true&characterEncoding=utf-8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
       - SEATA_STORE_DB_USER=${MYSQL_USER:-nexus}
       - SEATA_STORE_DB_PASSWORD=${MYSQL_PASSWORD:?prod 必需：禁止占位默认值}
       - SEATA_REGISTRY_NAME=nacos

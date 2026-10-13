@@ -21,10 +21,35 @@ spec:
     spec:
       automountServiceAccountToken: false
       securityContext:
-        # postgres:16-alpine 镜像默认以 UID 70 运行（已是 non-root）
+        # 2026-10-13 L3 预演修正：官方 postgres:16-alpine 的 Config.User 是**空**
+        # （entrypoint 才 gosu 到 postgres），kubelet 见 runAsNonRoot=true + User 空
+        # 会直接拒绝启动（CreateContainerConfigError）。必须显式给出 UID：
         runAsNonRoot: true
+        runAsUser: 70
+        runAsGroup: 70
+        fsGroup: 70
         seccompProfile:
           type: RuntimeDefault
+      # 2026-10-13 L3 预演修正：local-path 卷初建时属主是 root，而主容器按 uid 70 运行
+      # 改不了属主（initdb 报 "could not change permissions"）⇒ 官方推荐解法 = 用 root
+      # initContainer 修一次属主，主容器继续保持非 root（runAsNonRoot 不回退）。
+      initContainers:
+        - name: fix-volume-ownership
+          image: postgres:16-alpine
+          command: ["sh", "-c", "chown -R 70:70 /var/lib/postgresql/data && chmod 0700 /var/lib/postgresql/data"]
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+            runAsNonRoot: false
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN", "FOWNER", "DAC_OVERRIDE"]
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: pgdata
+              mountPath: /var/lib/postgresql/data
       containers:
         - name: postgres
           image: postgres:16-alpine
@@ -105,6 +130,33 @@ data:
     CREATE DATABASE IF NOT EXISTS nexus_signing CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     CREATE DATABASE IF NOT EXISTS nexus_bridge  CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     CREATE DATABASE IF NOT EXISTS seata         CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    CREATE DATABASE IF NOT EXISTS nacos_config CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    -- 2026-10-13 L3 预演（缺陷 #16）：Seata AT 模式 undo_log 必须先于应用首启存在
+    -- （DataSourceProxy 于 Bean 初始化即校验，早于 Flyway；与 V7/V3 迁移幂等共存）
+    CREATE TABLE IF NOT EXISTS nexus_gateway.undo_log (
+        branch_id BIGINT NOT NULL, xid VARCHAR(128) NOT NULL, context VARCHAR(128) NOT NULL,
+        rollback_info LONGBLOB NOT NULL, log_status INT NOT NULL,
+        log_created DATETIME(6) NOT NULL, log_modified DATETIME(6) NOT NULL,
+        UNIQUE KEY ux_undo_log (xid, branch_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    CREATE TABLE IF NOT EXISTS nexus_wallet.undo_log (
+        branch_id BIGINT NOT NULL, xid VARCHAR(128) NOT NULL, context VARCHAR(128) NOT NULL,
+        rollback_info LONGBLOB NOT NULL, log_status INT NOT NULL,
+        log_created DATETIME(6) NOT NULL, log_modified DATETIME(6) NOT NULL,
+        UNIQUE KEY ux_undo_log (xid, branch_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    CREATE TABLE IF NOT EXISTS nexus_signing.undo_log (
+        branch_id BIGINT NOT NULL, xid VARCHAR(128) NOT NULL, context VARCHAR(128) NOT NULL,
+        rollback_info LONGBLOB NOT NULL, log_status INT NOT NULL,
+        log_created DATETIME(6) NOT NULL, log_modified DATETIME(6) NOT NULL,
+        UNIQUE KEY ux_undo_log (xid, branch_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    CREATE TABLE IF NOT EXISTS nexus_bridge.undo_log (
+        branch_id BIGINT NOT NULL, xid VARCHAR(128) NOT NULL, context VARCHAR(128) NOT NULL,
+        rollback_info LONGBLOB NOT NULL, log_status INT NOT NULL,
+        log_created DATETIME(6) NOT NULL, log_modified DATETIME(6) NOT NULL,
+        UNIQUE KEY ux_undo_log (xid, branch_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     CREATE USER IF NOT EXISTS 'nexus_gateway'@'%' IDENTIFIED BY '${MYSQL_PASSWORD}';
     CREATE USER IF NOT EXISTS 'nexus_wallet'@'%'  IDENTIFIED BY '${MYSQL_PASSWORD}';
     CREATE USER IF NOT EXISTS 'nexus_signing'@'%' IDENTIFIED BY '${MYSQL_PASSWORD}';
@@ -119,6 +171,7 @@ data:
     GRANT ALL PRIVILEGES ON nexus_signing.* TO 'nexus'@'%';
     GRANT ALL PRIVILEGES ON nexus_bridge.*  TO 'nexus'@'%';
     GRANT ALL PRIVILEGES ON seata.*         TO 'nexus'@'%';
+    GRANT ALL PRIVILEGES ON nacos_config.*  TO 'nexus'@'%';
     -- 监控导出器需要全局 PROCESS/REPLICATION CLIENT（mysqld-exporter 的部分指标）
     GRANT PROCESS, REPLICATION CLIENT ON *.* TO 'nexus'@'%';
     FLUSH PRIVILEGES;
@@ -245,8 +298,12 @@ spec:
     spec:
       automountServiceAccountToken: false
       securityContext:
-        # redis:7-alpine 镜像默认以 UID 999 运行（non-root）
+        # 2026-10-13 L3 预演修正：同 postgres —— 官方 redis:7-alpine 的 Config.User 也是空，
+        # 只写 runAsNonRoot=true 会被 kubelet 拒绝，须显式给出 UID 999。
         runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
         seccompProfile:
           type: RuntimeDefault
       containers:

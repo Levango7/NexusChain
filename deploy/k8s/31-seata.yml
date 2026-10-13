@@ -1,0 +1,115 @@
+# Seata TC（分布式事务协调器）——K8s 清单
+# ============================================================================
+# L3 预演新增（缺陷 #13）：应用服务 SeataAutoConfiguration 在 Bean 初始化阶段
+# 强制连接 TC（GlobalTransactionScanner.afterPropertiesSet → TMClient.init），
+# TC 不可达即整个 Spring 上下文启动失败。此前 deploy/k8s 无 Seata 清单，
+# 按 README 路径安装后 5 个应用 Pod 全部 CrashLoop。
+#
+# 与 docker-compose.prod.yml 的 seata 服务对齐，差异仅两处（均为适配集群内）：
+#   1. registry/config 用 file 模式（应用侧经 NEX_SEATA_SERVER 直连
+#      seata.nexus.svc.cluster.local:8091，不依赖 Nacos 服务发现）；
+#      compose 的 nacos registry 用于控制台可视，生产如需可按注释启用。
+#   2. store 库连接走集群 DNS mysql.nexus.svc.cluster.local。
+# 存储模式同为 db + MySQL（表由 Seata 首次启动自建，init-mysql-dbs.sh 已建 seata 库）。
+# ============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: seata
+  namespace: nexus
+  labels:
+    app: seata
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: seata
+  template:
+    metadata:
+      labels:
+        app: seata
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        # apache/seata-server 官方镜像以 root 运行（写 /seata-server/logs 等），
+        # 与 postgres/redis 不同不强制 runAsNonRoot；仅收 capabilities + seccomp。
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: seata
+          # 官方镜像不含 MySQL 驱动（db 模式 fail）；用本仓封装镜像（deploy/seata/Dockerfile
+          # 把 mysql-connector-j 放入 /seata-server/lib/jdbc/）。
+          # 生产：构建后推送到客户 registry 并改此字段。
+          image: nexuschain/seata-server:2.5.0-mysqldrv
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          ports:
+            - name: tc
+              containerPort: 8091
+            - name: console
+              containerPort: 7091
+          env:
+            - name: SEATA_PORT
+              value: "8091"
+            - name: STORE_MODE
+              value: db
+            - name: SEATA_STORE_DB_DRIVER_CLASS_NAME
+              value: com.mysql.cj.jdbc.Driver
+            - name: SEATA_STORE_DB_URL
+              value: "jdbc:mysql://mysql.nexus.svc.cluster.local:3306/seata?useUnicode=true&characterEncoding=utf-8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC"
+            - name: SEATA_STORE_DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: nexus-secrets
+                  key: NEX_DB_USERNAME
+            - name: SEATA_STORE_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: nexus-secrets
+                  key: NEX_DB_PASSWORD
+            # --- 生产可选：控制台经 Nacos 注册/配置（compose 口径）---
+            # - name: SEATA_REGISTRY_NAME
+            #   value: nacos
+            # - name: SEATA_REGISTRY_NACOS_SERVER_ADDR
+            #   value: nacos.nexus.svc.cluster.local:8848
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+          readinessProbe:
+            tcpSocket:
+              port: 8091
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 8091
+            initialDelaySeconds: 40
+            periodSeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: seata
+  namespace: nexus
+  labels:
+    app: seata
+spec:
+  selector:
+    app: seata
+  ports:
+    - name: tc
+      port: 8091
+      targetPort: 8091
+    - name: console
+      port: 7091
+      targetPort: 7091

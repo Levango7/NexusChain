@@ -78,7 +78,7 @@ spring:
   # === P3 审批持久化（optional-improvements 高#8）：数据库持久化 ===
   # 生产 MySQL；dev/test profile 由 application-dev.yml / application-test.yml 覆盖为 H2
   datasource:
-    url: ${NEX_DB_URL:jdbc:mysql://localhost:3306/nexus_signing?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=UTC}
+    url: ${NEX_DB_URL:jdbc:mysql://localhost:3306/nexus_signing?useUnicode=true&characterEncoding=utf-8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC}
     username: ${NEX_DB_USERNAME:root}
     password: ${NEX_DB_PASSWORD:}
     driver-class-name: ${NEX_DB_DRIVER:com.mysql.cj.jdbc.Driver}
@@ -98,6 +98,8 @@ spring:
     enabled: true
     locations: classpath:db/migration
     baseline-on-migrate: true
+    # L3 预演（缺陷 #16）：安装脚本预建 undo_log → 库非空，baseline 必须落 0
+    baseline-version: 0
 
 # === 链节点 RPC（从 exchange-wallet application.properties 迁移） ===
 # nodeNet 为 NodeController 使用的链节点 RPC 地址

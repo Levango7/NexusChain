@@ -32,9 +32,16 @@ data:
     #==========================================
 
     #---------- 服务器基础配置 ----------
-    # 服务端口（HTTP / REST API）
-    server.port=8848
-    # 上下文路径
+    # 2026-10-13 L3 预演修正（缺陷⑤）：Nacos 3.x 把「主服务」与「Console」拆成**两个
+    # Spring 上下文、两个端口**（v3 的 application.properties 里分别是
+    # nacos.server.main.port=${NACOS_APPLICATION_PORT:8848} 与
+    # nacos.console.port=${NACOS_CONSOLE_PORT:8080}）。
+    # 原配置写的是 Spring 通配的 server.port=8848 —— 它会让 **Console 上下文也去绑 8848**，
+    # 而主服务已经占了该端口 ⇒ `Port 8848 is already in use` 启动失败。
+    # 改为 v3 的专有属性：主服务 8848，Console 8080。
+    nacos.server.main.port=8848
+    nacos.console.port=8080
+    # 上下文路径（Console 侧）
     server.servlet.contextPath=/nacos
     # 关闭默认 Tomcat access log，使用 Nacos 内置日志
     server.tomcat.accesslog.enabled=false
@@ -42,8 +49,16 @@ data:
     #---------- 集群模式 ----------
     # 启用集群模式（true = HA，false = 单机）
     nacos.standalone=false
+    # 2026-10-13 L3 预演修正：显式声明成员发现走本地文件（cluster.conf）。
+    # 不声明时 Nacos 在找不到 cluster.conf 的场合会回落 address-server 模式，
+    # 去请求公网域名 jmenv.tbsite.net ⇒ UnknownHostException 直接启动失败。
+    nacos.core.member.lookup.type=file
     # 集群配置文件路径
-    nacos.member.list=/home/nacos/conf/cluster.conf
+    # 2026-10-13 L3 预演修正（缺陷③）：原值把**文件路径**赋给了 nacos.member.list ——
+    # 该属性语义是「成员地址列表」（address-server 模式的数据源），拿到路径后 Nacos
+    # 会按地址去 HTTP 拉取（AddressServerMemberLookup）→ 连接失败 → 启动中止。
+    # 集群成员列表由 docker-startup.sh 依据 NACOS_SERVERS 写入 cluster.conf（file 模式），
+    # 故本行直接删除。
 
     #---------- 外接 MySQL 数据源 ----------
     # 2026-10-12：PostgreSQL → MySQL（与全栈数据库族一致）。
@@ -109,13 +124,11 @@ data:
   # 域名格式：{pod-name}.{headless-service}.{namespace}.svc.cluster.local
   cluster.conf: |
     # Nacos HA 集群节点列表（3 节点 Raft）
-    # 注意：节点数必须为奇数（3/5/7），偶数会导致 Raft 选主不稳定
-    # 修改节点数需同步修改 nacos-ha-statefulset.yaml 的 replicas
-    192.168.0.1:9849
-    192.168.0.2:9849
-    192.168.0.3:9849
-    # 上述为占位 IP，实际部署时通过 initContainer 或 entrypoint 脚本
-    # 动态生成以下格式（基于 Headless Service 域名）：
-    # nacos-0.nacos-headless.nexus.svc.cluster.local:9849
-    # nacos-1.nacos-headless.nexus.svc.cluster.local:9849
-    # nacos-2.nacos-headless.nexus.svc.cluster.local:9849
+    # 2026-10-13 L3 预演修正（缺陷④）：原值写的是**占位 IP 192.168.0.x:9849**，
+    # 注释声称"部署时动态生成"但并无生成逻辑；节点地址实际是占位 ⇒ 集群永远组不起来。
+    # 现直接写真实地址（Headless Service 域名，端口用主端口 8848——官方 docker
+    # 集群模式口径；Pod 重建后 IP 变化不影响解析）。
+    # 注意：节点数必须为奇数（3/5/7），改节点数需同步 nacos-ha-statefulset.yaml 的 replicas。
+    nacos-0.nacos-headless.nexus.svc.cluster.local:8848
+    nacos-1.nacos-headless.nexus.svc.cluster.local:8848
+    nacos-2.nacos-headless.nexus.svc.cluster.local:8848
