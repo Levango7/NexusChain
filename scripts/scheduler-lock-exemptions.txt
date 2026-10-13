@@ -1,0 +1,11 @@
+# 调度锁豁免账（scripts/check-scheduler-lock.py 读取）
+# 格式：<相对路径>|<方法名>|<理由>   —— 理由必填，写清"为什么多副本重复执行是安全的 / 为什么加锁有害"
+# 只准缩不准涨：一旦某条对应的 @Scheduled 消失（改名/删除），必须同步删掉本行。
+#
+# ── 类 A：任务依赖**进程内状态**，加 @SchedulerLock 会把执行权交给没有该状态的副本（反而更坏）──
+#    正确修法是"把状态持久化到共享存储"，见 docs/plan/PLAN-gateway-scheduler-inmemory-state-persistence.md
+nexus-gateway/src/main/java/org/nexus/gateway/security/encryption/KeyRotationScheduler.java|checkKekRotationPeriod|依赖进程内 migrationProgressMap 决定"是否续跑迁移/是否需轮换"；加锁只是把执行权随机交给某副本，另两副本读不到进度 → 判断不一致。正确修法是进度表落库（见 PLAN-gateway-scheduler-inmemory-state-persistence）
+nexus-gateway/src/main/java/org/nexus/gateway/transaction/TransactionRecoveryScheduler.java|recoverTimeoutTransactions|恢复动作依赖进程内 actionRegistry/stepRegistry（TccTransactionManager:44 / SagaTransactionManager:59）；加锁锁不住内存态，还可能锁住恰好无 action 的副本 → 把"本可成功释放"的机会锁没了。正确修法是参与方描述符持久化（见同一 PLAN）
+#
+# ── 类 B：任务本身无副作用 / 逐条幂等，重复执行只产生相同结果（告警或幂等写）──
+nexus-gateway/src/main/java/org/nexus/gateway/voidreversal/AutoReversalScheduler.java|scanTimeoutOrders|重复执行无副作用：扫描判据是 PAYING，而冲正前置条件要求 PAID，两者互斥 ⇒ 每笔候选必被 ORDER_NOT_PAID 拒绝，链路在修复前根本不创建记录，只回吐同一条聚合告警（#98 可见性处置，见类注释）

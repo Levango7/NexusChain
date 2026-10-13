@@ -1,0 +1,21 @@
+# 调度锁历史债务账（scripts/check-scheduler-lock.py --update-baseline 生成）
+# 格式：<相对路径>|<方法名>
+# 这些是**记账前就存在的缺口**，不阻断构建，但只准缩不准涨：
+#   · 新写的 @Scheduled 不带锁 ⇒ 判红（这条门禁真正的作用面）
+#   · 给某条补了 @SchedulerLock ⇒ 必须删掉对应行，否则"STALE-BASE"判红
+#   · 复核后认定"重复执行本来就安全"的，从本账移到 scheduler-lock-exemptions.txt 并写理由
+nexus-bridge/src/main/java/org/nexus/bridge/safety/FundConservationChecker.java|checkConservation
+nexus-bridge/src/main/java/org/nexus/bridge/scheduler/DailyLimitAuditService.java|dailyReset
+nexus-gateway/src/main/java/org/nexus/gateway/alert/AlertEngine.java|checkAlerts
+nexus-gateway/src/main/java/org/nexus/gateway/alert/AlertEscalationService.java|checkEscalations
+nexus-gateway/src/main/java/org/nexus/gateway/compliance/ReconciliationJob.java|reconcile
+nexus-gateway/src/main/java/org/nexus/gateway/export/DataExportService.java|cleanupExpiredExports
+nexus-gateway/src/main/java/org/nexus/gateway/export/DataExportTaskRunner.java|scanPendingExports
+nexus-gateway/src/main/java/org/nexus/gateway/orchestration/service/ConnectorHealthMonitor.java|checkAllConnectors
+nexus-gateway/src/main/java/org/nexus/gateway/orchestration/settlement/ChainSettlementConfirmationService.java|scanPendingConfirmations
+nexus-gateway/src/main/java/org/nexus/gateway/risk/link/BalanceAlertScheduler.java|scheduledBalanceCheck
+nexus-gateway/src/main/java/org/nexus/gateway/risk/link/LargeTransactionTimeoutScheduler.java|checkTimeoutInterceptions
+nexus-gateway/src/main/java/org/nexus/gateway/security/threeds/ChallengeTimeoutScheduler.java|checkChallengeTimeout
+nexus-gateway/src/main/java/org/nexus/gateway/sla/SlaMonitorService.java|monitor
+nexus-signing-service/src/main/java/org/nexus/signing/approval/SigningApprovalService.java|cleanupExpiredRequests
+nexus-signing-service/src/main/java/org/nexus/signing/pool/PoolTask.java|task
