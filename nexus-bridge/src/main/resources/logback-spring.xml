@@ -18,6 +18,14 @@
     </springProfile>
 
     <springProfile name="prod">
+        <!-- L3 预演缺陷 #30：prod 此前**只有文件 appender**——K8s 下 kubectl logs
+             只剩启动 banner（错误全进 bridge.json），运维端到端不可观测、故障静默。
+             补 CONSOLE（文件 JSON 保留给 Loki/Promtail）。 -->
+        <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder>
+                <pattern>%d{HH:mm:ss.SSS} [%thread] [%X{traceId:-},%X{spanId:-}] %-5level %logger{36} - %msg%n</pattern>
+            </encoder>
+        </appender>
         <appender name="JSON_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
             <file>/var/log/nexus/bridge.json</file>
             <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
@@ -31,6 +39,7 @@
             </encoder>
         </appender>
         <root level="INFO">
+            <appender-ref ref="CONSOLE" />
             <appender-ref ref="JSON_FILE" />
         </root>
     </springProfile>

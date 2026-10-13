@@ -52,3 +52,20 @@ stringData:
   # ${NEX_API_KEYS} 无默认值，chart envFrom nexus-secrets 注入；缺失则启动即
   # PlaceholderResolutionException。逗号分隔）。
   NEX_API_KEYS: "CHANGE_ME_MERCHANT_API_KEYS_COMMA_SEPARATED"
+  # Nacos 客户端凭据（2026-10-13 L3 预演缺陷 #23：nacos.core.auth.enabled=true 后
+  # 应用注册/配置拉取必须带用户名密码——应用侧读 NEX_NACOS_USERNAME/NEX_NACOS_PASSWORD
+  # （见各服务 application.yml 的 spring.cloud.nacos.*.username/password）。
+  # 服务端用户初始化：Nacos 3.x 空用户表时用控制台/API `POST /nacos/v3/auth/user/admin`
+  # （返回自动生成的初始口令），再把口令填到这里。空值 = 401 User not found）。
+  NEX_NACOS_USERNAME: "CHANGE_ME_NACOS_CLIENT_USER"
+  NEX_NACOS_PASSWORD: "CHANGE_ME_NACOS_CLIENT_PASSWORD"
+  # API Gateway HMAC 签名密钥（2026-10-14 L3 复验缺陷：api-gateway 的
+  # ${NEX_HMAC_SECRET} 无默认值，缺失即启动失败——与 NEX_API_KEYS 同型）。
+  NEX_HMAC_SECRET: "CHANGE_ME_HMAC_SECRET"
+  # signing-service 的 MPC 密钥材料（2026-10-14 L3 复验缺陷：EncryptedFileKeyShareStore
+  # 启动即校验 NEXUS_MPC_KEK，HmacSigner 用 NEXUS_MPC_MAK；均为 base64 32 字节，
+  # 缺失 fail-closed 拒绝启动）。
+  NEXUS_MPC_KEK: "CHANGE_ME_BASE64_32BYTE_MPC_KEK"
+  NEXUS_MPC_MAK: "CHANGE_ME_BASE64_32BYTE_MPC_MAK"
+  # core 链节点 JWT（L3 复验缺陷 #37：JWTUtil 启动即校验，fail-closed）
+  NEXUS_JWT_APP_SECRET: "CHANGE_ME_BASE64_32BYTE_JWT_APP_SECRET"

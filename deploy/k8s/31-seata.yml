@@ -80,11 +80,14 @@ spec:
             #   value: nacos.nexus.svc.cluster.local:8848
           resources:
             requests:
-              memory: "256Mi"
+              memory: "512Mi"
               cpu: "250m"
             limits:
-              memory: "1Gi"
-              cpu: "1000m"
+              # L3 预演复验缺陷 #41：官方镜像启动脚本把堆固定为 -Xmx2048m/-Xms2048m
+              # （JVM 参数在镜像内、本清单管不到），1Gi 限额下必然 OOMKilled
+              # （实测 47 次重启、exit 137）→ 限额抬到 3Gi 容纳默认堆。
+              memory: "3Gi"
+              cpu: "2000m"
           readinessProbe:
             tcpSocket:
               port: 8091

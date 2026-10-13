@@ -1,0 +1,45 @@
+# ============================================================================
+# nexus-bridge 生产 profile（L3 预演缺陷 #27 新增）
+# ============================================================================
+# 背景：bridge 此前**没有** prod profile，K8s/compose 生产都以 base
+# application.yml（dev 口径）启动，其中 datasource 强制
+#   ssl: true / requireSSL: true / verifyServerCertificate: true /
+#   trustCertificateKeyStoreUrl=classpath:keystore/mysql-truststore.jks
+# 而**镜像内根本没有该 keystore 资源** → Hikari 建连即失败，应用静默退出
+# （错误只进 logback 文件 appender，stdout 只剩 Sentinel 初始化日志）。
+#
+# 本 profile 与 gateway/wallet 的 prod 口径对齐：URL/凭据走环境变量、
+# 非 TLS（useSSL=false + allowPublicKeyRetrieval，MySQL 8 caching_sha2 必需）。
+#
+# 注意：bridge 的 schema 仍由 Hibernate ddl-auto=update 维护（无 Flyway 依赖，
+# resources/db/migration/V0..V4 是**未接线**的历史文件）——迁移到 Flyway 管理
+# 见 L3 预演缺陷 #22 记录，属独立批次（需先核对 V0..V4 与实体差异）。
+# ============================================================================
+spring:
+  datasource:
+    url: ${NEX_DB_URL:jdbc:mysql://mysql:3306/nexus_bridge?useUnicode=true&characterEncoding=utf-8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC}
+    username: ${NEX_DB_USERNAME:nexus_bridge}
+    password: ${NEX_DB_PASSWORD:${DB_PASSWORD}}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      # 生产不开 TLS keystore（镜像内无该资源；如需链路 TLS，注入真实
+      # keystore 后在此加回 data-source-properties.ssl 等，或改用 sslMode=REQUIRED）
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    open-in-view: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQLDialect
+
+# 服务间 Feign 的 mTLS：生产按需开启（默认关闭以免缺 keystore 时调用链报错；
+# 开启前先注入 feign-keystore.jks / feign-truststore.jks）
+feign:
+  tls:
+    enabled: ${FEIGN_TLS_ENABLED:false}

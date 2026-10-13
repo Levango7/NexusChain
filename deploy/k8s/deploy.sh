@@ -14,13 +14,23 @@ echo "Applying manifests in order..."
 kubectl apply -f "$DIR/00-namespace-config.yml"
 echo "[1/12] Namespace + ConfigMap + Secret"
 
-# 2. Create genesis ConfigMap from JSON files
-kubectl create configmap nexus-genesis \
-  --from-file=nexus-genesis-generator.json="$DIR/genesis.json" \
-  --from-file=validators.json="$DIR/validators.json" \
-  --namespace=nexus \
-  --dry-run=client -o yaml | kubectl apply -f -
-echo "[2/12] Genesis ConfigMap"
+# 2. genesis ConfigMap —— L3 预演缺陷 #28：改为**可选**。
+#    core 缺省用镜像内置 classpath genesis（schema 以
+#    nexus-core/src/main/resources/genesis/NexusChain-genesis-generator.json 为准）。
+#    $DIR/genesis.json / validators.json 是旧占位且 schema 与 core 不符，不能再直接建 ConfigMap。
+#    自定义链参数：把裁剪后的两个文件放 $DIR/custom-genesis/ 下（键名须为
+#    nexus-genesis-generator.json / validators.json），本步骤自动建 ConfigMap；
+#    并需在 20-core-statefulset.yml 按其中注释加回 GENESIS_FILE/VALIDATORS env 与 /genesis 卷。
+if [ -d "$DIR/custom-genesis" ]; then
+  kubectl create configmap nexus-genesis \
+    --from-file=nexus-genesis-generator.json="$DIR/custom-genesis/nexus-genesis-generator.json" \
+    --from-file=validators.json="$DIR/custom-genesis/validators.json" \
+    --namespace=nexus \
+    --dry-run=client -o yaml | kubectl apply -f -
+  echo "[2/12] Genesis ConfigMap（自定义，来自 $DIR/custom-genesis/）"
+else
+  echo "[2/12] Genesis ConfigMap 跳过（使用 core 镜像内置 genesis；自定义见 05-core-genesis.yml.example）"
+fi
 
 # 3. Infrastructure (MySQL + Redis)
 kubectl apply -f "$DIR/30-infrastructure.yml"

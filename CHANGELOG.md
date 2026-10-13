@@ -2,6 +2,82 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [2.74.0] - 2026-10-14
+
+### L3 复验（v2.73.0 发布镜像实装）——22 项遗留缺陷修复，**全栈 24/24 Pod Ready**
+
+**背景**：用 v2.73.0 发布镜像（GHCR 直拉在本机被 blob 阻塞，经 NJU GHCR 镜像站取得**真发布产物**）
+在 kind L3 集群复验完整安装路径。第一轮（v2.73.0）修掉 23 项后，实装又逐层剥出 22 项缺陷——
+多数是同一族病根：**Spring Boot 4 模块拆分**、"没人真装过"、**实体↔schema 长期漂移被
+"Flyway 静默不执行"掩盖**。复验完成态：**基础设施 7/7 + 应用 17/17 全部 Ready**，
+网关 Flyway 台账到 **V102**，制裁名单端点在线（匿名 401 = 路由与鉴权均在）。
+
+**凭据/密钥注入（同族：chart 只给地址不给凭据）**
+- **#23 Nacos 3.x 客户端凭据**：服务端用户表为空（`POST /nacos/v3/auth/user/admin` 初始化，
+  返回自动生成口令）+ `nexus-secrets` 注入 NEX_NACOS_USERNAME/PASSWORD；
+  **api-gateway 的 bootstrap.yml 根本没读这两行**（gateway/wallet 早有）→ 补。
+- **#29 signing 的 MPC 密钥材料**：`EncryptedFileKeyShareStore` 启动即校验
+  `NEXUS_MPC_KEK`（fail-closed）、`HmacSigner` 用 `NEXUS_MPC_MAK` → nexus-secrets 注入。
+- **#37 core 的 JWTUtil**：启动校验 `nexus.security.jwt.app-id/app-secret` → 注入。
+- **master/webhook 占位符**：`NEX_MASTER_KEY` 等留 `CHANGE_ME` 时 `VaultKeyManager`
+  报 `Illegal base64 character 5f`——安装文档已明示，L3 补真实值。
+
+**Boot 4 模块拆分（第二例、第三例）**
+- **#34 tracing 自动配置拆到 `spring-boot-zipkin`**：bridge 无 Tracer bean（BridgeServiceImpl
+  构造器注入失败）；gateway 注释早写了"生产引 starter"却**从未兑现**。落地方案=自定义
+  `productionRuntimeOnly` 只并入 bootJar 类路径（避开测试 @MockitoBean 冲突）。
+  **坑中坑：`classpath = configurations.runtimeClasspath + …` 会让 bootJar 丢掉应用类
+  （出空 BOOT-INF/classes、启动即 ClassNotFoundException）→ 必须用
+  `sourceSets.main.runtimeClasspath`；且 configurations 声明必须在 dependencies 之前。**
+- **#36 bridge 缺 `sentinel-datasource-nacos`**：yml 配了 nacos 数据源但 starter 不含连接器
+  → 启动 NoClassDefFoundError（wallet/signing 早有该依赖）。
+
+**配置/交付缺口（K8s 参考交付不含外部件 → 应用硬默认把它们当必需）**
+- **#32 core coinbase 占位句**：`miner.coinbase` 默认值 "your coin base address" 在
+  `ENABLE_MINING=true` 下被当 base58 解析 → 补 NEX_MINER_COINBASE（chart 模板**显式**列 env，
+  values 里的新键不会自动渲染——#32 的第二个坑）。
+- **#43 事件溯源/死信队列默认 Kafka**（matchIfMissing=true）而交付无 Kafka →
+  网关起不来；dev/sandbox 早有 `store: memory` 开关，prod 漏了 → chart 默认 memory
+  （接 Kafka 的部署改回）。
+- **#33 bridge chart `dependencies.seata: false`**：应用 yml 硬编码 `seata.enabled: true`
+  → 回落 localhost:8091 启动失败 → 改 true。
+- **#44 Sentinel 健康指示器**：dashboard 不在交付中 → /actuator/health 503 → 探针杀 Pod
+  反复重启（同批两个副本一稳一抖）→ `MANAGEMENT_HEALTH_SENTINEL_ENABLED=false`。
+- **#35 core LevelDB 路径**：`nexus.cache-dir` 缺省 `./leveldb`（WORKDIR=/app 不可写，
+  FileNotFound: /app/leveldb/LOCK）→ CACHE_DIR=/data/leveldb（挂 PVC）。
+- **#42 gateway 的 ./logs**：logback（共享 logback.xml）FILE appender 写相对路径 +
+  AsyncAppender 包裹 → **致命错误随进程退出丢失**（日志在 Flyway 后静默截断，
+  误导排查方向）→ chart 挂 /app/logs。
+- **#40 Seata store 表不自动建**（compose 注释誤称 auto-DDL）：`distributed_lock`
+  等 5 表缺失 → 官方 `script/server/db/mysql.sql` 建表（L3 已应用；纳入安装脚本属后续）。
+- **#41 Seata OOMKilled**：镜像启动脚本固定 `-Xmx2048m`，清单限 1Gi → 47 次重启
+  exit 137 → 限额抬 3Gi。
+
+**实体↔schema 漂移（缺陷 #20 修复后的连锁暴露，以集群真实 schema 全量对账收口）**
+- **#26 `clearing_settlement_records` 缺 `version` 列**（实体有 @Version）→ V99。
+- **#31 缺表**：`currency_wallets`（V100）、`exchange_rates`（V101）——对账确认这是
+  网关扫描面内最后两张（另两处疑似属 nexus-oracle 自有库/非 JPA 实体）。
+- **#38 全量对账收口（V102）**：`merchants.fee_basis_points`、`transaction_logs.error_message/version`
+  从未有迁移；`webhook_subscriptions` 8 列 **camelCase**（V33 建表时未随命名策略）→
+  RENAME 为 snake_case；`webhook_deliveries.deliveryId` 改实体映射 `@Column(name="id")`（不动表）。
+
+**其余**
+- **#28 genesis 内容与 core schema 不符**：deploy.sh/chart 均指向的
+  `deploy/k8s/genesis.json`（chainId 字符串/paymentExtensions）**不是** core 的模型
+  （config{chainId(int),Block}/alloc{...}；validators 是 URL 数组）；内置模板 6.3 万行
+  超 ConfigMap 1MiB 上限 → 两路径统一改为**可选挂载、缺省用镜像内置 classpath genesis**，
+  新增 `05-core-genesis.yml.example` 说明正确 schema 与自定义流程。
+- **#30 bridge prod 只有文件 appender**：K8s 下 kubectl logs 只剩 banner → 补 CONSOLE。
+- **#39 bridge actuator 被 Security 拦成 403**：探针恒失败、容器反复 SIGTERM
+  （Running 永不 Ready）→ permitAll health/info/prometheus。
+- **#24/#27/#25 及安装脚本系列**（core 日志卷 / bridge prod profile / per-chart image.tag
+  才是被读的键 / genesis 可选化）同批落地。
+
+**验证口径（诚实）**：24/24 Ready 为现场实测（含 4 验证人 core 与 3 MPC 引擎）；
+Flyway 台账 V1..V102 全 success；制裁名单端点 401（未带 JWT 的匿名探测）。
+GHCR 直拉在本机被 blob 阻塞 → 应用镜像取自 NJU GHCR 镜像站（同一 digest 的真发布产物）；
+gateway/bridge 为含本批修复的本机构建（tag 后缀 -l3），**下一版发布链给出正式镜像后应复验一次**。
+
 ## [2.73.0] - 2026-10-13
 
 ### L3 安装预演（kind 4 节点 + helm 全栈）——23 项安装/启动缺陷修复

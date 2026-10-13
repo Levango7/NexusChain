@@ -23,6 +23,20 @@ java {
 
 sourceCompatibility = 17
 
+// === 生产专用运行时依赖（L3 复验缺陷 #34） ===
+// tracing 自动配置在 Boot 4 拆到 spring-boot-zipkin；生产需要真实 Tracer bean
+// （dev 由 NoopTracerConfig 兜底），但 starter 进 runtimeClasspath 会与测试
+// 的 @MockitoBean 冲突。自定义 productionRuntimeOnly 只并入 bootJar 类路径。
+// 注意：必须用 sourceSets.main.runtimeClasspath（含本项目 classes 输出）——
+// 直接用 configurations.runtimeClasspath 会丢掉应用类（实测 bootJar 出空 classes）。
+configurations {
+    productionRuntimeOnly
+}
+
+tasks.named('bootJar') {
+    classpath = sourceSets.main.runtimeClasspath + configurations.productionRuntimeOnly
+}
+
 repositories {
     // SCA / Nacos / Sentinel 制品优先走阿里云镜像（与 signing-service build.gradle 对齐）
     maven { url 'https://maven.aliyun.com/nexus/content/groups/public/' }
@@ -77,10 +91,14 @@ dependencies {
     // W3C traceparent 格式跨服务传播，Zipkin 上报，Feign 自动埋点
     // 注：Spring Boot 4.0 将 tracing autoconfig 移到 spring-boot-zipkin 模块，
     // 但引入 spring-boot-starter-zipkin 会破坏单元测试（@MockitoBean 冲突）。
-    // dev/DAST 环境通过 NoopTracerConfig 提供 Tracer bean；生产环境引入完整 zipkin starter。
+    // dev/DAST 环境通过 NoopTracerConfig 提供 Tracer bean；
+    // L3 复验缺陷 #34 落地：生产用 productionRuntimeOnly 引 starter（只进 bootJar，
+    // 不进测试类路径——原注释"生产环境引入完整 zipkin starter"此前**从未兑现**，
+    // 生产 profile 同样缺 Tracer bean）。
     implementation 'io.micrometer:micrometer-tracing-bridge-brave'
     implementation 'io.zipkin.reporter2:zipkin-reporter-brave'
     implementation 'io.github.openfeign:feign-micrometer'
+    productionRuntimeOnly 'org.springframework.boot:spring-boot-starter-zipkin'
 
     // Resilience4j（保留：管理对链节点直接 HTTP 调用的熔断/重试，与 Sentinel 共存。
     // Sentinel 管理对 signing/wallet-service 的 Feign 调用。Phase 1 任务 #55 不删除。）

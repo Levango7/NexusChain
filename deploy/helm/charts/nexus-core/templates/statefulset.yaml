@@ -35,6 +35,7 @@ spec:
         fsGroup: 1000
         seccompProfile:
           type: RuntimeDefault
+      {{- if .Values.genesisConfigMap }}
       initContainers:
         # 初始化容器需拷贝 genesis；仅做文件复制，收紧提权与 capabilities
         - name: init-genesis
@@ -52,6 +53,7 @@ spec:
               mountPath: /genesis
             - name: core-data
               mountPath: /data
+      {{- end }}
       containers:
         - name: core
           image: {{ .Values.image.repository | default (printf "%s/%s" .Values.global.imageRegistry .Chart.Name) }}:{{ .Values.image.tag | default .Values.global.env | default "latest" }}
@@ -90,19 +92,47 @@ spec:
               value: {{ .Values.env.P2P_MODE | quote }}
             - name: ENABLE_MINING
               value: {{ .Values.env.ENABLE_MINING | quote }}
+            # L3 复验缺陷 #32：ENABLE_MINING=true 时 ConsensusConfig 解析 coinbase
+            # （base58）；application.properties 默认值是占位句 → 解析失败 core 起不来。
+            - name: NEX_MINER_COINBASE
+              value: {{ .Values.env.NEX_MINER_COINBASE | default "19JNq2jAprkxVrpkgBiRaa1m47WcUMXtCb" | quote }}
             - name: ENABLE_DISCOVERY
               value: {{ .Values.env.ENABLE_DISCOVERY | quote }}
             - name: BOOTSTRAPS
               value: {{ include "nexus-core.bootstraps" . | quote }}
+            # L3 复验缺陷 #35：Leveldb 用 nexus.cache-dir（默认 ./leveldb → WORKDIR /app，
+            # 非 root 不可写 → FileNotFoundException: /app/leveldb/LOCK）。指向 PVC 子目录。
+            - name: CACHE_DIR
+              value: "/data/leveldb"
+            # L3 复验缺陷 #37：core 的 JWTUtil 启动即校验 nexus.security.jwt.app-id
+            # 与 app-secret（fail-closed）。app-id 走普通 env，app-secret 走 nexus-secrets。
+            - name: NEXUS_JWT_APP_ID
+              value: "nexus-core"
+            - name: NEXUS_JWT_APP_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingSecret }}
+                  key: NEXUS_JWT_APP_SECRET
+            {{- if .Values.genesisConfigMap }}
+            # 仅在提供自定义 genesis ConfigMap 时覆盖；否则用镜像内置 classpath
+            # genesis（缺陷 #28：旧口径无条件指向 /data/*，ConfigMap 缺失即 genesis
+            # bean 为 null、core 起不来）
             - name: GENESIS_FILE
               value: "/data/nexus-genesis-generator.json"
             - name: VALIDATORS
               value: "/data/validators.json"
+            {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
             - name: core-data
               mountPath: /data
+            # L3 预演（缺陷 #24）：logback 的 FILE appender 写相对路径 ./logs/nexuscore.log
+            # （WORKDIR=/app），而镜像内 /app 由 root 拥有且非 root 运行 → 无法建目录，
+            # logback 配置即失败（IllegalStateException: Failed to create parent directories）。
+            # 挂 emptyDir；pod fsGroup=1000 保证可写。
+            - name: logs
+              mountPath: /app/logs
           livenessProbe:
             httpGet:
               path: /height
@@ -116,9 +146,14 @@ spec:
             initialDelaySeconds: {{ .Values.readinessProbe.initialDelaySeconds }}
             periodSeconds: {{ .Values.readinessProbe.periodSeconds }}
       volumes:
+        {{- if .Values.genesisConfigMap }}
         - name: genesis-config
           configMap:
             name: {{ .Values.genesisConfigMap }}
+        {{- end }}
+        # L3 预演缺陷 #24（见容器 volumeMounts 注释）
+        - name: logs
+          emptyDir: {}
   volumeClaimTemplates:
     - metadata:
         name: core-data

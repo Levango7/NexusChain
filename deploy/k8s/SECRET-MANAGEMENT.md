@@ -56,6 +56,11 @@ kubectl apply -f /tmp/nexus-secrets.yml && rm /tmp/nexus-secrets.yml
 | `NEX_DB_PASSWORD` | MySQL 密码（同时作为内置 MySQL StatefulSet 的 root 口令） | 强随机密码，定期轮换 |
 | `NEX_MASTER_KEY` | 主密钥（AES-256） | **必须 32 字节 BASE64**，用于钱包密钥加密 |
 | `NEX_WEBHOOK_SECRET` | Webhook 回调签名密钥 | 网关与商户共享，强随机字符串 |
+| `NACOS_AUTH_TOKEN` | Nacos 3.x 服务端 token 签名密钥（Base64） | **Base64 字符串**；`nacos-ha-statefulset` 启动脚本强制校验非空 |
+| `NACOS_AUTH_IDENTITY_KEY` / `NACOS_AUTH_IDENTITY_VALUE` | Nacos 服务端 identity（服务器间鉴权） | 强随机，三键缺一启动脚本 exit 255 |
+| `NEX_NACOS_USERNAME` / `NEX_NACOS_PASSWORD` | **Nacos 客户端**凭据（应用注册/配置拉取） | L3 预演缺陷 #23：`nacos.core.auth.enabled=true` 后必填，否则应用 401 `User not found` 起不来。服务端用户初始化：空用户表时 `POST /nacos/v3/auth/user/admin`（控制台 API，返回自动生成口令）后填入 |
+| `SPRING_DATA_REDIS_PASSWORD` | Redis requirepass（业务 Pod 经 envFrom 自动获得） | 强随机；须与 `30-infrastructure.yml` 的 Redis 一致 |
+| `NEX_API_KEYS` | API Gateway 商户 API Key 白名单 | 逗号分隔；缺失则 api-gateway 启动即 `PlaceholderResolutionException`（缺陷 #18） |
 
 ## 检查清单
 

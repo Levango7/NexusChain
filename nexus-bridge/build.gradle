@@ -23,6 +23,14 @@ plugins {
     id 'java'
 }
 
+// === 生产专用运行时依赖配置（L3 复验缺陷 #34） ===
+// 声明必须在 dependencies {} **之前**（Gradle 按脚本顺序解析 DSL）。
+// Boot 4 把 tracing 自动配置拆到 spring-boot-zipkin 模块，生产需要真实 Tracer bean；
+// starter 直接进 runtimeClasspath 会与测试的 @MockitoBean 冲突（gateway 注释实测）。
+configurations {
+    productionRuntimeOnly
+}
+
 // CVE-2026-65182（CRITICAL 安全约束绕过）/ CVE-2026-65905（HIGH DIGEST 重放）
 // / CVE-2026-68525（HIGH FORM 认证绕过）：tomcat-embed-core 11.0.24 修复于
 // 11.0.25。ext['tomcat.version'] 是 io.spring.dependency-management 插件的
@@ -77,11 +85,16 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-security'
 
     // === Micrometer Tracing + Zipkin（Phase 3 任务 #61，设计文档 §4.3.1） ===
-    // SpringBoot 3.2.5 BOM 管理版本（micrometer-tracing 1.2.5 + zipkin-reporter-brave 2.16.4）
+    // SpringBoot 4.0.8 BOM 管理版本（micrometer-tracing 1.6.7 + zipkin-reporter-brave 3.5.3）
     // W3C traceparent 格式跨服务传播，Zipkin 上报，Feign 自动埋点
     implementation 'io.micrometer:micrometer-tracing-bridge-brave'
     implementation 'io.zipkin.reporter2:zipkin-reporter-brave'
     implementation 'io.github.openfeign:feign-micrometer'
+    // L3 复验缺陷 #34：Boot 4 把 tracing 自动配置拆到 spring-boot-zipkin 模块，
+    // 只引上述三件时**生产缺 Tracer bean**（BridgeServiceImpl 构造器注入失败，
+    // 现象与 gateway 注释同源）。starter 走 productionRuntimeOnly：只进生产 bootJar，
+    // 不进测试运行时类路径 → 不与 @MockitoBean 冲突（gateway 的实测结论）。
+    productionRuntimeOnly 'org.springframework.boot:spring-boot-starter-zipkin'
 
     // Web3j: 用于与 EVM 兼容链（Ethereum / BSC / Polygon）进行 JSON-RPC 交互
     // 排除 jc-kzg-4844（EIP-4844 blob 交易支持），桥合约调用不需要且该依赖在
@@ -111,6 +124,11 @@ dependencies {
 
     // === Sentinel 熔断 / 限流 ===
     implementation 'com.alibaba.cloud:spring-cloud-starter-alibaba-sentinel'
+    // L3 复验缺陷 #36：application.yml 配了 sentinel 的 nacos 数据源
+    // （spring.cloud.sentinel.datasource.ds1.nacos），但 starter 不含该连接器
+    // → 启动即 NoClassDefFoundError: com.alibaba.csp.sentinel.datasource.nacos.NacosDataSource
+    // （wallet/signing 早已有本依赖，bridge 漏配）。
+    implementation 'com.alibaba.csp:sentinel-datasource-nacos'
 
     // === Seata 分布式事务（Phase 3 任务 #61） ===
     // SCA 2023.0.1.0 BOM 管理 seata-spring-boot-starter 版本（2.0.0），设计文档 §4.1 / §4.2.2
@@ -157,6 +175,14 @@ jar {
 
 test {
     useJUnitPlatform()
+}
+
+// === 生产专用运行时依赖（L3 复验缺陷 #34） ===
+// 自定义 productionRuntimeOnly：只并入 bootJar 类路径，不进测试运行时类路径。
+// 注意：必须用 sourceSets.main.runtimeClasspath（含本项目 classes 输出）——
+// 直接用 configurations.runtimeClasspath 会丢掉应用类（实测 bootJar 出空 classes）。
+tasks.named('bootJar') {
+    classpath = sourceSets.main.runtimeClasspath + configurations.productionRuntimeOnly
 }
 
 // === 覆盖率门禁 ===

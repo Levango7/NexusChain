@@ -36,7 +36,9 @@ import java.time.Instant;
 public class WebhookDeliveryRecord {
 
     @Id
-    @Column(length = 64)
+    // L3 复验缺陷 #38：V8 建表主键列名为 `id`（VARCHAR(64)），而字段名 deliveryId
+    // 按命名策略会推断成 delivery_id → validate 恒判缺列。显式映射到现有列名。
+    @Column(name = "id", length = 64)
     private String deliveryId;
 
     @Column(nullable = false, length = 64)

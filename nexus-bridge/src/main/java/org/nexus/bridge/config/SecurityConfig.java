@@ -37,6 +37,14 @@ public class SecurityConfig {
         http
             .csrf(csrf -> csrf.disable())
             .authorizeHttpRequests(auth -> auth
+                // L3 复验缺陷 #39：actuator 探针端点必须放行——此前 anyRequest().authenticated()
+                // 使 /actuator/health 恒 403，K8s liveness/readiness 永远失败，
+                // 容器被反复 SIGTERM（Running 但永不 Ready）。与 wallet/SecurityConfig 同口径。
+                .requestMatchers(
+                        "/actuator/health",
+                        "/actuator/health/**",
+                        "/actuator/info",
+                        "/actuator/prometheus").permitAll()
                 .requestMatchers(HttpMethod.GET,
                         "/api/v1/bridge/status",
                         "/api/v1/bridge/tx",
