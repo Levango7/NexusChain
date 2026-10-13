@@ -4,18 +4,11 @@
 #   · 新写的 @Scheduled 不带锁 ⇒ 判红（这条门禁真正的作用面）
 #   · 给某条补了 @SchedulerLock ⇒ 必须删掉对应行，否则"STALE-BASE"判红
 #   · 复核后认定"重复执行本来就安全"的，从本账移到 scheduler-lock-exemptions.txt 并写理由
-nexus-bridge/src/main/java/org/nexus/bridge/safety/FundConservationChecker.java|checkConservation
-nexus-bridge/src/main/java/org/nexus/bridge/scheduler/DailyLimitAuditService.java|dailyReset
-nexus-gateway/src/main/java/org/nexus/gateway/alert/AlertEngine.java|checkAlerts
-nexus-gateway/src/main/java/org/nexus/gateway/alert/AlertEscalationService.java|checkEscalations
-nexus-gateway/src/main/java/org/nexus/gateway/compliance/ReconciliationJob.java|reconcile
-nexus-gateway/src/main/java/org/nexus/gateway/export/DataExportService.java|cleanupExpiredExports
-nexus-gateway/src/main/java/org/nexus/gateway/export/DataExportTaskRunner.java|scanPendingExports
-nexus-gateway/src/main/java/org/nexus/gateway/orchestration/service/ConnectorHealthMonitor.java|checkAllConnectors
-nexus-gateway/src/main/java/org/nexus/gateway/orchestration/settlement/ChainSettlementConfirmationService.java|scanPendingConfirmations
-nexus-gateway/src/main/java/org/nexus/gateway/risk/link/BalanceAlertScheduler.java|scheduledBalanceCheck
-nexus-gateway/src/main/java/org/nexus/gateway/risk/link/LargeTransactionTimeoutScheduler.java|checkTimeoutInterceptions
-nexus-gateway/src/main/java/org/nexus/gateway/security/threeds/ChallengeTimeoutScheduler.java|checkChallengeTimeout
-nexus-gateway/src/main/java/org/nexus/gateway/sla/SlaMonitorService.java|monitor
-nexus-signing-service/src/main/java/org/nexus/signing/approval/SigningApprovalService.java|cleanupExpiredRequests
-nexus-signing-service/src/main/java/org/nexus/signing/pool/PoolTask.java|task
+#
+# 2026-10-13 清空：#103 门禁落主干后，15 条历史缺口逐条下钻严重性——
+#   · 4 条真多副本有害的（AlertEngine.checkAlerts / AlertEscalationService.checkEscalations /
+#     ChainSettlementConfirmationService.scanPendingConfirmations / FundConservationChecker.checkConservation）
+#     补 @SchedulerLock；
+#   · 11 条经复核要么"重复执行只回吐同一终值 / 只写日志 / 通知渠道仍是占位"，要么"加锁反而坏
+#     （依赖进程内状态，锁会把执行权交给没有该状态的副本）"——全部移入豁免账并写理由。
+# 本账现为空。**新写的 @Scheduled 不带锁 ⇒ 判红**这条真正的作用面从此接管。
