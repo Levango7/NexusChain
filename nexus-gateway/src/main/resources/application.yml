@@ -371,6 +371,12 @@ nexus:
     # 周期扣款调度 cron（Spring 6 六字段格式：秒 分 时 日 月 周）
     # 默认每小时整点扫描到期订阅
     billing-cycle-cron: "0 0 * * * *"
+    # 单次扫描的最大订阅数（2026-10-13；0 = 不限流）。超出即截断 + 打 WARN，剩余顺延下一轮。
+    # 注意这是**粗护栏不是保证**：单条扣款最坏耗时 = failover 连接器数 × read-timeout，
+    # 按 45s/条估，200 条 ≈ 150 分钟，早已超过 @SchedulerLock 的 lockAtMostFor=PT30M。
+    # 真正该盯的是扫描耗时（超过 20 分钟会打 WARN "approaching lock expiry"）；
+    # 若常态逼近，请调低本值（如 ≤25）或改并发/批量，而不是相信这个默认值封住了顶。
+    billing-sweep-batch-limit: 200
     # Dunning 策略：扣款失败时的重试/通知/暂停策略
     dunning:
       # 最大重试次数（达到后通知商户，但仍继续重试直到 suspend-after）
