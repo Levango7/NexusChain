@@ -1,5 +1,6 @@
 package org.nexus.gateway.escrow;
 
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -17,8 +18,23 @@ import java.util.List;
  *   <li>预授权超时：AUTHORIZED 状态超过 autoReleaseDays → 自动释放（voidPreAuth）</li>
  * </ul>
  *
- * <p>通过状态校验保证幂等：只有 FUNDED/AUTHORIZED 状态才会被处理，
- * 已变更状态的交易会被跳过。</p>
+ * <p><b>多副本防护</b>：prod 是 {@code nexus-gateway.replicaCount: 3}
+ * （values-prod.yaml:20-21），两个扫描方法都挂了 {@code @SchedulerLock}，
+ * 同一 tick 只有一个副本执行。<b>注意这条防线不是"状态校验"</b>：
+ * {@code confirmEscrow}/{@code voidPreAuth} 里的状态判断是 check-then-act，
+ * 扫描层也不去重（同一笔连跑两次就会被尝试两次）。</p>
+ *
+ * <p><b>已知的第二道防线与它的代价</b>：实体上的 {@code @Version} 乐观锁
+ * （{@code EscrowTransaction}、{@code PreAuthTransaction}）会在两个副本真并发时
+ * 让抢输的一方整体回滚（动账与状态写回同事务），所以资金不会双付；
+ * 代价是白跑一遍 + 乐观锁冲突 + 重复的状态变更事件尝试。
+ * 这两处由 {@code EscrowTimeoutSchedulerLockTest} 钉住：
+ * 若哪天摘掉 {@code @Version}，缺锁会立刻升级成真实资金事故，那条用例会先转红。</p>
+ *
+ * <p>锁的边界（诚实说明）：{@code lockAtMostFor=PT10M} 是"副本崩溃后锁自动释放"的上界，
+ * 不是"扫描必须在 10 分钟内跑完"的保证。若单次超时的担保/预授权笔数多到超过 10 分钟，
+ * 锁过期后第二个副本仍可进入 —— 此时只剩 {@code @Version} 兜底。
+ * 与 #93 里订阅扫描同一类问题，彻底封死需要在扫描层做原子认领。</p>
  */
 @Component
 public class EscrowTimeoutScheduler {
@@ -52,6 +68,7 @@ public class EscrowTimeoutScheduler {
      * 自动调用 confirmEscrow() 确认收货并释放资金给商户。</p>
      */
     @Scheduled(fixedDelay = 300000) // 5 分钟
+    @SchedulerLock(name = "escrowAutoConfirm", lockAtMostFor = "PT10M", lockAtLeastFor = "PT1M")
     public void autoConfirmEscrow() {
         // M-5-fix: 改用 Repository 超时查询方法，避免加载所有 FUNDED 记录到内存
         LocalDateTime cutoff = LocalDateTime.now().minusDays(DEFAULT_AUTO_CONFIRM_DAYS);
@@ -82,6 +99,7 @@ public class EscrowTimeoutScheduler {
      * 自动调用 voidPreAuth() 释放冻结金额。</p>
      */
     @Scheduled(fixedDelay = 300000) // 5 分钟
+    @SchedulerLock(name = "preAuthAutoRelease", lockAtMostFor = "PT10M", lockAtLeastFor = "PT1M")
     public void autoReleasePreAuth() {
         // M-5-fix: 改用 Repository 超时查询方法，避免加载所有 AUTHORIZED 记录到内存
         LocalDateTime cutoff = LocalDateTime.now().minusDays(DEFAULT_AUTO_RELEASE_DAYS);
