@@ -73,6 +73,17 @@
 - **#24/#27/#25 及安装脚本系列**（core 日志卷 / bridge prod profile / per-chart image.tag
   才是被读的键 / genesis 可选化）同批落地。
 
+**网关健康聚合抖动（复验收尾三连，24/24 零重启稳定后补记）**
+- **#45 chainNode 健康指示器恒探 localhost:19585**（chart/manifest 都没注入链节点地址；
+  dev compose 早有 NEX_CHAIN_RPC_URL）→ /actuator/health 503 → liveness 反复杀 Pod
+  （两副本交替重启的"抖动"真因）。
+- **#46 键名一字之差**：manifest 的 ConfigMap 写 `NEXUS_CHAIN_RPC_URL`，应用读
+  `${NEX_CHAIN_RPC_URL:...}` → 恒回落 localhost；**chart 模板还有 `toString` 先于
+  `default` 的坑**（`toString nil` = 非空 "<nil>"，渲染出 `http://nexus-core:<nil>`）。
+- **#47 signingServiceHealth 探针 403**：探针打 `/api/v1/transfers/capability`
+  （`hasRole('READ')`），网关服务令牌默认只有 SIGNING_SERVICE → 健康聚合恒 DOWN →
+  与 #45 叠加成抖动；服务令牌补 READ 角色（JWT_SERVICE_ROLES=SIGNING_SERVICE,READ）。
+
 **验证口径（诚实）**：24/24 Ready 为现场实测（含 4 验证人 core 与 3 MPC 引擎）；
 Flyway 台账 V1..V102 全 success；制裁名单端点 401（未带 JWT 的匿名探测）。
 GHCR 直拉在本机被 blob 阻塞 → 应用镜像取自 NJU GHCR 镜像站（同一 digest 的真发布产物）；
