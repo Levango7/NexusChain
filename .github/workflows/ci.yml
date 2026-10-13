@@ -88,6 +88,20 @@ jobs:
       - name: 版本口径一致性检查（build.gradle / version.properties / README）
         run: bash scripts/check-version-consistency.sh
 
+      # 调度锁门禁（2026-10-13 新增）
+      # 背景：多副本部署（values-prod replicaCount>1）下每个 @Scheduled 每副本各跑一遍，
+      # 资金/运维类调度器漏锁会造成重复动账 —— #95/#96/#97/#99 已逐一补锁。
+      # 本门禁要求：每个 @Scheduled 要么带 @SchedulerLock，要么落在两本"只准缩不准涨"的账里
+      # （scripts/scheduler-lock-baseline.txt 历史债务 / scheduler-lock-exemptions.txt 豁免〔理由必填〕）。
+      # 注意：**依赖进程内状态**的调度器加锁反而有害（锁会把执行权交给没有该状态的副本），
+      # 那类走豁免账并注明"正确修法是持久化"，见 docs/plan/PLAN-gateway-scheduler-inmemory-state-persistence.md。
+      # 先跑 --selftest：拿四个合成样本钉住解析器（缺锁/带锁/同行写法/纯注释提及），
+      # 防止解析器静默坏掉后"空判绿"。
+      - name: 调度锁门禁（@Scheduled 必须带锁或显式豁免）
+        run: |
+          python scripts/check-scheduler-lock.py --selftest
+          python scripts/check-scheduler-lock.py
+
   # ============================================================
   # Explorer 前端门禁（2026-09-16 审查新增）
   # ------------------------------------------------------------
