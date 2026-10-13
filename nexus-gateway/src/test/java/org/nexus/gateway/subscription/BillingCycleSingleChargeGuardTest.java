@@ -4,6 +4,7 @@ import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.nexus.gateway.subscription.claim.SubscriptionChargeClaimService;
 import org.springframework.context.ApplicationEventPublisher;
 
 import java.lang.reflect.Method;
@@ -89,9 +90,12 @@ class BillingCycleSingleChargeGuardTest {
         });
         when(subscriptionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
+        SubscriptionChargeClaimService claimService = mock(SubscriptionChargeClaimService.class);
+        when(claimService.tryClaim(any(), any())).thenReturn(true);
+
         service = new DefaultSubscriptionService(subscriptionRepository, planRepository,
                 chargeExecutor, new DunningManager(publisher, new SubscriptionProperties()),
-                new ProrationCalculator());
+                new ProrationCalculator(), claimService);
     }
 
     @Test

@@ -1,5 +1,6 @@
 package org.nexus.gateway.subscription;
 
+import org.nexus.gateway.subscription.claim.SubscriptionChargeClaimService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -17,6 +18,13 @@ import java.util.UUID;
  * 降级（下个周期生效）、查询、周期扣款处理、试用期转正。扣款通过
  * {@link ChargeExecutor}（默认实现集成 {@code RoutingEngine} AI 路由）
  * 执行，失败时由 {@link DunningManager} 处理重试/通知/暂停。</p>
+ *
+ * <p>并发防护：两处真实动账（{@link #processBillingCycle} 的周期扣款、
+ * {@link #convertTrialToActive} 的试用转正首扣）在动账前都先经
+ * {@link SubscriptionChargeClaimService} 原子认领本账期——唯一键
+ * {@code (subscription_id, cycle_key)} 保证同一账期有且仅有一个执行方，
+ * 认领未成功者不得动账。此前的 {@code nextChargeAt} 到期校验只是便宜的
+ * 前置过滤，不是并发防线（check-then-act）。</p>
  */
 @Service
 public class DefaultSubscriptionService implements SubscriptionService {
@@ -31,17 +39,20 @@ public class DefaultSubscriptionService implements SubscriptionService {
     private final ChargeExecutor chargeExecutor;
     private final DunningManager dunningManager;
     private final ProrationCalculator prorationCalculator;
+    private final SubscriptionChargeClaimService chargeClaimService;
 
     public DefaultSubscriptionService(SubscriptionRepository subscriptionRepository,
                                       SubscriptionPlanRepository planRepository,
                                       ChargeExecutor chargeExecutor,
                                       DunningManager dunningManager,
-                                      ProrationCalculator prorationCalculator) {
+                                      ProrationCalculator prorationCalculator,
+                                      SubscriptionChargeClaimService chargeClaimService) {
         this.subscriptionRepository = subscriptionRepository;
         this.planRepository = planRepository;
         this.chargeExecutor = chargeExecutor;
         this.dunningManager = dunningManager;
         this.prorationCalculator = prorationCalculator;
+        this.chargeClaimService = chargeClaimService;
     }
 
     @Override
@@ -190,16 +201,22 @@ public class DefaultSubscriptionService implements SubscriptionService {
             return null;
         }
 
-        // P1（2026-10-13）：账期守卫必须长在服务自己身上，不能只靠调用方筛选。
-        // 扣款是不可逆的真实动账（ChargeExecutor → connector.createPayment），而调度侧
-        // 的 findByStatusInAndNextChargeAtBefore 只是"读的时候到期"：多副本同一分钟各扫一遍
-        // （prod nexus-gateway.replicaCount=3）、或将来新增手工触发入口时，两个调用方都会
-        // 拿着同一份"已到期"快照各扣一次。这里重读实体上的 nextChargeAt —— 同一次扫描内
-        // 先跑完的那笔会把账期推进并写回，后跑的那条就会被这道校验挡下。
+        // P1（2026-10-13）：账期守卫——便宜的"未到期"前置过滤，避免为未到期订阅白白认领。
+        // 注意它<b>不是</b>并发防线：调度侧 findByStatusInAndNextChargeAtBefore 只是"读的时候到期"，
+        // 而多副本同一分钟各扫一遍（prod nexus-gateway.replicaCount=3）或新增手工触发入口时，
+        // 两个执行方都会拿到同一份"已到期"快照（各扫一遍时谁也看不到对方未提交的周期推进）。
         LocalDateTime chargeDueAt = sub.getNextChargeAt();
         if (chargeDueAt != null && chargeDueAt.isAfter(LocalDateTime.now())) {
             log.info("Billing cycle skipped: not yet due (server-side guard): subId={}, nextChargeAt={}",
                     subscriptionId, chargeDueAt);
+            return null;
+        }
+
+        // P0（2026-10-13）：真正的并发防线——先原子认领本账期再动账。
+        // 唯一键 (subscription_id, cycle_key=nextChargeAt) 保证同一账期只有一个执行方拿到执行权；
+        // 认领在独立短事务里先提交，未认领成功者一律不得触碰 chargeExecutor（不可逆动账）。
+        // 口径同 v1 SubscriptionServiceImpl#charge 的 claimTemplate。
+        if (!claimBillingCycle(sub, chargeDueAt)) {
             return null;
         }
 
@@ -247,6 +264,12 @@ public class DefaultSubscriptionService implements SubscriptionService {
             return false;
         }
 
+        // P0（2026-10-13）：首扣同属不可逆动账，同样先原子认领再动账。
+        LocalDateTime trialDueAt = sub.getTrialEnd();
+        if (!claimBillingCycle(sub, trialDueAt)) {
+            return false;
+        }
+
         // 试用期结束，转为 ACTIVE 并执行首次扣款
         sub.setStatus(SubscriptionStatus.ACTIVE);
         log.info("Trial ended, converting to ACTIVE: subId={}", subscriptionId);
@@ -275,6 +298,27 @@ public class DefaultSubscriptionService implements SubscriptionService {
                     subscriptionId, result.getErrorMessage());
             return true; // 仍返回 true 表示已转正（状态已变），扣款失败由 dunning 处理
         }
+    }
+
+    /**
+     * 原子认领一个扣款账期。
+     *
+     * <p>账期键取该账期的到期时间 {@code dueAt}（{@code processBillingCycle} 用
+     * {@code nextChargeAt}，试用转正用 {@code trialEnd}）。扣款成功会推进周期、
+     * dunning 失败会重设下次扣款时间，两者都让下一轮的 {@code dueAt} 变成新值，
+     * 因此"失败后的重试"不会被上一轮的认领挡住（dunning 语义不受影响），
+     * 而"同一次到期的并发重复"共享同一键、被唯一键裁决为单一执行方。</p>
+     *
+     * @return true=本执行方拿到执行权；false=该账期已被其他执行方认领
+     */
+    private boolean claimBillingCycle(Subscription sub, LocalDateTime dueAt) {
+        String cycleKey = String.valueOf(dueAt);
+        boolean claimed = chargeClaimService.tryClaim(sub.getSubscriptionId(), cycleKey);
+        if (!claimed) {
+            log.info("Billing cycle not claimed (already claimed by another executor): subId={}, cycleKey={}",
+                    sub.getSubscriptionId(), cycleKey);
+        }
+        return claimed;
     }
 
     /**
