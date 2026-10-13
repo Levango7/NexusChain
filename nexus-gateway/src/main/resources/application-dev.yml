@@ -39,7 +39,11 @@ spring:
         dialect: org.hibernate.dialect.H2Dialect
 
   flyway:
-    enabled: true
+    # L3 预演（缺陷 #20 连带）：上述 starter 补齐后 Flyway 在 dev 首次真正生效——
+    # 但 dev = H2 内存库 + ddl-auto=update（本档位设计如此，迁移集是 MySQL 方言，
+    # H2 兼容性差），执行即 JdbcSQLSyntaxError → dev compose / k6 冒烟起不来。
+    # dev 明确关闭，schema 由 Hibernate 维护；生产 profile 才跑 Flyway。
+    enabled: false
     locations: classpath:db/migration
 
   h2:

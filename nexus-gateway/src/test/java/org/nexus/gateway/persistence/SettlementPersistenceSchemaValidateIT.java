@@ -36,6 +36,11 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 @DataJpaTest
 @ContextConfiguration(classes = {SettlementPersistenceSchemaValidateIT.SliceConfig.class})
 @TestPropertySource(properties = {
+        // 0) L3 预演（缺陷 #20 连带，2026-10-13）：Boot 4 的 starter 补齐后
+        //    @DataJpaTest slice 也会加载 Flyway 自动配置（旧版不加载），全量 MySQL
+        //    迁移在 H2 上解析失败。本防线的建表机制本就是 spring.sql.init（见类注释），
+        //    显式关闭 Flyway。
+        "spring.flyway.enabled=false",
         // 1) DataSource 初始化期执行生产 V18 DDL（先于 JPA validate）
         "spring.sql.init.mode=always",
         "spring.sql.init.schema-locations=classpath:db/migration/V18__settlement_persistence.sql",
