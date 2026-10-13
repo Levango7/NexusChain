@@ -41,6 +41,47 @@ public class SettlementTransferService {
         this.accountRepository = accountRepository;
     }
 
+    // === 划拨指令认领（供调度器使用） ===
+
+    /**
+     * 原子认领一条待执行的划拨指令（PENDING → EXECUTING）。
+     *
+     * <p>刻意做成独立短事务：认领本身要尽快提交，而真正的动账（{@link #executeSettlementTransfer}）
+     * 在另一个事务里执行 —— 把不可逆操作圈进长事务会让锁攒着不放，
+     * 这条口径与 v1 订阅的 {@code claimCharge}（"认领已提交，链上转账在事务外执行"）一致。</p>
+     *
+     * @param recordId 指令记录 ID
+     * @return true=拿到执行权；false=已被其他副本认领或状态已流转，调用方必须放弃
+     */
+    @Transactional
+    public boolean claimScheduledTransfer(Long recordId) {
+        if (recordId == null) {
+            return false;
+        }
+        return recordRepository.claimForExecution(recordId, LocalDateTime.now()) == 1;
+    }
+
+    /**
+     * 收尾一条已认领的指令（EXECUTING → BOOKED / FAILED）。
+     *
+     * @param recordId     指令记录 ID
+     * @param success      动账是否成功
+     * @param errorMessage 失败原因（成功时传 null）
+     * @return true=收尾成功；false=记录已不在 EXECUTING（异常并发场景，留给人工/对账）
+     */
+    @Transactional
+    public boolean finishScheduledTransfer(Long recordId, boolean success, String errorMessage) {
+        if (recordId == null) {
+            return false;
+        }
+        BookingStatus to = success ? BookingStatus.BOOKED : BookingStatus.FAILED;
+        int rows = recordRepository.finishExecution(recordId, to, errorMessage, LocalDateTime.now());
+        if (rows == 0) {
+            log.warn("划拨指令收尾失败（记录不在 EXECUTING）: recordId={}, target={}", recordId, to);
+        }
+        return rows == 1;
+    }
+
     // === 结算划拨 ===
 
     /**
