@@ -43,6 +43,17 @@ public class TccTransactionManager {
     /** TccAction 注册表：以 transactionId 为 key，供恢复调度器查找 action 执行恢复操作 */
     private final ConcurrentHashMap<String, TccAction> actionRegistry = new ConcurrentHashMap<>();
 
+    /**
+     * 重启后按 participantId 重建无状态可重放 action 的解析器（#102 PLAN §4.1 / #38 Step2）。
+     * setter 注入且可选：为 null（未装配参与方）时恢复退回 PENDING_MANUAL，与本类改动前行为一致。
+     */
+    private TccActionResolver actionResolver;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setActionResolver(TccActionResolver actionResolver) {
+        this.actionResolver = actionResolver;
+    }
+
     public TccTransactionManager(TransactionLogRepository transactionLogRepository,
                                   ObjectMapper objectMapper) {
         this.transactionLogRepository = transactionLogRepository;
@@ -257,6 +268,9 @@ public class TccTransactionManager {
         String txId = txLog.getTransactionId();
         TccAction action = actionRegistry.get(txId);
         if (action == null) {
+            action = resolveReplayableAfterRestart(txLog.getParticipantId(), txId, "retryConfirm");
+        }
+        if (action == null) {
             // 进程内注册表 miss（典型=服务重启后 action 丢失）：无法自动重试 Confirm。
             // 绝不静默标 FAILED（那会把"预留资源从未确认释放"伪装成"已处理"）；
             // 落 PENDING_MANUAL + 稳定告警标记，显式移交人工确认。超时扫描只查 TRY/CONFIRM，不会重捞此项。
@@ -306,6 +320,9 @@ public class TccTransactionManager {
         String txId = txLog.getTransactionId();
         TccAction action = actionRegistry.get(txId);
         if (action == null) {
+            action = resolveReplayableAfterRestart(txLog.getParticipantId(), txId, "retryCancel");
+        }
+        if (action == null) {
             // TRY 超时本应由 Cancel 释放预留资源，但进程内注册表 miss（典型=服务重启后 action 丢失）
             // ⇒ 无法自动 Cancel。这是 §3.1 描述的最坏路径：Try 已预留 → 重启 → 注册表空 → 恢复扫描到 TRY 超时。
             // 若照旧标 FAILED，冻结/预留将<b>永不释放</b>且"看起来处理过了"；改为 PENDING_MANUAL + 稳定告警标记，
@@ -340,6 +357,25 @@ public class TccTransactionManager {
             transactionLogRepository.save(txLog);
             return false;
         }
+    }
+
+    /**
+     * 进程内注册表 miss 后，尝试按 {@code participantId} 重建一个<b>无状态、可重放</b>的 action
+     * （#102 PLAN §4.1 / #38 Step2）。这样服务重启后 {@code actionRegistry} 清空也能继续
+     * Confirm/Cancel——所需的业务输入全部来自 {@code TransactionLog.payload}（由调用方
+     * {@link #rebuildContext} 还原成 {@link TransactionContext}）。
+     *
+     * @return 命中的可重放 action；未装配解析器或 participantId 未注册则 {@code null}（调用方退回 PENDING_MANUAL）
+     */
+    private TccAction resolveReplayableAfterRestart(String participantId, String txId, String caller) {
+        if (actionResolver == null) {
+            return null;
+        }
+        java.util.Optional<TccAction> replayable = actionResolver.resolve(participantId);
+        replayable.ifPresent(a -> log.info(
+                "TCC {}: 注册表 miss 但按 participantId={} 命中可重放 action，从持久化上下文重建后重试 txId={}",
+                caller, participantId, txId));
+        return replayable.orElse(null);
     }
 
     /**
