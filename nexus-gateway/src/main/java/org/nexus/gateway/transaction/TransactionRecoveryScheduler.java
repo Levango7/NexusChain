@@ -23,7 +23,10 @@ import java.util.List;
  * <p>超时阈值：TCC 事务 30 秒，SAGA 事务 60 秒。</p>
  *
  * <p>恢复操作通过 TccTransactionManager 和 SagaTransactionManager 的 public 恢复方法执行。
- * 如果 action/step 不在注册表中（例如服务重启后），则降级为仅标记 FAILED 状态。</p>
+ * 如果 action/step 不在进程内注册表中（例如服务重启后），<b>不再静默标 FAILED</b>——那会把
+ * "预留资源从未释放"伪装成"已处理"。改为落 {@link TransactionStepStatus#PENDING_MANUAL}
+ * 并打带 {@link RecoveryAlert#MANUAL_REQUIRED_MARKER} 的 WARN，显式移交人工确认资源是否已释放。
+ * 超时扫描只查 TRY/CONFIRM/PENDING/COMPENSATE，{@code PENDING_MANUAL} 天然被排除、不会被反复重试。</p>
  */
 @Component
 public class TransactionRecoveryScheduler {

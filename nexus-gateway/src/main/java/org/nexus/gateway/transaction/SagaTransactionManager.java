@@ -249,9 +249,13 @@ public class SagaTransactionManager {
         String txId = txLog.getTransactionId();
         List<SagaStep> steps = stepRegistry.get(txId);
         if (steps == null || steps.isEmpty()) {
-            log.warn("SAGA retryCompensate: steps not found in registry (service may have restarted), txId={}", txId);
-            txLog.setStepStatus(TransactionStepStatus.FAILED);
-            txLog.setErrorMessage("Compensate retry failed: steps not in registry");
+            // 进程内注册表 miss（典型=服务重启后 steps 丢失）：无法自动补偿。
+            // 与 TCC 同口径：绝不静默标 FAILED（会把"已完成步骤从未逆向补偿"伪装成"已处理"），
+            // 落 PENDING_MANUAL + 稳定告警标记，显式移交人工确认。超时扫描只查 PENDING/COMPENSATE，不会重捞此项。
+            log.warn("{} SAGA retryCompensate: steps 不在注册表(进程可能已重启)，无法自动补偿，转人工：txId={} 需人工确认已完成步骤是否需逆向补偿",
+                    RecoveryAlert.MANUAL_REQUIRED_MARKER, txId);
+            txLog.setStepStatus(TransactionStepStatus.PENDING_MANUAL);
+            txLog.setErrorMessage("Compensate 无法自动重试：steps 不在进程内注册表（疑似重启），已移交人工确认");
             transactionLogRepository.save(txLog);
             return false;
         }

@@ -257,9 +257,13 @@ public class TccTransactionManager {
         String txId = txLog.getTransactionId();
         TccAction action = actionRegistry.get(txId);
         if (action == null) {
-            log.warn("TCC retryConfirm: action not found in registry (service may have restarted), txId={}", txId);
-            txLog.setStepStatus(TransactionStepStatus.FAILED);
-            txLog.setErrorMessage("CONFIRM retry failed: action not in registry");
+            // 进程内注册表 miss（典型=服务重启后 action 丢失）：无法自动重试 Confirm。
+            // 绝不静默标 FAILED（那会把"预留资源从未确认释放"伪装成"已处理"）；
+            // 落 PENDING_MANUAL + 稳定告警标记，显式移交人工确认。超时扫描只查 TRY/CONFIRM，不会重捞此项。
+            log.warn("{} TCC retryConfirm: action 不在注册表(进程可能已重启)，无法自动确认，转人工：txId={} 需人工确认该笔预留是否已释放",
+                    RecoveryAlert.MANUAL_REQUIRED_MARKER, txId);
+            txLog.setStepStatus(TransactionStepStatus.PENDING_MANUAL);
+            txLog.setErrorMessage("CONFIRM 无法自动重试：action 不在进程内注册表（疑似重启），已移交人工确认资源是否释放");
             transactionLogRepository.save(txLog);
             return false;
         }
@@ -302,9 +306,14 @@ public class TccTransactionManager {
         String txId = txLog.getTransactionId();
         TccAction action = actionRegistry.get(txId);
         if (action == null) {
-            log.warn("TCC retryCancel: action not found in registry (service may have restarted), txId={}", txId);
-            txLog.setStepStatus(TransactionStepStatus.FAILED);
-            txLog.setErrorMessage("CANCEL retry failed: action not in registry");
+            // TRY 超时本应由 Cancel 释放预留资源，但进程内注册表 miss（典型=服务重启后 action 丢失）
+            // ⇒ 无法自动 Cancel。这是 §3.1 描述的最坏路径：Try 已预留 → 重启 → 注册表空 → 恢复扫描到 TRY 超时。
+            // 若照旧标 FAILED，冻结/预留将<b>永不释放</b>且"看起来处理过了"；改为 PENDING_MANUAL + 稳定告警标记，
+            // 显式移交人工确认资源是否已释放。超时扫描只查 TRY，不会重捞此项（避免每 60s 空转）。
+            log.warn("{} TCC retryCancel: action 不在注册表(进程可能已重启)，无法自动释放预留资源，转人工：txId={} 需人工确认冻结/预留是否仍占用",
+                    RecoveryAlert.MANUAL_REQUIRED_MARKER, txId);
+            txLog.setStepStatus(TransactionStepStatus.PENDING_MANUAL);
+            txLog.setErrorMessage("CANCEL 无法自动重试：action 不在进程内注册表（疑似重启），已移交人工确认预留资源是否释放");
             transactionLogRepository.save(txLog);
             return false;
         }
