@@ -67,7 +67,7 @@ class KekRotationProgressPersistenceTest {
         Method m = KeyRotationScheduler.class.getMethod("checkKekRotationPeriod");
         SchedulerLock lock = m.getAnnotation(SchedulerLock.class);
         assertNotNull(lock,
-                "进度已落库（V99 kek_rotation_progress），checkKekRotationPeriod 现在应带 @SchedulerLock —— "
+                "进度已落库（V103 kek_rotation_progress），checkKekRotationPeriod 现在应带 @SchedulerLock —— "
                         + "锁住的是'谁来做本轮检查'，状态在库里共享，不再怕把执行权交给没该状态的副本");
         assertFalse(lock.lockAtMostFor().isEmpty(), "必须显式 lockAtMostFor");
         assertFalse(lock.lockAtLeastFor().isEmpty(), "必须显式 lockAtLeastFor");

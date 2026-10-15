@@ -1,4 +1,9 @@
--- V99: KEK 轮换迁移进度表（跨副本/重启可见的断点续传，#102 PLAN §4.2 · #31-Step3）
+-- V103: KEK 轮换迁移进度表（跨副本/重启可见的断点续传，#102 PLAN §4.2 · #31-Step3）
+--
+-- 号段说明：立项时记的是 V99。落地时 V99–V102 已被在途 PR #106（清结算/币种钱包/汇率/
+--   实体漂移）占用；Flyway 遇同号双份会直接 "Found more than one migration with version"
+--   把 migrate 判红，所以本表取当时全 ref 现查未占用的 V103。号要在提交前再查一次，
+--   "立项时先占号"不足以防并发立项。
 --
 -- 背景：KeyRotationScheduler 此前把渐进式 DEK 迁移的进度（migrated/failed/断点
 --   lastProcessedId/completed）放在单个 JVM 的 ConcurrentHashMap migrationProgressMap:48。

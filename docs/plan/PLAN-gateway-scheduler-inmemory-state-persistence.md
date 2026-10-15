@@ -62,7 +62,7 @@
 | `TransactionLog` 实体（含 `payload TEXT`、`version` 乐观锁列） | `transaction/TransactionLog.java:59,78` | 成熟；`payload` 列**当前闲置**，可直接承载序列化的参与方描述符 |
 | `TransactionLogRepository`（`findByTransactionTypeAndStepStatusAndUpdatedAtBefore` 等） | `transaction/` | 已有超时扫描/按 txId 查询 |
 | `TccRegistrationBean` 风格的本副本装配 | `security/encryption/`（KEK 侧） | 轮换进度表可按同风格落库 |
-| Flyway 迁移（V1..V98 序列） | `nexus-gateway/src/main/resources/db/migration/` | V98 已占（订阅幂等表），本项目顺延 V99+ |
+| Flyway 迁移（gateway：master 现最高 V98，在途 #106 排到 V102） | `nexus-gateway/src/main/resources/db/migration/` | **V99–V102 已被在途 #106 占 ⇒ `kek_rotation_progress` 实落 V103**（2026-10-15 改号） |
 | `@SchedulerLock`（ShedLock） | 已在 #97/#99 铺开 | 持久化**之后**再给 `checkKekRotationPeriod` 补，顺序不能反 |
 
 ## 4. 设计
@@ -93,7 +93,7 @@
 
 ### 4.2 KEK 轮换进度持久化（解决 A，次优先）
 
-新增表 `kek_rotation_progress`（Flyway V99）：
+新增表 `kek_rotation_progress`（Flyway **V103**；立项时记 V99，落地时 V99–V102 已被在途 #106 占用）：
 
 ```sql
 CREATE TABLE kek_rotation_progress (
@@ -152,7 +152,7 @@ CREATE TABLE kek_rotation_progress (
 | `payload` 描述符与实际 action 行为漂移（改了方法签名忘了改描述符） | 中 | Resolver 重建失败即 `PENDING_MANUAL` + 告警；加"重建后与注册表版行为等价"的单测 |
 | 远程参与方幂等性依赖对端 | 中 | `TccAction` 契约本就要求幂等；Resolver 发远程请求必须带 `idempotencyKey`（复用 `businessReference`） |
 | `PENDING_MANUAL` 堆积无人处理 | 中 | 接入现有告警通道；恢复调度器日志按 `PENDING_MANUAL` 计数打点 |
-| V99 与其它在途迁移号冲突 | 低 | 立项批准后先占号（当前 master 最高 V98） |
+| V99 与其它在途迁移号冲突 | 低 → **已发生**（2026-10-15） | 立项时 master 最高 V98，本表记 V99；落地时**在途 #106 已排到 V99–V102**。同号双份会被 Flyway `Found more than one migration with version` 直接把 migrate 判红 ⇒ 本表改落 **V103**（改前对全部本地/远端 ref 现查过号）。教训：号不是"立项时占"，是**提交前必须再查一次** |
 | 反射重建本地 bean 的 argsJson 反序列化安全 | 低 | 仅允许 `participantId` 白名单内的 bean；argsJson 走 Jackson，不开 `default typing` |
 
 ## 8. 明确不做
