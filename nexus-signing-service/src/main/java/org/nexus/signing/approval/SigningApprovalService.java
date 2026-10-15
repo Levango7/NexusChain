@@ -409,6 +409,21 @@ public class SigningApprovalService {
     /**
      * 提交审批通过。
      *
+     * <p><b>⚠ 现查（2026-10-15）：本方法与 {@link #reject} 在全部 main 源码里没有调用方，
+     * 且 {@code nexus-signing-service} 未暴露任何 approve/reject REST 端点</b>
+     * （{@code TxController} 只有 {@code /api/v1/transfers/sign}、{@code /sign/approved}、
+     * {@code /capability}、{@code /getNoncePool}）。后果：没有任何生产路径能把请求从 PENDING
+     * 推到 APPROVED，而 {@code /sign/approved} 的前置判据恰是
+     * {@code status == APPROVED} ⇒ 大额签名在"审批通过后执行"这一步事实上不可达。
+     * {@code approver-whitelist}（application.yml:160-163）与多签 {@code requiredApprovers}
+     * 因此都还是空转的配置。</p>
+     *
+     * <p>这与 #32 修的是两个缺陷：#32 修的是"审批请求只存在创建它的那个副本内存里，
+     * 别的副本 {@code getRequest(approvalId)} 查不到"（创建与执行是两次独立请求，经 LB 落到
+     * 哪个副本不确定 ⇒ 表现为 {@code Approval request not found} 偶发失败；具体命中率取决于
+     * 实际路由策略，此处未测量）；本节说的是"决策写入侧无入口"，需要新增端点才能解，
+     * 另立任务跟踪，勿混为一谈。</p>
+     *
      * @param requestId 审批请求 ID
      * @param approver  审批人标识
      * @param sourceIp  来源 IP（用于审计）
