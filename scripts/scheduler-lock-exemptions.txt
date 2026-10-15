@@ -4,7 +4,8 @@
 #
 # ── 类 A：任务依赖**进程内状态**，加 @SchedulerLock 会把执行权交给没有该状态的副本（反而更坏）──
 #    正确修法是"把状态持久化到共享存储"，见 docs/plan/PLAN-gateway-scheduler-inmemory-state-persistence.md
-nexus-gateway/src/main/java/org/nexus/gateway/security/encryption/KeyRotationScheduler.java|checkKekRotationPeriod|依赖进程内 migrationProgressMap 决定"是否续跑迁移/是否需轮换"；加锁只是把执行权随机交给某副本，另两副本读不到进度 → 判断不一致。正确修法是进度表落库（见 PLAN-gateway-scheduler-inmemory-state-persistence）
+#    （KeyRotationScheduler.checkKekRotationPeriod 已于 #31-Step3 完成进度持久化 + 补 @SchedulerLock，
+#     故从本豁免账移除；见该文件与 V99__kek_rotation_progress.sql。）
 nexus-gateway/src/main/java/org/nexus/gateway/transaction/TransactionRecoveryScheduler.java|recoverTimeoutTransactions|恢复动作依赖进程内 actionRegistry/stepRegistry（TccTransactionManager:44 / SagaTransactionManager:59）；加锁锁不住内存态，还可能锁住恰好无 action 的副本 → 把"本可成功释放"的机会锁没了。正确修法是参与方描述符持久化（见同一 PLAN）
 nexus-gateway/src/main/java/org/nexus/gateway/sla/SlaMonitorService.java|monitor|从**本 pod** 的 MeterRegistry 采样后 INSERT SlaMeasurement(:62)；prod 3 副本 ⇒ 每窗口每目标 3 行、各带 1/3 流量的局部计数，污染 SLA 合同报表(SlaReportService:75-79 以 countMetInWindow/countTotalInWindow 求达标率)。加锁只会把"某副本的局部视图"当唯一测量写进报表，与类 A 同型失效。正确修法=UNIQUE(target_id,window_start)+upsert 或改聚合指标源（见同一 PLAN）
 nexus-gateway/src/main/java/org/nexus/gateway/export/DataExportTaskRunner.java|scanPendingExports|加锁反而坏：任务经 processExportAsync 异步派发(DataExportService:127)、导出件写到**执行 pod 本地磁盘**(storeExportFile:422-431，默认 data/exports)、filePath 只在写它的 pod 存在；exportSemaphore 是 JVM-local(:35,:56)。锁住扫描入口不解决"下载 404 / 孤儿文件 / 跨 pod 重新认领"。正确修法=状态 CAS 认领(UPDATE ... WHERE id=? AND status='PENDING')+共享对象存储
