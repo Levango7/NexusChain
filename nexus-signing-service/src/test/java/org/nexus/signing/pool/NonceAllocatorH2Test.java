@@ -75,12 +75,15 @@ class NonceAllocatorH2Test {
     }
 
     @Test
-    @DisplayName("1.连续认领严格递增；链上播种只发生一次")
+    @DisplayName("1.连续认领严格递增；链上播种只发生一次，且播种值是「上一笔已应用 +1」")
     void sequentialClaims_areMonotonicAndSeedOnce() {
         String address = freshAddress("SEQ");
         AtomicInteger seedCalls = new AtomicInteger();
         NonceAllocator a = allocator();
 
+        // 节点侧语义（非推测）：HatchServiceImpl.getNonce 返回 best block 上 account.nonce，
+        // 而 MerkleRule 在应用交易时 setNonce(tran.nonce) ⇒ 那是**上一笔已应用**的 nonce；
+        // PackageMiner 又要求 tx.nonce > account.nonce（>= 即丢弃）⇒ 下一个可用值必须是 chain+1。
         long n0 = a.claim(address, () -> {
             seedCalls.incrementAndGet();
             return 100L;
@@ -94,9 +97,9 @@ class NonceAllocatorH2Test {
             return 999L;
         });
 
-        assertEquals(100L, n0, "首次认领应发链上值本身");
-        assertEquals(101L, n1);
-        assertEquals(102L, n2);
+        assertEquals(101L, n0, "首次认领必须发 chain+1：直接发 100 会被节点以 nonce 不递增为由丢弃");
+        assertEquals(102L, n1);
+        assertEquals(103L, n2);
         assertEquals(1, seedCalls.get(), "RPC 播种只在该地址首次（哨兵态）发生，平时不得再打链");
     }
 
@@ -153,9 +156,9 @@ class NonceAllocatorH2Test {
         String b = freshAddress("B1");
         NonceAllocator alloc = allocator();
 
-        assertEquals(10L, alloc.claim(a, () -> 10L));
-        assertEquals(700L, alloc.claim(b, () -> 700L));
-        assertEquals(11L, alloc.claim(a, () -> 10L), "A 的水位不受 B 影响");
+        assertEquals(11L, alloc.claim(a, () -> 10L), "A 首次发放 = chain(10)+1");
+        assertEquals(701L, alloc.claim(b, () -> 700L), "B 的水位独立，不受 A 影响");
+        assertEquals(12L, alloc.claim(a, () -> 10L), "A 的第二次认领继续在自己的水位上前进");
     }
 
     @Test
@@ -171,8 +174,8 @@ class NonceAllocatorH2Test {
                 }),
                 "取不到链上 nonce 时必须拒绝发放，而不是退回每副本一份的内存计数");
 
-        // 且失败不留半成品水位：修好后该地址应仍以链上值正常播种
+        // 且失败不留半成品水位：修好后该地址应仍以链上值正常播种（chain+1）
         long ok = alloc.claim(address, () -> 42L);
-        assertEquals(42L, ok, "播种失败不应污染水位（哨兵仍在，重试即恢复）");
+        assertEquals(43L, ok, "播种失败不应污染水位（哨兵仍在，重试即恢复）");
     }
 }

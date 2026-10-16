@@ -76,8 +76,10 @@ public class NonceAllocator {
      *
      * @param address   发送方地址（本仓所有转账共用唯一平台地址，见 {@code TxController} 的
      *                  {@code pubkey_mismatch} 校验）
-     * @param chainSeed 链上当前 nonce 的取值器——<b>仅在该地址首次认领（哨兵态）时调用</b>，
-     *                  平时不产生 RPC 开销。取值失败应直接抛异常，由上层映射成对调用方的失败响应。
+     * @param chainSeed 该地址<b>上一笔已应用</b>的 nonce（节点 {@code account.nonce} 语义）——
+     *                  仅在该地址首次认领（哨兵态）时调用一次，平时不产生 RPC 开销。
+     *                  分配器按节点规则以 {@code chainSeed + 1} 作为水位起点（见 {@code doClaim} 内注释）。
+     *                  取值失败应直接抛异常。
      * @return 本次认领到的 nonce（调用方是唯一持有者，可安全用于签名广播）
      * @throws NonceAllocationException DB 不可用、行无法递增或读到非法水位
      */
@@ -103,18 +105,28 @@ public class NonceAllocator {
                 throw new NonceAllocationException("nonce_allocation 行缺失: address=" + address);
             }
             if (next == UNSEEDED) {
-                long seed;
+                long chainValue;
                 try {
-                    seed = chainSeed.getAsLong();
+                    chainValue = chainSeed.getAsLong();
                 } catch (RuntimeException seedFailed) {
                     // 契约：发放失败一律以 NonceAllocationException 表达。调用方只需 catch 这一个
                     // 类型就能保证"要么拿到唯一 nonce，要么这笔不发"——不必关心失败源自 RPC 还是 DB。
                     throw new NonceAllocationException(
                             "播种链上 nonce 失败，拒绝发放: address=" + address + ", 原因=" + seedFailed, seedFailed);
                 }
-                int won = jdbc.update(SEED_CAS, seed, now(), address, UNSEEDED);
-                log.info("nonce 分配器播种 address={} seed={} 本方={}（0=并发对手已播种）",
-                        address, seed, won);
+                // 节点语义（现查，非推测）：
+                //   nexus-core/…/Impl/HatchServiceImpl.java:91-97  getNonce 取 best block 上的 account.nonce
+                //   nexus-core/…/core/validate/MerkleRule.java:380/420/431/455  应用交易时 setNonce(tran.nonce)
+                //     ⇒ 账户里存的是**上一笔已应用**的 nonce，不是"下一个可用"。
+                //   nexus-core/…/consensus/pow/PackageMiner.java:74  `account.nonce >= tx.nonce` 即丢弃
+                //     ⇒ 合法条件严格是 tx.nonce > account.nonce。
+                // 所以水位起点必须是 chain+1。旧实现（TxController 池空分支 / TCC 同形分支）直接拿
+                // chain 当下一个号，节点会把它当"重复 nonce"丢弃，而调用方已收到 statusCode=2000 —
+                // 这是被 #33 从"每次冷启动后第一笔"收敛到"每地址首次"的存量 off-by-one，在此一并修。
+                long nextUsable = Math.addExact(chainValue, 1L);
+                int won = jdbc.update(SEED_CAS, nextUsable, now(), address, UNSEEDED);
+                log.info("nonce 分配器播种 address={} 链上上一笔已应用={} ⇒ 水位起点={}（0=并发对手已播种）",
+                        address, chainValue, nextUsable, won);
                 continue;
             }
             int bumped = jdbc.update(BUMP, now(), address);
