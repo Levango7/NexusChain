@@ -7,6 +7,7 @@ import org.nexus.sdk.wallet.TxUtils;
 import org.nexus.sdk.wallet.WalletUtils;
 import org.nexus.signing.controller.NodeController;
 import org.nexus.signing.keystore.PlatformKeystore;
+import org.nexus.signing.pool.NonceAllocator;
 import org.nexus.signing.pool.NoncePool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -53,6 +54,13 @@ public class SigningTccActionImpl implements SigningTccAction {
     @Autowired
     NoncePool noncePool;
 
+    /**
+     * #33：nonce 的共享原子分配器。自本笔起 Try 阶段发放的 nonce 一律由它认领，
+     * {@code noncePool} 只保留 TCC 预锁定（lockNonce/confirmNonce/cancelNonce）与在飞台账职责。
+     */
+    @Autowired
+    NonceAllocator nonceAllocator;
+
     @Autowired
     NodeController nodeController;
 
@@ -91,20 +99,25 @@ public class SigningTccActionImpl implements SigningTccAction {
             throw new TccPrepareException("Address Error");
         }
 
-        // 3. 获取 nonce（maxNonce 或 RPC getNonce，与 TxController 一致）
-        long maxNonce = noncePool.getMaxNonce(address);
+        // 3. 发放 nonce —— #33：改为共享原子认领（与 TxController 同口径）。
+        //    旧的 noncePool.getMaxNonce 是**读**（返回 lastKey，不占位）：同副本并发、或 prod
+        //    replicaCount=3 的跨副本，都会对同一 address 发出相同 nonce；TCC 的 lockNonce 只锁本
+        //    副本内存，挡不住别的副本。链上 RPC 现在仅在该地址首次播种时打一次。
         long nonce;
-        if (maxNonce == 0) {
-            // 池为空，RPC 获取链上 nonce
-            JsonObject getNonceResp = nodeController.getNonce(frompubhash);
-            int code = getNonceResp != null && getNonceResp.has("code") ? getNonceResp.get("code").getAsInt() : 0;
-            if (code == 5000 || getNonceResp == null || !getNonceResp.has("data")) {
-                log.error("[TCC-Try] xid={} RPC getNonce failed: frompubhash={}", xid, frompubhash);
-                throw new TccPrepareException("RPC getNonce failed");
-            }
-            nonce = getNonceResp.get("data").getAsLong();
-        } else {
-            nonce = maxNonce;
+        try {
+            nonce = nonceAllocator.claim(address, () -> {
+                JsonObject rpc = nodeController.getNonce(frompubhash);
+                int code = rpc != null && rpc.has("code") ? rpc.get("code").getAsInt() : 0;
+                if (rpc == null || code == 5000 || !rpc.has("data")) {
+                    throw new NonceAllocator.NonceAllocationException(
+                            "RPC getNonce failed: frompubhash=" + frompubhash + ", code=" + code);
+                }
+                return rpc.get("data").getAsLong();
+            });
+        } catch (NonceAllocator.NonceAllocationException nonceStoreDown) {
+            // 对外语义不变：Try 阶段失败仍抛 TccPrepareException 触发 Seata 全局回滚
+            log.error("[TCC-Try] xid={} nonce 发放失败（共享分配器不可用）: {}", xid, nonceStoreDown.getMessage());
+            throw new TccPrepareException("RPC getNonce failed");
         }
 
         // 4. 预锁定 nonce

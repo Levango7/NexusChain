@@ -25,9 +25,16 @@ import java.util.concurrent.ConcurrentHashMap;
  * LevelDB 持久化保证服务重启后 Nonce 不丢失。</p>
  *
  * <p>Phase 3 任务 #62：新增 TCC 预锁定能力（{@link #lockNonce} /
- * {@link #confirmNonce} / {@link #cancelNonce}），用于 Seata TCC 分布式事务。
- * 非 TCC 路径走原逻辑（{@code getMaxNonce} 直接获取 + {@code add} 使用，无预锁定），
- * 保持向后兼容（设计文档 §4.2.4 / 风险 R2）。</p>
+ * {@link #confirmNonce} / {@link #cancelNonce}），用于 Seata TCC 分布式事务。</p>
+ *
+ * <p><b>#33 起本池不再承担 nonce 发放</b>：{@link #getMaxNonce} 是<b>读</b>（返回
+ * {@code TreeMap.lastKey}，不摘除不占位），旧的非 TCC 路径"getMaxNonce 直接获取 + add 写回"
+ * 是跨两次调用的复合动作且调用点无同步 ⇒ 同副本并发即可同号，prod 三副本（无按地址亲和）更甚。
+ * 发放一律走 {@link NonceAllocator#claim}（共享表内原子递增）。本池现在的职责只有两个：
+ * 在飞交易的 {@code txHash → nonce} 台账（供 {@code PoolTask} 确认扫描与 {@code /getNoncePool} 观测），
+ * 以及 TCC 预锁定表。<b>不要再用它发放 nonce。</b></p>
+ *
+ * <p>历史兼容：设计文档 §4.2.4 / 风险 R2 的"非 TCC 路径走原逻辑"已被 #33 取代。</p>
  */
 @Component
 public class NoncePool {
