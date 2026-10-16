@@ -245,8 +245,55 @@ jobs:
       # 否则重新生成必然产生 diff（如旧参数 8.5 会把 properties 改回 8.5）导致误报失败。
       - name: Validate Gradle wrapper
         run: |
-          ./gradlew wrapper --gradle-version 8.14 --gradle-distribution-url https://mirrors.huaweicloud.com/gradle/gradle-8.14-bin.zip --network-timeout 600000
-          git diff --exit-code gradle/wrapper/
+          # 本步骤真正要守的东西是最后那行 `git diff --exit-code gradle/wrapper/`
+          # （仓库 wrapper 与"重新生成的结果"必须一致，防篡改/防漂移）。
+          # 但生成命令本身会去**实测 distribution URL 可达性**（Gradle :wrapper 的设计），
+          # 于是第三方镜像抖一下就把整条 Build & Test 判红。实测代价：
+          #   master `8439b39a` 的 run `38892843985` 红在
+          #   `Execution failed for task ':wrapper' > Test of distribution url
+          #    https://mirrors.huaweicloud.com/gradle/gradle-8.14-bin.zip failed`，
+          #   而**同一内容**的 #114 PR run 是绿的、**上一条** master run（`636f52b8`）也是绿的，
+          #   且该提交对 `gradle/wrapper/` 的改动文件数=0 ⇒ 外部可用性抖动，不是代码回归。
+          # 处置口径同 #87（Docker Hub 匿名 429）：**只重试"镜像不可达"这一类**；
+          # wrapper 真漂移（git diff 非零）绝不重试、绝不解释——那是它该红的理由。
+          ATTEMPTS=3
+          RETRY_BASE_SLEEP=30
+          OUT=/tmp/wrapper-gen.log
+          i=0
+          rc=1
+          mirror_flaky=0
+          while [ "$i" -lt "$ATTEMPTS" ]; do
+            i=$((i + 1))
+            if ./gradlew wrapper --gradle-version 8.14 \
+                 --gradle-distribution-url https://mirrors.huaweicloud.com/gradle/gradle-8.14-bin.zip \
+                 --network-timeout 600000 >"$OUT" 2>&1; then
+              rc=0
+              break
+            fi
+            if grep -q "Test of distribution url" "$OUT"; then
+              mirror_flaky=1
+              echo "::warning::Gradle 发行镜像不可达（第 ${i}/${ATTEMPTS} 次尝试）——外部可用性抖动，非 wrapper 漂移"
+              sleep "$((i * RETRY_BASE_SLEEP))"
+            else
+              break   # 不是镜像问题，重试没有意义，直接落到下面的失败输出
+            fi
+          done
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::Validate Gradle wrapper 的前置生成步骤失败（rc=${rc}，尝试 ${i}/${ATTEMPTS}，镜像抖动=${mirror_flaky}）"
+            echo "归因指引："
+            echo "  · 日志含 'Test of distribution url ... failed' ⇒ huaweicloud 镜像不可达，属外部依赖抖动。"
+            echo "    判据（不要猜）：同一 head 的 PR run 是否绿 + 本次提交是否改动 gradle/wrapper/。"
+            echo "  · 否则才是仓库 wrapper 自身的问题，看下面的日志尾部。"
+            tail -40 "$OUT"
+            exit 1
+          fi
+          echo "wrapper 重新生成成功（第 ${i}/${ATTEMPTS} 次尝试）"
+          # ↓ 真正的门禁：有 diff 就是漂移，不重试、不解释
+          git diff --exit-code gradle/wrapper/ || {
+            echo "::error::gradle/wrapper/ 与重新生成的结果不一致（这才是本步骤要守的：wrapper 漂移/被篡改）"
+            git --no-pager diff -- gradle/wrapper/ | head -40
+            exit 1
+          }
 
       # 版权头合规门禁（2026-09-17 立即项 #1）：LGPL 派生范围声明 + 越界 GNU 许可头防护。
       # 背景：nexus-core 为上游 java-nexuscore 的 LGPL-3.0 派生代码（166 个 Java 文件带
