@@ -94,10 +94,10 @@ public class SigningTccActionTest {
     public void testPrepareSignTransfer_success_nonceLocked() {
         when(platformKeystore.getPrikey()).thenReturn(prikey);
         when(platformKeystore.getPubkey()).thenReturn(pubkey);
-        long expectedNonce = 42L;
-        // #33：首次认领由链上 RPC 播种 ⇒ 发放值就是 RPC 值（此后水位由共享表前进）
-        when(nodeController.getNonce(anyString())).thenReturn(NonceTestDbs.chainNonce(expectedNonce));
-        when(noncePool.lockNonce(eq(address), eq(expectedNonce))).thenReturn(expectedNonce);
+        long chainLastApplied = 42L;
+        long allocated = 43L; // 节点规则：account.nonce 是「上一笔已应用」⇒ 下一个可用 = chain+1
+        when(nodeController.getNonce(anyString())).thenReturn(NonceTestDbs.chainNonce(chainLastApplied));
+        when(noncePool.lockNonce(eq(address), eq(allocated))).thenReturn(allocated);
 
         BusinessActionContext ctx = newCtx();
         BigDecimal amount = new BigDecimal("100");
@@ -105,12 +105,12 @@ public class SigningTccActionTest {
         boolean result = tccAction.prepareSignTransfer(ctx, pubkey, toPubkeyHash, amount);
 
         assertTrue(result, "Try should succeed");
-        verify(noncePool).lockNonce(eq(address), eq(expectedNonce));
+        verify(noncePool).lockNonce(eq(address), eq(allocated));
         // 验证 context 写入
         assertEquals(pubkey, ctx.getActionContext("fromPubkey", String.class));
         assertEquals(toPubkeyHash, ctx.getActionContext("toPubkeyHash", String.class));
         assertEquals(ctx.getActionContext("amount", String.class), "100");
-        assertEquals(expectedNonce, ctx.getActionContext("nonce", Long.class).longValue());
+        assertEquals(allocated, ctx.getActionContext("nonce", Long.class).longValue());
         assertEquals(address, ctx.getActionContext("address", String.class));
     }
 
@@ -118,22 +118,23 @@ public class SigningTccActionTest {
     public void testPrepareSignTransfer_success_rpcGetNonce_whenPoolEmpty() {
         when(platformKeystore.getPrikey()).thenReturn(prikey);
         when(platformKeystore.getPubkey()).thenReturn(pubkey);
-        // #33：该地址在本用例的库里是首次认领（哨兵态）⇒ 发放值来自链上 RPC 播种，
-        // 这正是"池为空时打 RPC"这条老语义的新落点（且只播一次种）。
-        long rpcNonce = 7L;
+        // #33：该地址在本用例的库里是首次认领（哨兵态）⇒ 发放值 = 链上「上一笔已应用」+1，
+        // 这正是"池为空时打 RPC"这条老语义的新落点（且只播一次种、并修了 off-by-one）。
+        long rpcLastApplied = 7L;
+        long allocated = 8L;
         JsonObject getNonceResp = new JsonObject();
         getNonceResp.addProperty("code", 2000);
-        getNonceResp.addProperty("data", rpcNonce);
+        getNonceResp.addProperty("data", rpcLastApplied);
         when(nodeController.getNonce(anyString())).thenReturn(getNonceResp);
-        when(noncePool.lockNonce(eq(address), eq(rpcNonce))).thenReturn(rpcNonce);
+        when(noncePool.lockNonce(eq(address), eq(allocated))).thenReturn(allocated);
 
         BusinessActionContext ctx = newCtx();
         boolean result = tccAction.prepareSignTransfer(ctx, pubkey, toPubkeyHash, new BigDecimal("50"));
 
         assertTrue(result, "Try should succeed via RPC getNonce");
         verify(nodeController).getNonce(anyString());
-        verify(noncePool).lockNonce(eq(address), eq(rpcNonce));
-        assertEquals(rpcNonce, ctx.getActionContext("nonce", Long.class).longValue());
+        verify(noncePool).lockNonce(eq(address), eq(allocated));
+        assertEquals(allocated, ctx.getActionContext("nonce", Long.class).longValue());
     }
 
     @Test
@@ -167,10 +168,10 @@ public class SigningTccActionTest {
     public void testPrepareSignTransfer_lockConflict_throws() { assertThrows(TccPrepareException.class, () -> {
         when(platformKeystore.getPrikey()).thenReturn(prikey);
         when(platformKeystore.getPubkey()).thenReturn(pubkey);
-        // #33：nonce 由共享分配器发放（本用例首次认领 ⇒ 播种值 42），
+        // #33：nonce 由共享分配器发放（本用例首次认领 ⇒ 发放值 = 链上 42 + 1 = 43），
         // 真正的冲突来自 TCC 预锁定：本副本已有同值被锁 → lockNonce 返回 -1 → Try 必须失败
         when(nodeController.getNonce(anyString())).thenReturn(NonceTestDbs.chainNonce(42L));
-        when(noncePool.lockNonce(eq(address), eq(42L))).thenReturn(-1L); // 锁定冲突
+        when(noncePool.lockNonce(eq(address), eq(43L))).thenReturn(-1L); // 锁定冲突
 
         tccAction.prepareSignTransfer(newCtx(), pubkey, toPubkeyHash, new BigDecimal("100"));
         });
