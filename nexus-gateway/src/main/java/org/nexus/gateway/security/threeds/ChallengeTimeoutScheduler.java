@@ -14,10 +14,12 @@ import java.util.List;
  * Challenge 超时调度器 — 定时扫描超时的 Challenge 认证。
  *
  * <p>每 30 秒扫描一次，将超过 {@code challengeTimeoutSeconds}（默认 300 秒 / 5 分钟）
- * 未完成的 Challenge 认证标记为 TIMEOUT 状态，并发布 {@link ThreeDsAuthCompletedEvent}
- * 事件联动风控系统。</p>
+ * 未完成的 Challenge 认证标记为 TIMEOUT 状态，并发布 {@link ThreeDsAuthCompletedEvent}。</p>
  *
- * <p>超时认证视为认证失败（transStatus=N），风控系统应据此调整订单风险等级。</p>
+ * <p>超时认证视为认证失败（transStatus=N）。<b>如实说明：</b>设计文档里写的是"据此调整订单风险
+ * 等级"，但仓内至今没有风控消费者——该事件唯一的监听者是 {@link ThreeDsAuthCompletedObserver}，
+ * 它只计数与告警，不做任何风控动作（缺口见 Issue #34）。改这里之前先确认那个观察者是否已升级为
+ * 真实联动，否则注释会与代码脱节。</p>
  */
 @Component
 public class ChallengeTimeoutScheduler {
