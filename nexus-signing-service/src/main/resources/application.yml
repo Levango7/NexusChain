@@ -144,6 +144,16 @@ nexus:
     # 生产环境应配置 gateway / nginx / SLB 的内网 IP，防止客户端伪造 X-Forwarded-For。
     # 示例：trusted-proxy-ips=10.0.0.1,10.0.0.2,172.16.0.0/12（暂不支持 CIDR，仅精确 IP）
     trusted-proxy-ips: ${NEX_AUDIT_TRUSTED_PROXY_IPS:}
+  # === #48：nonce 水位校正（共享分配器 V3/V4）===
+  signing:
+    nonce:
+      # 每个地址最多每这么多秒实测一次链上 nonce，用于把水位**向前**校正
+      # （外部/人工用同一平台地址补发过交易、或 DB 被回滚时，链上值会超过本地水位，
+      #  此后发放的号会被节点以 `account.nonce >= tx.nonce` 丢弃 ⇒ 转账持续失败却看不出原因）。
+      # 0 或负数 = 关闭周期校正（首次播种仍会取一次链上值）。
+      # 不能设成 1 之类的极小值：那等于每次发放都打一次 RPC，会把 #33 省掉的开销加回来。
+      reconcile-interval-seconds: ${NEX_NONCE_RECONCILE_INTERVAL:300}
+
   # === P2-F1：多签审批配置 ===
   # SigningApprovalService 对大额签名操作要求多签审批：
   # 金额 ≥ large-amount-threshold 时创建审批请求，收集足够审批签名后才执行签名。
