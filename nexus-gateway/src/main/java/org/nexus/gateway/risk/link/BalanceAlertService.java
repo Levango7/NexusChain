@@ -121,7 +121,8 @@ public class BalanceAlertService {
      *   <li>查询商户 BALANCE 账户余额</li>
      *   <li>根据余额与阈值比较，确定当前预警级别</li>
      *   <li>预警级别跃迁检查（只允许升级，不允许降级）</li>
-     *   <li>更新 MerchantAccount.alertFlag</li>
+     *   <li>以 CAS 更新 MerchantAccount.alertFlag（{@code UPDATE ... WHERE alert_flag = 旧值}），
+     *       <b>只有翻动成功的一方才发通知</b>——多副本 / 事件驱动并发下同一跃迁只响一次</li>
      *   <li>发送预警通知（余额脱敏）</li>
      * </ol>
      *
@@ -160,18 +161,33 @@ public class BalanceAlertService {
             }
         }
 
-        // 更新 alertFlag
+        // 更新 alertFlag —— 原子 CAS（#35）：只有真的把旧值翻成新值的那一方才发通知。
+        // 旧写法是 findBy → setAlertFlag → save 的 check-then-act：prod replicaCount=3 且
+        // 余额变更还有一条 @Async 事件驱动入口（BalanceAlertListener），各副本读到同一个旧值、
+        // 各自判定"要跃迁"、各自发通知 ⇒ 同一跃迁 N 份告警。@Version 在这里救不了：
+        // 它让输者在提交时才抛异常，而通知早在提交前就发出去了。
+        String oldAlertFlag = account.getAlertFlag();
         String newAlertFlag = currentLevel != null ? currentLevel.name() : null;
-        if (!java.util.Objects.equals(account.getAlertFlag(), newAlertFlag)) {
-            account.setAlertFlag(newAlertFlag);
-            accountRepository.save(account);
-            log.info("预警级别更新: merchantId={}, previous={}, current={}, balance={}",
-                    merchantId, previousLevel, currentLevel, balance);
+        if (java.util.Objects.equals(oldAlertFlag, newAlertFlag)) {
+            return currentLevel;
+        }
 
-            // 发送预警通知（余额脱敏）
-            if (currentLevel != null) {
-                notifier.sendAlertNotification(merchantId, currentLevel, balance, config);
-            }
+        LocalDateTime transitionAt = LocalDateTime.now();
+        int flipped = oldAlertFlag == null
+                ? accountRepository.compareAndSetAlertFlagFromNull(account.getId(), newAlertFlag, transitionAt)
+                : accountRepository.compareAndSetAlertFlag(account.getId(), oldAlertFlag, newAlertFlag, transitionAt);
+        if (flipped == 0) {
+            log.info("预警跃迁已由其他副本（或事件驱动入口）先行完成，跳过通知: merchantId={}, expected={}, target={}",
+                    merchantId, oldAlertFlag, newAlertFlag);
+            return currentLevel;
+        }
+
+        log.info("预警级别更新: merchantId={}, previous={}, current={}, balance={}",
+                merchantId, previousLevel, currentLevel, balance);
+
+        // 发送预警通知（余额脱敏）
+        if (currentLevel != null) {
+            notifier.sendAlertNotification(merchantId, currentLevel, balance, config);
         }
 
         return currentLevel;
