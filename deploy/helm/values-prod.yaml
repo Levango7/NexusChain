@@ -137,6 +137,13 @@ nexus-signing-service:
     # 抬高上限只增加失败延迟，不影响正常耗时。
     NEX_MPC_ENGINE_CGGMP_DEADLINE_MS: "300000"
     NEX_MPC_ENGINE_TLS_OVERRIDE_AUTHORITY: "localhost"
+    # #32（2026-10-15）：审批状态跨副本共享。本服务 replicaCount=3（见上 :79），而审批请求的
+    #   创建（POST /api/v1/transfers/sign）与执行确认（POST /transfers/sign/approved）是两次
+    #   独立请求、经 LB 落到任意副本 ⇒ 审批若只存各副本内存，"A 建的审批 B/C 查不到"。
+    #   JpaApprovalStore（任务 #375/#378）与本栈的 MySQL 都已就绪，此前 Helm 与
+    #   docker-compose.prod.yml **两条 prod 路径都没设这个键**，即 prod 一直跑内存存储。
+    #   jpa 而 Repository 不可用时服务现在会拒绝启动（fail-closed），不再静默退回内存。
+    NEX_APPROVAL_STORE_TYPE: "jpa"
   extraVolumes:
     - name: mpc-certs
       secret:

@@ -245,8 +245,10 @@ public class SigningApprovalService {
      *   <li>回落遗留开关 {@code useDatabaseLegacy}：true → jpa，false → memory</li>
      * </ol>
      *
-     * <p>jpa 模式要求 {@code jpaRepository} 非空；缺失时记录 WARN 并回退
-     * 内存存储（fail-safe，保证服务可用性）。</p>
+     * <p>jpa 模式要求 {@code jpaRepository} 非空；缺失时<b>抛 {@link IllegalStateException}
+     * 拒绝启动</b>（#32 由"WARN + 静默回退内存"改为 fail-closed——审批状态属资金安全关键路径，
+     * 多副本下静默降级等于把状态切成三份互不可见的内存副本，服务还照样健康，问题只藏在日志里）。
+     * 未知的 {@code storeType} 同样抛错，避免拼写错误降级成内存存储。</p>
      */
     private SigningApprovalService(MpcApprovalPolicy mpcApprovalPolicy,
                                    AuditLogService auditLogService,
@@ -271,14 +273,17 @@ public class SigningApprovalService {
             String effectiveType = resolveStoreType(this.storeType, useDatabaseLegacy);
             switch (effectiveType) {
                 case "jpa" -> {
-                    if (jpaRepository != null) {
-                        this.requestStore = new JpaApprovalStore(jpaRepository);
-                        log.info("使用数据库持久化审批存储（多实例共享）: table=signing_approval_request");
-                    } else {
-                        this.requestStore = new MapApprovalStore(new ConcurrentHashMap<>());
-                        log.warn("store-type=jpa 但 JPA Repository 不可用，回退到内存审批存储"
-                                + "（请检查 datasource 配置与 spring-boot-starter-data-jpa 依赖）");
+                    if (jpaRepository == null) {
+                        // fail-closed：这里若静默回退内存，prod replicaCount=3 就退化成
+                        // "pod A 建的审批 pod B/C 看不见"，而服务仍健康启动、只在日志里留一句 WARN。
+                        throw new IllegalStateException(
+                                "审批存储要求 store-type=jpa（或遗留开关 use-database=true），但 "
+                                        + "SigningApprovalRequestRepository 不可用——拒绝启动。请检查 datasource 配置与 "
+                                        + "spring-boot-starter-data-jpa 依赖；确为单实例部署才显式设置 "
+                                        + "nexus.approval.store-type=memory。");
                     }
+                    this.requestStore = new JpaApprovalStore(jpaRepository);
+                    log.info("使用数据库持久化审批存储（多实例共享）: table=signing_approval_request");
                 }
                 case "file" -> {
                     this.requestStore = new FileBasedApprovalStore(this.approvalDataFilePath);
@@ -288,10 +293,8 @@ public class SigningApprovalService {
                     this.requestStore = new MapApprovalStore(new ConcurrentHashMap<>());
                     log.info("使用内存审批存储（单实例部署）");
                 }
-                default -> {
-                    this.requestStore = new MapApprovalStore(new ConcurrentHashMap<>());
-                    log.warn("未知的审批存储类型 '{}'，回退到内存审批存储", effectiveType);
-                }
+                default -> throw new IllegalStateException("未知的审批存储类型 '" + effectiveType
+                        + "'，可选值: memory / file / jpa（拼错不得静默降级为内存存储）");
             }
         }
 
@@ -405,6 +408,21 @@ public class SigningApprovalService {
 
     /**
      * 提交审批通过。
+     *
+     * <p><b>⚠ 现查（2026-10-15）：本方法与 {@link #reject} 在全部 main 源码里没有调用方，
+     * 且 {@code nexus-signing-service} 未暴露任何 approve/reject REST 端点</b>
+     * （{@code TxController} 只有 {@code /api/v1/transfers/sign}、{@code /sign/approved}、
+     * {@code /capability}、{@code /getNoncePool}）。后果：没有任何生产路径能把请求从 PENDING
+     * 推到 APPROVED，而 {@code /sign/approved} 的前置判据恰是
+     * {@code status == APPROVED} ⇒ 大额签名在"审批通过后执行"这一步事实上不可达。
+     * {@code approver-whitelist}（application.yml:160-163）与多签 {@code requiredApprovers}
+     * 因此都还是空转的配置。</p>
+     *
+     * <p>这与 #32 修的是两个缺陷：#32 修的是"审批请求只存在创建它的那个副本内存里，
+     * 别的副本 {@code getRequest(approvalId)} 查不到"（创建与执行是两次独立请求，经 LB 落到
+     * 哪个副本不确定 ⇒ 表现为 {@code Approval request not found} 偶发失败；具体命中率取决于
+     * 实际路由策略，此处未测量）；本节说的是"决策写入侧无入口"，需要新增端点才能解，
+     * 另立任务跟踪，勿混为一谈。</p>
      *
      * @param requestId 审批请求 ID
      * @param approver  审批人标识
@@ -617,19 +635,22 @@ public class SigningApprovalService {
      * <p>由 {@code @Scheduled} 驱动，每 {@code nexus.approval.cleanup-interval-ms} 毫秒执行一次（默认 60 秒）。
      * 清理分两阶段，避免直接删除 PENDING 请求导致调用方查询返回 null 而非 EXPIRED：</p>
      * <ol>
-     *   <li><b>标记过期</b>：扫描 PENDING 且 {@code deadline < now} 的请求，状态转换为 EXPIRED，
-     *       记录审计日志。保留请求实例供调用方查询与审计追溯。</li>
+     *   <li><b>标记过期</b>：扫描 PENDING 且 {@code deadline < now} 的请求，以存储层原子 CAS
+     *       迁移为 EXPIRED 并记录审计日志。保留请求实例供调用方查询与审计追溯。</li>
      *   <li><b>EXECUTING 卡死恢复</b>（P1-8 修复，v2.27.0）：扫描 EXECUTING 且
-     *       {@code deadline < now} 的请求（签名服务崩溃导致卡死），回退到 APPROVED 允许重试，
-     *       记录审计日志。</li>
+     *       {@code deadline < now} 的请求（签名服务崩溃导致卡死），以原子 CAS 回退到 APPROVED
+     *       允许重试并记录审计日志——与 {@link #revertExecuting} 同一口径。</li>
      *   <li><b>释放内存</b>：清理终态（EXPIRED / REJECTED / EXECUTED）且
      *       {@code deadline < now - cleanupRetentionSeconds} 的请求，从 {@link #requestStore} 移除。
      *       保留期内（默认 1 小时）的终态请求保留以供审计查询。
      *       APPROVED 状态不清理（签名执行流程可能仍在进行，由 {@link #markExecuted} 处理）。</li>
      * </ol>
      *
-     * <p>线程安全：使用 ConcurrentHashMap 的 entrySet().removeIf 与 computeIfPresent 原子操作，
-     * 清理期间不影响并发审批决策。</p>
+     * <p>并发口径：两处状态迁移都委托 {@link ApprovalStore#compareAndTransition}，迁移失败
+     * （状态已变或其他副本抢先）即跳过该条、不覆写也不重复出审计。这是把 {@code store-type}
+     * 切到共享实现（{@link JpaApprovalStore}，prod {@code replicaCount=3} 共表）的<b>前置条件</b>：
+     * 整行 {@code save} 覆写在共享 store 上会把其他副本刚写入的状态打回旧值，包括把
+     * {@code EXECUTED}（已签名）回退成 {@code APPROVED} 从而重开二次签名窗口。</p>
      */
     @Scheduled(fixedDelayString = "${nexus.approval.cleanup-interval-ms:60000}")
     public void cleanupExpiredRequests() {
@@ -642,8 +663,13 @@ public class SigningApprovalService {
             SigningApprovalRequest req = entry.getValue();
             if (req.getStatus() == SigningApprovalRequest.Status.PENDING
                     && req.getDeadline().isBefore(now)) {
-                SigningApprovalRequest expired = req.withStatus(SigningApprovalRequest.Status.EXPIRED);
-                requestStore.save(entry.getKey(), expired);
+                // 原子 CAS 而非裸 save：store 被多副本共享（JpaApprovalStore，prod replicaCount=3）时，
+                // 整行覆写会把别副本刚迁移的状态打回旧值（丢更新），同一请求还会各写一条审计。
+                if (!requestStore.compareAndTransition(entry.getKey(),
+                        SigningApprovalRequest.Status.PENDING, SigningApprovalRequest.Status.EXPIRED)) {
+                    log.debug("审批请求过期标记由其他副本先行完成: requestId={}", entry.getKey());
+                    continue;
+                }
                 markedExpired++;
                 log.info("审批请求过期标记: requestId={}, deadline={}", entry.getKey(), req.getDeadline());
                 auditLogService.log(AuditEvent.builder(AuditEvent.Type.APPROVAL_DECISION,
@@ -658,13 +684,19 @@ public class SigningApprovalService {
 
         // P1-8 修复（v2.27.0）：EXECUTING 卡死恢复——签名服务崩溃后 EXECUTING 状态的请求
         // 超过 deadline 仍未完成，回退到 APPROVED 允许后续重试。
+        // 与 revertExecuting 同口径走 CAS：共享 store 下若此处用裸 save，可能把别副本刚写的
+        // EXECUTED（已签名）打回 APPROVED ⇒ 同一笔资金二次签名的窗口。
         int revertedExecuting = 0;
         for (Map.Entry<String, SigningApprovalRequest> entry : requestStore.entrySet()) {
             SigningApprovalRequest req = entry.getValue();
             if (req.getStatus() == SigningApprovalRequest.Status.EXECUTING
                     && req.getDeadline().isBefore(now)) {
-                SigningApprovalRequest reverted = req.withStatus(SigningApprovalRequest.Status.APPROVED);
-                requestStore.save(entry.getKey(), reverted);
+                if (!requestStore.compareAndTransition(entry.getKey(),
+                        SigningApprovalRequest.Status.EXECUTING, SigningApprovalRequest.Status.APPROVED)) {
+                    log.debug("EXECUTING 卡死恢复由其他副本先行完成或状态已迁移: requestId={}",
+                            entry.getKey());
+                    continue;
+                }
                 revertedExecuting++;
                 log.warn("EXECUTING 请求卡死恢复 (EXECUTING→APPROVED): requestId={}, deadline={}",
                         entry.getKey(), req.getDeadline());

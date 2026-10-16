@@ -88,6 +88,12 @@ services:
       - NEX_DB_URL=jdbc:mysql://mysql:3306/nexus_signing?useUnicode=true&characterEncoding=utf-8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
       - NEX_DB_USERNAME=nexus_signing
       - NEX_DB_PASSWORD=${MYSQL_PASSWORD:?prod 必需：禁止占位默认值}
+      # #32：审批状态跨副本共享。审批请求的"创建"与"执行确认"是两次独立请求，经 LB 可能
+      # 落到不同副本（Helm prod 为 nexus-signing-service.replicaCount=3）⇒ 若各副本只持有
+      # 自己那份内存，pod A 建的审批在 B/C 查不到。DB 上面已接、JpaApprovalStore 早已实现，
+      # 缺的就是这个开关。设为 jpa 后若 Repository 不可用，服务会**拒绝启动**而不是静默退回
+      # 内存（本次同时把那条 fail-open 改成 fail-closed）。
+      - NEX_APPROVAL_STORE_TYPE=jpa
       # P0-1 Task 239: MPC 多端点路由（逗号分隔的 host:port 列表）
       - NEX_MPC_ENGINE_ENDPOINTS=mpc-engine-0:50051,mpc-engine-1:50051,mpc-engine-2:50051
       # mTLS 证书路径（生产通过 Secret / 挂载卷注入）
