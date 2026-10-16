@@ -6,6 +6,7 @@ import org.nexus.common.tracing.BusinessSpan;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.google.gson.JsonObject;
 import org.nexus.sdk.common.APIResult;
+import org.nexus.signing.pool.NonceAllocator;
 import org.nexus.signing.pool.NoncePool;
 import org.nexus.signing.pool.NonceState;
 import org.nexus.signing.keystore.PlatformKeystore;
@@ -54,6 +55,14 @@ public class TxController {
 
     @Autowired
     NoncePool noncePool;
+
+    /**
+     * #33：nonce 的<b>共享原子分配器</b>（DB 认领）。自本笔起，签名用的 nonce 一律由它发放；
+     * {@link #noncePool} 退化为"在飞交易台账"——仍记录 txHash→nonce 供确认扫描（PoolTask）与
+     * {@code /getNoncePool} 观测使用，但不再参与发放。
+     */
+    @Autowired
+    NonceAllocator nonceAllocator;
 
     @Autowired
     NodeController nodeController;
@@ -372,7 +381,6 @@ public class TxController {
                         + "caller-supplied private keys are no longer accepted");
             }
 
-            long nownonce=0;
             String frompubhash=WalletUtils.pubkeyStrToPubkeyHashStr(fromPubkey);
             String address=WalletUtils.pubkeyHashToAddress(frompubhash);
             if(WalletUtils.verifyAddress(address)!=0){
@@ -381,20 +389,29 @@ public class TxController {
                 return failResponse(HttpStatus.BAD_REQUEST, "Address Error");
             }
             span.attr("signing.from.address", address);
-            long maxnonce=noncePool.getMaxNonce(address);
-            if(maxnonce==0){
-                //rpc获取nonce
-                JsonObject getnonoce=nodeController.getNonce(frompubhash);
-                int Code= getnonoce != null && getnonoce.has("code") ? getnonoce.get("code").getAsInt() : 0;
-                if(Code==5000){
-                    span.attr("signing.error", "nonce_fetch_failed").error(null);
-                    auditSignFailure(actor, sourceIp, "nonce_fetch_failed", amount);
-                    return failResponse(HttpStatus.BAD_GATEWAY, "Error");
-                }
-                long dbnonce= getnonoce != null && getnonoce.has("data") ? getnonoce.get("data").getAsLong() : 0;
-                nownonce=dbnonce;
-            }else{
-                nownonce=maxnonce;
+            // #33：nonce 改为<b>共享原子认领</b>，取代"读本副本内存池的 maxNonce"。旧写法有两个洞：
+            //   · NoncePool.getMaxNonce 是**读**（返回 TreeMap.lastKey，不摘除不占位），而分配跨
+            //     两次调用（读 → 签名 → ++ → add）且调用点无同步 ⇒ 同一副本内两个并发签名同号；
+            //   · prod replicaCount=3 且无按地址亲和 ⇒ 三副本各持一份池，跨副本也同号。
+            // 同号上链必有一笔被替换/丢弃，而两个调用方都已收到"广播成功"。链上 RPC 现在只在
+            // 该地址首次播种时打一次（平时零 RPC 开销）。失败响应码与文案沿用原 nonce_fetch_failed
+            // 路径（502 / "Error"），不改变对外可见语义。
+            long nownonce;
+            try {
+                nownonce = nonceAllocator.claim(address, () -> {
+                    JsonObject rpc = nodeController.getNonce(frompubhash);
+                    int code = rpc != null && rpc.has("code") ? rpc.get("code").getAsInt() : 0;
+                    if (rpc == null || code == 5000 || !rpc.has("data")) {
+                        throw new NonceAllocator.NonceAllocationException(
+                                "播种需要链上 nonce，但 RPC 获取失败: frompubhash=" + frompubhash + ", code=" + code);
+                    }
+                    return rpc.get("data").getAsLong();
+                });
+            } catch (NonceAllocator.NonceAllocationException nonceStoreDown) {
+                // fail-closed：共享水位拿不到就拒单。回退到进程内计数正是本缺陷的成因，不允许。
+                span.attr("signing.error", "nonce_fetch_failed").error(nonceStoreDown);
+                auditSignFailure(actor, sourceIp, "nonce_fetch_failed", amount);
+                return failResponse(HttpStatus.BAD_GATEWAY, "Error");
             }
             span.attr("signing.nonce", nownonce);
             ObjectNode data = TxUtils.ClientToTransferAccount(fromPubkey,toPubkeyHash,amount,prikey,nownonce);
