@@ -326,6 +326,66 @@ jobs:
             || { echo "FAIL: 渲染产物中 env secretKeyRef 未指向 mpc-engine-secret"; exit 1; }
           echo "  ✓ prod SealedSecret 模式：无 stringData + env 引用 mpc-engine-secret"
 
+      # #47（2026-10-16）：**prod 覆盖层**渲染断言。
+      # 为什么要有这条：上面 164 行的漂移比对是 `helm template nexus deploy/helm --set …`，
+      # **不带 `-f deploy/helm/values-prod.yaml`** ⇒ 凡往 prod 覆盖层加的键，本 workflow
+      # 都是"必然绿、但根本不覆盖那一行"。#112 往 `nexus-signing-service.extraEnv` 加了
+      # `NEX_APPROVAL_STORE_TYPE=jpa`（prod replicaCount=3，审批不共享就会"A 建的审批 B/C 查不到"），
+      # 当时只能靠本机 helm 3.14 双向取证；本步把同一验法固化进 CI，防"日后删键/改名而流水线不知情"。
+      # 注意本 workflow 的 paths 过滤只盯 deploy/k8s/** 与 deploy/helm/**，**只改 .github/ 的
+      # PR 不会触发它**（本文件 18-21 行的 workflow_dispatch 注释已记录过这个坑）⇒ 本步的
+      # CI 实测值要靠 workflow_dispatch 在分支上取。
+      - name: prod 覆盖层渲染断言（values-prod.yaml）
+        run: |
+          set -e
+          helm template nexus deploy/helm -f deploy/helm/values-prod.yaml > /tmp/prod-overlay-rendered.yaml
+          helm template nexus deploy/helm > /tmp/default-rendered.yaml
+          python3 - <<'PYEOF'
+          import re
+
+          prod = open('/tmp/prod-overlay-rendered.yaml').read()
+          default = open('/tmp/default-rendered.yaml').read()
+
+          def signing_deployment(text):
+              # 只认「行首 kind: Deployment」且「metadata.name 恰为 nexus-signing-service」的文档。
+              # 朴素 substring 匹配会把 HPA 文档也捞进来（#112 本机取证时踩过这个假阳性）。
+              for doc in text.split('\n---\n'):
+                  if re.search(r'(?m)^kind: Deployment$', doc) and \
+                     re.search(r'(?m)^  name: nexus-signing-service$', doc):
+                      return doc
+              return None
+
+          d = signing_deployment(prod)
+          assert d is not None, (
+              "FAIL: prod 渲染里没有 nexus-signing-service 的 Deployment —— "
+              "结构变了？先查行首 kind:/metadata.name 是否还是这两个字面值")
+
+          m = re.search(r'-\s*name: NEX_APPROVAL_STORE_TYPE\s*\n\s*value: "?([^\\"\n]*)', d)
+          assert m is not None, (
+              "FAIL: signing Deployment 没渲染出 NEX_APPROVAL_STORE_TYPE —— prod 是 3 副本，"
+              "审批状态必须共享（jpa）；此键被删/改名会让服务静默退回每副本一份内存")
+          assert m.group(1).strip() == 'jpa', \
+              f"FAIL: NEX_APPROVAL_STORE_TYPE 渲染值 {m.group(1)!r} != 'jpa'"
+
+          r = re.search(r'(?m)^\s*replicas: (\d+)', d)
+          assert r is not None and r.group(1) == '3', \
+              f"FAIL: signing Deployment replicas={r.group(1) if r else '缺失'}，期望 3"
+
+          # 反向对照：默认 values 里必须没有该键 ⇒ 上面那次命中确实来自 prod 覆盖层，
+          # 不是 chart 默认值本来就带着（否则本断言退化成"它自己合成的命题"）。
+          assert 'NEX_APPROVAL_STORE_TYPE' not in default, (
+              "FAIL: 默认 values 渲染里也出现 NEX_APPROVAL_STORE_TYPE —— 负样本失效，"
+              "需要重新审视这条断言在比什么")
+          print("  ✓ prod 覆盖层：signing env NEX_APPROVAL_STORE_TYPE=jpa + replicas=3；默认 values 无此键")
+          PYEOF
+          # 源文件侧的键也必须在（防"渲染恰好对、但 values 里被注释掉"的另一路漂移）
+          grep -q 'NEX_APPROVAL_STORE_TYPE: "jpa"' deploy/helm/values-prod.yaml \
+            || { echo 'FAIL: values-prod.yaml 缺 NEX_APPROVAL_STORE_TYPE: "jpa"'; exit 1; }
+          # prod 两条部署拓扑口径必须一致（compose 是列表字符串形状）
+          grep -q 'NEX_APPROVAL_STORE_TYPE=jpa' docker-compose.prod.yml \
+            || { echo 'FAIL: docker-compose.prod.yml 缺 NEX_APPROVAL_STORE_TYPE=jpa'; exit 1; }
+          echo "  ✓ values-prod.yaml 与 docker-compose.prod.yml 两条 prod 路径同口径"
+
       # A 批（2026-09-08）：Alertmanager 路由树真实校验——此前 5 条告警 +
       # 路由配置全存在但**从未验证过路由语法**（健康扫描抓出的"看起来有
       # 但实际没有"同族盲点）。amtool check-config 验证 receivers/route/
