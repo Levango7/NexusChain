@@ -2,6 +2,7 @@ package org.nexus.signing.approval;
 
 import org.junit.jupiter.api.*;
 import org.nexus.signing.audit.AuditLogService;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.nexus.signing.mpc.MpcApprovalPolicy;
 import java.math.BigDecimal;
 import java.nio.file.*;
@@ -70,6 +71,8 @@ class SigningApprovalServiceEnhancedTest {
                 new MapApprovalStore(new ConcurrentHashMap<>()), null);
         String rid = service.createApprovalRequest("pkA","pkB",new BigDecimal("30000"),"USDT","init","1.1.1.1");
         assertNotNull(rid);
+        // 白名单现在必须显式配置：fail-closed 之后空名单=没人能批
+        ReflectionTestUtils.setField(service, "approverWhitelist", "bob@nexus,carol@nexus,eve@nexus");
         assertEquals(SigningApprovalRequest.Status.PENDING, service.getRequest(rid).getStatus());
 
         var approved = service.approve(rid, "bob@nexus", "1.1.1.2");
@@ -87,6 +90,7 @@ class SigningApprovalServiceEnhancedTest {
         var service = new SigningApprovalService(mpcPolicy, auditLog,
                 new MapApprovalStore(new ConcurrentHashMap<>()), null);
         String rid = service.createApprovalRequest("pkA","pkB",new BigDecimal("30000"),"USDT","init","1.1.1.1");
+        ReflectionTestUtils.setField(service, "approverWhitelist", "bob@nexus,carol@nexus,eve@nexus");
         var rejected = service.reject(rid, "eve@nexus", "1.1.1.4");
         assertEquals(SigningApprovalRequest.Status.REJECTED, rejected.getStatus());
     }
