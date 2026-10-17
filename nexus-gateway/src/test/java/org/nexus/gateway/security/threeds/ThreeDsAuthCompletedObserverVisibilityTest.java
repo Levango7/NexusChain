@@ -10,6 +10,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.nexus.gateway.security.audit.SecurityAuditService;
 import org.nexus.gateway.security.audit.SecurityMetricsRecorder;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
@@ -17,6 +18,13 @@ import org.springframework.context.annotation.AnnotationConfigApplicationContext
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 /**
  * 3DS 认证完成事件"占位观察者"的可见性测试（#34，沿用 #98 的口径：只让空转可见，不改风控/资金语义）。
@@ -46,6 +54,8 @@ class ThreeDsAuthCompletedObserverVisibilityTest {
 
     private SimpleMeterRegistry registry;
     private SecurityMetricsRecorder recorder;
+    /** 只验"每笔事件都递交给审计接缝"；映射与截断由 SecurityAuditPersistenceTest 专测。 */
+    private SecurityAuditService securityAuditService;
     private Logger observerLogger;
     private Level originalLevel;
     private ListAppender<ILoggingEvent> appender;
@@ -54,6 +64,7 @@ class ThreeDsAuthCompletedObserverVisibilityTest {
     void setUp() {
         registry = new SimpleMeterRegistry();
         recorder = new SecurityMetricsRecorder(registry);
+        securityAuditService = mock(SecurityAuditService.class);
 
         observerLogger = (Logger) LoggerFactory.getLogger(ThreeDsAuthCompletedObserver.class);
         originalLevel = observerLogger.getLevel();
@@ -103,7 +114,26 @@ class ThreeDsAuthCompletedObserverVisibilityTest {
         });
     }
 
-    // ==================== 不越权 ====================
+    @Test
+    @DisplayName("每笔事件都要落一条可查审计（与「只告警一次」是两件事）")
+    void everyEventProducesOneAuditRow() {
+        withContext(emit -> {
+            for (int i = 1; i <= 3; i++) {
+                emit.publish(event((long) i, TransStatus.N, AuthStatus.TIMEOUT));
+            }
+            verify(securityAuditService, times(3))
+                    .recordThreeDsAuth(eq(100L), eq("N"), any(), contains("authStatus=TIMEOUT"));
+        });
+    }
+
+    @Test
+    @DisplayName("没有事件就没有审计行（不凭空造记录）")
+    void noEventMeansNoAuditRow() {
+        withContext(emit -> verify(securityAuditService, never())
+                .recordThreeDsAuth(any(), any(), any(), any()));
+    }
+
+    // ==================== 不越权 ====
 
     @Test
     @DisplayName("观察者只动 3DS 计数：其它安全计数器纹丝不动（没顺手发明风控动作）")
@@ -149,9 +179,11 @@ class ThreeDsAuthCompletedObserverVisibilityTest {
      * 注解被删/写错 ⇒ 计数恒 0，第一个用例即红。
      */
     private void withContext(java.util.function.Consumer<Emit> body) {
-        ThreeDsAuthCompletedObserver observer = new ThreeDsAuthCompletedObserver(recorder);
+        ThreeDsAuthCompletedObserver observer =
+                new ThreeDsAuthCompletedObserver(recorder, securityAuditService);
         try (AnnotationConfigApplicationContext ctx = new AnnotationConfigApplicationContext()) {
             ctx.registerBean(SecurityMetricsRecorder.class, () -> recorder);
+            ctx.registerBean(SecurityAuditService.class, () -> securityAuditService);
             ctx.registerBean(ThreeDsAuthCompletedObserver.class, () -> observer);
             ctx.refresh();
             body.accept(event -> ctx.publishEvent(event));

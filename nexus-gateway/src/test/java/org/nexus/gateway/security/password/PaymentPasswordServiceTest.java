@@ -45,6 +45,9 @@ class PaymentPasswordServiceTest {
     @Mock
     private PasswordHistoryService historyService;
 
+    @Mock
+    private org.nexus.gateway.security.audit.SecurityAuditService securityAuditService;
+
     @InjectMocks
     private PaymentPasswordService paymentPasswordService;
 
@@ -220,6 +223,15 @@ class PaymentPasswordServiceTest {
         assertTrue(entity.getLockedUntil().isAfter(Instant.now()));
         assertTrue(entity.getLockedUntil().isBefore(Instant.now().plus(31, ChronoUnit.MINUTES)));
         assertNotNull(result.getLockedUntil());
+
+        // 自动锁定必须留下可查审计（此前只有一条 WARN，落在 root 里不可检索）。
+        ArgumentCaptor<String> detailCap = ArgumentCaptor.forClass(String.class);
+        verify(securityAuditService).recordPasswordLocked(eq(MERCHANT_ID), detailCap.capture());
+        String detail = detailCap.getValue();
+        assertTrue(detail.contains("5/" + defaultConfig.getMaxFailedAttempts()),
+                "detail 要说明失败次数与阈值（5/N），实际=" + detail);
+        assertFalse(detail.contains(WRONG_PASSWORD) || detail.contains(VALID_PASSWORD),
+                "审计详情绝不得出现密码明文（含被拒的那次输入），实际=" + detail);
     }
 
     @Test
