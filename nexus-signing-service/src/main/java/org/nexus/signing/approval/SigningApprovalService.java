@@ -57,7 +57,8 @@ import java.util.stream.Collectors;
  *   <li>✗ 审批人通知：未实现（需集成消息队列 / 邮件 / 钉钉，
  *         留待 P3 阶段；当前仅记录审计日志，运维通过日志监控发现待审批）</li>
  *   <li>✓ 审批人白名单：通过 {@code nexus.approval.approver-whitelist} 配置逗号分隔的
- *         审批人地址集合，空值表示不限制（任何 SIGNER 角色均可审批）</li>
+ *         审批人标识集合。<b>fail-closed</b>：空值/未配置 ⇒ 任何人都不能批（2026-10-17 改掉
+ *         旧的"空值不限制"，见 {@link #approverDenialReason}）。要启用人工审批必须显式列名单</li>
  *   <li>✓ 过期清理：{@link #cleanupExpiredRequests} 定时任务（@Scheduled，每分钟执行）
  *         将 PENDING+过期请求标记为 EXPIRED，并清理终态过期请求释放内存</li>
  * </ul></p>
@@ -446,26 +447,32 @@ public class SigningApprovalService {
     }
 
     /**
-     * 判断审批人是否在白名单内。
-     * <p>白名单未配置（空字符串或 null）时返回 true（不限制）；
-     * 否则按逗号分隔解析白名单集合，校验审批人地址是否包含在内。
-     * 解析时 trim 每个元素，空元素被忽略。</p>
+     * 判断审批人能否下决策，返回拒绝原因；返回 {@code null} 表示允许。
      *
-     * @param approverAddress 审批人地址标识
-     * @return true 表示允许审批；false 表示不在白名单
+     * <p><b>fail-closed（2026-10-17 改掉原来的 fail-open）</b>：白名单未配置时旧实现返回
+     * {@code true}（"不限制"），于是"谁能审批大额签名"这件事的默认答案是<b>任何调用方</b>。
+     * 大额签名的审批是资金路径上的最后一道人工闸门，缺配置必须等于"没人能批"，
+     * 而不是"谁都能批"。要启用审批必须显式配置
+     * {@code nexus.approval.approver-whitelist}（prod 两套拓扑此前都未设置该变量，见 #112）。</p>
+     *
+     * <p>拒绝原因分成三种可区分的字符串，是为了让审计里"没配"与"不在名单"不被混成一条：
+     * 前者要运维去补配置，后者要排查调用方身份。</p>
+     *
+     * @param approverAddress 审批人标识（来自已认证主体，绝不允许由请求体自带）
+     * @return {@code null} 表示允许；否则为可进审计的拒绝原因
      */
-    private boolean isApproverAllowed(String approverAddress) {
+    private String approverDenialReason(String approverAddress) {
         if (approverWhitelist == null || approverWhitelist.trim().isEmpty()) {
-            return true; // 未配置白名单则不限制
+            return "approver_whitelist_not_configured";
         }
         if (approverAddress == null || approverAddress.isBlank()) {
-            return false;
+            return "approver_identity_missing";
         }
         Set<String> whitelist = Arrays.stream(approverWhitelist.split(","))
                 .map(String::trim)
                 .filter(s -> !s.isEmpty())
                 .collect(Collectors.toSet());
-        return whitelist.contains(approverAddress.trim());
+        return whitelist.contains(approverAddress.trim()) ? null : "approver_not_in_whitelist";
     }
 
     private SigningApprovalRequest updateRequest(String requestId, String actor,
@@ -473,16 +480,17 @@ public class SigningApprovalService {
         if (requestId == null) {
             return null;
         }
-        // 项2：审批人白名单校验。未配置白名单时 isApproverAllowed 返回 true（不限制）。
-        if (!isApproverAllowed(actor)) {
-            log.warn("审批人不在白名单，拒绝决策: requestId={}, actor={}, decision={}",
-                    requestId, actor, approve ? "APPROVE" : "REJECT");
+        // 项2：审批人白名单校验。fail-closed——白名单没配就等于没人能批（旧实现是"没配就不限制"）。
+        String denialReason = approverDenialReason(actor);
+        if (denialReason != null) {
+            log.warn("审批人被拒绝: requestId={}, actor={}, reason={}, decision={}",
+                    requestId, actor, denialReason, approve ? "APPROVE" : "REJECT");
             auditLogService.log(AuditEvent.builder(AuditEvent.Type.APPROVAL_DECISION,
                             AuditEvent.Outcome.DENIED, actor)
                     .sourceIp(sourceIp)
                     .target(requestId)
                     .detail("decision", approve ? "APPROVE" : "REJECT")
-                    .detail("denied_reason", "approver_not_in_whitelist")
+                    .detail("denied_reason", denialReason)
                     .build());
             // 返回当前请求快照（不修改状态）；若请求不存在则返回 null
             return requestStore.get(requestId);
