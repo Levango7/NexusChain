@@ -22,14 +22,39 @@ import org.springframework.stereotype.Service;
  * </pre></p>
  *
  * <p>设计依据：Wave 12 设计文档 §9.3.1 — SecurityAuditService。</p>
+ *
+ * <p><b>两处输出（#52 A 段）：</b>①结构化 JSON 日志（专用 logger {@code SECURITY_AUDIT}，
+ * 该 logger 没有自己的 appender，会落到 root——不丢，但不可查）；②交给 {@link SecurityAuditSink}
+ * 落 {@code audit_events} 表，实现方在 {@code audit} 切片（依赖倒置的成因见该接口注释），
+ * 走 {@code AuditLogService} 已有的失败旁路（落库异常只记 {@code AUDIT_PERSIST_FAILED}，
+ * 不把业务带倒）。</p>
+ *
+ * <p>为什么没有新表/新列：{@code audit_events} 已带 {@code idx_audit_action} 与
+ * {@code idx_audit_merchant}/{@code idx_audit_ts}，把类别编进 {@code action} 前缀
+ * （{@code SECURITY_THREE_DS_AUTH} 这类）就能按类别与商户检索。代价是没有独立的 severity 维度
+ * （{@code AuditEventType} 里也没有该字段，不在此处发明），需要分级检索时另开一笔加列。</p>
  */
 @Service
 public class SecurityAuditService {
 
     private static final Logger auditLog = LoggerFactory.getLogger("SECURITY_AUDIT");
 
+    private final SecurityAuditSink sink;
+
+    /** 无落库接缝的构造：只保留日志输出（留给不要求落库的单测与本地装配）。 */
+    public SecurityAuditService() {
+        this.sink = null;
+    }
+
+    /** 主构造器：多构造器下必须显式 @Autowired，否则 Spring 选无参那个 ⇒ sink 永不注入、
+     *  审计静默退回"只写日志"（同 {@code AuditLogService:44} 记过的坑）。 */
+    @org.springframework.beans.factory.annotation.Autowired
+    public SecurityAuditService(SecurityAuditSink sink) {
+        this.sink = sink;
+    }
+
     /**
-     * 记录安全审计事件。将事件以结构化 JSON 格式写入专用审计日志。
+     * 记录安全审计事件：结构化日志 + 落 {@code audit_events}。
      *
      * @param event 审计事件，safeDetails 字段必须为脱敏后的信息
      */
@@ -50,6 +75,10 @@ public class SecurityAuditService {
                 event.getPaymentOrderId() != null ? event.getPaymentOrderId() : "null",
                 event.getSafeDetails() != null ? event.getSafeDetails() : "null"
         );
+
+        if (sink != null) {
+            sink.persist(event);
+        }
     }
 
     /**

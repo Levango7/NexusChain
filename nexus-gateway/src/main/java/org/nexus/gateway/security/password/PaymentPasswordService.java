@@ -37,13 +37,21 @@ public class PaymentPasswordService {
     private final PasswordSecurityConfigService configService;
     private final PasswordHistoryService historyService;
     private final BCryptPasswordEncoder passwordEncoder;
+    /**
+     * 自动锁定这一安全事件要落到可查询的 {@code audit_events}（此前只有一条 WARN）。
+     * 只在"跨过阈值的那一次"记一条，不是每次失败都记 ⇒ 无写放大；且 detail 只带尝试次数与
+     * 解锁时刻，绝不含密码材料或其哈希。
+     */
+    private final org.nexus.gateway.security.audit.SecurityAuditService securityAuditService;
 
     public PaymentPasswordService(MerchantPaymentPasswordRepository passwordRepository,
                                   PasswordSecurityConfigService configService,
-                                  PasswordHistoryService historyService) {
+                                  PasswordHistoryService historyService,
+                                  org.nexus.gateway.security.audit.SecurityAuditService securityAuditService) {
         this.passwordRepository = passwordRepository;
         this.configService = configService;
         this.historyService = historyService;
+        this.securityAuditService = securityAuditService;
         this.passwordEncoder = new BCryptPasswordEncoder(BCRYPT_COST);
     }
 
@@ -156,6 +164,9 @@ public class PaymentPasswordService {
                 passwordRepository.save(entity);
                 log.warn("Payment password locked for merchant {} after {} failed attempts",
                         merchantId, entity.getFailedAttempts());
+                securityAuditService.recordPasswordLocked(merchantId,
+                        "连续失败 " + entity.getFailedAttempts() + "/" + config.getMaxFailedAttempts()
+                                + " 次触发自动锁定，解锁时刻=" + entity.getLockedUntil());
                 return PasswordVerifyResult.locked(entity.getLockedUntil());
             }
 
