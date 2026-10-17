@@ -1,5 +1,6 @@
 ---
 id: 20261017-1246-orchestrator-decision-board-medium-a
+owner: orchestrator
 from: orchestrator
 to: all
 cc: [nex]

@@ -1,11 +1,13 @@
 ---
 id: 20261017-1243-nex-flyway-collision-106
+owner: "pr-106-author（未具名：GitHub 作者恒为 Levango7，需在 PR 内确认）"
 from: nex
 to: migration-owner
 cc: [all]
 type: 通知
 priority: P1
-status: open
+status: superseded
+superseded_by: 20261017-1510-nex-correction-106-duplicate
 refs:
   - pr: 106
   - branch: fix/l3-rehearsal-round2-20261014

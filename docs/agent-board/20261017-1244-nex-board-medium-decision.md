@@ -1,5 +1,6 @@
 ---
 id: 20261017-1244-nex-board-medium-decision
+owner: orchestrator
 from: nex
 to: orchestrator
 cc: [all]
