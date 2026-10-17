@@ -22,7 +22,8 @@ import java.util.Optional;
  * </ol>
  * </p>
  *
- * <p>认证结果通过 {@link ThreeDsAuthCompletedEvent} 事件发布联动风控系统。</p>
+ * <p>认证结果通过 {@link ThreeDsAuthCompletedEvent} 事件发布。<b>当前唯一监听者是
+ * {@link ThreeDsAuthCompletedObserver}，它只计数与告警，不做风控联动</b>（缺口见 Issue #34）。</p>
  */
 @Service
 public class ThreeDsService {
@@ -206,7 +207,9 @@ public class ThreeDsService {
     }
 
     /**
-     * 发布认证完成事件，联动风控系统。
+     * 发布认证完成事件。<b>注意：</b>本方法只在"认证流程结束"这一个点上是活的；无监听者时
+     * {@code publishEvent} 静默 no-op，历史上正是这样让"联动风控"停留在纸面。现在由
+     * {@link ThreeDsAuthCompletedObserver} 接住（只计数+告警）。
      */
     private void publishAuthCompletedEvent(ThreeDsAuthRecord record,
                                            ThreeDsServer.ThreeDsAuthResult result) {

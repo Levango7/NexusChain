@@ -3,10 +3,16 @@ package org.nexus.gateway.security.threeds;
 import org.springframework.context.ApplicationEvent;
 
 /**
- * 3DS 认证完成事件 — 认证流程结束时发布，联动风控系统。
+ * 3DS 认证完成事件 — 认证流程结束时发布。
  *
- * <p>事件接收方（如风控服务）可根据 {@code transStatus} 和 {@code authStatus}
- * 调整订单的风险等级。</p>
+ * <p>设计意图（Wave 12 §2.2.5）是"接收方（如风控服务）根据 {@code transStatus} 与
+ * {@code authStatus} 调整订单风险等级"，但仓内<b>没有</b>这样的接收方：目前唯一监听者是
+ * {@link ThreeDsAuthCompletedObserver}，它只计数与告警，不改动任何订单/资金状态。
+ * 风控联动需要先有裁定（谁有权改风险等级、改完资金路径上发生什么），见 Issue #34。</p>
+ *
+ * <p>注意别与本包同名类混淆：{@code org.nexus.gateway.security.audit.event.ThreeDsAuthCompletedEvent}
+ * 是另一个 POJO，只被 {@code SecurityEventPublisher} 引用，而后者<b>无任何调用方</b>——
+ * 本类才是生产路径上真正被发布的那个。</p>
  */
 public class ThreeDsAuthCompletedEvent extends ApplicationEvent {
 
