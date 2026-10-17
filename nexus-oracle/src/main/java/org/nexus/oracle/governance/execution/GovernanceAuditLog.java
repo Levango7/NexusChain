@@ -46,6 +46,20 @@ import java.util.concurrent.CopyOnWriteArrayList;
  *
  * <p>向后兼容：若未注入 Repository（如单元测试场景），则仅使用内存存储，哈希链仍然维护。
  *
+ * <p><b>2026-10-17 现状核对（上面那段 GOV-P0-02 宣称今天并不成立，别按它做安全假设）</b>：
+ * 持久化层要生效需要三件事同时成立，而三件都缺：
+ * <ol>
+ *   <li>仓储 bean 要被注册——{@code org.nexus.oracle.governance.execution} <b>不在</b> gateway 的
+ *       {@code @EnableJpaRepositories}/{@code @EntityScan} 根里（只含 {@code org.nexus.gateway} 与
+ *       {@code org.nexus.settlement}，见 {@code SettlementPersistenceConfig}）；</li>
+ *   <li>{@code governance_audit_log} 表要存在——全部 Flyway 迁移里<b>零命中</b>；</li>
+ *   <li>Spring 要选中带 repository 的那个构造器——本类此前两个 public 构造器都没标
+ *       {@code @Autowired}，Spring 会静默挑无参那个。</li>
+ * </ol>
+ * 所以现实是：<b>治理审计只在 JVM 内存里，重启即丢，三副本各持一份互不可见的哈希链</b>；
+ * 防篡改只覆盖"同一进程生命周期内改历史"，不覆盖"重启后查不到"。启动时 {@link #announcePersistenceMode()}
+ * 会打一条带 {@code GOVERNANCE_AUDIT_MEMORY_ONLY} 标记的 WARN，使这个落差在日志里可见。
+ *
  * @since 2.0.0
  */
 @Slf4j
@@ -54,6 +68,12 @@ public class GovernanceAuditLog {
 
     /** 哈希链首条记录的 previousHash 占位（64 个 0） */
     public static final String GENESIS_PREVIOUS_HASH = "0".repeat(64);
+
+    /**
+     * "治理审计只有内存层"这条告警的稳定标记。写成字面量而非引用枚举：运维侧据此配告警规则，
+     * 规则不该因为一次重构就跟着类名/方法名漂移。
+     */
+    static final String MEMORY_ONLY_MARKER = "GOVERNANCE_AUDIT_MEMORY_ONLY";
 
     /** 内存审计记录存储（proposalId → 该提案的所有审计记录列表，按时间顺序），快速查询层 */
     private final Map<String, List<AuditRecord>> auditLogByProposal = new ConcurrentHashMap<>();
@@ -74,12 +94,41 @@ public class GovernanceAuditLog {
     /**
      * 构造审计日志（带持久化层，GOV-P0-02）。
      *
+     * <p>{@code required = false} 是必需的：本类有两个 public 构造器，而 Spring 在多构造器且<b>无一个</b>
+     * 标注 {@code @Autowired} 时会静默挑无参那个（本仓已为此付过两次代价，见 gateway 的
+     * {@code AuditLogService} 注释与 PR #124 的 {@code SecurityAuditWiringIT}）。标了它，
+     * 仓储 bean 一旦注册（补 {@code @EnableJpaRepositories}/{@code @EntityScan} 根 + 建表迁移）持久化就自动
+     * 接上；仓储缺席时退回无参构造器，行为与今天一致，不会把应用砖掉。</p>
+     *
      * @param repository   JPA 持久化层（可为 null，表示仅使用内存存储）
      * @param objectMapper JSON 序列化器
      */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
     public GovernanceAuditLog(GovernanceAuditLogRepository repository, ObjectMapper objectMapper) {
         this.repository = repository;
         this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper must not be null");
+    }
+
+    /**
+     * 启动时把"治理审计到底有没有持久化"说清——这件事过去只写在注释里，因此没有任何运行期信号能
+     * 揭穿"重启不丢失"这句宣称其实是假的。
+     *
+     * <p>由 Spring 在 bean 初始化时调用；单元测试里 {@code new GovernanceAuditLog()} 不会触发它，
+     * 所以这条 WARN 只在真实容器里出现，不会污染测试日志。</p>
+     */
+    @jakarta.annotation.PostConstruct
+    public void announcePersistenceMode() {
+        if (repository == null) {
+            log.warn("{} 治理审计当前只有内存层：仓储 bean 未注册（org.nexus.oracle 不在 "
+                            + "@EnableJpaRepositories/@EntityScan 根内）且 governance_audit_log 无建表迁移。"
+                            + "后果=重启即丢、多副本各持一份互不可见的哈希链；GOV-P0-02 注释里"
+                            + "「进程重启后审计记录不丢失」在今天不成立。要接上持久化：补扫描根 + 迁移，"
+                            + "本条 WARN 会自动转为 info。",
+                    MEMORY_ONLY_MARKER);
+        } else {
+            log.info("治理审计持久化已启用（repository={}），哈希链同时写入内存与 governance_audit_log",
+                    repository.getClass().getSimpleName());
+        }
     }
 
     /**
