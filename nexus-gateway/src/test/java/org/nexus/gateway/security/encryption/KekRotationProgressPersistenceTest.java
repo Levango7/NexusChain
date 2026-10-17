@@ -40,13 +40,15 @@ class KekRotationProgressPersistenceTest {
     @Mock private EncryptionKeyMetadataRepository metadataRepository;
     @Mock private EncryptionConfigRepository configRepository;
     @Mock private KekRotationProgressRepository progressRepository;
+    @Mock private org.nexus.gateway.security.audit.SecurityAuditService securityAuditService;
 
     private KeyRotationScheduler scheduler;
 
     @BeforeEach
     void setUp() {
         scheduler = new KeyRotationScheduler(
-                keyManagementService, metadataRepository, configRepository, progressRepository);
+                keyManagementService, metadataRepository, configRepository, progressRepository,
+                securityAuditService);
     }
 
     private static KekRotationProgress row(int oldV, int newV, long lastId, boolean completed) {
