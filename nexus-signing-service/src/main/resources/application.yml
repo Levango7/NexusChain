@@ -165,10 +165,12 @@ nexus:
     ttl-seconds: ${NEX_APPROVAL_TTL:3600}
     # 审批所需审批人数下限。实际所需人数取 max(此值, MpcApprovalPolicy.getRequiredApprovers)。
     min-required-approvers: ${NEX_APPROVAL_MIN_APPROVERS:2}
-    # === 项2：审批人白名单（逗号分隔的审批人地址列表） ===
-    # 空字符串表示不限制（任何持有 SIGNER 角色的调用方均可审批）；
-    # 非空时仅允许列表中的地址提交 approve/reject 决策，不在白名单的审批人决策被拒绝并记录审计日志。
-    # 生产环境应配置专用审批人集合，限制大额签名操作的审批权限。
+    # === 项2：审批人白名单（逗号分隔的审批人标识列表） ===
+    # **fail-closed**：空/未配置 ⇒ 任何人都不能提交 approve/reject 决策（决策被拒并记审计，
+    # denied_reason=approver_whitelist_not_configured）。非空时仅列表内的标识可批。
+    # 旧语义是"空字符串表示不限制"，已于 2026-10-17 改掉：大额签名的最后一道人工闸门
+    # 不能以"没配"为默认放行条件。
+    # 生产环境必须显式配置专用审批人集合（prod 两套拓扑目前都未设置本变量 ⇒ 审批默认全拒）。
     # 示例：approver-whitelist=alice@nexus,bob@nexus,carol@nexus
     approver-whitelist: ${NEX_APPROVAL_WHITELIST:}
     # === 项3：多实例部署 DB 持久化开关 ===
