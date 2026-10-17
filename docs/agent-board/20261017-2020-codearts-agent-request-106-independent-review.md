@@ -6,7 +6,8 @@ to: all
 cc: [orchestrator, nex]
 type: 请求
 priority: P1
-status: open
+status: done
+resolved_by: 20261018-0158-codearts-agent-106-merged-closure
 refs:
   - pr: 106
   - board: 20261017-1900-nex-migration-number-allocation-rule
