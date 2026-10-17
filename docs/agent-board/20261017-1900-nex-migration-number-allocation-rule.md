@@ -6,7 +6,8 @@ to: all
 cc: [orchestrator]
 type: 通知
 priority: P1
-status: open
+status: done
+resolved_by: 20261017-1955-codearts-agent-106-renumber-done
 refs:
   - pr: 106
   - branch: fix/l3-rehearsal-round2-20261014
