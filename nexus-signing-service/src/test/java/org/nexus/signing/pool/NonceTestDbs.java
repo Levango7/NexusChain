@@ -26,6 +26,40 @@ public final class NonceTestDbs {
 
     /** 建一个全新的库并返回其上的分配器；{@code tag} 决定库名（每个用例给不同值）。 */
     public static NonceAllocator freshH2Allocator(String tag) {
+        return freshH2Harness(tag, 300L).allocator();
+    }
+
+    /** 测试夹具：分配器 + 同一份库的 JdbcTemplate + 同库第二个分配器（模拟另一副本）。 */
+    public record H2Harness(NonceAllocator allocator, JdbcTemplate jdbc,
+                            java.util.function.Supplier<NonceAllocator> replicaFactory) {
+
+        /** 再要一个分配器实例：同一个库、不同 JVM bean —— 就是 prod 三副本的形状。 */
+        public NonceAllocator replica() {
+            return replicaFactory.get();
+        }
+
+        /** 把该地址的校正租约拨到"早已过期"，等价于"过了一个 reconcile 周期"。 */
+        public void forceReconcileDue(String address) {
+            int n = jdbc.update("UPDATE nonce_allocation SET last_reconciled_at = ? WHERE address = ?",
+                    java.sql.Timestamp.from(java.time.Instant.EPOCH), address);
+            if (n == 0) {
+                throw new IllegalStateException("forceReconcileDue 没命中任何行: address=" + address);
+            }
+        }
+
+        /** 直读库里的水位（不经 allocator，避免"自己测自己"）。 */
+        public long watermark(String address) {
+            Long v = jdbc.queryForObject(
+                    "SELECT next_nonce FROM nonce_allocation WHERE address = ?", Long.class, address);
+            return v == null ? -1L : v;
+        }
+    }
+
+    public static H2Harness freshH2Harness(String tag, long reconcileIntervalSeconds) {
+        return freshH2HarnessInternal(tag, reconcileIntervalSeconds);
+    }
+
+    private static H2Harness freshH2HarnessInternal(String tag, long reconcileIntervalSeconds) {
         try {
             DriverManagerDataSource ds = new DriverManagerDataSource();
             ds.setDriverClassName("org.h2.Driver");
@@ -33,23 +67,33 @@ public final class NonceTestDbs {
             ds.setUsername("sa");
             ds.setPassword("");
 
-            String ddl;
-            try (InputStream in = NonceTestDbs.class.getResourceAsStream("/db/migration/V3__nonce_allocation.sql")) {
-                if (in == null) {
-                    throw new IllegalStateException("V3__nonce_allocation.sql 不在 classpath 上（迁移没进 main/resources？）");
-                }
-                ddl = new String(in.readAllBytes(), StandardCharsets.UTF_8);
-            }
-            // 剥掉 -- 注释行后执行（脚本主体只有一条 CREATE TABLE）
-            new JdbcTemplate(ds).execute(ddl.lines()
-                    .filter(l -> !l.strip().startsWith("--"))
-                    .collect(Collectors.joining("\n"))
-                    .strip());
+            // 按**真实迁移顺序**应用 V3 → V4：跑的就是 prod 会跑的那两支脚本，
+            // 而不是自己另写一份等价 DDL（否则 CI 里 Flyway 应用过的形状与本地测试的形状会漂移）。
+            JdbcTemplate tpl = new JdbcTemplate(ds);
+            applyMigration(tpl, "/db/migration/V3__nonce_allocation.sql");
+            applyMigration(tpl, "/db/migration/V4__nonce_allocation_reconcile.sql");
 
-            return new NonceAllocator(new JdbcTemplate(ds), new DataSourceTransactionManager(ds));
+            DataSourceTransactionManager txm = new DataSourceTransactionManager(ds);
+            return new H2Harness(new NonceAllocator(tpl, txm, reconcileIntervalSeconds), tpl,
+                    () -> new NonceAllocator(tpl, txm, reconcileIntervalSeconds));
         } catch (Exception e) {
             throw new IllegalStateException("测试用 H2 nonce 库初始化失败: tag=" + tag, e);
         }
+    }
+
+    private static void applyMigration(JdbcTemplate tpl, String resource) throws java.io.IOException {
+        String ddl;
+        try (InputStream in = NonceTestDbs.class.getResourceAsStream(resource)) {
+            if (in == null) {
+                throw new IllegalStateException(resource + " 不在 classpath 上（迁移没进 main/resources？）");
+            }
+            ddl = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        }
+        // 剥掉 -- 注释行后执行（两份脚本主体各一条语句）
+        tpl.execute(ddl.lines()
+                .filter(l -> !l.strip().startsWith("--"))
+                .collect(Collectors.joining("\n"))
+                .strip());
     }
 
     /** 组装一个 code=2000 的链上 nonce 响应（Gson JsonObject，与 NodeController 返回形状一致）。 */

@@ -3,13 +3,7 @@ package org.nexus.signing.pool;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
-import org.springframework.jdbc.datasource.DataSourceTransactionManager;
-import org.springframework.transaction.PlatformTransactionManager;
 
-import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
@@ -40,34 +34,20 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @DisplayName("nonce 共享原子分配器")
 class NonceAllocatorH2Test {
 
-    private static JdbcTemplate jdbc;
-    private static PlatformTransactionManager tm;
+    /**
+     * 共享夹具：一份库 + 一个默认分配器（间隔给大，令本组"发放"用例不被周期校正干扰；
+     * 周期校正本身另有 5–8 四个用例专测）。库的 DDL 走 {@link NonceTestDbs}，
+     * 它按真实顺序应用 V3→V4——不在测试里另写一份"等价"schema。
+     */
+    private static NonceTestDbs.H2Harness shared;
 
     @BeforeAll
-    static void createSchemaFromRealMigration() throws Exception {
-        DriverManagerDataSource ds = new DriverManagerDataSource();
-        ds.setDriverClassName("org.h2.Driver");
-        // MODE=MySQL：与 prod(MySQL8) 同语义跑条件 UPDATE / 主键；DB_CLOSE_DELAY 保证同 JVM 内共享库
-        ds.setUrl("jdbc:h2:mem:nc_nonce_test_" + System.nanoTime() + ";MODE=MySQL;DB_CLOSE_DELAY=-1");
-        ds.setUsername("sa");
-        ds.setPassword("");
-
-        try (InputStream in = NonceAllocatorH2Test.class.getResourceAsStream(
-                "/db/migration/V3__nonce_allocation.sql")) {
-            assertTrue(in != null, "找不到 V3__nonce_allocation.sql（迁移没进 classpath？）");
-            String ddl = new String(in.readAllBytes(), StandardCharsets.UTF_8);
-            // 去掉注释行后按语句执行（脚本里只有一条 CREATE TABLE）
-            String body = ddl.lines()
-                    .filter(l -> !l.strip().startsWith("--"))
-                    .collect(java.util.stream.Collectors.joining("\n"));
-            new JdbcTemplate(ds).execute(body.strip());
-        }
-        jdbc = new JdbcTemplate(ds);
-        tm = new DataSourceTransactionManager(ds);
+    static void createSchemaFromRealMigration() {
+        shared = NonceTestDbs.freshH2Harness("shared", 3600L);
     }
 
     private NonceAllocator allocator() {
-        return new NonceAllocator(jdbc, tm);
+        return shared.replica();
     }
 
     private static String freshAddress(String tag) {
@@ -167,8 +147,7 @@ class NonceAllocatorH2Test {
         String address = freshAddress("SEEDFAIL");
         NonceAllocator alloc = allocator();
 
-        NonceAllocator.NonceAllocationException ex = assertThrows(
-                NonceAllocator.NonceAllocationException.class,
+        assertThrows(NonceAllocator.NonceAllocationException.class,
                 () -> alloc.claim(address, () -> {
                     throw new IllegalStateException("RPC getNonce 返回 code=5000");
                 }),
@@ -177,5 +156,95 @@ class NonceAllocatorH2Test {
         // 且失败不留半成品水位：修好后该地址应仍以链上值正常播种（chain+1）
         long ok = alloc.claim(address, () -> 42L);
         assertEquals(43L, ok, "播种失败不应污染水位（哨兵仍在，重试即恢复）");
+    }
+
+    @Test
+    @DisplayName("5.外部消耗过 nonce（链更靠后）⇒ 水位向前校正后发放新值，不会一直发被节点丢弃的旧号")
+    void externalConsumption_bumpsWatermarkForward() {
+        NonceTestDbs.H2Harness h = NonceTestDbs.freshH2Harness("RECON_FWD", 3600L);
+        NonceAllocator alloc = h.allocator();
+        String address = freshAddress("FWD");
+        AtomicInteger seedCalls = new AtomicInteger();
+
+        assertEquals(51L, alloc.claim(address, () -> {
+            seedCalls.incrementAndGet();
+            return 50L;
+        }), "首次发放 = chain+1");
+        assertEquals(52L, h.watermark(address), "发完 51 后水位应是 52");
+
+        // 模拟"分配器之外"的消耗：链上上一笔已应用变成 80（外部/人工补发了 30 笔）
+        h.forceReconcileDue(address);
+        long allocated = alloc.claim(address, () -> {
+            seedCalls.incrementAndGet();
+            return 80L;
+        });
+
+        assertEquals(81L, allocated, "校正后必须发链上之后的号（80+1），而不是继续发 52（会被节点丢弃）");
+        assertEquals(82L, h.watermark(address));
+        assertEquals(2, seedCalls.get(), "播种 1 次 + 校正 1 次，不多打");
+    }
+
+    @Test
+    @DisplayName("6.未到校正周期 ⇒ 绝不打 RPC（否则把 #33 省掉的开销原样加回来）")
+    void notDue_mustNotCallChain() {
+        NonceTestDbs.H2Harness h = NonceTestDbs.freshH2Harness("RECON_DUE", 3600L);
+        NonceAllocator alloc = h.allocator();
+        String address = freshAddress("DUE");
+        AtomicInteger calls = new AtomicInteger();
+
+        alloc.claim(address, () -> {
+            calls.incrementAndGet();
+            return 50L;
+        });
+        long second = alloc.claim(address, () -> {
+            calls.incrementAndGet();
+            return 9999L;
+        });
+        long third = alloc.claim(address, () -> {
+            calls.incrementAndGet();
+            return 9999L;
+        });
+
+        assertEquals(52L, second);
+        assertEquals(53L, third);
+        assertEquals(1, calls.get(), "除首次播种外，一个周期内不得再取链上值");
+    }
+
+    @Test
+    @DisplayName("7.链上值落后于水位（有在飞交易）⇒ 校正只前进不后退，水位绝不被调回")
+    void chainBehind_neverMovesWatermarkBackwards() {
+        NonceTestDbs.H2Harness h = NonceTestDbs.freshH2Harness("RECON_BACK", 3600L);
+        NonceAllocator alloc = h.allocator();
+        String address = freshAddress("BACK");
+
+        assertEquals(51L, alloc.claim(address, () -> 50L));
+        long before = h.watermark(address);
+
+        h.forceReconcileDue(address);
+        long allocated = alloc.claim(address, () -> 20L); // 链上「上一笔已应用」远小于水位（在飞交易未上链）
+
+        assertEquals(52L, allocated, "水位高于链时必须照常用自己的水位，不能退回 21");
+        assertEquals(53L, h.watermark(address));
+        // before 是"第一个未被发放的值"（51 发出后=52），本次发放正是它 ⇒ 相等才是对的；
+        // 这条用例真正要守的是"链上更旧时水位不被调回"，由上一行的 53 与新发放值 52 共同证明。
+        assertEquals(52L, before, "校正未生效时水位保持原样（未被 chain=20 拉低）");
+    }
+
+    @Test
+    @DisplayName("8.校正时 RPC 失败 ⇒ 只跳过本周期校正，不阻断发放（也不静默改水位）")
+    void reconcileRpcFailure_doesNotBlockIssuance() {
+        NonceTestDbs.H2Harness h = NonceTestDbs.freshH2Harness("RECON_FAIL", 3600L);
+        NonceAllocator alloc = h.allocator();
+        String address = freshAddress("FAIL");
+
+        assertEquals(51L, alloc.claim(address, () -> 50L));
+        h.forceReconcileDue(address);
+
+        long allocated = alloc.claim(address, () -> {
+            throw new IllegalStateException("RPC 超时");
+        });
+
+        assertEquals(52L, allocated, "校正失败应退化为「按既有水位继续发放」，而不是把这笔交易打死");
+        assertEquals(53L, h.watermark(address), "失败的校正不得改水位");
     }
 }
