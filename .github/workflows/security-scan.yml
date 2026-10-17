@@ -777,15 +777,49 @@ jobs:
       - name: OWASP ZAP 基线扫描
         run: |
           mkdir -p reports/zap
-          # Docker Hub 匿名拉取自 2026 年限流收紧（auth.docker.io 握手失败，
-          # 33937656688 轮 exit 125 实测）——先经 GHCR 官方镜像预拉再 tag。
-          # zaproxy 官方自 2025-Q4 起同步发布 ghcr.io/zaproxy/zap-stable。
-          docker pull ghcr.io/zaproxy/zap-stable:latest || \
-            docker pull docker.m.daocloud.io/zaproxy/zap-stable:latest
-          docker tag ghcr.io/zaproxy/zap-stable:latest zaproxy/zap-stable:latest 2>/dev/null || \
-            docker tag docker.m.daocloud.io/zaproxy/zap-stable:latest zaproxy/zap-stable:latest
+          # 镜像来源：GHCR 是官方一手源，runner 侧直连，做首选；DaoCloud 仅兜底。
+          # 旧首选 `ghcr.io/zaproxy/zap-stable:latest` 的**仓库名是错的**——官方 GHCR 路径是
+          # ghcr.io/zaproxy/zaproxy:stable（只有 Docker Hub 才叫 zaproxy/zap-stable，见
+          # https://www.zaproxy.org/docs/docker/about/）。GHCR 对不存在的仓库一律回 denied，
+          # 所以那一腿从来没成功过，全靠兜底镜像撑着；兜底一抖，主干就红
+          # （run 38904199769 与 38904779893 同一串：ghcr denied + daocloud TLS handshake timeout）。
+          # 只重试"暂时性"错误（TLS 握手超时、连接被重置这类镜像链路抖动）；"永久性"错误
+          # （denied / 仓库不存在）立刻换下一个来源——重试既救不回来，也只会拖长定位。
+          # 拉不到仍然红：本 job 的 continue-on-error 已按 B1 摘除，不静默跳过。
+          pull_ref() {
+            local ref="$1" out
+            for try in 1 2 3; do
+              if out=$(docker pull "$ref" 2>&1); then
+                printf '%s\n' "$out"
+                return 0
+              fi
+              printf '%s\n' "$out"
+              if printf '%s' "$out" | grep -Eqi "denied|unauthorized|not found|manifest unknown|repository does not exist"; then
+                echo "永久性拉取错误，不再重试：$ref"
+                return 2
+              fi
+              echo "暂时性拉取失败（第 $try/3 次），退避后重试：$ref"
+              sleep $((15 * try))
+            done
+            return 1
+          }
+
+          SRC=""
+          for REF in ghcr.io/zaproxy/zaproxy:stable docker.m.daocloud.io/zaproxy/zap-stable:latest; do
+            if pull_ref "$REF"; then
+              SRC="$REF"
+              break
+            fi
+          done
+          if [ -z "$SRC" ]; then
+            echo "::error::ZAP 镜像两个来源都拉不到（ghcr.io/zaproxy/zaproxy:stable、docker.m.daocloud.io/zaproxy/zap-stable:latest），错误串已在上方打印。这是取数链路故障，不是扫描结论——先确认 runner 到 ghcr.io 的可达性，再判断是否真有安全问题。"
+            exit 1
+          fi
+          echo "ZAP 镜像来源：$SRC"
+          docker tag "$SRC" zaproxy/zap-stable:latest
+          docker image inspect zaproxy/zap-stable:latest > /dev/null
           docker run --rm -t --network=host \
-            -v $(pwd)/reports/zap:/zap/wrk:rw \
+            -v "$PWD/reports/zap:/zap/wrk:rw" \
             zaproxy/zap-stable zap-baseline.py \
             -t http://localhost:8080 \
             -r zap-report.html \

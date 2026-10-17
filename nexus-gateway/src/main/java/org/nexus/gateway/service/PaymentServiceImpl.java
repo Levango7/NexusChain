@@ -88,6 +88,19 @@ public class PaymentServiceImpl implements PaymentService {
     public void setAuditLogService(AuditLogService auditLogService) {
         this.auditLogService = auditLogService;
     }
+
+    /**
+     * 支付确认 TCC 参与方（无状态可重放 bean，#31-Step2b）。
+     *
+     * <p>setter 注入且可选：Spring 环境下用容器单例；走兼容构造的测试里为 null，
+     * {@link #confirmPayment} 现场 {@code new} 一个同依赖的实例，行为完全一致。</p>
+     */
+    @Autowired(required = false)
+    public void setPaymentConfirmTccAction(PaymentConfirmTccAction paymentConfirmTccAction) {
+        this.paymentConfirmTccAction = paymentConfirmTccAction;
+    }
+
+    private PaymentConfirmTccAction paymentConfirmTccAction;
     /** Micrometer Tracer：P3-T5 业务 span 注入。可为 null（测试环境降级 no-op）。 */
     private final Tracer tracer;
     /** P2-F3：三阶段执行模板（落库 PENDING → 链上执行 → 更新 CONFIRMED/FAILED） */
@@ -425,94 +438,16 @@ public class PaymentServiceImpl implements PaymentService {
                 TransactionContext tccCtx = TransactionContext.create(
                         "confirmPayment", payload, order.getTenantId());
 
-                final Long tccOrderId = orderId;
-                final String tccChainTxHash = chainTxHash;
                 final BusinessSpan tccConfirmSpan = confirmSpan;
 
-                TccAction paymentConfirmAction = new TccAction() {
-                    @Override
-                    public boolean tryAction(TransactionContext ctx) {
-                        // Try：锁定订单状态（PAYING → SUBMITTED）
-                        PaymentOrder tccOrder = orderRepository.findById(tccOrderId)
-                                .orElseThrow(() -> new IllegalArgumentException(
-                                        "Order not found in TCC try: " + tccOrderId));
-                        // 幂等：已确认的订单无需再次锁定
-                        if (tccOrder.getStatus() == PaymentOrder.OrderStatus.PAID) {
-                            return true;
-                        }
-                        OrderStateMachine.transition(tccOrder, PaymentOrder.OrderStatus.SUBMITTED);
-                        tccOrder.setChainTxHash(tccChainTxHash);
-                        orderRepository.save(tccOrder);
-                        log.info("TCC Try: order locked, orderNo={}", tccOrder.getOrderNo());
-                        return true;
-                    }
+                // 无状态可重放参与方（#31-Step2b）：Try/Confirm/Cancel 所需输入(orderId/chainTxHash)
+                // 全在 tccCtx 的 payload 里 ⇒ 服务重启后恢复调度器可按 participantId 取回本 bean、
+                // 用持久化上下文重建并继续 Confirm/Cancel（不再是匿名闭包捕获局部量、重启即丢）。
+                // Spring 用容器单例；走兼容构造的测试里为 null，则现场 new 同依赖实例，行为与原闭包一致。
+                TccAction paymentConfirmAction = paymentConfirmTccAction != null
+                        ? paymentConfirmTccAction
+                        : new PaymentConfirmTccAction(orderRepository, eventPublisher, finalityService);
 
-                    @Override
-                    public void confirmAction(TransactionContext ctx) {
-                        // Confirm：确认支付（SUBMITTED → PAID）
-                        PaymentOrder tccOrder = orderRepository.findById(tccOrderId)
-                                .orElseThrow(() -> new IllegalArgumentException(
-                                        "Order not found in TCC confirm: " + tccOrderId));
-                        // 幂等：Confirm 重试（最多 3 次）或重复确认时直接返回，
-                        // 避免 PAID → PAID 非法状态转换导致重试放大失败。
-                        if (tccOrder.getStatus() == PaymentOrder.OrderStatus.PAID) {
-                            log.info("TCC Confirm: order already PAID, skipping, orderNo={}",
-                                    tccOrder.getOrderNo());
-                            return;
-                        }
-                        OrderStateMachine.transition(tccOrder, PaymentOrder.OrderStatus.PAID);
-                        tccOrder.setPaidAt(LocalDateTime.now());
-                        tccOrder.setChainTxHash(tccChainTxHash);
-
-                        // 关联最终性状态
-                        if (finalityService != null) {
-                            FinalityService.FinalityInfo finalityInfo = finalityService.getFinality(tccChainTxHash);
-                            tccOrder.setFinalityStatus(finalityInfo.status());
-                        } else {
-                            tccOrder.setFinalityStatus(FinalityStatus.UNKNOWN);
-                        }
-
-                        orderRepository.save(tccOrder);
-                        log.info("TCC Confirm: payment confirmed, orderNo={}, txHash={}",
-                                tccOrder.getOrderNo(), tccChainTxHash);
-
-                        // 发布支付确认事件
-                        eventPublisher.publishEvent(new PaymentConfirmedEvent(
-                                this, tccOrder.getId(), tccOrder.getOrderNo(), tccOrder.getMerchantId(),
-                                tccChainTxHash, tccOrder.getPayerAddress(),
-                                tccOrder.getAmount().toPlainString(),
-                                tccOrder.getFinalityStatus()));
-
-                        // 发布 PaymentCompletedEvent 供 analytics 采集
-                        eventPublisher.publishEvent(new PaymentCompletedEvent(
-                                this,
-                                tccOrder.getId(),
-                                tccOrder.getAmount(),
-                                tccOrder.getTokenSymbol(),
-                                "NEXUS-CORE",
-                                tccOrder.getMerchantId(),
-                                tccChainTxHash,
-                                tccOrder.getPayerAddress(),
-                                tccOrder.getPayeeAddress(),
-                                Instant.now(),
-                                0L,
-                                0));
-                    }
-
-                    @Override
-                    public void cancelAction(TransactionContext ctx) {
-                        // Cancel：释放锁定（SUBMITTED → FAILED）
-                        PaymentOrder tccOrder = orderRepository.findById(tccOrderId).orElse(null);
-                        if (tccOrder == null
-                                || tccOrder.getStatus() != PaymentOrder.OrderStatus.SUBMITTED) {
-                            // 幂等：无可释放的锁定
-                            return;
-                        }
-                        OrderStateMachine.transition(tccOrder, PaymentOrder.OrderStatus.FAILED);
-                        orderRepository.save(tccOrder);
-                        log.warn("TCC Cancel: order released, orderNo={}", tccOrder.getOrderNo());
-                    }
-                };
 
                 boolean tccResult = tccTransactionManager.execute(paymentConfirmAction, tccCtx);
 

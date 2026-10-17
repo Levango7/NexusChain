@@ -10,6 +10,7 @@ import org.nexus.sdk.wallet.WalletUtils;
 import org.nexus.signing.keystore.PlatformKeystore;
 import org.nexus.signing.pool.NoncePool;
 import org.nexus.signing.pool.NonceState;
+import org.nexus.signing.pool.NonceTestDbs;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
@@ -50,9 +51,13 @@ public class TxControllerTest {
     private MockMvc mockMvc;
 
     @BeforeEach
-    public void setUp() {
+    public void setUp() throws Exception {
         TxController controller = new TxController();
         controller.noncePool = noncePool;
+        // #33：nonce 发放已改为共享原子认领。这里注入**真实**的分配器（跑在 H2 MODE=MySQL 上），
+        // 而不是把 claim 打桩成常数——这样"首次播种走 nodeController.getNonce、之后走 DB 递增"
+        // 这条链路在控制器测试里仍然是真的。
+        controller.nonceAllocator = NonceTestDbs.freshH2Allocator("txctl");
         controller.nodeController = nodeController;
         controller.platformKeystore = platformKeystore;
         mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
@@ -124,7 +129,8 @@ public class TxControllerTest {
 
         when(platformKeystore.getPrikey()).thenReturn(prikey);
         when(platformKeystore.getPubkey()).thenReturn(pubkey);
-        when(noncePool.getMaxNonce(anyString())).thenReturn(0L);
+        // #33：不再桩 noncePool.getMaxNonce——发放已改由共享分配器认领；
+        // 下面保留的 nodeController.getNonce 桩就是"首次播种"的真实取值路径。
         JsonObject nonce = new JsonObject();
         nonce.addProperty("code", 2000);
         nonce.addProperty("data", 0L);
@@ -152,7 +158,8 @@ public class TxControllerTest {
 
         when(platformKeystore.getPrikey()).thenReturn(prikey);
         when(platformKeystore.getPubkey()).thenReturn(pubkey);
-        when(noncePool.getMaxNonce(anyString())).thenReturn(0L);
+        // #33：不再桩 noncePool.getMaxNonce——发放已改由共享分配器认领；
+        // 下面保留的 nodeController.getNonce 桩就是"首次播种"的真实取值路径。
         JsonObject nonce = new JsonObject();
         nonce.addProperty("code", 2000);
         nonce.addProperty("data", 0L);

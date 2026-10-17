@@ -144,6 +144,16 @@ nexus:
     # 生产环境应配置 gateway / nginx / SLB 的内网 IP，防止客户端伪造 X-Forwarded-For。
     # 示例：trusted-proxy-ips=10.0.0.1,10.0.0.2,172.16.0.0/12（暂不支持 CIDR，仅精确 IP）
     trusted-proxy-ips: ${NEX_AUDIT_TRUSTED_PROXY_IPS:}
+  # === #48：nonce 水位校正（共享分配器 V3/V4）===
+  signing:
+    nonce:
+      # 每个地址最多每这么多秒实测一次链上 nonce，用于把水位**向前**校正
+      # （外部/人工用同一平台地址补发过交易、或 DB 被回滚时，链上值会超过本地水位，
+      #  此后发放的号会被节点以 `account.nonce >= tx.nonce` 丢弃 ⇒ 转账持续失败却看不出原因）。
+      # 0 或负数 = 关闭周期校正（首次播种仍会取一次链上值）。
+      # 不能设成 1 之类的极小值：那等于每次发放都打一次 RPC，会把 #33 省掉的开销加回来。
+      reconcile-interval-seconds: ${NEX_NONCE_RECONCILE_INTERVAL:300}
+
   # === P2-F1：多签审批配置 ===
   # SigningApprovalService 对大额签名操作要求多签审批：
   # 金额 ≥ large-amount-threshold 时创建审批请求，收集足够审批签名后才执行签名。
@@ -162,11 +172,17 @@ nexus:
     # 示例：approver-whitelist=alice@nexus,bob@nexus,carol@nexus
     approver-whitelist: ${NEX_APPROVAL_WHITELIST:}
     # === 项3：多实例部署 DB 持久化开关 ===
-    # false（默认）：使用内存 ConcurrentHashMap 存储，适合单实例部署。
-    # true：应使用 DB 共享存储（多实例部署审批状态共享）。
-    # 当前 true 时记录 WARN 日志并回退到内存存储（P3 阶段引入 JPA Repository 后完整实现）。
+    # false（默认）：内存 ConcurrentHashMap 存储 —— 仅单实例部署安全。
+    # true：等价于 store-type=jpa，即 DB 共享存储（多实例审批状态共享）。
+    # 【#32 订正】此前此处写"true 时只记 WARN 并回退内存（P3 阶段引入 JPA 后完整实现）"——
+    #   JpaApprovalStore 早已落地（任务 #375/#378），滞后的注释会让人以为共享还没实现。
+    #   现在 jpa 而 Repository 不可用会**抛错拒绝启动**，不再静默回退。
+    # ⚠ prod 两套部署拓扑（Helm values-prod 的 nexus-signing-service.extraEnv、
+    #   仓库根 docker-compose.prod.yml 的 signing environment）都必须显式设
+    #   NEX_APPROVAL_STORE_TYPE=jpa：replicaCount=3 时若不设，就是"pod A 建的审批
+    #   pod B/C 查不到"（v2.73.0 前两条 prod 路径都没设该键）。
     use-database: ${NEX_APPROVAL_USE_DATABASE:false}
-    # 存储类型显式选择：memory（默认）/ file / jpa
+    # 存储类型显式选择：memory / file / jpa（未知值直接拒绝启动）
     # 留空时回落 use-database 旧开关语义：false→memory，true→jpa
     store-type: ${NEX_APPROVAL_STORE_TYPE:}
     # === 项1：过期清理定时任务配置 ===

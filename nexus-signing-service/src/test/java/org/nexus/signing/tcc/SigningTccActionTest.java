@@ -13,6 +13,7 @@ import org.nexus.sdk.wallet.WalletUtils;
 import org.nexus.signing.controller.NodeController;
 import org.nexus.signing.keystore.PlatformKeystore;
 import org.nexus.signing.pool.NoncePool;
+import org.nexus.signing.pool.NonceTestDbs;
 
 import java.math.BigDecimal;
 import java.util.HashMap;
@@ -67,6 +68,10 @@ public class SigningTccActionTest {
     public void setUp() {
         tccAction = new SigningTccActionImpl();
         tccAction.noncePool = noncePool;
+        // #33：nonce 发放改为共享原子认领。注入**真**分配器（每用例一份独立 H2 库），
+        // 于是"该地址首次认领 → 用 nodeController.getNonce 播种"成为被测路径的一部分，
+        // 而不是被打桩成常数（那样 Try 里的取值语义就没人验了）。
+        tccAction.nonceAllocator = NonceTestDbs.freshH2Allocator("tcc");
         tccAction.nodeController = nodeController;
         tccAction.platformKeystore = platformKeystore;
 
@@ -89,9 +94,10 @@ public class SigningTccActionTest {
     public void testPrepareSignTransfer_success_nonceLocked() {
         when(platformKeystore.getPrikey()).thenReturn(prikey);
         when(platformKeystore.getPubkey()).thenReturn(pubkey);
-        long expectedNonce = 42L;
-        when(noncePool.getMaxNonce(address)).thenReturn(expectedNonce);
-        when(noncePool.lockNonce(eq(address), eq(expectedNonce))).thenReturn(expectedNonce);
+        long chainLastApplied = 42L;
+        long allocated = 43L; // 节点规则：account.nonce 是「上一笔已应用」⇒ 下一个可用 = chain+1
+        when(nodeController.getNonce(anyString())).thenReturn(NonceTestDbs.chainNonce(chainLastApplied));
+        when(noncePool.lockNonce(eq(address), eq(allocated))).thenReturn(allocated);
 
         BusinessActionContext ctx = newCtx();
         BigDecimal amount = new BigDecimal("100");
@@ -99,12 +105,12 @@ public class SigningTccActionTest {
         boolean result = tccAction.prepareSignTransfer(ctx, pubkey, toPubkeyHash, amount);
 
         assertTrue(result, "Try should succeed");
-        verify(noncePool).lockNonce(eq(address), eq(expectedNonce));
+        verify(noncePool).lockNonce(eq(address), eq(allocated));
         // 验证 context 写入
         assertEquals(pubkey, ctx.getActionContext("fromPubkey", String.class));
         assertEquals(toPubkeyHash, ctx.getActionContext("toPubkeyHash", String.class));
         assertEquals(ctx.getActionContext("amount", String.class), "100");
-        assertEquals(expectedNonce, ctx.getActionContext("nonce", Long.class).longValue());
+        assertEquals(allocated, ctx.getActionContext("nonce", Long.class).longValue());
         assertEquals(address, ctx.getActionContext("address", String.class));
     }
 
@@ -112,21 +118,23 @@ public class SigningTccActionTest {
     public void testPrepareSignTransfer_success_rpcGetNonce_whenPoolEmpty() {
         when(platformKeystore.getPrikey()).thenReturn(prikey);
         when(platformKeystore.getPubkey()).thenReturn(pubkey);
-        when(noncePool.getMaxNonce(address)).thenReturn(0L); // 池为空
-        long rpcNonce = 7L;
+        // #33：该地址在本用例的库里是首次认领（哨兵态）⇒ 发放值 = 链上「上一笔已应用」+1，
+        // 这正是"池为空时打 RPC"这条老语义的新落点（且只播一次种、并修了 off-by-one）。
+        long rpcLastApplied = 7L;
+        long allocated = 8L;
         JsonObject getNonceResp = new JsonObject();
         getNonceResp.addProperty("code", 2000);
-        getNonceResp.addProperty("data", rpcNonce);
+        getNonceResp.addProperty("data", rpcLastApplied);
         when(nodeController.getNonce(anyString())).thenReturn(getNonceResp);
-        when(noncePool.lockNonce(eq(address), eq(rpcNonce))).thenReturn(rpcNonce);
+        when(noncePool.lockNonce(eq(address), eq(allocated))).thenReturn(allocated);
 
         BusinessActionContext ctx = newCtx();
         boolean result = tccAction.prepareSignTransfer(ctx, pubkey, toPubkeyHash, new BigDecimal("50"));
 
         assertTrue(result, "Try should succeed via RPC getNonce");
         verify(nodeController).getNonce(anyString());
-        verify(noncePool).lockNonce(eq(address), eq(rpcNonce));
-        assertEquals(rpcNonce, ctx.getActionContext("nonce", Long.class).longValue());
+        verify(noncePool).lockNonce(eq(address), eq(allocated));
+        assertEquals(allocated, ctx.getActionContext("nonce", Long.class).longValue());
     }
 
     @Test
@@ -148,9 +156,8 @@ public class SigningTccActionTest {
     public void testPrepareSignTransfer_rpcGetNonceFailed_throws() { assertThrows(TccPrepareException.class, () -> {
         when(platformKeystore.getPrikey()).thenReturn(prikey);
         when(platformKeystore.getPubkey()).thenReturn(pubkey);
-        when(noncePool.getMaxNonce(address)).thenReturn(0L);
         JsonObject errResp = new JsonObject();
-        errResp.addProperty("code", 5000); // RPC 失败
+        errResp.addProperty("code", 5000); // RPC 失败 → 播种取不到值 → 分配器拒绝发放 → Try 失败
         when(nodeController.getNonce(anyString())).thenReturn(errResp);
 
         tccAction.prepareSignTransfer(newCtx(), pubkey, toPubkeyHash, new BigDecimal("100"));
@@ -161,8 +168,10 @@ public class SigningTccActionTest {
     public void testPrepareSignTransfer_lockConflict_throws() { assertThrows(TccPrepareException.class, () -> {
         when(platformKeystore.getPrikey()).thenReturn(prikey);
         when(platformKeystore.getPubkey()).thenReturn(pubkey);
-        when(noncePool.getMaxNonce(address)).thenReturn(42L);
-        when(noncePool.lockNonce(eq(address), eq(42L))).thenReturn(-1L); // 锁定冲突
+        // #33：nonce 由共享分配器发放（本用例首次认领 ⇒ 发放值 = 链上 42 + 1 = 43），
+        // 真正的冲突来自 TCC 预锁定：本副本已有同值被锁 → lockNonce 返回 -1 → Try 必须失败
+        when(nodeController.getNonce(anyString())).thenReturn(NonceTestDbs.chainNonce(42L));
+        when(noncePool.lockNonce(eq(address), eq(43L))).thenReturn(-1L); // 锁定冲突
 
         tccAction.prepareSignTransfer(newCtx(), pubkey, toPubkeyHash, new BigDecimal("100"));
         });

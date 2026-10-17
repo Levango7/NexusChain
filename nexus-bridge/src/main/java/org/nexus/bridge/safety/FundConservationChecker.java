@@ -1,5 +1,6 @@
 package org.nexus.bridge.safety;
 
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.nexus.bridge.model.BridgeTransaction.BridgeTxStatus;
 import org.nexus.bridge.repository.BridgeTransactionRepository;
 import org.slf4j.Logger;
@@ -49,6 +50,14 @@ import java.util.Map;
  * <h2>集成</h2>
  * <p>检测到严重偏差时联动 {@link EmergencyPauseService} 紧急暂停桥，
  * 并通过 {@link InsuranceFund} 准备补偿（仅记录日志，实际补偿需人工审批）。</p>
+ *
+ * <h2>多副本注意（2026-10-13）</h2>
+ * <p>{@link #doCheck()} 只读聚合，但违规分支经 {@code handleViolations → triggerEmergencyPause}
+ * 落到 {@link DefaultEmergencyPauseService#triggerPause}（{@code findById→setState→save} 的
+ * 绝对置状态，<b>无 CAS、无 @Version、无去重标记</b>）。prod bridge {@code replicaCount=3} 各读一份
+ * 非一致性快照，只要某副本读到 {@code minted>locked} 的瞬时抖动，就可能由"三之一"触发一次
+ * <b>误紧急暂停整条桥</b>并叠 3× ERROR/webhook 风暴。故 {@link #checkConservation()} 挂
+ * {@code @SchedulerLock}，让"读快照 + 判定 + 写状态"在多副本间串行。</p>
  *
  * @since 2.2.0
  */
@@ -103,6 +112,7 @@ public class FundConservationChecker {
      * 不影响后续执行。</p>
      */
     @Scheduled(cron = "${nexus.bridge.fund-conservation.cron:0 */5 * * * ?}")
+    @SchedulerLock(name = "fundConservationCheck", lockAtMostFor = "PT4M", lockAtLeastFor = "PT1M")
     public void checkConservation() {
         if (!enabled) {
             return;
