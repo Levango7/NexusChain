@@ -103,7 +103,21 @@ public class WebConfig implements WebMvcConfigurer {
                         "/api/v1/merchants/*/verify",   // Admin-only: @PreAuthorize("hasRole('ADMIN')")
                         "/api/v1/merchants/*/api-keys", // Admin-only: @PreAuthorize("hasRole('ADMIN')")
                         "/api/v2/merchants/*/verify",   // Admin-only: @PreAuthorize("hasRole('ADMIN')")
-                        "/api/v2/merchants/*/api-keys"  // Admin-only: @PreAuthorize("hasRole('ADMIN')")
+                        "/api/v2/merchants/*/api-keys", // Admin-only: @PreAuthorize("hasRole('ADMIN')")
+                        // 风控联动 + 大额审核（同上面 admin-only 的形状）：这些是**管理员动作**，
+                        // 鉴权靠 JWT + 方法级 hasRole('ADMIN')。此前未排除，于是被两头卡死：
+                        //   · 管理员只有 JWT、没有商户 API Key ⇒ ApiKeyInterceptor 直接 401
+                        //     （实测 /freeze 与 /interceptions/{id}/approve 都回
+                        //      {"code":40100,"message":"Missing API key} ⇒ approve/reject 恒不可用）；
+                        //   · 能带商户 API Key 进来的是商户自己，而类级只要求 ADMIN 或 MERCHANT，
+                        //     控制器又把目标商户取自调用方 Key ⇒ 商户可对自己的账户走
+                        //     freeze/unfreeze/status-change（executeUnfreeze 是真动钱 FROZEN→BALANCE）。
+                        // 只读端点 GET /interceptions 仍留在拦截器内，商户照常只看自己那份。
+                        "/api/v1/risk/link/freeze",
+                        "/api/v1/risk/link/unfreeze",
+                        "/api/v1/risk/link/status-change",
+                        "/api/v1/risk/link/interceptions/*/approve",
+                        "/api/v1/risk/link/interceptions/*/reject"
                 );
 
         // A2: payment orchestration now requires BOTH merchant API-key auth (above)
