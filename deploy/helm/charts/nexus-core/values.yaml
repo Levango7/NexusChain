@@ -16,8 +16,18 @@ imagePullPolicy: IfNotPresent
 # -- 链数据 PVC 大小
 storageSize: 50Gi
 
-# -- genesis ConfigMap（由集群侧创建，chart 不管理其内容）
-genesisConfigMap: nexus-genesis
+# -- genesis ConfigMap（**可选**；L3 预演缺陷 #28 修正）
+#    留空（默认）= 用镜像内置的 classpath genesis
+#      （nexus-core/src/main/resources/genesis/NexusChain-genesis-generator.json
+#       + validators.json；schema 以该文件为准——6.3 万行，超 ConfigMap 1MiB 上限，
+#       自定义必须裁剪后单独建 ConfigMap）。
+#    非空 = 挂该 ConfigMap 到 /genesis，init 容器复制到 /data，并设置
+#      GENESIS_FILE=/data/nexus-genesis-generator.json 与 VALIDATORS=/data/validators.json。
+#    ⚠️ deploy/k8s/genesis.json 与 validators.json 是旧占位、**schema 与 core 不符**，
+#       不要直接拿来建：core 的 Genesis 模型要求 config{chainId,Block}/coinbase/nBits/
+#       nonce/alloc{incubateAmount,initAmount,userIncubateAmount}，validators 是 URL 数组。
+#       生产用客户自己的链参数。
+genesisConfigMap: ""
 
 # -- 既有凭据 Secret（nexus-secrets：NEX_DB_USERNAME / NEX_DB_PASSWORD）
 existingSecret: nexus-secrets
@@ -29,6 +39,12 @@ env:
   P2P_MODE: "grpc"
   ENABLE_MINING: "true"
   ENABLE_DISCOVERY: "true"
+  # L3 复验缺陷 #32：ENABLE_MINING=true 时 ConsensusConfig 会解析 coinbase
+  # （base58 地址），而 application.properties 的默认值是占位句
+  # "your coin base address" → AuditCharacter 解析失败、core 起不来。
+  # 默认值取仓库既有的 dev 地址（application-local.properties 同源）；
+  # 生产必须替换为客户自己的矿工地址。
+  NEX_MINER_COINBASE: "19JNq2jAprkxVrpkgBiRaa1m47WcUMXtCb"
 
 resources:
   requests:

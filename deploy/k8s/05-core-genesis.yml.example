@@ -1,0 +1,58 @@
+# nexus-core 自定义 genesis —— 模板与操作说明（**示例文件，不直接 apply**）
+# ============================================================================
+# L3 预演缺陷 #28：core 的 genesis 有**固定 schema**，此前两处交付路径
+# （deploy/k8s/deploy.sh 与 helm chart）都指向 /data/nexus-genesis-generator.json，
+# 而仓库里 deploy/k8s/genesis.json 的内容与该 schema **不符**（旧占位），
+# 结果是 core 的 genesis bean 为 null、链节点永远起不来。
+#
+# 现在的缺省行为（无需本文件）：
+#   core 直接使用**镜像内置的 classpath genesis**
+#   （nexus-core/src/main/resources/genesis/NexusChain-genesis-generator.json + validators.json），
+#   适合演练/沙箱。生产若需客户自有链参数，按下面步骤覆盖。
+#
+# schema 以镜像内置文件为准（不要凭直觉造）：
+#   · nexus-genesis-generator.json 顶层键：
+#       config{chainId(int), Block(int)} / coinbase / nBits / nonce / extraData /
+#       hashBlock / parentHash / timestamp / alloc{incubateAmount[], initAmount[],
+#       userIncubateAmount[]}；条目形如 {"addr":"...","balance":<数值>}
+#       （userIncubateAmount 另有 days/remaindays/shareaddr/interest/share）
+#   · validators.json 是**字符串数组**（nexus://<pubkey>@<host>:19585），不是对象
+#   · 内置文件 6.3 万行、超 ConfigMap 1MiB 上限 ⇒ 自定义必须**裁剪**到实际需要的地址集
+#
+# 操作步骤（两条交付路径通用）：
+#   1) 把裁剪后的两个文件放入 deploy/k8s/custom-genesis/
+#      （键名必须为 nexus-genesis-generator.json 与 validators.json）
+#   2) 清单路径：deploy.sh 检测到 custom-genesis/ 目录即自动建 ConfigMap，
+#      并按 deploy/k8s/20-core-statefulset.yml 中注释恢复 GENESIS_FILE/VALIDATORS env
+#      与 /genesis 卷 + init 拷贝容器；
+#      Helm 路径：kubectl create configmap nexus-genesis --from-file=... -n nexus
+#      并 helm upgrade 时 --set nexus-core.genesisConfigMap=nexus-genesis
+#   3) 确认 core 启动日志出现 genesis 加载（此前静默失败表现为
+#      "bean method 'genesis' … bean value is null"）
+# ============================================================================
+# 最小结构示例（**仅供理解 schema，真实值必须来自客户链参数**）：
+#
+# apiVersion: v1
+# kind: ConfigMap
+# metadata:
+#   name: nexus-genesis
+#   namespace: nexus
+# data:
+#   nexus-genesis-generator.json: |
+#     {
+#       "config": { "chainId": 0, "Block": 0 },
+#       "coinbase": "0x0000000000000000000000000000000000000000",
+#       "nBits": "00001fffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+#       "nonce": "0x0000000000000042",
+#       "extraData": "",
+#       "hashBlock": "0x0000000000000000000000000000000000000000000000000000000000000000",
+#       "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+#       "timestamp": 1562548148,
+#       "alloc": {
+#         "incubateAmount": [],
+#         "initAmount": [ {"addr": "<客户初始地址>", "balance": 1000} ],
+#         "userIncubateAmount": []
+#       }
+#     }
+#   validators.json: |
+#     ["nexus://<验证人公钥>@<host>:19585"]

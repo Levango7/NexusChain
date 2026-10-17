@@ -32,24 +32,17 @@ spec:
         fsGroup: 1000
         seccompProfile:
           type: RuntimeDefault
-      initContainers:
-        # 初始化容器需 root 拷贝 genesis（busybox）；仅做文件复制，
-        # 仍收紧提权与 capabilities，不做非root约束（否则无法写 PVC）
-        - name: init-genesis
-          image: busybox:1.36
-          securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop:
-                - ALL
-            seccompProfile:
-              type: RuntimeDefault
-          command: ["sh", "-c", "cp /genesis/* /data/ 2>/dev/null || true"]
-          volumeMounts:
-            - name: genesis-config
-              mountPath: /genesis
-            - name: core-data
-              mountPath: /data
+      # L3 预演缺陷 #28：init-genesis 容器已移除（缺省用镜像内置 classpath genesis）。
+      # 自定义 genesis 时恢复本块（并加回 /genesis 卷与 GENESIS_FILE/VALIDATORS env）：
+      # initContainers:
+      #   - name: init-genesis
+      #     image: busybox:1.36
+      #     command: ["sh", "-c", "cp /genesis/* /data/ 2>/dev/null || true"]
+      #     volumeMounts:
+      #       - name: genesis-config
+      #         mountPath: /genesis
+      #       - name: core-data
+      #         mountPath: /data
       containers:
         - name: core
           # TODO: 固定为不可变 tag（semver 或 sha256 digest）
@@ -90,14 +83,33 @@ spec:
               value: "grpc"
             - name: ENABLE_MINING
               value: "true"
+            # L3 复验缺陷 #32：ENABLE_MINING=true 时 coinbase 必须可解析为 base58 地址
+            # （application.properties 默认值是占位句 → 解析失败 core 起不来）。
+            # 生产替换为客户矿工地址。
+            - name: NEX_MINER_COINBASE
+              value: "19JNq2jAprkxVrpkgBiRaa1m47WcUMXtCb"
             - name: ENABLE_DISCOVERY
               value: "true"
             - name: BOOTSTRAPS
               value: "nexus://nexus-core-0.nexus-core:9585,nexus://nexus-core-1.nexus-core:9585,nexus://nexus-core-2.nexus-core:9585,nexus://nexus-core-3.nexus-core:9585"
-            - name: GENESIS_FILE
-              value: "/data/nexus-genesis-generator.json"
-            - name: VALIDATORS
-              value: "/data/validators.json"
+            # L3 复验缺陷 #35：Leveldb 的 nexus.cache-dir 默认 ./leveldb（WORKDIR /app，
+            # 非 root 不可写）→ 指向 PVC 子目录（core-data 挂 /data）
+            - name: CACHE_DIR
+              value: "/data/leveldb"
+            # L3 复验缺陷 #37：JWTUtil 启动即校验 app-id/app-secret（fail-closed）
+            - name: NEXUS_JWT_APP_ID
+              value: "nexus-core"
+            - name: NEXUS_JWT_APP_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: nexus-secrets
+                  key: NEXUS_JWT_APP_SECRET
+            # L3 预演缺陷 #28：GENESIS_FILE / VALIDATORS 不再无条件指向 /data/*。
+            # 缺省 = 用 core 镜像内置的 classpath genesis（nexus-core/src/main/resources/
+            # genesis/，schema 以该目录文件为准）。自定义链参数 = 单独建 ConfigMap
+            # （键 nexus-genesis-generator.json + validators.json，见 05-core-genesis.yml.example）
+            # 并在此加回 GENESIS_FILE=/data/nexus-genesis-generator.json、
+            # VALIDATORS=/data/validators.json 两个 env + /genesis 卷 + init 拷贝容器。
           resources:
             requests:
               memory: "512Mi"
@@ -108,6 +120,9 @@ spec:
           volumeMounts:
             - name: core-data
               mountPath: /data
+            # L3 预演缺陷 #24：logback 写相对路径 ./logs（WORKDIR=/app，镜像内不可写）
+            - name: logs
+              mountPath: /app/logs
           livenessProbe:
             httpGet:
               path: /height
@@ -121,9 +136,10 @@ spec:
             initialDelaySeconds: 30
             periodSeconds: 10
       volumes:
-        - name: genesis-config
-          configMap:
-            name: nexus-genesis
+        # L3 预演缺陷 #24：/app/logs 空卷（logback 写相对路径 ./logs，镜像内 /app 不可写）
+        - name: logs
+          emptyDir: {}
+        # L3 预演缺陷 #28：genesis 卷已移除（缺省用镜像内置 classpath genesis；自定义见 env 处注释）
   volumeClaimTemplates:
     - metadata:
         name: core-data

@@ -89,11 +89,38 @@ spec:
             {{- if .Values.dependencies.sentinel }}
             - name: NEX_SENTINEL_SERVER
               value: {{ printf "%s:%s" .Values.global.infrastructure.sentinel.host (toString .Values.global.infrastructure.sentinel.port) | quote }}
+            # L3 预演复验缺陷 #44：SentinelHealthIndicator 把"心跳发不到 dashboard"
+            # 判成 DOWN → /actuator/health 503 → 探针杀 Pod 反复重启。
+            # K8s 参考交付不含 Sentinel dashboard → 停用该健康项（熔断/限流功能不受影响）。
+            - name: MANAGEMENT_HEALTH_SENTINEL_ENABLED
+              value: "false"
             {{- end }}
             {{- if .Values.dependencies.zipkin }}
             - name: NEX_ZIPKIN_ENDPOINT
               value: {{ printf "http://%s:%s/api/v2/spans" .Values.global.infrastructure.zipkin.host (toString .Values.global.infrastructure.zipkin.port) | quote }}
             {{- end }}
+            # L3 预演复验缺陷 #45：chainNode 健康指示器默认探 http://localhost:19585
+            # → 容器内恒 DOWN → /actuator/health 503 → liveness 反复杀 Pod
+            # （两副本交替重启的"抖动"真因；dev compose 早有 NEX_CHAIN_RPC_URL，
+            #  chart 漏了）。
+            - name: NEX_CHAIN_RPC_URL
+              # 注意：default 必须在 toString **之前**（toString nil → "<nil>" 非空，
+              # default 不再兜底；实测渲染出 http://nexus-core:<nil> → Bad authority）。
+              value: {{ printf "http://nexus-core:%s" (.Values.global.infrastructure.chainNodePort | default "19585" | toString) | quote }}
+            # L3 预演复验缺陷 #47：signingServiceHealth 探针打
+            # /api/v1/transfers/capability（@PreAuthorize hasRole('READ')），
+            # 而网关服务令牌默认只有 SIGNING_SERVICE → 403 → 健康聚合恒 DOWN →
+            # liveness 反复杀 Pod（与 chainNode 叠加成"两副本交替抖动"）。
+            - name: JWT_SERVICE_ROLES
+              value: "SIGNING_SERVICE,READ"
+            # L3 预演复验缺陷 #43：事件溯源/死信队列默认 store=kafka（matchIfMissing=true），
+            # 而 K8s 参考交付**不含 Kafka** → KafkaTemplate bean 缺失、网关起不来
+            # （dev/sandbox profile 早有同款 memory 开关，prod 漏了）。
+            # 默认 memory；接 Kafka 的部署把 eventSourcingStore 改回 kafka。
+            - name: NEXUS_EVENTSOURCING_STORE
+              value: {{ .Values.eventSourcingStore | default "memory" | quote }}
+            - name: NEXUS_WEBHOOK_DLQ_STORE
+              value: {{ .Values.eventSourcingStore | default "memory" | quote }}
             {{- if .Values.dependencies.mysql }}
             - name: SPRING_DATASOURCE_URL
               value: {{ printf "jdbc:mysql://%s:%s/%s?useUnicode=true&characterEncoding=utf-8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC" .Values.global.infrastructure.mysql.host (toString .Values.global.infrastructure.mysql.port) (.Values.dependencies.mysqlDatabase | default (replace "-" "_" .Chart.Name)) | quote }}
@@ -154,6 +181,11 @@ spec:
               mountPath: /app/config/application.yml
               subPath: application.yml
               readOnly: true
+            # L3 预演复验缺陷 #42：logback（来自 nexus-core 共享 logback.xml）的 FILE
+            # appender 写相对路径 ./logs/nexuscore.log，镜像内 /app 不可写，且被
+            # AsyncAppender 包裹 → 致命错误随进程退出丢失（日志在 Flyway 后截断）。
+            - name: logs
+              mountPath: /app/logs
             {{- with .Values.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -161,6 +193,8 @@ spec:
         - name: config
           configMap:
             name: {{ .Chart.Name }}-config
+        - name: logs
+          emptyDir: {}
         {{- with .Values.extraVolumes }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

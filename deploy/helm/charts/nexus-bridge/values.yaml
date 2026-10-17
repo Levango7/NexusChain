@@ -22,10 +22,14 @@ service:
 
 springProfile: ""
 
-# -- 依赖的基础设施（bridge 不依赖 seata）
+# -- 依赖的基础设施
+# L3 复验缺陷 #33：seata 从 false 改 true——bridge 的 application.yml 里
+# `seata.enabled: true` 是硬编码的（prod/dev 均不排除 SeataAutoConfiguration），
+# chart 不注入 NEX_SEATA_SERVER 时应用回落 localhost:8091，
+# 启动即 "can not connect to [127.0.0.1:8091]" 失败。
 dependencies:
   nacos: true
-  seata: false
+  seata: true
   sentinel: true
   zipkin: true
   # 2026-10-12：MySQL 8（原 postgres）。库名显式写出，与
