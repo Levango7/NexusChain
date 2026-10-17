@@ -10,9 +10,9 @@ import org.springframework.context.ApplicationEvent;
  * {@link ThreeDsAuthCompletedObserver}，它只计数与告警，不改动任何订单/资金状态。
  * 风控联动需要先有裁定（谁有权改风险等级、改完资金路径上发生什么），见 Issue #34。</p>
  *
- * <p>注意别与本包同名类混淆：{@code org.nexus.gateway.security.audit.event.ThreeDsAuthCompletedEvent}
- * 是另一个 POJO，只被 {@code SecurityEventPublisher} 引用，而后者<b>无任何调用方</b>——
- * 本类才是生产路径上真正被发布的那个。</p>
+ * <p>历史上还存在过一个同名 POJO（{@code security.audit.event.ThreeDsAuthCompletedEvent}）
+ * 与一个零调用方的 {@code SecurityEventPublisher}，两者从未被任何生产代码引用，现已删除。
+ * 本类是生产路径上唯一被发布与被消费的那个。</p>
  */
 public class ThreeDsAuthCompletedEvent extends ApplicationEvent {
 
