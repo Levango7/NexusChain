@@ -51,7 +51,7 @@ spec:
             optional: false
       containers:
         - name: signing-service
-          image: ghcr.io/levango7/nexuschain/nexus-signing-service:2.1.0
+          image: ghcr.io/levango7/nexuschain/nexus-signing-service:v2.74.0
           securityContext:
             allowPrivilegeEscalation: false
             # P2 加固：readOnlyRootFilesystem + emptyDir 挂载 /tmp

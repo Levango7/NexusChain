@@ -1,6 +1,6 @@
-# Kubernetes Secret 管理指南（v2.50.0）
+# Kubernetes Secret 管理指南（v2.74.0）
 
-<!-- 说明：标题中 v2.1.0 为历史架构阶段标记，非当前发布版本；当前版本请见根 README.md。本指南内容仍适用于当前部署。 -->
+<!-- 说明（2026-10-18 批次②重写）：标题版本 = 当前发布版本，由 scripts/bump-version.sh 第 6 步随每次归版同步；版本口径以根 README.md 为准。本指南内容适用于当前部署。 -->
 
 本目录的 `00-namespace-config.yml` 中定义了一个 `nexus-secrets` Secret，
 其中 `stringData` 字段的值（`CHANGE_ME_IN_PRODUCTION`、`BASE64_ENCODED_32_BYTE_AES_KEY_HERE` 等）
