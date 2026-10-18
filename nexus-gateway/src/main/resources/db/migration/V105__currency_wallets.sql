@@ -1,4 +1,4 @@
--- V100: currency_wallets 建表
+-- V105: currency_wallets 建表
 -- ============================================================================
 -- L3 预演缺陷 #31：实体 org.nexus.gateway.currency.CurrencyWallet 映射
 -- currency_wallets，但**迁移集里从未有过该表的建表脚本**（网关 dev yml 的注释

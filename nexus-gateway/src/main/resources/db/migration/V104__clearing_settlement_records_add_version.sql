@@ -1,4 +1,4 @@
--- V98: clearing_settlement_records 补乐观锁列 version
+-- V104: clearing_settlement_records 补乐观锁列 version
 -- ============================================================================
 -- L3 预演缺陷 #26：实体 org.nexus.gateway.clearing.ClearingSettlementRecord
 -- 含 @Version @Column(name="version")，而 V59__add_clearing_settlement_records.sql

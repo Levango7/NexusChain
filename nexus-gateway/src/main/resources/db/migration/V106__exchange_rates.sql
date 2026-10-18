@@ -1,4 +1,4 @@
--- V101: exchange_rates 建表
+-- V106: exchange_rates 建表
 -- ============================================================================
 -- L3 预演缺陷 #31（续）：实体 org.nexus.gateway.currency.ExchangeRate 映射
 -- exchange_rates，与 currency_wallets 同型——迁移集里从未有该表。
