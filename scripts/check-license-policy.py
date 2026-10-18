@@ -14,9 +14,10 @@ OWASP DC 漏洞）。`docs/licensing.md` §4.3 自述该缺口，§5 列为待�
 ------------
 1. **npm**：解析全部 `package-lock.json`（lockfileVersion 3 自带 `license`
    字段）→ 离线、确定、全覆盖。
-2. **Rust**：对每个含 `Cargo.lock` 的目录跑 `cargo metadata --locked`，
-   取每个包的 `license` 字段（cargo 是权威来源）。
-   若 cargo 不可用或失败 → 该模块标记 UNSCANNED（**不伪装成通过**）。
+2. **Rust**：解析全部 `Cargo.lock`（文本解析，不依赖 cargo 工具链），许可查
+   `scripts/rust-license-cache.json`（经 crates.io 核实过的可提交缓存）。
+   缓存未命中时默认计为 miss 并在报告里如实标注（**不伪装成通过**）；
+   `--update-cache` 时才联网补查并写回缓存（保证 CI 离线可复现）。
 3. **Java/Gradle**：**未覆盖**——Gradle 无锁文件，需解析已解析依赖树
    （另行评估）。报告里显式标注，不假装覆盖。
 
@@ -196,7 +197,11 @@ def scan_rust(root: str, findings: list, update_cache: bool = False) -> dict:
                 continue
             seen.add(key)
             lic = cache.get(key)
-            if lic is None and (update_cache or True):
+            # 2026-10-18 修复：原为 `(update_cache or True)` 恒真——任何运行都会对
+            # 未命中项联网查 crates.io（CI 网络依赖 + 非确定性），与模块文档
+            # 「可提交缓存、CI 离线可复现」的契约冲突。默认离线只读缓存；
+            # 未命中项如实计 miss（维护者用 --update-cache 刷新）。
+            if lic is None and update_cache:
                 got = _cratesio_license(name, ver)
                 if got is not None:
                     lic = got
@@ -308,7 +313,8 @@ def main() -> int:
     ap.add_argument("--strict", action="store_true",
                     help="发现强传染许可时 exit 1（默认 report-only）")
     ap.add_argument("--update-cache", action="store_true",
-                    help="把本次从 crates.io 查到的 Rust 许可写回 scripts/rust-license-cache.json")
+                    help="允许联网查询缓存未命中的 crate，并把结果写回 "
+                         "scripts/rust-license-cache.json（默认：离线只读缓存）")
     args = ap.parse_args()
 
     root = repo_root()
