@@ -103,3 +103,7 @@ spring.data.redis:
 
 nexus.security:
   replay-store: ${NEXUS_REPLAY_STORE:memory}
+  # 批次⑤ P0 加固（2026-10-18）：生产启动守卫——JWT_SECRET 未注入（或 <32 字节）时
+  # 拒绝启动，不再以"随机密钥 + WARN"静默降级（跨服务验签必失败的形态会被推迟到首个请求才暴露）。
+  jwt:
+    require-secret: true

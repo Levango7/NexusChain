@@ -56,12 +56,28 @@ public class JwtTokenProvider {
     @Value("${nexus.security.jwt.secret:}")
     private String secret;
 
+    /**
+     * 启动守卫（批次⑤ P0 加固，2026-10-18）：为 true 时，密钥未配置或短于
+     * HS256 所需 32 字节 → 启动期直接 fail-fast，拒绝以"随机密钥 + WARN"静默降级
+     * （那种形态下与 signing-service 的跨服务验签必然失败，故障会被推迟到首个请求才暴露）。
+     * 生产 profile 置 true（application-prod.yml）；dev / 测试默认 false，行为不变。
+     */
+    @Value("${nexus.security.jwt.require-secret:false}")
+    private boolean requireSecret;
+
     /** HS256 签名密钥。 */
     private SecretKey signingKey;
 
     @PostConstruct
     void init() {
         if (secret == null || secret.isBlank()) {
+            if (requireSecret) {
+                // fail-fast（同 20261017 #129「缺配置 ⇒ 拒绝启动」口径）：带着随机密钥启动
+                // 的服务无法解析 gateway/signing 互签的 token，故障会被推迟到首个请求才暴露。
+                throw new IllegalStateException(
+                        "nexus.security.jwt.require-secret=true 但 nexus.security.jwt.secret 未配置："
+                                + "拒绝启动；请通过 JWT_SECRET 注入 ≥32 字节共享密钥（gateway / signing-service 同值）");
+            }
             // 未配置密钥时记录警告但不抛异常，避免单测上下文启动失败；
             // 未配置密钥时签发/校验均用进程内一次性随机密钥，
             // 外部伪造 token 全部校验失败 → fail-closed（同 signing-service 策略）。
@@ -74,6 +90,12 @@ public class JwtTokenProvider {
         byte[] keyBytes = secret.getBytes(StandardCharsets.UTF_8);
         // HS256 要求 ≥32 字节；不足则零填充到 32 字节
         if (keyBytes.length < 32) {
+            if (requireSecret) {
+                // 零填充会稀释短密钥熵；启动守卫档位拒绝弱密钥（生产配置错误不该靠猜）。
+                throw new IllegalStateException(
+                        "nexus.security.jwt.secret 长度不足 32 字节（HS256 要求）："
+                                + "require-secret=true 时拒绝启动，请轮换为 ≥32 字节密钥");
+            }
             byte[] padded = new byte[32];
             System.arraycopy(keyBytes, 0, padded, 0, keyBytes.length);
             keyBytes = padded;

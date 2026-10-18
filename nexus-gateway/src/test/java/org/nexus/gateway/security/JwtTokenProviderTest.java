@@ -7,6 +7,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -16,7 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * {@link JwtTokenProvider} 单元测试。
  *
  * <p>覆盖：签发→解析往返（subject/roles claim）、过期拒绝、篡改拒绝、
- * 非法格式拒绝、角色提取（含空白项清理）。</p>
+ * 非法格式拒绝、角色提取（含空白项清理）、require-secret 启动守卫（批次⑤ P0 加固）。</p>
  */
 class JwtTokenProviderTest {
 
@@ -87,5 +88,39 @@ class JwtTokenProviderTest {
         Claims claims = provider.parseClaims(token);
 
         assertTrue(JwtTokenProvider.extractRoles(claims).isEmpty());
+    }
+
+    // --- require-secret 启动守卫（批次⑤ P0 加固，2026-10-18） ---
+
+    @Test
+    void requireSecret_true_withoutSecret_failsFastOnInit() {
+        JwtTokenProvider strict = new JwtTokenProvider();
+        ReflectionTestUtils.setField(strict, "secret", "");
+        ReflectionTestUtils.setField(strict, "requireSecret", true);
+
+        IllegalStateException e = assertThrows(IllegalStateException.class, strict::init);
+        assertTrue(e.getMessage().contains("require-secret"));
+    }
+
+    @Test
+    void requireSecret_true_withShortSecret_failsFastOnInit() {
+        JwtTokenProvider strict = new JwtTokenProvider();
+        ReflectionTestUtils.setField(strict, "secret", "short-secret");
+        ReflectionTestUtils.setField(strict, "requireSecret", true);
+
+        IllegalStateException e = assertThrows(IllegalStateException.class, strict::init);
+        assertTrue(e.getMessage().contains("32"));
+    }
+
+    @Test
+    void requireSecret_false_withoutSecret_startsWithRandomKey() {
+        // 默认档位（dev / 单测）保持既有行为：告警 + 进程内随机密钥，自签自验可用
+        JwtTokenProvider lenientProvider = new JwtTokenProvider();
+        ReflectionTestUtils.setField(lenientProvider, "secret", "");
+
+        assertDoesNotThrow(lenientProvider::init);
+
+        String token = lenientProvider.generateToken("svc", List.of("ADMIN"));
+        assertTrue(lenientProvider.validateToken(token));
     }
 }
