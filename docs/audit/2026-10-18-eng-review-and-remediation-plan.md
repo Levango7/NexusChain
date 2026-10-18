@@ -338,6 +338,7 @@
 | `ef0896c9` | fix(build)：composite SpotBugs 接入（共享脚本 ×6 模块 + spotbugsAll/testAll 聚合扩展）+ 首扫 21 条 findings 全闭环 + security-scan timeout 25 + README + ADR-035 |
 | （本执行明细同批） | docs(changelog+plan)：批次⑦条目 + 本记录 |
 | （残项复核补记，2026-10-19） | docs：批次⑦残项复核——SDK 覆盖 / explorer Node / perf-demo 三项闭环（§4 L173 复核项） |
+| （合并期，2026-10-19） | Merge origin/master（含 #142）：concurrency 与 #142 等价实现归一（保留 #142 版）；其 k8s-sync / performance-test / security-scan 三处同批次一并进入本分支 |
 
 **验证记录（全部当场复跑通过）**：
 - composite 模块 check 本地实测（settlement/compliance/analytics/oracle/api-gateway 五模块 `:check`）→ **BUILD SUCCESSFUL 3m53s**；jacoco XML 五份落盘（46KB–273KB）——compliance/analytics/api-gateway 的 0.50 门禁"已配置但 CI 只跑 test"（写而不测），翻闸后进入真实执行；
@@ -346,7 +347,7 @@
   - **收窄豁免 11 条（逐条论证入 spotbugs-exclude-filter.xml）**：本仓自定义 `Cloneable<T>` 约定接口 ×6、Start.consensusEngine 未来共识引擎守卫 ×1、net.Util 节点连通性探测 socket ×2、AES256CTR 套件语义（无生产调用点）×2；
 - 夹具（独立 worktree）全量复跑：`spotbugsAll` **BUILD SUCCESSFUL 5m57s**，8/8 composite 报告 `<BugInstance>` 计数 = 0；随后 consortium 三模块 + oracle `:check`（测试 + 覆盖率校验）全绿（1m28s / 1m06s）；
 - 主树复验：`spotbugsAll` BUILD SUCCESSFUL（与夹具逐字节同输入、构建缓存命中直接复用同一分析结果），主树 8/8 报告 total=0 点名复核；
-- **ci.yml 疑点逐条复核**（评审"尚未逐条复核"项闭环）：concurrency 全仓此前缺失（已加；master 不取消——docker-build 仅 master 触发，中途取消可能留不完整镜像集）；build-and-test 4 处 npm 无 setup-node（已补 Node 26，与 engines `>=24 <27` 及 Explorer/Hardhat job 一致）；artifact 名 `-${{ matrix.os }}` 残留 4 处（job 无 matrix、恒空串带尾横线，已清）；引用面核验：download-artifact 仅 security-scan 用 `trivy-fs-reports`（改名无联动）；
+- **ci.yml 疑点逐条复核**（评审"尚未逐条复核"项闭环）：concurrency 全仓此前缺失（**合并期归一**：origin/master 的 #142 以 `event_name == 'pull_request'` 的等价实现覆盖 4 个 workflow，语义等价且面更广——本分支合并消重、保留 #142 版本）；build-and-test 4 处 npm 无 setup-node（已补 Node 26，与 engines `>=24 <27` 及 Explorer/Hardhat job 一致）；artifact 名 `-${{ matrix.os }}` 残留 4 处（job 无 matrix、恒空串带尾横线，已清）；引用面核验：download-artifact 仅 security-scan 用 `trivy-fs-reports`（改名无联动）；
 - `testAll` 扩展与 spotbugsAll 同机制（`gradle.includedBuild().task()`，后者已实跑验证）；README 口径同步；**ADR-035** 落档（含 Gradle composite 三处实证陷阱：`--dry-run` 对 includeBuild 任务不生效、嵌套闭包 owner 链接收者陷阱、includedBuild 任务引用语法）；
 - **buildSrc/version catalog 重构评估**（范围"评估"项）：19 个 `build.gradle`、显式版本声明 324 处（boot 4.0.8 重复 10 处）——收益/风险权衡后**暂缓**，记账为独立批次候选（理由见 ADR-035 §2.3）；
 - 门禁：PyYAML 解析 ci.yml（8 jobs）/ security-scan.yml（11 jobs）通过；`check-code-hygiene.py` 无新增违规（49/49 基线）；`check-license-headers.sh` 通过；

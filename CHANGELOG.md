@@ -174,7 +174,7 @@ docs/ha-verification.md。
 **ci.yml 遗留疑点修复**
 - 新增 concurrency 组：同一 ref 新推送取消旧运行（master 除外——docker-build 仅 master
   触发，中途取消可能留下不完整镜像集）；此前全 workflow 无 concurrency，连续推送时旧 run
-  继续占用 runner。
+  继续占用 runner。（2026-10-19 归一：#142 已在 master 以等价实现覆盖 4 workflow，合并后保留 #142 版本。）
 - build-and-test 补 `Setup Node 26`：该 job 有 4 处 npm（SDK TS/DevTools/Explorer
   test+build）却无 setup-node、靠 runner 预装版本（三处 engines 均 `>=24 <27`，与
   Explorer/Hardhat job 统一钉 26）。

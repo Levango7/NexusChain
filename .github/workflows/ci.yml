@@ -15,16 +15,10 @@ on:
   pull_request:
     branches: [master]
 
-# 并发组（2026-10-18 批次⑦遗留疑点修复）：同一 ref 的新运行取消仍在排队/执行
-# 的旧运行。背景：本流水线单次为 30min 量级（build-and-test 观察 15.9–35.4min），
-# 此前**全 workflow 无 concurrency**——连续推送时旧 run 继续占用 runner，
-# 新 run 排队等待，反馈时间被叠加放大（本批自身连续推送到 PR 时实测多 run 并行）。
-# master 推送刻意不取消（cancel-in-progress 对 master 求值为 false）：
-# docker-build 仅在 master push 触发，中途取消可能留下不完整的镜像集；
-# master 运行按队列自然串行即可。
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+# （concurrency 归一说明 2026-10-19：本批原在此处新增了等价并发组；origin/master 的
+# #142 已以 `event_name == 'pull_request'` 实现覆盖 4 个 workflow（ci / k8s-sync /
+# performance-test / security-scan），语义等价且面更广——合并消重后保留 #142 版本，
+# 其块位于下方 env 之后。）
 
 env:
   # 关闭 daemon（CI 每次均为全新 runner，daemon 无意义且浪费资源）
