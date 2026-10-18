@@ -227,7 +227,7 @@
 - Groth16/KZG/欺诈证明：按"收敛声明"或"补齐实现"两条路线之一推进（建议先出一页路线文档再动代码）。
 - 验收：叙实一致（文档与代码能被同一句话描述）。
 
-### 批次⑦ 构建与 CI 覆盖
+### 批次⑦ 构建与 CI 覆盖（✅ 已执行，见 §7）
 - composite build 纳入 SpotBugs/JaCoCo/testAll（或明确豁免并写入 ADR）。
 - ci.yml 遗留疑点逐条复核修复；加 concurrency 组（取消过期运行，缩短反馈时间）。
 - buildSrc/version catalog 重构评估。
@@ -326,6 +326,29 @@
 - bump 夹具：独立 worktree（detached HEAD）实测 8 步全链 → 9.9.9，7 项探针全中（build.gradle / k8s `v9.9.9` / values-prod `v9.9.9` / Chart `9.9.9` / application.properties / version.properties / README 头注），SECRET-MANAGEMENT.md 零改动（去版本化步骤确已除名），0 个 `.bak` 残留；
 - `check-version-consistency.sh` 8 断言复跑全绿（CHANGELOG 102 条无重复、不超前）；
 - 修正声明均给出出处：settings.gradle 注记（SDK 移除）/ application.yml + SigningApprovalService（审批存储）/ docker-compose.prod.yml 注释 + ADR-033（DB 族）；架构图修正行行宽逐行测量（= 边框宽 71，未破坏 ASCII 框）；Spring Boot 4.0.8 / Gradle 8.14 复核为真、未改。
+
+### 批次⑦执行明细（构建与 CI 覆盖）
+
+**提交（3 个，同分支）**：
+
+| 提交 | 内容 |
+|---|---|
+| `d2196985` | fix(ci)：concurrency 组 + build-and-test Setup Node 26 + artifact 模板残留 ×4 + composite `:check` 翻闸 + composite JaCoCo 报告步骤/codecov 扩展 |
+| `ef0896c9` | fix(build)：composite SpotBugs 接入（共享脚本 ×6 模块 + spotbugsAll/testAll 聚合扩展）+ 首扫 21 条 findings 全闭环 + security-scan timeout 25 + README + ADR-035 |
+| （本执行明细同批） | docs(changelog+plan)：批次⑦条目 + 本记录 |
+
+**验证记录（全部当场复跑通过）**：
+- composite 模块 check 本地实测（settlement/compliance/analytics/oracle/api-gateway 五模块 `:check`）→ **BUILD SUCCESSFUL 3m53s**；jacoco XML 五份落盘（46KB–273KB）——compliance/analytics/api-gateway 的 0.50 门禁"已配置但 CI 只跑 test"（写而不测），翻闸后进入真实执行；
+- SpotBugs 接入首扫暴露 **21 条存量 findings**（此前 SAST 门禁对 composite 完全盲区——空转自证），全部就地闭环：
+  - **代码修复 10 条（真缺陷）**：HexBytes 补 `hashCode`（equals 契约破损）；ChainCache 构造器改私有 `doPut/doPutAll` 消除构造期虚分派（`ChainCacheWrapper(T/Collection)` 构造必 NPE 的埋雷——子类锁字段尚未初始化）、`evict` 直连私有 `remove`；InMemoryStateTree 改 `Arrays.equals`（语义等价、免分配）；PeersCache 改 `rand.nextInt(n)`（`Math.abs(Integer.MIN_VALUE)` 负索引 + 取模偏置）；TransactionPool `skip((long) page * size)`（int 溢出）；TestCommunicationTool try-with-resources（异常路径流泄漏）；FileSNAllocator 校验 `raf.read` 短读；AggregatedPriceOracle DCL 字段 `volatile`（安全发布）；
+  - **收窄豁免 11 条（逐条论证入 spotbugs-exclude-filter.xml）**：本仓自定义 `Cloneable<T>` 约定接口 ×6、Start.consensusEngine 未来共识引擎守卫 ×1、net.Util 节点连通性探测 socket ×2、AES256CTR 套件语义（无生产调用点）×2；
+- 夹具（独立 worktree）全量复跑：`spotbugsAll` **BUILD SUCCESSFUL 5m57s**，8/8 composite 报告 `<BugInstance>` 计数 = 0；随后 consortium 三模块 + oracle `:check`（测试 + 覆盖率校验）全绿（1m28s / 1m06s）；
+- 主树复验：`spotbugsAll` BUILD SUCCESSFUL（与夹具逐字节同输入、构建缓存命中直接复用同一分析结果），主树 8/8 报告 total=0 点名复核；
+- **ci.yml 疑点逐条复核**（评审"尚未逐条复核"项闭环）：concurrency 全仓此前缺失（已加；master 不取消——docker-build 仅 master 触发，中途取消可能留不完整镜像集）；build-and-test 4 处 npm 无 setup-node（已补 Node 26，与 engines `>=24 <27` 及 Explorer/Hardhat job 一致）；artifact 名 `-${{ matrix.os }}` 残留 4 处（job 无 matrix、恒空串带尾横线，已清）；引用面核验：download-artifact 仅 security-scan 用 `trivy-fs-reports`（改名无联动）；
+- `testAll` 扩展与 spotbugsAll 同机制（`gradle.includedBuild().task()`，后者已实跑验证）；README 口径同步；**ADR-035** 落档（含 Gradle composite 三处实证陷阱：`--dry-run` 对 includeBuild 任务不生效、嵌套闭包 owner 链接收者陷阱、includedBuild 任务引用语法）；
+- **buildSrc/version catalog 重构评估**（范围"评估"项）：19 个 `build.gradle`、显式版本声明 324 处（boot 4.0.8 重复 10 处）——收益/风险权衡后**暂缓**，记账为独立批次候选（理由见 ADR-035 §2.3）；
+- 门禁：PyYAML 解析 ci.yml（8 jobs）/ security-scan.yml（11 jobs）通过；`check-code-hygiene.py` 无新增违规（49/49 基线）；`check-license-headers.sh` 通过；
+- CI 实证（Build & Test 含 composite `:check` 与新 Node 路径 / SAST composite 0 findings / concurrency 取消行为）：run 号见 PR #140 评论区（推送网络恢复后回填）。
 
 ---
 

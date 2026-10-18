@@ -169,6 +169,37 @@ docs/ha-verification.md。
 - 验证：bump 夹具（独立 worktree）8 步全链 → 9.9.9 七探针全中、SECRET-MANAGEMENT
   零改动、0 个 `.bak` 残留；`check-version-consistency.sh` 8 断言全绿。
 
+### 工程评审批次⑦：构建与 CI 覆盖——concurrency/Node 钉版/artifact 修正 + composite 门禁真实化
+
+**ci.yml 遗留疑点修复**
+- 新增 concurrency 组：同一 ref 新推送取消旧运行（master 除外——docker-build 仅 master
+  触发，中途取消可能留下不完整镜像集）；此前全 workflow 无 concurrency，连续推送时旧 run
+  继续占用 runner。
+- build-and-test 补 `Setup Node 26`：该 job 有 4 处 npm（SDK TS/DevTools/Explorer
+  test+build）却无 setup-node、靠 runner 预装版本（三处 engines 均 `>=24 <27`，与
+  Explorer/Hardhat job 统一钉 26）。
+- artifact 名模板残留修正 ×4：`jacoco-reports` / `test-results` / `rust-test-logs` /
+  `jar-artifacts` 的 `-${{ matrix.os }}`（job 无 matrix、表达式恒为空串、名字带尾横线）。
+
+**composite build 门禁真实化（ADR-035）**
+- JaCoCo：compliance/analytics 与 api-gateway 的 0.50 门禁**已配置但 CI 长期只跑 `test`**
+  （写而不测）——本地五模块 `check` 实测全绿（3m53s、jacoco XML 五份落盘）后 CI 统一翻
+  `:check`；composite 报告新增生成步骤并纳入 codecov 与 artifact（此前根聚合只覆盖根
+  subprojects）。
+- SpotBugs/FindSecBugs：6 个 composite 模块（consortium 三子项目 + settlement /
+  compliance / analytics / oracle / api-gateway）此前完全在 SAST 门禁视野外。经共享脚本
+  `gradle/composite-spotbugs.gradle`（与根构建同口径）接入，`spotbugsAll` / `testAll`
+  以 `includedBuild().task()` 扩展聚合；SAST job 超时 15→25min。首扫暴露 **21 条存量
+  findings**（空转自证），全部就地闭环：**代码修复 10 条**（HexBytes 补 hashCode；
+  ChainCache 构造器消除构造期虚分派——ChainCacheWrapper 锁未初始化 NPE 埋雷；evict
+  直连私有 remove；InMemoryStateTree 改 Arrays.equals；PeersCache 改 rand.nextInt(n)
+  消除负索引+取模偏置；TransactionPool skip 长整型防溢出；TestCommunicationTool
+  try-with-resources；FileSNAllocator 短读校验；AggregatedPriceOracle DCL 加 volatile）
+  + **收窄豁免 11 条**（自定义 Cloneable<T> 约定 ×6、Start 未来引擎守卫、net.Util 探测
+  socket ×2、AES256CTR 套件语义 ×2，逐条论证入 spotbugs-exclude-filter.xml）。
+- `testAll` 聚合同步扩展为「根子项目 test + composite 模块 check」（与 CI 同集），README
+  口径同步；全量复跑 8/8 composite 报告 0 findings、consortium+oracle check 全绿。
+
 ## [2.74.0] - 2026-10-14
 
 ### L3 复验（v2.73.0 发布镜像实装）——22 项遗留缺陷修复，**全栈 24/24 Pod Ready**
