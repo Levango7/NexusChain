@@ -2,6 +2,47 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [Unreleased]
+
+### 工程评审批次①：版本口径收口 + CI/门禁缺陷修复 + 部署资产小修
+
+**版本归版（消除"CHANGELOG 超前"漂移）**：`build.gradle` / `version.properties` / README 头注
+2.73.0 → 2.74.0——[2.74.0] 条目先合并而构建版本未同步，旧门禁（双源 + 头注 + 条目去重）
+对此类漂移全绿。本次同步归版，并给 `check-version-consistency.sh` 增加断言 5
+（CHANGELOG 不得超前于构建版本）、断言 6（README 若复述 CHANGELOG 条目须一致）与
+断言 7（`application.properties` 的 `nexus.version` 必须等于当前版本——该字段实测
+陈旧至 v2.50.0，本次一并更新至 v2.74.0，属"写而不测"的补测）。
+
+**CI / 安全扫描**
+- `security-scan.yml`：Trivy fs 的 SARIF/JSON 步补 `trivyignores`（与阻断步、Docker job
+  对齐——豁免政策此前只对阻断生效）；Trivy Docker 矩阵补 nexus-explorer（ci.yml
+  docker-build 矩阵已含而此处漏）；新增 `Cargo Audit (zk-groth16-service)` 独立观察 job
+  （RustSec 覆盖此前仅 mpc-engine；按"先观察、再阻断"惯例不列入 required checks）。
+- `check-license-policy.py`：修复 `(update_cache or True)` 恒真缺陷——默认离线只读
+  `scripts/rust-license-cache.json`，仅 `--update-cache` 联网（此前每次运行都会对未
+  命中 crate 实时调用 crates.io）。
+- `check-mpc-tier-policy.sh`：prod 补 `NEX_MPC_ENGINE_DISTRIBUTED` /
+  `NEX_MPC_ENGINE_CGGMP_SIGNERS` 硬断言（此前仅 staging 有）。
+- `k8s-sync-check.yml`：触发 paths 补 `deploy/kustomize/**`、`deploy/monitoring/**`
+  （此前这两个目录改动不触发同步校验）。
+
+**部署资产**
+- `docker-compose.prod.yml`：7 处构建上下文由模块目录改回 repo 根（Java/zk Dockerfile
+  均要求根上下文——依赖根级 gradlew/build.gradle/project()，此前写法直接构建失败）；
+  gateway/signing 补 `JWT_SECRET`、signing 补 `NEX_MPC_ENGINE_AUTH_TOKEN` 的 fail-closed
+  注入（与 `.env.prod.example` 同步，清单 15→19 项口径修正）。
+- `docker-compose.yml`：zk-groth16-service 构建上下文同修。
+- `nexus-core/Dockerfile`：runtime 阶段补 `COPY /app/logs`（Logback `./logs/nexuscore.log`
+  缺目录即启动失败）；`busybox:musl` 浮动 tag 钉到 `1.36.1-musl`。
+- `deploy/k8s/50-prometheus-rules.yaml`：补 `release: kube-prometheus-stack` label
+  （与 values 里 ruleSelector 匹配；缺 label 时规则被 Operator 静默忽略），修正 promtool
+  验证注释。
+- `scripts/run-trivy-scan.sh`：docker build 改 repo 根上下文（与 CI 矩阵同口径）。
+
+**文档**
+- README：Gradle 8.5→8.14；testAll 描述修正；`ci.yml:453` 行号引用改 job 名；
+  版本头注不再复述 CHANGELOG 条目内容（历次漂移的复述源）。
+
 ## [2.74.0] - 2026-10-14
 
 ### L3 复验（v2.73.0 发布镜像实装）——22 项遗留缺陷修复，**全栈 24/24 Pod Ready**

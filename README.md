@@ -9,10 +9,10 @@ NexusChain 是一个**基于自研区块链的支付编排平台（Payment Orche
 > 沙箱/仿真态对外展示，生产资金操作由持牌交付方在其合规主体下运行。
 
 > **版本口径（2026-09-28 第三次修复漂移，CI 门禁化）**：构建侧**双源**为根 `build.gradle` 的 `version`
-> 与 `nexus-core/nexus-core/src/main/resources/version.properties` 的 `versionNumber`（当前均为 `2.73.0`；
+> 与 `nexus-core/nexus-core/src/main/resources/version.properties` 的 `versionNumber`（当前均为 `2.74.0`；
 > 发版时**两处都要改**——v2.50.2 曾因 version.properties 滞后导致 jar 名错位）；
-> 发布说明单一来源为 [CHANGELOG](CHANGELOG.md)（最新条目 `[2.73.0] - 2026-10-13`，
-> 即 L3 安装预演（kind 4 节点真实 K8s）剥出并修复 23 项安装/启动缺陷——helm/K8s 全栈安装路径首次端到端可达）。
+> 发布说明单一来源为 [CHANGELOG](CHANGELOG.md)（最新条目以 CHANGELOG 顶部为准；
+> 本头注不复述具体条目内容——历次漂移中有两次源于此处复述与现实脱节）。
 > 本头注的准确性由 CI 门禁 `scripts/check-version-consistency.sh` 保护：
 > build.gradle / version.properties / 本头注三处任一失配将直接导致 CI 失败。
 
@@ -21,7 +21,7 @@ NexusChain 是一个**基于自研区块链的支付编排平台（Payment Orche
 ### 环境要求
 
 - JDK 17+（nexus-consortium 亦已升级至 17）
-- Gradle 8.5（随 wrapper 提供）
+- Gradle 8.14（随 wrapper 提供）
 - 可选：Docker + docker-compose（一键起全栈）
 - 可选：Rust toolchain（编译 mpc-engine，需 C 编译器）
 
@@ -43,7 +43,7 @@ NexusChain 是一个**基于自研区块链的支付编排平台（Payment Orche
 ### 本地构建与测试
 
 ```bash
-# 全量回归测试
+# 聚合测试（根构建全部 Java 子项目；composite build 模块与 integration 标签用例不含）
 ./gradlew testAll
 
 # 仅网关（沙箱模式，零外部依赖）
@@ -159,7 +159,7 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
 > 进程（NXC1 信封），signing-service 不持有任何份额。生产路径 2-of-3 真实签名 E2E
 > （含份额隔离断言：三节点 keyshare.bin SHA-256 两两不同、无 GG20 快照残留）见
 > `CggmpMpcE2EClusterTest#cggmpE2EProductionPath`，由 `mpc-java-cluster-e2e` CI job
-> 无条件回归（`.github/workflows/ci.yml:453`）。
+> 无条件回归（CI job `mpc-java-cluster-e2e`）。
 > 旧路径退役已于 2026-10-08 实施完成（PLAN-001-R2）：
 > [docs/plan/PLAN-001-gg20-retirement.md](docs/plan/PLAN-001-gg20-retirement.md)。
 
