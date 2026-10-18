@@ -102,6 +102,35 @@ jobs:
           python scripts/check-scheduler-lock.py --selftest
           python scripts/check-scheduler-lock.py
 
+      # ============================================================
+      # 迁移版本号棘轮门禁（2026-10-18 新增）
+      # ------------------------------------------------------------
+      # 背景（真实事故）：PR #106 带 V99–V102，而 V103 已被另一个 PR
+      # （KEK 轮换）合入 master ⇒ V99–V102 变成「低号后到」。Flyway
+      # **未配 out-of-order**（默认 false）⇒ 在**已应用 V103 的存量库**上
+      # 启动即抛 FlywayException: Detected resolved migration not applied
+      # to database: 99。
+      #
+      # 为什么 CI 与 strict 都治不了它：
+      #   · CI 跑在**全新库**上，V1→…→V103 按序应用必然通过；
+      #   · `strict: true`（要求分支更新到最新）只改变 CI 跑在哪个 base 上，
+      #     而无论哪个 base 都是全新库。
+      # ⇒ 唯一对症的做法：**直接断言版本号单调性**。
+      #
+      # 作用域按**迁移目录**（不按全局）：本仓 5 个模块各有独立数据源
+      # （gateway 86 / bridge 5 / signing 4 / wallet 4 / consortium 1），
+      # V1–V4 跨目录同号是**合法**的——按全局判会把合法状态判红。
+      #
+      # 先跑 --selftest：合成样本钉住判定函数（含 #106 事故形态、
+      # 「恰等于 base_max 也算违规」、以及「跨目录同号必须放过」），
+      # 防止解析器/判定静默坏掉后空判绿或全判红。
+      # ============================================================
+      - name: 迁移版本号棘轮门禁（新增迁移必须 > 该目录 base 最大值）
+        run: |
+          python scripts/check-migration-version-ratchet.py --selftest
+          git fetch --depth=2 origin master
+          python scripts/check-migration-version-ratchet.py --base FETCH_HEAD
+
   # ============================================================
   # Explorer 前端门禁（2026-09-16 审查新增）
   # ------------------------------------------------------------
