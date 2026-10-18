@@ -20,7 +20,7 @@
 | C | **资金路径细节缺陷（gateway）** | 退款事务内出款、累计退款 check-then-act、无 UNIQUE 引用、自动出款竞态与内存台账等 6 项 | **P0**（真金白银路径） |
 | D | **门禁覆盖盲区 + 豁免不对称** | composite build 逃逸 SpotBugs/JaCoCo、explorer 从未被扫描、zk 无 RustSec、豁免只在部分步骤生效 | P2 |
 
-**本日已执行并落库（批次①+②+⑤+③+④+⑦，19 个提交；已推送 + PR [#140](https://github.com/Levango7/NexusChain/pull/140)）**：
+**本日已执行并落库（批次①+②+⑤+③+④+⑦全部收口，23 个提交；已推送 + PR [#140](https://github.com/Levango7/NexusChain/pull/140)）**：
 
 - **批次①（4 提交）**：版本四源归版 2.73.0→2.74.0 + 版本门禁 3→7 断言（含"CHANGELOG 超前检测"，并经反向用例验证）；CI/安全扫描三处补齐；许可证门禁恒真 bug 修复（实测从"每次运行必备网络"变为"离线 0 查询"）；prod/dev compose 构建上下文 8 处修正 + JWT/MPC token fail-closed 注入（含反用例实证）；core 镜像 logs 目录与 busybox 钉版；PrometheusRule 静默失效 label 修复。
 - **批次②（3 提交，发布工程收口）**：tag 政策落定**全面 v 前缀**（镜像/部署引用；chart 元数据维持纯 semver）；部署资产全链对齐 v2.74.0（k8s 静态清单 6 处 / values-prod 7/7 钉死 / chart×8）；registry 命名空间修正（ghcr.io/nexus 是从不存在的空间 → ghcr.io/levango7/nexuschain，含 kind mirror "永不命中"的 host 级修复）；版本门禁 7→8 断言（部署资产口径，反向用例验证）；bump 脚本 v 前缀；k8s-sync `--set` 单一真源化。详见 §7。
@@ -171,7 +171,7 @@
 - 四语言 SDK（java/js/python/go）+ explorer + devtools + demo + perf：**版本与发布链路一致性**是主要风险（与主仓版本没有联动门禁）；explorer 此前从未被 Trivy 扫描（批次①已修）。
 - zk-groth16-service Dockerfile：要求 repo 根上下文、基于 trixie-slim、无 USER 指令（与 L3 全栈一致化需复核）；RustSec 覆盖批次①已加观察 job。
 - mpc-engine：已有 `.cargo/audit.toml` 逐项豁免 + 说明（形态正确）；`NEX_MPC_ENGINE_AUTH_TOKEN` 链路已核对。
-- **未逐条复核项**：SDK 各语言测试在 CI 中的真实覆盖、explorer 构建链 Node 版本、perf/demo 是否只是演示资产——列入批次⑦。
+- **复核项（批次⑦残项，2026-10-19 已闭环）**：SDK 各语言测试在 CI 的真实覆盖（三语言 step 级 success + 用例数对齐；Java 走根构建 check + codecov）、explorer 构建链 Node 版本（三处统一钉 26）、perf/demo 定位（perf 实跑有据、demo 为本地演示包）——详见 §7 批次⑦残项复核。
 
 ### 4.8 文档治理
 
@@ -330,13 +330,14 @@
 
 ### 批次⑦执行明细（构建与 CI 覆盖）
 
-**提交（3 个，同分支）**：
+**提交（4 个，同分支）**：
 
 | 提交 | 内容 |
 |---|---|
 | `d2196985` | fix(ci)：concurrency 组 + build-and-test Setup Node 26 + artifact 模板残留 ×4 + composite `:check` 翻闸 + composite JaCoCo 报告步骤/codecov 扩展 |
 | `ef0896c9` | fix(build)：composite SpotBugs 接入（共享脚本 ×6 模块 + spotbugsAll/testAll 聚合扩展）+ 首扫 21 条 findings 全闭环 + security-scan timeout 25 + README + ADR-035 |
 | （本执行明细同批） | docs(changelog+plan)：批次⑦条目 + 本记录 |
+| （残项复核补记，2026-10-19） | docs：批次⑦残项复核——SDK 覆盖 / explorer Node / perf-demo 三项闭环（§4 L173 复核项） |
 
 **验证记录（全部当场复跑通过）**：
 - composite 模块 check 本地实测（settlement/compliance/analytics/oracle/api-gateway 五模块 `:check`）→ **BUILD SUCCESSFUL 3m53s**；jacoco XML 五份落盘（46KB–273KB）——compliance/analytics/api-gateway 的 0.50 门禁"已配置但 CI 只跑 test"（写而不测），翻闸后进入真实执行；
@@ -349,7 +350,7 @@
 - `testAll` 扩展与 spotbugsAll 同机制（`gradle.includedBuild().task()`，后者已实跑验证）；README 口径同步；**ADR-035** 落档（含 Gradle composite 三处实证陷阱：`--dry-run` 对 includeBuild 任务不生效、嵌套闭包 owner 链接收者陷阱、includedBuild 任务引用语法）；
 - **buildSrc/version catalog 重构评估**（范围"评估"项）：19 个 `build.gradle`、显式版本声明 324 处（boot 4.0.8 重复 10 处）——收益/风险权衡后**暂缓**，记账为独立批次候选（理由见 ADR-035 §2.3）；
 - 门禁：PyYAML 解析 ci.yml（8 jobs）/ security-scan.yml（11 jobs）通过；`check-code-hygiene.py` 无新增违规（49/49 基线）；`check-license-headers.sh` 通过；
-- **不覆盖项（诚实边界）**：SDK 各语言测试的 CI 真实覆盖矩阵、perf/demo 资产审计未做（记账批次⑧候选）；explorer 构建链 Node 版本已核（既有钉 26，与 build-and-test 新增 `Setup Node 26` 一致）；
+- **残项复核（§4 L173 三项，2026-10-19 补做闭环）**：① **SDK 四语言真实覆盖**——Go 13 用例（`go test ./nexus/`）/ Python 15（`python3 tests/test_nexus_sdk.py`）/ TS 8（`npm run test:ts`）三 step 在最终 HEAD run `39140973458` 全 success，且用例数与 ci.yml 注释（Go 13 / Python 15 / TS 8）逐一对齐；Java SDK 20 个测试文件走根构建 check + codecov（files 含 nexus-sdk/java）；② **explorer 构建链 Node**——explorer job / build-and-test / Hardhat 三处统一钉 26；③ **perf/demo 定位**——perf/k6（4 场景 + 容量基线 + HMAC 认证工具）经 performance-test.yml 真实接线，本 PR 冒烟为**实跑**（执行态日志 `##[notice]…执行 k6 冒烟实跑` + bridge 探针 warning + 服务栈启动 245s，run `39140973534`；不相关 PR 按设计 skip 记 success 防悬空 required check），capacity 基线首跑被 staging secrets 阻塞（roadmap C2 在案）；demo/ 为独立本地演示包（express mock + 七步流程脚本，ARCHITECTURE L406 为使用示例），无 CI 引用、非集成证据——无需变更；
 - CI 实证：Security Scan run `39139292023` **success**（SAST - SpotBugs + FindSecBugs job 7m32s 全绿——6 个 composite 模块报告经 gate 实测 0 findings）；concurrency 取消行为与最终 HEAD 的 Pipeline/Security Scan 全套 run 号见 PR #140 评论区（W10 三提交推送的 Pipeline run `39139292026` 的最终处置亦记录于此）。
 
 ---
