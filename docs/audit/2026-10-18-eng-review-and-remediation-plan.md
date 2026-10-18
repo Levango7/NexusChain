@@ -20,11 +20,12 @@
 | C | **资金路径细节缺陷（gateway）** | 退款事务内出款、累计退款 check-then-act、无 UNIQUE 引用、自动出款竞态与内存台账等 6 项 | **P0**（真金白银路径） |
 | D | **门禁覆盖盲区 + 豁免不对称** | composite build 逃逸 SpotBugs/JaCoCo、explorer 从未被扫描、zk 无 RustSec、豁免只在部分步骤生效 | P2 |
 
-**本日已执行并落库（批次①+②+⑤，11 个提交；已推送 + PR [#140](https://github.com/Levango7/NexusChain/pull/140)）**：
+**本日已执行并落库（批次①+②+⑤+③+④+⑦，19 个提交；已推送 + PR [#140](https://github.com/Levango7/NexusChain/pull/140)）**：
 
 - **批次①（4 提交）**：版本四源归版 2.73.0→2.74.0 + 版本门禁 3→7 断言（含"CHANGELOG 超前检测"，并经反向用例验证）；CI/安全扫描三处补齐；许可证门禁恒真 bug 修复（实测从"每次运行必备网络"变为"离线 0 查询"）；prod/dev compose 构建上下文 8 处修正 + JWT/MPC token fail-closed 注入（含反用例实证）；core 镜像 logs 目录与 busybox 钉版；PrometheusRule 静默失效 label 修复。
 - **批次②（3 提交，发布工程收口）**：tag 政策落定**全面 v 前缀**（镜像/部署引用；chart 元数据维持纯 semver）；部署资产全链对齐 v2.74.0（k8s 静态清单 6 处 / values-prod 7/7 钉死 / chart×8）；registry 命名空间修正（ghcr.io/nexus 是从不存在的空间 → ghcr.io/levango7/nexuschain，含 kind mirror "永不命中"的 host 级修复）；版本门禁 7→8 断言（部署资产口径，反向用例验证）；bump 脚本 v 前缀；k8s-sync `--set` 单一真源化。详见 §7。
 - **批次⑤（4 提交，资金路径 P0 加固）**：退款执行三段式（CAS 认领先提交 → 链上调用事务外 → 结果独立落库；链上成功后落库失败停留 EXECUTING 不再自动处置，新增扫描器告警）；自动提现出款认领协议（V108 三列 + 三段式落库 + 悬挂 fail-closed，同族"二次出款"风险一对收口）；JWT 启动守卫 require-secret（gateway/signing 双侧，prod 缺密钥拒起）。复核后推迟/豁免 3 项（reference UNIQUE、Split 幂等、Recovery 锁）已在 CHANGELOG 透明记录。详见 §7。
+- **批次③+④+⑦（8 提交，2026-10-18 续作）**：部署资产完备性（prod compose 20 服务限额/探针全栈 + sync-check 真断言 + runbook 5→11 条）；文档一致性（ARCHITECTURE 对准实现、SECRET-MANAGEMENT 去版本化、bump 脚本 8 步）；构建与 CI 覆盖——**composite build 门禁真实化**（6 模块接入 SpotBugs/JaCoCo/testAll，首扫 21 条存量 findings 全闭环：代码修复 10 + 收窄豁免 11；ADR-035）＋ ci.yml 遗留疑点全修（concurrency / Setup Node 26 / artifact 名 ×4）。详见 §7。
 
 **待你拍板的决策点**见 §8（tag 政策已决并执行；剩余：OWASP required 去留、GHCR 实拉验证窗口、origin 历史、报告归属、push/PR 授权、下一批次选择）。
 
@@ -77,10 +78,10 @@
 
 | 发现 | 证据/细节 | 状态 |
 |---|---|---|
-| composite build 门禁逃逸 | consortium / settlement / compliance / analytics / oracle / api-gateway 用 includeBuild 接入根构建，SpotBugs 聚合门禁不覆盖、JaCoCo 门禁对它们是空转 | 待批次⑦ |
+| composite build 门禁逃逸 | consortium / settlement / compliance / analytics / oracle / api-gateway 用 includeBuild 接入根构建，SpotBugs 聚合门禁不覆盖、JaCoCo 门禁对它们是空转 | **已修（批次⑦）**：6 模块接入（ADR-035）；首扫 21 条存量 findings 全闭环（修复 10 + 收窄豁免 11）；CI 首验 SAST 绿 |
 | `testAll` 语义被高估 | `build.gradle:433-436` 只依赖根 `subprojects` 的 test——composite 模块与 `integration` 标签用例不在内；README 原文"全量回归测试"不准确 | **已修（批次①，README 修正）** |
 | Gradle 版本引用过期 | README 写 8.5，wrapper 实际 8.14 | **已修（批次①）** |
-| 无 buildSrc / 版本目录 | 依赖与版本声明散落各 build.gradle，升级面大 | 待批次⑦ |
+| 无 buildSrc / 版本目录 | 依赖与版本声明散落各 build.gradle，升级面大 | **已评估（批次⑦）**：暂缓——19 个 build.gradle / 324 处版本声明，风险收益权衡后记账为独立批次候选（ADR-035 §2.3） |
 
 ### 4.2 CI/CD 与门禁
 
@@ -93,7 +94,7 @@
 | `check-mpc-tier-policy.sh` prod 缺 2 项硬断言 | 仅 staging 有 DISTRIBUTED / CGGMP_SIGNERS 断言；prod 静默退回非分布式也能过门禁 | **已修（批次①）** |
 | `k8s-sync-check.yml` 触发面缺口 | paths 只含 deploy/k8s 与 deploy/helm；kustomize / monitoring 改动不触发"双路径漂移"校验 | **已修（批次①）** |
 | OWASP Dependency-Check 治理悬空 | TEMP"永远上报"试运行 2026-10-15 已到期；且经 gh api 实证**该 job 已在 required contexts 中**（共 8 条）。若按计划改"PR 不跑"而不先撤 required，GitHub 会把"required 但永不产生状态"按 pending 处理 → 此后每个 PR 卡死 | **待决策（§8-3）** |
-| ci.yml 疑似遗留项 | 审计提出：build-and-test 跑 npm 却无 setup-node、artifact 名疑似模板残留、全文无 concurrency（不取消旧运行）——**尚未逐条复核** | 待批次⑦核查 |
+| ci.yml 疑似遗留项 | 审计提出：build-and-test 跑 npm 却无 setup-node、artifact 名疑似模板残留、全文无 concurrency（不取消旧运行）——**尚未逐条复核** | **已逐条复核修复（批次⑦）**：concurrency 组 + Setup Node 26 + artifact 名 ×4 全清 |
 
 ### 4.3 版本与发布工程（A 类重灾区）
 
@@ -348,7 +349,8 @@
 - `testAll` 扩展与 spotbugsAll 同机制（`gradle.includedBuild().task()`，后者已实跑验证）；README 口径同步；**ADR-035** 落档（含 Gradle composite 三处实证陷阱：`--dry-run` 对 includeBuild 任务不生效、嵌套闭包 owner 链接收者陷阱、includedBuild 任务引用语法）；
 - **buildSrc/version catalog 重构评估**（范围"评估"项）：19 个 `build.gradle`、显式版本声明 324 处（boot 4.0.8 重复 10 处）——收益/风险权衡后**暂缓**，记账为独立批次候选（理由见 ADR-035 §2.3）；
 - 门禁：PyYAML 解析 ci.yml（8 jobs）/ security-scan.yml（11 jobs）通过；`check-code-hygiene.py` 无新增违规（49/49 基线）；`check-license-headers.sh` 通过；
-- CI 实证（Build & Test 含 composite `:check` 与新 Node 路径 / SAST composite 0 findings / concurrency 取消行为）：run 号见 PR #140 评论区（推送网络恢复后回填）。
+- **不覆盖项（诚实边界）**：SDK 各语言测试的 CI 真实覆盖矩阵、perf/demo 资产审计未做（记账批次⑧候选）；explorer 构建链 Node 版本已核（既有钉 26，与 build-and-test 新增 `Setup Node 26` 一致）；
+- CI 实证：Security Scan run `39139292023` **success**（SAST - SpotBugs + FindSecBugs job 7m32s 全绿——6 个 composite 模块报告经 gate 实测 0 findings）；concurrency 取消行为与最终 HEAD 的 Pipeline/Security Scan 全套 run 号见 PR #140 评论区（W10 三提交推送的 Pipeline run `39139292026` 的最终处置亦记录于此）。
 
 ---
 
