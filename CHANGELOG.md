@@ -74,6 +74,58 @@ docs/ha-verification.md。
 - `k8s-sync-check.yml`：`--set *.image.tag` 从硬编码 2.1.0 改为自 build.gradle 单一
   真源推导（vX.Y.Z）——此前归版需人肉同步第三份版本常量。
 
+### 工程评审批次⑤：资金路径 P0 加固（退款三段式 / 自动提现认领协议 / JWT 启动守卫）
+
+**背景**：研读发现资金路径上存在两处"DB 事务里包着不可逆外部动作"的结构性风险——
+退款与自动提现都是"认领 + 出款调用 + 结果落库"同一事务；出款成功后 commit 失败会把
+扣账与状态一起回滚，重跑即**二次出款**。另有 JWT_SECRET 缺失时静默降级的问题。本批收口。
+
+**退款执行三段式（`DefaultRefundApprovalService.executeRefund`）**
+- 原实现：CAS 认领 + 链上调用 + 结果落库同一大事务；链上成功后任何数据库故障都会把
+  认领一并回滚，重试即造成二次打款。
+- 现改为：① 独立事务 CAS 认领（APPROVED→EXECUTING）并**先提交**；② 链上调用在
+  **事务外**执行；③ 独立事务落结果（EXECUTED / FAILED，`markExecuted`/`markFailed`
+  以 WHERE status=EXECUTING 防覆盖）。链上成功但落库失败时单据停留 EXECUTING 并抛出——
+  **不自动改 FAILED、不自动重试**（二次打款风险），由新增扫描器告警。
+- 订单终态迁移（PAID→REFUNDED）改为独立 best-effort 事务：超退防线不依赖订单状态
+  （`sumPendingRefundsByOrderId` 已计入 EXECUTING/EXECUTED），迁移失败可追查、不阻断资金结果。
+- 新增 `RefundExecutionReconciler` + `RefundExecutionAlert`：每 15 分钟
+  （`nexus.gateway.refund.stuck-scan-cron` 可覆盖）扫描停留 EXECUTING 超 10 分钟的单据，
+  打 `REFUND_EXECUTION_MANUAL_VERIFICATION_REQUIRED` 稳定标记的 WARN + 写审计，
+  **只告警不自动改**（自动改失败/成功/重试三条路都可能直接错）；ShedLock 防多副本重复刷告警。
+
+**自动提现出款认领协议（`AutoWithdrawService` + `V108`）**
+- 原实现："扣账 + 出款调用 + 规则推进"同一事务，同族二次出款风险。
+- 新增认领列：`payout_claim_reference` / `payout_claim_at` / `last_payout_ref`
+  （V108 三列，均可空）。执行为三段式：① 独立事务内悲观锁规则行（`findByIdForUpdate`）
+  + 复检周期与未决认领 + 置认领 + 扣账（原子提交）；② 出款调用事务外；③ 成功 → 独立事务
+  推进 `lastExecutedAt` + 记 `last_payout_ref` + 清认领；失败 → 独立事务补偿入账
+  （`AUTO_WITHDRAW_ROLLBACK_` 前缀）+ 清认领（保持可重试语义）。
+- 认领悬挂（崩溃 / 落库失败）→ 下轮 fail-closed 拒跑（`PAYOUT_CLAIM_ACTIVE`）并打
+  `AUTO_WITHDRAW_PAYOUT_UNRESOLVED_MANUAL_REQUIRED` 标记告警，**不自动清认领、不自动重试**；
+  执行入口另有快速预检先于余额/去向检查（告警不会被"无生效出款账户"等遮蔽）。
+- `AutoWithdrawPayoutWiringTest` 升级为认领协议契约测试：认领保存先于出款的 InOrder、
+  认领悬挂拒跑（不扣账、不出款）、出款失败补偿后认领清除且规则不推进、落库失败认领保留、
+  未装配事务 fail-closed。
+
+**JWT 启动守卫（gateway + signing-service）**
+- 新增 `nexus.security.jwt.require-secret`（默认 false）：为 true 且密钥未配置（或短于
+  32 字节）时 `@PostConstruct` 直接抛异常拒绝启动——不再以"随机密钥 + WARN"静默降级
+  （那种形态下跨服务验签必然失败，故障被推迟到首个请求才暴露）。
+- `application-prod.yml`：gateway 置 true；signing-service 新建 prod 档位文件同置 true
+  （docker-compose 与 helm 均以 prod profile 运行，缺密钥将启动即拒）。
+- 既有行为不变：dev / 测试档位保持原"告警 + 进程内随机密钥"兜底，既有测试全兼容；
+  gateway/signing 双侧补启动守卫测试。
+
+**复核后推迟/豁免（透明记录）**
+- `account_transactions.reference` 加 UNIQUE：经复核**推迟**——补偿后同周期重试会合法复用
+  同一 reference（`AUTO_WITHDRAW_日期_规则ID`），加唯一约束会破坏该重试路径；且缺 prod
+  存量脏数据审计。留待后续批次以"引用号加周期/尝试后缀"方案一并处理。
+- `SplitService.executeSplits` 无幂等：复核在主线**无调用方**（未接线入支付流程），本批不动；
+  接线时必须先补幂等（报告记述）。
+- `TransactionRecoveryScheduler` 无锁：维持既有豁免论证（正确修法是参与方描述持久化，
+  加锁有害），本批仅测试与报告记述。
+
 ## [2.74.0] - 2026-10-14
 
 ### L3 复验（v2.73.0 发布镜像实装）——22 项遗留缺陷修复，**全栈 24/24 Pod Ready**
