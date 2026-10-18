@@ -1,6 +1,10 @@
 package org.nexus.gateway.fundreport;
 
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
@@ -47,4 +51,18 @@ public interface AutoWithdrawRuleRepository extends JpaRepository<AutoWithdrawRu
      * @return 规则列表
      */
     Optional<AutoWithdrawRule> findByMerchantIdAndEnabledTrue(Long merchantId);
+
+    /**
+     * 加行级排它锁查询规则（批次⑤ P0 加固，2026-10-18）。
+     *
+     * <p>出款认领事务内使用：同一规则的并发执行（调度器与手工触发、多入口）
+     * 在数据库行锁上串行化，配合 {@code payout_claim_reference} 的未决判定，
+     * 保证"认领 + 扣账"原子且至多一次。</p>
+     *
+     * @param id 规则 ID
+     * @return 加锁后的规则
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT r FROM AutoWithdrawRule r WHERE r.id = :id")
+    Optional<AutoWithdrawRule> findByIdForUpdate(@Param("id") Long id);
 }
