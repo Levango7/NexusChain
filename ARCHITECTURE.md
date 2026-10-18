@@ -32,7 +32,7 @@ Blockchain is the foundational settlement layer — not the product itself. On t
 
 - Open-source products start less polished than commercial ones — this is normal
 - Direction correctness matters more than short-term completeness
-- All modules are retained and mature at their own pace; `nexus-java-sdk` / `nexus-js-sdk` are explicitly **Deprecated** (migrated to `nexus-sdk`) and excluded from the build
+- All modules are retained and mature at their own pace; `nexus-java-sdk` / `nexus-js-sdk` are explicitly **Deprecated and removed**（v2.39.0 目录已删除、git 历史可恢复——见 settings.gradle 注记；能力已并入 `nexus-sdk`）
 - Each module matures at its own pace, guided by real usage
 
 ## Module Map
@@ -44,7 +44,7 @@ Blockchain is the foundational settlement layer — not the product itself. On t
 | nexus-api-gateway | API 统一入口（Spring Cloud Gateway，Nacos 服务发现，路由/鉴权/限流/CORS） | Active |
 | nexus-bridge | Cross-chain asset bridge (lock/mint/burn/unlock) | Core — active |
 | nexus-explorer | Block explorer (React + TypeScript) | Active |
-| nexus-sdk | Multi-language SDK (Java, JS) | Active |
+| nexus-sdk | Multi-language SDK (Java/JS/Python/Go) | Active |
 | nexus-common | 共享工具库（BusinessSpan 跨模块 tracing，自 v2.2.0） | Active — 库 |
 | nexus-consortium | Consortium / sidechain — complete PoA chain (consensus, gRPC/WS P2P, 国密 SM2/3/4) | Active — complete chain |
 | nexus-exchange-wallet | Exchange/custodial wallet（已移除，v1.4.0 拆分到 signing-service/wallet-service） | Removed |
@@ -57,8 +57,8 @@ Blockchain is the foundational settlement layer — not the product itself. On t
 | nexus-oracle | 预言机与治理（价格聚合、VRF、提案、国库） | Active — 库（gateway 进程内消费，ChainConnector 喂价） |
 | nexus-devtools | Developer tools (CLI, testnet faucet) | Skeleton |
 | nexus-rpc-doc | RPC API documentation | Reference |
-| nexus-java-sdk | Legacy Java SDK (migrated to nexus-sdk) | Deprecated |
-| nexus-js-sdk | Legacy JS SDK (migrated to nexus-sdk) | Deprecated |
+| nexus-java-sdk | Legacy Java SDK（已移除：v2.39.0 目录删除，git 历史可恢复） | Removed |
+| nexus-js-sdk | Legacy JS SDK（已移除：v2.39.0 目录删除；迁移至 nexus-sdk/typescript） | Removed |
 
 ## Consensus
 
@@ -79,15 +79,17 @@ Blockchain is the foundational settlement layer — not the product itself. On t
 - **紧急回滚通道**（`governance/emergency/`）：m-of-n 守护人批准即生效，跳过 timelock，独立审计日志
 - **守护人罢免**（`governance/recall/`）：走正常治理投票流程，通过后移除作恶守护人
 
-## Signing Approval Flow（自 2.15.0）
+## Signing Approval Flow（自 2.15.0；2.31+ 演进）
 
-签名审批服务（`nexus-signing-service`）的双人审批闭环已完整化：
+签名审批服务（`nexus-signing-service`）的多签审批闭环：
 
 - **审批人通知**（`ApprovalNotifier` 接口 + `LoggingApprovalNotifier` 实现）：审批创建时通知审批人，通知异常不影响审批主流程
-- **审批记录持久化**（`ApprovalStore` 接口）：
-  - `MapApprovalStore`：内存 `ConcurrentHashMap`（单实例默认）
-  - `FileBasedApprovalStore`：JSON Lines 文件持久化（`data/approval-records.jsonl`，重启可恢复）
-  - 通过 `nexus.approval.use-database=true` 切换为文件持久化（默认 false = 内存）
+- **审批人白名单**（fail-closed，2026-10-17 收紧）：`nexus.approval.approver-whitelist` 为空 ⇒ 任何 approve/reject 决策被拒并记审计（不再"未配置 = 不限制"）；生产必须显式配置
+- **审批记录持久化**（`ApprovalStore` 接口；`nexus.approval.store-type` 显式选择 memory / file / jpa，未知值拒绝启动）：
+  - `MapApprovalStore`（memory，默认）：内存 `ConcurrentHashMap`——仅单实例部署安全
+  - `FileBasedApprovalStore`（file）：JSON Lines 文件持久化（`data/approval-records.jsonl`，重启可恢复）
+  - `JpaApprovalStore`（jpa）：DB 共享存储——多实例部署必需（prod 两套拓扑均显式 `NEX_APPROVAL_STORE_TYPE=jpa`）；jpa 而 Repository 不可用时**抛错拒绝启动**（不静默回退）
+  - 遗留开关 `nexus.approval.use-database=true` ≡ `store-type=jpa`（仅 store-type 未显式配置时生效）
 - **审批记录 DTO**（`ApprovalRecordDto`）：审批记录序列化载体
 
 ## L2 Rollup（自 1.3.0）
@@ -111,7 +113,7 @@ Blockchain is the foundational settlement layer — not the product itself. On t
 - **Language**: Java 17
 - **Framework**: Spring Boot — unified to `4.0.8` across all modules（2026-08 升级，配套 Spring Cloud 2025.1.0 / Spring Cloud Alibaba 2025.1.0.0；managed via Spring Boot BOM and io.spring.dependency-management plugin）
 - **Build**: Gradle 8.14（wrapper，见 gradle/wrapper/gradle-wrapper.properties）with toolchain auto-provisioning
-- **Database**: PostgreSQL (production), H2 (dev/sandbox)；注意：nexus-gateway 默认配置为 MySQL 方言、dev profile 为 H2 内存库，多模块数据库策略尚未完全统一
+- **Database**: MySQL 8.0 (production **业务库**——gateway/bridge/signing/wallet/seata/nacos；2026-10-12 全栈对齐，方向见 ADR-033「OceanBase / MySQL 模式」)；nexus-core 例外仍用 PostgreSQL 16（链状态 JDBC 为 PG 方言，迁移需重写 ddl.sql，独立批次）；H2 (dev/sandbox)
 - **P2P**: gRPC + Protobuf
 - **Smart Contracts**: WASM (Chicory 纯 Java 解释器) + EVM 子集解释器
 - **Frontend**: React + TypeScript + Tailwind CSS
@@ -153,7 +155,7 @@ Blockchain is the foundational settlement layer — not the product itself. On t
 │   nexus-settlement │ nexus-compliance │ nexus-analytics │ nexus-oracle │
 ├─────────────────────────────────────────────────────────────────────┤
 │                       SDK / Integration                              │
-│   nexus-sdk (Java/JS) │ nexus-common (shared tracing) │ nexus-rpc-doc │
+│ nexus-sdk (Java/JS/Python/Go) │ nexus-common (tracing) │ nexus-rpc-doc │
 ├─────────────────────────────────────────────────────────────────────┤
 │                    Infrastructure Layer                              │
 │   nexus-core (consensus, P2P, storage, VM)                           │
@@ -388,7 +390,7 @@ Blockchain is the foundational settlement layer — not the product itself. On t
 
 ### 全量回归测试基线
 
-- 2491 个测试用例，63 个失败（全部在 gateway 集成测试，已通过 `ConnectorRegistry` 防御性 null 检查修复），6 个跳过，其余所有模块测试全部通过
+- 2491 个测试用例（该轮回归基线；计数随代码演进，不构成现行指标），63 个失败（全部在 gateway 集成测试，已通过 `ConnectorRegistry` 防御性 null 检查修复），6 个跳过，其余所有模块测试全部通过
 
 ## Running Locally
 
