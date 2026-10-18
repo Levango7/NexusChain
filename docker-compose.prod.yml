@@ -14,6 +14,12 @@ version: '3.8'
 #      "空值拒绝启动"同一口径。必填变量清单见 `.env.prod.example`（2026-10-12 起
 #      数据库族改为 MySQL：POSTGRES_USER/POSTGRES_PASSWORD 由 MYSQL_* 取代）。
 #   4. restart: always（生产自愈）
+#   5. 2026-10-18（批次③）部署资产补全：全栈资源限额定档（deploy.resources.limits）；
+#      healthcheck 补齐——mpc×3 与 zk 用 TCP 探针、prometheus/grafana 用 HTTP
+#      探针（探针命令均在对应镜像实测通过）；nexus-core 补 restart: always；
+#      sentinel 端口修正 8080→8858（与 helm/docs/服务端配置全仓约定对齐）；
+#      redis 补 maxmemory 512mb（deploy/config/redis.conf，与容器限额联动）；
+#      sentinel 健康探针留白（镜像工具链不可实测，见该服务注释）。
 #
 # 端口约定（与各服务 application.yml server.port 对齐）：
 #   gateway:8080 / signing:8082 / wallet:8083 / bridge:8084 / api-gateway:8085
@@ -50,6 +56,11 @@ services:
       retries: 3
       start_period: 40s
     restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1536M
     depends_on:
       nexus-core:
         condition: service_healthy
@@ -69,6 +80,14 @@ services:
       timeout: 10s
       retries: 5
       start_period: 60s
+    # 2026-10-18 批次③：补 restart——此前为全栈唯一缺失自愈策略的服务
+    # （与文件头第 4 条声明不一致，core 挂掉后不会被拉起）。
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2048M
     environment:
       # 2026-10-12 更正：core **确实**需要关系库 —— 它没有 JPA/Flyway，但有 PG 方言的
       # JDBC 链存储（RDBMSBlockChainImpl + resources/ddl.sql，schema 用 bytea 与双引号
@@ -151,6 +170,11 @@ services:
       retries: 3
       start_period: 40s
     restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '1.5'
+          memory: 1280M
 
   # === 钱包管理服务（端口 8083，提现审批 TCC） ===
   nexus-wallet-service:
@@ -187,6 +211,11 @@ services:
       retries: 3
       start_period: 40s
     restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '1.5'
+          memory: 1280M
 
   # === 桥接服务（端口 8084，REQ-29 修正：原 8082→8084） ===
   nexus-bridge:
@@ -215,6 +244,11 @@ services:
       retries: 3
       start_period: 30s
     restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '1.5'
+          memory: 1024M
 
   # === API 网关（端口 8085，统一入口 Spring Cloud Gateway） ===
   nexus-api-gateway:
@@ -240,6 +274,11 @@ services:
       retries: 3
       start_period: 40s
     restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '1.5'
+          memory: 1024M
 
   # === 区块浏览器（对外展示面，端口 3000） ===
   # 2026-10-12 新增。单容器：Express BFF 同源托管前端产物 + /api/** 查询接口
@@ -263,6 +302,11 @@ services:
       retries: 3
       start_period: 15s
     restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
 
   # ==================== 密码学服务 ====================
   # === MPC 引擎（Rust，gRPC 50051，3 节点分散式部署） ===
@@ -299,7 +343,22 @@ services:
     depends_on:
       nexus-core:
         condition: service_healthy
+    healthcheck:
+      # 2026-10-18 批次③：Rust 引擎无 HTTP 探针；TCP 连通性探针（运行阶段
+      # 基础镜像 debian:trixie-slim 含 bash，/dev/tcp 机制已实测）。
+      # 依赖关系保持 service_started（就绪语义含 DKG 仪式，非 TCP 可表达；
+      # 探针用于容器健康可视化与运维排障）。
+      test: ['CMD-SHELL', 'bash -c "echo > /dev/tcp/127.0.0.1/50051"']
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1024M
 
   mpc-engine-1:
     # 构建上下文 = 仓库根（同 docker-compose.yml 的说明：Dockerfile 依赖
@@ -329,7 +388,19 @@ services:
     depends_on:
       nexus-core:
         condition: service_healthy
+    healthcheck:
+      # 2026-10-18 批次③：同 mpc-engine-0（TCP 探针 + 依赖语义说明）。
+      test: ['CMD-SHELL', 'bash -c "echo > /dev/tcp/127.0.0.1/50051"']
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1024M
 
   mpc-engine-2:
     # 构建上下文 = 仓库根（同 docker-compose.yml 的说明：Dockerfile 依赖
@@ -359,7 +430,19 @@ services:
     depends_on:
       nexus-core:
         condition: service_healthy
+    healthcheck:
+      # 2026-10-18 批次③：同 mpc-engine-0（TCP 探针 + 依赖语义说明）。
+      test: ['CMD-SHELL', 'bash -c "echo > /dev/tcp/127.0.0.1/50051"']
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1024M
 
   # === ZK Groth16 验证服务（Rust，gRPC 50061 + HTTP 50062） ===
   zk-groth16-service:
@@ -380,7 +463,21 @@ services:
         condition: service_started
       mpc-engine-2:
         condition: service_started
+    healthcheck:
+      # 2026-10-18 批次③：TCP 连通性探针（debian:trixie-slim 含 bash，已实测）；
+      # gRPC 无 HTTP 健康面，可达性探针表达"进程在跑"（就绪语义依赖 setup 卷，
+      # 非 TCP 可表达）。
+      test: ['CMD-SHELL', 'bash -c "echo > /dev/tcp/127.0.0.1/50061"']
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '1.5'
+          memory: 1024M
 
   # ==================== 基础设施 ====================
   # === 服务发现 + 配置中心（Nacos 2.3.2） ===
@@ -427,6 +524,11 @@ services:
       retries: 10
       start_period: 30s
     restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1536M
 
   # === 分布式事务协调器（Seata 2.5.0） ===
   # REQ-36/T36.4: 配置加密 key 用占位符
@@ -472,6 +574,15 @@ services:
       retries: 10
       start_period: 30s
     restart: always
+    deploy:
+      resources:
+        limits:
+          # 官方镜像默认 JVM：-Xmx/-Xms 2048m + MaxDirectMemorySize 1024m +
+          # MaxMetaspaceSize 256m（/seata-setup.sh 实测确认；JVM_XMX /
+          # JVM_MaxDirectMemorySize 环境变量可调），限额定 4g 覆盖
+          # 堆+直连内存+元空间+栈。客户下调 JVM 参数时可同步收紧。
+          cpus: '2.0'
+          memory: 4096M
 
   # === 链路追踪（Zipkin 3.4） ===
   zipkin:
@@ -487,6 +598,11 @@ services:
       retries: 10
       start_period: 20s
     restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1024M
 
   # === 熔断/限流控制台（Sentinel Dashboard 1.8.8） ===
   # REQ-36/T36.4: 凭据用占位符外部化
@@ -494,8 +610,12 @@ services:
     image: bladex/sentinel-dashboard:1.8.8
     container_name: nexus-sentinel-prod
     expose: ['8858']
+    # 2026-10-18 批次③：端口修正——此前 JAVA_OPTS 把 dashboard 压到 8080，
+    # 而 expose 与 helm（deploy/helm/values.yaml）、docs（k8s-deployment.md）、
+    # 四个服务的 NEX_SENTINEL_SERVER 全仓约定均为 8858，构成监听端口与
+    # 其他工件不一致的既有缺陷；此处对齐 8858（单一事实 = 8858）。
     environment:
-      - JAVA_OPTS=-Dserver.port=8080 -Dcsp.sentinel.dashboard.server=localhost:8080 -Dproject.name=nexus-sentinel-dashboard
+      - JAVA_OPTS=-Dserver.port=8858 -Dcsp.sentinel.dashboard.server=localhost:8858 -Dproject.name=nexus-sentinel-dashboard
       # Sentinel Dashboard 登录凭据（占位符外部化，禁止默认 nacos/nacos）
       - SENTINEL_USERNAME=${SENTINEL_USERNAME:?prod 必需：禁止占位默认值}
       - SENTINEL_PASSWORD=${SENTINEL_PASSWORD:?prod 必需：禁止占位默认值}
@@ -504,7 +624,15 @@ services:
     depends_on:
       nacos:
         condition: service_healthy
+    # healthcheck 留白（2026-10-18 批次③核查）：镜像 bladex/sentinel-dashboard:1.8.8
+    # 不在本环境镜像源白名单内、工具链（bash/wget）无法实测；为避免假死探针
+    # 影响 service_healthy 使用方，待可实测环境补 TCP(8858) 探针。
     restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1024M
 
   # === PostgreSQL 16（**仅供 core**：链状态 JDBC 存储为 PG 方言，见 core 段注释） ===
   # 业务库（gateway/wallet/signing/bridge/seata/Nacos）已全部切到下面的 MySQL。
@@ -524,6 +652,11 @@ services:
       retries: 5
       start_period: 10s
     restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1024M
 
   # === 数据库（MySQL 8.0，业务库；2026-10-12 由 PostgreSQL 16 切换而来） ===
   # 为什么切：① ADR-033（2026-10-03 Accepted）定的是 **OceanBase（MySQL 模式）** 方向，
@@ -562,6 +695,11 @@ services:
       retries: 10
       start_period: 30s
     restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2048M
 
   # === 缓存（Redis 7） ===
   # P2 加固：Redis 密码改为配置文件方式（--include /etc/redis/redis.conf）
@@ -586,6 +724,11 @@ services:
       retries: 3
       start_period: 5s
     restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 768M
 
   # ==================== 监控 ====================
   prometheus:
@@ -594,7 +737,20 @@ services:
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
+    healthcheck:
+      # 2026-10-18 批次③：镜像（busybox 基座）自带 wget，/-/healthy 探针已在
+      # prom/prometheus:v2.50.0 上实测（exec 形 exit=0、端到端 healthy）。
+      test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:9090/-/healthy']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1024M
 
   grafana:
     image: grafana/grafana:10.4.0
@@ -604,7 +760,20 @@ services:
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?prod 必需：禁止占位默认值}
     volumes:
       - grafana-data:/var/lib/grafana
+    healthcheck:
+      # 2026-10-18 批次③：镜像自带 busybox wget，/api/health 探针已在
+      # grafana/grafana:10.4.0 上实测（exec 形 exit=0、端到端 healthy）。
+      test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:3000/api/health']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
 
 volumes:
   # pgdata：core 专用（链状态 PG）；mysqldata：业务库 MySQL（2026-10-12 新增）
