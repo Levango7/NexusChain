@@ -26,6 +26,12 @@
 #   7. nexus-core application.properties 的 `nexus.version=vX.Y.Z` 必须等于当前
 #      版本（2026-10-18 发现该字段陈旧至 v2.50.0——bump 脚本会写它，但门禁
 #      从不校验，属"写而不测"）。
+#   8. 部署资产与发布产物同口径（2026-10-18 批次②）：deploy/k8s/*.yml 的 nexus
+#      镜像 tag、deploy/helm/values-prod.yaml 的 image tag 必须 = vX.Y.Z
+#      （release.yml 推 ${{ github.ref_name }} 即 v 前缀）；Chart.yaml（umbrella
+#      + 7 个子 chart）的 version/appVersion 必须 = X.Y.Z（纯 semver——release.yml
+#      `helm package --version "${CHART_VERSION#v}"` 显式去 v，属既定口径）。
+#      背景：静态清单停在 :2.1.0、values-prod 停在 2.50.0——生产安装拉不到镜像。
 #
 # 运行：bash scripts/check-version-consistency.sh
 # ============================================================================
@@ -103,5 +109,37 @@ if [ "$APP_VERSION" != "v$GRADLE_VERSION" ]; then
     fail "application.properties nexus.version($APP_VERSION) != v$GRADLE_VERSION —— 跑 bash scripts/bump-version.sh 归版（该字段此前陈旧至 v2.50.0，2026-10-18 发现）"
 fi
 echo "application.properties nexus.version = $APP_VERSION"
+
+# 断言 8（2026-10-18 批次②补）：部署资产引用必须与发布产物同口径——镜像 tag
+# （k8s 静态清单 + values-prod）= vX.Y.Z；chart 元数据 = X.Y.Z（纯 semver，
+# 与 release.yml `helm package --version "${CHART_VERSION#v}"` 口径一致）。
+# 背景：静态清单停在 :2.1.0、values-prod 停在 2.50.0——生产安装拉不到镜像。
+DEPLOY_TAG="v$GRADLE_VERSION"
+K8S_TAGS=$(grep -rhoE 'ghcr\.io/levango7/nexuschain/[a-z-]+:[^[:space:]]+' deploy/k8s/*.yml 2>/dev/null | sed 's/.*://' | tr -d '\r' | sort -u || true)
+for t in $K8S_TAGS; do
+    if [ "$t" != "$DEPLOY_TAG" ]; then
+        fail "deploy/k8s 静态清单镜像 tag($t) != $DEPLOY_TAG —— 部署资产与发布产物漂移（先例：清单停在 :2.1.0 跨多个版本）。处置：bash scripts/bump-version.sh $GRADLE_VERSION"
+    fi
+done
+echo "deploy/k8s 静态清单镜像 tag = $DEPLOY_TAG"
+
+VALS_TAGS=$(grep -E '^[[:space:]]+tag:' deploy/helm/values-prod.yaml 2>/dev/null | sed -E 's/^[[:space:]]+tag:[[:space:]]*"?([^"[:space:]]+)"?[[:space:]]*$/\1/' | tr -d '\r' | sort -u || true)
+for t in $VALS_TAGS; do
+    if [ "$t" != "$DEPLOY_TAG" ]; then
+        fail "deploy/helm/values-prod.yaml image tag($t) != $DEPLOY_TAG —— 离线 helm install -f values-prod.yaml 会拉不存在的镜像。处置：bash scripts/bump-version.sh $GRADLE_VERSION"
+    fi
+done
+echo "values-prod.yaml image tag = $DEPLOY_TAG"
+
+for cf in deploy/helm/Chart.yaml deploy/helm/charts/*/Chart.yaml; do
+    [ -f "$cf" ] || continue
+    BAD_CHART=$(grep -E '^(version:|appVersion:|    version:)' "$cf" \
+        | sed -E 's/^version:[[:space:]]*//; s/^appVersion:[[:space:]]*"//; s/^    version:[[:space:]]*//' \
+        | tr -d '\r' | sed -E 's/"$//' | grep -v "^${GRADLE_VERSION}$" || true)
+    if [ -n "$BAD_CHART" ]; then
+        fail "$cf 版本($(echo $BAD_CHART)) != $GRADLE_VERSION —— chart 元数据须随归版同步（纯 semver；发布打包显式去 v）"
+    fi
+done
+echo "deploy/helm Chart 元数据版本 = $GRADLE_VERSION（umbrella + 子 chart）"
 
 echo "OK: 版本口径一致 ($GRADLE_VERSION)"

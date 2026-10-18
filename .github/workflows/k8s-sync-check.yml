@@ -148,11 +148,12 @@ jobs:
           kubeconform -strict -kubernetes-version 1.28.0 -ignore-missing-schemas deploy/k8s/*.yml
 
       # P2-C3: 用 diff -u 做 Helm 渲染产物与静态清单的实际 YAML 对比。
-      # 策略（2026-08-29 审计修复）：
-      #   1. helm template 渲染全部资源到 /tmp/helm-rendered/（--set 注入与
-      #      静态清单一致的 registry/镜像 tag——原 --set global.image.tag
-      #      不被 chart 消费（chart 读取 image.tag | global.env），渲染 tag
-      #      恒为 staging，与静态清单 2.1.0 结构性必然不一致）
+      # 策略（2026-08-29 审计修复；2026-10-18 批次②更新）：
+      #   1. helm template 渲染全部资源到 /tmp/helm-rendered/（--set 注入 registry
+      #      与镜像 tag——原 --set global.image.tag 不被 chart 消费（chart 读取
+      #      image.tag | global.env），渲染 tag 恒为 staging，与静态清单结构性
+      #      不一致；批次②起 tag 从根 build.gradle 单一真源推导（vX.Y.Z），
+      #      静态清单同口径由 check-version-consistency.sh 断言 8 把守）
       #   2. 对每个 deploy/k8s/*.yml，按 (kind, metadata.name) 在渲染产物中查找匹配文件
       #   3. 完整 YAML diff 差异仅写入报告（WARN）——静态清单与 Helm 模板
       #      本就存在合法差异（helm 标签体系/探针/基础设施清单），整文件
@@ -166,16 +167,21 @@ jobs:
           echo ">>> 渲染 Helm 模板到 /tmp/helm-rendered/"
           rm -rf /tmp/helm-rendered
           mkdir -p /tmp/helm-rendered
-          # --set 参数验证：registry 与镜像 tag 与静态清单（deploy/k8s/*.yml）对齐
+          # --set 的 tag 从根 build.gradle 单一真源推导（2026-10-18 批次②）：
+          # 此前硬编码 2.1.0 手工与静态清单对齐——归版时需人肉同步第三份版本常量。
+          BASE_VERSION=$(grep -E "^[[:space:]]*version[[:space:]]*=" build.gradle | head -1 | sed "s/.*'\([^']*\)'.*/\1/")
+          if [ -z "$BASE_VERSION" ]; then echo "::error::无法从 build.gradle 解析版本号"; exit 1; fi
+          IMAGE_TAG="v${BASE_VERSION}"
+          echo ">>> 注入镜像 tag（推导自 build.gradle）= ${IMAGE_TAG}"
           helm template nexus deploy/helm \
             --set global.imageRegistry=ghcr.io/levango7/nexuschain \
-            --set nexus-gateway.image.tag=2.1.0 \
-            --set nexus-bridge.image.tag=2.1.0 \
-            --set nexus-signing-service.image.tag=2.1.0 \
-            --set nexus-wallet-service.image.tag=2.1.0 \
-            --set nexus-api-gateway.image.tag=2.1.0 \
-            --set nexus-core.image.tag=2.1.0 \
-            --set mpc-engine.image.tag=2.1.0 \
+            --set nexus-gateway.image.tag="${IMAGE_TAG}" \
+            --set nexus-bridge.image.tag="${IMAGE_TAG}" \
+            --set nexus-signing-service.image.tag="${IMAGE_TAG}" \
+            --set nexus-wallet-service.image.tag="${IMAGE_TAG}" \
+            --set nexus-api-gateway.image.tag="${IMAGE_TAG}" \
+            --set nexus-core.image.tag="${IMAGE_TAG}" \
+            --set mpc-engine.image.tag="${IMAGE_TAG}" \
             --include-crds \
             --output-dir /tmp/helm-rendered/
 

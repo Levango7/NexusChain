@@ -55,7 +55,9 @@ for f in deploy/k8s/*.yml; do
   if [ -f "$f" ]; then
     # 2026-10-18 修复：实际镜像前缀为 ghcr.io/levango7/nexuschain/<module>（GHCR 命名
     # 空间 = GitHub 用户 Levango7）——原 `ghcr.io/nexus/` 从未匹配任何行，本步一直是 no-op。
-    sed -i.bak "s|ghcr.io/levango7/nexuschain/\([a-z-]*\):[0-9]*\.[0-9]*\.[0-9]*|ghcr.io/levango7/nexuschain/\1:${NEW_VERSION}|g" "$f"
+    # 2026-10-18 批次②：发布产物 tag 为 vX.Y.Z（release.yml 推 ${{ github.ref_name }}），
+    # 静态清单同步写 v 前缀；正则兼容无 v 的存量形态，归版一次后全链统一。
+    sed -i.bak "s|ghcr.io/levango7/nexuschain/\([a-z-]*\):v\?[0-9]*\.[0-9]*\.[0-9]*|ghcr.io/levango7/nexuschain/\1:v${NEW_VERSION}|g" "$f"
     rm -f "$f.bak"
   fi
 done
@@ -83,8 +85,11 @@ done
 # 5. deploy/helm/values-prod.yaml
 echo "[5/9] 更新 deploy/helm/values-prod.yaml image tag ..."
 if [ -f deploy/helm/values-prod.yaml ]; then
-  sed -i.bak "s/^    tag: [0-9]*\.[0-9]*\.[0-9]*$/    tag: ${NEW_VERSION}/" deploy/helm/values-prod.yaml
-  sed -i.bak "s/^    tag: \"[0-9]*\.[0-9]*\.[0-9]*\"$/    tag: \"${NEW_VERSION}\"/" deploy/helm/values-prod.yaml
+  # 2026-10-18 批次②：image tag 与发布产物同口径（vX.Y.Z）。chart 元数据
+  # （步骤 3/4）维持纯 semver——release.yml `helm package --version
+  # "${CHART_VERSION#v}"` 显式去 v，属既定设计，v 政策只适用于镜像引用。
+  sed -i.bak "s/^    tag: v\?[0-9]*\.[0-9]*\.[0-9]*$/    tag: v${NEW_VERSION}/" deploy/helm/values-prod.yaml
+  sed -i.bak "s/^    tag: \"v\?[0-9]*\.[0-9]*\.[0-9]*\"$/    tag: \"v${NEW_VERSION}\"/" deploy/helm/values-prod.yaml
   rm -f deploy/helm/values-prod.yaml.bak
 fi
 

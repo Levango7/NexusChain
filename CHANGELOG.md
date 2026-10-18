@@ -43,6 +43,37 @@
 - README：Gradle 8.5→8.14；testAll 描述修正；`ci.yml:453` 行号引用改 job 名；
   版本头注不再复述 CHANGELOG 条目内容（历次漂移的复述源）。
 
+### 工程评审批次②：发布工程收口——部署资产 tag 与发布产物对齐（全面 v 前缀）
+
+**政策**：镜像/部署引用统一 **v 前缀**（与 release.yml 实际推的
+`${{ github.ref_name }}` 一致）；chart 元数据（Chart.yaml version/appVersion）维持
+**纯 semver**——release.yml 打包 `--version "${CHART_VERSION#v}"` 显式去 v，属既定
+口径，v 政策只适用于镜像引用。
+
+**部署资产对齐**（此前静态清单停在 :2.1.0、values-prod 停在 2.50.0，均与发布产物对不上）：
+- `deploy/k8s/*.yml`：6 个服务镜像 tag 2.1.0 → v2.74.0；
+- `deploy/helm/values-prod.yaml`：4/7 服务 tag → v2.74.0，并给 nexus-api-gateway /
+  nexus-core / mpc-engine 补钉 tag（此前这 3 个回退 `global.env`（="prod"）→ 指向
+  不存在的镜像；release.yml 实时部署靠 --set 覆盖故上游无感，离线
+  `helm install -f values-prod.yaml` 会踩中）；
+- `deploy/helm/Chart.yaml` + 7 个子 chart：version/appVersion 2.50.0 → 2.74.0；
+- `deploy/k8s/SECRET-MANAGEMENT.md`：标题版本 → v2.74.0，重写过期注记（原注记称
+  "标题中 v2.1.0 为历史标记"而标题实为 v2.50.0，自相矛盾）。
+
+**registry 命名空间修正**（ghcr.io/nexus 是从不存在的命名空间 → ghcr.io/levango7/nexuschain）：
+6 个子 chart values.yaml 的 imageRegistry、deploy/kind/kind-config.yaml 的 containerd
+mirror key（原 key "ghcr.io/nexus" 按 registry host 匹配**永不命中**，改为 host 级
+"ghcr.io"）、deploy/kind/README.md、deploy/istio/README.md、
+deploy/docs/mpc-distributed-deployment.md、docs/k8s-deployment.md、
+docs/ha-verification.md。
+
+**门禁与工具**：
+- `check-version-consistency.sh` 新增断言 8：k8s 静态清单镜像 tag / values-prod image
+  tag 必须 = vX.Y.Z；umbrella + 子 chart 元数据必须 = X.Y.Z（3→7→8 断言）；
+- `bump-version.sh`：步骤 2/5 改为写出 v 前缀（正则兼容无 v 存量），归版一次全链统一；
+- `k8s-sync-check.yml`：`--set *.image.tag` 从硬编码 2.1.0 改为自 build.gradle 单一
+  真源推导（vX.Y.Z）——此前归版需人肉同步第三份版本常量。
+
 ## [2.74.0] - 2026-10-14
 
 ### L3 复验（v2.73.0 发布镜像实装）——22 项遗留缺陷修复，**全栈 24/24 Pod Ready**
