@@ -25,7 +25,11 @@ version: '3.8'
 services:
   # ==================== 应用服务 ====================
   nexus-gateway:
-    build: ./nexus-gateway
+    # 2026-10-18：Java 模块构建上下文必须是 repo 根（Dockerfile 需根级 gradlew/
+    # settings.gradle/build.gradle 解析 project() 依赖），此前指向模块目录会直接构建失败。
+    build:
+      context: .
+      dockerfile: nexus-gateway/Dockerfile
     expose: ['8080']
     environment:
       - SPRING_PROFILES_ACTIVE=prod
@@ -35,6 +39,10 @@ services:
       - NEX_DB_URL=jdbc:mysql://mysql:3306/nexus_gateway?useUnicode=true&characterEncoding=utf-8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
       - NEX_DB_USERNAME=nexus_gateway
       - NEX_DB_PASSWORD=${MYSQL_PASSWORD:?prod 必需：禁止占位默认值}
+      # 2026-10-18 补：JWT_SECRET 与 signing-service 共享（同一密钥跨服务验签）。
+      # 此前 prod 面板未注入——JwtTokenProvider 会退化为进程内随机密钥
+      # （不报错但跨服务鉴权必然失败），生产必须显式注入。
+      - JWT_SECRET=${JWT_SECRET:?prod 必需：gateway/signing 共享 JWT 密钥（≥32 字节）}
     healthcheck:
       test: ['CMD', '/busybox', 'wget', '-q', '-O', '/dev/null', 'http://localhost:8080/actuator/health']
       interval: 30s
@@ -51,7 +59,9 @@ services:
         condition: service_healthy
 
   nexus-core:
-    build: ./nexus-core
+    build:
+      context: .
+      dockerfile: nexus-core/Dockerfile
     expose: ['19585']
     healthcheck:
       test: ['CMD', '/busybox', 'wget', '-q', '-O', '/dev/null', 'http://localhost:19585/height']
@@ -74,7 +84,9 @@ services:
 
   # === 签名服务（端口 8082，TCC 分布式事务） ===
   nexus-signing-service:
-    build: ./nexus-signing-service
+    build:
+      context: .
+      dockerfile: nexus-signing-service/Dockerfile
     expose: ['8082']
     environment:
       - SPRING_PROFILES_ACTIVE=prod
@@ -109,6 +121,12 @@ services:
       - NEX_MPC_ENGINE_CGGMP_SIGNERS=0,1
       - NEX_MPC_ENGINE_CGGMP_DEADLINE_MS=300000
       - NEX_MPC_ENGINE_TLS_OVERRIDE_AUTHORITY=localhost
+      # 2026-10-18 补：signing 调 mpc-engine（引擎侧 MPC_REQUIRE_AUTH=true）必须携带
+      # 同一 token。此前 prod 面板只给引擎配了 MPC_AUTH_TOKEN，signing 侧为空
+      # （MpcEngineRouter 仅告警）→ 冷钱包/签名路径会被引擎拒绝。与 engine 同值。
+      - NEX_MPC_ENGINE_AUTH_TOKEN=${MPC_AUTH_TOKEN:?prod 必需：与 mpc-engine 的 MPC_AUTH_TOKEN 同值}
+      # 2026-10-18 补：与 gateway 共享（跨服务 JWT 验签）。
+      - JWT_SECRET=${JWT_SECRET:?prod 必需：与 gateway 共享（跨服务 JWT 验签）}
     volumes:
       - mpc-certs:/etc/mpc/certs:ro
     depends_on:
@@ -136,7 +154,9 @@ services:
 
   # === 钱包管理服务（端口 8083，提现审批 TCC） ===
   nexus-wallet-service:
-    build: ./nexus-wallet-service
+    build:
+      context: .
+      dockerfile: nexus-wallet-service/Dockerfile
     expose: ['8083']
     environment:
       - SPRING_PROFILES_ACTIVE=prod
@@ -170,7 +190,9 @@ services:
 
   # === 桥接服务（端口 8084，REQ-29 修正：原 8082→8084） ===
   nexus-bridge:
-    build: ./nexus-bridge
+    build:
+      context: .
+      dockerfile: nexus-bridge/Dockerfile
     expose: ['8084']
     environment:
       - SPRING_PROFILES_ACTIVE=prod
@@ -196,7 +218,9 @@ services:
 
   # === API 网关（端口 8085，统一入口 Spring Cloud Gateway） ===
   nexus-api-gateway:
-    build: ./nexus-api-gateway
+    build:
+      context: .
+      dockerfile: nexus-api-gateway/Dockerfile
     expose: ['8085']
     environment:
       - SPRING_PROFILES_ACTIVE=prod
@@ -339,7 +363,9 @@ services:
 
   # === ZK Groth16 验证服务（Rust，gRPC 50061 + HTTP 50062） ===
   zk-groth16-service:
-    build: ./zk-groth16-service
+    build:
+      context: .
+      dockerfile: zk-groth16-service/Dockerfile
     expose: ['50061', '50062']
     environment:
       - ZK_SERVICE_PORT=50061

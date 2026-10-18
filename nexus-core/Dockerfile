@@ -138,13 +138,19 @@ COPY --from=builder /workspace/appconfig config/
 # busybox 静态二进制（~1.2MB，无动态依赖）：仅用于 compose healthcheck（wget）。
 # distroless 无 curl/wget/shell，注入单个静态 busybox 提供 wget 子命令，
 # 不引入 shell 与包管理器，保持最小攻击面（DAST 修复 2026-08-28）。
-COPY --from=busybox:musl /bin/busybox /busybox
+# 2026-10-18：tag 由浮动的 busybox:musl 钉到 1.36.1-musl（与 dir-builder 阶段同版本，
+# 消除浮动 tag 的不可复现性）。
+COPY --from=busybox:1.36.1-musl /bin/busybox /busybox
 # 创建 nonroot 用户可写目录：
 # - /app/leveldb：LevelDB 缓存（nexus.cache-dir 为空时回退到 user.dir + "/leveldb"）
 # - /app/data：链上状态快照持久化（nexus.chain.state-dir 默认 ./data/）
+# - /app/logs：Logback ./logs/nexuscore.log 的工作目录（logback.xml 无 profile
+#   守卫，目录缺失即启动失败；dir-builder 阶段已建，此前 runtime 阶段漏拷——
+#   2026-10-18 补）
 # distroless 无 shell/mkdir，通过 busybox 中间阶段创建并 chown 65532
 COPY --chown=nonroot:nonroot --from=dir-builder /app/leveldb /app/leveldb
 COPY --chown=nonroot:nonroot --from=dir-builder /app/data /app/data
+COPY --chown=nonroot:nonroot --from=dir-builder /app/logs /app/logs
 
 # 暴露服务端口（与 application.properties server.port: 19585 对齐）
 EXPOSE 19585

@@ -3,7 +3,8 @@
 # ============================================================================
 # 依赖：kube-prometheus-stack（Prometheus Operator + PrometheusRule CRD）
 # 部署：kubectl apply -f deploy/k8s/50-prometheus-rules.yaml
-# 验证：promtool check rules deploy/k8s/50-prometheus-rules.yaml
+# 验证：本文件是 PrometheusRule CRD（非原生 rules 文件），promtool 不能直接校验；
+#       需 kubectl 应用后提取 spec.groups 再跑 promtool（见 k8s-sync-check.yml）。
 #
 # 设计原则（避免告警疲劳）：
 #   1. 告警数 11 条（2026-09-09 "告警真值"整合）：原 5 条 + 从 legacy
@@ -24,6 +25,10 @@ metadata:
   labels:
     app.kubernetes.io/part-of: nexus
     nexus-chain.io/component: alerting
+    # 2026-10-18：kube-prometheus-stack 的 ruleSelector 匹配 release=kube-prometheus-stack
+    # （deploy/monitoring 的规则与 40-monitoring.yml 均带此 label）——缺此 label
+    # 规则会被 Operator 静默忽略（告警不在线且无报错）。
+    release: kube-prometheus-stack
 spec:
   groups:
   # ---- 链核心（PLAN-002 后续 2026-09-07 升级：精确块高告警）----
