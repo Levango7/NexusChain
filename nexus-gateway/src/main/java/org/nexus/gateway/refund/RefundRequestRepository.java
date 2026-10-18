@@ -60,4 +60,51 @@ public interface RefundRequestRepository extends JpaRepository<RefundRequest, Lo
             + "WHERE r.id = :id "
             + "AND r.status = org.nexus.gateway.refund.RefundRequest$RefundStatus.APPROVED")
     int claimForExecution(@Param("id") Long id, @Param("now") LocalDateTime now);
+
+    /**
+     * 结果落库：EXECUTING → EXECUTED（批次⑤ P0 加固，2026-10-18）。
+     *
+     * <p>执行三段式的第三段在<b>独立事务</b>中调用：链上出款发生在事务之外，
+     * 本 UPDATE 只负责把"链上已出款"这一既成事实落库。WHERE 锁 status=EXECUTING，
+     * 防止覆盖已被其他路径流转的单据。</p>
+     *
+     * @param id     退款单 ID
+     * @param txHash 链上交易哈希
+     * @param now    落库时间
+     * @return 受影响行数：1=落库成功，0=单据不在 EXECUTING（调用方需按异常处理）
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE RefundRequest r "
+            + "SET r.status = org.nexus.gateway.refund.RefundRequest$RefundStatus.EXECUTED, "
+            + "r.chainTxHash = :txHash, r.executedAt = :now, r.updatedAt = :now "
+            + "WHERE r.id = :id "
+            + "AND r.status = org.nexus.gateway.refund.RefundRequest$RefundStatus.EXECUTING")
+    int markExecuted(@Param("id") Long id, @Param("txHash") String txHash, @Param("now") LocalDateTime now);
+
+    /**
+     * 结果落库：EXECUTING → FAILED（链上出款确定未发生时调用，如通道返回失败/参数校验失败）。
+     *
+     * <p>同样只允许从 EXECUTING 流转，独立事务提交。</p>
+     *
+     * @param id     退款单 ID
+     * @param reason 失败原因（写入 rejection_reason）
+     * @param now    落库时间
+     * @return 受影响行数：1=落库成功，0=单据不在 EXECUTING
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE RefundRequest r "
+            + "SET r.status = org.nexus.gateway.refund.RefundRequest$RefundStatus.FAILED, "
+            + "r.rejectionReason = :reason, r.updatedAt = :now "
+            + "WHERE r.id = :id "
+            + "AND r.status = org.nexus.gateway.refund.RefundRequest$RefundStatus.EXECUTING")
+    int markFailed(@Param("id") Long id, @Param("reason") String reason, @Param("now") LocalDateTime now);
+
+    /**
+     * 扫描超时停留在指定状态的退款单（{@link RefundExecutionReconciler} 使用）。
+     *
+     * @param status 目标状态（当前仅使用 EXECUTING）
+     * @param cutoff 时间阈值（updated_at 早于该值视为超时）
+     * @return 命中的退款单列表
+     */
+    List<RefundRequest> findByStatusAndUpdatedAtBefore(RefundRequest.RefundStatus status, LocalDateTime cutoff);
 }

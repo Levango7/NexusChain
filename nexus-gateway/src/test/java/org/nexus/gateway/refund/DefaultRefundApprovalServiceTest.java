@@ -3,7 +3,6 @@ package org.nexus.gateway.refund;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.nexus.gateway.model.PaymentOrder;
@@ -11,9 +10,13 @@ import org.nexus.gateway.repository.PaymentOrderRepository;
 import org.nexus.settlement.execution.OnChainExecutionChannel;
 import org.nexus.settlement.execution.TransactionRequest;
 import org.nexus.settlement.execution.TransactionResult;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.SimpleTransactionStatus;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -30,6 +33,7 @@ class DefaultRefundApprovalServiceTest {
     @Mock private RefundRequestRepository refundRequestRepository;
     @Mock private PaymentOrderRepository paymentOrderRepository;
     @Mock private OnChainExecutionChannel executionChannel;
+    @Mock private PlatformTransactionManager transactionManager;
 
     private DefaultRefundPolicy policy;
     private DefaultRefundApprovalService service;
@@ -40,8 +44,11 @@ class DefaultRefundApprovalServiceTest {
     void setUp() throws Exception {
         policy = new DefaultRefundPolicy();
         setField(policy, "refundWindowDays", 7L);
+        // 三段式执行以编程式事务独立提交认领/落库段；单测里让事务边界"透传"（回调同步执行）
+        lenient().when(transactionManager.getTransaction(any()))
+                .thenAnswer(inv -> new SimpleTransactionStatus());
         service = new DefaultRefundApprovalService(refundRequestRepository, paymentOrderRepository,
-                policy, executionChannel, "PLATFORM_HOT_WALLET");
+                policy, executionChannel, "PLATFORM_HOT_WALLET", transactionManager);
 
         paidOrder = new PaymentOrder();
         paidOrder.setId(1L);
@@ -168,7 +175,7 @@ class DefaultRefundApprovalServiceTest {
         assertEquals("fraud", result.getRejectionReason());
     }
 
-    // --- executeRefund ---
+    // --- executeRefund（三段式：认领先提交 → 链上事务外 → 结果独立落库） ---
 
     @Test
     void executeRefund_onChainSuccessMarksExecutedAndOrderRefunded() {
@@ -176,7 +183,13 @@ class DefaultRefundApprovalServiceTest {
         approved.setStatus(RefundRequest.RefundStatus.APPROVED);
         when(refundRequestRepository.claimForExecution(eq(10L), any())).thenReturn(1);
         when(refundRequestRepository.findById(10L)).thenReturn(Optional.of(approved));
-        when(refundRequestRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(refundRequestRepository.markExecuted(eq(10L), eq("TX-ABC-123"), any()))
+                .thenAnswer(inv -> {
+                    approved.setStatus(RefundRequest.RefundStatus.EXECUTED);
+                    approved.setChainTxHash(inv.getArgument(1));
+                    approved.setExecutedAt(LocalDateTime.now());
+                    return 1;
+                });
         when(paymentOrderRepository.findById(1L)).thenReturn(Optional.of(paidOrder));
         when(executionChannel.execute(any(TransactionRequest.class)))
                 .thenReturn(TransactionResult.success("TX-ABC-123", 12, false));
@@ -191,22 +204,38 @@ class DefaultRefundApprovalServiceTest {
     }
 
     @Test
-    void executeRefund_claimBeforeOnChainCall() {
+    void executeRefund_claimCommittedBeforeOnChainCall() {
         RefundRequest approved = newPendingRequest();
         approved.setStatus(RefundRequest.RefundStatus.APPROVED);
-        when(refundRequestRepository.claimForExecution(eq(10L), any())).thenReturn(1);
+        // 记录关键步骤的实际发生顺序（认领 → 认领段 commit → 链上调用）。
+        // 不用 InOrder：多次 commit 与 atLeastOnce 的组合语义会吞掉后续事件，事件序列更确定。
+        List<String> sequence = new ArrayList<>();
+        when(refundRequestRepository.claimForExecution(eq(10L), any())).thenAnswer(inv -> {
+            sequence.add("claim");
+            return 1;
+        });
+        doAnswer(inv -> {
+            sequence.add("commit");
+            return null;
+        }).when(transactionManager).commit(any());
         when(refundRequestRepository.findById(10L)).thenReturn(Optional.of(approved));
-        when(refundRequestRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(refundRequestRepository.markExecuted(eq(10L), any(), any())).thenReturn(1);
         when(paymentOrderRepository.findById(1L)).thenReturn(Optional.of(paidOrder));
-        when(executionChannel.execute(any(TransactionRequest.class)))
-                .thenReturn(TransactionResult.success("TX-ABC-123", 12, false));
+        when(executionChannel.execute(any(TransactionRequest.class))).thenAnswer(inv -> {
+            sequence.add("execute");
+            return TransactionResult.success("TX-ABC-123", 12, false);
+        });
 
         service.executeRefund(10L);
 
-        // 认领（CAS）必须先于不可逆的链上调用
-        InOrder inOrder = inOrder(refundRequestRepository, executionChannel);
-        inOrder.verify(refundRequestRepository).claimForExecution(eq(10L), any());
-        inOrder.verify(executionChannel).execute(any(TransactionRequest.class));
+        // 批次⑤ P0：认领（CAS）与认领段 commit 必须都先于不可逆的链上调用——
+        // "出款成功后的 commit 失败不会回滚认领"这一防线在时序上的体现
+        int claimIdx = sequence.indexOf("claim");
+        int commitIdx = sequence.indexOf("commit");
+        int executeIdx = sequence.indexOf("execute");
+        assertTrue(claimIdx >= 0, "认领未发生: " + sequence);
+        assertTrue(commitIdx > claimIdx, "认领段未先提交（commit 应在认领之后）: " + sequence);
+        assertTrue(executeIdx > commitIdx, "链上调用未发生在认领段提交之后: " + sequence);
     }
 
     @Test
@@ -217,6 +246,8 @@ class DefaultRefundApprovalServiceTest {
         assertThrows(IllegalStateException.class, () -> service.executeRefund(10L));
         verify(executionChannel, never()).execute(any());
         verify(refundRequestRepository, never()).save(any());
+        verify(refundRequestRepository, never()).markExecuted(any(), any(), any());
+        verify(refundRequestRepository, never()).markFailed(any(), any(), any());
     }
 
     @Test
@@ -225,18 +256,70 @@ class DefaultRefundApprovalServiceTest {
         approved.setStatus(RefundRequest.RefundStatus.APPROVED);
         when(refundRequestRepository.claimForExecution(eq(10L), any())).thenReturn(1);
         when(refundRequestRepository.findById(10L)).thenReturn(Optional.of(approved));
-        when(refundRequestRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(refundRequestRepository.markFailed(eq(10L), any(), any()))
+                .thenAnswer(inv -> {
+                    approved.setStatus(RefundRequest.RefundStatus.FAILED);
+                    approved.setRejectionReason(inv.getArgument(1));
+                    return 1;
+                });
         when(paymentOrderRepository.findById(1L)).thenReturn(Optional.of(paidOrder));
         when(executionChannel.execute(any(TransactionRequest.class)))
                 .thenReturn(TransactionResult.failure("broadcast rejected", false));
 
         RefundRequest result = service.executeRefund(10L);
 
-        // 链上退款执行失败：请求置 FAILED 且不产生交易哈希
+        // 链上退款执行失败（确定未出款）：请求置 FAILED 且不产生交易哈希
         assertEquals(RefundRequest.RefundStatus.FAILED, result.getStatus());
         assertNull(result.getChainTxHash());
         assertNotNull(result.getRejectionReason());
         assertTrue(result.getRejectionReason().contains("broadcast rejected"));
+    }
+
+    @Test
+    void executeRefund_finalizeFailureRethrowsAndNeverMarksFailed() {
+        // 链上已出款但结果落库失败：单据停留 EXECUTING（结果未知）——
+        // 必须原样抛出交由 RefundExecutionReconciler 告警，不得改 FAILED（假阴性）、不得重试出款
+        RefundRequest approved = newPendingRequest();
+        approved.setStatus(RefundRequest.RefundStatus.APPROVED);
+        when(refundRequestRepository.claimForExecution(eq(10L), any())).thenReturn(1);
+        when(refundRequestRepository.findById(10L)).thenReturn(Optional.of(approved));
+        when(refundRequestRepository.markExecuted(eq(10L), any(), any())).thenReturn(0);
+        when(paymentOrderRepository.findById(1L)).thenReturn(Optional.of(paidOrder));
+        when(executionChannel.execute(any(TransactionRequest.class)))
+                .thenReturn(TransactionResult.success("TX-ABC-123", 12, false));
+
+        assertThrows(IllegalStateException.class, () -> service.executeRefund(10L));
+
+        verify(executionChannel, times(1)).execute(any(TransactionRequest.class));
+        verify(refundRequestRepository, never()).markFailed(any(), any(), any());
+        assertEquals(PaymentOrder.OrderStatus.PAID, paidOrder.getStatus());
+    }
+
+    @Test
+    void executeRefund_orderTransitionFailureDoesNotFailRefund() {
+        // 订单迁移失败不是资金风险（超退防线独立于订单状态，sum 已计入 EXECUTED）：
+        // 退款单仍按 EXECUTED 返回，订单停留原状态待人工追查
+        RefundRequest approved = newPendingRequest();
+        approved.setStatus(RefundRequest.RefundStatus.APPROVED);
+        when(refundRequestRepository.claimForExecution(eq(10L), any())).thenReturn(1);
+        when(refundRequestRepository.findById(10L)).thenReturn(Optional.of(approved));
+        when(refundRequestRepository.markExecuted(eq(10L), eq("TX-ABC-123"), any()))
+                .thenAnswer(inv -> {
+                    approved.setStatus(RefundRequest.RefundStatus.EXECUTED);
+                    approved.setChainTxHash(inv.getArgument(1));
+                    approved.setExecutedAt(LocalDateTime.now());
+                    return 1;
+                });
+        // 第一次 findById 供 executeOnChain 校验付款人地址；第二次（订单迁移）返回空 → 迁移失败
+        when(paymentOrderRepository.findById(1L))
+                .thenReturn(Optional.of(paidOrder), Optional.empty());
+        when(executionChannel.execute(any(TransactionRequest.class)))
+                .thenReturn(TransactionResult.success("TX-ABC-123", 12, false));
+
+        RefundRequest result = service.executeRefund(10L);
+
+        assertEquals(RefundRequest.RefundStatus.EXECUTED, result.getStatus());
+        assertEquals(PaymentOrder.OrderStatus.PAID, paidOrder.getStatus());
     }
 
     private RefundRequest newPendingRequest() {
