@@ -51,6 +51,10 @@ jobs:
           scan-ref: .
           severity: CRITICAL,HIGH,MEDIUM,LOW
           skip-dirs: build,out,target,.gradle,gradle,node_modules,jdk17,jdk-provision,.codeartsdoer
+          # 2026-10-18：SARIF/JSON 步与阻断步对齐豁免白名单（此前 .trivyignore
+          # 只在阻断步生效，已按政策处置的 CVE 仍会污染 Security tab 与分诊 JSON；
+          # Docker 扫描 job 的 SARIF 步早已带此参数，属遗漏对齐）。
+          trivyignores: .trivyignore
           format: sarif
           output: trivy-fs-results.sarif
           exit-code: 0
@@ -70,6 +74,8 @@ jobs:
           scan-ref: .
           severity: CRITICAL,HIGH,MEDIUM,LOW
           skip-dirs: build,out,target,.gradle,gradle,node_modules,jdk17,jdk-provision,.codeartsdoer
+          # 2026-10-18：与阻断步对齐豁免白名单（分诊 JSON 应与阻断判定同口径）。
+          trivyignores: .trivyignore
           format: json
           output: trivy-fs-results.json
           exit-code: 0
@@ -142,6 +148,9 @@ jobs:
           - nexus-oracle
           - mpc-engine
           - zk-groth16-service
+          # 2026-10-18：补 nexus-explorer（ci.yml docker-build 矩阵早已包含，
+          # 本矩阵注释声称"保持一致"但实际遗漏——explorer 镜像从未被 Trivy 扫描）。
+          - nexus-explorer
     steps:
       - name: Checkout 代码
         uses: actions/checkout@v5
@@ -667,6 +676,33 @@ jobs:
           # 豁免清单：mpc-engine/.cargo/audit.toml——cargo-audit 的默认发现路径
           # （.cargo/audit.toml，同 ~/.cargo/audit.toml 机制）。
           # 注：cargo-audit v0.22 无 --config 参数（此前误用导致 CI 失败）。
+          cargo audit
+
+  # ============================================================
+  # 4.5b Rust 依赖安全扫描（观察期）：zk-groth16-service
+  # -----------------------------------------------------------------------------
+  # 2026-10-18 补：zk-groth16-service 与 mpc-engine 同属密码学 Rust 组件，但此前
+  # RustSec 覆盖只写了 mpc-engine。按本仓「新门禁先观察、再转阻断」惯例，本 job
+  # 先独立运行（**不列入 required checks**），观察数个发布周期后再提拔为阻断。
+  # ============================================================
+  cargo-audit-zk:
+    timeout-minutes: 15
+    name: Cargo Audit (zk-groth16-service)
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v5
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo audit（zk-groth16-service）
+        working-directory: zk-groth16-service
+        run: |
+          cargo install cargo-audit --locked
+          # 豁免清单（如需）：zk-groth16-service/.cargo/audit.toml（默认发现路径）。
           cargo audit
 
   # ============================================================
