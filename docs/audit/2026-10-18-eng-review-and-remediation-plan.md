@@ -27,7 +27,7 @@
 - **批次⑤（4 提交，资金路径 P0 加固）**：退款执行三段式（CAS 认领先提交 → 链上调用事务外 → 结果独立落库；链上成功后落库失败停留 EXECUTING 不再自动处置，新增扫描器告警）；自动提现出款认领协议（V108 三列 + 三段式落库 + 悬挂 fail-closed，同族"二次出款"风险一对收口）；JWT 启动守卫 require-secret（gateway/signing 双侧，prod 缺密钥拒起）。复核后推迟/豁免 3 项（reference UNIQUE、Split 幂等、Recovery 锁）已在 CHANGELOG 透明记录。详见 §7。
 - **批次③+④+⑦（8 提交，2026-10-18 续作）**：部署资产完备性（prod compose 20 服务限额/探针全栈 + sync-check 真断言 + runbook 5→11 条）；文档一致性（ARCHITECTURE 对准实现、SECRET-MANAGEMENT 去版本化、bump 脚本 8 步）；构建与 CI 覆盖——**composite build 门禁真实化**（6 模块接入 SpotBugs/JaCoCo/testAll，首扫 21 条存量 findings 全闭环：代码修复 10 + 收窄豁免 11；ADR-035）＋ ci.yml 遗留疑点全修（concurrency / Setup Node 26 / artifact 名 ×4）。详见 §7。
 
-**待你拍板的决策点**见 §8（tag 政策已决并执行；剩余：OWASP required 去留、GHCR 实拉验证窗口、origin 历史、报告归属、push/PR 授权、下一批次选择）。
+**决策点状态**见 §8（tag 政策 / OWASP 完善 / GHCR 路径 / 报告归属 / push-PR 均已决并执行；合并按条件授权；剩余：origin 历史、下一批次选择）。
 
 ---
 
@@ -358,11 +358,11 @@
 ## 8. 需要你拍板的决策点
 
 1. ~~tag 格式统一方向~~ **已决并执行**：全面 `vX.Y.Z`（镜像/部署引用）；chart 元数据维持纯 semver。见 §7（批次②明细）。
-2. **GHCR 实拉验证窗口**：批次②已把部署资产对齐到 v2.74.0，但"从 GHCR 实拉 `v2.74.0` 镜像"的端到端验证需在有网络窗口时补做（本地网络受限无法预演）。
-3. **OWASP Dependency-Check 去留**：TEMP 已到期且 job 已在 required contexts；去/留都需要配套操作（撤 required 或固化 PR 策略），属仓库设置改动，需你执行或明确授权。
+2. ~~GHCR 实拉验证窗口~~ **已查明并定策（2026-10-19）**：v2.74.0 镜像**从未发布**——GHCR 现存最高 v2.73.0、release 运行史无 v2.74.0 tag（批次②对齐的 v2.74.0 部署资产属**待发布目标**）；package 匿名可读、manifest 直拉可用、NJU 镜像站同 digest 备援——**无需额外凭据**。前置链：PR #140 合并 → master 切 tag `v2.74.0`（触发 Release & Deploy：13 镜像构建 + GitHub Release + helm publish + staging/prod 部署，v2.73.0 同链先例全 success）→ 逐镜像实拉/digest 验证并记录。
+3. ~~OWASP Dependency-Check 去留~~ **已决并执行（2026-10-19）：完善（转正）**——「永远上报」试运行评估通过（26 次 run：min 2.1 / 中位 6.0 / max 20.4 分钟；失败可归因；缓存未挤爆），同仓库 PR 恒真跑定档为最终语义、保留 required；TEMP 标记全部清理；评估表与历史注记写入 `docs/dependency-check-update-policy.md`「转正结论」节；顺带修复 Dependabot 配置（自 v2.24.0 引入以来 0 PR——`auto-merge` 非 schema 键 + User 账号下无效团队 reviewers，已修复），SCA 三件套（DC / Trivy / Dependabot）分工成文。
 4. **origin/master 历史**：本地 master 领先 611 个提交，origin/master 疑似 2 提交扁平孤儿历史（merge-base 为空）。这决定后续 push/PR 的基线与策略——需要你说明现状或授权处理。
 5. ~~本报告与后续批次产物的归属~~ **已决并执行**：报告已收入 `docs/audit/2026-10-18-eng-review-and-remediation-plan.md`（随 PR #140）；agent-board 认领留言随提交入库（`docs/agent-board/20261018-1900-eng-review-money-path-p0.md`）。
-6. ~~推送与 PR~~ **已决并执行**：批次①+②+⑤ 共 **11 个提交**已 push（`origin/fix/eng-review`）并开 **PR #140**（`fix/eng-review` → `master`；推送前已 rebase 到 origin/master，提交哈希以 §7/§9 为准）。后续批次③/④/⑦ 将在同一分支/PR 续作（用户已确认继续执行）。
+6. ~~推送与 PR~~ **已决并执行**：批次①+②+⑤ 共 **11 个提交**已 push（`origin/fix/eng-review`）并开 **PR #140**（`fix/eng-review` → `master`；推送前已 rebase 到 origin/master，提交哈希以 §7/§9 为准）。后续批次③/④/⑦ 将在同一分支/PR 续作（用户已确认继续执行）。**合并授权更新（2026-10-19）**：确认无冲突且前置具备即合并；执行序＝OWASP 转正/修复与残项复核落库 → CI 全绿 → 合并 #140/#141 → 切 tag `v2.74.0` → GHCR 实拉验证。
 
 ---
 

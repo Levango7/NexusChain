@@ -200,6 +200,18 @@ docs/ha-verification.md。
 - `testAll` 聚合同步扩展为「根子项目 test + composite 模块 check」（与 CI 同集），README
   口径同步；全量复跑 8/8 composite 报告 0 findings、consortium+oracle check 全绿。
 
+### 安全治理：OWASP Dependency-Check「永远上报」转正 + Dependabot 配置修复（2026-10-19）
+
+- **OWASP DC 转正（完善路径）**：2026-10-01~10-15「永远上报」试运行评估通过——同仓库 PR
+  恒真跑（26 次 run：min 2.1 / 中位 6.0 / max 20.4 分钟；失败可归因；缓存周轮换未挤爆），
+  `if` 定档为最终语义、保留 required contexts；fork PR 维持 skipped 如实上报。评估表、
+  维护约束与「required × 永不产生状态 = 永久 pending」历史注记写入
+  `docs/dependency-check-update-policy.md`「转正结论」节；工作流 TEMP 标记全部清理。
+- **Dependabot 配置修复**：`dependabot.yml` 自 v2.24.0 引入起 0 PR——根因：`auto-merge:`
+  非合法 schema 键 + `reviewers` 指向 User 账号下不存在的团队（无效配置整体不执行）。
+  移除无效键、保留标准字段；patch 自动合并如需启用须配专用 workflow（当前全部人工审查）。
+  SCA 三件套（Dependabot 升级供给 / OWASP DC PR 阻断 / Trivy 镜像层）分工成文。
+
 ## [2.74.0] - 2026-10-14
 
 ### L3 复验（v2.73.0 发布镜像实装）——22 项遗留缺陷修复，**全栈 24/24 Pod Ready**
