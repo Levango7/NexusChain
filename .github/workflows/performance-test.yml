@@ -71,6 +71,16 @@ env:
   API_KEY: ${{ secrets.PERF_API_KEY }}
   SIGNING_SECRET: ${{ secrets.PERF_SIGNING_SECRET }}
 
+# 并发控制（2026-10-18）
+# ------------------------------------------------------------
+# 同一 ref 的新 push 取消旧 run，避免同一 PR 反复 push 时堆积重复 run。
+# **只对 pull_request 取消**：master push 若也取消，连续合并时中间提交会
+# 失去 CI 验证（那正是本仓最需要信号的地方）。
+# 已知边界：按 <workflow>-<ref> 分组只去重同一 ref，减少不了跨 PR 拥堵。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # ============================================================
   # 冒烟测试：PR 触发，本地 docker-compose 起服务后跑 k6
