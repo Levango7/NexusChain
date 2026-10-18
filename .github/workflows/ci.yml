@@ -43,7 +43,11 @@ jobs:
   code-hygiene:
     name: Code Hygiene (ratchet gate)
     runs-on: ubuntu-26.04
-    timeout-minutes: 5
+    # 2026-10-18：5 → 8。本 job 是 required context，而新增的「迁移版本号棘轮」
+    # step 需要一次 `git fetch --depth=2 origin master`。原 5 分钟是按"纯 Python、
+    # 秒级完成"定的；加了网络取数后，若 runner 网络抖动导致超时，这个 required job
+    # 会变红并**挡住所有人的合并**——比漏检更糟。8 分钟留足余量。
+    timeout-minutes: 8
     steps:
       - name: Checkout 代码
         uses: actions/checkout@v5
