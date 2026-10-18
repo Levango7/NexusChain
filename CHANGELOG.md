@@ -126,6 +126,49 @@ docs/ha-verification.md。
 - `TransactionRecoveryScheduler` 无锁：维持既有豁免论证（正确修法是参与方描述持久化，
   加锁有害），本批仅测试与报告记述。
 
+### 工程评审批次③：部署资产完备性收口——compose 探针/限额全栈 + sync-check 真断言 + 告警 runbook 补全
+
+**compose prod（`docker-compose.prod.yml` + `deploy/config/redis.conf`）**
+- 资源限制全栈定档：20 个服务补齐 `deploy.resources.limits`（此前全无上限）；
+  seata 限额定 4g 依据实测官方镜像默认 JVM（`-Xmx/-Xms 2048m + MaxDirectMemorySize 1024m + MaxMetaspaceSize 256m`）。
+- healthcheck 补齐 6 处：mpc×3 / zk 用 TCP 探针（运行阶段镜像 debian:trixie-slim 含
+  bash，`/dev/tcp` 探针已真机实测开/闭端口行为）；prometheus/grafana 用 HTTP 探针
+  （exec 形探针在对应镜像实测 exit=0 且端到端 healthy）；sentinel 探针留白并就地
+  注明（镜像不在本环境源白名单，拒绝放未验证探针）。
+- `nexus-core` 补 `restart: always`（全栈唯一缺重启策略的服务）；sentinel 端口
+  8080→8858（与 helm / docs / 各服务 `NEX_SENTINEL_SERVER` 的全仓约定对齐）；
+  redis.conf 补 `maxmemory 512mb`（allkeys-lru 此前无上限不生效）。
+- 验证：`docker compose config --quiet` exit 0；PyYAML 逐服务审计 20×limits /
+  19×healthcheck / 20×restart；redis 实启 `INFO memory` 确认 maxmemory=536870912 生效。
+
+**sync-check 与告警 runbook（`.github/workflows/k8s-sync-check.yml` + `docs/runbooks/alerts.md`）**
+- k8s-sync-check 注释声称"image 与 replicas 必须一致"而实现只比 image——按声明
+  口径补齐 replicas 真校验（静态清单 vs Helm 默认渲染；环境覆盖层差异不在比对
+  范围），同步修正策略说明/失败文案/yq 注释共四处口径。
+- alerts runbook 与规则漂移修正：告警总表 5→11 条（2026-09-09 已整合入规则但
+  runbook 未跟进）；补 JvmGcTimeHigh / JvmHeapUsageHigh / PodCpuUsageHigh /
+  PodMemoryUsageHigh / ServiceDown / SeataTcDown 六条排障手册；设计原则改为
+  "只允许引用真实存在的指标"；CI 验证节告警数口径 ≥4 → ≥5（当前 11）。
+- 验证：workflow_dispatch run `39128097756` + PR 事件 run `39128100422` 双绿
+  （新 replicas 校验首次真实执行）。
+
+### 工程评审批次④：文档一致性——ARCHITECTURE 对准实现 + SECRET-MANAGEMENT 标题去版本化
+
+- `ARCHITECTURE.md`：SDK 语言清单 Java/JS → Java/JS/Python/Go；`nexus-java-sdk` /
+  `nexus-js-sdk` 状态 Deprecated → Removed（v2.39.0 目录已删除，settings.gradle
+  权威注记；架构图同步）；Signing Approval Flow 重写为现行真态
+  （`store-type`=memory/file/jpa 显式选择、jpa 不可用抛错拒绝启动、prod 显式
+  `NEX_APPROVAL_STORE_TYPE=jpa`、审批人白名单 fail-closed——原"use-database=true
+  切换为文件持久化"表述与实现不符）；Database 行修正（MySQL 8.0 业务库 +
+  nexus-core 例外 PostgreSQL 16，2026-10-12 全栈对齐；原"PostgreSQL (production)"
+  已失真）；v2.26.0 节测试计数标注为"该轮回归基线"。
+- `deploy/k8s/SECRET-MANAGEMENT.md`：标题去版本化（原 `（v2.74.0）`）——跨版本
+  通用文档不再随归版 sed 同步，注记改为永久表述（当前版本以 README 版本口径为准）。
+- `scripts/bump-version.sh`：对应第 6 步移除、步号 9→8 重排（消除"每版必改"的
+  sed 维护面，同 nexusVersion 死代码移除先例）。
+- 验证：bump 夹具（独立 worktree）8 步全链 → 9.9.9 七探针全中、SECRET-MANAGEMENT
+  零改动、0 个 `.bak` 残留；`check-version-consistency.sh` 8 断言全绿。
+
 ## [2.74.0] - 2026-10-14
 
 ### L3 复验（v2.73.0 发布镜像实装）——22 项遗留缺陷修复，**全栈 24/24 Pod Ready**

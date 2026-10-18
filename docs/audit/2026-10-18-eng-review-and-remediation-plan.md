@@ -207,13 +207,13 @@
 - 已复核 release.yml：`latest` / `staging` 移动 tag 语义与 rollback 的 v 归一逻辑（`${TARGET_VERSION#v}`）均与新政策兼容。
 - 遗留（批次②续，见 §8-2）：GHCR 实拉验证需要网络窗口；`values-staging` 移动 tag 与分发路径复核可在有网环境补做。
 
-### 批次③ 部署资产完备性
+### 批次③ 部署资产完备性（✅ 已执行，见 §7）
 - prod compose：`depends_on: condition`、healthcheck 完备性、重启策略、资源限制逐服务过一遍。
 - kustomize / overlays 内容级复核；monitoring 告警规则与 runbook 链接核对。
 - k8s-sync-check 从"掩码后 diff"升为"关键字段显式断言集"。
 - 验收：kind 起栈（可选）+ 渲染 diff + 断言集全绿。
 
-### 批次④ 文档一致性
+### 批次④ 文档一致性（✅ 已执行，见 §7）
 - ARCHITECTURE 对准实现；SECRET-MANAGEMENT 标题/注记语义定稿（建议标题改为"当前版本见 README"的永久表述，终结每版必改）；runbooks 更新；与 migration-guide 认领者协调接口。
 - 验收：文档中所有版本/组件数声明可机械校验或有出处。
 
@@ -295,6 +295,37 @@
 - 期间暴露并修复 3 处：`ClaimOutcome` record 静态工厂与访问器同名（编译期拦截）；`InOrder + atLeastOnce` 时序断言语义不确定（改为事件序列表确定性断言）；signing `application-prod.yml` 命中 `.gitignore` 安全护栏（`**/src/main/resources/application-prod.yml`）→ 该文件零凭据且 bridge/gateway/wallet 已有 3 个受跟踪先例，按先例 `-f` 纳入（"改用环境变量注入"为可选替代，留后续统一）。
 - 门禁：`check-scheduler-lock.py`（37 个 @Scheduled 全部带锁/在账，新扫描器带 ShedLock）、`check-code-hygiene.py`（0 新增违规）、`check-license-headers.sh`、`check-packaging-consistency.py` 全绿。
 - 新增迁移 `V108` 复核：号段从顶部 V107 顺取（提交前二次复核 master 与工作树两处顶部均为 V107，无撞号）。
+
+### 批次③执行明细（部署资产完备性）
+
+**提交（2 个 + 1 笔合规修正，同分支）**：
+
+| 提交 | 内容 |
+|---|---|
+| `8eacae1b` | fix(deploy)：compose prod 20 服务资源限制 + 6 处 healthcheck 补齐（sentinel 留白注明）+ core restart + sentinel 端口 8858 + redis maxmemory |
+| `c782039a` | fix(deploy)：k8s-sync-check replicas 真校验（注释与实现口径对齐）+ alerts runbook 5→11 条补全 6 条排障手册 |
+| `60c57dc9` | chore(board)：1900 留言移出功能 PR（§4 合规，改经专用 PR #141 逐字节重投，blob 校验一致） |
+
+**验证记录（全部当场复跑通过）**：
+- `docker compose --env-file <dummy> -f docker-compose.prod.yml config --quiet` → exit 0；PyYAML 逐服务审计表 20×limits / 19×healthcheck / 20×restart；
+- 探针真机实测：debian:trixie-slim（mpc/zk 运行阶段镜像）`/dev/tcp` 开端口 exit=0 / 闭端口 refused；prom/prometheus:v2.50.0 与 grafana/grafana:10.4.0 exec 形 HTTP 探针 exit=0 且端到端 healthy；redis 实启 `INFO memory` 确认 maxmemory=536870912 生效（CONFIG 被 rename-command 禁用，以 INFO 验证）；
+- k8s-sync-check 改造后 **workflow_dispatch 实测 run `39128097756` + PR 事件 run `39128100422` 双绿**（该 workflow paths 不含 .github/，PR 推送不自动触发，显式 dispatch 取实测；新 replicas 校验首次真实执行）；抽取渲染 step `bash -n` 通过、workflow YAML 解析通过、runbook 围栏配平（18 个）；
+- 留白（诚实标注）：sentinel 探针（镜像不在本环境源白名单、工具链不可实测，compose 内就地注明待补）；kind 起栈（本机无 kind，以 compose config + 真容器探针替代）；
+- kustomize/overlays + monitoring 内容级复核结论：**设计有意、无需变更**（未发现漂移面）。
+
+### 批次④执行明细（文档一致性）
+
+**提交（2 个，同分支）**：
+
+| 提交 | 内容 |
+|---|---|
+| `db900ab6` | docs：ARCHITECTURE 对准实现 + SECRET-MANAGEMENT 标题去版本化 + bump 脚本 9→8 步重排 |
+| （本执行明细同批） | docs(changelog+plan)：批次③④条目 + 本记录 |
+
+**验证记录（全部当场复跑通过）**：
+- bump 夹具：独立 worktree（detached HEAD）实测 8 步全链 → 9.9.9，7 项探针全中（build.gradle / k8s `v9.9.9` / values-prod `v9.9.9` / Chart `9.9.9` / application.properties / version.properties / README 头注），SECRET-MANAGEMENT.md 零改动（去版本化步骤确已除名），0 个 `.bak` 残留；
+- `check-version-consistency.sh` 8 断言复跑全绿（CHANGELOG 102 条无重复、不超前）；
+- 修正声明均给出出处：settings.gradle 注记（SDK 移除）/ application.yml + SigningApprovalService（审批存储）/ docker-compose.prod.yml 注释 + ADR-033（DB 族）；架构图修正行行宽逐行测量（= 边框宽 71，未破坏 ASCII 框）；Spring Boot 4.0.8 / Gradle 8.14 复核为真、未改。
 
 ---
 
