@@ -204,7 +204,7 @@ kubectl get pods -n nexus -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.
 
 ```bash
 # 前置：部署 v2 版本（带 app.kubernetes.io/version=v2 标签）
-# kubectl set image deployment/nexus-gateway nexus-gateway=ghcr.io/nexus/nexus-gateway:v2 -n nexus
+# kubectl set image deployment/nexus-gateway nexus-gateway=ghcr.io/levango7/nexuschain/nexus-gateway:v2.74.0 -n nexus
 # kubectl label deployment/nexus-gateway app.kubernetes.io/version=v2 -n nexus --overwrite
 
 # 查看当前流量分割（90% stable / 10% canary）

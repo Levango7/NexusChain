@@ -75,7 +75,7 @@ kubectl get nodes -o wide
 
 预期 3 节点均为 `Ready`，且 `zone-a` / `zone-b` 标签可见。
 
-### 3. 启动本地镜像 registry（可选，用于 ghcr.io/nexus 重定向）
+### 3. 启动本地镜像 registry（可选，用于 ghcr.io 镜像重定向）
 
 ```bash
 # 启动 registry 容器
@@ -85,7 +85,7 @@ docker run -d --restart=always --name kind-registry -p 5000:5000 registry:2
 docker network connect kind kind-registry
 ```
 
-`kind-config.yaml` 已注入 containerd 配置，把 `ghcr.io/nexus` 重定向到 `registry:5000`。本地构建的镜像 `docker tag <image> registry:5000/<name>:<tag> && docker push registry:5000/<name>:<tag>` 后，集群内可拉取。
+`kind-config.yaml` 已注入 containerd 配置，把 `ghcr.io` 重定向到 `registry:5000`。本地构建的镜像按 `registry:5000/levango7/nexuschain/<service>:<tag>` 打 tag 并 push 后，集群内按 `ghcr.io/levango7/nexuschain/<service>:<tag>` 拉取即可命中（mirror 保留完整路径）。
 
 ### 4. 部署 NexusChain（dev 环境）
 
