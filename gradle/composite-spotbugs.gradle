@@ -1,0 +1,67 @@
+// ============================================================================
+// composite build 专用 SpotBugs + FindSecBugs 配置（2026-10-18 批次⑦）
+// ============================================================================
+// 背景：settings.gradle 中以 includeBuild 接入的 6 个 composite 模块
+// （nexus-consortium / nexus-settlement / nexus-compliance / nexus-analytics /
+// nexus-oracle / nexus-api-gateway）不在根构建 subprojects 账下，根
+// build.gradle 的 spotbugs 配置与 spotbugsAll 聚合任务对它们从未生效——
+// SAST 门禁（security-scan.yml：跑 spotbugsAll + 全仓扫描
+// build/reports/spotbugs/main.xml）此前对这批模块空转。
+//
+// 本脚本以「脚本插件」形式复用根构建同一套口径：
+//   - effort=max / reportLevel=low / ignoreFailures=true（失败判定交给 CI gate，
+//     与根构建 spotbugs {} 逐项一致）；
+//   - FindSecBugs 1.13.0 规则集 + spotbugs-annotations 4.8.6（同根构建）；
+//   - 排除清单仍用仓库根 spotbugs-exclude-filter.xml——composite 构建根目录
+//     均在仓库根下一级，故 ${rootDir}/.. 即仓库根；
+//   - 排除 protobuf 生成代码；不扫描测试代码（spotbugsTest.enabled=false）。
+//
+// 各 composite build 的接入方式（两行）：
+//   plugins { ... id 'com.github.spotbugs' version '5.1.5' }   // 声明类路径
+//   apply from: "${rootDir}/../gradle/composite-spotbugs.gradle"
+// 多子项目构建（nexus-consortium）在 subprojects/afterEvaluate 内逐子项目 apply。
+//
+// 任务聚合：根 build.gradle 的 spotbugsAll 以
+// gradle.includedBuild(name).task(':spotbugsMain'…) 引用各模块任务；报告统一
+// 落在 <module>/build/reports/spotbugs/main.{html,xml}，被 SAST 门禁的
+// find 扫描与 CI artifact 上传自然覆盖。
+// ============================================================================
+
+apply plugin: 'com.github.spotbugs'
+
+spotbugs {
+    // 与根构建同口径（JDK 8-21 引擎版本；FindSecBugs 1.13.0 兼容）
+    toolVersion = '4.8.6'
+    effort = 'max'
+    reportLevel = 'low'
+    ignoreFailures = true
+    showProgress = false
+}
+
+dependencies {
+    spotbugsPlugins 'com.h3xstream.findsecbugs:findsecbugs-plugin:1.13.0'
+    compileOnly 'com.github.spotbugs:spotbugs-annotations:4.8.6'
+}
+
+spotbugsMain {
+    reports {
+        html {
+            required = true
+            outputLocation = file("$buildDir/reports/spotbugs/main.html")
+        }
+        xml {
+            required = true
+            outputLocation = file("$buildDir/reports/spotbugs/main.xml")
+        }
+    }
+    excludeFilter = file("${rootDir}/../spotbugs-exclude-filter.xml")
+    classes = classes.filter { file ->
+        !file.path.contains('/generated/') &&
+        !file.path.contains('\\generated\\') &&
+        !file.path.replace('\\', '/').contains('/com/google/protobuf/')
+    }
+}
+
+spotbugsTest {
+    enabled = false
+}

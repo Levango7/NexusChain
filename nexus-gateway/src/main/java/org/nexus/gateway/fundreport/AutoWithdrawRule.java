@@ -55,6 +55,25 @@ public class AutoWithdrawRule {
     @Column(name = "last_executed_at")
     private LocalDateTime lastExecutedAt;
 
+    /**
+     * 出款认领引用（批次⑤ P0 加固，2026-10-18）。
+     *
+     * <p><b>不变量</b>：非空 ⇒ 该规则有一笔<b>已扣账</b>的出款处于未决状态
+     * （进行中，或已崩溃/落库失败需人工核对）。执行协议见
+     * {@link AutoWithdrawService#executeAutoWithdraw}：认领在此列（事务内先提交）→
+     * 出款（事务外）→ 结果落库后清空；未决期间拒绝重复执行（fail-closed）。</p>
+     */
+    @Column(name = "payout_claim_reference", length = 128)
+    private String payoutClaimReference;
+
+    /** 出款认领时间（配合 {@link #payoutClaimReference} 供运维定位未决出款）。 */
+    @Column(name = "payout_claim_at")
+    private LocalDateTime payoutClaimAt;
+
+    /** 最近一次成功出款的凭据号（PayoutExecutor 返回值，供人工核销追溯）。 */
+    @Column(name = "last_payout_ref", length = 128)
+    private String lastPayoutRef;
+
     /** 多租户隔离键 */
     @Column(name = "tenant_id", length = 64)
     private String tenantId;
@@ -113,6 +132,15 @@ public class AutoWithdrawRule {
 
     public LocalDateTime getLastExecutedAt() { return lastExecutedAt; }
     public void setLastExecutedAt(LocalDateTime lastExecutedAt) { this.lastExecutedAt = lastExecutedAt; }
+
+    public String getPayoutClaimReference() { return payoutClaimReference; }
+    public void setPayoutClaimReference(String payoutClaimReference) { this.payoutClaimReference = payoutClaimReference; }
+
+    public LocalDateTime getPayoutClaimAt() { return payoutClaimAt; }
+    public void setPayoutClaimAt(LocalDateTime payoutClaimAt) { this.payoutClaimAt = payoutClaimAt; }
+
+    public String getLastPayoutRef() { return lastPayoutRef; }
+    public void setLastPayoutRef(String lastPayoutRef) { this.lastPayoutRef = lastPayoutRef; }
 
     public String getTenantId() { return tenantId; }
     public void setTenantId(String tenantId) { this.tenantId = tenantId; }

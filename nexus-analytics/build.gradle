@@ -3,7 +3,12 @@ plugins {
     id 'jacoco'
     id 'org.springframework.boot' version '4.0.8'
     id 'io.spring.dependency-management' version '1.1.4'
+    // 2026-10-18 批次⑦：composite 模块 SpotBugs 接入（SAST 门禁此前对
+    // includeBuild 模块空转）——共享配置见仓库根 gradle/composite-spotbugs.gradle。
+    id 'com.github.spotbugs' version '5.1.5'
 }
+
+apply from: "${rootDir}/../gradle/composite-spotbugs.gradle"
 
 group = 'org.nexus'
 version = '2.30.0'

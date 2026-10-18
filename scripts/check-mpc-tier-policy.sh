@@ -41,6 +41,10 @@ assert_env() {
 assert_env deploy/helm/values-staging.yaml NEX_MPC_TRANSPORT_GRPC true "staging"
 assert_env deploy/helm/values-prod.yaml NEX_MPC_TRANSPORT_GRPC true "prod"
 assert_env deploy/helm/values-prod.yaml NEX_MPC_ENGINE_CGGMP_ENABLED true "prod"
+# 2026-10-18 补齐：prod 此前缺这两项硬断言（仅 staging 有）——distributed=false
+# 会静默退回非分布式路径、signers 集合错误会改变门限口径，两者均不允许被门禁放过。
+assert_env deploy/helm/values-prod.yaml NEX_MPC_ENGINE_DISTRIBUTED true "prod"
+assert_env deploy/helm/values-prod.yaml NEX_MPC_ENGINE_CGGMP_SIGNERS '"0,1"' "prod"
 
 # K8s 静态清单（deploy/k8s/25-signing.yml）：env 数组里 name 行的下一行是 value
 k8s_value=$(grep -A1 "name: NEX_MPC_TRANSPORT_GRPC" deploy/k8s/25-signing.yml \

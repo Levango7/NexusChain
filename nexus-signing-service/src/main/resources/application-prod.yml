@@ -1,0 +1,13 @@
+# 生产 profile 覆盖（批次⑤ P0 加固，2026-10-18）。
+#
+# 背景：本服务此前没有 prod 档位文件——docker-compose.prod.yml 与 helm values-prod
+# 都会激活 prod profile，配置全部继承自 application.yml。本文件只承载"生产必须
+# 显式生效、不适合放默认值"的守卫项，不复刻 application.yml 的任何现有配置。
+#
+# JWT 启动守卫：密钥未注入（或 <32 字节）时启动期直接 fail-fast，
+# 不再 WARN + 随机密钥静默降级（那种形态下与 gateway 的跨服务验签必然失败，
+# 故障会被推迟到首个请求才暴露）。
+nexus:
+  security:
+    jwt:
+      require-secret: true

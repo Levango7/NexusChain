@@ -2,6 +2,216 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [Unreleased]
+
+### 工程评审批次①：版本口径收口 + CI/门禁缺陷修复 + 部署资产小修
+
+**版本归版（消除"CHANGELOG 超前"漂移）**：`build.gradle` / `version.properties` / README 头注
+2.73.0 → 2.74.0——[2.74.0] 条目先合并而构建版本未同步，旧门禁（双源 + 头注 + 条目去重）
+对此类漂移全绿。本次同步归版，并给 `check-version-consistency.sh` 增加断言 5
+（CHANGELOG 不得超前于构建版本）、断言 6（README 若复述 CHANGELOG 条目须一致）与
+断言 7（`application.properties` 的 `nexus.version` 必须等于当前版本——该字段实测
+陈旧至 v2.50.0，本次一并更新至 v2.74.0，属"写而不测"的补测）。
+
+**CI / 安全扫描**
+- `security-scan.yml`：Trivy fs 的 SARIF/JSON 步补 `trivyignores`（与阻断步、Docker job
+  对齐——豁免政策此前只对阻断生效）；Trivy Docker 矩阵补 nexus-explorer（ci.yml
+  docker-build 矩阵已含而此处漏）；新增 `Cargo Audit (zk-groth16-service)` 独立观察 job
+  （RustSec 覆盖此前仅 mpc-engine；按"先观察、再阻断"惯例不列入 required checks）。
+- `check-license-policy.py`：修复 `(update_cache or True)` 恒真缺陷——默认离线只读
+  `scripts/rust-license-cache.json`，仅 `--update-cache` 联网（此前每次运行都会对未
+  命中 crate 实时调用 crates.io）。
+- `check-mpc-tier-policy.sh`：prod 补 `NEX_MPC_ENGINE_DISTRIBUTED` /
+  `NEX_MPC_ENGINE_CGGMP_SIGNERS` 硬断言（此前仅 staging 有）。
+- `k8s-sync-check.yml`：触发 paths 补 `deploy/kustomize/**`、`deploy/monitoring/**`
+  （此前这两个目录改动不触发同步校验）。
+
+**部署资产**
+- `docker-compose.prod.yml`：7 处构建上下文由模块目录改回 repo 根（Java/zk Dockerfile
+  均要求根上下文——依赖根级 gradlew/build.gradle/project()，此前写法直接构建失败）；
+  gateway/signing 补 `JWT_SECRET`、signing 补 `NEX_MPC_ENGINE_AUTH_TOKEN` 的 fail-closed
+  注入（与 `.env.prod.example` 同步，清单 15→19 项口径修正）。
+- `docker-compose.yml`：zk-groth16-service 构建上下文同修。
+- `nexus-core/Dockerfile`：runtime 阶段补 `COPY /app/logs`（Logback `./logs/nexuscore.log`
+  缺目录即启动失败）；`busybox:musl` 浮动 tag 钉到 `1.36.1-musl`。
+- `deploy/k8s/50-prometheus-rules.yaml`：补 `release: kube-prometheus-stack` label
+  （与 values 里 ruleSelector 匹配；缺 label 时规则被 Operator 静默忽略），修正 promtool
+  验证注释。
+- `scripts/run-trivy-scan.sh`：docker build 改 repo 根上下文（与 CI 矩阵同口径）。
+
+**文档**
+- README：Gradle 8.5→8.14；testAll 描述修正；`ci.yml:453` 行号引用改 job 名；
+  版本头注不再复述 CHANGELOG 条目内容（历次漂移的复述源）。
+
+### 工程评审批次②：发布工程收口——部署资产 tag 与发布产物对齐（全面 v 前缀）
+
+**政策**：镜像/部署引用统一 **v 前缀**（与 release.yml 实际推的
+`${{ github.ref_name }}` 一致）；chart 元数据（Chart.yaml version/appVersion）维持
+**纯 semver**——release.yml 打包 `--version "${CHART_VERSION#v}"` 显式去 v，属既定
+口径，v 政策只适用于镜像引用。
+
+**部署资产对齐**（此前静态清单停在 :2.1.0、values-prod 停在 2.50.0，均与发布产物对不上）：
+- `deploy/k8s/*.yml`：6 个服务镜像 tag 2.1.0 → v2.74.0；
+- `deploy/helm/values-prod.yaml`：4/7 服务 tag → v2.74.0，并给 nexus-api-gateway /
+  nexus-core / mpc-engine 补钉 tag（此前这 3 个回退 `global.env`（="prod"）→ 指向
+  不存在的镜像；release.yml 实时部署靠 --set 覆盖故上游无感，离线
+  `helm install -f values-prod.yaml` 会踩中）；
+- `deploy/helm/Chart.yaml` + 7 个子 chart：version/appVersion 2.50.0 → 2.74.0；
+- `deploy/k8s/SECRET-MANAGEMENT.md`：标题版本 → v2.74.0，重写过期注记（原注记称
+  "标题中 v2.1.0 为历史标记"而标题实为 v2.50.0，自相矛盾）。
+
+**registry 命名空间修正**（ghcr.io/nexus 是从不存在的命名空间 → ghcr.io/levango7/nexuschain）：
+6 个子 chart values.yaml 的 imageRegistry、deploy/kind/kind-config.yaml 的 containerd
+mirror key（原 key "ghcr.io/nexus" 按 registry host 匹配**永不命中**，改为 host 级
+"ghcr.io"）、deploy/kind/README.md、deploy/istio/README.md、
+deploy/docs/mpc-distributed-deployment.md、docs/k8s-deployment.md、
+docs/ha-verification.md。
+
+**门禁与工具**：
+- `check-version-consistency.sh` 新增断言 8：k8s 静态清单镜像 tag / values-prod image
+  tag 必须 = vX.Y.Z；umbrella + 子 chart 元数据必须 = X.Y.Z（3→7→8 断言）；
+- `bump-version.sh`：步骤 2/5 改为写出 v 前缀（正则兼容无 v 存量），归版一次全链统一；
+- `k8s-sync-check.yml`：`--set *.image.tag` 从硬编码 2.1.0 改为自 build.gradle 单一
+  真源推导（vX.Y.Z）——此前归版需人肉同步第三份版本常量。
+
+### 工程评审批次⑤：资金路径 P0 加固（退款三段式 / 自动提现认领协议 / JWT 启动守卫）
+
+**背景**：研读发现资金路径上存在两处"DB 事务里包着不可逆外部动作"的结构性风险——
+退款与自动提现都是"认领 + 出款调用 + 结果落库"同一事务；出款成功后 commit 失败会把
+扣账与状态一起回滚，重跑即**二次出款**。另有 JWT_SECRET 缺失时静默降级的问题。本批收口。
+
+**退款执行三段式（`DefaultRefundApprovalService.executeRefund`）**
+- 原实现：CAS 认领 + 链上调用 + 结果落库同一大事务；链上成功后任何数据库故障都会把
+  认领一并回滚，重试即造成二次打款。
+- 现改为：① 独立事务 CAS 认领（APPROVED→EXECUTING）并**先提交**；② 链上调用在
+  **事务外**执行；③ 独立事务落结果（EXECUTED / FAILED，`markExecuted`/`markFailed`
+  以 WHERE status=EXECUTING 防覆盖）。链上成功但落库失败时单据停留 EXECUTING 并抛出——
+  **不自动改 FAILED、不自动重试**（二次打款风险），由新增扫描器告警。
+- 订单终态迁移（PAID→REFUNDED）改为独立 best-effort 事务：超退防线不依赖订单状态
+  （`sumPendingRefundsByOrderId` 已计入 EXECUTING/EXECUTED），迁移失败可追查、不阻断资金结果。
+- 新增 `RefundExecutionReconciler` + `RefundExecutionAlert`：每 15 分钟
+  （`nexus.gateway.refund.stuck-scan-cron` 可覆盖）扫描停留 EXECUTING 超 10 分钟的单据，
+  打 `REFUND_EXECUTION_MANUAL_VERIFICATION_REQUIRED` 稳定标记的 WARN + 写审计，
+  **只告警不自动改**（自动改失败/成功/重试三条路都可能直接错）；ShedLock 防多副本重复刷告警。
+
+**自动提现出款认领协议（`AutoWithdrawService` + `V108`）**
+- 原实现："扣账 + 出款调用 + 规则推进"同一事务，同族二次出款风险。
+- 新增认领列：`payout_claim_reference` / `payout_claim_at` / `last_payout_ref`
+  （V108 三列，均可空）。执行为三段式：① 独立事务内悲观锁规则行（`findByIdForUpdate`）
+  + 复检周期与未决认领 + 置认领 + 扣账（原子提交）；② 出款调用事务外；③ 成功 → 独立事务
+  推进 `lastExecutedAt` + 记 `last_payout_ref` + 清认领；失败 → 独立事务补偿入账
+  （`AUTO_WITHDRAW_ROLLBACK_` 前缀）+ 清认领（保持可重试语义）。
+- 认领悬挂（崩溃 / 落库失败）→ 下轮 fail-closed 拒跑（`PAYOUT_CLAIM_ACTIVE`）并打
+  `AUTO_WITHDRAW_PAYOUT_UNRESOLVED_MANUAL_REQUIRED` 标记告警，**不自动清认领、不自动重试**；
+  执行入口另有快速预检先于余额/去向检查（告警不会被"无生效出款账户"等遮蔽）。
+- `AutoWithdrawPayoutWiringTest` 升级为认领协议契约测试：认领保存先于出款的 InOrder、
+  认领悬挂拒跑（不扣账、不出款）、出款失败补偿后认领清除且规则不推进、落库失败认领保留、
+  未装配事务 fail-closed。
+
+**JWT 启动守卫（gateway + signing-service）**
+- 新增 `nexus.security.jwt.require-secret`（默认 false）：为 true 且密钥未配置（或短于
+  32 字节）时 `@PostConstruct` 直接抛异常拒绝启动——不再以"随机密钥 + WARN"静默降级
+  （那种形态下跨服务验签必然失败，故障被推迟到首个请求才暴露）。
+- `application-prod.yml`：gateway 置 true；signing-service 新建 prod 档位文件同置 true
+  （docker-compose 与 helm 均以 prod profile 运行，缺密钥将启动即拒）。
+- 既有行为不变：dev / 测试档位保持原"告警 + 进程内随机密钥"兜底，既有测试全兼容；
+  gateway/signing 双侧补启动守卫测试。
+
+**复核后推迟/豁免（透明记录）**
+- `account_transactions.reference` 加 UNIQUE：经复核**推迟**——补偿后同周期重试会合法复用
+  同一 reference（`AUTO_WITHDRAW_日期_规则ID`），加唯一约束会破坏该重试路径；且缺 prod
+  存量脏数据审计。留待后续批次以"引用号加周期/尝试后缀"方案一并处理。
+- `SplitService.executeSplits` 无幂等：复核在主线**无调用方**（未接线入支付流程），本批不动；
+  接线时必须先补幂等（报告记述）。
+- `TransactionRecoveryScheduler` 无锁：维持既有豁免论证（正确修法是参与方描述持久化，
+  加锁有害），本批仅测试与报告记述。
+
+### 工程评审批次③：部署资产完备性收口——compose 探针/限额全栈 + sync-check 真断言 + 告警 runbook 补全
+
+**compose prod（`docker-compose.prod.yml` + `deploy/config/redis.conf`）**
+- 资源限制全栈定档：20 个服务补齐 `deploy.resources.limits`（此前全无上限）；
+  seata 限额定 4g 依据实测官方镜像默认 JVM（`-Xmx/-Xms 2048m + MaxDirectMemorySize 1024m + MaxMetaspaceSize 256m`）。
+- healthcheck 补齐 6 处：mpc×3 / zk 用 TCP 探针（运行阶段镜像 debian:trixie-slim 含
+  bash，`/dev/tcp` 探针已真机实测开/闭端口行为）；prometheus/grafana 用 HTTP 探针
+  （exec 形探针在对应镜像实测 exit=0 且端到端 healthy）；sentinel 探针留白并就地
+  注明（镜像不在本环境源白名单，拒绝放未验证探针）。
+- `nexus-core` 补 `restart: always`（全栈唯一缺重启策略的服务）；sentinel 端口
+  8080→8858（与 helm / docs / 各服务 `NEX_SENTINEL_SERVER` 的全仓约定对齐）；
+  redis.conf 补 `maxmemory 512mb`（allkeys-lru 此前无上限不生效）。
+- 验证：`docker compose config --quiet` exit 0；PyYAML 逐服务审计 20×limits /
+  19×healthcheck / 20×restart；redis 实启 `INFO memory` 确认 maxmemory=536870912 生效。
+
+**sync-check 与告警 runbook（`.github/workflows/k8s-sync-check.yml` + `docs/runbooks/alerts.md`）**
+- k8s-sync-check 注释声称"image 与 replicas 必须一致"而实现只比 image——按声明
+  口径补齐 replicas 真校验（静态清单 vs Helm 默认渲染；环境覆盖层差异不在比对
+  范围），同步修正策略说明/失败文案/yq 注释共四处口径。
+- alerts runbook 与规则漂移修正：告警总表 5→11 条（2026-09-09 已整合入规则但
+  runbook 未跟进）；补 JvmGcTimeHigh / JvmHeapUsageHigh / PodCpuUsageHigh /
+  PodMemoryUsageHigh / ServiceDown / SeataTcDown 六条排障手册；设计原则改为
+  "只允许引用真实存在的指标"；CI 验证节告警数口径 ≥4 → ≥5（当前 11）。
+- 验证：workflow_dispatch run `39128097756` + PR 事件 run `39128100422` 双绿
+  （新 replicas 校验首次真实执行）。
+
+### 工程评审批次④：文档一致性——ARCHITECTURE 对准实现 + SECRET-MANAGEMENT 标题去版本化
+
+- `ARCHITECTURE.md`：SDK 语言清单 Java/JS → Java/JS/Python/Go；`nexus-java-sdk` /
+  `nexus-js-sdk` 状态 Deprecated → Removed（v2.39.0 目录已删除，settings.gradle
+  权威注记；架构图同步）；Signing Approval Flow 重写为现行真态
+  （`store-type`=memory/file/jpa 显式选择、jpa 不可用抛错拒绝启动、prod 显式
+  `NEX_APPROVAL_STORE_TYPE=jpa`、审批人白名单 fail-closed——原"use-database=true
+  切换为文件持久化"表述与实现不符）；Database 行修正（MySQL 8.0 业务库 +
+  nexus-core 例外 PostgreSQL 16，2026-10-12 全栈对齐；原"PostgreSQL (production)"
+  已失真）；v2.26.0 节测试计数标注为"该轮回归基线"。
+- `deploy/k8s/SECRET-MANAGEMENT.md`：标题去版本化（原 `（v2.74.0）`）——跨版本
+  通用文档不再随归版 sed 同步，注记改为永久表述（当前版本以 README 版本口径为准）。
+- `scripts/bump-version.sh`：对应第 6 步移除、步号 9→8 重排（消除"每版必改"的
+  sed 维护面，同 nexusVersion 死代码移除先例）。
+- 验证：bump 夹具（独立 worktree）8 步全链 → 9.9.9 七探针全中、SECRET-MANAGEMENT
+  零改动、0 个 `.bak` 残留；`check-version-consistency.sh` 8 断言全绿。
+
+### 工程评审批次⑦：构建与 CI 覆盖——concurrency/Node 钉版/artifact 修正 + composite 门禁真实化
+
+**ci.yml 遗留疑点修复**
+- 新增 concurrency 组：同一 ref 新推送取消旧运行（master 除外——docker-build 仅 master
+  触发，中途取消可能留下不完整镜像集）；此前全 workflow 无 concurrency，连续推送时旧 run
+  继续占用 runner。（2026-10-19 归一：#142 已在 master 以等价实现覆盖 4 workflow，合并后保留 #142 版本。）
+- build-and-test 补 `Setup Node 26`：该 job 有 4 处 npm（SDK TS/DevTools/Explorer
+  test+build）却无 setup-node、靠 runner 预装版本（三处 engines 均 `>=24 <27`，与
+  Explorer/Hardhat job 统一钉 26）。
+- artifact 名模板残留修正 ×4：`jacoco-reports` / `test-results` / `rust-test-logs` /
+  `jar-artifacts` 的 `-${{ matrix.os }}`（job 无 matrix、表达式恒为空串、名字带尾横线）。
+
+**composite build 门禁真实化（ADR-035）**
+- JaCoCo：compliance/analytics 与 api-gateway 的 0.50 门禁**已配置但 CI 长期只跑 `test`**
+  （写而不测）——本地五模块 `check` 实测全绿（3m53s、jacoco XML 五份落盘）后 CI 统一翻
+  `:check`；composite 报告新增生成步骤并纳入 codecov 与 artifact（此前根聚合只覆盖根
+  subprojects）。
+- SpotBugs/FindSecBugs：6 个 composite 模块（consortium 三子项目 + settlement /
+  compliance / analytics / oracle / api-gateway）此前完全在 SAST 门禁视野外。经共享脚本
+  `gradle/composite-spotbugs.gradle`（与根构建同口径）接入，`spotbugsAll` / `testAll`
+  以 `includedBuild().task()` 扩展聚合；SAST job 超时 15→25min。首扫暴露 **21 条存量
+  findings**（空转自证），全部就地闭环：**代码修复 10 条**（HexBytes 补 hashCode；
+  ChainCache 构造器消除构造期虚分派——ChainCacheWrapper 锁未初始化 NPE 埋雷；evict
+  直连私有 remove；InMemoryStateTree 改 Arrays.equals；PeersCache 改 rand.nextInt(n)
+  消除负索引+取模偏置；TransactionPool skip 长整型防溢出；TestCommunicationTool
+  try-with-resources；FileSNAllocator 短读校验；AggregatedPriceOracle DCL 加 volatile）
+  + **收窄豁免 11 条**（自定义 Cloneable<T> 约定 ×6、Start 未来引擎守卫、net.Util 探测
+  socket ×2、AES256CTR 套件语义 ×2，逐条论证入 spotbugs-exclude-filter.xml）。
+- `testAll` 聚合同步扩展为「根子项目 test + composite 模块 check」（与 CI 同集），README
+  口径同步；全量复跑 8/8 composite 报告 0 findings、consortium+oracle check 全绿。
+
+### 安全治理：OWASP Dependency-Check「永远上报」转正 + Dependabot 配置修复（2026-10-19）
+
+- **OWASP DC 转正（完善路径）**：2026-10-01~10-15「永远上报」试运行评估通过——同仓库 PR
+  恒真跑（26 次 run：min 2.1 / 中位 6.0 / max 20.4 分钟；失败可归因；缓存周轮换未挤爆），
+  `if` 定档为最终语义、保留 required contexts；fork PR 维持 skipped 如实上报。评估表、
+  维护约束与「required × 永不产生状态 = 永久 pending」历史注记写入
+  `docs/dependency-check-update-policy.md`「转正结论」节；工作流 TEMP 标记全部清理。
+- **Dependabot 配置修复**：`dependabot.yml` 自 v2.24.0 引入起 0 PR——根因：`auto-merge:`
+  非合法 schema 键 + `reviewers` 指向 User 账号下不存在的团队（无效配置整体不执行）。
+  移除无效键、保留标准字段；patch 自动合并如需启用须配专用 workflow（当前全部人工审查）。
+  SCA 三件套（Dependabot 升级供给 / OWASP DC PR 阻断 / Trivy 镜像层）分工成文。
+
 ## [2.74.0] - 2026-10-14
 
 ### L3 复验（v2.73.0 发布镜像实装）——22 项遗留缺陷修复，**全栈 24/24 Pod Ready**

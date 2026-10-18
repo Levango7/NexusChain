@@ -15,6 +15,11 @@ on:
   pull_request:
     branches: [master]
 
+# （concurrency 归一说明 2026-10-19：本批原在此处新增了等价并发组；origin/master 的
+# #142 已以 `event_name == 'pull_request'` 实现覆盖 4 个 workflow（ci / k8s-sync /
+# performance-test / security-scan），语义等价且面更广——合并消重后保留 #142 版本，
+# 其块位于下方 env 之后。）
+
 env:
   # 关闭 daemon（CI 每次均为全新 runner，daemon 无意义且浪费资源）
   GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.caching=true -Dfile.encoding=UTF-8"
@@ -376,26 +381,41 @@ jobs:
       # 不被根 `./gradlew check` 覆盖，需单独执行其任务。
       # 这些模块自带 settings.gradle，通过 includeBuild 纳入统一构建，
       # 可通过根 gradlew 以 `:nexus-settlement:check` 形式调用（Gradle 8.x composite build 支持）。
-      # 2026-09-05（覆盖率门禁收编）：settlement/oracle 自带模块级
-      # jacocoTestCoverageVerification（0.30 下限，实测通过），test→check 激活门禁
-      # （check 仍依赖 test，测试照跑）；compliance/analytics 暂无门禁，保持 test。
+      # 覆盖率门禁收编（2026-09-05 起）：settlement/oracle 0.30；2026-10-18 批次⑦
+      # 复核发现 compliance/analytics 的模块级 0.50 门禁**已配置但 CI 只跑 test**
+      # （与"写了门禁从不运行"同病灶）——本地实测四个模块 check 全绿后统一翻为
+      # check：测试照跑（check 依赖 test）+ 覆盖率验证 + jacocoTestReport XML
+      # （下方 codecov 上传，含 composite 报告生成步骤）。
       - name: Test composite build modules
         run: |
-          ./gradlew :nexus-settlement:check :nexus-compliance:test :nexus-analytics:test :nexus-oracle:check --no-daemon
+          ./gradlew :nexus-settlement:check :nexus-compliance:check :nexus-analytics:check :nexus-oracle:check --no-daemon
 
       # 测试体系中期建设（2026-08-30）：影子测试资产纳入 CI。
       # 此前仅本地跑过的两模块，现纳入门禁（测试探活审计项）：
       # - nexus-consortium：includeBuild 且自带 settings.gradle，根 check 不覆盖，
       #   43 个测试文件/约 321 用例（PoA + 国密 SM2/3/4）——组合路径：
       #   consortium 是 includeBuild 声明的构建名，测试任务为 :nexus-consortium:consortium:test
-      #   2026-09-05（覆盖率门禁收编）：consortium 构建树自带子模块级门禁
-      #   （common/consortium 0.30，crypto 0.00 占位——实测指令覆盖 0/4259），
-      #   test→check 激活；check 仍依赖 test，测试照跑。
+      #   覆盖率门禁（2026-09-05 收编、2026-10-18 批次⑦核对）：consortium 构建树
+      #   自带子模块级门禁——common/consortium/crypto 均 0.30（crypto 的"0.00 占位"
+      #   已由补测批次提升为 0.30，此处旧注释同步修正）。
       # - nexus-api-gateway：根构建 include 的 21 用例（AuthenticationFilter/RateLimitFilter），
-      #   暂无模块级门禁，保持 test
+      #   2026-10-18 批次⑦：模块级 0.50 门禁已配置但 CI 长期只跑 test，本地实测
+      #   check 全绿后翻为 check。
       - name: Test consortium + api-gateway (shadow test assets)
         run: |
-          ./gradlew :nexus-consortium:consortium:check :nexus-consortium:common:check :nexus-consortium:crypto:check :nexus-api-gateway:test --no-daemon
+          ./gradlew :nexus-consortium:consortium:check :nexus-consortium:common:check :nexus-consortium:crypto:check :nexus-api-gateway:check --no-daemon
+
+      # Node 版本口径（2026-10-18 批次⑦遗留疑点修复）：本 job 有 4 处 npm ——
+      # SDK TypeScript（下方 SDK 步骤）、DevTools CLI、explorer frontend
+      # test+build——此前**无 setup-node**，靠 runner 预装版本，等于没有版本
+      # 锚点（runner 镜像升级会静默改变行为）。这与本 job 早前 Python 口径
+      # 问题同类（见上方 Setup Python 注释），与其同法显式钉版：
+      # 三处 package.json engines 均为 ">=24.0.0 <27.0.0"，与其余 Node job
+      # （Explorer Frontend / Hardhat E2E，均 26）统一钉 26。
+      - name: Setup Node 26
+        uses: actions/setup-node@v5
+        with:
+          node-version: '26'
 
       # ① SDK 三语言回归（2026-09-05）：B 批（5f62509）产出的 Go 13 / Python 15 /
       # TS 8 用例此前仅本地验证、未进 CI——对外交付物无回归保护（如 core 的
@@ -594,6 +614,22 @@ jobs:
       - name: 生成 JaCoCo 覆盖率报告
         run: ./gradlew jacocoTestReport --no-daemon
 
+      # composite 模块覆盖率报告（2026-10-18 批次⑦）：根 jacocoTestReport 聚合
+      # 任务只覆盖根 subprojects——composite 模块的报告需显式点名生成（其
+      # check 已在上方步骤运行、test 执行数据即用）。HTML/XML artifact 的
+      # glob 为 ** 递归，生成后自动包含。
+      - name: 生成 JaCoCo 覆盖率报告（composite 模块）
+        run: |
+          ./gradlew :nexus-settlement:jacocoTestReport \
+            :nexus-compliance:jacocoTestReport \
+            :nexus-analytics:jacocoTestReport \
+            :nexus-oracle:jacocoTestReport \
+            :nexus-api-gateway:jacocoTestReport \
+            :nexus-consortium:consortium:jacocoTestReport \
+            :nexus-consortium:common:jacocoTestReport \
+            :nexus-consortium:crypto:jacocoTestReport \
+            --no-daemon
+
       - name: 上传覆盖率到 Codecov
         # codecov v5（composite）内部钉了 node20 的 actions/github-script@60a0d…（OIDC token
         # 步骤），是 Node24 迁移后全仓最后一条 node20 残留；v6/v7 内部已改钉
@@ -601,15 +637,20 @@ jobs:
         uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: ./nexus-gateway/build/reports/jacoco/test/jacocoTestReport.xml,./nexus-bridge/build/reports/jacoco/test/jacocoTestReport.xml,./nexus-core/nexus-core/build/reports/jacoco/test/jacocoTestReport.xml,./nexus-signing-service/build/reports/jacoco/test/jacocoTestReport.xml,./nexus-wallet-service/build/reports/jacoco/test/jacocoTestReport.xml,./nexus-sdk/java/build/reports/jacoco/test/jacocoTestReport.xml
+          files: ./nexus-gateway/build/reports/jacoco/test/jacocoTestReport.xml,./nexus-bridge/build/reports/jacoco/test/jacocoTestReport.xml,./nexus-core/nexus-core/build/reports/jacoco/test/jacocoTestReport.xml,./nexus-signing-service/build/reports/jacoco/test/jacocoTestReport.xml,./nexus-wallet-service/build/reports/jacoco/test/jacocoTestReport.xml,./nexus-sdk/java/build/reports/jacoco/test/jacocoTestReport.xml,./nexus-settlement/build/reports/jacoco/test/jacocoTestReport.xml,./nexus-compliance/build/reports/jacoco/test/jacocoTestReport.xml,./nexus-analytics/build/reports/jacoco/test/jacocoTestReport.xml,./nexus-oracle/build/reports/jacoco/test/jacocoTestReport.xml,./nexus-api-gateway/build/reports/jacoco/test/jacocoTestReport.xml,./nexus-consortium/consortium/build/reports/jacoco/test/jacocoTestReport.xml,./nexus-consortium/common/build/reports/jacoco/test/jacocoTestReport.xml,./nexus-consortium/crypto/build/reports/jacoco/test/jacocoTestReport.xml
           fail_ci_if_error: false
           verbose: true
 
+      # artifact 命名（2026-10-18 批次⑦遗留疑点修复）：本 job 按设计**无 matrix**
+      # （见 job 头部注释，为保住 required check 名称而放弃 matrix），四个
+      # artifact 名中的 `-${{ matrix.os }}` 是模板残留——表达式恒为空串，
+      # 实际名等同 "xxx-"（带尾横线）。本处及下方 test-results / rust-test-logs /
+      # jar-artifacts 三处一并移除。
       - name: 上传 JaCoCo HTML 报告
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: jacoco-reports-${{ matrix.os }}
+          name: jacoco-reports
           path: |
             **/build/reports/jacoco/test/html
             **/build/reports/jacoco/test/jacocoTestReport.xml
@@ -636,7 +677,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: test-results-${{ matrix.os }}
+          name: test-results
           path: |
             **/build/test-results/**/*.xml
             nexus-core/nexus-core/build/test-results/**/*.xml
@@ -651,7 +692,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: rust-test-logs-${{ matrix.os }}
+          name: rust-test-logs
           path: |
             **/build/test-results/rust/*.log
           if-no-files-found: ignore
@@ -660,7 +701,7 @@ jobs:
       - name: 上传 JAR 构建产物
         uses: actions/upload-artifact@v7
         with:
-          name: jar-artifacts-${{ matrix.os }}
+          name: jar-artifacts
           path: |
             **/build/libs/*.jar
           if-no-files-found: ignore

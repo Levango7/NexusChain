@@ -24,11 +24,10 @@ updates:
       time: "06:00"
       timezone: "Asia/Shanghai"
     open-pull-requests-limit: 10
-    # P2-9: auto-merge 仅对 patch 版本自动合并（降低审查负担，patch 风险最低）
-    # minor/major 仍需人工审查合并
-    auto-merge:
-      - dependency-type: "all"
-        update-type: "semver:patch"
+    # 2026-10-19 修复：原 `auto-merge:` 不是 dependabot.yml 的合法 schema 键（GitHub 对
+    # 无效配置整体不执行——本文件自 v2.24.0 引入以来 0 PR 的根因之一）。如需 patch 自动
+    # 合并，须用专用 GitHub Actions workflow（对 dependabot PR 条件审批/合并），不要在本
+    # 文件里写非标准键。当前策略：全部更新走人工审查。
     labels:
       - "dependencies"
       - "java"
@@ -36,8 +35,8 @@ updates:
     commit-message:
       prefix: "deps(gradle)"
       include: "scope"
-    reviewers:
-      - "nexus-chain/maintainers"
+    # 2026-10-19 修复：原 `reviewers` 指向团队 "nexus-chain/maintainers"，但本仓 owner 为
+    # User 账号（无团队）——同样属无效值；需要指定审查人时填用户名（如 "Levango7"）。
     groups:
       spring-boot:
         patterns:

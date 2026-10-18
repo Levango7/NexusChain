@@ -80,11 +80,14 @@ nodes:
       topology.kubernetes.io/zone: zone-b
       nexus-node-role: worker
 
-# -- containerd 自定义：把 ghcr.io/nexus 重定向到本地 registry:5000
+# -- containerd 自定义：把 ghcr.io 重定向到本地 registry:5000
+#   2026-10-18 批次②修正：原 key 为 "ghcr.io/nexus"——containerd mirror 按
+#   registry host 匹配，该 key 永不命中（本仓镜像统一为
+#   ghcr.io/levango7/nexuschain/<service>）；改为 host 级重定向。
 #   部署脚本会先启动一个 kind-registry 容器并加载本地镜像
 containerdConfigPatches:
   - |-
-    [plugins."io.containerd.grpc.v1.cri".registry.mirrors."ghcr.io/nexus"]
+    [plugins."io.containerd.grpc.v1.cri".registry.mirrors."ghcr.io"]
       endpoint = ["http://registry:5000"]
   - |-
     [plugins."io.containerd.grpc.v1.cri".registry.mirrors."registry:5000"]

@@ -173,6 +173,46 @@
     <Match><Bug pattern="REFLC_REFLECTION_MAY_INCREASE_ACCESSIBILITY_OF_CLASS"/></Match>
     <Match><Bug pattern="INFORMATION_EXPOSURE_THROUGH_AN_ERROR_MESSAGE"/></Match>
 
+    <!-- ==================== 批次⑦：composite build 接入新增项（2026-10-18） ====================
+         SpotBugs/FindSecBugs 接入 6 个 composite build（includeBuild：nexus-consortium /
+         settlement / compliance / analytics / oracle / api-gateway）后暴露的存量项，逐条
+         人工审计后处置；同批次真实缺陷已在代码层修复（未列入本区）：
+         - CN_IMPLEMENTS_CLONE_BUT_NOT_CLONEABLE ×6：本仓自定义 Cloneable<T> 约定接口
+           （org.nexus.common.Cloneable），clone() 为领域拷贝方法，不实现 java.lang.Cloneable
+           语义（不参与 Object.clone 机制）；SpotBugs 按 JDK 接口假设误报。6 处均已核对。
+         - BC_VACUOUS_INSTANCEOF（Start.consensusEngine）：`engine instanceof PoA` 为未来
+           共识引擎（pow/pos/pow+pos/vrf，见分支注释）预留的存储注入守卫；当前仅 none/poa
+           两态使其恒真，属设计意图；移除守卫会在未来接入非 PoA 引擎时引入
+           ClassCastException 风险。
+         - UNENCRYPTED_SOCKET（net.Util.ping/bindIp）：P2P 节点连通性探测与本机地址发现
+           工具（1 秒超时 TCP 探测），目标为公开/内网服务，不传输凭据或业务数据；传输加密
+           属部署层职责（P2P 通道加密非本工具类语义）。
+         - CIPHER_INTEGRITY（AES256CTR）：类即 AES-256-CTR 密码套件实现（常量
+           "aes-256-ctr" 为规格标识），CTR 模式无完整性校验属算法语义而非实现缺陷，
+           完整性保护由配套 MAC/AEAD 使用方承担；该类当前无生产调用点（仅单测）。
+    -->
+    <Match>
+        <Bug pattern="CN_IMPLEMENTS_CLONE_BUT_NOT_CLONEABLE"/>
+        <Class name="~org\.nexus\.common\.(?:Block|ChainCache|ChainCacheWrapper|Header|Transaction)"/>
+    </Match>
+    <Match>
+        <Bug pattern="CN_IMPLEMENTS_CLONE_BUT_NOT_CLONEABLE"/>
+        <Class name="org.nexus.consortium.state.Account"/>
+    </Match>
+    <Match>
+        <Bug pattern="BC_VACUOUS_INSTANCEOF"/>
+        <Class name="org.nexus.consortium.Start"/>
+        <Method name="consensusEngine"/>
+    </Match>
+    <Match>
+        <Bug pattern="UNENCRYPTED_SOCKET"/>
+        <Class name="org.nexus.consortium.net.Util"/>
+    </Match>
+    <Match>
+        <Bug pattern="CIPHER_INTEGRITY"/>
+        <Class name="org.nexus.crypto.AES256CTR"/>
+    </Match>
+
     <!-- ==================== 不豁免注记（转代码修复，勿移入上方） ====================
          DM_DEFAULT_ENCODING（53）：隐式默认编码（new String(bytes)/getBytes()），
          跨平台行为不一致是真实缺陷 —— 应逐一显式 StandardCharsets.UTF_8 修复，

@@ -172,7 +172,7 @@ mpc-engine:
   global:
     env: prod
     namespace: nexus
-    imageRegistry: ghcr.io/nexus
+    imageRegistry: ghcr.io/levango7/nexuschain
 ```
 
 ### 4.3 部署命令

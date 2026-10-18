@@ -224,7 +224,7 @@ kubectl rollout status deployment/nexus-gateway -n nexus
 ```bash
 # 1. 触发滚动更新
 kubectl set image deployment/nexus-gateway \
-  nexus-gateway=ghcr.io/nexus/nexus-gateway:2.0.1 -n nexus
+  nexus-gateway=ghcr.io/levango7/nexuschain/nexus-gateway:v2.74.0 -n nexus
 
 # 2. 实时观察 Pod 状态
 watch -n 2 'kubectl get pods -n nexus -l app.kubernetes.io/name=nexus-gateway'

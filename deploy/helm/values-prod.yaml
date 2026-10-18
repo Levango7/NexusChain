@@ -20,8 +20,8 @@ global:
 nexus-gateway:
   replicaCount: 3
   image:
-    # 固定不可变 tag（semver），禁止 latest
-    tag: 2.50.0
+    # 固定不可变 tag（vX.Y.Z，与发布产物一致；2026-10-18 批次②起全链 v 前缀），禁止 latest
+    tag: v2.74.0
   resources:
     requests:
       memory: 1Gi
@@ -50,7 +50,7 @@ nexus-gateway:
 nexus-bridge:
   replicaCount: 3
   image:
-    tag: 2.50.0
+    tag: v2.74.0
   resources:
     requests:
       memory: 1Gi
@@ -78,7 +78,7 @@ nexus-bridge:
 nexus-signing-service:
   replicaCount: 3
   image:
-    tag: 2.50.0
+    tag: v2.74.0
   resources:
     requests:
       memory: 1Gi
@@ -157,7 +157,7 @@ nexus-signing-service:
 nexus-wallet-service:
   replicaCount: 3
   image:
-    tag: 2.50.0
+    tag: v2.74.0
   resources:
     requests:
       memory: 1Gi
@@ -182,6 +182,17 @@ nexus-wallet-service:
         matchLabels:
           app.kubernetes.io/name: nexus-wallet-service
 
+# -- nexus-api-gateway / nexus-core 固定 tag（2026-10-18 批次②补）：此前 3/7 服务
+#    未钉 tag，渲染回退 global.env（="prod"）→ 指向不存在的镜像；release.yml 实时
+#    部署靠 --set 覆盖故上游无感，但离线 helm install -f values-prod.yaml 会踩中。
+nexus-api-gateway:
+  image:
+    tag: v2.74.0
+
+nexus-core:
+  image:
+    tag: v2.74.0
+
 # -- mpc-engine（MPC 密码学引擎，prod 独有覆盖，PLAN-002 Step A）
 # 生产密钥经 sealed-secrets 注入：
 #   * sealedSecretName 非空 → chart secret.yaml 仅渲染元数据（无 stringData），
@@ -192,5 +203,7 @@ nexus-wallet-service:
 #   * storageKey 不在此设置——明文路径生产禁用（防误用；紧急明文冒烟
 #     请用 dev/staging 环境）
 mpc-engine:
+  image:
+    tag: v2.74.0
   secrets:
     sealedSecretName: mpc-engine-secret

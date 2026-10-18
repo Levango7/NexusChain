@@ -39,12 +39,12 @@ public class ChainCache<T extends Chained> implements Cloneable<ChainCache<T>> {
 
     public ChainCache(T node) {
         this();
-        put(node);
+        doPut(node, false);
     }
 
     public ChainCache(Collection<? extends T> nodes) {
         this();
-        put(nodes);
+        doPutAll(nodes, false);
     }
 
     public Optional<T> get(byte[] hash) {
@@ -175,18 +175,30 @@ public class ChainCache<T extends Chained> implements Cloneable<ChainCache<T>> {
                 .stream().sorted(comparator)
                 .limit(toRemove)
                 .map(n -> n.getHash().getBytes())
-                .forEach(this::remove);
+                // 直接绑定私有 remove(String)（同 remove(byte[]) 语义），避免经可覆写
+                // 方法虚分派——该方法处于构造期可达路径（spotbugs UR_UNINIT_READ）。
+                .forEach(h -> remove(HexBytes.encode(h)));
     }
 
     public void put(@NonNull T node) {
-        put(node, false);
+        doPut(node, false);
     }
 
     public void put(@NonNull Collection<? extends T> nodes) {
-        put(nodes, false);
+        doPutAll(nodes, false);
     }
 
     public void put(@NonNull T node, boolean evict) {
+        doPut(node, evict);
+    }
+
+    public void put(@NonNull Collection<? extends T> nodes, boolean evict) {
+        doPutAll(nodes, evict);
+    }
+
+    // 构造器与公开 put 统一走私有实现：避免构造期对可覆写方法（ChainCacheWrapper.put
+    // 等）的虚分派——子类锁字段尚未初始化时会 NPE（spotbugs UR_UNINIT_READ）。
+    private void doPut(@NonNull T node, boolean evict) {
         String key = node.getHash().toString();
         if (evict) {
             remove(key);
@@ -200,9 +212,9 @@ public class ChainCache<T extends Chained> implements Cloneable<ChainCache<T>> {
         evict();
     }
 
-    public void put(@NonNull Collection<? extends T> nodes, boolean evict) {
+    private void doPutAll(@NonNull Collection<? extends T> nodes, boolean evict) {
         for (T b : nodes) {
-            put(b, evict);
+            doPut(b, evict);
         }
     }
 

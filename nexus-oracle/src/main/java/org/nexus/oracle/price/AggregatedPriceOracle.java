@@ -56,8 +56,8 @@ public class AggregatedPriceOracle implements PriceOracle {
     /** 订阅表：subscriptionId → 订阅任务 */
     private final Map<String, Subscription> subscriptions = new ConcurrentHashMap<>();
 
-    /** 订阅调度器（懒启动） */
-    private ScheduledExecutorService subscriptionScheduler;
+    /** 订阅调度器（懒启动；volatile 保证双重检查锁的安全发布） */
+    private volatile ScheduledExecutorService subscriptionScheduler;
 
     public AggregatedPriceOracle(List<PriceFeed> feeds) {
         this.feeds = feeds == null ? Collections.emptyList() : feeds;

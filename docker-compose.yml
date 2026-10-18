@@ -557,8 +557,10 @@ services:
   # （可信设置仪式产出经 GROTH16_EXTERNAL_SETUP_DIR 挂载或 /v1/setup-external 导入）。
   zk-groth16-service:
     build:
-      context: ./zk-groth16-service
-      dockerfile: Dockerfile
+      # 2026-10-18：上下文改 repo 根（zk Dockerfile 内 COPY . . 后 WORKDIR 切到
+      # zk-groth16-service/ 子目录；此前指向模块目录与 Dockerfile 约定不符）。
+      context: .
+      dockerfile: zk-groth16-service/Dockerfile
     ports:
       - '127.0.0.1:50061:50061'    # gRPC
       - '127.0.0.1:50062:50062'    # HTTP JSON（Java HttpClient 桥接）

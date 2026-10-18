@@ -11,7 +11,9 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -26,9 +28,14 @@ import java.util.UUID;
  *       → 退款窗口未过期 → 落库 PENDING</li>
  *   <li>{@link #approveRefund}：校验 PENDING → 置 APPROVED 并记录审批人与时间</li>
  *   <li>{@link #rejectRefund}：校验 PENDING → 置 REJECTED 并记录拒绝原因</li>
- *   <li>{@link #executeRefund}：CAS 认领 APPROVED → EXECUTING（防并发重复打款）→
- *       触发链上退款 → 成功置 EXECUTED 带交易哈希并将订单迁移至 REFUNDED，
- *       失败置 FAILED</li>
+ *   <li>{@link #executeRefund}：三段式执行（批次⑤ P0 加固，2026-10-18）——
+ *       ① 独立事务内 CAS 认领 APPROVED → EXECUTING 并<b>先提交</b>；
+ *       ② 链上退款调用发生在<b>事务外</b>；③ 独立事务把结果落库（成功置 EXECUTED
+ *       带交易哈希并将订单迁移至 REFUNDED，失败置 FAILED）。
+ *       原实现把链上调用放在单一大事务内：出款成功后的 commit 失败会连认领一起
+ *       回滚，重试即有二次打款风险；若链上已出款但结果落库失败，单据停留在
+ *       EXECUTING（结果未知），由 {@link RefundExecutionReconciler} 扫描告警、
+ *       人工核对处置（不自动改状态、不自动重试）。</li>
  * </ul>
  *
  * <p><b>链上退款执行已接入：</b>{@link #executeOnChain} 通过
@@ -49,11 +56,18 @@ public class DefaultRefundApprovalService implements RefundApprovalService {
     private final OnChainExecutionChannel executionChannel;
     private final String platformRefundAddress;
 
+    /**
+     * 三段式执行的编程式事务模板（批次⑤ P0 加固，2026-10-18）。
+     * 由 {@link PlatformTransactionManager} 构建（与 AccountService 同款装配）；
+     * 认领段 / 结果落库段各自独立提交，链上出款位于两者之间的事务外。
+     */
+    private final TransactionTemplate transactionTemplate;
+
     public DefaultRefundApprovalService(RefundRequestRepository refundRequestRepository,
                                         PaymentOrderRepository paymentOrderRepository,
                                         RefundPolicy refundPolicy) {
         this(refundRequestRepository, paymentOrderRepository, refundPolicy, null,
-                DEFAULT_PLATFORM_REFUND_ADDRESS);
+                DEFAULT_PLATFORM_REFUND_ADDRESS, null);
     }
 
     /**
@@ -74,13 +88,16 @@ public class DefaultRefundApprovalService implements RefundApprovalService {
                                         PaymentOrderRepository paymentOrderRepository,
                                         RefundPolicy refundPolicy,
                                         OnChainExecutionChannel executionChannel,
-                                        @Value("${nexus.gateway.refund.platform-address:PLATFORM_HOT_WALLET}") String platformRefundAddress) {
+                                        @Value("${nexus.gateway.refund.platform-address:PLATFORM_HOT_WALLET}") String platformRefundAddress,
+                                        PlatformTransactionManager transactionManager) {
         this.refundRequestRepository = refundRequestRepository;
         this.paymentOrderRepository = paymentOrderRepository;
         this.refundPolicy = refundPolicy;
         this.executionChannel = executionChannel;
         this.platformRefundAddress = platformRefundAddress != null && !platformRefundAddress.isEmpty()
                 ? platformRefundAddress : DEFAULT_PLATFORM_REFUND_ADDRESS;
+        this.transactionTemplate = transactionManager != null
+                ? new TransactionTemplate(transactionManager) : null;
     }
 
     @Override
@@ -178,46 +195,114 @@ public class DefaultRefundApprovalService implements RefundApprovalService {
     }
 
     @Override
-    @Transactional
     public RefundRequest executeRefund(Long refundId) {
         if (refundId == null) {
             throw new IllegalArgumentException("refundId is required");
         }
-        // P0 修复：CAS 认领执行权。仅当退款单仍为 APPROVED 时原子置为 EXECUTING；
-        // 并发调用或重复执行在此处被拒绝，不会再触发第二次不可逆的链上打款。
-        int claimed = refundRequestRepository.claimForExecution(refundId, LocalDateTime.now());
-        if (claimed == 0) {
+        if (transactionTemplate == null) {
+            // fail-closed：执行退款必须有能力开启独立事务（认领段先提交），
+            // 否则无法保证"链上出款不在 DB 事务内"这一资金安全前提。
             throw new IllegalStateException(
-                    "refund is not claimable for execution (not approved or already executing/executed): id="
-                            + refundId);
+                    "transaction support is not configured; refund execution refused (fail-closed)");
         }
-        RefundRequest request = refundRequestRepository.findById(refundId)
-                .orElseThrow(() -> new IllegalStateException(
-                        "refund request disappeared after claim: " + refundId));
 
-        try {
-            String txHash = executeOnChain(request);
-            request.setChainTxHash(txHash);
-            request.setStatus(RefundRequest.RefundStatus.EXECUTED);
-            request.setExecutedAt(LocalDateTime.now());
-
-            // P0-1 修复（v2.27.0）：退款执行成功后将订单状态迁移到 REFUNDED，
-            // 防止同一订单被无限次重复放款。OrderStateMachine 支持 PAID → REFUNDED 迁移。
-            PaymentOrder order = paymentOrderRepository.findById(request.getOrderId())
+        // ── 第一段（独立事务，先提交）：CAS 认领 APPROVED → EXECUTING ──────────────
+        // 认领必须先于链上出款且独立提交：即使后续链上出款或结果落库失败，
+        // "已被这笔执行认领"这一事实也不会回滚。原实现把认领、链上出款、结果落库
+        // 放在同一个大事务里——出款成功后的 commit 失败会连认领一起回滚，
+        // 重试即可造成二次打款。
+        RefundRequest claimed = transactionTemplate.execute(status -> {
+            int claimedRows = refundRequestRepository.claimForExecution(refundId, LocalDateTime.now());
+            if (claimedRows == 0) {
+                throw new IllegalStateException(
+                        "refund is not claimable for execution (not approved or already executing/executed): id="
+                                + refundId);
+            }
+            return refundRequestRepository.findById(refundId)
                     .orElseThrow(() -> new IllegalStateException(
-                            "Order not found after refund execution: orderId=" + request.getOrderId()));
-            OrderStateMachine.transition(order, PaymentOrder.OrderStatus.REFUNDED);
-            paymentOrderRepository.save(order);
+                            "refund request disappeared after claim: " + refundId));
+        });
 
-            log.info("Refund executed: refundId={}, txHash={}", refundId, txHash);
-            audit("REFUND_EXECUTED", request, "txHash=" + txHash);
+        // ── 第二段（无事务）：链上退款。不可逆的外部调用不得待在 DB 事务内 ─────────
+        String txHash;
+        try {
+            txHash = executeOnChain(claimed);
         } catch (RuntimeException e) {
-            request.setStatus(RefundRequest.RefundStatus.FAILED);
-            request.setRejectionReason("execution failed: " + e.getMessage());
-            log.error("Refund execution failed: refundId={}", refundId, e);
-            audit("REFUND_EXECUTION_FAILED", request, "error=" + e.getMessage());
+            // 出款确定未发生（通道失败/参数校验失败）：独立事务落 FAILED
+            markFailedAndAudit(refundId, claimed, e);
+            return refundRequestRepository.findById(refundId).orElse(claimed);
         }
-        return refundRequestRepository.save(request);
+
+        // ── 第三段（独立事务）：把"链上已出款"落库为 EXECUTED ────────────────────
+        RefundRequest executed;
+        try {
+            executed = transactionTemplate.execute(status -> {
+                int updated = refundRequestRepository.markExecuted(refundId, txHash, LocalDateTime.now());
+                if (updated == 0) {
+                    throw new IllegalStateException(
+                            "refund state changed while finalizing execution: id=" + refundId);
+                }
+                return refundRequestRepository.findById(refundId)
+                        .orElseThrow(() -> new IllegalStateException(
+                                "refund request disappeared after finalize: " + refundId));
+            });
+        } catch (RuntimeException e) {
+            // 链上已出款但落库失败：单据停留在 EXECUTING，结果未知。
+            // 此处不得改状态、不得自动重试（二次打款风险）；RefundExecutionReconciler
+            // 会在超时后发出人工核对告警。
+            audit("REFUND_FINALIZE_FAILED_STUCK", claimed,
+                    "txHash=" + txHash + ", error=" + e.getMessage());
+            log.error("CRITICAL: refund executed on-chain but DB finalize failed; refund stays "
+                    + "EXECUTING for manual verification: refundId={}, txHash={}", refundId, txHash, e);
+            throw e;
+        }
+
+        log.info("Refund executed: refundId={}, txHash={}", refundId, txHash);
+        audit("REFUND_EXECUTED", executed, "txHash=" + txHash);
+
+        // 订单终态迁移（独立事务，best-effort）：超退防线不依赖订单状态
+        // （sumPendingRefundsByOrderId 已计入 EXECUTED），失败不构成资金风险但必须可追查。
+        transitionOrderToRefunded(claimed.getOrderId(), refundId, claimed);
+        return executed;
+    }
+
+    /** 出款确定未发生时的失败落库（独立事务；审计旁路，任何异常不阻断流程）。 */
+    private void markFailedAndAudit(Long refundId, RefundRequest claimed, RuntimeException cause) {
+        String reason = "execution failed: " + cause.getMessage();
+        try {
+            transactionTemplate.executeWithoutResult(status -> {
+                int updated = refundRequestRepository.markFailed(refundId, reason, LocalDateTime.now());
+                if (updated == 0) {
+                    log.warn("refund not in EXECUTING while marking failed (state moved): refundId={}", refundId);
+                }
+            });
+        } catch (RuntimeException persistError) {
+            log.error("failed to persist FAILED status for refund: refundId={}", refundId, persistError);
+        }
+        log.error("Refund execution failed: refundId={}", refundId, cause);
+        audit("REFUND_EXECUTION_FAILED", claimed, "error=" + cause.getMessage());
+    }
+
+    /** 执行成功后把订单迁移到 REFUNDED（独立事务，best-effort，可追查）。 */
+    private void transitionOrderToRefunded(Long orderId, Long refundId, RefundRequest claimed) {
+        try {
+            transactionTemplate.executeWithoutResult(status -> {
+                PaymentOrder order = paymentOrderRepository.findById(orderId)
+                        .orElseThrow(() -> new IllegalStateException(
+                                "Order not found after refund execution: orderId=" + orderId));
+                if (order.getStatus() == PaymentOrder.OrderStatus.REFUNDED) {
+                    // 幂等：同一订单的多笔（部分）退款，第一笔已把订单置为终态
+                    return;
+                }
+                OrderStateMachine.transition(order, PaymentOrder.OrderStatus.REFUNDED);
+                paymentOrderRepository.save(order);
+            });
+        } catch (RuntimeException e) {
+            log.error("Refund EXECUTED but order transition to REFUNDED failed: refundId={}, orderId={}",
+                    refundId, orderId, e);
+            audit("REFUND_ORDER_TRANSITION_FAILED", claimed,
+                    "orderId=" + orderId + ", error=" + e.getMessage());
+        }
     }
 
     @Override

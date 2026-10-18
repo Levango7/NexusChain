@@ -79,7 +79,7 @@ public class TransactionPool implements org.nexus.common.TransactionPool {
     @Override
     public List<Transaction> get(int page, int size) {
         return cache.asMap().values().stream()
-                .skip(page * size)
+                .skip((long) page * size)
                 .limit(size)
                 .collect(Collectors.toList());
     }

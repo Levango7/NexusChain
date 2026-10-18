@@ -73,4 +73,9 @@ public class HexBytes {
         HexBytes hexBytes = (HexBytes) o;
         return Arrays.equals(bytes, hexBytes.bytes);
     }
+
+    @Override
+    public int hashCode() {
+        return Arrays.hashCode(bytes);
+    }
 }

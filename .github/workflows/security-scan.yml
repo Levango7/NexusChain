@@ -19,7 +19,8 @@ on:
     branches: [master]
   # 门禁前移（2026-09-29）：原先只有 push master + 周 cron —— 密钥泄露/依赖漏洞要等合进
   # master 才被发现，对合并零约束力。现 PR 也跑轻量子集并阻断；重子集（镜像扫描矩阵、
-  # ZAP DAST、OWASP DC）见各自 if，仍只在 push/cron 执行以控制 PR 时长。
+  # ZAP DAST）见各自 if，仍只在 push/cron 执行以控制 PR 时长；OWASP DC 例外——
+  # 「永远上报」已于 2026-10-19 转正（同仓库 PR 亦真跑，见该 job 注释与策略文档）。
   pull_request:
     branches: [master]
   schedule:
@@ -61,6 +62,10 @@ jobs:
           scan-ref: .
           severity: CRITICAL,HIGH,MEDIUM,LOW
           skip-dirs: build,out,target,.gradle,gradle,node_modules,jdk17,jdk-provision,.codeartsdoer
+          # 2026-10-18：SARIF/JSON 步与阻断步对齐豁免白名单（此前 .trivyignore
+          # 只在阻断步生效，已按政策处置的 CVE 仍会污染 Security tab 与分诊 JSON；
+          # Docker 扫描 job 的 SARIF 步早已带此参数，属遗漏对齐）。
+          trivyignores: .trivyignore
           format: sarif
           output: trivy-fs-results.sarif
           exit-code: 0
@@ -80,6 +85,8 @@ jobs:
           scan-ref: .
           severity: CRITICAL,HIGH,MEDIUM,LOW
           skip-dirs: build,out,target,.gradle,gradle,node_modules,jdk17,jdk-provision,.codeartsdoer
+          # 2026-10-18：与阻断步对齐豁免白名单（分诊 JSON 应与阻断判定同口径）。
+          trivyignores: .trivyignore
           format: json
           output: trivy-fs-results.json
           exit-code: 0
@@ -152,6 +159,9 @@ jobs:
           - nexus-oracle
           - mpc-engine
           - zk-groth16-service
+          # 2026-10-18：补 nexus-explorer（ci.yml docker-build 矩阵早已包含，
+          # 本矩阵注释声称"保持一致"但实际遗漏——explorer 镜像从未被 Trivy 扫描）。
+          - nexus-explorer
     steps:
       - name: Checkout 代码
         uses: actions/checkout@v5
@@ -370,18 +380,22 @@ jobs:
   # ============================================================
   owasp-dependency-check:
     timeout-minutes: 25  # 观测峰值 7.4 min
-    # ⚠️ 「永远上报」试运行（TEMP：2026-10-01 起，评估截止 2026-10-15）——
-    # 目的：实测本 job 在 **PR 上真跑并上报真实状态** 的成本 / 稳定性 / 误报，为
-    # 「是否设为 required check」提供数据（审计 §13.10、策略文档「永远上报试运行」小节）。
+    # ✅ 「永远上报」已转正（2026-10-19 决议「完善」；试运行 2026-10-01 ~ 10-15 评估通过）——
+    # 下面这个 if 即**最终形态**，不再回退（回退会同时破坏 required 语义，见策略文档历史注记）。
     # 语义：
-    #   - 同仓库 PR：真跑全量扫描（依赖图 + NVD）→ 门禁结论在**并进 master 之前**就可见；
-    #   - fork PR：仍**跳过**（无 NVD_API_KEY secret，5 秒硬红会被误读为代码问题），
-    #     缺口在 checks 列表里如实显示为 skipped（**不伪装成绿**）；
+    #   - 同仓库 PR：真跑全量扫描（依赖图 + NVD）→ 门禁结论在**并进 master 之前**就可见
+    #     （本 job 已列于 required contexts，PR 阶段即拦截 SCA 回归）；
+    #   - fork PR：跳过（无 NVD_API_KEY secret），checks 列表如实显示 skipped（**不伪装成
+    #     绿**）；本仓为单一 owner（User 账号）无 fork PR 实际流量；未来若出现 fork 协作，
+    #     先实测「skipped 对 required check 的判定」再放行（注意：required × 永不产生状态
+    #     = 永久 pending 卡死，这是本仓踩过的形态，教训全文见策略文档）；
     #   - push master / 周 cron / workflow_dispatch：与以前一致。
-    # 回退（评估不通过时逐字还原）：
-    #   1) 把下面 if 改回单行 `if: github.event_name != 'pull_request'  # PR 不跑`；
-    #   2) 删除紧随 Setup JDK 之后的「计算 NVD 缓存键」「缓存 NVD 漏洞库」两步；
-    #   3) 同步策略文档「执行位置」表项。步骤见 docs/dependency-check-update-policy.md。
+    # 评估数据（2026-10-17 对最近 26 次 run 的逐次计量）：min 2.1 / 中位 6.0 / max 20.4
+    # 分钟；25 success + 1 cancelled（唯一红 = 25.3 分钟被 timeout 25 截断，属 NVD 取数
+    # 长尾，非扫描结论）→ 热缓存 ≤10 分钟通过线达成、失败可归因；周轮换缓存未挤爆配额。
+    # 配套保留：NVD 缓存两步（下方，PR 真跑的成本前提）；时长韧性（timeout 25→40 +
+    # 步骤级 33m 截断与 rc 分级）由分支 ci/dc-nvd-timeout（缺陷 #53）携带，合并时并收。
+    # 结论文档：docs/dependency-check-update-policy.md「转正结论」节。
     if: >-
       github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository
@@ -413,7 +427,7 @@ jobs:
           java-version: '17'
           cache: gradle
 
-      # === 「永远上报」试运行配套（TEMP，2026-10-01 ~ 2026-10-15，见 job 级注释）===
+      # === PR 恒上报的缓存配套（2026-10-19 转正后**保留**，勿删；见 job 级注释）===
       # 缓存 NVD 漏洞库目录（根 build.gradle：dependencyCheck.data.directory =
       # GRADLE_USER_HOME/dependency-check-data）。不缓存时每次全量拉取：2026-10-01 实测
       # 冷启动 46m05s（独占）~ 3h03m（与 master 侧扫描并发抢 NVD 配额）——PR 上不可接受；
@@ -571,7 +585,7 @@ jobs:
   # 排除测试代码（spotbugsTest.enabled=false）和 protobuf 生成代码
   # ============================================================
   sast-spotbugs:
-    timeout-minutes: 15  # 观测峰值 2.6 min
+    timeout-minutes: 25  # 批次⑦起含 6 个 composite build 的编译+扫描（此前观测峰值 2.6 min；composite 增量本机实测约 2 min）
     name: SAST - SpotBugs + FindSecBugs
     runs-on: ubuntu-26.04
     permissions:
@@ -677,6 +691,33 @@ jobs:
           # 豁免清单：mpc-engine/.cargo/audit.toml——cargo-audit 的默认发现路径
           # （.cargo/audit.toml，同 ~/.cargo/audit.toml 机制）。
           # 注：cargo-audit v0.22 无 --config 参数（此前误用导致 CI 失败）。
+          cargo audit
+
+  # ============================================================
+  # 4.5b Rust 依赖安全扫描（观察期）：zk-groth16-service
+  # -----------------------------------------------------------------------------
+  # 2026-10-18 补：zk-groth16-service 与 mpc-engine 同属密码学 Rust 组件，但此前
+  # RustSec 覆盖只写了 mpc-engine。按本仓「新门禁先观察、再转阻断」惯例，本 job
+  # 先独立运行（**不列入 required checks**），观察数个发布周期后再提拔为阻断。
+  # ============================================================
+  cargo-audit-zk:
+    timeout-minutes: 15
+    name: Cargo Audit (zk-groth16-service)
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v5
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo audit（zk-groth16-service）
+        working-directory: zk-groth16-service
+        run: |
+          cargo install cargo-audit --locked
+          # 豁免清单（如需）：zk-groth16-service/.cargo/audit.toml（默认发现路径）。
           cargo audit
 
   # ============================================================

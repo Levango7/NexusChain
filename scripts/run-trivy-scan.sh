@@ -117,7 +117,9 @@ if [[ "$MODE_DOCKER" == true ]]; then
     fi
     printf '\n%s--- %s --%s\n' "$C_CYAN" "$module" "$C_RESET"
     IMAGE_TAG="${module}:local-scan"
-    if ! docker build -t "$IMAGE_TAG" "./$module" 2>/dev/null; then
+    # 2026-10-18：上下文改 repo 根 + -f 指定 Dockerfile（与 CI trivy 矩阵/发布链
+    # 同一约定；Java 模块 Dockerfile 依赖根级 gradlew/build.gradle/project()）。
+    if ! docker build -t "$IMAGE_TAG" -f "$module/Dockerfile" . 2>/dev/null; then
       printf '%s[FAIL]%s %s 镜像构建失败\n' "$C_RED" "$C_RESET" "$module"
       EXIT_CODE=1
       continue

@@ -119,7 +119,7 @@ public class PeersCache {
         List<PeerImpl> res = getPeers().collect(Collectors.toList());
         Random rand = new Random();
         while (res.size() > 0 && res.size() > limit) {
-            int idx = Math.abs(rand.nextInt()) % res.size();
+            int idx = rand.nextInt(res.size());
             res.remove(idx);
         }
         return res;

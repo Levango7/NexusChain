@@ -1,0 +1,36 @@
+# cargo-audit 豁免白名单（2026-10-18，zk RustSec 观察 job 增设时入册）
+# ============================================================================
+# 处置原则与 mpc-engine/.cargo/audit.toml 一致：仅豁免「上游依赖锁定 / 无可用
+# 修复版本」的 advisory；可修复项一律升级（本轮已 cargo update -p h2
+# 0.4.15 → 0.4.20，RUSTSEC-2026-0258 随版本消除）。豁免项均附上游锁定依据与
+# 利用面分析，跟踪上游发版后移除。
+
+[advisories]
+ignore = [
+    # tracing-subscriber 0.2.25（RUSTSEC-2025-0055：日志 ANSI 转义注入）
+    # 引入链：ark-relations 0.4.0（arkworks 0.4 生态；本服务 ark-bn254 /
+    # ark-groth16 / ark-crypto-primitives / ark-snark 等全部锁 0.4 线）的
+    # `std` feature 显式包含 tracing-subscriber（^0.2, optional），经
+    # ark-crypto-primitives / ark-groth16 的 std 链激活进入依赖图
+    # （`cargo tree -e features` 实证；无法在不放弃 std 的前提下剔除）。
+    # 无同线修复：advisory 修复线 >= 0.3.20（跨 minor，breaking）；上游
+    # ark-relations 至 0.4.0 仍声明 ^0.2（crates.io 最新已到 0.6.0），升级需
+    # arkworks 0.4→0.5+ 全生态迁移（breaking API），属独立批次，届时移除本豁免。
+    # 利用面分析：advisory 触发条件为「攻击者可控文本」经 tracing-subscriber
+    # 0.2 的 Formatter 写入日志（ANSI 序列注入）。本服务全局日志由自有的
+    # tracing-subscriber 0.3.23 安装（src/main.rs:153
+    # `tracing_subscriber::fmt().with_env_filter("info").init()`，Cargo.toml
+    # 直依赖）；0.2.25 实例仅作为 ark-relations 的库依赖编译进入、无任何
+    # 初始化调用点（库不安装全局 subscriber），其 Formatter 不在活动日志路径上。
+    # 残余风险极低，记录并跟踪上游发版（cargo audit 门禁自动提醒重估）。
+    "RUSTSEC-2025-0055",
+
+    # derivative 2.2.0（RUSTSEC-2024-0388, unmaintained）
+    # 传递依赖（经 ark-crypto-primitives / ark-ec / ark-ff 0.4 链，proc-macro），
+    # 无修复版本，仅 informational 维护状态——与 mpc-engine 同项同类处置。
+    "RUSTSEC-2024-0388",
+
+    # paste 1.0.15（RUSTSEC-2024-0436, unmaintained）
+    # 传递依赖（经 ark-ff 0.4 链，proc-macro），无修复版本，仅 informational。
+    "RUSTSEC-2024-0436",
+]

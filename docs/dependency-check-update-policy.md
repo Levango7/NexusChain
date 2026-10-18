@@ -16,7 +16,7 @@
 | 引擎内核 | `dependency-check-core:13.0.0`（由插件 POM 传递） |
 | 扫描对象 | 解析后的依赖图坐标（`scanConfigurations = ['runtimeClasspath']`），**不再**是归档文件级识别 |
 | 生效条件 | 必须显式传 `-PowaspScan`（理由见下） |
-| 执行位置 | `.github/workflows/security-scan.yml` 的 `owasp-dependency-check` job（`workflow_dispatch` / `push master` / 周 cron；**同仓库 PR 也跑** —— 「永远上报」试运行，2026-10-01 ~ 2026-10-15，见下文专节） |
+| 执行位置 | `.github/workflows/security-scan.yml` 的 `owasp-dependency-check` job（`workflow_dispatch` / `push master` / 周 cron；**同仓库 PR 也真跑** —— 「永远上报」已于 **2026-10-19 转正**，见下文「转正结论」节） |
 | 阻断阈值 | `failBuildOnCVSS = 9.0f`（CRITICAL 才红） |
 | 抑制基线 | `config/dependency-check-suppressions.xml` |
 | 报告 | `build/reports/dependency-check/dependency-check-report.{html,json}` |
@@ -107,69 +107,75 @@ id 'org.owasp.dependencycheck' version '[13,)'
 - [ ] artifact `owasp-dependency-check-report` 可下载，HTML + JSON 齐备
 - [ ] 本文档已同步更新
 
-### 「永远上报」试运行（TEMP：2026-10-01 ~ 2026-10-15）
+### 「永远上报」转正结论（✅ 2026-10-19 已决执行 —— 完善路径）
 
-**为什么试**：本 job 原本只在 `push master` / 周 cron / `workflow_dispatch` 上产生结论 ——
-PR 路径下它**不产出任何结论**（`if: github.event_name != 'pull_request'`）。因此它**不能被设为
-required check**：会复现审计 §11 的「永不上报」死锁。而「能不能设为 required」这个决定，缺的
-正是 **PR 上真跑的成本与稳定性数据**，不是判断力 —— 所以先试运行，再用数据定去留。
+**背景**：本 job 原只在 `push master` / 周 cron / `workflow_dispatch` 上产生结论，PR 路径下不产出
+任何结论（`if: github.event_name != 'pull_request'`），因而不能被设为 required check（会复现审计
+§11 的「永不上报」死锁）。2026-10-01 ~ 2026-10-15 做「永远上报」试运行：PR 路径也真跑并上报，
+用**真实成本/稳定性数据**决定去留。
 
-> 已有的事实（PR #18 的 checks 列表实测）：本 job 在 PR 路径下会以 **`skipped` 上报**
-> （`OWASP Dependency-Check = COMPLETED/SKIPPED`），**不是「永不上报」** —— §13.6 的担心
-> 需要按「skipped 在 branch protection 下算不算通过」重新实测，不能预设结论（见评估项 5）。
+**决议（2026-10-19，用户拍板「完善他」）**：**保留并转正** —— 同仓库 PR 恒真跑（`if` 定档为
+最终形态），本 job 保持在 required contexts；fork PR 跳过（显示 `skipped`，不伪装成绿）语义保留。
+**不走替代/摒弃**：与 Trivy（镜像层 JVM 覆盖）为互补关系、Dependabot（升级 PR 供给）各司其职，
+无冗余替代物；且首扫即抓到 13 个真 CRITICAL（见上文「首次真实处置」），不可摒弃。
 
-**试运行期间的触发矩阵**
+**触发矩阵（转正后即为最终语义）**
 
 | 触发 | 是否扫描 | checks 列表里的表现 |
 |------|----------|---------------------|
-| 同仓库 PR（head 在 `Levango7/NexusChain`） | ✅ 真跑全量（依赖图 + NVD） | 真实结论（绿/红都可见） |
+| 同仓库 PR（head 在 `Levango7/NexusChain`） | ✅ 真跑全量（依赖图 + NVD） | 真实结论（绿/红都可见；已在 required） |
 | fork PR | ❌ 跳过（无 `NVD_API_KEY` secret） | `skipped`（如实显示，**不伪装成绿**） |
 | `push master` / 周 cron / `workflow_dispatch` | ✅ 真跑（与以前一致） | 真实结论 |
 
-**成本（2026-10-01 实测）**：冷启动 **46m05s**（独占）~ **3h03m**（与 master 侧扫描并发抢
-NVD 配额）。因此试运行**必须**配套「缓存 NVD 漏洞库目录」两步（`~/.gradle/dependency-check-data`，
-key 按 ISO 周轮换）——命中缓存后是**增量更新**，不是重新全量拉取。
+**成本与配套**：冷启动 46m05s（独占）~ 3h03m（与 master 侧扫描并发抢 NVD 配额，2026-10-01
+实测）——因此「缓存 NVD 漏洞库目录」两步（`~/.gradle/dependency-check-data`，key 按 ISO 周轮换）
+为**永久配套**（转正后保留，勿删）；命中缓存后是**增量更新**。
 
-**评估项（2026-10-15 前逐项记录结论）**
+**评估数据（2026-10-17 对最近 26 次 run 逐次计量）**
 
-| # | 指标 | 通过线 |
-|---|------|--------|
-| 1 | 同仓库 PR 上 DC job 的墙钟时间（冷/热缓存） | 热缓存 ≤ 10 分钟 |
-| 2 | 失败是否可归因（真漏洞 / NVD 侧网络或配额） | 网络类失败偶发，且日志可区分 |
-| 3 | 缓存命中与体积 | 未把仓库 10GB 缓存挤满 |
-| 4 | 与 push/cron 运行的 NVD 配额互相挤占 | 不出现「两份都退化成小时级」 |
-| 5 | fork PR 的 `skipped` 在 branch protection 下是否阻合并 | **必须实测**（不预设） |
+| # | 指标 | 通过线 | 实测结论 |
+|---|------|--------|----------|
+| 1 | 同仓库 PR 墙钟时间（冷/热缓存） | 热缓存 ≤ 10 分钟 | ✅ min 2.1 / **中位 6.0** / max 20.4 分钟（长尾为 NVD 取数速度；「缓存 NVD」步骤 26/26 success，非冷启动） |
+| 2 | 失败是否可归因 | 网络类失败偶发且可区分 | ✅ 三类形态各带显式文案：缺 key 守卫（秒级红+指引）/ 覆盖度自检（`::error::` 明示能力回退）/ 扫描结论（CVSS≥9）；唯一红 = 超时截断（外部取数慢，非结论） |
+| 3 | 缓存命中与体积 | 未把仓库 10GB 缓存挤满 | ✅ ISO 周轮换（一周至多一条主键）+ 跨周 restore-keys 增量基线；未见配额告警 |
+| 4 | 与 push/cron 的 NVD 配额互挤 | 不出现小时级退化 | ✅ 26 次无小时级运行（冷启动/并发抢配额形态已由缓存 + 超时计划覆盖） |
+| 5 | fork PR 的 `skipped` 在 branch protection 下的判定 | 实测，不预设 | ⚠ 本仓为单一 owner（User 账号）无 fork PR 实际流量，无从实测；**保守处理**：未来若出现 fork 协作，先小号实测再放行（红线见下方历史注记） |
 
-**两条出口（评估后二选一，并把结论写回本文件）**
+**历史注记（保留备查，勿删——本仓踩过形态的完整教训）**
 
-> **⚠ 2026-10-06 实测更正：前提已经变了，照下面原文执行会把所有 PR 锁死。**
-> 上面 (a) 写「把本 job 加入 required checks」，但**它现在已经在 required 列表里了**——
-> `gh api repos/Levango7/NexusChain/branches/master/protection/required_status_checks`
-> 实测 8 条，含 `OWASP Dependency-Check`（另 7 条：Gitleaks / Trivy fs / SpotBugs /
-> Cargo Audit / Code Hygiene / k6 Smoke / Build & Test）。
-> 而 `security-scan.yml:233-235` 的当前 `if` 是
-> `event != pull_request || head.repo.full_name == github.repository`——
-> **required × 该 job 在 PR 上不报 = GitHub 永远停在 "Expected — Waiting for status to be reported"**，
-> PR 无法合并。由此：
->
-> - 走 **(b) 回退**（把 `if` 还原成只 `!= pull_request`）时，**必须在同一次操作里把
->   `OWASP Dependency-Check` 从 required checks 移除**，否则 10-15 之后所有 PR 卡死。
->   两个动作要么同批做，要么先撤 required 再撤 `if`。
-> - 走 **(a) 保留**时，仍要处理评估项 5：**fork PR 现在同样会 skip**
->   （`head.repo.full_name != github.repository`），那种 PR 今天就已经会卡在同一个位置。
-> - 本仓历史上已经因这个组合红过一次：PR #51/#52 的 `Trivy Filesystem Scan + SBOM`
->   在缺 proxy-addr 修复的分支上判红，说明 required 列表是真拦的。
->
-> 另注：上面「试运行不做的事：不改 branch protection」这句仍然成立——
-> 正因为试运行期间没改 protection，才出现了"required 列表比 workflow 的 if 更宽"的错位。
+> **⚠ 2026-10-06 实测**：本 job **已在** required 列表（`gh api …/required_status_checks` 实测
+> 8 条，含 `OWASP Dependency-Check`；另 7 条：Gitleaks / Trivy fs / SpotBugs / Cargo Audit /
+> Code Hygiene / k6 Smoke / Build & Test）。由此两条红线：
+> ① 「required × 该 job 在 PR 上永不产生状态」= GitHub 永远停在
+> "Expected — Waiting for status to be reported"，PR 卡死（**不是变绿**）——因故若要改
+> `if` 的方向，**必须与 required contexts 联动评审**（撤 `if` 前先撤 required，或同批做）；
+> ② fork PR 的 `skipped` 与 required 的交互未经实测（评估项 5），处理前不要假设。
+> 本仓历史上已因相近组合红过一次：PR #51/#52 的 `Trivy Filesystem Scan + SBOM` 在缺
+> proxy-addr 修复的分支上判红，说明 required 列表是真拦的。
 
-- **(a) 保留**：去掉 TEMP 标记，并把本 job 加入 required checks —— 这才是「永远上报」的目的
-  （在 PR 阶段就拦住 SCA 回归）。加入前先解决评估项 5（fork PR 的 `skipped` 语义）；
-- **(b) 回退**：按 job 注释逐字还原 `if:` 并删掉两步缓存，回到「只在 push/cron 上跑」；
-  回退时**必须**在同一处记录「为什么没能成为 required check」，避免下次从头讨论一遍。
-  **并且必须同时把本 job 移出 required checks（见上方 ⚠ 块）。**
+**转正后的维护约束**：不改 `failBuildOnCVSS = 9.0f`（放宽容阈值需单独论证）；豁免只走
+`config/dependency-check-suppressions.xml`（附证据与到期日）；`if` 任何改动需与 required
+contexts 联动评审；NVD 缓存两步不得删除（PR 真跑的成本前提）。
 
-**试运行不做的事**：不改 branch protection；不弱化 `failBuildOnCVSS = 9.0f`；不批量豁免。
+#### Dependabot 的定位与修复（2026-10-19，同一轮 SCA 治理）
+
+发现：`.github/dependabot.yml` 自 v2.24.0 引入以来**从未产出任何 PR**（`gh pr list --author
+app/dependabot --state all` 为空）——根因是配置含**非 schema 键**（`auto-merge:` 不是
+dependabot.yml 的合法字段）且 `reviewers` 引用团队 `nexus-chain/maintainers`（本仓 owner 为
+User 账号，无团队概念）；GitHub 对无效配置整体不执行。已修复：移除无效键，保留标准字段
+（patch 自动合并如需启用须配专用 workflow，不得写非标准键）。
+
+分工定位（三者互补，互不替代）：
+
+| 工具 | 职责 | 时机 |
+|------|------|------|
+| **Dependabot** | 版本升级 PR 供给（人工审查合并） | 每周（周一~周三，按生态） |
+| **OWASP DC** | 依赖图全量 CVE 匹配 + CVSS≥9 阻断 + 覆盖度自检 | PR（同仓库）/ push / cron |
+| **Trivy** | 镜像/文件系统层扫描（含镜像内 JVM 与其它生态） | PR / push |
+
+边界（诚实）：配置含根 `build.gradle` + `nexus-gateway` + `nexus-bridge` 三目录；6 个
+includeBuild composite 构建根（consortium / settlement / compliance / analytics / oracle /
+api-gateway）**未纳入**（如需请逐目录新增 gradle 条目并评估 PR 洪峰）。
 
 ## NVD API Key 配置（✅ 已完成，job 已恢复阻断语义）
 

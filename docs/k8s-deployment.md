@@ -122,18 +122,19 @@ scoop install kind kubectl helm
 
 | 镜像 | 路径 | 端口 |
 |------|------|------|
-| ghcr.io/nexus/nexus-gateway | `nexus-gateway/Dockerfile` | 8080 |
-| ghcr.io/nexus/nexus-bridge | `nexus-bridge/Dockerfile` | 8084 |
-| ghcr.io/nexus/nexus-signing-service | `nexus-signing-service/Dockerfile` | 8082 |
-| ghcr.io/nexus/nexus-wallet-service | `nexus-wallet-service/Dockerfile` | 8083 |
+| ghcr.io/levango7/nexuschain/nexus-gateway | `nexus-gateway/Dockerfile` | 8080 |
+| ghcr.io/levango7/nexuschain/nexus-bridge | `nexus-bridge/Dockerfile` | 8084 |
+| ghcr.io/levango7/nexuschain/nexus-signing-service | `nexus-signing-service/Dockerfile` | 8082 |
+| ghcr.io/levango7/nexuschain/nexus-wallet-service | `nexus-wallet-service/Dockerfile` | 8083 |
 
 构建并推送到集群可访问的 registry（kind 场景见第3.3节）：
 
 命令示例：构建并推送镜像
 
 ```bash
-docker build -t ghcr.io/nexus/nexus-gateway:2.0.0 ./nexus-gateway
-docker push ghcr.io/nexus/nexus-gateway:2.0.0
+# 根上下文构建（Dockerfile 依赖根级 gradlew/settings.gradle），-f 指定模块 Dockerfile
+docker build -t ghcr.io/levango7/nexuschain/nexus-gateway:v2.74.0 -f nexus-gateway/Dockerfile .
+docker push ghcr.io/levango7/nexuschain/nexus-gateway:v2.74.0
 # 其余 3 个服务同理
 ```
 
@@ -170,7 +171,7 @@ kubectl cluster-info --context kind-nexus-chain
 
 ### 3.3 启动本地镜像 registry
 
-kind 默认从公网拉取镜像。为加速本地联调，启动一个 registry 容器并通过 containerd 配置重定向 `ghcr.io/nexus` 到本地 registry：
+kind 默认从公网拉取镜像。为加速本地联调，启动一个 registry 容器并通过 containerd 配置重定向 `ghcr.io` 到本地 registry：
 
 命令示例：启动并联通本地 registry
 
@@ -182,11 +183,11 @@ docker run -d --restart=always --name kind-registry -p 5000:5000 registry:2
 docker network connect kind kind-registry
 
 # 构建并推送（tag 用 registry:5000 前缀）
-docker build -t registry:5000/nexus-gateway:2.0.0 ./nexus-gateway
-docker push registry:5000/nexus-gateway:2.0.0
+docker build -t registry:5000/levango7/nexuschain/nexus-gateway:v2.74.0 -f nexus-gateway/Dockerfile .
+docker push registry:5000/levango7/nexuschain/nexus-gateway:v2.74.0
 ```
 
-`kind-config.yaml` 已注入 containerd 镜像重定向配置，集群内 `ghcr.io/nexus/nexus-gateway` 的拉取会自动转发到 `registry:5000/nexus-gateway`。
+`kind-config.yaml` 已注入 containerd 镜像重定向配置，集群内 `ghcr.io/levango7/nexuschain/nexus-gateway` 的拉取会自动转发到 `registry:5000/levango7/nexuschain/nexus-gateway`。
 
 ### 3.4 验证集群就绪
 

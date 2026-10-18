@@ -13,11 +13,17 @@ on:
     paths:
       - 'deploy/k8s/**'
       - 'deploy/helm/**'
+      # 2026-10-18：kustomize 与 monitoring 资产同样参与部署路径，此前改动
+      # 不触发本校验（与文件头"发现双路径漂移"的目的不符）。
+      - 'deploy/kustomize/**'
+      - 'deploy/monitoring/**'
   pull_request:
     branches: [master]
     paths:
       - 'deploy/k8s/**'
       - 'deploy/helm/**'
+      - 'deploy/kustomize/**'
+      - 'deploy/monitoring/**'
   # 手动触发（2026-10-02 新增）：本 workflow 的 paths 过滤使其在「只改 .github/」的
   # PR 上不会运行 —— Ubuntu 26.04 迁移预演（PR #26）因此无法取到本 job 的实测数据。
   # 补 workflow_dispatch 后可在任意 runner 版本上单独取证 helm lint + kubeconform。
@@ -92,7 +98,7 @@ jobs:
         with:
           version: 'v3.14.0'
 
-      # P2-C3: yq 用于解析 YAML 的 kind/metadata.name/image 字段以做精确匹配与 diff
+      # P2-C3: yq 用于解析 YAML 的 kind/metadata.name/image/replicas 字段以做精确匹配与 diff
       - name: Install yq
         # 2026-10-11 韧性：curl 加内建重试，吸收发布站瞬时抖动。
         run: |
@@ -152,17 +158,20 @@ jobs:
           kubeconform -strict -kubernetes-version 1.28.0 -ignore-missing-schemas deploy/k8s/*.yml
 
       # P2-C3: 用 diff -u 做 Helm 渲染产物与静态清单的实际 YAML 对比。
-      # 策略（2026-08-29 审计修复）：
-      #   1. helm template 渲染全部资源到 /tmp/helm-rendered/（--set 注入与
-      #      静态清单一致的 registry/镜像 tag——原 --set global.image.tag
-      #      不被 chart 消费（chart 读取 image.tag | global.env），渲染 tag
-      #      恒为 staging，与静态清单 2.1.0 结构性必然不一致）
+      # 策略（2026-08-29 审计修复；2026-10-18 批次②更新）：
+      #   1. helm template 渲染全部资源到 /tmp/helm-rendered/（--set 注入 registry
+      #      与镜像 tag——原 --set global.image.tag 不被 chart 消费（chart 读取
+      #      image.tag | global.env），渲染 tag 恒为 staging，与静态清单结构性
+      #      不一致；批次②起 tag 从根 build.gradle 单一真源推导（vX.Y.Z），
+      #      静态清单同口径由 check-version-consistency.sh 断言 8 把守）
       #   2. 对每个 deploy/k8s/*.yml，按 (kind, metadata.name) 在渲染产物中查找匹配文件
       #   3. 完整 YAML diff 差异仅写入报告（WARN）——静态清单与 Helm 模板
       #      本就存在合法差异（helm 标签体系/探针/基础设施清单），整文件
       #      对比作为门禁会使 CI 永远漂移变红，失去信号价值
-      #   4. 关键属性（image）不一致仍立即 exit 1（阻断）——镜像版本漂移
-      #      是两者之间唯一"部署了什么"级别的实质漂移
+      #   4. 关键属性（image / replicas）不一致立即 exit 1（阻断）——
+      #      镜像版本与副本数是两者之间"部署了什么"级别的实质漂移面。
+      #      （2026-10-18 批次③：此前注释声称比对 replicas 而实现只比
+      #      image——按声明口径补齐 replicas 真校验，见下方逐资源循环）
       # 注：CI 无真实 k8s 集群，无法 `kubectl get -o yaml`，故与静态清单对比而非集群状态。
       - name: 渲染 Helm 模板并 diff 对比静态清单
         run: |
@@ -170,16 +179,21 @@ jobs:
           echo ">>> 渲染 Helm 模板到 /tmp/helm-rendered/"
           rm -rf /tmp/helm-rendered
           mkdir -p /tmp/helm-rendered
-          # --set 参数验证：registry 与镜像 tag 与静态清单（deploy/k8s/*.yml）对齐
+          # --set 的 tag 从根 build.gradle 单一真源推导（2026-10-18 批次②）：
+          # 此前硬编码 2.1.0 手工与静态清单对齐——归版时需人肉同步第三份版本常量。
+          BASE_VERSION=$(grep -E "^[[:space:]]*version[[:space:]]*=" build.gradle | head -1 | sed "s/.*'\([^']*\)'.*/\1/")
+          if [ -z "$BASE_VERSION" ]; then echo "::error::无法从 build.gradle 解析版本号"; exit 1; fi
+          IMAGE_TAG="v${BASE_VERSION}"
+          echo ">>> 注入镜像 tag（推导自 build.gradle）= ${IMAGE_TAG}"
           helm template nexus deploy/helm \
             --set global.imageRegistry=ghcr.io/levango7/nexuschain \
-            --set nexus-gateway.image.tag=2.1.0 \
-            --set nexus-bridge.image.tag=2.1.0 \
-            --set nexus-signing-service.image.tag=2.1.0 \
-            --set nexus-wallet-service.image.tag=2.1.0 \
-            --set nexus-api-gateway.image.tag=2.1.0 \
-            --set nexus-core.image.tag=2.1.0 \
-            --set mpc-engine.image.tag=2.1.0 \
+            --set nexus-gateway.image.tag="${IMAGE_TAG}" \
+            --set nexus-bridge.image.tag="${IMAGE_TAG}" \
+            --set nexus-signing-service.image.tag="${IMAGE_TAG}" \
+            --set nexus-wallet-service.image.tag="${IMAGE_TAG}" \
+            --set nexus-api-gateway.image.tag="${IMAGE_TAG}" \
+            --set nexus-core.image.tag="${IMAGE_TAG}" \
+            --set mpc-engine.image.tag="${IMAGE_TAG}" \
             --include-crds \
             --output-dir /tmp/helm-rendered/
 
@@ -224,12 +238,24 @@ jobs:
               cat /tmp/diff-out.txt | tee -a "$DRIFT_REPORT"
             fi
 
-            # 关键属性严格校验：image 与 replicas 必须一致
+            # 关键属性严格校验（2026-10-18 批次③ 起为真校验——此前注释声称
+            # 比对 image 与 replicas，实现只比 image）：image 与 replicas 必须一致
             static_images=$(yq e '.. | .image? // empty | select(. != null)' "$f" 2>/dev/null | sort || true)
             helm_images=$(yq e '.. | .image? // empty | select(. != null)' "$matched" 2>/dev/null | sort || true)
             if [ "$static_images" != "$helm_images" ]; then
               echo "[drift-CRITICAL] $kind/$name image 不一致：" | tee -a "$DRIFT_REPORT"
               diff -u <(echo "$helm_images") <(echo "$static_images") | tee -a "$DRIFT_REPORT"
+              DRIFT_FOUND=1
+            fi
+            # replicas 校验（同上，2026-10-18 批次③ 补齐）：静态清单与 Helm
+            # 默认渲染的 spec.replicas 必须一致；两边均未声明（Service/ConfigMap
+            # 等）则跳过。注意比的是【chart 默认值】——环境覆盖层
+            # （values-staging/prod）按环境取不同副本数属预期，不在比对范围
+            # （prod overlay 的副本数由"prod 覆盖层渲染断言"单独把守）。
+            static_replicas=$(yq e '.spec.replicas // ""' "$f" 2>/dev/null | head -1 || true)
+            helm_replicas=$(yq e '.spec.replicas // ""' "$matched" 2>/dev/null | head -1 || true)
+            if [ "$static_replicas" != "$helm_replicas" ]; then
+              echo "[drift-CRITICAL] $kind/$name replicas 不一致：static=${static_replicas:-未设} helm=${helm_replicas:-未设}" | tee -a "$DRIFT_REPORT"
               DRIFT_FOUND=1
             fi
           done
@@ -239,10 +265,10 @@ jobs:
           cat "$DRIFT_REPORT"
           echo "================================================="
           if [ "$DRIFT_FOUND" -ne 0 ]; then
-            echo ">>> 检测到镜像版本漂移（Helm Chart 与 deploy/k8s/ 静态清单 image 不一致），CI 失败"
+            echo ">>> 检测到关键属性漂移（Helm Chart 与 deploy/k8s/ 静态清单 image/replicas 不一致），CI 失败"
             exit 1
           fi
-          echo ">>> 无镜像版本漂移；结构差异见上方报告（仅告警）"
+          echo ">>> 无镜像/副本漂移；结构差异见上方报告（仅告警）"
 
       # PLAN-002 Step B: Kustomize overlay 验证（多环境部署入口）
       # 三套 overlay（dev/staging/prod）只做 namespace + image tag + env label

@@ -184,7 +184,7 @@ global:
   namespace: nexus
 
   # -- 镜像仓库基址
-  imageRegistry: ghcr.io/nexus
+  imageRegistry: ghcr.io/levango7/nexuschain
 
   # -- 镜像拉取策略
   imagePullPolicy: IfNotPresent
