@@ -43,7 +43,7 @@ NexusChain 是一个**基于自研区块链的支付编排平台（Payment Orche
 ### 本地构建与测试
 
 ```bash
-# 聚合测试（根构建全部 Java 子项目；composite build 模块与 integration 标签用例不含）
+# 聚合测试（根构建全部 Java 子项目 test + composite build 模块 check（含覆盖率验证）；integration 标签用例不含）
 ./gradlew testAll
 
 # 仅网关（沙箱模式，零外部依赖）

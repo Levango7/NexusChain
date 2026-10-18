@@ -570,7 +570,7 @@ jobs:
   # 排除测试代码（spotbugsTest.enabled=false）和 protobuf 生成代码
   # ============================================================
   sast-spotbugs:
-    timeout-minutes: 15  # 观测峰值 2.6 min
+    timeout-minutes: 25  # 批次⑦起含 6 个 composite build 的编译+扫描（此前观测峰值 2.6 min；composite 增量本机实测约 2 min）
     name: SAST - SpotBugs + FindSecBugs
     runs-on: ubuntu-26.04
     permissions:

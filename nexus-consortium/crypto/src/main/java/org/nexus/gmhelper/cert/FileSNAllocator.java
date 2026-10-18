@@ -24,7 +24,10 @@ public class FileSNAllocator implements CertSNAllocator {
         try {
             raf = new RandomAccessFile(snFilePath, "r");
             byte[] data = new byte[(int) raf.length()];
-            raf.read(data);
+            int read = raf.read(data);
+            if (read != data.length) {
+                throw new IOException("SN 文件读取不完整: 期望 " + data.length + " 字节, 实际读到 " + read);
+            }
             String snStr = new String(data);
             return new BigInteger(snStr);
         } finally {

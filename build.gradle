@@ -433,8 +433,20 @@ task buildAll {
 }
 
 task testAll {
-    description = '运行所有 Java 子模块的测试'
+    description = '运行所有 Java 子模块的测试（根子项目 test + composite 模块 check）'
     dependsOn subprojects.findAll { it.plugins.hasPlugin('java') }.collect { it.tasks.getByName('test') }
+    // 2026-10-18 批次⑦：composite build 模块不在 subprojects 账下——此前
+    // testAll 与 CI 对 composite 模块的口径有差（README 已是"不含"诚实表述，
+    // 但聚合任务与 CI 不一致）；现按 CI 同集接线：四个单模块构建 + consortium
+    // 三子项目均以其 check 任务（测试 + 覆盖率验证）纳入。
+    dependsOn gradle.includedBuild('nexus-settlement').task(':check')
+    dependsOn gradle.includedBuild('nexus-compliance').task(':check')
+    dependsOn gradle.includedBuild('nexus-analytics').task(':check')
+    dependsOn gradle.includedBuild('nexus-oracle').task(':check')
+    dependsOn gradle.includedBuild('nexus-consortium').task(':consortium:check')
+    dependsOn gradle.includedBuild('nexus-consortium').task(':common:check')
+    dependsOn gradle.includedBuild('nexus-consortium').task(':crypto:check')
+    dependsOn gradle.includedBuild('nexus-api-gateway').task(':check')
 }
 
 task cleanAll {
@@ -444,8 +456,21 @@ task cleanAll {
 
 // === SAST 聚合任务（P2-T7） ===
 // 运行所有子模块的 spotbugsMain，聚合安全扫描结果
+// 2026-10-18 批次⑦：原实现只覆盖根 subprojects——includeBuild 的 composite
+// 模块不在根构建项目树内，spotbugsAll 与 SAST 门禁（security-scan.yml 跑本
+// 任务 + 按 build/reports/spotbugs/main.xml 路径扫描）从两边同时漏掉它们。
+// 现以 includedBuild().task() 显式引用其 spotbugsMain（任务路径相对各自
+// 构建根；nexus-consortium 为多子项目构建，逐子项目引用）。
 task spotbugsAll {
-    description = '运行所有 Java 子模块的 SpotBugs + FindSecBugs 静态安全扫描'
+    description = '运行所有 Java 子模块的 SpotBugs + FindSecBugs 静态安全扫描（含 composite build 模块）'
     group = 'verification'
     dependsOn subprojects.findAll { it.plugins.hasPlugin('java') }.collect { it.tasks.findByName('spotbugsMain') }
+    dependsOn gradle.includedBuild('nexus-settlement').task(':spotbugsMain')
+    dependsOn gradle.includedBuild('nexus-compliance').task(':spotbugsMain')
+    dependsOn gradle.includedBuild('nexus-analytics').task(':spotbugsMain')
+    dependsOn gradle.includedBuild('nexus-oracle').task(':spotbugsMain')
+    dependsOn gradle.includedBuild('nexus-consortium').task(':consortium:spotbugsMain')
+    dependsOn gradle.includedBuild('nexus-consortium').task(':common:spotbugsMain')
+    dependsOn gradle.includedBuild('nexus-consortium').task(':crypto:spotbugsMain')
+    dependsOn gradle.includedBuild('nexus-api-gateway').task(':spotbugsMain')
 }

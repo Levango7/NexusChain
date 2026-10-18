@@ -54,18 +54,14 @@ public class TestCommunicationTool {
     // 将文件转换成Byte数组
     private static byte[] getBytesByFile(String filePath) {
         File file = new File(filePath);
-        try {
-            FileInputStream fis = new FileInputStream(file);
-            ByteArrayOutputStream bos = new ByteArrayOutputStream(1000);
+        try (FileInputStream fis = new FileInputStream(file);
+             ByteArrayOutputStream bos = new ByteArrayOutputStream(1000)) {
             byte[] b = new byte[1000];
             int n;
             while ((n = fis.read(b)) != -1) {
                 bos.write(b, 0, n);
             }
-            fis.close();
-            byte[] data = bos.toByteArray();
-            bos.close();
-            return data;
+            return bos.toByteArray();
         } catch (Exception e) {
             log.error("TestCommunicationTool: uncaught exception", e);
         }

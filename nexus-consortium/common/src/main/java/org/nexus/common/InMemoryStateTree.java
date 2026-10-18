@@ -65,7 +65,7 @@ public class InMemoryStateTree<T extends ForkAbleState<T>> implements StateTree<
     }
 
     public Optional<T> get(String id, byte[] where) {
-        if (root.getHash().equals(new HexBytes(where))) {
+        if (Arrays.equals(root.getHash().getBytes(), where)) {
             // WARNING: do not use method reference here State::clone
             return Optional.ofNullable(root.get().get(id)).map(s -> s.clone());
         }

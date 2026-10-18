@@ -1,21 +1,36 @@
+plugins {
+    // 2026-10-18 批次⑦：composite 模块 SpotBugs 接入——类路径在此声明
+    // （与根构建 5.1.5 同版本），子项目在 afterEvaluate 内 apply。
+    id 'com.github.spotbugs' version '5.1.5' apply false
+}
+
 apply from: 'config.gradle'
 
-subprojects {
-    apply plugin: 'jacoco'
+subprojects { proj ->
+    proj.apply plugin: 'jacoco'
 
-    jacoco {
+    proj.jacoco {
         toolVersion = "0.8.11"
     }
 
-    afterEvaluate {
-        if (plugins.hasPlugin('java')) {
-            jacocoTestReport {
+    proj.afterEvaluate {
+        if (proj.plugins.hasPlugin('java')) {
+            // 2026-10-18 批次⑦：SpotBugs + FindSecBugs（共享配置脚本，与根
+            // 构建同口径；SAST 门禁此前对 includeBuild 子项目空转）。
+            // 实测教训：嵌套闭包内必须显式 proj 接收者——隐式 `apply from:`
+            // 会沿 owner 链解析到 consortium 根项目（无 java 插件、无
+            // compileOnly 配置），在共享脚本里炸 "Could not find method
+            // compileOnly()"。全块统一显式接收者，消除解析歧义。
+            proj.apply plugin: 'com.github.spotbugs'
+            proj.apply from: "${proj.rootDir}/../gradle/composite-spotbugs.gradle"
+
+            proj.jacocoTestReport {
                 reports {
                     xml.required = true
                     html.required = false
                 }
             }
-            jacocoTestCoverageVerification {
+            proj.jacocoTestCoverageVerification {
                 violationRules {
                     rule {
                         limit {
@@ -28,7 +43,7 @@ subprojects {
                     }
                 }
             }
-            check.dependsOn jacocoTestCoverageVerification
+            proj.check.dependsOn proj.jacocoTestCoverageVerification
         }
     }
 }
