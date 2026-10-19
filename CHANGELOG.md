@@ -4,6 +4,33 @@
 
 ## [Unreleased]
 
+### 状态执行接线：状态根不一致强制处置（PLAN-014 Phase 2 / PLAN-012 A-3）
+
+**背景**：Phase 1 的观察位只记录不一致（ERROR + 计数），不阻断不回滚。本批把处置
+升级为可配置：默认 `observe` 保持灰度，`rollback` 执行回滚 + 对端拉黑；最终化护栏
+（ADR-030）始终优先。
+
+- 新增配置 `nexus.core.state-root-mismatch.action=observe|rollback`（默认 `observe`，
+  环境变量 `NEXUS_STATE_ROOT_MISMATCH_ACTION`；未知值回落 observe）。
+- 新增 `StateRootMismatchEvent`：`StateReplayManager` 在写锁内发布；新增
+  `StateRootMismatchHandler`（`@Async @EventListener`）异步消费——避免在 StateDB 写锁
+  内重入回滚（历史 `pendingBlock` 自旋问题）。
+- rollback 动作：`StateDB.executeUnderWriteLock` 内完成 `rollbackTo(h-1)` +
+  `AccountDB/IncubatorDB.deleteFromHeight(h)`（新增删除 API），随后拉黑不一致高度区间
+  的来源对端；观测计数 `mismatchEvents` / `rollbacksExecuted` / `finalityRejections` /
+  `blacklistedPeers`。
+- 新增 `BlockOriginTracker`（有界 4096 条 LRU）：`SyncManager.onBlocks/onProposal`
+  入口记录 区块哈希 → (高度, 对端)，解决确认期无法溯源的问题；本地出块不记录。
+- 最终化护栏：不一致区块已最终化时拒绝回滚并记录 ERROR（需人工介入）；同时修复
+  `ReorgManager` epoch 长度硬编码 32 → 读取 `nexus.finality.epoch-length`。
+- 回归：新增 `StateRootMismatchHandlerTest`（6）/ `BlockOriginTrackerTest`（4）+
+  `ReorgManagerTest` 增补配置 epoch 用例 + `StateReplayManagerTest` 事件发布断言，
+  本地 19/19 通过。
+- **诚实边界**：回滚沿用既有语义——只回内存链缓存 + 状态行，不删除已持久化区块头
+  （由更长分叉链覆盖写入）；来源追踪不持久化（重启后旧块无法归因）；拉黑为内存态
+  （约 11 分钟衰减，且可能误伤仅转发后续区块的中继对端）；不做自动分叉重放，节点等待
+  更长分叉链后由 `ReorgManager` 切换；交易池未回滚。
+
 ### 状态执行接线：重放后状态根校验（PLAN-014 Phase 1 / PLAN-012 A-2）
 
 **背景**：批次⑥ 路线文档 §8 拍板（2026-10-19）将 A-2/A-3 与支付扩展执行、
