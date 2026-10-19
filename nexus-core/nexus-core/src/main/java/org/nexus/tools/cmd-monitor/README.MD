@@ -2,10 +2,10 @@
 
 ## Quick start
 
-- install dependencied
+- install dependencies（Node 24+ / npm，lockfile 确定性安装）
 
 ```bash
-yarn 
+npm ci
 ```
 
 - 计算平均出块时间

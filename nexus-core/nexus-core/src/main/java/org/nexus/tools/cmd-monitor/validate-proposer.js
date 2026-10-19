@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/env node
 
 const axios = require('axios/index')
 
@@ -9,8 +9,6 @@ const validators = [
     '5b0a4c7e31c3123db40a4c14200b54b8e358294b',
     '15f581858068ed39f7e8cf8e9fdec5dfdae9cf15'
 ]
-
-const
 
 axios.get("http://161.117.85.252:19585/block/1")
     .then(resp => resp.data)

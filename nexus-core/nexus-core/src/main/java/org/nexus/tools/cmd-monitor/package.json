@@ -3,14 +3,10 @@
     "@alicloud/pop-core": "^1.7.7",
     "axios": "^0.34.0",
     "commander": "^2.20.0",
-    "glob": "^7.1.4",
-    "nacl": "^0.1.3",
-    "node-schedule": "^1.3.2",
-    "pg": "^8.12.0",
-    "tweetnacl": "^1.0.1"
+    "node-schedule": "^1.3.2"
   },
   "name": "cmd-monitor",
-  "description": "## Quick start",
+  "description": "nexus 节点监控 CLI（出块间隔 / 出块统计 / 离线告警）",
   "version": "1.0.0",
   "main": "calc-interval.js",
   "devDependencies": {},
