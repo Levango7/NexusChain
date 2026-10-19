@@ -3,6 +3,7 @@ package org.nexus.core;
 import org.nexus.core.payment.BridgeTransaction;
 import org.nexus.core.payment.PaymentChannel;
 import org.nexus.core.payment.StableCoinPosition;
+import org.nexus.db.SchemaMeta;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
@@ -25,6 +26,12 @@ import java.util.concurrent.ConcurrentHashMap;
 public class JdbcPaymentStateStore implements PaymentStateStore {
 
     private static final Logger log = LoggerFactory.getLogger(JdbcPaymentStateStore.class);
+
+    /** schema 版本（批次⑥ 第 7 项）：破坏性变更必须递增并携带迁移脚本（docs/db-schema-versioning.md）。 */
+    public static final int SCHEMA_VERSION = 1;
+
+    /** 版本登记用 store 标识。 */
+    static final String STORE_NAME = "payment_state";
 
     /**
      * 内存缓存 TTL（P1，2026-09-17 修复）。
@@ -69,6 +76,7 @@ public class JdbcPaymentStateStore implements PaymentStateStore {
 
     @PostConstruct
     public void init() {
+        SchemaMeta.ensure(jdbc, STORE_NAME, SCHEMA_VERSION);
         jdbc.execute("CREATE TABLE IF NOT EXISTS payment_channels ("
             + "channel_id VARCHAR(128) PRIMARY KEY, "
             + "participant1 VARCHAR(128), participant2 VARCHAR(128), "

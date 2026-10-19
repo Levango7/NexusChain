@@ -1,6 +1,7 @@
 package org.nexus.consensus.finality.persistence;
 
 import org.nexus.consensus.pos.ValidatorRegistry;
+import org.nexus.db.SchemaMeta;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -26,6 +27,12 @@ public class ValidatorSetPersistence {
 
     private static final Logger log = LoggerFactory.getLogger(ValidatorSetPersistence.class);
 
+    /** schema 版本（批次⑥ 第 7 项）：破坏性变更必须递增并携带迁移脚本（docs/db-schema-versioning.md）。 */
+    public static final int SCHEMA_VERSION = 1;
+
+    /** 版本登记用 store 标识。 */
+    static final String STORE_NAME = "validator_set";
+
     private final JdbcTemplate jdbc;
     private final ValidatorRegistry validatorRegistry;
 
@@ -42,6 +49,7 @@ public class ValidatorSetPersistence {
             return;
         }
         try {
+            SchemaMeta.ensure(jdbc, STORE_NAME, SCHEMA_VERSION);
             jdbc.execute("CREATE TABLE IF NOT EXISTS validators_synced ("
                 + "address VARCHAR(128) PRIMARY KEY, "
                 + "public_key VARCHAR(256) NOT NULL, "
@@ -49,6 +57,10 @@ public class ValidatorSetPersistence {
                 + "updated_at BIGINT NOT NULL)");
             log.info("ValidatorSetPersistence: schema initialized");
             replay();
+        } catch (SchemaMeta.MismatchException e) {
+            // 版本不匹配必须 fail-fast（不吞没）；其余初始化异常保持既有容忍语义。
+            log.error("ValidatorSetPersistence: {} — 拒绝启动", e.getMessage());
+            throw e;
         } catch (RuntimeException e) {
             log.error("ValidatorSetPersistence init failed: {}", e.getMessage());
         }

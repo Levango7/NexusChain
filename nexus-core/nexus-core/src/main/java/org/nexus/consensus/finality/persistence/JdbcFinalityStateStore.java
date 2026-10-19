@@ -1,6 +1,7 @@
 package org.nexus.consensus.finality.persistence;
 
 import jakarta.annotation.PostConstruct;
+import org.nexus.db.SchemaMeta;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -25,6 +26,12 @@ import java.util.concurrent.ConcurrentHashMap;
 public class JdbcFinalityStateStore implements FinalityStateStore {
 
     private static final Logger log = LoggerFactory.getLogger(JdbcFinalityStateStore.class);
+
+    /** schema 版本（批次⑥ 第 7 项）：破坏性变更必须递增并携带迁移脚本（docs/db-schema-versioning.md）。 */
+    public static final int SCHEMA_VERSION = 1;
+
+    /** 版本登记用 store 标识。 */
+    static final String STORE_NAME = "finality_state";
 
     private final JdbcTemplate jdbc;
 
@@ -54,6 +61,7 @@ public class JdbcFinalityStateStore implements FinalityStateStore {
 
     @PostConstruct
     public void init() {
+        SchemaMeta.ensure(jdbc, STORE_NAME, SCHEMA_VERSION);
         jdbc.execute("CREATE TABLE IF NOT EXISTS finality_votes ("
             + "epoch BIGINT NOT NULL, checkpoint_hash VARCHAR(128) NOT NULL, "
             + "validator VARCHAR(128) NOT NULL, "

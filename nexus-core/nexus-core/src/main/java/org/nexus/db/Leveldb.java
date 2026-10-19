@@ -31,6 +31,12 @@ public final class Leveldb {
     private static final Logger log = LoggerFactory.getLogger(Leveldb.class);
     private static final Charset CHARSET = StandardCharsets.UTF_8;
 
+    /** 当前 schema 版本（批次⑥ 第 7 项）：破坏性键空间变更必须递增（docs/db-schema-versioning.md）。 */
+    public static final int SCHEMA_VERSION = 1;
+
+    /** 版本 meta 键。 */
+    public static final byte[] META_SCHEMA_VERSION_KEY = "__meta/schema_version".getBytes(StandardCharsets.UTF_8);
+
     private final File file;
     private final Options options;
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
@@ -61,7 +67,39 @@ public final class Leveldb {
         if (db != null) return;
         DBFactory factory = new Iq80DBFactory();
         db = factory.open(file, options);
+        verifySchemaVersion();
         log.info("LevelDB opened: {}", file.getAbsolutePath());
+    }
+
+    /**
+     * 写 / 校验 schema 版本 meta 键（批次⑥ 第 7 项，2026-10-19）。
+     *
+     * <p>缺失 → 以当前版本登记（首版采纳既有库）；相等 → 通过；
+     * 不相等或值损坏 → {@link SchemaMeta.MismatchException} 拒绝启动。</p>
+     */
+    private void verifySchemaVersion() {
+        byte[] raw = db.get(META_SCHEMA_VERSION_KEY);
+        if (raw == null) {
+            db.put(META_SCHEMA_VERSION_KEY, String.valueOf(SCHEMA_VERSION).getBytes(CHARSET));
+            log.info("LevelDB schema version registered: {}", SCHEMA_VERSION);
+            return;
+        }
+        int existing;
+        try {
+            existing = Integer.parseInt(new String(raw, CHARSET).trim());
+        } catch (NumberFormatException e) {
+            throw new SchemaMeta.MismatchException(
+                    "LevelDB schema version unreadable (corrupt meta key): '"
+                            + new String(raw, CHARSET) + "' — 拒绝启动");
+        }
+        if (existing == SCHEMA_VERSION) {
+            log.info("LevelDB schema version={} OK", SCHEMA_VERSION);
+            return;
+        }
+        String direction = existing < SCHEMA_VERSION ? "OLDER" : "NEWER";
+        throw new SchemaMeta.MismatchException("LevelDB schema version mismatch (DATABASE IS "
+                + direction + "): database=" + existing + ", code=" + SCHEMA_VERSION
+                + " — 见 docs/db-schema-versioning.md，拒绝启动");
     }
 
     @PreDestroy
