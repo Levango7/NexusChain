@@ -181,6 +181,9 @@ public class BasicRule implements BlockRule, TransactionRule {
             }
         }
 
+        // 注意（PLAN-014 Phase 3）：以下仅是 BasicRule 的单规则预检，不代表可上链。
+        // 完整区块/RPC 路径会被 AccountRule → TransactionCheck.TransactionFormatCheck
+        // 的 type<=15 门禁以 "Type check error" 拒绝（0x10–0x1a 当前不可上链）。
         // DID 身份注册基本验证
         if (transaction.type == Transaction.Type.IDENTITY_REGISTER.ordinal()) {
             if (transaction.amount < 0) {

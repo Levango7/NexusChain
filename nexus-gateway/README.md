@@ -90,7 +90,7 @@ SDK 对外提供 Java / TypeScript / Python / Go 四语言接入。
 
 | Method | Path | 说明 |
 |--------|------|------|
-| POST | `/api/v1/subscriptions` | 创建订阅（经签名服务提交链上 SUBSCRIPTION_AUTH 授权，失败回退为未授权订阅） |
+| POST | `/api/v1/subscriptions` | 创建订阅（经签名服务提交 **0 金额普通转账**作为授权标记；不是 `SUBSCRIPTION_AUTH` 0x1a——0x1a 当前被节点 `type<=15` 门禁拒绝；失败回退为未授权订阅） |
 | GET | `/api/v1/subscriptions/{id}` | 查询订阅 |
 | POST | `/api/v1/subscriptions/{id}/charge` | 手动扣款 |
 | POST | `/api/v1/subscriptions/{id}/cancel` | 取消订阅 |

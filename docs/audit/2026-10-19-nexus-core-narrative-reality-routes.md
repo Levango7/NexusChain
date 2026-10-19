@@ -17,7 +17,7 @@
 | 2 | "Groth16"实为 Schnorr | **真实 Groth16 已上线**（方案 C：`zk-groth16-service` Rust arkworks，Java 远程 fail-closed 对接）；本地 BouncyCastle 路径为 Schnorr 降级备胎 | 收敛（3 处架构文档漂移已修 + ADR-001 注记） | 已修 |
 | 3 | KZG 为 mock | SHA-256 模拟 + **防误声明**（`kzg-mode=real` 拒绝启动）；代码级 P3 降级声明完备 | 收敛（保持现有诚实标注，无需改动）+ 长期补齐（c-kzg/blst 绑定） | 长期项 |
 | 4 | 欺诈证明未锚定 | 单步二分 + 挑战窗 + bond/slashing 完整；但批次/挑战状态在**进程内存**，L1 客户端默认**内存模拟**（`real-l1-enabled=false`） | 收敛（对外标注"L2 内部机制 + L1 模拟"，机制真实/锚定未完成）+ 补齐（持久化 + 真实 L1） | 补齐 3–5d |
-| 5 | 0x10–0x1a 支付扩展 opcode 断层 | **验证在链、执行未接线**：类型/规则/处理器齐备，但 `PaymentTransactionProcessor.processTransaction` 生产**无调用点**（2026-08-14 已记录，本次复核依旧）；0x19/0x1a 仅日志无状态效果 | 收敛（对外标注"验证已生效 / 执行接线在途"）+ 补齐（执行接线专项，与 #1 同源） | 补齐 3–4d |
+| 5 | 0x10–0x1a 支付扩展 opcode 断层 | **类型/单规则预检存在，完整链路被门禁拒绝**（2026-10-20 修正）：`BasicRule` 预检 + 处理器逻辑齐备，但完整区块/RPC 路径被 `TransactionCheck.TransactionFormatCheck` 的 `type<=15` 门禁以 `Type check error` 拒绝，**当前不可上链**；`processTransaction` 生产无调用点，0x19/0x1a 仅日志无状态效果 | 收敛（已执行：口径/注释/门禁测试，PLAN-014 Phase 3）；"可上链/执行接线"属独立共识变更，另立项 | 已收敛（0.5–1d） |
 | 6 | nonce 无上界 | 校验点 `TransactionCheck.TransactionVerify`（区块验证 `AccountRule` 调用），无上界 | **补齐（本次已修）**：`MAX_TX_NONCE` 上界 + 回归测试 | 已修 |
 | 7 | DB 无版本化迁移 | LevelDB 无 meta 版本键；7 张 PG 表（`JdbcPaymentStateStore` 4 / `JdbcFinalityStateStore` 2 / `ValidatorSetPersistence` 1）全部 `CREATE TABLE IF NOT EXISTS`、无版本 | 补齐（设计草案见 §7，建议独立下一批） | 1–2d |
 
@@ -88,18 +88,26 @@ challenge bond + 罚没奖励 + 多挑战者冲突解决（first-valid-wins）�
 补齐＝批次/挑战状态持久化（PG/LevelDB）+ `real-l1-enabled=true` 全链路真机验证。
 （README L2 节"资产承载限制"已覆盖大方向；如需精确到"锚定未完成"，建议在此立项时补一句。）
 
-## 5. 0x10–0x1a 支付扩展 —— "验证在链、执行未接线"（收敛 + 补齐）
+## 5. 0x10–0x1a 支付扩展 —— "类型/单规则预检存在，完整链路被门禁拒绝"（已修正）
 
 **现状**：类型定义齐备（`core/account/Transaction.java:130-141`，CHANNEL_OPEN 0x10 …
-SUBSCRIPTION_AUTH 0x1a）；验证规则在链（`CompositeBlockRule` 支付扩展 `TransactionRule`
-列表 + `BasicRule:139`）；处理器实现齐备（`PaymentTransactionProcessor.processTransaction`
-分发 0x10–0x18 有逻辑、0x19/0x1a 仅日志 :156-159）。**但 `processTransaction` 生产无任何
-调用点**（全仓 prod 引用仅注释 + 测试；`AccountRule` 只调用验证不调用执行）——"执行接线"
-缺失（2026-08-14 PLAN-012 已记录："交易处理链路触发点缺失"，至今未变）。
+SUBSCRIPTION_AUTH 0x1a）；`BasicRule` 有单规则预检（`BasicRule.java:187-205`）；
+`PaymentTransactionProcessor.processTransaction` 分发 0x10–0x18 有逻辑、0x19/0x1a 仅日志
+（`:161-170`），**但 `processTransaction` 生产无任何调用点**。
 
-**收敛**：对外标注"支付扩展：类型/验证已上链，执行（状态变更）接线在途/实验性"。
-**补齐**：补"区块接受 → 支付扩展执行（processTransaction）→ 状态变更/对账"接线——
-与 #1 的状态重放属同一"状态执行接线"专项，建议一次设计、分期交付。
+**2026-10-20 修正（PLAN-014 Phase 3 侦察）**：上文"验证在链"只对 `BasicRule` 单规则成立。
+完整区块/RPC 路径先经 `AccountRule` 的 `TransactionFormatCheck`，其硬编码 `type <= 15`
+门禁（`TransactionCheck.java:119-125`）会以 `Type check error` 拒绝 0x10–0x1a；因此这些
+类型**当前不可上链**，不是"上链后不执行"。（本文档原始结论"验证在链、执行未接线"据此修正。）
+
+**风险提示**：若直接放宽门禁，`Miner.java:145` 会为每笔交易给 coinbase 记手续费，而
+`MerkleRule` 对 0x19/0x1a 无 case（不扣费、不递增 nonce）→ 凭空增发；且
+`hashMerkleState` 只承诺账户 ID + 高度，状态根发现不了（详见 PLAN-014 Phase 3 记录）。
+
+**收敛（已执行）**：修正 README / ARCHITECTURE / 本文档 / CHANGELOG 与代码注释口径；
+补 `TransactionCheckGateTest` / `PaymentExtensionBlockGateTest` 门禁回归。
+**补齐（另立项）**：若要"区块接受但不执行"的 validate-only，属共识变更（激活高度、
+费率/余额/nonce、状态根承诺、全节点升级），不能与"无共识变更"混谈。
 
 ## 6. nonce 上界 —— ✅ 本次已修（补齐）
 

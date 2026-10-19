@@ -116,7 +116,9 @@ public class SubscriptionServiceImpl implements SubscriptionService {
                 return null;
             }
 
-            // 提交 0 金额授权标记交易（SUBSCRIPTION_AUTH），签名服务签名+广播。
+            // 提交 0 金额普通转账作为订阅授权标记；注意（PLAN-014 Phase 3）：
+            // 这里调用的是 signTransfer（TRANSFER 0x01），不是 SUBSCRIPTION_AUTH（0x1a）——
+            // 0x1a 当前被节点 TransactionCheck 的 type<=15 门禁拒绝，不可上链。
             // 契约修正（2026-09-10）：Feign 返回响应 Map，经 SigningResponses 提取 txHash。
             String txHash = SigningResponses.txHash(signingServiceClient.signTransfer(
                     platformPubkey, payeePubkeyHash, BigDecimal.ZERO));
