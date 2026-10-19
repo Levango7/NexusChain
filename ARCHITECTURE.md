@@ -101,10 +101,11 @@ Blockchain is the foundational settlement layer — not the product itself. On t
   - 排序策略（`l2/sequencer/`，account nonce 升序 + priority fee 降序）
   - Gas 估算（`l2/gas/`）
 - **ZK Rollup**（`l2/` + `l2/zk/`）：ZK 证明即最终性
-  - `ZkProofSystem` 抽象（setup/prove/verify），支持未来接入 halo2/Plonk/Groth16
+  - `ZkProofSystem` 抽象（setup/prove/verify）；halo2/Plonk 按 ADR-001 冻结，Groth16 已接入（方案 C，见下）
   - `ZkCircuit` 电路抽象 + `RollupStateTransitionCircuit` 状态转换电路
   - `TrustedSetup` 可信设置多版本管理
-  - **Groth16 真实实现**（`l2/zk/groth16/`）：BouncyCastle 椭圆曲线证明系统 + R1CS 约束系统集成（`r1cs/`），setup/prove/verify 完整流程
+  - **真实 Groth16（方案 C，生产路径）**：`zk-groth16-service`（Rust arkworks，BN254 双线性配对）经 HTTP 提供真实证明；Java `DefaultZkProofSystem` 配置远程 URL 后优先对接，服务不可用即 fail-closed（不降级到 Schnorr/mock）
+  - **本地降级路径（非配对实现）**：`l2/zk/groth16/`（BouncyCastle + R1CS 集成）为 Schnorr 简化实现——仅在未配置远程服务时作为降级备胎，不具备真实配对验证的安全属性（详见 ADR-001 P5-T4/T5 与 README）
   - **mock 后端安全控制**（ZK-P2-04）：mock 证明带 "MOCK|" 前缀标记，`zk.prover.mock.allow-verify=false`（默认）时 verify 一律拒绝，防生产误用
   - plonk/halo2 按 ADR-001 决策冻结，当前降级为 groth16 后端
 

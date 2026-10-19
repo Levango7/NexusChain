@@ -4,6 +4,32 @@
 
 ## [Unreleased]
 
+### 加固：nexus-core 账户 nonce 上界（批次⑥ 先手项）
+
+**缺口**：账户 nonce 仅校验"严格大于当前值"（防重放），无上界——`Long.MAX_VALUE`
+级 nonce 可把账户钉死为"永不能再发交易"（单调递增校验恒真），并使协议内部递增
+（`StateDB.applyIncubate` 系统账户 `nonce++`）在边界回绕为负。
+
+**修复**：`TransactionCheck` 新增 `MAX_TX_NONCE = Long.MAX_VALUE - 1024`（保留 1024
+余量覆盖内部递增空间）；校验点位于区块验证链（`AccountRule` → `TransactionVerify`），
+超界返回 `Nonce out of range`。回归测试 `TransactionNonceBoundTest` 5 用例
+（上界内通过 / 上界+1 拒绝 / `Long.MAX_VALUE` 拒绝 / 既有 too-small 语义保持 / 正常递增通过）。
+
+### 文档：批次⑥ 路线文档（叙事/现实 7 项）+ 批次⑧ §8-4 回填 + 叙事对齐 4 处
+
+**背景**：2026-10-18 工程评审 §4.6 指出 nexus-core 7 项"叙事与实现脱节"（批次⑥，
+须先出路线文档再动代码）；§8-4 origin/master 历史待查明。
+
+- 新增 `docs/audit/2026-10-19-nexus-core-narrative-reality-routes.md`：7 项逐条
+  现状取证（file:line）+ "收敛声明 / 补齐实现"双路线建议 + DB schema 版本化设计草案
+  + 待拍板清单。关键澄清：支付扩展"断层"实质 = 执行层未接线（`processTransaction`
+  生产无调用点，验证规则在链上生效）；Groth16 真实路径已由 zk-groth16-service 提供，
+  本地 Schnorr 仅为降级备胎。
+- §8-4 回填：origin/master 与本地 master 同源谱系（共同根 `4b14af96`），本地 master
+  已纯 FF 对齐至 `d75a5f3f`；原"611 领先/2 提交孤儿"判断不复存在。
+- 叙事对齐：`ARCHITECTURE.md` ZK 段 ×2 处 / `docs/roadmap-unresolved.md` #6 /
+  ADR-001 P5-T4/T5 后续更新注记。
+
 ### 安全：nexus-explorer 运行镜像裁剪 npm 工具链（清 master Security Scan 红灯）
 
 **现象**：2026-10-18 Trivy 镜像矩阵补齐 nexus-explorer 后，master Security Scan 连续

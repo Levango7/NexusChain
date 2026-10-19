@@ -166,6 +166,8 @@
 
 **处理原则建议**：自研链定位是"结算基础设施"——**要么把声明收敛到实现（改名、改文档、标注实验性），要么把实现补到声明**。两者都行，但"叙述按未来、实现按现状"的缝隙就是审计/DD 时最容易被击穿的地方。批次⑥专项处理，且这是**产品/对外口径决策**，需要你参与。
 
+> **进展（2026-10-19）**：7 项逐条现状复核 + 双路线建议已出 → [`2026-10-19-nexus-core-narrative-reality-routes.md`](2026-10-19-nexus-core-narrative-reality-routes.md)；nonce 上界已修（含回归测试）；叙事对齐 4 处（ARCHITECTURE ×2 / roadmap-unresolved ×1 / ADR-001 ×1）。**待拍板**：第 2/3/4/5 项对外口径与"补齐"排期。
+
 ### 4.7 SDK / 前端 / 多语言 / 工具链
 
 - 四语言 SDK（java/js/python/go）+ explorer + devtools + demo + perf：**版本与发布链路一致性**是主要风险（与主仓版本没有联动门禁）；explorer 此前从未被 Trivy 扫描（批次①已修）。
@@ -188,7 +190,7 @@
 |---|---|---|
 | **P0** | gateway 资金路径 6 项（退款事务内出款 / 累计退款竞态 / reference 无 UNIQUE / AutoWithdraw / Split 幂等 / Recovery 锁） | **⑤ 已执行**（退款三段式、AutoWithdraw 认领协议**已修**；累计退款**核验为已修**；③推迟、⑤⑥豁免——明细见 §4.5/§7） |
 | P1 | 部署 tag 与发布产物对不上（纯版本号死引用） | **已修（批次②）** |
-| P1 | nexus-core 叙事脱节 7 项 | ⑥（含对外口径决策） |
+| P1 | nexus-core 叙事脱节 7 项 | ⑥（2026-10-19：路线文档 + nonce 上界已施工；叙事/补齐决策待拍板） |
 | P1 | 版本多源（检测与流程均已收口：bump 脚本 v 前缀 + 全链对齐 + 断言 8） | **已修（批次②）** |
 | P2 | composite build 门禁盲区 | ⑦ |
 | P2 | OWASP required 治理悬空（PR 卡死风险） | §8-3 决策 |
@@ -224,9 +226,10 @@
 - 验收实测：定向测试（gateway refund / fundreport / security / wiring 上下文 + signing）全绿；门禁 scheduler-lock / code-hygiene / license-headers / packaging 全绿；每项独立提交、可单独 revert（见 §7）。
 
 ### 批次⑥ nexus-core 诚信化（**依赖对外口径决策**）
-- Merkle 失败 fail-closed；nonce 上界；DB schema 版本化。
-- Groth16/KZG/欺诈证明：按"收敛声明"或"补齐实现"两条路线之一推进（建议先出一页路线文档再动代码）。
+- Merkle 失败 fail-closed（→ 路线文档 §1：现行为 PLAN-012 A-2 审核决策，直译 fail-closed 会复现同步死锁）；nonce 上界（✅ **已修**，2026-10-19）；DB schema 版本化（→ 路线文档 §7 设计草案）。
+- Groth16/KZG/欺诈证明：按"收敛声明"或"补齐实现"两条路线之一推进（建议先出一页路线文档再动代码）——**路线文档已出**：`docs/audit/2026-10-19-nexus-core-narrative-reality-routes.md`。
 - 验收：叙实一致（文档与代码能被同一句话描述）。
+- **已执行（2026-10-19 先手项）**：路线文档 + nonce 上界（`MAX_TX_NONCE` + `TransactionNonceBoundTest`）+ 叙事对齐 4 处（ARCHITECTURE ×2 / roadmap-unresolved / ADR-001）。**待拍板**：第 2/3/4/5 项对外口径与"补齐"排期。
 
 ### 批次⑦ 构建与 CI 覆盖（✅ 已执行，见 §7）
 - composite build 纳入 SpotBugs/JaCoCo/testAll（或明确豁免并写入 ADR）。
@@ -234,10 +237,10 @@
 - buildSrc/version catalog 重构评估。
 - 验收：门禁对 composite 模块产出真实报告；CI 时长下降可测量。
 
-### 批次⑧（可选）治理收尾
-- OWASP required 决策执行（去/留 + 文档同步）。
-- origin/master 与本地 master 的历史关系整理（需你拍板，见 §8-4）。
-- 本报告入库 `docs/audit/` + agent-board 留言。
+### 批次⑧（可选）治理收尾（✅ 已全部闭环，2026-10-19）
+- ~~OWASP required 决策执行（去/留 + 文档同步）~~ **已决并执行**（转正；见 §8-3）。
+- ~~origin/master 与本地 master 的历史关系整理（需你拍板，见 §8-4）~~ **已查明并解决**（同源谱系确认 + 本地 master 纯 FF 对齐；见 §8-4）。
+- ~~本报告入库 `docs/audit/` + agent-board 留言~~ **已执行**（见 §8-5）。
 
 ---
 
@@ -362,7 +365,7 @@
 2. ~~GHCR 实拉验证窗口~~ **已查明并定策（2026-10-19）**：v2.74.0 镜像**从未发布**——GHCR 现存最高 v2.73.0、release 运行史无 v2.74.0 tag（批次②对齐的 v2.74.0 部署资产属**待发布目标**）；package 匿名可读、manifest 直拉可用、NJU 镜像站同 digest 备援——**无需额外凭据**。前置链：PR #140 合并 → master 切 tag `v2.74.0`（触发 Release & Deploy：13 镜像构建 + GitHub Release + helm publish + staging/prod 部署，v2.73.0 同链先例全 success）→ 逐镜像实拉/digest 验证并记录。
    **执行完毕（2026-10-19）**：合并 `55b23196`（8/8 required 全绿 + CLEAN）→ tag `v2.74.0`（`458eb8e4`）→ Release & Deploy run `39168128412` **全链 success**（13/13 镜像构建推送 + GitHub Release + helm publish + staging/prod 部署，prod 经 production 环境 reviewer 批准）→ **GHCR 13/13 匿名 `docker pull` 实拉成功**（另经 `docker manifest inspect` 13/13 与 registry digest 交叉校验；digest 全量表见 PR #140 终版证据评论 https://github.com/Levango7/NexusChain/pull/140#issuecomment-6263845496；board 收口留言 `20261019-1730-eng-review-release-closure`）。
 3. ~~OWASP Dependency-Check 去留~~ **已决并执行（2026-10-19）：完善（转正）**——「永远上报」试运行评估通过（26 次 run：min 2.1 / 中位 6.0 / max 20.4 分钟；失败可归因；缓存未挤爆），同仓库 PR 恒真跑定档为最终语义、保留 required；TEMP 标记全部清理；评估表与历史注记写入 `docs/dependency-check-update-policy.md`「转正结论」节；顺带修复 Dependabot 配置（自 v2.24.0 引入以来 0 PR——`auto-merge` 非 schema 键 + User 账号下无效团队 reviewers，已修复），SCA 三件套（DC / Trivy / Dependabot）分工成文。
-4. **origin/master 历史**：本地 master 领先 611 个提交，origin/master 疑似 2 提交扁平孤儿历史（merge-base 为空）。这决定后续 push/PR 的基线与策略——需要你说明现状或授权处理。
+4. ~~origin/master 历史~~ **已查明并解决（2026-10-19）**：现状复核——origin/master 与本地 master **同源**（共同最早提交 `4b14af96`「NexusChain v2.1.0 - Clean repository」；当前各 618 / 623 个提交，merge-base = `13af8064`）。当时"领先 611 个提交 / origin 2 提交孤儿"的判断现不成立（系推送通道修复过程中的浅取/临时状态，已自然归一为完整谱系）。本地 master 已纯快进对齐至 `d75a5f3f`（#147）。基线策略维持：feature 分支以 GitHub `origin/master` 为基线并显式推送；本地 master 仅作只读镜像。
 5. ~~本报告与后续批次产物的归属~~ **已决并执行**：报告已收入 `docs/audit/2026-10-18-eng-review-and-remediation-plan.md`（随 PR #140）；agent-board 认领留言随提交入库（`docs/agent-board/20261018-1900-eng-review-money-path-p0.md`）。
 6. ~~推送与 PR~~ **已决并执行**：批次①+②+⑤ 共 **11 个提交**已 push（`origin/fix/eng-review`）并开 **PR #140**（`fix/eng-review` → `master`；推送前已 rebase 到 origin/master，提交哈希以 §7/§9 为准）。后续批次③/④/⑦ 将在同一分支/PR 续作（用户已确认继续执行）。**合并授权更新（2026-10-19）**：确认无冲突且前置具备即合并；执行序＝OWASP 转正/修复与残项复核落库 → CI 全绿 → 合并 #140/#141 → 切 tag `v2.74.0` → GHCR 实拉验证（**已全部执行完毕，2026-10-19；终态记录见 §8-2**）。
 
