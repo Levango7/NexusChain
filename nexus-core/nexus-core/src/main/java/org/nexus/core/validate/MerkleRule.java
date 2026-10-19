@@ -82,18 +82,34 @@ public class MerkleRule implements BlockRule {
             Map<String, Object> merklemap = validateMerkle(block.body, block.nHeight);
             List<Account> accountList = (List<Account>) merklemap.get("account");
             List<Incubator> incubatorList = (List<Incubator>) merklemap.get("incubator");
-            if (!org.bouncycastle.util.Arrays.areEqual(block.hashMerkleState, Block.calculateMerkleState(accountList))) {
-                return Result.Error("merkle state validate fail " + new String(codec.encodeBlock(block)) + " " + Hex.encodeHexString(block.hashMerkleState) + " " + Hex.encodeHexString(Block.calculateMerkleState(accountList)));
-            }
-            // 交易所不校验孵化状态
-            if (!validateIncubator) {
-                return Result.SUCCESS;
-            }
-            if (!org.bouncycastle.util.Arrays.areEqual(block.hashMerkleIncubate, Block.calculateMerkleIncubate(incubatorList))) {
-                return Result.Error("merkle incubate validate fail " + new String(codec.encodeBlock(block)) + " " + Hex.encodeHexString(block.hashMerkleIncubate) + " " + Hex.encodeHexString(Block.calculateMerkleIncubate(incubatorList)));
-            }
+            return verifyStateRoots(block, accountList, incubatorList);
         } catch (RuntimeException | java.io.IOException | DecoderException e) {
             return Result.Error("error occurs when validate merle hash");
+        }
+    }
+
+    /**
+     * 重放后状态根校验（PLAN-014 Phase 1 提取）。
+     *
+     * <p>将重放得到的账户/孵化列表与区块声明的状态根比对。与
+     * {@link #validateBlock} 原有内联校验逻辑逐字节等价，行为保持不变；
+     * 提取为 public 方法供 {@code StateReplayManager} 在"重放 → 持久化"
+     * 之后做二次校验（同步路径的写链前校验可能因本地状态滞后而失败，
+     * 重放后的校验才是权威比对）。</p>
+     *
+     * <p>交易所节点（node-character=exchange）不校验孵化状态根，语义
+     * 与 validateBlock 一致。</p>
+     */
+    public Result verifyStateRoots(Block block, List<Account> accountList, List<Incubator> incubatorList) {
+        if (!org.bouncycastle.util.Arrays.areEqual(block.hashMerkleState, Block.calculateMerkleState(accountList))) {
+            return Result.Error("merkle state validate fail " + new String(codec.encodeBlock(block)) + " " + Hex.encodeHexString(block.hashMerkleState) + " " + Hex.encodeHexString(Block.calculateMerkleState(accountList)));
+        }
+        // 交易所不校验孵化状态
+        if (!validateIncubator) {
+            return Result.SUCCESS;
+        }
+        if (!org.bouncycastle.util.Arrays.areEqual(block.hashMerkleIncubate, Block.calculateMerkleIncubate(incubatorList))) {
+            return Result.Error("merkle incubate validate fail " + new String(codec.encodeBlock(block)) + " " + Hex.encodeHexString(block.hashMerkleIncubate) + " " + Hex.encodeHexString(Block.calculateMerkleIncubate(incubatorList)));
         }
         return Result.SUCCESS;
     }

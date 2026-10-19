@@ -4,6 +4,28 @@
 
 ## [Unreleased]
 
+### 状态执行接线：重放后状态根校验（PLAN-014 Phase 1 / PLAN-012 A-2）
+
+**背景**：批次⑥ 路线文档 §8 拍板（2026-10-19）将 A-2/A-3 与支付扩展执行、
+欺诈证明锚定合并为"状态执行接线"专项（PLAN-014）。本批交付 Phase 1：把确认路径上
+"重放 → 持久化 → 状态根重建校验"收敛到单一入口，补上此前缺失的重放后校验闭环。
+
+- 新增 `StateReplayManager`（nexus-core）：`replayBlock` 复用 `MerkleRule.validateMerkle`
+  重放区块交易，按既有语义持久化 `account`/`incubator`，随后调用提取出的
+  `MerkleRule.verifyStateRoots` 与区块声明的 `hashMerkleState`/`hashMerkleIncubate` 比对。
+- `MerkleRule.verifyStateRoots`：从 `validateBlock` 内联逻辑逐字节等价提取（行为不变），
+  供重放后二次校验复用；交易所节点跳过孵化根的语义保持不变。
+- `StatetreeUpdate`：改为委托 `StateReplayManager`，异常路径仍发布 `AccountUpdateFailedEvent`。
+- **观察位策略（Phase 1）**：根不一致只记录 ERROR + 计数器，不阻断确认、不回滚；
+  强制处置（`ReorgManager` 回滚 + 对端拉黑）在 Phase 2 接线。
+- **诚实修正**：`MerkleHandler` 的 GET_TREE_NODES/TREE_NODES 对账的是**块体交易树**
+  （按 `block.body` 交易哈希构建、按索引替换交易），不是账户状态树；账户状态的真实链路是
+  确认路径 `NewBestBlockEvent → StatetreeUpdate`。此外 `Account.getId()` =
+  `pubkeyHash + blockHeight`，现有状态根承诺"触碰账户集合 + 高度"，不含余额/Nonce 明细。
+- 回归：`StateReplayManagerTest`（4 用例：一致区块 / 声明根不一致观察位 / 块体不完整
+  根不一致复现 / 重放失败向上抛出）+ `MerkleRuleStateRootsTest`（6 用例：状态根与孵化根
+  的接受/拒绝、交易所语义、`validateBlock` 提取等价性）。
+
 ### 文档：批次⑥ 对外口径精确标注 + "状态执行接线"专项立项（PLAN-014）
 
 **背景**：批次⑥ 路线文档 §8 拍板（2026-10-19）：第 4/5 项按 §4/§5 措辞补精确标注；
