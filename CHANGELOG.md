@@ -4,6 +4,23 @@
 
 ## [Unreleased]
 
+### 状态执行接线：支付扩展现状固化（PLAN-014 Phase 3 / 口径修正）
+
+**背景**：审计原口径"支付扩展验证已上链、执行未接线"不准确。Phase 3 侦察确认：
+`BasicRule` 单规则预检存在，但完整区块/RPC 路径被 `TransactionCheck.TransactionFormatCheck`
+的 `type<=15` 门禁拒绝（`Type check error`），0x10–0x1a **当前不可上链**；
+`processTransaction` 生产无调用点，0x19/0x1a 分支仅日志、无状态写入。
+
+- 口径修正：README / ARCHITECTURE / PLAN-014 / 审计路线文档 / CHANGELOG 统一为上述事实。
+- 边界注释：`TransactionCheck`（共识门禁）、`BasicRule`（单规则预检）、
+  `PaymentTransactionProcessor`（0x19/0x1a 仅日志）、SDK `TxUtils`（仅编码、不保证可上链）、
+  Gateway 订阅授权（实际是 0 金额普通转账，不是 0x1a）。
+- 门禁回归：`TransactionCheckGateTest`（0x19/0x1a → `Type check error`；0x0f 不被误伤）+
+  `PaymentExtensionBlockGateTest`（含 0x19/0x1a 的区块在 `AccountRule` 被拒绝）。
+- **不做**：不接 `processTransaction`、不放宽 `type<=15`、不改 `TYPE_MAX`/`GAS_TABLE`/proto。
+  放宽门禁会让未执行交易给 coinbase 加费（`Miner`），且状态根（仅承诺账户 ID+高度）无法发现；
+  "区块接受但不执行"的 validate-only 属独立共识变更。
+
 ### 状态执行接线：状态根不一致强制处置（PLAN-014 Phase 2 / PLAN-012 A-3）
 
 **背景**：Phase 1 的观察位只记录不一致（ERROR + 计数），不阻断不回滚。本批把处置
@@ -61,7 +78,8 @@
 
 - README（L2 Rollup 节）：补两条精确注记——① Optimistic 路线"欺诈证明机制真实但锚定未完成
   （批次/挑战状态内存态、L1 交互默认内存模拟）"；② 支付扩展"类型/验证已上链、执行接线在途
-  （`processTransaction` 生产暂无调用点）"。
+  （`processTransaction` 生产暂无调用点）"。（2026-10-20 修正：② 的后半句不准确——完整
+  区块/RPC 路径被 `TransactionCheck` 的 `type<=15` 门禁拒绝，当前不可上链；见 PLAN-014 Phase 3。）
 - ARCHITECTURE（L2 节）：同步补现状注记，指向 PLAN-014。
 - 新增 `docs/plan/PLAN-014-state-execution-wiring.md`：范围合并论证 + 现状证据（file:line）+
   目标链路（写链 → 重放 → merkle 重建校验 → 回滚拉黑）+ 分期交付（Phase 1 状态重放 A-2 /
@@ -87,8 +105,9 @@
 - 新增 `docs/audit/2026-10-19-nexus-core-narrative-reality-routes.md`：7 项逐条
   现状取证（file:line）+ "收敛声明 / 补齐实现"双路线建议 + DB schema 版本化设计草案
   + 待拍板清单。关键澄清：支付扩展"断层"实质 = 执行层未接线（`processTransaction`
-  生产无调用点，验证规则在链上生效）；Groth16 真实路径已由 zk-groth16-service 提供，
-  本地 Schnorr 仅为降级备胎。
+  生产无调用点）——2026-10-20 修正：`BasicRule` 单规则预检存在，但完整链路被
+  `TransactionCheck` 的 `type<=15` 门禁拒绝（当前不可上链，见 PLAN-014 Phase 3）；
+  Groth16 真实路径已由 zk-groth16-service 提供，本地 Schnorr 仅为降级备胎。
 - §8-4 回填：origin/master 与本地 master 同源谱系（共同根 `4b14af96`），本地 master
   已纯 FF 对齐至 `d75a5f3f`；原"611 领先/2 提交孤儿"判断不复存在。
 - 叙事对齐：`ARCHITECTURE.md` ZK 段 ×2 处 / `docs/roadmap-unresolved.md` #6 /

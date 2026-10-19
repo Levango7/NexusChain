@@ -35,6 +35,11 @@ import java.util.Map;
  * <p>状态记录以通道 ID / 仓位 ID / 桥交易 ID 为键存储于内存 Map 中，
  * 供后续查询与状态机驱动使用。实际生产环境可替换为持久化存储。</p>
  *
+ * <p><b>现状与边界（PLAN-014 Phase 3，诚实记录）</b>：本处理器生产路径无调用点
+ * （仅测试调用）；0x19/0x1a 分支只有日志、无状态写入。完整区块/RPC 路径受
+ * {@code TransactionCheck.TransactionFormatCheck} 的 {@code type<=15} 门禁约束，
+ * 0x10–0x1a 当前不可上链。本类不得视为"支付扩展执行已接线"。</p>
+ *
  * @author nexus-core
  * @since 1.0
  */
@@ -154,8 +159,12 @@ public class PaymentTransactionProcessor {
             } else if (tx.type == Transaction.Type.BRIDGE_BURN.ordinal()) {
                 processBridgeBurn(tx, blockHeight);
             } else if (tx.type == Transaction.Type.IDENTITY_REGISTER.ordinal()) {
+                // 仅日志占位（PLAN-014 Phase 3）：无状态写入；生产路径无调用点，
+                // 且 0x19 当前被 TransactionCheck 的 type<=15 门禁拒绝，不可上链。
                 logger.info("IDENTITY_REGISTER processed at height={}, tx={}", blockHeight, tx.getHashHexString());
             } else if (tx.type == Transaction.Type.SUBSCRIPTION_AUTH.ordinal()) {
+                // 仅日志占位（PLAN-014 Phase 3）：无状态写入；生产路径无调用点，
+                // 且 0x1a 当前被 TransactionCheck 的 type<=15 门禁拒绝，不可上链。
                 logger.info("SUBSCRIPTION_AUTH processed at height={}, tx={}", blockHeight, tx.getHashHexString());
             } else {
                 logger.debug("Transaction type {} processed (no payment extension handler) at height={}, tx={}",

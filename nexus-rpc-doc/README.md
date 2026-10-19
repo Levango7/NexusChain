@@ -348,6 +348,10 @@ Response Body:
 |25|0x19|DID身份注册|
 |26|0x1a|订阅支付授权|
 
+> 注（2026-10-20）：上表仅为交易类型编号定义。0x10–0x1a 的完整区块/RPC 路径当前受节点
+> `TransactionCheck.TransactionFormatCheck` 的 `type<=15` 门禁拒绝（`Type check error`），
+> **均不可上链**；`PaymentTransactionProcessor` 生产无调用点。详见 PLAN-014 Phase 3。
+
 ### 四、支付通道 RPC 接口
 
 #### 4.0 开启支付通道 — openChannel

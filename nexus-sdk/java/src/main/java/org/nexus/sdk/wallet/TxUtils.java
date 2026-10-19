@@ -404,6 +404,14 @@ public class TxUtils extends Thread {
         }
     }
 
+    /**
+     * 构造 SUBSCRIPTION_AUTH（0x1a）raw 交易（仅编码，不保证可上链）。
+     *
+     * <p>现状（PLAN-014 Phase 3）：节点完整区块/RPC 路径受
+     * {@code TransactionCheck.TransactionFormatCheck} 的 {@code type<=15} 门禁约束，
+     * 0x1a 会被拒绝（{@code Type check error}）。本方法仅用于 SDK 编码/离线签名测试，
+     * 不代表链上支持。</p>
+     */
     public static String CreateRawSubscriptionAuthTransaction(String fromPubkeyStr, String merchantPubkeyHash, BigDecimal maxAmount, Long intervalBlocks, Long duration, Long nonce) {
         try {
             byte[] version = new byte[]{0x01};

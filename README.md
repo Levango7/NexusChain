@@ -254,7 +254,7 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
 
 - **Optimistic 路线**：欺诈证明单步验证为真实逻辑（机制在 L2 进程内运行；批次/挑战状态为内存态、L1 交互默认内存模拟 `real-l1-enabled=false`——"锚定到真实 L1 状态"未完成，见"状态执行接线"专项 [PLAN-014](docs/plan/PLAN-014-state-execution-wiring.md)）。
 - **ZK 路线**：依赖上述 Schnorr 证明系统，不具备 ZK 安全属性。
-- **支付扩展（0x10–0x1a）**：交易类型与验证规则已在链上生效（`CompositeBlockRule`）；执行层（`PaymentTransactionProcessor.processTransaction`）接线在途/实验性——生产路径暂无调用点（见"状态执行接线"专项 [PLAN-014](docs/plan/PLAN-014-state-execution-wiring.md)）。
+- **支付扩展（0x10–0x1a）**：类型枚举、`GAS_TABLE` 与 `BasicRule` 单规则预检已存在；但完整区块/RPC 路径受 `TransactionCheck.TransactionFormatCheck` 的 `type<=15` 门禁约束，0x10–0x1a 会返回 `Type check error`，**当前不可上链**。`PaymentTransactionProcessor.processTransaction` 仅测试调用；0x19/0x1a（DID 注册、订阅授权）分支仅日志、无状态写入。执行接线与"可上链"共识变更均未完成（见 [PLAN-014](docs/plan/PLAN-014-state-execution-wiring.md)）。
 - **L2-L1 真实化**：Hardhat L1 测试环境 + `L2Bridge.sol` Solidity 合约已就绪，但端到端测试因 Hardhat EDR 不兼容跳过（未完成真实 L1 节点验证）。
 
 ### 治理执行（真实化完成，2026-08）

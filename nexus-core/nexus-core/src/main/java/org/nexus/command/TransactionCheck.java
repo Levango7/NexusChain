@@ -111,6 +111,11 @@ public class TransactionCheck {
             long gasPrice = BigEndian.decodeUint64(gasbyte);
             //gas
             long gas = 0;
+            // 共识门禁（PLAN-014 Phase 3 固化）：type<=15 是当前区块/RPC 的硬边界。
+            // 0x10–0x1a 支付扩展仅有类型定义与 BasicRule 单规则预检，会在此以
+            // "Type check error" 被拒绝（当前不可上链）。放宽此处会改变区块接受语义：
+            // Miner 会为未执行交易给 coinbase 记手续费，而 MerkleRule 对 0x19/0x1a 无 case，
+            // 状态根（仅承诺账户 ID+高度）无法发现——必须走独立共识升级，不能随业务开关调整。
             if (15 >= type[0] && type[0] >= 0) {
                 gas = Transaction.GAS_TABLE[type[0]];
             } else {
