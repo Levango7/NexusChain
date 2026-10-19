@@ -141,6 +141,23 @@ public class AccountDB {
         }
     }
 
+    /**
+     * 回滚支持（PLAN-014 Phase 2）：删除指定高度及以上的账户状态行。
+     * 账户行按 (pubkeyHash, blockHeight) 追加；回滚后同高度数据由后续重放覆盖写入。
+     *
+     * @param height 起始高度（含）
+     * @return 删除行数
+     */
+    public int deleteFromHeight(long height) {
+        try {
+            String sql = "delete from account where blockheight >= ?";
+            return tmpl.update(sql, new Object[]{height});
+        } catch (RuntimeException e) {
+            logger.error("AccountDB.deleteFromHeight failed", e);
+            throw new IllegalStateException("AccountDB.deleteFromHeight failed", e);
+        }
+    }
+
     public List<Map<String, Object>> selectlistTran(int height, int type, long gas) {
         try {
             String sql = "select encode(t.tx_hash::bytea,'hex') as \"tranHash\",t.from as \"fromAddress\",t.to as \"coinAddress\",t.amount as \"amount\",h.height as \"coinHeigth\",t.gas_price*? as \"fee\" \n" +

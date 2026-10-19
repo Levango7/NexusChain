@@ -108,6 +108,22 @@ public class IncubatorDB {
         }
     }
 
+    /**
+     * 回滚支持（PLAN-014 Phase 2）：删除指定高度及以上的孵化状态行。
+     *
+     * @param height 起始高度（含）
+     * @return 删除行数
+     */
+    public int deleteFromHeight(long height) {
+        try {
+            String sql = "delete from incubator_state where height >= ?";
+            return tmpl.update(sql, new Object[]{height});
+        } catch (RuntimeException e) {
+            log.error("IncubatorDB.deleteFromHeight failed", e);
+            throw new IllegalStateException("IncubatorDB.deleteFromHeight failed", e);
+        }
+    }
+
     public class IncubatorRowMapper implements RowMapper<Incubator> {
         @Override
         public Incubator mapRow(ResultSet resultSet, int i) throws SQLException {

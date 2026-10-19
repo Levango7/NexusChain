@@ -49,9 +49,10 @@ public class StatetreeUpdate implements ApplicationListener<NewBestBlockEvent> {
         peningTransPool.updatePool(b.body, 2, b.nHeight);
 
         try {
-            // PLAN-014 Phase 1：重放 + 持久化 + 重放后状态根校验统一收敛到
-            // StateReplayManager。校验不一致目前为观察位（StateReplayManager 内
-            // ERROR 日志 + 计数），不阻断确认；Phase 2 再接入回滚与对端拉黑。
+            // PLAN-014 Phase 1/2：重放 + 持久化 + 重放后状态根校验统一收敛到
+            // StateReplayManager；不一致由其在写锁内发布 StateRootMismatchEvent，
+            // StateRootMismatchHandler 异步按配置处置（observe / rollback+拉黑），
+            // 均不阻断确认路径。
             stateReplayManager.replayBlock(b);
         } catch (RuntimeException | java.io.IOException | org.apache.commons.codec.DecoderException e) {
             // CRITICAL FIX: previously returned silently without publishing any event,
