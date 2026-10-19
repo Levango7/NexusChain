@@ -13,6 +13,7 @@
 | `payment_state` | `JdbcPaymentStateStore` | `payment_channels` / `stablecoin_positions` / `bridge_transactions` / `bridge_replay_keys` | 1 |
 | `finality_state` | `JdbcFinalityStateStore` | `finality_votes` / `finality_checkpoints` | 1 |
 | `validator_set` | `ValidatorSetPersistence` | `validators_synced` | 1 |
+| `l2_fraud_state` | `JdbcFraudProofStateStore` | `l2_fraud_batches` / `l2_fraud_bonds` / `l2_fraud_conflicts` | 1 |
 | （LevelDB） | `org.nexus.db.Leveldb` | meta 键 `__meta/schema_version` | 1 |
 
 登记表（PG/H2 共享）：
@@ -63,3 +64,5 @@ CREATE TABLE IF NOT EXISTS nexus_schema_meta (
 
 - `SchemaMetaTest`（H2）：缺失→写入 / 相等→通过 / 旧库→拒绝（带迁移指引）/ 新库→拒绝 / 多 store 隔离。
 - `LeveldbSchemaVersionTest`：新库写键 / 同版本重启通过 / 旧值拒绝 / 新值拒绝 / 损坏值拒绝。
+- `JdbcFraudProofStateStoreTest`（H2）：`l2_fraud_state` 版本登记 / 批次 JSON 往返 / upsert 幂等 /
+  bond 状态更新 / 冲突嵌套证明往返 / 删除（Phase 4）。

@@ -1,7 +1,10 @@
 package org.nexus.l2.challenge;
 
+import org.nexus.l2.FraudProof;
+import org.nexus.l2.persistence.FraudProofStateStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -38,7 +41,11 @@ public class ChallengeConflictResolver {
     private final Map<Long, String> firstValidChallenger = new ConcurrentHashMap<>();
 
     /** 批次 ID -> 首个有效欺诈证明 */
-    private final Map<Long, Object> firstValidProof = new ConcurrentHashMap<>();
+    private final Map<Long, FraudProof> firstValidProof = new ConcurrentHashMap<>();
+
+    /** 持久化 store（未注入时保持纯内存行为）。 */
+    @Autowired(required = false)
+    private FraudProofStateStore stateStore;
 
     /** 批次 ID -> 所有挑战者地址（按提交顺序） */
     private final Map<Long, List<String>> allChallengers = new ConcurrentHashMap<>();
@@ -66,6 +73,14 @@ public class ChallengeConflictResolver {
         if (challenger == null) {
             return ChallengeConflictResult.NO_BOND;
         }
+        ChallengeConflictResult result =
+                doResolveChallenge(batchId, challenger, proofValid, windowClosed);
+        persist(batchId);
+        return result;
+    }
+
+    private ChallengeConflictResult doResolveChallenge(
+            long batchId, String challenger, boolean proofValid, boolean windowClosed) {
         // 记入挑战者列表
         allChallengers.computeIfAbsent(batchId, k -> Collections.synchronizedList(new ArrayList<>())).add(challenger);
 
@@ -101,14 +116,70 @@ public class ChallengeConflictResolver {
         return ChallengeConflictResult.DUPLICATE_AFTER_VALID;
     }
 
+    /** 将当前批次的冲突状态写穿到持久化 store（未注入则跳过）。 */
+    private void persist(long batchId) {
+        if (stateStore == null) {
+            return;
+        }
+        stateStore.saveConflict(new FraudProofStateStore.ConflictRecord(
+                batchId,
+                firstValidChallenger.get(batchId),
+                firstValidProof.get(batchId),
+                snapshot(allChallengers.get(batchId)),
+                snapshot(refundedChallengers.get(batchId)),
+                snapshot(slashedChallengers.get(batchId))));
+    }
+
+    private static List<String> snapshot(List<String> list) {
+        if (list == null) {
+            return List.of();
+        }
+        synchronized (list) {
+            return List.copyOf(list);
+        }
+    }
+
+    /**
+     * 启动恢复：载入持久化的 first-valid-wins 状态。
+     *
+     * @param records 持久化记录（可为 null）
+     */
+    public synchronized void restore(List<FraudProofStateStore.ConflictRecord> records) {
+        if (records == null) {
+            return;
+        }
+        for (FraudProofStateStore.ConflictRecord record : records) {
+            if (record.firstValidChallenger() != null) {
+                firstValidChallenger.put(record.batchId(), record.firstValidChallenger());
+            }
+            if (record.firstValidProof() != null) {
+                firstValidProof.put(record.batchId(), record.firstValidProof());
+            }
+            if (!record.allChallengers().isEmpty()) {
+                allChallengers.put(record.batchId(),
+                        Collections.synchronizedList(new ArrayList<>(record.allChallengers())));
+            }
+            if (!record.refundedChallengers().isEmpty()) {
+                refundedChallengers.put(record.batchId(),
+                        Collections.synchronizedList(new ArrayList<>(record.refundedChallengers())));
+            }
+            if (!record.slashedChallengers().isEmpty()) {
+                slashedChallengers.put(record.batchId(),
+                        Collections.synchronizedList(new ArrayList<>(record.slashedChallengers())));
+            }
+        }
+        logger.info("ChallengeConflictResolver restored {} batch conflict records", records.size());
+    }
+
     /**
      * 记入首个有效证明（在 FIRST_VALID 结果后调用，记录证明实体）。
      *
      * @param batchId 批次 ID
      * @param proof   欺诈证明
      */
-    public void recordFirstValidProof(long batchId, Object proof) {
+    public void recordFirstValidProof(long batchId, FraudProof proof) {
         firstValidProof.put(batchId, proof);
+        persist(batchId);
     }
 
     /**
@@ -137,7 +208,7 @@ public class ChallengeConflictResolver {
      * @param batchId 批次 ID
      * @return 首个有效证明；不存在返回 null
      */
-    public Object getFirstValidProof(long batchId) {
+    public FraudProof getFirstValidProof(long batchId) {
         return firstValidProof.get(batchId);
     }
 
@@ -185,5 +256,8 @@ public class ChallengeConflictResolver {
         allChallengers.remove(batchId);
         refundedChallengers.remove(batchId);
         slashedChallengers.remove(batchId);
+        if (stateStore != null) {
+            stateStore.deleteConflict(batchId);
+        }
     }
 }
