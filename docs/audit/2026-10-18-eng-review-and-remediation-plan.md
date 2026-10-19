@@ -360,10 +360,11 @@
 
 1. ~~tag 格式统一方向~~ **已决并执行**：全面 `vX.Y.Z`（镜像/部署引用）；chart 元数据维持纯 semver。见 §7（批次②明细）。
 2. ~~GHCR 实拉验证窗口~~ **已查明并定策（2026-10-19）**：v2.74.0 镜像**从未发布**——GHCR 现存最高 v2.73.0、release 运行史无 v2.74.0 tag（批次②对齐的 v2.74.0 部署资产属**待发布目标**）；package 匿名可读、manifest 直拉可用、NJU 镜像站同 digest 备援——**无需额外凭据**。前置链：PR #140 合并 → master 切 tag `v2.74.0`（触发 Release & Deploy：13 镜像构建 + GitHub Release + helm publish + staging/prod 部署，v2.73.0 同链先例全 success）→ 逐镜像实拉/digest 验证并记录。
+   **执行完毕（2026-10-19）**：合并 `55b23196`（8/8 required 全绿 + CLEAN）→ tag `v2.74.0`（`458eb8e4`）→ Release & Deploy run `39168128412` **全链 success**（13/13 镜像构建推送 + GitHub Release + helm publish + staging/prod 部署，prod 经 production 环境 reviewer 批准）→ **GHCR 13/13 匿名 `docker pull` 实拉成功**（另经 `docker manifest inspect` 13/13 与 registry digest 交叉校验；digest 全量表见 PR #140 终版证据评论 https://github.com/Levango7/NexusChain/pull/140#issuecomment-6263845496；board 收口留言 `20261019-1730-eng-review-release-closure`）。
 3. ~~OWASP Dependency-Check 去留~~ **已决并执行（2026-10-19）：完善（转正）**——「永远上报」试运行评估通过（26 次 run：min 2.1 / 中位 6.0 / max 20.4 分钟；失败可归因；缓存未挤爆），同仓库 PR 恒真跑定档为最终语义、保留 required；TEMP 标记全部清理；评估表与历史注记写入 `docs/dependency-check-update-policy.md`「转正结论」节；顺带修复 Dependabot 配置（自 v2.24.0 引入以来 0 PR——`auto-merge` 非 schema 键 + User 账号下无效团队 reviewers，已修复），SCA 三件套（DC / Trivy / Dependabot）分工成文。
 4. **origin/master 历史**：本地 master 领先 611 个提交，origin/master 疑似 2 提交扁平孤儿历史（merge-base 为空）。这决定后续 push/PR 的基线与策略——需要你说明现状或授权处理。
 5. ~~本报告与后续批次产物的归属~~ **已决并执行**：报告已收入 `docs/audit/2026-10-18-eng-review-and-remediation-plan.md`（随 PR #140）；agent-board 认领留言随提交入库（`docs/agent-board/20261018-1900-eng-review-money-path-p0.md`）。
-6. ~~推送与 PR~~ **已决并执行**：批次①+②+⑤ 共 **11 个提交**已 push（`origin/fix/eng-review`）并开 **PR #140**（`fix/eng-review` → `master`；推送前已 rebase 到 origin/master，提交哈希以 §7/§9 为准）。后续批次③/④/⑦ 将在同一分支/PR 续作（用户已确认继续执行）。**合并授权更新（2026-10-19）**：确认无冲突且前置具备即合并；执行序＝OWASP 转正/修复与残项复核落库 → CI 全绿 → 合并 #140/#141 → 切 tag `v2.74.0` → GHCR 实拉验证。
+6. ~~推送与 PR~~ **已决并执行**：批次①+②+⑤ 共 **11 个提交**已 push（`origin/fix/eng-review`）并开 **PR #140**（`fix/eng-review` → `master`；推送前已 rebase 到 origin/master，提交哈希以 §7/§9 为准）。后续批次③/④/⑦ 将在同一分支/PR 续作（用户已确认继续执行）。**合并授权更新（2026-10-19）**：确认无冲突且前置具备即合并；执行序＝OWASP 转正/修复与残项复核落库 → CI 全绿 → 合并 #140/#141 → 切 tag `v2.74.0` → GHCR 实拉验证（**已全部执行完毕，2026-10-19；终态记录见 §8-2**）。
 
 ---
 
