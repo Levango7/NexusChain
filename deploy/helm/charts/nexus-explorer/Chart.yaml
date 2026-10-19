@@ -1,0 +1,18 @@
+apiVersion: v2
+name: nexus-explorer
+description: NexusChain 区块浏览器（React 前端 + Express BFF 同源单容器）
+type: application
+version: 2.74.0
+appVersion: "2.74.0"
+keywords:
+  - blockchain
+  - explorer
+  - frontend
+  - react
+  - express
+home: https://github.com/nexus/NexusChain
+sources:
+  - https://github.com/nexus/NexusChain
+maintainers:
+  - name: NexusChain DevOps
+    email: devops@nexus.network

@@ -79,3 +79,20 @@ nexus-wallet-service:
     enabled: false
   pdb:
     enabled: false
+
+# -- 2026-10-19：区块浏览器（k8s/Helm 双路径补齐）
+nexus-explorer:
+  replicaCount: 1
+  image:
+    tag: latest
+  resources:
+    requests:
+      memory: 128Mi
+      cpu: 100m
+    limits:
+      memory: 256Mi
+      cpu: 500m
+  hpa:
+    enabled: false
+  pdb:
+    enabled: false

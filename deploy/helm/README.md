@@ -1,6 +1,6 @@
 # NexusChain Helm Chart
 
-NexusChain 区块链支付编排平台 Helm Umbrella Chart，聚合 5 个 Spring Boot 服务子 chart。
+NexusChain 区块链支付编排平台 Helm Umbrella Chart，聚合 8 个子 chart（5 个 Spring Boot 微服务 + 链节点 + MPC 引擎 + 区块浏览器）。
 
 ## 目录结构
 
@@ -21,11 +21,14 @@ deploy/helm/
 │   ├── nexus-bridge/             # 跨链桥 :8084
 │   ├── nexus-signing-service/    # 签名服务 :8082
 │   ├── nexus-wallet-service/     # 钱包服务 :8083
-│   └── nexus-api-gateway/        # API 统一入口 :8085（Spring Cloud Gateway）
+│   ├── nexus-api-gateway/        # API 统一入口 :8085（Spring Cloud Gateway）
+│   ├── nexus-core/               # 结算链节点（StatefulSet）P2P :9585 / RPC :19585
+│   ├── mpc-engine/               # MPC 密码学引擎（StatefulSet）:50051
+│   └── nexus-explorer/           # 区块浏览器 :3000（React 前端 + Express BFF 同源单容器）
 └── README.md
 ```
 
-每个服务子 chart 包含 7 个模板：`deployment` / `service` / `configmap` / `secret` / `hpa` / `pdb` / `servicemonitor`。
+服务子 chart 模板构成：5 个 Spring Boot 服务各含 7 个模板（`deployment` / `service` / `configmap` / `secret` / `hpa` / `pdb` / `servicemonitor`）；`nexus-core` 与 `mpc-engine` 为 StatefulSet 形态；`nexus-explorer` 含 4 个模板（`deployment` / `service` / `hpa` / `pdb`）——无配置文件、无凭据、无 `/metrics` 端点，故不提供 configmap/secret/servicemonitor。
 
 ## 服务架构
 
@@ -36,6 +39,7 @@ deploy/helm/
 | nexus-signing-service | 8082 | nacos + seata + zipkin | 签名服务 |
 | nexus-wallet-service | 8083 | nacos + seata + zipkin | 钱包服务 |
 | nexus-api-gateway | 8085 | nacos + zipkin + redis | API 统一入口（Spring Cloud Gateway，WebFlux 非阻塞） |
+| nexus-explorer | 3000 | nexus-core RPC | 区块浏览器（React 前端 + Express BFF 同源单容器） |
 
 基础设施（Nacos/Sentinel/Seata/Zipkin/Postgres/Redis）由独立 chart 或运维平台提供，本 chart 仅注入指向它们的服务地址环境变量。
 
@@ -275,3 +279,31 @@ nexus-api-gateway:
 ### 与 umbrella values 的关系
 
 本子 chart 的 values 通过 umbrella `.Values.nexus-api-gateway.*` 覆盖，`global.*` 透传。详见 `charts/nexus-api-gateway/values.yaml` 注释。
+
+## nexus-explorer 子 chart 说明（2026-10-19 补）
+
+`charts/nexus-explorer/` 是区块浏览器子 chart（React 前端 + Express BFF 同源单容器，端口 3000）。2026-10-19 前 explorer 仅存在于 docker-compose 与发布镜像链，两条 K8s 路径均缺——本子 chart 与 `deploy/k8s/28-explorer.yml` 静态清单同批补齐。
+
+### 关键 values
+
+| 路径 | 默认值 | 说明 |
+|------|--------|------|
+| `enabled` | `true` | 是否启用本子 chart |
+| `replicaCount` | `2` | 副本数（HPA 启用时作为初始值） |
+| `image.repository` | `""` | 镜像 repository（留空回退 `global.imageRegistry/nexus-explorer`） |
+| `image.tag` | `""` | 镜像 tag（留空回退 `global.env`；prod 覆盖层固定 `v2.74.0`） |
+| `service.port` | `3000` | Service / 容器端口 |
+| `rpcUrl` | `""` | core RPC 地址（留空按命名空间推导 `nexus-core.<ns>.svc.cluster.local:19585/rpc`） |
+| `corsAllowedOrigins` | `""` | CORS 白名单（同源托管无需；仅前端独立域名时配置） |
+| `extraEnv` | `{}` | 额外环境变量 |
+| `probes.liveness/readiness` | `/health` | 纯本地响应（不探测 RPC 上游），无假死误杀 |
+| `resources.requests` | `128Mi / 100m` | 静态托管 + 只读查询，资源需求低于 Java 栈 |
+| `resources.limits` | `256Mi / 500m` | 同上（prod 覆盖层 `512Mi / 500m`） |
+| `hpa.enabled` | `true` | HPA 开关（默认 2-6；prod 覆盖层 3-6） |
+| `pdb.enabled` | `true` | PDB 开关（`minAvailable: 1`；prod 覆盖层 2） |
+
+### 与 Spring 服务子 chart 的差异
+
+- 无 ConfigMap / Secret / ServiceMonitor 模板：无配置文件、无敏感凭据、无 `/metrics` 端点（BFF 仅暴露 `/health`）；
+- 不注入 Nacos / Seata / Zipkin：唯一依赖是 nexus-core RPC（`NEXUS_RPC_URL`）；
+- 安全上下文经 `global.securityContext` 注入（umbrella 下为 65532 distroless nonroot 全仓口径）；镜像已实测以任意非 root UID + 只读根文件系统 + `/tmp` emptyDir 可运行（/health 200、前端 index 200）。

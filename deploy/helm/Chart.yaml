@@ -1,8 +1,10 @@
 # NexusChain Helm Umbrella Chart
 # ============================================================================
-# 聚合 4 个 Spring Boot 服务子 chart + 链基础设施：
-#   nexus-gateway / nexus-bridge / nexus-signing-service / nexus-wallet-service
+# 聚合 5 个 Spring Boot 服务子 chart + 链基础设施：
+#   nexus-gateway / nexus-bridge / nexus-signing-service / nexus-wallet-service /
+#   nexus-api-gateway
 #   + nexus-core（结算链节点 StatefulSet）+ mpc-engine（MPC 密码学引擎）
+#   + nexus-explorer（区块浏览器：React 前端 + Express BFF 同源单容器）
 # P0-10 审计修复：此前 umbrella 不含 nexus-core 与 mpc-engine——helm 发布路径
 # 不部署链节点、K8s 路径下 signing-service 无法连接 MPC 引擎（门限签名不可用）。
 # 基础设施（Nacos/Sentinel/Seata/Zipkin/Postgres/Redis）由独立 chart 或
@@ -50,3 +52,9 @@ dependencies:
     version: 2.74.0
     repository: "file://charts/mpc-engine"
     condition: mpc-engine.enabled
+  # 2026-10-19：区块浏览器（React 前端 + Express BFF 同源单容器）。
+  # 此前两条 K8s 路径均缺——镜像早已在发布链（13 镜像含它），编排资产缺失。
+  - name: nexus-explorer
+    version: 2.74.0
+    repository: "file://charts/nexus-explorer"
+    condition: nexus-explorer.enabled

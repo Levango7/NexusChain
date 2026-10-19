@@ -149,3 +149,26 @@ nexus-wallet-service:
   pdb:
     enabled: true
     minAvailable: 1
+
+# -- 2026-10-19：区块浏览器（k8s/Helm 双路径补齐；前端为静态托管 + 只读查询，
+#    资源需求低于 Java 栈）
+nexus-explorer:
+  replicaCount: 2
+  image:
+    tag: staging
+  resources:
+    requests:
+      memory: 128Mi
+      cpu: 100m
+    limits:
+      memory: 256Mi
+      cpu: 500m
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 4
+    cpuTargetUtilization: 70
+    memoryTargetUtilization: 80
+  pdb:
+    enabled: true
+    minAvailable: 1
