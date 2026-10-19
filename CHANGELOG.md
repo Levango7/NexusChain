@@ -306,6 +306,24 @@ docs/ha-verification.md。
 node v24.21.0 / axios 0.34.0 / commander 2.20.3 / pop-core 1.8.0 / node-schedule 1.3.3；
 `node cmd.js --help` 正常。
 
+### 工程：DB schema 版本化基建（批次⑥ 第 7 项，PLAN-014 Phase 0）
+
+**缺口**：PG 侧 7 张表（payment_state 4 / finality_state 2 / validator_set 1）全部
+`CREATE TABLE IF NOT EXISTS`、无版本登记；LevelDB 无 meta 版本键——旧代码可静默打开新库
+（反之亦然），破坏性 schema 变更无护栏（路线文档 §7）。
+
+**实现**：新增共享工具 `org.nexus.db.SchemaMeta.ensure(jdbc, store, version)`——登记表
+`nexus_schema_meta(store, version, updated_at)`；语义：缺失→登记当前版本 / 相等→通过 /
+低于→拒绝启动（附迁移指引 `DATABASE IS OLDER`）/ 高于→拒绝启动（`DATABASE IS NEWER`，
+防旧代码开新库）。三处 JDBC store 接入（`payment_state` / `finality_state` /
+`validator_set`；`MismatchException` 在 `ValidatorSetPersistence` 显式重抛不吞没）；
+LevelDB 接入 `__meta/schema_version` 键（写/校验同语义，损坏值拒绝）。迁移政策：
+additive-only；破坏性变更携带 `migrations/pg/NNN-desc.sql` 并递增版本
+（`docs/db-schema-versioning.md`）。
+
+**验收**：`SchemaMetaTest`（H2 三分支：缺失→写入 / 相符→通过 / 不符→拒绝；+ 多 store 隔离）
+与 `LeveldbSchemaVersionTest`（新库写键 / 同版本重启通过 / 旧值拒绝 / 新值拒绝 / 损坏值拒绝）。
+
 ## [2.74.0] - 2026-10-14
 
 ### L3 复验（v2.73.0 发布镜像实装）——22 项遗留缺陷修复，**全栈 24/24 Pod Ready**
