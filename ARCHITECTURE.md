@@ -98,7 +98,7 @@ Blockchain is the foundational settlement layer — not the product itself. On t
   - MPT 状态根（`MerklePatriciaTrie`）+ 单步二分欺诈证明
   - EIP-4844 blob 承载（`l2/blob/`）降低 L1 caldata 成本
   - 多挑战者冲突解决（`l2/challenge/`，first-valid-wins）
-  - 现状注记（2026-10）：机制在 L2 进程内运行；批次/挑战状态为内存态、L1 交互默认内存模拟（`real-l1-enabled` 可配真实）——"锚定到真实 L1 状态"与支付扩展执行接线合并立项为"状态执行接线"专项（`docs/plan/PLAN-014-state-execution-wiring.md`）
+  - 现状注记（2026-10）：批次/挑战/bond 状态已 PG 持久化（`JdbcFraudProofStateStore`，2026-10-20），L1 交互默认内存模拟（`real-l1-enabled` 可配真实，真机验证并入 Phase 5）——"锚定到真实 L1 状态"与支付扩展执行接线合并立项为"状态执行接线"专项（`docs/plan/PLAN-014-state-execution-wiring.md`）
   - 支付扩展现状（2026-10）：0x10–0x1a 仅有类型定义与 `BasicRule` 单规则预检；完整区块/RPC 路径被 `TransactionCheck.TransactionFormatCheck` 的 `type<=15` 门禁拒绝（`Type check error`），**当前不可上链**；`processTransaction` 生产无调用点，0x19/0x1a 分支仅日志。详见 PLAN-014 Phase 3。
   - 排序策略（`l2/sequencer/`，account nonce 升序 + priority fee 降序）
   - Gas 估算（`l2/gas/`）

@@ -16,7 +16,7 @@
 | 1 | Merkle 校验失败仍写链 | 同步路径为 **PLAN-012 A-2 审核决策**（轻校验 + 信任签名 + 写链 + 异步对账）；"fail-closed"直译会复现 PLAN-011 的同步死锁 | 收敛（文档精确化，已完成）+ 补齐（A-2/A-3 完整状态重放，独立专项） | 补齐 3–4d |
 | 2 | "Groth16"实为 Schnorr | **真实 Groth16 已上线**（方案 C：`zk-groth16-service` Rust arkworks，Java 远程 fail-closed 对接）；本地 BouncyCastle 路径为 Schnorr 降级备胎 | 收敛（3 处架构文档漂移已修 + ADR-001 注记） | 已修 |
 | 3 | KZG 为 mock | SHA-256 模拟 + **防误声明**（`kzg-mode=real` 拒绝启动）；代码级 P3 降级声明完备 | 收敛（保持现有诚实标注，无需改动）+ 长期补齐（c-kzg/blst 绑定） | 长期项 |
-| 4 | 欺诈证明未锚定 | 单步二分 + 挑战窗 + bond/slashing 完整；但批次/挑战状态在**进程内存**，L1 客户端默认**内存模拟**（`real-l1-enabled=false`） | 收敛（对外标注"L2 内部机制 + L1 模拟"，机制真实/锚定未完成）+ 补齐（持久化 + 真实 L1） | 补齐 3–5d |
+| 4 | 欺诈证明未锚定 | 单步二分 + 挑战窗 + bond/slashing 完整；批次/挑战/bond 状态已 **PG 持久化**（2026-10-20，PLAN-014 Phase 4 持久化面）；L1 客户端默认**内存模拟**（`real-l1-enabled=false`） | 收敛（对外标注"状态持久化 + L1 模拟"，机制真实/锚定未完成）+ 补齐（real-L1 真机转入 Phase 5） | 持久化已收敛（1d）；real-L1 转 Phase 5 |
 | 5 | 0x10–0x1a 支付扩展 opcode 断层 | **类型/单规则预检存在，完整链路被门禁拒绝**（2026-10-20 修正）：`BasicRule` 预检 + 处理器逻辑齐备，但完整区块/RPC 路径被 `TransactionCheck.TransactionFormatCheck` 的 `type<=15` 门禁以 `Type check error` 拒绝，**当前不可上链**；`processTransaction` 生产无调用点，0x19/0x1a 仅日志无状态效果 | 收敛（已执行：口径/注释/门禁测试，PLAN-014 Phase 3）；"可上链/执行接线"属独立共识变更，另立项 | 已收敛（0.5–1d） |
 | 6 | nonce 无上界 | 校验点 `TransactionCheck.TransactionVerify`（区块验证 `AccountRule` 调用），无上界 | **补齐（本次已修）**：`MAX_TX_NONCE` 上界 + 回归测试 | 已修 |
 | 7 | DB 无版本化迁移 | LevelDB 无 meta 版本键；7 张 PG 表（`JdbcPaymentStateStore` 4 / `JdbcFinalityStateStore` 2 / `ValidatorSetPersistence` 1）全部 `CREATE TABLE IF NOT EXISTS`、无版本 | 补齐（设计草案见 §7，建议独立下一批） | 1–2d |
@@ -79,13 +79,15 @@
 
 **现状（`l2/FraudProof*.java`）**：单步二分证明（`FraudProof`，O(log n)）+ 挑战窗 +
 challenge bond + 罚没奖励 + 多挑战者冲突解决（first-valid-wins）实现完整。
-**但**：`FraudProofVerifier` 的批次/挑战状态为进程内存（`batchSubmitTime`/`batchStore`/
-`submitterStore`/`challengeBonds` 等 ConcurrentHashMap，:68-81）；L1 侧
-`DefaultL2BridgeContract` 默认注入**内存模拟** L1 客户端（`real-l1-enabled=false`，:26）。
-即：**L2 内部挑战机制真实；"锚定到链上状态"（持久化 + 真实 L1 合约交互）未完成**。
+**2026-10-20 修正（PLAN-014 Phase 4 持久化面）**：批次/挑战/bond 状态已 PG 持久化
+（`JdbcFraudProofStateStore`：`l2_fraud_batches` / `l2_fraud_bonds` / `l2_fraud_conflicts`，
+`restoreState()` 启动恢复，重启不丢失）；L1 侧 `DefaultL2BridgeContract` 默认仍注入
+**内存模拟** L1 客户端（`real-l1-enabled=false`，:26），且桥的存款/提款/已提交根仍为
+进程内存。即：**L2 内部挑战机制真实且状态持久；"锚定到链上状态"（真实 L1 合约交互）
+未完成**。
 
-**路线**：收敛＝对外标注"Optimistic 机制在 L2 进程内运行、L1 交互默认模拟（可配置真实）"；
-补齐＝批次/挑战状态持久化（PG/LevelDB）+ `real-l1-enabled=true` 全链路真机验证。
+**路线**：收敛＝对外标注"批次/挑战状态已持久化、L1 交互默认模拟（可配置真实）"；
+补齐＝`real-l1-enabled=true` 全链路真机验证（并入 PLAN-014 Phase 5）。
 （README L2 节"资产承载限制"已覆盖大方向；如需精确到"锚定未完成"，建议在此立项时补一句。）
 
 ## 5. 0x10–0x1a 支付扩展 —— "类型/单规则预检存在，完整链路被门禁拒绝"（已修正）

@@ -1,6 +1,6 @@
 # 方案 PLAN-014：状态执行接线专项（同步状态重放 A-2/A-3 + 支付扩展执行接线 + 欺诈证明锚定状态）
 
-- **状态**：Approved（2026-10-19 拍板：批次⑥ 路线文档 §8 结论——合并立项、一次设计、分期交付）；Phase 0/1 已交付（2026-10-19），Phase 2/3 已交付（2026-10-20，见 §八）
+- **状态**：Approved（2026-10-19 拍板：批次⑥ 路线文档 §8 结论——合并立项、一次设计、分期交付）；Phase 0/1 已交付（2026-10-19），Phase 2/3 已交付（2026-10-20），Phase 4 持久化面已交付（2026-10-20，real-L1 面并入 Phase 5，见 §八）
 - **日期**：2026-10-19
 - **前置**：
   - PLAN-012 审核方案 A（拆分验证路径 + 状态重放，2026-08-14 审核通过）——A-1 止血已上线，A-2/A-3 未实施
@@ -14,7 +14,7 @@
 |---|---|---|
 | PLAN-012 A-2/A-3 | 同步节点"写链 → 状态重放 → merkle 校验 → 回滚"未接线 | 写链后的状态执行与校验 |
 | 批次⑥ §5 | `0x10–0x1a` 支付扩展"类型/单规则预检存在、完整链路被门禁拒绝"（`processTransaction` 生产无调用点） | 区块接受后的交易执行入口（需独立共识变更） |
-| 批次⑥ §4 | 欺诈证明"机制真实、锚定未完成"（状态内存态 + L1 交互默认模拟） | 执行结果的状态持久化与外部锚定 |
+| 批次⑥ §4 | 欺诈证明"机制真实、锚定未完成"（原：状态内存态 + L1 交互默认模拟；状态已持久化——Phase 4） | 执行结果的状态持久化与外部锚定 |
 
 三者共同点是**同一条状态执行链路的三个消费方**：A-2/A-3 需要"按区块重放交易"的执行入口；支付扩展需要"区块接受路径调用执行器"的接线；欺诈证明需要"执行结果/批次状态的持久化"。分开实施会三次改动同一路径（`PendingBlocksManager` / `StateDB` / `MerkleTreeManager`），存在反复回归风险——**合并立项、一次设计、分期交付**。
 
@@ -24,7 +24,7 @@
 - **状态执行引擎存在**（PLAN-012 A-2 深挖修正）：`StateDB.applyTransactions` / `getAccountUnsafe`（按需重放）完整存在——缺口不是"引擎缺失"，而是**接线缺失**。
 - **merkle 对账链路的实现语义（Phase 1 实施期修正）**：`MerkleHandler` 的 GET_TREE_NODES/TREE_NODES 对账对象是**块体交易树**（按 `block.body` 交易哈希构建、按索引替换交易）——不是账户状态树；账户状态链路的真实实现是确认路径 `StateDB.writeBlock → NewBestBlockEvent → StatetreeUpdate`（Phase 1 已收敛到 `StateReplayManager`）。同步路径写链前的 merkle 校验失败（PLAN-011/012 死锁根因）语义不变：本地状态未重放至校验高度时的时序问题（A-1 已改为"延后 + 明确日志 + 继续写链"）。
 - **支付扩展（2026-10-20 Phase 3 修正）**：类型定义齐备（`core/account/Transaction.java:130-141`，CHANNEL_OPEN 0x10 … SUBSCRIPTION_AUTH 0x1a）；`BasicRule` 有单规则预检（`BasicRule.java:187-205`）；`PaymentTransactionProcessor.processTransaction` 分发 0x10–0x18 有逻辑、0x19/0x1a 仅日志（`:161-170`），**但 `processTransaction` 生产无任何调用点**。更重要的是：完整区块/RPC 路径先经 `AccountRule` 的 `TransactionFormatCheck`，其 `type<=15` 门禁（`TransactionCheck.java:119-125`）会以 `Type check error` 拒绝 0x10–0x1a——**当前不可上链**，不是"上链后不执行"。
-- **欺诈证明**：单步二分证明 + 挑战窗 + challenge bond + 罚没奖励 + 多挑战者冲突解决（first-valid-wins）实现完整；**但** `FraudProofVerifier` 的批次/挑战状态为进程内存（`batchSubmitTime`/`batchStore`/`submitterStore`/`challengeBonds` 等 ConcurrentHashMap，:68-81）；L1 侧 `DefaultL2BridgeContract` 默认注入内存模拟客户端（`real-l1-enabled=false`，:26）。
+- **欺诈证明**：单步二分证明 + 挑战窗 + challenge bond + 罚没奖励 + 多挑战者冲突解决（first-valid-wins）实现完整；批次/挑战/bond 状态已 PG 持久化（Phase 4，`JdbcFraudProofStateStore`，store=`l2_fraud_state`）；**但** L1 侧 `DefaultL2BridgeContract` 默认注入内存模拟客户端（`real-l1-enabled=false`，:26），且桥的存款/提款/已提交根仍为进程内存（见 §八 Phase 4 边界）。
 
 ## 三、目标架构
 
@@ -42,8 +42,9 @@
    │           └─ 不一致 → ReorgManager 回滚 + 拉黑对端（Phase 2）
    │
    └─► 欺诈证明（Phase 4）
-         批次/挑战状态持久化（复用 nexus_schema_meta / LevelDB meta 基建）
-         + real-l1-enabled=true 真机全链路
+         批次/挑战状态持久化（PG：l2_fraud_batches / l2_fraud_bonds / l2_fraud_conflicts，
+         SchemaMeta store=l2_fraud_state 版本登记）✅ 持久化面已交付（2026-10-20）
+         + real-l1-enabled=true 真机全链路（并入 Phase 5）
 ```
 
 **并发与幂等**：
@@ -59,7 +60,7 @@
 | **Phase 1**（已交付，2026-10-19，见 §八） | `StateReplayManager` 核心（A-2）：确认路径重放 → 账户/孵化状态持久化 → 状态根重算校验（`MerkleRule.verifyStateRoots` 提取）；观察位不阻断 | 2–3d | ✅ 单测：重放后状态根与出块方一致；块体不完整根不一致复现（10/10） |
 | **Phase 2**（已交付，2026-10-20，见 §八） | 事后校验 + 回滚（A-3）：`StateRootMismatchHandler` 异步处置；`observe`（默认）/`rollback` 可配；最终化护栏 + 对端溯源拉黑 | 1–2d | ✅ 单测 19/19：observe 不处置 / rollback 回滚+清理+拉黑 / 最终化拒绝 / 幂等 |
 | **Phase 3**（已交付，2026-10-20，见 §八） | 支付扩展口径固化（Option A，不改共识）：修正"验证已上链"表述；显式标注 0x10–0x1a 被 `TransactionFormatCheck` 的 `type<=15` 门禁拒绝（`Type check error`）、`processTransaction` 生产无调用点、0x19/0x1a 仅日志；补门禁回归测试。真正的"区块接受但不执行"validate-only 属独立共识变更，不在本期 | 0.5–1d | ✅ 门禁测试：0x19/0x1a → `Type check error`；0x0f 不因类型被拒 |
-| **Phase 4** | 欺诈证明锚定：批次/挑战状态持久化（PG/LevelDB）+ `real-l1-enabled=true` 真机链路 | 2–3d | 进程重启后批次/挑战状态不丢失；真机 L1 交互验证 |
+| **Phase 4**（持久化面已交付 2026-10-20；real-L1 面并入 Phase 5，见 §八） | 欺诈证明锚定：批次/挑战状态持久化（PG 单存储决策——不做 LevelDB、不双写）+ `real-l1-enabled=true` 真机链路 | 2–3d | ✅ 进程重启后批次/挑战状态不丢失（11 用例）；真机 L1 交互验证 → 转 Phase 5 |
 | **Phase 5** | 真机双节点全链路验证：持续同步 + 确认不中断（PLAN-011/012 死锁根除）；状态根对账一致 | 1d | A/B 双节点高度持续推进 + finality 正常 + RPC 验证 |
 
 预估总计 9–13 天（含真机验证），按阶段独立 PR 交付。
@@ -78,7 +79,7 @@
 
 本专项交付前，README / ARCHITECTURE 对以下两点的口径为（2026-10 起）：
 
-1. **Optimistic 路线**：欺诈证明机制真实，但运行在 L2 进程内（状态内存态、L1 交互默认内存模拟）——"锚定到真实 L1 状态"未完成。
+1. **Optimistic 路线**：欺诈证明机制真实；批次/挑战/bond 状态已 PG 持久化（Phase 4，2026-10-20），但 L1 交互默认内存模拟（`real-l1-enabled=false`）——"锚定到真实 L1 状态"未完成（real-L1 验证并入 Phase 5）。
 2. **支付扩展（0x10–0x1a）**：仅有类型定义与 `BasicRule` 单规则预检；完整区块/RPC 路径被 `TransactionCheck.TransactionFormatCheck` 的 `type<=15` 门禁拒绝（`Type check error`），**当前不可上链**。`processTransaction` 生产无调用点；0x19/0x1a 分支仅日志、无状态写入。
 
 各阶段交付后同步回填本节与 README/ARCHITECTURE 表述（**交付即收敛，不留口径漂移**）。
@@ -89,6 +90,50 @@
 - 批次⑥ 第 1/2/3 项（Merkle A-2 决策 / Groth16 真实路径 / KZG 诚实标注）——维持现状，已收敛。
 
 ## 八、实施记录
+
+### Phase 4（2026-10-20，持久化面已交付；real-L1 面未交付）
+
+**交付**（分支 `feat/fraud-proof-persistence`）：
+- 新增 `FraudProofStateStore`（`org.nexus.l2.persistence`，接口 + 快照记录）与
+  `JdbcFraudProofStateStore`（`@Profile("!dev")`）：三表 `l2_fraud_batches`（批次 JSON/提交时间/
+  提交者）、`l2_fraud_bonds`（金额/状态/质押时间）、`l2_fraud_conflicts`（first-valid-wins 状态 +
+  证明 JSON + 三类名单）；`SchemaMeta` 版本登记（store=`l2_fraud_state`，version=1）。
+- upsert 采用"先 UPDATE、缺行再 INSERT、唯一键竞争时重试 UPDATE"的可移植写法——
+  Phase 4 侦察实测 H2 2.2.224 仅支持 `ON CONFLICT DO NOTHING`、不支持 `DO UPDATE`；
+  `MERGE ... KEY()` 是 H2 专有、PostgreSQL 报 bad SQL grammar（`JdbcPaymentStateStore` 的
+  同款写法因此是潜在生产缺陷，见"遗留发现"）。
+- `FraudProofVerifier`：写穿批次（onSubmit / markChallenged / finalizeBatch）、bond
+  （stake / release / reward / invalid-slash）；`@PostConstruct restoreState()` 启动恢复
+  批次 + bond + 冲突；未注入 store 时行为与旧版一致（纯内存）。
+- `ChallengeConflictResolver`：first-valid-wins 状态写穿 + `restore(...)`；`clear` 同步删行；
+  `firstValidProof` 类型 `Object` → `FraudProof`（调用点仅 verifier，无破坏）。
+- `MerkleProof` 构造器补 Jackson `@JsonCreator/@JsonProperty`（FraudProof 嵌套反序列化所需，
+  行为不变）。
+- 回归：`JdbcFraudProofStateStoreTest`（6 用例：schema 登记 / 批次 JSON 往返 / upsert 幂等 /
+  bond 状态更新 / 冲突嵌套证明往返 / 删除）+ `FraudProofVerifierPersistenceTest`
+  （5 用例：批次+提交者+窗口恢复 / bond 状态恢复 / finalize 后状态恢复 / first-valid-wins 恢复 /
+  clear 删除）——本地 11/11 通过；`FraudProofVerifierTest` + `EndToEndRollupTest` 回归通过。
+
+**不做（本期边界）**：
+1. `real-l1-enabled=true` 真机 L1 链路未验证（real-L1 面并入 Phase 5）；`DefaultL2BridgeContract`
+   的存款/提款/已提交根仍为进程内存。
+2. `ChallengePeriodPolicy` 的"可疑行为延期"标记仍为进程内存。
+3. 多副本共享同一 PG 时为 last-writer-wins（单进程 synchronized 语义未分布式化，无分布式锁/
+   乐观版本）；完整多副本一致性另行设计。
+4. `challengerStore` 字段无写入点（历史遗留），本期不持久化、不删除。
+5. 持久化失败向上抛出（fail-fast）；进程在"内存已变、库未写"窗口崩溃时，重启以库中状态为准。
+
+**实施期修正（相对本文件初稿，诚实记录）**：
+- 初稿"PG/LevelDB 双写"被否决为 PG 单存储：nexus-core 多副本共享同一 PG，LevelDB 为各副本
+  本地库，双写只会引入分叉；LevelDB 侧不新增欺诈证明状态。
+- 初稿假设"ON CONFLICT DO UPDATE 可同时兼容 PG/H2"不成立（H2 版本限制），改为可移植 upsert。
+
+**遗留发现（不属本阶段交付，已记录待处理）**：
+- `JdbcPaymentStateStore` / `JdbcFinalityStateStore` 使用 H2 专有 `MERGE ... KEY()`，
+  生产 PostgreSQL 下写路径会 bad SQL grammar；因 `PaymentTransactionProcessor` 生产无调用点
+  （Phase 3 结论）而暂未暴露。建议 P1 修复（改可移植 upsert 或方言适配），另立任务。
+- `ValidatorSetPersistence.upsert` 使用 `ON CONFLICT DO UPDATE`，同样只对 PG 有效；
+  H2 测试路径会走 catch 分支静默降级（日志 WARN），测试覆盖存在盲区。
 
 ### Phase 3（2026-10-20，已交付）
 

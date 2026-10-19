@@ -4,6 +4,33 @@
 
 ## [Unreleased]
 
+### 状态执行接线：欺诈证明状态 PG 持久化（PLAN-014 Phase 4 持久化面）
+
+**背景**：批次⑥ 路线文档 §4 缺口"欺诈证明机制真实、锚定未完成"——批次/挑战状态
+全为进程内 ConcurrentHashMap，重启即丢失。本批交付 Phase 4 持久化面（PG 单存储决策，
+不做 LevelDB、不双写）；`real-l1-enabled=true` 真机链路并入 Phase 5（诚实边界见
+PLAN-014 §八）。
+
+- 新增 `FraudProofStateStore` 接口 + `JdbcFraudProofStateStore`（`@Profile("!dev")`）：
+  三表 `l2_fraud_batches` / `l2_fraud_bonds` / `l2_fraud_conflicts`，`SchemaMeta`
+  版本登记（store=`l2_fraud_state`，version=1）。
+- `FraudProofVerifier`：批次（onSubmit/markChallenged/finalizeBatch）、bond
+  （stake/release/reward/invalid-slash）写穿；`@PostConstruct restoreState()` 启动恢复；
+  未注入 store 时保持纯内存行为（测试兼容）。
+- `ChallengeConflictResolver`：first-valid-wins 状态写穿 + `restore(...)`，`clear` 同步删行；
+  `firstValidProof` 类型 `Object` → `FraudProof`。
+- `MerkleProof` 构造器补 Jackson 注解（FraudProof 嵌套反序列化；行为不变）。
+- upsert 采用"先 UPDATE、缺行再 INSERT（唯一键竞争重试）"：实测 H2 2.2.224 不支持
+  `ON CONFLICT DO UPDATE`，`MERGE ... KEY()` 又是 H2 专有——两种不可移植写法均排除。
+- 回归：`JdbcFraudProofStateStoreTest`（6 用例）+ `FraudProofVerifierPersistenceTest`
+  （5 用例，覆盖"模拟重启后状态恢复"）——本地 11/11；`FraudProofVerifierTest` /
+  `EndToEndRollupTest` 回归通过。
+- **不做**：不接 `real-l1-enabled=true` 真机链路（转 Phase 5）；不持久化
+  `ChallengePeriodPolicy` 延期标记；不做多副本分布式一致性（last-writer-wins 已标注）。
+- 遗留发现（待另立任务）：`JdbcPaymentStateStore` / `JdbcFinalityStateStore` 用 H2 专有
+  `MERGE ... KEY()`，生产 PG 写路径会 bad SQL grammar（当前因支付处理器无生产调用点而未暴露）；
+  `ValidatorSetPersistence.upsert` 的 `ON CONFLICT DO UPDATE` 在 H2 测试路径被 catch 静默降级。
+
 ### 状态执行接线：支付扩展现状固化（PLAN-014 Phase 3 / 口径修正）
 
 **背景**：审计原口径"支付扩展验证已上链、执行未接线"不准确。Phase 3 侦察确认：
@@ -78,8 +105,10 @@
 
 - README（L2 Rollup 节）：补两条精确注记——① Optimistic 路线"欺诈证明机制真实但锚定未完成
   （批次/挑战状态内存态、L1 交互默认内存模拟）"；② 支付扩展"类型/验证已上链、执行接线在途
-  （`processTransaction` 生产暂无调用点）"。（2026-10-20 修正：② 的后半句不准确——完整
-  区块/RPC 路径被 `TransactionCheck` 的 `type<=15` 门禁拒绝，当前不可上链；见 PLAN-014 Phase 3。）
+  （`processTransaction` 生产暂无调用点）"。（2026-10-20 修正：① 的"状态内存态"部分已收敛——
+  批次/挑战/bond 状态已 PG 持久化，见 PLAN-014 Phase 4；L1 交互默认内存模拟仍未完成。
+  ② 的后半句不准确——完整区块/RPC 路径被 `TransactionCheck` 的 `type<=15` 门禁拒绝，
+  当前不可上链；见 PLAN-014 Phase 3。）
 - ARCHITECTURE（L2 节）：同步补现状注记，指向 PLAN-014。
 - 新增 `docs/plan/PLAN-014-state-execution-wiring.md`：范围合并论证 + 现状证据（file:line）+
   目标链路（写链 → 重放 → merkle 重建校验 → 回滚拉黑）+ 分期交付（Phase 1 状态重放 A-2 /
