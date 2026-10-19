@@ -252,8 +252,9 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
 
 ### L2 Rollup（v2.0.0-rc1 真实化）
 
-- **Optimistic 路线**：欺诈证明单步验证为真实逻辑。
+- **Optimistic 路线**：欺诈证明单步验证为真实逻辑（机制在 L2 进程内运行；批次/挑战状态为内存态、L1 交互默认内存模拟 `real-l1-enabled=false`——"锚定到真实 L1 状态"未完成，见"状态执行接线"专项 [PLAN-014](docs/plan/PLAN-014-state-execution-wiring.md)）。
 - **ZK 路线**：依赖上述 Schnorr 证明系统，不具备 ZK 安全属性。
+- **支付扩展（0x10–0x1a）**：交易类型与验证规则已在链上生效（`CompositeBlockRule`）；执行层（`PaymentTransactionProcessor.processTransaction`）接线在途/实验性——生产路径暂无调用点（见"状态执行接线"专项 [PLAN-014](docs/plan/PLAN-014-state-execution-wiring.md)）。
 - **L2-L1 真实化**：Hardhat L1 测试环境 + `L2Bridge.sol` Solidity 合约已就绪，但端到端测试因 Hardhat EDR 不兼容跳过（未完成真实 L1 节点验证）。
 
 ### 治理执行（真实化完成，2026-08）

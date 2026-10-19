@@ -98,6 +98,7 @@ Blockchain is the foundational settlement layer — not the product itself. On t
   - MPT 状态根（`MerklePatriciaTrie`）+ 单步二分欺诈证明
   - EIP-4844 blob 承载（`l2/blob/`）降低 L1 caldata 成本
   - 多挑战者冲突解决（`l2/challenge/`，first-valid-wins）
+  - 现状注记（2026-10）：机制在 L2 进程内运行；批次/挑战状态为内存态、L1 交互默认内存模拟（`real-l1-enabled` 可配真实）——"锚定到真实 L1 状态"与支付扩展执行接线合并立项为"状态执行接线"专项（`docs/plan/PLAN-014-state-execution-wiring.md`）
   - 排序策略（`l2/sequencer/`，account nonce 升序 + priority fee 降序）
   - Gas 估算（`l2/gas/`）
 - **ZK Rollup**（`l2/` + `l2/zk/`）：ZK 证明即最终性
