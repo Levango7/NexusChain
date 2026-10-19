@@ -86,6 +86,7 @@ Phase 5 针对上述冻结模块进行了真实化改造，逐项验证解冻条
 - R1CS 约束严重不完备：缺少签名验证、nonce、gas 等约束（ZK-P0-03）
 - toxic waste 未销毁（ZK-P0-02）
 - 三重降级：halo2 → Groth16 → Schnorr（ZK-P1-03）
+- **后续更新（2026-10，方案 C）**：真实 Groth16 已上线（`zk-groth16-service` Rust arkworks + Java 远程 fail-closed 对接）；第 1/4 条的"Schnorr 替代"限制现仅适用于未配置远程服务的本地降级路径；可信设置流程见 `docs/zk-setup-ceremony.md`。
 
 ### P5-T6: L2 L1 真实节点测试环境
 

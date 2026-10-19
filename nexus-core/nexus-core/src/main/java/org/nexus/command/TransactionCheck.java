@@ -48,6 +48,16 @@ import java.util.Arrays;
 public class TransactionCheck {
     private static final Logger logger = LoggerFactory.getLogger(TransactionCheck.class);
 
+    /**
+     * 交易 nonce 上界（批次⑥ 加固，2026-10-19）。
+     *
+     * <p>交易 nonce 必须"严格大于账户当前 nonce"（防重放，见 {@link #TransactionVerify(Transaction, Account, Incubator)}），
+     * 但此前无上界——{@code Long.MAX_VALUE} 级 nonce 会把账户钉死为"无法再发送任何交易"
+     * （单调递增校验恒真），并让协议内部递增（{@code StateDB.applyIncubate} 的系统账户
+     * {@code nonce++}）在边界处回绕为负。上界之下保留 1024 余量，覆盖协议内部递增空间。</p>
+     */
+    public static final long MAX_TX_NONCE = Long.MAX_VALUE - 1024;
+
     @Autowired
     Configuration configuration;
 
@@ -216,6 +226,12 @@ public class TransactionCheck {
             if (nownonce >= trannonce) {
                 apiResult.setCode(5000);
                 apiResult.setMessage("Nonce is too small");
+                return apiResult;
+            }
+            // 批次⑥ 加固：nonce 上界（防无界跳变钉死账户 + 内部递增边界回绕）
+            if (trannonce > MAX_TX_NONCE) {
+                apiResult.setCode(5000);
+                apiResult.setMessage("Nonce out of range");
                 return apiResult;
             }
             //type
