@@ -3,12 +3,14 @@ package org.nexus.l2;
 import org.nexus.l2.challenge.ChallengeConflictResolver;
 import org.nexus.l2.challenge.ChallengeConflictResult;
 import org.nexus.l2.challenge.ChallengePeriodPolicy;
+import org.nexus.l2.persistence.FraudProofStateStore;
 import org.nexus.consensus.pos.SlashingService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
+import jakarta.annotation.PostConstruct;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.time.Duration;
@@ -62,6 +64,10 @@ public class FraudProofVerifier {
     @Autowired(required = false)
     private ChallengePeriodPolicy challengePeriodPolicy;
 
+    /** 批次/挑战状态持久化（PLAN-014 Phase 4；未注入时保持纯内存行为）。 */
+    @Autowired(required = false)
+    private FraudProofStateStore stateStore;
+
     private final Duration challengeWindow;
     private final BigDecimal rewardRate;
 
@@ -94,11 +100,53 @@ public class FraudProofVerifier {
     }
 
     /**
+     * 启动恢复（PLAN-014 Phase 4）：从持久化 store 载入批次、bond 与冲突状态。
+     *
+     * <p>非 Spring 手工装配（测试）不会触发 {@code @PostConstruct}，
+     * 此时 verifier 保持纯内存行为。</p>
+     */
+    @PostConstruct
+    public void restoreState() {
+        if (stateStore == null) {
+            return;
+        }
+        FraudProofStateStore.Snapshot snapshot = stateStore.load();
+        for (FraudProofStateStore.BatchRecord record : snapshot.batches()) {
+            RollupBatch batch = record.batch();
+            if (batch == null || batch.getBatchId() == null) {
+                continue;
+            }
+            long batchId = batch.getBatchId();
+            batchStore.put(batchId, batch);
+            if (record.submitter() != null) {
+                submitterStore.put(batchId, record.submitter());
+            }
+            if (record.submitTime() != null) {
+                batchSubmitTime.put(batchId, record.submitTime());
+            }
+        }
+        for (ChallengeBond bond : snapshot.bonds()) {
+            if (bond.getChallengerId() != null) {
+                challengeBonds.put(bond.getChallengerId(), bond);
+            }
+        }
+        if (conflictResolver != null) {
+            conflictResolver.restore(snapshot.conflicts());
+        }
+        logger.info("FraudProofVerifier restored {} batches, {} bonds, {} conflicts",
+                snapshot.batches().size(), snapshot.bonds().size(), snapshot.conflicts().size());
+    }
+
+    /**
      * 批次提交时调用，开启挑战窗口。
      */
     public void onSubmit(long batchId) {
         batchSubmitTime.put(batchId, Instant.now());
         logger.info("Challenge window opened for batch {} (duration={})", batchId, challengeWindow);
+        RollupBatch batch = batchStore.get(batchId);
+        if (batch != null) {
+            persistBatch(batch);
+        }
     }
 
     /**
@@ -115,6 +163,25 @@ public class FraudProofVerifier {
         batchStore.put(batchId, batch);
         submitterStore.put(batchId, submitter);
         onSubmit(batchId);
+    }
+
+    /** 写穿批次快照；未注入 store 时跳过。 */
+    private void persistBatch(RollupBatch batch) {
+        if (stateStore == null || batch == null || batch.getBatchId() == null) {
+            return;
+        }
+        long batchId = batch.getBatchId();
+        Instant submitTime = batchSubmitTime.get(batchId);
+        stateStore.saveBatch(batch, submitterStore.get(batchId),
+                submitTime == null ? Instant.now() : submitTime);
+    }
+
+    /** 写穿 bond 状态；未注入 store 时跳过。 */
+    private void persistBond(ChallengeBond bond) {
+        if (stateStore == null || bond == null || bond.getChallengerId() == null) {
+            return;
+        }
+        stateStore.saveBond(bond);
     }
 
     /**
@@ -329,11 +396,13 @@ public class FraudProofVerifier {
             case DUPLICATE_AFTER_VALID:
                 // 后续有效挑战者 bond 退还（不罚没）
                 bond.setStatus(ChallengeBond.Status.RELEASED);
+                persistBond(bond);
                 logger.info("submitChallenge: challenger {} bond refunded (first-valid-wins, firstValid={})",
                         challenger, conflictResolver.getFirstValidChallenger(batchId));
                 break;
             case INVALID_PROOF:
                 bond.setStatus(ChallengeBond.Status.SLASHED);
+                persistBond(bond);
                 logger.info("submitChallenge: challenger {} bond slashed (invalid proof)", challenger);
                 break;
             case WINDOW_CLOSED:
@@ -356,6 +425,7 @@ public class FraudProofVerifier {
         }
         if (!proofValid) {
             bond.setStatus(ChallengeBond.Status.SLASHED);
+            persistBond(bond);
             return ChallengeConflictResult.INVALID_PROOF;
         }
         executeChallengeSuccess(batchId, challenger, bond, batch);
@@ -454,6 +524,7 @@ public class FraudProofVerifier {
         ChallengeBond bond = challengeBonds.get(challengerId);
         if (bond != null && bond.getStatus() == ChallengeBond.Status.STAKED) {
             bond.setStatus(ChallengeBond.Status.RELEASED);
+            persistBond(bond);
         }
         logger.info("Challenger {} rewarded {}", challengerId, reward);
     }
@@ -474,7 +545,9 @@ public class FraudProofVerifier {
             logger.warn("Challenger {} already has a staked bond", challengerId);
             return false;
         }
-        challengeBonds.put(challengerId, new ChallengeBond(challengerId, amount));
+        ChallengeBond bond = new ChallengeBond(challengerId, amount);
+        challengeBonds.put(challengerId, bond);
+        persistBond(bond);
         logger.info("Challenge bond staked by {} amount {}", challengerId, amount);
         return true;
     }
@@ -488,6 +561,7 @@ public class FraudProofVerifier {
             return false;
         }
         bond.setStatus(ChallengeBond.Status.RELEASED);
+        persistBond(bond);
         logger.info("Challenge bond released for {}", challengerId);
         return true;
     }
@@ -505,6 +579,7 @@ public class FraudProofVerifier {
                 tx.setStatus(L2TransactionStatus.REVERTED);
             }
         }
+        persistBatch(batch);
         logger.info("Batch {} marked as CHALLENGED", batch.getBatchId());
     }
 
@@ -537,6 +612,7 @@ public class FraudProofVerifier {
                 }
             }
         }
+        persistBatch(batch);
         logger.info("Batch {} finalized as VERIFIED", batchId);
         // 触发所有提款 finalizeWithdraw
         if (bridgeContract != null) {

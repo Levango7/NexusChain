@@ -1,5 +1,8 @@
 package org.nexus.l2;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 import java.util.Collections;
 import java.util.List;
 
@@ -29,8 +32,12 @@ public class MerkleProof {
     /** 自底向上每层方向位：0 表示当前节点为左孩子，1 表示为右孩子 */
     private final List<Integer> directions;
 
-    public MerkleProof(String key, String value, int index,
-                       List<String> siblings, List<Integer> directions) {
+    @JsonCreator
+    public MerkleProof(@JsonProperty("key") String key,
+                       @JsonProperty("value") String value,
+                       @JsonProperty("index") int index,
+                       @JsonProperty("siblings") List<String> siblings,
+                       @JsonProperty("directions") List<Integer> directions) {
         this.key = key;
         this.value = value;
         this.index = index;
