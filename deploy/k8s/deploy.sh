@@ -12,7 +12,7 @@ echo "Applying manifests in order..."
 
 # 1. Namespace + Config + Secrets
 kubectl apply -f "$DIR/00-namespace-config.yml"
-echo "[1/12] Namespace + ConfigMap + Secret"
+echo "[1/13] Namespace + ConfigMap + Secret"
 
 # 2. genesis ConfigMap —— L3 预演缺陷 #28：改为**可选**。
 #    core 缺省用镜像内置 classpath genesis（schema 以
@@ -27,14 +27,14 @@ if [ -d "$DIR/custom-genesis" ]; then
     --from-file=validators.json="$DIR/custom-genesis/validators.json" \
     --namespace=nexus \
     --dry-run=client -o yaml | kubectl apply -f -
-  echo "[2/12] Genesis ConfigMap（自定义，来自 $DIR/custom-genesis/）"
+  echo "[2/13] Genesis ConfigMap（自定义，来自 $DIR/custom-genesis/）"
 else
-  echo "[2/12] Genesis ConfigMap 跳过（使用 core 镜像内置 genesis；自定义见 05-core-genesis.yml.example）"
+  echo "[2/13] Genesis ConfigMap 跳过（使用 core 镜像内置 genesis；自定义见 05-core-genesis.yml.example）"
 fi
 
 # 3. Infrastructure (MySQL + Redis)
 kubectl apply -f "$DIR/30-infrastructure.yml"
-echo "[3/12] Infrastructure (MySQL 8 + Redis)"
+echo "[3/13] Infrastructure (MySQL 8 + Redis)"
 
 # Wait for infra to be ready
 echo "Waiting for MySQL..."
@@ -44,42 +44,47 @@ kubectl wait --for=condition=ready pod -l app=redis -n nexus --timeout=60s 2>/de
 
 # 4. Core chain nodes (StatefulSet)
 kubectl apply -f "$DIR/20-core-statefulset.yml"
-echo "[4/12] Core StatefulSet (4 nodes)"
+echo "[4/13] Core StatefulSet (4 nodes)"
 
 # 5. Gateway (Deployment + HPA + Ingress)
 kubectl apply -f "$DIR/10-gateway.yml"
-echo "[5/12] Gateway (Deployment + HPA + Ingress)"
+echo "[5/13] Gateway (Deployment + HPA + Ingress)"
 
 # 6. Bridge (Deployment + HPA)
 kubectl apply -f "$DIR/15-bridge.yml"
-echo "[6/12] Bridge (Deployment + HPA)"
+echo "[6/13] Bridge (Deployment + HPA)"
 
 # 7. Signing Service (Deployment + HPA)
 kubectl apply -f "$DIR/25-signing.yml"
-echo "[7/12] Signing Service (Deployment + HPA)"
+echo "[7/13] Signing Service (Deployment + HPA)"
 
 # 8. Wallet Service (Deployment + HPA)
 kubectl apply -f "$DIR/26-wallet.yml"
-echo "[8/12] Wallet Service (Deployment + HPA)"
+echo "[8/13] Wallet Service (Deployment + HPA)"
 
 # 9. API Gateway (Deployment + HPA + Ingress)
 kubectl apply -f "$DIR/27-api-gateway.yml"
-echo "[9/12] API Gateway (Deployment + HPA + Ingress)"
+echo "[9/13] API Gateway (Deployment + HPA + Ingress)"
+
+# 10. Explorer (block explorer: React frontend + Express BFF, :3000)
+kubectl apply -f "$DIR/28-explorer.yml"
+echo "[10/13] Explorer (block explorer, :3000)"
 
 # 10. Monitoring (exporters + ServiceMonitors + alerts)
 kubectl apply -f "$DIR/40-monitoring.yml"
-echo "[10/12] Monitoring (PostgreSQL/Redis exporters + ServiceMonitors + PrometheusRule)"
+echo "[11/13] Monitoring (PostgreSQL/Redis exporters + ServiceMonitors + PrometheusRule)"
 
 # 11. Backup (PostgreSQL CronJob + PVC)
 kubectl apply -f "$DIR/50-backup.yml"
-echo "[11/12] Backup (PostgreSQL CronJob + PVC)"
+echo "[12/13] Backup (PostgreSQL CronJob + PVC)"
 
 # 12. NetworkPolicy baseline (default-deny + selective allow)
 kubectl apply -f "$DIR/60-networkpolicy.yml"
-echo "[12/12] NetworkPolicy baseline"
+echo "[13/13] NetworkPolicy baseline"
 
 echo ""
 echo "=== Deploy Complete ==="
 echo "Check status: kubectl get pods -n nexus"
 echo "Gateway logs: kubectl logs -f deploy/nexus-gateway -n nexus"
 echo "Core logs:    kubectl logs -f nexus-core-0 -n nexus"
+echo "Explorer:     kubectl port-forward svc/nexus-explorer 3000:3000 -n nexus"

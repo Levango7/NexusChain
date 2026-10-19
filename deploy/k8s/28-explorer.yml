@@ -1,0 +1,101 @@
+# ============================================================================
+# Explorer：区块浏览器 Deployment + Service
+# 端口 3000（nexus-explorer/Dockerfile：Express BFF 与前端产物同源单容器）
+# 数据依赖：nexus-core JSON-RPC（Service nexus-core:19585；NEXUS_RPC_URL 注入）
+#
+# 2026-10-19：k8s 双路径（本目录静态清单 + deploy/helm/）此前均无 explorer——
+# 区块浏览器只存在于 docker-compose 与发布镜像链，k8s 生产部署没有前端入口。
+# 本文件与 charts/nexus-explorer/ 子 chart 同批补齐，image tag / 副本数口径
+# 由 k8s-sync-check 与 check-version-consistency.sh 把守。
+# ============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nexus-explorer
+  namespace: nexus
+  labels:
+    app: nexus-explorer
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nexus-explorer
+  template:
+    metadata:
+      labels:
+        app: nexus-explorer
+    spec:
+      automountServiceAccountToken: false
+      # 跨可用区打散 Pod
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: nexus-explorer
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      # 只读根文件系统配套可写临时目录（Node 运行时不写盘，/tmp 供运行时兜底）
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      containers:
+        - name: explorer
+          image: ghcr.io/levango7/nexuschain/nexus-explorer:v2.74.0
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          ports:
+            - containerPort: 3000
+          env:
+            - name: NEXUS_RPC_URL
+              value: "http://nexus-core:19585/rpc"
+            # 同源托管（BFF 同时提供页面与 /api/**）：无需 CORS 白名单。
+            # 仅当把前端拆到独立域名时才需要 CORS_ALLOWED_ORIGINS（逗号分隔）。
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "500m"
+          # /health 为纯本地响应（不探测 RPC 上游），适合做探针
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nexus-explorer
+  namespace: nexus
+spec:
+  type: ClusterIP
+  selector:
+    app: nexus-explorer
+  ports:
+    - port: 3000
+      targetPort: 3000

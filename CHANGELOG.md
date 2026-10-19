@@ -4,6 +4,27 @@
 
 ## [Unreleased]
 
+### 部署：k8s/Helm 双路径补齐 nexus-explorer（区块浏览器）
+
+**缺口**：explorer 只存在于 docker-compose（dev/prod）与发布镜像链（13 镜像含它），
+`deploy/k8s/` 与 `deploy/helm/` 两条 K8s 路径**均无它**——k8s 生产部署没有任何
+前端入口（区块浏览器不可达）。
+
+- 静态清单：新增 `deploy/k8s/28-explorer.yml`（Deployment+Service，:3000，
+  `NEXUS_RPC_URL`→`nexus-core:19585/rpc`）；`deploy.sh` 步序增至 [13]；README 同步。
+- Helm：新增 `charts/nexus-explorer/` 子 chart（deployment/service/hpa/pdb；
+  无 configmap/secret/servicemonitor——无配置文件、无凭据、无 /metrics，见子 chart 注释）；
+  umbrella `Chart.yaml` 注册依赖、`values.yaml` 补子 chart 覆盖入口；
+  dev/staging/prod 三套覆盖层补齐（prod 固定 tag v2.74.0 + 多 AZ 打散）。
+- NetworkPolicy：`deploy/k8s/60-networkpolicy.yml` 与 helm 模板均增
+  `allow-ingress-to-explorer`（区块浏览器对外入口；无 Ingress 指向时
+  不产生实际流量路径）。
+- 门禁同步：`k8s-sync-check.yml` Helm 渲染步补 `--set nexus-explorer.image.tag`；
+  `check-version-consistency.sh` 断言自动纳入新静态清单与新 chart（tag=2.74.0，无需改脚本）。
+- 实证：镜像以 UID 65532 + 只读根文件系统 + tmpfs /tmp 实跑通过（/health 200、
+  前端 index 200）；`helm lint` / `helm dependency build` / `helm template`
+  （默认、prod、staging、dev 四路）本地全绿。
+
 ### 工程评审批次①：版本口径收口 + CI/门禁缺陷修复 + 部署资产小修
 
 **版本归版（消除"CHANGELOG 超前"漂移）**：`build.gradle` / `version.properties` / README 头注

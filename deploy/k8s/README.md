@@ -1,6 +1,6 @@
 # NexusChain Kubernetes 部署说明
 
-本目录包含 NexusChain 各组件的 Kubernetes 清单（namespace、gateway、core、基础设施、监控、备份、NetworkPolicy）。
+本目录包含 NexusChain 各组件的 Kubernetes 清单（namespace、gateway、core、浏览器 explorer、基础设施、监控、备份、NetworkPolicy）。
 
 ## 部署顺序
 
@@ -9,6 +9,7 @@ kubectl apply -f 00-namespace-config.yml   # namespace + ConfigMap + Secret
 kubectl apply -f 30-infrastructure.yml     # mysql / redis 等基础设施
 kubectl apply -f 20-core-statefulset.yml   # 链节点
 kubectl apply -f 10-gateway.yml            # 支付网关
+kubectl apply -f 28-explorer.yml           # 区块浏览器（:3000，2026-10-19 补）
 kubectl apply -f 40-monitoring.yml         # 监控
 kubectl apply -f 50-backup.yml             # 备份 CronJob
 kubectl apply -f 60-networkpolicy.yml      # 网络策略（default-deny）

@@ -1,0 +1,135 @@
+# nexus-explorer 子 chart 默认 values
+# ============================================================================
+# 区块浏览器（React 前端 + Express BFF 同源单容器），端口 3000。
+# 数据依赖：nexus-core JSON-RPC（NEXUS_RPC_URL）；不依赖 Nacos/Seata/DB/Redis。
+#
+# 与 Spring 服务子 chart 的模板差异（模板层同因裁剪，诚实标注）：
+#   · 无 ConfigMap/Secret 模板：explorer 全部配置走环境变量、无敏感凭据；
+#   · 无 ServiceMonitor：BFF 无 /metrics 端点（仅 /health），Prometheus 无物可抓；
+#   · 无 checksum 注解：无 ConfigMap/Secret 内容可随动。
+#   · 保留 HPA/PDB/RollingUpdate：与其余子 chart 同运维口径。
+# ============================================================================
+enabled: true
+replicaCount: 2
+nameOverride: ""
+image:
+  # -- 镜像 repository（留空回退 global.imageRegistry/nexus-explorer）
+  repository: ""
+  # -- 镜像 tag（留空回退 global.env）
+  tag: ""
+  pullPolicy: ""
+imagePullSecrets: []
+service:
+  type: ClusterIP
+  port: 3000
+  targetPort: 3000
+  name: http
+
+# -- nexus-core RPC 地址；留空则按命名空间推导
+#    http://nexus-core.<namespace>.svc.cluster.local:19585/rpc
+#    跨命名空间或独立部署 core 时显式指定。
+rpcUrl: ""
+
+# -- CORS 白名单（逗号分隔）。同源托管部署（本 chart 口径：BFF 同时提供页面与
+#    /api/**）无需配置；仅当把前端拆到独立域名时才需要。
+corsAllowedOrigins: ""
+
+# -- 额外环境变量
+extraEnv: {}
+
+resources:
+  requests:
+    memory: 128Mi
+    cpu: 100m
+  limits:
+    memory: 256Mi
+    cpu: 500m
+
+probes:
+  # -- liveness：/health 为纯本地响应（不探测 RPC），无假死误杀
+  liveness:
+    enabled: true
+    httpGet:
+      path: /health
+      port: http
+    initialDelaySeconds: 15
+    periodSeconds: 30
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readiness:
+    enabled: true
+    httpGet:
+      path: /health
+      port: http
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+  # -- startup：Node 启动快，默认关
+  startup:
+    enabled: false
+    httpGet:
+      path: /health
+      port: http
+    initialDelaySeconds: 0
+    periodSeconds: 10
+    failureThreshold: 30
+
+hpa:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  cpuTargetUtilization: 70
+  memoryTargetUtilization: 80
+
+pdb:
+  enabled: true
+  minAvailable: 1
+  maxUnavailable: ""
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+affinity: {}
+tolerations: []
+topologySpreadConstraints: []
+automountServiceAccountToken: false
+terminationGracePeriodSeconds: 30
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 0
+    maxSurge: 1
+extraVolumes: []
+extraVolumeMounts: []
+
+global:
+  env: staging
+  namespace: nexus
+  imageRegistry: ghcr.io/levango7/nexuschain
+  imagePullPolicy: IfNotPresent
+  partOfLabel: nexus
+
+  # -- Pod 级安全上下文。
+  #    注意（Helm global 合并语义）：经 umbrella（deploy/helm/values.yaml）部署时
+  #    本处默认被其 global 覆盖为 65532（distroless nonroot 全仓口径）；此处默认
+  #    值仅在独立渲染本子 chart 时生效。
+  #    实测（2026-10-19）：node:alpine 产物以 UID 65532 + 只读根文件系统 + tmpfs
+  #    /tmp 运行正常（/health 200、前端 index 200）——Node 运行时不依赖固定 UID。
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    fsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+
+  # -- 容器级安全上下文（readOnlyRootFilesystem 配套模板内 /tmp emptyDir）
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+    seccompProfile:
+      type: RuntimeDefault

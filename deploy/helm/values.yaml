@@ -142,3 +142,8 @@ nexus-api-gateway:
   # P3-T2：API Gateway 统一入口（Spring Cloud Gateway，端口 8085）
   # 端口 / 副本 / 资源 / HPA / PDB 等见子 chart values.yaml
   enabled: true
+
+nexus-explorer:
+  # 2026-10-19：区块浏览器（端口 3000，唯一依赖 nexus-core RPC）。
+  # 端口 / 副本 / 资源 / HPA / PDB 等见子 chart values.yaml。
+  enabled: true

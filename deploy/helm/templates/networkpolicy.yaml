@@ -4,6 +4,7 @@ NetworkPolicy 基线（零信任东西向流量）
 默认拒绝命名空间内全部入站，再按需放行：
   1) 命名空间内互访（gateway/bridge/signing/wallet 互相调用）
   2) 外部经 ingress-nginx 到 gateway:8080
+  3) 外部经 ingress-nginx 到 explorer:3000（区块浏览器；无 Ingress 时不产生流量，2026-10-19 补）
 说明：仅限制 Ingress；Egress 保持默认放行（镜像拉取 / 出站不受影响）。
 启用条件：.Values.global.networkPolicy.enabled
 */}}
@@ -67,4 +68,32 @@ spec:
       ports:
         - protocol: TCP
           port: 8080
+---
+# 4) 外部经 ingress-nginx 到 explorer:3000（区块浏览器对外入口，2026-10-19 补）
+# 与 deploy/k8s/60-networkpolicy.yml 同口径：无 Ingress 指向 nexus-explorer 时
+# 本条不产生实际流量路径。
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-to-explorer
+  namespace: {{ include "nexus-chain.namespace" . }}
+  labels:
+    {{- include "nexus-chain.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: nexus-explorer
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 3000
 {{- end }}
