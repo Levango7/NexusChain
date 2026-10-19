@@ -56,6 +56,23 @@ ENV NODE_ENV=production \
     FRONTEND_DIR=/app/frontend/dist
 WORKDIR /app
 
+# 2026-10-19（修复 master Security Scan 阻断）：删除基线镜像自带的 npm/npx/corepack。
+#
+# 为什么：node:24-alpine 的 npm（11.19.1）自带一份打包的 node_modules，其中
+# brace-expansion / http-cache-semantics / undici 携带 4 个 HIGH CVE
+# （CVE-2026-102276 / 102278 / 93748 / 19534），路径均在
+# /usr/local/lib/node_modules/npm/node_modules/** —— 属**基线镜像层**而非应用依赖
+# （应用 lockfile 不含这些版本，相关条目亦均为 dev-only）。2026-10-18 Trivy 镜像
+# 矩阵补齐 explorer 后首扫即命中，master Security Scan 连续红灯。
+#
+# 处置：运行镜像只执行 `node backend/dist/index.js`，包管理器永不被调用——
+# 按"可消除项不豁免"原则整树删除（含 corepack 及其 yarn/pnpm shims），
+# 同时缩小运行时文件系统与供应链暴露面；不写入 .trivyignore。
+RUN rm -rf /usr/local/lib/node_modules/npm \
+           /usr/local/lib/node_modules/corepack \
+           /usr/local/bin/npm /usr/local/bin/npx \
+           /usr/local/bin/corepack /usr/local/bin/yarn /usr/local/bin/yarnpkg
+
 # backend/package.json 必须一并拷入：其中 "type": "module" 决定 dist/*.js 按 ESM 解析
 COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=build /app/backend/package.json ./backend/package.json

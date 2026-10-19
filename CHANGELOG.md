@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+### 安全：nexus-explorer 运行镜像裁剪 npm 工具链（清 master Security Scan 红灯）
+
+**现象**：2026-10-18 Trivy 镜像矩阵补齐 nexus-explorer 后，master Security Scan 连续
+红灯——`Trivy Docker Image Scan (nexus-explorer)` 报 4 个 HIGH（brace-expansion ×2、
+http-cache-semantics、undici，severity 阻断阈值 CRITICAL,HIGH）。
+
+**根因**：4 个 CVE 全部命中 **node:24-alpine 基线镜像内置 npm 11.19.1 的打包依赖树**
+（`/usr/local/lib/node_modules/npm/node_modules/**`）——属基线工具链携带，非应用引入
+（应用 lockfile 不含这些版本，相关条目均为 dev-only）。应用侧依赖树自身 clean。
+
+**修复**：运行镜像只执行 `node backend/dist/index.js`，包管理器永不被调用——
+Dockerfile 运行阶段整树删除 npm/npx/corepack（含 yarn/pnpm shims），消除暴露面
+而非写入 .trivyignore 豁免可消除项。镜像以非 root + 只读根文件系统实跑复验
+（/health 200），并以后台 `workflow_dispatch` 在分支上真跑 Trivy 矩阵取证。
+
 ### 部署：k8s/Helm 双路径补齐 nexus-explorer（区块浏览器）
 
 **缺口**：explorer 只存在于 docker-compose（dev/prod）与发布镜像链（13 镜像含它），
