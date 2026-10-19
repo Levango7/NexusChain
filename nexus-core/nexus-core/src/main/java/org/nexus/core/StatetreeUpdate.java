@@ -18,23 +18,15 @@
 
 package org.nexus.core;
 
-import org.nexus.core.account.Account;
-import org.nexus.core.account.AccountDB;
 import org.nexus.core.event.NewBestBlockEvent;
 import org.nexus.core.event.AccountUpdateFailedEvent;
 import org.nexus.core.event.AccountUpdatedEvent;
-import org.nexus.core.incubator.Incubator;
-import org.nexus.core.incubator.IncubatorDB;
-import org.nexus.core.validate.MerkleRule;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationListener;
 import org.springframework.stereotype.Component;
 import org.nexus.pool.PeningTransPool;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -43,48 +35,24 @@ public class StatetreeUpdate implements ApplicationListener<NewBestBlockEvent> {
 
     private static final Logger log = LoggerFactory.getLogger(StatetreeUpdate.class);
     @Autowired
-    MerkleRule merkleRule;
-
-    @Autowired
-    AccountDB accountDB;
-
-    @Autowired
-    IncubatorDB incubatorDB;
-
-    @Autowired
     ApplicationContext ctx;
 
     @Autowired
     PeningTransPool peningTransPool;
 
+    @Autowired
+    StateReplayManager stateReplayManager;
+
     @Override
     public void onApplicationEvent(NewBestBlockEvent event) {
         Block b = event.getBlock();
         peningTransPool.updatePool(b.body, 2, b.nHeight);
-        Map<String, Object> merklemap = null;
 
         try {
-            merklemap = merkleRule.validateMerkle(b.body, b.nHeight);
-            List<Account> accountList = (List<Account>) merklemap.get("account");
-            List<Incubator> incubatorList = (List<Incubator>) merklemap.get("incubator");
-            List<Object[]> accountobject = new ArrayList<>();
-            List<Object[]> incubatorobjct = new ArrayList<>();
-            for (Account account : accountList) {
-                accountobject.add(new Object[]{
-                        account.getId(), account.getBlockHeight(), account.getPubkeyHash(), account.getNonce()
-                        , account.getBalance(), account.getIncubatecost(), account.getMortgage(), account.getVote()
-                });
-            }
-            accountDB.insertAccountList(accountobject);
-            for (Incubator incubator : incubatorList) {
-                incubatorobjct.add(new Object[]{
-                        incubator.getId(), incubator.getShare_pubkeyhash()
-                        , incubator.getPubkeyhash(), incubator.getTxid_issue()
-                        , incubator.getHeight(), incubator.getCost(), incubator.getInterest_amount()
-                        , incubator.getShare_amount(), incubator.getLast_blockheight_interest(), incubator.getLast_blockheight_share()
-                });
-            }
-            incubatorDB.insertIncubatorList(incubatorobjct);
+            // PLAN-014 Phase 1：重放 + 持久化 + 重放后状态根校验统一收敛到
+            // StateReplayManager。校验不一致目前为观察位（StateReplayManager 内
+            // ERROR 日志 + 计数），不阻断确认；Phase 2 再接入回滚与对端拉黑。
+            stateReplayManager.replayBlock(b);
         } catch (RuntimeException | java.io.IOException | org.apache.commons.codec.DecoderException e) {
             // CRITICAL FIX: previously returned silently without publishing any event,
             // causing StateDB.writeBlock's while(pendingBlock != null) to spin forever
