@@ -206,6 +206,20 @@ public class StateDB implements ApplicationListener<AccountUpdatedEvent> {
         }
     }
 
+    /**
+     * 在全局写锁内执行处置动作（PLAN-014 Phase 2）：回滚 + 状态行清理需要与
+     * 出块/确认（{@link #writeBlock}）及并行回滚互斥；锁可重入，
+     * 允许动作内部再调用 {@link #rollbackTo(long)} 等加锁方法。
+     */
+    public void executeUnderWriteLock(Runnable action) {
+        this.readWriteLock.writeLock().lock();
+        try {
+            action.run();
+        } finally {
+            this.readWriteLock.writeLock().unlock();
+        }
+    }
+
     public StateDB(
             @Value("${nexus.consensus.blocks-per-era}") int blocksPerEra,
             @Value("${nexus.allow-miner-joins-era}") int allowMinersJoinEra,

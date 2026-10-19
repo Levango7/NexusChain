@@ -6,11 +6,13 @@ import org.nexus.command.IncubatorAddress;
 import org.nexus.core.account.Account;
 import org.nexus.core.account.AccountDB;
 import org.nexus.core.account.Transaction;
+import org.nexus.core.event.StateRootMismatchEvent;
 import org.nexus.core.incubator.Incubator;
 import org.nexus.core.incubator.IncubatorDB;
 import org.nexus.core.validate.MerkleRule;
 import org.nexus.keystore.crypto.RipemdUtility;
 import org.nexus.keystore.crypto.SHA3Utility;
+import org.springframework.context.ApplicationContext;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.ArrayList;
@@ -25,16 +27,17 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * PLAN-014 Phase 1 回归：状态重放管理器（重放 → 持久化 → 状态根校验）。
+ * PLAN-014 Phase 1/2 回归：状态重放管理器（重放 → 持久化 → 状态根校验）。
  *
  * <p>覆盖：一致区块（重放后根一致 + 落库）/ 声明根不一致（观察位不抛异常、
  * 仍持久化、计数）/ 同步路径"块体不完整"导致的重放根不一致（PLAN-012
  * 死锁场景的最小复现）/ 重放失败向上抛出（由 StatetreeUpdate 转
- * AccountUpdateFailedEvent）。</p>
+ * AccountUpdateFailedEvent）/ 不一致时发布 StateRootMismatchEvent（PLAN-014 Phase 2）。</p>
  */
 public class StateReplayManagerTest {
 
@@ -44,6 +47,7 @@ public class StateReplayManagerTest {
     private IncubatorDB incubatorDB;
     private MerkleRule merkleRule;
     private StateReplayManager manager;
+    private ApplicationContext ctx;
 
     private byte[] proposerHash;
     private byte[] recipientHash;
@@ -59,10 +63,12 @@ public class StateReplayManagerTest {
         ReflectionTestUtils.setField(merkleRule, "accountDB", accountDB);
         ReflectionTestUtils.setField(merkleRule, "incubatorDB", incubatorDB);
 
+        ctx = mock(ApplicationContext.class);
         manager = new StateReplayManager();
         ReflectionTestUtils.setField(manager, "merkleRule", merkleRule);
         ReflectionTestUtils.setField(manager, "accountDB", accountDB);
         ReflectionTestUtils.setField(manager, "incubatorDB", incubatorDB);
+        ReflectionTestUtils.setField(manager, "ctx", ctx);
 
         proposerHash = filled(Transaction.PUBLIC_KEY_HASH_SIZE, (byte) 0x11);
         recipientHash = filled(Transaction.PUBLIC_KEY_HASH_SIZE, (byte) 0x22);
@@ -103,6 +109,7 @@ public class StateReplayManagerTest {
         verify(incubatorDB).insertIncubatorList(anyList());
         assertEquals(1L, manager.getReplayedBlocks());
         assertEquals(0L, manager.getStateRootMismatches());
+        verify(ctx, never()).publishEvent(any(StateRootMismatchEvent.class));
     }
 
     @Test
@@ -115,10 +122,11 @@ public class StateReplayManagerTest {
         assertFalse(result.isVerified());
         assertTrue(result.getVerifyMessage().contains("merkle state validate fail"),
                 result.getVerifyMessage());
-        // 观察位语义：状态仍按重放结果持久化，不抛异常、不阻断确认
+        // Phase 2：状态仍按重放结果持久化（不阻断确认），同时发布不一致事件供处置器消费
         verify(accountDB).insertAccountList(anyList());
         assertEquals(1L, manager.getReplayedBlocks());
         assertEquals(1L, manager.getStateRootMismatches());
+        verify(ctx).publishEvent(any(StateRootMismatchEvent.class));
     }
 
     @Test
@@ -134,6 +142,7 @@ public class StateReplayManagerTest {
         assertTrue(result.getVerifyMessage().contains("merkle state validate fail"),
                 result.getVerifyMessage());
         assertEquals(1, result.getTxCount());
+        verify(ctx).publishEvent(any(StateRootMismatchEvent.class));
     }
 
     @Test

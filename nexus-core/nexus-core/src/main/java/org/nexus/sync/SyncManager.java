@@ -99,6 +99,13 @@ public class SyncManager implements Plugin, ApplicationListener<NewBlockMinedEve
     @Autowired
     private CheckPointRule checkPointRule;
 
+    /**
+     * 区块来源追踪（PLAN-014 Phase 2）：记录 P2P 收块入口的 区块 → 对端 映射，
+     * 供状态根不一致处置阶段按高度反查对端拉黑（可选注入，单测可为空）。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private BlockOriginTracker blockOriginTracker;
+
     public SyncManager() {
         this.proposalCache = new ConcurrentLinkedHashMap.Builder<String, Boolean>().maximumWeightedCapacity(CACHE_SIZE).build();
     }
@@ -183,7 +190,14 @@ public class SyncManager implements Plugin, ApplicationListener<NewBlockMinedEve
 
     private void onBlocks(Context context, PeerServer server) {
         NexusChainOuterClass.Blocks blocksMessage = context.getPayload().getBlocks();
-        receiveBlocks(Utils.parseBlocks(blocksMessage.getBlocksList()));
+        List<Block> blocks = Utils.parseBlocks(blocksMessage.getBlocksList());
+        if (blockOriginTracker != null) {
+            Peer remote = context.getPayload().getRemote();
+            for (Block b : blocks) {
+                blockOriginTracker.record(b, remote);
+            }
+        }
+        receiveBlocks(blocks);
     }
 
     /**
@@ -265,6 +279,9 @@ public class SyncManager implements Plugin, ApplicationListener<NewBlockMinedEve
         }
         NexusChainOuterClass.Proposal proposal = context.getPayload().getProposal();
         Block block = Utils.parseBlock(proposal.getBlock());
+        if (blockOriginTracker != null) {
+            blockOriginTracker.record(block, context.getPayload().getRemote());
+        }
         if (proposalCache.containsKey(block.getHashHexString())) {
             return;
         }

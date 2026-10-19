@@ -5,6 +5,7 @@ import org.nexus.db.StateDB;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -30,11 +31,14 @@ public class ReorgManager {
 
     private final StateDB stateDB;
     private final FinalityGadget finalityGadget;
+    private final long epochLength;
 
     public ReorgManager(@Autowired(required = false) StateDB stateDB,
-                        @Autowired(required = false) FinalityGadget finalityGadget) {
+                        @Autowired(required = false) FinalityGadget finalityGadget,
+                        @Value("${nexus.finality.epoch-length:32}") long epochLength) {
         this.stateDB = stateDB;
         this.finalityGadget = finalityGadget;
+        this.epochLength = epochLength;
     }
 
     /**
@@ -108,9 +112,9 @@ public class ReorgManager {
         return true;
     }
 
-    /** 由检查点区块高度推导所属 epoch（与 FinalityCoordinator 语义一致：epochLength 配置）。 */
+    /** 由检查点区块高度推导所属 epoch（与 FinalityCoordinator 语义一致：epochLength 配置注入）。 */
     private long epochOf(long height) {
-        long epochLength = 32;  // 与 nexus.finality.epoch-length 默认一致；由调用方传入更精确
-        return (height - 1) / epochLength + 1;
+        long len = epochLength > 0 ? epochLength : 32;
+        return (height - 1) / len + 1;
     }
 }

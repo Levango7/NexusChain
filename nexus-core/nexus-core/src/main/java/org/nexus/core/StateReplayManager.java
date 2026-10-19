@@ -4,6 +4,7 @@ import com.google.protobuf.InvalidProtocolBufferException;
 import org.apache.commons.codec.DecoderException;
 import org.nexus.core.account.Account;
 import org.nexus.core.account.AccountDB;
+import org.nexus.core.event.StateRootMismatchEvent;
 import org.nexus.core.incubator.Incubator;
 import org.nexus.core.incubator.IncubatorDB;
 import org.nexus.core.validate.MerkleRule;
@@ -11,6 +12,7 @@ import org.nexus.core.validate.Result;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationContext;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -30,8 +32,11 @@ import java.util.concurrent.atomic.AtomicLong;
  *       {@code Miner} 生成 {@code hashMerkleState} 用的是同一套执行逻辑）；</li>
  *   <li>持久化语义与旧 {@code StatetreeUpdate} 完全一致：
  *       {@code accountDB.insertAccountList} / {@code incubatorDB.insertIncubatorList}；</li>
- *   <li><b>Phase 1 为观察位</b>：重放后状态根不一致只做 ERROR 日志与计数，
- *       不阻断确认、不回滚。强制处置（回滚 + 拉黑）在 Phase 2 接线。</li>
+ *   <li><b>Phase 2 处置接线</b>：重放后状态根不一致时发布
+ *       {@link StateRootMismatchEvent}，由 {@code StateRootMismatchHandler}
+ *       按 {@code nexus.core.state-root-mismatch.action} 处置
+ *       （observe=仅日志/计数，默认；rollback=回滚 + 拉黑对端）；
+ *       本类不阻断确认、不抛校验失败异常。</li>
  *   <li>{@code Account.getId() = pubkeyHash + blockHeight}，因此现有状态根
  *       承诺的是"本区块触碰了哪些账户、在什么高度"，不含余额/Nonce 明细；
  *       Phase 2 评估校验语义时需以此为基线。</li>
@@ -50,6 +55,9 @@ public class StateReplayManager {
 
     @Autowired
     private IncubatorDB incubatorDB;
+
+    @Autowired
+    private ApplicationContext ctx;
 
     private final AtomicLong replayedBlocks = new AtomicLong();
 
@@ -94,11 +102,14 @@ public class StateReplayManager {
 
         if (!verify.isSuccess()) {
             stateRootMismatches.incrementAndGet();
-            log.error("state replay mismatch (observe-only, PLAN-014 Phase 1): height={}, block={}, "
+            log.error("state replay mismatch (PLAN-014 Phase 2, see StateRootMismatchHandler): height={}, block={}, "
                             + "txs={}, replayedAccounts={}, replayedIncubators={}, reason={}",
                     block.nHeight, block.getHashHexString(),
                     block.body == null ? 0 : block.body.size(),
                     accountList.size(), incubatorList.size(), verify.getMessage());
+            if (ctx != null) {
+                ctx.publishEvent(new StateRootMismatchEvent(this, block, verify.getMessage()));
+            }
         } else {
             log.debug("state replay verified: height={}, txs={}, accounts={}, incubators={}",
                     block.nHeight, block.body == null ? 0 : block.body.size(),

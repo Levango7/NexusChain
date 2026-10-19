@@ -89,6 +89,42 @@
 
 ## 八、实施记录
 
+### Phase 2（2026-10-20，已交付）
+
+**交付**（分支 `feat/state-root-rollback`）：
+- 配置：新增 `nexus.core.state-root-mismatch.action=observe|rollback`（默认 `observe`；
+  环境变量 `NEXUS_STATE_ROOT_MISMATCH_ACTION`）。未知值一律回落 observe（fail-safe）。
+- 事件与处置：新增 `StateRootMismatchEvent`（`StateReplayManager` 在写锁内发布）+
+  `StateRootMismatchHandler`（`@Async @EventListener`）。异步化的原因：确认路径
+  `StateDB.writeBlock` 全程持写锁并等待 `pendingBlock` 握手，在栈内直接回滚会重入
+  `writeBlock` 导致 60s 自旋——处置必须出栈执行。
+- 回滚动作（`rollback`）：`StateDB.executeUnderWriteLock`（新增，锁可重入）内完成
+  `rollbackTo(h-1)` + `AccountDB.deleteFromHeight(h)` / `IncubatorDB.deleteFromHeight(h)`
+  （新增删除 API），封闭"回滚后并发确认又把状态行写回"的竞态；随后按高度区间拉黑来源对端。
+- 对端溯源：新增 `BlockOriginTracker`（有界 4096 条 LRU，`SyncManager.onBlocks/onProposal`
+  入口记录 `区块哈希 → (高度, 对端)`）。此前 SyncManager 收块即丢弃 remote，确认期
+  （≥3 深度）发现问题时无从归因；本地出块不入表，避免自拉黑。
+- 最终化护栏（ADR-030）：不一致区块已最终化时拒绝回滚并记录 ERROR（需人工介入）；
+  计数器 `finalityRejections`。同时修复 `ReorgManager` epoch 长度硬编码 32
+  → 读取 `nexus.finality.epoch-length`（与 `FinalityCoordinator` 同源）。
+- 观测计数：`mismatchEvents` / `rollbacksExecuted` / `finalityRejections` /
+  `blacklistedPeers`。
+- 回归：`StateRootMismatchHandlerTest`（6 用例：observe / 未知值回落 / rollback 回滚+拉黑 /
+  最终化拒绝 / 已回滚幂等 / 配置 epoch）+ `BlockOriginTrackerTest`（4 用例：记录查询 /
+  空输入 / 区块入口 / 容量上界）+ `ReorgManagerTest` 增补配置 epoch 用例 +
+  `StateReplayManagerTest` 增补事件发布断言——本地 19/19 通过。
+
+**诚实边界（Phase 2 范围内的已知限制）**：
+1. 回滚沿用既有 `ReorgManager` 语义：只回内存链缓存 + 删除状态行，不删除已持久化的
+   区块头/块体（由更长分叉链覆盖写入，读取以最新高度为准）。
+2. 来源追踪不持久化：进程重启后旧块无法归因（不影响重启后的实时处置）。
+3. 拉黑为内存态（`PeersCache` 评分衰减，约 11 分钟），非永久封禁；且按高度区间归因，
+   可能误伤仅转发后续区块的中继对端——灰度期先看数据再收紧范围。
+4. 不做"自动寻找替代分叉并重放"：回滚后节点停在 `h-1`，等待更长分叉链由
+   `ReorgManager` 正常切换；交易池未回滚。
+5. 异步处置存在窗口：事件排队期间若又确认了若干区块，回滚目标仍为 `h-1`，
+   会一并回退后续区块（`rollbackTo` 语义），状态行按 `> h-1` 统一清理。
+
 ### Phase 1（2026-10-19，已交付）
 
 **交付**（分支 `feat/state-replay-manager`）：

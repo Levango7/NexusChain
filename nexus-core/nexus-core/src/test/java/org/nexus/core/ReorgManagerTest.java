@@ -29,7 +29,7 @@ class ReorgManagerTest {
         Block localBest = block(10, 0);
         when(stateDB.getBestBlock()).thenReturn(localBest);
 
-        ReorgManager reorg = new ReorgManager(stateDB, null);
+        ReorgManager reorg = new ReorgManager(stateDB, null, 32);
         assertFalse(reorg.handlePotentialFork(block(10, 0)),
                 "同高度不分叉");
         assertFalse(reorg.handlePotentialFork(block(5, 0)),
@@ -57,7 +57,7 @@ class ReorgManagerTest {
         });
         when(stateDB.rollbackTo(anyLong())).thenReturn(1);
 
-        ReorgManager reorg = new ReorgManager(stateDB, null);
+        ReorgManager reorg = new ReorgManager(stateDB, null, 32);
         Block tip = block(12, 11);  // tip 12，父块 marker=11 → 分叉链 11
         assertTrue(reorg.handlePotentialFork(tip), "更长且可回溯的分叉链应切换");
         verify(stateDB).rollbackTo(anyLong());
@@ -71,7 +71,7 @@ class ReorgManagerTest {
         when(stateDB.getBestBlock()).thenReturn(localBest);
         when(stateDB.getBlock(any())).thenReturn(null);  // 父链无法回溯
 
-        ReorgManager reorg = new ReorgManager(stateDB, null);
+        ReorgManager reorg = new ReorgManager(stateDB, null, 32);
         assertFalse(reorg.handlePotentialFork(block(20, 19)),
                 "无法回溯到本地链的孤儿块不切换");
         verify(stateDB, never()).rollbackTo(anyLong());
@@ -101,11 +101,34 @@ class ReorgManagerTest {
         FinalityGadget gadget = mock(FinalityGadget.class);
         when(gadget.isFinalized(anyLong(), any())).thenReturn(true);
 
-        ReorgManager reorg = new ReorgManager(stateDB, gadget);
+        ReorgManager reorg = new ReorgManager(stateDB, gadget, 32);
         Block tip = block(12, 11);
         assertFalse(reorg.handlePotentialFork(tip),
                 "已最终化分叉点必须拒绝切换（护栏）");
         verify(stateDB, never()).rollbackTo(anyLong());
         verify(stateDB, never()).writeBlock(any());
+    }
+
+    @Test
+    void usesConfiguredEpochLengthForFinalityGuard() {
+        StateDB stateDB = mock(StateDB.class);
+        when(stateDB.getBestBlock()).thenReturn(block(10, 10));
+        when(stateDB.getBlock(any())).thenAnswer(inv -> {
+            byte[] h = inv.getArgument(0);
+            if (h == null || h.length != 32) return null;
+            long marker = h[0] & 0xFF;
+            if (marker == 11) return block(11, 10);
+            if (marker == 10) return block(10, 10);
+            return null;
+        });
+        when(stateDB.rollbackTo(anyLong())).thenReturn(1);
+
+        FinalityGadget gadget = mock(FinalityGadget.class);
+        when(gadget.isFinalized(anyLong(), any())).thenReturn(false);
+
+        // epochLength=4：分叉点高度 10 → epoch = (10-1)/4+1 = 3（原硬编码 32 会得到 1）
+        ReorgManager reorg = new ReorgManager(stateDB, gadget, 4);
+        assertTrue(reorg.handlePotentialFork(block(12, 11)));
+        verify(gadget).isFinalized(eq(3L), any());
     }
 }
