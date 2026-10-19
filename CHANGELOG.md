@@ -274,6 +274,23 @@ docs/ha-verification.md。
   移除无效键、保留标准字段；patch 自动合并如需启用须配专用 workflow（当前全部人工审查）。
   SCA 三件套（Dependabot 升级供给 / OWASP DC PR 阻断 / Trivy 镜像层）分工成文。
 
+### 运维：cmd-monitor 工具链升级（node:10 → node:24 + 锁定安装 + 非 root）
+
+**缺口**（`nexus-core/tools/cmd-monitor` 运维监控镜像）：
+- 基线 `node:10-alpine` 早已 EOL；`npm install` 无 lockfile → 非确定性构建
+  （目录内 `yarn.lock` 从未被镜像构建使用）；
+- `package.json` 含 4 个全仓零引用依赖（`glob`/`nacl`/`pg`/`tweetnacl`，
+  其中 `nacl` 为需要编译的原生模块）；
+- `validate-proposer.js` 为无法解析的半成品（bash shebang + 悬空 `const`）。
+
+**修复**：`node:24-alpine` + `npm ci`（新增 `package-lock.json` 锁定；剔除 4 个未引用
+依赖）+ `USER node` 非 root 运行；移除误导性的 `yarn.lock`；README 安装指引改 npm；
+`validate-proposer.js` 语法修复（骨架保留）。
+
+**实证**（本地 Docker）：构建通过；容器内 `id` = uid=1000(node)；依赖冒烟
+node v24.21.0 / axios 0.34.0 / commander 2.20.3 / pop-core 1.8.0 / node-schedule 1.3.3；
+`node cmd.js --help` 正常。
+
 ## [2.74.0] - 2026-10-14
 
 ### L3 复验（v2.73.0 发布镜像实装）——22 项遗留缺陷修复，**全栈 24/24 Pod Ready**
