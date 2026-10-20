@@ -359,7 +359,7 @@
 - **残项复核（§4 L173 三项，2026-10-19 补做闭环）**：① **SDK 四语言真实覆盖**——Go 13 用例（`go test ./nexus/`）/ Python 15（`python3 tests/test_nexus_sdk.py`）/ TS 8（`npm run test:ts`）三 step 在最终 HEAD run `39140973458` 全 success，且用例数与 ci.yml 注释（Go 13 / Python 15 / TS 8）逐一对齐；Java SDK 20 个测试文件走根构建 check + codecov（files 含 nexus-sdk/java）；② **explorer 构建链 Node**——explorer job / build-and-test / Hardhat 三处统一钉 26；③ **perf/demo 定位**——perf/k6（4 场景 + 容量基线 + HMAC 认证工具）经 performance-test.yml 真实接线，本 PR 冒烟为**实跑**（执行态日志 `##[notice]…执行 k6 冒烟实跑` + bridge 探针 warning + 服务栈启动 245s，run `39140973534`；不相关 PR 按设计 skip 记 success 防悬空 required check），capacity 基线首跑被 staging secrets 阻塞（roadmap C2 在案）；demo/ 为独立本地演示包（express mock + 七步流程脚本，ARCHITECTURE L406 为使用示例），无 CI 引用、非集成证据——无需变更；
 - CI 实证：Security Scan run `39139292023` **success**（SAST - SpotBugs + FindSecBugs job 7m32s 全绿——6 个 composite 模块报告经 gate 实测 0 findings）；concurrency 取消行为与最终 HEAD 的 Pipeline/Security Scan 全套 run 号见 PR #140 评论区（W10 三提交推送的 Pipeline run `39139292026` 的最终处置亦记录于此）。
 
-### 批次⑥执行明细（nexus-core 诚信化 + PLAN-014 立项与 Phase 0–4 交付）
+### 批次⑥执行明细（nexus-core 诚信化 + PLAN-014 立项与 Phase 0–6A 交付）
 
 **交付拆分（8 个 PR，均为 squash 合并，2026-10-19/20）**：
 
@@ -405,7 +405,14 @@
 - 拓扑：两个真实节点进程（A/B，HTTP 19585/19586，P2P 9235/9236）+ 容器化 PostgreSQL（`nexus-pgsql`，127.0.0.1:55432）；固定 Ed25519 私钥，`min-validators-to-mine=2`，round-robin。
 - 结果：A/B/PG 高度均 **3546**（30 分钟约 1.97 block/s）；`state replay mismatch` A/B 均 **0**；validator-set 注册各 **1** 次；ERROR A/B 均 **0**；finality epoch **885** 两端均 `FINALIZED`、`voted_weight=2000`、`total_weight=2000`、`progress=100`，checkpoint 均为 `2a2b9029…`（一致）。
 - 关键修复：`block_notice=11` P2P 签名透传；PoS 真实状态根；最终性改监听 `NewBlockEvent`；出块奖励不再累加质押 + `seedStake` 对端填充；未知 proposer 启动竞态降为 INFO 重试；最终性投票聚合串行化 + 稳定快照（修复 `arraycopy` 越界）。
-- 诚实边界：real-L1 真机链路未验证，桥的存款/提款/已提交根仍为内存态；"双节点"是同一 Windows 主机上的两个节点进程 + 容器化 PG，不是两台物理机；最终性状态仍为进程内存储；未做网络分区/崩溃/拜占庭/PG 故障注入；未写逐块状态根全量对账脚本。详见 PLAN-014 §八。
+- 诚实边界：real-L1 真机链路未验证，桥的存款/提款/已提交根仍为内存态；"双节点"是同一 Windows 主机上的两个节点进程 + 容器化 PG，不是两台物理机；最终性状态仍为进程内存储（**2026-10-21 PLAN-015 Phase 6A 已关闭**）；未做网络分区/拜占庭/PG 故障注入（强制重启已由 Phase 6A 覆盖）；未写逐块状态根全量对账脚本。详见 PLAN-014 §八。
+
+**Phase 6A 交付证据（最终性持久化 + 强制重启，2026-10-21）**：
+- 生产装配：`JdbcFinalityStateStore` 在 `nexus.finality.store=jdbc` 且非 dev profile 下成为 bean；`FinalityGadget` setter 注入，未配置时保持内存回退；test profile 显式 `memory`。
+- 关键修复：checkpoint key 改 hex 修复 `Arrays.toString` 超出 `VARCHAR(128)`（PG 首轮验收实际触发写失败/出块停滞）；无效投票先校验再落库；总权重 0 拒绝计票；JDBC reload fail-fast；重启后按 voters 重算权重，消除 `FINALIZED` 但 `voted_weight=0`。
+- 回归：`FinalityVoteP2PRoundTripTest` 覆盖 `sendOverP2P()` → `SyncManager.onTransactions()` 两侧；新增 32 字节 checkpoint JDBC 往返/重启测试与 0 权重快照防污染用例；本批定向 30 用例全绿。
+- 双节点强制重启：A/B 高度 **1268 → 1297/1298 → 1386**；epoch **316** 重启前后两端均 `FINALIZED`、`2000/2000`；各恢复 **61** 个最终化检查点，本次重启日志 ERROR 0；PG `finality_votes=180` / `finality_checkpoints=90`。
+- 边界：同一 Windows 主机双进程 + 容器 PG；未做网络分区/拜占庭/PG 故障注入；多副本最终性缓存一致性未解；real-L1/桥不变。详见 PLAN-015。
 
 ---
 

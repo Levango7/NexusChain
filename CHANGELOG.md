@@ -4,6 +4,31 @@
 
 ## [Unreleased]
 
+### 最终性持久化与重启韧性（PLAN-015 Phase 6A）
+
+**背景**：PLAN-014 Phase 5 的最终性状态仍是进程内 `InMemoryFinalityStateStore`；
+`JdbcFinalityStateStore` 已实现但未装配，节点重启后旧 epoch 可能返回 `UNKNOWN`。
+同时 `FinalityVoteBroadcaster.sendOverP2P()` / `SyncManager.onTransactions()` 两侧
+缺少自动化覆盖。
+
+- **生产装配**：`JdbcFinalityStateStore` 在 `nexus.finality.store=jdbc` 且非 dev profile
+  下成为 Spring bean；`FinalityGadget` 以 setter 注入，未配置时保持内存回退。
+  `application.properties` 默认 `jdbc`，local profile 显式开启，test profile 显式 `memory`。
+- **安全修复**：checkpoint key 统一为 hex，修复 `Arrays.toString(byte[])` 超出
+  `VARCHAR(128)` 导致 PostgreSQL 写入失败/出块停滞；投票先做活跃身份与公钥绑定校验
+  再落库；总权重为 0 时拒绝计票且不缓存 0 快照；JDBC 重载失败改为 fail-fast。
+- **恢复权重自愈**：节点重启早于质押账本装载时，`getEpochProgress` / `getFinality`
+  按当前 voters 重算权重，避免出现 `FINALIZED` 但 `voted_weight=0`。
+- **P2P 回归**：新增 `FinalityVoteP2PRoundTripTest`，覆盖
+  `sendOverP2P()` → `Transactions(VOTE)` → `SyncManager.onTransactions()` → 计票；
+  32 字节 checkpoint JDBC 往返测试锁定 schema 修复。
+- **双节点强制重启验收（2026-10-21）**：A/B 高度 1268 → 1297/1298 → 1386；
+  epoch 316 在重启前后两端均 `FINALIZED`、`2000/2000`；各恢复 61 个最终化检查点，
+  当前 A/B 日志 ERROR 均 0；PG `finality_votes=180` / `finality_checkpoints=90`。
+  拓扑仍是同一 Windows 主机两个进程 + 容器 PG。
+- **边界**：未做网络分区/拜占庭/PG 故障注入；多副本最终性缓存一致性未解；
+  real-L1 与桥资金链路未变。详见 `docs/plan/PLAN-015-finality-persistence-resilience.md`。
+
 ### 修复：状态存储改用可移植 upsert（PostgreSQL 生产写路径）
 
 **背景**：Phase 4 侦察发现 `JdbcPaymentStateStore` / `JdbcFinalityStateStore` 使用
@@ -49,7 +74,8 @@ Phase 5 验证两个真实节点进程在共享 PG 上持续出块、同步、�
   ERROR A/B 均 0；finality epoch 885 两端 `2000/2000 FINALIZED`，checkpoint 一致。
 - **诚实边界**：real-L1 真机链路未验证，桥的存款/提款/已提交根仍为内存态；"双节点"是
   同一 Windows 主机上的两个节点进程 + 容器化 PG，不是两台物理机；最终性状态仍为进程内
-  存储；未做网络分区/崩溃/拜占庭/PG 故障注入。详见 PLAN-014 §八。
+  存储（**2026-10-21 PLAN-015 Phase 6A 已改为 JDBC 持久化并完成强制重启验收**）；
+  未做网络分区/拜占庭/PG 故障注入；强制重启已由 Phase 6A 覆盖。详见 PLAN-014 §八 / PLAN-015。
 
 ### 状态执行接线：欺诈证明状态 PG 持久化（PLAN-014 Phase 4 持久化面）
 

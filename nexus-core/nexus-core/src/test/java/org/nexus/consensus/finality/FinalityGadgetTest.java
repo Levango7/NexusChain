@@ -34,13 +34,7 @@ class FinalityGadgetTest {
         validatorKeys.clear();
         registry = new ValidatorRegistry(new BigDecimal("100"), 100);
         staking = new StakingServiceImpl();
-        try {
-            var f = StakingServiceImpl.class.getDeclaredField("validatorRegistry");
-            f.setAccessible(true);
-            f.set(staking, registry);
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
+        injectRegistryIntoStaking(staking, registry);
         // 三个活跃验证者，各质押 300 → 总权重 900，2/3 阈值 = 600
         addValidator("v1", 300);
         addValidator("v2", 300);
@@ -49,7 +43,21 @@ class FinalityGadgetTest {
         // B-18 修复后：默认 CollectingAggregator 对无公钥投票 fail-closed。
         // 本测试套件聚焦权重累积/最终化/双签逻辑，注入恒通过聚合器隔离聚合验签
         // （投票本身的签名与公钥绑定已通过 vote() 工厂用真实 Ed25519 构造）。
-        gadget.setSignatureAggregator(new SignatureAggregator() {
+        gadget.setSignatureAggregator(passThroughAggregator());
+    }
+
+    private void injectRegistryIntoStaking(StakingService target, ValidatorRegistry targetRegistry) {
+        try {
+            var f = StakingServiceImpl.class.getDeclaredField("validatorRegistry");
+            f.setAccessible(true);
+            f.set(target, targetRegistry);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private SignatureAggregator passThroughAggregator() {
+        return new SignatureAggregator() {
             @Override
             public AggregatedSignature aggregate(java.util.List<Vote> votes) {
                 final int count = votes == null ? 0 : votes.size();
@@ -62,7 +70,7 @@ class FinalityGadgetTest {
             public boolean verifyAggregate(java.util.List<Vote> votes, AggregatedSignature aggregated) {
                 return true; // 权重逻辑测试：恒通过验签
             }
-        });
+        };
     }
 
     private void addValidator(String addr, int stake) {
@@ -99,6 +107,35 @@ class FinalityGadgetTest {
         FinalityRecord r = gadget.submitVote(vote("v1", 1, CP1));
         assertFalse(r.isFinalized());
         assertEquals(33, r.progressPercent());
+    }
+
+    @Test
+    void zeroTotalWeightSnapshotDoesNotPoisonLaterVotes() {
+        ValidatorRegistry emptyRegistry = new ValidatorRegistry(new BigDecimal("100"), 100);
+        StakingService emptyStaking = new StakingServiceImpl();
+        injectRegistryIntoStaking(emptyStaking, emptyRegistry);
+        FinalityGadget emptyGadget = new FinalityGadget(emptyRegistry, emptyStaking);
+        emptyGadget.setSignatureAggregator(passThroughAggregator());
+
+        // 启动早期验证人/质押尚未装载：该票被拒绝，且 0 权重不能写入 epoch 快照。
+        FinalityRecord ignored = emptyGadget.submitVote(vote("v1", 1, CP1));
+        assertFalse(ignored.isFinalized());
+        assertEquals(0, ignored.getVotedWeight().longValue());
+
+        // 验证人自举完成后，同一 epoch 的后续合法投票必须仍能正常计票。
+        for (String addr : new String[]{"v1", "v2"}) {
+            Ed25519KeyPair kp = validatorKeys.get(addr);
+            emptyRegistry.register(addr, Hex.encodeHexString(kp.getPublicKey().getEncoded()),
+                    new BigDecimal("300"), 0.1);
+            emptyRegistry.getValidator(addr).setStatus(ValidatorStatus.ACTIVE);
+            emptyStaking.stake(addr, new BigDecimal("300"));
+        }
+        FinalityRecord first = emptyGadget.submitVote(vote("v1", 1, CP1));
+        assertFalse(first.isFinalized());
+        assertEquals(new BigDecimal("300"), first.getVotedWeight());
+        FinalityRecord second = emptyGadget.submitVote(vote("v2", 1, CP1));
+        assertTrue(second.isFinalized());
+        assertEquals(100, second.progressPercent());
     }
 
     @Test

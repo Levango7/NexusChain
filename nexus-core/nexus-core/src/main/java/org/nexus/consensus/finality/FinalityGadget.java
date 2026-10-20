@@ -7,6 +7,10 @@ import org.nexus.consensus.pos.Validator;
 import org.nexus.consensus.pos.ValidatorRegistry;
 import org.nexus.consensus.pos.ValidatorStatus;
 import org.nexus.consensus.finality.SignatureAggregator.AggregatedSignature;
+import org.nexus.consensus.finality.persistence.FinalityStateStore;
+import org.nexus.consensus.finality.persistence.InMemoryFinalityStateStore;
+import org.nexus.consensus.finality.persistence.JdbcFinalityStateStore;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -56,9 +60,10 @@ public class FinalityGadget {
 
     /**
      * 最终性状态持久化（ADR-030 P0-1：节点重启不丢失已最终化检查点）。
-     * 默认内存版（测试/单机）；生产注入 {@link JdbcFinalityStateStore}。
+     * 默认内存版（测试/单机）；配置 {@code nexus.finality.store=jdbc} 时
+     * Spring 注入 {@link JdbcFinalityStateStore}（PostgreSQL）。
      */
-    private final org.nexus.consensus.finality.persistence.FinalityStateStore stateStore;
+    private FinalityStateStore stateStore;
 
     /**
      * 验证者集指纹（P0-② 治理关联）：活跃验证人地址+质押的规范化指纹。
@@ -67,18 +72,45 @@ public class FinalityGadget {
      */
     private volatile int validatorSetFingerprint = Integer.MIN_VALUE;
 
-    @org.springframework.beans.factory.annotation.Autowired
+    /**
+     * Spring/测试便捷构造器：默认使用内存最终性存储。
+     *
+     * <p>生产环境由 Spring 在构造后通过
+     * {@link #setStateStore(FinalityStateStore)} 注入 JDBC 实现（PLAN-015 Phase 6A）。</p>
+     */
+    @Autowired
     public FinalityGadget(ValidatorRegistry registry, StakingService stakingService) {
-        this(registry, stakingService,
-                new org.nexus.consensus.finality.persistence.InMemoryFinalityStateStore());
+        this(registry, stakingService, new InMemoryFinalityStateStore());
     }
 
     public FinalityGadget(ValidatorRegistry registry, StakingService stakingService,
-                          org.nexus.consensus.finality.persistence.FinalityStateStore stateStore) {
+                          FinalityStateStore stateStore) {
         this.validatorRegistry = registry;
         this.stakingService = stakingService;
         this.stateStore = stateStore;
         restoreFromStore();
+    }
+
+    /**
+     * 可选注入持久化存储（PLAN-015 Phase 6A）。
+     *
+     * <p>使用 setter 注入而不是多构造器，避免 Spring 在多个重载构造器之间
+     * 选择失败时静默回退内存实现；没有 {@link FinalityStateStore} bean 时
+     * 保持构造器创建的 {@link InMemoryFinalityStateStore}。</p>
+     */
+    @Autowired(required = false)
+    public synchronized void setStateStore(FinalityStateStore stateStore) {
+        if (stateStore == null || stateStore == this.stateStore) {
+            return;
+        }
+        this.stateStore = stateStore;
+        // 注入发生在 bean 初始化阶段，正常路径下缓存为空；清空后按持久化状态重建，
+        // 保证即使未来改为延迟注入也不会把内存态与持久化态混在一起。
+        finalizedCheckpoints.clear();
+        epochCheckpointVoters.clear();
+        epochCheckpointWeights.clear();
+        restoreFromStore();
+        log.info("FinalityGadget: using finality state store {}", stateStore.getClass().getSimpleName());
     }
 
     /** 启动恢复：从持久化层重建已最终化检查点、投票者缓存与投票权重。 */
@@ -147,45 +179,24 @@ public class FinalityGadget {
                     .info("FinalityGadget: validator set changed (fingerprint {}); weight snapshots invalidated", fp);
         }
 
-        // 总权重按 epoch 快照（快照失效时自动按最新验证者集重算）
-        // 修复（PLAN-013b）：computeIfAbsent 后 get 与 clear()（validator set changed
-        // 并发）竞态返回 null → NPE。compute 原子返回最终值，无竞态窗口。
-        BigDecimal total = epochTotalWeight.compute(String.valueOf(epoch),
-                (k, v) -> v == null ? computeTotalWeight() : v);
+        // 总权重按 epoch 快照（快照失效时自动按最新验证者集重算）。
+        // 注意：0 权重不能写入快照，否则启动早期验证人尚未装载时的一次投票
+        // 会让该 epoch 永远以 0 总权重计算，后续合法投票全部被误拒。
+        BigDecimal total = totalWeightForEpoch(epoch);
 
-        // 同验证者重复投票同检查点：幂等拒绝
-        Set<String> voters = epochCheckpointVoters.computeIfAbsent(checkpointKey, k -> ConcurrentHashMap.newKeySet());
-        if (!voters.add(vote.getValidatorAddress())) {
+        if (total.signum() <= 0) {
+            // 启动早期验证人/质押尚未装载时，不能把“总权重 0”误判为 100% 最终化。
+            log.warn("Finality vote ignored at epoch={}: total validator weight is zero", epoch);
             return record(epoch, vote.getCheckpointHash(), total);
         }
-        // 持久化投票（P0-1：节点重启后可恢复投票者集合）
-        stateStore.recordVote(epoch, vote.getCheckpointHash(), vote.getValidatorAddress());
 
-        // 双签检测：同 epoch 不同检查点
-        for (Map.Entry<String, Set<String>> e : epochCheckpointVoters.entrySet()) {
-            String[] parts = e.getKey().split("\\|", 2);
-            if (parts.length == 2 && parts[0].equals(String.valueOf(epoch))
-                    && !parts[1].equals(Arrays.toString(vote.getCheckpointHash()))
-                    && e.getValue().contains(vote.getValidatorAddress())) {
-                EquivocationEvidence ev = new EquivocationEvidence(
-                        vote, new Vote(epoch, parseCheckpoint(parts[1]), vote.getValidatorAddress(), new byte[0]));
-                detectedEquivocations.add(ev);
-                // M4 连接轴：注入罚没服务时，双签证据即时触发 slash（幂等，防止重复罚没）
-                if (slashingService != null && slashedOffenders.add(vote.getValidatorAddress())) {
-                    slashingService.slash(vote.getValidatorAddress(), SlashingService.Offense.DOUBLE_SIGN);
-                }
-            }
-        }
-
-        // 权重累积
+        // P0-1 审计修复：先做身份/公钥绑定校验，再记录投票。
+        // 不能先把未验证的地址写入 voters/DB——否则重启恢复时会把无效投票
+        // 的质押权重重新计入，破坏最终性安全边界。
         Validator v = validatorRegistry.getValidator(vote.getValidatorAddress());
         if (v == null || v.getStatus() != ValidatorStatus.ACTIVE) {
             return record(epoch, vote.getCheckpointHash(), total);
         }
-        // P0-1 审计修复：公钥绑定校验（fail-closed）。
-        // 投票携带的公钥必须与验证人注册表登记的公钥一致，否则拒绝计票——
-        // 防止攻击者携带任意公钥冒充活跃验证人参与权重累积。
-        // （配合 SignatureAggregator 的逐一 Ed25519 验签，伪造投票需要验证人私钥本身。）
         String registeredPubHex = v.getPublicKey();
         byte[] votePubKey = vote.getPublicKeyBytes();
         if (registeredPubHex == null || registeredPubHex.isEmpty()
@@ -197,8 +208,44 @@ public class FinalityGadget {
                     votePubKey == null || votePubKey.length == 0 ? "none" : "mismatch");
             return record(epoch, vote.getCheckpointHash(), total);
         }
+
+        // 同验证者重复投票同检查点：幂等拒绝
+        Set<String> voters = epochCheckpointVoters.computeIfAbsent(checkpointKey, k -> ConcurrentHashMap.newKeySet());
+        if (!voters.add(vote.getValidatorAddress())) {
+            return record(epoch, vote.getCheckpointHash(), total);
+        }
+        // 持久化有效投票（P0-1：节点重启后可恢复投票者集合）
+        stateStore.recordVote(epoch, vote.getCheckpointHash(), vote.getValidatorAddress());
+
+        // 双签检测：同 epoch 不同检查点
+        for (Map.Entry<String, Set<String>> e : epochCheckpointVoters.entrySet()) {
+            String[] parts = e.getKey().split("\\|", 2);
+            if (parts.length == 2 && parts[0].equals(String.valueOf(epoch))
+                    && !parts[1].equals(Hex.encodeHexString(vote.getCheckpointHash()))
+                    && e.getValue().contains(vote.getValidatorAddress())) {
+                EquivocationEvidence ev = new EquivocationEvidence(
+                        vote, new Vote(epoch, parseCheckpoint(parts[1]), vote.getValidatorAddress(), new byte[0]));
+                detectedEquivocations.add(ev);
+                // M4 连接轴：注入罚没服务时，双签证据即时触发 slash（幂等，防止重复罚没）
+                if (slashingService != null && slashedOffenders.add(vote.getValidatorAddress())) {
+                    slashingService.slash(vote.getValidatorAddress(), SlashingService.Offense.DOUBLE_SIGN);
+                }
+            }
+        }
+
+        // 正常路径保持“投票时权重快照”语义；只有恢复缓存为 0（重启早于
+        // StakingService 自举）时，才按当前 voters 重算并自愈。
         BigDecimal weight = stakingService.getStake(vote.getValidatorAddress());
-        epochCheckpointWeights.merge(checkpointKey, weight, BigDecimal::add);
+        if (weight == null) {
+            weight = BigDecimal.ZERO;
+        }
+        BigDecimal currentWeight = epochCheckpointWeights.getOrDefault(checkpointKey, BigDecimal.ZERO);
+        if (currentWeight.signum() == 0) {
+            currentWeight = currentVotedWeight(checkpointKey);
+        } else {
+            currentWeight = currentWeight.add(weight);
+        }
+        epochCheckpointWeights.put(checkpointKey, currentWeight);
         epochCheckpointVotes.computeIfAbsent(checkpointKey, k -> new java.util.concurrent.CopyOnWriteArrayList<>()).add(vote);
 
         BigDecimal voted = epochCheckpointWeights.get(checkpointKey);
@@ -226,8 +273,7 @@ public class FinalityGadget {
      * 查询检查点当前最终化状态。
      */
     public FinalityRecord getFinality(long epoch, byte[] checkpointHash) {
-        BigDecimal total = epochTotalWeight.getOrDefault(String.valueOf(epoch), computeTotalWeight());
-        return record(epoch, checkpointHash, total);
+        return record(epoch, checkpointHash, totalWeightForEpoch(epoch));
     }
 
     /**
@@ -254,7 +300,7 @@ public class FinalityGadget {
      */
     public FinalityRecord getEpochProgress(long epoch) {
         // 快照被指纹失效清空时（治理变更），回退按当前验证者集重算总权重，而非返回 0
-        BigDecimal total = epochTotalWeight.getOrDefault(String.valueOf(epoch), computeTotalWeight());
+        BigDecimal total = totalWeightForEpoch(epoch);
         FinalityRecord best = null;
         for (Map.Entry<String, BigDecimal> e : epochCheckpointWeights.entrySet()) {
             String[] parts = e.getKey().split("\\|", 2);
@@ -262,7 +308,7 @@ public class FinalityGadget {
                 continue;
             }
             byte[] checkpoint = parseCheckpoint(parts[1]);
-            FinalityRecord rec = new FinalityRecord(epoch, checkpoint, e.getValue(), total,
+            FinalityRecord rec = new FinalityRecord(epoch, checkpoint, currentVotedWeight(e.getKey()), total,
                     finalizedCheckpoints.contains(e.getKey()));
             if (best == null || rec.getVotedWeight().compareTo(best.getVotedWeight()) > 0) {
                 best = rec;
@@ -273,8 +319,56 @@ public class FinalityGadget {
 
     private FinalityRecord record(long epoch, byte[] checkpointHash, BigDecimal total) {
         String key = epochKey(epoch, checkpointHash);
-        BigDecimal voted = epochCheckpointWeights.getOrDefault(key, BigDecimal.ZERO);
-        return new FinalityRecord(epoch, checkpointHash, voted, total, finalizedCheckpoints.contains(key));
+        return new FinalityRecord(epoch, checkpointHash, currentVotedWeight(key), total,
+                finalizedCheckpoints.contains(key));
+    }
+
+    /**
+     * 按当前验证人质押重算投票权重。
+     *
+     * <p>持久化层只保存投票者地址（权重是衍生值）。节点重启时
+     * {@link FinalityGadget} 可能在 StakingService 完成自举之前构造，启动恢复
+     * 缓存的权重会是 0；查询/下一票时用本方法自愈，避免 RPC 显示
+     * {@code FINALIZED} 但 {@code voted_weight=0} 的矛盾状态。</p>
+     */
+    private BigDecimal currentVotedWeight(String checkpointKey) {
+        BigDecimal cached = epochCheckpointWeights.get(checkpointKey);
+        if (cached != null && cached.signum() > 0) {
+            return cached;
+        }
+        Set<String> voters = epochCheckpointVoters.get(checkpointKey);
+        if (voters == null || voters.isEmpty()) {
+            return cached == null ? BigDecimal.ZERO : cached;
+        }
+        BigDecimal sum = BigDecimal.ZERO;
+        for (String address : voters) {
+            Validator validator = validatorRegistry == null ? null : validatorRegistry.getValidator(address);
+            if (validator == null || validator.getStatus() != ValidatorStatus.ACTIVE) {
+                continue;
+            }
+            BigDecimal stake = stakingService == null ? null : stakingService.getStake(address);
+            if (stake != null) {
+                sum = sum.add(stake);
+            }
+        }
+        if (sum.signum() > 0) {
+            epochCheckpointWeights.put(checkpointKey, sum);
+        }
+        return sum;
+    }
+
+    /**
+     * 取 epoch 总权重快照；0 权重不留在快照里，避免启动早期的一次误判
+     * 把后续合法投票永久锁死。
+     */
+    private BigDecimal totalWeightForEpoch(long epoch) {
+        String key = String.valueOf(epoch);
+        BigDecimal total = epochTotalWeight.compute(key, (k, v) ->
+                (v == null || v.signum() <= 0) ? computeTotalWeight() : v);
+        if (total != null && total.signum() <= 0) {
+            epochTotalWeight.remove(key, total);
+        }
+        return total == null ? BigDecimal.ZERO : total;
     }
 
     private BigDecimal computeTotalWeight() {
@@ -309,14 +403,12 @@ public class FinalityGadget {
     }
 
     private String epochKey(long epoch, byte[] checkpointHash) {
-        return epoch + "|" + Arrays.toString(checkpointHash);
+        // 与 FinalityStateStore 的 key 约定一致：checkpoint 使用十六进制，
+        // 而不是 Arrays.toString（后者长度可达 160+，曾撑爆 VARCHAR(128)）。
+        return epoch + "|" + Hex.encodeHexString(checkpointHash == null ? new byte[0] : checkpointHash);
     }
 
-    private byte[] parseCheckpoint(String s) {
-        String inner = s.substring(1, s.length() - 1).replace(" ", "");
-        String[] parts = inner.split(",");
-        byte[] out = new byte[parts.length];
-        for (int i = 0; i < parts.length; i++) out[i] = Byte.parseByte(parts[i]);
-        return out;
+    private byte[] parseCheckpoint(String hex) {
+        return HexFormat.of().parseHex(hex);
     }
 }

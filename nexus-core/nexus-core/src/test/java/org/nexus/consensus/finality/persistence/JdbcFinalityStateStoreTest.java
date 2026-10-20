@@ -51,6 +51,23 @@ class JdbcFinalityStateStoreTest {
     }
 
     @Test
+    void thirtyTwoByteCheckpointFitsSchemaAndReloads() {
+        // 生产 checkpoint 是 32 字节；旧实现用 Arrays.toString 编码后超过 VARCHAR(128)，
+        // PostgreSQL 报 "value too long for type character varying(128)"。本测试锁定修复。
+        byte[] hash = new byte[32];
+        for (int i = 0; i < hash.length; i++) {
+            hash[i] = (byte) (i * 7 - 100);
+        }
+        store.recordVote(11, hash, "validator-32");
+        store.markFinalized(11, hash);
+
+        JdbcFinalityStateStore restarted = new JdbcFinalityStateStore(jdbc);
+        restarted.init();
+        assertTrue(restarted.isFinalized(11, hash));
+        assertEquals(Set.of("validator-32"), restarted.loadVoters(11, hash));
+    }
+
+    @Test
     void restartReloadsVotesAndFinalityFromDatabase() {
         byte[] hash = new byte[]{9, 8, 7};
         store.recordVote(7, hash, "validator-a");

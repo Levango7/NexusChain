@@ -1,6 +1,6 @@
 package org.nexus.consensus.finality.persistence;
 
-import java.util.Arrays;
+import java.util.HexFormat;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -46,6 +46,7 @@ public class InMemoryFinalityStateStore implements FinalityStateStore {
     }
 
     static String key(long epoch, byte[] checkpointHash) {
-        return epoch + "|" + Arrays.toString(checkpointHash);
+        return epoch + "|" + HexFormat.of().formatHex(
+                checkpointHash == null ? new byte[0] : checkpointHash);
     }
 }

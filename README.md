@@ -267,6 +267,7 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
 
 - 基础层闭环（ADR-029 审计基线）：权益加权出块提案、区块 8 步校验（真实 Ed25519 验签）、质押管理、罚没、验证者注册、出块奖励、P2P 同步。
 - **NexFinality 最终性层（ADR-030/031）已实现并真机闭环**：BFT 双轮投票、2/3 质押权重判定、双签证据惩罚链、验证者集变更走治理（VALIDATOR_SET_CHANGE）、BLS 接口层（M3 阻塞项：blst 库绑定待环境解锁）。
+- **最终性状态持久化（PLAN-015 Phase 6A，2026-10-21）**：生产/local 下 `JdbcFinalityStateStore` 将投票与最终化检查点写入 PG（`finality_votes` / `finality_checkpoints`）；双节点强制重启后旧 epoch 仍 `FINALIZED`、权重一致。同主机双进程验收边界、多副本缓存一致性与故障注入缺口见 [PLAN-015](docs/plan/PLAN-015-finality-persistence-resilience.md)。
 - **多节点共识全链路**（PLAN-001~013b）：验证人 P2P 同步、单 proposer 轮换、共享链幂等写、分叉重组——双节点真机 51/52 交替出块 + epoch 最终化 100%。
 
 ### L2 Rollup（ZK 真实化进展，2026-08）

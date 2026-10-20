@@ -5,9 +5,12 @@ import org.nexus.db.JdbcUpsert;
 import org.nexus.db.SchemaMeta;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Profile;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Component;
 
-import java.util.Arrays;
+import java.util.HexFormat;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -24,6 +27,9 @@ import java.util.concurrent.ConcurrentHashMap;
  *   <li>{@code finality_checkpoints(epoch BIGINT, checkpoint_hash VARCHAR(128), PRIMARY KEY(epoch, checkpoint_hash))}</li>
  * </ul>
  */
+@Component
+@Profile("!dev")
+@ConditionalOnProperty(name = "nexus.finality.store", havingValue = "jdbc")
 public class JdbcFinalityStateStore implements FinalityStateStore {
 
     private static final Logger log = LoggerFactory.getLogger(JdbcFinalityStateStore.class);
@@ -91,7 +97,12 @@ public class JdbcFinalityStateStore implements FinalityStateStore {
             log.info("JdbcFinalityStateStore: reloaded {} vote records, {} finalized checkpoints",
                     voteCache.size(), finalizedCache.size());
         } catch (RuntimeException e) {
-            log.error("JdbcFinalityStateStore.reload failed: {}", e.getMessage());
+            // 最终性状态是“已确认不可逆结算”的安全事实；加载失败时若静默降级为空缓存，
+            // 节点会以为旧检查点未最终化，存在重复终局/破坏安全前提的风险。
+            // 因此这里 fail-fast：宁可拒绝启动，也不带病参与共识。
+            throw new IllegalStateException(
+                    "Failed to reload finality state from database; refusing to start with an empty finality cache",
+                    e);
         }
     }
 
@@ -135,8 +146,11 @@ public class JdbcFinalityStateStore implements FinalityStateStore {
     }
 
     private static String hashStr(byte[] bytes) {
-        // checkpoint 哈希的规范化字符串表示（与 InMemory 实现的 key 编码一致）
-        return Arrays.toString(bytes == null ? new byte[0] : bytes);
+        // checkpoint 哈希的规范化字符串表示（与 InMemory/FinalityGadget 的 key 编码一致）。
+        // 32 字节哈希编码为 64 个 hex 字符，稳妥落在 VARCHAR(128) 内；
+        // 旧实现用 Arrays.toString(byte[])，32 字节可达 160+ 字符，PG 会报
+        // "value too long for type character varying(128)"。
+        return HexFormat.of().formatHex(bytes == null ? new byte[0] : bytes);
     }
 
     static String key(long epoch, String checkpointHex) {
