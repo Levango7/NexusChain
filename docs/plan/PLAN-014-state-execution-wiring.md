@@ -144,9 +144,14 @@
 1. `real-l1-enabled=true` 真机 L1 链路未验证；桥的存款/提款/已提交根仍为进程内存。
    Phase 5 的"双节点"是同一 Windows 主机上的两个节点进程 + 容器化 PG，不是两台物理机
    （与 PLAN-012 口径一致）。
-2. 最终性状态仍为进程内 `InMemoryFinalityStateStore`（`finality_votes` 表不存在），
-   重启后旧 epoch 可能返回 `UNKNOWN`；长跑验收查询当前 epoch。
-3. 未做网络分区、节点崩溃/重启、拜占庭节点、PG 故障注入；未写逐块状态根全量对账脚本，
+2. ~~最终性状态仍为进程内 `InMemoryFinalityStateStore`（`finality_votes` 表不存在），
+   重启后旧 epoch 可能返回 `UNKNOWN`；长跑验收查询当前 epoch。~~
+   **2026-10-21 Phase 6A 已关闭**：`nexus.finality.store=jdbc` 下
+   `JdbcFinalityStateStore` 已装配，`finality_votes` / `finality_checkpoints` 落 PG；
+   双节点强制重启后旧 epoch 仍 `FINALIZED`、权重 `2000/2000`。详见
+   [PLAN-015](PLAN-015-finality-persistence-resilience.md)。仍保留的边界是
+   多副本缓存一致性、网络分区/PG 故障注入与 real-L1 未验证。
+3. 未做网络分区、拜占庭节点、PG 故障注入；节点强制重启已由 PLAN-015 Phase 6A 覆盖；未写逐块状态根全量对账脚本，
    以 `state replay mismatch=0` + 最终性 checkpoint 一致作为验收证据。
 4. 未覆盖桥经济链路（存款/提款/根提交）与 `Web3jL1ContractClient` 真实调用路径。
 

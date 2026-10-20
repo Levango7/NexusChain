@@ -51,7 +51,8 @@ public interface FinalityStateStore {
 
     /**
      * 加载全部投票记录（key = epoch|checkpointHex，value = 投票者集合）。
-     * 启动时重建 {@code epochCheckpointVoters/epochCheckpointVotes} 用。
+     * 启动时重建 {@code epochCheckpointVoters/epochCheckpointWeights} 用；
+     * 完整 {@code Vote} 签名对象不持久化。
      */
     Map<String, Set<String>> loadAllVotes();
 }

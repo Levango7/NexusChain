@@ -12,6 +12,9 @@ nexus:
     jwt:
       app-id: ${NEXUS_JWT_APP_ID:test-app-id-not-for-production}
       app-secret: ${NEXUS_JWT_APP_SECRET:test-app-secret-not-for-production}
+  # 单测默认不装配 JDBC 最终性存储，保持内存语义；需要验证接线时显式覆盖。
+  finality:
+    store: memory
 
 # 测试数据源：默认指向本地 nexus_test 库（可用环境变量覆盖指向 CI 数据库）
 spring:

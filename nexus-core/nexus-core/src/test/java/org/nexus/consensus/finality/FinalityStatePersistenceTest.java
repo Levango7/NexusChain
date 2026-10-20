@@ -46,10 +46,14 @@ class FinalityStatePersistenceTest {
     }
 
     private void injectRegistryIntoStaking() {
+        injectRegistryIntoStaking(staking, registry);
+    }
+
+    private void injectRegistryIntoStaking(StakingService targetStaking, ValidatorRegistry targetRegistry) {
         try {
             var f = StakingServiceImpl.class.getDeclaredField("validatorRegistry");
             f.setAccessible(true);
-            f.set(staking, registry);
+            f.set(targetStaking, targetRegistry);
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
@@ -122,6 +126,40 @@ class FinalityStatePersistenceTest {
                 "重启后双签证据链路不应断裂");
         // epoch1 不因 CP2 的混入而受影响：CP1 仍最终化
         assertTrue(node2.isFinalized(1, CP1));
+    }
+
+    @Test
+    void restoredWeightSelfHealsAfterStakingBootstrap() {
+        FinalityStateStore store = new InMemoryFinalityStateStore();
+        FinalityGadget node1 = new FinalityGadget(registry, staking, store);
+        node1.submitVote(vote("v1", 1, CP1));
+        node1.submitVote(vote("v2", 1, CP1));
+        assertTrue(node1.isFinalized(1, CP1));
+
+        // 模拟 Spring 重启早期：FinalityGadget 先构造，验证人/质押账本尚未装载。
+        ValidatorRegistry emptyRegistry = new ValidatorRegistry(new BigDecimal("100"), 100);
+        StakingService emptyStaking = new StakingServiceImpl();
+        injectRegistryIntoStaking(emptyStaking, emptyRegistry);
+        FinalityGadget node2 = new FinalityGadget(emptyRegistry, emptyStaking, store);
+        assertTrue(node2.isFinalized(1, CP1), "最终化事实应先恢复");
+        assertEquals(0, node2.getFinality(1, CP1).getVotedWeight().longValue(),
+                "质押未装载时权重暂为 0");
+
+        // StakingService 完成自举后，查询路径应按已恢复的 voters 自愈权重。
+        for (String addr : new String[]{"v1", "v2"}) {
+            var kp = validatorKeys.get(addr);
+            emptyRegistry.register(addr,
+                    org.apache.commons.codec.binary.Hex.encodeHexString(kp.getPublicKey().getEncoded()),
+                    new BigDecimal("300"), 0.1);
+            Validator v = emptyRegistry.getValidator(addr);
+            v.setStatus(ValidatorStatus.ACTIVE);
+            emptyStaking.stake(addr, new BigDecimal("300"));
+        }
+
+        FinalityRecord healed = node2.getEpochProgress(1);
+        assertNotNull(healed);
+        assertEquals(new BigDecimal("600"), healed.getVotedWeight(), "恢复后权重应自愈");
+        assertTrue(healed.isFinalized());
     }
 
     @Test
