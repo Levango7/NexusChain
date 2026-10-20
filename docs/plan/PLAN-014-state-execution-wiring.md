@@ -128,12 +128,17 @@
   本地库，双写只会引入分叉；LevelDB 侧不新增欺诈证明状态。
 - 初稿假设"ON CONFLICT DO UPDATE 可同时兼容 PG/H2"不成立（H2 版本限制），改为可移植 upsert。
 
-**遗留发现（不属本阶段交付，已记录待处理）**：
+**遗留发现（已处理，2026-10-20）**：
 - `JdbcPaymentStateStore` / `JdbcFinalityStateStore` 使用 H2 专有 `MERGE ... KEY()`，
   生产 PostgreSQL 下写路径会 bad SQL grammar；因 `PaymentTransactionProcessor` 生产无调用点
-  （Phase 3 结论）而暂未暴露。建议 P1 修复（改可移植 upsert 或方言适配），另立任务。
-- `ValidatorSetPersistence.upsert` 使用 `ON CONFLICT DO UPDATE`，同样只对 PG 有效；
-  H2 测试路径会走 catch 分支静默降级（日志 WARN），测试覆盖存在盲区。
+  （Phase 3 结论）而暂未暴露。**已修复**：统一改用 `org.nexus.db.JdbcUpsert` 可移植
+  upsert（先 UPDATE → `INSERT ... ON CONFLICT DO NOTHING` → 竞争失败再 UPDATE），并新增
+  Testcontainers 真实 PostgreSQL 契约测试锁定。
+- `ValidatorSetPersistence.upsert` 使用 `ON CONFLICT DO UPDATE`（H2 不支持、异常被 catch
+  静默降级）**已修复**：改为复用 `JdbcUpsert`，H2 测试路径不再降级为 no-op。
+- 顺带修复 `JdbcFinalityStateStore.reload()` 的 `RowCallbackHandler` 误用（回调内再调
+  `rs.next()`）——重启后投票/终局状态只会恢复隔行、单行时一行都读不到；由新增的
+  "模拟重启"测试暴露。
 
 ### Phase 3（2026-10-20，已交付）
 

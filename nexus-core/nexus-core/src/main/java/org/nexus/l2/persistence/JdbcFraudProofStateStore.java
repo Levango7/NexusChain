@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
+import org.nexus.db.JdbcUpsert;
 import org.nexus.db.SchemaMeta;
 import org.nexus.l2.ChallengeBond;
 import org.nexus.l2.FraudProof;
@@ -11,7 +12,6 @@ import org.nexus.l2.RollupBatch;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
-import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
@@ -22,11 +22,11 @@ import java.util.List;
  * 欺诈证明状态 PostgreSQL 持久化实现（PLAN-014 Phase 4）。
  *
  * <p>接入方式对齐 {@code JdbcPaymentStateStore} / {@code JdbcFinalityStateStore}：
- * {@link JdbcTemplate} + {@link SchemaMeta} 版本登记 + 启动恢复。upsert 采用
- * <b>先 UPDATE、缺行再 INSERT</b> 的可移植写法（INSERT 撞唯一键时重试 UPDATE），
- * 同时兼容 PostgreSQL 与 H2。注意：H2 2.2.224（测试用）只支持
- * {@code ON CONFLICT DO NOTHING}，不支持 {@code DO UPDATE}；{@code MERGE ... KEY()}
- * 则是 H2 专有语法、PostgreSQL 会报 bad SQL grammar。</p>
+ * {@link JdbcTemplate} + {@link SchemaMeta} 版本登记 + 启动恢复。upsert 统一走
+ * {@link JdbcUpsert}（先 UPDATE、缺行再 {@code INSERT ... ON CONFLICT DO NOTHING}，
+ * 并发竞争时重试 UPDATE），同时兼容 PostgreSQL 与 H2。注意：H2 2.2.224（测试用）
+ * 只支持 {@code ON CONFLICT DO NOTHING}，不支持 {@code DO UPDATE}；
+ * {@code MERGE ... KEY()} 则是 H2 专有语法、PostgreSQL 会报 bad SQL grammar。</p>
  *
  * <p>表结构（additive-only，版本 1）：</p>
  * <ul>
@@ -195,21 +195,13 @@ public class JdbcFraudProofStateStore implements FraudProofStateStore {
     }
 
     /**
-     * 可移植 upsert：先 UPDATE；缺行则 INSERT；并发下 INSERT 撞唯一键时重试 UPDATE。
+     * 可移植 upsert，实现见 {@link JdbcUpsert}。
      *
      * <p>不依赖 {@code ON CONFLICT DO UPDATE}（H2 2.2.224 不支持）或
      * {@code MERGE ... KEY()}（PostgreSQL 不支持）。</p>
      */
     private void upsert(String updateSql, Object[] updateArgs, String insertSql, Object[] insertArgs) {
-        if (jdbc.update(updateSql, updateArgs) > 0) {
-            return;
-        }
-        try {
-            jdbc.update(insertSql, insertArgs);
-        } catch (DuplicateKeyException e) {
-            // 并发插入竞争：另一端已插入，退回更新
-            jdbc.update(updateSql, updateArgs);
-        }
+        JdbcUpsert.upsert(jdbc, updateSql, updateArgs, insertSql, insertArgs);
     }
 
     private static String writeJson(Object value) {

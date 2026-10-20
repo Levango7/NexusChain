@@ -4,6 +4,30 @@
 
 ## [Unreleased]
 
+### 修复：状态存储改用可移植 upsert（PostgreSQL 生产写路径）
+
+**背景**：Phase 4 侦察发现 `JdbcPaymentStateStore` / `JdbcFinalityStateStore` 使用
+H2 专有 `MERGE ... KEY()`——测试跑 H2 全绿、生产切 PostgreSQL 直接 bad SQL grammar
+（因支付处理器无生产调用点而未暴露）。本批统一改为可移植 upsert，并处理同源测试盲区。
+
+- 新增 `org.nexus.db.JdbcUpsert`：`upsert`（先 UPDATE → `INSERT ... ON CONFLICT DO
+  NOTHING` → 并发竞争时再 UPDATE）与 `insertIgnore`。只用 PostgreSQL 与 H2 2.2.224
+  都支持的语法；竞争路径不依赖异常（PG 事务不会因唯一键冲突被 abort）。
+- `JdbcPaymentStateStore`：4 处 `MERGE`（channel / position / bridgeTx / replayKey）改为
+  `JdbcUpsert`；`JdbcFinalityStateStore`：2 处 `MERGE` 改为 `insertIgnore`；
+  `ValidatorSetPersistence.upsert` 的 `ON CONFLICT DO UPDATE`（H2 不支持、异常被 catch
+  静默降级）改为 `JdbcUpsert`；`JdbcFraudProofStateStore` 私有 upsert 改为复用
+  `JdbcUpsert`（消除三份重复实现）。
+- **顺带修复真实缺陷**：`JdbcFinalityStateStore.reload()` 把 `RowCallbackHandler`
+  当作结果集遍历用（回调内再调 `rs.next()`），重启后投票/终局状态只会恢复隔行、
+  单行时一行都读不到——由新增"模拟重启"测试暴露并修复。
+- 回归：新增 `JdbcUpsertTest`（3）+ `JdbcPaymentStateStoreTest`（4）+
+  `JdbcFinalityStateStoreTest`（2）+ **真实 PostgreSQL 契约测试
+  `PortableUpsertPostgresTest`（4，Testcontainers，Docker 不可用时优雅跳过）**——
+  本地 13/13；`JdbcFraudProofStateStoreTest` / `FraudProofVerifierPersistenceTest`
+  等既有回归通过。
+- 口径：PLAN-014 Phase 4 记录与工程评审报告中的"遗留发现"两条随本批闭环。
+
 ### 状态执行接线：欺诈证明状态 PG 持久化（PLAN-014 Phase 4 持久化面）
 
 **背景**：批次⑥ 路线文档 §4 缺口"欺诈证明机制真实、锚定未完成"——批次/挑战状态

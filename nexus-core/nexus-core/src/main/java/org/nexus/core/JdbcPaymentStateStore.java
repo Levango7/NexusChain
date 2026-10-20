@@ -3,6 +3,7 @@ package org.nexus.core;
 import org.nexus.core.payment.BridgeTransaction;
 import org.nexus.core.payment.PaymentChannel;
 import org.nexus.core.payment.StableCoinPosition;
+import org.nexus.db.JdbcUpsert;
 import org.nexus.db.SchemaMeta;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -99,10 +100,19 @@ public class JdbcPaymentStateStore implements PaymentStateStore {
 
     @Override
     public void putChannel(String id, PaymentChannel ch) {
-        jdbc.update("MERGE INTO payment_channels KEY(channel_id) VALUES(?,?,?,?,?,?,?,?)",
-            id, ch.getParticipant1(), ch.getParticipant2(),
-            ch.getBalance1(), ch.getBalance2(), ch.getNonce(),
-            ch.getState().name(), ch.getOpenBlockHeight(), ch.getCloseBlockHeight());
+        JdbcUpsert.upsert(jdbc,
+            "UPDATE payment_channels SET participant1 = ?, participant2 = ?, balance1 = ?, "
+                + "balance2 = ?, nonce = ?, state = ?, open_block = ?, close_block = ? "
+                + "WHERE channel_id = ?",
+            new Object[]{ch.getParticipant1(), ch.getParticipant2(),
+                ch.getBalance1(), ch.getBalance2(), ch.getNonce(),
+                ch.getState().name(), ch.getOpenBlockHeight(), ch.getCloseBlockHeight(), id},
+            "INSERT INTO payment_channels"
+                + "(channel_id, participant1, participant2, balance1, balance2, nonce, "
+                + "state, open_block, close_block) VALUES(?,?,?,?,?,?,?,?,?)",
+            new Object[]{id, ch.getParticipant1(), ch.getParticipant2(),
+                ch.getBalance1(), ch.getBalance2(), ch.getNonce(),
+                ch.getState().name(), ch.getOpenBlockHeight(), ch.getCloseBlockHeight()});
         channelCache.put(id, ch);
     }
 
@@ -114,9 +124,16 @@ public class JdbcPaymentStateStore implements PaymentStateStore {
 
     @Override
     public void putPosition(String id, StableCoinPosition pos) {
-        jdbc.update("MERGE INTO stablecoin_positions KEY(position_id) VALUES(?,?,?,?,?,?)",
-            id, pos.getOwner(), pos.getCollateralAmount(), pos.getMintedAmount(),
-            pos.getLastUpdateBlock(), pos.getCreatedAtBlock());
+        JdbcUpsert.upsert(jdbc,
+            "UPDATE stablecoin_positions SET owner = ?, collateral = ?, minted = ?, "
+                + "last_update_block = ?, created_block = ? WHERE position_id = ?",
+            new Object[]{pos.getOwner(), pos.getCollateralAmount(), pos.getMintedAmount(),
+                pos.getLastUpdateBlock(), pos.getCreatedAtBlock(), id},
+            "INSERT INTO stablecoin_positions"
+                + "(position_id, owner, collateral, minted, last_update_block, created_block) "
+                + "VALUES(?,?,?,?,?,?)",
+            new Object[]{id, pos.getOwner(), pos.getCollateralAmount(), pos.getMintedAmount(),
+                pos.getLastUpdateBlock(), pos.getCreatedAtBlock()});
         positionCache.put(id, pos);
     }
 
@@ -128,9 +145,17 @@ public class JdbcPaymentStateStore implements PaymentStateStore {
 
     @Override
     public void putBridgeTx(String id, BridgeTransaction tx) {
-        jdbc.update("MERGE INTO bridge_transactions KEY(bridge_tx_id) VALUES(?,?,?,?,?,?,?)",
-            id, tx.getSourceChain(), tx.getTargetChain(), tx.getAmount(),
-            tx.getRecipient(), tx.getState().name(), tx.getValidators() != null ? tx.getValidators().size() : 0);
+        int validatorCount = tx.getValidators() != null ? tx.getValidators().size() : 0;
+        JdbcUpsert.upsert(jdbc,
+            "UPDATE bridge_transactions SET source_chain = ?, target_chain = ?, amount = ?, "
+                + "recipient = ?, state = ?, confirmations = ? WHERE bridge_tx_id = ?",
+            new Object[]{tx.getSourceChain(), tx.getTargetChain(), tx.getAmount(),
+                tx.getRecipient(), tx.getState().name(), validatorCount, id},
+            "INSERT INTO bridge_transactions"
+                + "(bridge_tx_id, source_chain, target_chain, amount, recipient, state, confirmations) "
+                + "VALUES(?,?,?,?,?,?,?)",
+            new Object[]{id, tx.getSourceChain(), tx.getTargetChain(), tx.getAmount(),
+                tx.getRecipient(), tx.getState().name(), validatorCount});
         bridgeCache.put(id, tx);
     }
 
@@ -142,7 +167,9 @@ public class JdbcPaymentStateStore implements PaymentStateStore {
 
     @Override
     public void putConsumedReplayKey(String kind, String keyHex) {
-        jdbc.update("MERGE INTO bridge_replay_keys KEY(kind, key_hex) VALUES(?,?)", kind, keyHex);
+        JdbcUpsert.insertIgnore(jdbc,
+            "INSERT INTO bridge_replay_keys(kind, key_hex) VALUES(?,?)",
+            new Object[]{kind, keyHex});
         replayKeyCache.asMap().computeIfAbsent(kind, k -> ConcurrentHashMap.newKeySet()).add(keyHex);
     }
 
