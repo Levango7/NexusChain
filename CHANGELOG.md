@@ -27,12 +27,36 @@ H2 专有 `MERGE ... KEY()`——测试跑 H2 全绿、生产切 PostgreSQL 直�
   本地 13/13；`JdbcFraudProofStateStoreTest` / `FraudProofVerifierPersistenceTest`
   等既有回归通过。
 - 口径：PLAN-014 Phase 4 记录与工程评审报告中的"遗留发现"两条随本批闭环。
+### 状态执行接线：双节点 30 分钟连续验证（PLAN-014 Phase 5）
+
+**背景**：Phase 1–4 已把状态重放、回滚、支付扩展口径、欺诈证明状态持久化逐项收敛；
+Phase 5 验证两个真实节点进程在共享 PG 上持续出块、同步、最终性投票与状态重放对账，
+并修复长跑中暴露的 P2P 签名透传、PoS 状态根、最终性投票源、质押权重与并发聚合问题。
+
+- **P2P 签名透传**：`Block` 追加 `bytes block_notice = 11`（保留 `body=10`），protoc 3.25.5
+  重新生成 checked-in `NexusChainOuterClass.java`；`Utils` 透传 R/S；新增真实 Ed25519
+  签名跨编解码往返测试。补齐 proto 中缺失的 `TransactionType` 16–26，保持线上枚举值不变。
+- **PoS 状态根**：出块时按 `merkleRule.validateMerkle` 结果计算真实
+  `hashMerkleState` / `hashMerkleIncubate`，不再写零根。
+- **最终性**：`FinalityCoordinator` 改监听 `NewBlockEvent`（确认写链后发布），不再只监听
+  本节点出块的 `NewBlockMinedEvent`；round-robin 下两端均投票。
+- **质押权重**：出块奖励不再累加到 proposer 质押（只走 coinbase）；`seedStake` 只初始化
+  账本，由 bootstrap/sync 为自身/对端验证人填充；修复本地权重膨胀导致的 A/B 权重分叉。
+- **启动与并发**：未知 proposer 归类为"验证人集合尚未同步"的 INFO 重试，不再刷 ERROR；
+  `FinalityGadget.submitVote` 串行化 + `SignatureAggregator` 固定列表快照，修复并发投票
+  下 `arraycopy` 越界与 pending block 超时。
+- **30 分钟长跑（2026-10-20）**：A/B/PG 高度均 **3546**；`state replay mismatch` 0；
+  ERROR A/B 均 0；finality epoch 885 两端 `2000/2000 FINALIZED`，checkpoint 一致。
+- **诚实边界**：real-L1 真机链路未验证，桥的存款/提款/已提交根仍为内存态；"双节点"是
+  同一 Windows 主机上的两个节点进程 + 容器化 PG，不是两台物理机；最终性状态仍为进程内
+  存储；未做网络分区/崩溃/拜占庭/PG 故障注入。详见 PLAN-014 §八。
 
 ### 状态执行接线：欺诈证明状态 PG 持久化（PLAN-014 Phase 4 持久化面）
 
 **背景**：批次⑥ 路线文档 §4 缺口"欺诈证明机制真实、锚定未完成"——批次/挑战状态
 全为进程内 ConcurrentHashMap，重启即丢失。本批交付 Phase 4 持久化面（PG 单存储决策，
-不做 LevelDB、不双写）；`real-l1-enabled=true` 真机链路并入 Phase 5（诚实边界见
+不做 LevelDB、不双写）；`real-l1-enabled=true` 真机链路原计划并入 Phase 5，实际未验证
+（Phase 5 仅覆盖双节点共识/同步；桥的存款/提款/已提交根仍为内存态，诚实边界见
 PLAN-014 §八）。
 
 - 新增 `FraudProofStateStore` 接口 + `JdbcFraudProofStateStore`（`@Profile("!dev")`）：
@@ -49,7 +73,7 @@ PLAN-014 §八）。
 - 回归：`JdbcFraudProofStateStoreTest`（6 用例）+ `FraudProofVerifierPersistenceTest`
   （5 用例，覆盖"模拟重启后状态恢复"）——本地 11/11；`FraudProofVerifierTest` /
   `EndToEndRollupTest` 回归通过。
-- **不做**：不接 `real-l1-enabled=true` 真机链路（转 Phase 5）；不持久化
+- **不做**：不接 `real-l1-enabled=true` 真机链路（原计划转 Phase 5，实际未验证）；不持久化
   `ChallengePeriodPolicy` 延期标记；不做多副本分布式一致性（last-writer-wins 已标注）。
 - 遗留发现（待另立任务）：`JdbcPaymentStateStore` / `JdbcFinalityStateStore` 用 H2 专有
   `MERGE ... KEY()`，生产 PG 写路径会 bad SQL grammar（当前因支付处理器无生产调用点而未暴露）；

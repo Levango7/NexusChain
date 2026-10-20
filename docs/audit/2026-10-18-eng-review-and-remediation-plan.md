@@ -159,7 +159,7 @@
 | Merkle 校验失败仍写链 | `PendingBlocksManager:92-110`：Merkle 根校验失败时并未 fail-closed，块照样写入 |
 | "Groth16" 实为 Schnorr | 声称的 Groth16 电路/证明实际是 Schnorr 签名路径——对外叙述与技术现实不符 |
 | KZG 为 mock 实现 | 承诺数据可用性层的关键组件是占位 |
-| 欺诈证明未锚定 | 欺诈证明机制未真正锚定到链上状态（**2026-10-20 修正**：批次/挑战/bond 状态已 PG 持久化（PLAN-014 Phase 4 持久化面），重启不丢失；"锚定到真实 L1"仍默认内存模拟，real-L1 验证转 Phase 5） |
+| 欺诈证明未锚定 | 欺诈证明机制未真正锚定到链上状态（**2026-10-20 修正**：批次/挑战/bond 状态已 PG 持久化（PLAN-014 Phase 4 持久化面），重启不丢失；"锚定到真实 L1"仍默认内存模拟；Phase 5 仅覆盖双节点共识/同步，real-L1 真机仍未验证） |
 | 0x10–0x1a 支付扩展 opcode 断层 | 支付扩展指令区无实现，链上"支付原生能力"名不副实（**2026-10-20 修正**：类型/处理器存在，但完整链路被 `TransactionCheck` 的 `type<=15` 门禁拒绝，当前不可上链；见 PLAN-014 Phase 3） |
 | nonce 无上界 | 账户 nonce 无溢出/上界防护 |
 | DB 无版本化迁移 | 状态存储无 schema 版本与迁移机制，升级面风险 |
@@ -191,7 +191,7 @@
 |---|---|---|
 | **P0** | gateway 资金路径 6 项（退款事务内出款 / 累计退款竞态 / reference 无 UNIQUE / AutoWithdraw / Split 幂等 / Recovery 锁） | **⑤ 已执行**（退款三段式、AutoWithdraw 认领协议**已修**；累计退款**核验为已修**；③推迟、⑤⑥豁免——明细见 §4.5/§7） |
 | P1 | 部署 tag 与发布产物对不上（纯版本号死引用） | **已修（批次②）** |
-| P1 | nexus-core 叙事脱节 7 项 | ⑥（✅ 2026-10-19/20 收口：nonce 上界 #148 / 对外口径 #150 / DB schema #151 / PLAN-014 Phase 1 #152 / Phase 2 #155 / Phase 3 #158 / Phase 4 #159；Phase 5 待排期） |
+| P1 | nexus-core 叙事脱节 7 项 | ⑥（✅ 2026-10-19/20 收口：nonce 上界 #148 / 对外口径 #150 / DB schema #151 / PLAN-014 Phase 1 #152 / Phase 2 #155 / Phase 3 #158 / Phase 4 #159；Phase 5 已交付（2026-10-20，双节点 30 分钟长跑）） |
 | P1 | 版本多源（检测与流程均已收口：bump 脚本 v 前缀 + 全链对齐 + 断言 8） | **已修（批次②）** |
 | P2 | composite build 门禁盲区 | ⑦ |
 | P2 | OWASP required 治理悬空（PR 卡死风险） | §8-3 决策 |
@@ -226,7 +226,7 @@
 - JWT 启动期 fail-fast **已修**：`nexus.security.jwt.require-secret`（prod 双侧置 true；dev/测试档位行为不变）。
 - 验收实测：定向测试（gateway refund / fundreport / security / wiring 上下文 + signing）全绿；门禁 scheduler-lock / code-hygiene / license-headers / packaging 全绿；每项独立提交、可单独 revert（见 §7）。
 
-### 批次⑥ nexus-core 诚信化（✅ 已执行 2026-10-19/20，见 §7 批次⑥执行明细；Phase 2–4 已交付，Phase 5 待排期）
+### 批次⑥ nexus-core 诚信化（✅ 已执行 2026-10-19/20，见 §7 批次⑥执行明细；Phase 2–5 已交付，Phase 5 双节点长跑 2026-10-20）
 - Merkle 失败 fail-closed：**已拍板不直译 fail-closed**（直译会复现同步死锁）——转为 PLAN-014 状态执行接线（Phase 1 状态重放已交付，观察位；Phase 2 接回滚 + 拉黑）。
 - nonce 上界：✅ **已修**（`MAX_TX_NONCE` + `TransactionNonceBoundTest`，PR #148）。
 - DB schema 版本化：✅ **已交付**（`SchemaMeta` 三分支 fail-fast + 三 store 接入 + LevelDB `__meta/schema_version`，PR #151 = PLAN-014 Phase 0）。
@@ -398,8 +398,14 @@
 - `FraudProofStateStore` + `JdbcFraudProofStateStore`（`@Profile("!dev")`，`SchemaMeta` store=`l2_fraud_state` v1）：`l2_fraud_batches` / `l2_fraud_bonds` / `l2_fraud_conflicts`；upsert 为"UPDATE→INSERT→唯一键竞争重试"（实测 H2 2.2.224 不支持 `ON CONFLICT DO UPDATE`，`MERGE KEY` 为 H2 专有）。
 - `FraudProofVerifier` 批次/bond 写穿 + `@PostConstruct restoreState()`；`ChallengeConflictResolver` first-valid-wins 写穿 + restore；`MerkleProof` 补 Jackson 注解。
 - 回归：`JdbcFraudProofStateStoreTest`（6）+ `FraudProofVerifierPersistenceTest`（5，含模拟重启）→ 11/11；nexus-core 全量 BUILD SUCCESSFUL。
-- 诚实边界：real-L1 真机未验证（Phase 5）、`ChallengePeriodPolicy` 延期标记仍内存、多副本 last-writer-wins、`challengerStore` 死字段、崩溃窗口以库为准。
+- 诚实边界：real-L1 真机未验证（Phase 5 未覆盖，桥的存款/提款/已提交根仍为内存态）、`ChallengePeriodPolicy` 延期标记仍内存、多副本 last-writer-wins、`challengerStore` 死字段、崩溃窗口以库为准。
 - 遗留发现（**2026-10-20 已修复**）：`JdbcPaymentStateStore`/`JdbcFinalityStateStore` 的 `MERGE ... KEY()` 统一改为 `org.nexus.db.JdbcUpsert` 可移植 upsert（H2 + PG 双兼容，新增 Testcontainers 真实 PG 契约测试）；`ValidatorSetPersistence.upsert` 的 `ON CONFLICT DO UPDATE`（H2 测试路径被 catch 静默降级）改为同一 helper；顺带修复 `JdbcFinalityStateStore.reload()` 回调误用 `rs.next()` 导致重启恢复丢行/丢全的缺陷。
+
+**Phase 5 交付证据（双节点 30 分钟长跑，2026-10-20）**：
+- 拓扑：两个真实节点进程（A/B，HTTP 19585/19586，P2P 9235/9236）+ 容器化 PostgreSQL（`nexus-pgsql`，127.0.0.1:55432）；固定 Ed25519 私钥，`min-validators-to-mine=2`，round-robin。
+- 结果：A/B/PG 高度均 **3546**（30 分钟约 1.97 block/s）；`state replay mismatch` A/B 均 **0**；validator-set 注册各 **1** 次；ERROR A/B 均 **0**；finality epoch **885** 两端均 `FINALIZED`、`voted_weight=2000`、`total_weight=2000`、`progress=100`，checkpoint 均为 `2a2b9029…`（一致）。
+- 关键修复：`block_notice=11` P2P 签名透传；PoS 真实状态根；最终性改监听 `NewBlockEvent`；出块奖励不再累加质押 + `seedStake` 对端填充；未知 proposer 启动竞态降为 INFO 重试；最终性投票聚合串行化 + 稳定快照（修复 `arraycopy` 越界）。
+- 诚实边界：real-L1 真机链路未验证，桥的存款/提款/已提交根仍为内存态；"双节点"是同一 Windows 主机上的两个节点进程 + 容器化 PG，不是两台物理机；最终性状态仍为进程内存储；未做网络分区/崩溃/拜占庭/PG 故障注入；未写逐块状态根全量对账脚本。详见 PLAN-014 §八。
 
 ---
 
@@ -412,7 +418,7 @@
 4. ~~origin/master 历史~~ **已查明并解决（2026-10-19）**：现状复核——origin/master 与本地 master **同源**（共同最早提交 `4b14af96`「NexusChain v2.1.0 - Clean repository」；当前各 618 / 623 个提交，merge-base = `13af8064`）。当时"领先 611 个提交 / origin 2 提交孤儿"的判断现不成立（系推送通道修复过程中的浅取/临时状态，已自然归一为完整谱系）。本地 master 已纯快进对齐至 `d75a5f3f`（#147）。基线策略维持：feature 分支以 GitHub `origin/master` 为基线并显式推送；本地 master 仅作只读镜像。
 5. ~~本报告与后续批次产物的归属~~ **已决并执行**：报告已收入 `docs/audit/2026-10-18-eng-review-and-remediation-plan.md`（随 PR #140）；agent-board 认领留言随提交入库（`docs/agent-board/20261018-1900-eng-review-money-path-p0.md`）。
 6. ~~推送与 PR~~ **已决并执行**：批次①+②+⑤ 共 **11 个提交**已 push（`origin/fix/eng-review`）并开 **PR #140**（`fix/eng-review` → `master`；推送前已 rebase 到 origin/master，提交哈希以 §7/§9 为准）。后续批次③/④/⑦ 将在同一分支/PR 续作（用户已确认继续执行）。**合并授权更新（2026-10-19）**：确认无冲突且前置具备即合并；执行序＝OWASP 转正/修复与残项复核落库 → CI 全绿 → 合并 #140/#141 → 切 tag `v2.74.0` → GHCR 实拉验证（**已全部执行完毕，2026-10-19；终态记录见 §8-2**）。
-7. ~~批次⑥ 路线文档 §8 四项拍板~~ **已全部拍板并执行（2026-10-19/20）**：对外口径精确标注（#150）/ 合并立项 PLAN-014（Phase 0–5）/ 欺诈证明锚定并入 Phase 4 / DB schema 版本化 fail-fast（#151 = Phase 0）。**执行结果**：#148 → #152 五连全部合并 master（squash，CI 全绿）；PLAN-014 Phase 0/1 已交付（#151/#152），**Phase 2/3/4 已交付（#155 / #158 / #159，CI 全绿）**，Phase 5（真机双节点验证）待排期（见 §7 批次⑥执行明细）。
+7. ~~批次⑥ 路线文档 §8 四项拍板~~ **已全部拍板并执行（2026-10-19/20）**：对外口径精确标注（#150）/ 合并立项 PLAN-014（Phase 0–5）/ 欺诈证明锚定并入 Phase 4 / DB schema 版本化 fail-fast（#151 = Phase 0）。**执行结果**：#148 → #152 五连全部合并 master（squash，CI 全绿）；PLAN-014 Phase 0/1 已交付（#151/#152），**Phase 2/3/4 已交付（#155 / #158 / #159，CI 全绿）**，**Phase 5（双节点连续验证）已交付（2026-10-20，30 分钟长跑；real-L1 未覆盖，见 §7 批次⑥执行明细）**。
 
 ---
 
