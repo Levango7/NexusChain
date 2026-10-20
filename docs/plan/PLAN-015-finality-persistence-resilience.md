@@ -1,10 +1,10 @@
 # 方案 PLAN-015：最终性持久化与重启韧性（Phase 6A）
 
-- **状态**：Phase 6A 已交付（2026-10-21）；Phase 6B（故障注入矩阵）待排期
+- **状态**：Phase 6A 已交付（2026-10-21）；Phase 6B 首批切片见 [PLAN-016](PLAN-016-finality-fault-injection.md)
 - **前置**：PLAN-014 Phase 5（双节点连续验证，master `47b01ee8`）
-- **分支**：`plan/phase6-finality-resilience`
+- **分支**：`plan/phase6-finality-resilience`（Phase 6A）/ `plan/phase6b-fault-injection`（Phase 6B）
 - **范围**：把已经实现但未装配的 `JdbcFinalityStateStore` 接入生产路径；补齐最终性投票 P2P 两侧测试；完成双节点强制重启验收。
-- **不包含**：real-L1、桥资金链路、网络分区/拜占庭/PG 故障注入、多副本最终性缓存一致性。
+- **不包含**：real-L1、桥资金链路、网络分区/拜占庭矩阵、多副本最终性缓存一致性；Phase 6B 首批（PLAN-016）另行覆盖重复/乱序投票、双签顺序反转、JDBC/PG 短时不可用，网络分区/拜占庭/多副本仍未做。
 
 ---
 
@@ -145,8 +145,10 @@ Phase 6A 的目标：
 
 ## 五、后续
 
-- **Phase 6B（建议下一批）**：故障注入矩阵——网络分区、写入窗口崩溃/重启（含重启中继续投票）、
-  PG 短时不可用、重复/延迟/乱序投票、双签/拜占庭注入；输出可复现证据与失败模式。
-- **多副本最终性缓存一致性**：在 6B 或单独 ADR 中拍板；当前只保证单实例重启恢复。
+- **Phase 6B（首批已交付，2026-10-21）**：见 [PLAN-016](PLAN-016-finality-fault-injection.md)。
+  已覆盖重复/延迟/乱序投票、双签顺序反转、JDBC/PG 短时不可用，并修复
+  “最终性写失败沿 `NewBlockEvent` 传播、导致 `pendingBlock` 60 秒超时”的真实缺陷。
+  仍未覆盖：持久化重试队列、真实网络分区、完整拜占庭矩阵、接收侧独立重试。
+- **多副本最终性缓存一致性**：尚未拍板；当前只保证单实例重启恢复。
 - **real-L1 专项**：另立任务，先用本地 Hardhat/Anvil + 真实 `Web3jL1ContractClient`，
   并把桥的存款/提款/已提交根持久化。

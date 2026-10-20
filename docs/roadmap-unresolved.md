@@ -67,6 +67,7 @@
 | 24 | ~~gateway 全量回归未复验~~ | ✅ 已复验（全量 testAll BUILD SUCCESSFUL，3m12s） |
 | 25 | **ADR `security-ops-batch-design-2026-09-14.md` §1.5「Phase B：kind 演练重跑」未闭环**（2026-10-07 新录） | ⬜ 未做。该节把"gateway→signing 真实 Feign 互调"定为 Boot4 批的**最终验收标尺**（此前只验到编译+启动层），并声明产出 `docs/deploy/fullstack-drill-report-2026-09-14.md`。取证：该路径 `git log --all` **0 命中**（从未写入，非被删）；仓内唯一演练报告是 09-12 那次的六个发现，不含这 5 项；五项关键词在 `CHANGELOG.md` 零命中。**不是文档过时，是验证没落**；且**当前不可重跑**——该演练的资产（`Dockerfile.java-drill`、`fullstack-drill-{infra,gateway,services}.yaml`、`nacos-init-v3.sh`，清单见 `fullstack-drill-report-2026-09-12.md:100-106`）在**仓外的** `F:\Nexus\build\`，本机现已不存在（`git ls-files \| grep -i drill` 只剩 `deploy/kind/` 两份与 09-12 报告）。先入库工具链，"重跑演练"才是任何人可执行的动作 |
 | 26 | ~~最终性投票的跨节点 P2P 投递零测试覆盖~~（2026-10-07 新录） | ✅ **已解决（2026-10-21，PLAN-015 Phase 6A）**：新增 `FinalityVoteP2PRoundTripTest`，真实触达 `FinalityVoteBroadcaster.sendOverP2P()` → `PeerServer.broadcast(Transactions/VOTE)`，再把捕获载荷构造成 `Message(TRANSACTIONS)` 交给 `SyncManager.onMessage()`，经 `onTransactions()` 的 `FinalityVoteP2PCodec.isVotePayload` 分流后进入对端 `FinalityGadget` 完成最终化。原缺口描述（两参构造器 peerServer=null、无测试触达两侧）保留作历史记录 |
+| 27 | **最终性故障注入剩余矩阵**（2026-10-21 新录） | 🟡 **首批已交付（PLAN-016 Phase 6B）**：重复/延迟/乱序投票、双签顺序反转、JDBC/最终性表短时不可用；修复写库失败污染内存、最终化提前对外可见、`pendingBlock` 60 秒超时。**仍未做**：持久化投票 outbox（当前重试队列仅内存，崩溃丢失）、真实网络分区、完整拜占庭矩阵、接收侧独立重试、多副本最终性缓存一致性。PG 整体停止会打穿 `AccountDB`/提案路径，未在本批修复 |
 
 ---
 
@@ -77,6 +78,7 @@
 | 2026-08-14 | 建立基线 + 逐项代码核实 | 核实 5 项"已修复文档过时" |
 | 2026-10-07 | 新增 #25 / #26 两条验证缺口；顺带勘误两处过期表述 | #25：`git log --all -- …/fullstack-drill-report-2026-09-14.md` 0 命中。#26：`FinalityVoteBroadcaster` 类注释原写"P2P 待接入、等 protoc 3.22.2 + 见 ADR-031-finality-p2p-integration.md"——投递两侧实际已接线，且该 ADR 文件名不存在（同编号实际文件是 `ADR-031-nexfinality-engineering-decisions.md`）；"等 protoc"这个前提也不成立——protoc 不在构建路径上，生成物 `NexusChainOuterClass.java` 已入库（`src/main/java/org/nexus/p2p/`），构建侧只有 `protobuf-java` 运行时依赖。两处均在 ADR / 源码注释就地更正 |
 | 2026-10-21 | #26 关闭：最终性投票 P2P 往返测试 + 双节点强制重启验收 | `FinalityVoteP2PRoundTripTest`；`PLAN-015` §二/§三 |
+| 2026-10-21 | #27 新录：最终性故障注入首批交付，剩余矩阵诚实登记 | `PLAN-016` §三/§四/§五；`FinalityGadgetFaultInjectionTest` / `JdbcFinalityStateOutageTest` |
 
 ## PLAN-007（单 proposer 协调）
 

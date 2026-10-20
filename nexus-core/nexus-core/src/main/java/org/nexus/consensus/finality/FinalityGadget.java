@@ -44,6 +44,11 @@ public class FinalityGadget {
     private final Map<String, BigDecimal> epochCheckpointWeights = new ConcurrentHashMap<>();
     private final Map<String, BigDecimal> epochTotalWeight = new ConcurrentHashMap<>();
     private final Set<String> finalizedCheckpoints = ConcurrentHashMap.newKeySet();
+    /**
+     * 聚合验签失败的检查点。重复投票不重复触发聚合验签，避免 P2P 重复消息
+     * 放大 CPU 开销；一旦有新的投票者加入，说明投票集合已变化，才会重新尝试。
+     */
+    private final Set<String> finalizationRejected = ConcurrentHashMap.newKeySet();
     private final List<EquivocationEvidence> detectedEquivocations = new java.util.concurrent.CopyOnWriteArrayList<>();  // P0-3: 并发安全
     /** 已执行罚没的作恶者（地址），防止同一证据重复 slash 造成过度惩罚。 */
     private final Set<String> slashedOffenders = ConcurrentHashMap.newKeySet();
@@ -108,7 +113,9 @@ public class FinalityGadget {
         // 保证即使未来改为延迟注入也不会把内存态与持久化态混在一起。
         finalizedCheckpoints.clear();
         epochCheckpointVoters.clear();
+        epochCheckpointVotes.clear();
         epochCheckpointWeights.clear();
+        finalizationRejected.clear();
         restoreFromStore();
         log.info("FinalityGadget: using finality state store {}", stateStore.getClass().getSimpleName());
     }
@@ -209,13 +216,29 @@ public class FinalityGadget {
             return record(epoch, vote.getCheckpointHash(), total);
         }
 
-        // 同验证者重复投票同检查点：幂等拒绝
         Set<String> voters = epochCheckpointVoters.computeIfAbsent(checkpointKey, k -> ConcurrentHashMap.newKeySet());
-        if (!voters.add(vote.getValidatorAddress())) {
+        if (voters.contains(vote.getValidatorAddress())) {
+            // 同验证者重复投票同检查点：幂等拒绝。若上一次最终化已通过聚合验签、
+            // 但 markFinalized 写库失败，重复投票是天然的重试机会；已确认的检查点
+            // 或聚合验签已拒绝的检查点不会重复触发昂贵的聚合验签。
+            tryFinalize(epoch, vote.getCheckpointHash(), checkpointKey, total);
             return record(epoch, vote.getCheckpointHash(), total);
         }
-        // 持久化有效投票（P0-1：节点重启后可恢复投票者集合）
+
+        // 持久化必须在任何内存状态变更之前完成：
+        // - 写库失败时 voters/weights/投票对象都保持原状，重试不会被误判为重复票；
+        // - 不会出现“内存已计票、重启后却从数据库消失”的不可逆结算丢失窗口。
         stateStore.recordVote(epoch, vote.getCheckpointHash(), vote.getValidatorAddress());
+
+        if (!voters.add(vote.getValidatorAddress())) {
+            // 防御性分支：正常路径由 synchronized + 上面的 contains 排除；
+            // 若未来恢复路径引入并发，这里仍保证不重复计权重。
+            tryFinalize(epoch, vote.getCheckpointHash(), checkpointKey, total);
+            return record(epoch, vote.getCheckpointHash(), total);
+        }
+
+        // 新投票进入集合，之前聚合验签失败的结论可能已变化，允许重新尝试。
+        finalizationRejected.remove(checkpointKey);
 
         // 双签检测：同 epoch 不同检查点
         for (Map.Entry<String, Set<String>> e : epochCheckpointVoters.entrySet()) {
@@ -252,21 +275,65 @@ public class FinalityGadget {
         log.debug("Finality vote counted: epoch={}, validator={}, weight={}, voted={}, total={}, checkpoint={}",
                 epoch, vote.getValidatorAddress(), weight, voted, total,
                 org.apache.commons.codec.binary.Hex.encodeHexString(vote.getCheckpointHash()));
-        boolean finalized = voted.multiply(BigDecimal.valueOf(3))
-                .compareTo(total.multiply(BigDecimal.valueOf(2))) >= 0;
-        if (finalized) {
-            // M3 架构挂接：最终化前对投票集合做聚合验签（收集式降级或 blst 聚合）
-            AggregatedSignature agg = signatureAggregator.aggregate(epochCheckpointVotes.get(checkpointKey));
-            if (agg != null && !signatureAggregator.verifyAggregate(epochCheckpointVotes.get(checkpointKey), agg)) {
-                // fail-closed：聚合验签失败则不最终化
-                finalized = false;
-            } else {
-                finalizedCheckpoints.add(checkpointKey);
-                // 持久化最终化标记（P0-1：节点重启不丢失已确认的不可逆结算）
-                stateStore.markFinalized(epoch, vote.getCheckpointHash());
-            }
+        if (voted.multiply(BigDecimal.valueOf(3))
+                .compareTo(total.multiply(BigDecimal.valueOf(2))) >= 0) {
+            tryFinalize(epoch, vote.getCheckpointHash(), checkpointKey, total);
         }
-        return new FinalityRecord(epoch, vote.getCheckpointHash(), voted, total, finalized);
+        return record(epoch, vote.getCheckpointHash(), total);
+    }
+
+    /**
+     * 尝试把已达阈值的检查点标记为最终化。
+     *
+     * <p>顺序固定为“聚合验签 → 写持久化 → 更新内存”：只有数据库确认最终化后，
+     * 内存缓存才对外报告 FINALIZED。写库失败时向上抛出，保持 fail-closed；
+     * 同一检查点的重复投票或后续新票会再次触发本方法。</p>
+     *
+     * @return 是否已最终化（false 表示未达阈值、投票签名缺失或聚合验签失败）
+     */
+    private boolean tryFinalize(long epoch, byte[] checkpointHash, String checkpointKey, BigDecimal total) {
+        if (finalizedCheckpoints.contains(checkpointKey)) {
+            return true;
+        }
+        if (finalizationRejected.contains(checkpointKey)) {
+            return false;
+        }
+        BigDecimal voted = currentVotedWeight(checkpointKey);
+        if (voted.multiply(BigDecimal.valueOf(3))
+                .compareTo(total.multiply(BigDecimal.valueOf(2))) < 0) {
+            return false;
+        }
+
+        List<Vote> votes = epochCheckpointVotes.get(checkpointKey);
+        if (votes == null || votes.isEmpty()) {
+            // 重启后只恢复了投票者地址，完整 Vote 签名对象未持久化。
+            // 此时不能仅凭数据库中的权重直接宣布最终化；等待新的投票对象
+            // 到达后重新走聚合验签路径。
+            log.debug("Finality threshold reached for {} but no vote signatures are loaded; deferring finalization",
+                    checkpointKey);
+            return false;
+        }
+
+        // M3 架构挂接：最终化前对投票集合做聚合验签（收集式降级或 blst 聚合）
+        AggregatedSignature agg = signatureAggregator.aggregate(votes);
+        if (agg != null && !signatureAggregator.verifyAggregate(votes, agg)) {
+            // fail-closed：聚合验签失败则不最终化，重复票不重复触发验签。
+            finalizationRejected.add(checkpointKey);
+            log.warn("Finality aggregate verification failed for {}; checkpoint remains unfinalized", checkpointKey);
+            return false;
+        }
+
+        try {
+            stateStore.markFinalized(epoch, checkpointHash);
+        } catch (RuntimeException e) {
+            // 写库失败时不能先把 finalizedCheckpoints 置位，否则内存报告 FINALIZED
+            // 而数据库没有最终化事实，重启后会丢失不可逆结算。保留重试机会并抛出。
+            log.error("Failed to persist finalization for {}; finality remains uncommitted", checkpointKey, e);
+            throw e;
+        }
+        finalizedCheckpoints.add(checkpointKey);
+        finalizationRejected.remove(checkpointKey);
+        return true;
     }
 
     /**

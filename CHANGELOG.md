@@ -4,6 +4,36 @@
 
 ## [Unreleased]
 
+### 最终性故障注入首批切片（PLAN-016 Phase 6B）
+
+**背景**：Phase 6A 已证明数据库可用时重启不丢最终性，但未验证数据库短时不可用、
+投票重复/延迟/乱序时内存状态与持久化事实是否一致。
+
+- **持久化顺序修复**：`FinalityGadget.submitVote` 改为“先写库、后改内存”。
+  `recordVote` 失败不再留下数据库里不存在的幽灵投票者；`markFinalized` 失败不再
+  提前对外报告 `FINALIZED`。重复票可重试补写最终化；聚合验签失败用
+  `finalizationRejected` 去重，避免重复消息反复验算。
+- **区块采纳隔离**：最终性表短时不可用时，`FinalityCoordinator` 把本地票放入有界
+  重试队列（256），后续区块自动补写/补广播；`onNewBlock` 兜底捕获，避免异常沿
+  `NewBlockEvent` 传播导致 `StateDB.pendingBlock` 60 秒超时。接收侧
+  `FinalityVoteBroadcaster.onVoteReceived` 同样不再让远端票写库失败拖垮同步线程。
+- **故障注入回归**：新增 `FinalityGadgetFaultInjectionTest`（6）、
+  `JdbcFinalityStateOutageTest`（1），并扩展 `FinalityCoordinatorTest` 与
+  `FinalityVoteBroadcasterTest`；本批定向 `*Finality*` + 治理权重共 **64** 个用例全绿。
+- **双节点实测（2026-10-21）**：仅将 `finality_votes` / `finality_checkpoints`
+  改名 21.6 秒，高度仍从 **2132/2133 → 2175/2175**；恢复后 epoch **534–544**
+  全部补齐最终化，高度到 **2297**，PG 检查点 519–574 连续 56 个无缺口
+  （112 票，每 epoch 2 票）。修复前同一故障会触发 `Local adoption failed` +
+  `pendingBlock` 60 秒超时。
+- **PG 整体停止对照**：停止约 20.1 秒后恢复，高度 2358/2359 → 2484/2484，
+  epoch 588/620 两端仍 `FINALIZED`，最终性检查点 576–621 连续 46 个；但停止期间
+  `/consensus/status` 不可达，B 出现 18 条 `CannotGetJdbcConnectionException` + 18 条
+  `Propose failed ... totalaccount is null`——**账户 DB 降级未在本批修复**，不能把
+  这组证据解读为完整 PG 容灾。
+- **边界**：重试队列不持久化（崩溃丢失）；只覆盖本地票；网络分区/完整拜占庭矩阵/
+  多副本最终性缓存一致性仍未做；real-L1 与桥不变。详见
+  `docs/plan/PLAN-016-finality-fault-injection.md`。
+
 ### 最终性持久化与重启韧性（PLAN-015 Phase 6A）
 
 **背景**：PLAN-014 Phase 5 的最终性状态仍是进程内 `InMemoryFinalityStateStore`；
