@@ -130,6 +130,8 @@ local.env
 mpc-certs/
 mpc-engine/mpc-sessions/
 nexus-core/nexus-core/data-*/
+# 双节点真机验证的本地 LevelDB 目录（data-A / data-B）
+/data-*/
 # start-mpc-cluster.sh 运行时生成（内嵌机器特定绝对证书路径 + 随机 storage_key）；
 # TOML 模板（node*.toml）已入库，JSON 由脚本按需生成
 mpc-engine/config/node*.json

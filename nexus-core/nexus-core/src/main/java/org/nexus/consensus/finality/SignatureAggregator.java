@@ -68,19 +68,22 @@ public interface SignatureAggregator {
             if (votes == null || votes.isEmpty()) {
                 return null;
             }
+            // 固定快照：调用方可能在并发投票下传入 CopyOnWriteArrayList，
+            // 若两次迭代之间列表被追加，按第一次长度分配、第二次复制会越界。
+            List<Vote> snapshot = new java.util.ArrayList<>(votes);
             int total = 0;
-            for (Vote v : votes) {
+            for (Vote v : snapshot) {
                 total += v.getSignature() == null ? 0 : v.getSignature().length;
             }
             byte[] packed = new byte[total];
             int off = 0;
-            for (Vote v : votes) {
+            for (Vote v : snapshot) {
                 byte[] sig = v.getSignature() == null ? new byte[0] : v.getSignature();
                 System.arraycopy(sig, 0, packed, off, sig.length);
                 off += sig.length;
             }
             final byte[] packedFinal = packed;
-            final int count = votes.size();
+            final int count = snapshot.size();
             return new AggregatedSignature() {
                 @Override public byte[] compressed() { return packedFinal; }
                 @Override public int signerCount() { return count; }
@@ -90,11 +93,15 @@ public interface SignatureAggregator {
         @Override
         public boolean verifyAggregate(List<Vote> votes, AggregatedSignature aggregated) {
             // 收集式聚合：无法比逐一验证更优，诚实返回"需要上层走逐签验证"
-            if (aggregated == null || votes == null || aggregated.signerCount() != votes.size()) {
+            if (aggregated == null || votes == null) {
+                return false;
+            }
+            List<Vote> snapshot = new java.util.ArrayList<>(votes);
+            if (aggregated.signerCount() != snapshot.size()) {
                 return false;
             }
             // 格式校验：拒绝无签名/空签名/异常短签名的投票，防止冒充验证人零成本触发 finalized
-            for (Vote vote : votes) {
+            for (Vote vote : snapshot) {
                 byte[] sig = vote.getSignature();
                 if (sig == null || sig.length == 0) {
                     log.warn("Vote from {} has null/empty signature, rejecting", vote.getValidatorAddress());
@@ -112,7 +119,7 @@ public interface SignatureAggregator {
             // （签名密钥为验证人注册密钥，伪造需要私钥）。公钥与验证人身份的
             // 绑定由 FinalityGadget 在计票前对照 ValidatorRegistry 完成。
             try {
-                for (Vote vote : votes) {
+                for (Vote vote : snapshot) {
                     byte[] pubKeyBytes = vote.getPublicKeyBytes();
                     // B-18 修复（P0-C 安全）：公钥为 null 时拒绝该签名（fail-closed），
                     // 不再跳过验签。攻击者可能提交无公钥的签名绕过验签。

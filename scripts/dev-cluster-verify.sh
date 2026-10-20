@@ -5,6 +5,10 @@
 # ============================================================
 cd "$(dirname "$0")/.."
 
+# PG 容器名解析（PLAN-014 Phase 5）：compose 服务固定 nexus-pgsql；兼容历史手动容器 nexus-pg。
+PG_CONTAINER="${PG_CONTAINER:-$(docker ps --filter publish=55432 --format '{{.Names}}' 2>/dev/null | head -1)}"
+PG_CONTAINER="${PG_CONTAINER:-nexus-pgsql}"
+
 echo "=== 高度对比 ==="
 echo -n "A: " && grep -oE "Block proposed at height [0-9]+" nodeA.log 2>/dev/null | tail -1
 echo -n "B: " && grep -oE "Block proposed at height [0-9]+" nodeB.log 2>/dev/null | tail -1
@@ -19,7 +23,7 @@ echo "取最近高度 $H 对比:"
 grep -oE "Selected proposer [A-Za-z0-9]+ at height $H" nodeA.log nodeB.log 2>/dev/null | sort -u
 
 echo "=== PG 共享链高度 ==="
-docker exec nexus-pg psql -U nexus -d nexuschain -t -c "SELECT max(height) FROM header;" 2>/dev/null
+docker exec "$PG_CONTAINER" psql -U nexus -d nexuschain -t -c "SELECT max(height) FROM header;" 2>/dev/null
 
 echo "=== 最终性 ==="
 curl -s http://localhost:19585/rpc/v1/finality/epoch/1 2>/dev/null | head -c 300

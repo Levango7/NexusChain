@@ -93,12 +93,14 @@ public class ValidatorNodeBootstrapper implements ApplicationListener<Applicatio
                 log.error("Self-register FAILED: address={} stake={}", address, selfStake);
                 return;
             }
-            stakingService.stake(address, selfStake);
             Validator v = validatorRegistry.getValidator(address);
             if (v != null && v.getStatus() != ValidatorStatus.ACTIVE) {
                 v.setStatus(ValidatorStatus.ACTIVE);
             }
         }
+        // 注册表可能从 PG/快照恢复（validator 已存在），但 StakingService 账本为空；
+        // seedStake 幂等填充，避免重复累加注册表里的初始质押。
+        stakingService.seedStake(address, selfStake);
         // 点亮最终性投票链路：协调器需知道本节点地址才能对检查点投票
         if (finalityCoordinator != null) {
             finalityCoordinator.setSelfValidatorAddress(address);

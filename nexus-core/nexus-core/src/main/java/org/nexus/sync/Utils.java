@@ -62,6 +62,8 @@ public class Utils {
         b.nTime = bk.getCreatedAt();
         b.nBits = bk.getNBits().toByteArray();
         b.nNonce = bk.getNonce().toByteArray();
+        // PoS 签名 S 分量（nNonce 承载 R）；漏传会导致跨节点验签必失败。
+        b.blockNotice = bk.getBlockNotice().toByteArray();
         b.body = new ArrayList<>();
         if (bk.getBodyList() == null || bk.getBodyList().size() == 0) {
             return b;
@@ -105,7 +107,8 @@ public class Utils {
                 .setHeight((int) block.nHeight)
                 .setCreatedAt((int) block.nTime)
                 .setNBits(ByteString.copyFrom(getBytes(block.nBits)))
-                .setNonce(ByteString.copyFrom(getBytes(block.nNonce)));
+                .setNonce(ByteString.copyFrom(getBytes(block.nNonce)))
+                .setBlockNotice(ByteString.copyFrom(getBytes(block.blockNotice)));
 
         if (block.body == null || block.body.size() == 0) {
             return bd.build();

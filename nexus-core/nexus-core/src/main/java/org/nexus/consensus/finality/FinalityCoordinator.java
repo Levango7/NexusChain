@@ -5,7 +5,7 @@ import org.nexus.consensus.pos.Validator;
 import org.nexus.consensus.pos.ValidatorRegistry;
 import org.nexus.consensus.pos.ValidatorStatus;
 import org.nexus.core.Block;
-import org.nexus.core.event.NewBlockMinedEvent;
+import org.nexus.core.event.NewBlockEvent;
 import org.nexus.crypto.ed25519.Ed25519PrivateKey;
 import org.nexus.crypto.ed25519.Ed25519PublicKey;
 import org.slf4j.Logger;
@@ -114,10 +114,15 @@ public class FinalityCoordinator {
     }
 
     /**
-     * 出块事件处理：命中 epoch 边界时自动投票。
+     * 已确认区块事件处理：命中 epoch 边界时自动投票。
+     *
+     * <p>必须监听 {@link NewBlockEvent}（StateDB 写链成功后发布），而不是
+     * {@code NewBlockMinedEvent}（仅本节点提案时发布）。否则只有检查点高度的
+     * 出块节点会投票；在 round-robin 下如果检查点高度总是同一个节点，
+     * 另一验证人永远不投票，最终性退化为单节点。</p>
      */
     @EventListener
-    public void onNewBlock(NewBlockMinedEvent event) {
+    public void onNewBlock(NewBlockEvent event) {
         if (event == null || event.getBlock() == null) {
             return;
         }
@@ -181,8 +186,9 @@ public class FinalityCoordinator {
         Vote vote = new Vote(epoch, checkpointHash, selfValidatorAddress, sigBytes, publicKeyBytes);
 
         FinalityRecord record = gadget.submitVote(vote);
-        log.info("Finality vote submitted: epoch={}, height={}, validator={}, finalized={}, progress={}%",
-                epoch, height, selfValidatorAddress, record.isFinalized(), record.progressPercent());
+        log.info("Finality vote submitted: epoch={}, height={}, checkpoint={}, validator={}, finalized={}, progress={}%",
+                epoch, height, org.apache.commons.codec.binary.Hex.encodeHexString(checkpointHash),
+                selfValidatorAddress, record.isFinalized(), record.progressPercent());
         // 广播投票至 P2P 网络（跨节点汇聚发送侧接线）
         if (broadcaster != null) {
             broadcaster.broadcast(vote);

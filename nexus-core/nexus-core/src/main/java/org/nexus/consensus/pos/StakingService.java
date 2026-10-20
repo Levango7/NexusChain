@@ -36,6 +36,18 @@ public interface StakingService {
     BigDecimal getStake(String validator);
 
     /**
+     * 初始化质押账本（幂等，不改变 Validator 注册信息）。
+     *
+     * <p>用于启动恢复与对端验证人同步：验证人注册表已记录初始质押，
+     * 但 StakingService 的账本可能为空。若直接调用 {@link #stake(String, BigDecimal)}
+     * 会把注册表里的质押再加一遍，导致权重翻倍。</p>
+     *
+     * @param validator 验证者地址
+     * @param amount    初始质押金额
+     */
+    void seedStake(String validator, BigDecimal amount);
+
+    /**
      * 按周期向活跃验证者分发奖励。
      */
     void distributeRewards();

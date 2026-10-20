@@ -109,7 +109,11 @@ class FinalityChainOrchestrationTest {
         when(packageMiner.TransferCheck(any(byte[].class), anyLong(), any(Block.class)))
                 .thenReturn(Collections.emptyList());
         ReflectionTestUtils.setField(engine, "packageMiner", packageMiner);
-        ReflectionTestUtils.setField(engine, "merkleRule", mock(MerkleRule.class));
+        MerkleRule merkleRule = mock(MerkleRule.class);
+        when(merkleRule.validateMerkle(any(), anyLong()))
+                .thenReturn(java.util.Map.of("account", Collections.emptyList(),
+                        "incubator", Collections.emptyList()));
+        ReflectionTestUtils.setField(engine, "merkleRule", merkleRule);
         EconomicModel economicModel = mock(EconomicModel.class);
         when(economicModel.getConsensusRewardAtHeight(anyLong())).thenReturn(20L * EconomicModel.NEX);
         ReflectionTestUtils.setField(engine, "economicModel", economicModel);

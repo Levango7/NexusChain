@@ -26,6 +26,11 @@ if [ -z "${GRADLE_BIN:-}" ]; then
   fi
 fi
 LOG_DIR="${LOG_DIR:-$(pwd)}"
+
+# PG 容器名解析（PLAN-014 Phase 5）：compose 服务固定 nexus-pgsql；兼容历史手动容器 nexus-pg。
+PG_CONTAINER="${PG_CONTAINER:-$(docker ps --filter publish=55432 --format '{{.Names}}' 2>/dev/null | head -1)}"
+PG_CONTAINER="${PG_CONTAINER:-nexus-pgsql}"
+
 PRIVA="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 PRIVB="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 PRIVC="cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
@@ -34,7 +39,7 @@ echo "[1/4] 清理旧状态..."
 pkill -f "org.nexus.Start" 2>/dev/null || true
 sleep 2
 rm -rf data-a data-b data-c nexus-core/nexus-core/data-a nexus-core/nexus-core/data-b nexus-core/nexus-core/data-c 2>/dev/null || true
-docker exec nexus-pg psql -U nexus -d nexuschain -c \
+docker exec "$PG_CONTAINER" psql -U nexus -d nexuschain -c \
   "TRUNCATE transaction_index, transaction, header, account, incubator_state, payment_channels, stablecoin_positions, bridge_transactions; DROP TABLE IF EXISTS validators_synced;" >/dev/null 2>&1 || true
 
 echo "[2/4] 启动 node-A (19585)..."
