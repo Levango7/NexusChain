@@ -110,7 +110,7 @@ public class FinalityGadget {
      * 注入签名聚合器（M3 架构挂接点）。
      * 默认收集式；生产环境应在 blst 就位后替换为真实聚合实现。
      */
-    public void setSignatureAggregator(SignatureAggregator aggregator) {
+    public synchronized void setSignatureAggregator(SignatureAggregator aggregator) {
         this.signatureAggregator = Objects.requireNonNull(aggregator, "aggregator must not be null");
     }
 
@@ -118,7 +118,7 @@ public class FinalityGadget {
      * 注入罚没服务（M4 连接轴）。注入后，检测到双签证据将自动执行
      * {@link SlashingService#slash(String, SlashingService.Offense)}（DOUBLE_SIGN，没收全部质押并置 SLASHED）。
      */
-    public void setSlashingService(SlashingService slashingService) {
+    public synchronized void setSlashingService(SlashingService slashingService) {
         this.slashingService = slashingService;
     }
 
