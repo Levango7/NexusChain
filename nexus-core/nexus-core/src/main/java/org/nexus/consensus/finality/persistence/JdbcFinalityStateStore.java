@@ -1,6 +1,7 @@
 package org.nexus.consensus.finality.persistence;
 
 import jakarta.annotation.PostConstruct;
+import org.nexus.db.JdbcUpsert;
 import org.nexus.db.SchemaMeta;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -14,7 +15,7 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * JDBC（Postgres/H2）版最终性状态存储。
  *
- * <p>对齐 {@code JdbcPaymentStateStore} 模式：{@link JdbcTemplate} + 建表 + MERGE。
+ * <p>对齐 {@code JdbcPaymentStateStore} 模式：{@link JdbcTemplate} + 建表 + 可移植 upsert。
  * 仅在 <b>写入时落库</b>，读取走内存重建缓存（启动时 {@code loadAll*}）。</p>
  *
  * <p>表结构：</p>
@@ -76,17 +77,16 @@ public class JdbcFinalityStateStore implements FinalityStateStore {
     /** 从库重建内存缓存（启动/恢复用）。 */
     private void reload() {
         try {
+            // 注意：query(String, RowCallbackHandler) 的回调是"每行调用一次"，
+            // 回调内不能再调用 rs.next()（旧实现这样写会跳过隔行；单行时一行都读不到）。
             jdbc.query("SELECT epoch, checkpoint_hash, validator FROM finality_votes", rs -> {
-                while (rs.next()) {
-                    String key = rs.getLong("epoch") + "|" + rs.getString("checkpoint_hash");
-                    voteCache.computeIfAbsent(key, k -> ConcurrentHashMap.newKeySet())
-                            .add(rs.getString("validator"));
-                }
+                String key = rs.getLong("epoch") + "|" + rs.getString("checkpoint_hash");
+                voteCache.computeIfAbsent(key, k -> ConcurrentHashMap.newKeySet())
+                        .add(rs.getString("validator"));
             });
             jdbc.query("SELECT epoch, checkpoint_hash FROM finality_checkpoints", rs -> {
-                while (rs.next()) {
-                    finalizedCache.put(rs.getLong("epoch") + "|" + rs.getString("checkpoint_hash"), Boolean.TRUE);
-                }
+                finalizedCache.put(rs.getLong("epoch") + "|" + rs.getString("checkpoint_hash"),
+                        Boolean.TRUE);
             });
             log.info("JdbcFinalityStateStore: reloaded {} vote records, {} finalized checkpoints",
                     voteCache.size(), finalizedCache.size());
@@ -98,16 +98,18 @@ public class JdbcFinalityStateStore implements FinalityStateStore {
     @Override
     public void recordVote(long epoch, byte[] checkpointHash, String validatorAddress) {
         String ck = hashStr(checkpointHash);
-        jdbc.update("MERGE INTO finality_votes KEY(epoch, checkpoint_hash, validator) VALUES(?,?,?)",
-                epoch, ck, validatorAddress);
+        JdbcUpsert.insertIgnore(jdbc,
+                "INSERT INTO finality_votes(epoch, checkpoint_hash, validator) VALUES(?,?,?)",
+                new Object[]{epoch, ck, validatorAddress});
         voteCache.computeIfAbsent(key(epoch, ck), k -> ConcurrentHashMap.newKeySet()).add(validatorAddress);
     }
 
     @Override
     public void markFinalized(long epoch, byte[] checkpointHash) {
         String ck = hashStr(checkpointHash);
-        jdbc.update("MERGE INTO finality_checkpoints KEY(epoch, checkpoint_hash) VALUES(?,?)",
-                epoch, ck);
+        JdbcUpsert.insertIgnore(jdbc,
+                "INSERT INTO finality_checkpoints(epoch, checkpoint_hash) VALUES(?,?)",
+                new Object[]{epoch, ck});
         finalizedCache.put(key(epoch, ck), Boolean.TRUE);
     }
 

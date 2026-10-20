@@ -399,7 +399,7 @@
 - `FraudProofVerifier` 批次/bond 写穿 + `@PostConstruct restoreState()`；`ChallengeConflictResolver` first-valid-wins 写穿 + restore；`MerkleProof` 补 Jackson 注解。
 - 回归：`JdbcFraudProofStateStoreTest`（6）+ `FraudProofVerifierPersistenceTest`（5，含模拟重启）→ 11/11；nexus-core 全量 BUILD SUCCESSFUL。
 - 诚实边界：real-L1 真机未验证（Phase 5）、`ChallengePeriodPolicy` 延期标记仍内存、多副本 last-writer-wins、`challengerStore` 死字段、崩溃窗口以库为准。
-- 遗留发现：`JdbcPaymentStateStore`/`JdbcFinalityStateStore` 的 `MERGE ... KEY()` 在 PG 生产写路径会失败（当前因无生产调用点未暴露，建议 P1）；`ValidatorSetPersistence.upsert` 的 `ON CONFLICT DO UPDATE` 在 H2 测试路径被 catch 静默降级。
+- 遗留发现（**2026-10-20 已修复**）：`JdbcPaymentStateStore`/`JdbcFinalityStateStore` 的 `MERGE ... KEY()` 统一改为 `org.nexus.db.JdbcUpsert` 可移植 upsert（H2 + PG 双兼容，新增 Testcontainers 真实 PG 契约测试）；`ValidatorSetPersistence.upsert` 的 `ON CONFLICT DO UPDATE`（H2 测试路径被 catch 静默降级）改为同一 helper；顺带修复 `JdbcFinalityStateStore.reload()` 回调误用 `rs.next()` 导致重启恢复丢行/丢全的缺陷。
 
 ---
 

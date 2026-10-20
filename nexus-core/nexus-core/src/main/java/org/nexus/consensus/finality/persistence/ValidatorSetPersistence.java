@@ -1,6 +1,7 @@
 package org.nexus.consensus.finality.persistence;
 
 import org.nexus.consensus.pos.ValidatorRegistry;
+import org.nexus.db.JdbcUpsert;
 import org.nexus.db.SchemaMeta;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -17,7 +18,7 @@ import java.math.BigDecimal;
  * <p>多节点共享同一 Postgres → 验证人集合写入共享表 {@code validators_synced}，
  * 实现：</p>
  * <ul>
- *   <li><b>写</b>：本节点自举注册 / 收到对端 validator-set 广播时写库（幂等 MERGE）</li>
+ *   <li><b>写</b>：本节点自举注册 / 收到对端 validator-set 广播时写库（幂等 upsert）</li>
  *   <li><b>读（重放）</b>：节点启动时从库加载全部验证人 → 注册到 {@link ValidatorRegistry}，
  *       重启后即使广播时序错失也能恢复全网验证人集合</li>
  * </ul>
@@ -91,14 +92,17 @@ public class ValidatorSetPersistence {
             return;
         }
         try {
-            // Postgres 幂等 upsert（MERGE 是 H2 语法，PG 报 bad SQL grammar——真机实证）
-            jdbc.update(
+            long now = System.currentTimeMillis();
+            String stake = stakeAmount.toPlainString();
+            // 可移植 upsert：PostgreSQL / H2 均支持；避免 MERGE（H2 专有）与
+            // ON CONFLICT DO UPDATE（H2 2.2.224 不支持，异常会被本方法 catch 吞掉）。
+            JdbcUpsert.upsert(jdbc,
+                    "UPDATE validators_synced SET public_key = ?, stake_amount = ?, updated_at = ? "
+                    + "WHERE address = ?",
+                    new Object[]{publicKey, stake, now, address},
                     "INSERT INTO validators_synced(address, public_key, stake_amount, updated_at) "
-                    + "VALUES(?,?,?,?) "
-                    + "ON CONFLICT(address) DO UPDATE SET "
-                    + "public_key=EXCLUDED.public_key, stake_amount=EXCLUDED.stake_amount, "
-                    + "updated_at=EXCLUDED.updated_at",
-                    address, publicKey, stakeAmount.toPlainString(), System.currentTimeMillis());
+                    + "VALUES(?,?,?,?)",
+                    new Object[]{address, publicKey, stake, now});
         } catch (RuntimeException e) {
             log.warn("Validator upsert failed: address={}, error={}", address, e.getMessage());
         }
