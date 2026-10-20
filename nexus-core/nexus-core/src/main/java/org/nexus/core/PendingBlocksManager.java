@@ -86,6 +86,12 @@ public class PendingBlocksManager {
                             continue;
                         }
                     }
+                    if (res.getMessage() != null
+                            && res.getMessage().startsWith("unknown proposer")) {
+                        logger.info("PendingBlocks: {}; block will be retried after validator-set sync (height={})",
+                                res.getMessage(), b.nHeight);
+                        return;
+                    }
                     logger.error("validate the block fail error = " + res.getMessage());
                     return;
                 }

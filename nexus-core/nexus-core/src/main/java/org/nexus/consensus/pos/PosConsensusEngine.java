@@ -7,8 +7,10 @@ import org.nexus.consensus.pow.EconomicModel;
 import org.nexus.consensus.pow.PackageMiner;
 import org.nexus.core.Block;
 import org.nexus.core.NexusChainBlockChain;
+import org.nexus.core.account.Account;
 import org.nexus.core.account.Transaction;
 import org.nexus.core.event.NewBlockMinedEvent;
+import org.nexus.core.incubator.Incubator;
 import org.nexus.core.validate.MerkleRule;
 import org.nexus.crypto.HashUtil;
 import org.nexus.db.StateDB;
@@ -450,8 +452,15 @@ public class PosConsensusEngine implements PosConsensus {
 
         // 计算 merkle root
         block.hashMerkleRoot = Block.calculateMerkleRoot(block.body);
-        block.hashMerkleState = new byte[Block.HASH_SIZE];
-        block.hashMerkleIncubate = new byte[Block.HASH_SIZE];
+        // 状态根必须由交易重放结果计算（与 PoW Miner 一致）；硬编码零根会导致
+        // 每个区块在接收端 StateReplayManager 重放时必然 mismatch。
+        Map<String, Object> merklemap = merkleRule.validateMerkle(block.body, height);
+        @SuppressWarnings("unchecked")
+        List<Account> accountList = (List<Account>) merklemap.get("account");
+        @SuppressWarnings("unchecked")
+        List<Incubator> incubatorList = (List<Incubator>) merklemap.get("incubator");
+        block.hashMerkleState = Block.calculateMerkleState(accountList);
+        block.hashMerkleIncubate = Block.calculateMerkleIncubate(incubatorList);
 
         return block;
     }
@@ -636,6 +645,24 @@ public class PosConsensusEngine implements PosConsensus {
             return false;
         }
         return verifyBlockSignature(block, proposerValidator);
+    }
+
+    /**
+     * 判断区块 coinbase 指向的提案者是否已在本节点验证人注册表中。
+     *
+     * <p>用于同步路径区分“验证人集合尚未同步”与“签名确实无效”：新节点刚接入时
+     * 可能先收到区块、后收到 validator-set 广播，此时应把区块留在 pending 队列，
+     * 而不是记录为签名校验 ERROR。</p>
+     */
+    public boolean isProposerKnown(Block block) {
+        if (block == null || block.body == null || block.body.isEmpty()) {
+            return false;
+        }
+        Transaction coinbase = block.body.get(0);
+        if (coinbase == null || coinbase.to == null) {
+            return false;
+        }
+        return findValidatorByPubKeyHash(Hex.encodeHexString(coinbase.to)) != null;
     }
 
     /**

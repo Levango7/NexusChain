@@ -79,6 +79,13 @@ public class SyncManager implements Plugin, ApplicationListener<NewBlockMinedEve
     private org.nexus.consensus.pos.ValidatorRegistry validatorRegistry;
 
     /**
+     * 质押账本（PLAN-014 Phase 5 修复）：对端验证人注册时需要同步 seed 初始质押，
+     * 否则 FinalityGadget 只统计本节点权重，单票即可伪造 100% 最终性。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private org.nexus.consensus.pos.StakingService stakingService;
+
+    /**
      * 验证人集合持久化（PLAN-001 步骤 5：广播收到的验证人写共享表）。
      */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -252,13 +259,16 @@ public class SyncManager implements Plugin, ApplicationListener<NewBlockMinedEve
                     logger.warn("Validator-set add missing pubkey/stake (dropped): {}", msg.address());
                     return;
                 }
+                java.math.BigDecimal stake = new java.math.BigDecimal(msg.stakeAmount());
+                // 先 seed 账本，再注册：seedStake 只填账本，不会把注册表质押重复累加。
+                if (stakingService != null) {
+                    stakingService.seedStake(msg.address(), stake);
+                }
                 boolean ok = validatorRegistry.register(
-                        msg.address(), msg.publicKey(),
-                        new java.math.BigDecimal(msg.stakeAmount()), 0.1);
+                        msg.address(), msg.publicKey(), stake, 0.1);
                 // PLAN-001 步骤 5：广播收到的验证人也写共享表（落库重放）
                 if (validatorSetPersistence != null) {
-                    validatorSetPersistence.upsert(msg.address(), msg.publicKey(),
-                            new java.math.BigDecimal(msg.stakeAmount()));
+                    validatorSetPersistence.upsert(msg.address(), msg.publicKey(), stake);
                 }
                 logger.info("Validator-set add: address={} registered={} (via P2P)", msg.address(), ok);
             } else {

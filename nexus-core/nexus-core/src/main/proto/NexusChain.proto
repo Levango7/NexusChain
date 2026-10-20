@@ -1,5 +1,6 @@
 syntax = "proto3";
-option java_package = "org.conpay.p2p";
+option java_package = "org.nexus.p2p";
+option java_outer_classname = "NexusChainOuterClass";
 
 import "google/protobuf/timestamp.proto";
 
@@ -108,6 +109,18 @@ enum TransactionType {
     EXIT_VOTE = 13;
     PLEDGE = 14;
     EXIT_PLEDGE = 15;
+    // 以下为生成代码中已存在、但 proto 长期未同步的交易类型（保持线上值不变）。
+    CHANNEL_OPEN = 16;
+    CHANNEL_UPDATE = 17;
+    CHANNEL_CLOSE = 18;
+    BATCH_TRANSFER = 19;
+    MINT_STABLECOIN = 20;
+    REDEEM_STABLECOIN = 21;
+    BRIDGE_LOCK = 22;
+    BRIDGE_MINT = 23;
+    BRIDGE_BURN = 24;
+    IDENTITY_REGISTER = 25;
+    SUBSCRIPTION_AUTH = 26;
 }
 
 message Transactions {
@@ -137,6 +150,8 @@ message Block {
     bytes n_bits = 8;
     bytes nonce = 9;
     repeated Transaction body = 10;
+    // PoS 区块头签名 S 分量（nNonce 存 R）；字段号 11 为兼容既有 body=10 追加。
+    bytes block_notice = 11;
 }
 
 message GetMerkleTransactions{

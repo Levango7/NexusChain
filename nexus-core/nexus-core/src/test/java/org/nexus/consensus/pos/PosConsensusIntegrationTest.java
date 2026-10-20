@@ -8,6 +8,7 @@ import org.nexus.consensus.pow.EconomicModel;
 import org.nexus.consensus.pow.PackageMiner;
 import org.nexus.core.Block;
 import org.nexus.core.NexusChainBlockChain;
+import org.nexus.core.account.Account;
 import org.nexus.core.account.Transaction;
 import org.nexus.core.validate.MerkleRule;
 import org.nexus.db.StateDB;
@@ -20,6 +21,8 @@ import org.springframework.test.util.ReflectionTestUtils;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -146,6 +149,9 @@ public class PosConsensusIntegrationTest {
         when(economicModel.getConsensusRewardAtHeight(anyLong())).thenReturn(20L * EconomicModel.NEX);
         when(packageMiner.TransferCheck(any(byte[].class), anyLong(), any(Block.class)))
                 .thenReturn(Collections.emptyList());
+        when(merkleRule.validateMerkle(any(), anyLong()))
+                .thenReturn(Map.of("account", Collections.emptyList(),
+                        "incubator", Collections.emptyList()));
         doNothing().when(applicationContext).publishEvent(any(ApplicationEvent.class));
 
         // 注册本节点为验证人：地址由引擎公钥推导，公钥与签名密钥对应，
@@ -233,6 +239,30 @@ public class PosConsensusIntegrationTest {
         assertFalse(isAllZeroes(coinbase.to), "coinbase 收款人应非全零（指向提案者 pubkeyHash）");
         assertNotNull(block.nNonce, "nNonce 不应为空");
         assertFalse(isAllZeroes(block.nNonce), "nNonce 应非零（含 Ed25519 签名 r）");
+    }
+
+    /**
+     * 回归：PoS 出块必须计算状态根，不能硬编码为零。
+     *
+     * <p>零状态根会让每个区块在接收端 StateReplayManager 重放时 mismatch，
+     * Phase 5 双节点连续运行会产生逐块错误。</p>
+     */
+    @Test
+    public void testProposeComputesStateRootFromReplay() throws Exception {
+        byte[] pubkeyHash = KeystoreAction.addressToPubkeyHash(selfAddress);
+        Account account = new Account(101, pubkeyHash, 0, 0, 0, 0, 0);
+        when(merkleRule.validateMerkle(any(), anyLong()))
+                .thenReturn(Map.of("account", List.of(account), "incubator", List.of()));
+
+        Block parent = buildParentBlock(100);
+        when(stateDB.getBestBlock()).thenReturn(parent);
+
+        Block block = engine.propose();
+
+        assertNotNull(block, "propose 应成功");
+        assertArrayEquals(Block.calculateMerkleState(List.of(account)), block.hashMerkleState,
+                "区块状态根必须由交易重放结果计算");
+        assertFalse(isAllZeroes(block.hashMerkleState), "有账户状态时状态根不应为零");
     }
 
     // ==================== 测试场景 2: validate 校验链完整 ====================
@@ -422,5 +452,15 @@ public class PosConsensusIntegrationTest {
         when(stateDB.getBestBlock()).thenReturn(buildParentBlock(100));
 
         assertNull(engine.propose(), "非本节点轮次应跳过出块");
+    }
+
+    /**
+     * 验证同步路径能区分“提案者尚未同步”与“签名无效”：
+     * 已注册验证人的 coinbase 返回 true，未注册地址返回 false。
+     */
+    @Test
+    public void testIsProposerKnownDistinguishesUnsyncedValidator() {
+        assertTrue(engine.isProposerKnown(buildBlockWithProposer(selfAddress, 1)));
+        assertFalse(engine.isProposerKnown(buildBlockWithProposer(VALIDATOR_B_ADDR, 1)));
     }
 }

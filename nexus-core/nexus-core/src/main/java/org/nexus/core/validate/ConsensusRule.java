@@ -98,6 +98,10 @@ public class ConsensusRule implements BlockRule {
             if (posConsensusEngine == null) {
                 return Result.Error("PoS consensus engine not available");
             }
+            if (!posConsensusEngine.isProposerKnown(block)) {
+                return Result.Error("unknown proposer (validator set not synchronized) at height "
+                        + block.nHeight);
+            }
             if (!posConsensusEngine.verifyBlockSignature(block)) {
                 return Result.Error("PoS block signature verification failed at height " + block.nHeight);
             }

@@ -42,7 +42,12 @@ public class PosRewardDistributor {
     }
 
     /**
-     * 向出块者分配奖励（基础出块奖励 + 交易手续费）。
+     * 计算并记录出块奖励（基础出块奖励 + 交易手续费）。
+     *
+     * <p>出块奖励已经通过 coinbase 交易计入出块者账户余额；这里不再调用
+     * {@link StakingService#stake(String, BigDecimal)} 把它累加到质押权重。
+     * 否则每出一个块都会抬高本地验证人权重，而远端节点不会同步这笔奖励，
+     * 最终导致各节点最终性权重分叉、单节点即可跨过 2/3 阈值。</p>
      *
      * @param proposerAddress 出块者地址
      * @param totalFees       本块包含的交易手续费总额
@@ -51,8 +56,8 @@ public class PosRewardDistributor {
     public BigDecimal distributeBlockReward(String proposerAddress, BigDecimal totalFees) {
         BigDecimal fees = totalFees == null ? BigDecimal.ZERO : totalFees;
         BigDecimal reward = baseBlockReward.add(fees);
-        stakingService.stake(proposerAddress, reward);
-        logger.info("Distributed block reward {} (base {} + fees {}) to {}", reward, baseBlockReward, fees, proposerAddress);
+        logger.info("Block reward {} (base {} + fees {}) credited via coinbase to {}",
+                reward, baseBlockReward, fees, proposerAddress);
         return reward;
     }
 

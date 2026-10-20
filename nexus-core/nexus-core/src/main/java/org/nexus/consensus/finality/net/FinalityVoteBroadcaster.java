@@ -134,8 +134,9 @@ public class FinalityVoteBroadcaster {
             log.warn("Received malformed finality vote payload (dropped)");
             return;
         }
-        log.debug("Received finality vote: epoch={}, validator={}",
-                vote.getEpoch(), vote.getValidatorAddress());
+        log.debug("Received finality vote: epoch={}, validator={}, checkpoint={}",
+                vote.getEpoch(), vote.getValidatorAddress(),
+                org.apache.commons.codec.binary.Hex.encodeHexString(vote.getCheckpointHash()));
         gadget.submitVote(vote);
     }
 

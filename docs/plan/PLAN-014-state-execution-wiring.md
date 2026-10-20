@@ -1,6 +1,6 @@
 # 方案 PLAN-014：状态执行接线专项（同步状态重放 A-2/A-3 + 支付扩展执行接线 + 欺诈证明锚定状态）
 
-- **状态**：Approved（2026-10-19 拍板：批次⑥ 路线文档 §8 结论——合并立项、一次设计、分期交付）；Phase 0/1 已交付（2026-10-19），Phase 2/3 已交付（2026-10-20），Phase 4 持久化面已交付（2026-10-20，real-L1 面并入 Phase 5，见 §八）
+- **状态**：Approved（2026-10-19 拍板：批次⑥ 路线文档 §8 结论——合并立项、一次设计、分期交付）；Phase 0/1 已交付（2026-10-19），Phase 2/3 已交付（2026-10-20），Phase 4 持久化面已交付（2026-10-20），Phase 5 双节点连续验证已交付（2026-10-20，见 §八）。**未交付边界**：`real-l1-enabled=true` 真机 L1 链路未验证，桥的存款/提款/已提交根仍为内存态。
 - **日期**：2026-10-19
 - **前置**：
   - PLAN-012 审核方案 A（拆分验证路径 + 状态重放，2026-08-14 审核通过）——A-1 止血已上线，A-2/A-3 未实施
@@ -24,7 +24,7 @@
 - **状态执行引擎存在**（PLAN-012 A-2 深挖修正）：`StateDB.applyTransactions` / `getAccountUnsafe`（按需重放）完整存在——缺口不是"引擎缺失"，而是**接线缺失**。
 - **merkle 对账链路的实现语义（Phase 1 实施期修正）**：`MerkleHandler` 的 GET_TREE_NODES/TREE_NODES 对账对象是**块体交易树**（按 `block.body` 交易哈希构建、按索引替换交易）——不是账户状态树；账户状态链路的真实实现是确认路径 `StateDB.writeBlock → NewBestBlockEvent → StatetreeUpdate`（Phase 1 已收敛到 `StateReplayManager`）。同步路径写链前的 merkle 校验失败（PLAN-011/012 死锁根因）语义不变：本地状态未重放至校验高度时的时序问题（A-1 已改为"延后 + 明确日志 + 继续写链"）。
 - **支付扩展（2026-10-20 Phase 3 修正）**：类型定义齐备（`core/account/Transaction.java:130-141`，CHANNEL_OPEN 0x10 … SUBSCRIPTION_AUTH 0x1a）；`BasicRule` 有单规则预检（`BasicRule.java:187-205`）；`PaymentTransactionProcessor.processTransaction` 分发 0x10–0x18 有逻辑、0x19/0x1a 仅日志（`:161-170`），**但 `processTransaction` 生产无任何调用点**。更重要的是：完整区块/RPC 路径先经 `AccountRule` 的 `TransactionFormatCheck`，其 `type<=15` 门禁（`TransactionCheck.java:119-125`）会以 `Type check error` 拒绝 0x10–0x1a——**当前不可上链**，不是"上链后不执行"。
-- **欺诈证明**：单步二分证明 + 挑战窗 + challenge bond + 罚没奖励 + 多挑战者冲突解决（first-valid-wins）实现完整；批次/挑战/bond 状态已 PG 持久化（Phase 4，`JdbcFraudProofStateStore`，store=`l2_fraud_state`）；**但** L1 侧 `DefaultL2BridgeContract` 默认注入内存模拟客户端（`real-l1-enabled=false`，:26），且桥的存款/提款/已提交根仍为进程内存（见 §八 Phase 4 边界）。
+- **欺诈证明**：单步二分证明 + 挑战窗 + challenge bond + 罚没奖励 + 多挑战者冲突解决（first-valid-wins）实现完整；批次/挑战/bond 状态已 PG 持久化（Phase 4，`JdbcFraudProofStateStore`，store=`l2_fraud_state`）；**但** L1 侧 `DefaultL2BridgeContract` 默认注入内存模拟客户端（`real-l1-enabled=false`，:26），且桥的存款/提款/已提交根仍为进程内存（见 §八 Phase 4/5 边界）。
 
 ## 三、目标架构
 
@@ -44,7 +44,8 @@
    └─► 欺诈证明（Phase 4）
          批次/挑战状态持久化（PG：l2_fraud_batches / l2_fraud_bonds / l2_fraud_conflicts，
          SchemaMeta store=l2_fraud_state 版本登记）✅ 持久化面已交付（2026-10-20）
-         + real-l1-enabled=true 真机全链路（并入 Phase 5）
+         + real-l1-enabled=true 真机全链路（未交付：Phase 5 仅覆盖双节点共识/同步，
+           桥的存款/提款/已提交根仍为进程内存）
 ```
 
 **并发与幂等**：
@@ -60,8 +61,8 @@
 | **Phase 1**（已交付，2026-10-19，见 §八） | `StateReplayManager` 核心（A-2）：确认路径重放 → 账户/孵化状态持久化 → 状态根重算校验（`MerkleRule.verifyStateRoots` 提取）；观察位不阻断 | 2–3d | ✅ 单测：重放后状态根与出块方一致；块体不完整根不一致复现（10/10） |
 | **Phase 2**（已交付，2026-10-20，见 §八） | 事后校验 + 回滚（A-3）：`StateRootMismatchHandler` 异步处置；`observe`（默认）/`rollback` 可配；最终化护栏 + 对端溯源拉黑 | 1–2d | ✅ 单测 19/19：observe 不处置 / rollback 回滚+清理+拉黑 / 最终化拒绝 / 幂等 |
 | **Phase 3**（已交付，2026-10-20，见 §八） | 支付扩展口径固化（Option A，不改共识）：修正"验证已上链"表述；显式标注 0x10–0x1a 被 `TransactionFormatCheck` 的 `type<=15` 门禁拒绝（`Type check error`）、`processTransaction` 生产无调用点、0x19/0x1a 仅日志；补门禁回归测试。真正的"区块接受但不执行"validate-only 属独立共识变更，不在本期 | 0.5–1d | ✅ 门禁测试：0x19/0x1a → `Type check error`；0x0f 不因类型被拒 |
-| **Phase 4**（持久化面已交付 2026-10-20；real-L1 面并入 Phase 5，见 §八） | 欺诈证明锚定：批次/挑战状态持久化（PG 单存储决策——不做 LevelDB、不双写）+ `real-l1-enabled=true` 真机链路 | 2–3d | ✅ 进程重启后批次/挑战状态不丢失（11 用例）；真机 L1 交互验证 → 转 Phase 5 |
-| **Phase 5** | 真机双节点全链路验证：持续同步 + 确认不中断（PLAN-011/012 死锁根除）；状态根对账一致 | 1d | A/B 双节点高度持续推进 + finality 正常 + RPC 验证 |
+| **Phase 4**（持久化面已交付 2026-10-20；real-L1 面未交付，见 §八） | 欺诈证明锚定：批次/挑战状态持久化（PG 单存储决策——不做 LevelDB、不双写）+ `real-l1-enabled=true` 真机链路 | 2–3d | ✅ 进程重启后批次/挑战状态不丢失（11 用例）；❌ 真机 L1 交互未验证（转后续专项） |
+| **Phase 5**（已交付，2026-10-20，见 §八） | 双节点连续验证（两个真实节点进程 + 容器化 PG）：持续同步 + 确认不中断（PLAN-011/012 死锁根除）；状态根对账一致 | 1d | ✅ 30 分钟长跑 A/B/PG 高度 3546 一致、ERROR 0、replay mismatch 0、finality 2000/2000 FINALIZED；边界：real-L1 未覆盖 |
 
 预估总计 9–13 天（含真机验证），按阶段独立 PR 交付。
 
@@ -79,7 +80,7 @@
 
 本专项交付前，README / ARCHITECTURE 对以下两点的口径为（2026-10 起）：
 
-1. **Optimistic 路线**：欺诈证明机制真实；批次/挑战/bond 状态已 PG 持久化（Phase 4，2026-10-20），但 L1 交互默认内存模拟（`real-l1-enabled=false`）——"锚定到真实 L1 状态"未完成（real-L1 验证并入 Phase 5）。
+1. **Optimistic 路线**：欺诈证明机制真实；批次/挑战/bond 状态已 PG 持久化（Phase 4，2026-10-20），但 L1 交互默认内存模拟（`real-l1-enabled=false`）——"锚定到真实 L1 状态"未完成；Phase 5 仅覆盖双节点共识/同步，real-L1 真机验证仍未交付。
 2. **支付扩展（0x10–0x1a）**：仅有类型定义与 `BasicRule` 单规则预检；完整区块/RPC 路径被 `TransactionCheck.TransactionFormatCheck` 的 `type<=15` 门禁拒绝（`Type check error`），**当前不可上链**。`processTransaction` 生产无调用点；0x19/0x1a 分支仅日志、无状态写入。
 
 各阶段交付后同步回填本节与 README/ARCHITECTURE 表述（**交付即收敛，不留口径漂移**）。
@@ -90,6 +91,64 @@
 - 批次⑥ 第 1/2/3 项（Merkle A-2 决策 / Groth16 真实路径 / KZG 诚实标注）——维持现状，已收敛。
 
 ## 八、实施记录
+
+### Phase 5（2026-10-20，双节点连续验证已交付；real-L1 未交付）
+
+**交付**（分支 `plan/phase5-dual-node-verify`）：
+- **P2P 区块签名透传**：`NexusChain.proto` 的 `Block` 追加 `bytes block_notice = 11`（保留
+  `body = 10`），用 protoc 3.25.5 重新生成 checked-in `NexusChainOuterClass.java`；
+  `Utils.encodeBlock/parseBlock` 透传 R/S，新增 `UtilsBlockSignatureRoundTripTest`
+  （真实 Ed25519 签名跨编解码可验签，篡改 S 分量验签失败）。同时把生成类中已存在、
+  但 proto 长期缺失的 `TransactionType` 16–26 补回 proto，保持线上枚举值不变。
+- **PoS 状态根**：`PosConsensusEngine.buildBlock` 在 `merkleRule.validateMerkle` 后计算真实的
+  `hashMerkleState` / `hashMerkleIncubate`，不再硬编码零根；
+  `testProposeComputesStateRootFromReplay` 通过。
+- **最终性投票源**：`FinalityCoordinator` 从 `NewBlockMinedEvent`（仅本节点出块时发布）改为
+  `NewBlockEvent`（`StateDB` 确认写链后发布）——round-robin 下检查点高度落在对端时，
+  本节点也会投票。修复前 A 的投票数为 0，最终性退化为单节点。
+- **质押权重稳定**：`PosRewardDistributor.distributeBlockReward` 不再把出块奖励累加到
+  proposer 的质押（奖励已由 coinbase 入账）；`StakingService.seedStake` 只初始化质押账本，
+  不修改 Validator 注册信息；`ValidatorNodeBootstrapper` / `SyncManager` 对自身/对端验证人
+  填充账本。修复前本地权重膨胀、远端不可见，曾观察到 A/B 权重分叉（如 epoch 240：
+  A `5300/6210`、B `4310/5210`），存在单节点跨过 2/3 的风险；修复后两端稳定为
+  `2000/2000`。
+- **启动竞态**：新增 `PosConsensusEngine.isProposerKnown`，`ConsensusRule` 对"验证人集合
+  尚未同步"返回可识别错误，`PendingBlocksManager` 以 INFO 记录并留在 pending 队列重试，
+  不再刷 ERROR；`SignatureAggregator.CollectingAggregator` 固定列表快照，
+  `FinalityGadget.submitVote` 串行化，修复并发投票下 `arraycopy` 越界与 pending block
+  超时（长跑首轮曾在 B 启动期各出现 1 次）。
+- **工程卫生**：`AccountDB.selectaccount` 首次查无账户不再刷
+  `EmptyResultDataAccessException` ERROR；root `data-A/`、`data-B/` 加入 `.gitignore`；
+  `scripts/dev-cluster-*.sh` 支持自动解析 PG 容器名（`nexus-pgsql` / 历史 `nexus-pg`）。
+- **回归**：定向测试 `UtilsBlockSignatureRoundTripTest` / `PosConsensusIntegrationTest` /
+  `StakingServiceImplTest` / `PosRewardDistributorTest` / `SignatureAggregatorTest` /
+  `FinalityGadgetTest` / `FinalityChainOrchestrationTest` /
+  `FinalityEndToEndIntegrationTest` 全绿；`installDist` 成功。
+
+**30 分钟双节点连续验证（2026-10-20 16:47–17:17）**：
+- 拓扑：两个真实节点进程（A/B，HTTP 19585/19586，P2P 9235/9236）+ 容器化 PostgreSQL
+  （`nexus-pgsql`，127.0.0.1:55432）；固定 Ed25519 私钥 `a*64`/`b*64`，
+  `min-validators-to-mine=2`，round-robin。
+- 结果：A/B/PG 高度均 **3546**（A/B delta 3546，30 分钟约 1.97 block/s）；
+  `state replay mismatch` A/B 均 **0**；validator-set 注册各 **1** 次；ERROR A/B 均 **0**；
+  finality epoch **885** 两端均 `FINALIZED`、`voted_weight=2000`、`total_weight=2000`、
+  `progress=100`；A/B epoch 885 checkpoint 均为
+  `2a2b90297b63bdd18003370a003e3b312cdccc8ff6fb45ccd37325e850edfc82`（一致）。
+- 3 分钟复跑：A/B 高度 257/256、`state replay mismatch=0`、ERROR 0、finality
+  `2000/2000 FINALIZED`。B 启动仅 1 条 `unknown proposer` INFO（不再 ERROR），随后自动追平。
+- 观测口径：`/rpc/v1/finality/epoch/{epoch}` 受 `nexus.localonly=true` 与
+  `LocalRpcInterceptor` 保护，必须携带 JWT `token` 头；无 token 返回 HTTP200 空 body，
+  不能用它判断端点异常。验收查询最新 epoch 的前一 epoch，避免投票尚未收齐的瞬时 50%。
+
+**不做（本期边界）**：
+1. `real-l1-enabled=true` 真机 L1 链路未验证；桥的存款/提款/已提交根仍为进程内存。
+   Phase 5 的"双节点"是同一 Windows 主机上的两个节点进程 + 容器化 PG，不是两台物理机
+   （与 PLAN-012 口径一致）。
+2. 最终性状态仍为进程内 `InMemoryFinalityStateStore`（`finality_votes` 表不存在），
+   重启后旧 epoch 可能返回 `UNKNOWN`；长跑验收查询当前 epoch。
+3. 未做网络分区、节点崩溃/重启、拜占庭节点、PG 故障注入；未写逐块状态根全量对账脚本，
+   以 `state replay mismatch=0` + 最终性 checkpoint 一致作为验收证据。
+4. 未覆盖桥经济链路（存款/提款/根提交）与 `Web3jL1ContractClient` 真实调用路径。
 
 ### Phase 4（2026-10-20，持久化面已交付；real-L1 面未交付）
 
@@ -115,7 +174,7 @@
   clear 删除）——本地 11/11 通过；`FraudProofVerifierTest` + `EndToEndRollupTest` 回归通过。
 
 **不做（本期边界）**：
-1. `real-l1-enabled=true` 真机 L1 链路未验证（real-L1 面并入 Phase 5）；`DefaultL2BridgeContract`
+1. `real-l1-enabled=true` 真机 L1 链路未验证（Phase 5 仅覆盖双节点共识/同步，real-L1 仍转后续专项）；`DefaultL2BridgeContract`
    的存款/提款/已提交根仍为进程内存。
 2. `ChallengePeriodPolicy` 的"可疑行为延期"标记仍为进程内存。
 3. 多副本共享同一 PG 时为 last-writer-wins（单进程 synchronized 语义未分布式化，无分布式锁/

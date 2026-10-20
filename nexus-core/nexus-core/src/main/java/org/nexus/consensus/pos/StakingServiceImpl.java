@@ -246,6 +246,17 @@ public class StakingServiceImpl implements StakingService {
     }
 
     @Override
+    public void seedStake(String validator, BigDecimal amount) {
+        if (validator == null || amount == null || amount.signum() <= 0) {
+            return;
+        }
+        // 只填充空账本：已有非零质押（快照恢复/真实质押）不覆盖，避免重复计权。
+        stakes.compute(validator, (k, current) ->
+                current == null || current.signum() == 0 ? amount : current);
+        logger.debug("Seeded stake {} for {} (ledger only)", amount, validator);
+    }
+
+    @Override
     public void distributeRewards() {
         // B-09 修复：使用锁保护奖励分发的原子性，防止并发下 Validator 状态与 stakes 不一致。
         stakingLock.lock();

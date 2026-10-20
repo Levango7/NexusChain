@@ -12,6 +12,16 @@
                 xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
                 xsi:schemaLocation="https://github.com/spotbugs/filter/3.0.0 https://raw.githubusercontent.com/spotbugs/spotbugs/3.2.0/spotbugs/etc/findbugsfilter.xsd">
 
+    <!-- ==================== 生成代码（非业务逻辑） ====================
+         NexusChainOuterClass 由 protoc 3.25.5 生成并 checked-in（便于无 protoc 构建）。
+         build.gradle 的 classes 过滤器只按 /generated/ 路径排除，本类位于
+         src/main/java/org/nexus/p2p，故在此按类名排除；生成器内部 builder
+         方法（UC_USELESS_VOID_METHOD 等）不代表业务缺陷，重新生成会覆盖任何
+         源码级注解，因此用过滤器而非 @SuppressFBWarnings。 -->
+    <Match>
+        <Class name="~org\.nexus\.p2p\.NexusChainOuterClass.*"/>
+    </Match>
+
     <!-- ==================== 安全类：不豁免（保留 CI 拦截） ====================
          COMMAND_INJECTION / SQL_INJECTION_SPRING_JDBC / URLCONNECTION_SSRF_FD /
          PATH_TRAVERSAL_IN / PREDICTABLE_RANDOM / DMI_RANDOM_USED_ONLY_ONCE /

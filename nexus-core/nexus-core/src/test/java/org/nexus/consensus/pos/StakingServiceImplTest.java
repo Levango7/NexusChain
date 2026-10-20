@@ -50,6 +50,20 @@ public class StakingServiceImplTest {
     }
 
     @Test
+    public void testSeedStakeIsIdempotentAndDoesNotDoubleValidatorStake() {
+        registry.register("addr1", "pub1", new BigDecimal("1000"), 0.05);
+
+        staking.seedStake("addr1", new BigDecimal("1000"));
+        assertEquals(new BigDecimal("1000"), staking.getStake("addr1"));
+        assertEquals(new BigDecimal("1000"), registry.getValidator("addr1").getStakeAmount(),
+                "seed 只填账本，不得再次累加注册表质押");
+
+        // 已有非零账本时不覆盖，避免重复 seed 抬高权重
+        staking.seedStake("addr1", new BigDecimal("500"));
+        assertEquals(new BigDecimal("1000"), staking.getStake("addr1"));
+    }
+
+    @Test
     public void testStakeInvalidArguments() {
         assertThrows(IllegalArgumentException.class, () -> staking.stake(null, BigDecimal.ONE));
         assertThrows(IllegalArgumentException.class, () -> staking.stake("addr1", null));

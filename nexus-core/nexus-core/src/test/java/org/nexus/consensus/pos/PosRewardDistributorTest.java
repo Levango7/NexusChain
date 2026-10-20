@@ -42,20 +42,22 @@ public class PosRewardDistributorTest {
     public void testDistributeBlockRewardWithFees() {
         BigDecimal reward = distributor.distributeBlockReward("addr1", new BigDecimal("5"));
         assertEquals(new BigDecimal("15"), reward);
-        verify(staking).stake("addr1", new BigDecimal("15"));
+        // 出块奖励由 coinbase 入账，不得再累加到质押权重
+        verifyNoInteractions(staking);
     }
 
     @Test
     public void testDistributeBlockRewardNullFees() {
         BigDecimal reward = distributor.distributeBlockReward("addr1", null);
         assertEquals(new BigDecimal("10"), reward);
-        verify(staking).stake("addr1", new BigDecimal("10"));
+        verifyNoInteractions(staking);
     }
 
     @Test
     public void testDistributeBlockRewardZeroFees() {
         BigDecimal reward = distributor.distributeBlockReward("addr1", BigDecimal.ZERO);
         assertEquals(new BigDecimal("10"), reward);
+        verifyNoInteractions(staking);
     }
 
     @Test

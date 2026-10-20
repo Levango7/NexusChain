@@ -110,7 +110,7 @@ public class FinalityGadget {
      * 注入签名聚合器（M3 架构挂接点）。
      * 默认收集式；生产环境应在 blst 就位后替换为真实聚合实现。
      */
-    public void setSignatureAggregator(SignatureAggregator aggregator) {
+    public synchronized void setSignatureAggregator(SignatureAggregator aggregator) {
         this.signatureAggregator = Objects.requireNonNull(aggregator, "aggregator must not be null");
     }
 
@@ -118,17 +118,22 @@ public class FinalityGadget {
      * 注入罚没服务（M4 连接轴）。注入后，检测到双签证据将自动执行
      * {@link SlashingService#slash(String, SlashingService.Offense)}（DOUBLE_SIGN，没收全部质押并置 SLASHED）。
      */
-    public void setSlashingService(SlashingService slashingService) {
+    public synchronized void setSlashingService(SlashingService slashingService) {
         this.slashingService = slashingService;
     }
 
     /**
      * 提交检查点投票。
      *
+     * <p>本方法必须串行化：本地投票与 P2P 对端投票可能并发到达，权重累积、
+     * 投票列表追加、阈值判断和聚合验签必须是一个原子过程。否则聚合器可能
+     * 在“计算总长度”和“复制签名”之间看到不同的列表快照，导致数组越界或
+     * 聚合签名与实际投票集合不一致。</p>
+     *
      * @param vote BFT 投票记录
      * @return 该检查点的当前最终化记录
      */
-    public FinalityRecord submitVote(Vote vote) {
+    public synchronized FinalityRecord submitVote(Vote vote) {
         long epoch = vote.getEpoch();
         String checkpointKey = epochKey(epoch, vote.getCheckpointHash());
 
@@ -197,6 +202,9 @@ public class FinalityGadget {
         epochCheckpointVotes.computeIfAbsent(checkpointKey, k -> new java.util.concurrent.CopyOnWriteArrayList<>()).add(vote);
 
         BigDecimal voted = epochCheckpointWeights.get(checkpointKey);
+        log.debug("Finality vote counted: epoch={}, validator={}, weight={}, voted={}, total={}, checkpoint={}",
+                epoch, vote.getValidatorAddress(), weight, voted, total,
+                org.apache.commons.codec.binary.Hex.encodeHexString(vote.getCheckpointHash()));
         boolean finalized = voted.multiply(BigDecimal.valueOf(3))
                 .compareTo(total.multiply(BigDecimal.valueOf(2))) >= 0;
         if (finalized) {

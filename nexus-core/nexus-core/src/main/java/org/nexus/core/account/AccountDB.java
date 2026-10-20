@@ -49,7 +49,10 @@ public class AccountDB {
     public Account selectaccount(byte[] pubkeyhash) {
         try {
             String sql = "select * from account b where b.pubkeyhash=? order by b.blockheight desc LIMIT 1";
-            return tmpl.queryForObject(sql, new Object[]{pubkeyhash}, new BeanPropertyRowMapper<>(Account.class));
+            List<Account> accounts = tmpl.query(sql, new Object[]{pubkeyhash}, new BeanPropertyRowMapper<>(Account.class));
+            // 账户首次出现（如首个 coinbase 收款人）时没有行是正常语义，返回 null 由调用方初始化；
+            // 不用 queryForObject，避免 EmptyResultDataAccessException 被当成 ERROR 刷屏。
+            return accounts.isEmpty() ? null : accounts.get(0);
         } catch (RuntimeException e) {
             logger.error("AccountDB.{} failed: {}", e, e.getMessage());
             return null;
