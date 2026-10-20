@@ -414,6 +414,14 @@
 - 双节点强制重启：A/B 高度 **1268 → 1297/1298 → 1386**；epoch **316** 重启前后两端均 `FINALIZED`、`2000/2000`；各恢复 **61** 个最终化检查点，本次重启日志 ERROR 0；PG `finality_votes=180` / `finality_checkpoints=90`。
 - 边界：同一 Windows 主机双进程 + 容器 PG；未做网络分区/拜占庭/PG 故障注入；多副本最终性缓存一致性未解；real-L1/桥不变。详见 PLAN-015。
 
+**Phase 6B 首批交付证据（最终性故障注入，2026-10-21）**：
+- 持久化顺序：`FinalityGadget` 改为先 `recordVote`/`markFinalized` 写库、后更新 voters/权重/`finalizedCheckpoints`；写库失败不再留下幽灵投票者或提前报告 `FINALIZED`；重复票可补写最终化，聚合验签失败用 `finalizationRejected` 去重。
+- 区块采纳隔离：`FinalityCoordinator` 增加 256 张本地票的有界内存重试队列，`onNewBlock` 兜底捕获，最终性表短时不可用不再沿 `NewBlockEvent` 传播导致 `StateDB.pendingBlock` 60 秒超时；`FinalityVoteBroadcaster.onVoteReceived` 同样捕获接收侧写库失败。
+- 回归：`FinalityGadgetFaultInjectionTest`（6）、`JdbcFinalityStateOutageTest`（1）、`FinalityCoordinatorTest` / `FinalityVoteBroadcasterTest` 扩展；定向 `*Finality*` + 治理权重 **64** 用例全绿。
+- 双节点实测：仅最终性表改名 21.6 秒，高度 2132/2133 → 2175/2175；恢复后 epoch 534–544 全部补齐最终化，高度到 2297，PG 检查点 519–574 连续 56 个无缺口（112 票，每 epoch 2 票）。修复前同一故障触发 `Local adoption failed` + `pendingBlock` 60 秒超时。
+- PG 整体停止 20.1 秒：高度 2358/2359 → 2484/2484，旧/新 epoch 最终化正常，检查点 576–621 连续 46 个；但 `/consensus/status` 不可达，B 出现 18 条 `CannotGetJdbcConnectionException` + 18 条 `Propose failed ... totalaccount is null`，账户 DB 降级未修，不能解读为完整 PG 容灾。
+- 边界：重试队列不持久化（崩溃丢失）；只覆盖本地票；真实网络分区/完整拜占庭矩阵/多副本最终性缓存一致性未做；real-L1/桥不变。详见 PLAN-016。
+
 ---
 
 ## 8. 需要你拍板的决策点

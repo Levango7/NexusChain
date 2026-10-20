@@ -137,7 +137,14 @@ public class FinalityVoteBroadcaster {
         log.debug("Received finality vote: epoch={}, validator={}, checkpoint={}",
                 vote.getEpoch(), vote.getValidatorAddress(),
                 org.apache.commons.codec.binary.Hex.encodeHexString(vote.getCheckpointHash()));
-        gadget.submitVote(vote);
+        try {
+            gadget.submitVote(vote);
+        } catch (RuntimeException e) {
+            // 接收侧写库失败不能让 P2P 消息处理线程/同步管道崩溃；发送方的
+            // FinalityCoordinator 重试队列会在数据库恢复后重新广播该票。
+            log.warn("Received finality vote could not be persisted: epoch={}, validator={}: {}",
+                    vote.getEpoch(), vote.getValidatorAddress(), e.getMessage());
+        }
     }
 
     /**

@@ -15,6 +15,9 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayDeque;
+import java.util.Arrays;
+import java.util.Deque;
 import java.util.Objects;
 
 /**
@@ -63,6 +66,20 @@ public class FinalityCoordinator {
     /** 随投票广播的验证人公钥（与注册表登记 hex 一致，供聚合器/绑定校验使用） */
     private Ed25519PublicKey voteVerifyingKey;
     private String selfValidatorAddress;
+
+    /**
+     * 最终性投票写库失败时的有界重试队列。
+     *
+     * <p>Phase 6B 故障注入实证：数据库短时不可用时，{@code submitVote} 抛出的异常
+     * 会沿 {@code NewBlockEvent} 监听器传播到 {@code StateDB}，使 pendingBlock 等待
+     * 60 秒才清理，连带推迟区块落盘。最终性写失败不应破坏区块采纳，因此这里把
+     * 投票留在内存队列，下一个区块事件再重试；队列满时丢弃最旧票并显式报错。</p>
+     *
+     * <p>边界：队列不持久化，进程崩溃会丢失；只覆盖本节点本地投票，远端票的
+     * 重投依赖发送方重试。</p>
+     */
+    private static final int MAX_PENDING_VOTES = 256;
+    private final Deque<Vote> pendingVotes = new ArrayDeque<>();
 
     /**
      * @param gadget               最终性投票收集器
@@ -127,7 +144,14 @@ public class FinalityCoordinator {
             return;
         }
         Block block = event.getBlock();
-        onBlock(block);
+        try {
+            onBlock(block);
+        } catch (RuntimeException e) {
+            // 最终性只是区块采纳后的附加动作：任何异常都不能反向破坏 StateDB
+            // 的 pendingBlock 状态更新。onBlock 内部已对已知的持久化失败做队列重试；
+            // 这里兜底未来新增的运行时异常。
+            log.error("Finality listener failed at height {}; block adoption continues", block.nHeight, e);
+        }
     }
 
     /**
@@ -145,6 +169,10 @@ public class FinalityCoordinator {
             log.debug("Skip finality vote: self validator {} not active", selfValidatorAddress);
             return null;
         }
+
+        // 先重试历史失败票，再处理当前区块。非检查点区块也会触发重试，
+        // 使数据库恢复后无需等待下一个 epoch 边界。
+        flushPendingVotes();
 
         long height = block.nHeight;
         if (!isCheckpoint(height)) {
@@ -185,15 +213,80 @@ public class FinalityCoordinator {
 
         Vote vote = new Vote(epoch, checkpointHash, selfValidatorAddress, sigBytes, publicKeyBytes);
 
-        FinalityRecord record = gadget.submitVote(vote);
-        log.info("Finality vote submitted: epoch={}, height={}, checkpoint={}, validator={}, finalized={}, progress={}%",
-                epoch, height, org.apache.commons.codec.binary.Hex.encodeHexString(checkpointHash),
-                selfValidatorAddress, record.isFinalized(), record.progressPercent());
-        // 广播投票至 P2P 网络（跨节点汇聚发送侧接线）
-        if (broadcaster != null) {
-            broadcaster.broadcast(vote);
+        try {
+            FinalityRecord record = gadget.submitVote(vote);
+            log.info("Finality vote submitted: epoch={}, height={}, checkpoint={}, validator={}, finalized={}, progress={}%",
+                    epoch, height, org.apache.commons.codec.binary.Hex.encodeHexString(checkpointHash),
+                    selfValidatorAddress, record.isFinalized(), record.progressPercent());
+            // 广播投票至 P2P 网络（跨节点汇聚发送侧接线）
+            broadcastQuietly(vote);
+            return record;
+        } catch (RuntimeException e) {
+            enqueuePendingVote(vote);
+            log.error("Finality vote persistence failed at epoch={}, height={}; queued for retry (pending={}): {}",
+                    epoch, height, pendingVoteCount(), e.getMessage());
+            return null;
         }
-        return record;
+    }
+
+    /**
+     * 重试队列中的本地投票。写库仍失败时保留队首票，等待下一个区块事件；
+     * 成功后移出队列并补发 P2P 广播。
+     */
+    private synchronized void flushPendingVotes() {
+        while (!pendingVotes.isEmpty()) {
+            Vote vote = pendingVotes.peekFirst();
+            try {
+                FinalityRecord record = gadget.submitVote(vote);
+                pendingVotes.removeFirst();
+                log.info("Finality vote retried: epoch={}, validator={}, finalized={}, progress={}%",
+                        vote.getEpoch(), vote.getValidatorAddress(), record.isFinalized(), record.progressPercent());
+                broadcastQuietly(vote);
+            } catch (RuntimeException e) {
+                log.warn("Finality vote retry still failing at epoch={}, validator={}; retained for next block: {}",
+                        vote.getEpoch(), vote.getValidatorAddress(), e.getMessage());
+                return;
+            }
+        }
+    }
+
+    /**
+     * 入队一张本地投票。队列有界，避免数据库长期不可用时无界占用内存；
+     * 溢出时丢弃最旧票并显式 ERROR，绝不静默吞掉。
+     */
+    private synchronized void enqueuePendingVote(Vote vote) {
+        // 同一张票可能因区块重放/重复事件再次进入 onBlock，避免队列里堆积
+        // 完全相同的 (epoch, checkpoint, validator) 项。
+        for (Vote pending : pendingVotes) {
+            if (pending.getEpoch() == vote.getEpoch()
+                    && pending.getValidatorAddress().equals(vote.getValidatorAddress())
+                    && Arrays.equals(pending.getCheckpointHash(), vote.getCheckpointHash())) {
+                return;
+            }
+        }
+        if (pendingVotes.size() >= MAX_PENDING_VOTES) {
+            Vote dropped = pendingVotes.removeFirst();
+            log.error("Finality retry queue full ({}); dropping oldest vote epoch={}, validator={}",
+                    MAX_PENDING_VOTES, dropped.getEpoch(), dropped.getValidatorAddress());
+        }
+        pendingVotes.addLast(vote);
+    }
+
+    synchronized int pendingVoteCount() {
+        return pendingVotes.size();
+    }
+
+    /** 广播失败不能反向影响已持久化的投票或区块采纳。 */
+    private void broadcastQuietly(Vote vote) {
+        if (broadcaster == null) {
+            return;
+        }
+        try {
+            broadcaster.broadcast(vote);
+        } catch (RuntimeException e) {
+            log.warn("Finality vote broadcast failed after persistence: epoch={}, validator={}: {}",
+                    vote.getEpoch(), vote.getValidatorAddress(), e.getMessage());
+        }
     }
 
     /**

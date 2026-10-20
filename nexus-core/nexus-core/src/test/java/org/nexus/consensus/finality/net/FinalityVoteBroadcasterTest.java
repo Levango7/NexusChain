@@ -4,6 +4,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.nexus.consensus.finality.FinalityGadget;
 import org.nexus.consensus.finality.Vote;
+import org.nexus.consensus.finality.persistence.FinalityStateStore;
+import org.nexus.consensus.finality.persistence.InMemoryFinalityStateStore;
 import org.nexus.consensus.pos.StakingServiceImpl;
 import org.nexus.consensus.pos.Validator;
 import org.nexus.consensus.pos.ValidatorRegistry;
@@ -14,12 +16,16 @@ import org.springframework.context.ApplicationEventPublisher;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class FinalityVoteBroadcasterTest {
 
+    private ValidatorRegistry registry;
+    private StakingService staking;
     private FinalityGadget gadget;
     private FinalityVoteBroadcaster broadcaster;
     private List<FinalityVoteBroadcaster.FinalityVoteBroadcastEvent> events;
@@ -32,8 +38,8 @@ class FinalityVoteBroadcasterTest {
 
     @BeforeEach
     void setUp() {
-        ValidatorRegistry registry = new ValidatorRegistry(new BigDecimal("100"), 100);
-        StakingService staking = new StakingServiceImpl();
+        registry = new ValidatorRegistry(new BigDecimal("100"), 100);
+        staking = new StakingServiceImpl();
         try {
             var f = StakingServiceImpl.class.getDeclaredField("validatorRegistry");
             f.setAccessible(true);
@@ -127,5 +133,52 @@ class FinalityVoteBroadcasterTest {
         });
         broadcaster.broadcast(new Vote(1, CP1, "v1", new byte[]{0x01}));
         assertEquals(1, outgoing.get());
+    }
+
+    @Test
+    void receivedVotePersistenceFailureDoesNotThrow() {
+        FailingStore store = new FailingStore();
+        FinalityGadget failingGadget = new FinalityGadget(registry, staking, store);
+        FinalityVoteBroadcaster failingBroadcaster = new FinalityVoteBroadcaster(failingGadget, publisher);
+
+        assertDoesNotThrow(() -> failingBroadcaster.onVoteReceived(
+                        FinalityVoteCodec.encode(signedVote(1, CP1))),
+                "接收侧写库失败不能拖垮 P2P 消息处理线程");
+        assertEquals(0, failingGadget.getFinality(1, CP1).getVotedWeight().signum());
+    }
+
+    /** 仅让 recordVote 失败，其余语义委托内存实现。 */
+    private static final class FailingStore implements FinalityStateStore {
+        private final FinalityStateStore delegate = new InMemoryFinalityStateStore();
+
+        @Override
+        public void recordVote(long epoch, byte[] checkpointHash, String validatorAddress) {
+            throw new IllegalStateException("simulated JDBC outage");
+        }
+
+        @Override
+        public void markFinalized(long epoch, byte[] checkpointHash) {
+            delegate.markFinalized(epoch, checkpointHash);
+        }
+
+        @Override
+        public boolean isFinalized(long epoch, byte[] checkpointHash) {
+            return delegate.isFinalized(epoch, checkpointHash);
+        }
+
+        @Override
+        public Set<String> loadVoters(long epoch, byte[] checkpointHash) {
+            return delegate.loadVoters(epoch, checkpointHash);
+        }
+
+        @Override
+        public Map<String, Boolean> loadAllFinalized() {
+            return delegate.loadAllFinalized();
+        }
+
+        @Override
+        public Map<String, Set<String>> loadAllVotes() {
+            return delegate.loadAllVotes();
+        }
     }
 }
