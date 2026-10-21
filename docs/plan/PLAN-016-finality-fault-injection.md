@@ -161,7 +161,9 @@ FinalityGadget.submitVote 抛 BadSqlGrammarException
 2. **只覆盖本地票**：远端票接收失败会记录 WARN，依赖发送方重试重新广播；接收端没有
    独立重试队列。
 3. **PG 整体故障仍影响账户/提案路径**：本次只隔离了最终性监听器对 `StateDB` 的
-   反向破坏，没有给 `AccountDB` 加降级/重连队列。
+   反向破坏，没有给 `AccountDB` 加降级/重连队列。该缺口已由
+   [PLAN-017](PLAN-017-account-store-degradation.md) 第一切片（Phase 6C）承接：
+   账户读取 fail-closed、状态接口内存化、proposer 安全暂停；仍不等于 PG 高可用。
 4. **不是多机 HA**：同一 Windows 主机双进程 + 容器 PG；未覆盖主机断电、磁盘损坏、
    PG 主备切换。
 5. **未做真实网络分区/完整拜占庭矩阵**：重复/延迟/乱序与双签顺序反转是进程内/消息级

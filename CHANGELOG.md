@@ -4,6 +4,31 @@
 
 ## [Unreleased]
 
+### PG/AccountDB 短时不可用降级（PLAN-017 Phase 6C 第一切片）
+
+**背景**：PLAN-016 Phase 6B 证明最终性表短时故障不再阻塞 `StateDB` 采纳，但 PG 整体
+停止仍会打穿账户读取、提案和 `/consensus/status`：`AccountDB` 把异常伪装成“新账户”，
+`MerkleRule` 随后 NPE；状态接口查询数据库；异步区块采纳异常逃逸。
+
+- **账户读取 fail-closed**：`AccountDB.selectaccount()` / `hasAccount()` 区分“无行”和
+  “数据库不可用”，后者抛 `AccountStoreUnavailableException`；`MerkleRule` 总账户缺失
+  显式失败；proposer 在账户库不可读时安全暂停，不产生零余额/无法验证的区块。
+- **状态接口内存化**：新增 `ChainHeadProvider`，`/consensus/status`、P2P 状态握手与
+  `SyncClient` 改用内存链头；同高度状态握手不再查数据库。新增
+  `GET /consensus/storage-status` 输出 `UP`/`DEGRADED` 快照。
+- **异步采纳隔离**：`PendingBlocksManager` 捕获写入/账户校验存储异常，失败链进入
+  内存重试队列并由 5 秒调度重试；`MerkleRule` 用 `account store unavailable` 前缀
+  避免把存储故障当成普通坏块。`AccountDB`/proposer 日志改为 10 秒采样，避免刷屏。
+- **连接池快速失败**：DBCP2 `max-wait-millis=5000`、`validation-query-timeout=3`、
+  借出/空闲校验，避免池耗尽或故障恢复后无限等待/借出坏连接。
+- **双节点实测（2026-10-21）**：同一主机双进程 + 容器 PG 停止 **43.9 秒**，
+  `/consensus/status` 全程 HTTP 200，proposer 在高度 3444 安全暂停；恢复后
+  A/B 高度 **3549/3549**，`ERROR`、`Local adoption failed`、`pendingBlock` 超时均为 0，
+  最终性检查点 834–900 无缺口（110 票、每 epoch 2 票）。
+- **边界**：不是 PG 高可用；无主备切换、无持久化区块/最终性 outbox、无多机网络分区
+  与主机断电验证；PG 停止期间链停止出块。详见
+  `docs/plan/PLAN-017-account-store-degradation.md`。
+
 ### 最终性故障注入首批切片（PLAN-016 Phase 6B）
 
 **背景**：Phase 6A 已证明数据库可用时重启不丢最终性，但未验证数据库短时不可用、

@@ -8,6 +8,7 @@ import org.nexus.consensus.pow.PackageMiner;
 import org.nexus.core.Block;
 import org.nexus.core.NexusChainBlockChain;
 import org.nexus.core.account.Account;
+import org.nexus.core.account.AccountStoreUnavailableException;
 import org.nexus.core.account.Transaction;
 import org.nexus.core.event.NewBlockMinedEvent;
 import org.nexus.core.incubator.Incubator;
@@ -30,6 +31,7 @@ import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * PoS 共识引擎。
@@ -77,6 +79,9 @@ import java.util.Map;
 public class PosConsensusEngine implements PosConsensus {
 
     private static final Logger logger = LoggerFactory.getLogger(PosConsensusEngine.class);
+    private static final long STORAGE_PAUSE_LOG_INTERVAL_MS = 10_000L;
+
+    private final AtomicLong lastStoragePauseLogAt = new AtomicLong(0);
 
     /** 默认出块时间窗口（秒），与 nexus.consensus.block-interval 对齐 */
     private static final long DEFAULT_BLOCK_INTERVAL_SECONDS = 30L;
@@ -257,6 +262,19 @@ public class PosConsensusEngine implements PosConsensus {
             logger.info("Block proposed at height {} hash={} by proposer {}",
                     height, block.getHashHexString(), selected.getAddress());
             return block;
+        } catch (AccountStoreUnavailableException e) {
+            // 存储短时不可用时安全暂停提案；不回退到内存零账户，也不产生
+            // 无法验证的区块。调度器会在下一轮自动重试。
+            long now = System.currentTimeMillis();
+            long last = lastStoragePauseLogAt.get();
+            if (now - last >= STORAGE_PAUSE_LOG_INTERVAL_MS
+                    && lastStoragePauseLogAt.compareAndSet(last, now)) {
+                logger.warn("Propose paused at height {}: account store unavailable: {}",
+                        height, e.getMessage());
+            } else {
+                logger.debug("Propose paused at height {}: account store unavailable", height);
+            }
+            return null;
         } catch (Exception e) {
             logger.error("Propose failed at height {}: {}", height, e.getMessage(), e);
             return null;

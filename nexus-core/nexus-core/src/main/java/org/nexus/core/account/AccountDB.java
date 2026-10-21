@@ -29,12 +29,20 @@ import org.springframework.stereotype.Component;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicLong;
 
 @Component
 public class AccountDB {
     public static final Logger logger = LoggerFactory.getLogger(AccountDB.class);
+    private static final long FAILURE_LOG_INTERVAL_MS = 10_000L;
+
     @Autowired
     private JdbcTemplate tmpl;
+
+    @Autowired(required = false)
+    private AccountStoreHealth accountStoreHealth;
+
+    private final AtomicLong lastFailureLogAt = new AtomicLong(0);
 
 /*    public Account selectaccount(byte[] pubkeyhash){
         try{
@@ -52,10 +60,13 @@ public class AccountDB {
             List<Account> accounts = tmpl.query(sql, new Object[]{pubkeyhash}, new BeanPropertyRowMapper<>(Account.class));
             // 账户首次出现（如首个 coinbase 收款人）时没有行是正常语义，返回 null 由调用方初始化；
             // 不用 queryForObject，避免 EmptyResultDataAccessException 被当成 ERROR 刷屏。
+            recordSuccess();
             return accounts.isEmpty() ? null : accounts.get(0);
         } catch (RuntimeException e) {
-            logger.error("AccountDB.{} failed: {}", e, e.getMessage());
-            return null;
+            // 查询失败不能返回 null：调用方会把“数据库不可用”误判为“新账户”，
+            // 进而在零余额/零 nonce 上继续构造区块。这里统一 fail-closed。
+            recordFailure("AccountDB.selectaccount", e);
+            throw new AccountStoreUnavailableException("AccountDB.selectaccount failed", e);
         }
     }
 
@@ -63,13 +74,38 @@ public class AccountDB {
         try {
             String sql = "select * from account b where b.pubkeyhash=? order by b.blockheight desc LIMIT 1";
             List<Account> accounts = tmpl.query(sql, new Object[]{publicKeyHash}, new BeanPropertyRowMapper<>(Account.class));
+            recordSuccess();
             if (accounts.size() > 0) {
                 return Optional.of(accounts.get(0));
             }
             return Optional.empty();
         } catch (RuntimeException e) {
-            logger.error("AccountDB.{} failed: {}", e, e.getMessage());
-            return Optional.empty();
+            // 空 Optional 表示账户确实不存在；数据库故障必须向上传播，
+            // 否则 StateDB 会创建零余额账户并继续执行交易。
+            recordFailure("AccountDB.hasAccount", e);
+            throw new AccountStoreUnavailableException("AccountDB.hasAccount failed", e);
+        }
+    }
+
+    private void recordSuccess() {
+        if (accountStoreHealth != null) {
+            accountStoreHealth.recordSuccess();
+        }
+    }
+
+    private void recordFailure(String operation, RuntimeException error) {
+        if (accountStoreHealth != null) {
+            accountStoreHealth.recordFailure(error);
+        }
+        long now = System.currentTimeMillis();
+        long last = lastFailureLogAt.get();
+        // 数据库短时不可用时 proposer 会每秒重试；只保留首条 WARN 和 10 秒级
+        // 采样，避免把 40 秒故障刷成 40 份完整堆栈。
+        if (now - last >= FAILURE_LOG_INTERVAL_MS && lastFailureLogAt.compareAndSet(last, now)) {
+            logger.warn("{} failed: {} (repeats suppressed for {}s)",
+                    operation, error.getMessage(), FAILURE_LOG_INTERVAL_MS / 1000);
+        } else {
+            logger.debug("{} failed", operation, error);
         }
     }
 
