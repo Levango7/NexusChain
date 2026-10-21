@@ -379,7 +379,17 @@ jobs:
   # 与其静默跳过让人误以为扫过了，不如明确报错。
   # ============================================================
   owasp-dependency-check:
-    timeout-minutes: 25  # 观测峰值 7.4 min
+    # 2026-10-17（缺陷 #53）上限 25 → 40，并给红因分级。实测依据 = 本 workflow 最近
+    # 26 次 run 的 owasp-dependency-check job（逐个取 started_at/completed_at 算耗时）：
+    #   25 success / 1 cancelled；耗时 min 2.1、中位 6.0、max 20.4；
+    #   唯一那次红 = **25.3 分钟被 timeout-minutes: 25 截掉**（master push 83705ae2，
+    #   run 39001186130，job 结论 cancelled、被截的那一步是扫描本身）。
+    # 同 26 次里「缓存 NVD 漏洞库」步骤 **26/26 success** ⇒ 长尾不是冷启动全量下载，
+    # 而是 **NVD API 取数速度**（本文件上方自己记过：冷启 46m05s，与别的扫描并发抢配额
+    # 时 3h03m）。原注释"观测峰值 7.4 min"已过期，按实测改掉。
+    # 为什么是"单次 + 更宽的天花板"而不是加有界重试：NVD 拥塞以小时计，重试只把等待
+    # 翻倍而不改变结论；#87/#118 那种重试适用于"暂时性拒绝"，这里慢的是取数量。
+    timeout-minutes: 40
     # ✅ 「永远上报」已转正（2026-10-19 决议「完善」；试运行 2026-10-01 ~ 10-15 评估通过）——
     # 下面这个 if 即**最终形态**，不再回退（回退会同时破坏 required 语义，见策略文档历史注记）。
     # 语义：
@@ -393,8 +403,13 @@ jobs:
     # 评估数据（2026-10-17 对最近 26 次 run 的逐次计量）：min 2.1 / 中位 6.0 / max 20.4
     # 分钟；25 success + 1 cancelled（唯一红 = 25.3 分钟被 timeout 25 截断，属 NVD 取数
     # 长尾，非扫描结论）→ 热缓存 ≤10 分钟通过线达成、失败可归因；周轮换缓存未挤爆配额。
-    # 配套保留：NVD 缓存两步（下方，PR 真跑的成本前提）；时长韧性（timeout 25→40 +
-    # 步骤级 33m 截断与 rc 分级）由分支 ci/dc-nvd-timeout（缺陷 #53）携带，合并时并收。
+    # 配套保留：NVD 缓存两步（下方，PR 真跑的成本前提）；时长韧性由本 job 的
+    # timeout 40 + 步骤级 33m 截断与 rc 分级承担（缺陷 #53，2026-10-21 随本 PR 合入）。
+    # 2026-10-21 实测补记：PR #170 的两次运行都被 25 分钟上限截断（job 结论 cancelled，
+    # 被截步骤=扫描本身），复现了上面的长尾；这是本 PR 放宽上限的直接触发证据。
+    # 附注（2026-10-17）：`gh api repos/…/branches/master/protection` 证实本 job 已在
+    # required contexts 里（共 8 条）。⇒ 若将来要改成"PR 不跑"，必须**同时**把 required
+    # contexts 中这条撤掉，否则 GitHub 会把"永不产生状态"的检查按 pending 处理，卡死此后每个 PR。
     # 结论文档：docs/dependency-check-update-policy.md「转正结论」节。
     if: >-
       github.event_name != 'pull_request' ||
@@ -479,7 +494,22 @@ jobs:
           chmod +x gradlew
           # 首次运行需全量拉取 NVD（约 20 分钟；有 key 时受 nvd.delay=8000ms 限速）。
           # 报告输出：build/reports/dependency-check/dependency-check-report.{json,html}
-          ./gradlew dependencyCheckAggregate -PowaspScan --no-daemon --stacktrace
+          # 2026-10-17（缺陷 #53）：加**步骤级** 33 分钟上限（< job 的 40），把"被 job
+          # 超时取消"变成"自己截断并说清是哪一类故障"——job 级超时把整个 run 记成
+          # cancelled，读起来像人为取消或 CI 故障，而真因只是外部漏洞库取数慢。
+          # 8000ms 限速 × NVD 条目数是本步骤耗时的主导项，与本次 diff 内容无关。
+          set +e
+          timeout -k 60 33m ./gradlew dependencyCheckAggregate -PowaspScan --no-daemon --stacktrace
+          rc=$?
+          set -e
+          if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+            echo "::error::NVD 取数/扫描超过 33 分钟被截（rc=$rc）——这是**上游漏洞库取数链路慢**，不是「依赖有没有漏洞」的扫描结论；报告大概率未产出，下一步覆盖度自检会如实标注。处置：重跑本 run，或等 NVD 侧恢复。"
+            exit "$rc"
+          fi
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::dependencyCheckAggregate 以 rc=$rc 结束——按真实门禁结论判红（CVSS>=9 命中或引擎自身报错），红因见上方 Gradle 输出，不要当成网络问题重跑。"
+            exit "$rc"
+          fi
           ls -la build/reports/dependency-check/
 
       # 2026-10-01（PR #16 引入 → PR #17 语义收紧）：扫描覆盖度自检。
