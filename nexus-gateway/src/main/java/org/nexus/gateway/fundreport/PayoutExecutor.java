@@ -31,6 +31,17 @@ public interface PayoutExecutor {
      * @param reference  幂等引用（调用方派生）
      * @return 出款凭据号（渠道退款单号 / 银行流水号 / 人工核销单号）
      * @throws PayoutException 出款失败（调用方据此补偿：退回商户余额）
+     *
+     * <p><b>⚠️ 契约（2026-10-21 明确，实现方必须遵守）</b>：抛异常 ⇔ <b>确定未提交出款</b>。
+     * 若调用已提交到渠道/链上但结果未知（超时、响应丢失、待确认），
+     * <b>不得抛异常</b>——必须返回一个可区分的"结果未知"表示，让调用方走人工核对，
+     * 而不是走"退回余额 + 清认领 + 下周期重试"。</p>
+     *
+     * <p>原因：{@code AutoWithdrawService} 当前在捕获异常时执行
+     * <b>退回商户余额 + 清空认领</b>，规则下周期可重试。若出款其实已发生，
+     * 该补偿会导致<b>二次打款</b>。当前唯一的实现 {@code ManualPayoutExecutor}
+     * 是进程内台账、不触渠道，故契约"碰巧"成立；一旦接入银行代付/渠道转账，
+     * 任何一次"已提交但响应丢失"都会造成真实资金损失。</p>
      */
     String pay(Long merchantId, MerchantPayoutAccount account, BigDecimal amount, String reference);
 

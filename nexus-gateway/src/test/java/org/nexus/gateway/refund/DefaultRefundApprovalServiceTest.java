@@ -276,6 +276,28 @@ class DefaultRefundApprovalServiceTest {
     }
 
     @Test
+    void executeRefund_broadcastNotConfirmedDoesNotMarkFailed() {
+        // P0（2026-10-21）：已广播但未达确认数（PENDING_CONFIRMATION）= 链上结果未知。
+        // 必须保持 EXECUTING 交由 RefundExecutionReconciler 告警，绝不能判 FAILED——
+        // 否则交易已在链上、记录却是 FAILED，账实不符且无任何路径纠正。
+        RefundRequest approved = newPendingRequest();
+        approved.setStatus(RefundRequest.RefundStatus.APPROVED);
+        when(refundRequestRepository.claimForExecution(eq(10L), any())).thenReturn(1);
+        when(refundRequestRepository.findById(10L)).thenReturn(Optional.of(approved));
+        when(paymentOrderRepository.findById(1L)).thenReturn(Optional.of(paidOrder));
+        when(executionChannel.execute(any(TransactionRequest.class)))
+                .thenReturn(TransactionResult.pending("TX-PENDING-1", 0, false));
+
+        assertThrows(RefundSubmitOutcomeUnknownException.class, () -> service.executeRefund(10L));
+
+        // 不得落 FAILED（假阴性），也不得当作已执行
+        verify(refundRequestRepository, never()).markFailed(any(), any(), any());
+        verify(refundRequestRepository, never()).markExecuted(any(), any(), any());
+        // 订单不得迁移到 REFUNDED（结果未知）
+        assertEquals(PaymentOrder.OrderStatus.PAID, paidOrder.getStatus());
+    }
+
+    @Test
     void executeRefund_finalizeFailureRethrowsAndNeverMarksFailed() {
         // 链上已出款但结果落库失败：单据停留 EXECUTING（结果未知）——
         // 必须原样抛出交由 RefundExecutionReconciler 告警，不得改 FAILED（假阴性）、不得重试出款
