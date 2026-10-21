@@ -86,8 +86,35 @@ public class SyncClient {
             if (b == null || b.nHeight == 0) {
                 continue;
             }
-            Result res = rule.validateBlock(b);
+            Result res;
+            try {
+                res = rule.validateBlock(b);
+            } catch (RuntimeException e) {
+                // PLAN-019：校验过程本身可能因为**存储不可用**而抛异常（读父块/读账户失败），
+                // 这时不能把它当成"区块无效"丢在门口 —— 旧行为里异常直接逃出 @Async 方法，
+                // 这批收到的区块被**静默丢弃**，只能等后续 P2P 同步再拉一遍。
+                // 现在交给 PendingBlocksManager：它会再试一次，仍失败则把区块
+                // （含写入意图）存进内存队列与持久化 outbox，存储恢复后补写。
+                logger.warn("Block validation failed with a storage error (height={}); "
+                        + "handing the batch to the pending-blocks manager for durable capture: {}",
+                        b.nHeight, e.getMessage());
+                validBlocks.add(b);
+                pendingBlocksManager.addPendingBlocks(
+                        orphanBlocksManager.removeAndCacheOrphans(validBlocks));
+                return null;
+            }
             if (!res.isSuccess()) {
+                if (isStorageUnavailable(res)) {
+                    // PLAN-019：存储不可用 ≠ 区块无效。旧行为把它当"invalid block"丢掉，
+                    // 现在交给 PendingBlocksManager 走重试与持久化 outbox 通道。
+                    logger.warn("Block validation hit a storage outage (height={}); "
+                            + "handing the batch to the pending-blocks manager for durable capture: {}",
+                            b.nHeight, res.getMessage());
+                    validBlocks.add(b);
+                    pendingBlocksManager.addPendingBlocks(
+                            orphanBlocksManager.removeAndCacheOrphans(validBlocks));
+                    return null;
+                }
                 logger.error("invalid block received reason = " + res.getMessage());
                 continue;
             }
@@ -100,6 +127,18 @@ public class SyncClient {
             pendingBlocksManager.addPendingBlocks(blocksWritable);
         }
         return null;
+    }
+
+    /**
+     * 校验结果是否表示"存储不可用"（而不是"区块无效"）。
+     *
+     * <p>判定依据是 {@code MerkleRule} 给存储故障打的前缀标记
+     * （PLAN-018 引入）：这类失败必须重试，不能当坏块丢掉。</p>
+     */
+    private static boolean isStorageUnavailable(Result res) {
+        return res.getMessage() != null
+                && res.getMessage().startsWith(
+                        org.nexus.core.validate.MerkleRule.ACCOUNT_STORE_UNAVAILABLE_PREFIX);
     }
 
     @Scheduled(fixedRate = 15 * 1000)

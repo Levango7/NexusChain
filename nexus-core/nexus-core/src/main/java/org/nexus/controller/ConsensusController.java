@@ -71,6 +71,9 @@ public class ConsensusController {
     /** 最终性投票补写队列观测（PLAN-018；未装配 pos 共识时为 null）。 */
     @Autowired(required = false)
     private org.nexus.consensus.finality.FinalityOutboxManager finalityOutboxManager;
+    /** 待补写区块队列观测（PLAN-019；未装配时为 null）。 */
+    @Autowired(required = false)
+    private org.nexus.core.PendingBlocksManager pendingBlocksManager;
 
     @Autowired
     private Block genesis;
@@ -146,6 +149,22 @@ public class ConsensusController {
         Map<String, Object> data = new LinkedHashMap<>(finalityOutboxManager.status().snapshot());
         data.put("enabled", true);
         return codec.encode(data);
+    }
+
+    /**
+     * 待补写区块队列观测（PLAN-019）。
+     *
+     * <p>{@code memoryPending} 是内存重试队列长度，{@code databasePending} 是持久化
+     * outbox 行数（-1 表示不可读/未装配）。</p>
+     */
+    @GetMapping(value = "/consensus/block-outbox", produces = "application/json")
+    public Object getBlockOutboxStatus() {
+        if (pendingBlocksManager == null) {
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("enabled", false);
+            return codec.encode(data);
+        }
+        return codec.encode(pendingBlocksManager.outboxStatus());
     }
 
     @PostMapping(value = "/consensus/status", produces = "application/json")

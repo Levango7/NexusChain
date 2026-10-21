@@ -33,6 +33,7 @@ import org.nexus.db.StateDB;
 import org.nexus.merkletree.MerkleTreeManager;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -62,10 +63,25 @@ public class PendingBlocksManager {
     private MerkleTreeManager merkleTreeManager;
 
     /**
-     * 存储故障期间暂存的待采纳区块。只在内存中，进程重启后由 P2P 同步重新拉取；
-     * 这是 PLAN-017 的“短时故障不丢采纳进度”兜底，不宣称持久化 outbox。
+     * 存储故障期间暂存的待采纳区块。
+     *
+     * <p>内存层：进程存活期间的快速兜底。PLAN-019 起，同一批区块还会写入
+     * {@code pending_block_outbox} 表（持久化层），重启后由
+     * {@link #restoreFromOutbox()} 捞回来继续补写。</p>
      */
     private final Map<String, Block> storageRetryBlocks = new ConcurrentHashMap<>();
+
+    /**
+     * 待补写区块的持久化 outbox（PLAN-019）。
+     *
+     * <p>可选注入：未装配（dev profile / 无库）时退化为纯内存重试队列 ——
+     * 与 PLAN-017 第一切片的行为一致，不影响既有部署。</p>
+     */
+    @Autowired(required = false)
+    private org.nexus.core.pending.PendingBlockOutbox blockOutbox;
+
+    /** 已从持久化 outbox 恢复过一次（避免每个调度周期重复捞库）。 */
+    private volatile boolean outboxRestored = false;
 
     // 区块的写入全部走这里
     @Async
@@ -95,7 +111,16 @@ public class PendingBlocksManager {
         logger.info("try to write blocks to local storage, size = " + chain.size());
         Block lastConfirmed = stateDB.getLastConfirmed();
         for (Block b : chain) {
-            if (b.nHeight <= lastConfirmed.nHeight || stateDB.hasBlockInCache(b.getHash())) {
+            if (b.nHeight <= lastConfirmed.nHeight) {
+                logger.info("the block has written");
+                continue;
+            }
+            if (stateDB.hasBlockInCache(b.getHash())) {
+                // PLAN-019：缓存命中不等于已落库 —— `stateDB.writeBlock` 会先把区块放进
+                // 内存缓存再写库，写库失败时缓存里已经有了（PLAN-017 已记录的窗口）。
+                // 因此这里要确认它**真的**在库里：落库了才清掉 outbox 行，否则保留
+                // （等后续补写），不能因为"缓存里有"就把写入意图丢掉。
+                reconcileOutboxEntry(b);
                 logger.info("the block has written");
                 continue;
             }
@@ -144,12 +169,37 @@ public class PendingBlocksManager {
                 // GET_TREE_NODES 对账（此前该分支 continue 跳过了触发，
                 // 导致状态树从未同步、hashMerkleState 全零）
                 merkleTreeManager.writeBlockToCache(b);
+                removeFromOutbox(b);
                 continue;
             }
             b.weight = 1;
             stateDB.writeBlock(b);
+            removeFromOutbox(b);
         }
         return true;
+    }
+
+    /**
+     * 缓存命中但可能未落库时的 outbox 对账（PLAN-019）。
+     *
+     * <p>真落库了 → 清掉 outbox 行；没落库 → 保留行（等补写），并显式告警
+     * （这是 PLAN-017 记录的"缓存先于落库"窗口，诚实暴露而不是悄悄丢）。</p>
+     */
+    private void reconcileOutboxEntry(Block block) {
+        if (blockOutbox == null || block == null) {
+            return;
+        }
+        try {
+            if (stateDB.hasBlock(block.getHash())) {
+                removeFromOutbox(block);
+            } else {
+                logger.warn("PendingBlocks: block is cached but not persisted (height={}); "
+                        + "keeping its outbox entry for a later retry", block.nHeight);
+            }
+        } catch (RuntimeException e) {
+            logger.warn("PendingBlocks: failed to reconcile outbox entry (height={}): {}",
+                    block.nHeight, e.getMessage());
+        }
     }
 
     private static boolean isAccountStoreUnavailable(Result result) {
@@ -161,12 +211,88 @@ public class PendingBlocksManager {
         for (Block b : chain) {
             if (b != null) {
                 storageRetryBlocks.put(b.getHashHexString(), b);
+                // PLAN-019：同时落持久化 outbox（数据库整体不可用时这一步会失败，
+                // 内存队列兜底；数据库可用但链写失败时，写库意图就真的留住了）。
+                persistToOutbox(b, error);
             }
         }
         logger.warn("PendingBlocks paused at heights {}-{}: storage unavailable: {}; "
                         + "queued {} block(s) for retry",
                 chain.get(0).nHeight, chain.get(chain.size() - 1).nHeight,
                 error.getMessage(), chain.size());
+    }
+
+    /** 把待补写区块记进持久化 outbox（失败只记日志，不影响主流程）。 */
+    private void persistToOutbox(Block block, RuntimeException error) {
+        if (blockOutbox == null) {
+            return;
+        }
+        try {
+            blockOutbox.enqueue(block);
+            if (error != null) {
+                blockOutbox.markFailure(block, error.getMessage());
+            }
+        } catch (RuntimeException e) {
+            logger.warn("PendingBlocks: failed to persist block to outbox (height={}): {}",
+                    block.nHeight, e.getMessage());
+        }
+    }
+
+    /** 区块补写成功后清掉 outbox 里的对应行。 */
+    private void removeFromOutbox(Block block) {
+        if (blockOutbox == null || block == null) {
+            return;
+        }
+        try {
+            blockOutbox.remove(block);
+        } catch (RuntimeException e) {
+            logger.warn("PendingBlocks: failed to remove block from outbox (height={}): {}",
+                    block.nHeight, e.getMessage());
+        }
+    }
+
+    /**
+     * 启动后从持久化 outbox 恢复待补写区块（PLAN-019）。
+     *
+     * <p>这些区块是"上一进程收到并校验过、但没写进链存储"的 —— 重启后把它们
+     * 重新投进采纳路径即可，不必等 P2P 同步再拉一遍。</p>
+     */
+    @Scheduled(fixedDelay = 15_000L, initialDelay = 20_000L)
+    public void restoreFromOutbox() {
+        if (outboxRestored || blockOutbox == null) {
+            return;
+        }
+        try {
+            List<Block> pending = blockOutbox.loadPending(64);
+            if (pending.isEmpty()) {
+                outboxRestored = true;
+                return;
+            }
+            outboxRestored = true;
+            logger.info("PendingBlocks: restoring {} pending block(s) from persistent outbox", pending.size());
+            // 走同一条采纳路径（内部会做校验与写链，并清理 outbox 行）。
+            addPendingBlocks(new BlocksCache(pending));
+        } catch (RuntimeException e) {
+            // 恢复失败不阻断调度：下一轮再试（outboxRestored 只在成功路径置位）。
+            logger.warn("PendingBlocks: failed to restore pending blocks from outbox: {}", e.getMessage());
+        }
+    }
+
+    /** 待补写区块的观测快照（内存 + 持久化 outbox）。 */
+    public Map<String, Object> outboxStatus() {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("memoryPending", storageRetryBlocks.size());
+        int dbPending = -1;
+        if (blockOutbox != null) {
+            try {
+                dbPending = blockOutbox.pendingCount();
+            } catch (RuntimeException e) {
+                dbPending = -1;
+            }
+        }
+        data.put("databasePending", dbPending);
+        data.put("enabled", blockOutbox != null);
+        return data;
     }
 
     /**
