@@ -263,6 +263,49 @@ fi
 **关键区分**：升级为失败的只有**覆盖度**，**不是漏洞数** —— 本步骤不会因为"有漏洞"而失败
 （那是 `failBuildOnCVSS = 9.0f` 的职责），它保证的是"绿"绝不可能是"什么都没扫到"。
 
+### NVD 取数长尾与「重试预算」（2026-10-22 实测加固，承接缺陷 #53）
+
+**背景**：缺陷 #53 已把 job 级上限从 25 分钟放宽到 40 分钟，并给「取数慢」与「真有漏洞」
+分了红因。但 2026-10-21 ~ 10-22 在 master push 上仍连续 3 次以 `rc=124`（33 分钟步骤级
+截断）收场，且**日志里从头到尾没有出现真实的 API 错误**——只有重复的
+`Retrying request ... 2nd time` … `10th time`。
+
+**机制（已在 dependency-check-core 13.0.0 的字节码与常量池中核对）**：
+
+1. 引擎的增量更新窗口是「缓存库 lastUpdate **+ 120 天**」
+   （`NvdApiDataSource` 里的 `ZonedDateTime.plusDays(120)`）——恰好顶在 NVD API
+   「单次最多 120 天」的上限，实测请求形如
+   `lastModStartDate=2026-10-19T10:19:50Z&lastModEndDate=2027-02-16T10:19:50Z`。
+2. 该窗口按 `resultsPerPage=2000` 分页，失败发生在第二页（`startIndex=2000`）。
+3. 引擎的 **HTTP 重试预算默认 10 次**，每次间隔 1~2 分钟 ⇒ 光重试就烧掉约 20 分钟，
+   最终被 33 分钟的步骤上限截断，**真实错误被埋在重试噪音里**。
+
+**改动**：把引擎的 NVD HTTP 重试预算从 10 降到 **3**
+（`nvd { maxRetryCount = 3 }`，引擎设置键 `nvd.api.max.retry.count`；
+另在根 `gradle.properties` 用 `systemProp.nvd.api.max.retry.count=3` 直达引擎进程，
+两条通路同值、互为兜底）。
+
+- 效果：取数链路确实坏时，几分钟内就以**真实错误**收场（可见、可归因），把时间预算让给
+  「重跑本 run」；成功路径不受影响（正常取数本就不需要重试——PR #170 实测 9 分钟、
+  2026-10-22 master 重跑 10 分 41 秒均一次过）。
+- **怎么确认生效**：失败时日志里最多出现 `3rd time`，不会再出现 `10th time`；
+  出现 `3rd time` 之后的异常即为真实 API 错误。
+
+**明确不做（避免用"更快"换"更弱"）**：
+
+| 不做 | 原因 |
+|------|------|
+| 不改 `failBuildOnCVSS = 9.0f` | 判定阈值是门禁语义，不属于性能问题 |
+| 不关 `autoUpdate` / 不改成只读缓存库 | 那会用「漏洞数据变旧」换速度，属于**削弱 SCA**，须安全负责人另行决策 |
+| 不在失败时保存 NVD 缓存 | 引擎的 lastUpdate 只在**成功**时推进；失败时存的是半成品，下轮仍要重拉同一窗口，且半成品 DB 有污染风险 |
+| 不改 `resultsPerPage` | 失败页并非因分页大小非法（2000 是 API 上限），改它属未经验证的猜测 |
+
+**已知覆盖缺口（诚实登记，非本次引入）**：2026-10-22 的成功扫描日志显示
+`No lock file exists - this will result in false negatives` 与
+`Analyzing '.../nexus-sdk/package.json' - however, the node_modules directory does not exist`，
+即 **npm 侧（nexus-sdk）实际未被扫描**，本次有效覆盖来自 239 个 `.jar`。
+补法（提交 lock file / 在构建产物上扫描）属独立事项，见 `docs/roadmap-unresolved.md`。
+
 ### 命中 CRITICAL（CVSS≥9）时的处置
 
 `failBuildOnCVSS = 9.0f` 一旦触发，job 变红并阻断 workflow。处置顺序：

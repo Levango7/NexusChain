@@ -415,6 +415,25 @@ if (project.hasProperty('owaspScan')) {
             if (key) { apiKey = key }
             // 带 key 时的官方建议请求间隔，避免触发 NVD 限流
             delay = 8000
+            // 2026-10-22（缺陷 #53 的后续加固）：把引擎的 **NVD HTTP 重试预算**从默认 10 降到 3。
+            //
+            // 实测依据（2026-10-21 ~ 10-22，master push run 39609353077 连续 3 次失败）：
+            // 引擎对同一条分页请求反复重试满 10 次仍不成功 —— 请求形如
+            //   /rest/json/cves/2.0?lastModStartDate=2026-10-19T10:19:50Z
+            //               &lastModEndDate=2027-02-16T10:19:50Z&resultsPerPage=2000&startIndex=2000
+            // （窗口 = 缓存库 lastUpdate + 120 天，见引擎 NvdApiDataSource 的 plusDays(120)；
+            //  恰在 NVD API「单次最多 120 天」的上限），每次重试间隔 1~2 分钟，
+            // 单是重试就烧掉 ~20 分钟，最终被 33 分钟步骤上限截断（rc=124），
+            // **真实的 API 错误从未出现在日志里**，只看到 "Retrying request ... 10th time"。
+            //
+            // 降到 3 之后：取数链路确实坏时，几分钟内就以**真实错误**收场（可见、可归因、
+            // 能区分"上游取数慢"与"依赖有漏洞"），把时间预算让给"重跑本 run"。
+            // 成功路径不受影响：正常取数（PR #170 实测 9 分钟）本就不需要重试。
+            //
+            // 口径说明：这是**引擎 HTTP 重试次数**（引擎设置键 nvd.api.max.retry.count，
+            // 已在 dependency-check-core 13.0.0 的常量池中核对），
+            // **不是**扫描重试，也不改漏洞判定阈值（failBuildOnCVSS 仍为 9.0）。
+            maxRetryCount = 3
         }
 
         data {
