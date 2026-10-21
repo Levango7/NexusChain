@@ -70,8 +70,13 @@ public class FinalityGadget {
      * 最终性状态持久化（ADR-030 P0-1：节点重启不丢失已最终化检查点）。
      * 默认内存版（测试/单机）；配置 {@code nexus.finality.store=jdbc} 时
      * Spring 注入 {@link JdbcFinalityStateStore}（PostgreSQL）。
+     *
+     * <p>{@code volatile}：该字段由 {@link #setStateStore} 在锁内写入，
+     * 但 {@link #getStateStore} 可能在锁外读取；用 volatile 保证可见性，
+     * 避免 SpotBugs 的 IS2_INCONSISTENT_SYNC / UG_SYNC_SET_UNSYNC_GET 告警
+     * （CI 的 SAST 门禁会把任何 finding 判红）。</p>
      */
-    private FinalityStateStore stateStore;
+    private volatile FinalityStateStore stateStore;
 
     /**
      * 验证者集指纹（P0-② 治理关联）：活跃验证人地址+质押的规范化指纹。
@@ -164,8 +169,12 @@ public class FinalityGadget {
     /**
      * 暴露当前持久化存储（PLAN-018：outbox 管理器需要与本类**同一个**存储实例，
      * 否则内存版与 JDBC 版各写各的，队列语义对不上）。
+     *
+     * <p>方法本身加 {@code synchronized}：写入方 {@link #setStateStore} 是同步方法，
+     * 读取方保持一致即可消除 SpotBugs 的 unsync-get 告警（CI 的 SAST 门禁对
+     * 任何 finding 判红）。读取成本极低（一次字段读），不构成热点。</p>
      */
-    public FinalityStateStore getStateStore() {
+    public synchronized FinalityStateStore getStateStore() {
         return stateStore;
     }
 
