@@ -4,17 +4,17 @@
 迁移工具采用 Flyway，脚本位于 `nexus-gateway/src/main/resources/db/migration/`。
 数据库：PostgreSQL（生产）/ H2（开发 / sandbox）。
 
-## 当前版本 v2.73.0
+## 当前版本 v2.74.0
 
-> 版本依据：`build.gradle` 中 `version = '2.73.0'`、git tag `v2.73.0`、`CHANGELOG.md` 最新条目 `[2.73.0] - 2026-10-13`，三者一致。
+> 版本依据：`build.gradle` 中 `version = '2.74.0'`、git tag `v2.74.0`、`CHANGELOG.md` 最新条目 `[2.74.0] - 2026-10-14`，三者一致。
 
-**迁移基线**（master @ v2.73.0）：V1–V66、V71、V81–V98、V103，共 86 支脚本。其中 V67–V70、V72–V80 为历史上从未分配的保留号段；V99–V102 为号段空洞，永久保留不填（见[迁移版本号分配规则](#迁移版本号分配规则)与[迁移脚本清单](#迁移脚本清单)）。
+**迁移基线**（master @ v2.74.0）：V1–V66、V71、V81–V98、V103–V108，共 91 支脚本。其中 V67–V70、V72–V80 为历史上从未分配的保留号段；V99–V102 为号段空洞，永久保留不填（见[迁移版本号分配规则](#迁移版本号分配规则)与[迁移脚本清单](#迁移脚本清单)）。
 
-**下一可用迁移版本号：V108+**（V104–V107 已被在途 PR #106 占用，见[在途迁移](#在途迁移)）。
+**下一可用迁移版本号：V109+**（master 现最高号为 V108，见[迁移脚本清单](#迁移脚本清单)与[号段沿革说明](#号段沿革说明)）。
 
 ### 通用升级步骤
 
-1. **拉取目标版本代码**：`git checkout v2.73.0`（或合并对应分支）。
+1. **拉取目标版本代码**：`git checkout v2.74.0`（或合并对应分支）。
 2. **编译验证**：`./gradlew assemble -x test`，确认 BUILD SUCCESSFUL。
 3. **启动服务**：`./gradlew :nexus-gateway:bootRun`，Flyway 会在启动时自动检测并执行未应用的增量 migration。
 4. **验证迁移结果**：查询 Flyway 历史表，确认新增版本均已执行且 `success` 为真：
@@ -37,7 +37,7 @@
 2. **任何空洞号段一律不填**。当前已知空洞/保留号段：
    - **V99–V102**：号段空洞，**永久保留不填**（成因见下节）；
    - **V67–V70、V72–V80**：历史上从未分配过脚本的保留号段，同样不填。
-3. **取号前必须核对在途 PR 的占用情况**：当前 **V104–V107 已被在途 PR #106 占用**，故**下一可用版本号为 V108+**。
+3. **取号前必须核对在途 PR 的占用情况**：当前 master 最高号为 **V108**，无在途 PR 占用更高号段，故**下一可用版本号为 V109+**。
 4. **PR 正文必须给出迁移版本号取值依据**：写明提交时 master 的最高号（附脚本文件名佐证），以及是否避开了在途 PR 已占用的号段。
 
 ### V99–V102 空洞成因
@@ -51,21 +51,21 @@
 
 | 判断 | 示例 | 说明 |
 |------|------|------|
-| ✅ 正确 | master 最高为 V107 时，新迁移取 **V108** | `max(master) + 1` |
-| ✅ 正确 | 当前 master 最高 V103、V104–V107 被 PR #106 在途占用，新迁移取 **V108** | 避开在途占用号段 |
+| ✅ 正确 | master 最高为 V108 时，新迁移取 **V109** | `max(master) + 1` |
+| ✅ 正确 | 当前 master 最高 V108、一新 PR 已占用 V109，另一新迁移取 **V110** | 避开在途占用号段 |
 | ❌ 错误 | 新迁移取 **V99–V102**（填洞） | 空洞永久不填；低号后到会使已应用 V103 的存量库启动失败 |
-| ❌ 错误 | master 最高 V103 时新迁移直接取 **V110**（跳号） | 制造新空洞，违反单调递增取号 |
-| ❌ 错误 | 新迁移取 **V104**（撞在途 PR #106） | 与在途 PR 同号冲突，Flyway 报 "Found more than one migration with version" |
+| ❌ 错误 | master 最高 V108 时新迁移直接取 **V110**（跳号） | 制造新空洞，违反单调递增取号 |
+| ❌ 错误 | 新迁移取 **V108**（撞已落 master 的号） | 与既有迁移同号冲突，Flyway 报 "Found more than one migration with version" |
 
 ### PR 正文取值依据模板
 
 新建迁移的 PR 正文必须包含类似如下表述：
 
-> 取值依据：提交时 master 最高迁移号为 V103（`V103__kek_rotation_progress.sql`）；V104–V107 已被在途 PR #106（分支 `fix/l3-rehearsal-round2-20261014`）占用，故本迁移取 V108。
+> 取值依据：提交时 master 最高迁移号为 V108（`V108__auto_withdraw_payout_claim.sql`）；无在途 PR 占用更高号段，故本迁移取 V109。
 
 ## 迁移脚本清单
 
-截至 v2.73.0，清单与 `nexus-gateway/src/main/resources/db/migration/` 实际文件一一对应（共 86 支）。
+截至 v2.74.0，清单与 `nexus-gateway/src/main/resources/db/migration/` 实际文件一一对应（共 91 支）。
 
 | 版本 | 脚本 | 说明 |
 |------|------|------|
@@ -158,19 +158,17 @@
 | V98 | `V98__subscription_charge_claim.sql` | 订阅周期扣款幂等认领表（并发重复扣款防线） |
 | V99–V102 | —（无脚本） | **号段空洞，永久保留不填**（成因见号段分配规则） |
 | V103 | `V103__kek_rotation_progress.sql` | KEK 轮换迁移进度表（跨副本/重启断点续传；立项号 V99，落地让号为 V103） |
+| V104 | `V104__clearing_settlement_records_add_version.sql` | clearing_settlement_records 补乐观锁 version 列（L3 预演缺陷 #26；原 V99 顺延） |
+| V105 | `V105__currency_wallets.sql` | currency_wallets 建表（L3 预演缺陷 #31：实体缺建表脚本；原 V100 顺延） |
+| V106 | `V106__exchange_rates.sql` | exchange_rates 建表（L3 预演缺陷 #31 续；原 V101 顺延） |
+| V107 | `V107__entity_schema_drift_closure.sql` | 实体 ↔ schema 漂移收口（L3 复验缺陷 #38；原 V102 顺延） |
+| V108 | `V108__auto_withdraw_payout_claim.sql` | 自动提现「出款认领」协议列（批次⑤ P0 加固：扣账/出款调用/规则推进拆分事务） |
 
-### 在途迁移
+### 号段沿革说明
 
-PR #106（分支 `fix/l3-rehearsal-round2-20261014`）在途、尚未合入 master，携带以下四支迁移——由原 V99–V102 **纯重命名**而来（只改文件名中的版本号，SQL 内容不动），故不在上表：
+V104–V107 原为 V99–V102（PR #106 立项号），随 PR #106（分支 `fix/l3-rehearsal-round2-20261014`）**纯重命名**顺延——只改文件名中的版本号，SQL 内容不动——已于 2026-10-17 合并入 master（`2dc3f7f0`）。V108 随后落地（批次⑤ P0 加固）。
 
-| 版本 | 脚本 | 说明 |
-|------|------|------|
-| V104 | `V104__clearing_settlement_records_add_version.sql` | clearing_settlement_records 补乐观锁 version 列（L3 预演缺陷 #26） |
-| V105 | `V105__currency_wallets.sql` | currency_wallets 建表（L3 预演缺陷 #31：实体缺建表脚本） |
-| V106 | `V106__exchange_rates.sql` | exchange_rates 建表（L3 预演缺陷 #31 续） |
-| V107 | `V107__entity_schema_drift_closure.sql` | 实体 ↔ schema 漂移收口（L3 复验缺陷 #38） |
-
-该 PR 合入后 master 最高号将变为 V107；按[迁移版本号分配规则](#迁移版本号分配规则)，下一可用版本号仍为 **V108**。
+master 现最高号为 **V108**；按[迁移版本号分配规则](#迁移版本号分配规则)，下一可用版本号为 **V109+**。
 
 ## v2.27.0 升级指引（历史）
 
@@ -339,6 +337,6 @@ Flyway 不支持自动回滚，手动执行：
 ## 注意事项
 
 - Flyway migration 脚本一经发布不可修改；如需修正，新增更高版本号的脚本。
-- **新增迁移前必读[迁移版本号分配规则](#迁移版本号分配规则)**：取号 = `max(master) + 1`，避开在途 PR 占用号段（当前 V104–V107），任何空洞（V99–V102 及 V67–V70、V72–V80 保留号段）一律不填；PR 正文必须给出取值依据。
+- **新增迁移前必读[迁移版本号分配规则](#迁移版本号分配规则)**：取号 = `max(master) + 1`（当前 master 最高 V108，故从 **V109** 起），避开在途 PR 占用号段，任何空洞（V99–V102 及 V67–V70、V72–V80 保留号段）一律不填；PR 正文必须给出取值依据。
 - 生产环境迁移前务必执行 V12 预检并备份数据。
 - H2（开发 / sandbox）与 PostgreSQL 语法兼容性已在 V12 脚本中验证（UNIQUE 约束 NULL 语义一致）。
