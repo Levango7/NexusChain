@@ -20,6 +20,32 @@
   不在失败时保存 NVD 缓存（lastUpdate 只在成功时推进，半成品无收益且有污染风险）。
 - 机制取证与复验方法见 `docs/dependency-check-update-policy.md`「NVD 取数长尾与重试预算」。
 
+### 持久化区块 outbox（PLAN-019 Phase 6C 第三切片）
+
+**背景**：PLAN-017 第一切片给 `PendingBlocksManager` 加了**内存**重试队列；
+本切片补成持久化，并顺手修掉两个查证源码后发现的既有缺口：
+
+- **F1（写库失败被吞）**：`RDBMSBlockChainImpl.writeBlock` 捕获写库异常后
+  `return false`，`StateDB.writeBlock` 据此**跳过该块**（"will be retried on next
+  confirmation pass"）⇒ 「区块写库失败」既不抛异常也不进任何重试队列。
+- **F2（接收侧丢区块）**：`SyncClient.receiveBlocks` 把 `account store unavailable`
+  当成 "invalid block" 丢弃；校验直接抛异常时异常逃出 `@Async` 方法，整批丢失。
+
+- **持久化 outbox**：新增 `pending_block_outbox` 表（block_hash/height/payload/created_at/
+  attempts/last_error）与 `PendingBlockOutbox` 抽象（JDBC 实现，additive-only 幂等 DDL，
+  未装配时禁用并退化为内存队列）。写链失败或区块无法处理时把写入意图落库，
+  启动后 `restoreFromOutbox()` 捞回补写。
+- **接收侧不再丢区块**：存储故障标记与校验异常都改交 `PendingBlocksManager`
+  （重试 + outbox 捕获），不再等 P2P 同步重拉。
+- **缓存命中 ≠ 已落库**：`stateDB.writeBlock` 先放缓存再写库，故缓存命中时要用
+  `stateDB.hasBlock` 确认**真的**落库了才清 outbox 行，否则保留（不静默丢写入意图）。
+- **观测**：新增 `GET /consensus/block-outbox`。
+- **实测（2026-10-22，同主机双进程 + 容器 PG，非多机 HA）**：账户表不可用 31.5 秒，
+  收到的区块被**持久化捕获**（`databasePending=1`），恢复后 outbox 自动清零、
+  链继续推进到 7726/7726，`pendingBlock` 超时 0、采纳失败 0。
+  诚实边界：「写库失败」不由本 outbox 兜底（见 F1）；PG 整体停机时链停摆，
+  没有新区块可捕获。详见 `docs/plan/PLAN-019-block-outbox.md`。
+
 ### 最终性持久化闭环（PLAN-018 Phase 6C 第二切片）
 
 **背景**：PLAN-016 把「最终性表短时不可用」修到了「不污染内存、不提前对外可见、可重试」，

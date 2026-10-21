@@ -20,7 +20,44 @@ PLAN-017 第一切片给 `PendingBlocksManager` 加了**内存**重试队列：�
   不必等 P2P 同步再拉一遍；
 - 补写成功后清掉对应行。
 
-### 1.1 先说清楚价值边界（别夸大）
+### 1.2 查证源码后修正的认知（重要，别按旧说法理解）
+
+动手前先查了写链路径，发现两个**既有事实**，它们决定了本切片的真实边界：
+
+**F1：写库失败被 `RDBMSBlockChainImpl.writeBlock` 吞掉。**
+
+```java
+// RDBMSBlockChainImpl.writeBlock
+Boolean result = txTmpl.execute((TransactionStatus status) -> {
+    try { writeHeader(block); writeBody(block); }
+    catch (RuntimeException e) {
+        logger.error("RDBMSBlockChainImpl: uncaught exception", e);
+        status.setRollbackOnly();
+        return false;          // ← 异常被吞，返回 false
+    }
+    return true;
+});
+```
+
+而 `StateDB.writeBlock` 拿到 `false` 后**跳过该块**并打印
+「will be retried on next confirmation pass」（A2 审计修复，2026-08-31），
+由 StateDB 自己的确认轮次补写。
+
+⇒ 结论：**"区块写库失败"既不抛异常、也不进任何重试队列**，
+它由 `StateDB` 的确认轮次机制兜住。PLAN-017 第一切片里
+`PendingBlocksManager` 的 `catch (DataAccessException)` 实际只覆盖
+**读**失败（父块查询/校验读），不覆盖写失败。
+
+**F2：接收侧把"存储不可用"当成"区块无效"丢掉。**
+
+`SyncClient.receiveBlocks` 里 `rule.validateBlock(b)` 的结果若是
+`account store unavailable` 标记（PLAN-018 引入），旧逻辑走
+`logger.error("invalid block received")` 后 `continue` —— **区块被静默丢弃**；
+而校验过程直接抛异常时，异常会逃出 `@Async` 方法，同样丢掉。
+两者都只能靠后续 P2P 同步把区块重新拉回来。
+
+⇒ 本切片因此包含两件事：**① 持久化 outbox（把"待补写"这件事持久化）；
+② 接收侧不再丢区块（存储故障时改交 PendingBlocksManager 走重试/outbox 通道）。**
 
 | | 最终性票（PLAN-018） | 区块（本切片） |
 |---|---|---|
@@ -31,6 +68,8 @@ PLAN-017 第一切片给 `PendingBlocksManager` 加了**内存**重试队列：�
 所以本切片的收益**低于** PLAN-018：它防的是「进程崩溃时丢掉已收到但未落库的区块」，
 而这个损失原本可以靠 P2P 同步兜底。它**不**解决「数据库整体不可用期间区块不落库」
 （那时 outbox 表本身也写不进去，仍靠内存队列兜底）。
+
+### 1.1 先说清楚价值边界（别夸大）
 
 ## 二、根因与修复
 
@@ -58,14 +97,25 @@ CREATE TABLE IF NOT EXISTS pending_block_outbox (
 
 ### 2.2 `PendingBlocksManager` 接线
 
-- 写库失败 → 内存队列 **+** 持久化 outbox（`enqueueStorageRetry`）。
+- 写库/校验失败 → 内存队列 **+** 持久化 outbox（`enqueueStorageRetry`）。
 - 写链成功 → 清掉 outbox 行。
 - 启动后（`@Scheduled(initialDelay=20s)`）→ `restoreFromOutbox()` 把待补写区块
   重新投进采纳路径（内部仍走校验 + 写链 + 清理）。
 - 观测：`GET /consensus/block-outbox` 返回 `memoryPending` / `databasePending` /
   `enabled`。
 
-### 2.3 一个必须处理的坑：「缓存命中 ≠ 已落库」
+### 2.3 接收侧不再丢区块（F2 的修复）
+
+`SyncClient.receiveBlocks` 现在区分三种结果：
+
+| 校验结果 | 旧行为 | 新行为 |
+|----------|--------|--------|
+| 通过 | 交 manager | 不变 |
+| `Result.Error`（区块无效） | 丢弃 | 不变 |
+| `account store unavailable` 标记 | **丢弃** | 交 manager → 重试 + outbox 捕获 |
+| 抛异常（读失败等） | **异常逃出 @Async，整批丢弃** | 交 manager → 重试 + outbox 捕获 |
+
+### 2.4 一个必须处理的坑：「缓存命中 ≠ 已落库」
 
 `stateDB.writeBlock(b)` 会**先把区块放进内存缓存、再写库**。写库失败时缓存里已经有了，
 于是重试时 `stateDB.hasBlockInCache(hash)` 为 true → 直接 `continue` 跳过写入 ——
@@ -87,12 +137,57 @@ CREATE TABLE IF NOT EXISTS pending_block_outbox (
 
 ## 四、真实 PG 验收
 
-见 §四（故障注入：撤销 `header` 表的 INSERT 权限 ⇒ 只让**区块写入**失败，
-读路径与其它表正常，链继续跑）。
+环境：同主机双进程 + 容器 PostgreSQL 16（**不是多机高可用**）。
+脚本：`C:\Users\winge\AppData\Local\Temp\opencode\p6c-pg-outage.ps1`（临时目录，不入库），
+证据原始输出：`p6c-s3-account-console.log`。
+
+### 4.1 主验收：账户表不可用（链继续出块，只有账户读路径坏）
+
+故障注入：把 `account` 表**改名**（读账户失败 ⇒ 梅克尔状态校验返回
+`account store unavailable` 标记），链表（`header`/`transaction`）正常 ⇒ 链继续出块。
+
+- 故障时长 **31.5 秒**。
+- **故障期间** `GET /consensus/block-outbox`：
+
+  | 节点 | memoryPending | databasePending |
+  |------|---------------|-----------------|
+  | A | 0 | **1** |
+  | B | 1 | **1** |
+
+  ⇒ 收到的区块**没有再被静默丢弃**（F2 已修），而是被 `PendingBlocksManager` 捕获，
+  并**持久化进 `pending_block_outbox` 表**（每节点 1 行）。
+- **恢复后**：`memoryPending=0`、`databasePending=0` ⇒ outbox 被补写并清空；
+  链继续推进到 7726/7726；`header` 表 7735 行。
+- 其它：`ERROR` 行 A=2/B=0；`pendingBlock` 超时 0；区块采纳失败 0；
+  旧 epoch 的最终性查询全程 `FINALIZED`（2000/2000）。
+
+### 4.2 对照与不可达场景（诚实记录）
+
+| 故障 | 结果 | 说明 |
+|------|------|------|
+| **PG 整体停机** | `memory=0 db=-1`（读不到行数），链停摆 | 库整体不可用 ⇒ 链停止出块（PLAN-017 的 fail-closed）⇒ 没有新区块可捕获；且此时 outbox 表本身也写不进去（`db` 读不到） |
+| **只让 `header` 写入失败**（BEFORE INSERT 触发器） | `memory=0 db=0`，**捕获数为 0** | 写失败被 `RDBMSBlockChainImpl` 吞掉（F1）⇒ `PendingBlocksManager` 根本看不到失败；该场景由 `StateDB` 的确认轮次机制兜住（事后链高度一致、无缺口） |
+
+⇒ 本切片覆盖的是**「区块无法被校验/处理」**（读/账户路径故障），
+**不覆盖**「写库失败」——后者是 `StateDB` 的既有机制（见 §5.1）。
+
+### 4.3 结论
+
+1. 接收侧在存储故障时不再丢区块（F2），改由 `PendingBlocksManager` 接管。
+2. 待补写区块会**持久化**进 `pending_block_outbox`（故障期 `databasePending=1`），
+   恢复后自动补写并清零（`databasePending=0`）。
+3. 全程 `pendingBlock` 超时 0、区块采纳失败 0、最终性查询正常。
+
+未证明（勿外推）：多机/多副本、真实网络分区、主机断电、PG 主备切换、
+outbox 表自身的复制与故障、"写库失败"路径（见 §4.2）。
 
 ## 五、明确边界（勿夸大）
 
-1. **数据库整体不可用时 outbox 表也写不进去** ⇒ 只剩内存队列兜底，进程崩溃仍丢区块。
+1. **写库失败不由本 outbox 兜底**：它被 `RDBMSBlockChainImpl.writeBlock` 吞成
+   `false`，再由 `StateDB` 跳过该块、靠自己的确认轮次补写（F1）。
+   这条既有路径本身值得单独审视（"跳过"意味着**该高度区间在 DB 里短暂缺块**，
+   且 `StateDB` 的补写只在后续确认轮次发生），已登记为 roadmap 新项。
+2. **数据库整体不可用时 outbox 表也写不进去** ⇒ 只剩内存队列兜底，进程崩溃仍丢区块。
 2. 本切片**不**解决「数据库不可用期间区块不落库」的持久性问题（那是数据库自己的问题）。
 3. 区块丢了原本可由 P2P 同步兜底 ⇒ 本切片的净收益是「少一次同步 + 可观测」，
    不是「数据不可恢复」。
@@ -109,3 +204,10 @@ CREATE TABLE IF NOT EXISTS pending_block_outbox (
    都已具备"被测对象"；
 2. **real-L1 / 桥资金链路持久化**；
 3. 性能、灾备与外部安全验证。
+
+### 6.1 本切片派生出的两个新缺口（已登记到 roadmap）
+
+| # | 缺口 | 说明 |
+|---|------|------|
+| **F1** | 「区块写库失败」被吞成 `false`，`StateDB` 跳过该块 | 跳过意味着**该高度区间在 DB 里短暂缺块**，补写依赖后续确认轮次；失败原因只进日志，运维看不到聚合视图 |
+| **F2** | 接收侧把「存储不可用」当「区块无效」丢弃 | 本切片已修（接收侧改交 manager）；但同类判断还在其它路径上（见 roadmap） |
