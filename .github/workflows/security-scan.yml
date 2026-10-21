@@ -517,7 +517,11 @@ jobs:
             timeout -k 60 33m ./gradlew dependencyCheckAggregate -PowaspScan --no-daemon --stacktrace
           else
             echo "PR/push run: 只读缓存库（odc.autoupdate=false），不做在线取数。"
-            timeout -k 60 33m ./gradlew dependencyCheckAggregate -PowaspScan -Dodc.autoupdate=false --no-daemon --stacktrace
+            # 注意：-D 开关必须**加引号**。PowerShell 会把未加引号的 `-Dodc.autoupdate=false`
+            # 按"成员访问"拆成两个参数（`-Dodc` + `.autoupdate=false`）导致 Gradle 报
+            # "Task '.autoupdate=false' not found"；bash 虽不受影响，但加引号两边都安全。
+            # 另外 -D 必须放在**任务名之前**：放在任务名之后会被 Gradle 当成该任务的选项解析。
+            timeout -k 60 33m ./gradlew "-Dodc.autoupdate=false" dependencyCheckAggregate -PowaspScan --no-daemon --stacktrace
           fi
           rc=$?
           set -e
