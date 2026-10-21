@@ -27,8 +27,10 @@ import org.nexus.p2p.entity.GetBlockQuery;
 import org.nexus.p2p.entity.Status;
 import org.nexus.encoding.JSONEncodeDecoder;
 import org.nexus.core.Block;
+import org.nexus.core.ChainHeadProvider;
 import org.nexus.core.TransactionPool;
 import org.nexus.core.NexusChainBlockChain;
+import org.nexus.core.account.AccountStoreHealth;
 import org.nexus.core.account.Transaction;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -57,6 +59,12 @@ public class ConsensusController {
 
     @Autowired
     private NexusChainBlockChain bc;
+
+    @Autowired
+    private ChainHeadProvider chainHeadProvider;
+
+    @Autowired
+    private AccountStoreHealth accountStoreHealth;
 
     @Autowired
     private Block genesis;
@@ -100,7 +108,7 @@ public class ConsensusController {
     @GetMapping(value = "/consensus/status", produces = "application/json")
     public Object getStatus() {
         ConsensuEntity.Status status = new ConsensuEntity.Status();
-        Block best = bc.currentHeader();
+        Block best = chainHeadProvider.currentHeader();
         status.version = best.nVersion;
         status.currentHeight = best.nHeight;
         status.bestBlockHash = best.getHash();
@@ -108,9 +116,17 @@ public class ConsensusController {
         return codec.encode(status);
     }
 
+    /**
+     * 账户库降级观测端点；不依赖数据库，PG 故障期间仍应返回 DEGRADED。
+     */
+    @GetMapping(value = "/consensus/storage-status", produces = "application/json")
+    public Object getStorageStatus() {
+        return codec.encode(accountStoreHealth.snapshot());
+    }
+
     @PostMapping(value = "/consensus/status", produces = "application/json")
     public Object handleStatus(@RequestBody byte[] body, HttpServletRequest request) {
-        Block header = bc.currentHeader();
+        Block header = chainHeadProvider.currentHeader();
         Status status = codec.decode(body, Status.class);
         if (status == null) {
             logger.error("invalid request accepted from " + request.getRemoteAddr());
@@ -123,7 +139,15 @@ public class ConsensusController {
         if (header.nHeight > status.currentHeight) {
             return SUCCESS("received");
         }
-        if (header.nHeight == status.currentHeight && bc.hasBlock(status.bestBlockHash)) {
+        if (header.nHeight == status.currentHeight) {
+            // 同一高度直接确认，避免状态握手路径查询数据库；PG 短时故障时
+            // 这里不能因为 bc.hasBlock(...) 把整个 /consensus/status 打成 500。
+            if (status.bestBlockHash == null
+                    || !Arrays.areEqual(header.getHash(), status.bestBlockHash)) {
+                logger.warn("peer status same height but different best hash: local={} peer={}",
+                        Hex.encodeHexString(header.getHash()),
+                        status.bestBlockHash == null ? "null" : Hex.encodeHexString(status.bestBlockHash));
+            }
             return SUCCESS("received");
         }
 

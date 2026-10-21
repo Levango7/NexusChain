@@ -34,6 +34,7 @@ import org.nexus.protobuf.tcp.command.HatchModel;
 import org.nexus.core.NexusChainBlockChain;
 import org.nexus.core.account.Account;
 import org.nexus.core.account.AccountDB;
+import org.nexus.core.account.AccountStoreUnavailableException;
 import org.nexus.core.account.Transaction;
 import org.nexus.core.incubator.Incubator;
 import org.nexus.core.incubator.IncubatorDB;
@@ -48,6 +49,12 @@ import java.util.*;
 public class MerkleRule implements BlockRule {
 
     private static final Logger logger = LoggerFactory.getLogger(MerkleRule.class);
+
+    /**
+     * 账户库不可用的结果前缀。调用方（尤其是 @Async 的区块采纳路径）据此把
+     * “存储短时故障”与“区块本身校验失败”分开，前者应重试而不是丢弃区块。
+     */
+    public static final String ACCOUNT_STORE_UNAVAILABLE_PREFIX = "account store unavailable";
 
     @Autowired
     AccountDB accountDB;
@@ -83,6 +90,10 @@ public class MerkleRule implements BlockRule {
             List<Account> accountList = (List<Account>) merklemap.get("account");
             List<Incubator> incubatorList = (List<Incubator>) merklemap.get("incubator");
             return verifyStateRoots(block, accountList, incubatorList);
+        } catch (AccountStoreUnavailableException e) {
+            // 不把存储故障降级成普通校验失败；由 PendingBlocksManager 识别并
+            // 进入重试队列，避免同步路径静默丢块。
+            return Result.Error(ACCOUNT_STORE_UNAVAILABLE_PREFIX + ": " + e.getMessage());
         } catch (RuntimeException | java.io.IOException | DecoderException e) {
             return Result.Error("error occurs when validate merle hash");
         }
@@ -118,6 +129,12 @@ public class MerkleRule implements BlockRule {
         Map<String, Account> accmap = new HashMap<>();
         Map<String, Incubator> incumap = new HashMap<>();
         Account totalaccount = accountDB.selectaccount(IncubatorAddress.resultpubhash());
+        if (totalaccount == null) {
+            // 总账户是链上状态的一部分；缺失说明状态未初始化或数据库返回不完整，
+            // 不能继续按零余额构造区块。
+            throw new IllegalStateException("total account is missing: "
+                    + Hex.encodeHexString(IncubatorAddress.resultpubhash()));
+        }
         long totalbalance = totalaccount.getBalance();
         boolean isdisplay = false;
         for (Transaction tran : transactionList) {

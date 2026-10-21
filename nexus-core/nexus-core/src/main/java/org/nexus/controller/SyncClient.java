@@ -55,6 +55,9 @@ public class SyncClient {
     private NexusChainBlockChain bc;
 
     @Autowired
+    private ChainHeadProvider chainHeadProvider;
+
+    @Autowired
     private Block genesis;
 
     @Async
@@ -105,7 +108,7 @@ public class SyncClient {
             return;
         }
         ConsensuEntity.Status status = new ConsensuEntity.Status();
-        Block best = bc.currentHeader();
+        Block best = chainHeadProvider.currentHeader();
         status.version = best.nVersion;
         status.currentHeight = best.nHeight;
         status.bestBlockHash = best.getHash();
@@ -126,7 +129,7 @@ public class SyncClient {
                 logger.error("invalid status received " + new String(resp));
                 return null;
             }
-            Block header = bc.currentHeader();
+            Block header = chainHeadProvider.currentHeader();
             if (status.currentHeight <= header.nHeight) {
                 return null;
             }

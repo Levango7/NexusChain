@@ -18,18 +18,24 @@
 
 package org.nexus.core;
 
+import org.nexus.core.account.AccountStoreUnavailableException;
 import org.nexus.core.validate.CompositeBlockRule;
 import org.nexus.core.validate.MerkleRule;
 import org.nexus.core.validate.Result;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataAccessException;
 import org.springframework.scheduling.annotation.Async;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.nexus.db.StateDB;
 import org.nexus.merkletree.MerkleTreeManager;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Component
 public class PendingBlocksManager {
@@ -55,6 +61,12 @@ public class PendingBlocksManager {
     @Autowired
     private MerkleTreeManager merkleTreeManager;
 
+    /**
+     * 存储故障期间暂存的待采纳区块。只在内存中，进程重启后由 P2P 同步重新拉取；
+     * 这是 PLAN-017 的“短时故障不丢采纳进度”兜底，不宣称持久化 outbox。
+     */
+    private final Map<String, Block> storageRetryBlocks = new ConcurrentHashMap<>();
+
     // 区块的写入全部走这里
     @Async
     public void addPendingBlocks(BlocksCache cache) {
@@ -63,61 +75,121 @@ public class PendingBlocksManager {
             if (chain == null || chain.size() == 0){
                 break;
             }
-            if (chainHasWritten(chain)) {
-                continue;
-            }
-            logger.info("try to write blocks to local storage, size = " + chain.size());
-            Block lastConfirmed = stateDB.getLastConfirmed();
-            for (Block b : chain) {
-                if (b.nHeight <= lastConfirmed.nHeight || stateDB.hasBlockInCache(b.getHash())) {
-                    logger.info("the block has written");
-                    continue;
+            try {
+                if (!processChain(chain)) {
+                    break;
                 }
-                Result res = rule.validateBlock(b);
-                if (!res.isSuccess()) {
-                    // PLAN-003：父块缺失 → 可能是更长分叉链，交 ReorgManager 处理
-                    if (res.getMessage() != null
-                            && (res.getMessage().contains("failed to find parent")
-                                || res.getMessage().contains("cannot find parent"))
-                            && reorgManager != null) {
-                        boolean switched = reorgManager.handlePotentialFork(b);
-                        if (switched) {
-                            logger.info("PendingBlocks: fork switch executed for block height={}", b.nHeight);
-                            continue;
-                        }
-                    }
-                    if (res.getMessage() != null
-                            && res.getMessage().startsWith("unknown proposer")) {
-                        logger.info("PendingBlocks: {}; block will be retried after validator-set sync (height={})",
-                                res.getMessage(), b.nHeight);
-                        return;
-                    }
-                    logger.error("validate the block fail error = " + res.getMessage());
-                    return;
-                }
-                Result result = merkleRule.validateBlock(b);
-                if (!result.isSuccess()) {
-                    // PLAN-012 A-2（信任签名+重放后校验，审核决策）：
-                    // 同步路径 merkle 状态校验失败不阻塞写链——明确日志后
-                    // 继续完整写链（stateDB.writeBlock），B 的 best 更新、
-                    // 高度认知恢复；状态一致性由 MerkleHandler 对账协议
-                    // （GET_TREE_NODES/TREE_NODES）异步对账。
-                    logger.warn("merkle state validate deferred (sync path, A-2): height={}, reason={} "
-                            + "→ full chain write, MerkleHandler will reconcile",
-                            b.nHeight, result.getMessage());
-                    b.weight = 1;
-                    stateDB.writeBlock(b);
-                    // 对账触发点（补）：写链后调用 writeBlockToCache 发布
-                    // MerkleMessageEvent → MerkleHandler.getRootTreeNodes →
-                    // GET_TREE_NODES 对账（此前该分支 continue 跳过了触发，
-                    // 导致状态树从未同步、hashMerkleState 全零）
-                    merkleTreeManager.writeBlockToCache(b);
-                    continue;
-                }
-                b.weight = 1;
-                stateDB.writeBlock(b);
+            } catch (DataAccessException | AccountStoreUnavailableException e) {
+                // 不能在 @Async 方法里把存储异常抛给默认异常处理器：
+                // 那样链已经从 BlocksCache 弹出，且调用方拿不到任何重试信号。
+                enqueueStorageRetry(chain, e);
+                return;
             }
         }
+    }
+
+    private boolean processChain(List<Block> chain) {
+        if (chainHasWritten(chain)) {
+            return true;
+        }
+        logger.info("try to write blocks to local storage, size = " + chain.size());
+        Block lastConfirmed = stateDB.getLastConfirmed();
+        for (Block b : chain) {
+            if (b.nHeight <= lastConfirmed.nHeight || stateDB.hasBlockInCache(b.getHash())) {
+                logger.info("the block has written");
+                continue;
+            }
+            Result res = rule.validateBlock(b);
+            if (!res.isSuccess()) {
+                if (isAccountStoreUnavailable(res)) {
+                    throw new AccountStoreUnavailableException(res.getMessage());
+                }
+                // PLAN-003：父块缺失 → 可能是更长分叉链，交 ReorgManager 处理
+                if (res.getMessage() != null
+                        && (res.getMessage().contains("failed to find parent")
+                            || res.getMessage().contains("cannot find parent"))
+                        && reorgManager != null) {
+                    boolean switched = reorgManager.handlePotentialFork(b);
+                    if (switched) {
+                        logger.info("PendingBlocks: fork switch executed for block height={}", b.nHeight);
+                        continue;
+                    }
+                }
+                if (res.getMessage() != null
+                        && res.getMessage().startsWith("unknown proposer")) {
+                    logger.info("PendingBlocks: {}; block will be retried after validator-set sync (height={})",
+                            res.getMessage(), b.nHeight);
+                    return false;
+                }
+                logger.error("validate the block fail error = " + res.getMessage());
+                return false;
+            }
+            Result result = merkleRule.validateBlock(b);
+            if (!result.isSuccess()) {
+                if (isAccountStoreUnavailable(result)) {
+                    throw new AccountStoreUnavailableException(result.getMessage());
+                }
+                // PLAN-012 A-2（信任签名+重放后校验，审核决策）：
+                // 同步路径 merkle 状态校验失败不阻塞写链——明确日志后
+                // 继续完整写链（stateDB.writeBlock），B 的 best 更新、
+                // 高度认知恢复；状态一致性由 MerkleHandler 对账协议
+                // （GET_TREE_NODES/TREE_NODES）异步对账。
+                logger.warn("merkle state validate deferred (sync path, A-2): height={}, reason={} "
+                        + "→ full chain write, MerkleHandler will reconcile",
+                        b.nHeight, result.getMessage());
+                b.weight = 1;
+                stateDB.writeBlock(b);
+                // 对账触发点（补）：写链后调用 writeBlockToCache 发布
+                // MerkleMessageEvent → MerkleHandler.getRootTreeNodes →
+                // GET_TREE_NODES 对账（此前该分支 continue 跳过了触发，
+                // 导致状态树从未同步、hashMerkleState 全零）
+                merkleTreeManager.writeBlockToCache(b);
+                continue;
+            }
+            b.weight = 1;
+            stateDB.writeBlock(b);
+        }
+        return true;
+    }
+
+    private static boolean isAccountStoreUnavailable(Result result) {
+        return result.getMessage() != null
+                && result.getMessage().startsWith(MerkleRule.ACCOUNT_STORE_UNAVAILABLE_PREFIX);
+    }
+
+    private void enqueueStorageRetry(List<Block> chain, RuntimeException error) {
+        for (Block b : chain) {
+            if (b != null) {
+                storageRetryBlocks.put(b.getHashHexString(), b);
+            }
+        }
+        logger.warn("PendingBlocks paused at heights {}-{}: storage unavailable: {}; "
+                        + "queued {} block(s) for retry",
+                chain.get(0).nHeight, chain.get(chain.size() - 1).nHeight,
+                error.getMessage(), chain.size());
+    }
+
+    /**
+     * PG 短时恢复后重试待采纳链。方法内直接调用 {@link #addPendingBlocks}，
+     * 不经过 Spring 代理，因此重试在调度线程同步执行，避免 @Async 自调用失效。
+     */
+    @Scheduled(fixedDelay = 5_000L)
+    public void retryStorageFailures() {
+        if (storageRetryBlocks.isEmpty()) {
+            return;
+        }
+        List<Block> retry = new ArrayList<>();
+        for (String key : new ArrayList<>(storageRetryBlocks.keySet())) {
+            Block b = storageRetryBlocks.remove(key);
+            if (b != null) {
+                retry.add(b);
+            }
+        }
+        if (retry.isEmpty()) {
+            return;
+        }
+        logger.info("PendingBlocks retrying {} queued block(s) after storage failure", retry.size());
+        addPendingBlocks(new BlocksCache(retry));
     }
 
     private boolean chainHasWritten(List<Block> chain) {
