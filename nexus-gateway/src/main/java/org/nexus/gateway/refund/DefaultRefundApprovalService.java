@@ -227,8 +227,16 @@ public class DefaultRefundApprovalService implements RefundApprovalService {
         String txHash;
         try {
             txHash = executeOnChain(claimed);
+        } catch (RefundSubmitOutcomeUnknownException e) {
+            // 已提交、结果未知（如已广播未确认）：保持 EXECUTING。
+            // 不得落 FAILED（假阴性，且 FAILED 是终态无出路）；不得自动重试出款（二次打款）。
+            // 由 RefundExecutionReconciler 扫描 EXECUTING 超时后告警，人工核对链上事实。
+            audit("REFUND_SUBMIT_OUTCOME_UNKNOWN", claimed, e.getMessage());
+            log.error("CRITICAL: refund submitted but outcome unknown; refund stays EXECUTING "
+                    + "for manual verification: refundId={}, {}", refundId, e.getMessage());
+            throw e;
         } catch (RuntimeException e) {
-            // 出款确定未发生（通道失败/参数校验失败）：独立事务落 FAILED
+            // 出款确定未发生（参数校验失败 / 通道返回确定性失败结果）：独立事务落 FAILED
             markFailedAndAudit(refundId, claimed, e);
             return refundRequestRepository.findById(refundId).orElse(claimed);
         }
@@ -361,6 +369,16 @@ public class DefaultRefundApprovalService implements RefundApprovalService {
                 "refund:" + request.getRefundNo(),
                 "refund:" + request.getId());
         TransactionResult result = executionChannel.execute(txReq);
+        // P0 修复（2026-10-21）：已广播但未达确认数 ⇒ 链上结果未知，绝不能当"确定失败"。
+        // TransactionResult.isSuccess() 只认 SUCCESS；PENDING_CONFIRMATION 会被下面的
+        // !isSuccess() 误判为失败，而交易其实已上链 ⇒ 落 FAILED 会造成账实不符且无路径纠正。
+        // 必须走"结果未知"分支：保持 EXECUTING 交由 RefundExecutionReconciler 告警人工核对。
+        if (result != null
+                && result.getStatus() == TransactionResult.Status.PENDING_CONFIRMATION
+                && result.getTxHash() != null) {
+            throw new RefundSubmitOutcomeUnknownException(
+                    "refund broadcast but not yet confirmed: txHash=" + result.getTxHash());
+        }
         if (result == null || !result.isSuccess() || result.getTxHash() == null) {
             String err = result != null ? result.getError() : "execution channel returned null";
             throw new IllegalStateException("on-chain refund execution failed: " + err);
