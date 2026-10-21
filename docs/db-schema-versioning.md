@@ -11,7 +11,7 @@
 | store | 组件 | 表 / 键 | 当前版本 |
 |---|---|---|---|
 | `payment_state` | `JdbcPaymentStateStore` | `payment_channels` / `stablecoin_positions` / `bridge_transactions` / `bridge_replay_keys` | 1 |
-| `finality_state` | `JdbcFinalityStateStore` | `finality_votes` / `finality_checkpoints` | 1 |
+| `finality_state` | `JdbcFinalityStateStore` | `finality_votes`（PLAN-018 起含 `signature`/`public_key` 两列）/ `finality_checkpoints` / `finality_vote_outbox`（PLAN-018 新增） | 1 |
 | `validator_set` | `ValidatorSetPersistence` | `validators_synced` | 1 |
 | `l2_fraud_state` | `JdbcFraudProofStateStore` | `l2_fraud_batches` / `l2_fraud_bonds` / `l2_fraud_conflicts` | 1 |
 | （LevelDB） | `org.nexus.db.Leveldb` | meta 键 `__meta/schema_version` | 1 |
@@ -50,6 +50,16 @@ CREATE TABLE IF NOT EXISTS nexus_schema_meta (
    - 迁移脚本**由运维在升级窗口手动执行**（应用启动不做自动 DDL 迁移）；
    - CHANGELOG 记录。
 3. 应用启动只做**版本校验**，不做"自动升级"——避免多实例启动竞态下 DDL 交错执行。
+
+> **PLAN-018 的 additive-only 变更说明**：`finality_votes` 增列 `signature`/`public_key`、
+> 新增 `finality_vote_outbox` 表，均属 §三.1 的 additive-only ⇒ **版本号保持 1**、
+> 不需要 `migrations/pg/` 脚本，幂等 DDL 在 `JdbcFinalityStateStore.init()` 里执行。
+> 注意这与 §三.3「启动只做版本校验」并不矛盾：仓库既有做法本就是启动时执行
+> `CREATE TABLE IF NOT EXISTS`（见 `ValidatorSetPersistence`），additive-only 的幂等 DDL
+> 沿用同一路径；**破坏性变更仍然必须走脚本 + 升版本**。
+> 幂等性由 `JdbcFinalityStateStoreTest.initIsIdempotentOnLegacySchema` 锁定
+> （老库没有 `signature` 列时，`init()` 必须把它补齐，否则新代码写签名直接
+> `BadSqlGrammarException`）。
 
 ## 四、运行手册（版本不匹配时）
 

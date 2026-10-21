@@ -5,9 +5,12 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
 
+import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -80,5 +83,81 @@ class JdbcFinalityStateStoreTest {
 
         assertTrue(restarted.isFinalized(7, hash));
         assertEquals(Set.of("validator-a", "validator-b"), restarted.loadVoters(7, hash));
+    }
+
+    @Test
+    void voteSignatureIsPersistedAndReloaded() {
+        // PLAN-018：签名与公钥必须随投票落库，否则重启后恢复不出 Vote 对象，
+        // 聚合验签无票可验（检查点永远补不了最终化）。
+        byte[] hash = new byte[]{4, 5, 6};
+        byte[] signature = new byte[64];
+        byte[] publicKey = new byte[32];
+        for (int i = 0; i < signature.length; i++) {
+            signature[i] = (byte) (i + 1);
+        }
+        for (int i = 0; i < publicKey.length; i++) {
+            publicKey[i] = (byte) (i + 3);
+        }
+        store.recordVote(3, hash, "validator-sig", signature, publicKey);
+
+        JdbcFinalityStateStore restarted = new JdbcFinalityStateStore(jdbc);
+        restarted.init();
+
+        Map<String, List<org.nexus.consensus.finality.Vote>> restored = restarted.loadAllVoteObjects();
+        assertEquals(1, restored.size(), "重启后必须能恢复出带签名的 Vote 对象");
+        List<org.nexus.consensus.finality.Vote> votes = restored.values().iterator().next();
+        assertEquals(1, votes.size());
+        org.nexus.consensus.finality.Vote vote = votes.get(0);
+        assertEquals("validator-sig", vote.getValidatorAddress());
+        assertArrayEquals(signature, vote.getSignature());
+        assertArrayEquals(publicKey, vote.getPublicKeyBytes());
+    }
+
+    @Test
+    void outboxRoundTripsAndSurvivesRestart() {
+        // PLAN-018：写库意图必须能跨进程存活。
+        byte[] hash = new byte[]{7, 7, 7};
+        byte[] signature = new byte[64];
+        FinalityOutboxEntry entry = new FinalityOutboxEntry(4, hash, "validator-outbox",
+                signature, new byte[32], FinalityVoteOrigin.RECEIVED, 1234L, 0, "boom");
+        store.enqueuePendingVote(entry);
+
+        JdbcFinalityStateStore restarted = new JdbcFinalityStateStore(jdbc);
+        restarted.init();
+        List<FinalityOutboxEntry> rows = restarted.loadPendingVotes(10);
+        assertEquals(1, rows.size(), "重启后必须能捞回 outbox 行");
+        FinalityOutboxEntry row = rows.get(0);
+        assertEquals(4, row.getEpoch());
+        assertEquals("validator-outbox", row.getValidatorAddress());
+        assertEquals(FinalityVoteOrigin.RECEIVED, row.getOrigin());
+        assertArrayEquals(signature, row.getSignature());
+
+        restarted.markPendingVoteFailure(row, "still failing");
+        List<FinalityOutboxEntry> afterFailure = restarted.loadPendingVotes(10);
+        assertEquals(1, afterFailure.size());
+        assertEquals(1, afterFailure.get(0).getAttempts());
+        assertEquals("still failing", afterFailure.get(0).getLastError());
+
+        restarted.removePendingVote(row);
+        assertEquals(0, restarted.loadPendingVotes(10).size(), "补写成功后必须能清掉 outbox 行");
+    }
+
+    @Test
+    void initIsIdempotentOnLegacySchema() {
+        // 模拟"老库"：finality_votes 已存在但没有 signature/public_key 列。
+        // init() 里的 ALTER TABLE ... ADD COLUMN IF NOT EXISTS 必须把它补齐，
+        // 否则新代码写签名会直接 BadSqlGrammarException。
+        jdbc.execute("DROP TABLE finality_votes");
+        jdbc.execute("CREATE TABLE finality_votes (epoch BIGINT NOT NULL, "
+                + "checkpoint_hash VARCHAR(128) NOT NULL, validator VARCHAR(128) NOT NULL, "
+                + "PRIMARY KEY (epoch, checkpoint_hash, validator))");
+
+        JdbcFinalityStateStore upgraded = new JdbcFinalityStateStore(jdbc);
+        upgraded.init();
+
+        byte[] hash = new byte[]{1, 1, 1};
+        upgraded.recordVote(2, hash, "validator-legacy", new byte[64], new byte[32]);
+        assertEquals(Set.of("validator-legacy"), upgraded.loadVoters(2, hash));
+        assertEquals(1, upgraded.loadAllVoteObjects().size());
     }
 }

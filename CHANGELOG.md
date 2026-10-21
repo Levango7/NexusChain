@@ -14,11 +14,36 @@
 - **改动**：`nvd { maxRetryCount = 3 }`（引擎键 `nvd.api.max.retry.count`），
   并在根 `gradle.properties` 以 `systemProp.nvd.api.max.retry.count=3` 直达引擎进程，
   两条通路同值互为兜底。
-- **效果**：取数链路坏时几分钟内以真实错误收场（可见、可归因），成功路径不受影响
-  （PR #170 实测 9 分钟、2026-10-22 master 重跑 10 分 41 秒均一次过）。
+- **效果（实测更正）**：单条请求的**重试深度**被压到 3（失败日志重试序号最大 4 = 初始 1 + 3 次重试，不再出现 `10th time`）；但总耗时由「多条独立请求 × 3 次重试 × 1~2 分钟」主导，33 分钟预算依然不够，**真实 API 错误仍看不到**（引擎该失败分支不打 URL/状态码/异常栈）⇒ 本项定性为**减压阀**。**真正解除"required check 被外部服务阻塞"的是同 PR 的第 2 部分：PR/push 路径改用只读 NVD 缓存库**（实测 OWASP job 由 8.8~36.3 分钟降到 **51 秒**，0 次在线取数，覆盖度 239/249）
+  成功路径不受影响（PR #170 实测 9 分钟、2026-10-22 master 重跑 10 分 41 秒均一次过）。
 - **不做**：不改 `failBuildOnCVSS`、不关 `autoUpdate`（不牺牲漏洞数据新鲜度）、
   不在失败时保存 NVD 缓存（lastUpdate 只在成功时推进，半成品无收益且有污染风险）。
 - 机制取证与复验方法见 `docs/dependency-check-update-policy.md`「NVD 取数长尾与重试预算」。
+
+### 最终性持久化闭环（PLAN-018 Phase 6C 第二切片）
+
+**背景**：PLAN-016 把「最终性表短时不可用」修到了「不污染内存、不提前对外可见、可重试」，
+但重试闭环本身还有三个洞：① `finality_votes` 只存地址不存签名 ⇒ 重启后恢复不出 Vote 对象，
+聚合验签无票可验，检查点**永远无法在重启后补最终化**；② 写库失败的重试队列纯内存，崩溃即丢；
+③ 接收侧写库失败只打一条 WARN，票直接蒸发（而发送方**并不会**重发）。
+
+- **签名随票落库**：`finality_votes` 增列 `signature`/`public_key`（additive-only，幂等 DDL，
+  老库经 `init()` 自动补列）；`FinalityGadget` 重启后恢复完整 Vote 对象，并新增
+  「启动恢复 + 定时」的**补最终化扫描** ⇒ 重启后不需要新票即可补最终化。
+- **持久化 outbox**：新增 `finality_vote_outbox` 表与重试中枢 `FinalityOutboxManager`
+  （内存队列 + 落库意图双层，跨进程重启存活；定时 5 秒补写 + 出块事件即时触发）。
+- **接收侧独立重试**：`FinalityVoteBroadcaster.onVoteReceived` 写库失败不再丢票，
+  由接收方自己排队补写；本地票补写成功后补发一次 P2P 广播（那张票此前从未广播出去）。
+- **队列语义修正**：去掉队首阻塞；把补写提到「非活跃验证人」早退之前；
+  本地票与远端票分队列计数；新增 `GET /consensus/finality-outbox` 观测端点。
+- **边界**：数据库整体不可用时只剩内存队列兜底（进程崩溃仍丢票）；多副本最终性缓存一致性
+  未解决；迁移前老数据没有签名。
+- **实测（2026-10-22，同主机双进程 + 容器 PG，非多机 HA）**：最终性表改名不可用 25.4 秒，
+  故障期 `/consensus/finality-outbox` 报 `DEGRADED`（每节点 11 张票在内存队列、**22 行
+  持久化 outbox 落库**），恢复后队列与 outbox 表自动清零；库内 `finality_votes` 172 行
+  **全部带签名与公钥**，最终性检查点 86 个（epoch 1060..1145）**缺口 0**。
+  另：PG 整体停机时链停止出块 ⇒ 不产生新票，outbox 无事可做（由 PLAN-017 的 fail-closed 处理）。
+  详见 `docs/plan/PLAN-018-finality-persistence.md`。
 
 ### PG/AccountDB 短时不可用降级（PLAN-017 Phase 6C 第一切片）
 

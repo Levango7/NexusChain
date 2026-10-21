@@ -35,6 +35,6 @@ public class WebSecurityConfig implements WebMvcConfigurer {
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
         registry.addInterceptor(rpcInterceptor).addPathPatterns("/NexusChainCore/*");
-        registry.addInterceptor(localRpcInterceptor).addPathPatterns("/**").excludePathPatterns("/consensus/blocks","/consensus/status","/consensus/status","/consensus/blocks","/consensus/storage-status","/NexusChainCore/*");
+        registry.addInterceptor(localRpcInterceptor).addPathPatterns("/**").excludePathPatterns("/consensus/blocks","/consensus/status","/consensus/status","/consensus/blocks","/consensus/storage-status","/consensus/finality-outbox","/NexusChainCore/*");
     }
 }
