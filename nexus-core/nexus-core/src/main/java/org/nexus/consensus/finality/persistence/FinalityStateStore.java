@@ -97,6 +97,31 @@ public interface FinalityStateStore {
     }
 
     /**
+     * 加载指定 epoch（含）之后的**带签名**投票（PLAN-021：跨节点视图收敛）。
+     *
+     * <p>用途：节点的最终性视图原本只是**启动快照** —— 启动之后对端投的票
+     * 本节点看不到，于是"权重按别人算、验签只验自己"（3 节点验收实测：
+     * 掉线节点重启后只看到自己 1000/3000，永远无法本地补最终化）。
+     * 有了这个方法，节点可以周期性地把**对端已落库**的票拉进自己的内存视图，
+     * 使权重口径与聚合验签覆盖度都对齐。</p>
+     *
+     * <p>key = epoch|checkpointHex，value = 该检查点的完整 Vote 列表。
+     * 默认返回空表（不支持收敛）。</p>
+     */
+    default Map<String, List<Vote>> loadVoteObjectsSince(long fromEpoch) {
+        return java.util.Collections.emptyMap();
+    }
+
+    /**
+     * 加载指定 epoch（含）之后已最终化的检查点 key（epoch|checkpointHex）。
+     *
+     * <p>PLAN-021：用于让节点的"已终局"视图跟随其它节点收敛。默认返回空集合。</p>
+     */
+    default Set<String> loadFinalizedKeysSince(long fromEpoch) {
+        return java.util.Collections.emptySet();
+    }
+
+    /**
      * 标记检查点最终化（幂等）。
      */
     void markFinalized(long epoch, byte[] checkpointHash);
