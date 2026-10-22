@@ -128,4 +128,9 @@ jdbc.query("SELECT address, public_key, stake_amount FROM validators_synced", rs
 2. **real-L1 / 桥资金链路持久化**；
 3. 性能、灾备与外部安全验证；
 4. 顺带按类排查 `RowCallbackHandler` + 内层 `rs.next()` 这一反模式在别处的残留
-   （本次在 `validators_synced` 重放与 `finality_votes` 重载两处各命中一次）。
+   —— **已全仓排查完成**（所有模块 `src/main/java`）：除本次修掉的
+   `ValidatorSetPersistence.replay()` 与早已修好的 `JdbcFinalityStateStore.reload()` 外，
+   只剩 `NonceAllocator.java` 的 `rs.next()`，那是 **ResultSetExtractor** 形式
+   （提取器只被调用一次、需自行 `next()`）⇒ **正确用法**，无需改。
+   结论：nexus-core 的最终性/验证人集持久化层此前**从未被真正测过"多行"路径** ——
+   本次补的 `ValidatorSetPersistenceReplayTest`（5 行全量重放）就是这条路径的回归护栏。
