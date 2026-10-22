@@ -134,8 +134,12 @@ ext {
     blstVersion = '0.3.11'
     // 2026-10-01（SCA 整改）：4.1.115.Final → 4.1.137.Final，理由与 CVE 清单见根
     // build.gradle 的同名变量注释（7 个 CRITICAL，修复线 4.1.133/135/137.Final）。
+    // 2026-10-22（PLAN-023）：CVE-2026-89044（Transfer-Encoding 请求走私，CVSS 6.5）
+    // 受影响区间覆盖 4.1.133~4.1.137（修复线 4.1.138+）⇒ 抬到 **4.1.139.Final**
+    // （修复线内最高补丁版，同 minor 不跨线；4.2 线由根 build.gradle 的
+    // resolutionStrategy 抬到 4.2.19.Final）。
     // 注意：**每个模块各自消费**该变量（根 ext 不强制注入子项目），两处必须同步。
-    nettyVersion = '4.1.137.Final'
+    nettyVersion = '4.1.139.Final'
     grpcVersion = '1.75.0'
     protobufVersion = '3.25.5'
     // jacksonVersion managed by Spring Boot BOM

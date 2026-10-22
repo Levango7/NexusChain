@@ -4,6 +4,28 @@
 
 ## [Unreleased]
 
+### 依赖升版清偿 SCA 命中（PLAN-023，2026-10-22）
+
+**背景**：PLAN-022 登记的 roadmap #31 —— OWASP 每次扫描稳定报出 52 个漏洞命中（实为 **2 个漏洞种类**），
+因未达门禁线 `failBuildOnCVSS=9.0` 而一直判绿。
+
+- **CVE-2026-89044**（netty Transfer-Encoding 头未正确校验最终 transfer coding ⇒ **请求走私**，
+  CVSS 6.5，CWE-444）：报告原文受影响区间 **4.1.133~4.1.137** 与 **4.2.13~4.2.17**（修复线 4.1.138+ / 4.2.18+）。
+  处置：4.1 线 **4.1.137.Final → 4.1.139.Final**（修复线内最高补丁版，同 minor 不跨线）；
+  4.2 线（Boot BOM 4.0.8 的 `netty.version=4.2.17.Final`）**→ 4.2.19.Final**
+  （用仓库既有的 BOM 属性覆盖机制 `ext['netty.version']`）。
+- **CVE-2023-0833**（okhttp 异常信息回显非法头值 ⇒ 信息泄露，CVSS 5.5，CWE-209）：
+  命中 `com.squareup.okhttp3:logging-interceptor:4.9.0`，来源 `org.web3j:core:4.11.0`。
+  处置：**4.9.0 → 4.12.0**（与本仓已用的 okhttp 4.12.0 对齐，4.9.2 即修复线），
+  解析层定点抬版，不动 web3j 本身。
+- **基线同步**：`config/dependency-check-baseline.json` 的 `accepted` 清零，两条 CVE 移入
+  `history` 留痕（含修复版本与关闭日期）⇒ 之后的周刷新若再出现这两个 CVE，会被
+  基线比对判红（即"升版没生效"会被立刻发现）。
+- **解析验证**（dependencyInsight）：nexus-core `netty-all=4.1.139.Final`、
+  `netty-common=4.2.19.Final`、`logging-interceptor=4.12.0`；nexus-gateway `netty-common=4.2.19.Final`；
+  nexus-bridge `logging-interceptor=4.12.0`；nexus-signing-service `netty-all=4.2.19.Final`。
+- **全量 check 通过**（含 `spotbugsAll` 全模块 0 finding）。
+
 ### SCA 基线比对：让新增漏洞必须有人签字（PLAN-022 Phase 6C 第六切片）
 
 **背景**：#177 把 PR/push 路径的 SCA 扫描改成「只读 NVD 缓存库」后，门禁耗时降到 46~66 秒且不再被 NVD 拥塞卡死；代价是 **PR 扫描看不到新披露的漏洞**（判定只覆盖缓存库里已知的那批）。

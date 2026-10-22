@@ -1,8 +1,8 @@
 {
   "updatedAt": "2026-10-22",
   "source": "dependency-check-report.json @ master 18856208（PR #178 合并后流水线 39731888746）",
-  "note": "已受理的漏洞基线：扫描报告里出现、但经评估可接受（低于门禁线 failBuildOnCVSS=9.0）的漏洞。新披露的漏洞不在此列时，scripts/security/dependency-check-baseline-diff.py 会判红，要求升版依赖或显式更新本文件（写明理由与复核日期）。",
-  "accepted": [
+  "note": "已受理漏洞基线：扫描报告里出现、但经评估可接受（低于门禁线 failBuildOnCVSS=9.0）的漏洞。新披露的漏洞不在此列时，scripts/security/dependency-check-baseline-diff.py 会判红，要求升版依赖或显式更新本文件（写明理由与复核日期）。",
+  "history": [
     {
       "id": "CVE-2026-89044",
       "cvss": 6.5,
@@ -11,7 +11,8 @@
         "netty-all-4.1.137.Final.jar",
         "netty-all-4.2.17.Final.jar"
       ],
-      "reason": "低于门禁线 9.0；netty 升版时一并移除该条目"
+      "resolution": "已升版（PLAN-023）：netty 4.1 线 4.1.137 → 4.1.139.Final，4.2 线 4.2.17 → 4.2.19.Final（CVE 修复线 4.1.138+ / 4.2.18+）",
+      "closedAt": "2026-10-22"
     },
     {
       "id": "CVE-2023-0833",
@@ -20,7 +21,9 @@
       "packages": [
         "logging-interceptor-4.9.0.jar"
       ],
-      "reason": "低于门禁线 9.0；okhttp 升版时一并移除该条目"
+      "resolution": "已升版（PLAN-023）：com.squareup.okhttp3:logging-interceptor 4.9.0 → 4.12.0（与本仓已用的 okhttp 4.12.0 对齐；来源 org.web3j:core:4.11.0）",
+      "closedAt": "2026-10-22"
     }
-  ]
+  ],
+  "accepted": []
 }

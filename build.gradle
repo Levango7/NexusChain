@@ -260,7 +260,11 @@ subprojects {
         // 均按 4.1 API 写），且 4.1.138.Final 与 4.2.x 未被 NVD 判定为必要 —— 用 CVE 声明的
         // 修复版本，让"为什么是这个版本"可被直接追溯。
         // 取证：run 36803239132 报告 netty-all-4.1.115.Final（见审计 §13.4）。
-        nettyVersion = '4.1.137.Final'
+        // 2026-10-22（PLAN-023）：CVE-2026-89044（Transfer-Encoding 请求走私，CVSS 6.5）
+        // 的受影响区间覆盖 4.1.133~4.1.137（修复线 4.1.138+）⇒ 本线再抬一格到
+        // **4.1.139.Final**（修复线内最高补丁版，同 minor 不跨线；4.2 线由下方
+        // resolutionStrategy 抬到 4.2.19.Final）。
+        nettyVersion = '4.1.139.Final'
         grpcVersion = '1.75.0'
         protobufVersion = '3.25.5'
         // CVE-2026-68497 在 Jackson 2 线上有两段受影响范围：>= 2.14.0, < 2.18.10 与
@@ -309,6 +313,18 @@ subprojects {
     ext['jackson-2-bom.version'] = '2.21.7'
     ext['jackson-bom.version'] = '3.1.7'
 
+    // 2026-10-22（PLAN-023）：CVE-2026-89044（netty Transfer-Encoding 请求走私，
+    // CVSS 6.5，CWE-444）—— Boot BOM 4.0.8 管理 netty.version=4.2.17.Final
+    // （spring-boot-dependencies-4.0.8.pom 的 netty.version 属性），而该版本的
+    // 4.2 线**在受影响区间内**（报告原文：4.2.13.Final ~ 4.2.17.Final，修复线 4.2.18+）
+    // ⇒ 用 Boot BOM 属性覆盖机制（同 jackson/tomcat 先例）抬到 **4.2.19.Final**
+    // （修复线内最高补丁版，同 minor 不跨线）。
+    // 4.1 线（netty-all）由上面的 nettyVersion 显式声明抬到 4.1.139.Final。
+    // 取证：master 18856208 的 OWASP 报告（run 39731888746）—— netty-all-4.1.137.Final
+    // + 51 个 netty-*-4.2.17.Final 构件命中；Maven Central 4.1 线最高 4.1.139.Final、
+    // 4.2 线最高 4.2.19.Final（netty-bom maven-metadata.xml，2026-10-06 更新）。
+    ext['netty.version'] = '4.2.19.Final'
+
     // CVE-2026-106451（HIGH：lz4-java 临时文件处理不当导致任意代码执行）命中
     // at.yawk.lz4:lz4-java 1.10.1 —— **kafka-clients 的传递依赖，不由 Spring Boot
     // BOM 管理**，故 ext['…'] 属性覆盖（jackson 那套）对它无效；用解析层 useVersion
@@ -326,6 +342,31 @@ subprojects {
             if (details.requested.group == 'at.yawk.lz4'
                     && details.requested.name == 'lz4-java') {
                 details.useVersion '1.11.4'
+            }
+            // 2026-10-22（PLAN-023）：CVE-2026-89044（netty Transfer-Encoding 头
+            // 未正确校验最终 transfer coding ⇒ 请求走私，CVSS 6.5，CWE-444）命中
+            // io.netty:* —— 报告原文：受影响 **4.1.133.Final ~ 4.1.137.Final** 与
+            // **4.2.13.Final ~ 4.2.17.Final**，即修复线为 4.1.138+ / 4.2.18+。
+            // 取证：master 18856208 的 OWASP 报告（run 39731888746）列出
+            // netty-all-4.1.137.Final 与 51 个 netty-*-4.2.17.Final 构件命中。
+            // 版本选择：4.1 线取修复线内**最高补丁版 4.1.139.Final**（同 minor，不跨线），
+            // 4.2 线取 **4.2.19.Final**（同 minor 最高补丁版）。
+            // ⚠️ 只对"请求版本以 4.2. 开头"的坐标生效：netty-all 走 4.1 线（上方
+            // nettyVersion 显式声明），不能被这条规则拖到 4.2（属跨 minor）。
+            if (details.requested.group == 'io.netty'
+                    && details.requested.version != null
+                    && details.requested.version.startsWith('4.2.')) {
+                details.useVersion '4.2.19.Final'
+            }
+            // 2026-10-22（PLAN-023）：CVE-2023-0833（okhttp 异常信息把非法头值回显
+            // 出去 ⇒ 信息泄露，CVSS 5.5，CWE-209）命中
+            // com.squareup.okhttp3:logging-interceptor:4.9.0 —— 来源
+            // org.web3j:core:4.11.0（本模块经 web3j → okhttp 路径）。
+            // 与本仓已用的 okhttp 4.12.0 对齐（4.9.2 即修复线，4.12.0 同 minor 更高），
+            // 只定点抬这一个坐标，不动 web3j 本身（避免跨线行为变化）。
+            if (details.requested.group == 'com.squareup.okhttp3'
+                    && details.requested.name == 'logging-interceptor') {
+                details.useVersion '4.12.0'
             }
         }
     }
