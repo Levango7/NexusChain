@@ -65,18 +65,30 @@ public class FinalityVoteBroadcaster {
     private final ApplicationEventPublisher eventPublisher;
     private final PeerServer peerServer;  // P2P 发送侧（可选；单进程/测试为 null）
     private final List<VoteListener> externalListeners = new CopyOnWriteArrayList<>();
+    /** 接收侧落库失败的补写队列（PLAN-018；可为 null —— 单进程/测试不装配时退化为"丢弃 + 告警"）。 */
+    private final org.nexus.consensus.finality.FinalityOutboxManager outboxManager;
 
     public FinalityVoteBroadcaster(FinalityGadget gadget, ApplicationEventPublisher eventPublisher) {
-        this(gadget, eventPublisher, null);
+        this(gadget, eventPublisher, null, null);
+    }
+
+    /** 兼容构造器（单进程/测试：有 P2P 发送侧，但无 outbox 管理器）。 */
+    public FinalityVoteBroadcaster(FinalityGadget gadget,
+                                   ApplicationEventPublisher eventPublisher,
+                                   PeerServer peerServer) {
+        this(gadget, eventPublisher, peerServer, null);
     }
 
     @Autowired
     public FinalityVoteBroadcaster(FinalityGadget gadget,
                                    ApplicationEventPublisher eventPublisher,
-                                   @Autowired(required = false) PeerServer peerServer) {
+                                   @Autowired(required = false) PeerServer peerServer,
+                                   @Autowired(required = false)
+                                   org.nexus.consensus.finality.FinalityOutboxManager outboxManager) {
         this.gadget = Objects.requireNonNull(gadget, "gadget must not be null");
         this.eventPublisher = Objects.requireNonNull(eventPublisher, "eventPublisher must not be null");
         this.peerServer = peerServer;
+        this.outboxManager = outboxManager;
     }
 
     /**
@@ -140,10 +152,24 @@ public class FinalityVoteBroadcaster {
         try {
             gadget.submitVote(vote);
         } catch (RuntimeException e) {
-            // 接收侧写库失败不能让 P2P 消息处理线程/同步管道崩溃；发送方的
-            // FinalityCoordinator 重试队列会在数据库恢复后重新广播该票。
-            log.warn("Received finality vote could not be persisted: epoch={}, validator={}: {}",
-                    vote.getEpoch(), vote.getValidatorAddress(), e.getMessage());
+            // PLAN-018：接收侧写库失败**不再把票丢掉**。
+            //
+            // 旧行为（PLAN-016 遗留缺口）：catch 之后只打一条 WARN，票直接蒸发；
+            // 而注释里"发送方会重新广播"并不成立 —— 发送方只在**它自己**写库失败时
+            // 才会重发，对端库故障时没有任何一方会重投，远端票静默消失。
+            //
+            // 现在：接收方自己把**完整 Vote（含签名）**投进 outbox，由本地定时补写；
+            // 数据库整体不可用时先落内存队列，恢复后补写。
+            if (outboxManager != null) {
+                outboxManager.enqueueReceived(vote, e);
+                log.warn("Received finality vote could not be persisted; queued for local retry: "
+                                + "epoch={}, validator={}: {}",
+                        vote.getEpoch(), vote.getValidatorAddress(), e.getMessage());
+            } else {
+                log.warn("Received finality vote could not be persisted and no outbox manager is "
+                                + "configured; vote dropped: epoch={}, validator={}: {}",
+                        vote.getEpoch(), vote.getValidatorAddress(), e.getMessage());
+            }
         }
     }
 

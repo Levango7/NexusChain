@@ -15,9 +15,6 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
-import java.util.ArrayDeque;
-import java.util.Arrays;
-import java.util.Deque;
 import java.util.Objects;
 
 /**
@@ -68,34 +65,47 @@ public class FinalityCoordinator {
     private String selfValidatorAddress;
 
     /**
-     * 最终性投票写库失败时的有界重试队列。
+     * 最终性投票写库失败后的重试中枢（PLAN-018）。
      *
      * <p>Phase 6B 故障注入实证：数据库短时不可用时，{@code submitVote} 抛出的异常
      * 会沿 {@code NewBlockEvent} 监听器传播到 {@code StateDB}，使 pendingBlock 等待
-     * 60 秒才清理，连带推迟区块落盘。最终性写失败不应破坏区块采纳，因此这里把
-     * 投票留在内存队列，下一个区块事件再重试；队列满时丢弃最旧票并显式报错。</p>
+     * 60 秒才清理，连带推迟区块落盘。最终性写失败不应破坏区块采纳，因此把投票
+     * 交给 {@link FinalityOutboxManager} 排队重试。</p>
      *
-     * <p>边界：队列不持久化，进程崩溃会丢失；只覆盖本节点本地投票，远端票的
-     * 重投依赖发送方重试。</p>
+     * <p>Phase 6C 第二切片起，该队列不再只是内存：管理器会同时把"写库意图"
+     * （含完整签名）落到持久化 outbox 表，进程重启后仍能补写；接收侧收到的远端票
+     * 也走同一条通道，<b>不再依赖发送方重发</b>。</p>
      */
-    private static final int MAX_PENDING_VOTES = 256;
-    private final Deque<Vote> pendingVotes = new ArrayDeque<>();
+    private final FinalityOutboxManager outboxManager;
+
+    /** 失败日志采样窗口（毫秒）与窗口内被抑制的条数。 */
+    private static final long FAILURE_LOG_WINDOW_MS = 10_000L;
+    private final java.util.concurrent.atomic.AtomicLong lastFailureLogAt =
+            new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicLong suppressedFailureLogs =
+            new java.util.concurrent.atomic.AtomicLong(0);
 
     /**
      * @param gadget               最终性投票收集器
      * @param validatorRegistry    验证人注册表（判定本节点是否活跃验证人）
      * @param epochLength          epoch 长度（每多少个块一个检查点）
      * @param broadcaster          P2P 投票广播器（可为 null）
+     * @param outboxManager        投票补写 outbox 管理器
      */
     @Autowired
     public FinalityCoordinator(FinalityGadget gadget,
                                ValidatorRegistry validatorRegistry,
                                @org.springframework.beans.factory.annotation.Value("${nexus.finality.epoch-length:32}") long epochLength,
-                               @Autowired(required = false) FinalityVoteBroadcaster broadcaster) {
+                               @Autowired(required = false) FinalityVoteBroadcaster broadcaster,
+                               FinalityOutboxManager outboxManager) {
         this.gadget = Objects.requireNonNull(gadget, "gadget must not be null");
         this.validatorRegistry = Objects.requireNonNull(validatorRegistry, "validatorRegistry must not be null");
         this.epochLength = epochLength <= 0 ? 32 : epochLength;
         this.broadcaster = broadcaster;
+        this.outboxManager = Objects.requireNonNull(outboxManager, "outboxManager must not be null");
+        // 补写成功后必须补发一次广播：这张票在写库失败时并没有发出去过
+        // （广播发生在写库成功之后），不补发就对端永远收不到它。
+        this.outboxManager.setLocalVotePersistedListener(this::broadcastQuietly);
     }
 
     /**
@@ -105,6 +115,16 @@ public class FinalityCoordinator {
                                ValidatorRegistry validatorRegistry,
                                long epochLength) {
         this(gadget, validatorRegistry, epochLength, null);
+    }
+
+    /**
+     * 兼容构造器（单进程/测试场景：无 P2P 广播器，但有独立的 outbox 管理器）。
+     */
+    public FinalityCoordinator(FinalityGadget gadget,
+                               ValidatorRegistry validatorRegistry,
+                               long epochLength,
+                               FinalityVoteBroadcaster broadcaster) {
+        this(gadget, validatorRegistry, epochLength, broadcaster, new FinalityOutboxManager(gadget));
     }
 
     /**
@@ -160,6 +180,13 @@ public class FinalityCoordinator {
      * @return 若投出票则返回 FinalityRecord，否则返回 null
      */
     FinalityRecord onBlock(Block block) {
+        // 先补写历史失败票，再处理当前区块。非检查点区块也会触发补写，
+        // 使数据库恢复后无需等待下一个 epoch 边界。
+        //
+        // PLAN-018：这句必须**在下面两个早退之前** —— 否则本节点被移出 ACTIVE
+        // 之后，队列将永远得不到补写（PLAN-016 审计 P3）。
+        flushPendingVotes();
+
         // fail-closed：本节点非验证人则不参与投票
         if (selfValidatorAddress == null || selfValidatorAddress.isEmpty()) {
             return null;
@@ -169,10 +196,6 @@ public class FinalityCoordinator {
             log.debug("Skip finality vote: self validator {} not active", selfValidatorAddress);
             return null;
         }
-
-        // 先重试历史失败票，再处理当前区块。非检查点区块也会触发重试，
-        // 使数据库恢复后无需等待下一个 epoch 边界。
-        flushPendingVotes();
 
         long height = block.nHeight;
         if (!isCheckpoint(height)) {
@@ -222,58 +245,60 @@ public class FinalityCoordinator {
             broadcastQuietly(vote);
             return record;
         } catch (RuntimeException e) {
-            enqueuePendingVote(vote);
-            log.error("Finality vote persistence failed at epoch={}, height={}; queued for retry (pending={}): {}",
-                    epoch, height, pendingVoteCount(), e.getMessage());
+            // PLAN-018：写库失败 → 交给 outbox 管理器排队补写。
+            // 管理器会尽力把"写库意图"落进持久化 outbox（数据库整体不可用时
+            // 只能靠内存队列兜底），并由定时任务/下一个区块事件继续补写。
+            outboxManager.enqueueLocal(vote, e);
+            if (shouldLogFailure()) {
+                log.error("Finality vote persistence failed at epoch={}, height={}; queued for retry "
+                                + "(pending={}): {}",
+                        epoch, height, pendingVoteCount(), e.getMessage());
+            }
             return null;
         }
     }
 
     /**
-     * 重试队列中的本地投票。写库仍失败时保留队首票，等待下一个区块事件；
-     * 成功后移出队列并补发 P2P 广播。
+     * 失败日志采样（10 秒窗口）。
+     *
+     * <p>数据库整体不可用时，每个 epoch 都会有一张票写库失败 —— 不采样的话，
+     * 30 秒故障能刷出几十条 ERROR，把真正的信号淹没（与 Phase 6C 第一切片对
+     * {@code AccountDB}/{@code Propose paused} 的口径一致）。</p>
      */
-    private synchronized void flushPendingVotes() {
-        while (!pendingVotes.isEmpty()) {
-            Vote vote = pendingVotes.peekFirst();
-            try {
-                FinalityRecord record = gadget.submitVote(vote);
-                pendingVotes.removeFirst();
-                log.info("Finality vote retried: epoch={}, validator={}, finalized={}, progress={}%",
-                        vote.getEpoch(), vote.getValidatorAddress(), record.isFinalized(), record.progressPercent());
-                broadcastQuietly(vote);
-            } catch (RuntimeException e) {
-                log.warn("Finality vote retry still failing at epoch={}, validator={}; retained for next block: {}",
-                        vote.getEpoch(), vote.getValidatorAddress(), e.getMessage());
-                return;
+    private boolean shouldLogFailure() {
+        long now = System.currentTimeMillis();
+        long start = lastFailureLogAt.get();
+        if (start == 0 || now - start >= FAILURE_LOG_WINDOW_MS) {
+            lastFailureLogAt.set(now);
+            long suppressed = suppressedFailureLogs.getAndSet(0);
+            if (suppressed > 0) {
+                log.info("Finality vote persistence failure log: {} suppressed in the last {}s",
+                        suppressed, FAILURE_LOG_WINDOW_MS / 1000);
             }
+            return true;
         }
+        suppressedFailureLogs.incrementAndGet();
+        return false;
     }
 
     /**
-     * 入队一张本地投票。队列有界，避免数据库长期不可用时无界占用内存；
-     * 溢出时丢弃最旧票并显式 ERROR，绝不静默吞掉。
+     * 补写待处理投票（PLAN-018：队列与重试逻辑已收敛到 {@link FinalityOutboxManager}）。
+     *
+     * <p>旧的"队首阻塞"语义（队首失败即 return，后面的票被无限期饿死）已去除：
+     * 管理器每轮遍历全部待写票，单张失败不影响其它票。</p>
      */
-    private synchronized void enqueuePendingVote(Vote vote) {
-        // 同一张票可能因区块重放/重复事件再次进入 onBlock，避免队列里堆积
-        // 完全相同的 (epoch, checkpoint, validator) 项。
-        for (Vote pending : pendingVotes) {
-            if (pending.getEpoch() == vote.getEpoch()
-                    && pending.getValidatorAddress().equals(vote.getValidatorAddress())
-                    && Arrays.equals(pending.getCheckpointHash(), vote.getCheckpointHash())) {
-                return;
-            }
+    private void flushPendingVotes() {
+        try {
+            outboxManager.flush();
+        } catch (RuntimeException e) {
+            // 补写失败不影响出块与投票主流程。
+            log.warn("Finality pending vote flush failed: {}", e.getMessage());
         }
-        if (pendingVotes.size() >= MAX_PENDING_VOTES) {
-            Vote dropped = pendingVotes.removeFirst();
-            log.error("Finality retry queue full ({}); dropping oldest vote epoch={}, validator={}",
-                    MAX_PENDING_VOTES, dropped.getEpoch(), dropped.getValidatorAddress());
-        }
-        pendingVotes.addLast(vote);
     }
 
+    /** 待补写投票数（测试与观测用）。 */
     synchronized int pendingVoteCount() {
-        return pendingVotes.size();
+        return outboxManager.pendingCount();
     }
 
     /** 广播失败不能反向影响已持久化的投票或区块采纳。 */

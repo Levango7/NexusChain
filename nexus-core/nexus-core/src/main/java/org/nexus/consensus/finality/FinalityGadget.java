@@ -36,6 +36,9 @@ public class FinalityGadget {
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(FinalityGadget.class);
 
+    /** 单轮补最终化扫描最多处理的检查点数（避免 CPU 尖峰）。 */
+    static final int SWEEP_BATCH = 50;
+
     private final ValidatorRegistry validatorRegistry;
     private final StakingService stakingService;
 
@@ -67,8 +70,13 @@ public class FinalityGadget {
      * 最终性状态持久化（ADR-030 P0-1：节点重启不丢失已最终化检查点）。
      * 默认内存版（测试/单机）；配置 {@code nexus.finality.store=jdbc} 时
      * Spring 注入 {@link JdbcFinalityStateStore}（PostgreSQL）。
+     *
+     * <p>{@code volatile}：该字段由 {@link #setStateStore} 在锁内写入，
+     * 但 {@link #getStateStore} 可能在锁外读取；用 volatile 保证可见性，
+     * 避免 SpotBugs 的 IS2_INCONSISTENT_SYNC / UG_SYNC_SET_UNSYNC_GET 告警
+     * （CI 的 SAST 门禁会把任何 finding 判红）。</p>
      */
-    private FinalityStateStore stateStore;
+    private volatile FinalityStateStore stateStore;
 
     /**
      * 验证者集指纹（P0-② 治理关联）：活跃验证人地址+质押的规范化指纹。
@@ -138,11 +146,36 @@ public class FinalityGadget {
             }
             epochCheckpointWeights.put(key, sum);
         });
+        // PLAN-018：恢复带签名的完整 Vote 对象 —— 这是"重启后仍能补最终化"的前提。
+        // 已终局的检查点不再需要验签，跳过以免把全部历史 Vote 读进内存。
+        stateStore.loadAllVoteObjects().forEach((key, votes) -> {
+            if (finalizedCheckpoints.contains(key) || votes == null || votes.isEmpty()) {
+                return;
+            }
+            epochCheckpointVotes.put(key, new java.util.concurrent.CopyOnWriteArrayList<>(votes));
+        });
+        // PLAN-018：恢复后立即尝试补最终化 —— 之前"重启即失去最终化能力"的根因是
+        // 完整 Vote 没落库；现在签名恢复了，重启后应当能自己把已达阈值的检查点补上。
+        // 构造期聚合器可能尚未注入，失败不阻断启动（定时补写会再试）。
+        sweepFinalization("startup-restore");
         if (!finalizedCheckpoints.isEmpty() || !epochCheckpointVoters.isEmpty()) {
             org.slf4j.LoggerFactory.getLogger(FinalityGadget.class)
-                    .info("FinalityGadget: restored {} finalized checkpoints, {} vote records",
-                            finalizedCheckpoints.size(), epochCheckpointVoters.size());
+                    .info("FinalityGadget: restored {} finalized checkpoints, {} vote records, {} signed vote objects",
+                            finalizedCheckpoints.size(), epochCheckpointVoters.size(),
+                            epochCheckpointVotes.size());
         }
+    }
+
+    /**
+     * 暴露当前持久化存储（PLAN-018：outbox 管理器需要与本类**同一个**存储实例，
+     * 否则内存版与 JDBC 版各写各的，队列语义对不上）。
+     *
+     * <p>方法本身加 {@code synchronized}：写入方 {@link #setStateStore} 是同步方法，
+     * 读取方保持一致即可消除 SpotBugs 的 unsync-get 告警（CI 的 SAST 门禁对
+     * 任何 finding 判红）。读取成本极低（一次字段读），不构成热点。</p>
+     */
+    public synchronized FinalityStateStore getStateStore() {
+        return stateStore;
     }
 
     /**
@@ -228,7 +261,10 @@ public class FinalityGadget {
         // 持久化必须在任何内存状态变更之前完成：
         // - 写库失败时 voters/weights/投票对象都保持原状，重试不会被误判为重复票；
         // - 不会出现“内存已计票、重启后却从数据库消失”的不可逆结算丢失窗口。
-        stateStore.recordVote(epoch, vote.getCheckpointHash(), vote.getValidatorAddress());
+        // PLAN-018：连同 Ed25519 签名与公钥一起落库 —— 只存地址的话，重启后
+        // 恢复不出 Vote 对象，聚合验签无票可验，检查点将永远无法在重启后补最终化。
+        stateStore.recordVote(epoch, vote.getCheckpointHash(), vote.getValidatorAddress(),
+                vote.getSignature(), vote.getPublicKeyBytes());
 
         if (!voters.add(vote.getValidatorAddress())) {
             // 防御性分支：正常路径由 synchronized + 上面的 contains 排除；
@@ -314,6 +350,20 @@ public class FinalityGadget {
             return false;
         }
 
+        // PLAN-018：验签覆盖度观测。
+        // 计数口径保持不变（权重按 epochCheckpointVoters 计）—— 因为 finality_votes 里的
+        // 每��行都是**本节点验签通过后才写入**的（计票前先做公钥绑定校验），它本身就是
+        // "该验证人签过这个检查点"的凭证。若因为历史行没有签名（迁移前写入）就拒绝最终化，
+        // 会把那些检查点永久卡住（活性风险），因此这里不拒绝，只记录覆盖度以便观测。
+        // 迁移之后写入的票都带签名，重启后恢复的 Vote 集合与投票者集合一致 ⇒ 聚合验签
+        // 覆盖全部票，这条残余口径只会影响迁移前的老数据。
+        Set<String> voters = epochCheckpointVoters.get(checkpointKey);
+        if (voters != null && votes.size() < voters.size()) {
+            log.debug("Finality aggregate covers {}/{} voters for {}; the remaining votes were "
+                            + "recorded before signature persistence and are trusted as accepted facts",
+                    votes.size(), voters.size(), checkpointKey);
+        }
+
         // M3 架构挂接：最终化前对投票集合做聚合验签（收集式降级或 blst 聚合）
         AggregatedSignature agg = signatureAggregator.aggregate(votes);
         if (agg != null && !signatureAggregator.verifyAggregate(votes, agg)) {
@@ -334,6 +384,69 @@ public class FinalityGadget {
         finalizedCheckpoints.add(checkpointKey);
         finalizationRejected.remove(checkpointKey);
         return true;
+    }
+
+    /**
+     * 补最终化扫描（PLAN-018）。
+     *
+     * <p>对"权重已达 2/3 阈值但尚未标记最终化"的检查点重新走一次
+     * {@link #tryFinalize}：验证签名覆盖度 → 聚合验签 → 写库标记。</p>
+     *
+     * <p>触发时机：① 启动恢复后（此时聚合器可能还没注入，失败不阻断启动）；
+     * ② 定时任务（{@code @Scheduled}，聚合器已就绪）。</p>
+     *
+     * <p>边界：单轮最多处理 {@link #SWEEP_BATCH} 个检查点，避免历史积压时
+     * 一轮做太多聚合验签（CPU 尖峰）。</p>
+     */
+    @org.springframework.scheduling.annotation.Scheduled(fixedDelay = 10_000L)
+    public void scheduledFinalizationSweep() {
+        try {
+            sweepFinalization("scheduled");
+        } catch (RuntimeException e) {
+            log.warn("Finality finalization sweep failed: {}", e.getMessage());
+        }
+    }
+
+    private void sweepFinalization(String trigger) {
+        int processed = 0;
+        for (Map.Entry<String, BigDecimal> entry : epochCheckpointWeights.entrySet()) {
+            if (processed >= SWEEP_BATCH) {
+                break;
+            }
+            String key = entry.getKey();
+            if (finalizedCheckpoints.contains(key) || finalizationRejected.contains(key)) {
+                continue;
+            }
+            if (epochCheckpointVotes.get(key) == null || epochCheckpointVotes.get(key).isEmpty()) {
+                continue;   // 没有可验签的 Vote 对象，补不了
+            }
+            String[] parts = key.split("\\|", 2);
+            if (parts.length != 2) {
+                continue;
+            }
+            long epoch;
+            try {
+                epoch = Long.parseLong(parts[0]);
+            } catch (NumberFormatException e) {
+                continue;
+            }
+            BigDecimal total = totalWeightForEpoch(epoch);
+            BigDecimal voted = currentVotedWeight(key);
+            if (total.signum() <= 0
+                    || voted.multiply(BigDecimal.valueOf(3)).compareTo(total.multiply(BigDecimal.valueOf(2))) < 0) {
+                continue;   // 未达阈值
+            }
+            try {
+                if (tryFinalize(epoch, parseCheckpoint(parts[1]), key, total)) {
+                    processed++;
+                    log.info("Finality checkpoint finalized by {} sweep: epoch={}, checkpoint={}",
+                            trigger, epoch, parts[1]);
+                }
+            } catch (RuntimeException e) {
+                // 写库失败不阻断其它检查点：下一轮再试。
+                log.warn("Finality sweep failed for {} ({}): {}", key, trigger, e.getMessage());
+            }
+        }
     }
 
     /**

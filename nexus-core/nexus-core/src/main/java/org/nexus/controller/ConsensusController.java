@@ -41,7 +41,9 @@ import org.nexus.service.Impl.CommandServiceImpl;
 
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.nexus.controller.ConsensusResult.ERROR;
 import static org.nexus.controller.ConsensusResult.SUCCESS;
@@ -65,6 +67,10 @@ public class ConsensusController {
 
     @Autowired
     private AccountStoreHealth accountStoreHealth;
+
+    /** 最终性投票补写队列观测（PLAN-018；未装配 pos 共识时为 null）。 */
+    @Autowired(required = false)
+    private org.nexus.consensus.finality.FinalityOutboxManager finalityOutboxManager;
 
     @Autowired
     private Block genesis;
@@ -122,6 +128,24 @@ public class ConsensusController {
     @GetMapping(value = "/consensus/storage-status", produces = "application/json")
     public Object getStorageStatus() {
         return codec.encode(accountStoreHealth.snapshot());
+    }
+
+    /**
+     * 最终性投票补写队列观测（PLAN-018）。
+     *
+     * <p>返回 local/received/数据库三层待补写票数与最近一次失败原因。
+     * 未装配最终性共识（非 pos 模式）时返回 {@code enabled=false}。</p>
+     */
+    @GetMapping(value = "/consensus/finality-outbox", produces = "application/json")
+    public Object getFinalityOutboxStatus() {
+        if (finalityOutboxManager == null) {
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("enabled", false);
+            return codec.encode(data);
+        }
+        Map<String, Object> data = new LinkedHashMap<>(finalityOutboxManager.status().snapshot());
+        data.put("enabled", true);
+        return codec.encode(data);
     }
 
     @PostMapping(value = "/consensus/status", produces = "application/json")

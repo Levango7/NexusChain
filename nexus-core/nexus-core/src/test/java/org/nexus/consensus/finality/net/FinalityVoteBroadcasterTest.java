@@ -147,6 +147,24 @@ class FinalityVoteBroadcasterTest {
         assertEquals(0, failingGadget.getFinality(1, CP1).getVotedWeight().signum());
     }
 
+    @Test
+    void receivedVoteIsQueuedForLocalRetryInsteadOfBeingDropped() {
+        // PLAN-018：接收侧写库失败时，票必须进入本地的补写队列，
+        // 而不是"记一条 WARN 就蒸发"（旧行为下发送方并不会重发，这张票会永久丢失）。
+        FailingStore store = new FailingStore();
+        FinalityGadget failingGadget = new FinalityGadget(registry, staking, store);
+        org.nexus.consensus.finality.FinalityOutboxManager outbox =
+                new org.nexus.consensus.finality.FinalityOutboxManager(failingGadget);
+        FinalityVoteBroadcaster broadcasterWithOutbox =
+                new FinalityVoteBroadcaster(failingGadget, publisher, null, outbox);
+
+        broadcasterWithOutbox.onVoteReceived(FinalityVoteCodec.encode(signedVote(1, CP1)));
+
+        assertEquals(1, outbox.pendingCount(
+                        org.nexus.consensus.finality.persistence.FinalityVoteOrigin.RECEIVED),
+                "接收侧写库失败的票必须排队等待本地补写");
+    }
+
     /** 仅让 recordVote 失败，其余语义委托内存实现。 */
     private static final class FailingStore implements FinalityStateStore {
         private final FinalityStateStore delegate = new InMemoryFinalityStateStore();

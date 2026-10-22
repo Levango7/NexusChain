@@ -11,6 +11,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 import java.util.HexFormat;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -62,6 +63,16 @@ public class JdbcFinalityStateStore implements FinalityStateStore {
     private final Map<String, Set<String>> voteCache = new ConcurrentHashMap<>();
     private final Map<String, Boolean> finalizedCache = new ConcurrentHashMap<>();
 
+    /**
+     * 带签名的完整 Vote 对象缓存（PLAN-018）。
+     *
+     * <p>只在启动时由 {@link #reload()} 填充，供 {@link #loadAllVoteObjects()} 返回；
+     * 与 {@link #voteCache} 一样是"启动快照"，<b>不设 TTL</b>（同 {@link #voteCache} 的理由：
+     * 条目过期会让已具备验签条件的检查点重新变得不可验签）。</p>
+     */
+    private final Map<String, List<org.nexus.consensus.finality.Vote>> voteObjectCache =
+            new ConcurrentHashMap<>();
+
     public JdbcFinalityStateStore(JdbcTemplate jdbc) {
         this.jdbc = jdbc;
     }
@@ -76,6 +87,23 @@ public class JdbcFinalityStateStore implements FinalityStateStore {
         jdbc.execute("CREATE TABLE IF NOT EXISTS finality_checkpoints ("
             + "epoch BIGINT NOT NULL, checkpoint_hash VARCHAR(128) NOT NULL, "
             + "PRIMARY KEY (epoch, checkpoint_hash))");
+        // PLAN-018（additive-only，docs/db-schema-versioning.md §三.1）：
+        // ① finality_votes 增列 signature/public_key —— 让重启后能恢复完整 Vote 对象
+        //    （否则聚合验签无票可验，检查点永远无法在重启后补最终化）。
+        // ② finality_vote_outbox —— 持久化"写库意图"：票还没写进 finality_votes，
+        //    但必须记住它，进程重启后不丢。
+        // 两处 DDL 都必须**幂等**（IF NOT EXISTS）：SchemaMeta 只登记版本号，
+        // 不会校验已登记为 version=1 的旧库到底有没有这两列/这张表。
+        // 兼容：PG 9.6+ 与 H2 2.x 都支持 ADD COLUMN IF NOT EXISTS。
+        jdbc.execute("ALTER TABLE finality_votes ADD COLUMN IF NOT EXISTS signature VARCHAR(256)");
+        jdbc.execute("ALTER TABLE finality_votes ADD COLUMN IF NOT EXISTS public_key VARCHAR(256)");
+        jdbc.execute("CREATE TABLE IF NOT EXISTS finality_vote_outbox ("
+            + "epoch BIGINT NOT NULL, checkpoint_hash VARCHAR(128) NOT NULL, "
+            + "validator VARCHAR(128) NOT NULL, origin VARCHAR(16) NOT NULL, "
+            + "signature VARCHAR(256), public_key VARCHAR(256), "
+            + "created_at BIGINT NOT NULL, attempts INT NOT NULL DEFAULT 0, "
+            + "last_error VARCHAR(512), "
+            + "PRIMARY KEY (epoch, checkpoint_hash, validator, origin))");
         log.info("JdbcFinalityStateStore: schema initialized");
         reload();
     }
@@ -94,8 +122,21 @@ public class JdbcFinalityStateStore implements FinalityStateStore {
                 finalizedCache.put(rs.getLong("epoch") + "|" + rs.getString("checkpoint_hash"),
                         Boolean.TRUE);
             });
-            log.info("JdbcFinalityStateStore: reloaded {} vote records, {} finalized checkpoints",
-                    voteCache.size(), finalizedCache.size());
+            // PLAN-018：恢复带签名的完整 Vote 对象（供重启后聚合验签）。
+            // 只取有签名的行 —— 迁移前写入的历史行没有签名，无法参与验签。
+            jdbc.query("SELECT epoch, checkpoint_hash, validator, signature, public_key "
+                    + "FROM finality_votes WHERE signature IS NOT NULL", rs -> {
+                String ck = rs.getString("checkpoint_hash");
+                String key = rs.getLong("epoch") + "|" + ck;
+                byte[] sig = hexToBytes(rs.getString("signature"));
+                byte[] pub = hexToBytes(rs.getString("public_key"));
+                byte[] checkpoint = hexToBytes(ck);
+                voteObjectCache.computeIfAbsent(key, k -> new java.util.concurrent.CopyOnWriteArrayList<>())
+                        .add(new org.nexus.consensus.finality.Vote(
+                                rs.getLong("epoch"), checkpoint, rs.getString("validator"), sig, pub));
+            });
+            log.info("JdbcFinalityStateStore: reloaded {} vote records, {} finalized checkpoints, {} signed votes",
+                    voteCache.size(), finalizedCache.size(), voteObjectCache.size());
         } catch (RuntimeException e) {
             // 最终性状态是“已确认不可逆结算”的安全事实；加载失败时若静默降级为空缓存，
             // 节点会以为旧检查点未最终化，存在重复终局/破坏安全前提的风险。
@@ -108,11 +149,88 @@ public class JdbcFinalityStateStore implements FinalityStateStore {
 
     @Override
     public void recordVote(long epoch, byte[] checkpointHash, String validatorAddress) {
+        recordVote(epoch, checkpointHash, validatorAddress, null, null);
+    }
+
+    @Override
+    public void recordVote(long epoch, byte[] checkpointHash, String validatorAddress,
+                           byte[] signature, byte[] publicKey) {
         String ck = hashStr(checkpointHash);
-        JdbcUpsert.insertIgnore(jdbc,
-                "INSERT INTO finality_votes(epoch, checkpoint_hash, validator) VALUES(?,?,?)",
-                new Object[]{epoch, ck, validatorAddress});
+        // PLAN-018：签名与公钥一并落库（重启后据此恢复完整 Vote 对象做聚合验签）。
+        // 用可移植 upsert：先 UPDATE（补齐后到的签名），未命中再 INSERT。
+        JdbcUpsert.upsert(jdbc,
+                "UPDATE finality_votes SET signature=?, public_key=? "
+                        + "WHERE epoch=? AND checkpoint_hash=? AND validator=?",
+                new Object[]{hexOrNull(signature), hexOrNull(publicKey), epoch, ck, validatorAddress},
+                "INSERT INTO finality_votes(epoch, checkpoint_hash, validator, signature, public_key) "
+                        + "VALUES(?,?,?,?,?)",
+                new Object[]{epoch, ck, validatorAddress, hexOrNull(signature), hexOrNull(publicKey)});
         voteCache.computeIfAbsent(key(epoch, ck), k -> ConcurrentHashMap.newKeySet()).add(validatorAddress);
+        if (signature != null && signature.length > 0) {
+            voteObjectCache.computeIfAbsent(key(epoch, ck), k -> new java.util.concurrent.CopyOnWriteArrayList<>())
+                    .add(new org.nexus.consensus.finality.Vote(epoch, checkpointHash, validatorAddress,
+                            signature, publicKey));
+        }
+    }
+
+    @Override
+    public Map<String, List<org.nexus.consensus.finality.Vote>> loadAllVoteObjects() {
+        return Map.copyOf(voteObjectCache);
+    }
+
+    @Override
+    public void enqueuePendingVote(FinalityOutboxEntry entry) {
+        String ck = hashStr(entry.getCheckpointHash());
+        JdbcUpsert.upsert(jdbc,
+                "UPDATE finality_vote_outbox SET signature=?, public_key=?, attempts=?, last_error=? "
+                        + "WHERE epoch=? AND checkpoint_hash=? AND validator=? AND origin=?",
+                new Object[]{hexOrNull(entry.getSignature()), hexOrNull(entry.getPublicKey()),
+                        entry.getAttempts(), entry.getLastError(),
+                        entry.getEpoch(), ck, entry.getValidatorAddress(), entry.getOrigin().code()},
+                "INSERT INTO finality_vote_outbox(epoch, checkpoint_hash, validator, origin, signature, "
+                        + "public_key, created_at, attempts, last_error) VALUES(?,?,?,?,?,?,?,?,?)",
+                new Object[]{entry.getEpoch(), ck, entry.getValidatorAddress(), entry.getOrigin().code(),
+                        hexOrNull(entry.getSignature()), hexOrNull(entry.getPublicKey()),
+                        entry.getCreatedAt(), entry.getAttempts(), entry.getLastError()});
+    }
+
+    @Override
+    public List<FinalityOutboxEntry> loadPendingVotes(int limit) {
+        int cap = limit <= 0 ? 64 : limit;
+        List<FinalityOutboxEntry> out = new java.util.ArrayList<>();
+        jdbc.query("SELECT epoch, checkpoint_hash, validator, origin, signature, public_key, "
+                        + "created_at, attempts, last_error FROM finality_vote_outbox "
+                        + "ORDER BY created_at ASC LIMIT " + cap,
+                rs -> {
+                    out.add(new FinalityOutboxEntry(
+                            rs.getLong("epoch"),
+                            hexToBytes(rs.getString("checkpoint_hash")),
+                            rs.getString("validator"),
+                            hexToBytes(rs.getString("signature")),
+                            hexToBytes(rs.getString("public_key")),
+                            FinalityVoteOrigin.fromCode(rs.getString("origin")),
+                            rs.getLong("created_at"),
+                            rs.getInt("attempts"),
+                            rs.getString("last_error")));
+                });
+        return out;
+    }
+
+    @Override
+    public void removePendingVote(FinalityOutboxEntry entry) {
+        jdbc.update("DELETE FROM finality_vote_outbox WHERE epoch=? AND checkpoint_hash=? "
+                        + "AND validator=? AND origin=?",
+                entry.getEpoch(), hashStr(entry.getCheckpointHash()), entry.getValidatorAddress(),
+                entry.getOrigin().code());
+    }
+
+    @Override
+    public void markPendingVoteFailure(FinalityOutboxEntry entry, String error) {
+        jdbc.update("UPDATE finality_vote_outbox SET attempts=attempts+1, last_error=? "
+                        + "WHERE epoch=? AND checkpoint_hash=? AND validator=? AND origin=?",
+                error == null ? "" : (error.length() > 500 ? error.substring(0, 500) : error),
+                entry.getEpoch(), hashStr(entry.getCheckpointHash()), entry.getValidatorAddress(),
+                entry.getOrigin().code());
     }
 
     @Override
@@ -151,6 +269,27 @@ public class JdbcFinalityStateStore implements FinalityStateStore {
         // 旧实现用 Arrays.toString(byte[])，32 字节可达 160+ 字符，PG 会报
         // "value too long for type character varying(128)"。
         return HexFormat.of().formatHex(bytes == null ? new byte[0] : bytes);
+    }
+
+    /** 二进制 → hex 字符串（NULL 安全；空数组视为无值）。 */
+    private static String hexOrNull(byte[] bytes) {
+        if (bytes == null || bytes.length == 0) {
+            return null;
+        }
+        return HexFormat.of().formatHex(bytes);
+    }
+
+    /** hex 字符串 → 二进制（NULL/非法安全）。 */
+    private static byte[] hexToBytes(String hex) {
+        if (hex == null || hex.isEmpty()) {
+            return null;
+        }
+        try {
+            return HexFormat.of().parseHex(hex);
+        } catch (IllegalArgumentException e) {
+            log.warn("Ignoring malformed hex value in finality store: {}", e.getMessage());
+            return null;
+        }
     }
 
     static String key(long epoch, String checkpointHex) {
