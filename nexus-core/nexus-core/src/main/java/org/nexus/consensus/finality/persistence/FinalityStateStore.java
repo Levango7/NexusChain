@@ -113,6 +113,27 @@ public interface FinalityStateStore {
     }
 
     /**
+     * 取 {@code epoch >= fromEpoch} 的、**带签名**的最新 {@code limit} 条投票（PLAN-025 补票响应用）。
+     *
+     * <p>为什么不直接复用 {@link #loadVoteObjectsSince(long)}：补票请求的 from 可能是 0
+     * （冷启动节点），而长链上 {@code finality_votes} 可能有数万行 —— 全量读进内存再截断
+     * 会让"每个对端每 30 秒一次的补票请求"变成 O(历史) 的查询。JDBC 实现应把
+     * 排序与截断下沉到 SQL；默认实现按"倒序取前 limit 条"在内存里截断。</p>
+     */
+    default List<Vote> loadLatestVoteObjects(long fromEpoch, int limit) {
+        Map<String, List<Vote>> all = loadVoteObjectsSince(fromEpoch);
+        java.util.List<Vote> flat = new java.util.ArrayList<>();
+        for (List<Vote> votes : all.values()) {
+            if (votes != null) {
+                flat.addAll(votes);
+            }
+        }
+        flat.sort(java.util.Comparator.comparingLong(Vote::getEpoch).reversed());
+        int cap = Math.max(1, limit);
+        return flat.size() <= cap ? flat : new java.util.ArrayList<>(flat.subList(0, cap));
+    }
+
+    /**
      * 加载指定 epoch（含）之后已最终化的检查点 key（epoch|checkpointHex）。
      *
      * <p>PLAN-021：用于让节点的"已终局"视图跟随其它节点收敛。默认返回空集合。</p>

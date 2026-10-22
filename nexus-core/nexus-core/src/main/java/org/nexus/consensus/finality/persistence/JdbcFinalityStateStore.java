@@ -169,9 +169,23 @@ public class JdbcFinalityStateStore implements FinalityStateStore {
                 new Object[]{epoch, ck, validatorAddress, hexOrNull(signature), hexOrNull(publicKey)});
         voteCache.computeIfAbsent(key(epoch, ck), k -> ConcurrentHashMap.newKeySet()).add(validatorAddress);
         if (signature != null && signature.length > 0) {
-            voteObjectCache.computeIfAbsent(key(epoch, ck), k -> new java.util.concurrent.CopyOnWriteArrayList<>())
-                    .add(new org.nexus.consensus.finality.Vote(epoch, checkpointHash, validatorAddress,
-                            signature, publicKey));
+            // PLAN-025：anti-entropy 补票会重复投递同一张票，按验证人去重替换，
+            // 否则 voteObjectCache 的 List 会随补票轮次无限增长（每次 add 都追加）。
+            java.util.List<org.nexus.consensus.finality.Vote> list = voteObjectCache
+                    .computeIfAbsent(key(epoch, ck), k -> new java.util.concurrent.CopyOnWriteArrayList<>());
+            org.nexus.consensus.finality.Vote incoming = new org.nexus.consensus.finality.Vote(
+                    epoch, checkpointHash, validatorAddress, signature, publicKey);
+            boolean replaced = false;
+            for (int i = 0; i < list.size(); i++) {
+                if (validatorAddress.equals(list.get(i).getValidatorAddress())) {
+                    list.set(i, incoming);
+                    replaced = true;
+                    break;
+                }
+            }
+            if (!replaced) {
+                list.add(incoming);
+            }
         }
     }
 
@@ -255,6 +269,33 @@ public class JdbcFinalityStateStore implements FinalityStateStore {
                     }, fromEpoch);
         } catch (RuntimeException e) {
             log.warn("JdbcFinalityStateStore: load votes since {} failed: {}", fromEpoch, e.getMessage());
+        }
+        return out;
+    }
+
+    /**
+     * PLAN-025：补票响应用 —— 排序与截断下沉到 SQL，避免 from=0 时把整张
+     * {@code finality_votes} 读进内存（长链上可达数万行）。
+     */
+    @Override
+    public List<org.nexus.consensus.finality.Vote> loadLatestVoteObjects(long fromEpoch, int limit) {
+        List<org.nexus.consensus.finality.Vote> out = new java.util.ArrayList<>();
+        try {
+            jdbc.query("SELECT epoch, checkpoint_hash, validator, signature, public_key "
+                            + "FROM finality_votes WHERE epoch >= ? AND signature IS NOT NULL "
+                            + "ORDER BY epoch DESC LIMIT ?",
+                    rs -> {
+                        out.add(new org.nexus.consensus.finality.Vote(
+                                rs.getLong("epoch"),
+                                hexToBytes(rs.getString("checkpoint_hash")),
+                                rs.getString("validator"),
+                                hexToBytes(rs.getString("signature")),
+                                hexToBytes(rs.getString("public_key"))));
+                    },
+                    fromEpoch, Math.max(1, limit));
+        } catch (RuntimeException e) {
+            log.warn("JdbcFinalityStateStore: load latest votes (from={}, limit={}) failed: {}",
+                    fromEpoch, limit, e.getMessage());
         }
         return out;
     }

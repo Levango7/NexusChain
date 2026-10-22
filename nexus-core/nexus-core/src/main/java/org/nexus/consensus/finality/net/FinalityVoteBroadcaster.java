@@ -68,6 +68,18 @@ public class FinalityVoteBroadcaster {
     /** 接收侧落库失败的补写队列（PLAN-018；可为 null —— 单进程/测试不装配时退化为"丢弃 + 告警"）。 */
     private final org.nexus.consensus.finality.FinalityOutboxManager outboxManager;
 
+    // === PLAN-025：独立存储拓扑下的补票（anti-entropy）===
+    // 这些字段用 @Value 注入但保留字面量默认值 —— 测试用手工构造器时不经过 Spring，
+    // 字段停在默认值上，行为可预期。
+    @org.springframework.beans.factory.annotation.Value("${nexus.finality.anti-entropy.enabled:true}")
+    private boolean antiEntropyEnabled = true;
+    /** 每次补票请求回看多少个 epoch（覆盖"短暂掉线"窗口；更大的缺口靠 from=0 冷启动补齐）。 */
+    @org.springframework.beans.factory.annotation.Value("${nexus.finality.anti-entropy.margin-epochs:50}")
+    private long antiEntropyMarginEpochs = 50L;
+    /** 单次请求/响应携带的票数上限（防止一次请求拉回全部历史）。 */
+    @org.springframework.beans.factory.annotation.Value("${nexus.finality.anti-entropy.max-votes:200}")
+    private int antiEntropyMaxVotes = FinalityVoteSyncCodec.DEFAULT_MAX_VOTES;
+
     public FinalityVoteBroadcaster(FinalityGadget gadget, ApplicationEventPublisher eventPublisher) {
         this(gadget, eventPublisher, null, null);
     }
@@ -139,8 +151,15 @@ public class FinalityVoteBroadcaster {
     /**
      * 处理来自网络的投票（接收端）。
      * 反序列化后投递至 {@link FinalityGadget#submitVote(Vote)}。
+     *
+     * <p>PLAN-025：同一入口也承载<b>补票请求</b>（{@link FinalityVoteSyncCodec}，魔数 0x5B）——
+     * 按载荷魔数分流，投票格式不变（向后兼容：老节点收到 0x5B 只会当作非投票载荷丢弃）。</p>
      */
     public void onVoteReceived(byte[] payload) {
+        if (FinalityVoteSyncCodec.isSyncPayload(payload)) {
+            handleVoteSyncRequest(payload);
+            return;
+        }
         Vote vote = FinalityVoteCodec.decode(payload);
         if (vote == null) {
             log.warn("Received malformed finality vote payload (dropped)");
@@ -170,6 +189,136 @@ public class FinalityVoteBroadcaster {
                                 + "configured; vote dropped: epoch={}, validator={}: {}",
                         vote.getEpoch(), vote.getValidatorAddress(), e.getMessage());
             }
+        }
+    }
+
+    // ===================== PLAN-025：补票（anti-entropy） =====================
+
+    /**
+     * 广播一条补票请求：请对端把 {@code epoch >= fromEpoch} 的**已签名**投票重发一遍。
+     *
+     * <p>为什么用"请求最近窗口"而不是"每轮全量 gossip"：全量 gossip 的流量随
+     * 节点数×票数平方增长，且会让每个节点重复处理大量已知票；补票请求只在对端
+     * 有缺口时才有实际数据传输，代价可预期。</p>
+     */
+    public void requestVoteSync(long fromEpoch, int maxVotes) {
+        if (peerServer == null) {
+            return;   // 单进程/测试：无 P2P
+        }
+        byte[] payload = FinalityVoteSyncCodec.encode(fromEpoch, maxVotes);
+        sendRawVotePayloadOverP2P(payload);
+        log.debug("Vote-sync request broadcast: fromEpoch={}, maxVotes={}", fromEpoch, maxVotes);
+    }
+
+    /**
+     * 周期性补票（默认 30 秒）。首次执行发生在容器启动后（{@code fixedDelay} 无 initialDelay）。
+     *
+     * <p>取本地最大 epoch 回看 {@code margin-epochs} 作为起点：</p>
+     * <ul>
+     *   <li>本地为空 ⇒ 从 0 起请求，对端把**最新** N 条票回推（冷启动追赶）；</li>
+     *   <li>本地已有票 ⇒ 只回看一个小窗口，用于修补"广播时恰好掉线/写库失败"的缝隙。</li>
+     * </ul>
+     */
+    @org.springframework.scheduling.annotation.Scheduled(
+            fixedDelayString = "${nexus.finality.anti-entropy.interval-ms:30000}")
+    public void scheduledVoteAntiEntropy() {
+        if (!antiEntropyEnabled || peerServer == null) {
+            return;
+        }
+        try {
+            long maxEpoch = localMaxVoteEpoch();
+            long from = maxEpoch < 0 ? 0L : Math.max(0L, maxEpoch - antiEntropyMarginEpochs);
+            requestVoteSync(from, antiEntropyMaxVotes);
+        } catch (RuntimeException e) {
+            log.warn("Scheduled vote anti-entropy failed: {}", e.getMessage());
+        }
+    }
+
+    /** 处理对端的补票请求：把本地存的、带签名的票按 epoch **倒序**截断后一次性回推。 */
+    void handleVoteSyncRequest(byte[] payload) {
+        FinalityVoteSyncCodec.SyncRequest req = FinalityVoteSyncCodec.decode(payload);
+        if (req == null) {
+            log.warn("Received malformed vote-sync request (dropped)");
+            return;
+        }
+        org.nexus.consensus.finality.persistence.FinalityStateStore store = gadget.getStateStore();
+        if (store == null) {
+            return;
+        }
+        try {
+            // 避免 from=0 时把全部历史票读进内存。
+            java.util.List<Vote> latest = store.loadLatestVoteObjects(req.fromEpoch(), req.maxVotes());
+            if (latest == null || latest.isEmpty()) {
+                log.debug("Vote-sync request (from epoch {}) has nothing to serve", req.fromEpoch());
+                return;
+            }
+            sendVotesOverP2P(latest);
+            log.info("Vote-sync request (from epoch {}) served with {} votes",
+                    req.fromEpoch(), latest.size());
+            return;
+        } catch (RuntimeException e) {
+            log.warn("Vote-sync request (from epoch {}) could not read local store: {}",
+                    req.fromEpoch(), e.getMessage());
+            return;
+        }
+    }
+
+    /** 本地已知的最大投票 epoch；无票返回 -1。 */
+    long localMaxVoteEpoch() {
+        org.nexus.consensus.finality.persistence.FinalityStateStore store = gadget.getStateStore();
+        if (store == null) {
+            return -1L;
+        }
+        java.util.Map<String, java.util.Set<String>> all;
+        try {
+            all = store.loadAllVotes();
+        } catch (RuntimeException e) {
+            return -1L;
+        }
+        long max = -1L;
+        for (String key : all.keySet()) {
+            int sep = key.indexOf('|');
+            if (sep <= 0) {
+                continue;
+            }
+            try {
+                max = Math.max(max, Long.parseLong(key.substring(0, sep)));
+            } catch (NumberFormatException ignored) {
+                // 键格式异常：跳过，不影响其它 epoch
+            }
+        }
+        return max;
+    }
+
+    /** 一次性回推多条投票（单条 P2P 消息承载多个 VOTE 交易，减少消息数）。 */
+    void sendVotesOverP2P(java.util.List<Vote> votes) {
+        if (peerServer == null || votes == null || votes.isEmpty()) {
+            return;
+        }
+        try {
+            NexusChainOuterClass.Transactions.Builder msg = NexusChainOuterClass.Transactions.newBuilder();
+            for (Vote v : votes) {
+                msg.addTransactions(NexusChainOuterClass.Transaction.newBuilder()
+                        .setTransactionType(NexusChainOuterClass.TransactionType.VOTE)
+                        .setPayload(ByteString.copyFrom(FinalityVoteCodec.encode(v)))
+                        .build());
+            }
+            peerServer.broadcast(msg.build());
+        } catch (RuntimeException e) {
+            log.warn("P2P vote-sync response failed: {}", e.getMessage());
+        }
+    }
+
+    /** 把已编码的最终性载荷（投票或补票请求）封成 VOTE 交易广播。 */
+    private void sendRawVotePayloadOverP2P(byte[] payload) {
+        try {
+            NexusChainOuterClass.Transaction tx = NexusChainOuterClass.Transaction.newBuilder()
+                    .setTransactionType(NexusChainOuterClass.TransactionType.VOTE)
+                    .setPayload(ByteString.copyFrom(payload))
+                    .build();
+            peerServer.broadcast(NexusChainOuterClass.Transactions.newBuilder().addTransactions(tx).build());
+        } catch (RuntimeException e) {
+            log.warn("P2P finality payload broadcast failed: {}", e.getMessage());
         }
     }
 

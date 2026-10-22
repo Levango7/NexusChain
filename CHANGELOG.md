@@ -4,6 +4,33 @@
 
 ## [Unreleased]
 
+### 独立存储拓扑下的最终性补票（PLAN-025，2026-10-23）
+
+**背景**：PLAN-021 让最终性视图在**共享存储**下收敛（掉线节点从同一个库把新票拉回来）；
+**独立存储**部署时对端的票从来不在本节点库里，广播错过的票永久缺失 ⇒ 视图不收敛（roadmap #27 的剩余缺口）。
+
+**协议**：新增 0x5B 补票请求（`{"from":N,"max":M}`），对端按 `epoch DESC LIMIT` 回推**已签名**的票；
+响应**复用既有 0x5A 投票通道**，接收端仍走 `submitVote` 的绑定校验、聚合验签、幂等落库 ⇒ 不新增信任面。
+老节点收到 0x5B 按非投票载荷丢弃（向后兼容，只是不补票）。
+
+- 补票请求不签名：不改变状态，只能触发重发已存在的签名票；放大受 `max-votes`（默认 200）约束。
+- 定时补票：默认 30 秒，`from = max(0, localMaxEpoch - margin)`，`margin` 默认 50；冷启动 `from = 0`。
+- `voteObjectCache` / `voteObjects` 改为**按验证人去重替换**（否则重复补票会让列表无限增长）。
+- `FinalityStateStore.loadLatestVoteObjects(from, limit)`：JDBC 下沉为 `ORDER BY epoch DESC LIMIT ?`。
+- `RDBMSBlockChainImpl` 的 `ALTER TABLE account OWNER TO <user>` 降级为 best-effort（非 PostgreSQL 不支持该语法）。
+
+**验收（同主机 2 进程 + 2 个独立 PostgreSQL 16.9 实例，非多机）**：
+预热后把 B 库中"对端的票"删掉、保留 B 自己的票并清空 checkpoint，重启观察 75 秒：
+
+| 组 | B 恢复后的 checkpoint | 其中历史区间 | max epoch |
+|----|----------------------|--------------|-----------|
+| 补票开 | `19..143 / 125 个` | **51 个（19..69）** | **143（与 A 一致）** |
+| 补票关 | `70..145 / 76 个` | **0 个（≤68）** | 145（仅新 epoch） |
+
+补回 51 个恰好对应 `margin=50` 的窗口（B 本地 max=69 ⇒ 从 19 开始），1..18 不补是已声明边界。
+补票关组证明历史缺口**不会自愈**（虽然水位照样能到 145，极易误判为"已恢复"）。
+详见 `docs/plan/PLAN-025-finality-anti-entropy.md`。
+
 ### CI runner 标签统一切到 ubuntu-24.04（PLAN-024，2026-10-22）
 
 **背景**：2026-10-21 ~ 10-22 多个 PR 出现「run 已创建但**全仓 in_progress=0**、job 排队 15~60 分钟」。

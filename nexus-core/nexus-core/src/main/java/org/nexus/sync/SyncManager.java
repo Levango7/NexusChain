@@ -233,7 +233,10 @@ public class SyncManager implements Plugin, ApplicationListener<NewBlockMinedEve
             if (tx.getTransactionType() != NexusChainOuterClass.TransactionType.VOTE) {
                 continue;
             }
-            if (org.nexus.consensus.finality.net.FinalityVoteP2PCodec.isVotePayload(payload)) {
+            // PLAN-025：补票请求（魔数 0x5B）与投票（0x5A）复用 VOTE 交易类型，按载荷魔数分流。
+            // 老节点收到 0x5B 会因 isVotePayload 为 false 而丢弃 —— 向后兼容（只是不补票）。
+            if (org.nexus.consensus.finality.net.FinalityVoteP2PCodec.isVotePayload(payload)
+                    || org.nexus.consensus.finality.net.FinalityVoteSyncCodec.isSyncPayload(payload)) {
                 finalityVoteBroadcaster.onVoteReceived(payload);
             }
         }
