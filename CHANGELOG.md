@@ -4,6 +4,28 @@
 
 ## [Unreleased]
 
+### 3 节点节点级故障容忍 + 验证人集重放修复（PLAN-020 Phase 6C 第四切片）
+
+**背景**：既定顺序里的下一项是「3 节点多主机混沌」，但本环境只有一台主机、一个共享 PG
+⇒ 本切片做的是**单主机 3 节点**（明确不是多机高可用）。
+
+- **真 bug 修复**：`ValidatorSetPersistence.replay()` 在 `RowCallbackHandler` 里多调了一次
+  `rs.next()` —— 该回调是"**每行调用一次**"，内部再 next() 会把游标多推一行 ⇒
+  **验证人集隔行丢失**（实测库里 3 个只重放 2 个）⇒ 重启节点认不全 proposer ⇒
+  `ConsensusRule` 判 "unknown proposer (validator set not synchronized)" ⇒
+  **该节点永久卡在缺口高度、无法采纳对端区块**。
+  这与 `JdbcFinalityStateStore.reload()` 里早已修过的同类坑同源（本次按类排查全仓，
+  确认无其它残留）。
+  新增回归测试 `ValidatorSetPersistenceReplayTest`（5 个验证人必须全部重放 + 幂等），
+  **已验证旧实现下 2/2 失败、修复后通过**。
+- **验收（单主机 3 节点 + 共享 PG，非多机）**：杀掉 1/3 验证人 ⇒ A/B 继续出块，
+  最终性不中断（epoch 1942 `voted=3000/3000` FINALIZED）；C 重启后**完全追平**
+  （7784 vs 7785）并**重新参与投票**（epoch 1945/1946）；检查点 epoch 1870..1946 **缺口 0**、
+  每 epoch 投票数 2..3、`ERROR` 0、无 reorg。
+- **边界**：不是多机（无独立存储/网络分区/断电/PG 主备切换）；多副本最终性视图仍不一致
+  （各节点报告的权重进度不同，读路径是启动快照，roadmap #27 未修）。
+  详见 `docs/plan/PLAN-020-node-failure-tolerance.md`。
+
 ### ci(security): OWASP Dependency-Check 的 NVD 重试预算 10→3（承接缺陷 #53）
 
 **背景**：缺陷 #53 已把 OWASP job 上限放宽到 40 分钟并给红因分级，但 2026-10-21 ~ 10-22

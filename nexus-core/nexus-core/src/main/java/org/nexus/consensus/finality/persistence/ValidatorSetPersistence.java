@@ -70,15 +70,21 @@ public class ValidatorSetPersistence {
     /** 启动重放：从共享表加载全部验证人注册到本地 Registry（幂等）。 */
     public void replay() {
         try {
+            // 2026-10-22 修复（PLAN-020 3 节点验收实证）：此前在 RowCallbackHandler 里
+            // 又调了一次 rs.next() —— 该回调是"**每行调用一次**"，内部再 next() 会把
+            // 游标多推一行 ⇒ **隔行丢失**（3 个验证人只重放了 2 个，第 3 个被跳过）。
+            // 后果：重启节点对"谁是 proposer"判断不完整 →
+            //      "unknown proposer (validator set not synchronized)" →
+            //      该节点无法采纳对端区块，永久卡在缺口高度（3 节点验收中实测：
+            //      C 重启后追平停在 7766，每 30 秒重试一次）。
+            // 与 JdbcFinalityStateStore.reload() 是同一类坑（那里已有注释留痕）。
             jdbc.query("SELECT address, public_key, stake_amount FROM validators_synced", rs -> {
-                while (rs.next()) {
-                    String addr = rs.getString("address");
-                    if (validatorRegistry.getValidator(addr) == null) {
-                        boolean ok = validatorRegistry.register(
-                                addr, rs.getString("public_key"),
-                                new BigDecimal(rs.getString("stake_amount")), 0.1);
-                        log.info("Validator replay: address={} registered={}", addr, ok);
-                    }
+                String addr = rs.getString("address");
+                if (validatorRegistry.getValidator(addr) == null) {
+                    boolean ok = validatorRegistry.register(
+                            addr, rs.getString("public_key"),
+                            new BigDecimal(rs.getString("stake_amount")), 0.1);
+                    log.info("Validator replay: address={} registered={}", addr, ok);
                 }
             });
         } catch (RuntimeException e) {
