@@ -535,6 +535,21 @@ jobs:
           fi
           ls -la build/reports/dependency-check/
 
+      # 2026-10-22（PLAN-022）：**基线比对** —— 补上"PR/push 只读缓存库"带来的增量盲区。
+      # 背景：#177 之后，PR/push 路径的扫描用的是 NVD **缓存库**（周级新鲜度），
+      #       所以 PR 扫描**看不到新披露的漏洞**（判定只覆盖"缓存库里已知的那批"）。
+      #       本步骤在**刷新路径**（周 cron / 手动）上跑：此时漏洞库刚被刷新，
+      #       报告里的漏洞集合与"已受理基线"比对，凡是基线之外的都算**新增** ⇒ 判红，
+      #       要求人二选一：升版依赖（首选）或显式更新基线文件（写明理由与复核日期）。
+      # 只在刷新路径执行：PR 路径若也跑这一步，缓存库一旦刷新就会把所有 PR 卡住，
+      # 造成"每周一次全员被卡"的噪声（基线更新本该是低频、有意识的动作）。
+      - name: 基线比对（新增漏洞必须有人签字）
+        if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        run: |
+          python3 scripts/security/dependency-check-baseline-diff.py \
+            --report build/reports/dependency-check/dependency-check-report.json \
+            --baseline config/dependency-check-baseline.json
+
       # 2026-10-01（PR #16 引入 → PR #17 语义收紧）：扫描覆盖度自检。
       # 目的：让"绿"永远不可能是「什么都没识别出来」造成的。
       # 语义变化（PR #17，配合改用官方 Gradle 插件做真覆盖）：
