@@ -38,8 +38,24 @@ public class InMemoryFinalityStateStore implements FinalityStateStore {
         votes.computeIfAbsent(key, k -> ConcurrentHashMap.newKeySet())
                 .add(validatorAddress);
         if (signature != null && signature.length > 0) {
-            voteObjects.computeIfAbsent(key, k -> new ArrayList<>())
-                    .add(new Vote(epoch, checkpointHash, validatorAddress, signature, publicKey));
+            // PLAN-025：anti-entropy 会重复投递同一张票（补票请求的回推），
+            // 这里按验证人去重替换，避免 List 无限增长（原先每次 add 都会追加一条）。
+            List<Vote> list = voteObjects.computeIfAbsent(key, k ->
+                    java.util.Collections.synchronizedList(new ArrayList<>()));
+            Vote incoming = new Vote(epoch, checkpointHash, validatorAddress, signature, publicKey);
+            synchronized (list) {
+                boolean replaced = false;
+                for (int i = 0; i < list.size(); i++) {
+                    if (validatorAddress.equals(list.get(i).getValidatorAddress())) {
+                        list.set(i, incoming);
+                        replaced = true;
+                        break;
+                    }
+                }
+                if (!replaced) {
+                    list.add(incoming);
+                }
+            }
         }
     }
 

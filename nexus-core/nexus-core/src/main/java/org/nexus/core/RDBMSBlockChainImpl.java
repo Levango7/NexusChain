@@ -228,7 +228,14 @@ public class RDBMSBlockChainImpl implements NexusChainBlockChain {
                     + databaseUserName + "'");
             }
             String sql = "ALTER TABLE account OWNER TO " + databaseUserName;
-            tmpl.execute(sql);//更换属主
+            // 属主变更只在 PostgreSQL 上有意义：建表用户本来就是属主，这行是历史遗留的显式兜底。
+            // 非 PostgreSQL（H2 等嵌入式库，用于本地/独立存储联调）不支持 OWNER TO 语法，
+            // 这里降级为告警而不是让节点起不来（属主错误只影响跨用户授权，不影响本节点读写）。
+            try {
+                tmpl.execute(sql);//更换属主
+            } catch (org.springframework.jdbc.BadSqlGrammarException e) {
+                logger.warn("Skip '{}' (unsupported by this database): {}", sql, e.getMessage());
+            }
         }
 
         tmpl.execute("ALTER TABLE account ADD COLUMN IF NOT EXISTS vote int8 not null DEFAULT 0");
