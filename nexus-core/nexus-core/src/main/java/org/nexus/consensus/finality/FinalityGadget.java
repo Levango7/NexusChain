@@ -53,6 +53,14 @@ public class FinalityGadget {
      */
     private final Set<String> finalizationRejected = ConcurrentHashMap.newKeySet();
     private final List<EquivocationEvidence> detectedEquivocations = new java.util.concurrent.CopyOnWriteArrayList<>();  // P0-3: 并发安全
+    /**
+     * 收敛起点（PLAN-021）：下一次从哪个 epoch 开始拉"新事实"。
+     *
+     * <p>启动恢复时置为"已恢复的最大 epoch"（含），避免第一次收敛就全表扫描；
+     * 之后随收敛推进。</p>
+     */
+    private volatile long convergeFromEpoch = 0L;
+
     /** 已执行罚没的作恶者（地址），防止同一证据重复 slash 造成过度惩罚。 */
     private final Set<String> slashedOffenders = ConcurrentHashMap.newKeySet();
 
@@ -164,6 +172,15 @@ public class FinalityGadget {
                             finalizedCheckpoints.size(), epochCheckpointVoters.size(),
                             epochCheckpointVotes.size());
         }
+        // PLAN-021：收敛起点 = 已恢复的最大 epoch（含），避免第一次收敛就全表扫描。
+        long maxEpoch = 0L;
+        for (String key : epochCheckpointVoters.keySet()) {
+            maxEpoch = Math.max(maxEpoch, epochOfKey(key));
+        }
+        for (String key : finalizedCheckpoints) {
+            maxEpoch = Math.max(maxEpoch, epochOfKey(key));
+        }
+        convergeFromEpoch = maxEpoch;
     }
 
     /**
@@ -192,6 +209,140 @@ public class FinalityGadget {
      */
     public synchronized void setSlashingService(SlashingService slashingService) {
         this.slashingService = slashingService;
+    }
+
+    /**
+     * 身份/公钥绑定校验（PLAN-021 抽出，供提交路径与**跨节点收敛**路径共用）。
+     *
+     * <p>口径必须与 {@link #submitVote} 完全一致：只有"在注册表里且状态为 ACTIVE、
+     * 且投票携带的公钥与注册公钥一致"的票才允许计权。收敛路径若放宽这一条，
+     * 就等于让**库里的任意行**都能给自己加权重。</p>
+     */
+    private boolean validateVoteBinding(Vote vote) {
+        Validator v = validatorRegistry.getValidator(vote.getValidatorAddress());
+        if (v == null || v.getStatus() != ValidatorStatus.ACTIVE) {
+            return false;
+        }
+        String registeredPubHex = v.getPublicKey();
+        byte[] votePubKey = vote.getPublicKeyBytes();
+        if (registeredPubHex == null || registeredPubHex.isEmpty()
+                || votePubKey == null || votePubKey.length == 0
+                || !registeredPubHex.equalsIgnoreCase(Hex.encodeHexString(votePubKey))) {
+            log.warn("Vote pubkey binding FAILED for validator {}: registered={}, votePayloadPubKey={}",
+                    vote.getValidatorAddress(),
+                    registeredPubHex == null || registeredPubHex.isEmpty() ? "none" : "present",
+                    votePubKey == null || votePubKey.length == 0 ? "none" : "mismatch");
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * 跨节点最终性视图收敛（PLAN-021）。
+     *
+     * <p><b>要解决的缺口</b>：本类的内存视图（投票者集合 / 投票对象 / 已终局集合）
+     * 原本只在**启动恢复**时从库里装载一次 ⇒ 启动之后对端投的票本节点永远看不到。
+     * 后果（3 节点验收实测）：掉线节点重启后只看到自己那 1 票（1000/3000），
+     * 于是①对外报告的权重进度是错的；②即便对端已把该检查点终局，本节点也
+     * 永远不会本地补最终化。</p>
+     *
+     * <p><b>做法</b>：每 5 秒把"库里的新事实"（对端已落库的票 + 已被标记终局的检查点）
+     * 拉进本地内存视图，并重试这些检查点的最终化。</p>
+     *
+     * <p><b>安全边界</b>：</p>
+     * <ul>
+     *   <li>合并进来的票**必须**通过与提交路径同一套绑定校验（{@link #validateVoteBinding}）；</li>
+     *   <li>合并是**单调**的：只增不减（与"缓存不设 TTL"的理由一致 —— 最终性事实不可逆）；</li>
+     *   <li>去重靠投票者集合（同一验证人不会被计两次权重）；</li>
+     *   <li>拉取窗口只覆盖"最近若干个 epoch"，避免每次全表扫描。</li>
+     * </ul>
+     */
+    @org.springframework.scheduling.annotation.Scheduled(fixedDelay = 5_000L)
+    public void scheduledFinalityViewConvergence() {
+        try {
+            convergeFinalityView();
+        } catch (RuntimeException e) {
+            log.warn("Finality view convergence failed: {}", e.getMessage());
+        }
+    }
+
+    /** 收敛逻辑（包内可测）。 */
+    synchronized void convergeFinalityView() {
+        FinalityStateStore store = stateStore;
+        if (store == null) {
+            return;
+        }
+        long from = convergeFromEpoch;
+        Map<String, List<Vote>> votes = store.loadVoteObjectsSince(from);
+        Set<String> finalized = store.loadFinalizedKeysSince(from);
+        if (votes.isEmpty() && finalized.isEmpty()) {
+            return;
+        }
+        long maxEpoch = from;
+        Set<String> affected = new java.util.HashSet<>();
+        for (Map.Entry<String, List<Vote>> entry : votes.entrySet()) {
+            String key = entry.getKey();
+            long epoch = epochOfKey(key);
+            maxEpoch = Math.max(maxEpoch, epoch);
+            Set<String> voters = epochCheckpointVoters.computeIfAbsent(key, k -> ConcurrentHashMap.newKeySet());
+            for (Vote vote : entry.getValue()) {
+                if (vote == null || voters.contains(vote.getValidatorAddress())) {
+                    continue;   // 去重：同一验证人不重复计权
+                }
+                if (!validateVoteBinding(vote)) {
+                    continue;   // 与提交路径同一口径的绑定校验
+                }
+                voters.add(vote.getValidatorAddress());
+                epochCheckpointVotes.computeIfAbsent(key, k -> new java.util.concurrent.CopyOnWriteArrayList<>())
+                        .add(vote);
+                BigDecimal weight = stakingService == null ? null : stakingService.getStake(vote.getValidatorAddress());
+                if (weight != null) {
+                    BigDecimal current = epochCheckpointWeights.getOrDefault(key, BigDecimal.ZERO);
+                    epochCheckpointWeights.put(key, current.add(weight));
+                }
+                finalizationRejected.remove(key);
+                affected.add(key);
+            }
+        }
+        for (String key : finalized) {
+            finalizedCheckpoints.add(key);
+            maxEpoch = Math.max(maxEpoch, epochOfKey(key));
+        }
+        // 下次仍从"当前最大 epoch"开始（而不是 +1）：同一 epoch 仍可能有迟到票。
+        convergeFromEpoch = maxEpoch;
+        if (!affected.isEmpty()) {
+            log.info("Finality view converged: merged votes for {} checkpoint(s) (epoch>= {})",
+                    affected.size(), from);
+        }
+        for (String key : affected) {
+            long epoch = epochOfKey(key);
+            byte[] checkpoint = parseCheckpoint(hexOfKey(key));
+            try {
+                tryFinalize(epoch, checkpoint, key, totalWeightForEpoch(epoch));
+            } catch (RuntimeException e) {
+                // 写库失败不影响其它检查点：下一轮再试。
+                log.warn("Finality convergence finalize attempt failed for {}: {}", key, e.getMessage());
+            }
+        }
+    }
+
+    /** 从 "epoch|hex" 里取 epoch。 */
+    private static long epochOfKey(String key) {
+        int idx = key.indexOf('|');
+        if (idx <= 0) {
+            return 0L;
+        }
+        try {
+            return Long.parseLong(key.substring(0, idx));
+        } catch (NumberFormatException e) {
+            return 0L;
+        }
+    }
+
+    /** 从 "epoch|hex" 里取 hex。 */
+    private static String hexOfKey(String key) {
+        int idx = key.indexOf('|');
+        return idx < 0 ? "" : key.substring(idx + 1);
     }
 
     /**
@@ -233,19 +384,7 @@ public class FinalityGadget {
         // P0-1 审计修复：先做身份/公钥绑定校验，再记录投票。
         // 不能先把未验证的地址写入 voters/DB——否则重启恢复时会把无效投票
         // 的质押权重重新计入，破坏最终性安全边界。
-        Validator v = validatorRegistry.getValidator(vote.getValidatorAddress());
-        if (v == null || v.getStatus() != ValidatorStatus.ACTIVE) {
-            return record(epoch, vote.getCheckpointHash(), total);
-        }
-        String registeredPubHex = v.getPublicKey();
-        byte[] votePubKey = vote.getPublicKeyBytes();
-        if (registeredPubHex == null || registeredPubHex.isEmpty()
-                || votePubKey == null || votePubKey.length == 0
-                || !registeredPubHex.equalsIgnoreCase(Hex.encodeHexString(votePubKey))) {
-            log.warn("Vote pubkey binding FAILED for validator {}: registered={}, votePayloadPubKey={}",
-                    vote.getValidatorAddress(),
-                    registeredPubHex == null || registeredPubHex.isEmpty() ? "none" : "present",
-                    votePubKey == null || votePubKey.length == 0 ? "none" : "mismatch");
+        if (!validateVoteBinding(vote)) {
             return record(epoch, vote.getCheckpointHash(), total);
         }
 

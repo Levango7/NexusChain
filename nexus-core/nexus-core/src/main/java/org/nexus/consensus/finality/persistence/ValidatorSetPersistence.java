@@ -1,5 +1,6 @@
 package org.nexus.consensus.finality.persistence;
 
+import org.nexus.consensus.pos.StakingService;
 import org.nexus.consensus.pos.ValidatorRegistry;
 import org.nexus.db.JdbcUpsert;
 import org.nexus.db.SchemaMeta;
@@ -36,11 +37,29 @@ public class ValidatorSetPersistence {
 
     private final JdbcTemplate jdbc;
     private final ValidatorRegistry validatorRegistry;
+    /** PLAN-021：可选注入，用于把重放出来的质押额灌进本地账本。 */
+    private final StakingService stakingService;
 
     public ValidatorSetPersistence(@Autowired(required = false) JdbcTemplate jdbc,
                                    @Autowired(required = false) ValidatorRegistry validatorRegistry) {
+        this(jdbc, validatorRegistry, null);
+    }
+
+    /**
+     * 完整构造（可注入 StakingService）。
+     *
+     * <p>PLAN-021：注入 {@link StakingService} 是为了让 {@link #replay()} 能把
+     * **质押额**也灌进本地账本 —— 少了这一步，节点虽然知道"有这些验证人"，
+     * 却在权重口径上只算自己（{@code getStake()} 只读本地账本），
+     * 于是总权重偏小、永远达不到 2/3 阈值（3 节点验收实测：重启节点报 1000/3000）。</p>
+     */
+    @Autowired
+    public ValidatorSetPersistence(@Autowired(required = false) JdbcTemplate jdbc,
+                                   @Autowired(required = false) ValidatorRegistry validatorRegistry,
+                                   @Autowired(required = false) StakingService stakingService) {
         this.jdbc = jdbc;
         this.validatorRegistry = validatorRegistry;
+        this.stakingService = stakingService;
     }
 
     @PostConstruct
@@ -85,6 +104,14 @@ public class ValidatorSetPersistence {
                             addr, rs.getString("public_key"),
                             new BigDecimal(rs.getString("stake_amount")), 0.1);
                     log.info("Validator replay: address={} registered={}", addr, ok);
+                }
+                // PLAN-021：质押额也必须进本地账本。
+                // StakingService.getStake() 只读自己的账本（不回落注册表），
+                // 所以只在注册表里补登记是不够的 —— 权重口径会把这些验证人算成 0，
+                // 总权重偏小 ⇒ 永远达不到 2/3 阈值 ⇒ 本节点永远无法本地补最终化。
+                // seedStake 只填空账本，不会覆盖已有质押 ✔（与广播路径 SyncManager 同一做法）。
+                if (stakingService != null) {
+                    stakingService.seedStake(addr, new BigDecimal(rs.getString("stake_amount")));
                 }
             });
         } catch (RuntimeException e) {

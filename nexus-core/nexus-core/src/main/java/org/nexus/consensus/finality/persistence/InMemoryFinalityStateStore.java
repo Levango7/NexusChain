@@ -5,6 +5,7 @@ import org.nexus.consensus.finality.Vote;
 import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -82,6 +83,40 @@ public class InMemoryFinalityStateStore implements FinalityStateStore {
                 current.getEpoch(), current.getCheckpointHash(), current.getValidatorAddress(),
                 current.getSignature(), current.getPublicKey(), current.getOrigin(),
                 current.getCreatedAt(), current.getAttempts() + 1, error));
+    }
+
+    @Override
+    public Map<String, List<Vote>> loadVoteObjectsSince(long fromEpoch) {
+        Map<String, List<Vote>> out = new LinkedHashMap<>();
+        voteObjects.forEach((key, votes) -> {
+            if (epochOfKey(key) >= fromEpoch) {
+                out.put(key, List.copyOf(votes));
+            }
+        });
+        return out;
+    }
+
+    @Override
+    public Set<String> loadFinalizedKeysSince(long fromEpoch) {
+        Set<String> out = new LinkedHashSet<>();
+        finalized.keySet().forEach(key -> {
+            if (epochOfKey(key) >= fromEpoch) {
+                out.add(key);
+            }
+        });
+        return out;
+    }
+
+    private static long epochOfKey(String key) {
+        int idx = key.indexOf('|');
+        if (idx <= 0) {
+            return 0L;
+        }
+        try {
+            return Long.parseLong(key.substring(0, idx));
+        } catch (NumberFormatException e) {
+            return 0L;
+        }
     }
 
     @Override

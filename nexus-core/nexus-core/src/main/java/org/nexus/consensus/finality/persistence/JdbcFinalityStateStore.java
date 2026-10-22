@@ -11,6 +11,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -231,6 +233,43 @@ public class JdbcFinalityStateStore implements FinalityStateStore {
                 error == null ? "" : (error.length() > 500 ? error.substring(0, 500) : error),
                 entry.getEpoch(), hashStr(entry.getCheckpointHash()), entry.getValidatorAddress(),
                 entry.getOrigin().code());
+    }
+
+    @Override
+    public Map<String, List<org.nexus.consensus.finality.Vote>> loadVoteObjectsSince(long fromEpoch) {
+        Map<String, List<org.nexus.consensus.finality.Vote>> out = new LinkedHashMap<>();
+        try {
+            // 只取带签名的行（迁移前的历史行没有签名，无法参与验签）。
+            jdbc.query("SELECT epoch, checkpoint_hash, validator, signature, public_key "
+                            + "FROM finality_votes WHERE epoch >= ? AND signature IS NOT NULL",
+                    rs -> {
+                        String ck = rs.getString("checkpoint_hash");
+                        String key = rs.getLong("epoch") + "|" + ck;
+                        byte[] sig = hexToBytes(rs.getString("signature"));
+                        byte[] pub = hexToBytes(rs.getString("public_key"));
+                        byte[] checkpoint = hexToBytes(ck);
+                        out.computeIfAbsent(key,
+                                        k -> new java.util.concurrent.CopyOnWriteArrayList<>())
+                                .add(new org.nexus.consensus.finality.Vote(
+                                        rs.getLong("epoch"), checkpoint, rs.getString("validator"), sig, pub));
+                    }, fromEpoch);
+        } catch (RuntimeException e) {
+            log.warn("JdbcFinalityStateStore: load votes since {} failed: {}", fromEpoch, e.getMessage());
+        }
+        return out;
+    }
+
+    @Override
+    public Set<String> loadFinalizedKeysSince(long fromEpoch) {
+        Set<String> out = new LinkedHashSet<>();
+        try {
+            jdbc.query("SELECT epoch, checkpoint_hash FROM finality_checkpoints WHERE epoch >= ?", rs -> {
+                out.add(rs.getLong("epoch") + "|" + rs.getString("checkpoint_hash"));
+            }, fromEpoch);
+        } catch (RuntimeException e) {
+            log.warn("JdbcFinalityStateStore: load finalized since {} failed: {}", fromEpoch, e.getMessage());
+        }
+        return out;
     }
 
     @Override
