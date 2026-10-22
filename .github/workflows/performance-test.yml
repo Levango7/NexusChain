@@ -87,7 +87,7 @@ jobs:
   # ============================================================
   smoke-test:
     name: k6 Smoke Test (PR)
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-24.04
     if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'smoke')
     # 审计修复：15min → 30min。docker compose 从源码构建 gateway+bridge 两个镜像
     # （每个含 wrapper 发行包下载 ~130MB + 全量依赖解析，构建容器无 Gradle 缓存），
@@ -254,7 +254,7 @@ jobs:
   # ============================================================
   full-load-test:
     name: k6 Full Load Test (staging)
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-24.04
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'full'
     timeout-minutes: 60
     env:
@@ -346,7 +346,7 @@ jobs:
   # ============================================================
   capacity-baseline:
     name: k6 Capacity Baseline
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-24.04
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'capacity'
     timeout-minutes: 45
     env:

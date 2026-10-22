@@ -7,7 +7,17 @@ name: NexusChain CI/CD Pipeline
 # 流程：编译 → 测试 → 覆盖率报告 → Codecov 上传 → JAR 产物上传 → Docker 构建/推送
 #
 # 注：CI 运行于 Linux runner，使用 ./gradlew（Windows 本地开发用 gradlew.bat）。
-#     matrix.os 可扩展为 [ubuntu-26.04, windows-latest] 做跨 OS 验证。
+#     matrix.os 可扩展为 [ubuntu-24.04, windows-latest] 做跨 OS 验证。
+#
+# 2026-10-22（PLAN-024）：runner 标签由 `ubuntu-26.04` 统一切到 **`ubuntu-24.04`**。
+# ⚠️ 归因已修正：最初把「job 排队 15~60 分钟」归因为「26.04 标签池为空」，但实测**不支持**该结论 ——
+#   · incident 前（2026-10-22 15:0xZ）：26.04 的 PR 排队 3.5 分钟、24.04 的 PR 4.4 分钟，**无差异**；
+#   · 15:28Z 起 GitHub Actions 官方 incident（degraded_performance）期间，两个标签**同时**排队 30+ 分钟且
+#     全仓 in_progress=0 ⇒ 排队主因在平台侧。
+# 因此切标签**不宣称**能缩短排队；理由是 24.04 为最成熟、供给最足的 LTS 镜像（低风险对冲，产物不受影响）。
+# 代价：24.04 的系统库安全更新比 26.04 晚一档（GitHub 每周重建镜像，补丁仍跟进）。
+#   已登记为 roadmap #32，可随时回退。
+# 复核方法：合并后对比同一 PR 的"run 创建 → 首个 job 启动"间隔（本 PR 自身即为对照样本）。
 
 on:
   push:
@@ -57,7 +67,7 @@ jobs:
   # ============================================================
   code-hygiene:
     name: Code Hygiene (ratchet gate)
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-24.04
     # 2026-10-18：5 → 8。本 job 是 required context，而新增的「迁移版本号棘轮」
     # step 需要一次 `git fetch --depth=2 origin master`。原 5 分钟是按"纯 Python、
     # 秒级完成"定的；加了网络取数后，若 runner 网络抖动导致超时，这个 required job
@@ -170,7 +180,7 @@ jobs:
   # ============================================================
   explorer-frontend:
     name: Explorer Frontend (lint / test / build / artifacts)
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     defaults:
       run:
@@ -257,7 +267,7 @@ jobs:
     # 两者都会让 required check「永不上报」→ master 上所有 PR 永久 blocked。
     # 故本 job 不使用 matrix；将来若需跨 OS 验证，另建独立 job 并各用固定名称。
     name: Build & Test (JDK 17)
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout 代码
         uses: actions/checkout@v5
@@ -728,7 +738,7 @@ jobs:
   # ============================================================
   mpc-java-cluster-e2e:
     name: MPC Java Cluster E2E (CGGMP21 3-node)
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-24.04
     needs: build-and-test
     timeout-minutes: 45
     steps:
@@ -833,7 +843,7 @@ jobs:
   # ============================================================
   mpc-kind-smoke:
     name: MPC Kind Smoke (mpc-engine chart on K8s)
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-24.04
     needs: build-and-test
     timeout-minutes: 50
     steps:
@@ -995,7 +1005,7 @@ jobs:
   flyway-migration-check:
     timeout-minutes: 10  # 观测峰值 0.9 min
     name: Flyway 迁移预检
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-24.04
     services:
       mysql:
         image: mysql:8.0
@@ -1088,7 +1098,7 @@ jobs:
   # ============================================================
   hardhat-e2e:
     name: Hardhat L1/L2 E2E (Node 26)
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-24.04
     # 观察模式已毕业（2026-08-30 首轮真实执行：33 用例运行/0 失败，
     # 5 类全部真实执行——治理 12/桥 4/校验管道 11/L2↔L1 6；其余 13 用例为
     # 环境断言下的合法 assumeTrue 跳过），转为强制门禁。
@@ -1162,7 +1172,7 @@ jobs:
     name: Docker Build & Push (${{ matrix.module }})
     needs: build-and-test
     if: github.ref == 'refs/heads/master' && github.event_name == 'push'
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-24.04
     # GHCR 推送需要 packages: write 权限（默认 GITHUB_TOKEN 无此权限，
     # 导致 "denied: installation not allowed to Create organization package"）。
     permissions:

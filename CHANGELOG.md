@@ -4,6 +4,24 @@
 
 ## [Unreleased]
 
+### CI runner 标签统一切到 ubuntu-24.04（PLAN-024，2026-10-22）
+
+**背景**：2026-10-21 ~ 10-22 多个 PR 出现「run 已创建但**全仓 in_progress=0**、job 排队 15~60 分钟」。
+
+**归因修正（重要）**：最初判断为「`ubuntu-26.04` 标签的 runner 池为空」，但 2026-10-22 的实测**推翻了它**：
+- incident 前（15:0xZ）：#182（**26.04**）排队 **3.5 分钟**、#183（24.04）**4.4 分钟** —— 两个标签**没有差异**；
+- 15:28Z 起 GitHub Actions 官方 incident（`degraded_performance`，至 16:41Z 仍未恢复）：
+  **26.04 与 24.04 的 job 全部排队 30+ 分钟、in_progress=0** ⇒ 排队主因在**平台侧**。
+
+⇒ 因此本项**不再宣称**「换标签缩短了排队」。仍执行切换的理由只剩一条：24.04 是最成熟、供给最足的 LTS 镜像，
+属低风险对冲（构建产物不受影响，镜像基础镜像由各 Dockerfile 决定）。
+
+- 29 处 `runs-on: ubuntu-26.04` → **`ubuntu-24.04`**（ci / security-scan / performance-test /
+  k8s-sync-check / release 五个 workflow）。
+- 取 `ubuntu-24.04` 而非 `ubuntu-latest`：本仓一贯钉版本（actions 钉 SHA、插件钉版本），`latest` 会漂移。
+- **代价**：24.04 的系统库安全更新比 26.04 晚一档（GitHub 每周重建镜像，补丁仍跟进）—— 已登记 roadmap #32，可随时回退。
+- **待复核**：在无 incident 时段做 26.04 vs 24.04 对照测量（当前无任何实测支持「换标签能提速」）。
+
 ### 依赖升版清偿 SCA 命中（PLAN-023，2026-10-22）
 
 **背景**：PLAN-022 登记的 roadmap #31 —— OWASP 每次扫描稳定报出 52 个漏洞命中（实为 **2 个漏洞种类**），

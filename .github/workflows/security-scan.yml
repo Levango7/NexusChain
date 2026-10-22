@@ -45,7 +45,7 @@ jobs:
   trivy-fs-scan:
     timeout-minutes: 15  # 观测峰值 1.1 min
     name: Trivy Filesystem Scan + SBOM
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       security-events: write   # 上传 SARIF 到 Security tab 所需
@@ -138,7 +138,7 @@ jobs:
     timeout-minutes: 30  # 观测峰值 5.5 min；含新增重试余量
     if: github.event_name != 'pull_request'  # PR 不跑（需构建镜像/起栈，成本高）
     name: Trivy Docker Image Scan (${{ matrix.module }})
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       security-events: write
@@ -242,7 +242,7 @@ jobs:
   trivyignore-staleness:
     timeout-minutes: 15  # 观测峰值 1.2 min
     name: Trivy 豁免时效复核（不阻断）
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-24.04
     # 与上面 2. 的镜像矩阵不同，本 job **在 PR 上也跑**：它不构建仓库镜像，只拉两个
     # 公开基础镜像（≈90s），而这正是有人改 `.trivyignore` 时最该被看一眼的时刻。
     # 刻意不用 matrix：判定 B（"在所有被扫镜像上都无命中"）必须同时看到两份结果，
@@ -320,7 +320,7 @@ jobs:
   # ============================================================
   license-policy:
     name: 依赖许可证策略（报告制）
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Checkout 代码
@@ -415,7 +415,7 @@ jobs:
       github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository
     name: OWASP Dependency-Check
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
@@ -655,7 +655,7 @@ jobs:
   sast-spotbugs:
     timeout-minutes: 25  # 批次⑦起含 6 个 composite build 的编译+扫描（此前观测峰值 2.6 min；composite 增量本机实测约 2 min）
     name: SAST - SpotBugs + FindSecBugs
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
@@ -738,7 +738,7 @@ jobs:
   cargo-audit:
     timeout-minutes: 15  # 观测峰值 3.3 min
     name: Cargo Audit (Rust deps)
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     # B1 修复（2026-08-31 交付前审计）：摘除 continue-on-error。
@@ -771,7 +771,7 @@ jobs:
   cargo-audit-zk:
     timeout-minutes: 15
     name: Cargo Audit (zk-groth16-service)
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
@@ -797,7 +797,7 @@ jobs:
   gitleaks-scan:
     timeout-minutes: 10  # 观测峰值 0.2 min
     name: Gitleaks Secret Scan
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       security-events: write
@@ -831,7 +831,7 @@ jobs:
     timeout-minutes: 25  # 观测峰值 7.7 min
     if: github.event_name != 'pull_request'  # PR 不跑（需构建镜像/起栈，成本高）
     name: DAST - OWASP ZAP Baseline (gateway)
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     # B1 修复（2026-08-31 交付前审计）：摘除 continue-on-error。
@@ -969,7 +969,7 @@ jobs:
   security-issue-triage:
     timeout-minutes: 10  # 观测峰值 0.1 min
     name: Security Issue Triage
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-24.04
     needs: [trivy-fs-scan]
     # 审计修复：原条件 result == 'success' 使 triage 只在扫描【通过】时运行——
     # 有 CRITICAL/HIGH 时 job 失败反而跳过建 Issue，无漏洞时又无漏可报，
