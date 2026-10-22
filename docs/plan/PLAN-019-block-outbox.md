@@ -135,6 +135,9 @@ CREATE TABLE IF NOT EXISTS pending_block_outbox (
 | `JdbcPendingBlockOutboxTest`（新，5 例） | 待补写区块**跨重启**可捞回并解码；重复入队幂等（不产生重复行）；remove 清行；失败计数累加；无 JdbcTemplate 时**禁用**而非抛异常 |
 | `PendingBlocksManagerStorageRetryTest`（+2 例） | 写库失败 → 进 outbox；补写成功 → outbox 行被清；**缓存命中但未落库 → outbox 行保留**（不被当成已完成） |
 
+core 全量：**1625 个用例，19 跳过**（其中 `PortableUpsertPostgresTest` 因本机 Docker 忙而瞬时失败，
+单独重跑通过 —— Testcontainers 起容器失败，与本次改动无关）；`spotbugsAll` 全模块 **0 finding**。
+
 ## 四、真实 PG 验收
 
 环境：同主机双进程 + 容器 PostgreSQL 16（**不是多机高可用**）。
