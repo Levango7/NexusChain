@@ -4,6 +4,22 @@
 
 ## [Unreleased]
 
+### ci(security): OWASP Dependency-Check 的 NVD 重试预算 10→3（承接缺陷 #53）
+
+**背景**：缺陷 #53 已把 OWASP job 上限放宽到 40 分钟并给红因分级，但 2026-10-21 ~ 10-22
+在 master push 上仍连续 3 次以 `rc=124` 收场，日志里**没有真实 API 错误**，只有
+`Retrying request ... 10th time` —— 引擎的默认 10 次 HTTP 重试（每次 1~2 分钟）把 33 分钟
+预算几乎全烧在重试上。
+
+- **改动**：`nvd { maxRetryCount = 3 }`（引擎键 `nvd.api.max.retry.count`），
+  并在根 `gradle.properties` 以 `systemProp.nvd.api.max.retry.count=3` 直达引擎进程，
+  两条通路同值互为兜底。
+- **效果**：取数链路坏时几分钟内以真实错误收场（可见、可归因），成功路径不受影响
+  （PR #170 实测 9 分钟、2026-10-22 master 重跑 10 分 41 秒均一次过）。
+- **不做**：不改 `failBuildOnCVSS`、不关 `autoUpdate`（不牺牲漏洞数据新鲜度）、
+  不在失败时保存 NVD 缓存（lastUpdate 只在成功时推进，半成品无收益且有污染风险）。
+- 机制取证与复验方法见 `docs/dependency-check-update-policy.md`「NVD 取数长尾与重试预算」。
+
 ### PG/AccountDB 短时不可用降级（PLAN-017 Phase 6C 第一切片）
 
 **背景**：PLAN-016 Phase 6B 证明最终性表短时故障不再阻塞 `StateDB` 采纳，但 PG 整体
