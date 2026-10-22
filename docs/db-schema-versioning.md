@@ -12,6 +12,7 @@
 |---|---|---|---|
 | `payment_state` | `JdbcPaymentStateStore` | `payment_channels` / `stablecoin_positions` / `bridge_transactions` / `bridge_replay_keys` | 1 |
 | `finality_state` | `JdbcFinalityStateStore` | `finality_votes`（PLAN-018 起含 `signature`/`public_key` 两列）/ `finality_checkpoints` / `finality_vote_outbox`（PLAN-018 新增） | 1 |
+| pending_block_outbox | JdbcPendingBlockOutbox | pending_block_outbox（PLAN-019 新增） | 1 |
 | `validator_set` | `ValidatorSetPersistence` | `validators_synced` | 1 |
 | `l2_fraud_state` | `JdbcFraudProofStateStore` | `l2_fraud_batches` / `l2_fraud_bonds` / `l2_fraud_conflicts` | 1 |
 | （LevelDB） | `org.nexus.db.Leveldb` | meta 键 `__meta/schema_version` | 1 |

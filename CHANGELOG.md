@@ -4,6 +4,28 @@
 
 ## [Unreleased]
 
+### 3 节点节点级故障容忍 + 验证人集重放修复（PLAN-020 Phase 6C 第四切片）
+
+**背景**：既定顺序里的下一项是「3 节点多主机混沌」，但本环境只有一台主机、一个共享 PG
+⇒ 本切片做的是**单主机 3 节点**（明确不是多机高可用）。
+
+- **真 bug 修复**：`ValidatorSetPersistence.replay()` 在 `RowCallbackHandler` 里多调了一次
+  `rs.next()` —— 该回调是"**每行调用一次**"，内部再 next() 会把游标多推一行 ⇒
+  **验证人集隔行丢失**（实测库里 3 个只重放 2 个）⇒ 重启节点认不全 proposer ⇒
+  `ConsensusRule` 判 "unknown proposer (validator set not synchronized)" ⇒
+  **该节点永久卡在缺口高度、无法采纳对端区块**。
+  这与 `JdbcFinalityStateStore.reload()` 里早已修过的同类坑同源（本次按类排查全仓，
+  确认无其它残留）。
+  新增回归测试 `ValidatorSetPersistenceReplayTest`（5 个验证人必须全部重放 + 幂等），
+  **已验证旧实现下 2/2 失败、修复后通过**。
+- **验收（单主机 3 节点 + 共享 PG，非多机）**：杀掉 1/3 验证人 ⇒ A/B 继续出块，
+  最终性不中断（epoch 1942 `voted=3000/3000` FINALIZED）；C 重启后**完全追平**
+  （7784 vs 7785）并**重新参与投票**（epoch 1945/1946）；检查点 epoch 1870..1946 **缺口 0**、
+  每 epoch 投票数 2..3、`ERROR` 0、无 reorg。
+- **边界**：不是多机（无独立存储/网络分区/断电/PG 主备切换）；多副本最终性视图仍不一致
+  （各节点报告的权重进度不同，读路径是启动快照，roadmap #27 未修）。
+  详见 `docs/plan/PLAN-020-node-failure-tolerance.md`。
+
 ### ci(security): OWASP Dependency-Check 的 NVD 重试预算 10→3（承接缺陷 #53）
 
 **背景**：缺陷 #53 已把 OWASP job 上限放宽到 40 分钟并给红因分级，但 2026-10-21 ~ 10-22
@@ -19,6 +41,32 @@
 - **不做**：不改 `failBuildOnCVSS`、不关 `autoUpdate`（不牺牲漏洞数据新鲜度）、
   不在失败时保存 NVD 缓存（lastUpdate 只在成功时推进，半成品无收益且有污染风险）。
 - 机制取证与复验方法见 `docs/dependency-check-update-policy.md`「NVD 取数长尾与重试预算」。
+
+### 持久化区块 outbox（PLAN-019 Phase 6C 第三切片）
+
+**背景**：PLAN-017 第一切片给 `PendingBlocksManager` 加了**内存**重试队列；
+本切片补成持久化，并顺手修掉两个查证源码后发现的既有缺口：
+
+- **F1（写库失败被吞）**：`RDBMSBlockChainImpl.writeBlock` 捕获写库异常后
+  `return false`，`StateDB.writeBlock` 据此**跳过该块**（"will be retried on next
+  confirmation pass"）⇒ 「区块写库失败」既不抛异常也不进任何重试队列。
+- **F2（接收侧丢区块）**：`SyncClient.receiveBlocks` 把 `account store unavailable`
+  当成 "invalid block" 丢弃；校验直接抛异常时异常逃出 `@Async` 方法，整批丢失。
+
+- **持久化 outbox**：新增 `pending_block_outbox` 表（block_hash/height/payload/created_at/
+  attempts/last_error）与 `PendingBlockOutbox` 抽象（JDBC 实现，additive-only 幂等 DDL，
+  未装配时禁用并退化为内存队列）。写链失败或区块无法处理时把写入意图落库，
+  启动后 `restoreFromOutbox()` 捞回补写。
+- **接收侧不再丢区块**：存储故障标记与校验异常都改交 `PendingBlocksManager`
+  （重试 + outbox 捕获），不再等 P2P 同步重拉。
+- **缓存命中 ≠ 已落库**：`stateDB.writeBlock` 先放缓存再写库，故缓存命中时要用
+  `stateDB.hasBlock` 确认**真的**落库了才清 outbox 行，否则保留（不静默丢写入意图）。
+- **观测**：新增 `GET /consensus/block-outbox`。
+- **实测（2026-10-22，同主机双进程 + 容器 PG，非多机 HA）**：账户表不可用 31.5 秒，
+  收到的区块被**持久化捕获**（`databasePending=1`），恢复后 outbox 自动清零、
+  链继续推进到 7726/7726，`pendingBlock` 超时 0、采纳失败 0。
+  诚实边界：「写库失败」不由本 outbox 兜底（见 F1）；PG 整体停机时链停摆，
+  没有新区块可捕获。详见 `docs/plan/PLAN-019-block-outbox.md`。
 
 ### 最终性持久化闭环（PLAN-018 Phase 6C 第二切片）
 

@@ -64,6 +64,103 @@ public class PendingBlocksManagerStorageRetryTest {
     }
 
     @Test
+    void storageFailurePersistsBlockToOutboxAndClearsItAfterRecovery() {
+        // PLAN-019：写库失败时，除了内存队列，还要把"写入意图"落进持久化 outbox；
+        // 补写成功后 outbox 行必须被清掉。
+        PendingBlocksManager manager = new PendingBlocksManager();
+        StateDB stateDB = mock(StateDB.class);
+        NexusChainBlockChain bc = mock(NexusChainBlockChain.class);
+        CompositeBlockRule rule = mock(CompositeBlockRule.class);
+        MerkleRule merkleRule = mock(MerkleRule.class);
+        RecordingOutbox outbox = new RecordingOutbox();
+
+        Block lastConfirmed = block(0);
+        when(stateDB.getLastConfirmed()).thenReturn(lastConfirmed);
+        when(stateDB.hasBlock(any())).thenReturn(false);
+        when(stateDB.hasBlockInCache(any())).thenReturn(false);
+        when(bc.hasBlock(any())).thenReturn(false);
+        when(rule.validateBlock(any())).thenReturn(Result.SUCCESS);
+        when(merkleRule.validateBlock(any())).thenReturn(Result.SUCCESS);
+        doThrow(new CannotGetJdbcConnectionException("database down"))
+                .doNothing()
+                .when(stateDB).writeBlock(any());
+
+        ReflectionTestUtils.setField(manager, "stateDB", stateDB);
+        ReflectionTestUtils.setField(manager, "bc", bc);
+        ReflectionTestUtils.setField(manager, "rule", rule);
+        ReflectionTestUtils.setField(manager, "merkleRule", merkleRule);
+        ReflectionTestUtils.setField(manager, "blockOutbox", outbox);
+
+        Block candidate = block(1);
+        manager.addPendingBlocks(new BlocksCache(candidate));
+
+        assertEquals(1, outbox.enqueued.size(), "写库失败必须把区块记进持久化 outbox");
+        assertEquals(candidate.getHashHexString(), outbox.enqueued.get(0).getHashHexString());
+
+        manager.retryStorageFailures();
+
+        assertTrue(outbox.removed.contains(candidate.getHashHexString()),
+                "补写成功后必须清掉 outbox 行");
+    }
+
+    @Test
+    void cachedButUnpersistedBlockKeepsItsOutboxEntry() {
+        // PLAN-019：缓存命中不等于已落库（writeBlock 先放缓存再写库）。
+        // 这种情况下**不能**清掉 outbox 行，否则写入意图会被悄悄丢掉。
+        PendingBlocksManager manager = new PendingBlocksManager();
+        StateDB stateDB = mock(StateDB.class);
+        NexusChainBlockChain bc = mock(NexusChainBlockChain.class);
+        CompositeBlockRule rule = mock(CompositeBlockRule.class);
+        MerkleRule merkleRule = mock(MerkleRule.class);
+        RecordingOutbox outbox = new RecordingOutbox();
+
+        Block lastConfirmed = block(0);
+        when(stateDB.getLastConfirmed()).thenReturn(lastConfirmed);
+        when(stateDB.hasBlock(any())).thenReturn(false);   // 没落库
+        when(stateDB.hasBlockInCache(any())).thenReturn(true);  // 但缓存里有
+        when(bc.hasBlock(any())).thenReturn(false);
+        when(rule.validateBlock(any())).thenReturn(Result.SUCCESS);
+        when(merkleRule.validateBlock(any())).thenReturn(Result.SUCCESS);
+
+        ReflectionTestUtils.setField(manager, "stateDB", stateDB);
+        ReflectionTestUtils.setField(manager, "bc", bc);
+        ReflectionTestUtils.setField(manager, "rule", rule);
+        ReflectionTestUtils.setField(manager, "merkleRule", merkleRule);
+        ReflectionTestUtils.setField(manager, "blockOutbox", outbox);
+
+        Block candidate = block(1);
+        manager.addPendingBlocks(new BlocksCache(candidate));
+
+        assertTrue(outbox.removed.isEmpty(), "没落库的区块不得被当成已完成");
+    }
+
+    /** 记录入队/移除的假 outbox。 */
+    private static final class RecordingOutbox implements org.nexus.core.pending.PendingBlockOutbox {
+        private final java.util.List<Block> enqueued = new java.util.ArrayList<>();
+        private final java.util.List<String> removed = new java.util.ArrayList<>();
+
+        @Override
+        public void enqueue(Block block) {
+            enqueued.add(block);
+        }
+
+        @Override
+        public void remove(Block block) {
+            removed.add(block.getHashHexString());
+        }
+
+        @Override
+        public java.util.List<Block> loadPending(int limit) {
+            return java.util.List.of();
+        }
+
+        @Override
+        public int pendingCount() {
+            return enqueued.size() - removed.size();
+        }
+    }
+
+    @Test
     void accountStoreValidationFailureQueuesChainAndRetriesAfterRecovery() {
         PendingBlocksManager manager = new PendingBlocksManager();
         StateDB stateDB = mock(StateDB.class);
