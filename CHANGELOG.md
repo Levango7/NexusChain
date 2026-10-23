@@ -42,7 +42,7 @@ grpc（其追块在 `SyncManager.onStatus` 已有）——F2 是 rest 形态的�
 测试 10 例：`SyncClientMiningSyncTest` 4（mining 不再跳过/窗口裁剪/边界）+
 `SyncManagerValidatorSetRelayTest` 6（首见转发/防环/remove/malformed 不转发/
 全表回放逐条 decode/无 server 短路）。如实边界：中继未签名（沿用 PLAN-001
-信任模型）、rest 形态无 P2P 广播通道故 F1 不适用、多机闭环待 Fifo 修复后
+信任模型）、rest 形态无 P2P 广播通道故 F1 不适用、多机闭环实证见 PLAN-027 §六
 统一重跑。详见 `docs/plan/PLAN-029-mining-node-active-catchup.md`、
 `docs/plan/PLAN-030-validator-set-relay.md`。
 
@@ -61,7 +61,7 @@ grpc（其追块在 `SyncManager.onStatus` 已有）——F2 是 rest 形态的�
   PLAN-003 reorg 兜底。
 
 边界如实：round 推进靠本地时钟，过渡窗口错位可产生一过性双块（兜底已存在，
-无新的绝对性保证）；无罚没/健康度自动降质；多机闭环实证待 F2/F1/Fifo
+无新的绝对性保证）；无罚没/健康度自动降质；多机闭环实证见 PLAN-027 §六
 修复后统一重跑。详见 `docs/plan/PLAN-028-proposer-view-change.md`。
 
 ### 多机拓扑验收与四项发现（PLAN-027，2026-10-23）
@@ -83,8 +83,31 @@ C 库里 A 的票补齐 1..102 全程、B 的票 1..91；A 累计服务补票请
    错过广播的块永久缺失。
 4. **F3** 提议人轮转无 view-change ⇒ 指定提议人卡住时全网停摆且不能自愈。
 
-本切片无产品代码改动；四项修复各自成切片（优先级 F3 > F2 > F1 > Fifo 之外另计），
-修完后重跑多机实验补完"停机-恢复-补票"闭环。
+本切片无产品代码改动；四项修复各自成切片（优先级 F3 > F2 > F1 > Fifo 之外另计），均已交付；多机闭环重跑已完成，见下一段。
+
+### PLAN-027 多机闭环重跑实证（四修复全集，2026-10-23）
+
+四项缺陷（F3/F2/F1/Fifo）全部修复并合并后，重跑多机实验完成"停机-恢复-补票"闭环。口径：**虚拟化边界多机（三套内核：Windows 宿主 / WSL2 VM / Docker VM），非物理多机**；无硬件故障注入，C 的停机为容器级进程隔离；C↔B 直连被宿主防火墙挡，拓扑为 A 居中星型。
+
+| 阶段 | 时刻 | A 高度 | B 高度 | C 高度 | 说明 |
+|------|------|--------|--------|--------|------|
+| T0 基线 | 19:50:23 | 649 | 643 | 650 | 三节点对齐，C 停机前 |
+| T1 停 C 60s | 19:51:53 | 680 | 681 | — | A/B 继续出块（F3 轮转不死锁） |
+| T2 C 恢复 | 19:57:10 | — | — | — | mm-pg-c + mm-app-c 重启 |
+| T3 追平 | ~20:10 | 932 | 927 | 932 | C 补票追平，与 A 同高（±6 块动态尾巴） |
+
+验证结论：
+- **F3**：C 槽位卡住后，A/B 在 C 缺席下继续出块（649→680、643→681），未出现"每秒重复 Selected proposer 无限等待"停摆。
+- **F2**：B 日志可见 SyncManager.require blocks 534..542，grpc 追块路径正常落库（643→681→927）。
+- **F1**：B 库 alidators_synced **3 行自然同步**（A=nv3g…、B=aKUR…、C=mRCg…），无任何人工插行；C 重启后 alidators_synced 同样 3 行（A/B/C 全员），重启节点靠全表回放自我补齐错过历史 add。
+- **Fifo**：B 在 /usr/bin/mkfifo 还原态下正常启动，ValidatorNodeBootstrapper 正常广播验证人集（Validator-set broadcast sent: 186 bytes），"永久卡死"不再复现。
+
+诚实边界：
+- 四修复解决的是**出块活性**（轮转不死锁、追块落库、验证人集同步）；**最终性签名信任模型**（PLAN-001 未签名验证人集消息）未改，伪造 add 风险与修复前同等敞口，签名化是后续工作。
+- 单物理机三内核上的实验，跨 VM/跨内核独立存储拓扑成立；物理多机、真机房网络分区、断电、PG 主备切换未覆盖。
+- F2 修的是 rest 形态 SyncClient.getStatus()；多机实验三节点均为 grpc，不声称 F2 对 grpc 受益。
+
+详见 docs/plan/PLAN-027-multi-machine-findings.md §六。
 
 ### 桥持久化：跨链消息存储落库（PLAN-026，2026-10-23）
 
