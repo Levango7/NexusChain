@@ -66,6 +66,13 @@ public class Fifo implements ApplicationRunner, ApplicationListener<Fifo.FifoMes
     @Value("${node-character}")
     private String character;
 
+    /**
+     * PLAN-031（发现 1 修复）：IPC FIFO 总开关（默认 true 保持既有行为；
+     * false 时完全跳过 —— 容器/CI/无 mkfifo 环境的显式逃生口）。
+     */
+    @Value("${nexus.ipc.enabled:true}")
+    boolean ipcEnabled;
+
     @Autowired
     private PeerServer peerServer;
 
@@ -93,11 +100,44 @@ public class Fifo implements ApplicationRunner, ApplicationListener<Fifo.FifoMes
 
     private static final String InvalidCron = "cron is invalid";
 
+    /**
+     * PLAN-031（修复 PLAN-027 发现 1）：FIFO IPC 移守护线程。
+     *
+     * <p>旧行为：Linux 上 {@link #initFifo()} 打开 FIFO 读端**阻塞等待写端**
+     * （{@code new FileReader}），该阻塞发生在 {@code SpringApplication.callRunners()}
+     * 内、**先于 ApplicationReadyEvent** ⇒ Bootstrapper 永不执行 ⇒ 不自注册、
+     * 不出块（多机实验线程栈实证：main 卡 initFifo → callRunners）。生产
+     * distroless（无 mkfifo）走 {@code catch(IOException)} 优雅降级恰好幸免。</p>
+     *
+     * <p>新行为：main 线程仅启动一个**守护线程**完成 init + 读循环后立即返回
+     * ——ApplicationReadyEvent 照常发布（出块/最终性/自注册不受 IPC 拖累），
+     * IPC 功能照常；读循环与事件分发仍在同一线程（{@code publishEvent} 同步
+     * 分发 + {@code writer} 字段同线程写入/读取，无新跨线程可见性面）。</p>
+     */
     @Override
     public void run(ApplicationArguments args) throws Exception {
         if (!isLinuxSystem()) {
             return;
         }
+        if (!ipcEnabled) {
+            logger.info("FIFO IPC disabled by nexus.ipc.enabled=false, skipping");
+            return;
+        }
+        Thread worker = new Thread(this::fifoWorkerLoop, "nexus-fifo-ipc");
+        worker.setDaemon(true);
+        lastFifoWorkerThread = worker;
+        worker.start();
+    }
+
+    /** 最近一次创建的 FIFO worker 线程（测试与诊断可观测；包内可见）。 */
+    volatile Thread lastFifoWorkerThread;
+
+    /**
+     * FIFO 初始化 + 读循环（守护线程体）。
+     * 读到 "exit" 退出并关闭；init 失败（mkfifo 不可用等）优雅降级，
+     * 与旧行为的 catch(IOException) 路径一致。
+     */
+    private void fifoWorkerLoop() {
         try {
             initFifo();
         } catch (IOException e) {
@@ -106,20 +146,31 @@ public class Fifo implements ApplicationRunner, ApplicationListener<Fifo.FifoMes
             // 仅 IPC 管道通信不可用（DAST/容器化部署场景不需要）。
             logger.warn("FIFO pipe init failed (mkfifo unavailable?), skipping IPC: {}", e.getMessage());
             return;
+        } catch (InterruptedException e) {
+            logger.info("FIFO init interrupted, skipping IPC: {}", e.getMessage());
+            Thread.currentThread().interrupt();
+            return;
         }
-        while (true) {
-            char[] a = new char[1024];
-            if ((reader.read(a)) != -1) {
-                ctx.publishEvent(new FifoMessageEvent(this, String.valueOf(a)));
-            } else {
-                Thread.sleep(100);
-                continue;
+        try {
+            while (true) {
+                char[] a = new char[1024];
+                if ((reader.read(a)) != -1) {
+                    ctx.publishEvent(new FifoMessageEvent(this, String.valueOf(a)));
+                } else {
+                    Thread.sleep(100);
+                    continue;
+                }
+                if (!String.valueOf(a).equals("") && String.valueOf(a).contains("exit")) {
+                    break;
+                }
             }
-            if (!String.valueOf(a).equals("") && String.valueOf(a).contains("exit")) {
-                break;
-            }
+            closeFifo();
+        } catch (IOException e) {
+            logger.warn("FIFO read loop failed, IPC worker exit: {}", e.getMessage());
+        } catch (InterruptedException e) {
+            logger.info("FIFO read loop interrupted: {}", e.getMessage());
+            Thread.currentThread().interrupt();
         }
-        closeFifo();
     }
 
     private void initFifo() throws IOException, InterruptedException {
@@ -151,11 +202,11 @@ public class Fifo implements ApplicationRunner, ApplicationListener<Fifo.FifoMes
     }
 
     /**
-     * isLinuxSystem 是否是linux系统
+     * isLinuxSystem 是否是linux系统（包内可见：测试子类可 override 模拟 Linux）。
      *
      * @return bool
      */
-    private boolean isLinuxSystem() {
+    boolean isLinuxSystem() {
         String os = System.getProperty("os.name");
         return !os.toLowerCase().startsWith("win");
     }

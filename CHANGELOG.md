@@ -4,6 +4,24 @@
 
 ## [Unreleased]
 
+### FIFO IPC 守护线程化 + 总开关（PLAN-031，2026-10-23）
+
+修复 PLAN-027 发现 1（P1）：非 distroless Linux 上节点启动永久卡死。
+`Fifo`（ApplicationRunner）在 main 线程打开 FIFO 读端（POSIX 语义阻塞
+等写端），阻塞发生在 ApplicationReadyEvent 之前 ⇒ Bootstrapper/自注册/
+最终性/出块全部不启动；生产 distroless 因无 mkfifo 走 catch(IOException)
+优雅降级恰好幸免——运维直跑 JVM（WSL/Ubuntu 等）100% 必现。
+
+修复：`run()` 改为启动单个守护线程（`nexus-fifo-ipc`）执行 init+读循环，
+main 立即返回——ApplicationReadyEvent 照常发布，IPC 功能照常；
+事件分发与 `writer` 仍同 worker 线程（无新增跨线程可见性面）。
+新增 `nexus.ipc.enabled`（默认 true；false 完全跳过——容器/CI 无 mkfifo
+环境的显式逃生口）。测试 4 例（`FifoBootNotBlockedTest`：Linux 路径
+run() 3s 内返回/守护线程存活（mkfifo 可用环境）/**开关零线程**/
+Windows 语义不变）。
+
+详见 `docs/plan/PLAN-031-fifo-daemon-thread.md`。
+
 ### 出块节点主动对账（PLAN-029，F2）+ 验证人集中继与回放（PLAN-030，F1）（2026-10-23）
 
 承接 PLAN-027 发现 3/2 的两项修复，一个 PR 两个切片：
