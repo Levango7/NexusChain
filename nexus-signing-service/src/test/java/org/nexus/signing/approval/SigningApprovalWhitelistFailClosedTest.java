@@ -1,5 +1,7 @@
 package org.nexus.signing.approval;
 
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -24,9 +26,11 @@ import static org.mockito.Mockito.when;
  *
  * <p>旧实现在白名单未配置时返回"允许"（注释原文："未配置白名单则不限制"），于是
  * "谁能批准大额签名"这件事的<b>默认答案是谁都能</b>。大额签名的审批是资金路径上最后一道
- * 人工闸门，缺配置必须等于"没人能批"。今天 {@code approve()}/{@code reject()} 在全部 main 源码
- * 里没有调用方（#45 已核实：signing 没有审批决策端点），所以这一改动对运行中的系统零影响；
- * 它改变的是"等有人把端点接上时，默认值是开还是关"。</p>
+ * 人工闸门，缺配置必须等于"没人能批"。本类写的时候 {@code approve()}/{@code reject()}
+ * 还没有任何生产调用方（#45 已核实：signing 当时没有审批决策端点），所以那次改动对
+ * 运行中的系统零影响；它改变的是"等端点接上时，默认值是开还是关"。端点已于 #50 落地
+ * （{@code POST /api/v1/signing/approvals/{requestId}/decision}），fail-closed 因此
+ * 从"将来的默认值"变成"当下的实际行为"。</p>
  *
  * <p>拒绝原因分三种可区分的字符串，是为了让审计里"没配"与"不在名单"不被混成一条：
  * 前者要运维补配置，后者要排查调用方身份。</p>
@@ -49,7 +53,8 @@ class SigningApprovalWhitelistFailClosedTest {
         SigningApprovalService service = serviceWithWhitelist("");
 
         String rid = createPendingRequest(service);
-        SigningApprovalRequest after = service.approve(rid, "anyone@nexus", "10.0.0.1");
+        authenticateAs("anyone@nexus");
+        SigningApprovalRequest after = service.approve(rid, "10.0.0.1", null);
 
         assertEquals(SigningApprovalRequest.Status.PENDING, after.getStatus(),
                 "缺配置必须等于没人能批，而不是谁都能批");
@@ -63,7 +68,8 @@ class SigningApprovalWhitelistFailClosedTest {
                 new MapApprovalStore(new ConcurrentHashMap<>()), null);
 
         String rid = createPendingRequest(service);
-        SigningApprovalRequest after = service.approve(rid, "anyone@nexus", "10.0.0.1");
+        authenticateAs("anyone@nexus");
+        SigningApprovalRequest after = service.approve(rid, "10.0.0.1", null);
 
         assertEquals(SigningApprovalRequest.Status.PENDING, after.getStatus());
         assertEquals("approver_whitelist_not_configured", capturedDenialReason());
@@ -75,7 +81,8 @@ class SigningApprovalWhitelistFailClosedTest {
         SigningApprovalService service = serviceWithWhitelist("alice@nexus,bob@nexus");
 
         String rid = createPendingRequest(service);
-        SigningApprovalRequest after = service.approve(rid, "mallory@nexus", "10.0.0.2");
+        authenticateAs("mallory@nexus");
+        SigningApprovalRequest after = service.approve(rid, "10.0.0.2", null);
 
         assertEquals(SigningApprovalRequest.Status.PENDING, after.getStatus());
         assertEquals("approver_not_in_whitelist", capturedDenialReason());
@@ -87,7 +94,8 @@ class SigningApprovalWhitelistFailClosedTest {
         SigningApprovalService service = serviceWithWhitelist("alice@nexus");
 
         String rid = createPendingRequest(service);
-        SigningApprovalRequest after = service.approve(rid, "   ", "10.0.0.3");
+        authenticateAs("   ");
+        SigningApprovalRequest after = service.approve(rid, "10.0.0.3", null);
 
         assertEquals(SigningApprovalRequest.Status.PENDING, after.getStatus());
         assertEquals("approver_identity_missing", capturedDenialReason());
@@ -99,7 +107,8 @@ class SigningApprovalWhitelistFailClosedTest {
         SigningApprovalService service = serviceWithWhitelist("alice@nexus, bob@nexus");
 
         String rid = createPendingRequest(service);
-        SigningApprovalRequest after = service.approve(rid, "bob@nexus", "10.0.0.4");
+        authenticateAs("bob@nexus");
+        SigningApprovalRequest after = service.approve(rid, "10.0.0.4", null);
 
         assertEquals(SigningApprovalRequest.Status.APPROVED, after.getStatus(),
                 "逗号分隔项带空格也必须能匹配（解析要 trim）");
@@ -133,5 +142,15 @@ class SigningApprovalWhitelistFailClosedTest {
         }
         assertNotNull(denied, "拒绝必须留下 DENIED 审计，否则运维无从知道审批被闸门挡住了");
         return String.valueOf(denied.getDetails().get("denied_reason"));
+    }
+
+    private static void authenticateAs(String principal) {
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken(principal, null, java.util.List.of()));
+    }
+
+    @org.junit.jupiter.api.AfterEach
+    void clearAuthenticationContext() {
+        SecurityContextHolder.clearContext();
     }
 }

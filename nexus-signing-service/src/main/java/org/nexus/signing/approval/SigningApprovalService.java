@@ -6,6 +6,9 @@ import org.nexus.signing.mpc.MpcApprovalPolicy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.security.authentication.AnonymousAuthenticationToken;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -410,44 +413,77 @@ public class SigningApprovalService {
     /**
      * 提交审批通过。
      *
-     * <p><b>⚠ 现查（2026-10-15）：本方法与 {@link #reject} 在全部 main 源码里没有调用方，
-     * 且 {@code nexus-signing-service} 未暴露任何 approve/reject REST 端点</b>
-     * （{@code TxController} 只有 {@code /api/v1/transfers/sign}、{@code /sign/approved}、
-     * {@code /capability}、{@code /getNoncePool}）。后果：没有任何生产路径能把请求从 PENDING
-     * 推到 APPROVED，而 {@code /sign/approved} 的前置判据恰是
-     * {@code status == APPROVED} ⇒ 大额签名在"审批通过后执行"这一步事实上不可达。
-     * {@code approver-whitelist}（application.yml:160-163）与多签 {@code requiredApprovers}
-     * 因此都还是空转的配置。</p>
+     * <p>生产入口是 {@code POST /api/v1/signing/approvals/{requestId}/decision}
+     * （{@link org.nexus.signing.controller.SigningApprovalController}）。在此之前本方法与
+     * {@link #reject} 在全部 main 源码里没有调用方、也没有任何 approve/reject REST 端点，
+     * 后果是没有任何路径能把请求从 PENDING 推到 APPROVED，而 {@code /sign/approved} 的前置判据
+     * 恰是 {@code status == APPROVED} ⇒ 大额签名在"审批通过后执行"这一步事实上不可达，
+     * {@code approver-whitelist} 与多签 {@code requiredApprovers} 都还是空转的配置。</p>
      *
      * <p>这与 #32 修的是两个缺陷：#32 修的是"审批请求只存在创建它的那个副本内存里，
-     * 别的副本 {@code getRequest(approvalId)} 查不到"（创建与执行是两次独立请求，经 LB 落到
-     * 哪个副本不确定 ⇒ 表现为 {@code Approval request not found} 偶发失败；具体命中率取决于
-     * 实际路由策略，此处未测量）；本节说的是"决策写入侧无入口"，需要新增端点才能解，
-     * 另立任务跟踪，勿混为一谈。</p>
+     * 别的副本 {@code getRequest(approvalId)} 查不到"；本节说的是"决策写入侧无入口"，
+     * 由上面的端点解决，勿混为一谈。</p>
      *
      * @param requestId 审批请求 ID
-     * @param approver  审批人标识
      * @param sourceIp  来源 IP（用于审计）
+     * @param comment   审批备注，可为 null；非空时进审计明细（不落审批请求本体——
+     *                  那需要新列，属 #52-B 已否决的范围）
      * @return 更新后的审批请求；requestId 不存在时返回 null
      */
-    public SigningApprovalRequest approve(String requestId, String approver, String sourceIp) {
-        return updateRequest(requestId, approver, sourceIp, true);
+    public SigningApprovalRequest approve(String requestId, String sourceIp, String comment) {
+        return updateRequest(requestId, currentApprover(), sourceIp, comment, true);
     }
 
     /**
      * 提交审批拒绝。
      *
      * @param requestId 审批请求 ID
-     * @param rejecter  拒绝人标识
      * @param sourceIp  来源 IP（用于审计）
+     * @param comment   拒绝理由，可为 null；非空时进审计明细
      * @return 更新后的审批请求；requestId 不存在时返回 null
      */
-    public SigningApprovalRequest reject(String requestId, String rejecter, String sourceIp) {
-        return updateRequest(requestId, rejecter, sourceIp, false);
+    public SigningApprovalRequest reject(String requestId, String sourceIp, String comment) {
+        return updateRequest(requestId, currentApprover(), sourceIp, comment, false);
     }
 
     /**
-     * 判断审批人能否下决策，返回拒绝原因；返回 {@code null} 表示允许。
+     * 当前认证主体标识（JWT {@code sub}）——审批人身份的唯一来源。
+     *
+     * <p><b>为什么不是入参</b>（协调板裁定
+     * {@code docs/agent-board/20261017-2015-nex-adjudication-50-approver-identity.md} 第 2 条）：
+     * 白名单是按<b>标识</b>比对的，只要决策方法还收一个 {@code actor} 参数，"请求体自带身份"
+     * 就随时可能被下一个调用方重新引入；把它从签名里删掉，这条路径在类型层面就凑不出伪造身份。
+     * 未认证（含 Spring Security 的 anonymous token）返回 {@code null}，
+     * 由 {@link #approverDenialReason} 归入 {@code approver_identity_missing} 拒掉——
+     * 缺身份是拒绝，不是放行。</p>
+     *
+     * <p>{@code @PreAuthorize} 已在端点上把角色闸门拦在前面，这里是第二道：
+     * 角色过但主体不在白名单（例如服务间 token 的服务身份）同样被拒。</p>
+     */
+    private static String currentApprover() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null || !authentication.isAuthenticated()
+                || authentication instanceof AnonymousAuthenticationToken) {
+            return null;
+        }
+        Object principal = authentication.getPrincipal();
+        return principal == null ? null : String.valueOf(principal);
+    }
+
+    /**
+     * 当前调用方（{@link #currentApprover()}）能否下决策；{@code null} 表示允许。
+     *
+     * <p>端点用它把拒绝原因回给调用方（协调板 #50 裁定的前置条件之一：拒绝理由要出现在
+     * API 响应体里，运维才知道是"没配"还是"不在名单"）。这个方法<b>不改变判定</b>——
+     * 判定与审计仍在 {@link #updateRequest} 内，端点只是复述同一个函数的结论，
+     * 因此不存在"绕过端点就能批"的第二道口子。</p>
+     */
+    public String currentApproverDenialReason() {
+        return approverDenialReason(currentApprover());
+    }
+
+    /**
+     * 判断给定标识能否下决策，返回拒绝原因；返回 {@code null} 表示允许。
      *
      * <p><b>fail-closed（2026-10-17 改掉原来的 fail-open）</b>：白名单未配置时旧实现返回
      * {@code true}（"不限制"），于是"谁能审批大额签名"这件事的默认答案是<b>任何调用方</b>。
@@ -457,6 +493,9 @@ public class SigningApprovalService {
      *
      * <p>拒绝原因分成三种可区分的字符串，是为了让审计里"没配"与"不在名单"不被混成一条：
      * 前者要运维去补配置，后者要排查调用方身份。</p>
+     *
+     * <p>刻意保持 private：身份只能由本类从 {@link SecurityContextHolder} 取
+     * （见 {@link #currentApprover()}），调用方无权提交审批人标识。</p>
      *
      * @param approverAddress 审批人标识（来自已认证主体，绝不允许由请求体自带）
      * @return {@code null} 表示允许；否则为可进审计的拒绝原因
@@ -476,7 +515,8 @@ public class SigningApprovalService {
     }
 
     private SigningApprovalRequest updateRequest(String requestId, String actor,
-                                                 String sourceIp, boolean approve) {
+                                                 String sourceIp, String comment, boolean approve) {
+        String decision = approve ? "APPROVE" : "REJECT";
         if (requestId == null) {
             return null;
         }
@@ -484,18 +524,14 @@ public class SigningApprovalService {
         String denialReason = approverDenialReason(actor);
         if (denialReason != null) {
             log.warn("审批人被拒绝: requestId={}, actor={}, reason={}, decision={}",
-                    requestId, actor, denialReason, approve ? "APPROVE" : "REJECT");
-            auditLogService.log(AuditEvent.builder(AuditEvent.Type.APPROVAL_DECISION,
-                            AuditEvent.Outcome.DENIED, actor)
-                    .sourceIp(sourceIp)
-                    .target(requestId)
-                    .detail("decision", approve ? "APPROVE" : "REJECT")
+                    requestId, actor, denialReason, decision);
+            auditLogService.log(decisionEvent(AuditEvent.Outcome.DENIED, actor, sourceIp,
+                            requestId, decision, comment)
                     .detail("denied_reason", denialReason)
                     .build());
             // 返回当前请求快照（不修改状态）；若请求不存在则返回 null
             return requestStore.get(requestId);
         }
-        final SigningApprovalRequest[] result = new SigningApprovalRequest[1];
         SigningApprovalRequest existing = requestStore.get(requestId);
         if (existing == null) {
             return null;
@@ -503,29 +539,44 @@ public class SigningApprovalService {
         if (existing.getStatus() != SigningApprovalRequest.Status.PENDING) {
             log.warn("审批请求状态非 PENDING，忽略决策: requestId={}, status={}, actor={}",
                     requestId, existing.getStatus(), actor);
-            result[0] = existing;
             return existing;
         }
         SigningApprovalRequest updated = approve
                 ? existing.withApproval(actor)
                 : existing.withRejection(actor);
         requestStore.save(requestId, updated);
-        result[0] = updated;
 
         log.info("审批决策: requestId={}, actor={}, decision={}, newStatus={}",
-                requestId, actor, approve ? "APPROVE" : "REJECT", updated.getStatus());
+                requestId, actor, decision, updated.getStatus());
 
-        auditLogService.log(AuditEvent.builder(AuditEvent.Type.APPROVAL_DECISION,
-                        approve ? AuditEvent.Outcome.SUCCESS : AuditEvent.Outcome.DENIED, actor)
-                .sourceIp(sourceIp)
-                .target(requestId)
-                .detail("decision", approve ? "APPROVE" : "REJECT")
+        auditLogService.log(decisionEvent(
+                        approve ? AuditEvent.Outcome.SUCCESS : AuditEvent.Outcome.DENIED,
+                        actor, sourceIp, requestId, decision, comment)
                 .detail("new_status", updated.getStatus().name())
                 .detail("approvals_count", updated.getApprovals().size())
                 .detail("required", updated.getRequiredApprovers())
                 .build());
 
         return updated;
+    }
+
+    /**
+     * 构造一条 APPROVAL_DECISION 审计事件的公共前缀（决策/备注/目标/来源 IP）。
+     *
+     * <p>{@code comment} 只在非空时写入：审计里"没填备注"与"填了空串"不必区分，
+     * 但一条恒定出现的 {@code comment=null} 会把检索噪声带进审计库。</p>
+     */
+    private AuditEvent.Builder decisionEvent(AuditEvent.Outcome outcome, String actor,
+                                             String sourceIp, String requestId, String decision,
+                                             String comment) {
+        AuditEvent.Builder builder = AuditEvent.builder(AuditEvent.Type.APPROVAL_DECISION, outcome, actor)
+                .sourceIp(sourceIp)
+                .target(requestId)
+                .detail("decision", decision);
+        if (comment != null && !comment.isBlank()) {
+            builder.detail("comment", comment.trim());
+        }
+        return builder;
     }
 
     /**

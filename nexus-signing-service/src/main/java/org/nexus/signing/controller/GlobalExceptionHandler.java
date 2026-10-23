@@ -35,6 +35,8 @@ public class GlobalExceptionHandler {
     private static final int BIZ_FAIL = 5000;
     /** 参数错误业务码：4xxx 段（400 语义），避免与 5000 业务失败混淆。 */
     private static final int BIZ_BAD_REQUEST = 4000;
+    /** 鉴权拒绝业务码：403 语义（角色不足 / 审批白名单外）。 */
+    private static final int BIZ_FORBIDDEN = 4030;
 
     private static ResponseEntity<Object> body(HttpStatus status, int bizCode, String message) {
         Map<String, Object> payload = new HashMap<>();
@@ -85,6 +87,23 @@ public class GlobalExceptionHandler {
         };
         log.warn("MPC protocol rejection ({}): {}", e.getReason(), e.getMessage());
         return body(status, BIZ_FAIL, "MPC " + e.getReason() + ": " + e.getMessage());
+    }
+
+    /**
+     * 方法级鉴权拒绝（403）——必须排在 {@link #handleGeneric} 之前。
+     *
+     * <p>{@code @PreAuthorize} 抛出的 {@code AuthorizationDeniedException}（继承
+     * {@code AccessDeniedException}）发生在 handler 方法调用处，会被 DispatcherServlet
+     * 交给本 advice，而不是交给 Spring Security 的过滤器链。此前它落入
+     * {@code @ExceptionHandler(Exception.class)} 兜底，于是"角色不够"对外表现为
+     * <b>HTTP 500 + {@code Internal error}</b>：调用方无法区分"你没权限"和"服务坏了"，
+     * 运维按 5xx 起告警，而鉴权拒绝是正常业务事件、不是服务端故障。</p>
+     */
+    @ExceptionHandler(org.springframework.security.access.AccessDeniedException.class)
+    public ResponseEntity<Object> handleAccessDenied(
+            org.springframework.security.access.AccessDeniedException e) {
+        log.warn("Access denied by method security: {}", e.getMessage());
+        return body(HttpStatus.FORBIDDEN, BIZ_FORBIDDEN, "Forbidden");
     }
 
     /** 兜底（500）：完整堆栈进服务端日志，响应只留摘要（不泄漏内部细节）。 */
