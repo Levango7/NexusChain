@@ -4,6 +4,28 @@
 
 ## [Unreleased]
 
+### 多机拓扑验收与四项发现（PLAN-027，2026-10-23）
+
+应"多机必须做"要求，在一台物理机上构造了**三个不同内核/网络栈**的节点
+（Windows 宿主 / WSL2 VM / Docker VM，真实跨 VM 网络，非 loopback），
+诚实口径为**虚拟化边界多机**。产出两部分：
+
+**跨边界补票实证**（PLAN-025 机制不依赖同主机假设）：迟到节点 C（独立库）的
+最终性 checkpoint 从 65 持续追至 87，**水位与 A 逐次采样完全一致**（至 102/102）；
+C 库里 A 的票补齐 1..102 全程、B 的票 1..91；A 累计服务补票请求 526 次。
+
+**四项真发现**（详见 `docs/plan/PLAN-027-multi-machine-findings.md`，roadmap #34/#35）：
+1. **P1** 非 distroless Linux 上节点启动永久卡死 —— `Fifo`（ApplicationRunner）
+   在 main 线程打开 FIFO 读端阻塞等待写端，`ApplicationReadyEvent` 永不发布，
+   Bootstrapper/最终性/挖矿全部不启动；生产 distroless 镜像恰好幸免。
+2. **F1** 验证人集广播不中继 ⇒ 星型拓扑下 C 的验证人到不了 B，C 的块 `unknown proposer`。
+3. **F2** 出块节点无主动追块通道（`getStatus` 对 mining 节点直接 return），
+   错过广播的块永久缺失。
+4. **F3** 提议人轮转无 view-change ⇒ 指定提议人卡住时全网停摆且不能自愈。
+
+本切片无产品代码改动；四项修复各自成切片（优先级 F3 > F2 > F1 > Fifo 之外另计），
+修完后重跑多机实验补完"停机-恢复-补票"闭环。
+
 ### 桥持久化：跨链消息存储落库（PLAN-026，2026-10-23）
 
 **摸底结论**：桥的资金安全状态已全部落库（幂等键四操作全用、Saga 每步 save +
