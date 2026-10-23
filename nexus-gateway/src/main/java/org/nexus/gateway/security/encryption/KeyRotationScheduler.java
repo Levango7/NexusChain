@@ -1,6 +1,7 @@
 package org.nexus.gateway.security.encryption;
 
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
+import org.nexus.gateway.security.audit.SecurityAuditService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
@@ -52,6 +53,11 @@ public class KeyRotationScheduler {
     private final EncryptionKeyMetadataRepository metadataRepository;
     private final EncryptionConfigRepository configRepository;
     private final KekRotationProgressRepository progressRepository;
+    /**
+     * KEK 轮换的两个终局（归档成功 / 仍有引用拒绝归档）要落到 {@code audit_events} 可查处。
+     * 这是每次轮换一条、不是每请求一条，所以没有写放大问题（防重放那条就不一样，见 PR 说明）。
+     */
+    private final SecurityAuditService securityAuditService;
 
     /** 迁移进度跟踪：oldVersion → MigrationProgress（DB 为权威，本表为写穿缓存） */
     private final Map<Integer, MigrationProgress> migrationProgressMap = new ConcurrentHashMap<>();
@@ -59,11 +65,13 @@ public class KeyRotationScheduler {
     public KeyRotationScheduler(KeyManagementService keyManagementService,
                                   EncryptionKeyMetadataRepository metadataRepository,
                                   EncryptionConfigRepository configRepository,
-                                  KekRotationProgressRepository progressRepository) {
+                                  KekRotationProgressRepository progressRepository,
+                                  SecurityAuditService securityAuditService) {
         this.keyManagementService = keyManagementService;
         this.metadataRepository = metadataRepository;
         this.configRepository = configRepository;
         this.progressRepository = progressRepository;
+        this.securityAuditService = securityAuditService;
     }
 
     /**
@@ -264,11 +272,17 @@ public class KeyRotationScheduler {
             // 其他副本 hydrate 时不会再认领这个已完成的 old_version，避免重复 archiveKek。
             persistProgress(progress);
             log.info("KEK v{} → v{} 迁移完成，旧 KEK 已归档", oldVersion, newVersion);
+            securityAuditService.recordKeyRotation(null, "COMPLETED",
+                    "KEK v" + oldVersion + " → v" + newVersion + " 迁移完成，旧 KEK 已归档；迁移 DEK "
+                            + progress.migratedRecords.get() + "/" + progress.totalRecords + " 条");
         } else {
             // 仍有旧版本引用（多为迁移失败的零头），保持 completed=false，写穿当前游标供续跑。
             persistProgress(progress);
             log.warn("KEK v{} 仍有 {} 条 DEK 引用，拒绝归档 — KEY_STILL_IN_USE",
                     oldVersion, remainingRecords);
+            securityAuditService.recordKeyRotation(null, "KEY_STILL_IN_USE",
+                    "KEK v" + oldVersion + " 仍有 " + remainingRecords
+                            + " 条 DEK 引用，未归档（旧 KEK 继续可解密，属安全降级状态，需跟进）");
         }
     }
 
