@@ -1,5 +1,7 @@
 package org.nexus.gateway.security;
 
+import org.nexus.gateway.security.audit.SecurityMetricsRecorder;
+
 import jakarta.servlet.ServletInputStream;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -67,6 +69,13 @@ public class RequestSignatureInterceptor implements HandlerInterceptor {
      */
     private final ReplayNonceStore nonceStore;
 
+    /**
+     * 安全指标记录器。与 {@link #nonceStore} 同口径的可选依赖：容器里有就喂
+     * {@code nexus_replay_interceptions_total}，没有（如手工 new 出来的实例）就不记，
+     * 绝不为凑数字造一个假实例。
+     */
+    private final SecurityMetricsRecorder replayMetrics;
+
     public RequestSignatureInterceptor(@Value("${nexus.security.requestSigningSecret:}") String signingSecret) {
         this(signingSecret, true, 180000L, 16);
     }
@@ -96,6 +105,7 @@ public class RequestSignatureInterceptor implements HandlerInterceptor {
         this.replayWindowMs = Math.max(60000L, Math.min(300000L, replayWindowMs));
         this.nonceMinLengthBytes = Math.max(16, nonceMinLengthBytes);
         this.nonceStore = new InMemoryReplayNonceStore();
+        this.replayMetrics = null;
     }
 
     /**
@@ -108,13 +118,15 @@ public class RequestSignatureInterceptor implements HandlerInterceptor {
             @Value("${nexus.security.signature-legacy-enabled:true}") boolean legacySignatureEnabled,
             @Value("${nexus.security.replay-window-ms:180000}") long replayWindowMs,
             @Value("${nexus.security.nonce-min-length-bytes:16}") int nonceMinLengthBytes,
-            org.springframework.beans.factory.ObjectProvider<ReplayNonceStore> nonceStoreProvider) {
+            org.springframework.beans.factory.ObjectProvider<ReplayNonceStore> nonceStoreProvider,
+            org.springframework.beans.factory.ObjectProvider<SecurityMetricsRecorder> metricsProvider) {
         this.signingSecret = signingSecret == null ? "" : signingSecret;
         this.legacySignatureEnabled = legacySignatureEnabled;
         this.replayWindowMs = Math.max(60000L, Math.min(300000L, replayWindowMs));
         this.nonceMinLengthBytes = Math.max(16, nonceMinLengthBytes);
         ReplayNonceStore provided = nonceStoreProvider.getIfAvailable();
         this.nonceStore = provided != null ? provided : new InMemoryReplayNonceStore();
+        this.replayMetrics = metricsProvider.getIfAvailable();
     }
 
     @Override
@@ -140,6 +152,7 @@ public class RequestSignatureInterceptor implements HandlerInterceptor {
         }
         long now = System.currentTimeMillis();
         if (Math.abs(now - ts) > replayWindowMs) {
+            countReplayInterception();
             return reject(response, 40103, "Request timestamp expired (" + (replayWindowMs / 1000) + "s window)");
         }
 
@@ -154,6 +167,7 @@ public class RequestSignatureInterceptor implements HandlerInterceptor {
             return reject(response, 40109, "Nonce too short (min " + nonceMinLengthBytes + " bytes)");
         }
         if (!nonceStore.register(nonce, replayWindowMs)) {
+            countReplayInterception();
             return reject(response, 40106, "Replayed nonce");
         }
 
@@ -202,6 +216,21 @@ public class RequestSignatureInterceptor implements HandlerInterceptor {
             return new String(cached, StandardCharsets.UTF_8);
         }
         return "";
+    }
+
+    /**
+     * 只在这两条判据上计数：时间戳出窗（40103）与 nonce 重复（40106）。
+     *
+     * <p>签名缺失/不匹配（40101/40107）是<b>伪造</b>尝试而不是重放，故意不计——否则
+     * {@code nexus_replay_interceptions_total} 会把两类攻击混成一个数，而这个指标唯一的用途
+     * 就是回答"有人也在撞防重放窗口吗"。该 counter 是 Micrometer 进程内计数，O(1) 内存、
+     * 无 DB 写，所以拒单量由攻击者驱动也不会变成写放大（这正是 {@code replay_interception_stats}
+     * 那张表的写侧一直没敢接的原因）。</p>
+     */
+    private void countReplayInterception() {
+        if (replayMetrics != null) {
+            replayMetrics.recordReplayInterception();
+        }
     }
 
     private boolean reject(HttpServletResponse response, int code, String message) throws IOException {
