@@ -4,6 +4,41 @@
 
 ## [Unreleased]
 
+### 验证人集消息签名化——第一切片（PLAN-001 扩展，2026-10-24）
+
+承接 F1 修复（PLAN-030）如实边界"中继未签名（沿用 PLAN-001 信任模型）"。
+本切片交付**验证器内核与测试**（纯 JDK 17，无新依赖），**不接线任何生产路径**
+（`TRANSACTION` 消息 v2 字段、`SyncManager` 挂载、星型广播灰度均为后续切片）：
+
+- 新增 `org.nexus.sync.validator.ValidatorSetSignatureVerifier`：Ed25519
+  （RFC 8410 raw 密钥编解码——32 字节种子/公钥，与现有 `validator-private-key`
+  十六进制格式直接兼容；亦兼容 64 字节 libsodium 形态）；`sign` / `check` / `isReplay`。
+- 三分语义（与方案文档逐条一致）：无签名 → `NO_SIGNATURE`（继续处理，向后兼容）；
+  无效 → `INVALID`（记录警告、不抛异常、不拒绝）；有效 → `VALID`（继续既有幂等注册路径）。
+- `isReplay` 为纯函数（`nonce <= lastSeen`），`lastSeen` 水位由调用方从既有
+  `validators_synced.nonce` 提供（不引入新状态表）。
+- 测试 7 例：**RFC 8032 §7.1 TEST 1 官方向量逐字节一致**（证明 DER 包装路径与标准
+  完全相符）/往返/篡改拒绝/错误公钥拒绝/畸形签名拒绝（不抛异常）/无签名向后兼容/
+  重放边界。`:nexus-core:nexus-core:test` 全模块 `BUILD SUCCESSFUL`。
+- 如实边界：不改任何生产路径；不解决 `seedStake` 注册路径的伪造敞口（与修复前
+  同等，签名化仅覆盖 TRANSACTION 广播层）；详见
+  `docs/plan/PLAN-001-signature-extension.md`。
+
+### PG 主备切换验证（本机测试床，2026-10-24）
+
+承接 PLAN-027 §四 边界"PG 主备切换未覆盖"：在本机完成**主备流复制 + 崩溃切换 +
+节点透明重连**闭环（Windows 双实例；单物理机口径，非真机房）：
+
+- 建立：主库干净停库（fast checkpoint）→ 一致性目录复制 → 备库 `standby.signal` +
+  `primary_conninfo` 启动（备库 `pg_stat_wal_receiver=streaming`；主库
+  `pg_stat_replication=streaming/async` 双向证据）；
+- 数据流通：主库写探针（`failover_probe`）→ 备库即时可见（count=1）；
+- 切换：kill 主库（崩溃模拟）→ `pg_promote()` → 备库可写（新主写入成功，两行数据完整）；
+- 节点集成：提升实例切回原端口 → **节点 A 5 秒内重连**（`currentHeight=12326`）、持续出块；
+- 边界：异步复制（切换窗口可能丢最后一瞬事务）；原主库未 pg_rewind 回接
+  （标记 `stale-crashed`）；不替代真机房多可用区/断电演练。详见
+  `docs/plan/PLAN-027-multi-machine-findings.md` §六 附。
+
 ### FIFO IPC 守护线程化 + 总开关（PLAN-031，2026-10-23）
 
 修复 PLAN-027 发现 1（P1）：非 distroless Linux 上节点启动永久卡死。
