@@ -170,7 +170,14 @@ nexus:
     # denied_reason=approver_whitelist_not_configured）。非空时仅列表内的标识可批。
     # 旧语义是"空字符串表示不限制"，已于 2026-10-17 改掉：大额签名的最后一道人工闸门
     # 不能以"没配"为默认放行条件。
-    # 生产环境必须显式配置专用审批人集合（prod 两套拓扑目前都未设置本变量 ⇒ 审批默认全拒）。
+    # 名单里的标识是**审批人的 JWT subject**（不是角色）：决策端点
+    # POST /api/v1/signing/approvals/{requestId}/decision 只从 SecurityContextHolder 取身份，
+    # 请求体里没有审批人字段，所以过 SIGNER/OPERATOR 角色也只算过了能力门，
+    # 主体不在名单里照样被拒（approver_not_in_whitelist）。
+    # 生产环境必须显式配置专用审批人集合。现查（2026-10-24，deploy/ 全量 grep
+    # NEX_APPROVAL_WHITELIST = 0 命中）：prod 两套拓扑都没设置本变量 ⇒ 审批决策默认全拒。
+    # 端点已于 #50 落地，于是"没配"不再只是理论默认值，而是当下会真实发生的 403；
+    # 要启用人工审批，运维必须先补这个配置。
     # 示例：approver-whitelist=alice@nexus,bob@nexus,carol@nexus
     approver-whitelist: ${NEX_APPROVAL_WHITELIST:}
     # === 项3：多实例部署 DB 持久化开关 ===

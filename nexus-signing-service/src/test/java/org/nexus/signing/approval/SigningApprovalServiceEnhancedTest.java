@@ -1,5 +1,7 @@
 package org.nexus.signing.approval;
 
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.junit.jupiter.api.*;
 import org.nexus.signing.audit.AuditLogService;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -75,10 +77,12 @@ class SigningApprovalServiceEnhancedTest {
         ReflectionTestUtils.setField(service, "approverWhitelist", "bob@nexus,carol@nexus,eve@nexus");
         assertEquals(SigningApprovalRequest.Status.PENDING, service.getRequest(rid).getStatus());
 
-        var approved = service.approve(rid, "bob@nexus", "1.1.1.2");
+        authenticateAs("bob@nexus");
+        var approved = service.approve(rid, "1.1.1.2", null);
         assertEquals(SigningApprovalRequest.Status.PENDING, approved.getStatus());
 
-        var approved2 = service.approve(rid, "carol@nexus", "1.1.1.3");
+        authenticateAs("carol@nexus");
+        var approved2 = service.approve(rid, "1.1.1.3", null);
         assertEquals(SigningApprovalRequest.Status.APPROVED, approved2.getStatus());
 
         var executed = service.markExecuted(rid);
@@ -91,7 +95,8 @@ class SigningApprovalServiceEnhancedTest {
                 new MapApprovalStore(new ConcurrentHashMap<>()), null);
         String rid = service.createApprovalRequest("pkA","pkB",new BigDecimal("30000"),"USDT","init","1.1.1.1");
         ReflectionTestUtils.setField(service, "approverWhitelist", "bob@nexus,carol@nexus,eve@nexus");
-        var rejected = service.reject(rid, "eve@nexus", "1.1.1.4");
+        authenticateAs("eve@nexus");
+        var rejected = service.reject(rid, "1.1.1.4", null);
         assertEquals(SigningApprovalRequest.Status.REJECTED, rejected.getStatus());
     }
 
@@ -109,5 +114,15 @@ class SigningApprovalServiceEnhancedTest {
         var service = new SigningApprovalService(mpcPolicy, auditLog);
         String rid = service.createApprovalRequest("pkA","pkB",new BigDecimal("100"),"USDT","init","1.1.1.1");
         assertNull(rid);
+    }
+
+    private static void authenticateAs(String principal) {
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken(principal, null, java.util.List.of()));
+    }
+
+    @org.junit.jupiter.api.AfterEach
+    void clearAuthenticationContext() {
+        SecurityContextHolder.clearContext();
     }
 }
