@@ -4,6 +4,27 @@
 
 ## [Unreleased]
 
+### 桥持久化：跨链消息存储落库（PLAN-026，2026-10-23）
+
+**摸底结论**：桥的资金安全状态已全部落库（幂等键四操作全用、Saga 每步 save +
+崩溃恢复 + 指数退避重试、紧急暂停含启动恢复、保险基金流水、重放 nonce）；
+真正缺的是消息层 —— `MessageStore` 只有内存实现，而消息中继的**去重、顺序、
+执行追溯**都依赖该状态跨重启存在。
+
+- 新增 `bridge_messages` 表：实体 `BridgeMessageRecord`（`message_id` 主键去重、
+  `(source_chain, nonce)` 索引保顺序水位、`execution_tx_hash` + `EXECUTED` 落追溯、
+  `version` 乐观锁）；payload 按 type/data/encodedData 三列存储（避免给
+  final 字段的传输类加 Jackson 注解）。
+- 新增 `JdbcMessageStore`：与 `InMemoryMessageStore` 语义逐条对齐；
+  并发下 `save` 由主键兜底（先到者胜）。
+- 装配开关 `nexus.bridge.messaging.store=memory|jpa`（**默认 memory 保持既有行为**；
+  生产配置 jpa）。运行时 schema 走 `ddl-auto=update`，CI Flyway 预检走 `V5` 迁移
+  （与 V0 的双轨模式一致）。
+- 测试 6 例（含"同一库新建 store 实例 ⇒ 重启后去重/nonce 水位/追溯全保住"）；
+  全套 `:nexus-bridge:test` 591 例 0 失败。
+- **如实登记**（roadmap #33）：messaging/liquidity 模块仍**未装配进生产流**，
+  本切片是消息模块上线的前置地基，不是上线本身。
+
 ### 独立存储拓扑下的最终性补票（PLAN-025，2026-10-23）
 
 **背景**：PLAN-021 让最终性视图在**共享存储**下收敛（掉线节点从同一个库把新票拉回来）；

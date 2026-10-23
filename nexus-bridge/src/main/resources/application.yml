@@ -189,6 +189,10 @@ nexus:
       required-signatures: 2
       message-timeout: 3600
       max-payload-size: 32768
+      # PLAN-026 桥持久化：消息存储实现。memory=进程内（默认，与既有行为一致，
+      # 状态不跨重启）；jpa=落库（bridge_messages 表，重启后去重/顺序/追溯不丢）。
+      # 生产环境（多实例 / 重启敏感）应配置 jpa。
+      store: ${BRIDGE_MESSAGE_STORE:memory}
 
 # === Actuator 健康检查 ===
 # REQ-09/P2: 端点暴露收敛，仅暴露 health,info,prometheus；show-details 收敛为 when_authorized
