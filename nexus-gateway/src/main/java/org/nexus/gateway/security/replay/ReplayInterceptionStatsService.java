@@ -13,9 +13,15 @@ import java.util.Map;
 /**
  * 防重放拦截统计服务。
  *
- * <p>提供拦截事件记录和统计查询能力。每次防重放拦截（时间戳过期、nonce 重放、
- * nonce 过短、幂等键无效等）调用 {@link #recordInterception} 记录一条统计，
- * 运营人员可通过 {@link #getStats} 查询指定时间范围内的拦截统计。</p>
+ * <p>提供拦截事件记录与统计查询两个能力。但<b>写侧当前没有生产调用方</b>
+ * （现查 2026-10-24：{@link #recordInterception} 在全部 main 源码里零调用；
+ * 真正拦住重放的是 {@code RequestSignatureInterceptor}，它只喂
+ * {@code nexus_replay_interceptions_total} 这个 Prometheus 计数）。
+ * 因此 {@link #getStats} 现在恒返回空/零——"这张表没数据"不等于"没被攻击"。</p>
+ *
+ * <p>已裁定（台账 #52）：<b>不</b>在这里补 DB 写。拦截速率由攻击者控制，按请求落库
+ * 等于把一次重放尝试换成一次写放大；跨副本准确计数归 Prometheus。要启用这张表，
+ * 先要有"按租户留存拦截行给谁看、留多久"的裁定。</p>
  *
  * <p>设计依据：Wave 12 设计文档 §2.2.2、§4.2.2。</p>
  */

@@ -81,10 +81,21 @@ public class ReplayProtectionController {
     /**
      * 查询防重放拦截统计。
      *
+     * <p><b>读侧活着，写侧没人喂</b>（现查 {@code master}，2026-10-24）：
+     * {@code ReplayInterceptionStatsService.recordInterception(...)} 在全部 main 源码里
+     * <b>零调用方</b>——拦截发生在 {@code RequestSignatureInterceptor} 里，它只发 Prometheus 计数
+     * （{@code nexus_replay_interceptions_total}，#127 接上的）。所以这个端点在当前实现下
+     * <b>恒返回空/零</b>，不是"没有攻击"，而是"没人往这张表写"。</p>
+     *
+     * <p>已裁定（台账 #52）不在这里补 DB 写：拦截速率是攻击者可控的，按请求落库等于把
+     * 一次重放尝试换成一次写放大；跨副本的准确计数归 Prometheus（Micrometer 计数器是每 JVM
+     * 的，聚合在指标侧做）。要启用这张表必须先有"为什么要按租户留存拦截行"的裁定，
+     * 见 {@code ReplayInterceptionStatsService} 的类注释。</p>
+     *
      * @param tenantId  租户 ID
      * @param from      开始时间（ISO 格式，如 2026-09-26T00:00:00）
      * @param to        结束时间（ISO 格式）
-     * @return 统计结果
+     * @return 统计结果（当前实现下恒为空/零，理由见上）
      */
     @GetMapping("/replay-stats")
     public ResponseEntity<Map<String, Object>> getStats(

@@ -48,6 +48,17 @@ class PaymentPasswordServiceTest {
     @Mock
     private org.nexus.gateway.security.audit.SecurityAuditService securityAuditService;
 
+    /**
+     * 服务构造器新增的可选指标依赖。这里必须给一个 mock：Mockito 的 {@code @InjectMocks}
+     * 对解析不到的构造器参数传 null，而构造器里会调 {@code metricsProvider.getIfAvailable()}
+     * ⇒ 没有这个 mock 就是 NPE。mock 的 {@code getIfAvailable()} 返回 null，
+     * 于是指标侧走"bean 缺席"分支，本类原有断言完全不受影响。
+     * 计数器真被喂上了这件事由 {@code SecurityCountersWiringTest} 钉。
+     */
+    @Mock
+    private org.springframework.beans.factory.ObjectProvider<
+            org.nexus.gateway.security.audit.SecurityMetricsRecorder> metricsProvider;
+
     @InjectMocks
     private PaymentPasswordService paymentPasswordService;
 

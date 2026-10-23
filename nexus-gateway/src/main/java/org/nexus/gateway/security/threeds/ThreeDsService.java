@@ -222,7 +222,12 @@ public class ThreeDsService {
                 result.getAuthStatus(),
                 result.getRiskScore(),
                 result.isFrictionlessFlow(),
-                result.isChallengeFlow()
+                result.isChallengeFlow(),
+                // 供监听方算 nexus_3ds_auth_latency_seconds：取记录上已有的两列。
+                // 调用顺序是先 updateAuthRecord 再本方法，所以 completedAt 此时已尽力写入；
+                // 仍可能是 null（上游没给完成时刻），那是"跳过采样"而不是"零延迟"。
+                record.getInitiatedAt(),
+                record.getCompletedAt()
         );
         eventPublisher.publishEvent(event);
         log.debug("发布 3DS 认证完成事件: paymentOrderId={}, transStatus={}",
