@@ -4,8 +4,31 @@
 
 ## [Unreleased]
 
-### 共识活性：提议人轮转 view-change（PLAN-028，2026-10-23）
+### 出块节点主动对账（PLAN-029，F2）+ 验证人集中继与回放（PLAN-030，F1）（2026-10-23）
 
+承接 PLAN-027 发现 3/2 的两项修复，一个 PR 两个切片：
+
+**F2（PLAN-029）**：`SyncClient.getStatus()` 删除 `if (enableMining) return;`
+——出块节点也主动对账（30s 周期、对端轮换）；决策抽为
+`buildCatchUpQuery`（对端不高 → 不追；高 → 按 50 块窗口裁剪）。
+**口径修正**：`SyncClient` 仅 `p2p.mode=rest` 装配；多机实验三节点均为
+grpc（其追块在 `SyncManager.onStatus` 已有）——F2 是 rest 形态的真实缺陷，
+多机停摆根因归属 F1，本切片不声称 grpc 受益。
+
+**F1（PLAN-030，多机闭环关键）**：`SyncManager.handleValidatorSet` 成功
+处理后按**载荷 SHA-256 指纹**转发一次（LRU 512 防环，回声两跳内收敛）；
+`onGetStatus` 挂**注册表全量回放**（对端咨询状态时单消息批量回放 add，
+超 64 人截断）——重启节点靠它自补齐错过的历史验证人（多机 B 的 C 缺行
+人工插行的注脚）。接收端幂等注册不变。
+
+测试 10 例：`SyncClientMiningSyncTest` 4（mining 不再跳过/窗口裁剪/边界）+
+`SyncManagerValidatorSetRelayTest` 6（首见转发/防环/remove/malformed 不转发/
+全表回放逐条 decode/无 server 短路）。如实边界：中继未签名（沿用 PLAN-001
+信任模型）、rest 形态无 P2P 广播通道故 F1 不适用、多机闭环待 Fifo 修复后
+统一重跑。详见 `docs/plan/PLAN-029-mining-node-active-catchup.md`、
+`docs/plan/PLAN-030-validator-set-relay.md`。
+
+### 共识活性：提议人轮转 view-change（PLAN-028，2026-10-23）
 修复 PLAN-027 四项发现中的 **F3**（最高优先级）：round-robin 按纯高度映射
 提议人，指定槽位卡住（死亡/被落后抑制）时该高度永远无人出块，全网停摆且
 不能自愈（多机实验日志范式：A 每秒重复 `Selected proposer … at height 165`
