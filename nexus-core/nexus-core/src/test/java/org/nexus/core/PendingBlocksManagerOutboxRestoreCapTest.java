@@ -19,7 +19,7 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
@@ -120,8 +120,7 @@ public class PendingBlocksManagerOutboxRestoreCapTest {
 
         manager.restoreFromOutbox();
 
-        assertEquals(TOTAL_ROWS, scripted.loadPendingCalls.get() == 0 ? 0 : scripted.rowsWritten.get(),
-                "所有行都应被补写");
+        assertEquals(TOTAL_ROWS, scripted.rowsWritten.get(), "所有行都应被补写");
         assertEquals(0, scripted.pendingCount(), "outbox 应被捞空");
         // 64 + 6 + 1（空批收尾）= 3 次
         assertEquals(3, scripted.loadPendingCalls.get(),
