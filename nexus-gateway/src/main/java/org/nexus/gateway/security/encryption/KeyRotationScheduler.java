@@ -2,6 +2,7 @@ package org.nexus.gateway.security.encryption;
 
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.nexus.gateway.security.audit.SecurityAuditService;
+import org.nexus.gateway.security.audit.SecurityMetricsRecorder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
@@ -58,6 +59,13 @@ public class KeyRotationScheduler {
      * 这是每次轮换一条、不是每请求一条，所以没有写放大问题（防重放那条就不一样，见 PR 说明）。
      */
     private final SecurityAuditService securityAuditService;
+    /**
+     * KEK 维度的两个 Gauge 的唯一喂数点：{@code nexus_kek_version} 与
+     * {@code nexus_key_rotation_progress}。它们在 {@code SecurityMetricsRecorder}
+     * 构造器里注册后从未被写过 ⇒ 面板上永远是 0，而"0"看起来像一个真实的 KEK 版本号
+     * （比缺指标更坏：缺指标至少不撒谎）。可选依赖，缺 bean 时轮换逻辑完全不受影响。
+     */
+    private final SecurityMetricsRecorder metricsRecorder;
 
     /** 迁移进度跟踪：oldVersion → MigrationProgress（DB 为权威，本表为写穿缓存） */
     private final Map<Integer, MigrationProgress> migrationProgressMap = new ConcurrentHashMap<>();
@@ -66,12 +74,14 @@ public class KeyRotationScheduler {
                                   EncryptionKeyMetadataRepository metadataRepository,
                                   EncryptionConfigRepository configRepository,
                                   KekRotationProgressRepository progressRepository,
-                                  SecurityAuditService securityAuditService) {
+                                  SecurityAuditService securityAuditService,
+                                  org.springframework.beans.factory.ObjectProvider<SecurityMetricsRecorder> metricsProvider) {
         this.keyManagementService = keyManagementService;
         this.metadataRepository = metadataRepository;
         this.configRepository = configRepository;
         this.progressRepository = progressRepository;
         this.securityAuditService = securityAuditService;
+        this.metricsRecorder = metricsProvider.getIfAvailable();
     }
 
     /**
@@ -86,6 +96,9 @@ public class KeyRotationScheduler {
             log.warn("KEK 不可用，跳过轮换检查 — fail-closed");
             return;
         }
+        // 版本 Gauge 不能只靠"轮换发生时"才更新：进程重启后 Gauge 归 0，而下一次轮换
+        // 可能在数天后 ⇒ 面板会拿 0 当"当前 KEK 版本"。每次检查都按权威值刷一次。
+        updateKekVersionGauge();
 
         // 先从库把"其他副本发起、本副本内存里没有"的未完成迁移捞回来，使三副本对
         // "是否仍在迁移"的判断一致（迁移进度以库为权威，内存仅写穿缓存）。
@@ -147,6 +160,34 @@ public class KeyRotationScheduler {
         row.setLastProcessedId(p.lastProcessedId);
         row.setCompleted(p.completed);
         progressRepository.save(row);
+        if (metricsRecorder != null) {
+            metricsRecorder.updateKeyRotationProgress(progressPercent(p));
+        }
+    }
+
+    /**
+     * 迁移进度百分比（0-100），供 {@code nexus_key_rotation_progress} Gauge 用。
+     *
+     * <p>{@code totalRecords == 0} 记 100 而不是 0：没有待迁记录就是"这件事已完成"，
+     * 报 0 会让面板显示"轮换卡在第一格"，而实际什么都不用做。整数除法向下取整，
+     * 所以"还差最后一条未迁"显示 99 而不是 100。</p>
+     */
+    static int progressPercent(MigrationProgress p) {
+        if (p == null || p.totalRecords <= 0) {
+            return 100;
+        }
+        return (int) Math.min(100, p.migratedRecords.get() * 100 / p.totalRecords);
+    }
+
+    /** 把当前 KEK 版本推进 Gauge；{@code getCurrentKekVersion()} 允许返回 null（尚未装载 KEK）。 */
+    private void updateKekVersionGauge() {
+        if (metricsRecorder == null) {
+            return;
+        }
+        Integer current = keyManagementService.getCurrentKekVersion();
+        if (current != null) {
+            metricsRecorder.updateKekVersion(current);
+        }
     }
 
     /**
@@ -163,6 +204,10 @@ public class KeyRotationScheduler {
 
         int newVersion = keyManagementService.rotateKek();
         log.info("KEK 轮换已启动: v{} → v{}", oldVersion, newVersion);
+        if (metricsRecorder != null) {
+            // 轮换当场就推版本，不等下一次 cron（那是数天后）
+            metricsRecorder.updateKekVersion(newVersion);
+        }
 
         // 统计需迁移的 DEK 记录数
         long totalRecords = metadataRepository.countByKekVersionAndStatus(

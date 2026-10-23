@@ -43,15 +43,26 @@ public class PaymentPasswordService {
      * 解锁时刻，绝不含密码材料或其哈希。
      */
     private final org.nexus.gateway.security.audit.SecurityAuditService securityAuditService;
+    /**
+     * 两个密码安全指标的唯一喂数点：{@code nexus_password_validations_total} 与
+     * {@code nexus_password_locks_total}。注册在 {@code SecurityMetricsRecorder} 构造器里
+     * 却从未被喂过（此前恒 0）。与防重放那条同一口径：进程内 Micrometer 计数器，
+     * O(1) 且不落库 ⇒ 攻击者高频试密码也不会造成写放大。
+     * 可选依赖（{@code ObjectProvider}），缺 bean 时业务照常，只是指标不涨。
+     */
+    private final org.nexus.gateway.security.audit.SecurityMetricsRecorder metricsRecorder;
 
     public PaymentPasswordService(MerchantPaymentPasswordRepository passwordRepository,
                                   PasswordSecurityConfigService configService,
                                   PasswordHistoryService historyService,
-                                  org.nexus.gateway.security.audit.SecurityAuditService securityAuditService) {
+                                  org.nexus.gateway.security.audit.SecurityAuditService securityAuditService,
+                                  org.springframework.beans.factory.ObjectProvider<
+                                          org.nexus.gateway.security.audit.SecurityMetricsRecorder> metricsProvider) {
         this.passwordRepository = passwordRepository;
         this.configService = configService;
         this.historyService = historyService;
         this.securityAuditService = securityAuditService;
+        this.metricsRecorder = metricsProvider.getIfAvailable();
         this.passwordEncoder = new BCryptPasswordEncoder(BCRYPT_COST);
     }
 
@@ -145,7 +156,12 @@ public class PaymentPasswordService {
         }
 
         // bcrypt 验证密码
-        if (passwordEncoder.matches(plaintextPassword, entity.getPasswordHash())) {
+        boolean matched = passwordEncoder.matches(plaintextPassword, entity.getPasswordHash());
+        // 口径：一次"真的做了密码比对"算一次验证。上面三条提前返回（未设置密码 / 仍在锁定期 /
+        // 密码已过期）没有进入比对，因此不计数——否则 nexus_password_validations_total
+        // 会把"根本没验"也统计成"验过"，让验证成功率这类派生指标失真。
+        countValidation();
+        if (matched) {
             // 验证成功，重置失败计数
             entity.setFailedAttempts(0);
             entity.setStatus(PasswordStatus.ACTIVE);
@@ -164,6 +180,7 @@ public class PaymentPasswordService {
                 passwordRepository.save(entity);
                 log.warn("Payment password locked for merchant {} after {} failed attempts",
                         merchantId, entity.getFailedAttempts());
+                countPasswordLock();
                 securityAuditService.recordPasswordLocked(merchantId,
                         "连续失败 " + entity.getFailedAttempts() + "/" + config.getMaxFailedAttempts()
                                 + " 次触发自动锁定，解锁时刻=" + entity.getLockedUntil());
@@ -173,6 +190,23 @@ public class PaymentPasswordService {
             passwordRepository.save(entity);
             int remaining = config.getMaxFailedAttempts() - entity.getFailedAttempts();
             return PasswordVerifyResult.invalid(remaining);
+        }
+    }
+
+    /** 计数是旁路观测，不参与业务判定；metrics bean 缺席时静默跳过。 */
+    private void countValidation() {
+        if (metricsRecorder != null) {
+            metricsRecorder.recordPasswordValidation();
+        }
+    }
+
+    /**
+     * 只统计"跨过阈值那一次"——与 {@code securityAuditService.recordPasswordLocked} 同一时点，
+     * 因此该计数器是"被锁死的账户数"的下界，而不是"失败次数"。
+     */
+    private void countPasswordLock() {
+        if (metricsRecorder != null) {
+            metricsRecorder.recordPasswordLock();
         }
     }
 
