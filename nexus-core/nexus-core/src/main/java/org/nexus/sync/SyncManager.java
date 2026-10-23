@@ -257,6 +257,7 @@ public class SyncManager implements Plugin, ApplicationListener<NewBlockMinedEve
             return;
         }
         try {
+            boolean mutated;
             if (msg.isAdd()) {
                 if (msg.publicKey() == null || msg.stakeAmount() == null) {
                     logger.warn("Validator-set add missing pubkey/stake (dropped): {}", msg.address());
@@ -274,15 +275,123 @@ public class SyncManager implements Plugin, ApplicationListener<NewBlockMinedEve
                     validatorSetPersistence.upsert(msg.address(), msg.publicKey(), stake);
                 }
                 logger.info("Validator-set add: address={} registered={} (via P2P)", msg.address(), ok);
+                mutated = true;
             } else {
                 boolean ok = validatorRegistry.unregister(msg.address());
                 if (validatorSetPersistence != null) {
                     validatorSetPersistence.remove(msg.address());
                 }
                 logger.info("Validator-set remove: address={} removed={} (via P2P)", msg.address(), ok);
+                mutated = true;
+            }
+            if (mutated) {
+                relayValidatorSet(payload);
             }
         } catch (RuntimeException e) {
             logger.error("Validator-set apply failed: address={}, error={}", msg.address(), e.getMessage());
+        }
+    }
+
+    // ==================== PLAN-030（F1）：验证人集中继与全表回放 ====================
+
+    /** 已转发 validator-set 载荷指纹容量（LRU，防环/防风暴）。 */
+    private static final int VALIDATOR_SET_RELAY_CACHE_SIZE = 512;
+
+    /** 一次全表回放最多携带的验证人数（防超大集合撑爆单条消息）。 */
+    private static final int MAX_VALIDATORS_PER_REPLAY = 64;
+
+    /** 已转发 validator-set 载荷指纹（内容寻址；第二次遇到即停止转发 → 回声两跳内收敛）。 */
+    private final ConcurrentMap<String, Boolean> validatorSetRelayCache =
+            new ConcurrentLinkedHashMap.Builder<String, Boolean>()
+                    .maximumWeightedCapacity(VALIDATOR_SET_RELAY_CACHE_SIZE).build();
+
+    /**
+     * PLAN-030（F1 修复）：把收到的 validator-set 消息转发给其余直连对端。
+     *
+     * <p>星型拓扑（C↔B 直连被防火墙挡，多机实证）下 validator-set 广播只达
+     * 直连对端 ⇒ A 不转发时 C 的验证人永远到不了 B，C 提议的块在 B 处
+     * {@code unknown proposer} 无法落库。按载荷内容指纹（SHA-256）去重：
+     * 同一载荷每节点最多转发一次，回声自此两跳内收敛，无广播风暴。</p>
+     */
+    private void relayValidatorSet(byte[] payload) {
+        if (server == null || payload == null || payload.length == 0) {
+            return;
+        }
+        String fingerprint;
+        try {
+            fingerprint = org.apache.commons.codec.binary.Hex.encodeHexString(
+                    java.security.MessageDigest.getInstance("SHA-256").digest(payload));
+        } catch (java.security.NoSuchAlgorithmException e) {
+            logger.warn("Validator-set relay skipped (SHA-256 unavailable): {}", e.getMessage());
+            return;
+        }
+        if (validatorSetRelayCache.putIfAbsent(fingerprint, Boolean.TRUE) != null) {
+            return;  // 已转发过 → 不再转发（防环）
+        }
+        try {
+            server.broadcast(buildValidatorSetTransactions(payload));
+            logger.info("Validator-set relayed to peers (bytes={})", payload.length);
+        } catch (RuntimeException e) {
+            logger.warn("Validator-set relay failed: {}", e.getMessage());
+        }
+    }
+
+    /** 把 validator-set 载荷包装为单一 TRANSACTIONS 广播消息（与 Bootstrapper 同封装）。 */
+    private static NexusChainOuterClass.Transactions buildValidatorSetTransactions(byte[] payload) {
+        NexusChainOuterClass.Transaction tx = NexusChainOuterClass.Transaction.newBuilder()
+                .setTransactionType(NexusChainOuterClass.TransactionType.VOTE)
+                .setPayload(ByteString.copyFrom(payload))
+                .build();
+        return NexusChainOuterClass.Transactions.newBuilder()
+                .addTransactions(tx)
+                .build();
+    }
+
+    /**
+     * PLAN-030（F1 修复）：把本节点注册表全量以 validator-set add 批量回放。
+     *
+     * <p>新/重启节点错过历史 add 广播后无人重放历史 ⇒ 永远缺后期加入的验证人
+     * （多机实验中 B 的 C 缺行靠人工插行绕行的注脚）。挂接点为
+     * {@link #onGetStatus}：对端每（默认 30s）咨询一次本节点状态时回放一次
+     * 全表——3 节点规模每周期 3 条 add，损耗微小；超过
+     * {@link #MAX_VALIDATORS_PER_REPLAY}（64）时截断并 warn。</p>
+     */
+    void replayValidatorSetTable() {
+        if (server == null || validatorRegistry == null) {
+            return;
+        }
+        List<org.nexus.consensus.pos.Validator> validators = validatorRegistry.getAllValidators();
+        if (validators == null || validators.isEmpty()) {
+            return;
+        }
+        List<org.nexus.consensus.pos.Validator> selected = validators.size() > MAX_VALIDATORS_PER_REPLAY
+                ? validators.subList(0, MAX_VALIDATORS_PER_REPLAY)
+                : validators;
+        if (selected.size() < validators.size()) {
+            logger.warn("Validator-set replay truncated: {} of {} validators (limit {})",
+                    selected.size(), validators.size(), MAX_VALIDATORS_PER_REPLAY);
+        }
+        NexusChainOuterClass.Transactions.Builder builder = NexusChainOuterClass.Transactions.newBuilder();
+        for (org.nexus.consensus.pos.Validator v : selected) {
+            if (v == null || v.getAddress() == null || v.getPublicKey() == null) {
+                continue;
+            }
+            try {
+                builder.addTransactions(NexusChainOuterClass.Transaction.newBuilder()
+                        .setTransactionType(NexusChainOuterClass.TransactionType.VOTE)
+                        .setPayload(ByteString.copyFrom(org.nexus.consensus.finality.net.ValidatorSetCodec.encodeAdd(
+                                v.getAddress(), v.getPublicKey(),
+                                v.getStakeAmount() == null ? "0" : v.getStakeAmount().toPlainString())))
+                        .build());
+            } catch (RuntimeException e) {
+                logger.warn("Validator-set replay row failed ({}): {}", v.getAddress(), e.getMessage());
+            }
+        }
+        try {
+            server.broadcast(builder.build());
+            logger.info("Validator-set full-table replay sent: {} validators", selected.size());
+        } catch (RuntimeException e) {
+            logger.warn("Validator-set replay failed: {}", e.getMessage());
         }
     }
 
@@ -347,6 +456,9 @@ public class SyncManager implements Plugin, ApplicationListener<NewBlockMinedEve
                 .setGenesisHash(ByteString.copyFrom(genesis.getHash()))
                 .build();
         context.response(resp);
+        // PLAN-030（F1）：对端咨询状态时回放本节点注册表全量 ——
+        // 新/重启节点靠这把"迟到验证人"补齐（多机 B 的 C 缺行注脚）。
+        replayValidatorSetTable();
     }
 
     private synchronized void receiveBlocks(List<Block> blocks) {

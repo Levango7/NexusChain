@@ -157,9 +157,12 @@ public class SyncClient {
 
     @Scheduled(fixedRate = 30 * 1000)
     public void getStatus() {
-        if (enableMining) {
-            return;
-        }
+        // PLAN-029（F2 修复）：出块节点也主动对账。旧行为 `if (enableMining) return;`
+        // 使出块节点永不主动按高度补块、只靠被动接收广播——错过广播的块永久缺失
+        // （PLAN-027 多机实证：B 停在 162、对端已 164，重启后仍 162）。
+        // F3 的 view-change 让 slot 轮转绕开卡住的节点，但"自身缺口追平"仍需要
+        // 出块节点自己拉块：以下为轮询对端状态（30s 周期、对端轮换），
+        // 对端不高于本地时自然跳过——mining/非 mining 行为因此统一。
         logger.info("try to sync from nexus seeds");
         String hostPort = consensusConfig.getPeers().get(counter.incrementAndGet() % consensusConfig.getPeers().size());
         rpcClient.get("http://" + hostPort + "/consensus/status", new HashMap<>(), (byte[] resp) -> {
@@ -168,16 +171,32 @@ public class SyncClient {
                 logger.error("invalid status received " + new String(resp));
                 return null;
             }
-            Block header = chainHeadProvider.currentHeader();
-            if (status.currentHeight <= header.nHeight) {
-                return null;
+            GetBlockQuery query = buildCatchUpQuery(chainHeadProvider.currentHeader().nHeight, status);
+            if (query != null) {
+                getBlocks(query.start, query.stop, false);
             }
-            // clip interval
-            GetBlockQuery query = new GetBlockQuery(header.nHeight, status.currentHeight)
-                    .clip(ConsensusController.MAX_BLOCKS_IN_TRANSIT_PER_PEER, false);
-            getBlocks(query.start, query.stop, false);
             return null;
         });
+    }
+
+    /**
+     * PLAN-029（F2 修复）：将"对端状态"折算为一次追块请求。
+     *
+     * <p>对端不高于本地（或状态无效）⇒ 无需追块，返回 {@code null}；
+     * 否则按窗口 {@code [localHeight, remoteHeight]} 发起拉取（上限
+     * {@code ConsensusController.MAX_BLOCKS_IN_TRANSIT_PER_PEER}，从起点裁剪）。</p>
+     *
+     * <p>窗口起点为本地链头高度（与既有非 mining 行为一致：已在本地的
+     * 再校验一次无副作用，窗口上界受 clip 限制）。</p>
+     *
+     * @return 追块查询；无需追块时返回 null
+     */
+    GetBlockQuery buildCatchUpQuery(long localHeaderHeight, Status remote) {
+        if (remote == null || remote.currentHeight <= localHeaderHeight) {
+            return null;
+        }
+        return new GetBlockQuery(localHeaderHeight, remote.currentHeight)
+                .clip(ConsensusController.MAX_BLOCKS_IN_TRANSIT_PER_PEER, false);
     }
 
     @Async
