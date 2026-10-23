@@ -9,6 +9,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.nexus.bridge.model.BridgeTransaction;
 import org.nexus.bridge.model.BridgeTransaction.BridgeTxStatus;
 import org.nexus.bridge.repository.BridgeTransactionRepository;
+import org.nexus.bridge.saga.BridgeSagaCoordinator;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 
@@ -27,11 +28,14 @@ class BridgeControllerTest {
     @Mock
     private BridgeService bridgeService;
 
+    @Mock
+    private BridgeSagaCoordinator sagaCoordinator;
+
     private BridgeController controller;
 
     @BeforeEach
     void setUp() {
-        controller = new BridgeController(bridgeService);
+        controller = new BridgeController(bridgeService, sagaCoordinator);
     }
 
     @Test
@@ -189,5 +193,67 @@ class BridgeControllerTest {
         assertNotNull(response.getBody());
         assertEquals(40900, response.getBody().get("code"));
         assertEquals("amount must be positive", response.getBody().get("message"));
+    }
+
+    // ==================== #59：成对端点必须走 saga 协调器 ====================
+
+    @Test
+    @DisplayName("transfer: 必须把 lock+mint 原样交给协调器执行（不是各自调 bridgeService）")
+    void transfer_delegatesWholePairToSagaCoordinator() {
+        LockRequest lock = new LockRequest("ethereum", "bsc", 1000L, "0xUser", "0xTarget", "0xHash");
+        MintRequest mint = new MintRequest();
+        BridgeTransaction tx = new BridgeTransaction();
+        tx.setTxId("saga-1");
+        when(sagaCoordinator.executeLockMint(lock, mint)).thenReturn(tx);
+
+        ResponseEntity<BridgeTransaction> response =
+                controller.transfer(new BridgeController.LockMintRequest(lock, mint));
+
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertSame(tx, response.getBody());
+        // 断的是"对象同一性"：端点若自己拼参数或改用单步 service，saga 记账与补偿就都丢了
+        verify(sagaCoordinator).executeLockMint(lock, mint);
+        verifyNoInteractions(bridgeService);
+    }
+
+    @Test
+    @DisplayName("reversal: 必须把 burn+unlock 原样交给协调器执行")
+    void reversal_delegatesWholePairToSagaCoordinator() {
+        BurnRequest burn = new BurnRequest("bsc", "ethereum", 500L, "0xUser", "0xTarget", "0xHash");
+        UnlockRequest unlock = new UnlockRequest();
+        BridgeTransaction tx = new BridgeTransaction();
+        tx.setTxId("saga-2");
+        when(sagaCoordinator.executeBurnUnlock(burn, unlock)).thenReturn(tx);
+
+        ResponseEntity<BridgeTransaction> response =
+                controller.reversal(new BridgeController.BurnUnlockRequest(burn, unlock));
+
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertSame(tx, response.getBody());
+        verify(sagaCoordinator).executeBurnUnlock(burn, unlock);
+        verifyNoInteractions(bridgeService);
+    }
+
+    @Test
+    @DisplayName("transfer/reversal 缺半边：400，且协调器一次都不被调用（半对不能当整对跑）")
+    void incompletePairsAreRejectedBeforeSaga() {
+        LockRequest lock = new LockRequest("ethereum", "bsc", 1000L, "0xUser", "0xTarget", "0xHash");
+        BurnRequest burn = new BurnRequest("bsc", "ethereum", 500L, "0xUser", "0xTarget", "0xHash");
+
+        assertEquals(HttpStatus.BAD_REQUEST,
+                controller.transfer(new BridgeController.LockMintRequest(lock, null)).getStatusCode());
+        assertEquals(HttpStatus.BAD_REQUEST,
+                controller.transfer(new BridgeController.LockMintRequest(null, new MintRequest())).getStatusCode());
+        assertEquals(HttpStatus.BAD_REQUEST,
+                controller.transfer(null).getStatusCode());
+        assertEquals(HttpStatus.BAD_REQUEST,
+                controller.reversal(new BridgeController.BurnUnlockRequest(burn, null)).getStatusCode());
+        assertEquals(HttpStatus.BAD_REQUEST,
+                controller.reversal(new BridgeController.BurnUnlockRequest(null, new UnlockRequest())).getStatusCode());
+        assertEquals(HttpStatus.BAD_REQUEST,
+                controller.reversal(null).getStatusCode());
+
+        verifyNoInteractions(sagaCoordinator);
+        verifyNoInteractions(bridgeService);
     }
 }
