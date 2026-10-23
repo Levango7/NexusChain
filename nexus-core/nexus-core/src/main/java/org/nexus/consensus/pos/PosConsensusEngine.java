@@ -132,6 +132,28 @@ public class PosConsensusEngine implements PosConsensus {
     @org.springframework.beans.factory.annotation.Value("${nexus.consensus.proposer-strategy:random}")
     private String proposerStrategy;
 
+    /**
+     * PLAN-028 view-change：固定高度槽位无块超时（秒）。
+     * 指定槽位的提案者在该时长内未产出区块（死亡/被抑制），按
+     * {@code (height + round) % size} 顺序轮转至下一位提案者，恢复出块活性。
+     * {@code 0} 禁用轮换（维持 PLAN-007 纯高度确定性语义）。
+     * 包内可见仅供同包测试直改。
+     */
+    @org.springframework.beans.factory.annotation.Value("${nexus.consensus.slot-timeout-seconds:5}")
+    long slotTimeoutSeconds = 5L;
+
+    /** PLAN-028 view-change 视图状态：当前视图高度（-1 = 尚未初始化）。包内可见仅供同包测试拨表。 */
+    volatile long viewHeight = -1L;
+
+    /** PLAN-028 view-change 视图状态：当前轮次（0 = 常规槽位）。包内可见仅供同包测试拨表。 */
+    volatile int viewRound = 0;
+
+    /** PLAN-028 view-change 视图状态：本视图周期起点（绝对毫秒，防累积漂移）。包内可见仅供同包测试拨表。 */
+    volatile long viewStartedAtMillis = 0L;
+
+    /** PLAN-028 view-change 状态锁（propose() 每秒一次调用，竞争极低；仅保证三元组原子推进）。 */
+    private final Object viewLock = new Object();
+
     /** 节点签名密钥对（Ed25519），用于对区块头签名（非 final 以便 @PostConstruct 用配置密钥替换）。 */
     private KeyPair signingKeyPair;
 
@@ -210,14 +232,17 @@ public class PosConsensusEngine implements PosConsensus {
         }
         long height = parent.nHeight + 1;
 
-        // 2. 选取当前提案者（stake-weighted random 或 round-robin，PLAN-001 步骤 4）
-        Validator selected = selectProposerWithStrategy(height);
+        // 2. PLAN-028 view-change：高度槽位超时则轮转提案者（恢复出块活性），再选取提案者
+        int round = advanceRoundIfSlotTimedOut(height);
+
+        // 3. 选取当前提案者（stake-weighted random 或 round-robin，PLAN-001 步骤 4）
+        Validator selected = selectProposerWithStrategy(height, round);
         if (selected == null) {
             logger.warn("Propose failed: no proposer selected at height {}", height);
             return null;
         }
 
-        // 3. 轮次判定：仅当被选中的提案者是本节点时才出块（fail-closed）
+        // 4. 轮次判定：仅当被选中的提案者是本节点时才出块（fail-closed）
         if (!self.getAddress().equals(selected.getAddress())) {
             logger.debug("Not this node's slot at height {}: selected={}, self={}",
                     height, selected.getAddress(), self.getAddress());
@@ -227,24 +252,24 @@ public class PosConsensusEngine implements PosConsensus {
         logger.info("Proposing block at height {} by proposer {}", height, selected.getAddress());
 
         try {
-            // 4. 构造区块
+            // 5. 构造区块
             Block block = buildBlock(parent, height, selected);
             if (block == null) {
                 logger.warn("Propose failed: block construction failed at height {}", height);
                 return null;
             }
 
-            // 5. 提案者签名（用节点 Ed25519 私钥签名区块头；失败即放弃，不产出无法验证的区块）
+            // 6. 提案者签名（用节点 Ed25519 私钥签名区块头；失败即放弃，不产出无法验证的区块）
             if (!signBlock(block)) {
                 logger.error("Propose aborted at height {}: block signing failed (fail-closed, no fallback)",
                         height);
                 return null;
             }
 
-            // 6. P2P 广播区块（通过 Spring 事件触发 SyncManager 广播）
+            // 7. P2P 广播区块（通过 Spring 事件触发 SyncManager 广播）
             broadcastBlock(block);
 
-            // 6.1 本地采纳（单节点/自产自收闭环）：写回链推进高度，
+            // 7.1 本地采纳（单节点/自产自收闭环）：写回链推进高度，
             //     否则 stateDB.getBestBlock() 恒为 genesis、高度永不递增，
             //     epoch 边界（finality 投票）永不触发（ADR-031 决策 8 补充修复）
             try {
@@ -255,7 +280,7 @@ public class PosConsensusEngine implements PosConsensus {
                 logger.warn("Local adoption failed at height {}: {}", height, e.getMessage());
             }
 
-            // 7. 分配出块奖励
+            // 8. 分配出块奖励
             BigDecimal fees = computeBlockFees(block);
             rewardDistributor.distributeBlockReward(selected.getAddress(), fees);
 
@@ -401,22 +426,71 @@ public class PosConsensusEngine implements PosConsensus {
      *   <li>{@code random}（默认）：权益加权随机——单节点/测试语义</li>
      *   <li>{@code round-robin}：{@code height % 活跃验证人数} 确定性轮换——
      *       多节点共享验证人集合时全网对同一高度得出同一 proposer，
-     *       避免多节点同时出块冲突</li>
+     *       避免多节点同时出块冲突；PLAN-028 view-change 后按
+     *       {@code (height + round) % size} 轮转</li>
      * </ul>
      */
-    private Validator selectProposerWithStrategy(long height) {
+    private Validator selectProposerWithStrategy(long height, int round) {
         // Spring 配置优先，-D JVM 参数兜底（真机 `-Dnexus.consensus.proposer-strategy=` 传递）
         String strategy = proposerStrategy != null && !proposerStrategy.isBlank()
                 ? proposerStrategy
                 : System.getProperty("nexus.consensus.proposer-strategy", "random");
         if ("round-robin".equalsIgnoreCase(strategy)) {
-            Validator v = proposer.selectRoundRobinProposer(height);
+            Validator v = proposer.selectRoundRobinProposer(height, round);
             if (v != null) {
-                logger.debug("Round-robin proposer at height {}: {}", height, v.getAddress());
+                logger.debug("Round-robin proposer at height {}: {} (round={})", height, v.getAddress(), round);
             }
             return v;
         }
         return proposer.selectProposer(height);
+    }
+
+    /**
+     * PLAN-028 view-change：若当前高度槽位超时未出块，轮转至下一位提案者。
+     *
+     * <p>各节点独立执行（无需额外网络消息）：同一高度首先到访时重置
+     * round=0；此后每 {@code slot-timeout-seconds} 递增一次 round，
+     * 从而对同一 (height, round) 全网得出同一提案者序列。
+     * 采用绝对周期计时（view 起点 + (round+1) × timeout），避免
+     * 检测延迟导致的累积漂移。超时错过的节点在轮转经过自己时
+     * 仍可接管轮次，恢复出块活性。</p>
+     *
+     * @param height 本节点观测到的下一个出块高度
+     * @return 当前应使用的 round
+     */
+    int advanceRoundIfSlotTimedOut(long height) {
+        if (slotTimeoutSeconds <= 0) {
+            return 0;  // 显式禁用（0）：维持 PLAN-007 纯高度确定性语义
+        }
+        synchronized (viewLock) {
+            long now = System.currentTimeMillis();
+            if (height != viewHeight) {
+                // 高度推进（本地 best 变化）→ 新视图周期从常规模块开始
+                viewHeight = height;
+                viewRound = 0;
+                viewStartedAtMillis = now;
+                return 0;
+            }
+            int currentRound = viewRound;
+            long periodMillis = slotTimeoutSeconds * 1000L;
+            if (now - viewStartedAtMillis >= periodMillis) {
+                viewRound = currentRound + 1;
+                // 周期基准 + 固定周期推进（而非重置为 now）：单次调用最多
+                // 推进一轮，长时间无块由后续每秒调度持续追赶，避免一次
+                // 吞掉多个周期造成与其他节点的 round 失步
+                viewStartedAtMillis = viewStartedAtMillis + periodMillis;
+                logger.warn("View-change: height {} advancing round to {} (slot idle beyond {}s)",
+                        height, viewRound, slotTimeoutSeconds);
+            }
+            return viewRound;
+        }
+    }
+
+    /** 测试与诊断用：当前视图轮次。 */
+    int currentViewRound() {
+        synchronized (viewLock) {
+            return viewRound;
+        }
     }
 
     /**

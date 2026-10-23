@@ -76,6 +76,23 @@ public class PosProposer {
      * @return 被选中的验证人；无活跃验证人返回 null
      */
     public Validator selectRoundRobinProposer(long height) {
+        return selectRoundRobinProposer(height, 0);
+    }
+
+    /**
+     * 带轮次（view）的确定性轮询选择提案者（PLAN-028 view-change）。
+     *
+     * <p>固定高度 slot 的提案者无响应（死亡/被抑制）时，按 {@code (height + round) % size}
+     * 轮转至下一位提案者。全部调用方对同一 (height, round) 得出同一提案者，
+     * 保持确定性；round 的本地推进由 {@link PosConsensusEngine} 统
+     一按 slot 超时执行，
+     * 保证各节点在同一高度上按相同顺序尝试提案者序列。</p>
+     *
+     * @param height 区块高度
+     * @param round  当前轮次（0 = 常规槽位）
+     * @return 被选中的验证人；无活跃验证人返回 null
+     */
+    public Validator selectRoundRobinProposer(long height, int round) {
         List<Validator> active = validatorRegistry.getActiveValidators();
         if (active.isEmpty()) {
             logger.warn("No active validators to propose at height {}", height);
@@ -87,9 +104,14 @@ public class PosProposer {
         List<Validator> ordered = new ArrayList<>(active);
         ordered.sort(java.util.Comparator.comparing(Validator::getAddress));
         int index = (int) (Math.abs(height) % ordered.size());
+        if (round > 0 && ordered.size() > 1) {
+            // PLAN-028 view-change：round 递增按固定顺序向后轮转
+            // （round ≥ size 时取模回绕，序列与单轮轮换保持一致）。
+            index = (int) ((Math.abs(height) + round) % ordered.size());
+        }
         Validator selected = ordered.get(index);
-        logger.info("Selected proposer {} at height {} (round robin index={}, ordered set size={})",
-                selected.getAddress(), height, index, ordered.size());
+        logger.info("Selected proposer {} at height {} (round robin index={}, round={}, ordered set size={})",
+                selected.getAddress(), height, index, round, ordered.size());
         return selected;
     }
 }

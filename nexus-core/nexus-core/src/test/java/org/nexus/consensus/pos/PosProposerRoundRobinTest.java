@@ -88,4 +88,54 @@ class PosProposerRoundRobinTest {
     void noActiveValidatorsReturnsNull() {
         assertNull(proposer.selectRoundRobinProposer(1));
     }
+
+    // ==================== PLAN-028 view-change：round 轮转 ====================
+
+    @Test
+    void roundZeroMatchesHeightOnlySemantics() {
+        for (String a : new String[]{"v0", "v1", "v2"}) registerActive(a);
+        for (long h : new long[]{1, 5, 100, -1}) {
+            assertEquals(proposer.selectRoundRobinProposer(h).getAddress(),
+                    proposer.selectRoundRobinProposer(h, 0).getAddress(),
+                    "round=0 必须与纯高度语义完全一致（兼容 PLAN-007）");
+        }
+    }
+
+    @Test
+    void roundAdvancesToNextProposerInFixedOrder() {
+        for (String a : new String[]{"v0", "v1", "v2"}) registerActive(a);
+        long h = 5;  // ordered[v0,v1,v2] → index = 5%3 = 2 → v2
+        assertEquals("v2", proposer.selectRoundRobinProposer(h).getAddress());
+        // 槽位 v2 无响应 → round 1、2 依次顺延
+        assertEquals("v0", proposer.selectRoundRobinProposer(h, 1).getAddress());
+        assertEquals("v1", proposer.selectRoundRobinProposer(h, 2).getAddress());
+    }
+
+    @Test
+    void roundWrapsAroundConsistently() {
+        for (String a : new String[]{"v0", "v1", "v2"}) registerActive(a);
+        long h = 5;
+        // round=3 回绕到 index=(5+3)%3=2 → v2（与 round=0 同一槽位）
+        assertEquals("v2", proposer.selectRoundRobinProposer(h, 3).getAddress());
+        assertEquals("v0", proposer.selectRoundRobinProposer(h, 4).getAddress());
+        // 跨节点（不同 PosProposer 实例）对同一 (h, round) 必须得出同一提案者
+        ValidatorRegistry registry2 = new ValidatorRegistry(new BigDecimal("100"), 100);
+        for (String a : new String[]{"v2", "v0", "v1"}) {
+            registry2.register(a, "pub-" + a, new BigDecimal("300"), 0.1);
+            registry2.getValidator(a).setStatus(ValidatorStatus.ACTIVE);
+        }
+        PosProposer proposer2 = new PosProposer();
+        try {
+            java.lang.reflect.Field f = PosProposer.class.getDeclaredField("validatorRegistry");
+            f.setAccessible(true);
+            f.set(proposer2, registry2);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+        for (int r = 0; r < 6; r++) {
+            assertEquals(proposer.selectRoundRobinProposer(h, r).getAddress(),
+                    proposer2.selectRoundRobinProposer(h, r).getAddress(),
+                    "(height,round)=(" + h + "," + r + ") 跨节点必须同提案者");
+        }
+    }
 }

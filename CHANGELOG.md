@@ -4,6 +4,25 @@
 
 ## [Unreleased]
 
+### 共识活性：提议人轮转 view-change（PLAN-028，2026-10-23）
+
+修复 PLAN-027 四项发现中的 **F3**（最高优先级）：round-robin 按纯高度映射
+提议人，指定槽位卡住（死亡/被落后抑制）时该高度永远无人出块，全网停摆且
+不能自愈（多机实验日志范式：A 每秒重复 `Selected proposer … at height 165`
+无限等待）。修复为 **Tendermint 式本地超时 round-stepping**：
+
+- 提案者索引扩展为 `(height + round) % size`，对同一 `(height, round)`
+  全网确定性一致（PLAN-007 语义在 `round=0` 与负高度下**逐字保留**）；
+- `PosConsensusEngine.advanceRoundIfSlotTimedOut`：同一高度空闲超过
+  `nexus.consensus.slot-timeout-seconds`（默认 5，`0` 禁用）轮转 `round+1`，
+  绝对周期基准防累积漂移、单次最多推进一轮；
+- `random` 策略不受影响；双块过渡窗口由既有 fail-closed 验签 +
+  PLAN-003 reorg 兜底。
+
+边界如实：round 推进靠本地时钟，过渡窗口错位可产生一过性双块（兜底已存在，
+无新的绝对性保证）；无罚没/健康度自动降质；多机闭环实证待 F2/F1/Fifo
+修复后统一重跑。详见 `docs/plan/PLAN-028-proposer-view-change.md`。
+
 ### 多机拓扑验收与四项发现（PLAN-027，2026-10-23）
 
 应"多机必须做"要求，在一台物理机上构造了**三个不同内核/网络栈**的节点
