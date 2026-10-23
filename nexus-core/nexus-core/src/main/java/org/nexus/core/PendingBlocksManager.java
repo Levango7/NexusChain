@@ -83,6 +83,14 @@ public class PendingBlocksManager {
     /** 已从持久化 outbox 恢复过一次（避免每个调度周期重复捞库）。 */
     private volatile boolean outboxRestored = false;
 
+    /**
+     * 单次从持久化 outbox 捞取的最大行数。
+     *
+     * <p>{@code loadPending} 是 {@code LIMIT} 无分页，所以"捞完"必须由
+     * {@link #restoreFromOutbox()} 的循环驱动，不能依赖单次调用。</p>
+     */
+    private static final int RESTORE_BATCH_SIZE = 64;
+
     // 区块的写入全部走这里
     @Async
     public void addPendingBlocks(BlocksCache cache) {
@@ -263,15 +271,42 @@ public class PendingBlocksManager {
             return;
         }
         try {
-            List<Block> pending = blockOutbox.loadPending(64);
-            if (pending.isEmpty()) {
-                outboxRestored = true;
-                return;
+            int total = 0;
+            while (true) {
+                // pendingCount() < 0 表示"读不到"（未装配 / 库不可用）——
+                // JdbcPendingBlockOutbox.loadPending 在库异常时会吞掉异常并返回**空列表**，
+                // 所以"空"不等于"没有待恢复区块"，必须先问一次数量。（缺陷 B）
+                int before = blockOutbox.pendingCount();
+                List<Block> pending = blockOutbox.loadPending(RESTORE_BATCH_SIZE);
+                if (pending.isEmpty()) {
+                    if (before < 0) {
+                        // 存储不可用：不得当成"已恢复完"。不置 outboxRestored，
+                        // 下一轮调度再试——否则 PG 未恢复时重启会永久丢掉整个 outbox。
+                        logger.warn("PendingBlocks: cannot read pending block outbox "
+                                + "(storage unavailable?); will retry next cycle");
+                        return;
+                    }
+                    // 真的捞到空批 = 没有待恢复区块，此时才允许标记完成。
+                    outboxRestored = true;
+                    if (total > 0) {
+                        logger.info("PendingBlocks: restored {} pending block(s) from persistent outbox",
+                                total);
+                    }
+                    return;
+                }
+                // 走同一条采纳路径（内部会做校验与写链，并清理 outbox 行）。
+                addPendingBlocks(new BlocksCache(pending));
+                int after = blockOutbox.pendingCount();
+                total += pending.size();
+                if (before >= 0 && after >= before) {
+                    // 本批没有任何 outbox 行被移除（存储仍不可用 / 块无法落库）。
+                    // 必须停止，否则会对同一批无限重试；且不置 outboxRestored，
+                    // 保留下一轮重试的机会。
+                    logger.warn("PendingBlocks: outbox restore made no progress "
+                            + "(still {} pending row(s)); will retry next cycle", after);
+                    return;
+                }
             }
-            outboxRestored = true;
-            logger.info("PendingBlocks: restoring {} pending block(s) from persistent outbox", pending.size());
-            // 走同一条采纳路径（内部会做校验与写链，并清理 outbox 行）。
-            addPendingBlocks(new BlocksCache(pending));
         } catch (RuntimeException e) {
             // 恢复失败不阻断调度：下一轮再试（outboxRestored 只在成功路径置位）。
             logger.warn("PendingBlocks: failed to restore pending blocks from outbox: {}", e.getMessage());

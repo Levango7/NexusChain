@@ -19,7 +19,7 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
@@ -109,25 +109,81 @@ public class PendingBlocksManagerOutboxRestoreCapTest {
     }
 
     /**
-     * 断言 2：{@code restoreFromOutbox} 整个进程生命周期只捞一次，
-     * 所以「一次捞不完」的尾部行永远不会被重试。
-     *
-     * <p>这是缺陷的「不循环」半边。用一个记录调用次数的桩 outbox，
-     * 不依赖真实数据库，也不依赖 {@link BlocksCache} 的成链行为。</p>
+     * 断言 2a：{@code restoreFromOutbox} 必须**循环捞取**直到一批取空，
+     * 否则超出单批（64）的行永远不会被恢复。
      */
     @Test
-    void restoreFromOutboxFetchesOnlyOnceSoTailRowsAreNeverRetried() {
-        RecordingOutbox recording = new RecordingOutbox();
-        PendingBlocksManager manager = new PendingBlocksManager();
+    void restoreFromOutboxDrainsAllBatchesUntilEmpty() {
+        ScriptedOutbox scripted = new ScriptedOutbox();
+        scripted.addRows(TOTAL_ROWS);
+        PendingBlocksManager manager = managerWith(scripted, /*lastConfirmedHeight=*/0L);
 
+        manager.restoreFromOutbox();
+
+        assertEquals(TOTAL_ROWS, scripted.rowsWritten.get(), "所有行都应被补写");
+        assertEquals(0, scripted.pendingCount(), "outbox 应被捞空");
+        // 64 + 6 + 1（空批收尾）= 3 次
+        assertEquals(3, scripted.loadPendingCalls.get(),
+                "必须循环捞取：64 一批 + 6 一批 + 空批收尾");
+        assertTrue(isRestoreDone(manager), "捞空后应置 outboxRestored");
+    }
+
+    /**
+     * 断言 2b：存储不可用时**不得**把"空列表"当成"已恢复完"。
+     *
+     * <p>{@code JdbcPendingBlockOutbox.loadPending} 在库异常时吞掉异常返回空列表，
+     * 原实现因此把"PG 还没起来"判成"没有待恢复区块"并永久置位——
+     * 这正是 PLAN-017 的核心场景（PG 停 → 重启 → PG 未恢复 → 永不补写）。</p>
+     */
+    @Test
+    void restoreFromOutboxDoesNotMarkDoneWhenStorageUnavailable() {
+        ScriptedOutbox scripted = new ScriptedOutbox();
+        scripted.addRows(TOTAL_ROWS);
+        scripted.unavailable = true;            // pendingCount() -> -1，loadPending -> 空列表
+        PendingBlocksManager manager = managerWith(scripted, /*lastConfirmedHeight=*/0L);
+
+        manager.restoreFromOutbox();
+        assertFalse(isRestoreDone(manager), "存储不可用时不得标记为已恢复完");
+
+        // 下一轮调度必须还能再试（没有一次性置位）
+        manager.restoreFromOutbox();
+        assertFalse(isRestoreDone(manager), "存储不可用时不得标记为已恢复完（第二轮）");
+        assertTrue(scripted.loadPendingCalls.get() >= 2, "未标记完成时应持续重试");
+    }
+
+    /**
+     * 断言 2c：本批没有任何行被补写掉时必须停止循环（防对同一批无限重试），
+     * 且不置位，保留下一轮重试机会。
+     */
+    @Test
+    void restoreFromOutboxStopsWhenNoProgressInsteadOfSpinning() {
+        ScriptedOutbox scripted = new ScriptedOutbox();
+        scripted.addRows(TOTAL_ROWS);
+        // lastConfirmed 高于所有块高度 ⇒ processChain 全部跳过 ⇒ 没有任何行被移除
+        PendingBlocksManager manager = managerWith(scripted, /*lastConfirmedHeight=*/TOTAL_ROWS);
+
+        manager.restoreFromOutbox();
+
+        assertEquals(1, scripted.loadPendingCalls.get(), "无进展时必须停止，不得对同一批重试");
+        assertEquals(TOTAL_ROWS, scripted.pendingCount(), "一行都不应被移除");
+        assertFalse(isRestoreDone(manager), "无进展时不得标记为已恢复完");
+    }
+
+    /** 读 manager 的 outboxRestored 标志（包内私有字段，用反射）。 */
+    private static boolean isRestoreDone(PendingBlocksManager manager) {
+        Object v = ReflectionTestUtils.getField(manager, "outboxRestored");
+        return Boolean.TRUE.equals(v);
+    }
+
+    /** 构造一个装配了脚本化 outbox 的 manager；{@code lastConfirmedHeight} 控制哪些块被跳过。 */
+    private PendingBlocksManager managerWith(PendingBlockOutbox outbox, long lastConfirmedHeight) {
+        PendingBlocksManager manager = new PendingBlocksManager();
         StateDB stateDB = mock(StateDB.class);
         NexusChainBlockChain bc = mock(NexusChainBlockChain.class);
         CompositeBlockRule rule = mock(CompositeBlockRule.class);
         MerkleRule merkleRule = mock(MerkleRule.class);
 
-        // 让 processChain 把所有块当「已确认过」直接跳过：本用例只关心捞取次数，
-        // 不关心写链路径（写链路径由 PendingBlocksManagerStorageRetryTest 覆盖）。
-        when(stateDB.getLastConfirmed()).thenReturn(block(TOTAL_ROWS));
+        when(stateDB.getLastConfirmed()).thenReturn(block(lastConfirmedHeight));
         when(stateDB.hasBlock(any())).thenReturn(false);
         when(stateDB.hasBlockInCache(any())).thenReturn(false);
         when(bc.hasBlock(any())).thenReturn(false);
@@ -138,40 +194,23 @@ public class PendingBlocksManagerOutboxRestoreCapTest {
         ReflectionTestUtils.setField(manager, "bc", bc);
         ReflectionTestUtils.setField(manager, "rule", rule);
         ReflectionTestUtils.setField(manager, "merkleRule", merkleRule);
-        ReflectionTestUtils.setField(manager, "blockOutbox", recording);
-
-        manager.restoreFromOutbox();
-        manager.restoreFromOutbox();
-        manager.restoreFromOutbox();
-
-        assertEquals(1, recording.loadPendingCalls.get(),
-                "restoreFromOutbox 必须只捞一次（outboxRestored 是一次性标志）"
-                        + "——重复调用不会再捞，所以超出单批的行永远不会被恢复");
-        assertTrue(recording.loadedOnce, "桩应至少被取用过一次");
-        assertNotNull(recording.lastLimit);
-        assertEquals(BATCH_LIMIT, recording.lastLimit,
-                "restoreFromOutbox 应以 64 为限调用 loadPending");
+        ReflectionTestUtils.setField(manager, "blockOutbox", outbox);
+        return manager;
     }
 
     /**
-     * 记录 {@code loadPending} 调用次数与上限的桩 outbox。
-     *
-     * <p>返回 64 条「已确认过」的块（高度 ≤ lastConfirmed），使
-     * {@code addPendingBlocks} 走完整条路径但不产生任何写库/移除动作。</p>
+     * 可编排的桩 outbox：模拟"一批最多 limit 行 + 显式 remove 才移除"的真实语义，
+     * 并可切换为"存储不可用"（{@code pendingCount() -> -1}、{@code loadPending -> 空列表}）。
      */
-    private static final class RecordingOutbox implements PendingBlockOutbox {
+    private static final class ScriptedOutbox implements PendingBlockOutbox {
 
+        private final List<Block> rows = new ArrayList<>();
         private final AtomicInteger loadPendingCalls = new AtomicInteger(0);
-        private volatile Integer lastLimit;
-        private volatile boolean loadedOnce;
+        private final AtomicInteger rowsWritten = new AtomicInteger(0);
+        private volatile boolean unavailable;
 
-        @Override
-        public List<Block> loadPending(int limit) {
-            loadPendingCalls.incrementAndGet();
-            lastLimit = limit;
-            loadedOnce = true;
-            List<Block> out = new ArrayList<>();
-            for (int h = 1; h <= limit; h++) {
+        private void addRows(int n) {
+            for (int h = 1; h <= n; h++) {
                 Block b = new Block();
                 b.nHeight = h;
                 b.nTime = 1700000000L + h;
@@ -180,14 +219,30 @@ public class PendingBlocksManagerOutboxRestoreCapTest {
                 b.hashMerkleState = new byte[]{8, 8, 8};
                 b.hashMerkleIncubate = new byte[]{7, 7, 7};
                 b.body = new ArrayList<>();
-                out.add(b);
+                rows.add(b);
             }
-            return out;
+        }
+
+        @Override
+        public List<Block> loadPending(int limit) {
+            loadPendingCalls.incrementAndGet();
+            if (unavailable) {
+                return List.of();      // 与 JdbcPendingBlockOutbox 一致：吞掉异常返回空
+            }
+            int end = Math.min(limit, rows.size());
+            return new ArrayList<>(rows.subList(0, end));
+        }
+
+        @Override
+        public void remove(Block block) {
+            if (rows.removeIf(b -> b.nHeight == block.nHeight)) {
+                rowsWritten.incrementAndGet();
+            }
         }
 
         @Override
         public int pendingCount() {
-            return TOTAL_ROWS - BATCH_LIMIT;
+            return unavailable ? -1 : rows.size();
         }
     }
 }
