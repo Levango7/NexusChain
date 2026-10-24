@@ -9,6 +9,7 @@ import ContractsPage from "./pages/ContractsPage";
 import ContractPage from "./pages/ContractPage";
 import CrossChainPage from "./pages/CrossChainPage";
 import Settings from "./pages/Settings";
+import WithdrawalApprovalsPage from "./pages/WithdrawalApprovalsPage";
 import { ErrorBoundary } from "./components/ui";
 
 /**
@@ -44,6 +45,7 @@ const App: React.FC = () => (
         <Route path="/block/:height" element={withBoundary(<BlockDetailPage />)} />
         <Route path="/tx/:hash" element={withBoundary(<TxDetailPage />)} />
         <Route path="/address/:addr" element={withBoundary(<AddressPage />)} />
+        <Route path="/wallet/approvals" element={withBoundary(<WithdrawalApprovalsPage />)} />
         <Route path="/settings" element={withBoundary(<Settings />)} />
       </Routes>
     </BrowserRouter>

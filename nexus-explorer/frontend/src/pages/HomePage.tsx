@@ -7,6 +7,7 @@ import {
   GitBranch,
   FileCode2,
   ArrowLeftRight,
+  Wallet,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api/client";
@@ -155,6 +156,14 @@ const HomePage: React.FC = () => {
           >
             <ArrowLeftRight size={16} />
             <span className="hidden sm:inline">{t("nav.crosschain")}</span>
+          </Link>
+          <Link
+            to="/wallet/approvals"
+            aria-label={t("nav.approvals")}
+            className="flex items-center gap-1 text-muted hover:text-accent text-xs transition-colors duration-base ease-standard focus:outline-none focus-visible:shadow-focus"
+          >
+            <Wallet size={16} />
+            <span className="hidden sm:inline">{t("nav.approvals")}</span>
           </Link>
           <Link
             to="/settings"

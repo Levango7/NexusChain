@@ -26,7 +26,8 @@
     "orchestration": "支付编排",
     "contracts": "合约",
     "crosschain": "跨链",
-    "settings": "设置"
+    "settings": "设置",
+    "approvals": "提现审批"
   },
   "home": {
     "title": "NexusChain 区块浏览器",
@@ -197,5 +198,40 @@
       "confirmed": "已确认",
       "failed": "失败"
     }
+  },
+  "approvals": {
+    "title": "提现审批",
+    "back": "返回",
+    "disconnect": "断开连接",
+    "connectTitle": "连接托管钱包服务",
+    "connectSubtitle": "提现审批在 nexus-wallet-service（JWT 鉴权），与网关的 HMAC 凭证不通用。",
+    "baseUrl": "wallet-service 地址",
+    "jwt": "访问令牌（JWT）",
+    "jwtPlaceholder": "粘贴 wallet-service 的 JWT（需 APPROVER 角色）",
+    "jwtHint": "令牌只存在当前标签页的 sessionStorage，关闭标签页即失效。",
+    "connect": "连接",
+    "sessionOnly": "仅本次会话有效",
+    "reconfigure": "重新配置",
+    "authInvalid": "JWT 无效或已过期——请重新配置",
+    "forbidden": "当前 JWT 角色不足（审批需要 APPROVER）",
+    "requestFailed": "请求失败 ({{status}}): {{message}}",
+    "unknownError": "未知错误",
+    "hotBalance": "热钱包余额",
+    "coldBalance": "冷钱包余额",
+    "pendingTitle": "待审批（{{n}} 笔）",
+    "noPending": "当前没有待审批的提现",
+    "whitelisted": "已加白",
+    "notWhitelisted": "未加白",
+    "whitelistUnknown": "白名单未知",
+    "notWhitelistedWarn": "收款地址不在白名单——批准前请人工核实",
+    "meta": "已批准 {{approved}}/{{required}} · {{time}}",
+    "approve": "批准",
+    "reject": "拒绝",
+    "execute": "执行",
+    "executeHint": "已满足审批门槛，可执行链上广播",
+    "rejectTitle": "拒绝提现",
+    "rejectFor": "拒绝 {{amount}} {{currency}} 的提现申请",
+    "rejectReasonPlaceholder": "填写拒绝原因（会记入审计）",
+    "rejectReasonHint": "原因必填：wallet-service 的 reject 端点要求 reason 参数。"
   }
 }
