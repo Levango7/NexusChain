@@ -137,6 +137,33 @@ public class SyncManager implements Plugin, ApplicationListener<NewBlockMinedEve
         validatorSetNonceWatermark.merge(address, nonce, Math::max);
     }
 
+    // ==================== PLAN-033：grpc 大缺口追块加速（切片 A） ====================
+
+    /** 加速门槛：差距 > maxBlocksPerTransfer × 此倍数时启用 5s 级对账。 */
+    private static final int ACCEL_CATCHUP_GAP_WINDOWS = 2;
+
+    /** 在途窗口超时（视为丢响应，允许重新对账）。 */
+    private static final long CATCHUP_INFLIGHT_TIMEOUT_MILLIS = 20_000L;
+
+    /** 连续零推进轮次上限（超过则暂停加速 60s，防打转热循环）。 */
+    private static final int MAX_CATCHUP_STALL = 5;
+
+    private static final long CATCHUP_STALL_PAUSE_MILLIS = 60_000L;
+
+    /** 在途窗口标记：请求已发出、响应尚未完成（避免重复拉同一窗口）。 */
+    private final java.util.concurrent.atomic.AtomicBoolean catchUpRequestInFlight =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+
+    /** 在途窗口的请求上界与发出时刻（完成/超时判定用）。 */
+    private volatile long catchUpWindowStop = 0L;
+    private volatile long catchUpIssuedAtMillis = 0L;
+
+    /** 防打转：连续零推进计数（原子自增，SpotBugs VO_VOLATILE_INCREMENT）/ 上次 best / 暂停截止。 */
+    private final java.util.concurrent.atomic.AtomicInteger catchUpStallCount =
+            new java.util.concurrent.atomic.AtomicInteger();
+    private volatile long catchUpLastBest = -1L;
+    private volatile long catchUpPausedUntilMillis = 0L;
+
     /** 已知对端最高区块高度（PLAN-002：本地出块抑制依据，volatile 跨线程可见）。 */
     private volatile long knownMaxPeerHeight = 0;
 
@@ -192,6 +219,72 @@ public class SyncManager implements Plugin, ApplicationListener<NewBlockMinedEve
 
     @Scheduled(fixedRate = 30 * 1000)
     public void getStatus() {
+        dialStatusToRandomPeer();
+    }
+
+    /**
+     * PLAN-033（切片 A）：大缺口时的 5s 级追块加速。
+     *
+     * <p>问题（量化）：常规 `getStatus()` 每 30s 只做一次"随机单 peer 对账"，
+     * 窗口（≤{@code maxBlocksPerTransfer}）到达后**不续拉**——大缺口时实际吞吐
+     * ~10–24 块/分 < 出块 ~26 块/分，永不收敛（PLAN-027 §六 边界）。</p>
+     *
+     * <p>做法：差距 > 2×窗口 且无在途窗口（或在途超时）时，提前拨 GetStatus
+     * ——对端响应触发 {@code onStatus} → 请求下一个窗口，形成"顺序窗口流水线"，
+     * 在途 ≤1（{@code catchUpRequestInFlight}），不并发、不乱序；常规 30s 周期
+     * 保持不变（冷启动/掉线恢复兜底）。</p>
+     *
+     * <p>防打转：连续 {@value #MAX_CATCHUP_STALL} 轮 best 未推进 → 暂停加速
+     * {@value #CATCHUP_STALL_PAUSE_MILLIS} ms（限频 WARN；常规周期仍在跑）。</p>
+     */
+    @Scheduled(fixedDelay = 5_000)
+    public void acceleratedCatchUp() {
+        if (server == null) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (now < catchUpPausedUntilMillis) {
+            return;
+        }
+        long best = stateDB.getBestBlock().nHeight;
+        long target = knownMaxPeerHeight;
+        if (!shouldAccelerateCatchUp(best, target, catchUpRequestInFlight.get(),
+                catchUpIssuedAtMillis, now)) {
+            return;
+        }
+        if (best == catchUpLastBest) {
+            catchUpStallCount.incrementAndGet();
+        } else {
+            catchUpStallCount.set(0);
+            catchUpLastBest = best;
+        }
+        int stallCount = catchUpStallCount.get();
+        if (stallCount > MAX_CATCHUP_STALL) {
+            logger.warn("accelerated catch-up paused: {} consecutive rounds without progress (best={}, target={})",
+                    stallCount, best, target);
+            catchUpPausedUntilMillis = now + CATCHUP_STALL_PAUSE_MILLIS;
+            catchUpStallCount.set(0);
+            return;
+        }
+        dialStatusToRandomPeer();
+    }
+
+    /**
+     * 加速判定（纯函数，单测锁定）：差距超阈值且（无在途 或 在途超时）⇒ true。
+     */
+    boolean shouldAccelerateCatchUp(long localBest, long target, boolean inFlight,
+                                    long issuedAtMillis, long nowMillis) {
+        if (target - localBest <= (long) maxBlocksPerTransfer * ACCEL_CATCHUP_GAP_WINDOWS) {
+            return false;
+        }
+        if (!inFlight) {
+            return true;
+        }
+        return nowMillis - issuedAtMillis > CATCHUP_INFLIGHT_TIMEOUT_MILLIS;
+    }
+
+    /** 状态对账主体（30s 常规周期与 5s 加速周期共用；行为与旧实现逐行一致）。 */
+    private void dialStatusToRandomPeer() {
         if (server == null) {
             return;
         }
@@ -602,6 +695,11 @@ public class SyncManager implements Plugin, ApplicationListener<NewBlockMinedEve
                     .setClipDirection(NexusChainOuterClass.ClipDirection.CLIP_TAIL).build();
             logger.info("require blocks start from " + req.getStartHeight() + " stop at " + req.getStopHeight());
             server.dial(context.getPayload().getRemote(), req);
+            // PLAN-033（切片 A）：记录在途窗口——加速调度据此判定"响应完成/超时"，
+            // 保证在途 ≤1（顺序窗口流水线，不并发、不乱序）。
+            catchUpWindowStop = getBlockQuery.stop;
+            catchUpIssuedAtMillis = System.currentTimeMillis();
+            catchUpRequestInFlight.set(true);
         }
     }
 
@@ -641,6 +739,12 @@ public class SyncManager implements Plugin, ApplicationListener<NewBlockMinedEve
         if (validBlocks.size() > 0) {
             BlocksCache blocksWritable = orphanBlocksManager.removeAndCacheOrphans(validBlocks);
             pendingBlocksManager.addPendingBlocks(blocksWritable);
+        }
+        // PLAN-033（切片 A）：在途窗口完成判定——本批最高高度到达/越过请求上界即视为
+        // 完成，允许加速调度续拉下一窗口（未到达则由 20s 超时兜底放行）。
+        if (catchUpRequestInFlight.get() && blocks.size() > 0
+                && blocks.get(blocks.size() - 1).nHeight >= catchUpWindowStop) {
+            catchUpRequestInFlight.set(false);
         }
     }
 
