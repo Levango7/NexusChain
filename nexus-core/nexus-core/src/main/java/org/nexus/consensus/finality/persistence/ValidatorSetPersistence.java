@@ -75,6 +75,16 @@ public class ValidatorSetPersistence {
                 + "public_key VARCHAR(256) NOT NULL, "
                 + "stake_amount VARCHAR(64) NOT NULL, "
                 + "updated_at BIGINT NOT NULL)");
+            // PLAN-001 签名扩展（切片 2）：重放水位列（additive-only，PG / H2 均支持
+            // ADD COLUMN IF NOT EXISTS）。存量行回填 0 → 首次签名消息（nonce=毫秒）恒新。
+            try {
+                jdbc.execute("ALTER TABLE validators_synced "
+                        + "ADD COLUMN IF NOT EXISTS nonce BIGINT NOT NULL DEFAULT 0");
+            } catch (RuntimeException e) {
+                // 老库/异构方言的兜底：列可能已存在或方言不支持 IF NOT EXISTS。
+                // 不影响注册路径本身（nonce 读写方法均有独立异常容忍）。
+                log.warn("ValidatorSetPersistence: nonce column ensure skipped: {}", e.getMessage());
+            }
             log.info("ValidatorSetPersistence: schema initialized");
             replay();
         } catch (SchemaMeta.MismatchException e) {
@@ -121,6 +131,17 @@ public class ValidatorSetPersistence {
 
     /** 写库（本节点自举注册 / 收到广播时调用；幂等 upsert）。 */
     public void upsert(String address, String publicKey, BigDecimal stakeAmount) {
+        upsert(address, publicKey, stakeAmount, 0L);
+    }
+
+    /**
+     * 写库（含重放水位）。
+     *
+     * <p>{@code nonce} 只增不减：{@code CASE WHEN nonce < ? THEN ? ELSE nonce END}
+     * 保证乱序到达（旧 nonce 晚于新 nonce）不会把水位回退——与内存 watermark
+     * 的 {@code max} 语义一致（PG / H2 均支持的普通 SQL，不依赖 GREATEST）。</p>
+     */
+    public void upsert(String address, String publicKey, BigDecimal stakeAmount, long nonce) {
         if (jdbc == null || address == null || publicKey == null || stakeAmount == null) {
             return;
         }
@@ -130,14 +151,37 @@ public class ValidatorSetPersistence {
             // 可移植 upsert：PostgreSQL / H2 均支持；避免 MERGE（H2 专有）与
             // ON CONFLICT DO UPDATE（H2 2.2.224 不支持，异常会被本方法 catch 吞掉）。
             JdbcUpsert.upsert(jdbc,
-                    "UPDATE validators_synced SET public_key = ?, stake_amount = ?, updated_at = ? "
+                    "UPDATE validators_synced SET public_key = ?, stake_amount = ?, updated_at = ?, "
+                    + "nonce = CASE WHEN nonce < ? THEN ? ELSE nonce END "
                     + "WHERE address = ?",
-                    new Object[]{publicKey, stake, now, address},
-                    "INSERT INTO validators_synced(address, public_key, stake_amount, updated_at) "
-                    + "VALUES(?,?,?,?)",
-                    new Object[]{address, publicKey, stake, now});
+                    new Object[]{publicKey, stake, now, nonce, nonce, address},
+                    "INSERT INTO validators_synced(address, public_key, stake_amount, updated_at, nonce) "
+                    + "VALUES(?,?,?,?,?)",
+                    new Object[]{address, publicKey, stake, now, nonce});
         } catch (RuntimeException e) {
             log.warn("Validator upsert failed: address={}, error={}", address, e.getMessage());
+        }
+    }
+
+    /**
+     * 读取某地址已见最大 nonce（重放护栏水位）。无记录 / 库不可用返回 0。
+     *
+     * <p>调用方（SyncManager）通常与内存 watermark 取 max 再交给
+     * {@code ValidatorSetMessageVerifier} 比较。</p>
+     */
+    public long lastNonce(String address) {
+        if (jdbc == null || address == null) {
+            return 0L;
+        }
+        try {
+            Long v = jdbc.queryForObject(
+                    "SELECT nonce FROM validators_synced WHERE address = ?", Long.class, address);
+            return v == null ? 0L : v;
+        } catch (org.springframework.dao.EmptyResultDataAccessException e) {
+            return 0L;
+        } catch (RuntimeException e) {
+            log.warn("Validator lastNonce read failed: address={}, error={}", address, e.getMessage());
+            return 0L;
         }
     }
 
