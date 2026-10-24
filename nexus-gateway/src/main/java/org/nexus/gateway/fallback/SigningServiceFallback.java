@@ -51,4 +51,18 @@ public class SigningServiceFallback implements SigningServiceFeignClient {
         // 审计修复：capability 探针降级返回 null，健康指示器按 DOWN 处理
         return null;
     }
+
+    @Override
+    public Map<String, Object> getApprovalStatus(String requestId) {
+        // fail-closed：查询降级 = 状态未知，调用方不得据此执行
+        log.error("getApprovalStatus Feign 降级触发: signing-service 不可用, requestId={}", requestId);
+        return null;
+    }
+
+    @Override
+    public Map<String, Object> executeApproved(String approvalId) {
+        // fail-closed：执行降级 = 结果未知，调用方不得当作已执行
+        log.error("executeApproved Feign 降级触发: signing-service 不可用, approvalId={}", approvalId);
+        return null;
+    }
 }

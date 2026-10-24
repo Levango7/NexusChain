@@ -10,6 +10,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -17,6 +18,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 
@@ -148,6 +150,44 @@ public class SigningApprovalController {
         }
 
         return body(HttpStatus.OK, BIZ_OK, "ok", snapshot(after, approve));
+    }
+
+    /**
+     * 查询审批请求状态（只读，不改变状态）。
+     *
+     * <p>调用方在 {@code POST /api/v1/transfers/sign} 收到
+     * {@code statusCode=2001}（PENDING）后，需要凭 approvalId 判断"是否已批准"，
+     * 再决定是否调用 {@code POST /api/v1/transfers/sign/approved} 执行签名。
+     * 没有本端点时，调用方只能反复撞执行端点（未批准时它回 5000），无法区分
+     * PENDING / REJECTED / EXPIRED，也无法安全地做轮询。</p>
+     *
+     * <p>服务间 token（SIGNING_SERVICE→SIGNER 归一化）与运维 token（OPERATOR）都可查询；
+     * 只返回人数与时间，不回显具体审批人地址。</p>
+     *
+     * @param requestId 审批请求 ID
+     * @return 状态快照；不存在时 404
+     */
+    @PreAuthorize("hasAnyRole('" + SecurityRoles.SIGNER + "','" + SecurityRoles.OPERATOR + "')")
+    @GetMapping("/{requestId}")
+    public ResponseEntity<Map<String, Object>> get(@PathVariable("requestId") String requestId) {
+        SigningApprovalRequest request = approvalService.getRequest(requestId);
+        if (request == null) {
+            return body(HttpStatus.NOT_FOUND, BIZ_NOT_FOUND,
+                    "Approval request not found: " + requestId, null);
+        }
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("requestId", request.getRequestId());
+        data.put("status", request.getStatus().name());
+        data.put("expired", request.isExpired());
+        data.put("amount", request.getAmount());
+        data.put("currency", request.getCurrency());
+        data.put("initiator", request.getInitiator());
+        data.put("required_approvers", request.getRequiredApprovers());
+        data.put("approvals_count", request.getApprovals().size());
+        data.put("rejections_count", request.getRejections().size());
+        data.put("created_at", request.getCreatedAt().toString());
+        data.put("deadline", request.getDeadline().toString());
+        return body(HttpStatus.OK, BIZ_OK, "ok", data);
     }
 
     /** 解析 {@code decision}；缺失或非法一律按 400 处理（交给 {@link GlobalExceptionHandler}）。 */
