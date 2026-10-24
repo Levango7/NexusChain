@@ -2,6 +2,8 @@ package org.nexus.gateway.fundreport;
 
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
+import org.nexus.gateway.security.MerchantOwnershipGuard;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -19,34 +21,59 @@ import java.util.Map;
  *
  * <p>提供自动提现规则配置、查询、禁用等功能。
  * 路径前缀：{@code /api/v1/auto-withdraw}</p>
+ *
+ * <h3>鉴权（2026-10-25 修复跨商户越权）</h3>
+ *
+ * <p><b>修复前</b>：{@code configure} 与查询端点只要求
+ * {@code hasRole('MERCHANT') or hasRole('ADMIN')}，路径 {@code merchantId}
+ * 直接交给 Service —— <b>没有归属校验</b>。自动提现规则决定"什么时候、往哪、提多少"，
+ * 能替他人配置等于能替他人设定自动出款，风险高于只读。</p>
+ *
+ * <p><b>修复方式</b>：对齐 {@code PaymentController} 范式，用
+ * {@link MerchantOwnershipGuard} 比对 {@code nexus.merchantId} 与路径参数。</p>
+ *
+ * <p>{@code disable} 是管理动作（{@code hasRole('ADMIN')}），本次未改动。</p>
  */
 @RestController
 @RequestMapping("/api/v1/auto-withdraw")
 @Tag(name = "AutoWithdraw", description = "自动提现管理：规则配置/查询/禁用")
-@PreAuthorize("isAuthenticated()")
 public class AutoWithdrawController {
 
     private static final Logger log = LoggerFactory.getLogger(AutoWithdrawController.class);
 
     private final AutoWithdrawService autoWithdrawService;
+    private final MerchantOwnershipGuard ownershipGuard;
 
-    public AutoWithdrawController(AutoWithdrawService autoWithdrawService) {
+    public AutoWithdrawController(AutoWithdrawService autoWithdrawService,
+                                  MerchantOwnershipGuard ownershipGuard) {
         this.autoWithdrawService = autoWithdrawService;
+        this.ownershipGuard = ownershipGuard;
+    }
+
+    /**
+     * 归属校验：路径 {@code merchantId} 必须等于调用方商户（fail-closed）。
+     */
+    private void requireOwnMerchant(HttpServletRequest request, Long merchantId) {
+        Long callerMerchantId = ownershipGuard.requireMerchantId(request);
+        ownershipGuard.requireOwned(callerMerchantId, merchantId, "auto-withdraw", merchantId);
     }
 
     /**
      * 配置自动提现规则。
      *
-     * @param merchantId 商户 ID
+     * @param merchantId 商户 ID（必须属于调用方）
      * @param body 请求体（frequency + threshold + targetAmount + minRetain）
+     * @param request HTTP 请求（承载 ApiKeyInterceptor 注入的商户上下文）
      * @return 200 + 配置后的规则信息
      */
     @Operation(summary = "配置自动提现规则")
-    @PreAuthorize("hasRole('MERCHANT') or hasRole('ADMIN')")
     @PostMapping("/{merchantId}/configure")
     public ResponseEntity<Map<String, Object>> configureAutoWithdraw(
             @PathVariable Long merchantId,
-            @RequestBody ConfigureRequest body) {
+            @RequestBody ConfigureRequest body,
+            HttpServletRequest request) {
+
+        requireOwnMerchant(request, merchantId);
 
         // 输入验证：frequency 和 threshold 不能为空
         if (body.getFrequency() == null) {
@@ -77,13 +104,15 @@ public class AutoWithdrawController {
     /**
      * 查询商户自动提现规则列表。
      *
-     * @param merchantId 商户 ID
+     * @param merchantId 商户 ID（必须属于调用方）
+     * @param request HTTP 请求（承载 ApiKeyInterceptor 注入的商户上下文）
      * @return 200 + 规则列表
      */
     @Operation(summary = "查询商户自动提现规则")
-    @PreAuthorize("hasRole('MERCHANT') or hasRole('ADMIN')")
     @GetMapping("/{merchantId}")
-    public ResponseEntity<Map<String, Object>> getAutoWithdrawRules(@PathVariable Long merchantId) {
+    public ResponseEntity<Map<String, Object>> getAutoWithdrawRules(@PathVariable Long merchantId,
+                                                                   HttpServletRequest request) {
+        requireOwnMerchant(request, merchantId);
         List<AutoWithdrawRule> rules = autoWithdrawService.getAutoWithdrawRule(merchantId);
 
         Map<String, Object> result = new LinkedHashMap<>();
