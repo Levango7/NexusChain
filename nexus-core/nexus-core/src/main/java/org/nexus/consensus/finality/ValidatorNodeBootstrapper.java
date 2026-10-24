@@ -129,13 +129,16 @@ public class ValidatorNodeBootstrapper implements ApplicationListener<Applicatio
         } catch (RuntimeException e) {
             log.warn("Validator-set signing failed (broadcast unsigned): {}", e.getMessage());
         }
-        // PLAN-001 步骤 5：本节点验证人写入共享表（重启后全网可重放）；带 nonce 落库。
-        if (validatorSetPersistence != null) {
-            validatorSetPersistence.upsert(address, pubHex, selfStake, nonce);
-        }
         // PLAN-001 步骤 3：向 P2P 全网广播本节点验证人信息（跨节点同步）
         byte[] msg = org.nexus.consensus.finality.net.ValidatorSetCodec.encodeAdd(
                 address, pubHex, stakeStr, nonce, signature);
+        // PLAN-001 步骤 5：本节点验证人写入共享表（重启后全网可重放）；带 nonce 落库。
+        // 切片 4：自签载荷原文落库——本节点参与对端全表回放时逐字节复用（enforce 前置）。
+        if (validatorSetPersistence != null) {
+            String storedPayload = signature == null
+                    ? null : java.util.Base64.getEncoder().encodeToString(msg);
+            validatorSetPersistence.upsert(address, pubHex, selfStake, nonce, storedPayload);
+        }
         broadcastValidatorSet(msg);
         // 多次延迟重发（PLAN-009）：对端可能后启动/握手未完成，广播在连接建立前
         // 静默丢弃——单次 10s 重发不足（真机观察 B 未收 A 广播）。

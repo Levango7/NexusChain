@@ -147,5 +147,15 @@ class PortableUpsertPostgresTest {
                 "SELECT public_key FROM validators_synced WHERE address = 'addr-1'", String.class));
         assertEquals("250", jdbc.queryForObject(
                 "SELECT stake_amount FROM validators_synced WHERE address = 'addr-1'", String.class));
+
+        // PLAN-001 切片 2/4：nonce 与 signed_payload 增量列在真实 PG 上可建、可读写
+        // （init() 的 ALTER TABLE ADD COLUMN IF NOT EXISTS 已在上方执行）。
+        persistence.upsert("addr-1", "pubkey-3", new BigDecimal("250"), 42L, "cGF5bG9hZA==");
+        assertEquals(42L, persistence.lastNonce("addr-1"));
+        assertEquals("cGF5bG9hZA==", persistence.loadSignedPayloads(10).get("addr-1"));
+        // 无签名 upsert（COALESCE）不得清空已存载荷
+        persistence.upsert("addr-1", "pubkey-4", new BigDecimal("250"), 43L);
+        assertEquals("cGF5bG9hZA==", persistence.loadSignedPayloads(10).get("addr-1"));
+        assertEquals(43L, persistence.lastNonce("addr-1"), "nonce 单调推进");
     }
 }

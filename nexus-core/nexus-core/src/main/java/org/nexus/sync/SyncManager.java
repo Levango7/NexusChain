@@ -342,8 +342,12 @@ public class SyncManager implements Plugin, ApplicationListener<NewBlockMinedEve
                         msg.address(), msg.publicKey(), stake, 0.1);
                 // PLAN-001 步骤 5：广播收到的验证人也写共享表（落库重放）。
                 // 切片 2：带 nonce 落库（只增不减），供重启后的重放护栏使用。
+                // 切片 4：签名载荷原文（base64）落库——全表回放逐字节复用（enforce 前置）。
                 if (validatorSetPersistence != null) {
-                    validatorSetPersistence.upsert(msg.address(), msg.publicKey(), stake, msg.nonce());
+                    String storedPayload = msg.hasSignature()
+                            ? java.util.Base64.getEncoder().encodeToString(payload) : null;
+                    validatorSetPersistence.upsert(
+                            msg.address(), msg.publicKey(), stake, msg.nonce(), storedPayload);
                 }
                 logger.info("Validator-set add: address={} registered={} (via P2P)", msg.address(), ok);
                 mutated = true;
@@ -431,6 +435,13 @@ public class SyncManager implements Plugin, ApplicationListener<NewBlockMinedEve
      * {@link #onGetStatus}：对端每（默认 30s）咨询一次本节点状态时回放一次
      * 全表——3 节点规模每周期 3 条 add，损耗微小；超过
      * {@link #MAX_VALIDATORS_PER_REPLAY}（64）时截断并 warn。</p>
+     *
+     * <p><b>切片 4（回放签名语义）</b>：优先逐字节复用 {@code validators_synced}
+     * 落库的**原始签名载荷**（{@link org.nexus.consensus.finality.persistence.ValidatorSetPersistence#loadSignedPayloads}）——
+     * 回放消息同样带 nonce/签名、可过 {@code ValidatorSetMessageVerifier}
+     * （这是 {@code enforce} 模式的启用前置）。无存量的老行（升级前注册、行内无
+     * payload）退化为旧的**无签名重建**路径（兼容模式可受理；enforce 模式下会被
+     * 接收端丢弃，待该验证人重启自宣后补齐）。</p>
      */
     void replayValidatorSetTable() {
         if (server == null || validatorRegistry == null) {
@@ -447,17 +458,41 @@ public class SyncManager implements Plugin, ApplicationListener<NewBlockMinedEve
             logger.warn("Validator-set replay truncated: {} of {} validators (limit {})",
                     selected.size(), validators.size(), MAX_VALIDATORS_PER_REPLAY);
         }
+        java.util.Map<String, String> storedPayloads = java.util.Collections.emptyMap();
+        if (validatorSetPersistence != null) {
+            storedPayloads = validatorSetPersistence.loadSignedPayloads(MAX_VALIDATORS_PER_REPLAY);
+        }
+        int signedReplayed = 0;
+        int legacyRebuilt = 0;
         NexusChainOuterClass.Transactions.Builder builder = NexusChainOuterClass.Transactions.newBuilder();
         for (org.nexus.consensus.pos.Validator v : selected) {
             if (v == null || v.getAddress() == null || v.getPublicKey() == null) {
                 continue;
             }
             try {
+                byte[] payload = null;
+                String stored = storedPayloads.get(v.getAddress());
+                if (stored != null) {
+                    try {
+                        payload = java.util.Base64.getDecoder().decode(stored);
+                    } catch (IllegalArgumentException e) {
+                        logger.warn("Validator-set replay stored payload undecodable ({}): {}",
+                                v.getAddress(), e.getMessage());
+                    }
+                }
+                if (payload != null && payload.length > 1
+                        && org.nexus.consensus.finality.net.ValidatorSetCodec.isValidatorSetPayload(payload)) {
+                    signedReplayed++;
+                } else {
+                    // 无存量/损坏：退化重建（无签名，老行为）
+                    payload = org.nexus.consensus.finality.net.ValidatorSetCodec.encodeAdd(
+                            v.getAddress(), v.getPublicKey(),
+                            v.getStakeAmount() == null ? "0" : v.getStakeAmount().toPlainString());
+                    legacyRebuilt++;
+                }
                 builder.addTransactions(NexusChainOuterClass.Transaction.newBuilder()
                         .setTransactionType(NexusChainOuterClass.TransactionType.VOTE)
-                        .setPayload(ByteString.copyFrom(org.nexus.consensus.finality.net.ValidatorSetCodec.encodeAdd(
-                                v.getAddress(), v.getPublicKey(),
-                                v.getStakeAmount() == null ? "0" : v.getStakeAmount().toPlainString())))
+                        .setPayload(ByteString.copyFrom(payload))
                         .build());
             } catch (RuntimeException e) {
                 logger.warn("Validator-set replay row failed ({}): {}", v.getAddress(), e.getMessage());
@@ -465,7 +500,8 @@ public class SyncManager implements Plugin, ApplicationListener<NewBlockMinedEve
         }
         try {
             server.broadcast(builder.build());
-            logger.info("Validator-set full-table replay sent: {} validators", selected.size());
+            logger.info("Validator-set full-table replay sent: {} validators ({} signed payloads verbatim, {} legacy rebuilt)",
+                    selected.size(), signedReplayed, legacyRebuilt);
         } catch (RuntimeException e) {
             logger.warn("Validator-set replay failed: {}", e.getMessage());
         }
