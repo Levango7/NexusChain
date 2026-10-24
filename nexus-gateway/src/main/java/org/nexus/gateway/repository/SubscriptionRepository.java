@@ -9,11 +9,15 @@ import org.springframework.stereotype.Repository;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 
 @Repository
 public interface SubscriptionRepository extends JpaRepository<Subscription, Long> {
 
     List<Subscription> findByMerchantId(Long merchantId);
+
+    /** 按订阅编号查找（审批执行腿推进任务回写 authTxHash 时使用）。 */
+    Optional<Subscription> findBySubscriptionNo(String subscriptionNo);
 
     List<Subscription> findByStatusAndNextChargeAtBefore(Subscription.SubscriptionStatus status, LocalDateTime cutoff);
 

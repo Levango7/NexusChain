@@ -118,14 +118,9 @@ public class SigningApprovalExecutionService {
             return new SigningOutcome(Status.FAILED, null, null, "signing service unavailable");
         }
 
-        if (SigningResponses.isApprovalRequired(response)) {
-            String approvalId = SigningResponses.approvalId(response);
-            if (approvalId == null) {
-                log.error("2001 响应缺少 approvalId，无法进入审批跟踪: requestKey={}, response={}",
-                        requestKey, response);
-                return new SigningOutcome(Status.FAILED, null, null,
-                        "approval required but approvalId missing");
-            }
+        SigningResponses.Outcome outcome = SigningResponses.classify(response);
+        if (outcome.isAwaitingApproval()) {
+            String approvalId = outcome.approvalId();
             ApprovalExecutionLink link = newLink(requestKey, requestType, approvalId,
                     fromPubkey, toPubkeyHash, amount, currency);
             try {
@@ -145,14 +140,12 @@ public class SigningApprovalExecutionService {
             return new SigningOutcome(Status.AWAITING_APPROVAL, approvalId, null, null);
         }
 
-        String txHash = SigningResponses.txHash(response);
-        if (txHash != null) {
-            return new SigningOutcome(Status.EXECUTED, null, txHash, null);
+        if (outcome.isExecuted()) {
+            return new SigningOutcome(Status.EXECUTED, null, outcome.txHash(), null);
         }
-        String message = SigningResponses.message(response);
-        log.error("signTransfer 失败（未动账）: requestKey={}, message={}", requestKey, message);
+        log.error("signTransfer 失败（未动账）: requestKey={}, message={}", requestKey, outcome.message());
         return new SigningOutcome(Status.FAILED, null, null,
-                message == null ? "signTransfer failed" : message);
+                outcome.message() == null ? "signTransfer failed" : outcome.message());
     }
 
     /**

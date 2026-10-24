@@ -88,7 +88,10 @@ public class HttpSigningServiceClient implements SigningServiceClient {
                 log.info("Sign+transfer successful: txHash={}", txHash);
                 return txHash;
             } else {
-                log.error("Sign+transfer failed: response={}", resp.getBody());
+                // 2001 = 大额转人工审批（不是失败）。本方法的返回值只有 String/null，
+                // 表达不了 approvalId，因此绝不能把它当"签名失败"去重发——见 javadoc。
+                log.error("Sign+transfer did not execute (statusCode={} , 2001=待人工审批而非失败): response={}",
+                        statusCode, resp.getBody());
                 return null;
             }
         } catch (RuntimeException e) {

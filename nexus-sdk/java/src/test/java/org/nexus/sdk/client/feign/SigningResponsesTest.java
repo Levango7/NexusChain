@@ -7,6 +7,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -89,5 +90,79 @@ class SigningResponsesTest {
         assertEquals("审批未通过", SigningResponses.message(response));
         assertNull(SigningResponses.message(response(5000, null)));
         assertNull(SigningResponses.message(null));
+    }
+
+    // --- classify：三态契约（待审批不得再被当成失败） ---
+
+    @Test
+    void classify_nullResponse_isFailed() {
+        SigningResponses.Outcome outcome = SigningResponses.classify(null);
+        assertTrue(outcome.isFailed());
+        assertNull(outcome.txHash());
+        assertNull(outcome.approvalId());
+        assertNull(outcome.statusCode());
+        assertNotNull(outcome.message());
+    }
+
+    @Test
+    void classify_okWithHash_isExecuted() {
+        SigningResponses.Outcome outcome = SigningResponses.classify(response(2000, "0xabc"));
+        assertTrue(outcome.isExecuted());
+        assertEquals("0xabc", outcome.txHash());
+        assertNull(outcome.approvalId());
+        assertEquals(2000, outcome.statusCode());
+    }
+
+    @Test
+    void classify_approvalRequired_isAwaitingWithApprovalId() {
+        Map<String, Object> response = response(2001, null);
+        response.put("approvalId", "appr-1");
+
+        SigningResponses.Outcome outcome = SigningResponses.classify(response);
+        assertTrue(outcome.isAwaitingApproval());
+        assertFalse(outcome.isFailed());
+        assertEquals("appr-1", outcome.approvalId());
+        assertNull(outcome.txHash());
+        assertEquals(2001, outcome.statusCode());
+    }
+
+    @Test
+    void classify_approvalRequiredWithoutId_isFailed() {
+        SigningResponses.Outcome outcome = SigningResponses.classify(response(2001, null));
+        assertTrue(outcome.isFailed());
+        assertNull(outcome.approvalId());
+        assertEquals(2001, outcome.statusCode());
+    }
+
+    @Test
+    void classify_okWithoutHash_isFailed() {
+        assertTrue(SigningResponses.classify(response(2000, null)).isFailed());
+        assertTrue(SigningResponses.classify(response(2000, "   ")).isFailed());
+    }
+
+    @Test
+    void classify_otherStatus_isFailedWithMessage() {
+        Map<String, Object> response = response(5000, null);
+        response.put("message", "签名服务内部错误");
+        SigningResponses.Outcome outcome = SigningResponses.classify(response);
+        assertTrue(outcome.isFailed());
+        assertEquals("签名服务内部错误", outcome.message());
+        assertEquals(5000, outcome.statusCode());
+    }
+
+    @Test
+    void classify_acceptsStringStatusCodeAndNumericApprovalId() {
+        Map<String, Object> response = response("2001", null);
+        response.put("approvalId", 42);
+        SigningResponses.Outcome outcome = SigningResponses.classify(response);
+        assertTrue(outcome.isAwaitingApproval());
+        assertEquals("42", outcome.approvalId());
+    }
+
+    @Test
+    void classify_invalidStatusCode_isFailed() {
+        SigningResponses.Outcome outcome = SigningResponses.classify(response("oops", "0xabc"));
+        assertTrue(outcome.isFailed());
+        assertNull(outcome.statusCode());
     }
 }

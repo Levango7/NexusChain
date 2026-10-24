@@ -1,16 +1,20 @@
 package org.nexus.gateway.service;
 
 import org.nexus.gateway.SubscriptionService;
+import org.nexus.gateway.approval.ApprovalExecutionLink;
+import org.nexus.gateway.approval.SigningApprovalExecutionService;
+import org.nexus.gateway.approval.SigningOutcome;
+import org.nexus.gateway.approval.SigningTransfers;
 import org.nexus.gateway.config.GatewayConfig;
 import org.nexus.gateway.model.Subscription;
 import org.nexus.gateway.repository.SubscriptionRepository;
 import org.nexus.sdk.client.feign.SigningServiceFeignClient;
-import org.nexus.sdk.client.feign.SigningResponses;
 import org.nexus.sdk.client.feign.WalletMgmtFeignClient;
 import org.nexus.sdk.wallet.WalletUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -45,6 +49,17 @@ public class SubscriptionServiceImpl implements SubscriptionService {
      */
     private final TransactionTemplate claimTemplate;
     private final WalletAddressHelper walletAddressHelper;
+
+    /**
+     * 大额签名审批执行服务（可选装配）。装配后，订阅授权/扣款的大额转账会转
+     * "待审批"并落库 approvalId；未装配时退化为直接签名（2001 fail-closed）。
+     */
+    private SigningApprovalExecutionService approvalExecutionService;
+
+    @Autowired(required = false)
+    public void setApprovalExecutionService(SigningApprovalExecutionService approvalExecutionService) {
+        this.approvalExecutionService = approvalExecutionService;
+    }
 
     public SubscriptionServiceImpl(SubscriptionRepository subscriptionRepository,
                                    SigningServiceFeignClient signingServiceClient,
@@ -119,12 +134,30 @@ public class SubscriptionServiceImpl implements SubscriptionService {
             // 提交 0 金额普通转账作为订阅授权标记；注意（PLAN-014 Phase 3）：
             // 这里调用的是 signTransfer（TRANSFER 0x01），不是 SUBSCRIPTION_AUTH（0x1a）——
             // 0x1a 当前被节点 TransactionCheck 的 type<=15 门禁拒绝，不可上链。
-            // 契约修正（2026-09-10）：Feign 返回响应 Map，经 SigningResponses 提取 txHash。
-            String txHash = SigningResponses.txHash(signingServiceClient.signTransfer(
-                    platformPubkey, payeePubkeyHash, BigDecimal.ZERO));
-            log.info("On-chain subscription auth submitted: subNo={}, txHash={}",
-                    sub.getSubscriptionNo(), txHash);
-            return txHash;
+            // 三态（执行腿）：已执行取 txHash；待审批/待人工核对时 authTxHash 留空，
+            // 由 SubscriptionApprovalReconciler 在审批通过后补齐，绝不伪造哈希。
+            SigningOutcome outcome = SigningTransfers.signOrAwait(approvalExecutionService,
+                    signingServiceClient,
+                    SigningTransfers.requestKey("SUB_AUTH", sub.getSubscriptionNo(), null),
+                    "SUB_AUTH", platformPubkey, payeePubkeyHash, BigDecimal.ZERO, currencyOf(sub));
+            if (outcome.isExecuted()) {
+                log.info("On-chain subscription auth submitted: subNo={}, txHash={}",
+                        sub.getSubscriptionNo(), outcome.txHash());
+                return outcome.txHash();
+            }
+            if (outcome.isAwaiting()) {
+                log.info("On-chain subscription auth awaiting approval: subNo={}, approvalId={}",
+                        sub.getSubscriptionNo(), outcome.approvalId());
+                return null;
+            }
+            if (outcome.requiresManualVerification()) {
+                log.error("On-chain subscription auth executed but unverified (manual check required): "
+                        + "subNo={}, approvalId={}", sub.getSubscriptionNo(), outcome.approvalId());
+                return null;
+            }
+            log.warn("On-chain subscription auth signing failed (subscription created without auth): "
+                    + "subNo={}, error={}", sub.getSubscriptionNo(), outcome.error());
+            return null;
         } catch (RuntimeException e) {
             log.warn("On-chain subscription auth failed (fail-closed, subscription created without auth): " +
                     "subNo={}, error={}", sub.getSubscriptionNo(), e.getMessage());
@@ -173,15 +206,32 @@ public class SubscriptionServiceImpl implements SubscriptionService {
         }
 
         // 认领已提交，链上转账在事务外执行（不可逆操作不入事务）
-        String txHash = executeSubscriptionCharge(sub);
-        if (txHash != null) {
+        // 幂等键 = 订阅号 + 认领前的扣款次数：同一周期只会有一条审批请求，
+        // 重试/重启后不会另起一笔重复扣款。
+        String requestKey = SigningTransfers.requestKey("SUB_CHARGE",
+                sub.getSubscriptionNo() + ":" + sub.getChargedCount(), null);
+        SigningOutcome outcome = executeSubscriptionCharge(sub, requestKey);
+        if (outcome.isExecuted()) {
             log.info("Subscription charged: subNo={}, count={}, txHash={}",
-                    sub.getSubscriptionNo(), sub.getChargedCount() + 1, txHash);
-        } else {
-            log.error("Subscription charge transfer failed after claim (cycle consumed, "
-                    + "manual follow-up required): subNo={}", sub.getSubscriptionNo());
+                    sub.getSubscriptionNo(), sub.getChargedCount() + 1, outcome.txHash());
+            return outcome.txHash();
         }
-        return txHash;
+        if (outcome.isAwaiting()) {
+            log.info("Subscription charge awaiting approval (cycle consumed, execution leg will "
+                    + "complete the transfer once approved): subNo={}, approvalId={}",
+                    sub.getSubscriptionNo(), outcome.approvalId());
+            return null;
+        }
+        if (outcome.requiresManualVerification()) {
+            log.error("Subscription charge executed but result unverified (manual check required, "
+                    + "do NOT retry): subNo={}, approvalId={}",
+                    sub.getSubscriptionNo(), outcome.approvalId());
+            return null;
+        }
+        log.error("Subscription charge transfer failed after claim (cycle consumed, "
+                + "manual follow-up required): subNo={}, error={}",
+                sub.getSubscriptionNo(), outcome.error());
+        return null;
     }
 
     @Override
@@ -241,15 +291,19 @@ public class SubscriptionServiceImpl implements SubscriptionService {
      *
      * <p>P0-3 安全修复：订阅扣款由签名服务使用平台热钱包密钥库完成签名，
      * 网关永不获取或传输私钥（legacy {@code transfer(..., prikey)} 路径已废弃）。
-     * 钱包不可达或平台公钥未配置时 fail-closed 返回 {@code null}，调用方据此
-     * 标记扣款失败，绝不生成伪交易哈希。</p>
+     * 钱包不可达或平台公钥未配置时 fail-closed 返回失败结果，绝不生成伪交易哈希。</p>
+     *
+     * <p>执行腿（三态）：大额扣款返回 2001 时不再当失败——approvalId 落
+     * {@code approval_execution_link}，由 {@code SubscriptionApprovalReconciler}
+     * 在审批通过后执行。结果不可核对时同样不报失败，转人工核对（禁止自动重试）。</p>
      */
-    private String executeSubscriptionCharge(Subscription sub) {
+    private SigningOutcome executeSubscriptionCharge(Subscription sub, String requestKey) {
         try {
             String receiverPubkeyHash = walletAddressHelper.addressToPubkeyHash(sub.getPayeeAddress());
             if (receiverPubkeyHash == null) {
                 log.error("Cannot resolve payee pubkeyHash (wallet unreachable?), subscription charge failed (fail-closed): {}", sub.getSubscriptionNo());
-                return null;
+                return new SigningOutcome(ApprovalExecutionLink.Status.FAILED, null, null,
+                        "payee pubkeyHash unavailable");
             }
 
             // P0-3 安全修复：使用 signTransfer（不传私钥），签名服务持钥签名
@@ -258,14 +312,22 @@ public class SubscriptionServiceImpl implements SubscriptionService {
 
             if (platformPubkey == null || platformPubkey.isEmpty()) {
                 log.error("Platform pubkey not configured, subscription charge failed (fail-closed): {}", sub.getSubscriptionNo());
-                return null;
+                return new SigningOutcome(ApprovalExecutionLink.Status.FAILED, null, null,
+                        "platform pubkey not configured");
             }
 
-            return SigningResponses.txHash(
-                    signingServiceClient.signTransfer(platformPubkey, receiverPubkeyHash, sub.getAmount()));
+            return SigningTransfers.signOrAwait(approvalExecutionService, signingServiceClient,
+                    requestKey, "SUB_CHARGE", platformPubkey, receiverPubkeyHash,
+                    sub.getAmount(), currencyOf(sub));
         } catch (RuntimeException e) {
             log.error("Subscription charge exception: {}", e.getMessage());
-            return null;
+            return new SigningOutcome(ApprovalExecutionLink.Status.FAILED, null, null, e.getMessage());
         }
+    }
+
+    /** 订阅结算币种（tokenSymbol 缺失时回落 NEX），用于审批请求上的可读信息。 */
+    private static String currencyOf(Subscription sub) {
+        String symbol = sub.getTokenSymbol();
+        return symbol == null || symbol.isBlank() ? "NEX" : symbol;
     }
 }
