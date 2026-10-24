@@ -190,6 +190,55 @@ class WalletControllerIT {
                 .andExpect(jsonPath("$.cold").exists());
     }
 
+    @Test
+    @DisplayName("GET /withdrawal/pending: 返回待审批列表，含新建的 PENDING 提现")
+    void listPendingWithdrawals_returnsPendingRequests() throws Exception {
+        // 造一笔 PENDING 提现（到已加白地址，与完整流程用例同一前置）
+        String requestId = mockMvc.perform(post("/api/v1/wallet/withdrawal/request")
+                        .param("to", WHITELISTED_ADDR)
+                        .param("amount", "500")
+                        .param("currency", "NEX")
+                        )
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("PENDING"))
+                .andReturn().getResponse().getContentAsString()
+                .replaceAll(".*\"requestId\":\"([^\"]+)\".*", "$1");
+
+        mockMvc.perform(get("/api/v1/wallet/withdrawal/pending"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$").isArray())
+                .andExpect(jsonPath("$[0].requestId").value(requestId))
+                .andExpect(jsonPath("$[0].status").value("PENDING"))
+                .andExpect(jsonPath("$[0].toAddress").value(WHITELISTED_ADDR))
+                .andExpect(jsonPath("$[0].currency").value("NEX"))
+                .andExpect(jsonPath("$[0].amount").value(500))
+                // createdAt 是 LocalDateTime：Jackson 3 (tools.jackson) 默认 ISO-8601 字符串。
+                // 这条断言同时把该契约钉住——若哪天改成时间戳数组，前端立刻会红。
+                .andExpect(jsonPath("$[0].createdAt").isString());
+    }
+
+    @Test
+    @DisplayName("GET /whitelist: 按商户返回生效中的白名单条目")
+    void listWhitelist_returnsActiveEntriesForMerchant() throws Exception {
+        mockMvc.perform(get("/api/v1/wallet/whitelist")
+                        .param("merchantId", "merchant-controller-it"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$").isArray())
+                .andExpect(jsonPath("$[0].address").value(WHITELISTED_ADDR))
+                .andExpect(jsonPath("$[0].merchantId").value("merchant-controller-it"))
+                .andExpect(jsonPath("$[0].active").value(true));
+    }
+
+    @Test
+    @DisplayName("GET /whitelist: merchantId 为空时返回空列表而非报错")
+    void listWhitelist_blankMerchantIdReturnsEmptyList() throws Exception {
+        mockMvc.perform(get("/api/v1/wallet/whitelist")
+                        .param("merchantId", "   "))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$").isArray())
+                .andExpect(jsonPath("$[0]").doesNotExist());
+    }
+
     /** 契约修正（2026-09-10）：signTransfer 真实响应形状 {statusCode, data, message} 的成功响应构造器。 */
     private static java.util.Map<String, Object> okResp(String txHash) {
         return java.util.Map.of("statusCode", 2000, "data", txHash);
