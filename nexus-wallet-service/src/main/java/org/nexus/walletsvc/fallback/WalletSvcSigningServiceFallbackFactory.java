@@ -59,6 +59,18 @@ public class WalletSvcSigningServiceFallbackFactory extends SigningServiceFallba
                 // 审计修复：capability 探针降级返回 null，健康指示器按 DOWN 处理
                 return null;
             }
+
+            @Override
+            public java.util.Map<String, Object> getApprovalStatus(String requestId) {
+                // fail-closed：查询降级 = 状态未知，调用方不得据此执行
+                return null;
+            }
+
+            @Override
+            public java.util.Map<String, Object> executeApproved(String approvalId) {
+                // fail-closed：执行降级 = 结果未知，调用方不得当作已执行
+                return null;
+            }
         };
     }
 }

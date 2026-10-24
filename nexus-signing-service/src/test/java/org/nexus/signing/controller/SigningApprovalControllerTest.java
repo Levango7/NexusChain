@@ -33,6 +33,7 @@ import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -228,6 +229,51 @@ class SigningApprovalControllerTest {
 
         assertEquals(SigningApprovalRequest.Status.PENDING, service.getRequest(rid).getStatus(),
                 "三次坏输入都不该动状态");
+    }
+
+    // ==================== 状态查询（执行腿的轮询入口） ====================
+
+    @Test
+    @DisplayName("GET 状态：PENDING 快照含人数与时间，且不回显审批人地址")
+    void getsPendingApprovalSnapshot() throws Exception {
+        String rid = createPendingRequest();
+
+        mockMvc.perform(get("/api/v1/signing/approvals/{rid}", rid))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.statusCode").value(2000))
+                .andExpect(jsonPath("$.data.requestId").value(rid))
+                .andExpect(jsonPath("$.data.status").value("PENDING"))
+                .andExpect(jsonPath("$.data.expired").value(false))
+                .andExpect(jsonPath("$.data.amount").value(50000))
+                .andExpect(jsonPath("$.data.currency").value("USDT"))
+                .andExpect(jsonPath("$.data.required_approvers").value(1))
+                .andExpect(jsonPath("$.data.approvals_count").value(0))
+                .andExpect(jsonPath("$.data.rejections_count").value(0))
+                .andExpect(jsonPath("$.data.approvals").doesNotExist())
+                .andExpect(jsonPath("$.data.rejections").doesNotExist());
+    }
+
+    @Test
+    @DisplayName("GET 状态：决策后返回 APPROVED，调用方据此决定是否执行")
+    void getsApprovedStatusAfterDecision() throws Exception {
+        String rid = createPendingRequest();
+        mockMvc.perform(post("/api/v1/signing/approvals/{rid}/decision", rid)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"decision\":\"APPROVE\"}"))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/v1/signing/approvals/{rid}", rid))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("APPROVED"))
+                .andExpect(jsonPath("$.data.approvals_count").value(1));
+    }
+
+    @Test
+    @DisplayName("GET 状态：未知 requestId → 404，与「已过期/已清理」同一口径")
+    void getUnknownRequestIsNotFound() throws Exception {
+        mockMvc.perform(get("/api/v1/signing/approvals/{rid}", "no-such-request"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.statusCode").value(4040));
     }
 
     // ==================== 辅助 ====================

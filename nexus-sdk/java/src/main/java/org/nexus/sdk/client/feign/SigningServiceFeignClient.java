@@ -3,6 +3,7 @@ package org.nexus.sdk.client.feign;
 import org.nexus.sdk.client.feign.fallback.SigningServiceFallbackFactory;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 
@@ -78,5 +79,33 @@ public interface SigningServiceFeignClient {
      */
     @GetMapping("/transfers/capability")
     Map<String, Object> getCapability();
+
+    /**
+     * 查询审批请求状态（执行腿轮询用）。
+     *
+     * <p>对应 {@code GET /api/v1/signing/approvals/{requestId}}。调用方在
+     * {@code signTransfer} 收到 {@code statusCode=2001}（PENDING）后保存 approvalId，
+     * 之后周期查询本端点；{@code status=APPROVED} 时再调
+     * {@link #executeApproved(String)}。只读、不改变状态。</p>
+     *
+     * <p>返回信封 {@code {statusCode:2000, data:{requestId, status, expired, amount, ...}}}；
+     * 不存在时 HTTP 404（Feign 抛异常 → 降级返回 null）。调用方从
+     * {@code data.status} 取 {@code PENDING/APPROVED/REJECTED/EXPIRED/EXECUTING/EXECUTED}。</p>
+     */
+    @GetMapping("/signing/approvals/{requestId}")
+    Map<String, Object> getApprovalStatus(@PathVariable("requestId") String requestId);
+
+    /**
+     * 执行已批准的转账（审批通过后的签名 + 广播）。
+     *
+     * <p>对应 {@code POST /api/v1/transfers/sign/approved}。签名服务内部用
+     * APPROVED→EXECUTING 的 CAS 防重复执行；并发/重复调用中只有一个成功，
+     * 其余返回 {@code statusCode=5001}。</p>
+     *
+     * @return 成功时形状与 {@code signTransfer} 相同（{@code {statusCode:2000,data:<txhash>}}）；
+     *         未批准返回 5000、并发被抢返回 5001；降级返回 null
+     */
+    @PostMapping(value = "/transfers/sign/approved", consumes = "application/x-www-form-urlencoded")
+    Map<String, Object> executeApproved(@RequestParam("approvalId") String approvalId);
 
 }

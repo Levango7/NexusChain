@@ -20,6 +20,14 @@ public final class SigningResponses {
     /** 签名服务成功状态码（与 TxController 的 statusCode 常量对齐）。 */
     public static final int STATUS_OK = 2000;
 
+    /**
+     * 大额签名转为待审批（PENDING）的状态码（与 TxController.pendingApprovalResponse 对齐）。
+     *
+     * <p>该响应<b>没有 {@code data} 字段</b>，txHash 提取必然为 null；调用方必须先用
+     * {@link #approvalId(Map)} 取出 approvalId 并按"待审批"处理，不能当签名失败。</p>
+     */
+    public static final int STATUS_APPROVAL_REQUIRED = 2001;
+
     /** "data" 字段名（交易哈希所在键）。 */
     public static final String KEY_STATUS_CODE = "statusCode";
     public static final String KEY_DATA = "data";
@@ -38,21 +46,8 @@ public final class SigningResponses {
         if (response == null) {
             return null;
         }
-        Object status = response.get(KEY_STATUS_CODE);
-        // Jackson 反序列化数字默认为 Integer/Long；兼容 Number 与字符串两种形态
-        int code;
-        if (status instanceof Number n) {
-            code = n.intValue();
-        } else if (status != null) {
-            try {
-                code = Integer.parseInt(status.toString());
-            } catch (NumberFormatException e) {
-                return null;
-            }
-        } else {
-            return null;
-        }
-        if (code != STATUS_OK) {
+        Integer code = statusCode(response);
+        if (code == null || code != STATUS_OK) {
             return null;
         }
         Object data = response.get(KEY_DATA);
@@ -61,6 +56,54 @@ public final class SigningResponses {
         }
         String txHash = data.toString();
         return txHash.isBlank() ? null : txHash;
+    }
+
+    /**
+     * 响应是否为"大额签名待人工审批"（{@code statusCode=2001}）。
+     *
+     * <p>与 {@link #txHash} 互斥：2001 没有 {@code data}，用 {@link #txHash} 判断会
+     * 得到 null 并被误读成签名失败——这正是执行腿断链的根因。</p>
+     */
+    public static boolean isApprovalRequired(Map<String, Object> response) {
+        Integer code = statusCode(response);
+        return code != null && code == STATUS_APPROVAL_REQUIRED;
+    }
+
+    /**
+     * 从待审批响应中提取 approvalId。
+     *
+     * @param response Feign 返回的响应 Map
+     * @return approvalId；响应不是 2001 或字段缺失/空白时返回 null
+     */
+    public static String approvalId(Map<String, Object> response) {
+        if (!isApprovalRequired(response)) {
+            return null;
+        }
+        Object id = response.get("approvalId");
+        if (id == null) {
+            return null;
+        }
+        String approvalId = id.toString();
+        return approvalId.isBlank() ? null : approvalId;
+    }
+
+    private static Integer statusCode(Map<String, Object> response) {
+        if (response == null) {
+            return null;
+        }
+        Object status = response.get(KEY_STATUS_CODE);
+        // Jackson 反序列化数字默认为 Integer/Long；兼容 Number 与字符串两种形态
+        if (status instanceof Number n) {
+            return n.intValue();
+        }
+        if (status != null) {
+            try {
+                return Integer.parseInt(status.toString());
+            } catch (NumberFormatException e) {
+                return null;
+            }
+        }
+        return null;
     }
 
     /**

@@ -51,6 +51,14 @@ class FallbackTest {
         assertNull(fb.signTransfer("from", "to", BigDecimal.ONE));
     }
 
+    @Test
+    @DisplayName("SigningServiceFallback: 审批状态查询与执行一律返回 null（状态未知≠可执行）")
+    void signingFallback_approvalLeg_failClosed() {
+        SigningServiceFallback fb = new SigningServiceFallback();
+        assertNull(fb.getApprovalStatus("req-1"));
+        assertNull(fb.executeApproved("req-1"));
+    }
+
     // === WalletMgmtFallback ===
 
     @Test
