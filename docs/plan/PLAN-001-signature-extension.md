@@ -226,3 +226,26 @@ public boolean isReplay(long nonce, long lastSeenNonce)       // 纯函数：non
   "存量行完成自宣补齐"（未补齐的老行在 enforce 下会被丢弃，待其 owner 重启自宣）。
 - 本切片为纯增量能力交付；默认兼容模式行为与切片 2 完全一致（回放体积略增，
   复用原文而非重建近似体）。
+
+### enforce=true 三节点实测（2026-10-25，切片 4 构建）
+
+> 口径：虚拟化边界多机（Windows/WSL2/Docker 三内核）；三节点全量重置后同启，
+> 全部显式带 `nexus.consensus.validator-set.signature.enforce=true`。
+
+| 证据 | A | B | C |
+|---|---|---|---|
+| 回放日志（`N signed payloads verbatim, M legacy rebuilt`） | 66 次，**全部 `3 verbatim / 0 rebuilt`** | 36 次同 | 32 次同 |
+| `DROP_UNSIGNED` / bad-signature 丢弃 | **0 / 0** | **0 / 0** | **0 / 0** |
+| 广播载荷 | 4× 311B | 4× 311B | 4× 311B |
+| `validators_synced`（nonce>0 且 `signed_payload` 非空） | **3/3 行** | **3/3 行** | **3/3 行** |
+
+**停 C 60s 闭环（enforce 下）**：T0 02:07:13 A=800/B=339/C=800 → 停 C 60s 后
+T1 A=810/B=349（链路未断）→ C 恢复 60s 内追平 **C=827 = A=827（ALIGNED）**。
+
+**对照点（切片 4 的直接价值）**：兼容模式回归（§七）时 B 库中 C 行 nonce=0
+（经无签名回放注册）；enforce 模式下同一位置变为 **nonce>0 且载荷原文在库**——
+证明回放消息走的是"逐字节复用的签名载荷"而非重建。重复投递仍被重放护栏幂等
+丢弃（本批次 A=30/B=33/C=85 条，均为同一 nonce 的重投，无副作用）。
+
+**边界**：B 落后（339 vs 800）仍为本环境 grpc 追块速率边界（与签名无关，同 §七）；
+本次仅在测试床显式开启 enforce，**默认值未改变（仍 false）**；不声称覆盖物理多机。
