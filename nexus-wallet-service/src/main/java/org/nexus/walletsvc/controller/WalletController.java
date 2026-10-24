@@ -18,6 +18,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.math.BigDecimal;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -29,10 +30,12 @@ import java.util.Map;
  *   <li>{@code GET /api/v1/wallet/whitelist/check}：地址白名单查询</li>
  *   <li>{@code POST /api/v1/wallet/whitelist/add}：加入白名单</li>
  *   <li>{@code POST /api/v1/wallet/whitelist/remove}：移出白名单</li>
+ *   <li>{@code GET /api/v1/wallet/whitelist}：按商户列出白名单</li>
  *   <li>{@code POST /api/v1/wallet/withdrawal/request}：发起提现申请</li>
  *   <li>{@code POST /api/v1/wallet/withdrawal/approve}：审批提现</li>
  *   <li>{@code POST /api/v1/wallet/withdrawal/reject}：拒绝提现</li>
  *   <li>{@code POST /api/v1/wallet/withdrawal/execute}：执行已审批提现</li>
+ *   <li>{@code GET /api/v1/wallet/withdrawal/pending}：列出待审批提现</li>
  *   <li>{@code GET /api/v1/wallet/custody/balance}：托管余额查询</li>
  *   <li>{@code POST /api/v1/wallet/custody/rebalance}：触发再平衡</li>
  * </ul></p>
@@ -100,6 +103,25 @@ public class WalletController {
      * @param merchantId 商户 ID
      * @return 创建的白名单条目
      */
+    /**
+     * 按商户列出当前生效的白名单条目。
+     *
+     * <p>补端点（2026-10-24）：原实现只有 check / add / remove，<b>没有列表查询</b>——
+     * 运维无法在系统内核对"这个商户到底放行了哪些地址"，只能逐条 check 或翻库。
+     * 服务层 {@code DefaultAddressWhitelistService.listByMerchant} 早已实现，
+     * 本端点只是把它暴露出来，不新增业务逻辑。</p>
+     *
+     * <p>SECURITY：{@code ADMIN} 管理白名单、{@code OPERATOR} 只读核对，两者都需可见。</p>
+     *
+     * @param merchantId 商户 ID
+     * @return 该商户生效中的白名单条目
+     */
+    @PreAuthorize("hasAnyRole('" + SecurityRoles.ADMIN + "', '" + SecurityRoles.OPERATOR + "')")
+    @GetMapping("/whitelist")
+    public List<WhitelistEntry> listWhitelist(@RequestParam("merchantId") String merchantId) {
+        return addressWhitelistService.listByMerchant(merchantId);
+    }
+
     @PreAuthorize("hasRole('" + SecurityRoles.ADMIN + "')")
     @PostMapping("/whitelist/add")
     public WhitelistEntry addWhitelist(@RequestParam("address") String address,
@@ -212,6 +234,26 @@ public class WalletController {
      *
      * @return 热钱包 / 冷钱包余额
      */
+    /**
+     * 列出待审批的提现请求（按创建时间倒序，最新优先）。
+     *
+     * <p>补端点（2026-10-24）：原实现有 {@code withdrawal/approve|reject|execute} 三个决策端点，
+     * 但<b>没有任何提现查询端点</b>——审批人只能靠外部通知（邮件/IM）才知道有待办，
+     * 无法在系统内发现待审批队列。服务层
+     * {@code DefaultWithdrawalApprovalService.listPending()} 早已实现，
+     * 本端点只是把它暴露出来，不新增业务逻辑。</p>
+     *
+     * <p>SECURITY：{@code APPROVER} 需要它才能看到自己的待办；
+     * {@code OPERATOR} 需要它做只读监控。故两者皆可（只读、不含任何决策动作）。</p>
+     *
+     * @return PENDING 状态的提现请求列表
+     */
+    @PreAuthorize("hasAnyRole('" + SecurityRoles.APPROVER + "', '" + SecurityRoles.OPERATOR + "')")
+    @GetMapping("/withdrawal/pending")
+    public List<WithdrawalRequest> listPendingWithdrawals() {
+        return withdrawalApprovalService.listPending();
+    }
+
     @PreAuthorize("hasRole('" + SecurityRoles.OPERATOR + "')")
     @GetMapping("/custody/balance")
     public Map<String, Object> custodyBalance() {
