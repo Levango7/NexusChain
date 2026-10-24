@@ -61,3 +61,44 @@ if (enableMining) { return; }   // 出块节点永不主动补块
 3. （可选）rest 部署形态的对称修复（`ConsensusController` 服务端无 P2P 广播通道，
    F1 的中继/回放均挂 P2P `server.broadcast`——rest 集群形态没有 P2P 通道本身，
    此口径与 F1 文档同步）。
+
+---
+
+## 六、rest 形态验证记录（2026-10-25）
+
+> 目的：把 F2 修复（mining 节点不再跳过 `getStatus`）放到真实 rest 形态里跑。
+> 结论先行：**F2 逻辑被实机执行并工作**；但顺手发现 rest 形态有**三个既有运行时
+> 缺陷**（与 F2 逻辑无关）——修掉之前 rest 节点根本起不来，意味着本切片的
+> rest 路径在此前**从未被实机跑过**。
+
+### 6.1 发现并修复的三个缺陷（均为既有问题）
+
+| # | 缺陷 | 症状 | 修复 |
+|---|------|------|------|
+| 1 | `NodeInfoController` 对 `PeerServer` 为**必填注入**（`@Autowired`） | rest（无 PeerServer bean）**上下文启动失败** | 可选注入 + `/peers/status` null 降级（空对端） |
+| 2 | `Fifo` 同样必填注入 `PeerServer` | 修掉 #1 后的下一个启动阻断点 | 可选注入 + `getNodeInfo()` 的 P2P 字段 null 降级 |
+| 3 | `JSONEncodeDecoder.decodeBlocks/decodeTransactions` 用**严格 mapper**（`FAIL_ON_UNKNOWN_PROPERTIES=true`） | 服务端区块 JSON 自带 getter 派生字段（`channelTransaction/stableCoinTransaction/paymentExtensionType/typeName/bridgeTransaction`）⇒ **拉块解码全失败**，`SyncClient.getBlocks` 永久拉不到块 | 新增 `decodeTolerant` 仅供 P2P 两方法；其余 `decode` 保持严格（单测双向锁定） |
+
+### 6.2 实测（第 4 个临时 rest 节点）
+
+- 配置：`p2p.mode=rest`、`enable-mining=true`、peers = A/C 的 HTTP 端点
+  （`miner.validators` 文件的 host:port）、独立库；验证人集经测试床**预置**
+  `validators_synced` 三行装载（理由见边界）。
+- 证据（单次运行约 35 分钟，日志 `rest-node.log`）：
+  - 启动成功；`try to sync from nexus seeds` **35 次** —— mining 开启仍执行
+    `getStatus`，即 **F2 修复点本身**；
+  - `receive blocks startListening from X stop at Y` **48 次**；
+  - 高度 **0 → 900+** 持续单调追赶（约 +50/分钟；期间链路头从 ~1100 推进到
+    2600+，gap 2161 → 1737 收敛）；
+  - `unknown proposer` **0 次**（预置验证人集后）。
+- 单测：`JSONEncodeDecoderP2PToleranceTest`（3 例：P2P 容忍 ×2 + 非 P2P 仍严格）
+  ；`NodeInfoControllerRestModeTest`（null 降级不 NPE）。
+
+### 6.3 边界（不夸大）
+
+- **不断言"最终追平时间"**：本次只观测到"持续、单调、正确的追赶"；
+  净收敛速率有限（每条 peer 状态周期上限 50 块），完全追平需长跑，未等到。
+- **rest 形态仍无验证人集同步通道**（F1 的中继/回放挂 grpc P2P 广播；
+  rest 无该通道——与 §五 第 3 条同口径）。本次以测试床预置共享表绕过，
+  仅用于验证 F2 路径；rest 下的验证人集分发属**未做**。
+- grpc 部署（多机实验拓扑）不受本次修复影响（`SyncClient` 仅在 rest 装配）。

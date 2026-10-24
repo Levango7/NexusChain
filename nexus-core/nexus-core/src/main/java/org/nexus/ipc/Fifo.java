@@ -73,7 +73,11 @@ public class Fifo implements ApplicationRunner, ApplicationListener<Fifo.FifoMes
     @Value("${nexus.ipc.enabled:true}")
     boolean ipcEnabled;
 
-    @Autowired
+    /**
+     * P2P 服务端（可选注入）。rest 形态（{@code p2p.mode=rest}）没有 PeerServer bean
+     * ——旧代码 required=true 导致上下文启动失败（F2 rest 形态验证发现，2026-10-25）。
+     */
+    @Autowired(required = false)
     private PeerServer peerServer;
 
     @Autowired
@@ -456,9 +460,10 @@ public class Fifo implements ApplicationRunner, ApplicationListener<Fifo.FifoMes
         } else {
             networkType = "testing";
         }
-        int port = peerServer.getPort();
-        String publicKey = peerServer.getNodePubKey();
-        String IP = peerServer.getIP();
+        // rest 形态无 PeerServer：node info 中的 P2P 字段退化为 null（不 500）。
+        Integer port = peerServer == null ? null : peerServer.getPort();
+        String publicKey = peerServer == null ? null : peerServer.getNodePubKey();
+        String IP = peerServer == null ? null : peerServer.getIP();
         ObjectNode jsonObject = JsonUtils.MAPPER.createObjectNode();
         jsonObject.put("ip", IP);
         jsonObject.put("publicKey", publicKey);

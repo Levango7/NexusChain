@@ -186,11 +186,41 @@ public class JSONEncodeDecoder implements CoreTypesEncoder, CoreTypesDecoder {
     }
 
     public List<Block> decodeBlocks(byte[] data) {
-        return Arrays.asList(decode(data, Block[].class));
+        return Arrays.asList(decodeTolerant(data, Block[].class));
     }
 
     public List<Transaction> decodeTransactions(byte[] txs) {
-        return Arrays.asList(decode(txs, Transaction[].class));
+        return Arrays.asList(decodeTolerant(txs, Transaction[].class));
+    }
+
+    /**
+     * P2P 线上解码（rest 形态区块/交易）：<b>容忍未知字段</b>。
+     *
+     * <p>为什么单独开这条路径（2026-10-25，F2 rest 形态验证发现）：服务端对区块做
+     * JSON 序列化时，会把对象上的 getter 派生属性一并写出（如
+     * {@code channelTransaction/stableCoinTransaction/paymentExtensionType/typeName/
+     * bridgeTransaction}）；而 {@link #decode} 的 mapper 默认
+     * {@code FAIL_ON_UNKNOWN_PROPERTIES=true} ⇒ 客户端解区块直接失败，
+     * rest 追块（SyncClient.getBlocks）永久拉不到块。线上数据本就应该容忍
+     * 未知/新增字段（跨版本兼容），因此仅对 P2P 解码放宽；其余 {@link #decode}
+     * 调用（本地快照/持久化）保持严格语义不变。</p>
+     */
+    private <T> T decodeTolerant(byte[] encoded, Class<T> valueType) {
+        if (encoded == null) {
+            return null;
+        }
+        try {
+            ObjectMapper mapper = new ObjectMapper()
+                    .configure(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+            SimpleModule module = new SimpleModule();
+            module.addDeserializer(byte[].class, new BytesDeserializer());
+            mapper.registerModule(module);
+            mapper.enable(JsonParser.Feature.ALLOW_COMMENTS);
+            return mapper.readValue(encoded, valueType);
+        } catch (RuntimeException | java.io.IOException e) {
+            log.error("JSONEncodeDecoder: uncaught exception", e);
+            return null;
+        }
     }
 
     public byte[] encodeTransactions(List<Transaction> txs) {
