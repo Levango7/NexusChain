@@ -157,7 +157,7 @@ public boolean isReplay(long nonce, long lastSeenNonce)       // 纯函数：non
 
 1. **【已交付】** 验证器内核（`ValidatorSetSignatureVerifier`：sign/check/isReplay，纯 JDK 17，无新依赖）+ 7 例测试（含 RFC 8032 官方向量），全模块 `BUILD SUCCESSFUL`。
 2. **【已交付】** 接线切片：消息 v2 字段（`nonce`/`signature`，可选追加，v1 编码逐字节不变）→ 发送侧（Bootstrapper）签名、接收侧（`ValidatorSetMessageVerifier` + `SyncManager`）验签与重放护栏、`validators_synced.nonce` 增量列、`enforce` 开关（默认 false）。测试见上表。
-3. **【后续回归】** 在多机拓扑上重跑闭环（停 C 60s → 恢复 → 补票追平），验证签名化不破坏既有链路。
+3. **【已交付】** 多机回归（三节点换 slice-2 构建，停 C 60s 闭环 + 签名端到端实证）——数据与诚实边界见 §七。
 4. **【后续硬化】** ① 全表回放消息的签名语义（当前无签名，是 `enforce` 启用的前置）；② 全部发送方升级后置 `enforce=true`，届时"防伪造已登记地址"才真正生效；③ 如需更强信任模型，再考虑治理层签名/白名单（超出当前切片）。
 
 **与现有修复的关系**：
@@ -174,3 +174,28 @@ public boolean isReplay(long nonce, long lastSeenNonce)       // 纯函数：non
 - **CHANGELOG 边界修正（已交付）**：F2 边界句已更新为"多机闭环实证见 PLAN-027 §六"，F3 边界句同理更新；签名化交付后可在同一段落追加"签名化已交付（协议后续）"，不替代现有内容。
 - **Roadmap #34/#35（已交付）**：#34 行已标记"已修并实证（PLAN-031）"，#35 行已标记"已修并实证"；签名化交付后可在 #35 行追加"签名化已交付（协议后续，PLAN-001 扩展）"，不修改现有分账。
 - **测试绿度**：新增 7 例测试（本切片）在现有测试基线（`FifoBootNotBlockedTest` 4 例、`SyncClientMiningSyncTest` 4 例、`SyncManagerValidatorSetRelayTest` 6 例）上逐字递进，不降低任何现有绿度（签名验证失败时记录警告但不抛异常，保持现有行为不变）。
+
+---
+
+## 七、多机回归（2026-10-24，三节点 slice-2 构建）
+
+> 口径：虚拟化边界多机（Windows 宿主 / WSL2 / Docker 三套内核），非物理多机；三节点统一重置后同时启动。
+
+**签名端到端实证**：
+| 证据 | 数据 |
+|---|---|
+| 三节点广播载荷 | 全部 `Validator-set broadcast sent: 311 bytes`（v1 未签名时代为 186 字节——v2 追加 nonce+签名） |
+| A 库 `validators_synced.nonce` | B=1792847235494、C=1792847280878、A=1792847206666 **均 > 0**（A 验签并落库了 B/C 的签名消息） |
+| B 库 | A 行 nonce>0（直连签名）；C 行 =0（经无签名全表回放路径——兼容语义生效） |
+| C 库 | 自身 nonce>0；A 行 =0（同上，回放路径） |
+| 误拒 | **0 条 bad-signature 丢弃**；重复投递被重放护栏幂等丢弃：A=6 / B=1 / C=0 条（P2P 重连重投的同一载荷，丢弃无副作用） |
+
+**停 C 60s 闭环（22:19–22:21）**：
+- T0 22:19:18 A=1712 / B=706 / C=1712；
+- 停 C 60s → T1 22:20:25 **A=1722（+10）/ B=717（+11）**——链路未断；
+- 恢复 C → T2 22:21:27 **C=1745 ≈ A=1743（ALIGNED，60s 内追平）**。
+
+**如实边界（本环境）**：
+- B 长期落后（706 vs 1712，差距在扩大）：为本环境**既有 grpc 追块速率边界**（F2 修复覆盖 rest 形态；grpc 大盘缺口追块速率 ~10 块/分钟 < 出块 ~26 块/分钟），**非签名切片引入**——签名化前后 B 的广播/验签/注册路径均正常（nonce>0）。
+- A→B 方向拨号 `CANCELLED`（WSL↔Windows 网络环境问题）；B 经自身外拨完成状态交换，功能面不受签名切片影响。
+- 本回归不声称覆盖物理多机、网络分区、断电；`enforce` 仍为默认关（未启用）。
