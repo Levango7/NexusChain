@@ -25,7 +25,12 @@ import static org.springframework.http.MediaType.APPLICATION_JSON_VALUE;
 
 @RestController
 public class NodeInfoController {
-    @Autowired
+    /**
+     * P2P 服务端（可选注入）。rest 形态（{@code p2p.mode=rest}）没有 PeerServer bean
+     * ——旧代码 required=true 直接导致上下文启动失败（F2 rest 形态验证发现，
+     * 2026-10-25）。{@code /peers/status} 在 null 时退化为"无对端"响应。
+     */
+    @Autowired(required = false)
     private PeerServer peerServer;
 
     @Value("${nexus.version}")
@@ -75,11 +80,20 @@ public class NodeInfoController {
     @GetMapping(value = "/peers/status", produces = "application/json")
     public Object getP2P() {
         Map<String, Object> info = new HashMap<>();
-        info.put("peers", peerServer.getPeers().stream().map(NodeInfoController::getPeerInfo));
-        info.put("bootstraps", peerServer.getBootstraps().stream().map(Peer::toString));
-        info.put("blockList", peerServer.getPeersCache().getBlocked().stream().map(NodeInfoController::getPeerInfo));
-        info.put("trusted", peerServer.getPeersCache().getTrusted().stream().map(Peer::toString));
-        info.put("self", peerServer.getSelf().toString());
+        if (peerServer == null) {
+            // rest 形态：无 grpc PeerServer（对端经 miner.validators 配置的 REST 地址）。
+            info.put("peers", Collections.emptyList());
+            info.put("bootstraps", Collections.emptyList());
+            info.put("blockList", Collections.emptyList());
+            info.put("trusted", Collections.emptyList());
+            info.put("self", null);
+        } else {
+            info.put("peers", peerServer.getPeers().stream().map(NodeInfoController::getPeerInfo));
+            info.put("bootstraps", peerServer.getBootstraps().stream().map(Peer::toString));
+            info.put("blockList", peerServer.getPeersCache().getBlocked().stream().map(NodeInfoController::getPeerInfo));
+            info.put("trusted", peerServer.getPeersCache().getTrusted().stream().map(Peer::toString));
+            info.put("self", peerServer.getSelf().toString());
+        }
         info.put("p2pMode", p2pMode);
         info.put("enableDiscovery", enableDiscovery);
         info.put("maxBlocksPerTransfer", maxBlocksPerTransfer);

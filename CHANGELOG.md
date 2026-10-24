@@ -4,6 +4,27 @@
 
 ## [Unreleased]
 
+### F2 rest 形态实机验证 + 三个运行时缺陷修复（PLAN-029 补记，2026-10-25）
+
+把 F2（mining 节点主动对账追块）放到真实 rest 形态运行。**F2 逻辑被实机执行并
+工作**；同时发现 rest 形态三个**既有运行时缺陷**（修掉前 rest 节点根本起不来
+——本切片的 rest 路径此前从未被实机跑过）：
+
+- **修复 1**：`NodeInfoController` 对 `PeerServer` 必填注入 ⇒ rest 上下文启动失败；
+  改为可选注入 + `/peers/status` null 降级（空对端）。
+- **修复 2**：`Fifo` 同样必填注入 ⇒ 下一个启动阻断点；改为可选注入 +
+  `getNodeInfo()` P2P 字段 null 降级。
+- **修复 3**：`JSONEncodeDecoder.decodeBlocks/decodeTransactions` 严格 mapper 拒绝
+  服务端 getter 派生字段（`channelTransaction` 等）⇒ 拉块解码全失败。新增
+  `decodeTolerant` **仅**用于 P2P 两方法；其余 `decode`（本地快照/持久化）保持
+  严格语义，单测双向锁定。
+- **实测**（第 4 个临时 rest 节点，`p2p.mode=rest` + `enable-mining=true`）：
+  `try to sync from nexus seeds` 35 次（mining 开启仍执行 getStatus = F2 修复点）、
+  `receive blocks startListening` 48 次、高度 0→900+ 持续单调追赶、`unknown proposer` 0 次。
+- **新增测试**：`JSONEncodeDecoderP2PToleranceTest` 3 例 + `NodeInfoControllerRestModeTest` 1 例。
+- **边界**：不断言最终追平时间（只观测持续追赶）；rest 形态仍无验证人集同步通道
+  （F1 语义，本次用测试床预置共享表绕过）。详见 `PLAN-029` §六。
+
 ### 验证人集签名化——切片 4：回放签名语义（PLAN-001 扩展，2026-10-25）
 
 补齐 `enforce` 模式的启用前置：全表回放（F1 晚加入节点补历史）此前用注册表
