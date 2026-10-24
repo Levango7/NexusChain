@@ -72,6 +72,33 @@ public class FundDashboardController {
     }
 
     /**
+     * 获取<b>当前商户</b>的完整资金管理仪表盘（路径不带 merchantId）。
+     *
+     * <h3>为什么需要这个端点</h3>
+     *
+     * <p>本仓商户侧的身份模型是：{@code ApiKeyInterceptor} 校验 API Key 并把商户写进
+     * {@code nexus.merchantId}，<b>客户端不持有也不需要知道自己的 merchantId</b>。
+     * {@code PaymentController}、{@code MerchantRoutingProfileController} 都是这个形状
+     * （后者类注释原话：「{@code GET /api/v1/routing/profiles} — 当前商户的画像配置」）。</p>
+     *
+     * <p>而 {@code /{merchantId}} 那组端点要求路径带 id —— 前端<b>无从得知</b>自己的 id
+     * （全仓没有 {@code /merchants/me} 之类的端点），因此那组端点对商户侧控制台
+     * 实际不可用。本端点补上"当前商户"这一形态，供商户控制台直接调用。</p>
+     *
+     * <p>四个模块一次返回（概览 / 趋势 / 明细 / 异常），前端一次请求即可渲染整页，
+     * 不必并发四次；30 秒缓存照旧生效。</p>
+     *
+     * @param request HTTP 请求（承载 ApiKeyInterceptor 注入的商户上下文）
+     * @return 仪表盘完整数据
+     */
+    @Operation(summary = "获取当前商户的资金管理仪表盘完整数据")
+    @GetMapping
+    public Map<String, Object> getMyDashboard(HttpServletRequest request) {
+        Long merchantId = ownershipGuard.requireMerchantId(request);
+        return fundDashboardService.getDashboard(merchantId);
+    }
+
+    /**
      * 获取完整资金管理仪表盘数据。
      *
      * <p>包含资金概览、流水趋势、收支明细、异常监控四个模块。
