@@ -156,7 +156,7 @@ class ThreeDsAuthCompletedObserverVisibilityTest {
     void alarmCarriesFieldsNeededForTriage() {
         withContext(emit -> {
             emit.publish(new ThreeDsAuthCompletedEvent(this, 9001L, 55L, "tenant-77",
-                    TransStatus.N, AuthStatus.TIMEOUT, 42, false, true));
+                    TransStatus.N, AuthStatus.TIMEOUT, 42, false, true, null, null));
 
             ILoggingEvent alarm = appender.list.stream()
                     .filter(e -> e.getLevel() == Level.WARN)
@@ -204,6 +204,6 @@ class ThreeDsAuthCompletedObserverVisibilityTest {
 
     private ThreeDsAuthCompletedEvent event(Long orderId, TransStatus transStatus, AuthStatus authStatus) {
         return new ThreeDsAuthCompletedEvent(this, orderId, 100L, "tenant-1",
-                transStatus, authStatus, 10, true, false);
+                transStatus, authStatus, 10, true, false, null, null);
     }
 }

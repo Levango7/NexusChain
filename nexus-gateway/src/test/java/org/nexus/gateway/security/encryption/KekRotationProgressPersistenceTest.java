@@ -41,6 +41,9 @@ class KekRotationProgressPersistenceTest {
     @Mock private EncryptionConfigRepository configRepository;
     @Mock private KekRotationProgressRepository progressRepository;
     @Mock private org.nexus.gateway.security.audit.SecurityAuditService securityAuditService;
+    /** 新增的可选指标依赖（本类不关心 Gauge，让它返回 null 走"bean 缺席"分支）。 */
+    @Mock private org.springframework.beans.factory.ObjectProvider<
+            org.nexus.gateway.security.audit.SecurityMetricsRecorder> metricsProvider;
 
     private KeyRotationScheduler scheduler;
 
@@ -48,7 +51,7 @@ class KekRotationProgressPersistenceTest {
     void setUp() {
         scheduler = new KeyRotationScheduler(
                 keyManagementService, metadataRepository, configRepository, progressRepository,
-                securityAuditService);
+                securityAuditService, metricsProvider);
     }
 
     private static KekRotationProgress row(int oldV, int newV, long lastId, boolean completed) {

@@ -100,7 +100,11 @@ public class ChallengeTimeoutScheduler {
                     AuthStatus.TIMEOUT,
                     record.getRiskScore(),
                     false,
-                    true
+                    true,
+                    // 超时的"延迟"就是它卡到超时的整段时长：上面刚 setCompletedAt(now)，
+                    // 所以这两列都有值，监听方能正常采样。
+                    record.getInitiatedAt(),
+                    record.getCompletedAt()
             );
             eventPublisher.publishEvent(event);
 
