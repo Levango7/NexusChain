@@ -158,7 +158,7 @@ public boolean isReplay(long nonce, long lastSeenNonce)       // 纯函数：non
 1. **【已交付】** 验证器内核（`ValidatorSetSignatureVerifier`：sign/check/isReplay，纯 JDK 17，无新依赖）+ 7 例测试（含 RFC 8032 官方向量），全模块 `BUILD SUCCESSFUL`。
 2. **【已交付】** 接线切片：消息 v2 字段（`nonce`/`signature`，可选追加，v1 编码逐字节不变）→ 发送侧（Bootstrapper）签名、接收侧（`ValidatorSetMessageVerifier` + `SyncManager`）验签与重放护栏、`validators_synced.nonce` 增量列、`enforce` 开关（默认 false）。测试见上表。
 3. **【已交付】** 多机回归（三节点换 slice-2 构建，停 C 60s 闭环 + 签名端到端实证）——数据与诚实边界见 §七。
-4. **【后续硬化】** ① 全表回放消息的签名语义（当前无签名，是 `enforce` 启用的前置）；② 全部发送方升级后置 `enforce=true`，届时"防伪造已登记地址"才真正生效；③ 如需更强信任模型，再考虑治理层签名/白名单（超出当前切片）。
+4. **【①已交付（切片 4，2026-10-25）】** 全表回放签名语义：回放优先**逐字节复用**落库的原始签名载荷（`validators_synced.signed_payload` 增量列；无签名 upsert 用 `COALESCE` 不清空），老行退化为无签名重建——见 §八。**【②仍待启用】** `enforce=true` 的前置已具备，但需"全部发送方升级 + 存量行完成自宣补齐"后按灰度人工开启（默认仍 false）。**【③未做】** 治理层签名/白名单（超出当前切片）。
 
 **与现有修复的关系**：
 - F3（轮转 view-change）：不受影响（签名计算在本地完成，不影响本地时钟轮转逻辑）。
@@ -199,3 +199,30 @@ public boolean isReplay(long nonce, long lastSeenNonce)       // 纯函数：non
 - B 长期落后（706 vs 1712，差距在扩大）：为本环境**既有 grpc 追块速率边界**（F2 修复覆盖 rest 形态；grpc 大盘缺口追块速率 ~10 块/分钟 < 出块 ~26 块/分钟），**非签名切片引入**——签名化前后 B 的广播/验签/注册路径均正常（nonce>0）。
 - A→B 方向拨号 `CANCELLED`（WSL↔Windows 网络环境问题）；B 经自身外拨完成状态交换，功能面不受签名切片影响。
 - 本回归不声称覆盖物理多机、网络分区、断电；`enforce` 仍为默认关（未启用）。
+
+---
+
+## 八、切片 4：回放签名语义（2026-10-25，`enforce` 的启用前置）
+
+> 问题：F1 的全表回放（晚加入节点补历史）用注册表数据**重建无签名消息** ⇒
+> `enforce=true` 时会被接收端丢弃，晚加入节点补不到历史 ⇒ 这是切片 2 标注的
+> enforce 唯一阻塞项。
+
+**实现（三处）**：
+1. **落库原文**（`validators_synced.signed_payload TEXT`，additive DDL）：
+   - 接收侧（`SyncManager`）：签名消息应用成功时存**收到的原始载荷**（base64）；
+   - 发送侧（`ValidatorNodeBootstrapper`）：自宣时存**自签原文**；
+   - 写入用 `COALESCE(?, signed_payload)`：无签名 upsert（老消息/回放自身到达）
+     **不清空**已存载荷。
+2. **回放复用**（`replayValidatorSetTable()`）：优先按 address 取存量载荷**逐字节**
+   广播（带 nonce+签名，可过 `ValidatorSetMessageVerifier`）；无存量的老行退化为
+   无签名重建。日志区分 `signed payloads verbatim / legacy rebuilt`。
+3. **测试**：新增 5 例——持久化 3 例（存取+limit、COALESCE 不清空、重启新实例后
+   仍可读）+ 中继 2 例（回放对存量行逐字节复用且带签名、签名消息落库原文与
+   收到载荷严格一致）。
+
+**状态与边界**：
+- `enforce` 默认仍 **false**。前置已具备；启用条件 = "全部发送方已升级" +
+  "存量行完成自宣补齐"（未补齐的老行在 enforce 下会被丢弃，待其 owner 重启自宣）。
+- 本切片为纯增量能力交付；默认兼容模式行为与切片 2 完全一致（回放体积略增，
+  复用原文而非重建近似体）。

@@ -203,4 +203,57 @@ class SyncManagerValidatorSetRelayTest {
         assertNull(registry.getValidator("addr-Y"), "enforce 模式下未签名消息不得注册");
         verify(server, never()).broadcast(any(NexusChainOuterClass.Transactions.class));
     }
+
+    // ==================== PLAN-001 切片 4：回放签名语义 ====================
+
+    @Test
+    void fullTableReplayReusesStoredSignedPayloadVerbatim() throws Exception {
+        registry.register("addr-B", "pubkey-B", new BigDecimal("1000"), 0.1);
+        registry.register("addr-C", "pubkey-C", new BigDecimal("1000"), 0.1);
+
+        // addr-B 有落库的原始签名载荷（v2，含 nonce+signature）；addr-C 无（老行）
+        java.security.KeyPair kp = ed25519();
+        String pub = rawPubHex(kp);
+        long nonce = 9_000L;
+        byte[] signedV2 = ValidatorSetCodec.encodeAdd("addr-B", pub, "1000", nonce,
+                signAdd("addr-B", pub, "1000", nonce, kp));
+        var persistence = mock(org.nexus.consensus.finality.persistence.ValidatorSetPersistence.class);
+        when(persistence.loadSignedPayloads(anyInt())).thenReturn(java.util.Map.of(
+                "addr-B", java.util.Base64.getEncoder().encodeToString(signedV2)));
+        set("validatorSetPersistence", persistence);
+
+        syncManager.replayValidatorSetTable();
+
+        ArgumentCaptor<NexusChainOuterClass.Transactions> captor =
+                ArgumentCaptor.forClass(NexusChainOuterClass.Transactions.class);
+        verify(server, times(1)).broadcast(captor.capture());
+        NexusChainOuterClass.Transactions replay = captor.getValue();
+        assertEquals(2, replay.getTransactionsCount());
+        byte[] b = replay.getTransactions(0).getPayload().toByteArray();
+        assertArrayEquals(signedV2, b, "有存量的行必须逐字节复用原始签名载荷");
+        assertTrue(ValidatorSetCodec.decode(b).hasSignature(), "复用载荷必须带签名");
+        byte[] c = replay.getTransactions(1).getPayload().toByteArray();
+        assertArrayEquals(ValidatorSetCodec.encodeAdd("addr-C", "pubkey-C", "1000"), c,
+                "无存量的老行退化为无签名重建（兼容模式可受理）");
+    }
+
+    @Test
+    void signedAddStoresRawPayloadForReplay() throws Exception {
+        var persistence = mock(org.nexus.consensus.finality.persistence.ValidatorSetPersistence.class);
+        set("validatorSetPersistence", persistence);
+
+        java.security.KeyPair kp = ed25519();
+        String pub = rawPubHex(kp);
+        long nonce = 1_234L;
+        byte[] signed = ValidatorSetCodec.encodeAdd("addr-Z", pub, "1000", nonce,
+                signAdd("addr-Z", pub, "1000", nonce, kp));
+        handle(signed);
+
+        String expected = java.util.Base64.getEncoder().encodeToString(signed);
+        verify(persistence).upsert(org.mockito.ArgumentMatchers.eq("addr-Z"),
+                org.mockito.ArgumentMatchers.eq(pub),
+                org.mockito.ArgumentMatchers.eq(new BigDecimal("1000")),
+                org.mockito.ArgumentMatchers.eq(nonce),
+                org.mockito.ArgumentMatchers.eq(expected));
+    }
 }

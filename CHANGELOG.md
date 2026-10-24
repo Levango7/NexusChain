@@ -4,6 +4,27 @@
 
 ## [Unreleased]
 
+### 验证人集签名化——切片 4：回放签名语义（PLAN-001 扩展，2026-10-25）
+
+补齐 `enforce` 模式的启用前置：全表回放（F1 晚加入节点补历史）此前用注册表
+数据重建**无签名**消息，`enforce` 下会被接收端丢弃、晚加入节点补不到历史。
+
+- **落库原文**：`validators_synced` 增量列 `signed_payload TEXT`（additive DDL，
+  PG/H2 兼容）——接收侧（`SyncManager`）签名消息应用成功时存收到的原始载荷
+  （base64）；发送侧（`ValidatorNodeBootstrapper`）自宣时存自签原文；写入用
+  `COALESCE(?, signed_payload)` ⇒ 无签名 upsert（老消息/回放自身到达）**不清空**
+  已存载荷。
+- **回放复用**：`replayValidatorSetTable()` 优先按地址取存量载荷**逐字节**广播
+  （带 nonce+签名，可过验签）；无存量的老行退化为无签名重建。日志区分
+  `signed payloads verbatim / legacy rebuilt`。
+- **测试**：新增 5 例——`ValidatorSetPersistenceSignedPayloadTest` 3 例（存取+
+  limit / COALESCE 不清空 / 重启后仍可读）+ `SyncManagerValidatorSetRelayTest`
+  新增 2 例（回放逐字节复用且带签名 / 签名消息落库原文与收到载荷严格一致）。
+  聚焦全绿；全模块 `BUILD SUCCESSFUL`。
+- **如实边界**：`enforce` 默认仍 **false**——启用还需"全部发送方升级 + 存量行
+  完成自宣补齐"的灰度动作；本切片只交付前置能力，默认兼容模式行为与切片 2
+  完全一致（回放改为复用原文，体积略增）。
+
 ### 验证人集消息签名化——第二切片：接线（PLAN-001 扩展，2026-10-24）
 
 承接第一切片（验证器内核，#197）。本切片把签名/重放护栏接进 TRANSACTION
