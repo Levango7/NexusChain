@@ -36,6 +36,7 @@ public interface RefundRepository extends JpaRepository<Refund, Long> {
             + "AND r.status IN ("
             + "org.nexus.gateway.model.Refund$RefundStatus.PENDING, "
             + "org.nexus.gateway.model.Refund$RefundStatus.PROCESSING, "
+            + "org.nexus.gateway.model.Refund$RefundStatus.AWAITING_APPROVAL, "
             + "org.nexus.gateway.model.Refund$RefundStatus.COMPLETED, "
             + "org.nexus.gateway.model.Refund$RefundStatus.RECONCILIATION_NEEDED)")
     BigDecimal sumActiveRefundsByOrderId(@Param("orderId") Long orderId);
@@ -76,4 +77,14 @@ public interface RefundRepository extends JpaRepository<Refund, Long> {
      * @return 符合条件的退款列表
      */
     List<Refund> findByStatus(Refund.RefundStatus status);
+
+    /**
+     * 取一批等待大额签名审批的退款（按最久未更新优先）。
+     *
+     * @param status 目标状态（AWAITING_APPROVAL）
+     * @param cutoff 时间阈值（updated_at 早于该值）
+     * @return 最多 50 条
+     */
+    List<Refund> findTop50ByStatusAndUpdatedAtBeforeOrderByUpdatedAtAsc(
+            Refund.RefundStatus status, LocalDateTime cutoff);
 }

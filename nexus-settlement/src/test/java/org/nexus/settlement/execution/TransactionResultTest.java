@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -121,12 +122,43 @@ class TransactionResultTest {
 
     @Test
     void statusEnum_shouldContainAllVariants() {
-        assertEquals(3, TransactionResult.Status.values().length);
+        assertEquals(5, TransactionResult.Status.values().length);
         assertEquals(TransactionResult.Status.SUCCESS,
                 TransactionResult.Status.valueOf("SUCCESS"));
         assertEquals(TransactionResult.Status.PENDING_CONFIRMATION,
                 TransactionResult.Status.valueOf("PENDING_CONFIRMATION"));
+        assertEquals(TransactionResult.Status.AWAITING_APPROVAL,
+                TransactionResult.Status.valueOf("AWAITING_APPROVAL"));
+        assertEquals(TransactionResult.Status.EXECUTED_UNVERIFIED,
+                TransactionResult.Status.valueOf("EXECUTED_UNVERIFIED"));
         assertEquals(TransactionResult.Status.FAILED,
                 TransactionResult.Status.valueOf("FAILED"));
+    }
+
+    @Test
+    void awaitingApproval_shouldCarryApprovalIdAndNotBeSuccess() {
+        TransactionResult r = TransactionResult.awaitingApproval("ap-1");
+
+        assertEquals(TransactionResult.Status.AWAITING_APPROVAL, r.getStatus());
+        assertEquals("ap-1", r.getApprovalId());
+        assertNull(r.getTxHash());
+        assertNull(r.getError());
+        assertFalse(r.isSuccess());
+    }
+
+    @Test
+    void executedUnverified_shouldNotBeSuccessAndCarryReason() {
+        TransactionResult r = TransactionResult.executedUnverified("ap-2", "no txHash");
+
+        assertEquals(TransactionResult.Status.EXECUTED_UNVERIFIED, r.getStatus());
+        assertEquals("ap-2", r.getApprovalId());
+        assertEquals("no txHash", r.getError());
+        assertFalse(r.isSuccess());
+    }
+
+    @Test
+    void equals_shouldIncludeApprovalId() {
+        assertNotEquals(TransactionResult.awaitingApproval("ap-1"),
+                TransactionResult.awaitingApproval("ap-2"));
     }
 }

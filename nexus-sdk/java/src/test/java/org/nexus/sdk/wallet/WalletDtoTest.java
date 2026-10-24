@@ -147,7 +147,9 @@ class WalletDtoTest {
     @Test
     void walletTransactionResult_statusEnum_shouldHaveAllValues() {
         WalletTransactionResult.Status[] statuses = WalletTransactionResult.Status.values();
-        assertEquals(3, statuses.length);
+        // 2026-10-25：3 → 5。新增 AWAITING_APPROVAL / EXECUTED_UNVERIFIED 是有意的契约变更：
+        // gateway 执行腿会把大额签名的 2001 透传为新状态，旧枚举会反序列化失败。
+        assertEquals(5, statuses.length);
     }
 
     @Test
@@ -212,6 +214,29 @@ class WalletDtoTest {
         assertEquals(WithdrawalRequest.WithdrawalStatus.REJECTED, WithdrawalRequest.WithdrawalStatus.valueOf("REJECTED"));
         assertEquals(WithdrawalRequest.WithdrawalStatus.EXECUTED, WithdrawalRequest.WithdrawalStatus.valueOf("EXECUTED"));
         assertEquals(WithdrawalRequest.WithdrawalStatus.FAILED, WithdrawalRequest.WithdrawalStatus.valueOf("FAILED"));
+    }
+
+    @Test
+    void walletTransactionResult_shouldParseApprovalStatusesFromGatewayJson() throws Exception {
+        // 契约门禁（2026-10-25）：gateway 的 /api/v1/execution/execute 现在会返回
+        // AWAITING_APPROVAL / EXECUTED_UNVERIFIED。旧枚举只有 3 个值，Jackson 反序列化
+        // 会抛异常并被 wallet 客户端 catch 成"gateway unreachable"——把待审批误报成失败。
+        assertEquals(5, WalletTransactionResult.Status.values().length);
+
+        com.fasterxml.jackson.databind.ObjectMapper mapper =
+                new com.fasterxml.jackson.databind.ObjectMapper();
+        WalletTransactionResult awaiting = mapper.readValue(
+                "{\"status\":\"AWAITING_APPROVAL\",\"approvalId\":\"ap-1\",\"confirmations\":0}",
+                WalletTransactionResult.class);
+        assertEquals(WalletTransactionResult.Status.AWAITING_APPROVAL, awaiting.getStatus());
+        assertEquals("ap-1", awaiting.getApprovalId());
+        assertFalse(awaiting.isSuccess());
+
+        WalletTransactionResult unverified = mapper.readValue(
+                "{\"status\":\"EXECUTED_UNVERIFIED\",\"error\":\"no txHash\"}",
+                WalletTransactionResult.class);
+        assertEquals(WalletTransactionResult.Status.EXECUTED_UNVERIFIED, unverified.getStatus());
+        assertFalse(unverified.isSuccess());
     }
 
     @Test

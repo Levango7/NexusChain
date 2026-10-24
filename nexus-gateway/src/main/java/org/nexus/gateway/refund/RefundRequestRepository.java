@@ -39,6 +39,7 @@ public interface RefundRequestRepository extends JpaRepository<RefundRequest, Lo
             + "org.nexus.gateway.refund.RefundRequest$RefundStatus.PENDING, "
             + "org.nexus.gateway.refund.RefundRequest$RefundStatus.APPROVED, "
             + "org.nexus.gateway.refund.RefundRequest$RefundStatus.EXECUTING, "
+            + "org.nexus.gateway.refund.RefundRequest$RefundStatus.AWAITING_APPROVAL, "
             + "org.nexus.gateway.refund.RefundRequest$RefundStatus.EXECUTED)")
     BigDecimal sumPendingRefundsByOrderId(@Param("orderId") Long orderId);
 
@@ -98,6 +99,58 @@ public interface RefundRequestRepository extends JpaRepository<RefundRequest, Lo
             + "WHERE r.id = :id "
             + "AND r.status = org.nexus.gateway.refund.RefundRequest$RefundStatus.EXECUTING")
     int markFailed(@Param("id") Long id, @Param("reason") String reason, @Param("now") LocalDateTime now);
+
+    /**
+     * CAS 认领"审批中"的退款执行权（AWAITING_APPROVAL → EXECUTING）。
+     *
+     * <p>与 {@link #claimForExecution} 同款原子 UPDATE：审批通过后由
+     * {@code RefundApprovalExecutionReconciler} 重新认领并执行链上退款。
+     * 两个并发推进者只有一个能认领成功。</p>
+     *
+     * @param id  退款单 ID
+     * @param now 认领时间
+     * @return 受影响行数：1=认领成功，0=认领失败（状态已变）
+     */
+    @Modifying
+    @Query("UPDATE RefundRequest r "
+            + "SET r.status = org.nexus.gateway.refund.RefundRequest$RefundStatus.EXECUTING, "
+            + "r.updatedAt = :now "
+            + "WHERE r.id = :id "
+            + "AND r.status = org.nexus.gateway.refund.RefundRequest$RefundStatus.AWAITING_APPROVAL")
+    int claimAwaitingForExecution(@Param("id") Long id, @Param("now") LocalDateTime now);
+
+    /**
+     * 结果落库：EXECUTING → AWAITING_APPROVAL（大额签名转人工审批，尚未广播）。
+     *
+     * <p>只允许从 EXECUTING 流转：认领已独立提交，状态回到"等待审批"而非 FAILED，
+     * 审批通过后由 reconciler 重新认领。审批等待期间该笔仍计入退款额度。</p>
+     *
+     * <p>{@code rejection_reason} 列在此复用为排障备注（存 approvalId），
+     * 避免为执行腿 ALTER 既有业务表；该列只在 FAILED 时对用户展示为拒绝原因。</p>
+     *
+     * @param id     退款单 ID
+     * @param reason 审批信息（如 approvalId）
+     * @param now    落库时间
+     * @return 受影响行数：1=落库成功，0=单据不在 EXECUTING
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE RefundRequest r "
+            + "SET r.status = org.nexus.gateway.refund.RefundRequest$RefundStatus.AWAITING_APPROVAL, "
+            + "r.rejectionReason = :reason, r.updatedAt = :now "
+            + "WHERE r.id = :id "
+            + "AND r.status = org.nexus.gateway.refund.RefundRequest$RefundStatus.EXECUTING")
+    int markAwaitingApproval(@Param("id") Long id, @Param("reason") String reason,
+                             @Param("now") LocalDateTime now);
+
+    /**
+     * 取一批等待审批的退款单（按最久未更新优先），供审批执行推进器使用。
+     *
+     * @param status 目标状态（AWAITING_APPROVAL）
+     * @param cutoff 时间阈值（updated_at 早于该值，避免刚写入就被重复处理）
+     * @return 最多 50 条
+     */
+    List<RefundRequest> findTop50ByStatusAndUpdatedAtBeforeOrderByUpdatedAtAsc(
+            RefundRequest.RefundStatus status, LocalDateTime cutoff);
 
     /**
      * 扫描超时停留在指定状态的退款单（{@link RefundExecutionReconciler} 使用）。

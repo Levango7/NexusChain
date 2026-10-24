@@ -23,6 +23,15 @@ public class WalletTransactionResult {
     public enum Status {
         SUCCESS,
         PENDING_CONFIRMATION,
+        /**
+         * 大额签名转人工审批（gateway 透传 signing-service 的 2001）。
+         *
+         * <p>非终态：调用方须保存 {@code approvalId} 并用同一 requestId 重试；
+         * 不可当作失败（原实现对未知状态会反序列化失败并误报"gateway 不可达"）。</p>
+         */
+        AWAITING_APPROVAL,
+        /** 签名已执行但调用方没有交易哈希（资金可能已转出，禁止自动重试） */
+        EXECUTED_UNVERIFIED,
         FAILED
     }
 
@@ -41,16 +50,26 @@ public class WalletTransactionResult {
     @JsonProperty("simulated")
     private boolean simulated;
 
+    /** 大额签名待审批时的审批请求 ID */
+    @JsonProperty("approvalId")
+    private String approvalId;
+
     public WalletTransactionResult() {
     }
 
     public WalletTransactionResult(String txHash, Status status, int confirmations,
                                     String error, boolean simulated) {
+        this(txHash, status, confirmations, error, simulated, null);
+    }
+
+    public WalletTransactionResult(String txHash, Status status, int confirmations,
+                                    String error, boolean simulated, String approvalId) {
         this.txHash = txHash;
         this.status = status;
         this.confirmations = confirmations;
         this.error = error;
         this.simulated = simulated;
+        this.approvalId = approvalId;
     }
 
     /** 是否成功 */
@@ -73,6 +92,9 @@ public class WalletTransactionResult {
     public boolean isSimulated() { return simulated; }
     public void setSimulated(boolean simulated) { this.simulated = simulated; }
 
+    public String getApprovalId() { return approvalId; }
+    public void setApprovalId(String approvalId) { this.approvalId = approvalId; }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
@@ -82,11 +104,12 @@ public class WalletTransactionResult {
                 && simulated == that.simulated
                 && Objects.equals(txHash, that.txHash)
                 && status == that.status
-                && Objects.equals(error, that.error);
+                && Objects.equals(error, that.error)
+                && Objects.equals(approvalId, that.approvalId);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(txHash, status, confirmations, error, simulated);
+        return Objects.hash(txHash, status, confirmations, error, simulated, approvalId);
     }
 }

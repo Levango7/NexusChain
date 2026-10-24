@@ -7,9 +7,11 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.nexus.gateway.approval.ApprovalExecutionLink;
+import org.nexus.gateway.approval.SigningApprovalExecutionService;
+import org.nexus.gateway.approval.SigningOutcome;
 import org.nexus.gateway.client.ChainRpcClient;
 import org.nexus.gateway.config.GatewayConfig;
-import org.nexus.sdk.client.feign.SigningServiceFeignClient;
 import org.nexus.sdk.client.feign.WalletMgmtFeignClient;
 import org.nexus.sdk.wallet.WalletUtils;
 import org.nexus.settlement.execution.TransactionRequest;
@@ -29,7 +31,7 @@ import static org.mockito.Mockito.*;
 class DefaultOnChainExecutionChannelTest {
 
     @Mock private ChainRpcClient chainRpcClient;
-    @Mock private SigningServiceFeignClient signingServiceClient;
+    @Mock private SigningApprovalExecutionService approvalExecutionService;
     @Mock private WalletMgmtFeignClient walletMgmtClient;
 
     private GatewayConfig cfg;
@@ -42,7 +44,7 @@ class DefaultOnChainExecutionChannelTest {
 
     private DefaultOnChainExecutionChannel newChannel() {
         return new DefaultOnChainExecutionChannel(chainRpcClient,
-                signingServiceClient, walletMgmtClient, cfg);
+                approvalExecutionService, walletMgmtClient, cfg);
     }
 
     private TransactionRequest validRequest(String requestId) {
@@ -146,7 +148,7 @@ class DefaultOnChainExecutionChannelTest {
         cfg.getExchangeWallet().setPlatformPubkey("platform-pk");
         try (MockedStatic<WalletUtils> mockedWalletUtils = mockStatic(WalletUtils.class)) {
             mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("to-addr")).thenReturn("to-hash");
-            when(signingServiceClient.signTransfer("platform-pk", "to-hash", new BigDecimal("100"))).thenReturn(okResp("0xTxHash"));
+            stubSigning(new SigningOutcome(ApprovalExecutionLink.Status.EXECUTED, null, "0xTxHash", null));
             when(chainRpcClient.isTransactionConfirmed("0xTxHash")).thenReturn(true);
 
             TransactionResult result = newChannel().execute(validRequest("r-7"));
@@ -162,7 +164,7 @@ class DefaultOnChainExecutionChannelTest {
         cfg.getExchangeWallet().setPlatformPubkey("platform-pk");
         try (MockedStatic<WalletUtils> mockedWalletUtils = mockStatic(WalletUtils.class)) {
             mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("to-addr")).thenReturn("to-hash");
-            when(signingServiceClient.signTransfer("platform-pk", "to-hash", new BigDecimal("100"))).thenReturn(okResp("0xTxHash"));
+            stubSigning(new SigningOutcome(ApprovalExecutionLink.Status.EXECUTED, null, "0xTxHash", null));
             when(chainRpcClient.isTransactionConfirmed("0xTxHash")).thenReturn(false);
 
             TransactionResult result = newChannel().execute(validRequest("r-8"));
@@ -189,7 +191,8 @@ class DefaultOnChainExecutionChannelTest {
         cfg.getExchangeWallet().setPlatformPubkey("platform-pk");
         try (MockedStatic<WalletUtils> mockedWalletUtils = mockStatic(WalletUtils.class)) {
             mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("to-addr")).thenReturn("to-hash");
-            when(signingServiceClient.signTransfer(any(), any(), any())).thenThrow(new RuntimeException("sign err"));
+            when(approvalExecutionService.signOrAwait(any(), any(), any(), any(), any(), any()))
+                    .thenThrow(new RuntimeException("sign err"));
 
             TransactionResult result = newChannel().execute(validRequest("r-10"));
             assertFalse(result.isSuccess());
@@ -202,7 +205,8 @@ class DefaultOnChainExecutionChannelTest {
         cfg.getExchangeWallet().setPlatformPubkey("platform-pk");
         try (MockedStatic<WalletUtils> mockedWalletUtils = mockStatic(WalletUtils.class)) {
             mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("to-addr")).thenReturn("to-hash");
-            when(signingServiceClient.signTransfer(any(), any(), any())).thenReturn(null);
+            stubSigning(new SigningOutcome(ApprovalExecutionLink.Status.FAILED, null, null,
+                    "signing service unavailable"));
 
             TransactionResult result = newChannel().execute(validRequest("r-11"));
             assertFalse(result.isSuccess());
@@ -215,7 +219,7 @@ class DefaultOnChainExecutionChannelTest {
         cfg.getExchangeWallet().setPlatformPubkey("platform-pk");
         try (MockedStatic<WalletUtils> mockedWalletUtils = mockStatic(WalletUtils.class)) {
             mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("to-addr")).thenReturn("to-hash");
-            when(signingServiceClient.signTransfer(any(), any(), any())).thenReturn(okResp("0xTxHash"));
+            stubSigning(new SigningOutcome(ApprovalExecutionLink.Status.EXECUTED, null, "0xTxHash", null));
             when(chainRpcClient.isTransactionConfirmed("0xTxHash")).thenThrow(new RuntimeException("rpc err"));
 
             TransactionResult result = newChannel().execute(validRequest("r-12"));
@@ -276,8 +280,74 @@ class DefaultOnChainExecutionChannelTest {
         }
     }
 
-    /** 契约修正（2026-09-10）：signTransfer 真实响应形状 {statusCode, data, message} 的成功响应构造器。 */
-    private static java.util.Map<String, Object> okResp(String txHash) {
-        return java.util.Map.of("statusCode", 2000, "data", txHash);
+    private void stubSigning(SigningOutcome outcome) {
+        when(approvalExecutionService.signOrAwait(any(), any(), any(), any(), any(), any()))
+                .thenReturn(outcome);
+    }
+
+    // === 大额审批执行腿（2001 → AWAITING_APPROVAL） ===
+
+    @Test
+    @DisplayName("execute: 2001 待审批 -> AWAITING_APPROVAL + approvalId，且不查链确认")
+    void execute_production_awaitingApproval() {
+        cfg.getExchangeWallet().setPlatformPubkey("platform-pk");
+        try (MockedStatic<WalletUtils> mockedWalletUtils = mockStatic(WalletUtils.class)) {
+            mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("to-addr")).thenReturn("to-hash");
+            stubSigning(new SigningOutcome(ApprovalExecutionLink.Status.AWAITING_APPROVAL,
+                    "approval-1", null, null));
+
+            TransactionResult result = newChannel().execute(validRequest("r-await"));
+            assertEquals(TransactionResult.Status.AWAITING_APPROVAL, result.getStatus());
+            assertEquals("approval-1", result.getApprovalId());
+            assertNull(result.getTxHash());
+            verify(chainRpcClient, never()).isTransactionConfirmed(any());
+        }
+    }
+
+    @Test
+    @DisplayName("execute: 重试同一 requestId 仍待审批 -> 仍返回 AWAITING_APPROVAL（非失败）")
+    void execute_production_awaitingApproval_retry() {
+        cfg.getExchangeWallet().setPlatformPubkey("platform-pk");
+        try (MockedStatic<WalletUtils> mockedWalletUtils = mockStatic(WalletUtils.class)) {
+            mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("to-addr")).thenReturn("to-hash");
+            stubSigning(new SigningOutcome(ApprovalExecutionLink.Status.AWAITING_APPROVAL,
+                    "approval-2", null, null));
+
+            DefaultOnChainExecutionChannel channel = newChannel();
+            TransactionRequest req = validRequest("r-await-2");
+            assertEquals(TransactionResult.Status.AWAITING_APPROVAL, channel.execute(req).getStatus());
+            assertEquals(TransactionResult.Status.AWAITING_APPROVAL, channel.execute(req).getStatus());
+        }
+    }
+
+    @Test
+    @DisplayName("execute: 执行结果不可核对 -> EXECUTED_UNVERIFIED（不得当失败、不得重试）")
+    void execute_production_executedUnverified() {
+        cfg.getExchangeWallet().setPlatformPubkey("platform-pk");
+        try (MockedStatic<WalletUtils> mockedWalletUtils = mockStatic(WalletUtils.class)) {
+            mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("to-addr")).thenReturn("to-hash");
+            stubSigning(new SigningOutcome(ApprovalExecutionLink.Status.EXECUTED_UNVERIFIED,
+                    "approval-3", null, "no txHash on caller side"));
+
+            TransactionResult result = newChannel().execute(validRequest("r-unverified"));
+            assertEquals(TransactionResult.Status.EXECUTED_UNVERIFIED, result.getStatus());
+            assertEquals("approval-3", result.getApprovalId());
+            assertNull(result.getTxHash());
+        }
+    }
+
+    @Test
+    @DisplayName("execute: 签名明确失败 -> FAILED 并透传原因")
+    void execute_production_declaredFailure() {
+        cfg.getExchangeWallet().setPlatformPubkey("platform-pk");
+        try (MockedStatic<WalletUtils> mockedWalletUtils = mockStatic(WalletUtils.class)) {
+            mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("to-addr")).thenReturn("to-hash");
+            stubSigning(new SigningOutcome(ApprovalExecutionLink.Status.FAILED, null, null,
+                    "approval rejected"));
+
+            TransactionResult result = newChannel().execute(validRequest("r-failed"));
+            assertEquals(TransactionResult.Status.FAILED, result.getStatus());
+            assertEquals("approval rejected", result.getError());
+        }
     }
 }

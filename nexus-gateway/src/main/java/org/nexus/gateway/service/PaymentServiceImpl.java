@@ -1,6 +1,8 @@
 package org.nexus.gateway.service;
 
 import org.nexus.gateway.PaymentService;
+import org.nexus.gateway.approval.SigningApprovalExecutionService;
+import org.nexus.gateway.approval.SigningOutcome;
 import org.nexus.gateway.client.ChainRpcClient;
 import org.nexus.gateway.client.OnChainTransaction;
 import org.nexus.gateway.compliance.AmlResult;
@@ -19,7 +21,6 @@ import org.nexus.gateway.risk.RefundRequest;
 import org.nexus.gateway.risk.RiskDecision;
 import org.nexus.common.tracing.BusinessSpan;
 import org.nexus.sdk.client.feign.SigningServiceFeignClient;
-import org.nexus.sdk.client.feign.SigningResponses;
 import org.nexus.sdk.client.feign.WalletMgmtFeignClient;
 import org.nexus.sdk.wallet.WalletUtils;
 import org.springframework.context.ApplicationEventPublisher;
@@ -101,6 +102,21 @@ public class PaymentServiceImpl implements PaymentService {
     }
 
     private PaymentConfirmTccAction paymentConfirmTccAction;
+
+    /**
+     * 大额签名审批执行服务（Board #213，2026-10-25）。
+     *
+     * <p>setter 注入且可选：走兼容构造器的测试里为 null；退款执行路径在使用前
+     * fail-closed 校验（不允许绕过审批链接直接签名）。</p>
+     */
+    private SigningApprovalExecutionService signingApprovalExecutionService;
+
+    @Autowired(required = false)
+    public void setSigningApprovalExecutionService(
+            SigningApprovalExecutionService signingApprovalExecutionService) {
+        this.signingApprovalExecutionService = signingApprovalExecutionService;
+    }
+
     /** Micrometer Tracer：P3-T5 业务 span 注入。可为 null（测试环境降级 no-op）。 */
     private final Tracer tracer;
     /** P2-F3：三阶段执行模板（落库 PENDING → 链上执行 → 更新 CONFIRMED/FAILED） */
@@ -619,11 +635,8 @@ public class PaymentServiceImpl implements PaymentService {
                         if (receiverPubkeyHash == null) {
                             return OnChainResult.failure("wallet unreachable", false);
                         }
-                        String txHash = executeRefundTransfer(order, receiverPubkeyHash, amount);
-                        if (txHash == null) {
-                            return OnChainResult.failure("refund transfer failed", false);
-                        }
-                        return OnChainResult.success(txHash, false);
+                        return executeRefundTransfer(order, receiverPubkeyHash, amount,
+                                refundNo, order.getTokenSymbol());
                     },
                     // 阶段3：根据链上结果更新 CONFIRMED/FAILED
                     (refund, onChainResult) -> {
@@ -641,6 +654,25 @@ public class PaymentServiceImpl implements PaymentService {
                             OrderStateMachine.transition(latestOrder, PaymentOrder.OrderStatus.REFUNDED);
                             refundSpan.attr("payment.refund.tx.hash", onChainResult.getTxHash())
                                     .attr("payment.refund.status", "COMPLETED");
+                        } else if (onChainResult.isAwaitingApproval()) {
+                            // 大额退款：签名服务只创建了审批请求，资金未动、链上未广播。
+                            // 订单保持 REFUND_PENDING（额度已被该笔占用），由
+                            // PaymentRefundApprovalReconciler 在审批通过后继续执行。
+                            refund.setStatus(Refund.RefundStatus.AWAITING_APPROVAL);
+                            refundSpan.attr("payment.refund.status", "AWAITING_APPROVAL")
+                                    .attr("payment.refund.approval.id", onChainResult.getApprovalId());
+                            log.warn("Refund awaiting signing approval: refundNo={}, orderId={}, approvalId={}",
+                                    refund.getRefundNo(), orderId, onChainResult.getApprovalId());
+                        } else if (onChainResult.requiresManualVerification()) {
+                            // 已执行但结果不可核对：资金可能已出，绝不能标 FAILED（会触发重退）。
+                            refund.setStatus(Refund.RefundStatus.RECONCILIATION_NEEDED);
+                            refundSpan.attr("payment.refund.status", "RECONCILIATION_NEEDED")
+                                    .attr("payment.refund.approval.id", onChainResult.getApprovalId());
+                            log.error("CRITICAL: refund signed but result unverified; "
+                                            + "marked RECONCILIATION_NEEDED (manual verification, no auto-retry): "
+                                            + "refundNo={}, orderId={}, approvalId={}, error={}",
+                                    refund.getRefundNo(), orderId, onChainResult.getApprovalId(),
+                                    onChainResult.getError());
                         } else {
                             refund.setStatus(Refund.RefundStatus.FAILED);
                             // 链上转账失败：回滚订单状态到 PAID，允许后续重试退款
@@ -688,12 +720,16 @@ public class PaymentServiceImpl implements PaymentService {
      * underlying exception is propagated to the caller (three-phase template) so that
      * the refund is correctly marked FAILED rather than silently treated as success.</p>
      *
-     * @throws IllegalStateException if the merchant keypair is not configured
-     * @throws RuntimeException      if the signing service call fails (B-01 fix:
-     *                               never swallow the exception and return null,
-     *                               which would let the caller assume success)
+     * <p>大额退款（signing-service 返回 2001）不再被误判为失败：本方法返回
+     * {@link OnChainResult#awaitingApproval(String)}，阶段3 把退款置
+     * {@code AWAITING_APPROVAL}，审批通过后由 {@code PaymentRefundApprovalReconciler}
+     * 继续推进。签名失败（确定未动账）仍抛异常，由阶段3 落 FAILED。</p>
+     *
+     * @throws IllegalStateException 平台签名公钥/审批执行服务未配置（fail-closed）
+     * @throws RuntimeException      签名服务调用异常（B-01 修复：绝不吞异常返回 null）
      */
-    private String executeRefundTransfer(PaymentOrder order, String receiverPubkeyHash, BigDecimal amount) {
+    private OnChainResult executeRefundTransfer(PaymentOrder order, String receiverPubkeyHash,
+                                                BigDecimal amount, String refundNo, String asset) {
         // SECURITY FIX: refunds are signed by the PLATFORM hot-wallet key held inside
         // exchange-wallet's keystore. The gateway never fetches or transmits any
         // private key (the legacy /ClientToTransferAccount?prikey= path was removed
@@ -704,17 +740,36 @@ public class PaymentServiceImpl implements PaymentService {
             throw new IllegalStateException("Exchange-wallet platformPubkey not configured; "
                     + "refund cannot be signed without the platform hot-wallet key");
         }
+        if (signingApprovalExecutionService == null) {
+            // fail-closed：没有审批执行服务就无法区分 2001 与失败，绝不能退回旧行为。
+            throw new IllegalStateException(
+                    "SigningApprovalExecutionService not injected; refund execution refused");
+        }
 
         // B-01 修复：不再吞掉异常返回 null（调用方会误以为退款成功）。
         // 记录错误日志后将异常向上抛出，由三阶段模板捕获并将退款标记为 FAILED。
-        // 契约修正（2026-09-10）：Feign 返回响应 Map，经 SigningResponses 提取 txHash。
+        // requestKey 与 PaymentRefundApprovalReconciler 使用的键一致，保证同一笔退款
+        // 的审批链接只有一条、重试能推进到已执行结果。
+        String requestKey = "execution:REFUND:refundNo:" + refundNo;
+        SigningOutcome outcome;
         try {
-            return SigningResponses.txHash(
-                    signingServiceClient.signTransfer(platformPubkey, receiverPubkeyHash, amount));
+            outcome = signingApprovalExecutionService.signOrAwait(
+                    requestKey, "REFUND", platformPubkey, receiverPubkeyHash, amount, asset);
         } catch (RuntimeException e) {
             log.error("Refund transfer exception for order {}: {}", order.getOrderNo(), e.getMessage(), e);
             throw new RuntimeException("Refund transfer failed for order "
                     + order.getOrderNo() + ": " + e.getMessage(), e);
         }
+        if (outcome.isExecuted()) {
+            return OnChainResult.success(outcome.txHash(), false);
+        }
+        if (outcome.requiresManualVerification()) {
+            return OnChainResult.executedUnverified(outcome.approvalId(), outcome.error());
+        }
+        if (outcome.isFailed()) {
+            throw new IllegalStateException(outcome.error() == null
+                    ? "refund transfer failed" : outcome.error());
+        }
+        return OnChainResult.awaitingApproval(outcome.approvalId());
     }
 }
