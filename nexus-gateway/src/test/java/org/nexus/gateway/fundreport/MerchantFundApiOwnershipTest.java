@@ -92,6 +92,29 @@ class MerchantFundApiOwnershipTest {
     // === 资金看板 ===
 
     @Test
+    @DisplayName("当前商户看板（路径不带 id）：从认证上下文取 merchantId 并返回 200")
+    void myDashboard_usesContextMerchantId() throws Exception {
+        when(fundDashboardService.getDashboard(CALLER)).thenReturn(Map.of("merchantId", CALLER));
+
+        fundDashboardMvc()
+                .perform(get("/api/v1/fund-dashboard").requestAttr(MERCHANT_ATTR, CALLER))
+                .andExpect(status().isOk());
+
+        // 关键：用的是上下文里的 merchantId，不是任何客户端可伪造的值
+        verify(fundDashboardService).getDashboard(eq(CALLER));
+    }
+
+    @Test
+    @DisplayName("当前商户看板：缺少商户上下文时 fail-closed（403）")
+    void myDashboard_missingContextForbidden() throws Exception {
+        fundDashboardMvc()
+                .perform(get("/api/v1/fund-dashboard"))
+                .andExpect(status().isForbidden());
+
+        verify(fundDashboardService, never()).getDashboard(anyLong());
+    }
+
+    @Test
     @DisplayName("资金看板：跨商户读取 403（修复前实测 200）")
     void dashboard_crossMerchantForbidden() throws Exception {
         lenient().when(fundDashboardService.getDashboard(anyLong()))
