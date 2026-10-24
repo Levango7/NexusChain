@@ -2,6 +2,8 @@ package org.nexus.gateway.account;
 
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
+import org.nexus.gateway.security.MerchantOwnershipGuard;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
@@ -23,6 +25,22 @@ import java.util.stream.Collectors;
  *
  * <p>提供余额查询、充值、提现、冻结、解冻、流水查询等功能。
  * 路径前缀：{@code /api/v1/accounts}</p>
+ *
+ * <h3>鉴权（2026-10-25 修复跨商户越权）</h3>
+ *
+ * <p><b>修复前</b>：{@code getBalance} / {@code getTransactions} / {@code withdraw}
+ * 三个商户端点只要求 {@code hasRole('MERCHANT') or hasRole('ADMIN')}，然后把路径
+ * {@code merchantId} 直接交给 Service —— <b>没有归属校验</b>。standalone MockMvc 实测：
+ * 调用方商户 200 请求 {@code GET /api/v1/accounts/999} 得到 <b>200 + 商户 999 的余额</b>。
+ * {@code POST /{merchantId}/withdraw} 同型 —— 即"改个路径参数就能从他人账户提现"。</p>
+ *
+ * <p><b>修复方式</b>：对齐 {@code PaymentController} 的商户侧范式，用
+ * {@link MerchantOwnershipGuard} 比对 {@code nexus.merchantId} 属性与路径参数。</p>
+ *
+ * <p>{@code deposit} / {@code freeze} / {@code unfreeze} 是<b>管理动作</b>
+ * （{@code hasRole('ADMIN')}），本次未改动其鉴权 —— 它们与
+ * {@code RiskLinkController} 修前同型（ADMIN 只有 JWT 会被 ApiKeyInterceptor 挡成 401），
+ * 属既有独立问题。</p>
  */
 @RestController
 @RequestMapping("/api/v1/accounts")
@@ -33,23 +51,36 @@ public class AccountController {
 
     private final AccountService accountService;
     private final AccountTransactionRepository transactionRepository;
+    private final MerchantOwnershipGuard ownershipGuard;
 
     public AccountController(AccountService accountService,
-                             AccountTransactionRepository transactionRepository) {
+                             AccountTransactionRepository transactionRepository,
+                             MerchantOwnershipGuard ownershipGuard) {
         this.accountService = accountService;
         this.transactionRepository = transactionRepository;
+        this.ownershipGuard = ownershipGuard;
+    }
+
+    /**
+     * 归属校验：路径 {@code merchantId} 必须等于调用方商户（fail-closed）。
+     */
+    private void requireOwnMerchant(HttpServletRequest request, Long merchantId) {
+        Long callerMerchantId = ownershipGuard.requireMerchantId(request);
+        ownershipGuard.requireOwned(callerMerchantId, merchantId, "account", merchantId);
     }
 
     /**
      * 查询商户账户余额。
      *
-     * @param merchantId 商户 ID
+     * @param merchantId 商户 ID（必须属于调用方）
+     * @param request    HTTP 请求（承载 ApiKeyInterceptor 注入的商户上下文）
      * @return 200 + 余额信息（balance, frozen, reserve）
      */
     @Operation(summary = "查询商户账户余额")
-    @PreAuthorize("hasRole('MERCHANT') or hasRole('ADMIN')")
     @GetMapping("/{merchantId}")
-    public ResponseEntity<Map<String, Object>> getBalance(@PathVariable Long merchantId) {
+    public ResponseEntity<Map<String, Object>> getBalance(@PathVariable Long merchantId,
+                                                          HttpServletRequest request) {
+        requireOwnMerchant(request, merchantId);
         Map<String, Object> balance = accountService.getBalance(merchantId);
         return ResponseEntity.ok(balance);
     }
@@ -57,18 +88,21 @@ public class AccountController {
     /**
      * 查询商户账户流水（分页）。
      *
-     * @param merchantId 商户 ID
+     * @param merchantId 商户 ID（必须属于调用方）
      * @param page 页码（从 0 开始，默认 0）
      * @param size 每页条数（默认 20）
+     * @param request HTTP 请求（承载 ApiKeyInterceptor 注入的商户上下文）
      * @return 200 + 流水分页结果
      */
     @Operation(summary = "查询商户账户流水")
-    @PreAuthorize("hasRole('MERCHANT') or hasRole('ADMIN')")
     @GetMapping("/{merchantId}/transactions")
     public ResponseEntity<Map<String, Object>> getTransactions(
             @PathVariable Long merchantId,
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size) {
+            @RequestParam(defaultValue = "20") int size,
+            HttpServletRequest request) {
+
+        requireOwnMerchant(request, merchantId);
 
         Pageable pageable = PageRequest.of(page, size);
         Page<AccountTransaction> txPage =
@@ -116,16 +150,22 @@ public class AccountController {
     /**
      * 提现。
      *
-     * @param merchantId 商户 ID
+     * <p><b>这是动钱端点</b>：修复前只校验"是商户或管理员"，不校验"这个商户是不是你"，
+     * 改个路径参数即可从他人账户提现。现要求路径 {@code merchantId} 必须属于调用方。</p>
+     *
+     * @param merchantId 商户 ID（必须属于调用方）
      * @param body 提现请求体
+     * @param request HTTP 请求（承载 ApiKeyInterceptor 注入的商户上下文）
      * @return 200 + 提现后的余额信息
      */
     @Operation(summary = "提现")
-    @PreAuthorize("hasRole('MERCHANT') or hasRole('ADMIN')")
     @PostMapping("/{merchantId}/withdraw")
     public ResponseEntity<Map<String, Object>> withdraw(
             @PathVariable Long merchantId,
-            @RequestBody WithdrawRequest body) {
+            @RequestBody WithdrawRequest body,
+            HttpServletRequest request) {
+
+        requireOwnMerchant(request, merchantId);
 
         BigDecimal amount = new BigDecimal(body.getAmount());
         MerchantAccount account = accountService.withdraw(merchantId, amount);
