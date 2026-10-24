@@ -2,7 +2,9 @@ package org.nexus.gateway.reserve;
 
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
 import org.nexus.gateway.account.AccountType;
+import org.nexus.gateway.security.MerchantOwnershipGuard;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -31,16 +33,29 @@ import java.util.stream.Collectors;
  */
 @RestController
 @RequestMapping("/api/v1/reserve")
-@PreAuthorize("isAuthenticated()")
 @Tag(name = "ReserveFund", description = "备付金管理：配置/余额查询/补充/监控预警")
 public class ReserveFundController {
 
     private static final Logger log = LoggerFactory.getLogger(ReserveFundController.class);
 
     private final ReserveFundService reserveFundService;
+    private final MerchantOwnershipGuard ownershipGuard;
 
-    public ReserveFundController(ReserveFundService reserveFundService) {
+    public ReserveFundController(ReserveFundService reserveFundService,
+                                 MerchantOwnershipGuard ownershipGuard) {
         this.reserveFundService = reserveFundService;
+        this.ownershipGuard = ownershipGuard;
+    }
+
+    /**
+     * 归属校验（2026-10-25）：路径 {@code merchantId} 必须属于调用方。
+     *
+     * <p>修复前这两个只读端点只要求 {@code ADMIN or MERCHANT}，路径参数直接交给
+     * Service —— 任何商户改路径即可读他人备付金配置与余额。</p>
+     */
+    private void requireOwnMerchant(HttpServletRequest request, Long merchantId) {
+        Long callerMerchantId = ownershipGuard.requireMerchantId(request);
+        ownershipGuard.requireOwned(callerMerchantId, merchantId, "reserve-fund", merchantId);
     }
 
     // === 配置管理 ===
@@ -67,13 +82,15 @@ public class ReserveFundController {
     /**
      * 查询商户备付金配置。
      *
-     * @param merchantId 商户ID
+     * @param merchantId 商户ID（必须属于调用方）
+     * @param request    HTTP 请求（承载 ApiKeyInterceptor 注入的商户上下文）
      * @return 200 + 配置信息
      */
     @Operation(summary = "查询商户备付金配置")
-    @PreAuthorize("hasRole('ADMIN') or hasRole('MERCHANT')")
     @GetMapping("/configs/{merchantId}")
-    public ResponseEntity<Map<String, Object>> getConfig(@PathVariable Long merchantId) {
+    public ResponseEntity<Map<String, Object>> getConfig(@PathVariable Long merchantId,
+                                                         HttpServletRequest request) {
+        requireOwnMerchant(request, merchantId);
         ReserveConfig config = reserveFundService.getConfig(merchantId)
                 .orElseThrow(() -> new IllegalArgumentException("备付金配置不存在: merchantId=" + merchantId));
 
@@ -85,13 +102,15 @@ public class ReserveFundController {
     /**
      * 查询商户备付金余额。
      *
-     * @param merchantId 商户ID
+     * @param merchantId 商户ID（必须属于调用方）
+     * @param request    HTTP 请求（承载 ApiKeyInterceptor 注入的商户上下文）
      * @return 200 + 余额信息
      */
     @Operation(summary = "查询商户备付金余额")
-    @PreAuthorize("hasRole('ADMIN') or hasRole('MERCHANT')")
     @GetMapping("/{merchantId}/balance")
-    public ResponseEntity<Map<String, Object>> getReserveBalance(@PathVariable Long merchantId) {
+    public ResponseEntity<Map<String, Object>> getReserveBalance(@PathVariable Long merchantId,
+                                                                 HttpServletRequest request) {
+        requireOwnMerchant(request, merchantId);
         BigDecimal balance = reserveFundService.getReserveBalance(merchantId);
         String alertFlag = reserveFundService.getConfig(merchantId)
                 .map(ReserveConfig::getAlertFlag)
