@@ -4,6 +4,30 @@
 
 ## [Unreleased]
 
+### rest 形态验证人集分发（PLAN-032，2026-10-25）
+
+承接 PLAN-029 §六 边界"rest 无验证人集同步通道"（F1 的中继/回放只覆盖 grpc）：
+rest 节点此前拉到的区块全部卡 `unknown proposer (validator set not synchronized)`。
+
+- **服务端**：`GET /consensus/validator-set`（`ConsensusController`）返回全表回放
+  载荷（base64 数组）——与 grpc 全表回放**同一构建来源**（`SyncManager` 抽取
+  `buildValidatorSetReplayPayloads()`：存量签名载荷逐字节复用、老行退化重建）。
+- **客户端**：`SyncClient.syncValidatorSet()`（30s 周期，rest-only）拉各 peer →
+  base64 解码 → `SyncManager.onValidatorSetPayload()`——**复用 grpc 同一处理路径**
+  （验签/重放护栏/幂等注册/落库）。
+- **白名单（踩坑固化）**：`LocalRpcInterceptor` 挂 `/**`，新端点漏加白名单 ⇒
+  **HTTP 200 空响应、静默失效**（无异常日志）；已加入白名单，并在
+  `WebSecurityConfig` 注释固化"新增 P2P 端点必须同步加白名单"。
+- **测试**：`SyncManagerValidatorSetRelayTest` +2 例（REST 入口同路径 / 列表与
+  grpc 回放同源逐字节）；全模块 `BUILD SUCCESSFUL`。
+- **实机端到端（零人工预置）**：空库 rest 节点自动
+  `validator-set sync ... 3 payload(s) applied` ×12、三验证人
+  `registered=true (via P2P)`、`receive blocks startListening` ×34、
+  `unknown proposer` **0**、高度 **0→332+ 持续单调**（6 分钟）。
+- **边界**：只读周期分发（非实时中继）；端点无鉴权（与既有 `/consensus/status`、
+  `/consensus/blocks` 同口径；载荷逐字节带签名，`enforce` 下接收端必验签）。
+  详见 `docs/plan/PLAN-032-rest-validator-set-distribution.md`。
+
 ### F2 rest 形态实机验证 + 三个运行时缺陷修复（PLAN-029 补记，2026-10-25）
 
 把 F2（mining 节点主动对账追块）放到真实 rest 形态运行。**F2 逻辑被实机执行并
