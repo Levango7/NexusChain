@@ -1,5 +1,6 @@
 package org.nexus.signing.approval;
 
+import jakarta.annotation.PostConstruct;
 import org.nexus.signing.audit.AuditEvent;
 import org.nexus.signing.audit.AuditLogService;
 import org.nexus.signing.mpc.MpcApprovalPolicy;
@@ -103,9 +104,12 @@ public class SigningApprovalService {
     /**
      * 审批人白名单（逗号分隔的审批人地址列表）。
      * <p>从 {@code nexus.approval.approver-whitelist} 配置读取，默认空字符串。
-     * 空值表示不限制（任何持有 SIGNER 角色的调用方均可审批）；
-     * 非空时仅允许列表中的地址提交审批决策（approve / reject）。</p>
+     * <b>空值 = fail-closed</b>：所有 approve/reject 决策都会被拒绝，原因为
+     * {@code approver_whitelist_not_configured}（#129）；非空时仅允许列表中的
+     * 地址提交审批决策。</p>
      * <p>示例：{@code approver-whitelist=alice@nexus,bob@nexus,carol@nexus}</p>
+     * <p>注意：本字段是 {@code @Value} 字段注入，构造器执行时尚未赋值，
+     * 因此可见性检查放在 {@link #logApproverWhitelistVisibility()}（{@code @PostConstruct}）。</p>
      */
     @Value("${nexus.approval.approver-whitelist:}")
     private String approverWhitelist;
@@ -312,12 +316,44 @@ public class SigningApprovalService {
         if (this.cleanupRetentionSeconds == 0) this.cleanupRetentionSeconds = 3600;
 
         log.info("SigningApprovalService 初始化完成: storeType={}, useDatabase(legacy)={}, storeClass={}, notifierType={}, "
-                + "cleanupIntervalMs={}, retentionSeconds={}, whitelistConfigured={}",
+                + "cleanupIntervalMs={}, retentionSeconds={}",
                 this.storeType.isBlank() ? "(unset)" : this.storeType, useDatabaseLegacy,
                 requestStore.getClass().getSimpleName(),
                 approvalNotifier.getClass().getSimpleName(),
-                cleanupIntervalMs, cleanupRetentionSeconds,
-                approverWhitelist != null && !approverWhitelist.trim().isEmpty());
+                cleanupIntervalMs, cleanupRetentionSeconds);
+    }
+
+    /**
+     * 审批人白名单的启动期可见性检查。
+     *
+     * <p>必须放在 {@code @PostConstruct}：{@code approverWhitelist} 是 {@code @Value}
+     * 字段注入，构造器执行时它还是 {@code null}，构造期打印出来的"是否配置"恒为 false。</p>
+     *
+     * <p>未配置时是 fail-closed（#129）：所有决策被拒、大额签名的人工审批实际不可用。
+     * 这必须是一条独立 WARN，否则运维会把一连串 403 误读成"权限配错了"，而不是
+     * "这个功能没启用"。</p>
+     */
+    @PostConstruct
+    void logApproverWhitelistVisibility() {
+        int count = configuredApproverCount();
+        if (count > 0) {
+            // 只记数量，不回显地址（审批人身份属运营信息）
+            log.info("审批人白名单已配置（{} 项）：大额签名人工审批可用", count);
+        } else {
+            log.warn("审批人白名单未配置（或没有任何有效项）"
+                    + "（nexus.approval.approver-whitelist / NEX_APPROVAL_WHITELIST）："
+                    + "所有 approve/reject 决策都会被拒绝，大额签名人工审批实际不可用（fail-closed，见 #129）");
+        }
+    }
+
+    private int configuredApproverCount() {
+        if (approverWhitelist == null || approverWhitelist.trim().isEmpty()) {
+            return 0;
+        }
+        return (int) Arrays.stream(approverWhitelist.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .count();
     }
 
     /**
