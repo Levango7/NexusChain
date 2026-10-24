@@ -67,10 +67,10 @@ import java.util.Map;
  *   <li>409：请求已不是 PENDING（已批准/已驳回/已过期），决策被忽略、状态不变。</li>
  * </ul>
  *
- * <h2>还没接的部分（如实说明）</h2>
- * <p>本 PR 只做 signing 侧入口。运维要经由管理后台点到这个端点，还需要网关侧的转发端点
- * （ADMIN 鉴权 + 从 {@code ApiKeyInterceptor} 排除），那一步与 #121 改同一个
- * {@code WebConfig}，故意排在 #121 合并之后另开 PR，避免两笔互相冲突。</p>
+ * <h2>上层入口</h2>
+ * <p>网关侧已提供同路径的转发端点（{@code SigningApprovalProxyController}）：
+ * 本地要求 {@code ROLE_ADMIN}，并把调用者自己的 {@code Authorization} 原样透传——
+ * 网关不代签身份，所以本服务看到的 {@code sub} 仍是运维本人，白名单与审计语义不变。</p>
  */
 @RestController
 @RequestMapping("/api/v1/signing/approvals")

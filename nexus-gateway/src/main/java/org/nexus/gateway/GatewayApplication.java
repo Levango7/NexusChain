@@ -33,7 +33,10 @@ import org.springframework.scheduling.annotation.EnableScheduling;
         "org.nexus.analytics",
         "org.nexus.oracle"
 })
-@EnableFeignClients(basePackages = "org.nexus.sdk.client.feign")
+@EnableFeignClients(basePackages = {
+        "org.nexus.sdk.client.feign",
+        "org.nexus.gateway.client.feign"
+})
 @EnableScheduling
 @EnableAsync
 @EnableSchedulerLock(defaultLockAtMostFor = "PT4M")
