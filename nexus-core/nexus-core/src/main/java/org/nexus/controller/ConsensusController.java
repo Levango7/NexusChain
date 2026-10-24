@@ -148,6 +148,20 @@ public class ConsensusController {
     }
 
     /**
+     * 追赶观测（PLAN-033 切片 B）：只读。与 rest 对端协议对象
+     * （{@code /consensus/status}）分离——观测字段不进协议对象。
+     * <p>注意：新增 P2P/运维对等端点必须同步加入 {@code WebSecurityConfig} 的
+     * {@code LocalRpcInterceptor} 白名单（PLAN-032 踩坑：漏加 ⇒ 200 空响应静默失效）。</p>
+     */
+    @GetMapping(value = "/consensus/catch-up", produces = "application/json")
+    public Object getCatchUp() {
+        if (syncManager == null) {
+            return codec.encode(Collections.emptyMap());
+        }
+        return codec.encode(syncManager.catchUpSnapshot());
+    }
+
+    /**
      * 账户库降级观测端点；不依赖数据库，PG 故障期间仍应返回 DEGRADED。
      */
     @GetMapping(value = "/consensus/storage-status", produces = "application/json")

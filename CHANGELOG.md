@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+### 追块观测端点（PLAN-033 切片 B，2026-10-25）
+
+- 新只读端点 `GET /consensus/catch-up`：`localHeight/peerHeight/gap`、
+  `windowRequested/windowStop/windowAgeMillis`（>20s=丢响应待重试）、
+  `accelerationPaused/stallCount`（防打转冷却与零推进计数）；
+  数据源 `SyncManager.catchUpSnapshot()`（纯读，库异常时 local=0 不放大故障）。
+- **不扩展 `/consensus/status`**（rest 对端协议对象，避免动协议）。
+- 白名单同步：`WebSecurityConfig` 的 `LocalRpcInterceptor` exclusions 加入
+  新端点（沿用 PLAN-032 踩坑固化规则）。
+- 单测：`SyncManagerCatchUpSnapshotTest` 3 例；全模块回归绿。
+
 ### grpc 大缺口追块加速（PLAN-033 切片 A，2026-10-25）
 
 修复 PLAN-027 §六 已登记边界"落后节点追块速率 < 出块速率 ⇒ 大缺口永不收敛"
