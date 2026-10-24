@@ -4,6 +4,31 @@
 
 ## [Unreleased]
 
+### 验证人集消息签名化——第二切片：接线（PLAN-001 扩展，2026-10-24）
+
+承接第一切片（验证器内核，#197）。本切片把签名/重放护栏接进 TRANSACTION
+广播路径，默认保持向后兼容。**如实边界：默认兼容模式受理未签名消息 ⇒
+"防伪造已登记地址"并未真正生效**（攻击者可绕过验签发未签名消息）；默认模式的
+真实增量是"带签名消息的篡改/冒用/重放被拒"，且护住未来 enforce 的迁移路径。
+
+- **消息 v2**（`ValidatorSetCodec`）：`nonce`/`signature` 作为可选字段追加；
+  v1 三参编码**逐字节不变**（单测锁定）。签名对象是**规范串**
+  （`nexus-validator-set-v2` 行分隔，非 JSON 字节——避免字段顺序/空白脆弱）。
+- **发送侧**（`ValidatorNodeBootstrapper`）：广播前 Ed25519 签名（nonce=毫秒，
+  多次重播复用同一载荷）；签名失败降级为无签名广播并告警（不阻断启动）。
+- **接收侧**（`SyncManager.handleValidatorSet` + `ValidatorSetMessageVerifier`）：
+  无签名 → 兼容受理（`enforce=true` 时丢弃）；有签名 → 验签（add 用消息自带
+  公钥、remove 用注册表登记公钥，未登记/错误公钥丢弃），失败或重放
+  （`nonce <= 水位`，相等也算）→ 丢弃且不中继；**仅验签通过的消息推进水位**。
+- **重放水位**：进程内 watermark ∪ `validators_synced.nonce`（增量列，
+  additive-only DDL；upsert 用 `CASE` 保证只增不减；重启后保持）。
+- **开关**：`nexus.consensus.validator-set.signature.enforce`（默认 false）。
+  启用前提：全部发送方升级 + 全表回放签名语义解决（回放消息当前无签名）。
+- **测试**：新增 13 例（决策器 7 / 水位持久化 3 / 中继接线 3）；
+  `:nexus-core:nexus-core:test` 全模块 `BUILD SUCCESSFUL`。
+- 后续硬化（未做）：全表回放消息的签名语义；全部升级后置 `enforce=true`。
+  详见 `docs/plan/PLAN-001-signature-extension.md`。
+
 ### 验证人集消息签名化——第一切片（PLAN-001 扩展，2026-10-24）
 
 承接 F1 修复（PLAN-030）如实边界"中继未签名（沿用 PLAN-001 信任模型）"。

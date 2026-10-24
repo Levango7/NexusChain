@@ -140,4 +140,67 @@ class SyncManagerValidatorSetRelayTest {
         syncManager.replayValidatorSetTable();
         verify(server, never()).broadcast(any());
     }
+
+    // ==================== PLAN-001 签名扩展（切片 2）接线用例 ====================
+
+    private static java.security.KeyPair ed25519() throws Exception {
+        return java.security.KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+    }
+
+    private static String rawSeedHex(java.security.KeyPair kp) {
+        byte[] der = kp.getPrivate().getEncoded();
+        return java.util.HexFormat.of().formatHex(java.util.Arrays.copyOfRange(der, der.length - 32, der.length));
+    }
+
+    private static String rawPubHex(java.security.KeyPair kp) {
+        byte[] der = kp.getPublic().getEncoded();
+        return java.util.HexFormat.of().formatHex(java.util.Arrays.copyOfRange(der, der.length - 32, der.length));
+    }
+
+    private static String signAdd(String address, String pub, String stake, long nonce,
+                                  java.security.KeyPair kp) {
+        return new org.nexus.sync.validator.ValidatorSetSignatureVerifier().sign(
+                ValidatorSetCodec.canonicalSigningBytes(ValidatorSetCodec.ACTION_ADD, address, pub, stake, nonce),
+                rawSeedHex(kp));
+    }
+
+    @Test
+    void signedInvalidNotRelayedNorRegistered() throws Exception {
+        java.security.KeyPair kp = ed25519();
+        String pub = rawPubHex(kp);
+        String sig = signAdd("addr-X", pub, "1000", 1_000L, kp);
+        // 篡改质押额（签名仍来自原载荷）→ 验签失败 → 不注册、不中继
+        byte[] tampered = ValidatorSetCodec.encodeAdd("addr-X", pub, "999999", 1_000L, sig);
+        handle(tampered);
+        assertNull(registry.getValidator("addr-X"), "验签失败的消息不得注册");
+        verify(server, never()).broadcast(any(NexusChainOuterClass.Transactions.class));
+    }
+
+    @Test
+    void signedReplayWithOlderNonceDroppedAtWiring() throws Exception {
+        java.security.KeyPair kp = ed25519();
+        String pub = rawPubHex(kp);
+        // 新消息（nonce=2000）：受理 + 中继 + 推进水位
+        byte[] fresh = ValidatorSetCodec.encodeAdd("addr-X", pub, "2000",
+                2_000L, signAdd("addr-X", pub, "2000", 2_000L, kp));
+        handle(fresh);
+        assertNotNull(registry.getValidator("addr-X"));
+        verify(server, times(1)).broadcast(any(NexusChainOuterClass.Transactions.class));
+
+        reset(server);
+        // 历史消息重放（nonce=1500，签名对它自身有效；载荷指纹不同 → 不依赖 LRU 防环）
+        byte[] replayed = ValidatorSetCodec.encodeAdd("addr-X", pub, "1500",
+                1_500L, signAdd("addr-X", pub, "1500", 1_500L, kp));
+        handle(replayed);
+        verify(server, never()).broadcast(any(NexusChainOuterClass.Transactions.class));
+    }
+
+    @Test
+    void unsignedDroppedWhenSignatureEnforced() throws Exception {
+        set("validatorSetSignatureEnforce", true);
+        byte[] payload = ValidatorSetCodec.encodeAdd("addr-Y", "pubkey-Y", "1000");
+        handle(payload);
+        assertNull(registry.getValidator("addr-Y"), "enforce 模式下未签名消息不得注册");
+        verify(server, never()).broadcast(any(NexusChainOuterClass.Transactions.class));
+    }
 }

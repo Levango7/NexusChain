@@ -95,6 +95,7 @@
 | 2026-10-23 | #34 修复交付（PLAN-031）：`Fifo`（ApplicationRunner）读循环移守护线程 `nexus-fifo-ipc`（main 不再阻塞，ApplicationReadyEvent 照常）+ `nexus.ipc.enabled` 总开关；4 例测试；**遗留**：多机闭环实证与"Linux 非 distroless 启动真回归"待 B 还原 mkfifo 后统一重跑 | `PLAN-031` §二/§三/§四；#34 行内更新 |
 | 2026-10-23 | #34/#35 多机闭环重跑已通过（PLAN-027 §六） | `PLAN-027` §六（T0 基线 19:50:23 A=649/B=643/C=650；T1 停 C 60s 19:51:53 A=680/B=681/C=—；T3 追平 ~20:10 A=932/B=927/C=932；B `validators_synced` 3 行自然同步；B `require blocks 534..542` grpc 追块落库；B `Validator-set broadcast sent` 正常） |
 | 2026-10-24 | #36 新录：持久化区块 outbox 恢复缺陷（一次捞不完 + 失败当成功）已由 #194（回归）/ #195（修复）关闭；本次只补台账（roadmap #36、CHANGELOG、`PLAN-017` §七 追记），**产品代码零改动** | #195：`PendingBlocksManager.restoreFromOutbox()` 循环捞取 + `pendingCount` fail-closed + 无进展不置位；`PendingBlocksManagerOutboxRestoreCapTest`（70 行跨批捞完 / 存储不可用两轮不置位） |
+| 2026-10-24 | PLAN-001 签名化第二切片（接线）交付：消息 v2（nonce/signature，v1 逐字节不变）+ 发送侧签名 + 接收侧验签/重放护栏 + `validators_synced.nonce` 增量列 + `enforce` 开关（默认 false）。**如实边界**：默认兼容模式受理未签名消息 ⇒ 防伪造未真正生效；enforce 前置（全表回放签名语义）未满足 | `PLAN-001-signature-extension.md` §二/§三/§五；`ValidatorSetMessageVerifierTest` 7 例 + `ValidatorSetPersistenceNonceTest` 3 例 + `SyncManagerValidatorSetRelayTest` 新增 3 例；全模块 `BUILD SUCCESSFUL` |
 
 ## PLAN-007（单 proposer 协调）
 
