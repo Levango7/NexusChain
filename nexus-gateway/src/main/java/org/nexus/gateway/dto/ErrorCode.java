@@ -42,7 +42,8 @@ public enum ErrorCode {
     // 500xx - Server Error
     INTERNAL_ERROR(50000, "Internal server error"),
     CHAIN_NODE_UNAVAILABLE(50200, "Chain node unavailable"),
-    WALLET_SERVICE_UNAVAILABLE(50201, "Wallet service unavailable");
+    WALLET_SERVICE_UNAVAILABLE(50201, "Wallet service unavailable"),
+    SIGNING_SERVICE_UNAVAILABLE(50202, "Signing service unavailable");
 
     private final int code;
     private final String message;

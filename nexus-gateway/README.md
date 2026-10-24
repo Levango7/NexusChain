@@ -111,6 +111,7 @@ SDK 对外提供 Java / TypeScript / Python / Go 四语言接入。
 | 对账与差错 | `/api/v1/reconciliation/*`、`/api/v1/suspense-accounts`、`/api/reconciliation/link` | 规则配置（`rules`）；账单下载（`bills`）；补偿（`compensations`）；T+1 报表（`reports`）；差错（`discrepancies`）；挂账；对账联动（JWT 鉴权） |
 | 风控与限额 | `/api/v1/risk/*`、`/api/v1/limits` | 风控事件（`events`）；账户联动（`link`）；余额告警（`balance-alert`）；限额 |
 | 支付安全 | `/api/v1/security/*` | 3DS（`3ds`）；支付密码（`payment-password`）；加密与重放保护端点 |
+| 签名审批 | `/api/v1/signing/approvals` | 大额签名多签决策的网关入口（ADMIN + 调用者 JWT 透传；审批人角色与白名单由 signing-service 判定） |
 | 运维可观测 | `/api/v1/alerts`、`/api/v1/ops`、`/api/v1/sla`、`/api/v1/resilience` | 告警；运维；SLA；熔断指标 |
 | 商户服务 | `/api/v1/merchants/{id}/dashboard`、`/api/v1/onboarding`、`/api/v1/qr`、`/api/v1/split`、`/api/v1/escrow`、`/api/v1/voidreversal`、`/api/v1/sandbox`、`/api/sandbox/*` | 仪表盘；入驻；扫码；分账；担保/预授权；撤销冲正；沙箱工具（`/api/sandbox/{health,config-check,callback-simulator}` 不在 API Key 拦截范围） |
 | 开放平台治理 | `/api/v1/api-keys`、`/api/v1/api-version`、`/api/v1/data-exports`、`/api/v1/developer` | Key 管理；版本策略；数据导出；开发者门户 |
@@ -125,7 +126,7 @@ SDK 对外提供 Java / TypeScript / Python / Go 四语言接入。
 | 机制 | 覆盖范围 | 实现 |
 |------|----------|------|
 | 商户 API Key | `/api/v1/**`、`/api/v2/**`；公开例外：`checkout`、`webhooks`（链事件接收）、`merchants/register` | `interceptor/ApiKeyInterceptor`（`config/WebConfig` 注册） |
-| 管理员鉴权 | 商户管理写端点（`verify`、`api-keys`） | JWT + `@PreAuthorize("hasRole('ADMIN')")` |
+| 管理员鉴权 | 商户管理写端点（`verify`、`api-keys`）、签名审批决策 | JWT + `@PreAuthorize("hasRole('ADMIN')")`（签名审批还把调用者 JWT 原样透传给 signing-service） |
 | HMAC 请求签名 | `/api/v1/payments/**`、`/api/v1/refunds/**`、`/api/v1/orders/**` | `security/RequestSignatureInterceptor`；v2 长度前缀 canonical（`NXC2`），服务端 v1/v2 兼容期 |
 | 商户归属校验（IDOR） | 商户资源端点 | `security/MerchantOwnershipGuard` |
 | Webhook 签名 | 投递（出）/ 链事件接收（入） | v2 绑定 deliveryId + timestamp（`NXCW`）；接收侧 v1/v2 双接受（`nexus.webhook.require-v2`） |

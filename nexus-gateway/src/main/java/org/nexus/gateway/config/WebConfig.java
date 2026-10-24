@@ -117,7 +117,11 @@ public class WebConfig implements WebMvcConfigurer {
                         "/api/v1/risk/link/unfreeze",
                         "/api/v1/risk/link/status-change",
                         "/api/v1/risk/link/interceptions/*/approve",
-                        "/api/v1/risk/link/interceptions/*/reject"
+                        "/api/v1/risk/link/interceptions/*/reject",
+                        // 签名审批决策（#50 收口）：运维用离线签发的 JWT 调用，没有商户
+                        // API Key。鉴权在两层：网关方法级 hasRole('ADMIN') + 下游
+                        // signing-service 的角色与审批人白名单，故此处只放行进 JWT 链。
+                        "/api/v1/signing/approvals/**"
                 );
 
         // A2: payment orchestration now requires BOTH merchant API-key auth (above)
