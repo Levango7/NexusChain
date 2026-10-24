@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import React, { useState } from "react";
 import userEvent from "@testing-library/user-event";
 import { render, screen } from "../test-utils";
 import { Modal } from "../../components/ui/Modal";
@@ -184,6 +185,38 @@ describe("Modal 组件", () => {
       </Modal>,
     );
     expect(document.body.style.overflow).toBe("hidden");
+  });
+
+  /**
+   * 回归（2026-10-24 缺陷）：父组件重渲染不应抢走弹窗内输入框的焦点。
+   *
+   * 原实现把 `onClose` 放进了焦点管理 effect 的依赖数组。父组件几乎总是传
+   * 内联箭头函数（每次渲染都是新引用），于是弹窗打开期间父组件的任何 state
+   * 变化都会让 effect 清理并重跑 —— 而清理里恰好有 `previouslyFocused.focus()`，
+   * 焦点被从输入箱抢回到触发元素，用户从第二个字符起就输入不进任何东西。
+   *
+   * 实证场景：提现审批台的「拒绝原因」文本框，`user.type` 只写进 1/4 个字符。
+   */
+  it("父组件重渲染时不应抢走弹窗内输入框的焦点", async () => {
+    const Harness: React.FC = () => {
+      const [open, setOpen] = useState(true);
+      const [text, setText] = useState("");
+      return (
+        <Modal open={open} onClose={() => setOpen(false)} title="输入弹窗">
+          <input aria-label="拒绝原因" value={text} onChange={(e) => setText(e.target.value)} />
+          <span data-testid="echo">{text}</span>
+        </Modal>
+      );
+    };
+    const user = userEvent.setup();
+    render(<Harness />);
+
+    const input = screen.getByLabelText("拒绝原因");
+    await user.type(input, "abcd");
+
+    // 四个字符都必须落进 state；若焦点被抢走，只会剩下第一个
+    expect(screen.getByTestId("echo").textContent).toBe("abcd");
+    expect(document.activeElement).toBe(input);
   });
 
   it("应该支持自定义 maxWidth 类", () => {
