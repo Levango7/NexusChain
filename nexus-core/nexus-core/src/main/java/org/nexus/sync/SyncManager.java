@@ -443,13 +443,22 @@ public class SyncManager implements Plugin, ApplicationListener<NewBlockMinedEve
      * payload）退化为旧的**无签名重建**路径（兼容模式可受理；enforce 模式下会被
      * 接收端丢弃，待该验证人重启自宣后补齐）。</p>
      */
-    void replayValidatorSetTable() {
-        if (server == null || validatorRegistry == null) {
-            return;
+    /** 回放载荷构建结果（grpc 广播与 REST 分发共用；计数供日志/断言）。 */
+    record ValidatorSetReplayPayloads(java.util.List<byte[]> payloads,
+                                      int signedVerbatim, int legacyRebuilt) {
+    }
+
+    /**
+     * 构建全表回放载荷（切片 4 抽取；PLAN-032：REST 分发与 grpc 广播同一来源，
+     * 保证两条通道语义一致——存量载荷逐字节复用、老行退化重建）。
+     */
+    ValidatorSetReplayPayloads buildValidatorSetReplayPayloads() {
+        if (validatorRegistry == null) {
+            return new ValidatorSetReplayPayloads(java.util.Collections.emptyList(), 0, 0);
         }
         List<org.nexus.consensus.pos.Validator> validators = validatorRegistry.getAllValidators();
         if (validators == null || validators.isEmpty()) {
-            return;
+            return new ValidatorSetReplayPayloads(java.util.Collections.emptyList(), 0, 0);
         }
         List<org.nexus.consensus.pos.Validator> selected = validators.size() > MAX_VALIDATORS_PER_REPLAY
                 ? validators.subList(0, MAX_VALIDATORS_PER_REPLAY)
@@ -464,7 +473,7 @@ public class SyncManager implements Plugin, ApplicationListener<NewBlockMinedEve
         }
         int signedReplayed = 0;
         int legacyRebuilt = 0;
-        NexusChainOuterClass.Transactions.Builder builder = NexusChainOuterClass.Transactions.newBuilder();
+        java.util.List<byte[]> payloads = new java.util.ArrayList<>(selected.size());
         for (org.nexus.consensus.pos.Validator v : selected) {
             if (v == null || v.getAddress() == null || v.getPublicKey() == null) {
                 continue;
@@ -490,18 +499,54 @@ public class SyncManager implements Plugin, ApplicationListener<NewBlockMinedEve
                             v.getStakeAmount() == null ? "0" : v.getStakeAmount().toPlainString());
                     legacyRebuilt++;
                 }
-                builder.addTransactions(NexusChainOuterClass.Transaction.newBuilder()
-                        .setTransactionType(NexusChainOuterClass.TransactionType.VOTE)
-                        .setPayload(ByteString.copyFrom(payload))
-                        .build());
+                payloads.add(payload);
             } catch (RuntimeException e) {
                 logger.warn("Validator-set replay row failed ({}): {}", v.getAddress(), e.getMessage());
             }
         }
+        return new ValidatorSetReplayPayloads(payloads, signedReplayed, legacyRebuilt);
+    }
+
+    /**
+     * REST 分发入口（PLAN-032）：返回全表回放载荷（只读构建，逐字节带签名）。
+     * 供 {@code GET /consensus/validator-set} 使用——rest 形态没有 grpc P2P
+     * 广播通道，验证人集经此 HTTP 端点分发（与 grpc 回放同一来源）。
+     */
+    public java.util.List<byte[]> validatorSetReplayPayloadsForRest() {
+        return buildValidatorSetReplayPayloads().payloads();
+    }
+
+    /**
+     * 处理单条 validator-set 载荷（PLAN-032）：rest 客户端经 HTTP 分发到达时，
+     * 复用与 grpc 接收完全相同的处理路径（验签 + 重放护栏 + 幂等注册 + 落库）。
+     */
+    public void onValidatorSetPayload(byte[] payload) {
+        if (payload == null || payload.length == 0) {
+            return;
+        }
+        handleValidatorSet(payload);
+    }
+
+    /** grpc 全表回放（原 replayValidatorSetTable，载荷构建已抽取共用）。 */
+    void replayValidatorSetTable() {
+        if (server == null) {
+            return;
+        }
+        ValidatorSetReplayPayloads replay = buildValidatorSetReplayPayloads();
+        if (replay.payloads().isEmpty()) {
+            return;
+        }
+        NexusChainOuterClass.Transactions.Builder builder = NexusChainOuterClass.Transactions.newBuilder();
+        for (byte[] payload : replay.payloads()) {
+            builder.addTransactions(NexusChainOuterClass.Transaction.newBuilder()
+                    .setTransactionType(NexusChainOuterClass.TransactionType.VOTE)
+                    .setPayload(ByteString.copyFrom(payload))
+                    .build());
+        }
         try {
             server.broadcast(builder.build());
             logger.info("Validator-set full-table replay sent: {} validators ({} signed payloads verbatim, {} legacy rebuilt)",
-                    selected.size(), signedReplayed, legacyRebuilt);
+                    replay.payloads().size(), replay.signedVerbatim(), replay.legacyRebuilt());
         } catch (RuntimeException e) {
             logger.warn("Validator-set replay failed: {}", e.getMessage());
         }

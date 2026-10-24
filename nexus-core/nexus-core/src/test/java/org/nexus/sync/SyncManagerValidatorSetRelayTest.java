@@ -256,4 +256,45 @@ class SyncManagerValidatorSetRelayTest {
                 org.mockito.ArgumentMatchers.eq(nonce),
                 org.mockito.ArgumentMatchers.eq(expected));
     }
+
+    // ==================== PLAN-032：rest 验证人集分发（同一来源/同一路径） ====================
+
+    @Test
+    void restPayloadEntryProcessesSignedAddThroughSamePath() throws Exception {
+        java.security.KeyPair kp = ed25519();
+        String pub = rawPubHex(kp);
+        long nonce = 7_000L;
+        byte[] signed = ValidatorSetCodec.encodeAdd("addr-R", pub, "1000", nonce,
+                signAdd("addr-R", pub, "1000", nonce, kp));
+
+        // rest 客户端入口（HTTP 分发到达）：与 grpc handle 同一处理路径
+        syncManager.onValidatorSetPayload(signed);
+
+        assertNotNull(registry.getValidator("addr-R"), "rest 到达的签名 add 必须注册");
+        verify(server, times(1)).broadcast(any(NexusChainOuterClass.Transactions.class));
+    }
+
+    @Test
+    void restPayloadListReusesStoredSignedPayloadVerbatim() throws Exception {
+        registry.register("addr-B", "pubkey-B", new BigDecimal("1000"), 0.1);
+        registry.register("addr-C", "pubkey-C", new BigDecimal("1000"), 0.1);
+
+        java.security.KeyPair kp = ed25519();
+        String pub = rawPubHex(kp);
+        long nonce = 9_500L;
+        byte[] signedV2 = ValidatorSetCodec.encodeAdd("addr-B", pub, "1000", nonce,
+                signAdd("addr-B", pub, "1000", nonce, kp));
+        var persistence = mock(org.nexus.consensus.finality.persistence.ValidatorSetPersistence.class);
+        when(persistence.loadSignedPayloads(anyInt())).thenReturn(java.util.Map.of(
+                "addr-B", java.util.Base64.getEncoder().encodeToString(signedV2)));
+        set("validatorSetPersistence", persistence);
+
+        java.util.List<byte[]> payloads = syncManager.validatorSetReplayPayloadsForRest();
+
+        assertEquals(2, payloads.size());
+        assertArrayEquals(signedV2, payloads.get(0), "REST 分发与 grpc 回放同源：存量载荷逐字节复用");
+        assertTrue(ValidatorSetCodec.decode(payloads.get(0)).hasSignature());
+        assertArrayEquals(ValidatorSetCodec.encodeAdd("addr-C", "pubkey-C", "1000"), payloads.get(1),
+                "老行退化为无签名重建（与 grpc 回放一致）");
+    }
 }

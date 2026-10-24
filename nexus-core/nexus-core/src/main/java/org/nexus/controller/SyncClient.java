@@ -204,6 +204,43 @@ public class SyncClient {
         rpcClient.broadcast("/consensus/blocks", codec.encodeBlock(block));
     }
 
+    /** 验证人集处理（PLAN-032；rest 分发到达后复用 grpc 同一路径）。 */
+    @Autowired(required = false)
+    private org.nexus.sync.SyncManager syncManager;
+
+    /**
+     * 拉取并应用验证人集（PLAN-032）：rest 形态没有 grpc P2P 广播通道，
+     * 周期从各 peer 的 {@code GET /consensus/validator-set} 拉"全表回放载荷"
+     * （base64 数组，逐字节带签名），逐条交 {@link org.nexus.sync.SyncManager#onValidatorSetPayload}——
+     * 验签、重放护栏、幂等注册与落库全部复用 grpc 路径。未装配 SyncManager 时跳过。
+     */
+    @Scheduled(fixedRate = 30 * 1000)
+    public void syncValidatorSet() {
+        if (syncManager == null) {
+            return;
+        }
+        for (String hostPort : consensusConfig.getPeers()) {
+            rpcClient.get("http://" + hostPort + "/consensus/validator-set", new HashMap<>(), (byte[] resp) -> {
+                List<String> payloads = codec.decode(resp, ArrayList.class);
+                if (payloads == null) {
+                    logger.warn("validator-set from " + hostPort + " failed to decode");
+                    return null;
+                }
+                int applied = 0;
+                for (String b64 : payloads) {
+                    try {
+                        syncManager.onValidatorSetPayload(java.util.Base64.getDecoder().decode(b64));
+                        applied++;
+                    } catch (IllegalArgumentException e) {
+                        logger.warn("validator-set payload from " + hostPort + " undecodable: " + e.getMessage());
+                    }
+                }
+                logger.info("validator-set sync from " + hostPort + ": " + applied + " payload(s) applied");
+                return null;
+            });
+        }
+    }
+
     @Scheduled(fixedRate = 30 * 1000)
     public void syncOrphan() {
         for (Block b : orphanBlocksManager.getInitials()) {
