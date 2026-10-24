@@ -8,6 +8,7 @@ import {
   FileCode2,
   ArrowLeftRight,
   Wallet,
+  Coins,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api/client";
@@ -164,6 +165,14 @@ const HomePage: React.FC = () => {
           >
             <Wallet size={16} />
             <span className="hidden sm:inline">{t("nav.approvals")}</span>
+          </Link>
+          <Link
+            to="/fund"
+            aria-label={t("nav.fund")}
+            className="flex items-center gap-1 text-muted hover:text-accent text-xs transition-colors duration-base ease-standard focus:outline-none focus-visible:shadow-focus"
+          >
+            <Coins size={16} />
+            <span className="hidden sm:inline">{t("nav.fund")}</span>
           </Link>
           <Link
             to="/settings"
