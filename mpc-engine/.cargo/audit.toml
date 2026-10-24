@@ -58,4 +58,24 @@ ignore = [
     #   ③ cggmp21 0.6.x 与未来工具链不兼容（rustc edition/新 MSRV/GMP API 变更
     #      导致无法编译），被迫升级时的窗口期同样适用本豁免依据。
     "RUSTSEC-2025-0127",
+
+    # crypto-bigint 0.5.5（RUSTSEC-2026-0387, crypto-failure, 2026-10-23 发布）
+    # 漏洞面：减法/前导零计数/除法/Montgomery 乘、UintRef 相等、BoxedMontyForm::invert
+    # 等"声明为常量时间"的操作存在秘密相关分支 ⇒ 时序/微架构侧信道，可能泄露
+    # 中间算术值、匹配 limb、可逆性；实际可利用性取决于下游算法、编译器、目标 CPU
+    # 与攻击者观测能力。修复版 >= 0.7.6。
+    # 上游锁定依据（已逐层核实，2026-10-24）：
+    #   cggmp21 0.6.3 → generic-ec ^0.4.1 → generic-ec-curves 0.2.4（0.2 线终点）
+    #   → k256 ^0.13 → elliptic-curve 0.13.8 → crypto-bigint 0.5.5
+    #   · crypto-bigint 无 0.5.x 补丁版（修复仅 0.7.6）；
+    #   · 0.7.6 需要 elliptic-curve 0.14 / k256 0.14 / generic-ec 0.5 /
+    #     generic-ec-curves 0.3（0.3.0 已切 k256 0.14）；
+    #   · 但 cggmp21 0.6.3 硬钉 generic-ec ^0.4.1，且 cggmp24 目前仅
+    #     0.7.0-alpha.3（非稳定）——无法在本仓侧解除锁定。
+    # 风险接受（不掩饰）：本豁免覆盖的是**真实的密码学时序风险**，不是"无影响"。
+    # 缓解事实：MPC 参与方为许可制、已认证的对端；攻击者需能对签名过程做细粒度
+    # 时序观测。该风险随 cggmp24 0.7 稳定版迁移一并消除。
+    # 移除触发条件：① cggmp24 0.7 stable 发布并完成迁移（CGGMP21_MIGRATION.md）；
+    # ② 出现针对 k256 0.13 / crypto-bigint 0.5 的可利用公开攻击；③ 上游 backport。
+    "RUSTSEC-2026-0387",
 ]
