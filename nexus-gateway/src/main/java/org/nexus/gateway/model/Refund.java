@@ -91,6 +91,14 @@ public class Refund {
         PENDING,
         /** 处理中（兼容旧代码，等同 PENDING 的中间态） */
         PROCESSING,
+        /**
+         * 大额退款等待签名审批（资金未动、链上未广播）。
+         *
+         * <p>由 {@code PaymentServiceImpl.refund} 的阶段3 写入；审批通过后由
+         * {@code PaymentRefundApprovalReconciler} 推进为 COMPLETED/FAILED。
+         * 非终态，且仍占用退款额度（见 {@code RefundRepository.sumActiveRefundsByOrderId}）。</p>
+         */
+        AWAITING_APPROVAL,
         /** 已完成（链上已确认） */
         COMPLETED,
         /** 已失败（链上执行失败或对账发现未上链） */

@@ -42,10 +42,14 @@ public interface RefundApprovalService {
     RefundRequest rejectRefund(Long refundId, String approverId, String reason);
 
     /**
-     * Execute an approved refund on-chain.
+     * Execute an approved refund on-chain（或从 AWAITING_APPROVAL 重新认领执行）。
+     *
+     * <p>大额退款会返回 {@code AWAITING_APPROVAL}（签名服务 2001，资金未动），
+     * 由 {@link RefundApprovalExecutionReconciler} 在审批通过后再次调用本方法；
+     * 结果未知时保持 EXECUTING 交人工核对，确定未动账才落 FAILED。</p>
      *
      * @param refundId refund request ID
-     * @return the updated refund request in EXECUTED (or FAILED) status
+     * @return the updated refund request in EXECUTED / AWAITING_APPROVAL / FAILED status
      */
     RefundRequest executeRefund(Long refundId);
 

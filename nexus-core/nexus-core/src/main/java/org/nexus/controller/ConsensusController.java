@@ -125,6 +125,28 @@ public class ConsensusController {
         return codec.encode(status);
     }
 
+    /** 验证人集分发（PLAN-032；rest 形态无 grpc P2P 广播通道时经此分发）。 */
+    @Autowired(required = false)
+    private org.nexus.sync.SyncManager syncManager;
+
+    /**
+     * 验证人集分发端点（PLAN-032）：返回"全表回放载荷"的 base64 数组——
+     * 与 grpc 全表回放**同一构建来源**（存量签名载荷逐字节复用、老行退化重建），
+     * 因此接收端可走与 grpc 完全相同的验签/重放/幂等注册路径。
+     * 未装配 SyncManager 时返回空数组（不 500）。
+     */
+    @GetMapping(value = "/consensus/validator-set", produces = "application/json")
+    public Object getValidatorSet() {
+        if (syncManager == null) {
+            return codec.encode(Collections.emptyList());
+        }
+        java.util.List<String> out = new java.util.ArrayList<>();
+        for (byte[] payload : syncManager.validatorSetReplayPayloadsForRest()) {
+            out.add(java.util.Base64.getEncoder().encodeToString(payload));
+        }
+        return codec.encode(out);
+    }
+
     /**
      * 账户库降级观测端点；不依赖数据库，PG 故障期间仍应返回 DEGRADED。
      */

@@ -93,6 +93,14 @@ public class RefundRequest {
         PENDING, APPROVED, REJECTED,
         /** 已原子认领、链上执行中（CAS 防并发重复打款，见 DefaultRefundApprovalService#executeRefund） */
         EXECUTING,
+        /**
+         * 大额退款转签名审批：链上尚未广播，等待人工审批通过后由
+         * {@code RefundApprovalExecutionReconciler} 重新认领并执行。
+         *
+         * <p>非终态且<b>不得计入失败</b>；额度校验必须计入（否则审批等待期间
+         * 可再次发起同额退款导致超退）。</p>
+         */
+        AWAITING_APPROVAL,
         EXECUTED, FAILED
     }
 

@@ -212,10 +212,16 @@ public class DefaultRefundApprovalService implements RefundApprovalService {
         // 放在同一个大事务里——出款成功后的 commit 失败会连认领一起回滚，
         // 重试即可造成二次打款。
         RefundRequest claimed = transactionTemplate.execute(status -> {
-            int claimedRows = refundRequestRepository.claimForExecution(refundId, LocalDateTime.now());
+            LocalDateTime now = LocalDateTime.now();
+            int claimedRows = refundRequestRepository.claimForExecution(refundId, now);
+            if (claimedRows == 0) {
+                // 审批窗口结束后的重新认领：AWAITING_APPROVAL → EXECUTING。
+                // 两个入口都走同一条"先认领后出款"的三段式，故并发语义不变。
+                claimedRows = refundRequestRepository.claimAwaitingForExecution(refundId, now);
+            }
             if (claimedRows == 0) {
                 throw new IllegalStateException(
-                        "refund is not claimable for execution (not approved or already executing/executed): id="
+                        "refund is not claimable for execution (not approved/awaiting or already executing/executed): id="
                                 + refundId);
             }
             return refundRequestRepository.findById(refundId)
@@ -227,6 +233,12 @@ public class DefaultRefundApprovalService implements RefundApprovalService {
         String txHash;
         try {
             txHash = executeOnChain(claimed);
+        } catch (RefundApprovalPendingException e) {
+            // 大额退款：签名服务只创建了审批请求，资金未动。单据置 AWAITING_APPROVAL
+            // （非终态、仍占退款额度），审批通过后由 RefundApprovalExecutionReconciler
+            // 重新认领执行；绝不落 FAILED。
+            markAwaitingApprovalAndAudit(refundId, claimed, e);
+            return refundRequestRepository.findById(refundId).orElse(claimed);
         } catch (RefundSubmitOutcomeUnknownException e) {
             // 已提交、结果未知（如已广播未确认）：保持 EXECUTING。
             // 不得落 FAILED（假阴性，且 FAILED 是终态无出路）；不得自动重试出款（二次打款）。
@@ -272,6 +284,28 @@ public class DefaultRefundApprovalService implements RefundApprovalService {
         // （sumPendingRefundsByOrderId 已计入 EXECUTED），失败不构成资金风险但必须可追查。
         transitionOrderToRefunded(claimed.getOrderId(), refundId, claimed);
         return executed;
+    }
+
+    /** 大额签名转审批：EXECUTING → AWAITING_APPROVAL（独立事务；审计旁路）。 */
+    private void markAwaitingApprovalAndAudit(Long refundId, RefundRequest claimed,
+                                              RefundApprovalPendingException cause) {
+        String reason = "awaiting signing approval: approvalId=" + cause.getApprovalId();
+        try {
+            transactionTemplate.executeWithoutResult(status -> {
+                int updated = refundRequestRepository.markAwaitingApproval(
+                        refundId, reason, LocalDateTime.now());
+                if (updated == 0) {
+                    log.warn("refund not in EXECUTING while marking AWAITING_APPROVAL (state moved): refundId={}",
+                            refundId);
+                }
+            });
+        } catch (RuntimeException persistError) {
+            // 落库失败：保持 EXECUTING，由 RefundExecutionReconciler 告警人工核对（不得改 FAILED）。
+            log.error("failed to persist AWAITING_APPROVAL for refund: refundId={}", refundId, persistError);
+        }
+        log.warn("Refund awaiting signing approval: refundId={}, approvalId={}",
+                refundId, cause.getApprovalId());
+        audit("REFUND_AWAITING_APPROVAL", claimed, "approvalId=" + cause.getApprovalId());
     }
 
     /** 出款确定未发生时的失败落库（独立事务；审计旁路，任何异常不阻断流程）。 */
@@ -369,6 +403,17 @@ public class DefaultRefundApprovalService implements RefundApprovalService {
                 "refund:" + request.getRefundNo(),
                 "refund:" + request.getId());
         TransactionResult result = executionChannel.execute(txReq);
+        if (result != null && result.getStatus() == TransactionResult.Status.AWAITING_APPROVAL) {
+            // 2001：签名服务已受理并创建审批请求，未签名/未广播。必须交给"等待审批"
+            // 状态机，不能走下面的失败分支（那是一笔会被永久丢掉的退款）。
+            throw new RefundApprovalPendingException(result.getApprovalId());
+        }
+        if (result != null && result.getStatus() == TransactionResult.Status.EXECUTED_UNVERIFIED) {
+            // 已执行但无哈希：资金可能已出，必须保持 EXECUTING 交人工核对，绝不落 FAILED。
+            throw new RefundSubmitOutcomeUnknownException(
+                    "refund signed but result unverified: approvalId=" + result.getApprovalId()
+                            + ", error=" + result.getError());
+        }
         // P0 修复（2026-10-21）：已广播但未达确认数 ⇒ 链上结果未知，绝不能当"确定失败"。
         // TransactionResult.isSuccess() 只认 SUCCESS；PENDING_CONFIRMATION 会被下面的
         // !isSuccess() 误判为失败，而交易其实已上链 ⇒ 落 FAILED 会造成账实不符且无路径纠正。
