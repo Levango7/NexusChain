@@ -38,6 +38,6 @@ public class WebSecurityConfig implements WebMvcConfigurer {
         // 注意：P2P 对端直连的 /consensus/* 端点必须全部列入白名单（LocalRpcInterceptor
         // 挂 /**）。PLAN-032 曾漏加 /consensus/validator-set ⇒ 被拦截为「200 空响应」
         // （rest 端拉到空数组，静默失效）——新增 P2P 端点时同步加到这里。
-        registry.addInterceptor(localRpcInterceptor).addPathPatterns("/**").excludePathPatterns("/consensus/blocks","/consensus/status","/consensus/status","/consensus/blocks","/consensus/storage-status","/consensus/finality-outbox","/consensus/block-outbox","/consensus/validator-set","/NexusChainCore/*");
+        registry.addInterceptor(localRpcInterceptor).addPathPatterns("/**").excludePathPatterns("/consensus/blocks","/consensus/status","/consensus/status","/consensus/blocks","/consensus/storage-status","/consensus/finality-outbox","/consensus/block-outbox","/consensus/validator-set","/consensus/catch-up","/NexusChainCore/*");
     }
 }

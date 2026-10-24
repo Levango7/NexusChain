@@ -168,6 +168,36 @@ public class SyncManager implements Plugin, ApplicationListener<NewBlockMinedEve
     private volatile long knownMaxPeerHeight = 0;
 
     /**
+     * 追赶快照（PLAN-033 切片 B）：供 {@code GET /consensus/catch-up} 只读端点使用。
+     *
+     * <p><b>为什么不扩展 /consensus/status</b>：那是 rest 对端的协议对象
+     * （{@code ConsensuEntity.Status}），加字段会动协议；观测另开只读端点。
+     * 字段含义见方案文档 §切片 B。</p>
+     */
+    public java.util.Map<String, Object> catchUpSnapshot() {
+        long now = System.currentTimeMillis();
+        long local = 0L;
+        try {
+            local = stateDB.getBestBlock().nHeight;
+        } catch (RuntimeException ignored) {
+            // 库异常时上报 local=0，不因观测把故障放大
+        }
+        long peer = knownMaxPeerHeight;
+        long gap = Math.max(0L, peer - local);
+        boolean requesting = catchUpRequestInFlight.get();
+        java.util.Map<String, Object> m = new java.util.LinkedHashMap<>();
+        m.put("localHeight", local);
+        m.put("peerHeight", peer);
+        m.put("gap", gap);
+        m.put("windowRequested", requesting);
+        m.put("windowStop", catchUpWindowStop);
+        m.put("windowAgeMillis", requesting ? Math.max(0L, now - catchUpIssuedAtMillis) : 0L);
+        m.put("accelerationPaused", now < catchUpPausedUntilMillis);
+        m.put("stallCount", (long) catchUpStallCount.get());
+        return m;
+    }
+
+    /**
      * 已知对端最高高度。供 PosMiningScheduler 在出块前比较：
      * 若本节点落后于对端，应抑制本地出块以跟随更长链（避免分叉持续）。
      */
