@@ -111,13 +111,31 @@ public class ValidatorNodeBootstrapper implements ApplicationListener<Applicatio
                         new org.nexus.crypto.ed25519.Ed25519PublicKey(keyPair.getPublicKey().getBytes()));
             }
         }
-        // PLAN-001 步骤 5：本节点验证人写入共享表（重启后全网可重放）
+        // PLAN-001 签名扩展（切片 2）：对 add 载荷签名（Ed25519，规范串），
+        // nonce 取毫秒时间戳（单调递增；重播同一载荷时保持不变——对端只应生效一次）。
+        // 签名失败降级为无签名广播（不阻断启动；接收端按 v1 兼容路径处理）。
+        long nonce = System.currentTimeMillis();
+        String stakeStr = selfStake.toPlainString();
+        String signature = null;
+        try {
+            byte[] priv = keyPair.getPrivateKey() == null ? null : keyPair.getPrivateKey().getBytes();
+            if (priv != null) {
+                signature = new org.nexus.sync.validator.ValidatorSetSignatureVerifier().sign(
+                        org.nexus.consensus.finality.net.ValidatorSetCodec.canonicalSigningBytes(
+                                org.nexus.consensus.finality.net.ValidatorSetCodec.ACTION_ADD,
+                                address, pubHex, stakeStr, nonce),
+                        org.apache.commons.codec.binary.Hex.encodeHexString(priv));
+            }
+        } catch (RuntimeException e) {
+            log.warn("Validator-set signing failed (broadcast unsigned): {}", e.getMessage());
+        }
+        // PLAN-001 步骤 5：本节点验证人写入共享表（重启后全网可重放）；带 nonce 落库。
         if (validatorSetPersistence != null) {
-            validatorSetPersistence.upsert(address, pubHex, selfStake);
+            validatorSetPersistence.upsert(address, pubHex, selfStake, nonce);
         }
         // PLAN-001 步骤 3：向 P2P 全网广播本节点验证人信息（跨节点同步）
         byte[] msg = org.nexus.consensus.finality.net.ValidatorSetCodec.encodeAdd(
-                address, pubHex, selfStake.toPlainString());
+                address, pubHex, stakeStr, nonce, signature);
         broadcastValidatorSet(msg);
         // 多次延迟重发（PLAN-009）：对端可能后启动/握手未完成，广播在连接建立前
         // 静默丢弃——单次 10s 重发不足（真机观察 B 未收 A 广播）。

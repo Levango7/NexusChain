@@ -92,6 +92,51 @@ public class SyncManager implements Plugin, ApplicationListener<NewBlockMinedEve
     @org.springframework.context.annotation.Lazy
     private org.nexus.consensus.finality.persistence.ValidatorSetPersistence validatorSetPersistence;
 
+    // ==================== PLAN-001 签名扩展（切片 2）：验签 + 重放护栏 ====================
+
+    /** 签名/重放决策器（无状态纯函数）。 */
+    private final org.nexus.sync.validator.ValidatorSetMessageVerifier validatorSetMessageVerifier =
+            new org.nexus.sync.validator.ValidatorSetMessageVerifier();
+
+    /**
+     * 签名强制模式开关（默认 false = 迁移窗口兼容：未签名 v1 消息继续受理）。
+     *
+     * <p>置 true 后：未签名消息不受理。**启用前提**：全部发送方已升级且
+     * 解决了全表回放消息无签名的问题（当前回放消息为无签名——enforce 下会被
+     * 丢弃，影响晚加入节点补历史）。</p>
+     */
+    @org.springframework.beans.factory.annotation.Value("${nexus.consensus.validator-set.signature.enforce:false}")
+    private boolean validatorSetSignatureEnforce;
+
+    /**
+     * 进程内重放水位（address -> 已见最大 nonce）。
+     *
+     * <p>与 {@code validators_synced.nonce}（持久层）取 max 使用：内存层覆盖
+     * 「无库/库暂不可用」窗口与 remove 后的墓碑语义（行被删但水位仍需
+     * 防历史重放），持久层覆盖重启恢复。仅**验签通过**的消息推进水位——
+     * 未签名消息不得推进（否则可用无签名消息抢占水位、阻塞合法签名消息）。</p>
+     */
+    private final java.util.concurrent.ConcurrentHashMap<String, Long> validatorSetNonceWatermark =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** 读取某地址的重放水位（内存 ∪ 持久层，取 max）。 */
+    private long lastSeenValidatorNonce(String address) {
+        long mem = validatorSetNonceWatermark.getOrDefault(address, 0L);
+        long db = 0L;
+        if (validatorSetPersistence != null) {
+            db = validatorSetPersistence.lastNonce(address);
+        }
+        return Math.max(mem, db);
+    }
+
+    /** 推进某地址的重放水位（仅验签通过后调用）。 */
+    private void rememberValidatorNonce(String address, long nonce) {
+        if (address == null || nonce <= 0L) {
+            return;
+        }
+        validatorSetNonceWatermark.merge(address, nonce, Math::max);
+    }
+
     /** 已知对端最高区块高度（PLAN-002：本地出块抑制依据，volatile 跨线程可见）。 */
     private volatile long knownMaxPeerHeight = 0;
 
@@ -256,6 +301,31 @@ public class SyncManager implements Plugin, ApplicationListener<NewBlockMinedEve
         if (validatorRegistry == null) {
             return;
         }
+        // PLAN-001 签名扩展（切片 2）：先验签 + 重放护栏，再进注册路径。
+        // remove 消息不带公钥，验签密钥从本地注册表解析（未登记的 remove 无法验证 → 丢弃）。
+        String registeredPubKey = null;
+        if (!msg.isAdd() && msg.hasSignature()) {
+            org.nexus.consensus.pos.Validator registered = validatorRegistry.getValidator(msg.address());
+            registeredPubKey = registered == null ? null : registered.getPublicKey();
+        }
+        org.nexus.sync.validator.ValidatorSetMessageVerifier.Result sigResult =
+                validatorSetMessageVerifier.decide(
+                        msg, registeredPubKey, lastSeenValidatorNonce(msg.address()),
+                        validatorSetSignatureEnforce);
+        if (sigResult.decision()
+                == org.nexus.sync.validator.ValidatorSetMessageVerifier.Decision.DROP_BAD_SIGNATURE
+                || sigResult.decision()
+                == org.nexus.sync.validator.ValidatorSetMessageVerifier.Decision.DROP_UNSIGNED) {
+            logger.warn("Validator-set message dropped ({}): address={}, detail={}",
+                    sigResult.decision(), msg.address(), sigResult.detail());
+            return;
+        }
+        if (sigResult.decision()
+                == org.nexus.sync.validator.ValidatorSetMessageVerifier.Decision.DROP_REPLAY) {
+            logger.info("Validator-set message dropped (replay): address={}, {}",
+                    msg.address(), sigResult.detail());
+            return;
+        }
         try {
             boolean mutated;
             if (msg.isAdd()) {
@@ -270,9 +340,10 @@ public class SyncManager implements Plugin, ApplicationListener<NewBlockMinedEve
                 }
                 boolean ok = validatorRegistry.register(
                         msg.address(), msg.publicKey(), stake, 0.1);
-                // PLAN-001 步骤 5：广播收到的验证人也写共享表（落库重放）
+                // PLAN-001 步骤 5：广播收到的验证人也写共享表（落库重放）。
+                // 切片 2：带 nonce 落库（只增不减），供重启后的重放护栏使用。
                 if (validatorSetPersistence != null) {
-                    validatorSetPersistence.upsert(msg.address(), msg.publicKey(), stake);
+                    validatorSetPersistence.upsert(msg.address(), msg.publicKey(), stake, msg.nonce());
                 }
                 logger.info("Validator-set add: address={} registered={} (via P2P)", msg.address(), ok);
                 mutated = true;
@@ -286,6 +357,11 @@ public class SyncManager implements Plugin, ApplicationListener<NewBlockMinedEve
             }
             if (mutated) {
                 relayValidatorSet(payload);
+                // 仅验签通过的消息推进水位（remove 的库行已删，内存水位兜底防历史重放）。
+                if (sigResult.decision()
+                        == org.nexus.sync.validator.ValidatorSetMessageVerifier.Decision.ACCEPT_SIGNED) {
+                    rememberValidatorNonce(msg.address(), msg.nonce());
+                }
             }
         } catch (RuntimeException e) {
             logger.error("Validator-set apply failed: address={}, error={}", msg.address(), e.getMessage());

@@ -74,20 +74,32 @@ public boolean isReplay(long nonce, long lastSeenNonce)       // 纯函数：non
 
 密钥编解码为 RFC 8410 raw 形态（PKCS#8 PrivateKeyInfo / X.509 SPKI DER 包装），与现有 `validator-private-key` 十六进制格式直接兼容（32 字节种子；亦兼容 64 字节 libsodium 形态，取前 32 字节）。
 
-集成点（**后续接线切片**的设计，本切片不实施；与现有 `handleValidatorSet` 逐行对齐）：
-1. `SyncManager.handleValidatorSet()` 成功处理 `add/remove` 后，**在发送广播前**（当前代码已在此处构造 `TRANSACTION` 消息）：
-   - 计算 `payload_sha256`（已存在）。
-   - 获取当前验证人的递增 `nonce`（查询 `validators_synced` 表的 `max(nonce)` + 1，或从本地注册表计算当前最大 nonce）。
-   - 计算 `signature = Ed25519.sign(privateKey, serializeWithoutSignature())`（私钥从现有 `validator-private-key` 配置读取，已存在）。
-   - 将 `signature` 和 `nonce` 附加到 `TRANSACTION` 消息（与现有字段逐字一致，不修改现有解析逻辑）。
-2. `SyncManager.broadcastValidatorSetChange()` 发送时（与现有 `TRANSACTION` 广播逐字一致）：
-   - 消息体包含新字段，不影响现有接收端解析（老节点忽略新字段，新节点做验证）。
-3. 接收端（`ValidatorNodeBootstrapper` 或 `SyncManager.onStatus` 接收到的消息处理路径）：
-   - 当前路径：收到 `TRANSACTION` → 解析 → `handleValidatorSet` → 幂等注册。
-   - 新增验证步骤（可选，不强制拒绝）：在 `handleValidatorSet` 之前或之后（建议在解析后、注册前），调用 `ValidatorSetSignatureVerifier.verify()`：
-     - **验证通过**：继续现有注册路径（无行为变化）。
-     - **验证失败**：记录警告，不执行注册（防伪造），但不抛异常（不破坏现有处理流程）。
-   - **无签名消息**：跳过验证（向后兼容），继续现有注册路径（与修复后行为完全一致）。
+集成点（**【切片 2】已实施**，落点与设计一致；与现有 `handleValidatorSet` 逐行对齐）：
+1. **发送侧**（`ValidatorNodeBootstrapper`）：首次广播前对本节点 `add` 载荷签名——
+   - `nonce = System.currentTimeMillis()`（单调递增；3 次重播复用同一载荷/签名）；
+   - 签名对象为**规范串**（非 JSON 字节）：`ValidatorSetCodec.canonicalSigningBytes`
+     = `nexus-validator-set-v2\n{action}\n{address}\n{publicKey}\n{stakeAmount}\n{nonce}`
+     （行分隔、null 记空串；避免 JSON 字段顺序/空白的脆弱性）；
+   - `signature = Ed25519.sign(privateKeyHex, 规范串)`（私钥取现有 `KeyPair`；
+     签名失败降级为无签名广播并告警，不阻断启动）。
+2. **消息格式 v2**（`ValidatorSetCodec`）：`"nonce":<long>` 与 `"signature":"<base64>"`
+   作为**可选字段追加**在 JSON 末尾；v1 三参编码路径**逐字节不变**（单测锁定），
+   老节点忽略未知字段。
+3. **接收侧**（`SyncManager.handleValidatorSet`，解析后、注册前）：
+   - 决策器 `ValidatorSetMessageVerifier.decide()`（无状态纯函数）：
+     - 无签名 → `ACCEPT_UNSIGNED`（兼容模式默认；`enforce` 模式 → `DROP_UNSIGNED`）；
+     - 有签名：add 用消息自带 `publicKey` 验签；**remove 用本地注册表登记公钥验签**
+       （未登记/错误公钥 → `DROP_BAD_SIGNATURE`，丢弃：不注册、不中继）；
+     - 验签通过 + `nonce <= lastSeen` → `DROP_REPLAY`（相等也视为重放）；
+   - 重放水位 `lastSeen = max(进程内 watermark, validators_synced.nonce)`；
+     仅**验签通过**的消息推进水位（未签名消息不得推进——否则可用无签名消息
+     抢占水位、阻塞合法签名消息）；
+   - `validators_synced` 增量加列 `nonce BIGINT NOT NULL DEFAULT 0`（additive-only，
+     upsert 用 `CASE WHEN nonce < ? THEN ? ELSE nonce END` 保证只增不减）。
+4. **开关**：`nexus.consensus.validator-set.signature.enforce`（默认 `false`）。
+   **启用前提**：全部发送方已升级，且全表回放消息的签名语义已解决——
+   回放消息由注册表数据重建、无原始签名，`enforce` 下会被丢弃、影响晚加入节点
+   补历史（回放语义留待后续切片）。
 
 **并发面说明（与 Fifo 修复一致）**：签名验证和消息处理仍在同一工作线程（与现有 `handleValidatorSet` 同步执行，不引入新跨线程可见性面）。签名计算（Ed25519 逐字节操作）在本地完成（无网络依赖），耗时可忽略（单次签名 < 1ms，远小于现有 30s 对账周期）。
 
@@ -107,11 +119,25 @@ public boolean isReplay(long nonce, long lastSeenNonce)       // 纯函数：non
 | `noSignatureIsBackwardCompatible` | 无签名（null/空）→ NO_SIGNATURE（继续处理，向后兼容） |
 | `replayDetectionPureFunction` | `nonce <= lastSeen` 重放边界（含相等/更旧/更新） |
 
+### 已交付测试（切片 2：接线；`ValidatorSetMessageVerifierTest` 7 例 + 重放水位持久化 3 例 + 中继接线 3 例）
+
+| 测试用例 | 验证点 |
+|----------|--------|
+| `legacyV1FormatIsByteIdenticalAndDecodesAsUnsigned` | v1 三参编码**逐字节不变**；解码 `nonce=0/signature=null`；兼容模式受理、enforce 模式丢弃 |
+| `signedAddIsAccepted` | 签名 add → `ACCEPT_SIGNED` |
+| `tamperedStakeIsDroppedEvenWithValidLookingSignature` | 保留签名篡改质押额 → `DROP_BAD_SIGNATURE`（防篡改） |
+| `wrongPublicKeyIsDropped` | 声明他人公钥 → 拒绝（防冒用已登记地址） |
+| `malformedSignatureIsDroppedNotThrown` | 畸形签名 → 丢弃且不抛异常 |
+| `replayIsDroppedForEqualOrOlderNonceAndAcceptedForNewer` | nonce 相等/更旧 → `DROP_REPLAY`；更新 → 受理 |
+| `removeVerificationUsesRegisteredPublicKey` | remove 用注册表公钥验签；未登记/错误公钥 → 丢弃 |
+| `ValidatorSetPersistenceNonceTest`（3 例） | nonce 列增量 DDL（H2/PG 兼容模式）；upsert **只增不减**（乱序/legacy 调用不回退）；重启新实例重放后水位保持 |
+| `SyncManagerValidatorSetRelayTest` 新增 3 例 | 验签失败不注册不中继；旧 nonce 重放在接线层被丢弃；enforce 模式丢弃未签名消息 |
+
 **验收标准（与现有口径一致，不夸大）**：
 - 新增测试在 `:nexus-core:nexus-core:test` 下运行，全模块 `BUILD SUCCESSFUL`（不降低现有绿度）。
 - 签名化不引入新的跨线程可见性面（与 Fifo 修复一致，仍同工作线程）。
-- 向后兼容性：老节点收到签名消息时行为与修复后一致（解析载荷、注册、更新 nonce，不拒绝消息）；新节点收到无签名消息时行为与修复前一致（解析、注册、不拒绝）。
-- **如实边界**：签名化不解决"伪造 `seedStake` 注册"的问题（现有 `seedStake` 路径仍无签名，伪造注册与修复前同等敞口）；签名化只保护 `TRANSACTION` 广播层的验证人集消息，不扩展到 `seedStake` 注册路径（除非后续决定统一签名化所有消息类型）。
+- 向后兼容性：老节点收到签名消息时忽略未知字段、按既有路径注册（不认识 nonce 列，也不受影响）；新节点收到无签名 v1 消息时行为与修复前一致（解析、注册、不拒绝）。
+- **如实边界（重要）**：**默认兼容模式受理未签名消息 ⇒ 防伪造并未真正生效**（攻击者可直接发未签名消息绕过验签）；默认模式的真实增量是"带签名消息的篡改/冒用/重放被拒"。要达到"防伪造已登记地址"需置 `enforce=true`，且其启用前提（全表回放签名语义）尚未满足。签名化不解决"伪造 `seedStake` 注册"的问题（该路径仍无签名，敞口与修复前同等）。
 
 ---
 
@@ -129,9 +155,10 @@ public boolean isReplay(long nonce, long lastSeenNonce)       // 纯函数：non
 
 本方案为协议层后续切片，不影响已交付的四缺陷修复（F3/F2/F1/Fifo）。顺序：
 
-1. **【本切片已交付】** 验证器内核（`ValidatorSetSignatureVerifier`：sign/check/isReplay，纯 JDK 17，无新依赖）+ 7 例测试（含 RFC 8032 官方向量），全模块 `BUILD SUCCESSFUL`。
-2. **【后续接线切片】** `TRANSACTION` 消息字段 v2（`signature`/`nonce`）→ `SyncManager.handleValidatorSet()` 发送侧挂签名、接收侧挂验证（不强制拒绝无签名消息，保持向后兼容；建议配置开关，默认关闭）。
+1. **【已交付】** 验证器内核（`ValidatorSetSignatureVerifier`：sign/check/isReplay，纯 JDK 17，无新依赖）+ 7 例测试（含 RFC 8032 官方向量），全模块 `BUILD SUCCESSFUL`。
+2. **【已交付】** 接线切片：消息 v2 字段（`nonce`/`signature`，可选追加，v1 编码逐字节不变）→ 发送侧（Bootstrapper）签名、接收侧（`ValidatorSetMessageVerifier` + `SyncManager`）验签与重放护栏、`validators_synced.nonce` 增量列、`enforce` 开关（默认 false）。测试见上表。
 3. **【后续回归】** 在多机拓扑上重跑闭环（停 C 60s → 恢复 → 补票追平），验证签名化不破坏既有链路。
+4. **【后续硬化】** ① 全表回放消息的签名语义（当前无签名，是 `enforce` 启用的前置）；② 全部发送方升级后置 `enforce=true`，届时"防伪造已登记地址"才真正生效；③ 如需更强信任模型，再考虑治理层签名/白名单（超出当前切片）。
 
 **与现有修复的关系**：
 - F3（轮转 view-change）：不受影响（签名计算在本地完成，不影响本地时钟轮转逻辑）。
