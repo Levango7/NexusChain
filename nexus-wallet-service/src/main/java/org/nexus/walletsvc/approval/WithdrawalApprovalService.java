@@ -4,6 +4,7 @@ import org.nexus.sdk.signing.ApprovalPolicy;
 import org.nexus.sdk.wallet.WithdrawalRequest;
 
 import java.math.BigDecimal;
+import java.util.List;
 
 /**
  * Withdrawal approval service interface driving the multi-approver withdrawal
@@ -61,4 +62,16 @@ public interface WithdrawalApprovalService {
      * @return the updated withdrawal request in EXECUTED (or FAILED) status
      */
     WithdrawalRequest executeApprovedWithdrawal(String approvalId);
+
+    /**
+     * List withdrawal requests awaiting a decision (PENDING), newest first.
+     *
+     * <p>Added 2026-10-24: the controller previously exposed
+     * approve/reject/execute but <b>no query endpoint</b> — an approver could
+     * only learn about pending work through out-of-band notification
+     * (email/IM), never from the system itself.</p>
+     *
+     * @return PENDING withdrawal requests ordered by creation time, newest first
+     */
+    List<WithdrawalRequest> listPending();
 }

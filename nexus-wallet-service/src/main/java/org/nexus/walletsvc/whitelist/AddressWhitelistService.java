@@ -1,5 +1,7 @@
 package org.nexus.walletsvc.whitelist;
 
+import java.util.List;
+
 /**
  * Address whitelist service interface for managing approved withdrawal
  * addresses and enforcing the first-time withdrawal delay.
@@ -50,4 +52,16 @@ public interface AddressWhitelistService {
      * @return {@code true} if the first-time withdrawal delay is still in effect
      */
     boolean checkFirstTimeWithdrawal(String address);
+
+    /**
+     * List the active whitelist entries of one merchant.
+     *
+     * <p>Added 2026-10-24: add/remove/check existed but <b>there was no way to
+     * enumerate</b> — operators could not verify which addresses a merchant had
+     * actually been allowed to withdraw to.</p>
+     *
+     * @param merchantId merchant ID
+     * @return active whitelist entries of that merchant
+     */
+    List<WhitelistEntry> listByMerchant(String merchantId);
 }
