@@ -29,12 +29,7 @@ export const DEFAULT_WALLET_BASE = "http://localhost:8083";
 
 /** 提现状态（与 SDK `WithdrawalRequest.WithdrawalStatus` 的 6 个值一致）。 */
 export type WithdrawalStatus =
-  | "PENDING"
-  | "APPROVED"
-  | "REJECTED"
-  | "EXECUTING"
-  | "EXECUTED"
-  | "FAILED";
+  "PENDING" | "APPROVED" | "REJECTED" | "EXECUTING" | "EXECUTED" | "FAILED";
 
 /** 提现请求 DTO（对齐 `org.nexus.sdk.wallet.WithdrawalRequest`）。 */
 export interface WithdrawalRequestDto {
