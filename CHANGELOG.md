@@ -39,6 +39,22 @@
   （标记 `stale-crashed`）；不替代真机房多可用区/断电演练。详见
   `docs/plan/PLAN-027-multi-machine-findings.md` §六 附。
 
+### 持久化区块 outbox 恢复上限与 fail-closed（PLAN-019 派生，合于 #195，2026-10-23）
+
+修复 `PendingBlocksManager.restoreFromOutbox()` 的两个缺陷（**#194** 先以回归测试证伪）：
+
+- **一次捞不完**：原实现单次 `loadPending(64)`（`LIMIT` 无分页）后无条件置
+  `outboxRestored = true` ⇒ outbox 有 N > 64 条时，第 65 条及以后**整个进程生命周期
+  都不会被恢复**。改为循环捞取直到取空。
+- **失败被当成成功**：`JdbcPendingBlockOutbox.loadPending` 在库异常时吞异常返回**空列表**，
+  原实现据此置位 ⇒ PG 短时不可用会把积压**永久**判为"已恢复"。改为先取 `pendingCount()`：
+  `< 0`（读不到）不置位、下一轮再试；只有"数量可读且已捞空"才算完成。
+- **无进展保护**：某批处理不减少待恢复数时停止本轮循环，但同样不置位，避免对同一批无限重试。
+- 回归：`PendingBlocksManagerOutboxRestoreCapTest`（70 行跨批捞完 / 存储不可用连续两轮不置位 /
+  单次 `LIMIT` 上限语义）。
+- 如实边界：不改变 #29 登记的 ① `writeBlock` 写库失败被吞成 `false`、② outbox 行无过期清理；
+  这两项仍开放。
+
 ### FIFO IPC 守护线程化 + 总开关（PLAN-031，2026-10-23）
 
 修复 PLAN-027 发现 1（P1）：非 distroless Linux 上节点启动永久卡死。
