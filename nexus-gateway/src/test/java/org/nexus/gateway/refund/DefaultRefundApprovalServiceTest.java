@@ -298,6 +298,80 @@ class DefaultRefundApprovalServiceTest {
     }
 
     @Test
+    void executeRefund_awaitingApprovalMarksAwaitingNotFailed() {
+        // 大额退款：signing-service 返回 2001（未签名/未广播）。
+        // 单据必须进 AWAITING_APPROVAL（非终态），绝不能判 FAILED ——
+        // 旧实现把"取不到 txHash"当失败，审批通过后也没有任何路径能重试。
+        RefundRequest approved = newPendingRequest();
+        approved.setStatus(RefundRequest.RefundStatus.APPROVED);
+        when(refundRequestRepository.claimForExecution(eq(10L), any())).thenReturn(1);
+        when(refundRequestRepository.findById(10L)).thenReturn(Optional.of(approved));
+        when(refundRequestRepository.markAwaitingApproval(eq(10L), any(), any()))
+                .thenAnswer(inv -> {
+                    approved.setStatus(RefundRequest.RefundStatus.AWAITING_APPROVAL);
+                    approved.setRejectionReason(inv.getArgument(1));
+                    return 1;
+                });
+        when(paymentOrderRepository.findById(1L)).thenReturn(Optional.of(paidOrder));
+        when(executionChannel.execute(any(TransactionRequest.class)))
+                .thenReturn(TransactionResult.awaitingApproval("AP-1"));
+
+        RefundRequest result = service.executeRefund(10L);
+
+        assertEquals(RefundRequest.RefundStatus.AWAITING_APPROVAL, result.getStatus());
+        assertNull(result.getChainTxHash());
+        verify(refundRequestRepository, never()).markFailed(any(), any(), any());
+        verify(refundRequestRepository, never()).markExecuted(any(), any(), any());
+        assertEquals(PaymentOrder.OrderStatus.PAID, paidOrder.getStatus());
+    }
+
+    @Test
+    void executeRefund_fromAwaitingApprovalReclaimsAndExecutes() {
+        // 审批通过后的推进：APPROVED 认领失败（已不在 APPROVED），
+        // 由 AWAITING_APPROVAL 认领接住；链上返回成功后正常落 EXECUTED。
+        RefundRequest awaiting = newPendingRequest();
+        awaiting.setStatus(RefundRequest.RefundStatus.AWAITING_APPROVAL);
+        when(refundRequestRepository.claimForExecution(eq(10L), any())).thenReturn(0);
+        when(refundRequestRepository.claimAwaitingForExecution(eq(10L), any())).thenReturn(1);
+        when(refundRequestRepository.findById(10L)).thenReturn(Optional.of(awaiting));
+        when(refundRequestRepository.markExecuted(eq(10L), eq("TX-OK-1"), any()))
+                .thenAnswer(inv -> {
+                    awaiting.setStatus(RefundRequest.RefundStatus.EXECUTED);
+                    awaiting.setChainTxHash(inv.getArgument(1));
+                    return 1;
+                });
+        when(paymentOrderRepository.findById(1L)).thenReturn(Optional.of(paidOrder));
+        when(executionChannel.execute(any(TransactionRequest.class)))
+                .thenReturn(TransactionResult.success("TX-OK-1", 12, false));
+
+        RefundRequest result = service.executeRefund(10L);
+
+        assertEquals(RefundRequest.RefundStatus.EXECUTED, result.getStatus());
+        assertEquals("TX-OK-1", result.getChainTxHash());
+        assertEquals(PaymentOrder.OrderStatus.REFUNDED, paidOrder.getStatus());
+        verify(refundRequestRepository).claimAwaitingForExecution(eq(10L), any());
+    }
+
+    @Test
+    void executeRefund_executedUnverifiedKeepsExecutingNotFailed() {
+        // 已执行但调用方无哈希：资金可能已出，必须保持 EXECUTING 交人工核对，
+        // 绝不能落 FAILED（会诱导重退造成二次打款）。
+        RefundRequest approved = newPendingRequest();
+        approved.setStatus(RefundRequest.RefundStatus.APPROVED);
+        when(refundRequestRepository.claimForExecution(eq(10L), any())).thenReturn(1);
+        when(refundRequestRepository.findById(10L)).thenReturn(Optional.of(approved));
+        when(paymentOrderRepository.findById(1L)).thenReturn(Optional.of(paidOrder));
+        when(executionChannel.execute(any(TransactionRequest.class)))
+                .thenReturn(TransactionResult.executedUnverified("AP-2", "no txHash"));
+
+        assertThrows(RefundSubmitOutcomeUnknownException.class, () -> service.executeRefund(10L));
+
+        verify(refundRequestRepository, never()).markFailed(any(), any(), any());
+        verify(refundRequestRepository, never()).markExecuted(any(), any(), any());
+        assertEquals(PaymentOrder.OrderStatus.PAID, paidOrder.getStatus());
+    }
+
+    @Test
     void executeRefund_finalizeFailureRethrowsAndNeverMarksFailed() {
         // 链上已出款但结果落库失败：单据停留 EXECUTING（结果未知）——
         // 必须原样抛出交由 RefundExecutionReconciler 告警，不得改 FAILED（假阴性）、不得重试出款

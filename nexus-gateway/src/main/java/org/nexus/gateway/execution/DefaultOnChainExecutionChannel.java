@@ -1,9 +1,9 @@
 package org.nexus.gateway.execution;
 
+import org.nexus.gateway.approval.SigningApprovalExecutionService;
+import org.nexus.gateway.approval.SigningOutcome;
 import org.nexus.gateway.client.ChainRpcClient;
 import org.nexus.gateway.config.GatewayConfig;
-import org.nexus.sdk.client.feign.SigningServiceFeignClient;
-import org.nexus.sdk.client.feign.SigningResponses;
 import org.nexus.sdk.client.feign.WalletMgmtFeignClient;
 import org.nexus.sdk.wallet.WalletUtils;
 import org.nexus.settlement.execution.OnChainExecutionChannel;
@@ -34,7 +34,8 @@ import java.util.concurrent.ConcurrentMap;
  *   <li>sandbox / mock 模式判定（platformPubkey 未配置 或 skipConfirmation=true）：
  *       生成模拟 txHash 并直接返回 SUCCESS（标记 simulated=true）</li>
  *   <li>生产模式：将 toAddress 转为 pubkeyHash → 调用
- *       {@link SigningServiceFeignClient#signTransfer} 完成签名 + 广播 → 轮询
+ *       {@link SigningApprovalExecutionService#signOrAwait} 完成签名 + 广播
+ *       （大额返回 2001 时落审批链接并返回 AWAITING_APPROVAL）→ 轮询
  *       {@link ChainRpcClient#isTransactionConfirmed} 等待确认</li>
  *   <li>返回 {@link TransactionResult}，缓存结果以保证幂等</li>
  * </ol>
@@ -46,12 +47,17 @@ import java.util.concurrent.ConcurrentMap;
  * 测试环境运行。结果以 {@link TransactionResult#isSimulated()} = true 标记。</p>
  *
  * <h3>幂等性</h3>
- * <p>基于 {@link TransactionRequest#getRequestId()} 在进程内缓存执行结果；
- * 相同 requestId 的重复 execute 调用直接返回缓存的 txHash，避免重复上链。
- * 生产环境如需跨进程幂等，应在签名服务侧基于 requestId 做去重。</p>
+ * <p>基于 {@link TransactionRequest#getRequestId()} 在进程内缓存<b>已拿到 txHash</b> 的执行结果；
+ * 大额审批等待中的请求由 {@link SigningApprovalExecutionService} 的
+ * {@code approval_execution_link} 表跨进程/重启跟踪（2001 → AWAITING_APPROVAL；
+ * 审批通过后由同一 requestId 的重试或业务域 reconciler 完成签名）。</p>
  *
  * <p>Phase 1 任务 #55：原注入 {@code ExchangeWalletClient} 兼容委托层，按方案 §5.1
  * 拆分为 {@code signingServiceClient} + {@code walletMgmtClient} 两个 Feign 客户端。</p>
+ *
+ * <p>执行腿接线（2026-10-25，Board #213）：大额签名不再被误判为失败——
+ * {@code statusCode=2001} 转为 {@link TransactionResult.Status#AWAITING_APPROVAL}
+ * 并携带 approvalId。</p>
  */
 @Component
 public class DefaultOnChainExecutionChannel implements OnChainExecutionChannel {
@@ -62,8 +68,8 @@ public class DefaultOnChainExecutionChannel implements OnChainExecutionChannel {
     public static final String SIMULATED_PREFIX = "SIMULATED-";
 
     private final ChainRpcClient chainRpcClient;
-    /** 签名服务 Feign 客户端：签名 + 广播（涉及私钥的操作） */
-    private final SigningServiceFeignClient signingServiceClient;
+    /** 签名/审批执行服务：签名 + 大额审批跟踪（涉及私钥的操作） */
+    private final SigningApprovalExecutionService approvalExecutionService;
     /** 钱包管理服务 Feign 客户端：地址转公钥哈希等（不涉及私钥的操作） */
     private final WalletMgmtFeignClient walletMgmtClient;
     private final GatewayConfig gatewayConfig;
@@ -72,11 +78,11 @@ public class DefaultOnChainExecutionChannel implements OnChainExecutionChannel {
     private final ConcurrentMap<String, TransactionResult> idempotentCache = new ConcurrentHashMap<>();
 
     public DefaultOnChainExecutionChannel(ChainRpcClient chainRpcClient,
-                                          SigningServiceFeignClient signingServiceClient,
+                                          SigningApprovalExecutionService approvalExecutionService,
                                           WalletMgmtFeignClient walletMgmtClient,
                                           GatewayConfig gatewayConfig) {
         this.chainRpcClient = chainRpcClient;
-        this.signingServiceClient = signingServiceClient;
+        this.approvalExecutionService = approvalExecutionService;
         this.walletMgmtClient = walletMgmtClient;
         this.gatewayConfig = gatewayConfig;
     }
@@ -192,21 +198,40 @@ public class DefaultOnChainExecutionChannel implements OnChainExecutionChannel {
                     "cannot resolve pubkeyHash for toAddress: " + request.getToAddress(), false);
         }
 
-        // 2. 调用签名服务完成签名 + 广播，返回 txHash。
-        // 契约修正（2026-09-10）：Feign 返回签名服务真实响应 Map
-        // ({statusCode, data, message})，经 SigningResponses 提取 data 字段。
-        String txHash;
+        // 2. 调用签名服务完成签名 + 广播，返回 txHash；大额签名（2001）落审批链接后
+        //    返回 AWAITING_APPROVAL，由 /transfers/sign/approved 在审批通过后执行。
+        String requestKey = "execution:" + request.getType() + ":"
+                + (request.getRequestId() != null && !request.getRequestId().isBlank()
+                        ? request.getRequestId()
+                        : "adhoc-" + UUID.randomUUID());
+        SigningOutcome outcome;
         try {
-            txHash = SigningResponses.txHash(signingServiceClient.signTransfer(
-                    platformPubkey, toPubkeyHash, request.getAmount()));
+            outcome = approvalExecutionService.signOrAwait(requestKey, request.getType().name(),
+                    platformPubkey, toPubkeyHash, request.getAmount(), request.getAsset());
         } catch (RuntimeException e) {
-            log.error("executeProduction: signTransfer threw, requestId={}", request.getRequestId(), e);
+            log.error("executeProduction: signOrAwait threw, requestId={}", request.getRequestId(), e);
             return TransactionResult.failure("signTransfer failed: " + e.getMessage(), false);
         }
-        if (txHash == null || txHash.isEmpty()) {
-            log.error("executeProduction: signTransfer returned null txHash, requestId={}", request.getRequestId());
-            return TransactionResult.failure("signTransfer returned null txHash", false);
+
+        if (outcome.requiresManualVerification()) {
+            log.error("executeProduction: 执行结果不可核对（资金可能已转出，禁止自动重试）: "
+                            + "requestId={}, approvalId={}, error={}",
+                    request.getRequestId(), outcome.approvalId(), outcome.error());
+            return TransactionResult.executedUnverified(outcome.approvalId(), outcome.error());
         }
+        if (outcome.isFailed()) {
+            String error = outcome.error() == null ? "signTransfer failed" : outcome.error();
+            log.error("executeProduction: signTransfer failed, requestId={}, error={}",
+                    request.getRequestId(), error);
+            return TransactionResult.failure(error, false);
+        }
+        if (!outcome.isExecuted()) {
+            log.info("executeProduction: 大额签名待审批, requestId={}, approvalId={}",
+                    request.getRequestId(), outcome.approvalId());
+            return TransactionResult.awaitingApproval(outcome.approvalId());
+        }
+
+        String txHash = outcome.txHash();
         log.info("executeProduction: signed and broadcast, requestId={}, txHash={}",
                 request.getRequestId(), txHash);
 

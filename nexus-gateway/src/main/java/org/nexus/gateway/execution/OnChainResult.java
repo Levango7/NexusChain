@@ -10,7 +10,9 @@ import java.util.Objects;
  *
  * <ul>
  *   <li>{@code txHash}：链上交易哈希；执行失败时为 null</li>
- *   <li>{@code status}：执行状态（SUCCESS / FAILED / PENDING_CONFIRMATION）</li>
+ *   <li>{@code status}：执行状态（SUCCESS / PENDING_CONFIRMATION / AWAITING_APPROVAL /
+ *       EXECUTED_UNVERIFIED / FAILED）</li>
+ *   <li>{@code approvalId}：大额签名待审批时的审批请求 ID（可为 null）</li>
  *   <li>{@code error}：失败时的错误描述，成功时为 null</li>
  *   <li>{@code simulated}：是否为 sandbox/mock 模式产生的模拟结果</li>
  * </ul>
@@ -23,6 +25,10 @@ public final class OnChainResult {
         SUCCESS,
         /** 已广播但尚未达到所需确认数 */
         PENDING_CONFIRMATION,
+        /** 大额签名转人工审批（未签名/未广播，非终态） */
+        AWAITING_APPROVAL,
+        /** 签名已执行但调用方没有交易哈希（资金可能已出，禁止自动重试） */
+        EXECUTED_UNVERIFIED,
         /** 执行失败（签名 / 广播 / 确认任一环节失败） */
         FAILED
     }
@@ -31,12 +37,19 @@ public final class OnChainResult {
     private final Status status;
     private final String error;
     private final boolean simulated;
+    private final String approvalId;
 
     public OnChainResult(String txHash, Status status, String error, boolean simulated) {
+        this(txHash, status, error, simulated, null);
+    }
+
+    public OnChainResult(String txHash, Status status, String error, boolean simulated,
+                         String approvalId) {
         this.txHash = txHash;
         this.status = Objects.requireNonNull(status, "status");
         this.error = error;
         this.simulated = simulated;
+        this.approvalId = approvalId;
     }
 
     /** 构造成功结果 */
@@ -54,6 +67,16 @@ public final class OnChainResult {
         return new OnChainResult(null, Status.FAILED, error, simulated);
     }
 
+    /** 构造"大额签名待审批"结果（非终态，调用方须保存 approvalId 并重试） */
+    public static OnChainResult awaitingApproval(String approvalId) {
+        return new OnChainResult(null, Status.AWAITING_APPROVAL, null, false, approvalId);
+    }
+
+    /** 构造"已执行但结果不可核对"结果（资金可能已出，禁止自动重试） */
+    public static OnChainResult executedUnverified(String approvalId, String error) {
+        return new OnChainResult(null, Status.EXECUTED_UNVERIFIED, error, false, approvalId);
+    }
+
     /** 是否成功（已上链并确认） */
     public boolean isSuccess() {
         return status == Status.SUCCESS;
@@ -69,10 +92,21 @@ public final class OnChainResult {
         return status == Status.PENDING_CONFIRMATION;
     }
 
+    /** 是否等待大额签名审批（非终态） */
+    public boolean isAwaitingApproval() {
+        return status == Status.AWAITING_APPROVAL;
+    }
+
+    /** 是否结果不可核对（资金可能已出，禁止自动重试） */
+    public boolean requiresManualVerification() {
+        return status == Status.EXECUTED_UNVERIFIED;
+    }
+
     public String getTxHash() { return txHash; }
     public Status getStatus() { return status; }
     public String getError() { return error; }
     public boolean isSimulated() { return simulated; }
+    public String getApprovalId() { return approvalId; }
 
     @Override
     public boolean equals(Object o) {
@@ -82,12 +116,13 @@ public final class OnChainResult {
         return simulated == that.simulated
                 && Objects.equals(txHash, that.txHash)
                 && status == that.status
-                && Objects.equals(error, that.error);
+                && Objects.equals(error, that.error)
+                && Objects.equals(approvalId, that.approvalId);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(txHash, status, error, simulated);
+        return Objects.hash(txHash, status, error, simulated, approvalId);
     }
 
     @Override
@@ -95,6 +130,8 @@ public final class OnChainResult {
         return "OnChainResult{txHash='" + txHash + '\''
                 + ", status=" + status
                 + ", error='" + error + '\''
-                + ", simulated=" + simulated + '}';
+                + ", simulated=" + simulated
+                + ", approvalId='" + approvalId + '\''
+                + '}';
     }
 }
