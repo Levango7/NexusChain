@@ -63,7 +63,27 @@ export const Modal: React.FC<ModalProps> = ({
   const titleId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
 
+  /**
+   * `onClose` 的最新引用。
+   *
+   * 缺陷修复（2026-10-24）：`onClose` **不能进下面那个 effect 的依赖数组**。
+   * 父组件几乎总是传内联箭头函数（`onClose={() => setX(false)}`），每次渲染
+   * 都是新引用；一旦它成为依赖，弹窗打开期间父组件的**任何** state 变化
+   * （例如用户在弹窗里输入）都会让 effect 清理并重跑 —— 而清理里恰好有
+   * `previouslyFocused?.focus()`，于是焦点被从输入框抢回到触发元素，
+   * 用户第二个字符起就输入不进任何东西。
+   *
+   * 实证：提现审批台的「拒绝原因」文本框，`user.type` 只写进 1/4 个字符。
+   * 用 ref 持有最新回调，effect 只依赖 `open` / `disableBackdropClose`
+   * （两者都是稳定值），焦点管理遂与父组件渲染解耦。
+   */
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
   // ESC 关闭 + body 滚动锁定 + 焦点陷阱 + 焦点归还
+  // 依赖只含 open / disableBackdropClose：见上面 onCloseRef 的说明。
   useEffect(() => {
     if (!open) return;
 
@@ -80,7 +100,7 @@ export const Modal: React.FC<ModalProps> = ({
     const onKey = (e: KeyboardEvent) => {
       // ESC 始终可关闭（与 disableBackdropClose 无关，见文件头说明）
       if (e.key === "Escape") {
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (e.key !== "Tab" || !dialog) return;
@@ -113,7 +133,7 @@ export const Modal: React.FC<ModalProps> = ({
       // 焦点归还到触发元素
       previouslyFocused?.focus?.();
     };
-  }, [open, onClose, disableBackdropClose]);
+  }, [open, disableBackdropClose]);
 
   if (!open) return null;
 

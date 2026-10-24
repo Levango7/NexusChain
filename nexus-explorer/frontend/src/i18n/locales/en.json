@@ -26,7 +26,8 @@
     "orchestration": "Orchestration",
     "contracts": "Contracts",
     "crosschain": "Cross-chain",
-    "settings": "Settings"
+    "settings": "Settings",
+    "approvals": "Withdrawals"
   },
   "home": {
     "title": "NexusChain Explorer",
@@ -197,5 +198,40 @@
       "confirmed": "Confirmed",
       "failed": "Failed"
     }
+  },
+  "approvals": {
+    "title": "Withdrawal approvals",
+    "back": "Back",
+    "disconnect": "Disconnect",
+    "connectTitle": "Connect to custody wallet service",
+    "connectSubtitle": "Approvals live in nexus-wallet-service (JWT auth), which does not accept the gateway's HMAC credentials.",
+    "baseUrl": "wallet-service base URL",
+    "jwt": "Access token (JWT)",
+    "jwtPlaceholder": "Paste a wallet-service JWT (requires the APPROVER role)",
+    "jwtHint": "The token is kept in this tab's sessionStorage only and is discarded when the tab closes.",
+    "connect": "Connect",
+    "sessionOnly": "Valid for this session only",
+    "reconfigure": "Reconfigure",
+    "authInvalid": "JWT is invalid or expired — please reconfigure",
+    "forbidden": "This JWT lacks the required role (approval needs APPROVER)",
+    "requestFailed": "Request failed ({{status}}): {{message}}",
+    "unknownError": "Unknown error",
+    "hotBalance": "Hot wallet balance",
+    "coldBalance": "Cold wallet balance",
+    "pendingTitle": "Pending approvals ({{n}})",
+    "noPending": "No withdrawals are awaiting approval",
+    "whitelisted": "Whitelisted",
+    "notWhitelisted": "Not whitelisted",
+    "whitelistUnknown": "Whitelist unknown",
+    "notWhitelistedWarn": "Destination address is not whitelisted — verify manually before approving",
+    "meta": "Approved {{approved}}/{{required}} · {{time}}",
+    "approve": "Approve",
+    "reject": "Reject",
+    "execute": "Execute",
+    "executeHint": "Approval threshold met — on-chain broadcast can be executed",
+    "rejectTitle": "Reject withdrawal",
+    "rejectFor": "Reject the withdrawal of {{amount}} {{currency}}",
+    "rejectReasonPlaceholder": "Reason for rejection (recorded in the audit log)",
+    "rejectReasonHint": "Required: the wallet-service reject endpoint mandates a reason."
   }
 }
