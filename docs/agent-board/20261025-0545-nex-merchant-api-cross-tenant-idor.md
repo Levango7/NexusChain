@@ -138,12 +138,68 @@ AssertionError: Status expected:<403> but was:<200>
 
 ---
 
+## 四之二、**勘误**：我最初把范围说小了——越权有**三种形态**，不止路径参数
+
+我最初按"是否接收 `@PathVariable merchantId`"扫描，得出「9 个控制器 / ≥41 个端点」。
+深入第二批时发现这个口径**漏了两类**，此处更正：
+
+| 形态 | 特征 | 能否用 `MerchantOwnershipGuard` 修 |
+|---|---|---|
+| **A 路径 merchantId** | 路径里有 `{merchantId}` | ✅ 可直接比对 |
+| **B 资源号** | 路径里只有 `{discrepancyId}` / `{reportNo}` 等 | ❌ 必须**先加载资源再比对它的 merchantId** |
+| **C 全量列表** | 既不收 merchantId 也不收资源号，返回全表 | ❌ 无从比对，需定角色策略 |
+
+### B 形态的实证（比 A 更隐蔽：换一个 ID 就能看别人的）
+
+```java
+// DiscrepancyResolutionController:75-81
+@GetMapping("/detail/{discrepancyId}")
+public ResponseEntity<ReconciliationDiscrepancy> getDiscrepancyDetail(
+        @PathVariable Long discrepancyId) {
+    Optional<ReconciliationDiscrepancy> discrepancy =
+            resolutionService.findDiscrepancyById(discrepancyId);   // ← 只按 ID 取，不校验归属
+    return discrepancy.map(ResponseEntity::ok).orElse(ResponseEntity.notFound().build());
+}
+
+// 同型且是**写**操作：startInvestigation / annotateChannel / resolveDiscrepancy / escalateDiscrepancy
+// （均为 POST /{discrepancyId}/...，直接改他人差错记录）
+
+// FundReportController:126-140（已修）
+@GetMapping("/detail/{reportNo}")
+public ResponseEntity<Map<String, Object>> getReportDetail(@PathVariable String reportNo) {
+    Optional<FundReport> reportOpt = fundReportService.getReportByNo(reportNo);  // ← 同样不校验
+    ...
+    result.put("merchantId", report.getMerchantId());   // ← 还把对方 merchantId 回显给调用方
+```
+
+### 更正后的清单
+
+| 控制器 | A（路径参数） | B（资源号） | C（全量列表） |
+|---|---|---|---|
+| `FundDashboardController` | 5 | — | — |
+| `AccountController` | 3 | — | — |
+| `AutoWithdrawController` | 2 | — | — |
+| `FundReportController` | 2 | **1**（`detail/{reportNo}`） | — |
+| `ReserveFundController` | 2 | — | — |
+| `DiscrepancyResolutionController` | 2 | **5（含 4 个写操作）** | 1（`/unattributed`，已限 ADMIN） |
+| `AuditEventController` | 1 | — | **3** |
+| `ReconciliationLinkController` | 14（路径缺 `v1`，见 §3.1） | — | 部分 |
+
+⇒ **`DiscrepancyResolutionController` 不能"机械修"**（我 §五 原文写错了）：
+8 个端点里只有 2 个是 A 形态，5 个是 B 形态的**写操作**，必须逐个加载 + 比对 + 再动。
+这也是我把它拆成独立 PR 的原因——把 5 个跨租户写操作和低风险改动混在一个 PR 里，
+漏一个就是敞开的资金端点。
+
+---
+
 ## 五、我的下一步（除非有人认领）
 
-1. `DiscrepancyResolutionController`(8) / `FundReportController`(3) / `ReserveFundController`(2)
-   —— 这三个在 `/api/v1/**` 下、路径带 merchantId，**可机械修**，我继续做。
-2. §3.1、§3.2 等上面两个决策落定再动。
-3. `SandboxController` 是 `@Profile("sandbox")` 隔离，**不计入生产风险**。
+1. **已开工（第二批 PR）**：`FundReportController`(2 个 A + 1 个 B) /
+   `ReserveFundController`(2 个 A) —— 风险低、修法明确。
+2. **独立 PR（第三批）**：`DiscrepancyResolutionController` —— 2 个 A + **5 个 B（4 个是写）**，
+   需要逐个"加载 → 比对 → 再动"，与低风险改动分开做（理由见 §四之二）。
+3. **等决策**：§3.1（`ReconciliationLinkController` 路径缺 `v1`）、§3.2（`AuditEventController` 的 C 形态）、§四（ADMIN 排除名单归属）。
+4. `SandboxController` 是 `@Profile("sandbox")` 隔离，**不计入生产风险**。
 
 ---
 
