@@ -85,6 +85,14 @@ public class ValidatorSetPersistence {
                 // 不影响注册路径本身（nonce 读写方法均有独立异常容忍）。
                 log.warn("ValidatorSetPersistence: nonce column ensure skipped: {}", e.getMessage());
             }
+            // 切片 4（回放签名语义）：存"收到/自签的原始签名载荷"（base64），全表回放时
+            // 逐字节复用——解决"回放重建消息无签名 ⇒ enforce 模式下晚加入节点补不到历史"。
+            try {
+                jdbc.execute("ALTER TABLE validators_synced "
+                        + "ADD COLUMN IF NOT EXISTS signed_payload TEXT");
+            } catch (RuntimeException e) {
+                log.warn("ValidatorSetPersistence: signed_payload column ensure skipped: {}", e.getMessage());
+            }
             log.info("ValidatorSetPersistence: schema initialized");
             replay();
         } catch (SchemaMeta.MismatchException e) {
@@ -142,6 +150,20 @@ public class ValidatorSetPersistence {
      * 的 {@code max} 语义一致（PG / H2 均支持的普通 SQL，不依赖 GREATEST）。</p>
      */
     public void upsert(String address, String publicKey, BigDecimal stakeAmount, long nonce) {
+        upsert(address, publicKey, stakeAmount, nonce, null);
+    }
+
+    /**
+     * 写库（含重放水位与原始签名载荷）。
+     *
+     * <p>{@code signedPayloadBase64}（切片 4）：收到/自签的**原始 v2 载荷**
+     * （含 nonce 与签名）的 base64。全表回放时逐字节复用（见
+     * {@link #loadSignedPayloads(int)}），使回放消息同样可验签——这是
+     * {@code enforce} 模式的启用前置。传 {@code null} 表示本次消息无签名
+     * （或老调用方），此时用 {@code COALESCE} **保留**行内已存载荷，不清空。</p>
+     */
+    public void upsert(String address, String publicKey, BigDecimal stakeAmount, long nonce,
+                       String signedPayloadBase64) {
         if (jdbc == null || address == null || publicKey == null || stakeAmount == null) {
             return;
         }
@@ -152,14 +174,46 @@ public class ValidatorSetPersistence {
             // ON CONFLICT DO UPDATE（H2 2.2.224 不支持，异常会被本方法 catch 吞掉）。
             JdbcUpsert.upsert(jdbc,
                     "UPDATE validators_synced SET public_key = ?, stake_amount = ?, updated_at = ?, "
-                    + "nonce = CASE WHEN nonce < ? THEN ? ELSE nonce END "
+                    + "nonce = CASE WHEN nonce < ? THEN ? ELSE nonce END, "
+                    + "signed_payload = COALESCE(?, signed_payload) "
                     + "WHERE address = ?",
-                    new Object[]{publicKey, stake, now, nonce, nonce, address},
-                    "INSERT INTO validators_synced(address, public_key, stake_amount, updated_at, nonce) "
-                    + "VALUES(?,?,?,?,?)",
-                    new Object[]{address, publicKey, stake, now, nonce});
+                    new Object[]{publicKey, stake, now, nonce, nonce, signedPayloadBase64, address},
+                    "INSERT INTO validators_synced(address, public_key, stake_amount, updated_at, nonce, signed_payload) "
+                    + "VALUES(?,?,?,?,?,?)",
+                    new Object[]{address, publicKey, stake, now, nonce, signedPayloadBase64});
         } catch (RuntimeException e) {
             log.warn("Validator upsert failed: address={}, error={}", address, e.getMessage());
+        }
+    }
+
+    /**
+     * 载入已存的原始签名载荷（address → base64 载荷），供全表回放逐字节复用。
+     *
+     * <p>无库 / 读失败返回空 map（回放退化为旧的无签名重建路径，不阻断功能）。</p>
+     */
+    public java.util.Map<String, String> loadSignedPayloads(int limit) {
+        if (jdbc == null) {
+            return java.util.Collections.emptyMap();
+        }
+        try {
+            return jdbc.query(
+                    "SELECT address, signed_payload FROM validators_synced "
+                    + "WHERE signed_payload IS NOT NULL LIMIT ?",
+                    rs -> {
+                        java.util.Map<String, String> m = new java.util.HashMap<>();
+                        while (rs.next()) {
+                            String a = rs.getString(1);
+                            String p = rs.getString(2);
+                            if (a != null && p != null && !p.isEmpty()) {
+                                m.put(a, p);
+                            }
+                        }
+                        return m;
+                    },
+                    limit);
+        } catch (RuntimeException e) {
+            log.warn("Validator loadSignedPayloads failed: {}", e.getMessage());
+            return java.util.Collections.emptyMap();
         }
     }
 
