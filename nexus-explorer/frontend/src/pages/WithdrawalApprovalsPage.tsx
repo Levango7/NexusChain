@@ -231,12 +231,20 @@ const WithdrawalApprovalsPage: React.FC = () => {
   const wlBadge = (addr: string) => {
     const state = whitelist[addr];
     if (state === undefined || state === null) {
-      return <Badge tone="neutral" icon={null}>{t("approvals.whitelistUnknown")}</Badge>;
+      return (
+        <Badge tone="neutral" icon={null}>
+          {t("approvals.whitelistUnknown")}
+        </Badge>
+      );
     }
     return state ? (
-      <Badge tone="success" icon={null}>{t("approvals.whitelisted")}</Badge>
+      <Badge tone="success" icon={null}>
+        {t("approvals.whitelisted")}
+      </Badge>
     ) : (
-      <Badge tone="danger" icon={null}>{t("approvals.notWhitelisted")}</Badge>
+      <Badge tone="danger" icon={null}>
+        {t("approvals.notWhitelisted")}
+      </Badge>
     );
   };
 
@@ -290,10 +298,7 @@ const WithdrawalApprovalsPage: React.FC = () => {
           >
             <form onSubmit={handleConnect} className="space-y-4">
               <div>
-                <label
-                  htmlFor="wallet-base"
-                  className="block text-xs font-medium text-fg-2 mb-1"
-                >
+                <label htmlFor="wallet-base" className="block text-xs font-medium text-fg-2 mb-1">
                   {t("approvals.baseUrl")}
                 </label>
                 <input
@@ -389,9 +394,7 @@ const WithdrawalApprovalsPage: React.FC = () => {
               {t("approvals.pendingTitle", { n: items.length })}
             </h2>
 
-            {items.length === 0 && (
-              <p className="text-muted text-sm">{t("approvals.noPending")}</p>
-            )}
+            {items.length === 0 && <p className="text-muted text-sm">{t("approvals.noPending")}</p>}
 
             <div className="space-y-3">
               {items.map((it) => {
@@ -509,9 +512,7 @@ const WithdrawalApprovalsPage: React.FC = () => {
                 const reason = rejectReason.trim();
                 setRejectTarget(null);
                 setRejectReason("");
-                runAction(target.requestId, () =>
-                  rejectWithdrawal(conn, target.requestId, reason),
-                );
+                runAction(target.requestId, () => rejectWithdrawal(conn, target.requestId, reason));
               }}
             >
               {t("approvals.reject")}
