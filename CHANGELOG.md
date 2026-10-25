@@ -1143,6 +1143,30 @@ FAILED，审批通过后也没有任何调用方去执行。按裁决"调用方�
   与把 `CHAIN` 塞进白名单，均按预期转红。
 
 
+### core 探针被 local-only 拦成 401（主干红的事后修复，2026-10-25）
+
+主干 CI 的 `DAST - OWASP ZAP Baseline (gateway)` 在 `05d6793f`（#233）转红，
+日志给出的不是抖动而是链条：`dependency failed to start: container
+nexuschain-nexus-core-1 is unhealthy`，容器内 `LocalRpcInterceptor` 打出
+`Local-only RPC rejected: missing token from 127.0.0.1`。
+
+- **成因**：`nexus.localonly` 默认 `true`（`${LOCALONLY:true}`），`LocalRpcInterceptor`
+  挂 `/**`，而它的公开白名单里**从来没有 `/height`**。#233 之前拒绝路径是
+  `return false` 且不写响应 ⇒ 探针拿到 **HTTP 200 空 body**，`wget` 以为健康；
+  #233 把拒绝改成**显式 401 + JSON**（这个改动本身是对的：PLAN-032 的静默失效就是被
+  "200 空响应"放大的），漏配立刻从"看不出来"变成"把探针打死"。
+- **影响面**：`docker-compose.yml` 的 core healthcheck、`deploy/helm/charts/nexus-core`
+  的 liveness **与** readiness 都打 `GET /height`（现查 statefulset.yaml:136-147）；
+  compose 里 gateway/signing `depends_on: condition: service_healthy` ⇒ 整栈起不来；
+  k8s 侧等价于探针失败/重启循环。CI 侧 DAST 不在 required 里，因此**PR 可以全绿而主干红**。
+- **修法**：把白名单抽成 `WebSecurityConfig.LOCAL_ONLY_PUBLIC_PATHS`（含 `/height`），
+  顺手去掉原先重复的 `/consensus/blocks`、`/consensus/status` 两项；
+  新增 `WebSecurityConfigWhitelistTest` 6 例——钉的是 **AntPathMatcher 匹配语义**而不是
+  "数组里含这个字符串"（`/heights`、`/proxy/height`、`/consensus` 都必须算未命中），
+  并反向钉住"未列出的命令端点不得被顺手放行"。
+- **留给下一个人的一条**：探针/P2P 端点漏配白名单这件事，**只有在拒绝会显式回错时才看得见**。
+  以后新增这类路径，同步改 `LOCAL_ONLY_PUBLIC_PATHS` + 该用例。
+
 ## [2.74.0] - 2026-10-14
 
 ### L3 复验（v2.73.0 发布镜像实装）——22 项遗留缺陷修复，**全栈 24/24 Pod Ready**
