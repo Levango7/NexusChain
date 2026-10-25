@@ -1,12 +1,14 @@
 package org.nexus.bridge.messaging;
 
 import org.nexus.bridge.adapter.ChainAdapter;
+import org.nexus.bridge.adapter.SimulatedChainAdapter;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -70,7 +72,17 @@ public class MessagingRelayConfig {
     }
 
     /**
-     * 目标链适配器（可缺失：切片 1 未接真实链；构造器容忍空 Map）。
+     * 目标链适配器注册表（PLAN-037 切片 3）：容器适配器 + 模拟链合并。
+     *
+     * <p><b>键语义</b>：{@link MessageExecutor} 以 {@code message.targetChain} 查
+     * 适配器，故注册表键必须是 {@link ChainAdapter#getChainId()}——而不是 Spring
+     * 收集 {@code Map<String, ChainAdapter>} 时的 bean 名（切片 1/2 遗留的装配
+     * 缺口，本切片修正：否则真实消息永远匹配不到适配器）。</p>
+     *
+     * <p>合并规则：容器中的适配器（如 {@code EthereumAdapter} 等 {@code @Component}）
+     * 按 chainId 归键；{@code nexus.bridge.messaging.simulated-target-chains}
+     * （逗号分隔，默认空）列出的模拟链用 {@link SimulatedChainAdapter} 补齐，
+     * <b>真实优先、模拟不覆盖同名链</b>。</p>
      */
     @Bean
     @ConditionalOnProperty(name = RELAY_ENABLED_PROPERTY, havingValue = "true")
@@ -78,8 +90,25 @@ public class MessagingRelayConfig {
             MessageFormatter formatter,
             MessageStore store,
             MessageConfig config,
+            @Value("${nexus.bridge.messaging.simulated-target-chains:}") String simulatedTargetChains,
             @Autowired(required = false) Map<String, ChainAdapter> targetAdapters) {
-        return new MessageExecutor(formatter, store, config, targetAdapters);
+        Map<String, ChainAdapter> registry = new LinkedHashMap<>();
+        if (targetAdapters != null) {
+            for (ChainAdapter adapter : targetAdapters.values()) {
+                if (adapter != null && adapter.getChainId() != null) {
+                    registry.put(adapter.getChainId(), adapter);
+                }
+            }
+        }
+        if (simulatedTargetChains != null) {
+            for (String raw : simulatedTargetChains.split(",")) {
+                String chainId = raw.trim();
+                if (!chainId.isEmpty() && !registry.containsKey(chainId)) {
+                    registry.put(chainId, new SimulatedChainAdapter(chainId));
+                }
+            }
+        }
+        return new MessageExecutor(formatter, store, config, registry);
     }
 
     @Bean

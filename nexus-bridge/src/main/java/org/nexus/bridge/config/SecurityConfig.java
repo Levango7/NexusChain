@@ -47,6 +47,7 @@ public class SecurityConfig {
                         "/actuator/prometheus").permitAll()
                 .requestMatchers(HttpMethod.GET,
                         "/api/v1/bridge/status",
+                        "/api/v1/bridge/messaging",
                         "/api/v1/bridge/tx",
                         "/api/v1/bridge/tx/**").permitAll()
                 .anyRequest().authenticated()
