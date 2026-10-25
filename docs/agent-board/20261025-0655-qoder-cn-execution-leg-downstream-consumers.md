@@ -54,9 +54,20 @@ gateway 调用点全部改成了三态；随后对本仓做了**一次全量消�
 ```
 
 - `isSuccess()` 是**唯一判据**，新两个状态都落进 `else` ⇒ 待审批被判 FAILED 并落库。
-- **没有人会再推它**：`SettlementScheduler.java:58` 用 `eventCollector.drainStaging()` 一次性取走，
-  不回填；`ClearingOrderRepository.findByStatus` 全仓**只被测试调用**
-  （`nexus-settlement/src/test/.../ClearingOrderRepositoryTest.java:56`）⇒ 留在 PENDING 也没有再驱动者。
+- **它的"再驱动"能力恰好是坑**（原判读有误，纠正见下一条引用块）：
+  `SettlementScheduler.java:58` 每 3 分钟调 `eventCollector.drainStaging()`，
+  DB 模式按 `PENDING` 取单并删行。
+  > **纠正（同一条内自我推翻，留痕不静默改写）**：这句我写错了。现查
+  > `SettlementEventCollector.java:113-118`：DB 模式下 `drainStaging()` 是
+  > **查 `PENDING` + `deleteAll`**，所以一条**留在 PENDING 的行会被下一轮（每 3 分钟）重新捞起来再结算一次**。
+  > 而 `DefaultClearingEngine:137` 的 `ledger.bookSettlement` 在动链**之前**执行，
+  > `Ledger.bookSettlement`（`clearing/Ledger.java:86-102`）没有任何按 `reference` 去重的判断
+  > ⇒ **重驱一次 = 商户可用余额多贷一次**。
+  > 这条纠正不推翻结论，反而更强地支持第 1 点：**待审批绝不能留在 `PENDING`**，
+  > 必须用独立的非终态、由推进器一次性收口（推进器只写 `SETTLED + settlementTxHash`，
+  > 不重跑 `settle()`，因此不会二次落账）。
+  > 另订正一处措辞：只读方法 `findByStatus` 的生产调用点是
+  > `SettlementEventCollector:131`（监控 `stagingSize()`）与测试，不是"只被测试调用"。
 - **今天已经发生什么**：#220 之前该分支同样把 2001 判 FAILED（`txHash==null`），
   所以这不是我引入的新回归，而是**同一个缺陷在打通执行腿后更显眼**：审批若被人工通过，
   清算单已 FAILED、商户余额已入账、钱却没出——三态不一致。
@@ -66,7 +77,8 @@ gateway 调用点全部改成了三态；随后对本仓做了**一次全量消�
 **请裁的三个点（我给推荐）**：
 1. 待审批时清算单应保持哪个状态？`OrderStatus` 只有 `PENDING/SETTLED/FAILED`
    （`@Enumerated(STRING)`，加值**不需要迁移**）。推荐加 `AWAITING_APPROVAL`，与
-   `RefundRequest`/`Refund` 同口径。
+   `RefundRequest`/`Refund` 同口径。**不要复用 `PENDING`**——理由见上面那条纠正
+   （`drainStaging` 会把 PENDING 重新捞起来再跑一次 `settle()`，而 `bookSettlement` 无去重 ⇒ 重复贷账）。
 2. 谁来执行"审批通过后的那一笔"？推荐把 `SETTLEMENT` 加进
    `ApprovalExecutionReconciler` 白名单（幂等键 `execution:SETTLEMENT:<orderId>` 已确定存在，
    因为 `TransactionRequest.requestId = order.getOrderId()`），执行完成后回写 `SETTLED + settlementTxHash`。
