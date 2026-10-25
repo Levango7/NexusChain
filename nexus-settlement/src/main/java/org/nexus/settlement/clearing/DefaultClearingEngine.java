@@ -108,7 +108,21 @@ public class DefaultClearingEngine implements ClearingEngine {
 
         BigDecimal netAmount = BigDecimal.ZERO;
         for (ClearingOrder order : orders) {
-            ClearingOrder settled = settle(order);
+            ClearingOrder settled;
+            try {
+                settled = settle(order);
+            } catch (RuntimeException e) {
+                // 关键：drainStaging 已经把这批 PENDING 行删掉并提交了（见类注释）。
+                // 单笔抛异常若不在此收口，batchClear 会整批中断、调度器只记日志，
+                // 于是"账已贷、链未付、订单行也不存在"——记录静默丢失且永不重试。
+                // 这里把异常单笔落为 FAILED 并持久化，其余单子继续结算（不改变记账顺序）。
+                settled = order;
+                settled.setStatus(ClearingOrder.OrderStatus.FAILED);
+                log.error("settle threw unexpectedly, marking order FAILED to keep the audit trail "
+                                + "(batch continues): orderId={}, error={}",
+                        order.getOrderId(), e.toString(), e);
+                persistOrderState(settled);
+            }
             if (settled.getStatus() == ClearingOrder.OrderStatus.SETTLED && settled.getAmount() != null) {
                 netAmount = netAmount.add(settled.getAmount());
             }
