@@ -154,9 +154,10 @@ public class SyncManager implements Plugin, ApplicationListener<NewBlockMinedEve
     private final java.util.concurrent.atomic.AtomicBoolean catchUpRequestInFlight =
             new java.util.concurrent.atomic.AtomicBoolean(false);
 
-    /** 在途窗口的请求上界与发出时刻（完成/超时判定用）。 */
+    /** 在途窗口的请求上界、发出时刻、请求起点（完成/部分完成判定用）。 */
     private volatile long catchUpWindowStop = 0L;
     private volatile long catchUpIssuedAtMillis = 0L;
+    private volatile long catchUpRequestedFrom = -1L;
 
     /** 防打转：连续零推进计数（原子自增，SpotBugs VO_VOLATILE_INCREMENT）/ 上次 best / 暂停截止。 */
     private final java.util.concurrent.atomic.AtomicInteger catchUpStallCount =
@@ -345,6 +346,14 @@ public class SyncManager implements Plugin, ApplicationListener<NewBlockMinedEve
         }
     }
 
+    /**
+     * PLAN-036：单条 GetBlocks 响应的体积预算（3MB）。
+     *
+     * <p>取值依据：{@code Util} 的分片阈值是 4MB−128KB=3.5MB，gRPC 客户端默认入站
+     * 上限 4MB；取 3MB 给 Message 包装/编码开销留裕量。</p>
+     */
+    private static final long MAX_BLOCKS_MESSAGE_BUDGET = 3L * 1024 * 1024;
+
     private void onGetBlocks(Context context, PeerServer server) {
         NexusChainOuterClass.GetBlocks getBlocks = context.getPayload().getGetBlocks();
         GetBlockQuery query = new GetBlockQuery(getBlocks.getStartHeight(), getBlocks.getStopHeight()).clip(maxBlocksPerTransfer, getBlocks.getClipDirection() == NexusChainOuterClass.ClipDirection.CLIP_INITIAL);
@@ -354,13 +363,46 @@ public class SyncManager implements Plugin, ApplicationListener<NewBlockMinedEve
         if (blocksToSend == null || blocksToSend.size() == 0) {
             return;
         }
-        NexusChainOuterClass.Blocks resp = NexusChainOuterClass.Blocks.newBuilder().addAllBlocks(Utils.encodeBlocks(blocksToSend)).build();
-        List<NexusChainOuterClass.Blocks> divided = Util.split(resp);
-        if (divided.size() == 0){
+        // PLAN-036：按序列化体积二次裁剪，保证**整个响应单消息**沿入站通道回送。
+        // 旧实现把超限响应 `Util.split` 成多片，只有第 1 片走 `context.response`
+        // （入站通道），其余片 `server.dial(remote)` **回拨**——星型拓扑下 A→B 拨号
+        // 必失败，请求方永远只收到 1 片 ⇒ 窗口反复请求同一区间、缺口停住
+        // （多机实测：B 卡 13955，窗口 [13955..14210] 每 30s 重请求）。
+        // 超限尾部留在库里，由请求方下一轮窗口（30s 常规 / 5s 加速）带走。
+        List<Block> sized = capBySize(blocksToSend,
+                b -> Utils.encodeBlock(b).getSerializedSize(), MAX_BLOCKS_MESSAGE_BUDGET);
+        NexusChainOuterClass.Blocks resp = NexusChainOuterClass.Blocks.newBuilder()
+                .addAllBlocks(Utils.encodeBlocks(sized)).build();
+        if (resp.getSerializedSize() > MAX_BLOCKS_MESSAGE_BUDGET) {
+            // 单块就超预算：serve 不了（不降级为多片回拨——那在星型拓扑下必丢失）。
+            logger.warn("get blocks skipped: first block at height {} alone exceeds message budget ({} bytes > {})",
+                    sized.get(0).nHeight, resp.getSerializedSize(), MAX_BLOCKS_MESSAGE_BUDGET);
             return;
         }
-        context.response(divided.get(0));
-        divided.subList(1, divided.size()).forEach(o -> server.dial(context.getPayload().getRemote(), o));
+        if (sized.size() < blocksToSend.size()) {
+            logger.info("get blocks size-capped: serving {} of {} blocks in this window (budget {} bytes)",
+                    sized.size(), blocksToSend.size(), MAX_BLOCKS_MESSAGE_BUDGET);
+        }
+        context.response(resp);
+    }
+
+    /**
+     * 按序列化体积裁剪（保持顺序；首块必留——单块超限由调用方告警处理）。
+     * 纯函数，便于单测（尺寸由 {@code sizeOf} 注入）。
+     */
+    static List<Block> capBySize(List<Block> blocks, java.util.function.ToIntFunction<Block> sizeOf,
+                                 long budget) {
+        List<Block> out = new ArrayList<>();
+        long total = 0;
+        for (Block b : blocks) {
+            int sz = sizeOf.applyAsInt(b);
+            if (!out.isEmpty() && total + sz > budget) {
+                break;
+            }
+            out.add(b);
+            total += sz;
+        }
+        return out;
     }
 
     private void onBlocks(Context context, PeerServer server) {
@@ -701,6 +743,7 @@ public class SyncManager implements Plugin, ApplicationListener<NewBlockMinedEve
         if (peerHeight > knownMaxPeerHeight) {
             knownMaxPeerHeight = peerHeight;
         }
+        catchUpRequestedFrom = best.nHeight;
 
         // 拉黑创世区块不相同的节点
         if (!Arrays.equals(genesis.getHash(), status.getGenesisHash().toByteArray())) {
@@ -770,11 +813,14 @@ public class SyncManager implements Plugin, ApplicationListener<NewBlockMinedEve
             BlocksCache blocksWritable = orphanBlocksManager.removeAndCacheOrphans(validBlocks);
             pendingBlocksManager.addPendingBlocks(blocksWritable);
         }
-        // PLAN-033（切片 A）：在途窗口完成判定——本批最高高度到达/越过请求上界即视为
-        // 完成，允许加速调度续拉下一窗口（未到达则由 20s 超时兜底放行）。
-        if (catchUpRequestInFlight.get() && blocks.size() > 0
-                && blocks.get(blocks.size() - 1).nHeight >= catchUpWindowStop) {
-            catchUpRequestInFlight.set(false);
+        // PLAN-033（切片 A）+PLAN-036：在途窗口完成判定——本批最高高度到达/越过请求
+        // 上界即视为完成；**部分窗口也算进展**（PLAN-036 体积裁剪后单次可能只送回
+        // 一部分块，越过请求起点即算推进），允许加速调度续拉下一窗口。
+        if (catchUpRequestInFlight.get() && blocks.size() > 0) {
+            long receivedMax = blocks.get(blocks.size() - 1).nHeight;
+            if (receivedMax >= catchUpWindowStop || receivedMax > catchUpRequestedFrom) {
+                catchUpRequestInFlight.set(false);
+            }
         }
     }
 
