@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # NexusChain nexus-core 多阶段生产 Dockerfile
 # ============================================================================
 # REQ-01 / T01：多阶段构建（Gradle + JDK 17 → distroless java17 nonroot）
@@ -22,6 +23,20 @@
 
 # === Stage 1: builder ===
 FROM gradle:8.14-jdk17 AS builder
+
+# 依赖缓存（本项修复）：把 GRADLE_USER_HOME 挂到 BuildKit cache mount。
+#
+# 修复前的实际行为：`RUN ./gradlew` 这一层每次源码变动就失效，gradle 会重新下载
+#   - gradle 发行版（wrapper 解压 ~130MB）
+#   - 全部第三方依赖（数百 MB）
+# 两者都要访问 Maven Central。瞬时抖动曾直接打红 nexus-gateway 镜像构建
+# （CI 已有 3 次重试兜底，但那是缓解不是根治）。
+#
+# 显式设 GRADLE_USER_HOME 而不依赖 HOME 推断：gradle 镜像默认 User=root 且未设该变量，
+# 上游一旦改默认用户，mount 路径会与 gradle 实际使用目录不一致 —— 构建仍成功、
+# 缓存却不再命中，属静默失效。显式声明后这个一致性在文件里可见。
+ENV GRADLE_USER_HOME=/root/.gradle
+
 USER root
 WORKDIR /workspace
 
@@ -54,7 +69,8 @@ COPY nexus-wallet-service ./nexus-wallet-service
 # copyDependencies 任务：复制所有外部依赖 jar 到 build/libs/lib/
 # 跳过测试与 jacoco 报告，加速构建
 # TRAVIS_BRANCH=master 让 build.gradle 的 gitCurBranch() 不调用 git（gradle 镜像无 git）
-RUN TRAVIS_BRANCH=master ./gradlew :nexus-core:nexus-core:jar :nexus-core:nexus-core:copyDependencies --no-daemon -x test -x jacocoTestReport \
+RUN --mount=type=cache,target=/root/.gradle,sharing=locked \
+    TRAVIS_BRANCH=master ./gradlew :nexus-core:nexus-core:jar :nexus-core:nexus-core:copyDependencies --no-daemon -x test -x jacocoTestReport \
     || { echo "[retry] 首次构建失败（疑似 Maven Central 瞬时抖动），30s 后重试一次"; sleep 30; TRAVIS_BRANCH=master ./gradlew :nexus-core:nexus-core:jar :nexus-core:nexus-core:copyDependencies --no-daemon -x test -x jacocoTestReport; }
 
 # 提取 thin jar（排除 fat jar *-all.jar）并重命名为 app.jar
