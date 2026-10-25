@@ -66,6 +66,24 @@ public class BlockWriteStats {
     }
 
     /**
+     * 最近一次写入异常（跳块或状态更新超时）的高度（无异常为 -1）。
+     *
+     * @return 高度；-1 表示进程启动以来尚未记录异常
+     */
+    public long lastFailureHeight() {
+        return lastFailureHeight.get();
+    }
+
+    /**
+     * 最近一次写入异常的时刻（epoch millis；无异常为 0）。
+     *
+     * @return epoch millis；0 表示尚未记录异常
+     */
+    public long lastFailureAtMillis() {
+        return lastFailureAtMillis.get();
+    }
+
+    /**
      * 只读快照（供观测端点）。
      *
      * @return 字段：writeFailures / stateUpdateTimeouts / lastFailureHeight（最新异常高度）/

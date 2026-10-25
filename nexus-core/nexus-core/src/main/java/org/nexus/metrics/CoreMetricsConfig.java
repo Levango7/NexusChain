@@ -30,6 +30,10 @@ import org.springframework.context.annotation.Configuration;
  * <h2>线程安全</h2>
  * <p>Gauge 供值函数在 Prometheus 抓取线程内执行；{@code StateDB.getBestBlock()}
  * 本身被共识/同步线程并发调用（既有契约），读取单字段无状态突变。</p>
+ *
+ * <p>区块持久化信号（写失败/状态超时/outbox 积压与可读性）由同一包的
+ * {@link BlockPersistenceMetrics} 注册（PLAN-040）——其 DB 读在 30s 采样线程，
+ * 抓取不查库，故与此 Gauge 同样不会阻塞抓取。</p>
  */
 @Configuration
 public class CoreMetricsConfig {

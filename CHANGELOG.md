@@ -4,6 +4,34 @@
 
 ## [Unreleased]
 
+### 区块持久化指标与告警对接（PLAN-040，2026-10-26）
+
+roadmap #29 ③ 的"告警系统未对接"收口：PLAN-039 的端点只有人工轮询才有意义，
+本次把信号接进 Prometheus/Micrometer，并补齐 4 条告警规则。
+
+- **`BlockPersistenceMetrics`**（新，`org.nexus.metrics`，`MeterBinder`）：
+  - `nexus_block_writer_write_failures_total` / `_state_update_timeouts_total`
+    （**FunctionCounter**，单调计数；口径同 PLAN-039：尝试次数，不是不同区块数）；
+  - `nexus_block_writer_last_failure_height` / `_age_seconds`（Gauge）；
+  - `nexus_block_outbox_{enabled,memory_pending,database_pending,
+    oldest_pending_age_seconds,max_attempts,readable}`（Gauge）。
+- **抓取安全**：写失败/超时是纯内存读；outbox 的库读放在 **30s 定时采样**，
+  Gauge 只读 volatile 缓存——**PG 抖动不会阻塞 `/actuator/prometheus`**，避免
+  整页抓取超时把 `nexuschain_block_height`/链停摆告警一起打哑。采样前 outbox
+  系列为 **NaN**（不冒充 0）；库不可读时 DB 系列 NaN + `readable=0`，
+  并保留上一次成功值。
+- **告警（`deploy/k8s/50-prometheus-rules.yaml` 新增 group）**：
+  `BlockWriteFailuresDetected`（warning）、`BlockWriterStateUpdateTimeouts`
+  （critical）、`BlockPersistenceBacklog`（warning，内存/持久化积压 ≥10min）、
+  `BlockOutboxUnreadable`（warning）；4 条 runbook 已补进
+  `docs/runbooks/alerts.md`（告警总数 11→15）。
+- **`BlockWriteStats`** 增 `lastFailureHeight()` / `lastFailureAtMillis()` getter
+  （供 Gauge 读取，避免每次抓取分配快照 Map）。
+- **测试**：`BlockPersistenceMetricsTest` 6 例（计数/最近失败/快照映射/NaN 语义/
+  未装配/采样异常保留上次值）；定向回归绿。
+- **如实边界**：进程内指标，重启归零；outbox 指标最多滞后 30s；物理多机/
+  真实断网断电与真实"永久不可恢复"行仍未验证（PLAN-040 §五）。
+
 ### 区块写库失败与 outbox 滞留可见性（PLAN-039，2026-10-26）
 
 roadmap #29 的观测面收口：写库失败此前**只进日志**，outbox 滞留只有行数——
