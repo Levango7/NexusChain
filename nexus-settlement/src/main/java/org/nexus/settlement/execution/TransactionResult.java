@@ -126,6 +126,25 @@ public class TransactionResult {
         return status == Status.SUCCESS;
     }
 
+    /**
+     * 是否"大额签名待人工审批"（{@link Status#AWAITING_APPROVAL}）。
+     *
+     * <p>非终态且<b>不是失败</b>：钱未出，调用方须保存 {@link #getApprovalId()}
+     * 并保持可推进的业务状态，由审批执行腿在完成审批后收口。</p>
+     */
+    public boolean isAwaitingApproval() {
+        return status == Status.AWAITING_APPROVAL;
+    }
+
+    /**
+     * 是否"签名已执行但结果不可核对"（{@link Status#EXECUTED_UNVERIFIED}）。
+     *
+     * <p>资金可能已转出：既不能记成功也不能记失败，<b>禁止自动重试</b>，转人工核对。</p>
+     */
+    public boolean isExecutedUnverified() {
+        return status == Status.EXECUTED_UNVERIFIED;
+    }
+
     // --- Getters and Setters ---
 
     public String getTxHash() { return txHash; }

@@ -1086,6 +1086,23 @@ FAILED，审批通过后也没有任何调用方去执行。按裁决"调用方�
   `ConnectorRefundResult` 新增 `pending + approvalId` 表达"待审批"。
 - **未做（按裁决 §五）**：wallet 侧提币执行腿不动——它是"平台审批 + 签名审批"双层审批的
   特例，需 (a)/(b)/(c) 之一签字；本 PR 仅补 SDK DTO 对新状态的反序列化兼容。
+- **执行腿下游消费方（G4）**：全仓核查发现执行通道打通后仍有消费方表达不了新状态。
+  本切片修了活的那条——**结算（settlement）**：
+  - `ClearingOrder.OrderStatus` 增 `AWAITING` / `UNVERIFIED`（**非终态**）。刻意用短名：
+    列是 `VARCHAR(16)`，`AWAITING_APPROVAL`/`RECONCILIATION_NEEDED` 装不下，
+    而复用 `PENDING` 更危险——`SettlementEventCollector.drainStaging()` 每轮重捞 PENDING
+    再跑一次 `settle()`，`Ledger.bookSettlement` 无按 reference 去重 ⇒ **重驱即重复贷账**。
+  - `DefaultClearingEngine.settle` 先拦 `isAwaitingApproval()` / `isExecutedUnverified()`
+    再走 `isSuccess()` 单边门；新增 `completeAfterSigningApproval` /
+    `markSigningApprovalRejected` / `markSigningApprovalUnverified` 三个**只改状态、不动账**
+    的收口方法（只认 AWAITING 入态，已终态不改写）。
+  - 新增 `SettlementApprovalReconciler`（ShedLock 每 2 分钟，幂等键
+    `execution:SETTLEMENT:<orderId>`）按审批结果一次性收口；`persistTerminalState` 更名
+    `persistOrderState`（它也写非终态了）。
+  - 同形但**无生产调用方**的 `DefaultFundSweepService` 本切片不动（现查：`FundSweepService`
+    只被它自己的测试引用，订单也不落库），已随板子留言记录。
+  - **记账顺序（先贷账 `:137` 后动链）仍是既有缺陷**，属结算账务语义，未在本文改动，
+    见 `docs/agent-board/20261025-0655-qoder-cn-execution-leg-downstream-consumers.md` §二第 3 点。
 - **测试**：`SigningResponsesTest` 15 例（三态逐例钉死）、`SigningTransfersTest` 5 例、
   `ApprovalExecutionLinkTest` 4 例（requestKey/businessId 对偶）、
   `ApprovalExecutionReconcilerTest` 7 例（含白名单结构断言）、

@@ -32,4 +32,30 @@ public interface ClearingEngine {
      */
     org.nexus.settlement.reconciliation.ReconciliationReport reconcile(
             org.nexus.settlement.reconciliation.ReconciliationReport report);
+
+    /**
+     * 大额签名审批通过后收口一笔仍处于 {@code AWAITING} 的结算
+     * （由审批执行腿的推进器调用；<b>不重跑 {@link #settle}</b>，因此不会二次落账）。
+     *
+     * @param orderId           清算订单 ID（同时是审批链接的幂等键后缀）
+     * @param settlementTxHash  结算转账的交易哈希
+     * @return true = 已把该单从 AWAITING 落为 SETTLED
+     */
+    boolean completeAfterSigningApproval(String orderId, String settlementTxHash);
+
+    /**
+     * 审批被拒/过期（确定未动账）：把 {@code AWAITING} 的单记为 FAILED。
+     *
+     * @param reason 拒绝原因（供日志与差错追溯）
+     * @return true = 已改写
+     */
+    boolean markSigningApprovalRejected(String orderId, String reason);
+
+    /**
+     * 审批腿执行结果不可核对：把 {@code AWAITING} 的单转 {@code UNVERIFIED}
+     * （禁止自动重试，等人工核对）。
+     *
+     * @return true = 已改写
+     */
+    boolean markSigningApprovalUnverified(String orderId, String reason);
 }
