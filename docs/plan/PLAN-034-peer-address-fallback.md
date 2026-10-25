@@ -80,3 +80,20 @@ LAN IP），但**同一对端的另一地址可达**（bootstrap 配置里的网
   原因 + listen/advertise 解耦的 multi-homing）。
 - 结论：**v2 修复了"兜底不触发"这个真 bug（单测 4 例锁定）；但"换地址后必然
   可达"不成立**——端到端恢复依赖后续对 CANCELLED 的定位。
+
+### v3（PLAN-035，本 PR）——兜底全链路打通
+CANCELLED 根因（两层，均在验收中定位）：
+1. **Context 继承**：兜底拨号是在第一次拨失败的 observer 回调里就地发起的，
+   gRPC Java 在该回调链返回时取消该 call 的 Context，新 RPC 继承已取消的
+   Context ⇒ 毫秒级 CANCELLED。修复：`Context.current().fork()` 生子独立
+   Context 里发起兜底拨号（父取消不传导）。
+2. **响应被丢**：兜底回调只处理 error、把响应消息 `m` 丢掉 ⇒ `GetStatus` 的
+   STATUS 响应无法驱动"请求下一窗口"（兜底"成功"却无追块）。修复：兜底回调与
+   正常拨路同语义（`m` 也回灌 `onMessage`）。
+- **实测（B 空库 + A 广告 host.docker.internal，零人工干预）**：
+  兜底拨号 **×7627、零失败**；B 高度 **0 → 13955（8 分钟，~1750 块/分，
+  远高于直连路径的 ~190/分——省掉了每次 3s 的拨号超时）**；窗口请求 ×78。
+- **仍未收官的一环（如实）**：B 在 13955 停住，同窗口 `[13955..14210]` 每 30s
+  重请求但拿不到 Blocks——怀疑 A 侧对 B 的响应/回拨路径（A→B 拨号在星型拓扑
+  下本就 CANCELLED）。记为后续项（PLAN-036 候选：GetBlocks 响应通道 +
+  A→B 可达性）。
