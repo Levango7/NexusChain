@@ -318,14 +318,31 @@ public class PendingBlocksManager {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("memoryPending", storageRetryBlocks.size());
         int dbPending = -1;
+        long oldestCreatedAt = -1L;
+        int maxAttempts = -1;
         if (blockOutbox != null) {
             try {
                 dbPending = blockOutbox.pendingCount();
             } catch (RuntimeException e) {
                 dbPending = -1;
             }
+            try {
+                oldestCreatedAt = blockOutbox.oldestCreatedAt();
+            } catch (RuntimeException e) {
+                oldestCreatedAt = -1L;
+            }
+            try {
+                maxAttempts = blockOutbox.maxAttempts();
+            } catch (RuntimeException e) {
+                maxAttempts = -1;
+            }
         }
         data.put("databasePending", dbPending);
+        // PLAN-039（roadmap #29 ②）：滞留可见性——行数不清零 + 最老行年龄大 /
+        // 重试次数高 ⇒ 有永远写不进去的区块；本类不自动清理（outbox 行是恢复
+        // 数据），由运维据 age/attempts 决策。
+        data.put("oldestPendingCreatedAt", oldestCreatedAt);
+        data.put("maxAttempts", maxAttempts);
         data.put("enabled", blockOutbox != null);
         return data;
     }

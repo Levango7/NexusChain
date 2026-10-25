@@ -173,6 +173,40 @@ public class JdbcPendingBlockOutbox implements PendingBlockOutbox {
         }
     }
 
+    /**
+     * 最老待补写行的创建时刻（PLAN-039；无行/不可读返回 -1）。
+     */
+    @Override
+    public long oldestCreatedAt() {
+        if (!enabled()) {
+            return -1L;
+        }
+        try {
+            Long oldest = jdbc.queryForObject(
+                    "SELECT MIN(created_at) FROM pending_block_outbox", Long.class);
+            return oldest == null ? -1L : oldest;
+        } catch (RuntimeException e) {
+            return -1L;
+        }
+    }
+
+    /**
+     * 单行最大补写尝试次数（PLAN-039；无行/不可读返回 -1）。
+     */
+    @Override
+    public int maxAttempts() {
+        if (!enabled()) {
+            return -1;
+        }
+        try {
+            Integer max = jdbc.queryForObject(
+                    "SELECT COALESCE(MAX(attempts), -1) FROM pending_block_outbox", Integer.class);
+            return max == null ? -1 : max;
+        } catch (RuntimeException e) {
+            return -1;
+        }
+    }
+
     private boolean enabled() {
         return jdbc != null && encoder != null && decoder != null;
     }

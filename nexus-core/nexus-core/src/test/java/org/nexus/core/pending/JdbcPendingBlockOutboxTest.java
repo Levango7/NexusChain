@@ -108,4 +108,30 @@ class JdbcPendingBlockOutboxTest {
         disabled.enqueue(block(1));
         disabled.remove(block(1));
     }
+
+    @Test
+    void oldestCreatedAtAndMaxAttemptsReflectPendingRows() {
+        long before = System.currentTimeMillis();
+        Block b1 = block(21);
+        Block b2 = block(22);
+        outbox.enqueue(b1);
+        outbox.enqueue(b2);
+        outbox.markFailure(b2, "boom");
+
+        long oldest = outbox.oldestCreatedAt();
+        assertTrue(oldest >= before && oldest <= System.currentTimeMillis(),
+                "最老行创建时刻应位于入队前后，实际 " + oldest);
+        assertEquals(1, outbox.maxAttempts(), "b2 失败一次 → 最大 attempts=1");
+    }
+
+    @Test
+    void oldestCreatedAtAndMaxAttemptsReturnMinusOneWhenEmptyOrDisabled() {
+        assertEquals(-1L, outbox.oldestCreatedAt(), "无行 → -1");
+        assertEquals(-1, outbox.maxAttempts(), "无行 → -1");
+
+        JdbcPendingBlockOutbox disabled = new JdbcPendingBlockOutbox(null, codec, codec);
+        disabled.init();
+        assertEquals(-1L, disabled.oldestCreatedAt(), "未装配 → -1");
+        assertEquals(-1, disabled.maxAttempts(), "未装配 → -1");
+    }
 }
