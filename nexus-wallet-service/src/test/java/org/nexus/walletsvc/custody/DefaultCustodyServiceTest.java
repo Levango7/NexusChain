@@ -3,6 +3,7 @@ package org.nexus.walletsvc.custody;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
@@ -13,8 +14,11 @@ import org.nexus.sdk.wallet.WalletTransactionResult;
 import org.nexus.sdk.wallet.WithdrawalRequest;
 import org.nexus.walletsvc.approval.WithdrawalApprovalService;
 import org.nexus.walletsvc.entity.CustodyBalanceEntity;
+import org.nexus.walletsvc.entity.CustodyTransferPendingEntity;
+import org.nexus.walletsvc.entity.CustodyTransferPendingEntity.PendingStatus;
 import org.nexus.walletsvc.execution.OnChainExecutionClient;
 import org.nexus.walletsvc.repository.CustodyBalanceRepository;
+import org.nexus.walletsvc.repository.CustodyTransferPendingRepository;
 import org.springframework.beans.factory.ObjectProvider;
 
 import java.math.BigDecimal;
@@ -27,6 +31,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -61,11 +67,14 @@ class DefaultCustodyServiceTest {
 
     @Mock private WithdrawalApprovalService approvalService;
     @Mock private CustodyBalanceRepository custodyBalanceRepository;
+    @Mock private CustodyTransferPendingRepository pendingRepository;
 
     private CustodyPolicy policy;
     private DefaultCustodyService service;
     private CustodyBalanceEntity hotEntity;
     private CustodyBalanceEntity coldEntity;
+    private CustodyTransferPendingRecorder pendingRecorder;
+    private OnChainExecutionClient stubClient;
 
     @BeforeEach
     void setUp() {
@@ -92,8 +101,15 @@ class DefaultCustodyServiceTest {
         when(custodyBalanceRepository.save(any(CustodyBalanceEntity.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
+        // 待处置登记表：用真实 Recorder（覆盖映射/截断逻辑）+ Mock 仓储（断言落库内容）
+        pendingRecorder = new CustodyTransferPendingRecorder(pendingRepository);
+        when(pendingRepository.findByRequestKey(anyString())).thenReturn(Optional.empty());
+        when(pendingRepository.save(any(CustodyTransferPendingEntity.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
         service = new DefaultCustodyService(
-                provider(policy), provider(approvalService), custodyBalanceRepository, provider(realChainClient()));
+                provider(policy), provider(approvalService), custodyBalanceRepository,
+                provider(realChainClient()), provider(pendingRecorder));
     }
 
     /** 返回真实链上哈希的桩执行客户端（simulated=false，模拟已上链）。 */
@@ -121,6 +137,34 @@ class DefaultCustodyServiceTest {
             @Override public T getIfAvailable() { return value; }
             @Override public T getIfUnique() { return value; }
         };
+    }
+
+    /** 执行通道桩：固定返回给定结果（用于三种结果的分支断言）。 */
+    private OnChainExecutionClient clientReturning(WalletTransactionResult result) {
+        stubClient = mock(OnChainExecutionClient.class);
+        when(stubClient.execute(any(WalletTransactionRequest.class))).thenReturn(result);
+        return stubClient;
+    }
+
+    private DefaultCustodyService serviceReturning(WalletTransactionResult result) {
+        return new DefaultCustodyService(provider(policy), provider(approvalService),
+                custodyBalanceRepository, provider(clientReturning(result)), provider(pendingRecorder));
+    }
+
+    /** 取出 Recorder 实际落库的待处置行。 */
+    private CustodyTransferPendingEntity savedPending() {
+        ArgumentCaptor<CustodyTransferPendingEntity> captor =
+                ArgumentCaptor.forClass(CustodyTransferPendingEntity.class);
+        verify(pendingRepository).save(captor.capture());
+        return captor.getValue();
+    }
+
+    /** 取出发给执行通道的原始请求（用于断言幂等键一致性）。 */
+    private WalletTransactionRequest sentRequest() {
+        ArgumentCaptor<WalletTransactionRequest> captor =
+                ArgumentCaptor.forClass(WalletTransactionRequest.class);
+        verify(stubClient).execute(captor.capture());
+        return captor.getValue();
     }
 
     /** Stub the approval service to accept the given approvalId (simulate APPROVED → EXECUTED). */
@@ -169,7 +213,7 @@ class DefaultCustodyServiceTest {
     void depositToCold_noExecutionClientFailsClosed_andBalanceUnchanged() {
         // Fail-closed：无链上执行通道时抛异常，余额不被扣减（账面不伪造成交）
         DefaultCustodyService svc = new DefaultCustodyService(
-                provider(policy), provider(approvalService), custodyBalanceRepository, provider(null));
+                provider(policy), provider(approvalService), custodyBalanceRepository, provider(null), provider(pendingRecorder));
         svc.seedBalances(new BigDecimal("1000"), new BigDecimal("9000"));
 
         IllegalStateException ex = assertThrows(IllegalStateException.class,
@@ -242,7 +286,7 @@ class DefaultCustodyServiceTest {
     void depositToCold_noPolicySkipsCapCheck() {
         // 无 custodyPolicy 时冷钱包上限校验跳过
         DefaultCustodyService svc = new DefaultCustodyService(
-                provider(null), provider(approvalService), custodyBalanceRepository, provider(realChainClient()));
+                provider(null), provider(approvalService), custodyBalanceRepository, provider(realChainClient()), provider(pendingRecorder));
         svc.seedBalances(new BigDecimal("1000"), BigDecimal.ZERO);
 
         String txHash = svc.depositToCold(COLD_ADDR, new BigDecimal("1000"));
@@ -250,6 +294,125 @@ class DefaultCustodyServiceTest {
         assertTrue(txHash.startsWith("0xREALTX"));
         assertEquals(0, BigDecimal.ZERO.compareTo(svc.getHotBalance()));
         assertEquals(0, new BigDecimal("1000").compareTo(svc.getColdBalance()));
+    }
+
+    // ==================== 三种执行结果的分支（G7，Board §五） ====================
+
+    @Test
+    void depositToCold_awaitingApproval_rollsBackAndRecordsApprovalOpen() {
+        // 大额转人工审批：钱没出 → 仍然抛 IllegalStateException 回滚，但要留一条 APPROVAL_OPEN
+        DefaultCustodyService svc = serviceReturning(new WalletTransactionResult(
+                null, WalletTransactionResult.Status.AWAITING_APPROVAL, 0, null, false, "APR-77"));
+        svc.seedBalances(new BigDecimal("1000"), BigDecimal.ZERO);
+
+        IllegalStateException ex = assertThrows(IllegalStateException.class,
+                () -> svc.depositToCold(COLD_ADDR, new BigDecimal("400")));
+        assertTrue(ex.getMessage().contains("awaiting signing approval"), ex.getMessage());
+        assertTrue(ex.getMessage().contains("APR-77"), ex.getMessage());
+
+        CustodyTransferPendingEntity pending = savedPending();
+        assertEquals(PendingStatus.APPROVAL_OPEN, pending.getStatus());
+        assertEquals("APR-77", pending.getApprovalId());
+        assertEquals("SWEEP", pending.getTransferType());
+        assertEquals(COLD_ADDR, pending.getAddress());
+        assertEquals(0, new BigDecimal("400").compareTo(pending.getAmount()));
+        // 幂等键与发给执行通道的 requestId 一致 ⇒ 可直接映射到 gateway 审批链接
+        // requestKey（execution:SWEEP:<requestId>）
+        assertEquals(sentRequest().getRequestId(), pending.getRequestKey());
+    }
+
+    @Test
+    void depositToCold_executedUnverified_throwsUnverifiedAndRecordsVerifyRequired() {
+        // 已执行但不可核对：不能当成功（无哈希），也不能当确定失败（回滚会造出反向对账缺口）
+        DefaultCustodyService svc = serviceReturning(new WalletTransactionResult(
+                null, WalletTransactionResult.Status.EXECUTED_UNVERIFIED, 0,
+                "signed but txHash missing", false, "APR-88"));
+        svc.seedBalances(new BigDecimal("1000"), BigDecimal.ZERO);
+
+        CustodyTransferUnverifiedException ex = assertThrows(CustodyTransferUnverifiedException.class,
+                () -> svc.depositToCold(COLD_ADDR, new BigDecimal("400")));
+        assertEquals(sentRequest().getRequestId(), ex.getRequestKey());
+        assertEquals("APR-88", ex.getApprovalId());
+
+        CustodyTransferPendingEntity pending = savedPending();
+        assertEquals(PendingStatus.VERIFY_REQUIRED, pending.getStatus());
+        assertEquals("APR-88", pending.getApprovalId());
+        assertTrue(pending.getErrorNote().contains("txHash missing"), pending.getErrorNote());
+        // 冷热调整已在内存账面上生效；「提交而非回滚」由 noRollbackFor 决定，
+        // 真实事务行为由 CustodyTransferPendingIntegrationTest 实证。
+    }
+
+    @Test
+    void depositToCold_definiteFailure_rollsBackWithoutRecord() {
+        // 确定未动账（FAILED 且无哈希）：照旧回滚，且不该污染人工核对队列
+        DefaultCustodyService svc = serviceReturning(new WalletTransactionResult(
+                null, WalletTransactionResult.Status.FAILED, 0, "gateway unreachable", false));
+        svc.seedBalances(new BigDecimal("1000"), BigDecimal.ZERO);
+
+        IllegalStateException ex = assertThrows(IllegalStateException.class,
+                () -> svc.depositToCold(COLD_ADDR, new BigDecimal("400")));
+        assertTrue(ex.getMessage().contains("gateway unreachable"), ex.getMessage());
+        verify(pendingRepository, never()).save(any(CustodyTransferPendingEntity.class));
+    }
+
+    @Test
+    void depositToCold_recordingFailureDoesNotChangeMoneyDecision() {
+        // 落表失败绝不能把「不可核对」降级成「确定未出账」——异常类型必须仍是 Unverified
+        doThrow(new RuntimeException("db down")).when(pendingRepository)
+                .save(any(CustodyTransferPendingEntity.class));
+        DefaultCustodyService svc = serviceReturning(new WalletTransactionResult(
+                null, WalletTransactionResult.Status.EXECUTED_UNVERIFIED, 0, "no hash", false, "APR-99"));
+        svc.seedBalances(new BigDecimal("1000"), BigDecimal.ZERO);
+
+        assertThrows(CustodyTransferUnverifiedException.class,
+                () -> svc.depositToCold(COLD_ADDR, new BigDecimal("400")));
+    }
+
+    @Test
+    void depositToCold_pendingRecorderAbsentStillFailsClosed() {
+        // 未注入 Recorder（独立测试环境）：资金决策不变，仍抛 Unverified
+        DefaultCustodyService svc = new DefaultCustodyService(provider(policy), provider(approvalService),
+                custodyBalanceRepository,
+                provider(clientReturning(new WalletTransactionResult(null,
+                        WalletTransactionResult.Status.EXECUTED_UNVERIFIED, 0, "no hash", false))),
+                provider(null));
+        svc.seedBalances(new BigDecimal("1000"), BigDecimal.ZERO);
+
+        assertThrows(CustodyTransferUnverifiedException.class,
+                () -> svc.depositToCold(COLD_ADDR, new BigDecimal("400")));
+        verify(pendingRepository, never()).save(any(CustodyTransferPendingEntity.class));
+    }
+
+    @Test
+    void withdrawFromCold_executedUnverified_consumesApprovalAndRecordsPending() {
+        // 冷钱包出金不可核对：审批已被消耗（不可重放），余额保持提交，转人工核对
+        String approvalId = "WD-unverified-1";
+        stubApprovalOk(approvalId);
+        DefaultCustodyService svc = serviceReturning(new WalletTransactionResult(
+                null, WalletTransactionResult.Status.EXECUTED_UNVERIFIED, 0, "broadcast ack lost", false,
+                "APR-123"));
+        svc.seedBalances(BigDecimal.ZERO, new BigDecimal("9000"));
+
+        assertThrows(CustodyTransferUnverifiedException.class,
+                () -> svc.withdrawFromCold(COLD_ADDR, new BigDecimal("300"), approvalId));
+        verify(approvalService).executeApprovedWithdrawal(approvalId);
+        CustodyTransferPendingEntity pending = savedPending();
+        assertEquals(PendingStatus.VERIFY_REQUIRED, pending.getStatus());
+        assertEquals("WITHDRAWAL", pending.getTransferType());
+    }
+
+    @Test
+    void withdrawFromCold_awaitingApproval_recordsApprovalOpen() {
+        // 待审批：抛 IllegalStateException（余额回滚），签名侧审批请求仍开放，登记 APPROVAL_OPEN
+        String approvalId = "WD-awaiting-1";
+        stubApprovalOk(approvalId);
+        DefaultCustodyService svc = serviceReturning(new WalletTransactionResult(
+                null, WalletTransactionResult.Status.AWAITING_APPROVAL, 0, null, false, "APR-456"));
+        svc.seedBalances(BigDecimal.ZERO, new BigDecimal("9000"));
+
+        assertThrows(IllegalStateException.class,
+                () -> svc.withdrawFromCold(COLD_ADDR, new BigDecimal("300"), approvalId));
+        assertEquals(PendingStatus.APPROVAL_OPEN, savedPending().getStatus());
     }
 
     // ==================== withdrawFromCold ====================
@@ -315,7 +478,7 @@ class DefaultCustodyServiceTest {
     void withdrawFromCold_noApprovalServiceThrows() {
         // fail closed：审批服务缺失时冷钱包出金整体禁用（且执行通道缺失，双闸门均 fail-closed）
         DefaultCustodyService svc = new DefaultCustodyService(
-                provider(policy), provider(null), custodyBalanceRepository, provider(realChainClient()));
+                provider(policy), provider(null), custodyBalanceRepository, provider(realChainClient()), provider(pendingRecorder));
         svc.seedBalances(BigDecimal.ZERO, new BigDecimal("1000"));
 
         IllegalStateException ex = assertThrows(
@@ -391,7 +554,7 @@ class DefaultCustodyServiceTest {
     @Test
     void rebalance_noPolicySkips() {
         DefaultCustodyService svc = new DefaultCustodyService(
-                provider(null), provider(approvalService), custodyBalanceRepository, provider(null));
+                provider(null), provider(approvalService), custodyBalanceRepository, provider(null), provider(pendingRecorder));
         svc.seedBalances(new BigDecimal("999999"), BigDecimal.ZERO);
 
         // 无策略 → 跳过，余额不变
@@ -501,7 +664,7 @@ class DefaultCustodyServiceTest {
     void custoryTier_nullPolicyKeepsDefaults() {
         // 未注入 CustodyPolicy（null）时回退默认 cold/warm 前缀
         DefaultCustodyService svc = new DefaultCustodyService(
-                provider(null), provider(approvalService), custodyBalanceRepository, provider(realChainClient()));
+                provider(null), provider(approvalService), custodyBalanceRepository, provider(realChainClient()), provider(pendingRecorder));
         assertEquals(WalletTier.COLD.name(), svc.getCustodyTier("cold-wallet-1"));
         assertTrue(svc.isColdCustody("COLD-STORAGE"));
     }
