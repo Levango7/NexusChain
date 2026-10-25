@@ -6,6 +6,7 @@ import org.nexus.sdk.wallet.WalletTransactionResult;
 import org.nexus.walletsvc.execution.OnChainExecutionClient;
 import org.nexus.walletsvc.approval.WithdrawalApprovalService;
 import org.nexus.walletsvc.entity.CustodyBalanceEntity;
+import org.nexus.walletsvc.entity.CustodyTransferPendingEntity.PendingStatus;
 import org.nexus.walletsvc.repository.CustodyBalanceRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -27,7 +28,13 @@ import java.util.UUID;
  *
  * <p>余额与转账已持久化到 {@code nexus_wallet} 库；链上转账经
  * {@link org.nexus.walletsvc.execution.OnChainExecutionClient}（gateway → 链上广播）
- * 执行，fail-closed：通道缺失/失败即抛异常回滚，绝不伪造交易哈希（v1.9.2 起）。</p>
+ * 执行，fail-closed：通道缺失/确定失败即抛异常回滚，绝不伪造交易哈希（v1.9.2 起）。</p>
+ *
+ * <p><strong>「拿不到哈希就回滚」的例外（2026-10-25，Board §五）</strong>：执行通道返回
+ * {@code EXECUTED_UNVERIFIED}（签名已执行但取不到哈希）时<b>不回滚</b>冷热余额，
+ * 改由 {@link CustodyTransferPendingRecorder} 登记 {@code VERIFY_REQUIRED} 待人工核对；
+ * 返回 {@code AWAITING_APPROVAL}（大额转人工审批）时照常回滚，但同样登记一条
+ * {@code APPROVAL_OPEN}，避免悬空审批无人知晓。两种结果都绝不当成功，也不自动重试。</p>
  *
  * <p>迁移历史：原位于 {@code org.nexus.wallet.wallet.custody.DefaultCustodyService}
  * （nexus-exchange-wallet），在 Phase 2 微服务化中迁移至 nexus-wallet-service
@@ -55,18 +62,28 @@ public class DefaultCustodyService implements CustodyService {
     /** 链上执行通道（v1.9.2）：冷钱包转账经此走 gateway → 链上广播，替换 SIMULATED 占位。 */
     private final OnChainExecutionClient onChainExecutionClient;
 
+    /**
+     * 待处置记录写入器：可选注入（纯单测路径可为 null）。
+     *
+     * <p>缺失时不阻断资金动作——回滚 / 不回滚的决策只取决于执行结果，
+     * 但会打 ERROR 说明「这笔需要人工核对的出金没能落表」。</p>
+     */
+    private final CustodyTransferPendingRecorder pendingTransferRecorder;
+
     public DefaultCustodyService(
             org.springframework.beans.factory.ObjectProvider<CustodyPolicy> custodyPolicyProvider,
             org.springframework.beans.factory.ObjectProvider<WithdrawalApprovalService> withdrawalApprovalServiceProvider,
             CustodyBalanceRepository custodyBalanceRepository,
-            org.springframework.beans.factory.ObjectProvider<OnChainExecutionClient> executionClientProvider) {
+            org.springframework.beans.factory.ObjectProvider<OnChainExecutionClient> executionClientProvider,
+            org.springframework.beans.factory.ObjectProvider<CustodyTransferPendingRecorder> pendingTransferRecorderProvider) {
         // CustodyPolicy 为可选配置：容器未提供时使用 null（rebalance 自动跳过策略分支）
         this.custodyPolicy = custodyPolicyProvider.getIfAvailable();
         // 审批服务为可选注入：缺失时冷钱包出金整体拒绝（fail closed），绝不无审批放行
         this.withdrawalApprovalService = withdrawalApprovalServiceProvider.getIfAvailable();
         this.custodyBalanceRepository = custodyBalanceRepository;
-        // 执行客户端为可选注入：缺失时转账退化为内部模拟哈希（向后兼容独立测试环境）
+        // 执行客户端为可选注入：缺失时托管出金整体拒绝（fail closed），绝不产出模拟哈希冒充上链
         this.onChainExecutionClient = executionClientProvider.getIfAvailable();
+        this.pendingTransferRecorder = pendingTransferRecorderProvider.getIfAvailable();
     }
 
     /**
@@ -102,7 +119,7 @@ public class DefaultCustodyService implements CustodyService {
     }
 
     @Override
-    @Transactional
+    @Transactional(noRollbackFor = CustodyTransferUnverifiedException.class)
     public String depositToCold(String address, BigDecimal amount) {
         if (address == null || address.isEmpty()) {
             throw new IllegalArgumentException("cold wallet address is required");
@@ -140,7 +157,7 @@ public class DefaultCustodyService implements CustodyService {
     }
 
     @Override
-    @Transactional
+    @Transactional(noRollbackFor = CustodyTransferUnverifiedException.class)
     public String withdrawFromCold(String address, BigDecimal amount, String approvalId) {
         if (address == null || address.isEmpty()) {
             throw new IllegalArgumentException("cold wallet address is required");
@@ -216,10 +233,22 @@ public class DefaultCustodyService implements CustodyService {
      * 通过链上执行通道（gateway → 链上广播）执行转账。
      *
      * <p><b>fail-closed（资金安全）</b>：当 {@code OnChainExecutionClient} 未注入或
-     * 链上调用失败 / 返回空哈希时，<b>抛异常而非返回伪造的 {@code SIMULATED-} 哈希</b>。
-     * 本方法在调用方（{@code depositToCold} / {@code transferColdToHotInternal}）的
-     * {@code @Transactional} 事务内执行，抛异常将触发回滚，已扣减的冷热余额随之撤销，
+     * 链上<b>确定失败</b>（返回空哈希且非下述两种状态）时，<b>抛异常而非返回伪造的
+     * {@code SIMULATED-} 哈希</b>。本方法在调用方（{@code depositToCold} /
+     * {@code transferColdToHotInternal}）的 {@code @Transactional} 事务内执行，
+     * 抛异常将触发回滚，已扣减的冷热余额随之撤销，
      * 保证账本绝不会出现「账上有、链上无」的对账缺口。</p>
+     *
+     * <p><b>三种结果不能混为一谈</b>（Board 裁决 20261025-0955 §五）：</p>
+     * <ul>
+     *   <li>{@code AWAITING_APPROVAL}：大额转人工审批，钱没出 ⇒ 照旧抛异常回滚，
+     *       并登记 {@code APPROVAL_OPEN}（签名侧审批请求仍开着，必须留痕）。
+     *       <b>不可自动重试</b>：审批通过后由签名侧执行，重试等于同一意图二次授权。</li>
+     *   <li>{@code EXECUTED_UNVERIFIED}：签名已执行但取不到哈希，钱可能已经出 ⇒
+     *       抛 {@link CustodyTransferUnverifiedException}（调用方以 {@code noRollbackFor}
+     *       放行）<b>保持余额调整提交</b>，登记 {@code VERIFY_REQUIRED} 待人工核对链上。</li>
+     *   <li>其余无哈希结果：确定未动账 ⇒ 抛 {@code IllegalStateException} 回滚，不留痕。</li>
+     * </ul>
      *
      * <p>沙箱 / 本地联调请改用 {@code nexus.wallet.execution.sandbox=true} 的
      * {@link org.nexus.walletsvc.execution.HttpOnChainExecutionClient} 沙箱通道，
@@ -230,7 +259,8 @@ public class DefaultCustodyService implements CustodyService {
      * @param amount  金额
      * @param memo    备注
      * @return 链上真实交易哈希（永不为 {@code SIMULATED-} 前缀）
-     * @throws IllegalStateException 执行通道缺失或链上执行失败（触发事务回滚）
+     * @throws IllegalStateException             执行通道缺失或确定失败（触发事务回滚）
+     * @throws CustodyTransferUnverifiedException 已执行但不可核对（不回滚，转人工）
      */
     private String executeOnChainTransfer(WalletTransactionRequest.Type type,
                                           String address, BigDecimal amount, String memo) {
@@ -240,17 +270,69 @@ public class DefaultCustodyService implements CustodyService {
             throw new IllegalStateException(
                     "on-chain execution channel not configured; custodial transfer aborted (rollback)");
         }
+        // requestId 按「一次出金意图」生成：三种结果都禁止自动重发（签名侧会把超时的
+        // EXECUTING 回退成 APPROVED，重发即双花），所以不需要跨调用的稳定键；
+        // 它同时是 gateway 审批链接的 requestKey 后缀（execution:<TYPE>:<requestId>），
+        // 人工可凭 custody_transfer_pending.request_key 直接定位到那条链接。
         WalletTransactionRequest request = new WalletTransactionRequest(
                 type, "cold-custody", address, amount, "NEX", memo, UUID.randomUUID().toString());
         WalletTransactionResult result = onChainExecutionClient.execute(request);
-        if (result == null || result.getTxHash() == null || result.getTxHash().isEmpty()) {
-            String error = result != null ? result.getError() : "null result";
+        WalletTransactionResult.Status status = result == null ? null : result.getStatus();
+        String approvalId = result == null ? null : result.getApprovalId();
+        String error = result != null ? result.getError() : "null result";
+
+        if (status == WalletTransactionResult.Status.AWAITING_APPROVAL) {
+            recordPendingTransfer(request, PendingStatus.APPROVAL_OPEN, approvalId,
+                    "大额签名待人工审批；冷热余额已回滚，钱未出账。审批通过后需人工重新发起或驳回。");
+            log.error("Fail-closed: on-chain transfer awaiting manual signing approval; aborting custodial "
+                            + "transfer (rollback): requestKey={}, approvalId={}, type={}, address={}, amount={}",
+                    request.getRequestId(), approvalId, type, address, amount);
+            throw new IllegalStateException("on-chain transfer awaiting signing approval: approvalId="
+                    + approvalId + " (rollback, no auto-retry)");
+        }
+        if (status == WalletTransactionResult.Status.EXECUTED_UNVERIFIED) {
+            recordPendingTransfer(request, PendingStatus.VERIFY_REQUIRED, approvalId,
+                    "签名已执行但无交易哈希，钱可能已转出；冷热余额调整保持提交，禁止自动重试，需人工核对链上。"
+                            + (error == null ? "" : " error=" + error));
+            log.error("Unverified: on-chain transfer executed without a verifiable txHash; custody balances "
+                            + "are NOT rolled back: requestKey={}, approvalId={}, type={}, address={}, amount={}, error={}",
+                    request.getRequestId(), approvalId, type, address, amount, error);
+            throw new CustodyTransferUnverifiedException(
+                    "on-chain transfer executed but unverifiable: approvalId=" + approvalId
+                            + " (custody balances kept, manual chain check required)",
+                    request.getRequestId(), approvalId);
+        }
+        String txHash = result == null ? null : result.getTxHash();
+        if (txHash == null || txHash.isEmpty()) {
             log.error("Fail-closed: on-chain transfer failed ({}); aborting custodial transfer type={}, address={}, amount={}",
                     error, type, address, amount);
             throw new IllegalStateException(
                     "on-chain transfer failed: " + error + " (rollback)");
         }
-        return result.getTxHash();
+        return txHash;
+    }
+
+    /**
+     * 登记一条托管出金待处置记录（独立事务，见 {@link CustodyTransferPendingRecorder}）。
+     *
+     * <p>登记失败绝不改变资金决策：落表失败时把核对所需信息打进 ERROR 日志，
+     * 人工仍可从日志定位这笔出金。</p>
+     */
+    private void recordPendingTransfer(WalletTransactionRequest request, PendingStatus status,
+                                       String approvalId, String note) {
+        if (pendingTransferRecorder == null) {
+            log.error("托管出金待处置记录未登记（CustodyTransferPendingRecorder 未注入），需按日志人工核对: "
+                            + "requestKey={}, status={}, approvalId={}, type={}, address={}, amount={}",
+                    request.getRequestId(), status, approvalId, request.getType(),
+                    request.getToAddress(), request.getAmount());
+            return;
+        }
+        try {
+            pendingTransferRecorder.record(request, status, approvalId, note);
+        } catch (RuntimeException e) {
+            log.error("托管出金待处置记录登记失败，需按日志人工核对: requestKey={}, status={}, approvalId={}, error={}",
+                    request.getRequestId(), status, approvalId, e.toString(), e);
+        }
     }
 
     @Override
