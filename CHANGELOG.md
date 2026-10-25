@@ -1116,6 +1116,14 @@ FAILED，审批通过后也没有任何调用方去执行。按裁决"调用方�
     只被它自己的测试引用，订单也不落库），已随板子留言记录。
   - **记账顺序（先贷账 `:137` 后动链）仍是既有缺陷**，属结算账务语义，未在本文改动，
     见 `docs/agent-board/20261025-0655-qoder-cn-execution-leg-downstream-consumers.md` §二第 3 点。
+- **结算批内隔离（#236 §三 的事后修复）**：`drainStaging()` 把这一批 `PENDING` 行**删除并提交**，
+  `SettlementScheduler.settle()` 对 `batchClear` 又是 `catch (RuntimeException) → 只记日志`；
+  原先 `batchClear` 的循环**没有单笔捕获** ⇒ 批内任何一笔抛异常都会让整批中断，
+  已抛那笔（以及其后所有笔）**既没有终态也没有订单行** —— 静默丢单且永不重试。
+  现在单笔异常就地收口（该笔落 `FAILED` 并持久化，其余继续结算），
+  **不改** "先贷账后动链" 的既有账务语义（该项仍按裁决留待 owner 定）。
+  同时在用例注释里钉住一个容易踩的差别：DB 模式有 `ledger_entry (reference, account)` 唯一键挡重复记账，
+  **内存模式没有** ⇒ 谁将来给 `settle()` 加自动重试，会在测试/无库环境里静默多贷。
 - **测试**：`SigningResponsesTest` 15 例（三态逐例钉死）、`SigningTransfersTest` 5 例、
   `ApprovalExecutionLinkTest` 4 例（requestKey/businessId 对偶）、
   `ApprovalExecutionReconcilerTest` 7 例（含白名单结构断言）、
