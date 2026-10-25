@@ -83,6 +83,35 @@ public class InMemoryMessageStore implements MessageStore {
         return Optional.ofNullable(executionTxHashes.get(messageId));
     }
 
+    /**
+     * 取待处理消息（PLAN-037 切片 2）：尚未执行（无执行哈希）且状态可重试
+     * （PENDING / RELAYED / FAILED），按 (sourceChain, nonce) 升序 ——
+     * 与 Jdbc 实现的语义逐条对齐。RELAYED 是"已中继、待执行"的中间态，必须被消费。
+     */
+    @Override
+    public java.util.List<CrossChainMessage> findPending(int limit) {
+        if (limit <= 0) {
+            return java.util.Collections.emptyList();
+        }
+        java.util.List<CrossChainMessage> pending = new java.util.ArrayList<>();
+        for (CrossChainMessage m : messages.values()) {
+            if (m == null || executionTxHashes.containsKey(m.getMessageId())) {
+                continue;
+            }
+            MessageStatus st = m.getStatus();
+            if (st == MessageStatus.PENDING || st == MessageStatus.RELAYED
+                    || st == MessageStatus.FAILED) {
+                pending.add(m);
+            }
+        }
+        pending.sort(java.util.Comparator.comparing(CrossChainMessage::getSourceChain)
+                .thenComparingLong(CrossChainMessage::getNonce));
+        if (pending.size() > limit) {
+            return new java.util.ArrayList<>(pending.subList(0, limit));
+        }
+        return pending;
+    }
+
     @Override
     public void clear() {
         messages.clear();

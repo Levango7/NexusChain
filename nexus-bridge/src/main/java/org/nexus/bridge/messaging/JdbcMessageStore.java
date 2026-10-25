@@ -95,6 +95,25 @@ public class JdbcMessageStore implements MessageStore {
     }
 
     @Override
+    public java.util.List<CrossChainMessage> findPending(int limit) {
+        if (limit <= 0) {
+            return java.util.Collections.emptyList();
+        }
+        try {
+            java.util.List<BridgeMessageRecord> records = repository.findPending(
+                    org.springframework.data.domain.PageRequest.of(0, limit));
+            java.util.List<CrossChainMessage> out = new java.util.ArrayList<>(records.size());
+            for (BridgeMessageRecord r : records) {
+                out.add(r.toMessage());
+            }
+            return out;
+        } catch (RuntimeException e) {
+            log.warn("findPending failed: {}", e.getMessage());
+            return java.util.Collections.emptyList();
+        }
+    }
+
+    @Override
     public Optional<String> getExecutionTxHash(String messageId) {
         if (messageId == null) {
             return Optional.empty();
