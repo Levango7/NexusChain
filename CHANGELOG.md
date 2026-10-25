@@ -4,6 +4,22 @@
 
 ## [Unreleased]
 
+### P2P 拨号兜底：对端广告地址不可达时重试 bootstrap 可达地址（PLAN-034，2026-10-25）
+
+修复多机/NAT 拓扑下真实撞到的阻断：对端**广告地址**（`--p2p.address`）在
+异构网络不可达（实测：A 广告 `host.docker.internal:9235`，WSL 内被防火墙
+挡掉），而同一 peerID 的 bootstrap 地址可达——旧实现拨号失败只记 WARN，
+导致 B 对 A 的 GetStatus/GetBlocks 外拨全部失败（PLAN-029/033 实测均因此
+需要临时改配置才能继续）。
+
+- `PeerServer.dialWithTTL` 失败回调新增 `redialOnAlternateAddress`：取
+  `getBootstraps()` 中**同 peerID** 的备选地址（per-peerID 轮换）**重试一次**，
+  重试回调不再递归（无拨号风暴）；
+- 无同 peerID 备选 / 备选与当前地址相同 / cache 未就绪 ⇒ 静默跳过；
+- 单测 2 例（同 peerID 兜底必须发生 / 无同 peerID 备选不得误拨）；全模块回归绿；
+- 边界：只改"往哪个地址拨"，不动消息语义；不根治配置问题（multi-homed 广告
+  是后续课题）；纯 discovery 学到的对端（无 bootstrap 条目）仍无兜底。
+
 ### MPC CGGMP21 3 方 keygen E2E 去竞态（测试健壮化，2026-10-25）
 
 PR #233 的 MPC Java Cluster E2E 抖动一次后定位（同 job 在 #219/#227/#233-rerun
