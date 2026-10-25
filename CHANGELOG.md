@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+### LocalRpcInterceptor 拒绝显式化 + token 判断加固（2026-10-25）
+
+修 PLAN-032 白名单踩坑暴露的拦截器层缺陷（根因不只是白名单）：
+
+- **拒绝不再静默**：旧实现 `return false` 且不写响应 ⇒ 调用方拿到 **HTTP 200 空
+  body**（无法区分"被拦截/限流/正常空返回"，PLAN-032 的新端点踩坑即被此放大）。
+  现在所有拒绝路径（缺 token / 验签不通过 / 解析异常）都写 **401 + JSON body**。
+- **空串 token 判断**：旧实现 `token != ""` 是**引用比较**（动态空串会被当成合法
+  值送进 JWT 解析）→ 改 `!token.isEmpty()`。
+- **JWT 解析异常兜底**：异常不再逃逸成 500，按拒绝处理并显式 401。
+- 单测 5 例：`LocalRpcInterceptorTest`（放行 / 缺 token 401+body / 动态空串拒绝 /
+  畸形 token 不抛 / 合法 JWT 放行）。
+
 ### 追块观测端点（PLAN-033 切片 B，2026-10-25）
 
 - 新只读端点 `GET /consensus/catch-up`：`localHeight/peerHeight/gap`、
@@ -1056,6 +1069,43 @@ additive-only；破坏性变更携带 `migrations/pg/NNN-desc.sql` 并递增版�
 
 **验收**：`SchemaMetaTest`（H2 三分支：缺失→写入 / 相符→通过 / 不符→拒绝；+ 多 store 隔离）
 与 `LeveldbSchemaVersionTest`（新库写键 / 同版本重启通过 / 旧值拒绝 / 新值拒绝 / 损坏值拒绝）。
+
+### 大额签名审批的执行腿（Board #213 / 裁决 20261025-0415，2026-10-25）
+
+签名服务对大额转账返回 `statusCode=2001 + approvalId`（转人工审批），但 gateway 侧
+所有调用方此前都用"取不到 txHash"判定失败 ⇒ 大额退款/结算/扣款在**审批之前**就被记
+FAILED，审批通过后也没有任何调用方去执行。按裁决"调用方执行"补齐三段：
+
+- **签名侧支撑（#215）**：新增 `GET /api/v1/signing/approvals/{requestId}`（SIGNER/OPERATOR
+  可读审批状态快照，不回显审批人地址）；SDK `SigningServiceFeignClient` 补
+  `getApprovalStatus` + `executeApproved`。
+- **三态契约（本 PR）**：`SigningResponses.classify(...)` 返回
+  `EXECUTED / AWAITING_APPROVAL / FAILED`；`txHash()` 标 `@Deprecated`——它在 2001 上
+  返回 null，正是断链根因。
+- **链接表 + 状态机（#220）**：新表 `approval_execution_link`（V109，不改任何既有业务表），
+  以 `request_key` 唯一约束做幂等。护栏：执行前先落 `EXECUTING + execution_attempted_at`；
+  **已尝试执行过的审批绝不自动重发**（签名服务会把超时的 EXECUTING 回退成 APPROVED，
+  重发即双花）；只有明确 `5000` 才回 `APPROVED` 可重试；`EXECUTED` 无哈希 ⇒
+  `EXECUTED_UNVERIFIED` 转人工核对；`tx_hash` 一旦写入不允许清回 NULL。
+- **退款链路（#220）**：`RefundRequest` / `Refund` 新增 `AWAITING_APPROVAL`（非终态、
+  计入在途额度），两条退款路径各配一个 ShedLock 推进器把已批准的单据收口
+  （COMPLETED+订单 REFUNDED / FAILED+订单回 PAID / RECONCILIATION_NEEDED）。
+- **连接器与订阅（本 PR）**：`ChainConnector` / `ConsortiumConnector` /
+  `SubscriptionServiceImpl` 全部改走三态。待审批时业务侧为 `PROCESSING`（订阅扣款
+  本周期已认领，等执行腿完成），**不再记 FAILED**；连接器支付的执行只由该笔支付自己的
+  状态轮询触发，因此 `ApprovalExecutionReconciler` 的自动推进白名单**故意不含**
+  `CHAIN`/`CONSORTIUM` 支付——避免"业务已判失败、后台随后把钱转走"；无轮询调用方的
+  `SUB_AUTH`/`SUB_CHARGE`/`*_REFUND` 才由推进器执行（订阅授权补齐 `authTxHash`）。
+  `ConnectorRefundResult` 新增 `pending + approvalId` 表达"待审批"。
+- **未做（按裁决 §五）**：wallet 侧提币执行腿不动——它是"平台审批 + 签名审批"双层审批的
+  特例，需 (a)/(b)/(c) 之一签字；本 PR 仅补 SDK DTO 对新状态的反序列化兼容。
+- **测试**：`SigningResponsesTest` 15 例（三态逐例钉死）、`SigningTransfersTest` 5 例、
+  `ApprovalExecutionLinkTest` 4 例（requestKey/businessId 对偶）、
+  `ApprovalExecutionReconcilerTest` 7 例（含白名单结构断言）、
+  `ChainConnectorApprovalTest` 9 例、`ConsortiumConnectorApprovalTest` 5 例、
+  `SubscriptionServiceImplApprovalTest` 5 例；变异反证：删掉"审批腿失败→FAILED"分支
+  与把 `CHAIN` 塞进白名单，均按预期转红。
+
 
 ## [2.74.0] - 2026-10-14
 
