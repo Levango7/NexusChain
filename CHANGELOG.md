@@ -4,6 +4,23 @@
 
 ## [Unreleased]
 
+### 桥 messaging 装配第一切片（PLAN-037，2026-10-25）
+
+把 roadmap #33 的最大欠账开始闭环：`MessageRelayer`/`MessageExecutor` 自 1.9.2
+起存在且单测完整，但从未装配进生产流（只有测试里 new）。
+
+- 新增 `MessagingRelayConfig`：开关 `nexus.bridge.messaging.relay-enabled`
+  （**默认关**）——开启时创建 formatter/relayer/executor/status 四类 Bean，
+  关闭时一个都不建（既有部署行为零变化）；store 沿用 PLAN-026 的 memory/jpa
+  开关，不重复定义。
+- `BridgeMessagingStatus` 只读快照：开关/签数/超时/store 实现/适配器数。
+- 单测 3 例（`MessagingRelayConfigTest`）：默认不装配 / 开启且 relayer 真实
+  完成"签名→多签验签→去重" / 0 签回落默认 2 签不进非法态；
+  `nexus-bridge:test` 全量无回归。
+- **如实边界**：切片 1 只做"通电"（Bean 生命周期 + 观测），**未接真实外部链、
+  不启动消息循环**，`targetAdapters=0` 是预期——没有任何真实消息会被中继或
+  执行；ChainAdapter 接入与消息循环属切片 2。详见 PLAN-037。
+
 ### 多机闭环全量重跑通过（PLAN-027 §六 附一，2026-10-25）
 
 当日全部修复在位（签名 enforce / 追块加速 PLAN-033/035/036）后，三节点库
