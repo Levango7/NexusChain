@@ -4,6 +4,23 @@
 
 ## [Unreleased]
 
+### 桥 messaging 装配第一切片（PLAN-037，2026-10-25）
+
+把 roadmap #33 的最大欠账开始闭环：`MessageRelayer`/`MessageExecutor` 自 1.9.2
+起存在且单测完整，但从未装配进生产流（只有测试里 new）。
+
+- 新增 `MessagingRelayConfig`：开关 `nexus.bridge.messaging.relay-enabled`
+  （**默认关**）——开启时创建 formatter/relayer/executor/status 四类 Bean，
+  关闭时一个都不建（既有部署行为零变化）；store 沿用 PLAN-026 的 memory/jpa
+  开关，不重复定义。
+- `BridgeMessagingStatus` 只读快照：开关/签数/超时/store 实现/适配器数。
+- 单测 3 例（`MessagingRelayConfigTest`）：默认不装配 / 开启且 relayer 真实
+  完成"签名→多签验签→去重" / 0 签回落默认 2 签不进非法态；
+  `nexus-bridge:test` 全量无回归。
+- **如实边界**：切片 1 只做"通电"（Bean 生命周期 + 观测），**未接真实外部链、
+  不启动消息循环**，`targetAdapters=0` 是预期——没有任何真实消息会被中继或
+  执行；ChainAdapter 接入与消息循环属切片 2。详见 PLAN-037。
+
 ### 多机闭环全量重跑通过（PLAN-027 §六 附一，2026-10-25）
 
 当日全部修复在位（签名 enforce / 追块加速 PLAN-033/035/036）后，三节点库
@@ -1232,12 +1249,40 @@ FAILED，审批通过后也没有任何调用方去执行。按裁决"调用方�
   同时把 `manual`（结果不可核对，**可能已动账**）从聚合 info 里拆出来单发一条计数告警
   （`failed` 是可以等的，`manual` 不能等）；盘点是只读旁路，它自己抛异常不拖累推进。
   推进方法改为返回 `AdvanceReport`（计数 + 存量），既能断言也为后续接指标留口。
+- **托管出金语义（G7，裁决 20261025-0955 §五）**：`DefaultCustodyService.executeOnChainTransfer`
+  原来**只读 `txHash`、从不读 `status`**，空哈希一律抛异常回滚冷热余额。#220 之后执行通道多了
+  两种不可当"确定未动账"的结果，本切片把它们分开：
+  - 新表 `custody_transfer_pending`（**V5**，不改任何既有表）两类状态——
+    `APPROVAL_OPEN`（待审批，余额已回滚、钱没出，处置=驳回或核对后重发）与
+    `VERIFY_REQUIRED`（已执行不可核对，余额**保持提交**、钱可能已出，处置=核对链上后补哈希或冲正）。
+  - `EXECUTED_UNVERIFIED` **不再回滚**：抛新异常 `CustodyTransferUnverifiedException`，
+    两个动账方法以 `@Transactional(noRollbackFor=…)` 放行；仍不是成功（拿不到哈希就绝不返回哈希），
+    也绝不自动重试。`AWAITING_APPROVAL` 继续回滚，但登记留痕，免得悬空审批无人知晓。
+  - 留痕写入器 `CustodyTransferPendingRecorder` 是**独立 Bean + `REQUIRES_NEW`**：同类自调用会让
+    `@Transactional` 失效（`ThreePhaseExecutionTemplate` 有同款审计教训），而外层回滚必须抹不掉这条记录。
+    登记失败（含未注入）**不改变资金决策**，只把核对所需字段打进 ERROR 日志。
+  - `request_key` = 发给执行通道的 `requestId`（一次意图一个 UUID，不做时间桶键：推进器若把旧的
+    `EXECUTED` 链接推回来会伪造成交）。它同时是 gateway 侧链接 `requestKey` 的后缀
+    （`execution:<TYPE>:<requestId>`），人工可凭这条记录直接定位那条审批链接。
+  - **可达性（先说清，免得读代码的人以为在产线上按了开关）**：全仓无任何 `CustodyPolicy` bean
+    （`ObjectProvider` 恒为 null）⇒ `rebalance()` 直接跳过，`depositToCold` / `withdrawFromCold`
+    今日**没有生产调用方**（唯一 HTTP 入口 `POST /api/v1/wallet/rebalance` 也就是那条空转分支）。
+    所以本切片是把语义先修对，不改变任何现存运行时行为。裁决 §五 提到的类型缺口
+    （`walletsvc.OnChainResult` 只 3 值）属提现签名腿，本路径用的是 SDK 的
+    `WalletTransactionResult`（已含 `status`/`approvalId`），不受它阻塞。
 - **测试**：`SigningResponsesTest` 15 例（三态逐例钉死）、`SigningTransfersTest` 5 例、
   `ApprovalExecutionLinkTest` 4 例（requestKey/businessId 对偶）、
   `ApprovalExecutionReconcilerTest` 11 例（含白名单结构断言，以及 #234 §二 要求的 4 例只读盘点/聚合计数）、
   `ChainConnectorApprovalTest` 9 例、`ConsortiumConnectorApprovalTest` 5 例、
   `SubscriptionServiceImplApprovalTest` 5 例；变异反证：删掉"审批腿失败→FAILED"分支
   与把 `CHAIN` 塞进白名单，均按预期转红。
+  G7 侧：`CustodyTransferPendingRecorderTest` 6 例（字段齐全 / 超长截断 / 同键更新不重复插 /
+  无键与空参跳过）、`CustodyTransferPendingIntegrationTest` 4 例（**只有真事务才测得到**：
+  不可核对保持提交、待审批回滚但留痕活下来、确定失败不留痕、`request_key` 数据库级唯一）、
+  `DefaultCustodyServiceTest` 由 41 例增至 48 例（三态分支 + 落表失败不改资金决策）。
+  wallet-service 全量回归 213 例 0 红。变异反证两条各转红一项：去掉 `noRollbackFor`
+  ⇒ "HOT 应停在 600" 断言失败（回滚到了 1000）；把 `REQUIRES_NEW` 改成 `REQUIRED`
+  ⇒ `countByStatus(APPROVAL_OPEN)` 得 0（留痕被外层回滚带走）。
 
 
 ### core 探针被 local-only 拦成 401（主干红的事后修复，2026-10-25）
