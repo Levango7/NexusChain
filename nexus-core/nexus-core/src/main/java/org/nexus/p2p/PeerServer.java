@@ -364,11 +364,30 @@ public class PeerServer extends NexusChainGrpc.NexusChainImplBase {
         }
         logger.info("P2P dial fallback: {}:{} unreachable, retrying same peer at {}:{}",
                 peer.host, peer.port, alt.host, alt.port);
-        gRPCClient.dialAsyncWithTTL(alt.host, alt.port, ttl, msg, (m, e) -> {
-            if (e != null) {
-                logger.warn("P2P dial fallback also failed: {}:{} error={}", alt.host, alt.port, e.getMessage());
-            }
-        });
+        // PLAN-035：兜底拨号必须在**脱离取消继承**的 Context 里发起——本方法运行在
+        // 第一次拨号的 observer 回调里，gRPC Java 在该回调链返回时会取消该 call 的
+        // Context；就地发起的新 RPC 继承这个已取消的 Context ⇒ 毫秒级
+        // `CANCELLED: io.grpc.Context was cancelled without error`（实测：v2 兜底
+        // 触发 ×50、目标却全部 CANCELLED）。`Context.current().fork()` 生子独立
+        // Context，父取消不会传导——新 RPC 因此可正常完成。
+        io.grpc.Context forked = io.grpc.Context.current().fork();
+        io.grpc.Context previous = forked.attach();
+        try {
+            gRPCClient.dialAsyncWithTTL(alt.host, alt.port, ttl, msg, (m, e) -> {
+                // 与正常拨路语义一致：响应消息必须回灌 onMessage——GetStatus 的
+                // STATUS 响应正是靠它驱动「对端更高 ⇒ 请求下一窗口」（v3 修复：
+                // v2 只处理 error、把 m 丢掉 ⇒ 兜底"成功"却无追块）。
+                if (m != null) {
+                    onMessage(m);
+                }
+                if (e != null) {
+                    logger.warn("P2P dial fallback also failed: {}:{} error={}",
+                            alt.host, alt.port, e.getMessage());
+                }
+            });
+        } finally {
+            io.grpc.Context.current().detach(previous);
+        }
     }
 
     private void dialWithTTL(String host, int port, long ttl, AbstractMessage msg) {
