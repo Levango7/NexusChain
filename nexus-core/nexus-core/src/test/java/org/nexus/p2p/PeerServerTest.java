@@ -10,6 +10,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.lang.reflect.Field;
 import java.util.Collections;
 import java.util.List;
+import java.util.function.BiConsumer;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -242,5 +243,51 @@ class PeerServerTest {
         // dial 调用 gRPCClient.dialAsyncWithTTL，mock 不会真正建连
         assertDoesNotThrow(() -> server.dial(p,
                 NexusChainOuterClass.Ping.newBuilder().build()));
+    }
+
+    // ==================== PLAN-034：广告地址不可达时的 bootstrap 兜底 ====================
+
+    @Test
+    void dialFallsBackToBootstrapAddressOfSamePeerIdOnFailure() {
+        byte[] id = new byte[32];
+        id[0] = 0x07;
+        // 对端（学习到的广告地址：异构网络不可达）
+        Peer advertised = PeerTestFixture.newPeer(id, "host.docker.internal", 9235);
+        // 同 peerID 的可达备选地址（bootstrap 配置）
+        Peer reachable = PeerTestFixture.newPeer(id, "172.17.208.1", 9235);
+        when(peersCache.getBootstraps()).thenReturn(List.of(reachable));
+
+        // 第一次拨号失败（捕获回调并触发 error 分支）
+        doAnswer(inv -> {
+            BiConsumer<NexusChainOuterClass.Message, Throwable> cb = inv.getArgument(4);
+            cb.accept(null, new RuntimeException("UNAVAILABLE"));
+            return null;
+        }).doNothing().when(gRPCClient).dialAsyncWithTTL(eq("host.docker.internal"), eq(9235), anyLong(), any(), any());
+
+        server.dial(advertised, NexusChainOuterClass.Ping.newBuilder().build());
+
+        // 兜底：必须用同一 peerID 的可达地址再拨一次
+        verify(gRPCClient).dialAsyncWithTTL(eq("172.17.208.1"), eq(9235), anyLong(), any(), any());
+    }
+
+    @Test
+    void dialFailureWithoutSamePeerIdBootstrapDoesNotRetry() {
+        byte[] idA = new byte[32];
+        idA[0] = 0x0A;
+        byte[] idB = new byte[32];
+        idB[0] = 0x0B;
+        Peer advertised = PeerTestFixture.newPeer(idA, "10.9.9.9", 7001);
+        when(peersCache.getBootstraps()).thenReturn(
+                List.of(PeerTestFixture.newPeer(idB, "172.17.208.1", 9235)));
+
+        doAnswer(inv -> {
+            BiConsumer<NexusChainOuterClass.Message, Throwable> cb = inv.getArgument(4);
+            cb.accept(null, new RuntimeException("UNAVAILABLE"));
+            return null;
+        }).when(gRPCClient).dialAsyncWithTTL(eq("10.9.9.9"), eq(7001), anyLong(), any(), any());
+
+        server.dial(advertised, NexusChainOuterClass.Ping.newBuilder().build());
+
+        verify(gRPCClient, never()).dialAsyncWithTTL(eq("172.17.208.1"), eq(9235), anyLong(), any(), any());
     }
 }

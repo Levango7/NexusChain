@@ -287,6 +287,11 @@ public class PeerServer extends NexusChainGrpc.NexusChainImplBase {
             }
             if (e != null) {
                 logger.warn("P2P dial failed to {}:{} error={}", peer.host, peer.port, e.getMessage());
+                // PLAN-034：对端广告地址在异构网络不可达时（如 WSL↔容器群的
+                // host.docker.internal 广告地址），按同一 peerID 的可达备选地址
+                // （bootstrap 配置地址）重试一次——上述场景实测导致追块窗口请求
+                // 全部打不到对端。重试不递归，避免拨号风暴。
+                redialOnAlternateAddress(peer, ttl, msg);
             }
 //            e.printStackTrace();
 //            logger.error("cannot connect to " + peer.toString());
@@ -294,6 +299,60 @@ public class PeerServer extends NexusChainGrpc.NexusChainImplBase {
 //                return;
 //            }
 //            peersCache.half(peer);
+        });
+    }
+
+    /** 同 peerID 备选地址轮换游标（peerID hex → index）。 */
+    private final java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicInteger>
+            dialFallbackCursor = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * 拨号兜底（PLAN-034）：用同一 peerID 的备选地址重试一次。
+     *
+     * <p>问题：多机/NAT 拓扑下对端广告的地址（{@code p2p.address}）对本节点所在
+     * 网络不一定可达（实测：A 广告 {@code host.docker.internal:9235}，WSL 内解析到
+     * 防火墙挡掉的 LAN IP；B 对 A 的 GetStatus/GetBlocks 外拨全部失败，仅 inbound
+     * 推送可用 ⇒ 追块窗口请求打不到对端）。兜底源取 {@link #getBootstraps()} 中
+     * 同 peerID 的地址（启动配置里"已知可达"的一组）。</p>
+     *
+     * <p>约束：只重试一次（失败回调里不再递归）；无同 peerID 备选 / 备选与当前
+     * 地址相同 ⇒ 不动作。</p>
+     */
+    private void redialOnAlternateAddress(Peer peer, long ttl, AbstractMessage msg) {
+        if (peer == null || peer.peerID == null) {
+            return;
+        }
+        List<Peer> alternates;
+        try {
+            alternates = getBootstraps();
+        } catch (RuntimeException ex) {
+            return; // 未启动/无 bootstraps：静默跳过（不放大故障）
+        }
+        if (alternates == null || alternates.isEmpty()) {
+            return;
+        }
+        List<Peer> sameId = new ArrayList<>();
+        for (Peer b : alternates) {
+            if (b != null && b.peerID != null && Arrays.equals(peer.peerID, b.peerID)) {
+                sameId.add(b);
+            }
+        }
+        if (sameId.isEmpty()) {
+            return;
+        }
+        String key = Hex.encodeHexString(peer.peerID);
+        java.util.concurrent.atomic.AtomicInteger cursor =
+                dialFallbackCursor.computeIfAbsent(key, k -> new java.util.concurrent.atomic.AtomicInteger());
+        Peer alt = sameId.get(Math.floorMod(cursor.getAndIncrement(), sameId.size()));
+        if (alt.host.equals(peer.host) && alt.port == peer.port) {
+            return; // 同一地址，重试无意义
+        }
+        logger.info("P2P dial fallback: {}:{} unreachable, retrying same peer at {}:{}",
+                peer.host, peer.port, alt.host, alt.port);
+        gRPCClient.dialAsyncWithTTL(alt.host, alt.port, ttl, msg, (m, e) -> {
+            if (e != null) {
+                logger.warn("P2P dial fallback also failed: {}:{} error={}", alt.host, alt.port, e.getMessage());
+            }
         });
     }
 
