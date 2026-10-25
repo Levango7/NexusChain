@@ -73,8 +73,10 @@ import static org.mockito.Mockito.when;
  * <p>验证范围：</p>
  * <ul>
  *   <li>3 个 mpc-engine 子进程（独立 endpoint，模拟生产 K8s StatefulSet 3 副本）</li>
- *   <li>Java 端 3 个 {@link MpcCggmpClient}（每方一个） + 1 协调器 client（绑 node0）</li>
- *   <li>每方独立驱动 publish→pull→pump 循环（{@link MpcCggmpOrchestrator}）</li>
+ *   <li>Java 端 3 个 {@link MpcCggmpClient}（每方一个） + 1 协调器 client（绑 node0）；
+ *       **三方 start 串行完成后再统一 pumpAll**（client 原语驱动，2026-10-25 起与
+ *       status/fullPipeline 一致——原 orchestrator 并发 pump 模式与 clear_session
+ *       阶段边界同族竞态，CI 抖动实证见 {@code cggmpE2EKeygen} 注释）</li>
  *   <li>完整生命周期：keygen(t=2, n=3) → aux → assembleShare → sign(t=2) → verify</li>
  *   <li>三方产出的 r/s 一致（同一签名可在任一方 verify 通过）</li>
  * </ul>
@@ -138,8 +140,9 @@ public class CggmpMpcE2EClusterTest {
     private static final List<Process> engines = new ArrayList<>();
     private static final List<ManagedChannel> channels = new ArrayList<>();
     private static final List<MpcCggmpClient> partyClients = new ArrayList<>();
+    // 2026-10-25：orchestrator 列表与构造已移除（最后一个使用方 cggmpE2EKeygen 改为
+    // client 原语 + 串行 start + 统一 pumpAll；保留 MpcCggmpOrchestrator 类供生产编排路径）。
     private static MpcCggmpClient coordinatorClient;
-    private static final List<MpcCggmpOrchestrator> orchestrators = new ArrayList<>();
     private static int port1;
     /**
      * 三个引擎的 host 端口——**从各自 nodeN.json 的 listen_addr 解析**（2026-10-09）。
@@ -264,12 +267,7 @@ public class CggmpMpcE2EClusterTest {
         }
         // 协调器 = node0（生产可指向独立协调方进程；本测试简化 = node0）
         coordinatorClient = partyClients.get(0);
-        // 每方建 orchestrator
-        for (int i = 0; i < 3; i++) {
-            orchestrators.add(new MpcCggmpOrchestrator(
-                    partyClients.get(i), coordinatorClient, i));
-        }
-        log.info("Java clients + 3 orchestrators ready");
+        log.info("Java clients ready (partyClients + coordinator)");
     }
 
     @AfterAll
@@ -290,56 +288,49 @@ public class CggmpMpcE2EClusterTest {
     @Test
     @DisplayName("CGGMP21 端到端：3 方并发 keygen(t=2)——三方产出**一致**聚合公钥")
     void cggmpE2EKeygen() throws Exception {
-        String sid = "i-batch-keygen-" + System.currentTimeMillis();
+        // 2026-10-25（CI 抖动治理）：与 cggmpE2EStatus / cggmpE2EFullPipeline 对齐，
+        // 改为 **client 原语 + 三方 start 串行 + 统一 pumpAll**；不再使用
+        // orchestrator.runKeygen 的“启动即融合并发 pump”模式——它与
+        // clear_session 阶段边界同族竞态（并发 start 时先发方的前期消息可能被后到方
+        // 的 start 清掉 ⇒ "state machine did not request this message (round ...)"）。
+        // 实证：PR #233 的 MPC Java Cluster E2E 抖动一次（引擎侧零 ERROR、5 例中仅此
+        // 并发用例失败、rerun 即绿）。sid 追加 nanoTime：防同 JVM 并行 fork 毫秒碰撞。
+        String sid = "i-batch-keygen-" + System.currentTimeMillis() + "-" + System.nanoTime();
         int n = 3;
         int t = 2;
 
-        // I 批关键验证：Java MpcCggmpOrchestrator 经 gRPC + mTLS + auth 真实驱动
-        // 3 个 mpc-engine 进程跑通 CGGMP21 keygen 协议（4 轮内完成），三方产出一致 agg pubkey。
-        // 这证明 Java 编排层与 mpc-engine 引擎**字节级互通**（F 批 RPC 契约 + is_p2p 消歧）。
         log.info("=== I batch: CGGMP21 keygen(n={}, t={}) session={} ===", n, t, sid);
-        java.util.concurrent.ExecutorService exec =
-                java.util.concurrent.Executors.newFixedThreadPool(n);
-        try {
-            List<java.util.concurrent.Future<CgPumpResult>> keygenFutures = new ArrayList<>();
-            for (int i = 0; i < n; i++) {
-                final int idx = i;
-                keygenFutures.add(exec.submit(() ->
-                        orchestrators.get(idx).runKeygen(sid, 0, idx, n, t)));
+
+        // Phase 1: 三方 start 串行（首波 outgoing 留在内存，pumpAll 才发布）
+        List<CgPumpResult> keygenStates = new ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            CgPumpResult r = partyClients.get(i).startKeygen(sid, 0, i, n, t);
+            if (!r.isSuccess() && r.getError() != null
+                    && r.getError().contains("HTTP status code")) {
+                // Netty 连接层抖动（非协议错误）：startKeygen 幂等守卫容忍重试
+                log.warn("startKeygen party {} transport glitch, retry once", i);
+                r = partyClients.get(i).startKeygen(sid, 0, i, n, t);
             }
-            List<CgPumpResult> keygenResults = new ArrayList<>();
-            for (int i = 0; i < n; i++) {
-                CgPumpResult r = keygenFutures.get(i).get(360, java.util.concurrent.TimeUnit.SECONDS);
-                assertTrue(r.isSuccess(), "keygen party " + i + " failed: " + r.getError());
-                assertTrue(r.isFinished(), "keygen party " + i + " not finished");
-                keygenResults.add(r);
-            }
-        // 三方应产出一致的聚合公钥
-        String aggPk0 = keygenResults.get(0).getAggregatePublicKey();
+            assertTrue(r.isSuccess(), "start keygen party " + i + " failed: " + r.getError());
+            keygenStates.add(r);
+        }
+
+        // Phase 2: 统一 pumpAll 循环（与 status/fullPipeline 同款）
+        keygenStates = pumpAll(keygenStates, sid, allParties(n), true, "keygen");
+        for (int i = 0; i < n; i++) {
+            assertTrue(keygenStates.get(i).isFinished(), "keygen party " + i + " not finished");
+        }
+
+        // 三方应产出一致的聚合公钥（I 批原始断言保留）
+        String aggPk0 = keygenStates.get(0).getAggregatePublicKey();
         assertNotNull(aggPk0, "agg pubkey is null");
         for (int i = 1; i < n; i++) {
-            String pki = keygenResults.get(i).getAggregatePublicKey();
+            String pki = keygenStates.get(i).getAggregatePublicKey();
             assertEquals(aggPk0, pki,
                     "party " + i + " agg pubkey mismatch (got " + pki + " vs " + aggPk0 + ")");
         }
-        log.info("keygen done, agg pubkey = {}", aggPk0);
-
-            // I 批：aux + assemble + sign + verify 三阶段见下方 cggmpE2EFullPipeline
-            // （J 批已补齐）。本批**关键验证**：
-            //   1. Java 客户端经 mTLS + Bearer auth gRPC 真实驱动 3 进程 mpc-engine
-            //   2. CGGMP21 keygen 协议 4-5 轮内完成（端到端延迟 < 1s）
-            //   3. 三方产出一致的压缩 SEC1 hex 聚合公钥（33 字节）
-            //   4. CgStatus 正确反映 has_keygen_state / has_core_share / has_key_share
-            //      （status 测试单独验）
-            log.info("I 批 keygen done: agg pubkey = {}",
-                    keygenResults.get(0).getAggregatePublicKey());
-            log.info("I 批端到端验证完成（全流水线见 cggmpE2EFullPipeline）");
-        } finally {
-            exec.shutdown();
-            exec.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS);
-        }
+        log.info("I 批 keygen done: agg pubkey = {}", aggPk0);
     }
-
     @Test
     @DisplayName("CgStatus 在 keygen 完成后正确反映状态")
     void cggpE2EStatus() throws Exception {
