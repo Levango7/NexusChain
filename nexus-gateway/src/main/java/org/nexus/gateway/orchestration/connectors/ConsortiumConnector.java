@@ -1,5 +1,8 @@
 package org.nexus.gateway.orchestration.connectors;
 
+import org.nexus.gateway.approval.SigningApprovalExecutionService;
+import org.nexus.gateway.approval.SigningOutcome;
+import org.nexus.gateway.approval.SigningTransfers;
 import org.nexus.gateway.client.ConsortiumRpcClient;
 import org.nexus.gateway.config.GatewayConfig;
 import org.nexus.gateway.orchestration.connector.*;
@@ -7,8 +10,8 @@ import org.nexus.gateway.orchestration.settlement.ConsortiumFinalityPolicy;
 import org.nexus.gateway.orchestration.settlement.FinalityPolicy;
 import org.nexus.gateway.orchestration.settlement.FinalityService;
 import org.nexus.gateway.model.FinalityStatus;
+import org.nexus.gateway.model.SubmissionStatus;
 import org.nexus.sdk.client.feign.SigningServiceFeignClient;
-import org.nexus.sdk.client.feign.SigningResponses;
 import org.nexus.sdk.client.feign.WalletMgmtFeignClient;
 import org.nexus.sdk.wallet.WalletUtils;
 import org.slf4j.Logger;
@@ -73,6 +76,16 @@ public class ConsortiumConnector implements PaymentConnector {
     private final Map<String, String> payeeHashMap = new ConcurrentHashMap<>();
     /** payer pubkeyHash per connectorPaymentId, preferred refund target. */
     private final Map<String, String> payerHashMap = new ConcurrentHashMap<>();
+    /** 审批执行链接的 requestKey per connectorPaymentId（待审批时用于状态轮询推进）。 */
+    private final Map<String, String> approvalRequestKeys = new ConcurrentHashMap<>();
+
+    /** 大额签名审批执行服务；未装配时退化为直接签名（2001 将 fail-closed）。 */
+    private SigningApprovalExecutionService approvalExecutionService;
+
+    @Autowired(required = false)
+    public void setApprovalExecutionService(SigningApprovalExecutionService approvalExecutionService) {
+        this.approvalExecutionService = approvalExecutionService;
+    }
 
     /**
      * 主构造函数：Spring 装配时使用，注入可选的 {@link OraclePriceAdapter}。
@@ -133,28 +146,51 @@ public class ConsortiumConnector implements PaymentConnector {
             // is absent, the currency is already the chain token, or conversion fails.
             BigDecimal settlementAmount = resolveChainAmount(request);
 
-            // Delegate construction + signing + broadcast to exchange-wallet. The returned
-            // txHash is the real on-chain transaction hash (already signed by exchange-wallet).
-            // 契约修正（2026-09-10）：Feign 返回响应 Map，经 SigningResponses 提取 txHash。
-            String txHash = SigningResponses.txHash(
-                    signingServiceClient.signTransfer(platformPubkey, toPubkeyHash, settlementAmount));
-            if (txHash == null) {
-                return ConnectorPaymentResult.fail("exchange-wallet signing failed");
+            String connectorId = "consortium_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+            // 业务请求标识优先用编排支付 ID，保证同一笔支付重试时复用同一审批请求
+            String requestKey = SigningTransfers.requestKey("CONSORTIUM", request.getPaymentId(), connectorId);
+            SigningOutcome outcome = SigningTransfers.signOrAwait(approvalExecutionService,
+                    signingServiceClient, requestKey, "CONSORTIUM",
+                    platformPubkey, toPubkeyHash, settlementAmount, "NEX");
+
+            if (outcome.requiresManualVerification() || outcome.isAwaiting()) {
+                // 待审批：钱未出账；结果不可核对：钱可能已出账。两种都不能记 FAILED，
+                // 业务侧统一保持 PROCESSING（前者由 queryPayment 推进，后者等人工核对）
+                pendingPayments.put(connectorId, PaymentStatus.PROCESSING);
+                payeeHashMap.put(connectorId, toPubkeyHash);
+                putPayerHash(connectorId, request.getPayerAddress());
+                approvalRequestKeys.put(connectorId, requestKey);
+                if (outcome.requiresManualVerification()) {
+                    log.error("Consortium payment execution unverified (manual verification required): "
+                            + "connectorId={}, requestKey={}", connectorId, requestKey);
+                } else {
+                    log.info("Consortium payment awaiting approval: connectorId={}, approvalId={}, amount={}",
+                            connectorId, outcome.approvalId(), settlementAmount);
+                }
+                return ConnectorPaymentResult.ok(connectorId, PaymentStatus.PROCESSING)
+                        .withSubmissionStatus(SubmissionStatus.SIGNING);
+            }
+            if (!outcome.isExecuted() || outcome.txHash() == null) {
+                return ConnectorPaymentResult.fail("exchange-wallet signing failed: " + outcome.error());
             }
 
-            String connectorId = "consortium_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+            String txHash = outcome.txHash();
             pendingPayments.put(connectorId, PaymentStatus.PROCESSING);
             payeeHashMap.put(connectorId, toPubkeyHash);
-            String payerHash = WalletUtils.addressToPubkeyHash(request.getPayerAddress());
-            if (payerHash != null) {
-                payerHashMap.put(connectorId, payerHash);
-            }
+            putPayerHash(connectorId, request.getPayerAddress());
             txHashMap.put(connectorId, txHash);
             log.info("Consortium payment submitted (delegated to exchange-wallet): {} -> txHash={}", connectorId, txHash);
             return ConnectorPaymentResult.ok(connectorId, PaymentStatus.PROCESSING, txHash);
         } catch (RuntimeException e) {
             log.error("Consortium payment failed: {}", e.getMessage());
             return ConnectorPaymentResult.fail("Consortium settlement error: " + e.getMessage());
+        }
+    }
+
+    private void putPayerHash(String connectorId, String payerAddress) {
+        String payerHash = WalletUtils.addressToPubkeyHash(payerAddress);
+        if (payerHash != null) {
+            payerHashMap.put(connectorId, payerHash);
         }
     }
 
@@ -192,35 +228,76 @@ public class ConsortiumConnector implements PaymentConnector {
 
         // Poll consortium chain for confirmation via FinalityPolicy
         String txHash = txHashMap.get(connectorPaymentId);
-        if (txHash != null) {
-            FinalityPolicy policy = getFinalityPolicy();
-            if (policy != null) {
-                try {
-                    FinalityService.FinalityInfo info = policy.evaluateFinality(txHash);
-                    PaymentStatus mapped = mapFinalityToPaymentStatus(info.status());
-                    if (mapped == PaymentStatus.SUCCEEDED) {
-                        pendingPayments.put(connectorPaymentId, PaymentStatus.SUCCEEDED);
-                        log.info("Consortium payment confirmed (finality={}): {}", info.status(), connectorPaymentId);
-                    }
-                    return mapped;
-                } catch (RuntimeException e) {
-                    log.warn("Failed to evaluate consortium finality: {}", e.getMessage());
+        if (txHash == null) {
+            SigningOutcome outcome = advanceApproval(connectorPaymentId);
+            if (outcome != null) {
+                if (outcome.isFailed()) {
+                    pendingPayments.put(connectorPaymentId, PaymentStatus.FAILED);
+                    log.error("Consortium payment approval leg failed: connectorId={}, requestKey={}, error={}",
+                            connectorPaymentId, approvalRequestKeys.get(connectorPaymentId), outcome.error());
+                    return PaymentStatus.FAILED;
                 }
-            } else {
-                // Fallback: legacy confirmation check when FinalityPolicy unavailable
-                try {
-                    boolean confirmed = consortiumRpc.isTransactionConfirmed(txHash);
-                    if (confirmed) {
-                        pendingPayments.put(connectorPaymentId, PaymentStatus.SUCCEEDED);
-                        log.info("Consortium payment confirmed (legacy): {}", connectorPaymentId);
-                        return PaymentStatus.SUCCEEDED;
+                if (outcome.isExecuted() && outcome.txHash() != null && !outcome.txHash().isBlank()) {
+                    txHash = outcome.txHash();
+                    txHashMap.put(connectorPaymentId, txHash);
+                    log.info("Consortium payment executed after approval: connectorId={}, txHash={}",
+                            connectorPaymentId, txHash);
+                } else {
+                    if (outcome.requiresManualVerification()) {
+                        log.error("Consortium payment approval executed but result is unverified "
+                                        + "(manual check required, retry forbidden): connectorId={}, requestKey={}",
+                                connectorPaymentId, approvalRequestKeys.get(connectorPaymentId));
                     }
-                } catch (RuntimeException e) {
-                    log.warn("Failed to query consortium confirmation: {}", e.getMessage());
+                    // 仍在审批中 / 执行中 / 结果待人工核对 —— 都不是失败
+                    return PaymentStatus.PROCESSING;
                 }
             }
         }
+
+        FinalityPolicy policy = getFinalityPolicy();
+        if (policy != null) {
+            try {
+                FinalityService.FinalityInfo info = policy.evaluateFinality(txHash);
+                PaymentStatus mapped = mapFinalityToPaymentStatus(info.status());
+                if (mapped == PaymentStatus.SUCCEEDED) {
+                    pendingPayments.put(connectorPaymentId, PaymentStatus.SUCCEEDED);
+                    log.info("Consortium payment confirmed (finality={}): {}", info.status(), connectorPaymentId);
+                }
+                return mapped;
+            } catch (RuntimeException e) {
+                log.warn("Failed to evaluate consortium finality: {}", e.getMessage());
+            }
+        } else {
+            // Fallback: legacy confirmation check when FinalityPolicy unavailable
+            try {
+                boolean confirmed = consortiumRpc.isTransactionConfirmed(txHash);
+                if (confirmed) {
+                    pendingPayments.put(connectorPaymentId, PaymentStatus.SUCCEEDED);
+                    log.info("Consortium payment confirmed (legacy): {}", connectorPaymentId);
+                    return PaymentStatus.SUCCEEDED;
+                }
+            } catch (RuntimeException e) {
+                log.warn("Failed to query consortium confirmation: {}", e.getMessage());
+            }
+        }
         return PaymentStatus.PROCESSING;
+    }
+
+    /**
+     * 推进一笔"大额待审批"的联盟链支付：查审批状态，已批准则由本调用方执行签名端点。
+     *
+     * <p>执行只由该笔支付自己的状态轮询触发——不存在脱离业务记录的后台自动执行，
+     * 因而不会出现"业务已判失败、审批随后把钱转走"。</p>
+     *
+     * @param connectorPaymentId 连接器支付 ID
+     * @return 推进后的三态结果；本笔没有审批链接（直接签名路径）时返回 null
+     */
+    private SigningOutcome advanceApproval(String connectorPaymentId) {
+        String requestKey = approvalRequestKeys.get(connectorPaymentId);
+        if (requestKey == null || approvalExecutionService == null) {
+            return null;
+        }
+        return approvalExecutionService.refresh(requestKey);
     }
 
     /**
@@ -259,13 +336,27 @@ public class ConsortiumConnector implements PaymentConnector {
             if (targetHash == null) {
                 return ConnectorRefundResult.fail("original payment not found: " + connectorPaymentId);
             }
-            String txHash = SigningResponses.txHash(signingServiceClient.signTransfer(
-                    platformPubkey, targetHash, BigDecimal.valueOf(amount)));
-            if (txHash == null) {
-                return ConnectorRefundResult.fail("exchange-wallet refund signing failed");
+            String refundId = "consortium_refund_" + connectorPaymentId;
+            SigningOutcome outcome = SigningTransfers.signOrAwait(approvalExecutionService,
+                    signingServiceClient,
+                    SigningTransfers.requestKey("CONSORTIUM_REFUND", connectorPaymentId + ":" + amount, refundId),
+                    "CONSORTIUM_REFUND", platformPubkey, targetHash, BigDecimal.valueOf(amount), "NEX");
+            if (outcome.isExecuted()) {
+                pendingPayments.put(connectorPaymentId, PaymentStatus.REFUNDED);
+                return ConnectorRefundResult.ok(refundId);
             }
-            pendingPayments.put(connectorPaymentId, PaymentStatus.REFUNDED);
-            return ConnectorRefundResult.ok("consortium_refund_" + connectorPaymentId);
+            if (outcome.isAwaiting()) {
+                // 大额退款待审批：钱还没动，但也绝不能报"退款成功"或"退款失败"
+                log.info("Consortium refund awaiting approval: connectorId={}, approvalId={}",
+                        connectorPaymentId, outcome.approvalId());
+                return ConnectorRefundResult.pending(refundId, outcome.approvalId());
+            }
+            if (outcome.requiresManualVerification()) {
+                log.error("Consortium refund executed but unverified (manual check required): connectorId={}, approvalId={}",
+                        connectorPaymentId, outcome.approvalId());
+                return ConnectorRefundResult.pending(refundId, outcome.approvalId());
+            }
+            return ConnectorRefundResult.fail("exchange-wallet refund signing failed: " + outcome.error());
         } catch (RuntimeException e) {
             return ConnectorRefundResult.fail("Consortium refund failed: " + e.getMessage());
         }

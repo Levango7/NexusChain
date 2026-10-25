@@ -153,6 +153,23 @@ public class ApprovalExecutionLink {
     public String getRequestKey() { return requestKey; }
     public void setRequestKey(String requestKey) { this.requestKey = requestKey; }
 
+    /**
+     * 从 {@code execution:<类型>:<业务 ID>} 形态的 requestKey 中取出业务标识。
+     *
+     * <p>推进任务据此回写业务记录（如订阅的 authTxHash）。业务 ID 允许自带冒号
+     * （如 {@code SUB_NO:3}），因此只剥掉前两段。</p>
+     *
+     * @return 业务标识；key 形态不符时返回原 key
+     */
+    public String businessId() {
+        if (requestKey == null) {
+            return null;
+        }
+        int first = requestKey.indexOf(':');
+        int second = first < 0 ? -1 : requestKey.indexOf(':', first + 1);
+        return second < 0 ? requestKey : requestKey.substring(second + 1);
+    }
+
     public String getRequestType() { return requestType; }
     public void setRequestType(String requestType) { this.requestType = requestType; }
 

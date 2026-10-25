@@ -35,13 +35,104 @@ public final class SigningResponses {
     private SigningResponses() {
     }
 
+    /** 三态结果类别：已执行 / 待审批 / 明确失败。 */
+    public enum OutcomeKind {
+        /** 已签名并广播，拿到了交易哈希。 */
+        EXECUTED,
+        /** 大额签名转人工审批，尚未动账；调用方应持久化 approvalId 并稍后执行。 */
+        AWAITING_APPROVAL,
+        /** 明确失败（确定未动账，或是无法跟踪的响应）。 */
+        FAILED
+    }
+
+    /**
+     * {@link #classify} 的三态结果快照。
+     *
+     * @param kind       结果类别
+     * @param txHash     交易哈希，仅 {@link OutcomeKind#EXECUTED} 非空
+     * @param approvalId 审批请求 ID，仅 {@link OutcomeKind#AWAITING_APPROVAL} 非空
+     * @param message    失败原因或服务端 message（诊断用）
+     * @param statusCode 签名服务返回的 statusCode（响应为 null 时为 null）
+     */
+    public record Outcome(OutcomeKind kind, String txHash, String approvalId,
+                          String message, Integer statusCode) {
+
+        public boolean isExecuted() {
+            return kind == OutcomeKind.EXECUTED;
+        }
+
+        public boolean isAwaitingApproval() {
+            return kind == OutcomeKind.AWAITING_APPROVAL;
+        }
+
+        public boolean isFailed() {
+            return kind == OutcomeKind.FAILED;
+        }
+    }
+
+    /**
+     * 把签名服务响应归入三态：已执行 / 待审批 / 失败。
+     *
+     * <p><b>调用方应优先使用本方法而不是 {@link #txHash}。</b>2001（待审批）没有
+     * {@code data} 字段，用 {@code txHash(...) == null} 判定会把"等审批"误判成
+     * "签名失败"——这是执行腿断链的根因。</p>
+     *
+     * <p>边界语义：</p>
+     * <ul>
+     *   <li>null（fallback 降级）→ FAILED（确定未动账）</li>
+     *   <li>2001 且带非空 approvalId → AWAITING_APPROVAL</li>
+     *   <li>2001 但缺 approvalId → FAILED（无法跟踪，不能当待审批）</li>
+     *   <li>2000 且 data 为非空哈希 → EXECUTED</li>
+     *   <li>2000 但 data 缺失/空白、其他状态码、非法状态码 → FAILED</li>
+     * </ul>
+     *
+     * @param response Feign 返回的响应 Map（可能为 null）
+     * @return 三态结果（永不为 null）
+     */
+    public static Outcome classify(Map<String, Object> response) {
+        if (response == null) {
+            return new Outcome(OutcomeKind.FAILED, null, null,
+                    "signing service unavailable", null);
+        }
+        Integer code = statusCode(response);
+        if (code != null && code == STATUS_APPROVAL_REQUIRED) {
+            String approvalId = approvalId(response);
+            if (approvalId == null) {
+                return new Outcome(OutcomeKind.FAILED, null, null,
+                        "approval required but approvalId missing", code);
+            }
+            return new Outcome(OutcomeKind.AWAITING_APPROVAL, null, approvalId,
+                    message(response), code);
+        }
+        if (code != null && code == STATUS_OK) {
+            Object data = response.get(KEY_DATA);
+            if (data != null) {
+                String txHash = data.toString();
+                if (!txHash.isBlank()) {
+                    return new Outcome(OutcomeKind.EXECUTED, txHash, null,
+                            message(response), code);
+                }
+            }
+            String msg = message(response);
+            return new Outcome(OutcomeKind.FAILED, null, null,
+                    msg == null ? "statusCode=2000 but data is missing or blank" : msg, code);
+        }
+        String msg = message(response);
+        return new Outcome(OutcomeKind.FAILED, null, null,
+                msg == null ? "signing failed (statusCode=" + code + ")" : msg, code);
+    }
+
     /**
      * 从 signTransfer 响应中提取交易哈希。
      *
      * @param response Feign 返回的响应 Map（可能为 null——fallback 降级）
      * @return 交易哈希；响应为 null / statusCode 非 2000 / data 缺失或空白
      *         时返回 null（调用方按签名失败处理）
+     * @deprecated 用 {@link #classify(Map)} 区分三态后再取 {@link Outcome#txHash()}。
+     *             本方法无法区分"待审批（2001）"与"签名失败"，继续使用会把
+     *             大额审批请求误记为 FAILED。
      */
+    @Deprecated
     public static String txHash(Map<String, Object> response) {
         if (response == null) {
             return null;
