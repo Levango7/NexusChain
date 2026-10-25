@@ -4,6 +4,22 @@
 
 ## [Unreleased]
 
+### 拨号兜底补强：peerID 缺失时兜底也生效（PLAN-034 v2，2026-10-25）
+
+v1（#242）的验收实测（A 改回 host.docker.internal 广告地址 + B 空库重启）暴露：
+B 从协议学到的**广告地址 Peer 不带 peerID** ⇒ v1 的"同 peerID 匹配"守卫直接
+跳过，兜底一次都没触发（外拨全失败）。
+
+- `redialOnAlternateAddress` 放宽：**同 peerID 优先；peerID 缺失 / 无同 ID
+  bootstrap 时降级为"任意地址不同的 bootstrap"**（仍只重试一次，无拨号风暴）；
+- 实测：兜底按设计触发 **×50**（`P2P dial fallback: host.docker.internal:9235
+  unreachable, retrying same peer at 172.17.208.1:9235`）——v1 的"不触发"bug 已修；
+- **如实边界**：兜底目标在本环境也失败（`dial fallback also failed ...
+  CANCELLED`，4ms 内；TCP 可达、A 侧 0.0.0.0 监听）——"换地址后必然可达"
+  **不成立**，端到端恢复依赖对 CANCELLED 的后续定位（PLAN-035 候选）；
+- 单测 4 例（同 ID 必兜底 / 无同 ID 降级兜底 / peerID 缺失降级兜底 /
+  同地址不重试）；全模块回归绿。
+
 ### P2P 拨号兜底：对端广告地址不可达时重试 bootstrap 可达地址（PLAN-034，2026-10-25）
 
 修复多机/NAT 拓扑下真实撞到的阻断：对端**广告地址**（`--p2p.address`）在
@@ -1159,9 +1175,16 @@ FAILED，审批通过后也没有任何调用方去执行。按裁决"调用方�
   **不改** "先贷账后动链" 的既有账务语义（该项仍按裁决留待 owner 定）。
   同时在用例注释里钉住一个容易踩的差别：DB 模式有 `ledger_entry (reference, account)` 唯一键挡重复记账，
   **内存模式没有** ⇒ 谁将来给 `settle()` 加自动重试，会在测试/无库环境里静默多贷。
+- **存量可见性（板子 #234 §二）**：把「盘点」从「推进」里拆开——`ApprovalExecutionLinkRepository.stockByStatus`
+  按业务类型 group by 统计**全部**非终态链接（含被推进白名单有意排除的 `CHAIN` / `CONSORTIUM` 支付），
+  推进任务每轮输出一条带**类型 / 数量 / 最久一条年龄**的 WARN。理由：排除自动推进是对的，
+  但「安全且完全不可见」在资金链路上不完整——「该动没动」也要能被看见。
+  同时把 `manual`（结果不可核对，**可能已动账**）从聚合 info 里拆出来单发一条计数告警
+  （`failed` 是可以等的，`manual` 不能等）；盘点是只读旁路，它自己抛异常不拖累推进。
+  推进方法改为返回 `AdvanceReport`（计数 + 存量），既能断言也为后续接指标留口。
 - **测试**：`SigningResponsesTest` 15 例（三态逐例钉死）、`SigningTransfersTest` 5 例、
   `ApprovalExecutionLinkTest` 4 例（requestKey/businessId 对偶）、
-  `ApprovalExecutionReconcilerTest` 7 例（含白名单结构断言）、
+  `ApprovalExecutionReconcilerTest` 11 例（含白名单结构断言，以及 #234 §二 要求的 4 例只读盘点/聚合计数）、
   `ChainConnectorApprovalTest` 9 例、`ConsortiumConnectorApprovalTest` 5 例、
   `SubscriptionServiceImplApprovalTest` 5 例；变异反证：删掉"审批腿失败→FAILED"分支
   与把 `CHAIN` 塞进白名单，均按预期转红。

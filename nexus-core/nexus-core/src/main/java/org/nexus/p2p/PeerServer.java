@@ -319,7 +319,7 @@ public class PeerServer extends NexusChainGrpc.NexusChainImplBase {
      * 地址相同 ⇒ 不动作。</p>
      */
     private void redialOnAlternateAddress(Peer peer, long ttl, AbstractMessage msg) {
-        if (peer == null || peer.peerID == null) {
+        if (peer == null) {
             return;
         }
         List<Peer> alternates;
@@ -331,19 +331,34 @@ public class PeerServer extends NexusChainGrpc.NexusChainImplBase {
         if (alternates == null || alternates.isEmpty()) {
             return;
         }
+        // 首选：同 peerID 的备选（精确身份匹配）
         List<Peer> sameId = new ArrayList<>();
         for (Peer b : alternates) {
-            if (b != null && b.peerID != null && Arrays.equals(peer.peerID, b.peerID)) {
+            if (b != null && peer.peerID != null && b.peerID != null
+                    && Arrays.equals(peer.peerID, b.peerID)) {
                 sameId.add(b);
             }
         }
-        if (sameId.isEmpty()) {
+        // 兜底降级（2026-10-25 验收补充）：学习到的"广告地址 Peer"常不带 peerID
+        // （多机实测：B 学到的 A@host.docker.internal peerID=null）——此时若无同 ID
+        // 匹配，退化为"任意地址不同的 bootstrap"（协议消息对等端可达即可，仍只重试一次）。
+        List<Peer> candidates = sameId;
+        if (candidates.isEmpty()) {
+            candidates = new ArrayList<>();
+            for (Peer b : alternates) {
+                if (b != null && !(b.host.equals(peer.host) && b.port == peer.port)) {
+                    candidates.add(b);
+                }
+            }
+        }
+        if (candidates.isEmpty()) {
             return;
         }
-        String key = Hex.encodeHexString(peer.peerID);
+        String key = peer.peerID != null ? Hex.encodeHexString(peer.peerID)
+                : (peer.host + ":" + peer.port);
         java.util.concurrent.atomic.AtomicInteger cursor =
                 dialFallbackCursor.computeIfAbsent(key, k -> new java.util.concurrent.atomic.AtomicInteger());
-        Peer alt = sameId.get(Math.floorMod(cursor.getAndIncrement(), sameId.size()));
+        Peer alt = candidates.get(Math.floorMod(cursor.getAndIncrement(), candidates.size()));
         if (alt.host.equals(peer.host) && alt.port == peer.port) {
             return; // 同一地址，重试无意义
         }

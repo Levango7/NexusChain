@@ -56,3 +56,27 @@ LAN IP），但**同一对端的另一地址可达**（bootstrap 配置里的网
   对端（无 bootstrap 条目）仍无兜底；
 - 只重试一次：若兜底地址也不可达，退回原行为（WARN + 等常规周期/推送）；
 - 单机双进程测试环境不受影响。
+
+---
+
+## 五、验收记录（2026-10-25，测试床实测）
+
+### v1（PR #242）——机制未触发，暴露盲区
+把 A 的 `--p2p.address` 改回 `host.docker.internal`（对 WSL 不可达）后 B 的
+外拨全部失败，但 **兜底一次都没触发**。根因：B 从协议学到的"广告地址 Peer"
+**peerID 为 null**，而 v1 的兜底守卫 `peer.peerID == null → return` 直接跳过。
+
+### v2（本 PR）——机制验证通过；端到端仍差一步
+- `redialOnAlternateAddress` 放宽：同 peerID 匹配优先；**peerID 缺失或无同 ID
+  匹配时降级为"任意地址不同的 bootstrap"**（仍只重试一次）。
+- 实测证据（B 重启、空库、A 广告 host.docker.internal）：
+  **`P2P dial fallback: host.docker.internal:9235 unreachable, retrying same peer
+  at 172.17.208.1:9235` × 50** —— 兜底按设计触发并立即改用 bootstrap 地址。
+- **未打通的一环（如实）**：兜底目标 172.17.208.1:9235 也报
+  `dial fallback also failed: ... CANCELLED`（TCP 层该地址可达、A 侧
+  `NettyServerBuilder.forPort` 是 0.0.0.0 监听）。CANCELLED 在 4ms 内出现，
+  疑似 A 侧 gRPC 处理或 B 侧 channel 生命周期问题（`gRPCClient.onError` 会
+  `channel.shutdown()`），**待定位**，记为后续项（PLAN-035 候选：兜底目标失败
+  原因 + listen/advertise 解耦的 multi-homing）。
+- 结论：**v2 修复了"兜底不触发"这个真 bug（单测 4 例锁定）；但"换地址后必然
+  可达"不成立**——端到端恢复依赖后续对 CANCELLED 的定位。
