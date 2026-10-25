@@ -1143,9 +1143,16 @@ FAILED，审批通过后也没有任何调用方去执行。按裁决"调用方�
   **不改** "先贷账后动链" 的既有账务语义（该项仍按裁决留待 owner 定）。
   同时在用例注释里钉住一个容易踩的差别：DB 模式有 `ledger_entry (reference, account)` 唯一键挡重复记账，
   **内存模式没有** ⇒ 谁将来给 `settle()` 加自动重试，会在测试/无库环境里静默多贷。
+- **存量可见性（板子 #234 §二）**：把「盘点」从「推进」里拆开——`ApprovalExecutionLinkRepository.stockByStatus`
+  按业务类型 group by 统计**全部**非终态链接（含被推进白名单有意排除的 `CHAIN` / `CONSORTIUM` 支付），
+  推进任务每轮输出一条带**类型 / 数量 / 最久一条年龄**的 WARN。理由：排除自动推进是对的，
+  但「安全且完全不可见」在资金链路上不完整——「该动没动」也要能被看见。
+  同时把 `manual`（结果不可核对，**可能已动账**）从聚合 info 里拆出来单发一条计数告警
+  （`failed` 是可以等的，`manual` 不能等）；盘点是只读旁路，它自己抛异常不拖累推进。
+  推进方法改为返回 `AdvanceReport`（计数 + 存量），既能断言也为后续接指标留口。
 - **测试**：`SigningResponsesTest` 15 例（三态逐例钉死）、`SigningTransfersTest` 5 例、
   `ApprovalExecutionLinkTest` 4 例（requestKey/businessId 对偶）、
-  `ApprovalExecutionReconcilerTest` 7 例（含白名单结构断言）、
+  `ApprovalExecutionReconcilerTest` 11 例（含白名单结构断言，以及 #234 §二 要求的 4 例只读盘点/聚合计数）、
   `ChainConnectorApprovalTest` 9 例、`ConsortiumConnectorApprovalTest` 5 例、
   `SubscriptionServiceImplApprovalTest` 5 例；变异反证：删掉"审批腿失败→FAILED"分支
   与把 `CHAIN` 塞进白名单，均按预期转红。

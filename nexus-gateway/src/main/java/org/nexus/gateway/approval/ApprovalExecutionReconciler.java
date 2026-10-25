@@ -76,20 +76,19 @@ public class ApprovalExecutionReconciler {
     }
 
     /**
-     * 每 2 分钟推进一批托管类型的待审批链接。
+     * 每 2 分钟推进一批托管类型的待审批链接，并盘点<b>全量</b>非终态存量。
      *
      * <p>cron 可用 {@code nexus.gateway.approval.execution-cron} 覆盖。</p>
+     *
+     * @return 本轮结果（计数 + 存量盘点），供测试与后续接指标使用
      */
     @Scheduled(cron = "${nexus.gateway.approval.execution-cron:0 */2 * * * *}")
     @SchedulerLock(name = "approvalExecutionAdvance", lockAtMostFor = "PT5M", lockAtLeastFor = "PT30S")
-    public void advanceAwaitingApprovals() {
+    public AdvanceReport advanceAwaitingApprovals() {
         List<ApprovalExecutionLink> candidates = linkRepository
                 .findTop100ByRequestTypeInAndStatusInAndUpdatedAtBeforeOrderByUpdatedAtAsc(
                         MANAGED_REQUEST_TYPES, OPEN_STATUSES,
                         LocalDateTime.now().minus(SETTLE_BEFORE));
-        if (candidates.isEmpty()) {
-            return;
-        }
 
         int executed = 0;
         int failed = 0;
@@ -118,8 +117,63 @@ public class ApprovalExecutionReconciler {
                         link.getRequestKey(), e.getMessage());
             }
         }
-        log.info("审批执行腿推进完成: candidates={}, executed={}, failed={}, manual={}, waiting={}",
-                candidates.size(), executed, failed, manual, waiting);
+        if (!candidates.isEmpty()) {
+            log.info("审批执行腿推进完成: candidates={}, executed={}, failed={}, manual={}, waiting={}",
+                    candidates.size(), executed, failed, manual, waiting);
+        }
+        // manual（可能已动账）与 failed（确定未动账）的紧迫性不同，必须单独成一条可告警的聚合行
+        if (manual > 0) {
+            log.error("有 {} 笔审批执行结果不可核对，需人工核对链上交易（禁止自动重试）", manual);
+        }
+
+        List<Stock> stock = inventory();
+        return new AdvanceReport(candidates.size(), executed, failed, manual, waiting, stock);
+    }
+
+    /**
+     * 只读盘点全部非终态链接的存量（<b>含被推进白名单排除的 CHAIN / CONSORTIUM 支付</b>）。
+     *
+     * <p>这是 Board #234 §二 要的"读与写分离"：排除自动推进是为了不出现
+     * "编排侧判 FAILED、后台把钱转走"，但被排除的链接不能因此**不可见**。
+     * 每种存量类型打一条带"最久一条年龄"的告警行，避免一堆数字没人看。</p>
+     */
+    List<Stock> inventory() {
+        List<ApprovalExecutionLinkRepository.StockRow> rows;
+        try {
+            rows = linkRepository.stockByStatus(OPEN_STATUSES);
+        } catch (RuntimeException e) {
+            // 盘点是只读的旁路：它坏了不能拖累推进
+            log.warn("审批链接存量盘点失败（不影响推进）: error={}", e.getMessage());
+            return List.of();
+        }
+        if (rows == null) {
+            return List.of();
+        }
+        List<Stock> stock = new java.util.ArrayList<>(rows.size());
+        LocalDateTime now = LocalDateTime.now();
+        for (ApprovalExecutionLinkRepository.StockRow row : rows) {
+            Stock entry = new Stock(row.getRequestType(), row.getLinkCount(), row.getOldestUpdatedAt());
+            stock.add(entry);
+            boolean advancedByThisJob = MANAGED_REQUEST_TYPES.contains(entry.requestType());
+            String note = advancedByThisJob ? "本任务托管" : "不在推进白名单（需业务侧轮询或人工推进）";
+            log.warn("审批链接存量: type={}, count={}, oldest={}（{}）",
+                    entry.requestType(), entry.count(), entry.ageOfOldest(now), note);
+        }
+        return stock;
+    }
+
+    /** 一轮推进的结果（计数 + 全量存量盘点）。 */
+    public record AdvanceReport(int candidates, int executed, int failed, int manual, int waiting,
+                                List<Stock> stock) {
+    }
+
+    /** 某一业务类型的非终态存量。 */
+    public record Stock(String requestType, long count, LocalDateTime oldestUpdatedAt) {
+
+        /** 最久一条距今多久；时间缺失时返回 null（只影响可读性，不影响计数）。 */
+        public Duration ageOfOldest(LocalDateTime now) {
+            return oldestUpdatedAt == null ? null : Duration.between(oldestUpdatedAt, now);
+        }
     }
 
     /**

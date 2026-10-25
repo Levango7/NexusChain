@@ -191,4 +191,90 @@ class ApprovalExecutionReconcilerTest {
 
         verify(subscriptionRepository, never()).save(any());
     }
+
+    // --- 只读存量盘点（Board #234 §二：读与写分离）---
+
+    private static ApprovalExecutionLinkRepository.StockRow row(String type, long count,
+                                                                LocalDateTime oldest) {
+        return new ApprovalExecutionLinkRepository.StockRow() {
+            @Override
+            public String getRequestType() {
+                return type;
+            }
+
+            @Override
+            public long getLinkCount() {
+                return count;
+            }
+
+            @Override
+            public LocalDateTime getOldestUpdatedAt() {
+                return oldest;
+            }
+        };
+    }
+
+    @Test
+    @DisplayName("盘点覆盖被推进白名单排除的类型（CHAIN 不再不可见）")
+    void inventoryCoversExcludedTypes() {
+        stubCandidates();
+        LocalDateTime oldest = LocalDateTime.now().minusHours(5);
+        when(linkRepository.stockByStatus(anyCollection())).thenReturn(List.of(
+                row("CHAIN", 3, oldest), row("SUB_CHARGE", 1, oldest)));
+
+        var report = reconciler.advanceAwaitingApprovals();
+
+        assertEquals(4, report.stock().stream().mapToLong(ApprovalExecutionReconciler.Stock::count).sum());
+        assertEquals(List.of("CHAIN", "SUB_CHARGE"),
+                report.stock().stream().map(ApprovalExecutionReconciler.Stock::requestType).toList());
+        assertTrue(report.stock().get(0).ageOfOldest(LocalDateTime.now()).toHours() >= 5,
+                "必须带最久一条年龄，否则数字没人会去看");
+    }
+
+    @Test
+    @DisplayName("没有可推进候选时盘点照跑（存量可见性不依赖推进）")
+    void inventoryRunsEvenWithNoCandidates() {
+        stubCandidates();
+        when(linkRepository.stockByStatus(anyCollection())).thenReturn(List.of(
+                row("CONSORTIUM", 2, LocalDateTime.now().minusMinutes(10))));
+
+        var report = reconciler.advanceAwaitingApprovals();
+
+        assertEquals(0, report.candidates());
+        assertEquals(1, report.stock().size());
+        assertEquals(2, report.stock().get(0).count());
+    }
+
+    @Test
+    @DisplayName("盘点是只读旁路：它抛异常不影响推进结果，也不吞掉计数")
+    void inventoryFailureDoesNotBreakAdvancing() {
+        ApprovalExecutionLink link = link("SUB_CHARGE", "execution:SUB_CHARGE:SUB9:1",
+                ApprovalExecutionLink.Status.AWAITING_APPROVAL);
+        stubCandidates(link);
+        when(signingApprovalExecutionService.refresh("execution:SUB_CHARGE:SUB9:1")).thenReturn(
+                new SigningOutcome(ApprovalExecutionLink.Status.FAILED, "appr-9", null, "审批被拒"));
+        when(linkRepository.stockByStatus(anyCollection())).thenThrow(new RuntimeException("db down"));
+
+        var report = reconciler.advanceAwaitingApprovals();
+
+        assertEquals(1, report.failed());
+        assertTrue(report.stock().isEmpty());
+    }
+
+    @Test
+    @DisplayName("manual 计数单独成项（可能已动账，不能与确定失败混在一条 info 里）")
+    void manualCountIsReportedSeparately() {
+        ApprovalExecutionLink link = link("SUB_CHARGE", "execution:SUB_CHARGE:SUB10:1",
+                ApprovalExecutionLink.Status.EXECUTING);
+        stubCandidates(link);
+        when(signingApprovalExecutionService.refresh("execution:SUB_CHARGE:SUB10:1")).thenReturn(
+                new SigningOutcome(ApprovalExecutionLink.Status.EXECUTION_UNKNOWN,
+                        "appr-10", null, "结果未知"));
+
+        var report = reconciler.advanceAwaitingApprovals();
+
+        assertEquals(1, report.manual());
+        assertEquals(0, report.failed());
+        assertEquals(0, report.executed());
+    }
 }
