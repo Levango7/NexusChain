@@ -29,4 +29,17 @@ public interface BridgeMessageRecordRepository extends JpaRepository<BridgeMessa
      */
     @Query("select coalesce(max(r.nonce), -1) from BridgeMessageRecord r where r.sourceChain = :chain")
     long findMaxNonceBySourceChain(@Param("chain") String sourceChain);
+
+    /**
+     * 取待处理消息（PLAN-037 切片 2 中继循环的取数源）。
+     *
+     * <p>待处理 = 尚无执行哈希（未 EXECUTED）且可再次尝试：状态
+     * {@code in (PENDING, RELAYED, FAILED)}。RELAYED 是"已中继、待执行"的
+     * 中间态，必须被消费。按 (sourceChain, nonce) 升序——顺序保证的消费方向。</p>
+     *
+     * @param pageable 分页（取前 N 条）
+     * @return 待处理记录（按源链 + nonce 有序）
+     */
+    @Query("select r from BridgeMessageRecord r where r.status in (org.nexus.bridge.messaging.MessageStatus.PENDING, org.nexus.bridge.messaging.MessageStatus.RELAYED, org.nexus.bridge.messaging.MessageStatus.FAILED) and (r.executionTxHash is null or r.executionTxHash = '') order by r.sourceChain asc, r.nonce asc")
+    java.util.List<org.nexus.bridge.messaging.BridgeMessageRecord> findPending(org.springframework.data.domain.Pageable pageable);
 }

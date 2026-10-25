@@ -71,6 +71,25 @@ public interface MessageStore {
     Optional<String> getExecutionTxHash(String messageId);
 
     /**
+     * 取待处理消息（PLAN-037 切片 2 中继循环取数源）。
+     *
+     * <p>待处理 = 尚无执行哈希（未 EXECUTED）且**可再次尝试**的消息 ——
+     * 即状态为 PENDING / RELAYED / FAILED。RELAYED 正是"已中继、待执行"的
+     * 中间态（见 {@link MessageStatus} 状态机），必须被消费。</p>
+     *
+     * <p>按 (sourceChain, nonce) 升序返回 —— 与顺序保证的消费方向一致。</p>
+     *
+     * <p>default 返回空列表：未实现该能力的存储不会因此编译失败，
+     * 只是不参与中继循环。</p>
+     *
+     * @param limit 最多返回条数（&le;0 视为不限制，由实现方安全兜底）
+     * @return 待处理消息列表（可能为空）
+     */
+    default java.util.List<CrossChainMessage> findPending(int limit) {
+        return java.util.Collections.emptyList();
+    }
+
+    /**
      * 清空存储（仅供测试使用）。
      */
     void clear();

@@ -4,6 +4,32 @@
 
 ## [Unreleased]
 
+### 桥 messaging 中继循环（PLAN-037 切片 2，2026-10-25）
+
+切片 1（#249）"通电"后，本切片把消息**流转**接上：`MessageRelayWorker` 周期
+循环——`findPending` → 顺序消费（sourceChain+nonce）→ 阈值计数 → 逐签验签 →
+（可选）执行 → 记账；单条失败置 FAILED 留下轮，不阻断整轮。
+
+- **新增 `MessageRelayWorker`**（`@Scheduled`，复用 Spring 调度线程；参数
+  `poll-interval-ms:5000`、`batch-size:50`、`execute-enabled:false` 默认关）：
+  execute 关时只验签观察；存储故障记 0 不炸调度器。
+- **`MessageStore.findPending(limit)`**（default 空实现 + 内存/Jdbc 覆盖）：
+  待处理 = 无执行哈希且状态 ∈ {PENDING, RELAYED, FAILED}，按 (sourceChain,
+  nonce) 升序。
+- **测试期抓到的真 bug**：`relayMessage` 入库置 **RELAYED**（"已中继、待执行"
+  的中间态），早期查询只取 PENDING/FAILED ⇒ 循环永远消费不到消息；三处实现
+  （接口/内存/Jdbc JPQL）已同步修正。
+- `BridgeMessageRecordRepository.findPending(Pageable)`：JPQL 同语义。
+- **多实例串行化**：`@SchedulerLock`（name=`messageRelayWorker`、
+  `lockAtMostFor=PT2M`、`lockAtLeastFor=PT2S`）——与桥既有调度任务同模式
+  （`ShedLockConfig`），同一时刻仅一个实例执行；降级语义同既有（shedlock
+  表缺失时失去锁保护、调度照常）。
+- 单测 5 例（`MessageRelayWorkerTest`）：顺序消费 / 阈值不足置 FAILED / 执行关
+  只观察 / 执行开记账且幂等 / 存储故障不抛；`nexus-bridge:test` 全量无回归。
+- **如实边界**：消息**前段**（外部链事件 → 落库）不在本切片（依赖 ChainAdapter，
+  切片 3）；无真实链适配器时不得开启 execute；单轮 >PT2M 的超长边界退化为
+  可并发（量级远小于此）。详见 PLAN-037 §五。
+
 ### 桥 messaging 装配第一切片（PLAN-037，2026-10-25）
 
 把 roadmap #33 的最大欠账开始闭环：`MessageRelayer`/`MessageExecutor` 自 1.9.2
