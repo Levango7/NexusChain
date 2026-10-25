@@ -1,11 +1,13 @@
-# 方案 PLAN-037：桥 messaging 装配第一切片（roadmap #33）
+# 方案 PLAN-037：桥 messaging 装配与中继循环（roadmap #33）
 
-- **状态**：切片 1 已交付（2026-10-25）：装配开关 + Bean 生命周期 + 就绪观测；
-  **未接真实外部链**，未启动消息循环
+- **状态**：**切片 1 + 切片 2 已交付（2026-10-25）**：切片 1 = 装配开关 + Bean
+  生命周期 + 就绪观测（#249）；切片 2 = 中继循环（findPending → 验签 → 可选
+  执行 → 记账，本 PR）。**未接真实外部链**（消息前段：外部链事件 → 落库，属
+  切片 3）
 - **前置**：PLAN-026（消息存储落库 memory/jpa 开关）、PLAN-016/021/025（资金安全链路）
-- **范围**：`nexus-bridge` 内 `MessageRelayer` / `MessageExecutor` 的**生产装配**：
-  开关默认关、Bean 化、可观测
-- **不包含**：ChainAdapter 真实链接入、消息循环与重试策略、流动性持久化、
+- **范围**：`nexus-bridge` 内 `MessageRelayer` / `MessageExecutor` / 中继循环的
+  **生产装配**：开关默认关、Bean 化、可观测、可回归
+- **不包含**：ChainAdapter 真实链接入（消息前段）、观测端点、流动性持久化、
   断路器跨重启（roadmap #33 其余欠账）
 
 ---
@@ -51,9 +53,56 @@ roadmap #33 登记的欠账：`MessageRelayer` / `MessageExecutor` 自 1.9.2 起
 - 多签阈值默认 1 只在"装配自检"语义下成立；真实治理阈值必须部署方显式配置
   （REQ/CG 门限另立切片）。
 
-## 五、后续（切片 2 起）
+## 五、切片 2：中继循环 —— 已交付（2026-10-25）
 
-1. ChainAdapter 装配（模拟 + 真实两档，开关控制）；
-2. 消息循环：入库 → 阈值验签 → 执行 → recordExecution → 失败重试/退避；
-3. 观测端点（`/consensus/finality-outbox` 同款风格）；
-4. `DefaultLiquidityManager` 持久化与 `CircuitBreaker` 跨重启语义（#33 剩余）。
+**流转链路**（`MessageRelayWorker`，`@Scheduled` 复用 Spring 调度线程，不新增线程）：
+
+```
+findPending（按 sourceChain+nonce 升序）→ 逐条：
+  阈值计数检查 → 逐签验签（MessageRelayer.verifySignatures）
+  → execute-enabled=true 时 MessageExecutor.executeMessage（内部记账）
+单条失败 ⇒ 置 FAILED 留下轮（失败隔离，不阻断整轮）
+```
+
+- `MessageStore.findPending(limit)`（default 空实现 + 内存/Jdbc 两实现覆盖）：
+  取数语义 = **无执行哈希且状态 ∈ {PENDING, RELAYED, FAILED}**，
+  按 (sourceChain, nonce) 升序（与顺序保证的消费方向一致）。
+  - **关键语义（测试期抓到的真 bug）**：`relayMessage` 入库置 **RELAYED**
+    （"已中继、待执行"的中间态）；早期实现只取 PENDING/FAILED ⇒ 循环永远
+    消费不到任何消息。三处实现（接口 default / 内存 / Jdbc JPQL）已同步修正。
+- `BridgeMessageRecordRepository.findPending(Pageable)`：JPQL 同语义
+  （`status in (PENDING, RELAYED, FAILED)` + `executionTxHash is null/''` +
+  `order by sourceChain, nonce`）。
+- 装配：`MessagingRelayConfig` 增 `bridgeMessageRelayWorker` Bean（同
+  `relay-enabled` 开关控制）；参数 `nexus.bridge.messaging.batch-size:50`、
+  `poll-interval-ms:5000`、`execute-enabled:false`（默认）。
+- **execute-enabled 默认 false**：只验签观察、不产真实交易；无适配器时不要
+  开启（开启后执行会失败并按失败隔离置 FAILED）。
+
+测试（`MessageRelayWorkerTest`，5 例）：
+
+| 用例 | 断言 |
+|---|---|
+| `consumesPendingInSourceChainNonceOrder` | relayer 顺序入库 1/2/3 → findPending 升序返回 → 整轮全消费 |
+| `belowThresholdIsMarkedFailedAndNotExecuted` | 0 签（直存绕过 relayer）→ FAILED 且零执行哈希 |
+| `executionDisabledOnlyObserves` | execute-enabled=false ⇒ 不产交易 |
+| `executionEnabledRecordsTxHashOnce` | 开启 + 适配器 ⇒ 记账 + EXECUTED；第二轮幂等 0 |
+| `storageOutageReturnsZeroWithoutThrowing` | 存储抛异常 ⇒ 记 0，不炸调度器 |
+
+`nexus-bridge:test` 全量通过（无回归）。
+
+**边界（勿夸大）**：
+
+- **消息前段不在本切片**：外部链事件监听 → 构造 `CrossChainMessage` → 落库，
+  依赖 ChainAdapter（切片 3）；本切片只消费**已入库**消息的后段；
+- **多实例部署**：`@SchedulerLock`（name=`messageRelayWorker`、`lockAtMostFor=PT2M`、
+  `lockAtLeastFor=PT2S`）与桥既有调度任务同模式（见 `ShedLockConfig`）——同一
+  时刻仅一个实例执行；降级语义同既有（shedlock 表缺失时失去锁保护、调度照常）；
+  单轮耗时 >PT2M 的超长边界退化为可并发（量级远小于此，记录为兜底语义）；
+- 无退避/限频策略（失败即留下轮、轮询间隔固定 5s）——量级上去前不引入。
+
+## 六、后续（切片 3 起）
+
+1. ChainAdapter 装配（模拟 + 真实两档，开关控制）——消息前段（事件 → 落库）；
+2. 观测端点（`/bridge/messaging`，`/consensus/finality-outbox` 同款风格）；
+3. `DefaultLiquidityManager` 持久化与 `CircuitBreaker` 跨重启语义（#33 剩余）。

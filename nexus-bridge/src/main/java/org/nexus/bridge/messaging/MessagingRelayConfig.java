@@ -94,4 +94,22 @@ public class MessagingRelayConfig {
                 store == null ? "none" : store.getClass().getSimpleName(),
                 executor == null ? 0 : executor.getTargetAdapters().size());
     }
+
+    /**
+     * 中继循环（PLAN-037 切片 2）：findPending → 阈值验签 → 可选执行 → 记账。
+     *
+     * <p>{@code execute-enabled} 默认 false：无真实链适配器时只做验签观察，
+     * 不产真实交易——见 {@link MessageRelayWorker} 的边界说明。</p>
+     */
+    @Bean
+    @ConditionalOnProperty(name = RELAY_ENABLED_PROPERTY, havingValue = "true")
+    public MessageRelayWorker bridgeMessageRelayWorker(
+            MessageStore store,
+            MessageRelayer relayer,
+            MessageExecutor executor,
+            MessageConfig config,
+            @Value("${nexus.bridge.messaging.batch-size:50}") int batchSize,
+            @Value("${nexus.bridge.messaging.execute-enabled:false}") boolean executeEnabled) {
+        return new MessageRelayWorker(store, relayer, executor, config, batchSize, executeEnabled);
+    }
 }
