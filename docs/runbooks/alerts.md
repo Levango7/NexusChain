@@ -3,14 +3,15 @@
 ## 设计原则
 
 - 起步 **4 条** critical/warning（设计稿 PLAN-002 §3.2）；2026-09-07 起 5 条、
-  2026-09-09 起 11 条（当前值，单一真源 = `deploy/k8s/50-prometheus-rules.yaml`）
+  2026-09-09 起 11 条、2026-10-26 起 **15 条**（当前值，单一真源 =
+  `deploy/k8s/50-prometheus-rules.yaml`）
 - 以 `kube_*` 通用 metrics 为主；`nexuschain_block_height` / `jvm_*` /
   `container_*` 等已确认真实注册或集群开箱即有的指标为辅——**规则只允许引用
   真实存在的指标**（2026-09-09 整合时退役了 11 条引用幽灵指标名的 legacy 告警）
 - `for:` 必填——避免抖动误报（链停/资源类 5-10min；在线类 1min）
 - 告警标签统一（severity + component + service）
 
-## 11 条告警（2026-09-07 +1 链停告警；2026-09-09 告警真值整合 +6；2026-10-18 批次③ runbook 补全）
+## 15 条告警（2026-09-07 +1 链停告警；2026-09-09 告警真值整合 +6；2026-10-18 批次③ runbook 补全；2026-10-26 PLAN-040 区块持久化 +4）
 
 | 名称 | 级别 | 触发条件 | 含义 |
 |---|---|---|---|
@@ -25,6 +26,10 @@
 | PodMemoryUsageHigh | warning | working_set / limit > 90% 持续 10min | OOMKilled 风险 |
 | ServiceDown | critical | Prometheus `up` 抓取失败持续 1min | 服务不可达（最基础信号） |
 | SeataTcDown | critical | Seata TC 抓取失败持续 1min | 分布式事务协调停摆 |
+| BlockWriteFailuresDetected | warning | `increase(nexus_block_writer_write_failures_total[10m]) > 0` 持续 5min | 有写库失败/跳块尝试（尝试次数，可被后续补写） |
+| BlockWriterStateUpdateTimeouts | critical | `increase(nexus_block_writer_state_update_timeouts_total[10m]) > 0` 持续 5min | `pendingBlock` 状态更新等待超时被强制清空 |
+| BlockPersistenceBacklog | warning | `memory_pending > 0 or database_pending > 0` 持续 10min | 内存队列/持久化 outbox 持续积压 |
+| BlockOutboxUnreadable | warning | `nexus_block_outbox_readable == 0` 持续 5min | outbox 已装配但读不到数据库 |
 
 后 6 条的排障手册见下方“新增 6 条告警排障手册”章节（2026-10-18 批次③ 补全）。
 
@@ -121,6 +126,65 @@
   ```
 - **重要前提（2026-09-10 实测修正）**：仅当集群存在 `job="seata-tc"` 抓取目标时本条才有数据；无目标时 `up` 序列缺失、表达式无数据、不触发（原 `absent()` 分支会恒为 1 造成永久假告警，已移除）。部署时需为 Seata 配置对应抓取，否则本条为“已定义未生效”状态。
 - **处置**：优先恢复 TC；查 nacos 注册状态（`deploy/k8s/31-seata.yml`）与 DB 连接（按 seata 存储模式）
+
+## 区块持久化 4 条告警排障手册（PLAN-040 · 2026-10-26）
+
+指标由 `org.nexus.metrics.BlockPersistenceMetrics` 注册（nexus-core，
+`/actuator/prometheus`）。**写失败/超时是纯内存读；outbox 行数/年龄/重试次数
+是应用内 30s 采样**——Prometheus 抓取本身不查库，PG 抖动不会把整页抓取拖超时。
+
+### BlockWriteFailuresDetected（warning · component=blockchain-core）
+
+- **触发**：`increase(nexus_block_writer_write_failures_total[10m]) > 0` 持续 5min
+- **含义**：`StateDB.writeBlock` 写入失败/跳块。**计数口径是"尝试次数"**：
+  同一高度在后续确认轮次重试会重复计数（PLAN-039 测试床 2 分钟 1666 次约对应
+  50 个高度区间）；单次失败可能已被补写，不等于链停摆。
+- **排查**：
+  ```bash
+  curl -s http://<core-pod>:19585/consensus/block-writer   # writeFailures / lastFailureHeight / lastFailureAtMillis
+  curl -s http://<core-pod>:19585/consensus/block-outbox    # 结合积压看
+  kubectl -n nexus logs <core-pod> --tail=200 | grep -i "failed to write block"
+  ```
+- **处置**：若 `writeFailures` 停止增长且 `lastFailureHeight` 已被后续高度越过 ⇒
+  已自愈，记录即可；持续增长 ⇒ 查 PG（连接/磁盘/锁）与 `BlockPersistenceBacklog`。
+- **注意**：`writeFailures=0` 不代表没有整库停机——停机走内存重试队列
+  （`PendingBlocksManager`），看 `nexus_block_outbox_memory_pending`。
+
+### BlockWriterStateUpdateTimeouts（critical · component=blockchain-core）
+
+- **触发**：`increase(nexus_block_writer_state_update_timeouts_total[10m]) > 0` 持续 5min
+- **含义**：`writeBlock` 等待账户状态更新超时，`pendingBlock` 被**强制清空防死锁**。
+  可能让后续区块采纳卡住，属高优先级信号。
+- **排查**：同 `GET /consensus/block-writer`；日志 grep `state update timeout`；
+  查 PG 长事务/锁等待（`pg_stat_activity`）与连接池耗尽。
+- **处置**：解除 PG 阻塞后观察计数停止；若持续，保留现场（线程栈 + PG 锁图）
+  再重启，不要只重启了事。
+
+### BlockPersistenceBacklog（warning · component=blockchain-core）
+
+- **触发**：`nexus_block_outbox_memory_pending > 0 or nexus_block_outbox_database_pending > 0` 持续 10min
+- **含义**：正常排空是秒级；持续 10 分钟仍有积压 ⇒ PG 写入慢/不可用，或补写循环无进展。
+  - `memory_pending`：整库停机后的内存重试队列（上限 100，PLAN-039 实测 0→100）；
+  - `database_pending`：持久化 outbox 待补写行（跨重启）。
+- **排查**：
+  ```bash
+  curl -s http://<core-pod>:19585/consensus/block-outbox
+  # oldestPendingCreatedAt 换算年龄；maxAttempts 看单行重试次数
+  ```
+- **处置**：先恢复 PG；恢复后确认 `database_pending` 归零、`oldest_pending_age_seconds`
+  回落。**不要手工删除 outbox 行**——它是恢复数据/审计证据（PLAN-039 §2.3）。
+  年龄持续增长且 `maxAttempts` 很高 ⇒ 可能有恒失败行，保留现场并按 PLAN-039
+  的 revisit 条件评估。
+
+### BlockOutboxUnreadable（warning · component=blockchain-core）
+
+- **触发**：`nexus_block_outbox_readable == 0` 持续 5min
+- **含义**：outbox 已装配但连续读不到数据库（`databasePending=-1`）。此时链可能仍
+  在内存中出块，但补写/重启恢复能力受限；`database_pending` 等指标为 NaN（不是 0）。
+- **排查**：`curl /consensus/block-outbox` 看 `enabled=true` + `databasePending=-1`；
+  查 PG 可达性、DBCP2 连接池、网络策略。
+- **处置**：优先恢复 PG；恢复后 `readable` 回 1、`databasePending` 归零。
+  若 `enabled=false`（未装配 outbox），本条不触发——那是配置选择，不是故障。
 
 ## 后续升级路径（gRPC 错误率）
 

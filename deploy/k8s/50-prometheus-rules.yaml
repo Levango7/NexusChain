@@ -7,11 +7,11 @@
 #       需 kubectl 应用后提取 spec.groups 再跑 promtool（见 k8s-sync-check.yml）。
 #
 # 设计原则（避免告警疲劳）：
-#   1. 告警数 11 条（2026-09-09 "告警真值"整合）：原 5 条 + 从 legacy
-#      deploy/monitoring/alerting-rules.yaml 并入 6 条真实指标告警（JVM/GC、
-#      Pod 资源、ServiceDown、SeataTcDown）；legacy 文件中 11 条引用幽灵
-#      指标名（代码从未注册）的告警退役——规则只允许引用代码真实注册的
-#      应用指标或 kube_* 通用指标
+#   1. 告警数 15 条（2026-09-09 "告警真值"整合 11 条 + PLAN-040 区块持久化 4 条）：
+#      原 5 条 + 从 legacy deploy/monitoring/alerting-rules.yaml 并入 6 条真实指标告警
+#      （JVM/GC、Pod 资源、ServiceDown、SeataTcDown）+ 2026-10-26 的 4 条区块持久化告警；
+#      legacy 文件中 11 条引用幽灵指标名（代码从未注册）的告警退役——规则只允许
+#      引用代码真实注册的应用指标或 kube_* 通用指标
 #   2. 全部 for: 5m（避免抖动误报）
 #   3. 用 `kube_*` 系列兜底（不依赖应用暴露 prom metrics）—— 2.x 阶段
 #      逐步补应用 metrics 再细化
@@ -53,6 +53,64 @@ spec:
         summary: "链核心 5min 块高无增长（停摆）"
         description: "max(nexuschain_block_height) 5 分钟内无增长——链停止出块。立即查 nexus-core Pod 日志（共识/存储）与 mpc-engine 状态。 genesis 链刚起或单节点 dev 环境预期也成立——仅 prod（ENABLE_MINING=true 集群）视为停摆。"
 
+  # ---- 区块持久化（PLAN-040 / roadmap #29 ③）----
+  # 应用侧 BlockPersistenceMetrics（nexus-core）暴露以下指标：
+  #   nexus_block_writer_write_failures_total（counter，尝试次数）
+  #   nexus_block_writer_state_update_timeouts_total（counter）
+  #   nexus_block_writer_last_failure_height / _age_seconds（gauge）
+  #   nexus_block_outbox_{enabled,memory_pending,database_pending,
+  #     oldest_pending_age_seconds,max_attempts,readable}（gauge；库不可读为 NaN）
+  # outbox 的库读在应用内 30s 采样，抓取不查库——PG 抖动不会拖垮整页抓取。
+  # 注意 write_failures 是**尝试次数**（同高度重试重复计数），单次失败可被
+  # 后续确认轮次补写；它告警但不等同链停摆（后者看 BlockchainCoreStalled）。
+  - name: nexuschain.block-persistence
+    interval: 30s
+    rules:
+    - alert: BlockWriteFailuresDetected
+      expr: increase(nexus_block_writer_write_failures_total[10m]) > 0
+      for: 5m
+      labels:
+        severity: warning
+        component: blockchain-core
+      annotations:
+        runbook_url: "https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md"
+        summary: "区块写库失败/跳块（10min 内有失败尝试）"
+        description: "{{ $labels.pod }} 的 nexus_block_writer_write_failures_total 10 分钟内增长——写入尝试失败/跳块。该计数是**尝试次数**（同一高度重试重复计数），可能已被后续确认轮次补写。查 GET /consensus/block-writer 的 lastFailureHeight/lastFailureAtMillis 与 nexus-core 日志中的 'Failed to write block'；若同时 BlockPersistenceBacklog 触发，优先查 PG。"
+
+    - alert: BlockWriterStateUpdateTimeouts
+      expr: increase(nexus_block_writer_state_update_timeouts_total[10m]) > 0
+      for: 5m
+      labels:
+        severity: critical
+        component: blockchain-core
+      annotations:
+        runbook_url: "https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md"
+        summary: "区块状态更新等待超时（pendingBlock 被强制清空）"
+        description: "{{ $labels.pod }} 的 nexus_block_writer_state_update_timeouts_total 10 分钟内增长——StateDB 等待账户状态更新超时并强制清空 pendingBlock 防死锁。可能卡住后续区块采纳。查 GET /consensus/block-writer 与 nexus-core 日志中的 'state update timeout'；结合 PG 连接池/长事务排查。"
+
+    - alert: BlockPersistenceBacklog
+      expr: |
+        nexus_block_outbox_memory_pending > 0
+        or nexus_block_outbox_database_pending > 0
+      for: 10m
+      labels:
+        severity: warning
+        component: blockchain-core
+      annotations:
+        runbook_url: "https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md"
+        summary: "区块持久化队列积压 ≥ 10min"
+        description: "{{ $labels.pod }} 的内存重试队列或持久化 outbox 持续有积压——正常排空是秒级。查 GET /consensus/block-outbox 的 databasePending/oldestPendingCreatedAt/maxAttempts：年龄持续增长且 maxAttempts 高 ⇒ 可能有写不进去的行；结合 GET /consensus/block-writer 与 PG 状态。注意：outbox 行是恢复数据，不要手工删除。"
+
+    - alert: BlockOutboxUnreadable
+      expr: nexus_block_outbox_readable == 0
+      for: 5m
+      labels:
+        severity: warning
+        component: blockchain-core
+      annotations:
+        runbook_url: "https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md"
+        summary: "区块 outbox 已装配但连续 5min 读不到数据库"
+        description: "{{ $labels.pod }} 的 nexus_block_outbox_readable=0——outbox 已装配但 databasePending 连续为 -1（PG 不可达/查询失败）。此时链可能仍在内存中出块，但补写/恢复能力受限；优先恢复 PG 连接，恢复后确认 databasePending 归零。"
   # ---- MPC 引擎 ----
   - name: nexuschain.mpc-engine
     interval: 30s
