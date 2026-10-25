@@ -271,7 +271,9 @@ class PeerServerTest {
     }
 
     @Test
-    void dialFailureWithoutSamePeerIdBootstrapDoesNotRetry() {
+    void dialFailureFallsBackToAnyBootstrapWhenNoSameIdMatch() {
+        // 语义（2026-10-25 验收后调整）：有 peerID 但无同 ID bootstrap 也兜底到
+        // "任意地址不同的 bootstrap"——身份未知时协议消息对等端可达即可。
         byte[] idA = new byte[32];
         idA[0] = 0x0A;
         byte[] idB = new byte[32];
@@ -288,6 +290,48 @@ class PeerServerTest {
 
         server.dial(advertised, NexusChainOuterClass.Ping.newBuilder().build());
 
-        verify(gRPCClient, never()).dialAsyncWithTTL(eq("172.17.208.1"), eq(9235), anyLong(), any(), any());
+        verify(gRPCClient).dialAsyncWithTTL(eq("172.17.208.1"), eq(9235), anyLong(), any(), any());
+    }
+
+    @Test
+    void dialFailureDoesNotRetryWhenOnlySameAddressBootstrapExists() {
+        // 备选与当前地址相同 ⇒ 重试无意义，不得再拨（防自环）
+        byte[] idA = new byte[32];
+        idA[0] = 0x0A;
+        Peer advertised = PeerTestFixture.newPeer(idA, "10.9.9.9", 7001);
+        when(peersCache.getBootstraps()).thenReturn(
+                List.of(PeerTestFixture.newPeer(idA, "10.9.9.9", 7001)));
+
+        doAnswer(inv -> {
+            BiConsumer<NexusChainOuterClass.Message, Throwable> cb = inv.getArgument(4);
+            cb.accept(null, new RuntimeException("UNAVAILABLE"));
+            return null;
+        }).when(gRPCClient).dialAsyncWithTTL(eq("10.9.9.9"), eq(7001), anyLong(), any(), any());
+
+        server.dial(advertised, NexusChainOuterClass.Ping.newBuilder().build());
+
+        verify(gRPCClient, times(1)).dialAsyncWithTTL(eq("10.9.9.9"), eq(7001), anyLong(), any(), any());
+    }
+
+    @Test
+    void dialFallsBackToAnyBootstrapWhenPeerIdUnknown() {
+        // 验收补充：学习到的广告地址 Peer 不带 peerID（多机实测 B→A 场景）——
+        // 此时兜底降级为"任意地址不同的 bootstrap"（仍只重试一次）。
+        Peer noId = new Peer();
+        noId.host = "host.docker.internal";
+        noId.port = 9235;
+        noId.peerID = null; // 学习到的广告地址 Peer：无身份（实测场景）
+        when(peersCache.getBootstraps()).thenReturn(
+                List.of(PeerTestFixture.newPeerWithByte(0, (byte) 0x0C, "172.17.208.1", 9235)));
+
+        doAnswer(inv -> {
+            BiConsumer<NexusChainOuterClass.Message, Throwable> cb = inv.getArgument(4);
+            cb.accept(null, new RuntimeException("UNAVAILABLE"));
+            return null;
+        }).when(gRPCClient).dialAsyncWithTTL(eq("host.docker.internal"), eq(9235), anyLong(), any(), any());
+
+        server.dial(noId, NexusChainOuterClass.Ping.newBuilder().build());
+
+        verify(gRPCClient).dialAsyncWithTTL(eq("172.17.208.1"), eq(9235), anyLong(), any(), any());
     }
 }

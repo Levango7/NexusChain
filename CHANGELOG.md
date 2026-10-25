@@ -4,6 +4,22 @@
 
 ## [Unreleased]
 
+### 拨号兜底补强：peerID 缺失时兜底也生效（PLAN-034 v2，2026-10-25）
+
+v1（#242）的验收实测（A 改回 host.docker.internal 广告地址 + B 空库重启）暴露：
+B 从协议学到的**广告地址 Peer 不带 peerID** ⇒ v1 的"同 peerID 匹配"守卫直接
+跳过，兜底一次都没触发（外拨全失败）。
+
+- `redialOnAlternateAddress` 放宽：**同 peerID 优先；peerID 缺失 / 无同 ID
+  bootstrap 时降级为"任意地址不同的 bootstrap"**（仍只重试一次，无拨号风暴）；
+- 实测：兜底按设计触发 **×50**（`P2P dial fallback: host.docker.internal:9235
+  unreachable, retrying same peer at 172.17.208.1:9235`）——v1 的"不触发"bug 已修；
+- **如实边界**：兜底目标在本环境也失败（`dial fallback also failed ...
+  CANCELLED`，4ms 内；TCP 可达、A 侧 0.0.0.0 监听）——"换地址后必然可达"
+  **不成立**，端到端恢复依赖对 CANCELLED 的后续定位（PLAN-035 候选）；
+- 单测 4 例（同 ID 必兜底 / 无同 ID 降级兜底 / peerID 缺失降级兜底 /
+  同地址不重试）；全模块回归绿。
+
 ### P2P 拨号兜底：对端广告地址不可达时重试 bootstrap 可达地址（PLAN-034，2026-10-25）
 
 修复多机/NAT 拓扑下真实撞到的阻断：对端**广告地址**（`--p2p.address`）在
