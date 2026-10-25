@@ -1,6 +1,8 @@
 package org.nexus.gateway.approval;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDateTime;
@@ -30,4 +32,28 @@ public interface ApprovalExecutionLinkRepository extends JpaRepository<ApprovalE
             Collection<String> requestTypes,
             Collection<ApprovalExecutionLink.Status> statuses,
             LocalDateTime cutoff);
+
+    /**
+     * 只读存量盘点：按业务类型统计处于非终态的链接数量与"最久一条"的更新时间。
+     *
+     * <p>与推进白名单<b>无关</b>——覆盖全部 {@code requestType}，包括被有意排除的
+     * {@code CHAIN} / {@code CONSORTIUM} 支付（Board #234 §二：读与写分离）。
+     * 没有这个入口时，"审批通过但无人推进"是完全不可见的，只能等商户投诉。</p>
+     *
+     * @param statuses 目标状态集合（通常为非终态）
+     * @return 每个业务类型一行：类型、数量、最久更新时间
+     */
+    @Query("SELECT l.requestType AS requestType, COUNT(l.id) AS linkCount, "
+            + "MIN(l.updatedAt) AS oldestUpdatedAt "
+            + "FROM ApprovalExecutionLink l WHERE l.status IN :statuses GROUP BY l.requestType")
+    List<StockRow> stockByStatus(@Param("statuses") Collection<ApprovalExecutionLink.Status> statuses);
+
+    /** {@link #stockByStatus} 的投影行。 */
+    interface StockRow {
+        String getRequestType();
+
+        long getLinkCount();
+
+        LocalDateTime getOldestUpdatedAt();
+    }
 }
