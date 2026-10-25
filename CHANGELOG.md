@@ -4,6 +4,39 @@
 
 ## [Unreleased]
 
+### 日限额持久化 + #33 余项处置决策（PLAN-038，2026-10-26）
+
+roadmap #33 ② 深挖收口：日限额**计数器本身**也是内存态——重启清零（当日限额
+可被重启绕过）、多副本各持一份（N 副本可允出 N 倍）。
+
+- **`DailyUsageStore` 抽象**（memory/jpa 双档，镜像 MessageStore 先例）：
+  `InMemoryDailyUsageStore`（默认，与原 AtomicLong+CAS+lazy reset 等价）；
+  `JdbcDailyUsageStore`（`bridge_daily_usage` 单行表 + **REQUIRES_NEW 独立
+  提交**（忠实复刻"先占后补偿"契约，防双重归还）+ 行级悲观锁）——
+  **重启不清零 + 多副本全局限额**；语义与历史逐条一致（滚动 24h 窗口、
+  `已用+amount>limit` 拒绝、过窗读 0、补偿归还）。
+- **审计历史落库**：`bridge_daily_limit_snapshot` 表；午夜快照写库（同日
+  覆盖幂等，多副本重复触发无副作用）；读取仓库优先、内存降级。
+- **开关**：`nexus.bridge.daily-usage.store=memory|jpa`（默认 memory = 既有
+  行为零变化；生产/重启敏感/多副本应配 jpa）。V6 迁移 + ddl-auto 双轨
+  （同 V5 模式）。
+- **测试**：新增 14 例（内存 store 4 / jdbc store 5（含重启与多副本语义）/
+  接线 3 / 审计落库 2）；模块全量回归绿。
+- **#33 余项处置决策**：`DefaultLiquidityManager` **暂不持久化**（零生产使用
+  点，不做投机性建设；附 revisit 条件）；`CircuitBreaker` **保持重启复位**
+  （进程内故障门闩定位；跨重启冻结由 DB 级紧急暂停承担）。详见 PLAN-038 §2.3。
+- **修复（本 PR 全上下文集成测试发现）**：`MessagingRelayConfig` 曾自建
+  `MessageConfig` Bean，与既有 `@ConfigurationProperties` Bean（`messageConfig`，
+  自 1.9.2）类型重复 ⇒ **`relay-enabled=true` 时完整上下文启动即
+  `NoUniqueBeanDefinitionException`**（此前无全上下文用例打开该开关，一路漏检
+  ——#249/#250/#251 的潜在启动级缺陷）。修正为复用既有绑定 Bean；
+  `required-signatures<=0` 从"静默回落 2 签"改为**启动 fail-fast**
+  （fail-closed，防误配被掩盖）；新增全上下文集成测试
+  `BridgeMessagingEndpointIntegrationTest` 锁定该接缝（端点经 Security 过滤链 +
+  jpa 日限额 store 装配 + 模拟链注册表）。
+- **如实边界**：默认档仍 memory（重启清零与历史一致，配 jpa 后消除）；
+  窗口语义未变（滚动 24h，非自然日）。
+
 ### 桥 messaging 模拟链装配 + 观测端点（PLAN-037 切片 3，2026-10-26）
 
 - **`SimulatedChainAdapter`**（新）：内存态模拟链（不连任何外部链）——确定性

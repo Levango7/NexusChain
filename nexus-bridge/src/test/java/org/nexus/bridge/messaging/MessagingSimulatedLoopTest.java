@@ -2,7 +2,9 @@ package org.nexus.bridge.messaging;
 
 import org.junit.jupiter.api.Test;
 import org.nexus.bridge.adapter.ChainAdapter;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
+import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.MapPropertySource;
 
 import java.util.HashMap;
@@ -22,10 +24,20 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class MessagingSimulatedLoopTest {
 
+    /**
+     * 绑定注册器：plain context 不含 Boot 的 ConfigurationProperties 后处理，
+     * 用 {@code @EnableConfigurationProperties} 启用既有 MessageConfig 绑定
+     * （生产环境由 Boot 组件扫描直接绑定 {@code messageConfig}）。
+     */
+    @Configuration
+    @EnableConfigurationProperties(MessageConfig.class)
+    static class BoundConfigRegistrar {
+    }
+
     @Test
     void simulatedClosedLoopExecutesAndRecordsTxHash() throws Exception {
         AnnotationConfigApplicationContext ctx = new AnnotationConfigApplicationContext();
-        ctx.register(MessageStoreConfig.class, MessagingRelayConfig.class);
+        ctx.register(MessageStoreConfig.class, MessagingRelayConfig.class, BoundConfigRegistrar.class);
         Map<String, Object> props = new HashMap<>();
         props.put("nexus.bridge.messaging.relay-enabled", "true");
         props.put("nexus.bridge.messaging.required-signatures", "1");
