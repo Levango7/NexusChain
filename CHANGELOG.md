@@ -27,7 +27,7 @@ roadmap #29 的观测面收口：写库失败此前**只进日志**，outbox 滞
   2、`PendingBlocksManagerStorageRetryTest` 2）；模块定向回归绿。
 - **如实边界**：计数为进程内内存聚合，重启清零，不替代日志；未接告警系统；
   故障注入验证见 `PLAN-039` §四（整库停机 4 分钟：内存队列 0→100、`databasePending`
-  降级为 -1、恢复后 30s 排空并追平；header 写入触发器注入 2 分钟：`writeFailures`
+  降级为 -1、恢复 30s 内排空并随后追平；header 写入触发器注入 2 分钟：`writeFailures`
   0→1666、`lastFailureHeight` 155→204，撤除后停止增长并补写追平；outbox 滞留
   字段用标注的合成行验证读取链路）。
 
