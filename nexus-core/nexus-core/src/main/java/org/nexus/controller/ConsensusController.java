@@ -211,9 +211,10 @@ public class ConsensusController {
      * 区块写库失败聚合观测（PLAN-039 / roadmap #29 ①）。
      *
      * <p>内存计数、**不依赖数据库**——PG 故障期间仍可读：{@code writeFailures}
-     * 增长说明有区块被跳过落库（后续确认轮次会补写，见 {@code StateDB.writeBlock}
-     * 的 A2 修复注释）；{@code stateUpdateTimeouts} 为非零时是更严重的信号
-     * （状态更新等待超时、pendingBlock 被强制清空）。</p>
+     * 增长说明有落库失败/跳块尝试（后续确认轮次会补写，见 {@code StateDB.writeBlock}
+     * 的 A2 修复注释；同一高度重试会重复计数，不是不同区块数）；
+     * {@code stateUpdateTimeouts} 为非零时是更严重的信号（状态更新等待超时、
+     * pendingBlock 被强制清空）。</p>
      */
     @GetMapping(value = "/consensus/block-writer", produces = "application/json")
     public Object getBlockWriterStatus() {

@@ -9,18 +9,21 @@ import java.util.concurrent.atomic.AtomicLong;
  *
  * <p>背景：{@code StateDB.writeBlock} 在落库失败时按既有语义"记录日志 + 跳过该块
  * （等待后续确认轮次补写）"，但失败**只出现在日志里**——运维无法回答
- * "有没有区块被跳过、跳了多少、最后一次在高度多少"。本类把失败聚合成
+ * "有没有写入尝试失败、失败了多少次、最后一次在高度多少"。本类把失败聚合成
  * 内存计数，经 {@code GET /consensus/block-writer} 观测（不依赖数据库，
  * PG 故障期间仍可读）。</p>
  *
- * <p>语义边界：计数只增不减（进程生命周期内累计）；进程重启清零——
- * 与"失败聚合/告警"的用途一致（不是持久化审计）。</p>
+ * <p><b>计数口径</b>：{@code writeFailures} 是**写入失败尝试次数**，不是不同区块数——
+ * 同一高度在后续确认轮次被反复尝试时会重复计数（测试床实测 2 分钟 1666 次
+ * 对应约 50 个高度区间）。{@code lastFailureHeight} 是最近一次失败尝试的高度。
+ * 计数只增不减（进程生命周期内累计）；进程重启清零——与"失败聚合/告警"的
+ * 用途一致（不是持久化审计）。</p>
  *
  * @since 2.76.0
  */
 public class BlockWriteStats {
 
-    /** 落库失败被跳过的区块数（后续确认轮次会尝试补写）。 */
+    /** 落库失败/跳块的尝试次数（同一高度重试会重复计数；后续确认轮次会补写）。 */
     private final AtomicLong writeFailures = new AtomicLong();
 
     /** 账户状态更新等待超时次数（pendingBlock 被强制清空，防死锁）。 */
@@ -33,7 +36,7 @@ public class BlockWriteStats {
     private final AtomicLong lastFailureAtMillis = new AtomicLong(0L);
 
     /**
-     * 记录一次落库失败（区块被跳过）。
+     * 记录一次落库失败（区块被跳过）。同一高度在后续确认轮次重试会再次计数。
      *
      * @param height 失败区块高度
      */
