@@ -135,6 +135,11 @@ nexus:
     timelock-period-seconds: 3600
     max-amount-per-tx: 50000000000
     daily-limit: 100000000000
+    # PLAN-038：日限额用量存储。memory=进程内（默认，与历史一致；重启清零、
+    # 多副本各持一份）；jpa=落库（bridge_daily_usage 表；重启不清零、多副本
+    # 共享全局限额）。生产（重启敏感 / 多副本）应配置 jpa。
+    daily-usage:
+      store: ${BRIDGE_DAILY_USAGE_STORE:memory}
     large-amount-threshold: 10000000000
     source-chain-id: nexus
     target-chain-id: ethereum

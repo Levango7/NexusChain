@@ -3,6 +3,8 @@ package org.nexus.bridge.messaging;
 import org.junit.jupiter.api.Test;
 import org.nexus.bridge.adapter.ChainAdapter;
 import org.nexus.bridge.adapter.SimulatedChainAdapter;
+import org.springframework.beans.BeansException;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -16,6 +18,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -45,9 +48,19 @@ class MessagingRelayConfigTest {
         }
     }
 
+    /**
+     * 绑定注册器：plain context 不含 Boot 的 ConfigurationProperties 后处理，
+     * 用 {@code @EnableConfigurationProperties} 注册绑定基础设施（生产环境由
+     * Boot 组件扫描直接绑定 {@code messageConfig}）。
+     */
+    @Configuration
+    @EnableConfigurationProperties(MessageConfig.class)
+    static class BoundConfigRegistrar {
+    }
+
     private AnnotationConfigApplicationContext newContext(Map<String, Object> props, Class<?>... extra) {
         AnnotationConfigApplicationContext ctx = new AnnotationConfigApplicationContext();
-        ctx.register(MessageStoreConfig.class, MessagingRelayConfig.class);
+        ctx.register(MessageStoreConfig.class, MessagingRelayConfig.class, BoundConfigRegistrar.class);
         if (extra.length > 0) {
             ctx.register(extra);
         }
@@ -142,14 +155,18 @@ class MessagingRelayConfigTest {
     }
 
     @Test
-    void zeroSignaturesFallsBackToDefaultNotCrash() {
-        // 显式配 0/负值：不得让 MessageConfig 进入非法态（verifySignatures 会拒绝 <=0）
-        try (AnnotationConfigApplicationContext ctx = newContext(
+    void zeroSignaturesFailsFastAtStartup() {
+        // 显式配 0/负值属于非法安全配置：relay-enabled=true 时启动即 fail-fast
+        // （fail-closed 风格；2026-10-26 复用既有绑定 Bean 时废除"静默回落默认
+        // 2 签"——静默回落可能掩盖误配）
+        BeansException ex = assertThrows(BeansException.class, () -> newContext(
                 Map.of("nexus.bridge.messaging.relay-enabled", "true",
-                       "nexus.bridge.messaging.required-signatures", "0"))) {
-            MessageConfig config = ctx.getBean(MessageConfig.class);
-            assertEquals(2, config.getRequiredSignatures(),
-                    "0 视为未配置：保持 MessageConfig 默认 2 签");
+                       "nexus.bridge.messaging.required-signatures", "0")));
+        Throwable root = ex;
+        while (root.getCause() != null) {
+            root = root.getCause();
         }
+        assertTrue(root instanceof IllegalStateException,
+                "根因应为 fail-fast 的 IllegalStateException，实际: " + root);
     }
 }
