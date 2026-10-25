@@ -1,14 +1,14 @@
 # 方案 PLAN-037：桥 messaging 装配与中继循环（roadmap #33）
 
-- **状态**：**切片 1 + 切片 2 已交付（2026-10-25）**：切片 1 = 装配开关 + Bean
-  生命周期 + 就绪观测（#249）；切片 2 = 中继循环（findPending → 验签 → 可选
-  执行 → 记账，本 PR）。**未接真实外部链**（消息前段：外部链事件 → 落库，属
-  切片 3）
+- **状态**：**切片 1 + 切片 2 + 切片 3 已交付（2026-10-25/26）**：切片 1 =
+  装配开关 + Bean 生命周期 + 就绪观测（#249）；切片 2 = 中继循环（#250）；
+  切片 3 = 模拟链装配 + 观测端点 + 注册表键语义修正（本 PR）。**仍未接真实
+  外部链**（消息前段：外部链事件 → 落库，属切片 4）
 - **前置**：PLAN-026（消息存储落库 memory/jpa 开关）、PLAN-016/021/025（资金安全链路）
-- **范围**：`nexus-bridge` 内 `MessageRelayer` / `MessageExecutor` / 中继循环的
-  **生产装配**：开关默认关、Bean 化、可观测、可回归
-- **不包含**：ChainAdapter 真实链接入（消息前段）、观测端点、流动性持久化、
-  断路器跨重启（roadmap #33 其余欠账）
+- **范围**：`nexus-bridge` 内 `MessageRelayer` / `MessageExecutor` / 中继循环 /
+  适配器注册表的**生产装配**：开关默认关、Bean 化、可观测、可回归
+- **不包含**：真实链事件源（消息前段）、流动性持久化、断路器跨重启
+  （roadmap #33 其余欠账）
 
 ---
 
@@ -101,8 +101,48 @@ findPending（按 sourceChain+nonce 升序）→ 逐条：
   单轮耗时 >PT2M 的超长边界退化为可并发（量级远小于此，记录为兜底语义）；
 - 无退避/限频策略（失败即留下轮、轮询间隔固定 5s）——量级上去前不引入。
 
-## 六、后续（切片 3 起）
+## 六、切片 3：模拟链装配 + 观测端点 —— 已交付（2026-10-26）
 
-1. ChainAdapter 装配（模拟 + 真实两档，开关控制）——消息前段（事件 → 落库）；
-2. 观测端点（`/bridge/messaging`，`/consensus/finality-outbox` 同款风格）；
-3. `DefaultLiquidityManager` 持久化与 `CircuitBreaker` 跨重启语义（#33 剩余）。
+**两个交付物 + 一个装配缺口修正**：
+
+1. **`SimulatedChainAdapter`**（`org.nexus.bridge.adapter`）：内存态模拟链，
+   不连任何外部链——`sendTransaction` 返回 `SHA-256(chainId‖tx‖序号)` 派生的
+   确定性伪 txHash；回执可查（已提交）；模拟高度=已提交交易数。
+2. **观测端点 `GET /api/v1/bridge/messaging`**（`BridgeMessagingController`）：
+   返回装配快照（开关/签数/超时/store/适配器数）；装配关闭时返回
+   `{relayEnabled:false, reason}`——端点恒可用，一处回答"插座通没通电"。
+   安全：随既有白名单在 `SecurityConfig` 放行（与 `/status` 同口径）。
+3. **装配缺口修正（键语义）**：`MessageExecutor` 以 `message.targetChain` 查
+   适配器，但切片 1/2 的注册表键是 Spring 收集 `Map<String,ChainAdapter>` 的
+   **bean 名**（如 `ethereumAdapter`）——真实消息永远匹配不到 ⇒ 本切片改为
+   按 `ChainAdapter.getChainId()` 归键；容器适配器（真实链 `@Component`）
+   优先，`simulated-target-chains` 的模拟链补齐、**不覆盖同名链**。
+
+**装配参数**：`nexus.bridge.messaging.simulated-target-chains`（逗号分隔，
+默认空=不装配）、`execute-enabled`（默认 false）——两者组合出"模拟闭环"：
+`relay-enabled=true` + `simulated-target-chains=L2-sim` + `execute-enabled=true`
+⇒ 消息可全链路走到 EXECUTED（无真实链）。
+
+**测试（本切片新增 5 例，模块全量 606 例通过）**：
+
+| 用例 | 断言 |
+|---|---|
+| `SimulatedChainAdapterTest`（2） | 伪哈希格式/派生化/回执/模拟高度；chainId 透传 |
+| `MessagingRelayConfigTest` 新增（2） | 模拟链装配进注册表；同名链真实优先不覆盖 |
+| `BridgeMessagingControllerTest`（2） | 关闭 ⇒ relayEnabled=false+reason；开启 ⇒ 完整快照 |
+| `MessagingSimulatedLoopTest`（1） | **端到端**：签名入库 → 循环 → 模拟链执行 → EXECUTED+记账；幂等 |
+
+**边界（勿夸大）**：
+
+- **不是"已接链"**：模拟链交易/回执均为内存态（进程重启即丢）；真实链接入
+  仍需部署方配置真实适配器（RPC 凭证在网络出口侧）；
+- **消息前段仍未交付**：外部链事件 → 构造消息 → 落库，依赖真实链事件源
+  （模拟事件源如需要可另立"测试床演示"小切片，但不算生产链路）；
+- 真实 `@Component` 适配器（Ethereum/BSC/Polygon/Avalanche/Solana）在
+  relay-enabled=true 时会被收集并按 chainId 归键——**无凭证时执行会失败
+  并按失败隔离置 FAILED**（`execute-enabled` 默认 false 挡住此路径）。
+
+## 七、后续（切片 4 起）
+
+1. 消息前段（真实链事件源 → 落库；模拟事件源可选做测试床演示）；
+2. `DefaultLiquidityManager` 持久化与 `CircuitBreaker` 跨重启语义（#33 剩余）。

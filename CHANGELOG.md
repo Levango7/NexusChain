@@ -4,6 +4,25 @@
 
 ## [Unreleased]
 
+### 桥 messaging 模拟链装配 + 观测端点（PLAN-037 切片 3，2026-10-26）
+
+- **`SimulatedChainAdapter`**（新）：内存态模拟链（不连任何外部链）——确定性
+  伪 txHash（`SHA-256(chainId‖tx‖序号)`）、回执可查、模拟高度=已提交交易数；
+  由 `nexus.bridge.messaging.simulated-target-chains`（逗号分隔，默认空）
+  装配，仅本地闭环验证用。
+- **观测端点 `GET /api/v1/bridge/messaging`**（新）：装配快照（开关/签数/超时/
+  store/适配器数）；关闭时 `{relayEnabled:false, reason}`；随既有 GET 白名单
+  放行（与 `/status` 同口径）。
+- **装配缺口修正（键语义）**：`MessageExecutor` 按 `message.targetChain` 查
+  适配器，但切片 1/2 注册表键是 Spring 收集的 bean 名（真实消息永远匹配不到）
+  ⇒ 改为按 `ChainAdapter.getChainId()` 归键；容器适配器优先、模拟链不覆盖
+  同名链。
+- **测试**：新增 7 例（模拟适配器 2 / 配置装配 2 / 端点 2 / 模拟闭环端到端 1）；
+  nexus-bridge 全量 606 例通过。
+- **如实边界**：不是"已接链"（模拟链交易/回执为内存态）；消息前段（真实链
+  事件 → 落库）仍未交付（切片 4）；真实 @Component 适配器无凭证时执行会失败
+  并置 FAILED（`execute-enabled` 默认 false 挡住）。详见 PLAN-037 §六。
+
 ### 桥 messaging 中继循环（PLAN-037 切片 2，2026-10-25）
 
 切片 1（#249）"通电"后，本切片把消息**流转**接上：`MessageRelayWorker` 周期

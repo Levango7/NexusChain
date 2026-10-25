@@ -2,6 +2,7 @@ package org.nexus.bridge.messaging;
 
 import org.junit.jupiter.api.Test;
 import org.nexus.bridge.adapter.ChainAdapter;
+import org.nexus.bridge.adapter.SimulatedChainAdapter;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -12,6 +13,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -102,7 +104,40 @@ class MessagingRelayConfigTest {
             assertEquals(1, status.targetAdapters());
             assertEquals(1, status.requiredSignatures());
             assertTrue(status.relayEnabled());
-            assertEquals("L2-fake", executor.getTargetAdapters().get("fakeChainAdapter").getChainId());
+            // 切片 3 键语义修正：注册表键 = chainId（此前是 Spring 收集的 bean 名，
+            // 与 MessageExecutor 按 targetChain 查找的语义不一致）
+            assertEquals("L2-fake", executor.getTargetAdapters().get("L2-fake").getChainId(),
+                    "注册表键应为 chainId，而非 bean 名");
+        }
+    }
+
+    @Test
+    void simulatedTargetChainsAreAssembledIntoExecutorRegistry() {
+        try (AnnotationConfigApplicationContext ctx = newContext(
+                Map.of("nexus.bridge.messaging.relay-enabled", "true",
+                       "nexus.bridge.messaging.required-signatures", "1",
+                       "nexus.bridge.messaging.simulated-target-chains", "L2-sim, L3-sim"))) {
+            MessageExecutor executor = ctx.getBean(MessageExecutor.class);
+            BridgeMessagingStatus status = ctx.getBean(BridgeMessagingStatus.class);
+            assertEquals(2, status.targetAdapters());
+            assertTrue(executor.getTargetAdapters().get("L2-sim") instanceof SimulatedChainAdapter);
+            assertTrue(executor.getTargetAdapters().get("L3-sim") instanceof SimulatedChainAdapter);
+        }
+    }
+
+    @Test
+    void containerAdapterWinsOverSimulatedForSameChainId() {
+        // 合并规则：真实（容器收集）优先、模拟不覆盖同名链
+        try (AnnotationConfigApplicationContext ctx = newContext(
+                Map.of("nexus.bridge.messaging.relay-enabled", "true",
+                       "nexus.bridge.messaging.required-signatures", "1",
+                       "nexus.bridge.messaging.simulated-target-chains", "L2-fake, L3-sim"),
+                FakeAdapterConfig.class)) {
+            MessageExecutor executor = ctx.getBean(MessageExecutor.class);
+            assertEquals(2, executor.getTargetAdapters().size());
+            assertFalse(executor.getTargetAdapters().get("L2-fake") instanceof SimulatedChainAdapter,
+                    "同名链必须保留容器适配器，模拟链不得覆盖");
+            assertTrue(executor.getTargetAdapters().get("L3-sim") instanceof SimulatedChainAdapter);
         }
     }
 
