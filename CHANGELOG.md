@@ -10,7 +10,8 @@ roadmap #29 的观测面收口：写库失败此前**只进日志**，outbox 滞
 运维无法回答"有没有跳块、跳了多少、最后在什么高度"以及"行数不清零是正在排空
 还是卡死"。
 
-- **`BlockWriteStats`**（新，`org.nexus.db`）：内存聚合 `writeFailures`（跳块）、
+- **`BlockWriteStats`**（新，`org.nexus.db`）：内存聚合 `writeFailures`（写入失败/
+  跳块的**尝试次数**，同一高度重试会重复计数；不是不同区块数）、
   `stateUpdateTimeouts`（pendingBlock 等待超时被强制清空）与最近一次异常
   高度/时刻；`StateDB.writeBlock` 三个既有吞点接入。
 - **`GET /consensus/block-writer`**（新）：内存读、**不依赖数据库**——PG 故障
@@ -25,7 +26,10 @@ roadmap #29 的观测面收口：写库失败此前**只进日志**，outbox 滞
 - **测试**：新增/扩展 7 例（`BlockWriteStatsTest` 3、`JdbcPendingBlockOutboxTest`
   2、`PendingBlocksManagerStorageRetryTest` 2）；模块定向回归绿。
 - **如实边界**：计数为进程内内存聚合，重启清零，不替代日志；未接告警系统；
-  故障注入验证记录见 `PLAN-039` §四（首轮因测试床基线发散无效，已重置重跑）。
+  故障注入验证见 `PLAN-039` §四（整库停机 4 分钟：内存队列 0→100、`databasePending`
+  降级为 -1、恢复后 30s 排空并追平；header 写入触发器注入 2 分钟：`writeFailures`
+  0→1666、`lastFailureHeight` 155→204，撤除后停止增长并补写追平；outbox 滞留
+  字段用标注的合成行验证读取链路）。
 
 ### 日限额持久化 + #33 余项处置决策（PLAN-038，2026-10-26）
 
