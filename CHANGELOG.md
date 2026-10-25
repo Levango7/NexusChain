@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+### LocalRpcInterceptor 拒绝显式化 + token 判断加固（2026-10-25）
+
+修 PLAN-032 白名单踩坑暴露的拦截器层缺陷（根因不只是白名单）：
+
+- **拒绝不再静默**：旧实现 `return false` 且不写响应 ⇒ 调用方拿到 **HTTP 200 空
+  body**（无法区分"被拦截/限流/正常空返回"，PLAN-032 的新端点踩坑即被此放大）。
+  现在所有拒绝路径（缺 token / 验签不通过 / 解析异常）都写 **401 + JSON body**。
+- **空串 token 判断**：旧实现 `token != ""` 是**引用比较**（动态空串会被当成合法
+  值送进 JWT 解析）→ 改 `!token.isEmpty()`。
+- **JWT 解析异常兜底**：异常不再逃逸成 500，按拒绝处理并显式 401。
+- 单测 5 例：`LocalRpcInterceptorTest`（放行 / 缺 token 401+body / 动态空串拒绝 /
+  畸形 token 不抛 / 合法 JWT 放行）。
+
 ### 追块观测端点（PLAN-033 切片 B，2026-10-25）
 
 - 新只读端点 `GET /consensus/catch-up`：`localHeight/peerHeight/gap`、
