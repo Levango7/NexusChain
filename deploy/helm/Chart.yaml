@@ -14,8 +14,8 @@ apiVersion: v2
 name: nexus-chain
 description: NexusChain 区块链支付编排平台 Helm Umbrella Chart
 type: application
-version: 2.74.0
-appVersion: "2.74.0"
+version: 2.75.0
+appVersion: "2.75.0"
 keywords:
   - blockchain
   - payment
@@ -30,31 +30,31 @@ maintainers:
     email: devops@nexus.network
 dependencies:
   - name: nexus-gateway
-    version: 2.74.0
+    version: 2.75.0
     repository: "file://charts/nexus-gateway"
   - name: nexus-bridge
-    version: 2.74.0
+    version: 2.75.0
     repository: "file://charts/nexus-bridge"
   - name: nexus-signing-service
-    version: 2.74.0
+    version: 2.75.0
     repository: "file://charts/nexus-signing-service"
   - name: nexus-wallet-service
-    version: 2.74.0
+    version: 2.75.0
     repository: "file://charts/nexus-wallet-service"
   - name: nexus-api-gateway
-    version: 2.74.0
+    version: 2.75.0
     repository: "file://charts/nexus-api-gateway"
   - name: nexus-core
-    version: 2.74.0
+    version: 2.75.0
     repository: "file://charts/nexus-core"
     condition: nexus-core.enabled
   - name: mpc-engine
-    version: 2.74.0
+    version: 2.75.0
     repository: "file://charts/mpc-engine"
     condition: mpc-engine.enabled
   # 2026-10-19：区块浏览器（React 前端 + Express BFF 同源单容器）。
   # 此前两条 K8s 路径均缺——镜像早已在发布链（13 镜像含它），编排资产缺失。
   - name: nexus-explorer
-    version: 2.74.0
+    version: 2.75.0
     repository: "file://charts/nexus-explorer"
     condition: nexus-explorer.enabled
