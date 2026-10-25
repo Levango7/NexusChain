@@ -21,7 +21,7 @@ nexus-gateway:
   replicaCount: 3
   image:
     # 固定不可变 tag（vX.Y.Z，与发布产物一致；2026-10-18 批次②起全链 v 前缀），禁止 latest
-    tag: v2.74.0
+    tag: v2.75.0
   resources:
     requests:
       memory: 1Gi
@@ -50,7 +50,7 @@ nexus-gateway:
 nexus-bridge:
   replicaCount: 3
   image:
-    tag: v2.74.0
+    tag: v2.75.0
   resources:
     requests:
       memory: 1Gi
@@ -78,7 +78,7 @@ nexus-bridge:
 nexus-signing-service:
   replicaCount: 3
   image:
-    tag: v2.74.0
+    tag: v2.75.0
   resources:
     requests:
       memory: 1Gi
@@ -157,7 +157,7 @@ nexus-signing-service:
 nexus-wallet-service:
   replicaCount: 3
   image:
-    tag: v2.74.0
+    tag: v2.75.0
   resources:
     requests:
       memory: 1Gi
@@ -187,11 +187,11 @@ nexus-wallet-service:
 #    部署靠 --set 覆盖故上游无感，但离线 helm install -f values-prod.yaml 会踩中。
 nexus-api-gateway:
   image:
-    tag: v2.74.0
+    tag: v2.75.0
 
 nexus-core:
   image:
-    tag: v2.74.0
+    tag: v2.75.0
 
 # -- mpc-engine（MPC 密码学引擎，prod 独有覆盖，PLAN-002 Step A）
 # 生产密钥经 sealed-secrets 注入：
@@ -204,7 +204,7 @@ nexus-core:
 #     请用 dev/staging 环境）
 mpc-engine:
   image:
-    tag: v2.74.0
+    tag: v2.75.0
   secrets:
     sealedSecretName: mpc-engine-secret
 
@@ -214,7 +214,7 @@ mpc-engine:
 nexus-explorer:
   replicaCount: 3
   image:
-    tag: v2.74.0
+    tag: v2.75.0
   resources:
     requests:
       memory: 128Mi

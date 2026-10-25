@@ -47,7 +47,7 @@ spec:
           emptyDir: {}
       containers:
         - name: explorer
-          image: ghcr.io/levango7/nexuschain/nexus-explorer:v2.74.0
+          image: ghcr.io/levango7/nexuschain/nexus-explorer:v2.75.0
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

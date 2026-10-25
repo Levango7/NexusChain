@@ -2,8 +2,8 @@ apiVersion: v2
 name: nexus-explorer
 description: NexusChain 区块浏览器（React 前端 + Express BFF 同源单容器）
 type: application
-version: 2.74.0
-appVersion: "2.74.0"
+version: 2.75.0
+appVersion: "2.75.0"
 keywords:
   - blockchain
   - explorer
