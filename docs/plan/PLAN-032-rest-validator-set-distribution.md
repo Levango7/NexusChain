@@ -44,6 +44,10 @@ PLAN-027（F1）修复的是 **grpc** 路径的验证人集中继与全表回放
 - **本切片首测踩坑**：漏加 `/consensus/validator-set` ⇒ 拦截器 `return false` ⇒
   **HTTP 200 空响应**（无 4xx/5xx、无异常日志），rest 端拉到空数组**静默失效**。
   已加白名单，并在 `WebSecurityConfig` 注释中固化"新增 P2P 端点必须同步加白名单"。
+- **追根（2026-10-25 加固）**：白名单只是触发面，真正的放大因素是 `LocalRpcInterceptor`
+  的拒绝路径 `return false` 且**不写响应**——任何被拦截的端点都表现为 200 空 body。
+  已修：所有拒绝（缺 token / 验签不通过 / 解析异常）现在写 **401 + JSON body**；
+  顺带修 `token != ""` 引用比较漏洞与 JWT 解析异常逃逸（500）。见 CHANGELOG 同条。
 
 ## 三、测试
 
