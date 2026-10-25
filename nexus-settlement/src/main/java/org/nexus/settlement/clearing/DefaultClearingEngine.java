@@ -145,6 +145,25 @@ public class DefaultClearingEngine implements ClearingEngine {
                 "settlement:" + order.getOrderId(),
                 order.getOrderId());
         TransactionResult result = executionChannel.execute(request);
+        if (result != null && result.isAwaitingApproval()) {
+            // 大额结算转人工审批：钱未出。不能记 FAILED（审批通过后还会执行），
+            // 也绝不能留在 PENDING（drainStaging 会重捞 PENDING 再跑一次 settle()，
+            // 而上面的 bookSettlement 无去重 ⇒ 重复贷账）。状态名见 ClearingOrder.OrderStatus 注释。
+            order.setStatus(ClearingOrder.OrderStatus.AWAITING);
+            log.info("settle awaiting signing approval: orderId={}, approvalId={}, amount={}",
+                    order.getOrderId(), result.getApprovalId(), order.getAmount());
+            persistOrderState(order);
+            return order;
+        }
+        if (result != null && result.isExecutedUnverified()) {
+            // 执行结果不可核对：钱可能已出 —— 禁止重试，转人工核对，同样不记 FAILED
+            order.setStatus(ClearingOrder.OrderStatus.UNVERIFIED);
+            log.error("settle executed but unverified (manual check required, retry forbidden): "
+                            + "orderId={}, approvalId={}, error={}",
+                    order.getOrderId(), result.getApprovalId(), result.getError());
+            persistOrderState(order);
+            return order;
+        }
         if (result != null && result.isSuccess()) {
             order.setStatus(ClearingOrder.OrderStatus.SETTLED);
             order.setSettlementTxHash(result.getTxHash());
@@ -153,23 +172,101 @@ public class DefaultClearingEngine implements ClearingEngine {
             // 链上凭证回填：向回填型数据源同步，供下一轮 reconcileWithChain 匹配
             feedChainRecordSource(order);
             // 终态落库：SETTLED + settlementTxHash 回写 clearing_order（账务核心持久化）
-            persistTerminalState(order);
+            persistOrderState(order);
         } else {
             order.setStatus(ClearingOrder.OrderStatus.FAILED);
             String err = result != null ? result.getError() : "execution channel returned null";
             log.error("settle on-chain failed: orderId={}, error={}", order.getOrderId(), err);
             // FAILED 终态同样落库（差错可追溯）
-            persistTerminalState(order);
+            persistOrderState(order);
         }
         return order;
     }
 
     /**
-     * 终态（SETTLED/FAILED）回写清算订单仓储。
-     * 仓储未注入（纯单测路径）或落库异常时跳过，不影响结算主流程；
-     * 落库异常仅 WARN（账务数据以 ledger_entry 双写为准，本表用于终态追溯）。
+     * 审批通过后由推进器收口：把仍处于 {@link ClearingOrder.OrderStatus#AWAITING}
+     * 的清算订单落为 SETTLED 并回填结算凭证。
+     *
+     * <p>本方法<b>不重跑 {@code settle()}</b>，因此不会二次 {@code bookSettlement}；
+     * 状态不是 AWAITING 时不改写（幂等，且拒绝把已终态的单子拉回）。</p>
      */
-    private void persistTerminalState(ClearingOrder order) {
+    @Override
+    public boolean completeAfterSigningApproval(String orderId, String settlementTxHash) {
+        if (clearingOrderRepository == null) {
+            log.error("待审批结算收口失败：清算订单仓储未装配, orderId={}", orderId);
+            return false;
+        }
+        ClearingOrder order = loadAwaitingOrder(orderId);
+        if (order == null) {
+            return false;
+        }
+        if (settlementTxHash == null || settlementTxHash.isBlank()) {
+            // 理论不可达（EXECUTED 必有哈希）；保守转人工核对，不落 SETTLED
+            order.setStatus(ClearingOrder.OrderStatus.UNVERIFIED);
+            persistOrderState(order);
+            log.error("审批执行完成但无结算交易哈希，转 UNVERIFIED 待人工核对: orderId={}", orderId);
+            return false;
+        }
+        order.setStatus(ClearingOrder.OrderStatus.SETTLED);
+        order.setSettlementTxHash(settlementTxHash);
+        feedChainRecordSource(order);
+        persistOrderState(order);
+        log.info("settle completed after signing approval: orderId={}, txHash={}", orderId, settlementTxHash);
+        return true;
+    }
+
+    /** 审批被拒/过期（确定未动账）：AWAITING → FAILED。 */
+    @Override
+    public boolean markSigningApprovalRejected(String orderId, String reason) {
+        if (clearingOrderRepository == null) {
+            return false;
+        }
+        ClearingOrder order = loadAwaitingOrder(orderId);
+        if (order == null) {
+            return false;
+        }
+        order.setStatus(ClearingOrder.OrderStatus.FAILED);
+        persistOrderState(order);
+        log.warn("settle signing approval rejected（确定未动账）: orderId={}, reason={}", orderId, reason);
+        return true;
+    }
+
+    /** 审批腿执行结果不可核对：AWAITING → UNVERIFIED（禁止重试，等人工）。 */
+    @Override
+    public boolean markSigningApprovalUnverified(String orderId, String reason) {
+        if (clearingOrderRepository == null) {
+            return false;
+        }
+        ClearingOrder order = loadAwaitingOrder(orderId);
+        if (order == null) {
+            return false;
+        }
+        order.setStatus(ClearingOrder.OrderStatus.UNVERIFIED);
+        persistOrderState(order);
+        log.error("settle signing approval executed but unverified, 转 UNVERIFIED（禁止自动重试）: "
+                + "orderId={}, reason={}", orderId, reason);
+        return true;
+    }
+
+    private ClearingOrder loadAwaitingOrder(String orderId) {
+        ClearingOrder order = clearingOrderRepository.findById(orderId).orElse(null);
+        if (order == null) {
+            log.warn("清算订单不存在，无法按审批结果收口: orderId={}", orderId);
+            return null;
+        }
+        if (order.getStatus() != ClearingOrder.OrderStatus.AWAITING) {
+            log.info("清算订单已不在待审批状态，跳过收口: orderId={}, status={}", orderId, order.getStatus());
+            return null;
+        }
+        return order;
+    }
+
+    /**
+     * 回写清算订单仓储（终态 SETTLED/FAILED 与非终态 AWAITING/UNVERIFIED 都走这里）。
+     * 仓储未注入（纯单测路径）或落库异常时跳过，不影响结算主流程；
+     * 落库异常仅 WARN（账务数据以 ledger_entry 双写为准，本表用于状态追溯）。
+     */
+    private void persistOrderState(ClearingOrder order) {
         if (clearingOrderRepository == null) {
             return;
         }

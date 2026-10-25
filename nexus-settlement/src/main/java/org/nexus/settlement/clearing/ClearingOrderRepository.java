@@ -27,6 +27,14 @@ public interface ClearingOrderRepository extends JpaRepository<ClearingOrder, St
     List<ClearingOrder> findByStatus(ClearingOrder.OrderStatus status);
 
     /**
+     * 按状态限量取单（供审批执行推进器扫描 {@code AWAITING} 结算使用，避免一次性拉全表）。
+     *
+     * @param status 订单状态
+     * @return 最多 100 条，按 orderId 稳定排序
+     */
+    List<ClearingOrder> findTop100ByStatusOrderByOrderIdAsc(ClearingOrder.OrderStatus status);
+
+    /**
      * P1-1：按状态查询订单并加悲观写锁，确保 drainStaging 的查询和删除原子执行。
      * 使用 @Query + @Lock 避免 Spring Data 方法名解析问题。
      *

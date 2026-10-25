@@ -46,8 +46,12 @@ class ClearingOrderAndBatchTest {
 
     @Test
     void clearingOrder_orderStatusEnum_shouldContainAllVariants() {
-        assertEquals(3, ClearingOrder.OrderStatus.values().length);
+        // 5 = PENDING/SETTLED/FAILED + 大额签名审批执行腿的两个非终态
+        // （AWAITING 待审批=钱未出、UNVERIFIED=已执行但不可核对；两者都不得记 FAILED）
+        assertEquals(5, ClearingOrder.OrderStatus.values().length);
         assertEquals(ClearingOrder.OrderStatus.PENDING, ClearingOrder.OrderStatus.valueOf("PENDING"));
+        assertEquals(ClearingOrder.OrderStatus.AWAITING, ClearingOrder.OrderStatus.valueOf("AWAITING"));
+        assertEquals(ClearingOrder.OrderStatus.UNVERIFIED, ClearingOrder.OrderStatus.valueOf("UNVERIFIED"));
         assertEquals(ClearingOrder.OrderStatus.SETTLED, ClearingOrder.OrderStatus.valueOf("SETTLED"));
         assertEquals(ClearingOrder.OrderStatus.FAILED, ClearingOrder.OrderStatus.valueOf("FAILED"));
     }

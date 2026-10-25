@@ -108,9 +108,27 @@ public class ClearingOrder {
     @JsonProperty("settlementTxHash")
     private String settlementTxHash;
 
-    /** 订单状态枚举 */
+    /**
+     * 订单状态枚举。
+     *
+     * <p>{@code AWAITING} / {@code UNVERIFIED} 是"大额签名审批执行腿"（Board 裁决
+     * 20261025-0415）引入的<b>非终态</b>：待审批时钱未出，不可核对时钱可能已出，
+     * 两者都绝不能记成 {@link #FAILED}。</p>
+     *
+     * <p>为什么不复用 {@link #PENDING}：{@code SettlementEventCollector.drainStaging()}
+     * 每轮把 PENDING 重新捞出并再跑一次 {@code settle()}，而落账在前、动链在后且
+     * {@code Ledger.bookSettlement} 无按 reference 去重 ⇒ 留在 PENDING 等于**每轮重复贷账**。
+     * 因此待审批必须用独立状态，由 {@code SettlementApprovalReconciler} 一次性收口。</p>
+     *
+     * <p>状态名故意取短（列 {@code status VARCHAR(16)}）：与退款侧的
+     * {@code AWAITING_APPROVAL} / {@code RECONCILIATION_NEEDED} 同语义但免一次 DDL 加宽。</p>
+     */
     public enum OrderStatus {
         PENDING,
+        /** 大额结算转人工审批（钱未出，非终态，由审批推进器收口） */
+        AWAITING,
+        /** 结算已执行但结果不可核对（非终态，禁止自动重试，等人工核对） */
+        UNVERIFIED,
         SETTLED,
         FAILED
     }
