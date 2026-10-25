@@ -4,6 +4,29 @@
 
 ## [Unreleased]
 
+### 区块写库失败与 outbox 滞留可见性（PLAN-039，2026-10-26）
+
+roadmap #29 的观测面收口：写库失败此前**只进日志**，outbox 滞留只有行数——
+运维无法回答"有没有跳块、跳了多少、最后在什么高度"以及"行数不清零是正在排空
+还是卡死"。
+
+- **`BlockWriteStats`**（新，`org.nexus.db`）：内存聚合 `writeFailures`（跳块）、
+  `stateUpdateTimeouts`（pendingBlock 等待超时被强制清空）与最近一次异常
+  高度/时刻；`StateDB.writeBlock` 三个既有吞点接入。
+- **`GET /consensus/block-writer`**（新）：内存读、**不依赖数据库**——PG 故障
+  期间仍可读；`LocalRpcInterceptor` 白名单同步（`LOCAL_ONLY_PUBLIC_PATHS`）。
+- **outbox 滞留信号**：`PendingBlockOutbox` 增 `oldestCreatedAt()` / `maxAttempts()`
+  默认方法（旧实现返回 -1，不受影响）；`JdbcPendingBlockOutbox` 用
+  `MIN(created_at)` / `COALESCE(MAX(attempts), -1)` 实现；
+  `GET /consensus/block-outbox` 增 `oldestPendingCreatedAt` / `maxAttempts`。
+- **决策：outbox 不自动清理**：滞留行是恢复数据/审计证据，自动删除会先于
+  "判定永久不可恢复"销毁证据；本次只上可见性，删不删留给运维（PLAN-039 §2.3，
+  附 revisit 条件）。
+- **测试**：新增/扩展 7 例（`BlockWriteStatsTest` 3、`JdbcPendingBlockOutboxTest`
+  2、`PendingBlocksManagerStorageRetryTest` 2）；模块定向回归绿。
+- **如实边界**：计数为进程内内存聚合，重启清零，不替代日志；未接告警系统；
+  故障注入验证记录见 `PLAN-039` §四（首轮因测试床基线发散无效，已重置重跑）。
+
 ### 日限额持久化 + #33 余项处置决策（PLAN-038，2026-10-26）
 
 roadmap #33 ② 深挖收口：日限额**计数器本身**也是内存态——重启清零（当日限额

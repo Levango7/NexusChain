@@ -69,6 +69,9 @@ public class StateDB implements ApplicationListener<AccountUpdatedEvent> {
     // block hash -> transaction hashes
     private Map<String, Set<String>> transactionIndex;
 
+    /** 区块写库失败聚合统计（PLAN-039 / roadmap #29 ①：跳块与超时可观测化）。 */
+    private final BlockWriteStats blockWriteStats = new BlockWriteStats();
+
     private static final Base64.Encoder encodeNr = Base64.getEncoder();
     public static final int CACHE_SIZE = 512;
 
@@ -522,6 +525,15 @@ public class StateDB implements ApplicationListener<AccountUpdatedEvent> {
         return latestConfirmed;
     }
 
+    /**
+     * 区块写库失败聚合快照（PLAN-039）。
+     *
+     * <p>只读、不依赖数据库；供 {@code GET /consensus/block-writer} 观测。</p>
+     */
+    public BlockWriteStats blockWriteStats() {
+        return blockWriteStats;
+    }
+
     // 写入区块
     public void writeBlock(Block block) {
         this.readWriteLock.writeLock().lock();
@@ -591,6 +603,7 @@ public class StateDB implements ApplicationListener<AccountUpdatedEvent> {
                 long waitDeadline = System.currentTimeMillis() + 60_000L;
                 while (pendingBlock != null) {
                     if (System.currentTimeMillis() > waitDeadline) {
+                        blockWriteStats.recordStateUpdateTimeout(pendingBlock.nHeight);
                         logger.error("Timed out waiting for pendingBlock state update at height "
                                 + pendingBlock.nHeight + " — clearing to avoid deadlock.");
                         pendingBlock = null;
@@ -601,6 +614,7 @@ public class StateDB implements ApplicationListener<AccountUpdatedEvent> {
                 }
                 boolean writeResult = bc.writeBlock(b);
                 if (!writeResult) {
+                    blockWriteStats.recordWriteFailure(b.nHeight);
                     // A2 修复（2026-08-31 交付前审计）：写失败不再无限重试。
                     // 原实现 continue 不自增 i → 同一块永久重试，且本循环持全局写锁
                     // —— 单块 DB 写失败即永久挂死整个节点。
@@ -621,6 +635,7 @@ public class StateDB implements ApplicationListener<AccountUpdatedEvent> {
             long finalWaitDeadline = System.currentTimeMillis() + 60_000L;
             while (pendingBlock != null) {
                 if (System.currentTimeMillis() > finalWaitDeadline) {
+                    blockWriteStats.recordStateUpdateTimeout(pendingBlock.nHeight);
                     logger.error("Timed out waiting for final pendingBlock state update at height "
                             + pendingBlock.nHeight + " — clearing to avoid deadlock.");
                     pendingBlock = null;

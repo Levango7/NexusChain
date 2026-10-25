@@ -75,6 +75,10 @@ public class ConsensusController {
     @Autowired(required = false)
     private org.nexus.core.PendingBlocksManager pendingBlocksManager;
 
+    /** 区块写库失败聚合观测（PLAN-039；未装配时为 null）。 */
+    @Autowired(required = false)
+    private org.nexus.db.StateDB stateDB;
+
     @Autowired
     private Block genesis;
 
@@ -201,6 +205,26 @@ public class ConsensusController {
             return codec.encode(data);
         }
         return codec.encode(pendingBlocksManager.outboxStatus());
+    }
+
+    /**
+     * 区块写库失败聚合观测（PLAN-039 / roadmap #29 ①）。
+     *
+     * <p>内存计数、**不依赖数据库**——PG 故障期间仍可读：{@code writeFailures}
+     * 增长说明有区块被跳过落库（后续确认轮次会补写，见 {@code StateDB.writeBlock}
+     * 的 A2 修复注释）；{@code stateUpdateTimeouts} 为非零时是更严重的信号
+     * （状态更新等待超时、pendingBlock 被强制清空）。</p>
+     */
+    @GetMapping(value = "/consensus/block-writer", produces = "application/json")
+    public Object getBlockWriterStatus() {
+        if (stateDB == null) {
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("enabled", false);
+            return codec.encode(data);
+        }
+        Map<String, Object> data = new LinkedHashMap<>(stateDB.blockWriteStats().snapshot());
+        data.put("enabled", true);
+        return codec.encode(data);
     }
 
     @PostMapping(value = "/consensus/status", produces = "application/json")
