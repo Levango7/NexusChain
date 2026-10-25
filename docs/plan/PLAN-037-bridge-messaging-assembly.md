@@ -26,13 +26,21 @@ roadmap #33 登记的欠账：`MessageRelayer` / `MessageExecutor` 自 1.9.2 起
   / `BridgeMessagingStatus`；
 - 关闭时（缺省）**一个 Bean 都不创建**——既有部署行为零变化（单测锁定）；
 - store 沿用 `MessageStoreConfig`（memory/jpa），不重复定义；
-- `requiredSignatures` / `messageTimeout` 外置（默认 1 签 —— 切片 1 语义是
-  自签自验；配置 0/负值时回落 MessageConfig 默认 2 签，不进入非法态）；
+- `requiredSignatures` / `messageTimeout` 外置（复用既有
+  `@ConfigurationProperties` Bean `messageConfig`；`required-signatures<=0` 为
+  非法配置 ⇒ 启动 fail-fast——见本节末修正注记）；
 - `BridgeMessagingStatus` 只读快照：开关/签数/超时/store 实现/适配器数。
 
 **为什么切片 1 只做装配**：真实链适配器（ChainAdapter）涉及外部链凭证与
 网络出口，本机无授权也无外部链；先把"插座"实体化并纳入回归，
 切片 2 再接模拟/真实 adapter + 消息循环（执行/落库/观测）。
+
+> **2026-10-26 修正（全上下文集成测试发现）**：本切片最初自建 `MessageConfig`
+> Bean，与既有 `messageConfig`（`@Configuration +`
+> `@ConfigurationProperties("nexus.bridge.messaging")`，自 1.9.2）类型重复 ⇒
+> `relay-enabled=true` 时完整上下文启动失败（`NoUniqueBeanDefinitionException`）。
+> 已改为复用既有绑定 Bean；"0 签静默回落 2 签"同步改为启动 fail-fast。修正由
+> PLAN-038 引入的 `BridgeMessagingEndpointIntegrationTest` 发现并锁定。
 
 ## 三、测试（`MessagingRelayConfigTest`，3 例）
 
@@ -142,7 +150,8 @@ findPending（按 sourceChain+nonce 升序）→ 逐条：
   relay-enabled=true 时会被收集并按 chainId 归键——**无凭证时执行会失败
   并按失败隔离置 FAILED**（`execute-enabled` 默认 false 挡住此路径）。
 
-## 七、后续（切片 4 起）
+## 七、后续
 
-1. 消息前段（真实链事件源 → 落库；模拟事件源可选做测试床演示）；
-2. `DefaultLiquidityManager` 持久化与 `CircuitBreaker` 跨重启语义（#33 剩余）。
+1. 消息前段（真实链事件源 → 落库；模拟事件源可选做测试床演示）。
+2. #33 剩余项已由 **PLAN-038** 收口：日限额持久化已交付；`DefaultLiquidityManager`
+   暂不持久化、`CircuitBreaker` 保持重启复位（决策与 revisit 条件见 PLAN-038 §2.3）。

@@ -20,9 +20,16 @@ import java.util.Map;
  *
  * <ul>
  *   <li>{@code nexus.bridge.messaging.relay-enabled=true} 时才创建
- *       formatter / relayer / executor / status 四类 Bean；</li>
+ *       formatter / relayer / executor / worker / status Bean；</li>
  *   <li>默认（缺省 / false）时**一个 Bean 都不创建**——既有部署行为零变化；</li>
- *   <li>store 沿用 {@link MessageStoreConfig} 的选择（memory / jpa），不重复造。</li>
+ *   <li>store 沿用 {@link MessageStoreConfig} 的选择（memory / jpa），不重复造；</li>
+ *   <li>消息配置复用既有 {@link MessageConfig} Bean（其自带
+ *       {@code @ConfigurationProperties("nexus.bridge.messaging")} 绑定，bean 名
+ *       {@code messageConfig}）。<b>2026-10-26 修复</b>：本类曾自建
+ *       MessageConfig Bean，与它类型重复 ⇒ 完整上下文在
+ *       {@code relay-enabled=true} 时启动即 {@code NoUniqueBeanDefinitionException}
+ *       （此前无全上下文用例打开该开关，一路漏检）；由新增全上下文集成测试
+ *       {@code BridgeMessagingEndpointIntegrationTest} 发现并修正。</li>
  * </ul>
  *
  * <p><b>切片 1 边界（不夸大）</b>：只做"通电"—— Bean 生命周期与就绪观测；
@@ -44,30 +51,25 @@ public class MessagingRelayConfig {
     }
 
     /**
-     * 消息配置（多签阈值/超时来自外部属性；默认 1 签——切片 1 的装配语义是
-     * "本节点自己签自己验"，真实多签治理阈值应由部署方显式配置）。
+     * 消息中继器。
+     *
+     * <p>配置复用既有 {@code @ConfigurationProperties} Bean（见类注释的修复记录）。
+     * {@code required-signatures<=0} 属于非法安全配置：<b>fail-fast</b>（启动即
+     * 失败，fail-closed 风格，与 JWTUtil/验证者白名单的启动校验同口径）——
+     * 切片 1 的"静默回落默认 2 签"已废除（2026-10-26 复用绑定 Bean 时调整；
+     * 静默回落可能掩盖误配）。</p>
      */
-    @Bean
-    @ConditionalOnProperty(name = RELAY_ENABLED_PROPERTY, havingValue = "true")
-    public MessageConfig bridgeMessageConfig(
-            @Value("${nexus.bridge.messaging.required-signatures:1}") int requiredSignatures,
-            @Value("${nexus.bridge.messaging.message-timeout:3600}") long messageTimeout) {
-        MessageConfig config = new MessageConfig();
-        if (requiredSignatures > 0) {
-            config.setRequiredSignatures(requiredSignatures);
-        }
-        if (messageTimeout > 0) {
-            config.setMessageTimeout(messageTimeout);
-        }
-        config.setEnabled(true);
-        return config;
-    }
-
     @Bean
     @ConditionalOnProperty(name = RELAY_ENABLED_PROPERTY, havingValue = "true")
     public MessageRelayer bridgeMessageRelayer(MessageFormatter formatter,
                                                MessageStore store,
                                                MessageConfig config) {
+        if (config.getRequiredSignatures() <= 0) {
+            throw new IllegalStateException(
+                    "nexus.bridge.messaging.required-signatures must be positive when "
+                            + RELAY_ENABLED_PROPERTY + "=true (got "
+                            + config.getRequiredSignatures() + "); fix the configuration");
+        }
         return new MessageRelayer(formatter, store, config);
     }
 

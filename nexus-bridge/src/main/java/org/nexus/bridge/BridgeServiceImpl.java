@@ -13,6 +13,8 @@ import org.nexus.bridge.repository.BridgePauseRecordRepository;
 import org.nexus.bridge.repository.BridgeTransactionRepository;
 import org.nexus.bridge.repository.IdempotencyKeyRepository;
 import org.nexus.bridge.safety.CircuitBreaker;
+import org.nexus.bridge.safety.DailyUsageStore;
+import org.nexus.bridge.safety.InMemoryDailyUsageStore;
 import org.nexus.common.tracing.BusinessSpan;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -35,7 +37,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -65,8 +66,17 @@ public class BridgeServiceImpl implements BridgeService {
      */
     private final org.nexus.bridge.handler.BridgeOnChainExecutor onChainExecutor;
     private final AtomicReference<BridgeState> bridgeState = new AtomicReference<>(BridgeState.ACTIVE);
-    private final AtomicLong dailyUsed = new AtomicLong(0);
-    private volatile long dailyResetTime = System.currentTimeMillis();
+
+    /**
+     * 日限额用量存储（PLAN-038）。
+     *
+     * <p>字段初始值为进程内实现（单测/嵌入式装配与历史行为逐条一致）；Spring
+     * 运行时若存在 {@link DailyUsageStore} Bean（{@code nexus.bridge.daily-usage.store}
+     * 的 memory/jpa 档，见 {@link org.nexus.bridge.safety.DailyUsageStoreConfig}）
+     * 则注入覆盖。jpa 档下计数器落库：<b>重启不清零、多副本共享全局限额</b>。</p>
+     */
+    @Autowired(required = false)
+    private DailyUsageStore dailyUsageStore = new InMemoryDailyUsageStore();
 
     // === P2-F2 幂等性 ===
     /** 幂等键 Repository（可为 null，测试环境降级跳过幂等检查）。 */
@@ -554,11 +564,10 @@ public class BridgeServiceImpl implements BridgeService {
 
     @Override
     public BridgeStatus getStatus() {
-        resetDailyIfNeeded();
         BridgeStatus status = new BridgeStatus();
         status.setState(bridgeState.get());
         status.setDailyLimit(config.getDailyLimit());
-        status.setDailyUsed(dailyUsed.get());
+        status.setDailyUsed(dailyUsageStore.currentUsed(System.currentTimeMillis()));
         status.setSignatureThreshold(config.getSignatureThreshold());
         status.setActiveValidatorCount(config.getValidatorPublicKeys() != null ? config.getValidatorPublicKeys().size() : 0);
         status.setPendingTxCount((int) txRepository.countByStatusIn(Arrays.asList(
@@ -798,11 +807,12 @@ public class BridgeServiceImpl implements BridgeService {
     }
 
     /**
-     * 金额合法性校验 + 日限额配额预留（修复点 4）。
+     * 金额合法性校验 + 日限额配额预留（PLAN-038 起委托 {@link DailyUsageStore}）。
      *
-     * <p>配额在事务内 CAS 预留（保持 TOCTOU 防护），并通过
-     * {@link TransactionSynchronization#afterCompletion(int)} 在事务回滚时
-     * 归还配额，避免"事务回滚但 AtomicLong 不回滚"的额度泄漏。</p>
+     * <p>配额预留为<b>独立于业务事务的即时生效</b>（memory 档 CAS / jpa 档
+     * REQUIRES_NEW，均防 TOCTOU），并通过
+     * {@link TransactionSynchronization#afterCompletion(int)} 在业务回滚时
+     * 补偿归还，避免额度泄漏。</p>
      */
     private void validateAmount(long amount) {
         if (amount <= 0) throw new BridgeException("Amount must be positive");
@@ -815,7 +825,7 @@ public class BridgeServiceImpl implements BridgeService {
                     if (status != TransactionSynchronization.STATUS_COMMITTED) {
                         releaseDailyQuota(amount);
                         log.warn("Transaction rolled back; released reserved daily quota of {} (dailyUsed={})",
-                                amount, dailyUsed.get());
+                                amount, dailyUsageStore.currentUsed(System.currentTimeMillis()));
                     }
                 }
             });
@@ -823,26 +833,20 @@ public class BridgeServiceImpl implements BridgeService {
     }
 
     /**
-     * 原子预留日限额配额（CAS 循环，防 TOCTOU 竞态）。
+     * 原子预留日限额配额（委托 {@link DailyUsageStore}；超额抛 {@code Daily limit exceeded}）。
+     *
+     * <p>谓词与历史一致：{@code 当前已用 + amount > dailyLimit} 即拒绝。</p>
      */
     private void reserveDailyQuota(long amount) {
-        resetDailyIfNeeded();
-        while (true) {
-            long current = dailyUsed.get();
-            if (config.exceedsDailyLimit(amount, current)) throw new BridgeException("Daily limit exceeded");
-            if (dailyUsed.compareAndSet(current, current + amount)) break;
+        if (!dailyUsageStore.tryReserve(amount, config.getDailyLimit(), System.currentTimeMillis())) {
+            throw new BridgeException("Daily limit exceeded");
         }
     }
 
     /**
-     * 归还此前预留的日限额配额（回滚补偿），下限钳制为 0。
+     * 归还此前预留的日限额配额（回滚补偿；委托 {@link DailyUsageStore}，下限 0）。
      */
     private void releaseDailyQuota(long amount) {
-        dailyUsed.updateAndGet(v -> Math.max(0, v - amount));
-    }
-
-    private void resetDailyIfNeeded() {
-        long now = System.currentTimeMillis();
-        if (now - dailyResetTime > 86_400_000L) { dailyUsed.set(0); dailyResetTime = now; }
+        dailyUsageStore.release(amount, System.currentTimeMillis());
     }
 }
