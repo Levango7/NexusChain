@@ -1,7 +1,8 @@
 # 方案 PLAN-033：grpc 大缺口追块吞吐（Phase 6D 首项，设计稿）
 
-- **状态**：**切片 A 已交付（2026-10-25）**：实现 + 单测 + 实机量化（8× 加速）；
-  切片 B（指标）与切片 B2（多 peer 并行）待排期
+- **状态**：**切片 A + B 已交付（2026-10-25）**：A=链式追块（实测 ~8×，净收敛转正）；
+  B=`GET /consensus/catch-up` 只读观测；切片 B2（多 peer 并行取块）与区块体
+  瘦身为后续 backlog
 - **前置**：PLAN-027 §六（多机闭环；B 落后为已登记边界）、PLAN-029（F2 rest
   形态追块；grpc 路径未覆盖）、PLAN-030（F1 验证人集）
 - **范围**：grpc（默认生产路径）的**大缺口追块吞吐**：从"每状态周期一个窗口"
@@ -69,6 +70,8 @@
 
 - **结论（如实）**：追块吞吐 ~8×（24→190 块/分），**净收敛转为正**
   （+164/分）；缺口 ~5700 的理论收敛时间从"永不收敛"降到 ~35 分钟。
+- **后续观测（同日 ~40 分钟后）**：A=7782 / **B=7782 / gap=0 —— 完全收敛达成**
+  （从 4748 缺口收敛到对齐，与上表理论估计一致）。
   B↔A 外拨可达性是本次测量的前提（见下条边界）。
 - **环境注记（重要，非本切片引入）**：B 对 A 的**外拨**若打向 A 的广告地址
   `host.docker.internal:9235`，在 WSL 内被解析到防火墙挡掉的 LAN IP ⇒ windows
@@ -77,14 +80,25 @@
   **这是独立的环境/拓扑问题**（多机拓扑下"广告地址"与实际可达地址不一致），
   已如实登记，**不属于**本切片修复范围。
 
-- 新增计数器/日志限频：追块轮次、窗口块数、实际落库块数、单窗口耗时、
-  连续零推进次数；`GET /consensus/status` 或既有观测端点附带
-  `catchUp: {gap, inFlight, lastWindowBlocks, lastWindowMillis}`（只读）。
+### 切片 B：可观测性 —— **已交付（2026-10-25）**
 
-### 明确不做（本方案）
+- 新只读端点 **`GET /consensus/catch-up`**（JSON，数据源
+  `SyncManager.catchUpSnapshot()`，纯读；库异常时 `localHeight=0` 不放大故障）：
+  - `localHeight` / `peerHeight` / `gap`：本地链头 / 已知对端最高 / 缺口；
+  - `windowRequested` / `windowStop` / `windowAgeMillis`：在途窗口与年龄
+    （>20s 视为丢响应，会被加速调度重试）；
+  - `accelerationPaused` / `stallCount`：防打转冷却窗与连续零推进计数。
+- **不扩展 `/consensus/status`**：那是 rest 对端协议对象（`ConsensuEntity.Status`），
+  加字段会动协议——观测另开只读端点。
+- 白名单已同步加入 `WebSecurityConfig` 的 `LocalRpcInterceptor` exclusions
+  （PLAN-032 踩坑固化规则：新增 P2P/运维对等端点必须加白名单）。
+- 单测：`SyncManagerCatchUpSnapshotTest` 3 例（gap 推导 / 在途窗口年龄 /
+  暂停窗与 stall 计数）。
 
-- **多 peer 并行取块**：收益明显但需要"乱序缓冲 + 顺序应用 + 分片去重"，
-  复杂度高；待切片 A/B 实测后再评估（第二切片）。
+### 明确不做（本方案 / 后续 backlog）
+
+- **多 peer 并行取块（切片 B2）**：收益明显但需要"乱序缓冲 + 顺序应用 +
+  分片去重"，复杂度高；待切片 A/B 实测后再评估。
 - **区块体瘦身**：单块 ~131KB（`blockSize` 字段 131454）疑似可优化，但牵涉
   序列化契约与签名，独立课题。
 
