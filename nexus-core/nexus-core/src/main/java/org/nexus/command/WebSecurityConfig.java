@@ -26,6 +26,35 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 @Configuration
 public class WebSecurityConfig implements WebMvcConfigurer {
 
+    /**
+     * {@link LocalRpcInterceptor} 的公开路径白名单（容器探针 + P2P 对端直连）。
+     *
+     * <p><b>{@code /height} 为什么必须在列</b>：{@code nexus.localonly} 默认
+     * {@code true}（application.properties 里 {@code ${LOCALONLY:true}}），而
+     * docker-compose 的 healthcheck 与 helm nexus-core 的 liveness/readiness 探针
+     * 打的都是 {@code GET /height}。2026-10-25 的教训：#233 把拒绝路径从
+     * "静默 200 空响应" 改成 "显式 401" 之后，漏配白名单不再看起来正常，而是直接把
+     * core 判成 unhealthy —— 主干 CI 实测红：
+     * {@code dependency failed to start: container nexuschain-nexus-core-1 is unhealthy}，
+     * 容器日志 {@code Local-only RPC rejected: missing token from 127.0.0.1}。
+     * 探针失败还会连带 {@code depends_on: service_healthy} 的 gateway/signing 全链起不来。</p>
+     *
+     * <p>PLAN-032 的另一面：漏加 {@code /consensus/validator-set} 当时表现为
+     * "200 空数组"的静默失效。<b>两条都指向同一条纪律：新增探针或 P2P 端点必须同步这里。</b></p>
+     */
+    static final String[] LOCAL_ONLY_PUBLIC_PATHS = {
+            "/height",
+            "/consensus/blocks",
+            "/consensus/status",
+            "/consensus/storage-status",
+            "/consensus/finality-outbox",
+            "/consensus/block-outbox",
+            "/consensus/block-writer",
+            "/consensus/validator-set",
+            "/consensus/catch-up",
+            "/NexusChainCore/*"
+    };
+
     @Autowired
     RpcInterceptor rpcInterceptor;
 
@@ -35,9 +64,7 @@ public class WebSecurityConfig implements WebMvcConfigurer {
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
         registry.addInterceptor(rpcInterceptor).addPathPatterns("/NexusChainCore/*");
-        // 注意：P2P 对端直连的 /consensus/* 端点必须全部列入白名单（LocalRpcInterceptor
-        // 挂 /**）。PLAN-032 曾漏加 /consensus/validator-set ⇒ 被拦截为「200 空响应」
-        // （rest 端拉到空数组，静默失效）——新增 P2P 端点时同步加到这里。
-        registry.addInterceptor(localRpcInterceptor).addPathPatterns("/**").excludePathPatterns("/consensus/blocks","/consensus/status","/consensus/status","/consensus/blocks","/consensus/storage-status","/consensus/finality-outbox","/consensus/block-outbox","/consensus/validator-set","/consensus/catch-up","/NexusChainCore/*");
+        registry.addInterceptor(localRpcInterceptor).addPathPatterns("/**")
+                .excludePathPatterns(LOCAL_ONLY_PUBLIC_PATHS);
     }
 }

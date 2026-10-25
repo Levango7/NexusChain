@@ -59,4 +59,24 @@ public interface PendingBlockOutbox {
     default int pendingCount() {
         return -1;
     }
+
+    /**
+     * 最老的待补写行创建时刻（观测用，PLAN-039 / roadmap #29 ②）。
+     *
+     * <p>与 {@link #pendingCount()} 组合回答"有没有**滞留**"：行数不清零 +
+     * 最老行年龄很大 ⇒ 有永远写不进去的区块（如校验恒失败/数据损坏），
+     * 运维据此决策（本类不自动清理——outbox 行是恢复数据）。</p>
+     *
+     * @return epoch millis；无行/读不到时返回 -1
+     */
+    default long oldestCreatedAt() {
+        return -1L;
+    }
+
+    /**
+     * 单行最大补写尝试次数（观测用；无行/读不到时返回 -1）。
+     */
+    default int maxAttempts() {
+        return -1;
+    }
 }

@@ -134,10 +134,42 @@ public class PendingBlocksManagerStorageRetryTest {
         assertTrue(outbox.removed.isEmpty(), "没落库的区块不得被当成已完成");
     }
 
+    @Test
+    void outboxStatusIncludesStagnationSignals() {
+        PendingBlocksManager manager = new PendingBlocksManager();
+        RecordingOutbox outbox = new RecordingOutbox();
+        outbox.oldestCreatedAtValue = 1_700_000_000_000L;
+        outbox.maxAttemptsValue = 5;
+        ReflectionTestUtils.setField(manager, "blockOutbox", outbox);
+
+        Map<String, Object> status = manager.outboxStatus();
+
+        assertEquals(0, status.get("memoryPending"));
+        assertEquals(0, status.get("databasePending"));
+        assertEquals(1_700_000_000_000L, status.get("oldestPendingCreatedAt"),
+                "滞留信号：最老行创建时刻（PLAN-039 / #29 ②）");
+        assertEquals(5, status.get("maxAttempts"), "滞留信号：最大重试次数");
+        assertEquals(true, status.get("enabled"));
+    }
+
+    @Test
+    void outboxStatusHandlesDisabledOutbox() {
+        PendingBlocksManager manager = new PendingBlocksManager();
+
+        Map<String, Object> status = manager.outboxStatus();
+
+        assertEquals(-1, status.get("databasePending"), "未装配 → -1（未知）");
+        assertEquals(-1L, status.get("oldestPendingCreatedAt"));
+        assertEquals(-1, status.get("maxAttempts"));
+        assertEquals(false, status.get("enabled"));
+    }
+
     /** 记录入队/移除的假 outbox。 */
     private static final class RecordingOutbox implements org.nexus.core.pending.PendingBlockOutbox {
         private final java.util.List<Block> enqueued = new java.util.ArrayList<>();
         private final java.util.List<String> removed = new java.util.ArrayList<>();
+        private long oldestCreatedAtValue = -1L;
+        private int maxAttemptsValue = -1;
 
         @Override
         public void enqueue(Block block) {
@@ -157,6 +189,16 @@ public class PendingBlocksManagerStorageRetryTest {
         @Override
         public int pendingCount() {
             return enqueued.size() - removed.size();
+        }
+
+        @Override
+        public long oldestCreatedAt() {
+            return oldestCreatedAtValue;
+        }
+
+        @Override
+        public int maxAttempts() {
+            return maxAttemptsValue;
         }
     }
 
