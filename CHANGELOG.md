@@ -4,6 +4,25 @@
 
 ## [Unreleased]
 
+### MPC CGGMP21 3 方 keygen E2E 去竞态（测试健壮化，2026-10-25）
+
+PR #233 的 MPC Java Cluster E2E 抖动一次后定位（同 job 在 #219/#227/#233-rerun
+全绿；失败那次 5 例中仅 1 例失败、引擎侧零 ERROR）：
+`CggmpMpcE2EClusterTest.cggmpE2EKeygen` 是最后一个走 orchestrator
+「启动即融合并发 pump」模式的用例——与 `cggmpE2EFullPipeline` 注释已记录的
+`clear_session` 阶段边界竞态同族：并发 start 时先发方的前期消息可能被后到方
+的 start 清掉 ⇒ 间歇性 `state machine did not request this message (round ...)`
+（纯客户端时序问题，可 rerun 复绿）。
+
+- 改为与 `cggmpE2EStatus`/`cggmpE2EFullPipeline` 一致的 **client 原语 + 三方
+  start 串行 + 统一 pumpAll**；`startKeygen` 增加"HTTP status code"传输抖动
+  重试（服务端幂等守卫）。
+- sid 追加 `nanoTime`（防同 JVM 并行 fork 毫秒级碰撞）。
+- 移除 `orchestrators` 字段/构造（无其他使用方；`MpcCggmpOrchestrator` 类保留
+  供生产编排路径）；类 Javadoc 同步更新。
+- 本地 `:nexus-signing-service:compileTestJava` 通过；E2E 本体由 CI 门禁验证
+  （本地无 mpc-engine 二进制）。
+
 ### LocalRpcInterceptor 拒绝显式化 + token 判断加固（2026-10-25）
 
 修 PLAN-032 白名单踩坑暴露的拦截器层缺陷（根因不只是白名单）：
