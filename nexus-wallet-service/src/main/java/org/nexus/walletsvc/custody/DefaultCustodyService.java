@@ -349,8 +349,32 @@ public class DefaultCustodyService implements CustodyService {
                 .orElse(BigDecimal.ZERO);
     }
 
+    /**
+     * 按策略自动再平衡冷热钱包余额。
+     *
+     * <p><b>失败语义（2026-10-26 修复）</b>：本方法**不再吞掉转账异常**。
+     * 修复前的 {@code catch (Exception e) { log.warn(...) }} 有一个致命后果：
+     * {@link #depositToCold} 的执行顺序是「先改冷热余额 → 再调链上执行」，
+     * 因此当执行通道返回确定失败（{@code FAILED} / 无 txHash / {@code AWAITING_APPROVAL}）时，
+     * 异常被吞掉 ⇒ 事务照常提交 ⇒ <b>钱没出去、账却动了</b>（余额虚增）。</p>
+     *
+     * <p>现在按执行结果分两种处理：
+     * <ul>
+     *   <li><b>确定失败</b>（{@code IllegalStateException}）：异常传播 ⇒
+     *       {@code @Transactional} 回滚 ⇒ 余额调整撤销，符合「钱没出账不能动」；</li>
+     *   <li><b>已执行但不可核对</b>（{@link CustodyTransferUnverifiedException}）：
+     *       由 {@code noRollbackFor} 放行提交 ⇒ 余额调整<b>保留</b>（钱可能已出），
+     *       异常继续传播让调用方知道需要人工核对，而不是静默返回成功。</li>
+     * </ul>
+     * 两种结果都不自动重试（重试会二次出金）。</p>
+     *
+     * <p><b>为什么 {@code noRollbackFor} 必须标在本方法上</b>：
+     * {@link #depositToCold} 虽然也有该注解，但它在 {@code rebalance} 内是<b>同类自调用</b>，
+     * 不经过 Spring 代理 ⇒ 注解不生效。事务边界在 {@code rebalance} 这里，
+     * 所以放行规则必须写在这里。</p>
+     */
     @Override
-    @Transactional
+    @Transactional(noRollbackFor = CustodyTransferUnverifiedException.class)
     public void rebalance(WalletTier target) {
         if (custodyPolicy == null) {
             log.warn("Rebalance skipped: no custody policy configured");
@@ -365,12 +389,9 @@ public class DefaultCustodyService implements CustodyService {
             WalletTier sweepTarget = custodyPolicy.getSweepTarget() == null
                     ? WalletTier.COLD : custodyPolicy.getSweepTarget();
             if (sweepTarget == WalletTier.COLD) {
-                try {
-                    depositToCold("cold-sweep", excess);
-                    log.info("Rebalance swept {} to COLD", excess);
-                } catch (Exception e) {
-                    log.warn("Rebalance sweep to COLD failed: {}", e.getMessage());
-                }
+                // 不捕获：确定失败必须传播以触发事务回滚（否则钱未出、账已动）。
+                String txHash = depositToCold("cold-sweep", excess);
+                log.info("Rebalance swept {} to COLD, txHash={}", excess, txHash);
             }
         }
 
@@ -381,13 +402,10 @@ public class DefaultCustodyService implements CustodyService {
             BigDecimal deficit = floor.subtract(hotAfterSweep);
             BigDecimal currentCold = getColdBalance();
             if (currentCold.compareTo(deficit) >= 0) {
-                try {
-                    // 内部受控路径：自动再平衡不伪造审批 ID，也不经过对外审批接口
-                    transferColdToHotInternal("hot-floor", deficit);
-                    log.info("Rebalance pulled {} from COLD to meet floor", deficit);
-                } catch (Exception e) {
-                    log.warn("Rebalance floor pull failed: {}", e.getMessage());
-                }
+                // 内部受控路径：自动再平衡不伪造审批 ID，也不经过对外审批接口。
+                // 不捕获：确定失败必须传播以触发事务回滚（否则钱未出、账已动）。
+                String txHash = transferColdToHotInternal("hot-floor", deficit);
+                log.info("Rebalance pulled {} from COLD to meet floor, txHash={}", deficit, txHash);
             } else {
                 log.warn("Rebalance floor pull skipped: cold balance insufficient");
             }
