@@ -4,6 +4,19 @@
 
 ## [2.75.0] - 2026-10-26
 
+### 参考交付范围口径落档 + prod compose 补 store 兜底（2026-10-26）
+
+- **新文档 `docs/deploy/reference-delivery-scope.md`**：客户口径拍板——**最小集交付**，
+  Kafka / Sentinel Dashboard / Zipkin Server 不进参考交付（L3 两轮预演实证三者缺席时 24/24 Ready）；
+  各组件"不装时什么在工作 / 什么没有 / 怎么加"逐项写明，含部署面现状核实结论。
+- **`docker-compose.prod.yml` 补两个 store env**（`NEXUS_EVENTSOURCING_STORE` /
+  `NEXUS_WEBHOOK_DLQ_STORE` = memory）：L3 缺陷 #43 的 **compose 漏网面**——此前只有 helm
+  路径兜底（chart 注入默认 memory），compose-prod 在无 Kafka 环境会踩中
+  `matchIfMissing=true` 的 kafka 激活（dev compose 由 dev profile 兜底，不受影响）。
+- **登记工程收口项**：① 代码侧 `KafkaEventStore` / `DeadLetterQueueService` 的
+  `matchIfMissing=true` 缺省语义反转（消灭 chart/compose 之外裸跑的残留陷阱，base yml
+  `dlq.store: kafka` 显式默认一并反转）；② Seata store DDL 并入安装脚本（L3 遗留）。
+
 ### 最终性停滞指标与告警（PLAN-045）
 
 承接 PLAN-044 §五 留项"未做指标化/告警"：把 `/consensus/finality`（PLAN-044）的
