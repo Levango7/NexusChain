@@ -81,7 +81,11 @@ public class WebConfig implements WebMvcConfigurer {
         // (the single rate-limiting implementation); falls through when absent.
         if (rateLimiter != null) {
             registry.addInterceptor(new RateLimitAdapter(rateLimiter))
-                    .addPathPatterns("/api/v1/**", "/api/v2/**");
+                    // /api/reconciliation/** 是既定保留的非 v1 路径（JWT 鉴权，
+                    // 见 README「不动项」），此前完全不在限流范围内；
+                    // 补上以对齐"所有 API 路径限流"的设计意图
+                    //（限流键取 API Key 头，缺失时回退来源 IP）。
+                    .addPathPatterns("/api/v1/**", "/api/v2/**", "/api/reconciliation/**");
         }
 
         registry.addInterceptor(apiKeyInterceptor)

@@ -28,7 +28,16 @@ import java.util.Map;
  */
 @RestController
 @RequestMapping("/api/reconciliation/link")
-@PreAuthorize("hasRole('ADMIN') or hasRole('MERCHANT')")
+// 2026-10-27 跨租户越权收口：本控制器 14 个端点暴露跨商户财务数据
+// （调整记录 / 挂账核销 / 审计记录）。路径有意保持在 ApiKeyInterceptor 之外
+// （JWT + 方法级鉴权模型，见 README 与 CHANGELOG 的"不动项"），因此
+// ApiKeyInterceptor 不会注入 nexus.merchantId，读端点无法做归属比对：
+// 原先类级放行 MERCHANT ⇒ 任意商户 JWT 可用 /adjustments/status/{s}、
+// /adjustments/{id}、/audit/date|range 读到他人数据。
+// 统一收紧为 ADMIN-only：所有写端点本就已是 ADMIN，且本仓库不存在面向商户的
+// JWT 签发入口（商户身份走 API Key + MerchantOwnershipGuard 另一条链路）；
+// 商户 API Key 调用本类本来就是 403，因此不构成功能回退。
+@PreAuthorize("hasRole('ADMIN')")
 public class ReconciliationLinkController {
 
     private static final Logger log = LoggerFactory.getLogger(ReconciliationLinkController.class);
