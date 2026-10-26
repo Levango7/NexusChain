@@ -30,7 +30,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * "提交时快照顺序浮动"可被该端点观测）；④ <b>链高不在检查点时仍报最近有票
  * 的 epoch</b>（PLAN-044 首轮实测修正点：只看当前 epoch 会连续 no-progress）；
  * ⑤ {@code finalityLag} 表达最终性落后几个 epoch；⑥ {@code finalizedCheckpoints}
- * 随最终化递增；⑦ 快照不触碰持久化 store。</p>
+ * 随最终化递增；⑦ 快照不触碰持久化 store；⑧ <b>水位粘滞</b>：窗口内无记录时
+ * 水位不后退、lag 无界增长、progress 冻结在最后已知值（PLAN-047 实测修正：
+ * 否则最终性死锁时 lag 变 NaN、告警熄火）；⑨ 水位只前进不后退。</p>
  */
 class FinalitySnapshotTest {
 
@@ -104,17 +106,18 @@ class FinalitySnapshotTest {
         assertEquals(2L, atCheckpoint.get("epochLength"));
         assertEquals(true, atCheckpoint.get("checkpoint"));
         assertEquals(2L, atCheckpoint.get("currentEpoch"));
-        assertNull(atCheckpoint.get("latestVotedEpoch"), "无任何投票时不得报出 epoch");
-        assertNull(atCheckpoint.get("progress"), "无投票时 progress 必须为 null（不冒充 0%）");
+        assertNull(atCheckpoint.get("latestVotedEpoch"), "进程内从未有投票时不报 epoch");
+        assertNull(atCheckpoint.get("progress"), "从未有投票时 progress 必须为 null（不冒充 0%）");
         assertNull(atCheckpoint.get("finalityLag"));
     }
 
     @Test
     void nonCheckpointHeightStillReportsMetadata() {
+        gadget.submitVote(vote("v1", 2L));
         Map<String, Object> snapshot = coordinator.finalitySnapshot(5L);
         assertEquals(false, snapshot.get("checkpoint"));
         assertEquals(3L, snapshot.get("currentEpoch"));
-        assertNull(snapshot.get("progress"));
+        assertNotNull(snapshot.get("progress"));
     }
 
     @Test
@@ -171,6 +174,42 @@ class FinalitySnapshotTest {
         assertNotNull(progress);
         assertTrue((Boolean) progress.get("finalized"));
         assertEquals(100, progress.get("progressPercent"));
+    }
+
+    @Test
+    void watermarkIsStickySoDeadFinalityKeepsRisingLag() {
+        // PLAN-047 修正：窗口内无记录时水位粘滞（不返回 null），lag 无界增长、
+        // progress 冻结在最后已知值——否则死锁时告警反而熄火（NaN）
+        gadget.submitVote(vote("v1", 2L));
+        gadget.submitVote(vote("v2", 2L));
+        // height 5 ⇒ currentEpoch 3；窗口 [1,3] 内 epoch 2 有记录 ⇒ 水位 2、lag 1
+        assertEquals(2L, coordinator.finalitySnapshot(5L).get("latestVotedEpoch"));
+        assertEquals(1L, coordinator.finalitySnapshot(5L).get("finalityLag"));
+
+        // 链高继续推进但没有任何新票（模拟最终性死锁）
+        Map<String, Object> stalled = coordinator.finalitySnapshot(30L);
+        assertEquals(15L, stalled.get("currentEpoch"));
+        assertEquals(2L, stalled.get("latestVotedEpoch"), "水位必须粘滞在最后有记录的 epoch");
+        assertEquals(13L, stalled.get("finalityLag"), "lag = currentEpoch - 水位，死锁时无界增长");
+        Map<?, ?> progress = (Map<?, ?>) stalled.get("progress");
+        assertNotNull(progress);
+        assertEquals(100, progress.get("progressPercent"), "progress 冻结在最后已知值（可观测）");
+
+        Map<String, Object> later = coordinator.finalitySnapshot(50L);
+        assertEquals(25L, later.get("currentEpoch"));
+        assertEquals(2L, later.get("latestVotedEpoch"));
+        assertEquals(23L, later.get("finalityLag"));
+    }
+
+    @Test
+    void watermarkDoesNotGoBackward() {
+        gadget.submitVote(vote("v1", 4L));
+        gadget.submitVote(vote("v2", 4L));
+        assertEquals(4L, coordinator.finalitySnapshot(8L).get("latestVotedEpoch"));
+        // 更早 epoch 有新记录（重放/乱序到达）不得把水位拽回去
+        gadget.submitVote(vote("v1", 3L));
+        Map<String, Object> snapshot = coordinator.finalitySnapshot(7L);
+        assertEquals(4L, snapshot.get("latestVotedEpoch"), "水位只前进不后退");
     }
 
     @Test

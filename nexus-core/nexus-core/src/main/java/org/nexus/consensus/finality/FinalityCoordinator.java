@@ -359,10 +359,11 @@ public class FinalityCoordinator {
      * @param height 当前内存链头高度（调用方传 {@code chainHeadProvider.currentHeader().nHeight}）
      * @return 字段：height / epochLength / currentEpoch（该高度的 epoch）/ checkpoint
      *         （该高度是否恰为检查点）/ finalizedCheckpoints（内存已最终化检查点数）/
-     *         latestVotedEpoch（回溯窗内最新有视图记录的 epoch，null=无）/
-     *         finalityLag（currentEpoch - latestVotedEpoch，最终性落后几个 epoch）/
-     *         progress（latestVotedEpoch 的 finalized/progressPercent/votedWeight/
-     *         totalWeight/checkpointHash；null=无记录）
+     *         latestVotedEpoch（**粘滞水位**：最近一次有本地视图记录的 epoch，只在
+     *         有记录时前进——见 {@link #finalityWatermarkEpoch}；进程内从未有记录
+     *         才为 null）/ finalityLag（currentEpoch − 水位：最终性落后几个 epoch，
+     *         死锁时无界增长）/ progress（水位对应的 finalized/progressPercent/
+     *         votedWeight/totalWeight/checkpointHash；从未有记录才为 null）
      */
     public java.util.Map<String, Object> finalitySnapshot(long height) {
         java.util.Map<String, Object> data = new java.util.LinkedHashMap<>();
@@ -373,28 +374,65 @@ public class FinalityCoordinator {
         data.put("currentEpoch", currentEpoch);
         data.put("finalizedCheckpoints", gadget.finalizedCheckpointCount());
 
+        FinalityRecord found = null;
+        long foundEpoch = -1L;
         for (long epoch = currentEpoch; epoch >= Math.max(1L, currentEpoch - FINALITY_SNAPSHOT_LOOKBACK_EPOCHS); epoch--) {
             FinalityRecord record = gadget.getEpochProgress(epoch);
-            if (record == null) {
-                continue;
+            if (record != null) {
+                found = record;
+                foundEpoch = epoch;
+                break;
             }
-            data.put("latestVotedEpoch", epoch);
-            data.put("finalityLag", currentEpoch - epoch);
-            java.util.Map<String, Object> progress = new java.util.LinkedHashMap<>();
-            progress.put("finalized", record.isFinalized());
-            progress.put("progressPercent", record.progressPercent());
-            progress.put("votedWeight", record.getVotedWeight());
-            progress.put("totalWeight", record.getTotalWeight());
-            progress.put("checkpointHash",
-                    org.apache.commons.codec.binary.Hex.encodeHexString(record.getCheckpointHash()));
-            data.put("progress", progress);
+        }
+        if (found != null) {
+            // 粘滞水位：只前进不后退（PLAN-047 实测修正，见 finalityWatermark 注释）
+            if (foundEpoch >= finalityWatermarkEpoch) {
+                finalityWatermarkEpoch = foundEpoch;
+                java.util.Map<String, Object> progress = new java.util.LinkedHashMap<>();
+                progress.put("finalized", found.isFinalized());
+                progress.put("progressPercent", found.progressPercent());
+                progress.put("votedWeight", found.getVotedWeight());
+                progress.put("totalWeight", found.getTotalWeight());
+                progress.put("checkpointHash",
+                        org.apache.commons.codec.binary.Hex.encodeHexString(found.getCheckpointHash()));
+                finalityWatermarkProgress = progress;
+            }
+        }
+        if (finalityWatermarkEpoch < 0) {
+            // 进程以来从未见过任何最终性记录（非 pos 模式/刚启动）
+            data.put("latestVotedEpoch", null);
+            data.put("finalityLag", null);
+            data.put("progress", null);
             return data;
         }
-        data.put("latestVotedEpoch", null);
-        data.put("finalityLag", null);
-        data.put("progress", null);
+        data.put("latestVotedEpoch", finalityWatermarkEpoch);
+        data.put("finalityLag", currentEpoch - finalityWatermarkEpoch);
+        data.put("progress", finalityWatermarkProgress);
         return data;
     }
+
+    /**
+     * 最终性**粘滞水位**：进程内"最近一次有本地视图记录的 epoch"及其 progress。
+     *
+     * <p>PLAN-047 的实测修正：初版快照在 8-epoch 回溯窗内找不到记录时返回
+     * {@code latestVotedEpoch=null / lag=null}，导致两个后果——</p>
+     * <ul>
+     *   <li>健康 3 验证人拓扑下 lag 基线恒为 2（轮转+视图切换使投票稳定落后
+     *       链头 2 个 epoch），{@code lag>=2} 的告警阈值持续误报；</li>
+     *   <li><b>最危险的一点</b>：最终性真死锁时窗口内同样找不到记录 ⇒ lag 变
+     *       NaN ⇒ 告警熄火——最该响的时候哑了。</li>
+     * </ul>
+     * <p>修正为粘滞水位：记录在就前进、不在就保持，于是死锁时
+     * {@code finalityLag = currentEpoch − 水位} 无界增长、{@code progress}
+     * 冻结在最后已知值（如 25%）——两个特征都可告警。</p>
+     *
+     * <p>线程安全：仅被 Prometheus 抓取线程/状态端点单调推进，volatile 足够；
+     * 竞态下最坏多算一次快照，值域仍单调不回退。</p>
+     */
+    private volatile long finalityWatermarkEpoch = -1L;
+
+    /** 水位对应的 progress 子表（与 {@link #finalityWatermarkEpoch} 同源更新）。 */
+    private volatile java.util.Map<String, Object> finalityWatermarkProgress;
 
     /**
      * 构造投票签名载荷（与 {@link Vote#signingPayload()} 格式一致）。
