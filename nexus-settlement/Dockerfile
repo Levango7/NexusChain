@@ -20,7 +20,7 @@
 # ============================================================================
 
 # === Stage 1: builder ===
-FROM gradle:8.5-jdk17 AS builder
+FROM gradle:8.14-jdk17 AS builder
 
 # 依赖缓存（本项修复）：把 GRADLE_USER_HOME 挂到 BuildKit cache mount。
 #
