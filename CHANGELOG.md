@@ -4,6 +4,21 @@
 
 ## [2.75.0] - 2026-10-26
 
+### signing 大额审批按转出地址豁免（(b2) 止血裁决，2026-10-26）
+
+- **背景**：wallet 执行腿与 signing 大额审批构成两层重复审批，且 wallet 侧拿到 2001 后
+  每次重试都会新建一条悬空审批（留言板 20261025-0415 §五 / 20261025-0830 §一）。
+  用户拍板：**采纳 (b2)（按转出地址豁免）止血，目标态 (a)（"业务已批准"专用契约）**；
+  否决 (b1)（全局提阈值 = 全平台失去大额审批，代价与收益不成比例）。
+- **实现**：`SigningApprovalService.requiresApproval` 新增三参重载（含 `fromPubkey`），
+  新配置 `nexus.approval.exempt-from-pubkeys`（env `NEX_APPROVAL_EXEMPT_FROM_PUBKEYS`，默认空）：
+  列入名单的转出地址跳过 signing 大额审批——**控制不丢失**（豁免前提是 wallet 多签已在
+  业务层审批）；名单未配置时行为与旧版完全一致（fail-closed）。两参旧签名保留并委托。
+  `TxController.signAndBroadcast` 与 `createApprovalRequest` 内部判定均传入 fromPubkey
+  （豁免地址不再创建悬空审批单——悬空审批正是本裁决要消除的缺陷本体）。
+- **测试**：新增 `SigningApprovalExemptFromPubkeysTest` 6 例（名单内豁免 / 名单外旧语义 /
+  null 与两参等价 / 未配置 fail-closed / 原文精确匹配+trim / 豁免地址不建审批单）。
+
 ### 最终性停滞指标与告警（PLAN-045）
 
 承接 PLAN-044 §五 留项"未做指标化/告警"：把 `/consensus/finality`（PLAN-044）的

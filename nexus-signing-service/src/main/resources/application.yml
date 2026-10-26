@@ -161,6 +161,10 @@ nexus:
   approval:
     # 大额阈值：金额 ≥ 此值时触发多签审批。默认 10000 USDT。
     large-amount-threshold: ${NEX_APPROVAL_LARGE_AMOUNT:10000}
+    # 大额审批豁免的转出地址（fromPubkey）名单，逗号分隔。默认空 ⇒ 无任何豁免（fail-closed，行为同旧版）。
+    # 用途：列入名单的地址（平台钱包）其转账已在 wallet-service 多签审批，signing 不再重复拦截（(b2) 止血裁决）。
+    # ⚠️ 仅在确认业务层审批在位时才配置；按公钥原文精确匹配（区分大小写，仅 trim 空白）。
+    exempt-from-pubkeys: ${NEX_APPROVAL_EXEMPT_FROM_PUBKEYS:}
     # 审批请求有效期（秒）。超过此时间未收集足够审批的请求自动标记为 EXPIRED。
     ttl-seconds: ${NEX_APPROVAL_TTL:3600}
     # 审批所需审批人数下限。实际所需人数取 max(此值, MpcApprovalPolicy.getRequiredApprovers)。

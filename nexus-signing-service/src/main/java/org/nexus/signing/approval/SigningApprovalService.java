@@ -115,6 +115,21 @@ public class SigningApprovalService {
     private String approverWhitelist;
 
     /**
+     * 大额审批豁免的转出地址（fromPubkey）名单，逗号分隔。
+     * <p>从 {@code nexus.approval.exempt-from-pubkeys}（env {@code NEX_APPROVAL_EXEMPT_FROM_PUBKEYS}）
+     * 读取，默认空字符串 ⇒ <b>无任何豁免（fail-closed）</b>，行为与未引入本配置前完全一致。</p>
+     * <p>用途（2026-10-26 (b2) 止血裁决，留言板 20261025-0415 §五 / 20261025-0830 §一）：
+     * 平台钱包转账的业务审批在 wallet-service 自身的多签流程里，执行腿再触发 signing
+     * 大额审批属于两层重复审批，且 wallet 侧重试会留下悬空审批。列入本名单的转出地址
+     * 跳过 signing 大额审批；<b>控制并未丢失</b>——豁免的前提是业务层（wallet 多签）
+     * 已完成审批。名单按公钥原文精确匹配（区分大小写，仅对两侧 trim 空白）。
+     * 目标态为 (a)（signing 提供显式的"业务已批准"契约），本配置是止血期方案，
+     * 落地 (a) 后应迁移并废弃本名单。</p>
+     */
+    @Value("${nexus.approval.exempt-from-pubkeys:}")
+    private String exemptFromPubkeys;
+
+    /**
      * 是否使用数据库持久化审批请求（多实例部署共享状态）——遗留开关。
      *
      * <p>从 {@code nexus.approval.use-database} 配置读取，默认 false（内存存储）。
@@ -389,10 +404,40 @@ public class SigningApprovalService {
      * @return true 表示需要审批；false 表示可直接签名
      */
     public boolean requiresApproval(BigDecimal amount, String currency) {
+        return requiresApproval(amount, currency, null);
+    }
+
+    /**
+     * 判断给定金额是否需要多签审批（带转出地址豁免）。
+     *
+     * <p>豁免语义（(b2) 止血方案）：{@code fromPubkey}（trim 后）显式列入
+     * {@code nexus.approval.exempt-from-pubkeys} 时返回 false——该地址的转账已在
+     * 业务层（wallet-service 多签）审批，signing 不再重复拦截。
+     * 名单未配置时本参数不生效，与两参版本等价。</p>
+     *
+     * @param amount     金额
+     * @param currency   币种
+     * @param fromPubkey 转出公钥（可为 null；null 或名单未配置时与两参版本等价）
+     * @return true 表示需要审批；false 表示可直接签名
+     */
+    public boolean requiresApproval(BigDecimal amount, String currency, String fromPubkey) {
         if (amount == null || largeAmountThreshold == null) {
             return false;
         }
+        if (fromPubkey != null && exemptFromPubkeySet().contains(fromPubkey.trim())) {
+            return false;
+        }
         return amount.compareTo(largeAmountThreshold) >= 0;
+    }
+
+    private Set<String> exemptFromPubkeySet() {
+        if (exemptFromPubkeys == null || exemptFromPubkeys.trim().isEmpty()) {
+            return Collections.emptySet();
+        }
+        return Arrays.stream(exemptFromPubkeys.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .collect(Collectors.toSet());
     }
 
     /**
@@ -412,7 +457,7 @@ public class SigningApprovalService {
     public String createApprovalRequest(String fromPubkey, String toPubkeyHash,
                                         BigDecimal amount, String currency,
                                         String initiator, String sourceIp) {
-        if (!requiresApproval(amount, currency)) {
+        if (!requiresApproval(amount, currency, fromPubkey)) {
             return null;
         }
         int required = Math.max(minRequiredApprovers,

@@ -311,7 +311,7 @@ public class TxController {
 
         // P0-2：大额签名触发多签审批（阻断式：创建审批请求后返回 PENDING，不执行签名）
         if (signingApprovalService != null
-                && signingApprovalService.requiresApproval(amount, "USDT")) {
+                && signingApprovalService.requiresApproval(amount, "USDT", fromPubkey)) {
             String approvalId = signingApprovalService.createApprovalRequest(
                     fromPubkey, toPubkeyHash, amount, "USDT", actor, sourceIp);
             // 阻断式审批已实现：创建审批请求后立即返回 PENDING 响应，不继续执行签名。
