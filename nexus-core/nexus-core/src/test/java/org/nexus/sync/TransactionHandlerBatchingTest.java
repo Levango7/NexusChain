@@ -34,7 +34,7 @@ class TransactionHandlerBatchingTest {
 
     @BeforeEach
     void setUp() {
-        handler = new TransactionHandler();
+        handler = new TransactionHandler(256);
         peerServer = mock(PeerServer.class);
         latch = new CountDownLatch(1);
         doAnswer(inv -> {

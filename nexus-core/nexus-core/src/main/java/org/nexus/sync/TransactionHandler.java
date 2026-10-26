@@ -32,9 +32,7 @@ import java.util.stream.Collectors;
 @Component
 public class TransactionHandler implements Plugin {
     private PeerServer server;
-    private static final int CACHE_SIZE = 256;
     private ConcurrentMap<String, Boolean> transactionCache;
-
     private static final Logger logger = LoggerFactory.getLogger(TransactionHandler.class);
     @Autowired
     private CommandService commandService;
@@ -67,8 +65,13 @@ public class TransactionHandler implements Plugin {
 
     private volatile ScheduledExecutorService flushExecutor;
 
-    public TransactionHandler() {
-        this.transactionCache = new ConcurrentLinkedHashMap.Builder<String, Boolean>().maximumWeightedCapacity(CACHE_SIZE).build();
+    /**
+     * 交易去重缓存容量。此前硬编码 256 —— 配置项 {@code p2p.packet-cacheSize}
+     * 实际只被 rest 形态的 {@link org.nexus.controller.PacketCache} 使用，
+     * gRPC 形态调整该配置不会生效。这里统一到同一配置项。
+     */
+    public TransactionHandler(@Value("${p2p.packet-cacheSize:256}") int cacheSize) {
+        this.transactionCache = new ConcurrentLinkedHashMap.Builder<String, Boolean>().maximumWeightedCapacity(cacheSize).build();
     }
 
     @Override

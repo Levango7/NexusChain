@@ -87,13 +87,14 @@ class RPCClientBatchingTest {
 
     @Test
     @DisplayName("单笔事务等窗口到期后才广播（延迟上限即窗口）")
-    void singleTransactionWaitsForWindow() throws Exception {
-        configureWindow(300, 1000);
+    void singleTransactionWaitsForWindow() {
+        // 窗口取大一点（2s），避免并行测试下"入队→断言"之间就到期
+        configureWindow(2000, 1000);
 
         client.broadcastTransactions(Collections.singletonList(tx(1, 100)));
 
         assertThat(broadcasts).as("窗口未到期前不应广播").isEmpty();
-        verify(client, timeout(3000).times(1)).broadcast(eq("/consensus/transactions"), any());
+        verify(client, timeout(8000).times(1)).broadcast(eq("/consensus/transactions"), any());
         assertThat(transactionsOf(broadcasts.get(0))).hasSize(1);
     }
 
