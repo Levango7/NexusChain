@@ -47,9 +47,12 @@
   （393/392）、`finalityLag` 两端为 0；
 - 测试 8 例（`FinalitySnapshotTest` 6 + `ConsensusControllerFinalityTest` 2），
   含"快照不触碰持久化 store"与"未装配时 enabled=false 仍带高度"；
-- 如实登记：D 重启后前 ~35s 的几次 `h=0 / finalizedCheckpoints=64` 采样与其
-  首票时间矛盾（Tomcat 可能在 `Started Start` 前已服务），未采纳为证据，
-  宿主机重启后测试床 PG 已停、待复查。
+- 如实登记（2026-10-27 复查未复现，根因未定）：D 重启后前 ~35s 的几次
+  `h=0 / finalizedCheckpoints=64` 采样与其首票时间矛盾、且与"空库"不符
+  （复查同场景该点为 `f=0`）。已排除旧进程残留（杀 D 后 19588 端口断言关闭），
+  可能解释（当时 DROP 是否成功/响应来源）均无法用留存数据证实证伪；
+  **这几次数据始终不采纳为证据**。复查工具缺陷一并记录（`$pid` 是 PS 只读
+  自动变量，侦听进程 PID 检查实际未执行）。
 
 ### 冷恢复长窗口最终性收敛 + #31 SCA 旧口径核销（PLAN-043，2026-10-26，台账收口）
 
