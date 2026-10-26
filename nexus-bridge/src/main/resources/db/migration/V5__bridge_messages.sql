@@ -5,9 +5,9 @@
 -- 顺序保证（per 源链 nonce）与执行追溯（executionTxHash）都依赖该状态
 -- 跨重启存在；本表为 JdbcMessageStore 提供存储。
 --
--- 与实体的关系：与 nexus-bridge 其它迁移一致，本模块运行时 schema 由
--- Hibernate ddl-auto=update 维护，本脚本是 CI Flyway 预检用的"未接线"
--- 历史文件（见 V0 头注），字段必须与 BridgeMessageRecord 实体一致。
+-- 与实体的关系：2026-10-27 数据层收口后，bridge 的 schema 只由本目录的
+-- Flyway 迁移维护（ddl-auto=validate 仅做一致性校验），本脚本不再是"未接线
+-- 历史文件"。字段必须与 BridgeMessageRecord 实体一致。
 --
 -- 语法说明：
 --   * CREATE TABLE IF NOT EXISTS 兼容 MySQL 8.0 / H2（同 V0）。

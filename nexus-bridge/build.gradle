@@ -65,6 +65,15 @@ dependencies {
     // === Spring Boot ===
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    // === 数据层收口（2026-10-27）：schema 交由 Flyway 管理 ===
+    // 此前本模块没有 Flyway 依赖，db/migration/V0..V6 写了但从不执行，
+    // 表实际由 ddl-auto=update 运行时创建（迁移与实体漂移不可见）。
+    // 现改为 Flyway 执行迁移 + ddl-auto=validate 做一致性校验。
+    // Boot 4 把 Flyway 自动配置拆到 spring-boot-flyway 模块：只引 flyway-core
+    // 时迁移**静默不执行**（gateway/signing 已实测），必须用 starter。
+    // 11.x 需数据库专用模块（MySQL）；H2 支持内置于 flyway-core，勿加 h2 制品。
+    implementation 'org.springframework.boot:spring-boot-starter-flyway'
+    implementation 'org.flywaydb:flyway-mysql'
     implementation 'org.springframework.boot:spring-boot-starter-validation'
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
     // C 批（2026-09-08）：/actuator/prometheus 指标输出——供 ServiceMonitor 抓取

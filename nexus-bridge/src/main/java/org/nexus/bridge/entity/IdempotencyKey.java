@@ -3,7 +3,6 @@ package org.nexus.bridge.entity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
-import jakarta.persistence.Lob;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 
@@ -56,13 +55,16 @@ public class IdempotencyKey {
     /**
      * 操作结果（JSON 序列化）。
      *
-     * <p>低4 改进：使用 {@code @Lob} 替代固定长度 {@code @Column(length = 4096)}，
-     * 因为大型 BridgeTransaction JSON（含跨链元数据、签名列表、事件日志）可能超过 4096 字符。
-     * {@code @Lob} 在 MySQL 映射为 TEXT/LONGTEXT，在 PostgreSQL 映射为 TEXT，
-     * 消除长度截断风险。</p>
+     * <p>低4 改进：使用大文本列替代固定长度 {@code @Column(length = 4096)}，
+     * 因为大型 BridgeTransaction JSON（含跨链元数据、签名列表、事件日志）可能超过 4096 字符。</p>
+     *
+     * <p>2026-10-27 schema 收口：由 {@code @Lob} 改为 {@code columnDefinition = "LONGTEXT"}。
+     * {@code @Lob} 在 Hibernate 侧期望 CLOB，而 H2 的 MySQL 兼容模式把 TEXT/LONGTEXT
+     * 报成 VARCHAR —— {@code ddl-auto=validate} 启动即失败。改用显式 LONGTEXT：
+     * 既与 {@code @Lob} 在 MySQL 上的历史列类型（longtext，由旧 ddl-auto 建出）
+     * 一致，避免存量库升级时校验失败，也保留大文本容量。</p>
      */
-    @Lob
-    @Column(name = "result", nullable = false)
+    @Column(name = "result", nullable = false, columnDefinition = "LONGTEXT")
     private String result;
 
     /** 创建时间。 */

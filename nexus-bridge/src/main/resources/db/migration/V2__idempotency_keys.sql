@@ -11,7 +11,7 @@
 --   id          — UUID 主键
 --   key_value   — 幂等键（sourceTxHash 或 requestId），最长 128
 --   operation   — 操作类型（LOCK / MINT / BURN / UNLOCK），最长 32
---   result      — 操作结果 JSON，最长 4096
+--   result      — 操作结果 JSON（TEXT，对应实体 @Lob，不设长度上限）
 --   created_at  — 创建时间
 --   expires_at  — 过期时间（默认 created_at + 24h）
 --
@@ -23,7 +23,9 @@ CREATE TABLE IF NOT EXISTS idempotency_keys (
     id          VARCHAR(64)   NOT NULL,
     key_value   VARCHAR(128)  NOT NULL,
     operation   VARCHAR(32)   NOT NULL,
-    result      VARCHAR(4096) NOT NULL,
+    -- 2026-10-27 收口：实体用 columnDefinition=LONGTEXT（原 @Lob 在 MySQL 上的
+    -- 实际列类型即 longtext），原 VARCHAR(4096) 与实体不一致，validate 直接失败。
+    result      LONGTEXT      NOT NULL,
     created_at  TIMESTAMP     NOT NULL,
     expires_at  TIMESTAMP     NOT NULL,
     CONSTRAINT pk_idempotency_keys PRIMARY KEY (id)
