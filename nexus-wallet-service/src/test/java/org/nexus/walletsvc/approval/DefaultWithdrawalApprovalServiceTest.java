@@ -416,7 +416,11 @@ class DefaultWithdrawalApprovalServiceTest {
 
         assertEquals(WithdrawalRequest.WithdrawalStatus.FAILED, executed.getStatus());
         assertNotNull(executed.getRejectionReason());
-        assertTrue(executed.getRejectionReason().contains("empty result"));
+        // (c)-lite（2026-10-27）：解析改用 SigningResponses.classify，null 响应的文案
+        // 从旧的「signing service returned empty result」变为 classify 给出的
+        // 「signing service unavailable」（更准确：null = Feign fallback 降级，
+        // 不是"返回了空结果"）。状态仍为 FAILED，语义不变。
+        assertTrue(executed.getRejectionReason().contains("signing service unavailable"));
         assertNull(executed.getChainTxHash());
     }
 

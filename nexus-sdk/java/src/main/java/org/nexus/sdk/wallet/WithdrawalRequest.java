@@ -66,7 +66,20 @@ public class WithdrawalRequest {
      * <p>持久化为字符串（{@code @Enumerated(STRING)}），故插入枚举值不需要数据库迁移。</p>
      */
     public enum WithdrawalStatus {
-        PENDING, APPROVED, EXECUTING, REJECTED, EXECUTED, FAILED
+        PENDING, APPROVED, EXECUTING, REJECTED, EXECUTED,
+        /**
+         * 已向签名侧发起执行但结果不可核对——<b>钱可能已经出去</b>（2026-10-27）。
+         *
+         * <p>与 {@link #FAILED} 的区别是资金语义，不是措辞：FAILED 表示「确定没出去」，
+         * 本状态表示「可能已广播，必须人工核对链上后补录或冲正」。
+         * 把它记成 FAILED 会让运维按「没出账」处置，进而重复发起。</p>
+         *
+         * <p>新增枚举值对持久化与传输都是安全的：Entity 用
+         * {@code @Enumerated(EnumType.STRING)} 存字符串（无需迁移），
+         * DTO 经 JSON 以字符串传输（只增不减，旧消费方按未知值兜底）。</p>
+         */
+        EXECUTED_UNVERIFIED,
+        FAILED
     }
 
     // --- Getters and Setters ---

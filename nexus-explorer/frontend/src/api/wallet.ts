@@ -27,9 +27,16 @@ const WALLET_JWT_STORAGE_KEY = "nexus.wallet.jwt";
 /** 默认 wallet-service 地址（与 docker-compose / 本地开发约定一致）。 */
 export const DEFAULT_WALLET_BASE = "http://localhost:8083";
 
-/** 提现状态（与 SDK `WithdrawalRequest.WithdrawalStatus` 的 6 个值一致）。 */
+/**
+ * 提现状态（与 SDK `WithdrawalRequest.WithdrawalStatus` 的 7 个值一致）。
+ *
+ * <p>`EXECUTED_UNVERIFIED`（2026-10-27）：已向签名侧发起执行但结果不可核对，
+ * **钱可能已经出去**。与 `FAILED` 的资金语义相反——`FAILED` 是「确定没出」，
+ * 本状态是「可能已出，需人工核对链上后补录或冲正」。UI 必须把它显示成
+ * 需要人工介入，不能与 FAILED 混同。</p>
+ */
 export type WithdrawalStatus =
-  "PENDING" | "APPROVED" | "REJECTED" | "EXECUTING" | "EXECUTED" | "FAILED";
+  "PENDING" | "APPROVED" | "REJECTED" | "EXECUTING" | "EXECUTED" | "EXECUTED_UNVERIFIED" | "FAILED";
 
 /** 提现请求 DTO（对齐 `org.nexus.sdk.wallet.WithdrawalRequest`）。 */
 export interface WithdrawalRequestDto {

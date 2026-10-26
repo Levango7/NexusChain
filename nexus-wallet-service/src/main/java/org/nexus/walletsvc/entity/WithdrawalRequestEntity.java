@@ -74,6 +74,33 @@ public class WithdrawalRequestEntity {
     @Column(name = "chain_tx_hash", length = 128)
     private String chainTxHash;
 
+    /**
+     * 签名侧审批请求 ID（V6，2026-10-27，(c)-lite 止血）。
+     *
+     * <p>大额提现时 signing-service 走阻断式审批：{@code POST /transfers/sign}
+     * 不签名，返回 {@code statusCode=2001} + approvalId。本字段保存该 approvalId，
+     * 提现状态回到 {@code APPROVED} 等待，由推进机制查
+     * {@code GET /signing/approvals/{id}}，状态为 APPROVED 后调
+     * {@code POST /transfers/sign/approved} 执行。</p>
+     *
+     * <p><b>非空表示"这笔提现已向签名侧提交过、审批请求已存在"</b>——
+     * 重入执行必须复用该 ID，<b>不得</b>再调 {@code /transfers/sign}，
+     * 否则每重试一次就多一条悬空审批。</p>
+     */
+    @Column(name = "signing_approval_id", length = 64)
+    private String signingApprovalId;
+
+    /**
+     * 最近一次向签名侧发起「凭 approvalId 执行」的时刻（V6，防双花）。
+     *
+     * <p>signing 侧的审批状态会因 TTL 超时从 {@code EXECUTING} 回退到
+     * {@code APPROVED}。若上次执行其实已广播、只是响应丢失，那么「看到
+     * APPROVED 就执行」会二次放款。本字段非空且再次看到 APPROVED 时，
+     * 不盲目重试，而是判 {@code FAILED} 交人工核对（fail-closed）。</p>
+     */
+    @Column(name = "signing_execution_attempted_at")
+    private LocalDateTime signingExecutionAttemptedAt;
+
     /** 拒绝原因（REJECTED / FAILED 时填充），可空。 */
     @Column(name = "rejection_reason", length = 256)
     private String rejectionReason;
@@ -139,6 +166,14 @@ public class WithdrawalRequestEntity {
 
     public String getChainTxHash() { return chainTxHash; }
     public void setChainTxHash(String chainTxHash) { this.chainTxHash = chainTxHash; }
+
+    public String getSigningApprovalId() { return signingApprovalId; }
+    public void setSigningApprovalId(String signingApprovalId) { this.signingApprovalId = signingApprovalId; }
+
+    public LocalDateTime getSigningExecutionAttemptedAt() { return signingExecutionAttemptedAt; }
+    public void setSigningExecutionAttemptedAt(LocalDateTime signingExecutionAttemptedAt) {
+        this.signingExecutionAttemptedAt = signingExecutionAttemptedAt;
+    }
 
     public String getRejectionReason() { return rejectionReason; }
     public void setRejectionReason(String rejectionReason) { this.rejectionReason = rejectionReason; }

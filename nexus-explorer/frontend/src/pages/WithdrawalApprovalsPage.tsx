@@ -220,6 +220,10 @@ const WithdrawalApprovalsPage: React.FC = () => {
       case "FAILED":
       case "REJECTED":
         return "danger";
+      case "EXECUTED_UNVERIFIED":
+        // 钱可能已经出去，需人工核对链上。用 danger 而不是 neutral：
+        // 这个状态必须被看见，不能混在「其他」里。
+        return "danger";
       default:
         return "neutral";
     }
