@@ -349,6 +349,25 @@ public class DefaultCustodyService implements CustodyService {
                 .orElse(BigDecimal.ZERO);
     }
 
+    /**
+     * 按策略在冷热层之间自动再平衡（受控内部分支）。
+     *
+     * <p><b>⚠ 本路径不受 G7 三态护栏保护</b>（代码契约，勿只记在留言板）：① 对
+     * {@link #depositToCold} / {@link #transferColdToHotInternal} 是<b>同类自调用</b>，
+     * 不经 Spring 代理 ⇒ 内层的 {@code @Transactional(noRollbackFor = …)} 不生效，并入本事务；
+     * ② 扫出与补底各有一个 {@code catch (Exception)} 把异常吞成 WARN ⇒ 异常传不到事务边界，
+     * {@code noRollbackFor} 没有机会参与。</p>
+     *
+     * <p>于是：{@code EXECUTED_UNVERIFIED} 的终态<b>恰好</b>是对的（余额提交 +
+     * {@code VERIFY_REQUIRED} 由独立 Bean 的 {@code REQUIRES_NEW} 落库，与吞不吞异常无关），
+     * 但那是"吞异常后外层提交"给的、不是护栏给的——改成重抛即翻转为回滚；
+     * 而 {@code AWAITING_APPROVAL}（钱确定没出）的余额<b>不会回滚</b>，冷热分配被就地改写，
+     * 只能靠 {@code APPROVAL_OPEN} 那行人工还原。</p>
+     *
+     * <p>⇒ 启用本路径（提供 {@code CustodyPolicy} 实现）的前置条件：按状态分流而非一律吞——
+     * 待审批必须回滚、不可核对必须显式 {@code noRollbackFor}、其余按确定失败回滚。
+     * 今日无 {@code CustodyPolicy} 实现，本方法第一行即返回，以上均属潜在行为。</p>
+     */
     @Override
     @Transactional
     public void rebalance(WalletTier target) {
