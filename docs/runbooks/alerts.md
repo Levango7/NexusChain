@@ -30,8 +30,8 @@
 | BlockWriterStateUpdateTimeouts | critical | `increase(nexus_block_writer_state_update_timeouts_total[10m]) > 0` 持续 5min | `pendingBlock` 状态更新等待超时被强制清空 |
 | BlockPersistenceBacklog | warning | `memory_pending > 0 or database_pending > 0` 持续 10min | 内存队列/持久化 outbox 持续积压 |
 | BlockOutboxUnreadable | warning | `nexus_block_outbox_readable == 0` 持续 5min | outbox 已装配但读不到数据库 |
-| FinalityStalled | critical | `nexus_finality_lag >= 2` 持续 5min | 最终性落后链高 ≥2 个 epoch |
-| FinalityBelowQuorum | warning | `nexus_finality_progress_percent < 100` 持续 10min | 最新已投票 epoch 的聚合进度不足 |
+| FinalityStalled | critical | `changes(nexus_finality_latest_voted_epoch[15m]) == 0` 持续 10min | 最终性水位 15min 无增长（最终化停滞） |
+| FinalityBelowQuorum | warning | `nexus_finality_progress_percent < 100` 持续 10min | 最终性进度不足（票没收齐） |
 
 后 6 条的排障手册见下方“新增 6 条告警排障手册”章节（2026-10-18 批次③ 补全）。
 
@@ -193,18 +193,28 @@
 指标由 `org.nexus.metrics.FinalityMetrics` 注册（nexus-core），数据源与
 `GET /consensus/finality`（PLAN-044）**同一份只读内存快照**：链头走
 `ChainHeadProvider`（内存，不查库），最终性视图走 `FinalityGadget` 内存聚合。
-非 pos 模式（未装配最终性共识）时 `nexus_finality_enabled=0`、其余指标 NaN——
-表达式不成立，不会误报。
+非 pos 模式（未装配最终性共识）时指标缺失（无序列）——表达式不成立，不会误报。
 
 **为什么不用"单次采样 percent < 100%"做告警**：`progress_percent` 是**提交时
-快照**，2 验证人拓扑下刚投完自己通常是 50%、收到对端票后翻 100%
+快照**，2 验证人拓扑下刚投完自己通常 50%、收到对端票后翻 100%
 （PLAN-043/044 实测的顺序浮动）。单点采样必误报，所以两条规则都用**持续量**：
-lag（落后幾個 epoch）与 10 分钟窗口的 percent。
+水位是否在动（`changes`）与 10 分钟窗口的 percent。
+
+**PLAN-047 重标定的两个关键点（勿凭直觉改阈值）**：
+1. 健康 3 验证人拓扑的 `finalityLag` 基线**恒为 2**（轮转 + 视图切换使投票稳定
+   落后链头 2 个 epoch）——旧的 `lag>=2` 会持续误报 critical，阈值已废弃；
+2. 最终性真死锁时，按"回溯窗内取最近有票 epoch"定义的 lag 会变 **NaN ⇒ 告警
+   熄火**（最该响的时候哑了）。现在 `latest_voted_epoch` 是**粘滞水位**
+   （有记录才前进、没记录保持），死锁时水位冻结、`finalityLag` 无界增长、
+   `progress` 冻结在最后已知值——两个特征都可告警。
 
 ### FinalityStalled（critical · component=blockchain-core）
 
-- **触发**：`nexus_finality_lag >= 2` 持续 5min（lag = currentEpoch − latestVotedEpoch）
-- **含义**：最终性投票/收敛跟不上出块——最新有记录的 epoch 已落后链高 2 个以上
+- **触发**：`changes(nexus_finality_latest_voted_epoch[15m]) == 0` 持续 10min
+- **含义**：最终性**水位** 15 分钟没有增长——投票/收敛已停（健康时约每 epoch
+  推进；2 块/epoch×3s ≈ 6s 一次）。这是"出块正常但最终性死掉"的专用信号
+  （PLAN-047 实测复现过：注册表混入第 4 个验证人后 2/3 门限不可达，链继续
+  出块而最终性冻结 8 分钟+）
 - **排查**：
   ```bash
   curl -s http://<core-pod>:19585/consensus/finality      # progress/votedWeight/totalWeight
@@ -213,7 +223,8 @@ lag（落后幾個 epoch）与 10 分钟窗口的 percent。
   ```
 - **处置**：票**发不出** ⇒ 查 P2P 连通与对端存活（`FinalityVoteBroadcaster`）；
   票**写不进** ⇒ 查 PG（`finality_vote_outbox` attempts/oldest）；
-  验证人**掉线** ⇒ 看 `/consensus/validator-set` 与 `BlockchainCoreStalled` 是否同时触发
+  **门限不达** ⇒ 看 `/consensus/validator-set` 的验证人数量与质押（多余/僵死
+  验证人会抬高总权重使 2/3 不可达——PLAN-047 登记的产品风险）
 - **注意**：链可能仍在出块（出块与最终性是两条链路）——不要与
   `BlockchainCoreStalled` 混淆；两者同时触发说明问题在共识/存储底层
 
@@ -227,7 +238,8 @@ lag（落后幾個 epoch）与 10 分钟窗口的 percent。
   `FinalityGadget.getDetectedEquivocations`）
 - **处置**：先恢复掉线验证人或补发票（outbox 补写有指数退避）；若
   `votedWeight` 占比长期停在 50%，核对验证人集合是否被治理变更清空
-  （`FinalityGadget` 的指纹失效会重算总权重）
+  （`FinalityGadget` 的指纹失效会重算总权重）；**3 验证人掉 1 个时进度会停在
+  67% 而 finalized 仍可为 true（2/3 达门限）——percent 与 finalized 都要看**
 
 ## 后续升级路径（gRPC 错误率）
 

@@ -102,7 +102,7 @@ class FinalityMetricsTest {
 
     @Test
     void noRecordYetKeepsEpochNumbersButNaNProgress() {
-        // 链刚起、最新 epoch 还没人投票：lag/currentEpoch 仍是数，percent/finalized 必须 NaN
+        // 进程内从未有过任何最终性记录（刚启动）：currentEpoch 有数，水位类为 NaN
         when(coordinator.finalitySnapshot(1366L))
                 .thenReturn(snapshot(683, null, null, null, null, 0));
 
@@ -112,6 +112,19 @@ class FinalityMetricsTest {
         assertTrue(Double.isNaN(gauge("nexus_finality_finalized")));
         assertTrue(Double.isNaN(gauge("nexus_finality_progress_percent")));
         assertEquals(0.0, gauge("nexus_finality_finalized_checkpoints"));
+    }
+
+    @Test
+    void stalledFinalityKeepsNumbersSoAlertsFire() {
+        // PLAN-047 修正：死锁时水位粘滞 ⇒ lag 无界增长、progress 冻结 ⇒ 两条告警都可触发
+        when(coordinator.finalitySnapshot(1366L))
+                .thenReturn(snapshot(683, 670, 13, Boolean.TRUE, 100, 682));
+
+        assertEquals(683.0, gauge("nexus_finality_current_epoch"));
+        assertEquals(670.0, gauge("nexus_finality_latest_voted_epoch"));
+        assertEquals(13.0, gauge("nexus_finality_lag"));
+        assertEquals(100.0, gauge("nexus_finality_progress_percent"));
+        assertEquals(1.0, gauge("nexus_finality_finalized"));
     }
 
     @Test
