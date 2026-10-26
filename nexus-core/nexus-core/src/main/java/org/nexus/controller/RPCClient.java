@@ -18,6 +18,8 @@
 
 package org.nexus.controller;
 
+import jakarta.annotation.PreDestroy;
+import org.apache.commons.codec.binary.Hex;
 import org.apache.http.HttpEntity;
 import org.apache.http.HttpResponse;
 import org.apache.http.client.config.RequestConfig;
@@ -37,11 +39,19 @@ import org.nexus.core.account.Transaction;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
 import java.net.URI;
 import java.util.*;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 @Component
 public class RPCClient {
@@ -54,6 +64,30 @@ public class RPCClient {
     private static final int HTTP_TIMEOUT = 5000;
 
     private CloseableHttpClient httpclient;
+
+    /**
+     * REST 形态的合批窗口（毫秒），与 gRPC 形态共用同一组配置：
+     * {@code <= 0} 表示关闭合批，逐笔立即广播。
+     *
+     * <p>2026-10-27：{@code p2p.mode=rest} 此前未纳入合批 —— 每受理一笔交易就
+     * 对每个 peer 发一次 HTTP POST。接收端 {@code /consensus/transactions}
+     * （{@code ConsensusController.handleTransactions}）本来就按列表遍历校验，
+     * 一个 {@code Packet} 携带多笔是协议支持的，因此这里补齐发送侧的合并。</p>
+     */
+    @Value("${p2p.broadcast-batch-window-ms:20}")
+    private int batchWindowMs = 20;
+
+    /** 合批上限：达到该数量立即冲刷，不等窗口到期。 */
+    @Value("${p2p.broadcast-batch-max-transactions:1000}")
+    private int batchMaxTransactions = 1000;
+
+    private final Queue<Transaction> pendingTransactions = new ConcurrentLinkedQueue<>();
+
+    private final AtomicBoolean flushScheduled = new AtomicBoolean(false);
+
+    private volatile ScheduledFuture<?> windowFlush;
+
+    private volatile ScheduledExecutorService flushExecutor;
 
     private static final Logger logger = LoggerFactory.getLogger(RPCClient.class);
 
@@ -167,8 +201,102 @@ public class RPCClient {
         broadcast("/consensus/transactions", codec.encodePacket(packet));
     }
 
+    /**
+     * REST 形态广播本地受理的交易。
+     *
+     * <p>与 gRPC 形态（{@code TransactionHandler}）一致：窗口内的多笔合并成一个
+     * {@code Packet} 再发给每个 peer，把「每笔 × 每个 peer」的 HTTP 往返降为
+     * 「每批 × 每个 peer」。{@code p2p.broadcast-batch-window-ms <= 0} 时保持
+     * 逐笔立即广播的旧语义。</p>
+     */
     @Async
     public void broadcastTransactions(List<Transaction> txs) {
-        broadcast("/consensus/transactions", codec.encodePacket(new Packet(codec.encodeTransactions(txs), 8)));
+        if (txs == null || txs.isEmpty()) {
+            return;
+        }
+        if (batchWindowMs <= 0) {
+            broadcast("/consensus/transactions",
+                    codec.encodePacket(new Packet(codec.encodeTransactions(txs), 8)));
+            return;
+        }
+        pendingTransactions.addAll(txs);
+        scheduleFlush(pendingTransactions.size() >= batchMaxTransactions ? 0L : batchWindowMs);
+    }
+
+    private void scheduleFlush(long delayMs) {
+        if (delayMs <= 0) {
+            ScheduledFuture<?> pending = windowFlush;
+            if (pending != null && pending.cancel(false)) {
+                flushScheduled.set(false);
+            }
+            if (flushScheduled.compareAndSet(false, true)) {
+                try {
+                    executor().execute(this::flushPending);
+                } catch (RejectedExecutionException e) {
+                    flushScheduled.set(false);
+                    flushPending();
+                }
+            }
+            return;
+        }
+        if (flushScheduled.compareAndSet(false, true)) {
+            try {
+                windowFlush = executor().schedule(this::flushPending, delayMs, TimeUnit.MILLISECONDS);
+            } catch (RejectedExecutionException e) {
+                flushScheduled.set(false);
+                flushPending();
+            }
+        }
+    }
+
+    /** 取出待发交易：按交易哈希折叠重复项后合成一个 Packet 广播。 */
+    private void flushPending() {
+        flushScheduled.set(false);
+        windowFlush = null;
+
+        List<Transaction> batch = new ArrayList<>();
+        Transaction tx;
+        while ((tx = pendingTransactions.poll()) != null) {
+            batch.add(tx);
+        }
+        if (batch.isEmpty()) {
+            return;
+        }
+        // 同一笔交易在窗口内可能被重复提交（重试/重复投递）；逐笔广播时每个包各自去重，
+        // 合并成一批后必须显式折叠，否则会把同一笔重复带上线。
+        Map<String, Transaction> unique = new LinkedHashMap<>();
+        for (Transaction t : batch) {
+            unique.putIfAbsent(Hex.encodeHexString(t.getHash()), t);
+        }
+        broadcast("/consensus/transactions",
+                codec.encodePacket(new Packet(codec.encodeTransactions(new ArrayList<>(unique.values())), 8)));
+    }
+
+    private ScheduledExecutorService executor() {
+        ScheduledExecutorService ex = flushExecutor;
+        if (ex == null) {
+            synchronized (this) {
+                ex = flushExecutor;
+                if (ex == null) {
+                    ex = Executors.newSingleThreadScheduledExecutor(r -> {
+                        Thread t = new Thread(r, "p2p-rest-broadcast-flush");
+                        t.setDaemon(true);
+                        return t;
+                    });
+                    flushExecutor = ex;
+                }
+            }
+        }
+        return ex;
+    }
+
+    /** 停机时把窗口内未到期的交易同步发出，避免静默丢弃。 */
+    @PreDestroy
+    public void shutdown() {
+        flushPending();
+        ScheduledExecutorService ex = flushExecutor;
+        if (ex != null) {
+            ex.shutdown();
+        }
     }
 }
