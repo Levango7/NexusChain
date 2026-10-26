@@ -3,15 +3,15 @@
 ## 设计原则
 
 - 起步 **4 条** critical/warning（设计稿 PLAN-002 §3.2）；2026-09-07 起 5 条、
-  2026-09-09 起 11 条、2026-10-26 起 **15 条**（当前值，单一真源 =
-  `deploy/k8s/50-prometheus-rules.yaml`）
+  2026-09-09 起 11 条、2026-10-26 起 15 条 + PLAN-045 最终性 2 条 = **17 条**（当前值，
+  单一真源 = `deploy/k8s/50-prometheus-rules.yaml`）
 - 以 `kube_*` 通用 metrics 为主；`nexuschain_block_height` / `jvm_*` /
   `container_*` 等已确认真实注册或集群开箱即有的指标为辅——**规则只允许引用
   真实存在的指标**（2026-09-09 整合时退役了 11 条引用幽灵指标名的 legacy 告警）
 - `for:` 必填——避免抖动误报（链停/资源类 5-10min；在线类 1min）
 - 告警标签统一（severity + component + service）
 
-## 15 条告警（2026-09-07 +1 链停告警；2026-09-09 告警真值整合 +6；2026-10-18 批次③ runbook 补全；2026-10-26 PLAN-040 区块持久化 +4）
+## 17 条告警（2026-09-07 +1 链停告警；2026-09-09 告警真值整合 +6；2026-10-18 批次③ runbook 补全；2026-10-26 PLAN-040 区块持久化 +4；2026-10-27 PLAN-045 最终性 +2）
 
 | 名称 | 级别 | 触发条件 | 含义 |
 |---|---|---|---|
@@ -30,6 +30,8 @@
 | BlockWriterStateUpdateTimeouts | critical | `increase(nexus_block_writer_state_update_timeouts_total[10m]) > 0` 持续 5min | `pendingBlock` 状态更新等待超时被强制清空 |
 | BlockPersistenceBacklog | warning | `memory_pending > 0 or database_pending > 0` 持续 10min | 内存队列/持久化 outbox 持续积压 |
 | BlockOutboxUnreadable | warning | `nexus_block_outbox_readable == 0` 持续 5min | outbox 已装配但读不到数据库 |
+| FinalityStalled | critical | `nexus_finality_lag >= 2` 持续 5min | 最终性落后链高 ≥2 个 epoch |
+| FinalityBelowQuorum | warning | `nexus_finality_progress_percent < 100` 持续 10min | 最新已投票 epoch 的聚合进度不足 |
 
 后 6 条的排障手册见下方“新增 6 条告警排障手册”章节（2026-10-18 批次③ 补全）。
 
@@ -185,6 +187,47 @@
   查 PG 可达性、DBCP2 连接池、网络策略。
 - **处置**：优先恢复 PG；恢复后 `readable` 回 1、`databasePending` 归零。
   若 `enabled=false`（未装配 outbox），本条不触发——那是配置选择，不是故障。
+
+## 最终性 2 条告警排障手册（PLAN-045 · 2026-10-27）
+
+指标由 `org.nexus.metrics.FinalityMetrics` 注册（nexus-core），数据源与
+`GET /consensus/finality`（PLAN-044）**同一份只读内存快照**：链头走
+`ChainHeadProvider`（内存，不查库），最终性视图走 `FinalityGadget` 内存聚合。
+非 pos 模式（未装配最终性共识）时 `nexus_finality_enabled=0`、其余指标 NaN——
+表达式不成立，不会误报。
+
+**为什么不用"单次采样 percent < 100%"做告警**：`progress_percent` 是**提交时
+快照**，2 验证人拓扑下刚投完自己通常是 50%、收到对端票后翻 100%
+（PLAN-043/044 实测的顺序浮动）。单点采样必误报，所以两条规则都用**持续量**：
+lag（落后幾個 epoch）与 10 分钟窗口的 percent。
+
+### FinalityStalled（critical · component=blockchain-core）
+
+- **触发**：`nexus_finality_lag >= 2` 持续 5min（lag = currentEpoch − latestVotedEpoch）
+- **含义**：最终性投票/收敛跟不上出块——最新有记录的 epoch 已落后链高 2 个以上
+- **排查**：
+  ```bash
+  curl -s http://<core-pod>:19585/consensus/finality      # progress/votedWeight/totalWeight
+  curl -s http://<core-pod>:19585/consensus/finality-outbox # 补写队列（PLAN-018）
+  curl -s http://<core-pod>:19585/consensus/validator-set   # 验证人集合
+  ```
+- **处置**：票**发不出** ⇒ 查 P2P 连通与对端存活（`FinalityVoteBroadcaster`）；
+  票**写不进** ⇒ 查 PG（`finality_vote_outbox` attempts/oldest）；
+  验证人**掉线** ⇒ 看 `/consensus/validator-set` 与 `BlockchainCoreStalled` 是否同时触发
+- **注意**：链可能仍在出块（出块与最终性是两条链路）——不要与
+  `BlockchainCoreStalled` 混淆；两者同时触发说明问题在共识/存储底层
+
+### FinalityBelowQuorum（warning · component=blockchain-core）
+
+- **触发**：`nexus_finality_progress_percent < 100` 持续 10min
+- **含义**：最新已投票 epoch 的聚合权重 10 分钟都不到门限——某验证人未投票/票丢失/
+  验签失败。单次 50% 是正常的提交时快照（会翻 100%），持续 10min 才是问题
+- **排查**：同上的 `/consensus/finality` + `/consensus/finality-outbox`；
+  对比对端同 epoch 的 `checkpointHash` 是否一致（不一致=分叉/双签，见
+  `FinalityGadget.getDetectedEquivocations`）
+- **处置**：先恢复掉线验证人或补发票（outbox 补写有指数退避）；若
+  `votedWeight` 占比长期停在 50%，核对验证人集合是否被治理变更清空
+  （`FinalityGadget` 的指纹失效会重算总权重）
 
 ## 后续升级路径（gRPC 错误率）
 

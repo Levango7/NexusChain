@@ -112,6 +112,7 @@
 | 2026-10-26 | **PLAN-043 长窗口最终性收敛（验证切片，零产品改动）**：10 分钟窗口高度逐采样一致、每 epoch checkpoint 同串、A/D 提交时快照 51/595 次 100% 且出现角色互换 ⇒ 暂态（H1）；DB 终态 A 1366 票 / D 1345 票、max epoch 均 683。**未测得项已由 PLAN-044 承接**：对端票到达后本地视图翻 true 的观测点不存在（仅有提交时快照）——PLAN-044 新增 `GET /consensus/finality`（只读内存）+ `finalityLag`，并用 5s 粒度采样复现 50%↔100% 浮动、确认冷恢复后两端 `finalityLag=0`、检查点数同步前进（393/392）。**遗留**：D 重启后前 ~35s 的几次 `h=0/f=64` 采样与首票时间矛盾，未采纳为证据，待复查 | PLAN-043 §三/§四；`pl043-longwindow.log`；PLAN-044 §四 |
 | 2026-10-26 | **最终性可见性端点（PLAN-044，产品变更）**：`GET /consensus/finality` 只读快照（currentEpoch/latestVotedEpoch/finalityLag/finalizedCheckpoints/progress）+ `FinalityGadget.finalizedCheckpointCount()`；白名单同步；8 例单测。**首轮实测 360/360 no-progress 暴露设计缺陷**（progress 绑当前高度的 epoch，而链高多数时刻不在检查点上）⇒ 改为"回溯 8 epoch 报最近有票 epoch"；新增 `finalityLag`（最终性落后几个 epoch） | PLAN-044 §二/§四；`FinalitySnapshotTest` 6 例 + `ConsensusControllerFinalityTest` 2 例 |
 | 2026-10-26 | **#31 SCA 旧口径核销（取证，零产品改动）**：master run 40240653579 的 OWASP 报告 250 依赖**未抑制 CVE=0**，唯一抑制 `CVE-2023-39017`（quartz-jobs 不在依赖图）；"稳定 52 个漏洞"为 PLAN-023 升版前口径 | roadmap #31 行内更新 |
+| 2026-10-27 | **最终性停滞指标与告警（PLAN-045，产品变更）**：`FinalityMetrics` 暴露 `nexus_finality_*`（enabled/current_epoch/latest_voted_epoch/lag/finalized/progress_percent/finalized_checkpoints，未装配 NaN）+ 2 条 PrometheusRule（`FinalityStalled` critical `lag>=2` for 5m；`FinalityBelowQuorum` warning `percent<100` for 10m），告警总数 15→17；关闭"链在出块但最终性跟不上"的告警盲区 | PLAN-045 §二/§三；`FinalityMetricsTest` 5 例；runbook +2 |
 
 ## PLAN-007（单 proposer 协调）
 
