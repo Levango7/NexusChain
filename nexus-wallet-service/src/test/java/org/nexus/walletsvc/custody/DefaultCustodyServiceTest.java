@@ -84,6 +84,8 @@ class DefaultCustodyServiceTest {
                 new BigDecimal("3000"));  // autoSweepThreshold
         policy.setColdWalletCap(new BigDecimal("20000"));
         policy.setHotWalletFloor(new BigDecimal("500"));
+        // 自动再平衡需要真实冷钱包地址（修复前传字面量 "cold-sweep"，地址解析必然失败）
+        policy.setColdWalletAddress(COLD_ADDR);
 
         // 模拟 custody_balances 表中的 HOT / COLD 行（Flyway V2 预置 balance=0）
         hotEntity = new CustodyBalanceEntity();
@@ -630,6 +632,53 @@ class DefaultCustodyServiceTest {
         svc.seedBalances(new BigDecimal("100"), new BigDecimal("5000"));
 
         assertThrows(IllegalStateException.class, () -> svc.rebalance(WalletTier.HOT));
+    }
+
+    @Test
+    void rebalance_sweepUsesConfiguredColdAddress() {
+        // 修复前传字面量 "cold-sweep"，到 WalletUtils.addressToPubkeyHash 必然判非法
+        // ⇒ 自动再平衡从未真正可用。现在必须用策略里配置的真实地址。
+        DefaultCustodyService svc = serviceReturning(new WalletTransactionResult(
+                "0xABC", WalletTransactionResult.Status.SUCCESS, 1, null, false));
+        svc.seedBalances(new BigDecimal("4000"), new BigDecimal("1000"));
+
+        svc.rebalance(WalletTier.COLD);
+
+        ArgumentCaptor<WalletTransactionRequest> c =
+                ArgumentCaptor.forClass(WalletTransactionRequest.class);
+        verify(stubClient).execute(c.capture());
+        assertEquals(COLD_ADDR, c.getValue().getToAddress(),
+                "sweep 必须把策略里配置的冷钱包地址传给执行通道，而不是占位符");
+    }
+
+    @Test
+    void rebalance_floorPullUsesConfiguredColdAddress() {
+        DefaultCustodyService svc = serviceReturning(new WalletTransactionResult(
+                "0xABC", WalletTransactionResult.Status.SUCCESS, 1, null, false));
+        svc.seedBalances(new BigDecimal("100"), new BigDecimal("5000"));
+
+        svc.rebalance(WalletTier.HOT);
+
+        ArgumentCaptor<WalletTransactionRequest> c =
+                ArgumentCaptor.forClass(WalletTransactionRequest.class);
+        verify(stubClient).execute(c.capture());
+        assertEquals(COLD_ADDR, c.getValue().getToAddress());
+    }
+
+    @Test
+    void rebalance_missingColdAddressRefusesToRun() {
+        // 配置不完整必须可见：缺地址就抛错，且绝不调用链上通道（不拿占位符去试）
+        DefaultCustodyService svc = serviceReturning(new WalletTransactionResult(
+                "0xABC", WalletTransactionResult.Status.SUCCESS, 1, null, false));
+        policy.setColdWalletAddress(null);
+        svc.seedBalances(new BigDecimal("4000"), new BigDecimal("1000"));
+
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> svc.rebalance(WalletTier.COLD));
+
+        assertTrue(e.getMessage().contains("coldWalletAddress"),
+                "错误消息必须点明缺哪个配置，否则运维无从下手");
+        verify(stubClient, never()).execute(any());
     }
 
     @Test

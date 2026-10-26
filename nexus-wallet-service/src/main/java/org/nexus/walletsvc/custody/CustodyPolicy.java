@@ -45,6 +45,22 @@ public class CustodyPolicy {
     /** Warm tier wallet ID 前缀（替代硬编码 "warm" 前缀猜测）。 */
     private String warmWalletPrefix = "warm";
 
+    /**
+     * 冷钱包的<b>真实链上地址</b>（自动再平衡的两个方向都用它：sweep 时是转入目标，
+     * floor pull 时是转出来源）。
+     *
+     * <p><b>为什么必须有它（2026-10-26 修复）</b>：{@code rebalance()} 修复前传的是字面量
+     * {@code "cold-sweep"} / {@code "hot-floor"}，到
+     * {@code WalletUtils.addressToPubkeyHash}（Base58 解码失败返回 null，`WalletUtils:231-234`）
+     * 会被判为非法地址 —— 也就是说<b>自动再平衡从来没有真正可用过</b>，
+     * 即使有人注册了策略也一样。</p>
+     *
+     * <p>现在要求显式配置真实地址；未配置时 {@code rebalance()} <b>明确拒绝执行</b>
+     * （抛 {@code IllegalStateException}），而不是拿占位符去调链上通道。
+     * 配置不完整就该报错，不能假装成功。</p>
+     */
+    private String coldWalletAddress;
+
     public CustodyPolicy() {}
 
     public CustodyPolicy(BigDecimal hotWalletCap, BigDecimal warmWalletCap, BigDecimal autoSweepThreshold) {
@@ -86,4 +102,9 @@ public class CustodyPolicy {
 
     public BigDecimal getHotWalletFloor() { return hotWalletFloor; }
     public void setHotWalletFloor(BigDecimal hotWalletFloor) { this.hotWalletFloor = hotWalletFloor; }
+
+    public String getColdWalletAddress() { return coldWalletAddress; }
+    public void setColdWalletAddress(String coldWalletAddress) {
+        this.coldWalletAddress = coldWalletAddress == null ? null : coldWalletAddress.trim();
+    }
 }

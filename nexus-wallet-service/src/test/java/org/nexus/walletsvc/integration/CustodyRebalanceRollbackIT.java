@@ -70,6 +70,8 @@ class CustodyRebalanceRollbackIT {
                     new BigDecimal("3000"));   // autoSweepThreshold
             policy.setColdWalletCap(new BigDecimal("20000"));
             policy.setHotWalletFloor(new BigDecimal("500"));
+            // 自动再平衡需要真实冷钱包地址（未配置时 rebalance 会明确拒绝执行）
+            policy.setColdWalletAddress("0xCOLDWALLET0000000000000000000000000000");
             return policy;
         }
     }
