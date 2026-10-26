@@ -80,6 +80,15 @@ public class FinalityCoordinator {
 
     /** 失败日志采样窗口（毫秒）与窗口内被抑制的条数。 */
     private static final long FAILURE_LOG_WINDOW_MS = 10_000L;
+
+    /**
+     * 最终性快照的回溯窗（epoch 数）：链高多数时刻不在检查点上，快照从当前 epoch
+     * 向下找最近一个有投票记录的 epoch（PLAN-044 实测修正：只看当前 epoch 会
+     * 连续返回 no-progress）。8 个 epoch 足以覆盖"最终性正常跟上出块"的时延，
+     * 又不会在大 epoch 号时线性扫描。
+     */
+    private static final long FINALITY_SNAPSHOT_LOOKBACK_EPOCHS = 8L;
+
     private final java.util.concurrent.atomic.AtomicLong lastFailureLogAt =
             new java.util.concurrent.atomic.AtomicLong(0);
     private final java.util.concurrent.atomic.AtomicLong suppressedFailureLogs =
@@ -330,6 +339,61 @@ public class FinalityCoordinator {
 
     public long getEpochLength() {
         return epochLength;
+    }
+
+    /**
+     * 给定高度的最终性视图快照（PLAN-044；只读内存，不查库）。
+     *
+     * <p><b>为什么不能只看"当前高度的 epoch"</b>：链高在绝大多数时刻**不是** epoch
+     * 边界（每次采样只有 1/epochLength 的概率落在检查点上），而投票发生在节点看到
+     * 检查点高度的那一刻——PLAN-044 首轮实测因此连续 360 次采样全是
+     * {@code no-progress}（遥测不可用）。修正为"<b>最近一个有本地视图记录的
+     * epoch</b>"（向下回溯 {@value #FINALITY_SNAPSHOT_LOOKBACK_EPOCHS} 个 epoch）。</p>
+     *
+     * <p><b>口径（重要）</b>：{@code progress} 是 {@link FinalityGadget} 的
+     * <b>进程内聚合视图</b>，不是"该 epoch 的永久结论"——它随对端票到达而增长：
+     * 刚投完自己那一票时通常是 50%（2 验证人拓扑），收到对端票后翻 100%。
+     * PLAN-043 的 10 分钟窗口实测证明这属于**提交时快照的顺序浮动**，不是
+     * 状态分歧；本端点把它变成可观测值，运维/脚本可自行抽样确认收敛。</p>
+     *
+     * @param height 当前内存链头高度（调用方传 {@code chainHeadProvider.currentHeader().nHeight}）
+     * @return 字段：height / epochLength / currentEpoch（该高度的 epoch）/ checkpoint
+     *         （该高度是否恰为检查点）/ finalizedCheckpoints（内存已最终化检查点数）/
+     *         latestVotedEpoch（回溯窗内最新有视图记录的 epoch，null=无）/
+     *         finalityLag（currentEpoch - latestVotedEpoch，最终性落后几个 epoch）/
+     *         progress（latestVotedEpoch 的 finalized/progressPercent/votedWeight/
+     *         totalWeight/checkpointHash；null=无记录）
+     */
+    public java.util.Map<String, Object> finalitySnapshot(long height) {
+        java.util.Map<String, Object> data = new java.util.LinkedHashMap<>();
+        data.put("height", height);
+        data.put("epochLength", epochLength);
+        data.put("checkpoint", isCheckpoint(height));
+        long currentEpoch = epochOf(height);
+        data.put("currentEpoch", currentEpoch);
+        data.put("finalizedCheckpoints", gadget.finalizedCheckpointCount());
+
+        for (long epoch = currentEpoch; epoch >= Math.max(1L, currentEpoch - FINALITY_SNAPSHOT_LOOKBACK_EPOCHS); epoch--) {
+            FinalityRecord record = gadget.getEpochProgress(epoch);
+            if (record == null) {
+                continue;
+            }
+            data.put("latestVotedEpoch", epoch);
+            data.put("finalityLag", currentEpoch - epoch);
+            java.util.Map<String, Object> progress = new java.util.LinkedHashMap<>();
+            progress.put("finalized", record.isFinalized());
+            progress.put("progressPercent", record.progressPercent());
+            progress.put("votedWeight", record.getVotedWeight());
+            progress.put("totalWeight", record.getTotalWeight());
+            progress.put("checkpointHash",
+                    org.apache.commons.codec.binary.Hex.encodeHexString(record.getCheckpointHash()));
+            data.put("progress", progress);
+            return data;
+        }
+        data.put("latestVotedEpoch", null);
+        data.put("finalityLag", null);
+        data.put("progress", null);
+        return data;
     }
 
     /**

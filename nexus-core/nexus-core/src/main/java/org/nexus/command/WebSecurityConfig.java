@@ -50,6 +50,7 @@ public class WebSecurityConfig implements WebMvcConfigurer {
             "/consensus/finality-outbox",
             "/consensus/block-outbox",
             "/consensus/block-writer",
+            "/consensus/finality",
             "/consensus/validator-set",
             "/consensus/catch-up",
             "/NexusChainCore/*"

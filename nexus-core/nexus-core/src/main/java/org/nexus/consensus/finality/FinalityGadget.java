@@ -603,6 +603,18 @@ public class FinalityGadget {
     }
 
     /**
+     * 已最终化的检查点数量（进程内累计，观测用；PLAN-044 的
+     * {@code GET /consensus/finality} 用它表达"本节点最终性视图已确认的历史规模"）。
+     *
+     * <p>只读 {@link #finalizedCheckpoints} 集合大小，无副作用；与持久化
+     * {@code finality_checkpoints} 表的区别：这里是**内存视图**（重启后从库恢复，
+     * 冷恢复节点需经补票重建）。</p>
+     */
+    public int finalizedCheckpointCount() {
+        return finalizedCheckpoints.size();
+    }
+
+    /**
      * 已检测到的双签证据（供 slashing 联动消费）。
      */
     public List<EquivocationEvidence> getDetectedEquivocations() {
