@@ -564,17 +564,72 @@ class DefaultCustodyServiceTest {
     }
 
     @Test
-    void rebalance_sweepColdCapBreachedSkipsSafely() {
-        // sweep 时冷钱包上限突破 → catch 异常，热钱包仍超阈值但余额不变（安全降级）
+    void rebalance_sweepColdCapBreachedPropagates() {
+        // 冷钱包上限突破属配置/状态问题，必须让调用方知道。
+        // 修复前它被 catch 吞掉 ⇒ 热钱包持续超阈值而无人处理。
+        // 上限校验在「改余额之前」，所以余额本来就不动（无需事务回滚）。
         policy.setColdWalletCap(new BigDecimal("1500"));
         service.seedBalances(new BigDecimal("4000"), new BigDecimal("1000"));
-        // sweep 1000 到冷钱包 → projected 2000 > cap 1500 → depositToCold 抛异常被 catch
 
-        service.rebalance(WalletTier.COLD);
+        assertThrows(IllegalStateException.class, () -> service.rebalance(WalletTier.COLD));
 
-        // sweep 失败，余额保持原值
         assertEquals(0, new BigDecimal("4000").compareTo(service.getHotBalance()));
         assertEquals(0, new BigDecimal("1000").compareTo(service.getColdBalance()));
+    }
+
+    @Test
+    void rebalance_sweepChannelFailedPropagates() {
+        // 执行通道返回确定失败（FAILED 且无哈希）⇒ 必须传播，让 @Transactional 回滚。
+        // 修复前被 catch 吞掉 ⇒ 事务提交 ⇒ 钱没出去、账却动了（余额虚增）。
+        DefaultCustodyService svc = serviceReturning(new WalletTransactionResult(
+                null, WalletTransactionResult.Status.FAILED, 0, "gateway unreachable", false));
+        svc.seedBalances(new BigDecimal("4000"), new BigDecimal("1000"));
+
+        assertThrows(IllegalStateException.class, () -> svc.rebalance(WalletTier.COLD));
+
+        // 单测无 Spring 事务，余额停在「已扣减」是预期的；
+        // 「回滚后余额复原」由集成测试 CustodyRebalanceRollbackIT 验证（那里有真实事务）。
+    }
+
+    @Test
+    void rebalance_sweepUnverifiedPropagatesAndKeepsBalance() {
+        // EXECUTED_UNVERIFIED：钱可能已出 ⇒ 余额必须保留（noRollbackFor），
+        // 且已登记 VERIFY_REQUIRED；异常仍传播，让调用方知道要人工核对链上，
+        // 而不是静默返回成功。
+        DefaultCustodyService svc = serviceReturning(new WalletTransactionResult(
+                null, WalletTransactionResult.Status.EXECUTED_UNVERIFIED, 0,
+                "broadcast ack lost", false, "APR-9"));
+        svc.seedBalances(new BigDecimal("4000"), new BigDecimal("1000"));
+
+        assertThrows(CustodyTransferUnverifiedException.class,
+                () -> svc.rebalance(WalletTier.COLD));
+
+        // 余额已按 sweep 调整 —— 保留即正确语义
+        assertEquals(0, new BigDecimal("3000").compareTo(svc.getHotBalance()));
+        assertEquals(0, new BigDecimal("2000").compareTo(svc.getColdBalance()));
+        assertEquals(PendingStatus.VERIFY_REQUIRED, savedPending().getStatus());
+    }
+
+    @Test
+    void rebalance_sweepAwaitingApprovalPropagates() {
+        // AWAITING_APPROVAL：钱没出 ⇒ 必须回滚（传播），但审批留痕要登记 APPROVAL_OPEN。
+        DefaultCustodyService svc = serviceReturning(new WalletTransactionResult(
+                null, WalletTransactionResult.Status.AWAITING_APPROVAL, 0, null, false, "APR-9"));
+        svc.seedBalances(new BigDecimal("4000"), new BigDecimal("1000"));
+
+        assertThrows(IllegalStateException.class, () -> svc.rebalance(WalletTier.COLD));
+
+        assertEquals(PendingStatus.APPROVAL_OPEN, savedPending().getStatus());
+    }
+
+    @Test
+    void rebalance_floorPullChannelFailedPropagates() {
+        // 回补路径同理：确定失败必须传播，不能被吞掉。
+        DefaultCustodyService svc = serviceReturning(new WalletTransactionResult(
+                null, WalletTransactionResult.Status.FAILED, 0, "gateway unreachable", false));
+        svc.seedBalances(new BigDecimal("100"), new BigDecimal("5000"));
+
+        assertThrows(IllegalStateException.class, () -> svc.rebalance(WalletTier.HOT));
     }
 
     @Test
