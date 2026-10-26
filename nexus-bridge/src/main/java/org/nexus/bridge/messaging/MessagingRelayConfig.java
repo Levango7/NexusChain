@@ -143,4 +143,50 @@ public class MessagingRelayConfig {
             @Value("${nexus.bridge.messaging.execute-enabled:false}") boolean executeEnabled) {
         return new MessageRelayWorker(store, relayer, executor, config, batchSize, executeEnabled);
     }
+
+    /**
+     * 事件源（PLAN-046）：默认**模拟链**，演示"外部链事件 → 消息 → 落库"前段。
+     *
+     * <p>开关 {@code nexus.bridge.messaging.event-source.enabled}（缺省 false）。
+     * 真实链事件源（RPC 订阅/事件日志）需要链凭证与网络出口，不在本切片——
+     * 接入时只需新增一个 {@link ChainEventSource} 实现并换掉本 Bean，
+     * 中继/执行/存储链路不变。</p>
+     */
+    @Bean
+    @ConditionalOnProperty(name = RELAY_ENABLED_PROPERTY, havingValue = "true")
+    @ConditionalOnProperty(name = "nexus.bridge.messaging.event-source.enabled", havingValue = "true")
+    public ChainEventSource bridgeSimulatedChainEventSource(
+            @Value("${nexus.bridge.messaging.event-source.source-chain:L1-sim}") String sourceChain,
+            @Value("${nexus.bridge.messaging.event-source.target-chain:L2-sim}") String targetChain,
+            @Value("${nexus.bridge.messaging.event-source.source-contract:0xsimsource}") String sourceContract,
+            @Value("${nexus.bridge.messaging.event-source.target-contract:0xsimtarget}") String targetContract,
+            @Value("${nexus.bridge.messaging.event-source.start-nonce:0}") long startNonce) {
+        return new SimulatedChainEventSource(sourceChain, targetChain,
+                sourceContract, targetContract, startNonce);
+    }
+
+    /**
+     * 事件源中继 worker（PLAN-046）：poll → format → 签名入库。
+     *
+     * <p>relayer 私钥来自 {@code nexus.bridge.messaging.event-source.relayer-private-key}
+     * （Ed25519 hex，64 字节）——与 {@link MessageRelayer#relayMessage} 的入参
+     * 同口径；未配置且开关开启时 <b>fail-fast</b>（无签名密钥就没有"真实中继"，
+     * 静默跳过会掩盖误配，与 required-signatures 的 fail-fast 同风格）。</p>
+     */
+    @Bean
+    @ConditionalOnProperty(name = RELAY_ENABLED_PROPERTY, havingValue = "true")
+    @ConditionalOnProperty(name = "nexus.bridge.messaging.event-source.enabled", havingValue = "true")
+    public BridgeEventSourceWorker bridgeEventSourceWorker(
+            ChainEventSource eventSource,
+            MessageFormatter formatter,
+            MessageRelayer relayer,
+            @Value("${nexus.bridge.messaging.event-source.relayer-private-key:}") String relayerPrivateKey,
+            @Value("${nexus.bridge.messaging.event-source.batch-size:1}") int batchSize) {
+        if (relayerPrivateKey == null || relayerPrivateKey.isEmpty()) {
+            throw new IllegalStateException(
+                    "nexus.bridge.messaging.event-source.relayer-private-key must be set when "
+                            + "nexus.bridge.messaging.event-source.enabled=true; fix the configuration");
+        }
+        return new BridgeEventSourceWorker(eventSource, formatter, relayer, relayerPrivateKey, batchSize);
+    }
 }

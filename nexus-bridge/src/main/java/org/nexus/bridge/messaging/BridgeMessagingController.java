@@ -27,13 +27,20 @@ import java.util.Map;
 public class BridgeMessagingController {
 
     private final ObjectProvider<BridgeMessagingStatus> statusProvider;
+    private final ObjectProvider<BridgeEventSourceWorker> eventSourceWorkerProvider;
 
-    public BridgeMessagingController(ObjectProvider<BridgeMessagingStatus> statusProvider) {
+    public BridgeMessagingController(ObjectProvider<BridgeMessagingStatus> statusProvider,
+                                     ObjectProvider<BridgeEventSourceWorker> eventSourceWorkerProvider) {
         this.statusProvider = statusProvider;
+        this.eventSourceWorkerProvider = eventSourceWorkerProvider;
     }
 
     /**
      * 装配快照：开关 / 签数阈值 / 超时 / store 实现 / 已装配适配器数。
+     *
+     * <p>PLAN-046 追加 {@code eventSource} 子对象（事件源开关开启时）：源链/目标链/
+     * 实现类名 + 进程内 poll/relayed/failed 计数 + 最近 nonce/错误摘要。开关未开时
+     * 不带该字段（与"装配关闭不带 targetAdapters 细节"同口径，不用 0 冒充）。</p>
      */
     @GetMapping("/messaging")
     public ResponseEntity<Map<String, Object>> messaging() {
@@ -49,6 +56,25 @@ public class BridgeMessagingController {
         body.put("messageTimeout", status.messageTimeout());
         body.put("storeType", status.storeType());
         body.put("targetAdapters", status.targetAdapters());
+        BridgeEventSourceWorker worker = eventSourceWorkerProvider.getIfAvailable();
+        if (worker != null) {
+            putEventSource(worker, body);
+        }
         return ResponseEntity.ok(body);
+    }
+
+    private static void putEventSource(BridgeEventSourceWorker worker, Map<String, Object> body) {
+        BridgeEventSourceStatus event = worker.snapshot();
+        Map<String, Object> source = new LinkedHashMap<>();
+        source.put("sourceEnabled", event.sourceEnabled());
+        source.put("sourceChain", event.sourceChain());
+        source.put("targetChain", event.targetChain());
+        source.put("sourceType", event.sourceType());
+        source.put("pollCount", event.pollCount());
+        source.put("relayedCount", event.relayedCount());
+        source.put("failedCount", event.failedCount());
+        source.put("lastNonce", event.lastNonce());
+        source.put("lastError", event.lastError());
+        body.put("eventSource", source);
     }
 }
