@@ -389,9 +389,11 @@ public class DefaultCustodyService implements CustodyService {
             WalletTier sweepTarget = custodyPolicy.getSweepTarget() == null
                     ? WalletTier.COLD : custodyPolicy.getSweepTarget();
             if (sweepTarget == WalletTier.COLD) {
+                String coldAddress = requireColdWalletAddress();
                 // 不捕获：确定失败必须传播以触发事务回滚（否则钱未出、账已动）。
-                String txHash = depositToCold("cold-sweep", excess);
-                log.info("Rebalance swept {} to COLD, txHash={}", excess, txHash);
+                String txHash = depositToCold(coldAddress, excess);
+                log.info("Rebalance swept {} to COLD (address={}), txHash={}",
+                        excess, coldAddress, txHash);
             }
         }
 
@@ -402,14 +404,40 @@ public class DefaultCustodyService implements CustodyService {
             BigDecimal deficit = floor.subtract(hotAfterSweep);
             BigDecimal currentCold = getColdBalance();
             if (currentCold.compareTo(deficit) >= 0) {
+                String coldAddress = requireColdWalletAddress();
                 // 内部受控路径：自动再平衡不伪造审批 ID，也不经过对外审批接口。
                 // 不捕获：确定失败必须传播以触发事务回滚（否则钱未出、账已动）。
-                String txHash = transferColdToHotInternal("hot-floor", deficit);
-                log.info("Rebalance pulled {} from COLD to meet floor, txHash={}", deficit, txHash);
+                String txHash = transferColdToHotInternal(coldAddress, deficit);
+                log.info("Rebalance pulled {} from COLD to meet floor (address={}), txHash={}",
+                        deficit, coldAddress, txHash);
             } else {
                 log.warn("Rebalance floor pull skipped: cold balance insufficient");
             }
         }
+    }
+
+    /**
+     * 取冷钱包<b>真实</b>地址；未配置时明确拒绝执行。
+     *
+     * <p><b>为什么需要这个方法（2026-10-26 修复）</b>：修复前 {@code rebalance()} 传的是
+     * 字面量 {@code "cold-sweep"} / {@code "hot-floor"}，到
+     * {@code WalletUtils.addressToPubkeyHash}（Base58 解码失败返回 null，`WalletUtils:231-234`）
+     * 必然被判非法地址 —— 也就是说<b>自动再平衡从来没有真正可用过</b>，
+     * 即使有人注册了策略也一样（这条不在 #260 的范围内，是另一个缺陷）。</p>
+     *
+     * <p>现在缺配置就抛错：配置不完整必须可见，不能靠占位符"看起来在跑"。
+     * 抛出的异常会传播到 {@code rebalance()} 的事务边界并触发回滚，
+     * 与「确定失败」的语义一致。</p>
+     */
+    private String requireColdWalletAddress() {
+        String address = custodyPolicy == null ? null : custodyPolicy.getColdWalletAddress();
+        if (address == null || address.isBlank()) {
+            throw new IllegalStateException(
+                    "custody policy is missing coldWalletAddress; automatic rebalance refuses to run "
+                            + "without a real cold wallet address (a placeholder would be rejected "
+                            + "by address parsing downstream)");
+        }
+        return address;
     }
 
     /**
