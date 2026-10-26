@@ -89,14 +89,16 @@ public abstract class AbstractHardhatIntegrationTest {
     protected static final String HARDHAT_DEPLOYER_ADDRESS =
             "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
 
-    /** RPC 连接超时（毫秒） */
-    private static final long RPC_TIMEOUT_MS = 15_000L;
+    /**
+     * RPC 就绪等待预算（毫秒）。
+     *
+     * <p>2026-10-27：原 15s 在 Node 冷启动+防病扫描的 Windows 上会间歇性超时，
+     * 导致集成测试静默 skip（而且测试 logback 是 root=ERROR，看不到原因）。</p>
+     */
+    private static final long RPC_TIMEOUT_MS = 60_000L;
 
     /** RPC 轮询间隔（毫秒） */
     private static final long RPC_POLL_INTERVAL_MS = 500L;
-
-    /** Hardhat 节点启动等待时间（毫秒） */
-    private static final long NODE_STARTUP_WAIT_MS = 5_000L;
 
     /** l1-test 资源目录名 */
     private static final String L1_TEST_DIR_NAME = "l1-test";
@@ -390,7 +392,8 @@ public abstract class AbstractHardhatIntegrationTest {
             Process p = buildProcess("npx", "--version")
                     .redirectErrorStream(true)
                     .start();
-            p.waitFor(10, TimeUnit.SECONDS);
+            // 首次 npx 调用需加载 npm shim 与缓存，Windows 上首轮可超 10s。
+            p.waitFor(30, TimeUnit.SECONDS);
             return p.exitValue() == 0;
         } catch (Exception e) {
             return false;
@@ -469,11 +472,8 @@ public abstract class AbstractHardhatIntegrationTest {
             outputReader.setDaemon(true);
             outputReader.start();
 
-            Thread.sleep(NODE_STARTUP_WAIT_MS);
-            if (!hardhatProcess.isAlive()) {
-                logger.warn("Hardhat 节点进程已退出");
-                return false;
-            }
+            // 2026-10-27：不再固定 sleep 后再判存活。节点是否真正就绪
+            // 统一交给 waitForRpcReady() 轮询判定（内含进程存活检查）。
             reuseExistingNode = false;
             return true;
         } catch (Exception e) {
@@ -506,6 +506,12 @@ public abstract class AbstractHardhatIntegrationTest {
             if (isRpcReachable()) {
                 logger.info("Hardhat RPC 已就绪");
                 return true;
+            }
+            // 自启的节点若已退出（依赖缺失 / 端口占用 / Node 版本不兼容），
+            // 立即失败并让调用方输出明确的跳过原因，而不是白等满超时。
+            if (hardhatProcess != null && !hardhatProcess.isAlive()) {
+                logger.warn("Hardhat 节点进程已退出，RPC 不可用");
+                return false;
             }
             try {
                 Thread.sleep(RPC_POLL_INTERVAL_MS);
@@ -551,7 +557,9 @@ public abstract class AbstractHardhatIntegrationTest {
                 }
             }
 
-            boolean ok = p.waitFor(60, TimeUnit.SECONDS) && p.exitValue() == 0;
+            // 2026-10-27：冷检出（无 artifacts/）时 hardhat run 需先编译合约
+            // （viaIR 优化器，本机实测约 20s，慢机器更久），60s 会超时。
+            boolean ok = p.waitFor(180, TimeUnit.SECONDS) && p.exitValue() == 0;
             if (!ok) {
                 logger.warn("部署脚本执行失败");
                 return false;
