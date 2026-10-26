@@ -79,6 +79,10 @@ public class ConsensusController {
     @Autowired(required = false)
     private org.nexus.db.StateDB stateDB;
 
+    /** 最终性视图快照观测（PLAN-044；非 pos 模式装配时为 null）。 */
+    @Autowired(required = false)
+    private org.nexus.consensus.finality.FinalityCoordinator finalityCoordinator;
+
     @Autowired
     private Block genesis;
 
@@ -224,6 +228,31 @@ public class ConsensusController {
             return codec.encode(data);
         }
         Map<String, Object> data = new LinkedHashMap<>(stateDB.blockWriteStats().snapshot());
+        data.put("enabled", true);
+        return codec.encode(data);
+    }
+
+    /**
+     * 当前高度的最终性视图快照（PLAN-044）。
+     *
+     * <p>与 {@code /consensus/status} 同样只读内存链头 + gadget 内存视图，
+     * 不查数据库；未装配最终性共识（非 pos 模式）时返回 {@code enabled=false}。</p>
+     *
+     * <p><b>口径</b>：{@code progress.progressPercent} 是进程内聚合视图的
+     * 提交时快照，随对端票到达而增长（2 验证人拓扑刚投完自己通常是 50%、收到
+     * 对端票后 100%）——PLAN-043 实测这属顺序浮动而非分歧；看收敛请抽样多次
+     * 或看 {@code finalizedCheckpoints} 是否随高度增长。</p>
+     */
+    @GetMapping(value = "/consensus/finality", produces = "application/json")
+    public Object getFinalityStatus() {
+        long height = chainHeadProvider.currentHeader().nHeight;
+        if (finalityCoordinator == null) {
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("enabled", false);
+            data.put("height", height);
+            return codec.encode(data);
+        }
+        Map<String, Object> data = new LinkedHashMap<>(finalityCoordinator.finalitySnapshot(height));
         data.put("enabled", true);
         return codec.encode(data);
     }

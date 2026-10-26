@@ -4,6 +4,30 @@
 
 ## [2.75.0] - 2026-10-26
 
+### 最终性视图可见性端点（PLAN-044）
+
+承接 PLAN-043 登记的"最终性无可观测点"：新增 `GET /consensus/finality`——
+只读内存链头 + gadget 内存视图（**不查库**，与 `/consensus/status` 同口径），
+未装配 pos 共识时 `enabled=false`；`LOCAL_ONLY_PUBLIC_PATHS` 同步。
+
+- `FinalityGadget.finalizedCheckpointCount()`：内存已最终化检查点数；
+- `FinalityCoordinator.finalitySnapshot(height)`：`currentEpoch` /
+  `finalizedCheckpoints` / `latestVotedEpoch` / **`finalityLag`（最终性落后出块
+  几个 epoch）** / `progress`（finalized、progressPercent、voted/totalWeight、
+  checkpointHash）；
+- **首轮实测暴露设计缺陷并修正**：初版把 progress 绑到"当前高度的 epoch"，
+  链高多数时刻不在 epoch 边界 ⇒ 6 分钟 360/360 次采样全部 `no-progress`
+  （遥测不可用）。改为"当前 epoch 向下回溯 8 个、报最近有票的 epoch"后，
+  5s 粒度即可复现 A 的 50%↔100% 浮动（PLAN-043 结论的 `curl` 化）；
+- 冷恢复复测：D 从 epoch=1 重新投票、补票回填（`Vote-sync served 50 votes`），
+  t+45s 起与 A 的 `finalizedCheckpoints` 只差 1 并同步前进到 t+360s
+  （393/392）、`finalityLag` 两端为 0；
+- 测试 8 例（`FinalitySnapshotTest` 6 + `ConsensusControllerFinalityTest` 2），
+  含"快照不触碰持久化 store"与"未装配时 enabled=false 仍带高度"；
+- 如实登记：D 重启后前 ~35s 的几次 `h=0 / finalizedCheckpoints=64` 采样与其
+  首票时间矛盾（Tomcat 可能在 `Started Start` 前已服务），未采纳为证据，
+  宿主机重启后测试床 PG 已停、待复查。
+
 ### 冷恢复长窗口最终性收敛 + #31 SCA 旧口径核销（PLAN-043，2026-10-26，台账收口）
 
 承接 PLAN-042 §四 登记项：D 冷恢复后"A 侧最终性进度 50% / D 侧 100%"是暂态还是持续？
