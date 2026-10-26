@@ -7,11 +7,12 @@
 #       需 kubectl 应用后提取 spec.groups 再跑 promtool（见 k8s-sync-check.yml）。
 #
 # 设计原则（避免告警疲劳）：
-#   1. 告警数 15 条（2026-09-09 "告警真值"整合 11 条 + PLAN-040 区块持久化 4 条）：
+#   1. 告警数 17 条（2026-09-09 "告警真值"整合 11 条 + PLAN-040 区块持久化 4 条
+#      + PLAN-045 最终性 2 条）：
 #      原 5 条 + 从 legacy deploy/monitoring/alerting-rules.yaml 并入 6 条真实指标告警
-#      （JVM/GC、Pod 资源、ServiceDown、SeataTcDown）+ 2026-10-26 的 4 条区块持久化告警；
-#      legacy 文件中 11 条引用幽灵指标名（代码从未注册）的告警退役——规则只允许
-#      引用代码真实注册的应用指标或 kube_* 通用指标
+#      （JVM/GC、Pod 资源、ServiceDown、SeataTcDown）+ 2026-10-26 的 4 条区块持久化告警
+#      + 2 条最终性告警；legacy 文件中 11 条引用幽灵指标名（代码从未注册）的告警
+#      退役——规则只允许引用代码真实注册的应用指标或 kube_* 通用指标
 #   2. 全部 for: 5m（避免抖动误报）
 #   3. 用 `kube_*` 系列兜底（不依赖应用暴露 prom metrics）—— 2.x 阶段
 #      逐步补应用 metrics 再细化
@@ -111,6 +112,39 @@ spec:
         runbook_url: "https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md"
         summary: "区块 outbox 已装配但连续 5min 读不到数据库"
         description: "{{ $labels.pod }} 的 nexus_block_outbox_readable=0——outbox 已装配但 databasePending 连续为 -1（PG 不可达/查询失败）。此时链可能仍在内存中出块，但补写/恢复能力受限；优先恢复 PG 连接，恢复后确认 databasePending 归零。"
+  # ---- 最终性视图（PLAN-045）----
+  # 应用侧 FinalityMetrics（nexus-core）暴露 nexus_finality_* 指标，数据源是
+  # GET /consensus/finality（PLAN-044）同一份只读内存快照：currentEpoch /
+  # latestVotedEpoch / lag / progress_percent / finalized / finalized_checkpoints。
+  # 非 pos 模式（未装配最终性共识）时 enabled=0、其余指标为 NaN——表达式自然
+  # 不成立，不会误报。
+  # 告警设计刻意不用"单次采样 percent<100"：该值是提交时快照，2 验证人拓扑下
+  # 刚投完自己通常是 50%，收到对端票后翻 100%（PLAN-043/044 实测的顺序浮动），
+  # 单点采样必误报。改用**持续量**：lag（落后幾個 epoch）与长窗口 percent。
+  - name: nexuschain.finality
+    interval: 30s
+    rules:
+    - alert: FinalityStalled
+      expr: nexus_finality_lag >= 2
+      for: 5m
+      labels:
+        severity: critical
+        component: blockchain-core
+      annotations:
+        runbook_url: "https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md"
+        summary: "最终性落后链高 ≥ 2 个 epoch 持续 5min"
+        description: "{{ $labels.pod }} 的 nexus_finality_lag（currentEpoch - latestVotedEpoch）≥2 持续 5min——最终性投票/收敛跟不上出块。查 GET /consensus/finality 的 progress（finalized/progressPercent/votedWeight/totalWeight）与 /consensus/finality-outbox（补写队列）：票发不出看 P2P/对端存活，票写不进看 PG；验证人掉线看 /consensus/validator-set。链本身可能仍在出块，不要与 BlockchainCoreStalled 混淆。"
+
+    - alert: FinalityBelowQuorum
+      expr: nexus_finality_progress_percent < 100
+      for: 10m
+      labels:
+        severity: warning
+        component: blockchain-core
+      annotations:
+        runbook_url: "https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md"
+        summary: "最新已投票 epoch 的聚合进度 < 100% 持续 10min"
+        description: "{{ $labels.pod }} 的 nexus_finality_progress_percent 连续 10min 不到 100%——最新 epoch 的票没收齐（某验证人未投票/票丢失/验签失败）。单次采样的 50% 是正常的提交时快照（会翻 100%），持续 10min 才是问题。查 GET /consensus/finality 的 votedWeight/totalWeight 与对端 /consensus/validator-set；疑丢票时配合 finality_vote_outbox 补写（PLAN-018）。"
   # ---- MPC 引擎 ----
   - name: nexuschain.mpc-engine
     interval: 30s

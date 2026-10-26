@@ -4,6 +4,29 @@
 
 ## [2.75.0] - 2026-10-26
 
+### 最终性停滞指标与告警（PLAN-045）
+
+承接 PLAN-044 §五 留项"未做指标化/告警"：把 `/consensus/finality`（PLAN-044）的
+只读内存快照接进 Prometheus，补上"链在出块但最终性跟不上"这一此前的告警盲区
+（既有 15 条全哑）。
+
+- **`FinalityMetrics`**（新，`org.nexus.metrics`，`MeterBinder`）：
+  `nexus_finality_{enabled, current_epoch, latest_voted_epoch, lag, finalized,
+  progress_percent, finalized_checkpoints}`；数据源是 `ChainHeadProvider`
+  （内存链头，不查库）+ `FinalityCoordinator.finalitySnapshot`，多 Gauge 共享
+  1s TTL 快照缓存；未装配/无记录一律 **NaN**（非 pos 模式不误报）。
+- **告警 2 条**（`nexuschain.finality`，告警总数 15→17）：
+  `FinalityStalled`（critical，`nexus_finality_lag >= 2` for 5m）与
+  `FinalityBelowQuorum`（warning，`nexus_finality_progress_percent < 100` for 10m）；
+  两条都用**持续量**——`progress_percent` 是提交时快照（2 验证人拓扑刚投完自己
+  通常 50%，PLAN-043/044 实测），单点采样必误报。
+- **runbook**：`docs/runbooks/alerts.md` 补 2 条排障手册（含"不要与
+  BlockchainCoreStalled 混淆：出块与最终性是两条链路"）。
+- **测试**：`FinalityMetricsTest` 5 例（未装配 NaN、快照映射、无记录可区分、
+  告警输入可观测、TTL 缓存单次计算）。
+- **如实边界**：进程内指标，重启清零、冷恢复窗口 lag 可能短暂 >0（`for: 5m`
+  为此设计）；未测真实多验证人拓扑的 lag 基线（本机 2 验证人实测全程 0）。
+
 ### 最终性视图可见性端点（PLAN-044）
 
 承接 PLAN-043 登记的"最终性无可观测点"：新增 `GET /consensus/finality`——
