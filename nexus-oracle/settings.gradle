@@ -1,3 +1,21 @@
+pluginManagement {
+    repositories {
+        // 顺序固定为「官方 -> 华为云」，**不用环境变量区分**。
+        // 为什么不能用 System.getenv('CI')：docker build 的 RUN 步骤不继承宿主环境变量，
+        // CI 变量在构建容器内不可见 => 会误走镜像。实测该写法让 nexus-bridge:bootJar
+        // 在 CI 上构建失败（PR #270 首轮 k6 Smoke 红，同批未改此文件的 PR 均绿）。
+        // 官方优先：CI（国外 runner）最快、零额外一跳；
+        // 华为云兜底：本地 plugins.gradle.org 不可达时降级（实测该插件坐标只有华为云有，
+        // 阿里云 / 腾讯云均返回 404，不能替代）。
+        gradlePluginPortal()
+        mavenCentral()
+        maven {
+            name = 'huaweiPlugins'
+            url = 'https://repo.huaweicloud.com/repository/maven/'
+        }
+    }
+}
+
 plugins {
     id 'org.gradle.toolchains.foojay-resolver-convention' version '0.5.0'
 }
