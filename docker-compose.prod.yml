@@ -49,6 +49,13 @@ services:
       # 此前 prod 面板未注入——JwtTokenProvider 会退化为进程内随机密钥
       # （不报错但跨服务鉴权必然失败），生产必须显式注入。
       - JWT_SECRET=${JWT_SECRET:?prod 必需：gateway/signing 共享 JWT 密钥（≥32 字节）}
+      # 2026-10-26 参考交付口径（docs/deploy/reference-delivery-scope.md）：
+      # 最小集交付不含 Kafka，而事件溯源/webhook 死信队列的代码默认都是 kafka
+      # （KafkaEventStore / DeadLetterQueueService 均 matchIfMissing=true，
+      #  L3 预演缺陷 #43 同款——helm 路径当时已兜底，compose 漏了）。
+      # 显式 memory；接 Kafka 的部署把两个值改回 kafka。
+      - NEXUS_EVENTSOURCING_STORE=memory
+      - NEXUS_WEBHOOK_DLQ_STORE=memory
     healthcheck:
       test: ['CMD', '/busybox', 'wget', '-q', '-O', '/dev/null', 'http://localhost:8080/actuator/health']
       interval: 30s
