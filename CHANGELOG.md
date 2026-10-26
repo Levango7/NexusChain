@@ -4,18 +4,34 @@
 
 ## [2.75.0] - 2026-10-26
 
-### 参考交付范围口径落档 + prod compose 补 store 兜底（2026-10-26）
+### 桥消息模拟事件源前段（PLAN-046 / roadmap #33 切片 4「演示口径」）
 
-- **新文档 `docs/deploy/reference-delivery-scope.md`**：客户口径拍板——**最小集交付**，
-  Kafka / Sentinel Dashboard / Zipkin Server 不进参考交付（L3 两轮预演实证三者缺席时 24/24 Ready）；
-  各组件"不装时什么在工作 / 什么没有 / 怎么加"逐项写明，含部署面现状核实结论。
-- **`docker-compose.prod.yml` 补两个 store env**（`NEXUS_EVENTSOURCING_STORE` /
-  `NEXUS_WEBHOOK_DLQ_STORE` = memory）：L3 缺陷 #43 的 **compose 漏网面**——此前只有 helm
-  路径兜底（chart 注入默认 memory），compose-prod 在无 Kafka 环境会踩中
-  `matchIfMissing=true` 的 kafka 激活（dev compose 由 dev profile 兜底，不受影响）。
-- **登记工程收口项**：① 代码侧 `KafkaEventStore` / `DeadLetterQueueService` 的
-  `matchIfMissing=true` 缺省语义反转（消灭 chart/compose 之外裸跑的残留陷阱，base yml
-  `dlq.store: kafka` 显式默认一并反转）；② Seata store DDL 并入安装脚本（L3 遗留）。
+PLAN-037 §七 自留项：消息链路的"前段"（事件 → 消息 → 落库）一直缺失——
+中继/执行/存储/模拟链适配器都通了，但没有东西在产事件，`relay-enabled=true`
+后中继循环只能对空 store 空转。本切片补上**接口 + 演示实现**（测试床专用，
+明确不是生产链路）：
+
+- **`ChainEventSource`**（新接口）：`pollEvents(maxEvents)` + `getSourceChain()` /
+  `getTargetChain()` / `describe()`；**getter 不得有副作用**（不得通过 poll 偷
+  事件——否则观测会消耗事件；测试锁定）。真实链事件源（RPC 订阅/事件日志）
+  只需替换该 Bean，中继/执行/存储链路不变；
+- **`SimulatedChainEventSource`**（演示实现）：内存态源链，每轮 ≤maxEvents 条
+  （默认 1），nonce 从 `start-nonce` 严格单调，负载
+  `sim-event:<chain>:<nonce>:<ms>`。**如实边界**：内存游标不落库，重启后若
+  store 是持久化的，旧 nonce 被顺序检查拒绝（预期，由 worker 逐事件容错）；
+  不连外部链、不要凭证；单 relayer 签名不构成多签门限；
+- **`BridgeEventSourceWorker`**（新）：`@Scheduled`(10s) + `@SchedulerLock`
+  （多副本只一格跑）——poll → `formatMessage` → `relayMessage`（真实签名 +
+  入库，RELAYED），后续交给既有 `MessageRelayWorker`；**逐事件容错**（乱序/
+  超时/存储抖动跳过并计数，不打死循环）；
+- **装配**：`event-source.enabled`（缺省 false）+ `relayer-private-key`
+  （开关开启而未配置 ⇒ **fail-fast**，与 `required-signatures` 同风格）；
+- **观测**：`GET /api/v1/bridge/messaging` 追加 `eventSource` 子对象
+  （源/目标链、实现类名、poll/relayed/failed 计数、lastNonce/lastError）——
+  **按请求实时构建**（worker.snapshot()），不做单例 Bean（启动时构造会把
+  计数冻死在 0）；
+- **测试 25 例**（新增 11：模拟源 5 + worker 6；改写 controller 3 例含
+  "eventSource 是活值"）：模块全量回归绿。
 
 ### 最终性停滞指标与告警（PLAN-045）
 
