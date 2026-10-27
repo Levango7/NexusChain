@@ -27,9 +27,9 @@ import java.time.Instant;
  *       （[0-9a-fx]）不会包含换行，因此该编码无损。</li>
  * </ul>
  *
- * <p>表结构同时由 {@code db/migration/V5__bridge_messages.sql}（CI Flyway 预检用）
- * 与 Hibernate {@code ddl-auto=update}（运行时）维护，两处字段必须保持一致
- * （与 V0 对 bridge_transactions 的做法相同）。</p>
+ * <p>表结构由 {@code db/migration/V5__bridge_messages.sql} 维护；2026-10-27
+ * 数据层收口后 Hibernate 只做 {@code ddl-auto=validate} 校验，两处字段必须
+ * 保持一致（与 V0 对 bridge_transactions 的做法相同）。</p>
  *
  * @since 2.75.0
  */

@@ -12,6 +12,10 @@ spring:
     username: sa
     password:
     driver-class-name: org.h2.Driver
+  # 2026-10-27：测试仍用 create-drop 快速建表；Flyway 的迁移执行
+  # 由 BridgeFlywaySchemaValidationTest 单独用 H2(MODE=MySQL) 验证。
+  flyway:
+    enabled: false
   jpa:
     hibernate:
       ddl-auto: create-drop

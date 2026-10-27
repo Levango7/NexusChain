@@ -34,6 +34,9 @@ CREATE TABLE IF NOT EXISTS saga_instances (
     last_error         VARCHAR(1024),
     created_at         TIMESTAMP     NOT NULL,
     updated_at         TIMESTAMP     NOT NULL,
+    -- 2026-10-27 收口：SagaInstance 的 @Version 乐观锁列（中5 改进）此前只由
+    -- ddl-auto=update 隐式创建，迁移未覆盖；validate 会报 missing column [version]。
+    version            BIGINT,
     CONSTRAINT pk_saga_instances PRIMARY KEY (id)
 );
 

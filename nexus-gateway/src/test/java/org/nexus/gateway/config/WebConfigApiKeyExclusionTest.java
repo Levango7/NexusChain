@@ -54,6 +54,31 @@ class WebConfigApiKeyExclusionTest {
                 "审批决策路径必须排除，否则运维无商户 API Key 会被 401");
     }
 
+    @Test
+    @DisplayName("/api/reconciliation/** 纳入限流（此前不受限）")
+    void reconciliationLinkPathIsRateLimited() {
+        ExposingRegistry registry = new ExposingRegistry();
+        WebConfig config = new WebConfig(
+                mock(ApiKeyInterceptor.class),
+                mock(RateLimiter.class),
+                mock(ApiVersionInterceptor.class),
+                mock(RequestSignatureInterceptor.class),
+                mock(TenantApiKeyInterceptor.class),
+                mock(TenantRateLimiter.class));
+
+        config.addInterceptors(registry);
+
+        MappedInterceptor rateLimit = registry.interceptors().stream()
+                .filter(MappedInterceptor.class::isInstance)
+                .map(MappedInterceptor.class::cast)
+                .filter(m -> "RateLimitAdapter".equals(m.getInterceptor().getClass().getSimpleName()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("RateLimitAdapter 应已注册"));
+
+        assertTrue(List.of(rateLimit.getIncludePathPatterns()).contains("/api/reconciliation/**"),
+                "对账联动路径（非 v1）必须显式纳入限流");
+    }
+
     /** {@code InterceptorRegistry#getInterceptors()} 是 protected，测试用子类暴露只读视图。 */
     private static class ExposingRegistry extends InterceptorRegistry {
 

@@ -12,10 +12,11 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.context.event.EventListener;
 import org.springframework.http.*;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.event.TransactionPhase;
+import org.springframework.transaction.event.TransactionalEventListener;
 import org.springframework.web.client.RestTemplate;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -101,8 +102,21 @@ public class PaymentEventListener {
         this(gatewayConfig, new RestTemplate(), orderRepository, new WebhookUrlValidator(), null, null, "OPTIMISTIC");
     }
 
+    /**
+     * 支付确认：事务提交后再异步投递（2026-10-27 一致性修复）。
+     *
+     * <p>此前是 {@code @EventListener}（仅异步）：{@code PaymentServiceImpl} 在
+     * 事务内发布事件，异步线程可能在**订单尚未提交**时就开始处理 ——
+     * 此时 {@code resolveCallbackUrl} 查不到该订单（另一事务不可见），
+     * 会回退到运维配置的 callback-url，商户永远收不到自己 notifyUrl 的通知；
+     * 若事务随后回滚，webhook 与余额联动还会基于不存在的支付发生。</p>
+     *
+     * <p>改为 {@code @TransactionalEventListener(AFTER_COMMIT)}：提交后才投递，
+     * 回滚则不投递；{@code fallbackExecution = true} 保证无事务上下文时
+     * （定时补偿、测试直接发布）行为不变。</p>
+     */
     @Async
-    @EventListener
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onPaymentConfirmed(PaymentConfirmedEvent event) {
         log.info("Event received: {} order={}", event.getEventType(), event.getOrderNo());
 
@@ -135,8 +149,11 @@ public class PaymentEventListener {
         sendWebhook(event.getMerchantId(), payload);
     }
 
+    /**
+     * 退款完成：同样改为事务提交后异步投递（同 {@link #onPaymentConfirmed}）。
+     */
     @Async
-    @EventListener
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onRefundCompleted(RefundCompletedEvent event) {
         log.info("Event received: {} order={} refund={}", event.getEventType(), event.getOrderNo(), event.getRefundNo());
 

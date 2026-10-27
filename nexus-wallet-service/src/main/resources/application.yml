@@ -206,3 +206,15 @@ seata:
       nexus-tx-group: default
     grouplist:
       default: ${NEX_SEATA_SERVER:localhost:8091}
+
+# === 托管策略（nexus.custody，2026-10-27） ===
+# 默认不装配：enabled 不为 true 时 DefaultCustodyService.rebalance 安全跳过并告警。
+# 启用后必须同时提供阈值与冷钱包真实地址，否则启动失败（fail-fast）。
+# nexus:
+#   custody:
+#     enabled: true
+#     hot-wallet-cap: 10000
+#     auto-sweep-threshold: 8000
+#     hot-wallet-floor: 2000
+#     sweep-target: COLD
+#     cold-wallet-address: ${NEX_COLD_WALLET_ADDRESS}

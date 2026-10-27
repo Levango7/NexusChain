@@ -5,7 +5,6 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
-import jakarta.persistence.Lob;
 import jakarta.persistence.Table;
 import jakarta.persistence.Version;
 
@@ -66,8 +65,7 @@ public class SagaInstance {
     private int currentStepIndex;
 
     /** Saga 上下文 JSON。 */
-    @Lob
-    @Column(name = "payload")
+    @Column(name = "payload", columnDefinition = "LONGTEXT")
     private String payload;
 
     /** 关联的桥交易 ID（如 lockTxId / burnTxId）。 */

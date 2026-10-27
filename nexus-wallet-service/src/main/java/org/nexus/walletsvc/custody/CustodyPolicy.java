@@ -1,6 +1,7 @@
 package org.nexus.walletsvc.custody;
 
 import org.nexus.sdk.wallet.WalletTier;
+import org.springframework.beans.factory.InitializingBean;
 
 import java.math.BigDecimal;
 
@@ -19,7 +20,7 @@ import java.math.BigDecimal;
  * （新包 {@code org.nexus.walletsvc.custody}）。{@link WalletTier} 已迁至
  * nexus-sdk 共享层（{@code org.nexus.sdk.wallet.WalletTier}）。</p>
  */
-public class CustodyPolicy {
+public class CustodyPolicy implements InitializingBean {
 
     /** Maximum balance allowed in the hot wallet. */
     private BigDecimal hotWalletCap;
@@ -62,6 +63,31 @@ public class CustodyPolicy {
     private String coldWalletAddress;
 
     public CustodyPolicy() {}
+
+    /**
+     * 启用托管策略时的启动校验（2026-10-27）。
+     *
+     * <p><b>为什么放在这里</b>：{@code nexus.custody.enabled=true} 是显式开关，
+     * 但若只启用不配阈值，{@code rebalance()} 两个分支都会因阈值 null 直接跳过，
+     * 结果是"策略已启用"却什么都不做——正是本项目反复收口的静默成功形态。
+     * 因此启用即要求配置完整；缺任何一项都在启动期失败。</p>
+     *
+     * <p>手动 {@code new CustodyPolicy(...)} 的测试不会触发本方法（非 Spring 管理），
+     * 现有单测语义不变。</p>
+     */
+    @Override
+    public void afterPropertiesSet() {
+        if (autoSweepThreshold == null && hotWalletFloor == null) {
+            throw new IllegalStateException(
+                    "nexus.custody.enabled=true but neither auto-sweep-threshold nor "
+                            + "hot-wallet-floor is configured; rebalance would silently do nothing");
+        }
+        if (coldWalletAddress == null || coldWalletAddress.isBlank()) {
+            throw new IllegalStateException(
+                    "nexus.custody.enabled=true requires a real cold-wallet-address; "
+                            + "a placeholder would be rejected by address parsing downstream");
+        }
+    }
 
     public CustodyPolicy(BigDecimal hotWalletCap, BigDecimal warmWalletCap, BigDecimal autoSweepThreshold) {
         this.hotWalletCap = hotWalletCap;
