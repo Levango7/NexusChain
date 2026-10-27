@@ -4,6 +4,20 @@
 
 ## [2.75.0] - 2026-10-26
 
+### MPC E2E job 韧性：apt 失败的 45 分钟空转压到 ~10 分钟（PLAN-054）
+
+PR #298 的 CI 取证：`MPC Java Cluster E2E` 的 apt 步骤在 job 开始 18 秒后就
+fail-fast（`连续 3 次失败; exit 1`），但 job 空转到 45 分钟 timeout 才结束
+——观感上"MPC E2E 排队久"的大头不是排队（≤2min，PLAN-053），是失败后的空转。
+
+- **基线**：最近 22 个成功 job 时长 4 / 8 / 10 min（最短 / 中位 / 最长）；
+- **改动**（`ci.yml`，零测试代码）：job timeout **45 → 15**；两处 GMP 步骤加
+  **步级 timeout 6min**；重试 **3→5、间隔 15s→30s**（单步上限约 3min）；
+- **效果**：apt 抖动场景的失败总时长 **~45min → ~10min**，假性 pending 同比例下降；
+- **代价（如实）**：若 job 偶发需要 >15min 可能被误杀——当前 22 个样本全部
+  ≤10min，不支持该情形；revisit：出现 >10min 成功样本则上调 timeout；
+- 不改 runner 标签、不引入自定义镜像。
+
 ### CI 排队对照测量收口（PLAN-053，零代码改动）
 
 roadmap #32 的"待复核"项（无 incident 时段做 26.04 vs 24.04 对照）收口：
