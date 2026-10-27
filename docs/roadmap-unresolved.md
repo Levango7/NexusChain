@@ -118,6 +118,7 @@
 | 2026-10-27 | **最终性告警重标定（PLAN-048，产品变更）**：`finalitySnapshot` 改**粘滞水位**（有记录才前进、无记录保持）⇒ 死锁时 lag 无界增长 + progress 冻结（原来 NaN 熄火）；`FinalityStalled` 改为 `changes(latest_voted_epoch[15m])==0` for 10m（与拓扑无关）；runbook 重写。**仍未做**：僵死验证人回收（PLAN-047 风险，只做到"可被发现"——观测面已由 PLAN-049 补齐）、`changes==0` 的测试床复测 | PLAN-048 §二/§三；16 例全绿；规则 8 groups/17 alerts |
 | 2026-10-27 | **验证人注册表可观测性（PLAN-049，只观测不剔除）**：`GET /consensus/catch-up` 追加 `validators` 摘要（total/active/inactive/capacity + 排序地址列表），零共识逻辑改动。**自动剔除的三项阻碍已登记**：① 僵死判据需 SLA 输入（误删临时分区健康验证人伤 liveness）② 验证人集消息签名化（PLAN-001 enforce 默认 false，签名化前自动 remove=安全倒退）③ 移除权限的治理决议。**runbook 纪律**：候选僵死项（换钥重启留下新旧地址）与 `/consensus/validator-set` 对账后走治理路径，不手工改 `validators_synced` | PLAN-049 §二/§四/§五；`SyncManagerCatchUpSnapshotTest` 5 例 |
 | 2026-10-27 | **补票回看窗 margin 决策测量（PLAN-048b，零产品改动）**：margin=200 复跑同场景 ⇒ 窗外缺口 **29→0**（105 个宕机 epoch 全补回、终态 272/272/272），代价=单次响应打满 `max-votes=200` 自动拆多轮（~2 分钟搬完）。**决策建议**：默认维持 50；SLA 需覆盖 ~20 分钟级宕机可调 200；恢复总时长（非 margin 值）才是真下限。**revisit**：更长宕机仍丢 ⇒ 需游标式分页续传；max-votes 成瓶颈 ⇒ 评估上调 | PLAN-048b §三/§四；`pl048-multivalidator.log` |
+| 2026-10-27 | **`FinalityStalled` 告警演练（PLAN-050，零产品改动）**：判据 B 通过（杀到单验证人 ⇒ 水位冻结/链高照涨/lag 无界 ⇒ 告警必触发）；判据 A **转为真阳性**——健康集群里 D 的投票在 epoch 60 后静默停止（卡在 `unknown proposer at height 125`，链高照涨、无 ERROR/WARN、仍服务补票）⇒ "活着但弃权"节点被照出。**根因缩小**：注册表有该验证人、round-robin 也选得出，但 `isProposerKnown` 的 pubKeyHash 匹配认不出（疑匹配口径/装入时序；校验在 PendingBlocksManager 侧即挂起）。**派生 PLAN-051 定位修复**；告警表达式不改 | PLAN-050 §三/§四；`pl050-alert-rehearsal.log` |
 
 ## PLAN-007（单 proposer 协调）
 
