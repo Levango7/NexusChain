@@ -32,18 +32,36 @@ public interface PayoutExecutor {
      * @return 出款凭据号（渠道退款单号 / 银行流水号 / 人工核销单号）
      * @throws PayoutException 出款失败（调用方据此补偿：退回商户余额）
      *
-     * <p><b>⚠️ 契约（2026-10-21 明确，实现方必须遵守）</b>：抛异常 ⇔ <b>确定未提交出款</b>。
-     * 若调用已提交到渠道/链上但结果未知（超时、响应丢失、待确认），
-     * <b>不得抛异常</b>——必须返回一个可区分的"结果未知"表示，让调用方走人工核对，
+     * <p><b>⚠️ 契约（2026-10-21 明确，2026-10-27 升级为类型级）</b>：抛异常 ⇔
+     * <b>确定未提交出款</b>。若调用已提交到渠道/链上但结果未知（超时、响应丢失、待确认），
+     * <b>不得抛异常</b>——必须通过 {@link #payWithOutcome} 返回
+     * {@link PayoutOutcome#unverified(String)}，让调用方走人工核对，
      * 而不是走"退回余额 + 清认领 + 下周期重试"。</p>
      *
-     * <p>原因：{@code AutoWithdrawService} 当前在捕获异常时执行
+     * <p>原因：{@code AutoWithdrawService} 在捕获异常时执行
      * <b>退回商户余额 + 清空认领</b>，规则下周期可重试。若出款其实已发生，
      * 该补偿会导致<b>二次打款</b>。当前唯一的实现 {@code ManualPayoutExecutor}
      * 是进程内台账、不触渠道，故契约"碰巧"成立；一旦接入银行代付/渠道转账，
      * 任何一次"已提交但响应丢失"都会造成真实资金损失。</p>
      */
     String pay(Long merchantId, MerchantPayoutAccount account, BigDecimal amount, String reference);
+
+    /**
+     * 出款（结果敏感形态，P0 修复 2026-10-27）：返回可区分「成功」与「结果未知」的出款结果。
+     *
+     * <p>调用方 {@code AutoWithdrawService} <b>只走本方法</b>；默认实现把 {@link #pay}
+     * 的返回视为「确定成功」，把抛出的 {@link PayoutException} 原样放行——
+     * 对进程内台账类实现（如 {@code ManualPayoutExecutor}）语义完全等价，
+     * 既有实现无需改动。</p>
+     *
+     * <p><b>会触达外部渠道的实现必须覆写本方法</b>：把"请求已发出但应答不确定"
+     * 返回为 {@link PayoutOutcome#unverified(String)}；调用方将保留出款认领
+     * （fail-closed 拒绝重跑）、绝不退余额、绝不清认领，交人工核对。</p>
+     */
+    default PayoutOutcome payWithOutcome(Long merchantId, MerchantPayoutAccount account,
+                                         BigDecimal amount, String reference) {
+        return PayoutOutcome.executed(pay(merchantId, account, amount, reference));
+    }
 
     /** 执行器名称（用于配置选择与日志）。 */
     String name();

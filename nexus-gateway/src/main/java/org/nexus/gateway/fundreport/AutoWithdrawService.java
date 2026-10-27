@@ -205,7 +205,10 @@ public class AutoWithdrawService {
      *   <li>风控评估：检查账户状态和预警标志</li>
      *   <li><b>认领（独立事务，先提交）</b>：加锁规则行 → 复检周期与未决认领 →
      *       置 payout_claim_reference + 扣账（同一事务原子提交）</li>
-     *   <li><b>出款（事务外）</b>：调用 PayoutExecutor；不可逆的外部动作不待在 DB 事务内</li>
+     *   <li><b>出款（事务外）</b>：调用 {@link PayoutExecutor#payWithOutcome}；不可逆的
+     *       外部动作不待在 DB 事务内。结果分三态（P0 修复 2026-10-27）：
+     *       确定成功 → 继续落库；确定未出款（抛异常）→ 补偿退账；<b>结果未知
+     *       （{@link PayoutOutcome#unverified}）→ 认领保留、不退余额、不推进</b></li>
      *   <li><b>结果落库（独立事务）</b>：成功 → lastExecutedAt + 凭据 + 清认领；
      *       失败 → 补偿入账 + 清认领（规则不推进，下周期可重试）；落库或补偿失败 →
      *       认领保留，下轮拒跑并告警（宁滞留待人工核对，勿自动重试——避免二次出款）</li>
@@ -379,13 +382,17 @@ public class AutoWithdrawService {
         }
 
         // 7. 出款（事务外）：不可逆的外部动作不得待在 DB 事务内。
+        // P0 修复 2026-10-27：改走结果敏感形态 payWithOutcome——旧签名 String 表达不了
+        // 「已提交但结果未知」，契约仅停留在注释里；渠道实现一旦"提交后抛异常"，
+        // 下面的补偿分支会退余额 + 清认领 ⇒ 下周期重试 ⇒ 二次打款。
         String payoutRef = null;
         if (payoutExecutor != null) {
+            PayoutOutcome outcome;
             try {
-                payoutRef = payoutExecutor.pay(rule.getMerchantId(), payoutAccount,
+                outcome = payoutExecutor.payWithOutcome(rule.getMerchantId(), payoutAccount,
                         withdrawAmount, reference);
             } catch (RuntimeException e) {
-                // 干净失败（按执行器契约：抛异常 = 未出款）：补偿退账 + 清认领（独立事务）。
+                // 干净失败（按执行器契约：抛异常 = 确定未出款）：补偿退账 + 清认领（独立事务）。
                 // 规则不推进（下周期可重试）；补偿失败 → 认领保留，下轮拒跑并告警。
                 boolean compensated = compensatePayoutFailure(rule.getId(), rule.getMerchantId(),
                         withdrawAmount, reference);
@@ -399,6 +406,28 @@ public class AutoWithdrawService {
                         "amount=" + withdrawAmount.toPlainString() + ", refunded=" + compensated);
                 return result;
             }
+
+            // 结果未知（可能已出款）或执行器违反契约返回 null：fail-closed——
+            // 绝不退余额（可能造成"钱出去了还退账"的双重损失）、绝不清认领、绝不推进周期。
+            // 认领保留即代表"这笔已扣账的出款未决"，后续轮次在认领闸门被拒（PAYOUT_CLAIM_ACTIVE），
+            // 交人工核对链上/渠道实际结果后处置。
+            if (outcome == null || outcome.isUnverified()) {
+                String detail = outcome == null
+                        ? "payout executor returned null outcome (contract violation)"
+                        : outcome.detail();
+                log.error("CRITICAL: {} 出款结果未知（可能已出款，需人工核对）: merchantId={}, "
+                                + "amount={}, reference={}, detail={}",
+                        PAYOUT_CLAIM_UNRESOLVED_MARKER, rule.getMerchantId(),
+                        withdrawAmount, reference, detail);
+                result.put("reason", "PAYOUT_UNVERIFIED_MANUAL_REQUIRED");
+                result.put("payoutUnverified", true);
+                result.put("detail", detail);
+                audit("AUTO_WITHDRAW_PAYOUT_UNVERIFIED", rule.getMerchantId(),
+                        "amount=" + withdrawAmount.toPlainString()
+                                + ", reference=" + reference + ", detail=" + detail);
+                return result;
+            }
+            payoutRef = outcome.reference();
         }
 
         // 8. 落库（独立事务）：推进 lastExecutedAt + 记凭据 + 清认领；失败 → 认领保留并告警。
