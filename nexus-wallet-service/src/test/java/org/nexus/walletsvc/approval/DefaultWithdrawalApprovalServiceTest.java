@@ -416,7 +416,12 @@ class DefaultWithdrawalApprovalServiceTest {
 
         assertEquals(WithdrawalRequest.WithdrawalStatus.FAILED, executed.getStatus());
         assertNotNull(executed.getRejectionReason());
-        assertTrue(executed.getRejectionReason().contains("empty result"));
+        // (c)-lite（2026-10-27）：执行腿改走 SigningResponses.classify 三态分类器后，
+        // 诊断文案由"empty result"变为分类器文案（null 响应 = "signing service unavailable"）。
+        // 语义契约不变：Feign 降级/空响应仍判 FAILED（确定未动账）。
+        assertTrue(executed.getRejectionReason().contains("signing service unavailable")
+                        || executed.getRejectionReason().contains("empty result"),
+                "失败原因须可辨（分类器文案或旧文案），实得：" + executed.getRejectionReason());
         assertNull(executed.getChainTxHash());
     }
 
@@ -583,8 +588,10 @@ class DefaultWithdrawalApprovalServiceTest {
     }
 
     @Test
-    void execute_emptyPlatformWallet_usesDefault() {
-        // 验证 @Value 注入空字符串时回退到默认平台钱包地址
+    void execute_unsetPlatformWallet_failsClosed() {
+        // 2026-10-27（板 20261027-0306 §五）：**语义反转**——空平台地址不再回退占位符字面量，
+        // 而是执行前 fail-closed 拒绝。原行为会把 "PLATFORM_HOT_WALLET" 假地址发给 signing，
+        // 提现必然失败且原因不可辨认（与 #269 "cold-sweep" 同型）。
         DefaultWithdrawalApprovalService svc = new DefaultWithdrawalApprovalService(
                 approvalPolicy, signingServiceClient, "",
                 withdrawalRequestRepository, withdrawalApproverRepository);
@@ -592,14 +599,13 @@ class DefaultWithdrawalApprovalServiceTest {
                 WHITELISTED_ADDR, new BigDecimal("100"), "NEX");
         svc.approve(request.getRequestId(), "approver-1");
 
-        when(signingServiceClient.signTransfer(
-                eq("PLATFORM_HOT_WALLET"), eq(WHITELISTED_ADDR), any())).thenReturn(okResp("0xtx"));
-
         WithdrawalRequest executed = svc.executeApprovedWithdrawal(request.getRequestId());
 
-        assertEquals(WithdrawalRequest.WithdrawalStatus.EXECUTED, executed.getStatus());
-        verify(signingServiceClient).signTransfer(
-                eq("PLATFORM_HOT_WALLET"), eq(WHITELISTED_ADDR), any());
+        assertEquals(WithdrawalRequest.WithdrawalStatus.FAILED, executed.getStatus());
+        assertNotNull(executed.getRejectionReason());
+        assertTrue(executed.getRejectionReason().contains("not configured"),
+                "原因须明写未配置（fail-closed），实得：" + executed.getRejectionReason());
+        verify(signingServiceClient, never()).signTransfer(any(), any(), any());
     }
 
     // ==================== getRequest ====================

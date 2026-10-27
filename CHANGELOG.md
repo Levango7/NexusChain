@@ -108,6 +108,46 @@ PLAN-047 三验证人实测暴露 PLAN-045 两个缺陷：① 健康 3 验证人
 - **未做**：僵死验证人回收（本切片只让它可被发现，治理另立）；测试床复测
   `changes(...)==0` 不误报（下一条 3 验证人实验顺带复核）。
 
+### wallet 平台地址占位符 fail-closed（2026-10-27）
+
+- **缺陷**（板 `20261027-0306` §五 独立发现，与 #269 "cold-sweep" 同型）：
+  `nexus.wallet.platform-address` 默认值是占位符字面量 `"PLATFORM_HOT_WALLET"`，
+  且 helm/compose **均不注入** `NEX_WALLET_PLATFORM_ADDRESS` ⇒ 真实部署必然把假地址
+  发给 signing，提现失败且原因不可辨认。
+- **修复**：配置默认值改**空**；`DefaultWithdrawalApprovalService` 不再回退占位符——
+  未配置 ⇒ 执行前 fail-closed 拒绝（原因明写 `not configured`）；显式配成占位符 ⇒ 放行但 WARN。
+- **测试**：`execute_emptyPlatformWallet_usesDefault` 语义反转为
+  `execute_unsetPlatformWallet_failsClosed`（钉 fail-closed + `never().signTransfer`）；
+  Spring 测试上下文（`application-test.yml`）显式配置测试专用地址
+  （模拟"已正确配置的部署"）。wallet 全量 **231 例 / 0 失败**。
+
+### 提现执行腿 (c)-lite：signing 审批持久化与复用（2026-10-27）
+
+- **背景与裁决**：#261 的 (b2)（按转出地址豁免 signing 大额审批）前提被 P0 复核推翻——平台热钱包
+  只有一把私钥（`signing-service/application.yml:108`），wallet 提现与 gateway 五条路径
+  （Payment/Subscription/ChainConnector/ConsortiumConnector/DefaultOnChainExecutionChannel）
+  **物理共用同一 fromPubkey**："豁免粒度是地址、风险粒度是业务"，按 (b2) 本意配置会连带打掉
+  gateway 支付/退款/订阅的唯一审批闸门（板 `20261027-0306`）；(b2') initiator 维度因
+  `JWT_SECRET` 跨服务共享（服务身份可伪造）被否决。用户拍板改走 **(c)-lite**：
+  wallet 侧持久化并复用 signing 的 approvalId，双层审批与全部门槛保留。
+- **实现**（wallet 侧，`nexus-wallet-service` + SDK 枚举）：
+  - `WithdrawalStatus` 新增 `AWAITING_APPROVAL` / `EXECUTED_UNVERIFIED`（字符串持久化，无需迁移）；
+    `OnChainResult` 增同两态 + `approvalId` 载体；命名与 gateway 侧
+    `WalletTransactionResult.Status`（2026-10-25 契约）对齐；
+  - 实体新增 `signing_approval_id` 列（**V6 迁移**，H2(MODE=MySQL)/MySQL 8 双兼容）；
+  - 执行腿改走 `SigningResponses.classify` 三态分类（不再用已废弃的 `txHash`——2001「待审批」
+    与「签名失败」被压成同一个 null，正是"待审批被判 FAILED"的根因）；
+  - **核心不变式**：实体已带 `signingApprovalId` 的重试走 `resumeSigningApproval`——只查询/推进
+    既有审批（`PENDING/EXECUTING` 保持等待、`APPROVED` 走 sign-approved、
+    `REJECTED/EXPIRED/不存在` 落 FAILED），**绝不再调 signTransfer** ⇒ 悬空审批不再随重试线性增长；
+  - sign-approved 报 `EXECUTED` 而本地无哈希 ⇒ `EXECUTED_UNVERIFIED`（可能已动账：不得判 FAILED、不得自动重放）；
+  - 原子抢占扩展允许 `AWAITING_APPROVAL → EXECUTING` 重入（复用既有条件 UPDATE 范式）。
+- **测试**：新增 `WithdrawalSigningApprovalReuseTest` **8 例**（三态分类 / 重试不新建审批 /
+  APPROVED 走 sign-approved / REJECTED·不存在落 FAILED / 已执行未核对照 EXECUTED_UNVERIFIED）；
+  wallet 全量 **231 例 / 0 失败 / 0 错误**（含 `FlywayMigrationIT` 实跑 V6 与 `ddl-auto=validate`）；
+  SDK 契约门禁 `WalletDtoTest.withdrawalRequest_withdrawalStatusEnum_shouldHaveAllValues` 同步放开到 8 值；
+  既有 `execute_feignReturnsNull_setsFailed` 断言随分类器文案调整（语义不变：降级仍判 FAILED）。
+
 ### 桥消息模拟事件源前段（PLAN-046 / roadmap #33 切片 4「演示口径」）
 
 PLAN-037 §七 自留项：消息链路的"前段"（事件 → 消息 → 落库）一直缺失——

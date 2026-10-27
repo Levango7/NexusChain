@@ -69,6 +69,11 @@ nexus:
   wallet:
     execution:
       sandbox: true
+    # 2026-10-27（板 20261027-0306 §五）：platform-address 默认值改空后，本测试上下文
+    # 显式配置一个测试专用地址（模拟"已正确配置的部署"）。"未配置 ⇒ fail-closed 拒绝"
+    # 的语义由 DefaultWithdrawalApprovalServiceTest.execute_unsetPlatformWallet_failsClosed
+    # 以单测单独钉住，不依赖本文件。
+    platform-address: 0xtestplatformwallet00000000000000
   # === P0-3 安全加固：测试环境 JWT 密钥配置 ===
   # 测试 profile 注入固定 JWT 密钥，避免 SecurityConfig 启动时因缺少密钥
   # 而 fail-closed（记录 ERROR 日志）。密钥为测试专用，非生产密钥。
