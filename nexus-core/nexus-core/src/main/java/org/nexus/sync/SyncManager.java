@@ -195,7 +195,49 @@ public class SyncManager implements Plugin, ApplicationListener<NewBlockMinedEve
         m.put("windowAgeMillis", requesting ? Math.max(0L, now - catchUpIssuedAtMillis) : 0L);
         m.put("accelerationPaused", now < catchUpPausedUntilMillis);
         m.put("stallCount", (long) catchUpStallCount.get());
+        m.put("validators", validatorRegistrySnapshot());
         return m;
+    }
+
+    /**
+     * 验证人注册表的只读摘要（观测用；PLAN-049）。
+     *
+     * <p><b>为什么只观测不动数据</b>：注册表是共识安全边界（PLAN-047 实测：
+     * 混入第 4 个僵死验证人 ⇒ 2/3 门限不可达 ⇒ 全网最终性冻结而链继续出块）。
+     * 自动剔除需要"多久没出现算僵死"的 SLA 输入 + 验证人集消息签名化
+     * （PLAN-001：未签名时任何对端可伪造 remove）——两项都未就绪，因此本切片
+     * 只做"可被发现"：把 ACTIVE/INACTIVE 计数与地址列表暴露到既有只读端点，
+     * 由运维按 runbook 处置。</p>
+     *
+     * <p>注册表未装配（{@code validatorRegistry == null}）时返回
+     * {@code {"enabled": false}}，不用 0 冒充。</p>
+     */
+    private java.util.Map<String, Object> validatorRegistrySnapshot() {
+        java.util.Map<String, Object> v = new java.util.LinkedHashMap<>();
+        if (validatorRegistry == null) {
+            v.put("enabled", false);
+            return v;
+        }
+        java.util.List<org.nexus.consensus.pos.Validator> all = validatorRegistry.getAllValidators();
+        java.util.List<String> active = new java.util.ArrayList<>();
+        java.util.List<String> inactive = new java.util.ArrayList<>();
+        for (org.nexus.consensus.pos.Validator validator : all) {
+            if (validator.getStatus() == org.nexus.consensus.pos.ValidatorStatus.ACTIVE) {
+                active.add(validator.getAddress());
+            } else {
+                inactive.add(validator.getAddress());
+            }
+        }
+        java.util.Collections.sort(active);
+        java.util.Collections.sort(inactive);
+        v.put("enabled", true);
+        v.put("total", all.size());
+        v.put("active", active.size());
+        v.put("inactive", inactive.size());
+        v.put("capacity", validatorRegistry.getMaxValidators());
+        v.put("activeAddresses", active);
+        v.put("inactiveAddresses", inactive);
+        return v;
     }
 
     /**
