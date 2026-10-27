@@ -112,6 +112,28 @@ spec:
         runbook_url: "https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md"
         summary: "区块 outbox 已装配但连续 5min 读不到数据库"
         description: "{{ $labels.pod }} 的 nexus_block_outbox_readable=0——outbox 已装配但 databasePending 连续为 -1（PG 不可达/查询失败）。此时链可能仍在内存中出块，但补写/恢复能力受限；优先恢复 PG 连接，恢复后确认 databasePending 归零。"
+  # ---- 区块采纳弃权风险（PLAN-052）----
+  # 应用侧 AbstainMetrics（nexus-core）暴露：nexus_finality_defer_total（单调）、
+  # nexus_finality_defer_max_height / max_count（最可能卡住的采纳点）、
+  # nexus_finality_abstain_risk（0/1，任一高度达 defer 阈值 5 即亮）。
+  # 与 FinalityStalled/BelowQuorum 的关系：后两条是"结果维度"（滞后 15min 窗口），
+  # 本条是"原因维度、单节点、最早出现症状"（第一次 unknown-proposer  defer 即可见）。
+  # 口径：计数按高度独立累计、只增不减 ⇒ abstain_risk=1 的含义是"本进程启动以来
+  # 见过弃权风险"，不是"当前正在弃权"（如需当前语义属后续切片）。
+  - name: nexuschain.block-adoption
+    interval: 30s
+    rules:
+    - alert: BlockAdoptionAbstainRisk
+      expr: nexus_finality_abstain_risk == 1
+      for: 5m
+      labels:
+        severity: warning
+        component: blockchain-core
+      annotations:
+        runbook_url: "https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md"
+        summary: "区块采纳出现 unknown-proposer 弃权风险（单节点）"
+        description: "{{ $labels.pod }} 的 nexus_finality_abstain_risk=1——某高度的 unknown-proposer defer 已达阈值（5）。查 GET /consensus/block-outbox 与日志中的 `abstain-risk` ERROR 行（含 deferCount 与高度），并用 GET /consensus/catch-up 的 validators 摘要与 GET /consensus/validator-set 回放地址对账（多余/僵死验证人会抬高总权重、换钥重启会留下新旧两个地址）。单节点弃权只影响该节点投票（其它节点仍在最终化，故本条为 warning）；全网死锁看 FinalityStalled。注意 abstain_risk 是进程内累计语义（历史见过也亮），不代表当前正在发生。"
+
   # ---- 最终性视图（PLAN-045；PLAN-047 重标定）----
   # 应用侧 FinalityMetrics（nexus-core）暴露 nexus_finality_* 指标，数据源是
   # GET /consensus/finality（PLAN-044）同一份只读内存快照：currentEpoch /

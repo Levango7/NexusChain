@@ -4,6 +4,26 @@
 
 ## [2.75.0] - 2026-10-26
 
+### 弃权风险指标化 + `BlockAdoptionAbstainRisk` 告警（PLAN-052）
+
+把 PLAN-051 的"原因维度"信号接进 Prometheus（此前只有日志）——最终性告警从
+"结果滞后 15min"扩展到"原因最早可见"：
+
+- **`AbstainMetrics`**（新，`org.nexus.metrics`）：`nexus_finality_defer_total`
+  （FunctionCounter 单调）、`nexus_finality_defer_max_height` /
+  `max_count`（最可能卡住的采纳点）、`nexus_finality_abstain_risk`（0/1，
+  任一高度达阈值 5 即亮）；数据源是 `PendingBlocksManager` 的
+  `unknownProposerDeferCount`（PLAN-051 已建），**只读、抓取零 DB**；
+- **告警第 18 条**（`BlockchainAdoptionAbstainRisk`，`nexuschain.block-adoption`，
+  warning，`abstain_risk==1` for 5m）——**warning 而非 critical**：单节点弃权
+  只影响该节点投票（其它节点仍在最终化，全网死锁由 `FinalityStalled` 覆盖）；
+- **口径（如实登记，勿误读）**：计数按高度独立累计、只增不减 ⇒
+  `abstain_risk=1` 的含义是"**本进程启动以来见过**弃权风险"，不是"当前正在
+  弃权"；如需"当前"语义（最近 N 分钟增量/衰减）属后续切片；
+- **测试**：`AbstainRiskMetricsTest` 4 例（无 defer 为 0 非 NaN / 低于阈值不亮 /
+  达阈值必亮 / 多高度独立不求和）；
+- 规则静态校验：9 groups / 18 alerts、无重名、全带 `for`。
+
 ### PLAN-051 复现跑：弃权形态未复现，观测面按设计工作（零产品改动）
 
 对 PLAN-050 暴露的"活着但弃权"做同脚本复现（三节点固定密钥）：
