@@ -11,7 +11,7 @@
 - `for:` 必填——避免抖动误报（链停/资源类 5-10min；在线类 1min）
 - 告警标签统一（severity + component + service）
 
-## 17 条告警（2026-09-07 +1 链停告警；2026-09-09 告警真值整合 +6；2026-10-18 批次③ runbook 补全；2026-10-26 PLAN-040 区块持久化 +4；2026-10-27 PLAN-045 最终性 +2）
+## 18 条告警（2026-09-07 +1 链停告警；2026-09-09 告警真值整合 +6；2026-10-18 批次③ runbook 补全；2026-10-26 PLAN-040 区块持久化 +4；2026-10-27 PLAN-045 最终性 +2、PLAN-052 弃权风险 +1）
 
 | 名称 | 级别 | 触发条件 | 含义 |
 |---|---|---|---|
@@ -32,6 +32,7 @@
 | BlockOutboxUnreadable | warning | `nexus_block_outbox_readable == 0` 持续 5min | outbox 已装配但读不到数据库 |
 | FinalityStalled | critical | `changes(nexus_finality_latest_voted_epoch[15m]) == 0` 持续 10min | 最终性水位 15min 无增长（最终化停滞） |
 | FinalityBelowQuorum | warning | `nexus_finality_progress_percent < 100` 持续 10min | 最终性进度不足（票没收齐） |
+| BlockAdoptionAbstainRisk | warning | `nexus_finality_abstain_risk == 1` 持续 5m | 区块采纳出现 unknown-proposer 弃权风险（单节点、原因维度） |
 
 后 6 条的排障手册见下方“新增 6 条告警排障手册”章节（2026-10-18 批次③ 补全）。
 
@@ -278,7 +279,7 @@ unknown-proposer defer 达到阈值（5 次/同一高度）** 时就亮，而结
 
 `.github/workflows/k8s-sync-check.yml` 的 "PrometheusRule 静态校验" step：
 - `kubectl apply --dry-run=client -f deploy/k8s/50-prometheus-rules.yaml` 验 CRD schema
-- 告警数 ≥ 5（当前 11 条）
+- 告警数 ≥ 5（当前 18 条）
 - `for:` 字段必填（避免抖动误报）
 
 ## 部署
