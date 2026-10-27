@@ -3,6 +3,7 @@ package org.nexus.walletsvc.custody;
 import org.nexus.sdk.wallet.WalletTier;
 import org.nexus.sdk.wallet.WalletTransactionRequest;
 import org.nexus.sdk.wallet.WalletTransactionResult;
+import org.nexus.sdk.wallet.WithdrawalRequest;
 import org.nexus.walletsvc.execution.OnChainExecutionClient;
 import org.nexus.walletsvc.approval.WithdrawalApprovalService;
 import org.nexus.walletsvc.entity.CustodyBalanceEntity;
@@ -184,7 +185,31 @@ public class DefaultCustodyService implements CustodyService {
         // 对「未达审批阈值（非 APPROVED）」的审批抛 IllegalStateException——拒绝放行；
         // 对已批准的审批则置为 EXECUTED——消耗该审批，防止同一 approvalId 重放。
         // 余额校验在前，余额不足时不会消耗审批。
-        withdrawalApprovalService.executeApprovedWithdrawal(approvalId);
+        WithdrawalRequest executed = withdrawalApprovalService.executeApprovedWithdrawal(approvalId);
+
+        // 2026-10-27（打捞自 #280，板 20261027-1830）：executeApprovedWithdrawal
+        // 的返回值必须校验——它可能返回非 EXECUTED：
+        //   * APPROVED / AWAITING_APPROVAL：签名侧把该笔转人工审批（2001，钱没出）；
+        //   * EXECUTED_UNVERIFIED：钱**可能已出**（哈希缺失）；
+        //   * FAILED / REJECTED：确定没出。
+        // 若像原实现那样忽略返回值，后续的冷→热划转仍会执行 ⇒ 提现单还停在
+        // 「等签名审批/未确认」而托管余额已被划走 ⇒ 账实不符。
+        // 抛 IllegalStateException ⇒ 本方法事务回滚（noRollbackFor 只放行
+        // CustodyTransferUnverifiedException），托管余额不动；提现单状态由
+        // executeApprovedWithdrawal 内部 REQUIRES_NEW 阶段3 独立提交，保留原状态等待推进。
+        if (executed == null
+                || executed.getStatus() != WithdrawalRequest.WithdrawalStatus.EXECUTED) {
+            // 用枚举判断「钱可能已出」，不依赖 rejectionReason 字符串前缀（易漂移）。
+            boolean possiblyBroadcast = executed != null
+                    && executed.getStatus() == WithdrawalRequest.WithdrawalStatus.EXECUTED_UNVERIFIED;
+            throw new IllegalStateException(
+                    "cold withdrawal not executed (withdrawal status="
+                            + (executed == null ? "null" : executed.getStatus()) + ")"
+                            + (possiblyBroadcast
+                                    ? "; POSSIBLY ALREADY BROADCAST — manual reconciliation required"
+                                    : "")
+                            + "; custody balances left untouched");
+        }
 
         String txHash = transferColdToHotInternal(address, amount);
         log.info("Cold withdrawal authorized by approvalId={}, txHash={}", approvalId, txHash);

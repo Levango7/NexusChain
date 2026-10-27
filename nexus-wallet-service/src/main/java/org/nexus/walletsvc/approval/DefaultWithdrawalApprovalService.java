@@ -24,6 +24,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -92,6 +93,18 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
      * </ul>
      */
     private static final String PLACEHOLDER_PLATFORM_WALLET_ADDRESS = "PLATFORM_HOT_WALLET";
+
+    /**
+     * signing 侧「审批未通过」状态码（executeApproved 响应）——确定未动账。
+     * <p>与 {@link #SIGNING_EXECUTION_CONFLICT} 一起是唯二可用于「安全重置防双花标记」的
+     * 确定性信号（设计见 V7 迁移与板 20261027-1830）。</p>
+     */
+    private static final int SIGNING_NOT_APPROVED = 5000;
+
+    /**
+     * signing 侧「并发执行冲突」（另一路已抢走执行权）状态码——本次确定未动账。
+     */
+    private static final int SIGNING_EXECUTION_CONFLICT = 5001;
 
     private final ApprovalPolicy approvalPolicy;
     private final SigningServiceFeignClient signingServiceClient;
@@ -423,7 +436,7 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
         }
         String existingApprovalId = e.getSigningApprovalId();
         if (existingApprovalId != null && !existingApprovalId.isBlank()) {
-            return resumeSigningApproval(existingApprovalId);
+            return resumeSigningApproval(e, existingApprovalId);
         }
         SigningResponses.Outcome outcome = SigningResponses.classify(signingServiceClient.signTransfer(
                 platformWalletAddress,
@@ -445,16 +458,41 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
      * <p>按 signing 侧审批状态分派：</p>
      * <ul>
      *   <li>{@code PENDING/EXECUTING} → 保持 AWAITING_APPROVAL（**不新建审批单**）</li>
-     *   <li>{@code APPROVED} → 调 sign-approved 执行，按响应再分派</li>
+     *   <li>{@code APPROVED} → 调 sign-approved 执行，按响应再分派；
+     *       <b>防双花</b>（V7，打捞自 #280）：若实体上已记录一次执行尝试
+     *       （{@code signingExecutionAttemptedAt} 非空），说明上次可能已广播只是响应丢失
+     *       （signing 审批会因 TTL 超时从 {@code EXECUTING} 回退到 {@code APPROVED}），
+     *       此时**不得重试**，判 {@code EXECUTED_UNVERIFIED} 交人工核对；
+     *       仅当 signing 明确告知「本次未动账」（5000/5001）时才清空标记允许下次重试</li>
      *   <li>{@code EXECUTED} → EXECUTED_UNVERIFIED（signing 已执行但本地无哈希 = 可能已动账，
      *       不得判 FAILED / 不得自动重放）</li>
      *   <li>{@code REJECTED/EXPIRED} 或审批已不存在（404/降级）→ FAILED（链上确认未动账，
      *       可安全判失败；理由是"审批不存在"而非"签名失败"）</li>
      * </ul>
+     *
+     * <p><b>fail-safe</b>：查状态/执行抛 {@link RuntimeException}（Feign 非 2xx、编解码错误
+     * 等，fallback 未覆盖）时结果不明——按「继续等待」处理，不判 FAILED，以免把一笔
+     * 本可继续等待或实际已动的提现判死。代价是若 approvalId 永久不可达，这笔会长期停在
+     * APPROVED，需人工巡检发现（故此处用 ERROR 级别留痕）。</p>
      */
-    private OnChainResult resumeSigningApproval(String signingApprovalId) {
-        String status = SigningResponses.approvalStatus(
-                signingServiceClient.getApprovalStatus(signingApprovalId));
+    private OnChainResult resumeSigningApproval(WithdrawalRequestEntity entity, String signingApprovalId) {
+        Map<String, Object> statusResponse;
+        try {
+            statusResponse = signingServiceClient.getApprovalStatus(signingApprovalId);
+        } catch (RuntimeException e) {
+            // 查询失败不代表钱动了（与 R1 同源：未知不能当确定）。
+            // 注意代价：本分支返回 awaitingApproval ⇒ 提现停在 APPROVED，而 expired 兜底
+            // 依赖成功读到响应，查询一直失败时永远读不到 ⇒ 需人工巡检，故记 ERROR。
+            log.error("getApprovalStatus threw; withdrawal will stay APPROVED and the TTL fallback"
+                            + " cannot apply on this path (manual inspection required):"
+                            + " signingApprovalId={}, error={}",
+                    signingApprovalId, e.getMessage());
+            return new OnChainResult(null, OnChainResult.Status.AWAITING_APPROVAL,
+                    "signing approval status query failed (TTL fallback not applicable): "
+                            + e.getMessage(),
+                    false, signingApprovalId);
+        }
+        String status = SigningResponses.approvalStatus(statusResponse);
         if (status == null) {
             return OnChainResult.failure(
                     "signing approval not found (expired or cleaned up): " + signingApprovalId, false);
@@ -464,16 +502,45 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
             case "EXECUTING":
                 return OnChainResult.awaitingApproval(signingApprovalId, false);
             case "APPROVED": {
-                SigningResponses.Outcome outcome = SigningResponses.classify(
-                        signingServiceClient.executeApproved(signingApprovalId));
+                if (entity.getSigningExecutionAttemptedAt() != null) {
+                    // 上次尝试过执行，signing 又回到 APPROVED ⇒ 上次可能已广播但结果丢失。
+                    // 不重试（防双花），交人工核对。
+                    // 注意这不是 FAILED：钱**可能已经出去**，记 FAILED 会让运维以为没出。
+                    return OnChainResult.executedUnverified(
+                            "signing approval returned to APPROVED after a prior execution attempt;"
+                                    + " possible prior broadcast, manual reconciliation required", false);
+                }
+                entity.setSigningExecutionAttemptedAt(LocalDateTime.now());
+                SigningResponses.Outcome outcome;
+                try {
+                    outcome = SigningResponses.classify(
+                            signingServiceClient.executeApproved(signingApprovalId));
+                } catch (RuntimeException e) {
+                    // 执行请求已发出但抛了异常（fallback 未覆盖的情形）：结果不明
+                    // ⇒ 必须落 EXECUTED_UNVERIFIED，不能冒泡到三阶段模板的 catch
+                    // 被记成「确定没出」的 FAILED。
+                    log.error("executeApproved threw: signingApprovalId={}, error={}",
+                            signingApprovalId, e.getMessage(), e);
+                    return OnChainResult.executedUnverified(
+                            "executeApproved threw: " + e.getMessage()
+                                    + "; manual reconciliation required", false);
+                }
                 if (outcome.isExecuted()) {
                     return OnChainResult.success(outcome.txHash(), false);
                 }
-                if (outcome.isAwaitingApproval()) {
-                    return OnChainResult.awaitingApproval(outcome.approvalId(), false);
+                if (isDefinitelyNotExecuted(outcome)) {
+                    // 5000（审批未通过）/ 5001（并发被另一路抢走）⇒ 本次确定未动账。
+                    // 必须清掉 attempted 标记：否则下一次推进会被误判成
+                    // 「上次可能已广播」而永久判死一笔从未广播的提现。
+                    entity.setSigningExecutionAttemptedAt(null);
+                    return new OnChainResult(null, OnChainResult.Status.AWAITING_APPROVAL,
+                            "executeApproved not completed: " + outcome.message(),
+                            false, signingApprovalId);
                 }
-                return OnChainResult.failure(
-                        outcome.message() != null ? outcome.message() : "approved signing failed", false);
+                // 结果不明（网络失败 / 2000 但 data 缺失）：保留 attempted 标记，
+                // 不写回可安全重试语义（否则下次会被当成「可安全重试」而二次放款）。
+                return OnChainResult.executedUnverified(
+                        "executeApproved outcome unknown: " + outcome.message(), false);
             }
             case "EXECUTED":
                 return OnChainResult.executedUnverified(
@@ -483,6 +550,19 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
                         "signing approval " + status.toLowerCase(java.util.Locale.ROOT)
                                 + ": " + signingApprovalId, false);
         }
+    }
+
+    /**
+     * signing 侧是否明确告知「本次未动账」。
+     *
+     * <p>只有 5000（审批未通过）与 5001（并发被抢）是确定的；其余（含响应为
+     * {@code null} 的网络失败）都属「结果不明」，必须保留
+     * {@code signingExecutionAttemptedAt} 标记。</p>
+     */
+    private static boolean isDefinitelyNotExecuted(SigningResponses.Outcome outcome) {
+        Integer code = outcome.statusCode();
+        return code != null
+                && (code == SIGNING_NOT_APPROVED || code == SIGNING_EXECUTION_CONFLICT);
     }
 
     /**

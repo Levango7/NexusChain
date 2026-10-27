@@ -84,6 +84,19 @@ public class WithdrawalRequestEntity {
     @Column(name = "signing_approval_id", length = 64)
     private String signingApprovalId;
 
+    /**
+     * 上次向 signing 发起 executeApproved 的时刻（防双花，见 V7 迁移）。
+     *
+     * <p>signing 审批会因 TTL 超时从 {@code EXECUTING} 回退到 {@code APPROVED}。
+     * 若上次执行其实已广播、只是响应丢失，直接重试会二次放款。该字段非空时，
+     * 推进逻辑不再盲目重试，而是判 {@code EXECUTED_UNVERIFIED} 交人工核对；
+     * 若 signing 明确告知「本次未动账」（5000/5001）则清空本字段。</p>
+     *
+     * <p>可空：历史数据与「尚未尝试执行」的记录均为 null，行为与加列前一致。</p>
+     */
+    @Column(name = "signing_execution_attempted_at")
+    private LocalDateTime signingExecutionAttemptedAt;
+
     /** 拒绝原因（REJECTED / FAILED 时填充），可空。 */
     @Column(name = "rejection_reason", length = 256)
     private String rejectionReason;
@@ -155,6 +168,11 @@ public class WithdrawalRequestEntity {
 
     public String getRejectionReason() { return rejectionReason; }
     public void setRejectionReason(String rejectionReason) { this.rejectionReason = rejectionReason; }
+
+    public LocalDateTime getSigningExecutionAttemptedAt() { return signingExecutionAttemptedAt; }
+    public void setSigningExecutionAttemptedAt(LocalDateTime signingExecutionAttemptedAt) {
+        this.signingExecutionAttemptedAt = signingExecutionAttemptedAt;
+    }
 
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
