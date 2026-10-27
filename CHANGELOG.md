@@ -38,6 +38,24 @@ roadmap #32 的"待复核"项（无 incident 时段做 26.04 vs 24.04 对照）�
   达阈值必亮 / 多高度独立不求和）；
 - 规则静态校验：9 groups / 18 alerts、无重名、全带 `for`。
 
+### 自动提现出款结果三态：结果未知 fail-closed（P0 修复，2026-10-27）
+
+`PayoutExecutor` 的"抛异常 ⇔ 确定未出款"契约此前只写在注释里，`String pay(...)`
+返回类型**表达不了**「已提交但结果未知」，`AutoWithdrawService` 也没有对应分支——
+一旦接入银行代付/渠道转账，任何一次"提交后响应丢失"都会走补偿分支
+（退余额 + 清认领 + 下周期重试）造成**二次打款**。
+
+- 新增 `PayoutOutcome`（`executed(凭据号)` / `unverified(原因)`）：把该契约升级为类型级；
+  `executed` 强制携带凭据号（不许伪造成功）；
+- `PayoutExecutor` 增 `payWithOutcome`（默认实现委托 `pay`，台账类实现零改动）；
+  渠道类实现须覆写并把"应答不确定"映射为 `unverified`；
+- `AutoWithdrawService` 只走 `payWithOutcome`：**结果未知（或执行器违反契约返回 null）
+  ⇒ 不退余额、不清认领、不推进周期**，认领保留使后续轮次在认领闸门被拒
+  （`PAYOUT_UNVERIFIED_MANUAL_REQUIRED` + `AUTO_WITHDRAW_PAYOUT_UNVERIFIED` 审计），
+  交人工核对；只有抛 `PayoutException`（确定未出款）才补偿退账 + 清认领重试；
+- 测试：`AutoWithdrawPayoutWiringTest` 11 例（新增 4 例：结果未知不回退、
+  下一轮认领闸门拦停、null 结果 fail-closed、`PayoutOutcome` 契约）。
+
 ### PLAN-051 复现跑：弃权形态未复现，观测面按设计工作（零产品改动）
 
 对 PLAN-050 暴露的"活着但弃权"做同脚本复现（三节点固定密钥）：
