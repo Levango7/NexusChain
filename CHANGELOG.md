@@ -4,6 +4,20 @@
 
 ## [2.75.0] - 2026-10-26
 
+### CI 排队对照测量收口（PLAN-053，零代码改动）
+
+roadmap #32 的"待复核"项（无 incident 时段做 26.04 vs 24.04 对照）收口：
+
+- **方法**：GitHub API 取最近 60 个 run，按"run created → 最早 job started"
+  量排队时长；排除 PLAN-024 已记录的 incident 时段；
+- **结果**：30 个有效样本中 **22 个排队 0 分钟**、其余 3 个 ≤2 分钟、1 个 17 分钟
+  （孤值，平台侧瞬时态形态）——中位 0 好于 PLAN-024 的 incident 前样本
+  （26.04 = 3.5min / 24.04 = 4.4min）；
+- **结论**：**维持 ubuntu-24.04，无回退理由**；当初切标签的理由本就是"成熟供给的
+  低风险对冲"而非缩短排队，实测也不支持"换标签能缩短"的归因；
+- **不求一般性**：单仓 ~30 样本、平台 incident 不可排除；未来再现 15 分钟级排队
+  先查平台状态页再动标签。
+
 ### 弃权风险指标化 + `BlockAdoptionAbstainRisk` 告警（PLAN-052）
 
 把 PLAN-051 的"原因维度"信号接进 Prometheus（此前只有日志）——最终性告警从
@@ -41,34 +55,6 @@
 - **信号链已闭环**：`FinalityStalled`（水位冻结）+ `abstain-risk`（拒绝路径）
   + `/consensus/catch-up validators`（注册表对账）三路互相印证——即使根因
   不再深挖，"活着但弃权"已不可静默。
-
-### 提现防双花 + custody 审批闸返回值校验（打捞自 #280 的设计，板 20261027-1830）
-
-#280 与 (c)-lite 的 #285 重复实现，#285 合入 master（45df2e05）后，
-#280 独有的三件真价值按板 20261027-1725 清单打捞到 master 基线（不改 #280 分支）：
-
-- **`signing_execution_attempted_at` 列 + 推进逻辑防双花**（V7 迁移）：
-  signing 审批会因 TTL 超时从 `EXECUTING` 回退到 `APPROVED`；若上次
-  `executeApproved` 已实际广播只是响应丢失，重试即二次放款。现：
-  `APPROVED` 且曾尝试执行（该字段非空）⇒ 判 `EXECUTED_UNVERIFIED` 交人工核对，
-  **不重试**（不是 FAILED——钱可能已出）；仅当 signing 明确告知「本次未动账」
-  （5000 审批未通过 / 5001 并发被抢）才清空标记允许下次推进；查询或执行
-  抛 `RuntimeException`（fallback 未覆盖的 Feign 错误）、响应形状不明时
-  一律按「结果不明」保留标记，不再冒泡被三阶段模板压成 FAILED；
-- **`DefaultCustodyService.withdrawFromCold` 不再忽略返回值**：
-  `executeApprovedWithdrawal` 返回非 `EXECUTED`（转人工审批 / 可能已出 / 失败）
-  时抛 `IllegalStateException`，托管余额不动——原实现照常冷→热划转会导致
-  提现单停着未确认而余额已被划走的账实不符；`EXECUTED_UNVERIFIED` 时异常信息
-  显式带 `POSSIBLY ALREADY BROADCAST` 提示对账；
-- **前端枚举对齐**：`wallet.ts` 的 `WithdrawalStatus` 从 6 值补齐到 8 值
-  （补 `AWAITING_APPROVAL` / `EXECUTED_UNVERIFIED`），
-  `WithdrawalApprovalsPage` 补两态的展示分支（等待审批=黄色、已执行未核实=红色）；
-- **测试**：`WithdrawalDoubleSpendGuardTest` 7 例（曾尝试则不重试 / 首次执行落标记 /
-  5000·5001 清标记 / 抛异常·形状不明保留标记 / 审批状态查询失败不判 FAILED）；
-  `DefaultCustodyServiceTest` 2 例（非 EXECUTED 则余额不动 +
-  `POSSIBLY ALREADY BROADCAST`）。
->>>>>>> 785dfff3
- (fix(wallet): 提现防双花（V7）+ custody 审批闸返回值校验 + 前端 8 值枚举（打捞自 #280）)
 
 ### unknown-proposer 挂起的弃权风险可观测性（PLAN-051 第一步）
 
