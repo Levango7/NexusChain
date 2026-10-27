@@ -4,6 +4,28 @@
 
 ## [2.75.0] - 2026-10-26
 
+### unknown-proposer 挂起的弃权风险可观测性（PLAN-051 第一步）
+
+承接 PLAN-050 暴露的"活着但弃权"静默节点：老代码对
+`unknown proposer (validator set not synchronized)` 只打一条 INFO 就 defer 重试，
+运维无法分辨"等验证人集的短暂挂起"与"本节点已慢性停止投票"。
+
+- **`PendingBlocksManager`** 新增按高度累计的 `unknownProposerDeferCount`：
+  同一高度每次 defer 累加（不同高度独立计数）；达到
+  `ABSTAIN_DEFER_THRESHOLD=5` 后日志升级为 **ERROR 并带 `abstain-risk`
+  标记**（提示查 `/consensus/finality` 的 `latestVotedEpoch` 与
+  `/consensus/catch-up` 的 `validators`）；**defer 语义不变**（仍返回 false
+  等验证人集同步，只是可观测）；
+- **测试**：`PendingBlocksManagerAbstainObservabilityTest` 3 例（按高度累计 /
+  跨阈值继续累计且不抛异常 / 不同高度独立计数）；
+  `PendingBlocksManagerStorageRetryTest` 6 例、`*PendingBlocksManagerOutboxRestoreCapTest`
+  不回归；模块全量回归 BUILD SUCCESSFUL；
+- **这不修根因**：PLAN-050 定位到的"注册表有该验证人、round-robin 选得出、
+  `isProposerKnown` 认不出"（pubKeyHash 匹配口径或装入时序）需观测数据
+  进场后复现再修——纪律是"先看清再动手"（PLAN-047/050 两次教训）；
+- **下一步（PLAN-051 第二步）**：测试床复现时按新 ERROR 行判断疑点
+  （注册表无地址 ⇒ 视图/时序；有地址但 hash 不匹配 ⇒ 匹配口径）。
+
 ### `FinalityStalled` 告警演练：暴露"活着但不再投票"的弃权节点（PLAN-050）
 
 演练预登记两条判据；结果一比一平、一胜一负，且输的那条转为**真阳性**：
