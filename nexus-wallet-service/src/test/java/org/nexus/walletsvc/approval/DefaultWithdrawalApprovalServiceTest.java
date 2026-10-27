@@ -416,7 +416,12 @@ class DefaultWithdrawalApprovalServiceTest {
 
         assertEquals(WithdrawalRequest.WithdrawalStatus.FAILED, executed.getStatus());
         assertNotNull(executed.getRejectionReason());
-        assertTrue(executed.getRejectionReason().contains("empty result"));
+        // (c)-lite（2026-10-27）：执行腿改走 SigningResponses.classify 三态分类器后，
+        // 诊断文案由"empty result"变为分类器文案（null 响应 = "signing service unavailable"）。
+        // 语义契约不变：Feign 降级/空响应仍判 FAILED（确定未动账）。
+        assertTrue(executed.getRejectionReason().contains("signing service unavailable")
+                        || executed.getRejectionReason().contains("empty result"),
+                "失败原因须可辨（分类器文案或旧文案），实得：" + executed.getRejectionReason());
         assertNull(executed.getChainTxHash());
     }
 

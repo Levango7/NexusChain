@@ -66,7 +66,18 @@ public class WithdrawalRequest {
      * <p>持久化为字符串（{@code @Enumerated(STRING)}），故插入枚举值不需要数据库迁移。</p>
      */
     public enum WithdrawalStatus {
-        PENDING, APPROVED, EXECUTING, REJECTED, EXECUTED, FAILED
+        PENDING, APPROVED, EXECUTING, REJECTED, EXECUTED, FAILED,
+        /**
+         * 大额签名待人工审批（(c)-lite，2026-10-27）：signing 侧返回 2001，**链上未动账**。
+         * 执行腿须持久化 signing approvalId，重试时**复用**该审批（查询状态；通过后走
+         * sign-approved），不得新建审批单（悬空审批随重试线性增长是本状态要消灭的缺陷）。
+         */
+        AWAITING_APPROVAL,
+        /**
+         * 结果不可核对（(c)-lite，2026-10-27）：signing 报已执行但本地未记录到哈希等场景——
+         * **可能已动账**，必须保持此态留痕并转人工核对，**不得**回滚或置 FAILED。
+         */
+        UNVERIFIED
     }
 
     // --- Getters and Setters ---

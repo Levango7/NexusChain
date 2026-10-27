@@ -178,6 +178,36 @@ public final class SigningResponses {
         return approvalId.isBlank() ? null : approvalId;
     }
 
+    /**
+     * 从审批状态查询响应（{@code GET /signing/approvals/{id}}）中提取审批状态字符串。
+     *
+     * <p>返回信封形状 {@code {statusCode:2000, data:{requestId, status, expired, ...}}}；
+     * 审批已不存在时 HTTP 404（Feign 降级返回 null）。</p>
+     *
+     * @param response 审批状态查询响应 Map（可能为 null——404/降级）
+     * @return 状态字符串（{@code PENDING/APPROVED/REJECTED/EXPIRED/EXECUTING/EXECUTED}）；
+     *         响应为 null、信封非法或 {@code data.status} 缺失时返回 {@code null}
+     */
+    public static String approvalStatus(Map<String, Object> response) {
+        if (response == null) {
+            return null;
+        }
+        Integer code = statusCode(response);
+        if (code == null || code != STATUS_OK) {
+            return null;
+        }
+        Object data = response.get(KEY_DATA);
+        if (!(data instanceof Map<?, ?> dataMap)) {
+            return null;
+        }
+        Object status = dataMap.get("status");
+        if (status == null) {
+            return null;
+        }
+        String value = status.toString().trim();
+        return value.isEmpty() ? null : value;
+    }
+
     private static Integer statusCode(Map<String, Object> response) {
         if (response == null) {
             return null;
