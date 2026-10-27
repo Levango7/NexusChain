@@ -104,6 +104,25 @@ public class PendingBlocksManager {
     private static final int ABSTAIN_DEFER_THRESHOLD = 5;
 
     /**
+     * unknown-proposer defer 计数的只读快照（PLAN-052 指标化数据源）。
+     *
+     * <p>返回**副本**（调用方遍历不影响内部）；未装配/无 defer 时返回空表。
+     * 语义与 {@link #unknownProposerDeferCount} 一致：按高度独立累计、
+     * 只增不减（进程生命周期）。</p>
+     *
+     * @return 高度 → defer 次数 的不可变副本
+     */
+    public java.util.Map<Long, Integer> unknownProposerDeferSnapshot() {
+        return java.util.Collections.unmodifiableMap(
+                new java.util.LinkedHashMap<>(unknownProposerDeferCount));
+    }
+
+    /** defer 计数的升级阈值（与告警/指标同源，避免两处魔数漂移）。 */
+    public static int abstainDeferThreshold() {
+        return ABSTAIN_DEFER_THRESHOLD;
+    }
+
+    /**
      * 单次从持久化 outbox 捞取的最大行数。
      *
      * <p>{@code loadPending} 是 {@code LIMIT} 无分页，所以"捞完"必须由

@@ -241,6 +241,34 @@
   （`FinalityGadget` 的指纹失效会重算总权重）；**3 验证人掉 1 个时进度会停在
   67% 而 finalized 仍可为 true（2/3 达门限）——percent 与 finalized 都要看**
 
+## 区块采纳弃权风险告警（PLAN-052 · 2026-10-27）
+
+`BlockAdoptionAbstainRisk`（warning · component=blockchain-core）——**原因维度**
+信号，与上面两条最终性告警（结果维度）互补：本告警在**第一次
+unknown-proposer defer 达到阈值（5 次/同一高度）** 时就亮，而结果维度要等
+15 分钟窗口。
+
+- **触发**：`nexus_finality_abstain_risk == 1` 持续 5m
+- **含义**：某高度的区块因"validator set not synchronized"被 defer 5 次以上——
+  本节点可能已停止投票（采纳卡住 ⇒ `NewBlockEvent` 不再触发 ⇒ 不产票），
+  而链高照涨、服务照旧（PLAN-050 实测的"活着但弃权"形态）
+- **排查**：
+  ```bash
+  curl -s http://<core-pod>:19585/consensus/block-outbox        # outbox 积压
+  kubectl -n nexus logs <core-pod> | grep abstain-risk           # deferCount + 高度
+  curl -s http://<core-pod>:19585/consensus/catch-up             # validators 摘要
+  curl -s http://<core-pod>:19585/consensus/validator-set        # 回放地址对账
+  ```
+- **处置**：与 `/consensus/validator-set` 对账找出多余/僵死验证人（换钥重启
+  会留下**新旧两个地址**）；本节点投票是否真停看 `/consensus/finality` 的
+  `latestVotedEpoch` 是否还在动
+- **注意（口径，勿误报也勿漏报）**：计数**按高度独立累计、只增不减**
+  ⇒ `abstain_risk=1` 表示"**本进程启动以来见过**弃权风险"，**不代表当前正在
+  发生**——历史 defer 过的高度会一直亮；判定"当前"请以 `latestVotedEpoch`
+  是否推进 + 日志中 `abstain-risk` 行的时间戳为准
+- **与 FinalityStalled 的分工**：本条=单节点、原因、最早；FinalityStalled=
+  全网、结果、最重。两者同时亮 ⇒ 单节点弃权已拖垮全网门限
+
 ## 后续升级路径（gRPC 错误率）
 
 当前**不告警**：gRPC 错误率——需 nexus-signing-service 暴露客户端 metrics
