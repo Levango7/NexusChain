@@ -207,13 +207,18 @@ class WalletDtoTest {
         // 2026-10-12：6 个（原 5 个）—— 新增 EXECUTING 是**有意**的契约变更：
         // 执行方在签名/广播前用条件 UPDATE 抢占该状态，使并发/重复 execute 只有一个能通过
         // （修「同一笔提现被广播两次」）。本用例是契约门禁：改枚举必须同步改此处 + CHANGELOG。
-        assertEquals(6, statuses.length);
+        // 2026-10-27（(c)-lite，板 20261027-1543）：8 个（原 6 个）——
+        // AWAITING_APPROVAL（signing 2001 待审批，未动账）+ EXECUTED_UNVERIFIED（signing 已执行
+        // 但本地无哈希，可能已动账）。命名与 gateway 侧 WalletTransactionResult.Status 对齐。
+        assertEquals(8, statuses.length);
         assertEquals(WithdrawalRequest.WithdrawalStatus.PENDING, WithdrawalRequest.WithdrawalStatus.valueOf("PENDING"));
         assertEquals(WithdrawalRequest.WithdrawalStatus.APPROVED, WithdrawalRequest.WithdrawalStatus.valueOf("APPROVED"));
         assertEquals(WithdrawalRequest.WithdrawalStatus.EXECUTING, WithdrawalRequest.WithdrawalStatus.valueOf("EXECUTING"));
         assertEquals(WithdrawalRequest.WithdrawalStatus.REJECTED, WithdrawalRequest.WithdrawalStatus.valueOf("REJECTED"));
         assertEquals(WithdrawalRequest.WithdrawalStatus.EXECUTED, WithdrawalRequest.WithdrawalStatus.valueOf("EXECUTED"));
         assertEquals(WithdrawalRequest.WithdrawalStatus.FAILED, WithdrawalRequest.WithdrawalStatus.valueOf("FAILED"));
+        assertEquals(WithdrawalRequest.WithdrawalStatus.AWAITING_APPROVAL, WithdrawalRequest.WithdrawalStatus.valueOf("AWAITING_APPROVAL"));
+        assertEquals(WithdrawalRequest.WithdrawalStatus.EXECUTED_UNVERIFIED, WithdrawalRequest.WithdrawalStatus.valueOf("EXECUTED_UNVERIFIED"));
     }
 
     @Test

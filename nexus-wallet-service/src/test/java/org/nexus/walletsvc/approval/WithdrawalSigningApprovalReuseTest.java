@@ -45,7 +45,7 @@ import static org.mockito.Mockito.when;
  *   <li>重试（实体已带 signingApprovalId）⇒ **绝不再次调用 signTransfer**（不新建审批单），
  *       只查询既有审批状态并按状态分派；</li>
  *   <li>APPROVED ⇒ 走 sign-approved 执行；REJECTED/EXPIRED/不存在 ⇒ FAILED 且原因可辨；</li>
- *   <li>signing 已 EXECUTED 而本地无哈希 ⇒ UNVERIFIED（可能已动账，不得 FAILED）。</li>
+ *   <li>signing 已 EXECUTED 而本地无哈希 ⇒ EXECUTED_UNVERIFIED（可能已动账，不得 FAILED）。</li>
  * </ol>
  */
 @ExtendWith(MockitoExtension.class)
@@ -248,7 +248,7 @@ class WithdrawalSigningApprovalReuseTest {
     }
 
     @Test
-    @DisplayName("重试（signing 已 EXECUTED 但本地无哈希）：UNVERIFIED，绝不判 FAILED")
+    @DisplayName("重试（signing 已 EXECUTED 但本地无哈希）：EXECUTED_UNVERIFIED，绝不判 FAILED")
     void retry_signingAlreadyExecuted_marksUnverified() {
         WithdrawalRequestEntity e = seed("AWAITING_APPROVAL", SIGNING_APPROVAL_ID);
         when(signingServiceClient.getApprovalStatus(SIGNING_APPROVAL_ID))
@@ -256,7 +256,7 @@ class WithdrawalSigningApprovalReuseTest {
 
         service.executeApprovedWithdrawal(REQ_ID);
 
-        assertEquals(WithdrawalRequest.WithdrawalStatus.UNVERIFIED, e.getStatus(),
+        assertEquals(WithdrawalRequest.WithdrawalStatus.EXECUTED_UNVERIFIED, e.getStatus(),
                 "signing 已执行 = 可能已动账：不得判 FAILED、不得自动重放，须人工核对");
         verify(signingServiceClient, never()).signTransfer(anyString(), anyString(), any());
         verify(signingServiceClient, never()).executeApproved(anyString());

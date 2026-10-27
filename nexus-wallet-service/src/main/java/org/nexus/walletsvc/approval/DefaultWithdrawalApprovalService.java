@@ -348,7 +348,7 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
                 req -> entity,
                 // 阶段2：链上签名广播（事务外）——(c)-lite 四态 + signing 审批复用
                 e -> executeOnChain(e),
-                // 阶段3：按结果落 EXECUTED / AWAITING_APPROVAL / UNVERIFIED / FAILED
+                // 阶段3：按结果落 EXECUTED / AWAITING_APPROVAL / EXECUTED_UNVERIFIED / FAILED
                 (e, onChainResult) -> {
                     applyExecutionOutcome(e, onChainResult, approvalId);
                     withdrawalRequestRepository.save(e);
@@ -401,7 +401,7 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
      * 故重试不再产生悬空审批单。</p>
      *
      * @param e 提现实体（可能已带 signingApprovalId）
-     * @return 四态结果：SUCCESS / AWAITING_APPROVAL / UNVERIFIED / FAILED
+     * @return 四态结果：SUCCESS / AWAITING_APPROVAL / EXECUTED_UNVERIFIED / FAILED
      */
     private OnChainResult executeOnChain(WithdrawalRequestEntity e) {
         // 2026-10-27（板 20261027-0306 §五 独立缺陷）：平台地址未配置 ⇒ fail-closed 拒绝。
@@ -446,7 +446,7 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
      * <ul>
      *   <li>{@code PENDING/EXECUTING} → 保持 AWAITING_APPROVAL（**不新建审批单**）</li>
      *   <li>{@code APPROVED} → 调 sign-approved 执行，按响应再分派</li>
-     *   <li>{@code EXECUTED} → UNVERIFIED（signing 已执行但本地无哈希 = 可能已动账，
+     *   <li>{@code EXECUTED} → EXECUTED_UNVERIFIED（signing 已执行但本地无哈希 = 可能已动账，
      *       不得判 FAILED / 不得自动重放）</li>
      *   <li>{@code REJECTED/EXPIRED} 或审批已不存在（404/降级）→ FAILED（链上确认未动账，
      *       可安全判失败；理由是"审批不存在"而非"签名失败"）</li>
@@ -476,7 +476,7 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
                         outcome.message() != null ? outcome.message() : "approved signing failed", false);
             }
             case "EXECUTED":
-                return OnChainResult.unverified(
+                return OnChainResult.executedUnverified(
                         "signing approval already EXECUTED but no local txHash: " + signingApprovalId, false);
             default:
                 return OnChainResult.failure(
@@ -488,7 +488,7 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
     /**
      * 阶段3：按四态结果落库 + 审计。
      *
-     * <p>不变式：AWAITING_APPROVAL 与 UNVERIFIED 都是**非终态语义**（前者未动账、后者可能已动账），
+     * <p>不变式：AWAITING_APPROVAL 与 EXECUTED_UNVERIFIED 都是**非终态语义**（前者未动账、后者可能已动账），
      * 必须留痕并保持可重入/可核对，不得被压成 FAILED。</p>
      */
     private void applyExecutionOutcome(WithdrawalRequestEntity e, OnChainResult result, String requestId) {
@@ -511,8 +511,8 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
                     "signingApprovalId=" + result.getApprovalId());
             return;
         }
-        if (result.isUnverified()) {
-            e.setStatus(WithdrawalRequest.WithdrawalStatus.UNVERIFIED);
+        if (result.isExecutedUnverified()) {
+            e.setStatus(WithdrawalRequest.WithdrawalStatus.EXECUTED_UNVERIFIED);
             e.setRejectionReason(result.getError());
             log.error("Withdrawal UNVERIFIED (possible on-chain effect, manual check required): requestId={}, reason={}",
                     requestId, result.getError());

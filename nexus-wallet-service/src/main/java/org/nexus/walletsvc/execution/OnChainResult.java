@@ -15,8 +15,8 @@ public final class OnChainResult {
         PENDING_CONFIRMATION,
         /** 大额签名转人工审批（signing 返回 2001）：**钱未动**，等待审批通过后可重入执行。 */
         AWAITING_APPROVAL,
-        /** 已提交但结果不可核对（如 sign-approved 报 EXECUTED 而本地无哈希）：**可能已动账**，不得回滚、需人工核对。 */
-        UNVERIFIED,
+        /** 已执行但结果不可核对（如 sign-approved 报 EXECUTED 而本地无哈希）：**可能已动账**，不得回滚、需人工核对。 */
+        EXECUTED_UNVERIFIED,
         FAILED
     }
 
@@ -56,10 +56,11 @@ public final class OnChainResult {
     }
 
     /**
-     * 结果不可核对（可能已动账）：必须保持非终态留痕并转人工，**不得**回滚或置 FAILED。
+     * 已执行但结果不可核对（可能已动账）：必须保持非终态留痕并转人工，**不得**回滚或置 FAILED。
+     * 命名与 SDK/gateway 的 {@code EXECUTED_UNVERIFIED} 口径对齐（板 20261027-1543 §四）。
      */
-    public static OnChainResult unverified(String error, boolean simulated) {
-        return new OnChainResult(null, Status.UNVERIFIED, error, simulated);
+    public static OnChainResult executedUnverified(String error, boolean simulated) {
+        return new OnChainResult(null, Status.EXECUTED_UNVERIFIED, error, simulated);
     }
 
     public static OnChainResult failure(String error, boolean simulated) {
@@ -70,7 +71,7 @@ public final class OnChainResult {
     public boolean isFailed() { return status == Status.FAILED; }
     public boolean isPending() { return status == Status.PENDING_CONFIRMATION; }
     public boolean isAwaitingApproval() { return status == Status.AWAITING_APPROVAL; }
-    public boolean isUnverified() { return status == Status.UNVERIFIED; }
+    public boolean isExecutedUnverified() { return status == Status.EXECUTED_UNVERIFIED; }
 
     public String getTxHash() { return txHash; }
     public Status getStatus() { return status; }

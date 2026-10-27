@@ -74,10 +74,12 @@ public class WithdrawalRequest {
          */
         AWAITING_APPROVAL,
         /**
-         * 结果不可核对（(c)-lite，2026-10-27）：signing 报已执行但本地未记录到哈希等场景——
+         * 已执行但结果不可核对（(c)-lite，2026-10-27）：signing 报已执行但本地未记录到哈希等场景——
          * **可能已动账**，必须保持此态留痕并转人工核对，**不得**回滚或置 FAILED。
+         * 命名与 gateway 侧 `WalletTransactionResult.Status.EXECUTED_UNVERIFIED` 对齐（板
+         * 20261027-1543 §四：SDK 枚举沿用仓库既有口径）。
          */
-        UNVERIFIED
+        EXECUTED_UNVERIFIED
     }
 
     // --- Getters and Setters ---
