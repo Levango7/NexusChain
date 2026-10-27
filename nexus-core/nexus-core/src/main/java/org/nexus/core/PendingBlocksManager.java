@@ -84,6 +84,26 @@ public class PendingBlocksManager {
     private volatile boolean outboxRestored = false;
 
     /**
+     * unknown-proposer 挂起的连续观测（PLAN-051）：同一区块高度被
+     * "validator set not synchronized" 拒绝的次数。
+     *
+     * <p><b>为什么需要</b>：PLAN-050 测试床实证——一个节点可以因单条
+     * unknown-proposer 块采纳不了 ⇒ `NewBlockEvent` 不再触发 ⇒ **投票永久
+     * 停止**，而它的链高照涨、照旧服务补票、无 ERROR/WARN——"活着但弃权"
+     * 的静默节点。旧代码只用 {@code logger.info} 记一次，运维无法从日志
+     * 分辨"等验证人集的短暂挂起"与"已慢性弃权"。</p>
+     *
+     * <p>达到 {@link #ABSTAIN_DEFER_THRESHOLD} 次即由 {@link #processChain}
+     * 升级为 ERROR 并打 {@code abstain-risk} 标记（与
+     * {@code /consensus/finality} 的 {@code FinalityStalled} 告警互相印证）。</p>
+     */
+    private final java.util.concurrent.ConcurrentHashMap<Long, Integer> unknownProposerDeferCount =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** 连续 unknown-proposer 挂起升级为 ERROR 的阈值（同一高度）。 */
+    private static final int ABSTAIN_DEFER_THRESHOLD = 5;
+
+    /**
      * 单次从持久化 outbox 捞取的最大行数。
      *
      * <p>{@code loadPending} 是 {@code LIMIT} 无分页，所以"捞完"必须由
@@ -150,8 +170,18 @@ public class PendingBlocksManager {
                 }
                 if (res.getMessage() != null
                         && res.getMessage().startsWith("unknown proposer")) {
-                    logger.info("PendingBlocks: {}; block will be retried after validator-set sync (height={})",
-                            res.getMessage(), b.nHeight);
+                    // PLAN-051：unknown-proposer 挂起的连续计数与升级（观测，不改 defer 语义）
+                    int deferCount = unknownProposerDeferCount.merge(b.nHeight, 1, Integer::sum);
+                    if (deferCount >= ABSTAIN_DEFER_THRESHOLD) {
+                        logger.error("PendingBlocks: {}; DEFERRED {} times at height={} "
+                                        + "(abstain-risk: this node may have stopped voting — "
+                                        + "check /consensus/finality latestVotedEpoch and "
+                                        + "/consensus/catch-up validators)",
+                                res.getMessage(), deferCount, b.nHeight);
+                    } else {
+                        logger.info("PendingBlocks: {}; block will be retried after validator-set sync (height={}, deferCount={})",
+                                res.getMessage(), b.nHeight, deferCount);
+                    }
                     return false;
                 }
                 logger.error("validate the block fail error = " + res.getMessage());
