@@ -79,7 +79,19 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
     private static final Logger log = LoggerFactory.getLogger(DefaultWithdrawalApprovalService.class);
 
     /** 平台热钱包地址默认值 */
-    private static final String DEFAULT_PLATFORM_WALLET_ADDRESS = "PLATFORM_HOT_WALLET";
+    /**
+     * 平台热钱包地址的**占位符字面量**（2026-10-27 语义修正）。
+     *
+     * <p>原实现把它当"未配置时的回退默认值"——真实部署（helm/compose 均不注入
+     * {@code NEX_WALLET_PLATFORM_ADDRESS}）因此会把该字面量当作平台地址发给 signing，
+     * 提现必然以不可辨认的原因失败（与 #269 "cold-sweep" 同型）。
+     * 现语义：**它只是"看起来像地址但实际不是"的标记值**——</p>
+     * <ul>
+     *   <li>未配置（空）⇒ 执行前 fail-closed 拒绝（{@link #executeOnChain}）；</li>
+     *   <li>显式配成该字面量 ⇒ 放行但打 WARN（部署方可能照抄了示例）。</li>
+     * </ul>
+     */
+    private static final String PLACEHOLDER_PLATFORM_WALLET_ADDRESS = "PLATFORM_HOT_WALLET";
 
     private final ApprovalPolicy approvalPolicy;
     private final SigningServiceFeignClient signingServiceClient;
@@ -109,7 +121,8 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
      *
      * @param approvalPolicy              审批策略（白名单校验 + 所需审批人数）
      * @param signingServiceClient        signing-service Feign 客户端（可为 null，fallback SIMULATED txHash）
-     * @param platformWalletAddress       平台热钱包地址（@Value 注入，空则回退默认值）
+     * @param platformWalletAddress       平台热钱包地址（@Value 注入；**空 = 未配置**，
+     *                                    执行前 fail-closed 拒绝，不再回退占位符字面量）
      * @param withdrawalRequestRepository 提现请求持久化 Repository
      * @param withdrawalApproverRepository 提现审批人持久化 Repository
      * @param threePhaseTemplate          三阶段执行模板（P2-F3）
@@ -117,14 +130,15 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
     @Autowired
     public DefaultWithdrawalApprovalService(ApprovalPolicy approvalPolicy,
                                              SigningServiceFeignClient signingServiceClient,
-                                             @Value("${nexus.wallet.platform-address:PLATFORM_HOT_WALLET}") String platformWalletAddress,
+                                             @Value("${nexus.wallet.platform-address:}") String platformWalletAddress,
                                              WithdrawalRequestRepository withdrawalRequestRepository,
                                              WithdrawalApproverRepository withdrawalApproverRepository,
                                              ThreePhaseExecutionTemplate threePhaseTemplate) {
         this.approvalPolicy = approvalPolicy;
         this.signingServiceClient = signingServiceClient;
-        this.platformWalletAddress = (platformWalletAddress == null || platformWalletAddress.isEmpty())
-                ? DEFAULT_PLATFORM_WALLET_ADDRESS : platformWalletAddress;
+        // 2026-10-27：不再回退占位符字面量——空保持为空，执行前 fail-closed 拒绝
+        //（占位符当默认值会让真实部署把假地址发给 signing，失败原因不可辨认）。
+        this.platformWalletAddress = platformWalletAddress == null ? "" : platformWalletAddress.trim();
         this.withdrawalRequestRepository = withdrawalRequestRepository;
         this.withdrawalApproverRepository = withdrawalApproverRepository;
         this.threePhaseTemplate = threePhaseTemplate;
@@ -390,6 +404,19 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
      * @return 四态结果：SUCCESS / AWAITING_APPROVAL / UNVERIFIED / FAILED
      */
     private OnChainResult executeOnChain(WithdrawalRequestEntity e) {
+        // 2026-10-27（板 20261027-0306 §五 独立缺陷）：平台地址未配置 ⇒ fail-closed 拒绝。
+        // 原实现回退占位符字面量并把假地址发给 signing，失败原因不可辨认（与 #269 同型）。
+        if (platformWalletAddress == null || platformWalletAddress.isBlank()) {
+            return OnChainResult.failure(
+                    "platform wallet address not configured "
+                            + "(nexus.wallet.platform-address / NEX_WALLET_PLATFORM_ADDRESS): "
+                            + "withdrawal aborted (fail-closed)", false);
+        }
+        if (PLACEHOLDER_PLATFORM_WALLET_ADDRESS.equals(platformWalletAddress)) {
+            log.warn("platform wallet address equals the placeholder literal '{}' — it is NOT a real "
+                            + "address; set NEX_WALLET_PLATFORM_ADDRESS for this deployment",
+                    PLACEHOLDER_PLATFORM_WALLET_ADDRESS);
+        }
         if (signingServiceClient == null) {
             return OnChainResult.failure(
                     "signing service client not configured; withdrawal aborted (fail-closed)", false);

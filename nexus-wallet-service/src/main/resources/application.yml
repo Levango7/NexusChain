@@ -126,8 +126,11 @@ spring:
 # === 钱包管理配置 ===
 nexus:
   wallet:
-    # 平台热钱包地址（提现发起方），生产环境通过 Nacos / 环境变量下发
-    platform-address: ${NEX_WALLET_PLATFORM_ADDRESS:PLATFORM_HOT_WALLET}
+    # 平台热钱包地址（提现发起方），生产环境通过 Nacos / 环境变量下发。
+    # 2026-10-27（板 20261027-0306 §五）：默认值由占位符字面量改为**空**——原默认会让
+    # 未配置的部署把 "PLATFORM_HOT_WALLET" 假地址发给 signing（提现必然失败、原因不可辨认）。
+    # 现语义：未配置 ⇒ 提现执行 fail-closed 拒绝（原因明写 not configured）。
+    platform-address: ${NEX_WALLET_PLATFORM_ADDRESS:}
     # 地址白名单首次提币延迟（小时）
     whitelist:
       first-withdrawal-delay-hours: ${NEX_WALLET_WHITELIST_DELAY_HOURS:24}

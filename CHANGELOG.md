@@ -87,6 +87,19 @@ PLAN-047 三验证人实测暴露 PLAN-045 两个缺陷：① 健康 3 验证人
 - **未做**：僵死验证人回收（本切片只让它可被发现，治理另立）；测试床复测
   `changes(...)==0` 不误报（下一条 3 验证人实验顺带复核）。
 
+### wallet 平台地址占位符 fail-closed（2026-10-27）
+
+- **缺陷**（板 `20261027-0306` §五 独立发现，与 #269 "cold-sweep" 同型）：
+  `nexus.wallet.platform-address` 默认值是占位符字面量 `"PLATFORM_HOT_WALLET"`，
+  且 helm/compose **均不注入** `NEX_WALLET_PLATFORM_ADDRESS` ⇒ 真实部署必然把假地址
+  发给 signing，提现失败且原因不可辨认。
+- **修复**：配置默认值改**空**；`DefaultWithdrawalApprovalService` 不再回退占位符——
+  未配置 ⇒ 执行前 fail-closed 拒绝（原因明写 `not configured`）；显式配成占位符 ⇒ 放行但 WARN。
+- **测试**：`execute_emptyPlatformWallet_usesDefault` 语义反转为
+  `execute_unsetPlatformWallet_failsClosed`（钉 fail-closed + `never().signTransfer`）；
+  Spring 测试上下文（`application-test.yml`）显式配置测试专用地址
+  （模拟"已正确配置的部署"）。wallet 全量 **231 例 / 0 失败**。
+
 ### 提现执行腿 (c)-lite：signing 审批持久化与复用（2026-10-27）
 
 - **背景与裁决**：#261 的 (b2)（按转出地址豁免 signing 大额审批）前提被 P0 复核推翻——平台热钱包
