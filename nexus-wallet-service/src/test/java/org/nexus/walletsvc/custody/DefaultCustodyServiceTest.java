@@ -31,6 +31,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -415,6 +416,51 @@ class DefaultCustodyServiceTest {
         assertThrows(IllegalStateException.class,
                 () -> svc.withdrawFromCold(COLD_ADDR, new BigDecimal("300"), approvalId));
         assertEquals(PendingStatus.APPROVAL_OPEN, savedPending().getStatus());
+    }
+
+    // ==================== withdrawFromCold：审批闸返回值校验（打捞自 #280） ====================
+
+    @Test
+    void withdrawFromCold_approvalNotExecuted_throwsAndBalancesUntouched() {
+        // 提现单只是转人工审批（钱没出），冷→热划转绝不能继续，否则账实不符
+        String approvalId = "WD-gate-awaiting-1";
+        WithdrawalRequest notExecuted = new WithdrawalRequest();
+        notExecuted.setRequestId(approvalId);
+        notExecuted.setStatus(WithdrawalRequest.WithdrawalStatus.AWAITING_APPROVAL);
+        when(approvalService.executeApprovedWithdrawal(approvalId)).thenReturn(notExecuted);
+        DefaultCustodyService svc = serviceReturning(new WalletTransactionResult(
+                "0xREALTX", WalletTransactionResult.Status.SUCCESS, 0, "ok", false));
+        svc.seedBalances(BigDecimal.ZERO, new BigDecimal("9000"));
+        clearInvocations(custodyBalanceRepository);
+
+        IllegalStateException ex = assertThrows(IllegalStateException.class,
+                () -> svc.withdrawFromCold(COLD_ADDR, new BigDecimal("300"), approvalId));
+        assertTrue(ex.getMessage().contains("cold withdrawal not executed"),
+                "异常原因必须写明提现未执行，便于运维定位");
+        // 冷库余额原封不动（事务回滚语义由调用方 @Transactional 保证；此处断言未发生任何划转）
+        assertEquals(0, new BigDecimal("9000").compareTo(svc.getColdBalance()));
+        assertEquals(0, BigDecimal.ZERO.compareTo(svc.getHotBalance()));
+        verify(custodyBalanceRepository, never()).save(any(CustodyBalanceEntity.class));
+    }
+
+    @Test
+    void withdrawFromCold_approvalExecutedUnverified_throwsPossiblyBroadcast() {
+        // 审批闸返回 EXECUTED_UNVERIFIED（钱可能已出）：余额同样不能划走，
+        // 且异常信息必须提示「可能已广播」交人工核对
+        String approvalId = "WD-gate-unverified-1";
+        WithdrawalRequest possiblyBroadcast = new WithdrawalRequest();
+        possiblyBroadcast.setRequestId(approvalId);
+        possiblyBroadcast.setStatus(WithdrawalRequest.WithdrawalStatus.EXECUTED_UNVERIFIED);
+        when(approvalService.executeApprovedWithdrawal(approvalId)).thenReturn(possiblyBroadcast);
+        DefaultCustodyService svc = serviceReturning(new WalletTransactionResult(
+                "0xREALTX", WalletTransactionResult.Status.SUCCESS, 0, "ok", false));
+        svc.seedBalances(BigDecimal.ZERO, new BigDecimal("9000"));
+
+        IllegalStateException ex = assertThrows(IllegalStateException.class,
+                () -> svc.withdrawFromCold(COLD_ADDR, new BigDecimal("300"), approvalId));
+        assertTrue(ex.getMessage().contains("POSSIBLY ALREADY BROADCAST"),
+                "钱可能已出时异常必须显式提示人工对账");
+        assertEquals(0, new BigDecimal("9000").compareTo(svc.getColdBalance()));
     }
 
     // ==================== withdrawFromCold ====================

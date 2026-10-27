@@ -216,7 +216,12 @@ const WithdrawalApprovalsPage: React.FC = () => {
         return "success";
       case "APPROVED":
       case "EXECUTING":
+      case "AWAITING_APPROVAL":
+        // 大额签名转人工审批（signing 2001）——非终态，黄色提示等待。
         return "warning";
+      case "EXECUTED_UNVERIFIED":
+        // 签名已执行但哈希缺失，钱可能已出——最危险态，红色且措辞需人工核对。
+        return "danger";
       case "FAILED":
       case "REJECTED":
         return "danger";

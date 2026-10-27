@@ -27,9 +27,10 @@ const WALLET_JWT_STORAGE_KEY = "nexus.wallet.jwt";
 /** 默认 wallet-service 地址（与 docker-compose / 本地开发约定一致）。 */
 export const DEFAULT_WALLET_BASE = "http://localhost:8083";
 
-/** 提现状态（与 SDK `WithdrawalRequest.WithdrawalStatus` 的 6 个值一致）。 */
+/** 提现状态（与 SDK `WithdrawalRequest.WithdrawalStatus` 的 8 个值一致，2026-10-27 (c)-lite）。 */
 export type WithdrawalStatus =
-  "PENDING" | "APPROVED" | "REJECTED" | "EXECUTING" | "EXECUTED" | "FAILED";
+  "PENDING" | "APPROVED" | "REJECTED" | "EXECUTING" | "EXECUTED"
+  | "AWAITING_APPROVAL" | "EXECUTED_UNVERIFIED" | "FAILED";
 
 /** 提现请求 DTO（对齐 `org.nexus.sdk.wallet.WithdrawalRequest`）。 */
 export interface WithdrawalRequestDto {
