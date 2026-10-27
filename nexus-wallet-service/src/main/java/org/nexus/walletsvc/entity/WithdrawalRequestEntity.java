@@ -74,6 +74,16 @@ public class WithdrawalRequestEntity {
     @Column(name = "chain_tx_hash", length = 128)
     private String chainTxHash;
 
+    /**
+     * signing 侧审批请求 ID（(c)-lite，2026-10-27，可空）。
+     *
+     * <p>大额签名触发 signing 人工审批（响应 2001）时持久化；执行腿重试时**复用**本 ID
+     * 查询审批状态（不再新建审批单），消灭"每次重试多一条悬空审批"的缺陷。
+     * 与 {@code status=AWAITING_APPROVAL} 配套（见 V6 迁移）。</p>
+     */
+    @Column(name = "signing_approval_id", length = 64)
+    private String signingApprovalId;
+
     /** 拒绝原因（REJECTED / FAILED 时填充），可空。 */
     @Column(name = "rejection_reason", length = 256)
     private String rejectionReason;
@@ -139,6 +149,9 @@ public class WithdrawalRequestEntity {
 
     public String getChainTxHash() { return chainTxHash; }
     public void setChainTxHash(String chainTxHash) { this.chainTxHash = chainTxHash; }
+
+    public String getSigningApprovalId() { return signingApprovalId; }
+    public void setSigningApprovalId(String signingApprovalId) { this.signingApprovalId = signingApprovalId; }
 
     public String getRejectionReason() { return rejectionReason; }
     public void setRejectionReason(String rejectionReason) { this.rejectionReason = rejectionReason; }

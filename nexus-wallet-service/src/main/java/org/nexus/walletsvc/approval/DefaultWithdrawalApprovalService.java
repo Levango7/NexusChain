@@ -287,6 +287,15 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
                 WithdrawalRequest.WithdrawalStatus.APPROVED,
                 WithdrawalRequest.WithdrawalStatus.EXECUTING);
         if (claimed != 1) {
+            // (c)-lite（2026-10-27）：允许从 AWAITING_APPROVAL 重入——复用既有 signing 审批
+            // （阶段2 走查询/executeApproved，不再新建审批单）。悬空审批随重试线性增长
+            // 正是本改造要消灭的缺陷（板 20261025-0415 §五 / 20261027-0306）。
+            claimed = withdrawalRequestRepository.compareAndSetStatus(
+                    approvalId,
+                    WithdrawalRequest.WithdrawalStatus.AWAITING_APPROVAL,
+                    WithdrawalRequest.WithdrawalStatus.EXECUTING);
+        }
+        if (claimed != 1) {
             WithdrawalRequest.WithdrawalStatus current = withdrawalRequestRepository
                     .findByRequestId(approvalId)
                     .map(WithdrawalRequestEntity::getStatus)
@@ -323,40 +332,11 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
                 executionRequest,
                 // 阶段1：落库 PENDING（保持 APPROVED 状态，记录执行意图）
                 req -> entity,
-                // 阶段2：链上签名广播（事务外）
-                e -> {
-                    if (signingServiceClient == null) {
-                        return OnChainResult.failure(
-                                "signing service client not configured; withdrawal aborted (fail-closed)",
-                                false);
-                    }
-                    // 契约修正（2026-09-10）：Feign 返回签名服务响应 Map，经
-                    // SigningResponses 提取 txHash（null/非2000/缺 data 均得 null）。
-                    String txHash = SigningResponses.txHash(signingServiceClient.signTransfer(
-                            platformWalletAddress,
-                            e.getToAddress(),
-                            e.getAmount()));
-                    if (txHash == null || txHash.isEmpty()) {
-                        return OnChainResult.failure("signing service returned empty result", false);
-                    }
-                    return OnChainResult.success(txHash, false);
-                },
-                // 阶段3：根据链上结果更新 EXECUTED / FAILED
+                // 阶段2：链上签名广播（事务外）——(c)-lite 四态 + signing 审批复用
+                e -> executeOnChain(e),
+                // 阶段3：按结果落 EXECUTED / AWAITING_APPROVAL / UNVERIFIED / FAILED
                 (e, onChainResult) -> {
-                    if (onChainResult.isSuccess()) {
-                        e.setChainTxHash(onChainResult.getTxHash());
-                        e.setStatus(WithdrawalRequest.WithdrawalStatus.EXECUTED);
-                        e.setExecutedAt(LocalDateTime.now());
-                        log.info("Withdrawal executed via signing-service: requestId={}, txHash={}",
-                                approvalId, onChainResult.getTxHash());
-                        audit("WITHDRAWAL_EXECUTED", e, "txHash=" + onChainResult.getTxHash());
-                    } else {
-                        e.setStatus(WithdrawalRequest.WithdrawalStatus.FAILED);
-                        e.setRejectionReason(onChainResult.getError());
-                        log.error("Withdrawal execution failed: requestId={}, reason={}",
-                                approvalId, onChainResult.getError());
-                        audit("WITHDRAWAL_FAILED", e, "error=" + onChainResult.getError());
-                    }
+                    applyExecutionOutcome(e, onChainResult, approvalId);
                     withdrawalRequestRepository.save(e);
                 });
 
@@ -372,34 +352,17 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
      */
     private WithdrawalRequest executeInline(String approvalId, WithdrawalRequestEntity entity) {
         try {
-            String txHash;
-            if (signingServiceClient != null) {
-                String result = SigningResponses.txHash(signingServiceClient.signTransfer(
-                        platformWalletAddress,
-                        entity.getToAddress(),
-                        entity.getAmount()));
-                if (result == null || result.isEmpty()) {
-                    entity.setStatus(WithdrawalRequest.WithdrawalStatus.FAILED);
-                    entity.setRejectionReason("signing service returned empty result");
-                    withdrawalRequestRepository.save(entity);
-                    log.error("Withdrawal execution failed: requestId={}, signing service returned empty", approvalId);
-                    return WithdrawalRequestMapper.toDto(entity,
-                            withdrawalApproverRepository.findByRequestId(approvalId));
-                }
-                txHash = result;
-                log.info("Withdrawal executed via signing-service: requestId={}, txHash={}",
-                        approvalId, txHash);
-            } else {
-                entity.setStatus(WithdrawalRequest.WithdrawalStatus.FAILED);
-                entity.setRejectionReason("signing service client not configured; withdrawal aborted (fail-closed)");
+            if (signingServiceClient == null) {
+                OnChainResult failClosed = OnChainResult.failure(
+                        "signing service client not configured; withdrawal aborted (fail-closed)", false);
+                applyExecutionOutcome(entity, failClosed, approvalId);
                 withdrawalRequestRepository.save(entity);
                 log.error("Withdrawal aborted (fail-closed): no signing service client, requestId={}", approvalId);
                 return WithdrawalRequestMapper.toDto(entity,
                         withdrawalApproverRepository.findByRequestId(approvalId));
             }
-            entity.setChainTxHash(txHash);
-            entity.setStatus(WithdrawalRequest.WithdrawalStatus.EXECUTED);
-            entity.setExecutedAt(LocalDateTime.now());
+            OnChainResult result = executeOnChain(entity);
+            applyExecutionOutcome(entity, result, approvalId);
         } catch (Exception e) {
             // P1-F3 修复：先持久化 FAILED 状态供后续排查，再重抛异常
             entity.setStatus(WithdrawalRequest.WithdrawalStatus.FAILED);
@@ -410,6 +373,129 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
         }
         WithdrawalRequestEntity saved = withdrawalRequestRepository.save(entity);
         return WithdrawalRequestMapper.toDto(saved, withdrawalApproverRepository.findByRequestId(approvalId));
+    }
+
+    /**
+     * 阶段2：链上执行（(c)-lite 四态语义 + signing 审批复用）。
+     *
+     * <p>三态分类改走 {@link SigningResponses#classify}（不再用已废弃的
+     * {@link SigningResponses#txHash}——它把 2001「待审批」与「签名失败」压成同一个 null，
+     * 是执行腿"待审批被判 FAILED"的根因）。</p>
+     *
+     * <p><b>核心不变式（复用，不新建）</b>：实体已带 {@code signingApprovalId} 时走
+     * {@link #resumeSigningApproval}——只查询/推进既有审批，**绝不再次调用 signTransfer**，
+     * 故重试不再产生悬空审批单。</p>
+     *
+     * @param e 提现实体（可能已带 signingApprovalId）
+     * @return 四态结果：SUCCESS / AWAITING_APPROVAL / UNVERIFIED / FAILED
+     */
+    private OnChainResult executeOnChain(WithdrawalRequestEntity e) {
+        if (signingServiceClient == null) {
+            return OnChainResult.failure(
+                    "signing service client not configured; withdrawal aborted (fail-closed)", false);
+        }
+        String existingApprovalId = e.getSigningApprovalId();
+        if (existingApprovalId != null && !existingApprovalId.isBlank()) {
+            return resumeSigningApproval(existingApprovalId);
+        }
+        SigningResponses.Outcome outcome = SigningResponses.classify(signingServiceClient.signTransfer(
+                platformWalletAddress,
+                e.getToAddress(),
+                e.getAmount()));
+        if (outcome.isExecuted()) {
+            return OnChainResult.success(outcome.txHash(), false);
+        }
+        if (outcome.isAwaitingApproval()) {
+            return OnChainResult.awaitingApproval(outcome.approvalId(), false);
+        }
+        return OnChainResult.failure(
+                outcome.message() != null ? outcome.message() : "signing service returned empty result", false);
+    }
+
+    /**
+     * 重试路径：复用既有 signing 审批推进整笔提现（(c)-lite 核心不变式）。
+     *
+     * <p>按 signing 侧审批状态分派：</p>
+     * <ul>
+     *   <li>{@code PENDING/EXECUTING} → 保持 AWAITING_APPROVAL（**不新建审批单**）</li>
+     *   <li>{@code APPROVED} → 调 sign-approved 执行，按响应再分派</li>
+     *   <li>{@code EXECUTED} → UNVERIFIED（signing 已执行但本地无哈希 = 可能已动账，
+     *       不得判 FAILED / 不得自动重放）</li>
+     *   <li>{@code REJECTED/EXPIRED} 或审批已不存在（404/降级）→ FAILED（链上确认未动账，
+     *       可安全判失败；理由是"审批不存在"而非"签名失败"）</li>
+     * </ul>
+     */
+    private OnChainResult resumeSigningApproval(String signingApprovalId) {
+        String status = SigningResponses.approvalStatus(
+                signingServiceClient.getApprovalStatus(signingApprovalId));
+        if (status == null) {
+            return OnChainResult.failure(
+                    "signing approval not found (expired or cleaned up): " + signingApprovalId, false);
+        }
+        switch (status) {
+            case "PENDING":
+            case "EXECUTING":
+                return OnChainResult.awaitingApproval(signingApprovalId, false);
+            case "APPROVED": {
+                SigningResponses.Outcome outcome = SigningResponses.classify(
+                        signingServiceClient.executeApproved(signingApprovalId));
+                if (outcome.isExecuted()) {
+                    return OnChainResult.success(outcome.txHash(), false);
+                }
+                if (outcome.isAwaitingApproval()) {
+                    return OnChainResult.awaitingApproval(outcome.approvalId(), false);
+                }
+                return OnChainResult.failure(
+                        outcome.message() != null ? outcome.message() : "approved signing failed", false);
+            }
+            case "EXECUTED":
+                return OnChainResult.unverified(
+                        "signing approval already EXECUTED but no local txHash: " + signingApprovalId, false);
+            default:
+                return OnChainResult.failure(
+                        "signing approval " + status.toLowerCase(java.util.Locale.ROOT)
+                                + ": " + signingApprovalId, false);
+        }
+    }
+
+    /**
+     * 阶段3：按四态结果落库 + 审计。
+     *
+     * <p>不变式：AWAITING_APPROVAL 与 UNVERIFIED 都是**非终态语义**（前者未动账、后者可能已动账），
+     * 必须留痕并保持可重入/可核对，不得被压成 FAILED。</p>
+     */
+    private void applyExecutionOutcome(WithdrawalRequestEntity e, OnChainResult result, String requestId) {
+        if (result.isSuccess()) {
+            e.setChainTxHash(result.getTxHash());
+            e.setStatus(WithdrawalRequest.WithdrawalStatus.EXECUTED);
+            e.setExecutedAt(LocalDateTime.now());
+            log.info("Withdrawal executed via signing-service: requestId={}, txHash={}",
+                    requestId, result.getTxHash());
+            audit("WITHDRAWAL_EXECUTED", e, "txHash=" + result.getTxHash());
+            return;
+        }
+        if (result.isAwaitingApproval()) {
+            e.setSigningApprovalId(result.getApprovalId());
+            e.setStatus(WithdrawalRequest.WithdrawalStatus.AWAITING_APPROVAL);
+            e.setRejectionReason(null);
+            log.warn("Withdrawal awaiting signing approval: requestId={}, signingApprovalId={}",
+                    requestId, result.getApprovalId());
+            audit("WITHDRAWAL_AWAITING_SIGNING_APPROVAL", e,
+                    "signingApprovalId=" + result.getApprovalId());
+            return;
+        }
+        if (result.isUnverified()) {
+            e.setStatus(WithdrawalRequest.WithdrawalStatus.UNVERIFIED);
+            e.setRejectionReason(result.getError());
+            log.error("Withdrawal UNVERIFIED (possible on-chain effect, manual check required): requestId={}, reason={}",
+                    requestId, result.getError());
+            audit("WITHDRAWAL_UNVERIFIED", e, "error=" + result.getError());
+            return;
+        }
+        e.setStatus(WithdrawalRequest.WithdrawalStatus.FAILED);
+        e.setRejectionReason(result.getError());
+        log.error("Withdrawal execution failed: requestId={}, reason={}", requestId, result.getError());
+        audit("WITHDRAWAL_FAILED", e, "error=" + result.getError());
     }
 
     /**
