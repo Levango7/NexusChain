@@ -66,4 +66,37 @@ class SyncManagerCatchUpSnapshotTest {
         ReflectionTestUtils.setField(m, "catchUpPausedUntilMillis", 0L);
         assertFalse((Boolean) m.catchUpSnapshot().get("accelerationPaused"));
     }
+
+    // ==================== PLAN-049：验证人注册表摘要（只观测，不剔除） ====================
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void withoutRegistryReportsDisabledNotZero() {
+        Map<String, Object> s = manager().catchUpSnapshot();
+        Map<String, Object> v = (Map<String, Object>) s.get("validators");
+        assertEquals(false, v.get("enabled"), "注册表未装配必须是 enabled=false，不用 0 冒充");
+        assertFalse(v.containsKey("active"), "未装配时不得出现计数字段");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void registrySnapshotCountsActiveAndInactive() {
+        SyncManager m = manager();
+        org.nexus.consensus.pos.ValidatorRegistry registry =
+                new org.nexus.consensus.pos.ValidatorRegistry(
+                        new java.math.BigDecimal("100"), 100);
+        registry.register("aaa", "11", new java.math.BigDecimal("1000"), 0.1);
+        registry.register("bbb", "22", new java.math.BigDecimal("1000"), 0.1);
+        registry.unregister("bbb"); // ACTIVE -> INACTIVE（"僵死/已退出"的可观测形态）
+        ReflectionTestUtils.setField(m, "validatorRegistry", registry);
+
+        Map<String, Object> v = (Map<String, Object>) m.catchUpSnapshot().get("validators");
+        assertEquals(true, v.get("enabled"));
+        assertEquals(2, v.get("total"));
+        assertEquals(1, v.get("active"));
+        assertEquals(1, v.get("inactive"));
+        assertEquals(100, v.get("capacity"));
+        assertEquals(java.util.List.of("aaa"), v.get("activeAddresses"));
+        assertEquals(java.util.List.of("bbb"), v.get("inactiveAddresses"));
+    }
 }

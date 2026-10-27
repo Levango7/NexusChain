@@ -4,6 +4,28 @@
 
 ## [2.75.0] - 2026-10-26
 
+### 验证人注册表可观测性（PLAN-049，只观测不剔除）
+
+承接 PLAN-047 产品风险的"最后一公里"：节点重启换密钥 ⇒ 注册表混入第 4 个不再
+投票的验证人 ⇒ 总质押稀释 ⇒ 2/3 门限不可达 ⇒ 最终性冻结而链继续出块。
+PLAN-048 让它"可被发现"（告警），本切片补上直接证据。
+
+- **`GET /consensus/catch-up` 追加 `validators` 摘要**（复用既有只读端点，
+  白名单齐备）：`enabled` / `total` / `active` / `inactive` / `capacity` /
+  排序后的 `activeAddresses` / `inactiveAddresses`；未装配注册表时
+  `enabled=false` 且**不出现计数字段**（不用 0 冒充）；
+- **零共识逻辑改动**：只读 `ValidatorRegistry.getAllValidators()`，
+  不碰注册/剔除/门限计算；
+- **测试**：`SyncManagerCatchUpSnapshotTest` 5 例（+2：未装配不冒充 0、
+  ACTIVE/INACTIVE 计数与地址列表）；`SyncManagerValidatorSetRelayTest` 13 例不回归；
+- **明确不做（阻碍已登记）**：自动剔除僵死验证人需要 ① "多久没出现算僵死"的
+  SLA 输入（误删临时分区的健康验证人会伤害 liveness）② 验证人集消息**签名化**
+  （PLAN-001：enforce 默认 false，伪造 remove 与修复前同等——签名化前做自动
+  remove 是安全性倒退）③ 移除权限的治理决议。三项就绪前只做观测；
+- **runbook 处置纪律**：发现候选僵死项（换钥重启会留下新旧两个地址）⇒ 与
+  `/consensus/validator-set` 回放地址对账 ⇒ **走治理路径移除**，不手工改
+  `validators_synced`（共识安全状态，直改=绕过协议）。
+
 ### 补票回看窗 margin-epochs 的产品决策测量（PLAN-048b）
 
 承接 PLAN-047 的量化缺口：margin=50、宕机 105 epoch ⇒ 永久丢失 29。
