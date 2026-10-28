@@ -280,7 +280,12 @@ subprojects {
         // 取证：master push run 36773548701 镜像扫描 nexus-core:scan Java(jar) = Total: 4 HIGH，
         // 全部为该两条 CVE（OS 层 debian 13.7 为 Total: 0）。
         jacksonVersion = '2.21.7'
-        guavaVersion = '33.4.8-jre'
+        // 2026-10-28：CVE-2026-102554（HIGH，Guava unthrottled memory allocation，
+        // Trivy 修复版 33.7.2）——由 33.4.8-jre 抬到 **33.7.2-jre**（同 minor，
+        // 33 线最高补丁版；Guava 只发 -jre/-android 变体，无裸版本号）。
+        // 取证：master push run 40589543320 的 6 个 Java 模块镜像扫描 jar 层
+        // 报 `com.google.guava:guava 33.4.8-jre → fixed 33.7.2`（OS 层 0）。
+        guavaVersion = '33.7.2-jre'
         // Tomcat embed-core 11.0.24 有 3 个新 CVE（CVE-2026-65182 CRITICAL
         // 安全约束绕过 / CVE-2026-65905 HIGH DIGEST 重放 / CVE-2026-68525 HIGH
         // FORM 认证绕过），修复版 11.0.25。Spring Boot 4.0.8 BOM 管理解析为
@@ -344,6 +349,18 @@ subprojects {
             if (details.requested.group == 'at.yawk.lz4'
                     && details.requested.name == 'lz4-java') {
                 details.useVersion '1.11.4'
+            }
+            // 2026-10-28：CVE-2026-108106（DoS）/ CVE-2026-93451（buffer overflow）
+            // 命中 org.xerial.snappy:snappy-java 1.1.10.7，修复版 1.1.10.9。
+            // 来源与 lz4 同一条链：spring-kafka → org.apache.kafka:kafka-clients:4.1.2
+            // （kafka 的传递依赖，Boot BOM 不管），故同样用解析层定点抬版，
+            // 留在 1.1.10.x 同补丁线，不跨 minor。
+            // 取证：master push run 40589543320 的 `Trivy Docker Image Scan (nexus-gateway)`
+            // 阻断步骤报 Java(jar) Total: 1（OS 层 0）；其余模块镜像无 snappy 条目。
+            // 处置原则同本源其他覆盖：可修复一律升级，不用 ignore。
+            if (details.requested.group == 'org.xerial.snappy'
+                    && details.requested.name == 'snappy-java') {
+                details.useVersion '1.1.10.9'
             }
             // 2026-10-22（PLAN-023）：CVE-2026-89044（netty Transfer-Encoding 头
             // 未正确校验最终 transfer coding ⇒ 请求走私，CVSS 6.5，CWE-444）命中

@@ -4,7 +4,8 @@ ext {
     jargon2Version = '1.1.1'
     // TD-05（tech-debt-audit）：由 31.1-jre 统一至 33.4.8-jre（CVE-2023-2976 于 32.0.0 修复），
     // 与主构建 nexus-core / sdk 数值对齐。
-    guavaVersion = '33.4.8-jre'
+    // 2026-10-28：CVE-2026-102554（HIGH）修复版 33.7.2 ⇒ 再抬到 33.7.2-jre（同 minor）。
+    guavaVersion = '33.7.2-jre'
     lombokVersion = '1.18.32'
     // TD-04（tech-debt-audit）：composite 无法消费主构建的 Boot BOM，直接对齐数值。
     // 主构建 Jackson 实际生效值 = Boot 3.2.5 BOM 管理的 2.15.4。
