@@ -4,6 +4,23 @@
 
 ## [2.75.0] - 2026-10-26
 
+### 镜像扫描清理：guava / snappy HIGH（CVE-2026-102554 / -108106 / -93451）
+
+- **guava 33.4.8-jre → 33.7.2-jre**（root / `nexus-core` / `nexus-sdk` /
+  `nexus-consortium` 四处同步）：CVE-2026-102554（HIGH，unthrottled memory
+  allocation）的 Trivy 修复版为 33.7.2；Guava 只发布 `-jre`/`-android` 变体。
+- **snappy-java 1.1.10.7 → 1.1.10.9**：CVE-2026-108106（DoS）/ CVE-2026-93451
+  （buffer overflow），来源 `spring-kafka → org.apache.kafka:kafka-clients:4.1.2`
+  的传递依赖（Boot BOM 不管），沿 lz4 先例在根 `resolutionStrategy` 定点抬版，
+  留 1.1.10.x 同补丁线不跨 minor。
+- **nacos-client 内嵌（relocated）guava 33.3.1-android**：副本类全在
+  `com.alibaba.nacos.shaded.com.google.common.*`（原始包名 0 个），最新
+  nacos-client 3.3.0-RC 仍内嵌 33.5.0-android（同样低于修复版）⇒ 上游无可用修复，
+  在 `.trivyignore` 单条豁免并写明删除条件；自家 guava 的回退仍由
+  OWASP Dependency-Check（必检）覆盖。
+- **取证**：master push run 40589543320 —— 6 个 Java 模块镜像 jar 层 HIGH；
+  本地 `bootJar` 实证产物内为 `guava-33.7.2-jre.jar` / `snappy-java-1.1.10.9.jar`。
+
 ### 补票游标分页——缺口 > 单轮上限时也能补回（PLAN-057）
 
 PLAN-048b 用 margin=200 把窗外缺口从 29 压到 0，本次实现期复看代码推翻该定性：
