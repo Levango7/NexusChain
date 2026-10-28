@@ -593,6 +593,82 @@ class FinalityVoteSyncPagingTest {
         assertEquals(4L, last, "标记到达后游标必须是 servedTo+1 = 4");
     }
 
+    /**
+     * PLAN-057 第 9 处回归（第 14 例）：**margin（cursor=false）响应不得携带 0x5C 标记**。
+     *
+     * <p>第六轮测试床实证：margin 响应服务的是"最新 N 条"，响应端曾对所有请求
+     * 一律回带标记，而请求方仅按 {@code requestFrom} 匹配、无法区分这条标记
+     * 来自游标响应还是 margin 响应。对端（冷却期）发起 margin 请求 {@code from=0}
+     * ⇒ 响应 latest-200（实际 49..200）附带标记 ⇒ 相邻节点从 0 起的游标轮
+     * {@code requestFrom=0} 直接命中 ⇒ 游标被拽到 201 ⇒ 51..200 中段永远不再请求。
+     * 恢复后的节点最终 <b>未追平</b>（670s 差 358 票）。</p>
+     */
+    @Test
+    void legacyResponseMustNotEmitMarker() {
+        for (long epoch = 1; epoch <= 5; epoch++) {
+            gadgetA.submitVote(vote("v1", epoch, CP1));
+        }
+        List<byte[]> sent = new CopyOnWriteArrayList<>();
+        FinalityVoteBroadcaster responder = newNode(gadgetA, capturingPeer(sent));
+
+        // margin 模式（cursor=false）请求：只应回票，不应回标记。
+        responder.onVoteReceived(FinalityVoteSyncCodec.encode(0L, 3, false));
+
+        assertEquals(3, sent.stream()
+                        .filter(p -> !FinalityVoteSyncCodec.isResponsePayload(p)).count(),
+                "margin 响应应按既有行为回 3 张票");
+        assertTrue(sent.stream().noneMatch(FinalityVoteSyncCodec::isResponsePayload),
+                "margin（cursor=false）响应不得携带 0x5C 标记——请求方按 requestFrom "
+                        + "匹配时无法区分标记来自游标还是 margin 响应，会把游标拽到链头");
+    }
+
+    /**
+     * PLAN-057 第 9 处回归（第 15 例）：**游标轮只响应自己那一轮的标记**，
+     * 且同来自其他节点（broadcast 全网可见）但 requestFrom 相同的游标标记，
+     * 在响应数据一致时不会带来回退（单调守卫）。
+     */
+    @Test
+    void foreignMarkersMustNotPoisonCursorRound() {
+        for (long epoch = 1; epoch <= 5; epoch++) {
+            gadgetA.submitVote(vote("v1", epoch, CP1));
+        }
+
+        FinalityVoteBroadcaster[] nodes = new FinalityVoteBroadcaster[2];
+        final List<byte[]> bRequests = new CopyOnWriteArrayList<>();
+        nodes[0] = newNode(gadgetA, relayingPeer(p -> nodes[1].onVoteReceived(p)));
+        nodes[1] = newNode(gadgetB, relayingPeer(p -> {
+            if (FinalityVoteSyncCodec.isSyncPayload(p)) {
+                bRequests.add(p);
+            }
+            nodes[0].onVoteReceived(p);
+        }));
+        nodes[1].setAntiEntropyPagingEnabled(true);
+        nodes[1].setAntiEntropyPagingGraceMs(5000L);
+
+        // B 第一轮：从 0 起。A 升序服务 1..5 + 游标标记。
+        nodes[1].scheduledVoteAntiEntropy();
+        assertEquals(5, allVotes(storeB).size(), "第一轮应补齐 1..5");
+
+        // 直击要害：伪造一条"margin 响应形态"的标记（served 49..200-style 的
+        // 大幅越界范围），对 requestFrom=0 的当前轮尝试拽游标。
+        // 注：修法是让响应端不再为 margin 请求发标记；
+        // 处理端必须对 requestFrom 之外的标记严格单调（不退、不跳）。
+        nodes[1].onVoteSyncResponse(
+                FinalityVoteSyncCodec.encodeResponse(0L, 49L, 200L, 200));
+
+        // 真实标记已经来自 A（1..5），所以下一轮必须从 6 开始，而不是 201。
+        nodes[1].scheduledVoteAntiEntropy();
+        long lastFrom = bRequests.stream()
+                .map(FinalityVoteSyncCodec::decode)
+                .filter(java.util.Objects::nonNull)
+                .filter(FinalityVoteSyncCodec.SyncRequest::cursor)
+                .mapToLong(FinalityVoteSyncCodec.SyncRequest::fromEpoch)
+                .reduce((a, b) -> b)
+                .orElse(-1L);
+        assertEquals(6L, lastFrom,
+                "伪造标记不得把游标拽出服务范围：real response only covered 1..5");
+    }
+
     // ---------- helpers ----------
 
     private FinalityVoteBroadcaster newNode(FinalityGadget gadget, PeerServer peerServer) {
