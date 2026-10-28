@@ -501,6 +501,21 @@ public class FinalityVoteBroadcaster {
                     + " (requestFrom={})", resp.servedTo() + 1, resp.requestFrom());
             return;
         }
+        // PLAN-057 第 9 处（第六轮实测发现）：标记必须与本端**实际收到**的响应票一致。
+        // requestFrom 只有"起点"一个维度：若对端（冷却期）margin 请求与本端
+        // 游标请求使用了同一 from epoch，margin 响应（latest-first，served 头部切片）
+        // 的标记会命中本轮 requestFrom ⇒ 游标被拽到链头、中段永久跳过。
+        // 修法 §1（响应端）：margin 请求一律不回标记（见 handleVoteSyncRequest）。
+        // 修法 §2（请求方，本处）：标记的 servedTo 不得超出本轮**已实收**的最大 epoch
+        // （lastRespondedEpoch 已含窗口过滤，只计 [roundAskedFrom, +maxVotes] 内的票）。
+        // 每个连接的广播是"先页后标记"的 FIFO，所以诚实响应必有 servedTo <= 实收。
+        if (resp.servedTo() > lastRespondedEpoch) {
+            log.warn("Vote-sync response marker dropped: claims servedTo={} but only "
+                            + "seen up to {} in round from {} (foreign/margin marker or "
+                            + "unordered delivery)",
+                    resp.servedTo(), lastRespondedEpoch, roundAskedFrom);
+            return;
+        }
         long next = resp.servedTo() + 1;
         if (next > nextSyncCursorEpoch) {
             nextSyncCursorEpoch = next;
@@ -537,8 +552,12 @@ public class FinalityVoteBroadcaster {
             if (page == null || page.isEmpty()) {
                 // PLAN-057 第 8 处：空页也要回标记，请求方据此**立即**终止，
                 // 不必再等一个宽限期（老节点不发标记，仍由宽限期兜底）。
-                sendRawVotePayloadOverP2P(FinalityVoteSyncCodec.encodeResponse(
-                        req.fromEpoch(), req.fromEpoch(), req.fromEpoch() - 1, 0));
+                // 第 9 处：仅游标请求回标记——margin 响应附带的标记在第六轮
+                // 实测中把别处的游标从 0 直接拽到链头（详见方法内注释）。
+                if (req.cursor()) {
+                    sendRawVotePayloadOverP2P(FinalityVoteSyncCodec.encodeResponse(
+                            req.fromEpoch(), req.fromEpoch(), req.fromEpoch() - 1, 0));
+                }
                 log.debug("Vote-sync request (from epoch{}, cursor={}) has nothing to serve",
                         req.fromEpoch(), req.cursor());
                 return;
@@ -559,8 +578,16 @@ public class FinalityVoteBroadcaster {
             // 没有这条标记，请求方只能按"收到的最大 epoch"猜；链头广播票会把游标
             // 推到链头，中段被整段跳过（第五轮实测：请求 171、服务 171..237，
             // 游标却跳到 372，238..370 一次都没被请求）。
-            sendRawVotePayloadOverP2P(FinalityVoteSyncCodec.encodeResponse(
-                    req.fromEpoch(), servedMin, servedMax, page.size()));
+            // PLAN-057 第 9 处（第六轮实测发现）：**仅游标请求回带标记**。
+            // margin（cursor=false）响应服务的是"最新 N 条"；请求方按
+            // requestFrom 匹配标记，无法区分这条标记源自游标响应还是 margin 响应。
+            // 第六轮实证：对端（冷却期）margin 请求 from=0 → 响应 latest-200
+            // (49..200) 附带标记 → 相邻节点游标 round 从 0 直接被拽到 201，
+            // 中段 51..200 永远不再请求 ⇒ 补票失效。margin 响应不得带标记。
+            if (req.cursor()) {
+                sendRawVotePayloadOverP2P(FinalityVoteSyncCodec.encodeResponse(
+                        req.fromEpoch(), servedMin, servedMax, page.size()));
+            }
             log.info("Vote-sync request (from epoch{}, cursor={}) served with {} votes"
                     + " (servedRange={}..{})",
                     req.fromEpoch(), req.cursor(), page.size(), servedMin, servedMax);
