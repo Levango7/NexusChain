@@ -225,7 +225,7 @@ public class FinalityVoteBroadcaster {
         // PLAN-057：记录本节点"本轮已见到的最大 epoch"。
         // 分页爬升的游标推进由此驱动：cursor = lastRespondedEpoch + 1。
         // 单调不回退：正常投票仍在继续，本地已见更大的 epoch 时游标不动。
-        lastRespondedEpoch = Math.max(lastRespondedEpoch, vote.getEpoch());
+        noteEpochForCursor(vote.getEpoch());
         votesSinceRound.incrementAndGet();
         log.debug("Received finality vote: epoch={}, validator={}, checkpoint={}",
                 vote.getEpoch(), vote.getValidatorAddress(),
@@ -281,6 +281,30 @@ public class FinalityVoteBroadcaster {
         sendRawVotePayloadOverP2P(payload);
         log.debug("Vote-sync request broadcast: fromEpoch={}, maxVotes={}, cursor={}",
                 fromEpoch, maxVotes, cursor);
+    }
+
+    /**
+     * 记录"可供游标推进"的最大 epoch（PLAN-057 第 6 处修正）。
+     *
+     * <p>原实现用<b>所有</b>入站票的 max epoch 驱动 {@code cursor = lastRespondedEpoch + 1}。
+     * 在线集群里正常广播是贴着链头的涓流，于是游标被拉到链头，下一轮
+     * {@code from = 链头 + 1} 永远取不到货，中段缺口一次都不会被请求。</p>
+     *
+     * <p>判据：分页进行中时，只有落在<b>本轮请求窗口</b>
+     * {@code [roundAskedFrom, roundAskedFrom + max-votes]}（两端闭合）内的 epoch
+     * 才可推进游标。依据是响应端按升序服务：{@code from} 之后的前 {@code max-votes}
+     * 张票，最后一张的 epoch 最多是 {@code from + max-votes}；再往后的票不可能是
+     * 本轮分页响应，只能是贴着链头的广播涓流。未开启分页时行为不变。</p>
+     */
+    private void noteEpochForCursor(long epoch) {
+        if (!pagingRoundIssued || roundAskedFrom < 0) {
+            lastRespondedEpoch = Math.max(lastRespondedEpoch, epoch);
+            return;
+        }
+        long windowEnd = roundAskedFrom + Math.max(1, antiEntropyMaxVotes);
+        if (epoch >= roundAskedFrom && epoch <= windowEnd) {
+            lastRespondedEpoch = Math.max(lastRespondedEpoch, epoch);
+        }
     }
 
     /**
@@ -415,7 +439,7 @@ public class FinalityVoteBroadcaster {
                     servedMax = v.getEpoch();
                 }
             }
-            lastRespondedEpoch = Math.max(lastRespondedEpoch, servedMax);
+            noteEpochForCursor(servedMax);
             log.info("Vote-sync request (from epoch{}, cursor={}) served with {} votes"
                     + " (servedMaxEpoch={})",
                     req.fromEpoch(), req.cursor(), page.size(), servedMax);
