@@ -47,6 +47,27 @@ public class SigningServiceFallback implements SigningServiceFeignClient {
     }
 
     @Override
+    public Map<String, Object> signTransferWithBusinessApproval(String fromPubkey, String toPubkeyHash,
+                                                                BigDecimal amount, String businessApprovalId) {
+        // A2：gateway 五路径不携带业务凭据（ADR-036 §2.2），本方法仅为接口完备性而实现。
+        // 若未来有调用方误用，降级返回 null 按失败处理。
+        log.error("signTransferWithBusinessApproval Feign 降级触发: signing-service 不可用, businessApprovalId={}",
+                businessApprovalId);
+        return null;
+    }
+
+    @Override
+    public Map<String, Object> registerBusinessApproval(String businessApprovalId, String payloadHash,
+                                                        BigDecimal amount, String currency,
+                                                        String fromPubkey, String toPubkeyHash,
+                                                        String expiresAt, String approversCsv) {
+        // A2：登记是 wallet 专属动作，gateway 不应调用；降级返回 null 按未登记处理。
+        log.error("registerBusinessApproval Feign 降级触发: signing-service 不可用, businessApprovalId={}",
+                businessApprovalId);
+        return null;
+    }
+
+    @Override
     public Map<String, Object> getCapability() {
         // 审计修复：capability 探针降级返回 null，健康指示器按 DOWN 处理
         return null;

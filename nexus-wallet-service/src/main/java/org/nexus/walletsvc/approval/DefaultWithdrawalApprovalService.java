@@ -4,6 +4,7 @@ import io.seata.spring.annotation.GlobalTransactional;
 import org.nexus.sdk.client.feign.SigningServiceFeignClient;
 import org.nexus.sdk.client.feign.SigningResponses;
 import org.nexus.sdk.signing.ApprovalPolicy;
+import org.nexus.sdk.signing.BusinessApprovalPayloads;
 import org.nexus.sdk.wallet.WithdrawalRequest;
 import org.nexus.walletsvc.entity.WithdrawalApproverEntity;
 import org.nexus.walletsvc.entity.WithdrawalRequestEntity;
@@ -106,11 +107,40 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
      */
     private static final int SIGNING_EXECUTION_CONFLICT = 5001;
 
+    /**
+     * signing 侧「A2 业务凭据已被消费」（可能已广播）状态码——结果不明，
+     * 必须判 EXECUTED_UNVERIFIED（同 #294 原则：可能已出不得当没出）。
+     */
+    private static final int SIGNING_BUSINESS_APPROVAL_CONSUMED = 5003;
+
     private final ApprovalPolicy approvalPolicy;
     private final SigningServiceFeignClient signingServiceClient;
     private final String platformWalletAddress;
     private final WithdrawalRequestRepository withdrawalRequestRepository;
     private final WithdrawalApproverRepository withdrawalApproverRepository;
+
+    /**
+     * A2 开关（ADR-036 §2.2，2026-10-28 立项；<b>默认 false = 旧行为逐字节不变</b>）。
+     *
+     * <p>setter 注入：本类已有多构造器历史（见 walletAuditService 注释），不再加构造参数。
+     * 开启后首腿改为「登记业务凭据 → 携凭据签名」，登记/校验失败回落既有 signing 审批流；
+     * 携凭据调用结果不明 ⇒ EXECUTED_UNVERIFIED（绝不回落重试，见
+     * {@link #executeWithBusinessApproval}）。</p>
+     */
+    private boolean businessApprovalEnabled = false;
+
+    /** A2 凭据 TTL（登记时派生 expiresAt；过期不续期，重批走新提现单）。 */
+    private java.time.Duration businessApprovalTtl = java.time.Duration.ofHours(24);
+
+    @org.springframework.beans.factory.annotation.Value("${nexus.signing.business-approval.enabled:false}")
+    public void setBusinessApprovalEnabled(boolean businessApprovalEnabled) {
+        this.businessApprovalEnabled = businessApprovalEnabled;
+    }
+
+    @org.springframework.beans.factory.annotation.Value("${nexus.signing.business-approval.ttl-hours:24}")
+    public void setBusinessApprovalTtlHours(long ttlHours) {
+        this.businessApprovalTtl = java.time.Duration.ofHours(ttlHours);
+    }
 
     /**
      * 审计（P0 补齐 2026-10-11，setter 注入）。
@@ -438,6 +468,17 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
         if (existingApprovalId != null && !existingApprovalId.isBlank()) {
             return resumeSigningApproval(e, existingApprovalId);
         }
+        if (businessApprovalEnabled) {
+            return executeWithBusinessApproval(e);
+        }
+        return legacyFirstLeg(e);
+    }
+
+    /**
+     * 既有首腿（A2 关闭 / A2 登记失败时的回落路径）：直接 signTransfer，
+     * 大额由 signing 侧建审批返回 2001。语义与 A2 之前逐字节一致。
+     */
+    private OnChainResult legacyFirstLeg(WithdrawalRequestEntity e) {
         SigningResponses.Outcome outcome = SigningResponses.classify(signingServiceClient.signTransfer(
                 platformWalletAddress,
                 e.getToAddress(),
@@ -450,6 +491,85 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
         }
         return OnChainResult.failure(
                 outcome.message() != null ? outcome.message() : "signing service returned empty result", false);
+    }
+
+    /**
+     * A2 首腿（开关开启时）：登记业务凭据 → 携凭据签名，跳过 signing 侧大额审批
+     * （ADR-036 §2.2，消除 wallet 与 signing 对同一笔提现的双重审批）。
+     *
+     * <p><b>回落语义（fail-closed 方向的取舍）</b>：</p>
+     * <ul>
+     *   <li>登记失败 / 降级 / 非 2000 ⇒ <b>回落 {@link #legacyFirstLeg}</b>——此刻凭据
+     *       尚未被消费、无资金动作，既有审批流（signing 侧人审）完全兜底；</li>
+     *   <li>携凭据签名：<b>结果不明（响应丢失 / Feign 降级 null / 抛异常）⇒
+     *       EXECUTED_UNVERIFIED，绝不回落、绝不重试</b>——凭据在签名前已被 CAS 消费，
+     *       上次广播可能已发生；回落重放即双花（#294/#300 同源原则）；</li>
+     *   <li>signing 返回 5003（凭据已被消费）⇒ 同上 EXECUTED_UNVERIFIED；</li>
+     *   <li>signing 回落返回 2001（凭据校验未过，signing 走了既有审批）⇒
+     *       AWAITING_APPROVAL，之后走 (c)-lite 复用机制，与旧行为汇合；</li>
+     *   <li>其余明确失败（5xxx 预广播失败，凭据已被 signing 回退可重试）⇒ FAILED。</li>
+     * </ul>
+     *
+     * <p>幂等：{@code businessApprovalId} = 提现 requestId（跨重试稳定）；登记侧同单号
+     * 同载荷幂等返回，重试（含 resume 路径带既有 signingApprovalId 的）不会重复登记或双花。</p>
+     */
+    private OnChainResult executeWithBusinessApproval(WithdrawalRequestEntity e) {
+        String businessApprovalId = e.getRequestId();
+        String payloadHash = BusinessApprovalPayloads.canonicalHash(
+                platformWalletAddress, e.getToAddress(), e.getAmount(), businessApprovalId);
+        String expiresAt = java.time.Instant.now().plus(businessApprovalTtl).toString();
+        Map<String, Object> registration;
+        try {
+            registration = signingServiceClient.registerBusinessApproval(
+                    businessApprovalId, payloadHash, e.getAmount(), e.getCurrency(),
+                    platformWalletAddress, e.getToAddress(), expiresAt, null);
+        } catch (RuntimeException registrationFailure) {
+            log.warn("A2 凭据登记失败，回落既有 signing 审批流: requestId={}, error={}",
+                    businessApprovalId, registrationFailure.getMessage());
+            return legacyFirstLeg(e);
+        }
+        Integer registrationCode = registration == null
+                ? null
+                : SigningResponses.statusCode(registration);
+        if (registrationCode == null || registrationCode != 2000) {
+            log.warn("A2 凭据登记未成功（code={}），回落既有 signing 审批流: requestId={}",
+                    registrationCode, businessApprovalId);
+            return legacyFirstLeg(e);
+        }
+
+        try {
+            SigningResponses.Outcome outcome = SigningResponses.classify(
+                    signingServiceClient.signTransferWithBusinessApproval(
+                            platformWalletAddress, e.getToAddress(), e.getAmount(), businessApprovalId));
+            if (outcome.isExecuted()) {
+                return OnChainResult.success(outcome.txHash(), false);
+            }
+            if (outcome.isAwaitingApproval()) {
+                // signing 侧豁免校验未过，回落到既有审批流（2001）：与旧行为汇合
+                return OnChainResult.awaitingApproval(outcome.approvalId(), false);
+            }
+            // FAILED 细分：降级（statusCode=null）/ 5003 ⇒ 结果不明；其余为明确未动账
+            if (outcome.statusCode() == null) {
+                return OnChainResult.executedUnverified(
+                        "business-approval sign outcome unknown (signing degraded); "
+                                + "possible prior broadcast, manual reconciliation required", false);
+            }
+            if (outcome.statusCode() == SIGNING_BUSINESS_APPROVAL_CONSUMED) {
+                return OnChainResult.executedUnverified(
+                        "business approval already consumed (possible prior broadcast); "
+                                + "manual reconciliation required", false);
+            }
+            return OnChainResult.failure(
+                    outcome.message() != null ? outcome.message() : "signing service returned empty result",
+                    false);
+        } catch (RuntimeException signFailure) {
+            // 请求已发出但结果不明：凭据可能已被消费并广播 ⇒ 绝不回落重试
+            log.error("A2 携凭据签名结果不明（可能已广播，需人工核对）: requestId={}, error={}",
+                    businessApprovalId, signFailure.getMessage());
+            return OnChainResult.executedUnverified(
+                    "business-approval sign attempt outcome unknown (" + signFailure.getMessage()
+                            + "); possible prior broadcast, manual reconciliation required", false);
+        }
     }
 
     /**

@@ -4,6 +4,30 @@
 
 ## [2.75.0] - 2026-10-26
 
+### A2 落地：businessApprovalId 单笔豁免契约（消除提现双重审批，2026-10-28）
+
+ADR-036 §2.2 由 Proposed 转 **Accepted** 并完成 P1+P2 实施：wallet 提现单业务审批
+（APPROVED）后向 signing 登记**单笔**业务凭据，signing 校验通过即跳过自身大额审批——
+同一笔提现不再被两批审批人各批一遍。
+
+- **signing P1**：新表 `signing_business_approval`（**V5**）· 登记端点
+  `POST /api/v1/signing/business-approvals`（幂等：同单号同哈希幂等返回，异哈希 409/5002）·
+  `/api/v1/transfers/sign` 增**可选** `businessApprovalId`（缺省/不存在/不匹配/过期 ⇒
+  **回落既有审批流，行为与旧版逐字节一致**；有效 ⇒ CAS 单次消费 + 跳过自身审批直接签名；
+  广播失败回退 REGISTERED 可重试）· **已消费凭据返回 5003 终止、绝不回落人审**
+  （防止为同一笔提现保留二次放款通道，#294/#300 同源原则）· 审计类型 `BUSINESS_APPROVAL`；
+- **SDK**：`BusinessApprovalPayloads.canonicalHash`（`A2-v1` canonical sha256，金额归一，
+  双侧共享防漂移）· `SigningServiceFeignClient` 增 `registerBusinessApproval` 与
+  `signTransferWithBusinessApproval`（**既有三参签名不动**；三处 fallback 同步补齐）·
+  `SigningResponses.statusCode` 提升为 public；
+- **wallet P2**：`nexus.signing.business-approval.enabled`（**默认 false = 旧行为不变**）+
+  `ttl-hours`（默认 24）；开启后先登记再携凭据签名，登记失败回落旧流程；
+  **携凭据调用结果不明（降级 null / 5003 / 抛异常）⇒ EXECUTED_UNVERIFIED，绝不回落重试**；
+- 测试：SDK 5 例（确定性/金额归一/字段敏感/格式）、signing 16 例
+  （登记 5 + 消费 6 + 回退 2 + 端点 4 口径 + signTransfer 钩子 7）、wallet 10 例
+  （开关关闭零交互 / 登记先于签名 / canonical 摘要 / TTL 派生 / 回落 / 结果不明不重试）。
+- gateway 五路径不携带该参数 ⇒ 零行为变化（既有 `signTransfer` 语义未动）。
+
 ### MPC E2E job 韧性：apt 失败的 45 分钟空转压到 ~10 分钟（PLAN-054）
 
 PR #298 的 CI 取证：`MPC Java Cluster E2E` 的 apt 步骤在 job 开始 18 秒后就

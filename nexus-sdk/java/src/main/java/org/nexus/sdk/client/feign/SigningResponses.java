@@ -208,7 +208,14 @@ public final class SigningResponses {
         return value.isEmpty() ? null : value;
     }
 
-    private static Integer statusCode(Map<String, Object> response) {
+    /**
+     * 提取响应的 statusCode（无则 {@code null}）。
+     *
+     * <p>2026-10-28 由 private 提升为 public：A2 腿（wallet）需要在 classify 的
+     * 三态之上细分 statusCode（如 5003「业务凭据已消费」→ EXECUTED_UNVERIFIED），
+     * 调用方不应各自散落 map.get("statusCode") 解析。</p>
+     */
+    public static Integer statusCode(Map<String, Object> response) {
         if (response == null) {
             return null;
         }

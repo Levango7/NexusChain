@@ -52,6 +52,8 @@ public final class AuditEvent {
         APPROVAL_REQUEST,
         /** 多签审批决策（通过/拒绝）。 */
         APPROVAL_DECISION,
+        /** A2 业务批准凭据（登记/消费/回退，ADR-036 §2.2，2026-10-28）。 */
+        BUSINESS_APPROVAL,
         /** 鉴权失败（401/403，潜在攻击信号）。 */
         AUTH_FAILURE
     }
