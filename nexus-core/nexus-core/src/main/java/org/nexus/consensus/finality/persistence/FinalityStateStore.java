@@ -134,6 +134,33 @@ public interface FinalityStateStore {
     }
 
     /**
+     * 取 {@code epoch >= fromEpoch} 的、**带签名**的最老 {@code limit} 条投票
+     * （PLAN-057 补票游标分页的响应端查询）。
+     *
+     * <p><b>为什么不能复用 {@link #loadLatestVoteObjects(long, int)}</b>：后者是
+     * {@code ORDER BY epoch DESC LIMIT N}——永远返回**最新** N 条。分页爬升的请求方
+     * 每轮把 {@code from} 设为"上一轮终点 + 1"，需要的是<b>从 from 起最老的 N 条</b>；
+     * 若仍用降序查询，每轮拿回的永远是同一批最新票，中段缺口永远补不回来
+     * （PLAN-048b 实测"from 每轮只前进约 1 个 epoch"的根因即此——不是收敛慢，
+     * 是结构上补不上）。</p>
+     *
+     * <p>默认实现按 epoch **升序**在内存里截断；JDBC 实现下沉到 SQL
+     * （{@code ORDER BY epoch ASC LIMIT ?}），避免 from=0 时全表读入。</p>
+     */
+    default List<Vote> loadVoteObjectsAscending(long fromEpoch, int limit) {
+        Map<String, List<Vote>> all = loadVoteObjectsSince(fromEpoch);
+        java.util.List<Vote> flat = new java.util.ArrayList<>();
+        for (List<Vote> votes : all.values()) {
+            if (votes != null) {
+                flat.addAll(votes);
+            }
+        }
+        flat.sort(java.util.Comparator.comparingLong(Vote::getEpoch));
+        int cap = Math.max(1, limit);
+        return flat.size() <= cap ? flat : new java.util.ArrayList<>(flat.subList(0, cap));
+    }
+
+    /**
      * 加载指定 epoch（含）之后已最终化的检查点 key（epoch|checkpointHex）。
      *
      * <p>PLAN-021：用于让节点的"已终局"视图跟随其它节点收敛。默认返回空集合。</p>

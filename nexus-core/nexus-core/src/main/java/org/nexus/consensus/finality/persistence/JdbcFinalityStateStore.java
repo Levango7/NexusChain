@@ -300,6 +300,36 @@ public class JdbcFinalityStateStore implements FinalityStateStore {
         return out;
     }
 
+    /**
+     * PLAN-057：补票游标分页的响应端查询——{@code ORDER BY epoch ASC LIMIT ?}。
+     *
+     * <p>与 {@link #loadLatestVoteObjects(long, int)} 的唯一差别是排序方向。
+     * 分页请求方每轮从"上一轮终点 + 1"继续，必须拿到<b>最老</b>的 N 条；
+     * 用降序会让每轮都拿回同一批最新票，中段缺口结构上补不回来。</p>
+     */
+    @Override
+    public List<org.nexus.consensus.finality.Vote> loadVoteObjectsAscending(long fromEpoch, int limit) {
+        List<org.nexus.consensus.finality.Vote> out = new java.util.ArrayList<>();
+        try {
+            jdbc.query("SELECT epoch, checkpoint_hash, validator, signature, public_key "
+                            + "FROM finality_votes WHERE epoch >= ? AND signature IS NOT NULL "
+                            + "ORDER BY epoch ASC LIMIT ?",
+                    rs -> {
+                        out.add(new org.nexus.consensus.finality.Vote(
+                                rs.getLong("epoch"),
+                                hexToBytes(rs.getString("checkpoint_hash")),
+                                rs.getString("validator"),
+                                hexToBytes(rs.getString("signature")),
+                                hexToBytes(rs.getString("public_key"))));
+                    },
+                    fromEpoch, Math.max(1, limit));
+        } catch (RuntimeException e) {
+            log.warn("JdbcFinalityStateStore: load votes ascending (from={}, limit={}) failed: {}",
+                    fromEpoch, limit, e.getMessage());
+        }
+        return out;
+    }
+
     @Override
     public Set<String> loadFinalizedKeysSince(long fromEpoch) {
         Set<String> out = new LinkedHashSet<>();
