@@ -73,7 +73,11 @@ public class BridgeEventSourceWorker {
      */
     @Scheduled(fixedDelayString = "${nexus.bridge.messaging.event-source.poll-interval-ms:10000}")
     @SchedulerLock(name = "bridgeEventSourceWorker", lockAtMostFor = "PT2M", lockAtLeastFor = "PT2S")
-    public int runOnce() {
+    // PLAN-055：ShedLock 4.x 拒绝 primitive 返回（LockingNotSupportedException:
+    // "Can not lock method returning primitive value"）——测试床实测：int 返回会让
+    // AOP 在调用前抛异常，runOnce 永不执行（eventSource.pollCount 恒 0）。
+    // 与 MessageRelayWorker 不同：那边是 void 包装 int，本题必须装箱 Integer。
+    public Integer runOnce() {
         pollCount.incrementAndGet();
         List<ChainEvent> events;
         try {

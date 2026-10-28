@@ -68,7 +68,10 @@ public class MessageRelayWorker {
      */
     @Scheduled(fixedDelayString = "${nexus.bridge.messaging.poll-interval-ms:5000}")
     @SchedulerLock(name = "messageRelayWorker", lockAtMostFor = "PT2M", lockAtLeastFor = "PT2S")
-    public int runOnce() {
+    // PLAN-055：同 BridgeEventSourceWorker——ShedLock 4.x 拒绝 primitive 返回。
+    // 测试床实测：relay-enabled=true 下该路径从未被调度执行过（装配以来零 relay
+    // 日志），@SchedulerLock 在调用前即抛 LockingNotSupportedException。
+    public Integer runOnce() {
         List<CrossChainMessage> pending;
         try {
             pending = store.findPending(batchSize);
