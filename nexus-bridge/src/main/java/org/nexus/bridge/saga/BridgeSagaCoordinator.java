@@ -498,8 +498,10 @@ public class BridgeSagaCoordinator {
      * @return 恢复处理的 Saga 数量
      */
     @Transactional
+    // PLAN-056：同 PLAN-055——ShedLock 4.x 拒绝 primitive 返回。
+    // 该恢复循环此前同样从未被调度执行（盘点发现）；改装箱 Integer。
     @SchedulerLock(name = "recoverIncompleteSagas", lockAtMostFor = "PT4M", lockAtLeastFor = "PT1M")
-    public int recoverIncompleteSagas() {
+    public Integer recoverIncompleteSagas() {
         List<SagaState> nonTerminal = new ArrayList<>();
         nonTerminal.add(SagaState.PENDING);
         nonTerminal.add(SagaState.EXECUTING);

@@ -4,6 +4,45 @@
 
 ## [2.75.0] - 2026-10-26
 
+### ShedLock 方法签名守卫 + 第 3 处同类缺陷（PLAN-056）
+
+承接 PLAN-055 的教训（primitive 返回 => `@SchedulerLock` 循环从未执行），
+把"人肉盯"变成"提交即拦截"：
+
+- **`scripts/security/check-shedlock-eligibility.py`**（新，零依赖 Python）：
+  扫描 `@SchedulerLock` 方法的返回类型，primitive => FAIL；
+- **`ShedLockEligibilityTest`**（新，JUnit）：调用该脚本并断言
+  nexus-bridge 零 primitive 返回 + 盘点数为 4（防移码假绿）；
+- **`Bridge Schedule Contract` workflow**（新）：PR/push 均跑，
+  `ubuntu-24.04` + Python 3.14、秒级；即使模块测试被跳过也能拦；
+- **盘点当场抓到第 3 处**：`BridgeSagaCoordinator.recoverIncompleteSagas()`
+  ——该崩溃恢复循环同样从未被调度执行；改为 `Integer` 返回。
+
+**方法论**：PLAN-055 的缺陷在单测全绿的情况下存活了整个装配周期，
+根因是单测用 `new` 绕开 Spring AOP。任何"调度/锁/事务"类代码，
+签名契约必须有一道**不看 Spring 上下文也能判定**的门禁。
+
+### relay/event-source 调度循环从未执行——ShedLock primitive 返回拒绝（PLAN-055）
+
+**PLAN-046 §五 留的测试床联调抓到一个"单测全绿但生产从未执行"的真缺陷**：
+`BridgeEventSourceWorker.runOnce()` 与 `MessageRelayWorker.runOnce()` 的
+`@SchedulerLock` 在 Spring AOP **调用前**即抛
+`LockingNotSupportedException: Can not lock method returning primitive value`
+（ShedLock 4.x 拒绝 primitive 返回）——两条链路自 PLAN-026/037/046 装配
+`relay-enabled=true` 以来在真实部署里从未运行过；单测绿是因为用 `new` +
+手工 `runOnce()` 绕开了 AOP。同类盲区第 1 例是 PLAN-038 的
+`NoUniqueBeanDefinitionException`。
+
+- **修复**：两处返回类型 `int` -> `Integer`（装箱，语义零变化）；
+- **顺带**：`nexus-bridge/build.gradle` 补 `runtimeOnly` PG 驱动——
+  bootJar 原先不含 `org.postgresql.Driver`，单 jar 直跑即启动失败；
+- **复验**（真起 bridge 应用，relay + event-source + execute 全开）：
+  eventSource 计数稳定增长（t+120s pollCount=42 / relayedCount=84 / lastNonce=83），
+  每条消息经 `MessageRelayWorker` 验签 -> 执行到 L2-sim 模拟链 -> 记账
+  （日志 `relay: message ... executed, txHash=0x...`）；20 例 messaging 单测不回归；
+- **口径**：模拟事件源是进程内内存态（测试床演示），不验证真实链事实；
+  多副本 ShedLock 竞争未测。
+
 ### A2 落地：businessApprovalId 单笔豁免契约（消除提现双重审批，2026-10-28）
 
 ADR-036 §2.2 由 Proposed 转 **Accepted** 并完成 P1+P2 实施：wallet 提现单业务审批

@@ -1,0 +1,55 @@
+name: Bridge Schedule Contract
+
+# ---------------------------------------------------------------------------
+# PLAN-056：ShedLock 方法签名守卫（"调度循环是否真的会跑"的静态盘点）。
+#
+# 背景：PLAN-055 实测发现 ShedLock 4.x 拒绝 primitive 返回类型的
+# `@SchedulerLock` 方法——AOP 在调用前抛 LockingNotSupportedException，
+# 导致 BridgeEventSourceWorker / MessageRelayWorker 的调度循环自装配
+# relay-enabled=true 以来**从未执行**（单测用 new + 手工调用绕开 AOP，故全绿）。
+# 随后 PLAN-056 盘点又发现第 3 处：BridgeSagaCoordinator.recoverIncompleteSagas()。
+#
+# 本 workflow 跑 scripts/security/check-shedlock-eligibility.py：
+# primitive 返回 ⇒ job 红 ⇒ 该循环"名义存在、实际不跑"在 PR 阶段即被拦截。
+#
+# 与单元测试（nexus-bridge ShedLockEligibilityTest）等价但路径不同：
+#   · 本 job 即使模块测试被跳过也能拦；
+#   · 单测保证开发者本地 gradle test 也能拦。
+# ---------------------------------------------------------------------------
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  shedlock-eligibility:
+    name: ShedLock Method Signature Guard
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      # 2026-10-06 统一口径：全仓 Python 调用统一钉 3.14。
+      - name: 扫描 @SchedulerLock 方法签名
+        run: |
+          python scripts/security/check-shedlock-eligibility.py \
+            --path nexus-bridge/src/main/java
+
+      # JSON 形态供后续仓级"调度方法体检"消费（Plan-056 §五）。
+      - name: 输出 JSON 摘要（不阻断）
+        if: always()
+        run: |
+          python scripts/security/check-shedlock-eligibility.py \
+            --path nexus-bridge/src/main/java --json || true
