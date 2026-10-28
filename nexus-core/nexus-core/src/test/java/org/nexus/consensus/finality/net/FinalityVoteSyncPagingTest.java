@@ -669,6 +669,72 @@ class FinalityVoteSyncPagingTest {
                 "伪造标记不得把游标拽出服务范围：real response only covered 1..5");
     }
 
+    /**
+     * PLAN-057 第 10 处回归（第 16 例）：**响应页丢失时老启发式不得首个宽限 tick 就拽走游标**。
+     *
+     * <p>第七轮测试床实证：E 刚重启（markerCapable=false），第一轮 from=0 的
+     * 响应页在 block-sync 高峰里丢失；老启发式在 graceElapsed 一成立（第 3 个 tick，
+     * ≈10 s 时）就按 {@code lastResponded+1} 把游标从 0 拽到 184 ⇒ 68..135 中段
+     * 从此永远不再被请求（实测漏 123 票）。</p>
+     *
+     * <p>修法：老启发式必须攒够 3 个"无标记且宽限已过"的 tick 才启用。
+     * 本测试证明：连续两次 grace tick 时游标不动（重传 in-flight），
+     * 第三次才按老启发式推进（对老对端的兼容不丢）。</p>
+     */
+    @Test
+    void heuristicFallbackMustWaitForMarkerlessGraceTicks() throws Exception {
+        for (long epoch = 1; epoch <= 3; epoch++) {
+            gadgetA.submitVote(vote("v1", epoch, CP1));
+        }
+
+        FinalityVoteBroadcaster[] nodes = new FinalityVoteBroadcaster[2];
+        final List<byte[]> heldMarkers = new CopyOnWriteArrayList<>();
+        nodes[0] = newNode(gadgetA, relayingPeer(p -> {
+            if (FinalityVoteSyncCodec.isResponsePayload(p)) {
+                heldMarkers.add(p);   // 扣住标记：模拟页/标记在高峰里丢、票稍后到
+                return;
+            }
+            nodes[1].onVoteReceived(p);
+        }));
+        final List<byte[]> bRequests = new CopyOnWriteArrayList<>();
+        nodes[1] = newNode(gadgetB, relayingPeer(p -> {
+            if (FinalityVoteSyncCodec.isSyncPayload(p)) {
+                bRequests.add(p);
+            }
+            nodes[0].onVoteReceived(p);
+        }));
+        nodes[1].setAntiEntropyPagingEnabled(true);
+        nodes[1].setAntiEntropyPagingGraceMs(80L);
+
+        // 第 1 轮：from=0，A 回 1..3（标记被扣住）。
+        nodes[1].scheduledVoteAntiEntropy();
+        assertEquals(3, allVotes(storeB).size(), "第一轮的响应票仍应到来");
+
+        // tick 2-3（前两个"无标记宽限"tick）：游标必须仍是 0，重传已在路上。
+        for (int i = 0; i < 2; i++) {
+            Thread.sleep(120);
+            nodes[1].scheduledVoteAntiEntropy();
+            long from = bRequests.stream()
+                    .map(FinalityVoteSyncCodec::decode)
+                    .filter(FinalityVoteSyncCodec.SyncRequest::cursor)
+                    .mapToLong(FinalityVoteSyncCodec.SyncRequest::fromEpoch)
+                    .reduce((a, b) -> b).orElse(-1L);
+            assertEquals(0L, from,
+                    "只过了 " + (i + 1) + " 个无标记宽限 tick，不得拽走游标（第 10 处）");
+        }
+
+        // tick 4（第三个）：老启发式才启用，按 lastResponded+1 推进（对老对端的兼容）。
+        Thread.sleep(120);
+        nodes[1].scheduledVoteAntiEntropy();
+        long from = bRequests.stream()
+                .map(FinalityVoteSyncCodec::decode)
+                .filter(FinalityVoteSyncCodec.SyncRequest::cursor)
+                .mapToLong(FinalityVoteSyncCodec.SyncRequest::fromEpoch)
+                .reduce((a, b) -> b).orElse(-1L);
+        assertEquals(4L, from,
+                "连续 3 个无标记宽限 tick 后，老启发式必须仍能为老对端推进");
+    }
+
     // ---------- helpers ----------
 
     private FinalityVoteBroadcaster newNode(FinalityGadget gadget, PeerServer peerServer) {
