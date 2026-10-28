@@ -34,13 +34,42 @@ public final class FinalityVoteSyncCodec {
 
     private FinalityVoteSyncCodec() {}
 
-    /** 补票请求（不可变）。 */
-    public record SyncRequest(long fromEpoch, int maxVotes) {}
+    /**
+     * 补票请求（不可变）。
+     *
+     * <p>PLAN-057：新增 {@code cursor} 语义——请求方做<b>游标分页爬升</b>
+     * （每轮从上一轮的终点继续，而不是每轮都从 `maxEpoch - margin` 起）。
+     * 向后兼容：老节点不认识 {@code cursor} 键，解码为 {@code false}
+     * ⇒ 行为与 PLAN-025 完全一致。</p>
+     *
+     * @param fromEpoch 请求起点（含）
+     * @param maxVotes  单轮上限
+     * @param cursor    是否声明分页（true=FALSE 兼容旧节点行为）
+     */
+    public record SyncRequest(long fromEpoch, int maxVotes, boolean cursor) {
+
+        /** 兼容构造器：无 cursor 声明时视为旧行为。 */
+        public SyncRequest(long fromEpoch, int maxVotes) {
+            this(fromEpoch, maxVotes, false);
+        }
+    }
 
     public static byte[] encode(long fromEpoch, int maxVotes) {
+        return encode(fromEpoch, maxVotes, false);
+    }
+
+    /**
+     * 带游标声明的补票请求编码。
+     *
+     * @param fromEpoch 起点（含）
+     * @param maxVotes  单轮上限
+     * @param cursor    true 时在载荷写入 {@code "cursor":true}——老节点忽略未知键
+     */
+    public static byte[] encode(long fromEpoch, int maxVotes, boolean cursor) {
         long from = Math.max(0L, fromEpoch);
         int max = maxVotes <= 0 ? DEFAULT_MAX_VOTES : maxVotes;
-        String body = "{\"from\":" + from + ",\"max\":" + max + "}";
+        String body = "{\"from\":" + from + ",\"max\":" + max + "}"
+                + (cursor ? ",\"cursor\":true" : "");
         byte[] raw = body.getBytes(StandardCharsets.UTF_8);
         byte[] out = new byte[1 + raw.length];
         out[0] = MAGIC;
@@ -62,11 +91,12 @@ public final class FinalityVoteSyncCodec {
         String json = new String(payload, 1, payload.length - 1, StandardCharsets.UTF_8);
         Long from = parseLong(json, "\"from\":");
         Long max = parseLong(json, "\"max\":");
+        boolean cursor = json.contains("\"cursor\":true");
         if (from == null) {
             return null;
         }
         int limit = (max == null || max <= 0 || max > 10_000) ? DEFAULT_MAX_VOTES : max.intValue();
-        return new SyncRequest(Math.max(0L, from), limit);
+        return new SyncRequest(Math.max(0L, from), limit, cursor);
     }
 
     private static Long parseLong(String json, String key) {

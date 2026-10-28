@@ -17,6 +17,7 @@ import org.springframework.stereotype.Component;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * 最终性投票广播器（ADR-030 M_net）。
@@ -79,6 +80,62 @@ public class FinalityVoteBroadcaster {
     /** 单次请求/响应携带的票数上限（防止一次请求拉回全部历史）。 */
     @org.springframework.beans.factory.annotation.Value("${nexus.finality.anti-entropy.max-votes:200}")
     private int antiEntropyMaxVotes = FinalityVoteSyncCodec.DEFAULT_MAX_VOTES;
+
+    /**
+     * PLAN-057：补票游标分页开关（缺省 false = 维持 PLAN-025 的
+     * "margin 缝隙修补"行为；开启后大缺口走多轮爬升）。
+     */
+    @org.springframework.beans.factory.annotation.Value("${nexus.finality.anti-entropy.paging-enabled:false}")
+    private boolean antiEntropyPagingEnabled = false;
+
+    /**
+     * PLAN-057：分页终止前的宽限期（毫秒）。
+     *
+     * <p>补票响应走 P2P 异步投递，发出请求后同一线程的下一个 tick 就来判"对端
+     * 是否无货"会读到还没到货的数据 ⇒ 假终止。默认 5000ms 与测试床
+     * {@code interval-ms=5000} 对齐（生产缺省 interval 30s，宽限期远小于它）。</p>
+     */
+    @org.springframework.beans.factory.annotation.Value("${nexus.finality.anti-entropy.paging-grace-ms:5000}")
+    private long antiEntropyPagingGraceMs = 5000L;
+
+    /**
+     * 下一轮分页请求的起点（含）；-1 = 未启用/已完成（回退 margin 模式）。
+     *
+     * <p>单调不回退：本地投票仍在继续时游标不回退。</p>
+     */
+    private volatile long nextSyncCursorEpoch = -1L;
+
+    /** 本轮已响应的最大 epoch（由 {@link #onVoteReceived} 记录，-1 = 无）。 */
+    private volatile long lastRespondedEpoch = -1L;
+
+    /**
+     * 本轮分页请求发出后收到的票数（含补回来的与正常广播来的）。
+     *
+     * <p>终止判据用"少于上限"而不是"游标越过本地 max"：追赶期本地 max
+     * <b>天然落后于对端</b>，用 maxEpoch 比游标会过早判完成。补票响应的
+     * 条数是 min(可服务数, 上限) ⇒ 收到数 < 上限 即可推断对端已无货。</p>
+     */
+    private final AtomicInteger votesSinceRound = new AtomicInteger();
+
+    /** 本进程是否已发出过分页请求（区分"首轮"与"续轮"）。 */
+    private volatile boolean pagingRoundIssued = false;
+
+    /**
+     * 本轮向对端请求的起点（含）。终止判据用它而不是"收到票数"——见下方注释。
+     *
+     * <p>PLAN-057 测试床修正：原判据是"本轮收到的票数 < max-votes"，在<b>在线集群</b>
+     * 里几乎永远成立——正常广播是涓流（实测约 3 票/5s），到不了 200 ⇒ 分页在第一轮
+     * 后就自认为完成。单测绿是因为测试只投递同步响应、没有广播涓流（PLAN-055
+     * 同型盲区）。改为<b>判据对齐"游标处有没有新数据"</b>：请求起点为 C，
+     * 宽限期后仍未见过 epoch >= C 的票 ⇒ 对端在 C 处已无货 ⇒ 终止。</p>
+     */
+    private volatile long roundAskedFrom = -1L;
+
+    /**
+     * 本轮请求发出的时刻（nanoTime；0 = 未发过）。宽限期存在的理由：补票响应走
+     * P2P 是<b>异步</b>投递，同一线程下一 tick 就来判终止会读到"还没到货"。
+     */
+    private volatile long roundIssuedAtNanos = 0L;
 
     public FinalityVoteBroadcaster(FinalityGadget gadget, ApplicationEventPublisher eventPublisher) {
         this(gadget, eventPublisher, null, null);
@@ -165,6 +222,11 @@ public class FinalityVoteBroadcaster {
             log.warn("Received malformed finality vote payload (dropped)");
             return;
         }
+        // PLAN-057：记录本节点"本轮已见到的最大 epoch"。
+        // 分页爬升的游标推进由此驱动：cursor = lastRespondedEpoch + 1。
+        // 单调不回退：正常投票仍在继续，本地已见更大的 epoch 时游标不动。
+        lastRespondedEpoch = Math.max(lastRespondedEpoch, vote.getEpoch());
+        votesSinceRound.incrementAndGet();
         log.debug("Received finality vote: epoch={}, validator={}, checkpoint={}",
                 vote.getEpoch(), vote.getValidatorAddress(),
                 org.apache.commons.codec.binary.Hex.encodeHexString(vote.getCheckpointHash()));
@@ -202,12 +264,23 @@ public class FinalityVoteBroadcaster {
      * 有缺口时才有实际数据传输，代价可预期。</p>
      */
     public void requestVoteSync(long fromEpoch, int maxVotes) {
+        requestVoteSync(fromEpoch, maxVotes, false);
+    }
+
+    /**
+     * 带游标声明的补票请求（PLAN-057）。
+     *
+     * @param cursor true 表示请求方在做分页爬升；载荷含 {@code "cursor":true}
+     *                （老节点忽略未知键，行为不变）
+     */
+    public void requestVoteSync(long fromEpoch, int maxVotes, boolean cursor) {
         if (peerServer == null) {
             return;   // 单进程/测试：无 P2P
         }
-        byte[] payload = FinalityVoteSyncCodec.encode(fromEpoch, maxVotes);
+        byte[] payload = FinalityVoteSyncCodec.encode(fromEpoch, maxVotes, cursor);
         sendRawVotePayloadOverP2P(payload);
-        log.debug("Vote-sync request broadcast: fromEpoch={}, maxVotes={}", fromEpoch, maxVotes);
+        log.debug("Vote-sync request broadcast: fromEpoch={}, maxVotes={}, cursor={}",
+                fromEpoch, maxVotes, cursor);
     }
 
     /**
@@ -227,6 +300,62 @@ public class FinalityVoteBroadcaster {
         }
         try {
             long maxEpoch = localMaxVoteEpoch();
+            if (antiEntropyPagingEnabled) {
+                // PLAN-057：游标分页爬升。
+                //
+                // 终止判据（测试床修正后）：本轮请求起点为 C，宽限期后仍没见过
+                // epoch >= C 的票 ⇒ 对端在 C 处已无货 ⇒ 终止并回 margin 缝隙修补。
+                //
+                // 为什么<b>不</b>用"收到票数 < 上限"：在线集群里正常广播是涓流
+                // （实测 ~3 票/5s），该条件几乎恒真 ⇒ 分页一轮后就自认为完成——
+                // 测试床 583s 追赶里 cursor=true 只出现 1 次即此。
+                //
+                // 宽限期：响应走 P2P 异步投递，同一线程下一 tick 立即判会读到
+                // "还没到货" ⇒ 假终止。
+                boolean graceElapsed = roundIssuedAtNanos != 0L
+                        && (System.nanoTime() - roundIssuedAtNanos)
+                        >= antiEntropyPagingGraceMs * 1_000_000L;
+                boolean peerExhaustedAtCursor = roundAskedFrom >= 0
+                        && lastRespondedEpoch < roundAskedFrom;
+                if (pagingRoundIssued && graceElapsed && peerExhaustedAtCursor) {
+                    log.info("Anti-entropy paging complete: no vote at or after epoch {}"
+                            + " after {}ms grace; resuming margin-based gap repair"
+                            + " (local max epoch={})",
+                            roundAskedFrom, antiEntropyPagingGraceMs, maxEpoch);
+                    nextSyncCursorEpoch = -1L;
+                    lastRespondedEpoch = -1L;
+                    pagingRoundIssued = false;
+                    roundAskedFrom = -1L;
+                    roundIssuedAtNanos = 0L;
+                } else {
+                    // PLAN-057（复测第 5 处修正）：首轮起点不能取进程内的
+                    // lastRespondedEpoch——它记录的是"本进程见过哪些票"，
+                    // 而宕机节点重启后 lastRespondedEpoch 停在**宕机前最后
+                    // 一条本地票**（实测 196），于是首轮 cursor=197，只问到
+                    // 边界 1~2 票就判"无货"退出，中段完全没搬。
+                    //
+                    // 正确起点 = 与 margin 模式同源的地板：
+                    //   max(0, localMaxVoteEpoch - margin-epochs)
+                    // 该地板 <= 任何真实缺口起点 ⇒ 不会漏中段。
+                    long floor = maxEpoch < 0 ? 0L : Math.max(0L, maxEpoch - antiEntropyMarginEpochs);
+                    if (!pagingRoundIssued) {
+                        nextSyncCursorEpoch = floor;
+                        log.info("Anti-entropy paging: starting cursor crawl from epoch {}"
+                                + " (local max epoch={}, margin={})",
+                                nextSyncCursorEpoch, maxEpoch, antiEntropyMarginEpochs);
+                    } else if (lastRespondedEpoch >= 0 && lastRespondedEpoch + 1 > nextSyncCursorEpoch) {
+                        // 续轮：推进游标 = 本轮已见最大 epoch + 1（单调不回退）。
+                        nextSyncCursorEpoch = lastRespondedEpoch + 1;
+                    }
+                    long cursor = nextSyncCursorEpoch < 0 ? 0L : nextSyncCursorEpoch;
+                    roundAskedFrom = cursor;
+                    roundIssuedAtNanos = System.nanoTime();
+                    votesSinceRound.set(0);
+                    pagingRoundIssued = true;
+                    requestVoteSync(cursor, antiEntropyMaxVotes, true);
+                    return;
+                }
+            }
             long from = maxEpoch < 0 ? 0L : Math.max(0L, maxEpoch - antiEntropyMarginEpochs);
             requestVoteSync(from, antiEntropyMaxVotes);
         } catch (RuntimeException e) {
@@ -246,21 +375,72 @@ public class FinalityVoteBroadcaster {
             return;
         }
         try {
-            // 避免 from=0 时把全部历史票读进内存。
-            java.util.List<Vote> latest = store.loadLatestVoteObjects(req.fromEpoch(), req.maxVotes());
-            if (latest == null || latest.isEmpty()) {
-                log.debug("Vote-sync request (from epoch {}) has nothing to serve", req.fromEpoch());
+            java.util.List<Vote> page;
+            if (req.cursor()) {
+                // PLAN-057：分页协议必须**升序**（老 -> 新）服务，否则请求方
+                // 的"from=游标"永远只拿回最新 N 条、永远补不回中段缺口
+                // （原实现 ORDER BY epoch DESC LIMIT N 正是 PLAN-048b 里
+                // "from 每轮只前进 1 个 epoch"的根因——不是慢，是补不上）。
+                // 老节点不认识 cursor 键，仍走降序分支（渐进降级）。
+                page = store.loadVoteObjectsAscending(req.fromEpoch(), req.maxVotes());
+            } else {
+                // 避免 from=0 时把全部历史票读进内存。
+                page = store.loadLatestVoteObjects(req.fromEpoch(), req.maxVotes());
+            }
+            if (page == null || page.isEmpty()) {
+                log.debug("Vote-sync request (from epoch{}, cursor={}) has nothing to serve",
+                        req.fromEpoch(), req.cursor());
                 return;
             }
-            sendVotesOverP2P(latest);
-            log.info("Vote-sync request (from epoch {}) served with {} votes",
-                    req.fromEpoch(), latest.size());
+            sendVotesOverP2P(page);
+            // PLAN-057：记录本端"刚服务出去的最大 epoch"，供对端推进游标时
+            // 与本端 own-crawl 取 max 用（多对端场景下不回退）。
+            long servedMax = Long.MIN_VALUE;
+            for (Vote v : page) {
+                if (v.getEpoch() > servedMax) {
+                    servedMax = v.getEpoch();
+                }
+            }
+            lastRespondedEpoch = Math.max(lastRespondedEpoch, servedMax);
+            log.info("Vote-sync request (from epoch{}, cursor={}) served with {} votes"
+                    + " (servedMaxEpoch={})",
+                    req.fromEpoch(), req.cursor(), page.size(), servedMax);
             return;
         } catch (RuntimeException e) {
             log.warn("Vote-sync request (from epoch {}) could not read local store: {}",
                     req.fromEpoch(), e.getMessage());
             return;
         }
+    }
+
+    /**
+     * 打开/关闭补票游标分页（PLAN-057）。
+     *
+     * <p>为什么需要包内方法：{@code antiEntropyPagingEnabled} 由 {@code @Value}
+     * 注入，而两参构造器不过 Spring——测试（与本类同包）需要一条不经容器的
+     * 打开路径。生产侧仍走 {@code nexus.finality.anti-entropy.paging-enabled}。</p>
+     *
+     * <p>关闭时重置分页状态：避免"上次爬到一半"的游标污染下一次开启。</p>
+     */
+    void setAntiEntropyPagingEnabled(boolean enabled) {
+        this.antiEntropyPagingEnabled = enabled;
+        if (!enabled) {
+            nextSyncCursorEpoch = -1L;
+            lastRespondedEpoch = -1L;
+            pagingRoundIssued = false;
+            roundAskedFrom = -1L;
+            roundIssuedAtNanos = 0L;
+            votesSinceRound.set(0);
+        }
+    }
+
+    /**
+     * 覆盖分页终止宽限期（PLAN-057；包内可见，供测试把 5000ms 缩到毫秒级）。
+     *
+     * <p>生产侧仍走 {@code nexus.finality.anti-entropy.paging-grace-ms}。</p>
+     */
+    void setAntiEntropyPagingGraceMs(long millis) {
+        this.antiEntropyPagingGraceMs = Math.max(0L, millis);
     }
 
     /** 本地已知的最大投票 epoch；无票返回 -1。 */
