@@ -97,6 +97,24 @@ public class FinalityVoteBroadcaster {
      */
     @org.springframework.beans.factory.annotation.Value("${nexus.finality.anti-entropy.paging-grace-ms:5000}")
     private long antiEntropyPagingGraceMs = 5000L;
+    /** 分页终止后的冷却时长：避免在"已无货"的位置每 interval 空转一次。 */
+    private volatile long antiEntropyPagingCooldownMs = 60_000L;
+    /** 冷却截止时刻（{@link System#nanoTime()} 口径）；0 表示不在冷却。 */
+    private volatile long pagingCooldownUntilNanos = 0L;
+    /** 本轮是否已收到对端的 0x5C 响应标记（收到即以此为准推进游标）。 */
+    private volatile boolean pagingResponseSeen = false;
+    /** 响应标记报告"该起点之后无货"（count=0）⇒ 立即终止，不等宽限期。 */
+    private volatile boolean pagingPeerExhausted = false;
+    /**
+     * 对端**曾经**发过 0x5C 标记（粘性，跨轮保持）。
+     *
+     * <p>为什么需要它：{@code pagingResponseSeen} 只表示"本轮标记到了"。
+     * 若只用它做闸门，则下一轮发请求后、标记还没回来之前，
+     * {@code !pagingResponseSeen} 为真 ⇒ 老启发式重新生效 ⇒ 链头广播票
+     * 仍可能把游标拖走。只要见过一次标记，就说明对端支持精确范围，
+     * 此后不应再退回启发式。</p>
+     */
+    private volatile boolean pagingMarkerCapable = false;
 
     /**
      * 下一轮分页请求的起点（含）；-1 = 未启用/已完成（回退 margin 模式）。
@@ -217,6 +235,13 @@ public class FinalityVoteBroadcaster {
             handleVoteSyncRequest(payload);
             return;
         }
+        // PLAN-057 第 8 处：响应标记（0x5C）不是投票。必须在这里也挡一道——
+        // 有的调用方（测试夹具、老路由）不区分魔数，直接把它投给 onVoteReceived，
+        // 而 FinalityVoteCodec 不校验魔数，会把 JSON 体解成一张"垃圾票"落库。
+        if (FinalityVoteSyncCodec.isResponsePayload(payload)) {
+            onVoteSyncResponse(payload);
+            return;
+        }
         Vote vote = FinalityVoteCodec.decode(payload);
         if (vote == null) {
             log.warn("Received malformed finality vote payload (dropped)");
@@ -325,6 +350,15 @@ public class FinalityVoteBroadcaster {
         try {
             long maxEpoch = localMaxVoteEpoch();
             if (antiEntropyPagingEnabled) {
+                if (pagingCooldownUntilNanos > 0
+                        && System.nanoTime() < pagingCooldownUntilNanos) {
+                    // 分页刚判完成：冷却期内只做 margin 修补，不在"已无货"处空转。
+                    long cooldownFrom = maxEpoch < 0
+                            ? 0L : Math.max(0L, maxEpoch - antiEntropyMarginEpochs);
+                    requestVoteSync(cooldownFrom, antiEntropyMaxVotes);
+                    return;
+                }
+                pagingCooldownUntilNanos = 0L;
                 // PLAN-057：游标分页爬升。
                 //
                 // 终止判据（测试床修正后）：本轮请求起点为 C，宽限期后仍没见过
@@ -341,6 +375,7 @@ public class FinalityVoteBroadcaster {
                         >= antiEntropyPagingGraceMs * 1_000_000L;
                 boolean peerExhaustedAtCursor = roundAskedFrom >= 0
                         && lastRespondedEpoch < roundAskedFrom;
+                boolean markerSaysExhausted = pagingRoundIssued && pagingPeerExhausted;
                 // PLAN-057 §5.5 观测点：分页开启时每轮 tick 记一行状态。
                 // 动机：第三轮测试床出现"首轮之后整条 anti-entropy 调度静默"
                 // （cursor=true 仅 1 次、cursor=false 也是 0 次），而现有日志
@@ -351,18 +386,26 @@ public class FinalityVoteBroadcaster {
                 // 缺省 paging-enabled=false，开启后每 interval-ms 一行，量可控。
                 log.info("Anti-entropy paging tick: maxEpoch={} cursor={} askedFrom={} "
                                 + "lastResponded={} votesSinceRound={} graceElapsed={} "
-                                + "peerExhausted={} graceMs={}",
+                                + "peerExhausted={} marker={} markerExhausted={} graceMs={}",
                         maxEpoch, nextSyncCursorEpoch, roundAskedFrom, lastRespondedEpoch,
                         votesSinceRound.get(), graceElapsed, peerExhaustedAtCursor,
-                        antiEntropyPagingGraceMs);
-                if (pagingRoundIssued && graceElapsed && peerExhaustedAtCursor) {
+                        pagingResponseSeen, markerSaysExhausted, antiEntropyPagingGraceMs);
+                if (pagingRoundIssued
+                        && (markerSaysExhausted
+                        || (graceElapsed && peerExhaustedAtCursor))) {
                     log.info("Anti-entropy paging complete: no vote at or after epoch {}"
                             + " after {}ms grace; resuming margin-based gap repair"
                             + " (local max epoch={})",
                             roundAskedFrom, antiEntropyPagingGraceMs, maxEpoch);
-                    nextSyncCursorEpoch = -1L;
-                    lastRespondedEpoch = -1L;
+                    // 不回到地板：保留续点，否则下一轮又按 localMax-margin 重算地板、
+                    // 再问一遍同一个起点（第五轮实测 paging-start=37 / complete=36，
+                    // 全在原地打转，一票没多拿）。冷却期后从续点继续。
+                    nextSyncCursorEpoch = roundAskedFrom;
+                    pagingCooldownUntilNanos = System.nanoTime()
+                            + antiEntropyPagingCooldownMs * 1_000_000L;
                     pagingRoundIssued = false;
+                    pagingResponseSeen = false;
+                    pagingPeerExhausted = false;
                     roundAskedFrom = -1L;
                     roundIssuedAtNanos = 0L;
                 } else {
@@ -377,12 +420,25 @@ public class FinalityVoteBroadcaster {
                     // 该地板 <= 任何真实缺口起点 ⇒ 不会漏中段。
                     long floor = maxEpoch < 0 ? 0L : Math.max(0L, maxEpoch - antiEntropyMarginEpochs);
                     if (!pagingRoundIssued) {
-                        nextSyncCursorEpoch = floor;
-                        log.info("Anti-entropy paging: starting cursor crawl from epoch {}"
-                                + " (local max epoch={}, margin={})",
-                                nextSyncCursorEpoch, maxEpoch, antiEntropyMarginEpochs);
-                    } else if (lastRespondedEpoch >= 0 && lastRespondedEpoch + 1 > nextSyncCursorEpoch) {
-                        // 续轮：推进游标 = 本轮已见最大 epoch + 1（单调不回退）。
+                        if (nextSyncCursorEpoch < 0) {
+                            nextSyncCursorEpoch = floor;
+                            log.info("Anti-entropy paging: starting cursor crawl from epoch {}"
+                                    + " (local max epoch={}, margin={})",
+                                    nextSyncCursorEpoch, maxEpoch, antiEntropyMarginEpochs);
+                        } else {
+                            log.info("Anti-entropy paging: resuming cursor crawl from epoch {}"
+                                    + " (resume point kept from previous round)",
+                                    nextSyncCursorEpoch);
+                        }
+                    } else if (!pagingMarkerCapable && graceElapsed
+                            && lastRespondedEpoch >= 0
+                            && lastRespondedEpoch + 1 > nextSyncCursorEpoch) {
+                        // 老对端（从未发过 0x5C）：退回第 6 处的窗口过滤 + 宽限期路径。
+                        //
+                        // 两道闸门都是必需的：
+                        //   - pagingMarkerCapable：一旦对端证明会发标记，就不再退回启发式；
+                        //   - graceElapsed：首轮标记可能还在路上，此时 lastRespondedEpoch
+                        //     可能只反映了链头广播票 ⇒ 立即推进会跳过中段。
                         nextSyncCursorEpoch = lastRespondedEpoch + 1;
                     }
                     long cursor = nextSyncCursorEpoch < 0 ? 0L : nextSyncCursorEpoch;
@@ -400,6 +456,8 @@ public class FinalityVoteBroadcaster {
                     // 现在：只有游标真的前进（提出的是"新问题"）才重置计时；
                     // 同一游标上的重发只是重传，不重置，让等待时间得以累积。
                     boolean cursorAdvanced = !pagingRoundIssued || cursor != roundAskedFrom;
+                    pagingResponseSeen = false;
+                    pagingPeerExhausted = false;
                     roundAskedFrom = cursor;
                     if (cursorAdvanced) {
                         roundIssuedAtNanos = System.nanoTime();
@@ -415,6 +473,41 @@ public class FinalityVoteBroadcaster {
         } catch (RuntimeException e) {
             log.warn("Scheduled vote anti-entropy failed: {}", e.getMessage());
         }
+    }
+
+    /**
+     * 处理对端的补票**响应标记**（0x5C，PLAN-057 第 8 处）。
+     *
+     * <p>这是请求方推进游标的**唯一权威依据**：它携带对端实际服务的范围，
+     * 因此不会被链头广播票误导。老节点不发此标记，请求方退回
+     * "窗口过滤 + 宽限期"的启发式路径（见 {@code scheduledVoteAntiEntropy}）。</p>
+     */
+    public void onVoteSyncResponse(byte[] payload) {
+        FinalityVoteSyncCodec.SyncResponse resp = FinalityVoteSyncCodec.decodeResponse(payload);
+        if (resp == null) {
+            return;
+        }
+        if (!pagingRoundIssued || resp.requestFrom() != roundAskedFrom) {
+            // 不是本轮的回答：可能是上一轮的迟到响应，或别的节点发出的请求被广播到全网。
+            log.debug("Vote-sync response marker ignored: requestFrom={} currentRound={}",
+                    resp.requestFrom(), roundAskedFrom);
+            return;
+        }
+        pagingResponseSeen = true;
+        pagingMarkerCapable = true;
+        if (resp.count() <= 0) {
+            pagingPeerExhausted = true;
+            log.info("Vote-sync response marker: peer has nothing at or after epoch {}"
+                    + " (requestFrom={})", resp.servedTo() + 1, resp.requestFrom());
+            return;
+        }
+        long next = resp.servedTo() + 1;
+        if (next > nextSyncCursorEpoch) {
+            nextSyncCursorEpoch = next;
+        }
+        log.info("Vote-sync response marker: served {}..{} ({} votes) for request from {}"
+                + " -> next cursor {}", resp.servedFrom(), resp.servedTo(), resp.count(),
+                resp.requestFrom(), nextSyncCursorEpoch);
     }
 
     /** 处理对端的补票请求：把本地存的、带签名的票按 epoch **倒序**截断后一次性回推。 */
@@ -442,23 +535,35 @@ public class FinalityVoteBroadcaster {
                 page = store.loadLatestVoteObjects(req.fromEpoch(), req.maxVotes());
             }
             if (page == null || page.isEmpty()) {
+                // PLAN-057 第 8 处：空页也要回标记，请求方据此**立即**终止，
+                // 不必再等一个宽限期（老节点不发标记，仍由宽限期兜底）。
+                sendRawVotePayloadOverP2P(FinalityVoteSyncCodec.encodeResponse(
+                        req.fromEpoch(), req.fromEpoch(), req.fromEpoch() - 1, 0));
                 log.debug("Vote-sync request (from epoch{}, cursor={}) has nothing to serve",
                         req.fromEpoch(), req.cursor());
                 return;
             }
-            sendVotesOverP2P(page);
-            // PLAN-057：记录本端"刚服务出去的最大 epoch"，供对端推进游标时
-            // 与本端 own-crawl 取 max 用（多对端场景下不回退）。
+            long servedMin = Long.MAX_VALUE;
             long servedMax = Long.MIN_VALUE;
             for (Vote v : page) {
+                if (v.getEpoch() < servedMin) {
+                    servedMin = v.getEpoch();
+                }
                 if (v.getEpoch() > servedMax) {
                     servedMax = v.getEpoch();
                 }
             }
+            sendVotesOverP2P(page);
             noteEpochForCursor(servedMax);
+            // PLAN-057 第 8 处：把"实际服务了哪一段"回带给请求方。
+            // 没有这条标记，请求方只能按"收到的最大 epoch"猜；链头广播票会把游标
+            // 推到链头，中段被整段跳过（第五轮实测：请求 171、服务 171..237，
+            // 游标却跳到 372，238..370 一次都没被请求）。
+            sendRawVotePayloadOverP2P(FinalityVoteSyncCodec.encodeResponse(
+                    req.fromEpoch(), servedMin, servedMax, page.size()));
             log.info("Vote-sync request (from epoch{}, cursor={}) served with {} votes"
-                    + " (servedMaxEpoch={})",
-                    req.fromEpoch(), req.cursor(), page.size(), servedMax);
+                    + " (servedRange={}..{})",
+                    req.fromEpoch(), req.cursor(), page.size(), servedMin, servedMax);
             return;
         } catch (RuntimeException e) {
             log.warn("Vote-sync request (from epoch {}) could not read local store: {}",
@@ -479,6 +584,12 @@ public class FinalityVoteBroadcaster {
     void setAntiEntropyPagingEnabled(boolean enabled) {
         this.antiEntropyPagingEnabled = enabled;
         if (!enabled) {
+            pagingCooldownUntilNanos = 0L;
+            pagingResponseSeen = false;
+            pagingPeerExhausted = false;
+            pagingMarkerCapable = false;
+        }
+        if (!enabled) {
             nextSyncCursorEpoch = -1L;
             lastRespondedEpoch = -1L;
             pagingRoundIssued = false;
@@ -495,6 +606,14 @@ public class FinalityVoteBroadcaster {
      */
     void setAntiEntropyPagingGraceMs(long millis) {
         this.antiEntropyPagingGraceMs = Math.max(0L, millis);
+    }
+
+    void setAntiEntropyPagingCooldownMs(long millis) {
+        this.antiEntropyPagingCooldownMs = Math.max(0L, millis);
+    }
+
+    void setAntiEntropyMarginEpochs(long epochs) {
+        this.antiEntropyMarginEpochs = Math.max(0L, epochs);
     }
 
     /** 本地已知的最大投票 epoch；无票返回 -1。 */

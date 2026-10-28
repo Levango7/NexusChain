@@ -485,6 +485,12 @@ public class SyncManager implements Plugin, ApplicationListener<NewBlockMinedEve
             if (tx.getTransactionType() != NexusChainOuterClass.TransactionType.VOTE) {
                 continue;
             }
+            // PLAN-057 第 8 处：补票**响应标记**（0x5C）单独分流——它不是投票，
+            // 不能被当成票投递（老节点不认识 0x5C，按 isVotePayload=false 丢弃）。
+            if (org.nexus.consensus.finality.net.FinalityVoteSyncCodec.isResponsePayload(payload)) {
+                finalityVoteBroadcaster.onVoteSyncResponse(payload);
+                continue;
+            }
             // PLAN-025：补票请求（魔数 0x5B）与投票（0x5A）复用 VOTE 交易类型，按载荷魔数分流。
             // 老节点收到 0x5B 会因 isVotePayload 为 false 而丢弃 —— 向后兼容（只是不补票）。
             if (org.nexus.consensus.finality.net.FinalityVoteP2PCodec.isVotePayload(payload)
