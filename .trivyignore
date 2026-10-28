@@ -141,3 +141,20 @@ CVE-2026-84782
 # 说明：迁移后本源文件内 openssl/libssl3 等 bookworm 专有豁免条目对新镜像不再命中
 # （Trivy 对未命中的 ignore 条目静默忽略，无副作用）。
 
+
+# ============================================================================
+# --- 2026-10-28 例外：nacos-client 内嵌（shaded）guava 的 CVE-2026-102554 ---
+# 应用自身 guava 已升级（33.4.8-jre → 33.7.2-jre = Trivy 修复版），本条目只覆盖
+# nacos-client-3.1.1.jar 里 **relocated** 的副本：
+#   · 副本类在 com.alibaba.nacos.shaded.com.google.common.*（原始包名 com/google/common
+#     下 0 个类，本地 `jar tf` 实证），应用代码不会走到它；Trivy 仍从内嵌
+#     META-INF/maven/.../pom.properties 读到 guava 33.3.1-android 并报同一条 CVE。
+#   · 上游无可用修复：nacos-client 3.2.4 / 3.3.0-RC 仍内嵌 guava 33.5.0-android
+#     （同样 < 33.7.2），升 nacos 清不掉；Spring Cloud Alibaba 2025.1.0.0 锁 3.1.1。
+#   · 回归防线：应用自身 guava 的回退仍由 OWASP Dependency-Check（必检）覆盖，
+#     本条不会把自家依赖的旧版本静默掉。
+# 删除条件：nacos-client 某版本内嵌 guava ≥ 33.7.2（或不再内嵌）时移除。
+# 注：`trivyignore-staleness` 只复核 OS 层基础镜像；本条属 jar 层，会在那里被
+#     列为 B 类「作用域可能失效」（预期，不阻断）。
+# 取证：master push run 40589543320 → Trivy Docker Image Scan（6 个 Java 模块）jar 层。
+CVE-2026-102554
