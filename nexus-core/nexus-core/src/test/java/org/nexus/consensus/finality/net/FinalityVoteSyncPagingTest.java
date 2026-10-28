@@ -334,6 +334,57 @@ class FinalityVoteSyncPagingTest {
                         + "不得取进程内 lastRespondedEpoch+1=197（复测实测缺陷）");
     }
 
+    /**
+     * PLAN-057 复测回归（第 10 例）：**广播涓流不得把分页游标拉到链头**。
+     *
+     * <p>真缺陷（2026-10-28 第三轮测试床，E 重启后 583s 无进展）：首轮从 floor=0
+     * 拿到 200 票后，`lastRespondedEpoch` 被**正常广播**的票推到链头（实测涨到
+     * 对端前沿之上），于是后续每轮 `from = 链头 + 1`，响应端每次都"无货可服务"
+     * （只留 DEBUG），中段缺口一次都没被请求；而终止判据又因链头持续前进永不成立。</p>
+     *
+     * <p>三个"零"（响应端零次 served、调度器零次 WARN、零次 paging complete）
+     * 与"调度停摆"的假设不符——请求一直在发，只是 from 已越过前沿。</p>
+     */
+    @Test
+    void liveBroadcastTrickleAtHeadMustNotDragPagingCursor() {
+        // 对端有 250 张票（超过单轮上限 200），B 是空库。
+        final long total = 250L;
+        for (long epoch = 1; epoch <= total; epoch++) {
+            gadgetA.submitVote(vote("v1", epoch, CP1));
+        }
+
+        List<byte[]> bRequests = new CopyOnWriteArrayList<>();
+        FinalityVoteBroadcaster[] nodes = new FinalityVoteBroadcaster[2];
+        nodes[0] = newNode(gadgetA, relayingPeer(p -> nodes[1].onVoteReceived(p)));
+        nodes[1] = newNode(gadgetB, relayingPeer(p -> {
+            if (FinalityVoteSyncCodec.isSyncPayload(p)) {
+                bRequests.add(p);
+            }
+            nodes[0].onVoteReceived(p);
+        }));
+        nodes[1].setAntiEntropyPagingEnabled(true);
+        nodes[1].setAntiEntropyPagingGraceMs(60L);
+
+        // 第 1 轮：从 floor=0 起，A 回最老的 200 张（epoch 1..200）。
+        nodes[1].scheduledVoteAntiEntropy();
+        assertEquals(200, allVotes(storeB).size(), "第 1 轮应补回最老的 200 张");
+
+        // 关键：模拟在线集群的正常广播涓流——链头附近来一张 epoch=900 的票。
+        nodes[1].onVoteReceived(FinalityVoteCodec.encode(vote("v1", 900, CP1)));
+
+        // 第 2 轮：游标必须仍停在本轮窗口（[0,200)）的终点之后，即 201；
+        // 不得被涓流拉到 901（那样 A 无货，中段 201..250 永远补不上）。
+        nodes[1].scheduledVoteAntiEntropy();
+        assertEquals(2, bRequests.size(), "第 2 轮必须发出请求");
+        assertEquals(201L, FinalityVoteSyncCodec.decode(bRequests.get(1)).fromEpoch(),
+                "广播涓流（epoch=900）不得把游标推到链头：第 2 轮应从 201 起");
+
+        // 第 3 轮：A 已无 ≥251 的货 ⇒ 收尾。
+        nodes[1].scheduledVoteAntiEntropy();
+        assertTrue(allVotes(storeB).stream().anyMatch(v -> v.getEpoch() == total),
+                "201..250 的中段必须补齐（旧实现游标被涓流拉到 901、A 无货，中段永远补不上）");
+    }
+
     // ---------- helpers ----------
 
     private FinalityVoteBroadcaster newNode(FinalityGadget gadget, PeerServer peerServer) {
