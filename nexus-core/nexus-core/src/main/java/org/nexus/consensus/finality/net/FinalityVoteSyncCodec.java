@@ -32,6 +32,24 @@ public final class FinalityVoteSyncCodec {
     /** 单次请求/响应的默认上限，防止一次请求把整条历史全量拉回。 */
     public static final int DEFAULT_MAX_VOTES = 200;
 
+    /**
+     * 补票**响应标记**魔数（PLAN-057 第 8 处）。
+     *
+     * <p>为什么必须要有它：请求方无法从"收到的票"判断对端<b>实际服务了哪一段</b>。
+     * 第五轮测试床实证：请求 {@code from=171}、对端按升序服务 {@code 171..237}
+     * （对端日志 {@code servedMaxEpoch=237}），但同一时刻链头 371 的正常广播票
+     * 落在本轮窗口内 ⇒ 游标被推到 372 ⇒ {@code 238..370} 一次都没被请求过。
+     * 任何"按收到的最大 epoch 推进"的启发式都会在这一形态下失败。</p>
+     *
+     * <p>因此响应端在回推票之后，额外广播一条本标记，携带
+     * {@code requestFrom / servedFrom / servedTo / count}，请求方据此<b>精确</b>
+     * 推进游标；{@code count=0} 表示"该起点之后无货"⇒ 立即终止，不必等宽限期。</p>
+     *
+     * <p><b>向后兼容</b>：老节点不认识 0x5C，按既有规则丢弃（只是继续用宽限期兜底）；
+     * 新节点收到老节点的响应（无标记）时，仍走第 6 处的窗口过滤 + 宽限期路径。</p>
+     */
+    public static final byte RESPONSE_MAGIC = 0x5C;
+
     private FinalityVoteSyncCodec() {}
 
     /**
@@ -97,6 +115,52 @@ public final class FinalityVoteSyncCodec {
         }
         int limit = (max == null || max <= 0 || max > 10_000) ? DEFAULT_MAX_VOTES : max.intValue();
         return new SyncRequest(Math.max(0L, from), limit, cursor);
+    }
+
+    /**
+     * 补票响应标记（不可变）。
+     *
+     * @param requestFrom 对应请求的起点（请求方据此判断"这是不是我这轮的回答"）
+     * @param servedFrom  本次实际服务的第一张票的 epoch（无票时等于 requestFrom）
+     * @param servedTo    本次实际服务的最后一张票的 epoch（无票时等于 requestFrom - 1）
+     * @param count       本次服务的票数（0 = 该起点之后无货）
+     */
+    public record SyncResponse(long requestFrom, long servedFrom, long servedTo, int count) {}
+
+    /** 编码响应标记：{@code {"req":..,"sfrom":..,"sto":..,"n":..}}，前缀 {@link #RESPONSE_MAGIC}。 */
+    public static byte[] encodeResponse(long requestFrom, long servedFrom, long servedTo, int count) {
+        String body = "{\"req\":" + Math.max(0L, requestFrom)
+                + ",\"sfrom\":" + Math.max(0L, servedFrom)
+                + ",\"sto\":" + Math.max(0L, servedTo)
+                + ",\"n\":" + Math.max(0, count) + "}";
+        byte[] raw = body.getBytes(StandardCharsets.UTF_8);
+        byte[] out = new byte[1 + raw.length];
+        out[0] = RESPONSE_MAGIC;
+        System.arraycopy(raw, 0, out, 1, raw.length);
+        return out;
+    }
+
+    public static boolean isResponsePayload(byte[] payload) {
+        return payload != null && payload.length > 1 && payload[0] == RESPONSE_MAGIC;
+    }
+
+    /** 解码响应标记；非本类型或格式损坏返回 {@code null}。 */
+    public static SyncResponse decodeResponse(byte[] payload) {
+        if (!isResponsePayload(payload)) {
+            return null;
+        }
+        String json = new String(payload, 1, payload.length - 1, StandardCharsets.UTF_8);
+        Long req = parseLong(json, "\"req\":");
+        Long sfrom = parseLong(json, "\"sfrom\":");
+        Long sto = parseLong(json, "\"sto\":");
+        Long n = parseLong(json, "\"n\":");
+        if (req == null || n == null) {
+            return null;
+        }
+        int count = (n <= 0 || n > 10_000) ? 0 : n.intValue();
+        long from = sfrom == null ? req : sfrom;
+        long to = sto == null ? (count == 0 ? req - 1 : from + count - 1) : sto;
+        return new SyncResponse(Math.max(0L, req), Math.max(0L, from), to, count);
     }
 
     private static Long parseLong(String json, String key) {

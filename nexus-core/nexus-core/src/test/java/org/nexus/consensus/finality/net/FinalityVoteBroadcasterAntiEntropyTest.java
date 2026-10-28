@@ -98,8 +98,13 @@ class FinalityVoteBroadcasterAntiEntropyTest {
 
         broadcaster.onVoteReceived(FinalityVoteSyncCodec.encode(0L, 10));
 
-        assertEquals(3, sent.size(), "应答应把 epoch>=0 的 3 张票全部回推");
-        sent.forEach(p -> {
+        // PLAN-057 第 8 处：响应端在回推票之后会额外发一条 0x5C 响应标记，
+        // 计数与解码都必须把它排除（它不是票）。
+        List<byte[]> votesSent = sent.stream()
+                .filter(p -> !FinalityVoteSyncCodec.isResponsePayload(p))
+                .collect(java.util.stream.Collectors.toList());
+        assertEquals(3, votesSent.size(), "应答应把 epoch>=0 的 3 张票全部回推");
+        votesSent.forEach(p -> {
             Vote v = FinalityVoteCodec.decode(p);
             assertNotNull(v, "回推的载荷必须能被投票 codec 解码");
             assertTrue(v.getSignature() != null && v.getSignature().length > 0,
@@ -117,7 +122,10 @@ class FinalityVoteBroadcasterAntiEntropyTest {
 
         broadcaster.onVoteReceived(FinalityVoteSyncCodec.encode(0L, 2));
 
-        assertEquals(2, sent.size(), "max=2 时只回推 2 张票（防止一次拉回全量历史）");
+        long voteCount = sent.stream()
+                .filter(p -> !FinalityVoteSyncCodec.isResponsePayload(p))
+                .count();
+        assertEquals(2, voteCount, "max=2 时只回推 2 张票（防止一次拉回全量历史）");
     }
 
     @Test

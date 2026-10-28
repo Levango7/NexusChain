@@ -117,13 +117,29 @@ class FinalityVoteSyncPagingTest {
 
         responder.onVoteReceived(FinalityVoteSyncCodec.encode(0L, 3, true));
 
-        assertEquals(3, sent.size(), "max=3 时只回推 3 张");
+        // PLAN-057 第 8 处：响应端在回推票之后会额外发一条 0x5C 响应标记，
+        // 携带实际服务范围。计数时必须把它排除，否则会把标记当成"第 4 张票"。
+        List<byte[]> votesSent = sent.stream()
+                .filter(p -> !FinalityVoteSyncCodec.isResponsePayload(p))
+                .collect(java.util.stream.Collectors.toList());
+        assertEquals(3, votesSent.size(), "max=3 时只回推 3 张");
         long[] epochs = new long[3];
         for (int i = 0; i < 3; i++) {
-            Vote v = FinalityVoteCodec.decode(sent.get(i));
+            Vote v = FinalityVoteCodec.decode(votesSent.get(i));
             assertNotNull(v);
             epochs[i] = v.getEpoch();
         }
+        // 标记必须回带实际范围（3 张：1..3），请求方据此精确推进游标。
+        FinalityVoteSyncCodec.SyncResponse marker = sent.stream()
+                .filter(FinalityVoteSyncCodec::isResponsePayload)
+                .findFirst()
+                .map(FinalityVoteSyncCodec::decodeResponse)
+                .orElse(null);
+        assertNotNull(marker, "响应端必须回带 0x5C 响应标记");
+        assertEquals(0L, marker.requestFrom());
+        assertEquals(1L, marker.servedFrom());
+        assertEquals(3L, marker.servedTo());
+        assertEquals(3, marker.count());
         assertEquals(1L, epochs[0], "cursor 分页必须升序服务：第一张应是最老的 epoch=1");
         assertEquals(2L, epochs[1]);
         assertEquals(3L, epochs[2]);
@@ -189,7 +205,10 @@ class FinalityVoteSyncPagingTest {
 
         broadcaster.onVoteReceived(FinalityVoteSyncCodec.encode(0L, 4, true));
 
-        assertEquals(3, sent.size(), "只有 3 张可服务");
+        long voteCount = sent.stream()
+                .filter(p -> !FinalityVoteSyncCodec.isResponsePayload(p))
+                .count();
+        assertEquals(3, voteCount, "只有 3 张可服务");
     }
 
     // ---------- 4) 向后兼容：无 cursor 字段 ----------
@@ -436,6 +455,142 @@ class FinalityVoteSyncPagingTest {
         assertTrue(sawMarginRequest,
                 "grace(200ms) > tick 间隔(40ms) 时终止分支不可达：分页永不退出、"
                         + "也永不回退 margin 修补");
+    }
+
+    /**
+     * PLAN-057 第 8 处回归（第 12 例）：**链头广播票不得让分页跳过中段**。
+     *
+     * <p>第五轮测试床的真实形态：E 有 epoch 1..170 和链头 371，缺 171..370。
+     * 请求 {@code from=171}、max-votes=200 ⇒ 第 6 处的"本轮请求窗口"
+     * 上界是 {@code 171+200=371}，而链头正好是 371 ⇒ 链头的正常广播票
+     * 落在窗口内、被当成响应票 ⇒ 游标跳到 372，{@code 171..370} 一次都没被请求
+     * （对端日志：{@code servedMaxEpoch=237}，而游标却到了 372）。</p>
+     *
+     * <p>修法：响应端在回推票后广播 0x5C 标记（{@code requestFrom/servedFrom/
+     * servedTo/count}），请求方据此**精确**推进游标，不再靠"收到的最大 epoch"猜。</p>
+     *
+     * <p>本测试在请求方第二轮之前注入一张链头票（epoch=371），旧实现会因此
+     * 把游标推到 372 并永久跳过 171..370。</p>
+     */
+    @Test
+    void responseMarkerPreventsHeadVoteFromSkippingGap() {
+        for (long epoch = 1; epoch <= 371; epoch++) {
+            gadgetA.submitVote(vote("v1", epoch, CP1));
+        }
+        // B：有 1..170 和链头 371，缺 171..370（正好 200 个 epoch = 单轮上限）。
+        for (long epoch = 1; epoch <= 170; epoch++) {
+            gadgetB.submitVote(vote("v1", epoch, CP1));
+        }
+        gadgetB.submitVote(vote("v1", 371, CP1));
+
+        FinalityVoteBroadcaster[] nodes = new FinalityVoteBroadcaster[2];
+        final List<byte[]> bRequests = new CopyOnWriteArrayList<>();
+        nodes[0] = newNode(gadgetA, relayingPeer(p -> nodes[1].onVoteReceived(p)));
+        nodes[1] = newNode(gadgetB, relayingPeer(p -> {
+            if (FinalityVoteSyncCodec.isSyncPayload(p)) {
+                bRequests.add(p);
+            }
+            nodes[0].onVoteReceived(p);
+        }));
+        nodes[1].setAntiEntropyPagingEnabled(true);
+        nodes[1].setAntiEntropyPagingGraceMs(60L);
+        nodes[1].setAntiEntropyPagingCooldownMs(0L);
+        // 与测试床一致：margin=200 ⇒ 地板 = 371-200 = 171（缺 171..370）。
+        nodes[1].setAntiEntropyMarginEpochs(200L);
+
+        // 第 1 轮：地板 = 371 - 200 = 171；A 升序服务 171..370。
+        nodes[1].scheduledVoteAntiEntropy();
+        // 关键注入：链头的正常广播票。旧实现（无 0x5C）会把它当响应票 ⇒ 游标 372。
+        nodes[0].broadcast(vote("v1", 371, CP1));
+        // 第 2 轮（应从 371 起，而不是 372）、第 3 轮（372，对端无货）、第 4 轮（终止）。
+        nodes[1].scheduledVoteAntiEntropy();
+        nodes[1].scheduledVoteAntiEntropy();
+        nodes[1].scheduledVoteAntiEntropy();
+
+        long[] cursorFroms = bRequests.stream()
+                .map(FinalityVoteSyncCodec::decode)
+                .filter(java.util.Objects::nonNull)
+                .filter(FinalityVoteSyncCodec.SyncRequest::cursor)
+                .mapToLong(FinalityVoteSyncCodec.SyncRequest::fromEpoch)
+                .toArray();
+        assertTrue(cursorFroms.length >= 2, "应至少有两轮分页请求，实际 " + cursorFroms.length);
+        assertEquals(171L, cursorFroms[0], "首轮从缺口地板 171 起");
+        assertEquals(371L, cursorFroms[1],
+                "第 2 轮必须从 171+200=371 起——链头票 371 不得把游标推到 372");
+        assertEquals(371, allVotes(storeB).size(),
+                "171..370 必须被补齐：链头票不能让它被整段跳过");
+    }
+
+    /**
+     * PLAN-057 第 8 处回归（第 13 例）：**标记尚在途中时，链头票不得触发老启发式**。
+     *
+     * <p>第 12 例在测试里是同步投递，所以标记总是先到。生产里标记与广播票
+     * 走同一条 P2P 通道、到达顺序不保证：若链头票先到、标记后到，
+     * 而 {@code pagingResponseSeen} 只表示"本轮标记到了"，则下一轮发请求后
+     * {@code !pagingResponseSeen} 为真 ⇒ 老启发式重新生效 ⇒ 游标被拖到链头。</p>
+     *
+     * <p>本测试把标记**扣住不投递**，先注入一张链头票（epoch=10），
+     * 再跑一轮：游标必须仍是 4（响应实际服务到 3），不能是 11。
+     * 随后放行标记，游标仍应精确前进。</p>
+     */
+    @Test
+    void inFlightMarkerMustNotLetHeadVoteTriggerHeuristic() {
+        for (long epoch = 1; epoch <= 3; epoch++) {
+            gadgetA.submitVote(vote("v1", epoch, CP1));
+        }
+
+        FinalityVoteBroadcaster[] nodes = new FinalityVoteBroadcaster[2];
+        final List<byte[]> heldMarkers = new CopyOnWriteArrayList<>();
+        // A 的出站：标记扣住（模拟"还在路上"），票照常投给 B。
+        nodes[0] = newNode(gadgetA, relayingPeer(p -> {
+            if (FinalityVoteSyncCodec.isResponsePayload(p)) {
+                heldMarkers.add(p);
+                return;
+            }
+            nodes[1].onVoteReceived(p);
+        }));
+        final List<byte[]> bRequests = new CopyOnWriteArrayList<>();
+        nodes[1] = newNode(gadgetB, relayingPeer(p -> {
+            if (FinalityVoteSyncCodec.isSyncPayload(p)) {
+                bRequests.add(p);
+            }
+            nodes[0].onVoteReceived(p);
+        }));
+        nodes[1].setAntiEntropyPagingEnabled(true);
+        nodes[1].setAntiEntropyPagingGraceMs(5000L);   // 宽限期未过
+
+        // 第 1 轮：0 -> A 服务 1..3（标记被扣住）。
+        nodes[1].scheduledVoteAntiEntropy();
+        assertEquals(3, allVotes(storeB).size());
+
+        // 链头广播票先到（epoch=10，远高于实际服务范围）。
+        nodes[1].onVoteReceived(FinalityVoteCodec.encode(vote("v1", 10, CP1)));
+
+        // 宽限期内再跑一轮：不得按 lastResponded=10 把游标推到 11。
+        nodes[1].scheduledVoteAntiEntropy();
+        long[] froms = bRequests.stream()
+                .map(FinalityVoteSyncCodec::decode)
+                .filter(java.util.Objects::nonNull)
+                .filter(FinalityVoteSyncCodec.SyncRequest::cursor)
+                .mapToLong(FinalityVoteSyncCodec.SyncRequest::fromEpoch)
+                .toArray();
+        assertTrue(froms.length >= 2, "应有两轮分页请求，实际 " + froms.length);
+        assertEquals(0L, froms[froms.length - 1],
+                "标记未到时不得按链头票推进游标（老启发式必须等宽限期）");
+
+        // 放行标记：游标精确前进到 4。
+        for (byte[] marker : heldMarkers) {
+            nodes[1].onVoteSyncResponse(marker);
+        }
+        nodes[1].scheduledVoteAntiEntropy();
+        long last = bRequests.stream()
+                .map(FinalityVoteSyncCodec::decode)
+                .filter(java.util.Objects::nonNull)
+                .filter(FinalityVoteSyncCodec.SyncRequest::cursor)
+                .mapToLong(FinalityVoteSyncCodec.SyncRequest::fromEpoch)
+                .reduce((a, b) -> b)
+                .orElse(-1L);
+        assertEquals(4L, last, "标记到达后游标必须是 servedTo+1 = 4");
     }
 
     // ---------- helpers ----------
