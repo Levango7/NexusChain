@@ -317,6 +317,20 @@ public class FinalityVoteBroadcaster {
                         >= antiEntropyPagingGraceMs * 1_000_000L;
                 boolean peerExhaustedAtCursor = roundAskedFrom >= 0
                         && lastRespondedEpoch < roundAskedFrom;
+                // PLAN-057 §5.5 观测点：分页开启时每轮 tick 记一行状态。
+                // 动机：第三轮测试床出现"首轮之后整条 anti-entropy 调度静默"
+                // （cursor=true 仅 1 次、cursor=false 也是 0 次），而现有日志
+                // 只在"首轮开始"和"判完成"时打点，中间静默无法区分
+                // "没被调度"与"调度了但没发请求"
+                // （原猜"broadcast 阻塞饿死 @Scheduled 单线程调度器"已排除：
+                // ScheduleConfig 的池大小是 20）。
+                // 缺省 paging-enabled=false，开启后每 interval-ms 一行，量可控。
+                log.info("Anti-entropy paging tick: maxEpoch={} cursor={} askedFrom={} "
+                                + "lastResponded={} votesSinceRound={} graceElapsed={} "
+                                + "peerExhausted={} graceMs={}",
+                        maxEpoch, nextSyncCursorEpoch, roundAskedFrom, lastRespondedEpoch,
+                        votesSinceRound.get(), graceElapsed, peerExhaustedAtCursor,
+                        antiEntropyPagingGraceMs);
                 if (pagingRoundIssued && graceElapsed && peerExhaustedAtCursor) {
                     log.info("Anti-entropy paging complete: no vote at or after epoch {}"
                             + " after {}ms grace; resuming margin-based gap repair"
