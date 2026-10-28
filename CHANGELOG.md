@@ -4,6 +4,27 @@
 
 ## [2.75.0] - 2026-10-26
 
+### relay/event-source 调度循环从未执行——ShedLock primitive 返回拒绝（PLAN-055）
+
+**PLAN-046 §五 留的测试床联调抓到一个"单测全绿但生产从未执行"的真缺陷**：
+`BridgeEventSourceWorker.runOnce()` 与 `MessageRelayWorker.runOnce()` 的
+`@SchedulerLock` 在 Spring AOP **调用前**即抛
+`LockingNotSupportedException: Can not lock method returning primitive value`
+（ShedLock 4.x 拒绝 primitive 返回）——两条链路自 PLAN-026/037/046 装配
+`relay-enabled=true` 以来在真实部署里从未运行过；单测绿是因为用 `new` +
+手工 `runOnce()` 绕开了 AOP。同类盲区第 1 例是 PLAN-038 的
+`NoUniqueBeanDefinitionException`。
+
+- **修复**：两处返回类型 `int` → `Integer`（装箱，语义零变化）；
+- **顺带**：`nexus-bridge/build.gradle` 补 `runtimeOnly` PG 驱动——
+  bootJar 原先不含 `org.postgresql.Driver`，单 jar 直跑即启动失败；
+- **复验**（真起 bridge 应用，relay + event-source + execute 全开）：
+  eventSource 计数稳定增长（t+120s pollCount=42 / relayedCount=84 / lastNonce=83），
+  每条消息经 `MessageRelayWorker` 验签 → 执行到 L2-sim 模拟链 → 记账
+  （日志 `relay: message ... executed, txHash=0x...`）；20 例 messaging 单测不回归；
+- **口径**：模拟事件源是进程内内存态（测试床演示），不验证真实链事实；
+  多副本 ShedLock 竞争未测。
+
 ### MPC E2E job 韧性：apt 失败的 45 分钟空转压到 ~10 分钟（PLAN-054）
 
 PR #298 的 CI 取证：`MPC Java Cluster E2E` 的 apt 步骤在 job 开始 18 秒后就

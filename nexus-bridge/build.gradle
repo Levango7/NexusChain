@@ -162,6 +162,10 @@ dependencies {
 
     runtimeOnly 'com.h2database:h2'
     runtimeOnly 'com.mysql:mysql-connector-j'
+    // PLAN-055：PG 驱动原先不在 bootJar 类路径（dev/compose 走外部 lib），
+    // 测试床单 jar 直跑会 'Cannot load driver class: org.postgresql.Driver'。
+    // 生产 compose/K8s 已注入驱动；加这里只为让 bootJar 自包含（无副作用）。
+    runtimeOnly 'org.postgresql:postgresql'
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     // === Spring Boot 4.0 模块化：@AutoConfigureMockMvc 移到 spring-boot-webmvc-test ===
     testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
