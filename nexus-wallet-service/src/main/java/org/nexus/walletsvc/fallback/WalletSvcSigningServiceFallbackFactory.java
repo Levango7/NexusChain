@@ -55,6 +55,27 @@ public class WalletSvcSigningServiceFallbackFactory extends SigningServiceFallba
             }
 
             @Override
+            public java.util.Map<String, Object> signTransferWithBusinessApproval(
+                    String fromPubkey, String toPubkeyHash, BigDecimal amount, String businessApprovalId) {
+                // A2 凭据签名降级 = 结果未知（凭据可能已消费并广播）：
+                // 返回 null 由 A2 腿判 EXECUTED_UNVERIFIED，绝不回落重试（双花）
+                log.error("A2 凭据签名降级: signing-service 不可用, businessApprovalId={}, to={}, amount={}",
+                        businessApprovalId, toPubkeyHash, amount);
+                return null;
+            }
+
+            @Override
+            public java.util.Map<String, Object> registerBusinessApproval(
+                    String businessApprovalId, String payloadHash, BigDecimal amount,
+                    String currency, String fromPubkey, String toPubkeyHash,
+                    String expiresAt, String approversCsv) {
+                // A2 登记降级 = 未登记；A2 腿据此回落既有审批流（安全，无资金动作）
+                log.error("A2 凭据登记降级: signing-service 不可用, businessApprovalId={}",
+                        businessApprovalId);
+                return null;
+            }
+
+            @Override
             public java.util.Map<String, Object> getCapability() {
                 // 审计修复：capability 探针降级返回 null，健康指示器按 DOWN 处理
                 return null;

@@ -143,6 +143,12 @@ nexus:
 
 # === OpenFeign 配置（设计文档 §4.4.2） ===
 # wallet-service 通过 Feign 调用 signing-service（SigningServiceFeignClient）
+# A2（ADR-036 §2.2，2026-10-28 立项）：开启后提现单 APPROVED 先向 signing 登记业务凭据
+# 再携凭据签名（跳过 signing 大额审批，消除双重审批）。默认 false = 旧行为逐字节不变；
+# 登记失败自动回落既有审批流（fail-closed 方向）。凭据 TTL 默认 24h，过期不续期。
+nexus.signing.business-approval:
+  enabled: ${NEXUS_SIGNING_BUSINESS_APPROVAL_ENABLED:false}
+  ttl-hours: ${NEXUS_SIGNING_BUSINESS_APPROVAL_TTL_HOURS:24}
 feign:
   client:
     config:

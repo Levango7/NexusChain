@@ -76,7 +76,18 @@ wallet 提现确实存在双重审批（wallet 多签 + signing 大额审批）�
 **代价（接受）**：wallet 大额提现比 gateway 其他业务多一道人审；这是共用地址
 架构下的必要成本，直到 A2 落地。
 
-### 2.2 A2（Proposed，立项）：signing 提供「业务已批准」显式契约
+### 2.2 A2（**Accepted，2026-10-28 立项实施**）：signing 提供「业务已批准」显式契约
+
+> **状态更新（2026-10-28）**：用户拍板立项（板 20261028-0608）。实施按
+> `docs/adr/A2-business-approval-design-draft-2026-10-27.md` 执行，D1-D5 取推荐项：
+> 登记端点 `POST /api/v1/signing/business-approvals` + `signTransfer` 可选
+> `businessApprovalId` + 独立表 `signing_business_approval`（signing **V5**）+
+> canonical sha256（`A2-v1`，nexus-sdk 双侧共享）+ wallet 开关
+> `nexus.signing.business-approval.enabled`（**默认 false = 旧行为逐字节不变**）。
+> **一处对草案 §2.2 的强化**：凭据**已被消费**时 signing 返回 5003 终止而**不回落人审**
+> ——"校验失败一律回落"若适用于已消费凭据，会为同一笔提现保留二次放款通道
+> （#294/#300 同源原则："可能已出"不得当"没出"重放）；其余校验失败
+> （不存在 / 哈希不匹配 / 过期）仍回落旧流程（有人审兜底）。
 
 **目标**：把豁免粒度从「地址」收紧到「单笔业务」——既去掉 wallet 的重复审批，
 又不误伤 gateway 其他业务。

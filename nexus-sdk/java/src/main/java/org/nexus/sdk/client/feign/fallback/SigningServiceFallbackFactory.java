@@ -53,6 +53,23 @@ public class SigningServiceFallbackFactory implements FallbackFactory<SigningSer
             }
 
             @Override
+            public java.util.Map<String, Object> signTransferWithBusinessApproval(
+                    String fromPubkey, String toPubkeyHash, BigDecimal amount, String businessApprovalId) {
+                // fail-closed：凭据签名降级 = 结果未知（凭据可能已消费并广播），
+                // 调用方（wallet A2 腿）必须按 EXECUTED_UNVERIFIED 处理，不得回落重试
+                return null;
+            }
+
+            @Override
+            public java.util.Map<String, Object> registerBusinessApproval(
+                    String businessApprovalId, String payloadHash, BigDecimal amount,
+                    String currency, String fromPubkey, String toPubkeyHash,
+                    String expiresAt, String approversCsv) {
+                // fail-closed：登记降级 = 未登记；调用方可安全回落既有审批流
+                return null;
+            }
+
+            @Override
             public java.util.Map<String, Object> getCapability() {
                 // 审计修复：capability 探针降级返回 null，健康指示器按 DOWN 处理
                 return null;

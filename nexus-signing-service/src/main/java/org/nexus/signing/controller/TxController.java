@@ -6,8 +6,8 @@ import org.nexus.common.tracing.BusinessSpan;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.google.gson.JsonObject;
 import org.nexus.sdk.common.APIResult;
-import org.nexus.signing.pool.NonceAllocator;
 import org.nexus.signing.pool.NoncePool;
+import org.nexus.signing.pool.NonceAllocator;
 import org.nexus.signing.pool.NonceState;
 import org.nexus.signing.keystore.PlatformKeystore;
 import org.nexus.signing.config.SecurityRoles;
@@ -16,6 +16,8 @@ import org.nexus.signing.audit.AuditLogService;
 import org.nexus.signing.approval.SigningApprovalService;
 import org.nexus.signing.approval.SigningApprovalRequest;
 import org.nexus.sdk.util.JsonUtil;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import io.micrometer.tracing.Tracer;
 import jakarta.servlet.http.HttpServletRequest;
@@ -53,6 +55,8 @@ import java.util.TreeMap;
 @RestController
 public class TxController {
 
+    private static final Logger log = LoggerFactory.getLogger(TxController.class);
+
     @Autowired
     NoncePool noncePool;
 
@@ -85,6 +89,13 @@ public class TxController {
      */
     @Autowired(required = false)
     SigningApprovalService signingApprovalService;
+
+    /**
+     * A2 业务批准凭据服务（ADR-036 §2.2，2026-10-28）。可为 null（单测未装配时
+     * 携凭据请求按"无法核验"回落既有审批流——豁免 fail-closed，业务不阻断）。
+     */
+    @Autowired(required = false)
+    org.nexus.signing.business.BusinessApprovalService businessApprovalService;
 
     /**
      * LEGACY transfer endpoint, kept for backward compatibility with existing
@@ -139,9 +150,10 @@ public class TxController {
     public Object signTransfer(@RequestParam(value = "fromPubkey", required = true) String fromPubkey,
                                @RequestParam(value = "toPubkeyHash", required = true) String toPubkeyHash,
                                @RequestParam(value = "amount", required = true) BigDecimal amount,
+                               @RequestParam(value = "businessApprovalId", required = false) String businessApprovalId,
                                HttpServletRequest request
     ) throws IOException {
-        return signAndBroadcast(fromPubkey, toPubkeyHash, amount, request);
+        return signAndBroadcast(fromPubkey, toPubkeyHash, amount, businessApprovalId, request);
     }
 
     /**
@@ -301,13 +313,64 @@ public class TxController {
      */
     private Object signAndBroadcast(String fromPubkey, String toPubkeyHash,
                                     BigDecimal amount, HttpServletRequest request) throws IOException {
-        // P2-F1：提取调用方信息用于审计
+        return signAndBroadcast(fromPubkey, toPubkeyHash, amount, null, request);
+    }
+
+    /**
+     * 签名 + 广播（A2 扩展形态）：{@code businessApprovalId} 非空时先走业务批准凭据校验。
+     *
+     * <p><b>A2 分派（ADR-036 §2.2，2026-10-28 立项实施）</b>：</p>
+     * <ul>
+     *   <li>凭据服务不可用 / 凭据不存在 / 载荷哈希不匹配 / 已过期 ⇒
+     *       <b>回落既有大额审批流</b>（本方法后续逻辑，逐字节不变）——
+     *       豁免 fail-closed，但业务不阻断（有人审兜底）；</li>
+     *   <li>凭据有效 ⇒ CAS 消费（并发只成一个）→ <b>跳过 signing 大额审批</b>直接
+     *       签名广播；广播失败（资金未转出的失败响应）⇒ 凭据回退 REGISTERED 可重试；</li>
+     *   <li><b>凭据已被消费 ⇒ 返回 5003 终止，绝不回落人审</b>——上次签名可能已广播，
+     *       此时再给一条人审通道等于为同一笔提现开二次放款路径
+     *       （#294/#300 同源原则："可能已出"不得当"没出"重放）。</li>
+     * </ul>
+     *
+     * <p>未携带 {@code businessApprovalId} 的调用（gateway 五路径 / flag 关闭的
+     * wallet / legacy 端点）不进入本逻辑，行为与 A2 之前逐字节一致。</p>
+     */
+    private Object signAndBroadcast(String fromPubkey, String toPubkeyHash,
+                                    BigDecimal amount, String businessApprovalId,
+                                    HttpServletRequest request) throws IOException {
         String actor = AuditLogService.resolveActor("anonymous");
-        // 中9：使用实例方法 extractClientIp，仅信任可信代理的 X-Forwarded-For。
-        // auditLogService 为 null（测试环境）时回退到 RemoteAddr（最安全，不信任 XFF）。
         String sourceIp = auditLogService != null
                 ? auditLogService.extractClientIp(request)
                 : request.getRemoteAddr();
+
+        String baId = businessApprovalId == null || businessApprovalId.isBlank()
+                ? null : businessApprovalId.trim();
+        if (baId != null) {
+            if (businessApprovalService == null) {
+                // 登记表不可用（单测/降级）：无法核验 ⇒ 不豁免，回落既有审批流（有人审兜底）
+                log.warn("businessApprovalId={} 携带但凭据服务不可用，回落大额审批流", baId);
+            } else {
+                org.nexus.signing.business.BusinessApprovalService.ConsumeAttempt attempt =
+                        businessApprovalService.tryConsume(baId, fromPubkey, toPubkeyHash, amount);
+                if (attempt.consumed()) {
+                    Object result = doSignAndBroadcast(fromPubkey, toPubkeyHash, amount, request, actor, sourceIp);
+                    if (isFailureResponse(result)) {
+                        // 失败响应 = 资金未转出：凭据回退可重试（并发已变则保持 CONSUMED 交人工）
+                        businessApprovalService.revertConsumedAfterFailedBroadcast(baId);
+                    }
+                    return result;
+                }
+                if (attempt.reason() == org.nexus.signing.business.BusinessApprovalService.Reason.ALREADY_CONSUMED) {
+                    return businessApprovalConsumedResponse(baId);
+                }
+                // ABSENT / HASH_MISMATCH / EXPIRED：审计已在服务内落，继续走既有审批流
+                log.info("businessApprovalId={} 未通过豁免校验（{}），回落大额审批流",
+                        baId, attempt.reason());
+            }
+        }
+
+        // P2-F1：提取调用方信息用于审计
+        // 中9：使用实例方法 extractClientIp，仅信任可信代理的 X-Forwarded-For。
+        // auditLogService 为 null（测试环境）时回退到 RemoteAddr（最安全，不信任 XFF）。
 
         // P0-2：大额签名触发多签审批（阻断式：创建审批请求后返回 PENDING，不执行签名）
         if (signingApprovalService != null
@@ -557,6 +620,23 @@ public class TxController {
         response.put("approvalId", approvalId);
         response.put("message", "大额签名需等待审批通过");
         return response;
+    }
+
+    /**
+     * A2：业务批准凭据已被消费的终止响应（statusCode=5003，HTTP 409）。
+     *
+     * <p><b>绝不回落人审</b>：凭据已消费意味着上次签名可能已广播；若此处降级为
+     * "创建新审批单"，同一笔提现就获得了二次放款路径。调用方（wallet A2 腿）收到
+     * 非 2xx 后经 Feign 降级为 null，按 {@code EXECUTED_UNVERIFIED} 交人工核对。</p>
+     */
+    private ResponseEntity<Object> businessApprovalConsumedResponse(String businessApprovalId) {
+        APIResult result = new APIResult();
+        result.setStatusCode(5003);
+        result.setMessage("business approval already consumed (possible prior broadcast); "
+                + "manual reconciliation required: " + businessApprovalId);
+        log.error("A2 凭据已被消费，签名拒绝（不回落人审）: businessApprovalId={}", businessApprovalId);
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(JsonUtil.GSON.fromJson(JsonUtil.GSON.toJson(result), HashMap.class));
     }
 
     /**

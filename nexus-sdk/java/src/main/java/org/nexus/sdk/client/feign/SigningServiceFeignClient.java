@@ -70,6 +70,52 @@ public interface SigningServiceFeignClient {
                         @RequestParam("amount") BigDecimal amount);
 
     /**
+     * A2（ADR-036 §2.2）：携带业务批准凭据的签名广播（2026-10-28 立项实施）。
+     *
+     * <p>对应 {@code POST /api/v1/transfers/sign}（同一端点，多一个可选参数）。
+     * signing 侧校验凭据（存在 / 未过期 / 未消费 / 载荷摘要匹配）通过后
+     * <b>跳过自身大额审批</b>直接签名广播；任一校验不过时<b>回落到既有审批流</b>
+     * （返回 2001）——除「凭据已消费」返回 5003（可能已广播，不得再走人审，
+     * 否则同一笔提现有二次放款通道）。</p>
+     *
+     * <p>{@code businessApprovalId} 应传业务单号（wallet 提现 requestId），
+     * 且必须已通过 {@link #registerBusinessApproval} 登记同一载荷。</p>
+     */
+    @PostMapping(value = "/transfers/sign", consumes = "application/x-www-form-urlencoded")
+    java.util.Map<String, Object> signTransferWithBusinessApproval(
+                        @RequestParam("fromPubkey") String fromPubkey,
+                        @RequestParam("toPubkeyHash") String toPubkeyHash,
+                        @RequestParam("amount") BigDecimal amount,
+                        @RequestParam("businessApprovalId") String businessApprovalId);
+
+    /**
+     * A2：登记一笔业务批准凭据（wallet → signing，2026-10-28 立项实施）。
+     *
+     * <p>对应 {@code POST /api/v1/signing/business-approvals}。幂等：同
+     * {@code businessApprovalId} 重复登记且 {@code payloadHash} 相同 ⇒ 幂等返回
+     * （2000）；payloadHash 不同 ⇒ 5002 拒绝（防"同单号换载荷"）。登记本身
+     * 不触发任何资金动作。</p>
+     *
+     * <p>{@code payloadHash} 由 {@link org.nexus.sdk.signing.BusinessApprovalPayloads#canonicalHash}
+     * 计算（登记端会按 body 字段重算比对）；{@code expiresAt} 为 ISO-8601
+     * instant 字符串（wallet 侧按提现单 TTL 派生）。</p>
+     *
+     * @return {@code {statusCode:2000, data:{businessApprovalId, state}}}；冲突 5002、
+     *         参数非法 5004；降级返回 null
+     */
+    @PostMapping(value = "/signing/business-approvals", consumes = "application/x-www-form-urlencoded")
+    java.util.Map<String, Object> registerBusinessApproval(
+                        @RequestParam("businessApprovalId") String businessApprovalId,
+                        @RequestParam("payloadHash") String payloadHash,
+                        @RequestParam("amount") BigDecimal amount,
+                        @RequestParam(value = "currency", required = false, defaultValue = "USDT") String currency,
+                        @RequestParam("fromPubkey") String fromPubkey,
+                        @RequestParam("toPubkeyHash") String toPubkeyHash,
+                        @RequestParam("expiresAt") String expiresAt,
+                        @RequestParam(value = "approvers", required = false) String approversCsv);
+
+
+    /**
      * 无副作用轻量探针（审计修复，任务 #317 的重新落地）。
      *
      * <p>对应 {@code GET /api/v1/transfers/capability}。供 gateway 健康检查
