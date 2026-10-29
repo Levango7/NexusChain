@@ -23,14 +23,17 @@ import static org.junit.jupiter.api.Assertions.assertNull;
  * <p>背景：signing 以 HTTP 非 2xx 携带 JSON 业务信封返回失败（BIZ_FAIL→500 /
  * BIZ_BAD_REQUEST→400 / BIZ_FORBIDDEN→403），而本模块
  * {@code spring.cloud.openfeign.circuitbreaker.enabled=true} 会把该 FeignException 转给
- * fallback。原实现一律返回 null，使「明确未动账（5000/5001/4000/4030）」与
+ * fallback。原实现一律返回 null，使「明确未动账（5000/4000/4030）」与
  * 「凭据已消费（5003）」塌缩成同一个「结果不明」。修复后 fallback 把<b>带已定义
- * statusCode</b> 的信封透传给调用方，使降级路径与异常路径收敛到同一三态语义。</p>
+ * 未动账码或 5003</b> 的信封透传给调用方，使降级路径与异常路径收敛到同一三态语义；
+ * 5001（并发执行冲突）不透传——另一路可能正在广播，须由调用方判 EXECUTED_UNVERIFIED。</p>
  *
  * <p>钉死的不变式：</p>
  * <ol>
- *   <li>异常体带已定义码（含 5003）⇒ 签名方法返回该信封（由 classify 侧决定 FAILED/UNVERIFIED）；</li>
- *   <li>异常体不可解析 / 未知码 / 熔断（非 Feign 异常）⇒ 签名方法返回 null（结果不明）；</li>
+ *   <li>异常体带已定义未动账码（5000/4000/4030）或 5003 ⇒ 签名方法返回该信封
+ *       （由 classify 侧决定 FAILED/UNVERIFIED）；</li>
+ *   <li>异常体带 5001（并发执行冲突，另一路可能正在广播）/ 不可解析 / 未知码 /
+ *       熔断（非 Feign 异常）⇒ 签名方法返回 null（结果不明）；</li>
  *   <li>登记方法无条件返回 null（未登记 = 可安全回落既有审批流，语义不变）。</li>
  * </ol>
  */
@@ -97,6 +100,23 @@ class WalletSvcSigningServiceFallbackFactoryTest {
                 FROM_PUBKEY, TO_PUBKEY_HASH, AMOUNT, "BA-1");
         assertNotNull(approval, "5003 是已定义码：透传信封让 classify 侧按 UNVERIFIED 处理（信息不丢失）");
         assertEquals(5003, SigningResponses.statusCode(approval));
+    }
+
+    @Test
+    @DisplayName("响应体=5001（并发执行冲突，另一路可能正在广播）⇒ 返回 null（fail-closed，不透传）")
+    void feign5001Body_returnsNull_neverTreatedAsNotExecuted() {
+        SigningServiceFeignClient client = new WalletSvcSigningServiceFallbackFactory().create(
+                feignFailure(true,
+                        "{\"statusCode\":5001,\"message\":\"execution conflict\",\"data\":\"\"}"));
+
+        // 5001 是已定义码，但语义是「另一路持执行权、可能正在广播」，不是「明确未动账」：
+        // 谓词 declaresNotExecuted 对其返回 false ⇒ 不透传信封，A2 腿按降级 null 判
+        // EXECUTED_UNVERIFIED。若透传，classify 会把它落 FAILED（「确定未动账」），
+        // 把别人正在广播的一笔记成没出钱。
+        assertNull(client.signTransfer(FROM_PUBKEY, TO_PUBKEY_HASH, AMOUNT),
+                "5001 不得透传成可判 FAILED 的信封");
+        assertNull(client.signTransferWithBusinessApproval(FROM_PUBKEY, TO_PUBKEY_HASH, AMOUNT, "BA-1"),
+                "5001 不得透传成可判 FAILED 的信封");
     }
 
     @Test

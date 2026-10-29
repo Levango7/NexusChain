@@ -30,6 +30,7 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -53,8 +54,9 @@ import static org.mockito.Mockito.when;
  *   <li>登记失败 / 降级 / 非 2000 ⇒ 回落既有 signing 审批流（此刻无资金动作，人审兜底）；</li>
  *   <li>携凭据签名<b>结果不明</b>（降级 null / 5003 凭据已消费 / 抛不可解析异常）⇒
  *       EXECUTED_UNVERIFIED，<b>绝不回落重试</b>（凭据已被 CAS 消费，上次可能已广播）；
- *       抛 FeignException 但响应体带<b>已定义未动账码</b>（5000/5001/4000/4030）⇒ FAILED
- *       （A2 §7.5 决策一，P0-2：signing 以 HTTP 非 2xx 携信封返回业务失败）；</li>
+ *       抛 FeignException 但响应体带<b>已定义未动账码</b>（5000/4000/4030）⇒ FAILED
+ *       （A2 §7.5 决策一，P0-2：signing 以 HTTP 非 2xx 携信封返回业务失败；
+ *       5001 不在其列——另一路持执行权且可能正在广播，谓词按结果不明处理）；</li>
  *   <li>signing 回落返回 2001 ⇒ AWAITING_APPROVAL，与旧行为汇合（(c)-lite 接管）；</li>
  *   <li>词表对齐（§7.5 ③）：from 用 platform-pubkey、to 用地址转换出的 pubkeyHash，
  *       canonicalHash/register/sign 三处一致；platform-pubkey 未配 ⇒ fail-closed。</li>
@@ -494,6 +496,32 @@ class WithdrawalBusinessApprovalLegTest {
 
         assertEquals(WithdrawalRequest.WithdrawalStatus.EXECUTED_UNVERIFIED, e.getStatus(),
                 "5003 表示凭据可能已被消费并广播：不判 FAILED、不自动重放");
+        verify(signingServiceClient, never()).signTransfer(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("携凭据签名抛 FeignException 且响应体=5001（并发执行冲突）→ EXECUTED_UNVERIFIED，不当未动账")
+    void signCallThrowsFeign5001_executedUnverified_neverTreatedAsNotExecuted() {
+        WithdrawalRequestEntity e = seedApproved();
+        when(signingServiceClient.registerBusinessApproval(
+                anyString(), anyString(), any(), any(), any(), any(), anyString(), isNull()))
+                .thenReturn(registeredOk());
+        when(signingServiceClient.signTransferWithBusinessApproval(
+                PLATFORM_PUBKEY, TO_PUBKEY_HASH, AMOUNT, REQ_ID))
+                .thenThrow(feignBusinessFailure(
+                        "{\"statusCode\":5001,\"message\":\"execution conflict: another caller holds the lock\",\"data\":\"\"}"));
+
+        service.setBusinessApprovalEnabled(true);
+        service.setPlatformWalletPubkey(PLATFORM_PUBKEY);
+        service.executeApprovedWithdrawal(REQ_ID);
+
+        // 5001 的唯一出处是 sign-approved 路径的 tryMarkExecuting CAS 失败——本调用虽未执行，
+        // 但抢到执行权的另一路可能正在广播。declaresNotExecuted 对 5001 返回 false（fail-closed
+        // 词表）：绝不写成「confirmed not executed」，保持结果不明交人工核对。
+        assertEquals(WithdrawalRequest.WithdrawalStatus.EXECUTED_UNVERIFIED, e.getStatus(),
+                "5001 表示另一路可能正在广播：不判 FAILED、不自动重放");
+        assertFalse(e.getRejectionReason().contains("confirmed not executed"),
+                "结果不明的码不得写成「确定未动账」: " + e.getRejectionReason());
         verify(signingServiceClient, never()).signTransfer(any(), any(), any());
     }
 
