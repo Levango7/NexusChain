@@ -350,4 +350,32 @@ class DefaultOnChainExecutionChannelTest {
             assertEquals("approval rejected", result.getError());
         }
     }
+
+    // === canTransferTo 预检（S1：板 20261029-2057 裁决 / 20261029-2352 范围） ===
+
+    @Test
+    @DisplayName("canTransferTo: null/空白 -> false（不依赖 WalletUtils）")
+    void canTransferTo_nullOrBlank() {
+        DefaultOnChainExecutionChannel channel = newChannel();
+        assertFalse(channel.canTransferTo(null));
+        assertFalse(channel.canTransferTo(""));
+        assertFalse(channel.canTransferTo("   "));
+    }
+
+    @Test
+    @DisplayName("canTransferTo: 含 Base58 非法字符（如 MERCHANT: 前缀）-> 解析失败 -> false")
+    void canTransferTo_illegalChars() {
+        // 真实解析路径：'：' 不在 Base58 字母表，decode 抛异常 -> addressToPubkeyHash 返回 null
+        DefaultOnChainExecutionChannel channel = newChannel();
+        assertFalse(channel.canTransferTo("MERCHANT:M001"));
+    }
+
+    @Test
+    @DisplayName("canTransferTo: 真实可解析地址（pubkeyHash 往返）-> true")
+    void canTransferTo_validRoundTrip() {
+        // 用同一套解析构造真实地址，再交给 canTransferTo 校验，覆盖生产解析路径而非 mock。
+        DefaultOnChainExecutionChannel channel = newChannel();
+        String addr = WalletUtils.pubkeyHashToAddress("a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9");
+        assertTrue(channel.canTransferTo(addr), "真实可解析地址必须判定为可用");
+    }
 }

@@ -51,6 +51,9 @@ class ClearingEngineAwaitingApprovalTest {
         o.setAmount(new BigDecimal(amount));
         o.setCurrency("NEX");
         o.setStatus(ClearingOrder.OrderStatus.PENDING);
+        // S1（板 20261029-2057/2352）：settle() 现在先用 canTransferTo 预判收款地址，
+        // 默认实现要求非空；happy-path 用例必须带上可用收款地址，否则会被预检误判 FAILED。
+        o.setPayeeAddress("PAYEE-VALID-" + merchantId);
         return o;
     }
 

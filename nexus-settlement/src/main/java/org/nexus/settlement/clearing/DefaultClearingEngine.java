@@ -145,6 +145,30 @@ public class DefaultClearingEngine implements ClearingEngine {
         }
         if (order.getAmount() == null || order.getMerchantId() == null) {
             order.setStatus(ClearingOrder.OrderStatus.FAILED);
+            // 2026-10-30（S1）：本分支原先直接 return，不落库。drainStaging 在取出时已把
+            // PENDING 行删除并提交（见类注释），不落库等于订单行静默丢失、审计链断裂。
+            // 与下方各终态分支保持一致，补一次落库。
+            persistOrderState(order);
+            return order;
+        }
+        // 2026-10-30（S1，板 20261029-2352 / 20261029-2057 §裁决一）：
+        // 收款地址预检**必须在贷账之前**。
+        //
+        // bookSettlement 内部走独立 TransactionTemplate 当场提交（见 Ledger），而 settle()
+        // 本身无 @Transactional ⇒ 贷账一旦发生就不可回滚。若「地址不可用」在动链时才暴露，
+        // 就会留下「已贷账、必失败」的永久偏移：FAILED 是终态、drainStaging 只捞 PENDING、
+        // 全仓无冲正能力，三重叠加导致该偏移无法自动纠正。
+        //
+        // 同时本方法不再把 "MERCHANT:" + merchantId 当收款地址——那是合成账户名，不是链上
+        // 地址；真实收款地址在 clearing_order.payee_address（由 SettlementEventCollector 写入）。
+        String payeeAddress = order.getPayeeAddress();
+        if (!executionChannel.canTransferTo(payeeAddress)) {
+            order.setStatus(ClearingOrder.OrderStatus.FAILED);
+            log.error("settle aborted BEFORE booking: payee address is missing or not a usable chain "
+                            + "address (no ledger entry written, order will not be retried): "
+                            + "orderId={}, merchantId={}, payeeAddress={}",
+                    order.getOrderId(), order.getMerchantId(), payeeAddress);
+            persistOrderState(order);
             return order;
         }
         // 账户级落账：借：待结算负债，贷：商户可用余额
@@ -153,7 +177,7 @@ public class DefaultClearingEngine implements ClearingEngine {
         TransactionRequest request = new TransactionRequest(
                 TransactionRequest.Type.SETTLEMENT,
                 platformSettlementAddress,
-                "MERCHANT:" + order.getMerchantId(),
+                payeeAddress,
                 order.getAmount(),
                 order.getCurrency(),
                 "settlement:" + order.getOrderId(),

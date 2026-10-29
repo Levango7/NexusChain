@@ -47,4 +47,25 @@ public interface OnChainExecutionChannel {
      *         不抛异常（便于轮询）
      */
     TransactionResult queryStatus(String txHash);
+
+    /**
+     * 预检：给定收款地址是否可用于链上转账。
+     * <p>
+     * <b>为什么需要这个预检</b>：调用方（结算引擎）在发起链上转账<b>之前</b>就已经
+     * 提交了不可回滚的副作用（复式记账走独立事务当场提交，见
+     * {@code Ledger#bookSettlement}）。若目标地址不可用这件事在转账时才暴露，就会留下
+     * 「已记账、必失败」的永久偏移——终态 FAILED 不可重试，也没有冲正能力。
+     * 因此把「地址可用性」的判定前移到副作用之前，由本方法承担。
+     * </p>
+     *
+     * <p>默认实现只做非空校验（适用于不需要真实地址的 sandbox / mock 实现）；
+     * 真实实现应覆盖本方法并做可解析性校验（例如地址 → pubkeyHash 是否成功）。
+     * 使用 default 方法是为了不破坏既有实现的二进制兼容。</p>
+     *
+     * @param toAddress 目标收款地址，允许为 null
+     * @return 可用于转账返回 true；null / 空白 / 不可解析返回 false
+     */
+    default boolean canTransferTo(String toAddress) {
+        return toAddress != null && !toAddress.isBlank();
+    }
 }
