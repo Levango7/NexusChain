@@ -107,12 +107,6 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
      */
     private static final int SIGNING_EXECUTION_CONFLICT = 5001;
 
-    /**
-     * signing 侧「A2 业务凭据已被消费」（可能已广播）状态码——结果不明，
-     * 必须判 EXECUTED_UNVERIFIED（同 #294 原则：可能已出不得当没出）。
-     */
-    private static final int SIGNING_BUSINESS_APPROVAL_CONSUMED = 5003;
-
     private final ApprovalPolicy approvalPolicy;
     private final SigningServiceFeignClient signingServiceClient;
     private final String platformWalletAddress;
@@ -634,20 +628,22 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
                 // signing 侧豁免校验未过，回落到既有审批流（2001）：与旧行为汇合
                 return OnChainResult.awaitingApproval(outcome.approvalId(), false);
             }
-            // FAILED 细分：降级（statusCode=null）/ 5003 ⇒ 结果不明；其余为明确未动账
-            if (outcome.statusCode() == null) {
-                return OnChainResult.executedUnverified(
-                        "business-approval sign outcome unknown (signing degraded); "
-                                + "possible prior broadcast, manual reconciliation required", false);
+            // FAILED 细分：与异常腿共用同一张 fail-closed 词表（declaresNotExecuted），
+            // 避免两条路径对同一个 signing 响应给出不一致结论。此前只特例 null 与 5003，
+            // 其余任何码（含 5001、以及 signing 未来新增的码）都落终态 FAILED——而异常腿
+            // 对白名单之外的码判 UNVERIFIED，方向相反。
+            Integer signCode = outcome.statusCode();
+            if (SigningResponses.declaresNotExecuted(signCode)) {
+                return OnChainResult.failure(
+                        outcome.message() != null ? outcome.message() : "signing service returned empty result",
+                        false);
             }
-            if (outcome.statusCode() == SIGNING_BUSINESS_APPROVAL_CONSUMED) {
-                return OnChainResult.executedUnverified(
-                        "business approval already consumed (possible prior broadcast); "
-                                + "manual reconciliation required", false);
-            }
-            return OnChainResult.failure(
-                    outcome.message() != null ? outcome.message() : "signing service returned empty result",
-                    false);
+            String signingDetail = outcome.message();
+            return OnChainResult.executedUnverified(
+                    "business-approval sign outcome unknown (code=" + signCode + ")"
+                            + (signingDetail == null ? "" : "; " + signingDetail)
+                            + "; not in the fail-closed not-executed vocabulary, possible prior"
+                            + " broadcast, manual reconciliation required", false);
         } catch (RuntimeException signFailure) {
             // 2026-10-29（A2 §7.5 决策一，P0-2 配套）：signing 把业务失败以 HTTP 非 2xx
             // 携 JSON 信封返回（BIZ_FAIL 5000 / BIZ_BAD_REQUEST 4000 / BIZ_FORBIDDEN 4030），
