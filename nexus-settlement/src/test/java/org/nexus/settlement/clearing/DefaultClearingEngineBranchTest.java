@@ -216,6 +216,8 @@ class DefaultClearingEngineBranchTest {
         ClearingOrder o = new ClearingOrder();
         o.setOrderId(id);
         o.setMerchantId(merchant);
+        // S1（PR #347）预检要求结算单必须带可用收款地址，统一补合法占位地址以越过 canTransferTo 预检
+        o.setPayeeAddress("PAYEE-VALID-ADDR");
         o.setAmount(new BigDecimal(amount));
         o.setCurrency("USDT");
         o.setStatus(ClearingOrder.OrderStatus.PENDING);

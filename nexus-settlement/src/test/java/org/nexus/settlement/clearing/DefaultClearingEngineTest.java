@@ -159,6 +159,9 @@ class DefaultClearingEngineTest {
         ClearingOrder o = new ClearingOrder();
         o.setOrderId(id);
         o.setMerchantId(merchant);
+        // S1（PR #347）预检要求结算单必须带可用收款地址；此处统一补一个合法占位地址，
+        // 使成功路径测试能越过 canTransferTo 预检（预检失败路径由 settle_missingAmount_shouldFail 等覆盖）。
+        o.setPayeeAddress("PAYEE-VALID-ADDR");
         o.setAmount(new BigDecimal(amount));
         o.setCurrency("USDT");
         o.setStatus(ClearingOrder.OrderStatus.PENDING);
