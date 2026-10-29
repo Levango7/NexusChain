@@ -35,6 +35,12 @@ dependencies:
   mysqlDatabase: nexus_wallet
   redis: true
 
+# -- 追加环境变量（覆盖层 values 通过 nexus-wallet-service.extraEnv 同名键注入）
+# A2（ADR-036 §2.2）相关键——**值由部署方下发，仓库不落明文**：
+#   NEXUS_SIGNING_BUSINESS_APPROVAL_ENABLED: "true"     # A2 开关；开闸检查单见 ADR §5
+#   NEX_WALLET_PLATFORM_PUBKEY: "<平台钱包完整公钥>"    # 开闸阻断项；留空 = A2 腿 fail-closed
+# 配置门禁：凡 A2 flag=true 的覆盖层渲染必须带非空 NEX_WALLET_PLATFORM_PUBKEY
+# （.github/workflows/k8s-sync-check.yml「A2 开闸配置门禁」步）。
 extraEnv: {}
 
 resources:

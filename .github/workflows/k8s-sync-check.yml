@@ -423,6 +423,129 @@ jobs:
             || { echo 'FAIL: docker-compose.prod.yml 缺 NEX_APPROVAL_STORE_TYPE=jpa'; exit 1; }
           echo "  ✓ values-prod.yaml 与 docker-compose.prod.yml 两条 prod 路径同口径"
 
+      # A2 开闸配置门禁（2026-10-30；板 20261030-0112 qoder 复核点 B 的收口，
+      # 认领见板 20261030-0300/20261030-0354）。
+      # 为什么要有这条：ADR-036 §5 把「开闸前必须下发 nexus.wallet.platform-pubkey」
+      # 列为**开闸阻断项**，但此前只能人肉核——部署侧漏下该键时，A2 开启状态下的
+      # 提现会被 fail-closed 拒绝（每笔都失败，且发生在执行前）。staging 已于
+      # PR #326（按仓库所有者指示）置 NEXUS_SIGNING_BUSINESS_APPROVAL_ENABLED=true，
+      # 而 deploy/ 下 NEX_WALLET_PLATFORM_PUBKEY 零命中 ⇒ 现在就是那个状态。
+      # 本步把「文档里的开闸条件」变成 CI 门禁，形态照上方 #113 prod 覆盖层断言：
+      #   · **prod 硬断言**（阻断）：prod 覆盖层渲染里，A2 flag=true ⇒
+      #     NEX_WALLET_PLATFORM_PUBKEY 必须渲染出非空值。prod 当前未开 A2 ⇒
+      #     断言 vacuously green；一旦有人开 prod A2 而漏下公钥，CI 立刻红。
+      #   · **staging 软告警**（见下方 continue-on-error 步）：同样的逻辑条件，
+      #     但**不阻断**——staging flag 是所有者指示开的观察期状态，公钥尚未下发，
+      #     此时把门禁做成阻断会让 deploy 路径整体卡死（且本 PR 自己也过不了 CI）。
+      #     公钥下发的同一 PR 会让该步自动转绿；届时把 continue-on-error 去掉即
+      #     升级为阻断（升级动作留给部署方/所有者，本注释即交接说明）。
+      # 口径边界：本门禁只覆盖 **values 驱动的 env 路径**（子 chart extraEnv）。
+      # 若将来改用 Secret/envFrom 注入公钥，渲染产物里看不到它，需同步改本步。
+      - name: A2 开闸配置门禁（prod 覆盖层硬断言）
+        run: |
+          set -e
+          helm template nexus deploy/helm -f deploy/helm/values-prod.yaml > /tmp/a2-prod-rendered.yaml
+          helm template nexus deploy/helm > /tmp/a2-default-rendered.yaml
+          python3 - <<'PYEOF'
+          import re
+
+          prod = open('/tmp/a2-prod-rendered.yaml').read()
+          default = open('/tmp/a2-default-rendered.yaml').read()
+
+          FLAG = 'NEXUS_SIGNING_BUSINESS_APPROVAL_ENABLED'
+          PUBKEY = 'NEX_WALLET_PLATFORM_PUBKEY'
+
+          def wallet_deployment(text):
+              # 只认「行首 kind: Deployment」且「metadata.name 恰为 nexus-wallet-service」
+              # 的文档（与上方 #113 断言同判据；朴素 substring 会捞进 HPA/Service）。
+              for doc in text.split('\n---\n'):
+                  if re.search(r'(?m)^kind: Deployment$', doc) and \
+                     re.search(r'(?m)^  name: nexus-wallet-service$', doc):
+                      return doc
+              return None
+
+          def env_value(doc, name):
+              m = re.search(r'-\s*name: ' + name + r'\s*\n\s*value: "?([^\\"\n]*)', doc)
+              return m.group(1).strip() if m else None
+
+          d = wallet_deployment(prod)
+          assert d is not None, (
+              "FAIL: prod 渲染里没有 nexus-wallet-service 的 Deployment —— "
+              "结构变了？先查行首 kind:/metadata.name 是否还是这两个字面值")
+
+          flag = env_value(d, FLAG)
+          if flag is None or flag.lower() != 'true':
+              print(f"  ✓ prod A2 flag 未开启（渲染值 {flag!r}）——开闸门禁 vacuously green；"
+                    "置 true 时本断言要求必须同时下发非空 NEX_WALLET_PLATFORM_PUBKEY")
+          else:
+              pubkey = env_value(d, PUBKEY)
+              assert pubkey, (
+                  "FAIL: prod 已置 NEXUS_SIGNING_BUSINESS_APPROVAL_ENABLED=true 但未渲染出"
+                  "非空 NEX_WALLET_PLATFORM_PUBKEY——ADR-036 §5 开闸阻断项：留空时 A2 提现"
+                  "腿被 fail-closed 拒绝（每笔都失败）。请在 values-prod.yaml 的"
+                  "nexus-wallet-service.extraEnv 下发平台钱包公钥后重试")
+              print(f"  ✓ prod A2 flag=true 且已下发非空 platform-pubkey（{len(pubkey)} 字符）")
+
+          # 反向对照：默认 values 两个键都不在 ⇒ 上面的判定确实来自覆盖层，而不是
+          # chart 默认值自带的（否则门禁退化成"它自己合成的命题"）。
+          dflt = wallet_deployment(default)
+          if dflt is not None:
+              assert env_value(dflt, FLAG) is None and env_value(dflt, PUBKEY) is None, (
+                  "FAIL: 默认 values 渲染里出现 A2 相关键——负样本失效，"
+                  "A2 配置只能来自环境覆盖层（ADR-036 §5）")
+          print("  ✓ 默认 values 无 A2 相关键（负样本成立）")
+          PYEOF
+
+      # 同一逻辑条件的 staging 侧——**故意不阻断**（见上步注释的理由）：
+      # staging flag=true 且公钥未下发 ⇒ 打一条 error 级提示后仍让 job 通过。
+      # 公钥下发（values-staging.yaml extraEnv 加 NEX_WALLET_PLATFORM_PUBKEY）
+      # 的同一 PR 会让本步自动转绿；届时可去掉 continue-on-error 升级为阻断。
+      - name: A2 开闸配置门禁（staging 侧软告警，公钥未下发时故意红）
+        continue-on-error: true
+        run: |
+          set -e
+          helm template nexus deploy/helm -f deploy/helm/values-staging.yaml > /tmp/a2-staging-rendered.yaml
+          python3 - <<'PYEOF'
+          import re
+
+          staging = open('/tmp/a2-staging-rendered.yaml').read()
+          FLAG = 'NEXUS_SIGNING_BUSINESS_APPROVAL_ENABLED'
+          PUBKEY = 'NEX_WALLET_PLATFORM_PUBKEY'
+
+          def wallet_deployment(text):
+              for doc in text.split('\n---\n'):
+                  if re.search(r'(?m)^kind: Deployment$', doc) and \
+                     re.search(r'(?m)^  name: nexus-wallet-service$', doc):
+                      return doc
+              return None
+
+          def env_value(doc, name):
+              m = re.search(r'-\s*name: ' + name + r'\s*\n\s*value: "?([^\\"\n]*)', doc)
+              return m.group(1).strip() if m else None
+
+          d = wallet_deployment(staging)
+          assert d is not None, (
+              "FAIL: staging 渲染里没有 nexus-wallet-service 的 Deployment —— 结构变了？")
+
+          flag = env_value(d, FLAG)
+          pubkey = env_value(d, PUBKEY)
+          if flag is None or flag.lower() != 'true':
+              print(f"  ✓ staging A2 flag 未开启（渲染值 {flag!r}）")
+          elif pubkey:
+              print(f"  ✓ staging A2 flag=true 且已下发非空 platform-pubkey（{len(pubkey)} 字符）")
+          else:
+              # 这就是当前状态（2026-10-30）：flag 已开、公钥未下发 ⇒ A2 提现腿
+              # fail-closed。故意用断言失败让本步显示为红（continue-on-error，不阻断）。
+              raise AssertionError(
+                  "staging 已置 NEXUS_SIGNING_BUSINESS_APPROVAL_ENABLED=true，但未下发"
+                  " NEX_WALLET_PLATFORM_PUBKEY（deploy/ 全仓零命中）——ADR-036 §5 开闸"
+                  "阻断项：此时 staging 上 A2 提现腿被 fail-closed 拒绝（每笔都失败）。"
+                  "修复：values-staging.yaml 的 nexus-wallet-service.extraEnv 加"
+                  " NEX_WALLET_PLATFORM_PUBKEY: <平台钱包公钥>，本步即自动转绿。"
+                  "（本步为软告警，不阻断 CI；本条状态由 PR #326 的所有者指示开启造成，"
+                  "公钥值须由部署方提供，仓库不落明文）")
+          PYEOF
+
       # A 批（2026-09-08）：Alertmanager 路由树真实校验——此前 5 条告警 +
       # 路由配置全存在但**从未验证过路由语法**（健康扫描抓出的"看起来有
       # 但实际没有"同族盲点）。amtool check-config 验证 receivers/route/
