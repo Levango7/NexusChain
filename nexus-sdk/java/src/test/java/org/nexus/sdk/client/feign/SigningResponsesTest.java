@@ -204,16 +204,17 @@ class SigningResponsesTest {
 
     /**
      * fail-closed 词表（ADR §7.5 决策一）：只有契约已确立的「明确未动账」码才允许判 FAILED；
-     * 5003（凭据可能已消费/可能已广播）与一切未知码都必须返回 false，调用方保持结果不明。
+     * 5003（凭据可能已消费/可能已广播）、5001（另一路持执行权、可能正在广播——仅审批状态机
+     * 驱动方可收敛）与一切未知码都必须返回 false，调用方保持结果不明。
      */
     @Test
     void declaresNotExecuted_onlyForContractuallyEstablishedCodes() {
         assertTrue(SigningResponses.declaresNotExecuted(SigningResponses.STATUS_BUSINESS_FAIL));            // 5000
-        assertTrue(SigningResponses.declaresNotExecuted(SigningResponses.STATUS_EXECUTION_CONFLICT));      // 5001
         assertTrue(SigningResponses.declaresNotExecuted(SigningResponses.STATUS_BAD_REQUEST));            // 4000
         assertTrue(SigningResponses.declaresNotExecuted(SigningResponses.STATUS_FORBIDDEN));              // 4030
 
         assertFalse(SigningResponses.declaresNotExecuted(SigningResponses.STATUS_BUSINESS_APPROVAL_CONSUMED)); // 5003 结果不明
+        assertFalse(SigningResponses.declaresNotExecuted(SigningResponses.STATUS_EXECUTION_CONFLICT));      // 5001 另一路可能正在广播
         assertFalse(SigningResponses.declaresNotExecuted(2000));   // 成功
         assertFalse(SigningResponses.declaresNotExecuted(2001));   // 待审批
         assertFalse(SigningResponses.declaresNotExecuted(5999));   // 未知码

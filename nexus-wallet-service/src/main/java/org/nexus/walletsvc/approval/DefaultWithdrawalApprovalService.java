@@ -580,9 +580,11 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
      *       EXECUTED_UNVERIFIED，绝不回落、绝不重试</b>——凭据在签名前已被 CAS 消费，
      *       上次广播可能已发生；回落重放即双花（#294/#300 同源原则）；</li>
      *   <li>携凭据签名抛 {@code FeignException} 但响应体带<b>已定义未动账码</b>
-     *       （5000/5001/4000/4030）⇒ FAILED——signing 以 HTTP 非 2xx 携信封返回
+     *       （5000/4000/4030）⇒ FAILED——signing 以 HTTP 非 2xx 携信封返回
      *       业务失败（P0-2），异常体里能证明「确定未动账」才允许判失败（A2 §7.5 决策一）；</li>
      *   <li>signing 返回 5003（凭据已被消费）⇒ 同上 EXECUTED_UNVERIFIED；</li>
+     *   <li>signing 返回 5001（并发执行冲突：另一路持执行权且可能正在广播）⇒
+     *       EXECUTED_UNVERIFIED——5001 不属于「明确未动账」，不得当 FAILED 重放；</li>
      *   <li>signing 回落返回 2001（凭据校验未过，signing 走了既有审批）⇒
      *       AWAITING_APPROVAL，之后走 (c)-lite 复用机制，与旧行为汇合；</li>
      *   <li>其余明确失败（5xxx 预广播失败，凭据已被 signing 回退可重试）⇒ FAILED。</li>
@@ -648,12 +650,15 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
                     false);
         } catch (RuntimeException signFailure) {
             // 2026-10-29（A2 §7.5 决策一，P0-2 配套）：signing 把业务失败以 HTTP 非 2xx
-            // 携 JSON 信封返回（BIZ_FAIL 5000 / BIZ_BAD_REQUEST 4000 / BIZ_FORBIDDEN 4030
-            // / 冲突 5001），Feign 因此抛 FeignException 而不是返回信封——原实现一律按
+            // 携 JSON 信封返回（BIZ_FAIL 5000 / BIZ_BAD_REQUEST 4000 / BIZ_FORBIDDEN 4030），
+            // Feign 因此抛 FeignException 而不是返回信封——原实现一律按
             // 「结果不明」处理，使「明确未动账」的 FAILED 分支在这条路径上不可达。
             // 现从异常响应体解析 statusCode：已定义未动账码 ⇒ FAILED；其余（5003 /
-            // 未知码 / 无响应体 / 非 Feign 异常）保持 EXECUTED_UNVERIFIED，fail-closed
-            // 绝不回落重试（凭据可能已被消费并广播）。
+            // 5001 / 未知码 / 无响应体 / 非 Feign 异常）保持 EXECUTED_UNVERIFIED，
+            // fail-closed 绝不回落重试（凭据可能已被消费并广播）。
+            // 5001（并发执行冲突）当前仅由 sign-approved 路径产生，A2 携凭据端点不产，
+            // 但谓词按 fail-closed 词表对其返回 false：另一路持执行权且可能正在广播，
+            // 不得按「确定未动账」处理。
             Integer signStatusCode = signingFailureStatusCode(signFailure);
             if (SigningResponses.declaresNotExecuted(signStatusCode)) {
                 log.warn("A2 携凭据签名明确失败（code={}，确定未动账，signing 侧已回退凭据）: "

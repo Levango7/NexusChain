@@ -123,14 +123,16 @@ public class WalletSvcSigningServiceFallbackFactory extends SigningServiceFallba
      * <p>signing 以 HTTP 非 2xx 携带 JSON 信封返回业务失败；当 Feign 把该异常交给
      * fallback 时（本模块 {@code spring.cloud.openfeign.circuitbreaker.enabled=true}
      * 会把 FeignException 转成降级），原实现一律返回 null，使「明确未动账
-     * （5000/5001/4000/4030）」与「凭据已消费（5003）」都塌缩成「结果不明」，
+     * （5000/4000/4030）」与「凭据已消费（5003）」都塌缩成「结果不明」，
      * A2 腿的 FAILED 分支在降级路径上不可达。</p>
      *
-     * <p>本方法只放行信封里带<b>已定义 statusCode</b> 的响应，与
+     * <p>本方法只放行信封里带<b>已定义未动账码或 5003</b> 的响应，与
      * {@code DefaultWithdrawalApprovalService} 异常路径共用
      * {@link SigningResponses} 的同一套解析与判据，保证两条路径收敛到同一语义；
-     * 未定义码 / 无响应体 / 熔断打开 / 非 Feign 异常仍返回 null，由调用方按
-     * fail-closed 处理（A2 腿判 EXECUTED_UNVERIFIED）。</p>
+     * 其余一切（5001 / 未定义码 / 无响应体 / 熔断打开 / 非 Feign 异常）仍返回 null，
+     * 由调用方按 fail-closed 处理（A2 腿判 EXECUTED_UNVERIFIED）。5001（并发执行冲突）
+     * 特意不透传——另一路持执行权且可能正在广播，A2 腿两条路径（降级 null 与异常
+     * 分支）都必须把它收敛成 EXECUTED_UNVERIFIED，而不是 FAILED。</p>
      *
      * @param cause 触发降级的异常
      * @return 可透传的业务失败信封；null 表示不可翻译

@@ -48,7 +48,14 @@ public final class SigningResponses {
 
     /**
      * 并发执行冲突（TxController sign-approved 路径的 tryMarkExecuting 失败）：
-     * 另一路抢走了执行权，<b>本次调用确定未动账</b>。
+     * 另一路抢走了执行权。<b>本次调用</b>确实没有执行（未动账），但持有执行权的
+     * 那一路<b>可能正在广播</b>——就「这笔业务是否在动账」而言整体属「结果不明」，
+     * 不得按「确定未动账」映射为可重试的 FAILED。
+     *
+     * <p>适用约定：审批状态机的驱动方（wallet resume 腿、gateway
+     * {@code SigningApprovalExecutionService}）可按各自状态机收敛此码——二者本就
+     * 把它当非终态处理；其余一切调用方一律按「结果不明」处理
+     * （{@link #declaresNotExecuted} 对 5001 返回 false）。</p>
      */
     public static final int STATUS_EXECUTION_CONFLICT = 5001;
 
@@ -344,7 +351,6 @@ public final class SigningResponses {
      * <ul>
      *   <li>{@link #STATUS_BUSINESS_FAIL}（5000）：预广播失败（无密钥/地址非法/
      *       交易构造失败/审批未通过…），A2 凭据已被 signing 回退，可安全重试；</li>
-     *   <li>{@link #STATUS_EXECUTION_CONFLICT}（5001）：并发冲突，本次未动账；</li>
      *   <li>{@link #STATUS_BAD_REQUEST}（4000）：参数非法，请求在执行前被拒；</li>
      *   <li>{@link #STATUS_FORBIDDEN}（4030）：鉴权/白名单拒绝，请求在执行前被拒。</li>
      * </ul>
@@ -353,6 +359,11 @@ public final class SigningResponses {
      * <ul>
      *   <li>{@link #STATUS_BUSINESS_APPROVAL_CONSUMED}（5003）：凭据已消费，上次
      *       签名<b>可能已广播</b>——交人工核对；</li>
+     *   <li>{@link #STATUS_EXECUTION_CONFLICT}（5001）：另一路持执行权且
+     *       <b>可能正在广播</b>——本调用虽未执行，但整体结果不明。仅审批状态机
+     *       驱动方（wallet resume 腿、gateway {@code SigningApprovalExecutionService}）
+     *       可按各自状态机收敛此码；其余调用方一律按结果不明处理
+     *       （见 {@link #STATUS_EXECUTION_CONFLICT} 的 javadoc）；</li>
      *   <li>一切未知码（含未来新增码）：语义未确立，降级为结果不明，禁止当 FAILED 重放。</li>
      * </ul>
      *
@@ -364,7 +375,6 @@ public final class SigningResponses {
             return false;
         }
         return statusCode == STATUS_BUSINESS_FAIL
-                || statusCode == STATUS_EXECUTION_CONFLICT
                 || statusCode == STATUS_BAD_REQUEST
                 || statusCode == STATUS_FORBIDDEN;
     }
