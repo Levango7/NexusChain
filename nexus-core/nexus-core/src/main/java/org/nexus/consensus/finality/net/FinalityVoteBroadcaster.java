@@ -526,8 +526,12 @@ public class FinalityVoteBroadcaster {
         }
         if (!pagingRoundIssued || resp.requestFrom() != roundAskedFrom) {
             // 不是本轮的回答：可能是上一轮的迟到响应，或别的节点发出的请求被广播到全网。
-            log.debug("Vote-sync response marker ignored: requestFrom={} currentRound={}",
-                    resp.requestFrom(), roundAskedFrom);
+            // 第 12 处诊断：从 debug 提级为 info。
+            // 第九轮实测出现"页收到了（votesSinceRound≈404）、0x5C 标记一条都没打"，
+            // 需要能区分"标记根本没到"与"到了但被这里忽略"。
+            log.info("Vote-sync response marker ignored: requestFrom={} currentRound={}"
+                    + " roundIssued={}",
+                    resp.requestFrom(), roundAskedFrom, pagingRoundIssued);
             return;
         }
         pagingResponseSeen = true;
