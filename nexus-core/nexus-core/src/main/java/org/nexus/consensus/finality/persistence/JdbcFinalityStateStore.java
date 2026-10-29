@@ -309,25 +309,44 @@ public class JdbcFinalityStateStore implements FinalityStateStore {
      */
     @Override
     public List<org.nexus.consensus.finality.Vote> loadVoteObjectsAscending(long fromEpoch, int limit) {
-        List<org.nexus.consensus.finality.Vote> out = new java.util.ArrayList<>();
+        // PLAN-057 第 11 处：按 epoch 完整交付——多取 1 行做哨兵，
+        // 若第 limit+1 行与被截部分同属一个 epoch，则整个 epoch 不进本页
+        // （否则请求方按 servedTo+1 推进时会永久跳过该 epoch 剩余的票）。
+        int cap = Math.max(1, limit);
+        List<org.nexus.consensus.finality.Vote> rows = new java.util.ArrayList<>();
         try {
             jdbc.query("SELECT epoch, checkpoint_hash, validator, signature, public_key "
                             + "FROM finality_votes WHERE epoch >= ? AND signature IS NOT NULL "
                             + "ORDER BY epoch ASC LIMIT ?",
                     rs -> {
-                        out.add(new org.nexus.consensus.finality.Vote(
+                        rows.add(new org.nexus.consensus.finality.Vote(
                                 rs.getLong("epoch"),
                                 hexToBytes(rs.getString("checkpoint_hash")),
                                 rs.getString("validator"),
                                 hexToBytes(rs.getString("signature")),
                                 hexToBytes(rs.getString("public_key"))));
                     },
-                    fromEpoch, Math.max(1, limit));
+                    fromEpoch, cap + 1);
+            if (rows.isEmpty()) {
+                return java.util.Collections.emptyList();
+            }
+            // 第 11 处：页必须按 epoch 完整交付。多取的哨兵行所在 epoch
+            // 的剩余票一并带上（最多超限一个 epoch 的票数），
+            // 否则请求方按 servedTo+1 推进时会跳过被截断的票。
+            long servedEpoch = rows.get(cap).getEpoch();
+            List<org.nexus.consensus.finality.Vote> out = new java.util.ArrayList<>();
+            for (org.nexus.consensus.finality.Vote v : rows) {
+                if (v.getEpoch() > servedEpoch) {
+                    break;
+                }
+                out.add(v);
+            }
+            return out;
         } catch (RuntimeException e) {
             log.warn("JdbcFinalityStateStore: load votes ascending (from={}, limit={}) failed: {}",
                     fromEpoch, limit, e.getMessage());
         }
-        return out;
+        return java.util.Collections.emptyList();
     }
 
     @Override

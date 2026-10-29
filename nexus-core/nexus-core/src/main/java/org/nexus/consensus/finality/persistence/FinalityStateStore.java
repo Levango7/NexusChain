@@ -146,6 +146,10 @@ public interface FinalityStateStore {
      *
      * <p>默认实现按 epoch **升序**在内存里截断；JDBC 实现下沉到 SQL
      * （{@code ORDER BY epoch ASC LIMIT ?}），避免 from=0 时全表读入。</p>
+     *
+     * <p><b>第 11 处**（PLAN-057 第八轮实测）：页必须**按 epoch 完整交付**——
+     * 截断点所在 epoch 的剩余票一并带上，否则请求方按
+     * {@code servedTo+1} 推进时会永远跳过它们。</p>
      */
     default List<Vote> loadVoteObjectsAscending(long fromEpoch, int limit) {
         Map<String, List<Vote>> all = loadVoteObjectsSince(fromEpoch);
@@ -157,7 +161,24 @@ public interface FinalityStateStore {
         }
         flat.sort(java.util.Comparator.comparingLong(Vote::getEpoch));
         int cap = Math.max(1, limit);
-        return flat.size() <= cap ? flat : new java.util.ArrayList<>(flat.subList(0, cap));
+        if (flat.size() <= cap) {
+            return flat;
+        }
+        // PLAN-057 第 11 处：**响应页必须按 epoch 完整交付**。
+        // 旧实现 subList(0, cap) 会在某个 epoch 中间截断（第八轮实测：201 票里
+        // 第 201 票属于 epoch 134，被 LIMIT 200 切在页外），而请求方按标记的
+        // servedTo（页内最大 epoch）+1 前进 ⇒ 那一票永远不再被请求。
+        // 现在：多取 1 行做哨兵，若页满则把哨兵所在 epoch 的剩余行一并带上
+        // ⇒ 页永远 epoch 完整；代价是最多超限一个 epoch 的票数（生产 ~3 票）。
+        long servedEpoch = flat.get(cap).getEpoch();
+        java.util.List<Vote> out = new java.util.ArrayList<>();
+        for (Vote v : flat) {
+            if (v.getEpoch() > servedEpoch) {
+                break;
+            }
+            out.add(v);
+        }
+        return out;
     }
 
     /**
