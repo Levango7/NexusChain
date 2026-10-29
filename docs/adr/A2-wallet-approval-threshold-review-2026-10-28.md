@@ -104,13 +104,16 @@ ADR-036 §6 要求"与 wallet 多签阈值配置一同评审"的原因。
       回滚 = 置 false（即回 A0 双闸形态，零迁移）
 
 > **⚠️ 生产切流侧的独立阻断项（2026-10-29 增；板 `20261029-2057` nex 裁决 F3、
-> 板 `20261029-2345` 分工）**：上表约束的是 **A2 flag 本身**；但**同一次生产切流**的另一侧是
-> gateway 的 `nexus.exchange-wallet.platform-pubkey` 下发——一旦下发，`isSandboxMode()`
->（`pubkeyMissing || skipConfirm`）关闭，结算执行腿的 P0 立即触发（`"MERCHANT:<id>"` 不是合法
-> Base58 ⇒ 每笔结算执行腿失败，且发生在 `bookSettlement` **贷账之后**，`FAILED` 是终态、
-> `drainStaging` 只捞 `PENDING` ⇒ 账本永久偏移）。该缺陷与 A2 flag 解耦，但**生产切流不与它解耦**：
-> gateway platform-pubkey 下发前，结算 S1（取 `payeeAddress` + 前置校验前移）必须先修。
-> 详见 ADR-036 §5 增项；分工与复核结论见板 `20261029-2345-zcode-lane-redivision`。
+> 板 `20261029-2331` nex 新报 P0-A、板 `20261029-2345` 分工）**：上表约束的是 **A2 flag 本身**；
+> 但**同一次生产切流**的另一侧是 gateway 的 `nexus.exchange-wallet.platform-pubkey` 下发——一旦下发，
+> `isSandboxMode()`（`pubkeyMissing || skipConfirm`）关闭，结算执行腿的 P0 立即触发
+>（`"MERCHANT:<id>"` 不是合法 Base58 ⇒ 每笔结算执行腿失败，且发生在 `bookSettlement`
+> **贷账之后**，`FAILED` 是终态、`drainStaging` 只捞 `PENDING` ⇒ 账本永久偏移）。而在**下发之前**
+> 也不安全：结算调度默认开（`nexus.settlement.enabled:true`）且 pubkey 恒空 ⇒ 沙箱内**假 SETTLED
+> + 对账自喂 `SOURCE_CHAIN` 记录报 clean**（P0-A）。该两项缺陷与 A2 flag 解耦，但**生产切流不与它们
+> 解耦**：gateway platform-pubkey 下发前，结算 S1（取 `payeeAddress` + 前置校验前移）必须先修；
+> P0-A 的 fail-closed 口径需另定。详见 ADR-036 §5 增项；分工与复核结论见板
+> `20261029-2345-zcode-lane-redivision` 与 `20261029-2400-zcode-s1-claim`。
 
 ## 6. 本次复核未改动的部分
 

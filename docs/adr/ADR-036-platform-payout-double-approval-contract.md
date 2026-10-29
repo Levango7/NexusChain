@@ -150,18 +150,35 @@ wallet 提现确实存在双重审批（wallet 多签 + signing 大额审批）�
 | A2 实施设计草案（评审材料） | zcode | ✅ 已成稿：`docs/adr/A2-business-approval-design-draft-2026-10-27.md`，含 5 条待评审决策 |
 | A2 立项评审（阈值配置 + 契约设计 + 人力） | 待评审人/用户 | 材料已备；评审通过后并入本文 §2.2 并排期 |
 | gateway 五类业务的人审替代方案 | 待认领 | 未启动（A2 前不得动）；"五路径零行为变化"回归断言已作为 A2 草案 §4 不变式 6 固化，随 A2 P2 常驻测试 |
-| **⚠️ 结算执行腿收款地址 P0（板 20261029-2057 nex 裁决 F3；zcode 已源码级复核确认——见下）** | nex lane（S1/S2/S3） | **生产切流阻断项**：看板 `20261029-2345-zcode-lane-redivision` 认领分工 |
+| **⚠️ 结算执行腿收款地址 P0（板 20261029-2057 nex 裁决 F3；zcode 已源码级复核确认——见下）** | **zcode（S1 已认领，板 20261029-2400）** | **生产切流阻断项**；S1 = 取 `payee_address` + 预校验前移 |
+| **⚠️ 结算 sandbox「假结算」P0（板 20261029-2331 nex 新报 P0-A；zcode 已复核坐实——见下）** | **待定**（fail-closed 口径需确认，见板 20261029-2400） | **生产切流阻断项**：沙箱内假 SETTLED + 对账被喂伪造对侧 |
 
 > **F3 复核结论（zcode，2026-10-29，对 master `1201e2d6` 源码级核实，补 nex 未实跑的两项）**：
-> `Base58Utility.decode` 对非字母表字符**逐字符 `INDEXES[c] < 0 ⇒ AddressFormatException` 必抛**
-> （`:` 不在字母表）⇒ `WalletUtils.addressToPubkeyHash("MERCHANT:M001")` 必返 `null` ⇒
+> `Base58Utility.decode` 对非字母表字符**逐字符 `INDEXES[c] < 0 ⇒ AddressFormatException.InvalidCharacter`
+> 必抛**（`:` 不在字母表）⇒ `WalletUtils.addressToPubkeyHash("MERCHANT:M001")` 必返 `null` ⇒
 > `DefaultOnChainExecutionChannel.executeProduction` 返 `failure` ⇒ 引擎落 `FAILED`（发生在
-> `ledger.bookSettlement` **之后**）。读侧缺失已复核一致（`ClearingOrder.getPayeeAddress()` 存在、
-> `DefaultClearingEngine` 零调用）。**另坐实 nex 未核 ④**：兜底地址 `"1MerchantSettlement" + merchantId`
->（`OrderServiceImpl:247`）含 `l`（字母表不含 `l`）⇒ **S1 的前置校验必须同时拦「空」与「不可解析」**，
-> 并处理该兜底地址来源。当前被 sandbox 掩盖（gateway `platform-pubkey` 为空 ⇒ `isSandboxMode()` 恒 true），
-> **gateway platform-pubkey 一旦下发立即触发**。S1 修法 = 取 `order.getPayeeAddress()` +
-> 前置校验前移到 `bookSettlement` 之前（空/不可解析 ⇒ 直接 FAILED，零账务概念变更）。
+> `ledger.bookSettlement` **之后**）。
+> ⚠️ **引用更正（采纳 nex 对 #339 的勘误）**：`WalletUtils.java:16` 实际导入的是 **nexus-core 的
+> `org.nexus.keystore.util.Base58Utility`**，不是 consortium 那份；两份实现同型（对非字母表字符
+> 同样抛 `AddressFormatException.InvalidCharacter`），**结论不变**。读侧缺失已复核一致
+>（`ClearingOrder.getPayeeAddress()` 存在、`DefaultClearingEngine` 零调用）。**另坐实 nex 未核 ④**：
+> 兜底地址 `"1MerchantSettlement" + merchantId`（`OrderServiceImpl:247`）含 `l`（字母表不含 `l`）
+> ⇒ **S1 的前置校验必须同时拦「空」与「不可解析」**，并处理该兜底地址来源。当前被 sandbox 掩盖
+>（gateway `platform-pubkey` 为空 ⇒ `isSandboxMode()` 恒 true），**gateway platform-pubkey 一旦下发
+> 立即触发**。S1 修法 = 取 `order.getPayeeAddress()` + 前置校验前移到 `bookSettlement` 之前
+>（空/不可解析 ⇒ 直接 FAILED，零账务概念变更）。
+>
+> **P0-A 复核结论（zcode，2026-10-29，对 nex 新报 P0-A 逐条核实，全部坐实）**：
+> ①`SettlementScheduler`（gateway：`nexus-gateway/.../settlement/SettlementScheduler.java:45`）
+> `@Value("${nexus.settlement.enabled:true}")` **默认开**，且全仓无 yml/helm/k8s/compose 覆盖
+>（`nexus.settlement.enabled` 仅此一处命中）；②gateway `platform-pubkey` 恒空 ⇒ 恒 sandbox ⇒
+> `executeSandbox` 返 simulated SUCCESS；③`DefaultClearingEngine:181-189` 落 `SETTLED`，
+> `:185` 的 `isSimulated()` **只出现在日志参数里、无分支**（全仓唯一的真分支在退款
+> `DefaultRefundApprovalService:432`）；④更糟的是 `:187` `feedChainRecordSource(order)` 把该笔
+>「链上凭证」写入 `InMemoryChainRecordSource`（仓内**唯一** `ChainRecordSource` 实现，DB 模式
+> `saveIfAbsent` 标 `SOURCE_CHAIN`），而 `DefaultReconciliationService:53` 以 `fetchChainRecords()`
+> 作**外部侧** ⇒ **对账拿自喂的记录比自己，报 clean 而非漏报**。⇒ 结算在 sandbox 下是「假结算 +
+> 伪对账」，`MERCHANT:*` 可用余额已被确认而链上无对应资金，一旦接入按余额出款即重复出款。
 
 > 说明：原独立的「gateway 五路径人工复核计划」**并入 A2 草案的不变式与测试**——
 > 现网 `exempt-from-pubkeys` 机制从未在代码中实现（仅存在于板讨论），无需独立巡检；
