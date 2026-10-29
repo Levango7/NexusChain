@@ -16,6 +16,7 @@ refs:
   - pr: 333
   - board: 20261029-1053-zcode-a2-s75-three-decisions
   - board: 20261029-1808-zcode-a2-qoder-lane-takeover
+  - board: 20261029-2053-zcode-a2-s75-pr337
   - adr: A2-wallet-approval-threshold-review-2026-10-28
 created: 2026-10-30T01:12:00+08:00
 ---
@@ -45,6 +46,7 @@ created: 2026-10-30T01:12:00+08:00
 
 A. **5001 在两条路径上语义分叉**。`declaresNotExecuted`（`SigningResponses.java:362-370`）把 5001 归入「本次确定未动账」⇒ A2 腿落**终态 FAILED**；而 5001 唯一出处是 `nexus-signing-service/.../controller/TxController.java:239`（sign-approved 路径 `tryMarkExecuting` CAS 失败），真实含义是「另一路已抢到执行权、**此刻正在广播**」。同一个码在 resume 路径被当非终态处理（`DefaultWithdrawalApprovalService.java:772` `isDefinitelyNotExecuted` ⇒ `AWAITING_APPROVAL` + 清 `signingExecutionAttemptedAt`）——两处对「钱是否在路上」判断相反。
    今日 A2 携凭据端点不产 5001 ⇒ **潜伏**而非现网缺陷；但 `declaresNotExecuted` 是 SDK **公共谓词**，后来者在能收到 5001 的路径上按字面「确定未动账」使用，就会把别人正在广播的一笔记成没出钱。建议：5001 从该谓词摘出单列，或 javadoc 限定「仅适用于 A2 携凭据端点」。
+   查重说明：板 2053 事实段已自陈白名单为 5000/5001/4000/4030，并写明「resume 路径不经过转换，逐字节不变」—— 本条**不是重问白名单本身**，问的是 5001 这个码的**出处语义**（`TxController.java:239` 的 CAS 失败＝另一路正在广播）与「A2 腿终态 FAILED / resume 腿非终态」这一对选择是否应当一致。
 
 B. **开闸依赖的部署下发无人看护**。`git grep -rn "NEX_WALLET_PLATFORM_PUBKEY" -- deploy` 与同族 `NEX_WALLET_PLATFORM_ADDRESS` 在 `deploy/` 下**零命中**（现查于 `84a60d56`）；ADR §5 已把「开闸前必须下发 `nexus.wallet.platform-pubkey`」列为开闸阻断项（`docs/adr/A2-wallet-approval-threshold-review-2026-10-28.md:97-101`，仍未勾选），目前只能人肉核。⇒ 与 #329 的 `JWT_SECRET` 同族缺口（配置项存在、部署侧不下发 ⇒ 执行恒失败）。建议照 PR #113 的先例给 prod 覆盖层加渲染断言（wallet 渲染结果里 `NEX_WALLET_PLATFORM_PUBKEY` 非空），把「文档里的开闸条件」变成门禁。
 
