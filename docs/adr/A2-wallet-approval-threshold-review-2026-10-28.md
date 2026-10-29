@@ -113,7 +113,7 @@ ADR-036 §6 要求"与 wallet 多签阈值配置一同评审"的原因。
 > + 对账自喂 `SOURCE_CHAIN` 记录报 clean**（P0-A）。该两项缺陷与 A2 flag 解耦，但**生产切流不与它们
 > 解耦**：gateway platform-pubkey 下发前，结算 S1（取 `payeeAddress` + 前置校验前移）必须先修；
 > P0-A 的 fail-closed 口径需另定。详见 ADR-036 §5 增项；分工与复核结论见板
-> `20261029-2345-zcode-lane-redivision` 与 `20261029-2400-zcode-s1-claim`。
+> `20261029-2345-zcode-lane-redivision` 与 `20261030-0011-zcode-s1-claim`。
 
 ## 6. 本次复核未改动的部分
 
