@@ -47,9 +47,17 @@ public class NonceAllocator {
     /** 认领最多重试几次（应对并发播种方尚未提交时的空递增）。 */
     private static final int MAX_ATTEMPTS = 3;
 
-    private static final String ENSURE_ROW =
-            "INSERT INTO nonce_allocation (address, next_nonce, updated_at) "
-                    + "SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM nonce_allocation WHERE address = ?)";
+    /**
+     * 建行拆成两条单表 DML：Seata AT 的数据源代理解析不了
+     * {@code INSERT ... SELECT ... WHERE NOT EXISTS}（抛 NotSupportYetException
+     * "not support the sql syntax insert with query"），全局事务里首次签名会直接 500。
+     * 语义不变：先探存在性（UPDATE 命中即已存在），不存在才插，并发由主键兜。
+     */
+    private static final String TOUCH_ROW =
+            "UPDATE nonce_allocation SET updated_at = ? WHERE address = ?";
+
+    private static final String INSERT_ROW =
+            "INSERT INTO nonce_allocation (address, next_nonce, updated_at) VALUES (?, ?, ?)";
 
     private static final String SEED_CAS =
             "UPDATE nonce_allocation SET next_nonce = ?, updated_at = ?, last_reconciled_at = ? "
@@ -123,8 +131,11 @@ public class NonceAllocator {
 
     /** 建行独立成一步（不在认领事务里），让"并发首次建行"的主键冲突只影响这一条幂等 INSERT。 */
     private void ensureRow(String address) {
+        if (jdbc.update(TOUCH_ROW, now(), address) > 0) {
+            return;
+        }
         try {
-            jdbc.update(ENSURE_ROW, address, UNSEEDED, now(), address);
+            jdbc.update(INSERT_ROW, address, UNSEEDED, now());
         } catch (org.springframework.dao.DuplicateKeyException concurrentFirstCreator) {
             // 并发首次建行的正常结果：主键挡住了一方，行已经存在，直接走后面的认领路径。
             log.debug("nonce_allocation 行由并发方先建: address={}", address);
