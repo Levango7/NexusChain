@@ -349,7 +349,12 @@ public class FinalityVoteBroadcaster {
             lastRespondedEpoch = Math.max(lastRespondedEpoch, epoch);
             return;
         }
-        long windowEnd = roundAskedFrom + Math.max(1, antiEntropyMaxVotes);
+        // 窗口上界 = from + maxVotes，再 +1 是 PLAN-057 第 11 处的哨兵余量：
+        // 响应页按 epoch 完整交付，可能多带"哨兵 epoch"的票，其 epoch 恰好
+        // 可能超过 from + maxVotes 一个。若这里不放宽，那些票不会计入
+        // lastRespondedEpoch，随后响应标记里同值的 servedTo 会被一致性护栏
+        // 误判为"标记超出实收范围"而丢弃 ⇒ 游标停住、同一 from 反复重问。
+        long windowEnd = roundAskedFrom + Math.max(1, antiEntropyMaxVotes) + 1;
         if (epoch >= roundAskedFrom && epoch <= windowEnd) {
             lastRespondedEpoch = Math.max(lastRespondedEpoch, epoch);
         }
@@ -549,13 +554,21 @@ public class FinalityVoteBroadcaster {
                     resp.servedTo(), lastRespondedEpoch, roundAskedFrom);
             return;
         }
+        // PLAN-057 第 11 处（第八轮实测发现，1/1026 票缺口）：游标推进依赖
+        // 响应端**按 epoch 完整交付**这一前提。
+        // 旧实现 `ORDER BY epoch ASC LIMIT N` 会在某个 epoch 中间截断（实测
+        // 68..134 共 201 票，LIMIT 200 ⇒ validator nv3gC5.. 的 epoch 134
+        // 被切在页外），而 servedTo 只报"页内最大 epoch" ⇒ 请求方按 +1
+        // 前进 ⇒ 那一票永远不再被请求。
+        // 修法在响应端（loadVoteObjectsAscending：多取 1 行做哨兵，
+        // 边界 epoch 整体不进本页），因此这里的推进恢复为简单的 servedTo+1。
         long next = resp.servedTo() + 1;
         if (next > nextSyncCursorEpoch) {
             nextSyncCursorEpoch = next;
         }
         log.info("Vote-sync response marker: served {}..{} ({} votes) for request from {}"
-                + " -> next cursor {}", resp.servedFrom(), resp.servedTo(), resp.count(),
-                resp.requestFrom(), nextSyncCursorEpoch);
+                + " -> next cursor {}", resp.servedFrom(), resp.servedTo(),
+                resp.count(), resp.requestFrom(), nextSyncCursorEpoch);
     }
 
     /** 处理对端的补票请求：把本地存的、带签名的票按 epoch **倒序**截断后一次性回推。 */
