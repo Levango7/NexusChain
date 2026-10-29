@@ -54,7 +54,13 @@ sourceCompatibility = 17
 targetCompatibility = 17
 
 mainClassName = 'org.nexus.Start'
-applicationDefaultJvmArgs = ["-server", "-Xss2m", "-Xmx2G", "-XX:-OmitStackTraceInFastThrow"]
+// logback 经典自动配置只识别 classpath 根的 logback.xml / logback.groovy /
+// logback-test.xml；nexus-core 作为库被四个微服务依赖时，jar 内的 logback.xml
+// 会被经典自动配置抢先加载，遮蔽服务自带的 logback-spring.xml（观测实证：
+// prod 未生成 /var/log/nexus/signing-audit.json，root=DEBUG）。故配置文件改名
+// logback-node.xml 留在 jar 内但不再被自动发现；standalone 节点由此参数显式引用。
+applicationDefaultJvmArgs = ["-server", "-Xss2m", "-Xmx2G", "-XX:-OmitStackTraceInFastThrow",
+                             "-Dlogback.configurationFile=logback-node.xml"]
 
 if (project.hasProperty('jvmArgs')) {
     applicationDefaultJvmArgs = applicationDefaultJvmArgs + project.jvmArgs.split('\\s+').toList()

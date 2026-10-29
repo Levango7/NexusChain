@@ -132,7 +132,7 @@ RUN echo "=== thin jar 检查 org/nexus/Start.class ===" && \
 
 # === Stage 1.5: directory builder ===
 # distroless 无 shell/mkdir/chown，用 busybox 创建 nonroot 可写目录
-# /app/logs（2026-09-14 10b 补）：logback.xml:18 ./logs/nexuscore.log 无 profile
+# /app/logs（2026-09-14 10b 补）：logback-node.xml:18 ./logs/nexuscore.log 无 profile
 # 守卫，WORKDIR=/app → /app/logs；目录缺失即 Logback 启动失败（演练 CrashLoop 实证）
 FROM busybox:1.36.1 AS dir-builder
 RUN mkdir -p /app/leveldb /app/data /app/logs && \
@@ -160,7 +160,7 @@ COPY --from=busybox:1.36.1-musl /bin/busybox /busybox
 # 创建 nonroot 用户可写目录：
 # - /app/leveldb：LevelDB 缓存（nexus.cache-dir 为空时回退到 user.dir + "/leveldb"）
 # - /app/data：链上状态快照持久化（nexus.chain.state-dir 默认 ./data/）
-# - /app/logs：Logback ./logs/nexuscore.log 的工作目录（logback.xml 无 profile
+# - /app/logs：Logback ./logs/nexuscore.log 的工作目录（logback-node.xml 无 profile
 #   守卫，目录缺失即启动失败；dir-builder 阶段已建，此前 runtime 阶段漏拷——
 #   2026-10-18 补）
 # distroless 无 shell/mkdir，通过 busybox 中间阶段创建并 chown 65532
@@ -180,6 +180,8 @@ EXPOSE 19585
 # JVM 参数：
 #   -XX:+UseContainerSupport      自动识别容器 cgroup 内存限制
 #   -XX:MaxRAMPercentage=75.0     堆上限 = 容器内存 × 75%（预留 25% 给非堆/Metaspace/直接内存）
+#   -Dlogback.configurationFile   显式指定 standalone 节点日志配置（库 jar 内改名
+#     logback-node.xml 以免遮蔽微服务的 logback-spring.xml，见 build.gradle 注释）。
 # java -jar app.jar：JVM 读取 manifest 的 Main-Class=org.nexus.Start 和
 # Class-Path=lib/*.jar，自动加载主类和依赖。
-ENTRYPOINT ["java", "-XX:+UseContainerSupport", "-XX:MaxRAMPercentage=75.0", "-jar", "app.jar"]
+ENTRYPOINT ["java", "-XX:+UseContainerSupport", "-XX:MaxRAMPercentage=75.0", "-Dlogback.configurationFile=logback-node.xml", "-jar", "app.jar"]
