@@ -243,7 +243,18 @@ public class OrderServiceImpl implements OrderService {
         } catch (NumberFormatException e) {
             // fall through
         }
-        log.warn("Merchant not found for id={}, using placeholder address", merchantId);
+        // 2026-10-30（S1，板 20261029-2352 §F3）：原先这里是 warn + 编造地址。
+        // 编造的 "1MerchantSettlement" + merchantId 含 'l'，不在 Base58 字母表 ⇒
+        // WalletUtils.addressToPubkeyHash 必然解析失败 ⇒ 把「商户结算地址缺失」伪装成
+        // 「地址解析失败」，结算侧失败原因不可辨认。
+        //
+        // 未直接返回 null 的原因：payment_orders.payee_address 为 NOT NULL
+        // （V1__init_schema.sql:32），返回 null 会在落库时抛约束异常，把可辨认的
+        // 领域错误变成不可辨认的 500。「无结算地址的商户能否下单」属产品口径，
+        // 不在 S1 内单方面改变行为。此处升到 ERROR 并点明后果；结算侧已由
+        // DefaultClearingEngine 在贷账之前 fail-closed 拦下（canTransferTo）。
+        log.error("Merchant settlement address missing: order created with a placeholder payee address, "
+                + "on-chain settlement for it will fail closed before booking: merchantId={}", merchantId);
         return "1MerchantSettlement" + merchantId;
     }
 }

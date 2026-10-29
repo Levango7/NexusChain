@@ -473,7 +473,10 @@ public class OrchestrationService {
                     p.getConnectorId(),
                     p.getMerchantId(),
                     txHash,
-                    null, null,
+                    // 2026-10-30（S1，板 20261029-2352 §F1）：原先传 null, null，
+                    // 导致编排链路的 clearing_order.payee_address 恒为 NULL，
+                    // 结算执行腿在贷账之后必然因「无可用收款地址」失败。
+                    p.getPayerAddress(), p.getPayeeAddress(),
                     Instant.now(),
                     latencyMs,
                     costBps

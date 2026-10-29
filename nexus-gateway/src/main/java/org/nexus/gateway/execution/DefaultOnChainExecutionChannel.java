@@ -115,6 +115,29 @@ public class DefaultOnChainExecutionChannel implements OnChainExecutionChannel {
         return result;
     }
 
+    /**
+     * 预检：目标地址能否转换为 40-hex {@code pubkeyHash}。
+     * <p>
+     * 与 {@link #executeProduction} 第 1 步用的是同一套解析
+     * （{@link WalletUtils#addressToPubkeyHash}），因此「预检通过」等价于
+     * 「执行时不会再因地址解析失败而返 FAILED」。
+     * </p>
+     *
+     * <p>典型反例：结算引擎历史上把 {@code "MERCHANT:" + merchantId} 当收款地址传入，
+     * 该串含 {@code ':'}，不在 Base58 字母表 ⇒ 解析必失败。此类调用方缺陷应当在
+     * 记账之前被本预检拦下，而不是在记账之后落成 FAILED。</p>
+     *
+     * @param toAddress 目标收款地址
+     * @return 非空且能解析出 pubkeyHash 时 true
+     */
+    @Override
+    public boolean canTransferTo(String toAddress) {
+        if (toAddress == null || toAddress.isBlank()) {
+            return false;
+        }
+        return WalletUtils.addressToPubkeyHash(toAddress) != null;
+    }
+
     @Override
     public TransactionResult queryStatus(String txHash) {
         if (txHash == null || txHash.isEmpty()) {
