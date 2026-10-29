@@ -7,12 +7,17 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.Collectors;
 
 /**
  * 默认对账服务实现。
@@ -39,6 +44,12 @@ public class DefaultReconciliationService implements ReconciliationService {
 
     /** 历次差错记录（供审计回溯） */
     private final List<ReconciliationReport> discrepancyHistory = new CopyOnWriteArrayList<>();
+
+    /** LOCAL_ONLY 差错累计计数（跨对账轮次，可告警指标，见板 20261029-2057 §裁决三） */
+    private final AtomicLong localOnlyTotal = new AtomicLong(0);
+
+    /** LOCAL_ONLY 差错按 ref 定位的最近出现时间（跨轮次，供告警路由） */
+    private final Map<String, Instant> localOnlyByRef = new ConcurrentHashMap<>();
 
     public DefaultReconciliationService(Ledger ledger,
                                         ChainRecordSource chainRecordSource,
@@ -85,10 +96,20 @@ public class DefaultReconciliationService implements ReconciliationService {
      * @return 对账报告
      */
     private ReconciliationReport reconcile(List<SettlementRecord> externalRecords, String sourceLabel) {
-        // 本地侧：商户结算分录（MERCHANT:* 账户的贷方），reference = 清算订单 ID
+        // 本地侧：待结算负债（SETTLEMENT_PAYABLE）的借方分录 = 已记账的结算（reference = 清算订单 ID）。
+        // 旧注释曾误写为 "MERCHANT:* 账户的贷方"，正确语义见 Ledger.bookSettlement。
+        // 冲正产生的贷方分录（reference 以 ":REV" 结尾）视为该基准单已回滚，须从本地侧剔除，
+        // 否则原单的借方分录会永久被报为「本地有、外部无」（见板 20261029-2057 §F9）。
+        List<LedgerEntry> payableEntries = ledger.entriesOf(Ledger.SETTLEMENT_PAYABLE);
+        Set<String> reversedRefs = payableEntries.stream()
+                .filter(e -> e.getDirection() == LedgerEntry.Direction.CREDIT
+                        && e.getReference() != null && e.getReference().endsWith(":REV"))
+                .map(e -> e.getReference().substring(0, e.getReference().length() - ":REV".length()))
+                .collect(Collectors.toSet());
         Map<String, BigDecimal> localByRef = new HashMap<>();
-        ledger.entriesOf(Ledger.SETTLEMENT_PAYABLE).stream()
+        payableEntries.stream()
                 .filter(e -> e.getDirection() == LedgerEntry.Direction.DEBIT)
+                .filter(e -> !reversedRefs.contains(e.getReference()))
                 .forEach(e -> localByRef.put(e.getReference(), e.getAmount()));
 
         Map<String, BigDecimal> externalByRef = new HashMap<>();
@@ -101,6 +122,7 @@ public class DefaultReconciliationService implements ReconciliationService {
         long matched = 0;
         List<String> discrepancies = new ArrayList<>();
         List<DiscrepancyDetail> details = new ArrayList<>();
+        List<String> localOnlyRefsThisRun = new ArrayList<>();
         BigDecimal discrepancyAmount = BigDecimal.ZERO;
 
         for (Map.Entry<String, BigDecimal> entry : localByRef.entrySet()) {
@@ -112,6 +134,10 @@ public class DefaultReconciliationService implements ReconciliationService {
                 details.add(new DiscrepancyDetail(
                         DiscrepancyDetail.Type.LOCAL_ONLY, ref, localAmount, null));
                 discrepancyAmount = discrepancyAmount.add(localAmount != null ? localAmount : BigDecimal.ZERO);
+                // 指标化：LOCAL_ONLY 累计计数 + 按 ref 可定位（见板 20261029-2057 §裁决三）
+                localOnlyTotal.incrementAndGet();
+                localOnlyByRef.put(ref, Instant.now());
+                localOnlyRefsThisRun.add(ref);
             } else if (localAmount.compareTo(externalByRef.get(ref)) != 0) {
                 BigDecimal externalAmount = externalByRef.get(ref);
                 discrepancies.add(String.format("[%s] ref=%s 金额不符（local=%s, external=%s）",
@@ -147,6 +173,12 @@ public class DefaultReconciliationService implements ReconciliationService {
         report.setTotalDiscrepancyAmount(discrepancyAmount);
         report.setDetails(details);
         report.setReconciledAt(java.time.Instant.now());
+        report.setLocalOnlyTotal(localOnlyTotal.get());
+        report.setLocalOnlyRefsThisRun(localOnlyRefsThisRun);
+        if (!localOnlyRefsThisRun.isEmpty()) {
+            log.warn("[metric] reconciliation LOCAL_ONLY total={} thisRun={} refs={} source={}",
+                    localOnlyTotal.get(), localOnlyRefsThisRun.size(), localOnlyRefsThisRun, sourceLabel);
+        }
         return report;
     }
 }
