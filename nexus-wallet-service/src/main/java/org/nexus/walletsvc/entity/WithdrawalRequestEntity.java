@@ -98,7 +98,7 @@ public class WithdrawalRequestEntity {
     private LocalDateTime signingExecutionAttemptedAt;
 
     /** 拒绝原因（REJECTED / FAILED 时填充），可空。 */
-    @Column(name = "rejection_reason", length = 256)
+    @Column(name = "rejection_reason", length = 1024)
     private String rejectionReason;
 
     /** 创建时间，由 {@link PrePersist} 自动维护。 */

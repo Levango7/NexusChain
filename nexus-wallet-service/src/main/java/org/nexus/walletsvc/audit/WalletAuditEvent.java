@@ -45,7 +45,7 @@ public class WalletAuditEvent {
     @Column(name = "currency", length = 16)
     private String currency;
 
-    @Column(name = "detail", length = 512)
+    @Column(name = "detail", length = 2048)
     private String detail;
 
     // === getters / setters ===
