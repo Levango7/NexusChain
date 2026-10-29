@@ -29,7 +29,10 @@ import java.util.Map;
  *       完成签名并保存 txHash；本类<b>不自行定时执行</b>——"谁发起、谁推进"，
  *       避免未接线的业务路径在审批通过后被隐式动钱；</li>
  *   <li>终态映射：拒绝/过期 → FAILED；签名已执行但无哈希 → EXECUTED_UNVERIFIED；
- *       执行结果不可判定 → EXECUTION_UNKNOWN（均禁止自动重试）。</li>
+ *       执行结果不可判定 → EXECUTION_UNKNOWN（均禁止自动重试）。
+ *       <b>第一腿同样适用该词表</b>：异常/降级/未携带「明确未动账」码
+ *       （{@link SigningResponses#declaresNotExecuted(Integer)}）的响应一律
+ *       EXECUTION_UNKNOWN，只有契约确立的未动账码（5000/4000/4030）才 FAILED。</li>
  * </ol>
  *
  * <h3>为什么状态机要区分"未执行/已执行但未知"</h3>
@@ -93,7 +96,8 @@ public class SigningApprovalExecutionService {
      * @param toPubkeyHash 收款方公钥哈希
      * @param amount       金额
      * @param currency     币种/资产（可为 null）
-     * @return 当前结果（执行成功 / 待审批 / 失败）
+     * @return 当前结果（执行成功 / 待审批 / 确定未动账失败 / 结果不明——后两者分别映射
+     *         {@link Status#FAILED}（仅契约确立的未动账码）与 {@link Status#EXECUTION_UNKNOWN}）
      */
     public SigningOutcome signOrAwait(String requestKey, String requestType, String fromPubkey,
                                       String toPubkeyHash, BigDecimal amount, String currency) {
@@ -109,13 +113,20 @@ public class SigningApprovalExecutionService {
         try {
             response = signingClient.signTransfer(fromPubkey, toPubkeyHash, amount);
         } catch (RuntimeException e) {
-            log.error("signTransfer 抛异常（未动账）: requestKey={}, error={}", requestKey, e.getMessage(), e);
-            return new SigningOutcome(Status.FAILED, null, null,
-                    "signTransfer failed: " + e.getMessage());
+            // 结果不明：异常可能发生在广播之后（如读超时），不得当「确定未动账」FAILED 重放。
+            // 与第二腿 executeApproved 的异常分支同范式——停结果不明，交人工核对。
+            log.error("signTransfer 抛异常（结果不明，可能已广播，禁止自动重试）: requestKey={}, error={}",
+                    requestKey, e.getMessage(), e);
+            return new SigningOutcome(Status.EXECUTION_UNKNOWN, null, null,
+                    "signTransfer outcome unknown: " + e.getMessage());
         }
         if (response == null) {
-            // 降级：签名服务不可用，确定未动账
-            return new SigningOutcome(Status.FAILED, null, null, "signing service unavailable");
+            // 降级（fallback 闸门返回 null）：信封未携带契约确立的未动账码——
+            // 5001/未定义码/熔断打开/无响应体皆可能，结果不明，禁止当未动账 FAILED。
+            // 与第二腿 executeApproved 的 null 分支同范式。
+            log.error("signTransfer 降级（结果不明，禁止自动重试）: requestKey={}", requestKey);
+            return new SigningOutcome(Status.EXECUTION_UNKNOWN, null, null,
+                    "signTransfer outcome unknown: signing service degraded");
         }
 
         SigningResponses.Outcome outcome = SigningResponses.classify(response);
@@ -143,9 +154,21 @@ public class SigningApprovalExecutionService {
         if (outcome.isExecuted()) {
             return new SigningOutcome(Status.EXECUTED, null, outcome.txHash(), null);
         }
-        log.error("signTransfer 失败（未动账）: requestKey={}, message={}", requestKey, outcome.message());
-        return new SigningOutcome(Status.FAILED, null, null,
-                outcome.message() == null ? "signTransfer failed" : outcome.message());
+        // 非成功、非待审批：仅「契约确立的明确未动账」码（5000/4000/4030，见
+        // SigningResponses.declaresNotExecuted）才允许 FAILED——此时资金确定未转出，
+        // 调用方可以安全处理业务失败。其余（5001 并发被抢/5003 凭据可能已消费/
+        // 未知码/契约残缺响应）一律结果不明，交人工核对，与第二腿范式一致。
+        Integer code = outcome.statusCode();
+        if (SigningResponses.declaresNotExecuted(code)) {
+            log.warn("signTransfer 明确失败（未动账）: requestKey={}, statusCode={}, message={}",
+                    requestKey, code, outcome.message());
+            return new SigningOutcome(Status.FAILED, null, null,
+                    outcome.message() == null ? "signTransfer failed" : outcome.message());
+        }
+        log.error("signTransfer 结果不明（不当未动账，禁止自动重试）: requestKey={}, statusCode={}, message={}",
+                requestKey, code, outcome.message());
+        return new SigningOutcome(Status.EXECUTION_UNKNOWN, null, null,
+                outcome.message() == null ? "signTransfer outcome unknown" : outcome.message());
     }
 
     /**

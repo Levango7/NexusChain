@@ -35,7 +35,9 @@ import static org.mockito.Mockito.when;
  *   <li>2001 必须落审批链接并返回待审批，不能当失败；</li>
  *   <li>APPROVED 才执行，执行前先落 EXECUTING 标记；</li>
  *   <li>执行结果不明（null/5001）后即便签名状态回退成 APPROVED，也<b>不得再次执行</b>；</li>
- *   <li>签名报告 EXECUTED 但调用方无 txHash ⇒ 人工核对，不得当作成功或失败。</li>
+ *   <li>签名报告 EXECUTED 但调用方无 txHash ⇒ 人工核对，不得当作成功或失败；</li>
+ *   <li>第一腿同词表：异常/降级/未携带明确未动账码的响应 ⇒ EXECUTION_UNKNOWN，
+ *       仅契约确立的未动账码（5000/4000/4030）才 FAILED。</li>
  * </ul>
  */
 @ExtendWith(MockitoExtension.class)
@@ -102,7 +104,7 @@ class SigningApprovalExecutionServiceTest {
     }
 
     @Test
-    @DisplayName("2001 缺 approvalId -> FAILED，不落链接（无法跟踪的审批禁止当成功）")
+    @DisplayName("2001 缺 approvalId -> EXECUTION_UNKNOWN，不落链接（契约残缺响应按结果不明处理）")
     void signOrAwait_approvalWithoutId() {
         when(repository.findByRequestKey(KEY)).thenReturn(Optional.empty());
         when(signingClient.signTransfer(any(), any(), any()))
@@ -111,19 +113,58 @@ class SigningApprovalExecutionServiceTest {
         SigningOutcome outcome = service.signOrAwait(KEY, "REFUND", "pk", "to-hash",
                 BigDecimal.TEN, "NEX");
 
-        assertTrue(outcome.isFailed());
+        assertTrue(outcome.requiresManualVerification());
         verify(repository, never()).save(any());
     }
 
     @Test
-    @DisplayName("signTransfer 降级/抛异常 -> FAILED（确定未动账）")
+    @DisplayName("signTransfer 降级/抛异常 -> EXECUTION_UNKNOWN（结果不明，禁止当未动账 FAILED 重放）")
     void signOrAwait_unavailable() {
         when(repository.findByRequestKey(KEY)).thenReturn(Optional.empty());
         when(signingClient.signTransfer(any(), any(), any())).thenReturn(null);
-        assertTrue(service.signOrAwait(KEY, "REFUND", "pk", "to-hash", BigDecimal.TEN, "NEX").isFailed());
+        SigningOutcome degraded = service.signOrAwait(KEY, "REFUND", "pk", "to-hash",
+                BigDecimal.TEN, "NEX");
+        assertTrue(degraded.requiresManualVerification(),
+                "降级 null 可能是 5001/未定义码/熔断打开——结果不明，不是确定未动账");
+        assertFalse(degraded.isFailed());
 
         when(signingClient.signTransfer(any(), any(), any())).thenThrow(new RuntimeException("down"));
-        assertTrue(service.signOrAwait(KEY, "REFUND", "pk", "to-hash", BigDecimal.TEN, "NEX").isFailed());
+        SigningOutcome threw = service.signOrAwait(KEY, "REFUND", "pk", "to-hash",
+                BigDecimal.TEN, "NEX");
+        assertTrue(threw.requiresManualVerification(),
+                "异常可能发生在广播之后（如读超时）——结果不明，不是确定未动账");
+        assertFalse(threw.isFailed());
+    }
+
+    @Test
+    @DisplayName("signTransfer 返回契约确立的未动账码（5000/4000/4030）-> FAILED（确定未动账）")
+    void signOrAwait_contractuallyNotExecutedCodes_failed() {
+        when(repository.findByRequestKey(KEY)).thenReturn(Optional.empty());
+        for (int code : new int[] {5000, 4000, 4030}) {
+            when(signingClient.signTransfer(any(), any(), any()))
+                    .thenReturn(Map.of("statusCode", code, "message", "rejected",
+                            "data", Map.of()));
+            SigningOutcome outcome = service.signOrAwait(KEY, "REFUND", "pk", "to-hash",
+                    BigDecimal.TEN, "NEX");
+            assertTrue(outcome.isFailed(), "statusCode=" + code + " 应判 FAILED（确定未动账）");
+            assertFalse(outcome.requiresManualVerification());
+        }
+    }
+
+    @Test
+    @DisplayName("signTransfer 返回 5001（并发被抢）/5003（凭据可能已消费）/未知码 -> EXECUTION_UNKNOWN")
+    void signOrAwait_ambiguousCodes_executionUnknown() {
+        when(repository.findByRequestKey(KEY)).thenReturn(Optional.empty());
+        for (int code : new int[] {5001, 5003, 5999}) {
+            when(signingClient.signTransfer(any(), any(), any()))
+                    .thenReturn(Map.of("statusCode", code, "message", "ambiguous",
+                            "data", Map.of()));
+            SigningOutcome outcome = service.signOrAwait(KEY, "REFUND", "pk", "to-hash",
+                    BigDecimal.TEN, "NEX");
+            assertTrue(outcome.requiresManualVerification(),
+                    "statusCode=" + code + " 结果不明，必须人工核对，不得当 FAILED 重放");
+            assertFalse(outcome.isFailed(), "statusCode=" + code + " 不得写成确定未动账");
+        }
     }
 
     @Test
