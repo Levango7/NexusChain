@@ -138,6 +138,13 @@ nexus:
     # 未配置的部署把 "PLATFORM_HOT_WALLET" 假地址发给 signing（提现必然失败、原因不可辨认）。
     # 现语义：未配置 ⇒ 提现执行 fail-closed 拒绝（原因明写 not configured）。
     platform-address: ${NEX_WALLET_PLATFORM_ADDRESS:}
+    # 平台热钱包**公钥**（hex，A2 §7.5 ③ 词表对齐，2026-10-29）。
+    # signing 侧 signTransfer 的 fromPubkey 必须是完整公钥 hex（与
+    # wallet.keystore.json 的 pubkey 逐字比对）；base58 地址是公钥哈希的单向编码，
+    # 不可反推。镜像 gateway 侧 nexus.exchange-wallet.platform-pubkey 的部署口径。
+    # 语义：A2 开关开启时未配置 ⇒ 提现执行 fail-closed 拒绝（不回退用地址冒充公钥）；
+    # A2 关闭时未配置 ⇒ 保留旧行为（from 仍传 platform-address，兼容存量部署）。
+    platform-pubkey: ${NEX_WALLET_PLATFORM_PUBKEY:}
     # 地址白名单首次提币延迟（小时）
     whitelist:
       first-withdrawal-delay-hours: ${NEX_WALLET_WHITELIST_DELAY_HOURS:24}

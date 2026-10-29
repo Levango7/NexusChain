@@ -3,6 +3,7 @@ package org.nexus.walletsvc.seata;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.nexus.sdk.client.feign.SigningServiceFeignClient;
+import org.nexus.sdk.wallet.WalletUtils;
 import org.nexus.sdk.wallet.WithdrawalRequest;
 import org.nexus.walletsvc.approval.WithdrawalApprovalService;
 import org.nexus.walletsvc.entity.WhitelistEntryEntity;
@@ -69,7 +70,8 @@ class SeataIntegrationTest {
     @MockitoBean
     private SigningServiceFeignClient signingServiceClient;
 
-    private static final String WHITELISTED_ADDR = "0xseataIntegrationTestAddr1234567";
+    private static final String WHITELISTED_ADDR =
+            WalletUtils.pubkeyHashToAddress("cccc4442deadbeefdeadbeefdeadbeefdeadbeef");
 
     @Test
     @DisplayName("Seata AT: @GlobalTransactional 正常路径 — 状态 PENDING → APPROVED → EXECUTED")
@@ -207,7 +209,8 @@ class SeataIntegrationTest {
     @Test
     @DisplayName("Seata AT: timeoutMills=120000 配置存在且不阻止执行")
     void globalTransactionalTimeoutConfig_doesNotBlockExecution() {
-        String addr = "0xseataTimeoutTestAddr1234567890123456";
+        String addr = WalletUtils.pubkeyHashToAddress(
+                "ffff7777deadbeefdeadbeefdeadbeefdeadbeef");
         if (!whitelistEntryRepository.existsByAddress(addr)) {
             WhitelistEntryEntity entry = new WhitelistEntryEntity();
             entry.setAddress(addr);

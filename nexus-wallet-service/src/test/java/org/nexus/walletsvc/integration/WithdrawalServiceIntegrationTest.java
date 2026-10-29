@@ -4,6 +4,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.nexus.sdk.client.feign.SigningServiceFeignClient;
+import org.nexus.sdk.wallet.WalletUtils;
 import org.nexus.sdk.wallet.WithdrawalRequest;
 import org.nexus.walletsvc.approval.WithdrawalApprovalService;
 import org.nexus.walletsvc.entity.WhitelistEntryEntity;
@@ -66,7 +67,8 @@ class WithdrawalServiceIntegrationTest {
     private SigningServiceFeignClient signingServiceClient;
 
     /** 测试用白名单地址（长度 ≥ 20）。 */
-    private static final String WHITELISTED_ADDR = "0xwithdrawalTargetAddr1234567890";
+    private static final String WHITELISTED_ADDR =
+            WalletUtils.pubkeyHashToAddress("aaaa2222deadbeefdeadbeefdeadbeefdeadbeef");
     private static final String MERCHANT_ID = "merchant-it-withdrawal";
 
     @BeforeEach

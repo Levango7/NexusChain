@@ -143,6 +143,28 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
     }
 
     /**
+     * 平台热钱包<b>公钥</b>（hex，A2 §7.5 词表对齐，2026-10-29）。
+     *
+     * <p>signing 侧 {@code signTransfer(fromPubkey, toPubkeyHash, amount)} 要求
+     * fromPubkey 是<b>完整公钥 hex</b>（TxController 会与
+     * {@code platformKeystore.getPubkey()} 逐字比对）；而 base58 地址是公钥哈希的
+     * 单向编码，<b>不可</b>由地址反推。遗留配置 {@code nexus.wallet.platform-address}
+     * 装的是地址，直接当 fromPubkey 用必然 pubkey_mismatch——ADR §7.5 ③。</p>
+     *
+     * <p>镜像 gateway 侧 {@code nexus.exchange-wallet.platform-pubkey}
+     * （GatewayConfig，「MUST be configured per deployment」）。本配置<b>必须</b>
+     * 部署时填：A2 开启时为空 ⇒ 执行前 fail-closed 拒绝（不回退用地址冒充公钥）；
+     * A2 关闭时为空 ⇒ 保留旧行为（from 参数仍传 platform-address，兼容既有部署），
+     * 但应在下次部署补齐。</p>
+     */
+    private String platformWalletPubkey = "";
+
+    @org.springframework.beans.factory.annotation.Value("${nexus.wallet.platform-pubkey:}")
+    public void setPlatformWalletPubkey(String platformWalletPubkey) {
+        this.platformWalletPubkey = platformWalletPubkey == null ? "" : platformWalletPubkey.trim();
+    }
+
+    /**
      * 审计（P0 补齐 2026-10-11，setter 注入）。
      *
      * <p>提现是钱包侧唯一的资金出口，四个关键节点都要留痕（请求/审批/执行/失败）。
@@ -468,20 +490,73 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
         if (existingApprovalId != null && !existingApprovalId.isBlank()) {
             return resumeSigningApproval(e, existingApprovalId);
         }
-        if (businessApprovalEnabled) {
-            return executeWithBusinessApproval(e);
+        // 2026-10-29（A2 §7.5 ③ 词表对齐）：signing 侧签名接口的参数空间是
+        // fromPubkey（完整公钥 hex，TxController 与 platformKeystore.getPubkey()
+        // 逐字比对）与 toPubkeyHash（40-hex 公钥哈希），而实体/配置侧存的是 base58
+        // 地址。转换集中在此处完成，两腿共用同一份结果，保证 canonicalHash /
+        // register / sign 三处看到的是完全一致的值（signing 按请求体字段重算哈希）。
+        String fromPubkey = resolveFromPubkey();
+        if (fromPubkey == null) {
+            return OnChainResult.failure(
+                    "platform wallet pubkey not configured "
+                            + "(nexus.wallet.platform-pubkey / NEX_WALLET_PLATFORM_PUBKEY): "
+                            + "withdrawal aborted (fail-closed)", false);
         }
-        return legacyFirstLeg(e);
+        String toPubkeyHash = resolveToPubkeyHash(e.getToAddress());
+        if (toPubkeyHash == null) {
+            return OnChainResult.failure(
+                    "destination address is not a valid base58 address (cannot derive toPubkeyHash): "
+                            + e.getToAddress() + "; withdrawal aborted (fail-closed)", false);
+        }
+        if (businessApprovalEnabled) {
+            return executeWithBusinessApproval(e, fromPubkey, toPubkeyHash);
+        }
+        return legacyFirstLeg(e, fromPubkey, toPubkeyHash);
+    }
+
+    /**
+     * 解析签名接口的 fromPubkey（A2 §7.5 ③ 词表对齐）。
+     *
+     * <p>优先使用 {@code nexus.wallet.platform-pubkey}（完整公钥 hex，与 gateway
+     * 同一部署口径）；未配置时：A2 开启 ⇒ 返回 null 触发 fail-closed（公钥不可由
+     * base58 地址反推，用地址冒充必然 pubkey_mismatch 且会把错误值写进凭据哈希）；
+     * A2 关闭 ⇒ 保留旧行为透传 platform-address，兼容尚未补齐该配置的部署。</p>
+     */
+    private String resolveFromPubkey() {
+        if (!platformWalletPubkey.isBlank()) {
+            return platformWalletPubkey;
+        }
+        if (businessApprovalEnabled) {
+            return null;
+        }
+        return platformWalletAddress.isBlank() ? null : platformWalletAddress;
+    }
+
+    /**
+     * 把目标 base58 地址转成 signing 侧要求的 40-hex toPubkeyHash
+     * （A2 §7.5 ③ 词表对齐）。
+     *
+     * <p>先用 {@link org.nexus.sdk.wallet.WalletUtils#verifyAddress} 做校验和预检
+     * （0 = 1 开头且校验和通过），再经 {@link org.nexus.sdk.wallet.WalletUtils#addressToPubkeyHash}
+     * 转换。非法地址返回 null ⇒ 调用方 fail-closed：收款地址错就发出去是不可挽回的，
+     * 必须在签名前拦下，而不是等 signing 侧 tx_build_failed。</p>
+     */
+    private static String resolveToPubkeyHash(String toAddress) {
+        if (toAddress == null || org.nexus.sdk.wallet.WalletUtils.verifyAddress(toAddress) != 0) {
+            return null;
+        }
+        return org.nexus.sdk.wallet.WalletUtils.addressToPubkeyHash(toAddress);
     }
 
     /**
      * 既有首腿（A2 关闭 / A2 登记失败时的回落路径）：直接 signTransfer，
-     * 大额由 signing 侧建审批返回 2001。语义与 A2 之前逐字节一致。
+     * 大额由 signing 侧建审批返回 2001。语义与 A2 之前一致；2026-10-29 起
+     * 入参经词表转换（fromPubkey / toPubkeyHash），不再是裸地址。
      */
-    private OnChainResult legacyFirstLeg(WithdrawalRequestEntity e) {
+    private OnChainResult legacyFirstLeg(WithdrawalRequestEntity e, String fromPubkey, String toPubkeyHash) {
         SigningResponses.Outcome outcome = SigningResponses.classify(signingServiceClient.signTransfer(
-                platformWalletAddress,
-                e.getToAddress(),
+                fromPubkey,
+                toPubkeyHash,
                 e.getAmount()));
         if (outcome.isExecuted()) {
             return OnChainResult.success(outcome.txHash(), false);
@@ -501,9 +576,12 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
      * <ul>
      *   <li>登记失败 / 降级 / 非 2000 ⇒ <b>回落 {@link #legacyFirstLeg}</b>——此刻凭据
      *       尚未被消费、无资金动作，既有审批流（signing 侧人审）完全兜底；</li>
-     *   <li>携凭据签名：<b>结果不明（响应丢失 / Feign 降级 null / 抛异常）⇒
+     *   <li>携凭据签名：<b>结果不明（响应丢失 / Feign 降级 null / 抛不可解析异常）⇒
      *       EXECUTED_UNVERIFIED，绝不回落、绝不重试</b>——凭据在签名前已被 CAS 消费，
      *       上次广播可能已发生；回落重放即双花（#294/#300 同源原则）；</li>
+     *   <li>携凭据签名抛 {@code FeignException} 但响应体带<b>已定义未动账码</b>
+     *       （5000/5001/4000/4030）⇒ FAILED——signing 以 HTTP 非 2xx 携信封返回
+     *       业务失败（P0-2），异常体里能证明「确定未动账」才允许判失败（A2 §7.5 决策一）；</li>
      *   <li>signing 返回 5003（凭据已被消费）⇒ 同上 EXECUTED_UNVERIFIED；</li>
      *   <li>signing 回落返回 2001（凭据校验未过，signing 走了既有审批）⇒
      *       AWAITING_APPROVAL，之后走 (c)-lite 复用机制，与旧行为汇合；</li>
@@ -512,21 +590,27 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
      *
      * <p>幂等：{@code businessApprovalId} = 提现 requestId（跨重试稳定）；登记侧同单号
      * 同载荷幂等返回，重试（含 resume 路径带既有 signingApprovalId 的）不会重复登记或双花。</p>
+     *
+     * @param fromPubkey   平台公钥 hex（executeOnChain 词表转换后的 from 参数）
+     * @param toPubkeyHash 目标公钥哈希 hex（executeOnChain 词表转换后的 to 参数）；
+     *                     canonicalHash / register / sign 三处必须用同一对值——
+     *                     signing 按请求体字段重算哈希，登记与签名值不一致会被判载荷不匹配
      */
-    private OnChainResult executeWithBusinessApproval(WithdrawalRequestEntity e) {
+    private OnChainResult executeWithBusinessApproval(
+            WithdrawalRequestEntity e, String fromPubkey, String toPubkeyHash) {
         String businessApprovalId = e.getRequestId();
         String payloadHash = BusinessApprovalPayloads.canonicalHash(
-                platformWalletAddress, e.getToAddress(), e.getAmount(), businessApprovalId);
+                fromPubkey, toPubkeyHash, e.getAmount(), businessApprovalId);
         String expiresAt = java.time.Instant.now().plus(businessApprovalTtl).toString();
         Map<String, Object> registration;
         try {
             registration = signingServiceClient.registerBusinessApproval(
                     businessApprovalId, payloadHash, e.getAmount(), e.getCurrency(),
-                    platformWalletAddress, e.getToAddress(), expiresAt, null);
+                    fromPubkey, toPubkeyHash, expiresAt, null);
         } catch (RuntimeException registrationFailure) {
             log.warn("A2 凭据登记失败，回落既有 signing 审批流: requestId={}, error={}",
                     businessApprovalId, registrationFailure.getMessage());
-            return legacyFirstLeg(e);
+            return legacyFirstLeg(e, fromPubkey, toPubkeyHash);
         }
         Integer registrationCode = registration == null
                 ? null
@@ -534,13 +618,13 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
         if (registrationCode == null || registrationCode != 2000) {
             log.warn("A2 凭据登记未成功（code={}），回落既有 signing 审批流: requestId={}",
                     registrationCode, businessApprovalId);
-            return legacyFirstLeg(e);
+            return legacyFirstLeg(e, fromPubkey, toPubkeyHash);
         }
 
         try {
             SigningResponses.Outcome outcome = SigningResponses.classify(
                     signingServiceClient.signTransferWithBusinessApproval(
-                            platformWalletAddress, e.getToAddress(), e.getAmount(), businessApprovalId));
+                            fromPubkey, toPubkeyHash, e.getAmount(), businessApprovalId));
             if (outcome.isExecuted()) {
                 return OnChainResult.success(outcome.txHash(), false);
             }
@@ -563,13 +647,50 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
                     outcome.message() != null ? outcome.message() : "signing service returned empty result",
                     false);
         } catch (RuntimeException signFailure) {
+            // 2026-10-29（A2 §7.5 决策一，P0-2 配套）：signing 把业务失败以 HTTP 非 2xx
+            // 携 JSON 信封返回（BIZ_FAIL 5000 / BIZ_BAD_REQUEST 4000 / BIZ_FORBIDDEN 4030
+            // / 冲突 5001），Feign 因此抛 FeignException 而不是返回信封——原实现一律按
+            // 「结果不明」处理，使「明确未动账」的 FAILED 分支在这条路径上不可达。
+            // 现从异常响应体解析 statusCode：已定义未动账码 ⇒ FAILED；其余（5003 /
+            // 未知码 / 无响应体 / 非 Feign 异常）保持 EXECUTED_UNVERIFIED，fail-closed
+            // 绝不回落重试（凭据可能已被消费并广播）。
+            Integer signStatusCode = signingFailureStatusCode(signFailure);
+            if (SigningResponses.declaresNotExecuted(signStatusCode)) {
+                log.warn("A2 携凭据签名明确失败（code={}，确定未动账，signing 侧已回退凭据）: "
+                                + "requestId={}, error={}",
+                        signStatusCode, businessApprovalId, signFailure.getMessage());
+                return OnChainResult.failure(
+                        "business-approval sign failed (" + signStatusCode
+                                + "; confirmed not executed by signing): " + signFailure.getMessage(), false);
+            }
             // 请求已发出但结果不明：凭据可能已被消费并广播 ⇒ 绝不回落重试
-            log.error("A2 携凭据签名结果不明（可能已广播，需人工核对）: requestId={}, error={}",
-                    businessApprovalId, signFailure.getMessage());
+            log.error("A2 携凭据签名结果不明（可能已广播，需人工核对）: requestId={}, code={}, error={}",
+                    businessApprovalId, signStatusCode, signFailure.getMessage());
             return OnChainResult.executedUnverified(
                     "business-approval sign attempt outcome unknown (" + signFailure.getMessage()
-                            + "); possible prior broadcast, manual reconciliation required", false);
+                    + "); possible prior broadcast, manual reconciliation required", false);
         }
+    }
+
+    /**
+     * 从签名调用异常中提取响应体 statusCode（A2 §7.5 决策一，P0-2 配套）。
+     *
+     * <p>signing 以 HTTP 非 2xx 携带 JSON 信封返回业务失败，Feign 将其转为
+     * {@code FeignException} 并保留响应体；本方法把信封里的 statusCode 抠出来
+     * 供三态映射。返回 null 表示无响应体或不可解析（熔断器打开、连接超时、
+     * 响应体非 JSON、非 Feign 异常）——调用方必须按「结果不明」处理，
+     * 不得据此判 FAILED（fail-closed）。</p>
+     *
+     * @param failure 签名调用抛出的异常
+     * @return 响应体信封中的 statusCode；null 表示不可解析
+     */
+    private static Integer signingFailureStatusCode(Throwable failure) {
+        if (!(failure instanceof feign.FeignException)) {
+            return null;
+        }
+        byte[] body = ((feign.FeignException) failure).content();
+        return body == null ? null
+                : SigningResponses.statusCode(new String(body, java.nio.charset.StandardCharsets.UTF_8));
     }
 
     /**

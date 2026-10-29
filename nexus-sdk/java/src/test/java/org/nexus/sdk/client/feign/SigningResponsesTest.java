@@ -165,4 +165,58 @@ class SigningResponsesTest {
         assertTrue(outcome.isFailed());
         assertNull(outcome.statusCode());
     }
+
+    // ==================== A2 §7.5 决策一：失败路径响应体解析（2026-10-29） ====================
+
+    @Test
+    void envelope_parsesJsonEnvelopeString() {
+        Map<String, Object> parsed = SigningResponses.envelope(
+                "  {\"statusCode\": 5000, \"message\": \"No signing key available\", \"data\": \"\"}  ");
+        assertNotNull(parsed);
+        assertEquals(5000, SigningResponses.statusCode(parsed));
+        assertEquals("No signing key available", parsed.get("message"));
+    }
+
+    @Test
+    void envelope_isNullForAbsentOrMalformedInput() {
+        assertNull(SigningResponses.envelope(null));
+        assertNull(SigningResponses.envelope(""));
+        assertNull(SigningResponses.envelope("   "));
+        assertNull(SigningResponses.envelope("<html>503 Service Unavailable</html>"));
+        // 非 JSON 对象（数组/数字）也不是信封
+        assertNull(SigningResponses.envelope("[1,2,3]"));
+        assertNull(SigningResponses.envelope("42"));
+    }
+
+    @Test
+    void statusCode_parsesIntegerFormFromBody() {
+        assertEquals(5003, SigningResponses.statusCode("{\"statusCode\":5003}"));
+        // 字符串形态也要兼容（信封经 Gson 解出的是 Double/字符串都可能）
+        assertEquals(5001, SigningResponses.statusCode("{\"statusCode\":\"5001\"}"));
+    }
+
+    @Test
+    void statusCode_isNullWhenBodyIsNotAnEnvelope() {
+        assertNull(SigningResponses.statusCode((String) null));
+        assertNull(SigningResponses.statusCode("unavailable"));
+        assertNull(SigningResponses.statusCode("{\"data\":\"x\"}"));
+    }
+
+    /**
+     * fail-closed 词表（ADR §7.5 决策一）：只有契约已确立的「明确未动账」码才允许判 FAILED；
+     * 5003（凭据可能已消费/可能已广播）与一切未知码都必须返回 false，调用方保持结果不明。
+     */
+    @Test
+    void declaresNotExecuted_onlyForContractuallyEstablishedCodes() {
+        assertTrue(SigningResponses.declaresNotExecuted(SigningResponses.STATUS_BUSINESS_FAIL));            // 5000
+        assertTrue(SigningResponses.declaresNotExecuted(SigningResponses.STATUS_EXECUTION_CONFLICT));      // 5001
+        assertTrue(SigningResponses.declaresNotExecuted(SigningResponses.STATUS_BAD_REQUEST));            // 4000
+        assertTrue(SigningResponses.declaresNotExecuted(SigningResponses.STATUS_FORBIDDEN));              // 4030
+
+        assertFalse(SigningResponses.declaresNotExecuted(SigningResponses.STATUS_BUSINESS_APPROVAL_CONSUMED)); // 5003 结果不明
+        assertFalse(SigningResponses.declaresNotExecuted(2000));   // 成功
+        assertFalse(SigningResponses.declaresNotExecuted(2001));   // 待审批
+        assertFalse(SigningResponses.declaresNotExecuted(5999));   // 未知码
+        assertFalse(SigningResponses.declaresNotExecuted(null));   // 不可解析
+    }
 }

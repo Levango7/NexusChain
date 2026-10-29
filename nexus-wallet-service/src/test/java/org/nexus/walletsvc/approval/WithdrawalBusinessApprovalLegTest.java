@@ -12,6 +12,7 @@ import org.mockito.quality.Strictness;
 import org.nexus.sdk.client.feign.SigningServiceFeignClient;
 import org.nexus.sdk.signing.ApprovalPolicy;
 import org.nexus.sdk.signing.BusinessApprovalPayloads;
+import org.nexus.sdk.wallet.WalletUtils;
 import org.nexus.sdk.wallet.WithdrawalRequest;
 import org.nexus.walletsvc.entity.WithdrawalRequestEntity;
 import org.nexus.walletsvc.repository.WithdrawalApproverRepository;
@@ -50,18 +51,31 @@ import static org.mockito.Mockito.when;
  *   <li>开关开启 ⇒ 先登记（canonical 摘要绑定载荷、requestId 作凭据号）再携凭据签名，
  *       登记先于签名（InOrder）；</li>
  *   <li>登记失败 / 降级 / 非 2000 ⇒ 回落既有 signing 审批流（此刻无资金动作，人审兜底）；</li>
- *   <li>携凭据签名<b>结果不明</b>（降级 null / 5003 凭据已消费 / 抛异常）⇒
- *       EXECUTED_UNVERIFIED，<b>绝不回落重试</b>（凭据已被 CAS 消费，上次可能已广播）；</li>
- *   <li>signing 回落返回 2001 ⇒ AWAITING_APPROVAL，与旧行为汇合（(c)-lite 接管）。</li>
+ *   <li>携凭据签名<b>结果不明</b>（降级 null / 5003 凭据已消费 / 抛不可解析异常）⇒
+ *       EXECUTED_UNVERIFIED，<b>绝不回落重试</b>（凭据已被 CAS 消费，上次可能已广播）；
+ *       抛 FeignException 但响应体带<b>已定义未动账码</b>（5000/5001/4000/4030）⇒ FAILED
+ *       （A2 §7.5 决策一，P0-2：signing 以 HTTP 非 2xx 携信封返回业务失败）；</li>
+ *   <li>signing 回落返回 2001 ⇒ AWAITING_APPROVAL，与旧行为汇合（(c)-lite 接管）；</li>
+ *   <li>词表对齐（§7.5 ③）：from 用 platform-pubkey、to 用地址转换出的 pubkeyHash，
+ *       canonicalHash/register/sign 三处一致；platform-pubkey 未配 ⇒ fail-closed。</li>
  * </ol>
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
 class WithdrawalBusinessApprovalLegTest {
 
+    /**
+     * A2 §7.5 ③ 词表对齐（2026-10-29）：signing 侧签名接口的参数空间是
+     * fromPubkey（完整公钥 hex）/ toPubkeyHash（40-hex），实体/配置侧存的是 base58 地址。
+     * 测试常量按真实口径构造：TO_ADDR 由 TO_PUBKEY_HASH 经 base58 编码得来，
+     * 服务侧再转回 pubkeyHash 发给 signing（往返即同一值）。
+     */
     private static final String PLATFORM_WALLET = "0xplatform0000000000000000000000deadbeef";
+    private static final String PLATFORM_PUBKEY =
+            "02abababababababababababababababababababababababababababababababab";
+    private static final String TO_PUBKEY_HASH = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+    private static final String TO_ADDR = WalletUtils.pubkeyHashToAddress(TO_PUBKEY_HASH);
     private static final String REQ_ID = "WD-a2-0001";
-    private static final String TO_ADDR = "0xrecipient000000000000";
     private static final BigDecimal AMOUNT = new BigDecimal("50000");
 
     @Mock private SigningServiceFeignClient signingServiceClient;
@@ -147,7 +161,9 @@ class WithdrawalBusinessApprovalLegTest {
     @DisplayName("开关默认关闭：直接 signTransfer，绝不登记、绝不携凭据")
     void flagOff_legacyBehaviorUntouched() {
         WithdrawalRequestEntity e = seedApproved();
-        when(signingServiceClient.signTransfer(PLATFORM_WALLET, TO_ADDR, AMOUNT))
+        // 开关关闭且未配 platform-pubkey ⇒ from 沿用旧行为传 platform-address，
+        // to 转成 pubkeyHash（词表对齐）
+        when(signingServiceClient.signTransfer(PLATFORM_WALLET, TO_PUBKEY_HASH, AMOUNT))
                 .thenReturn(envelope(2000, "0xhash-plain", null));
 
         service.executeApprovedWithdrawal(REQ_ID);
@@ -168,13 +184,14 @@ class WithdrawalBusinessApprovalLegTest {
         WithdrawalRequestEntity e = seedApproved();
         when(signingServiceClient.registerBusinessApproval(
                 eq(REQ_ID), anyString(), eq(AMOUNT), eq("NEX"),
-                eq(PLATFORM_WALLET), eq(TO_ADDR), anyString(), isNull()))
+                eq(PLATFORM_PUBKEY), eq(TO_PUBKEY_HASH), anyString(), isNull()))
                 .thenReturn(registeredOk());
         when(signingServiceClient.signTransferWithBusinessApproval(
-                PLATFORM_WALLET, TO_ADDR, AMOUNT, REQ_ID))
+                PLATFORM_PUBKEY, TO_PUBKEY_HASH, AMOUNT, REQ_ID))
                 .thenReturn(envelope(2000, "0xhash-ba", null));
 
         service.setBusinessApprovalEnabled(true);
+        service.setPlatformWalletPubkey(PLATFORM_PUBKEY);
         service.executeApprovedWithdrawal(REQ_ID);
 
         assertEquals(WithdrawalRequest.WithdrawalStatus.EXECUTED, e.getStatus());
@@ -182,9 +199,9 @@ class WithdrawalBusinessApprovalLegTest {
         InOrder order = inOrder(signingServiceClient);
         order.verify(signingServiceClient).registerBusinessApproval(
                 eq(REQ_ID), anyString(), eq(AMOUNT), eq("NEX"),
-                eq(PLATFORM_WALLET), eq(TO_ADDR), anyString(), isNull());
+                eq(PLATFORM_PUBKEY), eq(TO_PUBKEY_HASH), anyString(), isNull());
         order.verify(signingServiceClient).signTransferWithBusinessApproval(
-                PLATFORM_WALLET, TO_ADDR, AMOUNT, REQ_ID);
+                PLATFORM_PUBKEY, TO_PUBKEY_HASH, AMOUNT, REQ_ID);
     }
 
     @Test
@@ -199,15 +216,16 @@ class WithdrawalBusinessApprovalLegTest {
                 .thenReturn(envelope(2000, "0xhash-ba", null));
 
         service.setBusinessApprovalEnabled(true);
+        service.setPlatformWalletPubkey(PLATFORM_PUBKEY);
         service.executeApprovedWithdrawal(REQ_ID);
 
         org.mockito.ArgumentCaptor<String> hashCaptor =
                 org.mockito.ArgumentCaptor.forClass(String.class);
         verify(signingServiceClient).registerBusinessApproval(
                 eq(REQ_ID), hashCaptor.capture(), eq(AMOUNT), eq("NEX"),
-                eq(PLATFORM_WALLET), eq(TO_ADDR), anyString(), isNull());
+                eq(PLATFORM_PUBKEY), eq(TO_PUBKEY_HASH), anyString(), isNull());
         assertEquals(BusinessApprovalPayloads.canonicalHash(
-                        PLATFORM_WALLET, TO_ADDR, AMOUNT, REQ_ID),
+                        PLATFORM_PUBKEY, TO_PUBKEY_HASH, AMOUNT, REQ_ID),
                 hashCaptor.getValue());
     }
 
@@ -223,6 +241,7 @@ class WithdrawalBusinessApprovalLegTest {
                 .thenReturn(envelope(2000, "0xhash-ba", null));
 
         service.setBusinessApprovalEnabled(true);
+        service.setPlatformWalletPubkey(PLATFORM_PUBKEY);
         service.setBusinessApprovalTtlHours(2);
         long before = Instant.now().toEpochMilli();
         service.executeApprovedWithdrawal(REQ_ID);
@@ -249,7 +268,8 @@ class WithdrawalBusinessApprovalLegTest {
         when(signingServiceClient.registerBusinessApproval(
                 anyString(), anyString(), any(), any(), any(), any(), anyString(), isNull()))
                 .thenThrow(new RuntimeException("signing connect timeout"));
-        when(signingServiceClient.signTransfer(PLATFORM_WALLET, TO_ADDR, AMOUNT))
+        // 回落后首腿收到的已是转换后的词表（from=公钥 / to=pubkeyHash）
+        when(signingServiceClient.signTransfer(PLATFORM_PUBKEY, TO_PUBKEY_HASH, AMOUNT))
                 .thenAnswer(inv -> {
                     Map<String, Object> m = new HashMap<>();
                     m.put("statusCode", 2001);
@@ -258,6 +278,7 @@ class WithdrawalBusinessApprovalLegTest {
                 });
 
         service.setBusinessApprovalEnabled(true);
+        service.setPlatformWalletPubkey(PLATFORM_PUBKEY);
         service.executeApprovedWithdrawal(REQ_ID);
 
         assertEquals(WithdrawalRequest.WithdrawalStatus.AWAITING_APPROVAL, e.getStatus());
@@ -274,7 +295,7 @@ class WithdrawalBusinessApprovalLegTest {
                 anyString(), anyString(), any(), any(), any(), any(), anyString(), isNull()))
                 .thenReturn(null)
                 .thenReturn(envelope(5002, null, "payload hash conflict"));
-        when(signingServiceClient.signTransfer(PLATFORM_WALLET, TO_ADDR, AMOUNT))
+        when(signingServiceClient.signTransfer(PLATFORM_PUBKEY, TO_PUBKEY_HASH, AMOUNT))
                 .thenAnswer(inv -> {
                     Map<String, Object> m = new HashMap<>();
                     m.put("statusCode", 2001);
@@ -283,6 +304,7 @@ class WithdrawalBusinessApprovalLegTest {
                 });
 
         service.setBusinessApprovalEnabled(true);
+        service.setPlatformWalletPubkey(PLATFORM_PUBKEY);
         service.executeApprovedWithdrawal(REQ_ID);
         assertEquals(WithdrawalRequest.WithdrawalStatus.AWAITING_APPROVAL, e.getStatus());
 
@@ -310,10 +332,11 @@ class WithdrawalBusinessApprovalLegTest {
                 anyString(), anyString(), any(), any(), any(), any(), anyString(), isNull()))
                 .thenReturn(registeredOk());
         when(signingServiceClient.signTransferWithBusinessApproval(
-                PLATFORM_WALLET, TO_ADDR, AMOUNT, REQ_ID))
+                PLATFORM_PUBKEY, TO_PUBKEY_HASH, AMOUNT, REQ_ID))
                 .thenReturn(null);
 
         service.setBusinessApprovalEnabled(true);
+        service.setPlatformWalletPubkey(PLATFORM_PUBKEY);
         service.executeApprovedWithdrawal(REQ_ID);
 
         assertEquals(WithdrawalRequest.WithdrawalStatus.EXECUTED_UNVERIFIED, e.getStatus(),
@@ -332,11 +355,12 @@ class WithdrawalBusinessApprovalLegTest {
                 anyString(), anyString(), any(), any(), any(), any(), anyString(), isNull()))
                 .thenReturn(registeredOk());
         when(signingServiceClient.signTransferWithBusinessApproval(
-                PLATFORM_WALLET, TO_ADDR, AMOUNT, REQ_ID))
+                PLATFORM_PUBKEY, TO_PUBKEY_HASH, AMOUNT, REQ_ID))
                 .thenReturn(envelope(5003, null,
                         "business approval already consumed (possible prior broadcast)"));
 
         service.setBusinessApprovalEnabled(true);
+        service.setPlatformWalletPubkey(PLATFORM_PUBKEY);
         service.executeApprovedWithdrawal(REQ_ID);
 
         assertEquals(WithdrawalRequest.WithdrawalStatus.EXECUTED_UNVERIFIED, e.getStatus());
@@ -352,10 +376,11 @@ class WithdrawalBusinessApprovalLegTest {
                 anyString(), anyString(), any(), any(), any(), any(), anyString(), isNull()))
                 .thenReturn(registeredOk());
         when(signingServiceClient.signTransferWithBusinessApproval(
-                PLATFORM_WALLET, TO_ADDR, AMOUNT, REQ_ID))
+                PLATFORM_PUBKEY, TO_PUBKEY_HASH, AMOUNT, REQ_ID))
                 .thenThrow(new RuntimeException("socket reset"));
 
         service.setBusinessApprovalEnabled(true);
+        service.setPlatformWalletPubkey(PLATFORM_PUBKEY);
         service.executeApprovedWithdrawal(REQ_ID);
 
         assertEquals(WithdrawalRequest.WithdrawalStatus.EXECUTED_UNVERIFIED, e.getStatus());
@@ -373,7 +398,7 @@ class WithdrawalBusinessApprovalLegTest {
                 anyString(), anyString(), any(), any(), any(), any(), anyString(), isNull()))
                 .thenReturn(registeredOk());
         when(signingServiceClient.signTransferWithBusinessApproval(
-                PLATFORM_WALLET, TO_ADDR, AMOUNT, REQ_ID))
+                PLATFORM_PUBKEY, TO_PUBKEY_HASH, AMOUNT, REQ_ID))
                 .thenAnswer(inv -> {
                     Map<String, Object> m = new HashMap<>();
                     m.put("statusCode", 2001);
@@ -382,6 +407,7 @@ class WithdrawalBusinessApprovalLegTest {
                 });
 
         service.setBusinessApprovalEnabled(true);
+        service.setPlatformWalletPubkey(PLATFORM_PUBKEY);
         service.executeApprovedWithdrawal(REQ_ID);
 
         assertEquals(WithdrawalRequest.WithdrawalStatus.AWAITING_APPROVAL, e.getStatus());
@@ -398,13 +424,139 @@ class WithdrawalBusinessApprovalLegTest {
                 anyString(), anyString(), any(), any(), any(), any(), anyString(), isNull()))
                 .thenReturn(registeredOk());
         when(signingServiceClient.signTransferWithBusinessApproval(
-                PLATFORM_WALLET, TO_ADDR, AMOUNT, REQ_ID))
+                PLATFORM_PUBKEY, TO_PUBKEY_HASH, AMOUNT, REQ_ID))
                 .thenReturn(envelope(5000, null, "No signing key available"));
 
         service.setBusinessApprovalEnabled(true);
+        service.setPlatformWalletPubkey(PLATFORM_PUBKEY);
         service.executeApprovedWithdrawal(REQ_ID);
 
         assertEquals(WithdrawalRequest.WithdrawalStatus.FAILED, e.getStatus(),
                 "预广播失败 = 确定未动账（signing 侧已回退凭据），按 FAILED 走既有重试语义");
+    }
+
+    // ==================== A2 §7.5 决策一：异常路径三态映射（P0-2 配套，2026-10-29） ====================
+
+    /**
+     * 构造一个携带 JSON 业务信封的 FeignException——signing 以 HTTP 非 2xx 返回业务失败
+     * （GlobalExceptionHandler：BIZ_FAIL→500 / BIZ_BAD_REQUEST→400 / BIZ_FORBIDDEN→403），
+     * Feign 因此抛异常而不是返回信封；三态映射必须能从异常响应体里把 statusCode 抠出来。
+     */
+    private static feign.FeignException feignBusinessFailure(String body) {
+        return new feign.FeignException.InternalServerError(
+                "signing-service returned 500",
+                feign.Request.create(feign.Request.HttpMethod.POST,
+                        "http://signing-service/api/v1/transfers/sign",
+                        java.util.Collections.emptyMap(), new byte[0],
+                        java.nio.charset.StandardCharsets.UTF_8),
+                body.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                java.util.Collections.emptyMap());
+    }
+
+    @Test
+    @DisplayName("携凭据签名抛 FeignException 且响应体=5000（明确未动账）→ FAILED")
+    void signCallThrowsFeign5000_failed() {
+        WithdrawalRequestEntity e = seedApproved();
+        when(signingServiceClient.registerBusinessApproval(
+                anyString(), anyString(), any(), any(), any(), any(), anyString(), isNull()))
+                .thenReturn(registeredOk());
+        when(signingServiceClient.signTransferWithBusinessApproval(
+                PLATFORM_PUBKEY, TO_PUBKEY_HASH, AMOUNT, REQ_ID))
+                .thenThrow(feignBusinessFailure(
+                        "{\"statusCode\":5000,\"message\":\"No signing key available\",\"data\":\"\"}"));
+
+        service.setBusinessApprovalEnabled(true);
+        service.setPlatformWalletPubkey(PLATFORM_PUBKEY);
+        service.executeApprovedWithdrawal(REQ_ID);
+
+        assertEquals(WithdrawalRequest.WithdrawalStatus.FAILED, e.getStatus(),
+                "响应体里的 5000 证明确定未动账（signing 已回退凭据）：应判 FAILED 走重试语义");
+        assertTrue(e.getRejectionReason().contains("confirmed not executed"),
+                "失败原因必须写明确定未动账: " + e.getRejectionReason());
+        verify(signingServiceClient, never()).signTransfer(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("携凭据签名抛 FeignException 且响应体=5003（凭据已消费）→ EXECUTED_UNVERIFIED")
+    void signCallThrowsFeign5003_executedUnverified() {
+        WithdrawalRequestEntity e = seedApproved();
+        when(signingServiceClient.registerBusinessApproval(
+                anyString(), anyString(), any(), any(), any(), any(), anyString(), isNull()))
+                .thenReturn(registeredOk());
+        when(signingServiceClient.signTransferWithBusinessApproval(
+                PLATFORM_PUBKEY, TO_PUBKEY_HASH, AMOUNT, REQ_ID))
+                .thenThrow(feignBusinessFailure(
+                        "{\"statusCode\":5003,\"message\":\"business approval already consumed\",\"data\":\"\"}"));
+
+        service.setBusinessApprovalEnabled(true);
+        service.setPlatformWalletPubkey(PLATFORM_PUBKEY);
+        service.executeApprovedWithdrawal(REQ_ID);
+
+        assertEquals(WithdrawalRequest.WithdrawalStatus.EXECUTED_UNVERIFIED, e.getStatus(),
+                "5003 表示凭据可能已被消费并广播：不判 FAILED、不自动重放");
+        verify(signingServiceClient, never()).signTransfer(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("携凭据签名抛 FeignException 但响应体不可解析 → EXECUTED_UNVERIFIED（fail-closed）")
+    void signCallThrowsFeignUnparseableBody_executedUnverified() {
+        WithdrawalRequestEntity e = seedApproved();
+        when(signingServiceClient.registerBusinessApproval(
+                anyString(), anyString(), any(), any(), any(), any(), anyString(), isNull()))
+                .thenReturn(registeredOk());
+        when(signingServiceClient.signTransferWithBusinessApproval(
+                PLATFORM_PUBKEY, TO_PUBKEY_HASH, AMOUNT, REQ_ID))
+                .thenThrow(feignBusinessFailure("<html>503 Service Unavailable</html>"));
+
+        service.setBusinessApprovalEnabled(true);
+        service.setPlatformWalletPubkey(PLATFORM_PUBKEY);
+        service.executeApprovedWithdrawal(REQ_ID);
+
+        assertEquals(WithdrawalRequest.WithdrawalStatus.EXECUTED_UNVERIFIED, e.getStatus(),
+                "不可解析 ⇒ 无法证明未动账：保持结果不明，绝不自动重放");
+        assertTrue(e.getRejectionReason().contains("possible prior broadcast"),
+                "原因必须提示可能已广播: " + e.getRejectionReason());
+        verify(signingServiceClient, never()).signTransfer(any(), any(), any());
+    }
+
+    // ==================== A2 §7.5 ③ 词表对齐 fail-closed（2026-10-29） ====================
+
+    @Test
+    @DisplayName("A2 开启但 platform-pubkey 未配置 → fail-closed FAILED，绝不以地址冒充公钥")
+    void a2OnWithoutPlatformPubkey_failClosed() {
+        WithdrawalRequestEntity e = seedApproved();
+
+        service.setBusinessApprovalEnabled(true);
+        // 不调 setPlatformWalletPubkey：公钥不可由 base58 地址反推，冒充必错
+        service.executeApprovedWithdrawal(REQ_ID);
+
+        assertEquals(WithdrawalRequest.WithdrawalStatus.FAILED, e.getStatus());
+        assertTrue(e.getRejectionReason().contains("platform wallet pubkey not configured"),
+                "原因必须明写缺失的配置项: " + e.getRejectionReason());
+        verify(signingServiceClient, never()).registerBusinessApproval(
+                any(), any(), any(), any(), any(), any(), any(), any());
+        verify(signingServiceClient, never()).signTransferWithBusinessApproval(
+                any(), any(), any(), any());
+        verify(signingServiceClient, never()).signTransfer(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("收款地址不是合法 base58 → fail-closed FAILED，绝不发签名")
+    void destinationNotBase58_failClosed() {
+        WithdrawalRequestEntity e = seedApproved();
+        e.setToAddress("not-a-base58-address");
+
+        service.setBusinessApprovalEnabled(true);
+        service.setPlatformWalletPubkey(PLATFORM_PUBKEY);
+        service.executeApprovedWithdrawal(REQ_ID);
+
+        assertEquals(WithdrawalRequest.WithdrawalStatus.FAILED, e.getStatus());
+        assertTrue(e.getRejectionReason().contains("cannot derive toPubkeyHash"),
+                "原因必须明写收款地址非法: " + e.getRejectionReason());
+        verify(signingServiceClient, never()).registerBusinessApproval(
+                any(), any(), any(), any(), any(), any(), any(), any());
+        verify(signingServiceClient, never()).signTransferWithBusinessApproval(
+                any(), any(), any(), any());
+        verify(signingServiceClient, never()).signTransfer(any(), any(), any());
     }
 }
