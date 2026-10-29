@@ -115,6 +115,29 @@ public class FinalityVoteBroadcaster {
      * 此后不应再退回启发式。</p>
      */
     private volatile boolean pagingMarkerCapable = false;
+    /**
+     * 连续"宽限期已过且本轮未见标记"的 tick 数（PLAN-057 第 10 处）。
+     *
+     * <p>第 10 处（第七轮实测发现）：进程刚重启、`pagingMarkerCapable` 尚为
+     * false，而第一轮的响应页（及标记）在 block-sync 高峰里丢失时，
+     * 老启发式在 graceElapsed 一成立就按 {@code lastResponded+1} 推进游标
+     * ⇒ 游标 0→184，68..135 中段从此不再被请求（实测漏 123 票）。</p>
+     *
+     * <p>修法：老启发式必须攒够 {@value #MARKERLESS_GRACE_TICKS_NEEDED} 个
+     * "无标记且宽限已过"的 tick 才可用——给 P2P 重传留出时间窗口；
+     * 响应页可能丢，多轮重传总归会到。对真正的老对端（永远不发标记），
+     * 仅是把推进延后约 3 个宽限期，行为不变。</p>
+     */
+    /**
+     * 连续"宽限期已过且本轮未见标记"的 tick 数（PLAN-057 第 10 处）。
+     *
+     * <p>非原子递增会让 SpotBugs 报 VO_VOLATILE_INCREMENT ⇒ 用 AtomicInteger，
+     * 与 {@code votesSinceRound} 同型。</p>
+     */
+    private final java.util.concurrent.atomic.AtomicInteger markerlessGraceTicks =
+            new java.util.concurrent.atomic.AtomicInteger(0);
+    /** 老启发式启用前必须见到的"无标记宽限 tick"数。 */
+    static final int MARKERLESS_GRACE_TICKS_NEEDED = 3;
 
     /**
      * 下一轮分页请求的起点（含）；-1 = 未启用/已完成（回退 margin 模式）。
@@ -376,6 +399,10 @@ public class FinalityVoteBroadcaster {
                 boolean peerExhaustedAtCursor = roundAskedFrom >= 0
                         && lastRespondedEpoch < roundAskedFrom;
                 boolean markerSaysExhausted = pagingRoundIssued && pagingPeerExhausted;
+                // PLAN-057 第 10 处：统计"无标记且宽限已过"的连续 tick。
+                if (pagingRoundIssued && !pagingResponseSeen && graceElapsed) {
+                    markerlessGraceTicks.incrementAndGet();
+                }
                 // PLAN-057 §5.5 观测点：分页开启时每轮 tick 记一行状态。
                 // 动机：第三轮测试床出现"首轮之后整条 anti-entropy 调度静默"
                 // （cursor=true 仅 1 次、cursor=false 也是 0 次），而现有日志
@@ -386,10 +413,13 @@ public class FinalityVoteBroadcaster {
                 // 缺省 paging-enabled=false，开启后每 interval-ms 一行，量可控。
                 log.info("Anti-entropy paging tick: maxEpoch={} cursor={} askedFrom={} "
                                 + "lastResponded={} votesSinceRound={} graceElapsed={} "
-                                + "peerExhausted={} marker={} markerExhausted={} graceMs={}",
+                                + "peerExhausted={} marker={} markerExhausted={} "
+                                + "markerlessGrace={} graceMs={}",
                         maxEpoch, nextSyncCursorEpoch, roundAskedFrom, lastRespondedEpoch,
                         votesSinceRound.get(), graceElapsed, peerExhaustedAtCursor,
-                        pagingResponseSeen, markerSaysExhausted, antiEntropyPagingGraceMs);
+                        pagingResponseSeen, markerSaysExhausted,
+                        markerlessGraceTicks.get(),
+                        antiEntropyPagingGraceMs);
                 if (pagingRoundIssued
                         && (markerSaysExhausted
                         || (graceElapsed && peerExhaustedAtCursor))) {
@@ -431,14 +461,16 @@ public class FinalityVoteBroadcaster {
                                     nextSyncCursorEpoch);
                         }
                     } else if (!pagingMarkerCapable && graceElapsed
+                            && markerlessGraceTicks.get() >= MARKERLESS_GRACE_TICKS_NEEDED
                             && lastRespondedEpoch >= 0
                             && lastRespondedEpoch + 1 > nextSyncCursorEpoch) {
                         // 老对端（从未发过 0x5C）：退回第 6 处的窗口过滤 + 宽限期路径。
                         //
-                        // 两道闸门都是必需的：
+                        // 三道闸门都是必需的：
                         //   - pagingMarkerCapable：一旦对端证明会发标记，就不再退回启发式；
-                        //   - graceElapsed：首轮标记可能还在路上，此时 lastRespondedEpoch
-                        //     可能只反映了链头广播票 ⇒ 立即推进会跳过中段。
+                        //   - graceElapsed：得等宽限期，给标记到达留时间；
+                        //   - markerlessGraceTicks：首轮的响应页/标记可能在
+                        //     block-sync 高峰里丢失 ⇒ 必须再多忍几轮重传（第 10 处）。
                         nextSyncCursorEpoch = lastRespondedEpoch + 1;
                     }
                     long cursor = nextSyncCursorEpoch < 0 ? 0L : nextSyncCursorEpoch;
@@ -495,6 +527,7 @@ public class FinalityVoteBroadcaster {
         }
         pagingResponseSeen = true;
         pagingMarkerCapable = true;
+        markerlessGraceTicks.set(0);
         if (resp.count() <= 0) {
             pagingPeerExhausted = true;
             log.info("Vote-sync response marker: peer has nothing at or after epoch {}"
@@ -615,6 +648,7 @@ public class FinalityVoteBroadcaster {
             pagingResponseSeen = false;
             pagingPeerExhausted = false;
             pagingMarkerCapable = false;
+            markerlessGraceTicks.set(0);
         }
         if (!enabled) {
             nextSyncCursorEpoch = -1L;
