@@ -100,6 +100,17 @@ ADR-036 §6 要求"与 wallet 多签阈值配置一同评审"的原因。
       **开闸前部署环境必须下发 `nexus.wallet.platform-pubkey`**（镜像 gateway 侧
       `nexus.exchange-wallet.platform-pubkey` 的口径）；留空时 A2 开启状态下的提现会被
       fail-closed 拒绝（原因明写 not configured）。此项须由部署方确认配置就位后方可勾选。
+      **伴生记录（2026-10-30，zcode 收口 qoder 板 20261030-0112 复核点 B）**：上述
+      「必须下发」已从人肉核升级为 **CI 渲染门禁**——`.github/workflows/k8s-sync-check.yml`
+      新增「A2 开闸配置门禁」步：凡 `NEXUS_SIGNING_BUSINESS_APPROVAL_ENABLED=true` 的
+      覆盖层渲染，必须带非空 `NEX_WALLET_PLATFORM_PUBKEY`（env 路径，即子 chart
+      `extraEnv`）。**prod 侧为硬断言**（开 prod A2 而漏公钥 ⇒ CI 红）；**staging 侧
+      当前为软告警**（不阻断），因为 staging flag 已按 PR #326 所有者指示开启而公钥
+      尚未下发——即【staging 此刻正处于本条所述的 fail-closed 状态：A2 提现腿每笔
+      被拒】。公钥下发的同一 PR 会让该步转绿，届时可去掉 `continue-on-error` 升级为
+      阻断。⚠️ 本伴生项**不构成**对本检查单条目的勾选：勾选权仍在部署方（须由其确认
+      真实公钥值已在目标环境就位；门禁只把 values 路径的漏配挡在 CI 里，不能证明
+      落盘的值是对的公钥）。
 - [ ] 生产开启时走 env（`NEXUS_SIGNING_BUSINESS_APPROVAL_ENABLED=true`），
       回滚 = 置 false（即回 A0 双闸形态，零迁移）
 
