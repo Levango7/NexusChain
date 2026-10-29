@@ -9,6 +9,8 @@
   已于 2026-10-29 由创始人确认（见 §4）；staging 观察已完成（见 §7），
   **但观察是在 §7.4 的 5 项缺陷修复之上做的 —— master 现状必须先合入这些修复，才谈开闸**。
 - 修订：2026-10-29 补 §4 的创始人确认与 §5 检查单勾选（qoder CN 代录）。
+- 修订：2026-10-29 补 §5 开闸阻断项「词表对齐」，并把 §7.5 观察项 ①②③ 标记为已解决
+  （板 20261029-1053 三项裁决；①③ 由本次 wallet 修复落实，② 由 PR #333 落实）。
 - 修订：2026-10-29 补 §7 staging 观察记录与 5 项缺陷（qoder CN）。
 
 ## 1. 复核对象：A2 之后一笔提现实际经过的闸门
@@ -92,6 +94,12 @@ ADR-036 §6 要求"与 wallet 多签阈值配置一同评审"的原因。
       —— 2026-10-29 在 kind staging 完成，数据见 §7。**注意口径**：本次观察是跑在
       §7.4 所列 5 项修复之上的本地构建上；**master 现状（未含这些修复）不可开闸**，
       理由见 §7.4 缺陷 1/2/3。
+- [ ] **词表对齐（§7.5 ③；2026-10-29 裁决为开闸阻断项，板 20261029-1053 决策三）**：
+      wallet→signing 的 `fromPubkey`/`toPubkeyHash` 转换代码已随本次修复落地（收款地址
+      经 base58 校验后转 40-hex pubkeyHash；A2 开启时发起方必须是 pubkey）。
+      **开闸前部署环境必须下发 `nexus.wallet.platform-pubkey`**（镜像 gateway 侧
+      `nexus.exchange-wallet.platform-pubkey` 的口径）；留空时 A2 开启状态下的提现会被
+      fail-closed 拒绝（原因明写 not configured）。此项须由部署方确认配置就位后方可勾选。
 - [ ] 生产开启时走 env（`NEXUS_SIGNING_BUSINESS_APPROVAL_ENABLED=true`），
       回滚 = 置 false（即回 A0 双闸形态，零迁移）
 
@@ -159,17 +167,33 @@ wallet 侧 A2 腿日志同步命中：`A2 凭据登记失败，回落既有 sign
 A2 成功腿仍 `EXECUTED`；失败腿落库 `EXECUTED_UNVERIFIED` + 原因 551 字符 +
 审计 557 字符；重放仍 `409/5003`。
 
-### 7.5 未解决的观察项（不计入本检查单，另立议题）
+### 7.5 观察项追踪（①②③ 已于 2026-10-29 裁决并修复；④ 仍另立议题）
 
-- **失败三态映射**：signing 的「明确未动账」以 HTTP 5xx + `statusCode=5000` 表达，
-  而 wallet 侧 Feign 把任何非 2xx 变异常 → 一律判 `EXECUTED_UNVERIFIED`，
-  **A2 设计里「明确失败 ⇒ FAILED」的分支在生产路径上不可达**，可重试失败被升级为
-  人工核对。属资金语义裁定，需 owner 决定（改 signing 的 HTTP 状态 vs wallet 解析响应体）。
-- **审计不落盘**：`nexus-core` jar 内 `logback.xml` 遮蔽了服务的 `logback-spring.xml`
-  （`Found resource [logback.xml] at …nexus-core-…jar!`），prod 档位的
-  `/var/log/nexus/signing-audit.json` 从未生成，审计只在 stdout；root 级别为 DEBUG。
-- **地址/公钥词表错位**：wallet 的 `nexus.wallet.platform-address` 被当作
-  signing 的 `fromPubkey` 使用（必须是 pubkey），提现 `toAddress` 被当作
-  `toPubkeyHash` 使用（必须是 40-hex pubkeyhash，base58 地址会 `tx_build_failed`）。
-- 观察窗只覆盖单副本、单笔并发；3 副本下的 CAS/ShedLock 行为未验。
+- **失败三态映射** —— **已解决**（裁决见板 20261029-1053 决策一）。signing 的
+  「明确未动账」以 HTTP 5xx + `statusCode=5000` 表达，而 wallet 侧 Feign 把任何非 2xx
+  变异常 → 一律判 `EXECUTED_UNVERIFIED`，**A2 设计里「明确失败 ⇒ FAILED」的分支在
+  生产路径上不可达**。裁决为 **wallet 侧解析响应体（不动 signing 的 HTTP 语义）**：
+  两条返回路径（FeignException 直接抛出 + 熔断 fallback 降级）已汇合到同一个 SDK 解析器
+  （`SigningResponses`）——catch 与 fallback 均从响应体信封解析 `statusCode`，契约上
+  已确立的「明确未动账」码（5000/5001/4000/4030）⇒ `FAILED`；5003（凭据已消费）
+  与未知/不可解析响应 ⇒ 保持 `EXECUTED_UNVERIFIED`（fail-closed，绝不自动重放）。
+  两条路径均有单测覆盖（`WithdrawalBusinessApprovalLegTest`、
+  `WalletSvcSigningServiceFallbackFactoryTest`）。
+- **审计不落盘** —— **已解决**（PR #333，板 20261029-1053 决策二）。根因是
+  `nexus-core` jar 内 `logback.xml` 被 logback 自动配置抢先加载，遮蔽服务的
+  `logback-spring.xml`（staging 实证：prod `/var/log/nexus/signing-audit.json`
+  从未生成、root=DEBUG）。修法：jar 内改名 `logback-node.xml` 脱离自动发现路径，
+  standalone 节点经 `-Dlogback.configurationFile` 显式引用（build.gradle 与
+  Dockerfile 双入口）。
+- **地址/公钥词表错位** —— **已解决**（裁决见板 20261029-1053 决策三）。wallet 的
+  `nexus.wallet.platform-address` 被当作 signing 的 `fromPubkey`（必须是 pubkey），
+  提现 `toAddress` 被当作 `toPubkeyHash`（必须是 40-hex pubkeyhash，base58 地址会
+  `tx_build_failed`）。裁决为 **wallet 侧承担转换**：新增 `nexus.wallet.platform-pubkey`
+  配置（镜像 gateway 侧 `nexus.exchange-wallet.platform-pubkey` 的部署口径）；A2 开启时
+  `from` 用 pubkey（未配置 ⇒ fail-closed 拒绝），`toAddress` 经 base58 校验后转
+  40-hex `toPubkeyHash`（非法地址 ⇒ fail-closed 拒绝）；转换后的值贯穿登记载荷、
+  `canonicalHash` 与签名调用（signing 按请求字段双侧同算法重算，故登记与签名必须用
+  同一组转换值）。legacy 路径（A2 关闭）在未配置 pubkey 时仍取 platform-address 作为
+  `from`，保持向后兼容。**已列为 §5 开闸阻断项**（开闸前须下发该配置）。
+- 观察窗只覆盖单副本、单笔并发；3 副本下的 CAS/ShedLock 行为未验。**（仍未解决）**
 

@@ -4,6 +4,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.nexus.sdk.client.feign.SigningServiceFeignClient;
+import org.nexus.sdk.wallet.WalletUtils;
 import org.nexus.sdk.wallet.WithdrawalRequest;
 import org.nexus.walletsvc.approval.WithdrawalApprovalService;
 import org.nexus.walletsvc.entity.WhitelistEntryEntity;
@@ -69,7 +70,8 @@ class WithdrawalRollbackTest {
     @MockitoBean
     private SigningServiceFeignClient signingServiceClient;
 
-    private static final String WHITELISTED_ADDR = "0xrollbackTestAddr12345678901234";
+    private static final String WHITELISTED_ADDR =
+            WalletUtils.pubkeyHashToAddress("eeee6666deadbeefdeadbeefdeadbeefdeadbeef");
 
     @BeforeEach
     void setupWhitelist() {

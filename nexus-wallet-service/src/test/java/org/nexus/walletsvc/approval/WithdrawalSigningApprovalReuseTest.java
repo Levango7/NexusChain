@@ -9,6 +9,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.nexus.sdk.client.feign.SigningServiceFeignClient;
+import org.nexus.sdk.wallet.WalletUtils;
 import org.nexus.sdk.wallet.WithdrawalRequest;
 import org.nexus.walletsvc.entity.WithdrawalApproverEntity;
 import org.nexus.walletsvc.entity.WithdrawalRequestEntity;
@@ -104,7 +105,8 @@ class WithdrawalSigningApprovalReuseTest {
     private WithdrawalRequestEntity seed(String status, String signingApprovalId) {
         WithdrawalRequestEntity e = new WithdrawalRequestEntity();
         e.setRequestId(REQ_ID);
-        e.setToAddress("0xrecipient000000000000");
+        e.setToAddress(WalletUtils.pubkeyHashToAddress(
+                "dddd5555deadbeefdeadbeefdeadbeefdeadbeef"));
         e.setAmount(new BigDecimal("50000"));
         e.setCurrency("NEX");
         e.setRequiredApprovers(2);

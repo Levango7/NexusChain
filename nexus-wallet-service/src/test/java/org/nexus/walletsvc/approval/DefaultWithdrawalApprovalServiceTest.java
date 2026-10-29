@@ -8,6 +8,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.nexus.sdk.client.feign.SigningServiceFeignClient;
+import org.nexus.sdk.wallet.WalletUtils;
 import org.nexus.sdk.wallet.WithdrawalRequest;
 import org.nexus.walletsvc.entity.WithdrawalApproverEntity;
 import org.nexus.walletsvc.entity.WithdrawalRequestEntity;
@@ -70,8 +71,14 @@ import static org.mockito.Mockito.when;
 @MockitoSettings(strictness = Strictness.LENIENT)
 class DefaultWithdrawalApprovalServiceTest {
 
-    /** 测试用白名单地址（长度 ≥ 20，满足 DefaultAddressWhitelistService 校验，但本服务不校验地址格式）。 */
-    private static final String WHITELISTED_ADDR = "0xwhitelisted1234567890";
+    /**
+     * 测试用白名单地址（base58）：A2 §7.5 ③ 词表对齐后执行腿会把收款地址转成
+     * toPubkeyHash 再发给 signing，种子地址必须是校验和可通过的合法 base58
+     * （由 pubkeyHash 经 {@link WalletUtils#pubkeyHashToAddress} 构造，长度亦满足
+     * DefaultAddressWhitelistService 的校验）。
+     */
+    private static final String WHITELISTED_PUBKEY_HASH = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+    private static final String WHITELISTED_ADDR = WalletUtils.pubkeyHashToAddress(WHITELISTED_PUBKEY_HASH);
     private static final String PLATFORM_WALLET = "PLATFORM_HOT_WALLET";
 
     @Mock private SigningServiceFeignClient signingServiceClient;
@@ -392,7 +399,7 @@ class DefaultWithdrawalApprovalServiceTest {
 
         String signedTxHash = "0xsignedtxhash1234567890abcdef";
         when(signingServiceClient.signTransfer(
-                eq(PLATFORM_WALLET), eq(WHITELISTED_ADDR), eq(new BigDecimal("100"))))
+                eq(PLATFORM_WALLET), eq(WHITELISTED_PUBKEY_HASH), eq(new BigDecimal("100"))))
                 .thenReturn(okResp(signedTxHash));
 
         WithdrawalRequest executed = service.executeApprovedWithdrawal(request.getRequestId());
@@ -401,7 +408,7 @@ class DefaultWithdrawalApprovalServiceTest {
         assertEquals(signedTxHash, executed.getChainTxHash());
         assertNotNull(executed.getExecutedAt());
         verify(signingServiceClient).signTransfer(
-                PLATFORM_WALLET, WHITELISTED_ADDR, new BigDecimal("100"));
+                PLATFORM_WALLET, WHITELISTED_PUBKEY_HASH, new BigDecimal("100"));
     }
 
     @Test

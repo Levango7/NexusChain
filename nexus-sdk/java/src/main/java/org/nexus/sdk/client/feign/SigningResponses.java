@@ -1,5 +1,9 @@
 package org.nexus.sdk.client.feign;
 
+import com.google.gson.Gson;
+import com.google.gson.reflect.TypeToken;
+
+import java.lang.reflect.Type;
 import java.util.Map;
 
 /**
@@ -14,6 +18,12 @@ import java.util.Map;
  * <p>降级/fail-closed 语义：响应为 null（fallback 触发）、statusCode 非
  * 2000、或 data 缺失/空白时，{@link #txHash} 返回 {@code null}——与调用方
  * 既有的"null = 签名失败，标记 FAILED"约定完全一致。</p>
+ *
+ * <p>2026-10-29（A2 §7.5 决策一）：新增「失败路径响应体」提取能力。签名服务的
+ * 明确未动账失败以 <b>HTTP 非 2xx + 业务信封</b>表达（P0-2），消费方 Feign
+ * 看到的是异常（或被熔断器转成降级），正常 {@code Map} 返回路径拿不到它。
+ * {@link #statusCode(String)} 与 {@link #declaresNotExecuted(Integer)}
+ * 供 wallet 侧把异常/降级里的 {@code statusCode} 抠出来做三态映射。</p>
  */
 public final class SigningResponses {
 
@@ -28,9 +38,44 @@ public final class SigningResponses {
      */
     public static final int STATUS_APPROVAL_REQUIRED = 2001;
 
+    /**
+     * 业务失败（TxController.fail / failResponse 及 GlobalExceptionHandler 的
+     * BIZ_FAIL）：所有<b>预广播失败</b>——无签名密钥 / 公钥不匹配 / 地址非法 /
+     * nonce 获取失败 / 交易构造失败 / 审批未通过等。签名侧在此之后<b>没有</b>广播，
+     * A2 凭据也会被 {@code revertConsumedAfterFailedBroadcast} 退回（可重试）。
+     */
+    public static final int STATUS_BUSINESS_FAIL = 5000;
+
+    /**
+     * 并发执行冲突（TxController sign-approved 路径的 tryMarkExecuting 失败）：
+     * 另一路抢走了执行权，<b>本次调用确定未动账</b>。
+     */
+    public static final int STATUS_EXECUTION_CONFLICT = 5001;
+
+    /**
+     * A2 业务凭据已被消费（HTTP 409 + statusCode=5003）：上次签名<b>可能已广播</b>，
+     * 属「结果不明」而非「未动账」——调用方必须判 EXECUTED_UNVERIFIED。
+     */
+    public static final int STATUS_BUSINESS_APPROVAL_CONSUMED = 5003;
+
+    /**
+     * 参数非法（GlobalExceptionHandler BIZ_BAD_REQUEST，400 语义）：
+     * 请求在执行前被拒，确定未动账。
+     */
+    public static final int STATUS_BAD_REQUEST = 4000;
+
+    /**
+     * 鉴权/角色拒绝（GlobalExceptionHandler BIZ_FORBIDDEN，403 语义）：
+     * 请求在执行前被拒，确定未动账。
+     */
+    public static final int STATUS_FORBIDDEN = 4030;
+
     /** "data" 字段名（交易哈希所在键）。 */
     public static final String KEY_STATUS_CODE = "statusCode";
     public static final String KEY_DATA = "data";
+
+    private static final Gson GSON = new Gson();
+    private static final Type ENVELOPE_TYPE = new TypeToken<Map<String, Object>>() {}.getType();
 
     private SigningResponses() {
     }
@@ -235,7 +280,7 @@ public final class SigningResponses {
     }
 
     /**
-     * 提取签名服务响应中的 message 字段（供日志/告警诊断）。
+     * 从签名服务响应中的 message 字段（供日志/告警诊断）。
      *
      * @param response Feign 返回的响应 Map
      * @return message；缺失时返回 null
@@ -246,5 +291,81 @@ public final class SigningResponses {
         }
         Object msg = response.get("message");
         return msg == null ? null : msg.toString();
+    }
+
+    /**
+     * 把失败路径的响应体 JSON 字符串解析成信封 Map（供 {@link #statusCode(Map)}
+     * 等既有提取器复用）。
+     *
+     * <p>适用于签名服务以 HTTP 非 2xx 返回的业务信封（P0-2：业务失败带非 2xx
+     * 状态码，响应体保持 {@code {"statusCode":…,"message":…,"data":""}} 形状），
+     * 消费方只能从 Feign 异常的响应体（或熔断降级的 cause）里拿到它。</p>
+     *
+     * @param jsonEnvelope 响应体字符串（可能为 null / 空 / 非 JSON）
+     * @return 信封 Map；入参为 null/空或无法按 JSON 对象解析时返回 null
+     */
+    @SuppressWarnings("unchecked")
+    public static Map<String, Object> envelope(String jsonEnvelope) {
+        if (jsonEnvelope == null) {
+            return null;
+        }
+        String trimmed = jsonEnvelope.trim();
+        if (trimmed.isEmpty()) {
+            return null;
+        }
+        try {
+            Object parsed = GSON.fromJson(trimmed, ENVELOPE_TYPE);
+            // Gson 把 JSON 对象解析为 Map；非对象（数组/字符串/数字）时为其它类型
+            return parsed instanceof Map<?, ?> ? (Map<String, Object>) parsed : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * 从失败路径的响应体 JSON 字符串中提取 statusCode（无则 {@code null}）。
+     *
+     * <p>与 {@link #statusCode(Map)} 同语义，只是入参为 Feign 异常响应体的
+     * 字符串形态（{@code FeignException.content()} 等）。Number 与字符串两种
+     * 形态都兼容。</p>
+     *
+     * @param jsonEnvelope 响应体字符串（可能为 null / 空 / 非 JSON）
+     * @return statusCode；入参非法或缺失 statusCode 时返回 null
+     */
+    public static Integer statusCode(String jsonEnvelope) {
+        return statusCode(envelope(jsonEnvelope));
+    }
+
+    /**
+     * 判断「失败路径」上的 statusCode 是否<b>由签名服务契约确立为「本次明确未动账」</b>。
+     *
+     * <p><b>fail-closed 判据（A2 §7.5 决策一）</b>：只有契约明确声明「未动账」
+     * 的码才能映射为 FAILED——</p>
+     * <ul>
+     *   <li>{@link #STATUS_BUSINESS_FAIL}（5000）：预广播失败（无密钥/地址非法/
+     *       交易构造失败/审批未通过…），A2 凭据已被 signing 回退，可安全重试；</li>
+     *   <li>{@link #STATUS_EXECUTION_CONFLICT}（5001）：并发冲突，本次未动账；</li>
+     *   <li>{@link #STATUS_BAD_REQUEST}（4000）：参数非法，请求在执行前被拒；</li>
+     *   <li>{@link #STATUS_FORBIDDEN}（4030）：鉴权/白名单拒绝，请求在执行前被拒。</li>
+     * </ul>
+     *
+     * <p><b>不</b>属于确定性未动账的码（返回 false，调用方必须保持「结果不明」）：</p>
+     * <ul>
+     *   <li>{@link #STATUS_BUSINESS_APPROVAL_CONSUMED}（5003）：凭据已消费，上次
+     *       签名<b>可能已广播</b>——交人工核对；</li>
+     *   <li>一切未知码（含未来新增码）：语义未确立，降级为结果不明，禁止当 FAILED 重放。</li>
+     * </ul>
+     *
+     * @param statusCode 失败响应体里的 statusCode（可为 null）
+     * @return 仅当属于契约确立的「明确未动账」码时返回 true
+     */
+    public static boolean declaresNotExecuted(Integer statusCode) {
+        if (statusCode == null) {
+            return false;
+        }
+        return statusCode == STATUS_BUSINESS_FAIL
+                || statusCode == STATUS_EXECUTION_CONFLICT
+                || statusCode == STATUS_BAD_REQUEST
+                || statusCode == STATUS_FORBIDDEN;
     }
 }

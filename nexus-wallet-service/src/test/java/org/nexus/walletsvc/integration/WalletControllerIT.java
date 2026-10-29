@@ -4,6 +4,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.nexus.sdk.client.feign.SigningServiceFeignClient;
+import org.nexus.sdk.wallet.WalletUtils;
 import org.nexus.walletsvc.entity.WhitelistEntryEntity;
 import org.nexus.walletsvc.repository.WhitelistEntryRepository;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -72,7 +73,8 @@ class WalletControllerIT {
     @MockitoBean
     private SigningServiceFeignClient signingServiceClient;
 
-    private static final String WHITELISTED_ADDR = "0xcontrollerTestAddr12345678901";
+    private static final String WHITELISTED_ADDR =
+            WalletUtils.pubkeyHashToAddress("bbbb3332deadbeefdeadbeefdeadbeefdeadbeef");
 
     @BeforeEach
     void setupWhitelist() {

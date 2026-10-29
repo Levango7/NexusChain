@@ -1,12 +1,16 @@
 package org.nexus.walletsvc.fallback;
 
 import org.nexus.sdk.client.feign.SigningServiceFeignClient;
+import org.nexus.sdk.client.feign.SigningResponses;
 import org.nexus.sdk.client.feign.fallback.SigningServiceFallbackFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * wallet-service 侧 SigningServiceFeignClient 的 FallbackFactory 实现。
@@ -33,6 +37,13 @@ import java.math.BigDecimal;
  * <p>端点对齐修复（任务 #317）：移除 {@code transfer} / {@code canSignViaMpc} /
  * {@code getNoncePool} 的 fallback 实现，与 SigningServiceFeignClient 接口对齐。</p>
  *
+ * <p>业务失败信封透传（A2 §7.5 决策一，2026-10-29）：signing 以 HTTP 非 2xx 携 JSON
+ * 信封返回业务失败，经熔断器转成降级时，{@code signTransfer} /
+ * {@code signTransferWithBusinessApproval} 从 FeignException 响应体解析出已定义
+ * statusCode 并把信封返回给调用方，使「明确未动账」码能被判 FAILED（与异常路径
+ * 共用 {@link SigningResponses} 同一套解析，两路径收敛同一语义）；无响应体或
+ * 未知码仍返回 null，A2 腿判 EXECUTED_UNVERIFIED（fail-closed 不双花）。</p>
+ *
  * @see SigningServiceFallbackFactory
  */
 @Component
@@ -46,17 +57,27 @@ public class WalletSvcSigningServiceFallbackFactory extends SigningServiceFallba
                 cause.getClass().getSimpleName(), cause.getMessage(), cause);
         return new SigningServiceFeignClient() {
             @Override
-            public java.util.Map<String, Object> signTransfer(String fromPubkey, String toPubkeyHash, BigDecimal amount) {
+            public Map<String, Object> signTransfer(String fromPubkey, String toPubkeyHash, BigDecimal amount) {
+                Map<String, Object> failureEnvelope = translateFailureEnvelope(cause);
+                if (failureEnvelope != null) {
+                    // 透传 signing 的业务失败信封：classify 侧按已定义未动账码判 FAILED
+                    return new HashMap<>(failureEnvelope);
+                }
                 log.error("提现签名降级: signing-service 不可用, from={}, to={}, amount={}",
                         fromPubkey, toPubkeyHash, amount);
-                // DefaultWithdrawalApprovalService 经 SigningResponses.txHash(null)
-                // 提取得 null，标记提现 FAILED
+                // DefaultWithdrawalApprovalService 经 SigningResponses.classify(null)
+                // 提取失败，标记提现 FAILED
                 return null;
             }
 
             @Override
-            public java.util.Map<String, Object> signTransferWithBusinessApproval(
+            public Map<String, Object> signTransferWithBusinessApproval(
                     String fromPubkey, String toPubkeyHash, BigDecimal amount, String businessApprovalId) {
+                Map<String, Object> failureEnvelope = translateFailureEnvelope(cause);
+                if (failureEnvelope != null) {
+                    // 透传信封：明确未动账码 ⇒ classify 侧判 FAILED；5003 ⇒ UNVERIFIED
+                    return new HashMap<>(failureEnvelope);
+                }
                 // A2 凭据签名降级 = 结果未知（凭据可能已消费并广播）：
                 // 返回 null 由 A2 腿判 EXECUTED_UNVERIFIED，绝不回落重试（双花）
                 log.error("A2 凭据签名降级: signing-service 不可用, businessApprovalId={}, to={}, amount={}",
@@ -93,5 +114,45 @@ public class WalletSvcSigningServiceFallbackFactory extends SigningServiceFallba
                 return null;
             }
         };
+    }
+
+    /**
+     * 把 FeignException 响应体里的业务信封翻译成可透传的 Map
+     * （A2 §7.5 决策一，P0-2 配套，2026-10-29）。
+     *
+     * <p>signing 以 HTTP 非 2xx 携带 JSON 信封返回业务失败；当 Feign 把该异常交给
+     * fallback 时（本模块 {@code spring.cloud.openfeign.circuitbreaker.enabled=true}
+     * 会把 FeignException 转成降级），原实现一律返回 null，使「明确未动账
+     * （5000/5001/4000/4030）」与「凭据已消费（5003）」都塌缩成「结果不明」，
+     * A2 腿的 FAILED 分支在降级路径上不可达。</p>
+     *
+     * <p>本方法只放行信封里带<b>已定义 statusCode</b> 的响应，与
+     * {@code DefaultWithdrawalApprovalService} 异常路径共用
+     * {@link SigningResponses} 的同一套解析与判据，保证两条路径收敛到同一语义；
+     * 未定义码 / 无响应体 / 熔断打开 / 非 Feign 异常仍返回 null，由调用方按
+     * fail-closed 处理（A2 腿判 EXECUTED_UNVERIFIED）。</p>
+     *
+     * @param cause 触发降级的异常
+     * @return 可透传的业务失败信封；null 表示不可翻译
+     */
+    private static Map<String, Object> translateFailureEnvelope(Throwable cause) {
+        if (!(cause instanceof feign.FeignException)) {
+            return null;
+        }
+        byte[] body = ((feign.FeignException) cause).content();
+        if (body == null) {
+            return null;
+        }
+        Map<String, Object> envelope = SigningResponses.envelope(new String(body, StandardCharsets.UTF_8));
+        if (envelope == null) {
+            return null;
+        }
+        Integer statusCode = SigningResponses.statusCode(envelope);
+        if (statusCode == null) {
+            return null;
+        }
+        return (SigningResponses.declaresNotExecuted(statusCode)
+                || statusCode == SigningResponses.STATUS_BUSINESS_APPROVAL_CONSUMED)
+                ? envelope : null;
     }
 }
