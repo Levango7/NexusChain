@@ -181,6 +181,31 @@ class DefaultReconciliationServiceTest {
         assertEquals(2, report.getTotalExternal());
     }
 
+    @Test
+    void reconcile_localOnly_reversedShouldBeExcluded() {
+        ledger.bookSettlement("M001", new BigDecimal("100"), "O1");
+        // 对 O1 做冲正：产生 SETTLEMENT_PAYABLE 贷方分录 "O1:REV"
+        ledger.reverseSettlement("M001", new BigDecimal("100"), "O1");
+
+        ReconciliationReport report = service.reconcileWithChain();
+
+        // 被冲正的单不应再被报为「本地有、外部无」
+        assertEquals(0, report.getDiscrepancyCount());
+        assertTrue(report.getDiscrepancies().isEmpty());
+        assertTrue(report.getLocalOnlyRefsThisRun().isEmpty());
+    }
+
+    @Test
+    void reconcile_localOnly_shouldTrackMetric() {
+        ledger.bookSettlement("M001", new BigDecimal("100"), "O1");
+
+        ReconciliationReport report = service.reconcileWithChain();
+
+        // 指标化：本轮该 ref 被定位为 LOCAL_ONLY，且累计计数自增
+        assertTrue(report.getLocalOnlyRefsThisRun().contains("O1"));
+        assertTrue(report.getLocalOnlyTotal() >= 1);
+    }
+
     private SettlementRecord record(String ref, String amount) {
         return new SettlementRecord(ref, new BigDecimal(amount), "USDT", Instant.now());
     }
