@@ -102,6 +102,34 @@ public class Ledger {
     }
 
     /**
+     * 冲正一笔已记账的结算（{@link #bookSettlement} 的逆操作）。
+     * <p>
+     * 借：商户可用余额减少；贷：待结算负债增加。冲正分录的 reference 自动追加 {@code ":REV"} 后缀，
+     * 以便对账本地侧将其对应的原单识别为已回滚（见 {@code DefaultReconciliationService}）。
+     * </p>
+     *
+     * @param merchantId 商户 ID
+     * @param amount     结算金额（正数，须与原单一致）
+     * @param reference  原结算业务凭证（清算订单 ID），冲正分录 reference = {@code reference + ":REV"}
+     */
+    public void reverseSettlement(String merchantId, BigDecimal amount, String reference) {
+        if (merchantId == null || amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
+            return;
+        }
+        String revRef = reference + ":REV";
+        Instant now = Instant.now();
+        if (dbMode()) {
+            transactionTemplate().executeWithoutResult(s -> {
+                persist(SETTLEMENT_PAYABLE, LedgerEntry.Direction.CREDIT, amount, revRef, now);
+                persist("MERCHANT:" + merchantId, LedgerEntry.Direction.DEBIT, amount, revRef, now);
+            });
+            return;
+        }
+        post(SETTLEMENT_PAYABLE, LedgerEntry.Direction.CREDIT, amount, revRef, now);
+        post("MERCHANT:" + merchantId, LedgerEntry.Direction.DEBIT, amount, revRef, now);
+    }
+
+    /**
      * 记录一笔归集落账：借：归集目标账户（增加资产），贷：源账户（减少资产）。
      *
      * @param sourceAccount 源账户名

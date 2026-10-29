@@ -215,6 +215,16 @@ public class DefaultClearingEngine implements ClearingEngine {
             order.setStatus(ClearingOrder.OrderStatus.FAILED);
             String err = result != null ? result.getError() : "execution channel returned null";
             log.error("settle on-chain failed: orderId={}, error={}", order.getOrderId(), err);
+            // S3 冲正：仅当"确定未动账"（confirmedNotExecuted=true）才回滚已记账的贷账。
+            // 超时 / 降级 null / 未知码一律不冲正，避免对可能已广播的交易误撤销（见板 20261029-2057 §S2/§S3）。
+            if (result != null && result.isConfirmedNotExecuted()) {
+                try {
+                    ledger.reverseSettlement(order.getMerchantId(), order.getAmount(), order.getOrderId());
+                    log.info("reversed settlement booking (confirmed not executed): orderId={}", order.getOrderId());
+                } catch (RuntimeException re) {
+                    log.error("settlement reversal failed for orderId={}: {}", order.getOrderId(), re.getMessage(), re);
+                }
+            }
             // FAILED 终态同样落库（差错可追溯）
             persistOrderState(order);
         }
