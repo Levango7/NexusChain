@@ -113,6 +113,72 @@ class JdbcFinalityStateStoreTest {
         assertArrayEquals(publicKey, vote.getPublicKeyBytes());
     }
 
+    /**
+     * PLAN-057 第 11 处回归（store 级）：**升序分页必须按 epoch 完整交付**。
+     *
+     * <p>第八轮测试床实测（1/1026 票缺口）：响应页 {@code ORDER BY epoch ASC LIMIT 200}
+     * 会在某个 epoch 中间截断，请求方按标记的 {@code servedTo+1} 前进 ⇒ 被截断的票
+     * 永远不再被请求。修法：页必须把"哨兵 epoch"整体带入。</p>
+     *
+     * <p>本例：epoch 1 有 4 票、epoch 2 有 1 票，limit=2：
+     * 正确行为 = 第 1 页回 epoch 1 的全部 4 票（虽超限），第 2 页回 epoch 2。</p>
+     */
+    @Test
+    void ascendingPageNeverSplitsAnEpoch() {
+        for (byte cp = 1; cp <= 4; cp++) {
+            store.recordVote(1, new byte[]{cp}, "v" + cp, sig(), pk());
+        }
+        store.recordVote(2, new byte[]{9}, "v9", sig(), pk());
+
+        java.util.List<org.nexus.consensus.finality.Vote> first =
+                store.loadVoteObjectsAscending(1, 2);
+        assertEquals(4, first.size(), "第 11 处：epoch 1 的 4 票必须整页带回（虽超 limit=2）");
+        assertTrue(first.stream().allMatch(v -> v.getEpoch() == 1));
+        assertTrue(first.stream().map(v -> v.getValidatorAddress()).filter(java.util.Objects::nonNull)
+                        .allMatch(a -> a.startsWith("v")), "回带的必须是带签名的 Vote 对象");
+
+        java.util.List<org.nexus.consensus.finality.Vote> second =
+                store.loadVoteObjectsAscending(2, 2);
+        assertEquals(1, second.size(), "第 2 页应只剩 epoch 2 的那 1 票");
+        assertEquals(2, second.get(0).getEpoch());
+    }
+
+    /**
+     * PLAN-057 第 12 处回归（store 级）：**行数不足 limit+1 时不得越界、不得变空页**。
+     *
+     * <p>第九轮测试床实测：旧实现直接 {@code rows.get(cap)}，当库内带签名票少于
+     * limit+1 时抛 IndexOutOfBounds，被 catch 吞成空页 ⇒ 响应端回 count=0 标记 ⇒
+     * 请求方判"对端无货"提前终止分页（A.log 209 条 WARN，D 连续 12 轮空标记，
+     * 整条爬升退化成 margin 涓流）。本例库内只有 3 票、limit=200。</p>
+     */
+    @Test
+    void shortHistoryMustNotBeSwallowedIntoEmptyPage() {
+        for (byte cp = 1; cp <= 3; cp++) {
+            store.recordVote(1, new byte[]{cp}, "s" + cp, sig(), pk());
+        }
+        // 3 票远小于 limit=200 ⇒ 必须原样返回 3 票（而不是越界成空页）。
+        java.util.List<org.nexus.consensus.finality.Vote> page =
+                store.loadVoteObjectsAscending(1, 200);
+        assertEquals(3, page.size(), "第 12 处：短页必须原样返回，不能变空页");
+        assertEquals(1, page.get(0).getEpoch());
+    }
+
+    private static byte[] sig() {
+        byte[] s = new byte[64];
+        for (int i = 0; i < s.length; i++) {
+            s[i] = (byte) (i + 1);
+        }
+        return s;
+    }
+
+    private static byte[] pk() {
+        byte[] k = new byte[32];
+        for (int i = 0; i < k.length; i++) {
+            k[i] = (byte) (i + 3);
+        }
+        return k;
+    }
+
     @Test
     void outboxRoundTripsAndSurvivesRestart() {
         // PLAN-018：写库意图必须能跨进程存活。

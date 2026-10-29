@@ -122,17 +122,19 @@ class FinalityVoteSyncPagingTest {
         List<byte[]> votesSent = sent.stream()
                 .filter(p -> !FinalityVoteSyncCodec.isResponsePayload(p))
                 .collect(java.util.stream.Collectors.toList());
-        // 第 11 处：页按 epoch 完整交付——max=3 时哨兵行属 epoch 4，
-        // 为不截断该 epoch，回推 4 张（超 1 张，代价是一个 epoch 的票数）。
-        assertEquals(4, votesSent.size(),
-                "第 11 处：max=3 时哨兵行（epoch 4）所在 epoch 要整体带上，回 4 张");
+        // 第 11 处（精确语义）：页 = "epoch <= 第 max 行所在 epoch"。
+        // 库内 5 票（epoch 1..5 各 1 票）、max=3 ⇒ 第 3 行就是 epoch 3 ⇒ 页=1..3。
+        // 旧纯 LIMIT 写法同样回 3，但边界 epoch 有多票时会把那个 epoch 切成两半；
+        // 本实现的页边界始终与 epoch 对齐，因此不会丢票。
+        assertEquals(3, votesSent.size(),
+                "第 11 处：页=1..3（不超限、不与 epoch 边界错位）");
         long[] epochs = new long[votesSent.size()];
         for (int i = 0; i < votesSent.size(); i++) {
             Vote v = FinalityVoteCodec.decode(votesSent.get(i));
             assertNotNull(v);
             epochs[i] = v.getEpoch();
         }
-        // 标记必须回带实际范围（4 张：1..4），请求方据此精确推进游标。
+        // 标记必须回带实际范围（3 张：1..3），请求方据此精确推进游标。
         FinalityVoteSyncCodec.SyncResponse marker = sent.stream()
                 .filter(FinalityVoteSyncCodec::isResponsePayload)
                 .findFirst()
@@ -141,12 +143,11 @@ class FinalityVoteSyncPagingTest {
         assertNotNull(marker, "响应端必须回带 0x5C 响应标记");
         assertEquals(0L, marker.requestFrom());
         assertEquals(1L, marker.servedFrom());
-        assertEquals(4L, marker.servedTo(), "第 11 处：哨兵 epoch 整体带上 ⇒ servedTo=4");
-        assertEquals(4, marker.count());
+        assertEquals(3L, marker.servedTo(), "第 11 处：页=1..3 ⇒ servedTo=3（下一轮从 4 起）");
+        assertEquals(3, marker.count());
         assertEquals(1L, epochs[0], "cursor 分页必须升序服务：第一张应是最老的 epoch=1");
         assertEquals(2L, epochs[1]);
         assertEquals(3L, epochs[2]);
-        assertEquals(4L, epochs[3], "第 11 处：哨兵 epoch(4) 整体带入");
     }
 
     @Test
@@ -174,10 +175,10 @@ class FinalityVoteSyncPagingTest {
 
         // 第 1 轮：B 空库 ⇒ 首轮从 margin 地板起（maxEpoch=-1 ⇒ floor=0）。
         nodes[1].scheduledVoteAntiEntropy();
-        // 第 11 处：页按 epoch 完整交付，200 限制下哨兵行属 epoch 201，
-        // 为不截断该 epoch 整体带上 ⇒ 回 201 张。
-        assertEquals(201, allVotes(storeB).size(),
-                "第 11 处：201 张 = 200 限制 + 哨兵 epoch(201)，不截断");
+        // 第 11 处（精确语义）：页 = epoch <= 第 200 行所在 epoch = 200 ⇒ 1..200。
+        // 页边界与 epoch 对齐；旧纯 LIMIT 也回 200，但边界 epoch 有多票时会截断丢票。
+        assertEquals(200, allVotes(storeB).size(),
+                "第 11 处：页=1..200（第 200 行的 epoch 就是 200）");
 
         // 第 2 轮：推进游标 = 本轮已见最大 epoch+1 = 201 ⇒ A 给 201..250。
         nodes[1].scheduledVoteAntiEntropy();
@@ -191,8 +192,10 @@ class FinalityVoteSyncPagingTest {
                 .toArray();
         assertTrue(froms.length >= 3, "应有 3 轮请求，实际 " + froms.length);
         assertEquals(0L, froms[0], "第 1 轮从地板（0）起");
-        assertEquals(202L, froms[1],
-                "第 11 处：第 1 页整体覆盖哨兵 epoch 201 ⇒ 第 2 轮从 202 起（不截断才不丢票）。旧实现（纯 LIMIT）会把 epoch 201 的票截一部分在页外，而游标按 201+1 跳过 ⇒ 永久丢票");
+        assertEquals(201L, froms[1],
+                "第 11 处：第 1 页=1..200 ⇒ 第 2 轮从 201 起。"
+                        + "不变式是页边界与 epoch 对齐：旧纯 LIMIT 在边界 epoch 有多票时会把票截在页外，"
+                        + "而游标按 servedTo+1 跳过 ⇒ 永久丢票");
         assertEquals(251L, froms[2], "第 3 轮应已越过对端前沿（251），据此判追平");
         assertEquals(total, allVotes(storeB).size(),
                 "两轮分页必须把 250 张票全部补齐（这正是 PLAN-048b 补不上的那部分）");
@@ -392,10 +395,9 @@ class FinalityVoteSyncPagingTest {
 
         // 第 1 轮：从 floor=0 起，A 回最老的 200 张（epoch 1..200）。
         nodes[1].scheduledVoteAntiEntropy();
-        // 第 11 处：页按 epoch 完整交付，200 限制下哨兵行属 epoch 201，
-        // 为不截断该 epoch 整体带上 ⇒ 回 201 张。
-        assertEquals(201, allVotes(storeB).size(),
-                "第 11 处：201 张 = 200 限制 + 哨兵 epoch(201)，不截断");
+        // 第 11 处（精确语义）：页 = epoch <= 第 200 行所在 epoch = 200 ⇒ 1..200。
+        assertEquals(200, allVotes(storeB).size(),
+                "第 11 处：页=1..200（第 200 行的 epoch 就是 200，不超限）");
 
         // 关键：模拟在线集群的正常广播涓流——链头附近来一张 epoch=900 的票。
         nodes[1].onVoteReceived(FinalityVoteCodec.encode(vote("v1", 900, CP1)));
@@ -404,9 +406,8 @@ class FinalityVoteSyncPagingTest {
         // 不得被涓流拉到 901（那样 A 无货，中段 201..250 永远补不上）。
         nodes[1].scheduledVoteAntiEntropy();
         assertEquals(2, bRequests.size(), "第 2 轮必须发出请求");
-        assertEquals(202L, FinalityVoteSyncCodec.decode(bRequests.get(1)).fromEpoch(),
-                "第 11 处：第 1 页整页覆盖哨兵 epoch(201) ⇒ 游标 202；"
-                        + "广播涓流（epoch=900）不得把它继续推到链头");
+        assertEquals(201L, FinalityVoteSyncCodec.decode(bRequests.get(1)).fromEpoch(),
+                "第 11 处：第 1 页=1..200 ⇒ 游标 201；广播涓流（epoch=900）不得把它推到链头");
 
         // 第 3 轮：A 已无 ≥251 的货 ⇒ 收尾。
         nodes[1].scheduledVoteAntiEntropy();
@@ -527,11 +528,11 @@ class FinalityVoteSyncPagingTest {
         assertEquals(171L, cursorFroms[0], "首轮从缺口地板 171 起");
         // 第 11 处：页按 epoch 完整交付——A 的库有 1..371 全票，第 1 页
         // 从 171 起取 200 票（171..370）+ 哨兵 epoch 371 整体 ⇒ servedTo=371。
-        assertEquals(372L, cursorFroms[1],
-                // 注：本例中 A 有 1..371 全票，第 1 页 171..370(200 票)+哨兵 epoch 371
-                // 整体带上 ⇒ servedTo=371。链头票本身在内（B 已有 371）。
-                // 第 11 处的抛物线是：服务范围内部必须完整——而非截断。
-                "第 11 处：哨兵 epoch 371 整体带上 ⇒ servedTo=371（即将到达链头）");
+        assertEquals(371L, cursorFroms[1],
+                // 第 11 处（精确语义）：页 = epoch <= 第 200 行所在 epoch = 370
+                // ⇒ 页=171..370，servedTo=370，下一轮从 371 起。
+                // 不变式：页边界与 epoch 对齐——不超限、不截断半个 epoch。
+                "第 11 处：页=171..370 ⇒ 第 2 轮从 371 起（链头票 371 已在 B 库）");
         assertEquals(371, allVotes(storeB).size(),
                 "171..370 必须被补齐：链头票不能让它被整段跳过");
     }

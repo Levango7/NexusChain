@@ -170,7 +170,11 @@ public interface FinalityStateStore {
         // servedTo（页内最大 epoch）+1 前进 ⇒ 那一票永远不再被请求。
         // 现在：多取 1 行做哨兵，若页满则把哨兵所在 epoch 的剩余行一并带上
         // ⇒ 页永远 epoch 完整；代价是最多超限一个 epoch 的票数（生产 ~3 票）。
-        long servedEpoch = flat.get(cap).getEpoch();
+        // 第 11 处：页 = "epoch <= 第 cap 行所在 epoch" 的全部票 ⇒ 永不把同一个
+        // epoch 切成两半（截断那一侧整段留给下一轮，不会永久丢票）。
+        // 注：哨兵用第 cap 行（0-based 索引 cap-1）——若改用 cap+1 行做哨兵，
+        // 边界 epoch 还有更多行时仍会被截断（JDBC 路径实测 4 票只回 3 票）。
+        long servedEpoch = flat.get(cap - 1).getEpoch();
         java.util.List<Vote> out = new java.util.ArrayList<>();
         for (Vote v : flat) {
             if (v.getEpoch() > servedEpoch) {

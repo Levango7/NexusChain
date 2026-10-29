@@ -309,38 +309,41 @@ public class JdbcFinalityStateStore implements FinalityStateStore {
      */
     @Override
     public List<org.nexus.consensus.finality.Vote> loadVoteObjectsAscending(long fromEpoch, int limit) {
-        // PLAN-057 第 11 处：按 epoch 完整交付——多取 1 行做哨兵，
-        // 若第 limit+1 行与被截部分同属一个 epoch，则整个 epoch 不进本页
-        // （否则请求方按 servedTo+1 推进时会永久跳过该 epoch 剩余的票）。
+        // PLAN-057 第 11 处：**响应页必须按 epoch 完整交付**。
+        //
+        // 旧实现 `ORDER BY epoch ASC LIMIT N` 在页满时会在某个 epoch 中间截断
+        // （第八轮实测 201/200：epoch 134 的第 201 票被切在页外），请求方按标记的
+        // servedTo（页内最大 epoch）+1 前进 ⇒ 那一票永远不再被请求。
+        //
+        // 修法：页 = "epoch <= 第 cap 行所在 epoch" 的全部票行。这样：
+        //   * 页永不会把同一个 epoch 切成两半（截断的那一侧整段留给下一轮）；
+        //   * 页大小可能略超 limit（最多一个 epoch 的票数，生产 ~3 票）；
+        //   * 行数不足 cap 时子查询为空 ⇒ COALESCE 兜底成"取到对端前沿"。
+        //
+        // 第 12 处：早期实现用 `rows.get(cap)` 读哨兵行，行数不足 cap+1 时越界，
+        // 被 catch 吞成空页（实测 A.log 209 条 WARN、D 连续 12 轮空标记、爬升退化成
+        // margin 涓流）。本实现不再依赖行数假设。
         int cap = Math.max(1, limit);
-        List<org.nexus.consensus.finality.Vote> rows = new java.util.ArrayList<>();
+        List<org.nexus.consensus.finality.Vote> out = new java.util.ArrayList<>();
         try {
             jdbc.query("SELECT epoch, checkpoint_hash, validator, signature, public_key "
                             + "FROM finality_votes WHERE epoch >= ? AND signature IS NOT NULL "
-                            + "ORDER BY epoch ASC LIMIT ?",
+                            + "AND epoch <= COALESCE(( "
+                            + "  SELECT e FROM ( "
+                            + "    SELECT epoch e FROM finality_votes "
+                            + "    WHERE epoch >= ? AND signature IS NOT NULL "
+                            + "    ORDER BY epoch ASC LIMIT 1 OFFSET ?) t), "
+                            + "9223372036854775807) "
+                            + "ORDER BY epoch ASC",
                     rs -> {
-                        rows.add(new org.nexus.consensus.finality.Vote(
+                        out.add(new org.nexus.consensus.finality.Vote(
                                 rs.getLong("epoch"),
                                 hexToBytes(rs.getString("checkpoint_hash")),
                                 rs.getString("validator"),
                                 hexToBytes(rs.getString("signature")),
                                 hexToBytes(rs.getString("public_key"))));
                     },
-                    fromEpoch, cap + 1);
-            if (rows.isEmpty()) {
-                return java.util.Collections.emptyList();
-            }
-            // 第 11 处：页必须按 epoch 完整交付。多取的哨兵行所在 epoch
-            // 的剩余票一并带上（最多超限一个 epoch 的票数），
-            // 否则请求方按 servedTo+1 推进时会跳过被截断的票。
-            long servedEpoch = rows.get(cap).getEpoch();
-            List<org.nexus.consensus.finality.Vote> out = new java.util.ArrayList<>();
-            for (org.nexus.consensus.finality.Vote v : rows) {
-                if (v.getEpoch() > servedEpoch) {
-                    break;
-                }
-                out.add(v);
-            }
+                    fromEpoch, fromEpoch, cap - 1);
             return out;
         } catch (RuntimeException e) {
             log.warn("JdbcFinalityStateStore: load votes ascending (from={}, limit={}) failed: {}",
