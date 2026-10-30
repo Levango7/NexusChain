@@ -39,10 +39,13 @@ public final class SigningResponses {
     public static final int STATUS_APPROVAL_REQUIRED = 2001;
 
     /**
-     * 业务失败（TxController.fail / failResponse 及 GlobalExceptionHandler 的
-     * BIZ_FAIL）：所有<b>预广播失败</b>——无签名密钥 / 公钥不匹配 / 地址非法 /
-     * nonce 获取失败 / 交易构造失败 / 审批未通过等。签名侧在此之后<b>没有</b>广播，
-     * A2 凭据也会被 {@code revertConsumedAfterFailedBroadcast} 退回（可重试）。
+     * 业务失败（TxController.fail / failResponse）：所有<b>预广播失败</b>——无签名
+     * 密钥 / 公钥不匹配 / 地址非法 / nonce 获取失败 / 交易构造失败 / 审批未通过等。
+     * 签名侧在此之后<b>没有</b>广播，A2 凭据也会被
+     * {@code revertConsumedAfterFailedBroadcast} 退回（可重试）。
+     *
+     * <p>注意：{@code GlobalExceptionHandler} 的未处理异常兜底<b>不再</b>使用本码，
+     * 改用 {@link #STATUS_INTERNAL_ERROR}（5002）——兜底时动账状态未知。</p>
      */
     public static final int STATUS_BUSINESS_FAIL = 5000;
 
@@ -64,6 +67,17 @@ public final class SigningResponses {
      * 属「结果不明」而非「未动账」——调用方必须判 EXECUTED_UNVERIFIED。
      */
     public static final int STATUS_BUSINESS_APPROVAL_CONSUMED = 5003;
+
+    /**
+     * 服务端未处理异常（HTTP 500 + statusCode=5002，GlobalExceptionHandler 兜底）：
+     * <b>结果不可判定</b>——异常可能发生在广播之后（读超时、序列化失败、依赖瞬断等），
+     * 兜底处理器本身不知道资金是否已转出。
+     *
+     * <p>与 {@link #STATUS_BUSINESS_FAIL}（5000，「广播前判定、确定未动账」）严格区分：
+     * 调用方对 5002 必须保持「结果不明」（EXECUTED_UNVERIFIED / EXECUTION_UNKNOWN），
+     * 禁止当 FAILED 重放。{@link #declaresNotExecuted} 对它返回 false。</p>
+     */
+    public static final int STATUS_INTERNAL_ERROR = 5002;
 
     /**
      * 参数非法（GlobalExceptionHandler BIZ_BAD_REQUEST，400 语义）：
@@ -364,6 +378,8 @@ public final class SigningResponses {
      *       驱动方（wallet resume 腿、gateway {@code SigningApprovalExecutionService}）
      *       可按各自状态机收敛此码；其余调用方一律按结果不明处理
      *       （见 {@link #STATUS_EXECUTION_CONFLICT} 的 javadoc）；</li>
+     *   <li>{@link #STATUS_INTERNAL_ERROR}（5002）：服务端未处理异常，异常点可能在
+     *       广播之后，兜底处理器无法证明未动账；</li>
      *   <li>一切未知码（含未来新增码）：语义未确立，降级为结果不明，禁止当 FAILED 重放。</li>
      * </ul>
      *

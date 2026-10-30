@@ -215,6 +215,7 @@ class SigningResponsesTest {
 
         assertFalse(SigningResponses.declaresNotExecuted(SigningResponses.STATUS_BUSINESS_APPROVAL_CONSUMED)); // 5003 结果不明
         assertFalse(SigningResponses.declaresNotExecuted(SigningResponses.STATUS_EXECUTION_CONFLICT));      // 5001 另一路可能正在广播
+        assertFalse(SigningResponses.declaresNotExecuted(SigningResponses.STATUS_INTERNAL_ERROR));         // 5002 兜底异常可能在广播后
         assertFalse(SigningResponses.declaresNotExecuted(2000));   // 成功
         assertFalse(SigningResponses.declaresNotExecuted(2001));   // 待审批
         assertFalse(SigningResponses.declaresNotExecuted(5999));   // 未知码

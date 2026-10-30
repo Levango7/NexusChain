@@ -21,18 +21,28 @@ import java.util.Map;
  * IllegalArgumentException 会变 500（应为 400）。</p>
  *
  * <p>兼容性设计（不破坏既有契约）：错误响应沿用本模块既有业务形状
- * {@code {"statusCode":5000,"message":"...","data":""}}——与 TxController
- * 的失败响应（HTTP 200 + statusCode 5000）语义一致；但参数类错误按
- * HTTP 语义纠正为 400/405/500 状态码。新调用方可同时依赖 HTTP 状态码
- * 与业务码两层判定，旧调用方解析 body 的逻辑不受影响。</p>
+ * {@code {"statusCode":…,"message":"…","data":""}}；但参数类错误按 HTTP 语义
+ * 纠正为 400/405/500 状态码。新调用方可同时依赖 HTTP 状态码与业务码两层判定。</p>
+ *
+ * <p><b>失败码分工（2026-10-31）</b>：业务失败沿用 {@link #BIZ_FAIL}（5000，
+ * TxController 在<b>广播之前</b>判定并返回，语义为「确定未动账」）；
+ * 未处理异常兜底改用 {@link #BIZ_INTERNAL_ERROR}（5002）——兜底处理器不知道
+ * 异常发生在广播之前还是之后，与 5000 同码会让调用方把「可能已广播」误判成
+ * 「确定未动账」。消费方须把 5002 视为结果不明（fail-closed），不得重放。</p>
  */
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
-    /** 业务失败码：与 TxController 既有 fail() 约定一致。 */
+    /** 业务失败码：与 TxController 既有 fail() 约定一致（广播前判定，确定未动账）。 */
     private static final int BIZ_FAIL = 5000;
+    /**
+     * 服务端未处理异常业务码（HTTP 500）：语义为<b>结果不可判定</b>。
+     * 兜底处理器不知道异常发生在广播之前还是之后，因此不得复用 5000
+     * （=「确定未动账」），否则调用方会把可能已上链的交易当失败重放。
+     */
+    static final int BIZ_INTERNAL_ERROR = 5002;
     /** 参数错误业务码：4xxx 段（400 语义），避免与 5000 业务失败混淆。 */
     private static final int BIZ_BAD_REQUEST = 4000;
     /** 鉴权拒绝业务码：403 语义（角色不足 / 审批白名单外）。 */
@@ -106,10 +116,15 @@ public class GlobalExceptionHandler {
         return body(HttpStatus.FORBIDDEN, BIZ_FORBIDDEN, "Forbidden");
     }
 
-    /** 兜底（500）：完整堆栈进服务端日志，响应只留摘要（不泄漏内部细节）。 */
+    /**
+     * 兜底（500）：完整堆栈进服务端日志，响应只留摘要（不泄漏内部细节）。
+     *
+     * <p>业务码必须是 {@link #BIZ_INTERNAL_ERROR}（5002）而不是 5000——后者是
+     * TxController 在广播前给出的「确定未动账」；兜底异常的动账状态未知。</p>
+     */
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Object> handleGeneric(Exception e) {
         log.error("Unhandled exception in signing-service", e);
-        return body(HttpStatus.INTERNAL_SERVER_ERROR, BIZ_FAIL, "Internal error");
+        return body(HttpStatus.INTERNAL_SERVER_ERROR, BIZ_INTERNAL_ERROR, "Internal error");
     }
 }
