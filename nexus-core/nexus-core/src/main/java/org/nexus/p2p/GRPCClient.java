@@ -158,7 +158,12 @@ public class GRPCClient {
         @Override
         public void onError(Throwable t) {
             function.accept(null, t);
-            channel.shutdown();
+            // PLAN-057 第 14 处（第 13 轮诊断实测）：不要在这里关闭 channel。
+            // channel 来自 getChannel(HostPort) 的共享缓存；旧写法在任一条 RPC
+            // 失败时关闭它，会把同一渠道上所有在途 RPC 一并取消
+            // （gRPC 报 CANCELLED），而每个被取消的 RPC 又会再次触发关闭 ⇒ 错误风暴。
+            // 实测（三节点同内核）：A→E 消息丢失 ~2/3（A 日忕 1537 次 CANCELLED）。
+            // 单条 RPC 失败就只失败它自己；渠道生命周期归缓存/应用关闭管。
         }
 
         @Override
@@ -192,9 +197,9 @@ public class GRPCClient {
                         return stub.entry(msg);
                     }catch (RuntimeException e){
                         throw new RuntimeException(e.getMessage());
-                    } finally {
-                        ch.shutdown();
                     }
+                    // PLAN-057 第 14 处：不再 finally ch.shutdown() ——
+                    // 共享 channel 一旦被关闭，并发的异步广播会全部取消。
                 }, executor);
     }
 
