@@ -467,6 +467,9 @@ public class FinalityVoteBroadcaster {
                         }
                     } else if (!pagingMarkerCapable && graceElapsed
                             && markerlessGraceTicks.get() >= MARKERLESS_GRACE_TICKS_NEEDED
+                            // 第 13 处：只有收到页级批量（老节点倒序页）才认为对端不发标记。
+                            // 重启后连接未建、本轮一页都没到时，禁止按 lastResponded+1 拉走游标。
+                            && votesSinceRound.get() >= Math.max(1, antiEntropyMaxVotes / 2)
                             && lastRespondedEpoch >= 0
                             && lastRespondedEpoch + 1 > nextSyncCursorEpoch) {
                         // 老对端（从未发过 0x5C）：退回第 6 处的窗口过滤 + 宽限期路径。
@@ -622,22 +625,18 @@ public class FinalityVoteBroadcaster {
                     servedMax = v.getEpoch();
                 }
             }
-            sendVotesOverP2P(page);
             noteEpochForCursor(servedMax);
-            // PLAN-057 第 8 处：把"实际服务了哪一段"回带给请求方。
-            // 没有这条标记，请求方只能按"收到的最大 epoch"猜；链头广播票会把游标
-            // 推到链头，中段被整段跳过（第五轮实测：请求 171、服务 171..237，
-            // 游标却跳到 372，238..370 一次都没被请求）。
-            // PLAN-057 第 9 处（第六轮实测发现）：**仅游标请求回带标记**。
-            // margin（cursor=false）响应服务的是"最新 N 条"；请求方按
-            // requestFrom 匹配标记，无法区分这条标记源自游标响应还是 margin 响应。
-            // 第六轮实证：对端（冷却期）margin 请求 from=0 → 响应 latest-200
-            // (49..200) 附带标记 → 相邻节点游标 round 从 0 直接被拽到 201，
-            // 中段 51..200 永远不再请求 ⇒ 补票失效。margin 响应不得带标记。
-            if (req.cursor()) {
-                sendRawVotePayloadOverP2P(FinalityVoteSyncCodec.encodeResponse(
-                        req.fromEpoch(), servedMin, servedMax, page.size()));
-            }
+            // PLAN-057 第 13 处（第 9/10 轮实测）：响应标记必须与页同消息。
+            // 旧写法先发页、再独立发一条标记，两条广播可各走各的连接
+            //            ⇒ "页到、标记丢" 结构上无法保证不发生；实测后枚就是
+            //            无标记 → 老启发式把游标从 0 拉到 147，1..146 整段跳过。
+            //            现在标记追加为页消息末条交星（接收端按魔数分流 0x5C）。
+            //            第 9 处的限制保留：仅 cursor=true 请求才生成标记。
+            byte[] d13Marker = req.cursor()
+                    ? FinalityVoteSyncCodec.encodeResponse(
+                            req.fromEpoch(), servedMin, servedMax, page.size())
+                    : null;
+            sendVotesOverP2P(page, d13Marker);
             log.info("Vote-sync request (from epoch{}, cursor={}) served with {} votes"
                     + " (servedRange={}..{})",
                     req.fromEpoch(), req.cursor(), page.size(), servedMin, servedMax);
@@ -721,8 +720,23 @@ public class FinalityVoteBroadcaster {
         return max;
     }
 
-    /** 一次性回推多条投票（单条 P2P 消息承载多个 VOTE 交易，减少消息数）。 */
+    /**
+     * 一次性回推多条投票（单条 P2P 消息承载多个 VOTE 交易，减少消息数）。
+     *
+     * <p>PLAN-057 第 13 处（第 9/10 轮实测）：<b>响应标记（0x5C）必须与页同消息一起发</b>。
+     * 旧实现先发页、再独立发一条标记＋两条广播可以各走各的连接
+     * ⇒ "页到了、标记没到"结构上无法保证不发生。实测后枚：请求方因无标记而走老启发式，
+     * 把游标从 0 拉到 147，1..146 整段跳过（空漏 30 多票）。现在标记作为页消息的<b>末条交星</b>追加
+     * （接收端 onTransactions 本就按魔数分流 0x5C）⇒ 页到则标记必到。</p>
+     */
     void sendVotesOverP2P(java.util.List<Vote> votes) {
+        sendVotesOverP2P(votes, null);
+    }
+
+    /**
+     * 回推页＋可选地把响应标记追加到<b>同一条</b>消息末尾。
+     */
+    void sendVotesOverP2P(java.util.List<Vote> votes, byte[] markerPayload) {
         if (peerServer == null || votes == null || votes.isEmpty()) {
             return;
         }
@@ -732,6 +746,12 @@ public class FinalityVoteBroadcaster {
                 msg.addTransactions(NexusChainOuterClass.Transaction.newBuilder()
                         .setTransactionType(NexusChainOuterClass.TransactionType.VOTE)
                         .setPayload(ByteString.copyFrom(FinalityVoteCodec.encode(v)))
+                        .build());
+            }
+            if (markerPayload != null) {
+                msg.addTransactions(NexusChainOuterClass.Transaction.newBuilder()
+                        .setTransactionType(NexusChainOuterClass.TransactionType.VOTE)
+                        .setPayload(ByteString.copyFrom(markerPayload))
                         .build());
             }
             peerServer.broadcast(msg.build());
