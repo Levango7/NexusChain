@@ -8,6 +8,7 @@ import org.nexus.core.ChainHeadProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 
 import java.util.Map;
+import org.springframework.stereotype.Component;
 
 /**
  * 最终性视图指标（PLAN-045）：把 {@code GET /consensus/finality}（PLAN-044）的
@@ -41,6 +42,7 @@ import java.util.Map;
  *
  * @since 2.77.0
  */
+@Component
 public class FinalityMetrics implements MeterBinder {
 
     /** 快照缓存最长新鲜度（毫秒）：单次抓取内多个 Gauge 共享一次计算。 */
