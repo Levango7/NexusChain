@@ -32,7 +32,10 @@ import java.util.Map;
  *       执行结果不可判定 → EXECUTION_UNKNOWN（均禁止自动重试）。
  *       <b>第一腿同样适用该词表</b>：异常/降级/未携带「明确未动账」码
  *       （{@link SigningResponses#declaresNotExecuted(Integer)}）的响应一律
- *       EXECUTION_UNKNOWN，只有契约确立的未动账码（5000/4000/4030）才 FAILED。</li>
+ *       EXECUTION_UNKNOWN，只有契约确立的未动账码（5000/4000/4030）才 FAILED；</li>
+ *   <li><b>第一腿结果不明必须落链接</b>：写一行终态 EXECUTION_UNKNOWN（approvalId
+ *       为空，V110）堵住同一 requestKey 的再次发起——重试在链接表顶部被短路返回，
+ *       不会再次调用 signTransfer。<b>确定未动账</b>不落行，保持可安全重试。</li>
  * </ol>
  *
  * <h3>为什么状态机要区分"未执行/已执行但未知"</h3>
@@ -114,19 +117,21 @@ public class SigningApprovalExecutionService {
             response = signingClient.signTransfer(fromPubkey, toPubkeyHash, amount);
         } catch (RuntimeException e) {
             // 结果不明：异常可能发生在广播之后（如读超时），不得当「确定未动账」FAILED 重放。
-            // 与第二腿 executeApproved 的异常分支同范式——停结果不明，交人工核对。
-            log.error("signTransfer 抛异常（结果不明，可能已广播，禁止自动重试）: requestKey={}, error={}",
-                    requestKey, e.getMessage(), e);
-            return new SigningOutcome(Status.EXECUTION_UNKNOWN, null, null,
-                    "signTransfer outcome unknown: " + e.getMessage());
+            // 与第二腿 executeApproved 的异常分支同范式——停结果不明，交人工核对；
+            // 同时落阻塞链接，阻止同一 requestKey 的再次发起（资金安全不变量见类注释）。
+            String reason = "signTransfer outcome unknown: " + e.getMessage();
+            log.error("signTransfer 抛异常（结果不明，可能已广播，禁止自动重试）: "
+                    + "requestKey={}, error={}", requestKey, e.getMessage(), e);
+            return unknownFirstLeg(requestKey, requestType, fromPubkey, toPubkeyHash, amount,
+                    currency, reason);
         }
         if (response == null) {
             // 降级（fallback 闸门返回 null）：信封未携带契约确立的未动账码——
             // 5001/未定义码/熔断打开/无响应体皆可能，结果不明，禁止当未动账 FAILED。
-            // 与第二腿 executeApproved 的 null 分支同范式。
+            String reason = "signTransfer outcome unknown: signing service degraded";
             log.error("signTransfer 降级（结果不明，禁止自动重试）: requestKey={}", requestKey);
-            return new SigningOutcome(Status.EXECUTION_UNKNOWN, null, null,
-                    "signTransfer outcome unknown: signing service degraded");
+            return unknownFirstLeg(requestKey, requestType, fromPubkey, toPubkeyHash, amount,
+                    currency, reason);
         }
 
         SigningResponses.Outcome outcome = SigningResponses.classify(response);
@@ -167,8 +172,47 @@ public class SigningApprovalExecutionService {
         }
         log.error("signTransfer 结果不明（不当未动账，禁止自动重试）: requestKey={}, statusCode={}, message={}",
                 requestKey, code, outcome.message());
-        return new SigningOutcome(Status.EXECUTION_UNKNOWN, null, null,
-                outcome.message() == null ? "signTransfer outcome unknown" : outcome.message());
+        String reason = "signTransfer outcome unknown: statusCode=" + code
+                + (outcome.message() == null ? "" : ", message=" + outcome.message());
+        return unknownFirstLeg(requestKey, requestType, fromPubkey, toPubkeyHash, amount,
+                currency, reason);
+    }
+
+    /**
+     * 首腿（直接签名）结果不明：落一条<b>终态 EXECUTION_UNKNOWN</b> 链接（approvalId 为空），
+     * 以 {@code request_key} 唯一键堵住同一 requestKey 的<b>再次发起签名</b>。
+     *
+     * <p>为什么必须落：阻塞重试。请求方重试（同一 requestKey 再次调用本类，或域内
+     * reconciler 的 {@code refresh}）必然先命中这行终态链接并原样返回 EXECUTION_UNKNOWN——
+     * 若首次签名其实已广播，重试就是二次广播双花。</p>
+     *
+     * <p>approvalId 为空是合法状态（V110）：首腿是直接签名路径，信封里本就没有
+     * approvalId；该行<b>不对应任何审批</b>，只是"这里发生过一次签名尝试、结果不明"的
+     * 闸口。终态链接在 {@code advance()} 顶部即被短路，不会被查询审批状态。</p>
+     *
+     * <p>并发同 key：另一路已先落库时以既有链接为准（同 2001 分支范式）。此时本路
+     * 多出来的签名请求已成事实，链接状态以后落库者为准。</p>
+     */
+    private SigningOutcome unknownFirstLeg(String requestKey, String requestType, String fromPubkey,
+                                           String toPubkeyHash, BigDecimal amount, String currency,
+                                           String reason) {
+        ApprovalExecutionLink link = newLink(requestKey, requestType, null,
+                fromPubkey, toPubkeyHash, amount, currency);
+        link.setStatus(Status.EXECUTION_UNKNOWN);
+        link.setLastError(truncate(reason));
+        try {
+            ApprovalExecutionLink persisted = repository.save(link);
+            log.error("首腿结果不明，已落 EXECUTION_UNKNOWN 阻塞链接（禁止再次签名）: "
+                    + "requestKey={}, reason={}", requestKey, reason);
+            return outcome(persisted);
+        } catch (DataIntegrityViolationException race) {
+            log.warn("首腿结果不明，链接已被同 key 占用: requestKey={}", requestKey);
+            ApprovalExecutionLink winner = repository.findByRequestKey(requestKey).orElse(null);
+            if (winner == null) {
+                throw race;
+            }
+            return outcome(winner);
+        }
     }
 
     /**

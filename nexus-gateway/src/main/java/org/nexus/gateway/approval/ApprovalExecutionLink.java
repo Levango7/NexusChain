@@ -30,6 +30,9 @@ import java.time.LocalDateTime;
  *   <li>一旦发起过执行但结果不明（超时/降级/5001），状态停在 EXECUTING 或转为
  *       EXECUTION_UNKNOWN，<b>永不自动重试</b>——签名服务会把超时的 EXECUTING 回退成
  *       APPROVED，自动重试存在二次打款窗口；</li>
+ *   <li>首腿（直接签名）结果不明同样落一行终态 EXECUTION_UNKNOWN（approvalId 为空），
+ *       用唯一键堵住同一 requestKey 的再次发起——见 {@link SigningApprovalExecutionService}
+ *       首腿词表；**确定未动账**（失败码 5000/4000/4030）不落行，保持可安全重试；</li>
  *   <li>{@code txHash} 只在拿到确定哈希时写入，任何路径都不清空。</li>
  * </ul>
  */
@@ -78,8 +81,14 @@ public class ApprovalExecutionLink {
     @Column(name = "request_type", nullable = false, length = 32)
     private String requestType;
 
-    /** signing-service 的审批请求 ID。 */
-    @Column(name = "approval_id", nullable = false, length = 64)
+    /**
+     * signing-service 的审批请求 ID。
+     *
+     * <p><b>可为 null</b>（V110）：首腿（直接签名）结果不明时落一行终态
+     * {@link Status#EXECUTION_UNKNOWN} 链接，仅作为同一 requestKey 的阻塞闸口，
+     * 不对应任何审批请求。此类行一律为终态，任何轮询都不会据此查询审批状态。</p>
+     */
+    @Column(name = "approval_id", nullable = true, length = 64)
     private String approvalId;
 
     @Column(name = "from_pubkey", length = 512)
