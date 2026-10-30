@@ -427,7 +427,13 @@ public class FinalityVoteBroadcaster {
                         antiEntropyPagingGraceMs);
                 if (pagingRoundIssued
                         && (markerSaysExhausted
-                        || (graceElapsed && peerExhaustedAtCursor))) {
+                        || (graceElapsed && peerExhaustedAtCursor
+                        // PLAN-057 第 15 处（第 13 轮实测）：legacy 宽限期终止
+                        // 必须同样累计夕到 MARKERLESS_GRACE_TICKS_NEEDED 个 tick 才可俥用。
+                        // 否则：重启后前几轮若请求/响应丢失（连接尚未建穔），会被误判为
+                        // “对端无货”而提前终止，整条爬升退化成 margin——第五轮实测
+                        // from=0 两个 tick 无响应即终止，最终只能靠 margin 搩小缺口。
+                        && markerlessGraceTicks.get() >= MARKERLESS_GRACE_TICKS_NEEDED))) {
                     log.info("Anti-entropy paging complete: no vote at or after epoch {}"
                             + " after {}ms grace; resuming margin-based gap repair"
                             + " (local max epoch={})",
