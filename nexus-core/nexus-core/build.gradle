@@ -125,6 +125,13 @@ test {
     systemProperties System.properties
     systemProperty "user.dir", workingDir
     systemProperty "file.encoding", "UTF-8"
+
+    // PLAN-062：BlockPersistenceRulesContractTest 读取仓库根的部署告警规则，
+    // 它不在 test 任务的默认输入里——不显式登记的话，改了规则文件本地 Gradle
+    // 会判定 up-to-date 而跳过该测试（"门禁写对了、却不知道输入变了"的同型）。
+    inputs.file("${rootDir}/deploy/k8s/50-prometheus-rules.yaml")
+        .withPathSensitivity(org.gradle.api.tasks.PathSensitivity.RELATIVE)
+        .withPropertyName("prometheusRules")
 }
 
 ext {
