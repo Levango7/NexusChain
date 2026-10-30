@@ -371,6 +371,52 @@ class WithdrawalBusinessApprovalLegTest {
     }
 
     @Test
+    @DisplayName("signing 以 200 信封回 5001（并发执行冲突）→ EXECUTED_UNVERIFIED，不落终态 FAILED")
+    void signing5001OnEnvelopePath_executedUnverified() {
+        WithdrawalRequestEntity e = seedApproved();
+        when(signingServiceClient.registerBusinessApproval(
+                anyString(), anyString(), any(), any(), any(), any(), anyString(), isNull()))
+                .thenReturn(registeredOk());
+        when(signingServiceClient.signTransferWithBusinessApproval(
+                PLATFORM_PUBKEY, TO_PUBKEY_HASH, AMOUNT, REQ_ID))
+                .thenReturn(envelope(5001, null,
+                        "approval execution claimed by another request"));
+
+        service.setBusinessApprovalEnabled(true);
+        service.setPlatformWalletPubkey(PLATFORM_PUBKEY);
+        service.executeApprovedWithdrawal(REQ_ID);
+
+        // 5001 = 另一路持执行权且可能正在广播；fail-closed 词表不认它是「确定未动账」，
+        // 终态 FAILED 会让运维以为钱没出去。此前 Map 路径只特例 null/5003，5001 会漏成 FAILED。
+        assertEquals(WithdrawalRequest.WithdrawalStatus.EXECUTED_UNVERIFIED, e.getStatus(),
+                "5001 must not become terminal FAILED on the envelope path");
+        assertTrue(e.getRejectionReason().contains("code=5001"), e.getRejectionReason());
+        verify(signingServiceClient, never()).signTransfer(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("signing 回未知码（5999）→ EXECUTED_UNVERIFIED：白名单之外一律不得乐观落 FAILED")
+    void signingUnknownCodeOnEnvelopePath_executedUnverified() {
+        WithdrawalRequestEntity e = seedApproved();
+        when(signingServiceClient.registerBusinessApproval(
+                anyString(), anyString(), any(), any(), any(), any(), anyString(), isNull()))
+                .thenReturn(registeredOk());
+        when(signingServiceClient.signTransferWithBusinessApproval(
+                PLATFORM_PUBKEY, TO_PUBKEY_HASH, AMOUNT, REQ_ID))
+                .thenReturn(envelope(5999, null, "some future signing failure"));
+
+        service.setBusinessApprovalEnabled(true);
+        service.setPlatformWalletPubkey(PLATFORM_PUBKEY);
+        service.executeApprovedWithdrawal(REQ_ID);
+
+        // 未来新增码的语义未被契约确立 ⇒ 结果不明（与异常腿同一判据），禁止当未动账重放。
+        assertEquals(WithdrawalRequest.WithdrawalStatus.EXECUTED_UNVERIFIED, e.getStatus(),
+                "codes outside the not-executed vocabulary must stay EXECUTED_UNVERIFIED");
+        assertTrue(e.getRejectionReason().contains("code=5999"), e.getRejectionReason());
+        verify(signingServiceClient, never()).signTransfer(any(), any(), any());
+    }
+
+    @Test
     @DisplayName("携凭据签名抛异常 → EXECUTED_UNVERIFIED 保留人工核对语义")
     void signCallThrows_executedUnverified() {
         WithdrawalRequestEntity e = seedApproved();
