@@ -51,7 +51,7 @@ class AbstainRiskMetricsTest {
         ReflectionTestUtils.setField(manager, "rule", rule);
         ReflectionTestUtils.setField(manager, "merkleRule", merkleRule);
 
-        metrics = new AbstainRiskMetrics(manager);
+        metrics = new AbstainRiskMetrics(manager, 120_000L);
         registry = new SimpleMeterRegistry();
         metrics.bindTo(registry);
     }

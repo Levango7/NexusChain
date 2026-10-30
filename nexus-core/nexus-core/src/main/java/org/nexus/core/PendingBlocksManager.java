@@ -100,6 +100,16 @@ public class PendingBlocksManager {
     private final java.util.concurrent.ConcurrentHashMap<Long, Integer> unknownProposerDeferCount =
             new java.util.concurrent.ConcurrentHashMap<>();
 
+    /**
+     * 同一高度的最后一次 unknown-proposer defer 时刷（PLAN-053）。
+     *
+     * <p>为什么要它：{@code unknownProposerDeferCount} 只增不减，
+     * "启权风险”因此是本进程生命周期语义。PLAN-052 的口径限制已如实登记：
+     * "当前正在启杀" 需要知道这个高度还在不在继续被拒。</p>
+     */
+    private final java.util.concurrent.ConcurrentHashMap<Long, Long> unknownProposerDeferLastNanos =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
     /** 连续 unknown-proposer 挂起升级为 ERROR 的阈值（同一高度）。 */
     private static final int ABSTAIN_DEFER_THRESHOLD = 5;
 
@@ -120,6 +130,17 @@ public class PendingBlocksManager {
     /** defer 计数的升级阈值（与告警/指标同源，避免两处魔数漂移）。 */
     public static int abstainDeferThreshold() {
         return ABSTAIN_DEFER_THRESHOLD;
+    }
+
+    /**
+     * 各高度最后一次 defer 的时间戳快照（{@link System#nanoTime()} 口径，PLAN-053）。
+     *
+     * <p>返回**副本**；未被 defer 过的高度不出现在表中。
+     * 话义：有值 = "本进程启动以来该高度自少被 defer 过一次"。</p>
+     */
+    public java.util.Map<Long, Long> unknownProposerDeferLastNanosSnapshot() {
+        return java.util.Collections.unmodifiableMap(
+                new java.util.LinkedHashMap<>(unknownProposerDeferLastNanos));
     }
 
     /**
@@ -191,6 +212,7 @@ public class PendingBlocksManager {
                         && res.getMessage().startsWith("unknown proposer")) {
                     // PLAN-051：unknown-proposer 挂起的连续计数与升级（观测，不改 defer 语义）
                     int deferCount = unknownProposerDeferCount.merge(b.nHeight, 1, Integer::sum);
+        unknownProposerDeferLastNanos.put(b.nHeight, System.nanoTime());
                     if (deferCount >= ABSTAIN_DEFER_THRESHOLD) {
                         logger.error("PendingBlocks: {}; DEFERRED {} times at height={} "
                                         + "(abstain-risk: this node may have stopped voting — "
