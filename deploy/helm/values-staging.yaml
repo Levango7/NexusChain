@@ -149,12 +149,13 @@ nexus-wallet-service:
   pdb:
     enabled: true
     minAvailable: 1
-  # A2（ADR-036 §2.2）：业务审批单笔豁免凭据——staging 观察期开启（2026-10-29）。
-  # 开启后 wallet 提现改走"登记制 + signing 一次性消费凭据"（代码 #309→212c1de8，
-  # flag 默认关）。**仅 staging**：prod 开启另行走环境变量评审。回滚 = 删 extraEnv
-  # 重部署，零迁移、零数据库变更。
-  extraEnv:
-    NEXUS_SIGNING_BUSINESS_APPROVAL_ENABLED: "true"
+  # A2（ADR-036 §2.2）：业务审批单笔豁免凭据——**当前关闭**（2026-10-31，创始人指示）。
+  # 为什么关：开关自 2026-10-29 开启，但 staging 从未下发 NEX_WALLET_PLATFORM_PUBKEY，
+  # A2 提现腿会在执行前 fail-closed 拒绝（每笔都失败）。该公钥须由部署方从 signing
+  # 平台热钱包 keystore 导出（POST /api/v1/signing/keystoreToPubkey）后下发，值不入仓。
+  # 回滚即本条：删 extraEnv 重部署，零迁移、零数据库变更。
+  # 重开步骤：extraEnv 同时下发 NEX_WALLET_PLATFORM_PUBKEY 与
+  # NEXUS_SIGNING_BUSINESS_APPROVAL_ENABLED: "true"（口径见板 20261031-0310）。
 
 # -- 2026-10-19：区块浏览器（k8s/Helm 双路径补齐；前端为静态托管 + 只读查询，
 #    资源需求低于 Java 栈）
