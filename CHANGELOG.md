@@ -7201,15 +7201,23 @@ zk:
 
 
 ### ShedLock 守卫扩到全仓——gateway 的 29 处调度方法此前在门禁外（PLAN-059）
-### 
-### PLAN-056 的三道门禁（workflow / 脚本 / JUnit）都只覆盖 `nexus-bridge`，
-### 而全仓实拦共 33 处 `@SchedulerLock`（bridge 4 + gateway 29）⇒ gateway 的 29 处从未被任何门禁看过。新写的 primitive 返回调度方法在 gateway 不会红，正是 PLAN-055 “从未执行” 缺陷的温床。
-### 
-### - **脚本**（`scripts/security/check-shedlock-eligibility.py`）：`--path` 缺省改为仓库根；跳过 `*/src/test/*` 源树；新增 `strip_comments()` 过滤注释里的伪注解（javadoc 里写 `@SchedulerLock(...)` 曾被误报成构造器“方法”）；
-### - **workflow**（`schedule-contract.yml`）：两处调用改为 `--path .`，头注释补记覆盖面与原因；
-### - **判据一字未改**（primitive ⇒ FAIL，void/包装 ⇒ PASS），只改扮哪些文件；
-### - **验证**：全仓扮 32 处（原 33 中的 1 处是注释伪注解，已正确滤掉）全部 PASS；**反向对照**——在 gateway 注入 `@SchedulerLock public int probe()`，门禁 FAIL（exit=1）并带文件行号；移除后恢复 exit=0。扩面前同一探针在 `--path nexus-bridge` 下不会被看到；
-### - **零生产代码影响**：未摡及任何被守卫的类。
-### 
-### 方法论（同型第 5 例）：PLAN-038 Bean 重复 → PLAN-055 ShedLock 签名 → PLAN-058 @Component 缺失 → **PLAN-059 门禁覆盖面只覆盖一个模块**。前几条是“代码没接线”，这一条是“守卫本身没接线”。可复用问句：这道门禁**实际扮过**的范围和它**名义守卫**的范围是同一个吗？要用注入探针验证，而不是读调用参数。
-### 
+
+PLAN-056 的三道门禁（workflow / 脚本 / JUnit）都只覆盖 `nexus-bridge`，而全仓实扫共 33 处 `@SchedulerLock`（bridge 4 + gateway 29）⇒ gateway 的 29 处从未被任何门禁看过。新写的 primitive 返回调度方法在 gateway 不会红，正是 PLAN-055 “从未执行” 缺陷的温床。
+
+- **脚本**（`scripts/security/check-shedlock-eligibility.py`）：`--path` 缺省改为仓库根；跳过 `*/src/test/*` 源树；新增 `strip_comments()` 过滤注释里的伪注解（javadoc 里写 `@SchedulerLock(...)` 曾被误报成构造器“方法”）；
+- **workflow**（`schedule-contract.yml`）：两处调用改为 `--path .`，头注释补记覆盖面与原因；
+- **判据一字未改**（primitive ⇒ FAIL，void/包装 ⇒ PASS），只改扫哪些文件；
+- **验证**：全仓扫 32 处（原 33 中的 1 处是注释伪注解，已正确滤掉）全部 PASS；**反向对照**——在 gateway 注入 `@SchedulerLock public int probe()`，门禁 FAIL（exit=1）并带文件行号；移除后恢复 exit=0。扩面前同一探针在 `--path nexus-bridge` 下不会被看到；
+- **零生产代码影响**：未触及任何被守卫的类。
+
+方法论（同型第 5 例）：PLAN-038 Bean 重复 → PLAN-055 ShedLock 签名 → PLAN-058 @Component 缺失 → **PLAN-059 门禁覆盖面只覆盖一个模块**。前几条是“代码没接线”，这一条是“守卫本身没接线”。可复用问句：这道门禁**实际扫过**的范围和它**名义守卫**的范围是同一个吗？要用注入探针验证，而不是读调用参数。
+
+### 指标名契约门禁——告警规则引用的名字必须与代码注册的名字一致（PLAN-062）
+
+`BlockPersistenceMetricsTest` 锁指标**值**、`WiringAuditTest` 锁**注册路径**，都没问过一件事：`deploy/k8s/50-prometheus-rules.yaml` 的 expr 引用的名字，和代码注册出来的名字是不是同一个。任一端写错/改名，告警就永远不会触发，而现有测试全绿——PLAN-058 同型第 6 例。
+
+- 新增 `BlockPersistenceRulesContractTest`：绑定一次真 `SimpleMeterRegistry` 拿实际注册名，解析规则文件里 `nexuschain.block-persistence` 组的 `expr`，双向断言（规则→代码：引用名必须已注册；代码→规则：每个注册项要么被告警消费，要么进白名单登记用途）；
+- 顺带钉下现状：注册 10 个、expr 消费 5 个（两个 counter + memory/database pending + readable）、5 个诊断 Gauge 白名单化（`last_failure_height/_age_seconds`、`outbox_enabled`、`oldest_pending_age_seconds`、`max_attempts`）；
+- `nexus-core` 的 `test` 任务登记 `inputs.file(<root>/deploy/k8s/50-prometheus-rules.yaml)`——否则改了规则文件本地判定 up-to-date 跳过该测试；
+- **验证**：基线 2 测试全绿 + 绑定自检 10 个；反向对照 A（规则名注入 `_TYPO`）两个测试同红；反向对照 B（代码侧改名）代码→规则方向红；探针已还原；
+- 未真起应用：本机 PostgreSQL 的 forked backend 首次连接即 `0xC0000142` 崩溃（与仓库无关，本轮如实记录，不得宣称已验证过抓取端）。
