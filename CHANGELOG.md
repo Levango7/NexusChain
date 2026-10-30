@@ -7221,3 +7221,13 @@ PLAN-056 的三道门禁（workflow / 脚本 / JUnit）都只覆盖 `nexus-bridg
 - `nexus-core` 的 `test` 任务登记 `inputs.file(<root>/deploy/k8s/50-prometheus-rules.yaml)`——否则改了规则文件本地判定 up-to-date 跳过该测试；
 - **验证**：基线 2 测试全绿 + 绑定自检 10 个；反向对照 A（规则名注入 `_TYPO`）两个测试同红；反向对照 B（代码侧改名）代码→规则方向红；探针已还原；
 - 未真起应用：本机 PostgreSQL 的 forked backend 首次连接即 `0xC0000142` 崩溃（与仓库无关，本轮如实记录，不得宣称已验证过抓取端）。
+
+### 最终性指标名契约门禁 + 规则解析去重（PLAN-063）
+
+PLAN-062 只覆盖 `nexus_block_*`；finality 侧有同一条缝的另一头——`FinalityMetricsRegistrationTest` 断"binder 带 @Component + 5 个名字在册"，但它不读规则文件，规则侧写错名字照样全绿。
+
+- 新增 `FinalityRulesContractTest`：覆盖引用 `nexus_finality_*` 的两个告警组（`nexuschain.finality` / `nexuschain.block-adoption`），双向断言；新增 `PrometheusRulesFixture` 收规则文件定位、组 expr 解析、counter `_total` 归一化，两个契约测试共用；
+- `BlockPersistenceRulesContractTest` 改为复用 fixture，删掉自带的那一份解析（两份必然漂移，而门禁自己变成不一致的源头）；
+- 顺带钉下现状：finality 侧注册 12 个（`FinalityMetrics` 7 + `AbstainRiskMetrics` 5），规则引用 3 个，其余 9 个进白名单；**白名单只强制分类、不裁决"该不该有告警"**（例如 `nexus_finality_lag` 的健康值不是 0，阈值属产品决策）；
+- **验证**：`--rerun-tasks` 实跑全绿（`gradle_exit=0`，22 个测试方法）；反向对照（把 `progress_percent` 改成 `progress_percentage`）两个测试同时红，还原后恢复绿；
+- 零生产代码改动。
