@@ -783,6 +783,69 @@ class FinalityVoteSyncPagingTest {
         }
     }
 
+    /**
+     * PLAN-057 第 15 处回归（第 20 例）：**"没收到响应"不等于"对端没货"**。
+     *
+     * <p>第十三轮实测：E 重启后首轮 from=0 连续两个 tick 未收到任何页/标记
+     * （P2P 连接尚在重建），legacy 宽限判据立刻判"对端无货"并终止爬升
+     * ⇒ 整条分页退化成 margin，只能补回 < max-votes 的小缺口。</p>
+     *
+     * <p>修法：legacy 宽限终止与老启发式一样，必须累计满
+     * {@value #MARKERLESS_GRACE_TICKS_NEEDED} 个无标记 tick 才可用；
+     * 若期间响应到达，则由 0x5C 标记精确推进。</p>
+     */
+    @Test
+    void noResponseYetMustNotBeReadAsPeerExhausted() throws Exception {
+        for (long epoch = 1; epoch <= 30; epoch++) {
+            gadgetA.submitVote(vote("v1", epoch, CP1));
+        }
+
+        FinalityVoteBroadcaster[] nodes = new FinalityVoteBroadcaster[2];
+        // 连接重建中：A→B 方向整条不通（页与标记都不到），
+        // 只有 B→A 的请求能到（否则 A 根本不会服务、也谈不上"重传"）。
+        nodes[0] = newNode(gadgetA, relayingPeer(p -> { }));
+        final List<byte[]> bRequests = new CopyOnWriteArrayList<>();
+        nodes[1] = newNode(gadgetB, relayingPeer(p -> {
+            if (FinalityVoteSyncCodec.isSyncPayload(p)) {
+                bRequests.add(p);
+            }
+            nodes[0].onVoteReceived(p);
+        }));
+        nodes[1].setAntiEntropyPagingEnabled(true);
+        nodes[1].setAntiEntropyMarginEpochs(0L);
+        nodes[1].setAntiEntropyPagingGraceMs(80L);
+
+        // 第 1 轮：从 0 起；对端无响应（模拟连接重建）。
+        nodes[1].scheduledVoteAntiEntropy();
+        assertEquals(0L, lastCursorFrom(bRequests), "首轮应从 0 起");
+        // 第 2 轮（第二个宽限 tick）：仍不得终止——第二个请求必须是**原地重传的
+        // 游标请求**（cursor=true, from=0）。若提前终止，冷却期会改发 margin 请求
+        // （cursor=false），第二条约为此形态。
+        Thread.sleep(120);
+        nodes[1].scheduledVoteAntiEntropy();
+        StringBuilder dbg = new StringBuilder("REQS: ");
+        for (byte[] r : bRequests) {
+            FinalityVoteSyncCodec.SyncRequest q = FinalityVoteSyncCodec.decode(r);
+            dbg.append(q == null ? "null" : ("[from=" + q.fromEpoch() + " cursor=" + q.cursor() + "]")).append(" ");
+        }
+        System.out.println(dbg);
+        assertTrue(bRequests.size() >= 2, "应已发出第二个请求，实际 " + bRequests.size());
+        FinalityVoteSyncCodec.SyncRequest second =
+                FinalityVoteSyncCodec.decode(bRequests.get(1));
+        assertNotNull(second, "第二个请求必须可解码");
+        assertTrue(second.cursor(),
+                "第 15 处：第二个请求必须仍是游标请求（原地重传），实际 = " + second);
+        assertEquals(0L, second.fromEpoch(),
+                "第 15 处：第二个请求必须仍从 0 起（未终止 ⇒ 不换起点）");
+
+        // 第 3 轮起：才允许 legacy 宽限终止（老对端兼容仍在）。
+        for (int i = 0; i < 4; i++) {
+            Thread.sleep(120);
+            nodes[1].scheduledVoteAntiEntropy();
+        }
+    }
+
+
     // ---------- helpers ----------
 
     /**
