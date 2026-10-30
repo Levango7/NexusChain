@@ -686,20 +686,16 @@ class FinalityVoteSyncPagingTest {
     }
 
     /**
-     * PLAN-057 第 10 处回归（第 16 例）：**响应页丢失时老启发式不得首个宽限 tick 就拽走游标**。
+     * PLAN-057 第 10 处回归（第 16 例）：<b>老对端（不发标记）的启发式回退仍需可用</b>。
      *
-     * <p>第七轮测试床实证：E 刚重启（markerCapable=false），第一轮 from=0 的
-     * 响应页在 block-sync 高峰里丢失；老启发式在 graceElapsed 一成立（第 3 个 tick，
-     * ≈10 s 时）就按 {@code lastResponded+1} 把游标从 0 拽到 184 ⇒ 68..135 中段
-     * 从此永远不再被请求（实测漏 123 票）。</p>
-     *
-     * <p>修法：老启发式必须攒够 3 个"无标记且宽限已过"的 tick 才启用。
-     * 本测试证明：连续两次 grace tick 时游标不动（重传 in-flight），
-     * 第三次才按老启发式推进（对老对端的兼容不丢）。</p>
+     * <p>第 13 处给启发式加了"本轮必须收到页级别量（>= maxVotes/2）"门榢，
+     * 因此本例的头材必须模拟“对端回了一页大约 N 票、但没标记”——
+     * 老节点不识 cursor 键，按旧路径服务（大约 N 票）。</p>
      */
     @Test
-    void heuristicFallbackMustWaitForMarkerlessGraceTicks() throws Exception {
-        for (long epoch = 1; epoch <= 3; epoch++) {
+    void heuristicFallbackStillServesLegacyPeerWithPageSizedBatch() throws Exception {
+        // A 有 150 票（远大于 maxVotes/2 = 100）。
+        for (long epoch = 1; epoch <= 150; epoch++) {
             gadgetA.submitVote(vote("v1", epoch, CP1));
         }
 
@@ -707,7 +703,7 @@ class FinalityVoteSyncPagingTest {
         final List<byte[]> heldMarkers = new CopyOnWriteArrayList<>();
         nodes[0] = newNode(gadgetA, relayingPeer(p -> {
             if (FinalityVoteSyncCodec.isResponsePayload(p)) {
-                heldMarkers.add(p);   // 扣住标记：模拟页/标记在高峰里丢、票稍后到
+                heldMarkers.add(p);   // 老对端：只回页、不回标记
                 return;
             }
             nodes[1].onVoteReceived(p);
@@ -720,36 +716,74 @@ class FinalityVoteSyncPagingTest {
             nodes[0].onVoteReceived(p);
         }));
         nodes[1].setAntiEntropyPagingEnabled(true);
+        nodes[1].setAntiEntropyMarginEpochs(0L);
         nodes[1].setAntiEntropyPagingGraceMs(80L);
 
-        // 第 1 轮：from=0，A 回 1..3（标记被扣住）。
+        // 第 1 轮：from=0，A 回 1..67（201 票大小的页）——超过 maxVotes/2。
         nodes[1].scheduledVoteAntiEntropy();
-        assertEquals(3, allVotes(storeB).size(), "第一轮的响应票仍应到来");
-
-        // tick 2-3（前两个"无标记宽限"tick）：游标必须仍是 0，重传已在路上。
+        // 前两个"无标记宽限 tick"：游标必须仍在 0（重传在途）。
         for (int i = 0; i < 2; i++) {
             Thread.sleep(120);
             nodes[1].scheduledVoteAntiEntropy();
-            long from = bRequests.stream()
-                    .map(FinalityVoteSyncCodec::decode)
-                    .filter(FinalityVoteSyncCodec.SyncRequest::cursor)
-                    .mapToLong(FinalityVoteSyncCodec.SyncRequest::fromEpoch)
-                    .reduce((a, b) -> b).orElse(-1L);
-            assertEquals(0L, from,
-                    "只过了 " + (i + 1) + " 个无标记宽限 tick，不得拽走游标（第 10 处）");
+            long from = lastCursorFrom(bRequests);
+            assertEquals(0L, from, "还没累计到 3 个无标记 tick，不得推进");
         }
-
-        // tick 4（第三个）：老启发式才启用，按 lastResponded+1 推进（对老对端的兼容）。
+        // 第三次后：老启发式必须生效（否则老对穲节点永远补不上票）。
         Thread.sleep(120);
         nodes[1].scheduledVoteAntiEntropy();
-        long from = bRequests.stream()
-                .map(FinalityVoteSyncCodec::decode)
-                .filter(FinalityVoteSyncCodec.SyncRequest::cursor)
-                .mapToLong(FinalityVoteSyncCodec.SyncRequest::fromEpoch)
-                .reduce((a, b) -> b).orElse(-1L);
-        assertEquals(4L, from,
-                "连续 3 个无标记宽限 tick 后，老启发式必须仍能为老对端推进");
+        long from = lastCursorFrom(bRequests);
+        assertTrue(from > 0L,
+                "老对端（页级批量、无标记）必须在 3 个无标记 tick 后仍能推进，实际 from=" + from);
     }
+
+    /**
+     * PLAN-057 第 13 处回归（第 18 例）：<b>本轮什么都没收到时，老启发式不得拉走游标</b>。
+     *
+     * <p>第五轮/第十轮实测：重启后 P2P 连接未建好，前几轮只收到在线涓流
+     * （2~6 票）、一页都没到；老启发式却按 {@code lastResponded+1} 把游标从 0
+     * 拉到 147，1..146 整段跳过（空漏 30 多票）。</p>
+     *
+     * <p>不变式：无页级别量 ⇒ 游标必须坐在原地（重传），不得前进。</p>
+     */
+    @Test
+    void noPageReceivedMustNeverDragTheCursor() throws Exception {
+        for (long epoch = 1; epoch <= 30; epoch++) {
+            gadgetA.submitVote(vote("v1", epoch, CP1));
+        }
+
+        FinalityVoteBroadcaster[] nodes = new FinalityVoteBroadcaster[2];
+        nodes[0] = newNode(gadgetA, relayingPeer(p -> {
+            if (FinalityVoteSyncCodec.isResponsePayload(p)) {
+                return;   // 连接尚未建好：页与标记都不投递
+            }
+            nodes[1].onVoteReceived(p);
+        }));
+        final List<byte[]> bRequests = new CopyOnWriteArrayList<>();
+        nodes[1] = newNode(gadgetB, relayingPeer(p -> {
+            if (FinalityVoteSyncCodec.isSyncPayload(p)) {
+                bRequests.add(p);
+            }
+            nodes[0].onVoteReceived(p);
+        }));
+        nodes[1].setAntiEntropyPagingEnabled(true);
+        nodes[1].setAntiEntropyMarginEpochs(200L);
+        nodes[1].setAntiEntropyPagingGraceMs(80L);
+
+        // 第 1 轮：B 空库 ⇒ 首轮从地板 0 起。
+        nodes[1].scheduledVoteAntiEntropy();
+        assertEquals(0L, lastCursorFrom(bRequests), "首轮应从地板 0 起");
+
+        // 模拟在线涓流：链头附近零星票（远小于 maxVotes/2）。
+        for (int round = 2; round <= 5; round++) {
+            nodes[1].onVoteReceived(FinalityVoteCodec.encode(vote("v1", 200 + round, CP1)));
+            Thread.sleep(120);
+            nodes[1].scheduledVoteAntiEntropy();
+            assertEquals(0L, lastCursorFrom(bRequests),
+                "第 13 处：未收到页级批量时游标必须留在原地（第 " + round + " 轮）");
+        }
+    }
+
+    // ---------- helpers ----------
 
     /**
      * PLAN-057 第 11 处回归（第 17 例）：**页满时必须原地重问，不能按 epoch 跳过**。
@@ -844,6 +878,60 @@ class FinalityVoteSyncPagingTest {
         return store.loadVoteObjectsSince(0).values().stream()
                 .flatMap(List::stream)
                 .toList();
+    }
+
+    /** \u6700\u540e\u4e00\u6761\u6e38\u6807\uff08cursor=true\uff09\u8bf7\u6c42\u7684 from\uff1b\u65e0\u5219 -1\u3002 */
+    /**
+     * PLAN-057 第 13 处回归（第 19 例）：<b>0x5C 响应标记必须与页同消息</b>。
+     *
+     * <p>第 9/10 轮实测豁山：页与标记曾是两条广播，可各走各的连接
+     * ⇒ "页到、标记没到" 结构上无法避免；请求方因无标记而走老启发式，
+     * 把游标从 0 拉到 147，1..146 整段跳过。</p>
+     *
+     * <p>本例直接抓 P2P 消息：响应必须只发<b>一条</b> Transactions，
+     * 且末条交星就是那个 0x5C 魔数的标记。</p>
+     */
+    @Test
+    void markerMustTravelInTheSameMessageAsThePage() {
+        for (long epoch = 1; epoch <= 3; epoch++) {
+            gadgetA.submitVote(vote("v1", epoch, CP1));
+        }
+
+        final List<NexusChainOuterClass.Transactions> msgs = new CopyOnWriteArrayList<>();
+        PeerServer peerServer = mock(PeerServer.class);
+        doAnswer(invocation -> {
+            Object arg = invocation.getArgument(0);
+            if (arg instanceof NexusChainOuterClass.Transactions txs) {
+                msgs.add(txs);
+            }
+            return null;
+        }).when(peerServer).broadcast(any());
+
+        FinalityVoteBroadcaster responder = new FinalityVoteBroadcaster(
+                gadgetA, event -> { }, peerServer);
+
+        responder.onVoteReceived(FinalityVoteSyncCodec.encode(0L, 3, true));
+
+        assertEquals(1, msgs.size(),
+                "第 13 处：页与响应标记必须同消息（只发 1 条），实际 " + msgs.size());
+        NexusChainOuterClass.Transactions msg = msgs.get(0);
+        assertEquals(4, msg.getTransactionsCount(), "3 票 + 1 标记");
+        byte[] last = msg.getTransactions(msg.getTransactionsCount() - 1).getPayload().toByteArray();
+        assertTrue(FinalityVoteSyncCodec.isResponsePayload(last),
+                "第 13 处：末条交星必须是 0x5C 响应标记");
+        FinalityVoteSyncCodec.SyncResponse marker = FinalityVoteSyncCodec.decodeResponse(last);
+        assertNotNull(marker);
+        assertEquals(3, marker.count(), "标记必须报实服务 3 票");
+    }
+
+    private static long lastCursorFrom(List<byte[]> requests) {
+        return requests.stream()
+                .map(FinalityVoteSyncCodec::decode)
+                .filter(java.util.Objects::nonNull)
+                .filter(FinalityVoteSyncCodec.SyncRequest::cursor)
+                .mapToLong(FinalityVoteSyncCodec.SyncRequest::fromEpoch)
+                .reduce((a, b) -> b)
+                .orElse(-1L);
     }
 
     private void injectRegistryIntoStaking(StakingService target, ValidatorRegistry targetRegistry) {
