@@ -14,6 +14,12 @@ primitive 返回 ⇒ FAIL（循环会死）；void / 包装类型 / 对象类型
 用法：
     check-shedlock-eligibility.py [--path <src-root>] [--json]
 
+覆盖面（PLAN-059）：缺省改为**仓库根**——PLAN-056 落地时只传了
+`nexus-bridge/src/main/java`，而全仓共 33 处 `@SchedulerLock`
+（bridge 4 + gateway 29），gateway 的 29 处从此在守卫之外：新增 primitive
+返回的调度方法在 gateway 不会被拦。默认跳过测试源树（`/src/test/`）——
+ShedLock 语义只对生产调度有意义，扫测试只会带来噪声与假阳性。
+
 退出码：0 = 全部通过；1 = 发现 primitive 返回（附文件/行号/方法名）。
 """
 
@@ -44,12 +50,42 @@ METHOD_RE = re.compile(
 )
 
 
+def strip_comments(line: str) -> str:
+    """去掉行内 `//` 与 `/* ... */`（单行场景）后的代码文本。
+
+    PLAN-059：门禁原先会把 javadoc 里的 `@SchedulerLock(lockAtMostFor = "PT30M")`
+    当成真注解，报出一条 `PASS: public BillingCycleScheduler()` 假阳性
+    （构造器签名被匹配成"方法"）。噪声本身不致命，但会让"扫出多少处"这个
+    数字失去意义，也使 `--json` 的 total 不可信。
+    """
+    idx = line.find("//")
+    if idx >= 0:
+        line = line[:idx]
+    start = line.find("/*")
+    if start >= 0:
+        end = line.find("*/", start + 2)
+        line = line[:start] + (line[end + 2:] if end >= 0 else "")
+    return line
+
+
 def scan_file(path: str) -> list[dict]:
+    # PLAN-059：跳过测试源树。测试里的 @SchedulerLock 不产生生产调度语义，
+    # 扫它只会噪声；注释/字符串里出现的伪注解另由 is_annotation 过滤。
+    parts = os.path.normpath(path).split(os.sep)
+    if "src" in parts:
+        k = parts.index("src")
+        if k + 1 < len(parts) and parts[k + 1] != "main":
+            return []
     with open(path, "r", encoding="utf-8", errors="replace") as handle:
         lines = handle.readlines()
     hits: list[dict] = []
     for idx, line in enumerate(lines):
         if not SCHEDULER_LOCK_RE.search(line):
+            continue
+        # PLAN-059：javadoc/注释里提到 `@SchedulerLock(...)` 不是注解。
+        # 判定：去掉行内注释与块注释内容后，@SchedulerLock 必须仍在该行文本里。
+        code = strip_comments(line)
+        if not SCHEDULER_LOCK_RE.search(code):
             continue
         # 向下找最近的方法签名（注解与声明之间可能有注释/换行）
         for jdx in range(idx + 1, min(idx + 12, len(lines))):
@@ -73,7 +109,8 @@ def scan_file(path: str) -> list[dict]:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--path", default="nexus-bridge/src/main/java")
+    ap.add_argument("--path", default=os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__)))))
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
 
