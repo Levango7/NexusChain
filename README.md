@@ -109,7 +109,7 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
 
 ### 区块浏览器（nexus-explorer）
 
-- **状态（2026-10-12 复核）：六个数据面全部真实接入，可容器化部署；仍未做链上实时订阅与图表可视化。**
+- **状态（2026-10-31 复核）：六个数据面全部真实接入，可容器化部署，K8s/Helm 双路径已落地；仍未做链上实时订阅与图表可视化。**
 - **已具备**：
   - 页面/路由 9 条，全部消费真实后端端点：区块列表与详情、交易列表与详情、地址（余额/交易数）、
     **合约列表与详情**（`/contracts`、`/contracts/:addr`）、**跨链交易追踪**（`/crosschain`，含状态筛选）、
@@ -119,11 +119,14 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
   - 测试与门禁：页面级测试 + 组件测试 + 构建产物校验（设计令牌注入/工具类生成）+ 对比度校验（WCAG AA）。
   - **部署形态**：`nexus-explorer/Dockerfile`（多阶段，单容器 = Express BFF 同源托管前端产物 + `/api/**`），
     已接入 dev/prod compose 与发布链（`release.yml` / `ci.yml` 镜像矩阵）。
+  - **K8s/Helm 双路径已落地**：`deploy/helm/charts/nexus-explorer/`（Chart + deployment/service/hpa/pdb + values.yaml）
+    与 `deploy/k8s/28-explorer.yml` 已同步存在；已纳入 `k8s-sync-check`（双路径渲染断言，`k8s-sync-check.yml:195`）、
+    `ci.yml`（`explorer-frontend` job）与 `release.yml`（镜像矩阵）。
 - **未具备（诚实声明）**：链上状态实时订阅（当前为 10s 轮询）、图表可视化、监控告警前端、
-  K8s/Helm 部署形态（`deploy/helm/charts/` 无 explorer 子 chart，`deploy/k8s/` 无静态清单——
-  两者须同步落地，否则 `k8s-sync-check` 会判定双路径漂移）、合约 `abi` 数据源（core 不返回，UI 显式说明）。
+  合约 `abi` 数据源（core 不返回，UI 显式说明）。
 - **历史**：2026-08-27 曾标注「MVP 骨架（约 40 个前端源文件）」；该口径在 2026-09-16 数据接入审查
-  与 2026-10-12 合约/跨链页补齐后均已过期，本段为最新口径。
+  与 2026-10-12 合约/跨链页补齐后均已过期。2026-10-31 复核时 K8s/Helm 双路径已落地，
+  据此更新「未具备」列表，本段为最新口径。
 
 ### MPC 多方签名（CGGMP21 门限 ECDSA；GG20 已退役 2026-10-08）
 
