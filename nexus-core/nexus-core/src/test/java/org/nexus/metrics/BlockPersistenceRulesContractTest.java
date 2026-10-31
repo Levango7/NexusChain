@@ -9,17 +9,11 @@ import org.nexus.db.BlockWriteStats;
 import org.nexus.db.StateDB;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.LinkedHashSet;
-import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -46,16 +40,13 @@ import static org.mockito.Mockito.when;
  * 对比两侧名字。改名/漏接任一方向，CI 直接红。</p>
  *
  * <p>与 {@code BlockPersistenceMetricsTest} 的分工：那个测"值对不对"，
- * 本测试测"名字接没接上"。</p>
+ * 本测试测"名字接没接上"；finality 侧的同型门禁见
+ * {@link FinalityRulesContractTest}，规则文件解析两者共用
+ * {@link PrometheusRulesFixture}。</p>
  */
 class BlockPersistenceRulesContractTest {
 
-    private static final String RULES_RELATIVE_PATH =
-            "deploy/k8s/50-prometheus-rules.yaml";
     private static final String RULE_GROUP = "nexuschain.block-persistence";
-
-    /** Micrometer 把 FunctionCounter 暴露为 {@code <name>_total}；Gauge 原样。 */
-    private static final String PROMETHEUS_COUNTER_SUFFIX = "_total";
 
     /**
      * 已注册但<b>没有</b>告警消费的指标白名单（诊断用 Gauge）。
@@ -106,7 +97,7 @@ class BlockPersistenceRulesContractTest {
     @Test
     @DisplayName("告警规则引用的每个 nexus_block_* 名字都必须在代码里注册")
     void everyRuleReferencedNameIsRegistered() throws IOException {
-        Set<String> referenced = normalizedRuleReferencedNames();
+        Set<String> referenced = PrometheusRulesFixture.normalizedMeterNames(RULE_GROUP);
 
         Set<String> unknown = new LinkedHashSet<>();
         for (String name : referenced) {
@@ -125,7 +116,7 @@ class BlockPersistenceRulesContractTest {
     @DisplayName("每个已注册指标要么被告警消费，要么在白名单里登记用途")
     void everyRegisteredNameIsAlertedOrDocumented() throws IOException {
         // 归一化到 registry 侧的名字：counter 在 Prometheus 侧带 _total，registry 里不带
-        Set<String> referenced = normalizedRuleReferencedNames();
+        Set<String> referenced = PrometheusRulesFixture.normalizedMeterNames(RULE_GROUP);
         assertEquals(5, referenced.size(),
                 "block-persistence 组的 expr 应引用 5 个指标（"
                         + "write_failures/state_update_timeouts/memory_pending/"
@@ -140,98 +131,5 @@ class BlockPersistenceRulesContractTest {
                         + "（新指标必须有意识地分类）：" + uncovered
                         + "\n  已注册: " + registeredNames
                         + "\n  告警引用: " + referenced);
-    }
-
-    /**
-     * 归一化到 registry 侧命名的规则引用集合。
-     *
-     * <p>Prometheus 把 FunctionCounter 暴露为 {@code <name>_total}，而
-     * {@link SimpleMeterRegistry} 里的 meter 名不带该后缀——两个方向都要先归一化，
-     * 否则"名字明明一样"也会对不上（本测试第一版就在这里虚报了）。</p>
-     */
-    private Set<String> normalizedRuleReferencedNames() throws IOException {
-        Set<String> normalized = new TreeSet<>();
-        for (String raw : ruleReferencedNames()) {
-            if (raw.endsWith(PROMETHEUS_COUNTER_SUFFIX)) {
-                normalized.add(raw.substring(
-                        0, raw.length() - PROMETHEUS_COUNTER_SUFFIX.length()));
-            } else {
-                normalized.add(raw);
-            }
-        }
-        return normalized;
-    }
-
-    /** 解析 block-persistence 组 expr 里引用的 nexus_* 指标名（Prometheus 侧原样）。 */
-    private Set<String> ruleReferencedNames() throws IOException {
-        Path rules = locateRulesFile();
-        assertNotNull(rules, "未找到 " + RULES_RELATIVE_PATH + "（仓库根定位失败）");
-
-        List<String> lines = Files.readAllLines(rules, StandardCharsets.UTF_8);
-        int start = -1;
-        for (int i = 0; i < lines.size(); i++) {
-            if (lines.get(i).trim().equals("- name: " + RULE_GROUP)) {
-                start = i;
-                break;
-            }
-        }
-        assertTrue(start >= 0, "规则文件里没有 " + RULE_GROUP + " 组：" + rules);
-
-        int end = lines.size();
-        for (int i = start + 1; i < lines.size(); i++) {
-            String line = lines.get(i);
-            // 组结束：下一个顶层告警组，或下一个章节注释
-            if (line.matches("^\\s{2}- name: \\S+.*")
-                    || line.startsWith("  # ----")) {
-                end = i;
-                break;
-            }
-        }
-
-        StringBuilder exprs = new StringBuilder();
-        boolean collecting = false;
-        for (int i = start; i < end; i++) {
-            String line = lines.get(i);
-            String trimmed = line.trim();
-            if (trimmed.startsWith("expr:")) {
-                String inline = trimmed.substring("expr:".length());
-                if ("|".equals(inline.trim()) || "|-".equals(inline.trim())) {
-                    collecting = true;          // 块标量：收集后续缩进行
-                    continue;
-                }
-                exprs.append(inline).append('\n');
-                continue;
-            }
-            if (collecting) {
-                // expr 块标量内的行都比 alert 项缩进更深；遇到同级/更浅的行即结束
-                if (!line.startsWith("        ")) {
-                    collecting = false;
-                } else {
-                    exprs.append(trimmed).append('\n');
-                }
-            }
-        }
-
-        Set<String> names = new TreeSet<>();
-        String text = exprs.toString();
-        java.util.regex.Matcher m =
-                java.util.regex.Pattern.compile("nexus_[a-zA-Z0-9_]+").matcher(text);
-        while (m.find()) {
-            names.add(m.group());
-        }
-        return names;
-    }
-
-    /** 从当前工作目录上溯，定位部署规则文件（多模块构建下 tests 运行目录可能是模块目录）。 */
-    private static Path locateRulesFile() {
-        Path dir = Paths.get("").toAbsolutePath();
-        for (int i = 0; i < 6 && dir != null; i++) {
-            Path candidate = dir.resolve(RULES_RELATIVE_PATH);
-            if (Files.isRegularFile(candidate)) {
-                return candidate;
-            }
-            dir = dir.getParent();
-        }
-        return null;
     }
 }

@@ -97,6 +97,29 @@ finality 的 12 个）。
 `F:\Agent\opencode\workspace\verify-block-metrics.ps1` 已备好（PLAN-058 同款
 模板），PG 恢复后可直接重跑，把 10 个指标逐个落到抓取端上。
 
+> 该限制只描述当轮环境。2026-10-31 换用 WSL2 内的 PostgreSQL 补验通过，
+> 见下节；原记录保留，不追改历史。
+
+### 2026-10-31 补验：换掉坏掉的 PG，不动应用
+
+原阻塞在本机 Windows PG 的 fork 路径（`0xC0000142`），绕开它即可：应用仍是
+Windows JDK 17 的 `org.nexus.Start`，只把 datasource 指向 WSL2 Ubuntu-24.04
+内的 PostgreSQL 16.15（`172.17.218.229:5432`，库 `nexuschain_vb`）。
+**同一物理机、跨 WSL2 内核边界，不是物理多机。**
+
+- 启动参数沿用 PLAN-058 模板，仅改 datasource 与 P2P 端口：19336——原 9236
+  落在 Windows Hyper-V/WSL 动态保留段 `9211-9310`，绑定会随机
+  `BindException: Address already in use`；
+- `GET /actuator/prometheus` 实测 22 个 `nexus_*`：block 侧 **10/10** 全在抓取端
+  （`outbox_readable=1.0`、`database_pending=0`、两个 counter=0、
+  `last_failure_height=-1`、`last_failure_age=NaN`、`max_attempts=NaN`）；
+  同一次抓取还看到 finality 侧 12/12（见 PLAN-063 §七）；
+- 因此"抓取端未验证"缺口关闭。**仍未验证**：告警是否按阈值触发（测试床没有
+  写失败/积压/停滞，只证明了名字与取值形态在线上）、物理多机与真实断网断电；
+- 复跑脚本 `F:\Agent\opencode\workspace\verify-block-metrics-wsl.ps1`（仓外）。
+  注意 WSL 发行版在无客户端连接后数秒自动关机、连带 PG 停止，复跑前需挂
+  一个常驻 `wsl ... sleep` 进程。
+
 ## 六、遗留
 
 - 本门禁只覆盖 `nexus_block_*` / `nexuschain.block-persistence` 一组；
