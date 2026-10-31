@@ -160,6 +160,31 @@ jobs:
           git fetch --depth=2 origin master
           python scripts/check-migration-version-ratchet.py --base FETCH_HEAD
 
+      # ============================================================
+      # 留言板签收门禁（2026-10-31 新增；口径见 docs/agent-board/README.md §7）
+      # ------------------------------------------------------------
+      # 背景（真实失效，2026-10-30）：一条 P1 复核结论 21:21 已产出，21:33 目标
+      # PR 被合并，中间**没有任何签收路径**——留言板只保证"写了"，不保证"被读过"。
+      # §2.2 又规定留言整篇不可变，所以状态不能靠回改 status 表达。
+      #
+      # 本门禁的做法：留言可选 `ack_required: true` + `expires: <ISO-8601>`，
+      # 签收 = 另一条**署名不同**的留言在 refs 里写 `- board: <id>`；
+      # P0/P1 逾期未签收 ⇒ CI 红（P2 只打印，避免一条知会卡死全仓合并）。
+      #
+      # 为什么挂在**本 job**（context `Code Hygiene (ratchet gate)`）而不是新 job：
+      # 新 context 必须先在 branch protection 里加勾才真正 required；未加勾的新
+      # context 对 required 判定完全无效，门禁就退化成"跑了但不挡"。挂已有 required
+      # job ⇒ 落地当天就有效，且无需任何人再动仓库设置。
+      #
+      # 先跑 --selftest（12 条合成样本，含"自己引用自己不算签收"“status=done 不再
+      # 计时""缺 expires"等边界），防止解析器坏掉后空判绿。
+      # 已知边界见 §7.4：门禁不产生通知，也不能替人签收。
+      # ============================================================
+      - name: 留言板签收门禁（ack_required 逾期即阻断）
+        run: |
+          python scripts/check-agent-board-inbox.py --selftest
+          python scripts/check-agent-board-inbox.py --summary "$GITHUB_STEP_SUMMARY"
+
   # ============================================================
   # Explorer 前端门禁（2026-09-16 审查新增）
   # ------------------------------------------------------------
