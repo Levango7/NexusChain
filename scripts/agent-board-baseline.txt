@@ -1,0 +1,8 @@
+# 留言板历史结构性缺口基线（scripts/check-agent-board-inbox.py）
+#
+# 这些条目是**门禁上线之前**已存在的留言缺项。按 §2.2「整篇不可变」，
+# 不能回头改别人投出的留言，所以先记账、只要求不再增长。
+# 基线只应收缩；补齐后运行 --update-baseline 重写。
+#
+# 记录格式：kind|id
+missing-field|20261030-0120-zcode-idempotency-key-draft
