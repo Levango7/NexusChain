@@ -45,9 +45,9 @@ bignumber.js@^9.0.0:
   integrity sha512-Ko0uX15oIUS7wJ3Rb30Fs6SkVbLmPBAKdlm7q9+ak9bbIeFf0MwuBsQV6z7+X768/cHsfg+WlysDWJcmthjsjQ==
 
 brace-expansion@^1.1.7:
-  version "1.1.20"
-  resolved "https://registry.npmjs.org/brace-expansion/-/brace-expansion-1.1.20.tgz#6e1f1179d50e3e4b3d8a76205dba0efd899210c2"
-  integrity sha512-5/qk29RyvatwgzNMrvGjkIhKYzpJ0OUnPK+9TU+zS/CMJqzmb+UD0irWu42JfpUvO636fxd8IstgiydZRM/76A==
+  version "1.1.21"
+  resolved "https://registry.npmjs.org/brace-expansion/-/brace-expansion-1.1.21.tgz#edf4fab5c64d051aea5a8def49aba1c7522279f3"
+  integrity sha512-9zeA+KLZNNzglF2TPKRQEDyx6Yby7daAkuy8MiPzpXPsYDWi/DRM8jmwUDxokQjYqBpv5DgPiwD4h4ZZSy1Ujw==
   dependencies:
     balanced-match "^1.0.0"
     concat-map "0.0.1"
@@ -133,9 +133,9 @@ es-set-tostringtag@^2.1.0:
     hasown "^2.0.2"
 
 follow-redirects@^1.15.4:
-  version "1.16.1"
-  resolved "https://registry.npmjs.org/follow-redirects/-/follow-redirects-1.16.1.tgz#6e0efa40a727fb369b98dab15883ec34787d675e"
-  integrity sha512-FNvFGzoMLWmE6Yj9spb/zjd7yiNCHiAW9/Tg9CXrQ8wuu32HtlJOwWO11OJafl5FfY3DxTdQ0vj42zU1kvv5jg==
+  version "1.16.2"
+  resolved "https://registry.npmjs.org/follow-redirects/-/follow-redirects-1.16.2.tgz#a233160dd1bc9b16cbbab43709e6adc7cc941c8c"
+  integrity sha512-/kVP2U8z596Ia0gwFrwyIeo74ta5aVmSeU1FfAUMAmcEP5EP7zydmag3SLiN64NaRKef3lxsq7i/g7ltJQDGow==
 
 form-data@^4.0.4:
   version "4.0.6"

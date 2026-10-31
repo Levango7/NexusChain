@@ -4,6 +4,26 @@
 
 ## [2.75.0] - 2026-10-26
 
+### 依赖安全：follow-redirects 1.16.1 → 1.16.2 / brace-expansion 1.1.20 → 1.1.21
+
+Trivy 文件系统扫描（必检）在 `cmd-monitor` 工具的两个锁文件里报 HIGH：
+`follow-redirects@1.16.1` 跨域重定向信息泄露，修复版 1.16.2。
+
+- `nexus-core/nexus-core/src/main/java/org/nexus/tools/cmd-monitor/package-lock.json`
+  与同目录 `yarn.lock` 同步抬版（axios 声明的 `^1.15.4` 范围本就允许）；
+  integrity / shasum 取自 npm registry 1.16.2 官方元数据，并用下载的 tarball
+  复算 SHA-512 核对一致；
+- 未改任何运行时代码，也未新增 ignore 条目（有可用修复就不豁免）；
+- `yarn.lock` 里 `glob@7` 的传递依赖 `brace-expansion` 1.1.20 → 1.1.21：
+  CVE-2026-102277（MEDIUM，crafted brace 模式 CPU DoS）；补丁线内抬版，
+  integrity 同样用 tarball 复算核对；
+- `minimatch@3.1.5`（同一条 `glob@7` 链）CVE-2026-118764（MEDIUM）**无 3.x
+  修复**——3.x 冻结在 3.1.5，修复版只有 11.0.1 大版本。该工具是运维脚本、
+  不随镜像发布，本次不跨大版本；在 PR 的 code-scanning 会话里登记接受理由
+  与跟进条件，不静默忽略；
+- 取证：PR #377 的 run 41206292794 → `Trivy Filesystem Scan + SBOM`
+  （job 124551921918）两处 HIGH，均指向 `follow-redirects`。
+
 ### 镜像扫描清理：guava / snappy HIGH（CVE-2026-102554 / -108106 / -93451）
 
 - **guava 33.4.8-jre → 33.7.2-jre**（root / `nexus-core` / `nexus-sdk` /
@@ -7221,3 +7241,15 @@ PLAN-056 的三道门禁（workflow / 脚本 / JUnit）都只覆盖 `nexus-bridg
 - `nexus-core` 的 `test` 任务登记 `inputs.file(<root>/deploy/k8s/50-prometheus-rules.yaml)`——否则改了规则文件本地判定 up-to-date 跳过该测试；
 - **验证**：基线 2 测试全绿 + 绑定自检 10 个；反向对照 A（规则名注入 `_TYPO`）两个测试同红；反向对照 B（代码侧改名）代码→规则方向红；探针已还原；
 - 未真起应用：本机 PostgreSQL 的 forked backend 首次连接即 `0xC0000142` 崩溃（与仓库无关，本轮如实记录，不得宣称已验证过抓取端）。
+- **2026-10-31 补验**：改用 WSL2 Ubuntu-24.04 内的 PostgreSQL 16.15（应用仍跑 Windows JDK 17，单物理机、跨 WSL2 内核边界，**非物理多机**）⇒ `/actuator/prometheus` 实测 10/10 在抓取端（`outbox_readable=1.0`、`database_pending=0`、两 counter=0、`last_failure_height=-1`、`last_failure_age=NaN`、`max_attempts=NaN`）；仍未验证告警按阈值触发与物理多机。
+
+### 最终性指标名契约门禁 + 规则解析去重（PLAN-063）
+
+PLAN-062 只覆盖 `nexus_block_*`；finality 侧有同一条缝的另一头——`FinalityMetricsRegistrationTest` 断"binder 带 @Component + 5 个名字在册"，但它不读规则文件，规则侧写错名字照样全绿。
+
+- 新增 `FinalityRulesContractTest`：覆盖引用 `nexus_finality_*` 的两个告警组（`nexuschain.finality` / `nexuschain.block-adoption`），双向断言；新增 `PrometheusRulesFixture` 收规则文件定位、组 expr 解析、counter `_total` 归一化，两个契约测试共用；
+- `BlockPersistenceRulesContractTest` 改为复用 fixture，删掉自带的那一份解析（两份必然漂移，而门禁自己变成不一致的源头）；
+- 顺带钉下现状：finality 侧注册 12 个（`FinalityMetrics` 7 + `AbstainRiskMetrics` 5），规则引用 3 个，其余 9 个进白名单；**白名单只强制分类、不裁决"该不该有告警"**（例如 `nexus_finality_lag` 的健康值不是 0，阈值属产品决策）；
+- **验证**：`--rerun-tasks` 实跑全绿（`gradle_exit=0`，22 个测试方法）；反向对照（把 `progress_percent` 改成 `progress_percentage`）两个测试同时红，还原后恢复绿；
+- **抓取端补验（2026-10-31）**：同一轮 `/actuator/prometheus` 里 finality 侧 12/12 全在（`enabled=1`、`finalized=1`、`current_epoch=28`、`latest_voted_epoch=26`、`progress_percent=100`、`lag=2`、`finalized_checkpoints=26`、`abstain_current=0`、`abstain_risk=0`、`defer_*`=0）；环境为 Windows 应用 + WSL2 PostgreSQL 16，单物理机、非物理多机；
+- 零生产代码改动。
