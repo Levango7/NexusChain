@@ -215,7 +215,7 @@ class PaymentChaosTest {
 
     @Test
     @Order(5)
-    @DisplayName("5. 签名服务超时→支付失败→恢复→成功")
+    @DisplayName("5. 签名服务超时→结果不明(PROCESSING)→恢复→成功")
     void signingTimeout_thenRecover() {
         try (MockedStatic<WalletUtils> mockedWalletUtils = mockStatic(WalletUtils.class)) {
             mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("0xPayee_chaos5")).thenReturn("payeeHash");
@@ -230,9 +230,11 @@ class PaymentChaosTest {
 
             ChainConnector connector = newConnector();
 
-            // 超时：支付失败（ChainConnector 捕获异常返回 FAILED）
+            // 超时：结果不明。2026-11-01 fail-closed 收敛后 SigningTransfers 把直签
+            // 异常收敛为 EXECUTION_UNKNOWN ⇒ 连接器保持 PROCESSING 等人工核对，
+            // 不再记 FAILED（FAILED 会被上游当"确定未出账"补发 ⇒ 双重支付风险）。
             ConnectorPaymentResult timeout = connector.createPayment(paymentRequest("chaos5", 15000L));
-            assertFalse(timeout.isSuccess(), "签名超时应导致支付失败");
+            assertEquals(PaymentStatus.PROCESSING, timeout.getStatus(), "签名超时不得记 FAILED");
 
             // 恢复
             signingResponsive.set(true);

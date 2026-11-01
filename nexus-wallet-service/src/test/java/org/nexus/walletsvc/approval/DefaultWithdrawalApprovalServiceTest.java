@@ -28,6 +28,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -496,8 +497,10 @@ class DefaultWithdrawalApprovalServiceTest {
     }
 
     @Test
-    void execute_feignThrowsException_rethrowsAfterMarkingFailed() {
-        // P1-F3 修复：catch 块先持久化 FAILED 再重抛异常，触发 @GlobalTransactional 全局回滚。
+    void execute_feignThrowsException_rethrowsAfterMarkingUnverified() {
+        // P1-F3：catch 块先落库留痕再重抛（触发 @GlobalTransactional 全局回滚）。
+        // 2026-11-01 fail-closed 收敛：落的状态是 EXECUTED_UNVERIFIED 而不是 FAILED——
+        // 阶段2 的异常可能在广播之后才抛出，FAILED 可被重提 ⇒ 双重支付风险。
         WithdrawalRequest request = service.requestWithdrawal(
                 WHITELISTED_ADDR, new BigDecimal("100"), "NEX");
         service.approve(request.getRequestId(), "approver-1");
@@ -508,18 +511,19 @@ class DefaultWithdrawalApprovalServiceTest {
         RuntimeException ex = assertThrows(RuntimeException.class,
                 () -> service.executeApprovedWithdrawal(request.getRequestId()));
         assertTrue(ex.getMessage().contains("signing-service unavailable"));
-        // FAILED 状态已落库供后续排查：save 至少被调用 1 次（含 requestWithdrawal/approve/catch 块）
+        // 留痕已落库：save 至少被调用 1 次（含 requestWithdrawal/approve/catch 块）
         verify(withdrawalRequestRepository, atLeast(1)).save(any(WithdrawalRequestEntity.class));
-        // 验证最终实体状态为 FAILED
         WithdrawalRequestEntity finalEntity = requestStore.get(request.getRequestId());
-        assertEquals(WithdrawalRequest.WithdrawalStatus.FAILED, finalEntity.getStatus());
+        assertEquals(WithdrawalRequest.WithdrawalStatus.EXECUTED_UNVERIFIED, finalEntity.getStatus());
+        assertNotEquals(WithdrawalRequest.WithdrawalStatus.FAILED, finalEntity.getStatus(),
+                "抛异常不得记「确定未动账」的终态 FAILED");
     }
 
     @Test
-    void execute_feignThrowsFeignLikeException_rethrowsAfterMarkingFailed() {
+    void execute_feignThrowsFeignLikeException_rethrowsAfterMarkingUnverified() {
         // 模拟 Feign 降级场景：签名服务返回 5xx，Feign 抛异常透传到本服务
         // （用 RuntimeException 模拟 FeignException 以避免跨 feign 版本构造签名差异）
-        // P1-F3 修复：catch 块重抛异常触发全局回滚，避免落库失败状态退回 APPROVED。
+        // P1-F3：catch 块重抛触发全局回滚；留痕为非终态 UNVERIFIED（见上一条用例注释）。
         WithdrawalRequest request = service.requestWithdrawal(
                 WHITELISTED_ADDR, new BigDecimal("100"), "NEX");
         service.approve(request.getRequestId(), "approver-1");
@@ -530,10 +534,9 @@ class DefaultWithdrawalApprovalServiceTest {
         RuntimeException ex = assertThrows(RuntimeException.class,
                 () -> service.executeApprovedWithdrawal(request.getRequestId()));
         assertTrue(ex.getMessage().contains("signing-service 500"));
-        // FAILED 状态已落库供后续排查
         verify(withdrawalRequestRepository, atLeast(1)).save(any(WithdrawalRequestEntity.class));
         WithdrawalRequestEntity finalEntity = requestStore.get(request.getRequestId());
-        assertEquals(WithdrawalRequest.WithdrawalStatus.FAILED, finalEntity.getStatus());
+        assertEquals(WithdrawalRequest.WithdrawalStatus.EXECUTED_UNVERIFIED, finalEntity.getStatus());
     }
 
     @Test

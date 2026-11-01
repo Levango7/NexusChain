@@ -51,7 +51,19 @@ public final class SigningTransfers {
         if (service != null) {
             return service.signOrAwait(requestKey, requestType, fromPubkey, toPubkeyHash, amount, currency);
         }
-        return fromClassify(client.signTransfer(fromPubkey, toPubkeyHash, amount), requestKey);
+        // 无审批执行服务（未装配）时的直签：调用抛异常同样属"结果不明"——
+        // 异常点可能在广播之后（连接重置/读超时），不得记可重放的 FAILED。
+        // 与有服务那条腿的 catch 分支同范式（SigningApprovalExecutionService.signOrAwait）。
+        java.util.Map<String, Object> response;
+        try {
+            response = client.signTransfer(fromPubkey, toPubkeyHash, amount);
+        } catch (RuntimeException e) {
+            log.error("直签抛异常（无执行服务，结果不明，禁止当未动账重放）: requestKey={}, error={}",
+                    requestKey, e.getMessage());
+            return new SigningOutcome(ApprovalExecutionLink.Status.EXECUTION_UNKNOWN, null, null,
+                    "signTransfer outcome unknown: " + e.getMessage());
+        }
+        return fromClassify(response, requestKey);
     }
 
     /**

@@ -34,8 +34,9 @@ import static org.mockito.Mockito.when;
  * <p><strong>事务边界分析</strong>（设计文档 §4.5.2）：
  * <ul>
  *   <li>{@code executeApprovedWithdrawal} 标注 {@code @GlobalTransactional} + {@code @Transactional}</li>
- *   <li>方法内部 catch Exception 后置 FAILED 并返回（不重新抛出），此路径下事务正常提交
- *      （FAILED 状态持久化）——这是有意设计，保留 FAILED 记录供排查</li>
+ *   <li>模板捕获阶段2 异常后返回（不重新抛出），此路径下事务正常提交
+ *      （非终态 EXECUTED_UNVERIFIED 持久化）——2026-11-01 起不再记 FAILED，
+ *      因为阶段2 的异常可能发生在广播之后，FAILED 会被当成"确定未动账"而重提</li>
  *   <li>仅当方法抛出未捕获异常时才触发回滚</li>
  * </ul>
  * </p>
@@ -47,7 +48,7 @@ import static org.mockito.Mockito.when;
  *
  * <p>验证场景：
  * <ul>
- *   <li>场景 1：signing-service 抛异常 → 状态置 FAILED（catch 后正常提交）</li>
+ *   <li>场景 1：signing-service 抛异常 → 状态置 EXECUTED_UNVERIFIED（结果不明，正常提交）</li>
  *   <li>场景 2：signing-service 返回 null → 状态置 EXECUTED_UNVERIFIED（结果不明）</li>
  *   <li>场景 3：signing-service 返回 2000 但无哈希 → 状态置 EXECUTED_UNVERIFIED</li>
  *   <li>场景 4：signing-service 正常返回 → 状态置 EXECUTED</li>
@@ -95,8 +96,8 @@ class WithdrawalRollbackTest {
     }
 
     @Test
-    @DisplayName("场景 1: signing-service 抛异常 → 状态置 FAILED（catch 后正常提交）")
-    void signingServiceThrowsException_statusSetToFailed() {
+    @DisplayName("场景 1: signing-service 抛异常 → 状态置 EXECUTED_UNVERIFIED（模板捕获后正常提交）")
+    void signingServiceThrowsException_statusSetToUnverified() {
         when(signingServiceClient.signTransfer(anyString(), anyString(), any(BigDecimal.class)))
                 .thenThrow(new RuntimeException("signing-service connection refused"));
 
@@ -104,14 +105,15 @@ class WithdrawalRollbackTest {
 
         WithdrawalRequest result = withdrawalApprovalService.executeApprovedWithdrawal(requestId);
 
-        // catch 后置 FAILED 并返回（不重新抛出）
-        assertEquals(WithdrawalRequest.WithdrawalStatus.FAILED, result.getStatus());
+        // 模板捕获异常后不重抛；2026-11-01 fail-closed 收敛：落非终态 UNVERIFIED
+        // （抛异常可能在广播之后，FAILED 可被重提 ⇒ 双重支付风险）
+        assertEquals(WithdrawalRequest.WithdrawalStatus.EXECUTED_UNVERIFIED, result.getStatus());
         assertNotNull(result.getRejectionReason());
         assertEquals(requestId, result.getRequestId());
 
-        // 数据库验证：FAILED 状态已持久化（事务正常提交，非回滚）
+        // 数据库验证：状态已持久化（事务正常提交，非回滚）
         WithdrawalRequestEntity entity = withdrawalRequestRepository.findByRequestId(requestId).orElseThrow();
-        assertEquals(WithdrawalRequest.WithdrawalStatus.FAILED, entity.getStatus());
+        assertEquals(WithdrawalRequest.WithdrawalStatus.EXECUTED_UNVERIFIED, entity.getStatus());
         assertNotNull(entity.getRejectionReason());
         assertNotNull(entity.getUpdatedAt());
     }
@@ -173,8 +175,8 @@ class WithdrawalRollbackTest {
     }
 
     @Test
-    @DisplayName("FAILED 状态保留 rejectionReason 供后续排查")
-    void failedStatusPreservesRejectionReason() {
+    @DisplayName("结果不明状态同样保留 rejectionReason 供后续排查")
+    void unverifiedStatusPreservesRejectionReason() {
         when(signingServiceClient.signTransfer(anyString(), anyString(), any(BigDecimal.class)))
                 .thenThrow(new RuntimeException("detailed failure reason for debugging"));
 
@@ -182,7 +184,7 @@ class WithdrawalRollbackTest {
         withdrawalApprovalService.executeApprovedWithdrawal(requestId);
 
         WithdrawalRequestEntity entity = withdrawalRequestRepository.findByRequestId(requestId).orElseThrow();
-        assertEquals(WithdrawalRequest.WithdrawalStatus.FAILED, entity.getStatus());
+        assertEquals(WithdrawalRequest.WithdrawalStatus.EXECUTED_UNVERIFIED, entity.getStatus());
         assertNotNull(entity.getRejectionReason());
         // 2026-08-30 断言修正：生产实现记录的是链上执行的具体错误串
         // （OnChainResult.error，经三阶段模板传递），不再有统一 'execution failed'

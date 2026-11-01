@@ -64,12 +64,24 @@ public class ThreePhaseExecutionTemplate {
         try {
             result = onChainExecute.apply(record);
             if (result == null) {
-                result = OnChainResult.failure("onChainExecute returned null", false);
+                // 阶段2 返回 null 同样属"结果不明"：调用可能已经发出并被服务端处理，
+                // 只是没拿到可核对的结果 ⇒ 不得记确定未动账。
+                result = OnChainResult.executedUnverified(
+                        "onChainExecute returned null; outcome indeterminate, manual reconciliation required",
+                        false);
             }
         } catch (Exception e) {
-            log.error("Phase 2 (onChainExecute) exception: idempotencyKey={}, error={}",
-                    request.getIdempotencyKey(), e.getMessage(), e);
-            result = OnChainResult.failure("on-chain execution exception: " + e.getMessage(), false);
+            // fail-closed 词表（2026-11-01）：阶段2 是**不可逆的链上调用**——异常可能发生在
+            // 广播之后（连接重置、读超时、响应解析失败）。此前一律记 FAILED，等于账本宣称
+            // "确定未动账"，而 FAILED 是可重提的状态 ⇒ 与可能已上链的那笔构成双重支付风险。
+            // 因此改落非终态 EXECUTED_UNVERIFIED（模板不猜资金结论，交人工核对）。
+            // 例外说明：调用**之前**的确定性拒绝（参数非法、余额不足、白名单未过等）由
+            // onChainExecute 自己返回 OnChainResult.failure(...)，那条路径逐字节不变。
+            log.error("Phase 2 (onChainExecute) exception (outcome indeterminate, not treated as not-executed): "
+                    + "idempotencyKey={}, error={}", request.getIdempotencyKey(), e.getMessage(), e);
+            result = OnChainResult.executedUnverified(
+                    "on-chain execution exception: " + e.getMessage()
+                            + "; outcome indeterminate, manual reconciliation required", false);
         }
         log.info("Phase 2 (onChainExecute) completed: idempotencyKey={}, status={}, txHash={}",
                 request.getIdempotencyKey(), result.getStatus(), result.getTxHash());

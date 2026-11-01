@@ -105,6 +105,20 @@ class SigningTransfersTest {
     }
 
     @Test
+    @DisplayName("直签抛异常（无执行服务）→ 结果不明，不落 FAILED")
+    void fallbackWithoutService_clientThrowsIsUnknown() {
+        SigningServiceFeignClient client = mock(SigningServiceFeignClient.class);
+        when(client.signTransfer("pk", "to", BigDecimal.TEN)).thenThrow(new RuntimeException("signing timeout"));
+
+        SigningOutcome outcome = SigningTransfers.signOrAwait(null, client,
+                "k", "CHAIN", "pk", "to", BigDecimal.TEN, "NEX");
+
+        assertFalse(outcome.isFailed(), "异常点可能在广播之后，不得当「确定未动账」");
+        assertTrue(outcome.requiresManualVerification());
+        assertTrue(outcome.error().contains("signing timeout"), "实得：" + outcome.error());
+    }
+
+    @Test
     @DisplayName("业务失败 5000 仍落终态失败（白名单不变）")
     void fallbackWithoutService_businessFail5000StaysFailed() {
         SigningServiceFeignClient client = mock(SigningServiceFeignClient.class);

@@ -331,14 +331,18 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
      * <p><strong>事务边界</strong>（设计文档 §4.5.2）：
      * {@code timeoutMills=120000}（2 分钟）覆盖链上签名广播耗时；
      * {@code rollbackFor=Exception.class} 保证校验异常触发全局回滚。
-     * 阶段2 链上执行异常被模板捕获并转为 FAILED 结果，不重抛
-     * （链上不可逆，由 CompensationService 后续补偿）。</p>
+     * 阶段2 链上执行异常被模板捕获并转为<b>结果不明</b>（见下），不重抛。</p>
      *
-     * <p><strong>P1-F3 兼容</strong>：原 catch Exception 后置 FAILED 落库并重抛的语义
-     * 由三阶段模板的阶段3 保证。阶段2 异常被模板捕获转为 OnChainResult.failure，
-     * 阶段3 据此更新 FAILED。原重抛异常触发全局回滚的语义改为：
-     * 阶段3 落库 FAILED 后正常返回，由 CompensationService 异步补偿。
-     * 这避免了链上已广播但全局回滚导致的状态不一致。</p>
+     * <p><strong>P1-F3 兼容 + fail-closed 收敛（2026-11-01）</strong>：原语义是
+     * "阶段2 异常 → OnChainResult.failure → 阶段3 落 FAILED 后正常返回，由
+     * CompensationService 异步补偿"，避免了链上已广播却因全局回滚退回 APPROVED。
+     * 但 FAILED 本身仍是一句<b>无法证明</b>的断言——阶段2 的异常可能在广播之后
+     * （连接重置、读超时、响应解析失败）才抛出，此时钱已出账，而 FAILED 是可被
+     * 重提的状态 ⇒ 与已上链那笔构成双重支付。现改为：阶段2 逃逸出的异常与
+     * {@code null} 结果一律落非终态 {@code EXECUTED_UNVERIFIED}（禁止自动重放，
+     * 转人工核对）；而调用<b>之前</b>的确定性拒绝（参数非法 / 余额不足 / 白名单未过 /
+     * 无 signing client）仍由 {@code executeOnChain} 自己返回
+     * {@code OnChainResult.failure}，即仍记 FAILED，逐字节不变。</p>
      */
     @Override
     @GlobalTransactional(timeoutMills = 120000, rollbackFor = Exception.class)
@@ -437,11 +441,16 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
             OnChainResult result = executeOnChain(entity);
             applyExecutionOutcome(entity, result, approvalId);
         } catch (Exception e) {
-            // P1-F3 修复：先持久化 FAILED 状态供后续排查，再重抛异常
-            entity.setStatus(WithdrawalRequest.WithdrawalStatus.FAILED);
-            entity.setRejectionReason("execution failed: " + e.getMessage());
+            // P1-F3：先落库留痕再重抛（这条降级路径保留重抛语义）。
+            // 2026-11-01 fail-closed 收敛：这里收到的是**逃逸出链上调用的异常**
+            // （模板阶段2 的同一条判据）——异常点可能在广播之后，不得记确定未动账的
+            // FAILED（FAILED 可被重提 ⇒ 与可能已上链的那笔构成双重支付），改落非终态。
+            entity.setStatus(WithdrawalRequest.WithdrawalStatus.EXECUTED_UNVERIFIED);
+            entity.setRejectionReason("execution outcome indeterminate: " + e.getMessage()
+                    + "; not treated as definitely-not-executed, manual reconciliation required");
             withdrawalRequestRepository.save(entity);
-            log.error("Withdrawal execution failed: requestId={}", approvalId, e);
+            log.error("Withdrawal execution threw (outcome indeterminate, NOT recorded as not-executed): "
+                    + "requestId={}", approvalId, e);
             throw e;
         }
         WithdrawalRequestEntity saved = withdrawalRequestRepository.save(entity);
