@@ -9,10 +9,11 @@
 #       CI 步骤见 k8s-sync-check.yml「promtool 规则演练」（PLAN-064，2026-11-01）。
 #
 # 设计原则（避免告警疲劳）：
-#   1. 告警数 18 条（2026-09-09 "告警真值"整合 11 条 + PLAN-040 区块持久化 4 条
+#   1. 告警数 20 条（2026-09-09 "告警真值"整合 11 条 + PLAN-040 区块持久化 4 条
 #      + PLAN-045 最终性 2 条 + PLAN-052 弃权风险 1 条；2026-11-01 PLAN-064
 #      用 promtool 实测逐条计数时发现此处曾停留在 17——原门禁只断言"≥5"，
-#      数量漂移从不触发）：
+#      数量漂移从不触发；2026-11-02 PLAN-066 再 +2 条投票拒绝计数告警：
+#      19 → 20）：
 #      原 5 条 + 从 legacy deploy/monitoring/alerting-rules.yaml 并入 6 条真实指标告警
 #      （JVM/GC、Pod 资源、ServiceDown、SeataTcDown）+ 2026-10-26 的 4 条区块持久化告警
 #      + 2 条最终性告警；legacy 文件中 11 条引用幽灵指标名（代码从未注册）的告警
@@ -176,6 +177,40 @@ spec:
         runbook_url: "https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md"
         summary: "最终性进度 < 100% 持续 10min（票没收齐）"
         description: "{{ $labels.pod }} 的 nexus_finality_progress_percent 连续 10min 不到 100%——水位 epoch 的票没收齐（某验证人未投票/票丢失/验签失败）。单次采样的 50% 是正常的提交时快照（会翻 100%），持续 10min 才是问题。查 GET /consensus/finality 的 votedWeight/totalWeight 与对端 /consensus/validator-set；疑丢票时配合 finality_vote_outbox 补写（PLAN-018）。3 验证人中 1 个掉线时进度会停在 67% 但 finalized 仍可为 true（2/3 达门限）——两者都看。"
+
+    # ---- 投票拒绝计数（PLAN-065 缺口 → PLAN-066 指标化）----
+    # 应用侧 FinalityRejectionMetrics（nexus-core）暴露：
+    #   nexus_finality_vote_rejected_total{reason, phase}（counter）
+    #     reason: validator_unknown / validator_inactive / malformed_vote /
+    #             pubkey_mismatch / signature_invalid / zero_total_weight
+    #     phase:  admission（网络/本地提交）/ convergence（库里坏行）/ restore（启动恢复）
+    #   nexus_finality_finalize_rejected_total{reason}（counter）
+    # 告警只按 reason 过滤出两类"伪造票"：公钥是公开信息，攻击者无需私钥即可构造
+    # 公钥正确、签名垃圾的票（PLAN-065 的占位攻击）。其余 reason 多是启动期/治理期
+    # 正常现象，逐条告警只会产生噪声——按标签排查即可，不在告警里展开。
+    # validator 地址故意不做标签：否则攻击者用随机地址洪泛即可让标签基数无界增长，
+    # "被观测对象会被观测本身打垮"；按人定位仍看日志（WARN 行含地址与 epoch）。
+    - alert: FinalityVoteRejected
+      expr: increase(nexus_finality_vote_rejected_total{reason=~"signature_invalid|pubkey_mismatch"}[10m]) > 0
+      for: 5m
+      labels:
+        severity: warning
+        component: blockchain-core
+      annotations:
+        runbook_url: "https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md"
+        summary: "最终性投票出现伪造票（10min 内 {{ $value }} 次）"
+        description: "{{ $labels.pod }} 的 nexus_finality_vote_rejected_total{reason=\"{{ $labels.reason }}\"} 10 分钟内增长 {{ $value }} 次——有人投了公钥正确但签名伪造（或票内公钥与注册公钥不一致）的票。合法节点之间正常不会发生；先查 nexus-core 日志里的 `Vote signature verification FAILED` / `Vote pubkey binding FAILED` 行（含涉事验证人地址与 epoch），判断是配置错配（换钥后未重新注册）还是伪造票攻击。phase=convergence 表示库里躺着坏行（历史污染，配合启动恢复日志）；phase=admission 表示正在被网络攻击。伪造票已按 PLAN-065 在计票前被拒、不影响最终化，但它是 liveness 攻击前兆，应作安全事件处理。"
+
+    - alert: FinalityFinalizeRejected
+      expr: increase(nexus_finality_finalize_rejected_total[15m]) > 0
+      for: 10m
+      labels:
+        severity: critical
+        component: blockchain-core
+      annotations:
+        runbook_url: "https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md"
+        summary: "最终化因聚合验签失败被拒（15min 内 {{ $value }} 次）"
+        description: "{{ $labels.pod }} 的 nexus_finality_finalize_rejected_total 15 分钟内增长 {{ $value }} 次——已达 2/3 权重的检查点在聚合验签环节被 fail-closed 拒绝（不会最终化，权重停在那里）。每票入场前已做单票 Ed25519 验签（PLAN-065），此信号意味着验签口径不一致或投票集在两次校验之间被改变，属罕见安全告警。查日志 `Finality aggregate verification failed` 拿 checkpoint key，对照 GET /consensus/finality 与 finality_votes 表该 key 的签名列。链可能仍在出块，这是『出块正常但该检查点不再终局』的形态，与 BlockchainCoreStalled 不同。"
   # ---- MPC 引擎 ----
   - name: nexuschain.mpc-engine
     interval: 30s

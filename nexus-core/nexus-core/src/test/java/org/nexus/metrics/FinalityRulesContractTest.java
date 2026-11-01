@@ -7,6 +7,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.nexus.core.Block;
 import org.nexus.core.ChainHeadProvider;
+import org.nexus.consensus.finality.FinalityRejectionCounter.FinalizeReason;
+import org.nexus.consensus.finality.FinalityRejectionCounter.Phase;
+import org.nexus.consensus.finality.FinalityRejectionCounter.Reason;
 
 import java.io.IOException;
 import java.util.LinkedHashSet;
@@ -40,7 +43,7 @@ class FinalityRulesContractTest {
             "nexuschain.finality",
             "nexuschain.block-adoption");
 
-    private static final int EXPECTED_METER_COUNT = 12;
+    private static final int EXPECTED_METER_COUNT = 14;
 
     /**
      * 已注册但<b>没有</b>告警消费的指标白名单（诊断用）。
@@ -72,6 +75,14 @@ class FinalityRulesContractTest {
             "nexus_finality_abstain_current"
     );
 
+    /**
+     * PLAN-066 新增的两个指标**不**进上面的白名单——它们必须由告警规则真消费，
+     * 否则就是 PLAN-063 说的"静默变成没人看的指标"。告警只按 reason 过滤出
+     * 伪造票相关的两类（见 {@code nexuschain.finality} 组的
+     * {@code FinalityVoteRejected}）；其余 reason 的 series 供按标签排查，
+     * 不需要也不应该各自建告警（启动期/治理期的正常现象会产生噪声）。
+     */
+
     private Set<String> registeredNames;
 
     @BeforeEach
@@ -85,15 +96,22 @@ class FinalityRulesContractTest {
             }
         }, null).bindTo(registry);
         new AbstainRiskMetrics(null, 120_000L).bindTo(registry);
+        // PLAN-066：拒绝计数是 Counter，必须"计一次才注册一个序列"，否则
+        // SimpleMeterRegistry 里一个序列都没有，下面的计数断言会虚高。
+        FinalityRejectionMetrics rejections = new FinalityRejectionMetrics(registry);
+        rejections.countFinalizeRejected(FinalizeReason.AGGREGATE_VERIFICATION_FAILED);
+        rejections.countVoteRejected(Reason.SIGNATURE_INVALID, Phase.ADMISSION);
+        rejections.countVoteRejected(Reason.SIGNATURE_INVALID, Phase.CONVERGENCE);
 
         registeredNames = new TreeSet<>();
         for (Meter meter : registry.getMeters()) {
             registeredNames.add(meter.getId().getName());
         }
 
-        // 防假绿：绑定结果必须正是那 12 个（FinalityMetrics 7 + AbstainRiskMetrics 5）
+        // 防假绿：绑定结果必须正是那 14 个（FinalityMetrics 7 + AbstainRiskMetrics 5
+        // + PLAN-066 的两个拒绝计数指标）
         assertEquals(EXPECTED_METER_COUNT, registeredNames.size(),
-                "两个 finality binder 应注册 12 个指标，实际：" + registeredNames);
+                "三个 finality binder 应注册 14 个指标，实际：" + registeredNames);
     }
 
     @Test
