@@ -83,11 +83,24 @@ wallet 提现确实存在双重审批（wallet 多签 + signing 大额审批）�
 > 登记端点 `POST /api/v1/signing/business-approvals` + `signTransfer` 可选
 > `businessApprovalId` + 独立表 `signing_business_approval`（signing **V5**）+
 > canonical sha256（`A2-v1`，nexus-sdk 双侧共享）+ wallet 开关
-> `nexus.signing.business-approval.enabled`（**默认 false = 旧行为逐字节不变**）。
+> `nexus.signing.business-approval.enabled`（**默认 false = 旧行为逐字节不变**——
+> 限定范围见下勘误）。
 > **一处对草案 §2.2 的强化**：凭据**已被消费**时 signing 返回 5003 终止而**不回落人审**
 > ——"校验失败一律回落"若适用于已消费凭据，会为同一笔提现保留二次放款通道
 > （#294/#300 同源原则："可能已出"不得当"没出"重放）；其余校验失败
 > （不存在 / 哈希不匹配 / 过期）仍回落旧流程（有人审兜底）。
+
+> **勘误（2026-11-02，zcode；对 master `0386b8af` 源码级核实）**：上条「逐字节不变」
+> 限定为**调用前的确定性拒绝路径**——无 signing client / 平台公钥缺失 / 地址不可解析 /
+> 额度校验不过等显式 `failure(...)`，FAILED 语义逐字节不变。**结果不明路径**此前一律落
+> 可重放的终态 FAILED，等于账本宣称「确定未动账」而实际可能已广播上链（与 #294/#300、
+> A0 同源的双重支付风险）；PR #390（fail-closed 词表）起改落非终态、禁自动重放、交人工
+> 核对，共五条路径：wallet `ThreePhaseExecutionTemplate` 阶段2 异常与 null →
+> `OnChainResult.executedUnverified`；wallet `executeInline` 与 `legacyFirstLeg` 非契约
+> 拒签码 → `EXECUTED_UNVERIFIED`；gateway `SigningTransfers` 直签异常与 `fromClassify`
+> 非契约拒签码 → `EXECUTION_UNKNOWN`。该收敛与 A2 开关**正交**（开关默认 false 时同样
+> 生效）；`SigningResponses.declaresNotExecuted` 词表（5000/4000/4030）未变。
+> 共识板面：`20261101-2306` + `20261102-0139`。
 
 **目标**：把豁免粒度从「地址」收紧到「单笔业务」——既去掉 wallet 的重复审批，
 又不误伤 gateway 其他业务。
@@ -149,7 +162,7 @@ wallet 提现确实存在双重审批（wallet 多签 + signing 大额审批）�
 | A0 落地（防双花打捞 PR #294） | zcode | ✅ 已落地（master `45b1bbb8`） |
 | A2 实施设计草案（评审材料） | zcode | ✅ 已成稿：`docs/adr/A2-business-approval-design-draft-2026-10-27.md`，含 5 条待评审决策 |
 | A2 立项评审（阈值配置 + 契约设计 + 人力） | 待评审人/用户 | 材料已备；评审通过后并入本文 §2.2 并排期 |
-| gateway 五类业务的人审替代方案 | 待认领 | 未启动（A2 前不得动）；"五路径零行为变化"回归断言已作为 A2 草案 §4 不变式 6 固化，随 A2 P2 常驻测试 |
+| gateway 五类业务的人审替代方案 | 待认领 | 未启动（A2 前不得动）；"五路径零行为变化"回归断言已作为 A2 草案 §4 不变式 6 固化，随 A2 P2 常驻测试。**勘误（2026-11-02）**：「零行为变化」同样按 §2.2 勘误限定为调用前的确定性拒绝路径；结果不明路径的失败语义已由 fail-closed 收敛链（#355/#364/#375/#390）改为非终态，五条路径清单见 §2.2 勘误条 |
 | **⚠️ 结算执行腿收款地址 P0（板 20261029-2057 nex 裁决 F3；zcode 已源码级复核确认——见下）** | **zcode（S1 已认领，板 20261030-0011）** | **生产切流阻断项**；S1 = 取 `payee_address` + 预校验前移 |
 | **⚠️ 结算 sandbox「假结算」P0（板 20261029-2331 nex 新报 P0-A；zcode 已复核坐实——见下）** | **待定**（fail-closed 口径需确认，见板 20261030-0011） | **生产切流阻断项**：沙箱内假 SETTLED + 对账被喂伪造对侧 |
 
