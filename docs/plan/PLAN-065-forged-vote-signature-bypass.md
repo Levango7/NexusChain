@@ -161,13 +161,19 @@ FinalityVoteForgeryTest > forgedSignatureWithRegisteredPublicKeyIsRejectedBefore
    这些检查点需要新票/补票才能最终化；已终局历史不受影响。
 5. **未改真实 L1 / 桥资金链路**：本切片只触及最终性投票准入与恢复。
 6. **未新增拒绝计数指标**：验签失败目前只打 `WARN` 日志；拒绝量观测是后续项，
-   不在本切片冒充已完成。
+   不在本切片冒充已完成。**（2026-11-02 回填：已由
+   [PLAN-066](PLAN-066-finality-vote-rejection-metrics.md) 兑现——四条拒绝路径
+   都有了 `nexus_finality_vote_rejected_total{reason, phase}` 计数与两条告警；
+   但 PLAN-066 同样**没有**做验证人地址维度的标签，见其 §2.3 的基数风险论证。）**
 
 ## 六、后续
 
 - 完整拜占庭矩阵剩余项：真实网络分区、验证人协同双签、私钥泄露、长程攻击、
   消息重放/洪泛；
-- 验签失败计数指标（按验证人/原因分桶）与告警，避免只靠日志；
+- 验签失败计数指标（按验证人/原因分桶）与告警，避免只靠日志 —— **（2026-11-02
+  交付：PLAN-066；其中“按验证人分桶”经论证后**刻意不做**，理由见
+  [PLAN-066](PLAN-066-finality-vote-rejection-metrics.md) §2.3 —— 攻击者用随机
+  地址即可打垮标签基数。）**
 - BLS 聚合替换后，确认“单票验签 + 聚合验签”的分层仍然成立；
 - 若未来引入验证人集热变更，补“变更窗口内旧票/新票”的准入矩阵。
 
@@ -180,3 +186,5 @@ FinalityVoteForgeryTest > forgedSignatureWithRegisteredPublicKeyIsRejectedBefore
 - PLAN-021 §2.2 的“绑定校验 = 注册表 + ACTIVE + 公钥一致”在本切片后扩展为
   “注册表 + ACTIVE + 公钥一致 + **单票签名有效**”；收敛路径与提交路径继续
   共用同一入口。
+- 本切片 §六 的第一条遗留项已由 [PLAN-066](PLAN-066-finality-vote-rejection-metrics.md)
+  交付（2026-11-02），其 §七 反向引用了本条。

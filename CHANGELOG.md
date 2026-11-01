@@ -7308,3 +7308,15 @@ PLAN-062 只覆盖 `nexus_block_*`；finality 侧有同一条缝的另一头—�
 - **测试**：新增 `FinalityVoteForgeryTest` 4 例（伪造票不计权/不落库、不占位、收敛验签、重启丢弃坏行）；`FinalityGadgetFaultInjectionTest` 的旧 3 参替身用例按“老库无签名行不可信”改写；
 - **反向对照**：临时还原 `FinalityGadget.java` ⇒ 5 个用例精确红（4 伪造票 + 1 老库恢复）；恢复后 10/10 绿；finality 全包 `--rerun-tasks` **135 用例 0 失败**；`nexus-core` 全量 **1816 用例 0 失败 / 19 跳过**（同内核 JVM 测试，非物理多机）；
 - **边界**：未覆盖真实网络分区、完整拜占庭矩阵其余输入（女巫/长程/私钥泄露）、物理多机、真实 L1/桥资金；每票一次 Ed25519 验签，未做生产负载基准；未终局的无签名历史行会被丢弃，需新票/补票重新累计。
+### 最终性投票拒绝计数指标——伪造票攻击不再只能 grep 日志（PLAN-066）
+
+PLAN-065 把验签前移到计票前之后，四条拒绝路径（公钥绑定失败 / 单票验签失败 / 启动恢复丢坏行 / 聚合验签失败）**只有一行 WARN 日志**：是否被攻击、是否正在被攻击、是配置错配还是伪造，都无法在不动容器的情况下回答。本切片把它们变成可聚合、可告警的计数。
+
+- **端口与被使用方定义**：新增 `org.nexus.consensus.finality.FinalityRejectionCounter`（`Reason` / `Phase` / `FinalizeReason` 三个闭合词表 enum——标签值由编译器保证有界），适配器 `org.nexus.metrics.FinalityRejectionMetrics`（@Component）做 Micrometer 计数；端口放在 consensus 侧是为了不引入 `metrics → consensus` 的循环依赖；
+- **指标**：`nexus_finality_vote_rejected_total{reason, phase}`（6 原因 × 3 路径）+ `nexus_finality_finalize_rejected_total{reason}`；`phase` 必须分开——`signature_invalid@convergence` 是"库里躺着坏行"，`@admission` 是"正在被网络攻击"，合成一个标签会失去定位能力；
+- **刻意不做验证人地址标签**：攻击者用随机地址洪泛即可让标签基数无界增长、**被观测对象被观测本身打垮**；按人定位仍走 WARN 日志（含地址与 epoch）；
+- **构造期重放**：`restoreFromStore()` 跑在构造器里而端口是 setter 注入，缓冲构造期事件并在注入后补记（否则"重启后发现库被污染"在指标上恒为 0，观测自己变成静默失败）；上限 4096 防泄漏；
+- **告警**：`nexuschain.finality` 组 +2 条——`FinalityVoteRejected`（warning，只认 `signature_invalid|pubkey_mismatch`，其余 reason 是启动期/治理期正常现象不告警）与 `FinalityFinalizeRejected`（critical 金丝雀）；
+- **测试**：新增 `FinalityRejectionCounterWiringTest` 7 例 + `FinalityRejectionMetricsTest` 5 例；`FinalityMetricsRegistrationTest` / `FinalityRulesContractTest` 同步（12 → 14 指标，新名字必须被告警消费而非塞进 `ALERTLESS_BY_DESIGN`）；
+- **验证**：promtool **v3.15.1**（WSL2 Ubuntu-24.04 内，CI 同版本）`check rules` 20 rules + `test rules` 全部用例通过，新增 6 个演练用例含"良性 reason 不触发"；反向对照：抹掉三处转发调用 ⇒ **6 用例精确红**、恢复后 **7/7 绿**；metrics+finality 全包 `--rerun-tasks` **169 用例 0 失败 0 跳过**；
+- **边界**：同内核 JVM 单测 + WSL2 里的 promtool CLI（**非物理多机**）；两条告警未在真实集群触发过（只证 PromQL 与标签集在合成序列上按预期工作）；未做 `/actuator/prometheus` 抓取端补验；未做验证人维度与吞吐基准；未触碰真实 L1 / 桥资金 / wallet / settlement lane。

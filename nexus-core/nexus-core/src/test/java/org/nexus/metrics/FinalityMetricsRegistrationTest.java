@@ -3,6 +3,7 @@ package org.nexus.metrics;
 import io.micrometer.core.instrument.Meter;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
+import org.nexus.consensus.finality.FinalityRejectionCounter;
 import org.nexus.core.Block;
 import org.nexus.core.ChainHeadProvider;
 import org.springframework.stereotype.Component;
@@ -44,6 +45,10 @@ class FinalityMetricsRegistrationTest {
         assertTrue(AbstainRiskMetrics.class.isAnnotationPresent(Component.class),
                 "AbstainRiskMetrics 必须带 @Component（PLAN-058：缺它 ⇒ nexus_finality_abstain_risk "
                         + "从未注册 ⇒ BlockAdoptionAbstainRisk 永不会触发）");
+        assertTrue(FinalityRejectionMetrics.class.isAnnotationPresent(Component.class),
+                "FinalityRejectionMetrics 必须带 @Component（PLAN-066：缺它 ⇒ "
+                        + "nexus_finality_vote_rejected_total / finalize_rejected_total 从未注册 "
+                        + "⇒ FinalityVoteRejected / FinalityFinalizeRejected 永不会触发）");
 
         // ② 绑定后指标名必须覆盖三条告警的消费目标。
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
@@ -55,11 +60,21 @@ class FinalityMetricsRegistrationTest {
         };
         new FinalityMetrics(head, null).bindTo(registry);
         new AbstainRiskMetrics(null, 120_000L).bindTo(registry);
+        // PLAN-066：Counter 序列按需注册，必须先计一次才有名字可断。
+        FinalityRejectionMetrics rejections = new FinalityRejectionMetrics(registry);
+        rejections.countFinalizeRejected(FinalityRejectionCounter.FinalizeReason.AGGREGATE_VERIFICATION_FAILED);
+        rejections.countVoteRejected(FinalityRejectionCounter.Reason.SIGNATURE_INVALID,
+                FinalityRejectionCounter.Phase.ADMISSION);
 
         Set<String> names = registry.getMeters().stream()
                 .map(Meter::getId)
                 .map(id -> id.getName())
                 .collect(Collectors.toSet());
+
+        assertTrue(names.contains("nexus_finality_vote_rejected"),
+                "FinalityVoteRejected 消费的指标必须在计数后注册，实际 = " + names);
+        assertTrue(names.contains("nexus_finality_finalize_rejected"),
+                "FinalityFinalizeRejected 消费的指标必须在计数后注册，实际 = " + names);
 
         assertTrue(names.contains("nexus_finality_latest_voted_epoch"),
                 "FinalityStalled 消费的指标必须存在，实际 = " + names);

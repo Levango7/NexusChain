@@ -11,6 +11,9 @@ import org.nexus.consensus.finality.persistence.FinalityStateStore;
 import org.nexus.consensus.finality.persistence.InMemoryFinalityStateStore;
 import org.nexus.consensus.finality.persistence.JdbcFinalityStateStore;
 import org.nexus.crypto.ed25519.Ed25519PublicKey;
+import org.nexus.consensus.finality.FinalityRejectionCounter.FinalizeReason;
+import org.nexus.consensus.finality.FinalityRejectionCounter.Phase;
+import org.nexus.consensus.finality.FinalityRejectionCounter.Reason;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
@@ -40,6 +43,9 @@ public class FinalityGadget {
 
     /** 单轮补最终化扫描最多处理的检查点数（避免 CPU 尖峰）。 */
     static final int SWEEP_BATCH = 50;
+
+    /** 构造期拒绝事件缓冲上限（PLAN-066 重放队列的防泄漏护栏）。 */
+    private static final int MAX_REPLAY_EVENTS = 4_096;
 
     private final ValidatorRegistry validatorRegistry;
     private final StakingService stakingService;
@@ -87,6 +93,31 @@ public class FinalityGadget {
      * （CI 的 SAST 门禁会把任何 finding 判红）。</p>
      */
     private volatile FinalityStateStore stateStore;
+
+    /**
+     * 可选注入拒绝计数端口（PLAN-066）。
+     *
+     * <p>{@code volatile}：本字段由 {@link #setRejectionCounter} 在锁内写入、
+     * 由计票/恢复路径在锁外读取——与 {@link #stateStore} 同样的同步口径，
+     * 避免 SpotBugs 的 IS2_INCONSISTENT_SYNC / UG_SYNC_SET_UNSYNC_GET
+     * （CI 的 SAST 门禁会把任何 finding 判红）。</p>
+     */
+    private volatile FinalityRejectionCounter rejectionCounter;
+
+    /**
+     * 构造期累积的票级拒绝事件，待 {@link #setRejectionCounter} 注入后重放
+     * （PLAN-066）。
+     *
+     * <p>为什么需要它：{@link #restoreFromStore()} 跑在构造器里，而端口是
+     * setter 注入 ⇒ 启动恢复丢弃不可信行的计数若直接丢掉，等于
+     * "重启后才发现库被污染"这个最关键的信号在指标上恒为 0。这里先缓冲再补记，
+     * 不让"观测"自己变成一个静默失败。</p>
+     *
+     * <p>上限 {@link #MAX_REPLAY_EVENTS}：缓冲只在"从未注入端口"时堆积，正常情况下
+     * 注入后立刻清空；留硬上限是为了异常情况下不成为内存泄漏面。</p>
+     */
+    private final java.util.List<RejectEvent> pendingRejections =
+            new java.util.concurrent.CopyOnWriteArrayList<>();
 
     /**
      * 验证者集指纹（P0-② 治理关联）：活跃验证人地址+质押的规范化指纹。
@@ -138,6 +169,70 @@ public class FinalityGadget {
         log.info("FinalityGadget: using finality state store {}", stateStore.getClass().getSimpleName());
     }
 
+    /**
+     * 可选注入拒绝计数端口（PLAN-066）。
+     *
+     * <p>用 setter 而不是构造器：</p>
+     * <ul>
+     *   <li>本类的 3 参构造器被大量测试替身使用，加参数会一次打断所有用例；</li>
+     *   <li>指标是<strong>观测</strong>而非<strong>正确性</strong>依赖，缺了它
+     *       共识行为不变（退化为只打日志），没有理由让它变成必需依赖。</li>
+     * </ul>
+     *
+     * <p>注入完成时把构造期（{@link #restoreFromStore()} 阶段）缓冲的拒绝事件
+     * 补记进计数器，再清空缓冲——只补记一次。</p>
+     */
+    @Autowired(required = false)
+    public synchronized void setRejectionCounter(FinalityRejectionCounter rejectionCounter) {
+        this.rejectionCounter = rejectionCounter;
+        if (rejectionCounter == null || pendingRejections.isEmpty()) {
+            return;
+        }
+        for (RejectEvent event : pendingRejections) {
+            rejectionCounter.countVoteRejected(event.reason, event.phase);
+        }
+        pendingRejections.clear();
+    }
+
+    /**
+     * 记一次票级拒绝（PLAN-066）。
+     *
+     * <p>无端口时缓冲（供 {@link #setRejectionCounter} 重放）；判定本身仍
+     * fail-closed、日志仍打，只是没有指标。</p>
+     */
+    private void countVoteRejected(Reason reason, Phase phase) {
+        FinalityRejectionCounter counter = rejectionCounter;
+        if (counter == null) {
+            bufferPendingRejection(reason, phase);
+            return;
+        }
+        counter.countVoteRejected(reason, phase);
+    }
+
+    /**
+     * 记一次检查点级拒绝（PLAN-066）。
+     *
+     * <p>检查点级拒绝发生在最终化路径，那时端口早已注入 ⇒ 不需要重放缓冲；
+     * 缺失即 no-op。</p>
+     */
+    private void countFinalizeRejected(FinalizeReason reason) {
+        FinalityRejectionCounter counter = rejectionCounter;
+        if (counter != null) {
+            counter.countFinalizeRejected(reason);
+        }
+    }
+
+    /** 端口未注入前的缓冲（仅用于启动恢复阶段的补记）。 */
+    private void bufferPendingRejection(Reason reason, Phase phase) {
+        if (pendingRejections.size() < MAX_REPLAY_EVENTS) {
+            pendingRejections.add(new RejectEvent(reason, phase));
+        }
+    }
+
+    /** 构造期拒绝事件（reason + phase 对，仅重放用）。 */
+    private record RejectEvent(Reason reason, Phase phase) {
+    }
+
     /** 启动恢复：从持久化层重建已最终化检查点、投票者缓存与投票权重。 */
     private void restoreFromStore() {
         stateStore.loadAllFinalized().keySet().forEach(finalizedCheckpoints::add);
@@ -175,10 +270,13 @@ public class FinalityGadget {
                     log.warn("Startup restore: dropping vote with invalid signature: "
                                     + "epoch={}, validator={}",
                             vote.getEpoch(), vote.getValidatorAddress());
+                    countVoteRejected(Reason.SIGNATURE_INVALID, Phase.RESTORE);
                     continue;
                 }
                 String validatorAddress = vote.getValidatorAddress();
                 if (validatorAddress == null || validatorAddress.isEmpty()) {
+                    log.warn("Startup restore: dropping malformed vote row (missing validator address)");
+                    countVoteRejected(Reason.MALFORMED_VOTE, Phase.RESTORE);
                     continue;   // 防御：畸形行不得让启动恢复抛 NPE
                 }
                 if (!restored.add(validatorAddress)) {
@@ -288,17 +386,29 @@ public class FinalityGadget {
      *
      * <p>成本：每票一次 Ed25519 验签（验证人数量级）；最终化时的聚合验签保留为
      * 纵深防御，不因本校验而移除。</p>
+     *
+     * <p>PLAN-066：每条拒绝分支同时把原因/路径送进 {@link FinalityRejectionCounter}，
+     * 否则"被伪造票攻击了多久"只能靠 grep 日志回答。</p>
+     *
+     * @param phase 拒绝发生在哪条路径（指标标签；判定逻辑与 phase 无关）
      */
-    private boolean validateVoteBinding(Vote vote) {
+    private boolean validateVoteBinding(Vote vote, Phase phase) {
         if (vote == null) {
+            countVoteRejected(Reason.MALFORMED_VOTE, phase);
             return false;
         }
         String validatorAddress = vote.getValidatorAddress();
         if (validatorAddress == null || validatorAddress.isEmpty()) {
+            countVoteRejected(Reason.MALFORMED_VOTE, phase);
             return false;
         }
         Validator v = validatorRegistry.getValidator(validatorAddress);
-        if (v == null || v.getStatus() != ValidatorStatus.ACTIVE) {
+        if (v == null) {
+            countVoteRejected(Reason.VALIDATOR_UNKNOWN, phase);
+            return false;
+        }
+        if (v.getStatus() != ValidatorStatus.ACTIVE) {
+            countVoteRejected(Reason.VALIDATOR_INACTIVE, phase);
             return false;
         }
         String registeredPubHex = v.getPublicKey();
@@ -310,12 +420,14 @@ public class FinalityGadget {
                     vote.getValidatorAddress(),
                     registeredPubHex == null || registeredPubHex.isEmpty() ? "none" : "present",
                     votePubKey == null || votePubKey.length == 0 ? "none" : "mismatch");
+            countVoteRejected(Reason.PUBKEY_MISMATCH, phase);
             return false;
         }
         // PLAN-065：公钥匹配不等于签名有效——必须在计票/落库前验签。
         if (!hasValidVoteSignature(vote)) {
             log.warn("Vote signature verification FAILED for validator {} (epoch={})",
                     validatorAddress, vote.getEpoch());
+            countVoteRejected(Reason.SIGNATURE_INVALID, phase);
             return false;
         }
         return true;
@@ -374,7 +486,7 @@ public class FinalityGadget {
                 if (vote == null || voters.contains(vote.getValidatorAddress())) {
                     continue;   // 去重：同一验证人不重复计权
                 }
-                if (!validateVoteBinding(vote)) {
+                if (!validateVoteBinding(vote, Phase.CONVERGENCE)) {
                     continue;   // 与提交路径同一口径的绑定校验
                 }
                 voters.add(vote.getValidatorAddress());
@@ -463,6 +575,7 @@ public class FinalityGadget {
         if (total.signum() <= 0) {
             // 启动早期验证人/质押尚未装载时，不能把“总权重 0”误判为 100% 最终化。
             log.warn("Finality vote ignored at epoch={}: total validator weight is zero", epoch);
+            countVoteRejected(Reason.ZERO_TOTAL_WEIGHT, Phase.ADMISSION);
             return record(epoch, vote.getCheckpointHash(), total);
         }
 
@@ -471,7 +584,7 @@ public class FinalityGadget {
         // 占住验证人位、把合法票去重掉，最终化永远失败。
         // 不能先把未验证的票写入 voters/DB——否则重启恢复时会把无效投票
         // 的质押权重重新计入，破坏最终性安全边界。
-        if (!validateVoteBinding(vote)) {
+        if (!validateVoteBinding(vote, Phase.ADMISSION)) {
             return record(epoch, vote.getCheckpointHash(), total);
         }
 
@@ -594,6 +707,7 @@ public class FinalityGadget {
             // fail-closed：聚合验签失败则不最终化，重复票不重复触发验签。
             finalizationRejected.add(checkpointKey);
             log.warn("Finality aggregate verification failed for {}; checkpoint remains unfinalized", checkpointKey);
+            countFinalizeRejected(FinalizeReason.AGGREGATE_VERIFICATION_FAILED);
             return false;
         }
 
