@@ -3,7 +3,7 @@
 > **性质**：给新加入的 Agent 的「一页入口」，不是规范本体。规范以
 > `docs/agent-board/README.md`、`README.md` 与 CI 门禁为准；本页在冲突时让位。
 >
-> **快照时间**：2026-11-02（master `df79da1e`）。分工与在途 PR 变化很快，
+> **快照时间**：2026-11-02（master `c0485ea8`）。分工与在途 PR 变化很快，
 > 以 `docs/agent-board/` 最新留言为准；本页只负责把「先读什么、怎么开工、
 > 哪里不能碰」说清楚。
 
@@ -52,7 +52,7 @@ Code Hygiene、k6 Smoke、OWASP Dependency-Check、Build & Test，以及 MPC 集
 ## 4. 工作树与主树（最容易踩的坑）
 
 - `F:/Nexus/NexusChain` 是**共享主树**，多个 Agent 共用；它经常停在旧基点
-  （2026-11-02 时落后 origin 7 个提交，且带 3 条未跟踪留言）。
+  （2026-11-02 时落后 origin 9 个提交，且带 3 条未跟踪留言）。
 - **不要**在主树切分支、rebase、reset、clean。需要开工时从 `origin/master` 新建 worktree：
 
 ```bash
@@ -86,9 +86,9 @@ git -C F:/Nexus/NexusChain worktree add -b <type>/<slug> F:/Nexus/nc-wt-<slug> o
 
 | 身份 | 当前域 | 在途 |
 |---|---|---|
-| **nex** | consensus / finality / 补票 / 指标门禁；结算 S1–S3；多项裁决 | #352（S3，DRAFT）；#393（PLAN-066 拒绝计数指标，认领） |
-| **zcode** | gateway 审批/执行腿、SDK 词表、ADR-036、signTransfer 幂等键 | ADR-036 勘误（等 #390 合入后落笔）；幂等键 ADR 草案 |
-| **qoder CN** | wallet/signing fail-closed 收敛、deploy 渲染门禁、板面签收门禁 | #390（三条结果不明路径收敛，已全绿待合） |
+| **nex** | consensus / finality / 补票 / 指标门禁；结算 S1–S3；多项裁决 | #352（S3，DRAFT）；PLAN-066 实现（认领已合 #393） |
+| **zcode** | gateway 审批/执行腿、SDK 词表、ADR-036、signTransfer 幂等键 | ADR-036 勘误（#390 已合，可落笔）；幂等键 ADR 草案 |
+| **qoder CN** | wallet/signing fail-closed 收敛、deploy 渲染门禁、板面签收门禁 | #390 已合（`0386b8af`） |
 | **codearts agent** | Flyway 迁移号段 / DB 文档 / README 成熟度核对 | 无明显在途（#379/#380 已闭环） |
 | **eng-review** | 全仓审计、资金路径 P0 批次、发布收口 | 自 10-19 后无明显板面动作 |
 | **orchestrator** | 指派、裁决、外部前置 | 不直接写代码 |
@@ -100,13 +100,14 @@ git -C F:/Nexus/NexusChain worktree add -b <type>/<slug> F:/Nexus/nc-wt-<slug> o
 
 ## 7. 当前闸门与待办（快照）
 
-1. **#390 已全绿待合**：合入后 zcode 才能改 ADR-036 的「A2-off 零行为变化」两处表述。
+1. **#390 已合（`0386b8af`）**：zcode 落 ADR-036「A2-off 零行为变化」勘误的前置已解除。
 2. **#352（S3）**：依赖 #347 已合（10-29），可 rebase/去 DRAFT；法币 `payee=null` 政策仍未决。
-3. **0247/0249 未送达**：只在共享主树工作区，master 上看不到；0248 已由 #359/#364 兑现、
+3. **PLAN-066**：认领已随 #393 合入（`c0485ea8`），实现（拒绝计数指标 + 告警）待做。
+4. **0247/0249 未送达**：只在共享主树工作区，master 上看不到；0248 已由 #359/#364 兑现、
    #388 明确可销账。0249 是法币收款方政策请求，不送达则裁决不启动。
-4. **staging A2**：A2 开着但 `NEX_WALLET_PLATFORM_PUBKEY` 未下发 ⇒ 当前 master 部署即
+5. **staging A2**：A2 开着但 `NEX_WALLET_PLATFORM_PUBKEY` 未下发 ⇒ 当前 master 部署即
    提现腿 100% fail-closed；需要公钥值 + 「先关后开」的决定。
-5. **A3 风控口径**：限额按自然日 vs 滚动 24h，需产品拍板。
+6. **A3 风控口径**：限额按自然日 vs 滚动 24h，需产品拍板。
 
 ## 8. 资金语义口径（改代码前先对齐）
 
