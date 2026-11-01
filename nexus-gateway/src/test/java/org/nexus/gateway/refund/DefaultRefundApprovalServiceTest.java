@@ -47,8 +47,10 @@ class DefaultRefundApprovalServiceTest {
         // 三段式执行以编程式事务独立提交认领/落库段；单测里让事务边界"透传"（回调同步执行）
         lenient().when(transactionManager.getTransaction(any()))
                 .thenAnswer(inv -> new SimpleTransactionStatus());
+        // 模拟"已正确配置平台退款地址的部署"（2026-11-02 起 @Value 默认为空，
+        // 未配置 ⇒ 执行前 fail-closed，见 unsetPlatformRefundAddressFailsClosed）
         service = new DefaultRefundApprovalService(refundRequestRepository, paymentOrderRepository,
-                policy, executionChannel, "PLATFORM_HOT_WALLET", transactionManager);
+                policy, executionChannel, "1PlatformRefundHot0000000000000000000", transactionManager);
 
         paidOrder = new PaymentOrder();
         paidOrder.setId(1L);
@@ -273,6 +275,35 @@ class DefaultRefundApprovalServiceTest {
         assertNull(result.getChainTxHash());
         assertNotNull(result.getRejectionReason());
         assertTrue(result.getRejectionReason().contains("broadcast rejected"));
+    }
+
+    @Test
+    void executeRefund_unsetPlatformRefundAddressFailsClosed() {
+        // 2026-11-02（板 20261102-0321，与 wallet 2026-10-27 同型）：平台退款地址未配置
+        // ⇒ 执行前 fail-closed 拒绝（FAILED + 原因明写 not configured），
+        // 绝不把占位符假地址 "PLATFORM_HOT_WALLET" 发给执行通道。
+        service = new DefaultRefundApprovalService(refundRequestRepository, paymentOrderRepository,
+                policy, executionChannel, "", transactionManager);
+        RefundRequest approved = newPendingRequest();
+        approved.setStatus(RefundRequest.RefundStatus.APPROVED);
+        when(refundRequestRepository.claimForExecution(eq(10L), any())).thenReturn(1);
+        when(refundRequestRepository.findById(10L)).thenReturn(Optional.of(approved));
+        when(refundRequestRepository.markFailed(eq(10L), any(), any()))
+                .thenAnswer(inv -> {
+                    approved.setStatus(RefundRequest.RefundStatus.FAILED);
+                    approved.setRejectionReason(inv.getArgument(1));
+                    return 1;
+                });
+
+        RefundRequest result = service.executeRefund(10L);
+
+        assertEquals(RefundRequest.RefundStatus.FAILED, result.getStatus());
+        assertNull(result.getChainTxHash());
+        assertNotNull(result.getRejectionReason());
+        assertTrue(result.getRejectionReason().contains("not configured"));
+        // 执行通道零交互（出款确定未发生），付款人地址也从未被查询（配置校验在前）
+        verifyNoInteractions(executionChannel);
+        verify(paymentOrderRepository, never()).findById(any());
     }
 
     @Test

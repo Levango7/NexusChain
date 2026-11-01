@@ -233,6 +233,15 @@ nexus:
     # 紧急回滚场景（Feign 调用失败率飙升）可置 true 切回 RestTemplate + 硬编码 baseUrl。
     enabled: false
 
+  # 退款平台热钱包地址（链上退款的发起方 from）。
+  # 2026-11-02（板 20261102-0321，与 wallet 2026-10-27 同型）：默认值由占位符字面量
+  # 改为**空**——原默认会让未配置的部署把 "PLATFORM_HOT_WALLET" 假地址发给执行通道
+  # （退款必然失败、原因不可辨认）。现语义：未配置 ⇒ 退款执行前 fail-closed 拒绝
+  # （原因明写 not configured）；显式配成占位符 ⇒ 放行但 WARN。
+  gateway:
+    refund:
+      platform-address: ${NEX_GATEWAY_REFUND_PLATFORM_ADDRESS:}
+
   # Phase 1 任务 #55：服务边界拆分 + Feign 传输配置
   #
   # transport-mode=feign：gateway 通过 OpenFeign + Nacos 服务发现调用独立部署的
