@@ -176,6 +176,10 @@ FinalityGadget.submitVote 抛 BadSqlGrammarException
   或人工恢复。该限制是 liveness 风险，不改变“数据库确认前不报告 FINALIZED”的
   安全边界；生产级修复需要持久化投票签名或 outbox。
 8. **real-L1 与桥不变**：本次未触碰真机 L1、桥存款/提款/已提交根持久化。
+9. **（2026-11-01 回填）** #1 与 #7 已由 [PLAN-018](PLAN-018-finality-persistence.md)
+   关闭：`finality_vote_outbox` + `FinalityOutboxManager` 提供持久化重试队列；
+   完整 `Vote` 签名随票落库，重启后无需新票即可补最终化
+   （`FinalityRestartFinalizationTest`）。本条保留为当时边界的历史记录。
 
 ---
 
