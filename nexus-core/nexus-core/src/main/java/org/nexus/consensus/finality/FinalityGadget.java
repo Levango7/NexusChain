@@ -10,6 +10,7 @@ import org.nexus.consensus.finality.SignatureAggregator.AggregatedSignature;
 import org.nexus.consensus.finality.persistence.FinalityStateStore;
 import org.nexus.consensus.finality.persistence.InMemoryFinalityStateStore;
 import org.nexus.consensus.finality.persistence.JdbcFinalityStateStore;
+import org.nexus.crypto.ed25519.Ed25519PublicKey;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
@@ -28,8 +29,9 @@ import java.util.concurrent.ConcurrentHashMap;
  *   <li>检测双签产生 {@link EquivocationEvidence}</li>
  * </ul>
  *
- * <p>M1 阶段不验签（签名验证明智至 M3 BLS 集成时统一接入，
- * 当前仅按提交者身份累积权重，便于单节点测试）。</p>
+ * <p>签名验证分两层：投票进入计票/落库之前先做**单票 Ed25519 验签 + 公钥绑定**
+ * （PLAN-065 修复：只比对公钥不验签，会让伪造票占住验证人位、把合法票去重掉，
+ * 最终化永远失败）；最终化时再做一次聚合验签，作为纵深防御保留。</p>
  */
 @Component
 public class FinalityGadget {
@@ -139,7 +141,11 @@ public class FinalityGadget {
     /** 启动恢复：从持久化层重建已最终化检查点、投票者缓存与投票权重。 */
     private void restoreFromStore() {
         stateStore.loadAllFinalized().keySet().forEach(finalizedCheckpoints::add);
+        // 已终局的检查点：历史事实，保留全部投票者（含迁移前无签名行）仅用于展示。
         stateStore.loadAllVotes().forEach((key, voters) -> {
+            if (!finalizedCheckpoints.contains(key)) {
+                return;
+            }
             // 恢复投票者集合，并按当前质押重建投票权重（权重为衍生值，不持久化）
             Set<String> restored = ConcurrentHashMap.newKeySet();
             restored.addAll(voters);
@@ -154,13 +160,44 @@ public class FinalityGadget {
             }
             epochCheckpointWeights.put(key, sum);
         });
-        // PLAN-018：恢复带签名的完整 Vote 对象 —— 这是"重启后仍能补最终化"的前提。
-        // 已终局的检查点不再需要验签，跳过以免把全部历史 Vote 读进内存。
+        // 未终局的检查点：只信任"签名有效"的票（PLAN-065）。
+        // 修复前伪造票可以落库；启动恢复若无条件信任历史行，脏行会占住验证人位，
+        // 真正的合法票随后被当作重复票去重，检查点永久无法最终化。
         stateStore.loadAllVoteObjects().forEach((key, votes) -> {
             if (finalizedCheckpoints.contains(key) || votes == null || votes.isEmpty()) {
                 return;
             }
-            epochCheckpointVotes.put(key, new java.util.concurrent.CopyOnWriteArrayList<>(votes));
+            Set<String> restored = ConcurrentHashMap.newKeySet();
+            List<Vote> validVotes = new ArrayList<>();
+            BigDecimal sum = BigDecimal.ZERO;
+            for (Vote vote : votes) {
+                if (!hasValidVoteSignature(vote)) {
+                    log.warn("Startup restore: dropping vote with invalid signature: "
+                                    + "epoch={}, validator={}",
+                            vote.getEpoch(), vote.getValidatorAddress());
+                    continue;
+                }
+                String validatorAddress = vote.getValidatorAddress();
+                if (validatorAddress == null || validatorAddress.isEmpty()) {
+                    continue;   // 防御：畸形行不得让启动恢复抛 NPE
+                }
+                if (!restored.add(validatorAddress)) {
+                    continue;   // 同一验证人只计一次（补票可能重复投递）
+                }
+                validVotes.add(vote);
+                Validator v = validatorRegistry == null
+                        ? null : validatorRegistry.getValidator(validatorAddress);
+                if (v != null && v.getStatus() == ValidatorStatus.ACTIVE) {
+                    sum = sum.add(stakingService == null
+                            ? BigDecimal.ZERO : stakingService.getStake(validatorAddress));
+                }
+            }
+            if (!restored.isEmpty()) {
+                epochCheckpointVoters.put(key, restored);
+                epochCheckpointWeights.put(key, sum);
+                epochCheckpointVotes.put(key,
+                        new java.util.concurrent.CopyOnWriteArrayList<>(validVotes));
+            }
         });
         // PLAN-018：恢复后立即尝试补最终化 —— 之前"重启即失去最终化能力"的根因是
         // 完整 Vote 没落库；现在签名恢复了，重启后应当能自己把已达阈值的检查点补上。
@@ -212,14 +249,55 @@ public class FinalityGadget {
     }
 
     /**
-     * 身份/公钥绑定校验（PLAN-021 抽出，供提交路径与**跨节点收敛**路径共用）。
+     * 单票签名验证（只依赖票自身携带的公钥，不查注册表）。
      *
-     * <p>口径必须与 {@link #submitVote} 完全一致：只有"在注册表里且状态为 ACTIVE、
-     * 且投票携带的公钥与注册公钥一致"的票才允许计权。收敛路径若放宽这一条，
-     * 就等于让**库里的任意行**都能给自己加权重。</p>
+     * <p>启动恢复时验证人集可能尚未装载，不能在这里做注册表绑定；网络/收敛入口
+     * 先做绑定校验，再调用本方法。</p>
+     */
+    private boolean hasValidVoteSignature(Vote vote) {
+        if (vote == null) {
+            return false;
+        }
+        byte[] signature = vote.getSignature();
+        byte[] checkpoint = vote.getCheckpointHash();
+        byte[] publicKey = vote.getPublicKeyBytes();
+        if (signature == null || signature.length == 0
+                || checkpoint == null
+                || publicKey == null || publicKey.length == 0) {
+            return false;
+        }
+        try {
+            return new Ed25519PublicKey(publicKey).verify(vote.signingPayload(), signature);
+        } catch (RuntimeException e) {
+            // fail-closed：公钥/签名格式异常一律视为验签失败。
+            return false;
+        }
+    }
+
+    /**
+     * 投票准入校验：身份/公钥绑定 + **单票签名验签**（PLAN-065）。
+     *
+     * <p>为什么不能只比对公钥：公钥是公开信息。攻击者无需私钥即可伪造
+     * {@code Vote(epoch, cp, 合法验证人, 垃圾签名, 该验证人公钥)}——绑定校验会通过，
+     * 伪造票随后落库、计权重、进入 voters；真正的验证人投出合法票时反而被当作
+     * "重复票"幂等拒绝，最终化时聚合验签永远失败，该检查点永久无法最终化
+     * （重启后依旧，因为伪造票已经落库）。因此验签必须发生在**计票/落库之前**。</p>
+     *
+     * <p>口径与 {@link #submitVote} / 跨节点收敛路径共用：任何一条路径放宽，
+     * 都等于让"库里的任意行"或"网络上的任意消息"给自己加权重。</p>
+     *
+     * <p>成本：每票一次 Ed25519 验签（验证人数量级）；最终化时的聚合验签保留为
+     * 纵深防御，不因本校验而移除。</p>
      */
     private boolean validateVoteBinding(Vote vote) {
-        Validator v = validatorRegistry.getValidator(vote.getValidatorAddress());
+        if (vote == null) {
+            return false;
+        }
+        String validatorAddress = vote.getValidatorAddress();
+        if (validatorAddress == null || validatorAddress.isEmpty()) {
+            return false;
+        }
+        Validator v = validatorRegistry.getValidator(validatorAddress);
         if (v == null || v.getStatus() != ValidatorStatus.ACTIVE) {
             return false;
         }
@@ -232,6 +310,12 @@ public class FinalityGadget {
                     vote.getValidatorAddress(),
                     registeredPubHex == null || registeredPubHex.isEmpty() ? "none" : "present",
                     votePubKey == null || votePubKey.length == 0 ? "none" : "mismatch");
+            return false;
+        }
+        // PLAN-065：公钥匹配不等于签名有效——必须在计票/落库前验签。
+        if (!hasValidVoteSignature(vote)) {
+            log.warn("Vote signature verification FAILED for validator {} (epoch={})",
+                    validatorAddress, vote.getEpoch());
             return false;
         }
         return true;
@@ -251,7 +335,8 @@ public class FinalityGadget {
      *
      * <p><b>安全边界</b>：</p>
      * <ul>
-     *   <li>合并进来的票**必须**通过与提交路径同一套绑定校验（{@link #validateVoteBinding}）；</li>
+     *   <li>合并进来的票**必须**通过与提交路径同一套准入校验
+     *       （{@link #validateVoteBinding}：注册表身份 + 公钥绑定 + 单票验签）；</li>
      *   <li>合并是**单调**的：只增不减（与"缓存不设 TTL"的理由一致 —— 最终性事实不可逆）；</li>
      *   <li>去重靠投票者集合（同一验证人不会被计两次权重）；</li>
      *   <li>拉取窗口只覆盖"最近若干个 epoch"，避免每次全表扫描。</li>
@@ -382,7 +467,9 @@ public class FinalityGadget {
         }
 
         // P0-1 审计修复：先做身份/公钥绑定校验，再记录投票。
-        // 不能先把未验证的地址写入 voters/DB——否则重启恢复时会把无效投票
+        // PLAN-065：绑定校验同时包含**单票签名验签**——只比对公钥的话，伪造票会
+        // 占住验证人位、把合法票去重掉，最终化永远失败。
+        // 不能先把未验证的票写入 voters/DB——否则重启恢复时会把无效投票
         // 的质押权重重新计入，破坏最终性安全边界。
         if (!validateVoteBinding(vote)) {
             return record(epoch, vote.getCheckpointHash(), total);
@@ -481,7 +568,7 @@ public class FinalityGadget {
 
         List<Vote> votes = epochCheckpointVotes.get(checkpointKey);
         if (votes == null || votes.isEmpty()) {
-            // 重启后只恢复了投票者地址，完整 Vote 签名对象未持久化。
+            // 没有可验签的 Vote 对象（例如存储实现不支持签名恢复）。
             // 此时不能仅凭数据库中的权重直接宣布最终化；等待新的投票对象
             // 到达后重新走聚合验签路径。
             log.debug("Finality threshold reached for {} but no vote signatures are loaded; deferring finalization",
@@ -489,17 +576,15 @@ public class FinalityGadget {
             return false;
         }
 
-        // PLAN-018：验签覆盖度观测。
-        // 计数口径保持不变（权重按 epochCheckpointVoters 计）—— 因为 finality_votes 里的
-        // 每��行都是**本节点验签通过后才写入**的（计票前先做公钥绑定校验），它本身就是
-        // "该验证人签过这个检查点"的凭证。若因为历史行没有签名（迁移前写入）就拒绝最终化，
-        // 会把那些检查点永久卡住（活性风险），因此这里不拒绝，只记录覆盖度以便观测。
-        // 迁移之后写入的票都带签名，重启后恢复的 Vote 集合与投票者集合一致 ⇒ 聚合验签
-        // 覆盖全部票，这条残余口径只会影响迁移前的老数据。
+        // PLAN-018 的验签覆盖度观测。
+        // PLAN-065 起，未终局检查点的 voters / weights / votes 都只由**签名有效**的票
+        // 重建，正常情况下 votes.size() == voters.size()；网络提交与收敛路径也都在
+        // 计票前验签。这里保留覆盖度日志用于观测旧存储实现（只返回地址行）的残余口径，
+        // 不据此拒绝最终化——已终局检查点不会走到本方法。
         Set<String> voters = epochCheckpointVoters.get(checkpointKey);
         if (voters != null && votes.size() < voters.size()) {
-            log.debug("Finality aggregate covers {}/{} voters for {}; the remaining votes were "
-                            + "recorded before signature persistence and are trusted as accepted facts",
+            log.debug("Finality aggregate covers {}/{} voters for {}; remaining votes were restored "
+                            + "from an address-only store and cannot be re-verified",
                     votes.size(), voters.size(), checkpointKey);
         }
 

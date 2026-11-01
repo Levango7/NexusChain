@@ -226,8 +226,8 @@ class FinalityGadgetFaultInjectionTest {
     }
 
     @Test
-    void restartAfterVoteButBeforeFinalizationNeedsNewSignatureToFinish() {
-        // 数据库已有 v1/v2 的投票，但最终化标记写失败；模拟进程重启。
+    void restartFromAddressOnlyStoreDropsUnsignedVotesAndReaccumulates() {
+        // 老库（PLAN-018 之前）只存投票者地址、不存签名：模拟最终化标记写失败后重启。
         store.failMarkFinalized = true;
         gadget.submitVote(vote("v1", 1, CP1));
         assertThrows(IllegalStateException.class, () -> gadget.submitVote(vote("v2", 1, CP1)));
@@ -235,12 +235,14 @@ class FinalityGadgetFaultInjectionTest {
         store.failMarkFinalized = false;
         FinalityGadget restarted = newGadget(store);
         assertFalse(restarted.isFinalized(1, CP1));
-        assertEquals(new BigDecimal("600"), restarted.getFinality(1, CP1).getVotedWeight(),
-                "投票者/权重应从持久化层恢复");
+        // PLAN-065：无法验签的历史行不能被信任，重启后不得据此恢复权重/占位；
+        // 否则伪造票（或迁移前脏行）会永久挡住合法票。
+        assertEquals(0, restarted.getFinality(1, CP1).getVotedWeight().signum(),
+                "无签名的历史行不得在重启后恢复权重（无法验签即不可信）");
 
-        // 完整 Vote 签名对象没有持久化，重启后不能只凭 voters 直接宣布最终化；
-        // 新票到达后重新走聚合验签路径，阈值达成即可完成最终化。
-        FinalityRecord finished = restarted.submitVote(vote("v3", 1, CP1));
+        // 合法票重新到达后正常累计并最终化，证明被丢弃的历史行不会占位。
+        restarted.submitVote(vote("v1", 1, CP1));
+        FinalityRecord finished = restarted.submitVote(vote("v2", 1, CP1));
         assertTrue(finished.isFinalized());
         assertTrue(restarted.isFinalized(1, CP1));
         assertTrue(store.isFinalized(1, CP1));
