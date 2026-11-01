@@ -291,9 +291,12 @@ jobs:
 
       # PLAN-002 Step C: PrometheusRule 静态校验（YAML 结构 + 告警数）
       # kubectl apply --dry-run=client 验 CRD schema——若集群无
-      # monitoring.coreos.com CRD 则跳过。promtool 校验 PromQL 表达式
-      # 需二进制安装（GitHub release 1 步），不强制——应用 prom metrics
-      # 大部分 TODO（2.x 阶段补），告警表达式暂只基于 kube_* 通用 metrics。
+      # monitoring.coreos.com CRD 则跳过。
+      # 注意（2026-11-01 PLAN-064）：本步**不看 PromQL**——表达式写错、
+      # 阈值写反、两侧标签集不匹配（除法恒空、告警永不触发）都在这步全绿。
+      # 表达式级校验与逐条触发演练见下一步「promtool 规则演练」。原注释
+      # 「应用 metrics 大部分 TODO、promtool 不强制」的理由已过时：
+      # 应用指标 10/12 早已注册并有名字契约门禁（PLAN-062/063）。
       - name: PrometheusRule 静态校验
         run: |
           set -e
@@ -318,6 +321,47 @@ jobs:
           if [ "$missing" -lt "$cnt" ]; then
             echo "FAIL: 部分 alert 缺少 for: 字段"; exit 1
           fi
+
+      # PLAN-064（2026-11-01）：promtool 规则演练——上面静态校验只验 YAML 结构
+      # 与计数，PromQL 语义/阈值/标签匹配不在其中。本步对**全部 18 条告警**做
+      # 两级验证：
+      #   1) check rules —— 18 条 PromQL 全部可解析（语法/语义）；
+      #   2) test rules  —— 逐条演练「满足阈值 ⇒ 在 for 窗口后触发 / 不满足 ⇒
+      #      不触发 / 时长不足 ⇒ 不触发」（用例见
+      #      deploy/k8s/tests/prometheus-rules.test.yaml）。
+      # 首跑即抓到两条**从未触发**的告警（PodCpu/PodMemory：两侧标签集不匹配、
+      # 除法恒空）——已随本 PLAN 修复，防回归由本步守住。
+      # 为什么放本 workflow 而不是 ci.yml：规则文件在 deploy/k8s/，本 workflow
+      # 的 paths 过滤恰好覆盖；它虽非 required check，但失败会让 PR 的
+      # mergeStateStatus=UNSTABLE —— 与「只合 CLEAN」的合并口径一致。
+      # promtool 固定 v3.15.1 + sha256（每次运行下载约 110MB；升级改这两处）。
+      - name: promtool 规则演练（check rules + test rules）
+        run: |
+          set -euo pipefail
+          PROM_VERSION=3.15.1
+          PROM_SHA256=6a726885328ad9efebbf36e876ce2fb6225468a71fd1e7ce3ba666d5f4d97a84
+          PROM_TGZ="$RUNNER_TEMP/prometheus-${PROM_VERSION}.linux-amd64.tar.gz"
+          for attempt in 1 2 3; do
+            if curl -sSLf --retry 3 --retry-delay 5 -o "$PROM_TGZ" \
+              "https://github.com/prometheus/prometheus/releases/download/v${PROM_VERSION}/prometheus-${PROM_VERSION}.linux-amd64.tar.gz"; then
+              break
+            fi
+            echo "::warning::promtool 下载第 ${attempt} 次失败，15s 后重试"
+            sleep 15
+          done
+          [ -s "$PROM_TGZ" ] || { echo "::error::promtool 下载连续失败"; exit 1; }
+          echo "${PROM_SHA256}  ${PROM_TGZ}" | sha256sum -c -
+          tar -xzf "$PROM_TGZ" -C "$RUNNER_TEMP"
+          PROMTOOL="$RUNNER_TEMP/prometheus-${PROM_VERSION}.linux-amd64/promtool"
+          "$PROMTOOL" --version
+          GATE_DIR="$RUNNER_TEMP/prom-gate"
+          mkdir -p "$GATE_DIR"
+          python3 scripts/extract-prometheus-rules.py \
+            deploy/k8s/50-prometheus-rules.yaml "$GATE_DIR/rules.yaml"
+          cp deploy/k8s/tests/prometheus-rules.test.yaml "$GATE_DIR/"
+          "$PROMTOOL" check rules "$GATE_DIR/rules.yaml"
+          ( cd "$GATE_DIR" && "$PROMTOOL" test rules prometheus-rules.test.yaml )
+          echo "  ✓ promtool check rules + test rules 全部通过"
 
       # PLAN-002 完善-修2（2026-09-09 修3）：生产 SealedSecret 模式渲染断言——
       # values-prod.yaml 设 sealedSecretName 后，secret.yaml 的【配置 Secret】

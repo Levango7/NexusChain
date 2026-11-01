@@ -4,11 +4,15 @@
 # 依赖：kube-prometheus-stack（Prometheus Operator + PrometheusRule CRD）
 # 部署：kubectl apply -f deploy/k8s/50-prometheus-rules.yaml
 # 验证：本文件是 PrometheusRule CRD（非原生 rules 文件），promtool 不能直接校验；
-#       需 kubectl 应用后提取 spec.groups 再跑 promtool（见 k8s-sync-check.yml）。
+#       由 scripts/extract-prometheus-rules.py 提取 spec.groups 后跑 promtool（check
+#       rules + test rules）——测试用例见 deploy/k8s/tests/prometheus-rules.test.yaml，
+#       CI 步骤见 k8s-sync-check.yml「promtool 规则演练」（PLAN-064，2026-11-01）。
 #
 # 设计原则（避免告警疲劳）：
-#   1. 告警数 17 条（2026-09-09 "告警真值"整合 11 条 + PLAN-040 区块持久化 4 条
-#      + PLAN-045 最终性 2 条）：
+#   1. 告警数 18 条（2026-09-09 "告警真值"整合 11 条 + PLAN-040 区块持久化 4 条
+#      + PLAN-045 最终性 2 条 + PLAN-052 弃权风险 1 条；2026-11-01 PLAN-064
+#      用 promtool 实测逐条计数时发现此处曾停留在 17——原门禁只断言"≥5"，
+#      数量漂移从不触发）：
 #      原 5 条 + 从 legacy deploy/monitoring/alerting-rules.yaml 并入 6 条真实指标告警
 #      （JVM/GC、Pod 资源、ServiceDown、SeataTcDown）+ 2026-10-26 的 4 条区块持久化告警
 #      + 2 条最终性告警；legacy 文件中 11 条引用幽灵指标名（代码从未注册）的告警
@@ -292,12 +296,17 @@ spec:
     interval: 30s
     rules:
     # Pod CPU > limit 80% 持续 10m——节流影响延迟
+    # 2026-11-01 PLAN-064（promtool 单测首跑发现）：分母原为裸
+    # kube_pod_container_resource_limits，与左侧 sum by (pod, container) 的标签集
+    # 不同（RHS 多 resource/job/instance），除法向量匹配恒空 ⇒ 该告警**从未触发**。
+    # 实测：恒定 85% 使用率 20 分钟 got:[]；改为 sum by (pod, container) 归一
+    # 标签集后同一序列正常触发。（缺 limit 序列时两侧无匹配、仍不触发——语义保留。）
     - alert: PodCpuUsageHigh
       expr: |
         (
           sum(rate(container_cpu_usage_seconds_total{namespace="nexus", container!="", container!="POD"}[5m])) by (pod, container)
           /
-          clamp_min(kube_pod_container_resource_limits{namespace="nexus", resource="cpu"}, 1)
+          clamp_min(sum by (pod, container) (kube_pod_container_resource_limits{namespace="nexus", resource="cpu"}), 1)
         ) > 0.80
       for: 10m
       labels:
@@ -309,12 +318,15 @@ spec:
         description: "容器 {{ $labels.container }} CPU 使用率持续超过 limit 的 80%，可能触发 CPU 节流（throttling）影响延迟。"
 
     # Pod 内存 > limit 90% 持续 10m——OOMKilled 风险
+    # 2026-11-01 PLAN-064：同 PodCpuUsageHigh 的标签集不匹配缺陷——两侧都按
+    # pod/container 归一后才可能匹配（原式 LHS 带 namespace/container，RHS 多
+    # resource，恒空 ⇒ 从未触发；实测恒定 95% 使用率 14 分钟 got:[]）。
     - alert: PodMemoryUsageHigh
       expr: |
         (
-          container_memory_working_set_bytes{namespace="nexus", container!="", container!="POD"}
+          sum by (pod, container) (container_memory_working_set_bytes{namespace="nexus", container!="", container!="POD"})
           /
-          clamp_min(kube_pod_container_resource_limits{namespace="nexus", resource="memory"}, 1)
+          clamp_min(sum by (pod, container) (kube_pod_container_resource_limits{namespace="nexus", resource="memory"}), 1)
         ) > 0.90
       for: 10m
       labels:
