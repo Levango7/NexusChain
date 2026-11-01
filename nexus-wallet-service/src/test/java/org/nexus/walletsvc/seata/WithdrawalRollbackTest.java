@@ -48,8 +48,8 @@ import static org.mockito.Mockito.when;
  * <p>验证场景：
  * <ul>
  *   <li>场景 1：signing-service 抛异常 → 状态置 FAILED（catch 后正常提交）</li>
- *   <li>场景 2：signing-service 返回 null → 状态置 FAILED</li>
- *   <li>场景 3：signing-service 返回空字符串 → 状态置 FAILED</li>
+ *   <li>场景 2：signing-service 返回 null → 状态置 EXECUTED_UNVERIFIED（结果不明）</li>
+ *   <li>场景 3：signing-service 返回 2000 但无哈希 → 状态置 EXECUTED_UNVERIFIED</li>
  *   <li>场景 4：signing-service 正常返回 → 状态置 EXECUTED</li>
  * </ul>
  * </p>
@@ -117,8 +117,8 @@ class WithdrawalRollbackTest {
     }
 
     @Test
-    @DisplayName("场景 2: signing-service 返回 null → 状态置 FAILED")
-    void signingServiceReturnsNull_statusSetToFailed() {
+    @DisplayName("场景 2: signing-service 返回 null → 状态置 EXECUTED_UNVERIFIED（结果不明）")
+    void signingServiceReturnsNull_statusSetToUnverified() {
         when(signingServiceClient.signTransfer(anyString(), anyString(), any(BigDecimal.class)))
                 .thenReturn(null);
 
@@ -126,28 +126,31 @@ class WithdrawalRollbackTest {
 
         WithdrawalRequest result = withdrawalApprovalService.executeApprovedWithdrawal(requestId);
 
-        assertEquals(WithdrawalRequest.WithdrawalStatus.FAILED, result.getStatus());
+        // 2026-10-31 fail-closed 收敛：降级 null 无法证明「没广播」（熔断/读超时都可能
+        // 发生在广播之后）⇒ 不得记终态 FAILED（会被重提＝二次出款），落非终态待人工核对。
+        assertEquals(WithdrawalRequest.WithdrawalStatus.EXECUTED_UNVERIFIED, result.getStatus());
         assertNotNull(result.getRejectionReason());
 
         // 数据库验证
         WithdrawalRequestEntity entity = withdrawalRequestRepository.findByRequestId(requestId).orElseThrow();
-        assertEquals(WithdrawalRequest.WithdrawalStatus.FAILED, entity.getStatus());
+        assertEquals(WithdrawalRequest.WithdrawalStatus.EXECUTED_UNVERIFIED, entity.getStatus());
     }
 
     @Test
-    @DisplayName("场景 3: signing-service 返回空字符串 → 状态置 FAILED")
-    void signingServiceReturnsEmptyString_statusSetToFailed() {
+    @DisplayName("场景 3: signing-service 返回 2000 但无哈希 → 状态置 EXECUTED_UNVERIFIED")
+    void signingServiceReturnsEmptyString_statusSetToUnverified() {
         when(signingServiceClient.signTransfer(anyString(), anyString(), any(BigDecimal.class))).thenReturn(okResp(""));
 
         String requestId = createApprovedRequest();
 
         WithdrawalRequest result = withdrawalApprovalService.executeApprovedWithdrawal(requestId);
 
-        assertEquals(WithdrawalRequest.WithdrawalStatus.FAILED, result.getStatus());
+        // 2000 本身报告"已签名广播"，只是没回传哈希 ⇒ 更加不能当"确定未动账"。
+        assertEquals(WithdrawalRequest.WithdrawalStatus.EXECUTED_UNVERIFIED, result.getStatus());
 
         // 数据库验证
         WithdrawalRequestEntity entity = withdrawalRequestRepository.findByRequestId(requestId).orElseThrow();
-        assertEquals(WithdrawalRequest.WithdrawalStatus.FAILED, entity.getStatus());
+        assertEquals(WithdrawalRequest.WithdrawalStatus.EXECUTED_UNVERIFIED, entity.getStatus());
     }
 
     @Test

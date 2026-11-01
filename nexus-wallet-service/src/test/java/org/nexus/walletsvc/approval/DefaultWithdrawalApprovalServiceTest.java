@@ -412,7 +412,7 @@ class DefaultWithdrawalApprovalServiceTest {
     }
 
     @Test
-    void execute_feignReturnsNull_setsFailed() {
+    void execute_feignReturnsNull_isExecutedUnverified() {
         WithdrawalRequest request = service.requestWithdrawal(
                 WHITELISTED_ADDR, new BigDecimal("100"), "NEX");
         service.approve(request.getRequestId(), "approver-1");
@@ -421,19 +421,18 @@ class DefaultWithdrawalApprovalServiceTest {
 
         WithdrawalRequest executed = service.executeApprovedWithdrawal(request.getRequestId());
 
-        assertEquals(WithdrawalRequest.WithdrawalStatus.FAILED, executed.getStatus());
+        // fail-closed（2026-10-31 口径变更）：Feign 降级 null 不能证明"没广播"——
+        // 熔断/读超时都可能发生在签名广播之后。落非终态 EXECUTED_UNVERIFIED 交人工核对，
+        // 而不是 FAILED（FAILED 会被重提 ⇒ 与可能已上链的那笔构成二次出款）。
+        assertEquals(WithdrawalRequest.WithdrawalStatus.EXECUTED_UNVERIFIED, executed.getStatus());
         assertNotNull(executed.getRejectionReason());
-        // (c)-lite（2026-10-27）：执行腿改走 SigningResponses.classify 三态分类器后，
-        // 诊断文案由"empty result"变为分类器文案（null 响应 = "signing service unavailable"）。
-        // 语义契约不变：Feign 降级/空响应仍判 FAILED（确定未动账）。
-        assertTrue(executed.getRejectionReason().contains("signing service unavailable")
-                        || executed.getRejectionReason().contains("empty result"),
-                "失败原因须可辨（分类器文案或旧文案），实得：" + executed.getRejectionReason());
+        assertTrue(executed.getRejectionReason().contains("indeterminate"),
+                "须写明「结果不明」而非「确定未动账」，实得：" + executed.getRejectionReason());
         assertNull(executed.getChainTxHash());
     }
 
     @Test
-    void execute_feignReturnsEmptyString_setsFailed() {
+    void execute_status2000WithoutHash_isExecutedUnverified() {
         WithdrawalRequest request = service.requestWithdrawal(
                 WHITELISTED_ADDR, new BigDecimal("100"), "NEX");
         service.approve(request.getRequestId(), "approver-1");
@@ -442,8 +441,58 @@ class DefaultWithdrawalApprovalServiceTest {
 
         WithdrawalRequest executed = service.executeApprovedWithdrawal(request.getRequestId());
 
-        assertEquals(WithdrawalRequest.WithdrawalStatus.FAILED, executed.getStatus());
+        // 2000 = signing 报告已签名并广播，只是没回传哈希 ⇒ 更加不能当"未动账"。
+        assertEquals(WithdrawalRequest.WithdrawalStatus.EXECUTED_UNVERIFIED, executed.getStatus());
         assertNotNull(executed.getRejectionReason());
+    }
+
+    @Test
+    void legacyLeg_businessFail5000_staysTerminalFailed() {
+        WithdrawalRequest request = service.requestWithdrawal(
+                WHITELISTED_ADDR, new BigDecimal("100"), "NEX");
+        service.approve(request.getRequestId(), "approver-1");
+
+        when(signingServiceClient.signTransfer(any(), any(), any()))
+                .thenReturn(envelope(5000, "tx build failed"));
+
+        WithdrawalRequest executed = service.executeApprovedWithdrawal(request.getRequestId());
+
+        // 白名单不动：5000 是 signing 在广播之前自己判定的业务失败（确定未动账）。
+        assertEquals(WithdrawalRequest.WithdrawalStatus.FAILED, executed.getStatus());
+    }
+
+    @Test
+    void legacyLeg_executionConflict5001_isExecutedUnverified() {
+        WithdrawalRequest request = service.requestWithdrawal(
+                WHITELISTED_ADDR, new BigDecimal("100"), "NEX");
+        service.approve(request.getRequestId(), "approver-1");
+
+        when(signingServiceClient.signTransfer(any(), any(), any()))
+                .thenReturn(envelope(5001, "execution conflict"));
+
+        WithdrawalRequest executed = service.executeApprovedWithdrawal(request.getRequestId());
+
+        // 5001 = 另一路持执行权且可能正在广播 ⇒ 结果不明，禁止重提。
+        assertEquals(WithdrawalRequest.WithdrawalStatus.EXECUTED_UNVERIFIED, executed.getStatus());
+        assertTrue(executed.getRejectionReason().contains("code=5001"),
+                "须带上 signing 返回的码，实得：" + executed.getRejectionReason());
+    }
+
+    @Test
+    void legacyLeg_internalError5002_isExecutedUnverified() {
+        WithdrawalRequest request = service.requestWithdrawal(
+                WHITELISTED_ADDR, new BigDecimal("100"), "NEX");
+        service.approve(request.getRequestId(), "approver-1");
+
+        when(signingServiceClient.signTransfer(any(), any(), any()))
+                .thenReturn(envelope(5002, "Internal error"));
+
+        WithdrawalRequest executed = service.executeApprovedWithdrawal(request.getRequestId());
+
+        // 5002 = 服务端未处理异常，异常点可能在广播之后 ⇒ 结果不明。
+        assertEquals(WithdrawalRequest.WithdrawalStatus.EXECUTED_UNVERIFIED, executed.getStatus());
+        assertTrue(executed.getRejectionReason().contains("code=5002"),
+                "实得：" + executed.getRejectionReason());
     }
 
     @Test
@@ -640,5 +689,10 @@ class DefaultWithdrawalApprovalServiceTest {
     /** 契约修正（2026-09-10）：signTransfer 真实响应形状 {statusCode, data, message} 的成功响应构造器。 */
     private static java.util.Map<String, Object> okResp(String txHash) {
         return java.util.Map.of("statusCode", 2000, "data", txHash);
+    }
+
+    /** 失败信封构造器（HTTP 200 + statusCode=业务码）；data 缺省为空串，与 signing 的 fail() 形状一致。 */
+    private static java.util.Map<String, Object> envelope(int statusCode, String message) {
+        return java.util.Map.of("statusCode", statusCode, "data", "", "message", message);
     }
 }

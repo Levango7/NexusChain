@@ -544,8 +544,16 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
 
     /**
      * 既有首腿（A2 关闭 / A2 登记失败时的回落路径）：直接 signTransfer，
-     * 大额由 signing 侧建审批返回 2001。语义与 A2 之前一致；2026-10-29 起
-     * 入参经词表转换（fromPubkey / toPubkeyHash），不再是裸地址。
+     * 大额由 signing 侧建审批返回 2001。2026-10-29 起入参经词表转换
+     * （fromPubkey / toPubkeyHash），不再是裸地址。
+     *
+     * <p><b>失败语义（2026-10-31 起与 A2 腿共用同一张 fail-closed 词表）</b>：
+     * 只有契约确立的「明确未动账」码（5000/4000/4030）才落终态 FAILED；
+     * 其余（降级 null、2000 但 data 空白、5001、5002、5003、未知码）一律
+     * {@code EXECUTED_UNVERIFIED}——本腿与 signing 之间隔着一次可能已广播的
+     * HTTP 调用，把「结果不明」写成「确定未动账」会让账本失真。
+     * 2001 但缺 approvalId 同样落非终态：signing 侧留下一条无凭据可跟踪的审批请求，
+     * 若记 FAILED 就可能被人工重提 ⇒ 与那条孤儿审批构成二次出款。</p>
      */
     private OnChainResult legacyFirstLeg(WithdrawalRequestEntity e, String fromPubkey, String toPubkeyHash) {
         SigningResponses.Outcome outcome = SigningResponses.classify(signingServiceClient.signTransfer(
@@ -558,8 +566,15 @@ public class DefaultWithdrawalApprovalService implements WithdrawalApprovalServi
         if (outcome.isAwaitingApproval()) {
             return OnChainResult.awaitingApproval(outcome.approvalId(), false);
         }
-        return OnChainResult.failure(
-                outcome.message() != null ? outcome.message() : "signing service returned empty result", false);
+        Integer legacyCode = outcome.statusCode();
+        String legacyDetail = outcome.message() != null ? outcome.message() : "signing service returned empty result";
+        if (SigningResponses.declaresNotExecuted(legacyCode)) {
+            return OnChainResult.failure(legacyDetail, false);
+        }
+        return OnChainResult.executedUnverified(
+                "legacy sign outcome indeterminate (code=" + legacyCode + "; " + legacyDetail
+                        + "); not in the fail-closed not-executed vocabulary, possible prior broadcast"
+                        + " or untrackable approval request, manual reconciliation required", false);
     }
 
     /**
