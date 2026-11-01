@@ -1,0 +1,632 @@
+# ============================================================================
+# PLAN-064：PrometheusRule 告警的 promtool 单元测试（触发行为 + for: 窗口）
+# ============================================================================
+# 运行方式（CI 见 .github/workflows/k8s-sync-check.yml 的 "promtool 规则演练" 步）：
+#   1) python3 scripts/extract-prometheus-rules.py \
+#        deploy/k8s/50-prometheus-rules.yaml rules.yaml
+#   2) cp deploy/k8s/tests/prometheus-rules.test.yaml .
+#   3) promtool check rules rules.yaml
+#   4) promtool test rules prometheus-rules.test.yaml
+#   （promtool 固定版本与 sha256 见 workflow；测试文件里的 rule_files 用相对
+#    路径 rules.yaml——两者必须放在同一目录运行。）
+#
+# 覆盖口径：规则文件全部 18 条告警逐条演练——
+#   · 阈值触发：条件持续满足 ⇒ 在 for 窗口后触发（含 max() 聚合后标签变少的
+#     BlockchainCoreStalled——exp_labels 按**实际会发出**的标签集断言）；
+#   · 阈值不触发：条件不满足/低于阈值 ⇒ 不触发；
+#   · for 窗口边界：条件满足但时长不足 ⇒ 不触发（例：5m 档在 4m 不响）。
+#   exp_annotations 是**精确匹配**（promtool 语义）：{{ $labels.* }} / {{ $value }}
+#   已按各用例样本标签展开固化；规则注解文案改动后本文件需要同步更新。
+#
+# 期望值校准说明：生成时以 promtool 实际输出为准（不是手抄的）——首跑就暴露过
+# 两个事实：① max() 聚合后 job/pod 标签会消失；② PodCpu/PodMemory 两条告警
+# 因两侧标签集不匹配**从未触发**（已随本 PLAN 修复，见规则文件内注释）。
+# ============================================================================
+rule_files:
+- rules.yaml
+evaluation_interval: 1m
+tests:
+- name: blockchain-core-stalled-flat-height
+  interval: 1m
+  input_series:
+  - series: nexuschain_block_height{job="nexus-core", pod="nexus-core-0"}
+    values: 100x16
+  alert_rule_test:
+  - eval_time: 9m
+    alertname: BlockchainCoreStalled
+    exp_alerts: []
+  - eval_time: 11m
+    alertname: BlockchainCoreStalled
+    exp_alerts:
+    - exp_labels:
+        severity: critical
+        component: blockchain-core
+      exp_annotations:
+        runbook_url: https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md
+        summary: 链核心 5min 块高无增长（停摆）
+        description: max(nexuschain_block_height) 5 分钟内无增长——链停止出块。立即查 nexus-core Pod 日志（共识/存储）与 mpc-engine 状态。 genesis 链刚起或单节点 dev 环境预期也成立——仅 prod（ENABLE_MINING=true 集群）视为停摆。
+- name: blockchain-core-stalled-genesis-zero
+  interval: 1m
+  input_series:
+  - series: nexuschain_block_height{job="nexus-core", pod="nexus-core-0"}
+    values: '0x12'
+  alert_rule_test:
+  - eval_time: 4m
+    alertname: BlockchainCoreStalled
+    exp_alerts: []
+  - eval_time: 6m
+    alertname: BlockchainCoreStalled
+    exp_alerts:
+    - exp_labels:
+        severity: critical
+        component: blockchain-core
+      exp_annotations:
+        runbook_url: https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md
+        summary: 链核心 5min 块高无增长（停摆）
+        description: max(nexuschain_block_height) 5 分钟内无增长——链停止出块。立即查 nexus-core Pod 日志（共识/存储）与 mpc-engine 状态。 genesis 链刚起或单节点 dev 环境预期也成立——仅 prod（ENABLE_MINING=true 集群）视为停摆。
+- name: block-write-failures-detected
+  interval: 1m
+  input_series:
+  - series: nexus_block_writer_write_failures_total{job="nexus-core", pod="nexus-core-0"}
+    values: 0 1x30
+  alert_rule_test:
+  - eval_time: 5m
+    alertname: BlockWriteFailuresDetected
+    exp_alerts: []
+  - eval_time: 7m
+    alertname: BlockWriteFailuresDetected
+    exp_alerts:
+    - exp_labels:
+        job: nexus-core
+        pod: nexus-core-0
+        severity: warning
+        component: blockchain-core
+      exp_annotations:
+        runbook_url: https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md
+        summary: 区块写库失败/跳块（10min 内有失败尝试）
+        description: nexus-core-0 的 nexus_block_writer_write_failures_total 10 分钟内增长——写入尝试失败/跳块。该计数是**尝试次数**（同一高度重试重复计数），可能已被后续确认轮次补写。查 GET /consensus/block-writer 的 lastFailureHeight/lastFailureAtMillis 与 nexus-core 日志中的 'Failed to write block'；若同时 BlockPersistenceBacklog 触发，优先查 PG。
+- name: block-write-failures-none
+  interval: 1m
+  input_series:
+  - series: nexus_block_writer_write_failures_total{job="nexus-core", pod="nexus-core-0"}
+    values: 7x30
+  alert_rule_test:
+  - eval_time: 15m
+    alertname: BlockWriteFailuresDetected
+    exp_alerts: []
+- name: block-writer-state-update-timeouts
+  interval: 1m
+  input_series:
+  - series: nexus_block_writer_state_update_timeouts_total{job="nexus-core", pod="nexus-core-0"}
+    values: 0 1x30
+  alert_rule_test:
+  - eval_time: 5m
+    alertname: BlockWriterStateUpdateTimeouts
+    exp_alerts: []
+  - eval_time: 7m
+    alertname: BlockWriterStateUpdateTimeouts
+    exp_alerts:
+    - exp_labels:
+        job: nexus-core
+        pod: nexus-core-0
+        severity: critical
+        component: blockchain-core
+      exp_annotations:
+        runbook_url: https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md
+        summary: 区块状态更新等待超时（pendingBlock 被强制清空）
+        description: nexus-core-0 的 nexus_block_writer_state_update_timeouts_total 10 分钟内增长——StateDB 等待账户状态更新超时并强制清空 pendingBlock 防死锁。可能卡住后续区块采纳。查 GET /consensus/block-writer 与 nexus-core 日志中的 'state update timeout'；结合 PG 连接池/长事务排查。
+- name: block-writer-state-update-timeouts-none
+  interval: 1m
+  input_series:
+  - series: nexus_block_writer_state_update_timeouts_total{job="nexus-core", pod="nexus-core-0"}
+    values: 3x30
+  alert_rule_test:
+  - eval_time: 15m
+    alertname: BlockWriterStateUpdateTimeouts
+    exp_alerts: []
+- name: block-persistence-backlog-memory
+  interval: 1m
+  input_series:
+  - series: nexus_block_outbox_memory_pending{job="nexus-core", pod="nexus-core-0"}
+    values: 1x30
+  alert_rule_test:
+  - eval_time: 9m
+    alertname: BlockPersistenceBacklog
+    exp_alerts: []
+  - eval_time: 11m
+    alertname: BlockPersistenceBacklog
+    exp_alerts:
+    - exp_labels:
+        job: nexus-core
+        pod: nexus-core-0
+        severity: warning
+        component: blockchain-core
+      exp_annotations:
+        runbook_url: https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md
+        summary: 区块持久化队列积压 ≥ 10min
+        description: nexus-core-0 的内存重试队列或持久化 outbox 持续有积压——正常排空是秒级。查 GET /consensus/block-outbox 的 databasePending/oldestPendingCreatedAt/maxAttempts：年龄持续增长且 maxAttempts 高 ⇒ 可能有写不进去的行；结合 GET /consensus/block-writer 与 PG 状态。注意：outbox 行是恢复数据，不要手工删除。
+- name: block-persistence-backlog-database
+  interval: 1m
+  input_series:
+  - series: nexus_block_outbox_database_pending{job="nexus-core", pod="nexus-core-0"}
+    values: 1x30
+  alert_rule_test:
+  - eval_time: 9m
+    alertname: BlockPersistenceBacklog
+    exp_alerts: []
+  - eval_time: 11m
+    alertname: BlockPersistenceBacklog
+    exp_alerts:
+    - exp_labels:
+        job: nexus-core
+        pod: nexus-core-0
+        severity: warning
+        component: blockchain-core
+      exp_annotations:
+        runbook_url: https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md
+        summary: 区块持久化队列积压 ≥ 10min
+        description: nexus-core-0 的内存重试队列或持久化 outbox 持续有积压——正常排空是秒级。查 GET /consensus/block-outbox 的 databasePending/oldestPendingCreatedAt/maxAttempts：年龄持续增长且 maxAttempts 高 ⇒ 可能有写不进去的行；结合 GET /consensus/block-writer 与 PG 状态。注意：outbox 行是恢复数据，不要手工删除。
+- name: block-persistence-backlog-none
+  interval: 1m
+  input_series:
+  - series: nexus_block_outbox_memory_pending{job="nexus-core", pod="nexus-core-0"}
+    values: '0x30'
+  - series: nexus_block_outbox_database_pending{job="nexus-core", pod="nexus-core-0"}
+    values: '0x30'
+  alert_rule_test:
+  - eval_time: 15m
+    alertname: BlockPersistenceBacklog
+    exp_alerts: []
+- name: block-outbox-unreadable
+  interval: 1m
+  input_series:
+  - series: nexus_block_outbox_readable{job="nexus-core", pod="nexus-core-0"}
+    values: '0x20'
+  alert_rule_test:
+  - eval_time: 4m
+    alertname: BlockOutboxUnreadable
+    exp_alerts: []
+  - eval_time: 6m
+    alertname: BlockOutboxUnreadable
+    exp_alerts:
+    - exp_labels:
+        job: nexus-core
+        pod: nexus-core-0
+        severity: warning
+        component: blockchain-core
+      exp_annotations:
+        runbook_url: https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md
+        summary: 区块 outbox 已装配但连续 5min 读不到数据库
+        description: nexus-core-0 的 nexus_block_outbox_readable=0——outbox 已装配但 databasePending 连续为 -1（PG 不可达/查询失败）。此时链可能仍在内存中出块，但补写/恢复能力受限；优先恢复 PG 连接，恢复后确认 databasePending 归零。
+- name: block-outbox-readable-no-alert
+  interval: 1m
+  input_series:
+  - series: nexus_block_outbox_readable{job="nexus-core", pod="nexus-core-0"}
+    values: 1x20
+  alert_rule_test:
+  - eval_time: 15m
+    alertname: BlockOutboxUnreadable
+    exp_alerts: []
+- name: block-adoption-abstain-risk
+  interval: 1m
+  input_series:
+  - series: nexus_finality_abstain_risk{job="nexus-core", pod="nexus-core-0"}
+    values: 1x20
+  alert_rule_test:
+  - eval_time: 4m
+    alertname: BlockAdoptionAbstainRisk
+    exp_alerts: []
+  - eval_time: 6m
+    alertname: BlockAdoptionAbstainRisk
+    exp_alerts:
+    - exp_labels:
+        job: nexus-core
+        pod: nexus-core-0
+        severity: warning
+        component: blockchain-core
+      exp_annotations:
+        runbook_url: https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md
+        summary: 区块采纳出现 unknown-proposer 弃权风险（单节点）
+        description: nexus-core-0 的 nexus_finality_abstain_risk=1——某高度的 unknown-proposer defer 已达阈值（5）。查 GET /consensus/block-outbox 与日志中的 `abstain-risk` ERROR 行（含 deferCount 与高度），并用 GET /consensus/catch-up 的 validators 摘要与 GET /consensus/validator-set 回放地址对账（多余/僵死验证人会抬高总权重、换钥重启会留下新旧两个地址）。单节点弃权只影响该节点投票（其它节点仍在最终化，故本条为 warning）；全网死锁看 FinalityStalled。注意 abstain_risk 是进程内累计语义（历史见过也亮），不代表当前正在发生。
+- name: block-adoption-abstain-risk-none
+  interval: 1m
+  input_series:
+  - series: nexus_finality_abstain_risk{job="nexus-core", pod="nexus-core-0"}
+    values: '0x20'
+  alert_rule_test:
+  - eval_time: 15m
+    alertname: BlockAdoptionAbstainRisk
+    exp_alerts: []
+- name: finality-stalled-frozen-watermark
+  interval: 1m
+  input_series:
+  - series: nexus_finality_latest_voted_epoch{job="nexus-core", pod="nexus-core-0"}
+    values: 5x40
+  alert_rule_test:
+  - eval_time: 9m
+    alertname: FinalityStalled
+    exp_alerts: []
+  - eval_time: 12m
+    alertname: FinalityStalled
+    exp_alerts:
+    - exp_labels:
+        job: nexus-core
+        pod: nexus-core-0
+        severity: critical
+        component: blockchain-core
+      exp_annotations:
+        runbook_url: https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md
+        summary: 最终性水位 15min 无增长（最终化停滞）
+        description: nexus-core-0 的 nexus_finality_latest_voted_epoch 15 分钟内没有变化——最终性投票/收敛已停（健康时约每 epoch 推进，2 块/epoch×3s ≈ 6s 一次）。查 GET /consensus/finality 的 progress（votedWeight/totalWeight，看缺谁的票）与 /consensus/finality-outbox（补写队列）：票发不出看 P2P/对端存活，票写不进看 PG，门限不达看 /consensus/validator-set（验证人掉线/注册表异常）。链本身可能仍在出块，不要与 BlockchainCoreStalled 混淆——这是最危险的『出块正常但最终性死掉』形态（PLAN-047 实测复现过）。
+- name: finality-stalled-advancing-watermark
+  interval: 1m
+  input_series:
+  - series: nexus_finality_latest_voted_epoch{job="nexus-core", pod="nexus-core-0"}
+    values: 5+1x40
+  alert_rule_test:
+  - eval_time: 20m
+    alertname: FinalityStalled
+    exp_alerts: []
+- name: finality-below-quorum-sustained
+  interval: 1m
+  input_series:
+  - series: nexus_finality_progress_percent{job="nexus-core", pod="nexus-core-0"}
+    values: 50x24
+  alert_rule_test:
+  - eval_time: 9m
+    alertname: FinalityBelowQuorum
+    exp_alerts: []
+  - eval_time: 11m
+    alertname: FinalityBelowQuorum
+    exp_alerts:
+    - exp_labels:
+        job: nexus-core
+        pod: nexus-core-0
+        severity: warning
+        component: blockchain-core
+      exp_annotations:
+        runbook_url: https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md
+        summary: 最终性进度 < 100% 持续 10min（票没收齐）
+        description: nexus-core-0 的 nexus_finality_progress_percent 连续 10min 不到 100%——水位 epoch 的票没收齐（某验证人未投票/票丢失/验签失败）。单次采样的 50% 是正常的提交时快照（会翻 100%），持续 10min 才是问题。查 GET /consensus/finality 的 votedWeight/totalWeight 与对端 /consensus/validator-set；疑丢票时配合 finality_vote_outbox 补写（PLAN-018）。3 验证人中 1 个掉线时进度会停在 67% 但 finalized 仍可为 true（2/3 达门限）——两者都看。
+- name: finality-below-quorum-transient-dip
+  interval: 1m
+  input_series:
+  - series: nexus_finality_progress_percent{job="nexus-core", pod="nexus-core-0"}
+    values: 50x3 100x21
+  alert_rule_test:
+  - eval_time: 10m
+    alertname: FinalityBelowQuorum
+    exp_alerts: []
+- name: finality-below-quorum-none
+  interval: 1m
+  input_series:
+  - series: nexus_finality_progress_percent{job="nexus-core", pod="nexus-core-0"}
+    values: 100x30
+  alert_rule_test:
+  - eval_time: 15m
+    alertname: FinalityBelowQuorum
+    exp_alerts: []
+- name: mpc-engine-crash-looping
+  interval: 1m
+  input_series:
+  - series: kube_pod_container_status_waiting_reason{reason="CrashLoopBackOff", container="mpc-engine", namespace="nexus", pod="mpc-engine-0"}
+    values: 1x12
+  alert_rule_test:
+  - eval_time: 4m
+    alertname: MpcEngineCrashLooping
+    exp_alerts: []
+  - eval_time: 6m
+    alertname: MpcEngineCrashLooping
+    exp_alerts:
+    - exp_labels:
+        reason: CrashLoopBackOff
+        container: mpc-engine
+        namespace: nexus
+        pod: mpc-engine-0
+        severity: critical
+        component: mpc-engine
+      exp_annotations:
+        runbook_url: https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md
+        summary: mpc-engine CrashLoopBackOff 持续 1min
+        description: Pod mpc-engine-0 在命名空间 nexus 持续 CrashLoopBackOff——签名服务停摆。立即查 kubectl describe + logs。
+- name: mpc-engine-other-waiting-reason
+  interval: 1m
+  input_series:
+  - series: kube_pod_container_status_waiting_reason{reason="ImagePullBackOff", container="mpc-engine", namespace="nexus", pod="mpc-engine-0"}
+    values: 1x12
+  alert_rule_test:
+  - eval_time: 15m
+    alertname: MpcEngineCrashLooping
+    exp_alerts: []
+- name: mpc-engine-not-ready
+  interval: 1m
+  input_series:
+  - series: kube_pod_status_ready{condition="true", namespace="nexus", pod="mpc-engine-0"}
+    values: '0x12'
+  - series: kube_deployment_status_replicas_ready{namespace="nexus"}
+    values: 1x12
+  alert_rule_test:
+  - eval_time: 4m
+    alertname: MpcEngineNotReady
+    exp_alerts: []
+  - eval_time: 6m
+    alertname: MpcEngineNotReady
+    exp_alerts:
+    - exp_labels:
+        namespace: nexus
+        pod: mpc-engine-0
+        condition: 'true'
+        severity: warning
+        component: mpc-engine
+      exp_annotations:
+        runbook_url: https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md
+        summary: mpc-engine 至少 1 副本 NotReady 5min
+        description: 命名空间 nexus 内至少一个 mpc-engine Pod 非 Ready 持续 5min。
+- name: mpc-engine-ready-no-alert
+  interval: 1m
+  input_series:
+  - series: kube_pod_status_ready{condition="true", namespace="nexus", pod="mpc-engine-0"}
+    values: 1x12
+  - series: kube_deployment_status_replicas_ready{namespace="nexus"}
+    values: 1x12
+  alert_rule_test:
+  - eval_time: 15m
+    alertname: MpcEngineNotReady
+    exp_alerts: []
+- name: mpc-engine-resource-unbound-pvc
+  interval: 1m
+  input_series:
+  - series: kube_persistentvolumeclaim_status_phase{namespace="nexus", persistentvolumeclaim="mpc-engine-data", phase="Pending"}
+    values: 1x12
+  alert_rule_test:
+  - eval_time: 4m
+    alertname: MpcEngineResourceUnbound
+    exp_alerts: []
+  - eval_time: 6m
+    alertname: MpcEngineResourceUnbound
+    exp_alerts:
+    - exp_labels:
+        namespace: nexus
+        persistentvolumeclaim: mpc-engine-data
+        phase: Pending
+        severity: critical
+        component: mpc-engine
+      exp_annotations:
+        runbook_url: https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md
+        summary: mpc-engine 资源 5min 未就绪
+        description: PVC 未绑定或 Pod 非 Running 持续 5min——可能存储后端故障或调度问题。
+- name: mpc-engine-resource-bound-no-alert
+  interval: 1m
+  input_series:
+  - series: kube_persistentvolumeclaim_status_phase{namespace="nexus", persistentvolumeclaim="mpc-engine-data", phase="Bound"}
+    values: 1x12
+  alert_rule_test:
+  - eval_time: 15m
+    alertname: MpcEngineResourceUnbound
+    exp_alerts: []
+- name: nexus-service-unhealthy-ratio
+  interval: 1m
+  input_series:
+  - series: kube_deployment_status_replicas_unavailable{namespace="nexus", deployment="nexus-gateway"}
+    values: 2x20
+  - series: kube_deployment_spec_replicas{namespace="nexus", deployment="nexus-gateway"}
+    values: 3x20
+  alert_rule_test:
+  - eval_time: 4m
+    alertname: NexusServiceUnhealthy
+    exp_alerts: []
+  - eval_time: 6m
+    alertname: NexusServiceUnhealthy
+    exp_alerts:
+    - exp_labels:
+        namespace: nexus
+        deployment: nexus-gateway
+        severity: warning
+        component: service
+      exp_annotations:
+        runbook_url: https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md
+        summary: nexus-gateway 不可用副本 > 50%
+        description: Deployment nexus-gateway 不可用副本持续 5min。检查 Pod 状态 + 日志。
+- name: nexus-service-below-half-no-alert
+  interval: 1m
+  input_series:
+  - series: kube_deployment_status_replicas_unavailable{namespace="nexus", deployment="nexus-gateway"}
+    values: 1x20
+  - series: kube_deployment_spec_replicas{namespace="nexus", deployment="nexus-gateway"}
+    values: 3x20
+  alert_rule_test:
+  - eval_time: 15m
+    alertname: NexusServiceUnhealthy
+    exp_alerts: []
+- name: jvm-gc-time-high
+  interval: 1m
+  input_series:
+  - series: jvm_gc_pause_seconds_sum{service="nexus-gateway", instance="10.0.0.1:19585"}
+    values: 0+15x30
+  - series: process_uptime_seconds{service="nexus-gateway", instance="10.0.0.1:19585"}
+    values: 0+60x30
+  alert_rule_test:
+  - eval_time: 6m
+    alertname: JvmGcTimeHigh
+    exp_alerts: []
+  - eval_time: 12m
+    alertname: JvmGcTimeHigh
+    exp_alerts:
+    - exp_labels:
+        service: nexus-gateway
+        instance: 10.0.0.1:19585
+        severity: warning
+        component: jvm
+      exp_annotations:
+        runbook_url: https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md
+        summary: nexus-gateway GC 时间占比高于 20%
+        description: nexus-gateway (10.0.0.1:19585) GC 时间占运行时间比例持续超过 20%，存在内存压力或频繁 Full GC。
+- name: jvm-gc-time-normal
+  interval: 1m
+  input_series:
+  - series: jvm_gc_pause_seconds_sum{service="nexus-gateway", instance="10.0.0.1:19585"}
+    values: 0+3x30
+  - series: process_uptime_seconds{service="nexus-gateway", instance="10.0.0.1:19585"}
+    values: 0+60x30
+  alert_rule_test:
+  - eval_time: 16m
+    alertname: JvmGcTimeHigh
+    exp_alerts: []
+- name: jvm-heap-usage-high
+  interval: 1m
+  input_series:
+  - series: jvm_memory_used_bytes{area="heap", service="nexus-gateway", instance="10.0.0.1:19585"}
+    values: 860x12
+  - series: jvm_memory_max_bytes{area="heap", service="nexus-gateway", instance="10.0.0.1:19585"}
+    values: 1000x12
+  alert_rule_test:
+  - eval_time: 4m
+    alertname: JvmHeapUsageHigh
+    exp_alerts: []
+  - eval_time: 6m
+    alertname: JvmHeapUsageHigh
+    exp_alerts:
+    - exp_labels:
+        service: nexus-gateway
+        instance: 10.0.0.1:19585
+        severity: warning
+        component: jvm
+      exp_annotations:
+        runbook_url: https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md
+        summary: nexus-gateway 堆内存使用率高于 85%
+        description: nexus-gateway (10.0.0.1:19585) 堆内存使用率持续超过 85%，OOM 风险升高。请检查内存泄漏或扩容。
+- name: jvm-heap-usage-normal
+  interval: 1m
+  input_series:
+  - series: jvm_memory_used_bytes{area="heap", service="nexus-gateway", instance="10.0.0.1:19585"}
+    values: 800x30
+  - series: jvm_memory_max_bytes{area="heap", service="nexus-gateway", instance="10.0.0.1:19585"}
+    values: 1000x30
+  alert_rule_test:
+  - eval_time: 15m
+    alertname: JvmHeapUsageHigh
+    exp_alerts: []
+- name: pod-cpu-usage-high
+  interval: 1m
+  input_series:
+  - series: container_cpu_usage_seconds_total{namespace="nexus", pod="nexus-gateway-0", container="nexus-gateway"}
+    values: 0+51x40
+  - series: kube_pod_container_resource_limits{namespace="nexus", pod="nexus-gateway-0", container="nexus-gateway", resource="cpu"}
+    values: 1x40
+  alert_rule_test:
+  - eval_time: 9m
+    alertname: PodCpuUsageHigh
+    exp_alerts: []
+  - eval_time: 15m
+    alertname: PodCpuUsageHigh
+    exp_alerts:
+    - exp_labels:
+        pod: nexus-gateway-0
+        container: nexus-gateway
+        severity: warning
+        component: resource
+      exp_annotations:
+        runbook_url: https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md
+        summary: Pod nexus-gateway-0 CPU 使用率高于 80%
+        description: 容器 nexus-gateway CPU 使用率持续超过 limit 的 80%，可能触发 CPU 节流（throttling）影响延迟。
+- name: pod-cpu-usage-normal
+  interval: 1m
+  input_series:
+  - series: container_cpu_usage_seconds_total{namespace="nexus", pod="nexus-gateway-0", container="nexus-gateway"}
+    values: 0+30x40
+  - series: kube_pod_container_resource_limits{namespace="nexus", pod="nexus-gateway-0", container="nexus-gateway", resource="cpu"}
+    values: 1x40
+  alert_rule_test:
+  - eval_time: 20m
+    alertname: PodCpuUsageHigh
+    exp_alerts: []
+- name: pod-memory-usage-high
+  interval: 1m
+  input_series:
+  - series: container_memory_working_set_bytes{namespace="nexus", pod="nexus-gateway-0", container="nexus-gateway"}
+    values: 950x30
+  - series: kube_pod_container_resource_limits{namespace="nexus", pod="nexus-gateway-0", container="nexus-gateway", resource="memory"}
+    values: 1000x30
+  alert_rule_test:
+  - eval_time: 9m
+    alertname: PodMemoryUsageHigh
+    exp_alerts: []
+  - eval_time: 11m
+    alertname: PodMemoryUsageHigh
+    exp_alerts:
+    - exp_labels:
+        pod: nexus-gateway-0
+        container: nexus-gateway
+        severity: warning
+        component: resource
+      exp_annotations:
+        runbook_url: https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md
+        summary: Pod nexus-gateway-0 内存使用率高于 90%
+        description: 容器 nexus-gateway 内存使用率持续超过 limit 的 90%，OOMKilled 风险高。请扩容或排查内存泄漏。
+- name: pod-memory-usage-normal
+  interval: 1m
+  input_series:
+  - series: container_memory_working_set_bytes{namespace="nexus", pod="nexus-gateway-0", container="nexus-gateway"}
+    values: 500x30
+  - series: kube_pod_container_resource_limits{namespace="nexus", pod="nexus-gateway-0", container="nexus-gateway", resource="memory"}
+    values: 1000x30
+  alert_rule_test:
+  - eval_time: 15m
+    alertname: PodMemoryUsageHigh
+    exp_alerts: []
+- name: service-down
+  interval: 1m
+  input_series:
+  - series: up{job="nexus-gateway", namespace="nexus", instance="10.0.0.1:19585"}
+    values: '0x12'
+  alert_rule_test:
+  - eval_time: 2m
+    alertname: ServiceDown
+    exp_alerts:
+    - exp_labels:
+        job: nexus-gateway
+        namespace: nexus
+        instance: 10.0.0.1:19585
+        severity: critical
+        component: service
+      exp_annotations:
+        runbook_url: https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md
+        summary: 服务 nexus-gateway 不可达
+        description: Prometheus 抓取 nexus-gateway (10.0.0.1:19585) 连续 1 分钟失败。可能因 Pod 崩溃、Service 端口错误或 NetworkPolicy 阻断。
+- name: service-up-no-alert
+  interval: 1m
+  input_series:
+  - series: up{job="nexus-gateway", namespace="nexus", instance="10.0.0.1:19585"}
+    values: 1x12
+  alert_rule_test:
+  - eval_time: 10m
+    alertname: ServiceDown
+    exp_alerts: []
+- name: seata-tc-down
+  interval: 1m
+  input_series:
+  - series: up{job="seata-tc", namespace="nexus", instance="10.0.0.2:8091"}
+    values: '0x12'
+  alert_rule_test:
+  - eval_time: 2m
+    alertname: SeataTcDown
+    exp_alerts:
+    - exp_labels:
+        job: seata-tc
+        namespace: nexus
+        instance: 10.0.0.2:8091
+        severity: critical
+        component: seata
+      exp_annotations:
+        runbook_url: https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md
+        summary: Seata TC 事务协调器不可达
+        description: Seata TC Server 连续 1 分钟不可达，分布式事务无法提交/回滚，可能造成支付与桥操作挂起。请优先恢复 Seata TC。
+- name: seata-tc-up-no-alert
+  interval: 1m
+  input_series:
+  - series: up{job="seata-tc", namespace="nexus", instance="10.0.0.2:8091"}
+    values: 1x12
+  alert_rule_test:
+  - eval_time: 10m
+    alertname: SeataTcDown
+    exp_alerts: []

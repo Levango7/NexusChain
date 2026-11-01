@@ -7253,3 +7253,32 @@ PLAN-062 只覆盖 `nexus_block_*`；finality 侧有同一条缝的另一头—�
 - **验证**：`--rerun-tasks` 实跑全绿（`gradle_exit=0`，22 个测试方法）；反向对照（把 `progress_percent` 改成 `progress_percentage`）两个测试同时红，还原后恢复绿；
 - **抓取端补验（2026-10-31）**：同一轮 `/actuator/prometheus` 里 finality 侧 12/12 全在（`enabled=1`、`finalized=1`、`current_epoch=28`、`latest_voted_epoch=26`、`progress_percent=100`、`lag=2`、`finalized_checkpoints=26`、`abstain_current=0`、`abstain_risk=0`、`defer_*`=0）；环境为 Windows 应用 + WSL2 PostgreSQL 16，单物理机、非物理多机；
 - 零生产代码改动。
+
+### 告警规则 promtool 演练——首跑抓到两条"从未触发"的死告警（PLAN-064）
+
+「PrometheusRule 静态校验」只验 YAML 结构/计数（`>=5`）/`for:` 存在性，18 条
+告警的 **PromQL 语义与触发行为从未被验证**——表达式写错、阈值写反、两侧标签集
+不匹配（除法恒空）全都在绿区内。本次补上 promtool 两级门禁，并修复首跑抓到的
+两条死告警：
+
+- **新增**：`scripts/extract-prometheus-rules.py`（从 CRD 提取 `spec.groups`）
+  + `deploy/k8s/tests/prometheus-rules.test.yaml`（38 用例 / 56 断言，覆盖全部
+  18 条告警的「阈值触发 / 不触发 / `for` 窗口未满不触发」三态）；
+- **CI**：`k8s-sync-check.yml` 新增「promtool 规则演练」步（promtool 固定
+  v3.15.1 + sha256，下载 3 次重试；`deploy/**` 变更即触发；失败 ⇒
+  `mergeStateStatus=UNSTABLE`）；
+- **死告警 1/2**：`PodCpuUsageHigh` / `PodMemoryUsageHigh` 的分母
+  `kube_pod_container_resource_limits` 与左侧标签集不同（多 `resource`，真实
+  环境还多 `job/instance`）⇒ 除法向量匹配恒空、**从未触发**。实证：恒定 95%
+  内存占用 × 14 分钟 `got:[]`（CPU 恒 85% × 20 分钟同理）。修法：两侧
+  `sum by (pod, container)` 归一标签集（`clamp_min` 保留；缺 limit 序列时仍
+  不触发，语义不变）；修复后同一序列 11m 正常触发；
+- **顺带修正**：文件头「告警数 17 条」停在 PLAN-052 之前（实为 **18** 条）——
+  CI 只断 `>=5`，漂移从不触发；本次修正并留原因；
+- **验证**：本地 promtool v3.15.1（sha256 与官方 `sha256sums.txt` 复核一致）
+  `check rules` 18/18 + `test rules` 全绿；反向对照 A（还原两处修复）恰两条
+  用例红；反向对照 B（`readable == 0` → `== 2`）恰对应用例红；
+- **边界**：不起真实 Prometheus/Alertmanager（`for` 状态机由单测覆盖；通知/
+  路由链路仍属部署侧未验证）；`kube_*` 用例为合成序列，不证明真实抓取目标
+  存在；
+- 无 Java/产品代码改动（规则表达式修复属告警配置）。
