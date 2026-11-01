@@ -47,8 +47,12 @@ public class DefaultRefundApprovalService implements RefundApprovalService {
 
     private static final Logger log = LoggerFactory.getLogger(DefaultRefundApprovalService.class);
 
-    /** 平台退款热钱包地址默认值 */
-    private static final String DEFAULT_PLATFORM_REFUND_ADDRESS = "PLATFORM_HOT_WALLET";
+    /**
+     * 占位符字面量：不是真实地址（既非合法 Base58 也非 hex 公钥）。
+     * 仅用于识别"被显式配成了占位符"并 WARN；不再作为未配置时的回退值
+     * （2026-11-02，板 20261102-0321，与 wallet 2026-10-27 同型修复）。
+     */
+    private static final String PLACEHOLDER_PLATFORM_REFUND_ADDRESS = "PLATFORM_HOT_WALLET";
 
     private final RefundRequestRepository refundRequestRepository;
     private final PaymentOrderRepository paymentOrderRepository;
@@ -67,7 +71,7 @@ public class DefaultRefundApprovalService implements RefundApprovalService {
                                         PaymentOrderRepository paymentOrderRepository,
                                         RefundPolicy refundPolicy) {
         this(refundRequestRepository, paymentOrderRepository, refundPolicy, null,
-                DEFAULT_PLATFORM_REFUND_ADDRESS, null);
+                "", null);
     }
 
     /**
@@ -88,14 +92,13 @@ public class DefaultRefundApprovalService implements RefundApprovalService {
                                         PaymentOrderRepository paymentOrderRepository,
                                         RefundPolicy refundPolicy,
                                         OnChainExecutionChannel executionChannel,
-                                        @Value("${nexus.gateway.refund.platform-address:PLATFORM_HOT_WALLET}") String platformRefundAddress,
+                                        @Value("${nexus.gateway.refund.platform-address:}") String platformRefundAddress,
                                         PlatformTransactionManager transactionManager) {
         this.refundRequestRepository = refundRequestRepository;
         this.paymentOrderRepository = paymentOrderRepository;
         this.refundPolicy = refundPolicy;
         this.executionChannel = executionChannel;
-        this.platformRefundAddress = platformRefundAddress != null && !platformRefundAddress.isEmpty()
-                ? platformRefundAddress : DEFAULT_PLATFORM_REFUND_ADDRESS;
+        this.platformRefundAddress = platformRefundAddress == null ? "" : platformRefundAddress.trim();
         this.transactionTemplate = transactionManager != null
                 ? new TransactionTemplate(transactionManager) : null;
     }
@@ -380,6 +383,20 @@ public class DefaultRefundApprovalService implements RefundApprovalService {
      * @throws IllegalStateException if the execution channel is not injected or execution fails
      */
     private String executeOnChain(RefundRequest request) {
+        // 2026-11-02（板 20261102-0321，与 wallet 2026-10-27 同型）：平台退款地址未配置 ⇒
+        // 执行前 fail-closed 拒绝。原实现回退占位符字面量，把 "PLATFORM_HOT_WALLET" 假地址
+        // 发给执行通道——失败必然发生但原因伪装成链/签名错误，排障成本高。此处检查位于
+        // 任何外部调用之前，拒绝即"出款确定未发生"，落入 markFailedAndAudit（FAILED + 原因明写）。
+        if (platformRefundAddress == null || platformRefundAddress.isBlank()) {
+            throw new IllegalStateException("platform refund address not configured "
+                    + "(nexus.gateway.refund.platform-address / NEX_GATEWAY_REFUND_PLATFORM_ADDRESS): "
+                    + "refund aborted (fail-closed)");
+        }
+        if (PLACEHOLDER_PLATFORM_REFUND_ADDRESS.equals(platformRefundAddress)) {
+            log.warn("platform refund address equals the placeholder literal '{}' — it is NOT a real "
+                            + "address; set NEX_GATEWAY_REFUND_PLATFORM_ADDRESS for this deployment",
+                    PLACEHOLDER_PLATFORM_REFUND_ADDRESS);
+        }
         if (executionChannel == null) {
             throw new IllegalStateException("OnChainExecutionChannel is not injected");
         }

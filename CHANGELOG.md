@@ -445,6 +445,22 @@ PLAN-047 三验证人实测暴露 PLAN-045 两个缺陷：① 健康 3 验证人
   Spring 测试上下文（`application-test.yml`）显式配置测试专用地址
   （模拟"已正确配置的部署"）。wallet 全量 **231 例 / 0 失败**。
 
+### gateway 退款平台地址占位符 fail-closed（2026-11-02）
+
+- **缺陷**（板 `20261102-0321`，TRAE 宝只读核查报告；与 wallet 2026-10-27 同型）：
+  `nexus.gateway.refund.platform-address` 默认值是占位符字面量 `"PLATFORM_HOT_WALLET"`，
+  且 `deploy/` / compose / `application*.yml` **均不注入**
+  ⇒ 未在仓库外注入的部署，链上退款的 from 就是假地址（既非合法 Base58 也非 hex 公钥），
+  执行必然失败且原因伪装成链/签名错误，排障成本高。
+- **修复**：`@Value` 默认值改**空**并去掉构造器对占位符的回退；`DefaultRefundApprovalService`
+  在退款执行前 fail-closed 拒绝（原因明写 `not configured`，落于"出款确定未发生"的 FAILED
+  分支）；显式配成占位符 ⇒ 放行但 WARN。`application.yml` 新增
+  `nexus.gateway.refund.platform-address: ${NEX_GATEWAY_REFUND_PLATFORM_ADDRESS:}` 键，
+  使部署侧可发现、可注入。与 A2 开关 / fail-closed 词表收敛链（#355/#364/#375/#390）正交。
+- **测试**：`executeRefund_unsetPlatformRefundAddressFailsClosed`（钉 FAILED + 原因含
+  `not configured` + 执行通道零交互 + 付款人地址从未被查询）；setUp 由占位符改为
+  测试专用地址（模拟"已正确配置的部署"）。
+
 ### 提现执行腿 (c)-lite：signing 审批持久化与复用（2026-10-27）
 
 - **背景与裁决**：#261 的 (b2)（按转出地址豁免 signing 大额审批）前提被 P0 复核推翻——平台热钱包
