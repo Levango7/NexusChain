@@ -59,6 +59,12 @@ public final class SigningTransfers {
      *
      * <p>待审批但无执行服务可跟踪 ⇒ 明确报失败并打出 approvalId，
      * 让运维能在签名服务侧处理，而不是静默留下一个永不执行的审批请求。</p>
+     *
+     * <p><b>失败语义（2026-10-31 起与 {@code SigningApprovalExecutionService.signOrAwait}
+     * 共用同一张 fail-closed 词表）</b>：只有契约确立的「明确未动账」码（5000/4000/4030）
+     * 才落 FAILED；降级 null、2000 无哈希、5001、5002、5003 及未知码都属结果不明 ⇒
+     * {@code EXECUTION_UNKNOWN}（调用方按人工核对处理，不得自动重放）。本方法没有链接表
+     * 可依，因此 UNKNOWN 只体现在返回值上，不落库。</p>
      */
     public static SigningOutcome fromClassify(java.util.Map<String, Object> response, String requestKey) {
         SigningResponses.Outcome outcome = SigningResponses.classify(response);
@@ -70,6 +76,14 @@ public final class SigningTransfers {
                     requestKey, outcome.approvalId());
             return new SigningOutcome(ApprovalExecutionLink.Status.FAILED,
                     outcome.approvalId(), null, "approval execution service unavailable");
+        }
+        Integer code = outcome.statusCode();
+        if (!SigningResponses.declaresNotExecuted(code)) {
+            log.error("直签结果不明（无执行服务，禁止当未动账重放）: requestKey={}, statusCode={}, message={}",
+                    requestKey, code, outcome.message());
+            return new SigningOutcome(ApprovalExecutionLink.Status.EXECUTION_UNKNOWN, null, null,
+                    "signTransfer outcome unknown: statusCode=" + code
+                            + (outcome.message() == null ? "" : ", message=" + outcome.message()));
         }
         return new SigningOutcome(ApprovalExecutionLink.Status.FAILED, null, null, outcome.message());
     }

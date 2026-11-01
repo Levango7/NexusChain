@@ -98,8 +98,8 @@ class ConsortiumConnectorTest {
     }
 
     @Test
-    @DisplayName("createPayment: wallet signing fails -> FAILED")
-    void createPayment_signingFails() {
+    @DisplayName("createPayment: 签名降级（null）→ 保持 PROCESSING，不记 FAILED")
+    void createPayment_signingDegraded_staysProcessing() {
         ConsortiumRpcClient rpc = mock(ConsortiumRpcClient.class);
         SigningServiceFeignClient signing = mock(SigningServiceFeignClient.class);
         WalletMgmtFeignClient walletMgmt = mock(WalletMgmtFeignClient.class);
@@ -110,7 +110,8 @@ class ConsortiumConnectorTest {
             ConsortiumConnector c = connectorWith(rpc, signing, walletMgmt, gatewayConfigWith("platformPk"));
             ConnectorPaymentResult r = c.createPayment(sampleRequest());
 
-            assertFalse(r.isSuccess());
+            // 与 ChainConnector 同口径（2026-10-31 fail-closed 收敛）：降级不等于"没广播"。
+            assertEquals(PaymentStatus.PROCESSING, r.getStatus());
         }
     }
 

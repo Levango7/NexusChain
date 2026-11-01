@@ -175,21 +175,24 @@ class PaymentSigningChainE2ETest {
 
     @Test
     @Order(4)
-    @DisplayName("4. 签名服务故障 → FAILED；恢复后重试 → 成功")
+    @DisplayName("4. 签名降级（null）→ 结果不明保持 PROCESSING；恢复后重试 → 成功")
     void signingServiceFailure_thenRecovery() {
         try (MockedStatic<WalletUtils> mockedWalletUtils = mockStatic(WalletUtils.class)) {
             mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("0xPayee_pay_1")).thenReturn("payeeHash");
             mockedWalletUtils.when(() -> WalletUtils.addressToPubkeyHash("0xPayer_pay_1")).thenReturn("payerHash");
-            // 第一次签名故障（null），第二次恢复
+            // 第一次签名降级（null），第二次恢复
             when(signing.signTransfer(anyString(), anyString(), any()))
                     .thenReturn(null)
                     .thenReturn(okResp("0xrecoveredTx"));
 
             ChainConnector connector = newConnector();
 
-            // 第一次：故障
+            // 第一次：降级 = 结果不明。2026-10-31 fail-closed 收敛后**不记 FAILED**
+            // （熔断/读超时都可能发生在广播之后，记失败会诱发上游补发 ⇒ 双重支付），
+            // 保持 PROCESSING 等人工核对，与已装配审批执行服务那条腿同口径。
             ConnectorPaymentResult r1 = connector.createPayment(paymentRequest("pay_1", 50000L));
-            assertFalse(r1.isSuccess(), "签名故障应导致支付失败");
+            assertEquals(PaymentStatus.PROCESSING, r1.getStatus(), "签名降级不得记 FAILED");
+            assertNull(r1.getTransactionHash(), "结果不明时不得伪造交易哈希");
 
             // 第二次：恢复
             ConnectorPaymentResult r2 = connector.createPayment(paymentRequest("pay_1", 50000L));

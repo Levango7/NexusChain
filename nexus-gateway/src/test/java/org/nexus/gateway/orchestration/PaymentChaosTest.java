@@ -126,12 +126,14 @@ class PaymentChaosTest {
 
             ChainConnector connector = newConnector();
 
-            // 第1次：故障
-            assertFalse(connector.createPayment(paymentRequest("chaos2", 10000L)).isSuccess(),
-                    "第1次签名故障应失败");
-            // 第2次：故障
-            assertFalse(connector.createPayment(paymentRequest("chaos2", 10000L)).isSuccess(),
-                    "第2次签名故障应失败");
+            // 第1次：降级 = 结果不明 ⇒ 不记 FAILED（保持 PROCESSING 等人工核对）
+            assertEquals(PaymentStatus.PROCESSING,
+                    connector.createPayment(paymentRequest("chaos2", 10000L)).getStatus(),
+                    "第1次签名降级不得记确定未动账");
+            // 第2次：降级 = 结果不明
+            assertEquals(PaymentStatus.PROCESSING,
+                    connector.createPayment(paymentRequest("chaos2", 10000L)).getStatus(),
+                    "第2次签名降级不得记确定未动账");
             // 第3次：恢复
             ConnectorPaymentResult recovered = connector.createPayment(paymentRequest("chaos2", 10000L));
             assertTrue(recovered.isSuccess(), "第3次签名恢复应成功");
@@ -193,9 +195,10 @@ class PaymentChaosTest {
 
             ChainConnector connector = newConnector();
 
-            // 阶段1：签名宕机 → 支付失败
-            assertFalse(connector.createPayment(paymentRequest("chaos4", 30000L)).isSuccess(),
-                    "签名宕机应导致支付失败");
+            // 阶段1：签名降级（结果不明）→ 不记 FAILED，保持 PROCESSING 等人工核对
+            assertEquals(PaymentStatus.PROCESSING,
+                    connector.createPayment(paymentRequest("chaos4", 30000L)).getStatus(),
+                    "签名降级不得被当成「确定未动账」而记 FAILED");
 
             // 阶段2：签名恢复，链上宕机 → 支付创建成功，查询降级
             ConnectorPaymentResult created = connector.createPayment(paymentRequest("chaos4", 30000L));
