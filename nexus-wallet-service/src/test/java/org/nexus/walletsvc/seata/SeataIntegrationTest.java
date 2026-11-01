@@ -23,6 +23,8 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -48,7 +50,7 @@ import static org.mockito.Mockito.when;
  * <ul>
  *   <li>{@code @GlobalTransactional} + {@code @Transactional} 标注存在且不阻止执行</li>
  *   <li>正常路径：状态 PENDING → APPROVED → EXECUTED 全部持久化</li>
- *   <li>异常路径：signing-service 失败时状态置 FAILED 并持久化</li>
+ *   <li>异常路径：signing-service 抛异常时状态置 EXECUTED_UNVERIFIED（结果不明）并持久化</li>
  *   <li>undo_log 表存在（V3 migration 创建）</li>
  *   <li>多步操作在同一事务中原子提交</li>
  * </ul>
@@ -111,12 +113,11 @@ class SeataIntegrationTest {
     }
 
     @Test
-    @DisplayName("Seata AT: signing-service 失败 — 状态置 FAILED 并持久化（catch 后提交）")
-    void globalTransactional_signingFailureStatusFailedPersisted() {
-        String addr = "0xseataFailureTestAddr12345678901234";
-        if (!whitelistEntryRepository.existsByAddress(addr)) {
+    @DisplayName("Seata AT: 链上调用抛异常 — 状态置 EXECUTED_UNVERIFIED 并持久化（模板捕获后提交）")
+    void globalTransactional_signingExceptionStatusUnverifiedPersisted() {
+        if (!whitelistEntryRepository.existsByAddress(WHITELISTED_ADDR)) {
             WhitelistEntryEntity entry = new WhitelistEntryEntity();
-            entry.setAddress(addr);
+            entry.setAddress(WHITELISTED_ADDR);
             entry.setMerchantId("merchant-seata-fail");
             entry.setAddedAt(LocalDateTime.now());
             entry.setFirstWithdrawalAvailableAt(LocalDateTime.now().plusHours(24));
@@ -127,18 +128,50 @@ class SeataIntegrationTest {
         when(signingServiceClient.signTransfer(anyString(), anyString(), any(BigDecimal.class)))
                 .thenThrow(new RuntimeException("simulated signing-service failure"));
 
-        WithdrawalRequest request = withdrawalApprovalService.requestWithdrawal(
-                addr, new BigDecimal("500"), "NEX");
-        withdrawalApprovalService.approve(request.getRequestId(), "approver-seata-fail");
+        String requestId = withdrawalApprovalService
+                .requestWithdrawal(WHITELISTED_ADDR, new BigDecimal("500"), "NEX").getRequestId();
+        withdrawalApprovalService.approve(requestId, "approver-seata-fail");
 
-        WithdrawalRequest result = withdrawalApprovalService.executeApprovedWithdrawal(request.getRequestId());
+        WithdrawalRequest result = withdrawalApprovalService.executeApprovedWithdrawal(requestId);
 
-        // FAILED 状态持久化（catch 后正常提交，非回滚）
-        assertEquals(WithdrawalRequest.WithdrawalStatus.FAILED, result.getStatus());
-        WithdrawalRequestEntity entity = withdrawalRequestRepository
-                .findByRequestId(request.getRequestId()).orElseThrow();
-        assertEquals(WithdrawalRequest.WithdrawalStatus.FAILED, entity.getStatus());
+        // 阶段2 异常 ⇒ 结果不明（非终态），持久化后正常提交，不触发全局回滚。
+        // 2026-11-01 fail-closed 收敛前这里是 FAILED —— 而"抛异常"无法证明没广播，
+        // FAILED 又可被重提，等于给了双重支付一条路。
+        assertEquals(WithdrawalRequest.WithdrawalStatus.EXECUTED_UNVERIFIED, result.getStatus(),
+                "reason=" + result.getRejectionReason());
+        WithdrawalRequestEntity entity = withdrawalRequestRepository.findByRequestId(requestId).orElseThrow();
+        assertEquals(WithdrawalRequest.WithdrawalStatus.EXECUTED_UNVERIFIED, entity.getStatus());
         assertNotNull(entity.getRejectionReason());
+        assertTrue(entity.getRejectionReason().contains("simulated signing-service failure"),
+                "具体异常原因要留在留痕里，实得：" + entity.getRejectionReason());
+    }
+
+    @Test
+    @DisplayName("Seata AT: 收款地址不可解析 ⇒ 调用前 fail-closed，仍记 FAILED 且不打扰 signing")
+    void globalTransactional_invalidPayeeAddressFailsBeforeSigning() {
+        String addr = "0xseataFailureTestAddr12345678901234";
+        if (!whitelistEntryRepository.existsByAddress(addr)) {
+            WhitelistEntryEntity entry = new WhitelistEntryEntity();
+            entry.setAddress(addr);
+            entry.setMerchantId("merchant-seata-badaddr");
+            entry.setAddedAt(LocalDateTime.now());
+            entry.setFirstWithdrawalAvailableAt(LocalDateTime.now().plusHours(24));
+            entry.setActive(true);
+            whitelistEntryRepository.save(entry);
+        }
+
+        String requestId = withdrawalApprovalService
+                .requestWithdrawal(addr, new BigDecimal("500"), "NEX").getRequestId();
+        withdrawalApprovalService.approve(requestId, "approver-seata-badaddr");
+
+        WithdrawalRequest result = withdrawalApprovalService.executeApprovedWithdrawal(requestId);
+
+        // 这条是**确定性**拒绝（钱没动、请求没发出）⇒ 允许终态 FAILED；
+        // 它原本被当作"signing 抛异常"的用例，实际从未走到 signing（本用例即纠正该误标）。
+        assertEquals(WithdrawalRequest.WithdrawalStatus.FAILED, result.getStatus());
+        assertTrue(result.getRejectionReason().contains("not a valid base58 address"),
+                "实得：" + result.getRejectionReason());
+        verify(signingServiceClient, never()).signTransfer(anyString(), anyString(), any(BigDecimal.class));
     }
 
     @Test

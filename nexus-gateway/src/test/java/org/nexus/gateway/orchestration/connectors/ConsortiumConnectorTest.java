@@ -98,8 +98,8 @@ class ConsortiumConnectorTest {
     }
 
     @Test
-    @DisplayName("createPayment: wallet signing fails -> FAILED")
-    void createPayment_signingFails() {
+    @DisplayName("createPayment: 签名降级（null）→ 保持 PROCESSING，不记 FAILED")
+    void createPayment_signingDegraded_staysProcessing() {
         ConsortiumRpcClient rpc = mock(ConsortiumRpcClient.class);
         SigningServiceFeignClient signing = mock(SigningServiceFeignClient.class);
         WalletMgmtFeignClient walletMgmt = mock(WalletMgmtFeignClient.class);
@@ -110,7 +110,8 @@ class ConsortiumConnectorTest {
             ConsortiumConnector c = connectorWith(rpc, signing, walletMgmt, gatewayConfigWith("platformPk"));
             ConnectorPaymentResult r = c.createPayment(sampleRequest());
 
-            assertFalse(r.isSuccess());
+            // 与 ChainConnector 同口径（2026-10-31 fail-closed 收敛）：降级不等于"没广播"。
+            assertEquals(PaymentStatus.PROCESSING, r.getStatus());
         }
     }
 
@@ -125,7 +126,7 @@ class ConsortiumConnectorTest {
     }
 
     @Test
-    @DisplayName("createPayment: signing 抛异常 -> FAILED")
+    @DisplayName("createPayment: signing 抛异常 -> 结果不明（PROCESSING），不记 FAILED")
     void createPayment_exception() {
         SigningServiceFeignClient signing = mock(SigningServiceFeignClient.class);
         WalletMgmtFeignClient walletMgmt = mock(WalletMgmtFeignClient.class);
@@ -136,7 +137,9 @@ class ConsortiumConnectorTest {
             ConsortiumConnector c = connectorWith(mock(ConsortiumRpcClient.class), signing, walletMgmt,
                     gatewayConfigWith("platformPk"));
             ConnectorPaymentResult r = c.createPayment(sampleRequest());
-            assertFalse(r.isSuccess());
+            // 2026-11-01 fail-closed 收敛：直签调用抛异常无法证明「没广播」
+            // （连接重置/读超时都可能发生在广播之后）⇒ 结果不明，保持 PROCESSING。
+            assertEquals(PaymentStatus.PROCESSING, r.getStatus());
         }
     }
 

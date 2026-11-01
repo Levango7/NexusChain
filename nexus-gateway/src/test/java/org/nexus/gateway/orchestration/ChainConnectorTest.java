@@ -17,6 +17,7 @@ import org.nexus.sdk.wallet.WalletUtils;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.anyString;
@@ -94,8 +95,8 @@ class ChainConnectorTest {
     }
 
     @Test
-    @DisplayName("createPayment: wallet signing fails -> FAILED")
-    void createPayment_signingFails() {
+    @DisplayName("createPayment: 签名降级（null）→ 不记 FAILED，保持 PROCESSING 待人工核对")
+    void createPayment_signingDegraded_staysProcessing() {
         ChainRpcClient rpc = mock(ChainRpcClient.class);
         SigningServiceFeignClient signing = mock(SigningServiceFeignClient.class);
         WalletMgmtFeignClient walletMgmt = mock(WalletMgmtFeignClient.class);
@@ -106,8 +107,11 @@ class ChainConnectorTest {
             ChainConnector c = connectorWith(rpc, signing, walletMgmt, gatewayConfigWith("platformPk"));
             ConnectorPaymentResult r = c.createPayment(sampleRequest());
 
-            assertFalse(r.isSuccess());
-            assertEquals(PaymentStatus.FAILED, r.getStatus());
+            // 2026-10-31 fail-closed 收敛：降级 null 无法证明「没广播」（读超时/熔断都可能
+            // 发生在广播之后）。记 FAILED 会让上游按"确定未出账"补发 ⇒ 双重支付风险；
+            // 与已装配审批执行服务那条腿同口径：保持 PROCESSING 等人工核对。
+            assertEquals(PaymentStatus.PROCESSING, r.getStatus());
+            assertNull(r.getTransactionHash(), "结果不明时不得伪造交易哈希");
         }
     }
 

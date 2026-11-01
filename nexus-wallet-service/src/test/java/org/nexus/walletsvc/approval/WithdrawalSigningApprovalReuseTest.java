@@ -173,15 +173,18 @@ class WithdrawalSigningApprovalReuseTest {
     }
 
     @Test
-    @DisplayName("首次执行 2001 但缺 approvalId：FAILED（无法跟踪，不当待审批）")
-    void freshExecution_approvalRequiredWithoutId_failsSafely() {
+    @DisplayName("首次执行 2001 但缺 approvalId：EXECUTED_UNVERIFIED（既不当待审批，也不当确定未动账）")
+    void freshExecution_approvalRequiredWithoutId_isUnverified() {
         WithdrawalRequestEntity e = seed("APPROVED", null);
         when(signingServiceClient.signTransfer(anyString(), anyString(), any()))
                 .thenReturn(envelope(2001, null, null));
 
         service.executeApprovedWithdrawal(REQ_ID);
 
-        assertEquals(WithdrawalRequest.WithdrawalStatus.FAILED, e.getStatus());
+        // 2026-10-31 fail-closed 收敛：signing 侧留下了一条**无凭据可跟踪**的审批请求，
+        // 记 FAILED 会被人工重提 ⇒ 与该审批后续被执行构成二次出款；记待审批又无 id 可追。
+        // 两者都不安全，落非终态 UNVERIFIED 交人工核对。
+        assertEquals(WithdrawalRequest.WithdrawalStatus.EXECUTED_UNVERIFIED, e.getStatus());
         assertNull(e.getSigningApprovalId());
     }
 
