@@ -251,24 +251,33 @@ jobs:
       - name: Checkout 代码
         uses: actions/checkout@v5
 
-      - name: Trivy 扫描 java17-debian13（**故意不带 .trivyignore**）→ JSON
+      - name: Trivy 扫描 java17-debian13（**真的禁用豁免**）→ JSON
         # 同一枚 pinned commit sha（见 2. 的更新策略注释）。
-        # 关键差异：不传 trivyignores —— 否则被豁免项被抑制，复核无从谈起。
+        # 关键差异：trivyignores 指向仓库内一份**只有注释、无条目**的空清单
+        # （.github/trivyignore-empty）。覆盖默认发现路径的必要性：Trivy CLI 会
+        # 自动读取工作目录的 .trivyignore，不传参数 ≠ 不豁免（2026-11-02 用
+        # master run 41362251753 的原始 JSON 实证：白名单里 27 条 id 一条都
+        # 不出现，白名单外的同镜像 CVE 正常出现），否则复核永远只能判 B 类。
+        # 不用 $RUNNER_TEMP：trivy-action 在容器内执行、宿主路径原样传参，
+        # 容器里找不到该文件（2026-11-02 实测 cannot find ignorefile）。
         uses: aquasecurity/trivy-action@b2933f565dbc598b29947660e66259e3c7bc8561  # v0.20.0
         with:
           image-ref: gcr.io/distroless/java17-debian13:nonroot
           severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          trivyignores: .github/trivyignore-empty
           format: json
           output: trivy-staleness-java17-debian13.json
           exit-code: 0
 
       - name: Trivy 扫描 trixie-slim（Rust 模块运行阶段基础镜像）→ JSON
-        # 依据 mpc-engine/Dockerfile:51 与 zk-groth16-service/Dockerfile:17：
-        # 2026-10-01 起运行阶段是 debian:trixie-slim（不再是 bookworm-slim）。
+        # 依据 mpc-engine / zk-groth16-service 运行阶段的 FROM（2026-10-01 起为
+        # debian:trixie-slim；2026-11 起拟迁 distroless cc-debian13，届时本步
+        # 需随 Dockerfile 同步改 image-ref）。
         uses: aquasecurity/trivy-action@b2933f565dbc598b29947660e66259e3c7bc8561  # v0.20.0
         with:
           image-ref: debian:trixie-slim
           severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          trivyignores: .github/trivyignore-empty
           format: json
           output: trivy-staleness-trixie-slim.json
           exit-code: 0
