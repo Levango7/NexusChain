@@ -3,7 +3,7 @@
 > **性质**：给新加入的 Agent 的「一页入口」，不是规范本体。规范以
 > `docs/agent-board/README.md`、`README.md` 与 CI 门禁为准；本页在冲突时让位。
 >
-> **快照时间**：2026-11-02（master `c0485ea8`）。分工与在途 PR 变化很快，
+> **快照时间**：2026-11-02（master `35dfbf6c`）。分工与在途 PR 变化很快，
 > 以 `docs/agent-board/` 最新留言为准；本页只负责把「先读什么、怎么开工、
 > 哪里不能碰」说清楚。
 
@@ -52,7 +52,7 @@ Code Hygiene、k6 Smoke、OWASP Dependency-Check、Build & Test，以及 MPC 集
 ## 4. 工作树与主树（最容易踩的坑）
 
 - `F:/Nexus/NexusChain` 是**共享主树**，多个 Agent 共用；它经常停在旧基点
-  （2026-11-02 时落后 origin 9 个提交，且带 3 条未跟踪留言）。
+  （2026-11-02 时落后 origin 16 个提交，且带 3 条未跟踪留言）。
 - **不要**在主树切分支、rebase、reset、clean。需要开工时从 `origin/master` 新建 worktree：
 
 ```bash
@@ -86,13 +86,13 @@ git -C F:/Nexus/NexusChain worktree add -b <type>/<slug> F:/Nexus/nc-wt-<slug> o
 
 | 身份 | 当前域 | 在途 |
 |---|---|---|
-| **nex** | consensus / finality / 补票 / 指标门禁；结算 S1–S3；多项裁决 | #352（S3，DRAFT）；PLAN-066 实现（认领已合 #393） |
-| **zcode** | gateway 审批/执行腿、SDK 词表、ADR-036、signTransfer 幂等键 | ADR-036 勘误（#390 已合，可落笔）；幂等键 ADR 草案 |
+| **nex** | consensus / finality / 补票 / 指标门禁；结算 S1–S3；多项裁决 | #352（S3，DRAFT）；PLAN-066 已实现（#400） |
+| **zcode** | gateway 审批/执行腿、SDK 词表、ADR-036、signTransfer 幂等键 | ADR-036 勘误已合（#395/#397）；幂等键 ADR 草案 |
 | **qoder CN** | wallet/signing fail-closed 收敛、deploy 渲染门禁、板面签收门禁 | #390 已合（`0386b8af`） |
 | **codearts agent** | Flyway 迁移号段 / DB 文档 / README 成熟度核对 | 无明显在途（#379/#380 已闭环） |
 | **eng-review** | 全仓审计、资金路径 P0 批次、发布收口 | 自 10-19 后无明显板面动作 |
 | **orchestrator** | 指派、裁决、外部前置 | 不直接写代码 |
-| **TRAE 宝** | 项目现状/分工索引、roadmap 快照（docs-only） | 本条 lane |
+| **TRAE 宝** | 项目现状/分工索引、roadmap 快照（docs-only） | 0118 已交接（#401，在途） |
 
 历史参与者：**opencode** 在 PLAN 文档里留下 `C:\Users\winge\AppData\Local\Temp\opencode\...`
 与 `F:\Agent\opencode\workspace\...` 证据；**WorkBuddy** 在 10-27 发现平台地址占位符类 P0，
@@ -100,14 +100,17 @@ git -C F:/Nexus/NexusChain worktree add -b <type>/<slug> F:/Nexus/nc-wt-<slug> o
 
 ## 7. 当前闸门与待办（快照）
 
-1. **#390 已合（`0386b8af`）**：zcode 落 ADR-036「A2-off 零行为变化」勘误的前置已解除。
-2. **#352（S3）**：依赖 #347 已合（10-29），可 rebase/去 DRAFT；法币 `payee=null` 政策仍未决。
-3. **PLAN-066**：认领已随 #393 合入（`c0485ea8`），实现（拒绝计数指标 + 告警）待做。
-4. **0247/0249 未送达**：只在共享主树工作区，master 上看不到；0248 已由 #359/#364 兑现、
+已完成（本轮）：ADR-036 勘误（#395/#397）、退款平台地址 fail-closed（#398/#399）、
+PLAN-066 实现（#400）、0118 现状基线（#394）。
+
+1. **#352（S3）**：依赖 #347 已合（10-29），可 rebase/去 DRAFT；法币 `payee=null` 政策仍未决。
+2. **结算 0320**：`DefaultClearingEngine:63` 仍是 `PLATFORM_HOT_WALLET` 默认值 +
+   `:67-68` 空值二次回退；仓库内零注入，已投 P2 通知给 nex，尚未回帖/修复。
+3. **0247/0249 未送达**：只在共享主树工作区，master 上看不到；0248 已由 #359/#364 兑现、
    #388 明确可销账。0249 是法币收款方政策请求，不送达则裁决不启动。
-5. **staging A2**：A2 开着但 `NEX_WALLET_PLATFORM_PUBKEY` 未下发 ⇒ 当前 master 部署即
+4. **staging A2**：A2 开着但 `NEX_WALLET_PLATFORM_PUBKEY` 未下发 ⇒ 当前 master 部署即
    提现腿 100% fail-closed；需要公钥值 + 「先关后开」的决定。
-6. **A3 风控口径**：限额按自然日 vs 滚动 24h，需产品拍板。
+5. **A3 风控口径**：限额按自然日 vs 滚动 24h，需产品拍板。
 
 ## 8. 资金语义口径（改代码前先对齐）
 
@@ -116,6 +119,8 @@ git -C F:/Nexus/NexusChain worktree add -b <type>/<slug> F:/Nexus/nc-wt-<slug> o
 - 5001/5002/5003、`null`、未知码、超时/异常 ⇒ **EXECUTED_UNVERIFIED**（wallet）/
   **EXECUTION_UNKNOWN**（gateway），非终态、禁自动重放、交人工核对。
 - 同一响应在「异常腿 / 信封腿 / 直签腿」必须给出同一结论；改一处要检查其余两条腿。
+- 平台地址未配置 ⇒ 执行前 `not configured` fail-closed，不得回退占位符；wallet（10-27）
+  与退款（#398）已落地，结算 0320 仍待办。
 
 ## 9. 硬边界
 
