@@ -7349,3 +7349,19 @@ PLAN-066/067 把拒绝原因做成了 `nexus_finality_vote_rejected_total{reason
 - **回归**：`nexus-core` 全量 `--rerun-tasks` **220 个测试类 / 1845 用例 / 0 失败 / 0 错误 / 19 跳过**（19 跳过为仓库既有）；Code Hygiene 49 = 基线 49，无新增；
 - **一条重要的"仍绿"反向结果**：把 `WebSecurityConfig` 的 `excludePathPatterns(...)` 去掉、让拦截器名义上覆盖 `/**` 后，抓取**仍为 200**——再次独立证实 `HandlerInterceptor` 不参与 actuator 的独立 HandlerMapping。想给 actuator 加鉴权必须用 `EndpointFilter` / Spring Security / 独立 `management.server.port`，改 `WebSecurityConfig` 无效；
 - **边界**：同内核单机（WSL2 PG + Windows 侧 core，非物理多机）；未起真实 Prometheus/Alertmanager，未在真实集群触发告警；actuator 目前**没有鉴权**，切片只证明"抓取可达、标签可见"，不是"暴露面已加固"；未做吞吐/基数基准；合成拒绝不代表真实攻击；未触碰真实 L1 / 桥资金 / wallet / settlement lane。
+
+### 最终性历史脏行清理——`migrations/pg/` 首支脚本，先隔离后删除且可回滚（PLAN-069）
+
+PLAN-067 的交付文档把一件事明确留成欠账：「**不清洗历史短哈希行**：恢复时丢弃、不建索引、不占新键配额，但数据仍在库里，清理需要单独迁移脚本与审计窗口」。生产侧 `hasValidCheckpointHash()` 早已按 32 字节 fail-closed，但**数据层从未被清理**——本机实测库里仍有 `010203`（hexlen=6，即 3 字节）这条行。同时发现 `docs/db-schema-versioning.md` §三.2 规定的 `migrations/pg/NNN-desc.sql` **目录在仓库里根本不存在**，这条政策自 2026-10-19 落地以来从未被执行过。
+
+- **隔离而非删除（关键决策）**：把待清理行**原样搬运**到新增的 `finality_votes_quarantine`（含 `reason` / `quarantined_at` / `quarantined_by` / `migration_id` 四列审计），之后才从 `finality_votes` 移除。直接 `DELETE` 不可回滚；隔离后生产逻辑等效看不到脏行，但数据可查、可导出、可**原样搬回**；
+- **判定口径与生产逐字一致**：`length(checkpoint_hash) = 64 AND checkpoint_hash ~ '^[0-9a-fA-F]{64}$'`——对应 `FinalityGadget.hasValidCheckpointHash()`（32 字节）与 `JdbcFinalityStateStore.hashStr()`（`HexFormat.formatHex` ⇒ 小写 64 hex，读回 `hexToBytes` 非 hex 解成 null）。口径不一致是**双向**破坏：更宽则漏删、更严则把合法票搬走；
+- **脚本结构**：§0 幂等建隔离表 → §1 审计（只读，按行输出分类）→ §2 搬运（`ON CONFLICT DO NOTHING`）→ §3 移除（带按三列主键匹配的 `EXISTS` 双保险：宁可留脏行也不静默丢数据）→ §4 自检（`remaining_invalid` 必须为 0）；
+- **回滚是真回滚**：`.rollback.sql` 按 `migration_id` 把行原样搬回，且**不删除隔离表**（审计痕迹必须留）；搬回是安全的，因为这些行仍被生产侧判为脏行；
+- **版本号保持 1**：DDL 部分只有 `CREATE TABLE IF NOT EXISTS`（additive-only），数据搬运不改任何既有表结构。按 §三.2 它仍必须是脚本 + 人工执行（属数据重写），但版本号表达的是结构契约、不是"跑过数据脚本"。已在 `docs/db-schema-versioning.md` 新增 §三.4 台账说明该判定；
+- **门禁 `FinalityDirtyRowMigrationContractTest`（6 例）**：8 个样本上 Java 口径与 SQL 口径逐结论相同；**逐语句**断言 §2/§3/§4 都同时校验长度与字符集且不得退化成 `< 64`；`Block.HASH_SIZE*2 == 64`；INSERT 必须先于 DELETE 且 DELETE 带三列主键 EXISTS；回滚不得 `DROP TABLE` 或清空隔离表；
+- **端到端演练（WSL2 PostgreSQL 16.15，独立库）**：2 条合法 + 4 条脏行（3 字节 / 63 位 / 65 位 / 64 位非 hex）→ 迁移后剩 2、隔离 4 且各自正确归类 → **重复执行仍 2/4**（幂等）→ 回滚后 6 行全部恢复、隔离表仍留 4 行（`PASS votes_restored_6` / `legal_rows_untouched_2` / `quarantine_retained_4`）；
+- **反向对照 5 组全部精确变红**（A `=64`→`<64`、B 去掉 hex 字符集检查、C 去掉 EXISTS 双保险、D 回滚加 `DROP TABLE`、E 先删后隔离），还原后两文件 SHA-256 与变异前逐字一致；
+- **反向对照抓到三个真实缺陷**（因此实现被改过，如实记录）：①最初把口径断言写在对**整份 SQL** 的 `contains()` 上，§1/§2/§4 的同样文本让断言恒真、只改坏 §3 仍绿——改为逐语句截取；②DELETE 的 `EXISTS` 检查同样是整份 SQL 级，前文即可命中——改为截到分号并额外要求三列主键；③测试读仓库外路径的 `migrations/pg/*.sql` **不在 test 任务输入里**，改坏 SQL 后 Gradle 判 `UP-TO-DATE` 直接跳过（"门禁写对了却从未执行"），已按 PLAN-062 的先例补 `inputs.dir("${rootDir}/migrations/pg")` 并实测改 SQL 后不再跳过；
+- **回归**：`nexus-core` 全量 `--rerun-tasks` **221 个测试类 / 1851 用例 / 0 失败 / 0 错误 / 19 跳过**；
+- **边界**：**未在生产/预发库执行**，全部演练在本机 WSL2 PG 独立库；不做自动清洗（§三.3 明确启动只做版本校验）；不处理 `finality_checkpoints`（只在 §4 报告其脏行数，语义待确认）；不做通用 retention；同内核单机非物理多机；未触碰真实 L1 / 桥资金 / wallet / settlement lane。
