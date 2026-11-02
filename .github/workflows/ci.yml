@@ -986,17 +986,24 @@ jobs:
           kubectl get pods -n nexus -o wide
 
       # ⑤批持久化接线部署面验证：PVC 挂载 + 会话目录可写 + env 注入
+      # 2026-11-02：运行阶段改 distroless 后容器内没有 sh（本 job 曾因
+      # `kubectl exec -- sh -c` 报 `exec: "sh": executable file not found`）。
+      # 改为直接调镜像内注入的静态 busybox applet（/busybox ls|touch|rm|env），
+      # 不经 shell；最后的 grep 在 runner 侧执行，不依赖容器内工具。
       - name: Verify session PVC + persistence env wiring
         run: |
           echo "=== PVCs (expect 2 kinds: mpc-config + mpc-sessions) ==="
           kubectl get pvc -n nexus
           for p in 0 1 2; do
             echo "=== mpc-engine-$p persistence wiring ==="
-            kubectl exec -n nexus mpc-engine-$p -- sh -c 'ls -ld /app/sessions || echo MISSING_SESSIONS_DIR'
-            kubectl exec -n nexus mpc-engine-$p -- sh -c 'echo smoke > /app/sessions/.write-test && cat /app/sessions/.write-test && rm /app/sessions/.write-test'
+            kubectl exec -n nexus mpc-engine-$p -- /busybox ls -ld /app/sessions
+            kubectl exec -n nexus mpc-engine-$p -- /busybox touch /app/sessions/.write-test
+            kubectl exec -n nexus mpc-engine-$p -- /busybox ls -l /app/sessions/.write-test
+            kubectl exec -n nexus mpc-engine-$p -- /busybox rm /app/sessions/.write-test
           done
           echo "=== env wiring ==="
-          kubectl exec -n nexus mpc-engine-0 -- sh -c 'env | grep -E "MPC_ENGINE_SESSION_DIR|MPC_STORAGE_KEY_VERSION|MPC_CONFIG_PATH" || true'
+          kubectl exec -n nexus mpc-engine-0 -- /busybox env \
+            | grep -E "MPC_ENGINE_SESSION_DIR|MPC_STORAGE_KEY_VERSION|MPC_CONFIG_PATH" || true
 
       # 协议冒烟：Pod 0 上起一轮 keygen 首轮（CgStartKeygen 广播消息 = 引擎
       # 在 K8s 内可驱动协议），用 grpcurl 不现实（容器无该二进制）——用
