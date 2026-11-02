@@ -11,7 +11,7 @@
 | store | 组件 | 表 / 键 | 当前版本 |
 |---|---|---|---|
 | `payment_state` | `JdbcPaymentStateStore` | `payment_channels` / `stablecoin_positions` / `bridge_transactions` / `bridge_replay_keys` | 1 |
-| `finality_state` | `JdbcFinalityStateStore` | `finality_votes`（PLAN-018 起含 `signature`/`public_key` 两列）/ `finality_checkpoints` / `finality_vote_outbox`（PLAN-018 新增） | 1 |
+| `finality_state` | `JdbcFinalityStateStore` | `finality_votes`（PLAN-018 起含 `signature`/`public_key` 两列）/ `finality_checkpoints` / `finality_vote_outbox`（PLAN-018 新增）/ `finality_votes_quarantine`（**PLAN-069 新增**，迁移脚本 `001` 创建，见 §三.4） | 1 |
 | pending_block_outbox | JdbcPendingBlockOutbox | pending_block_outbox（PLAN-019 新增） | 1 |
 | `validator_set` | `ValidatorSetPersistence` | `validators_synced` | 1 |
 | `l2_fraud_state` | `JdbcFraudProofStateStore` | `l2_fraud_batches` / `l2_fraud_bonds` / `l2_fraud_conflicts` | 1 |
@@ -62,6 +62,25 @@ CREATE TABLE IF NOT EXISTS nexus_schema_meta (
 > （老库没有 `signature` 列时，`init()` 必须把它补齐，否则新代码写签名直接
 > `BadSqlGrammarException`）。
 
+### 三.4 `migrations/pg/` 脚本台账
+
+| 脚本 | 目的 | store | 版本号 | 可回滚 |
+|---|---|---|---|---|
+| `001-finality-quarantine-invalid-checkpoint-hash.sql` | PLAN-069：把 `finality_votes` 里检查点哈希不是 32 字节（hex 64 字符）的历史行**原样隔离**到 `finality_votes_quarantine`，再从生产表移除 | `finality_state` | **保持 1** | ✅ 配套 `.rollback.sql`（把行原样搬回，保留隔离表作审计） |
+
+> **为什么 PLAN-069 没升 `SCHEMA_VERSION`**：本脚本的 DDL 部分只有
+> `CREATE TABLE IF NOT EXISTS finality_votes_quarantine`（§三.1 的 additive-only），
+> 数据搬运不改变任何既有表的结构与语义。按 §三.2 的要求它**仍然必须是脚本 +
+> 人工执行**（因为是数据重写），但版本号不需递增——这与 PLAN-018 的判定同一口径：
+> 版本号表达的是**结构契约**，不是"是否跑过数据脚本"。
+> 若将来出现改类型/删列/改键，则必须递增。
+
+> **判定口径必须与生产一致**（本切片的门禁会检查）：
+> `length(checkpoint_hash) = 64 AND checkpoint_hash ~ '^[0-9a-fA-F]{64}$'`
+> ——对应 `FinalityGadget.hasValidCheckpointHash()`（32 字节）与
+> `JdbcFinalityStateStore.hashStr()`（`HexFormat.formatHex` ⇒ 小写 64 hex）。
+> 由 `FinalityDirtyRowMigrationContractTest` 逐语句断言两侧口径一致。
+
 ## 四、运行手册（版本不匹配时）
 
 1. 看到启动异常 `Schema version mismatch for store=...`：
@@ -70,6 +89,8 @@ CREATE TABLE IF NOT EXISTS nexus_schema_meta (
 2. LevelDB 侧：`__meta/schema_version` 低于代码 → 破例变更需人工评估键空间兼容性；
    不要手工篡改 meta 键（除显式迁移流程）。
 3. 查当前登记：`SELECT * FROM nexus_schema_meta;`
+4. 数据类脚本（不升版本号、不发启动异常）按 §三.4 台账**主动**执行；
+   执行前先单独跑脚本的「审计」段确认影响面，执行后可跑配套 `.rollback.sql` 回滚。
 
 ## 五、验收与测试
 

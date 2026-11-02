@@ -132,6 +132,17 @@ test {
     inputs.file("${rootDir}/deploy/k8s/50-prometheus-rules.yaml")
         .withPathSensitivity(org.gradle.api.tasks.PathSensitivity.RELATIVE)
         .withPropertyName("prometheusRules")
+
+    // PLAN-069：FinalityDirtyRowMigrationContractTest 读取仓库根的迁移脚本
+    // （migrations/pg/*.sql），同样不在 test 任务的默认输入里。不登记的话，
+    // 改了 SQL 而 Java 未变时 Gradle 判定 up-to-date 直接跳过该测试——
+    // 本地"绿"但门禁从未执行（与上面 PLAN-062 的同型缺陷）。
+    // 用 dir + 后缀过滤：新增迁移脚本也应触发重跑，无需逐条登记。
+    inputs.dir("${rootDir}/migrations/pg")
+        .withPathSensitivity(org.gradle.api.tasks.PathSensitivity.RELATIVE)
+        .withPropertyName("pgMigrations")
+        .skipWhenEmpty()
+        .optional(true)
 }
 
 ext {
