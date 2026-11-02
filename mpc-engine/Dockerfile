@@ -89,4 +89,5 @@ ENV RUST_LOG=info \
     MPC_ENGINE_HOST=0.0.0.0 \
     MPC_ENGINE_PORT=50051
 
-CMD ["mpc-engine"]
+# 绝对路径（不依赖 PATH；distroless 的 PATH 无保证）
+CMD ["/usr/local/bin/mpc-engine"]

@@ -40,4 +40,5 @@ EXPOSE 50061 50062
 ENV ZK_SERVICE_PORT=50061 \
     ZK_HTTP_PORT=50062 \
     GROTH16_SETUP_DIR=/setup
-ENTRYPOINT ["zk-groth16-service"]
+# 绝对路径（不依赖 PATH；distroless 的 PATH 无保证）
+ENTRYPOINT ["/usr/local/bin/zk-groth16-service"]
