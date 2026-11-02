@@ -7335,3 +7335,17 @@ PLAN-065/066 把“伪造签名”和“拒绝可见”补齐之后，拒绝判�
 - **测试**：`FinalityCheckpointBoundsTest` 6 例 + `FinalityVotePayloadBoundsTest` 4 例 + `FinalityCoordinatorTest` fail-closed 1 例；finality 全包 **153 用例 0 失败 0 跳过**、metrics 全包 **27 用例 0 失败**；三个包外用例（`MultiNodeConsensusConvergenceTest` / `ConsensusChaosTest` / `FinalityVoteP2PRoundTripTest`）的 4 字节检查点同步改为 32 字节；
 - **反向对照**：5 组定点变异（哈希 4 红、游标 1 红、K 上限 1 红、载荷 2 红、restore 独立闸 1 红），还原后 10/10 绿且三文件 SHA-256 与变异前一致；
 - **边界**：同内核 JVM 单测（非物理多机）；未做 epoch 窗口/规范检查点语义校验（需链接口）；不清洗历史脏行；未在真实集群触发告警；未触碰真实 L1 / 桥资金 / wallet / settlement lane。
+
+### 最终性拒绝指标的抓取端可见性——抓取文本与告警标签值首次进入门禁（PLAN-068）
+
+PLAN-066/067 把拒绝原因做成了 `nexus_finality_vote_rejected_total{reason,phase}` 与 20 条告警，但两版交付文档都登记了同一条遗留项：**未做 `/actuator/prometheus` 抓取端补验**。此前全仓 `src/test` 里搜 `actuator/prometheus` 只有 2 处注释，**没有任何断言**回答过"不带 token 抓取会不会被 `localonly` 挡成 401、三个新 reason 在抓取文本里长什么样"。
+
+- **运行时实证（真实进程 + 真实 PG）**：WSL2 PostgreSQL 16.15 上的库 + Windows 侧单进程 nexus-core（`localonly` 取默认 `true`、19585 端口），不带 token 实测 `/actuator/prometheus` **200**、`/actuator/health` 200、`/height` 200，而同进程 `/cheackTxlist` 与 `/nodeInfo` 仍为 **401** ⇒ 抓取可达且鉴权确实在工作；
+- **结论：不改白名单**。静态与运行时证据一致——Boot 4.0.8 的 actuator 由独立 `WebMvcEndpointHandlerMapping` 提供，构造时不调用 `setInterceptors`，`WebMvcConfigurer` 注册的 `HandlerInterceptor` 够不到 `/actuator/**`；把 `/actuator/prometheus` 加进 `LOCAL_ONLY_PUBLIC_PATHS` 是**无效修复**且会固化错误心智模型。`/actuator/health` 也不加：nexus-core 的 Helm/k8s/compose/prod 探针全部打 `/height`；
+- **标签可见性（真实 PG）**：向 `finality_votes` 插入 3 字节哈希脏行，等一个 5s 收敛周期后，抓取文本出现 `nexus_finality_vote_rejected_total{phase="convergence",reason="checkpoint_hash_invalid"} 1.0`（插入前该序列连 `# HELP`/`# TYPE` 都不存在）；
+- **门禁一 `FinalityMetricsScrapeGateTest`**（2 例）：`@SpringBootTest(webEnvironment=RANDOM_PORT)` 起真实内嵌 Tomcat，用 JDK `HttpClient` 发**不带 token** 的 GET，断言 200 + 三个新 reason 的序列各 =1 + `# TYPE ... counter`；三个 reason 都走真实判定路径（短哈希 submitVote / K=4 第 5 个新键 / 真实编码后 >2048 字节的 broadcaster 入站帧）；**外加 401 对照**（同进程普通端点必须仍被拦），并用第二条用例读生产 `application.properties` 断言 `prometheus` 仍暴露、`server.port` 仍 19585、未单独配 `management.server.port`；
+- **门禁二 `FinalityRejectionLabelContractTest`**（4 例）：`FinalityRulesContractTest` 只校验规则里的**指标名**，不看标签值；新增测试把 `reason=~"..."` 的正则取值与 `Reason` 枚举逐字对齐，并强制 PLAN-067 的三个新 reason **必须被某条告警消费**（防止"只进指标、永不告警"）；
+- **反向对照 4 组精确变红**：B 抹掉 `counter.increment()` ⇒ 1 红；C 生产配置去掉 `prometheus` ⇒ 2 红；D 放行对照端点 ⇒ 401 断言红；E 规则里 `checkpoint_hash_invalid` 拼错 ⇒ 3 红。还原后 4 个文件 SHA-256 与变异前逐字一致，重跑全绿；
+- **回归**：`nexus-core` 全量 `--rerun-tasks` **220 个测试类 / 1845 用例 / 0 失败 / 0 错误 / 19 跳过**（19 跳过为仓库既有）；Code Hygiene 49 = 基线 49，无新增；
+- **一条重要的"仍绿"反向结果**：把 `WebSecurityConfig` 的 `excludePathPatterns(...)` 去掉、让拦截器名义上覆盖 `/**` 后，抓取**仍为 200**——再次独立证实 `HandlerInterceptor` 不参与 actuator 的独立 HandlerMapping。想给 actuator 加鉴权必须用 `EndpointFilter` / Spring Security / 独立 `management.server.port`，改 `WebSecurityConfig` 无效；
+- **边界**：同内核单机（WSL2 PG + Windows 侧 core，非物理多机）；未起真实 Prometheus/Alertmanager，未在真实集群触发告警；actuator 目前**没有鉴权**，切片只证明"抓取可达、标签可见"，不是"暴露面已加固"；未做吞吐/基数基准；合成拒绝不代表真实攻击；未触碰真实 L1 / 桥资金 / wallet / settlement lane。
