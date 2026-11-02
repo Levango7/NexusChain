@@ -33,8 +33,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class FinalityGadgetFaultInjectionTest {
 
-    private static final byte[] CP1 = new byte[]{1, 2, 3};
-    private static final byte[] CP2 = new byte[]{9, 9, 9};
+    private static final byte[] CP1 = new byte[]{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
+    private static final byte[] CP2 = new byte[]{9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9};
 
     private ValidatorRegistry registry;
     private StakingService staking;

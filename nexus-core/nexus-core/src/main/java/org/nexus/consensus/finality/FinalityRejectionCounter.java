@@ -46,7 +46,29 @@ public interface FinalityRejectionCounter {
         /** 单票 Ed25519 验签失败（公钥正确但签名伪造——PLAN-065 的主缺口）。 */
         SIGNATURE_INVALID,
         /** epoch 总质押权重为 0（启动早期/注册表异常），无法做阈值判定。 */
-        ZERO_TOTAL_WEIGHT
+        ZERO_TOTAL_WEIGHT,
+        /**
+         * 检查点哈希不是协议规定的 {@code Block.HASH_SIZE}（32）字节。
+         *
+         * <p>PLAN-067：这是"畸形/放大"类拒绝，不是正常治理噪声。超长哈希在
+         * {@code epochKey()} 里会 hex 成 2 倍体积的字符串；必须在建键/验签之前拒绝。</p>
+         */
+        CHECKPOINT_HASH_INVALID,
+        /**
+         * 单个验证人在单个 epoch 内试图**新引入**超过
+         * {@code MAX_CHECKPOINTS_PER_VALIDATOR_PER_EPOCH} 个检查点键。
+         *
+         * <p>PLAN-067：对已存在键投票不会触发本原因；只有"造新键"才受上限约束，
+         * 避免一个拜占庭验证人用假键把其他验证人挡在真检查点之外。</p>
+         */
+        CHECKPOINT_LIMIT_EXCEEDED,
+        /**
+         * 最终性网络载荷超过编码后尺寸上限（PLAN-067）。
+         *
+         * <p>由 {@code FinalityVoteBroadcaster} 在解析前计数；不是共识判定拒绝，
+         * 但同样属于"异常输入"，需要与正常流量区分。</p>
+         */
+        PAYLOAD_TOO_LARGE
     }
 
     /**

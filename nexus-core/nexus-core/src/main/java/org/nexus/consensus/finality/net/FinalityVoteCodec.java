@@ -28,6 +28,16 @@ public final class FinalityVoteCodec {
 
     public static final byte MAGIC = 0x5A;
 
+    /**
+     * 单张投票编码后的最大字节数（PLAN-067）。
+     *
+     * <p>正常字段上限：epoch ≤ 20、checkpoint hex 64、validator ≤ 128、
+     * sig hex 128、pub hex 64，加 JSON 键名/引号/逗号约 100 ⇒ 正常票远小于
+     * 600 字节。取 2048 留 3 倍余量；超过上限的帧在解析前直接丢弃，避免为
+     * P2P 允许的近 4MB 攻击帧分配 String/字节数组。</p>
+     */
+    public static final int MAX_ENCODED_VOTE_BYTES = 2048;
+
     private FinalityVoteCodec() {}
 
     public static byte[] encode(Vote vote) {
@@ -48,7 +58,9 @@ public final class FinalityVoteCodec {
     }
 
     public static Vote decode(byte[] raw) {
-        if (raw == null || raw.length < 2 || raw[0] != MAGIC) {
+        if (raw == null || raw.length < 2
+                || raw.length > MAX_ENCODED_VOTE_BYTES
+                || raw[0] != MAGIC) {
             return null;
         }
         String json = new String(raw, 1, raw.length - 1, StandardCharsets.UTF_8);

@@ -50,7 +50,7 @@ import static org.mockito.Mockito.mock;
  */
 class FinalityVoteSyncPagingTest {
 
-    private static final byte[] CP1 = new byte[]{1, 2, 3};
+    private static final byte[] CP1 = new byte[]{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
 
     private ValidatorRegistry registry;
     private StakingService staking;
@@ -870,9 +870,9 @@ class FinalityVoteSyncPagingTest {
     void fullPageMustResumeInclusivelyAtSameEpoch() {
         // 注：同 (validator, epoch, checkpoint) 会被库里去重，要造出"epoch1 三张"
         // 必须换不同检查点。
-        gadgetA.submitVote(vote("v1", 1, new byte[]{1}));
-        gadgetA.submitVote(vote("v1", 1, new byte[]{2}));
-        gadgetA.submitVote(vote("v1", 1, new byte[]{3}));
+        gadgetA.submitVote(vote("v1", 1, new byte[]{17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17}));
+        gadgetA.submitVote(vote("v1", 1, new byte[]{18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18}));
+        gadgetA.submitVote(vote("v1", 1, new byte[]{19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19}));
         gadgetA.submitVote(vote("v1", 2, CP1));
 
         FinalityVoteBroadcaster[] nodes = new FinalityVoteBroadcaster[2];

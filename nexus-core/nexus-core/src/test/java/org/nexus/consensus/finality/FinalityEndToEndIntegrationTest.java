@@ -125,6 +125,16 @@ class FinalityEndToEndIntegrationTest {
         coordinator.setSelfValidatorAddress(selfAddr);
     }
 
+    /**
+     * 生成 32 字节检查点哈希（PLAN-067：最终性层按 {@link Block#HASH_SIZE} 严格校验）。
+     *
+     * <p>用后缀派生并补零，既保证不同后缀对应不同检查点，又满足协议长度。</p>
+     */
+    private static byte[] hashOf(String suffix) {
+        byte[] raw = ("cp-" + suffix).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        return java.util.Arrays.copyOf(raw, Block.HASH_SIZE);
+    }
+
     /** 驱动一块出块事件（进入 coordinator 判断逻辑） */
     private FinalityRecord driveBlock(long height, String hashSuffix) {
         Block block = new Block();
@@ -133,7 +143,7 @@ class FinalityEndToEndIntegrationTest {
         try {
             Field f = Block.class.getDeclaredField("hashCache");
             f.setAccessible(true);
-            f.set(block, ("cp-" + hashSuffix).getBytes());
+            f.set(block, hashOf(hashSuffix));
         } catch (Exception e) {
             throw new RuntimeException("Cannot set block hashCache", e);
         }
@@ -154,7 +164,7 @@ class FinalityEndToEndIntegrationTest {
 
         // 投票达 2/3 → 检查点最终化
         assertTrue(last.isFinalized(), "3 票（权重 900）应使检查点最终化");
-        assertTrue(gadget.isFinalized(1, "cp-epoch1".getBytes()));
+        assertTrue(gadget.isFinalized(1, hashOf("epoch1")));
         assertEquals(100, last.progressPercent(), "权重 3/3 = 100%");
     }
 
@@ -197,7 +207,7 @@ class FinalityEndToEndIntegrationTest {
 
         // v1 再投下一个 epoch 检查点（高度 8）
         assertNull(driveBlock(EPOCH_LENGTH * 2, "epoch2"), "SLASHED 后应停止投票");
-        assertFalse(gadget.isFinalized(2, "cp-epoch2".getBytes()), "epoch2 不应被 v1 推进最终化");
+        assertFalse(gadget.isFinalized(2, hashOf("epoch2")), "epoch2 不应被 v1 推进最终化");
     }
 
     /** 直接改验证人状态（不做 slash 逻辑） */

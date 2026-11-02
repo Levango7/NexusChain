@@ -8,6 +8,7 @@ import org.nexus.consensus.pos.StakingService;
 import org.nexus.consensus.pos.Validator;
 import org.nexus.consensus.pos.ValidatorRegistry;
 import org.nexus.consensus.pos.ValidatorStatus;
+import org.nexus.core.Block;
 
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
@@ -76,7 +77,12 @@ class ConsensusChaosTest {
     }
 
     private byte[] checkpoint(long epoch) {
-        return new byte[]{(byte) epoch, 1, 2, 3};
+        byte[] cp = new byte[Block.HASH_SIZE];
+        ByteBuffer.wrap(cp).putLong(epoch);
+        cp[8] = 1;
+        cp[9] = 2;
+        cp[10] = 3;
+        return cp;
     }
 
     /**

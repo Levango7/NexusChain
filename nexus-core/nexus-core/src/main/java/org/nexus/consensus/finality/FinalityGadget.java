@@ -10,6 +10,7 @@ import org.nexus.consensus.finality.SignatureAggregator.AggregatedSignature;
 import org.nexus.consensus.finality.persistence.FinalityStateStore;
 import org.nexus.consensus.finality.persistence.InMemoryFinalityStateStore;
 import org.nexus.consensus.finality.persistence.JdbcFinalityStateStore;
+import org.nexus.core.Block;
 import org.nexus.crypto.ed25519.Ed25519PublicKey;
 import org.nexus.consensus.finality.FinalityRejectionCounter.FinalizeReason;
 import org.nexus.consensus.finality.FinalityRejectionCounter.Phase;
@@ -47,10 +48,51 @@ public class FinalityGadget {
     /** 构造期拒绝事件缓冲上限（PLAN-066 重放队列的防泄漏护栏）。 */
     private static final int MAX_REPLAY_EVENTS = 4_096;
 
+    /**
+     * 收敛路径拒绝计数的去重集合上限（PLAN-067）。
+     *
+     * <p>收敛每 5 秒重扫一次库；同一条坏行不能每轮都往 counter 里加 1，否则
+     * "库里有一条历史脏行"会被放大成持续增长的攻击曲线。集合按
+     * (key, validator, reason) 去重，且有界——超出后不再增长，只停止为**新**
+     * 坏行计数（判定/日志不受影响）。</p>
+     */
+    private static final int MAX_CONVERGENCE_REJECTION_KEYS = 4_096;
+
+    /**
+     * 单个验证人在单个 epoch 内最多可**新引入**的检查点键数（PLAN-067）。
+     *
+     * <p>诚实验证人每个 epoch 只签一个检查点；双签证据最多需要保留 2 个不同键。
+     * 取 4 留 2 倍余量：既能保留双签证据，又让"一个拜占庭验证人用不同哈希无限
+     * 造键"的放大系数变成常数。上限只作用于<b>新键</b>——对已存在键投票永不拦截，
+     * 否则攻击者先造 4 个假键就能把其他验证人挡在真检查点之外。</p>
+     */
+    static final int MAX_CHECKPOINTS_PER_VALIDATOR_PER_EPOCH = 4;
+
     private final ValidatorRegistry validatorRegistry;
     private final StakingService stakingService;
 
     private final Map<String, Set<String>> epochCheckpointVoters = new ConcurrentHashMap<>();
+    /**
+     * epoch → 该 epoch 下已创建的检查点键（PLAN-067）。
+     *
+     * <p>用途有两个：</p>
+     * <ul>
+     *   <li>双签检测只扫本 epoch 的键，而不是全表所有键（原实现每张新票
+     *       O(全部键)，拜占庭验证人可用"同 epoch 无限造键"把它放大成 O(N²)）；</li>
+     *   <li>按 (epoch, validator) 统计"新引入了几个键"，支撑
+     *       {@link #MAX_CHECKPOINTS_PER_VALIDATOR_PER_EPOCH}。</li>
+     * </ul>
+     *
+     * <p>只索引**至少有一张通过绑定校验的票**的键；收敛路径不会为脏行建空键。
+     * 与 {@code epochCheckpointVoters} 同生命周期，{@link #setStateStore} 时清空重建。</p>
+     */
+    private final Map<Long, Set<String>> epochCheckpointKeys = new ConcurrentHashMap<>();
+    /**
+     * 收敛路径已计过数的拒绝（key|validator|reason，PLAN-067）。
+     *
+     * <p>只为"库里已有的坏行"去重；admission 路径的每一条网络消息仍然逐条计数。</p>
+     */
+    private final Set<String> convergenceRejectionsCounted = ConcurrentHashMap.newKeySet();
     private final Map<String, List<Vote>> epochCheckpointVotes = new ConcurrentHashMap<>(); // M3: 投票对象存档，供聚合验签（并发安全：CopyOnWriteArrayList）
     private final Map<String, BigDecimal> epochCheckpointWeights = new ConcurrentHashMap<>();
     private final Map<String, BigDecimal> epochTotalWeight = new ConcurrentHashMap<>();
@@ -162,9 +204,11 @@ public class FinalityGadget {
         // 保证即使未来改为延迟注入也不会把内存态与持久化态混在一起。
         finalizedCheckpoints.clear();
         epochCheckpointVoters.clear();
+        epochCheckpointKeys.clear();
         epochCheckpointVotes.clear();
         epochCheckpointWeights.clear();
         finalizationRejected.clear();
+        convergenceRejectionsCounted.clear();
         restoreFromStore();
         log.info("FinalityGadget: using finality state store {}", stateStore.getClass().getSimpleName());
     }
@@ -245,6 +289,12 @@ public class FinalityGadget {
             Set<String> restored = ConcurrentHashMap.newKeySet();
             restored.addAll(voters);
             epochCheckpointVoters.put(key, restored);
+            // PLAN-067：只把 32 字节哈希的键放进新索引。历史库里的短哈希键是
+            // 迁移前遗留事实（非目标：本切片不洗库），但它们不应占用新键配额，
+            // 也不应参与双签扫描。
+            if (hasValidCheckpointKey(key)) {
+                indexCheckpointKey(epochOfKey(key), key);
+            }
             BigDecimal sum = BigDecimal.ZERO;
             for (String addr : voters) {
                 Validator v = validatorRegistry == null ? null : validatorRegistry.getValidator(addr);
@@ -266,11 +316,17 @@ public class FinalityGadget {
             List<Vote> validVotes = new ArrayList<>();
             BigDecimal sum = BigDecimal.ZERO;
             for (Vote vote : votes) {
-                if (!hasValidVoteSignature(vote)) {
-                    log.warn("Startup restore: dropping vote with invalid signature: "
-                                    + "epoch={}, validator={}",
-                            vote.getEpoch(), vote.getValidatorAddress());
-                    countVoteRejected(Reason.SIGNATURE_INVALID, Phase.RESTORE);
+                if (vote == null) {
+                    log.warn("Startup restore: dropping null vote row");
+                    countVoteRejected(Reason.MALFORMED_VOTE, Phase.RESTORE);
+                    continue;
+                }
+                if (!hasValidCheckpointHash(vote.getCheckpointHash())) {
+                    log.warn("Startup restore: dropping vote with invalid checkpoint hash: "
+                                    + "epoch={}, validator={}, bytes={}",
+                            vote.getEpoch(), vote.getValidatorAddress(),
+                            vote.getCheckpointHash() == null ? -1 : vote.getCheckpointHash().length);
+                    countVoteRejected(Reason.CHECKPOINT_HASH_INVALID, Phase.RESTORE);
                     continue;
                 }
                 String validatorAddress = vote.getValidatorAddress();
@@ -278,6 +334,13 @@ public class FinalityGadget {
                     log.warn("Startup restore: dropping malformed vote row (missing validator address)");
                     countVoteRejected(Reason.MALFORMED_VOTE, Phase.RESTORE);
                     continue;   // 防御：畸形行不得让启动恢复抛 NPE
+                }
+                if (!hasValidVoteSignature(vote)) {
+                    log.warn("Startup restore: dropping vote with invalid signature: "
+                                    + "epoch={}, validator={}",
+                            vote.getEpoch(), validatorAddress);
+                    countVoteRejected(Reason.SIGNATURE_INVALID, Phase.RESTORE);
+                    continue;
                 }
                 if (!restored.add(validatorAddress)) {
                     continue;   // 同一验证人只计一次（补票可能重复投递）
@@ -292,6 +355,9 @@ public class FinalityGadget {
             }
             if (!restored.isEmpty()) {
                 epochCheckpointVoters.put(key, restored);
+                if (hasValidCheckpointKey(key)) {
+                    indexCheckpointKey(epochOfKey(key), key);
+                }
                 epochCheckpointWeights.put(key, sum);
                 epochCheckpointVotes.put(key,
                         new java.util.concurrent.CopyOnWriteArrayList<>(validVotes));
@@ -360,7 +426,7 @@ public class FinalityGadget {
         byte[] checkpoint = vote.getCheckpointHash();
         byte[] publicKey = vote.getPublicKeyBytes();
         if (signature == null || signature.length == 0
-                || checkpoint == null
+                || !hasValidCheckpointHash(checkpoint)
                 || publicKey == null || publicKey.length == 0) {
             return false;
         }
@@ -393,44 +459,93 @@ public class FinalityGadget {
      * @param phase 拒绝发生在哪条路径（指标标签；判定逻辑与 phase 无关）
      */
     private boolean validateVoteBinding(Vote vote, Phase phase) {
+        Reason reason = checkVoteBinding(vote);
+        if (reason == null) {
+            return true;
+        }
+        logVoteRejection(vote, reason);
+        countVoteRejected(reason, phase);
+        return false;
+    }
+
+    /**
+     * 与路径无关的绑定校验：返回拒绝原因，{@code null} 表示通过。
+     *
+     * <p>PLAN-067：把"判定"与"计数"拆开，收敛路径可以按
+     * (key, validator, reason) 去重计数——同一条库里的坏行每 5 秒被重新扫描
+     * 一次，不能每轮都累加指标（否则历史脏行会伪装成持续攻击）。</p>
+     */
+    private Reason checkVoteBinding(Vote vote) {
         if (vote == null) {
-            countVoteRejected(Reason.MALFORMED_VOTE, phase);
-            return false;
+            return Reason.MALFORMED_VOTE;
         }
         String validatorAddress = vote.getValidatorAddress();
         if (validatorAddress == null || validatorAddress.isEmpty()) {
-            countVoteRejected(Reason.MALFORMED_VOTE, phase);
-            return false;
+            return Reason.MALFORMED_VOTE;
+        }
+        // PLAN-067：检查点哈希必须是 32 字节。必须在注册表/验签之前挡掉——
+        // 超长哈希会让 signingPayload() 按 8+len 分配，也会让 epochKey() hex 成
+        // 2 倍体积的字符串；这是"先校验、后建键"的第一道闸。
+        if (!hasValidCheckpointHash(vote.getCheckpointHash())) {
+            return Reason.CHECKPOINT_HASH_INVALID;
         }
         Validator v = validatorRegistry.getValidator(validatorAddress);
         if (v == null) {
-            countVoteRejected(Reason.VALIDATOR_UNKNOWN, phase);
-            return false;
+            return Reason.VALIDATOR_UNKNOWN;
         }
         if (v.getStatus() != ValidatorStatus.ACTIVE) {
-            countVoteRejected(Reason.VALIDATOR_INACTIVE, phase);
-            return false;
+            return Reason.VALIDATOR_INACTIVE;
         }
         String registeredPubHex = v.getPublicKey();
         byte[] votePubKey = vote.getPublicKeyBytes();
         if (registeredPubHex == null || registeredPubHex.isEmpty()
                 || votePubKey == null || votePubKey.length == 0
                 || !registeredPubHex.equalsIgnoreCase(Hex.encodeHexString(votePubKey))) {
-            log.warn("Vote pubkey binding FAILED for validator {}: registered={}, votePayloadPubKey={}",
-                    vote.getValidatorAddress(),
-                    registeredPubHex == null || registeredPubHex.isEmpty() ? "none" : "present",
-                    votePubKey == null || votePubKey.length == 0 ? "none" : "mismatch");
-            countVoteRejected(Reason.PUBKEY_MISMATCH, phase);
-            return false;
+            return Reason.PUBKEY_MISMATCH;
         }
         // PLAN-065：公钥匹配不等于签名有效——必须在计票/落库前验签。
         if (!hasValidVoteSignature(vote)) {
-            log.warn("Vote signature verification FAILED for validator {} (epoch={})",
-                    validatorAddress, vote.getEpoch());
-            countVoteRejected(Reason.SIGNATURE_INVALID, phase);
-            return false;
+            return Reason.SIGNATURE_INVALID;
         }
-        return true;
+        return null;
+    }
+
+    /** 拒绝日志（PLAN-065/067 的排障口径；调用方已确认 reason 非 null）。 */
+    private void logVoteRejection(Vote vote, Reason reason) {
+        if (reason == Reason.CHECKPOINT_HASH_INVALID) {
+            log.warn("Vote checkpoint hash invalid for validator {}: epoch={}, bytes={}",
+                    vote == null ? "unknown" : vote.getValidatorAddress(),
+                    vote == null ? -1 : vote.getEpoch(),
+                    vote == null || vote.getCheckpointHash() == null
+                            ? -1 : vote.getCheckpointHash().length);
+        } else if (reason == Reason.PUBKEY_MISMATCH) {
+            byte[] votePubKey = vote == null ? null : vote.getPublicKeyBytes();
+            log.warn("Vote pubkey binding FAILED for validator {}: votePayloadPubKey={}",
+                    vote == null ? "unknown" : vote.getValidatorAddress(),
+                    votePubKey == null || votePubKey.length == 0 ? "none" : "mismatch");
+        } else if (reason == Reason.SIGNATURE_INVALID) {
+            log.warn("Vote signature verification FAILED for validator {} (epoch={})",
+                    vote == null ? "unknown" : vote.getValidatorAddress(),
+                    vote == null ? -1 : vote.getEpoch());
+        }
+    }
+
+    /**
+     * 收敛路径的拒绝计数：同一 (key, validator, reason) 只计一次（PLAN-067）。
+     *
+     * <p>集合有界：达到上限后不再为新的坏行计数，避免被大量脏行撑爆内存；
+     * 判定与日志不受影响。</p>
+     */
+    private void countConvergenceRejection(String checkpointKey, Vote vote, Reason reason) {
+        String validator = vote == null ? "" : String.valueOf(vote.getValidatorAddress());
+        String id = checkpointKey + "|" + validator + "|" + reason;
+        if (!convergenceRejectionsCounted.contains(id)
+                && convergenceRejectionsCounted.size() >= MAX_CONVERGENCE_REJECTION_KEYS) {
+            return;
+        }
+        if (convergenceRejectionsCounted.add(id)) {
+            countVoteRejected(reason, Phase.CONVERGENCE);
+        }
     }
 
     /**
@@ -480,16 +595,42 @@ public class FinalityGadget {
         for (Map.Entry<String, List<Vote>> entry : votes.entrySet()) {
             String key = entry.getKey();
             long epoch = epochOfKey(key);
-            maxEpoch = Math.max(maxEpoch, epoch);
-            Set<String> voters = epochCheckpointVoters.computeIfAbsent(key, k -> ConcurrentHashMap.newKeySet());
+            Set<String> voters = epochCheckpointVoters.get(key);
+            // PLAN-067：已有有效投票者的键在之前已合并过有效票，可以推进游标。
+            // 只有"从未合并过任何有效票"的键（voters == null，典型是历史脏行）
+            // 必须靠本轮真正合并成功才推进——否则一条 epoch 极大的脏行会把游标
+            // 推到 1000，之后写入的 epoch 1..999 合法票再也不会被看到。
+            boolean mergedAny = voters != null;
             for (Vote vote : entry.getValue()) {
-                if (vote == null || voters.contains(vote.getValidatorAddress())) {
+                if (vote == null) {
+                    countConvergenceRejection(key, null, Reason.MALFORMED_VOTE);
+                    continue;
+                }
+                if (voters != null && voters.contains(vote.getValidatorAddress())) {
                     continue;   // 去重：同一验证人不重复计权
                 }
-                if (!validateVoteBinding(vote, Phase.CONVERGENCE)) {
-                    continue;   // 与提交路径同一口径的绑定校验
+                Reason rejection = checkVoteBinding(vote);
+                if (rejection != null) {
+                    logVoteRejection(vote, rejection);
+                    countConvergenceRejection(key, vote, rejection);
+                    continue;   // 与提交路径同一口径的绑定校验（含 32 字节哈希）
+                }
+                // PLAN-067：只有"新键"才受单验证人单 epoch 上限约束；
+                // 对已存在键投票永远放行，否则攻击者可用假键挡住真检查点。
+                if (voters == null
+                        && validatorEpochKeyLimitReached(epoch, vote.getValidatorAddress())) {
+                    log.warn("Finality convergence: dropping vote that would exceed per-validator "
+                                    + "checkpoint key limit: epoch={}, validator={}, key={}",
+                            epoch, vote.getValidatorAddress(), key);
+                    countConvergenceRejection(key, vote, Reason.CHECKPOINT_LIMIT_EXCEEDED);
+                    continue;
+                }
+                if (voters == null) {
+                    voters = epochCheckpointVoters.computeIfAbsent(
+                            key, k -> ConcurrentHashMap.newKeySet());
                 }
                 voters.add(vote.getValidatorAddress());
+                indexCheckpointKey(epoch, key);
                 epochCheckpointVotes.computeIfAbsent(key, k -> new java.util.concurrent.CopyOnWriteArrayList<>())
                         .add(vote);
                 BigDecimal weight = stakingService == null ? null : stakingService.getStake(vote.getValidatorAddress());
@@ -499,6 +640,13 @@ public class FinalityGadget {
                 }
                 finalizationRejected.remove(key);
                 affected.add(key);
+                mergedAny = true;
+            }
+            // PLAN-067：游标只由"真正合并了有效票的键"或已终局键推进。原实现从
+            // 所有键推进，一条 epoch 极大的脏行会把游标推到 1000，之后写入的
+            // epoch 1..999 合法票再也不会被 loadVoteObjectsSince(from) 看到。
+            if (mergedAny) {
+                maxEpoch = Math.max(maxEpoch, epoch);
             }
         }
         for (String key : finalized) {
@@ -554,8 +702,13 @@ public class FinalityGadget {
      * @return 该检查点的当前最终化记录
      */
     public synchronized FinalityRecord submitVote(Vote vote) {
+        if (vote == null) {
+            // 防御：P2P 解码正常不会给出 null，但公开方法不能因 null 直接 NPE。
+            log.warn("Finality vote ignored: null vote");
+            countVoteRejected(Reason.MALFORMED_VOTE, Phase.ADMISSION);
+            return new FinalityRecord(0L, new byte[0], BigDecimal.ZERO, BigDecimal.ZERO, false);
+        }
         long epoch = vote.getEpoch();
-        String checkpointKey = epochKey(epoch, vote.getCheckpointHash());
 
         // 治理变更检测：验证者集（活跃地址+质押）变化 → 失效总权重快照，
         // 使新增/移除验证人的权重在下一票起生效（P0-② 治理关联）
@@ -584,16 +737,29 @@ public class FinalityGadget {
         // 占住验证人位、把合法票去重掉，最终化永远失败。
         // 不能先把未验证的票写入 voters/DB——否则重启恢复时会把无效投票
         // 的质押权重重新计入，破坏最终性安全边界。
+        // PLAN-067：校验（含 32 字节哈希）通过后才建键，避免超长哈希在
+        // epochKey() 里被 hex 成 2 倍体积的字符串。
         if (!validateVoteBinding(vote, Phase.ADMISSION)) {
             return record(epoch, vote.getCheckpointHash(), total);
         }
 
-        Set<String> voters = epochCheckpointVoters.computeIfAbsent(checkpointKey, k -> ConcurrentHashMap.newKeySet());
-        if (voters.contains(vote.getValidatorAddress())) {
+        String checkpointKey = epochKey(epoch, vote.getCheckpointHash());
+        Set<String> voters = epochCheckpointVoters.get(checkpointKey);
+        if (voters != null && voters.contains(vote.getValidatorAddress())) {
             // 同验证者重复投票同检查点：幂等拒绝。若上一次最终化已通过聚合验签、
             // 但 markFinalized 写库失败，重复投票是天然的重试机会；已确认的检查点
             // 或聚合验签已拒绝的检查点不会重复触发昂贵的聚合验签。
             tryFinalize(epoch, vote.getCheckpointHash(), checkpointKey, total);
+            return record(epoch, vote.getCheckpointHash(), total);
+        }
+
+        // PLAN-067：上限只约束“该验证人新引入的键”。对已存在键投票永远放行，
+        // 否则攻击者先造满 4 个假键就能把其他验证人挡在真检查点之外。
+        if (voters == null && validatorEpochKeyLimitReached(epoch, vote.getValidatorAddress())) {
+            log.warn("Finality vote rejected: per-validator checkpoint key limit reached: "
+                            + "epoch={}, validator={}, key={}",
+                    epoch, vote.getValidatorAddress(), checkpointKey);
+            countVoteRejected(Reason.CHECKPOINT_LIMIT_EXCEEDED, Phase.ADMISSION);
             return record(epoch, vote.getCheckpointHash(), total);
         }
 
@@ -602,27 +768,37 @@ public class FinalityGadget {
         // - 不会出现“内存已计票、重启后却从数据库消失”的不可逆结算丢失窗口。
         // PLAN-018：连同 Ed25519 签名与公钥一起落库 —— 只存地址的话，重启后
         // 恢复不出 Vote 对象，聚合验签无票可验，检查点将永远无法在重启后补最终化。
+        // PLAN-067：`computeIfAbsent` 也移到写库之后；原实现先建空 voter set，
+        // 写库因 VARCHAR(128) 溢出抛异常时会留下不可回收的空键。
         stateStore.recordVote(epoch, vote.getCheckpointHash(), vote.getValidatorAddress(),
                 vote.getSignature(), vote.getPublicKeyBytes());
 
+        voters = epochCheckpointVoters.computeIfAbsent(checkpointKey, k -> ConcurrentHashMap.newKeySet());
         if (!voters.add(vote.getValidatorAddress())) {
             // 防御性分支：正常路径由 synchronized + 上面的 contains 排除；
             // 若未来恢复路径引入并发，这里仍保证不重复计权重。
             tryFinalize(epoch, vote.getCheckpointHash(), checkpointKey, total);
             return record(epoch, vote.getCheckpointHash(), total);
         }
+        indexCheckpointKey(epoch, checkpointKey);
 
         // 新投票进入集合，之前聚合验签失败的结论可能已变化，允许重新尝试。
         finalizationRejected.remove(checkpointKey);
 
-        // 双签检测：同 epoch 不同检查点
-        for (Map.Entry<String, Set<String>> e : epochCheckpointVoters.entrySet()) {
-            String[] parts = e.getKey().split("\\|", 2);
-            if (parts.length == 2 && parts[0].equals(String.valueOf(epoch))
-                    && !parts[1].equals(Hex.encodeHexString(vote.getCheckpointHash()))
-                    && e.getValue().contains(vote.getValidatorAddress())) {
+        // 双签检测：同 epoch 不同检查点（PLAN-067：按 epoch 索引扫描，避免全表键遍历）
+        Set<String> sameEpochKeys = epochCheckpointKeys.get(epoch);
+        if (sameEpochKeys != null) {
+            for (String otherKey : sameEpochKeys) {
+                if (otherKey.equals(checkpointKey)) {
+                    continue;
+                }
+                Set<String> otherVoters = epochCheckpointVoters.get(otherKey);
+                if (otherVoters == null || !otherVoters.contains(vote.getValidatorAddress())) {
+                    continue;
+                }
                 EquivocationEvidence ev = new EquivocationEvidence(
-                        vote, new Vote(epoch, parseCheckpoint(parts[1]), vote.getValidatorAddress(), new byte[0]));
+                        vote, new Vote(epoch, parseCheckpoint(hexOfKey(otherKey)),
+                        vote.getValidatorAddress(), new byte[0]));
                 detectedEquivocations.add(ev);
                 // M4 连接轴：注入罚没服务时，双签证据即时触发 slash（幂等，防止重复罚没）
                 if (slashingService != null && slashedOffenders.add(vote.getValidatorAddress())) {
@@ -798,6 +974,10 @@ public class FinalityGadget {
      * 检查点是否已最终化。
      */
     public boolean isFinalized(long epoch, byte[] checkpointHash) {
+        // PLAN-067：只读查询也不能让超长哈希在 epochKey() 里分配 2 倍体积字符串。
+        if (!hasValidCheckpointHash(checkpointHash)) {
+            return false;
+        }
         return finalizedCheckpoints.contains(epochKey(epoch, checkpointHash));
     }
 
@@ -848,6 +1028,11 @@ public class FinalityGadget {
     }
 
     private FinalityRecord record(long epoch, byte[] checkpointHash, BigDecimal total) {
+        // PLAN-067：畸形/超长哈希不得进入 epochKey()（会 hex 成 2 倍体积的字符串）。
+        // 查询路径与拒绝路径都走这里，所以护栏放在唯一出口上。
+        if (!hasValidCheckpointHash(checkpointHash)) {
+            return new FinalityRecord(epoch, checkpointHash, BigDecimal.ZERO, total, false);
+        }
         String key = epochKey(epoch, checkpointHash);
         return new FinalityRecord(epoch, checkpointHash, currentVotedWeight(key), total,
                 finalizedCheckpoints.contains(key));
@@ -930,6 +1115,44 @@ public class FinalityGadget {
             fp = 31 * fp + (s == null ? 0 : s.hashCode());
         }
         return fp;
+    }
+
+    /** 检查点哈希必须是协议规定的 32 字节（{@link Block#HASH_SIZE}）。 */
+    private static boolean hasValidCheckpointHash(byte[] checkpointHash) {
+        return checkpointHash != null && checkpointHash.length == Block.HASH_SIZE;
+    }
+
+    /** 检查点键里的 hex 部分是否对应 32 字节（用于恢复历史行时过滤短哈希键）。 */
+    private static boolean hasValidCheckpointKey(String key) {
+        return key != null && hexOfKey(key).length() == Block.HASH_SIZE * 2;
+    }
+
+    /** 记录 epoch → 检查点键（幂等；只对通过绑定校验的键调用）。 */
+    private void indexCheckpointKey(long epoch, String key) {
+        epochCheckpointKeys.computeIfAbsent(epoch, k -> ConcurrentHashMap.newKeySet()).add(key);
+    }
+
+    /**
+     * 单个验证人在该 epoch 是否已经**新引入**了上限数量的检查点键。
+     *
+     * <p>只统计"该验证人投过票的键"；对已存在键投票不会被本方法拦截（调用方
+     * 只在键尚不存在时调用）。这样上限约束的是"造键"，不是"投票"。</p>
+     */
+    private boolean validatorEpochKeyLimitReached(long epoch, String validatorAddress) {
+        Set<String> keys = epochCheckpointKeys.get(epoch);
+        if (keys == null) {
+            return false;
+        }
+        int count = 0;
+        for (String key : keys) {
+            Set<String> voters = epochCheckpointVoters.get(key);
+            if (voters != null && voters.contains(validatorAddress)) {
+                if (++count >= MAX_CHECKPOINTS_PER_VALIDATOR_PER_EPOCH) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private String epochKey(long epoch, byte[] checkpointHash) {

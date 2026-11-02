@@ -36,7 +36,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class FinalitySnapshotTest {
 
-    private static final byte[] CP = new byte[]{7, 7, 7, 7};
+    private static final byte[] CP = new byte[]{7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7};
 
     private ValidatorRegistry registry;
     private StakingService staking;

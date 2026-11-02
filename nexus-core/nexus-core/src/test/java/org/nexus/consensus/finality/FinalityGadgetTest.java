@@ -26,8 +26,8 @@ class FinalityGadgetTest {
     /** 每个验证者的真实 Ed25519 密钥（P0-1 绑定校验后，投票必须注册公钥+真实签名） */
     private final Map<String, Ed25519KeyPair> validatorKeys = new HashMap<>();
 
-    private static final byte[] CP1 = new byte[]{1, 2, 3};
-    private static final byte[] CP2 = new byte[]{9, 9, 9};
+    private static final byte[] CP1 = new byte[]{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
+    private static final byte[] CP2 = new byte[]{9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9};
 
     @BeforeEach
     void setUp() {

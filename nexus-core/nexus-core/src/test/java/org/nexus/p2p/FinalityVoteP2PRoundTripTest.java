@@ -38,7 +38,8 @@ import static org.mockito.Mockito.verify;
  */
 class FinalityVoteP2PRoundTripTest {
 
-    private static final byte[] CHECKPOINT = new byte[]{0x11, 0x22, 0x33};
+    private static final byte[] CHECKPOINT =
+            java.util.Arrays.copyOf(new byte[]{0x11, 0x22, 0x33}, org.nexus.core.Block.HASH_SIZE);
     private static final long EPOCH = 7L;
 
     @Test
