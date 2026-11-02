@@ -100,7 +100,9 @@
   kubectl -n nexus top pod
   kubectl -n nexus describe pod <pod> | grep -B2 -A6 "OOMKilled"   # 重启历史
   # mpc-engine（Rust）额外查会话落盘量：MPC_ENGINE_SESSION_DIR
-  kubectl -n nexus exec mpc-engine-0 -- du -sh /app/data/sessions
+  # 2026-11-02 起运行阶段是 distroless（无 shell / 无 du），镜像内只注入了
+  # 静态 busybox，改用 /busybox du（去掉 2026-11-02 前的 `du -sh ...` 写法）。
+  kubectl -n nexus exec mpc-engine-0 -- /busybox du -sh /app/data/sessions
   ```
 - **处置**：扩容 memory limit；Rust 引擎清理历史会话数据；Java 服务联动 `JvmHeapUsageHigh` 处置
 
