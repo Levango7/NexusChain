@@ -351,11 +351,12 @@ services:
       nexus-core:
         condition: service_healthy
     healthcheck:
-      # 2026-10-18 批次③：Rust 引擎无 HTTP 探针；TCP 连通性探针（运行阶段
-      # 基础镜像 debian:trixie-slim 含 bash，/dev/tcp 机制已实测）。
+      # 2026-10-18 批次③：Rust 引擎无 HTTP 探针；TCP 连通性探针。
+      # 2026-11-02：运行阶段改 distroless（无 bash/shell），探针改用镜像内注入的
+      # 静态 busybox 的 nc 子命令（`/busybox nc -z`），不再依赖 /dev/tcp/bash。
       # 依赖关系保持 service_started（就绪语义含 DKG 仪式，非 TCP 可表达；
       # 探针用于容器健康可视化与运维排障）。
-      test: ['CMD-SHELL', 'bash -c "echo > /dev/tcp/127.0.0.1/50051"']
+      test: ['CMD', '/busybox', 'nc', '-z', '-w', '3', '127.0.0.1', '50051']
       interval: 30s
       timeout: 5s
       retries: 5
@@ -397,7 +398,7 @@ services:
         condition: service_healthy
     healthcheck:
       # 2026-10-18 批次③：同 mpc-engine-0（TCP 探针 + 依赖语义说明）。
-      test: ['CMD-SHELL', 'bash -c "echo > /dev/tcp/127.0.0.1/50051"']
+      test: ['CMD', '/busybox', 'nc', '-z', '-w', '3', '127.0.0.1', '50051']
       interval: 30s
       timeout: 5s
       retries: 5
@@ -439,7 +440,7 @@ services:
         condition: service_healthy
     healthcheck:
       # 2026-10-18 批次③：同 mpc-engine-0（TCP 探针 + 依赖语义说明）。
-      test: ['CMD-SHELL', 'bash -c "echo > /dev/tcp/127.0.0.1/50051"']
+      test: ['CMD', '/busybox', 'nc', '-z', '-w', '3', '127.0.0.1', '50051']
       interval: 30s
       timeout: 5s
       retries: 5
@@ -471,10 +472,11 @@ services:
       mpc-engine-2:
         condition: service_started
     healthcheck:
-      # 2026-10-18 批次③：TCP 连通性探针（debian:trixie-slim 含 bash，已实测）；
-      # gRPC 无 HTTP 健康面，可达性探针表达"进程在跑"（就绪语义依赖 setup 卷，
-      # 非 TCP 可表达）。
-      test: ['CMD-SHELL', 'bash -c "echo > /dev/tcp/127.0.0.1/50061"']
+      # 2026-10-18 批次③：TCP 连通性探针；gRPC 无 HTTP 健康面，可达性探针表达
+      # "进程在跑"（就绪语义依赖 setup 卷，非 TCP 可表达）。
+      # 2026-11-02：运行阶段改 distroless（无 bash/shell），改用镜像内注入的
+      # 静态 busybox 的 nc 子命令。
+      test: ['CMD', '/busybox', 'nc', '-z', '-w', '3', '127.0.0.1', '50061']
       interval: 30s
       timeout: 5s
       retries: 5
