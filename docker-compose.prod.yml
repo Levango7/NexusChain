@@ -453,6 +453,18 @@ services:
           memory: 1024M
 
   # === ZK Groth16 验证服务（Rust，gRPC 50061 + HTTP 50062） ===
+  # 一次性属主迁移：服务镜像已降权到 65532，既有 zk-groth16-setup 卷里的
+  # <fingerprint>/ 仍是旧镜像（root）写下的 0700 root。chown -R 幂等，
+  # 空卷是 no-op；zk 以 service_completed_successfully 等它退出。
+  zk-groth16-setup-init:
+    image: busybox:1.36.1-musl
+    user: '0:0'
+    command: ['chown', '-R', '65532:65532', '/setup']
+    volumes:
+      - zk-groth16-setup:/setup
+    network_mode: none
+    restart: 'no'
+
   zk-groth16-service:
     build:
       context: .
@@ -465,6 +477,8 @@ services:
     volumes:
       - zk-groth16-setup:/setup
     depends_on:
+      zk-groth16-setup-init:
+        condition: service_completed_successfully
       mpc-engine-0:
         condition: service_started
       mpc-engine-1:

@@ -555,6 +555,19 @@ services:
   # === ZK Groth16 真实验证服务（Rust arkworks，BN254 配对）===
   # gRPC 50061 + HTTP 50062（Java 桥接 /v1/verify）。setup 持久化到命名卷
   # （可信设置仪式产出经 GROTH16_EXTERNAL_SETUP_DIR 挂载或 /v1/setup-external 导入）。
+  #
+  # 一次性属主迁移：服务镜像已降权到 65532，而**既有** zk-groth16-setup 卷里的
+  # <fingerprint>/ 仍是旧镜像（root）写下的 0700 root。chown -R 幂等，空卷是 no-op；
+  # zk 以 service_completed_successfully 等它退出，迁移失败则服务不启动。
+  zk-groth16-setup-init:
+    image: busybox:1.36.1-musl
+    user: '0:0'
+    command: ['chown', '-R', '65532:65532', '/setup']
+    volumes:
+      - zk-groth16-setup:/setup
+    network_mode: none
+    restart: 'no'
+
   zk-groth16-service:
     build:
       # 2026-10-18：上下文改 repo 根（zk Dockerfile 内 COPY . . 后 WORKDIR 切到
@@ -570,6 +583,9 @@ services:
       - GROTH16_SETUP_DIR=/setup
     volumes:
       - zk-groth16-setup:/setup
+    depends_on:
+      zk-groth16-setup-init:
+        condition: service_completed_successfully
     networks:
       - nexus-net
     restart: unless-stopped
