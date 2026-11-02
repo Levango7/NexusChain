@@ -142,28 +142,14 @@ CVE-2026-84782
 # （Trivy 对未命中的 ignore 条目静默忽略，无副作用）。
 
 
-# --- 2026-11-01 增补（debian:trixie-slim，Rust 模块运行阶段）---
-# libsqlite3-0 3.46.1-7+deb13u2：CVE-2026-119373（堆缓冲越界 → DoS，HIGH）与
-# CVE-2026-119586（.recover 任意命令执行，HIGH）——两条均 **无 Fixed Version**
-# （Trivy status=affected），落在 debian:trixie-slim 的 OS 层，不是应用依赖。
-# 为什么不能升也不能删（2026-11-02 在 debian:trixie-slim 容器内实证）：
-#   · apt-cache policy libsqlite3-0 → Installed = Candidate = 3.46.1-7+deb13u2
-#     （trixie/main）；两个 Dockerfile 运行段已带 `apt-get upgrade -y`，即当前
-#     已是 Debian 能给出的最新版本，没有可升目标；
-#   · 不能 purge：apt-cache rdepends --installed libsqlite3-0 = liblastlog2-2，
-#     而 util-linux **PreDepends** liblastlog2-2 ⇒ purge 连锁移除 essential 包。
-# 暴露面论证：mpc-engine / zk-groth16-service 的 Cargo.toml 与 Cargo.lock 对
-# sqlite/rusqlite 零命中（本地 grep 实证），两个二进制不链接 libsqlite3，
-# 容器内无直连 sqlite 的进程；两条 CVE 的触发路径（特制 SQL / .recover 工具）
-# 在运行中的服务里不可达。
-# 删除条件：Debian 发布 deb13u3+ 修复版（或基础镜像不再携带 libsqlite3-0）后移除。
-# 观测点：`Trivy 豁免时效复核（不阻断）` 的 A 类（命中且已有修复版）会自动提示。
-# 根治方向：两个 Rust 模块运行阶段改 distroless（连 apt/util-linux 整层 OS 包去掉），
-# 届时本条与同类 OS CVE 一并消失——已单独立项，不靠豁免长期续命。
-# 取证：master push run 41349422767（bced921a）Trivy Docker Image Scan 的
-# mpc-engine / zk-groth16-service 两条腿均 Total: 2 (HIGH: 2)，即仅此两条。
-CVE-2026-119373
-CVE-2026-119586
+# --- 2026-11-02 撤销（原 2026-11-01 增补：libsqlite3-0 两条 CVE 豁免）---
+# 2026-11-01 曾在此豁免 CVE-2026-119373 / CVE-2026-119586（libsqlite3-0
+# 3.46.1-7+deb13u2：trixie-slim OS 层、无 Fixed Version、apt 无更高版本、
+# purge 会经 util-linux PreDepends liblastlog2-2 连锁删 essential 包）。
+# 同日根治：mpc-engine / zk-groth16-service 运行阶段改
+# gcr.io/distroless/cc-debian13 —— 镜像里不再有 libsqlite3-0 / util-linux / apt
+# 这整层 OS 包，两条 finding 失去对象，故**撤销豁免**，不用 ignore 掩盖可消除项。
+# 若日后基础镜像再出现同类 OS CVE，按本源文件处置原则重新评估，不要回填本条。
 
 # ============================================================================
 # --- 2026-10-28 例外：nacos-client 内嵌（shaded）guava 的 CVE-2026-102554 ---
