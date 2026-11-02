@@ -2,6 +2,9 @@ package org.nexus.consensus.finality.net;
 
 import com.google.protobuf.ByteString;
 import org.nexus.consensus.finality.FinalityGadget;
+import org.nexus.consensus.finality.FinalityRejectionCounter;
+import org.nexus.consensus.finality.FinalityRejectionCounter.Phase;
+import org.nexus.consensus.finality.FinalityRejectionCounter.Reason;
 import org.nexus.consensus.finality.Vote;
 import org.nexus.p2p.NexusChainOuterClass;
 import org.nexus.p2p.PeerServer;
@@ -68,6 +71,14 @@ public class FinalityVoteBroadcaster {
     private final List<VoteListener> externalListeners = new CopyOnWriteArrayList<>();
     /** 接收侧落库失败的补写队列（PLAN-018；可为 null —— 单进程/测试不装配时退化为"丢弃 + 告警"）。 */
     private final org.nexus.consensus.finality.FinalityOutboxManager outboxManager;
+
+    /**
+     * 可选拒绝计数端口（PLAN-067）：超长/畸形帧在解析前就被计数。
+     *
+     * <p>与 {@link FinalityGadget} 共用同一个 {@link FinalityRejectionCounter} bean；
+     * 未注入时只打日志（与共识路径的降级口径一致）。</p>
+     */
+    private volatile FinalityRejectionCounter rejectionCounter;
 
     // === PLAN-025：独立存储拓扑下的补票（anti-entropy）===
     // 这些字段用 @Value 注入但保留字面量默认值 —— 测试用手工构造器时不经过 Spring，
@@ -202,6 +213,17 @@ public class FinalityVoteBroadcaster {
     }
 
     /**
+     * 可选注入拒绝计数端口（PLAN-067）。
+     *
+     * <p>只用于"解析前就丢弃"的两类输入（超长帧、畸形帧）；票级语义拒绝仍由
+     * {@link FinalityGadget#submitVote(Vote)} 计数，避免同一张票被重复记两次。</p>
+     */
+    @Autowired(required = false)
+    public void setRejectionCounter(FinalityRejectionCounter rejectionCounter) {
+        this.rejectionCounter = rejectionCounter;
+    }
+
+    /**
      * 广播投票（本节点产生后向 P2P 网络推送）。
      */
     public void broadcast(Vote vote) {
@@ -254,6 +276,15 @@ public class FinalityVoteBroadcaster {
      * 按载荷魔数分流，投票格式不变（向后兼容：老节点收到 0x5B 只会当作非投票载荷丢弃）。</p>
      */
     public void onVoteReceived(byte[] payload) {
+        // PLAN-067：所有最终性入站载荷（投票、补票请求、响应标记）先过统一的
+        // 尺寸闸。正常票 < 600 字节；P2P 允许近 4MB，不挡的话解析本身就会
+        // 为攻击帧分配大字符串/数组。
+        if (payload != null && payload.length > FinalityVoteCodec.MAX_ENCODED_VOTE_BYTES) {
+            log.warn("Dropped oversized finality payload: {} bytes > {}",
+                    payload.length, FinalityVoteCodec.MAX_ENCODED_VOTE_BYTES);
+            countVoteRejected(Reason.PAYLOAD_TOO_LARGE, Phase.ADMISSION);
+            return;
+        }
         if (FinalityVoteSyncCodec.isSyncPayload(payload)) {
             handleVoteSyncRequest(payload);
             return;
@@ -268,6 +299,7 @@ public class FinalityVoteBroadcaster {
         Vote vote = FinalityVoteCodec.decode(payload);
         if (vote == null) {
             log.warn("Received malformed finality vote payload (dropped)");
+            countVoteRejected(Reason.MALFORMED_VOTE, Phase.ADMISSION);
             return;
         }
         // PLAN-057：记录本节点"本轮已见到的最大 epoch"。
@@ -299,6 +331,14 @@ public class FinalityVoteBroadcaster {
                                 + "configured; vote dropped: epoch={}, validator={}: {}",
                         vote.getEpoch(), vote.getValidatorAddress(), e.getMessage());
             }
+        }
+    }
+
+    /** 解析前拒绝的计数（PLAN-067）；端口缺失时只打日志。 */
+    private void countVoteRejected(Reason reason, Phase phase) {
+        FinalityRejectionCounter counter = rejectionCounter;
+        if (counter != null) {
+            counter.countVoteRejected(reason, phase);
         }
     }
 

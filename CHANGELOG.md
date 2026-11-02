@@ -7320,3 +7320,18 @@ PLAN-065 把验签前移到计票前之后，四条拒绝路径（公钥绑定�
 - **测试**：新增 `FinalityRejectionCounterWiringTest` 7 例 + `FinalityRejectionMetricsTest` 5 例；`FinalityMetricsRegistrationTest` / `FinalityRulesContractTest` 同步（12 → 14 指标，新名字必须被告警消费而非塞进 `ALERTLESS_BY_DESIGN`）；
 - **验证**：promtool **v3.15.1**（WSL2 Ubuntu-24.04 内，CI 同版本）`check rules` 20 rules + `test rules` 全部用例通过，新增 6 个演练用例含"良性 reason 不触发"；反向对照：抹掉三处转发调用 ⇒ **6 用例精确红**、恢复后 **7/7 绿**；metrics+finality 全包 `--rerun-tasks` **169 用例 0 失败 0 跳过**；
 - **边界**：同内核 JVM 单测 + WSL2 里的 promtool CLI（**非物理多机**）；两条告警未在真实集群触发过（只证 PromQL 与标签集在合成序列上按预期工作）；未做 `/actuator/prometheus` 抓取端补验；未做验证人维度与吞吐基准；未触碰真实 L1 / 桥资金 / wallet / settlement lane。
+
+### 最终性投票载荷与检查点键上界——畸形/超长输入不再放大判定路径（PLAN-067）
+
+PLAN-065/066 把“伪造签名”和“拒绝可见”补齐之后，拒绝判定本身仍假设输入有界：3 字节检查点哈希可以建键，4KB 哈希会在 `epochKey()` 里 hex 成 8KB 字符串；P2P 近 4MB 单帧在解析前就分配大对象；一个验证人可在一个 epoch 内造无限检查点键；收敛路径先建键后校验、游标被脏行推进，可能让低 epoch 合法票永久不可见。
+
+- **32 字节检查点哈希**：`FinalityGadget` 在 admission/convergence/restore/查询四路统一按 `Block.HASH_SIZE` fail-closed；先校验、后建键，坏行不落库、不建键、不推进游标；
+- **载荷上限**：`FinalityVoteCodec.MAX_ENCODED_VOTE_BYTES=2048`，broadcaster 入站在区分投票/补票/标记之前统一拦截，超限计 `payload_too_large`，不误记 malformed；
+- **收敛游标**：只由“本轮真正合并有效票 / 已有有效投票者 / 已终局”的键推进；一条 epoch 极大的脏行不再把游标推过 epoch 1..999 的合法票；
+- **写库顺序**：提交路径先 `recordVote` 成功、再建内存 voter set，写库失败不再留下不可回收空键；
+- **新键上限 K=4**：只约束“该验证人新引入的键”，对已存在键投票永不拦截——否则攻击者可用 4 个假键挡住真检查点；恢复路径只为 32 字节哈希建索引，历史短哈希行不占配额、不参与双签扫描（本切片不清洗）；
+- **双签扫描**：新增 `epoch→keys` 索引，从全表键遍历降到同 epoch；
+- **告警**：新增 `checkpoint_hash_invalid` / `checkpoint_limit_exceeded` / `payload_too_large` 三个原因；`FinalityVoteRejected` 正则与 summary/description 同步，promtool 新增 2 条演练用例（20 rules 全过）；
+- **测试**：`FinalityCheckpointBoundsTest` 6 例 + `FinalityVotePayloadBoundsTest` 4 例 + `FinalityCoordinatorTest` fail-closed 1 例；finality 全包 **153 用例 0 失败 0 跳过**、metrics 全包 **27 用例 0 失败**；三个包外用例（`MultiNodeConsensusConvergenceTest` / `ConsensusChaosTest` / `FinalityVoteP2PRoundTripTest`）的 4 字节检查点同步改为 32 字节；
+- **反向对照**：5 组定点变异（哈希 4 红、游标 1 红、K 上限 1 红、载荷 2 红、restore 独立闸 1 红），还原后 10/10 绿且三文件 SHA-256 与变异前一致；
+- **边界**：同内核 JVM 单测（非物理多机）；未做 epoch 窗口/规范检查点语义校验（需链接口）；不清洗历史脏行；未在真实集群触发告警；未触碰真实 L1 / 桥资金 / wallet / settlement lane。

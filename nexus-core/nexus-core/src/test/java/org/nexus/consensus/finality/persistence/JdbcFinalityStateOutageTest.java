@@ -40,7 +40,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class JdbcFinalityStateOutageTest {
 
-    private static final byte[] CP1 = new byte[]{1, 2, 3};
+    private static final byte[] CP1 = new byte[]{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
 
     private ToggleDataSource dataSource;
     private JdbcTemplate jdbc;

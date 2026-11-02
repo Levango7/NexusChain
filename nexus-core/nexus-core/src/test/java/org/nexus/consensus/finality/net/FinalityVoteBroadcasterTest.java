@@ -31,7 +31,7 @@ class FinalityVoteBroadcasterTest {
     private List<FinalityVoteBroadcaster.FinalityVoteBroadcastEvent> events;
     private ApplicationEventPublisher publisher;
 
-    private static final byte[] CP1 = new byte[]{1, 2, 3};
+    private static final byte[] CP1 = new byte[]{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
 
     /** P0-1 修复后：v1 注册真实 Ed25519 公钥，绑定校验要求投票公钥与之一致。 */
     private org.nexus.crypto.ed25519.Ed25519KeyPair v1Keys;

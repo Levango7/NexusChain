@@ -347,8 +347,8 @@ tests:
         component: blockchain-core
       exp_annotations:
         runbook_url: https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md
-        summary: 最终性投票出现伪造票（10min 内 6 次）
-        description: nexus-core-0 的 nexus_finality_vote_rejected_total{reason="signature_invalid"} 10 分钟内增长 6 次——有人投了公钥正确但签名伪造（或票内公钥与注册公钥不一致）的票。合法节点之间正常不会发生；先查 nexus-core 日志里的 `Vote signature verification FAILED` / `Vote pubkey binding FAILED` 行（含涉事验证人地址与 epoch），判断是配置错配（换钥后未重新注册）还是伪造票攻击。phase=convergence 表示库里躺着坏行（历史污染，配合启动恢复日志）；phase=admission 表示正在被网络攻击。伪造票已按 PLAN-065 在计票前被拒、不影响最终化，但它是 liveness 攻击前兆，应作安全事件处理。
+        summary: 最终性投票出现异常拒绝（10min 内 6 次）
+        description: nexus-core-0 的 nexus_finality_vote_rejected_total{reason="signature_invalid"} 10 分钟内增长 6 次——最终性投票在计票/落库前被拒。reason=signature_invalid|pubkey_mismatch 表示公钥正确但签名伪造（或票内公钥与注册公钥不一致）；reason=checkpoint_hash_invalid 表示检查点哈希不是 32 字节（畸形或放大攻击）；reason=checkpoint_limit_exceeded 表示单个验证人在一个 epoch 内试图新引入超过 4 个检查点键；reason=payload_too_large 表示 P2P 最终性载荷超过 2048 字节。合法节点之间正常不会发生；先查 nexus-core 日志里的 `Vote signature verification FAILED` / `Vote pubkey binding FAILED` / `Vote checkpoint hash invalid` / `per-validator checkpoint key limit reached` / `Dropped oversized finality payload` 行（含涉事验证人地址与 epoch），判断是配置错配（换钥后未重新注册）、历史脏行还是网络攻击。phase=convergence 表示库里躺着坏行（历史污染，配合启动恢复日志）；phase=admission 表示正在被网络攻击。被拒票已按 PLAN-065/067 在计票前被拒、不影响最终化，但它是 liveness 攻击前兆，应作安全事件处理。
 - name: finality-vote-rejected-convergence-phase
   interval: 1m
   input_series:
@@ -367,8 +367,48 @@ tests:
         component: blockchain-core
       exp_annotations:
         runbook_url: https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md
-        summary: 最终性投票出现伪造票（10min 内 7 次）
-        description: nexus-core-0 的 nexus_finality_vote_rejected_total{reason="pubkey_mismatch"} 10 分钟内增长 7 次——有人投了公钥正确但签名伪造（或票内公钥与注册公钥不一致）的票。合法节点之间正常不会发生；先查 nexus-core 日志里的 `Vote signature verification FAILED` / `Vote pubkey binding FAILED` 行（含涉事验证人地址与 epoch），判断是配置错配（换钥后未重新注册）还是伪造票攻击。phase=convergence 表示库里躺着坏行（历史污染，配合启动恢复日志）；phase=admission 表示正在被网络攻击。伪造票已按 PLAN-065 在计票前被拒、不影响最终化，但它是 liveness 攻击前兆，应作安全事件处理。
+        summary: 最终性投票出现异常拒绝（10min 内 7 次）
+        description: nexus-core-0 的 nexus_finality_vote_rejected_total{reason="pubkey_mismatch"} 10 分钟内增长 7 次——最终性投票在计票/落库前被拒。reason=signature_invalid|pubkey_mismatch 表示公钥正确但签名伪造（或票内公钥与注册公钥不一致）；reason=checkpoint_hash_invalid 表示检查点哈希不是 32 字节（畸形或放大攻击）；reason=checkpoint_limit_exceeded 表示单个验证人在一个 epoch 内试图新引入超过 4 个检查点键；reason=payload_too_large 表示 P2P 最终性载荷超过 2048 字节。合法节点之间正常不会发生；先查 nexus-core 日志里的 `Vote signature verification FAILED` / `Vote pubkey binding FAILED` / `Vote checkpoint hash invalid` / `per-validator checkpoint key limit reached` / `Dropped oversized finality payload` 行（含涉事验证人地址与 epoch），判断是配置错配（换钥后未重新注册）、历史脏行还是网络攻击。phase=convergence 表示库里躺着坏行（历史污染，配合启动恢复日志）；phase=admission 表示正在被网络攻击。被拒票已按 PLAN-065/067 在计票前被拒、不影响最终化，但它是 liveness 攻击前兆，应作安全事件处理。
+- name: finality-vote-rejected-checkpoint-limit-exceeded
+  interval: 1m
+  input_series:
+  - series: nexus_finality_vote_rejected_total{reason="checkpoint_limit_exceeded", phase="admission", job="nexus-core", pod="nexus-core-0"}
+    values: 0+1x12
+  alert_rule_test:
+  - eval_time: 6m
+    alertname: FinalityVoteRejected
+    exp_alerts:
+    - exp_labels:
+        reason: checkpoint_limit_exceeded
+        phase: admission
+        job: nexus-core
+        pod: nexus-core-0
+        severity: warning
+        component: blockchain-core
+      exp_annotations:
+        runbook_url: https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md
+        summary: 最终性投票出现异常拒绝（10min 内 6 次）
+        description: nexus-core-0 的 nexus_finality_vote_rejected_total{reason="checkpoint_limit_exceeded"} 10 分钟内增长 6 次——最终性投票在计票/落库前被拒。reason=signature_invalid|pubkey_mismatch 表示公钥正确但签名伪造（或票内公钥与注册公钥不一致）；reason=checkpoint_hash_invalid 表示检查点哈希不是 32 字节（畸形或放大攻击）；reason=checkpoint_limit_exceeded 表示单个验证人在一个 epoch 内试图新引入超过 4 个检查点键；reason=payload_too_large 表示 P2P 最终性载荷超过 2048 字节。合法节点之间正常不会发生；先查 nexus-core 日志里的 `Vote signature verification FAILED` / `Vote pubkey binding FAILED` / `Vote checkpoint hash invalid` / `per-validator checkpoint key limit reached` / `Dropped oversized finality payload` 行（含涉事验证人地址与 epoch），判断是配置错配（换钥后未重新注册）、历史脏行还是网络攻击。phase=convergence 表示库里躺着坏行（历史污染，配合启动恢复日志）；phase=admission 表示正在被网络攻击。被拒票已按 PLAN-065/067 在计票前被拒、不影响最终化，但它是 liveness 攻击前兆，应作安全事件处理。
+- name: finality-vote-rejected-payload-too-large
+  interval: 1m
+  input_series:
+  - series: nexus_finality_vote_rejected_total{reason="payload_too_large", phase="admission", job="nexus-core", pod="nexus-core-0"}
+    values: 0+1x12
+  alert_rule_test:
+  - eval_time: 6m
+    alertname: FinalityVoteRejected
+    exp_alerts:
+    - exp_labels:
+        reason: payload_too_large
+        phase: admission
+        job: nexus-core
+        pod: nexus-core-0
+        severity: warning
+        component: blockchain-core
+      exp_annotations:
+        runbook_url: https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md
+        summary: 最终性投票出现异常拒绝（10min 内 6 次）
+        description: nexus-core-0 的 nexus_finality_vote_rejected_total{reason="payload_too_large"} 10 分钟内增长 6 次——最终性投票在计票/落库前被拒。reason=signature_invalid|pubkey_mismatch 表示公钥正确但签名伪造（或票内公钥与注册公钥不一致）；reason=checkpoint_hash_invalid 表示检查点哈希不是 32 字节（畸形或放大攻击）；reason=checkpoint_limit_exceeded 表示单个验证人在一个 epoch 内试图新引入超过 4 个检查点键；reason=payload_too_large 表示 P2P 最终性载荷超过 2048 字节。合法节点之间正常不会发生；先查 nexus-core 日志里的 `Vote signature verification FAILED` / `Vote pubkey binding FAILED` / `Vote checkpoint hash invalid` / `per-validator checkpoint key limit reached` / `Dropped oversized finality payload` 行（含涉事验证人地址与 epoch），判断是配置错配（换钥后未重新注册）、历史脏行还是网络攻击。phase=convergence 表示库里躺着坏行（历史污染，配合启动恢复日志）；phase=admission 表示正在被网络攻击。被拒票已按 PLAN-065/067 在计票前被拒、不影响最终化，但它是 liveness 攻击前兆，应作安全事件处理。
 - name: finality-finalize-rejected-none
   interval: 1m
   input_series:

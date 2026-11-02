@@ -178,28 +178,29 @@ spec:
         summary: "最终性进度 < 100% 持续 10min（票没收齐）"
         description: "{{ $labels.pod }} 的 nexus_finality_progress_percent 连续 10min 不到 100%——水位 epoch 的票没收齐（某验证人未投票/票丢失/验签失败）。单次采样的 50% 是正常的提交时快照（会翻 100%），持续 10min 才是问题。查 GET /consensus/finality 的 votedWeight/totalWeight 与对端 /consensus/validator-set；疑丢票时配合 finality_vote_outbox 补写（PLAN-018）。3 验证人中 1 个掉线时进度会停在 67% 但 finalized 仍可为 true（2/3 达门限）——两者都看。"
 
-    # ---- 投票拒绝计数（PLAN-065 缺口 → PLAN-066 指标化）----
+    # ---- 投票拒绝计数（PLAN-065 缺口 → PLAN-066 指标化；PLAN-067 扩展尺寸/键上界）----
     # 应用侧 FinalityRejectionMetrics（nexus-core）暴露：
     #   nexus_finality_vote_rejected_total{reason, phase}（counter）
     #     reason: validator_unknown / validator_inactive / malformed_vote /
-    #             pubkey_mismatch / signature_invalid / zero_total_weight
+    #             pubkey_mismatch / signature_invalid / zero_total_weight /
+    #             checkpoint_hash_invalid / checkpoint_limit_exceeded / payload_too_large
     #     phase:  admission（网络/本地提交）/ convergence（库里坏行）/ restore（启动恢复）
     #   nexus_finality_finalize_rejected_total{reason}（counter）
-    # 告警只按 reason 过滤出两类"伪造票"：公钥是公开信息，攻击者无需私钥即可构造
-    # 公钥正确、签名垃圾的票（PLAN-065 的占位攻击）。其余 reason 多是启动期/治理期
-    # 正常现象，逐条告警只会产生噪声——按标签排查即可，不在告警里展开。
+    # 告警过滤出"异常输入"类 reason：伪造票（公钥是公开信息，攻击者无需私钥即可
+    # 构造公钥正确、签名垃圾的票）、畸形/超长检查点哈希、单验证人单 epoch 造键超限、
+    # 超长 P2P 载荷。其余 reason 多是启动期/治理期正常现象，逐条告警只会产生噪声。
     # validator 地址故意不做标签：否则攻击者用随机地址洪泛即可让标签基数无界增长，
     # "被观测对象会被观测本身打垮"；按人定位仍看日志（WARN 行含地址与 epoch）。
     - alert: FinalityVoteRejected
-      expr: increase(nexus_finality_vote_rejected_total{reason=~"signature_invalid|pubkey_mismatch"}[10m]) > 0
+      expr: increase(nexus_finality_vote_rejected_total{reason=~"signature_invalid|pubkey_mismatch|checkpoint_hash_invalid|checkpoint_limit_exceeded|payload_too_large"}[10m]) > 0
       for: 5m
       labels:
         severity: warning
         component: blockchain-core
       annotations:
         runbook_url: "https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md"
-        summary: "最终性投票出现伪造票（10min 内 {{ $value }} 次）"
-        description: "{{ $labels.pod }} 的 nexus_finality_vote_rejected_total{reason=\"{{ $labels.reason }}\"} 10 分钟内增长 {{ $value }} 次——有人投了公钥正确但签名伪造（或票内公钥与注册公钥不一致）的票。合法节点之间正常不会发生；先查 nexus-core 日志里的 `Vote signature verification FAILED` / `Vote pubkey binding FAILED` 行（含涉事验证人地址与 epoch），判断是配置错配（换钥后未重新注册）还是伪造票攻击。phase=convergence 表示库里躺着坏行（历史污染，配合启动恢复日志）；phase=admission 表示正在被网络攻击。伪造票已按 PLAN-065 在计票前被拒、不影响最终化，但它是 liveness 攻击前兆，应作安全事件处理。"
+        summary: "最终性投票出现异常拒绝（10min 内 {{ $value }} 次）"
+        description: "{{ $labels.pod }} 的 nexus_finality_vote_rejected_total{reason=\"{{ $labels.reason }}\"} 10 分钟内增长 {{ $value }} 次——最终性投票在计票/落库前被拒。reason=signature_invalid|pubkey_mismatch 表示公钥正确但签名伪造（或票内公钥与注册公钥不一致）；reason=checkpoint_hash_invalid 表示检查点哈希不是 32 字节（畸形或放大攻击）；reason=checkpoint_limit_exceeded 表示单个验证人在一个 epoch 内试图新引入超过 4 个检查点键；reason=payload_too_large 表示 P2P 最终性载荷超过 2048 字节。合法节点之间正常不会发生；先查 nexus-core 日志里的 `Vote signature verification FAILED` / `Vote pubkey binding FAILED` / `Vote checkpoint hash invalid` / `per-validator checkpoint key limit reached` / `Dropped oversized finality payload` 行（含涉事验证人地址与 epoch），判断是配置错配（换钥后未重新注册）、历史脏行还是网络攻击。phase=convergence 表示库里躺着坏行（历史污染，配合启动恢复日志）；phase=admission 表示正在被网络攻击。被拒票已按 PLAN-065/067 在计票前被拒、不影响最终化，但它是 liveness 攻击前兆，应作安全事件处理。"
 
     - alert: FinalityFinalizeRejected
       expr: increase(nexus_finality_finalize_rejected_total[15m]) > 0

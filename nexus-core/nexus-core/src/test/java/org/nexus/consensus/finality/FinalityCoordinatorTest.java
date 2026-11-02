@@ -79,6 +79,20 @@ class FinalityCoordinatorTest {
     }
 
     @Test
+    void blockWithShortHashSkipsVoteFailClosed() throws Exception {
+        Block block = mockBlock(4);
+        // Block.getHash() 依赖 hashCache（private）；塞一个 3 字节哈希模拟坏块。
+        var field = Block.class.getDeclaredField("hashCache");
+        field.setAccessible(true);
+        field.set(block, new byte[]{1, 2, 3});
+
+        assertNull(coordinator.onBlock(block),
+                "非 32 字节区块哈希必须 fail-closed，不能退化成空哈希投票");
+        assertEquals(0, coordinator.pendingVoteCount(),
+                "被拒绝的区块不得进入补写队列");
+    }
+
+    @Test
     void votesOnCheckpointBlock() {
         FinalityRecord rec = coordinator.onBlock(mockBlock(4));
         assertNotNull(rec);

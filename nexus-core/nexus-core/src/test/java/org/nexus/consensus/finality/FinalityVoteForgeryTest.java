@@ -40,7 +40,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class FinalityVoteForgeryTest {
 
-    private static final byte[] CP1 = new byte[]{1, 2, 3};
+    private static final byte[] CP1 = new byte[]{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
 
     private ValidatorRegistry registry;
     private StakingService staking;

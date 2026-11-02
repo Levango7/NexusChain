@@ -24,7 +24,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * <table>
  *   <tr><th>指标</th><th>标签</th><th>语义</th></tr>
  *   <tr><td>{@code nexus_finality_vote_rejected_total}</td>
- *       <td>{@code reason}（6 种）、{@code phase}（3 种）</td>
+ *       <td>{@code reason}（9 种）、{@code phase}（3 种）</td>
  *       <td>票级拒绝累计次数：一张票没有进入计票/落库的原因与路径</td></tr>
  *   <tr><td>{@code nexus_finality_finalize_rejected_total}</td>
  *       <td>{@code reason}（当前 1 种）</td>
@@ -74,7 +74,7 @@ public class FinalityRejectionMetrics implements FinalityRejectionCounter {
      */
     private final MeterRegistry registry;
 
-    /** reason+phase → Counter。基数闭合（6 × 3）故可直接用并发 Map，无内存风险。 */
+    /** reason+phase → Counter。基数闭合（9 × 3）故可直接用并发 Map，无内存风险。 */
     private final Map<Long, Counter> voteCounters = new ConcurrentHashMap<>();
     private final Map<String, Counter> finalizeCounters = new ConcurrentHashMap<>();
 

@@ -214,7 +214,14 @@ public class FinalityCoordinator {
         long epoch = epochOf(height);
         // 检查点哈希直接使用 Block 原始哈希字节（避免 hex 字符串二次编码造成的口径不一致）
         byte[] blockHash = block.getHash();
-        byte[] checkpointHash = blockHash != null ? blockHash : new byte[0];
+        if (blockHash == null || blockHash.length != Block.HASH_SIZE) {
+            // PLAN-067：哈希缺失/长度不对时不能退化成空哈希投票——最终性层现在
+            // 会按 32 字节严格拒绝，这里提前 fail-closed 并留下可定位的日志。
+            log.error("Skip finality vote at epoch={}, height={}: block hash length={} (required {})",
+                    epoch, height, blockHash == null ? -1 : blockHash.length, Block.HASH_SIZE);
+            return null;
+        }
+        byte[] checkpointHash = blockHash;
 
         // P0-1 审计修复：使用 Ed25519 真实签名（替代可伪造的 BLS-like 构造）
         // fail-closed：未注入投票密钥对时拒绝投票，防止任何节点伪造投票
