@@ -1,0 +1,15 @@
+# 故意为空的豁免清单（只有注释，无任何 CVE 条目）。
+#
+# 用途：`security-scan.yml` 的「Trivy 豁免时效复核」job 需要一次**真的不带豁免**的
+# 基础镜像扫描——否则被 .trivyignore 抑制的条目看不见，A/B/C 三类判定全部失效。
+#
+# 为什么不能只是"不传 trivyignores"：Trivy CLI 会从工作目录自动发现 `.trivyignore`，
+# 不传参数 ≠ 不豁免（2026-11-02 用 master run 41362251753 的原始 JSON 实证：
+# 白名单里的 27 条 id 一条都不出现，白名单外的同镜像 CVE 正常出现）。
+# 因此扫描步骤显式把 `trivyignores` 指向本文件，覆盖默认发现路径。
+#
+# 为什么不用 $RUNNER_TEMP：trivy-action 在容器内执行并把宿主路径原样传给 trivy，
+# 宿主 Runner.Temp 在容器里不存在（实测 `cannot find ignorefile`），改为仓库内
+# 相对路径（workdir = /github/workspace）。
+#
+# 维护约束：本文件必须保持 0 条 CVE/GHSA/RUSTSEC 条目。
