@@ -2,6 +2,8 @@
 # 构建: docker build -t nexus-zk-groth16 -f zk-groth16-service/Dockerfile .
 # 运行: docker run -p 50061:50061 -p 50062:50062 \
 #         -e GROTH16_SETUP_DIR=/setup -v <setup-vol>:/setup nexus-zk-groth16
+# 进程以 UID/GID 65532 运行（distroless nonroot）：命名卷由 compose 的
+# zk-groth16-setup-init 迁移属主；手工绑定的宿主目录需 chown 65532 后使用。
 
 FROM rust:1.85-slim AS build
 WORKDIR /src
@@ -20,12 +22,15 @@ RUN mkdir -p -m 0700 /src/runtime-dirs/setup
 # 镜像内二进制 ldd：NEEDED 仅 libgcc_s.so.1 / libm.so.6 / libc.so.6 +
 # ld-linux，cc-debian13 全覆盖）。trixie-slim 的 apt/util-linux/libsqlite3-0
 # 等整层 OS 包随之消失，不再逐条豁免 OS CVE。
-# **本批不改运行 UID**：迁移前无 USER 指令（root），这里沿用（不加 :nonroot）。
-# 原因：/setup 是 0700 root 的持久化命名卷（docker-compose.prod.yml
-# zk-groth16-setup），改 nonroot 后**既有卷**仍归 root，升级即读不到 pk.bin；
-# 降权必须随一次显式的 chown 迁移一起做，属于独立改动（避免本 PR 混入
-# 不可回滚的运维步骤）。因此本文件与 mpc-engine 的 UID 策略不同是刻意的。
-FROM gcr.io/distroless/cc-debian13
+# 2026-11-02（其后）：cc-debian13 → cc-debian13:nonroot（UID/GID 65532）。
+# 降权唯一的硬约束是 /setup 持久化卷：旧镜像无 USER（root），既有命名卷里的
+# <fingerprint>/ 目录是 0700 root，直接切 nonroot 会让升级后的进程读不到 pk.bin。
+# 故配套一次**幂等属主迁移**：两个 compose 文件里的 zk-groth16-setup-init
+# （busybox:1.36.1-musl，`chown -R 65532:65532 /setup`），zk 以
+# service_completed_successfully 等它成功退出才启动。全新部署不依赖该迁移：
+# 镜像内 /setup 已归 65532，命名卷首次挂载会复制镜像内属主。
+# GROTH16_EXTERNAL_SETUP_DIR 挂载（仪式产出，只读）需确保对 65532 可读。
+FROM gcr.io/distroless/cc-debian13:nonroot
 
 COPY --from=build /src/zk-groth16-service/target/release/zk-groth16-service /usr/local/bin/zk-groth16-service
 # busybox 静态二进制（~1.2MB，无动态依赖）：仅用于 compose healthcheck（nc -z）。
@@ -33,8 +38,9 @@ COPY --from=build /src/zk-groth16-service/target/release/zk-groth16-service /usr
 # mpc-engine/Dockerfile 同批注释）。
 COPY --from=busybox:1.36.1-musl /bin/busybox /busybox
 # 可信设置目录（外部仪式产出经卷挂载或 API 导入）——distroless 无 RUN，
-# 目录由构建阶段造好（0700）后 COPY，权限位与属主（root）均与迁移前一致。
-COPY --from=build /src/runtime-dirs/ /
+# 目录由构建阶段造好（0700）后 COPY；属主随运行 UID 改为 65532。
+# 第一次挂载到空命名卷时，Docker 会把这里的属主/权限位复制进卷。
+COPY --from=build --chown=65532:65532 /src/runtime-dirs/ /
 
 EXPOSE 50061 50062
 ENV ZK_SERVICE_PORT=50061 \
