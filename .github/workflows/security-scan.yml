@@ -269,17 +269,17 @@ jobs:
           output: trivy-staleness-java17-debian13.json
           exit-code: 0
 
-      - name: Trivy 扫描 trixie-slim（Rust 模块运行阶段基础镜像）→ JSON
-        # 依据 mpc-engine / zk-groth16-service 运行阶段的 FROM（2026-10-01 起为
-        # debian:trixie-slim；2026-11 起拟迁 distroless cc-debian13，届时本步
-        # 需随 Dockerfile 同步改 image-ref）。
+      - name: Trivy 扫描 distroless cc-debian13（Rust 模块运行阶段基础镜像）→ JSON
+        # 依据 mpc-engine / zk-groth16-service 运行阶段的 FROM：2026-11-02 起为
+        # gcr.io/distroless/cc-debian13（此前 debian:trixie-slim，2026-10-01 起）。
+        # 换基础镜像时必须同步改本行，否则复核会对着已弃用的镜像判 B 类。
         uses: aquasecurity/trivy-action@b2933f565dbc598b29947660e66259e3c7bc8561  # v0.20.0
         with:
-          image-ref: debian:trixie-slim
+          image-ref: gcr.io/distroless/cc-debian13
           severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
           trivyignores: .github/trivyignore-empty
           format: json
-          output: trivy-staleness-trixie-slim.json
+          output: trivy-staleness-cc-debian13.json
           exit-code: 0
 
       - name: 上传扫描原始结果
@@ -304,7 +304,7 @@ jobs:
           python3 scripts/check-trivyignore-staleness.py \
             --ignore .trivyignore \
             --scan "java17-debian13=trivy-staleness-java17-debian13.json" \
-            --scan "trixie-slim=trivy-staleness-trixie-slim.json"
+            --scan "cc-debian13=trivy-staleness-cc-debian13.json"
 
   # ============================================================
   # 依赖许可证策略扫描（2026-10-07 新增，**报告制**）
