@@ -242,6 +242,8 @@ A′ 是把拦截器挂成"连 actuator 也拦"，按理应该让抓取变 401�
    也不是"鉴权已完善"的证明——actuator 端点目前**没有鉴权**（若未来需要，见 §4.2 A′
    的结论：必须另选机制）；
 4. **未做吞吐/基数基准**：只验标签值可见，不验高基数下的抓取开销；
+   （**已由 PLAN-070 核销**：实测「高基数」前提并不成立——`phase × reason` 是闭合枚举，
+   序列数上限 28；真实数据见 `docs/plan/PLAN-070-scrape-cost-and-sparse-series.md`）
 5. **合成拒绝**：三个 reason 的触发是测试夹具，不代表真实发生过攻击；
 6. **`checkpoint_limit_exceeded` 的触发**用 K=4 上限的真实判定路径，但
    `checkpoint_hash_invalid` 的运行时实证走的是**收敛路径**（库里预置脏行），
@@ -254,6 +256,8 @@ A′ 是把拦截器挂成"连 actuator 也拦"，按理应该让抓取变 401�
 - 历史脏行清理（迁移切片，需可回滚 + 审计日志）；
 - 真实集群告警演练（Alertmanager 路由与通知，需真实集群）；
 - 吞吐/基数基准（高基数下 `phase × reason` 序列的抓取开销）；
+  → **已交付 PLAN-070**（2026-11-03）：实测证明「高基数」前提不成立（闭合词表上限 28 序列），
+  改为交付抓取开销实测 + 稀疏序列语义门禁；Prometheus 服务端成本仍属平台侧未验；
 - 物理多机 / 真实网络分区矩阵；
 - **若需给 actuator 加鉴权**：必须用 `EndpointFilter` / Spring Security /
   独立 `management.server.port`，改 `WebSecurityConfig` 无效（§4.2 A′ 实证）。
