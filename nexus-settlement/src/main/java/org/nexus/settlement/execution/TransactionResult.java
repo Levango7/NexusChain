@@ -74,21 +74,31 @@ public class TransactionResult {
     @JsonProperty("approvalId")
     private String approvalId;
 
+    /** 是否"确定未动账"：true = 签名服务/通道明确返回未执行（资金未转出），可安全冲正；false = 结果未知，禁止自动冲正 */
+    @JsonProperty("confirmedNotExecuted")
+    private boolean confirmedNotExecuted;
+
     public TransactionResult() {
     }
 
     public TransactionResult(String txHash, Status status, int confirmations, String error, boolean simulated) {
-        this(txHash, status, confirmations, error, simulated, null);
+        this(txHash, status, confirmations, error, simulated, null, false);
     }
 
     public TransactionResult(String txHash, Status status, int confirmations, String error,
                              boolean simulated, String approvalId) {
+        this(txHash, status, confirmations, error, simulated, approvalId, false);
+    }
+
+    public TransactionResult(String txHash, Status status, int confirmations, String error,
+                             boolean simulated, String approvalId, boolean confirmedNotExecuted) {
         this.txHash = txHash;
         this.status = status;
         this.confirmations = confirmations;
         this.error = error;
         this.simulated = simulated;
         this.approvalId = approvalId;
+        this.confirmedNotExecuted = confirmedNotExecuted;
     }
 
     /** 构造成功结果 */
@@ -101,9 +111,24 @@ public class TransactionResult {
         return new TransactionResult(txHash, Status.PENDING_CONFIRMATION, confirmations, null, simulated);
     }
 
-    /** 构造失败结果 */
+    /** 构造失败结果（默认"结果未知"，不声明确定未动账） */
     public static TransactionResult failure(String error, boolean simulated) {
-        return new TransactionResult(null, Status.FAILED, 0, error, simulated);
+        return failure(error, simulated, false);
+    }
+
+    /**
+     * 构造失败结果，并声明该失败是否"确定未动账"（confirmedNotExecuted）。
+     *
+     * <p>仅当签名服务 / 通道明确返回"未执行、资金未转出"语义（如 5000/4000/4030 这类可判定码，
+     * 即 {@code SigningResponses.declaresNotExecuted} 为真的码集）时才应传 {@code true}；
+     * 超时、降级 {@code null}、未知码一律传 {@code false}——否则会把可能已广播的交易误判为
+     * 未动账并触发冲正，造成二次打款或错误撤销。</p>
+     *
+     * <p><b>5001 不在该码集内</b>：它表示"另一路已抢到执行权、此刻正在广播"，已由 A 修复从
+     * {@code declaresNotExecuted} 摘除，<b>不得</b>当作确定未动账使用。</p>
+     */
+    public static TransactionResult failure(String error, boolean simulated, boolean confirmedNotExecuted) {
+        return new TransactionResult(null, Status.FAILED, 0, error, simulated, null, confirmedNotExecuted);
     }
 
     /** 构造"大额签名待人工审批"结果（非终态，调用方须保存 approvalId 后重试） */
@@ -165,6 +190,10 @@ public class TransactionResult {
     public String getApprovalId() { return approvalId; }
     public void setApprovalId(String approvalId) { this.approvalId = approvalId; }
 
+    /** 是否"确定未动账"：true 时上层可对已记账的结算做冲正；false 表示结果未知，禁止自动冲正 */
+    public boolean isConfirmedNotExecuted() { return confirmedNotExecuted; }
+    public void setConfirmedNotExecuted(boolean confirmedNotExecuted) { this.confirmedNotExecuted = confirmedNotExecuted; }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
@@ -175,12 +204,13 @@ public class TransactionResult {
                 && Objects.equals(txHash, that.txHash)
                 && status == that.status
                 && Objects.equals(error, that.error)
-                && Objects.equals(approvalId, that.approvalId);
+                && Objects.equals(approvalId, that.approvalId)
+                && confirmedNotExecuted == that.confirmedNotExecuted;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(txHash, status, confirmations, error, simulated, approvalId);
+        return Objects.hash(txHash, status, confirmations, error, simulated, approvalId, confirmedNotExecuted);
     }
 
     @Override
@@ -191,6 +221,7 @@ public class TransactionResult {
                 + ", error='" + error + '\''
                 + ", simulated=" + simulated
                 + ", approvalId='" + approvalId + '\''
+                + ", confirmedNotExecuted=" + confirmedNotExecuted
                 + '}';
     }
 }

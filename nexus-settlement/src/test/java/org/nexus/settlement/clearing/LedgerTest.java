@@ -69,4 +69,33 @@ class LedgerTest {
         assertEquals(new BigDecimal("30"), ledger.balanceOf("MERCHANT:M002"));
         assertEquals(2, ledger.entriesOf("MERCHANT:M001").size());
     }
+
+    @Test
+    void reverseSettlement_shouldUndoBooking() {
+        ledger.bookSettlement("M001", new BigDecimal("100.00"), "ORDER-1");
+        ledger.reverseSettlement("M001", new BigDecimal("100.00"), "ORDER-1");
+
+        // 借贷双方均回滚到 0（用 compareTo 比较，规避 BigDecimal scale 差异：0 与 0.00 不等）
+        assertEquals(0, BigDecimal.ZERO.compareTo(ledger.balanceOf(Ledger.SETTLEMENT_PAYABLE)));
+        assertEquals(0, BigDecimal.ZERO.compareTo(ledger.balanceOf("MERCHANT:M001")));
+
+        // 冲正分录存在且 reference 带 :REV 后缀、方向与原单相反
+        List<LedgerEntry> merchantEntries = ledger.entriesOf("MERCHANT:M001");
+        assertEquals(2, merchantEntries.size());
+        assertEquals(LedgerEntry.Direction.CREDIT, merchantEntries.get(0).getDirection());
+        assertEquals(LedgerEntry.Direction.DEBIT, merchantEntries.get(1).getDirection());
+        assertEquals("ORDER-1:REV", merchantEntries.get(1).getReference());
+    }
+
+    @Test
+    void reverseSettlement_shouldIgnoreInvalidInput() {
+        ledger.bookSettlement("M001", new BigDecimal("100"), "O1");
+        ledger.reverseSettlement(null, BigDecimal.TEN, "O1");
+        ledger.reverseSettlement("M001", null, "O1");
+        ledger.reverseSettlement("M001", new BigDecimal("-5"), "O1");
+
+        // 无效冲正不新增分录
+        assertEquals(1, ledger.entriesOf("MERCHANT:M001").size());
+        assertEquals(new BigDecimal("100"), ledger.balanceOf("MERCHANT:M001"));
+    }
 }

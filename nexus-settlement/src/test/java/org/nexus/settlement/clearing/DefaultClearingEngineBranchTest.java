@@ -212,6 +212,57 @@ class DefaultClearingEngineBranchTest {
         assertEquals(ClearingOrder.OrderStatus.SETTLED, result.getStatus());
     }
 
+    @Test
+    void settle_confirmedNotExecutedFailure_shouldReverseBooking() {
+        OnChainExecutionChannel confirmedFailed = new OnChainExecutionChannel() {
+            @Override
+            public TransactionResult execute(TransactionRequest request) {
+                // 明确未动账（如 5000/5001/4000/4030 这类可判定码）
+                return TransactionResult.failure("signing service rejected (5000)", false, true);
+            }
+
+            @Override
+            public TransactionResult queryStatus(String txHash) {
+                return TransactionResult.failure("n/a", false);
+            }
+        };
+        DefaultClearingEngine engine = new DefaultClearingEngine(
+                ledger, reconciliation, confirmedFailed, "PLATFORM");
+
+        ClearingOrder o = order("O1", "M001", "100");
+        ClearingOrder result = engine.settle(o);
+
+        assertEquals(ClearingOrder.OrderStatus.FAILED, result.getStatus());
+        // 已记账的贷账应被冲正：商户可用余额与待结算负债均回到 0
+        assertEquals(BigDecimal.ZERO, ledger.balanceOf("MERCHANT:M001"));
+        assertEquals(BigDecimal.ZERO, ledger.balanceOf(Ledger.SETTLEMENT_PAYABLE));
+    }
+
+    @Test
+    void settle_unknownFailure_shouldNotReverseBooking() {
+        OnChainExecutionChannel unknownFailed = new OnChainExecutionChannel() {
+            @Override
+            public TransactionResult execute(TransactionRequest request) {
+                // 结果未知（超时/降级），confirmedNotExecuted 默认 false
+                return TransactionResult.failure("channel timeout", false);
+            }
+
+            @Override
+            public TransactionResult queryStatus(String txHash) {
+                return TransactionResult.failure("n/a", false);
+            }
+        };
+        DefaultClearingEngine engine = new DefaultClearingEngine(
+                ledger, reconciliation, unknownFailed, "PLATFORM");
+
+        ClearingOrder o = order("O2", "M001", "100");
+        ClearingOrder result = engine.settle(o);
+
+        assertEquals(ClearingOrder.OrderStatus.FAILED, result.getStatus());
+        // 结果未知 → 不冲正：商户余额仍被记账（须人工核对，禁止误撤销）
+        assertEquals(0, new BigDecimal("100").compareTo(ledger.balanceOf("MERCHANT:M001")));
+    }
+
     private ClearingOrder order(String id, String merchant, String amount) {
         ClearingOrder o = new ClearingOrder();
         o.setOrderId(id);

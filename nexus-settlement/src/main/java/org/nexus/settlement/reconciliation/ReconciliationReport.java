@@ -61,6 +61,14 @@ public class ReconciliationReport {
     @JsonProperty("reconciledAt")
     private Instant reconciledAt;
 
+    /** LOCAL_ONLY 差错累计计数（跨轮次可告警指标） */
+    @JsonProperty("localOnlyTotal")
+    private long localOnlyTotal;
+
+    /** 本轮对账出现的 LOCAL_ONLY 差错 reference 列表（按 ref 可定位） */
+    @JsonProperty("localOnlyRefsThisRun")
+    private List<String> localOnlyRefsThisRun;
+
     public LocalDate getReconcileDate() { return reconcileDate; }
     public void setReconcileDate(LocalDate reconcileDate) { this.reconcileDate = reconcileDate; }
 
@@ -92,4 +100,10 @@ public class ReconciliationReport {
 
     public Instant getReconciledAt() { return reconciledAt; }
     public void setReconciledAt(Instant reconciledAt) { this.reconciledAt = reconciledAt; }
+
+    public long getLocalOnlyTotal() { return localOnlyTotal; }
+    public void setLocalOnlyTotal(long localOnlyTotal) { this.localOnlyTotal = localOnlyTotal; }
+
+    public List<String> getLocalOnlyRefsThisRun() { return localOnlyRefsThisRun; }
+    public void setLocalOnlyRefsThisRun(List<String> localOnlyRefsThisRun) { this.localOnlyRefsThisRun = localOnlyRefsThisRun; }
 }
