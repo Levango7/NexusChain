@@ -10,7 +10,7 @@
 #   （promtool 固定版本与 sha256 见 workflow；测试文件里的 rule_files 用相对
 #    路径 rules.yaml——两者必须放在同一目录运行。）
 #
-# 覆盖口径：规则文件全部 18 条告警逐条演练——
+# 覆盖口径：规则文件全部 24 条告警逐条演练——
 #   · 阈值触发：条件持续满足 ⇒ 在 for 窗口后触发（含 max() 聚合后标签变少的
 #     BlockchainCoreStalled——exp_labels 按**实际会发出**的标签集断言）；
 #   · 阈值不触发：条件不满足/低于阈值 ⇒ 不触发；
@@ -306,6 +306,95 @@ tests:
   - eval_time: 15m
     alertname: FinalityBelowQuorum
     exp_alerts: []
+# ---- PLAN-073 最终性投票 outbox 告警（2026-11-04 追加）---------------------
+# counter 用 `0x5 1x20`：第 5 分钟丢第 1 张票并保持不变；for: 1m 在 6m 后满足。
+- name: finality-outbox-dropping-fires-after-one-drop
+  interval: 1m
+  input_series:
+  - series: nexus_finality_outbox_dropped_total{job="nexus-core", pod="nexus-core-0"}
+    values: 0x5 1x20
+  alert_rule_test:
+  - eval_time: 5m
+    alertname: FinalityOutboxDropping
+    exp_alerts: []
+  - eval_time: 7m
+    alertname: FinalityOutboxDropping
+    exp_alerts:
+    - exp_labels:
+        job: nexus-core
+        pod: nexus-core-0
+        severity: warning
+        component: blockchain-core
+      exp_annotations:
+        runbook_url: https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md
+        summary: 最终性投票 outbox 队列满丢票（10min 内 1 张）
+        description: nexus-core-0 的 nexus_finality_outbox_dropped_total 10 分钟内增长 1——内存补写队列达到每 origin 256 张上限，最老的票被**永久丢弃**（不是重试失败，不会再补写）。这直接减少本节点对最终化的贡献；若其它验证人仍凑够 2/3，FinalityStalled 可能不响。查 GET /consensus/finality-outbox 的 totalDropped 与 localPending/receivedPending、PG 可用性（databaseReadable/databasePending），以及日志 `Finality outbox queue full`（含 epoch/validator/origin）。先恢复 PG 让队列排空；丢票本身不可恢复，需在事后从对端补票/回放。
+- name: finality-outbox-backlog-sustained
+  interval: 1m
+  input_series:
+  - series: nexus_finality_outbox_database_pending{job="nexus-core", pod="nexus-core-0"}
+    values: 100x30
+  alert_rule_test:
+  - eval_time: 9m
+    alertname: FinalityOutboxBacklog
+    exp_alerts: []
+  - eval_time: 11m
+    alertname: FinalityOutboxBacklog
+    exp_alerts:
+    - exp_labels:
+        job: nexus-core
+        pod: nexus-core-0
+        severity: warning
+        component: blockchain-core
+      exp_annotations:
+        runbook_url: https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md
+        summary: 最终性投票持久化 outbox 积压 ≥ 10min
+        description: nexus-core-0 的 nexus_finality_outbox_database_pending 连续 10min > 0——finality_vote_outbox 有票写不进 finality_votes。正常排空是秒级；持续积压说明 PG 写路径故障或单行反复失败。查 GET /consensus/finality-outbox 的 databasePending/databaseReadable/totalFailed/lastError，再看 PG 可用性与 finality_vote_outbox.attempts 是否在涨。注意：outbox 行是恢复数据，不要手工删除；PLAN-072 已确认脏行重放时会被 submitVote 正常拒绝并移除。
+- name: finality-outbox-memory-backlog-sustained
+  interval: 1m
+  input_series:
+  - series: nexus_finality_outbox_pending{origin="local", job="nexus-core", pod="nexus-core-0"}
+    values: 5x30
+  alert_rule_test:
+  - eval_time: 9m
+    alertname: FinalityOutboxMemoryBacklog
+    exp_alerts: []
+  - eval_time: 11m
+    alertname: FinalityOutboxMemoryBacklog
+    exp_alerts:
+    - exp_labels:
+        origin: local
+        job: nexus-core
+        pod: nexus-core-0
+        severity: warning
+        component: blockchain-core
+      exp_annotations:
+        runbook_url: https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md
+        summary: 最终性投票内存补写队列积压 ≥ 10min（local）
+        description: nexus-core-0 的 nexus_finality_outbox_pending{origin="local"} 连续 10min > 0——票写库失败后留在内存队列，且 10min 内没能补写成功。与 FinalityOutboxBacklog 的区别：本指标**不依赖数据库可读**，PG 完全读不到时仍能反映「有多少票在内存里等」。持续增长会逼近 256 张上限并触发 FinalityOutboxDropping。查 GET /consensus/finality-outbox、PG 连接与日志 `Finality vote queued for retry`。
+- name: finality-outbox-unreadable-sustained
+  interval: 1m
+  input_series:
+  - series: nexus_finality_outbox_database_readable{job="nexus-core", pod="nexus-core-0"}
+    values: 0x20
+  - series: nexus_finality_outbox_database_readable{job="nexus-core", pod="nexus-core-1"}
+    values: 1x20
+  alert_rule_test:
+  - eval_time: 4m
+    alertname: FinalityOutboxUnreadable
+    exp_alerts: []
+  - eval_time: 6m
+    alertname: FinalityOutboxUnreadable
+    exp_alerts:
+    - exp_labels:
+        job: nexus-core
+        pod: nexus-core-0
+        severity: warning
+        component: blockchain-core
+      exp_annotations:
+        runbook_url: https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md
+        summary: 最终性投票 outbox 已装配但连续 5min 读不到数据库
+        description: nexus-core-0 的 nexus_finality_outbox_database_readable=0——finality_vote_outbox 的 count(*) 连续失败（PG 不可达/查询失败）。此时 database_pending 为 NaN，不能用「没有积压」解读；内存队列仍可观测（nexus_finality_outbox_pending）。优先恢复 PG 连接，恢复后确认 databaseReadable=1 且 databasePending 归零。
 # ---- PLAN-066 投票拒绝计数告警（2026-11-02 追加）---------------------------
 # increase() 语义要求 counter 真的在涨：values 用 `0+1x12` 表示每分钟 +1。
 - name: finality-vote-rejected-none

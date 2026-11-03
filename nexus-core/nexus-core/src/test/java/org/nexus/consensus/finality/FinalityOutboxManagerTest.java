@@ -25,6 +25,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
  * PLAN-018 Phase 6C 第二切片：最终性投票的持久化 outbox 与接收侧独立重试。
@@ -185,10 +187,55 @@ class FinalityOutboxManagerTest {
             assertEquals(2, manager.pendingCount(), "数据库全挂时票必须留在内存队列里");
             FinalityOutboxStatus status = manager.status();
             assertTrue(status.isDegraded());
+            assertFalse(status.isDatabaseReadable(),
+                    "PLAN-073：库读不到必须显式标记，不能显示成「0 积压」");
+            assertEquals(0L, status.getDatabasePending(),
+                    "读不到时数值字段只是占位，语义由 databaseReadable 表达");
             assertNotNull(status.snapshot().get("lastError"));
         } finally {
             store.failEverything = false;
         }
+    }
+
+    /**
+     * PLAN-073：{@code status()} 必须用精确计数，不能把 {@code LIMIT 64} 的
+     * 第一批结果当积压数（旧缺陷：真实积压 100 行只报 64）。
+     */
+    @Test
+    void statusUsesExactCountNotTheFetchBatch() {
+        FinalityGadget mockGadget = mock(FinalityGadget.class);
+        FinalityStateStore mockStore = mock(FinalityStateStore.class);
+        when(mockGadget.getStateStore()).thenReturn(mockStore);
+        when(mockStore.countPendingVotes()).thenReturn(100L);
+        when(mockStore.loadPendingVotes(FinalityOutboxManager.DB_FETCH_BATCH))
+                .thenReturn(java.util.Collections.nCopies(64, (FinalityOutboxEntry) null));
+
+        FinalityOutboxManager manager = new FinalityOutboxManager(mockGadget);
+        FinalityOutboxStatus status = manager.status();
+
+        assertEquals(100L, status.getDatabasePending(),
+                "必须用精确计数，不能把 LIMIT 64 当积压数（旧实现会报 64）");
+        assertTrue(status.isDatabaseReadable());
+    }
+
+    /**
+     * PLAN-073：队列满丢票是**永久丢失**，必须与「重试失败（还会再试）」分开计数。
+     *
+     * <p>旧实现把两者都加进 {@code totalFailed}，丢一张票会被成千上万次重试失败
+     * 平均掉，既不可告警也不可复盘。</p>
+     */
+    @Test
+    void queueOverflowCountsDroppedSeparatelyFromRetryFailures() {
+        FinalityOutboxManager manager = new FinalityOutboxManager(gadget);
+        for (int i = 0; i < FinalityOutboxManager.MAX_PENDING_PER_ORIGIN + 1; i++) {
+            manager.enqueueLocal(vote("v1", i + 1L, CP1), new IllegalStateException("db down"));
+        }
+
+        assertEquals(FinalityOutboxManager.MAX_PENDING_PER_ORIGIN,
+                manager.pendingCount(FinalityVoteOrigin.LOCAL), "队列必须保持上限");
+        assertEquals(1L, manager.totalDropped(), "第 257 张票必须计入永久丢弃");
+        assertEquals(0L, manager.totalFailed(), "丢票不是重试失败，不能混进 totalFailed");
+        assertEquals(1L, manager.status().getTotalDropped(), "快照必须暴露丢票数");
     }
 
     @Test

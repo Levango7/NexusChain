@@ -85,6 +85,11 @@ public class InMemoryFinalityStateStore implements FinalityStateStore {
     }
 
     @Override
+    public long countPendingVotes() {
+        return outbox.size();
+    }
+
+    @Override
     public void removePendingVote(FinalityOutboxEntry entry) {
         outbox.remove(outboxKey(entry));
     }

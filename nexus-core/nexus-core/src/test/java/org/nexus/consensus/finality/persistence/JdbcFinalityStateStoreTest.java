@@ -163,6 +163,28 @@ class JdbcFinalityStateStoreTest {
         assertEquals(1, page.get(0).getEpoch());
     }
 
+    /**
+     * PLAN-073：观测口径必须是**精确行数**，不能被分页 {@code LIMIT 64} 低报。
+     *
+     * <p>旧 {@code FinalityOutboxManager.status()} 用
+     * {@code loadPendingVotes(DB_FETCH_BATCH).size()} 当积压数，真实积压 100 行时
+     * 端点只报 64；本测试同时钉住两件事：分页读取仍受 limit 约束（64），
+     * 但计数接口必须返回 100。</p>
+     */
+    @Test
+    void countPendingVotesIsExactBeyondFetchBatch() {
+        for (int i = 0; i < 100; i++) {
+            store.enqueuePendingVote(new FinalityOutboxEntry(i + 1, new byte[]{(byte) i},
+                    "count-v" + i, new byte[64], new byte[32],
+                    FinalityVoteOrigin.LOCAL, 1_000L + i, 0, ""));
+        }
+
+        assertEquals(64, store.loadPendingVotes(64).size(),
+                "分页读取必须继续受 limit 约束（补写批次不能一次拉全表）");
+        assertEquals(100L, store.countPendingVotes(),
+                "PLAN-073：观测必须拿到精确行数（旧实现会低报成 64）");
+    }
+
     private static byte[] sig() {
         byte[] s = new byte[64];
         for (int i = 0; i < s.length; i++) {

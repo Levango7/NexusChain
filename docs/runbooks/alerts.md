@@ -3,15 +3,16 @@
 ## 设计原则
 
 - 起步 **4 条** critical/warning（设计稿 PLAN-002 §3.2）；2026-09-07 起 5 条、
-  2026-09-09 起 11 条、2026-10-26 起 15 条 + PLAN-045 最终性 2 条 = **17 条**（当前值，
-  单一真源 = `deploy/k8s/50-prometheus-rules.yaml`）
+  2026-09-09 起 11 条、2026-10-26 起 15 条 + PLAN-045 最终性 2 条 +
+  PLAN-052 弃权 1 条 = 18 条；2026-11-04 起 **24 条**（PLAN-066 拒绝计数 +2、
+  PLAN-073 最终性 outbox +4；单一真源 = `deploy/k8s/50-prometheus-rules.yaml`）
 - 以 `kube_*` 通用 metrics 为主；`nexuschain_block_height` / `jvm_*` /
   `container_*` 等已确认真实注册或集群开箱即有的指标为辅——**规则只允许引用
   真实存在的指标**（2026-09-09 整合时退役了 11 条引用幽灵指标名的 legacy 告警）
 - `for:` 必填——避免抖动误报（链停/资源类 5-10min；在线类 1min）
 - 告警标签统一（severity + component + service）
 
-## 18 条告警（2026-09-07 +1 链停告警；2026-09-09 告警真值整合 +6；2026-10-18 批次③ runbook 补全；2026-10-26 PLAN-040 区块持久化 +4；2026-10-27 PLAN-045 最终性 +2、PLAN-052 弃权风险 +1）
+## 24 条告警（2026-09-07 +1 链停告警；2026-09-09 告警真值整合 +6；2026-10-18 批次③ runbook 补全；2026-10-26 PLAN-040 区块持久化 +4；2026-10-27 PLAN-045 最终性 +2、PLAN-052 弃权风险 +1；2026-11-02 PLAN-066 拒绝计数 +2；2026-11-04 PLAN-073 最终性 outbox +4）
 
 | 名称 | 级别 | 触发条件 | 含义 |
 |---|---|---|---|
@@ -33,6 +34,12 @@
 | FinalityStalled | critical | `changes(nexus_finality_latest_voted_epoch[15m]) == 0` 持续 10min | 最终性水位 15min 无增长（最终化停滞） |
 | FinalityBelowQuorum | warning | `nexus_finality_progress_percent < 100` 持续 10min | 最终性进度不足（票没收齐） |
 | BlockAdoptionAbstainRisk | warning | `nexus_finality_abstain_risk == 1` 持续 5m | 区块采纳出现 unknown-proposer 弃权风险（单节点、原因维度） |
+| FinalityVoteRejected | warning | `increase(nexus_finality_vote_rejected_total{reason=~"signature_invalid\|pubkey_mismatch\|checkpoint_hash_invalid\|checkpoint_limit_exceeded\|payload_too_large"}[10m]) > 0` 持续 5min | 最终性投票出现异常拒绝（伪造/畸形/超限） |
+| FinalityFinalizeRejected | critical | `increase(nexus_finality_finalize_rejected_total[15m]) > 0` 持续 10min | 最终化因聚合验签失败被拒 |
+| FinalityOutboxDropping | warning | `increase(nexus_finality_outbox_dropped_total[10m]) > 0` 持续 1min | 内存补写队列满，票被**永久丢弃** |
+| FinalityOutboxBacklog | warning | `nexus_finality_outbox_database_pending > 0` 持续 10min | 持久化 outbox 持续积压 |
+| FinalityOutboxMemoryBacklog | warning | `nexus_finality_outbox_pending > 0` 持续 10min | 内存补写队列持续积压（不依赖 DB 可读） |
+| FinalityOutboxUnreadable | warning | `nexus_finality_outbox_database_readable == 0` 持续 5min | outbox 已装配但读不到数据库 |
 
 后 6 条的排障手册见下方“新增 6 条告警排障手册”章节（2026-10-18 批次③ 补全）。
 
@@ -271,6 +278,61 @@ unknown-proposer defer 达到阈值（5 次/同一高度）** 时就亮，而结
   是否推进 + 日志中 `abstain-risk` 行的时间戳为准
 - **与 FinalityStalled 的分工**：本条=单节点、原因、最早；FinalityStalled=
   全网、结果、最重。两者同时亮 ⇒ 单节点弃权已拖垮全网门限
+
+## 最终性 outbox 4 条告警排障手册（PLAN-073 · 2026-11-04）
+
+指标由 `org.nexus.metrics.FinalityOutboxMetrics` 注册（nexus-core），数据源是
+`FinalityOutboxManager.status()`；库读在应用内 30s 采样，**抓取不查库**。
+`finality_vote_outbox` 是「票写不进库」的最后兜底：它积压时 `FinalityStalled`
+未必立刻触发（其它验证人的票仍可凑够 2/3），所以这 4 条是**独立盲区信号**。
+端点的 `databasePending` 自 PLAN-073 起是 `SELECT count(*)` 的**精确值**
+（旧实现用 `LIMIT 64` 会低报），`databaseReadable=false` 表示读不到而不是 0 积压。
+
+### FinalityOutboxDropping（warning · component=blockchain-core）
+
+- **触发**：`increase(nexus_finality_outbox_dropped_total[10m]) > 0` 持续 1min
+- **含义**：内存补写队列达到每 origin 256 张上限，**最老的票被永久丢弃**——
+  这不是「重试失败」，不会再补写。若其它验证人仍凑够 2/3，最终性可能照常推进，
+  所以 `FinalityStalled` 不一定响
+- **排查**：
+  ```bash
+  curl -s http://<core-pod>:19585/consensus/finality-outbox   # totalDropped/localPending/receivedPending
+  kubectl -n nexus logs <core-pod> | grep "Finality outbox queue full"
+  ```
+  日志行含被丢票的 epoch / validator / origin；同时看 `databaseReadable` /
+  `databasePending` 与 PG 可用性
+- **处置**：先恢复 PG 让队列排空；**丢票本身不可恢复**，需在事后从对端补票/回放。
+  若丢票与 PG 故障同时出现，优先按 PG 故障处理
+
+### FinalityOutboxBacklog（warning · component=blockchain-core）
+
+- **触发**：`nexus_finality_outbox_database_pending > 0` 持续 10min
+- **含义**：`finality_vote_outbox` 有票写不进 `finality_votes`。正常排空是秒级；
+  持续积压说明 PG 写路径故障或单行反复失败
+- **排查**：`GET /consensus/finality-outbox` 的 `databasePending` / `totalFailed` /
+  `lastError`；查 PG 可用性与 `finality_vote_outbox.attempts` 是否在涨
+- **处置**：恢复 PG；**不要手工删除 outbox 行**（它们是恢复数据）。PLAN-072 已确认
+  脏行重放时会被 `submitVote` 正常拒绝并移除，不会变毒丸
+
+### FinalityOutboxMemoryBacklog（warning · component=blockchain-core）
+
+- **触发**：`nexus_finality_outbox_pending > 0` 持续 10min（按 `origin` 分 local/received）
+- **含义**：票写库失败后留在内存队列，且 10min 内没能补写成功。与
+  `FinalityOutboxBacklog` 的区别：本指标**不依赖数据库可读**，PG 完全读不到时
+  仍能反映「有多少票在内存里等」
+- **排查**：`GET /consensus/finality-outbox`、PG 连接、日志
+  `Finality vote queued for retry`
+- **处置**：同 Backlog；持续增长会逼近 256 张上限并触发 `FinalityOutboxDropping`
+
+### FinalityOutboxUnreadable（warning · component=blockchain-core）
+
+- **触发**：`nexus_finality_outbox_database_readable == 0` 持续 5min
+- **含义**：`finality_vote_outbox` 的 `count(*)` 连续失败（PG 不可达/查询失败）。
+  此时 `database_pending` 为 **NaN**，不能用「没有积压」解读；内存队列仍可观测
+- **排查**：PG 连接/慢查询；`GET /consensus/finality-outbox` 的
+  `databaseReadable` 与 `databasePending`
+- **处置**：优先恢复 PG 连接，恢复后确认 `databaseReadable=1` 且
+  `databasePending` 归零
 
 ## 后续升级路径（gRPC 错误率）
 
