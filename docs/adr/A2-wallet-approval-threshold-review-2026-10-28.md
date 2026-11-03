@@ -18,6 +18,9 @@
 - 修订：2026-11-03 修订 §5 条目 5 与头部的过期但书：§7.4 五项修复已随 #329/#330/#331
   合入 master（核对至 `91212220`），「master 现状（未含这些修复）不可开闸」不再成立；
   本次为纯事实核对，不构成对条目 6/7 的勾选（勾选权仍在部署方）（zcode）。
+- 修订：2026-11-04 勘正 §5 条目 6 伴生注的 staging 现状：#372（2026-10-31，创始人指示）
+  已把 staging A2 观察开关整体关闭，「flag 开+公钥缺 ⇒ 每笔被拒」状态不复存在；
+  补重开配方（extraEnv 两键同下，板 20261031-0310）（zcode）。
 
 ## 1. 复核对象：A2 之后一笔提现实际经过的闸门
 
@@ -112,10 +115,16 @@ ADR-036 §6 要求"与 wallet 多签阈值配置一同评审"的原因。
       新增「A2 开闸配置门禁」步：凡 `NEXUS_SIGNING_BUSINESS_APPROVAL_ENABLED=true` 的
       覆盖层渲染，必须带非空 `NEX_WALLET_PLATFORM_PUBKEY`（env 路径，即子 chart
       `extraEnv`）。**prod 侧为硬断言**（开 prod A2 而漏公钥 ⇒ CI 红）；**staging 侧
-      当前为软告警**（不阻断），因为 staging flag 已按 PR #326 所有者指示开启而公钥
-      尚未下发——即【staging 此刻正处于本条所述的 fail-closed 状态：A2 提现腿每笔
-      被拒】。公钥下发的同一 PR 会让该步转绿，届时可去掉 `continue-on-error` 升级为
-      阻断。⚠️ 本伴生项**不构成**对本检查单条目的勾选：勾选权仍在部署方（须由其确认
+      当前为软告警**（不阻断）。
+      **⚠️ staging 现状勘正（2026-11-04）**：上文「staging flag 已开启、公钥未下发、
+      提现腿每笔被拒」的状态描述**已失效**——2026-10-31 经创始人指示，staging 的 A2
+      观察开关已被 **#372 整体关闭**（flag=false，见 `deploy/helm/values-staging.yaml`
+      注释块），staging 此后走 legacy 路径，**不再处于 fail-closed 每笔被拒状态**；
+      门禁 staging 软告警步在 flag 关闭时显示绿（「flag 未开启」）。**重开配方**（板
+      20261031-0310）：`values-staging` 的 wallet `extraEnv` **同时**下发
+      `NEX_WALLET_PLATFORM_PUBKEY` 与 `NEXUS_SIGNING_BUSINESS_APPROVAL_ENABLED: "true"`
+      ——届时该步的硬断言生效（有 flag 无公钥即红），可去掉 `continue-on-error`
+      升级为阻断。⚠️ 本伴生项**不构成**对本检查单条目的勾选：勾选权仍在部署方（须由其确认
       真实公钥值已在目标环境就位；门禁只把 values 路径的漏配挡在 CI 里，不能证明
       落盘的值是对的公钥）。
 - [ ] 生产开启时走 env（`NEXUS_SIGNING_BUSINESS_APPROVAL_ENABLED=true`），
