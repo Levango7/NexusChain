@@ -11,7 +11,7 @@
 | store | 组件 | 表 / 键 | 当前版本 |
 |---|---|---|---|
 | `payment_state` | `JdbcPaymentStateStore` | `payment_channels` / `stablecoin_positions` / `bridge_transactions` / `bridge_replay_keys` | 1 |
-| `finality_state` | `JdbcFinalityStateStore` | `finality_votes`（PLAN-018 起含 `signature`/`public_key` 两列）/ `finality_checkpoints` / `finality_vote_outbox`（PLAN-018 新增）/ `finality_votes_quarantine`（**PLAN-069 新增**，迁移脚本 `001` 创建，见 §三.4） | 1 |
+| `finality_state` | `JdbcFinalityStateStore` | `finality_votes`（PLAN-018 起含 `signature`/`public_key` 两列）/ `finality_checkpoints` / `finality_vote_outbox`（PLAN-018 新增）/ `finality_votes_quarantine`（**PLAN-069**）+ `finality_checkpoints_quarantine`（**PLAN-071**），两者由迁移脚本 `001` 创建，见 §三.4 | 1 |
 | pending_block_outbox | JdbcPendingBlockOutbox | pending_block_outbox（PLAN-019 新增） | 1 |
 | `validator_set` | `ValidatorSetPersistence` | `validators_synced` | 1 |
 | `l2_fraud_state` | `JdbcFraudProofStateStore` | `l2_fraud_batches` / `l2_fraud_bonds` / `l2_fraud_conflicts` | 1 |
@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS nexus_schema_meta (
 
 | 脚本 | 目的 | store | 版本号 | 可回滚 |
 |---|---|---|---|---|
-| `001-finality-quarantine-invalid-checkpoint-hash.sql` | PLAN-069：把 `finality_votes` 里检查点哈希不是 32 字节（hex 64 字符）的历史行**原样隔离**到 `finality_votes_quarantine`，再从生产表移除 | `finality_state` | **保持 1** | ✅ 配套 `.rollback.sql`（把行原样搬回，保留隔离表作审计） |
+| `001-finality-quarantine-invalid-checkpoint-hash.sql` | PLAN-069 + **PLAN-071**：把 `finality_votes` 与 `finality_checkpoints` 里检查点哈希不是 32 字节（hex 64 字符）的历史行**原样隔离**到各自的 quarantine 表，再从生产表移除 | `finality_state` | **保持 1** | ✅ 配套 `.rollback.sql`（按 `migration_id` 分来源搬回，保留两张隔离表作审计） |
 
 > **为什么 PLAN-069 没升 `SCHEMA_VERSION`**：本脚本的 DDL 部分只有
 > `CREATE TABLE IF NOT EXISTS finality_votes_quarantine`（§三.1 的 additive-only），
@@ -79,7 +79,16 @@ CREATE TABLE IF NOT EXISTS nexus_schema_meta (
 > `length(checkpoint_hash) = 64 AND checkpoint_hash ~ '^[0-9a-fA-F]{64}$'`
 > ——对应 `FinalityGadget.hasValidCheckpointHash()`（32 字节）与
 > `JdbcFinalityStateStore.hashStr()`（`HexFormat.formatHex` ⇒ 小写 64 hex）。
-> 由 `FinalityDirtyRowMigrationContractTest` 逐语句断言两侧口径一致。
+> 由 `FinalityDirtyRowMigrationContractTest` 逐语句断言两侧口径一致。**两张表
+> （`finality_votes` / `finality_checkpoints`）用同一套口径，各配一张同构隔离表**
+> ——checkpoints 的主键没有 `validator` 列，不能硬塞进 votes 的隔离表给 validator
+> 编哨兵值（审计表一旦说谎就无法可靠反查）。
+
+> **`001` 的修订约束**：`001` 合入后**尚未在任何真实环境执行过**，故 PLAN-071
+> 直接修订它而没有新开 `002`。**一旦 `001` 在任一真实环境执行过，后继变更必须
+> 新开编号**，不得再就地修订——这与 Flyway "已应用迁移不可变"的原则同源，只是
+> `migrations/pg/` 由人工执行、无 `flyway_schema_history` 自动保护，
+> 因此靠这条约定与 code review 守住。
 
 ## 四、运行手册（版本不匹配时）
 

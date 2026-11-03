@@ -171,6 +171,76 @@ class FinalityDirtyRowMigrationContractTest {
                 "migration_id 必须是 NOT NULL（回滚按它收窄范围）");
     }
 
+    // ------------------------------------------------------ PLAN-071: checkpoints
+
+    @Test
+    @DisplayName("finality_checkpoints 也被隔离：独立隔离表 + 同一套口径 + 先搬后删")
+    void checkpointsAreQuarantinedToo() {
+        String sql = read(FORWARD_SQL);
+
+        // 独立隔离表（不用 votes 表硬塞 validator 哨兵值——审计表不能撒谎）
+        assertTrue(sql.contains("CREATE TABLE IF NOT EXISTS finality_checkpoints_quarantine"),
+                "finality_checkpoints 需要自己的隔离表：它的主键没有 validator 列，"
+                        + "硬塞进 votes 隔离表就得给 validator 编哨兵值，审计表一旦说谎就无法可靠反查");
+        assertTrue(sql.contains("PRIMARY KEY (epoch, checkpoint_hash)"),
+                "checkpoints 隔离表主键必须与源表同构 (epoch, checkpoint_hash)");
+
+        String insertStmt = statement(sql, "INSERT INTO finality_checkpoints_quarantine");
+        String deleteStmt = statement(sql, "DELETE FROM finality_checkpoints c");
+
+        // 与 votes 完全相同的判定口径（长度 = 64 且 hex 字符集）
+        for (String stmt : List.of(insertStmt, deleteStmt)) {
+            assertTrue(stmt.contains("length(") && stmt.contains("= 64"),
+                    "checkpoints 判定必须按 length = 64：" + stmt);
+            assertFalse(stmt.contains("< 64") || stmt.contains("<= 64"),
+                    "checkpoints 判定不得退化成『长度小于 64』——会漏掉 65 位与非 hex 行：" + stmt);
+            assertTrue(stmt.contains("^[0-9a-fA-F]{64}$"),
+                    "checkpoints 判定必须校验 hex 字符集：" + stmt);
+        }
+
+        // 先搬后删 + EXISTS 双保险
+        int cpInsertAt = sql.indexOf("INSERT INTO finality_checkpoints_quarantine");
+        int cpDeleteAt = sql.indexOf("DELETE FROM finality_checkpoints c");
+        assertTrue(cpInsertAt > 0 && cpDeleteAt > 0, "checkpoints 的搬运/移除两段都必须存在");
+        assertTrue(cpInsertAt < cpDeleteAt,
+                "checkpoints 也必须先 INSERT 到隔离表、再 DELETE");
+        assertTrue(deleteStmt.contains("EXISTS")
+                        && deleteStmt.contains("finality_checkpoints_quarantine"),
+                "checkpoints 的 DELETE 必须带 EXISTS 隔离表双保险：" + deleteStmt);
+        assertTrue(sql.contains("ON CONFLICT (epoch, checkpoint_hash) DO NOTHING"),
+                "checkpoints 搬运必须幂等（按自己的主键 ON CONFLICT）");
+
+        // 审计表的 migration_id 要能区分来源，回滚据此收窄
+        assertTrue(sql.contains("'PLAN-071/001'"),
+                "checkpoints 隔离行必须带独立 migration_id，否则回滚无法区分来源");
+    }
+
+    @Test
+    @DisplayName("回滚按来源分别搬回：checkpoints 回 checkpoints、votes 回 votes")
+    void rollbackRestoresEachTableBySource() {
+        String sql = read(ROLLBACK_SQL);
+
+        assertTrue(sql.contains("INSERT INTO finality_checkpoints"),
+                "回滚必须把检查点隔离行搬回 finality_checkpoints");
+        assertTrue(sql.contains("FROM finality_checkpoints_quarantine"),
+                "回滚必须从检查点隔离表取数据");
+        assertTrue(sql.contains("migration_id = 'PLAN-071/001'"),
+                "回滚只能恢复本切片的 checkpoints 隔离行（按来源收窄）");
+
+        // 关键：checkpoints 的行**不得**被搬回 votes 表（列都不存在，且语义错位）
+        String cpRestore = statement(sql, "INSERT INTO finality_checkpoints");
+        assertFalse(cpRestore.contains("validator"),
+                "检查点行不得写进 finality_votes（该表还有 validator 列，会错位）");
+
+        String withoutComments = stripSqlComments(sql);
+        assertFalse(withoutComments.toUpperCase().contains("DELETE FROM FINALITY_VOTES_QUARANTINE"),
+                "回滚不得删除隔离表内容（审计痕迹）");
+        assertFalse(withoutComments.toUpperCase().contains("DELETE FROM FINALITY_CHECKPOINTS_QUARANTINE"),
+                "回滚不得删除检查点隔离表内容（审计痕迹）");
+        assertFalse(withoutComments.toUpperCase().contains("DROP TABLE"), "回滚不得 DROP 隔离表");
+    }
+
+
     // ------------------------------------------------------------ helpers
 
     /** SQL 侧的判定：{@code length = 64 AND ~ '^[0-9a-fA-F]{64}$'}。 */
