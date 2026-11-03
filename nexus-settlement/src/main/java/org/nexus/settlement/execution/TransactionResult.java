@@ -119,9 +119,13 @@ public class TransactionResult {
     /**
      * 构造失败结果，并声明该失败是否"确定未动账"（confirmedNotExecuted）。
      *
-     * <p>仅当签名服务 / 通道明确返回"未执行、资金未转出"语义（如 5000/5001/4000/4030 这类可判定码）
-     * 时才应传 {@code true}；超时、降级 {@code null}、未知码一律传 {@code false}——
-     * 否则会把可能已广播的交易误判为未动账并触发冲正，造成二次打款或错误撤销。</p>
+     * <p>仅当签名服务 / 通道明确返回"未执行、资金未转出"语义（如 5000/4000/4030 这类可判定码，
+     * 即 {@code SigningResponses.declaresNotExecuted} 为真的码集）时才应传 {@code true}；
+     * 超时、降级 {@code null}、未知码一律传 {@code false}——否则会把可能已广播的交易误判为
+     * 未动账并触发冲正，造成二次打款或错误撤销。</p>
+     *
+     * <p><b>5001 不在该码集内</b>：它表示"另一路已抢到执行权、此刻正在广播"，已由 A 修复从
+     * {@code declaresNotExecuted} 摘除，<b>不得</b>当作确定未动账使用。</p>
      */
     public static TransactionResult failure(String error, boolean simulated, boolean confirmedNotExecuted) {
         return new TransactionResult(null, Status.FAILED, 0, error, simulated, null, confirmedNotExecuted);
