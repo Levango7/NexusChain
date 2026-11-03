@@ -182,6 +182,8 @@ class DefaultOnChainExecutionChannelTest {
 
             TransactionResult result = newChannel().execute(validRequest("r-9"));
             assertFalse(result.isSuccess());
+            // 地址解析失败在签名之前 ⇒ 确定未动账，允许 S3 冲正
+            assertTrue(result.isConfirmedNotExecuted());
         }
     }
 
@@ -196,6 +198,8 @@ class DefaultOnChainExecutionChannelTest {
 
             TransactionResult result = newChannel().execute(validRequest("r-10"));
             assertFalse(result.isSuccess());
+            // 异常可能发生在广播之后 ⇒ 结果未知，绝不得声明「确定未动账」（否则会误冲正、二次打款）
+            assertFalse(result.isConfirmedNotExecuted());
         }
     }
 
@@ -210,6 +214,7 @@ class DefaultOnChainExecutionChannelTest {
 
             TransactionResult result = newChannel().execute(validRequest("r-11"));
             assertFalse(result.isSuccess());
+            assertTrue(result.isConfirmedNotExecuted());
         }
     }
 
@@ -348,6 +353,8 @@ class DefaultOnChainExecutionChannelTest {
             TransactionResult result = newChannel().execute(validRequest("r-failed"));
             assertEquals(TransactionResult.Status.FAILED, result.getStatus());
             assertEquals("approval rejected", result.getError());
+            // FAILED 只来自契约确立的未动账码/拒绝/过期 ⇒ 声明确定未动账，允许 S3 冲正
+            assertTrue(result.isConfirmedNotExecuted());
         }
     }
 
