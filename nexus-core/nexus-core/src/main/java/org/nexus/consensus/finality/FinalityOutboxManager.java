@@ -68,6 +68,8 @@ public class FinalityOutboxManager {
     private final AtomicLong totalEnqueued = new AtomicLong(0);
     private final AtomicLong totalFlushed = new AtomicLong(0);
     private final AtomicLong totalFailed = new AtomicLong(0);
+    /** 队列满被丢弃的票数（**永久丢失**，PLAN-073 从 totalFailed 里拆出来）。 */
+    private final AtomicLong totalDropped = new AtomicLong(0);
     private final AtomicReference<String> lastError = new AtomicReference<>("");
     /** 失败日志采样：窗口起点与窗口内被抑制的条数。 */
     private final AtomicLong logWindowStartedAt = new AtomicLong(0);
@@ -129,7 +131,9 @@ public class FinalityOutboxManager {
             log.error("Finality outbox queue full ({}); dropping oldest pending vote epoch={}, validator={}, origin={}",
                     MAX_PENDING_PER_ORIGIN, dropped.vote.getEpoch(),
                     dropped.vote.getValidatorAddress(), origin.code());
-            totalFailed.incrementAndGet();
+            // PLAN-073：丢票是**永久丢失**，与「重试失败（还会再试）」不是一回事。
+            // 只计 dropped；totalFailed 保持「重试失败」语义，避免丢票被平均掉。
+            totalDropped.incrementAndGet();
         }
         PendingVote pending = new PendingVote(vote, origin);
         pending.error = describe(error);
@@ -329,18 +333,47 @@ public class FinalityOutboxManager {
 
     /** 当前观测快照。 */
     public synchronized FinalityOutboxStatus status() {
-        int dbPending = 0;
+        long dbPending = 0L;
+        boolean readable = true;
         try {
             FinalityStateStore store = gadget.getStateStore();
             if (store != null) {
-                dbPending = store.loadPendingVotes(DB_FETCH_BATCH).size();
+                long counted = store.countPendingVotes();
+                if (counted < 0L) {
+                    readable = false;
+                } else {
+                    dbPending = counted;
+                }
             }
         } catch (RuntimeException e) {
-            // 数据库不可用时读不到行数，内存计数仍然有效。
+            // PLAN-073：数据库不可用时**不能**把 dbPending 留成 0 冒充「没有积压」；
+            // 用 readable=false 显式表达「读不到」，快照与指标据此区分两种语义。
+            readable = false;
         }
         return new FinalityOutboxStatus(localPending.size(), receivedPending.size(), dbPending,
                 lastFlushAt.get(), lastEnqueueAt.get(),
-                totalEnqueued.get(), totalFlushed.get(), totalFailed.get(), lastError.get());
+                totalEnqueued.get(), totalFlushed.get(), totalFailed.get(),
+                totalDropped.get(), readable, lastError.get());
+    }
+
+    /** 入队总数（含重复票去重后的首次入队）。 */
+    public long totalEnqueued() {
+        return totalEnqueued.get();
+    }
+
+    /** 补写成功总数。 */
+    public long totalFlushed() {
+        return totalFlushed.get();
+    }
+
+    /** 重试失败总数（**不含**队列满丢票）。 */
+    public long totalFailed() {
+        return totalFailed.get();
+    }
+
+    /** 队列满被丢弃的票数（永久丢失，PLAN-073）。 */
+    public long totalDropped() {
+        return totalDropped.get();
     }
 
     /** 内存中待补写的票数（测试与观测用）。 */

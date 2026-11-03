@@ -4,6 +4,37 @@
 
 ## [2.75.0] - 2026-10-26
 
+### 最终性投票 outbox 可观测性 + 4 条告警（PLAN-073，2026-11-04）
+
+`finality_vote_outbox` 是「票写不进库」的最后兜底，此前只有端点、没有任何指标；
+端点自身还有两个语义缺陷：
+
+- **精确积压**：`FinalityStateStore.countPendingVotes()`（JDBC 用 `SELECT count(*)`，
+  内存用 `size()`），`status()` 不再用 `loadPendingVotes(DB_FETCH_BATCH).size()`
+  把 500 行低报成 64；
+- **可读性**：`FinalityOutboxStatus.databaseReadable`，库读不到时
+  `isDegraded()` 为真，不再把「读不到」显示成「0 积压」；
+- **指标**：新增 `org.nexus.metrics.FinalityOutboxMetrics`
+  （`MeterBinder` + `@Component`，30s 采样、抓取零 DB 访问）：
+  `nexus_finality_outbox_{enabled, pending{origin}, database_pending,
+  database_readable, enqueued, flushed, failed, dropped}`；
+- **丢票拆分**：队列满丢票从 `totalFailed` 拆成 `dropped`——永久丢失与
+  「重试失败（还会再试）」不再混在一个数里；
+- **告警 4 条**：`FinalityOutboxDropping` / `FinalityOutboxBacklog` /
+  `FinalityOutboxMemoryBacklog` / `FinalityOutboxUnreadable`
+  （规则总数 20 → 24；promtool v3.15.1 实跑 24 rules + 4 组演练全过）；
+- **门禁**：`FinalityOutboxMetricsTest` 7 例、JDBC 精确计数 1 例、
+  manager 精确计数 1 例、`dropped` 拆分 1 例；
+  `FinalityRulesContractTest` 指标数 14 → 22（`pending` 标签键严格 `{origin}`、
+  取值只有 local/received）；runbook 补 4 条排障手册；
+- **反向对照 3 组**：`count(*)`→`LIMIT 64`、读不到→报 0、丢票→`totalFailed`，
+  分别精确命中 `100≠64`、`NaN≠0`、`dropped 1≠0`；还原后 SHA-256 与变异前一致；
+- 全量 `nexus-core` **1869 用例 / 0 失败 / 0 错误 / 23 跳过**；
+  SpotBugs 通过、Code Hygiene 49 = 基线；
+- **边界**：同内核单机 + promtool（**非物理多机**）；未起真实
+  Prometheus/Alertmanager、未在真实集群触发；采样 30s ⇒ 指标最多滞后 30s；
+  不改重试策略 / 不加 `attempts` 上限 / 不做自动清理。
+
 ### 依赖安全：follow-redirects 1.16.1 → 1.16.2 / brace-expansion 1.1.20 → 1.1.21
 
 Trivy 文件系统扫描（必检）在 `cmd-monitor` 工具的两个锁文件里报 HIGH：

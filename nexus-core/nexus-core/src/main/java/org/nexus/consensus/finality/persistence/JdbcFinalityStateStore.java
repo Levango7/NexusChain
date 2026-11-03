@@ -233,6 +233,12 @@ public class JdbcFinalityStateStore implements FinalityStateStore {
     }
 
     @Override
+    public long countPendingVotes() {
+        Long n = jdbc.queryForObject("SELECT count(*) FROM finality_vote_outbox", Long.class);
+        return n == null ? 0L : n;
+    }
+
+    @Override
     public void removePendingVote(FinalityOutboxEntry entry) {
         jdbc.update("DELETE FROM finality_vote_outbox WHERE epoch=? AND checkpoint_hash=? "
                         + "AND validator=? AND origin=?",

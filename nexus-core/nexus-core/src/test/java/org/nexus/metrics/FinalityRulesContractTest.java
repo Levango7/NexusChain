@@ -43,7 +43,7 @@ class FinalityRulesContractTest {
             "nexuschain.finality",
             "nexuschain.block-adoption");
 
-    private static final int EXPECTED_METER_COUNT = 14;
+    private static final int EXPECTED_METER_COUNT = 22;
 
     /**
      * 已注册但<b>没有</b>告警消费的指标白名单（诊断用）。
@@ -72,7 +72,15 @@ class FinalityRulesContractTest {
             "nexus_finality_defer_max_count",
             // 当前窗口内的弃权数：时序性强、抖动大，PLAN-052 选了 5m 稳态口径
             // 才有 abstain_risk 这个可告警的 0/1；本指标不进告警。
-            "nexus_finality_abstain_current"
+            "nexus_finality_abstain_current",
+            // PLAN-073：outbox 的诊断/累计指标。四条告警分别消费
+            // pending{origin}、database_pending、database_readable、dropped；
+            // 下面四个没有阈值语义（enabled=0 表示未装配；三个累计量用于对账，
+            // 单独告警只会制造噪声）。
+            "nexus_finality_outbox_enabled",
+            "nexus_finality_outbox_enqueued",
+            "nexus_finality_outbox_flushed",
+            "nexus_finality_outbox_failed"
     );
 
     /**
@@ -96,6 +104,8 @@ class FinalityRulesContractTest {
             }
         }, null).bindTo(registry);
         new AbstainRiskMetrics(null, 120_000L).bindTo(registry);
+        // PLAN-073：outbox 指标（未装配时 Gauge 仍注册，采样后为 0/NaN）。
+        new FinalityOutboxMetrics(null, null).bindTo(registry);
         // PLAN-066：拒绝计数是 Counter，必须"计一次才注册一个序列"，否则
         // SimpleMeterRegistry 里一个序列都没有，下面的计数断言会虚高。
         FinalityRejectionMetrics rejections = new FinalityRejectionMetrics(registry);
@@ -108,10 +118,10 @@ class FinalityRulesContractTest {
             registeredNames.add(meter.getId().getName());
         }
 
-        // 防假绿：绑定结果必须正是那 14 个（FinalityMetrics 7 + AbstainRiskMetrics 5
-        // + PLAN-066 的两个拒绝计数指标）
+        // 防假绿：绑定结果必须正是那 22 个（FinalityMetrics 7 + AbstainRiskMetrics 5
+        // + PLAN-066 的两个拒绝计数指标 + PLAN-073 的 8 个 outbox 指标）
         assertEquals(EXPECTED_METER_COUNT, registeredNames.size(),
-                "三个 finality binder 应注册 14 个指标，实际：" + registeredNames);
+                "四个 finality binder 应注册 22 个指标，实际：" + registeredNames);
     }
 
     @Test

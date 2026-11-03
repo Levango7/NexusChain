@@ -29,7 +29,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 反向对照（去掉两个 @Component）**不会红**——因为它验的是"我手动 new 出来的对象
  * 能绑指标",而缺陷在"生产里根本没有这个 bean"。所以这里改成断两件真正的事：</p>
  * <ol>
- *   <li>两个类**带着 {@code @Component}**（生产注册路径的前提；缺了它上面两段全空转）；</li>
+ *   <li>每个 finality 指标类**带着 {@code @Component}**（生产注册路径的前提；
+ *       缺了它上面两段全空转）；</li>
  *   <li>绑定后的指标名覆盖三条告警各自消费的那一个（规则里
  *       {@code expr: nexus_finality_* == 1} 才可能为真）。</li>
  * </ol>
@@ -49,6 +50,10 @@ class FinalityMetricsRegistrationTest {
                 "FinalityRejectionMetrics 必须带 @Component（PLAN-066：缺它 ⇒ "
                         + "nexus_finality_vote_rejected_total / finalize_rejected_total 从未注册 "
                         + "⇒ FinalityVoteRejected / FinalityFinalizeRejected 永不会触发）");
+        assertTrue(FinalityOutboxMetrics.class.isAnnotationPresent(Component.class),
+                "FinalityOutboxMetrics 必须带 @Component（PLAN-073：缺它 ⇒ "
+                        + "nexus_finality_outbox_* 从未注册 ⇒ FinalityOutboxDropping / "
+                        + "FinalityOutboxBacklog / FinalityOutboxUnreadable 永不会触发）");
 
         // ② 绑定后指标名必须覆盖三条告警的消费目标。
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
@@ -60,6 +65,7 @@ class FinalityMetricsRegistrationTest {
         };
         new FinalityMetrics(head, null).bindTo(registry);
         new AbstainRiskMetrics(null, 120_000L).bindTo(registry);
+        new FinalityOutboxMetrics(null, null).bindTo(registry);
         // PLAN-066：Counter 序列按需注册，必须先计一次才有名字可断。
         FinalityRejectionMetrics rejections = new FinalityRejectionMetrics(registry);
         rejections.countFinalizeRejected(FinalityRejectionCounter.FinalizeReason.AGGREGATE_VERIFICATION_FAILED);
@@ -85,5 +91,14 @@ class FinalityMetricsRegistrationTest {
         // PLAN-052 的另外两个指标一并钉住，避免将来回退。
         assertTrue(names.contains("nexus_finality_defer_max_height"), "实际 = " + names);
         assertTrue(names.contains("nexus_finality_defer_total"), "实际 = " + names);
+        // PLAN-073：outbox 告警消费的指标必须存在。
+        assertTrue(names.contains("nexus_finality_outbox_pending"),
+                "FinalityOutboxMemoryBacklog 消费的指标必须存在，实际 = " + names);
+        assertTrue(names.contains("nexus_finality_outbox_database_pending"),
+                "FinalityOutboxBacklog 消费的指标必须存在，实际 = " + names);
+        assertTrue(names.contains("nexus_finality_outbox_database_readable"),
+                "FinalityOutboxUnreadable 消费的指标必须存在，实际 = " + names);
+        assertTrue(names.contains("nexus_finality_outbox_dropped"),
+                "FinalityOutboxDropping 消费的指标必须存在，实际 = " + names);
     }
 }

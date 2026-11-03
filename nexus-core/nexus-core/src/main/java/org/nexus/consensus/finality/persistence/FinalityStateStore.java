@@ -83,6 +83,24 @@ public interface FinalityStateStore {
     }
 
     /**
+     * 持久化 outbox 的**精确**行数（PLAN-073）。
+     *
+     * <p>为什么不能继续用 {@code loadPendingVotes(limit).size()}：那是
+     * {@code LIMIT limit} 的采样，积压超过 limit 时会把行数**低报**成 limit。
+     * 观测要的是「到底积压了多少」，不是「第一批取了多少」。</p>
+     *
+     * <p>默认实现回退到 {@link #loadPendingVotes(int)} 的**无上限**调用
+     * （不支持 outbox 的实现返回空表 ⇒ 0，与旧行为一致）；JDBC 实现必须覆盖为
+     * {@code SELECT count(*)}，避免把整表读进内存。</p>
+     *
+     * @return 行数；{@code -1} 表示本实现无法给出精确值（调用方应视为「读不到」）
+     */
+    default long countPendingVotes() {
+        List<FinalityOutboxEntry> rows = loadPendingVotes(Integer.MAX_VALUE);
+        return rows == null ? -1L : rows.size();
+    }
+
+    /**
      * 删除一条已成功补写的 outbox 记录（幂等）。
      */
     default void removePendingVote(FinalityOutboxEntry entry) {
