@@ -160,7 +160,7 @@ default long countPendingVotes() {
 | 组 | 变异 | 精确变红的断言 | 还原后 SHA-256 |
 |---|---|---|---|
 | A | `countPendingVotes()` 的 `SELECT count(*)` 改回 `loadPendingVotes(64).size()` | `JdbcFinalityStateStoreTest.java:184`：`expected: <100> but was: <64>` | `F336E53A…F6680EC0` |
-| B | `FinalityOutboxMetrics` 把「读不到」改回 `readable=true` + `databasePending=status.getDatabasePending()` | `FinalityOutboxMetricsTest.java:138`：`database_pending` 期望 NaN、实际 0.0 | `B9E6776C…73193412` |
+| B | `FinalityOutboxMetrics` 把「读不到」改回 `readable=true` + `databasePending=status.getDatabasePending()` | `FinalityOutboxMetricsTest.java:138`：`database_pending` 期望 NaN、实际 0.0 | `3B7EA897…86808690` |
 | C | 队列满丢票改回只加 `totalFailed` | `FinalityOutboxManagerTest.java:236`：`totalDropped` 期望 1、实际 0 | `D30B5B8C…5A6599AB` |
 
 每组都做了「变异 → 红 → 还原 → 同一用例绿 → SHA-256 与变异前逐字一致」的完整闭环
