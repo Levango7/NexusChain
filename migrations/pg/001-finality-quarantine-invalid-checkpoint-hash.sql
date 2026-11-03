@@ -2,6 +2,7 @@
 -- migrations/pg/001-finality-quarantine-invalid-checkpoint-hash.sql
 -- ============================================================================
 -- PLAN-069：最终性历史脏行清理（PLAN-067 遗留项）
+-- PLAN-071：扩展到 finality_checkpoints（本脚本负责**两张表**）
 --
 -- 背景
 -- ----
@@ -9,6 +10,16 @@
 -- 必须是 Block.HASH_SIZE = 32 字节（hex 表示 64 字符），并在 admission /
 -- convergence / restore 三路 fail-closed。但**库里的历史行从未被清理**：
 -- 非 32 字节哈希的行仍然躺在 finality_votes 里，每 5 秒被收敛路径重扫一次。
+--
+-- 两张表都要清，原因不同：
+--   * finality_votes：每 5 秒被收敛路径重扫（PLAN-069）；
+--   * finality_checkpoints：脏行会经 FinalityGadget.restoreFromStore 的
+--     「已终局分支」进入 epochCheckpointWeights（该分支**不做**长度校验，
+--     hasValidCheckpointKey 只挡"建索引"），随后被 sweepFinalization 遍历，
+--     造成「库里写着已终局、isFinalized() 返回 false」的长期视图不一致，
+--     且每次重启都把同一行重新载入、永不清除（PLAN-071 实测）。
+--   脏行**不能由外部攻击者制造**（submitVote/收敛路径均已 fail-closed），
+--   只能来自迁移前历史库或手工写库 ⇒ 历史污染，非可达攻击面。
 --
 -- 为什么是「隔离」而不是「DELETE」
 -- --------------------------------
@@ -68,6 +79,25 @@ CREATE TABLE IF NOT EXISTS finality_votes_quarantine (
 );
 
 -- ---------------------------------------------------------------------------
+-- §0b 检查点隔离表（PLAN-071）
+-- ---------------------------------------------------------------------------
+-- 为什么不复用上面的表：finality_checkpoints 的主键是 (epoch, checkpoint_hash)，
+-- **没有 validator 列**。硬塞进 votes 隔离表就得给 validator 编一个哨兵值
+-- （空串/占位符），那是数据建模上的谎——审计表一旦说谎，事后就无法可靠反查。
+-- 每张源表配一张同构隔离表，"搬回哪张表"由表身份决定，不靠判别列（判别列也会漂）。
+-- 审计列与 votes 隔离表完全一致，查"001 这次动了什么"用 UNION ALL 即可。
+CREATE TABLE IF NOT EXISTS finality_checkpoints_quarantine (
+    epoch           BIGINT       NOT NULL,
+    checkpoint_hash VARCHAR(128) NOT NULL,
+    -- 审计列（与 finality_votes_quarantine 同名同义）
+    reason          VARCHAR(64)  NOT NULL,
+    quarantined_at  BIGINT       NOT NULL,
+    quarantined_by  VARCHAR(64)  NOT NULL,
+    migration_id    VARCHAR(64)  NOT NULL,
+    PRIMARY KEY (epoch, checkpoint_hash)
+);
+
+-- ---------------------------------------------------------------------------
 -- §1 审计（只读）：先看清楚将被隔离的行
 -- ---------------------------------------------------------------------------
 -- 单独执行本段即可预览，不产生任何写入。
@@ -86,6 +116,19 @@ SELECT
     END                                          AS classification
 FROM finality_votes
 ORDER BY epoch, validator;
+
+-- §1b 审计（只读）：finality_checkpoints 的待隔离行（PLAN-071）
+SELECT
+    epoch,
+    checkpoint_hash,
+    length(checkpoint_hash)                      AS hex_len,
+    CASE
+        WHEN length(checkpoint_hash) <> 64 THEN 'checkpoint_hash_len_' || length(checkpoint_hash)
+        WHEN checkpoint_hash !~ '^[0-9a-fA-F]{64}$' THEN 'checkpoint_hash_not_hex'
+        ELSE 'valid'
+    END                                          AS classification
+FROM finality_checkpoints
+ORDER BY epoch;
 
 -- ---------------------------------------------------------------------------
 -- §2 搬运脏行到隔离表
@@ -114,6 +157,29 @@ WHERE NOT (length(v.checkpoint_hash) = 64
 ON CONFLICT (epoch, checkpoint_hash, validator) DO NOTHING;
 
 -- ---------------------------------------------------------------------------
+-- §2b 搬运 finality_checkpoints 的脏行（PLAN-071）
+-- ---------------------------------------------------------------------------
+-- 同一套判定口径。这张表的脏行会经 FinalityGadget.restoreFromStore 的
+-- 「已终局分支」进入 epochCheckpointWeights（该分支**不做**长度校验），
+-- 造成「库里写着已终局、isFinalized() 却返回 false」的长期视图不一致。
+INSERT INTO finality_checkpoints_quarantine
+    (epoch, checkpoint_hash, reason, quarantined_at, quarantined_by, migration_id)
+SELECT
+    c.epoch,
+    c.checkpoint_hash,
+    CASE
+        WHEN length(c.checkpoint_hash) <> 64 THEN 'checkpoint_hash_len_' || length(c.checkpoint_hash)
+        ELSE 'checkpoint_hash_not_hex'
+    END,
+    (EXTRACT(EPOCH FROM now()) * 1000)::BIGINT,
+    'migrations/pg/001',
+    'PLAN-071/001'
+FROM finality_checkpoints c
+WHERE NOT (length(c.checkpoint_hash) = 64
+           AND c.checkpoint_hash ~ '^[0-9a-fA-F]{64}$')
+ON CONFLICT (epoch, checkpoint_hash) DO NOTHING;
+
+-- ---------------------------------------------------------------------------
 -- §3 从 finality_votes 移除已隔离的行
 -- ---------------------------------------------------------------------------
 -- 只删「已确认存在于隔离表」的行（双保险：即使 §2 因故少搬，也不会丢数据）。
@@ -128,15 +194,31 @@ WHERE NOT (length(v.checkpoint_hash) = 64
   );
 
 -- ---------------------------------------------------------------------------
+-- §3b 从 finality_checkpoints 移除已隔离的行（PLAN-071）
+-- ---------------------------------------------------------------------------
+-- 同样带 EXISTS 双保险：宁可留脏行，也不静默丢数据。
+DELETE FROM finality_checkpoints c
+WHERE NOT (length(c.checkpoint_hash) = 64
+           AND c.checkpoint_hash ~ '^[0-9a-fA-F]{64}$')
+  AND EXISTS (
+        SELECT 1 FROM finality_checkpoints_quarantine q
+        WHERE q.epoch = c.epoch
+          AND q.checkpoint_hash = c.checkpoint_hash
+  );
+
+-- ---------------------------------------------------------------------------
 -- §4 验证（只读）：执行后自检
 -- ---------------------------------------------------------------------------
 -- 期望：remaining_invalid = 0
 SELECT
     (SELECT count(*) FROM finality_votes)             AS rows_in_votes,
     (SELECT count(*) FROM finality_votes_quarantine)  AS rows_in_quarantine,
+    (SELECT count(*) FROM finality_checkpoints)       AS rows_in_checkpoints,
+    (SELECT count(*) FROM finality_checkpoints_quarantine) AS rows_in_cp_quarantine,
     (SELECT count(*) FROM finality_votes
       WHERE NOT (length(checkpoint_hash) = 64
                  AND checkpoint_hash ~ '^[0-9a-fA-F]{64}$')) AS remaining_invalid,
     (SELECT count(*) FROM finality_checkpoints
       WHERE NOT (length(checkpoint_hash) = 64
                  AND checkpoint_hash ~ '^[0-9a-fA-F]{64}$')) AS invalid_in_checkpoints;
+-- 期望：remaining_invalid = 0 且 invalid_in_checkpoints = 0（PLAN-071 起后者也清零）

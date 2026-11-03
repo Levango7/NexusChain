@@ -7364,7 +7364,22 @@ PLAN-067 的交付文档把一件事明确留成欠账：「**不清洗历史短
 - **反向对照 5 组全部精确变红**（A `=64`→`<64`、B 去掉 hex 字符集检查、C 去掉 EXISTS 双保险、D 回滚加 `DROP TABLE`、E 先删后隔离），还原后两文件 SHA-256 与变异前逐字一致；
 - **反向对照抓到三个真实缺陷**（因此实现被改过，如实记录）：①最初把口径断言写在对**整份 SQL** 的 `contains()` 上，§1/§2/§4 的同样文本让断言恒真、只改坏 §3 仍绿——改为逐语句截取；②DELETE 的 `EXISTS` 检查同样是整份 SQL 级，前文即可命中——改为截到分号并额外要求三列主键；③测试读仓库外路径的 `migrations/pg/*.sql` **不在 test 任务输入里**，改坏 SQL 后 Gradle 判 `UP-TO-DATE` 直接跳过（"门禁写对了却从未执行"），已按 PLAN-062 的先例补 `inputs.dir("${rootDir}/migrations/pg")` 并实测改 SQL 后不再跳过；
 - **回归**：`nexus-core` 全量 `--rerun-tasks` **221 个测试类 / 1851 用例 / 0 失败 / 0 错误 / 19 跳过**；
-- **边界**：**未在生产/预发库执行**，全部演练在本机 WSL2 PG 独立库；不做自动清洗（§三.3 明确启动只做版本校验）；不处理 `finality_checkpoints`（只在 §4 报告其脏行数，语义待确认）；不做通用 retention；同内核单机非物理多机；未触碰真实 L1 / 桥资金 / wallet / settlement lane。
+- **边界**：**未在生产/预发库执行**，全部演练在本机 WSL2 PG 独立库；不做自动清洗（§三.3 明确启动只做版本校验）；不处理 `finality_checkpoints`（只在 §4 报告其脏行数，语义待确认——**已由 PLAN-071 补足**）；不做通用 retention；同内核单机非物理多机；未触碰真实 L1 / 桥资金 / wallet / settlement lane。
+
+### `finality_checkpoints` 脏行隔离——PLAN-069 留下的那一刀（PLAN-071）
+
+PLAN-069 交接留言 §八 明确留下「`finality_checkpoints` 脏行的语义确认与清理」，当时脚本 §4 只**报告** `invalid_in_checkpoints` 不搬运，理由是「来源与语义需另行确认」。本切片把确认做完了，结论是**确实该清**，并把清理并入同一支脚本 `001`。
+
+- **取证三步**：① `JdbcFinalityStateStore.markFinalized(epoch, byte[])` **无长度闸门**（H2 探针实测能写 3 字节与 0 字节行）；② 生产路径**确实能到达** —— `restoreFromStore()` 的「已终局分支」把键无条件写进 `epochCheckpointWeights`（`hasValidCheckpointKey` 只挡"建索引"，**没挡"进集合"**），随后 `sweepFinalization("startup-restore")` 会遍历它；③ 后果实测 —— 3 字节已终局行的 `gadget.isFinalized()` 返回 **false** 而库里仍写着该行，形成**长期 DB/内存视图不一致**，且每次重启都把同一行重新载入、永不清除；
+- **先纠自己的错**：第一次取证只检查了 `submitVote`/收敛/sweep 三条路径中「遍历的集合」，没意识到其中一类键**从未经过校验**，得出过"生产路径到不了"的错误结论。补做 gadget 级实测后才纠正。教训：不要把"多数路径安全"当成"所有路径安全"，要看**键是怎么进来的**；
+- **设计：checkpoints 单独一张隔离表**（`finality_checkpoints_quarantine`）—— 该表主键是 `(epoch, checkpoint_hash)`、**没有 `validator` 列**，硬塞进 votes 隔离表就得编哨兵值，而审计表一旦说谎就无法可靠反查。"搬回哪张表"由**表身份**决定，不靠判别列；
+- **修订 `001` 而不新开 `002`**（有依据）：`migrations/pg/` **不在**迁移棘轮门禁作用域内（已核验 `check-migration-version-ratchet.py` 只认 `<模块>/db/migration/V<n>__*.sql`，实测 115 支 / 5 个目录不含它）；且 `001` **从未在任何真实环境执行过**，修订不造成漂移。**约束已写进 `docs/db-schema-versioning.md`：一旦 `001` 在任一真实环境执行过，后继变更必须新开编号**；
+- **脚本结构**：新增 §1b 审计 / §2b 搬运 / §3b 移除（同样带 `EXISTS` 双保险：宁可留脏行也不静默丢数据），判定口径与 votes 完全一致；`migration_id` 区分来源（`PLAN-069/001` vs `PLAN-071/001`），回滚据此分别收窄；
+- **端到端演练**（WSL2 PG 独立库，4 类行：votes 1 合法+3 脏、cps 1 合法+2 脏）：迁移后 votes 4→1、cps 3→1，隔离 3/2 且分类正确（`checkpoint_hash_len_6` / `_len_63`）；**重复执行仍 1/3**（幂等）；回滚后两表都恢复（4 / 3）且两张隔离表都保留审计痕迹。5 条断言全 PASS；
+- **门禁 `FinalityDirtyRowMigrationContractTest` 6 → 8 例**：新增「checkpoints 也被隔离」（独立表 + 主键同构 + 逐语句同口径 + 先搬后删 + EXISTS + `ON CONFLICT` 幂等 + 独立 `migration_id`）与「回滚按来源分别搬回」（checkpoints 不得写进 votes——该表有 validator 列会错位）；
+- **反向对照 4 组全部精确命中**：A checkpoints 判定 `=64`→`<64`、B 去掉 EXISTS 双保险、C 回滚把 cps 搬回 votes、D `migration_id` 塌缩成 `PLAN-069/001` —— 依次命中 `checkpointsAreQuarantinedToo` ×3 与 `rollbackRestoresEachTableBySource` ×1，报错文案直指被改坏的语句。还原后两文件 SHA-256 与变异前逐字一致（`c835bb9a…` / `d02b5243…`）；
+- **边界**：**脏行不能由外部攻击者通过网络制造**（`submitVote`/收敛路径均 fail-closed），只能来自迁移前历史库或手工写库 ⇒ 历史污染 + 视图不一致，**非可达攻击面**，P2；**未在生产/预发库执行**；**不为 `markFinalized` 加运行时防御**（会改变存储层契约，且现有 5 处测试刻意用 3 字节哈希测「任意字节可存取」，是另一个需要单独决策的改动）；不处理 `finality_vote_outbox`；同内核单机非物理多机。
+
 
 ### 最终性拒绝指标的抓取开销上界与稀疏序列语义——并纠正「高基数」这个错误前提（PLAN-070）
 

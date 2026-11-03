@@ -28,6 +28,17 @@ FROM finality_votes_quarantine
 GROUP BY migration_id, reason
 ORDER BY migration_id, reason;
 
+-- §1b 审计（只读）：检查点隔离表（PLAN-071）
+SELECT
+    migration_id,
+    reason,
+    count(*)         AS rows_to_restore,
+    min(quarantined_at) AS first_at,
+    max(quarantined_at) AS last_at
+FROM finality_checkpoints_quarantine
+GROUP BY migration_id, reason
+ORDER BY migration_id, reason;
+
 -- ---------------------------------------------------------------------------
 -- §2 搬回
 -- ---------------------------------------------------------------------------
@@ -39,6 +50,14 @@ FROM finality_votes_quarantine q
 WHERE q.migration_id = 'PLAN-069/001'
 ON CONFLICT (epoch, checkpoint_hash, validator) DO NOTHING;
 
+-- §2b 把检查点隔离行搬回 finality_checkpoints（PLAN-071）
+-- 按 migration_id 分别收窄：PLAN-071/001 是本次新增的来源。
+INSERT INTO finality_checkpoints (epoch, checkpoint_hash)
+SELECT q.epoch, q.checkpoint_hash
+FROM finality_checkpoints_quarantine q
+WHERE q.migration_id = 'PLAN-071/001'
+ON CONFLICT (epoch, checkpoint_hash) DO NOTHING;
+
 -- ---------------------------------------------------------------------------
 -- §3 验证（只读）
 -- ---------------------------------------------------------------------------
@@ -47,6 +66,12 @@ SELECT
     (SELECT count(*) FROM finality_votes)                                   AS rows_in_votes,
     (SELECT count(*) FROM finality_votes_quarantine
       WHERE migration_id = 'PLAN-069/001')                                  AS still_quarantined,
+    (SELECT count(*) FROM finality_checkpoints)                             AS rows_in_checkpoints,
+    (SELECT count(*) FROM finality_checkpoints_quarantine
+      WHERE migration_id = 'PLAN-071/001')                                  AS cp_still_quarantined,
     (SELECT count(*) FROM finality_votes
       WHERE NOT (length(checkpoint_hash) = 64
-                 AND checkpoint_hash ~ '^[0-9a-fA-F]{64}$'))               AS invalid_back_in_votes;
+                 AND checkpoint_hash ~ '^[0-9a-fA-F]{64}$'))               AS invalid_back_in_votes,
+    (SELECT count(*) FROM finality_checkpoints
+      WHERE NOT (length(checkpoint_hash) = 64
+                 AND checkpoint_hash ~ '^[0-9a-fA-F]{64}$'))               AS invalid_back_in_checkpoints;

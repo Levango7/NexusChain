@@ -5,7 +5,8 @@
   提供真实 PG 实证手段，#413）、`docs/db-schema-versioning.md`（迁移政策）
 - **范围**：`migrations/pg/` 首支脚本（脏行隔离 + 可回滚 + 审计列）、
   「脚本口径 == 生产口径」的契约门禁、Gradle 测试输入登记、文档与 CHANGELOG
-- **不包含**：在生产/预发库执行、自动清洗、`finality_checkpoints` 清理、
+- **不包含**：在生产/预发库执行、自动清洗、`finality_checkpoints` 清理（**已由
+  PLAN-071 补足**）、
   通用数据保留策略（retention）、物理多机、真实集群
 
 ---
@@ -200,9 +201,13 @@ inputs.dir("${rootDir}/migrations/pg")
    不做自动升级"，本切片不破坏这条。脚本必须人造、人审、人执行；
 3. **同内核单机**：WSL2 里的 PG 与 Windows 侧的 Java 同属一台物理机，
    **不是物理多机**，不构成分布式/集群结论；
-4. **不处理 `finality_checkpoints`**：脚本 §4 只**报告**它的脏行数
-   （`invalid_in_checkpoints`），不搬运。需先确认该表脏行的来源与语义，
-   属后续切片；
+4. **~~不处理 `finality_checkpoints`~~ → 已由 PLAN-071 处理**：本切片当时只
+   **报告**该表脏行数（`invalid_in_checkpoints`）不搬运，理由是「来源与语义需确认」。
+   PLAN-071 确认结果：该表脏行经 `FinalityGadget.restoreFromStore` 的「已终局分支」
+   （该分支不做长度校验）进入 `epochCheckpointWeights`，造成「库里写着已终局、
+   `isFinalized()` 却返回 false」的长期视图不一致；现已由同一脚本 `001`
+   搬进 `finality_checkpoints_quarantine`。详见
+   `docs/plan/PLAN-071-checkpoint-quarantine.md`；
 5. **不做通用 retention**：只处理"格式非法"的行，不处理"合法但过旧"的行；
 6. **回滚不抹审计**：隔离表在回滚后仍然保留，这是有意的；
 7. 未触碰真实 L1 / 桥资金 / wallet / settlement lane，未修改他人分支/PR。
@@ -225,7 +230,9 @@ psql -h <host> -U <user> -d <db> -v ON_ERROR_STOP=1 \
 
 ## 六、后续
 
-- `finality_checkpoints` 脏行的语义确认与清理；
+- ~~`finality_checkpoints` 脏行的语义确认与清理~~ → **已交付 PLAN-071**（2026-11-03）：
+  语义已确认（restoreFromStore 已终局分支无条件入 weights ⇒ DB/内存视图不一致），
+  清理已并入同一支脚本 `001`（独立隔离表 `finality_checkpoints_quarantine`）；
 - 通用 retention（合法但过旧的票）——需产品定义保留窗口；
 - 把"迁移脚本已演练"接入 CI（当前是本地演练 + 契约门禁，未在 CI 里起 PG 跑脚本）；
 - roadmap #27 的其余项：epoch 窗口/规范检查点语义（阻塞于链接口）、
