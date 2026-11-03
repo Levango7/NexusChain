@@ -206,13 +206,19 @@ rb   d02b5243848d7e43db222ecd8447a8bec5f1d9a5c712a9fefa8b1ed0be2eb54a
    存储层契约，且现有 5 处测试刻意用 3 字节哈希测「任意字节可存取」——
    是另一个需要单独决策的改动。本切片只清数据、不改行为；
 3. **不做自动清洗**：脚本必须人造、人审、人执行；
-4. **不处理 `finality_vote_outbox`**：需先确认其脏行是否会传播到最终性视图；
+4. ~~**不处理 `finality_vote_outbox`**~~ → **已由 PLAN-072 确认无需处理**（2026-11-03）：
+   outbox 写入侧同样不校验长度（脏票可入队），但重放走 `submitVote` →
+   `validateVoteBinding` 被**正常拒绝**（不抛异常），而 `tryFlush` 只在抛异常时才
+   留着重试 ⇒ 脏票被移除、不沉淀、不变毒丸。详见
+   `docs/plan/PLAN-072-outbox-dirty-vote-containment.md`；
 5. **同内核单机**：非物理多机，不构成分布式/集群结论；
 6. 未触碰真实 L1 / 桥资金 / wallet / settlement lane，未修改他人分支/PR。
 
 ## 七、后续
 
-- `finality_vote_outbox` 的脏行传播性确认（若确认不传播，可正式登记为非目标）；
+- ~~`finality_vote_outbox` 的脏行传播性确认~~ → **已交付 PLAN-072**（2026-11-03）：
+  结论是**不传播、无需清理**（重放时 `submitVote` 正常拒绝并移除，不沉淀、非毒丸），
+  已固化为 `FinalityOutboxDirtyVoteContainmentTest`；
 - `markFinalized` 是否加防御性校验——需与存储层「任意字节可存取」的测试契约
   一并决策；
 - 把「迁移脚本已演练」接入 CI（当前是本地演练 + 契约门禁）；

@@ -7378,7 +7378,20 @@ PLAN-069 交接留言 §八 明确留下「`finality_checkpoints` 脏行的语�
 - **端到端演练**（WSL2 PG 独立库，4 类行：votes 1 合法+3 脏、cps 1 合法+2 脏）：迁移后 votes 4→1、cps 3→1，隔离 3/2 且分类正确（`checkpoint_hash_len_6` / `_len_63`）；**重复执行仍 1/3**（幂等）；回滚后两表都恢复（4 / 3）且两张隔离表都保留审计痕迹。5 条断言全 PASS；
 - **门禁 `FinalityDirtyRowMigrationContractTest` 6 → 8 例**：新增「checkpoints 也被隔离」（独立表 + 主键同构 + 逐语句同口径 + 先搬后删 + EXISTS + `ON CONFLICT` 幂等 + 独立 `migration_id`）与「回滚按来源分别搬回」（checkpoints 不得写进 votes——该表有 validator 列会错位）；
 - **反向对照 4 组全部精确命中**：A checkpoints 判定 `=64`→`<64`、B 去掉 EXISTS 双保险、C 回滚把 cps 搬回 votes、D `migration_id` 塌缩成 `PLAN-069/001` —— 依次命中 `checkpointsAreQuarantinedToo` ×3 与 `rollbackRestoresEachTableBySource` ×1，报错文案直指被改坏的语句。还原后两文件 SHA-256 与变异前逐字一致（`c835bb9a…` / `d02b5243…`）；
-- **边界**：**脏行不能由外部攻击者通过网络制造**（`submitVote`/收敛路径均 fail-closed），只能来自迁移前历史库或手工写库 ⇒ 历史污染 + 视图不一致，**非可达攻击面**，P2；**未在生产/预发库执行**；**不为 `markFinalized` 加运行时防御**（会改变存储层契约，且现有 5 处测试刻意用 3 字节哈希测「任意字节可存取」，是另一个需要单独决策的改动）；不处理 `finality_vote_outbox`；同内核单机非物理多机。
+- **边界**：**脏行不能由外部攻击者通过网络制造**（`submitVote`/收敛路径均 fail-closed），只能来自迁移前历史库或手工写库 ⇒ 历史污染 + 视图不一致，**非可达攻击面**，P2；**未在生产/预发库执行**；**不为 `markFinalized` 加运行时防御**（会改变存储层契约，且现有 5 处测试刻意用 3 字节哈希测「任意字节可存取」，是另一个需要单独决策的改动）；不处理 `finality_vote_outbox`（**已由 PLAN-072 确认无需处理**）；同内核单机非物理多机。
+
+### `finality_vote_outbox` 脏行传播性确认——结论是「无需清理」（PLAN-072）
+
+PLAN-071 交付留言 §后续 留下最后一条：「`finality_vote_outbox` 的脏行传播性确认（若确认不传播，可正式登记为非目标）」。本切片把它确认掉，**结论是不传播、无需清理**——所以交付的是**证据与门禁**，不是清理脚本。
+
+- **取证方法**：H2 + 真实 `JdbcFinalityStateStore` + 真实 `FinalityGadget` + 真实 `FinalityOutboxManager`，用一条**签名完全有效、仅哈希长度非法（3 字节）**的票——这样才能证明是「长度闸」在起作用，而不是「签名坏了」这种无关原因；
+- **脏票能进 outbox**：`enqueue()` 只挡 `vote == null`，**不校验 checkpoint 哈希长度** ⇒ 实测入队后内存 `pendingCount=1`、`finality_vote_outbox` 表 1 行；
+- **但重放时被正常拒绝并移除**：`flush() → tryFlush() → submitVote()`，而 `submitVote` 内部先走 `validateVoteBinding`（含 PLAN-067 的 32 字节校验），脏票返回**正常结果**（`finalized=false`，**不抛异常**）；`tryFlush` 只在 **catch 到异常**时才把票留在队列重试 ⇒ 实测连续 3 轮 flush 后内存队列与 outbox 表**都归零**，`finality_votes` / `finality_checkpoints` 均 0 行，`isFinalized()` 为 false，内存 voter 集合为空；
+- **三张表的行为对比**（本切片核心结论）：`finality_votes` 与 `finality_checkpoints` 的写入侧都不校验、脏行会**沉淀**（故 PLAN-069/071 需隔离）；`finality_vote_outbox` 是「写库意图」的暂存，**它的出口 `submitVote` 本身就是 fail-closed 的** ⇒ 脏票在这里只是「一次失败的尝试」，不是「沉淀的事实」；
+- **门禁 `FinalityOutboxDirtyVoteContainmentTest`（2 例）**：① 脏票可入队（**前提断言**，防止将来给 enqueue 加校验后用例假绿）+ flush 后队列与表都归零 + 三张表都不被污染 + `isFinalized()` false + voter 集合空；② 连续 3 轮 flush 仍为空（不能「越跑越多」或残留）；
+- **反向对照 2 组全部精确命中**：A 让 `submitVote` 对非法绑定**抛异常**（模拟硬失败）⇒ 两例都红（`第 1 轮后内存队列必须为空 ==> expected: <0> but was: <1>`，即毒丸行为）；B 给 `enqueue()` 加长度校验 ⇒ 前提断言红（`expected: <1> but was: <0>`）。还原后两文件 SHA-256 与变异前逐字一致（`babf1de2…` / `7a22f0f2…`），重跑 2/2 绿；
+- **一个必须说清的隐含依赖**：本结论前提是「`submitVote` 对非法哈希**正常拒绝**而非抛异常」。若将来改成抛异常，脏票会变成**毒丸**（每 5 秒重试一条永远失败的票、永远留在 outbox）——门禁会红，但修复需要新代码（例如按 `attempts` 上限丢弃并计数）。这条依赖已写进 PLAN-072；
+- **边界**：这是「不需要做」的结论、**不是「已修复」**；取证在 H2 上完成（与 PG 同一 `JdbcFinalityStateStore` 驱动，存储语义一致）；同内核单机非物理多机；不涉及生产库数据操作；未触碰真实 L1 / 桥资金 / wallet / settlement lane。
 
 
 ### 最终性拒绝指标的抓取开销上界与稀疏序列语义——并纠正「高基数」这个错误前提（PLAN-070）
