@@ -217,8 +217,10 @@ public class DefaultOnChainExecutionChannel implements OnChainExecutionChannel {
         String toPubkeyHash = WalletUtils.addressToPubkeyHash(request.getToAddress());
         if (toPubkeyHash == null || toPubkeyHash.isEmpty()) {
             log.error("executeProduction: addressToPubkeyHash failed for toAddress={}", request.getToAddress());
+            // 地址解析失败发生在请求签名之前，资金确定未转出 ⇒ 声明「确定未动账」，
+            // 允许上游（结算 S3）回滚已记账贷账，避免留下永久 LOCAL_ONLY 差错。
             return TransactionResult.failure(
-                    "cannot resolve pubkeyHash for toAddress: " + request.getToAddress(), false);
+                    "cannot resolve pubkeyHash for toAddress: " + request.getToAddress(), false, true);
         }
 
         // 2. 调用签名服务完成签名 + 广播，返回 txHash；大额签名（2001）落审批链接后
@@ -246,7 +248,11 @@ public class DefaultOnChainExecutionChannel implements OnChainExecutionChannel {
             String error = outcome.error() == null ? "signTransfer failed" : outcome.error();
             log.error("executeProduction: signTransfer failed, requestId={}, error={}",
                     request.getRequestId(), error);
-            return TransactionResult.failure(error, false);
+            // Status.FAILED 只由「契约确立的未动账码」（SigningResponses.declaresNotExecuted：
+            // 5000/4000/4030）、审批拒绝/过期、链接不存在、PENDING 查询累计超时产生，
+            // 语义均为资金确定未转出 ⇒ 可安全声明「确定未动账」，让结算 S3 回滚贷账。
+            // 5001 / 未定义码 / 无响应体 / 抛异常已在上方走 EXECUTION_UNKNOWN，不得到达此处。
+            return TransactionResult.failure(error, false, true);
         }
         if (!outcome.isExecuted()) {
             log.info("executeProduction: 大额签名待审批, requestId={}, approvalId={}",
