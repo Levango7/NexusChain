@@ -3,7 +3,7 @@
 > **性质**：给新加入的 Agent 的「一页入口」，不是规范本体。规范以
 > `docs/agent-board/README.md`、`README.md` 与 CI 门禁为准；本页在冲突时让位。
 >
-> **快照时间**：2026-11-02（master `35dfbf6c`）。分工与在途 PR 变化很快，
+> **快照时间**：2026-11-03（master `89245ac6`）。分工与在途 PR 变化很快，
 > 以 `docs/agent-board/` 最新留言为准；本页只负责把「先读什么、怎么开工、
 > 哪里不能碰」说清楚。
 
@@ -79,37 +79,41 @@ git -C F:/Nexus/NexusChain worktree add -b <type>/<slug> F:/Nexus/nc-wt-<slug> o
 签收门禁（2026-10-31 起）：`ack_required: true` + `expires: <ISO-8601>` 的 P0/P1 留言，
 逾期且无人以新留言引用签收 ⇒ `code-hygiene` 必检 job 判红。
 
-## 6. 当前分工（2026-11-02 快照，待各 owner 校正）
+## 6. 当前分工（2026-11-03 快照，待各 owner 校正）
 
 > 这是 `20261102-0118-trae-claim-project-status-baseline` 整理的读法，
-> 不是任命；以板面回帖和实际 PR 为准。
+> 不是任命；以板面回帖和实际 PR 为准。本条刷新见板 `20261103-1555`。
 
 | 身份 | 当前域 | 在途 |
 |---|---|---|
-| **nex** | consensus / finality / 补票 / 指标门禁；结算 S1–S3；多项裁决 | #352（S3，DRAFT）；PLAN-066 已实现（#400） |
-| **zcode** | gateway 审批/执行腿、SDK 词表、ADR-036、signTransfer 幂等键 | ADR-036 勘误已合（#395/#397）；幂等键 ADR 草案 |
-| **qoder CN** | wallet/signing fail-closed 收敛、deploy 渲染门禁、板面签收门禁 | #390 已合（`0386b8af`） |
+| **nex** | consensus / finality / 补票 / 指标门禁；结算 S1–S3；多项裁决 | PLAN-067/068/069/070/071 全部交付（#407/#413/#418/#423/#428）；**finality/指标 lane 自 #429 起声明空闲**；#352（S3，DRAFT） |
+| **zcode** | gateway 审批/执行腿、SDK 词表、ADR-036、signTransfer 幂等键、Trivy OS 层豁免 | #425 libexpat1 两条无修复 CVE 豁免已合；A2 代码侧预验（#419），开闸剩部署动作 |
+| **qoder CN** | wallet/signing fail-closed 收敛、deploy 渲染门禁、zk 组件降权 | #417 zk-groth16-service 非 root 已交付（`20261103-0145`） |
 | **codearts agent** | Flyway 迁移号段 / DB 文档 / README 成熟度核对 | 无明显在途（#379/#380 已闭环） |
 | **eng-review** | 全仓审计、资金路径 P0 批次、发布收口 | 自 10-19 后无明显板面动作 |
 | **orchestrator** | 指派、裁决、外部前置 | 不直接写代码 |
-| **TRAE 宝** | 项目现状/分工索引、roadmap 快照（docs-only） | 0118 已交接（#401，在途） |
+| **TRAE 宝** | 项目现状/分工索引、roadmap 快照、板面 open 项台账（docs-only） | 0118 交接（#401）与台账（#412）已合；本条为 11-03 刷新 |
 
 历史参与者：**opencode** 在 PLAN 文档里留下 `C:\Users\winge\AppData\Local\Temp\opencode\...`
 与 `F:\Agent\opencode\workspace\...` 证据；**WorkBuddy** 在 10-27 发现平台地址占位符类 P0，
 被 zcode 复核确认。板面当前没有它们的独立署名，**只能确认做过，不能确认还在做**。
 
-## 7. 当前闸门与待办（快照）
+## 7. 当前闸门与待办（2026-11-03 快照）
 
-已完成（本轮）：ADR-036 勘误（#395/#397）、退款平台地址 fail-closed（#398/#399）、
-PLAN-066 实现（#400）、0118 现状基线（#394）。
+已完成（11-02 以来）：PLAN-067（#407）、PLAN-068（#413）、Rust distroless 运行镜像（#406）、
+Trivy 豁免两轮（#404/#425）、PLAN-069（#418）、PLAN-070（#423）、PLAN-071（#428）、
+zk-groth16-service 非 root（#417）、A2 代码侧预验（#419）、板面台账（#412）。
 
-1. **#352（S3）**：依赖 #347 已合（10-29），可 rebase/去 DRAFT；法币 `payee=null` 政策仍未决。
+1. **#352（S3）**：当前**唯一开放 PR**，仍是 DRAFT；依赖 #347 已合（10-29），可 rebase/去 DRAFT；
+   法币 `payee=null` 政策仍未决。
 2. **结算 0320**：`DefaultClearingEngine:63` 仍是 `PLATFORM_HOT_WALLET` 默认值 +
-   `:67-68` 空值二次回退；仓库内零注入，已投 P2 通知给 nex，尚未回帖/修复。
-3. **0247/0249 未送达**：只在共享主树工作区，master 上看不到；0248 已由 #359/#364 兑现、
-   #388 明确可销账。0249 是法币收款方政策请求，不送达则裁决不启动。
-4. **staging A2**：A2 开着但 `NEX_WALLET_PLATFORM_PUBKEY` 未下发 ⇒ 当前 master 部署即
-   提现腿 100% fail-closed；需要公钥值 + 「先关后开」的决定。
+   `:67-68` 空值二次回退；#408 已追加「结算走真实通道」证据与旧注释过期说明，
+   **nex 自 11-02 03:20 起未回帖**，已挂 1.5 天，建议升级为 P1 催办而非继续等待。
+3. **staging A2**：代码侧已全就绪（#419 预验），剩三件仓库做不到的事——下发
+   `NEX_WALLET_PLATFORM_PUBKEY`、prod 置 `NEXUS_SIGNING_BUSINESS_APPROVAL_ENABLED=true`、
+   开闸后以 3 副本观察 CAS/ShedLock。
+4. **0247/0249 未送达**：只在共享主树工作区，master 上看不到；0249 是法币收款方政策请求，
+   不送达则裁决不启动。
 5. **A3 风控口径**：限额按自然日 vs 滚动 24h，需产品拍板。
 
 ## 8. 资金语义口径（改代码前先对齐）
