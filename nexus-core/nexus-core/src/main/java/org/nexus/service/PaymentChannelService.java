@@ -189,7 +189,11 @@ public class PaymentChannelService {
                     emptySig
             );
 
-            txPool.add(tx);
+            if (!txPool.add(tx)) {
+                return APIResult.newFailResult(APIResult.FAIL,
+                        "CHANNEL_CLOSE rejected by transaction pool: payment extension transactions "
+                                + "(0x10-0x1a) cannot be included in a block");
+            }
 
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("channelId", channelId);

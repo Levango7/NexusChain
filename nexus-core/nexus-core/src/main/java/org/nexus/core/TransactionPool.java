@@ -51,22 +51,70 @@ public class TransactionPool {
         this.lock = new ReentrantReadWriteLock();
     }
 
-    public void add(Transaction... txs) {
+    /**
+     * 交易入池守卫并提交。
+     *
+     * <p>拒绝永远不可能通过区块校验的交易，避免调用方在交易不可能上链时仍以成功语义返回：</p>
+     * <ul>
+     *   <li>全零 {@code from} 或空/全零签名（{@code SignatureRule} 必然验签失败）；</li>
+     *   <li>0x10–0x1a 支付扩展类型（{@code TransactionCheck} 的 {@code type <= 15} 门禁必然拒绝）。</li>
+     * </ul>
+     * <p>COINBASE 为共识层生成的系统交易，无 from/签名，白名单放行。</p>
+     *
+     * @return 全部交易均被接受（或已存在于池中）时返回 true；任一交易被守卫拒绝时返回 false
+     */
+    public boolean add(Transaction... txs) {
         lock.writeLock().lock();
         try {
             if (txs == null) {
-                return;
+                return false;
             }
+            boolean allAccepted = true;
             for (Transaction tx : txs) {
+                if (!isAdmissible(tx)) {
+                    allAccepted = false;
+                    continue;
+                }
                 if(indices.contains(tx.getHashHexString())){
                     continue;
                 }
                 pq.add(tx);
                 indices.add(tx.getHashHexString());
             }
+            return allAccepted;
         } finally {
             lock.writeLock().unlock();
         }
+    }
+
+    /**
+     * 入池前静态守卫：只做与链上校验等价的快速判定，不验签。
+     */
+    private static boolean isAdmissible(Transaction tx) {
+        if (tx == null) {
+            return false;
+        }
+        // coinbase 由共识层生成，天然没有 from / 签名
+        if (tx.type == Transaction.Type.COINBASE.ordinal()) {
+            return true;
+        }
+        // 支付扩展类型当前无法通过 TransactionCheck 的类型门禁，入池只会成为死账
+        if (tx.isPaymentExtensionType()) {
+            return false;
+        }
+        return !isAllZero(tx.from) && !isAllZero(tx.signature);
+    }
+
+    private static boolean isAllZero(byte[] bytes) {
+        if (bytes == null || bytes.length == 0) {
+            return true;
+        }
+        for (byte b : bytes) {
+            if (b != 0) {
+                return false;
+            }
+        }
+        return true;
     }
 
     public boolean has(String txHash){

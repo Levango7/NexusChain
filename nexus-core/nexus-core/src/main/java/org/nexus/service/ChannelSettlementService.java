@@ -191,7 +191,11 @@ public class ChannelSettlementService {
                     placeholderTo,
                     new byte[Transaction.SIGNATURE_SIZE]
             );
-            txPool.add(closeTx);
+            if (!txPool.add(closeTx)) {
+                return APIResult.newFailResult(APIResult.FAIL,
+                        "CHANNEL_CLOSE rejected by transaction pool: payment extension transactions "
+                                + "(0x10-0x1a) cannot be included in a block");
+            }
 
             // 请求关闭并完成结算
             channel.requestClose(blockHeight);

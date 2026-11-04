@@ -36,7 +36,7 @@ class BridgeBurnPayloadFormatTest {
         bridgeService = new BridgeService();
         txPool = mock(TransactionPool.class);
         poolTxs = new ArrayList<>();
-        doAnswer(inv -> { poolTxs.add(inv.getArgument(0)); return null; })
+        doAnswer(inv -> { poolTxs.add(inv.getArgument(0)); return true; })
                 .when(txPool).add(any(Transaction.class));
         setField(bridgeService, "txPool", txPool);
         setField(bridgeService, "minValidators", 3);
