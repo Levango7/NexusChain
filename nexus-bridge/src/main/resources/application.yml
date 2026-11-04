@@ -138,6 +138,8 @@ feign:
 
 # Bridge configuration
 nexus:
+  actuator:
+    prometheus-token: ${NEXUS_METRICS_TOKEN:}
   bridge:
     signature-threshold: 2
     timelock-period-seconds: 3600

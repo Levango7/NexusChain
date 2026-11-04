@@ -121,6 +121,8 @@ wallet:
 # token 用下方 secret 签发（HS256），需与 gateway 共享同一密钥。
 # 生产环境通过 JWT_SECRET 环境变量注入，禁止硬编码到本文件。
 nexus:
+  actuator:
+    prometheus-token: ${NEXUS_METRICS_TOKEN:}
   security:
     jwt:
       # HS256 共享密钥（≥32 字节）。生产环境必须通过 JWT_SECRET 环境变量注入。

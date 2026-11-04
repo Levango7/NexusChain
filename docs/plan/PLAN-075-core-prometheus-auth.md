@@ -1,102 +1,82 @@
-# PLAN-075：nexus-core `/actuator/prometheus` 熊封令鉴权门禁
+# PLAN-075：Spring/Boot `/actuator/prometheus` 鉴权门禁
 
-- **状态**：已交付（2026-11-04）
-- **前置**：PLAN-002 后续（actuator + micrometer + ServiceMonitor）、
-  PLAN-068（确认 actuator 由独立 `WebMvcEndpointHandlerMapping` 提供，MVC
-  `HandlerInterceptor` 无法保护该路径）
-- **范围**：nexus-core 的 `/actuator/prometheus` 要求 Bearer token；
+- **状态**：已交付（2026-11-05）
+- **范围**：全仓实际暴露 `/actuator/prometheus` 的 Spring/Boot 服务在请求解析前要求 Bearer token；
   `/actuator/health` 维持公开（给探针使用）
-- **未包含**：其余服务（nexus-gateway / nexus-bridge / nexus-api-gateway /
-  nexus-signing-service / nexus-wallet-service / nexus-consortium）的同口径门禁、
-  其他 actuator 端点、证书轮换与集群侧 secret 分发、真实 Prometheus/Alertmanager 认证配置 —
-  这些有归属之争或跨 lane/prod deploy 风险，需 orchestrator 指定落地方案。
-  本次只保证 core **本机/集群 env 未配置即 fail-closed**，不做“docs say secured but default open”的微妙回退。
+- **新增模块**：nexus-gateway / nexus-bridge / nexus-api-gateway /
+  nexus-signing-service / nexus-wallet-service /
+  之前生成的 nexus-core
+- **不包含**：nexus-consortium（仅 actuator 依赖，无 micrometer-registry-prometheus）；
+  生产 Secret 建立/轮换/Prometheus/Alertmanager 的外部落地；其他 actuator 端点、
+  `/actuator/health`
+- **依据**：20261104-1530 认领 core 最小切片；用户明确“可以继续做剩余的”；
+  20261104-1640 扩展认证为全仓 metrics 门禁，见板面。
 
 ---
 
 ## 一、问题
 
-PLAN-068 实测证明：
+PLAN-068 运行时实证：
 
 - `/cheackTxlist`、`/nodeInfo` 不带 token 被 MVC interceptor 拒为 401；
 - `/actuator/prometheus` 不带 token 返回 200，`/actuator/health` 也 200；
-- Boot 4 actuator 不走 MVC interceptor，因此原来的配置并没有保护它。
+- Boot 4 actuator 不走 MVC interceptor；所有同类服务同样暴露公开 metrics。
 
-metrics 暴露的不只是 `nexuschain_block_height`，还有应用、数据库、出块、
-最终性等运行时信息（gateway/core/signing/wallet/bridge 的 ServiceMonitor
-路径均为 `/actuator/prometheus`）。任何能访问 core 的网络位置都能读到
-时间序列和标签，无需凭据。
+ metrics 包含应用、数据库、链高度、最终性/结算/签名等运行时信息。任何可访问服务的网络位置都能读取时间序列和标签，无需凭据。
 
 ## 二、设计
 
 ### 2.1 只保护 Prometheus endpoint
 
-- `application.properties` 仅暴露 `health` + `prometheus`（不动，最小攻击面）；
 - `/actuator/prometheus` 由 `ActuatorPrometheusAuthFilter`（servlet Filter +
   `@Component`）在请求解析前校验；
-- `/actuator/health` 不加鉴权，给容器/Helm/compose 的 liveness/readiness 探针用；
-- 不加 Spring Security，不引入新第三方依赖，直接沿用 servlet Filter。
+- `/actuator/health` 不加鉴权；
+- 不加 Spring Security，不引入第三方依赖；
+- 其他 actuator endpoint 曝露面保持不动。
 
 ### 2.2 Bearer token + fail-closed
 
-- 属性名 `nexus.actuator.prometheus-token=${NEXUS_METRICS_TOKEN:}`；
+- 属性名：`nexus.actuator.prometheus-token=${NEXUS_METRICS_TOKEN:}`；
 - token 常量时间比较；大小写不敏感 `Bearer ` 必需；token 不写日志；
 - **未配置 = 503 + JSON**（fail-closed），不是默认放行；
-- 无 `Authorization` / token 错误 = 401 + `WWW-Authenticate` header + JSON；
-- 不输出是否接近、是否配置好等额外细节。
+- 无 `Authorization` / token 错误 = 401 + `WWW-Authenticate` + JSON；
+- 不泄露是否配置已到限。
 
-### 2.3 部署侧
+### 2.3 部署/Compose
 
-Helm chart 改用 `existingSecret` 新键 `NEXUS_METRICS_TOKEN` 注入 core env：
+- **所有六项 chart 均经 `envFrom` 引入 `nexus-secrets`**；
+  operator 在 `nexus-secrets` 增加 `NEXUS_METRICS_TOKEN`，五个 Spring/ Boot 模块的 env  automatically 注入。
+- core 的 env 已显式声明（`secretKeyRef`），同一个 `nexus-secrets` 提供 token；
+  gateway/bridge/api-gateway/signing-service/wallet-service 通过 shared `nexus-secrets` envFrom 同样拿到该 token。
+- `prometheus.yml` 全部 targets 加 `bearer_token_file:/run/secrets/nexus-metrics-token`；
+- `docker-compose.prod.yml` services 全部 `NEXUS_METRICS_TOKEN=${NEXUS_METRICS_TOKEN:?...}`；
+  top-level `secrets.nexus-metrics-token: environment: NEXUS_METRICS_TOKEN`；
+  Promtheus 使用 `secrets: - nexus-metrics-token` 将 token 挂载到 `/run/secrets/nexus-metrics-token`；
+- Secret 没有提交本仓（与 DB/JWT secret 同待遇，operator 部署前创建 `NEXUS_METRICS_TOKEN`）；
 
-- `nexus-secrets` 新增 `NEXUS_METRICS_TOKEN`（必须由 operator 生成并由 secret 分发）；
-- Secret 没有提交本仓（与 NEXUS_JWT_APP_SECRET / DB_PASSWORD 同等待遇，operator 注入）。
+### 2.4 外部依赖（不自助拍死）
 
-Prometheus 侧 token 分发由编排负责，因为它是 “core 既有 Secret → 监控 Prometheus”的角色
-边界；本仓不擅自改编排配置。推荐：
-
-```yaml
-# prometheus operator (kube-prometheus-stack) 约束示例：把 token 放进单独的 monitoring Secret，不共享 app secret 本身
-spec:
-  secrets:
-    - nexus-core-metrics-token
----
-# ServiceMonitor endpoint (same namespace as prometheus)
-endpoints:
-  - port: rpc
-    path: /actuator/prometheus
-    authorization:
-      type: Bearer
-      credentialsFile: /etc/prometheus/secrets/nexus-core-metrics-token/NEXUS_METRICS_TOKEN
-```
-
-此文件内容与 app 端注入的 `NEXUS_METRICS_TOKEN` **必须同值**。文件 token 必须经
-Secret 挂载，不能在 repo/镜像中内置。
-
-### 2.4 未包含（故意为之）
-
-- 其他 6 个 Spring 服务的 `/actuator/prometheus` 仍不鉴权：它们属于
-  gateway/bridge/api-gateway/signing/wallet/consortium lane，不由本 lane 独擅；
-- 不自动旋转/生成 token：需要 secret 供给方；
-- 不变动 `management.endpoints.web.exposure.include`、不影响 `/actuator/health`、
-  不动 MVC interceptor；
-- 不声称“整个生产栈已加固”。
+- `nexus-consortium` 没有 `micrometer-registry-prometheus`，`/actuator/prometheus` 不存在；
+- 不自动生成/ rotate token；不改变 `nexus-secrets` 结构；
+- 不 push 生产 secret/Prometheus Operator 配置，由 platform/orchestrator 部署，避免跨 lane / prod deploy 擅越；
+- Production Rollout（`nexus-secrets` 写入 token + Prometheus/ServiceMonitor 读取 token + 灰度 + 监控 ownership）**未完成**，不在本仓闭环内；
+  部署前应确认全部 `nexus-*` 服务同时设置 `NEXUS_METRICS_TOKEN`，否则会 fail-closed scrape。
+- 不自主改变 Aligned `git-commit`、不自主 open PR/merge。
 
 ## 三、验证
 
-- `ActuatorPrometheusAuthFilterTest` 4 例覆盖：
-  未配置 token ⇒ 503；无/错 token ⇒ 401；正确 token ⇒ 正常放行；
-  `/actuator/health` 不鉴权；
-- 反向对照应红：
-  `?q=`。（见 delivery PR 文档与 CI）
+- core `ActuatorPrometheusAuthFilterTest` 4 例：未配置 ⇒ 503；无/错 token ⇒ 401；正确 token ⇒ 放行；health 不鉴权；
+- 反向对照（`isTokenConfigured` 放宽）⇒ 503 断言红；还原后绿；
+- compose template render 使用 placeholder 通过（`?prod` 必需项全部注入测试 placeholder）；
+- 所有新模块生成源码路径与启动主类已静态核对；
+- 全量生产 Release process 未执行。
 
 ## 四、边界
 
-1. **localonly 与 metrics token 不是同一凭据**：业务 RPC 仍走 JWT
-  (`token`)；metrics 是 Bearer；
-2. **fail-closed 的运营代价**：未重建 secret 的 operator 会看到 app 起不来 /
-  metrics 503，必须先创建 `NEXUS_METRICS_TOKEN` 再升 core；
-3. **没有 push-based automatic rotation**：轮换需要双方重建 env 与 prometheus
-  secret file；
-4. 只证明“core 这一端不再免鉴权敞开”，**不**证明“全栈已无未授权 metrics”；
-5. 未触碰真实 L1 / 桥资金 / wallet / settlement lane，未修改他人分支/PR。
+1. **localonly 与 metrics token 不是同一凭据**：业务 RPC 仍走 JWT；
+2. **fail-closed 的运营代价**：未加 `nexus-secrets` token 的部署会看到 `/actuator/prometheus` 503；
+  需先 operator 做 secret then scrape；
+3. **Health path 仍是 public**：所有容器/Compose readiness/liveness 探针不受影响；
+4. **无生产 Rollout harness**：不自动 rotate、不改 Prometheus operator config、不做真实 prod 抓取/验收；
+5. 指标标签可能含难分析的治理值；本次只阻断未授权抓取，不清理 metrics cardinality；
+6. 未触碰真实 L1 / 桥资金 / wallet / settlement 契约，未修改他人分支/PR。

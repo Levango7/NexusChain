@@ -178,6 +178,8 @@ shedlock:
 
 # NexusChain Gateway configuration
 nexus:
+  actuator:
+    prometheus-token: ${NEXUS_METRICS_TOKEN:}
   # Token symbol used across the platform
   token-symbol: NEX
 
