@@ -2,6 +2,7 @@ package org.nexus.gateway.orchestration.connectors;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.annotation.PostConstruct;
 import org.nexus.gateway.orchestration.connector.*;
 import org.nexus.gateway.orchestration.settlement.FinalityPolicy;
 import org.nexus.gateway.orchestration.settlement.PspFinalityPolicy;
@@ -28,7 +29,14 @@ import java.util.concurrent.ConcurrentHashMap;
  * 此时缺 app-id / merchant-private-key 一律 fail-closed；仅显式设置 sandbox=true
  * （sandbox profile）才走 dry-run 模拟。生产环境严禁开启 sandbox。</p>
  *
- * <p>支付宝 API 使用统一网关 {@code https://openapi-sandbox.dl.alipaydev.com/gateway.do}，
+ * <p><b>目标地址（安全，2026-11-05 收紧）</b>：本连接器**不再**把支付宝**公开沙箱域**
+ * （{@code *.alipaydev.com}）当作缺省值。缺省为空 ⇒ 未显式配置目标地址时，四个交易入口
+ * （createPayment / queryPayment / closePayment / refund）一律 fail-closed 拒绝外发，
+ * 而不是拿着真实 app_id + 真实商户私钥去打第三方演示域。
+ * 仅 {@code sandbox=true} 时才允许（并自动补）沙箱域。</p>
+ *
+ * <p>支付宝 API 使用统一网关（生产为 {@code https://openapi.alipay.com/gateway.do}，
+ * 由 {@code nexus.connectors.alipay.api-base-url} / {@code NEX_PSP_ALIPAY_API_BASE_URL} 显式给出），
  * 通过 method 参数区分不同接口（alipay.trade.precreate / alipay.trade.query / alipay.trade.refund）。
  * 认证方式为 RSA2 签名，请求参数中包含 app_id、sign、sign_type=RSA2。</p>
  *
@@ -39,7 +47,18 @@ import java.util.concurrent.ConcurrentHashMap;
 public class AlipayConnector implements PaymentConnector {
 
     private static final Logger log = LoggerFactory.getLogger(AlipayConnector.class);
-    private static final String DEFAULT_ALIPAY_API_BASE = "https://openapi-sandbox.dl.alipaydev.com/gateway.do";
+    /**
+     * 支付宝**公开沙箱**网关：只允许在 {@code sandbox=true} 时使用。
+     * 此前它是缺省值（生产模式也会落到这里），现降级为"仅沙箱档可用"的显式常量。
+     */
+    static final String SANDBOX_API_BASE = "https://openapi-sandbox.dl.alipaydev.com/gateway.do";
+
+    /** 沙箱域族标记：生产模式（sandbox=false）命中即拒绝外发。 */
+    static final String SANDBOX_HOST_MARKER = "alipaydev.com";
+
+    /** 目标地址不可用时的统一拒绝原因（四处入口共用，门禁按稳定字符串断言）。 */
+    static final String TARGET_ADDRESS_REFUSAL =
+            "Alipay connector misconfigured: api-base-url missing or points to sandbox host";
 
     @Value("${nexus.connectors.alipay.app-id:}")
     private String appId;
@@ -50,8 +69,8 @@ public class AlipayConnector implements PaymentConnector {
     @Value("${nexus.connectors.alipay.alipay-public-key:}")
     private String alipayPublicKey;
 
-    @Value("${nexus.connectors.alipay.api-base-url:https://openapi-sandbox.dl.alipaydev.com/gateway.do}")
-    private String apiBaseUrl = DEFAULT_ALIPAY_API_BASE;
+    @Value("${nexus.connectors.alipay.api-base-url:}")
+    private String apiBaseUrl = "";
 
     @Value("${nexus.connectors.alipay.enabled:false}")
     private boolean enabled;
@@ -77,6 +96,61 @@ public class AlipayConnector implements PaymentConnector {
     public AlipayConnector() {
         this.restTemplate = new RestTemplate();
         this.objectMapper = new ObjectMapper();
+    }
+
+    /**
+     * 目标地址解析（Spring 装配路径）：空值时，只有显式 {@code sandbox=true} 才补沙箱域。
+     *
+     * <p>非 Spring 路径（{@code ConnectorFactory.createAlipay} 反射装配）不会走这里，
+     * 因此交易期校验 {@link #targetAddressAllowed()} 才是唯一的闸——这里只负责把
+     * "配错/没配"变成一条可被告警抓到的启动日志，不让它静默。</p>
+     */
+    @PostConstruct
+    void resolveTargetAddress() {
+        if (apiBaseUrl == null || apiBaseUrl.isBlank()) {
+            if (sandbox) {
+                apiBaseUrl = SANDBOX_API_BASE;
+                log.warn("[Alipay] 未配置 api-base-url，sandbox=true ⇒ 使用公开沙箱网关 {}", SANDBOX_API_BASE);
+            } else {
+                log.error("[Alipay] ALIPAY_TARGET_ADDRESS_MISSING：nexus.connectors.alipay.api-base-url 未配置，"
+                        + "且 sandbox=false ⇒ 所有真实交易将被拒绝（fail-closed）");
+            }
+            return;
+        }
+        if (!sandbox && isSandboxHost(apiBaseUrl)) {
+            log.error("[Alipay] ALIPAY_TARGET_SANDBOX_IN_PROD_MODE：sandbox=false 却把目标地址配成公开沙箱域 {}"
+                    + " ⇒ 交易会被拒绝，请显式配置生产网关", apiBaseUrl);
+        }
+    }
+
+    /**
+     * 交易期唯一闸：目标地址必须**显式存在**，且生产模式（{@code sandbox=false}）不得指向沙箱域族。
+     *
+     * <p>为什么放在交易期而不是启动期：连接器默认 {@code enabled=false}，为一个未启用的
+     * 外部渠道让整个网关起不来，会把"一条通道配错"放大成"全站不可用"（与 2026-10-13
+     * 那次"入口没被跑过一次就整体崩"相反的另一种过度）；缺配的表现必须是该通道拒绝交易
+     * + 稳定日志标记，而不是启动崩溃。</p>
+     */
+    boolean targetAddressAllowed() {
+        if (apiBaseUrl == null || apiBaseUrl.isBlank()) {
+            return false;
+        }
+        return sandbox || !isSandboxHost(apiBaseUrl);
+    }
+
+    private static boolean isSandboxHost(String url) {
+        return isSandboxApiBase(url);
+    }
+
+    /** 供注册入口复用：判定某个目标地址是否属于支付宝**公开沙箱域族**（唯一判据在此处）。 */
+    public static boolean isSandboxApiBase(String url) {
+        return url != null && url.toLowerCase(Locale.ROOT).contains(SANDBOX_HOST_MARKER);
+    }
+
+    /** 交易入口的统一拒绝响应文案（四处共用，便于门禁断言稳定字符串）。 */
+    private ConnectorPaymentResult refuseNoSafeTarget() {
+        log.error("[Alipay] 目标地址不可用（未配置或 sandbox=false 却指向公开沙箱域），拒绝创建支付（fail-closed）");
+        return ConnectorPaymentResult.fail(TARGET_ADDRESS_REFUSAL);
     }
 
     @Override
@@ -159,6 +233,9 @@ public class AlipayConnector implements PaymentConnector {
             log.error("[Alipay] app-id/merchant-private-key 缺失且 sandbox 已关闭，拒绝创建支付（fail-closed）");
             return ConnectorPaymentResult.fail("Alipay connector misconfigured: credentials missing and sandbox disabled");
         }
+        if (!targetAddressAllowed()) {
+            return refuseNoSafeTarget();
+        }
 
         try {
             // 当面付 API：alipay.trade.precreate
@@ -209,6 +286,12 @@ public class AlipayConnector implements PaymentConnector {
         if (isDryRun()) {
             return localState.getOrDefault(connectorPaymentId, PaymentStatus.FAILED);
         }
+        if (!targetAddressAllowed()) {
+            // 不外发也不新造状态：与本方法既有的"外呼失败"分支同形（返回本地已知状态），
+            // 免得把"我没法查"变成"这笔单子失败了"。
+            log.error("[Alipay] 目标地址不可用，跳过外呼查询（fail-closed）: out_trade_no={}", connectorPaymentId);
+            return localState.getOrDefault(connectorPaymentId, PaymentStatus.FAILED);
+        }
 
         try {
             // 查询订单 API：alipay.trade.query
@@ -257,6 +340,10 @@ public class AlipayConnector implements PaymentConnector {
             log.info("[Alipay DRY-RUN] 关闭订单模拟成功: {}", connectorPaymentId);
             return true;
         }
+        if (!targetAddressAllowed()) {
+            log.error("[Alipay] 目标地址不可用，拒绝关闭订单（fail-closed）: out_trade_no={}", connectorPaymentId);
+            return false;
+        }
         try {
             Map<String, Object> bizContentMap = new LinkedHashMap<>();
             bizContentMap.put("out_trade_no", connectorPaymentId);
@@ -288,6 +375,10 @@ public class AlipayConnector implements PaymentConnector {
         if (isDryRun()) {
             localState.put(connectorPaymentId, PaymentStatus.REFUNDED);
             return ConnectorRefundResult.ok("alipay_refund_" + connectorPaymentId);
+        }
+        if (!targetAddressAllowed()) {
+            log.error("[Alipay] 目标地址不可用，拒绝退款（fail-closed）: out_trade_no={}", connectorPaymentId);
+            return ConnectorRefundResult.fail(TARGET_ADDRESS_REFUSAL);
         }
 
         try {

@@ -315,10 +315,13 @@ public class PaymentOrchestrationController {
     }
 
     /**
-     * 注册 alipay 类型连接器（通过 ConnectorConfigService 持久化，跳过 PspTargetPolicy 校验）。
+     * 注册 alipay 类型连接器（通过 ConnectorConfigService 持久化）。
      *
      * <p>敏感信息策略：merchant_private_key_env 和 alipay_public_key_env 引用环境变量名，
      * 实际值通过 System.getenv() 解析。</p>
+     *
+     * <p>2026-11-05 起本入口**不再跳过** PspTargetPolicy：{@code base_url} 必填且需通过
+     * {@code pspTargetPolicy.isAllowedBaseUrl}，并额外拒绝公开沙箱域（生产凭据不得外发演示域）。</p>
      */
     private ResponseEntity<Map<String, Object>> registerAlipayConnector(
             String id, String type, String displayName,
@@ -328,6 +331,18 @@ public class PaymentOrchestrationController {
                 : String.valueOf(body.get("merchant_private_key_env")).trim();
         String alipayPublicKeyEnv = body.get("alipay_public_key_env") == null ? null
                 : String.valueOf(body.get("alipay_public_key_env")).trim();
+        // 2026-11-05 修复：动态 alipay 连接器必须**显式**给出目标地址。
+        // 此前本方法不读 base_url、ConnectorFactory 又把地址硬编码成公开沙箱域，
+        // 于是"注册成功 + 201"背后是真实凭据打到第三方演示域。
+        // 校验与 http_psp 注册路径（见 :257-258）对齐，并额外拒绝沙箱域：
+        // 动态注册即"真实通道意图"，想跑沙箱请用静态 Spring profile 路径
+        // （NEX_PSP_ALIPAY_SANDBOX=true），别把生产签名发出去。
+        String alipayBaseUrl = body.get("base_url") == null ? "" : String.valueOf(body.get("base_url")).trim();
+        if (alipayBaseUrl.isEmpty()
+                || !pspTargetPolicy.isAllowedBaseUrl(alipayBaseUrl)
+                || org.nexus.gateway.orchestration.connectors.AlipayConnector.isSandboxApiBase(alipayBaseUrl)) {
+            return ResponseEntity.badRequest().build();
+        }
 
         ConnectorConfig config = new ConnectorConfig();
         config.setId(id);
@@ -336,6 +351,7 @@ public class PaymentOrchestrationController {
         config.setAppId(appId);
         config.setMerchantPrivateKey(merchantPrivateKeyEnv);
         config.setAlipayPublicKey(alipayPublicKeyEnv);
+        config.setBaseUrl(alipayBaseUrl);
         config.setCurrencies(String.join(",", currencies));
         config.setFeeBps(feeBps);
         config.setActive(true);

@@ -362,7 +362,11 @@ nexus:
       app-id: ${NEX_PSP_ALIPAY_APP_ID:}
       merchant-private-key: ${NEX_PSP_ALIPAY_MERCHANT_PRIVATE_KEY:}
       alipay-public-key: ${NEX_PSP_ALIPAY_PUBLIC_KEY:}
-      api-base-url: ${NEX_PSP_ALIPAY_API_BASE_URL:https://openapi-sandbox.dl.alipaydev.com/gateway.do}
+      # 目标网关**必须显式配置**（生产为 https://openapi.alipay.com/gateway.do）。
+      # 此前缺省值是支付宝公开沙箱域 ⇒ 真实 app_id + 真实商户私钥会被发到第三方演示域。
+      # 留空时 AlipayConnector 在交易期 fail-closed 拒绝外发（日志标记
+      # ALIPAY_TARGET_ADDRESS_MISSING）；仅 sandbox=true 才自动补沙箱域。
+      api-base-url: ${NEX_PSP_ALIPAY_API_BASE_URL:}
 
   # Webhook callback configuration
   webhook:
