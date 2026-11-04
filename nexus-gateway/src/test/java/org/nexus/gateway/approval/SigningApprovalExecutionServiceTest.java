@@ -63,10 +63,31 @@ class SigningApprovalExecutionServiceTest {
     @BeforeEach
     void setUp() {
         service = new SigningApprovalExecutionService(signingClient, repository,
-                Duration.ofHours(2), Duration.ofHours(1));
+                Duration.ofHours(2), Duration.ofHours(1), 3600L);
         org.mockito.Mockito.lenient()
                 .when(repository.save(any(ApprovalExecutionLink.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
+    }
+
+    // === 配置不变量：awaiting-timeout 必须 ≥ signing 审批有效期（板 20261104-0712 §二） ===
+
+    @Test
+    @DisplayName("awaiting-timeout < signing TTL ⇒ 构造即抛 IllegalStateException（拒绝启动）")
+    void constructor_rejectsAwaitingTimeoutBelowSigningTtl() {
+        IllegalStateException ex = org.junit.jupiter.api.Assertions.assertThrows(
+                IllegalStateException.class,
+                () -> new SigningApprovalExecutionService(signingClient, repository,
+                        Duration.ofMinutes(30), Duration.ofHours(1), 3600L));
+        assertTrue(ex.getMessage().contains("配置不变量被破坏"));
+        assertTrue(ex.getMessage().contains("nexus.gateway.approval.signing-ttl-seconds"));
+    }
+
+    @Test
+    @DisplayName("awaiting-timeout == signing TTL ⇒ 允许（边界相等安全：审批到期即失效）")
+    void constructor_allowsAwaitingTimeoutEqualToSigningTtl() {
+        SigningApprovalExecutionService boundary = new SigningApprovalExecutionService(
+                signingClient, repository, Duration.ofSeconds(3600), Duration.ofHours(1), 3600L);
+        assertNotNull(boundary);
     }
 
     // === 首次调用 signTransfer ===
