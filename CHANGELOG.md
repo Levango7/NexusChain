@@ -6,6 +6,35 @@
 
 > 本段为 2.75.0（2026-10-26）之后合入的批次，按时间倒序；2.75.0 的明细见下方同名小节。
 
+### 结算平台出款地址的部署侧注入位 + 防再漏门禁（板 20261104-0746 / nex runbook 20261105-0435，2026-11-05）
+
+代码侧 fail-closed（`DefaultClearingEngine:164-171`）与配置占位（`application.yml:192`
+`${NEX_SETTLEMENT_PLATFORM_ADDRESS:}`）早已就位，但 `deploy/` 全 surface **零注入**：
+`git grep NEX_SETTLEMENT_PLATFORM_ADDRESS` 在 helm / compose 一处都不命中。
+后果是 staging 与 prod 的 `nexus-gateway` 恒定走空地址分支——每笔结算在记账前被记
+`FAILED`，且该分支不自动重试，恢复要靠人工重放。
+
+- **注入位落在 `nexus-gateway:` 段**：`values-staging.yaml` / `values-prod.yaml` 的顶级
+  `nexus-gateway:` 段下各新增 `extraEnv: NEX_SETTLEMENT_PLATFORM_ADDRESS: ""`。
+  两个文件里**既有的 `extraEnv` 都在 `nexus-signing-service:` 段**（内容是 `NEX_MPC_*`），
+  照字面"加到已有的 extraEnv 块"会把键送进签名服务、gateway 仍读空值——这是本条要防的主坑；
+- **值为空占位**：真实热钱包地址由 ops 注入，不由代码提交。空值时按笔 fail-closed，
+  不会拿占位符动钱；
+- **compose 同步**：`docker-compose.prod.yml` 网关段加
+  `NEX_SETTLEMENT_PLATFORM_ADDRESS=${NEX_SETTLEMENT_PLATFORM_ADDRESS:-}`。用 `:-` 而非 `:?`
+  是刻意的：该值只被结算一条路径消费，缺它不该让整个网关栈起不来（`:?` 会把"运维还没填"
+  放大成"全站不可部署"）。dev `docker-compose.yml` 不加，与该文件既有口径一致
+  （wallet / refund 两个平台地址同样只在 prod 注入）；
+- **零副作用证明**：`helm lint` prod/staging 各 0 failed；同 chart 用 base 与新的两个
+  values 分别渲染再 diff，prod / staging **各只差 2 行**（正是新增的 name/value），
+  没有 `checksum/config` 抖动（该注解只哈希 `config.applicationYml`，不含 `extraEnv`），
+  既有部署升级不会因此白滚一次 Pod；
+- **防再漏门禁**：`k8s-sync-check.yml` 新增「结算平台出款地址注入位门禁」——对 prod / staging
+  渲染**硬断言**该键出现在 `nexus-gateway` 的容器 env 里（按行首 `kind: Deployment` +
+  `metadata.name` 精确取文档，避免 HPA/Service 假阳性），并带反向对照：默认 values 渲染
+  不得含该键（否则断言退化成读 chart 自身默认值）。值为空时打印提醒而非判红，
+  并把"段落错=白注入"与"已落 FAILED 的单要人工重放"写进失败信息。
+
 ### Alipay 连接器目标地址 fail-closed（板 20261105-0002，2026-11-05）
 
 `ConnectorFactory.createAlipay` 此前把支付宝网关**硬编码**为公开沙箱域

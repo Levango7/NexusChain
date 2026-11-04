@@ -46,6 +46,16 @@ nexus-gateway:
       labelSelector:
         matchLabels:
           app.kubernetes.io/name: nexus-gateway
+  # 结算平台出款地址注入位（板 20261104-0746 / nex runbook 20261105-0435）。
+  # ⚠️ 必须挂在 **nexus-gateway 段**下：本文件里现存的 extraEnv 在
+  # nexus-signing-service 段（NEX_MPC_*），加到那边等于没加——gateway 读到的仍是空。
+  # 值留空 = 保持现有 fail-closed：DefaultClearingEngine:164-171 记账前判空即记
+  # FAILED、不写 ledger、不动链；真实热钱包地址由 ops 填写（占位符会被 :173 的
+  # canTransferTo 判不可解析，同样 FAILED）。注入后需人工处理或重放已落 FAILED
+  # 的结算单——该分支明确「order will not be retried」，重部署不会自动补跑。
+  # CI 侧由 k8s-sync-check「结算平台出款地址注入位门禁」保证这个键存在。
+  extraEnv:
+    NEX_SETTLEMENT_PLATFORM_ADDRESS: ""
 
 nexus-bridge:
   replicaCount: 3
