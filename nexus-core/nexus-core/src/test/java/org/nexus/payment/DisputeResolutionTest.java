@@ -12,6 +12,8 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
@@ -43,18 +45,38 @@ public class DisputeResolutionTest {
 
     /** 争议解决实例。 */
     private DisputeResolution disputeResolution;
+    /** 可控交易池（默认可入池，用于隔离争议逻辑与入池判定）。 */
+    private TogglePool txPool;
     /** 全零公钥（骨架）。 */
     private final byte[] dummyPubkey = new byte[PUBKEY_SIZE];
     /** 全零签名（骨架）。 */
     private final byte[] dummySig = new byte[SIG_SIZE];
 
     /**
+     * 可控交易池：用于在单元测试中隔离入池判定，聚焦争议状态机逻辑。
+     * 入池被拒的语义由 {@link #testInitiateDisputeRejectedByPoolDoesNotCreateRecord()}
+     * 与 {@link #testChallengeRejectedByPoolKeepsDisputeState()} 使用真实池覆盖。
+     */
+    private static class TogglePool extends TransactionPool {
+        private boolean accepting = true;
+
+        void rejectAll() {
+            accepting = false;
+        }
+
+        @Override
+        public boolean add(Transaction... txs) {
+            return accepting;
+        }
+    }
+
+    /**
      * 每个测试前创建新的 DisputeResolution 实例。
      */
     @BeforeEach
     public void setUp() {
-        // 直接 new TransactionPool，不依赖 Spring 容器
-        disputeResolution = new DisputeResolution(new TransactionPool());
+        txPool = new TogglePool();
+        disputeResolution = new DisputeResolution(txPool);
     }
 
     // ==================== 辅助方法 ====================
@@ -319,5 +341,57 @@ public class DisputeResolutionTest {
         // 验证争议状态已结算
         DisputeRecord finalRecord = disputeResolution.getDisputeStatus(CHANNEL_ID);
         assertEquals(DisputeRecord.DisputeState.SETTLED, finalRecord.getState(), "最终争议状态应为 SETTLED");
+    }
+
+    /**
+     * 测试发起争议时入池被拒：应抛出异常，且不创建争议记录。
+     */
+    @Test
+    public void testInitiateDisputeRejectedByPoolDoesNotCreateRecord() {
+        DisputeResolution realPoolResolution = new DisputeResolution(new TransactionPool());
+        ChannelUpdate latestUpdate = createFullySignedUpdate(1L, 800L, 200L);
+
+        IllegalStateException ex = assertThrows(IllegalStateException.class, () ->
+                realPoolResolution.initiateDispute(
+                        CHANNEL_ID, latestUpdate,
+                        dummyPubkey, dummySig,
+                        START_BLOCK, DISPUTE_PERIOD
+                ), "入池被拒时发起争议应失败");
+
+        assertTrue(ex.getMessage().contains("not accepted by the transaction pool"),
+                "异常消息应说明链上交易未被交易池接受");
+        assertNull(realPoolResolution.getDisputeStatus(CHANNEL_ID),
+                "入池被拒时不应创建争议记录");
+    }
+
+    /**
+     * 测试挑战争议时入池被拒：应抛出异常，且争议记录保持挑战前状态。
+     */
+    @Test
+    public void testChallengeRejectedByPoolKeepsDisputeState() {
+        ChannelUpdate oldUpdate = createFullySignedUpdate(1L, 800L, 200L);
+        disputeResolution.initiateDispute(
+                CHANNEL_ID, oldUpdate,
+                dummyPubkey, dummySig,
+                START_BLOCK, DISPUTE_PERIOD
+        );
+
+        ChannelUpdate newUpdate = createFullySignedUpdate(2L, 700L, 300L);
+        txPool.rejectAll();
+
+        assertThrows(IllegalStateException.class, () ->
+                disputeResolution.challengeDispute(
+                        CHANNEL_ID, newUpdate,
+                        dummyPubkey, dummySig,
+                        START_BLOCK + 50
+                ), "入池被拒时挑战争议应失败");
+
+        DisputeRecord record = disputeResolution.getDisputeStatus(CHANNEL_ID);
+        assertEquals(DisputeRecord.DisputeState.ACTIVE, record.getState(),
+                "入池被拒后争议状态应保持 ACTIVE");
+        assertEquals(1L, record.getLatestUpdate().getNonce(),
+                "入池被拒后 latestUpdate nonce 不应变更为挑战值");
+        assertEquals(0L, record.getPenaltyAmount(),
+                "入池被拒后不应记录惩罚金");
     }
 }

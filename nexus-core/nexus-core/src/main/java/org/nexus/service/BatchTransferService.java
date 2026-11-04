@@ -133,7 +133,11 @@ public class BatchTransferService {
             byte[] signature = privateKey.sign(tx.getRawForSign());
             tx.signature = signature;
 
-            txPool.add(tx);
+            if (!txPool.add(tx)) {
+                return APIResult.newFailResult(APIResult.FAIL,
+                        "BATCH_TRANSFER transaction was not accepted by the transaction pool: "
+                                + "the on-chain transaction was rejected");
+            }
 
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("txHash", tx.getHashHexString());

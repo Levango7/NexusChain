@@ -138,7 +138,11 @@ public class StableCoinService {
             byte[] signature = privateKey.sign(tx.getRawForSign());
             tx.signature = signature;
 
-            txPool.add(tx);
+            if (!txPool.add(tx)) {
+                return APIResult.newFailResult(APIResult.FAIL,
+                        "MINT_STABLECOIN transaction was not accepted by the transaction pool: "
+                                + "the on-chain transaction was rejected");
+            }
 
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("positionId", positionId);
@@ -220,7 +224,11 @@ public class StableCoinService {
             byte[] signature = privateKey.sign(tx.getRawForSign());
             tx.signature = signature;
 
-            txPool.add(tx);
+            if (!txPool.add(tx)) {
+                return APIResult.newFailResult(APIResult.FAIL,
+                        "REDEEM_STABLECOIN transaction was not accepted by the transaction pool: "
+                                + "the on-chain transaction was rejected");
+            }
 
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("redeemAmount", redeemAmount);

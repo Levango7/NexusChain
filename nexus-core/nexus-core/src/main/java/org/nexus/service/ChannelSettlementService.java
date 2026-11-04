@@ -197,12 +197,12 @@ public class ChannelSettlementService {
                                 + "(0x10-0x1a) cannot be included in a block");
             }
 
+            // 执行资金分配（先入池；任一笔被拒则抛异常，通道状态保持 OPEN）
+            String[] txHashes = distributeFunds(channel, finalBalance1, finalBalance2, 0L);
+
             // 请求关闭并完成结算
             channel.requestClose(blockHeight);
             channel.close(blockHeight);
-
-            // 执行资金分配
-            String[] txHashes = distributeFunds(channel, finalBalance1, finalBalance2, 0L);
 
             // 构造结算结果
             ChannelSettlement settlement = new ChannelSettlement(
@@ -442,7 +442,11 @@ public class ChannelSettlementService {
                     to1,
                     emptySig
             );
-            txPool.add(tx1);
+            if (!txPool.add(tx1)) {
+                throw new IllegalStateException(
+                        "TRANSFER allocation to participant1 was not accepted by the transaction pool: "
+                                + "the on-chain transaction was rejected");
+            }
             txHashes[0] = tx1.getHashHexString();
         } else {
             txHashes[0] = null;
@@ -461,7 +465,11 @@ public class ChannelSettlementService {
                     to2,
                     emptySig
             );
-            txPool.add(tx2);
+            if (!txPool.add(tx2)) {
+                throw new IllegalStateException(
+                        "TRANSFER allocation to participant2 was not accepted by the transaction pool: "
+                                + "the on-chain transaction was rejected");
+            }
             txHashes[1] = tx2.getHashHexString();
         } else {
             txHashes[1] = null;
