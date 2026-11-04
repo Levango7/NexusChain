@@ -101,7 +101,7 @@
 ### B. 可观测性 / 告警 / 容量
 
 - [ ] **真实集群告警未触发**（promtool、本机 Prometheus + Alertmanager 三进程均非真实集群） —— 未开始。`PLAN-066`、`PLAN-067`、`PLAN-068`、`PLAN-073`、`PLAN-074`
-- [ ] **`/actuator/prometheus` 目前没有鉴权**（原文只证「抓取可达、标签可见」，不是「暴露面已加固」） —— 未开始。`PLAN-068`
+- [x] **`/actuator/prometheus` 目前没有鉴权**（原文只证「抓取可达、标签可见」，不是「暴露面已加固」） —— **已闭环（2026-11-05）**：PLAN-075 全仓 Bearer 鉴权（#458 `d24ab1db`）、PLAN-076 本地真实链路演练 + runbook（#470 `ac6a316a`）、PLAN-077 双 token 零空窗轮换（#480 `cd237063`）。`PLAN-068`
 - [ ] **真实攻击形态未演练**（合成拒绝不代表真实攻击） —— 未开始。`PLAN-068`
 - [ ] **Prometheus 服务端存储 / 查询成本基准（容量规划）未做** —— 未开始。`PLAN-070`、`PLAN-074`
 - [ ] **outbox 指标 30s 采样滞后**（告警发现延迟） —— 部分完成（指标与告警已交付，采样延迟仍在）。`PLAN-073`
@@ -172,6 +172,7 @@
 | 2026-10-27 | **弃权风险指标化（PLAN-052，产品变更）**：`AbstainMetrics` 暴露 `nexus_finality_{defer_total,defer_max_height,defer_max_count,abstain_risk}`（只读 PLAN-051 的 defer 计数、抓取零 DB）+ 告警第 18 条 `BlockAdoptionAbstainRisk`（warning，`abstain_risk==1` for 5m；单节点弃权≠全网死锁，后者归 FinalityStalled）。**口径**：计数只增不减 ⇒ 1 的含义是"本进程启动以来见过弃权风险"，非"当前正在弃权"；"当前"语义属后续切片。4 例新测试；规则 9 groups/18 alerts | PLAN-052 §二/§三；`AbstainRiskMetricsTest` 4 例 |
 | 2026-10-31 | **PLAN-062/063 抓取端补验（验证切片，零代码改动）**：Windows 本机 PG 的 fork 路径 `0xC0000142` 阻塞绕开——应用仍在 Windows JDK 17，datasource 换到 WSL2 Ubuntu-24.04 内的 PostgreSQL 16.15（单物理机、跨 WSL2 内核边界，非物理多机）。`/actuator/prometheus` 实测 22 个 `nexus_*`：block 侧 **10/10**（`outbox_readable=1.0`、`database_pending=0`、两 counter=0、`last_failure_height=-1`）、finality 侧 **12/12**（enabled/finalized/current_epoch/latest_voted_epoch/progress/lag/checkpoints/abstain/defer 全在）。**仍未验证**：告警按阈值触发、物理多机/真实断网断电。环境坑：9236 落在 Windows Hyper-V 保留段 9211-9310 ⇒ P2P 改 19336；WSL 无客户端连接数秒即关机连带 PG 停止，需常驻 `wsl sleep` | PLAN-062 §五 补验节；PLAN-063 §七；`F:\Agent\opencode\workspace\verify-block-metrics-wsl.ps1` |
 | 2026-11-01 | **告警规则 promtool 演练（PLAN-064，门禁变更 + 告警配置修复）**：静态校验只验 YAML/计数，PromQL 语义与触发行为此前零验证 ⇒ 新增提取脚本（`scripts/extract-prometheus-rules.py`）+ 38 用例/56 断言（18 条告警三态）+ CI 步（promtool v3.15.1 固定 + sha256；失败 ⇒ `UNSTABLE`，与"只合 CLEAN"口径一致）。**首跑抓到 2 条从未触发的死告警**（`PodCpuUsageHigh`/`PodMemoryUsageHigh`：分母标签集不匹配、除法恒空；恒定 95% 占用 14min `got:[]` 实证）——改两侧 `sum by (pod, container)` 归一后同一序列正常触发；顺带修正文件头告警数 17→18（CI 只断 ≥5，漂移从未被发现）。反向对照：A 还原修复 ⇒ 恰 2 用例红；B 改阈值 ⇒ 对应用例红。**仍未验证**：Alertmanager 路由/通知链路；`kube_*` 序列真实抓取目标存在性（合成序列只证表达式语义） | PLAN-064 §三/§四/§五；`deploy/k8s/tests/prometheus-rules.test.yaml`；`scripts/extract-prometheus-rules.py` |
+| 2026-11-05 | **#27 清单纠偏（PLAN-078，E5 通知 20261105-0615 owner 回填）**：actuator 鉴权条按 PLAN-075/076/077 勾选；归档追加 PLAN-069 补录与编号勘误（只新增，不改逐字正文） | PLAN-075 #458 `d24ab1db`、PLAN-076 #470 `ac6a316a`、PLAN-077 #480 `cd237063`；`docs/roadmap-unresolved-archive-27-finality.md`「E5 补录」小节 |
 
 ## PLAN-007（单 proposer 协调）
 
