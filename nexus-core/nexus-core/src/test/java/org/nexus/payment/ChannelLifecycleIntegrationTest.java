@@ -57,6 +57,20 @@ public class ChannelLifecycleIntegrationTest {
     // ==================== 辅助方法 ====================
 
     /**
+     * 接受所有交易的交易池。
+     *
+     * <p>本测试聚焦通道生命周期状态机；入池被拒的语义由
+     * {@link org.nexus.payment.DisputeResolutionTest} 与
+     * {@link org.nexus.core.TransactionPoolGuardTest} 覆盖。</p>
+     */
+    private static class AcceptingPool extends TransactionPool {
+        @Override
+        public boolean add(Transaction... txs) {
+            return true;
+        }
+    }
+
+    /**
      * 生成两对 Ed25519 密钥用于测试。
      */
     private Ed25519KeyPair[] generateTwoKeyPairs() {
@@ -197,7 +211,7 @@ public class ChannelLifecycleIntegrationTest {
     public void testDisputeLifecycle() {
         ChannelManager manager = new ChannelManager();
         Ed25519KeyPair[] keys = generateTwoKeyPairs();
-        TransactionPool txPool = new TransactionPool();
+        TransactionPool txPool = new AcceptingPool();
         DisputeResolution disputeResolution = new DisputeResolution(txPool);
 
         // 步骤1：开启通道

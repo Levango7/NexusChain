@@ -119,8 +119,12 @@ public class DisputeResolution {
         closeTx.to = new byte[Transaction.PUBLIC_KEY_HASH_SIZE];
         closeTx.signature = initiatorSig.clone();
 
-        // 提交到交易池
-        txPool.add(closeTx);
+        // 提交到交易池（被拒则不写入争议记录）
+        if (!txPool.add(closeTx)) {
+            throw new IllegalStateException(
+                    "CHANNEL_CLOSE transaction was not accepted by the transaction pool: "
+                            + "the on-chain transaction was rejected");
+        }
 
         // 创建争议记录
         long endBlock = currentBlockHeight + disputePeriod;
@@ -200,11 +204,6 @@ public class DisputeResolution {
         // 计算惩罚金（发起方提交了过期状态）
         long penalty = calculatePenalty(dispute, challengingUpdate);
 
-        // 更新争议记录
-        dispute.setLatestUpdate(challengingUpdate);
-        dispute.setState(DisputeRecord.DisputeState.CHALLENGED);
-        dispute.setPenaltyAmount(penalty);
-
         // 构造 CHANNEL_UPDATE 交易
         byte[] payload = challengingUpdate.toJson().getBytes(java.nio.charset.StandardCharsets.UTF_8);
         Transaction updateTx = Transaction.createEmpty();
@@ -216,8 +215,17 @@ public class DisputeResolution {
         updateTx.to = new byte[Transaction.PUBLIC_KEY_HASH_SIZE];
         updateTx.signature = challengerSig.clone();
 
-        // 提交到交易池
-        txPool.add(updateTx);
+        // 提交到交易池（被拒则争议记录保持挑战前状态）
+        if (!txPool.add(updateTx)) {
+            throw new IllegalStateException(
+                    "CHANNEL_UPDATE transaction was not accepted by the transaction pool: "
+                            + "the on-chain transaction was rejected");
+        }
+
+        // 更新争议记录
+        dispute.setLatestUpdate(challengingUpdate);
+        dispute.setState(DisputeRecord.DisputeState.CHALLENGED);
+        dispute.setPenaltyAmount(penalty);
 
         LOG.info("Challenged dispute: channelId={}, newNonce={}, penalty={}",
                 channelId, challengingUpdate.getNonce(), penalty);

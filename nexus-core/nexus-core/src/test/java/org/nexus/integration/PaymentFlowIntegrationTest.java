@@ -36,6 +36,16 @@ public class PaymentFlowIntegrationTest {
     /** 测试用 64 字节签名。 */
     private static final byte[] SIGNATURE = new byte[Transaction.SIGNATURE_SIZE];
 
+    /** 合法非零 from：入池守卫只要求非全零，不做链上验签。 */
+    private static final byte[] NON_ZERO_FROM = new byte[Transaction.PUBLIC_KEY_SIZE];
+    /** 合法非零签名。 */
+    private static final byte[] NON_ZERO_SIGNATURE = new byte[Transaction.SIGNATURE_SIZE];
+
+    static {
+        NON_ZERO_FROM[0] = 1;
+        NON_ZERO_SIGNATURE[0] = 1;
+    }
+
     /** CHANNEL_OPEN payload JSON。 */
     private static final byte[] CHANNEL_OPEN_PAYLOAD =
             ("{\"channelId\":\"nexus-ch-001\",\"participant1\":\"addr1\",\"participant2\":\"addr2\","
@@ -106,10 +116,10 @@ public class PaymentFlowIntegrationTest {
         assertTrue(result.isSuccess(),
                 "CHANNEL_OPEN 验证应通过: " + (result.getMessage() != null ? result.getMessage() : ""));
 
-        // 入池
-        txPool.add(tx);
+        // 入池守卫：0x10–0x1a 扩展类型当前无法通过区块类型门禁，应被拒绝
+        assertFalse(txPool.add(tx), "扩展类型交易应被入池守卫拒绝");
         // 验证 txPool.has(txHash)
-        assertTrue(txPool.has(tx.getHashHexString()), "交易池应包含该交易");
+        assertFalse(txPool.has(tx.getHashHexString()), "交易池不应包含该交易");
     }
 
     /**
@@ -135,9 +145,9 @@ public class PaymentFlowIntegrationTest {
         assertTrue(result.isSuccess(),
                 "CHANNEL_CLOSE 验证应通过: " + (result.getMessage() != null ? result.getMessage() : ""));
 
-        // 入池
-        txPool.add(tx);
-        assertTrue(txPool.has(tx.getHashHexString()), "交易池应包含该交易");
+        // 入池守卫：0x10–0x1a 扩展类型当前无法通过区块类型门禁，应被拒绝
+        assertFalse(txPool.add(tx), "扩展类型交易应被入池守卫拒绝");
+        assertFalse(txPool.has(tx.getHashHexString()), "交易池不应包含该交易");
     }
 
     /**
@@ -163,9 +173,9 @@ public class PaymentFlowIntegrationTest {
         assertTrue(result.isSuccess(),
                 "BATCH_TRANSFER 验证应通过: " + (result.getMessage() != null ? result.getMessage() : ""));
 
-        // 入池
-        txPool.add(tx);
-        assertTrue(txPool.has(tx.getHashHexString()), "交易池应包含该交易");
+        // 入池守卫：0x10–0x1a 扩展类型当前无法通过区块类型门禁，应被拒绝
+        assertFalse(txPool.add(tx), "扩展类型交易应被入池守卫拒绝");
+        assertFalse(txPool.has(tx.getHashHexString()), "交易池不应包含该交易");
     }
 
     /**
@@ -191,9 +201,9 @@ public class PaymentFlowIntegrationTest {
         assertTrue(result.isSuccess(),
                 "MINT_STABLECOIN 验证应通过: " + (result.getMessage() != null ? result.getMessage() : ""));
 
-        // 入池
-        txPool.add(tx);
-        assertTrue(txPool.has(tx.getHashHexString()), "交易池应包含该交易");
+        // 入池守卫：0x10–0x1a 扩展类型当前无法通过区块类型门禁，应被拒绝
+        assertFalse(txPool.add(tx), "扩展类型交易应被入池守卫拒绝");
+        assertFalse(txPool.has(tx.getHashHexString()), "交易池不应包含该交易");
     }
 
     /**
@@ -219,9 +229,9 @@ public class PaymentFlowIntegrationTest {
         assertTrue(result.isSuccess(),
                 "BRIDGE_LOCK 验证应通过: " + (result.getMessage() != null ? result.getMessage() : ""));
 
-        // 入池
-        txPool.add(tx);
-        assertTrue(txPool.has(tx.getHashHexString()), "交易池应包含该交易");
+        // 入池守卫：0x10–0x1a 扩展类型当前无法通过区块类型门禁，应被拒绝
+        assertFalse(txPool.add(tx), "扩展类型交易应被入池守卫拒绝");
+        assertFalse(txPool.has(tx.getHashHexString()), "交易池不应包含该交易");
     }
 
     // ==================== 验证拒绝测试 ====================
@@ -279,43 +289,43 @@ public class PaymentFlowIntegrationTest {
      */
     @Test
     public void testTransactionPoolGetByType() {
-        // 构造并添加多种类型交易
-        Transaction channelOpenTx = new Transaction(
-                1, Transaction.Type.CHANNEL_OPEN.ordinal(), 1L,
-                FROM_PUBKEY, 100000L, 500000L, CHANNEL_OPEN_PAYLOAD,
-                TO_PUBKEY_HASH, SIGNATURE
+        // 使用链上可打包的基础类型（扩展类型会被入池守卫拒绝）
+        Transaction transferTx = new Transaction(
+                1, Transaction.Type.TRANSFER.ordinal(), 1L,
+                NON_ZERO_FROM, 100000L, 500000L, null,
+                TO_PUBKEY_HASH, NON_ZERO_SIGNATURE
         );
-        Transaction batchTransferTx = new Transaction(
-                1, Transaction.Type.BATCH_TRANSFER.ordinal(), 2L,
-                FROM_PUBKEY, 100000L, 0L, BATCH_TRANSFER_PAYLOAD,
-                TO_PUBKEY_HASH, SIGNATURE
+        Transaction voteTx = new Transaction(
+                1, Transaction.Type.VOTE.ordinal(), 2L,
+                NON_ZERO_FROM, 100000L, 0L, null,
+                TO_PUBKEY_HASH, NON_ZERO_SIGNATURE
         );
-        Transaction bridgeLockTx = new Transaction(
-                1, Transaction.Type.BRIDGE_LOCK.ordinal(), 3L,
-                FROM_PUBKEY, 100000L, 1000000L, BRIDGE_LOCK_PAYLOAD,
-                TO_PUBKEY_HASH, SIGNATURE
+        Transaction assetDefineTx = new Transaction(
+                1, Transaction.Type.ASSET_DEFINE.ordinal(), 3L,
+                NON_ZERO_FROM, 100000L, 0L, null,
+                TO_PUBKEY_HASH, NON_ZERO_SIGNATURE
         );
 
         // 全部入池
-        txPool.add(channelOpenTx, batchTransferTx, bridgeLockTx);
+        assertTrue(txPool.add(transferTx, voteTx, assetDefineTx), "合法交易应被接受");
         assertEquals(3, txPool.size(), "交易池应有 3 笔交易");
 
-        // 按类型查询 CHANNEL_OPEN
+        // 按类型查询 TRANSFER
         assertEquals(1,
-                txPool.getTransactionsByType(Transaction.Type.CHANNEL_OPEN.ordinal()).size(),
-                "CHANNEL_OPEN 类型交易应有 1 笔");
-        // 按类型查询 BATCH_TRANSFER
-        assertEquals(1,
-                txPool.getTransactionsByType(Transaction.Type.BATCH_TRANSFER.ordinal()).size(),
-                "BATCH_TRANSFER 类型交易应有 1 笔");
-        // 按类型查询 BRIDGE_LOCK
-        assertEquals(1,
-                txPool.getTransactionsByType(Transaction.Type.BRIDGE_LOCK.ordinal()).size(),
-                "BRIDGE_LOCK 类型交易应有 1 笔");
-        // 按类型查询不存在的类型（TRANSFER）
-        assertEquals(0,
                 txPool.getTransactionsByType(Transaction.Type.TRANSFER.ordinal()).size(),
-                "TRANSFER 类型交易应有 0 笔");
+                "TRANSFER 类型交易应有 1 笔");
+        // 按类型查询 VOTE
+        assertEquals(1,
+                txPool.getTransactionsByType(Transaction.Type.VOTE.ordinal()).size(),
+                "VOTE 类型交易应有 1 笔");
+        // 按类型查询 ASSET_DEFINE
+        assertEquals(1,
+                txPool.getTransactionsByType(Transaction.Type.ASSET_DEFINE.ordinal()).size(),
+                "ASSET_DEFINE 类型交易应有 1 笔");
+        // 按类型查询不存在的类型（BRIDGE_MINT）
+        assertEquals(0,
+                txPool.getTransactionsByType(Transaction.Type.BRIDGE_MINT.ordinal()).size(),
+                "BRIDGE_MINT 类型交易应有 0 笔");
     }
 
     // ==================== PaymentTransactionProcessor 测试 ====================
