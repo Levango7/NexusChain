@@ -25,6 +25,32 @@
 - **部署注意**：未注入该变量的环境，结算会在记账前全部拒绝（这是预期行为，
   比用不存在的地址尝试打款安全）。
 
+### 本地真实链路告警演练 + counter 引用形状门禁（PLAN-074，2026-11-04）
+
+把 PLAN-073 只做到单测/promtool 的四条事实，拿到**本机三进程**的真实链路上取证
+（Prometheus 3.15.1 + Alertmanager 0.34.2 + nexus-core，均本机；**同内核单机，
+非物理多机**）：
+
+- **真实 PG 精确计数**：往 `finality_vote_outbox` 插 100 行 ⇒ `database_pending 100.0`
+  （旧实现低报 64）；Prometheus 侧同样 `value=1e+02`；
+- **真实 PG 停机**：`database_pending NaN` + `database_readable 0.0`
+  ⇒ PLAN-073 修的「读不到冒充 0 积压」在真实连接失败路径上成立；
+- **真实抓取文本形状**：9 条序列的 `# TYPE` / `_total` 后缀 / `origin` 标签
+  与契约一致（promtool 吃的是合成序列，这不是它验过的）；
+- **告警真实触发并送达**：`FinalityOutboxBacklog`（100 行积压，for 10m）与
+  `FinalityOutboxUnreadable`（PG 停机，for 5m）在真实 Prometheus 上 **firing**、
+  真实 Alertmanager **active**、webhook 落盘；PG 停机后 Backlog 自动转非 firing
+  （`database_pending` NaN），Unreadable 亮起——语义切换符合预期；
+- **新门禁** `FinalityRulesCounterUsageTest`：counter 指标必须包
+  `increase()`/`rate()` 引用（裸比较在 counter 归零后永不触发），违规时报出
+  「哪条告警 + expr 原文」；实现返工过一次（自扫文件会把 description/注释/组级
+  说明块算成引用，改为复用 `PrometheusRulesFixture.groupExprLines`）；
+- **反向对照**：把 `increase(...dropped_total[10m])` 改成裸比较 ⇒ 断言精确报出
+  `nexuschain.finality / FinalityOutboxDropping`（无连带假阳性）；还原后绿、
+  规则文件 SHA-256 一致；
+- **边界**：同内核单机 + 自下载社区二进制，**不是真实机房**、不宣称告警已在
+  真实集群触发；scrape 15s + 采样 30s 的组合与生产可能有差异；未改告警阈值。
+
 ### 最终性投票 outbox 可观测性 + 4 条告警（PLAN-073，2026-11-04）
 
 `finality_vote_outbox` 是「票写不进库」的最后兜底，此前只有端点、没有任何指标；
