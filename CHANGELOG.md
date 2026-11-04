@@ -172,6 +172,28 @@ docker compose -f docker-compose.prod.yml config --format json \
   生产网关放行），证明拒绝分支不是恒真。
 
 
+### outbox 真实 PG 复核 + legacy origin 大小写静默删除（PLAN-079，2026-11-05）
+
+真实 PG 取证（WSL2 PostgreSQL 16.15 + 单进程 core）复核 PLAN-072 的
+「脏行不传播」结论，并意外暴露一个静默失败路径：
+
+- **复核通过**：正确小写 `origin='local'` 的 3 字节哈希脏行在启动恢复时
+  **只处理一次**（`submitVote` 长度闸正常拒绝），行被移除；
+  `outbox=0 / dirty=0 / vote_rows=0 / dirty_votes=0`，无重复重试；
+- **发现缺口**：`finality_vote_outbox.origin` 落库短码是小写 `local`/`received`，
+  但 `removePendingVote` / `markPendingVoteFailure` 用精确等值匹配；legacy/手工
+  行若是大写（`LOCAL`），读取照常、删除 0 行且**不检查 affected rows** ⇒
+  该行每 ~5s 被重新处理（人工毒丸形态）；
+- **修复**：两条语句改 `LOWER(origin)=LOWER(?)`，0 行时 `log.warn`（含
+  epoch/validator/origin），不再静默；
+- **测试**：`JdbcFinalityStateStoreTest` 新增 legacy 大写行「可删除」「可计
+  attempts」2 例；反向对照两组各自精确红（`expected 0/1 but was 1/0`），
+  还原后 11/11 绿；**修复后真实 PG 复验**：大写行处理一次即被移除
+  （`outbox=0/votes=0`，无重复重试）；
+- **边界**：应用自己写入的行始终是小写 ⇒ PLAN-072 结论不变；本缺口只在
+  legacy/手工数据触发；同内核单机，非物理多机；`LOWER(origin)` 不再命中 PK
+  索引，outbox 常态极小可接受（已登记）。
+
 ### metrics Bearer 双 token 零空窗轮换（PLAN-077，2026-11-05）
 
 PLAN-076 的 runbook 如实登记了「单 token 轮换必然出现短暂 401 抓取空窗」。

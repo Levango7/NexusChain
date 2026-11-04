@@ -185,6 +185,43 @@ class JdbcFinalityStateStoreTest {
                 "PLAN-073：观测必须拿到精确行数（旧实现会低报成 64）");
     }
 
+    /**
+     * PLAN-079：legacy/手工行的 {@code origin} 可能是大写（应用写的是小写短码）；
+     * 删除必须大小写不敏感，否则 0 行静默不删 ⇒ 该行被反复重试（人工毒丸形态）。
+     */
+    @Test
+    void legacyUppercaseOriginRowIsRemovedCaseInsensitively() {
+        jdbc.update("INSERT INTO finality_vote_outbox(epoch, checkpoint_hash, validator, origin, "
+                        + "signature, public_key, created_at, attempts, last_error) "
+                        + "VALUES(?,?,?,?,?,?,?,?,?)",
+                42L, "010203", "legacy-v", "LOCAL", "ab", "cd", 1L, 0, "");
+        assertEquals(1, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM finality_vote_outbox", Integer.class));
+
+        store.removePendingVote(new FinalityOutboxEntry(42L, new byte[]{1, 2, 3}, "legacy-v",
+                new byte[64], new byte[32], FinalityVoteOrigin.LOCAL, 1L, 0, ""));
+
+        assertEquals(0, jdbc.queryForObject(
+                        "SELECT COUNT(*) FROM finality_vote_outbox", Integer.class),
+                "大写 origin 的 legacy 行也必须被删掉（PLAN-079），不能 0 行静默");
+    }
+
+    /** PLAN-079：失败重试计数同样必须大小写不敏感。 */
+    @Test
+    void legacyUppercaseOriginRowGetsFailureAttemptsIncremented() {
+        jdbc.update("INSERT INTO finality_vote_outbox(epoch, checkpoint_hash, validator, origin, "
+                        + "signature, public_key, created_at, attempts, last_error) "
+                        + "VALUES(?,?,?,?,?,?,?,?,?)",
+                43L, "010204", "legacy-r", "RECEIVED", "ab", "cd", 1L, 0, "");
+
+        store.markPendingVoteFailure(new FinalityOutboxEntry(43L, new byte[]{1, 2, 4}, "legacy-r",
+                new byte[64], new byte[32], FinalityVoteOrigin.RECEIVED, 1L, 0, ""), "boom");
+
+        assertEquals(1, jdbc.queryForObject("SELECT attempts FROM finality_vote_outbox "
+                        + "WHERE validator='legacy-r'", Integer.class),
+                "大写 origin 的 legacy 行也必须更新 attempts（PLAN-079）");
+    }
+
     private static byte[] sig() {
         byte[] s = new byte[64];
         for (int i = 0; i < s.length; i++) {
