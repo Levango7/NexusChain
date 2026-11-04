@@ -30,6 +30,24 @@
   生产网关放行），证明拒绝分支不是恒真。
 
 
+### metrics Bearer 本地真实链路演练 + runbook（PLAN-076，2026-11-05）
+
+PLAN-075 的验证只到单测 / `promtool check config` / compose 占位渲染；本批用
+同内核单机的真实进程补齐「配置真的生效」证据：
+
+- **真实 Prometheus 3.15.1 三种抓取配置对照**：无鉴权 ⇒ `up=0` +
+  `lastError=401`；错 token ⇒ `up=0` + 401；`bearer_token_file` 正确 ⇒ `up=1`；
+- **直连断言**：无 token ⇒ 401 + `WWW-Authenticate`；错 token ⇒ 401；
+  对 token ⇒ 200（36957 bytes，`nexuschain_block_height` /
+  `nexus_finality_outbox_*` 序列在）；`/actuator/health` 无 token ⇒ 200；
+- **带 token + 真实规则文件**：9 组 24 条规则加载、关键序列可查询
+  ⇒ metrics 门禁没有打断抓取/规则/告警链路；
+- 新增 `docs/runbooks/metrics-auth.md`：口径表（503 vs 401）、三处配置位置、
+  轮换步骤（**如实登记单 token 轮换空窗**）、401/503 排查树；
+- **未发现配置/代码缺陷**；两条登记局限：轮换空窗（零空窗需双 token 改造）、
+  K8s Operator/ServiceMonitor 挂载未验（外部依赖）；
+- 边界：同内核单机 + 真实 Prometheus 二进制，**不是物理多机/真实集群**。
+
 ### `/actuator/prometheus` 鉴权（PLAN-075，2026-11-05）
 
 PLAN-068 证明 Boot 4 actuator 由独立 handler mapping 服务、MVC 拦截器够不到，
