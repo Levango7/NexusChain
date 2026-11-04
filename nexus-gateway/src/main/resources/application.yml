@@ -181,6 +181,14 @@ nexus:
   # Token symbol used across the platform
   token-symbol: NEX
 
+  # === 结算平台出款地址（fail-closed） ===
+  # DefaultClearingEngine 发起 Type.SETTLEMENT 转账时使用的 from 地址。
+  # 未配置 ⇒ 结算在「贷账之前」直接拒绝（订单落 FAILED，不贷账、不动链），
+  # 因此部署环境必须显式注入（k8s 建议 NEX_SETTLEMENT_PLATFORM_ADDRESS）。
+  # 不得回退占位符：占位符会被当成真地址去签名/广播（见板 20261102-0320）。
+  settlement:
+    platform-address: ${NEX_SETTLEMENT_PLATFORM_ADDRESS:}
+
   # === 任务 #26：运维管理 API 配置 ===
   # OpsController / OpsService 的行为开关与缓存/线程池监控参数
   ops:

@@ -29,8 +29,12 @@ public class DefaultClearingEngine implements ClearingEngine {
 
     private static final Logger log = LoggerFactory.getLogger(DefaultClearingEngine.class);
 
-    /** 平台结算热钱包地址默认值 */
-    private static final String DEFAULT_PLATFORM_SETTLEMENT_ADDRESS = "PLATFORM_HOT_WALLET";
+    /**
+     * 仅用于单测 / 沙箱装配的占位出款地址。
+     * <p>生产路径由 Spring 使用四参构造器注入 {@code nexus.settlement.platform-address}，
+     * 未配置即为空串并 fail-closed；本常量<b>不会</b>在配置缺失时被回退使用。</p>
+     */
+    private static final String SANDBOX_PLATFORM_SETTLEMENT_ADDRESS = "SANDBOX_PLATFORM_SETTLEMENT_WALLET";
 
     /** 账本组件 */
     private final Ledger ledger;
@@ -52,20 +56,23 @@ public class DefaultClearingEngine implements ClearingEngine {
 
     public DefaultClearingEngine(Ledger ledger,
                                  org.nexus.settlement.reconciliation.ReconciliationService reconciliationService) {
+        // 仅用于单测 / 沙箱装配：使用显式的沙箱占位地址（不是生产默认值）。
+        // 生产由 Spring 走四参构造器；配置缺失时为空串并在 settle() 前 fail-closed。
         this(ledger, reconciliationService, new SandboxOnChainExecutionChannel(),
-                DEFAULT_PLATFORM_SETTLEMENT_ADDRESS);
+                SANDBOX_PLATFORM_SETTLEMENT_ADDRESS);
     }
 
     @Autowired
     public DefaultClearingEngine(Ledger ledger,
                                  org.nexus.settlement.reconciliation.ReconciliationService reconciliationService,
                                  OnChainExecutionChannel executionChannel,
-                                 @Value("${nexus.settlement.platform-address:PLATFORM_HOT_WALLET}") String platformSettlementAddress) {
+                                 @Value("${nexus.settlement.platform-address:}") String platformSettlementAddress) {
         this.ledger = ledger;
         this.reconciliationService = reconciliationService;
         this.executionChannel = executionChannel;
-        this.platformSettlementAddress = platformSettlementAddress != null && !platformSettlementAddress.isEmpty()
-                ? platformSettlementAddress : DEFAULT_PLATFORM_SETTLEMENT_ADDRESS;
+        // fail-closed（板 20261102-0320）：未配置即空值，绝不再回退 "PLATFORM_HOT_WALLET" 这类占位符——
+        // 占位符会被当作真地址送去签名/广播，等于用一个不存在的出款地址尝试打款。
+        this.platformSettlementAddress = platformSettlementAddress == null ? "" : platformSettlementAddress.trim();
     }
 
     /**
@@ -148,6 +155,27 @@ public class DefaultClearingEngine implements ClearingEngine {
             // 2026-10-30（S1）：本分支原先直接 return，不落库。drainStaging 在取出时已把
             // PENDING 行删除并提交（见类注释），不落库等于订单行静默丢失、审计链断裂。
             // 与下方各终态分支保持一致，补一次落库。
+            persistOrderState(order);
+            return order;
+        }
+        // 2026-11-04（板 20261102-0320）：平台出款地址 fail-closed，必须前置到贷账之前。
+        // 未配置 / 不可解析 ⇒ 记账后必然「已贷账、链上必失败」的永久偏移，S3 冲正虽已具备，
+        // 但没有必要先制造一笔再冲正——直接拒绝更干净。
+        if (platformSettlementAddress.isEmpty()) {
+            order.setStatus(ClearingOrder.OrderStatus.FAILED);
+            log.error("settle aborted BEFORE booking: settlement platform address is not configured "
+                            + "(nexus.settlement.platform-address / NEX_SETTLEMENT_PLATFORM_ADDRESS); "
+                            + "no ledger entry written, order will not be retried: orderId={}, merchantId={}",
+                    order.getOrderId(), order.getMerchantId());
+            persistOrderState(order);
+            return order;
+        }
+        if (!executionChannel.canTransferTo(platformSettlementAddress)) {
+            order.setStatus(ClearingOrder.OrderStatus.FAILED);
+            log.error("settle aborted BEFORE booking: settlement platform address is not a usable chain "
+                            + "address (no ledger entry written, order will not be retried): "
+                            + "orderId={}, merchantId={}, platformAddress={}",
+                    order.getOrderId(), order.getMerchantId(), platformSettlementAddress);
             persistOrderState(order);
             return order;
         }

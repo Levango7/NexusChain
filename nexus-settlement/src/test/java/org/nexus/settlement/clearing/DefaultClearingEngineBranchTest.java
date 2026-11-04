@@ -171,7 +171,7 @@ class DefaultClearingEngineBranchTest {
     }
 
     @Test
-    void constructor_emptyPlatformAddress_shouldFallbackToDefault() {
+    void constructor_emptyPlatformAddress_shouldFailClosedBeforeBooking() {
         OnChainExecutionChannel channel = new OnChainExecutionChannel() {
             @Override
             public TransactionResult execute(TransactionRequest request) {
@@ -183,16 +183,18 @@ class DefaultClearingEngineBranchTest {
                 return TransactionResult.success(txHash, 1, true);
             }
         };
+        // 板 20261102-0320：空串不再回退 PLATFORM_HOT_WALLET，而是记账前拒绝
         DefaultClearingEngine engine = new DefaultClearingEngine(
                 ledger, reconciliation, channel, "");
 
         ClearingOrder o = order("O1", "M001", "100");
         ClearingOrder result = engine.settle(o);
-        assertEquals(ClearingOrder.OrderStatus.SETTLED, result.getStatus());
+        assertEquals(ClearingOrder.OrderStatus.FAILED, result.getStatus());
+        assertEquals(0, ledger.entriesOf("MERCHANT:M001").size());
     }
 
     @Test
-    void constructor_nullPlatformAddress_shouldFallbackToDefault() {
+    void constructor_nullPlatformAddress_shouldFailClosedBeforeBooking() {
         OnChainExecutionChannel channel = new OnChainExecutionChannel() {
             @Override
             public TransactionResult execute(TransactionRequest request) {
@@ -204,12 +206,14 @@ class DefaultClearingEngineBranchTest {
                 return TransactionResult.success(txHash, 1, true);
             }
         };
+        // 板 20261102-0320：null 不再回退 PLATFORM_HOT_WALLET，而是记账前拒绝
         DefaultClearingEngine engine = new DefaultClearingEngine(
                 ledger, reconciliation, channel, null);
 
         ClearingOrder o = order("O1", "M001", "100");
         ClearingOrder result = engine.settle(o);
-        assertEquals(ClearingOrder.OrderStatus.SETTLED, result.getStatus());
+        assertEquals(ClearingOrder.OrderStatus.FAILED, result.getStatus());
+        assertEquals(0, ledger.entriesOf("MERCHANT:M001").size());
     }
 
     @Test

@@ -4,6 +4,24 @@
 
 ## [2.75.0] - 2026-10-26
 
+### 结算平台出款地址 fail-closed（板 20261102-0320，2026-11-04）
+
+`DefaultClearingEngine` 的 `nexus.settlement.platform-address` 此前默认
+`"PLATFORM_HOT_WALLET"`，且空值/null 再回退同一字面量——该串不是合法链地址，
+会被当作 `Type.SETTLEMENT` 的 from 送去签名/广播。
+
+- **去掉占位符与二次回退**：键改为 `${nexus.settlement.platform-address:}`，
+  未配置即空串；构造器只做 trim，不再拼默认值；
+- **前置 fail-closed**：`settle()` 在 `bookSettlement` **之前**校验平台地址——
+  空串/空白、或 `executionChannel.canTransferTo()` 判定不可解析，均记 `FAILED`
+  并落库，**不写任何 `ledger_entry`**、不动链，避免「已贷账、链上必失败」的永久偏移；
+- **配置入口**：`nexus-gateway/application.yml` 新增 `nexus.settlement.platform-address`
+  （默认取 `NEX_SETTLEMENT_PLATFORM_ADDRESS`，留空即未配置）；
+- **测试**：`ClearingEnginePlatformAddressTest` 4 例（空串 / 空白 / 不可解析 / 正常路径
+  且 from 取自配置）；两参构造器仅供单测与沙箱，改用显式沙箱占位常量；
+- **部署注意**：未注入该变量的环境，结算会在记账前全部拒绝（这是预期行为，
+  比用不存在的地址尝试打款安全）。
+
 ### 最终性投票 outbox 可观测性 + 4 条告警（PLAN-073，2026-11-04）
 
 `finality_vote_outbox` 是「票写不进库」的最后兜底，此前只有端点、没有任何指标；
