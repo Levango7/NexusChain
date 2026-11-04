@@ -121,6 +121,13 @@ spec:
                   name: {{ .Values.existingSecret }}
                   key: NEXUS_METRICS_TOKEN
                   optional: true
+            # 轮换期并行接受的旧 token（PLAN-077）；optional，空=仅 current。
+            - name: NEXUS_METRICS_TOKEN_PREVIOUS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingSecret }}
+                  key: NEXUS_METRICS_TOKEN_PREVIOUS
+                  optional: true
             {{- if .Values.genesisConfigMap }}
             # 仅在提供自定义 genesis ConfigMap 时覆盖；否则用镜像内置 classpath
             # genesis（缺陷 #28：旧口径无条件指向 /data/*，ConfigMap 缺失即 genesis

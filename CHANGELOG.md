@@ -30,6 +30,24 @@
   生产网关放行），证明拒绝分支不是恒真。
 
 
+### metrics Bearer 双 token 零空窗轮换（PLAN-077，2026-11-05）
+
+PLAN-076 的 runbook 如实登记了「单 token 轮换必然出现短暂 401 抓取空窗」。
+本批给六个 metrics 服务（core/gateway/bridge/signing/wallet/api-gateway）的
+过滤器加 **current + previous 双 token**：
+
+- `NEXUS_METRICS_TOKEN`（current，必须配置）+ `NEXUS_METRICS_TOKEN_PREVIOUS`
+  （可空；空 = 仅 current，行为不变）；
+- 匹配任一即放行；**current 缺失仍 503**（previous 不会替代 fail-closed 语义）；
+- servlet 五模块用 `Filter`、api-gateway 用 WebFlux `WebFilter`，语义一致；
+- Helm：core chart 增 `NEXUS_METRICS_TOKEN_PREVIOUS`（optional）；其余服务经
+  共享 `nexus-secrets` envFrom 生效；compose 六服务增同名 env（默认空）；
+- runbook §三改写为零空窗流程：应用先写 previous → Prometheus 换新 token →
+  验证 `up=1` → 应用提升 current 并清空 previous；失败只清 previous 即可回退；
+- 测试：两套各 6 例（含 previous 放行、current 未配置时 previous 也 503）；
+  反向对照去掉 previous 匹配 ⇒ previous 断言精确红，还原后 12/12 绿；
+- 边界：仍无热更新（env 改动需滚动进程）；不支持第三个 token；非物理多机。
+
 ### metrics Bearer 本地真实链路演练 + runbook（PLAN-076，2026-11-05）
 
 PLAN-075 的验证只到单测 / `promtool check config` / compose 占位渲染；本批用

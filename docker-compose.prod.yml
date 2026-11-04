@@ -40,6 +40,8 @@ services:
     environment:
       # Prometheus metrics endpoint can only be scraped with shared NEXUS_METRICS_TOKEN.
       - NEXUS_METRICS_TOKEN=${NEXUS_METRICS_TOKEN:?prod 必需：禁止占位默认值}
+      # 轮换期旧 token（PLAN-077）；默认空=仅 current。
+      - NEXUS_METRICS_TOKEN_PREVIOUS=${NEXUS_METRICS_TOKEN_PREVIOUS:-}
       - SPRING_PROFILES_ACTIVE=prod
       # 2026-10-12：DB 家族对齐 MySQL 8（原为 PostgreSQL，与 prod profile 的
       # db/migration-pg 一起构成"起不来"的组合：迁移冻结在 V17 而 ddl-auto=validate）。
@@ -100,6 +102,8 @@ services:
     environment:
       # Prometheus metrics endpoint can only be scraped with shared NEXUS_METRICS_TOKEN.
       - NEXUS_METRICS_TOKEN=${NEXUS_METRICS_TOKEN:?prod 必需：禁止占位默认值}
+      # 轮换期旧 token（PLAN-077）；默认空=仅 current。
+      - NEXUS_METRICS_TOKEN_PREVIOUS=${NEXUS_METRICS_TOKEN_PREVIOUS:-}
       # 2026-10-12 更正：core **确实**需要关系库 —— 它没有 JPA/Flyway，但有 PG 方言的
       # JDBC 链存储（RDBMSBlockChainImpl + resources/ddl.sql，schema 用 bytea 与双引号
       # 标识符，见 ddl.sql）。故全栈 DB 族切 MySQL 时 **core 例外，仍用 PostgreSQL**：
@@ -121,6 +125,8 @@ services:
     environment:
       # Prometheus metrics endpoint can only be scraped with shared NEXUS_METRICS_TOKEN.
       - NEXUS_METRICS_TOKEN=${NEXUS_METRICS_TOKEN:?prod 必需：禁止占位默认值}
+      # 轮换期旧 token（PLAN-077）；默认空=仅 current。
+      - NEXUS_METRICS_TOKEN_PREVIOUS=${NEXUS_METRICS_TOKEN_PREVIOUS:-}
       - SPRING_PROFILES_ACTIVE=prod
       - NEX_NACOS_SERVER=nacos:8848
       - NEX_SEATA_SERVER=seata:8091
@@ -198,6 +204,8 @@ services:
     environment:
       # Prometheus metrics endpoint can only be scraped with shared NEXUS_METRICS_TOKEN.
       - NEXUS_METRICS_TOKEN=${NEXUS_METRICS_TOKEN:?prod 必需：禁止占位默认值}
+      # 轮换期旧 token（PLAN-077）；默认空=仅 current。
+      - NEXUS_METRICS_TOKEN_PREVIOUS=${NEXUS_METRICS_TOKEN_PREVIOUS:-}
       - SPRING_PROFILES_ACTIVE=prod
       - NEX_NACOS_SERVER=nacos:8848
       - NEX_SEATA_SERVER=seata:8091
@@ -241,6 +249,8 @@ services:
     environment:
       # Prometheus metrics endpoint can only be scraped with shared NEXUS_METRICS_TOKEN.
       - NEXUS_METRICS_TOKEN=${NEXUS_METRICS_TOKEN:?prod 必需：禁止占位默认值}
+      # 轮换期旧 token（PLAN-077）；默认空=仅 current。
+      - NEXUS_METRICS_TOKEN_PREVIOUS=${NEXUS_METRICS_TOKEN_PREVIOUS:-}
       - SPRING_PROFILES_ACTIVE=prod
       # 2026-10-12：同 signing-service —— 无 prod profile、默认 URL 指向 localhost，
       # 此处显式注入服务名与库；默认 URL 的 requireSSL + JKS 信任库一并覆盖。
@@ -276,6 +286,8 @@ services:
     environment:
       # Prometheus metrics endpoint can only be scraped with shared NEXUS_METRICS_TOKEN.
       - NEXUS_METRICS_TOKEN=${NEXUS_METRICS_TOKEN:?prod 必需：禁止占位默认值}
+      # 轮换期旧 token（PLAN-077）；默认空=仅 current。
+      - NEXUS_METRICS_TOKEN_PREVIOUS=${NEXUS_METRICS_TOKEN_PREVIOUS:-}
       - SPRING_PROFILES_ACTIVE=prod
       - NEX_REDIS_HOST=redis
       - NEX_REDIS_PORT=6379

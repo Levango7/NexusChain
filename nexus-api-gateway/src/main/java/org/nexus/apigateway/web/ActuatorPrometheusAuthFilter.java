@@ -23,8 +23,9 @@ import reactor.core.publisher.Mono;
  * servlet {@code Filter}. The health endpoint remains intentionally unauthenticated because
  * Kubernetes probes depend on it.</p>
  *
- * <p>Absence of a configured token fails closed. The shared {@code NEXUS_METRICS_TOKEN} is
- * supplied by the deployment secret and never committed to the repository.</p>
+ * <p>Absence of a configured token fails closed. During credential rotation the filter accepts
+ * the current token and an optional previous token so monitoring and deployments can be rolled
+ * independently without an authentication gap (PLAN-077).</p>
  */
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE)
@@ -34,9 +35,13 @@ public class ActuatorPrometheusAuthFilter implements WebFilter {
     private static final String BEARER_PREFIX = "Bearer ";
 
     private final String expectedToken;
+    private final String previousToken;
 
-    public ActuatorPrometheusAuthFilter(@Value("${nexus.actuator.prometheus-token:}") String expectedToken) {
+    public ActuatorPrometheusAuthFilter(
+            @Value("${nexus.actuator.prometheus-token:}") String expectedToken,
+            @Value("${nexus.actuator.prometheus-previous-token:}") String previousToken) {
         this.expectedToken = expectedToken == null ? "" : expectedToken;
+        this.previousToken = previousToken == null ? "" : previousToken;
     }
 
     @Override
@@ -60,6 +65,7 @@ public class ActuatorPrometheusAuthFilter implements WebFilter {
         return chain.filter(exchange);
     }
 
+    /** fail-closed 只由 current token 决定：previous 单独存在不算已配置。 */
     private boolean isTokenConfigured() {
         return expectedToken != null && !expectedToken.isBlank();
     }
@@ -72,9 +78,14 @@ public class ActuatorPrometheusAuthFilter implements WebFilter {
             return false;
         }
         String candidate = authorization.substring(BEARER_PREFIX.length());
-        return MessageDigest.isEqual(
-                expectedToken.getBytes(StandardCharsets.UTF_8),
-                candidate.getBytes(StandardCharsets.UTF_8));
+        return matches(expectedToken, candidate) || matches(previousToken, candidate);
+    }
+
+    private static boolean matches(String expected, String candidate) {
+        return expected != null && !expected.isBlank()
+                && MessageDigest.isEqual(
+                        expected.getBytes(StandardCharsets.UTF_8),
+                        candidate.getBytes(StandardCharsets.UTF_8));
     }
 
     private Mono<Void> reject(ServerWebExchange exchange, HttpStatus status, String message) {

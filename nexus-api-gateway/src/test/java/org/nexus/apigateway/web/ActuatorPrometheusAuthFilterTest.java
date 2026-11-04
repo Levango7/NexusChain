@@ -18,15 +18,22 @@ import static org.mockito.Mockito.when;
 
 class ActuatorPrometheusAuthFilterTest {
 
+    private static final String CURRENT = "current-token";
+    private static final String PREVIOUS = "previous-token";
+
     private static WebFilterChain chain() {
         WebFilterChain chain = mock(WebFilterChain.class);
         when(chain.filter(any())).thenReturn(Mono.empty());
         return chain;
     }
 
+    private static ActuatorPrometheusAuthFilter filter(String current, String previous) {
+        return new ActuatorPrometheusAuthFilter(current, previous);
+    }
+
     @Test
     void unconfiguredTokenFailsClosed() {
-        ActuatorPrometheusAuthFilter filter = new ActuatorPrometheusAuthFilter("");
+        ActuatorPrometheusAuthFilter filter = filter("", "");
         MockServerWebExchange exchange = MockServerWebExchange.from(
                 MockServerHttpRequest.get("/actuator/prometheus").build());
 
@@ -36,8 +43,20 @@ class ActuatorPrometheusAuthFilterTest {
     }
 
     @Test
+    void unconfiguredCurrentFailsClosedEvenIfPreviousIsSet() {
+        ActuatorPrometheusAuthFilter filter = filter("", PREVIOUS);
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.get("/actuator/prometheus")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + PREVIOUS).build());
+
+        filter.filter(exchange, chain()).block();
+
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, exchange.getResponse().getStatusCode());
+    }
+
+    @Test
     void rejectsWrongToken() {
-        ActuatorPrometheusAuthFilter filter = new ActuatorPrometheusAuthFilter("expected-token");
+        ActuatorPrometheusAuthFilter filter = filter(CURRENT, PREVIOUS);
         MockServerWebExchange exchange = MockServerWebExchange.from(
                 MockServerHttpRequest.get("/actuator/prometheus")
                         .header(HttpHeaders.AUTHORIZATION, "Bearer wrong").build());
@@ -51,10 +70,23 @@ class ActuatorPrometheusAuthFilterTest {
 
     @Test
     void acceptsExpectedToken() {
-        ActuatorPrometheusAuthFilter filter = new ActuatorPrometheusAuthFilter("expected-token");
+        ActuatorPrometheusAuthFilter filter = filter(CURRENT, PREVIOUS);
         MockServerWebExchange exchange = MockServerWebExchange.from(
                 MockServerHttpRequest.get("/actuator/prometheus")
-                        .header(HttpHeaders.AUTHORIZATION, "Bearer expected-token").build());
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + CURRENT).build());
+        WebFilterChain chain = chain();
+
+        filter.filter(exchange, chain).block();
+
+        verify(chain).filter(exchange);
+    }
+
+    @Test
+    void acceptsPreviousTokenDuringRotation() {
+        ActuatorPrometheusAuthFilter filter = filter(CURRENT, PREVIOUS);
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.get("/actuator/prometheus")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + PREVIOUS).build());
         WebFilterChain chain = chain();
 
         filter.filter(exchange, chain).block();
@@ -64,7 +96,7 @@ class ActuatorPrometheusAuthFilterTest {
 
     @Test
     void leavesHealthUnauthenticated() {
-        ActuatorPrometheusAuthFilter filter = new ActuatorPrometheusAuthFilter("expected-token");
+        ActuatorPrometheusAuthFilter filter = filter(CURRENT, PREVIOUS);
         MockServerWebExchange exchange = MockServerWebExchange.from(
                 MockServerHttpRequest.get("/actuator/health").build());
         WebFilterChain chain = chain();

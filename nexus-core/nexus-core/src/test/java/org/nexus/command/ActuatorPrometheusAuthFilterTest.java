@@ -9,14 +9,17 @@ import org.junit.jupiter.api.Test;
 
 import java.io.PrintWriter;
 
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class ActuatorPrometheusAuthFilterTest {
+
+    private static final String CURRENT = "current-token";
+    private static final String PREVIOUS = "previous-token";
 
     private HttpServletRequest request(String path, String authorization) {
         HttpServletRequest request = mock(HttpServletRequest.class);
@@ -33,9 +36,13 @@ class ActuatorPrometheusAuthFilterTest {
         return response;
     }
 
+    private static ActuatorPrometheusAuthFilter filter(String current, String previous) {
+        return new ActuatorPrometheusAuthFilter(current, previous);
+    }
+
     @Test
     void unconfiguredTokenFailsClosed() throws Exception {
-        ActuatorPrometheusAuthFilter filter = new ActuatorPrometheusAuthFilter("");
+        ActuatorPrometheusAuthFilter filter = filter("", "");
         FilterChain chain = mock(FilterChain.class);
         PrintWriter[] sink = new PrintWriter[1];
         HttpServletResponse response = response(sink);
@@ -48,8 +55,21 @@ class ActuatorPrometheusAuthFilterTest {
     }
 
     @Test
+    void unconfiguredCurrentFailsClosedEvenIfPreviousIsSet() throws Exception {
+        ActuatorPrometheusAuthFilter filter = filter("", PREVIOUS);
+        FilterChain chain = mock(FilterChain.class);
+        PrintWriter[] sink = new PrintWriter[1];
+        HttpServletResponse response = response(sink);
+
+        filter.doFilter(request("/actuator/prometheus", "Bearer " + PREVIOUS), response, chain);
+
+        verify(response).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+        verify(chain, times(0)).doFilter(any(ServletRequest.class), any(ServletResponse.class));
+    }
+
+    @Test
     void rejectsInvalidMetricsToken() throws Exception {
-        ActuatorPrometheusAuthFilter filter = new ActuatorPrometheusAuthFilter("expected-token");
+        ActuatorPrometheusAuthFilter filter = filter(CURRENT, PREVIOUS);
         FilterChain chain = mock(FilterChain.class);
         PrintWriter[] sink = new PrintWriter[1];
         HttpServletResponse response = response(sink);
@@ -64,23 +84,37 @@ class ActuatorPrometheusAuthFilterTest {
 
     @Test
     void acceptsExpectedMetricsToken() throws Exception {
-        ActuatorPrometheusAuthFilter filter = new ActuatorPrometheusAuthFilter("expected-token");
+        ActuatorPrometheusAuthFilter filter = filter(CURRENT, PREVIOUS);
         FilterChain chain = mock(FilterChain.class);
-        HttpServletResponse response = mock(HttpServletResponse.class);
+        PrintWriter[] sink = new PrintWriter[1];
+        HttpServletResponse response = response(sink);
 
-        filter.doFilter(request("/actuator/prometheus", "bearer expected-token"), response, chain);
+        filter.doFilter(request("/actuator/prometheus", "bearer " + CURRENT), response, chain);
 
-        verify(chain).doFilter(org.mockito.Mockito.any(), org.mockito.Mockito.any());
+        verify(chain).doFilter(any(ServletRequest.class), any(ServletResponse.class));
+    }
+
+    @Test
+    void acceptsPreviousTokenDuringRotation() throws Exception {
+        ActuatorPrometheusAuthFilter filter = filter(CURRENT, PREVIOUS);
+        FilterChain chain = mock(FilterChain.class);
+        PrintWriter[] sink = new PrintWriter[1];
+        HttpServletResponse response = response(sink);
+
+        filter.doFilter(request("/actuator/prometheus", "Bearer " + PREVIOUS), response, chain);
+
+        verify(chain).doFilter(any(ServletRequest.class), any(ServletResponse.class));
     }
 
     @Test
     void leavesHealthUnauthenticated() throws Exception {
-        ActuatorPrometheusAuthFilter filter = new ActuatorPrometheusAuthFilter("expected-token");
+        ActuatorPrometheusAuthFilter filter = filter(CURRENT, PREVIOUS);
         FilterChain chain = mock(FilterChain.class);
-        HttpServletResponse response = mock(HttpServletResponse.class);
+        PrintWriter[] sink = new PrintWriter[1];
+        HttpServletResponse response = response(sink);
 
         filter.doFilter(request("/actuator/health", null), response, chain);
 
-        verify(chain).doFilter(org.mockito.Mockito.any(), org.mockito.Mockito.any());
+        verify(chain).doFilter(any(ServletRequest.class), any(ServletResponse.class));
     }
 }

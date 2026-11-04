@@ -24,18 +24,25 @@ import org.springframework.beans.factory.annotation.Value;
  * intentionally unauthenticated because Kubernetes probes and local compose health checks are
  * operational liveness/readiness dependencies.</p>
  *
- * <p>Absence of a configured token fails closed. Production and local metrics wiring must
- * provide the same secret through a secret manager, never with a literal token in source.</p>
+ * <p>Absence of a configured token fails closed. During credential rotation the filter accepts
+ * the current token and an optional previous token so Prometheus and the applications can be
+ * rolled independently without an authentication gap (PLAN-077).</p>
  */
 @Component
 @Order(0)
 public class ActuatorPrometheusAuthFilter implements Filter {
 
     private static final String METRICS_PATH = "/actuator/prometheus";
-    private final String expectedToken;
+    private static final String BEARER_PREFIX = "Bearer ";
 
-    public ActuatorPrometheusAuthFilter(@Value("${nexus.actuator.prometheus-token:}") String expectedToken) {
+    private final String expectedToken;
+    private final String previousToken;
+
+    public ActuatorPrometheusAuthFilter(
+            @Value("${nexus.actuator.prometheus-token:}") String expectedToken,
+            @Value("${nexus.actuator.prometheus-previous-token:}") String previousToken) {
         this.expectedToken = expectedToken == null ? "" : expectedToken;
+        this.previousToken = previousToken == null ? "" : previousToken;
     }
 
     @Override
@@ -69,21 +76,27 @@ public class ActuatorPrometheusAuthFilter implements Filter {
         chain.doFilter(request, response);
     }
 
+    /** fail-closed 只由 current token 决定：previous 单独存在不算已配置。 */
     private boolean isTokenConfigured() {
         return expectedToken != null && !expectedToken.isBlank();
     }
 
     private boolean isExpectedBearer(String authorization) {
-        if (authorization == null || authorization.length() < "Bearer ".length() + 1) {
+        if (authorization == null || authorization.length() < BEARER_PREFIX.length() + 1) {
             return false;
         }
-        if (!authorization.regionMatches(true, 0, "Bearer ", 0, "Bearer ".length())) {
+        if (!authorization.regionMatches(true, 0, BEARER_PREFIX, 0, BEARER_PREFIX.length())) {
             return false;
         }
-        String candidate = authorization.substring("Bearer ".length());
-        return MessageDigest.isEqual(
-                expectedToken.getBytes(StandardCharsets.UTF_8),
-                candidate.getBytes(StandardCharsets.UTF_8));
+        String candidate = authorization.substring(BEARER_PREFIX.length());
+        return matches(expectedToken, candidate) || matches(previousToken, candidate);
+    }
+
+    private static boolean matches(String expected, String candidate) {
+        return expected != null && !expected.isBlank()
+                && MessageDigest.isEqual(
+                        expected.getBytes(StandardCharsets.UTF_8),
+                        candidate.getBytes(StandardCharsets.UTF_8));
     }
 
     private void reject(HttpServletResponse response, int status, String message) throws IOException {

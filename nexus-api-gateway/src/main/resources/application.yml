@@ -71,6 +71,8 @@ spring:
 nexus:
   actuator:
     prometheus-token: ${NEXUS_METRICS_TOKEN:}
+    # 轮换用: 旧 token 在切换期并行接受, 空=仅 current (PLAN-077)
+    prometheus-previous-token: ${NEXUS_METRICS_TOKEN_PREVIOUS:}
   api-gateway:
     # === 鉴权配置（AuthenticationFilter） ===
     # P1-D1：统一鉴权协议，与 nexus-gateway 对齐 X-NexusChain-* 头
