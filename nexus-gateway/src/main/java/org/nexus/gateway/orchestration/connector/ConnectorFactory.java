@@ -113,7 +113,10 @@ public class ConnectorFactory {
         setField(connector, "merchantPrivateKey", merchantPrivateKey);
         setField(connector, "alipayPublicKey", alipayPublicKey);
         setField(connector, "enabled", true);
-        setField(connector, "apiBaseUrl", "https://openapi-sandbox.dl.alipaydev.com/gateway.do");
+        // 2026-11-05 修复：此前这里**硬编码**支付宝公开沙箱域，且完全忽略 config.getBaseUrl()
+        // ⇒ 管理员在库配了真实 app_id / 真实商户私钥，签名与订单仍被发到第三方演示域。
+        // 现按显式配置传递；为空时由 AlipayConnector 的交易期校验 fail-closed 拒绝外发。
+        setField(connector, "apiBaseUrl", config.getBaseUrl() == null ? "" : config.getBaseUrl().trim());
 
         log.info("Created dynamic AlipayConnector: id={}, appId={}",
                 config.getId(), config.getAppId());

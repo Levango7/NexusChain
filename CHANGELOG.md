@@ -6,6 +6,29 @@
 
 > 本段为 2.75.0（2026-10-26）之后合入的批次，按时间倒序；2.75.0 的明细见下方同名小节。
 
+### Alipay 连接器目标地址 fail-closed（板 20261105-0002，2026-11-05）
+
+`ConnectorFactory.createAlipay` 此前把支付宝网关**硬编码**为公开沙箱域
+`https://openapi-sandbox.dl.alipaydev.com/gateway.do`，且完全忽略
+`ConnectorConfig.baseUrl`；`AlipayConnector` 的 `@Value` 与 `application.yml`
+两处兜底同一个沙箱域。结果是：管理员配了**真实 app_id + 真实商户私钥**，
+生产签名与订单仍被外发到第三方演示域（表现为通道全量失败 + 信息外发）。
+
+- **目标地址改为必填**：动态注册 alipay 连接器必须显式给 `base_url`，
+  并经 `PspTargetPolicy.isAllowedBaseUrl`（与 http_psp 注册路径对齐）+ 拒绝沙箱域，否则 400；
+- **工厂透传**：`createAlipay` 改读 `config.getBaseUrl()`，不再硬编码；
+- **交易期唯一闸**：`sandbox=false` 时地址为空或属 `alipaydev.com` ⇒ 四个入口
+  （createPayment / queryPayment / closePayment / refund）一律 fail-closed 拒绝外发；
+  `queryPayment` 沿用既有"外呼失败"形状（回落本地状态），不新造订单状态；
+- **不做启动崩溃**：连接器默认 `enabled=false`，为一个未启用的通道让整个网关起不来
+  会把"一条通道配错"放大成"全站不可用"；缺配的表现是拒绝交易 + 稳定日志标记
+  `ALIPAY_TARGET_ADDRESS_MISSING` / `ALIPAY_TARGET_SANDBOX_IN_PROD_MODE`；
+- **配置迁移**：`NEX_PSP_ALIPAY_API_BASE_URL` 不再有沙箱兜底，生产需显式配
+  `https://openapi.alipay.com/gateway.do`；仅 `NEX_PSP_ALIPAY_SANDBOX=true` 才自动补沙箱域；
+- **测试**：原断言"默认值即沙箱域"的契约测试随本次改写（那条断言本身在给缺陷背书）；
+  新增 `AlipayTargetAddressFailClosedTest` 6 例，含两条反向对照（同域在 sandbox=true 下放行 /
+  生产网关放行），证明拒绝分支不是恒真。
+
 
 ### 结算平台出款地址 fail-closed（板 20261102-0320，2026-11-04）
 

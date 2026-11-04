@@ -69,11 +69,14 @@ class AlipayConnectorTest {
         return rt;
     }
 
-    /** 配置为 real 模式：sandbox=false + 真实 RSA 私钥 */
+    /** 配置为 real 模式：sandbox=false + 真实 RSA 私钥 + **显式生产目标地址** */
     private void setRealMode(AlipayConnector c) throws Exception {
         setField(c, "sandbox", false);
         setField(c, "merchantPrivateKey", testPrivateKeyBase64);
         setField(c, "appId", "test_app");
+        // 2026-11-05：目标地址不再有沙箱兜底，"real 模式"必须自带生产网关，
+        // 否则交易期校验会按新契约拒绝（那正是要测的行为，见 AlipayTargetAddressFailClosedTest）。
+        setField(c, "apiBaseUrl", "https://openapi.alipay.com/gateway.do");
     }
 
     private ConnectorPaymentRequest sampleRequest() {
@@ -181,16 +184,18 @@ class AlipayConnectorTest {
         assertEquals("0.00", result);
     }
 
-    // ==================== 默认沙箱地址 ====================
+    // ==================== 目标地址：无沙箱兜底（2026-11-05 收紧） ====================
 
     @Test
-    @DisplayName("默认 apiBaseUrl 为沙箱地址 https://openapi-sandbox.dl.alipaydev.com/gateway.do")
-    void defaultApiBaseUrl_isSandbox() throws Exception {
+    @DisplayName("默认 apiBaseUrl 为空：不再把支付宝公开沙箱域当缺省值")
+    void defaultApiBaseUrl_isEmpty_notSandbox() throws Exception {
         AlipayConnector c = newConnector();
         Field f = AlipayConnector.class.getDeclaredField("apiBaseUrl");
         f.setAccessible(true);
         String apiBaseUrl = (String) f.get(c);
-        assertEquals("https://openapi-sandbox.dl.alipaydev.com/gateway.do", apiBaseUrl);
+        assertEquals("", apiBaseUrl);
+        assertFalse(apiBaseUrl.contains("alipaydev.com"),
+                "缺省值不得指向第三方公开沙箱域");
     }
 
     // ==================== Dry-run 模式：bizContent 不调用 ObjectMapper ====================
