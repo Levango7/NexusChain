@@ -27,17 +27,33 @@
      ServiceMonitor `authorization: {type: Bearer, credentialsFile: /etc/prometheus/secrets/<...>/<key>}`；
 3. 两处值不一致时表现为 **Prometheus `up=0` + lastError=401**（见 §四）。
 
-## 三、轮换步骤（如实：当前不支持双 token 并行）
+## 三、轮换步骤（零空窗，PLAN-077 起支持 current + previous 双 token）
+
+过滤器同时接受：
+
+- `NEXUS_METRICS_TOKEN`（current，**必须配置**，否则 503 fail-closed）；
+- `NEXUS_METRICS_TOKEN_PREVIOUS`（previous，可空；空 = 仅 current，与旧行为一致）。
+
+零空窗轮换：
 
 1. 生成新 token（≥32 字节随机；不进仓库、不进镜像、不进 CI 日志）；
-2. **先**更新 Prometheus 侧引用（token 文件/Secret 内容会立即生效于下次 reload/抓取）；
-3. **再**滚动重启各 Spring 服务，让它们读到新 `NEXUS_METRICS_TOKEN`
-   （过滤器在进程启动时读取 env，运行中不会热更新）；
-4. 验证：Prometheus `up{job="nexus-*"}=1`，`/actuator/prometheus` 带新 token 为 200；
-5. **期间的抓取空窗是已知代价**：旧 token 被 Prometheus 先换掉、服务未重启完，
-   或服务先换、Prometheus 未换，都会出现短暂 401。指标是 pull 型，不会丢业务数据；
-   若要求零空窗，需要「同时接受新旧两个 token」的改造（未实现，立项另行评估）。
-6. 轮换后 15 分钟内留意 `up==0` 与任何 `FinalityOutboxUnreadable` 类误报。
+2. **应用侧第一步**：把**新** token 写入 `NEXUS_METRICS_TOKEN_PREVIOUS`
+   （Helm：`nexus-secrets` 加该键；compose：`NEXUS_METRICS_TOKEN_PREVIOUS`），
+   滚动全部服务。此时 current=旧、previous=新，**两个都接受**；
+3. **Prometheus 侧**：把 token 文件/Secret 内容换成**新** token；
+4. 验证：`up{job="nexus-*"}=1`，带新 token 请求 `/actuator/prometheus` 为 200；
+5. **应用侧第二步**：把 `NEXUS_METRICS_TOKEN` 提升为新 token，
+   并清空/删除 `NEXUS_METRICS_TOKEN_PREVIOUS`，再滚动一次；
+6. 轮换后 15 分钟内留意 `up==0` 与 `FinalityOutboxUnreadable` 类误报；
+7. 失败回退：任何一步异常时，清空 previous 即回到单 token（current）状态，
+   不需要同时回退 Prometheus。
+
+注意：
+
+- 仍**没有热更新**（过滤器在进程启动时读 env，改 env 必须滚动 Pod/容器）；
+- 不支持第三个 token；previous 只用于单向过渡；
+- **previous 单独存在不会替代 current**：current 缺失时依旧 503（防误配把
+  fail-closed 变成「只认旧值」）。
 
 ## 四、排查树
 
@@ -67,5 +83,5 @@ curl -s -D - -o /dev/null http://127.0.0.1:19585/actuator/prometheus | head -5  
 
 - 本 runbook 基于本机真实进程演练（PLAN-076，2026-11-05）：同内核单机 +
   真实 Prometheus 3.15.1，**不是物理多机/真实集群验收**；
-- 未覆盖：K8s Operator 实际 Secret 挂载验收、双 token 并行、自动轮换；
+- 未覆盖：K8s Operator 实际 Secret 挂载验收、自动轮换（双 token 并行已支持，见 §三）；
 - 不改 `/actuator/health`、不改业务 RPC 的 JWT 语义。
