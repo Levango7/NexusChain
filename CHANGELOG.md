@@ -23,8 +23,12 @@
 - **compose 同步**：`docker-compose.prod.yml` 网关段加
   `NEX_SETTLEMENT_PLATFORM_ADDRESS=${NEX_SETTLEMENT_PLATFORM_ADDRESS:-}`。用 `:-` 而非 `:?`
   是刻意的：该值只被结算一条路径消费，缺它不该让整个网关栈起不来（`:?` 会把"运维还没填"
-  放大成"全站不可部署"）。dev `docker-compose.yml` 不加，与该文件既有口径一致
-  （wallet / refund 两个平台地址同样只在 prod 注入）；
+  放大成"全站不可部署"）。dev `docker-compose.yml` 不加：dev 不跑真实结算。
+  （如实边界：`deploy/` 里 wallet / refund 两个平台地址同样没有注入位，本次只补结算
+  这一条，不顺手扩范围。）
+- **k8s 静态清单同步**：`deploy/k8s/00-namespace-config.yml` 的 `nexus-config` ConfigMap 增
+  `NEX_SETTLEMENT_PLATFORM_ADDRESS: ""`——`10-gateway.yml` 经 `envFrom` 注入 gateway，
+  与 Helm / compose 两条路径同键同语义（留空 = 运行期按笔 fail-closed，不阻断启动）；
 - **零副作用证明**：`helm lint` prod/staging 各 0 failed；同 chart 用 base 与新的两个
   values 分别渲染再 diff，prod / staging **各只差 2 行**（正是新增的 name/value），
   没有 `checksum/config` 抖动（该注解只哈希 `config.applicationYml`，不含 `extraEnv`），
@@ -33,7 +37,10 @@
   渲染**硬断言**该键出现在 `nexus-gateway` 的容器 env 里（按行首 `kind: Deployment` +
   `metadata.name` 精确取文档，避免 HPA/Service 假阳性），并带反向对照：默认 values 渲染
   不得含该键（否则断言退化成读 chart 自身默认值）。值为空时打印提醒而非判红，
-  并把"段落错=白注入"与"已落 FAILED 的单要人工重放"写进失败信息。
+  并把"段落错=白注入"与"已落 FAILED 的单要人工重放"写进失败信息；
+  同一步骤对渲染路径看不到的两条部署面再作静态 `grep` 断言：
+  `deploy/k8s/00-namespace-config.yml`（ConfigMap）与 `docker-compose.prod.yml`（env），
+  任一缺键即判红。
 
 ### Alipay 连接器目标地址 fail-closed（板 20261105-0002，2026-11-05）
 

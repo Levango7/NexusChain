@@ -23,6 +23,13 @@ data:
   # 此前误写 NEXUS_CHAIN_RPC_URL → 恒回落 localhost:19585 → chainNode 健康项
   # DOWN → /actuator/health 503 → liveness 反复杀 Pod。
   NEX_CHAIN_RPC_URL: "http://nexus-core-0.nexus-core:19585"
+  # 结算平台出款地址（2026-11-05，板 20261104-0746 / nex runbook 20261105-0435）：
+  # nexus-gateway 的 nexus.settlement.platform-address = ${NEX_SETTLEMENT_PLATFORM_ADDRESS:}。
+  # 本 ConfigMap 被多个服务 envFrom 注入，但只有 gateway 消费该键；其余服务读到无害。
+  # 默认留空 = 保持 fail-closed（DefaultClearingEngine 在记账前判空即记 FAILED，
+  # 不写 ledger、不动链）。**部署前必须由部署方填入平台热钱包地址**；留空不会阻断
+  # 启动，但每笔结算都会失败且 FAILED 是终态（不自动重跑）。
+  NEX_SETTLEMENT_PLATFORM_ADDRESS: ""
   # 注：应用侧 nexus.exchange-wallet.base-url 目前**没有** env 占位符
   # （硬编码 localhost:8081），此键暂无消费者；待该属性环境变量化后启用。
   # NEXUS_WALLET_BASE_URL: "http://nexus-gateway:8080"

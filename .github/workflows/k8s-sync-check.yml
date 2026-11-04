@@ -663,6 +663,13 @@ jobs:
                   "该配置只能来自环境覆盖层（staging/prod values）")
           print("  ✓ 默认 values 无该键（负样本成立）")
           PYEOF
+          # 静态清单 / compose 两条部署路径同样必须有注入位：上面的 helm 渲染只覆盖
+          # values 驱动的 extraEnv，看不到 ConfigMap（k8s 静态清单）与 compose 的 env。
+          grep -q 'NEX_SETTLEMENT_PLATFORM_ADDRESS' deploy/k8s/00-namespace-config.yml \
+            || { echo "FAIL: deploy/k8s/00-namespace-config.yml 缺 NEX_SETTLEMENT_PLATFORM_ADDRESS（gateway 经 nexus-config envFrom 注入）"; exit 1; }
+          grep -q 'NEX_SETTLEMENT_PLATFORM_ADDRESS=' docker-compose.prod.yml \
+            || { echo "FAIL: docker-compose.prod.yml 缺 NEX_SETTLEMENT_PLATFORM_ADDRESS"; exit 1; }
+          echo "  ✓ deploy/k8s 静态清单与 docker-compose.prod.yml 均有注入位"
 
       # A 批（2026-09-08）：Alertmanager 路由树真实校验——此前 5 条告警 +
       # 路由配置全存在但**从未验证过路由语法**（健康扫描抓出的"看起来有
