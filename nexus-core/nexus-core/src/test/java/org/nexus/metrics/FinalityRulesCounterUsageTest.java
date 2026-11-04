@@ -39,10 +39,23 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class FinalityRulesCounterUsageTest {
 
-    /** 与 {@link FinalityRulesContractTest} 相同的两个告警组（引用形状也在这里断言）。 */
+    /**
+     * 受检查的告警组。
+     *
+     * <p>除 {@link FinalityRulesContractTest} 的两个组外，**显式纳入
+     * {@code nexuschain.block-persistence}**：它的
+     * {@code nexus_block_writer_write_failures_total} /
+     * {@code state_update_timeouts_total} 同样是 counter，裸比较同样会在进程重启后
+     * 永不触发。引用形状是跨组通用的不变量，没有理由按组豁免。</p>
+     *
+     * <p>不含 {@code nexuschain.jvm} 等组：那里的告警引用的指标（如
+     * {@code container_cpu_usage_seconds_total}）不是 {@code nexus_*} 前缀，
+     * 由 kube-prometheus 自身保证，不在本仓契约范围内。</p>
+     */
     private static final List<String> GROUPS = List.of(
             "nexuschain.finality",
-            "nexuschain.block-adoption");
+            "nexuschain.block-adoption",
+            "nexuschain.block-persistence");
 
     /** Prometheus 侧 counter 名（Micrometer FunctionCounter 的暴露形状）。 */
     private static final java.util.regex.Pattern COUNTER_NAME =

@@ -35,8 +35,21 @@ PLAN-073 交付留言 §五把「真实集群告警演练」登记为受限于 *
 | webhook 接收器 | WSL python3 | 9094 | 把每次投递原样落盘 `hooks/hook-NNN.json` |
 
 **端口选择教训**：`9090-9091` 被 Windows 侧 Docker 容器
-`opsmesh-controlplane-1` 占用（`docker ps` 可见），最初 Prometheus 起不来就是这个原因；
-Alertmanager 默认 gossip 端口与 webhook 9094 冲突。改 9097/9098/9099/9094 后全部就绪。
+`opsmesh-controlplane-1` 占用（`docker ps --format '{{.Names}} {{.Ports}}'` 可见），
+最初 Prometheus 起不来就是这个原因；Alertmanager 默认 gossip 端口又与 webhook 的
+9094 冲突（`unable to initialize gossip mesh … port 9094: bind: address already in use`）。
+监控栈改用 **9097 / 9098 / 9099 / 9094** 后全部就绪。
+⇒ 本机有多个 docker 容器与既有服务占用常用端口，起栈前先 `ss -ltn` + `docker ps`
+核对端口，比失败后再猜快得多。
+
+另有四处**自伤**（如实登记，都是本机脚本问题而非产品问题）：
+
+| 自伤 | 现象 | 处置 |
+|---|---|---|
+| WSL 内 `nohup … &` | `wsl -e bash -c` 会话结束即连带清理，日志文件都没落 | 脚本放 `/mnt/c` 持久侧，用 Windows `Start-Process` 托管，日志也写 `/mnt/c` |
+| `set -u` 下引用未设变量 | `FINALITY_STORE: unbound variable` 直接退出 | `${VAR:-default}`，并在脚本内显式 `export` |
+| `pgrep -f alertmanager` | 匹配到 java classpath 里含该词的 nexus-core 进程 ⇒ 误判「已在运行」 | `pgrep -af <完整二进制路径>` |
+| 按端口清杀脚本 | 端口集合误含 19585 ⇒ 误杀一次 nexus-core（重启后恢复，无数据影响） | 端口集合只含监控端口，**绝不**包含 19585/5432 |
 
 ## 三、四条事实的实测（对应 PLAN-073 未做到的部分）
 
