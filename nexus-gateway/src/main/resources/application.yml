@@ -249,6 +249,20 @@ nexus:
   gateway:
     refund:
       platform-address: ${NEX_GATEWAY_REFUND_PLATFORM_ADDRESS:}
+    # 大额签名「审批 → 执行」状态机的超时与不变量（SigningApprovalExecutionService）。
+    # awaiting-timeout / executing-timeout 此前只靠 @Value 默认值（PT2H/PT1H），未落 yml；
+    # 2026-11-04 补文档化 + 新增 signing-ttl-seconds 镜像键（板 20261104-0712 §二）。
+    approval:
+      # 审批等待上限：超过后仍 PENDING ⇒ 按「确定未动账」FAILED（结算 S3 据此冲正贷账）。
+      # ⚠️ 不变量（启动时强校验，违例拒绝启动）：本值必须 ≥ signing 审批有效期
+      #    nexus.approval.ttl-seconds（signing 侧默认 3600）。否则网关先判超时冲正、
+      #    signing 侧审批仍可被批准执行 ⇒ 反向账实不符（款打了、账已冲）。
+      awaiting-timeout: PT2H
+      # EXECUTING 卡死上限：超过后转 EXECUTION_UNKNOWN（结果不明，禁止自动重试）。
+      executing-timeout: PT1H
+      # signing 侧审批有效期镜像（应与 signing 的 nexus.approval.ttl-seconds 一致，
+      # signing 侧默认 3600）。仅用于启动时校验上面那条不变量，不参与运行时判定。
+      signing-ttl-seconds: 3600
 
   # Phase 1 任务 #55：服务边界拆分 + Feign 传输配置
   #

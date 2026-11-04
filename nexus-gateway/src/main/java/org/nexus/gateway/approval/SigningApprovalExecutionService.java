@@ -75,16 +75,46 @@ public class SigningApprovalExecutionService {
     /** EXECUTING 卡死上限：超过后转 EXECUTION_UNKNOWN，停止自动推进、交人工核对。 */
     private final Duration executingTimeout;
 
+    /**
+     * signing 侧审批有效期（秒）的<b>镜像值</b>：必须与 signing 的
+     * {@code nexus.approval.ttl-seconds} 保持一致（signing 侧默认 3600）。
+     *
+     * <p>为什么网关要知道它：本类把「审批等待超过 {@link #awaitingTimeout}」判定为
+     * <b>确定未动账</b>（FAILED，结算 S3 据此冲正贷账）。该判定成立的前提是
+     * <b>网关放弃等待时，signing 侧的审批已经失效、不可能再被批准执行</b>——
+     * 即 {@code awaitingTimeout ≥ signing TTL}。若部署方把 signing TTL 调大而
+     * 网关等待上限没跟上，网关会先判超时并触发冲正，而 signing 侧审批仍可被批准执行，
+     * 造成<b>反向账实不符</b>（款打了、账已冲）。构造时强制校验这条不变量，
+     * 违例直接拒绝启动（fail-closed），见板 20261104-0712 §二。</p>
+     */
+    private final long signingApprovalTtlSeconds;
+
     public SigningApprovalExecutionService(SigningServiceFeignClient signingClient,
                                            ApprovalExecutionLinkRepository repository,
                                            @Value("${nexus.gateway.approval.awaiting-timeout:PT2H}")
                                            Duration awaitingTimeout,
                                            @Value("${nexus.gateway.approval.executing-timeout:PT1H}")
-                                           Duration executingTimeout) {
+                                           Duration executingTimeout,
+                                           @Value("${nexus.gateway.approval.signing-ttl-seconds:3600}")
+                                           long signingApprovalTtlSeconds) {
         this.signingClient = signingClient;
         this.repository = repository;
         this.awaitingTimeout = awaitingTimeout;
         this.executingTimeout = executingTimeout;
+        this.signingApprovalTtlSeconds = signingApprovalTtlSeconds;
+        if (awaitingTimeout == null || awaitingTimeout.toSeconds() < signingApprovalTtlSeconds) {
+            throw new IllegalStateException(
+                    "配置不变量被破坏：nexus.gateway.approval.awaiting-timeout（当前 "
+                            + (awaitingTimeout == null ? "null" : awaitingTimeout.toSeconds() + "s")
+                            + "）必须 ≥ signing 侧审批有效期镜像 nexus.gateway.approval.signing-ttl-seconds"
+                            + "（当前 " + signingApprovalTtlSeconds + "s，应与 signing 的"
+                            + " nexus.approval.ttl-seconds 一致）。否则网关会先于 signing 审批失效判"
+                            + "「等待超时 ⇒ 确定未动账」，结算 S3 将冲正一笔之后仍可能被执行的审批，"
+                            + "造成反向账实不符。修复：调大 awaiting-timeout，或调小 signing 侧 ttl"
+                            + " 并同步本镜像键。（板 20261104-0712 §二）");
+        }
+        log.info("审批等待上限 {}s ≥ signing 审批有效期镜像 {}s：超时判「确定未动账」安全",
+                awaitingTimeout.toSeconds(), signingApprovalTtlSeconds);
     }
 
     /**
