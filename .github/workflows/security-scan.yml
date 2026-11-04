@@ -222,6 +222,58 @@ jobs:
           exit-code: 1
 
   # ============================================================
+  # 2a. PR 轻量基础镜像腿（板 20261105-0445 / E1，2026-11-05）
+  # ------------------------------------------------------------
+  # 背景：trivy-docker-scan 只在 push master 跑（构建 13 个应用镜像成本高），
+  # 后果是「PR 全绿合并、master 持续红、红时长无约束」——2026-11-04 实证连红
+  # 多轮（Trivy DB 增补 libexpat1 CVE-2026-113351，无修复版，#465 豁免收口）。
+  # 而这类 finding 的源头是**运行阶段基础镜像的 OS 层**，对同源模块完全一致：
+  # 10 个 Java 模块共用 java17-debian13:nonroot，Rust 两模块共用 cc-debian13
+  # （zk 为 :nonroot 变体，OS 包层相同），explorer 用 node:24-alpine。
+  # 扫这 3 个基础镜像 ≈ 覆盖 13 个应用镜像的 OS 层，且**无需构建任何应用镜像**。
+  #
+  # 设计：
+  #   · 仅 pull_request 触发（push/cron 已有完整矩阵，重复扫无增量信号）；
+  #   · 阻断口径与 master 矩阵阻断步一致：CRITICAL,HIGH + .trivyignore；
+  #   · 成本实测依据：staleness job 用同样的「拉公开镜像 + 扫描」形态在 PR 上
+  #     跑，观测峰值 1.2 min（本 job 三镜像并行 ≈ 1.5 min 量级）；
+  #   · 红 = 基础镜像出现未豁免的 CRITICAL/HIGH ⇒ 处置路径 = 按既有豁免纪律
+  #     （只豁免上游无修复版系统包 + 注明删除条件 + staleness 复核）开豁免 PR，
+  #     再把本 PR rebase 到豁免之后。豁免 PR 自身携带新 .trivyignore，自洽变绿；
+  #   · 不上传 SARIF：Security tab 只呈现默认分支，push 路径矩阵已有全量 SARIF，
+  #     PR 上传只会增加噪音；
+  #   · 换基础镜像时必须同步改本矩阵（同 staleness job 的约束）。
+  # ============================================================
+  trivy-base-image-pr:
+    timeout-minutes: 15
+    if: github.event_name == 'pull_request'
+    name: Trivy Base Image Scan (PR light, ${{ matrix.base }})
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        base:
+          - gcr.io/distroless/java17-debian13:nonroot
+          - gcr.io/distroless/cc-debian13
+          - node:24-alpine
+    steps:
+      - name: Checkout 代码（取 .trivyignore）
+        uses: actions/checkout@v5
+
+      - name: Trivy 基础镜像扫描（CRITICAL,HIGH 阻断，带 .trivyignore）
+        # 钉 commit sha 提升供应链安全（v0.20.0 → b2933f565dbc598b29947660e66259e3c7bc8561）
+        # 更新策略：随依赖升级一并更新，需安全负责人审批
+        uses: aquasecurity/trivy-action@b2933f565dbc598b29947660e66259e3c7bc8561  # v0.20.0
+        with:
+          image-ref: ${{ matrix.base }}
+          severity: CRITICAL,HIGH
+          format: table
+          trivyignores: .trivyignore
+          exit-code: 1
+
+  # ============================================================
   # 2b. 豁免清单时效复核（**不阻断**，2026-10-07）
   # -----------------------------------------------------------------------------
   # 为什么要有这条：`.trivyignore` 的处置原则是"只豁免上游无可用修复版本的系统包"，
