@@ -38,6 +38,8 @@ services:
       dockerfile: nexus-gateway/Dockerfile
     expose: ['8080']
     environment:
+      # Prometheus metrics endpoint can only be scraped with shared NEXUS_METRICS_TOKEN.
+      - NEXUS_METRICS_TOKEN=${NEXUS_METRICS_TOKEN:?prod 必需：禁止占位默认值}
       - SPRING_PROFILES_ACTIVE=prod
       # 2026-10-12：DB 家族对齐 MySQL 8（原为 PostgreSQL，与 prod profile 的
       # db/migration-pg 一起构成"起不来"的组合：迁移冻结在 V17 而 ddl-auto=validate）。
@@ -96,6 +98,8 @@ services:
           cpus: '2.0'
           memory: 2048M
     environment:
+      # Prometheus metrics endpoint can only be scraped with shared NEXUS_METRICS_TOKEN.
+      - NEXUS_METRICS_TOKEN=${NEXUS_METRICS_TOKEN:?prod 必需：禁止占位默认值}
       # 2026-10-12 更正：core **确实**需要关系库 —— 它没有 JPA/Flyway，但有 PG 方言的
       # JDBC 链存储（RDBMSBlockChainImpl + resources/ddl.sql，schema 用 bytea 与双引号
       # 标识符，见 ddl.sql）。故全栈 DB 族切 MySQL 时 **core 例外，仍用 PostgreSQL**：
@@ -115,6 +119,8 @@ services:
       dockerfile: nexus-signing-service/Dockerfile
     expose: ['8082']
     environment:
+      # Prometheus metrics endpoint can only be scraped with shared NEXUS_METRICS_TOKEN.
+      - NEXUS_METRICS_TOKEN=${NEXUS_METRICS_TOKEN:?prod 必需：禁止占位默认值}
       - SPRING_PROFILES_ACTIVE=prod
       - NEX_NACOS_SERVER=nacos:8848
       - NEX_SEATA_SERVER=seata:8091
@@ -190,6 +196,8 @@ services:
       dockerfile: nexus-wallet-service/Dockerfile
     expose: ['8083']
     environment:
+      # Prometheus metrics endpoint can only be scraped with shared NEXUS_METRICS_TOKEN.
+      - NEXUS_METRICS_TOKEN=${NEXUS_METRICS_TOKEN:?prod 必需：禁止占位默认值}
       - SPRING_PROFILES_ACTIVE=prod
       - NEX_NACOS_SERVER=nacos:8848
       - NEX_SEATA_SERVER=seata:8091
@@ -231,6 +239,8 @@ services:
       dockerfile: nexus-bridge/Dockerfile
     expose: ['8084']
     environment:
+      # Prometheus metrics endpoint can only be scraped with shared NEXUS_METRICS_TOKEN.
+      - NEXUS_METRICS_TOKEN=${NEXUS_METRICS_TOKEN:?prod 必需：禁止占位默认值}
       - SPRING_PROFILES_ACTIVE=prod
       # 2026-10-12：同 signing-service —— 无 prod profile、默认 URL 指向 localhost，
       # 此处显式注入服务名与库；默认 URL 的 requireSSL + JKS 信任库一并覆盖。
@@ -264,6 +274,8 @@ services:
       dockerfile: nexus-api-gateway/Dockerfile
     expose: ['8085']
     environment:
+      # Prometheus metrics endpoint can only be scraped with shared NEXUS_METRICS_TOKEN.
+      - NEXUS_METRICS_TOKEN=${NEXUS_METRICS_TOKEN:?prod 必需：禁止占位默认值}
       - SPRING_PROFILES_ACTIVE=prod
       - NEX_REDIS_HOST=redis
       - NEX_REDIS_PORT=6379
@@ -760,6 +772,8 @@ services:
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
+    secrets:
+      - nexus-metrics-token
     healthcheck:
       # 2026-10-18 批次③：镜像（busybox 基座）自带 wget，/-/healthy 探针已在
       # prom/prometheus:v2.50.0 上实测（exec 形 exit=0、端到端 healthy）。
@@ -812,3 +826,7 @@ volumes:
   mpc-engine-1-data:
   mpc-engine-2-data:
   mpc-certs:
+
+secrets:
+  nexus-metrics-token:
+    environment: NEXUS_METRICS_TOKEN

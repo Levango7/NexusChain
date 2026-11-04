@@ -69,6 +69,8 @@ spring:
 
 # === NexusChain API Gateway 业务配置 ===
 nexus:
+  actuator:
+    prometheus-token: ${NEXUS_METRICS_TOKEN:}
   api-gateway:
     # === 鉴权配置（AuthenticationFilter） ===
     # P1-D1：统一鉴权协议，与 nexus-gateway 对齐 X-NexusChain-* 头

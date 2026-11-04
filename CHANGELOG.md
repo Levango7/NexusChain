@@ -7,6 +7,27 @@
 > 本段为 2.75.0（2026-10-26）之后合入的批次，按时间倒序；2.75.0 的明细见下方同名小节。
 
 
+### `/actuator/prometheus` 鉴权（PLAN-075，2026-11-05）
+
+PLAN-068 证明 Boot 4 actuator 由独立 handler mapping 服务、MVC 拦截器够不到，
+`/actuator/prometheus` 未授权即可抓取。本批为全部实际暴露 metrics 的 Spring/Boot
+服务（core/gateway/bridge/signing/wallet/api-gateway）加 Bearer token：
+
+- servlet 模块用 `ActuatorPrometheusAuthFilter`（`@Component` + `Filter`）；
+  WebFlux 的 api-gateway 用同语义 `WebFilter`（不能引 servlet 栈）；
+- 只拦 `/actuator/prometheus`；`/actuator/health` 保持公开供探针；
+- `NEXUS_METRICS_TOKEN` 缺失 ⇒ **503 fail-closed**；无/错 token ⇒ 401
+  + `WWW-Authenticate`；常量时间比较、不写日志；
+- Helm：core 经 `existingSecret` 的 `NEXUS_METRICS_TOKEN` 注入（`optional: true`，
+  不阻塞应用启动）；其余服务经 envFrom 的共享 `nexus-secrets` 注入；
+- Compose：`prometheus.yml` 六个 target 使用
+  `bearer_token_file:/run/secrets/nexus-metrics-token`，compose secret 取自
+  `NEXUS_METRICS_TOKEN` 环境变量；不把 token 提交进仓库；
+- `nexus-consortium` 无 `micrometer-registry-prometheus`、不暴露该端点，未修改。
+
+边界：生产 Secret 建立/轮换、Prometheus Operator/ServiceMonitor 的 token 读取、
+真实集群验收不在本批（由 platform/orchestrator 落地）；未触碰 L1/桥/钱包契约。
+
 ### 结算平台出款地址 fail-closed（板 20261102-0320，2026-11-04）
 
 `DefaultClearingEngine` 的 `nexus.settlement.platform-address` 此前默认

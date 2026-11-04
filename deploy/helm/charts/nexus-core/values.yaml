@@ -29,7 +29,8 @@ storageSize: 50Gi
 #       生产用客户自己的链参数。
 genesisConfigMap: ""
 
-# -- 既有凭据 Secret（nexus-secrets：NEX_DB_USERNAME / NEX_DB_PASSWORD）
+# -- 既有凭据 Secret（nexus-secrets：NEX_DB_USERNAME / NEX_DB_PASSWORD /
+# NEXUS_JWT_APP_SECRET / NEXUS_METRICS_TOKEN）
 existingSecret: nexus-secrets
 
 env:
