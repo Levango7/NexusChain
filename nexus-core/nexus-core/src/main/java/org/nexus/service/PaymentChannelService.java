@@ -126,7 +126,11 @@ public class PaymentChannelService {
                     emptySig
             );
 
-            txPool.add(tx);
+            if (!txPool.add(tx)) {
+                return APIResult.newFailResult(APIResult.FAIL,
+                        "CHANNEL_OPEN transaction was not accepted by the transaction pool: "
+                                + "the on-chain transaction was rejected");
+            }
 
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("channelId", channelId);

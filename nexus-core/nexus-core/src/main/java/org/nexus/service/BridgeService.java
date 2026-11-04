@@ -179,7 +179,11 @@ public class BridgeService {
             byte[] signature = privateKey.sign(tx.getRawForSign());
             tx.signature = signature;
 
-            txPool.add(tx);
+            if (!txPool.add(tx)) {
+                return APIResult.newFailResult(APIResult.FAIL,
+                        "BRIDGE_LOCK transaction was not accepted by the transaction pool: "
+                                + "the on-chain transaction was rejected");
+            }
 
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("bridgeTxId", bridgeTxId);
@@ -617,7 +621,11 @@ public class BridgeService {
             byte[] signature = privateKey.sign(tx.getRawForSign());
             tx.signature = signature;
 
-            txPool.add(tx);
+            if (!txPool.add(tx)) {
+                return APIResult.newFailResult(APIResult.FAIL,
+                        "BRIDGE_BURN transaction was not accepted by the transaction pool: "
+                                + "the on-chain transaction was rejected");
+            }
 
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("amount", amount);
