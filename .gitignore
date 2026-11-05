@@ -213,3 +213,7 @@ deploy/helm/charts/*.tgz
 
 # Seata TC 封装镜像的驱动 jar（构建前置，见 deploy/seata/Dockerfile）
 deploy/seata/lib/*.jar
+
+# 多机演练证据输出（docs/drill/multi-node-drill-plan.md §5，不入仓）
+evidence/
+.drill-pids/
