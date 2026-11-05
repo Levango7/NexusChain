@@ -1,0 +1,87 @@
+// ============================================================================
+// Java/Gradle 依赖清单导出（板 20261105-0502-qoder-cn-claim-java-license-scan）
+// ----------------------------------------------------------------------------
+// 为什么需要它：`scripts/check-license-policy.py` 的三条腿里 Java 一直是空洞
+// （脚本自述「Gradle 无锁文件，需解析已解析依赖树」）。npm 有 package-lock.json、
+// Rust 有 Cargo.lock，Java 侧唯一确定的「已解析」视图只有 Gradle 自己。
+//
+// 设计取舍：
+//   · **只读导出，不改构建语义**——用 init script 注册任务，不动任何模块的
+//     build.gradle，避免为了扫描给 7 个构建树都加配置；
+//   · 走 `runtimeClasspath` 的 **artifactView + lenient(true)**：这是会随产物分发的
+//     依赖集合（testRuntimeClasspath 不分发，不在许可义务范围内）；lenient 让
+//     「POM 有但 jar 缺失」的元数据依赖不至于把整个导出打死；
+//   · 跳过 `ProjectComponentIdentifier`（仓内模块互相依赖），它们不是第三方组件，
+//     查 Maven Central 必然查不到，混进来只会淹没真问题（与 Rust 腿跳过本地包同理）；
+//   · 输出目录用**系统属性** `-Dnexus.javaDepsOut=<绝对路径>` 传递而非 `-P`：
+//     `-P` 只落到根构建，included build（nexus-settlement 等 6 个独立构建树）读不到，
+//     而 CI 用 `--no-daemon` 在同一个 JVM 里跑完所有 `-p` 调用，系统属性是共享的。
+//     未传该属性时落到各项目的 `build/java-deps/`，本地手工跑也能拿到东西。
+//
+// 用法（CI 里对每个构建树根各跑一次，全部写进同一目录）：
+//   ./gradlew --no-daemon --init-script scripts/java-deps-export.init.gradle \
+//       -Dnexus.javaDepsOut=$PWD/build/java-deps exportJavaDependencies
+//   ./gradlew -p nexus-settlement ... 同上
+// 产物随后由 `scripts/java-deps-collect.py merge` 合成可提交清单
+// `scripts/java-dependencies.json`，许可字符串再进 `scripts/java-license-cache.json`。
+// ============================================================================
+
+import org.gradle.api.artifacts.component.ModuleComponentIdentifier
+
+def outDirProp = System.getProperty('nexus.javaDepsOut')
+
+gradle.projectsLoaded { g ->
+    g.rootProject.allprojects { p ->
+        p.plugins.withId('java') {
+            def cfg = p.configurations.findByName('runtimeClasspath')
+            if (cfg == null) {
+                return
+            }
+            def buildName = g.rootProject.name
+            def safePath = p.path.replaceAll(':', '_')
+            def outDir = outDirProp ? new File(outDirProp) : new File(p.buildDir, 'java-deps')
+            def outFile = new File(outDir, "${buildName}__${safePath}.json")
+
+            p.tasks.register('exportJavaDependencies') { t ->
+                t.group = 'reporting'
+                t.description = '把 runtimeClasspath 已解析的第三方坐标导出为 JSON（供许可扫描，不改构建语义）'
+                t.outputs.file(outFile)
+                t.doLast {
+                    def coords = new TreeSet<String>()
+                    def unresolved = new TreeSet<String>()
+                    cfg.incoming.artifactView { av -> av.lenient(true) }.artifacts.each { art ->
+                        def id = art.id.componentIdentifier
+                        if (id instanceof ModuleComponentIdentifier) {
+                            coords.add("${id.group}:${id.name}:${id.version}".toString())
+                        }
+                    }
+                    // lenient(true) 会把「解析得到但取不到文件」的依赖照样计入上面；
+                    // 真正**解析失败**的边不会出现在 artifactView 里，只能从解析结果比对。
+                    // 这里显式记录失败集合，让报告能区分「没有依赖」和「解析没成功」。
+                    try {
+                        cfg.incoming.resolutionResult.allDependencies.each { dep ->
+                            if (dep instanceof org.gradle.api.artifacts.result.UnresolvedDependencyResult) {
+                                unresolved.add(dep.attempted.toString())
+                            }
+                        }
+                    } catch (Exception ignored) {
+                        unresolved.add('(resolutionResult 读取失败)')
+                    }
+
+                    outDir.mkdirs()
+                    def sb = new StringBuilder()
+                    sb.append('{\n')
+                    sb.append("  \"build\": ").append(groovy.json.JsonOutput.toJson(buildName)).append(',\n')
+                    sb.append("  \"project\": ").append(groovy.json.JsonOutput.toJson(p.path)).append(',\n')
+                    sb.append("  \"configuration\": \"runtimeClasspath\",\n")
+                    sb.append("  \"coordinates\": ").append(groovy.json.JsonOutput.toJson(new ArrayList(coords))).append(',\n')
+                    sb.append("  \"unresolved\": ").append(groovy.json.JsonOutput.toJson(new ArrayList(unresolved))).append('\n')
+                    sb.append('}\n')
+                    outFile.text = sb.toString()
+                    logger.lifecycle("[java-deps] ${buildName}${p.path}: ${coords.size()} 个第三方坐标" +
+                            (unresolved.isEmpty() ? '' : "，解析失败 ${unresolved.size()} 项"))
+                }
+            }
+        }
+    }
+}
