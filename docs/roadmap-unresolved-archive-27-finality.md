@@ -64,3 +64,23 @@
 ## PLAN-074 第十二切片（2026-11-04）
 
 **第十二切片已交付（PLAN-074，2026-11-04）**：用户指示「本地环境能做多少做多少」⇒ 拆除 PLAN-073 时「需 Prometheus/Alertmanager」的前提——从 GitHub releases 下载 Prometheus 3.15.1（sha256 `6a726885…`）+ Alertmanager 0.34.2（`17ee14ac…`），与 WSL2 PostgreSQL 16.15、WSL 内 JDK 单进程 nexus-core 组成**本机三进程**验证链路（同内核单机，非物理多机）。四条事实全部实测：① 真实 PG 插 100 行 ⇒ `database_pending 100.0`（旧实现低报 64），Prometheus 侧 `value=1e+02`；② `service postgresql stop` ⇒ `database_pending NaN` + `database_readable 0.0` ⇒ PLAN-073 修的「读不到冒充 0 积压」在真实连接失败路径上成立；③ 抓取文本 9 条序列的 `# TYPE`/`_total`/`origin` 形状与契约一致；④ `FinalityOutboxBacklog`（for 10m）与 `FinalityOutboxUnreadable`（for 5m）在真实 Prometheus **firing**、真实 Alertmanager **active**、webhook 落盘，且 PG 停机后 Backlog 自动转非 firing、Unreadable 亮起（语义切换符合预期）。CI 侧新增 `FinalityRulesCounterUsageTest`：counter 必须包 `increase()`/`rate()` 引用（裸比较在 counter 归零后永不触发），违规时报出「哪条告警 + expr 原文」；实现返工一次（自扫规则文件会把 description/注释/组级说明块算成引用 ⇒ 改为复用 `PrometheusRulesFixture.groupExprLines`）。反向对照：`increase(...dropped_total[10m])`→裸比较 ⇒ 精确报出 `FinalityOutboxDropping` 且无连带假阳性；还原后绿、规则文件 SHA-256 `29F80F9E…845F1A74` 一致。**边界**：自下载社区二进制、非真实机房、不宣称告警已在真实集群触发；scrape 15s+采样 30s 与生产可能有差异；9090-9091 被 Windows docker 容器占用故监控栈用 9097/9098/9099/9094；Alertmanager 默认 gossip 端口与 webhook 冲突改 9099；实验脚本与日志均留在仓库外。**仍未做**：真实网络分区、完整拜占庭矩阵其余输入（女巫/长程/私钥泄露）、物理多机、真实集群告警演练、Prometheus 服务端成本基准。
+---
+
+## E5 补录（owner 回填，2026-11-05；非原文内容）
+
+> 本节由 owner（nex lane）在 E5 拆分后按 master 现状补录；**不改上文任何逐字内容**。
+
+### PLAN-069（`finality_votes` 历史脏行隔离）
+
+- 原被 PLAN-071/072 正文引用，但 #27 序列缺对应分段（E5 漂移通知第 3 条）；
+- 交付：`finality_votes` 迁移前历史脏行（短哈希/畸形）的「先隔离后删除、
+  可回滚」脚本与演练；master 上交付留言 #420 `c5835fa5`；实现细节见
+  `docs/plan/PLAN-069-finality-dirty-row-cleanup.md`；
+- 与 PLAN-071（checkpoints 隔离）、PLAN-072（outbox 脏行不传播确认）合计三张
+  最终性表收口。
+
+### 编号勘误（E5 漂移通知第 1 条）
+
+- 上文 `PLAN-018 第二切片` 与 `PLAN-021 第二切片` 的「第二」编号重复（原文如此）；
+- 按实际交付序列，PLAN-072 是本矩阵第 13 段切片，不是「第十二」；
+- 本勘误只作说明，不回写上文。

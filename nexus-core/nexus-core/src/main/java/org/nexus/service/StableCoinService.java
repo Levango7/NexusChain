@@ -248,11 +248,11 @@ public class StableCoinService {
     /**
      * 查询地址的抵押率和仓位信息。
      *
-     * <p>骨架实现：返回零余额的模拟仓位。后续可从 {@link StateDB}
-     * 查询用户真实仓位。</p>
+     * <p>支付扩展类型当前保留未启用，本接口固定返回
+     * {@link APIResult#PAYMENT_EXTENSION_NOT_ENABLED}，不再返回模拟仓位。</p>
      *
      * @param address NEX 地址
-     * @return 统一响应结果，data 中包含 {@link StableCoinPosition} 对象
+     * @return 统一响应结果；支付扩展未启用时返回 {@link APIResult#PAYMENT_EXTENSION_NOT_ENABLED}
      */
     public APIResult getCollateralRatio(String address) {
         try {
@@ -260,15 +260,8 @@ public class StableCoinService {
                 return APIResult.newFailResult(APIResult.FAIL, "address is required");
             }
 
-            // 骨架：返回模拟仓位
-            StableCoinPosition position = new StableCoinPosition();
-            position.setOwner(address);
-            position.setCollateralAmount(0L);
-            position.setMintedAmount(0L);
-            position.setCollateralRatio(0);
-            position.setState(StableCoinPosition.State.HEALTHY);
-
-            return APIResult.newSuccess(position);
+            // 支付扩展（0x10–0x1a）保留未启用：不再返回模拟零仓位/HEALTHY 状态。
+            return APIResult.paymentExtensionNotEnabled();
         } catch (RuntimeException e) {
             return APIResult.newFailResult(APIResult.FAIL, "Failed to query collateral: " + e.getMessage());
         }

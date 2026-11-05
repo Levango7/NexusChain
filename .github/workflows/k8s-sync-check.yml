@@ -681,16 +681,89 @@ jobs:
                   "FAIL: 默认 values 渲染里出现了结算键——负样本失效")
           print("  ✓ 默认 values 无结算键（负样本成立）")
           PYEOF
-          # 静态清单 / compose / dev compose 三条部署路径同键同语义。
+          # 静态清单 / dev compose 同键同语义。
           grep -q 'NEX_SETTLEMENT_PLATFORM_ADDRESS' deploy/k8s/00-namespace-config.yml \
             || { echo "FAIL: deploy/k8s/00-namespace-config.yml 缺 NEX_SETTLEMENT_PLATFORM_ADDRESS"; exit 1; }
           grep -q 'NEX_SETTLEMENT_ENABLED: "true"' deploy/k8s/00-namespace-config.yml \
             || { echo "FAIL: deploy/k8s/00-namespace-config.yml 未显式开启结算"; exit 1; }
-          grep -q 'NEX_SETTLEMENT_PLATFORM_ADDRESS:?' docker-compose.prod.yml \
-            || { echo "FAIL: docker-compose.prod.yml 必须用 :? 让缺地址直接渲染失败（不是 :- 空值）"; exit 1; }
           grep -q 'NEX_SETTLEMENT_ENABLED=false' docker-compose.yml \
             || { echo "FAIL: dev docker-compose.yml 未显式关闭结算（缺地址会拒绝启动）"; exit 1; }
-          echo "  ✓ k8s 静态清单 / prod compose / dev compose 均符合 fail-fast 语义"
+          echo "  ✓ k8s 静态清单 / dev compose 均符合 fail-fast 语义"
+
+      # prod compose 结算开关四组合渲染断言（2026-11-06；v2.77.1 P0 热修）。
+      # compose 不支持条件插值 ⇒ 「要不要地址」的判定从渲染期移到启动期（守卫）。
+      # 本步断言 **渲染后实际值**（不是 grep 源文件字符串）：
+      #   false+无地址 / false+有地址 / true+有效地址 / true+空地址 / 未设置（默认开启）
+      # 前三者必须渲染成功；false 组合不得因缺地址而渲染失败。
+      - name: compose 结算开关四组合渲染断言
+        run: |
+          set -euo pipefail
+          python3 - <<'PYEOF'
+          import json, os, re, subprocess, sys
+
+          COMPOSE = 'docker-compose.prod.yml'
+          ENABLED = 'NEX_SETTLEMENT_ENABLED'
+          ADDRESS = 'NEX_SETTLEMENT_PLATFORM_ADDRESS'
+
+          # 从 compose 源文件枚举所有 `${VAR:?}` 必需变量并注入 dummy 值：
+          # 本步只验证两个结算键的渲染结果，其余必需键用假值满足插值。
+          text = open(COMPOSE).read()
+          required = sorted(set(re.findall(r'\$\{([A-Z0-9_]+):\?', text)))
+
+          def render(label, overrides):
+              env = dict(os.environ)
+              for name in required:
+                  if name not in (ENABLED, ADDRESS):
+                      env[name] = 'ci-dummy'
+              env.pop(ENABLED, None)
+              env.pop(ADDRESS, None)
+              env.update(overrides)
+              proc = subprocess.run(
+                  ['docker', 'compose', '-f', COMPOSE, 'config', '--format', 'json'],
+                  capture_output=True, text=True, env=env)
+              assert proc.returncode == 0, (
+                  f"FAIL: compose 组合「{label}」渲染失败（exit {proc.returncode}），"
+                  f"stderr: {proc.stderr.strip()[:400]}")
+              cfg = json.loads(proc.stdout)
+              raw = cfg['services']['nexus-gateway'].get('environment') or {}
+              if isinstance(raw, dict):
+                  return {k: '' if v is None else str(v) for k, v in raw.items()}
+              out = {}
+              for item in raw:
+                  if '=' in item:
+                      k, v = item.split('=', 1)
+                      out[k] = v
+                  else:
+                      out[item] = ''
+              return out
+
+          # (标签, 注入的 env, 期望渲染出的 ENABLED, 期望渲染出的 ADDRESS)
+          cases = [
+              ('false + 无地址', {ENABLED: 'false'}, 'false', ''),
+              ('false + 有地址', {ENABLED: 'false', ADDRESS: 'CISyntheticPlatformAddress'},
+               'false', 'CISyntheticPlatformAddress'),
+              ('true + 有效地址', {ENABLED: 'true', ADDRESS: 'CISyntheticPlatformAddress'},
+               'true', 'CISyntheticPlatformAddress'),
+              ('true + 空地址', {ENABLED: 'true', ADDRESS: ''}, 'true', ''),
+              ('未设置（默认开启）', {}, 'true', ''),
+          ]
+          for label, overrides, want_enabled, want_address in cases:
+              m = render(label, overrides)
+              got_enabled = m.get(ENABLED)
+              got_address = m.get(ADDRESS)
+              assert got_enabled is not None, (
+                  f"FAIL: compose 组合「{label}」没有渲染出 {ENABLED}——"
+                  "可能有人删了 environment 透传；不写该键等于开启（Spring 默认 true）")
+              assert got_enabled.lower() == want_enabled, (
+                  f"FAIL: compose 组合「{label}」渲染 {ENABLED}={got_enabled!r}，"
+                  f"期望 {want_enabled!r}")
+              assert got_address == want_address, (
+                  f"FAIL: compose 组合「{label}」渲染 {ADDRESS}={got_address!r}，"
+                  f"期望 {want_address!r}")
+              print(f"  ✓ compose {label}: {ENABLED}={got_enabled!r} {ADDRESS}={got_address!r}")
+          print("  ✓ compose 五组合均渲染成功（false+无地址不因缺地址失败；"
+                "true+空地址由启动守卫拒绝，见 nexus-settlement 守卫单测）")
+          PYEOF
 
       # A 批（2026-09-08）：Alertmanager 路由树真实校验——此前 5 条告警 +
       # 路由配置全存在但**从未验证过路由语法**（健康扫描抓出的"看起来有
