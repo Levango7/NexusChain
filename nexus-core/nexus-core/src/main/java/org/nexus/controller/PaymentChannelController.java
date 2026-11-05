@@ -2,6 +2,8 @@ package org.nexus.controller;
 
 import org.apache.commons.codec.binary.Hex;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -66,7 +68,7 @@ public class PaymentChannelController {
         long amount = amountObj != null ? Long.parseLong(amountObj.toString()) : 0L;
         int lockTime = lockTimeObj != null ? Integer.parseInt(lockTimeObj.toString()) : 0;
 
-        return channelService.openChannel(from, to, amount, lockTime);
+        return respond(channelService.openChannel(from, to, amount, lockTime));
     }
 
     /**
@@ -95,7 +97,7 @@ public class PaymentChannelController {
         long finalBalance2 = balance2Obj != null ? Long.parseLong(balance2Obj.toString()) : 0L;
         long nonce = nonceObj != null ? Long.parseLong(nonceObj.toString()) : 0L;
 
-        return channelService.closeChannel(channelId, finalBalance1, finalBalance2, nonce);
+        return respond(channelService.closeChannel(channelId, finalBalance1, finalBalance2, nonce));
     }
 
     /**
@@ -157,8 +159,8 @@ public class PaymentChannelController {
         byte[] pubkey1 = decodeHex(pubkey1Hex);
         byte[] pubkey2 = decodeHex(pubkey2Hex);
 
-        return settlementService.cooperativeClose(channelId, finalBalance1, finalBalance2,
-                nonce, sig1, sig2, pubkey1, pubkey2);
+        return respond(settlementService.cooperativeClose(channelId, finalBalance1, finalBalance2,
+                nonce, sig1, sig2, pubkey1, pubkey2));
     }
 
     /**
@@ -177,7 +179,7 @@ public class PaymentChannelController {
     public Object settleChannel(@PathVariable("channelId") String channelId,
                                 @RequestBody Map<String, Object> request) {
         long currentBlockHeight = parseLong(request.get("currentBlockHeight"));
-        return settlementService.settleChannel(channelId, currentBlockHeight);
+        return respond(settlementService.settleChannel(channelId, currentBlockHeight));
     }
 
     /**
@@ -207,7 +209,7 @@ public class PaymentChannelController {
     public Object forceExpire(@PathVariable("channelId") String channelId,
                               @RequestBody Map<String, Object> request) {
         long currentBlockHeight = parseLong(request.get("currentBlockHeight"));
-        return settlementService.forceExpire(channelId, currentBlockHeight);
+        return respond(settlementService.forceExpire(channelId, currentBlockHeight));
     }
 
     /**
@@ -251,7 +253,7 @@ public class PaymentChannelController {
                 channelId, nonce, balance1, balance2, sig1, sig2, timestamp
         );
 
-        return settlementService.unilateralClose(channelId, latestUpdate, closerPubkey, closerSig);
+        return respond(settlementService.unilateralClose(channelId, latestUpdate, closerPubkey, closerSig));
     }
 
     // ==================== Private Helpers ====================
@@ -278,5 +280,13 @@ public class PaymentChannelController {
         } catch (org.apache.commons.codec.DecoderException e) {
             return null;
         }
+    }
+
+    /** 支付扩展未启用时返回 HTTP 501；其余结果保持原响应（含入参校验失败）。 */
+    private static Object respond(APIResult result) {
+        if (result.getCode() == APIResult.PAYMENT_EXTENSION_NOT_ENABLED) {
+            return ResponseEntity.status(HttpStatus.NOT_IMPLEMENTED).body(result);
+        }
+        return result;
     }
 }
