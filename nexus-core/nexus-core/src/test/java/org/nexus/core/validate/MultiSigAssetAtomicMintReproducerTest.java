@@ -285,6 +285,11 @@ public class MultiSigAssetAtomicMintReproducerTest {
         composite.addRule(consensusRule);
         composite.addRule(new SignatureRule());
         composite.addRule(accountRule);
+        // Same transaction-rule set as the Spring-wired composite (payment extension).
+        composite.addTransactionRule(new PaymentChannelRule());
+        composite.addTransactionRule(new BatchTransferRule());
+        composite.addTransactionRule(new StableCoinRule());
+        composite.addTransactionRule(new BridgeRule());
         return composite;
     }
 
