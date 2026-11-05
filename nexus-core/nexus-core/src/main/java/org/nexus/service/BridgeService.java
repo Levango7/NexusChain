@@ -646,11 +646,11 @@ public class BridgeService {
     /**
      * 查询桥交易状态。
      *
-     * <p>骨架实现：返回基于 txHash 的模拟桥交易状态。后续可从
-     * 桥交易数据库查询真实状态。</p>
+     * <p>支付扩展类型当前保留未启用，本接口固定返回
+     * {@link APIResult#PAYMENT_EXTENSION_NOT_ENABLED}，不再返回模拟桥交易状态。</p>
      *
      * @param txHash 交易哈希或桥交易 ID
-     * @return 统一响应结果，data 中包含 {@link BridgeTransaction} 对象
+     * @return 统一响应结果；支付扩展未启用时返回 {@link APIResult#PAYMENT_EXTENSION_NOT_ENABLED}
      */
     public APIResult getStatus(String txHash) {
         try {
@@ -658,12 +658,8 @@ public class BridgeService {
                 return APIResult.newFailResult(APIResult.FAIL, "txHash is required");
             }
 
-            // 骨架：返回模拟桥交易状态
-            BridgeTransaction bridgeTx = new BridgeTransaction();
-            bridgeTx.setBridgeTxId(txHash);
-            bridgeTx.setState(BridgeTransaction.State.LOCKED);
-
-            return APIResult.newSuccess(bridgeTx);
+            // 支付扩展（0x10–0x1a）保留未启用：不再返回模拟 LOCKED 状态。
+            return APIResult.paymentExtensionNotEnabled();
         } catch (RuntimeException e) {
             return APIResult.newFailResult(APIResult.FAIL, "Failed to query bridge status: " + e.getMessage());
         }

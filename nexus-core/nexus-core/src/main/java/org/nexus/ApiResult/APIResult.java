@@ -21,7 +21,31 @@ package org.nexus.ApiResult;
 public class APIResult<T> extends ResultSupport {
     public static int FAIL = 5000;
     public static int SUCCESS = 2000;
+
+    /**
+     * 支付扩展类型（0x10–0x1a）为保留类型，当前未启用。
+     *
+     * <p>读接口在未启用时统一返回此稳定错误码，便于调用方区分
+     * 「未启用」与「实现故障」。裁决依据见
+     * {@code docs/decision-payment-extension-onchain.md} §9。</p>
+     */
+    public static final int PAYMENT_EXTENSION_NOT_ENABLED = 5010;
+
+    /** 支付扩展读接口统一的「未启用」消息。 */
+    public static final String PAYMENT_EXTENSION_NOT_ENABLED_MESSAGE =
+            "Payment extension (0x10-0x1a) is reserved but not enabled";
+
     protected T data;
+
+    /**
+     * 支付扩展读接口统一的「未启用」响应。
+     *
+     * @param <U> 数据类型
+     * @return code 固定为 {@link #PAYMENT_EXTENSION_NOT_ENABLED} 的失败响应
+     */
+    public static <U> APIResult<U> paymentExtensionNotEnabled() {
+        return newFailResult(PAYMENT_EXTENSION_NOT_ENABLED, PAYMENT_EXTENSION_NOT_ENABLED_MESSAGE);
+    }
 
     public T getData() {
         return data;
