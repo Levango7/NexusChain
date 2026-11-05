@@ -18,6 +18,8 @@
 
 package org.nexus;
 
+// scope-proof: 仅用于验证 PR 镜像门禁的路径过滤（nexus-core 变更 → 10 腿），无功能影响。
+
 import org.apache.commons.dbcp2.BasicDataSource;
 import org.apache.commons.io.IOUtils;
 import org.springframework.beans.factory.annotation.Value;
