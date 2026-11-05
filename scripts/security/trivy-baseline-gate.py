@@ -290,10 +290,22 @@ def main() -> int:
         choices=["CRITICAL", "HIGH"],
         help="判红阈值（默认 HIGH，即 HIGH+CRITICAL）",
     )
-    parser.add_argument("--today", default=None, help="覆盖当前日期（ISO），仅用于 fixture 测试")
+    parser.add_argument(
+        "--today",
+        default=None,
+        help="覆盖当前日期（ISO），仅用于 fixture 测试；缺省取 UTC 日期",
+    )
     args = parser.parse_args()
 
-    today = dt.date.fromisoformat(args.today) if args.today else dt.date.today()
+    # 基准日期显式取 **UTC**，不用本地日期：
+    # GitHub runner 的时区是 UTC，而开发者本机（本仓为东八区）比 UTC 早 8 小时，
+    # 于是「本机看到今天，CI 上还是昨天」。若用本地日期做「有效期上限」校验，
+    # 同一份基线会在 CI 上多算 1 天而被 `MAX_HORIZON_DAYS_FIX_EXCEPTION` 误判
+    # 越界、以退出码 2 永久拒收（本 PR 第一次跑 CI 就踩到了：
+    # entries[10](CVE-2026-102554) expires=2027-02-04 超出 90 天）。
+    # 固定 UTC 让 CI 与本地结论一致、可复现；副作用是到期判定最多晚 1 天（可接受，
+    # 到期复核本就是人工动作）。基线到期日请按 UTC 计算，并留 1 天余量。
+    today = dt.date.fromisoformat(args.today) if args.today else dt.datetime.now(dt.timezone.utc).date()
     threshold_rank = SEVERITY_RANK[args.min_severity]
 
     baseline, baseline_errors = load_baseline(args.baseline, today)

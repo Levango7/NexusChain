@@ -98,6 +98,20 @@ CASES = [
         ["超出最长有效期 180 天", "[REJECT]"],
     ),
     (
+        "not-applicable 恰为 90 天边界放行（UTC 边界）",
+        "report-fixable-only.json",
+        "baseline-fix-exception-exact90.json",
+        0,
+        ["[EXCEPTION] CVE-2026-999001", "[PASS]"],
+    ),
+    (
+        "not-applicable 超出 90 天被拒收",
+        "report-fixable-only.json",
+        "baseline-fix-exception-over90.json",
+        2,
+        ["超出最长有效期 90 天", "[REJECT]"],
+    ),
+    (
         "干净报告（Results 为空数组）不误判红",
         "report-clean-empty.json",
         "baseline-known.json",
