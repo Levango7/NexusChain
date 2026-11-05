@@ -1,0 +1,19 @@
+{
+  "Results": [
+    {
+      "Target": "nexus-core",
+      "Class": "lang-pkgs",
+      "Type": "jar",
+      "Vulnerabilities": [
+        {
+          "VulnerabilityID": "CVE-2026-999001",
+          "PkgName": "libssl3t64",
+          "InstalledVersion": "3.5.1-1",
+          "FixedVersion": "3.5.4-1",
+          "Severity": "CRITICAL",
+          "Status": "fixed"
+        }
+      ]
+    }
+  ]
+}

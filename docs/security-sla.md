@@ -163,9 +163,46 @@ CI 扫描发现漏洞
 
 ### 4.4 阻断策略
 
-- **CRITICAL 漏洞**：CI 流水线 `exit-code: 1`，阻断合并
-- **HIGH 漏洞**：创建 Issue + PR comment 警告，不阻断（可配置）
-- **MEDIUM/LOW**：仅记录，不阻断
+> **2026-11-06（E1）口径修正**：原「CRITICAL 阻断 / HIGH 不阻断」的写法与实际不符，
+> 且旧实现是「全量判红 + 无到期豁免」，会把 Trivy DB 的每次增补都变成一次人工加豁免。
+> 现口径如下。
+
+**分两条路径，两者不能混在一个 job 里：**
+
+| 路径 | 扫什么 | 何时跑 | 判定 | 阻断合并 |
+|------|--------|--------|------|---------|
+| **我方产物**（`trivy-fs-scan`、`trivy-docker-scan`） | 仓库依赖、13 个应用镜像 | PR + push master + 周 cron | **基线差分**：只有新增的 HIGH/CRITICAL 判红 | ✅ 是（`Trivy Filesystem Scan + SBOM` 已在必需检查里；`Trivy Image Baseline Gate (PR)` 为聚合候选，启用状态见分支保护配置） |
+| **上游浮动镜像**（`trivy-upstream-watch`） | `node:24-alpine` 本体（含其自带 npm 依赖树） | 仅周 cron / 手动 | 出现**未被跟踪**的 HIGH/CRITICAL → 开 issue 并置红；下次去重后回绿 | ❌ 否（观测任务） |
+
+为什么上游镜像必须移出阻断路径：那 6 条 HIGH（`brace-expansion` / `undici`）有修复版，
+但位于**上游镜像自带的 npm 依赖树**（`/usr/local/lib/node_modules/npm/…`）。我方改
+`Dockerfile` 不改变被扫对象，上游也还没发布打补丁的 tag —— 它是**永远红**的，
+放在 PR 门禁里等于让所有 PR 永久无法合并（已用 issue #495 跟踪）。
+
+**基线差分语义**（`scripts/security/trivy-baseline-gate.py`）：
+
+- 已知项必须登记在 `config/trivy-baseline.json`，每条必填
+  `id`（CVE 编号）/ `package`（包名）/ `reason`（存在理由）/ `expires`（到期日）；
+- **不允许无到期日的永久豁免**：缺 `expires` 直接拒收（退出码 2）；
+- **到期即红**：`today > expires` 且该条目仍被扫到 → 判红（退出码 1）；
+- **严禁给「有修复版」的 CVE 加基线**：Trivy 报出 `FixedVersion` 而条目未显式标注
+  `fixable: not-applicable` → 判红（退出码 1）。`not-applicable` 必须写 `evidence`
+  （说明修复版为何不适用于被扫产物），且最长有效期收紧到 **90 天**；
+- 普通条目最长有效期 **180 天**；
+- 新增项：扫到但未登记 → 判红，且 `::error::` 里带 CVE / 包 / 受影响 target。
+
+**新增漏洞的处理顺序**：先尝试升级消除 → 若上游确无修复版，登记基线并写明理由与
+到期日（≤180 天）→ 到期前必须重新评估（升级 / 换基础镜像 / 重新论证暴露面）。
+
+### 4.5 基线的续期与到期
+
+- 到期日不要「顺手往后改」。到期意味着**必须重新取证**：确认上游是否仍未发布修复版、
+  暴露面论证是否仍成立，再决定续期（≤180 天）或改走修复。
+- 门禁每次运行都会打印 `[STALE]`（基线条目本次未命中，可删）与 `[EXCEPTION]`
+  （`fixable=not-applicable` 放行，附 `::warning::`）——这两类不是红，但需要人看。
+- `.trivyignore` 与基线**并存且职责不同**：`.trivyignore` 是「展示/告警口径」的抑制
+  （SARIF、分诊 JSON 仍带它），基线是「阻断口径」的白名单。不要为了绿灯删已有
+  `.trivyignore` 条目，也不要把条目改成通配。
 
 ---
 

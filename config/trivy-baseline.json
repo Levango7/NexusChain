@@ -1,0 +1,107 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-11-06",
+  "policy": "只允许登记『上游无修复版』或『Trivy 报出的修复版不适用于被扫产物』的 HIGH/CRITICAL。每条必须有 id/package/reason/expires；缺到期日会被 trivy-baseline-gate.py 直接拒收（退出码 2）。普通条目最长 180 天，fixable=not-applicable 最长 90 天。到期后再次命中即判红。",
+  "entries": [
+    {
+      "id": "CVE-2026-113351",
+      "package": "libexpat1",
+      "scope": "os",
+      "reason": "Debian 13 的 libexpat1 2.9.0 受影响，Debian/上游均未发布修复版；服务只解析自有格式的受控 XML，不对外提供 XML 解析入口",
+      "fixable": "none",
+      "expires": "2027-02-04",
+      "addedAt": "2026-11-06",
+      "evidence": "gcr.io/distroless/java17-debian13@sha256:97c47f913d6c... 实扫 FixedVersion 为空，Status=affected"
+    },
+    {
+      "id": "CVE-2026-117610",
+      "package": "libexpat1",
+      "scope": "os",
+      "reason": "同 libexpat1 2.9.0 上游无修复版；不解析不可信 XML，暴露面仅限内部受控报文",
+      "fixable": "none",
+      "expires": "2027-02-04",
+      "addedAt": "2026-11-06",
+      "evidence": "distroless java17 实扫 FixedVersion 为空，Status=affected"
+    },
+    {
+      "id": "CVE-2026-118370",
+      "package": "libexpat1",
+      "scope": "os",
+      "reason": "同 libexpat1 2.9.0 上游无修复版；不解析不可信 XML，暴露面仅限内部受控报文",
+      "fixable": "none",
+      "expires": "2027-02-04",
+      "addedAt": "2026-11-06",
+      "evidence": "distroless java17 实扫 FixedVersion 为空，Status=affected"
+    },
+    {
+      "id": "CVE-2026-76642",
+      "package": "libuuid1",
+      "scope": "os",
+      "reason": "Debian 13 的 libuuid1 2.41.5 受影响且无修复版；容器内不生成/解析不可信 UUID 输入",
+      "fixable": "none",
+      "expires": "2027-02-04",
+      "addedAt": "2026-11-06",
+      "evidence": "distroless java17 实扫 FixedVersion 为空，Status=affected"
+    },
+    {
+      "id": "CVE-2026-78408",
+      "package": "libuuid1",
+      "scope": "os",
+      "reason": "同 libuuid1 2.41.5 无修复版；容器内 UUID 仅作为内部标识，不接收外部构造输入",
+      "fixable": "none",
+      "expires": "2027-02-04",
+      "addedAt": "2026-11-06",
+      "evidence": "distroless java17 实扫 FixedVersion 为空，Status=affected"
+    },
+    {
+      "id": "CVE-2026-78409",
+      "package": "libuuid1",
+      "scope": "os",
+      "reason": "同 libuuid1 2.41.5 无修复版；容器内 UUID 仅作为内部标识，不接收外部构造输入",
+      "fixable": "none",
+      "expires": "2027-02-04",
+      "addedAt": "2026-11-06",
+      "evidence": "distroless java17 实扫 FixedVersion 为空，Status=affected"
+    },
+    {
+      "id": "CVE-2026-78410",
+      "package": "libuuid1",
+      "scope": "os",
+      "reason": "同 libuuid1 2.41.5 无修复版；容器内 UUID 仅作为内部标识，不接收外部构造输入",
+      "fixable": "none",
+      "expires": "2027-02-04",
+      "addedAt": "2026-11-06",
+      "evidence": "distroless java17 实扫 FixedVersion 为空，Status=affected"
+    },
+    {
+      "id": "CVE-2026-76844",
+      "package": "zlib1g",
+      "scope": "os",
+      "reason": "Debian 13 的 zlib1g 1.3.1 受影响且无修复版；解压入口只处理内部可信归档，不接受用户上传压缩包",
+      "fixable": "none",
+      "expires": "2027-02-04",
+      "addedAt": "2026-11-06",
+      "evidence": "distroless java17 / cc-debian13 实扫 FixedVersion 为空，Status=affected"
+    },
+    {
+      "id": "CVE-2025-66017",
+      "package": "cggmp21",
+      "scope": "app",
+      "reason": "mpc-engine 使用的 cggmp21 0.6.3 无可用的稳定版修复（仅 alpha 预发布），升级会改变 MPC 协议行为；MPC 端点仅在内网且协议入口有鉴权",
+      "fixable": "none",
+      "expires": "2027-02-04",
+      "addedAt": "2026-11-06",
+      "evidence": "Cargo.lock 与 mpc-engine 镜像实扫均命中，FixedVersion 为空"
+    },
+    {
+      "id": "CVE-2026-102554",
+      "package": "nacos-client（内嵌 shaded guava 33.3.1-android）",
+      "scope": "app",
+      "reason": "命中的是 nacos-client 3.1.1 jar 内 relocated 的 guava 副本；应用自身 guava 已升到 33.7.2-jre，但升级依赖不会替换 shaded 副本，需等 nacos 上游重打包。nacos 仅用于服务注册/配置，不反序列化外部 YAML",
+      "fixable": "not-applicable",
+      "evidence": "Trivy 报出的 FixedVersion 针对应用自身 guava（33.7.2-jre），对 shaded 副本不可执行；副本版本随 nacos-client jar 固定",
+      "expires": "2027-02-04",
+      "addedAt": "2026-11-06"
+    }
+  ]
+}
