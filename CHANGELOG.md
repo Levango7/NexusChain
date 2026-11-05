@@ -2,6 +2,47 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [Unreleased]
+
+### P0 热修：prod compose 未透传结算开关（2.77.0 迁移路径 B 的环境实际可能在结算）
+
+**影响谁**：v2.77.0 期间按本文件「迁移路径 B」配置 `docker-compose.prod.yml` 的 prod
+环境——即以为「显式写 `NEX_SETTLEMENT_ENABLED=false`」或「`:?` 缺地址报错即等于关闭」
+就能停用结算的部署。**2.77.0 期间按原指引配置 prod compose 的环境实际可能在结算**：
+`docker-compose.prod.yml` 的 gateway `environment` 从未透传 `NEX_SETTLEMENT_ENABLED`，
+容器取 Spring 默认 `true`；`${NEX_SETTLEMENT_PLATFORM_ADDRESS:?}` 只是在缺地址时
+阻止渲染，一旦为绕过报错补了地址，结算就按开启执行。
+
+**怎么自查**（在 prod compose 所在目录执行）：
+
+```
+docker compose -f docker-compose.prod.yml config --format json \
+  | python3 -c 'import json,sys; e=json.load(sys.stdin)["services"]["nexus-gateway"]["environment"]; d=e if isinstance(e,dict) else dict(i.split("=",1) for i in e if "=" in i); print({k:v for k,v in d.items() if "SETTLEMENT" in k})'
+```
+
+渲染结果里没有 `NEX_SETTLEMENT_ENABLED=false` 的环境，此前是按「开启」运行的。
+
+**怎么处置**：不结算的环境显式补 `NEX_SETTLEMENT_ENABLED=false`（此时无需地址）；
+需要结算的环境补真实 `NEX_SETTLEMENT_PLATFORM_ADDRESS`，并保持
+`NEX_SETTLEMENT_ENABLED=true`。
+
+**修复**：gateway `environment` 新增 `NEX_SETTLEMENT_ENABLED=${NEX_SETTLEMENT_ENABLED:-true}`
+（显式透传且带默认值，避免容器取 Spring 默认），地址由 `${...:?}` 改为
+`${NEX_SETTLEMENT_PLATFORM_ADDRESS:-}`。compose 不支持条件插值，故「要不要地址」的
+判定从渲染期移到启动期（`SettlementPlatformAddressGuard@PostConstruct`）：
+
+| NEX_SETTLEMENT_ENABLED | 地址 | `compose config` | 启动 | 结算 |
+|---|---|---|---|---|
+| `false` | 无 | 成功 | 成功 | 不执行 |
+| `false` | 有 | 成功 | 成功 | 不执行（开关优先） |
+| `true` | 有效 | 成功 | 成功 | 执行 |
+| `true` | 空/占位符 | 成功 | **失败**（守卫点名键与解法） | — |
+| 未设置 | 空 | 成功 | **失败**（默认开启） | — |
+
+- 门禁：`k8s-sync-check` 新增 compose 四组合（含「未设置」负样本）**渲染后实际值**
+  断言，并断言 `false` 组合不得因缺地址而渲染失败；守卫契约由
+  `SettlementPlatformAddressGuardTest`（6 用例）锁住。
+
 ## [2.77.0] - 2026-11-05
 
 > 发布口径：以 master 分支保护的 8 项必需检查为准。PR 期非必需
@@ -28,6 +69,10 @@
 - **compose 用 `:?`**：`docker-compose.prod.yml` 已改为
   `${NEX_SETTLEMENT_PLATFORM_ADDRESS:?...}`，缺 env 时 `docker compose config` /
   `up` 直接渲染失败，不再静默落到空地址。
+  > **更正（[Unreleased] / 补丁版）**：本版 compose 未透传 `NEX_SETTLEMENT_ENABLED`，
+  > 且 `:?` 在缺地址时直接渲染失败——**2.77.0 期间按迁移路径 B 配置 prod compose
+  > 的环境实际可能在结算**。自查与处置见 [Unreleased] 段；v2.77.1 起 compose 改为
+  > 显式透传开关、地址用 `:-`，硬性要求移到启动守卫。
 - 已清理隐式回退：`DefaultClearingEngine` 的沙箱占位地址常量与两参构造器，
   以及 yml / deploy 中“空值即未配、仍可继续启动”的写法；staging / dev 显式
   `NEX_SETTLEMENT_ENABLED=false`。
