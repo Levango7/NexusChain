@@ -60,6 +60,12 @@ services:
       # 显式 memory；接 Kafka 的部署把两个值改回 kafka。
       - NEXUS_EVENTSOURCING_STORE=memory
       - NEXUS_WEBHOOK_DLQ_STORE=memory
+      # 结算平台出款地址注入位（板 20261104-0746 / nex runbook 20261105-0435）。
+      # 故意用 `:-`（允许空）而不是 `:?`（缺变量即拒绝启动）：这个值只被结算一条路径消费，
+      # 空值时 DefaultClearingEngine:164-171 已按笔 fail-closed（记 FAILED、不写 ledger、
+      # 不动链），不该因为运维还没填地址就让整个网关栈起不来。
+      # 真实热钱包地址由 ops 注入；占位符会被 :173 的 canTransferTo 判不可解析，同样 FAILED。
+      - NEX_SETTLEMENT_PLATFORM_ADDRESS=${NEX_SETTLEMENT_PLATFORM_ADDRESS:-}
     healthcheck:
       test: ['CMD', '/busybox', 'wget', '-q', '-O', '/dev/null', 'http://localhost:8080/actuator/health']
       interval: 30s

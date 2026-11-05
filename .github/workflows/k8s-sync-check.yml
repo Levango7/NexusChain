@@ -590,6 +590,87 @@ jobs:
                   "公钥值须由部署方提供，仓库不落明文）")
           PYEOF
 
+      # 结算平台出款地址注入位门禁（2026-11-05；认领见板 20261105-0502-qoder-cn-claim-settlement-address-injection）。
+      # 为什么要有这条：v2.76.0 把结算改成「地址未配置就在记账前 fail-closed 记 FAILED」，
+      # 但 deploy/ 与 prod compose 对该变量**零注入**（nex 的 runbook 20261105-0435 与
+      # TRAE 的板 20261104-0746 都登记过）⇒ 升级即结算全停，且 FAILED 是终态不自动补跑。
+      # nex 的 runbook 还指出一个会让注入白做的坑：两个 values 文件里现存的 extraEnv
+      # 都在 **nexus-signing-service** 段下，把键加到那里，gateway 读到的仍是空。
+      # 本步把「键必须渲染进 nexus-gateway 容器」变成硬断言，形态照上方 A2 门禁：
+      #   · 硬断言（阻断）：prod 与 staging 渲染里，nexus-gateway Deployment 必须出现
+      #     NEX_SETTLEMENT_PLATFORM_ADDRESS；缺失即红（= 注入位被删或加错段）。
+      #   · 值留空**不阻断**：真实热钱包地址由 ops 填，仓库不落值；空值时代码侧
+      #     fail-closed 已经保证不会用占位符动钱，这里只打印提示。
+      #   · 反向对照：默认 values 渲染里不得出现该键 ⇒ 证明断言读的是环境覆盖层，
+      #     不是 chart 自带默认（否则门禁退化成"自己合成的命题"）。
+      # 口径边界：只覆盖 values 驱动的 env 路径（子 chart extraEnv）；若将来改用
+      # Secret/envFrom 注入，渲染产物里看不到它，需同步改本步。
+      - name: 结算平台出款地址注入位门禁（nexus-gateway 段硬断言）
+        run: |
+          set -e
+          helm template nexus deploy/helm -f deploy/helm/values-prod.yaml > /tmp/settle-addr-prod.yaml
+          helm template nexus deploy/helm -f deploy/helm/values-staging.yaml > /tmp/settle-addr-staging.yaml
+          helm template nexus deploy/helm > /tmp/settle-addr-default.yaml
+          python3 - <<'PYEOF'
+          import re
+
+          KEY = 'NEX_SETTLEMENT_PLATFORM_ADDRESS'
+
+          def deployment(text, name):
+              # 只认「行首 kind: Deployment」且「metadata.name 恰为该服务」的文档，
+              # 朴素 substring 会捞进 HPA/Service/ConfigMap。
+              for doc in text.split('\n---\n'):
+                  if re.search(r'(?m)^kind: Deployment$', doc) and \
+                     re.search(r'(?m)^  name: ' + re.escape(name) + r'$', doc):
+                      return doc
+              return None
+
+          def env_value(doc, name):
+              m = re.search(r'-\s*name: ' + name + r'\s*\n\s*value: "?([^\\"\n]*)', doc)
+              return m.group(1).strip() if m else None
+
+          for label, path in (('prod', '/tmp/settle-addr-prod.yaml'),
+                              ('staging', '/tmp/settle-addr-staging.yaml')):
+              text = open(path).read()
+              gw = deployment(text, 'nexus-gateway')
+              assert gw is not None, (
+                  f"FAIL: {label} 渲染里没有 nexus-gateway 的 Deployment —— 结构变了？"
+                  "先查行首 kind:/metadata.name 是否还是这两个字面值")
+
+              val = env_value(gw, KEY)
+              assert val is not None, (
+                  f"FAIL: {label} 的 nexus-gateway 容器里没有渲染出 {KEY}。"
+                  "两种可能：①注入位被删；②键被加到了 nexus-signing-service.extraEnv"
+                  "（两个 values 文件里现存的 extraEnv 都在那一段）——那样 gateway 读到的"
+                  "仍是空值，结算会在记账前 fail-closed 记 FAILED 且不自动重试。"
+                  "修复：在 values-" + ("prod" if label == 'prod' else "staging") +
+                  ".yaml 的顶级 nexus-gateway: 段下加 extraEnv." + KEY)
+
+              if val == '':
+                  print(f"  ✓ {label}: {KEY} 注入位存在但值为空（预期）——"
+                        "真实热钱包地址由 ops 填写；空值时 DefaultClearingEngine:164-171 "
+                        "按笔 fail-closed，不会用占位符动钱。注意：注入后需人工处理或"
+                        "重放此前已落 FAILED 的结算单（该分支不自动重试）")
+              else:
+                  print(f"  ✓ {label}: {KEY} 已下发（{len(val)} 字符）")
+
+          # 反向对照：默认 values 不得自带该键，否则上面的断言可能只是在读 chart 默认值。
+          default_text = open('/tmp/settle-addr-default.yaml').read()
+          gw_default = deployment(default_text, 'nexus-gateway')
+          if gw_default is not None:
+              assert env_value(gw_default, KEY) is None, (
+                  f"FAIL: 默认 values 渲染里出现了 {KEY}——负样本失效，"
+                  "该配置只能来自环境覆盖层（staging/prod values）")
+          print("  ✓ 默认 values 无该键（负样本成立）")
+          PYEOF
+          # 静态清单 / compose 两条部署路径同样必须有注入位：上面的 helm 渲染只覆盖
+          # values 驱动的 extraEnv，看不到 ConfigMap（k8s 静态清单）与 compose 的 env。
+          grep -q 'NEX_SETTLEMENT_PLATFORM_ADDRESS' deploy/k8s/00-namespace-config.yml \
+            || { echo "FAIL: deploy/k8s/00-namespace-config.yml 缺 NEX_SETTLEMENT_PLATFORM_ADDRESS（gateway 经 nexus-config envFrom 注入）"; exit 1; }
+          grep -q 'NEX_SETTLEMENT_PLATFORM_ADDRESS=' docker-compose.prod.yml \
+            || { echo "FAIL: docker-compose.prod.yml 缺 NEX_SETTLEMENT_PLATFORM_ADDRESS"; exit 1; }
+          echo "  ✓ deploy/k8s 静态清单与 docker-compose.prod.yml 均有注入位"
+
       # A 批（2026-09-08）：Alertmanager 路由树真实校验——此前 5 条告警 +
       # 路由配置全存在但**从未验证过路由语法**（健康扫描抓出的"看起来有
       # 但实际没有"同族盲点）。amtool check-config 验证 receivers/route/
