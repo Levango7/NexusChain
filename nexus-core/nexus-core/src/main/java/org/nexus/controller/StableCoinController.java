@@ -2,6 +2,8 @@ package org.nexus.controller;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -87,7 +89,7 @@ public class StableCoinController {
             }
         }
 
-        return stableCoinService.mint(pubkey, collateralAmount, mintAmount, prikey, nonce);
+        return respond(stableCoinService.mint(pubkey, collateralAmount, mintAmount, prikey, nonce));
     }
 
     /**
@@ -115,7 +117,15 @@ public class StableCoinController {
 
         long redeemAmount = redeemObj != null ? Long.parseLong(redeemObj.toString()) : 0L;
 
-        return stableCoinService.redeem(pubkey, redeemAmount, prikey, nonce);
+        return respond(stableCoinService.redeem(pubkey, redeemAmount, prikey, nonce));
+    }
+
+    /** 支付扩展未启用时返回 HTTP 501；其余结果保持原响应（含入参校验失败）。 */
+    private static Object respond(APIResult result) {
+        if (result.getCode() == APIResult.PAYMENT_EXTENSION_NOT_ENABLED) {
+            return ResponseEntity.status(HttpStatus.NOT_IMPLEMENTED).body(result);
+        }
+        return result;
     }
 
     /**
