@@ -5,7 +5,7 @@ name: NexusChain Security Scan
 # 触发：push 到 master / 每周一定时扫描 / 手动触发(workflow_dispatch)
 # 扫描器：
 #   1. Trivy fs      — Gradle 依赖 + 源码配置漏洞扫描 + CycloneDX SBOM 产出
-#   2. Trivy image   — Docker 镜像漏洞扫描（nexus-gateway / nexus-bridge）
+#   2. Trivy image   — Docker 镜像漏洞扫描（13 个应用镜像，PR 阻断路径）
 #   3. OWASP Dep-Check — 备选方案，扫描 build.gradle 生成 HTML/JSON 报告
 #   4. SpotBugs + FindSecBugs（SAST）— Java 静态安全扫描，产出 HTML/XML 报告
 #   5. OWASP ZAP 基线扫描（DAST）— nexus-gateway API 动态扫描
@@ -21,6 +21,9 @@ on:
   # master 才被发现，对合并零约束力。现 PR 也跑轻量子集并阻断；重子集（镜像扫描矩阵、
   # ZAP DAST）见各自 if，仍只在 push/cron 执行以控制 PR 时长；OWASP DC 例外——
   # 「永远上报」已于 2026-10-19 转正（同仓库 PR 亦真跑，见该 job 注释与策略文档）。
+  # 2026-11-06（E1）：镜像扫描矩阵已改为 PR 阻断口径——我方构建的 13 个镜像在 PR 上真跑，
+  # 只对**新增** HIGH/CRITICAL 判红（基线见 config/trivy-baseline.json）；上游浮动镜像
+  # （node:24-alpine）移出 PR 门禁，改由 trivy-upstream-watch 定时观测。DAST 仍只在 push/cron。
   pull_request:
     branches: [master]
   schedule:
@@ -114,29 +117,58 @@ jobs:
             sbom-cyclonedx.json
           retention-days: 30
 
-      - name: Trivy fs 扫描（CRITICAL,HIGH 阻断）
+      # === E1（2026-11-06）：阻断口径从「全量 + .trivyignore」改为「基线差分」 ===
+      # 旧的 `format: table` + `exit-code: 1` 只回答「此刻有没有 HIGH/CRITICAL」，
+      # 于是 Trivy DB 每次增补都要人来加一条 .trivyignore —— 即审计点名的
+      # 「DB 增补 → 红 → 分诊 → 加豁免」跑步机，且豁免无到期日。
+      # 新口径：**原始报告**（显式指向空豁免清单，防止 Trivy 自动发现 .trivyignore）
+      # + config/trivy-baseline.json 差分。只有【新增】的 HIGH/CRITICAL 判红；
+      # 已知项必须进基线且带到期日，到期仍命中即判红（详见 docs/security-sla.md）。
+      # 注意：上面 SARIF/JSON/分诊三步仍带 .trivyignore（那是「展示与告警口径」，
+      # 与「阻断口径」是两件事，不要合并）。
+      - name: Trivy fs 扫描 → 原始 JSON（不套豁免，供基线差分）
         # 钉 commit sha 提升供应链安全（v0.20.0 → b2933f565dbc598b29947660e66259e3c7bc8561）
         # 更新策略：随依赖升级一并更新，需安全负责人审批
         uses: aquasecurity/trivy-action@b2933f565dbc598b29947660e66259e3c7bc8561  # v0.20.0
         with:
           scan-type: fs
           scan-ref: .
-          # P2-C7: 阻断门槛从 CRITICAL 提升至 CRITICAL,HIGH
-          # 原 CRITICAL-only 会放过 HIGH 漏洞，不符合 P1 SLA（HIGH 7d 修复）
+          # P2-C7: 阻断门槛 CRITICAL,HIGH（HIGH 属 P1 SLA，不能只盯 CRITICAL）
           severity: CRITICAL,HIGH
           skip-dirs: build,out,target,.gradle,gradle,node_modules,jdk17,jdk-provision,.codeartsdoer
-          # P4-A: 与 Docker 扫描 job 同款豁免白名单（此前 fs 阻断从未踩中
-          # 豁免项故遗漏；CVE-2025-66017 首例踩中，对齐 .trivyignore 生效路径）
-          trivyignores: .trivyignore
-          format: table
-          exit-code: 1
+          # 关键：显式指向空豁免清单。Trivy 会自动发现工作目录的 .trivyignore，
+          # 不传参数 ≠ 不豁免（实证见 .github/trivyignore-empty 文件头）。
+          trivyignores: .github/trivyignore-empty
+          format: json
+          output: trivy-fs-gate.json
+          exit-code: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
+      - name: 基线差分门禁（只对新增 HIGH/CRITICAL 判红）
+        # 退出码：0 通过 / 1 判红（新增、到期、有修复版却登记豁免）/ 2 配置错误。
+        # 脚本与 fixture 测试：scripts/security/trivy-baseline-gate.py +
+        # scripts/security/test_trivy_baseline_gate.py。
+        run: |
+          python3 scripts/security/trivy-baseline-gate.py \
+            --baseline config/trivy-baseline.json \
+            --report trivy-fs-gate.json
 
   # ============================================================
-  # 2. Trivy Docker 镜像扫描
+  # 2. Trivy Docker 镜像扫描（**我方构建产物 → PR 阻断路径**）
+  # -----------------------------------------------------------------------------
+  # 2026-11-06（E1）语义修正：本 job 原先 `if: github.event_name != 'pull_request'`，
+  # 即「红灯只出现在不阻断合并的路径上」——master 上连红 10 条镜像腿，而 PR 上
+  # 同一份改动全绿。现改为 **PR 也跑**，判定口径换成基线差分（只有新增项判红），
+  # 并由 `trivy-image-baseline-gate` 聚合 job 作为唯一的候选必需检查。
+  # 上游浮动镜像（node:24-alpine 本体）已从 PR 门禁移出 → 见 `trivy-upstream-watch`。
+  # 成本：每腿 3 次扫描（SARIF/分诊/门禁），13 腿并行，观测峰值 5.5 → ~7 min。
   # ============================================================
   trivy-docker-scan:
-    timeout-minutes: 30  # 观测峰值 5.5 min；含新增重试余量
-    if: github.event_name != 'pull_request'  # PR 不跑（需构建镜像/起栈，成本高）
+    timeout-minutes: 30  # 观测峰值 5.5 min（2 扫描/腿）；新增门禁扫描后约 7 min，余量充足
     name: Trivy Docker Image Scan (${{ matrix.module }})
     runs-on: ubuntu-24.04
     permissions:
@@ -212,7 +244,7 @@ jobs:
 
       - name: Trivy 镜像扫描 → JSON（供自动分诊）
         # E1 后半（板 20261105-0640，2026-11-05）：为 security-issue-triage job
-        # 产出 JSON 报告。exit-code: 0（不阻断；阻断由下一步 table 步负责），
+        # 产出 JSON 报告。exit-code: 0（不阻断；阻断由后面的『基线差分门禁』步负责），
         # severity 收齐四档使分诊脚本能按 min-severity 过滤；trivyignores 与
         # SARIF/阻断步同口径（已按政策豁免的 CVE 不应再进分诊队列）。
         # 成本代价：每矩阵腿多一次扫描（+~1.5min），timeout 30min 充裕（原峰值 5.5min）。
@@ -230,95 +262,150 @@ jobs:
       - name: 上传 JSON 报告（供分诊 job 聚合）
         # v4+ 要求同一 run 内 artifact 名唯一 ⇒ 矩阵 13 腿各带模块后缀；
         # 分诊 job 用 pattern + merge-multiple 汇总。
-        # 放在阻断步之前：阻断步（exit-code: 1）踩红时本步已完成，报告不丢。
+        # 放在门禁步之前：门禁（退出码 1）判红时本步已完成，报告不丢。
         uses: actions/upload-artifact@v7
         with:
           name: trivy-docker-report-${{ matrix.module }}
           path: trivy-docker-${{ matrix.module }}.json
           retention-days: 7
 
-      - name: Trivy 镜像扫描（CRITICAL,HIGH 阻断）
+      # === E1（2026-11-06）：阻断口径改为基线差分（原为 table + .trivyignore 全量判红） ===
+      - name: Trivy 镜像扫描 → 原始 JSON（不套豁免，供基线差分）
+        # 关键：显式指向空豁免清单。Trivy 会从工作目录自动发现 .trivyignore，
+        # 不传参数 ≠ 不豁免（实证见 .github/trivyignore-empty 文件头）。
         # 钉 commit sha 提升供应链安全（v0.20.0 → b2933f565dbc598b29947660e66259e3c7bc8561）
         # 更新策略：随依赖升级一并更新，需安全负责人审批
         uses: aquasecurity/trivy-action@b2933f565dbc598b29947660e66259e3c7bc8561  # v0.20.0
         with:
           image-ref: ${{ matrix.module }}:scan
-          # P2-C7: 镜像扫描同步提升至 CRITICAL,HIGH 阻断
           severity: CRITICAL,HIGH
-          format: table
-          # P4-A: 豁免上游声明不修的系统包漏洞（.trivyignore 白名单，
-          # 含 zlib1g/libexpat1/libglib2.0-0/bsdutils，详见文件注释）
-          trivyignores: .trivyignore
-          exit-code: 1
+          format: json
+          output: trivy-gate-${{ matrix.module }}.json
+          trivyignores: .github/trivyignore-empty
+          exit-code: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
+      - name: 基线差分门禁（只对新增 HIGH/CRITICAL 判红）
+        # 只看本腿这一份报告：某模块新增漏洞只让该腿红，聚合 job 再统一收口。
+        run: |
+          python3 scripts/security/trivy-baseline-gate.py \
+            --baseline config/trivy-baseline.json \
+            --report trivy-gate-${{ matrix.module }}.json
 
   # ============================================================
-  # 2a. PR 轻量基础镜像腿（板 20261105-0445 / E1，2026-11-05）
+  # 2a. 镜像基线门禁聚合（**PR 阻断路径的唯一收口点**，E1，2026-11-06）
   # ------------------------------------------------------------
-  # 背景：trivy-docker-scan 只在 push master 跑（构建 13 个应用镜像成本高），
-  # 后果是「PR 全绿合并、master 持续红、红时长无约束」——2026-11-04 实证连红
-  # 多轮（Trivy DB 增补 libexpat1 CVE-2026-113351，无修复版，#465 豁免收口）。
-  # 而这类 finding 的源头是**运行阶段基础镜像的 OS 层**，对同源模块完全一致：
-  # 10 个 Java 模块共用 java17-debian13:nonroot，Rust 两模块共用 cc-debian13
-  # （zk 为 :nonroot 变体，OS 包层相同），explorer 用 node:24-alpine。
-  # 扫这 3 个基础镜像 ≈ 覆盖 13 个应用镜像的 OS 层，且**无需构建任何应用镜像**。
+  # 为什么需要这一层：trivy-docker-scan 是 13 腿矩阵，每腿一个 check name。
+  # 若把 13 个腿名逐条设为必需检查，矩阵一变（加/删模块）就会让某些 PR 上
+  # 「该 check 不存在」→ GitHub 按 pending 处理 → 永久卡住（本仓踩过的形态）。
+  # 故只把这个**单一名**的聚合 job 作为候选必需检查：它 needs 整个矩阵，
+  # 任一腿非 success 即红；矩阵内部怎么加模块都不影响必需检查的名字。
   #
-  # 设计：
-  #   · 仅 pull_request 触发（push/cron 已有完整矩阵，重复扫无增量信号）；
-  #   · 阻断口径与 master 矩阵阻断步一致：CRITICAL,HIGH + .trivyignore；
-  #   · 成本实测依据：staleness job 用同样的「拉公开镜像 + 扫描」形态在 PR 上
-  #     跑，观测峰值 1.2 min（本 job 三镜像并行 ≈ 1.5 min 量级）；
-  #   · 红 = 基础镜像出现未豁免的 CRITICAL/HIGH ⇒ 处置路径 = 按既有豁免纪律
-  #     （只豁免上游无修复版系统包 + 注明删除条件 + staleness 复核）开豁免 PR，
-  #     再把本 PR rebase 到豁免之后。豁免 PR 自身携带新 .trivyignore，自洽变绿；
-  #   · 不上传 SARIF：Security tab 只呈现默认分支，push 路径矩阵已有全量 SARIF，
-  #     PR 上传只会增加噪音；
-  #   · 换基础镜像时必须同步改本矩阵（同 staleness job 的约束）。
+  # 只对 pull_request 生效（push/cron 也有 13 腿结论，但那条路径不需要"必需检查"）。
+  # 若本 job 未能稳定通过，就不启用为必需检查——替代方案见 trivy-upstream-watch
+  # 与 docs/security-sla.md 的说明。
   # ============================================================
-  trivy-base-image-pr:
-    timeout-minutes: 15
-    if: github.event_name == 'pull_request'
-    name: Trivy Base Image Scan (PR light, ${{ matrix.base }})
+  trivy-image-baseline-gate:
+    timeout-minutes: 5
+    if: always() && github.event_name == 'pull_request'
+    name: Trivy Image Baseline Gate (PR)
+    runs-on: ubuntu-24.04
+    needs: [trivy-docker-scan]
+    steps:
+      - name: 收敛镜像矩阵门禁结论
+        run: |
+          echo "矩阵汇总结果：${{ needs.trivy-docker-scan.result }}"
+          if [ "${{ needs.trivy-docker-scan.result }}" != "success" ]; then
+            echo "::error title=镜像基线门禁未通过::trivy-docker-scan 结果=${{ needs.trivy-docker-scan.result }}；请查看该矩阵中失败腿的『基线差分门禁』步骤输出（新增项/到期项/有修复版却登记豁免）"
+            exit 1
+          fi
+          echo "::notice::镜像基线门禁通过（13 腿全部 success）"
+
+  # ============================================================
+  # 2b. 上游浮动镜像观测（**移出 PR 门禁，定时 + 失败自动开 issue**，E1，2026-11-06）
+  # -------------------------------------------------------------
+  # 原 `trivy-base-image-pr` 在 PR 上直接扫 `node:24-alpine` 本体，结果是永远红：
+  # 那 6 条 HIGH（brace-expansion / undici）有修复版，但位于**上游镜像自带的 npm
+  # 依赖树**（/usr/local/lib/node_modules/npm/…）；我方改 Dockerfile 不改变被扫
+  # 对象，上游也还没发布打补丁的 tag —— 已用 issue #495 跟踪。
+  # 结论：这类「盯上游」的观测**不能**和「我方产物」混在同一条阻断路径里，
+  # 否则门禁的红灯表达的是别人的待办，而不是本 PR 的问题。
+  #
+  # 现设计：
+  #   · 只在 schedule / workflow_dispatch 跑（PR 与 push 不跑）；
+  #   · 原始扫描（空豁免清单），不对上游镜像套 .trivyignore；
+  #   · 结果交给 trivy-to-issues.py：**出现未被跟踪的 HIGH/CRITICAL 时**才开 issue
+  #     并置红；同一批 finding 下一次定时运行会命中去重 → 回绿。
+  #     即红灯只在「上游新出现」时亮，不会长期常红（这是与旧 PR 腿的关键差别）。
+  #   · issue 带 `upstream-watch` 观测标签 + P0/P1 SLA 标签（口径见 docs/security-sla.md），
+  #     与 PR 门禁的 security-triage 队列分开，避免两类红灯混成一个队列。
+  #   · 只观测 node:24-alpine：两条 distroless 基础镜像的 OS 层已由 13 腿应用镜像
+  #     矩阵按基线覆盖，再扫一遍只会产出与基线重复的 issue。
+  # ============================================================
+  trivy-upstream-watch:
+    timeout-minutes: 20
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    name: Trivy Upstream Image Watch
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        base:
-          - gcr.io/distroless/java17-debian13:nonroot
-          - gcr.io/distroless/cc-debian13
-          - node:24-alpine
+      issues: write
     steps:
-      - name: Checkout 代码（取 .trivyignore）
+      - name: Checkout 代码
         uses: actions/checkout@v5
 
-      - name: Trivy 基础镜像扫描（CRITICAL,HIGH 阻断，带 .trivyignore）
-        # 2026-11-05（E1 假红定夺，板 20261105-1133-nex-remind-e1-pr-light-false-red）：
-        # 本腿语义 = 覆盖 13 个应用镜像的 OS 层（见 job 头注释），npm 打包依赖不属此层。
-        # 实证：node:24-alpine 腿的 6 条 HIGH 全部来自基础镜像自带 npm 的 node_modules
-        # （brace-expansion / undici，路径 /usr/local/lib/node_modules/npm/…，Status=fixed），
-        # 而 nexus-explorer 运行镜像已按"可消除项不豁免"原则整树删除 npm/npx/corepack
-        # （nexus-explorer/Dockerfile 的 RUN rm -rf 段，注释写明正是这些 CVE）——交付镜像
-        # 不含这些包，属**假红**；该腿 OS 层实扫 Total: 0。故本腿限定 vuln-type: os：
-        #   · 保留 OS 层 CRITICAL/HIGH + .trivyignore 阻断口径不变（zlib1g 等 OS 真红
-        #     仍照常阻断，同日走 .trivyignore 增补处置，见 PR #504）；
-        #   · 不把这 6 条写进 .trivyignore——它们不是"上游无修复版系统包"（上游有修复版且
-        #     交付镜像整树删除），写进去违背 .trivyignore 文件头纪律；
-        #   · Java 两条腿（java17-debian13 / cc-debian13）OS 与 os,library 两口径实扫数字
-        #     一致（JRE 模块不被 Trivy 的 jar 分析器识别），限定不改其信号。
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
+      - name: Trivy 扫描上游浮动镜像 node:24-alpine → JSON（不阻断）
+        # vuln-type 取 os,library：本 job 就是要看**上游镜像本体**（含它自带的 npm
+        # 依赖树），这正是 PR 门禁不该承担的信号。
         # 钉 commit sha 提升供应链安全（v0.20.0 → b2933f565dbc598b29947660e66259e3c7bc8561）
         # 更新策略：随依赖升级一并更新，需安全负责人审批
         uses: aquasecurity/trivy-action@b2933f565dbc598b29947660e66259e3c7bc8561  # v0.20.0
         with:
-          image-ref: ${{ matrix.base }}
+          image-ref: node:24-alpine
           severity: CRITICAL,HIGH
-          format: table
-          vuln-type: os
-          trivyignores: .trivyignore
-          exit-code: 1
+          vuln-type: os,library
+          trivyignores: .github/trivyignore-empty
+          format: json
+          output: trivy-upstream-node24-alpine.json
+          exit-code: 0
+
+      - name: 确保观测标签存在
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        # gh label create 在标签已存在时返回非零，忽略即可（这里显式兜底，
+        # 避免因缺 label 导致 issue 创建失败、观测信号丢失）。
+        run: |
+          gh label create upstream-watch --repo "$REPO" \
+            --color 5319E7 --description "上游浮动镜像观测（不阻断合并）" || true
+
+      - name: 上游新增漏洞自动开 issue（带 SLA 标签）
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        # --exit-nonzero-on-findings：本次**新开** issue（或创建失败）才让 job 红；
+        # 已被跟踪的 finding 下次运行会去重跳过 → 退出码 0。故本 job 不是常红。
+        # --label upstream-watch：去重范围限定在「上游观测」issue，与 PR 门禁的
+        # security-triage 队列**分开**，避免把阻断队列和观测队列混成一条。
+        run: |
+          python3 scripts/security/trivy-to-issues.py \
+            --report trivy-upstream-node24-alpine.json \
+            --repo "$REPO" \
+            --min-severity HIGH \
+            --label upstream-watch \
+            --exit-nonzero-on-findings
 
   # ============================================================
-  # 2b. 豁免清单时效复核（**不阻断**，2026-10-07）
+  # 2c. 豁免清单时效复核（**不阻断**，2026-10-07）
   # -----------------------------------------------------------------------------
   # 为什么要有这条：`.trivyignore` 的处置原则是"只豁免上游无可用修复版本的系统包"，
   # 且每条都写了删除条件（"Debian 发布修复后移除"）。但上面 2. 的两步扫描都带
@@ -1081,8 +1168,9 @@ jobs:
     timeout-minutes: 10  # 观测峰值 0.1 min（加镜像报告聚合后仍为秒级）
     name: Security Issue Triage
     runs-on: ubuntu-24.04
-    # E1 后半：聚合镜像矩阵报告（13 腿 artifact）。docker 腿只在 push/cron 跑；
-    # PR 路径它被 skipped，下面的下载步用 continue-on-error + 文件存在守卫放行。
+    # E1 后半：聚合镜像矩阵报告（13 腿 artifact）。
+    # 2026-11-06（E1）：docker 腿改为 **PR 也跑**，故 PR 路径同样有镜像报告；
+    # 但矩阵可能部分腿失败/取消（只拿到子集），下载步仍用 continue-on-error + 文件存在守卫。
     needs: [trivy-fs-scan, trivy-docker-scan]
     # 审计修复：原条件 result == 'success' 使 triage 只在扫描【通过】时运行——
     # 有 CRITICAL/HIGH 时 job 失败反而跳过建 Issue，无漏洞时又无漏可报，
@@ -1117,10 +1205,9 @@ jobs:
           name: trivy-fs-reports
 
       - name: 下载 Trivy 报告（镜像矩阵，可能为空/部分缺失）
-        # E1 后半：docker 腿只在 push/cron 跑（PR 路径无 artifact）；13 腿中
-        # 若干腿因 registry 抖动失败时只拿到成功子集。继续执行不阻断——
-        # 分诊脚本对缺失报告只告警不中断（单份损坏不影响其余分诊）。
-        # continue-on-error 的另一层含义：PR 路径无任何匹配 artifact 时
+        # E1：13 腿中若干腿因 registry 抖动或新增漏洞判红时只拿到成功子集。
+        # 继续执行不阻断——分诊脚本对缺失报告只告警不中断（单份损坏不影响其余分诊）。
+        # continue-on-error 的另一层含义：无任何匹配 artifact 时
         # download-artifact v4+ 会失败，此处放行后由 run 步守卫跳过。
         uses: actions/download-artifact@v7
         with:

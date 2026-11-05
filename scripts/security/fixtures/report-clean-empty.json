@@ -1,0 +1,9 @@
+{
+  "SchemaVersion": 2,
+  "Trivy": {
+    "Version": "0.20.0"
+  },
+  "ArtifactName": "nexus-explorer:scan",
+  "ArtifactType": "container_image",
+  "Results": []
+}

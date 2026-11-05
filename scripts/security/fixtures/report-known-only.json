@@ -1,0 +1,18 @@
+{
+  "Results": [
+    {
+      "Target": "gcr.io/distroless/java17-debian13:nonroot (debian 13.7)",
+      "Class": "os-pkgs",
+      "Type": "debian",
+      "Vulnerabilities": [
+        {
+          "VulnerabilityID": "CVE-2026-113351",
+          "PkgName": "libexpat1",
+          "InstalledVersion": "2.9.0-1~deb13u1",
+          "Severity": "HIGH",
+          "Status": "affected"
+        }
+      ]
+    }
+  ]
+}

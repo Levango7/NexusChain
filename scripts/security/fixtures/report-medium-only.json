@@ -1,0 +1,17 @@
+{
+  "Results": [
+    {
+      "Target": "nexus-core",
+      "Class": "lang-pkgs",
+      "Type": "jar",
+      "Vulnerabilities": [
+        {
+          "VulnerabilityID": "CVE-2026-111111",
+          "PkgName": "guava",
+          "InstalledVersion": "33.3.1",
+          "Severity": "MEDIUM"
+        }
+      ]
+    }
+  ]
+}
