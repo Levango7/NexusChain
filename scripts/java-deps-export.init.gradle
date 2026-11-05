@@ -18,12 +18,12 @@
 //     而系统属性会随 `gradlew` 进程传进构建 JVM。
 //     未传该属性时落到各项目的 `build/java-deps/`，本地手工跑也能拿到东西。
 //
-// 用法（CI 在同一个 composite 调用里按任务路径逐个触发 included build，
-// 不用 `-p <目录>` 单跑——那些构建 standalone 时会去仓库解析 org.nexus:nexus-* ，
-// 而这些坐标只有靠 composite 替换才存在）：
+// 用法（CI 主路径：对 6 个 included build 各用 `-p <目录>` 独立调起一次，
+// init script 一定作用于被调起的那个构建；这些构建里没有 `org.nexus:` 依赖，
+// 独立解析自洽——已 grep 核实。兜底路径见 ci.yml 的 composite 任务路径注释）：
 //   ./gradlew --no-daemon --init-script scripts/java-deps-export.init.gradle \
 //       -Dnexus.javaDepsOut=$PWD/build/java-deps exportJavaDependencies
-//   ./gradlew --no-daemon --init-script 同上 :nexus-settlement:exportJavaDependencies
+//   ./gradlew --no-daemon -p nexus-settlement --init-script 同上 exportJavaDependencies
 // 产物随后由 `scripts/java-deps-collect.py merge` 合成可提交清单
 // `scripts/java-dependencies.json`，许可字符串再进 `scripts/java-license-cache.json`。
 // ============================================================================

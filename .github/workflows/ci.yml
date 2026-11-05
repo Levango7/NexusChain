@@ -520,26 +520,49 @@ jobs:
       #   这样"别人新增了依赖还没刷新清单"不会在别人的 PR 上判红，但机制失效不会静默。
       # 位置刻意放在 Java 测试与回归之后：同一 job 内 runtimeClasspath 已解析过，
       # 这几次调用只读本地缓存，不重复下载依赖。
-      # included build 用 `:名字:任务` 寻址——与本 job 第 9 步 `:nexus-settlement:check`
-      # 同一条已被 CI 验证过的路径；**不用 `-p <目录>` 单跑**：那些构建 standalone 时
-      # 会去仓库解析 `org.nexus:nexus-common` 这类只有靠 composite 替换才存在的坐标。
-      # 若 init script 不作用于 included build（Gradle 版本行为，需实测），任务路径会
-      # not found ⇒ 这里降级为 warning 并在下方"覆盖核对"里点名缺哪些构建，不判红。
+      # included build 的导出走**两条路各试一次**（顺序有意）：
+      #   ① `-p <目录>`：init script 一定作用于被调起的那个构建 ⇒ 确定性最高；
+      #      前提是该构建独立跑也能解析依赖——已核：这 6 个 included build 的
+      #      settings.gradle / build.gradle 里**没有任何 `org.nexus:` 或跨构建 project(...) 依赖**
+      #      （grep 实测），各自带 pluginManagement/repositories，独立构建树可自洽解析。
+      #   ② composite 任务路径 `:名字:exportJavaDependencies`：与本 job 第 9 步
+      #      `:nexus-settlement:check` 同一条已被 CI 验证过的寻址方式，作为兜底——
+      #      它成立与否取决于「init script 是否也应用到 composite 内的 included build」，
+      #      这一点 Gradle 文档未承诺，故不作为唯一路径。
+      # 两条都失败才计入 MISSING，并由下方"覆盖核对"点名；**不判红**（报告制）。
+      # 根构建那一次调用失败仍判红（红=载体坏），但先做**有界重试**：
+      # 镜像 5xx / 解析抖动属载体抖动，不该把全仓 PR 弄红（同 #87/#49 的 CD 重试口径）。
       - name: 导出 Java 依赖清单并与已提交清单比对（报告制）
         run: |
           set -e
+          run_txn() {
+            local n=0
+            until "$@"; do
+              n=$((n + 1))
+              if [ "$n" -ge 2 ]; then
+                return 1
+              fi
+              echo "::warning::导出调用第 $n 次失败（可能是镜像 5xx/解析抖动），重试同一命令"
+              sleep 20
+            done
+          }
           INIT=scripts/java-deps-export.init.gradle
           OUT="$PWD/build/java-deps"
           rm -rf "$OUT" && mkdir -p "$OUT"
-          ./gradlew --no-daemon --init-script "$INIT" \
+          run_txn ./gradlew --no-daemon --init-script "$INIT" \
             -Dnexus.javaDepsOut="$OUT" exportJavaDependencies
           MISSING=""
           for b in nexus-settlement nexus-compliance nexus-analytics \
                    nexus-oracle nexus-consortium nexus-api-gateway; do
-            if ! ./gradlew --no-daemon --init-script "$INIT" \
+            if ./gradlew --no-daemon -p "$b" --init-script "$INIT" \
+                 -Dnexus.javaDepsOut="$OUT" exportJavaDependencies; then
+              echo "::notice::$b 经独立构建树（-p）导出成功"
+            elif ./gradlew --no-daemon --init-script "$INIT" \
                  -Dnexus.javaDepsOut="$OUT" ":$b:exportJavaDependencies"; then
+              echo "::notice::$b 经 composite 任务路径导出成功（-p 单跑失败，已兜底）"
+            else
               MISSING="$MISSING $b"
-              echo "::warning::included build $b 导出任务未命中" \
+              echo "::warning::$b 两条寻址都失败" \
                    "⇒ 该构建树的依赖不会进清单（Java 覆盖不完整，非误报漂移）"
             fi
           done
