@@ -158,6 +158,55 @@ jobs:
             --report trivy-fs-gate.json
 
   # ============================================================
+  # 2-0. 镜像扫描范围（**PR 路径过滤**，2026-11-06 E1 收尾）
+  # ------------------------------------------------------------
+  # 为什么：E1 把镜像扫描放进 PR 阻断路径后，每个 PR 都要跑 13 条完整
+  # docker build（排队 20+ min 起），一个只改 docs/ 的 PR 也要付全量成本，
+  # 实测把 P0 修复 #520 卡在 `Trivy Image Baseline Gate (PR)` 上。
+  # E1 的目的是「红灯出现在该红的地方」，不是「所有 PR 交一遍全量成本」。
+  #
+  # 过滤口径写在 scripts/security/image-scan-scope.py：按 13 个 Dockerfile 的
+  # COPY 列表推导，每一类都有理由；**未知路径一律全量兜底**，避免新增目录里的
+  # 镜像输入被静默跳过。
+  #
+  # 硬约束：
+  #   · 本 job 只决定矩阵范围，**不改判定口径**（基线差分、新增 HIGH/CRITICAL
+  #     才判红、UTC 到期全部沿用 security-scan 的既有语义）；
+  #   · push / schedule / workflow_dispatch 一律 13 腿全量（合并后的真实状态不能漏）；
+  #   · 0 腿时聚合 job 仍必须给出 success（必需检查不能变成 skipped/missing）。
+  # ============================================================
+  image-scan-scope:
+    name: Image Scan Scope (path filter)
+    timeout-minutes: 5
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      modules: ${{ steps.scope.outputs.modules }}
+      count: ${{ steps.scope.outputs.count }}
+      reason: ${{ steps.scope.outputs.reason }}
+    steps:
+      - name: Checkout 代码（取全量历史以计算 PR 基线 diff）
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
+      - name: 计算需要构建/扫描的镜像模块
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          python3 scripts/security/image-scan-scope.py \
+            --event "$EVENT" \
+            --base-ref "$BASE_REF" \
+            --output "$GITHUB_OUTPUT"
+
   # 2. Trivy Docker 镜像扫描（**我方构建产物 → PR 阻断路径**）
   # -----------------------------------------------------------------------------
   # 2026-11-06（E1）语义修正：本 job 原先 `if: github.event_name != 'pull_request'`，
@@ -177,26 +226,16 @@ jobs:
       # E1 后半（板 20261105-0640，2026-11-05）：上传 JSON 报告 artifact 供
       # security-issue-triage job 下载聚合——v4+ 上传 artifact 需 actions: write。
       actions: write
+    # 范围由 image-scan-scope 计算（PR 按路径过滤；push/cron/dispatch 全量）。
+    # 0 腿时整个 job 跳过，聚合 job 会把它转成 success（必需检查不能变 skipped）。
+    needs: [image-scan-scope]
+    if: needs.image-scan-scope.outputs.count != '0'
     strategy:
       fail-fast: false
       matrix:
-        # P2-C7: 扩展至全部含 Dockerfile 的模块（与 ci.yml docker-build job 保持一致）
-        module:
-          - nexus-core
-          - nexus-gateway
-          - nexus-bridge
-          - nexus-signing-service
-          - nexus-wallet-service
-          - nexus-api-gateway
-          - nexus-settlement
-          - nexus-compliance
-          - nexus-analytics
-          - nexus-oracle
-          - mpc-engine
-          - zk-groth16-service
-          # 2026-10-18：补 nexus-explorer（ci.yml docker-build 矩阵早已包含，
-          # 本矩阵注释声称"保持一致"但实际遗漏——explorer 镜像从未被 Trivy 扫描）。
-          - nexus-explorer
+        # 矩阵不再写死：取值来自 image-scan-scope 的输出（JSON 数组）。
+        # 13 个候选模块与其触发规则见 scripts/security/image-scan-scope.py。
+        module: ${{ fromJSON(needs.image-scan-scope.outputs.modules) }}
     steps:
       - name: Checkout 代码
         uses: actions/checkout@v5
@@ -299,7 +338,8 @@ jobs:
   # ============================================================
   # 2a. 镜像基线门禁聚合（**PR 阻断路径的唯一收口点**，E1，2026-11-06）
   # ------------------------------------------------------------
-  # 为什么需要这一层：trivy-docker-scan 是 13 腿矩阵，每腿一个 check name。
+  # 为什么需要这一层：trivy-docker-scan 是**按范围过滤的矩阵**（候选 13 腿），
+  # 每个腿一个 check name。
   # 若把 13 个腿名逐条设为必需检查，矩阵一变（加/删模块）就会让某些 PR 上
   # 「该 check 不存在」→ GitHub 按 pending 处理 → 永久卡住（本仓踩过的形态）。
   # 故只把这个**单一名**的聚合 job 作为候选必需检查：它 needs 整个矩阵，
@@ -314,16 +354,37 @@ jobs:
     if: always() && github.event_name == 'pull_request'
     name: Trivy Image Baseline Gate (PR)
     runs-on: ubuntu-24.04
-    needs: [trivy-docker-scan]
+    needs: [image-scan-scope, trivy-docker-scan]
     steps:
       - name: 收敛镜像矩阵门禁结论
         run: |
-          echo "矩阵汇总结果：${{ needs.trivy-docker-scan.result }}"
-          if [ "${{ needs.trivy-docker-scan.result }}" != "success" ]; then
-            echo "::error title=镜像基线门禁未通过::trivy-docker-scan 结果=${{ needs.trivy-docker-scan.result }}；请查看该矩阵中失败腿的『基线差分门禁』步骤输出（新增项/到期项/有修复版却登记豁免）"
+          SCOPE_RESULT="${{ needs.image-scan-scope.result }}"
+          SCOPE_REASON="${{ needs.image-scan-scope.outputs.reason }}"
+          SCOPE_COUNT="${{ needs.image-scan-scope.outputs.count }}"
+          SCAN_RESULT="${{ needs.trivy-docker-scan.result }}"
+
+          echo "范围判定：$SCOPE_REASON（模块数 $SCOPE_COUNT）"
+          echo "矩阵汇总结果：$SCAN_RESULT"
+
+          # ① 范围计算失败绝不能当成「无相关改动」放行：门禁自己坏掉时必须红。
+          if [ "$SCOPE_RESULT" != "success" ]; then
+            echo "::error title=镜像范围计算失败::image-scan-scope 结果=$SCOPE_RESULT；无法确定哪些镜像需要扫描，按失败处理"
             exit 1
           fi
-          echo "::notice::镜像基线门禁通过（13 腿全部 success）"
+
+          # ② 无相关改动 → 矩阵整体跳过，本 job **必须**给出 success。
+          #    必需检查若变 skipped/missing，所有不涉及镜像的 PR 都会被卡成 pending。
+          if [ "$SCAN_RESULT" = "skipped" ]; then
+            echo "::notice title=镜像基线门禁（no relevant changes）::本次 PR 未命中任何镜像输入（$SCOPE_REASON），跳过构建与扫描；按通过处理"
+            exit 0
+          fi
+
+          # ③ 有腿执行则沿用 E1 口径：任一腿非 success 即红。
+          if [ "$SCAN_RESULT" != "success" ]; then
+            echo "::error title=镜像基线门禁未通过::trivy-docker-scan 结果=$SCAN_RESULT（$SCOPE_COUNT 腿）；请查看失败腿的『基线差分门禁』步骤输出（新增项/到期项/有修复版却登记豁免）"
+            exit 1
+          fi
+          echo "::notice::镜像基线门禁通过（$SCOPE_COUNT 腿全部 success；范围：$SCOPE_REASON）"
 
   # ============================================================
   # 2b. 上游浮动镜像观测（**移出 PR 门禁，定时 + 失败自动开 issue**，E1，2026-11-06）
