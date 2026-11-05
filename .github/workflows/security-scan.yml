@@ -141,7 +141,10 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-      security-events: write
+      security-events: write   # 上传 SARIF 到 Security tab 所需
+      # E1 后半（板 20261105-0640，2026-11-05）：上传 JSON 报告 artifact 供
+      # security-issue-triage job 下载聚合——v4+ 上传 artifact 需 actions: write。
+      actions: write
     strategy:
       fail-fast: false
       matrix:
@@ -206,6 +209,33 @@ jobs:
         with:
           sarif_file: trivy-docker-${{ matrix.module }}.sarif
           category: trivy-docker-${{ matrix.module }}
+
+      - name: Trivy 镜像扫描 → JSON（供自动分诊）
+        # E1 后半（板 20261105-0640，2026-11-05）：为 security-issue-triage job
+        # 产出 JSON 报告。exit-code: 0（不阻断；阻断由下一步 table 步负责），
+        # severity 收齐四档使分诊脚本能按 min-severity 过滤；trivyignores 与
+        # SARIF/阻断步同口径（已按政策豁免的 CVE 不应再进分诊队列）。
+        # 成本代价：每矩阵腿多一次扫描（+~1.5min），timeout 30min 充裕（原峰值 5.5min）。
+        # 钉 commit sha 提升供应链安全（v0.20.0 → b2933f565dbc598b29947660e66259e3c7bc8561）
+        # 更新策略：随依赖升级一并更新，需安全负责人审批
+        uses: aquasecurity/trivy-action@b2933f565dbc598b29947660e66259e3c7bc8561  # v0.20.0
+        with:
+          image-ref: ${{ matrix.module }}:scan
+          severity: CRITICAL,HIGH,MEDIUM,LOW
+          format: json
+          output: trivy-docker-${{ matrix.module }}.json
+          trivyignores: .trivyignore
+          exit-code: 0
+
+      - name: 上传 JSON 报告（供分诊 job 聚合）
+        # v4+ 要求同一 run 内 artifact 名唯一 ⇒ 矩阵 13 腿各带模块后缀；
+        # 分诊 job 用 pattern + merge-multiple 汇总。
+        # 放在阻断步之前：阻断步（exit-code: 1）踩红时本步已完成，报告不丢。
+        uses: actions/upload-artifact@v7
+        with:
+          name: trivy-docker-report-${{ matrix.module }}
+          path: trivy-docker-${{ matrix.module }}.json
+          retention-days: 7
 
       - name: Trivy 镜像扫描（CRITICAL,HIGH 阻断）
         # 钉 commit sha 提升供应链安全（v0.20.0 → b2933f565dbc598b29947660e66259e3c7bc8561）
@@ -1023,25 +1053,35 @@ jobs:
         run: docker compose -f docker-compose.yml -f docker-compose.dast.yml down || true
 
   # ============================================================
-  # 6. 安全发现分诊：高危漏洞自动创建 GitHub Issue（P2-T7）
+  # 6. 安全发现分诊：高危漏洞自动创建 GitHub Issue（P2-T7 + E1 后半）
   # -----------------------------------------------------------------------------
-  # 解析 Trivy JSON 报告，对 CRITICAL/HIGH 漏洞自动创建 GitHub Issue
-  # 去重：通过 label "security-triage" + 漏洞指纹（CVE+包名）避免重复创建
+  # 解析 Trivy JSON 报告（fs + 镜像矩阵各腿），对 CRITICAL/HIGH 漏洞自动建 Issue：
+  #   - 聚合：同一（CVE, 包, 严重性）跨模块只开一个 issue，body 列出全部受影响 target
+  #     （E1 前：10 个 Java 模块共用基础镜像时同一 CVE 会开 10 个 issue 刷屏）
+  #   - 自动分类：os-no-fix / os-fixable / app-no-fix / app-fixable，
+  #     os-no-fix（跑步机型）处置建议=豁免纪律评估，而非无意义的"升级"
+  # 去重：label "security-triage" + 标题指纹 + CVE 子串（兼容旧标题格式）
   # SLA：P0(CRITICAL) 24h / P1(HIGH) 7d / P2(MEDIUM) 30d（见 docs/security-sla.md）
   # ============================================================
   security-issue-triage:
-    timeout-minutes: 10  # 观测峰值 0.1 min
+    timeout-minutes: 10  # 观测峰值 0.1 min（加镜像报告聚合后仍为秒级）
     name: Security Issue Triage
     runs-on: ubuntu-24.04
-    needs: [trivy-fs-scan]
+    # E1 后半：聚合镜像矩阵报告（13 腿 artifact）。docker 腿只在 push/cron 跑；
+    # PR 路径它被 skipped，下面的下载步用 continue-on-error + 文件存在守卫放行。
+    needs: [trivy-fs-scan, trivy-docker-scan]
     # 审计修复：原条件 result == 'success' 使 triage 只在扫描【通过】时运行——
     # 有 CRITICAL/HIGH 时 job 失败反而跳过建 Issue，无漏洞时又无漏可报，
     # 自动分诊永不生效。改为扫描已执行（未跳过/未取消）即运行，
     # 扫描失败（发现漏洞）时对报告中的漏洞建 Issue。
+    # 注意：needs 含 docker 腿时，某腿因发现漏洞变红，!cancelled() 仍放行本 job
+    # （这正是"红灯时才需要分诊"的语义）；docker 腿整体 skipped（PR）亦放行。
     if: ${{ !cancelled() && needs.trivy-fs-scan.result != 'skipped' }}
     permissions:
       contents: read
       issues: write
+      # v4+ 下载 artifact 需 actions: read（fs 报告 + 镜像矩阵报告两步）
+      actions: read
     steps:
       - name: Checkout 代码
         uses: actions/checkout@v5
@@ -1057,18 +1097,39 @@ jobs:
         with:
           python-version: '3.14'
 
-      - name: 下载 Trivy 报告
+      - name: 下载 Trivy 报告（fs）
         uses: actions/download-artifact@v7
         with:
           name: trivy-fs-reports
+
+      - name: 下载 Trivy 报告（镜像矩阵，可能为空/部分缺失）
+        # E1 后半：docker 腿只在 push/cron 跑（PR 路径无 artifact）；13 腿中
+        # 若干腿因 registry 抖动失败时只拿到成功子集。继续执行不阻断——
+        # 分诊脚本对缺失报告只告警不中断（单份损坏不影响其余分诊）。
+        # continue-on-error 的另一层含义：PR 路径无任何匹配 artifact 时
+        # download-artifact v4+ 会失败，此处放行后由 run 步守卫跳过。
+        uses: actions/download-artifact@v7
+        with:
+          pattern: trivy-docker-report-*
+          merge-multiple: true
+          path: trivy-docker-reports
+        continue-on-error: true
 
       - name: 高危漏洞自动创建 GitHub Issue
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
+          DOCKER_ARGS=""
+          for f in trivy-docker-reports/trivy-docker-*.json; do
+            if [ -f "$f" ]; then
+              DOCKER_ARGS="$DOCKER_ARGS --report $f"
+            fi
+          done
+          echo "::notice::分诊输入：fs 报告 1 份 + 镜像报告 $(echo $DOCKER_ARGS | grep -o '\-\-report' | wc -l) 份"
           python3 scripts/security/trivy-to-issues.py \
             --report trivy-fs-results.json \
+            $DOCKER_ARGS \
             --repo "$REPO" \
             --min-severity HIGH \
             --label security-triage

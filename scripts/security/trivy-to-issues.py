@@ -3,21 +3,29 @@
 trivy-to-issues.py — Trivy 漏洞报告 → GitHub Issue 自动分诊
 
 功能：
-  - 解析 Trivy JSON 报告，提取 CRITICAL/HIGH 漏洞
-  - 对每个唯一漏洞（按 CVE+包名去重）创建 GitHub Issue
-  - 通过 label "security-triage" + 漏洞指纹避免重复创建
+  - 解析一份或多份 Trivy JSON 报告（fs / 镜像矩阵），提取 CRITICAL/HIGH 漏洞
+  - 按 (CVE + 包 + 严重性) 聚合：同一漏洞命中多个模块只开一个 issue，
+    body 列出全部受影响 target
+  - 自动分类（E1 跑步机分诊，2026-11-05）：
+      * os-no-fix    — OS 层包且上游无修复版 ⇒ 标签 os-no-fix，
+                       处置建议=豁免纪律评估（不是"升级"）
+      * os-fixable   — OS 层包但有修复版 ⇒ 标签 fix-available（随基础镜像升级）
+      * app-no-fix / app-fixable — 应用/依赖层同理
+  - 通过 label "security-triage" + 标题指纹 + CVE 子串检索三层去重
+    （CVE 子串检索保证与旧标题格式 issue 的兼容：改标题格式不产生重复）
   - 在 issue body 中标注 SLA 期限（P0 24h / P1 7d / P2 30d）
 
 用法：
   python3 trivy-to-issues.py \
     --report trivy-fs-results.json \
+    --report trivy-docker-reports/nexus-core.json \
     --repo owner/repo \
     --min-severity HIGH \
     --label security-triage
 
 退出码：
   0 — 成功（无论是否创建 issue）
-  1 — 参数错误或报告读取失败
+  1 — 参数错误或全部报告读取失败
 """
 
 import argparse
@@ -52,7 +60,7 @@ def run_gh(args, check=False):
 
 
 def list_existing_issues(repo, label):
-    """列出带有指定 label 的现有 issue，返回 {title: number} 字典。"""
+    """列出带有指定 label 的现有 open issue，返回 {title: number} 字典。"""
     rc, out, err = run_gh([
         "issue", "list",
         "--repo", repo,
@@ -69,6 +77,21 @@ def list_existing_issues(repo, label):
         return {item["title"]: item["number"] for item in issues}
     except json.JSONDecodeError:
         return {}
+
+
+def cve_has_open_issue(cve, title_map):
+    """CVE 子串级去重：任何 open security-triage issue 标题含该 CVE 即视为已开。
+    兼容历史标题格式（含 target 的旧格式改版后不会产生重复 issue）。"""
+    for title, num in title_map.items():
+        if cve and cve in title:
+            return num
+    return None
+
+
+def ensure_label(repo, label):
+    """确保 label 存在（已存在时 gh 报错，忽略）。"""
+    run_gh(["label", "create", label, "--repo", repo, "--color", "D93F0B",
+            "--description", "自动分诊分类标签"])
 
 
 def create_issue(repo, title, body, labels):
@@ -93,7 +116,28 @@ def create_issue(repo, title, body, labels):
         return None
 
 
-def build_issue_body(vuln, package, severity, sla_config):
+def classify(result_class, vuln):
+    """E1 跑步机自动分诊：返回 (category, category_text)。
+
+    category:
+      os-no-fix    — OS 层包，上游无修复版（跑步机型：豁免纪律评估）
+      os-fixable   — OS 层包，有修复版（随基础镜像升级）
+      app-no-fix   — 应用/依赖层，无修复版（盯上游 / 换依赖）
+      app-fixable  — 应用/依赖层，有修复版（升级依赖）
+    """
+    fixed = (vuln.get("FixedVersion") or "").strip()
+    status = (vuln.get("Status") or "").strip().lower()
+    has_fix = bool(fixed) or status == "fixed"
+    is_os = (result_class == "os-pkgs")
+    if is_os:
+        return ("os-no-fix", "OS 层包 · 上游无修复版") if not has_fix \
+            else ("os-fixable", "OS 层包 · 有修复版")
+    return ("app-no-fix", "应用/依赖层 · 无修复版") if not has_fix \
+        else ("app-fixable", "应用/依赖层 · 有修复版")
+
+
+def build_issue_body(vuln, package, severity, sla_config, category, category_text,
+                     affected_targets):
     """构建 issue body（Markdown 格式）。"""
     now = datetime.now(timezone.utc)
     deadline = now + timedelta(days=sla_config["deadline_days"])
@@ -101,12 +145,28 @@ def build_issue_body(vuln, package, severity, sla_config):
     cve = vuln.get("VulnerabilityID", "N/A")
     cvss = vuln.get("CVSS", {})
     cvss_score = cvss.get("nvd", {}).get("V3Score", "N/A") if isinstance(cvss, dict) else "N/A"
-    fixed_version = vuln.get("FixedVersion", "未修复")
+    fixed_version = vuln.get("FixedVersion", "") or "未修复（上游无修复版）"
     description = vuln.get("Description", "无描述")
     references = vuln.get("References", [])
-    primary_url = references[0] if references else "无"
 
     ref_list = "\n".join(f"- [{ref}]({ref})" for ref in references[:5]) if references else "无"
+    target_list = "\n".join(f"- `{t}`" for t in affected_targets)
+
+    if category == "os-no-fix":
+        advice = f"""1. **上游无修复版，"升级"不适用**：按 `.trivyignore` 既有豁免纪律评估——
+   只豁免「OS 层 + 无修复版 + 服务不触达该库」的系统包，每条注明删除条件
+   （Debian/Alpine 发布修复后随基础镜像升级移除），并确认 staleness 复核覆盖；
+2. 若不可豁免（服务真实触达），评估缓解（配置/禁用功能/换实现）并记录到本 issue；
+3. 关联 PR 时注明豁免或缓解二选一，不得静默关闭。"""
+    elif category == "os-fixable":
+        advice = f"""1. 随基础镜像升级吸收（`{package.get("Name", "N/A")}` 已有修复版
+   `{fixed_version}`）；确认基础镜像引用为浮动 tag 后重扫即可消除；
+2. 若基础镜像侧无新版本，回到 os-no-fix 流程评估豁免纪律。"""
+    else:
+        advice = f"""1. 升级 `{package.get("Name", "N/A")}` 至 `{fixed_version}` 或更高版本
+2. 如无法立即升级，评估是否可通过配置缓解（如禁用受影响功能）
+3. 在 PR 中关联本 issue（`Fixes #<issue_number>`）
+4. 修复后关闭本 issue 并验证漏洞已消除"""
 
     body = f"""## 🔴 安全漏洞发现 — {severity}
 
@@ -118,7 +178,12 @@ def build_issue_body(vuln, package, severity, sla_config):
 | **受影响包** | `{package.get("Name", "N/A")}` |
 | **已安装版本** | `{package.get("InstalledVersion", "N/A")}` |
 | **修复版本** | `{fixed_version}` |
+| **自动分类** | **{category_text}**（`{category}`） |
 | **发现时间** | {now.strftime("%Y-%m-%d %H:%M UTC")} |
+
+## 🎯 受影响范围（本仓聚合）
+
+{target_list}
 
 ## ⏱️ SLA 期限
 
@@ -126,7 +191,7 @@ def build_issue_body(vuln, package, severity, sla_config):
 |--------|---------|---------|
 | **{sla_config["label"]}** | {sla_config["sla_text"]} | {deadline.strftime("%Y-%m-%d %H:%M UTC")} |
 
-> ⚠️ 请在截止时间前完成修复或提供缓解方案。逾期未处理将升级至安全负责人。
+> ⚠️ 请在截止时间前完成修复、豁免（按纪律）或缓解。逾期未处理将升级至安全负责人。
 
 ## 📝 漏洞描述
 
@@ -136,23 +201,21 @@ def build_issue_body(vuln, package, severity, sla_config):
 
 {ref_list}
 
-## 🛠️ 修复建议
+## 🛠️ 处置建议（按自动分类）
 
-1. 升级 `{package.get("Name", "N/A")}` 至 `{fixed_version}` 或更高版本
-2. 如无法立即升级，评估是否可通过配置缓解（如禁用受影响功能）
-3. 在 PR 中关联本 issue（`Fixes #<issue_number>`）
-4. 修复后关闭本 issue 并验证漏洞已消除
+{advice}
 
 ---
-*由 `security-scan.yml` → `trivy-to-issues.py` 自动创建*
-*SLA 标准见 [docs/security-sla.md](../docs/security-sla.md)*
+*由 `security-scan.yml` → `trivy-to-issues.py` 自动创建（多报告聚合 + 自动分类）*
+*SLA 标准见 docs/security-sla.md*
 """
     return body
 
 
 def main():
     parser = argparse.ArgumentParser(description="Trivy 漏洞报告 → GitHub Issue 自动分诊")
-    parser.add_argument("--report", required=True, help="Trivy JSON 报告路径")
+    parser.add_argument("--report", action="append", required=True,
+                        help="Trivy JSON 报告路径（可重复传多份：fs + 镜像矩阵各腿）")
     parser.add_argument("--repo", required=True, help="GitHub 仓库（owner/repo）")
     parser.add_argument("--min-severity", default="HIGH",
                         choices=["CRITICAL", "HIGH", "MEDIUM", "LOW"],
@@ -163,45 +226,59 @@ def main():
                         help="只打印将创建的 issue，不实际创建")
     args = parser.parse_args()
 
-    # 读取 Trivy JSON 报告
-    try:
-        with open(args.report, "r", encoding="utf-8") as f:
-            report = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError) as e:
-        print(f"[ERROR] 无法读取报告 {args.report}: {e}", file=sys.stderr)
+    # 读取一份或多份 Trivy JSON 报告；单份损坏只告警不中断（其余报告照常分诊）
+    reports = []
+    load_failures = 0
+    for path in args.report:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                reports.append(json.load(f))
+        except (FileNotFoundError, json.JSONDecodeError) as e:
+            print(f"[WARN] 跳过报告 {path}: {e}", file=sys.stderr)
+            load_failures += 1
+    if load_failures == len(args.report):
+        print("[ERROR] 所有报告均不可读", file=sys.stderr)
         return 1
 
-    # Trivy JSON 报告格式: [{ "Target": "...", "Vulnerabilities": [...] }, ...]
-    if not isinstance(report, list):
-        print(f"[WARN] 报告格式非预期（非数组），可能是空报告或格式变更", file=sys.stderr)
-        report = []
-
+    # Trivy JSON 报告格式: [{ "Target": "...", "Class": "...", "Vulnerabilities": [...] }, ...]
     min_severity_rank = SEVERITY_ORDER.get(args.min_severity, 3)
 
-    # 收集所有符合严重性阈值的漏洞
-    findings = []
-    for result_entry in report:
-        target = result_entry.get("Target", "unknown")
-        vulns = result_entry.get("Vulnerabilities") or []
-        for vuln in vulns:
-            severity = vuln.get("Severity", "UNKNOWN").upper()
-            if SEVERITY_ORDER.get(severity, 0) < min_severity_rank:
-                continue
-            findings.append({
-                "target": target,
-                "vulnerability": vuln,
-                "package": {
-                    "Name": vuln.get("PkgName", "N/A"),
-                    "InstalledVersion": vuln.get("InstalledVersion", "N/A"),
-                },
-                "severity": severity,
-            })
+    # 收集所有符合严重性阈值的漏洞，并按 (CVE, 包, 严重性) 聚合
+    aggregated = {}
+    for report in reports:
+        if not isinstance(report, list):
+            print("[WARN] 报告格式非预期（非数组），跳过该报告", file=sys.stderr)
+            continue
+        for result_entry in report:
+            target = result_entry.get("Target", "unknown")
+            result_class = result_entry.get("Class", "")
+            vulns = result_entry.get("Vulnerabilities") or []
+            for vuln in vulns:
+                severity = vuln.get("Severity", "UNKNOWN").upper()
+                if SEVERITY_ORDER.get(severity, 0) < min_severity_rank:
+                    continue
+                cve = vuln.get("VulnerabilityID", "UNKNOWN")
+                pkg_name = vuln.get("PkgName", "N/A")
+                key = (cve, pkg_name, severity)
+                if key not in aggregated:
+                    aggregated[key] = {
+                        "vulnerability": vuln,
+                        "package": {
+                            "Name": pkg_name,
+                            "InstalledVersion": vuln.get("InstalledVersion", "N/A"),
+                        },
+                        "severity": severity,
+                        "result_class": result_class,
+                        "targets": [],
+                    }
+                if target not in aggregated[key]["targets"]:
+                    aggregated[key]["targets"].append(target)
 
-    if not findings:
+    if not aggregated:
         print(f"[INFO] 未发现 {args.min_severity} 及以上级别的漏洞，无需创建 issue")
         return 0
 
-    print(f"[INFO] 发现 {len(findings)} 个 {args.min_severity}+ 漏洞，开始分诊...")
+    print(f"[INFO] 发现 {len(aggregated)} 个 {args.min_severity}+ 唯一漏洞（已跨报告聚合），开始分诊...")
 
     # 列出现有 issue 用于去重
     if not args.dry_run:
@@ -209,37 +286,40 @@ def main():
         print(f"[INFO] 现有 {len(existing)} 个 open security-triage issue")
     else:
         existing = {}
-        print(f"[INFO] --dry-run 模式：不实际创建 issue")
+        print("[INFO] --dry-run 模式：不实际创建 issue")
 
     created = 0
     skipped = 0
 
-    for finding in findings:
+    for (_cve, _pkg_name, _severity), finding in sorted(aggregated.items()):
         vuln = finding["vulnerability"]
         pkg = finding["package"]
         severity = finding["severity"]
         cve = vuln.get("VulnerabilityID", "UNKNOWN")
-        pkg_name = pkg["Name"]
 
         sla_config = SLA.get(severity, SLA["MEDIUM"])
+        category, category_text = classify(finding["result_class"], vuln)
 
-        # issue 标题（唯一键）
-        title = f"[Security/{severity}] {cve} — {pkg_name} ({finding['target']})"
+        # issue 标题（唯一键：CVE+包；target 收进 body，跨模块聚合不再刷屏）
+        title = f"[Security/{severity}] {cve} — {pkg['Name']}"
 
-        # 去重检查
-        if title in existing:
-            print(f"  [SKIP] 已存在 issue #{existing[title]}: {title}")
+        # 双层去重：标题精确匹配（新格式）+ CVE 子串检索（兼容旧格式）
+        dup = existing.get(title) or cve_has_open_issue(cve, existing)
+        if dup:
+            print(f"  [SKIP] 已存在 issue #{dup}: {title}")
             skipped += 1
             continue
 
-        body = build_issue_body(vuln, pkg, severity, sla_config)
-        labels = [args.label, "security", sla_config["label"], "automated"]
+        body = build_issue_body(vuln, pkg, severity, sla_config,
+                                category, category_text, finding["targets"])
+        labels = [args.label, "security", sla_config["label"], "automated", category]
 
         if args.dry_run:
-            print(f"  [DRY-RUN] 将创建: {title}")
+            print(f"  [DRY-RUN] 将创建: {title}（{category_text}；影响 {len(finding['targets'])} 个 target）")
             created += 1
             continue
 
+        ensure_label(args.repo, category)
         issue_num = create_issue(args.repo, title, body, labels)
         if issue_num:
             print(f"  [CREATED] #{issue_num}: {title}")
