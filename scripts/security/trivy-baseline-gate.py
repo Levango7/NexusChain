@@ -224,8 +224,15 @@ def _serialize_finding(finding: dict) -> dict:
     }
 
 
+def _age_days(today: dt.date, added: dt.date) -> int:
+    # 门禁按 UTC 日期判定，而 addedAt 允许是「今天（本地）」登记的日期；
+    # 东八区清晨跑 UTC 还是前一天，直接相减会得到 -1。展示层夹到 0，避免
+    # 输出「登记 -1 天」这种看起来像算错了的日志（不影响 90 天判定）。
+    return max(0, (today - added).days)
+
+
 def _serialize_entry(entry: dict, today: dt.date) -> dict:
-    stale_days = (today - entry["added"]).days if entry.get("added") else None
+    stale_days = _age_days(today, entry["added"]) if entry.get("added") else None
     return {
         "id": entry["id"],
         "package": entry["package"],
@@ -312,7 +319,7 @@ def gate(findings: list[dict], baseline: dict[str, dict], today: dt.date) -> tup
         )
 
     for entry in stale:
-        days = (today - entry["added"]).days if entry.get("added") else None
+        days = _age_days(today, entry["added"]) if entry.get("added") else None
         age_text = f"登记 {days} 天" if days is not None else "登记日期未知"
         print(
             f"[STALE] 基线条目 {entry['id']} / {entry['package']} 本次未命中"
@@ -320,7 +327,7 @@ def gate(findings: list[dict], baseline: dict[str, dict], today: dt.date) -> tup
         )
 
     for entry in stale_aged:
-        days = (today - entry["added"]).days
+        days = _age_days(today, entry["added"])
         print(
             f"[STALE-AGED] 基线条目 {entry['id']} / {entry['package']} 已 {days} 天未命中，"
             f"需复核是否可清理（到期 {entry['expires']}）"
