@@ -9,16 +9,17 @@ import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
- * PLAN-014 Phase 3 回归：支付扩展类型门禁（{@link TransactionCheck#TransactionFormatCheck}）。
+ * 类型门禁回归：{@link TransactionCheck#TransactionFormatCheck} 的显式白名单。
  *
- * <p>固化事实：完整区块/RPC 路径的硬边界是 {@code type <= 15}；0x19/0x1a
- * （IDENTITY_REGISTER / SUBSCRIPTION_AUTH）在类型分支直接返回
- * {@code Type check error}——不是"验证通过、执行缺失"。0x0f 作为对照，
- * 证明门禁未误伤既有类型（其后续失败原因不是类型错误）。</p>
+ * <p>P0 #522 起，共识门禁由 {@code 15 >= type >= 0} 收紧为
+ * {@code 0x00–0x03, 0x09–0x0f} 白名单：白名单外类型（含 0x04–0x08 与 0x10–0x1a）
+ * 一律返回 {@code code=5000 "Transaction type not enabled: 0xNN (Type check error)"}，
+ * 不是"验证通过、执行缺失"。0x0f 作为对照，证明门禁未误伤既有类型。</p>
  */
 class TransactionCheckGateTest {
 
@@ -26,20 +27,30 @@ class TransactionCheckGateTest {
     void rejectsIdentityRegisterAtTypeGate() {
         APIResult result = check(Transaction.Type.IDENTITY_REGISTER.ordinal());
         assertEquals(5000, result.getCode());
-        assertEquals("Type check error", result.getMessage());
+        assertTrue(result.getMessage().contains("not enabled"), result.getMessage());
     }
 
     @Test
     void rejectsSubscriptionAuthAtTypeGate() {
         APIResult result = check(Transaction.Type.SUBSCRIPTION_AUTH.ordinal());
         assertEquals(5000, result.getCode());
-        assertEquals("Type check error", result.getMessage());
+        assertTrue(result.getMessage().contains("not enabled"), result.getMessage());
+    }
+
+    @Test
+    void rejectsMultiSigAndAssetTypesAtTypeGate() {
+        for (int type = 0x04; type <= 0x08; type++) {
+            APIResult result = check(type);
+            assertEquals(5000, result.getCode(), "type 0x0" + type);
+            assertTrue(result.getMessage().contains("not enabled"),
+                    "type 0x0" + type + ": " + result.getMessage());
+        }
     }
 
     @Test
     void legacyTypePassesTypeGate() {
         APIResult result = check(0x0f);
-        assertNotEquals("Type check error", result.getMessage(),
+        assertNotEquals("Transaction type not enabled: 0x0f (Type check error)", result.getMessage(),
                 "既有类型 0x0f 不应被类型门禁拒绝（后续失败原因可能是签名/地址/手续费）");
     }
 

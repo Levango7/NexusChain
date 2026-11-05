@@ -19,6 +19,7 @@
 package org.nexus.core.validate;
 
 import org.apache.commons.codec.binary.Hex;
+import org.nexus.command.TransactionCheck;
 import org.nexus.consensus.pow.EconomicModel;
 import org.nexus.db.StateDB;
 import org.nexus.util.Arrays;
@@ -65,10 +66,20 @@ public class CoinbaseRule implements BlockRule, TransactionRule {
         long fees = 0;
         // the block body contains at most one coin base transaction
         for (int i = 1; i < block.body.size(); i++) {
-            fees += block.body.get(i).getFee();
-            if (block.body.get(i).type == Transaction.Type.COINBASE.ordinal()) {
+            Transaction tx = block.body.get(i);
+            if (tx.type == Transaction.Type.COINBASE.ordinal()) {
                 return Result.Error("a block contains at most one coin base ");
             }
+            // 手续费守恒（P0 修复，2026-11-06）：计入 coinbase 的手续费必须真的从
+            // 发送方扣过款。只有共识白名单内的类型会在状态重放中扣手续费；其余类型
+            // 会被 Miner 计入 coinbase 却不产生任何扣款，等于凭空增发。这里独立复算
+            // 一遍"会产生扣款"的类型集合，与 TransactionCheck 的类型门禁交叉校验。
+            if (!TransactionCheck.isConsensusEnabledType(tx.type)) {
+                return Result.Error("fee conservation violated: transaction type 0x"
+                        + Hex.encodeHexString(new byte[]{(byte) tx.type})
+                        + " does not debit a fee (type not enabled)");
+            }
+            fees += tx.getFee();
         }
 
         // check amount = consensus amount + fees

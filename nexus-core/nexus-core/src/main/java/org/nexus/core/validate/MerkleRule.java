@@ -26,6 +26,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.nexus.command.Configuration;
 import org.nexus.command.IncubatorAddress;
+import org.nexus.command.TransactionCheck;
 import org.nexus.core.Block;
 import org.nexus.encoding.JSONEncodeDecoder;
 import org.nexus.keystore.crypto.RipemdUtility;
@@ -94,6 +95,10 @@ public class MerkleRule implements BlockRule {
             // 不把存储故障降级成普通校验失败；由 PendingBlocksManager 识别并
             // 进入重试队列，避免同步路径静默丢块。
             return Result.Error(ACCOUNT_STORE_UNAVAILABLE_PREFIX + ": " + e.getMessage());
+        } catch (IllegalArgumentException e) {
+            // 未知类型的状态重放拒绝：返回可区分的明确结果，而不是笼统的
+            // "error occurs when validate merle hash"。
+            return Result.Error("merkle state replay rejected: " + e.getMessage());
         } catch (RuntimeException | java.io.IOException | DecoderException e) {
             return Result.Error("error occurs when validate merle hash");
         }
@@ -289,6 +294,15 @@ public class MerkleRule implements BlockRule {
                     List<Account> celMortgageList = UpdateCancelMortgage(tran, fromaccount, toaccount, nowheight, frompubhash);
                     celMortgageList.stream().forEach(a -> accmap.put(Hex.encodeHexString(a.getPubkeyHash()), a));
                     break;
+                default:
+                    // 未知类型必须显式拒绝（P0 修复，2026-11-06）：此前的静默 no-op
+                    // 会让"有交易、无状态变更"的区块通过状态根校验——手续费被计入
+                    // coinbase 却不扣款，且状态根只承诺账户 ID+高度，无法发现。
+                    throw new IllegalArgumentException("state replay does not support transaction type 0x"
+                            + Hex.encodeHexString(new byte[]{(byte) tran.type})
+                            + (TransactionCheck.isConsensusEnabledType(tran.type)
+                                    ? " (consensus whitelist / replay branch mismatch)"
+                                    : " (type not enabled)"));
             }
         }
         if (isdisplay) {
