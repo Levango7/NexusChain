@@ -1,16 +1,26 @@
 /*
- * TEST-ONLY reproducer. No production code is modified by this file.
+ * 共识回归测试（P0 #522 修复配套）。
  *
- * Question under test: can a block carrying a transaction of type 0x04..0x08
- * (TRANSFER_MULTISIG_MULTISIG / TRANSFER_MULTISIG_NORMAL / TRANSFER_NORMAL_MULTISIG /
- *  ASSET_DEFINE / ATOMIC_EXCHANGE) pass the full block rule chain while the fee
- * it declares in its gasPrice is credited to coinbase but never debited from the
- * sender, i.e. unbounded minting?
+ * 历史对照——同一个区块构造、同一套断言口径：
+ *
+ * | 版本 | 含 0x04–0x08 交易的区块 | 发送方余额 / nonce | coinbase 入账 |
+ * | --- | --- | --- | --- |
+ * | 修复前（master ≤ 2026-11-06，见 PR #520 复现测试） | 通过完整规则链与状态根校验 | 不变（手续费从未扣款） | 增加 gasPrice × GAS_TABLE[type] |
+ * | 修复后（本 PR） | 在 CoinbaseRule 手续费守恒 / TransactionCheck 类型门禁 / MerkleRule 重放 default 处被拒 | 不变 | 不入账 |
+ *
+ * PR #520 原本断言"必须成功且余额不变"——那是一条绿着的增发证明。本文件把它反转为
+ * "必须被拒"，历史证据保留在本注释与 CHANGELOG 中，master 上不再存在断言增发成功的测试。
+ *
+ * 被拒的三道独立关卡：
+ * 1. {@code TransactionCheck#TransactionFormatCheck} 类型白名单（0x00–0x03 / 0x09–0x0f）；
+ * 2. {@code CoinbaseRule} 手续费守恒断言（计入 coinbase 的手续费必须真的扣过款）；
+ * 3. {@code MerkleRule} 状态重放 switch 的 {@code default} 显式拒绝（不再静默 no-op）。
  */
 package org.nexus.core.validate;
 
 import org.apache.commons.codec.binary.Hex;
 import org.junit.jupiter.api.Test;
+import org.nexus.ApiResult.APIResult;
 import org.nexus.command.Configuration;
 import org.nexus.command.IncubatorAddress;
 import org.nexus.command.TransactionCheck;
@@ -46,88 +56,279 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assertions.fail;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-public class MultiSigAssetAtomicMintReproducerTest {
+public class MultiSigAssetAtomicMintRejectionTest {
 
-    /** Block reward used by the mocked economic model (20 NEX in smallest units). */
+    /** 被 mock 的共识奖励（最小单位）。 */
     private static final long REWARD = EconomicModel.INITIAL_SUPPLY;
-    /** gasPrice of the probe transaction; fee = gasPrice * GAS_TABLE[type]. */
+    /** 探针交易的 gasPrice；fee = gasPrice * GAS_TABLE[type]。 */
     private static final long GAS_PRICE = 1000L;
 
     private static final BigInteger MAX_TARGET = BigInteger.ONE.shiftLeft(256).subtract(BigInteger.ONE);
 
-    // ---------------------------------------------------------------- 0x04..0x08
+    // ---------------------------------------------------------------- 1. 完整规则链逐个拒绝
 
     @Test
-    void type0x04_multisigMultisig_mintsFee() {
-        assertTypeMintsFeeWithoutDebit(4);
+    void type0x04_multisigMultisig_rejected() {
+        assertRejectedByCompositeAndReplay(4);
     }
 
     @Test
-    void type0x05_multisigNormal_mintsFee() {
-        assertTypeMintsFeeWithoutDebit(5);
+    void type0x05_multisigNormal_rejected() {
+        assertRejectedByCompositeAndReplay(5);
     }
 
     @Test
-    void type0x06_normalMultisig_mintsFee() {
-        assertTypeMintsFeeWithoutDebit(6);
+    void type0x06_normalMultisig_rejected() {
+        assertRejectedByCompositeAndReplay(6);
     }
 
     @Test
-    void type0x07_assetDefine_mintsFee() {
-        assertTypeMintsFeeWithoutDebit(7);
+    void type0x07_assetDefine_rejected() {
+        assertRejectedByCompositeAndReplay(7);
     }
 
     @Test
-    void type0x08_atomicExchange_mintsFee() {
-        assertTypeMintsFeeWithoutDebit(8);
+    void type0x08_atomicExchange_rejected() {
+        assertRejectedByCompositeAndReplay(8);
     }
 
     /**
-     * Builds one block [coinbase(reward+fee), tx(type, gasPrice=X)] and runs the
-     * production rule chain plus the state-root rule. Fails loudly with the
-     * blocking rule and its message if any gate stops it.
+     * 构造 [coinbase(奖励+手续费), tx(type)] 区块，要求完整规则链与状态重放都拒绝。
+     *
+     * <p>修复前这两处都放行：composite 返回 SUCCESS，MerkleRule 的 replay switch
+     * 对 0x04–0x08 没有 case 也没有 default，静默 no-op 后状态根校验通过。</p>
      */
-    private void assertTypeMintsFeeWithoutDebit(int type) {
-        long gasPerTx = Transaction.GAS_TABLE[type];
-        assertEquals(50000L, gasPerTx, "premise: GAS_TABLE[" + type + "] must be 50000");
-        long fee = GAS_PRICE * gasPerTx;
+    private void assertRejectedByCompositeAndReplay(int type) {
+        assertEquals(50000L, Transaction.GAS_TABLE[type],
+                "前提：GAS_TABLE[" + type + "] 必须是 50000");
+        long fee = GAS_PRICE * Transaction.GAS_TABLE[type];
         String label = "type 0x0" + type;
 
-        // --- keys / accounts -------------------------------------------------
+        Fixture fx = fixture(type, fee);
+
+        Result compositeResult = fx.composite.validateBlock(fx.block);
+        assertFalse(compositeResult.isSuccess(),
+                label + ": 修复后必须被完整规则链拒绝，实际通过");
+        System.out.println("[REJECTED composite] " + label + " -> " + compositeResult.getMessage());
+
+        Result merkleResult = fx.merkleRule.validateBlock(fx.block);
+        assertFalse(merkleResult.isSuccess(),
+                label + ": 修复后必须被 MerkleRule 状态重放拒绝，实际通过");
+        System.out.println("[REJECTED merkle] " + label + " -> " + merkleResult.getMessage());
+
+        // 被拒 = 没有任何状态变更；这是"修复前/修复后都不动发送方余额"的对照点。
+        assertEquals(fx.senderBalanceBefore, fx.senderAccount.getBalance(),
+                label + ": 发送方余额必须不变");
+        assertEquals(fx.senderNonceBefore, fx.senderAccount.getNonce(),
+                label + ": 发送方 nonce 必须不变");
+    }
+
+    // ---------------------------------------------------------------- 2. 类型门禁消息
+
+    @Test
+    void formatGateRejects0x04() {
+        assertFormatGateRejects(4);
+    }
+
+    @Test
+    void formatGateRejects0x05() {
+        assertFormatGateRejects(5);
+    }
+
+    @Test
+    void formatGateRejects0x06() {
+        assertFormatGateRejects(6);
+    }
+
+    @Test
+    void formatGateRejects0x07() {
+        assertFormatGateRejects(7);
+    }
+
+    @Test
+    void formatGateRejects0x08() {
+        assertFormatGateRejects(8);
+    }
+
+    /**
+     * 直接打 {@link TransactionCheck#TransactionFormatCheck}：白名单之外的交易必须
+     * 返回 5000，且消息点名"该类型未启用"（含十六进制类型号）。
+     *
+     * <p>这是变异验证的精确锚点：把白名单改回 {@code 15 >= type >= 0} 时，这 5 个
+     * 用例必须变红。</p>
+     */
+    private void assertFormatGateRejects(int type) {
+        TransactionCheck transactionCheck = new TransactionCheck();
+        Configuration configuration = mock(Configuration.class);
+        when(configuration.getMin_procedurefee()).thenReturn(1L);
+        ReflectionTestUtils.setField(transactionCheck, "configuration", configuration);
+
+        Transaction tx = signedTx(type, Ed25519.generateKeyPair(), new byte[Transaction.PUBLIC_KEY_HASH_SIZE], 0L);
+        APIResult result = transactionCheck.TransactionFormatCheck(tx.toRPCBytes());
+
+        assertEquals(5000, result.getCode(), "type 0x0" + type + " 必须被类型门禁拒绝");
+        assertTrue(result.getMessage().contains("not enabled"),
+                "拒绝消息必须点名该类型未启用，实际: " + result.getMessage());
+        assertTrue(result.getMessage().contains("0x0" + type),
+                "拒绝消息必须包含类型号，实际: " + result.getMessage());
+    }
+
+    // ---------------------------------------------------------------- 3. MerkleRule 未知类型
+
+    /**
+     * 修复前：replay switch 无 default，0x04 交易被静默跳过，状态根校验照常通过。
+     * 修复后：必须返回错误而不是 no-op。
+     */
+    @Test
+    void merkleReplayRejectsUnknownTypeInsteadOfNoOp() {
+        Ed25519KeyPair senderKp = Ed25519.generateKeyPair();
+        byte[] senderPub = senderKp.getPublicKey().getEncoded();
+        byte[] senderHash = RipemdUtility.ripemd160(SHA3Utility.keccak256(senderPub));
+        byte[] minerHash = RipemdUtility.ripemd160(
+                SHA3Utility.keccak256(Ed25519.generateKeyPair().getPublicKey().getEncoded()));
+
+        Account totalAccount = new Account(0, IncubatorAddress.resultpubhash(), 0, 0, 0, 0, 0);
+        Account senderAccount = new Account(0, senderHash, 7L, 1000L * EconomicModel.NEX, 0, 0, 0);
+        Account minerAccount = new Account(0, minerHash, 0, 0, 0, 0, 0);
+
+        Transaction unknown = signedTx(0x04, senderKp, minerHash, 0L);
+        List<Transaction> body = new ArrayList<>();
+        body.add(unknown);
+
+        Block block = blockWith(body, 1L);
+        block.hashMerkleRoot = Block.calculateMerkleRoot(body);
+
+        MerkleRule merkleRule = merkleRule(totalAccount, senderAccount, minerAccount);
+        Result result = merkleRule.validateBlock(block);
+
+        assertFalse(result.isSuccess(), "MerkleRule 必须拒绝未知类型，实际通过（静默 no-op 回归）");
+        assertTrue(result.getMessage().contains("state replay"),
+                "错误必须来自状态重放的显式拒绝，实际: " + result.getMessage());
+        assertTrue(result.getMessage().contains("type not enabled"),
+                "错误必须点名类型未启用，实际: " + result.getMessage());
+    }
+
+    // ---------------------------------------------------------------- 4. CoinbaseRule 守恒
+
+    /**
+     * 修复前：CoinbaseRule 只累加 body[1..] 的 getFee()，从不确认这笔手续费真的从
+     * 发送方扣过款——0x04–0x08 没有扣款分支，coinbase 却照常入账。
+     * 修复后：手续费守恒断言必须在"无扣款类型"上拒绝。
+     */
+    @Test
+    void coinbaseRejectsFeeThatIsNotDebited() {
+        long fee = GAS_PRICE * Transaction.GAS_TABLE[4];
+        Fixture fx = fixture(4, fee);
+
+        CoinbaseRule coinbaseRule = coinbaseRule(fx.stateDB, REWARD);
+        Result result = coinbaseRule.validateBlock(fx.block);
+
+        assertFalse(result.isSuccess(), "coinbase 认领了未扣款的手续费，必须被拒");
+        assertTrue(result.getMessage().contains("fee conservation violated"),
+                "错误必须点名手续费守恒，实际: " + result.getMessage());
+    }
+
+    /**
+     * 对照：白名单内的类型（0x03 存证）确实扣手续费，coinbase 认领等额手续费应当通过，
+     * 证明守恒断言没有误伤既有合法区块。
+     */
+    @Test
+    void coinbaseAcceptsEnabledTypeWithMatchingFee() {
+        int type = Transaction.Type.DEPOSIT.ordinal();
+        long fee = GAS_PRICE * Transaction.GAS_TABLE[type];
+        Fixture fx = fixture(type, fee);
+
+        CoinbaseRule coinbaseRule = coinbaseRule(fx.stateDB, REWARD);
+        Result result = coinbaseRule.validateBlock(fx.block);
+
+        assertTrue(result.isSuccess(),
+                "0x03 会真实扣手续费，coinbase 等额认领不应被拒，实际: " + result.getMessage());
+    }
+
+    // ---------------------------------------------------------------- 5. 佐证（不改变判定）
+
+    /**
+     * 佐证"不可检测"：状态根只承诺账户 ID + 高度，不承诺余额，所以余额增发在状态根
+     * 层面不可见。这也是本次必须在类型门禁 / 重放 / coinbase 三处收紧的原因。
+     */
+    @Test
+    void stateRootDoesNotCommitBalances() {
+        Ed25519KeyPair minerKp = Ed25519.generateKeyPair();
+        byte[] minerHash = RipemdUtility.ripemd160(SHA3Utility.keccak256(minerKp.getPublicKey().getEncoded()));
+
+        String rootZero = Hex.encodeHexString(
+                Block.calculateMerkleState(List.of(new Account(1L, minerHash, 0, 0, 0, 0, 0))));
+        String rootFunded = Hex.encodeHexString(
+                Block.calculateMerkleState(List.of(new Account(1L, minerHash, 0, REWARD, 0, 0, 0))));
+
+        assertEquals(rootZero, rootFunded, "状态根不承诺余额，余额变化在根上不可见");
+    }
+
+    /**
+     * 佐证 APIResult 的 code 语义：{@code ResultSupport.Code} 是未初始化的 int（0），
+     * 成功码是 2000、失败码是 5000。{@code PayloadCheck} 缺 {@code default} 时返回 0，
+     * 既不是"成功"也不是"失败"——只是"未设置"。
+     *
+     * <p>本 PR 不改 {@code AccountRule} 的 {@code == 5000} 判定：上游类型白名单已让
+     * 该路径不可达，把 0 当失败属于额外的共识改动，收益不足以抵消风险。</p>
+     */
+    @Test
+    void payloadCheckDefaultCodeIsUnsetNeitherSuccessNorFailure() {
+        Ed25519KeyPair senderKp = Ed25519.generateKeyPair();
+        byte[] senderPub = senderKp.getPublicKey().getEncoded();
+        byte[] senderHash = RipemdUtility.ripemd160(SHA3Utility.keccak256(senderPub));
+
+        Transaction tx = signedTx(4, senderKp, senderHash, 0L);
+
+        TransactionCheck transactionCheck = new TransactionCheck();
+        Configuration configuration = mock(Configuration.class);
+        when(configuration.getMin_procedurefee()).thenReturn(1L);
+        ReflectionTestUtils.setField(transactionCheck, "configuration", configuration);
+
+        Account account = new Account(0, senderHash, 0L, 1000L, 0, 0, 0);
+        APIResult result = transactionCheck.TransactionVerify(tx, account, null);
+
+        assertEquals(0, result.getCode(), "PayloadCheck 无 default 时必须落到 ResultSupport 的默认 code 0");
+        assertNotEquals(APIResult.SUCCESS, result.getCode(), "0 不是成功码（成功码是 2000）");
+        assertNotEquals(APIResult.FAIL, result.getCode(), "0 也不是失败码（失败码是 5000）");
+    }
+
+    // ---------------------------------------------------------------- fixtures / helpers
+
+    /** 一次区块构造所需的全部上下文。 */
+    private static final class Fixture {
+        Block block;
+        StateDB stateDB;
+        CompositeBlockRule composite;
+        MerkleRule merkleRule;
+        Account senderAccount;
+        long senderBalanceBefore;
+        long senderNonceBefore;
+    }
+
+    private Fixture fixture(int type, long fee) {
         Ed25519KeyPair senderKp = Ed25519.generateKeyPair();
         Ed25519KeyPair minerKp = Ed25519.generateKeyPair();
         byte[] senderPub = senderKp.getPublicKey().getEncoded();
-        byte[] senderPriv = senderKp.getPrivateKey().getEncoded();
-        byte[] minerPub = minerKp.getPublicKey().getEncoded();
-
+        byte[] minerHash = RipemdUtility.ripemd160(SHA3Utility.keccak256(minerKp.getPublicKey().getEncoded()));
         byte[] senderHash = RipemdUtility.ripemd160(SHA3Utility.keccak256(senderPub));
-        byte[] minerHash = RipemdUtility.ripemd160(SHA3Utility.keccak256(minerPub));
 
         long senderBalanceBefore = 1000L * EconomicModel.NEX;
         long senderNonceBefore = 7L;
-        long minerBalanceBefore = 0L;
-
         Account senderAccount = new Account(0, senderHash, senderNonceBefore, senderBalanceBefore, 0, 0, 0);
-        Account minerAccount = new Account(0, minerHash, 0, minerBalanceBefore, 0, 0, 0);
+        Account minerAccount = new Account(0, minerHash, 0, 0, 0, 0, 0);
         Account totalAccount = new Account(0, IncubatorAddress.resultpubhash(), 0, 0, 0, 0, 0);
 
-        // --- transactions ----------------------------------------------------
-        Transaction tx = new Transaction(
-                1, type, senderNonceBefore + 1, senderPub,
-                GAS_PRICE, 0L,
-                "probe".getBytes(StandardCharsets.UTF_8),
-                minerHash, new byte[Transaction.SIGNATURE_SIZE]);
-        byte[] signature = new Ed25519PrivateKey(senderPriv).sign(tx.getRawForSign());
-        ReflectionTestUtils.setField(tx, "signature", signature);
-
+        Transaction tx = signedTx(type, senderKp, minerHash, 0L);
         Transaction coinbase = new Transaction(
                 1, Transaction.Type.COINBASE.ordinal(), 1L,
                 new byte[Transaction.PUBLIC_KEY_SIZE], 0L,
@@ -137,21 +338,31 @@ public class MultiSigAssetAtomicMintReproducerTest {
         body.add(coinbase);
         body.add(tx);
 
-        // --- block -----------------------------------------------------------
         Block block = blockWith(body, 1L);
-        // Declared post-state root is computed from the *expected* post state.
-        // The id of an account is pubkeyHash + height, so this is exactly what a
-        // miner would publish.
+        block.hashMerkleRoot = Block.calculateMerkleRoot(body);
+        // 声明修复前会形成的后状态根（miner = 奖励+手续费）。修复后被拒，根不再重要，
+        // 但保留它以便证明"状态根层面的校验本身是放行的"。
         block.hashMerkleState = Block.calculateMerkleState(
                 List.of(new Account(1L, minerHash, 0, REWARD + fee, 0, 0, 0)));
-        block.hashMerkleRoot = Block.calculateMerkleRoot(body);
 
-        // --- mocked chain state ---------------------------------------------
+        StateDB stateDB = stateDB(senderHash, senderAccount, minerHash, minerAccount);
+
+        Fixture fx = new Fixture();
+        fx.block = block;
+        fx.stateDB = stateDB;
+        fx.composite = compositeBlockRule(stateDB);
+        fx.merkleRule = merkleRule(totalAccount, senderAccount, minerAccount);
+        fx.senderAccount = senderAccount;
+        fx.senderBalanceBefore = senderBalanceBefore;
+        fx.senderNonceBefore = senderNonceBefore;
+        return fx;
+    }
+
+    private static StateDB stateDB(byte[] senderHash, Account senderAccount,
+                                   byte[] minerHash, Account minerAccount) {
         StateDB stateDB = mock(StateDB.class);
-        Block bestBlock = emptyBlock(0L);
-        when(stateDB.getBestBlock()).thenReturn(bestBlock);
-        Block parent = emptyBlock(0L);
-        when(stateDB.getBlock(any(byte[].class))).thenReturn(parent);
+        when(stateDB.getBestBlock()).thenReturn(emptyBlock(0L));
+        when(stateDB.getBlock(any(byte[].class))).thenReturn(emptyBlock(0L));
 
         TargetStateFactory targetStateFactory = mock(TargetStateFactory.class);
         TargetState targetState = mock(TargetState.class);
@@ -165,86 +376,35 @@ public class MultiSigAssetAtomicMintReproducerTest {
         when(stateDB.getProposersFactory()).thenReturn(proposersFactory);
 
         Map<String, AccountState> accounts = new HashMap<>();
-        accounts.put(Hex.encodeHexString(senderHash), new AccountState(senderAccount, new HashMap<>(), new HashMap<>()));
-        accounts.put(Hex.encodeHexString(minerHash), new AccountState(minerAccount, new HashMap<>(), new HashMap<>()));
+        accounts.put(Hex.encodeHexString(senderHash),
+                new AccountState(senderAccount, new HashMap<>(), new HashMap<>()));
+        accounts.put(Hex.encodeHexString(minerHash),
+                new AccountState(minerAccount, new HashMap<>(), new HashMap<>()));
         when(stateDB.getAccounts(any(byte[].class), any(List.class))).thenReturn(accounts);
-
-        // --- production rule chain ------------------------------------------
-        CompositeBlockRule composite = compositeBlockRule(stateDB);
-
-        Result compositeResult = composite.validateBlock(block);
-        assertTrue(compositeResult.isSuccess(),
-                label + ": BLOCKED by composite rule chain -> " + compositeResult.getMessage());
-
-        // --- assertion 2: sender untouched ----------------------------------
-        assertEquals(senderBalanceBefore, senderAccount.getBalance(),
-                label + ": sender balance must be unchanged");
-        assertEquals(senderNonceBefore, senderAccount.getNonce(),
-                label + ": sender nonce must be unchanged");
-
-        // --- assertion 3: coinbase credited with the fee ---------------------
-        long minerBefore = minerAccount.getBalance();
-        MerkleRule merkleRule = merkleRule(totalAccount, senderAccount, minerAccount);
-        Result merkleResult = merkleRule.validateBlock(block);
-        assertTrue(merkleResult.isSuccess(),
-                label + ": BLOCKED by MerkleRule -> " + merkleResult.getMessage());
-
-        long minerDelta = minerAccount.getBalance() - minerBefore;
-        assertEquals(REWARD + fee, minerDelta,
-                label + ": miner must be credited reward + fee");
-        assertEquals(fee, tx.getFee(), label + ": fee must be gasPrice*GAS_TABLE[type]");
-        assertEquals(0L, senderBalanceBefore - senderAccount.getBalance(),
-                label + ": no debit was taken from the sender for the fee");
-
-        // --- "undetectable": same id-root at different balances --------------
-        String rootWithoutBalance = Hex.encodeHexString(
-                Block.calculateMerkleState(List.of(new Account(1L, minerHash, 0, 0, 0, 0, 0))));
-        String rootWithBalance = Hex.encodeHexString(
-                Block.calculateMerkleState(List.of(new Account(1L, minerHash, 0, REWARD + fee, 0, 0, 0))));
-        assertEquals(rootWithoutBalance, rootWithBalance,
-                label + ": state root must not commit balances");
-
-        System.out.println("[REPRODUCED] " + label + " fee=" + fee
-                + " senderBalance=" + senderAccount.getBalance()
-                + " senderNonce=" + senderAccount.getNonce()
-                + " minerBalance=" + minerAccount.getBalance());
+        return stateDB;
     }
 
-    // ---------------------------------------------------------------- uncertainty (a)
-
-    /**
-     * TransactionCheck.PayloadCheck has a switch without `default`. For 0x04..0x08
-     * it falls through to `new APIResult()`. ResultSupport.Code is an int with no
-     * initializer, i.e. 0, while AccountRule treats only code 5000 as failure.
-     */
-    @Test
-    void unknownTypePayloadCheckReturnsNonFailureCode() {
-        Ed25519KeyPair senderKp = Ed25519.generateKeyPair();
+    private static Transaction signedTx(int type, Ed25519KeyPair senderKp, byte[] to, long amount) {
         byte[] senderPub = senderKp.getPublicKey().getEncoded();
-        byte[] senderPriv = senderKp.getPrivateKey().getEncoded();
-        byte[] toHash = RipemdUtility.ripemd160(SHA3Utility.keccak256(senderPub));
-
-        Transaction tx = new Transaction(1, 4, 1L, senderPub, 1L, 0L,
-                "p".getBytes(StandardCharsets.UTF_8), toHash, new byte[Transaction.SIGNATURE_SIZE]);
-        ReflectionTestUtils.setField(tx, "signature", new Ed25519PrivateKey(senderPriv).sign(tx.getRawForSign()));
-
-        TransactionCheck transactionCheck = new TransactionCheck();
-        Configuration configuration = mock(Configuration.class);
-        when(configuration.getMin_procedurefee()).thenReturn(1L);
-        ReflectionTestUtils.setField(transactionCheck, "configuration", configuration);
-
-        Account account = new Account(0, RipemdUtility.ripemd160(SHA3Utility.keccak256(senderPub)), 0L, 1000L, 0, 0, 0);
-        org.nexus.ApiResult.APIResult result = transactionCheck.TransactionVerify(tx, account, null);
-
-        System.out.println("[UNCERTAINTY-A] TransactionVerify(0x04).code=" + result.getCode()
-                + " message=" + result.getMessage());
-        assertEquals(0, result.getCode(),
-                "PayloadCheck without default must fall through to APIResult default code 0");
-        assertTrue(result.getCode() != 5000,
-                "AccountRule:177 only treats 5000 as failure -> this passes");
+        Transaction tx = new Transaction(
+                1, type, 8L, senderPub,
+                GAS_PRICE, amount,
+                "probe".getBytes(StandardCharsets.UTF_8),
+                to, new byte[Transaction.SIGNATURE_SIZE]);
+        byte[] signature = new Ed25519PrivateKey(senderKp.getPrivateKey().getEncoded())
+                .sign(tx.getRawForSign());
+        ReflectionTestUtils.setField(tx, "signature", signature);
+        return tx;
     }
 
-    // ---------------------------------------------------------------- helpers
+    private static CoinbaseRule coinbaseRule(StateDB stateDB, long reward) {
+        EconomicModel economicModel = mock(EconomicModel.class);
+        when(economicModel.getConsensusRewardAtHeight(anyLong())).thenReturn(reward);
+        CoinbaseRule coinbaseRule = new CoinbaseRule();
+        ReflectionTestUtils.setField(coinbaseRule, "stateDB", stateDB);
+        ReflectionTestUtils.setField(coinbaseRule, "economicModel", economicModel);
+        return coinbaseRule;
+    }
 
     private static CompositeBlockRule compositeBlockRule(StateDB stateDB) {
         Block genesis = emptyBlock(0L);
@@ -285,7 +445,7 @@ public class MultiSigAssetAtomicMintReproducerTest {
         composite.addRule(consensusRule);
         composite.addRule(new SignatureRule());
         composite.addRule(accountRule);
-        // Same transaction-rule set as the Spring-wired composite (payment extension).
+        // 与 Spring 装配一致的支付扩展交易规则集。
         composite.addTransactionRule(new PaymentChannelRule());
         composite.addTransactionRule(new BatchTransferRule());
         composite.addTransactionRule(new StableCoinRule());

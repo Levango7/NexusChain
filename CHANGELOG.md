@@ -4,6 +4,46 @@
 
 ## [Unreleased]
 
+### P0 共识规则收紧：禁用无执行路径的交易类型（防不可检测的无限增发）
+
+**所有节点必须同步升级。** 这是**共识变更**而不是业务开关：升级前的节点会接受
+`0x04–0x08` 交易并把它计入 coinbase 手续费，升级后的节点一律拒绝。请在同一窗口
+切换全部验证节点/矿工，否则新旧节点在**新块**上直接分叉。
+
+**问题**：`0x04–0x08`（多签转账 / 资产定义 / 原子交换）在旧的 `15 >= type >= 0`
+区间门禁下被视为合法，但 `MerkleRule` 的状态重放 switch 没有对应 case（静默
+no-op），`PackageMiner.UpdateOtherAccount` 也没有这些类型的余额/nonce 分支。结果：
+`Miner` 把 `gasPrice × GAS_TABLE[type]` 计入 coinbase，发送方却从未被扣款；又因
+状态根只承诺「账户 ID + 高度」、不承诺余额，这种增发在状态根层面完全不可检测。
+详见 P0 #522 与 `MultiSigAssetAtomicMintRejectionTest` 的历史对照。
+
+**修复（三处独立关卡）**：
+
+- `TransactionCheck.TransactionFormatCheck`：类型门禁由 `15 >= type >= 0` 改为显式
+  白名单 `0x00–0x03, 0x09–0x0f`（`TransactionCheck.isConsensusEnabledType`）。
+  白名单外一律 `code=5000`，消息
+  `Transaction type not enabled: 0xNN (Type check error)`。
+- `MerkleRule`：状态重放 switch 新增 `default`，抛
+  `IllegalArgumentException`，由 `validateBlock` 转成
+  `Result.Error("merkle state replay rejected: ...")`；未知类型不再静默 no-op。
+- `CoinbaseRule`：新增手续费守恒断言——计入 coinbase 的每笔手续费，其交易类型必须
+  在「会真实扣款」的白名单内，否则
+  `Result.Error("fee conservation violated: ... does not debit a fee")`。
+
+**会拒绝什么**：`0x04`、`0x05`、`0x06`、`0x07`、`0x08`；以及 `0x10–0x1a`（此前被
+`type<=15` 拒绝，现在同样以「未启用」消息拒绝）。`0x00–0x03`、`0x09–0x0f` 行为
+不变，由 `TransactionCheckGateTest` 与 `CoinbaseRule` 对照用例覆盖。
+
+**兼容性**：若某条链的历史区块中**已经包含** `0x04–0x08` 交易（测试网、私有部署、
+快照），新节点会在同步到该高度时拒绝该区块。升级前请先扫描历史区块
+`body[1..].type`；若存在此类交易，需先评估回滚/重放方案，不能直接升级。
+
+**已知隐患（本 PR 只登记、不修）**：`MerkleTree` 未对叶子排序，状态根对插入顺序
+敏感；`MerkleRule` 重放时账户列表来自 `HashMap` 遍历。账户集合相同但插入顺序
+不同（如碰撞键）会得到不同 `hashMerkleState`；同一区块按交易顺序重放对 String
+键在同一 JDK 下稳定。修正排序会改写全部历史状态根、等同于全链重算，故不在本次
+收紧范围内（证据见 `MerkleStateOrderSensitivityTest`）。
+
 ### P0 热修：prod compose 未透传结算开关（2.77.0 迁移路径 B 的环境实际可能在结算）
 
 **影响谁**：v2.77.0 期间按本文件「迁移路径 B」配置 `docker-compose.prod.yml` 的 prod
