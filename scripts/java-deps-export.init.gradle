@@ -15,13 +15,15 @@
 //     查 Maven Central 必然查不到，混进来只会淹没真问题（与 Rust 腿跳过本地包同理）；
 //   · 输出目录用**系统属性** `-Dnexus.javaDepsOut=<绝对路径>` 传递而非 `-P`：
 //     `-P` 只落到根构建，included build（nexus-settlement 等 6 个独立构建树）读不到，
-//     而 CI 用 `--no-daemon` 在同一个 JVM 里跑完所有 `-p` 调用，系统属性是共享的。
+//     而系统属性会随 `gradlew` 进程传进构建 JVM。
 //     未传该属性时落到各项目的 `build/java-deps/`，本地手工跑也能拿到东西。
 //
-// 用法（CI 里对每个构建树根各跑一次，全部写进同一目录）：
+// 用法（CI 在同一个 composite 调用里按任务路径逐个触发 included build，
+// 不用 `-p <目录>` 单跑——那些构建 standalone 时会去仓库解析 org.nexus:nexus-* ，
+// 而这些坐标只有靠 composite 替换才存在）：
 //   ./gradlew --no-daemon --init-script scripts/java-deps-export.init.gradle \
 //       -Dnexus.javaDepsOut=$PWD/build/java-deps exportJavaDependencies
-//   ./gradlew -p nexus-settlement ... 同上
+//   ./gradlew --no-daemon --init-script 同上 :nexus-settlement:exportJavaDependencies
 // 产物随后由 `scripts/java-deps-collect.py merge` 合成可提交清单
 // `scripts/java-dependencies.json`，许可字符串再进 `scripts/java-license-cache.json`。
 // ============================================================================

@@ -516,10 +516,15 @@ jobs:
 
       # Java/Gradle 依赖许可清单导出（板 20261105-0502 / 脚本头注详述设计取舍）。
       # 语义与 `Trivy 豁免时效复核`、`check-trivyignore-staleness.py` 一致：
-      #   红 = **导出/合成没跑成**（载体坏了），漂移只 ::warning::（报告制）。
-      #   这样"新增了一个依赖"不会在别人的 PR 上判红，但"清单机制失效"不会静默。
+      #   红 = **导出/合成没跑成**（载体坏了），漂移与覆盖缺口只 ::warning::（报告制）。
+      #   这样"别人新增了依赖还没刷新清单"不会在别人的 PR 上判红，但机制失效不会静默。
       # 位置刻意放在 Java 测试与回归之后：同一 job 内 runtimeClasspath 已解析过，
-      # 这 7 次调用只读本地缓存，不重复下载依赖。
+      # 这几次调用只读本地缓存，不重复下载依赖。
+      # included build 用 `:名字:任务` 寻址——与本 job 第 9 步 `:nexus-settlement:check`
+      # 同一条已被 CI 验证过的路径；**不用 `-p <目录>` 单跑**：那些构建 standalone 时
+      # 会去仓库解析 `org.nexus:nexus-common` 这类只有靠 composite 替换才存在的坐标。
+      # 若 init script 不作用于 included build（Gradle 版本行为，需实测），任务路径会
+      # not found ⇒ 这里降级为 warning 并在下方"覆盖核对"里点名缺哪些构建，不判红。
       - name: 导出 Java 依赖清单并与已提交清单比对（报告制）
         run: |
           set -e
@@ -528,15 +533,38 @@ jobs:
           rm -rf "$OUT" && mkdir -p "$OUT"
           ./gradlew --no-daemon --init-script "$INIT" \
             -Dnexus.javaDepsOut="$OUT" exportJavaDependencies
-          # 6 个 included build 各有自己的 settings.gradle，根构建的 allprojects 覆盖不到，
-          # 故按构建树根各跑一次，全部写进同一目录（系统属性跨 -p 仍共享同一 JVM）。
+          MISSING=""
           for b in nexus-settlement nexus-compliance nexus-analytics \
                    nexus-oracle nexus-consortium nexus-api-gateway; do
-            ./gradlew --no-daemon -p "$b" --init-script "$INIT" \
-              -Dnexus.javaDepsOut="$OUT" exportJavaDependencies
+            if ! ./gradlew --no-daemon --init-script "$INIT" \
+                 -Dnexus.javaDepsOut="$OUT" ":$b:exportJavaDependencies"; then
+              MISSING="$MISSING $b"
+              echo "::warning::included build $b 导出任务未命中" \
+                   "⇒ 该构建树的依赖不会进清单（Java 覆盖不完整，非误报漂移）"
+            fi
           done
           python3 scripts/java-deps-collect.py merge --from "$OUT" \
             --out build/java-dependencies-fresh.json
+          python3 - "$OUT" "$MISSING" <<'PY'
+          # 覆盖核对：清单必须真的看到 7 个构建树，否则把缺口显式打出来。
+          # 为什么单列一步：merge 只说"合成成功"，说不出"少了哪棵构建"——
+          # 而"少一棵构建"恰好是最像"已覆盖"的失效形状。
+          import glob, json, os, sys
+          out, missing = sys.argv[1], sys.argv[2].split()
+          seen = set()
+          for p in glob.glob(os.path.join(out, '*.json')):
+              try:
+                  seen.add(json.load(open(p, encoding='utf-8')).get('build') or '?')
+              except Exception as e:
+                  print('::warning::分片不可读 %s: %s' % (p, e))
+          want = {'nexus', 'nexus-settlement', 'nexus-compliance', 'nexus-analytics',
+                  'nexus-oracle', 'consortium', 'nexus-api-gateway'}
+          absent = sorted(want - seen)
+          print('构建树覆盖：%d/%d；已见 %s' % (len(seen & want), len(want), sorted(seen)))
+          if absent:
+              print('::warning::缺构建树 %s%s ⇒ 清单不完整，bootstrap 前必须补齐'
+                    % (absent, ('；任务未命中：' + ' '.join(missing)) if missing else ''))
+          PY
           if [ -f scripts/java-dependencies.json ]; then
             python3 scripts/java-deps-collect.py diff \
               --committed scripts/java-dependencies.json \
