@@ -7,7 +7,14 @@
 #   1. deploy/scripts/backup-mysql.sh 默认 DATABASES 数组
 #   2. deploy/k8s/50-backup.yml CronJob command 中的 for DB in ... 列表
 # ============================================================================
-# 2026-10-12：nexus_core 移除（core 是链节点，链数据在 LevelDB，无关系库）；
+# 2026-10-12：nexus_core 从**本清单**移除（core 是链节点，但它**不是**无关系库、
+#           也**不是** LevelDB）——链数据存 PostgreSQL 的 nexus_core 库
+#           （表 header / transaction / transaction_index，PG 方言 DDL：
+#            nexus-core/nexus-core/src/main/resources/ddl.sql）。
+#           它不列在此处，只因它不走 MySQL 备份脚本，而由独立的 pg_dump CronJob
+#           备份：deploy/k8s/50-backup.yml 的 nexus-pg-core-backup
+#           （pg_dump --dbname=nexus_core → nexus-mysql-backup PVC）。
+#           依据：docs/database-production.md §1.1「core（链节点）例外，仍用 PostgreSQL」。
 #           补 nexus_signing / seata（DB 家族切 MySQL 后纳入备份范围）
 nexus_gateway
 nexus_wallet
