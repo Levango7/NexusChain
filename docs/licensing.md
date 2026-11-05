@@ -72,7 +72,14 @@ nexus-consortium/consortium/src/
    - **npm** — ✅ 解析全部 `package-lock.json` 的 `license` 字段（离线、确定）
    - **Rust** — ✅ 解析 `Cargo.lock` + crates.io 许可，带**可提交缓存**
      `scripts/rust-license-cache.json`（离线可复现；缓存未命中会告警，提示新增依赖未核实）
-   - **Java/Gradle** — ❌ **仍未覆盖**（无锁文件，需解析已解析依赖树，另行评估）
+   - **Java/Gradle** — ⚠️ **机制已就位、清单待 bootstrap**（2026-11-06，板 20261105-0502）：
+     Gradle 无锁文件，改由 `scripts/java-deps-export.init.gradle` 只读导出各构建树
+     `runtimeClasspath` 的已解析坐标，`scripts/java-deps-collect.py merge` 合成可提交清单
+     `scripts/java-dependencies.json`，许可查 `scripts/java-license-cache.json`
+     （Maven Central POM `<licenses>` + parent 链，离线只读缓存）。
+     **清单尚未提交** ⇒ 报告现在仍如实标 `❌ 未覆盖`，Java 依赖不计入合计；
+     bootstrap 后自动转为"已覆盖"，届时才可把 `--require-java` 打开。
+     刷新流程见 `scripts/check-license-policy.py` 头注（导出 → merge → `--update-java-cache`）。
    - 当前为**报告制**（不阻断）：首扫即发现 **5 个 GPL-3.0 系 crate**，见 §5 新增决策项。
 
 ## 5. 待办（未完成，不得宣称"许可已合规"）
@@ -97,7 +104,12 @@ nexus-consortium/consortium/src/
       需对 `nexus-core/nexus-core/src`（162 文件）+ consortium 4 文件重写或替换。
 - [x] ~~**依赖许可清单化**~~ → **2026-10-07 部分完成**：已接入
       `scripts/check-license-policy.py` + CI job `依赖许可证策略（报告制）`
-      （npm ✅ / Rust ✅ 带缓存 / **Java ❌ 未覆盖**）。~~**转阻断的前提**是上面
+      （npm ✅ / Rust ✅ 带缓存 / **Java ❌ 未覆盖**）。
+      → **2026-11-06 Java 腿机制补齐**（板 20261105-0502，见 §4.3 同条）：导出 init script +
+      合成器 + `scan_java` + POM 许可缓存 + 三向自测 + CI 导出步骤已落；
+      **清单 `scripts/java-dependencies.json` 尚未 bootstrap**（需 CI 先导出一次再合成提交），
+      在那之前本条仍按"Java 未覆盖"对待，不得对外宣称三腿齐全。
+      ~~**转阻断的前提**是上面
       第一条 GPL 决策落地——否则 CI 会因存量 5 个 GPL 组件常红，"红"将失去
       "新引入违规"的语义。~~ → **2026-10-08 前提已达成**（强传染归零）：转阻断
       的技术条件已具备，可择机把 `--strict` 打开（转阻断前先确认弱传染 34 项

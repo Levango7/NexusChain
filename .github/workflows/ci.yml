@@ -514,6 +514,50 @@ jobs:
             --tests "org.nexus.bridge.safety.DefaultInsuranceFundTest" \
             --no-daemon
 
+      # Java/Gradle 依赖许可清单导出（板 20261105-0502 / 脚本头注详述设计取舍）。
+      # 语义与 `Trivy 豁免时效复核`、`check-trivyignore-staleness.py` 一致：
+      #   红 = **导出/合成没跑成**（载体坏了），漂移只 ::warning::（报告制）。
+      #   这样"新增了一个依赖"不会在别人的 PR 上判红，但"清单机制失效"不会静默。
+      # 位置刻意放在 Java 测试与回归之后：同一 job 内 runtimeClasspath 已解析过，
+      # 这 7 次调用只读本地缓存，不重复下载依赖。
+      - name: 导出 Java 依赖清单并与已提交清单比对（报告制）
+        run: |
+          set -e
+          INIT=scripts/java-deps-export.init.gradle
+          OUT="$PWD/build/java-deps"
+          rm -rf "$OUT" && mkdir -p "$OUT"
+          ./gradlew --no-daemon --init-script "$INIT" \
+            -Dnexus.javaDepsOut="$OUT" exportJavaDependencies
+          # 6 个 included build 各有自己的 settings.gradle，根构建的 allprojects 覆盖不到，
+          # 故按构建树根各跑一次，全部写进同一目录（系统属性跨 -p 仍共享同一 JVM）。
+          for b in nexus-settlement nexus-compliance nexus-analytics \
+                   nexus-oracle nexus-consortium nexus-api-gateway; do
+            ./gradlew --no-daemon -p "$b" --init-script "$INIT" \
+              -Dnexus.javaDepsOut="$OUT" exportJavaDependencies
+          done
+          python3 scripts/java-deps-collect.py merge --from "$OUT" \
+            --out build/java-dependencies-fresh.json
+          if [ -f scripts/java-dependencies.json ]; then
+            python3 scripts/java-deps-collect.py diff \
+              --committed scripts/java-dependencies.json \
+              --fresh build/java-dependencies-fresh.json \
+              || echo "::warning::清单比对脚本本身跑失败（不是漂移）"
+          else
+            echo "::warning::已提交清单 scripts/java-dependencies.json 尚不存在" \
+                 "⇒ Java 腿仍是「未覆盖」；本次导出件就是 bootstrap 的输入" \
+                 "(artifact: java-dependencies-export)"
+          fi
+
+      - name: 上传 Java 依赖清单导出件（bootstrap / 取证）
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: java-dependencies-export
+          path: |
+            build/java-deps/
+            build/java-dependencies-fresh.json
+          retention-days: 14
+
       # 短期项 #5（2026-09-17）：explorer 前端进入 CI 门禁。
       # 此前 10 个 vitest 测试文件（93 用例）没有任何 CI job 执行——
       # 前端回归零保护（审计发现）。此处与其余 Node job 同用 Node 26。
