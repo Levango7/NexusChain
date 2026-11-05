@@ -5,7 +5,7 @@ name: NexusChain Security Scan
 # 触发：push 到 master / 每周一定时扫描 / 手动触发(workflow_dispatch)
 # 扫描器：
 #   1. Trivy fs      — Gradle 依赖 + 源码配置漏洞扫描 + CycloneDX SBOM 产出
-#   2. Trivy image   — Docker 镜像漏洞扫描（nexus-gateway / nexus-bridge）
+#   2. Trivy image   — Docker 镜像漏洞扫描（13 个应用镜像，PR 阻断路径）
 #   3. OWASP Dep-Check — 备选方案，扫描 build.gradle 生成 HTML/JSON 报告
 #   4. SpotBugs + FindSecBugs（SAST）— Java 静态安全扫描，产出 HTML/XML 报告
 #   5. OWASP ZAP 基线扫描（DAST）— nexus-gateway API 动态扫描
@@ -21,6 +21,9 @@ on:
   # master 才被发现，对合并零约束力。现 PR 也跑轻量子集并阻断；重子集（镜像扫描矩阵、
   # ZAP DAST）见各自 if，仍只在 push/cron 执行以控制 PR 时长；OWASP DC 例外——
   # 「永远上报」已于 2026-10-19 转正（同仓库 PR 亦真跑，见该 job 注释与策略文档）。
+  # 2026-11-06（E1）：镜像扫描矩阵已改为 PR 阻断口径——我方构建的 13 个镜像在 PR 上真跑，
+  # 只对**新增** HIGH/CRITICAL 判红（基线见 config/trivy-baseline.json）；上游浮动镜像
+  # （node:24-alpine）移出 PR 门禁，改由 trivy-upstream-watch 定时观测。DAST 仍只在 push/cron。
   pull_request:
     branches: [master]
   schedule:
