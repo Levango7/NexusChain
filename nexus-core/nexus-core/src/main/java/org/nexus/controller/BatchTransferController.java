@@ -1,6 +1,8 @@
 package org.nexus.controller;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -58,7 +60,7 @@ public class BatchTransferController {
                                 @RequestParam(value = "fromPubkey", required = false) String fromPubkey,
                                 @RequestParam(value = "prikey", required = false) String prikey,
                                 @RequestParam(value = "nonce", required = false, defaultValue = "0") long nonce) {
-        return batchTransferService.batchTransfer(fromPubkey, items, prikey, nonce);
+        return respond(batchTransferService.batchTransfer(fromPubkey, items, prikey, nonce));
     }
 
     /**
@@ -70,5 +72,21 @@ public class BatchTransferController {
     @GetMapping("/status/{txHash}")
     public Object getBatchStatus(@PathVariable("txHash") String txHash) {
         return batchTransferService.getBatchStatus(txHash);
+    }
+
+    /**
+     * 支付扩展（0x10–0x1a）保留未启用时，把业务结果映射为 HTTP 501。
+     *
+     * <p>入参校验失败（{@link APIResult#FAIL}）仍按原样返回 HTTP 200，
+     * 保证空参/非法参数优先于 5010。</p>
+     *
+     * @param result 业务结果
+     * @return 5010 时包装为 {@link ResponseEntity}，否则原样返回
+     */
+    private static Object respond(APIResult result) {
+        if (result.getCode() == APIResult.PAYMENT_EXTENSION_NOT_ENABLED) {
+            return ResponseEntity.status(HttpStatus.NOT_IMPLEMENTED).body(result);
+        }
+        return result;
     }
 }
