@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### 支付扩展（0x10–0x1a）写端点收口（B-2）
+
+13 个写端点保留路由与方法签名，但不再构造交易：有效请求统一返回 **HTTP 501 + code 5010**
+（`Payment extension (0x10-0x1a) is reserved but not enabled`）；入参校验失败优先返回 `5000`
+（RPC `POST /rpc/v1/transaction/broadcast` 缺参为 `4001`）。读路径沿用 B-1（#519）的 `5010`
+语义。实现：Bridge/StableCoin #523、通道 6 端点 #524、批量转账 + RPC 广播 #526；裁决见
+`docs/decision-payment-extension-onchain.md`。真实广播路径不经过本次收口的端点
+（gateway → signing-service `/api/v1/transfers/sign` → core `/sendTransaction`），不受影响。
+
 ### P0 热修：prod compose 未透传结算开关（2.77.0 迁移路径 B 的环境实际可能在结算）
 
 **影响谁**：v2.77.0 期间按本文件「迁移路径 B」配置 `docker-compose.prod.yml` 的 prod
