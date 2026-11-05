@@ -46,16 +46,17 @@ nexus-gateway:
       labelSelector:
         matchLabels:
           app.kubernetes.io/name: nexus-gateway
-  # 结算平台出款地址注入位（板 20261104-0746 / nex runbook 20261105-0435）。
-  # ⚠️ 必须挂在 **nexus-gateway 段**下：本文件里现存的 extraEnv 在
-  # nexus-signing-service 段（NEX_MPC_*），加到那边等于没加——gateway 读到的仍是空。
-  # 值留空 = 保持现有 fail-closed：DefaultClearingEngine:164-171 记账前判空即记
-  # FAILED、不写 ledger、不动链；真实热钱包地址由 ops 填写（占位符会被 :173 的
-  # canTransferTo 判不可解析，同样 FAILED）。注入后需人工处理或重放已落 FAILED
-  # 的结算单——该分支明确「order will not be retried」，重部署不会自动补跑。
-  # CI 侧由 k8s-sync-check「结算平台出款地址注入位门禁」保证这个键存在。
+  # 结算平台出款地址注入位（板 20261104-0746 / 20261105 fail-fast）。
+  # ⚠️ 必须挂 **nexus-gateway 段**：本文件里现存的 extraEnv 在
+  # nexus-signing-service 段（NEX_MPC_*），加到那边等于没加。
+  # prod 结算开启（NEX_SETTLEMENT_ENABLED 默认 true），因此该值**必须**由部署方
+  # 覆盖为真实平台热钱包地址；提交里的 CHANGE_ME_* 是模板占位符，
+  # SettlementPlatformAddressGuard 会在上下文启动期直接拒绝启动（不会静默放行）。
+  # 部署命令示例：--set nexus-gateway.extraEnv.NEX_SETTLEMENT_PLATFORM_ADDRESS=<真实地址>
+  # 若确需在 prod 关闭结算（不推荐），显式加 NEX_SETTLEMENT_ENABLED: "false"。
+  # CI 侧由 k8s-sync-check「结算平台出款地址注入位门禁」保证该键非占位符。
   extraEnv:
-    NEX_SETTLEMENT_PLATFORM_ADDRESS: ""
+    NEX_SETTLEMENT_PLATFORM_ADDRESS: "CHANGE_ME_PLATFORM_SETTLEMENT_ADDRESS"
 
 nexus-bridge:
   replicaCount: 3

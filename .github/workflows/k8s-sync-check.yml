@@ -590,31 +590,37 @@ jobs:
                   "公钥值须由部署方提供，仓库不落明文）")
           PYEOF
 
-      # 结算平台出款地址注入位门禁（2026-11-05；认领见板 20261105-0502-qoder-cn-claim-settlement-address-injection）。
-      # 为什么要有这条：v2.76.0 把结算改成「地址未配置就在记账前 fail-closed 记 FAILED」，
-      # 但 deploy/ 与 prod compose 对该变量**零注入**（nex 的 runbook 20261105-0435 与
-      # TRAE 的板 20261104-0746 都登记过）⇒ 升级即结算全停，且 FAILED 是终态不自动补跑。
-      # nex 的 runbook 还指出一个会让注入白做的坑：两个 values 文件里现存的 extraEnv
-      # 都在 **nexus-signing-service** 段下，把键加到那里，gateway 读到的仍是空。
-      # 本步把「键必须渲染进 nexus-gateway 容器」变成硬断言，形态照上方 A2 门禁：
-      #   · 硬断言（阻断）：prod 与 staging 渲染里，nexus-gateway Deployment 必须出现
-      #     NEX_SETTLEMENT_PLATFORM_ADDRESS；缺失即红（= 注入位被删或加错段）。
-      #   · 值留空**不阻断**：真实热钱包地址由 ops 填，仓库不落值；空值时代码侧
-      #     fail-closed 已经保证不会用占位符动钱，这里只打印提示。
-      #   · 反向对照：默认 values 渲染里不得出现该键 ⇒ 证明断言读的是环境覆盖层，
-      #     不是 chart 自带默认（否则门禁退化成"自己合成的命题"）。
-      # 口径边界：只覆盖 values 驱动的 env 路径（子 chart extraEnv）；若将来改用
-      # Secret/envFrom 注入，渲染产物里看不到它，需同步改本步。
-      - name: 结算平台出款地址注入位门禁（nexus-gateway 段硬断言）
+      # 结算地址/开关启动期 fail-fast 门禁（2026-11-05；板 20261104-0746）。
+      # 语义：结算默认开启；地址缺失/占位符/不可解析 ⇒ 应用**上下文启动失败**
+      # （SettlementPlatformAddressGuard，早于调度器）；唯一绕过是显式
+      # NEX_SETTLEMENT_ENABLED=false，且关闭后调度器不跑、结算入口返回 FAILED。
+      # 本步把 deploy 三条路径钉死：
+      #   · prod：注入位必须仍在 nexus-gateway 段；仓库内的值必须是占位符/空值
+      #     （真实地址不入仓）——这种值会让 prod 启动直接失败，而不是静默放行；
+      #     用 --set 合成地址渲染一次，证明注入位可被真实值覆盖。
+      #   · staging：必须显式 NEX_SETTLEMENT_ENABLED=false，且不再留空地址蒙混。
+      #   · 默认 values：不得自带任何结算键（负样本，防止断言退化成读 chart 默认）。
+      #   · 静态清单 / compose / dev compose 同键同语义。
+      - name: 结算地址/开关启动期 fail-fast 门禁
         run: |
           set -e
-          helm template nexus deploy/helm -f deploy/helm/values-prod.yaml > /tmp/settle-addr-prod.yaml
-          helm template nexus deploy/helm -f deploy/helm/values-staging.yaml > /tmp/settle-addr-staging.yaml
-          helm template nexus deploy/helm > /tmp/settle-addr-default.yaml
+          helm template nexus deploy/helm -f deploy/helm/values-prod.yaml > /tmp/settle-prod-default.yaml
+          helm template nexus deploy/helm -f deploy/helm/values-prod.yaml \
+            --set nexus-gateway.extraEnv.NEX_SETTLEMENT_PLATFORM_ADDRESS=CISyntheticPlatformAddress \
+            > /tmp/settle-prod-override.yaml
+          helm template nexus deploy/helm -f deploy/helm/values-staging.yaml > /tmp/settle-staging.yaml
+          helm template nexus deploy/helm > /tmp/settle-default.yaml
           python3 - <<'PYEOF'
           import re
 
           KEY = 'NEX_SETTLEMENT_PLATFORM_ADDRESS'
+          ENABLED = 'NEX_SETTLEMENT_ENABLED'
+          PLACEHOLDERS = {
+              'PLATFORM_HOT_WALLET',
+              'SANDBOX_PLATFORM_SETTLEMENT_WALLET',
+              'CHANGE_ME_PLATFORM_SETTLEMENT_ADDRESS',
+              'REPLACE_ME_PLATFORM_SETTLEMENT_ADDRESS',
+          }
 
           def deployment(text, name):
               # 只认「行首 kind: Deployment」且「metadata.name 恰为该服务」的文档，
@@ -629,47 +635,62 @@ jobs:
               m = re.search(r'-\s*name: ' + name + r'\s*\n\s*value: "?([^\\"\n]*)', doc)
               return m.group(1).strip() if m else None
 
-          for label, path in (('prod', '/tmp/settle-addr-prod.yaml'),
-                              ('staging', '/tmp/settle-addr-staging.yaml')):
-              text = open(path).read()
-              gw = deployment(text, 'nexus-gateway')
+          def gateway(path, label):
+              gw = deployment(open(path).read(), 'nexus-gateway')
               assert gw is not None, (
-                  f"FAIL: {label} 渲染里没有 nexus-gateway 的 Deployment —— 结构变了？"
-                  "先查行首 kind:/metadata.name 是否还是这两个字面值")
+                  f"FAIL: {label} 渲染里没有 nexus-gateway 的 Deployment —— 结构变了？")
+              return gw
 
-              val = env_value(gw, KEY)
-              assert val is not None, (
-                  f"FAIL: {label} 的 nexus-gateway 容器里没有渲染出 {KEY}。"
-                  "两种可能：①注入位被删；②键被加到了 nexus-signing-service.extraEnv"
-                  "（两个 values 文件里现存的 extraEnv 都在那一段）——那样 gateway 读到的"
-                  "仍是空值，结算会在记账前 fail-closed 记 FAILED 且不自动重试。"
-                  "修复：在 values-" + ("prod" if label == 'prod' else "staging") +
-                  ".yaml 的顶级 nexus-gateway: 段下加 extraEnv." + KEY)
+          # prod：注入位 + 合成值覆盖
+          gw = gateway('/tmp/settle-prod-override.yaml', 'prod(override)')
+          val = env_value(gw, KEY)
+          assert val is not None, (
+              f"FAIL: prod 的 nexus-gateway 容器里没有渲染出 {KEY}。"
+              "可能注入位被删，或键被加到 nexus-signing-service.extraEnv"
+              "（两个 values 文件里现存的 extraEnv 都在那一段）——那样 gateway 读到的"
+              "仍是空值，会直接启动失败。修复：values-prod.yaml 顶级 nexus-gateway: 段的 extraEnv")
+          assert val == 'CISyntheticPlatformAddress', (
+              f"FAIL: prod --set 覆盖未生效（渲染值 {val!r}）")
+          print(f"  ✓ prod: {KEY} 注入位位于 nexus-gateway 段，可被部署方覆盖")
 
-              if val == '':
-                  print(f"  ✓ {label}: {KEY} 注入位存在但值为空（预期）——"
-                        "真实热钱包地址由 ops 填写；空值时 DefaultClearingEngine:164-171 "
-                        "按笔 fail-closed，不会用占位符动钱。注意：注入后需人工处理或"
-                        "重放此前已落 FAILED 的结算单（该分支不自动重试）")
-              else:
-                  print(f"  ✓ {label}: {KEY} 已下发（{len(val)} 字符）")
+          # prod 默认渲染：仓库值必须是占位符/空值（真实地址不入仓），
+          # 这种值由启动守卫拒绝 ⇒ 缺地址的 prod 起不来，而不是静默放行。
+          val = env_value(gateway('/tmp/settle-prod-default.yaml', 'prod'), KEY)
+          assert val is not None, (
+              f"FAIL: prod 默认渲染缺 {KEY} 注入位——别把「未配置」藏进 chart 默认值")
+          assert val == '' or val.upper() in PLACEHOLDERS, (
+              f"FAIL: prod 默认渲染的 {KEY}={val!r} 既非空值也不是占位符；"
+              "真实平台地址不得入仓，请改为 CHANGE_ME_PLATFORM_SETTLEMENT_ADDRESS")
+          print(f"  ✓ prod 默认值 {val!r} 是占位符/空值：应用启动守卫会拒绝启动（预期）")
 
-          # 反向对照：默认 values 不得自带该键，否则上面的断言可能只是在读 chart 默认值。
-          default_text = open('/tmp/settle-addr-default.yaml').read()
-          gw_default = deployment(default_text, 'nexus-gateway')
+          # staging：显式关闭，且不靠留空地址蒙混
+          gw = gateway('/tmp/settle-staging.yaml', 'staging')
+          flag = env_value(gw, ENABLED)
+          assert flag is not None and flag.lower() == 'false', (
+              f"FAIL: staging 必须显式 {ENABLED}=\"false\"（渲染值 {flag!r}）。"
+              "staging 不做真实结算；留空地址 + 默认开启会让 gateway 启动失败。")
+          assert env_value(gw, KEY) is None, (
+              f"FAIL: staging 已关闭结算，却仍渲染 {KEY}——不要用空地址蒙混，"
+              "要么显式关闭，要么下发真实地址并开启结算")
+          print(f"  ✓ staging: {ENABLED}=false 且无地址键（显式关闭，非留空蒙混）")
+
+          # 反向对照：默认 values 不得自带任何结算键
+          gw_default = deployment(open('/tmp/settle-default.yaml').read(), 'nexus-gateway')
           if gw_default is not None:
-              assert env_value(gw_default, KEY) is None, (
-                  f"FAIL: 默认 values 渲染里出现了 {KEY}——负样本失效，"
-                  "该配置只能来自环境覆盖层（staging/prod values）")
-          print("  ✓ 默认 values 无该键（负样本成立）")
+              assert env_value(gw_default, KEY) is None and env_value(gw_default, ENABLED) is None, (
+                  "FAIL: 默认 values 渲染里出现了结算键——负样本失效")
+          print("  ✓ 默认 values 无结算键（负样本成立）")
           PYEOF
-          # 静态清单 / compose 两条部署路径同样必须有注入位：上面的 helm 渲染只覆盖
-          # values 驱动的 extraEnv，看不到 ConfigMap（k8s 静态清单）与 compose 的 env。
+          # 静态清单 / compose / dev compose 三条部署路径同键同语义。
           grep -q 'NEX_SETTLEMENT_PLATFORM_ADDRESS' deploy/k8s/00-namespace-config.yml \
-            || { echo "FAIL: deploy/k8s/00-namespace-config.yml 缺 NEX_SETTLEMENT_PLATFORM_ADDRESS（gateway 经 nexus-config envFrom 注入）"; exit 1; }
-          grep -q 'NEX_SETTLEMENT_PLATFORM_ADDRESS=' docker-compose.prod.yml \
-            || { echo "FAIL: docker-compose.prod.yml 缺 NEX_SETTLEMENT_PLATFORM_ADDRESS"; exit 1; }
-          echo "  ✓ deploy/k8s 静态清单与 docker-compose.prod.yml 均有注入位"
+            || { echo "FAIL: deploy/k8s/00-namespace-config.yml 缺 NEX_SETTLEMENT_PLATFORM_ADDRESS"; exit 1; }
+          grep -q 'NEX_SETTLEMENT_ENABLED: "true"' deploy/k8s/00-namespace-config.yml \
+            || { echo "FAIL: deploy/k8s/00-namespace-config.yml 未显式开启结算"; exit 1; }
+          grep -q 'NEX_SETTLEMENT_PLATFORM_ADDRESS:?' docker-compose.prod.yml \
+            || { echo "FAIL: docker-compose.prod.yml 必须用 :? 让缺地址直接渲染失败（不是 :- 空值）"; exit 1; }
+          grep -q 'NEX_SETTLEMENT_ENABLED=false' docker-compose.yml \
+            || { echo "FAIL: dev docker-compose.yml 未显式关闭结算（缺地址会拒绝启动）"; exit 1; }
+          echo "  ✓ k8s 静态清单 / prod compose / dev compose 均符合 fail-fast 语义"
 
       # A 批（2026-09-08）：Alertmanager 路由树真实校验——此前 5 条告警 +
       # 路由配置全存在但**从未验证过路由语法**（健康扫描抓出的"看起来有

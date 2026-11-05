@@ -38,15 +38,13 @@ nexus-gateway:
   pdb:
     enabled: true
     minAvailable: 1
-  # 结算平台出款地址注入位（板 20261104-0746 / nex runbook 20261105-0435）。
-  # ⚠️ 必须挂在 **nexus-gateway 段**下：本文件里现存的 extraEnv 在
-  # nexus-signing-service 段（NEX_MPC_*），加到那边等于没加——gateway 读到的仍是空。
-  # 值留空 = 保持现有 fail-closed：DefaultClearingEngine:164-171 在记账前判空即
-  # 记 FAILED、不写 ledger、不动链；真实热钱包地址由 ops 填写（占位符会被
-  # :173 的 canTransferTo 判不可解析，同样 FAILED）。
-  # CI 侧由 k8s-sync-check「结算平台出款地址注入位门禁」保证这个键存在。
+  # 结算开关（板 20261104-0746 / 20261105 fail-fast）。
+  # staging 不做真实结算：这里**显式**关闭（而不是留空地址蒙混），
+  # 关闭后不要求平台出款地址，调度器不执行，结算入口直接返回 FAILED（未启用）。
+  # 若 staging 将来要跑结算：删掉 NEX_SETTLEMENT_ENABLED: "false"，
+  # 并同时注入真实 NEX_SETTLEMENT_PLATFORM_ADDRESS。
   extraEnv:
-    NEX_SETTLEMENT_PLATFORM_ADDRESS: ""
+    NEX_SETTLEMENT_ENABLED: "false"
 
 nexus-bridge:
   replicaCount: 2

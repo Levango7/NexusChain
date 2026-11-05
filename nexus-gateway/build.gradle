@@ -235,6 +235,13 @@ task integrationTest(type: Test) {
     }
 }
 
+// 结算启动守卫（SettlementPlatformAddressGuard）在结算开启时要求真实平台地址。
+// 网关的单元/集成测试不跑真实结算，测试运行器显式关闭——这是测试装配的主动选择，
+// 不是 profile 名豁免；生产侧默认仍是开启。
+tasks.withType(Test).configureEach {
+    systemProperty 'nexus.settlement.enabled', 'false'
+}
+
 jacoco {
     toolVersion = "0.8.11"
 }

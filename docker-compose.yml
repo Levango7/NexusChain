@@ -37,6 +37,8 @@ services:
     environment:
       # REQ-33/P2: dev compose 应使用 dev profile，prod profile 留给 docker-compose.prod.yml
       - SPRING_PROFILES_ACTIVE=dev
+      # dev 不做真实结算：显式关闭（启动守卫要求地址，缺地址会拒绝启动）。
+      - NEX_SETTLEMENT_ENABLED=false
       # CI 审计修复（ZAP/DAST）：容器网络内 core 的地址是服务名 nexus-core，
       # 默认 http://localhost:19585 在容器内指向自身导致链 RPC 恒不可达
       - NEX_CHAIN_RPC_URL=http://nexus-core:19585

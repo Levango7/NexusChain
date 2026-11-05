@@ -84,13 +84,13 @@ class DefaultClearingEngineBranchTest {
 
     @Test
     void settle_nullOrder_shouldReturnNull() {
-        DefaultClearingEngine engine = new DefaultClearingEngine(ledger, reconciliation);
+        DefaultClearingEngine engine = new DefaultClearingEngine(ledger, reconciliation, new org.nexus.settlement.execution.SandboxOnChainExecutionChannel(), "TEST_PLATFORM_WALLET");
         assertNull(engine.settle(null));
     }
 
     @Test
     void settle_nullMerchantId_shouldMarkFailed() {
-        DefaultClearingEngine engine = new DefaultClearingEngine(ledger, reconciliation);
+        DefaultClearingEngine engine = new DefaultClearingEngine(ledger, reconciliation, new org.nexus.settlement.execution.SandboxOnChainExecutionChannel(), "TEST_PLATFORM_WALLET");
         ClearingOrder o = new ClearingOrder();
         o.setOrderId("O1");
         o.setAmount(new BigDecimal("100"));
@@ -102,13 +102,13 @@ class DefaultClearingEngineBranchTest {
 
     @Test
     void batchClear_nullBatch_shouldReturnNull() {
-        DefaultClearingEngine engine = new DefaultClearingEngine(ledger, reconciliation);
+        DefaultClearingEngine engine = new DefaultClearingEngine(ledger, reconciliation, new org.nexus.settlement.execution.SandboxOnChainExecutionChannel(), "TEST_PLATFORM_WALLET");
         assertNull(engine.batchClear(null));
     }
 
     @Test
     void batchClear_nullOrders_shouldFail() {
-        DefaultClearingEngine engine = new DefaultClearingEngine(ledger, reconciliation);
+        DefaultClearingEngine engine = new DefaultClearingEngine(ledger, reconciliation, new org.nexus.settlement.execution.SandboxOnChainExecutionChannel(), "TEST_PLATFORM_WALLET");
         SettlementBatch batch = new SettlementBatch();
         batch.setBatchNo("B-NULL");
 
@@ -147,7 +147,7 @@ class DefaultClearingEngineBranchTest {
 
     @Test
     void reconcile_chainReportHasDiscrepancies_shouldMergeIntoInput() {
-        DefaultClearingEngine engine = new DefaultClearingEngine(ledger, reconciliation);
+        DefaultClearingEngine engine = new DefaultClearingEngine(ledger, reconciliation, new org.nexus.settlement.execution.SandboxOnChainExecutionChannel(), "TEST_PLATFORM_WALLET");
 
         // 制造本地有外部无的差错
         ledger.bookSettlement("M001", new BigDecimal("100"), "O1");
@@ -165,7 +165,7 @@ class DefaultClearingEngineBranchTest {
     @Test
     void reconcile_nullInputAndCleanChain_shouldReturnReport() {
         // 链上无差错时（本地与链上均空），reconcile(null) 应返回链上报告
-        DefaultClearingEngine engine = new DefaultClearingEngine(ledger, reconciliation);
+        DefaultClearingEngine engine = new DefaultClearingEngine(ledger, reconciliation, new org.nexus.settlement.execution.SandboxOnChainExecutionChannel(), "TEST_PLATFORM_WALLET");
         ReconciliationReport result = engine.reconcile(null);
         assertNotNull(result);
     }

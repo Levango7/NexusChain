@@ -1,7 +1,6 @@
 package org.nexus.settlement.clearing;
 
 import org.nexus.settlement.execution.OnChainExecutionChannel;
-import org.nexus.settlement.execution.SandboxOnChainExecutionChannel;
 import org.nexus.settlement.execution.TransactionRequest;
 import org.nexus.settlement.execution.TransactionResult;
 import org.slf4j.Logger;
@@ -29,13 +28,6 @@ public class DefaultClearingEngine implements ClearingEngine {
 
     private static final Logger log = LoggerFactory.getLogger(DefaultClearingEngine.class);
 
-    /**
-     * 仅用于单测 / 沙箱装配的占位出款地址。
-     * <p>生产路径由 Spring 使用四参构造器注入 {@code nexus.settlement.platform-address}，
-     * 未配置即为空串并 fail-closed；本常量<b>不会</b>在配置缺失时被回退使用。</p>
-     */
-    private static final String SANDBOX_PLATFORM_SETTLEMENT_ADDRESS = "SANDBOX_PLATFORM_SETTLEMENT_WALLET";
-
     /** 账本组件 */
     private final Ledger ledger;
 
@@ -48,30 +40,39 @@ public class DefaultClearingEngine implements ClearingEngine {
     /** 平台结算热钱包链上地址 */
     private final String platformSettlementAddress;
 
+    /** 结算总开关：false 时结算入口直接返回「未启用」失败，不记账、不动链 */
+    private final boolean settlementEnabled;
+
     /** 链上记录数据源（可选注入：结算成功后向回填型数据源同步链上凭证） */
     private org.nexus.settlement.reconciliation.ChainRecordSource chainRecordSource;
 
     /** 清算订单仓储（可选注入：settle 终态回填落库，账务核心持久化） */
     private ClearingOrderRepository clearingOrderRepository;
 
+    /**
+     * 单测 / 沙箱装配用构造器：显式传入地址，结算开关按默认「开启」。
+     * 生产路径由 Spring 使用五参构造器。
+     */
     public DefaultClearingEngine(Ledger ledger,
-                                 org.nexus.settlement.reconciliation.ReconciliationService reconciliationService) {
-        // 仅用于单测 / 沙箱装配：使用显式的沙箱占位地址（不是生产默认值）。
-        // 生产由 Spring 走四参构造器；配置缺失时为空串并在 settle() 前 fail-closed。
-        this(ledger, reconciliationService, new SandboxOnChainExecutionChannel(),
-                SANDBOX_PLATFORM_SETTLEMENT_ADDRESS);
+                                 org.nexus.settlement.reconciliation.ReconciliationService reconciliationService,
+                                 OnChainExecutionChannel executionChannel,
+                                 String platformSettlementAddress) {
+        this(ledger, reconciliationService, executionChannel, platformSettlementAddress, true);
     }
 
     @Autowired
     public DefaultClearingEngine(Ledger ledger,
                                  org.nexus.settlement.reconciliation.ReconciliationService reconciliationService,
                                  OnChainExecutionChannel executionChannel,
-                                 @Value("${nexus.settlement.platform-address:}") String platformSettlementAddress) {
+                                 @Value("${nexus.settlement.platform-address:}") String platformSettlementAddress,
+                                 @Value("${nexus.settlement.enabled:true}") boolean settlementEnabled) {
         this.ledger = ledger;
         this.reconciliationService = reconciliationService;
         this.executionChannel = executionChannel;
+        this.settlementEnabled = settlementEnabled;
         // fail-closed（板 20261102-0320）：未配置即空值，绝不再回退 "PLATFORM_HOT_WALLET" 这类占位符——
         // 占位符会被当作真地址送去签名/广播，等于用一个不存在的出款地址尝试打款。
+        // 启动期由 SettlementPlatformAddressGuard 直接拒绝启动，不等到第一笔业务。
         this.platformSettlementAddress = platformSettlementAddress == null ? "" : platformSettlementAddress.trim();
     }
 
@@ -105,6 +106,16 @@ public class DefaultClearingEngine implements ClearingEngine {
     public SettlementBatch batchClear(SettlementBatch batch) {
         if (batch == null) {
             return null;
+        }
+        if (!settlementEnabled) {
+            // 显式关闭结算（nexus.settlement.enabled=false）：批次直接落 FAILED，
+            // 不写 ledger、不动链，调用方拿到明确的「未启用」失败语义。
+            batch.setStatus(SettlementBatch.BatchStatus.FAILED);
+            log.error("batchClear refused: settlement is disabled ({}={} / {}={}); "
+                            + "no ledger entry written, no chain transaction sent: batchNo={}",
+                    SettlementPlatformAddressGuard.ENABLED_KEY, false,
+                    SettlementPlatformAddressGuard.ENABLED_ENV, false, batch.getBatchNo());
+            return batch;
         }
         List<ClearingOrder> orders = batch.getOrders() != null ? batch.getOrders() : List.of();
         if (orders.isEmpty()) {
@@ -148,6 +159,17 @@ public class DefaultClearingEngine implements ClearingEngine {
             return null;
         }
         if (order.getStatus() == ClearingOrder.OrderStatus.SETTLED) {
+            return order;
+        }
+        if (!settlementEnabled) {
+            // 显式关闭结算：入口返回明确的「未启用」失败，不等到链上执行才报错。
+            order.setStatus(ClearingOrder.OrderStatus.FAILED);
+            log.error("settle refused: settlement is disabled ({}={} / {}={}); "
+                            + "no ledger entry written, no chain transaction sent: orderId={}, merchantId={}",
+                    SettlementPlatformAddressGuard.ENABLED_KEY, false,
+                    SettlementPlatformAddressGuard.ENABLED_ENV, false,
+                    order.getOrderId(), order.getMerchantId());
+            persistOrderState(order);
             return order;
         }
         if (order.getAmount() == null || order.getMerchantId() == null) {

@@ -31,7 +31,7 @@ class DefaultClearingEngineTest {
         chainSource = new InMemoryChainRecordSource();
         var bankSource = new InMemoryBankRecordSource();
         var reconciliation = new DefaultReconciliationService(ledger, chainSource, bankSource);
-        engine = new DefaultClearingEngine(ledger, reconciliation);
+        engine = new DefaultClearingEngine(ledger, reconciliation, new org.nexus.settlement.execution.SandboxOnChainExecutionChannel(), "TEST_PLATFORM_WALLET");
         // Path C：注入回填型链上记录源，形成结算→链上凭证→对账匹配闭环
         engine.setChainRecordSource(chainSource);
     }
@@ -95,7 +95,9 @@ class DefaultClearingEngineTest {
         DefaultClearingEngine isolatedEngine = new DefaultClearingEngine(
                 ledger,
                 new org.nexus.settlement.reconciliation.DefaultReconciliationService(
-                        ledger, new InMemoryChainRecordSource(), new InMemoryBankRecordSource()));
+                        ledger, new InMemoryChainRecordSource(), new InMemoryBankRecordSource()),
+                new org.nexus.settlement.execution.SandboxOnChainExecutionChannel(),
+                "TEST_PLATFORM_WALLET");
 
         isolatedEngine.settle(order("O1", "M001", "100"));
 

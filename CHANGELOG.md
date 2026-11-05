@@ -2,6 +2,25 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [Unreleased]
+
+### 结算平台出款地址启动期 fail-fast（行为变更，板 20261104-0746）
+
+**升级后若未配置结算地址，服务将无法启动。**
+
+- 结算默认开启。`nexus.settlement.platform-address`（`NEX_SETTLEMENT_PLATFORM_ADDRESS`）
+  缺失、仍为历史占位符（如 `PLATFORM_HOT_WALLET` / `CHANGE_ME_*`）、或当前
+  `OnChainExecutionChannel` 无法解析 ⇒ `SettlementPlatformAddressGuard` 在 Spring
+  上下文启动期（`@PostConstruct`，早于调度器注册）直接抛错，服务起不来；
+  不再“启动成功、第一笔结算才失败”。
+- 唯一绕过：部署方显式写 `nexus.settlement.enabled=false`（`NEX_SETTLEMENT_ENABLED=false`）。
+  关闭后调度器不执行，`settle()` / `batchClear()` 直接返回 FAILED（未启用），
+  不写 ledger、不动链。
+- 已清理隐式回退：`DefaultClearingEngine` 的沙箱占位地址常量与两参构造器，
+  以及 yml / deploy 中“空值即未配、仍可继续启动”的写法。deploy 形态：
+  prod 注入位保留占位符（部署方必须覆盖，否则启动失败）；staging / dev 显式
+  `NEX_SETTLEMENT_ENABLED=false`；prod compose 用 `:?`，缺地址直接渲染失败。
+- **迁移动作**：① 注入真实平台热钱包地址并重启；② 或显式关闭结算并重启。
 ## [2.76.0] - 2026-11-04
 
 > 本段为 2.75.0（2026-10-26）之后合入的批次，按时间倒序；2.75.0 的明细见下方同名小节。
