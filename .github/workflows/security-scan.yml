@@ -25,7 +25,10 @@ on:
   # 只对**新增** HIGH/CRITICAL 判红（基线见 config/trivy-baseline.json）；上游浮动镜像
   # （node:24-alpine）移出 PR 门禁，改由 trivy-upstream-watch 定时观测。DAST 仍只在 push/cron。
   pull_request:
-    branches: [master]
+    # ci/e1-scope-base 仅用于取证（该分支 = #537 分支 HEAD，只多一行本注释与下方
+    # branches 项），让取证 PR 的 base 也带上门禁，从而 PR diff 里**不含**门禁自身
+    # 文件，能真实复现「docs-only → 0 腿 / nexus-core → 10 腿」。合入 master 前会删掉。
+    branches: [master, ci/e1-scope-base]
   schedule:
     # 每周一 03:00 UTC（北京时间周一 11:00）
     - cron: '0 3 * * 1'
