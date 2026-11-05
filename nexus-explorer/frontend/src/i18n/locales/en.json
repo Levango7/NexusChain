@@ -191,7 +191,8 @@
     "back": "Back",
     "loading": "Loading cross-chain transfers...",
     "loadFailed": "Failed to load cross-chain transfers",
-    "empty": "No cross-chain transfers",
+    "reservedTitle": "Cross-chain bridge is not enabled yet",
+    "reservedDesc": "BRIDGE_* transaction types (0x10-0x1a) are reserved but not enabled: write endpoints return HTTP 501 + code 5010, and the node neither builds nor broadcasts them, so no cross-chain data exists yet.",
     "filterLabel": "Filter by status",
     "filterAll": "All",
     "status": {

@@ -43,7 +43,7 @@
 | buildTransfer(params) | TransferParams | Transaction | 构建转账交易 |
 | buildContractCall(from, addr, data, value) | - | Transaction | 构建合约调用 |
 | sign(tx, privateKey) | Transaction, string | string | 签名交易 |
-| broadcast(signedTx) | string | string | 广播交易 |
+| broadcast(signedTx) | string | string | **不可用**（Not Implemented）：调用 core 未注册的 `nexus_sendRawTransaction`，必失败；真实提交路径见下方说明 |
 | getTransactionReceipt(txHash) | string | Receipt | 查询回执 |
 | estimateGas(tx) | Transaction | string/int | 估算 Gas |
 | getGasPrice() | - | string/int | 当前 Gas 价格 |
@@ -107,8 +107,13 @@ NexusChain 节点支持的 JSON-RPC 方法（nexus_ 前缀）。
 | nexus_getBalance | Implemented | 获取账户余额 | 直接调用 |
 | nexus_getTransactionCount | Implemented | 获取交易计数（nonce） | 直接调用 |
 | nexus_estimateGas | Implemented | 估算交易 Gas | 直接调用 |
-| nexus_sendRawTransaction | Implemented | 广播已签名交易 | 直接调用 |
+| nexus_sendRawTransaction | **Not Implemented** (nexus-core) | 广播已签名交易——**SDK `broadcast()` 不可用** | SDK 保留接口但调用必失败；改用 wallet-service `submitTransfer` 或 core `POST /sendTransaction` |
 | nexus_getTransactionReceipt | Implemented | 获取交易回执 | 直接调用 |
+
+> **广播不可用（2026-11，B-4）**：core 的 JSON-RPC 方法表（`JsonRpcController.java:144-174`）
+> 只注册了上表方法，未注册 `nexus_sendRawTransaction`。Java / Go / Python 的 `broadcast()`
+> 调用必失败（Java 有测试钉死：`SdkExtraTest.java:112`）；TypeScript 已移除该方法。
+> 真实提交路径是 nexus-wallet-service 或 core `POST /sendTransaction`。
 
 ### 已弃用 / 未实现的 RPC 方法
 
