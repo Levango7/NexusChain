@@ -160,11 +160,11 @@ public class BatchTransferService {
     /**
      * 查询批量转账状态。
      *
-     * <p>骨架实现：返回 UNKNOWN 状态。后续可从交易池或区块链中
-     * 查询交易的确认状态。</p>
+     * <p>支付扩展类型当前保留未启用，本接口固定返回
+     * {@link APIResult#PAYMENT_EXTENSION_NOT_ENABLED}，不再返回模拟 PENDING/UNKNOWN 状态。</p>
      *
      * @param txHash 交易哈希（十六进制字符串）
-     * @return 统一响应结果，data 中包含交易状态信息
+     * @return 统一响应结果；支付扩展未启用时返回 {@link APIResult#PAYMENT_EXTENSION_NOT_ENABLED}
      */
     public APIResult getBatchStatus(String txHash) {
         try {
@@ -172,18 +172,8 @@ public class BatchTransferService {
                 return APIResult.newFailResult(APIResult.FAIL, "txHash is required");
             }
 
-            // 骨架：先查交易池，未命中则返回 UNKNOWN
-            Map<String, Object> statusInfo = new LinkedHashMap<>();
-            statusInfo.put("txHash", txHash);
-            if (txPool != null && txPool.has(txHash)) {
-                statusInfo.put("status", "PENDING");
-                statusInfo.put("confirmations", 0);
-            } else {
-                statusInfo.put("status", "UNKNOWN");
-                statusInfo.put("confirmations", 0);
-            }
-
-            return APIResult.newSuccess(statusInfo);
+            // 支付扩展（0x10–0x1a）保留未启用：不再返回模拟批量转账状态。
+            return APIResult.paymentExtensionNotEnabled();
         } catch (RuntimeException e) {
             return APIResult.newFailResult(APIResult.FAIL, "Failed to query batch transfer status: " + e.getMessage());
         }
