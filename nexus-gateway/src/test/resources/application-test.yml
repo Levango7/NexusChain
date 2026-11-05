@@ -92,6 +92,8 @@ nexus:
     platform-pubkey: "1TestPlatformPubkey000000000000000000000000000"
     enabled: false
   settlement:
+    # 网关集成测试不做真实结算：显式关闭（启动守卫要求地址，缺地址会拒绝启动）。
+    enabled: false
     risk:
       amount-threshold: 1000000000
       velocity-max-count: 10000

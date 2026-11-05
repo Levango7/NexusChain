@@ -61,11 +61,9 @@ services:
       - NEXUS_EVENTSOURCING_STORE=memory
       - NEXUS_WEBHOOK_DLQ_STORE=memory
       # 结算平台出款地址注入位（板 20261104-0746 / nex runbook 20261105-0435）。
-      # 故意用 `:-`（允许空）而不是 `:?`（缺变量即拒绝启动）：这个值只被结算一条路径消费，
-      # 空值时 DefaultClearingEngine:164-171 已按笔 fail-closed（记 FAILED、不写 ledger、
-      # 不动链），不该因为运维还没填地址就让整个网关栈起不来。
-      # 真实热钱包地址由 ops 注入；占位符会被 :173 的 canTransferTo 判不可解析，同样 FAILED。
-      - NEX_SETTLEMENT_PLATFORM_ADDRESS=${NEX_SETTLEMENT_PLATFORM_ADDRESS:-}
+      # prod 结算默认开启：地址必须由部署方提供，缺失则 compose 直接渲染失败
+      # （:? 语义），不再用 :- 空值把「没配」放行到运行期。
+      - NEX_SETTLEMENT_PLATFORM_ADDRESS=${NEX_SETTLEMENT_PLATFORM_ADDRESS:?NEX_SETTLEMENT_PLATFORM_ADDRESS must be set for prod settlement (or set NEX_SETTLEMENT_ENABLED=false explicitly)}
     healthcheck:
       test: ['CMD', '/busybox', 'wget', '-q', '-O', '/dev/null', 'http://localhost:8080/actuator/health']
       interval: 30s

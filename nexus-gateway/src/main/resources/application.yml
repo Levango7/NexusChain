@@ -185,12 +185,18 @@ nexus:
   # Token symbol used across the platform
   token-symbol: NEX
 
-  # === 结算平台出款地址（fail-closed） ===
-  # DefaultClearingEngine 发起 Type.SETTLEMENT 转账时使用的 from 地址。
-  # 未配置 ⇒ 结算在「贷账之前」直接拒绝（订单落 FAILED，不贷账、不动链），
-  # 因此部署环境必须显式注入（k8s 建议 NEX_SETTLEMENT_PLATFORM_ADDRESS）。
-  # 不得回退占位符：占位符会被当成真地址去签名/广播（见板 20261102-0320）。
+  # === 结算开关与平台出款地址（启动期 fail-closed） ===
+  # enabled 默认 true（结算开启）。只有部署方主动写 false（推荐环境变量
+  # NEX_SETTLEMENT_ENABLED=false）才跳过地址校验；此时调度器不执行，
+  # 结算入口直接返回 FAILED（未启用）。
+  # 地址未配置 / 仍是占位符 / 当前 OnChainExecutionChannel 无法解析 ⇒
+  # SettlementPlatformAddressGuard 在上下文启动期直接抛错，服务起不来
+  # （不再「启动成功、每笔失败」）。地址必须由部署方注入
+  # （NEX_SETTLEMENT_PLATFORM_ADDRESS），不得回退占位符。
   settlement:
+    enabled: ${NEX_SETTLEMENT_ENABLED:true}
+    # 末尾的 ':' 只把「未设置」映射为空串，便于 enabled=false 时无地址启动；
+    # 它不是地址默认值——enabled=true 时空串会被启动守卫直接拒绝。
     platform-address: ${NEX_SETTLEMENT_PLATFORM_ADDRESS:}
 
   # === 任务 #26：运维管理 API 配置 ===
