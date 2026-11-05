@@ -27,7 +27,10 @@ E1 落地通知：**PR 门禁新增「我方产物」镜像基线门禁**，并�
    「`table` + `.trivyignore` 全量判红」改为「**基线差分**」：只对**新增**的
    HIGH/CRITICAL 判红，已知项必须在 `config/trivy-baseline.json` 里且有到期日。
 2. 新增聚合 job **`Trivy Image Baseline Gate (PR)`**（单一名，收口 13 腿矩阵），
-   已/将加入分支保护必需检查（启用状态以 master 分支保护实际配置为准）。
+   **已加入 master 分支保护必需检查**（2026-11-06 生效，原 8 项 → 9 项，`strict` 仍为 false）。
+   启用前在 PR #509 上用两个提交各跑一轮全绿：run 42075513888（head `06facda`）与
+   run 42093557937 attempt 2（head `b651d479`）：23 个 job success，另 2 个
+   （上游观测、DAST）按设计 skipped。
 3. **删除** `Trivy Base Image Scan (PR light, …)`：它扫的是 `node:24-alpine` **上游本体**，
    6 条 HIGH（`brace-expansion`/`undici`）有修复版但在我方改不动的上游 npm 树里，
    **永远红**（issue #495）。
@@ -41,7 +44,7 @@ E1 落地通知：**PR 门禁新增「我方产物」镜像基线门禁**，并�
   `Trivy Image Baseline Gate (PR)`；合并门槛以 `Trivy Image Baseline Gate (PR)` 为准
   （它是 13 腿的聚合，**不要**把 13 条腿逐条设成必需检查，否则矩阵一变就会出现
   「该 check 不存在」导致 PR 永久 pending）。
-- PR 墙钟增加约 2 分钟（13 腿并行，每腿 3 次扫描，峰值约 7 分钟）。
+- PR 墙钟增加约 3–4 分钟（13 腿并行，实测单腿 1m36s–3m39s；不含 runner 排队时间）。
 - 纯文档 PR 也会跑镜像矩阵——这是「我方产物逐 PR 验证」的代价，不是配置错误。
 
 ## 三、门禁红了怎么读（三种，处置完全不同）
@@ -67,7 +70,8 @@ E1 落地通知：**PR 门禁新增「我方产物」镜像基线门禁**，并�
 }
 ```
 
-- `expires` **必填**，最长 180 天；无到期日的条目会被门禁以退出码 2 拒收。
+- `expires` **必填**，最长 180 天（`fixable: "not-applicable"` 例外上限 90 天）；
+  无到期日的条目会被门禁以退出码 2 拒收。到期日按 **UTC** 算，请留 1 天余量。
 - 有修复版的 CVE 不要写进来——写了门禁直接判红（`[POLICY]`）。
 - `.trivyignore` **不是**基线：它只用于 SARIF/分诊的展示口径，删除它不会让门禁变绿，
   也不要为了绿灯删已有条目或改通配。
@@ -75,7 +79,7 @@ E1 落地通知：**PR 门禁新增「我方产物」镜像基线门禁**，并�
 本地自测（不需要推 CI）：
 
 ```powershell
-python scripts/security/test_trivy_baseline_gate.py            # 12 条 fixture
+python scripts/security/test_trivy_baseline_gate.py            # 14 条 fixture
 python scripts/security/trivy-baseline-gate.py `
   --baseline config/trivy-baseline.json `
   --report <trivy json> --today 2026-11-06
