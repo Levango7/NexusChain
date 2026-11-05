@@ -89,8 +89,11 @@ class ChannelWriteOffTest {
     }
 
     @Test
-    void closeChannelReturnsNotEnabled() {
-        assertNotEnabled(channelService.closeChannel("ch_1", 500L, 500L, 0L));
+    void closeChannelReturnsNotEnabledAndStateUnchanged() {
+        PaymentChannel channel = newOpenChannel();
+        String channelId = channel.getChannelId();
+        assertNotEnabled(channelService.closeChannel(channelId, 500L, 500L, 0L));
+        assertStateUnchanged(channelId);
     }
 
     @Test
