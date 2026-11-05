@@ -18,33 +18,19 @@
 
 package org.nexus.service;
 
-import org.apache.commons.codec.DecoderException;
-import org.apache.commons.codec.binary.Hex;
 import org.nexus.ApiResult.APIResult;
-import org.nexus.core.account.Transaction;
-import org.nexus.core.TransactionPool;
 import org.nexus.core.payment.BatchTransferPayload;
 import org.nexus.core.payment.BatchTransferPayload.TransferItem;
-import org.nexus.crypto.CryptoException;
-import org.nexus.crypto.ed25519.Ed25519PrivateKey;
-import org.nexus.keystore.crypto.RipemdUtility;
-import org.nexus.keystore.crypto.SHA3Utility;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 
 /**
  * 批量转账业务服务。
  *
- * <p>支持在单笔 {@code BATCH_TRANSFER} 交易中向多个收款人转账。
- * 本服务负责校验转账项、构造 payload、签名交易并提交到
- * {@link TransactionPool}。</p>
- *
- * <p>payload 格式由 {@link BatchTransferPayload#build(List)} 定义，
- * 包含 total_count、total_amount 和 items 三个字段。</p>
+ * <p>支付扩展类型（0x10–0x1a）当前保留未启用：批量转账路由保留、
+ * 入参校验保留，但不再构造 {@code BATCH_TRANSFER} 交易，统一返回
+ * {@link APIResult#PAYMENT_EXTENSION_NOT_ENABLED}。</p>
  *
  * @author nexus-core
  * @since 1.0
@@ -52,109 +38,44 @@ import java.util.Map;
 @Component
 public class BatchTransferService {
 
-    /** 交易版本号，固定为 1。 */
-    private static final int TX_VERSION = Transaction.DEFAULT_TRANSACTION_VERSION;
-
-    /** 默认 gasPrice，按最小单位计费。 */
-    private static final long DEFAULT_GAS_PRICE = 1L;
-
     /** 最大收款人数量。 */
     private static final int MAX_RECIPIENTS = 256;
 
     /** 最大总金额（NEX 最小单位）。 */
     private static final long MAX_TOTAL_AMOUNT = Long.MAX_VALUE;
 
-    @Autowired
-    private TransactionPool txPool;
-
     /**
      * 提交批量转账交易。
      *
-     * <p>流程：
-     * <ol>
-     *   <li>调用 {@link BatchTransferPayload#build(List)} 构造 payload</li>
-     *   <li>调用 {@link BatchTransferPayload#validate(List, int, long)} 校验</li>
-     *   <li>使用私钥对交易签名</li>
-     *   <li>构造 {@code BATCH_TRANSFER} 类型交易并提交到交易池</li>
-     * </ol></p>
+     * <p>支付扩展类型（0x10–0x1a）保留未启用：保留路由与入参校验，
+     * 但不再构造 {@code BATCH_TRANSFER} 交易。</p>
      *
      * @param fromPubkey 发起方公钥（十六进制字符串，32 字节）
      * @param recipients 收款人列表，每项包含 address 和 amount
      * @param prikey     发起方私钥（十六进制字符串，32 字节）
      * @param nonce      交易 nonce
-     * @return 统一响应结果，data 中包含 txHash、recipientCount、totalAmount 等
+     * @return 统一响应结果；支付扩展未启用时返回 {@link APIResult#PAYMENT_EXTENSION_NOT_ENABLED}
      */
     public APIResult batchTransfer(String fromPubkey, List<TransferItem> recipients,
                                    String prikey, long nonce) {
+        if (fromPubkey == null || fromPubkey.isEmpty()) {
+            return APIResult.newFailResult(APIResult.FAIL, "fromPubkey is required");
+        }
+        if (recipients == null || recipients.isEmpty()) {
+            return APIResult.newFailResult(APIResult.FAIL, "recipients must not be empty");
+        }
+        if (prikey == null || prikey.isEmpty()) {
+            return APIResult.newFailResult(APIResult.FAIL, "prikey is required");
+        }
+
         try {
-            if (fromPubkey == null || fromPubkey.isEmpty()) {
-                return APIResult.newFailResult(APIResult.FAIL, "fromPubkey is required");
-            }
-            if (recipients == null || recipients.isEmpty()) {
-                return APIResult.newFailResult(APIResult.FAIL, "recipients must not be empty");
-            }
-            if (prikey == null || prikey.isEmpty()) {
-                return APIResult.newFailResult(APIResult.FAIL, "prikey is required");
-            }
-
-            // 校验转账项
             BatchTransferPayload.validate(recipients, MAX_RECIPIENTS, MAX_TOTAL_AMOUNT);
-
-            // 计算 from/to 字段
-            byte[] fromBytes = Hex.decodeHex(fromPubkey.toCharArray());
-            if (fromBytes.length != Transaction.PUBLIC_KEY_SIZE) {
-                return APIResult.newFailResult(APIResult.FAIL,
-                        "fromPubkey must be " + Transaction.PUBLIC_KEY_SIZE + " bytes, got " + fromBytes.length);
-            }
-            byte[] toBytes = RipemdUtility.ripemd160(SHA3Utility.keccak256(fromBytes));
-
-            // 构造 payload
-            byte[] payload = BatchTransferPayload.build(recipients);
-            long totalAmount = BatchTransferPayload.getTotalAmount(recipients);
-
-            // 占位签名（待签名）
-            byte[] emptySig = new byte[Transaction.SIGNATURE_SIZE];
-
-            Transaction tx = new Transaction(
-                    TX_VERSION,
-                    Transaction.Type.BATCH_TRANSFER.ordinal(),
-                    nonce,
-                    fromBytes,
-                    DEFAULT_GAS_PRICE,
-                    totalAmount,
-                    payload,
-                    toBytes,
-                    emptySig
-            );
-
-            // 使用私钥签名
-            byte[] prikeyBytes = Hex.decodeHex(prikey.toCharArray());
-            Ed25519PrivateKey privateKey = new Ed25519PrivateKey(prikeyBytes);
-            byte[] signature = privateKey.sign(tx.getRawForSign());
-            tx.signature = signature;
-
-            if (!txPool.add(tx)) {
-                return APIResult.newFailResult(APIResult.FAIL,
-                        "BATCH_TRANSFER transaction was not accepted by the transaction pool: "
-                                + "the on-chain transaction was rejected");
-            }
-
-            Map<String, Object> data = new LinkedHashMap<>();
-            data.put("txHash", tx.getHashHexString());
-            data.put("recipientCount", recipients.size());
-            data.put("totalAmount", totalAmount);
-            data.put("status", "PENDING");
-
-            return APIResult.newSuccess(data);
-        } catch (DecoderException e) {
-            return APIResult.newFailResult(APIResult.FAIL, "Invalid hex format: " + e.getMessage());
         } catch (IllegalArgumentException e) {
             return APIResult.newFailResult(APIResult.FAIL, "Validation failed: " + e.getMessage());
-        } catch (CryptoException e) {
-            return APIResult.newFailResult(APIResult.FAIL, "Signing failed: " + e.getMessage());
-        } catch (RuntimeException e) {
-            return APIResult.newFailResult(APIResult.FAIL, "Failed to submit batch transfer: " + e.getMessage());
         }
+
+        // 支付扩展（0x10–0x1a）保留未启用：不再构造 BATCH_TRANSFER 交易。
+        return APIResult.paymentExtensionNotEnabled();
     }
 
     /**
