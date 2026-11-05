@@ -62,31 +62,35 @@ def run_gh(args, check=False):
 
 
 def list_existing_issues(repo, label):
-    """列出带有指定 label 的现有 open issue，返回 {title: number} 字典。"""
+    """列出带有指定 label 的现有 open issue，返回 [{number,title,body}]。"""
     rc, out, err = run_gh([
         "issue", "list",
         "--repo", repo,
         "--label", label,
         "--state", "open",
         "--limit", "200",
-        "--json", "number,title",
+        "--json", "number,title,body",
     ])
     if rc != 0:
         print(f"[WARN] 无法列出现有 issue（gh CLI 可能未认证）: {err}", file=sys.stderr)
-        return {}
+        return []
     try:
-        issues = json.loads(out) if out else []
-        return {item["title"]: item["number"] for item in issues}
+        return json.loads(out) if out else []
     except json.JSONDecodeError:
-        return {}
+        return []
 
 
-def cve_has_open_issue(cve, title_map):
-    """CVE 子串级去重：任何 open security-triage issue 标题含该 CVE 即视为已开。
-    兼容历史标题格式（含 target 的旧格式改版后不会产生重复 issue）。"""
-    for title, num in title_map.items():
-        if cve and cve in title:
-            return num
+def cve_has_open_issue(cve, existing):
+    """CVE 子串级去重：任何 open issue 的标题**或正文**含该 CVE 即视为已开。
+
+    2026-11-06（发布后 digest 扫描）：此前只匹配标题，会漏掉人工维护的汇总型
+    issue（上游观测的 #495 正文列了 node:24-alpine 的 6 个 CVE，标题里没有编号），
+    结果同一批 CVE 被重复开成多条新 issue。正文匹配把这种情况覆盖掉。
+    """
+    for item in existing:
+        blob = f"{item.get('title') or ''}\n{item.get('body') or ''}"
+        if cve and cve in blob:
+            return item["number"]
     return None
 
 
@@ -326,7 +330,7 @@ def main():
         existing = list_existing_issues(args.repo, args.label)
         print(f"[INFO] 现有 {len(existing)} 个 open security-triage issue")
     else:
-        existing = {}
+        existing = []
         print("[INFO] --dry-run 模式：不实际创建 issue")
 
     created = 0
@@ -345,8 +349,11 @@ def main():
         # issue 标题（唯一键：CVE+包；target 收进 body，跨模块聚合不再刷屏）
         title = f"[Security/{severity}] {cve} — {pkg['Name']}"
 
-        # 双层去重：标题精确匹配（新格式）+ CVE 子串检索（兼容旧格式）
-        dup = existing.get(title) or cve_has_open_issue(cve, existing)
+        # 双层去重：标题精确匹配（新格式）+ CVE 子串检索（标题或正文，兼容汇总型 issue）
+        dup = next(
+            (item["number"] for item in existing if item.get("title") == title),
+            None,
+        ) or cve_has_open_issue(cve, existing)
         if dup:
             print(f"  [SKIP] 已存在 issue #{dup}: {title}")
             skipped += 1
