@@ -191,7 +191,8 @@
     "back": "返回",
     "loading": "加载跨链交易中...",
     "loadFailed": "加载跨链交易失败",
-    "empty": "暂无跨链交易",
+    "reservedTitle": "跨链桥功能保留未启用",
+    "reservedDesc": "BRIDGE_* 交易类型（0x10–0x1a）尚未启用：节点写端点统一返回 HTTP 501 + code 5010，不构造也不广播此类交易，因此暂无跨链数据。",
     "filterLabel": "按状态筛选",
     "filterAll": "全部",
     "status": {

@@ -46,6 +46,13 @@ public class TransactionBuilder {
         return TxUtils.signRawBasicTransaction(rawHex, privateKey);
     }
 
+    /**
+     * 广播已签名交易。
+     *
+     * <p><b>不可用</b>：本方法调用 {@code nexus_sendRawTransaction}，但 nexus-core 的
+     * JSON-RPC 方法表未注册该方法，调用必抛 {@link RpcClient.RpcException}。
+     * 真实提交路径为 nexus-wallet-service，或 core 的 {@code POST /sendTransaction}。
+     */
     public String broadcast(String signedTx) {
         Object result = rpcClient.call("nexus_sendRawTransaction", new Object[]{signedTx});
         return result != null ? result.toString() : null;

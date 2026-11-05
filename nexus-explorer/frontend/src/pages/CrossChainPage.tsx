@@ -123,8 +123,19 @@ const CrossChainPage: React.FC = () => {
           </div>
         )}
 
+        {/* BRIDGE_* 属支付扩展 0x10–0x1a（保留未启用，B-2 收口为 HTTP 501 + 5010）：
+            core 的 nexus_getCrossChainTransactions 只筛 BRIDGE_* 交易，因此本页长期无数据。
+            用「保留未启用」空态替代「暂无数据」，避免被误读为取数故障。 */}
         {!loading && !error && transfers.length === 0 && (
-          <div className="text-center text-sm text-muted py-12">{t("crosschain.empty")}</div>
+          <div className="py-12 text-center">
+            <div className="inline-flex items-center gap-2 text-sm font-medium text-fg-2">
+              <AlertCircle size={16} aria-hidden="true" />
+              <span>{t("crosschain.reservedTitle")}</span>
+            </div>
+            <p className="mt-2 text-xs text-muted max-w-xl mx-auto leading-relaxed">
+              {t("crosschain.reservedDesc")}
+            </p>
+          </div>
         )}
 
         {!loading && !error && transfers.length > 0 && (

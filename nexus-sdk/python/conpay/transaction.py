@@ -118,6 +118,10 @@ class TransactionManager:
         """
         广播已签名的交易到网络。
 
+        **不可用**：本方法调用 `nexus_sendRawTransaction`，但 nexus-core 未注册该
+        JSON-RPC 方法，调用必失败。真实提交路径为 wallet-service 或 core
+        `POST /sendTransaction`。
+
         Args:
             signed_tx: 已签名的交易序列化字符串
 
