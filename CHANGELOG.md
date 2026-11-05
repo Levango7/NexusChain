@@ -2,30 +2,72 @@
 
 本文件记录 NexusChain 各版本的变更。
 
-## [Unreleased]
+## [2.77.0] - 2026-11-05
 
-### 结算平台出款地址启动期 fail-fast（行为变更，板 20261104-0746）
+> 发布口径：以 master 分支保护的 8 项必需检查为准。PR 期非必需
+> `Trivy Base Image Scan (node:24-alpine)` 为既有基线红项（6 条可修 HIGH，
+> 仅改文档的 PR 同样红），追踪 issue #495 —— 本版不声称「全绿」。
 
-**升级后若未配置结算地址，服务将无法启动。**
+### 部署迁移（最高优先：升级前必须二选一）
+
+**升级 v2.77.0 后，结算平台地址缺失、仍为 `CHANGE_ME_*` / 历史占位符、或无法解析，gateway 将启动失败——这是预期行为，不是降级。**
 
 - 结算默认开启。`nexus.settlement.platform-address`（`NEX_SETTLEMENT_PLATFORM_ADDRESS`）
-  缺失、仍为历史占位符（如 `PLATFORM_HOT_WALLET` / `CHANGE_ME_*`）、或当前
-  `OnChainExecutionChannel` 无法解析 ⇒ `SettlementPlatformAddressGuard` 在 Spring
-  上下文启动期（`@PostConstruct`，早于调度器注册）直接抛错，服务起不来；
+  缺失、仍为历史占位符（如 `PLATFORM_HOT_WALLET` / `SANDBOX_PLATFORM_SETTLEMENT_WALLET`）、
+  或当前 `OnChainExecutionChannel` 无法解析 ⇒ `SettlementPlatformAddressGuard`
+  在 Spring 上下文启动期（`@PostConstruct`，早于调度器注册）直接抛错，服务起不来；
   不再“启动成功、第一笔结算才失败”。
-- 唯一绕过：部署方显式写 `nexus.settlement.enabled=false`（`NEX_SETTLEMENT_ENABLED=false`）。
-  关闭后调度器不执行，`settle()` / `batchClear()` 直接返回 FAILED（未启用），
-  不写 ledger、不动链。
+- **迁移路径 A（继续结算）**：注入真实平台热钱包地址后重启——Helm
+  `values-prod.yaml` 的 `NEX_SETTLEMENT_PLATFORM_ADDRESS` 必须覆盖
+  `CHANGE_ME_PLATFORM_SETTLEMENT_ADDRESS`；k8s 走
+  `deploy/k8s/00-namespace-config.yml` 的 ConfigMap；compose 走同名环境变量。
+- **迁移路径 B（不结算的环境）**：显式写 `NEX_SETTLEMENT_ENABLED=false`
+  （`nexus.settlement.enabled=false`）后重启。关闭后调度器不执行，
+  `settle()` / `batchClear()` 直接返回 FAILED（未启用），不写 ledger、不动链。
+  不写这个开关**不等于**关闭——默认开启，会走启动校验。
+- **compose 用 `:?`**：`docker-compose.prod.yml` 已改为
+  `${NEX_SETTLEMENT_PLATFORM_ADDRESS:?...}`，缺 env 时 `docker compose config` /
+  `up` 直接渲染失败，不再静默落到空地址。
 - 已清理隐式回退：`DefaultClearingEngine` 的沙箱占位地址常量与两参构造器，
-  以及 yml / deploy 中“空值即未配、仍可继续启动”的写法。deploy 形态：
-  prod 注入位保留占位符（部署方必须覆盖，否则启动失败）；staging / dev 显式
-  `NEX_SETTLEMENT_ENABLED=false`；prod compose 用 `:?`，缺地址直接渲染失败。
-- **迁移动作**：① 注入真实平台热钱包地址并重启；② 或显式关闭结算并重启。
-## [2.76.0] - 2026-11-04
+  以及 yml / deploy 中“空值即未配、仍可继续启动”的写法；staging / dev 显式
+  `NEX_SETTLEMENT_ENABLED=false`。
+- 落地提交：#486（部署注入位与防再漏门禁）、#493（启动期 fail-fast 守卫）。
 
-> 本段为 2.75.0（2026-10-26）之后合入的批次，按时间倒序；2.75.0 的明细见下方同名小节。
+### 对外行为变更
+
+- **支付扩展路径不再返回假成功**（#460 / #462）：`TransactionPool.add` 改为返回
+  boolean，拒绝全零 from、空/全零签名、`0x10`–`0x1a` 支付扩展类型交易
+  （COINBASE 白名单放行）；`/bridge/mint`、`/channel/cooperative-close`、
+  `/channel/close` 等 **10 个调用点**在入池被拒时返回失败，不再返回
+  `MINTED` / `CLOSING` 等成功语义；结算分账 `distributeFunds` 与争议挑战改为
+  先入池、再改状态，被拒交易不会留下半写的终态。
+
+### 其余变更
+
+- **actuator Prometheus 鉴权**（#458 / #470 / #480）：六个服务
+  `/actuator/prometheus` 需 Bearer token，未配置即 503（fail-closed）；
+  `/actuator/health` 保持公开；新增 current + previous 双 token 零空窗轮换。
+- **Alipay 连接器目标地址 fail-closed**（#463）：删除硬编码沙箱域，
+  `base_url` 必填并拒绝 `alipaydev.com`，生产四个交易入口缺配即拒绝外发。
+- **新增 CallbackSimulatorService 往返契约测试**（#464）：微信 V3 回调
+  （AES-256-GCM + RSA-SHA256）与支付宝异步回调（RSA2）的签名/加密对偶断言。
+- **`.trivyignore` 增补**（#465）：libexpat1 第三条无修复版 HIGH
+  CVE-2026-113351（OS 层、Debian affected/无 Fixed、Java XML 不触达 libexpat；
+  与 11-03 两条同判据）。
+
+### 已知问题（发版登记，非本次引入）
+
+- PR 期非必需 job `Trivy Base Image Scan (PR light, node:24-alpine)` 报 6 条
+  有修复版的 HIGH：brace-expansion 5.0.9→5.0.10（CVE-2026-102276 / -102278）、
+  undici 6.28.0→6.29.1（CVE-2026-109383 / -109869 / -19534 / -87018）。
+  属既有基线问题：扫描对象是上游浮动镜像 `node:24-alpine` 本体、命中的是镜像
+  内置 npm 打包依赖树，仅改文档的 PR 同样红。上游尚未发布含修复版的基础镜像，
+  按纪律不对此类可修 CVE 加豁免；追踪 issue **#495**。
 
 ### 结算平台出款地址的部署侧注入位 + 防再漏门禁（板 20261104-0746 / nex runbook 20261105-0435，2026-11-05）
+
+> 注：本条的 compose `:-` 放行语义随后由 #493 收敛为 `:?` 启动失败，
+> 部署口径以本段上方「部署迁移」为准。
 
 代码侧 fail-closed（`DefaultClearingEngine:164-171`）与配置占位（`application.yml:192`
 `${NEX_SETTLEMENT_PLATFORM_ADDRESS:}`）早已就位，但 `deploy/` 全 surface **零注入**：
@@ -141,6 +183,10 @@ PLAN-068 证明 Boot 4 actuator 由独立 handler mapping 服务、MVC 拦截器
 
 边界：生产 Secret 建立/轮换、Prometheus Operator/ServiceMonitor 的 token 读取、
 真实集群验收不在本批（由 platform/orchestrator 落地）；未触碰 L1/桥/钱包契约。
+
+## [2.76.0] - 2026-11-04
+
+> 本段为 2.75.0（2026-10-26）之后合入的批次，按时间倒序；2.75.0 的明细见下方同名小节。
 
 ### 结算平台出款地址 fail-closed（板 20261102-0320，2026-11-04）
 
