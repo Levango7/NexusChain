@@ -241,7 +241,7 @@ jobs:
 
       - name: Trivy 镜像扫描 → JSON（供自动分诊）
         # E1 后半（板 20261105-0640，2026-11-05）：为 security-issue-triage job
-        # 产出 JSON 报告。exit-code: 0（不阻断；阻断由下一步 table 步负责），
+        # 产出 JSON 报告。exit-code: 0（不阻断；阻断由后面的『基线差分门禁』步负责），
         # severity 收齐四档使分诊脚本能按 min-severity 过滤；trivyignores 与
         # SARIF/阻断步同口径（已按政策豁免的 CVE 不应再进分诊队列）。
         # 成本代价：每矩阵腿多一次扫描（+~1.5min），timeout 30min 充裕（原峰值 5.5min）。
@@ -259,7 +259,7 @@ jobs:
       - name: 上传 JSON 报告（供分诊 job 聚合）
         # v4+ 要求同一 run 内 artifact 名唯一 ⇒ 矩阵 13 腿各带模块后缀；
         # 分诊 job 用 pattern + merge-multiple 汇总。
-        # 放在阻断步之前：阻断步（exit-code: 1）踩红时本步已完成，报告不丢。
+        # 放在门禁步之前：门禁（退出码 1）判红时本步已完成，报告不丢。
         uses: actions/upload-artifact@v7
         with:
           name: trivy-docker-report-${{ matrix.module }}
