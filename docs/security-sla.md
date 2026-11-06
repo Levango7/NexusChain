@@ -183,6 +183,7 @@ CI 扫描发现漏洞
 
 - 已知项必须登记在 `config/trivy-baseline.json`，每条必填
   `id`（CVE 编号）/ `package`（包名）/ `reason`（存在理由）/ `expires`（到期日）；
+  可选 `addedAt`（登记日，用于 4.5 的 90 天「长期未命中」复核提示）；
 - **不允许无到期日的永久豁免**：缺 `expires` 直接拒收（退出码 2）；
 - **到期即红**：`today > expires` 且该条目仍被扫到 → 判红（退出码 1）；
 - **严禁给「有修复版」的 CVE 加基线**：Trivy 报出 `FixedVersion` 而条目未显式标注
@@ -200,9 +201,36 @@ CI 扫描发现漏洞
   暴露面论证是否仍成立，再决定续期（≤180 天）或改走修复。
 - 门禁每次运行都会打印 `[STALE]`（基线条目本次未命中，可删）与 `[EXCEPTION]`
   （`fixable=not-applicable` 放行，附 `::warning::`）——这两类不是红，但需要人看。
+- **长期未命中复核（2026-11-06）**：条目登记日（`addedAt`）距今 **≥ 90 天**且本次仍未命中，
+  门禁额外打印 `[STALE-AGED]` 与 `::notice::`「该基线项已长期未命中，需复核是否可清理」。
+  只提示、不判红，也不自动删除：保留它是为了「同一 CVE 若重现时不被误判成新增」。
 - `.trivyignore` 与基线**并存且职责不同**：`.trivyignore` 是「展示/告警口径」的抑制
   （SARIF、分诊 JSON 仍带它），基线是「阻断口径」的白名单。不要为了绿灯删已有
   `.trivyignore` 条目，也不要把条目改成通配。
+
+### 4.6 发布后按 digest 扫描（不阻断发版）
+
+> **2026-11-06 新增**：E1 只覆盖了「将要合入的代码」。`release.yml` 推的是
+> `docker/build-push-action` 产出的镜像（带 provenance），**与 PR 门禁里重建的镜像
+> 不是同一个 digest**；而 Release 此前只写 tag、不记 digest、不扫描 ——
+> v2.77.0 的 13 个镜像从未被扫过。
+
+| 环节 | 做什么 | 阻断发版 |
+|------|--------|---------|
+| `build-images` | 用 buildx 自报的 `outputs.digest` 写 `digests/<module>.json` 并上传 artifact | 是（构建失败即终止发布） |
+| `github-release` | 把 13 行 `模块 / 镜像 / tag / manifest digest` 表拼进 Release body | 是（Release 创建失败会阻断部署） |
+| `release-digest-scan` | 用 `ghcr.io/<repo>/<module>@sha256:...` 逐镜像 trivy 扫描 → 基线差分 → 只产 summary | **否** |
+| `release-digest-triage` | 汇总 summary，创建/更新 issue（`release-digest-watch`），正文含 image + digest + tag + CVE 清单 | **否** |
+
+约束：
+
+- 扫描对象必须是 `image@sha256:...`，**不重新 build、不用 tag**（tag 会被下个版本覆盖）；
+- 判红语义与 PR 门禁完全共用 `trivy-baseline-gate.py`（新增 HIGH/CRITICAL / 基线到期 /
+  有修复版却登记豁免），不另立阈值；
+- 扫描失败（GHCR 鉴权、网络）不判红，但会在 issue 的「扫描异常」段落里出现 —— 信号丢失
+  比假绿更该被看见；
+- 去重键是 issue 标题前缀 `[Release/<tag>]`，同一 tag 重跑只更新正文、不新开 issue；
+  CVE 消失后不自动关闭，需人工确认（避免自动关闭掩盖仍在的镜像）。
 
 ---
 

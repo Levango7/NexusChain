@@ -34,6 +34,9 @@ SEVERITY_RANK = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4, "UNKNOWN": 0}
 MAX_HORIZON_DAYS = 180
 MAX_HORIZON_DAYS_FIX_EXCEPTION = 90
 
+# 基线条目「长期未命中」的复核提示阈值（只提示，不判红）
+STALE_HINT_DAYS = 90
+
 
 def _load_json(path: str):
     with open(path, "r", encoding="utf-8") as f:
@@ -175,6 +178,16 @@ def load_baseline(path: str, today: dt.date) -> tuple[dict[str, dict], list[str]
         if fixable == "not-applicable" and not str(entry.get("evidence") or "").strip():
             errors.append(f"{where} fixable=not-applicable 必须填写 evidence（说明修复版为何不适用）")
 
+        # addedAt 可选：登记进基线的日期，用于「长期未命中」复核提示（只提示、不判红）。
+        # 缺失时不报错（历史条目不强制回填），但也就无法计算 stale 天数。
+        added_raw = str(entry.get("addedAt") or "").strip()
+        added = None
+        if added_raw:
+            try:
+                added = dt.date.fromisoformat(added_raw)
+            except ValueError:
+                errors.append(f"{where} addedAt 不是 ISO 日期（YYYY-MM-DD）：{added_raw}")
+
         if expires:
             horizon = MAX_HORIZON_DAYS_FIX_EXCEPTION if fixable == "not-applicable" else MAX_HORIZON_DAYS
             if (expires - today).days > horizon:
@@ -194,12 +207,43 @@ def load_baseline(path: str, today: dt.date) -> tuple[dict[str, dict], list[str]
             "expires": expires,
             "fixable": fixable,
             "evidence": str(entry.get("evidence") or "").strip(),
+            "added": added,
         }
 
     return by_id, errors
 
 
-def gate(findings: list[dict], baseline: dict[str, dict], today: dt.date) -> int:
+def _serialize_finding(finding: dict) -> dict:
+    return {
+        "id": finding["id"],
+        "package": finding["package"],
+        "severity": finding["severity"],
+        "installed": finding["installed"],
+        "fixedVersions": sorted(finding["fixedVersions"]),
+        "targets": sorted(finding["targets"]),
+    }
+
+
+def _age_days(today: dt.date, added: dt.date) -> int:
+    # 门禁按 UTC 日期判定，而 addedAt 允许是「今天（本地）」登记的日期；
+    # 东八区清晨跑 UTC 还是前一天，直接相减会得到 -1。展示层夹到 0，避免
+    # 输出「登记 -1 天」这种看起来像算错了的日志（不影响 90 天判定）。
+    return max(0, (today - added).days)
+
+
+def _serialize_entry(entry: dict, today: dt.date) -> dict:
+    stale_days = _age_days(today, entry["added"]) if entry.get("added") else None
+    return {
+        "id": entry["id"],
+        "package": entry["package"],
+        "reason": entry["reason"],
+        "expires": entry["expires"].isoformat() if entry["expires"] else None,
+        "addedAt": entry["added"].isoformat() if entry.get("added") else None,
+        "staleDays": stale_days,
+    }
+
+
+def gate(findings: list[dict], baseline: dict[str, dict], today: dt.date) -> tuple[int, dict]:
     new_findings = []
     expired = []
     policy = []
@@ -223,14 +267,21 @@ def gate(findings: list[dict], baseline: dict[str, dict], today: dt.date) -> int
 
     hit_ids = {f["id"] for f in findings}
     stale = [e for eid, e in baseline.items() if eid not in hit_ids]
+    # 「长期未命中」复核提示：只提示、不判红。判据是条目登记日 addedAt 距今 >= 90 天
+    # 且本次仍未命中（addedAt 缺失则无法计算，跳过）。
+    stale_aged = [
+        e for e in stale
+        if e.get("added") and (today - e["added"]).days >= STALE_HINT_DAYS
+    ]
 
     print(f"[INFO] 门禁阈值 HIGH/CRITICAL；唯一 (CVE, 包) 命中 {len(findings)} 条；基线 {len(baseline)} 条")
     print(f"[INFO] 基线命中 {len(baseline) - len(stale)} 条，未命中（stale，仅提示）{len(stale)} 条")
 
     for finding, entry in fix_exceptions:
+        fixed = ", ".join(sorted(finding["fixedVersions"]))
         print(
             f"[EXCEPTION] {finding['id']} / {finding['package']} 报出修复版 "
-            f"({', '.join(sorted(finding['fixedVersions']))})，按 fixable=not-applicable 放行："
+            f"({fixed})，按 fixable=not-applicable 放行："
             f"{entry['evidence']}（到期 {entry['expires']}）"
         )
         print(
@@ -257,9 +308,10 @@ def gate(findings: list[dict], baseline: dict[str, dict], today: dt.date) -> int
         )
 
     for finding, entry in policy:
+        fixed = ", ".join(sorted(finding["fixedVersions"]))
         print(
             f"[POLICY] {finding['id']} / {finding['package']} 报出可用修复版 "
-            f"({', '.join(sorted(finding['fixedVersions']))})，禁止按普通基线豁免"
+            f"({fixed})，禁止按普通基线豁免"
         )
         print(
             f"::error title=Trivy 有修复版不得豁免::"
@@ -267,17 +319,70 @@ def gate(findings: list[dict], baseline: dict[str, dict], today: dt.date) -> int
         )
 
     for entry in stale:
-        print(f"[STALE] 基线条目 {entry['id']} / {entry['package']} 本次未命中（可删，到期 {entry['expires']}）")
+        days = _age_days(today, entry["added"]) if entry.get("added") else None
+        age_text = f"登记 {days} 天" if days is not None else "登记日期未知"
+        print(
+            f"[STALE] 基线条目 {entry['id']} / {entry['package']} 本次未命中"
+            f"（{age_text}，到期 {entry['expires']}）"
+        )
+
+    for entry in stale_aged:
+        days = _age_days(today, entry["added"])
+        print(
+            f"[STALE-AGED] 基线条目 {entry['id']} / {entry['package']} 已 {days} 天未命中，"
+            f"需复核是否可清理（到期 {entry['expires']}）"
+        )
+        print(
+            f"::notice title=基线长期未命中::"
+            f"{entry['id']} / {entry['package']} 登记于 {entry['added']}，已 {days} 天未命中；"
+            f"请复核是否仍需要该豁免（只提示，不判红）"
+        )
+
+    summary = {
+        "today": today.isoformat(),
+        "counts": {
+            "findings": len(findings),
+            "baseline": len(baseline),
+            "new": len(new_findings),
+            "expired": len(expired),
+            "policy": len(policy),
+            "fixExceptions": len(fix_exceptions),
+            "stale": len(stale),
+            "staleAged": len(stale_aged),
+        },
+        "new": [_serialize_finding(f) for f in new_findings],
+        "expired": [dict(_serialize_finding(f), expires=entry["expires"].isoformat()) for f, entry in expired],
+        "policy": [_serialize_finding(f) for f, _ in policy],
+        "fixExceptions": [
+            dict(_serialize_finding(f), evidence=entry["evidence"], expires=entry["expires"].isoformat())
+            for f, entry in fix_exceptions
+        ],
+        "stale": [_serialize_entry(e, today) for e in stale],
+        "staleAged": [_serialize_entry(e, today) for e in stale_aged],
+        "errors": [],
+    }
 
     if new_findings or expired or policy:
         print(
             f"[FAIL] 门禁判红：新增 {len(new_findings)} 条 / 到期 {len(expired)} 条 / "
             f"有修复版却登记豁免 {len(policy)} 条"
         )
-        return 1
+        return 1, summary
 
     print("[PASS] 无新增、无到期、无策略违规")
-    return 0
+    return 0, summary
+
+
+def _write_summary(path: str | None, summary: dict) -> None:
+    """可选的机器可读结论。写失败只告警，不改变门禁退出码。"""
+    if not path:
+        return
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(summary, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+    except OSError as e:
+        print(f"[WARN] 无法写入 summary JSON：{path}（{e}）")
 
 
 def main() -> int:
@@ -294,6 +399,11 @@ def main() -> int:
         "--today",
         default=None,
         help="覆盖当前日期（ISO），仅用于 fixture 测试；缺省取 UTC 日期",
+    )
+    parser.add_argument(
+        "--summary-json",
+        default=None,
+        help="可选：把门禁结论写成机器可读 JSON（供发布后 digest 扫描等下游消费）",
     )
     args = parser.parse_args()
 
@@ -317,9 +427,18 @@ def main() -> int:
             print(f"[CONFIG] {message}")
             print(f"::error title=Trivy 基线配置无效::{message}")
         print(f"[REJECT] 配置/输入错误 {len(errors)} 处，门禁拒收（退出码 2）")
+        _write_summary(args.summary_json, {
+            "today": today.isoformat(),
+            "counts": {"new": 0, "expired": 0, "policy": 0, "fixExceptions": 0,
+                       "stale": 0, "staleAged": 0, "baseline": len(baseline), "findings": 0},
+            "new": [], "expired": [], "policy": [], "fixExceptions": [],
+            "stale": [], "staleAged": [], "errors": errors,
+        })
         return 2
 
-    return gate(findings, baseline, today)
+    code, summary = gate(findings, baseline, today)
+    _write_summary(args.summary_json, summary)
+    return code
 
 
 if __name__ == "__main__":
