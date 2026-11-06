@@ -354,6 +354,7 @@ def gate(findings: list[dict], baseline: dict[tuple[str, str], dict], today: dt.
     expired = []
     policy = []
     shaded = []
+    nofix: list[tuple[dict, dict]] = []
 
     for finding in findings:
         # 严格二元组匹配：同一 CVE 换到别的包就是另一条 finding，必须独立判定。
@@ -376,6 +377,10 @@ def gate(findings: list[dict], baseline: dict[tuple[str, str], dict], today: dt.
 
         if entry["expires"] and today > entry["expires"]:
             expired.append((finding, entry))
+        elif entry["fixable"] == "none":
+            # 无修复版且本次仍命中：允许放行，但必须在日志逐条可见（[NOFIX]），
+            # 避免「登记一次就静默通过」——每次跑都要能看出这几条还在。
+            nofix.append((finding, entry))
 
     # stale 同样按二元组比对：同一 CVE 在别的包命中了，不代表本条目命中。
     hit_keys = {(f["id"], f["package"]) for f in findings}
@@ -437,6 +442,17 @@ def gate(findings: list[dict], baseline: dict[tuple[str, str], dict], today: dt.
             f"声明依赖已解析到修复版；到期 {entry['expires']}"
         )
 
+    for finding, entry in nofix:
+        print(
+            f"[NOFIX] {finding['id']} / {finding['package']} 无修复版（Trivy 未给出 FixedVersion），"
+            f"已评估登记；到期 {entry['expires']}；reason：{entry['reason']}"
+        )
+        print(
+            f"::notice title=Trivy 无修复版登记::"
+            f"{finding['id']} / {finding['package']} 本次仍命中且无修复版，"
+            f"按 fixable=none 登记；到期 {entry['expires']}"
+        )
+
     for entry in stale:
         days = _age_days(today, entry["added"]) if entry.get("added") else None
         age_text = f"登记 {days} 天" if days is not None else "登记日期未知"
@@ -466,6 +482,7 @@ def gate(findings: list[dict], baseline: dict[tuple[str, str], dict], today: dt.
             "expired": len(expired),
             "policy": len(policy),
             "shaded": len(shaded),
+            "nofix": len(nofix),
             "stale": len(stale),
             "staleAged": len(stale_aged),
         },
@@ -473,6 +490,7 @@ def gate(findings: list[dict], baseline: dict[tuple[str, str], dict], today: dt.
         "expired": [dict(_serialize_finding(f), expires=entry["expires"].isoformat()) for f, entry in expired],
         "policy": [_serialize_finding(f) for f, _ in policy],
         "shaded": [_serialize_finding(f, entry) for f, entry in shaded],
+        "nofix": [_serialize_finding(f, entry) for f, entry in nofix],
         "stale": [_serialize_entry(e, today) for e in stale],
         "staleAged": [_serialize_entry(e, today) for e in stale_aged],
         "errors": [],
@@ -485,11 +503,17 @@ def gate(findings: list[dict], baseline: dict[tuple[str, str], dict], today: dt.
         )
         return 1, summary
 
+    extras = []
     if shaded:
-        print(
-            f"[PASS] 无新增、无到期、无策略违规"
-            f"（含 shaded_vendored 例外 {len(shaded)} 条：有修复版但命中来自第三方 jar 内嵌副本，本次不判红）"
+        extras.append(
+            f"含 shaded_vendored 例外 {len(shaded)} 条：有修复版但命中来自第三方 jar 内嵌副本，本次不判红"
         )
+    if nofix:
+        extras.append(
+            f"含无修复版登记 {len(nofix)} 条：FixedVersion 为空，已在日志逐条打印 [NOFIX]"
+        )
+    if extras:
+        print(f"[PASS] 无新增、无到期、无策略违规（{'；'.join(extras)}）")
     else:
         print("[PASS] 无新增、无到期、无策略违规")
     return 0, summary

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -151,6 +152,27 @@ CASES = [
         ["[PASS]", "基线命中 1 条"],
     ),
     (
+        "④ fixable=none 命中必须在日志打印 [NOFIX]（不可静默通过）",
+        "report-no-fix-only.json",
+        "baseline-nofix.json",
+        0,
+        ["[NOFIX] CVE-2026-999001 / libssl3t64", "含无修复版登记 1 条", "[PASS]"],
+    ),
+    (
+        "⑤ fixable=none 的 expires 若为 addedAt+91 → 退出码 2",
+        "report-no-fix-only.json",
+        "baseline-nofix-over90.json",
+        2,
+        ["addedAt=2026-11-06 + 90 天 = 2027-02-04", "不一致", "[REJECT]"],
+    ),
+    (
+        "⑥ fixable=none 但该二元组报出 FixedVersion → 必须判红（nofix 不能当后门）",
+        "report-fixable-only.json",
+        "baseline-nofix.json",
+        1,
+        ["[POLICY] CVE-2026-999001 / libssl3t64", "禁止按普通基线豁免"],
+    ),
+    (
         "④ 同 CVE 两个包都已登记 → 各自独立判定（有修复版的那个仍判红）",
         "report-guava-two-pkgs.json",
         "baseline-guava-both.json",
@@ -266,6 +288,22 @@ ABSENT_CASES = [
 ]
 
 
+def check_nofix_pass_consistency(output: str) -> str:
+    """[PASS] 里报的「无修复版登记 N 条」必须等于本次实际打印的 [NOFIX] 行数。
+
+    这一行的意义是「没被静默放过」；若它自己数错，就是新的假绿。
+    返回空串表示一致（或不涉及 nofix）；否则返回问题描述。
+    """
+    printed = sum(1 for line in output.splitlines() if line.startswith("[NOFIX] CVE-"))
+    match = re.search(r"含无修复版登记 (\d+) 条", output)
+    if not match:
+        return ""
+    reported = int(match.group(1))
+    if reported != printed:
+        return f"[PASS] 报 {reported} 条，实际打印 [NOFIX] {printed} 行（口径不一致）"
+    return ""
+
+
 def check_summary_json() -> tuple[bool, str]:
     """--summary-json 要与文本结论一致（下游 issue 分诊依赖它）。"""
     with tempfile.TemporaryDirectory() as tmp:
@@ -301,13 +339,16 @@ def main() -> int:
         result = run(report, baseline, today)
         output = result.stdout + result.stderr
         missing = [s for s in expected_snippets if s not in output]
-        ok = result.returncode == expected_code and not missing
+        consistency_error = check_nofix_pass_consistency(output)
+        ok = result.returncode == expected_code and not missing and not consistency_error
         status = "PASS" if ok else "FAIL"
         print(f"[{status}] {name}（期望退出码 {expected_code}，实际 {result.returncode}）")
         if not ok:
             failures += 1
             if missing:
                 print(f"  缺少输出片段：{missing}")
+            if consistency_error:
+                print(f"  {consistency_error}")
             print("  --- 实际输出 ---")
             for line in output.splitlines():
                 print(f"  {line}")
