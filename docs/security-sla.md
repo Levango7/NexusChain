@@ -223,6 +223,42 @@ CI 扫描发现漏洞
   （SARIF、分诊 JSON 仍带它），基线是「阻断口径」的白名单。不要为了绿灯删已有
   `.trivyignore` 条目，也不要把条目改成通配。
 
+### 4.7 已知限制与人工处置：PR 镜像门禁的成本（2026-11-06）
+
+**已知限制**：`Trivy Image Baseline Gate (PR)` 取证依赖真实 docker build。2026-11-06
+起 PR 上按路径过滤（`scripts/security/image-scan-scope.py`），把「13 腿」收窄为
+「命中镜像输入的腿」，但仍不能消除构建：
+
+- 只改 `docs/`、`deploy/`、`migrations/` 等不进入镜像的路径 → 0 腿，聚合 job 报
+  `no relevant changes` 并给出 **success**（必需检查不会变 skipped/missing）；
+- 改共享 Java 输入（根 gradle 配置、`nexus-core` / `nexus-sdk` / `nexus-common` /
+  `nexus-consortium` / `nexus-settlement` / `nexus-compliance` / `nexus-analytics` /
+  `nexus-oracle` / `nexus-api-gateway`）→ 仍要 **10 腿**：这些目录被 10 个 Java
+  Dockerfile `COPY`，jar 内容确实会变；改 `nexus-bridge` / `nexus-signing-service` /
+  `nexus-wallet-service` → 还需重建 `nexus-core`（其 Dockerfile 运行期 COPY 了这三个模块）；
+- 因此**构建抖动仍可能卡住合并**：单腿耗时随依赖下载与 Runner 负载波动，极端情况下
+  门禁会长时间 pending。这是「用真实产物取证」的代价，不用跳过构建来掩盖。
+- **SARIF 上传偶发失败**：个别腿的 `上传 SARIF 到 GitHub Security tab` 会因上传端点
+  5xx / 超时失败，表现为该腿红、聚合门禁跟着红，但扫描结论里并没有 `[NEW]` /
+  `[EXPIRED]` / `[POLICY]`。这类失败直接 `gh run rerun <run-id> --failed` 重跑失败腿
+  即绿（#537 首次 run 就是这样：`nexus-gateway` / `nexus-api-gateway` 两腿上传 SARIF
+  失败，`--failed` 重跑后两腿与聚合门禁全部 success）。**不要**为此改门禁语义或
+  摘掉必需检查。
+
+**基础设施失败的人工处置口径**（仅适用于「不是代码问题」的失败）：
+
+1. **谁能 merge**：仅 CODEOWNERS 内的 maintainer（`@Levango7`）。前提是
+   `Trivy Filesystem Scan + SBOM` 为绿，且失败腿的日志明确指向基础设施
+   （Runner 无响应 / 网络超时 / registry 5xx / buildx 崩溃），**不得**含
+   `[NEW]` / `[EXPIRED]` / `[POLICY]` 条目 —— 有这三类一律不得豁免。
+2. **怎么留痕**：在 PR 上评论 `infra-flake: <run 链接> <失败步骤原文>`，并 rerun
+   一次；**同一 PR 同一腿连续两次**基建失败才允许人工合并。
+3. **合并后必须补证**：24h 内对该 commit 触发 `security-scan.yml` 的
+   `workflow_dispatch`（该路径为 13 腿全量），把 run 链接补回 PR；若补跑发现新增
+   HIGH/CRITICAL，按 4.4 开 issue 并跟进或回滚，不因「已合并」降级处理。
+4. **禁止**：用「跳过某腿」「把该 check 从必需检查里摘掉」「放宽基线」来应对基建
+   失败——那会把「红灯不在阻断路径上」的问题重新引回来。
+
 ### 4.6 发布后按 digest 扫描（不阻断发版）
 
 > **2026-11-06 新增**：E1 只覆盖了「将要合入的代码」。`release.yml` 推的是
@@ -306,9 +342,12 @@ CycloneDX SBOM（`sbom-cyclonedx.json`）作为依赖审计基线，每次扫描
 | `.github/dependabot.yml` | Dependabot 依赖更新配置 |
 | `build.gradle` | SpotBugs + FindSecBugs SAST 配置 |
 | `scripts/security/trivy-to-issues.py` | 漏洞自动分诊脚本 |
+| `scripts/security/image-scan-scope.py` | PR 镜像扫描的路径过滤（范围计算，见 4.6） |
 
 ### 7.2 变更历史
 
 | 日期 | 版本 | 变更内容 | 作者 |
 |------|------|---------|------|
 | 2026-08-09 | 1.0 | 初始版本，定义 P0-P3 SLA | Phase 2 安全扫描工程 |
+| 2026-11-06 | 1.1 | E1：镜像门禁改为基线差分（新增 HIGH/CRITICAL 才判红）、上游镜像移出阻断路径、§4.5 基线续期 | 安全扫描工程 |
+| 2026-11-06 | 1.2 | PR 镜像门禁按路径过滤（§4.6），并补「基础设施失败的人工处置口径」 | 安全扫描工程 |
