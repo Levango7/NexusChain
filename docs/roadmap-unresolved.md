@@ -175,6 +175,7 @@
 | 2026-11-05 | **#27 清单纠偏（PLAN-078，E5 通知 20261105-0615 owner 回填）**：actuator 鉴权条按 PLAN-075/076/077 勾选；归档追加 PLAN-069 补录与编号勘误（只新增，不改逐字正文） | PLAN-075 #458 `d24ab1db`、PLAN-076 #470 `ac6a316a`、PLAN-077 #480 `cd237063`；`docs/roadmap-unresolved-archive-27-finality.md`「E5 补录」小节 |
 | 2026-11-05 | **PLAN-079：outbox 真实 PG 复核 + legacy origin 大小写静默删除修复** | 真实 PG（WSL2 + 单进程 core）：正确小写脏行处理一次即移除；`removePendingVote`/`markPendingVoteFailure` 改大小写不敏感 + 0 行 WARN；JdbcFinalityStateStoreTest +2 例、反向对照两组精确红 | `docs/plan/PLAN-079-outbox-legacy-origin-case.md` |
 | 2026-11-07 | **PLAN-080：REST 形态 P2P 合批测试时序抖动去时序化**（qoder CN `20261106-0022` 交回 nexus-core lane）：`RPCClientBatchingTest` 等待改用信号量（替 `verify(timeout)`）、窗口 80ms→2000ms、折叠用例冲刷由合批上限计数触发；折叠覆盖加强（同内容、不同实例） | 只改测试、零生产代码；本地基线 7/7 绿、压测 26/26 绿；反向对照（去重键改实例身份）精确红在 `[同一笔不应重复上线] Expected size: 1 but was: 2`，还原后绿 | `docs/plan/PLAN-080-rpcclient-batching-test-flaky.md` |
+| 2026-11-07 | **PLAN-081：gRPC 形态 P2P 合批测试时序抖动去时序化 + 批内折叠路径覆盖修复**（PLAN-080 交付留言单列的遗留项）：`TransactionHandlerBatchingTest` 窗口 80/300ms→2000ms、等待上界同步放大、折叠用例改由合批上限（计数）触发冲刷、两处 `Thread.sleep` 掩盖改 `verify(after(300).times(1))` | 只改测试、零生产代码；实测复现 2 处红（`Expected size: 1 but was: 2`、`[窗口未到期前不应广播] Expecting empty but was: [...]`）；基线 5/5 绿、压测 62/62 绿；反向对照（去掉批内 `LinkedHashSet`）精确红在 `[同一事务不应重复广播] Expected size: 1 but was: 2`，而**改前同一对照仍绿**（证明原用例没覆盖批内折叠路径），还原后绿 | `docs/plan/PLAN-081-transactionhandler-batching-test-flaky.md` |
 
 ## PLAN-007（单 proposer 协调）
 
