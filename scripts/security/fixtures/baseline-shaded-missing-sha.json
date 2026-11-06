@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "entries": [
+    {
+      "id": "CVE-2026-777777",
+      "package": "com.google.guava:guava",
+      "kind": "shaded_vendored",
+      "reason": "缺 jar_sha256，应被拒收",
+      "expires": "2027-01-05",
+      "evidence": {
+        "jar_path": "nacos-client-3.1.1.jar",
+        "vulnerable_copy": "33.3.1-android",
+        "shaded_prefix": "com/alibaba/nacos/shaded/com/google/common/",
+        "declared_dependency_fixed": "guava 33.4.8-jre -> 33.7.2-jre（by constraint）",
+        "upstream_max_version": "nacos-client 3.3.0 内嵌 guava 33.5.0-android"
+      }
+    }
+  ]
+}

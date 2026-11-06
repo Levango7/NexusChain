@@ -13,7 +13,12 @@
   * 到期条目一旦再次命中即判红（不允许无到期的永久豁免）；
   * Trivy 报出可用修复版（FixedVersion）时一律拒收。`fixable=not-applicable`
     也只在该二元组**本身无修复版**时成立；同一 CVE 在别的包有修复版会作为独立
-    finding 各自判定（不再共享豁免）。
+    finding 各自判定（不再共享豁免）；
+  * `kind: shaded_vendored` 是唯一「有修复版仍可不判红」的有界例外：命中来自
+    第三方 jar 的内嵌（relocated）副本、本仓库无法替换。必须给出四件套 evidence
+    （jar_path / jar_sha256 / vulnerable_copy + shaded_prefix /
+    declared_dependency_fixed + upstream_max_version），有效期上限 90 天，
+    命中时强制打印 `[SHADED]` 并计入 `[PASS]` 的例外条数，不静默通过。
 
 退出码：
   0  通过（无新增、无到期、无策略违规）
@@ -36,9 +41,20 @@ import sys
 
 SEVERITY_RANK = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4, "UNKNOWN": 0}
 
-# 普通基线条目最长有效期；fixable=not-applicable 再收紧到 90 天
+# 普通基线条目最长有效期；not-applicable 与 shaded_vendored 收紧到 90 天
 MAX_HORIZON_DAYS = 180
 MAX_HORIZON_DAYS_FIX_EXCEPTION = 90
+
+# kind 取值：default（普通条目）/ not-applicable（该二元组无修复版）/ shaded_vendored
+KINDS = ("default", "not-applicable", "shaded_vendored")
+SHADED_EVIDENCE_FIELDS = (
+    "jar_path",
+    "jar_sha256",
+    "vulnerable_copy",
+    "shaded_prefix",
+    "declared_dependency_fixed",
+    "upstream_max_version",
+)
 
 # 基线条目「长期未命中」的复核提示阈值（只提示，不判红）
 STALE_HINT_DAYS = 90
@@ -150,6 +166,19 @@ def _package_rejection(pkg: str) -> str | None:
     return None
 
 
+def _shaded_evidence_rejection(evidence) -> str | None:
+    """kind=shaded_vendored 必须带四件套 evidence；返回拒收理由，合法则返回 None。"""
+    if not isinstance(evidence, dict):
+        return ("kind=shaded_vendored 的 evidence 必须是对象，且四件套齐全："
+                + " / ".join(SHADED_EVIDENCE_FIELDS))
+    missing = [k for k in SHADED_EVIDENCE_FIELDS if not str(evidence.get(k) or "").strip()]
+    if missing:
+        return (f"kind=shaded_vendored 的 evidence 缺少字段：{', '.join(missing)}"
+                "（jar_path / jar_sha256 / vulnerable_copy+shaded_prefix / "
+                "declared_dependency_fixed+upstream_max_version 必须齐全）")
+    return None
+
+
 def load_baseline(path: str, today: dt.date) -> tuple[dict[tuple[str, str], dict], list[str]]:
     """读取并校验基线；任何不合规条目都进 errors（调用方以退出码 2 拒收）。"""
     errors: list[str] = []
@@ -196,11 +225,30 @@ def load_baseline(path: str, today: dt.date) -> tuple[dict[tuple[str, str], dict
                 errors.append(f"{where} expires 不是 ISO 日期（YYYY-MM-DD）：{expires_raw}")
                 expires = None
 
+        kind = str(entry.get("kind") or "").strip() or "default"
+        if kind not in KINDS:
+            errors.append(
+                f"{where} kind 只能是 {' / '.join(KINDS)}，实际：{kind}"
+            )
+            kind = "default"
+
         fixable = str(entry.get("fixable") or "none").strip()
+        if kind == "not-applicable":
+            fixable = "not-applicable"
         if fixable not in ("none", "not-applicable"):
             errors.append(f"{where} fixable 只能是 none / not-applicable，实际：{fixable}")
-        if fixable == "not-applicable" and not str(entry.get("evidence") or "").strip():
-            errors.append(f"{where} fixable=not-applicable 必须填写 evidence（说明修复版为何不适用）")
+            fixable = "none"
+
+        evidence = entry.get("evidence")
+        if kind == "shaded_vendored":
+            rejection = _shaded_evidence_rejection(evidence)
+            if rejection:
+                errors.append(f"{where} {rejection}")
+        else:
+            if not str(evidence or "").strip():
+                evidence = ""
+            if fixable == "not-applicable" and not str(evidence).strip():
+                errors.append(f"{where} fixable=not-applicable 必须填写 evidence（说明修复版为何不适用）")
 
         # addedAt 可选：登记进基线的日期，用于「长期未命中」复核提示（只提示、不判红）。
         # 缺失时不报错（历史条目不强制回填），但也就无法计算 stale 天数。
@@ -213,11 +261,15 @@ def load_baseline(path: str, today: dt.date) -> tuple[dict[tuple[str, str], dict
                 errors.append(f"{where} addedAt 不是 ISO 日期（YYYY-MM-DD）：{added_raw}")
 
         if expires:
-            horizon = MAX_HORIZON_DAYS_FIX_EXCEPTION if fixable == "not-applicable" else MAX_HORIZON_DAYS
+            horizon = (
+                MAX_HORIZON_DAYS_FIX_EXCEPTION
+                if kind in ("not-applicable", "shaded_vendored") or fixable == "not-applicable"
+                else MAX_HORIZON_DAYS
+            )
             if (expires - today).days > horizon:
                 errors.append(
                     f"{where} expires={expires} 超出最长有效期 {horizon} 天"
-                    f"（fixable={fixable}），请缩短复核周期"
+                    f"（kind={kind}），请缩短复核周期"
                 )
 
         key = (vuln_id, pkg)
@@ -231,15 +283,16 @@ def load_baseline(path: str, today: dt.date) -> tuple[dict[tuple[str, str], dict
             "reason": str(entry.get("reason") or "").strip(),
             "expires": expires,
             "fixable": fixable,
-            "evidence": str(entry.get("evidence") or "").strip(),
+            "kind": kind,
+            "evidence": evidence if isinstance(evidence, dict) else str(evidence or "").strip(),
             "added": added,
         }
 
     return by_key, errors
 
 
-def _serialize_finding(finding: dict) -> dict:
-    return {
+def _serialize_finding(finding: dict, entry: dict | None = None) -> dict:
+    data = {
         "id": finding["id"],
         "package": finding["package"],
         "severity": finding["severity"],
@@ -247,6 +300,11 @@ def _serialize_finding(finding: dict) -> dict:
         "fixedVersions": sorted(finding["fixedVersions"]),
         "targets": sorted(finding["targets"]),
     }
+    if entry is not None:
+        data["kind"] = entry["kind"]
+        data["expires"] = entry["expires"].isoformat() if entry["expires"] else None
+        data["evidence"] = entry["evidence"]
+    return data
 
 
 def _age_days(today: dt.date, added: dt.date) -> int:
@@ -272,6 +330,7 @@ def gate(findings: list[dict], baseline: dict[tuple[str, str], dict], today: dt.
     new_findings = []
     expired = []
     policy = []
+    shaded = []
 
     for finding in findings:
         # 严格二元组匹配：同一 CVE 换到别的包就是另一条 finding，必须独立判定。
@@ -280,9 +339,16 @@ def gate(findings: list[dict], baseline: dict[tuple[str, str], dict], today: dt.
             new_findings.append(finding)
             continue
 
-        # 该二元组本身报出修复版 → 一律拒收（not-applicable 也不放行）。
+        # 该二元组本身报出修复版 → 一律拒收（not-applicable 也不放行）；
+        # 唯一例外是 kind=shaded_vendored（命中来自第三方 jar 内嵌副本），仍受到期约束。
         if finding["fixedVersions"]:
-            policy.append((finding, entry))
+            if entry["kind"] == "shaded_vendored":
+                if entry["expires"] and today > entry["expires"]:
+                    expired.append((finding, entry))
+                else:
+                    shaded.append((finding, entry))
+            else:
+                policy.append((finding, entry))
             continue
 
         if entry["expires"] and today > entry["expires"]:
@@ -333,6 +399,21 @@ def gate(findings: list[dict], baseline: dict[tuple[str, str], dict], today: dt.
             f"{finding['id']} / {finding['package']} 报出修复版，请升级而不是加基线"
         )
 
+    for finding, entry in shaded:
+        fixed = ", ".join(sorted(finding["fixedVersions"]))
+        ev = entry["evidence"]
+        print(
+            f"[SHADED] {finding['id']} / {finding['package']} 有修复版 {fixed}，"
+            f"但命中来自 {ev['jar_path']} 内嵌副本（{ev['vulnerable_copy']}），"
+            f"本仓库不可替换；到期 {entry['expires']}"
+        )
+        print(
+            f"::notice title=Trivy 内嵌副本例外::"
+            f"{finding['id']} / {finding['package']} 命中 {ev['jar_path']} 内嵌副本 "
+            f"{ev['vulnerable_copy']}（shaded {ev['shaded_prefix']}），"
+            f"声明依赖已解析到修复版；到期 {entry['expires']}"
+        )
+
     for entry in stale:
         days = _age_days(today, entry["added"]) if entry.get("added") else None
         age_text = f"登记 {days} 天" if days is not None else "登记日期未知"
@@ -361,12 +442,14 @@ def gate(findings: list[dict], baseline: dict[tuple[str, str], dict], today: dt.
             "new": len(new_findings),
             "expired": len(expired),
             "policy": len(policy),
+            "shaded": len(shaded),
             "stale": len(stale),
             "staleAged": len(stale_aged),
         },
         "new": [_serialize_finding(f) for f in new_findings],
         "expired": [dict(_serialize_finding(f), expires=entry["expires"].isoformat()) for f, entry in expired],
         "policy": [_serialize_finding(f) for f, _ in policy],
+        "shaded": [_serialize_finding(f, entry) for f, entry in shaded],
         "stale": [_serialize_entry(e, today) for e in stale],
         "staleAged": [_serialize_entry(e, today) for e in stale_aged],
         "errors": [],
@@ -379,7 +462,13 @@ def gate(findings: list[dict], baseline: dict[tuple[str, str], dict], today: dt.
         )
         return 1, summary
 
-    print("[PASS] 无新增、无到期、无策略违规")
+    if shaded:
+        print(
+            f"[PASS] 无新增、无到期、无策略违规"
+            f"（含 shaded_vendored 例外 {len(shaded)} 条：有修复版但命中来自第三方 jar 内嵌副本，本次不判红）"
+        )
+    else:
+        print("[PASS] 无新增、无到期、无策略违规")
     return 0, summary
 
 

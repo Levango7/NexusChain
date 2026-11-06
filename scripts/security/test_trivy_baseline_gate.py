@@ -188,6 +188,49 @@ CASES = [
         0,
         ["[STALE-AGED]", "已 158 天未命中", "[PASS]"],
     ),
+    (
+        "⑤ shaded_vendored 四件套齐全 → 绿 + [SHADED]（有修复版但来自内嵌副本）",
+        "report-guava-fixed-only.json",
+        "baseline-shaded-vendored.json",
+        0,
+        [
+            "[SHADED] CVE-2026-777777 / com.google.guava:guava",
+            "有修复版 33.7.2",
+            "nacos-client-3.1.1.jar",
+            "33.3.1-android",
+            "到期 2027-01-05",
+            "[PASS]",
+            "shaded_vendored 例外 1 条",
+        ],
+    ),
+    (
+        "⑤ shaded_vendored 缺 jar_sha256 → 退出码 2",
+        "report-guava-fixed-only.json",
+        "baseline-shaded-missing-sha.json",
+        2,
+        ["缺少字段：jar_sha256", "[REJECT]"],
+    ),
+    (
+        "⑤ shaded_vendored 但 package 为通配 * → 退出码 2",
+        "report-guava-fixed-only.json",
+        "baseline-shaded-wildcard-package.json",
+        2,
+        ["含通配符", "[REJECT]"],
+    ),
+    (
+        "⑤ shaded_vendored 到期 → 判红（不再放行）",
+        "report-guava-fixed-only.json",
+        "baseline-shaded-expired.json",
+        1,
+        ["[EXPIRED] CVE-2026-777777", "已于 2026-10-01 到期", "到期 1 条"],
+    ),
+    (
+        "⑤ 同 CVE 换包仍是 [NEW]（shaded 例外不跨包）",
+        "report-guava-two-pkgs.json",
+        "baseline-shaded-vendored.json",
+        1,
+        ["[NEW] CVE-2026-777777 / nacos-client", "[SHADED] CVE-2026-777777 / com.google.guava:guava"],
+    ),
 ]
 
 # (名称, 报告, 基线, 不允许出现的片段)

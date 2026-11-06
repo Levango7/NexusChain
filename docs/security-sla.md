@@ -195,6 +195,13 @@ CI 扫描发现漏洞
 - **Trivy 报出 `FixedVersion` 一律拒收**（退出码 1）：`fixable: not-applicable`
   只在**该二元组本身确实无修复版**时成立，且必须写 `evidence`，最长有效期
   **90 天**；同一 CVE 在别的包有修复版会作为独立 finding 各自判定；
+- **唯一有界例外 `kind: shaded_vendored`**（2026-11-06 新增）：语义是「有修复版，
+  但命中来自第三方 jar 的内嵌（relocated）副本，本仓库无法替换」。必须填齐四件套
+  `evidence`：`jar_path` / `jar_sha256` / `vulnerable_copy` + `shaded_prefix` /
+  `declared_dependency_fixed` + `upstream_max_version`，缺任一 → 退出码 2；
+  `package` 仍必须是精确 `PkgName`（通配照旧拒收）；最长有效期 **90 天**，到期
+  再次命中即判红。命中时门禁强制打印 `[SHADED]`，并在 `[PASS]` 行申明例外条数
+  （不静默通过）。该例外不跨包：别的包上的同一 CVE 仍按 `[NEW]` 独立判红；
 - 普通条目最长有效期 **180 天**；
 - 新增项：扫到但未登记 → 判红，且 `::error::` 里带 CVE / 包 / 受影响 target。
 
