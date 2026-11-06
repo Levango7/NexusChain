@@ -25,12 +25,22 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
+import os
 import re
 import sys
 
 STALE_MESSAGE = "Trivy 漏洞库过期，无法保证结论有效性"
 DEFAULT_MAX_AGE_DAYS = 7
+
+
+def _sha256(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def _load(path: str):
@@ -69,6 +79,12 @@ def main() -> int:
         "--now",
         default=None,
         help="覆盖当前 UTC 时间（ISO），仅用于测试",
+    )
+    parser.add_argument(
+        "--fingerprint-out",
+        default=None,
+        help="可选：把本次下载的 DB 身份（metadata 字段 + trivy.db sha256）写成 JSON，"
+        "供门禁步交叉校验「门禁结论基于哪份库」",
     )
     args = parser.parse_args()
 
@@ -117,6 +133,26 @@ def main() -> int:
         return 1
 
     print(f"[DB-OK] Trivy 漏洞库新鲜（{age_days:.2f} 天 <= {args.max_age_days} 天）")
+
+    if args.fingerprint_out:
+        db_path = os.path.join(os.path.dirname(os.path.abspath(args.metadata)), "trivy.db")
+        try:
+            sha256 = _sha256(db_path)
+        except OSError as e:
+            print(f"[DB-STALE] {STALE_MESSAGE}：无法对 DB 文件取指纹 {db_path}（{e}）")
+            print(f"::error title=Trivy 漏洞库不可绑定::{STALE_MESSAGE}（DB 文件不可读）")
+            return 2
+        fingerprint = {
+            "Version": meta.get("Version"),
+            "UpdatedAt": meta.get("UpdatedAt"),
+            "NextUpdate": meta.get("NextUpdate"),
+            "dbSha256": sha256,
+        }
+        with open(args.fingerprint_out, "w", encoding="utf-8") as f:
+            json.dump(fingerprint, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+        print(f"[DB] DB 指纹 sha256={sha256}（已写入 {args.fingerprint_out}）")
+
     return 0
 
 
