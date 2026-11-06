@@ -618,12 +618,14 @@ jobs:
       - name: Trivy 按 digest 扫描（原始 JSON，不套豁免）
         id: trivy
         continue-on-error: true   # 扫描失败不判红：信号转成 summary 缺失，由 triage 报 issue
-        uses: aquasecurity/trivy-action@b2933f565dbc598b29947660e66259e3c7bc8561  # v0.20.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         env:
           # trivy 直连 registry 拉取（本 job 没有 build 出来的本地镜像可扫）
           TRIVY_USERNAME: ${{ github.actor }}
           TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
         with:
+          # trivy 版本锁定（不用浮动 tag）；发布后 digest 扫描为独立取证步，不占用门禁 DB 缓存
+          version: v0.76.2
           image-ref: ${{ steps.ref.outputs.image }}
           format: json
           output: trivy-release-${{ matrix.module }}.json

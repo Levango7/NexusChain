@@ -6,7 +6,8 @@
       "package": "*",
       "kind": "shaded_vendored",
       "reason": "用通配实现全局豁免，应被拒收",
-      "expires": "2027-01-05",
+      "expires": "2027-02-04",
+      "addedAt": "2026-11-06",
       "evidence": {
         "jar_path": "nacos-client-3.1.1.jar",
         "jar_sha256": "08bc00766deb3a5044e1e16561ac49df74f397ca268ee6ef2f84a3317485c6c1",

@@ -7,9 +7,12 @@
     「纯 CVE 编号」匹配，于是 A 包里登记一条 not-applicable 会顺带豁免 B 包里
     的同一条 CVE（实测 CVE-2026-102554：nacos 内嵌副本的豁免吞掉了
     com.google.guava:guava 上的真实修复版），豁免机制整体失效；
-  * 基线条目必填 CVE 编号 / 包名 / 存在理由 / 到期日，缺到期日直接拒收；
-    package 为空或含通配符（`*` / `?` / any / all）一律拒收，不允许用通配实现
-    「全局豁免」；
+  * 基线条目必填 CVE 编号 / 包名 / 存在理由 / 登记日 addedAt / 到期日，缺任一项
+    直接拒收；package 为空或含通配符（`*` / `?` / any / all）一律拒收，不允许用
+    通配实现「全局豁免」；
+  * **有效期只从 addedAt 起算**：`expires == addedAt + 90 天`，与运行当天是哪一天
+    无关。此前按「expires - 今天 <= 上限」判定，导致同一份配置在东八区清晨（UTC
+    仍是前一天）会多算 1 天、以退出码 2 全体拒收——结论随运行时刻漂移，已废弃；
   * 到期条目一旦再次命中即判红（不允许无到期的永久豁免）；
   * Trivy 报出可用修复版（FixedVersion）时一律拒收。`fixable=not-applicable`
     也只在该二元组**本身无修复版**时成立；同一 CVE 在别的包有修复版会作为独立
@@ -41,9 +44,10 @@ import sys
 
 SEVERITY_RANK = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4, "UNKNOWN": 0}
 
-# 普通基线条目最长有效期；not-applicable 与 shaded_vendored 收紧到 90 天
-MAX_HORIZON_DAYS = 180
-MAX_HORIZON_DAYS_FIX_EXCEPTION = 90
+# 有效期固定为「登记日 + 90 天」，所有 kind 一视同仁。
+# 判定只依赖 addedAt（确定性），不再依赖运行当天，避免「同一份基线换个 UTC
+# 日期就以退出码 2 全体拒收」。
+VALIDITY_DAYS = 90
 
 # kind 取值：default（普通条目）/ not-applicable（该二元组无修复版）/ shaded_vendored
 KINDS = ("default", "not-applicable", "shaded_vendored")
@@ -179,7 +183,7 @@ def _shaded_evidence_rejection(evidence) -> str | None:
     return None
 
 
-def load_baseline(path: str, today: dt.date) -> tuple[dict[tuple[str, str], dict], list[str]]:
+def load_baseline(path: str) -> tuple[dict[tuple[str, str], dict], list[str]]:
     """读取并校验基线；任何不合规条目都进 errors（调用方以退出码 2 拒收）。"""
     errors: list[str] = []
     try:
@@ -250,26 +254,25 @@ def load_baseline(path: str, today: dt.date) -> tuple[dict[tuple[str, str], dict
             if fixable == "not-applicable" and not str(evidence).strip():
                 errors.append(f"{where} fixable=not-applicable 必须填写 evidence（说明修复版为何不适用）")
 
-        # addedAt 可选：登记进基线的日期，用于「长期未命中」复核提示（只提示、不判红）。
-        # 缺失时不报错（历史条目不强制回填），但也就无法计算 stale 天数。
+        # addedAt 必填：有效期只按登记日 + 90 天计算，缺登记日就无法做确定性校验。
         added_raw = str(entry.get("addedAt") or "").strip()
         added = None
-        if added_raw:
+        if not added_raw:
+            errors.append(
+                f"{where} 缺少 addedAt（有效期必须从登记日 addedAt 起算：expires = addedAt + {VALIDITY_DAYS} 天）"
+            )
+        else:
             try:
                 added = dt.date.fromisoformat(added_raw)
             except ValueError:
                 errors.append(f"{where} addedAt 不是 ISO 日期（YYYY-MM-DD）：{added_raw}")
 
-        if expires:
-            horizon = (
-                MAX_HORIZON_DAYS_FIX_EXCEPTION
-                if kind in ("not-applicable", "shaded_vendored") or fixable == "not-applicable"
-                else MAX_HORIZON_DAYS
-            )
-            if (expires - today).days > horizon:
+        if expires and added:
+            expected = added + dt.timedelta(days=VALIDITY_DAYS)
+            if expires != expected:
                 errors.append(
-                    f"{where} expires={expires} 超出最长有效期 {horizon} 天"
-                    f"（kind={kind}），请缩短复核周期"
+                    f"{where} expires={expires} 与 addedAt={added} + {VALIDITY_DAYS} 天 = {expected} 不一致"
+                    f"（有效期只按登记日起算，与运行当天无关；超出或缩短都必须重新取证）"
                 )
 
         key = (vuln_id, pkg)
@@ -324,6 +327,26 @@ def _serialize_entry(entry: dict, today: dt.date) -> dict:
         "addedAt": entry["added"].isoformat() if entry.get("added") else None,
         "staleDays": stale_days,
     }
+
+
+def _print_db_metadata(path: str) -> None:
+    """把本次结论所依据的 Trivy 漏洞库版本/更新时间打进门禁日志。
+
+    新鲜度断言（>7 天判红）在扫描前由 trivy-db-freshness.py 完成；这里只做
+    「结论基于哪一天的库」的可核对留痕，读不到时降级为 WARN，不影响判定。
+    """
+    try:
+        meta = _load_json(path)
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        print(f"[WARN] 无法读取 Trivy DB 元数据：{path}（{e}）")
+        return
+    if not isinstance(meta, dict):
+        print(f"[WARN] Trivy DB 元数据格式不可识别：{path}")
+        return
+    print(
+        f"[DB] 本次门禁结论基于 Trivy 漏洞库：Version={meta.get('Version')} "
+        f"UpdatedAt={meta.get('UpdatedAt')} NextUpdate={meta.get('NextUpdate')}"
+    )
 
 
 def gate(findings: list[dict], baseline: dict[tuple[str, str], dict], today: dt.date) -> tuple[int, dict]:
@@ -504,20 +527,21 @@ def main() -> int:
         default=None,
         help="可选：把门禁结论写成机器可读 JSON（供发布后 digest 扫描等下游消费）",
     )
+    parser.add_argument(
+        "--db-metadata",
+        default=None,
+        help="可选：Trivy DB 的 metadata.json，用于在门禁日志里声明结论所依据的库版本/更新时间",
+    )
     args = parser.parse_args()
 
-    # 基准日期显式取 **UTC**，不用本地日期：
-    # GitHub runner 的时区是 UTC，而开发者本机（本仓为东八区）比 UTC 早 8 小时，
-    # 于是「本机看到今天，CI 上还是昨天」。若用本地日期做「有效期上限」校验，
-    # 同一份基线会在 CI 上多算 1 天而被 `MAX_HORIZON_DAYS_FIX_EXCEPTION` 误判
-    # 越界、以退出码 2 永久拒收（本 PR 第一次跑 CI 就踩到了：
-    # entries[10](CVE-2026-102554) expires=2027-02-04 超出 90 天）。
-    # 固定 UTC 让 CI 与本地结论一致、可复现；副作用是到期判定最多晚 1 天（可接受，
-    # 到期复核本就是人工动作）。基线到期日请按 UTC 计算，并留 1 天余量。
+    # 基准日期显式取 **UTC**（GitHub runner 就是 UTC，本机东八区比 UTC 早 8 小时）。
+    # 有效期上限已改为「addedAt + 90 天」的确定性校验，与 today 无关；today 现在
+    # 只用于两件事：① 到期判定（today > expires 即到期，这是真实时间事件）；
+    # ② stale/长期未命中的天数展示。两者都不再影响配置是否被拒收。
     today = dt.date.fromisoformat(args.today) if args.today else dt.datetime.now(dt.timezone.utc).date()
     threshold_rank = SEVERITY_RANK[args.min_severity]
 
-    baseline, baseline_errors = load_baseline(args.baseline, today)
+    baseline, baseline_errors = load_baseline(args.baseline)
     findings, report_errors = collect_findings(args.report, threshold_rank)
 
     errors = baseline_errors + report_errors
@@ -534,6 +558,9 @@ def main() -> int:
             "stale": [], "staleAged": [], "errors": errors,
         })
         return 2
+
+    if args.db_metadata:
+        _print_db_metadata(args.db_metadata)
 
     code, summary = gate(findings, baseline, today)
     _write_summary(args.summary_json, summary)

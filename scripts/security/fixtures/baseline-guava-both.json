@@ -7,14 +7,16 @@
       "reason": "命中的是 nacos-client jar 内 relocated 的 guava 副本，上游未重打包前无法替换",
       "fixable": "not-applicable",
       "evidence": "nacos-client 通过 relocated 副本自带 guava，升级依赖不会替换该副本",
-      "expires": "2027-01-05"
+      "expires": "2027-01-05",
+      "addedAt": "2026-10-07"
     },
     {
       "id": "CVE-2026-777777",
       "package": "com.google.guava:guava",
       "reason": "误把同一 CVE 在应用自身 guava 上的命中一起登记（应当升级而不是豁免）",
       "fixable": "none",
-      "expires": "2027-01-05"
+      "expires": "2027-01-05",
+      "addedAt": "2026-10-07"
     }
   ]
 }

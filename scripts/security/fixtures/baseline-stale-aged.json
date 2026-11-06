@@ -6,7 +6,7 @@
       "package": "libexpat1",
       "reason": "演示：登记超过 90 天且本次未命中",
       "fixable": "none",
-      "expires": "2027-02-04",
+      "expires": "2026-08-30",
       "addedAt": "2026-06-01"
     }
   ]

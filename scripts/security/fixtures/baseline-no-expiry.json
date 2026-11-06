@@ -5,7 +5,8 @@
       "id": "CVE-2026-113351",
       "package": "libexpat1",
       "reason": "上游无修复版，XML 解析入口不对外",
-      "fixable": "none"
+      "fixable": "none",
+      "addedAt": "2026-11-06"
     }
   ]
 }

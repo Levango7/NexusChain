@@ -6,7 +6,8 @@
       "package": "libssl3t64",
       "reason": "想直接豁免（策略上不允许：Trivy 报出可用修复版）",
       "fixable": "none",
-      "expires": "2027-01-05"
+      "expires": "2027-01-05",
+      "addedAt": "2026-10-07"
     }
   ]
 }

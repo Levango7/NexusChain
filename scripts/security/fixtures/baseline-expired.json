@@ -6,7 +6,8 @@
       "package": "libexpat1",
       "reason": "上游无修复版，XML 解析入口不对外",
       "fixable": "none",
-      "expires": "2026-10-01"
+      "expires": "2026-10-01",
+      "addedAt": "2026-07-03"
     }
   ]
 }

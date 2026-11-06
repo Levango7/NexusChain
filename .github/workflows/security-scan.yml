@@ -56,10 +56,29 @@ jobs:
       - name: Checkout 代码
         uses: actions/checkout@v5
 
+      - name: 安装固定版本 Trivy（v0.76.2）
+        # 与后续 trivy-action step 共用同一个二进制；版本锁定，不用浮动 tag。
+        uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514  # v0.2.6
+        with:
+          version: v0.76.2
+          cache: false
+
+      - name: 刷新 Trivy 漏洞库并断言新鲜度（超过 7 天直接判红）
+        # 失明必须以红灯表现：每次运行都强制下载最新 DB，并读出 UpdatedAt/Version。
+        # DB 超过 7 天 → 本 step 失败，消息含「Trivy 漏洞库过期，无法保证结论有效性」。
+        run: |
+          trivy --version
+          trivy image --download-db-only --no-progress --cache-dir "$GITHUB_WORKSPACE/.cache/trivy"
+          python3 scripts/security/trivy-db-freshness.py \
+            --metadata "$GITHUB_WORKSPACE/.cache/trivy/db/metadata.json" \
+            --max-age-days 7
+
       - name: Trivy fs 扫描 → SARIF（全量漏洞，不阻断）
-        # 钉 commit sha 提升供应链安全（v0.20.0 → b2933f565dbc598b29947660e66259e3c7bc8561）
+        # 钉 commit sha 提升供应链安全（v0.36.0 → ed142fd0673e97e23eac54620cfb913e5ce36c25）
+        # trivy 版本在每个 step 的 with.version 锁定为 v0.76.2（不用浮动 tag）；
+        # 展示/分诊步复用 DB 缓存；强制刷新只在门禁步（cache: false）。
         # 更新策略：随依赖升级一并更新，需安全负责人审批
-        uses: aquasecurity/trivy-action@b2933f565dbc598b29947660e66259e3c7bc8561  # v0.20.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
           scan-type: fs
           scan-ref: .
@@ -70,6 +89,8 @@ jobs:
           # Docker 扫描 job 的 SARIF 步早已带此参数，属遗漏对齐）。
           trivyignores: .trivyignore
           format: sarif
+          version: v0.76.2
+          skip-setup-trivy: 'true'
           output: trivy-fs-results.sarif
           exit-code: 0
 
@@ -80,9 +101,11 @@ jobs:
           category: trivy-fs
 
       - name: Trivy fs 扫描 → JSON（用于 issue 分诊）
-        # 钉 commit sha 提升供应链安全（v0.20.0 → b2933f565dbc598b29947660e66259e3c7bc8561）
+        # 钉 commit sha 提升供应链安全（v0.36.0 → ed142fd0673e97e23eac54620cfb913e5ce36c25）
+        # trivy 版本在每个 step 的 with.version 锁定为 v0.76.2（不用浮动 tag）；
+        # 展示/分诊步复用 DB 缓存；强制刷新只在门禁步（cache: false）。
         # 更新策略：随依赖升级一并更新，需安全负责人审批
-        uses: aquasecurity/trivy-action@b2933f565dbc598b29947660e66259e3c7bc8561  # v0.20.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
           scan-type: fs
           scan-ref: .
@@ -91,19 +114,25 @@ jobs:
           # 2026-10-18：与阻断步对齐豁免白名单（分诊 JSON 应与阻断判定同口径）。
           trivyignores: .trivyignore
           format: json
+          version: v0.76.2
+          skip-setup-trivy: 'true'
           output: trivy-fs-results.json
           exit-code: 0
 
       # === SCA: CycloneDX SBOM 产出（P2-T7） ===
       # 生成 CycloneDX 格式的软件物料清单（SBOM），用于依赖合规审计与漏洞追踪
       - name: Trivy 生成 CycloneDX SBOM
-        # 钉 commit sha 提升供应链安全（v0.20.0 → b2933f565dbc598b29947660e66259e3c7bc8561）
+        # 钉 commit sha 提升供应链安全（v0.36.0 → ed142fd0673e97e23eac54620cfb913e5ce36c25）
+        # trivy 版本在每个 step 的 with.version 锁定为 v0.76.2（不用浮动 tag）；
+        # 展示/分诊步复用 DB 缓存；强制刷新只在门禁步（cache: false）。
         # 更新策略：随依赖升级一并更新，需安全负责人审批
-        uses: aquasecurity/trivy-action@b2933f565dbc598b29947660e66259e3c7bc8561  # v0.20.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
           scan-type: fs
           scan-ref: .
           skip-dirs: build,out,target,.gradle,gradle,node_modules,jdk17,jdk-provision,.codeartsdoer
+          version: v0.76.2
+          skip-setup-trivy: 'true'
           format: cyclonedx
           output: sbom-cyclonedx.json
           exit-code: 0
@@ -127,9 +156,11 @@ jobs:
       # 注意：上面 SARIF/JSON/分诊三步仍带 .trivyignore（那是「展示与告警口径」，
       # 与「阻断口径」是两件事，不要合并）。
       - name: Trivy fs 扫描 → 原始 JSON（不套豁免，供基线差分）
-        # 钉 commit sha 提升供应链安全（v0.20.0 → b2933f565dbc598b29947660e66259e3c7bc8561）
+        # 钉 commit sha 提升供应链安全（v0.36.0 → ed142fd0673e97e23eac54620cfb913e5ce36c25）
+        # trivy 版本在每个 step 的 with.version 锁定为 v0.76.2（不用浮动 tag）；
+        # cache: false 确保每次运行都重新下载 DB（失明必须表现为红，而不是绿）。
         # 更新策略：随依赖升级一并更新，需安全负责人审批
-        uses: aquasecurity/trivy-action@b2933f565dbc598b29947660e66259e3c7bc8561  # v0.20.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
           scan-type: fs
           scan-ref: .
@@ -140,6 +171,9 @@ jobs:
           # 不传参数 ≠ 不豁免（实证见 .github/trivyignore-empty 文件头）。
           trivyignores: .github/trivyignore-empty
           format: json
+          version: v0.76.2
+          cache: 'false'
+          skip-setup-trivy: 'true'
           output: trivy-fs-gate.json
           exit-code: 0
 
@@ -155,7 +189,8 @@ jobs:
         run: |
           python3 scripts/security/trivy-baseline-gate.py \
             --baseline config/trivy-baseline.json \
-            --report trivy-fs-gate.json
+            --report trivy-fs-gate.json \
+            --db-metadata "$GITHUB_WORKSPACE/.cache/trivy/db/metadata.json"
 
   # ============================================================
   # 2-0. 镜像扫描范围（**PR 路径过滤**，2026-11-06 E1 收尾）
@@ -240,6 +275,23 @@ jobs:
       - name: Checkout 代码
         uses: actions/checkout@v5
 
+      - name: 安装固定版本 Trivy（v0.76.2）
+        # 与后续 trivy-action step 共用同一个二进制；版本锁定，不用浮动 tag。
+        uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514  # v0.2.6
+        with:
+          version: v0.76.2
+          cache: false
+
+      - name: 刷新 Trivy 漏洞库并断言新鲜度（超过 7 天直接判红）
+        # 失明必须以红灯表现：每次运行都强制下载最新 DB，并读出 UpdatedAt/Version。
+        # DB 超过 7 天 → 本 step 失败，消息含「Trivy 漏洞库过期，无法保证结论有效性」。
+        run: |
+          trivy --version
+          trivy image --download-db-only --no-progress --cache-dir "$GITHUB_WORKSPACE/.cache/trivy"
+          python3 scripts/security/trivy-db-freshness.py \
+            --metadata "$GITHUB_WORKSPACE/.cache/trivy/db/metadata.json" \
+            --max-age-days 7
+
       - name: 构建 Docker 镜像（仅用于扫描，不推送）
         # 所有模块统一用 repo 根目录作构建上下文（-f 指定 Dockerfile 路径）。
         # Java 模块需根级 gradlew/build.gradle/project() 依赖；
@@ -264,13 +316,17 @@ jobs:
           exit 1
 
       - name: Trivy 镜像扫描 → SARIF
-        # 钉 commit sha 提升供应链安全（v0.20.0 → b2933f565dbc598b29947660e66259e3c7bc8561）
+        # 钉 commit sha 提升供应链安全（v0.36.0 → ed142fd0673e97e23eac54620cfb913e5ce36c25）
+        # trivy 版本在每个 step 的 with.version 锁定为 v0.76.2（不用浮动 tag）；
+        # 展示/分诊步复用 DB 缓存；强制刷新只在门禁步（cache: false）。
         # 更新策略：随依赖升级一并更新，需安全负责人审批
-        uses: aquasecurity/trivy-action@b2933f565dbc598b29947660e66259e3c7bc8561  # v0.20.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
           image-ref: ${{ matrix.module }}:scan
           severity: CRITICAL,HIGH,MEDIUM,LOW
           format: sarif
+          version: v0.76.2
+          skip-setup-trivy: 'true'
           output: trivy-docker-${{ matrix.module }}.sarif
           trivyignores: .trivyignore
           exit-code: 0
@@ -287,13 +343,17 @@ jobs:
         # severity 收齐四档使分诊脚本能按 min-severity 过滤；trivyignores 与
         # SARIF/阻断步同口径（已按政策豁免的 CVE 不应再进分诊队列）。
         # 成本代价：每矩阵腿多一次扫描（+~1.5min），timeout 30min 充裕（原峰值 5.5min）。
-        # 钉 commit sha 提升供应链安全（v0.20.0 → b2933f565dbc598b29947660e66259e3c7bc8561）
+        # 钉 commit sha 提升供应链安全（v0.36.0 → ed142fd0673e97e23eac54620cfb913e5ce36c25）
+        # trivy 版本在每个 step 的 with.version 锁定为 v0.76.2（不用浮动 tag）；
+        # 展示/分诊步复用 DB 缓存；强制刷新只在门禁步（cache: false）。
         # 更新策略：随依赖升级一并更新，需安全负责人审批
-        uses: aquasecurity/trivy-action@b2933f565dbc598b29947660e66259e3c7bc8561  # v0.20.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
           image-ref: ${{ matrix.module }}:scan
           severity: CRITICAL,HIGH,MEDIUM,LOW
           format: json
+          version: v0.76.2
+          skip-setup-trivy: 'true'
           output: trivy-docker-${{ matrix.module }}.json
           trivyignores: .trivyignore
           exit-code: 0
@@ -312,13 +372,18 @@ jobs:
       - name: Trivy 镜像扫描 → 原始 JSON（不套豁免，供基线差分）
         # 关键：显式指向空豁免清单。Trivy 会从工作目录自动发现 .trivyignore，
         # 不传参数 ≠ 不豁免（实证见 .github/trivyignore-empty 文件头）。
-        # 钉 commit sha 提升供应链安全（v0.20.0 → b2933f565dbc598b29947660e66259e3c7bc8561）
+        # 钉 commit sha 提升供应链安全（v0.36.0 → ed142fd0673e97e23eac54620cfb913e5ce36c25）
+        # trivy 版本在每个 step 的 with.version 锁定为 v0.76.2（不用浮动 tag）；
+        # cache: false 确保每次运行都重新下载 DB（失明必须表现为红，而不是绿）。
         # 更新策略：随依赖升级一并更新，需安全负责人审批
-        uses: aquasecurity/trivy-action@b2933f565dbc598b29947660e66259e3c7bc8561  # v0.20.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
           image-ref: ${{ matrix.module }}:scan
           severity: CRITICAL,HIGH
           format: json
+          version: v0.76.2
+          cache: 'false'
+          skip-setup-trivy: 'true'
           output: trivy-gate-${{ matrix.module }}.json
           trivyignores: .github/trivyignore-empty
           exit-code: 0
@@ -333,7 +398,8 @@ jobs:
         run: |
           python3 scripts/security/trivy-baseline-gate.py \
             --baseline config/trivy-baseline.json \
-            --report trivy-gate-${{ matrix.module }}.json
+            --report trivy-gate-${{ matrix.module }}.json \
+            --db-metadata "$GITHUB_WORKSPACE/.cache/trivy/db/metadata.json"
 
   # ============================================================
   # 2a. 镜像基线门禁聚合（**PR 阻断路径的唯一收口点**，E1，2026-11-06）
@@ -427,10 +493,14 @@ jobs:
       - name: Trivy 扫描上游浮动镜像 node:24-alpine → JSON（不阻断）
         # vuln-type 取 os,library：本 job 就是要看**上游镜像本体**（含它自带的 npm
         # 依赖树），这正是 PR 门禁不该承担的信号。
-        # 钉 commit sha 提升供应链安全（v0.20.0 → b2933f565dbc598b29947660e66259e3c7bc8561）
+        # 钉 commit sha 提升供应链安全（v0.36.0 → ed142fd0673e97e23eac54620cfb913e5ce36c25）
+        # trivy 版本在每个 step 的 with.version 锁定为 v0.76.2（不用浮动 tag）；
+        # cache: false 确保每次运行都重新下载 DB（失明必须表现为红，而不是绿）。
         # 更新策略：随依赖升级一并更新，需安全负责人审批
-        uses: aquasecurity/trivy-action@b2933f565dbc598b29947660e66259e3c7bc8561  # v0.20.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
+          version: v0.76.2
+          cache: 'false'
           image-ref: node:24-alpine
           severity: CRITICAL,HIGH
           vuln-type: os,library
@@ -504,12 +574,14 @@ jobs:
         # 不出现，白名单外的同镜像 CVE 正常出现），否则复核永远只能判 B 类。
         # 不用 $RUNNER_TEMP：trivy-action 在容器内执行、宿主路径原样传参，
         # 容器里找不到该文件（2026-11-02 实测 cannot find ignorefile）。
-        uses: aquasecurity/trivy-action@b2933f565dbc598b29947660e66259e3c7bc8561  # v0.20.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
           image-ref: gcr.io/distroless/java17-debian13:nonroot
           severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
           trivyignores: .github/trivyignore-empty
           format: json
+          version: v0.76.2
+          cache: 'false'
           output: trivy-staleness-java17-debian13.json
           exit-code: 0
 
@@ -519,12 +591,14 @@ jobs:
         # zk 在其后的降权改造中改为 :nonroot 变体——变体只改运行 UID，OS 包层相同，
         # 故这里按 OS 层扫一次即可。
         # 换基础镜像时必须同步改本行，否则复核会对着已弃用的镜像判 B 类。
-        uses: aquasecurity/trivy-action@b2933f565dbc598b29947660e66259e3c7bc8561  # v0.20.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
           image-ref: gcr.io/distroless/cc-debian13
           severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
           trivyignores: .github/trivyignore-empty
           format: json
+          version: v0.76.2
+          cache: 'false'
           output: trivy-staleness-cc-debian13.json
           exit-code: 0
 

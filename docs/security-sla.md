@@ -179,11 +179,25 @@ CI 扫描发现漏洞
 `Dockerfile` 不改变被扫对象，上游也还没发布打补丁的 tag —— 它是**永远红**的，
 放在 PR 门禁里等于让所有 PR 永久无法合并（已用 issue #495 跟踪）。
 
+**扫描器有效性（2026-11-06）**：门禁结论只有在 Trivy 漏洞库足够新时才可信。
+`security-scan.yml` 把 trivy 锁定为 `v0.76.2`（action 钉 commit SHA，不使用浮动 tag），
+并在 fs / docker 两个门禁 job 的扫描前显式执行
+`trivy image --download-db-only` + `scripts/security/trivy-db-freshness.py`：
+打印 DB 的 `Version` / `UpdatedAt`，若 `UpdatedAt` 距今超过 **7 天** 则 job 直接失败，
+消息为「Trivy 漏洞库过期，无法保证结论有效性」。门禁步还会在判定日志里再次打印
+`[DB] 本次门禁结论基于 Trivy 漏洞库：Version=… UpdatedAt=… NextUpdate=…`。
+原则：**失明必须表现为红，不能表现为绿**。
+
 **基线差分语义**（`scripts/security/trivy-baseline-gate.py`）：
 
 - 已知项必须登记在 `config/trivy-baseline.json`，每条必填
-  `id`（CVE 编号）/ `package`（精确包名）/ `reason`（存在理由）/ `expires`（到期日）；
-  可选 `addedAt`（登记日，用于 4.5 的 90 天「长期未命中」复核提示）；
+  `id`（CVE 编号）/ `package`（精确包名）/ `reason`（存在理由）/ `addedAt`（登记日）/
+  `expires`（到期日）；
+- **有效期只从 `addedAt` 起算（2026-11-06 起）**：`expires` 必须精确等于
+  `addedAt + 90 天`（日历日算法，跨闰年/月末由 `date + timedelta` 处理），
+  与运行当天是哪一天无关；不相等一律退出码 2 拒收。此前按
+  「`expires - 今天 <= 上限`」判定，同一份配置在 UTC 跨日时会多算 1 天而全体拒收，
+  结论随运行时刻漂移，已废弃；
 - **按 (CVE 编号, 包名) 二元组严格匹配**（2026-11-06 修正）：同一 CVE 换到别的包
   就是另一条 finding，必须单独登记；A 包里的条目不覆盖 B 包。此前按纯 CVE 编号
   匹配，`CVE-2026-102554` 的 nacos 内嵌副本豁免因此顺带吞掉了
@@ -193,25 +207,25 @@ CI 扫描发现漏洞
 - **不允许无到期日的永久豁免**：缺 `expires` 直接拒收（退出码 2）；
 - **到期即红**：`today > expires` 且该条目仍被扫到 → 判红（退出码 1）；
 - **Trivy 报出 `FixedVersion` 一律拒收**（退出码 1）：`fixable: not-applicable`
-  只在**该二元组本身确实无修复版**时成立，且必须写 `evidence`，最长有效期
-  **90 天**；同一 CVE 在别的包有修复版会作为独立 finding 各自判定；
+  只在**该二元组本身确实无修复版**时成立，且必须写 `evidence`；同一 CVE 在别的包
+  有修复版会作为独立 finding 各自判定；
 - **唯一有界例外 `kind: shaded_vendored`**（2026-11-06 新增）：语义是「有修复版，
   但命中来自第三方 jar 的内嵌（relocated）副本，本仓库无法替换」。必须填齐四件套
   `evidence`：`jar_path` / `jar_sha256` / `vulnerable_copy` + `shaded_prefix` /
   `declared_dependency_fixed` + `upstream_max_version`，缺任一 → 退出码 2；
-  `package` 仍必须是精确 `PkgName`（通配照旧拒收）；最长有效期 **90 天**，到期
-  再次命中即判红。命中时门禁强制打印 `[SHADED]`，并在 `[PASS]` 行申明例外条数
-  （不静默通过）。该例外不跨包：别的包上的同一 CVE 仍按 `[NEW]` 独立判红；
-- 普通条目最长有效期 **180 天**；
+  `package` 仍必须是精确 `PkgName`（通配照旧拒收），到期再次命中即判红。命中时
+  门禁强制打印 `[SHADED]`，并在 `[PASS]` 行申明例外条数（不静默通过）。该例外
+  不跨包：别的包上的同一 CVE 仍按 `[NEW]` 独立判红；
+- 所有 kind 的有效期上限统一为 **90 天**（`addedAt + 90`）；
 - 新增项：扫到但未登记 → 判红，且 `::error::` 里带 CVE / 包 / 受影响 target。
 
 **新增漏洞的处理顺序**：先尝试升级消除 → 若上游确无修复版，登记基线并写明理由与
-到期日（≤180 天）→ 到期前必须重新评估（升级 / 换基础镜像 / 重新论证暴露面）。
+到期日（`addedAt + 90 天`）→ 到期前必须重新评估（升级 / 换基础镜像 / 重新论证暴露面）。
 
 ### 4.5 基线的续期与到期
 
 - 到期日不要「顺手往后改」。到期意味着**必须重新取证**：确认上游是否仍未发布修复版、
-  暴露面论证是否仍成立，再决定续期（≤180 天）或改走修复。
+  暴露面论证是否仍成立，再决定续期（按新的 `addedAt` 重算 `+90 天`）或改走修复。
 - 门禁每次运行都会打印 `[STALE]`（基线条目本次未命中，可删）——不是红，但需要人看；
   `[POLICY]`（该二元组报出修复版却登记了基线）不再是 warning，直接判红。
 - **长期未命中复核（2026-11-06）**：条目登记日（`addedAt`）距今 **≥ 90 天**且本次仍未命中，
