@@ -151,6 +151,27 @@ CASES = [
         ["[PASS]", "基线命中 1 条"],
     ),
     (
+        "④ fixable=none 命中必须在日志打印 [NOFIX]（不可静默通过）",
+        "report-no-fix-only.json",
+        "baseline-nofix.json",
+        0,
+        ["[NOFIX] CVE-2026-999001 / libssl3t64", "含无修复版登记 1 条", "[PASS]"],
+    ),
+    (
+        "⑤ fixable=none 的 expires 若为 addedAt+91 → 退出码 2",
+        "report-no-fix-only.json",
+        "baseline-nofix-over90.json",
+        2,
+        ["addedAt=2026-11-06 + 90 天 = 2027-02-04", "不一致", "[REJECT]"],
+    ),
+    (
+        "⑥ fixable=none 但该二元组报出 FixedVersion → 必须判红（nofix 不能当后门）",
+        "report-fixable-only.json",
+        "baseline-nofix.json",
+        1,
+        ["[POLICY] CVE-2026-999001 / libssl3t64", "禁止按普通基线豁免"],
+    ),
+    (
         "④ 同 CVE 两个包都已登记 → 各自独立判定（有修复版的那个仍判红）",
         "report-guava-two-pkgs.json",
         "baseline-guava-both.json",
