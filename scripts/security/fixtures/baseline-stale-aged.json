@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "entries": [
+    {
+      "id": "CVE-2026-113351",
+      "package": "libexpat1",
+      "reason": "演示：登记超过 90 天且本次未命中",
+      "fixable": "none",
+      "expires": "2027-02-04",
+      "addedAt": "2026-06-01"
+    }
+  ]
+}

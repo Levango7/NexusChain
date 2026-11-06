@@ -22,5 +22,7 @@
 >
 > **Deprecated**：品牌残留（CPAY）+ Broadcast 调用不存在的 RPC 方法 +
 > hex 信封解析假设错误。仅为兼容保留源码，请勿新集成；迁移到 `nexus` 包。
+> `Broadcast()` 调用的 `nexus_sendRawTransaction` 在 nexus-core 未注册，
+> **调用必失败**；真实提交路径是 `Wallet.SubmitTransfer`（wallet-service）。
 >
 > 运行测试：`cd nexus-sdk/go && go test ./nexus/`

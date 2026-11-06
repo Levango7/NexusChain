@@ -58,6 +58,23 @@ public class TransactionCheck {
      */
     public static final long MAX_TX_NONCE = Long.MAX_VALUE - 1024;
 
+    /**
+     * 共识层启用的交易类型白名单（P0 修复，2026-11-06）。
+     *
+     * <p>只有下列类型在状态重放（{@code MerkleRule#validateMerkle}、{@code PackageMiner}、
+     * {@code AccountRule}）中存在"余额校验 + 扣手续费 + 写状态"的完整分支：
+     * {@code 0x00–0x03}（coinbase / 转账 / 投票 / 存证）与 {@code 0x09–0x0f}
+     * （孵化 / 提取利息与分享 / 提取本金 / 撤回投票 / 抵押 / 撤回抵押）。</p>
+     *
+     * <p>{@code 0x04–0x08}（多签转账 / 资产定义 / 原子交换）与 {@code 0x10–0x1a}
+     * （支付扩展）没有执行分支。放行会让手续费计入 coinbase 而从不从发送方扣款，
+     * 且状态根不承诺余额，属于不可检测的无限增发（P0 #522）。这套白名单同时被
+     * {@code CoinbaseRule} 用来交叉校验"计入 coinbase 的手续费确实扣过款"。</p>
+     */
+    public static boolean isConsensusEnabledType(int type) {
+        return (type >= 0x00 && type <= 0x03) || (type >= 0x09 && type <= 0x0f);
+    }
+
     @Autowired
     Configuration configuration;
 
@@ -111,16 +128,20 @@ public class TransactionCheck {
             long gasPrice = BigEndian.decodeUint64(gasbyte);
             //gas
             long gas = 0;
-            // 共识门禁（PLAN-014 Phase 3 固化）：type<=15 是当前区块/RPC 的硬边界。
-            // 0x10–0x1a 支付扩展仅有类型定义与 BasicRule 单规则预检，会在此以
-            // "Type check error" 被拒绝（当前不可上链）。放宽此处会改变区块接受语义：
-            // Miner 会为未执行交易给 coinbase 记手续费，而 MerkleRule 对 0x19/0x1a 无 case，
-            // 状态根（仅承诺账户 ID+高度）无法发现——必须走独立共识升级，不能随业务开关调整。
-            if (15 >= type[0] && type[0] >= 0) {
+            // 共识门禁（P0 修复，2026-11-06）：显式白名单取代旧的 15>=type>=0 区间判断。
+            // 只有 0x00–0x03 与 0x09–0x0f 在状态重放（MerkleRule / PackageMiner /
+            // AccountRule）中有"余额校验 + 扣手续费 + 写状态"的完整分支。0x04–0x08
+            // （多签转账/资产定义/原子交换）与 0x10–0x1a（支付扩展）只有类型定义、
+            // 没有执行路径：一旦放行，手续费会被 Miner 计入 coinbase 却从不从发送方
+            // 扣款，而状态根只承诺账户 ID+高度、不承诺余额，形成不可检测的无限增发
+            // （详见 P0 #522）。新增类型必须同时补齐重放与扣款分支后才能加入白名单；
+            // 放宽此处属于共识变更，必须独立升级，不能随业务开关调整。
+            if (isConsensusEnabledType(type[0])) {
                 gas = Transaction.GAS_TABLE[type[0]];
             } else {
                 apiResult.setCode(5000);
-                apiResult.setMessage("Type check error");
+                apiResult.setMessage("Transaction type not enabled: 0x"
+                        + Hex.encodeHexString(type) + " (Type check error)");
                 return apiResult;
             }
             //fee

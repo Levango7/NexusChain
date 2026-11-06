@@ -12,9 +12,11 @@ fixture 中的 Trivy 报告取自 2026-11-05 master 实扫产物
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 GATE = os.path.join(HERE, "trivy-baseline-gate.py")
@@ -22,7 +24,7 @@ FIXTURES = os.path.join(HERE, "fixtures")
 TODAY = "2026-11-06"
 
 
-def run(report: str, baseline: str, today: str = TODAY) -> subprocess.CompletedProcess:
+def run(report: str, baseline: str, today: str = TODAY, extra: list[str] | None = None) -> subprocess.CompletedProcess:
     return subprocess.run(
         [
             sys.executable,
@@ -33,6 +35,7 @@ def run(report: str, baseline: str, today: str = TODAY) -> subprocess.CompletedP
             os.path.join(FIXTURES, report),
             "--today",
             today,
+            *(extra or []),
         ],
         capture_output=True,
         text=True,
@@ -139,12 +142,56 @@ CASES = [
         2,
         ["报告不可读"],
     ),
+    (
+        "stale 超过 90 天给出复核提示（不判红）",
+        "report-clean-empty.json",
+        "baseline-stale-aged.json",
+        0,
+        ["[STALE-AGED]", "已 158 天未命中", "[PASS]"],
+    ),
 ]
+
+# (名称, 报告, 基线, 不允许出现的片段)
+ABSENT_CASES = [
+    (
+        "stale 不足 90 天不出复核提示",
+        "report-clean-empty.json",
+        "baseline-stale-fresh.json",
+        ["[STALE-AGED]"],
+    ),
+]
+
+
+def check_summary_json() -> tuple[bool, str]:
+    """--summary-json 要与文本结论一致（下游 issue 分诊依赖它）。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        out = os.path.join(tmp, "summary.json")
+        result = run(
+            "report-known-plus-new.json",
+            "baseline-known.json",
+            extra=["--summary-json", out],
+        )
+        if result.returncode != 1:
+            return False, f"期望退出码 1，实际 {result.returncode}"
+        try:
+            with open(out, encoding="utf-8") as f:
+                summary = json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            return False, f"summary JSON 不可读：{e}"
+        if summary["counts"]["new"] != 1:
+            return False, f"counts.new 应为 1，实际 {summary['counts']['new']}"
+        if [item["id"] for item in summary["new"]] != ["CVE-2026-999001"]:
+            return False, f"new 列表不符：{summary['new']}"
+        if summary["errors"]:
+            return False, f"errors 应为空：{summary['errors']}"
+        return True, ""
 
 
 def main() -> int:
     failures = 0
+    total = 0
     for name, report, baseline, expected_code, expected_snippets in CASES:
+        total += 1
         result = run(report, baseline)
         output = result.stdout + result.stderr
         missing = [s for s in expected_snippets if s not in output]
@@ -158,8 +205,29 @@ def main() -> int:
             print("  --- 实际输出 ---")
             for line in output.splitlines():
                 print(f"  {line}")
+
+    for name, report, baseline, absent_snippets in ABSENT_CASES:
+        total += 1
+        result = run(report, baseline)
+        output = result.stdout + result.stderr
+        present = [s for s in absent_snippets if s in output]
+        ok = result.returncode == 0 and not present
+        status = "PASS" if ok else "FAIL"
+        print(f"[{status}] {name}（期望退出码 0，实际 {result.returncode}）")
+        if not ok:
+            failures += 1
+            if present:
+                print(f"  不应出现却出现了：{present}")
+
+    total += 1
+    ok, reason = check_summary_json()
+    print(f"[{'PASS' if ok else 'FAIL'}] --summary-json 输出与结论一致")
+    if not ok:
+        failures += 1
+        print(f"  {reason}")
+
     print()
-    print(f"结果：{len(CASES) - failures}/{len(CASES)} 通过")
+    print(f"结果：{total - failures}/{total} 通过")
     return 0 if failures == 0 else 1
 
 
