@@ -84,16 +84,6 @@
       "evidence": "distroless java17 / cc-debian13 实扫 FixedVersion 为空，Status=affected"
     },
     {
-      "id": "CVE-2025-66017",
-      "package": "cggmp21",
-      "scope": "app",
-      "reason": "mpc-engine 使用的 cggmp21 0.6.3 无可用的稳定版修复（仅 alpha 预发布），升级会改变 MPC 协议行为；MPC 端点仅在内网且协议入口有鉴权",
-      "fixable": "none",
-      "expires": "2027-02-04",
-      "addedAt": "2026-11-06",
-      "evidence": "Cargo.lock 与 mpc-engine 镜像实扫均命中，FixedVersion 为空"
-    },
-    {
       "id": "CVE-2026-102554",
       "package": "com.google.guava:guava",
       "scope": "app",
