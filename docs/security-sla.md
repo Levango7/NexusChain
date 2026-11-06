@@ -219,6 +219,12 @@ CI 扫描发现漏洞
   `nexus-wallet-service` → 还需重建 `nexus-core`（其 Dockerfile 运行期 COPY 了这三个模块）；
 - 因此**构建抖动仍可能卡住合并**：单腿耗时随依赖下载与 Runner 负载波动，极端情况下
   门禁会长时间 pending。这是「用真实产物取证」的代价，不用跳过构建来掩盖。
+- **SARIF 上传偶发失败**：个别腿的 `上传 SARIF 到 GitHub Security tab` 会因上传端点
+  5xx / 超时失败，表现为该腿红、聚合门禁跟着红，但扫描结论里并没有 `[NEW]` /
+  `[EXPIRED]` / `[POLICY]`。这类失败直接 `gh run rerun <run-id> --failed` 重跑失败腿
+  即绿（#537 首次 run 就是这样：`nexus-gateway` / `nexus-api-gateway` 两腿上传 SARIF
+  失败，`--failed` 重跑后两腿与聚合门禁全部 success）。**不要**为此改门禁语义或
+  摘掉必需检查。
 
 **基础设施失败的人工处置口径**（仅适用于「不是代码问题」的失败）：
 
