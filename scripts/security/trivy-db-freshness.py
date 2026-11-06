@@ -117,7 +117,7 @@ def main() -> int:
     age_days = (now - updated_at).total_seconds() / 86400
     print(
         f"[DB] Trivy 漏洞库 Version={meta.get('Version')} "
-        f"UpdatedAt={updated_at.isoformat()} NextUpdate={meta.get('NextUpdate')}"
+        f"UpdatedAt={meta.get('UpdatedAt')} NextUpdate={meta.get('NextUpdate')}"
     )
     print(f"[DB] 库龄 {age_days:.2f} 天（阈值 {args.max_age_days} 天，判定时间 {now.isoformat()}）")
 
