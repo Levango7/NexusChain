@@ -60,6 +60,25 @@ public interface ClearingSettlementRecordRepository extends JpaRepository<Cleari
     List<ClearingSettlementRecord> findByBatchNoAndBookingStatus(String batchNo, BookingStatus bookingStatus);
 
     /**
+     * 按清算批次编号 + 记录类型 + 入账状态查询记录。
+     *
+     * <p>2026-11-07 审计修复引入。{@code clearing_settlement_record} 一张表承载多种
+     * {@code recordType}（{@code CLEARING} / {@code SETTLEMENT_TRANSFER} /
+     * {@code RECON_ADJUST} / {@code SUSPENSE_WRITEOFF}），且**共享同一个 batchNo**
+     * （划拨记录由 {@code SettlementTransferService#executeSettlementTransfer}
+     * 用同一个 batchNo 落库）。任何"按批次重试动账"的逻辑都必须先用本方法按
+     * {@code recordType} 收窄 —— 详见
+     * {@code ClearingSettlementService#retryFailedRecords} 的修复说明。</p>
+     *
+     * @param batchNo       清算批次编号
+     * @param recordType    记录类型（用 {@code ClearingSettlementService.RECORD_TYPE_*} 常量）
+     * @param bookingStatus 入账状态
+     * @return 清算结算记录列表
+     */
+    List<ClearingSettlementRecord> findByBatchNoAndRecordTypeAndBookingStatus(
+            String batchNo, String recordType, BookingStatus bookingStatus);
+
+    /**
      * 按记录类型查询记录。
      *
      * @param recordType 记录类型

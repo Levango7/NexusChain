@@ -33,6 +33,9 @@ public class ClearingSettlementService {
 
     private static final Logger log = LoggerFactory.getLogger(ClearingSettlementService.class);
 
+    /** 清算入账记录的类型标识（{@code clearing_settlement_record.record_type}）。 */
+    public static final String RECORD_TYPE_CLEARING = "CLEARING";
+
     private final ClearingSettlementRecordRepository recordRepository;
     private final AccountService accountService;
     private final ApplicationEventPublisher eventPublisher;
@@ -118,7 +121,7 @@ public class ClearingSettlementService {
                                                            ClearingBatchCompletedEvent.MerchantSettlementDetail detail) {
         ClearingSettlementRecord record = new ClearingSettlementRecord();
         record.setRecordNo("CSR" + System.currentTimeMillis() + UUID.randomUUID().toString().replace("-", "").substring(0, 8));
-        record.setRecordType("CLEARING");
+        record.setRecordType(RECORD_TYPE_CLEARING);
         record.setBatchNo(batchNo);
         record.setMerchantId(detail.getMerchantId());
         record.setAmount(detail.getNetAmount());
@@ -157,7 +160,25 @@ public class ClearingSettlementService {
     // === 重试 ===
 
     /**
-     * 重试失败的入账记录。
+     * 重试失败的**清算入账**记录。
+     *
+     * <p><b>2026-11-07 审计修复（重要）</b>：原实现用
+     * {@code findByBatchNoAndBookingStatus(batchNo, FAILED)} 取集，**不带 recordType 过滤**。
+     * 而 {@code clearing_settlement_record} 一表多型（{@code CLEARING} /
+     * {@code SETTLEMENT_TRANSFER} / {@code RECON_ADJUST} / {@code SUSPENSE_WRITEOFF}）
+     * 且共享同一个 batchNo（划拨记录由
+     * {@code SettlementTransferService#executeSettlementTransfer} 用同一 batchNo 落库）。
+     * 于是"重试失败入账"会把同批次的划拨/调账/核销记录一并当作清算入账调用
+     * {@code AccountService#creditOnClearing}，两种坏结果：
+     * <ul>
+     *   <li>对 {@code direction=DEBIT} 的划拨记录 —— **按 credit 反向动账**；</li>
+     *   <li>对 {@code transferReference} 为空的行 —— 幂等键退化为
+     *       {@code CLR_<batchNo>_<merchantId>}，与合法清算入账**同一个键**，
+     *       被幂等检查跳过却仍被置为 {@code BOOKED} ⇒ **假 BOOKED**
+     *       （记录显示已入账，实际没动账）。</li>
+     * </ul>
+     * 该路径此前只被测试调用（无生产调用方）故未暴露；本方法接上定时重试后即成真实资金缺陷，
+     * 故**接线前先在此收窄到 {@code recordType=CLEARING}**。</p>
      *
      * @param batchNo 清算批次编号
      * @return 重试结果摘要
@@ -165,7 +186,8 @@ public class ClearingSettlementService {
     @Transactional
     public ClearingBatchResult retryFailedRecords(String batchNo) {
         List<ClearingSettlementRecord> failedRecords = recordRepository
-                .findByBatchNoAndBookingStatus(batchNo, BookingStatus.FAILED);
+                .findByBatchNoAndRecordTypeAndBookingStatus(
+                        batchNo, RECORD_TYPE_CLEARING, BookingStatus.FAILED);
 
         log.info("重试失败入账记录: batchNo={}, failCount={}", batchNo, failedRecords.size());
 
