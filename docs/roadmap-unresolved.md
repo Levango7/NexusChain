@@ -174,6 +174,7 @@
 | 2026-11-01 | **告警规则 promtool 演练（PLAN-064，门禁变更 + 告警配置修复）**：静态校验只验 YAML/计数，PromQL 语义与触发行为此前零验证 ⇒ 新增提取脚本（`scripts/extract-prometheus-rules.py`）+ 38 用例/56 断言（18 条告警三态）+ CI 步（promtool v3.15.1 固定 + sha256；失败 ⇒ `UNSTABLE`，与"只合 CLEAN"口径一致）。**首跑抓到 2 条从未触发的死告警**（`PodCpuUsageHigh`/`PodMemoryUsageHigh`：分母标签集不匹配、除法恒空；恒定 95% 占用 14min `got:[]` 实证）——改两侧 `sum by (pod, container)` 归一后同一序列正常触发；顺带修正文件头告警数 17→18（CI 只断 ≥5，漂移从未被发现）。反向对照：A 还原修复 ⇒ 恰 2 用例红；B 改阈值 ⇒ 对应用例红。**仍未验证**：Alertmanager 路由/通知链路；`kube_*` 序列真实抓取目标存在性（合成序列只证表达式语义） | PLAN-064 §三/§四/§五；`deploy/k8s/tests/prometheus-rules.test.yaml`；`scripts/extract-prometheus-rules.py` |
 | 2026-11-05 | **#27 清单纠偏（PLAN-078，E5 通知 20261105-0615 owner 回填）**：actuator 鉴权条按 PLAN-075/076/077 勾选；归档追加 PLAN-069 补录与编号勘误（只新增，不改逐字正文） | PLAN-075 #458 `d24ab1db`、PLAN-076 #470 `ac6a316a`、PLAN-077 #480 `cd237063`；`docs/roadmap-unresolved-archive-27-finality.md`「E5 补录」小节 |
 | 2026-11-05 | **PLAN-079：outbox 真实 PG 复核 + legacy origin 大小写静默删除修复** | 真实 PG（WSL2 + 单进程 core）：正确小写脏行处理一次即移除；`removePendingVote`/`markPendingVoteFailure` 改大小写不敏感 + 0 行 WARN；JdbcFinalityStateStoreTest +2 例、反向对照两组精确红 | `docs/plan/PLAN-079-outbox-legacy-origin-case.md` |
+| 2026-11-07 | **PLAN-080：REST 形态 P2P 合批测试时序抖动去时序化**（qoder CN `20261106-0022` 交回 nexus-core lane）：`RPCClientBatchingTest` 等待改用信号量（替 `verify(timeout)`）、窗口 80ms→2000ms、折叠用例冲刷由合批上限计数触发；折叠覆盖加强（同内容、不同实例） | 只改测试、零生产代码；本地基线 7/7 绿、压测 26/26 绿；反向对照（去重键改实例身份）精确红在 `[同一笔不应重复上线] Expected size: 1 but was: 2`，还原后绿 | `docs/plan/PLAN-080-rpcclient-batching-test-flaky.md` |
 
 ## PLAN-007（单 proposer 协调）
 
