@@ -1,0 +1,26 @@
+{
+  "Results": [
+    {
+      "Target": "nexus-gateway:scan (jar)",
+      "Class": "lang-pkgs",
+      "Type": "jar",
+      "Vulnerabilities": [
+        {
+          "VulnerabilityID": "CVE-2026-777777",
+          "PkgName": "com.google.guava:guava",
+          "InstalledVersion": "33.3.1-android",
+          "FixedVersion": "33.7.2",
+          "Severity": "HIGH",
+          "Status": "fixed"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-777777",
+          "PkgName": "nacos-client",
+          "InstalledVersion": "3.1.1",
+          "Severity": "HIGH",
+          "Status": "affected"
+        }
+      ]
+    }
+  ]
+}

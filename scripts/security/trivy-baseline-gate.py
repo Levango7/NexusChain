@@ -3,16 +3,22 @@
 
 设计约束（见 docs/security-sla.md「基线豁免与到期」一节）：
   * 门禁只对「新增」的 HIGH/CRITICAL 判红；已知项必须登记在基线文件里；
+  * 基线条目按 **(CVE 编号, 包名) 二元组**严格匹配。2026-11-06 修正：此前按
+    「纯 CVE 编号」匹配，于是 A 包里登记一条 not-applicable 会顺带豁免 B 包里
+    的同一条 CVE（实测 CVE-2026-102554：nacos 内嵌副本的豁免吞掉了
+    com.google.guava:guava 上的真实修复版），豁免机制整体失效；
   * 基线条目必填 CVE 编号 / 包名 / 存在理由 / 到期日，缺到期日直接拒收；
+    package 为空或含通配符（`*` / `?` / any / all）一律拒收，不允许用通配实现
+    「全局豁免」；
   * 到期条目一旦再次命中即判红（不允许无到期的永久豁免）；
-  * Trivy 报出可用修复版（FixedVersion）的条目默认拒收；只有「修复版不适用于
-    被扫产物」（例如 nacos-client 内嵌的 relocated 副本）才能显式登记为
-    fixable=not-applicable，且必须写 evidence，最长 90 天。
+  * Trivy 报出可用修复版（FixedVersion）时一律拒收。`fixable=not-applicable`
+    也只在该二元组**本身无修复版**时成立；同一 CVE 在别的包有修复版会作为独立
+    finding 各自判定（不再共享豁免）。
 
 退出码：
   0  通过（无新增、无到期、无策略违规）
-  1  门禁判红（新增 HIGH/CRITICAL / 基线条目到期 / 有修复版却按普通豁免登记）
-  2  输入或配置错误（基线缺字段、无到期日、日期越界、报告不可读等）
+  1  门禁判红（新增 HIGH/CRITICAL / 基线条目到期 / 有修复版却登记豁免）
+  2  输入或配置错误（基线缺字段 / 包名为空或通配 / 无到期日 / 日期越界 / 报告不可读等）
 
 用法：
   python3 scripts/security/trivy-baseline-gate.py \
@@ -129,7 +135,22 @@ def collect_findings(paths: list[str], threshold_rank: int) -> tuple[list[dict],
     return list(findings.values()), errors
 
 
-def load_baseline(path: str, today: dt.date) -> tuple[dict[str, dict], list[str]]:
+def _package_rejection(pkg: str) -> str | None:
+    """package 必须是精确包名；返回拒收理由，合法则返回 None。
+
+    空值会让 `(id, "")` 变成「只按 CVE 匹配」的变种；通配（`*` / `?` / any /
+    all）则直接等于「全局豁免」。两者都违背二元组口径，必须拒收。
+    """
+    if not pkg:
+        return "缺少字段 package（基线必须按 (CVE, 包名) 二元组登记，不允许全局豁免）"
+    if "*" in pkg or "?" in pkg:
+        return f"package={pkg!r} 含通配符（不允许用通配实现全局豁免，请写 Trivy 报出的精确 PkgName）"
+    if pkg.lower() in ("any", "all", "any-package"):
+        return f"package={pkg!r} 是占位值（不允许用通配实现全局豁免，请写 Trivy 报出的精确 PkgName）"
+    return None
+
+
+def load_baseline(path: str, today: dt.date) -> tuple[dict[tuple[str, str], dict], list[str]]:
     """读取并校验基线；任何不合规条目都进 errors（调用方以退出码 2 拒收）。"""
     errors: list[str] = []
     try:
@@ -144,7 +165,7 @@ def load_baseline(path: str, today: dt.date) -> tuple[dict[str, dict], list[str]
     if not isinstance(entries, list) or not entries:
         return {}, ["基线格式错误：entries 必须是非空数组"]
 
-    by_id: dict[str, dict] = {}
+    by_key: dict[tuple[str, str], dict] = {}
     for index, entry in enumerate(entries, start=1):
         where = f"entries[{index}]"
         if not isinstance(entry, dict):
@@ -157,9 +178,12 @@ def load_baseline(path: str, today: dt.date) -> tuple[dict[str, dict], list[str]
             continue
         where = f"{where}({vuln_id})"
 
-        for field in ("package", "reason"):
-            if not str(entry.get(field) or "").strip():
-                errors.append(f"{where} 缺少字段 {field}（CVE 编号 / 包名 / 存在理由 / 到期日 均为必填）")
+        pkg = str(entry.get("package") or "").strip()
+        rejection = _package_rejection(pkg)
+        if rejection:
+            errors.append(f"{where} {rejection}")
+        if not str(entry.get("reason") or "").strip():
+            errors.append(f"{where} 缺少字段 reason（CVE 编号 / 包名 / 存在理由 / 到期日 均为必填）")
 
         expires_raw = str(entry.get("expires") or "").strip()
         if not expires_raw:
@@ -196,13 +220,14 @@ def load_baseline(path: str, today: dt.date) -> tuple[dict[str, dict], list[str]
                     f"（fixable={fixable}），请缩短复核周期"
                 )
 
-        if vuln_id in by_id:
-            errors.append(f"{where} 与前面的条目重复（同一 CVE 只允许登记一次）")
+        key = (vuln_id, pkg)
+        if key in by_key:
+            errors.append(f"{where} 与前面的条目重复（同一 (CVE, 包) 只允许登记一次）")
             continue
 
-        by_id[vuln_id] = {
+        by_key[key] = {
             "id": vuln_id,
-            "package": str(entry.get("package") or "").strip(),
+            "package": pkg,
             "reason": str(entry.get("reason") or "").strip(),
             "expires": expires,
             "fixable": fixable,
@@ -210,7 +235,7 @@ def load_baseline(path: str, today: dt.date) -> tuple[dict[str, dict], list[str]
             "added": added,
         }
 
-    return by_id, errors
+    return by_key, errors
 
 
 def _serialize_finding(finding: dict) -> dict:
@@ -243,30 +268,29 @@ def _serialize_entry(entry: dict, today: dt.date) -> dict:
     }
 
 
-def gate(findings: list[dict], baseline: dict[str, dict], today: dt.date) -> tuple[int, dict]:
+def gate(findings: list[dict], baseline: dict[tuple[str, str], dict], today: dt.date) -> tuple[int, dict]:
     new_findings = []
     expired = []
     policy = []
-    fix_exceptions = []
 
     for finding in findings:
-        entry = baseline.get(finding["id"])
+        # 严格二元组匹配：同一 CVE 换到别的包就是另一条 finding，必须独立判定。
+        entry = baseline.get((finding["id"], finding["package"]))
         if entry is None:
             new_findings.append(finding)
             continue
 
-        if finding["fixedVersions"] and entry["fixable"] != "not-applicable":
+        # 该二元组本身报出修复版 → 一律拒收（not-applicable 也不放行）。
+        if finding["fixedVersions"]:
             policy.append((finding, entry))
             continue
-
-        if entry["fixable"] == "not-applicable" and finding["fixedVersions"]:
-            fix_exceptions.append((finding, entry))
 
         if entry["expires"] and today > entry["expires"]:
             expired.append((finding, entry))
 
-    hit_ids = {f["id"] for f in findings}
-    stale = [e for eid, e in baseline.items() if eid not in hit_ids]
+    # stale 同样按二元组比对：同一 CVE 在别的包命中了，不代表本条目命中。
+    hit_keys = {(f["id"], f["package"]) for f in findings}
+    stale = [e for key, e in baseline.items() if key not in hit_keys]
     # 「长期未命中」复核提示：只提示、不判红。判据是条目登记日 addedAt 距今 >= 90 天
     # 且本次仍未命中（addedAt 缺失则无法计算，跳过）。
     stale_aged = [
@@ -276,18 +300,6 @@ def gate(findings: list[dict], baseline: dict[str, dict], today: dt.date) -> tup
 
     print(f"[INFO] 门禁阈值 HIGH/CRITICAL；唯一 (CVE, 包) 命中 {len(findings)} 条；基线 {len(baseline)} 条")
     print(f"[INFO] 基线命中 {len(baseline) - len(stale)} 条，未命中（stale，仅提示）{len(stale)} 条")
-
-    for finding, entry in fix_exceptions:
-        fixed = ", ".join(sorted(finding["fixedVersions"]))
-        print(
-            f"[EXCEPTION] {finding['id']} / {finding['package']} 报出修复版 "
-            f"({fixed})，按 fixable=not-applicable 放行："
-            f"{entry['evidence']}（到期 {entry['expires']}）"
-        )
-        print(
-            f"::warning title=修复版不可用的基线豁免::"
-            f"{finding['id']} 依赖 fixable=not-applicable 放行，到期日 {entry['expires']}"
-        )
 
     for finding in new_findings:
         targets = "、".join(sorted(finding["targets"]))
@@ -309,9 +321,12 @@ def gate(findings: list[dict], baseline: dict[str, dict], today: dt.date) -> tup
 
     for finding, entry in policy:
         fixed = ", ".join(sorted(finding["fixedVersions"]))
+        note = ""
+        if entry["fixable"] == "not-applicable":
+            note = "；fixable=not-applicable 也不适用：该 (CVE, 包) 本身已报出修复版"
         print(
             f"[POLICY] {finding['id']} / {finding['package']} 报出可用修复版 "
-            f"({fixed})，禁止按普通基线豁免"
+            f"({fixed})，禁止按普通基线豁免{note}"
         )
         print(
             f"::error title=Trivy 有修复版不得豁免::"
@@ -346,17 +361,12 @@ def gate(findings: list[dict], baseline: dict[str, dict], today: dt.date) -> tup
             "new": len(new_findings),
             "expired": len(expired),
             "policy": len(policy),
-            "fixExceptions": len(fix_exceptions),
             "stale": len(stale),
             "staleAged": len(stale_aged),
         },
         "new": [_serialize_finding(f) for f in new_findings],
         "expired": [dict(_serialize_finding(f), expires=entry["expires"].isoformat()) for f, entry in expired],
         "policy": [_serialize_finding(f) for f, _ in policy],
-        "fixExceptions": [
-            dict(_serialize_finding(f), evidence=entry["evidence"], expires=entry["expires"].isoformat())
-            for f, entry in fix_exceptions
-        ],
         "stale": [_serialize_entry(e, today) for e in stale],
         "staleAged": [_serialize_entry(e, today) for e in stale_aged],
         "errors": [],

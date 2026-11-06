@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "updatedAt": "2026-11-06",
-  "policy": "只允许登记『上游无修复版』或『Trivy 报出的修复版不适用于被扫产物』的 HIGH/CRITICAL。每条必须有 id/package/reason/expires；缺到期日会被 trivy-baseline-gate.py 直接拒收（退出码 2）。普通条目最长 180 天，fixable=not-applicable 最长 90 天。到期后再次命中即判红。有效期上限与到期判定一律按 **UTC 日期**计算（CI runner 就是 UTC，本机东八区比 UTC 早 8 小时；按本地日期算会在 CI 上多算 1 天而被拒收）。即『本机到期日 <= 今天(本地) + N』不等价，请按 UTC 留 1 天余量。",
+  "policy": "只允许登记『上游确实无修复版』的 HIGH/CRITICAL，并按 **(CVE 编号, 包名) 二元组**严格匹配（2026-11-06 修正：此前按纯 CVE 编号匹配，A 包里的豁免会顺带豁免 B 包里的同一条 CVE）。package 必填且必须是 Trivy 报出的精确 PkgName，为空或含通配符（* / ? / any / all）会被 trivy-baseline-gate.py 直接拒收（退出码 2）。Trivy 报出 FixedVersion 的一律拒收；fixable=not-applicable 也只在该二元组本身无修复版时成立，且最长 90 天（普通条目最长 180 天）。每条必须有 id/package/reason/expires，缺到期日同样拒收；到期后再次命中即判红。有效期上限与到期判定一律按 **UTC 日期**计算（CI runner 就是 UTC，本机东八区比 UTC 早 8 小时；按本地日期算会在 CI 上多算 1 天而被拒收）。即『本机到期日 <= 今天(本地) + N』不等价，请按 UTC 留 1 天余量。",
   "entries": [
     {
       "id": "CVE-2026-113351",
@@ -92,16 +92,6 @@
       "expires": "2027-02-04",
       "addedAt": "2026-11-06",
       "evidence": "Cargo.lock 与 mpc-engine 镜像实扫均命中，FixedVersion 为空"
-    },
-    {
-      "id": "CVE-2026-102554",
-      "package": "nacos-client（内嵌 shaded guava 33.3.1-android）",
-      "scope": "app",
-      "reason": "命中的是 nacos-client 3.1.1 jar 内 relocated 的 guava 副本；应用自身 guava 已升到 33.7.2-jre，但升级依赖不会替换 shaded 副本，需等 nacos 上游重打包。nacos 仅用于服务注册/配置，不反序列化外部 YAML",
-      "fixable": "not-applicable",
-      "evidence": "Trivy 报出的 FixedVersion 针对应用自身 guava（33.7.2-jre），对 shaded 副本不可执行；副本版本随 nacos-client jar 固定",
-      "expires": "2027-02-03",
-      "addedAt": "2026-11-06"
     }
   ]
 }

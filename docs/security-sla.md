@@ -182,13 +182,19 @@ CI 扫描发现漏洞
 **基线差分语义**（`scripts/security/trivy-baseline-gate.py`）：
 
 - 已知项必须登记在 `config/trivy-baseline.json`，每条必填
-  `id`（CVE 编号）/ `package`（包名）/ `reason`（存在理由）/ `expires`（到期日）；
+  `id`（CVE 编号）/ `package`（精确包名）/ `reason`（存在理由）/ `expires`（到期日）；
   可选 `addedAt`（登记日，用于 4.5 的 90 天「长期未命中」复核提示）；
+- **按 (CVE 编号, 包名) 二元组严格匹配**（2026-11-06 修正）：同一 CVE 换到别的包
+  就是另一条 finding，必须单独登记；A 包里的条目不覆盖 B 包。此前按纯 CVE 编号
+  匹配，`CVE-2026-102554` 的 nacos 内嵌副本豁免因此顺带吞掉了
+  `com.google.guava:guava` 上的真实修复版；
+- **`package` 必须是 Trivy 报出的精确 `PkgName`**：为空或含通配符
+  （`*` / `?` / `any` / `all`）一律拒收（退出码 2），不允许用通配实现全局豁免；
 - **不允许无到期日的永久豁免**：缺 `expires` 直接拒收（退出码 2）；
 - **到期即红**：`today > expires` 且该条目仍被扫到 → 判红（退出码 1）；
-- **严禁给「有修复版」的 CVE 加基线**：Trivy 报出 `FixedVersion` 而条目未显式标注
-  `fixable: not-applicable` → 判红（退出码 1）。`not-applicable` 必须写 `evidence`
-  （说明修复版为何不适用于被扫产物），且最长有效期收紧到 **90 天**；
+- **Trivy 报出 `FixedVersion` 一律拒收**（退出码 1）：`fixable: not-applicable`
+  只在**该二元组本身确实无修复版**时成立，且必须写 `evidence`，最长有效期
+  **90 天**；同一 CVE 在别的包有修复版会作为独立 finding 各自判定；
 - 普通条目最长有效期 **180 天**；
 - 新增项：扫到但未登记 → 判红，且 `::error::` 里带 CVE / 包 / 受影响 target。
 
@@ -199,11 +205,13 @@ CI 扫描发现漏洞
 
 - 到期日不要「顺手往后改」。到期意味着**必须重新取证**：确认上游是否仍未发布修复版、
   暴露面论证是否仍成立，再决定续期（≤180 天）或改走修复。
-- 门禁每次运行都会打印 `[STALE]`（基线条目本次未命中，可删）与 `[EXCEPTION]`
-  （`fixable=not-applicable` 放行，附 `::warning::`）——这两类不是红，但需要人看。
+- 门禁每次运行都会打印 `[STALE]`（基线条目本次未命中，可删）——不是红，但需要人看；
+  `[POLICY]`（该二元组报出修复版却登记了基线）不再是 warning，直接判红。
 - **长期未命中复核（2026-11-06）**：条目登记日（`addedAt`）距今 **≥ 90 天**且本次仍未命中，
   门禁额外打印 `[STALE-AGED]` 与 `::notice::`「该基线项已长期未命中，需复核是否可清理」。
   只提示、不判红，也不自动删除：保留它是为了「同一 CVE 若重现时不被误判成新增」。
+- 2026-11-06 起 `not-applicable` 不再产出 `[EXCEPTION]` 放行：只要 Trivy 为该
+  (CVE, 包) 报出修复版，就按 `[POLICY]` 判红。
 - `.trivyignore` 与基线**并存且职责不同**：`.trivyignore` 是「展示/告警口径」的抑制
   （SARIF、分诊 JSON 仍带它），基线是「阻断口径」的白名单。不要为了绿灯删已有
   `.trivyignore` 条目，也不要把条目改成通配。

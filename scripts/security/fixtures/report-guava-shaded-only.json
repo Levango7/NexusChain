@@ -1,0 +1,18 @@
+{
+  "Results": [
+    {
+      "Target": "nexus-gateway:scan (jar)",
+      "Class": "lang-pkgs",
+      "Type": "jar",
+      "Vulnerabilities": [
+        {
+          "VulnerabilityID": "CVE-2026-777777",
+          "PkgName": "nacos-client",
+          "InstalledVersion": "3.1.1",
+          "Severity": "HIGH",
+          "Status": "affected"
+        }
+      ]
+    }
+  ]
+}
