@@ -96,7 +96,7 @@
 - [ ] **epoch 窗口 / 规范检查点语义校验未做**（需链接口） —— 未开始。`PLAN-067`
 - [ ] **历史短哈希行未全量清洗**（只丢弃、不建索引、不占配额；`PLAN-071` 起改为隔离表） —— 部分完成（隔离演练完成，生产库未执行）。`PLAN-067`、`PLAN-071`
 - [ ] **脏行迁移未在生产库执行** —— 部分完成（仅 H2 / 迁移演练）。`PLAN-071`
-- [ ] **outbox 脏票「不变毒丸」依赖 `submitVote` 对非法哈希正常拒绝而非抛异常** —— 已有门禁但未在真实环境验证（`FinalityOutboxDirtyVoteContainmentTest`）。`PLAN-072`
+- [x] **outbox 脏票「不变毒丸」依赖 `submitVote` 对非法哈希正常拒绝而非抛异常** —— **已闭环（2026-11-05）**：H2 门禁（`FinalityOutboxDirtyVoteContainmentTest`）+ 真实 PG 复核（正确小写 origin 的脏行处理一次即被拒并移除，`outbox=0/votes=0`）；并修复 legacy/手工 origin 大小写导致 `removePendingVote`/`markPendingVoteFailure` 静默 0 行的问题（PLAN-079：大小写不敏感匹配 + 0 行 WARN）。`PLAN-072`
 
 ### B. 可观测性 / 告警 / 容量
 
@@ -173,6 +173,7 @@
 | 2026-10-31 | **PLAN-062/063 抓取端补验（验证切片，零代码改动）**：Windows 本机 PG 的 fork 路径 `0xC0000142` 阻塞绕开——应用仍在 Windows JDK 17，datasource 换到 WSL2 Ubuntu-24.04 内的 PostgreSQL 16.15（单物理机、跨 WSL2 内核边界，非物理多机）。`/actuator/prometheus` 实测 22 个 `nexus_*`：block 侧 **10/10**（`outbox_readable=1.0`、`database_pending=0`、两 counter=0、`last_failure_height=-1`）、finality 侧 **12/12**（enabled/finalized/current_epoch/latest_voted_epoch/progress/lag/checkpoints/abstain/defer 全在）。**仍未验证**：告警按阈值触发、物理多机/真实断网断电。环境坑：9236 落在 Windows Hyper-V 保留段 9211-9310 ⇒ P2P 改 19336；WSL 无客户端连接数秒即关机连带 PG 停止，需常驻 `wsl sleep` | PLAN-062 §五 补验节；PLAN-063 §七；`F:\Agent\opencode\workspace\verify-block-metrics-wsl.ps1` |
 | 2026-11-01 | **告警规则 promtool 演练（PLAN-064，门禁变更 + 告警配置修复）**：静态校验只验 YAML/计数，PromQL 语义与触发行为此前零验证 ⇒ 新增提取脚本（`scripts/extract-prometheus-rules.py`）+ 38 用例/56 断言（18 条告警三态）+ CI 步（promtool v3.15.1 固定 + sha256；失败 ⇒ `UNSTABLE`，与"只合 CLEAN"口径一致）。**首跑抓到 2 条从未触发的死告警**（`PodCpuUsageHigh`/`PodMemoryUsageHigh`：分母标签集不匹配、除法恒空；恒定 95% 占用 14min `got:[]` 实证）——改两侧 `sum by (pod, container)` 归一后同一序列正常触发；顺带修正文件头告警数 17→18（CI 只断 ≥5，漂移从未被发现）。反向对照：A 还原修复 ⇒ 恰 2 用例红；B 改阈值 ⇒ 对应用例红。**仍未验证**：Alertmanager 路由/通知链路；`kube_*` 序列真实抓取目标存在性（合成序列只证表达式语义） | PLAN-064 §三/§四/§五；`deploy/k8s/tests/prometheus-rules.test.yaml`；`scripts/extract-prometheus-rules.py` |
 | 2026-11-05 | **#27 清单纠偏（PLAN-078，E5 通知 20261105-0615 owner 回填）**：actuator 鉴权条按 PLAN-075/076/077 勾选；归档追加 PLAN-069 补录与编号勘误（只新增，不改逐字正文） | PLAN-075 #458 `d24ab1db`、PLAN-076 #470 `ac6a316a`、PLAN-077 #480 `cd237063`；`docs/roadmap-unresolved-archive-27-finality.md`「E5 补录」小节 |
+| 2026-11-05 | **PLAN-079：outbox 真实 PG 复核 + legacy origin 大小写静默删除修复** | 真实 PG（WSL2 + 单进程 core）：正确小写脏行处理一次即移除；`removePendingVote`/`markPendingVoteFailure` 改大小写不敏感 + 0 行 WARN；JdbcFinalityStateStoreTest +2 例、反向对照两组精确红 | `docs/plan/PLAN-079-outbox-legacy-origin-case.md` |
 
 ## PLAN-007（单 proposer 协调）
 
