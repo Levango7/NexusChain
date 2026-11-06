@@ -13,6 +13,7 @@ fixture 中的 Trivy 报告取自 2026-11-05 master 实扫产物
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import subprocess
@@ -329,6 +330,82 @@ def check_summary_json() -> tuple[bool, str]:
         return True, ""
 
 
+def _write_db(dirpath: str, updated_at: str, db_bytes: bytes) -> None:
+    """造一份假的 Trivy DB 目录（metadata.json + trivy.db）。"""
+    os.makedirs(dirpath)
+    meta = {
+        "Version": 2,
+        "UpdatedAt": updated_at,
+        "NextUpdate": "2026-11-07T12:55:02.577403513Z",
+    }
+    with open(os.path.join(dirpath, "metadata.json"), "w", encoding="utf-8") as f:
+        json.dump(meta, f)
+    with open(os.path.join(dirpath, "trivy.db"), "wb") as f:
+        f.write(db_bytes)
+
+
+def _fingerprint_of(db_dir: str) -> dict:
+    meta = json.load(open(os.path.join(db_dir, "metadata.json"), encoding="utf-8"))
+    sha = hashlib.sha256(open(os.path.join(db_dir, "trivy.db"), "rb").read()).hexdigest()
+    return {**meta, "dbSha256": sha}
+
+
+def check_db_identity() -> tuple[bool, str]:
+    """硬不变量：门禁报的「基于哪份库」必须与刷新步那份库逐项一致。
+
+    重点是「报告来自 A 库、metadata.json / trivy.db 却是 B 库」必须判红：
+    这条证据行一旦允许漂移，就等于给人一个假的审计依据。
+    """
+    problems: list[str] = []
+    with tempfile.TemporaryDirectory() as tmp:
+        a = os.path.join(tmp, "A")
+        b = os.path.join(tmp, "B")
+        a_same_meta = os.path.join(tmp, "A-same-meta")
+        _write_db(a, "2026-11-06T12:55:02.577403+00:00", b"db-A")
+        _write_db(b, "2026-11-06T06:50:38.697107077Z", b"db-B")
+        _write_db(a_same_meta, "2026-11-06T12:55:02.577403+00:00", b"db-A-tampered")
+
+        fp_a = os.path.join(tmp, "fp-A.json")
+        with open(fp_a, "w", encoding="utf-8") as f:
+            json.dump(_fingerprint_of(a), f)
+
+        ok_result = run(
+            "report-known-only.json", "baseline-known.json",
+            extra=["--db-dir", a, "--db-fingerprint", fp_a],
+        )
+        if ok_result.returncode != 0:
+            problems.append(f"同源库应绿，实际退出码 {ok_result.returncode}")
+        if "sha256=" not in ok_result.stdout or "已与刷新步指纹交叉校验" not in ok_result.stdout:
+            problems.append("同源库未打印带 sha256 的 [DB] 行")
+
+        mismatch_meta = run(
+            "report-known-only.json", "baseline-known.json",
+            extra=["--db-dir", b, "--db-fingerprint", fp_a],
+        )
+        if mismatch_meta.returncode != 2:
+            problems.append(f"A 指纹 + B 库应判红（退出码 2），实际 {mismatch_meta.returncode}")
+        if "[DB][FAIL]" not in mismatch_meta.stdout or "UpdatedAt" not in mismatch_meta.stdout:
+            problems.append("A 指纹 + B 库未给出 [DB][FAIL] 的字段级证据")
+
+        mismatch_sha = run(
+            "report-known-only.json", "baseline-known.json",
+            extra=["--db-dir", a_same_meta, "--db-fingerprint", fp_a],
+        )
+        if mismatch_sha.returncode != 2:
+            problems.append(f"metadata 相同但 DB 文件被换应判红，实际 {mismatch_sha.returncode}")
+        if "DB 文件指纹不一致" not in mismatch_sha.stdout:
+            problems.append("DB 文件被换时未报「DB 文件指纹不一致」")
+
+        half_only = run(
+            "report-known-only.json", "baseline-known.json",
+            extra=["--db-fingerprint", fp_a],
+        )
+        if half_only.returncode != 2:
+            problems.append(f"只给指纹不给 --db-dir 应拒收，实际 {half_only.returncode}")
+
+    return (not problems), "；".join(problems)
+
+
 def main() -> int:
     failures = 0
     total = 0
@@ -369,6 +446,13 @@ def main() -> int:
     total += 1
     ok, reason = check_summary_json()
     print(f"[{'PASS' if ok else 'FAIL'}] --summary-json 输出与结论一致")
+    if not ok:
+        failures += 1
+        print(f"  {reason}")
+
+    total += 1
+    ok, reason = check_db_identity()
+    print(f"[{'PASS' if ok else 'FAIL'}] DB 身份绑定（报告/指纹/实际库不一致必须判红）")
     if not ok:
         failures += 1
         print(f"  {reason}")
