@@ -223,6 +223,30 @@ CI 扫描发现漏洞
   （SARIF、分诊 JSON 仍带它），基线是「阻断口径」的白名单。不要为了绿灯删已有
   `.trivyignore` 条目，也不要把条目改成通配。
 
+### 4.6 发布后按 digest 扫描（不阻断发版）
+
+> **2026-11-06 新增**：E1 只覆盖了「将要合入的代码」。`release.yml` 推的是
+> `docker/build-push-action` 产出的镜像（带 provenance），**与 PR 门禁里重建的镜像
+> 不是同一个 digest**；而 Release 此前只写 tag、不记 digest、不扫描 ——
+> v2.77.0 的 13 个镜像从未被扫过。
+
+| 环节 | 做什么 | 阻断发版 |
+|------|--------|---------|
+| `build-images` | 用 buildx 自报的 `outputs.digest` 写 `digests/<module>.json` 并上传 artifact | 是（构建失败即终止发布） |
+| `github-release` | 把 13 行 `模块 / 镜像 / tag / manifest digest` 表拼进 Release body | 是（Release 创建失败会阻断部署） |
+| `release-digest-scan` | 用 `ghcr.io/<repo>/<module>@sha256:...` 逐镜像 trivy 扫描 → 基线差分 → 只产 summary | **否** |
+| `release-digest-triage` | 汇总 summary，创建/更新 issue（`release-digest-watch`），正文含 image + digest + tag + CVE 清单 | **否** |
+
+约束：
+
+- 扫描对象必须是 `image@sha256:...`，**不重新 build、不用 tag**（tag 会被下个版本覆盖）；
+- 判红语义与 PR 门禁完全共用 `trivy-baseline-gate.py`（新增 HIGH/CRITICAL / 基线到期 /
+  有修复版却登记豁免），不另立阈值；
+- 扫描失败（GHCR 鉴权、网络）不判红，但会在 issue 的「扫描异常」段落里出现 —— 信号丢失
+  比假绿更该被看见；
+- 去重键是 issue 标题前缀 `[Release/<tag>]`，同一 tag 重跑只更新正文、不新开 issue；
+  CVE 消失后不自动关闭，需人工确认（避免自动关闭掩盖仍在的镜像）。
+
 ### 4.7 已知限制与人工处置：PR 镜像门禁的成本（2026-11-06）
 
 **已知限制**：`Trivy Image Baseline Gate (PR)` 取证依赖真实 docker build。2026-11-06
@@ -258,30 +282,6 @@ CI 扫描发现漏洞
    HIGH/CRITICAL，按 4.4 开 issue 并跟进或回滚，不因「已合并」降级处理。
 4. **禁止**：用「跳过某腿」「把该 check 从必需检查里摘掉」「放宽基线」来应对基建
    失败——那会把「红灯不在阻断路径上」的问题重新引回来。
-
-### 4.6 发布后按 digest 扫描（不阻断发版）
-
-> **2026-11-06 新增**：E1 只覆盖了「将要合入的代码」。`release.yml` 推的是
-> `docker/build-push-action` 产出的镜像（带 provenance），**与 PR 门禁里重建的镜像
-> 不是同一个 digest**；而 Release 此前只写 tag、不记 digest、不扫描 ——
-> v2.77.0 的 13 个镜像从未被扫过。
-
-| 环节 | 做什么 | 阻断发版 |
-|------|--------|---------|
-| `build-images` | 用 buildx 自报的 `outputs.digest` 写 `digests/<module>.json` 并上传 artifact | 是（构建失败即终止发布） |
-| `github-release` | 把 13 行 `模块 / 镜像 / tag / manifest digest` 表拼进 Release body | 是（Release 创建失败会阻断部署） |
-| `release-digest-scan` | 用 `ghcr.io/<repo>/<module>@sha256:...` 逐镜像 trivy 扫描 → 基线差分 → 只产 summary | **否** |
-| `release-digest-triage` | 汇总 summary，创建/更新 issue（`release-digest-watch`），正文含 image + digest + tag + CVE 清单 | **否** |
-
-约束：
-
-- 扫描对象必须是 `image@sha256:...`，**不重新 build、不用 tag**（tag 会被下个版本覆盖）；
-- 判红语义与 PR 门禁完全共用 `trivy-baseline-gate.py`（新增 HIGH/CRITICAL / 基线到期 /
-  有修复版却登记豁免），不另立阈值；
-- 扫描失败（GHCR 鉴权、网络）不判红，但会在 issue 的「扫描异常」段落里出现 —— 信号丢失
-  比假绿更该被看见；
-- 去重键是 issue 标题前缀 `[Release/<tag>]`，同一 tag 重跑只更新正文、不新开 issue；
-  CVE 消失后不自动关闭，需人工确认（避免自动关闭掩盖仍在的镜像）。
 
 ---
 
@@ -342,7 +342,7 @@ CycloneDX SBOM（`sbom-cyclonedx.json`）作为依赖审计基线，每次扫描
 | `.github/dependabot.yml` | Dependabot 依赖更新配置 |
 | `build.gradle` | SpotBugs + FindSecBugs SAST 配置 |
 | `scripts/security/trivy-to-issues.py` | 漏洞自动分诊脚本 |
-| `scripts/security/image-scan-scope.py` | PR 镜像扫描的路径过滤（范围计算，见 4.6） |
+| `scripts/security/image-scan-scope.py` | PR 镜像扫描的路径过滤（范围计算，见 §4.7） |
 
 ### 7.2 变更历史
 
@@ -350,4 +350,4 @@ CycloneDX SBOM（`sbom-cyclonedx.json`）作为依赖审计基线，每次扫描
 |------|------|---------|------|
 | 2026-08-09 | 1.0 | 初始版本，定义 P0-P3 SLA | Phase 2 安全扫描工程 |
 | 2026-11-06 | 1.1 | E1：镜像门禁改为基线差分（新增 HIGH/CRITICAL 才判红）、上游镜像移出阻断路径、§4.5 基线续期 | 安全扫描工程 |
-| 2026-11-06 | 1.2 | PR 镜像门禁按路径过滤（§4.6），并补「基础设施失败的人工处置口径」 | 安全扫描工程 |
+| 2026-11-06 | 1.2 | PR 镜像门禁按路径过滤（§4.7），并补「基础设施失败的人工处置口径」 | 安全扫描工程 |
