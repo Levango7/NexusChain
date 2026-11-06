@@ -71,7 +71,7 @@ jobs:
           trivy image --download-db-only --no-progress --cache-dir "$GITHUB_WORKSPACE/.cache/trivy"
           python3 scripts/security/trivy-db-freshness.py \
             --metadata "$GITHUB_WORKSPACE/.cache/trivy/db/metadata.json" \
-            --max-age-days 7
+            --max-age-days 0  # TEMP-EVIDENCE: 临时把阈值设为 0 天，取证「库过期即判红」，取证后 revert
 
       - name: Trivy fs 扫描 → SARIF（全量漏洞，不阻断）
         # 钉 commit sha 提升供应链安全（v0.36.0 → ed142fd0673e97e23eac54620cfb913e5ce36c25）
