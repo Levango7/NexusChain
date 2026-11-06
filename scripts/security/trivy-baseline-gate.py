@@ -39,7 +39,10 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
+import os
+import re
 import sys
 
 SEVERITY_RANK = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4, "UNKNOWN": 0}
@@ -329,24 +332,92 @@ def _serialize_entry(entry: dict, today: dt.date) -> dict:
     }
 
 
-def _print_db_metadata(path: str) -> None:
-    """把本次结论所依据的 Trivy 漏洞库版本/更新时间打进门禁日志。
+def _sha256_file(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
-    新鲜度断言（>7 天判红）在扫描前由 trivy-db-freshness.py 完成；这里只做
-    「结论基于哪一天的库」的可核对留痕，读不到时降级为 WARN，不影响判定。
-    """
+
+def _norm_ts(value) -> str:
+    """归一化时间戳，使 `...577403+00:00` 与 `...Z` 两种写法可直接比较。"""
+    text = str(value or "").strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    text = re.sub(r"(\.[0-9]{6})[0-9]+", r"\1", text)
     try:
-        meta = _load_json(path)
+        parsed = dt.datetime.fromisoformat(text)
+    except ValueError:
+        return text
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed.astimezone(dt.timezone.utc).isoformat()
+
+
+def _verify_db_identity(db_dir: str, fingerprint_path: str) -> list[str]:
+    """校验「本次结论所依据的库」= 刷新步下载并取指纹的那份库。
+
+    背景（2026-11-06 实测）：Trivy v0.76.2 的 JSON 报告 `Metadata` 只有
+    Size/OS/ImageID/DiffIDs/RepoTags/Reference/ImageConfig/Layers，**不含**
+    VulnerabilityDB（无 Version/UpdatedAt/sha256），因此无法把结论直接绑定到
+    报告内嵌身份，只能退一步用文件指纹绑定：
+
+      刷新步  → trivy-db-freshness.py 记录 metadata 字段 + trivy.db sha256
+      门禁步  → 读同一份指纹，重算 trivy.db sha256、重读 metadata.json，三者比对
+
+    任何一项不一致都说明「门禁日志里那句『基于哪份库』」不再是产出报告的那份
+    库（例如中间有 actions/cache 把缓存目录覆盖回旧库），必须判红而不是照打。
+    """
+    errors: list[str] = []
+    try:
+        fingerprint = _load_json(fingerprint_path)
     except (FileNotFoundError, json.JSONDecodeError) as e:
-        print(f"[WARN] 无法读取 Trivy DB 元数据：{path}（{e}）")
-        return
+        return [f"刷新步 DB 指纹不可读：{fingerprint_path}（{e}）"]
+    if not isinstance(fingerprint, dict) or not fingerprint.get("dbSha256"):
+        return [f"刷新步 DB 指纹格式不可识别或缺少 dbSha256：{fingerprint_path}"]
+
+    metadata_path = os.path.join(db_dir, "metadata.json")
+    db_path = os.path.join(db_dir, "trivy.db")
+    try:
+        meta = _load_json(metadata_path)
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        return [f"门禁步实际 metadata.json 不可读：{metadata_path}（{e}）"]
     if not isinstance(meta, dict):
-        print(f"[WARN] Trivy DB 元数据格式不可识别：{path}")
-        return
-    print(
-        f"[DB] 本次门禁结论基于 Trivy 漏洞库：Version={meta.get('Version')} "
-        f"UpdatedAt={meta.get('UpdatedAt')} NextUpdate={meta.get('NextUpdate')}"
-    )
+        return [f"门禁步实际 metadata.json 格式不可识别：{metadata_path}"]
+
+    try:
+        actual_sha256 = _sha256_file(db_path)
+    except OSError as e:
+        return [f"门禁步实际 trivy.db 不可读：{db_path}（{e}）"]
+
+    if fingerprint["dbSha256"] != actual_sha256:
+        errors.append(
+            f"DB 文件指纹不一致：刷新步 sha256={fingerprint['dbSha256']}，"
+            f"门禁步 sha256={actual_sha256}（{db_path}）"
+        )
+    for field in ("Version", "UpdatedAt", "NextUpdate"):
+        expected = fingerprint.get(field)
+        actual = meta.get(field)
+        if field == "Version":
+            expected = str(expected) if expected is not None else None
+            actual = str(actual) if actual is not None else None
+        else:
+            expected = _norm_ts(expected)
+            actual = _norm_ts(actual)
+        if expected != actual:
+            errors.append(
+                f"metadata.json 的 {field} 不一致：刷新步={fingerprint.get(field)}，"
+                f"门禁步={meta.get(field)}"
+            )
+
+    if not errors:
+        print(
+            f"[DB] 本次门禁结论基于 Trivy 漏洞库：Version={meta.get('Version')} "
+            f"UpdatedAt={meta.get('UpdatedAt')} NextUpdate={meta.get('NextUpdate')} "
+            f"sha256={actual_sha256}（已与刷新步指纹交叉校验）"
+        )
+    return errors
 
 
 def gate(findings: list[dict], baseline: dict[tuple[str, str], dict], today: dt.date) -> tuple[int, dict]:
@@ -552,9 +623,16 @@ def main() -> int:
         help="可选：把门禁结论写成机器可读 JSON（供发布后 digest 扫描等下游消费）",
     )
     parser.add_argument(
-        "--db-metadata",
+        "--db-dir",
         default=None,
-        help="可选：Trivy DB 的 metadata.json，用于在门禁日志里声明结论所依据的库版本/更新时间",
+        help="可选：Trivy DB 缓存目录（含 trivy.db 与 metadata.json）；"
+        "与 --db-fingerprint 成对提供时强制校验结论所依据的库",
+    )
+    parser.add_argument(
+        "--db-fingerprint",
+        default=None,
+        help="可选：刷新步 trivy-db-freshness.py 写出的 DB 身份指纹 JSON；"
+        "与 --db-dir 成对提供时强制校验结论所依据的库",
     )
     args = parser.parse_args()
 
@@ -583,8 +661,19 @@ def main() -> int:
         })
         return 2
 
-    if args.db_metadata:
-        _print_db_metadata(args.db_metadata)
+    if args.db_fingerprint or args.db_dir:
+        if not (args.db_fingerprint and args.db_dir):
+            message = "--db-dir 与 --db-fingerprint 必须成对提供，否则无法验证结论基于哪份库"
+            print(f"[REJECT] {message}")
+            print(f"::error title=Trivy DB 身份无法校验::{message}")
+            return 2
+        db_errors = _verify_db_identity(args.db_dir, args.db_fingerprint)
+        if db_errors:
+            for message in db_errors:
+                print(f"[DB][FAIL] {message}")
+                print(f"::error title=Trivy DB 身份不一致::{message}")
+            print(f"[REJECT] DB 身份校验失败 {len(db_errors)} 处，门禁拒收（退出码 2）")
+            return 2
 
     code, summary = gate(findings, baseline, today)
     _write_summary(args.summary_json, summary)
