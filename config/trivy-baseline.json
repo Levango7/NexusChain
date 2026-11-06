@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "updatedAt": "2026-11-06",
-  "policy": "只允许登记『上游无修复版』或『Trivy 报出的修复版不适用于被扫产物』的 HIGH/CRITICAL。每条必须有 id/package/reason/expires；缺到期日会被 trivy-baseline-gate.py 直接拒收（退出码 2）。普通条目最长 180 天，fixable=not-applicable 最长 90 天。到期后再次命中即判红。有效期上限与到期判定一律按 **UTC 日期**计算（CI runner 就是 UTC，本机东八区比 UTC 早 8 小时；按本地日期算会在 CI 上多算 1 天而被拒收）。即『本机到期日 <= 今天(本地) + N』不等价，请按 UTC 留 1 天余量。",
+  "policy": "只允许登记『上游确实无修复版』的 HIGH/CRITICAL，并按 **(CVE 编号, 包名) 二元组**严格匹配（2026-11-06 修正：此前按纯 CVE 编号匹配，A 包里的豁免会顺带豁免 B 包里的同一条 CVE）。package 必填且必须是 Trivy 报出的精确 PkgName，为空或含通配符（* / ? / any / all）会被 trivy-baseline-gate.py 直接拒收（退出码 2）。Trivy 报出 FixedVersion 的一律拒收；fixable=not-applicable 也只在该二元组本身无修复版时成立，且最长 90 天（普通条目最长 180 天）。唯一例外是 kind=shaded_vendored：有修复版但命中来自第三方 jar 的内嵌（relocated）副本、本仓库无法替换，必须填齐四件套 evidence（jar_path / jar_sha256 / vulnerable_copy+shaded_prefix / declared_dependency_fixed+upstream_max_version），最长同样 90 天，且命中时门禁必须打印 [SHADED] 并计入 [PASS] 的例外条数。每条必须有 id/package/reason/expires，缺到期日同样拒收；到期后再次命中即判红。有效期上限与到期判定一律按 **UTC 日期**计算（CI runner 就是 UTC，本机东八区比 UTC 早 8 小时；按本地日期算会在 CI 上多算 1 天而被拒收）。即『本机到期日 <= 今天(本地) + N』不等价，请按 UTC 留 1 天余量。",
   "entries": [
     {
       "id": "CVE-2026-113351",
@@ -95,13 +95,20 @@
     },
     {
       "id": "CVE-2026-102554",
-      "package": "nacos-client（内嵌 shaded guava 33.3.1-android）",
+      "package": "com.google.guava:guava",
       "scope": "app",
-      "reason": "命中的是 nacos-client 3.1.1 jar 内 relocated 的 guava 副本；应用自身 guava 已升到 33.7.2-jre，但升级依赖不会替换 shaded 副本，需等 nacos 上游重打包。nacos 仅用于服务注册/配置，不反序列化外部 YAML",
-      "fixable": "not-applicable",
-      "evidence": "Trivy 报出的 FixedVersion 针对应用自身 guava（33.7.2-jre），对 shaded 副本不可执行；副本版本随 nacos-client jar 固定",
-      "expires": "2027-02-03",
-      "addedAt": "2026-11-06"
+      "kind": "shaded_vendored",
+      "reason": "该 (CVE, 包) 的命中来自 nacos-client-3.1.1.jar 内 relocated 的 guava 副本（33.3.1-android），应用自身声明依赖已解析到修复版 33.7.2-jre；本仓库无法替换第三方 jar 内部副本，上游最新版仍内嵌 33.5.0-android < 33.7.2",
+      "expires": "2027-02-04",
+      "addedAt": "2026-11-06",
+      "evidence": {
+        "jar_path": "nacos-client-3.1.1.jar",
+        "jar_sha256": "08bc00766deb3a5044e1e16561ac49df74f397ca268ee6ef2f84a3317485c6c1",
+        "vulnerable_copy": "33.3.1-android",
+        "shaded_prefix": "com/alibaba/nacos/shaded/com/google/common/",
+        "declared_dependency_fixed": ":nexus-gateway:dependencyInsight --dependency com.google.guava:guava --configuration runtimeClasspath → com.google.guava:guava:33.4.8-jre -> 33.7.2-jre (By constraint)，21.0/32.1.3-jre/33.3.1-android 请求全部解析到 33.7.2-jre；镜像 BOOT-INF/lib 内 guava-33.7.2-jre.jar 与 nacos-client-3.1.1.jar 并存",
+        "upstream_max_version": "nacos-client 3.1.1 内嵌 guava 33.3.1-android；3.1.2 / 3.2.0 / 3.3.0(最新) 内嵌均为 33.5.0-android，全部低于修复版 33.7.2，升 nacos 也消不掉该 finding"
+      }
     }
   ]
 }
