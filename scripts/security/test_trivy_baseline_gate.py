@@ -94,25 +94,47 @@ CASES = [
         ["[PASS]", "命中 0 条"],
     ),
     (
-        "到期日越界被拒收",
+        "到期日不按 addedAt+90 → 拒收（确定性算法）",
         "report-known-only.json",
         "baseline-horizon-too-far.json",
         2,
-        ["超出最长有效期 180 天", "[REJECT]"],
+        ["addedAt=2026-11-06 + 90 天 = 2027-02-04", "不一致", "[REJECT]"],
     ),
     (
-        "not-applicable 恰为 90 天边界放行（UTC 边界，该二元组无修复版）",
+        "① not-applicable 恰为 addedAt+90 边界放行（与运行日无关）",
         "report-no-fix-only.json",
         "baseline-fix-exception-exact90.json",
         0,
         ["[PASS]", "基线命中 1 条"],
     ),
     (
-        "not-applicable 超出 90 天被拒收",
+        "② not-applicable 为 addedAt+91 → 退出码 2 拒收",
         "report-no-fix-only.json",
         "baseline-fix-exception-over90.json",
         2,
-        ["超出最长有效期 90 天", "[REJECT]"],
+        ["addedAt=2026-11-06 + 90 天 = 2027-02-04", "不一致", "[REJECT]"],
+    ),
+    (
+        "③ 运行日 = 2026-12-01，同一条目结论不变（仍通过）",
+        "report-known-only.json",
+        "baseline-known.json",
+        0,
+        ["[PASS]", "基线命中 1 条"],
+        "2026-12-01",
+    ),
+    (
+        "跨闰年：addedAt=2024-02-29 + 90 天 = 2024-05-29",
+        "report-clean-empty.json",
+        "baseline-leap-year.json",
+        0,
+        ["[PASS]"],
+    ),
+    (
+        "跨月末：addedAt=2026-01-31 + 90 天 = 2026-05-01",
+        "report-clean-empty.json",
+        "baseline-month-end.json",
+        0,
+        ["[PASS]"],
     ),
     (
         "① 同 CVE 不同包：未登记的包必须 NEW 判红（不再跨包豁免）",
@@ -198,7 +220,7 @@ CASES = [
             "有修复版 33.7.2",
             "nacos-client-3.1.1.jar",
             "33.3.1-android",
-            "到期 2027-01-05",
+            "到期 2027-02-04",
             "[PASS]",
             "shaded_vendored 例外 1 条",
         ],
@@ -222,7 +244,7 @@ CASES = [
         "report-guava-fixed-only.json",
         "baseline-shaded-expired.json",
         1,
-        ["[EXPIRED] CVE-2026-777777", "已于 2026-10-01 到期", "到期 1 条"],
+        ["[EXPIRED] CVE-2026-777777", "已于 2026-10-30 到期", "到期 1 条"],
     ),
     (
         "⑤ 同 CVE 换包仍是 [NEW]（shaded 例外不跨包）",
@@ -272,9 +294,11 @@ def check_summary_json() -> tuple[bool, str]:
 def main() -> int:
     failures = 0
     total = 0
-    for name, report, baseline, expected_code, expected_snippets in CASES:
+    for case in CASES:
         total += 1
-        result = run(report, baseline)
+        name, report, baseline, expected_code, expected_snippets, *rest = case
+        today = rest[0] if rest else TODAY
+        result = run(report, baseline, today)
         output = result.stdout + result.stderr
         missing = [s for s in expected_snippets if s not in output]
         ok = result.returncode == expected_code and not missing

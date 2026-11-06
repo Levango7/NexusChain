@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "entries": [
+    {
+      "id": "CVE-2026-LEAP01",
+      "package": "libdemo-leap",
+      "reason": "算法用例：跨闰年 2024-02-29 + 90 天 = 2024-05-29",
+      "fixable": "none",
+      "expires": "2024-05-29",
+      "addedAt": "2024-02-29"
+    }
+  ]
+}

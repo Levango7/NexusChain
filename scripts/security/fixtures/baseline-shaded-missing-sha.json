@@ -6,7 +6,8 @@
       "package": "com.google.guava:guava",
       "kind": "shaded_vendored",
       "reason": "缺 jar_sha256，应被拒收",
-      "expires": "2027-01-05",
+      "expires": "2027-02-04",
+      "addedAt": "2026-11-06",
       "evidence": {
         "jar_path": "nacos-client-3.1.1.jar",
         "vulnerable_copy": "33.3.1-android",

@@ -7,7 +7,8 @@
       "reason": "修复版只针对应用自身依赖，对被扫的静态链接副本不可执行",
       "fixable": "not-applicable",
       "evidence": "openssl 副本随上游基础镜像静态打包，无法单独替换",
-      "expires": "2027-02-04"
+      "expires": "2027-02-04",
+      "addedAt": "2026-11-06"
     }
   ]
 }

@@ -6,7 +6,8 @@
       "package": "libexpat1",
       "reason": "到期日设置过远，违反最长有效期",
       "fixable": "none",
-      "expires": "2035-01-01"
+      "expires": "2035-01-01",
+      "addedAt": "2026-11-06"
     }
   ]
 }

@@ -6,7 +6,8 @@
       "package": "*",
       "reason": "用通配实现全局豁免（应被拒收）",
       "fixable": "none",
-      "expires": "2027-01-05"
+      "expires": "2027-02-04",
+      "addedAt": "2026-11-06"
     }
   ]
 }
