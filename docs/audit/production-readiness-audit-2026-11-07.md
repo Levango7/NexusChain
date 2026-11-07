@@ -223,9 +223,27 @@ nexus.settlement.platform-address（环境变量 NEX_SETTLEMENT_PLATFORM_ADDRESS
 | #565 | A4 / B8 / B9 三个孤儿告警事件接线到既有告警出口（新增 `DomainAlertEventSink`，**不改既有类**） | `BUILD SUCCESSFUL`；XML 核对 `tests=7 skipped=0 failures=0 errors=0` |
 | #566 | A5 清算失败自动重试 + **D1 收窄修复** | `BUILD SUCCESSFUL`；XML 核对 8+3 用例全过；本仓 `check-code-hygiene`（49→49 无新增）与 `check-scheduler-lock`（带锁）本地跑过 |
 | #568 | B5 / B7 / B10 错误态收口 + **D2 / D3 / D4** | prettier / eslint / **vitest 20 文件 206 用例** / build / verify:build / verify:contrast(70 组) **全过**；`path="*"` 与错误态均**真浏览器实测** |
+| #579 | 板面认领 §十 M1–M4 卫生项处置（查重零冲突，边界写清） | 前置查重：`git grep` 板面零他人认领；三文件在 `8667f138..31ee7696` 间无人改动 |
+| #580 | M1–M3 就地标注（`FileUtil` 整类零调用方 + 接线警告 / `CopyrightUtil` 一次性工具禁调用 / MPC 脚本测试夹具凭据声明） | **+42 −0 纯注释 + 1 个 `@Deprecated`**；`compileJava` BUILD SUCCESSFUL；**`spotbugsMain` = 0 findings**；`bash -n` rc=0；卫生棘轮 49→49 |
 
 **仍待处置**：A2（鉴权开关 prod 收口）、B1（replay-store 默认内存）、B2（3DS 模拟默认开）、
 B3（compose 硬编码 container_name）、B4（0 回滚脚本）、C1（nexus-oracle 一致性）、C4（同族架构断言）。
+
+### 勘误与后续（诚实记录）
+
+1. **M1 订正**：§十 初版写「`recursiveDelete` 零调用方」，复核后是**整个 `FileUtil` 类**零调用方
+   （`git grep -c 'FileUtil\.'` = 0 个文件，`recursiveList` 同样无使用者）。#580 的 javadoc 按订正后的口径写。
+2. **审计基线 ≠ 当前 master**：#562 的审计基线是 `8667f138`；执行期间 `origin/master` 已前移到
+   **`31ee7696`**（`git fetch origin master` rc=0，2026-11-08T01:34:39+08:00，
+   `feat(devtools): 新增端到端验收脚本与 runbook (#575)`）。
+   复核：`git diff --stat 8667f138..31ee7696 --` §十 M1–M3 涉及的三个文件 ⇒ **空输出**，未被他人改动。
+3. **与板面新条目的边界**：`20261107-1120-nex-claim-delivery-readiness`（nex 认领「交付就绪工程」）
+   明确自述「**不是再修一遍 bug**」，落点为 `.env.prod.example` / `docker-compose.prod.yml` /
+   交付脚本（`check-prod-env.sh`、`smoke-dev-boot.sh`、`acceptance-e2e.sh`）/ `upgrade-rollback.md` / `slo.md`。
+   与本报告的审计修复线**零文件交集**；其 D2 反而依赖本线 #563 合并（未合并则显式 SKIP）。
+   ⇒ 本条**不与之冲突**，也**不代其认领**。
+4. 因此 §十 的 M1–M4 处置**只做注释/注解级**（#580），**不做删除**：删除属破坏性 API 变更，
+   且与 nex 的交付面存在交接关系（清理类变更宜在其交付验收跑通后再立单独立项）。
 
 ---
 
