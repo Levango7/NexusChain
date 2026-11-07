@@ -14,6 +14,7 @@ import org.nexus.gateway.compliance.ComplianceService;
 import org.nexus.gateway.config.GatewayConfig;
 import org.nexus.gateway.dto.PaymentResult;
 import org.nexus.gateway.model.PaymentOrder;
+import org.nexus.gateway.observability.PaymentMetrics;
 import org.nexus.gateway.repository.PaymentOrderRepository;
 import org.nexus.gateway.repository.RefundRepository;
 import org.nexus.gateway.risk.PaymentRiskService;
@@ -58,12 +59,18 @@ class PaymentServiceImplConfirmBindingTest {
 
     private PaymentServiceImpl service;
     private PaymentOrder order;
+    /** 业务指标（2026-11-07 接线）：用真实 registry 而非 mock，才能断言「调用点真的存在」。 */
+    private io.micrometer.prometheusmetrics.PrometheusMeterRegistry metricsRegistry;
 
     @BeforeEach
     void setUp() {
         service = new PaymentServiceImpl(orderRepository, refundRepository, gatewayConfig,
                 chainRpcClient, signingServiceClient, walletMgmtClient, eventPublisher,
                 keyManager, riskService, complianceService);
+
+        metricsRegistry = new io.micrometer.prometheusmetrics.PrometheusMeterRegistry(
+                io.micrometer.prometheusmetrics.PrometheusConfig.DEFAULT);
+        service.setPaymentMetrics(new PaymentMetrics(metricsRegistry));
 
         lenient().when(gatewayConfig.getChain()).thenReturn(chainConfig);
         lenient().when(chainConfig.isSkipConfirmation()).thenReturn(false);
@@ -102,6 +109,10 @@ class PaymentServiceImplConfirmBindingTest {
         assertEquals(PaymentOrder.OrderStatus.FAILED, order.getStatus());
         assertNull(order.getChainTxHash(), "失败路径不得写入 txHash（防止抢占唯一约束槽位）");
         verify(complianceService, never()).screenAml(any());
+        // 业务指标接线（2026-11-07）：终态失败必须计一次，否则支付失败率恒为 0
+        assertEquals(1.0, metricsRegistry.get("nexus.payments.failed").counter().count(), 1e-9,
+                "金额不匹配是终态失败，应计入 nexus_payments_failed_total");
+        assertEquals(0.0, metricsRegistry.get("nexus.payments.confirmed").counter().count(), 1e-9);
     }
 
     @Test
@@ -157,6 +168,10 @@ class PaymentServiceImplConfirmBindingTest {
             assertEquals(PaymentOrder.OrderStatus.PAID, order.getStatus());
             assertEquals(TX_HASH, order.getChainTxHash());
             assertNotNull(order.getPaidAt());
+            // 业务指标接线（2026-11-07）：进入 PAID 必须计一次成功
+            assertEquals(1.0, metricsRegistry.get("nexus.payments.confirmed").counter().count(), 1e-9,
+                    "确认成功应计入 nexus_payments_confirmed_total");
+            assertEquals(0.0, metricsRegistry.get("nexus.payments.failed").counter().count(), 1e-9);
         }
     }
 
