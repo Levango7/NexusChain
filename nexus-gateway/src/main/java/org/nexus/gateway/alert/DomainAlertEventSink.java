@@ -2,6 +2,8 @@ package org.nexus.gateway.alert;
 
 import org.nexus.gateway.event.AccountLinkageFailedEvent;
 import org.nexus.gateway.sla.SlaBreachEvent;
+import org.nexus.gateway.sla.SlaMeasurement;
+import org.nexus.gateway.sla.SlaTarget;
 import org.nexus.gateway.subscription.DunningNotificationEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -115,20 +117,33 @@ public class DomainAlertEventSink {
      */
     @EventListener
     public void onSlaBreach(SlaBreachEvent event) {
-        String targetName = event.getSlaTarget() != null ? event.getSlaTarget().getName() : "?";
-        String metricName = event.getSlaTarget() != null ? event.getSlaTarget().getMetricName() : "sla.breach";
-        Double measured = event.getSlaMeasurement() != null ? event.getSlaMeasurement().getMeasuredValue() : null;
-        Double target = event.getSlaMeasurement() != null
-                ? event.getSlaMeasurement().getTargetValue()
-                : (event.getSlaTarget() != null ? event.getSlaTarget().getTargetValue() : null);
+        SlaTarget slaTarget = event.getSlaTarget();
+        SlaMeasurement slaMeasurement = event.getSlaMeasurement();
+
+        String targetName = slaTarget == null ? "?" : slaTarget.getName();
+        String metricName = slaTarget == null ? "sla.breach" : slaTarget.getMetricName();
+
+        // 用局部原始类型 + 显式分支，不用"可空装箱 Double 参与三元再拆箱"的写法。
+        // 原写法（`Double target = meas != null ? meas.getTargetValue() : (target != null ? target.getTargetValue() : null)`）
+        // 触发 SpotBugs NP_NULL_ON_SOME_PATH（priority=2，CWE-476）——「Constant value null」
+        // 被判定可能进入 double 上下文；本仓 SAST 门禁对 findings 零容忍（>0 即红）。
+        // 语义不变：有测量值就用测量值，否则退到目标值，都没有则 "?"。
+        String measuredText = "?";
+        String targetText = "?";
+        if (slaMeasurement != null) {
+            measuredText = String.format("%.4f", slaMeasurement.getMeasuredValue());
+            targetText = String.format("%.4f", slaMeasurement.getTargetValue());
+        } else if (slaTarget != null) {
+            targetText = String.format("%.4f", slaTarget.getTargetValue());
+        }
 
         emit(RULE_SLA_BREACH,
                 metricName,
                 AlertRule.Severity.WARN,
                 String.format("SLA 未达标[%s] measured=%s target=%s",
                         targetName,
-                        measured == null ? "?" : String.format("%.4f", measured),
-                        target == null ? "?" : String.format("%.4f", target)),
+                        measuredText,
+                        targetText),
                 event);
     }
 
