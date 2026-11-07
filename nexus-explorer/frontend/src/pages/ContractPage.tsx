@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from "react";
 import { useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { api } from "../api/client";
+import { api, ApiError } from "../api/client";
 import type { ContractInfo } from "../types";
 import { DetailPageLayout, Button } from "../components/ui";
+import { displayErrorMessage } from "../utils/displayError";
 import { orDash } from "../utils/value";
 import { formatAbsoluteTime } from "../utils/time";
 
@@ -25,26 +26,36 @@ const ContractPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showFullCode, setShowFullCode] = useState(false);
+  /** 重试计数：自增即重跑加载（审计 B7）。 */
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     // addr 为 undefined 时会请求 /api/contracts/undefined
     if (!addr) return;
+    setLoading(true);
     (async () => {
       try {
-        const data = await api.getContract(addr).catch((err) => {
-          console.error("API请求失败:", err);
-          return null;
-        });
+        const data = await api.getContract(addr);
         setContract(data);
-        if (!data) setError(t("contracts.notFound"));
+        // 后端可能以 200 + null 表示「查无此合约」（原实现同样处理）。必须显式置错误态：
+        // 否则 loading=false、error=null、contract=null ⇒ DetailPageLayout 既不渲染
+        // loading 也不渲染 error ⇒ 只剩一个 header 的空白页。
+        setError(data ? null : t("contracts.notFound"));
       } catch (err) {
-        setError(err instanceof Error ? err.message : t("contracts.loadFailed"));
+        console.error("API请求失败:", err);
+        setContract(null);
+        // 404 才是「合约不存在」；其余按真实原因提示（审计 B5：错误语义错配）
+        if (err instanceof ApiError && err.status === 404) {
+          setError(t("contracts.notFound"));
+        } else {
+          setError(displayErrorMessage(err, t, "contracts.loadFailed"));
+        }
       } finally {
         setLoading(false);
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [addr]);
+  }, [addr, reloadKey]);
 
   if (loading || error || !contract) {
     return (
@@ -52,6 +63,7 @@ const ContractPage: React.FC = () => {
         loading={loading}
         loadingLabel={t("contracts.loading")}
         error={error}
+        onRetry={() => setReloadKey((k) => k + 1)}
         title={t("contracts.title")}
         backLabel={t("contracts.back")}
       />
