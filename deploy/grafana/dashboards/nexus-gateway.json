@@ -928,7 +928,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum(rate(nexus_orders_created_total{job=~\".*nexus-gateway.*\"}[$__rate_interval]))",
+          "expr": "sum(rate(nexus_orders_total{job=~\".*nexus-gateway.*\"}[$__rate_interval]))",
           "refId": "A",
           "legendFormat": "订单创建"
         },
