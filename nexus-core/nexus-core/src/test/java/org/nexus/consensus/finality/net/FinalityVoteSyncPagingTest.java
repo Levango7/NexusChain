@@ -256,24 +256,26 @@ class FinalityVoteSyncPagingTest {
         assertFalse(req.cursor(), "paging-enabled 缺省 false，不得声明 cursor");
     }
 
-    // ---------- 测试床回归：异步投递 + 广播涓流 ----------
+    // ---------- 测试床回归：短页 / 宽限期 / 无标记启发式 ----------
 
     /**
-     * PLAN-057 测试床回归：分页不得被"广播涓流 + 异步投递"提前判死。
+     * PLAN-057 分页回归：<b>短页（远小于 max-votes）不得让分页提前终止</b>。
      *
      * <p>真缺陷（2026-10-28 三节点测试床实测，E 宕机 631s）：原终止判据是
      * "本轮收到的票数 < max-votes"，而在线集群里正常广播是涓流（实测约
      * 3 票/5s），该条件几乎恒真 ⇒ 分页在第一轮后就自认为完成，
      * 583s 追赶里 {@code cursor=true} 只出现 1 次。</p>
      *
-     * <p>为什么单测此前全绿：它只投递同步响应、没有广播涓流，且响应立即到达
-     * ⇒ 计数与宽限期都不会暴露问题（与 PLAN-055 同型盲区）。</p>
+     * <p>本例固定该缺陷的最小形态：对端只有 3 张票（远小于上限 200），
+     * 第 1 轮的 0x5C 标记把游标推进到 4，第 2 轮必须继续发 {@code from=4}
+     * 的游标请求，而不是按"收到 3 票 &lt; 200"判完成。</p>
      *
-     * <p>本测试两件事同时造出来：①响应<b>异步</b>到达（另一线程，晚一个 grace）；②
-     * 期间有<b>广播涓流</b>（少量正常票）。修正后必须继续爬升而不是终止。</p>
+     * <p>广播涓流与异步投递的完整形态由 PLAN-057 测试床取证（本类不模拟线程）。
+     * 原名 {@code pagingSurvivesBroadcastTrickleAndAsyncDelivery} 名不副实
+     * ——本测试是同步中继、无涓流，故改名。</p>
      */
     @Test
-    void pagingSurvivesBroadcastTrickleAndAsyncDelivery() throws Exception {
+    void shortPageDoesNotStopPaging() {
         // 对端只有 3 张票。max-votes 默认 200 ⇒ 本轮只收到 3 票（远小于上限）。
         // 旧判据"收到数 < 上限"会在此判终止；新判据看"游标处有没有新数据"，
         // 游标=0 而拿到了 epoch>=0 的票 ⇒ 未耗尽 ⇒ 必须继续。
@@ -294,15 +296,14 @@ class FinalityVoteSyncPagingTest {
             nodes[0].onVoteReceived(p);
         }));
         nodes[1].setAntiEntropyPagingEnabled(true);
-        nodes[1].setAntiEntropyPagingGraceMs(60L);   // 缩短宽限期，测试不等 5 秒
+        nodes[1].setAntiEntropyPagingGraceMs(60L);
 
-        // 第 1 轮：从地板 0 起 ⇒ A 回 3 张（远小于上限 200）。
+        // 第 1 轮：从地板 0 起 ⇒ A 回 3 张（远小于上限 200）+ 标记 count=3。
         nodes[1].scheduledVoteAntiEntropy();
         assertEquals(3, allVotes(storeB).size(), "第 1 轮应补回全部 3 张");
 
-        // 关键：宽限期过去后跑第 2 轮。旧判据（3 < 200）会判"完成"从而不发请求；
-        // 新判据看到游标 0 处有新数据（epoch 1..3），判"未耗尽" ⇒ 推进到 4 再请求。
-        Thread.sleep(120);
+        // 第 2 轮：游标已由标记推进到 servedTo+1=4。本用例只验证"短页不终止"，
+        // 不需要等宽限期——宽限期只影响终止分支，不参与游标推进。
         nodes[1].scheduledVoteAntiEntropy();
 
         assertTrue(bRequests.size() >= 2,
@@ -426,6 +427,12 @@ class FinalityVoteSyncPagingTest {
      *
      * <p>本测试 grace=200ms、每 40ms 一 tick：旧实现每 tick 重置计时，
      * 永远等不到 200ms；修正后计时从"游标上次前进"起算，必然终止。</p>
+     *
+     * <p><b>测试床关键约束</b>：第 2 个起的 0x5C 标记必须扣住。否则对端在
+     * {@code from=4} 回空页时带的 {@code count=0} 标记会让
+     * {@code markerSaysExhausted=true} 直接终止（约 80ms），根本走不到
+     * "宽限期跨 tick 累计"分支——旧实现（每 tick 重置）也会绿，属假回归。
+     * 第 1 个标记照常送达，用于把游标从 0 推进到 4。</p>
      */
     @Test
     void graceLongerThanTickGapStillTerminates() throws Exception {
@@ -434,7 +441,17 @@ class FinalityVoteSyncPagingTest {
         }
 
         FinalityVoteBroadcaster[] nodes = new FinalityVoteBroadcaster[2];
-        nodes[0] = newNode(gadgetA, relayingPeer(p -> nodes[1].onVoteReceived(p)));
+        final List<byte[]> heldMarkers = new CopyOnWriteArrayList<>();
+        final java.util.concurrent.atomic.AtomicInteger markerCount =
+                new java.util.concurrent.atomic.AtomicInteger();
+        nodes[0] = newNode(gadgetA, relayingPeer(p -> {
+            if (FinalityVoteSyncCodec.isResponsePayload(p)
+                    && markerCount.incrementAndGet() > 1) {
+                heldMarkers.add(p);   // 第 2 个起的标记扣住：终止不得由标记驱动
+                return;
+            }
+            nodes[1].onVoteReceived(p);
+        }));
 
         final List<byte[]> bRequests = new CopyOnWriteArrayList<>();
         nodes[1] = newNode(gadgetB, relayingPeer(p -> {
@@ -446,15 +463,16 @@ class FinalityVoteSyncPagingTest {
         nodes[1].setAntiEntropyPagingEnabled(true);
         nodes[1].setAntiEntropyPagingGraceMs(200L);
 
-        // 第 1 轮：从地板 0 起，A 回 epoch 1..3。
+        // 第 1 轮：从地板 0 起，A 回 epoch 1..3 + 标记 ⇒ 游标推进到 4。
         nodes[1].scheduledVoteAntiEntropy();
         assertEquals(3, allVotes(storeB).size(), "第 1 轮应补回 3 张");
 
-        // 之后每 40ms 一 tick：游标停在 4（A 在 4 之后无货）。
+        // 之后每 40ms 一 tick：游标停在 4（A 在 4 之后无货，空页标记被扣住）。
         // 旧实现每 tick 重置计时 ⇒ grace 永远只有 40ms ⇒ 永不终止。
+        // 修正后计时从"游标上次前进"起算，跨 tick 累计 200ms 后终止并回退 margin。
         boolean sawMarginRequest = false;
         for (int i = 0; i < 12 && !sawMarginRequest; i++) {
-            Thread.sleep(40);
+            Thread.sleep(40);   // 等待下界：慢机器只会更早满足 200ms，不会假红
             nodes[1].scheduledVoteAntiEntropy();
             for (byte[] req : bRequests) {
                 if (!FinalityVoteSyncCodec.decode(req).cursor()) {
@@ -463,6 +481,9 @@ class FinalityVoteSyncPagingTest {
                 }
             }
         }
+        assertFalse(heldMarkers.isEmpty(),
+                "测试床必须扣住至少一个后续标记；否则终止由标记驱动，"
+                        + "测不到宽限期累计（旧实现也会绿）");
         assertTrue(sawMarginRequest,
                 "grace(200ms) > tick 间隔(40ms) 时终止分支不可达：分页永不退出、"
                         + "也永不回退 margin 修补");
@@ -693,7 +714,7 @@ class FinalityVoteSyncPagingTest {
      * 老节点不识 cursor 键，按旧路径服务（大约 N 票）。</p>
      */
     @Test
-    void heuristicFallbackStillServesLegacyPeerWithPageSizedBatch() throws Exception {
+    void heuristicFallbackStillServesLegacyPeerWithPageSizedBatch() {
         // A 有 150 票（远大于 maxVotes/2 = 100）。
         for (long epoch = 1; epoch <= 150; epoch++) {
             gadgetA.submitVote(vote("v1", epoch, CP1));
@@ -717,19 +738,19 @@ class FinalityVoteSyncPagingTest {
         }));
         nodes[1].setAntiEntropyPagingEnabled(true);
         nodes[1].setAntiEntropyMarginEpochs(0L);
-        nodes[1].setAntiEntropyPagingGraceMs(80L);
+        // grace=0：本用例的被测对象是「3 个无标记 tick + 页级量闸门」，
+        // 不是宽限期本身；置 0 后每个 tick 都算"宽限已过"，无需 sleep。
+        nodes[1].setAntiEntropyPagingGraceMs(0L);
 
-        // 第 1 轮：from=0，A 回 1..67（201 票大小的页）——超过 maxVotes/2。
+        // 第 1 轮：from=0，A 回 1..150（150 票，超过 maxVotes/2 = 100）。
         nodes[1].scheduledVoteAntiEntropy();
         // 前两个"无标记宽限 tick"：游标必须仍在 0（重传在途）。
         for (int i = 0; i < 2; i++) {
-            Thread.sleep(120);
             nodes[1].scheduledVoteAntiEntropy();
             long from = lastCursorFrom(bRequests);
             assertEquals(0L, from, "还没累计到 3 个无标记 tick，不得推进");
         }
-        // 第三次后：老启发式必须生效（否则老对穲节点永远补不上票）。
-        Thread.sleep(120);
+        // 第三次后：老启发式必须生效（否则老对端节点永远补不上票）。
         nodes[1].scheduledVoteAntiEntropy();
         long from = lastCursorFrom(bRequests);
         assertTrue(from > 0L,
@@ -737,16 +758,21 @@ class FinalityVoteSyncPagingTest {
     }
 
     /**
-     * PLAN-057 第 13 处回归（第 18 例）：<b>本轮什么都没收到时，老启发式不得拉走游标</b>。
+     * PLAN-057 第 13 处回归（第 18 例）：<b>无标记且页级量不足时，老启发式不得拉走游标</b>。
      *
      * <p>第五轮/第十轮实测：重启后 P2P 连接未建好，前几轮只收到在线涓流
-     * （2~6 票）、一页都没到；老启发式却按 {@code lastResponded+1} 把游标从 0
+     * （2~6 票）；老启发式却按 {@code lastResponded+1} 把游标从 0
      * 拉到 147，1..146 整段跳过（空漏 30 多票）。</p>
      *
-     * <p>不变式：无页级别量 ⇒ 游标必须坐在原地（重传），不得前进。</p>
+     * <p>本例让对端回 30 票的页、但扣住标记：页确实到了，只是量
+     * &lt; maxVotes/2 ⇒ 页级量闸门必须拦住启发式。真正的"一页都没到"
+     * 由 {@code noResponseYetMustNotBeReadAsPeerExhausted} 覆盖；
+     * 原名 {@code noPageReceivedMustNeverDragTheCursor} 名不副实，故改名。</p>
+     *
+     * <p>不变式：无标记且未收到页级别量 ⇒ 游标必须坐在原地（重传），不得前进。</p>
      */
     @Test
-    void noPageReceivedMustNeverDragTheCursor() throws Exception {
+    void smallPageWithoutMarkerMustNotDragCursor() {
         for (long epoch = 1; epoch <= 30; epoch++) {
             gadgetA.submitVote(vote("v1", epoch, CP1));
         }
@@ -754,7 +780,7 @@ class FinalityVoteSyncPagingTest {
         FinalityVoteBroadcaster[] nodes = new FinalityVoteBroadcaster[2];
         nodes[0] = newNode(gadgetA, relayingPeer(p -> {
             if (FinalityVoteSyncCodec.isResponsePayload(p)) {
-                return;   // 连接尚未建好：页与标记都不投递
+                return;   // 老对端：扣住标记；票页照常投递
             }
             nodes[1].onVoteReceived(p);
         }));
@@ -767,7 +793,8 @@ class FinalityVoteSyncPagingTest {
         }));
         nodes[1].setAntiEntropyPagingEnabled(true);
         nodes[1].setAntiEntropyMarginEpochs(200L);
-        nodes[1].setAntiEntropyPagingGraceMs(80L);
+        // grace=0：被测对象是页级量闸门，不是宽限期；无需 sleep。
+        nodes[1].setAntiEntropyPagingGraceMs(0L);
 
         // 第 1 轮：B 空库 ⇒ 首轮从地板 0 起。
         nodes[1].scheduledVoteAntiEntropy();
@@ -776,7 +803,6 @@ class FinalityVoteSyncPagingTest {
         // 模拟在线涓流：链头附近零星票（远小于 maxVotes/2）。
         for (int round = 2; round <= 5; round++) {
             nodes[1].onVoteReceived(FinalityVoteCodec.encode(vote("v1", 200 + round, CP1)));
-            Thread.sleep(120);
             nodes[1].scheduledVoteAntiEntropy();
             assertEquals(0L, lastCursorFrom(bRequests),
                 "第 13 处：未收到页级批量时游标必须留在原地（第 " + round + " 轮）");
@@ -795,7 +821,7 @@ class FinalityVoteSyncPagingTest {
      * 若期间响应到达，则由 0x5C 标记精确推进。</p>
      */
     @Test
-    void noResponseYetMustNotBeReadAsPeerExhausted() throws Exception {
+    void noResponseYetMustNotBeReadAsPeerExhausted() {
         for (long epoch = 1; epoch <= 30; epoch++) {
             gadgetA.submitVote(vote("v1", epoch, CP1));
         }
@@ -813,7 +839,9 @@ class FinalityVoteSyncPagingTest {
         }));
         nodes[1].setAntiEntropyPagingEnabled(true);
         nodes[1].setAntiEntropyMarginEpochs(0L);
-        nodes[1].setAntiEntropyPagingGraceMs(80L);
+        // grace=0：被测对象是「3 个无标记 tick 的终止闸门」，不是宽限期本身；
+        // 每个 tick 都算"宽限已过"，tick 数语义与原来一致。
+        nodes[1].setAntiEntropyPagingGraceMs(0L);
 
         // 第 1 轮：从 0 起；对端无响应（模拟连接重建）。
         nodes[1].scheduledVoteAntiEntropy();
@@ -821,7 +849,6 @@ class FinalityVoteSyncPagingTest {
         // 第 2 轮（第二个宽限 tick）：仍不得终止——第二个请求必须是**原地重传的
         // 游标请求**（cursor=true, from=0）。若提前终止，冷却期会改发 margin 请求
         // （cursor=false），第二条约为此形态。
-        Thread.sleep(120);
         nodes[1].scheduledVoteAntiEntropy();
         StringBuilder dbg = new StringBuilder("REQS: ");
         for (byte[] r : bRequests) {
@@ -840,7 +867,6 @@ class FinalityVoteSyncPagingTest {
 
         // 第 3 轮起：才允许 legacy 宽限终止（老对端兼容仍在）。
         for (int i = 0; i < 4; i++) {
-            Thread.sleep(120);
             nodes[1].scheduledVoteAntiEntropy();
         }
     }
