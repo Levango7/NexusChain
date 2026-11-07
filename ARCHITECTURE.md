@@ -99,7 +99,7 @@ Blockchain is the foundational settlement layer — not the product itself. On t
   - EIP-4844 blob 承载（`l2/blob/`）降低 L1 caldata 成本
   - 多挑战者冲突解决（`l2/challenge/`，first-valid-wins）
   - 现状注记（2026-10）：批次/挑战/bond 状态已 PG 持久化（`JdbcFraudProofStateStore`，2026-10-20），L1 交互默认内存模拟（`real-l1-enabled` 可配真实，真机验证仍未完成——Phase 5 仅覆盖双节点共识/同步）——"锚定到真实 L1 状态"与支付扩展执行接线合并立项为"状态执行接线"专项（`docs/plan/PLAN-014-state-execution-wiring.md`）
-  - 支付扩展现状（2026-10）：0x10–0x1a 仅有类型定义与 `BasicRule` 单规则预检；完整区块/RPC 路径被 `TransactionCheck.TransactionFormatCheck` 的 `type<=15` 门禁拒绝（`Type check error`），**当前不可上链**；`processTransaction` 生产无调用点，0x19/0x1a 分支仅日志。详见 PLAN-014 Phase 3。
+  - 支付扩展现状（2026-11）：0x10–0x1a 为**保留类型、未启用**；13 个写端点保留路由与方法签名，有效请求统一返回 `HTTP 501` + `code 5010`，入参校验失败优先 `5000`（RPC broadcast 缺参为 `4001`），读端点返回 `5010`；节点不构造、不签名、不广播此类交易。链上类型门禁不接受 0x10–0x1a（白名单细节以共识层为准，见 #520）；`processTransaction` 生产无调用点，0x19/0x1a 分支仅日志。裁决见 `docs/decision-payment-extension-onchain.md`，详见 PLAN-014 Phase 3。
   - 排序策略（`l2/sequencer/`，account nonce 升序 + priority fee 降序）
   - Gas 估算（`l2/gas/`）
 - **ZK Rollup**（`l2/` + `l2/zk/`）：ZK 证明即最终性
