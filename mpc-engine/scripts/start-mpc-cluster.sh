@@ -11,6 +11,13 @@
 #   5. 优雅停止：trap SIGINT/SIGTERM，停止所有节点子进程
 #   6. 日志输出到 logs/node{1,2,3}.log
 #
+# ⚠️ 仅测试环境（2026-11-07 审计标注）
+#   本脚本用于本地/CI 拉起 3 节点测试集群，其中有**固定的测试凭据**：
+#       export MPC_AUTH_TOKEN="nexus-mpc-test-token"   （见本文件下方）
+#   该值是测试夹具，**禁止用于任何生产环境**。生产形态由容器编排注入真实 token
+#   （见 docker-compose.yml 中 mpc-engine-* 的 `${MPC_AUTH_TOKEN:?…}` / k8s Secret）。
+#   本脚本只监听 127.0.0.1 且设 MPC_REQUIRE_TLS=true，也不足以使其成为生产部署方式。
+#
 # 用法：
 #   bash start-mpc-cluster.sh                # 前台启动，Ctrl+C 停止
 #   bash start-mpc-cluster.sh -d             # 后台启动（daemon 模式）

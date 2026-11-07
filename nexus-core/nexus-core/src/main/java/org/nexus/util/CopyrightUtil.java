@@ -24,6 +24,20 @@ import java.io.RandomAccessFile;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * 许可证头批量写入工具（继承自 java-nexuscore 上游的**一次性开发脚本**）。
+ *
+ * <p><b>2026-11-07 生产就绪度审计标注</b>：`main` 里被处理的路径是写死的
+ * 作者本机绝对路径（{@code C:\Users\Administrator\IdeaProjects\...\Start.java}），
+ * 即它只在原作者机器上跑过一次。</p>
+ *
+ * <p><b>不要在构建 / CI / 生产流程中调用本类</b>：它会就地改写 {@code .java} 源文件，
+ * 且路径来自调用方。若确需重跑，请先把 {@code main} 里的路径改成受控参数，
+ * 并先在小范围验证（工具本身不做任何边界校验）。</p>
+ *
+ * <p>静态扫描把它标为 path-traversal 入口——判定为误报的依据是"无服务端调用方 + 一次性工具"，
+ * 而不是"它安全"。</p>
+ */
 public class CopyrightUtil {
     private static int count = 0;
     private static List<String> fail = new ArrayList<>();
