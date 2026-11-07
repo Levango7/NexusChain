@@ -21,6 +21,9 @@ dev 档不自洽导致开箱起不来、前端错误态与契约面收口不足�
 - 被否证 / 降级 **12 条**（含审计方自身前两轮的 2 处误判）
 - 被否证那一栏与发现栏同等重要：**它决定了修复预算不浪费**。
 - 已修复并推 PR **4 个**（覆盖 6 条 🔴/🟠 + 3 条追加发现，见 §九）；仍待处置项同见 §九。
+- **Mimosa 深度扫描已完成并逐条分诊**（§十）：37 条命中，**0 条可确证为可利用缺口**；
+  该扫描自报 `inconclusive` / `completeness: partial` / `principals: 0` ⇒ **不据此宣称项目安全**。
+  另分诊出 4 条低优先清理/加固项（M1–M4）。
 
 ---
 
@@ -226,7 +229,73 @@ B3（compose 硬编码 container_name）、B4（0 回滚脚本）、C1（nexus-o
 
 ---
 
-## 十、边界声明
+## 十、Mimosa 深度扫描结果与逐条分诊
+
+扫描：`scan-job-mw5qrscc-0e0eabce5bcc3285`（depth=deep）→
+`scan-2026-11-07T01-48-14.904Z-6641a11e0a8b`，seal `sha256:d97d2086…`，
+落盘 `C:\Users\winge\.mimosa\security-scans\project-a7d16cd6922957236e07fe01\`。
+
+### 先看扫描器对自己的评价（这决定了结果能用来断言什么）
+
+| 字段 | 值 |
+|---|---|
+| `runStatus` | **inconclusive** |
+| `completeness` | **partial** |
+| `verdictEffect` | **none** |
+| `evidenceBoundary` | `static_only_no_runtime_execution` |
+| `gaps` | 「部分分析阶段未能完整覆盖」 |
+| source | 2889 文件全部解析（`truncated:false`、`readFailures:0`、`parseFailures:0`）⇒ **文件级覆盖完整** |
+| threatModel | `entryPoints:22`、**`principals: 0`**、`authorizationSurfaces:15` |
+| pathAnalysis | 1234 functions / **1617 callEdges**（对 2889 文件而言调用图很薄）、traces 4 |
+
+**`principals: 0` 是关键**：扫描器没有建立身份模型（0 个主体/角色）。
+这直接解释了 4 条 HIGH 业务逻辑候选为何全是 **inconclusive** ——
+没有身份模型就**无法观察到**所有权/租户绑定，"未观察到 guard"只等于"没看到"，不等于"没有"。
+其 proof gaps 也自认「尚未展开下游 service/repository 的实现」「object-id 流向追踪被截断」。
+
+### 37 条发现逐组分诊（每条都读到代码为止）
+
+| 组 | 条数 | 判定 | 代码依据 |
+|---|---|---|---|
+| 硬编码凭据 | 6 | **误报** | 4 个 `HEADER_API_KEY` / `LEGACY_HEADER_API_KEY` / `auth.ts API_KEY` / k6 `HEADER_API_KEY` 的值全是 **HTTP 头名** `"X-NexusChain-ApiKey"` / `"X-Nexus-Api-Key"`，注释原文即「API Key **请求头名**」；k6 脚本的真实凭据来自 `__ENV.API_KEY`。扫描器按变量名 `*API_KEY*` 判定，未看值 |
+| 过时 TLS | 2 | **误报（且方向相反）** | `MutualTlsContext:79-81` 是 `SSLContext.getInstance("TLSv1.3")` **优先**、仅 `NoSuchAlgorithmException` 时退 `TLSv1.2` —— 这是明确的现代配置；把 `"TLSv1.2"` 字面量读成了"允许过时版本" |
+| 不安全反序列化 | 1 | **误报（已加固）** | `SerializableUtil:185-193` 已有 `MAX_DESERIALIZED_SIZE` 上限 + **`ois.setObjectInputFilter(DESERIALIZATION_FILTER)`** 白名单；方法注释自标「**不推荐使用**，保留仅为兼容未迁移的调用方」 |
+| 弱加密算法 | 3 | **误报** | `user-tracker/index.js:9` 与 `:132` 命中的字面量其实是 **RIPEMD160**（`crypto.createHash('ripemd160')`）——**公钥→地址派生的标准环节**（比特币/以太坊同构），不用于完整性保护；第 3 条在 `demo/` 内 |
+| 加密强度不足 | 1 | **误报** | `SandboxCallbackCertInitializer` 是 `@Profile("sandbox")`（沙盒专用，prod 不加载），且 `RSA_KEY_SIZE = 2048`（标准强度） |
+| 反射加载类 | 1 | **误报** | `FastByteComparisons:78` 的 `Class.forName(UNSAFE_COMPARER_NAME)` 类名是**编译期常量**、非外部输入，属该工具（ES/BitcoinJ 同名实现）的标准写法 |
+| 路径穿越 | 13 | **误报（操作者即信任边界）** | 8 条在 `scripts/*.py`（本仓 CI 自用）、3 条在 `nexus-devtools/src/cli.ts`（开发者 CLI，路径来自操作者自己的参数）、1 条 `CopyrightUtil:74`、1 条 `FileUtil:70` —— **全部不被任何服务端代码调用**。其中 `FileUtil.recursiveDelete` 经核**零调用方**（除自递归），`CopyrightUtil` 唯一调用点指向作者本机的硬编码绝对路径 |
+| SSRF | 5 | **误报** | `demo/run-demo.js ×2`（演示脚本）；`nexus-sdk/python/{client.py:81,wallet.py:83}` 是**客户端 SDK**——URL 由 SDK 调用方自己配置，**调用方即信任边界**（任何 HTTP 客户端库都如此），且端点形状对齐 `nexus-core JsonRpcController`；`scripts/check-license-policy.py:170` 为 CI 取仓库自身 URL |
+| 跨文件污点 SSRF | 1 | **误报** | `cmd-monitor/send-service-alert.js:6` 的端点是**硬编码常量** `https://dysmsapi.aliyuncs.com`（阿里云短信），**不是 env 派生 URL**；env/参数喂的是 AccessKey（运维脚本常态） |
+| 业务逻辑 IDOR/BOLA 候选 | 4 | **覆盖边界产物（inconclusive）** | 4 条全在**公开只读面**：`demo/server.js:135/141` 与 `nexus-explorer/backend/src/index.ts:151/206`（`/api/tx/:hash`、`/api/account/:address`、`/api/contracts/:addr`）。这些是**区块浏览器的公开链上数据**（`AccountInfo` 只有 `address/balance/txCount`）——链上数据**没有所有权概念**，且该 BFF 本就无鉴权、靠 CORS 白名单收敛（见 `nexus-explorer/backend/src/index.ts:58-79`）。叠加 `principals: 0`，此处"未观察到绑定"无判别力 |
+
+⇒ **37 条中 0 条可确证为可利用缺口**（与我在同类项目的经验一致：这类扫描在本仓的命中率主要是**模式匹配误报**）。
+
+### 但分诊出 4 条「低优先清理/加固项」（不进 §二~§四，属卫生）
+
+| # | 项 | 依据 |
+|---|---|---|
+| M1 | `FileUtil.recursiveDelete` 是**零调用方**的递归删除工具（带 `setWritable(true)` 后删除），留着是future footgun | `git grep recursiveDelete` 仅命中定义与自递归 |
+| M2 | `CopyrightUtil` 是残留开发工具：唯一调用点写死作者机器路径 `C:\Users\Administrator\IdeaProjects\...\Start.java` | `CopyrightUtil:50` |
+| M3 | `mpc-engine/scripts/start-mpc-cluster.sh:286` 硬编码 `MPC_AUTH_TOKEN="nexus-mpc-test-token"`。值本身自述 test、脚本监听 `127.0.0.1`、且同段设 `MPC_REQUIRE_TLS=true` ⇒ 属**测试夹具**，但建议在脚本头显式声明「仅测试环境，禁止用于生产」，防误用 | 该脚本 280-292 行 |
+| M4 | `SerializableUtil` 仍保留 Java 原生反序列化路径（虽已白名单 + 大小限制 + 标记 deprecated） | 见上表 |
+
+### 依赖面（与既有门禁的关系）
+
+扫描报告的依赖段为离线公告库命中 3 包 / 6 条 advisory（未在 `findings.json` 内附明细）。
+**本仓在依赖面已有更强且钉版本的门禁**：`Trivy Filesystem Scan + SBOM`、`OWASP Dependency-Check`、
+`Cargo Audit`（两条）、`依赖许可证策略` 均为 CI 必过检查。⇒ 依赖结论**以既有门禁为准**，本扫描的该段不作为增量证据。
+
+### 边界声明（不得越界解读）
+
+- 本扫描 `verdictEffect: none`、`runStatus: inconclusive`、`evidenceBoundary: static_only_no_runtime_execution`
+  ⇒ **本文不据此宣称项目安全**，也不宣称"无漏洞"；只能说"在静态视角下、对上述 37 条命中逐条读码后未发现可利用项"。
+- `principals: 0` 与 `callEdges: 1617`（对 2889 文件）表明身份模型与调用图都不完整
+  ⇒ 业务逻辑类与跨模块数据流类结论**天然不完整**，若要覆盖该面需补充**运行时**跨主体访问验证（本轮未做）。
+- 未做：动态/运行时验证、渗透测试、真实 L1/L2 链交互、MPC 密码学正确性证明、性能压测。
+
+---
+
+## 十一、边界声明
 
 - **审计结论部分未经修改产品代码即完成**；所有结论均给出 `文件:行号` 或可执行命令。
   修复在独立 PR 中进行（§九：本报告自身所在的 PR 只加文档）。
