@@ -13,6 +13,7 @@ import type {
   RoutingRuleDto,
 } from "../types/orchestration";
 import { PageHeader } from "../components/layout/PageHeader";
+import { displayErrorMessage } from "../utils/displayError";
 
 /**
  * OrchestrationDashboard — 支付编排控制台。
@@ -99,13 +100,18 @@ const OrchestrationDashboard: React.FC = () => {
           kind: "network",
           message: t("orchestration.requestFailed", {
             status: err.status,
-            message: err.message,
+            // 审计 B5：err.message 可能是本地兜底英文串（`Request failed: 500 …`）；
+            // displayErrorMessage 会优先取服务端中文文案，否则给 i18n 文案。
+            // 保留 HTTP 状态码 —— 它对排障有用，且不是"给用户看的英文技术串"。
+            message: displayErrorMessage(err, t, "orchestration.unknownError"),
           }),
         });
       } else {
         setError({
           kind: "network",
-          message: err instanceof Error ? err.message : t("orchestration.unknownError"),
+          // 这一支就是网络失败/超时（TypeError / TimeoutError）——原写法直接透传
+          // err.message，用户在中文界面看到的是 "Failed to fetch"（审计 B5）。
+          message: displayErrorMessage(err, t, "orchestration.unknownError"),
         });
       }
       // Clear stale data so the UI does not show pre-error snapshots.

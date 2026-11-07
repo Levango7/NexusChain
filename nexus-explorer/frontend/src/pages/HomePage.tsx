@@ -3,7 +3,6 @@ import { useNavigate, Link } from "react-router-dom";
 import {
   Search,
   Settings as SettingsIcon,
-  AlertCircle,
   GitBranch,
   FileCode2,
   ArrowLeftRight,
@@ -13,7 +12,8 @@ import {
 import { useTranslation } from "react-i18next";
 import { api } from "../api/client";
 import type { BlockInfo, TransactionInfo, ChainStatus } from "../types";
-import { Loading } from "../components/ui";
+import { ErrorState, Loading } from "../components/ui";
+import { displayErrorMessage } from "../utils/displayError";
 import { formatRelativeTime } from "../utils/time";
 import { PageHeader } from "../components/layout/PageHeader";
 
@@ -68,7 +68,9 @@ const HomePage: React.FC = () => {
       setBlocks([]);
       setTransactions([]);
       // 旧实现静默吞掉错误，用户看不到任何反馈；现在显式设置错误状态供 UI 展示
-      setError(err instanceof Error ? err.message : t("common.unknownError"));
+      // 经 displayErrorMessage 映射：服务端文案优先，否则 i18n（审计 B5 —— 原写法
+      // 的 t() 兜底对 Error 实例永远不可达，中文界面会冒出 "Failed to fetch"）
+      setError(displayErrorMessage(err, t, "common.unknownError"));
     } finally {
       if (seq === fetchSeq.current) {
         setLoading(false);
@@ -79,9 +81,13 @@ const HomePage: React.FC = () => {
 
   useEffect(() => {
     fetchData();
-    const iv = setInterval(fetchData, 10000);
+    // 审计 B6：失败时不要把 10s 高频轮询一直保持 —— 对不可达的后端每轮打 3 个
+    // 端点持续施压，对用户却毫无收益。进入错误态后退避到 60s，恢复后自动回 10s。
+    // （client.ts 自己的注释也点过「10s 轮询会堆积请求」，当时只补了 8s 超时。）
+    const intervalMs = error ? 60_000 : 10_000;
+    const iv = setInterval(fetchData, intervalMs);
     return () => clearInterval(iv);
-  }, [fetchData]);
+  }, [fetchData, error]);
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -205,14 +211,18 @@ const HomePage: React.FC = () => {
         </form>
       </div>
 
-      {/* 错误提示 banner：旧实现 catch 块静默吞掉错误，用户无感知；现在显式展示 */}
+      {/* 错误提示：显式展示 + 重试入口（审计 B7 —— 此前整页 0 个按钮，
+          用户既不能重试也没有离开的出口）。onRetry 先置 loading 给出即时反馈，
+          再复用已有的 fetchData，不另造一套取数逻辑。 */}
       {error && !loading && (
-        <div
-          role="alert"
-          className="max-w-6xl mx-auto px-4 mb-4 flex items-center gap-2 text-sm text-danger bg-surface-2 border border-danger/30 rounded-md py-3"
-        >
-          <AlertCircle size={16} />
-          <span>{error}</span>
+        <div className="max-w-6xl mx-auto px-4 mb-4">
+          <ErrorState
+            message={error}
+            onRetry={() => {
+              setLoading(true);
+              void fetchData();
+            }}
+          />
         </div>
       )}
 

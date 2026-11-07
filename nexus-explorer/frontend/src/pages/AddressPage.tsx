@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from "react";
 import { useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { api } from "../api/client";
+import { api, ApiError } from "../api/client";
 import type { AccountInfo } from "../types";
 import { DetailPageLayout } from "../components/ui";
+import { displayErrorMessage } from "../utils/displayError";
 import { orDash } from "../utils/value";
 
 /**
@@ -22,32 +23,44 @@ const AddressPage: React.FC = () => {
   const [account, setAccount] = useState<AccountInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  /** 重试计数：自增即重跑加载（审计 B7）。 */
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     // addr 为 undefined 时 api.getAccount(addr!) 会崩溃
     if (!addr) return;
+    setLoading(true);
     (async () => {
       try {
-        const acc = await api.getAccount(addr).catch((err) => {
-          console.error("API请求失败:", err);
-          return null;
-        });
+        const acc = await api.getAccount(addr);
         setAccount(acc);
-        if (!acc) setError(t("address.notFound"));
+        // 200 + null 表示「查无此地址」（原实现同样处理）。必须显式置错误态，
+        // 否则 loading/error/account 三者全空 ⇒ 只剩 header 的空白页。
+        setError(acc ? null : t("address.notFound"));
       } catch (err) {
-        setError(err instanceof Error ? err.message : t("address.loadFailed"));
+        console.error("API请求失败:", err);
+        setAccount(null);
+        // 只有 404 才叫「地址不存在」。此前所有异常都被内层 .catch 吞成 null、
+        // 统一报 t("address.notFound") —— 后端没起来时用户会以为是自己地址写错了。
+        // 现按真实原因分流（审计 B5 同族：错误语义错配）。
+        if (err instanceof ApiError && err.status === 404) {
+          setError(t("address.notFound"));
+        } else {
+          setError(displayErrorMessage(err, t, "address.loadFailed"));
+        }
       } finally {
         setLoading(false);
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [addr]);
+  }, [addr, reloadKey]);
 
   return (
     <DetailPageLayout
       loading={loading}
       loadingLabel={t("address.loading")}
       error={error}
+      onRetry={() => setReloadKey((k) => k + 1)}
       title={t("address.title")}
       backLabel={t("address.back")}
       mainClassName="max-w-4xl mx-auto px-4 py-6 space-y-6"

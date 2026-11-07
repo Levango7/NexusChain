@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import { api } from "../api/client";
 import type { BlockInfo } from "../types";
 import { DetailPageLayout } from "../components/ui";
+import { displayErrorMessage } from "../utils/displayError";
 import { orDash } from "../utils/value";
 import { formatAbsoluteTime } from "../utils/time";
 
@@ -25,22 +26,29 @@ const BlockDetailPage: React.FC = () => {
   const [block, setBlock] = useState<BlockInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  /** 重试计数：自增即重跑加载（审计 B7）。 */
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     // height 为 undefined 时 Number(undefined) === NaN，会请求 /api/blocks/NaN
     if (!height) return;
+    setLoading(true);
     (async () => {
       try {
         const data = await api.getBlock(Number(height));
         setBlock(data);
+        // 200 + null 表示「查无此区块」：显式置错误态，避免三态全空只剩 header
+        setError(data ? null : t("block.notFound"));
       } catch (err) {
-        setError(err instanceof Error ? err.message : t("block.notFound"));
+        console.error("API请求失败:", err);
+        setBlock(null);
+        setError(displayErrorMessage(err, t, "block.notFound"));
       } finally {
         setLoading(false);
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [height]);
+  }, [height, reloadKey]);
 
   if (loading || error || !block) {
     return (
@@ -48,6 +56,7 @@ const BlockDetailPage: React.FC = () => {
         loading={loading}
         loadingLabel={t("block.loadingBlock", { height })}
         error={error}
+        onRetry={() => setReloadKey((k) => k + 1)}
         title={
           block ? (
             <>
