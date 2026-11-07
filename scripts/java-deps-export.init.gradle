@@ -54,7 +54,9 @@ gradle.projectsLoaded { g ->
                     cfg.incoming.artifactView { av -> av.lenient(true) }.artifacts.each { art ->
                         def id = art.id.componentIdentifier
                         if (id instanceof ModuleComponentIdentifier) {
-                            coords.add("${id.group}:${id.name}:${id.version}".toString())
+                            // ModuleComponentIdentifier 只有 group/module/version，**没有 name**
+                            // （Groovy 属性访问会直接抛 MissingPropertyException，不是 null）。
+                            coords.add("${id.group}:${id.module}:${id.version}".toString())
                         }
                     }
                     // lenient(true) 会把「解析得到但取不到文件」的依赖照样计入上面；
