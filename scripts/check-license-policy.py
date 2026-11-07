@@ -18,8 +18,13 @@ OWASP DC 漏洞）。`docs/licensing.md` §4.3 自述该缺口，§5 列为待�
    `scripts/rust-license-cache.json`（经 crates.io 核实过的可提交缓存）。
    缓存未命中时默认计为 miss 并在报告里如实标注（**不伪装成通过**）；
    `--update-cache` 时才联网补查并写回缓存（保证 CI 离线可复现）。
-3. **Java/Gradle**：**未覆盖**——Gradle 无锁文件，需解析已解析依赖树
-   （另行评估）。报告里显式标注，不假装覆盖。
+3. **Java/Gradle**（2026-11-06 补齐，板 20261105-0502）：Gradle 无锁文件，故清单由
+   `scripts/java-deps-export.init.gradle`（只读导出 `runtimeClasspath` 已解析坐标）
+   + `scripts/java-deps-collect.py merge` 合成为**可提交清单**
+   `scripts/java-dependencies.json`；许可字符串查 `scripts/java-license-cache.json`
+   （Maven Central POM 的 `<licenses>`，含 parent 链继承，经人工/脚本核实后提交）。
+   同样**默认离线只读缓存**，`--update-java-cache` 才联网补查。
+   清单缺失 ⇒ Java 仍是"未覆盖"，报告如实标 ❌，不假装扫过。
 
 默认 **report-only**（exit 0）；加 `--strict` 时，发现强传染许可即 exit 1。
 这与本仓"新门禁先观察模式、再转阻断"的惯例一致
@@ -29,6 +34,15 @@ OWASP DC 漏洞）。`docs/licensing.md` §4.3 自述该缺口，§5 列为待�
 ----
     python3 scripts/check-license-policy.py --out-dir build/license-report
     python3 scripts/check-license-policy.py --strict      # 阻断模式
+    python3 scripts/check-license-policy.py --selftest    # 内置合成样本（三向）
+
+Java 腿的刷新流程（清单/缓存都由维护者显式刷新，CI 只读）：
+    ./gradlew --no-daemon --init-script scripts/java-deps-export.init.gradle \
+        -Dnexus.javaDepsOut=$PWD/build/java-deps exportJavaDependencies
+    # …对 6 个 included build 各跑一次同一命令（见 ci.yml 的步骤）
+    python3 scripts/java-deps-collect.py merge --from build/java-deps \
+        --out scripts/java-dependencies.json
+    python3 scripts/check-license-policy.py --update-java-cache
 """
 from __future__ import annotations
 
@@ -230,8 +244,212 @@ def scan_rust(root: str, findings: list, update_cache: bool = False) -> dict:
             "api_fetched": added, "misses": misses}
 
 
+# ---------------------------------------------------------------- Java/Gradle
+JAVA_MANIFEST_REL = "scripts/java-dependencies.json"
+JAVA_CACHE_REL = "scripts/java-license-cache.json"
+MAVEN_POM_BASE = "https://repo1.maven.org/maven2"
+
+
+def _pom_url(group: str, name: str, ver: str) -> str:
+    return (f"{MAVEN_POM_BASE}/{group.replace('.', '/')}/{name}/{ver}/{name}-{ver}.pom")
+
+
+def _xml_local(el, tag: str) -> list:
+    """按 local-name 取子元素——POM 可能带 http://maven.apache.org/POM/4.0.0 命名空间。"""
+    out = []
+    for c in el:
+        t = c.tag.split('}')[-1] if isinstance(c.tag, str) else c.tag
+        if t == tag:
+            out.append(c)
+    return out
+
+
+def _pom_license_names(group: str, name: str, ver: str, timeout: int = 20,
+                     max_hops: int = 6) -> list[str] | None:
+    """取 POM 的 `<licenses><name>` 列表；**沿 parent 链继承**（多数 Apache/Spring
+    子模块把许可声明在父 POM）。
+
+    返回 None = 取不到（网络失败 / 404 / XML 非法），调用方按"未核实"处理；
+    返回 [] = POM 树里确实没有 `<licenses>`，属"已核实但 POM 未声明"，
+    与"没查过"必须区分——否则缓存里的真实缺口会被反复当成 miss 或当成通过。
+    """
+    import urllib.request
+    import xml.etree.ElementTree as ET
+
+    names: list[str] = []
+    g, n, v = group, name, ver
+    seen: set[str] = set()
+    for _ in range(max_hops):
+        key = f"{g}:{n}:{v}"
+        if key in seen:
+            break
+        seen.add(key)
+        try:
+            req = urllib.request.Request(_pom_url(g, n, v), headers={
+                "User-Agent": "nexuschain-license-audit "
+                              "(https://github.com/Levango7/NexusChain)"})
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                body = r.read(1_000_000)
+        except Exception:
+            return None
+        # POM 是第三方内容：合法 POM 从不含 DOCTYPE，出现即按"不可信"丢弃，
+        # 避免实体展开（billion laughs）/ 外部实体这类解析器攻击面。
+        if b'<!doctype' in body.lower():
+            return None
+        try:
+            root = ET.fromstring(body)
+        except Exception:
+            return None
+        for lic_node in _xml_local(root, 'licenses'):
+            for lic in _xml_local(lic_node, 'license'):
+                for nm in _xml_local(lic, 'name'):
+                    txt = (nm.text or '').strip()
+                    if txt:
+                        names.append(txt)
+        parents = _xml_local(root, 'parent')
+        if not parents:
+            break
+        par = parents[0]
+        pg = (_xml_local(par, 'groupId') or [None])[0]
+        pn = (_xml_local(par, 'artifactId') or [None])[0]
+        pv = (_xml_local(par, 'version') or [None])[0]
+        if not (pg is not None and pn is not None and pv is not None):
+            break
+        g, n, v = (pg.text or g).strip(), (pn.text or n).strip(), (pv.text or v).strip()
+    return names
+
+
+# POM 里的许可名是自由文本，这里只做**高置信**归一；拿不准的一律原样保留，
+# 交给 classify() 判 UNKNOWN（宁可留人工核对项，不要把猜测写成结论）。
+_POM_NAME_MAP = (
+    ("apache license, version 2", "Apache-2.0"),
+    ("apache software license, version 2", "Apache-2.0"),
+    ("apache license 2", "Apache-2.0"),
+    ("the apache license, version 2", "Apache-2.0"),
+    ("gnu general public license, version 3", "GPL-3.0"),
+    ("gnu general public license, version 2", "GPL-2.0"),
+    ("gnu affero general public license", "AGPL-3.0"),
+    ("gnu lesser general public license, version 3", "LGPL-3.0"),
+    ("gnu lesser general public license, version 2.1", "LGPL-2.1"),
+    ("gnu lesser general public license version 3", "LGPL-3.0"),
+    ("eclipse public license v. 2.0", "EPL-2.0"),
+    ("eclipse public license 2.0", "EPL-2.0"),
+    ("eclipse distribution license, version 1.0", "BSD-3-Clause"),
+    ("mozilla public license, version 2.0", "MPL-2.0"),
+    ("mozilla public license 2.0", "MPL-2.0"),
+    ("common development and distribution license (cddl), version 1.1", "CDDL-1.1"),
+    ("common development and distribution license version 1.1", "CDDL-1.1"),
+    ("mit license", "MIT"),
+    ("the mit license", "MIT"),
+    ("new bsd license", "BSD-3-Clause"),
+    ("bsd 3-clause", "BSD-3-Clause"),
+    ("the bsd license", "BSD-3-Clause"),
+    ("bsd licence", "BSD-3-Clause"),
+    ("simplified bsd license", "BSD-2-Clause"),
+    ("eclipse public license v. 1.0", "EPL-1.0"),
+    ("gnu lesser general public license", "LGPL"),
+    ("gnu general public license", "GPL"),
+)
+
+
+def _normalize_pom_license(names: list[str]) -> str:
+    if not names:
+        return ""
+    out = []
+    for raw in names:
+        low = raw.lower().strip()
+        hit = None
+        for pat, spdx in _POM_NAME_MAP:
+            if pat in low:
+                hit = spdx
+                break
+        out.append(hit or raw.strip())
+    # 多个 <license> 在 Maven 语义里是"任选其一"，但 classify() 刻意取最危险项，
+    # 这里保留 OR 串即可（保守定级由 classify 负责）。
+    return " OR ".join(dict.fromkeys(out))
+
+
+def scan_java(root: str, findings: list, update_cache: bool = False) -> dict:
+    """读可提交清单 + 可提交许可缓存；默认**离线**，miss 如实计入。
+
+    与 Rust 腿同构的理由：许可扫描要出现在 CI 门禁里，就必须离线、确定性、
+    不新增网络依赖（本仓 2026-10-18 已为 Rust 腿的恒联网问题修过一次）。
+    Java 侧唯一的"已解析"视图来自 Gradle，故拆成「维护者跑导出 + 合成提交」与
+    「CI 只读清单」两步。
+    """
+    manifest_path = os.path.join(root, JAVA_MANIFEST_REL)
+    cache_path = os.path.join(root, JAVA_CACHE_REL)
+    stat = {"present": False, "coords": 0, "modules": 0, "builds": 0,
+            "cached": 0, "undeclared": 0, "misses": [], "unresolved": []}
+
+    if not os.path.exists(manifest_path):
+        return stat
+    try:
+        manifest = json.load(open(manifest_path, encoding="utf-8"))
+    except Exception as e:
+        stat["error"] = f"清单不可解析：{e}"
+        return stat
+
+    coords = manifest.get("coordinates") or []
+    stat.update({"present": True, "coords": len(coords),
+                 "modules": len(manifest.get("modules") or {}),
+                 "builds": len(manifest.get("builds") or []),
+                 "unresolved": manifest.get("unresolved") or []})
+
+    cache: dict = {}
+    if os.path.exists(cache_path):
+        try:
+            cache = json.load(open(cache_path, encoding="utf-8"))
+        except Exception:
+            cache = {}
+
+    dirty = 0
+    src_by_coord: dict[str, str] = {}
+    for mod_key, cs in (manifest.get("modules") or {}).items():
+        for c in cs:
+            src_by_coord.setdefault(c, mod_key)
+
+    for c in coords:
+        lic = cache.get(c)
+        if lic is None and update_cache:
+            parts = c.split(":")
+            if len(parts) == 3:
+                names = _pom_license_names(*parts)
+                if names is not None:
+                    lic = _normalize_pom_license(names)
+                    cache[c] = lic
+                    dirty += 1
+        src = src_by_coord.get(c, "(未归属模块)")
+        if lic is None:
+            stat["misses"].append(c)
+            findings.append({"eco": "java", "file": JAVA_MANIFEST_REL, "name": c,
+                             "version": "", "license": "(缓存未核实)",
+                             "class": "UNKNOWN", "module": src})
+            continue
+        if lic == "":
+            stat["undeclared"] += 1
+            findings.append({"eco": "java", "file": JAVA_MANIFEST_REL, "name": c,
+                             "version": "", "license": "(POM 未声明许可)",
+                             "class": "UNKNOWN", "module": src})
+            continue
+        stat["cached"] += 1
+        findings.append({"eco": "java", "file": JAVA_MANIFEST_REL, "name": c,
+                         "version": "", "license": lic, "class": classify(lic),
+                         "module": src})
+
+    if update_cache and dirty:
+        try:
+            with open(cache_path, "w", encoding="utf-8", newline="\n") as fh:
+                json.dump(dict(sorted(cache.items())), fh,
+                          ensure_ascii=False, indent=1, sort_keys=True)
+                fh.write("\n")
+        except Exception as e:
+            print(f"::warning::Java 许可缓存写入失败：{e}")
+    return stat
+
+
 # ---------------------------------------------------------------- 报告
-def build_report(findings, rust_stat, npm_stat):
+def build_report(findings, rust_stat, npm_stat, java_stat):
     by_class = defaultdict(list)
     for f in findings:
         by_class[f["class"]].append(f)
@@ -266,8 +484,26 @@ def build_report(findings, rust_stat, npm_stat):
                      f"（缓存命中 {rust_stat['cache_hit']}、本次查询 {rust_stat['api_fetched']}） |")
     else:
         L.append("| Rust | ➖ 无 | 未发现 Cargo.lock |")
-    L.append("| **Java/Gradle** | ❌ **未覆盖** | Gradle 无锁文件，需解析已解析依赖树；"
-             "**本脚本不声称覆盖 Java**，勿据此认为 Java 依赖已合规 |\n")
+    if java_stat.get("present"):
+        jmiss = java_stat.get("misses") or []
+        L.append(f"| {'✅' if not jmiss else '⚠️'} Java/Gradle | "
+                 f"{'已覆盖' if not jmiss else '部分覆盖'} | "
+                 f"清单 {java_stat['coords']} 个第三方坐标"
+                 f"（{java_stat['modules']} 模块 / {java_stat['builds']} 构建树）；"
+                 f"许可缓存命中 {java_stat['cached']}、POM 未声明 {java_stat['undeclared']}、"
+                 f"**未核实 {len(jmiss)}**（新增依赖需 `--update-java-cache` 刷新） |")
+    else:
+        L.append("| **Java/Gradle** | ❌ **未覆盖** | Gradle 无锁文件；可提交清单 "
+                 f"`{JAVA_MANIFEST_REL}` 尚未生成（先跑 `java-deps-export.init.gradle` "
+                 "+ `java-deps-collect.py merge`）。"
+                 "**本脚本不声称覆盖 Java**，勿据此认为 Java 依赖已合规 |")
+    L.append("")
+    if java_stat.get("error"):
+        L.append(f"> ⚠️ Java 清单读取异常：{java_stat['error']}\n")
+    if java_stat.get("unresolved"):
+        u = java_stat["unresolved"]
+        L.append(f"> ℹ️ 导出时 {len(u)} 条依赖边解析失败、不在清单内（**不代表合规**）："
+                 f"{'; '.join(u[:5])}{' …' if len(u) > 5 else ''}\n")
 
     if by_class["STRONG_COPYLEFT"]:
         L.append("## 3. 🔴 强传染许可组件（**须处置**）\n")
@@ -307,6 +543,97 @@ def build_report(findings, rust_stat, npm_stat):
     return "\n".join(L), by_class
 
 
+# ------------------------------------------------------------------ selftest
+def _dump(path: str, obj) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        json.dump(obj, fh, ensure_ascii=False, indent=1, sort_keys=True)
+        fh.write("\n")
+
+
+def selftest() -> int:
+    """三向自测：正例通过、清单缺失必判红、缓存与清单不一致必判红。
+
+    为什么要有这条：本脚本的失败模式不是"算错"，而是**把没扫说成扫过**——
+    一次 `continue-on-error`、一个空清单、一个静默 return 都会让报告看起来
+    "已覆盖、零风险"。三条断言分别钉住：分类正确性、覆盖缺失必须能被 --require-java
+    抓到、以及"清单里有坐标但缓存没核实"也必须被抓到。
+    """
+    import tempfile
+
+    script = os.path.abspath(__file__)
+    tmp = tempfile.mkdtemp(prefix="lic-selftest-")
+    os.makedirs(os.path.join(tmp, "scripts"), exist_ok=True)
+    # 用一份副本跑 subprocess，使 repo_root() 落到 tmp（临时目录不在任何 git 仓内）
+    test_script = os.path.join(tmp, "scripts", "check-license-policy.py")
+    with open(script, encoding="utf-8") as src, open(test_script, "w",
+                                                    encoding="utf-8", newline="\n") as dst:
+        dst.write(src.read())
+
+    manifest = {
+        "schema": 1,
+        "builds": ["nexus"],
+        "moduleCount": 1,
+        "coordinates": ["com.zaxxer:HikariCP:5.1.0",
+                        "org.gpl.example:gpl-thing:1.0",
+                        "org.quiet:no-license:2.0"],
+        "modules": {"nexus:nexus-gateway": ["com.zaxxer:HikariCP:5.1.0",
+                                            "org.gpl.example:gpl-thing:1.0",
+                                            "org.quiet:no-license:2.0"]},
+        "unresolved": [],
+    }
+    cache = {"com.zaxxer:HikariCP:5.1.0": "Apache-2.0",
+             "org.gpl.example:gpl-thing:1.0": "GPL-3.0",
+             "org.quiet:no-license:2.0": ""}
+
+    def run(extra=(), cwd=tmp):
+        return subprocess.run([sys.executable, test_script, "--out-dir", "build/lr",
+                               *extra], capture_output=True, text=True, cwd=cwd)
+
+    # ① 正例：分类正确、report-only 恒 0、--strict 才因强传染红
+    _dump(os.path.join(tmp, JAVA_MANIFEST_REL), manifest)
+    _dump(os.path.join(tmp, JAVA_CACHE_REL), cache)
+    r = run()
+    assert r.returncode == 0, f"报告制应 0：{r.stdout}{r.stderr}"
+    assert "强传染 1" in r.stdout, r.stdout
+    assert "未核实 0" in r.stdout, r.stdout
+    md = open(os.path.join(tmp, "build/lr/license-report.md"), encoding="utf-8").read()
+    assert "✅ Java/Gradle | 已覆盖" in md, md[md.find("## 2"):md.find("## 2") + 900]
+    r1 = run(["--strict"])
+    assert r1.returncode == 1 and "STRONG-COPYLEFT] java org.gpl.example" in r1.stdout, r1.stdout
+    print("  ✓ 正例：Java 分类正确（Apache/GPL/未声明各一），报告制 0、--strict 1")
+
+    # ② 反向对照：清单缺失 ⇒ 报告制仍 0（不新增假红），但 --require-java 必判红，
+    #    且报告行必须写 ❌ 未覆盖——否则"零 Java 发现"会被读成"Java 已合规"。
+    os.remove(os.path.join(tmp, JAVA_MANIFEST_REL))
+    r2 = run()
+    assert r2.returncode == 0, f"缺清单时报告制仍应 0：{r2.stdout}"
+    assert "Java 腿**未覆盖**" in r2.stdout, r2.stdout
+    md2 = open(os.path.join(tmp, "build/lr/license-report.md"), encoding="utf-8").read()
+    assert "❌ **未覆盖**" in md2, "报告不得把缺清单写成已覆盖"
+    r3 = run(["--require-java"])
+    assert r3.returncode == 1, "--require-java 下缺清单必须判红"
+    print("  ✓ 反向①：清单缺失 ⇒ 报告标 ❌ 且 --require-java 判红（不会假通过）")
+
+    # ③ 反向对照：清单与缓存不一致（新增坐标没核实）⇒ --require-java 必判红并点名
+    manifest2 = dict(manifest)
+    manifest2["coordinates"] = sorted(set(manifest["coordinates"]) |
+                                      {"org.new:unaudited:9.9"})
+    _dump(os.path.join(tmp, JAVA_MANIFEST_REL), manifest2)
+    r4 = run()
+    assert r4.returncode == 0 and "未核实 1" in r4.stdout, r4.stdout
+    r5 = run(["--require-java"])
+    assert r5.returncode == 1 and "org.new:unaudited:9.9" in r5.stdout, r5.stdout
+    print("  ✓ 反向②：缓存未覆盖新增坐标 ⇒ 判红并点名（不静默放过）")
+
+    # ④ 缓存整体缺失也不放过（回到 miss 全量）
+    os.remove(os.path.join(tmp, JAVA_CACHE_REL))
+    r6 = run(["--require-java"])
+    assert r6.returncode == 1 and "未核实 4" in r6.stdout, r6.stdout
+    print("  ✓ 反向③：许可缓存文件缺失 ⇒ 全部计未核实并判红")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out-dir", default="build/license-report")
@@ -315,21 +642,33 @@ def main() -> int:
     ap.add_argument("--update-cache", action="store_true",
                     help="允许联网查询缓存未命中的 crate，并把结果写回 "
                          "scripts/rust-license-cache.json（默认：离线只读缓存）")
+    ap.add_argument("--update-java-cache", action="store_true",
+                    help="允许联网按 Maven Central POM（含 parent 链）补齐 "
+                         "scripts/java-license-cache.json 的未核实坐标（默认离线只读）")
+    ap.add_argument("--require-java", action="store_true",
+                    help="Java 腿必须已覆盖：清单缺失、或清单里有坐标未核实许可 ⇒ exit 1。"
+                         "用于清单/缓存 bootstrap 完成后，把「覆盖缺口」钉成门禁；"
+                         "注意它阻断的是**没扫**，不是**扫出 copyleft**（后者仍报告制）")
+    ap.add_argument("--selftest", action="store_true", help="内置合成样本三向自测")
     args = ap.parse_args()
+
+    if args.selftest:
+        return selftest()
 
     root = repo_root()
     findings: list = []
     npm_stat = scan_npm(root, findings)
     rust_stat = scan_rust(root, findings, update_cache=args.update_cache)
+    java_stat = scan_java(root, findings, update_cache=args.update_java_cache)
 
-    md, by_class = build_report(findings, rust_stat, npm_stat)
+    md, by_class = build_report(findings, rust_stat, npm_stat, java_stat)
     os.makedirs(os.path.join(root, args.out_dir), exist_ok=True)
     md_path = os.path.join(root, args.out_dir, "license-report.md")
     js_path = os.path.join(root, args.out_dir, "license-report.json")
     with open(md_path, "w", encoding="utf-8") as fh:
         fh.write(md)
     with open(js_path, "w", encoding="utf-8") as fh:
-        json.dump({"findings": findings, "rust": rust_stat,
+        json.dump({"findings": findings, "rust": rust_stat, "java": java_stat,
                    "npm_total": npm_stat[0], "npm_licensed": npm_stat[1]},
                   fh, ensure_ascii=False, indent=2)
 
@@ -344,8 +683,28 @@ def main() -> int:
         print(f"::warning::Rust 有 {len(m)} 个 crate 许可未核实（新增依赖？）："
               f"{', '.join(m[:10])}{' …' if len(m) > 10 else ''}")
 
+    jmiss = java_stat.get("misses") or []
+    if java_stat.get("present"):
+        print(f"Java 腿：清单 {java_stat['coords']} 坐标 / "
+              f"{java_stat['modules']} 模块 / {java_stat['builds']} 构建树，"
+              f"缓存命中 {java_stat['cached']}，POM 未声明 {java_stat['undeclared']}，"
+              f"未核实 {len(jmiss)}")
+        if jmiss:
+            print(f"::warning::Java 有 {len(jmiss)} 个坐标许可未核实："
+                  f"{', '.join(jmiss[:10])}{' …' if len(jmiss) > 10 else ''}"
+                  f"（刷新：python3 scripts/check-license-policy.py --update-java-cache）")
+    else:
+        print("::warning::Java 腿**未覆盖**（清单 "
+              f"{JAVA_MANIFEST_REL} 未生成）——报告里的合计不含任何 Java 依赖")
+
     if args.strict and strong:
         print("::error::--strict 模式下存在强传染许可，门禁失败")
+        return 1
+    if args.require_java and (not java_stat.get("present") or jmiss
+                             or java_stat.get("error")):
+        print("::error::--require-java：Java 覆盖不完整"
+              f"（清单已生成={bool(java_stat.get('present'))}，"
+              f"未核实={len(jmiss)}，异常={java_stat.get('error', '-')}）")
         return 1
     return 0
 

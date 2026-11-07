@@ -788,8 +788,12 @@ jobs:
   # 覆盖边界（诚实标注，勿高估）：
   #   · npm  — ✅ 解析全部 package-lock.json 的 license 字段（离线、确定）
   #   · Rust — ✅ 解析 Cargo.lock + crates.io 许可（带可提交缓存，离线可复现）
-  #   · Java — ❌ **未覆盖**（Gradle 无锁文件，需解析已解析依赖树，另行评估）
-  # 脚本本身对未覆盖项会在报告里显式标注，不假装全覆盖。
+  #   · Java — ⚠️ 2026-11-06 起**机制已就位**：清单由 Build & Test 的
+  #     「导出 Java 依赖清单」步骤产出（`java-deps-export.init.gradle`），
+  #     合成为可提交清单 `scripts/java-dependencies.json` 后本 job 才真正读得到；
+  #     清单未 bootstrap 前，报告仍写 ❌ 未覆盖（脚本自己判，不靠注释）。
+  # 本 job 先跑 `--selftest`（三向：正例 / 清单缺失 / 缓存与清单不一致）——
+  # 许可门禁最坏的失效是"把没扫说成扫过"，自测红 = 载体坏，必须与"发现 copyleft"区分。
   # ============================================================
   license-policy:
     name: 依赖许可证策略（报告制）
@@ -804,9 +808,17 @@ jobs:
         with:
           python-version: '3.14'
 
+      - name: 脚本三向自测（载体健康，红=门禁自己瞎了）
+        run: python3 scripts/check-license-policy.py --selftest
+
+      - name: Java 清单合成器自测（拒绝空清单 / 畸形分片）
+        run: python3 scripts/java-deps-collect.py --selftest
+
       - name: 许可证策略扫描（报告制，不阻断）
-        # 脚本默认 exit 0（report-only）。加 --strict 才会在发现强传染许可时
-        # 返回 1——待 licensing.md §5 决策落地后再切。
+        # 脚本默认 exit 0（report-only）。两个开关的含义不同，别混用：
+        #   --strict       ⇒ 发现**强传染许可**才 1（待 licensing.md §5 决策落地后打开）
+        #   --require-java ⇒ Java **覆盖不完整**才 1（清单缺失 / 坐标未核实许可）
+        # 后者是"没扫就红"，不是"扫出问题就红"，故可在 bootstrap 完成后立刻打开。
         run: python3 scripts/check-license-policy.py --out-dir build/license-report
 
       - name: 上传许可证报告（取证）
