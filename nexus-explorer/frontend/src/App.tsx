@@ -11,6 +11,7 @@ import CrossChainPage from "./pages/CrossChainPage";
 import Settings from "./pages/Settings";
 import WithdrawalApprovalsPage from "./pages/WithdrawalApprovalsPage";
 import FundDashboardPage from "./pages/FundDashboardPage";
+import NotFoundPage from "./pages/NotFoundPage";
 import { ErrorBoundary } from "./components/ui";
 
 /**
@@ -33,6 +34,10 @@ const withBoundary = (element: React.ReactElement): React.ReactElement => (
  * P1   : 路由级 ErrorBoundary 包裹，隔离单页渲染错误。
  * 2026-10-12: 新增 /contracts、/contracts/:addr、/crosschain —— README 承诺的
  *             「合约查看 / 跨链交易追踪」此前在后端可用但前端零消费（不可达）。
+ * 2026-11-07: 补 `path="*"` 兜底路由（审计发现 B10）。此前未匹配路径下 React Router
+ *             渲染 null ⇒ `<div id="root">` 保持空 ⇒ **纯白屏**；且本仓没有承载导航的
+ *             布局路由（首页自己渲染导航、其它页渲染「返回」链接），故未匹配时用户
+ *             既无导航也无返回入口，被完全困住。兜底页见 pages/NotFoundPage.tsx。
  */
 const App: React.FC = () => (
   <ErrorBoundary>
@@ -49,6 +54,8 @@ const App: React.FC = () => (
         <Route path="/wallet/approvals" element={withBoundary(<WithdrawalApprovalsPage />)} />
         <Route path="/fund" element={withBoundary(<FundDashboardPage />)} />
         <Route path="/settings" element={withBoundary(<Settings />)} />
+        {/* 兜底：必须放最后。未匹配路径渲染 404 页而不是 null（白屏）。 */}
+        <Route path="*" element={withBoundary(<NotFoundPage />)} />
       </Routes>
     </BrowserRouter>
   </ErrorBoundary>

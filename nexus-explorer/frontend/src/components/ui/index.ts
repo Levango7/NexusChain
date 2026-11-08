@@ -25,5 +25,8 @@ export type { ErrorBoundaryProps } from "./ErrorBoundary";
 export { Badge } from "./Badge";
 export type { BadgeProps, BadgeTone } from "./Badge";
 
+export { ErrorState } from "./ErrorState";
+export type { ErrorStateProps } from "./ErrorState";
+
 export { DetailPageLayout } from "./DetailPageLayout";
 export type { DetailPageLayoutProps } from "./DetailPageLayout";

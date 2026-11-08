@@ -348,11 +348,19 @@ Response Body:
 |25|0x19|DID身份注册|
 |26|0x1a|订阅支付授权|
 
-> 注（2026-10-20）：上表仅为交易类型编号定义。0x10–0x1a 的完整区块/RPC 路径当前受节点
-> `TransactionCheck.TransactionFormatCheck` 的 `type<=15` 门禁拒绝（`Type check error`），
-> **均不可上链**；`PaymentTransactionProcessor` 生产无调用点。详见 PLAN-014 Phase 3。
+> 注（2026-11-06 更新，B-2 口径收口）：上表仅为交易类型编号定义。0x10–0x1a 为**保留未启用**类型：
+> 节点侧 13 个写端点已收口——保留路由与方法签名，有效请求统一返回 **HTTP 501 + code 5010**
+> （`Payment extension (0x10-0x1a) is reserved but not enabled`），入参校验失败优先返回 5000
+> （`POST /rpc/v1/transaction/broadcast` 缺参为 4001）；节点不再构造、签名或广播此类交易。
+> 链上类型门禁是否接受 0x10–0x1a 以共识层为准（见 #520）；`PaymentTransactionProcessor`
+> 生产无调用点。详见 PLAN-014 Phase 3。
 
 ### 四、支付通道 RPC 接口
+
+> 注（2026-11-06，B-2）：本节 6 个写接口（`/channel/open`、`/channel/close`、
+> `/channel/cooperative-close`、`/channel/settle/{channelId}`、`/channel/force-expire/{channelId}`、
+> `/channel/unilateral-close`）**保留未启用**：有效请求返回 HTTP 501 + code 5010；入参校验失败
+> 优先返回 5000。路由与方法签名保留，节点不构造交易。
 
 #### 4.0 开启支付通道 — openChannel
 
@@ -440,6 +448,9 @@ Response Body:
 
 ### 五、批量转账 RPC 接口
 
+> 注（2026-11-06，B-2）：`/batch/transfer` **保留未启用**：有效请求返回 HTTP 501 + code 5010；
+> 入参校验失败优先返回 5000。路由与方法签名保留，节点不构造交易。
+
 #### 5.0 批量转账 — batchTransfer
 
 ```
@@ -483,6 +494,10 @@ Response Body:
 ```
 
 ### 六、稳定币 RPC 接口
+
+> 注（2026-11-06，B-2）：写接口 `/stablecoin/mint`、`/stablecoin/redeem` **保留未启用**：
+> 有效请求返回 HTTP 501 + code 5010；入参校验失败优先返回 5000。读接口返回 code 5010。
+> 路由与方法签名保留，节点不构造交易。
 
 #### 6.0 铸造稳定币 — mintStableCoin
 
@@ -564,6 +579,10 @@ Response Body:
 ```
 
 ### 七、跨链桥 RPC 接口
+
+> 注（2026-11-06，B-2）：写接口 `/bridge/lock`、`/bridge/mint`、`/bridge/burn` **保留未启用**：
+> 有效请求返回 HTTP 501 + code 5010；入参校验失败优先返回 5000。读接口返回 code 5010。
+> 路由与方法签名保留，节点不构造交易。
 
 #### 7.0 跨链锁定 — bridgeLock
 

@@ -7,7 +7,12 @@
  * 并以 Node/浏览器的 Web Crypto 计算 HMAC 自洽性。
  */
 import { describe, expect, it } from "vitest";
-import { buildCanonicalString, buildCanonicalStringV2, isProtectedPath } from "../../api/auth";
+import {
+  buildCanonicalString,
+  buildCanonicalStringV2,
+  isProtectedPath,
+  PROTECTED_PATH_PREFIXES,
+} from "../../api/auth";
 
 describe("v2 canonical（短期项 #4）", () => {
   it("长度前缀消除字段边界碰撞", () => {
@@ -49,9 +54,41 @@ describe("v2 canonical（短期项 #4）", () => {
     expect(c).toBe("NXC2|1:1|1:n|3:GET|2:/p|3:支|");
   });
 
-  it("isProtectedPath 仍只保护 /api/v1/payments/**", () => {
+  it("签名面清单与网关 WebConfig 的 5 个前缀逐项一致", () => {
+    // 后端权威来源：WebConfig.addInterceptors → requestSignatureInterceptor
+    //   .addPathPatterns("/api/v1/payments/**", "/api/v1/refunds/**", "/api/v1/orders/**",
+    //                    "/api/v2/payments/**", "/api/v2/orders/**")
+    // 该清单是"前端签名面 = 后端校验面"的单一断言点：任何一侧改动而未同步，
+    // 本用例必须变红（此前它断言的是"只保护 /api/v1/payments/**"，把缺口钉死了）。
+    expect(PROTECTED_PATH_PREFIXES).toEqual([
+      "/api/v1/payments",
+      "/api/v1/refunds",
+      "/api/v1/orders",
+      "/api/v2/payments",
+      "/api/v2/orders",
+    ]);
+  });
+
+  it("isProtectedPath 覆盖 v1/v2 资金端点，且按段边界判定", () => {
+    // 命中：前缀本身、子路径、带 query（网关用 getRequestURI()，不含 query）
     expect(isProtectedPath("/api/v1/payments")).toBe(true);
     expect(isProtectedPath("/api/v1/payments/123")).toBe(true);
-    expect(isProtectedPath("/api/v1/orders")).toBe(false);
+    expect(isProtectedPath("/api/v1/payments?limit=20")).toBe(true);
+    expect(isProtectedPath("/api/v1/refunds")).toBe(true);
+    expect(isProtectedPath("/api/v1/refunds/456")).toBe(true);
+    expect(isProtectedPath("/api/v1/orders")).toBe(true);
+    expect(isProtectedPath("/api/v1/orders/1/confirm")).toBe(true);
+    expect(isProtectedPath("/api/v2/payments/batch")).toBe(true);
+    expect(isProtectedPath("/api/v2/orders/1/refund")).toBe(true);
+
+    // 不命中：段边界（裸 startsWith 会把这些误判为受保护）
+    expect(isProtectedPath("/api/v1/payments-other")).toBe(false);
+    expect(isProtectedPath("/api/v1/ordersomething")).toBe(false);
+    expect(isProtectedPath("/api/v2/refunds")).toBe(false); // 网关未注册该前缀
+
+    // 不命中：只过 ApiKey 的那些面
+    expect(isProtectedPath("/api/v1/fund-dashboard")).toBe(false);
+    expect(isProtectedPath("/api/v1/wallet/withdrawal/pending")).toBe(false);
+    expect(isProtectedPath("/api/v1/merchants")).toBe(false);
   });
 });

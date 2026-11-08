@@ -120,8 +120,9 @@ votesSinceRound 清零后计时
 6. `decodeWithoutCursorDefaultsToFalse` — 无 cursor 键 ⇒ `false`（含兼容构造器）；
 7. `schedulerFallsBackToMarginWhenPagingDisabled` — 关开关时走旧 margin 路径
    （本地 max=101、margin=50 ⇒ from=51）；
-8. `pagingSurvivesBroadcastTrickleAndAsyncDelivery` — **测试床回归（第 4 处）**：
-   只收到远小于上限的票 + 宽限期过后，不得判终止，须从已见最大+1 继续；
+8. `shortPageDoesNotStopPaging`（原名 `pagingSurvivesBroadcastTrickleAndAsyncDelivery`，
+   PLAN-082 改名：原测试为同步中继、无涓流） — **测试床回归（第 4 处）**：
+   只收到远小于上限的票，不得按"收到数 < 上限"判终止，须从已见最大+1 继续；
 9. `firstPagingRoundStartsFromMarginFloorNotLastResponded` — **测试床回归（第 5 处）**：
    进程态 `lastRespondedEpoch` 很高时，首轮起点仍须是 margin 地板。
 

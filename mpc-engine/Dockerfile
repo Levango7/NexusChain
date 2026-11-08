@@ -56,7 +56,11 @@ RUN mkdir -p /app/runtime-dirs/app/data/sessions \
 # libgcc_s.so.1 / libm.so.6 / libc.so.6 + ld-linux —— cc-debian13 全覆盖；
 # gmp/mpfr 由 gmp-mpfr-sys 静态编入，不产生动态依赖。
 # TLS 走 rustls/ring（纯 Rust，Cargo.lock 无 openssl-sys），不依赖系统 libssl。
-FROM gcr.io/distroless/cc-debian13
+# 固定 digest（2026-11-06 取自 master run 42176885852 的 BuildKit 解析）；
+# 运行阶段 cc-debian13 与构建阶段 rust:1.88-debian13 必须成对升级：glibc 版本
+# 只允许「运行镜像 >= 构建镜像」，单独升运行镜像勿降级构建链，单独升构建链勿降级运行镜像，
+# 否则运行时报 GLIBC_x.y not found。
+FROM gcr.io/distroless/cc-debian13:latest@sha256:58e12be899275afaa05f1b03051ab19037ed7f252528e57a3a9ad7e220a62578
 
 # REQ-20 非 root：保持迁移前的 UID/GID 1000（原 `USER mpc` 同一数字），
 # 避免 compose 侧挂载属主假设变化。distroless 无 useradd，进程按数字 UID

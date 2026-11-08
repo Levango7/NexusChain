@@ -39,7 +39,10 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
+import os
+import re
 import sys
 
 SEVERITY_RANK = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4, "UNKNOWN": 0}
@@ -49,8 +52,12 @@ SEVERITY_RANK = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4, "UNKNOWN": 0}
 # 日期就以退出码 2 全体拒收」。
 VALIDITY_DAYS = 90
 
-# kind 取值：default（普通条目）/ not-applicable（该二元组无修复版）/ shaded_vendored
-KINDS = ("default", "not-applicable", "shaded_vendored")
+# kind 取值：default（普通条目）/ not-applicable（该二元组无修复版）/ shaded_vendored /
+#            pending_base_rebuild（上游已发修复版，但**尚无包含该修复版的已发布基础镜像**）
+KINDS = ("default", "not-applicable", "shaded_vendored", "pending_base_rebuild")
+
+# pending_base_rebuild 是**有界**例外：只允许 14 天，到期即判红，必须重新取证。
+PENDING_VALIDITY_DAYS = 14
 SHADED_EVIDENCE_FIELDS = (
     "jar_path",
     "jar_sha256",
@@ -239,9 +246,26 @@ def load_baseline(path: str) -> tuple[dict[tuple[str, str], dict], list[str]]:
         fixable = str(entry.get("fixable") or "none").strip()
         if kind == "not-applicable":
             fixable = "not-applicable"
-        if fixable not in ("none", "not-applicable"):
-            errors.append(f"{where} fixable 只能是 none / not-applicable，实际：{fixable}")
+        allowed_fixable = ("none", "not-applicable", "upstream-fixed")
+        if fixable not in allowed_fixable:
+            errors.append(
+                f"{where} fixable 只能是 {' / '.join(allowed_fixable)}，实际：{fixable}"
+            )
             fixable = "none"
+        # pending_base_rebuild 必须显式声明"上游已有修复版"，且必须带证据：
+        # 没有证据就不该存在这条豁免（防止把它当成普通"加基线"的通道）。
+        if kind == "pending_base_rebuild":
+            if fixable != "upstream-fixed":
+                errors.append(
+                    f"{where} kind=pending_base_rebuild 必须 fixable=upstream-fixed（实际：{fixable}）"
+                )
+            # 直接读 entry，**不要**用下面的 evidence 局部变量：那行在本块之后才赋值，
+            # 引用在前 ⇒ Python 视为局部变量提前引用（条目排第一时 UnboundLocalError 崩溃；
+            # 否则沿用上一条的 evidence 静默放过 —— 2026-11-08 复核发现并修正）。
+            if not str(entry.get("evidence") or "").strip():
+                errors.append(
+                    f"{where} kind=pending_base_rebuild 必须填写 evidence（证明当前无包含该修复版的已发布镜像）"
+                )
 
         evidence = entry.get("evidence")
         if kind == "shaded_vendored":
@@ -268,10 +292,11 @@ def load_baseline(path: str) -> tuple[dict[tuple[str, str], dict], list[str]]:
                 errors.append(f"{where} addedAt 不是 ISO 日期（YYYY-MM-DD）：{added_raw}")
 
         if expires and added:
-            expected = added + dt.timedelta(days=VALIDITY_DAYS)
+            validity_days = PENDING_VALIDITY_DAYS if kind == "pending_base_rebuild" else VALIDITY_DAYS
+            expected = added + dt.timedelta(days=validity_days)
             if expires != expected:
                 errors.append(
-                    f"{where} expires={expires} 与 addedAt={added} + {VALIDITY_DAYS} 天 = {expected} 不一致"
+                    f"{where} expires={expires} 与 addedAt={added} + {validity_days} 天 = {expected} 不一致"
                     f"（有效期只按登记日起算，与运行当天无关；超出或缩短都必须重新取证）"
                 )
 
@@ -329,24 +354,92 @@ def _serialize_entry(entry: dict, today: dt.date) -> dict:
     }
 
 
-def _print_db_metadata(path: str) -> None:
-    """把本次结论所依据的 Trivy 漏洞库版本/更新时间打进门禁日志。
+def _sha256_file(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
-    新鲜度断言（>7 天判红）在扫描前由 trivy-db-freshness.py 完成；这里只做
-    「结论基于哪一天的库」的可核对留痕，读不到时降级为 WARN，不影响判定。
-    """
+
+def _norm_ts(value) -> str:
+    """归一化时间戳，使 `...577403+00:00` 与 `...Z` 两种写法可直接比较。"""
+    text = str(value or "").strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    text = re.sub(r"(\.[0-9]{6})[0-9]+", r"\1", text)
     try:
-        meta = _load_json(path)
+        parsed = dt.datetime.fromisoformat(text)
+    except ValueError:
+        return text
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed.astimezone(dt.timezone.utc).isoformat()
+
+
+def _verify_db_identity(db_dir: str, fingerprint_path: str) -> list[str]:
+    """校验「本次结论所依据的库」= 刷新步下载并取指纹的那份库。
+
+    背景（2026-11-06 实测）：Trivy v0.76.2 的 JSON 报告 `Metadata` 只有
+    Size/OS/ImageID/DiffIDs/RepoTags/Reference/ImageConfig/Layers，**不含**
+    VulnerabilityDB（无 Version/UpdatedAt/sha256），因此无法把结论直接绑定到
+    报告内嵌身份，只能退一步用文件指纹绑定：
+
+      刷新步  → trivy-db-freshness.py 记录 metadata 字段 + trivy.db sha256
+      门禁步  → 读同一份指纹，重算 trivy.db sha256、重读 metadata.json，三者比对
+
+    任何一项不一致都说明「门禁日志里那句『基于哪份库』」不再是产出报告的那份
+    库（例如中间有 actions/cache 把缓存目录覆盖回旧库），必须判红而不是照打。
+    """
+    errors: list[str] = []
+    try:
+        fingerprint = _load_json(fingerprint_path)
     except (FileNotFoundError, json.JSONDecodeError) as e:
-        print(f"[WARN] 无法读取 Trivy DB 元数据：{path}（{e}）")
-        return
+        return [f"刷新步 DB 指纹不可读：{fingerprint_path}（{e}）"]
+    if not isinstance(fingerprint, dict) or not fingerprint.get("dbSha256"):
+        return [f"刷新步 DB 指纹格式不可识别或缺少 dbSha256：{fingerprint_path}"]
+
+    metadata_path = os.path.join(db_dir, "metadata.json")
+    db_path = os.path.join(db_dir, "trivy.db")
+    try:
+        meta = _load_json(metadata_path)
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        return [f"门禁步实际 metadata.json 不可读：{metadata_path}（{e}）"]
     if not isinstance(meta, dict):
-        print(f"[WARN] Trivy DB 元数据格式不可识别：{path}")
-        return
-    print(
-        f"[DB] 本次门禁结论基于 Trivy 漏洞库：Version={meta.get('Version')} "
-        f"UpdatedAt={meta.get('UpdatedAt')} NextUpdate={meta.get('NextUpdate')}"
-    )
+        return [f"门禁步实际 metadata.json 格式不可识别：{metadata_path}"]
+
+    try:
+        actual_sha256 = _sha256_file(db_path)
+    except OSError as e:
+        return [f"门禁步实际 trivy.db 不可读：{db_path}（{e}）"]
+
+    if fingerprint["dbSha256"] != actual_sha256:
+        errors.append(
+            f"DB 文件指纹不一致：刷新步 sha256={fingerprint['dbSha256']}，"
+            f"门禁步 sha256={actual_sha256}（{db_path}）"
+        )
+    for field in ("Version", "UpdatedAt", "NextUpdate"):
+        expected = fingerprint.get(field)
+        actual = meta.get(field)
+        if field == "Version":
+            expected = str(expected) if expected is not None else None
+            actual = str(actual) if actual is not None else None
+        else:
+            expected = _norm_ts(expected)
+            actual = _norm_ts(actual)
+        if expected != actual:
+            errors.append(
+                f"metadata.json 的 {field} 不一致：刷新步={fingerprint.get(field)}，"
+                f"门禁步={meta.get(field)}"
+            )
+
+    if not errors:
+        print(
+            f"[DB] 本次门禁结论基于 Trivy 漏洞库：Version={meta.get('Version')} "
+            f"UpdatedAt={meta.get('UpdatedAt')} NextUpdate={meta.get('NextUpdate')} "
+            f"sha256={actual_sha256}（已与刷新步指纹交叉校验）"
+        )
+    return errors
 
 
 def gate(findings: list[dict], baseline: dict[tuple[str, str], dict], today: dt.date) -> tuple[int, dict]:
@@ -354,6 +447,8 @@ def gate(findings: list[dict], baseline: dict[tuple[str, str], dict], today: dt.
     expired = []
     policy = []
     shaded = []
+    pending_rebuild: list[tuple[dict, dict]] = []
+    nofix: list[tuple[dict, dict]] = []
 
     for finding in findings:
         # 严格二元组匹配：同一 CVE 换到别的包就是另一条 finding，必须独立判定。
@@ -370,12 +465,23 @@ def gate(findings: list[dict], baseline: dict[tuple[str, str], dict], today: dt.
                     expired.append((finding, entry))
                 else:
                     shaded.append((finding, entry))
+            elif entry["kind"] == "pending_base_rebuild":
+                # 有界例外：上游修复版已发布、但**尚无包含它的基础镜像**（已按 digest 实证）。
+                # 只放行到 expires（登记日 + 14 天）；到期即走 expired → 判红。
+                if entry["expires"] and today > entry["expires"]:
+                    expired.append((finding, entry))
+                else:
+                    pending_rebuild.append((finding, entry))
             else:
                 policy.append((finding, entry))
             continue
 
         if entry["expires"] and today > entry["expires"]:
             expired.append((finding, entry))
+        elif entry["fixable"] == "none":
+            # 无修复版且本次仍命中：允许放行，但必须在日志逐条可见（[NOFIX]），
+            # 避免「登记一次就静默通过」——每次跑都要能看出这几条还在。
+            nofix.append((finding, entry))
 
     # stale 同样按二元组比对：同一 CVE 在别的包命中了，不代表本条目命中。
     hit_keys = {(f["id"], f["package"]) for f in findings}
@@ -437,6 +543,29 @@ def gate(findings: list[dict], baseline: dict[tuple[str, str], dict], today: dt.
             f"声明依赖已解析到修复版；到期 {entry['expires']}"
         )
 
+    for finding, entry in pending_rebuild:
+        fixed = ", ".join(sorted(finding["fixedVersions"]))
+        print(
+            f"[PENDING-REBUILD] {finding['id']} / {finding['package']} 上游已发布修复版 {fixed}，"
+            f"但尚无包含该修复版的已发布基础镜像；到期 {entry['expires']}（到期即判红）"
+        )
+        print(
+            f"::warning title=Trivy 待基础镜像重建::"
+            f"{finding['id']} / {finding['package']} 修复版 {fixed} 未随镜像发布，"
+            f"已登记待重建（到期 {entry['expires']}）"
+        )
+
+    for finding, entry in nofix:
+        print(
+            f"[NOFIX] {finding['id']} / {finding['package']} 无修复版（Trivy 未给出 FixedVersion），"
+            f"已评估登记；到期 {entry['expires']}；reason：{entry['reason']}"
+        )
+        print(
+            f"::notice title=Trivy 无修复版登记::"
+            f"{finding['id']} / {finding['package']} 本次仍命中且无修复版，"
+            f"按 fixable=none 登记；到期 {entry['expires']}"
+        )
+
     for entry in stale:
         days = _age_days(today, entry["added"]) if entry.get("added") else None
         age_text = f"登记 {days} 天" if days is not None else "登记日期未知"
@@ -466,6 +595,8 @@ def gate(findings: list[dict], baseline: dict[tuple[str, str], dict], today: dt.
             "expired": len(expired),
             "policy": len(policy),
             "shaded": len(shaded),
+            "pendingRebuild": len(pending_rebuild),
+            "nofix": len(nofix),
             "stale": len(stale),
             "staleAged": len(stale_aged),
         },
@@ -473,6 +604,8 @@ def gate(findings: list[dict], baseline: dict[tuple[str, str], dict], today: dt.
         "expired": [dict(_serialize_finding(f), expires=entry["expires"].isoformat()) for f, entry in expired],
         "policy": [_serialize_finding(f) for f, _ in policy],
         "shaded": [_serialize_finding(f, entry) for f, entry in shaded],
+        "pendingRebuild": [_serialize_finding(f, entry) for f, entry in pending_rebuild],
+        "nofix": [_serialize_finding(f, entry) for f, entry in nofix],
         "stale": [_serialize_entry(e, today) for e in stale],
         "staleAged": [_serialize_entry(e, today) for e in stale_aged],
         "errors": [],
@@ -485,11 +618,17 @@ def gate(findings: list[dict], baseline: dict[tuple[str, str], dict], today: dt.
         )
         return 1, summary
 
+    extras = []
     if shaded:
-        print(
-            f"[PASS] 无新增、无到期、无策略违规"
-            f"（含 shaded_vendored 例外 {len(shaded)} 条：有修复版但命中来自第三方 jar 内嵌副本，本次不判红）"
+        extras.append(
+            f"含 shaded_vendored 例外 {len(shaded)} 条：有修复版但命中来自第三方 jar 内嵌副本，本次不判红"
         )
+    if nofix:
+        extras.append(
+            f"含无修复版登记 {len(nofix)} 条：FixedVersion 为空，已在日志逐条打印 [NOFIX]"
+        )
+    if extras:
+        print(f"[PASS] 无新增、无到期、无策略违规（{'；'.join(extras)}）")
     else:
         print("[PASS] 无新增、无到期、无策略违规")
     return 0, summary
@@ -528,9 +667,16 @@ def main() -> int:
         help="可选：把门禁结论写成机器可读 JSON（供发布后 digest 扫描等下游消费）",
     )
     parser.add_argument(
-        "--db-metadata",
+        "--db-dir",
         default=None,
-        help="可选：Trivy DB 的 metadata.json，用于在门禁日志里声明结论所依据的库版本/更新时间",
+        help="可选：Trivy DB 缓存目录（含 trivy.db 与 metadata.json）；"
+        "与 --db-fingerprint 成对提供时强制校验结论所依据的库",
+    )
+    parser.add_argument(
+        "--db-fingerprint",
+        default=None,
+        help="可选：刷新步 trivy-db-freshness.py 写出的 DB 身份指纹 JSON；"
+        "与 --db-dir 成对提供时强制校验结论所依据的库",
     )
     args = parser.parse_args()
 
@@ -559,8 +705,19 @@ def main() -> int:
         })
         return 2
 
-    if args.db_metadata:
-        _print_db_metadata(args.db_metadata)
+    if args.db_fingerprint or args.db_dir:
+        if not (args.db_fingerprint and args.db_dir):
+            message = "--db-dir 与 --db-fingerprint 必须成对提供，否则无法验证结论基于哪份库"
+            print(f"[REJECT] {message}")
+            print(f"::error title=Trivy DB 身份无法校验::{message}")
+            return 2
+        db_errors = _verify_db_identity(args.db_dir, args.db_fingerprint)
+        if db_errors:
+            for message in db_errors:
+                print(f"[DB][FAIL] {message}")
+                print(f"::error title=Trivy DB 身份不一致::{message}")
+            print(f"[REJECT] DB 身份校验失败 {len(db_errors)} 处，门禁拒收（退出码 2）")
+            return 2
 
     code, summary = gate(findings, baseline, today)
     _write_summary(args.summary_json, summary)
