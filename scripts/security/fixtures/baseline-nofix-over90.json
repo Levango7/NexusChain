@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "entries": [
+    {
+      "id": "CVE-2026-999001",
+      "package": "libssl3t64",
+      "reason": "fixture：fixable=none 但 expires 比 addedAt+90 多 1 天，必须退出码 2",
+      "fixable": "none",
+      "expires": "2027-02-05",
+      "addedAt": "2026-11-06",
+      "evidence": "实扫 InstalledVersion=3.5.1-1，FixedVersion 为空，Status=affected"
+    }
+  ]
+}

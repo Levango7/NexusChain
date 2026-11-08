@@ -16,7 +16,8 @@
  *       signature = "v2:" + lowerHex( HMAC-SHA256(canonical, secret) )
  *     — 长度按 UTF-8 字节计，多语言字节级一致。新客户端默认应产出 v2。
  *
- * Headers injected on protected (/api/v1/payments/**) endpoints:
+ * Headers injected on protected endpoints (see {@link PROTECTED_PATH_PREFIXES};
+ * mirrors the gateway's RequestSignatureInterceptor path registration):
  *   - X-NexusChain-ApiKey
  *   - X-NexusChain-Timestamp   (unix millis, string)
  *   - X-NexusChain-Nonce       (unique per request)
@@ -33,8 +34,28 @@ export const AUTH_HEADERS = {
   NONCE: "X-NexusChain-Nonce",
 } as const;
 
-/** Path prefix that triggers ApiKey + HMAC authentication. */
-export const PROTECTED_PATH_PREFIX = "/api/v1/payments";
+/**
+ * Path prefixes that trigger ApiKey + HMAC request signing.
+ *
+ * **必须与网关的拦截器注册逐项一致**：{@code WebConfig.addInterceptors} 中
+ * {@code requestSignatureInterceptor.addPathPatterns(...)} 的 5 个前缀 —— 见
+ * nexus-gateway/src/main/java/org/nexus/gateway/config/WebConfig.java:135-143：
+ *   /api/v1/payments/**  /api/v1/refunds/**  /api/v1/orders/**
+ *   /api/v2/payments/**  /api/v2/orders/**
+ *
+ * 历史缺口：此前这里只有 {@code "/api/v1/payments"} 一个前缀。后端在 2026-10-05
+ * （退款/订单确认端点加固）与 v2 资金端点加固时把签名面扩到 5 个前缀，前端未同步，
+ * 导致 /api/v1/refunds、/api/v1/orders 与整个 /api/v2/** 的请求不被签名。
+ *
+ * 新增或调整前缀时：改这里 + 同步 @code __tests__/auth/authV2.test.ts 的清单断言。
+ */
+export const PROTECTED_PATH_PREFIXES = [
+  "/api/v1/payments",
+  "/api/v1/refunds",
+  "/api/v1/orders",
+  "/api/v2/payments",
+  "/api/v2/orders",
+] as const;
 
 export interface SignRequestParams {
   /** HTTP method (GET, POST, ...). Case-sensitive — match gateway exactly. */
@@ -194,9 +215,22 @@ export async function buildAuthHeaders(
 }
 
 /**
- * Predicate: does a given path require ApiKey + HMAC authentication?
- * Matches the gateway's protected subtree (/api/v1/payments/**).
+ * Predicate: does a given path require ApiKey + HMAC request signing?
+ * Matches the gateway's protected subtrees ({@link PROTECTED_PATH_PREFIXES}).
+ *
+ * 两处语义对齐网关：
+ *   - **段边界**：Spring 的 {@code /x/**} 命中 {@code /x} 与其子路径，但不命中
+ *     {@code /xfoo}。裸 {@code startsWith} 会把 {@code /api/v1/payments-other}
+ *     误判为受保护，故此处按段边界判定。
+ *   - **query string**：网关用 {@code request.getRequestURI()} 取路径（不含 query），
+ *     故这里先剥离 {@code ?} 之后的部分再比较。
  */
 export function isProtectedPath(path: string): boolean {
-  return typeof path === "string" && path.startsWith(PROTECTED_PATH_PREFIX);
+  if (typeof path !== "string") {
+    return false;
+  }
+  const pathOnly = path.split("?")[0] ?? path;
+  return PROTECTED_PATH_PREFIXES.some(
+    (prefix) => pathOnly === prefix || pathOnly.startsWith(`${prefix}/`),
+  );
 }

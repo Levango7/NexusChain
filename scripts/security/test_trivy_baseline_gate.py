@@ -13,7 +13,9 @@ fixture 中的 Trivy 报告取自 2026-11-05 master 实扫产物
 from __future__ import annotations
 
 import json
+import hashlib
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -151,6 +153,27 @@ CASES = [
         ["[PASS]", "基线命中 1 条"],
     ),
     (
+        "④ fixable=none 命中必须在日志打印 [NOFIX]（不可静默通过）",
+        "report-no-fix-only.json",
+        "baseline-nofix.json",
+        0,
+        ["[NOFIX] CVE-2026-999001 / libssl3t64", "含无修复版登记 1 条", "[PASS]"],
+    ),
+    (
+        "⑤ fixable=none 的 expires 若为 addedAt+91 → 退出码 2",
+        "report-no-fix-only.json",
+        "baseline-nofix-over90.json",
+        2,
+        ["addedAt=2026-11-06 + 90 天 = 2027-02-04", "不一致", "[REJECT]"],
+    ),
+    (
+        "⑥ fixable=none 但该二元组报出 FixedVersion → 必须判红（nofix 不能当后门）",
+        "report-fixable-only.json",
+        "baseline-nofix.json",
+        1,
+        ["[POLICY] CVE-2026-999001 / libssl3t64", "禁止按普通基线豁免"],
+    ),
+    (
         "④ 同 CVE 两个包都已登记 → 各自独立判定（有修复版的那个仍判红）",
         "report-guava-two-pkgs.json",
         "baseline-guava-both.json",
@@ -266,6 +289,22 @@ ABSENT_CASES = [
 ]
 
 
+def check_nofix_pass_consistency(output: str) -> str:
+    """[PASS] 里报的「无修复版登记 N 条」必须等于本次实际打印的 [NOFIX] 行数。
+
+    这一行的意义是「没被静默放过」；若它自己数错，就是新的假绿。
+    返回空串表示一致（或不涉及 nofix）；否则返回问题描述。
+    """
+    printed = sum(1 for line in output.splitlines() if line.startswith("[NOFIX] CVE-"))
+    match = re.search(r"含无修复版登记 (\d+) 条", output)
+    if not match:
+        return ""
+    reported = int(match.group(1))
+    if reported != printed:
+        return f"[PASS] 报 {reported} 条，实际打印 [NOFIX] {printed} 行（口径不一致）"
+    return ""
+
+
 def check_summary_json() -> tuple[bool, str]:
     """--summary-json 要与文本结论一致（下游 issue 分诊依赖它）。"""
     with tempfile.TemporaryDirectory() as tmp:
@@ -291,6 +330,82 @@ def check_summary_json() -> tuple[bool, str]:
         return True, ""
 
 
+def _write_db(dirpath: str, updated_at: str, db_bytes: bytes) -> None:
+    """造一份假的 Trivy DB 目录（metadata.json + trivy.db）。"""
+    os.makedirs(dirpath)
+    meta = {
+        "Version": 2,
+        "UpdatedAt": updated_at,
+        "NextUpdate": "2026-11-07T12:55:02.577403513Z",
+    }
+    with open(os.path.join(dirpath, "metadata.json"), "w", encoding="utf-8") as f:
+        json.dump(meta, f)
+    with open(os.path.join(dirpath, "trivy.db"), "wb") as f:
+        f.write(db_bytes)
+
+
+def _fingerprint_of(db_dir: str) -> dict:
+    meta = json.load(open(os.path.join(db_dir, "metadata.json"), encoding="utf-8"))
+    sha = hashlib.sha256(open(os.path.join(db_dir, "trivy.db"), "rb").read()).hexdigest()
+    return {**meta, "dbSha256": sha}
+
+
+def check_db_identity() -> tuple[bool, str]:
+    """硬不变量：门禁报的「基于哪份库」必须与刷新步那份库逐项一致。
+
+    重点是「报告来自 A 库、metadata.json / trivy.db 却是 B 库」必须判红：
+    这条证据行一旦允许漂移，就等于给人一个假的审计依据。
+    """
+    problems: list[str] = []
+    with tempfile.TemporaryDirectory() as tmp:
+        a = os.path.join(tmp, "A")
+        b = os.path.join(tmp, "B")
+        a_same_meta = os.path.join(tmp, "A-same-meta")
+        _write_db(a, "2026-11-06T12:55:02.577403+00:00", b"db-A")
+        _write_db(b, "2026-11-06T06:50:38.697107077Z", b"db-B")
+        _write_db(a_same_meta, "2026-11-06T12:55:02.577403+00:00", b"db-A-tampered")
+
+        fp_a = os.path.join(tmp, "fp-A.json")
+        with open(fp_a, "w", encoding="utf-8") as f:
+            json.dump(_fingerprint_of(a), f)
+
+        ok_result = run(
+            "report-known-only.json", "baseline-known.json",
+            extra=["--db-dir", a, "--db-fingerprint", fp_a],
+        )
+        if ok_result.returncode != 0:
+            problems.append(f"同源库应绿，实际退出码 {ok_result.returncode}")
+        if "sha256=" not in ok_result.stdout or "已与刷新步指纹交叉校验" not in ok_result.stdout:
+            problems.append("同源库未打印带 sha256 的 [DB] 行")
+
+        mismatch_meta = run(
+            "report-known-only.json", "baseline-known.json",
+            extra=["--db-dir", b, "--db-fingerprint", fp_a],
+        )
+        if mismatch_meta.returncode != 2:
+            problems.append(f"A 指纹 + B 库应判红（退出码 2），实际 {mismatch_meta.returncode}")
+        if "[DB][FAIL]" not in mismatch_meta.stdout or "UpdatedAt" not in mismatch_meta.stdout:
+            problems.append("A 指纹 + B 库未给出 [DB][FAIL] 的字段级证据")
+
+        mismatch_sha = run(
+            "report-known-only.json", "baseline-known.json",
+            extra=["--db-dir", a_same_meta, "--db-fingerprint", fp_a],
+        )
+        if mismatch_sha.returncode != 2:
+            problems.append(f"metadata 相同但 DB 文件被换应判红，实际 {mismatch_sha.returncode}")
+        if "DB 文件指纹不一致" not in mismatch_sha.stdout:
+            problems.append("DB 文件被换时未报「DB 文件指纹不一致」")
+
+        half_only = run(
+            "report-known-only.json", "baseline-known.json",
+            extra=["--db-fingerprint", fp_a],
+        )
+        if half_only.returncode != 2:
+            problems.append(f"只给指纹不给 --db-dir 应拒收，实际 {half_only.returncode}")
+
+    return (not problems), "；".join(problems)
+
+
 def main() -> int:
     failures = 0
     total = 0
@@ -301,13 +416,16 @@ def main() -> int:
         result = run(report, baseline, today)
         output = result.stdout + result.stderr
         missing = [s for s in expected_snippets if s not in output]
-        ok = result.returncode == expected_code and not missing
+        consistency_error = check_nofix_pass_consistency(output)
+        ok = result.returncode == expected_code and not missing and not consistency_error
         status = "PASS" if ok else "FAIL"
         print(f"[{status}] {name}（期望退出码 {expected_code}，实际 {result.returncode}）")
         if not ok:
             failures += 1
             if missing:
                 print(f"  缺少输出片段：{missing}")
+            if consistency_error:
+                print(f"  {consistency_error}")
             print("  --- 实际输出 ---")
             for line in output.splitlines():
                 print(f"  {line}")
@@ -328,6 +446,13 @@ def main() -> int:
     total += 1
     ok, reason = check_summary_json()
     print(f"[{'PASS' if ok else 'FAIL'}] --summary-json 输出与结论一致")
+    if not ok:
+        failures += 1
+        print(f"  {reason}")
+
+    total += 1
+    ok, reason = check_db_identity()
+    print(f"[{'PASS' if ok else 'FAIL'}] DB 身份绑定（报告/指纹/实际库不一致必须判红）")
     if not ok:
         failures += 1
         print(f"  {reason}")

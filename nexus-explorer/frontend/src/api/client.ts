@@ -15,10 +15,43 @@ export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
+    /**
+     * 该 message 是否来自**服务端响应体**（BFF 的 `{error}` / 网关的 `{code,message}`）。
+     *
+     * <p>`true` ⇒ 文案已经是服务端给的中文且具体，可直接展示给用户；
+     * `false` ⇒ 只是本地兜底文本（如 `Request failed: 500 Internal Server Error`），
+     * 展示层应改用 i18n 文案，避免把英文技术串暴露到中文界面
+     * （2026-11-07 审计发现 B5）。见 {@code utils/displayError.ts}。</p>
+     */
+    public fromServer = false,
   ) {
     super(message);
     this.name = "ApiError";
   }
+}
+
+/**
+ * 尽力从错误响应体里取出**服务端文案**（BFF `{error}` / 网关 `{code,message}`）。
+ *
+ * <p>取不到（非 JSON / 空体 / 字段缺失）一律返回 `null`，由调用方回落到本地文案 ——
+ * "取文案"这件事本身绝不能再把错误路径炸一次。</p>
+ */
+async function readServerErrorMessage(res: Response): Promise<string | null> {
+  try {
+    const body: unknown = await res.json();
+    if (body !== null && typeof body === "object") {
+      const obj = body as { error?: unknown; message?: unknown };
+      if (typeof obj.message === "string" && obj.message.trim() !== "") {
+        return obj.message;
+      }
+      if (typeof obj.error === "string" && obj.error.trim() !== "") {
+        return obj.error;
+      }
+    }
+  } catch {
+    /* 非 JSON / 空体 ⇒ 用本地兜底文案 */
+  }
+  return null;
 }
 
 /**
@@ -63,7 +96,12 @@ async function request<T>(path: string, requiredFields?: readonly string[]): Pro
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   if (!res.ok) {
-    throw new ApiError(res.status, `Request failed: ${res.status} ${res.statusText}`);
+    // 优先采用服务端的说明文案（BFF 返回 {"error":"获取区块列表失败"} 这类中文），
+    // 取不到才回落到本地兜底；两者用 fromServer 区分，展示层据此决定是否走 i18n。
+    const serverMessage = await readServerErrorMessage(res);
+    throw serverMessage !== null
+      ? new ApiError(res.status, serverMessage, true)
+      : new ApiError(res.status, `Request failed: ${res.status} ${res.statusText}`);
   }
   const body: unknown = await res.json();
   return requiredFields ? assertShape<T>(body, requiredFields, path) : (body as T);
@@ -169,15 +207,17 @@ export async function authenticatedRequest<T>(
     // Attempt to extract the gateway's {code, message} envelope for richer
     // diagnostics, but never block the throw on parse failure.
     let message = `Request failed: ${res.status} ${res.statusText}`;
+    let fromServer = false;
     try {
       const errBody = (await res.json()) as { code?: number; message?: string };
-      if (errBody && typeof errBody.message === "string") {
+      if (errBody && typeof errBody.message === "string" && errBody.message.trim() !== "") {
         message = errBody.message;
+        fromServer = true;
       }
     } catch {
       /* keep default message */
     }
-    throw new ApiError(res.status, message);
+    throw new ApiError(res.status, message, fromServer);
   }
 
   // 204 No Content / empty body → undefined (typed as T by caller).
