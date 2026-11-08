@@ -199,6 +199,15 @@ nexus:
     # 它不是地址默认值——enabled=true 时空串会被启动守卫直接拒绝。
     platform-address: ${NEX_SETTLEMENT_PLATFORM_ADDRESS:}
 
+  # === 3DS 模拟挑战（2026-11-08 审计修复 B2）===
+  # 此前 ThreeDsServer 的 @Value 默认是 true，且**全仓 yml 零配置面** —— 生产若未显式设置
+  # 就走"模拟 Challenge"，而该类 javadoc 自述「生产环境必须设置为 false 并对接真实 ACS」
+  # （CWE-287 类：认证强度被静默降级）。
+  # 现改为：base 默认 false（安全默认），dev / sandbox 档显式置 true（本地与集成测试需要模拟）。
+  # 对接真实 ACS 之前，**不要**在 prod 侧打开此键。
+  3ds:
+    simulated-challenge-enabled: ${NEXUS_3DS_SIMULATED_CHALLENGE_ENABLED:false}
+
   # === 任务 #26：运维管理 API 配置 ===
   # OpsController / OpsService 的行为开关与缓存/线程池监控参数
   ops:
