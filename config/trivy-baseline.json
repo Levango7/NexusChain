@@ -81,7 +81,7 @@
       "fixable": "upstream-fixed",
       "expires": "2026-11-22",
       "addedAt": "2026-11-08",
-      "evidence": "升级不可执行（已实证）：m.daocloud.io/gcr.io/distroless/java17-debian13:nonroot 当前 digest=sha256:97c47f913d6cbdf67e657c139e8765510bfb87eb345e25e25745ae98f70dfcb3，与仓库 pin 完全相同；cc-debian13:nonroot=sha256:08476c244888bfb425bae1ae4dd7c17f093e972aab8426883d97f3c6f280f7c1，亦相同 ⇒ 尚无包含修复版 1:1.3.dfsg+really1.3.1-1+deb13u1 的已发布基础镜像；14 天到期后必须重新取证",
+      "evidence": "复核方式（2026-11-08 实测，镜像源 m.daocloud.io，与 gcr.io/distroless 同 tag 解析）：A) docker buildx imagetools inspect m.daocloud.io/gcr.io/distroless/java17-debian13:nonroot ⇒ Digest: sha256:97c47f913d6cbdf67e657c139e8765510bfb87eb345e25e25745ae98f70dfcb3（与仓库 pin 逐字相同）；B) 同上 cc-debian13:nonroot ⇒ sha256:08476c244888bfb425bae1ae4dd7c17f093e972aab8426883d97f3c6f280f7c1（亦相同）。⇒ 2026-11-08 当日无任何包含修复版 1:1.3.dfsg+really1.3.1-1+deb13u1 的已发布基础镜像。14 天后复核：重跑 A/B，若任一 digest 已变 ⇒ bump pin + 删除本条目；若仍未变 ⇒ 重新取证并另投一条，不得改日期续期。",
       "kind": "pending_base_rebuild"
     },
     {
@@ -112,7 +112,7 @@
       "fixable": "upstream-fixed",
       "expires": "2026-11-22",
       "addedAt": "2026-11-08",
-      "evidence": "升级不可执行（已实证）：m.daocloud.io/gcr.io/distroless/java17-debian13:nonroot 当前 digest=sha256:97c47f913d6cbdf67e657c139e8765510bfb87eb345e25e25745ae98f70dfcb3，与仓库 pin 完全相同；cc-debian13:nonroot=sha256:08476c244888bfb425bae1ae4dd7c17f093e972aab8426883d97f3c6f280f7c1，亦相同 ⇒ 尚无包含修复版 1:1.3.dfsg+really1.3.1-1+deb13u1 的已发布基础镜像；14 天到期后必须重新取证",
+      "evidence": "复核方式（2026-11-08 实测，镜像源 m.daocloud.io，与 gcr.io/distroless 同 tag 解析）：A) docker buildx imagetools inspect m.daocloud.io/gcr.io/distroless/java17-debian13:nonroot ⇒ Digest: sha256:97c47f913d6cbdf67e657c139e8765510bfb87eb345e25e25745ae98f70dfcb3（与仓库 pin 逐字相同）；B) 同上 cc-debian13:nonroot ⇒ sha256:08476c244888bfb425bae1ae4dd7c17f093e972aab8426883d97f3c6f280f7c1（亦相同）。⇒ 2026-11-08 当日无任何包含修复版 1:1.3.dfsg+really1.3.1-1+deb13u1 的已发布基础镜像。14 天后复核：重跑 A/B，若任一 digest 已变 ⇒ bump pin + 删除本条目；若仍未变 ⇒ 重新取证并另投一条，不得改日期续期。",
       "kind": "pending_base_rebuild"
     },
     {
