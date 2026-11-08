@@ -16,7 +16,14 @@
     "notFound": "Not Found",
     "closeDialog": "Close dialog",
     "pageError": "Page render error",
-    "unknownError": "Unknown error"
+    "unknownError": "Unknown error",
+    "notFoundTitle": "Page not found",
+    "notFoundDesc": "No page matches this path. The link may be stale, or the address mistyped.",
+    "backHome": "Back to home",
+    "errorNetwork": "Cannot reach the service (network down or backend not running)",
+    "errorTimeout": "Request timed out, please retry",
+    "errorCanceled": "Request cancelled",
+    "errorService": "Service temporarily unavailable, please retry"
   },
   "nav": {
     "home": "Home",
