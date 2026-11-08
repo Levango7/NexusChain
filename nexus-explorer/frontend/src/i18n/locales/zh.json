@@ -16,7 +16,14 @@
     "notFound": "未找到",
     "closeDialog": "关闭弹窗",
     "pageError": "页面渲染出错",
-    "unknownError": "未知错误"
+    "unknownError": "未知错误",
+    "notFoundTitle": "页面不存在",
+    "notFoundDesc": "你访问的路径没有对应页面。可能是链接已过期，或者地址输入有误。",
+    "backHome": "返回首页",
+    "errorNetwork": "无法连接到服务（网络中断或后端未启动）",
+    "errorTimeout": "请求超时，请稍后重试",
+    "errorCanceled": "请求已取消",
+    "errorService": "服务暂时不可用，请稍后重试"
   },
   "nav": {
     "home": "首页",

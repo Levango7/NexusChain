@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { api } from "../api/client";
 import type { TransactionInfo } from "../types";
 import { DetailPageLayout, Badge, type BadgeTone } from "../components/ui";
+import { displayErrorMessage } from "../utils/displayError";
 import { orDash } from "../utils/value";
 import { formatAbsoluteTime } from "../utils/time";
 
@@ -23,22 +24,29 @@ const TxDetailPage: React.FC = () => {
   const [tx, setTx] = useState<TransactionInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  /** 重试计数：自增即重跑加载（审计 B7）。 */
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     // hash 为 undefined 时 api.getTransaction(hash!) 会崩溃
     if (!hash) return;
+    setLoading(true);
     (async () => {
       try {
         const data = await api.getTransaction(hash);
         setTx(data);
+        // 200 + null 表示「查无此交易」：显式置错误态，避免三态全空只剩 header
+        setError(data ? null : t("tx.notFound"));
       } catch (err) {
-        setError(err instanceof Error ? err.message : t("tx.notFound"));
+        console.error("API请求失败:", err);
+        setTx(null);
+        setError(displayErrorMessage(err, t, "tx.notFound"));
       } finally {
         setLoading(false);
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hash]);
+  }, [hash, reloadKey]);
 
   if (loading || error || !tx) {
     return (
@@ -46,6 +54,7 @@ const TxDetailPage: React.FC = () => {
         loading={loading}
         loadingLabel={t("tx.loading")}
         error={error}
+        onRetry={() => setReloadKey((k) => k + 1)}
         title={t("tx.title")}
         backLabel={t("tx.back")}
       />

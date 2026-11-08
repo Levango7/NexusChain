@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { AlertCircle, FileCode2 } from "lucide-react";
+import { FileCode2 } from "lucide-react";
 import { api } from "../api/client";
 import type { ContractInfo } from "../types";
-import { Loading } from "../components/ui";
+import { ErrorState, Loading } from "../components/ui";
 import { PageHeader, BackLink } from "../components/layout/PageHeader";
+import { displayErrorMessage } from "../utils/displayError";
 import { orDash } from "../utils/value";
 import { formatRelativeTime } from "../utils/time";
 
@@ -26,8 +27,11 @@ const ContractsPage: React.FC = () => {
   const [contracts, setContracts] = useState<ContractInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  /** 重试计数：自增即重跑加载（页面级重试入口，审计 B7）。 */
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
+    setLoading(true);
     (async () => {
       try {
         const list = await api.getContracts();
@@ -37,13 +41,14 @@ const ContractsPage: React.FC = () => {
         console.error("API请求失败:", err);
         // 失败时清空列表：留着旧数据会让用户把「拉取失败」误读为「合约被删」
         setContracts([]);
-        setError(err instanceof Error ? err.message : t("contracts.loadFailed"));
+        // 经 displayErrorMessage 映射：服务端文案优先，否则走 i18n（审计 B5）
+        setError(displayErrorMessage(err, t, "contracts.loadFailed"));
       } finally {
         setLoading(false);
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [reloadKey]);
 
   return (
     <div className="min-h-screen bg-bg text-fg">
@@ -68,13 +73,7 @@ const ContractsPage: React.FC = () => {
         )}
 
         {!loading && error && (
-          <div
-            role="alert"
-            className="flex items-center gap-2 text-sm text-danger bg-surface-2 border border-danger/30 rounded-md px-4 py-3"
-          >
-            <AlertCircle size={16} aria-hidden="true" />
-            <span>{error}</span>
-          </div>
+          <ErrorState message={error} onRetry={() => setReloadKey((k) => k + 1)} />
         )}
 
         {!loading && !error && contracts.length === 0 && (
