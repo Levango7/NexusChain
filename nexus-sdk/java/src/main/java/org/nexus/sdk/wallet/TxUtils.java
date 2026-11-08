@@ -262,7 +262,7 @@ public class TxUtils extends Thread {
      * Construct a raw channel-open transaction.
      * fastjson {@code new JSONObject()}/{@code JSON.toJSONString} → Jackson
      * {@code JsonUtils.createObjectNode()}/{@code JsonUtils.toJson}.
-     * <p>仅编码：0x10 属支付扩展保留类型（0x10–0x1a）。节点完整区块/RPC 路径受 {@code TransactionCheck} 的 {@code type<=15} 门禁拒绝（Type check error），本方法产出的 raw hex <b>不可上链</b>；仅用于离线编码/签名测试。</p>
+     * <p>仅编码：0x10 属支付扩展保留类型（0x10–0x1a）。节点完整区块/RPC 路径受 {@code TransactionCheck#isConsensusEnabledType} 白名单门禁拒绝（0x10–0x1a 不在共识白名单，报 {@code Type check error}），本方法产出的 raw hex <b>不可上链</b>；仅用于离线编码/签名测试。</p>
      */
     public static String CreateRawChannelOpenTransaction(String fromPubkeyStr, String counterpartyPubkeyHashStr, BigDecimal fundingAmount, Long lockTimeBlocks, Long nonce) {
         try {
@@ -288,7 +288,7 @@ public class TxUtils extends Thread {
     }
 
     /**
-     * <p>仅编码：0x12 属支付扩展保留类型（0x10–0x1a）。节点完整区块/RPC 路径受 {@code TransactionCheck} 的 {@code type<=15} 门禁拒绝（Type check error），本方法产出的 raw hex <b>不可上链</b>；仅用于离线编码/签名测试。</p>
+     * <p>仅编码：0x12 属支付扩展保留类型（0x10–0x1a）。节点完整区块/RPC 路径受 {@code TransactionCheck#isConsensusEnabledType} 白名单门禁拒绝（0x10–0x1a 不在共识白名单，报 {@code Type check error}），本方法产出的 raw hex <b>不可上链</b>；仅用于离线编码/签名测试。</p>
      */
     public static String CreateRawChannelCloseTransaction(String fromPubkeyStr, String channelId, BigDecimal finalBalance1, BigDecimal finalBalance2, String sig1, String sig2, Long nonce) {
         try {
@@ -319,7 +319,7 @@ public class TxUtils extends Thread {
     /**
      * Construct a raw batch-transfer transaction.
      * fastjson {@code List<JSONObject>} → Jackson {@code List<ObjectNode>}.
-     * <p>仅编码：0x13 属支付扩展保留类型（0x10–0x1a）。节点完整区块/RPC 路径受 {@code TransactionCheck} 的 {@code type<=15} 门禁拒绝（Type check error），本方法产出的 raw hex <b>不可上链</b>；仅用于离线编码/签名测试。</p>
+     * <p>仅编码：0x13 属支付扩展保留类型（0x10–0x1a）。节点完整区块/RPC 路径受 {@code TransactionCheck#isConsensusEnabledType} 白名单门禁拒绝（0x10–0x1a 不在共识白名单，报 {@code Type check error}），本方法产出的 raw hex <b>不可上链</b>；仅用于离线编码/签名测试。</p>
      */
     public static String CreateRawBatchTransferTransaction(String fromPubkeyStr, List<ObjectNode> recipients, Long nonce) {
         try {
@@ -344,7 +344,7 @@ public class TxUtils extends Thread {
     }
 
     /**
-     * <p>仅编码：0x14 属支付扩展保留类型（0x10–0x1a）。节点完整区块/RPC 路径受 {@code TransactionCheck} 的 {@code type<=15} 门禁拒绝（Type check error），本方法产出的 raw hex <b>不可上链</b>；仅用于离线编码/签名测试。</p>
+     * <p>仅编码：0x14 属支付扩展保留类型（0x10–0x1a）。节点完整区块/RPC 路径受 {@code TransactionCheck#isConsensusEnabledType} 白名单门禁拒绝（0x10–0x1a 不在共识白名单，报 {@code Type check error}），本方法产出的 raw hex <b>不可上链</b>；仅用于离线编码/签名测试。</p>
      */
     public static String CreateRawMintStableCoinTransaction(String fromPubkeyStr, BigDecimal collateralAmount, BigDecimal mintAmount, Long nonce) {
         try {
@@ -370,7 +370,7 @@ public class TxUtils extends Thread {
     }
 
     /**
-     * <p>仅编码：0x15 属支付扩展保留类型（0x10–0x1a）。节点完整区块/RPC 路径受 {@code TransactionCheck} 的 {@code type<=15} 门禁拒绝（Type check error），本方法产出的 raw hex <b>不可上链</b>；仅用于离线编码/签名测试。</p>
+     * <p>仅编码：0x15 属支付扩展保留类型（0x10–0x1a）。节点完整区块/RPC 路径受 {@code TransactionCheck#isConsensusEnabledType} 白名单门禁拒绝（0x10–0x1a 不在共识白名单，报 {@code Type check error}），本方法产出的 raw hex <b>不可上链</b>；仅用于离线编码/签名测试。</p>
      */
     public static String CreateRawRedeemStableCoinTransaction(String fromPubkeyStr, BigDecimal redeemAmount, Long nonce) {
         try {
@@ -392,7 +392,7 @@ public class TxUtils extends Thread {
     }
 
     /**
-     * <p>仅编码：0x16 属支付扩展保留类型（0x10–0x1a）。节点完整区块/RPC 路径受 {@code TransactionCheck} 的 {@code type<=15} 门禁拒绝（Type check error），本方法产出的 raw hex <b>不可上链</b>；仅用于离线编码/签名测试。</p>
+     * <p>仅编码：0x16 属支付扩展保留类型（0x10–0x1a）。节点完整区块/RPC 路径受 {@code TransactionCheck#isConsensusEnabledType} 白名单门禁拒绝（0x10–0x1a 不在共识白名单，报 {@code Type check error}），本方法产出的 raw hex <b>不可上链</b>；仅用于离线编码/签名测试。</p>
      */
     public static String CreateRawBridgeLockTransaction(String fromPubkeyStr, String targetChain, String recipient, BigDecimal amount, Long nonce) {
         try {
