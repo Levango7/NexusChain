@@ -192,6 +192,30 @@ docker compose -f docker-compose.prod.yml config --format json \
   许可归一表只做高置信映射，拿不准的原样保留并落 `UNKNOWN` 交人工核对。
   不触碰 npm/Rust 两条腿的既有判据，也不改 `docs/licensing.md` 的法务待办勾选状态。
 
+### Java 许可清单 bootstrap：7 构建树全量导出 + 缓存补齐 + 首扫如实暴露（板 20261105-0502 续批 / #107，2026-11-08）
+
+机制层（上一条）把 CI 导出步骤落完后，本批完成 bootstrap 收尾：
+
+- **导出修齐**：CI 的「导出 Java 依赖清单」步骤此前只覆盖 6/7 构建树——
+  `-p <included build>` 调起时 Gradle 把**相对路径** init script 解析到 included
+  build 目录下，六棵 included build 全军覆没（只剩 composite 兜底，而 consortium
+  根项目没挂 java 插件、连兜底也没有）。修法是导出步骤改绝对路径 INIT
+  （`ci.yml` 一行），consortium 本地复验 BUILD SUCCESSFUL / 3 分片 / 172 坐标 /
+  0 未解析边。
+- **清单与缓存同批提交**：`scripts/java-dependencies.json` 取 **CI 自己导出的
+  7/7 工件**合成（零漂移保证：CI 比对步骤 diff 为空），`scripts/java-license-cache.json`
+  由 `--update-java-cache` 按 Maven Central POM（含 parent 链）补齐联合体 delta。
+  落地口径：**7 构建树 / 17 模块 / 485 坐标 / 0 未解析边；缓存命中 484 +
+  POM 未声明 1（org.antlr:ST4:4.3）+ 未核实 0**。报告 Java 行 ❌→✅，三腿齐全。
+- **首扫如实暴露（报告制，不假装干净）**：Java 腿 **18 行强传染**全部为 Eclipse
+  三联许可 OR 串（EDL-1.0 OR EPL-2.0 OR GPL-2.0，GlassFish/Jakarta 系传递依赖；
+  POM 逐字实录，classifier 按 OR 取最严是既定行为，是否可择宽是法务问题不是代码问题）；
+  **67 行 UNKNOWN**（含 mysql-connector-j 裸 `GPL` 不匹配 `GPL-` 前缀的分类器边界，
+  暴露不静默修）；**3 行弱传染**。Rust 腿 3 个缓存未命中（rustls@0.23.46 /
+  rustls-webpki@0.103.16 / h2@0.4.20）属另一 lane 的升版，本批只报告。
+- **开关口径不变**：`--strict` / `--require-java` 均**不打开**——bootstrap 完成只意味着
+  「覆盖完整」这一条件成立，转阻断 / 转覆盖门禁均属 owner 裁决（见 licensing.md §4.3/§5）。
+
 ### 结算平台出款地址的部署侧注入位 + 防再漏门禁（板 20261104-0746 / nex runbook 20261105-0435，2026-11-05）
 
 > 注：本条的 compose `:-` 放行语义随后由 #493 收敛为 `:?` 启动失败，

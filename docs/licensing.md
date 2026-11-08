@@ -72,13 +72,18 @@ nexus-consortium/consortium/src/
    - **npm** — ✅ 解析全部 `package-lock.json` 的 `license` 字段（离线、确定）
    - **Rust** — ✅ 解析 `Cargo.lock` + crates.io 许可，带**可提交缓存**
      `scripts/rust-license-cache.json`（离线可复现；缓存未命中会告警，提示新增依赖未核实）
-   - **Java/Gradle** — ⚠️ **机制已就位、清单待 bootstrap**（2026-11-06，板 20261105-0502）：
+   - **Java/Gradle** — ✅ 已 bootstrap（2026-11-08，板 20261105-0502 / #107）：
      Gradle 无锁文件，改由 `scripts/java-deps-export.init.gradle` 只读导出各构建树
      `runtimeClasspath` 的已解析坐标，`scripts/java-deps-collect.py merge` 合成可提交清单
      `scripts/java-dependencies.json`，许可查 `scripts/java-license-cache.json`
      （Maven Central POM `<licenses>` + parent 链，离线只读缓存）。
-     **清单尚未提交** ⇒ 报告现在仍如实标 `❌ 未覆盖`，Java 依赖不计入合计；
-     bootstrap 后自动转为"已覆盖"，届时才可把 `--require-java` 打开。
+     清单与缓存已提交：CI 导出 **7 构建树 / 17 模块 / 485 坐标 / 0 未解析边**，
+     缓存命中 484 + POM 未声明 1（`org.antlr:ST4:4.3`）+ 未核实 0，
+     报告 Java 行已转 ✅（覆盖完成）。首扫如实暴露：**18 行强传染**全部为
+     Eclipse 三联许可 OR 串（EDL-1.0 OR EPL-2.0 OR GPL-2.0，GlassFish/Jakarta 系，
+     POM 逐字实录；classifier 按 OR 取最严是设计行为）；**67 行 UNKNOWN**
+     （含 `mysql-connector-j` 裸 `GPL` 不匹配 `GPL-` 前缀——分类器边界，
+     暴露不静默修）；**3 行弱传染**。是否转 `--strict` / `--require-java` 属 owner 裁决。
      刷新流程见 `scripts/check-license-policy.py` 头注（导出 → merge → `--update-java-cache`）。
    - 当前为**报告制**（不阻断）：首扫即发现 **5 个 GPL-3.0 系 crate**，见 §5 新增决策项。
 
@@ -106,14 +111,16 @@ nexus-consortium/consortium/src/
       `scripts/check-license-policy.py` + CI job `依赖许可证策略（报告制）`
       （npm ✅ / Rust ✅ 带缓存 / **Java ❌ 未覆盖**）。
       → **2026-11-06 Java 腿机制补齐**（板 20261105-0502，见 §4.3 同条）：导出 init script +
-      合成器 + `scan_java` + POM 许可缓存 + 三向自测 + CI 导出步骤已落；
-      **清单 `scripts/java-dependencies.json` 尚未 bootstrap**（需 CI 先导出一次再合成提交），
-      在那之前本条仍按"Java 未覆盖"对待，不得对外宣称三腿齐全。
+      合成器 + `scan_java` + POM 许可缓存 + 三向自测 + CI 导出步骤已落。
+      → **2026-11-08 Java 腿 bootstrap 完成**（板 #107）：清单改由 CI 全量导出
+      （7 构建树 / 17 模块 / 485 坐标）合成提交，缓存同批补齐（命中 484 /
+      POM 未声明 1 / 未核实 0），三腿齐全，报告 Java 行转 ✅；首扫暴露的
+      18 强传染 / 67 UNKNOWN / 3 弱传染按报告制如实呈现（见 §4.3）。
       ~~**转阻断的前提**是上面
       第一条 GPL 决策落地——否则 CI 会因存量 5 个 GPL 组件常红，"红"将失去
       "新引入违规"的语义。~~ → **2026-10-08 前提已达成**（强传染归零）：转阻断
-      的技术条件已具备，可择机把 `--strict` 打开（转阻断前先确认弱传染 34 项
-      无新增误报面，见 §6）。
+      的技术条件已具备，可择机把 `--strict` 打开（转阻断前先确认弱传染 37 项
+      无新增误报面——含 Java 腿首扫 3 项弱传染，见 §6）。
 - [ ] **前端许可统一**：`nexus-explorer/frontend/package.json` 的 `MIT` 与根
       Apache-2.0 对齐（或明确为独立许可）。
 - [ ] **清理未标注的内嵌 JS**（`org/nexus/tools/**`）或补齐其许可信息。
