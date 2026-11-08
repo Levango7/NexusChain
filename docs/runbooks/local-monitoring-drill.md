@@ -16,7 +16,10 @@
 2. **不是真实机房**：Prometheus / Alertmanager 是自下载社区二进制，
    不是集群内 kube-prometheus-stack；无 ServiceMonitor、无多副本抓取拓扑；
 3. **不宣称「告警已在真实集群触发过」**；
-4. 本 runbook 用 **15s scrape + 30s 应用采样**；生产可能是 30s/15s，数值不可直接对比；
+4. 本 runbook 用 **15s scrape + 30s 应用采样**（**演练口径**）；仓库基线是 **30s scrape +
+   30s 规则评估**（`deploy/monitoring/kube-prometheus-stack-values.yaml:51-53`）。两个口径
+   **不可直接对比**；生产实际值由部署方覆盖，仓库内无法核实——引用数值时必须注明所用口径，
+   不得把演练口径当成生产结论（最坏时延算法见 §十）；
 5. **不改任何告警阈值**；若为缩短等待改 `for:`，只改演练副本，并明确标注
    「这不是生产规则的证据」；
 6. **不写任何密钥**：`NEXUS_METRICS_TOKEN` 用一次性随机值，只写临时文件，不入库；
@@ -341,3 +344,34 @@ rm -rf "$DRILL"
 本 runbook **不是** CI 门禁：CI 只跑 `FinalityRulesCounterUsageTest` 等静态/契约
 测试与 promtool 规则检查。真实链路仍需按本文手工执行；若要进 CI，需要先解决
 「起 PG + 三进程 + 等 10 分钟告警」的成本与稳定性问题，属独立切片。
+
+## 十、告警最坏发现时延（仓库基线口径）
+
+§一 的 15s/30s 是**演练口径**，不要拿它的数值推生产。下面只按**仓库基线**计算。
+
+| 环节 | 仓库基线 | 依据 |
+|---|---|---|
+| outbox DB 采样 | 30s（`fixedDelay`，自上轮完成起算） | `docs/plan/PLAN-040-block-persistence-metrics.md:52` |
+| Prometheus 抓取 | 30s | `deploy/monitoring/kube-prometheus-stack-values.yaml:53` |
+| 规则评估 | 30s | 同上 `:51` |
+| 积压告警 `for:` | 10m | `deploy/k8s/50-prometheus-rules.yaml:101`（`BlockPersistenceBacklog`） |
+| outbox 不可读 `for:` | 5m | 同文件 `:112`（`BlockOutboxUnreadable`） |
+| Alertmanager `group_wait` / `group_interval` | 30s / 5m | `deploy/monitoring/kube-prometheus-stack-values.yaml:129-130` |
+
+**最坏发现时延**（条件在 t0 出现后）：
+
+- `BlockPersistenceBacklog`：30s（采样）+ 30s（抓取）+ 30s（评估）+ 600s（`for`）
+  ⇒ **≤ 11m30s 进入 firing**；叠加 `group_wait` 30s ⇒ **≤ 12m 通知**。若该 group
+  正在合并批次，通知还受 `group_interval` 5m 约束 ⇒ **≤ 16m30s**。
+- `BlockOutboxUnreadable`：30s + 30s + 30s + 300s（`for`）⇒ **≤ 6m30s firing**；
+  通知叠加同上。
+
+**必须保留的口径限制**：
+
+1. 采样取的是 `@Scheduled(fixedDelay=30s)` 的缓存快照；**首轮采样前 outbox 系列为 NaN**
+   （不是 0），所以「刚启动」不会被误报为积压，但上表以「首轮采样已发生」为前提；
+2. 采样执行耗时未实测，**无法核实**；上表只算调度间隔，不含执行耗时；
+3. `for:` 要求条件**连续成立**，中间任一评估点为假会重置计时；因此实际时延只会更长，
+   上表是同口径下的上限而非保证值；
+4. 生产若覆盖了 scrape / 评估间隔，**按同一算式替换对应项重算**，不得沿用本表数值；
+5. **禁止为「对齐」而放大 `for:`**——那是掩盖问题，不是修复；`for:` 变更需独立评审。
