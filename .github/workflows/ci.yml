@@ -547,7 +547,10 @@ jobs:
               sleep 20
             done
           }
-          INIT=scripts/java-deps-export.init.gradle
+          # INIT 必须绝对路径：-p <included build> 调起时 Gradle 会把相对路径的
+          # init script 解析到那个构建树的目录下（实测报 "does not exist"），
+          # 六棵 included build 全军覆没，只剩 composite 兜底一条路。
+          INIT="$PWD/scripts/java-deps-export.init.gradle"
           OUT="$PWD/build/java-deps"
           rm -rf "$OUT" && mkdir -p "$OUT"
           run_txn ./gradlew --no-daemon --init-script "$INIT" \
