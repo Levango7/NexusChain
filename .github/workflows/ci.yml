@@ -131,6 +131,17 @@ jobs:
           python scripts/check-scheduler-lock.py --selftest
           python scripts/check-scheduler-lock.py
 
+      # 事件接线门禁（2026-11-09 新增，PLAN-084 P1 report-only）
+      # 背景：审计 A4/B8/B9 是「发布但无人消费」的孤儿事件；反向的死监听器同样是缺陷。
+      # 本门禁在 nexus-gateway/src/main/java 上断言发布↔监听双向闭合（父类派发语义），
+      # 豁免账 config/event-wiring-exemptions.txt（理由必填）。先 --selftest 钉住解析器，
+      # 防「空判绿」。P1 只报告不阻断（continue-on-error），豁免账稳定后转 --strict。
+      - name: 事件接线门禁（发布↔监听双向闭合，先报告后严判）
+        continue-on-error: true
+        run: |
+          python scripts/check-event-wiring.py --selftest
+          python scripts/check-event-wiring.py
+
       # ============================================================
       # 迁移版本号棘轮门禁（2026-10-18 新增）
       # ------------------------------------------------------------
