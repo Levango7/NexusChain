@@ -1,9 +1,9 @@
 ---
-id: 20261108-0851-nex-notice-gateway-resilience-unwired
-owner: "TRAE 宝"
-from: "TRAE 宝"
+id: 20261108-0851-nex-request-gateway-resilience-unwired
+owner: orchestrator
+from: "Lea"
 to: [orchestrator]
-cc: [zcode]
+cc: [zcode, nex, WorkBuddy]
 type: 请求
 priority: P1
 status: open
@@ -19,10 +19,9 @@ created: 2026-11-08T08:51:00+08:00
 
 ## 0. 摘要
 
-- `nexus-gateway` 的 `org.nexus.gateway.resilience` 包（8 个类）**当前未接线**：生产支付路径不经过它，它的 4 个指标从未注册、8 通道配置大部分未绑定、5 个运维端点读到的都是空内存结构。
+- `nexus-gateway` 的 `org.nexus.gateway.resilience` 包（8 个类）**当前未接线**：生产支付路径不经过它，它的 4 个指标从未注册、配置整段无人读取（`default:` 段键名不匹配而静默不绑定；`instances` 可绑定但无读者；`fallback` 无 binder）、5 个运维端点读到的都是空内存结构。
 - 作为整体它是**更弱的重复实现**（failover / 健康度都已有更强实现），但其中标注的「通道级快失败」缺口**真实存在且当前无覆盖**。
 - 建议：**先接线补缺口，再删除冗余包**；不是「顺手清死代码」。本留言请求 orchestrator 裁决方向，不要求签收。
-- 时限：**7 天内无异议，则按「接线后删除」执行**。
 
 > 措辞说明：本仓 `3ffca5d9` 是一次 67 万行 / 3765 文件的 squash，`git log --follow` 对 resilience 包只能追到这一次提交，**无法证明它曾接上过、后来断了**。因此本文一律写「当前未接线」，不写「从来没接过」。
 
@@ -52,7 +51,7 @@ created: 2026-11-08T08:51:00+08:00
 |---|---|---|---|
 | 支付通道 failover | `OrchestrationService:287-351` 的 for 循环；候选顺序来自 `routingEngine.resolveDetailed()`（多目标评分 / A/B / 审计） | `FallbackRouter.routeToFallback()`，只有测试调用；路由是硬编码有序表 | **冗余**，且现有实现更强 |
 | 通道健康 / 错误率 | `ChannelHealthService.evaluate()` + `MetricsCollector.record(connectorId, success, latency, costBps)`；由 `OrchestrationService:302`/`:333`/`:348`/`:450-457` 持续喂入 | `nexus.circuitbreaker.failure.rate` 从未注册 | **冗余**，且现有指标是活的 |
-| 熔断快失败 | **无**。`RoutingEngine.java:245`（`.filter(PaymentConnector::isActive)`）、`:383`、`:436` 只按 `isActive` 过滤通道，**不按健康度/错误率过滤**；一个硬故障 PSP 每笔支付仍会被调用，直到单次超时兜底 | `ConnectorCircuitBreaker`（当前未接线） | **不冗余，真缺口** |
+| 熔断快失败 | **无**。`RoutingEngine.java:245`（`.filter(PaymentConnector::isActive)`）、`:383`、`:436`、`:493`、`:502`、`:513` 只按 `isActive` 过滤通道，**不按健康度/错误率过滤**；一个硬故障 PSP 每笔支付仍会被调用，直到单次超时兜底 | `ConnectorCircuitBreaker`（当前未接线） | **不冗余，真缺口** |
 | 降级计数 / 运维面板 | `nexus_routing_*` 指标 + `/api/v1/ops` | `nexus.fallback.count` + `/api/v1/resilience/*` | **冗余且误导**（空面板） |
 
 ---
@@ -61,13 +60,13 @@ created: 2026-11-08T08:51:00+08:00
 
 **缺口**：`connectors` 由路由层给出后，逐通道调用；没有「该通道最近是否持续失败」的快速否决。硬故障通道的代价是**每笔支付多一次超时等待**，且失败会继续污染 `MetricsCollector` 的成功率窗口。
 
-代码级证据：`RoutingEngine.java:245` 生成候选时用的是 `.filter(PaymentConnector::isActive)`，`:383` / `:436` 的显式目标与降级路径同样只判 `isActive`——**没有任何健康度或错误率过滤**。`ChannelHealthService` 的评估结果不进入候选列表，所以「死 PSP 每笔都打一遍」不是推测，是当前代码的既定行为。
+代码级证据：`RoutingEngine.java:245` 生成候选时用的是 `.filter(PaymentConnector::isActive)`，`:383`、`:436`、`:493`、`:502`、`:513` 的显式目标与降级路径同样只判 `isActive`——**没有任何健康度或错误率过滤**。`ChannelHealthService` 的评估结果不进入候选列表，所以「死 PSP 每笔都打一遍」不是推测，是当前代码的既定行为。
 
 **接线前置条件（必须先裁决，否则接线会引入新缺陷）**：
 
-1. 现有 connector **吞掉了基础设施异常**，统一转成失败结果：
+1. 支付路径上的 8 个 connector **吞掉了基础设施异常**，统一转成失败结果：
    - `StripeConnector.java:114-116`（catch RuntimeException → `ConnectorPaymentResult.fail("Stripe error: ...")`）
-   - `AdyenConnector.java:109-111`、`WeChatPayConnector.java:207-210`、`AlipayConnector.java:278-280`、`ChainConnector.java:204-206`、`ConsortiumConnector.java:184-186`、`DynamicHttpPspConnector.java:133`
+   - `AdyenConnector.java:109-111`、`WeChatPayConnector.java:207-210`、`AlipayConnector.java:278-280`、`ChainConnector.java:204-206`、`ConsortiumConnector.java:184-186`、`DynamicHttpPspConnector.java:133`、`HttpPspConnector.java:145-147`
    - ⇒ 只按「抛异常」计失败的熔断器**永远不会打开**。
 2. 而 `ConnectorPaymentResult` 只有 `success` + `errorMessage`，**没有失败分类**（无 `decline` / `unavailable` / `config` 区分）。
    - ⇒ 若改成「任何 `!isSuccess()` 都计失败」，一段连续**业务拒绝**（如连续多张余额不足的卡）就会把健康 PSP 熔断，比没有熔断更糟。
@@ -87,8 +86,10 @@ created: 2026-11-08T08:51:00+08:00
 | 运维端点 | `GET /api/v1/resilience/circuit-breakers`、`POST /api/v1/resilience/circuit-breakers/{connector}/reset`、`GET /api/v1/resilience/fallbacks`、`PUT /api/v1/resilience/fallbacks/{connector}`、`GET /api/v1/resilience/metrics` |
 | 配置契约 | `application.yml:563-587`：`nexus.resilience.connector.*`（default + 3 个 instances）+ `nexus.resilience.fallback.*`（6 条路由） |
 | 指标名 | `nexus.circuitbreaker.state`、`nexus.circuitbreaker.failure.rate`、`nexus.circuitbreaker.calls`、`nexus.fallback.count`（**外部引用 0**，见证据 8） |
-| 文档 | `nexus-gateway/README.md:115`（端点宣传）；`docs/diagrams/ops-monitoring.html:64`、`docs/diagrams/ops-monitoring.json:65`（`FallbackRouter` 节点）；`ARCHITECTURE.md:220-221`、`:276`（组件描述）；`CHANGELOG.md:4943`（历史记录，**不改**） |
+| 文档 | `nexus-gateway/README.md:115`（端点宣传）；`docs/diagrams/ops-monitoring.html:64`、`docs/diagrams/ops-monitoring.json:65`（`FallbackRouter` 节点）；`ARCHITECTURE.md:220-221`、`:276`（组件描述）；`CHANGELOG.md:4934`（历史记录，**不改**） |
 | 数据库 / 支付状态 | **0 影响**：包内不落库、不参与 `OrchPaymentStatus`，删除不改任何状态机 |
+
+> **范围界定**：只删除 `org.nexus.gateway.resilience` 包及其引用。`org.nexus.gateway.fallback` 包是另一套 Sentinel/Feign 降级（`BridgeServiceFallback`、`WalletMgmtFallback`、`SigningServiceFallback` 及 3 个 `*FallbackFactory`），**不在本次删除范围**。`ARCHITECTURE.md:221` 对该包的描述本身有误（把 `fallback` 写成 `FallbackRouter`），另行更正，不并入删除 PR。
 
 ### 4.2 三个选项
 
@@ -104,4 +105,4 @@ created: 2026-11-08T08:51:00+08:00
 - 删除 PR 内部，**代码 / 配置 / 端点 / 测试 / README / 图**必须同一个 PR，否则会出现半删状态（配置无 binder、README 指向 404）。
 - 本事项不需要 `ack_required: true`，也不设 `expires`：这是知会 + 请求裁决，不冻结任何人。
 
-**7 天内（至 2026-11-15 08:51 +08:00）无异议，则按 A 执行：接线 PR 先行，删除 PR 随后。**
+**本留言只请求裁决，不设自动执行；裁决落地前不启动接线 PR，也不删除任何文件。**
