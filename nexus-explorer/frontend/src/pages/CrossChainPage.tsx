@@ -3,8 +3,9 @@ import { useTranslation } from "react-i18next";
 import { AlertCircle, ArrowLeftRight, RefreshCw } from "lucide-react";
 import { api } from "../api/client";
 import type { CrossChainTransfer } from "../types";
-import { Badge, Button, Loading, type BadgeTone } from "../components/ui";
+import { Badge, Button, ErrorState, Loading, type BadgeTone } from "../components/ui";
 import { PageHeader, BackLink } from "../components/layout/PageHeader";
+import { displayErrorMessage } from "../utils/displayError";
 import { orDash } from "../utils/value";
 import { formatRelativeTime } from "../utils/time";
 
@@ -56,7 +57,7 @@ const CrossChainPage: React.FC = () => {
         if (cancelled) return;
         console.error("API请求失败:", err);
         setTransfers([]);
-        setError(err instanceof Error ? err.message : t("crosschain.loadFailed"));
+        setError(displayErrorMessage(err, t, "crosschain.loadFailed"));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -114,13 +115,9 @@ const CrossChainPage: React.FC = () => {
         )}
 
         {!loading && error && (
-          <div
-            role="alert"
-            className="flex items-center gap-2 text-sm text-danger bg-surface-2 border border-danger/30 rounded-md px-4 py-3"
-          >
-            <AlertCircle size={16} aria-hidden="true" />
-            <span>{error}</span>
-          </div>
+          // 复用已有的 refreshSeq（本页 header 的「刷新」也用它）——
+          // 不给重试另造一套取数逻辑（审计 B7）
+          <ErrorState message={error} onRetry={() => setRefreshSeq((n) => n + 1)} />
         )}
 
         {/* BRIDGE_* 属支付扩展 0x10–0x1a（保留未启用，B-2 收口为 HTTP 501 + 5010）：
