@@ -1,0 +1,18 @@
+{
+  "Results": [
+    {
+      "Target": "gcr.io/distroless/java17-debian13:nonroot (debian 13.7)",
+      "Class": "os-pkgs",
+      "Type": "debian",
+      "Vulnerabilities": [
+        {
+          "VulnerabilityID": "CVE-2026-999001",
+          "PkgName": "libssl3t64",
+          "InstalledVersion": "3.5.1-1",
+          "Severity": "HIGH",
+          "Status": "affected"
+        }
+      ]
+    }
+  ]
+}

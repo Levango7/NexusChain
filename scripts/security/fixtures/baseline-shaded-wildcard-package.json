@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "entries": [
+    {
+      "id": "CVE-2026-777777",
+      "package": "*",
+      "kind": "shaded_vendored",
+      "reason": "用通配实现全局豁免，应被拒收",
+      "expires": "2027-02-04",
+      "addedAt": "2026-11-06",
+      "evidence": {
+        "jar_path": "nacos-client-3.1.1.jar",
+        "jar_sha256": "08bc00766deb3a5044e1e16561ac49df74f397ca268ee6ef2f84a3317485c6c1",
+        "vulnerable_copy": "33.3.1-android",
+        "shaded_prefix": "com/alibaba/nacos/shaded/com/google/common/",
+        "declared_dependency_fixed": "guava 33.4.8-jre -> 33.7.2-jre（by constraint）",
+        "upstream_max_version": "nacos-client 3.3.0 内嵌 guava 33.5.0-android"
+      }
+    }
+  ]
+}

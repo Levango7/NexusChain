@@ -240,19 +240,31 @@ public class JdbcFinalityStateStore implements FinalityStateStore {
 
     @Override
     public void removePendingVote(FinalityOutboxEntry entry) {
-        jdbc.update("DELETE FROM finality_vote_outbox WHERE epoch=? AND checkpoint_hash=? "
-                        + "AND validator=? AND origin=?",
+        // PLAN-079：origin 落库短码是小写 local/received，但 legacy/手工行可能是其它
+        // 大小写；精确等值会 0 行静默不删，让该行被反复重试（人工毒丸形态）。
+        // 这里大小写不敏感匹配，且对 0 行显式告警，不再静默。
+        int removed = jdbc.update("DELETE FROM finality_vote_outbox WHERE epoch=? "
+                        + "AND checkpoint_hash=? AND validator=? AND LOWER(origin)=LOWER(?)",
                 entry.getEpoch(), hashStr(entry.getCheckpointHash()), entry.getValidatorAddress(),
                 entry.getOrigin().code());
+        if (removed == 0) {
+            log.warn("Finality outbox remove matched 0 rows: epoch={}, validator={}, origin={}",
+                    entry.getEpoch(), entry.getValidatorAddress(), entry.getOrigin().code());
+        }
     }
 
     @Override
     public void markPendingVoteFailure(FinalityOutboxEntry entry, String error) {
-        jdbc.update("UPDATE finality_vote_outbox SET attempts=attempts+1, last_error=? "
-                        + "WHERE epoch=? AND checkpoint_hash=? AND validator=? AND origin=?",
+        int updated = jdbc.update("UPDATE finality_vote_outbox SET attempts=attempts+1, last_error=? "
+                        + "WHERE epoch=? AND checkpoint_hash=? AND validator=? "
+                        + "AND LOWER(origin)=LOWER(?)",
                 error == null ? "" : (error.length() > 500 ? error.substring(0, 500) : error),
                 entry.getEpoch(), hashStr(entry.getCheckpointHash()), entry.getValidatorAddress(),
                 entry.getOrigin().code());
+        if (updated == 0) {
+            log.warn("Finality outbox failure update matched 0 rows: epoch={}, validator={}, origin={}",
+                    entry.getEpoch(), entry.getValidatorAddress(), entry.getOrigin().code());
+        }
     }
 
     @Override

@@ -131,6 +131,7 @@ jobs:
       # 试跑：只推 :dryrun 一个标签 —— 既不占用正式版本号，
       # 又能完整验证「标签合法性 + GHCR 认证 + 推送权限」这条此前一直失败的路径。
       - name: Build and push image（试跑：仅 :dryrun）
+        id: push-dryrun
         if: inputs.dry_run
         uses: docker/build-push-action@v7
         with:
@@ -140,6 +141,7 @@ jobs:
           tags: ${{ env.REGISTRY }}/${{ steps.prefix.outputs.value }}/${{ matrix.module }}:dryrun
 
       - name: Build and push image（tag = git tag 版本号）
+        id: push
         if: github.event_name == 'push'
         uses: docker/build-push-action@v7
         with:
@@ -150,6 +152,52 @@ jobs:
             ${{ env.REGISTRY }}/${{ steps.prefix.outputs.value }}/${{ matrix.module }}:${{ github.ref_name }}
             ${{ env.REGISTRY }}/${{ steps.prefix.outputs.value }}/${{ matrix.module }}:latest
             ${{ env.REGISTRY }}/${{ steps.prefix.outputs.value }}/${{ matrix.module }}:staging
+
+      # 2026-11-06（发布后 digest 扫描）：把 buildx 自报的 manifest digest 落盘并上传。
+      # 为什么必须记 digest：tag 可被覆盖（:latest / :staging 随下个版本移动），
+      # 只有 `image@sha256:...` 固定指向本次发布的那批字节。
+      # v2.77.0 的 digest 只存在于 build 日志（`##[group]Digest`），事后按 tag 取回
+      # 也只能拿到「现在这个 tag 指向谁」，因此无法证明「发版镜像被扫过」。
+      - name: 记录推送镜像的 manifest digest
+        if: github.event_name == 'push' || inputs.dry_run
+        env:
+          MODULE: ${{ matrix.module }}
+          DIGEST: ${{ steps.push.outputs.digest || steps.push-dryrun.outputs.digest }}
+          IMAGE: ${{ env.REGISTRY }}/${{ steps.prefix.outputs.value }}/${{ matrix.module }}
+        run: |
+          if [ -z "${DIGEST}" ]; then
+            echo "::error title=缺少 manifest digest::build-push-action 未返回 digest，发布后扫描无法按产物取证"
+            exit 1
+          fi
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            export TAGS="dryrun"
+          else
+            export TAGS="${{ github.ref_name }},latest,staging"
+          fi
+          mkdir -p digests
+          python3 - <<'PY'
+          import json, os
+          tags = [t.strip() for t in os.environ["TAGS"].split(",") if t.strip()]
+          payload = {
+              "module": os.environ["MODULE"],
+              "image": os.environ["IMAGE"],
+              "digest": os.environ["DIGEST"],
+              "tags": tags,
+          }
+          with open(f"digests/{os.environ['MODULE']}.json", "w", encoding="utf-8") as f:
+              json.dump(payload, f, ensure_ascii=False)
+              f.write("\n")
+          PY
+          echo ">>> ${IMAGE}@${DIGEST}"
+
+      - name: 上传 digest 清单（供 Release body 与发布后扫描）
+        if: github.event_name == 'push' || inputs.dry_run
+        uses: actions/upload-artifact@v7
+        with:
+          name: image-digest-${{ matrix.module }}
+          path: digests/
+          retention-days: 14
+          if-no-files-found: error
 
   # ============================================================
   # 2. 创建 GitHub Release（从 CHANGELOG.md 提取对应版本段落）
@@ -197,6 +245,36 @@ jobs:
             echo "::warning::Version section ${VERSION_NUM} not found in CHANGELOG.md, falling back to full changelog"
             cp CHANGELOG.md version_changelog.md
           fi
+
+      - name: 下载各镜像 digest 清单
+        uses: actions/download-artifact@v7
+        with:
+          pattern: image-digest-*
+          path: image-digests
+          merge-multiple: true
+
+      # 2026-11-06：digest 必须进 Release body。
+      # 此前 Release 只写 CHANGELOG，`v2.77.0` 的 manifest digest 只存在于 build
+      # 日志里 —— 日志会过期、tag 会被覆盖，事后无法证明「这次发布推的是哪批字节」。
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
+      - name: 生成镜像 digest 表并拼入 Release body
+        run: |
+          python3 scripts/security/release-digest-report.py \
+            --digests image-digests \
+            --tag "${{ github.ref_name }}" \
+            --table-output digest-table.md
+          {
+            echo ""
+            echo "## 发布镜像 digest"
+            echo ""
+            echo "> tag 可被覆盖（\`:latest\` / \`:staging\` 随下个版本移动），digest 才是本次发布的唯一身份。"
+            echo ""
+            cat digest-table.md
+          } >> version_changelog.md
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
@@ -475,3 +553,161 @@ jobs:
           echo ">>> Post-rollback status for ${namespace}:"
           helm status nexuschain --namespace "${namespace}"
           echo ">>> 请人工确认：kubectl rollout status、业务接口健康检查、Flyway 迁移兼容性"
+
+  # ============================================================
+  # 7. 发布后按 digest 扫描（**不阻断发版**）
+  # ============================================================
+  # 为什么要有这一层（2026-11-06）：
+  # `security-scan.yml` 的 PR 门禁扫的是「本次构建的本地镜像」（`docker build -t <m>:scan`），
+  # 它证明「将要合入的代码不引入新增漏洞」，但**证明不了已发布的那批字节**：
+  # v2.77.0 的 13 个镜像由 `docker/build-push-action` 产出、带 provenance，
+  # manifest digest 与 PR 门禁重建出来的镜像不同（**重建 ≠ 同一镜像**），
+  # 且 release 链路此前没有任何扫描 —— 发版镜像从未被扫过。
+  #
+  # 语义约束：
+  #   · 只扫**已推送的 manifest**，用 `image@sha256:...` 引用，不重新 build、不用 tag；
+  #   · 判红语义完全复用 `trivy-baseline-gate.py`（新增 HIGH/CRITICAL 才算问题）；
+  #   · **发版已发生，本 job 一律不判红**（`continue-on-error` + 脚本只产 summary），
+  #     有问题走 issue（`release-digest-watch`），去重靠 issue 标题前缀 `[Release/<tag>]`。
+  release-digest-scan:
+    timeout-minutes: 30
+    name: Post-release Digest Scan (${{ matrix.module }})
+    if: always() && (github.event_name == 'push' || inputs.dry_run) && needs.build-images.result == 'success'
+    needs: build-images
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read   # 按 digest 拉取 GHCR 私有镜像
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        module:
+          - nexus-core
+          - nexus-gateway
+          - nexus-bridge
+          - nexus-signing-service
+          - nexus-wallet-service
+          - nexus-api-gateway
+          - nexus-settlement
+          - nexus-compliance
+          - nexus-analytics
+          - nexus-oracle
+          - mpc-engine
+          - zk-groth16-service
+          - nexus-explorer
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v5
+
+      - name: 下载本模块 digest 清单
+        uses: actions/download-artifact@v7
+        with:
+          name: image-digest-${{ matrix.module }}
+          path: image-digests
+
+      - name: 解析 digest → `image@sha256:...`
+        id: ref
+        run: |
+          DIGEST=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["digest"])' "image-digests/${{ matrix.module }}.json")
+          IMAGE="${REGISTRY}/${GITHUB_REPOSITORY,,}/${{ matrix.module }}@${DIGEST}"
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+          echo ">>> 扫描对象：${IMAGE}"
+
+      - name: Trivy 按 digest 扫描（原始 JSON，不套豁免）
+        id: trivy
+        continue-on-error: true   # 扫描失败不判红：信号转成 summary 缺失，由 triage 报 issue
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        env:
+          # trivy 直连 registry 拉取（本 job 没有 build 出来的本地镜像可扫）
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # trivy 版本锁定（不用浮动 tag）；发布后 digest 扫描为独立取证步，不占用门禁 DB 缓存
+          version: v0.76.2
+          image-ref: ${{ steps.ref.outputs.image }}
+          format: json
+          output: trivy-release-${{ matrix.module }}.json
+          vuln-type: os,library
+          severity: CRITICAL,HIGH,MEDIUM,LOW
+          exit-code: '0'
+          # 显式指向空清单：不让根目录 `.trivyignore` 的 29 条历史豁免悄悄生效
+          trivyignores: .github/trivyignore-empty
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
+      - name: 基线差分门禁（只判新增；仅产出 summary，不判红）
+        id: gate
+        continue-on-error: true
+        run: |
+          mkdir -p gate-summaries
+          set +e
+          python3 scripts/security/trivy-baseline-gate.py \
+            --baseline config/trivy-baseline.json \
+            --report "trivy-release-${{ matrix.module }}.json" \
+            --summary-json "gate-summaries/${{ matrix.module }}.json"
+          rc=$?
+          echo ">>> gate exit=${rc}（1=有新增/到期/策略违规，已转 issue；2=输入不可读）"
+          # 步骤本身保持 green：发版不能因为「扫描判断出问题」而变红
+          exit 0
+
+      - name: 上传门禁 summary
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-gate-summary-${{ matrix.module }}
+          path: gate-summaries/
+          retention-days: 14
+          if-no-files-found: warn
+
+  release-digest-triage:
+    timeout-minutes: 10
+    name: Post-release Digest Triage (${{ github.ref_name }})
+    if: always() && (github.event_name == 'push' || inputs.dry_run) && needs.build-images.result == 'success'
+    needs: [build-images, release-digest-scan]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      issues: write   # 「有问题就开 issue」；不阻断发版
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
+      # 某些腿失败时产物可能缺失；下载失败不判红，缺 summary 会在 issue 里列为「扫描异常」
+      - name: 下载各镜像 digest 清单
+        continue-on-error: true
+        uses: actions/download-artifact@v7
+        with:
+          pattern: image-digest-*
+          path: image-digests
+          merge-multiple: true
+
+      - name: 下载各腿门禁 summary
+        continue-on-error: true
+        uses: actions/download-artifact@v7
+        with:
+          pattern: release-gate-summary-*
+          path: gate-summaries
+          merge-multiple: true
+
+      - name: 汇总并创建/更新 issue（不判红）
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 scripts/security/release-digest-report.py \
+            --digests image-digests \
+            --summaries gate-summaries \
+            --tag "${{ inputs.dry_run && 'dryrun' || github.ref_name }}" \
+            --repo "${{ github.repository }}" \
+            --label release-digest-watch \
+            ${{ inputs.dry_run && '--dry-run' || '' }}

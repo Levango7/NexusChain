@@ -96,16 +96,16 @@
 - [ ] **epoch 窗口 / 规范检查点语义校验未做**（需链接口） —— 未开始。`PLAN-067`
 - [ ] **历史短哈希行未全量清洗**（只丢弃、不建索引、不占配额；`PLAN-071` 起改为隔离表） —— 部分完成（隔离演练完成，生产库未执行）。`PLAN-067`、`PLAN-071`
 - [ ] **脏行迁移未在生产库执行** —— 部分完成（仅 H2 / 迁移演练）。`PLAN-071`
-- [ ] **outbox 脏票「不变毒丸」依赖 `submitVote` 对非法哈希正常拒绝而非抛异常** —— 已有门禁但未在真实环境验证（`FinalityOutboxDirtyVoteContainmentTest`）。`PLAN-072`
+- [x] **outbox 脏票「不变毒丸」依赖 `submitVote` 对非法哈希正常拒绝而非抛异常** —— **已闭环（2026-11-05）**：H2 门禁（`FinalityOutboxDirtyVoteContainmentTest`）+ 真实 PG 复核（正确小写 origin 的脏行处理一次即被拒并移除，`outbox=0/votes=0`）；并修复 legacy/手工 origin 大小写导致 `removePendingVote`/`markPendingVoteFailure` 静默 0 行的问题（PLAN-079：大小写不敏感匹配 + 0 行 WARN）。`PLAN-072`
 
 ### B. 可观测性 / 告警 / 容量
 
 - [ ] **真实集群告警未触发**（promtool、本机 Prometheus + Alertmanager 三进程均非真实集群） —— 未开始。`PLAN-066`、`PLAN-067`、`PLAN-068`、`PLAN-073`、`PLAN-074`
-- [ ] **`/actuator/prometheus` 目前没有鉴权**（原文只证「抓取可达、标签可见」，不是「暴露面已加固」） —— 未开始。`PLAN-068`
+- [x] **`/actuator/prometheus` 目前没有鉴权**（原文只证「抓取可达、标签可见」，不是「暴露面已加固」） —— **已闭环（2026-11-05）**：PLAN-075 全仓 Bearer 鉴权（#458 `d24ab1db`）、PLAN-076 本地真实链路演练 + runbook（#470 `ac6a316a`）、PLAN-077 双 token 零空窗轮换（#480 `cd237063`）。`PLAN-068`
 - [ ] **真实攻击形态未演练**（合成拒绝不代表真实攻击） —— 未开始。`PLAN-068`
 - [ ] **Prometheus 服务端存储 / 查询成本基准（容量规划）未做** —— 未开始。`PLAN-070`、`PLAN-074`
 - [ ] **outbox 指标 30s 采样滞后**（告警发现延迟） —— 部分完成（指标与告警已交付，采样延迟仍在）。`PLAN-073`
-- [ ] **监控栈实验脚本与日志留在仓库外**（验证资产未入库、不可复现） —— 未开始。`PLAN-074`
+- [x] **监控栈实验脚本与日志留在仓库外**（验证资产未入库、不可复现） —— **已闭环（2026-11-07）**：步骤、参数、预期观测已固化为 `docs/runbooks/local-monitoring-drill.md`（PLAN-083）；原始日志、webhook 落盘与一次性脚本按既有纪律仍留仓库外（有意，不是缺口）。`PLAN-074`
 - [ ] **生产 scrape 间隔与实验参数（15s scrape + 30s 采样）可能有差异** —— 未开始。`PLAN-074`
 
 ### C. 已由后续切片关闭（不入上表，防重复登记）
@@ -172,6 +172,10 @@
 | 2026-10-27 | **弃权风险指标化（PLAN-052，产品变更）**：`AbstainMetrics` 暴露 `nexus_finality_{defer_total,defer_max_height,defer_max_count,abstain_risk}`（只读 PLAN-051 的 defer 计数、抓取零 DB）+ 告警第 18 条 `BlockAdoptionAbstainRisk`（warning，`abstain_risk==1` for 5m；单节点弃权≠全网死锁，后者归 FinalityStalled）。**口径**：计数只增不减 ⇒ 1 的含义是"本进程启动以来见过弃权风险"，非"当前正在弃权"；"当前"语义属后续切片。4 例新测试；规则 9 groups/18 alerts | PLAN-052 §二/§三；`AbstainRiskMetricsTest` 4 例 |
 | 2026-10-31 | **PLAN-062/063 抓取端补验（验证切片，零代码改动）**：Windows 本机 PG 的 fork 路径 `0xC0000142` 阻塞绕开——应用仍在 Windows JDK 17，datasource 换到 WSL2 Ubuntu-24.04 内的 PostgreSQL 16.15（单物理机、跨 WSL2 内核边界，非物理多机）。`/actuator/prometheus` 实测 22 个 `nexus_*`：block 侧 **10/10**（`outbox_readable=1.0`、`database_pending=0`、两 counter=0、`last_failure_height=-1`）、finality 侧 **12/12**（enabled/finalized/current_epoch/latest_voted_epoch/progress/lag/checkpoints/abstain/defer 全在）。**仍未验证**：告警按阈值触发、物理多机/真实断网断电。环境坑：9236 落在 Windows Hyper-V 保留段 9211-9310 ⇒ P2P 改 19336；WSL 无客户端连接数秒即关机连带 PG 停止，需常驻 `wsl sleep` | PLAN-062 §五 补验节；PLAN-063 §七；`F:\Agent\opencode\workspace\verify-block-metrics-wsl.ps1` |
 | 2026-11-01 | **告警规则 promtool 演练（PLAN-064，门禁变更 + 告警配置修复）**：静态校验只验 YAML/计数，PromQL 语义与触发行为此前零验证 ⇒ 新增提取脚本（`scripts/extract-prometheus-rules.py`）+ 38 用例/56 断言（18 条告警三态）+ CI 步（promtool v3.15.1 固定 + sha256；失败 ⇒ `UNSTABLE`，与"只合 CLEAN"口径一致）。**首跑抓到 2 条从未触发的死告警**（`PodCpuUsageHigh`/`PodMemoryUsageHigh`：分母标签集不匹配、除法恒空；恒定 95% 占用 14min `got:[]` 实证）——改两侧 `sum by (pod, container)` 归一后同一序列正常触发；顺带修正文件头告警数 17→18（CI 只断 ≥5，漂移从未被发现）。反向对照：A 还原修复 ⇒ 恰 2 用例红；B 改阈值 ⇒ 对应用例红。**仍未验证**：Alertmanager 路由/通知链路；`kube_*` 序列真实抓取目标存在性（合成序列只证表达式语义） | PLAN-064 §三/§四/§五；`deploy/k8s/tests/prometheus-rules.test.yaml`；`scripts/extract-prometheus-rules.py` |
+| 2026-11-05 | **#27 清单纠偏（PLAN-078，E5 通知 20261105-0615 owner 回填）**：actuator 鉴权条按 PLAN-075/076/077 勾选；归档追加 PLAN-069 补录与编号勘误（只新增，不改逐字正文） | PLAN-075 #458 `d24ab1db`、PLAN-076 #470 `ac6a316a`、PLAN-077 #480 `cd237063`；`docs/roadmap-unresolved-archive-27-finality.md`「E5 补录」小节 |
+| 2026-11-05 | **PLAN-079：outbox 真实 PG 复核 + legacy origin 大小写静默删除修复** | 真实 PG（WSL2 + 单进程 core）：正确小写脏行处理一次即移除；`removePendingVote`/`markPendingVoteFailure` 改大小写不敏感 + 0 行 WARN；JdbcFinalityStateStoreTest +2 例、反向对照两组精确红 | `docs/plan/PLAN-079-outbox-legacy-origin-case.md` |
+| 2026-11-07 | **PLAN-080：REST 形态 P2P 合批测试时序抖动去时序化**（qoder CN `20261106-0022` 交回 nexus-core lane）：`RPCClientBatchingTest` 等待改用信号量（替 `verify(timeout)`）、窗口 80ms→2000ms、折叠用例冲刷由合批上限计数触发；折叠覆盖加强（同内容、不同实例） | 只改测试、零生产代码；本地基线 7/7 绿、压测 26/26 绿；反向对照（去重键改实例身份）精确红在 `[同一笔不应重复上线] Expected size: 1 but was: 2`，还原后绿 | `docs/plan/PLAN-080-rpcclient-batching-test-flaky.md` |
+| 2026-11-07 | **PLAN-081：gRPC 形态 P2P 合批测试时序抖动去时序化 + 批内折叠路径覆盖修复**（PLAN-080 交付留言单列的遗留项）：`TransactionHandlerBatchingTest` 窗口 80/300ms→2000ms、等待上界同步放大、折叠用例改由合批上限（计数）触发冲刷、两处 `Thread.sleep` 掩盖改 `verify(after(300).times(1))` | 只改测试、零生产代码；实测复现 2 处红（`Expected size: 1 but was: 2`、`[窗口未到期前不应广播] Expecting empty but was: [...]`）；基线 5/5 绿、压测 62/62 绿；反向对照（去掉批内 `LinkedHashSet`）精确红在 `[同一事务不应重复广播] Expected size: 1 but was: 2`，而**改前同一对照仍绿**（证明原用例没覆盖批内折叠路径），还原后绿 | `docs/plan/PLAN-081-transactionhandler-batching-test-flaky.md` |
 
 ## PLAN-007（单 proposer 协调）
 

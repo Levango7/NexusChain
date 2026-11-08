@@ -14,6 +14,9 @@
 > 三语言共享的架构决策：**交易签名与密钥管控集中在 nexus-wallet-service**
 > （KMS/轮换/审计），SDK 不持私钥——`create/submit` 方法指向 wallet-service
 > 端点。查询能力直连 nexus-core JSON-RPC（15 个已核实方法，数值信封）。
+> **广播不可用（2026-11）**：Java/Go/Python 的 `broadcast()` 调 core 未注册的
+> `nexus_sendRawTransaction`（调用必失败），TypeScript 已移除该方法；真实提交路径
+> 为 nexus-wallet-service 或 core `POST /sendTransaction`。
 > 各语言详情见对应目录 `STATUS.md`。
 >
 > 历史：2026-08-31 前三门语言为骨架占位（含 Broadcast 调用不存在方法等缺陷）；

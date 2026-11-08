@@ -2,6 +2,96 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [Unreleased]
+
+### P0 共识规则收紧：禁用无执行路径的交易类型（防不可检测的无限增发）
+
+**所有节点必须同步升级。** 这是**共识变更**而不是业务开关：升级前的节点会接受
+`0x04–0x08` 交易并把它计入 coinbase 手续费，升级后的节点一律拒绝。请在同一窗口
+切换全部验证节点/矿工，否则新旧节点在**新块**上直接分叉。
+
+**问题**：`0x04–0x08`（多签转账 / 资产定义 / 原子交换）在旧的 `15 >= type >= 0`
+区间门禁下被视为合法，但 `MerkleRule` 的状态重放 switch 没有对应 case（静默
+no-op），`PackageMiner.UpdateOtherAccount` 也没有这些类型的余额/nonce 分支。结果：
+`Miner` 把 `gasPrice × GAS_TABLE[type]` 计入 coinbase，发送方却从未被扣款；又因
+状态根只承诺「账户 ID + 高度」、不承诺余额，这种增发在状态根层面完全不可检测。
+详见 P0 #522 与 `MultiSigAssetAtomicMintRejectionTest` 的历史对照。
+
+**修复（三处独立关卡）**：
+
+- `TransactionCheck.TransactionFormatCheck`：类型门禁由 `15 >= type >= 0` 改为显式
+  白名单 `0x00–0x03, 0x09–0x0f`（`TransactionCheck.isConsensusEnabledType`）。
+  白名单外一律 `code=5000`，消息
+  `Transaction type not enabled: 0xNN (Type check error)`。
+- `MerkleRule`：状态重放 switch 新增 `default`，抛
+  `IllegalArgumentException`，由 `validateBlock` 转成
+  `Result.Error("merkle state replay rejected: ...")`；未知类型不再静默 no-op。
+- `CoinbaseRule`：新增手续费守恒断言——计入 coinbase 的每笔手续费，其交易类型必须
+  在「会真实扣款」的白名单内，否则
+  `Result.Error("fee conservation violated: ... does not debit a fee")`。
+
+**会拒绝什么**：`0x04`、`0x05`、`0x06`、`0x07`、`0x08`；以及 `0x10–0x1a`（此前被
+`type<=15` 拒绝，现在同样以「未启用」消息拒绝）。`0x00–0x03`、`0x09–0x0f` 行为
+不变，由 `TransactionCheckGateTest` 与 `CoinbaseRule` 对照用例覆盖。
+
+**兼容性**：若某条链的历史区块中**已经包含** `0x04–0x08` 交易（测试网、私有部署、
+快照），新节点会在同步到该高度时拒绝该区块。升级前请先扫描历史区块
+`body[1..].type`；若存在此类交易，需先评估回滚/重放方案，不能直接升级。
+
+**已知隐患（本 PR 只登记、不修）**：`MerkleTree` 未对叶子排序，状态根对插入顺序
+敏感；`MerkleRule` 重放时账户列表来自 `HashMap` 遍历。账户集合相同但插入顺序
+不同（如碰撞键）会得到不同 `hashMerkleState`；同一区块按交易顺序重放对 String
+键在同一 JDK 下稳定。修正排序会改写全部历史状态根、等同于全链重算，故不在本次
+收紧范围内（证据见 `MerkleStateOrderSensitivityTest`）。
+
+### 支付扩展（0x10–0x1a）写端点收口（B-2）
+
+13 个写端点保留路由与方法签名，但不再构造交易：有效请求统一返回 **HTTP 501 + code 5010**
+（`Payment extension (0x10-0x1a) is reserved but not enabled`）；入参校验失败优先返回 `5000`
+（RPC `POST /rpc/v1/transaction/broadcast` 缺参为 `4001`）。读路径沿用 B-1（#519）的 `5010`
+语义。实现：Bridge/StableCoin #523、通道 6 端点 #524、批量转账 + RPC 广播 #526；裁决见
+`docs/decision-payment-extension-onchain.md`。真实广播路径不经过本次收口的端点
+（gateway → signing-service `/api/v1/transfers/sign` → core `/sendTransaction`），不受影响。
+
+### P0 热修：prod compose 未透传结算开关（2.77.0 迁移路径 B 的环境实际可能在结算）
+
+**影响谁**：v2.77.0 期间按本文件「迁移路径 B」配置 `docker-compose.prod.yml` 的 prod
+环境——即以为「显式写 `NEX_SETTLEMENT_ENABLED=false`」或「`:?` 缺地址报错即等于关闭」
+就能停用结算的部署。**2.77.0 期间按原指引配置 prod compose 的环境实际可能在结算**：
+`docker-compose.prod.yml` 的 gateway `environment` 从未透传 `NEX_SETTLEMENT_ENABLED`，
+容器取 Spring 默认 `true`；`${NEX_SETTLEMENT_PLATFORM_ADDRESS:?}` 只是在缺地址时
+阻止渲染，一旦为绕过报错补了地址，结算就按开启执行。
+
+**怎么自查**（在 prod compose 所在目录执行）：
+
+```
+docker compose -f docker-compose.prod.yml config --format json \
+  | python3 -c 'import json,sys; e=json.load(sys.stdin)["services"]["nexus-gateway"]["environment"]; d=e if isinstance(e,dict) else dict(i.split("=",1) for i in e if "=" in i); print({k:v for k,v in d.items() if "SETTLEMENT" in k})'
+```
+
+渲染结果里没有 `NEX_SETTLEMENT_ENABLED=false` 的环境，此前是按「开启」运行的。
+
+**怎么处置**：不结算的环境显式补 `NEX_SETTLEMENT_ENABLED=false`（此时无需地址）；
+需要结算的环境补真实 `NEX_SETTLEMENT_PLATFORM_ADDRESS`，并保持
+`NEX_SETTLEMENT_ENABLED=true`。
+
+**修复**：gateway `environment` 新增 `NEX_SETTLEMENT_ENABLED=${NEX_SETTLEMENT_ENABLED:-true}`
+（显式透传且带默认值，避免容器取 Spring 默认），地址由 `${...:?}` 改为
+`${NEX_SETTLEMENT_PLATFORM_ADDRESS:-}`。compose 不支持条件插值，故「要不要地址」的
+判定从渲染期移到启动期（`SettlementPlatformAddressGuard@PostConstruct`）：
+
+| NEX_SETTLEMENT_ENABLED | 地址 | `compose config` | 启动 | 结算 |
+|---|---|---|---|---|
+| `false` | 无 | 成功 | 成功 | 不执行 |
+| `false` | 有 | 成功 | 成功 | 不执行（开关优先） |
+| `true` | 有效 | 成功 | 成功 | 执行 |
+| `true` | 空/占位符 | 成功 | **失败**（守卫点名键与解法） | — |
+| 未设置 | 空 | 成功 | **失败**（默认开启） | — |
+
+- 门禁：`k8s-sync-check` 新增 compose 四组合（含「未设置」负样本）**渲染后实际值**
+  断言，并断言 `false` 组合不得因缺地址而渲染失败；守卫契约由
+  `SettlementPlatformAddressGuardTest`（6 用例）锁住。
+
 ## [2.77.0] - 2026-11-05
 
 > 发布口径：以 master 分支保护的 8 项必需检查为准。PR 期非必需
@@ -28,6 +118,10 @@
 - **compose 用 `:?`**：`docker-compose.prod.yml` 已改为
   `${NEX_SETTLEMENT_PLATFORM_ADDRESS:?...}`，缺 env 时 `docker compose config` /
   `up` 直接渲染失败，不再静默落到空地址。
+  > **更正（[Unreleased] / 补丁版）**：本版 compose 未透传 `NEX_SETTLEMENT_ENABLED`，
+  > 且 `:?` 在缺地址时直接渲染失败——**2.77.0 期间按迁移路径 B 配置 prod compose
+  > 的环境实际可能在结算**。自查与处置见 [Unreleased] 段；v2.77.1 起 compose 改为
+  > 显式透传开关、地址用 `:-`，硬性要求移到启动守卫。
 - 已清理隐式回退：`DefaultClearingEngine` 的沙箱占位地址常量与两参构造器，
   以及 yml / deploy 中“空值即未配、仍可继续启动”的写法；staging / dev 显式
   `NEX_SETTLEMENT_ENABLED=false`。
@@ -160,6 +254,28 @@
   新增 `AlipayTargetAddressFailClosedTest` 6 例，含两条反向对照（同域在 sandbox=true 下放行 /
   生产网关放行），证明拒绝分支不是恒真。
 
+
+### outbox 真实 PG 复核 + legacy origin 大小写静默删除（PLAN-079，2026-11-05）
+
+真实 PG 取证（WSL2 PostgreSQL 16.15 + 单进程 core）复核 PLAN-072 的
+「脏行不传播」结论，并意外暴露一个静默失败路径：
+
+- **复核通过**：正确小写 `origin='local'` 的 3 字节哈希脏行在启动恢复时
+  **只处理一次**（`submitVote` 长度闸正常拒绝），行被移除；
+  `outbox=0 / dirty=0 / vote_rows=0 / dirty_votes=0`，无重复重试；
+- **发现缺口**：`finality_vote_outbox.origin` 落库短码是小写 `local`/`received`，
+  但 `removePendingVote` / `markPendingVoteFailure` 用精确等值匹配；legacy/手工
+  行若是大写（`LOCAL`），读取照常、删除 0 行且**不检查 affected rows** ⇒
+  该行每 ~5s 被重新处理（人工毒丸形态）；
+- **修复**：两条语句改 `LOWER(origin)=LOWER(?)`，0 行时 `log.warn`（含
+  epoch/validator/origin），不再静默；
+- **测试**：`JdbcFinalityStateStoreTest` 新增 legacy 大写行「可删除」「可计
+  attempts」2 例；反向对照两组各自精确红（`expected 0/1 but was 1/0`），
+  还原后 11/11 绿；**修复后真实 PG 复验**：大写行处理一次即被移除
+  （`outbox=0/votes=0`，无重复重试）；
+- **边界**：应用自己写入的行始终是小写 ⇒ PLAN-072 结论不变；本缺口只在
+  legacy/手工数据触发；同内核单机，非物理多机；`LOWER(origin)` 不再命中 PK
+  索引，outbox 常态极小可接受（已登记）。
 
 ### metrics Bearer 双 token 零空窗轮换（PLAN-077，2026-11-05）
 

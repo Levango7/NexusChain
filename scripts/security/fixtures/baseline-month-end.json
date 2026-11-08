@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "entries": [
+    {
+      "id": "CVE-2026-MONTHEND",
+      "package": "libdemo-monthend",
+      "reason": "算法用例：月末 2026-01-31 + 90 天 = 2026-05-01",
+      "fixable": "none",
+      "expires": "2026-05-01",
+      "addedAt": "2026-01-31"
+    }
+  ]
+}

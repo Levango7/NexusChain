@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "entries": [
+    {
+      "id": "CVE-2026-113351",
+      "package": "",
+      "reason": "只写 CVE 不写包（应被拒收）",
+      "fixable": "none",
+      "expires": "2027-02-04",
+      "addedAt": "2026-11-06"
+    }
+  ]
+}

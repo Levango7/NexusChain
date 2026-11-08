@@ -6,15 +6,12 @@ import org.nexus.ApiResult.APIResult;
 import org.nexus.core.NexusChainBlockChain;
 import org.nexus.core.Block;
 import org.nexus.core.account.Transaction;
-import org.nexus.service.CommandService;
-import org.nexus.sync.TransactionHandler;
 import org.nexus.core.account.AccountDB;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -27,16 +24,8 @@ import java.util.Map;
 @RequestMapping("/rpc/v1")
 public class PaymentRpcController {
 
-    private static final Logger log = LoggerFactory.getLogger(PaymentRpcController.class);
-
     @Autowired
     private NexusChainBlockChain bc;
-
-    @Autowired
-    private CommandService commandService;
-
-    @Autowired
-    private TransactionHandler transactionHandler;
 
     @Autowired
     private AccountDB accountDB;
@@ -54,34 +43,23 @@ public class PaymentRpcController {
 
     /**
      * POST /rpc/v1/transaction/broadcast
-     * Broadcasts a signed transaction hex to the network.
-     * Body: { "signed_tx_hex": "..." }
+     * 支付扩展（0x10–0x1a）保留未启用：本端点不再转发任何交易入池。
+     *
+     * <p>保留路由与方法签名；空 {@code signed_tx_hex} 优先返回 4001，
+     * 其余请求统一返回 HTTP 501 + code 5010。</p>
+     *
+     * <p>Body: { "signed_tx_hex": "..." }</p>
      */
     @PostMapping("/transaction/broadcast")
-    public Map<String, Object> broadcastTransaction(@RequestBody Map<String, String> body) {
-        String txHex = body.get("signed_tx_hex");
+    public Object broadcastTransaction(@RequestBody(required = false) Map<String, String> body) {
+        String txHex = body == null ? null : body.get("signed_tx_hex");
         if (txHex == null || txHex.isBlank()) {
             return rpcResult(4001, "missing signed_tx_hex", null);
         }
-        try {
-            byte[] raw = Hex.decodeHex(txHex.toCharArray());
-            APIResult result = commandService.verifyTransfer(raw);
-            if (result.getCode() == 2000) {
-                Transaction t = (Transaction) result.getData();
-                transactionHandler.broadcastTransactions(Collections.singletonList(t));
-                String txHash = Hex.encodeHexString(t.getHash());
-                Map<String, Object> data = new LinkedHashMap<>();
-                data.put("tx_hash", txHash);
-                data.put("accepted", true);
-                return rpcResult(2000, "transaction broadcast accepted", data);
-            }
-            return rpcResult(result.getCode(), "transaction rejected: " + result.getMessage(), null);
-        } catch (DecoderException e) {
-            return rpcResult(4002, "invalid hex encoding: " + e.getMessage(), null);
-        } catch (RuntimeException e) {
-            log.error("Broadcast failed: {}", e.getMessage());
-            return rpcResult(5001, "broadcast error: " + e.getMessage(), null);
-        }
+        // 支付扩展（0x10–0x1a）保留未启用：写端点统一拒绝。
+        return ResponseEntity.status(HttpStatus.NOT_IMPLEMENTED)
+                .body(rpcResult(APIResult.PAYMENT_EXTENSION_NOT_ENABLED,
+                        APIResult.PAYMENT_EXTENSION_NOT_ENABLED_MESSAGE, null));
     }
 
     /**

@@ -163,9 +163,179 @@ CI 扫描发现漏洞
 
 ### 4.4 阻断策略
 
-- **CRITICAL 漏洞**：CI 流水线 `exit-code: 1`，阻断合并
-- **HIGH 漏洞**：创建 Issue + PR comment 警告，不阻断（可配置）
-- **MEDIUM/LOW**：仅记录，不阻断
+> **2026-11-06（E1）口径修正**：原「CRITICAL 阻断 / HIGH 不阻断」的写法与实际不符，
+> 且旧实现是「全量判红 + 无到期豁免」，会把 Trivy DB 的每次增补都变成一次人工加豁免。
+> 现口径如下。
+
+**分两条路径，两者不能混在一个 job 里：**
+
+| 路径 | 扫什么 | 何时跑 | 判定 | 阻断合并 |
+|------|--------|--------|------|---------|
+| **我方产物**（`trivy-fs-scan`、`trivy-docker-scan`） | 仓库依赖、13 个应用镜像 | PR + push master + 周 cron | **基线差分**：只有新增的 HIGH/CRITICAL 判红 | ✅ 是（`Trivy Filesystem Scan + SBOM` 已在必需检查里；`Trivy Image Baseline Gate (PR)` 为聚合候选，启用状态见分支保护配置） |
+| **上游浮动镜像**（`trivy-upstream-watch`） | `node:24-alpine` 本体（含其自带 npm 依赖树） | 仅周 cron / 手动 | 出现**未被跟踪**的 HIGH/CRITICAL → 开 issue 并置红；下次去重后回绿 | ❌ 否（观测任务） |
+
+为什么上游镜像必须移出阻断路径：那 6 条 HIGH（`brace-expansion` / `undici`）有修复版，
+但位于**上游镜像自带的 npm 依赖树**（`/usr/local/lib/node_modules/npm/…`）。我方改
+`Dockerfile` 不改变被扫对象，上游也还没发布打补丁的 tag —— 它是**永远红**的，
+放在 PR 门禁里等于让所有 PR 永久无法合并（已用 issue #495 跟踪）。
+
+**扫描器有效性（2026-11-06）**：门禁结论只有在 Trivy 漏洞库足够新时才可信。
+`security-scan.yml` 把 trivy 锁定为 `v0.76.2`（action 钉 commit SHA，不使用浮动 tag），
+并在 fs / docker 两个门禁 job 的扫描前显式执行
+`trivy image --download-db-only` + `scripts/security/trivy-db-freshness.py`：
+打印 DB 的 `Version` / `UpdatedAt`，若 `UpdatedAt` 距今超过 **7 天** 则 job 直接失败，
+消息为「Trivy 漏洞库过期，无法保证结论有效性」。门禁步还会在判定日志里再次打印
+`[DB] 本次门禁结论基于 Trivy 漏洞库：Version=… UpdatedAt=… NextUpdate=…`。
+原则：**失明必须表现为红，不能表现为绿**。
+
+**基线差分语义**（`scripts/security/trivy-baseline-gate.py`）：
+
+- 已知项必须登记在 `config/trivy-baseline.json`，每条必填
+  `id`（CVE 编号）/ `package`（精确包名）/ `reason`（存在理由）/ `addedAt`（登记日）/
+  `expires`（到期日）；
+- **有效期只从 `addedAt` 起算（2026-11-06 起）**：`expires` 必须精确等于
+  `addedAt + 90 天`（日历日算法，跨闰年/月末由 `date + timedelta` 处理），
+  与运行当天是哪一天无关；不相等一律退出码 2 拒收。此前按
+  「`expires - 今天 <= 上限`」判定，同一份配置在 UTC 跨日时会多算 1 天而全体拒收，
+  结论随运行时刻漂移，已废弃；
+- **按 (CVE 编号, 包名) 二元组严格匹配**（2026-11-06 修正）：同一 CVE 换到别的包
+  就是另一条 finding，必须单独登记；A 包里的条目不覆盖 B 包。此前按纯 CVE 编号
+  匹配，`CVE-2026-102554` 的 nacos 内嵌副本豁免因此顺带吞掉了
+  `com.google.guava:guava` 上的真实修复版；
+- **`package` 必须是 Trivy 报出的精确 `PkgName`**：为空或含通配符
+  （`*` / `?` / `any` / `all`）一律拒收（退出码 2），不允许用通配实现全局豁免；
+- **不允许无到期日的永久豁免**：缺 `expires` 直接拒收（退出码 2）；
+- **到期即红**：`today > expires` 且该条目仍被扫到 → 判红（退出码 1）；
+- **Trivy 报出 `FixedVersion` 一律拒收**（退出码 1）：`fixable: not-applicable`
+  只在**该二元组本身确实无修复版**时成立，且必须写 `evidence`；同一 CVE 在别的包
+  有修复版会作为独立 finding 各自判定；
+- **唯一有界例外 `kind: shaded_vendored`**（2026-11-06 新增）：语义是「有修复版，
+  但命中来自第三方 jar 的内嵌（relocated）副本，本仓库无法替换」。必须填齐四件套
+  `evidence`：`jar_path` / `jar_sha256` / `vulnerable_copy` + `shaded_prefix` /
+  `declared_dependency_fixed` + `upstream_max_version`，缺任一 → 退出码 2；
+  `package` 仍必须是精确 `PkgName`（通配照旧拒收），到期再次命中即判红。命中时
+  门禁强制打印 `[SHADED]`，并在 `[PASS]` 行申明例外条数（不静默通过）。该例外
+  不跨包：别的包上的同一 CVE 仍按 `[NEW]` 独立判红；
+- 所有 kind 的有效期上限统一为 **90 天**（`addedAt + 90`）；
+- 新增项：扫到但未登记 → 判红，且 `::error::` 里带 CVE / 包 / 受影响 target。
+
+**新增漏洞的处理顺序**：先尝试升级消除 → 若上游确无修复版，登记基线并写明理由与
+到期日（`addedAt + 90 天`）→ 到期前必须重新评估（升级 / 换基础镜像 / 重新论证暴露面）。
+
+### 4.5 基线的续期与到期
+
+- 到期日不要「顺手往后改」。到期意味着**必须重新取证**：确认上游是否仍未发布修复版、
+  暴露面论证是否仍成立，再决定续期（按新的 `addedAt` 重算 `+90 天`）或改走修复。
+- 门禁每次运行都会打印 `[STALE]`（基线条目本次未命中，可删）——不是红，但需要人看；
+  `[POLICY]`（该二元组报出修复版却登记了基线）不再是 warning，直接判红。
+- **长期未命中复核（2026-11-06）**：条目登记日（`addedAt`）距今 **≥ 90 天**且本次仍未命中，
+  门禁额外打印 `[STALE-AGED]` 与 `::notice::`「该基线项已长期未命中，需复核是否可清理」。
+  只提示、不判红，也不自动删除：保留它是为了「同一 CVE 若重现时不被误判成新增」。
+- 2026-11-06 起 `not-applicable` 不再产出 `[EXCEPTION]` 放行：只要 Trivy 为该
+  (CVE, 包) 报出修复版，就按 `[POLICY]` 判红。
+- `.trivyignore` 与基线**并存且职责不同**：`.trivyignore` 是「展示/告警口径」的抑制
+  （SARIF、分诊 JSON 仍带它），基线是「阻断口径」的白名单。不要为了绿灯删已有
+  `.trivyignore` 条目，也不要把条目改成通配。
+
+### 4.6 发布后按 digest 扫描（不阻断发版）
+
+> **2026-11-06 新增**：E1 只覆盖了「将要合入的代码」。`release.yml` 推的是
+> `docker/build-push-action` 产出的镜像（带 provenance），**与 PR 门禁里重建的镜像
+> 不是同一个 digest**；而 Release 此前只写 tag、不记 digest、不扫描 ——
+> v2.77.0 的 13 个镜像从未被扫过。
+
+| 环节 | 做什么 | 阻断发版 |
+|------|--------|---------|
+| `build-images` | 用 buildx 自报的 `outputs.digest` 写 `digests/<module>.json` 并上传 artifact | 是（构建失败即终止发布） |
+| `github-release` | 把 13 行 `模块 / 镜像 / tag / manifest digest` 表拼进 Release body | 是（Release 创建失败会阻断部署） |
+| `release-digest-scan` | 用 `ghcr.io/<repo>/<module>@sha256:...` 逐镜像 trivy 扫描 → 基线差分 → 只产 summary | **否** |
+| `release-digest-triage` | 汇总 summary，创建/更新 issue（`release-digest-watch`），正文含 image + digest + tag + CVE 清单 | **否** |
+
+约束：
+
+- 扫描对象必须是 `image@sha256:...`，**不重新 build、不用 tag**（tag 会被下个版本覆盖）；
+- 判红语义与 PR 门禁完全共用 `trivy-baseline-gate.py`（新增 HIGH/CRITICAL / 基线到期 /
+  有修复版却登记豁免），不另立阈值；
+- 扫描失败（GHCR 鉴权、网络）不判红，但会在 issue 的「扫描异常」段落里出现 —— 信号丢失
+  比假绿更该被看见；
+- 去重键是 issue 标题前缀 `[Release/<tag>]`，同一 tag 重跑只更新正文、不新开 issue；
+  CVE 消失后不自动关闭，需人工确认（避免自动关闭掩盖仍在的镜像）。
+
+### 4.7 已知限制与人工处置：PR 镜像门禁的成本（2026-11-06）
+
+**已知限制**：`Trivy Image Baseline Gate (PR)` 取证依赖真实 docker build。2026-11-06
+起 PR 上按路径过滤（`scripts/security/image-scan-scope.py`），把「13 腿」收窄为
+「命中镜像输入的腿」，但仍不能消除构建：
+
+- 只改 `docs/`、`deploy/`、`migrations/` 等不进入镜像的路径 → 0 腿，聚合 job 报
+  `no relevant changes` 并给出 **success**（必需检查不会变 skipped/missing）；
+- 改共享 Java 输入（根 gradle 配置、`nexus-core` / `nexus-sdk` / `nexus-common` /
+  `nexus-consortium` / `nexus-settlement` / `nexus-compliance` / `nexus-analytics` /
+  `nexus-oracle` / `nexus-api-gateway`）→ 仍要 **10 腿**：这些目录被 10 个 Java
+  Dockerfile `COPY`，jar 内容确实会变；改 `nexus-bridge` / `nexus-signing-service` /
+  `nexus-wallet-service` → 还需重建 `nexus-core`（其 Dockerfile 运行期 COPY 了这三个模块）；
+- 因此**构建抖动仍可能卡住合并**：单腿耗时随依赖下载与 Runner 负载波动，极端情况下
+  门禁会长时间 pending。这是「用真实产物取证」的代价，不用跳过构建来掩盖。
+- **SARIF 上传偶发失败**：个别腿的 `上传 SARIF 到 GitHub Security tab` 会因上传端点
+  5xx / 超时失败，表现为该腿红、聚合门禁跟着红，但扫描结论里并没有 `[NEW]` /
+  `[EXPIRED]` / `[POLICY]`。这类失败直接 `gh run rerun <run-id> --failed` 重跑失败腿
+  即绿（#537 首次 run 就是这样：`nexus-gateway` / `nexus-api-gateway` 两腿上传 SARIF
+  失败，`--failed` 重跑后两腿与聚合门禁全部 success）。**不要**为此改门禁语义或
+  摘掉必需检查。
+
+**基础设施失败的人工处置口径**（仅适用于「不是代码问题」的失败）：
+
+1. **谁能 merge**：仅 CODEOWNERS 内的 maintainer（`@Levango7`）。前提是
+   `Trivy Filesystem Scan + SBOM` 为绿，且失败腿的日志明确指向基础设施
+   （Runner 无响应 / 网络超时 / registry 5xx / buildx 崩溃），**不得**含
+   `[NEW]` / `[EXPIRED]` / `[POLICY]` 条目 —— 有这三类一律不得豁免。
+2. **怎么留痕**：在 PR 上评论 `infra-flake: <run 链接> <失败步骤原文>`，并 rerun
+   一次；**同一 PR 同一腿连续两次**基建失败才允许人工合并。
+3. **合并后必须补证**：24h 内对该 commit 触发 `security-scan.yml` 的
+   `workflow_dispatch`（该路径为 13 腿全量），把 run 链接补回 PR；若补跑发现新增
+   HIGH/CRITICAL，按 4.4 开 issue 并跟进或回滚，不因「已合并」降级处理。
+4. **禁止**：用「跳过某腿」「把该 check 从必需检查里摘掉」「放宽基线」来应对基建
+   失败——那会把「红灯不在阻断路径上」的问题重新引回来。
+
+### 4.8 共享 Trivy 漏洞库：失败率观察窗口与处置阶梯（2026-11-06 起 14 天）
+
+**背景**：E1 的三处缺陷（扫描器失明 → 证据行失真 → 缓存绕过新鲜度断言）收口后，
+`trivy-action` 全部 `cache: 'false'`，镜像扫描腿改为「`trivy-db-prep` 一次下载 +
+artifact 共享 + 每腿指纹绑定 + 聚合校验 13 腿一致」。副作用是**单点放大**：原先
+每腿各自下载 DB / Java DB，某一腿网络抖动只影响一腿；现在 prep 失败会让全部 13 腿
+判 skipped。因此需要一段**有明确判定标准**的观察期，而不是凭印象。
+
+**窗口**：`2026-11-06T18:34Z`（#555 合并）— `2026-11-21`（UTC）。窗口内只观察、
+只计数，不改口径。
+
+**基线（窗口前对比基准，实测）**：最近 20 次 `master` push 的 `security-scan.yml`
+run —— 16 success / 2 failure / 2 cancelled；两次 failure 的失败步骤均为
+`基线差分门禁（只对新增 HIGH/CRITICAL 判红）`，**无一次**是 DB 下载失败。
+
+**「不只是偶发」的三条阈值**（命中任一即视为真问题，需报告并停手）：
+
+| # | 判定 | 口径 |
+|---|------|------|
+| T1 | 同一 module 在窗口内 ≥ **2 次** DB 下载失败 | 按 `[DB-LEG]` / prep 日志与失败步骤名归因 |
+| T2 | 单个 run **≥ 3 腿**因 DB 下载失败判红 | 同一 run 内计数 |
+| T3 | **连续 2 次** `master` push run 出现任一 DB 下载失败 | 按 run 序号相邻判定，含 cancelled 不计入连续性 |
+
+判定只看「DB 下载 / 恢复 / 指纹不一致」类失败；构建失败、SARIF 上传 5xx、
+基线判红**不计入**本窗口（它们走 §4.7 的既有人工处置口径）。
+
+**到期处置阶梯**（按顺序，不得跳级）：
+
+1. **下载步有界重试**：prep 的 `--download-db-only` 加 3 次指数退避重试，仍失败才判红；
+2. **改「缓存 DB + 恢复后重跑新鲜度断言 + 指纹绑定」**：允许用 `actions/cache` 保存
+   共享 DB，但**恢复后必须在本腿重新跑 `trivy-db-freshness.py` 并交叉校验指纹**，
+   即「断言过的库 = 扫描用的库」这条不变量不得削弱；
+3. **禁止回退到「缓存库不被断言」**（`cache: true` 默认行为）：那正是 2026-11-06
+   修掉的洞（刷新步断言 12:55 的库、cache 恢复成 06:50 的库后扫描从未经过断言），
+   重新打开它等于把「绿得毫无意义」放回阻断路径。
+
+**边界声明**：本节是**可核的判定标准**（依据 run 日志与失败步骤可逐条复算），
+不是对失败率的承诺；窗口内若触发任一阈值，**不得自行放宽阈值或加豁免**——判为
+真问题，报告并停手，由安全负责人决定处置。
 
 ---
 
@@ -226,9 +396,16 @@ CycloneDX SBOM（`sbom-cyclonedx.json`）作为依赖审计基线，每次扫描
 | `.github/dependabot.yml` | Dependabot 依赖更新配置 |
 | `build.gradle` | SpotBugs + FindSecBugs SAST 配置 |
 | `scripts/security/trivy-to-issues.py` | 漏洞自动分诊脚本 |
+| `scripts/security/image-scan-scope.py` | PR 镜像扫描的路径过滤（范围计算，见 §4.7） |
+| `scripts/security/trivy-db-freshness.py` | DB 新鲜度断言 + DB 指纹（`Version`/`UpdatedAt`/`NextUpdate`/`trivy.db` sha256）产出与校验 |
+| `scripts/security/trivy-baseline-gate.py` | 基线差分门禁；用 `--db-dir` + `--db-fingerprint` 绑定「结论基于哪份库」 |
+| `scripts/security/trivy-db-consistency.py` | 聚合 job 校验各腿 DB 指纹一致（数量与 distinct，见 §4.8） |
 
 ### 7.2 变更历史
 
 | 日期 | 版本 | 变更内容 | 作者 |
 |------|------|---------|------|
 | 2026-08-09 | 1.0 | 初始版本，定义 P0-P3 SLA | Phase 2 安全扫描工程 |
+| 2026-11-06 | 1.1 | E1：镜像门禁改为基线差分（新增 HIGH/CRITICAL 才判红）、上游镜像移出阻断路径、§4.5 基线续期 | 安全扫描工程 |
+| 2026-11-06 | 1.2 | PR 镜像门禁按路径过滤（§4.7），并补「基础设施失败的人工处置口径」 | 安全扫描工程 |
+| 2026-11-06 | 1.3 | 共享 Trivy DB 落地（`cache: false` + prep 一次下载 + 13 腿指纹聚合校验），新增失败率观察窗口与处置阶梯（§4.8） | 安全扫描工程 |

@@ -60,10 +60,17 @@ services:
       # 显式 memory；接 Kafka 的部署把两个值改回 kafka。
       - NEXUS_EVENTSOURCING_STORE=memory
       - NEXUS_WEBHOOK_DLQ_STORE=memory
-      # 结算平台出款地址注入位（板 20261104-0746 / nex runbook 20261105-0435）。
-      # prod 结算默认开启：地址必须由部署方提供，缺失则 compose 直接渲染失败
-      # （:? 语义），不再用 :- 空值把「没配」放行到运行期。
-      - NEX_SETTLEMENT_PLATFORM_ADDRESS=${NEX_SETTLEMENT_PLATFORM_ADDRESS:?NEX_SETTLEMENT_PLATFORM_ADDRESS must be set for prod settlement (or set NEX_SETTLEMENT_ENABLED=false explicitly)}
+      # 结算开关 + 出款地址（板 20261104-0746 / nex runbook 20261105-0435 /
+      # v2.77.1 P0 热修）。compose 不支持条件插值，故把「要不要地址」的判定
+      # 从渲染期移到启动期（SettlementPlatformAddressGuard@PostConstruct）：
+      #   - NEX_SETTLEMENT_ENABLED=false：正常启动，结算不执行，无需地址；
+      #   - NEX_SETTLEMENT_ENABLED=false + 有地址：正常启动，仍不执行（开关优先）；
+      #   - NEX_SETTLEMENT_ENABLED=true + 有效地址：正常结算；
+      #   - NEX_SETTLEMENT_ENABLED=true + 空地址/占位符：启动失败（守卫点名键与解法）。
+      # 注意：不写 NEX_SETTLEMENT_ENABLED 等于开启（Spring 默认 true），会走启动校验；
+      # 想关闭结算必须显式写 false。
+      - NEX_SETTLEMENT_ENABLED=${NEX_SETTLEMENT_ENABLED:-true}
+      - NEX_SETTLEMENT_PLATFORM_ADDRESS=${NEX_SETTLEMENT_PLATFORM_ADDRESS:-}
     healthcheck:
       test: ['CMD', '/busybox', 'wget', '-q', '-O', '/dev/null', 'http://localhost:8080/actuator/health']
       interval: 30s

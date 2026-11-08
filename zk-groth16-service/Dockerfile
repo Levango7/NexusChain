@@ -30,7 +30,11 @@ RUN mkdir -p -m 0700 /src/runtime-dirs/setup
 # service_completed_successfully 等它成功退出才启动。全新部署不依赖该迁移：
 # 镜像内 /setup 已归 65532，命名卷首次挂载会复制镜像内属主。
 # GROTH16_EXTERNAL_SETUP_DIR 挂载（仪式产出，只读）需确保对 65532 可读。
-FROM gcr.io/distroless/cc-debian13:nonroot
+# 固定 digest（2026-11-06 取自 master run 42176885852 的 BuildKit 解析）；
+# 运行阶段 cc-debian13:nonroot 与构建阶段 rust:1.85-slim 必须成对升级：glibc 版本
+# 只允许「运行镜像 >= 构建镜像」，单独升运行镜像勿降级构建链，单独升构建链勿降级运行镜像，
+# 否则运行时报 GLIBC_x.y not found。
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:08476c244888bfb425bae1ae4dd7c17f093e972aab8426883d97f3c6f280f7c1
 
 COPY --from=build /src/zk-groth16-service/target/release/zk-groth16-service /usr/local/bin/zk-groth16-service
 # busybox 静态二进制（~1.2MB，无动态依赖）：仅用于 compose healthcheck（nc -z）。

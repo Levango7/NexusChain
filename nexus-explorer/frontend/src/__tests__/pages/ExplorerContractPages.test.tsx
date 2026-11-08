@@ -230,7 +230,7 @@ describe("CrossChainPage", () => {
     expectNoUndefinedLeak();
   });
 
-  it("无跨链交易时应展示空态", async () => {
+  it("无跨链交易时应展示「保留未启用」空态", async () => {
     mocked.getCrossChain.mockResolvedValue([]);
     const CrossChainPage = (await import("../../pages/CrossChainPage")).default;
     render(
@@ -239,7 +239,7 @@ describe("CrossChainPage", () => {
       </MemoryRouter>,
     );
     await waitFor(() => {
-      expect(screen.getByText("暂无跨链交易")).toBeInTheDocument();
+      expect(screen.getByText("跨链桥功能保留未启用")).toBeInTheDocument();
     });
     expectNoUndefinedLeak();
   });

@@ -110,26 +110,154 @@ updates:
       prefix: "deps(npm-devtools)"
       include: "scope"
 
-  # === Docker 基础镜像更新 ===
+  # === Docker 基础镜像（仅 runtime 阶段） ===
+  # 2026-11-08：原配置只覆盖 /nexus-gateway、/nexus-bridge，其余 10 个模块 runtime 基镜像
+  # 的 pin（gcr.io/distroless/*@sha256:…）在上游重建时没有任何人会被告知；与「证据行指向
+  # 的库不是实际用的库」同属「东西悄悄变了、没人被通知」这一类。这里补齐 12 处 runtime
+  # FROM 所在的全部模块目录（nexus-explorer 的 node:24-alpine 未 pin digest，不在本批）。
+  # 只覆盖 runtime 阶段：builder 阶段的 gradle / rust / busybox 一律 ignore —— 它们的版本
+  # 升级与运行镜像无关，纳进来只会把噪声变成常态。**新增 builder 镜像时要同步补 ignore**，
+  # 否则会开始出 tag 升级 PR（宁可漏 ignore 被看见，也不要靠 allow 白名单静默漏扫）。
+  # 节奏统一 weekly（gateway/bridge 原为 monthly）：上游重建后要在一周内被通知到，
+  # monthly 最长等 30 天，对 7 天时间盒等于没有提醒。
   - package-ecosystem: "docker"
-    directory: "/nexus-gateway"
+    directory: "/mpc-engine"
     schedule:
-      interval: "monthly"
+      interval: "weekly"
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
       - "docker"
-      - "gateway"
+    ignore:
+      - dependency-name: "rust"      # builder 阶段 rust:1.88
+
+  - package-ecosystem: "docker"
+    directory: "/nexus-analytics"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "docker"
+    ignore:
+      - dependency-name: "gradle"    # builder 阶段 gradle:8.14-jdk17
+
+  - package-ecosystem: "docker"
+    directory: "/nexus-api-gateway"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "docker"
+    ignore:
+      - dependency-name: "gradle"
 
   - package-ecosystem: "docker"
     directory: "/nexus-bridge"
     schedule:
-      interval: "monthly"
+      interval: "weekly"
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
       - "docker"
       - "bridge"
+    ignore:
+      - dependency-name: "gradle"
+      - dependency-name: "busybox"   # dir-builder 阶段
+
+  - package-ecosystem: "docker"
+    directory: "/nexus-compliance"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "docker"
+    ignore:
+      - dependency-name: "gradle"
+
+  - package-ecosystem: "docker"
+    directory: "/nexus-core"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "docker"
+    ignore:
+      - dependency-name: "gradle"
+      - dependency-name: "busybox"
+
+  - package-ecosystem: "docker"
+    directory: "/nexus-gateway"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "docker"
+      - "gateway"
+    ignore:
+      - dependency-name: "gradle"
+      - dependency-name: "busybox"
+
+  - package-ecosystem: "docker"
+    directory: "/nexus-oracle"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "docker"
+    ignore:
+      - dependency-name: "gradle"
+
+  - package-ecosystem: "docker"
+    directory: "/nexus-settlement"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "docker"
+    ignore:
+      - dependency-name: "gradle"
+
+  - package-ecosystem: "docker"
+    directory: "/nexus-signing-service"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "docker"
+    ignore:
+      - dependency-name: "gradle"
+      - dependency-name: "busybox"
+
+  - package-ecosystem: "docker"
+    directory: "/nexus-wallet-service"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "docker"
+    ignore:
+      - dependency-name: "gradle"
+      - dependency-name: "busybox"
+
+  - package-ecosystem: "docker"
+    directory: "/zk-groth16-service"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "docker"
+    ignore:
+      - dependency-name: "rust"      # build 阶段 rust:1.85-slim
 
   # === GitHub Actions 版本更新 ===
   - package-ecosystem: "github-actions"

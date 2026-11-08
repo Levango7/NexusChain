@@ -24,8 +24,10 @@ trivy-to-issues.py — Trivy 漏洞报告 → GitHub Issue 自动分诊
     --label security-triage
 
 退出码：
-  0 — 成功（无论是否创建 issue）
-  1 — 参数错误或全部报告读取失败
+  0 — 成功（无论是否创建 issue；指定 --exit-nonzero-on-findings 时，
+      阈值以上漏洞已全部有关联 issue → 仍为 0）
+  1 — 参数错误或全部报告读取失败；或指定 --exit-nonzero-on-findings 且
+      本次新开了 issue / 创建失败（观测型 job 用它表达「出现了未被跟踪的漏洞」）
 """
 
 import argparse
@@ -60,38 +62,70 @@ def run_gh(args, check=False):
 
 
 def list_existing_issues(repo, label):
-    """列出带有指定 label 的现有 open issue，返回 {title: number} 字典。"""
+    """列出带有指定 label 的现有 open issue，返回 [{number,title,body}]。"""
     rc, out, err = run_gh([
         "issue", "list",
         "--repo", repo,
         "--label", label,
         "--state", "open",
         "--limit", "200",
-        "--json", "number,title",
+        "--json", "number,title,body",
     ])
     if rc != 0:
         print(f"[WARN] 无法列出现有 issue（gh CLI 可能未认证）: {err}", file=sys.stderr)
-        return {}
+        return []
     try:
-        issues = json.loads(out) if out else []
-        return {item["title"]: item["number"] for item in issues}
+        return json.loads(out) if out else []
     except json.JSONDecodeError:
-        return {}
+        return []
 
 
-def cve_has_open_issue(cve, title_map):
-    """CVE 子串级去重：任何 open security-triage issue 标题含该 CVE 即视为已开。
-    兼容历史标题格式（含 target 的旧格式改版后不会产生重复 issue）。"""
-    for title, num in title_map.items():
-        if cve and cve in title:
-            return num
+def cve_has_open_issue(cve, existing):
+    """CVE 子串级去重：任何 open issue 的标题**或正文**含该 CVE 即视为已开。
+
+    2026-11-06（发布后 digest 扫描）：此前只匹配标题，会漏掉人工维护的汇总型
+    issue（上游观测的 #495 正文列了 node:24-alpine 的 6 个 CVE，标题里没有编号），
+    结果同一批 CVE 被重复开成多条新 issue。正文匹配把这种情况覆盖掉。
+    """
+    for item in existing:
+        blob = f"{item.get('title') or ''}\n{item.get('body') or ''}"
+        if cve and cve in blob:
+            return item["number"]
     return None
 
 
-def ensure_label(repo, label):
+def ensure_label(repo, label, color="D93F0B", description="自动分诊分类标签"):
     """确保 label 存在（已存在时 gh 报错，忽略）。"""
-    run_gh(["label", "create", label, "--repo", repo, "--color", "D93F0B",
-            "--description", "自动分诊分类标签"])
+    run_gh(["label", "create", label, "--repo", repo, "--color", color,
+            "--description", description])
+
+
+def ensure_labels(repo, labels):
+    """确保 issue 用到的**全部** label 存在。
+
+    2026-11-06（E1）：此前只创建 category 一个标签，其余（security / P0 / P1 /
+    automated / 上游观测 label）靠人工预置。gh 在遇到不存在的 label 时会**整条
+    issue 创建失败**，于是「失败自动开 issue」的观测任务会静默丢信号。
+    这里逐个兜底（已存在时返回非零，忽略）。
+    """
+    for label in labels:
+        ensure_label(repo, label, color=_label_color(label), description=_label_description(label))
+
+
+def _label_color(label):
+    if label.startswith("P") and label[1:].isdigit():
+        return "B60205"   # SLA 优先级标签
+    if label == "upstream-watch":
+        return "5319E7"
+    return "D93F0B"
+
+
+def _label_description(label):
+    if label.startswith("P") and label[1:].isdigit():
+        return "SLA 优先级"
+    if label == "upstream-watch":
+        return "上游浮动镜像观测（不阻断合并）"
+    return "自动分诊分类标签"
 
 
 def create_issue(repo, title, body, labels):
@@ -224,6 +258,8 @@ def main():
                         help="用于去重标记的 label（默认 security-triage）")
     parser.add_argument("--dry-run", action="store_true",
                         help="只打印将创建的 issue，不实际创建")
+    parser.add_argument("--exit-nonzero-on-findings", action="store_true",
+                        help="发现阈值以上漏洞时返回退出码 1（供『上游浮动镜像观测』job 置红）")
     args = parser.parse_args()
 
     # 读取一份或多份 Trivy JSON 报告；单份损坏只告警不中断（其余报告照常分诊）
@@ -246,10 +282,19 @@ def main():
     # 收集所有符合严重性阈值的漏洞，并按 (CVE, 包, 严重性) 聚合
     aggregated = {}
     for report in reports:
-        if not isinstance(report, list):
-            print("[WARN] 报告格式非预期（非数组），跳过该报告", file=sys.stderr)
+        # 2026-11-06（E1）：`trivy -f json` 的原始输出是对象 {"SchemaVersion":2,"Results":[...]}，
+        # 不是数组。此前一律按数组处理，导致镜像/fs 报告全部被当成"格式非预期"跳过，
+        # 自动分诊实际上从未产出过 issue；这里兼容两种形态。
+        if isinstance(report, dict):
+            result_entries = report.get("Results")
+        elif isinstance(report, list):
+            result_entries = report
+        else:
+            result_entries = None
+        if not isinstance(result_entries, list):
+            print("[WARN] 报告格式非预期（既非数组也无 Results 数组），跳过该报告", file=sys.stderr)
             continue
-        for result_entry in report:
+        for result_entry in result_entries:
             target = result_entry.get("Target", "unknown")
             result_class = result_entry.get("Class", "")
             vulns = result_entry.get("Vulnerabilities") or []
@@ -285,11 +330,12 @@ def main():
         existing = list_existing_issues(args.repo, args.label)
         print(f"[INFO] 现有 {len(existing)} 个 open security-triage issue")
     else:
-        existing = {}
+        existing = []
         print("[INFO] --dry-run 模式：不实际创建 issue")
 
     created = 0
     skipped = 0
+    failed = 0
 
     for (_cve, _pkg_name, _severity), finding in sorted(aggregated.items()):
         vuln = finding["vulnerability"]
@@ -303,8 +349,11 @@ def main():
         # issue 标题（唯一键：CVE+包；target 收进 body，跨模块聚合不再刷屏）
         title = f"[Security/{severity}] {cve} — {pkg['Name']}"
 
-        # 双层去重：标题精确匹配（新格式）+ CVE 子串检索（兼容旧格式）
-        dup = existing.get(title) or cve_has_open_issue(cve, existing)
+        # 双层去重：标题精确匹配（新格式）+ CVE 子串检索（标题或正文，兼容汇总型 issue）
+        dup = next(
+            (item["number"] for item in existing if item.get("title") == title),
+            None,
+        ) or cve_has_open_issue(cve, existing)
         if dup:
             print(f"  [SKIP] 已存在 issue #{dup}: {title}")
             skipped += 1
@@ -319,7 +368,7 @@ def main():
             created += 1
             continue
 
-        ensure_label(args.repo, category)
+        ensure_labels(args.repo, labels)
         issue_num = create_issue(args.repo, title, body, labels)
         if issue_num:
             print(f"  [CREATED] #{issue_num}: {title}")
@@ -327,8 +376,17 @@ def main():
             existing[title] = issue_num
         else:
             print(f"  [FAILED] {title}")
+            failed += 1
 
-    print(f"\n[SUMMARY] 创建 {created} 个 issue，跳过 {skipped} 个已存在 issue")
+    print(f"\n[SUMMARY] 创建 {created} 个 issue，跳过 {skipped} 个已存在 issue，失败 {failed} 个")
+    if args.exit_nonzero_on_findings and (created > 0 or failed > 0):
+        # 观测型 job 用它把「出现未被跟踪的 HIGH/CRITICAL」变成一次红灯：
+        # 本次已开 issue ⇒ 判红（提醒有人看），下次定时运行同 finding 会被去重跳过 ⇒ 回绿。
+        # 这样红灯只在"新出现且无跟踪"时亮，不会因历史遗留问题长期常红。
+        print(f"[OBSERVE] 新增未被跟踪的漏洞 {created} 个 → 退出码 1（观测任务判红，不阻断合并）")
+        return 1
+    if args.exit_nonzero_on_findings:
+        print(f"[OBSERVE] 阈值以上漏洞 {len(aggregated)} 个，均已有关联 issue → 退出码 0（已跟踪）")
     return 0
 
 
