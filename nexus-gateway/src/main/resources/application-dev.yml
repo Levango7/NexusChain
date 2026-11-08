@@ -103,6 +103,10 @@ nexus:
     skip-confirmation: true
   consortium:
     skip-confirmation: true
+  # 3DS（2026-11-08 审计修复 B2）：base 已改为默认 false，dev 显式打开模拟挑战，
+  # 否则本地/DAST 的 3DS 流程会因"无真实 ACS"而失败。
+  3ds:
+    simulated-challenge-enabled: true
   # === 结算开关（2026-11-07 审计修复）：dev 档显式关闭 ===
   # base application.yml 是 `enabled: ${NEX_SETTLEMENT_ENABLED:true}`，dev 档此前未覆盖，
   # 于是 SettlementPlatformAddressGuard 启动期 fail-closed 直接抛：

@@ -103,7 +103,16 @@ spring.data.redis:
 
 nexus.security:
   replay-store: ${NEXUS_REPLAY_STORE:memory}
-  # 批次⑤ P0 加固（2026-10-18）：生产启动守卫——JWT_SECRET 未注入（或 <32 字节）时
-  # 拒绝启动，不再以"随机密钥 + WARN"静默降级（跨服务验签必失败的形态会被推迟到首个请求才暴露）。
+  # 审计 A2（2026-11-08）：base 的 `nexus.security.signature-legacy-enabled` 默认 true，
+  # 而 prod 档此前**未覆盖** ⇒ 生产默认接受 v1（无分隔符拼接）签名，而该类注释自述
+  # 「兼容期结束后将置 false」。现 prod 显式关闭；确需兼容旧客户端时用 env 临时打开，
+  # 并记录迁移计划：NEXUS_SIGNATURE_LEGACY_ENABLED=true。
+  signature-legacy-enabled: ${NEXUS_SIGNATURE_LEGACY_ENABLED:false}
+  # 审计 B1（2026-11-08，已订正）：上面的 `replay-store` 默认 memory 是**有意为之** ——
+  # RedisReplayNonceStore 的 javadoc 写明这是为了避免"Redis 未配置就把 prod 打挂"
+  # （该 bean 仅在 prod + replay-store=redis 且配好 spring.data.redis 时创建，且 Redis 异常时
+  # fail-closed）。因此这里**不改默认值**，改为显式提示：多副本部署（values-prod 里
+  # replicaCount>1）必须设 NEXUS_REPLAY_STORE=redis，否则各副本 nonce 不共享，
+  # 5 分钟重放窗口内可跨 Pod 重放。
   jwt:
     require-secret: true

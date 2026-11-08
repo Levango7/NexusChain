@@ -55,6 +55,16 @@ nexus-gateway:
   # 部署命令示例：--set nexus-gateway.extraEnv.NEX_SETTLEMENT_PLATFORM_ADDRESS=<真实地址>
   # 若确需在 prod 关闭结算（不推荐），显式加 NEX_SETTLEMENT_ENABLED: "false"。
   # CI 侧由 k8s-sync-check「结算平台出款地址注入位门禁」保证该键非占位符。
+  # === 防重放存储（审计 B1，2026-11-08）===
+  # nexus-gateway 的 replicaCount 是 3（见本文件顶部），而 nexus.security.replay-store
+  # 在 base/prod 的默认值是 memory：进程内 nonce 表在多副本下**不共享**，
+  # 5 分钟重放窗口内同一请求可在不同 Pod 各过一遍。
+  # 该默认是**有意为之**（RedisReplayNonceStore 的 javadoc：避免 Redis 未配置时
+  # 直接把 prod 打挂，且该 bean 仅在 prod + replay-store=redis 时创建、Redis 异常时 fail-closed）。
+  # ⇒ 多副本生产部署**必须**显式注入：
+  #     --set nexus-gateway.extraEnv.NEXUS_REPLAY_STORE=redis
+  #   （并要求 NEX_REDIS_HOST/PORT/PASSWORD 已就绪；否则 Redis 故障期间所有带签名的请求会被拒）
+  # 单副本 / 不需要跨 Pod 重放防护的部署可以保持 memory。
   extraEnv:
     NEX_SETTLEMENT_PLATFORM_ADDRESS: "CHANGE_ME_PLATFORM_SETTLEMENT_ADDRESS"
 
