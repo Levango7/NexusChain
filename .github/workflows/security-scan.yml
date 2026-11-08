@@ -56,25 +56,25 @@ jobs:
       - name: Checkout 代码
         uses: actions/checkout@v5
 
-      - name: 探测 Trivy 发布资产可达性（只定位失败原因，不改判定口径）
-        # 2026-11-08 incident：08:47Z 与 09:08Z 两处 setup-trivy 在 12s / 0.32s 内失败，
-        # 日志只有 `##[error]Process completed with exit code 1.`——看不出 403/429/5xx。
-        # setup-trivy 的 install.sh 不打印响应体，所以在它之前先探一次同一资产。
-        run: |
-          URL="https://github.com/aquasecurity/trivy/releases/download/v0.76.2/trivy_0.76.2_Linux-64bit.tar.gz"
-          code=$(curl -sSL -o /dev/null -w '%{http_code}' --retry 3 --retry-all-errors "$URL") || code="curl-failed"
-          echo "Trivy 资产探测: http=$code url=$URL"
-          if [ "$code" != "200" ]; then
-            echo "::error::下载失败 http=$code url=$URL（紧随其后的 setup-trivy 复用同一资产）"
-            exit 1
-          fi
+      - name: 探测 Trivy 安装路径的真实端点（只定位失败原因，不改判定口径）
+        # 端点以 install.sh 源码为准（见 scripts/security/trivy-fetch-diagnostics.sh 头注释）：
+        # github.com 的 release 页（需响应体含 "tag_name":"）+ get.trivy.dev 资产 + github.com 校验和。
+        # 不访问 api.github.com——install.sh 从不访问它，打那里测不到真实失败路径。
+        run: bash scripts/security/trivy-fetch-diagnostics.sh gate
 
       - name: 安装固定版本 Trivy（v0.76.2）
+        id: trivy-setup
         # 与后续 trivy-action step 共用同一个二进制；版本锁定，不用浮动 tag。
         uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514  # v0.2.6
         with:
           version: v0.76.2
           cache: false
+
+      - name: 安装失败时复采 Trivy 端点证据（不掩盖原始失败）
+        # setup-trivy 失败时只会吐 `crit unable to find 'v0.76.2'` 或直接 exit 1，
+        # 不打印 HTTP 状态和 curl 错误。用同一份探针复采，把 rc/stderr 留下。
+        if: failure() && steps.trivy-setup.outcome == 'failure'
+        run: bash scripts/security/trivy-fetch-diagnostics.sh diagnose
 
       - name: 刷新 Trivy 漏洞库并断言新鲜度（超过 7 天直接判红）
         # 失明必须以红灯表现：每次运行都强制下载最新 DB，并读出 UpdatedAt/Version。
@@ -294,24 +294,22 @@ jobs:
       - name: Checkout 代码
         uses: actions/checkout@v5
 
-      - name: 探测 Trivy 发布资产可达性（只定位失败原因，不改判定口径）
-        # 2026-11-08 incident：09:10Z 本 job 的 setup-trivy 安装步失败
-        # （duration_ms=11500），不是 DB 内容问题。install.sh 不打印响应体，
-        # 先探同一资产，让下一次红直接告出状态码。
-        run: |
-          URL="https://github.com/aquasecurity/trivy/releases/download/v0.76.2/trivy_0.76.2_Linux-64bit.tar.gz"
-          code=$(curl -sSL -o /dev/null -w '%{http_code}' --retry 3 --retry-all-errors "$URL") || code="curl-failed"
-          echo "Trivy 资产探测: http=$code url=$URL"
-          if [ "$code" != "200" ]; then
-            echo "::error::下载失败 http=$code url=$URL（紧随其后的 setup-trivy 复用同一资产）"
-            exit 1
-          fi
+      - name: 探测 Trivy 安装路径的真实端点（只定位失败原因，不改判定口径）
+        # 端点以 install.sh 源码为准（见 scripts/security/trivy-fetch-diagnostics.sh 头注释）：
+        # github.com 的 release 页（需响应体含 "tag_name":"）+ get.trivy.dev 资产 + github.com 校验和。
+        # 不访问 api.github.com——install.sh 从不访问它，打那里测不到真实失败路径。
+        run: bash scripts/security/trivy-fetch-diagnostics.sh gate
 
       - name: 安装固定版本 Trivy（v0.76.2）
+        id: trivy-setup
         uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514  # v0.2.6
         with:
           version: v0.76.2
           cache: false
+
+      - name: 安装失败时复采 Trivy 端点证据（不掩盖原始失败）
+        if: failure() && steps.trivy-setup.outcome == 'failure'
+        run: bash scripts/security/trivy-fetch-diagnostics.sh diagnose
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -378,25 +376,25 @@ jobs:
       - name: Checkout 代码
         uses: actions/checkout@v5
 
-      - name: 探测 Trivy 发布资产可达性（只定位失败原因，不改判定口径）
-        # 2026-11-08 incident：08:47Z 与 09:08Z 两处 setup-trivy 在 12s / 0.32s 内失败，
-        # 日志只有 `##[error]Process completed with exit code 1.`——看不出 403/429/5xx。
-        # setup-trivy 的 install.sh 不打印响应体，所以在它之前先探一次同一资产。
-        run: |
-          URL="https://github.com/aquasecurity/trivy/releases/download/v0.76.2/trivy_0.76.2_Linux-64bit.tar.gz"
-          code=$(curl -sSL -o /dev/null -w '%{http_code}' --retry 3 --retry-all-errors "$URL") || code="curl-failed"
-          echo "Trivy 资产探测: http=$code url=$URL"
-          if [ "$code" != "200" ]; then
-            echo "::error::下载失败 http=$code url=$URL（紧随其后的 setup-trivy 复用同一资产）"
-            exit 1
-          fi
+      - name: 探测 Trivy 安装路径的真实端点（只定位失败原因，不改判定口径）
+        # 端点以 install.sh 源码为准（见 scripts/security/trivy-fetch-diagnostics.sh 头注释）：
+        # github.com 的 release 页（需响应体含 "tag_name":"）+ get.trivy.dev 资产 + github.com 校验和。
+        # 不访问 api.github.com——install.sh 从不访问它，打那里测不到真实失败路径。
+        run: bash scripts/security/trivy-fetch-diagnostics.sh gate
 
       - name: 安装固定版本 Trivy（v0.76.2）
+        id: trivy-setup
         # 与后续 trivy-action step 共用同一个二进制；版本锁定，不用浮动 tag。
         uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514  # v0.2.6
         with:
           version: v0.76.2
           cache: false
+
+      - name: 安装失败时复采 Trivy 端点证据（不掩盖原始失败）
+        # setup-trivy 失败时只会吐 `crit unable to find 'v0.76.2'` 或直接 exit 1，
+        # 不打印 HTTP 状态和 curl 错误。用同一份探针复采，把 rc/stderr 留下。
+        if: failure() && steps.trivy-setup.outcome == 'failure'
+        run: bash scripts/security/trivy-fetch-diagnostics.sh diagnose
 
       - name: 下载共享 Trivy 漏洞库（prep 产出，全 run 仅下载一次）
         uses: actions/download-artifact@v7
