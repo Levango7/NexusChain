@@ -1,9 +1,11 @@
 package org.nexus.gateway.reconciliation.link;
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -14,6 +16,9 @@ import org.nexus.gateway.reconciliation.ReconciliationDiscrepancy;
 import org.springframework.context.ApplicationEventPublisher;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
@@ -234,5 +239,204 @@ class ReconciliationAdjustmentServiceTest {
         verify(adjustmentRepository, never()).save(any());
         verify(accountService, never()).depositWithType(any(), any(), any(), any());
         verify(accountService, never()).withdrawWithType(any(), any(), any(), any());
+    }
+
+    // ==================== 日上限（2026-11-08）：enforce=false 只观测 ====================
+
+    @Test
+    @DisplayName("日上限 enforce=false：笔数超限仍 AUTO_APPROVED 并执行资金调整（行为未变），指标照常累加")
+    void dailyLimit_enforceFalse_countOver_stillAutoApprovedAndExecuted() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        adjustmentService.setMeterRegistry(registry);
+        adjustmentService.setEnforceDailyLimits(false);
+        adjustmentService.setDailyMaxCount(5);
+        adjustmentService.setDailyMaxTotal(new BigDecimal("3000"));
+
+        // 当日已有 5 笔 AUTO_APPROVED（累计 500），本笔 10 元 → 命中笔数上限
+        stubDailyApproved(recordsOf("100", "100", "100", "100", "100"));
+        stubSaveEcho();
+
+        List<ReconciliationAdjustment> result =
+                adjustmentService.processDiffReport(100L, reportOf(mismatch(11L, "10", "0", "10")), 1L);
+
+        assertEquals(1, result.size());
+        assertEquals(ApprovalStatus.AUTO_APPROVED, result.get(0).getApprovalStatus(),
+                "enforce=false 是硬要求：超限也不得改变既有自动审批行为");
+        verify(accountService).depositWithType(
+                eq(100L), eq(new BigDecimal("10")), any(), eq(AccountOperationType.RECON_ADJUST));
+        // 观测基线：即使不拦截，指标也必须累加
+        assertEquals(1.0, registry.counter("nexus_reconciliation_adjustment_over_limit_total",
+                "reason", "count").count(), 0.001);
+        assertNull(registry.find("nexus_reconciliation_adjustment_over_limit_total")
+                .tag("reason", "total").counter(), "累计未超限，不应打 total 计数");
+    }
+
+    // ==================== 日上限：enforce=true 转人工审批 ====================
+
+    @Test
+    @DisplayName("日上限 enforce=true：笔数超限 → PENDING_APPROVAL 且不执行资金调整")
+    void dailyLimit_enforceTrue_countOver_pendingAndNoExecution() {
+        adjustmentService.setEnforceDailyLimits(true);
+        adjustmentService.setDailyMaxCount(5);
+        adjustmentService.setDailyMaxTotal(new BigDecimal("3000"));
+
+        stubDailyApproved(recordsOf("100", "100", "100", "100", "100"));
+        stubSaveEcho();
+
+        List<ReconciliationAdjustment> result =
+                adjustmentService.processDiffReport(100L, reportOf(mismatch(12L, "10", "0", "10")), 1L);
+
+        assertEquals(ApprovalStatus.PENDING_APPROVAL, result.get(0).getApprovalStatus());
+        verify(accountService, never()).depositWithType(any(), any(), any(), any());
+        verify(accountService, never()).withdrawWithType(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("日上限 enforce=true：当日累计超限 → PENDING_APPROVAL 且不执行资金调整")
+    void dailyLimit_enforceTrue_totalOver_pendingAndNoExecution() {
+        adjustmentService.setEnforceDailyLimits(true);
+        adjustmentService.setDailyMaxCount(5);
+        adjustmentService.setDailyMaxTotal(new BigDecimal("3000"));
+
+        // 当日仅 1 笔（未超笔数），但累计 2900 + 本笔 200 = 3100 > 3000
+        stubDailyApproved(recordsOf("2900"));
+        stubSaveEcho();
+
+        List<ReconciliationAdjustment> result =
+                adjustmentService.processDiffReport(100L, reportOf(mismatch(13L, "200", "0", "200")), 1L);
+
+        assertEquals(ApprovalStatus.PENDING_APPROVAL, result.get(0).getApprovalStatus());
+        verify(accountService, never()).depositWithType(any(), any(), any(), any());
+        verify(accountService, never()).withdrawWithType(any(), any(), any(), any());
+    }
+
+    // ==================== 计数口径：跨日重置 / 只算 AUTO_APPROVED ====================
+
+    @Test
+    @DisplayName("日上限：跨日重置 —— 昨日 20 笔不在今日区间内，今日第 1 笔放行（区间左闭右开）")
+    void dailyLimit_crossDayReset_firstOfTodayPasses() {
+        adjustmentService.setEnforceDailyLimits(true);
+        adjustmentService.setDailyMaxCount(5);
+        adjustmentService.setDailyMaxTotal(new BigDecimal("3000"));
+
+        // 昨日 20 笔已被仓库查询的日区间排除 ⇒ 今日查询返回空
+        stubDailyApproved(Collections.emptyList());
+        stubSaveEcho();
+
+        List<ReconciliationAdjustment> result =
+                adjustmentService.processDiffReport(100L, reportOf(mismatch(14L, "10", "0", "10")), 1L);
+
+        assertEquals(ApprovalStatus.AUTO_APPROVED, result.get(0).getApprovalStatus());
+        verify(accountService).depositWithType(
+                eq(100L), eq(new BigDecimal("10")), any(), eq(AccountOperationType.RECON_ADJUST));
+
+        ArgumentCaptor<LocalDateTime> startCaptor = ArgumentCaptor.forClass(LocalDateTime.class);
+        ArgumentCaptor<LocalDateTime> endCaptor = ArgumentCaptor.forClass(LocalDateTime.class);
+        verify(adjustmentRepository).findByMerchantIdAndApprovalStatusAndCreatedAtBetween(
+                eq(100L), eq(ApprovalStatus.AUTO_APPROVED), startCaptor.capture(), endCaptor.capture());
+        LocalDateTime start = startCaptor.getValue();
+        assertEquals(LocalDate.now().atStartOfDay(), start, "日界＝今日 00:00");
+        assertEquals(start.plusDays(1), endCaptor.getValue(), "右开区间＝明日 00:00");
+    }
+
+    @Test
+    @DisplayName("日上限：PENDING_APPROVAL/REJECTED 不占自动额度 —— 计数只按 AUTO_APPROVED 查询")
+    void dailyLimit_onlyAutoApprovedCounted() {
+        adjustmentService.setEnforceDailyLimits(true);
+        adjustmentService.setDailyMaxCount(5);
+        adjustmentService.setDailyMaxTotal(new BigDecimal("3000"));
+
+        stubDailyApproved(Collections.emptyList());
+        stubSaveEcho();
+
+        adjustmentService.processDiffReport(100L, reportOf(mismatch(15L, "10", "0", "10")), 1L);
+
+        ArgumentCaptor<ApprovalStatus> statusCaptor = ArgumentCaptor.forClass(ApprovalStatus.class);
+        verify(adjustmentRepository).findByMerchantIdAndApprovalStatusAndCreatedAtBetween(
+                eq(100L), statusCaptor.capture(), any(), any());
+        assertEquals(ApprovalStatus.AUTO_APPROVED, statusCaptor.getValue(),
+                "口径硬约束：只有 AUTO_APPROVED 计入当日笔数/累计");
+    }
+
+    // ==================== 与原单笔阈值的关系 ====================
+
+    @Test
+    @DisplayName("单笔 >1000 仍走原 PENDING_APPROVAL 路径，不进入日上限判据（不被新闸重复影响）")
+    void singleAmountOver1000_originalPath_dailyQueryNotInvolved() {
+        adjustmentService.setEnforceDailyLimits(true);
+        adjustmentService.setDailyMaxCount(5);
+        adjustmentService.setDailyMaxTotal(new BigDecimal("3000"));
+
+        stubSaveEcho();
+
+        List<ReconciliationAdjustment> result =
+                adjustmentService.processDiffReport(100L, reportOf(mismatch(16L, "1500", "0", "1500")), 1L);
+
+        assertEquals(ApprovalStatus.PENDING_APPROVAL, result.get(0).getApprovalStatus());
+        verify(accountService, never()).depositWithType(any(), any(), any(), any());
+        verify(adjustmentRepository, never())
+                .findByMerchantIdAndApprovalStatusAndCreatedAtBetween(any(), any(), any(), any());
+    }
+
+    // ==================== fail-closed ====================
+
+    @Test
+    @DisplayName("日上限查询抛异常 → 按超限处理（fail-closed，有意选择），转 PENDING_APPROVAL 不动账")
+    void dailyLimit_queryThrows_failClosedPending() {
+        adjustmentService.setEnforceDailyLimits(true);
+        adjustmentService.setDailyMaxCount(5);
+        adjustmentService.setDailyMaxTotal(new BigDecimal("3000"));
+
+        when(adjustmentRepository.findByMerchantIdAndApprovalStatusAndCreatedAtBetween(
+                any(), any(), any(), any())).thenThrow(new RuntimeException("db down"));
+        stubSaveEcho();
+
+        List<ReconciliationAdjustment> result =
+                adjustmentService.processDiffReport(100L, reportOf(mismatch(17L, "10", "0", "10")), 1L);
+
+        assertEquals(ApprovalStatus.PENDING_APPROVAL, result.get(0).getApprovalStatus());
+        verify(accountService, never()).depositWithType(any(), any(), any(), any());
+        verify(accountService, never()).withdrawWithType(any(), any(), any(), any());
+    }
+
+    // ==================== 测试辅助 ====================
+
+    private void stubDailyApproved(List<ReconciliationAdjustment> today) {
+        when(adjustmentRepository.findByMerchantIdAndApprovalStatusAndCreatedAtBetween(
+                eq(100L), eq(ApprovalStatus.AUTO_APPROVED), any(), any())).thenReturn(today);
+    }
+
+    private void stubSaveEcho() {
+        when(adjustmentRepository.findByReferenceIn(any())).thenReturn(Collections.emptyList());
+        when(adjustmentRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+    }
+
+    private List<ReconciliationAdjustment> recordsOf(String... amounts) {
+        List<ReconciliationAdjustment> records = new ArrayList<>();
+        for (String amount : amounts) {
+            ReconciliationAdjustment record = new ReconciliationAdjustment();
+            record.setMerchantId(100L);
+            record.setAmount(new BigDecimal(amount));
+            record.setApprovalStatus(ApprovalStatus.AUTO_APPROVED);
+            records.add(record);
+        }
+        return records;
+    }
+
+    private ReconciliationDiffReport reportOf(ReconciliationDiscrepancy discrepancy) {
+        ReconciliationDiffReport report = new ReconciliationDiffReport();
+        report.setDiscrepancies(List.of(discrepancy));
+        return report;
+    }
+
+    private ReconciliationDiscrepancy mismatch(long id, String channelAmount, String internalAmount, String diff) {
+        ReconciliationDiscrepancy discrepancy = new ReconciliationDiscrepancy();
+        discrepancy.setId(id);
+        discrepancy.setDiscrepancyType(ReconciliationDiscrepancy.DiscrepancyType.AMOUNT_MISMATCH);
+        discrepancy.setTransactionId("TXN-DAILY-" + id);
+        discrepancy.setChannelAmount(new BigDecimal(channelAmount));
+        discrepancy.setInternalAmount(new BigDecimal(internalAmount));
+        discrepancy.setAmountDiff(new BigDecimal(diff));
+        return discrepancy;
     }
 }
