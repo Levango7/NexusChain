@@ -55,6 +55,10 @@ jobs:
     steps:
       - name: Checkout 代码
         uses: actions/checkout@v5
+        with:
+          # 基线差分门禁要用 git log -S 核对 addedAt 与条目首次出现日（防自续），
+          # shallow clone 下取不到历史会静默跳过 ⇒ 必须全量历史（146 commits，成本忽略不计）
+          fetch-depth: 0
 
       - name: 安装固定版本 Trivy（v0.76.2）
         # 与后续 trivy-action step 共用同一个二进制；版本锁定，不用浮动 tag。
@@ -351,6 +355,9 @@ jobs:
     steps:
       - name: Checkout 代码
         uses: actions/checkout@v5
+        with:
+          # 同 trivy-fs-scan：门禁的 addedAt 防自续锚点需要全量 git 历史
+          fetch-depth: 0
 
       - name: 安装固定版本 Trivy（v0.76.2）
         # 与后续 trivy-action step 共用同一个二进制；版本锁定，不用浮动 tag。
