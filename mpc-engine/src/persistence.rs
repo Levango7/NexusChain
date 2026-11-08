@@ -392,8 +392,12 @@ pub(crate) fn persist_cggmp_blob(
 
 /// 加载 CGGMP21 协议产物密文并解密。
 ///
-/// 密钥按文件头记录的版本号选择（`peek_key_version` →
-/// `load_storage_key_for_version`），轮换后旧版本文件用旧密钥解。
+/// 密钥来源与写路径 `persist_cggmp_blob` 对称：写恒用调用方注入的
+/// `StorageCtx.key`（文件头记其 `key_version`），读对**同版本**文件必须用
+/// 同一把钥匙——否则 `StorageCtx::new` 注入的场景写读不对称（本函数曾
+/// 只读 env 导致注入路径恢复必红，#100 CI 回归）。仅当文件头版本号与注入
+/// ctx 不符（轮换历史的旧版本文件）时，才回落 env 逐版密钥
+/// （`MPC_STORAGE_KEY_V{ver}` 优先，回退 `MPC_STORAGE_KEY`）。
 ///
 /// 返回 `Ok(None)` = 文件不存在（首次运行）；存在但解密/解码失败 → 硬错误
 /// （fail-closed——篡改/截断/错密钥在此暴露，绝不降级为"没有"）。
@@ -401,6 +405,7 @@ pub(crate) fn load_cggmp_blob(
     session_id: &str,
     kind: &str,
     base_dir: &std::path::Path,
+    storage: Option<&crate::cggmp_state::StorageCtx>,
 ) -> eyre::Result<Option<(u32, Vec<u8>)>> {
     if kind != "incomplete" && kind != "keyshare" {
         return Err(eyre!("cggmp load: invalid kind '{kind}'"));
@@ -411,7 +416,10 @@ pub(crate) fn load_cggmp_blob(
     }
     let blob = fs::read(&path).map_err(|e| eyre!("cggmp load: read {}: {e}", path.display()))?;
     let key_version = peek_key_version(&blob);
-    let key = load_storage_key_for_version(key_version)?;
+    let key = match storage.filter(|c| c.key_version == key_version) {
+        Some(c) => c.key,
+        None => load_storage_key_for_version(key_version)?,
+    };
     let (version, plaintext) = aes_decrypt_with_version(&blob, &key).map_err(|e| {
         eyre!(
             "cggmp load: decrypt {} failed (tampered/truncated/wrong key?): {e}",
@@ -496,7 +504,7 @@ mod tests {
 
         // 读取按文件头版本号选密钥：V3 专属密钥
         set_version_key_env(3, key);
-        let (ver, decoded) = load_cggmp_blob("sess-rt", "keyshare", &base)
+        let (ver, decoded) = load_cggmp_blob("sess-rt", "keyshare", &base, None)
             .expect("load")
             .expect("some");
         remove_version_key_env(3);
@@ -508,7 +516,7 @@ mod tests {
     #[test]
     fn cggmp_blob_load_missing_is_none() {
         let base = cggmp_test_base("missing");
-        let r = load_cggmp_blob("no-such-session", "incomplete", &base)
+        let r = load_cggmp_blob("no-such-session", "incomplete", &base, None)
             .expect("load must not error on missing file");
         assert!(r.is_none(), "missing file → None (首次运行)，不是错误");
     }
@@ -530,7 +538,7 @@ mod tests {
         tampered[KEY_VERSION_HEADER_LEN + NONCE_LEN] ^= 0xFF;
         std::fs::write(&path, &tampered).expect("write tampered");
         assert!(
-            load_cggmp_blob("sess-t", "keyshare", &base).is_err(),
+            load_cggmp_blob("sess-t", "keyshare", &base, None).is_err(),
             "tampered blob must fail closed"
         );
 
@@ -538,7 +546,7 @@ mod tests {
         let truncated = good[..good.len() - 7].to_vec();
         std::fs::write(&path, &truncated).expect("write truncated");
         assert!(
-            load_cggmp_blob("sess-t", "keyshare", &base).is_err(),
+            load_cggmp_blob("sess-t", "keyshare", &base, None).is_err(),
             "truncated blob must fail closed"
         );
 
@@ -546,7 +554,7 @@ mod tests {
         std::fs::write(&path, &good).expect("restore good");
         set_version_key_env(1, [0x00; 32]);
         assert!(
-            load_cggmp_blob("sess-t", "keyshare", &base).is_err(),
+            load_cggmp_blob("sess-t", "keyshare", &base, None).is_err(),
             "wrong key must fail closed"
         );
         remove_version_key_env(1);
@@ -559,7 +567,7 @@ mod tests {
         let key = cggmp_test_key();
         // kind 白名单
         assert!(persist_cggmp_blob("s", "evil", &base, b"x", &key, 1).is_err());
-        assert!(load_cggmp_blob("s", "../evil", &base).is_err());
+        assert!(load_cggmp_blob("s", "../evil", &base, None).is_err());
         // session_id 穿越被 sanitize 封堵：文件必然落在 base 内
         let path = cggmp_share_path(&base, "../../etc/passwd", "keyshare");
         let base_str = base.to_string_lossy();
@@ -601,10 +609,10 @@ mod tests {
 
         set_version_key_env(1, key_v1);
         set_version_key_env(2, key_v2);
-        let (v1, p1) = load_cggmp_blob("sess-old", "keyshare", &base)
+        let (v1, p1) = load_cggmp_blob("sess-old", "keyshare", &base, None)
             .expect("load v1")
             .expect("v1 file exists");
-        let (v2, p2) = load_cggmp_blob("sess-new", "keyshare", &base)
+        let (v2, p2) = load_cggmp_blob("sess-new", "keyshare", &base, None)
             .expect("load v2")
             .expect("v2 file exists");
         remove_version_key_env(1);
@@ -632,8 +640,8 @@ mod tests {
 
         set_version_key_env(1, [0x99; 32]); // ← V1 来源被指错
         set_version_key_env(2, key_v2);
-        let v1_result = load_cggmp_blob("sess-old", "keyshare", &base);
-        let v2_result = load_cggmp_blob("sess-new", "keyshare", &base);
+        let v1_result = load_cggmp_blob("sess-old", "keyshare", &base, None);
+        let v2_result = load_cggmp_blob("sess-new", "keyshare", &base, None);
         remove_version_key_env(1);
         remove_version_key_env(2);
 
@@ -674,10 +682,10 @@ mod tests {
         remove_version_key_env(1);
         remove_version_key_env(2);
 
-        let v1 = load_cggmp_blob("sess-v1", "keyshare", &base)
+        let v1 = load_cggmp_blob("sess-v1", "keyshare", &base, None)
             .expect("load v1 via fallback")
             .expect("v1 exists");
-        let v2 = load_cggmp_blob("sess-v2", "keyshare", &base);
+        let v2 = load_cggmp_blob("sess-v2", "keyshare", &base, None);
 
         match prev {
             Ok(old) => unsafe { std::env::set_var(STORAGE_KEY_ENV, old) },
@@ -690,6 +698,33 @@ mod tests {
             v2.is_err(),
             "v2 file with only single key configured must fail closed (GCM auth), got {v2:?}"
         );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 回归（#100 CI 红）：`load_cggmp_blob` 不得绕开注入的 `StorageCtx` 去读
+    /// env——写路径恒用 `ctx.key`，读路径对同版本文件必须用同一把钥匙
+    /// （否则 `StorageCtx::new` 注入的恢复测试写读不对称，start_aux 恢复
+    /// 必红）。本测试全程不设任何 `MPC_STORAGE_KEY*` 环境变量。
+    #[test]
+    fn cggmp_blob_injected_storage_key_honored_without_env() {
+        let base = cggmp_test_base("inject");
+        let ctx = crate::cggmp_state::StorageCtx::new(base.clone(), [0x7A; 32], 1);
+        let plaintext = b"injected-key-payload";
+
+        persist_cggmp_blob(
+            "sess-inj",
+            "keyshare",
+            &base,
+            plaintext,
+            &ctx.key,
+            ctx.key_version,
+        )
+        .expect("persist");
+        let (ver, decoded) = load_cggmp_blob("sess-inj", "keyshare", &base, Some(&ctx))
+            .expect("load with injected ctx (no env needed)")
+            .expect("file exists");
+        assert_eq!(ver, 1);
+        assert_eq!(decoded, plaintext.to_vec());
         let _ = std::fs::remove_dir_all(&base);
     }
 
