@@ -1,11 +1,16 @@
 //! MPC 会话持久化：CGGMP21 协议产物（keygen 中间态 / 完整 KeyShare）的
 //! 加密落盘与恢复。
 //!
-//! **MPC-P1-05 + 中12 加密信封**：落盘前用 **AES-256-GCM** 认证加密，密钥从
-//! 环境变量 `MPC_STORAGE_KEY` 读取（hex 编码的 32 字节）。文件格式：
+//! **MPC-P1-05 + 中12 加密信封**：落盘前用 **AES-256-GCM** 认证加密。文件格式：
 //! `MAGIC("NXC1") || version(4B LE) || nonce(12B) || ciphertext`，GCM 自带
-//! 完整性校验防篡改；密钥版本号支持轮换（旧格式无头视为版本 1）。
-//! 引擎侧隔离进程持有密钥材料不跨进程传输（方案 A"份额只在参与者进程"语义）。
+//! 完整性校验防篡改；旧格式无头视为版本 1。
+//!
+//! **密钥版本化（中12）**：解密按文件头记录的版本号选密钥——先查专属环境变量
+//! `MPC_STORAGE_KEY_V{version}`（由 `PartyConfig::apply_storage_key_to_env`
+//! 从 `storage_keys` 映射逐版导出），未配置时回退 `MPC_STORAGE_KEY`
+//! （v1 旧格式与单密钥部署的向后兼容；密钥错配由 GCM 认证硬失败暴露，
+//! 不会静默解错）。引擎侧隔离进程持有密钥材料不跨进程传输
+//! （方案 A"份额只在参与者进程"语义）。
 //!
 //! **GG20 退役（PLAN-001-R2）**：GG20 时代的三类落盘产物——`persist_session`
 //! 全量会话快照、`persist_my_share` 本方份额隔离记录（`MyShareRecord`）——
@@ -125,20 +130,7 @@ fn load_storage_key() -> eyre::Result<[u8; KEY_LEN]> {
             STORAGE_KEY_ENV
         )
     })?;
-    let key_bytes =
-        hex::decode(&key_hex).map_err(|e| eyre!("{} hex decode failed: {e}", STORAGE_KEY_ENV))?;
-    if key_bytes.len() != KEY_LEN {
-        return Err(eyre!(
-            "{} must be {} bytes ({} hex chars), got {} bytes",
-            STORAGE_KEY_ENV,
-            KEY_LEN,
-            KEY_LEN * 2,
-            key_bytes.len()
-        ));
-    }
-    let mut key = [0u8; KEY_LEN];
-    key.copy_from_slice(&key_bytes);
-    Ok(key)
+    decode_key_hex(STORAGE_KEY_ENV, &key_hex)
 }
 
 /// AES-256-GCM 加密。
@@ -181,8 +173,8 @@ pub(crate) fn aes_decrypt(data: &[u8], key: &[u8; KEY_LEN]) -> eyre::Result<Vec<
 /// 中12: AES-256-GCM 加密（带密钥版本号文件头）。
 ///
 /// 输出格式：`MAGIC(4B "NXC1") || version(4B LE) || nonce(12B) || ciphertext`。
-/// 解密时 `aes_decrypt_with_version` 根据 MAGIC 前缀识别新格式并读取版本号，
-/// 选择对应版本的密钥解密（完整多密钥支持见 `load_storage_key_for_version`，TODO）。
+/// 解密时 `aes_decrypt_with_version` 根据 MAGIC 前缀识别新格式并读取版本号；
+/// 版本号驱动的密钥选择由 `load_storage_key_for_version` 完成。
 ///
 /// `version` 为密钥版本号，用于密钥轮换：新文件用当前版本加密，
 /// 旧文件由解密方根据版本号选择对应密钥。
@@ -208,8 +200,8 @@ pub(crate) fn aes_encrypt_with_version(
 ///   * 新格式：`MAGIC(4B "NXC1") || version(4B LE) || nonce(12B) || ciphertext`
 ///   * 旧格式（无版本号）：`nonce(12B) || ciphertext`，视为版本 `DEFAULT_KEY_VERSION`(1)
 ///
-/// 返回 `(version, plaintext)`。调用方根据 version 选择对应密钥
-/// （当前实现仍用单一 `MPC_STORAGE_KEY`，完整多密钥支持标注 TODO）。
+/// 返回 `(version, plaintext)`。密钥选择由调用方按 version 完成
+/// （`load_storage_key_for_version`）。
 ///
 /// `pub(crate)`：CGGMP21 份额读取路径（load_cggmp_blob）复用此原语。
 pub(crate) fn aes_decrypt_with_version(
@@ -231,22 +223,59 @@ pub(crate) fn aes_decrypt_with_version(
 
 /// 中12: 从环境变量加载指定版本的 AES-256 密钥。
 ///
-/// 当前实现：所有版本都使用 `MPC_STORAGE_KEY`（单密钥模式）。
-/// 完整多密钥支持（从 `PartyConfig.storage_keys` 映射按版本号选择密钥）标注 TODO，
-/// 因 persistence 模块不持有 `PartyConfig` 引用，需通过环境变量
-/// `MPC_STORAGE_KEY_V{version}` 或全局单例传递，待后续重构。
+/// 来源优先级：
+///   1. `MPC_STORAGE_KEY_V{version}`（专属版本密钥，由
+///      `PartyConfig::apply_storage_key_to_env` 从 `storage_keys` 映射逐版导出）
+///   2. 回退 `MPC_STORAGE_KEY`（`load_storage_key`）——单密钥部署与 v1 旧格式的
+///      向后兼容；回退且 version != 1 时打印 WARN，密钥错配由 GCM 认证失败暴露
 ///
-/// `version` 参数仅用于日志记录，实际密钥仍从 `MPC_STORAGE_KEY` 读取。
+/// 返回 hex 解码后的 `[u8; KEY_LEN]`；格式非法（hex 错误/长度非 32）fail-closed。
 fn load_storage_key_for_version(version: u32) -> eyre::Result<[u8; KEY_LEN]> {
-    let key = load_storage_key()?;
+    let env_name = format!("{STORAGE_KEY_ENV}_V{version}");
+    if let Ok(key_hex) = std::env::var(&env_name) {
+        return decode_key_hex(&env_name, &key_hex);
+    }
     if version != DEFAULT_KEY_VERSION {
-        tracing::debug!(
+        tracing::warn!(
             version,
-            "中12: load_storage_key_for_version — using single MPC_STORAGE_KEY for all versions \
-             (multi-key support TODO)"
+            env = %env_name,
+            "中12: version-specific key {} not set — falling back to {STORAGE_KEY_ENV} \
+             (GCM auth failure will surface any mismatch)",
+            env_name
         );
     }
+    load_storage_key()
+}
+
+/// 中12: hex 解码并校验 32 字节长度（fail-closed）。
+///
+/// `name` 仅用于错误信息（环境变量名），不参与解码。
+fn decode_key_hex(name: &str, key_hex: &str) -> eyre::Result<[u8; KEY_LEN]> {
+    let key_bytes = hex::decode(key_hex).map_err(|e| eyre!("{} hex decode failed: {e}", name))?;
+    if key_bytes.len() != KEY_LEN {
+        return Err(eyre!(
+            "{} must be {} bytes ({} hex chars), got {} bytes",
+            name,
+            KEY_LEN,
+            KEY_LEN * 2,
+            key_bytes.len()
+        ));
+    }
+    let mut key = [0u8; KEY_LEN];
+    key.copy_from_slice(&key_bytes);
     Ok(key)
+}
+
+/// 中12: 从落盘 blob 的文件头 peek 出密钥版本号（不解密）。
+///
+/// 新格式读 `MAGIC || version(4B LE)` 的版本字段；旧格式（无 MAGIC 头）
+/// 视为 `DEFAULT_KEY_VERSION`(1)。供 `load_cggmp_blob` 在解密前选密钥。
+fn peek_key_version(data: &[u8]) -> u32 {
+    if data.len() >= KEY_VERSION_HEADER_LEN && &data[0..4] == KEY_VERSION_MAGIC {
+        u32::from_le_bytes([data[4], data[5], data[6], data[7]])
+    } else {
+        DEFAULT_KEY_VERSION
+    }
 }
 
 /// 中12: 读取当前密钥版本号（从 `MPC_STORAGE_KEY_VERSION` 环境变量）。
@@ -363,13 +392,15 @@ pub(crate) fn persist_cggmp_blob(
 
 /// 加载 CGGMP21 协议产物密文并解密。
 ///
+/// 密钥按文件头记录的版本号选择（`peek_key_version` →
+/// `load_storage_key_for_version`），轮换后旧版本文件用旧密钥解。
+///
 /// 返回 `Ok(None)` = 文件不存在（首次运行）；存在但解密/解码失败 → 硬错误
 /// （fail-closed——篡改/截断/错密钥在此暴露，绝不降级为"没有"）。
 pub(crate) fn load_cggmp_blob(
     session_id: &str,
     kind: &str,
     base_dir: &std::path::Path,
-    key: &[u8; KEY_LEN],
 ) -> eyre::Result<Option<(u32, Vec<u8>)>> {
     if kind != "incomplete" && kind != "keyshare" {
         return Err(eyre!("cggmp load: invalid kind '{kind}'"));
@@ -379,7 +410,9 @@ pub(crate) fn load_cggmp_blob(
         return Ok(None);
     }
     let blob = fs::read(&path).map_err(|e| eyre!("cggmp load: read {}: {e}", path.display()))?;
-    let (version, plaintext) = aes_decrypt_with_version(&blob, key).map_err(|e| {
+    let key_version = peek_key_version(&blob);
+    let key = load_storage_key_for_version(key_version)?;
+    let (version, plaintext) = aes_decrypt_with_version(&blob, &key).map_err(|e| {
         eyre!(
             "cggmp load: decrypt {} failed (tampered/truncated/wrong key?): {e}",
             path.display()
@@ -428,7 +461,23 @@ mod tests {
         [0x5A; 32]
     }
 
+    /// 把 32 字节密钥写入专属版本环境变量 `MPC_STORAGE_KEY_V{version}`。
+    /// 仅限 #[serial_test::serial] 测试内调用（env 为进程全局）。
+    fn set_version_key_env(version: u32, key: [u8; 32]) {
+        let name = format!("{STORAGE_KEY_ENV}_V{version}");
+        // SAFETY: 串行测试内调用，与其他读 env 的测试互斥（serial_test 保证）。
+        unsafe { std::env::set_var(name, hex::encode(key)) };
+    }
+
+    /// 移除专属版本环境变量 `MPC_STORAGE_KEY_V{version}`（测试清理）。
+    fn remove_version_key_env(version: u32) {
+        let name = format!("{STORAGE_KEY_ENV}_V{version}");
+        // SAFETY: 串行测试内调用。
+        unsafe { std::env::remove_var(name) };
+    }
+
     #[test]
+    #[serial_test::serial]
     fn cggmp_blob_round_trip_and_nxc1_magic() {
         let base = cggmp_test_base("rt");
         let key = cggmp_test_key();
@@ -445,9 +494,12 @@ mod tests {
         // 密文不是明文（payload 不出现）
         assert!(!raw.windows(8).any(|w| w == b"unit-test"));
 
-        let (ver, decoded) = load_cggmp_blob("sess-rt", "keyshare", &base, &key)
+        // 读取按文件头版本号选密钥：V3 专属密钥
+        set_version_key_env(3, key);
+        let (ver, decoded) = load_cggmp_blob("sess-rt", "keyshare", &base)
             .expect("load")
             .expect("some");
+        remove_version_key_env(3);
         assert_eq!(ver, 3);
         assert_eq!(decoded, plaintext.to_vec());
         let _ = std::fs::remove_dir_all(&base);
@@ -456,12 +508,13 @@ mod tests {
     #[test]
     fn cggmp_blob_load_missing_is_none() {
         let base = cggmp_test_base("missing");
-        let r = load_cggmp_blob("no-such-session", "incomplete", &base, &cggmp_test_key())
+        let r = load_cggmp_blob("no-such-session", "incomplete", &base)
             .expect("load must not error on missing file");
         assert!(r.is_none(), "missing file → None (首次运行)，不是错误");
     }
 
     #[test]
+    #[serial_test::serial]
     fn cggmp_blob_tamper_truncate_wrong_key_fail_closed() {
         let base = cggmp_test_base("tamper");
         let key = cggmp_test_key();
@@ -470,12 +523,14 @@ mod tests {
         let path = cggmp_share_path(&base, "sess-t", "keyshare");
         let good = std::fs::read(&path).expect("read");
 
+        set_version_key_env(1, key);
+
         // 1) 篡改密文 → 解密失败
         let mut tampered = good.clone();
         tampered[KEY_VERSION_HEADER_LEN + NONCE_LEN] ^= 0xFF;
         std::fs::write(&path, &tampered).expect("write tampered");
         assert!(
-            load_cggmp_blob("sess-t", "keyshare", &base, &key).is_err(),
+            load_cggmp_blob("sess-t", "keyshare", &base).is_err(),
             "tampered blob must fail closed"
         );
 
@@ -483,17 +538,18 @@ mod tests {
         let truncated = good[..good.len() - 7].to_vec();
         std::fs::write(&path, &truncated).expect("write truncated");
         assert!(
-            load_cggmp_blob("sess-t", "keyshare", &base, &key).is_err(),
+            load_cggmp_blob("sess-t", "keyshare", &base).is_err(),
             "truncated blob must fail closed"
         );
 
-        // 3) 错误密钥 → 解密失败
+        // 3) 错误密钥（V1 被指错）→ 解密失败
         std::fs::write(&path, &good).expect("restore good");
-        let wrong_key = [0x00; 32];
+        set_version_key_env(1, [0x00; 32]);
         assert!(
-            load_cggmp_blob("sess-t", "keyshare", &base, &wrong_key).is_err(),
+            load_cggmp_blob("sess-t", "keyshare", &base).is_err(),
             "wrong key must fail closed"
         );
+        remove_version_key_env(1);
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -503,7 +559,7 @@ mod tests {
         let key = cggmp_test_key();
         // kind 白名单
         assert!(persist_cggmp_blob("s", "evil", &base, b"x", &key, 1).is_err());
-        assert!(load_cggmp_blob("s", "../evil", &base, &key).is_err());
+        assert!(load_cggmp_blob("s", "../evil", &base).is_err());
         // session_id 穿越被 sanitize 封堵：文件必然落在 base 内
         let path = cggmp_share_path(&base, "../../etc/passwd", "keyshare");
         let base_str = base.to_string_lossy();
@@ -512,6 +568,144 @@ mod tests {
             path_str.starts_with(&*base_str) && !path_str.contains(".."),
             "sanitized path must stay under base: {path_str}"
         );
+    }
+
+    // ===== 中12: 密钥版本化轮换（#100）====
+
+    /// 轮换过渡期：旧版本文件（v1）与新版本文件（v2）共存于同一 base_dir，
+    /// 各自经专属环境变量 `MPC_STORAGE_KEY_V{ver}` 解密成功。
+    #[test]
+    #[serial_test::serial]
+    fn cggmp_blob_rotation_two_versions_coexist() {
+        let base = cggmp_test_base("rot");
+        let key_v1 = [0x11; 32];
+        let key_v2 = [0x22; 32];
+        persist_cggmp_blob("sess-old", "keyshare", &base, b"legacy-v1-payload", &key_v1, 1)
+            .expect("persist v1");
+        persist_cggmp_blob("sess-new", "keyshare", &base, b"rotated-v2-payload", &key_v2, 2)
+            .expect("persist v2");
+
+        set_version_key_env(1, key_v1);
+        set_version_key_env(2, key_v2);
+        let (v1, p1) = load_cggmp_blob("sess-old", "keyshare", &base)
+            .expect("load v1")
+            .expect("v1 file exists");
+        let (v2, p2) = load_cggmp_blob("sess-new", "keyshare", &base)
+            .expect("load v2")
+            .expect("v2 file exists");
+        remove_version_key_env(1);
+        remove_version_key_env(2);
+
+        assert_eq!(v1, 1);
+        assert_eq!(p1, b"legacy-v1-payload".to_vec());
+        assert_eq!(v2, 2);
+        assert_eq!(p2, b"rotated-v2-payload".to_vec());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 来源断言（#100）：解密密钥来源由文件头版本号驱动，而非全局单一密钥。
+    /// `MPC_STORAGE_KEY_V1` 指错密钥 ⇒ 仅 v1 文件失败；v2 文件不受影响仍解出。
+    #[test]
+    #[serial_test::serial]
+    fn cggmp_blob_key_source_follows_header_version() {
+        let base = cggmp_test_base("prov");
+        let key_v1 = [0x33; 32];
+        let key_v2 = [0x44; 32];
+        persist_cggmp_blob("sess-old", "keyshare", &base, b"v1-secret", &key_v1, 1)
+            .expect("persist v1");
+        persist_cggmp_blob("sess-new", "keyshare", &base, b"v2-secret", &key_v2, 2)
+            .expect("persist v2");
+
+        set_version_key_env(1, [0x99; 32]); // ← V1 来源被指错
+        set_version_key_env(2, key_v2);
+        let v1_result = load_cggmp_blob("sess-old", "keyshare", &base);
+        let v2_result = load_cggmp_blob("sess-new", "keyshare", &base);
+        remove_version_key_env(1);
+        remove_version_key_env(2);
+
+        assert!(
+            v1_result.is_err(),
+            "provenance: wrong MPC_STORAGE_KEY_V1 must fail the v1 file (GCM auth)"
+        );
+        let (ver, plaintext) = v2_result
+            .expect("v2 unaffected by V1 misconfiguration")
+            .expect("v2 file exists");
+        assert_eq!(ver, 2);
+        assert_eq!(plaintext, b"v2-secret".to_vec());
+    }
+
+    /// 回退（向后兼容）：未配置 `MPC_STORAGE_KEY_V{ver}` 时回退 `MPC_STORAGE_KEY`
+    /// ——单密钥部署不变；v2 文件无专属密钥时回退到不匹配的单一密钥，GCM 认证硬失败。
+    #[test]
+    #[serial_test::serial]
+    fn cggmp_blob_fallback_to_single_storage_key_when_no_dedicated() {
+        let base = cggmp_test_base("fallback");
+        let key_single = [0x66; 32];
+        let key_v2 = [0x77; 32];
+        persist_cggmp_blob("sess-v1", "keyshare", &base, b"single-key-v1", &key_single, 1)
+            .expect("persist v1");
+        persist_cggmp_blob("sess-v2", "keyshare", &base, b"single-key-v2", &key_v2, 2)
+            .expect("persist v2");
+
+        let prev = std::env::var(STORAGE_KEY_ENV);
+        // SAFETY: 串行测试内读写 env。
+        unsafe { std::env::set_var(STORAGE_KEY_ENV, hex::encode(key_single)) };
+        remove_version_key_env(1);
+        remove_version_key_env(2);
+
+        let v1 = load_cggmp_blob("sess-v1", "keyshare", &base)
+            .expect("load v1 via fallback")
+            .expect("v1 exists");
+        let v2 = load_cggmp_blob("sess-v2", "keyshare", &base);
+
+        match prev {
+            Ok(old) => unsafe { std::env::set_var(STORAGE_KEY_ENV, old) },
+            Err(_) => unsafe { std::env::remove_var(STORAGE_KEY_ENV) },
+        }
+
+        assert_eq!(v1.0, 1);
+        assert_eq!(v1.1, b"single-key-v1".to_vec());
+        assert!(
+            v2.is_err(),
+            "v2 file with only single key configured must fail closed (GCM auth), got {v2:?}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 来源优先级单测：专属 `MPC_STORAGE_KEY_V{ver}` 优先于回退 `MPC_STORAGE_KEY`。
+    #[test]
+    #[serial_test::serial]
+    fn load_storage_key_for_version_prefers_dedicated_env() {
+        let k_default = [0x81; 32];
+        let k_v7 = [0x82; 32];
+        let prev = std::env::var(STORAGE_KEY_ENV);
+        // SAFETY: 串行测试内读写 env。
+        unsafe { std::env::set_var(STORAGE_KEY_ENV, hex::encode(k_default)) };
+        remove_version_key_env(7);
+
+        let via_fallback =
+            load_storage_key_for_version(7).expect("fallback to MPC_STORAGE_KEY");
+        assert_eq!(via_fallback, k_default);
+
+        set_version_key_env(7, k_v7);
+        let via_dedicated = load_storage_key_for_version(7).expect("dedicated V7");
+        remove_version_key_env(7);
+        assert_eq!(via_dedicated, k_v7);
+
+        match prev {
+            Ok(old) => unsafe { std::env::set_var(STORAGE_KEY_ENV, old) },
+            Err(_) => unsafe { std::env::remove_var(STORAGE_KEY_ENV) },
+        }
+    }
+
+    /// peek_key_version：新格式读头字段，旧格式（无 MAGIC）视为 DEFAULT_KEY_VERSION。
+    #[test]
+    fn peek_key_version_reads_header_or_defaults() {
+        let key = cggmp_test_key();
+        let legacy = aes_encrypt(b"x", &key).expect("legacy enc");
+        assert_eq!(peek_key_version(&legacy), DEFAULT_KEY_VERSION);
+        let v5 = aes_encrypt_with_version(b"x", &key, 5).expect("v5 enc");
+        assert_eq!(peek_key_version(&v5), 5);
     }
 
     // ===== S4-a: session_id 路径穿越净化回归 =====
