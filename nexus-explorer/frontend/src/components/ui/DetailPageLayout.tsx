@@ -2,6 +2,7 @@ import React from "react";
 import { Link } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
 import { Loading } from "./Loading";
+import { ErrorState } from "./ErrorState";
 import { PageHeader } from "../layout/PageHeader";
 
 /**
@@ -29,6 +30,12 @@ export interface DetailPageLayoutProps {
   loading?: boolean;
   /** 错误文案（非空时全屏展示，优先级高于 loading）。 */
   error?: string | null;
+  /**
+   * 取数失败时的重试回调（2026-11-07 审计修复 B7）；不传则不渲染重试按钮。
+   *
+   * <p>调用方通常用 `setReloadKey(k => k + 1)` 驱动其 useEffect 重跑。</p>
+   */
+  onRetry?: () => void;
   /** 主内容节点。 */
   children?: React.ReactNode;
   /** main 容器额外 className（默认 max-w-4xl + py-6）。 */
@@ -45,6 +52,7 @@ export const DetailPageLayout: React.FC<DetailPageLayoutProps> = ({
   loadingLabel,
   loading = false,
   error = null,
+  onRetry,
   children,
   mainClassName = "max-w-4xl mx-auto px-4 py-6",
 }) => {
@@ -55,24 +63,38 @@ export const DetailPageLayout: React.FC<DetailPageLayoutProps> = ({
       </div>
     );
   }
+
+  const header = (
+    <PageHeader maxWidth="max-w-4xl" innerClassName="gap-4">
+      <Link
+        to="/"
+        className="flex items-center gap-1 text-accent hover:text-accent-hover text-sm transition-colors duration-base ease-standard focus:outline-none focus-visible:shadow-focus"
+      >
+        <ArrowLeft size={14} />
+        {backLabel}
+      </Link>
+      {title && <h1 className="text-sm font-semibold text-fg-2">{title}</h1>}
+    </PageHeader>
+  );
+
   if (error) {
+    // 2026-11-07 审计修复（B7/B10 同族）：此前错误分支是
+    // `<div className="… flex items-center justify-center text-danger">{error}</div>`
+    // —— 只有一行红字：**连 header 与「返回」一起消失**，用户除浏览器后退外无出口，
+    // 且没有重试入口。现改为"保留页面外壳 + 行内 ErrorState（含可选重试）"。
     return (
-      <div className="min-h-screen bg-bg flex items-center justify-center text-danger">{error}</div>
+      <div className="min-h-screen bg-bg text-fg">
+        {header}
+        <main className={mainClassName}>
+          <ErrorState message={error} onRetry={onRetry} />
+        </main>
+      </div>
     );
   }
 
   return (
     <div className="min-h-screen bg-bg text-fg">
-      <PageHeader maxWidth="max-w-4xl" innerClassName="gap-4">
-        <Link
-          to="/"
-          className="flex items-center gap-1 text-accent hover:text-accent-hover text-sm transition-colors duration-base ease-standard focus:outline-none focus-visible:shadow-focus"
-        >
-          <ArrowLeft size={14} />
-          {backLabel}
-        </Link>
-        {title && <h1 className="text-sm font-semibold text-fg-2">{title}</h1>}
-      </PageHeader>
+      {header}
       <main className={mainClassName}>{children}</main>
     </div>
   );

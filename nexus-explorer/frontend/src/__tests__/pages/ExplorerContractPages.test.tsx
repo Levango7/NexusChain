@@ -93,8 +93,14 @@ describe("ContractsPage", () => {
       </MemoryRouter>,
     );
     await waitFor(() => {
-      expect(screen.getByRole("alert")).toHaveTextContent("contracts boom");
+      // 审计 B5：普通 Error 不再透传 err.message（那会让中文界面出现英文技术串），
+      // 而是走 i18n 兜底文案。
+      expect(screen.getByRole("alert")).toHaveTextContent("加载合约失败");
     });
+    // 原始技术串不得泄漏给用户
+    expect(screen.getByRole("alert").textContent ?? "").not.toContain("contracts boom");
+    // 失败时必须给出重试出口（审计 B7：此前整页 0 个按钮）
+    expect(screen.getByRole("button", { name: "重试" })).toBeInTheDocument();
     expect(document.body.textContent).not.toContain("NEXcontractAddress");
     expectNoUndefinedLeak();
   });
@@ -224,8 +230,12 @@ describe("CrossChainPage", () => {
       </MemoryRouter>,
     );
     await waitFor(() => {
-      expect(screen.getByRole("alert")).toHaveTextContent("crosschain boom");
+      // 审计 B5：同 ContractsPage —— 走 i18n 而不是 err.message 原文
+      expect(screen.getByRole("alert")).toHaveTextContent("加载跨链交易失败");
     });
+    expect(screen.getByRole("alert").textContent ?? "").not.toContain("crosschain boom");
+    // 重试复用本页已有的 refreshSeq（head 的「刷新」同源），审计 B7
+    expect(screen.getByRole("button", { name: "重试" })).toBeInTheDocument();
     expect(document.body.textContent).not.toContain("xchain-0001");
     expectNoUndefinedLeak();
   });
