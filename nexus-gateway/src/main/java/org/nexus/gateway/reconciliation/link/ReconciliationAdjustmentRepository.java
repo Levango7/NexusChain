@@ -3,6 +3,7 @@ package org.nexus.gateway.reconciliation.link;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
+import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -23,6 +24,15 @@ public interface ReconciliationAdjustmentRepository
     /** 按商户 ID 和审批状态查询 */
     List<ReconciliationAdjustment> findByMerchantIdAndApprovalStatus(
             Long merchantId, ApprovalStatus approvalStatus);
+
+    /**
+     * 按商户 ID、审批状态与创建时间区间查询 — 用于日上限计数（2026-11-08）。
+     *
+     * <p>区间左闭右开：{@code createdAt ∈ [start, end)}。只传 {@code AUTO_APPROVED}
+     * 时，PENDING_APPROVAL / APPROVED / REJECTED 不占自动额度。</p>
+     */
+    List<ReconciliationAdjustment> findByMerchantIdAndApprovalStatusAndCreatedAtBetween(
+            Long merchantId, ApprovalStatus approvalStatus, LocalDateTime start, LocalDateTime end);
 
     /** 按审批状态查询 */
     List<ReconciliationAdjustment> findByApprovalStatus(ApprovalStatus approvalStatus);

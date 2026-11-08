@@ -9,7 +9,7 @@
 
 | 服务 | 真实指标名 |
 | --- | --- |
-| nexus-gateway（PaymentMetrics.java） | `nexus_orders_created_total`、`nexus_payments_confirmed_total`、`nexus_payments_failed_total`、`nexus_refunds_issued_total`、`nexus_webhooks_delivered_total`、`nexus_webhooks_failed_total`、`nexus_payment_latency_seconds_*` |
+| nexus-gateway（PaymentMetrics.java） | `nexus_orders_total`、`nexus_payments_confirmed_total`、`nexus_payments_failed_total`、`nexus_refunds_issued_total`、`nexus_webhooks_delivered_total`、`nexus_webhooks_failed_total`、`nexus_payment_latency_seconds_*` |
 | nexus-core（CoreMetricsConfig.java） | `nexuschain_block_height` |
 
 **请改用 `deploy/grafana/dashboards/` 的 dashboard**（基于上述真实注册名 +

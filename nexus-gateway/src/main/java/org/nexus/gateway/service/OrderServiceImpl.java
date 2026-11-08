@@ -6,6 +6,7 @@ import org.nexus.gateway.dto.CreateOrderRequest;
 import org.nexus.gateway.model.Merchant;
 import org.nexus.gateway.model.OrderStateMachine;
 import org.nexus.gateway.model.PaymentOrder;
+import org.nexus.gateway.observability.PaymentMetrics;
 import org.nexus.gateway.repository.MerchantRepository;
 import org.nexus.gateway.repository.PaymentOrderRepository;
 import org.slf4j.Logger;
@@ -32,6 +33,20 @@ public class OrderServiceImpl implements OrderService {
     private final GatewayConfig gatewayConfig;
 
     private final IdempotencyStore idempotencyStore;
+
+    /**
+     * 业务指标（2026-11-07 接线）。
+     *
+     * <p>setter 注入而非构造函数：{@link #OrderServiceImpl} 有 4 个参数、
+     * 多个测试直接 {@code new} 它；加构造参数会波及全部既有测试，而指标是
+     * 纯旁路观测，不该改变依赖契约。</p>
+     */
+    private PaymentMetrics paymentMetrics;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setPaymentMetrics(PaymentMetrics paymentMetrics) {
+        this.paymentMetrics = paymentMetrics;
+    }
 
     public OrderServiceImpl(PaymentOrderRepository orderRepository,
                             MerchantRepository merchantRepository,
@@ -123,6 +138,10 @@ public class OrderServiceImpl implements OrderService {
             order.setExpiresAt(LocalDateTime.now().plusMinutes(expiryMinutes));
 
             PaymentOrder saved = orderRepository.save(order);
+            // 业务指标：订单行已落库即计一次（2026-11-07 接线，此前该 meter 零调用点）
+            if (paymentMetrics != null) {
+                paymentMetrics.orderCreated();
+            }
             // Store idempotency mapping
             if (idempotencyKey != null && !idempotencyKey.isEmpty()) {
                 idempotencyStore.put(idempotencyKey, String.valueOf(saved.getId()));

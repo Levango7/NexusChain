@@ -4,7 +4,7 @@
 # ⚠ 2026-09-09 告警真值整合注释：本文档中"业务指标命名约定"章节（下方
 #    nexus_payment_total / nexus_chain_rpc_duration_seconds / nexus_bridge_*
 #    等）为早期设计约定名——代码实际从未按此注册。真实注册名：
-#      * nexus-gateway PaymentMetrics.java：nexus_orders_created_total /
+#      * nexus-gateway PaymentMetrics.java：nexus_orders_total /
 #        nexus_payments_confirmed_total / nexus_payments_failed_total /
 #        nexus_refunds_issued_total / nexus_webhooks_delivered_total /
 #        nexus_webhooks_failed_total / nexus_payment_latency_seconds_*

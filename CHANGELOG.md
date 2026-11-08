@@ -158,6 +158,64 @@ docker compose -f docker-compose.prod.yml config --format json \
   内置 npm 打包依赖树，仅改文档的 PR 同样红。上游尚未发布含修复版的基础镜像，
   按纪律不对此类可修 CVE 加豁免；追踪 issue **#495**。
 
+### Java/Gradle 依赖许可扫描接入（机制层，报告制；板 20261105-0502，2026-11-06）
+
+许可扫描三条腿里 Java 是唯一的空洞——`scripts/check-license-policy.py` 自述
+「Gradle 无锁文件，需解析已解析依赖树」，报告里长期挂着 `| Java/Gradle | ❌ 未覆盖 |`。
+后果：新增一个 GPL/EPL 的 Java 传递依赖不会有任何提示，而 Java 才是本仓依赖量最大的一腿。
+
+- **只读导出，不改构建语义**：`scripts/java-deps-export.init.gradle` 用 init script 给每个
+  带 `java` 插件的项目注册 `exportJavaDependencies`，取 `runtimeClasspath` 的
+  `artifactView(lenient=true)` 坐标集合；跳过 `ProjectComponentIdentifier`（仓内互引不是第三方），
+  并把**解析失败的依赖边**单独留痕——「没有依赖」和「解析没成功」必须是两种输出。
+  不改任何模块的 `build.gradle`，也不引入许可插件（避免给 7 个构建树都加配置）。
+- **合成器可提交**：`scripts/java-deps-collect.py` 把分片合成
+  `scripts/java-dependencies.json`（按模块 + 去重 + 构建树清单），并支持 `diff` 与已提交清单比对。
+  **空分片目录 / 畸形分片一律拒绝合成**——否则会产出一份"看起来覆盖过、实际零依赖"的假清单。
+- **扫描侧离线可复现**：`scan_java` 只读「已提交清单 + `scripts/java-license-cache.json`」，
+  与 npm 读 lockfile、Rust 读 Cargo.lock + crates.io 缓存同构；联网补查只在显式
+  `--update-java-cache` 时发生（本仓 2026-10-18 就为 Rust 腿"恒联网"的同类缺陷修过一次，
+  这次不再犯）。许可取自 Maven Central POM 的 `<licenses>` 并**沿 parent 链继承**，
+  第三方 POM 解析前显式拒含 `DOCTYPE` 的文档并限长 1MB（实体展开攻击面）。
+- **两个开关语义分开**（这是关键取舍）：`--strict` = 发现**强传染许可**才红；
+  `--require-java` = Java **覆盖不完整**才红（清单缺失 / 坐标未核实许可）。
+  后者阻断的是"没扫"，不是"扫出问题"，因此 bootstrap 后即可打开而不制造存量常红。
+  本轮两个都**不打开**（报告制先行，避免"上线一条死门禁 = 当场新增一批红"）。
+- **CI**：`Build & Test` 新增「导出 Java 依赖清单并与已提交清单比对」步骤 + 导出件 artifact
+  （红 = 导出/合成没跑成；漂移只 `::warning::`）；`依赖许可证策略（报告制）` job 前置两个
+  自测步骤（`--selftest` 三向 + 合成器自测），把"门禁自己瞎了"与"扫出 copyleft"区分开。
+- **三向自测**：正例（Apache/GPL/POM 未声明各一，分类正确、报告制 0、`--strict` 1）、
+  清单缺失（报告必须写 ❌ 且 `--require-java` 判红）、缓存与清单不一致（点名未核实坐标）；
+  另加一条缓存文件整体缺失 ⇒ 全量计未核实。
+- **诚实边界**：本轮**不含清单 bootstrap**——`scripts/java-dependencies.json` 需先由 CI 导出一次
+  再合成提交（下一批），在那之前报告仍标 `❌ 未覆盖`，Java 依赖不计入合计；
+  许可归一表只做高置信映射，拿不准的原样保留并落 `UNKNOWN` 交人工核对。
+  不触碰 npm/Rust 两条腿的既有判据，也不改 `docs/licensing.md` 的法务待办勾选状态。
+
+### Java 许可清单 bootstrap：7 构建树全量导出 + 缓存补齐 + 首扫如实暴露（板 20261105-0502 续批 / #107，2026-11-08）
+
+机制层（上一条）把 CI 导出步骤落完后，本批完成 bootstrap 收尾：
+
+- **导出修齐**：CI 的「导出 Java 依赖清单」步骤此前只覆盖 6/7 构建树——
+  `-p <included build>` 调起时 Gradle 把**相对路径** init script 解析到 included
+  build 目录下，六棵 included build 全军覆没（只剩 composite 兜底，而 consortium
+  根项目没挂 java 插件、连兜底也没有）。修法是导出步骤改绝对路径 INIT
+  （`ci.yml` 一行），consortium 本地复验 BUILD SUCCESSFUL / 3 分片 / 172 坐标 /
+  0 未解析边。
+- **清单与缓存同批提交**：`scripts/java-dependencies.json` 取 **CI 自己导出的
+  7/7 工件**合成（零漂移保证：CI 比对步骤 diff 为空），`scripts/java-license-cache.json`
+  由 `--update-java-cache` 按 Maven Central POM（含 parent 链）补齐联合体 delta。
+  落地口径：**7 构建树 / 17 模块 / 485 坐标 / 0 未解析边；缓存命中 484 +
+  POM 未声明 1（org.antlr:ST4:4.3）+ 未核实 0**。报告 Java 行 ❌→✅，三腿齐全。
+- **首扫如实暴露（报告制，不假装干净）**：Java 腿 **18 行强传染**全部为 Eclipse
+  三联许可 OR 串（EDL-1.0 OR EPL-2.0 OR GPL-2.0，GlassFish/Jakarta 系传递依赖；
+  POM 逐字实录，classifier 按 OR 取最严是既定行为，是否可择宽是法务问题不是代码问题）；
+  **67 行 UNKNOWN**（含 mysql-connector-j 裸 `GPL` 不匹配 `GPL-` 前缀的分类器边界，
+  暴露不静默修）；**3 行弱传染**。Rust 腿 3 个缓存未命中（rustls@0.23.46 /
+  rustls-webpki@0.103.16 / h2@0.4.20）属另一 lane 的升版，本批只报告。
+- **开关口径不变**：`--strict` / `--require-java` 均**不打开**——bootstrap 完成只意味着
+  「覆盖完整」这一条件成立，转阻断 / 转覆盖门禁均属 owner 裁决（见 licensing.md §4.3/§5）。
+
 ### 结算平台出款地址的部署侧注入位 + 防再漏门禁（板 20261104-0746 / nex runbook 20261105-0435，2026-11-05）
 
 > 注：本条的 compose `:-` 放行语义随后由 #493 收敛为 `:?` 启动失败，
