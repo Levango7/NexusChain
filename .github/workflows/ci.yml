@@ -931,6 +931,22 @@ jobs:
 
       # kind 3 节点集群：StatefulSet 反亲和（podAntiAffinity hard）要求
       # 3 副本可调度到不同 Node——3 worker 验证该约束在真实拓扑下成立
+      - name: 探测 kind 发布资产可达性（只定位失败原因，不改判定口径）
+        # 2026-11-08 incident：本 job 在 08:51Z 6s 内失败，唯一线索是
+        # `sha256sum: 'standard input': no properly formatted checksum lines found`
+        # ——被喂给 sha256sum 的根本不是校验和（典型是 403/429 的 HTML 响应体）。
+        # helm/kind-action 内部用 curl -sL，状态码被吞掉；装 kind 也没有重试。
+        run: |
+          BASE="https://github.com/kubernetes-sigs/kind/releases/download/v0.31.0"
+          for asset in kind-linux-amd64 kind-linux-amd64.sha256sum; do
+            code=$(curl -sSL -o /dev/null -w '%{http_code}' --retry 3 --retry-all-errors "$BASE/$asset") || code="curl-failed"
+            echo "kind 资产探测: $asset http=$code url=$BASE/$asset"
+            if [ "$code" != "200" ]; then
+              echo "::error::下载失败 http=$code url=$BASE/$asset（helm/kind-action 复用同一资产）"
+              exit 1
+            fi
+          done
+
       - name: Create kind cluster (3 workers)
         uses: helm/kind-action@v1
         with:
