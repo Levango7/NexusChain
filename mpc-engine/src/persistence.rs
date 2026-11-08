@@ -580,10 +580,24 @@ mod tests {
         let base = cggmp_test_base("rot");
         let key_v1 = [0x11; 32];
         let key_v2 = [0x22; 32];
-        persist_cggmp_blob("sess-old", "keyshare", &base, b"legacy-v1-payload", &key_v1, 1)
-            .expect("persist v1");
-        persist_cggmp_blob("sess-new", "keyshare", &base, b"rotated-v2-payload", &key_v2, 2)
-            .expect("persist v2");
+        persist_cggmp_blob(
+            "sess-old",
+            "keyshare",
+            &base,
+            b"legacy-v1-payload",
+            &key_v1,
+            1,
+        )
+        .expect("persist v1");
+        persist_cggmp_blob(
+            "sess-new",
+            "keyshare",
+            &base,
+            b"rotated-v2-payload",
+            &key_v2,
+            2,
+        )
+        .expect("persist v2");
 
         set_version_key_env(1, key_v1);
         set_version_key_env(2, key_v2);
@@ -642,8 +656,15 @@ mod tests {
         let base = cggmp_test_base("fallback");
         let key_single = [0x66; 32];
         let key_v2 = [0x77; 32];
-        persist_cggmp_blob("sess-v1", "keyshare", &base, b"single-key-v1", &key_single, 1)
-            .expect("persist v1");
+        persist_cggmp_blob(
+            "sess-v1",
+            "keyshare",
+            &base,
+            b"single-key-v1",
+            &key_single,
+            1,
+        )
+        .expect("persist v1");
         persist_cggmp_blob("sess-v2", "keyshare", &base, b"single-key-v2", &key_v2, 2)
             .expect("persist v2");
 
@@ -683,8 +704,7 @@ mod tests {
         unsafe { std::env::set_var(STORAGE_KEY_ENV, hex::encode(k_default)) };
         remove_version_key_env(7);
 
-        let via_fallback =
-            load_storage_key_for_version(7).expect("fallback to MPC_STORAGE_KEY");
+        let via_fallback = load_storage_key_for_version(7).expect("fallback to MPC_STORAGE_KEY");
         assert_eq!(via_fallback, k_default);
 
         set_version_key_env(7, k_v7);

@@ -640,8 +640,7 @@ impl DriverInner {
         };
         if !have_key_share {
             if let Some(ctx) = self.storage.clone() {
-                match crate::persistence::load_cggmp_blob(sid, "keyshare", &ctx.base_dir)
-                {
+                match crate::persistence::load_cggmp_blob(sid, "keyshare", &ctx.base_dir) {
                     Err(e) => return Self::err(format!("start_sign {sid}: restore: {e}")),
                     Ok(Some((_, plaintext))) => match crate::cggmp::decode_key_share(&plaintext) {
                         Ok(share) => {
