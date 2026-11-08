@@ -259,7 +259,10 @@ def load_baseline(path: str) -> tuple[dict[tuple[str, str], dict], list[str]]:
                 errors.append(
                     f"{where} kind=pending_base_rebuild 必须 fixable=upstream-fixed（实际：{fixable}）"
                 )
-            if not str(evidence or "").strip():
+            # 直接读 entry，**不要**用下面的 evidence 局部变量：那行在本块之后才赋值，
+            # 引用在前 ⇒ Python 视为局部变量提前引用（条目排第一时 UnboundLocalError 崩溃；
+            # 否则沿用上一条的 evidence 静默放过 —— 2026-11-08 复核发现并修正）。
+            if not str(entry.get("evidence") or "").strip():
                 errors.append(
                     f"{where} kind=pending_base_rebuild 必须填写 evidence（证明当前无包含该修复版的已发布镜像）"
                 )
