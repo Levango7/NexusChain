@@ -176,6 +176,24 @@ shedlock:
   lock-at-most-for: PT4M
   lock-at-least-for: PT1M
 
+# === 对账自动调账上限（2026-11-08 显式声明） ===
+# 服务读取的是**无 nexus 前缀**的 reconciliation.adjustment.*（既有 @Value 路径），
+# 而补偿侧读取的是 nexus.reconciliation.compensation.*（见下方 nexus 段）。
+# 两段命名不一致是既有现状；本次不擅自改前缀（改前缀会静默忽略运维已有的
+# RECONCILIATION_ADJUSTMENT_* 覆盖），只把调账侧键显式化，做到运维可见、可覆盖。
+reconciliation:
+  adjustment:
+    # 单笔自动审批金额上限（> 此值走 PENDING_APPROVAL，既有行为，不变）
+    auto-approve-threshold: 1000
+    # 每商户当日 AUTO_APPROVED 笔数上限（本次新增；≤0 视为未配置、不参与拦截）
+    daily-max-count: 5
+    # 每商户当日 AUTO_APPROVED 累计金额上限（本次新增；≤0 视为未配置、不参与拦截）
+    daily-max-total: 3000
+    daily-limits:
+      # 闸门开关：false = 只判定 + 打日志 + 累加指标，行为完全不变（默认）；
+      # true = 超限转既有 PENDING_APPROVAL，不调用 executeAdjustment。
+      enforce: false
+
 # NexusChain Gateway configuration
 nexus:
   actuator:
