@@ -162,4 +162,33 @@ class ConnectorPaymentResultTest {
         result.setSubmissionStatus(null);
         assertNull(result.getSubmissionStatus());
     }
+
+    // ==================== FailureKind：缺省 DECLINE，不计入熔断 ====================
+
+    @Test
+    void failWithoutKindDefaultsToDecline() {
+        ConnectorPaymentResult result = ConnectorPaymentResult.fail("psp rejected");
+        assertEquals(FailureKind.DECLINE, result.getFailureKind());
+        assertFalse(result.getFailureKind().isBreakerFailure());
+    }
+
+    @Test
+    void failWithNullKindDefaultsToDecline() {
+        ConnectorPaymentResult result = ConnectorPaymentResult.fail("psp rejected", null);
+        assertEquals(FailureKind.DECLINE, result.getFailureKind());
+    }
+
+    @Test
+    void failWithUnavailableKindIsBreakerFailure() {
+        ConnectorPaymentResult result = ConnectorPaymentResult.fail("gateway timeout", FailureKind.UNAVAILABLE);
+        assertEquals(FailureKind.UNAVAILABLE, result.getFailureKind());
+        assertTrue(result.getFailureKind().isBreakerFailure());
+    }
+
+    @Test
+    void setFailureKindToNullDefaultsToDecline() {
+        ConnectorPaymentResult result = ConnectorPaymentResult.fail("psp rejected");
+        result.setFailureKind(null);
+        assertEquals(FailureKind.DECLINE, result.getFailureKind());
+    }
 }

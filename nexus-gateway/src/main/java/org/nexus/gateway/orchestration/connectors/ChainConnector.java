@@ -203,7 +203,8 @@ public class ChainConnector implements PaymentConnector {
             return ConnectorPaymentResult.ok(connectorId, PaymentStatus.PROCESSING, txHash);
         } catch (RuntimeException e) {
             log.error("Chain payment failed: {}", e.getMessage());
-            return ConnectorPaymentResult.fail("Chain settlement error: " + e.getMessage());
+            return ConnectorPaymentResult.fail("Chain settlement error: " + e.getMessage(),
+                    ConnectorFailureClassifier.classify(e));
         }
     }
 

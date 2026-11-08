@@ -231,7 +231,9 @@ public class AlipayConnector implements PaymentConnector {
         }
         if (!hasCredentials()) {
             log.error("[Alipay] app-id/merchant-private-key 缺失且 sandbox 已关闭，拒绝创建支付（fail-closed）");
-            return ConnectorPaymentResult.fail("Alipay connector misconfigured: credentials missing and sandbox disabled");
+            return ConnectorPaymentResult.fail(
+                    "Alipay connector misconfigured: credentials missing and sandbox disabled",
+                    FailureKind.CONFIG);
         }
         if (!targetAddressAllowed()) {
             return refuseNoSafeTarget();
@@ -277,7 +279,8 @@ public class AlipayConnector implements PaymentConnector {
             return ConnectorPaymentResult.fail("Alipay returned empty response");
         } catch (RuntimeException e) {
             log.error("[Alipay] createPayment failed: {}", e.getMessage());
-            return ConnectorPaymentResult.fail("Alipay error: " + e.getMessage());
+            return ConnectorPaymentResult.fail("Alipay error: " + e.getMessage(),
+                    ConnectorFailureClassifier.classify(e));
         }
     }
 
