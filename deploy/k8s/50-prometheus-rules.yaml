@@ -9,11 +9,12 @@
 #       CI 步骤见 k8s-sync-check.yml「promtool 规则演练」（PLAN-064，2026-11-01）。
 #
 # 设计原则（避免告警疲劳）：
-#   1. 告警数 20 条（2026-09-09 "告警真值"整合 11 条 + PLAN-040 区块持久化 4 条
+#   1. 告警数 25 条（2026-09-09 "告警真值"整合 11 条 + PLAN-040 区块持久化 4 条
 #      + PLAN-045 最终性 2 条 + PLAN-052 弃权风险 1 条；2026-11-01 PLAN-064
 #      用 promtool 实测逐条计数时发现此处曾停留在 17——原门禁只断言"≥5"，
 #      数量漂移从不触发；2026-11-02 PLAN-066 再 +2 条投票拒绝计数告警：
-#      19 → 20）：
+#      19 → 20；2026-11-04 PLAN-073 最终性 outbox +4：20 → 24；2026-11-09
+#      20261105-0003 裁决⑤ 调账日上限观测 +1：24 → 25）：
 #      原 5 条 + 从 legacy deploy/monitoring/alerting-rules.yaml 并入 6 条真实指标告警
 #      （JVM/GC、Pod 资源、ServiceDown、SeataTcDown）+ 2026-10-26 的 4 条区块持久化告警
 #      + 2 条最终性告警；legacy 文件中 11 条引用幽灵指标名（代码从未注册）的告警
@@ -458,3 +459,25 @@ spec:
         runbook_url: "https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md"
         summary: "Seata TC 事务协调器不可达"
         description: "Seata TC Server 连续 1 分钟不可达，分布式事务无法提交/回滚，可能造成支付与桥操作挂起。请优先恢复 Seata TC。"
+
+  # ---- 对账自动调账日上限观测（20261105-0003 裁决⑤；2026-11-09 用户裁五问）----
+  # 应用侧 ReconciliationAdjustmentService（nexus-gateway）注册 counter：
+  #   nexus_reconciliation_adjustment_over_limit_total{reason="count"|"total"}
+  #   （ReconciliationAdjustmentService.java:78；标签仅 reason，无商户/渠道标签——
+  #   按商户定位看网关日志 WARN 行「对账自动调账日上限命中」，含 merchantId）。
+  # enforce=false（当前默认，#562 硬要求）期间命中也照常累加 ⇒ 本条是「若开闸
+  # 会被拦的商户行为」的先行信号与化整为零试探的可见性，不是资金损失信号；
+  # 切 enforce=true 后同一 counter 伴随真实转 PENDING_APPROVAL（不动账）。
+  - name: nexuschain.reconciliation
+    interval: 30s
+    rules:
+    - alert: ReconciliationAdjustmentOverLimit
+      expr: increase(nexus_reconciliation_adjustment_over_limit_total[10m]) > 0
+      for: 5m
+      labels:
+        severity: warning
+        component: reconciliation
+      annotations:
+        runbook_url: "https://github.com/Levango7/NexusChain/blob/master/docs/runbooks/alerts.md"
+        summary: "对账自动调账命中日上限（10min 内 {{ $value }} 次，reason={{ $labels.reason }}）"
+        description: "nexus-gateway 的 nexus_reconciliation_adjustment_over_limit_total{reason={{ $labels.reason }}} 10 分钟内增长 {{ $value }}——自动调账命中日上限（当前默认 5 笔 / 3000 元，reconciliation.adjustment.daily-limits.*；reason=count 为笔数超、reason=total 为金额超）。enforce 当前为 false（观测模式，#562 硬要求）⇒ 超限笔数照常 AUTO_APPROVED 动账，本条是该风险的先行可见性（化整为零试探）；若已切 enforce=true，则同类事件已转 PENDING_APPROVAL 不动账。查网关日志 WARN 行「对账自动调账日上限命中」（含 merchantId / 当日笔数 / 当日累计）确认商户与形态，评估是否收紧阈值或切闸。"
