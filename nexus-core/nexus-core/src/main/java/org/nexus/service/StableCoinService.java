@@ -18,22 +18,10 @@
 
 package org.nexus.service;
 
-import org.nexus.keystore.util.JsonUtils;
-import org.apache.commons.codec.DecoderException;
-import org.apache.commons.codec.binary.Hex;
 import org.nexus.ApiResult.APIResult;
-import org.nexus.core.account.Transaction;
-import org.nexus.core.TransactionPool;
-import org.nexus.core.payment.StableCoinPosition;
-import org.nexus.crypto.CryptoException;
-import org.nexus.crypto.ed25519.Ed25519PrivateKey;
-import org.nexus.keystore.crypto.RipemdUtility;
-import org.nexus.keystore.crypto.SHA3Utility;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
-import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -42,22 +30,15 @@ import java.util.Map;
  *
  * <p>负责 NEX 稳定币系统的铸造（{@code MINT_STABLECOIN}）、赎回
  * （{@code REDEEM_STABLECOIN}）、抵押率查询和价格查询。
- * 用户通过抵押 NEX 代币铸造稳定币，抵押率须满足最低要求。</p>
- *
- * <p>铸造交易 payload 为 {@link StableCoinPosition#toJson()} 的 UTF-8 字节，
- * 赎回交易 payload 包含赎回金额和仓位 ID。</p>
+ * 支付扩展类型（0x10–0x1a）当前保留未启用：铸造/赎回路由保留，
+ * 但不再构造任何扩展类型交易，统一返回
+ * {@link APIResult#PAYMENT_EXTENSION_NOT_ENABLED}。</p>
  *
  * @author nexus-core
  * @since 1.0
  */
 @Component
 public class StableCoinService {
-
-    /** 交易版本号，固定为 1。 */
-    private static final int TX_VERSION = Transaction.DEFAULT_TRANSACTION_VERSION;
-
-    /** 默认 gasPrice，按最小单位计费。 */
-    private static final long DEFAULT_GAS_PRICE = 1L;
 
     /** 稳定币符号。 */
     @Value("${nexus.stablecoin.symbol:NEX}")
@@ -75,174 +56,63 @@ public class StableCoinService {
     @Value("${nexus.stablecoin.price-source:PEG}")
     private String priceSource;
 
-    @Autowired
-    private TransactionPool txPool;
-
     /**
      * 铸造稳定币。
      *
-     * <p>创建 {@link StableCoinPosition} 仓位对象并调用
-     * {@link StableCoinPosition#mint(long, long, int)}，随后构造
-     * {@code MINT_STABLECOIN} 类型交易并提交到交易池。</p>
+     * <p>支付扩展类型（0x10–0x1a）保留未启用：保留路由与入参校验，
+     * 但不再构造 {@code MINT_STABLECOIN} 交易。</p>
      *
      * @param fromPubkey       抵押人公钥（十六进制字符串，32 字节）
      * @param collateralAmount 抵押 NEX 数量（最小单位）
      * @param mintAmount       铸造稳定币数量（最小单位）
      * @param prikey           抵押人私钥（十六进制字符串，32 字节）
      * @param nonce            交易 nonce
-     * @return 统一响应结果，data 中包含 positionId、mintedAmount、collateralRatio 等
+     * @return 统一响应结果；支付扩展未启用时返回 {@link APIResult#PAYMENT_EXTENSION_NOT_ENABLED}
      */
     public APIResult mint(String fromPubkey, long collateralAmount, long mintAmount,
                           String prikey, long nonce) {
-        try {
-            if (fromPubkey == null || fromPubkey.isEmpty()) {
-                return APIResult.newFailResult(APIResult.FAIL, "fromPubkey is required");
-            }
-            if (prikey == null || prikey.isEmpty()) {
-                return APIResult.newFailResult(APIResult.FAIL, "prikey is required");
-            }
-
-            // 计算地址（公钥哈希）用于仓位归属
-            byte[] fromBytes = Hex.decodeHex(fromPubkey.toCharArray());
-            if (fromBytes.length != Transaction.PUBLIC_KEY_SIZE) {
-                return APIResult.newFailResult(APIResult.FAIL,
-                        "fromPubkey must be " + Transaction.PUBLIC_KEY_SIZE + " bytes, got " + fromBytes.length);
-            }
-            byte[] toBytes = RipemdUtility.ripemd160(SHA3Utility.keccak256(fromBytes));
-            String ownerHex = Hex.encodeHexString(toBytes);
-
-            // 构造仓位并执行铸造
-            String positionId = "pos_" + System.currentTimeMillis();
-            StableCoinPosition position = new StableCoinPosition(positionId, ownerHex, 0L);
-            position.mint(collateralAmount, mintAmount, minCollateralRatio);
-
-            // 构造 MINT_STABLECOIN 交易
-            byte[] payload = position.toJson().getBytes(StandardCharsets.UTF_8);
-            byte[] emptySig = new byte[Transaction.SIGNATURE_SIZE];
-
-            Transaction tx = new Transaction(
-                    TX_VERSION,
-                    Transaction.Type.MINT_STABLECOIN.ordinal(),
-                    nonce,
-                    fromBytes,
-                    DEFAULT_GAS_PRICE,
-                    collateralAmount,
-                    payload,
-                    toBytes,
-                    emptySig
-            );
-
-            // 签名
-            byte[] prikeyBytes = Hex.decodeHex(prikey.toCharArray());
-            Ed25519PrivateKey privateKey = new Ed25519PrivateKey(prikeyBytes);
-            byte[] signature = privateKey.sign(tx.getRawForSign());
-            tx.signature = signature;
-
-            if (!txPool.add(tx)) {
-                return APIResult.newFailResult(APIResult.FAIL,
-                        "MINT_STABLECOIN transaction was not accepted by the transaction pool: "
-                                + "the on-chain transaction was rejected");
-            }
-
-            Map<String, Object> data = new LinkedHashMap<>();
-            data.put("positionId", positionId);
-            data.put("owner", ownerHex);
-            data.put("collateralAmount", collateralAmount);
-            data.put("mintedAmount", mintAmount);
-            data.put("collateralRatio", position.getCollateralRatio());
-            data.put("liquidationPrice", position.getLiquidationPrice());
-            data.put("state", position.getState().name());
-            data.put("txHash", tx.getHashHexString());
-
-            return APIResult.newSuccess(data);
-        } catch (DecoderException e) {
-            return APIResult.newFailResult(APIResult.FAIL, "Invalid hex format: " + e.getMessage());
-        } catch (IllegalStateException | IllegalArgumentException e) {
-            return APIResult.newFailResult(APIResult.FAIL, "Mint validation failed: " + e.getMessage());
-        } catch (CryptoException e) {
-            return APIResult.newFailResult(APIResult.FAIL, "Signing failed: " + e.getMessage());
-        } catch (RuntimeException e) {
-            return APIResult.newFailResult(APIResult.FAIL, "Failed to mint stablecoin: " + e.getMessage());
+        if (fromPubkey == null || fromPubkey.isEmpty()) {
+            return APIResult.newFailResult(APIResult.FAIL, "fromPubkey is required");
         }
+        if (prikey == null || prikey.isEmpty()) {
+            return APIResult.newFailResult(APIResult.FAIL, "prikey is required");
+        }
+        if (collateralAmount <= 0) {
+            return APIResult.newFailResult(APIResult.FAIL, "collateralAmount must be greater than 0");
+        }
+        if (mintAmount <= 0) {
+            return APIResult.newFailResult(APIResult.FAIL, "mintAmount must be greater than 0");
+        }
+
+        // 支付扩展（0x10–0x1a）保留未启用：不再构造 MINT_STABLECOIN 交易。
+        return APIResult.paymentExtensionNotEnabled();
     }
 
     /**
      * 赎回稳定币。
      *
-     * <p>构造 {@code REDEEM_STABLECOIN} 类型交易并提交到交易池。
-     * payload 包含赎回金额和仓位所有者信息。</p>
+     * <p>支付扩展类型（0x10–0x1a）保留未启用：保留路由与入参校验，
+     * 但不再构造 {@code REDEEM_STABLECOIN} 交易。</p>
      *
      * @param fromPubkey  赎回人公钥（十六进制字符串，32 字节）
      * @param redeemAmount 赎回稳定币数量（最小单位）
      * @param prikey      赎回人私钥（十六进制字符串，32 字节）
      * @param nonce       交易 nonce
-     * @return 统一响应结果，data 中包含赎回结果
+     * @return 统一响应结果；支付扩展未启用时返回 {@link APIResult#PAYMENT_EXTENSION_NOT_ENABLED}
      */
     public APIResult redeem(String fromPubkey, long redeemAmount, String prikey, long nonce) {
-        try {
-            if (fromPubkey == null || fromPubkey.isEmpty()) {
-                return APIResult.newFailResult(APIResult.FAIL, "fromPubkey is required");
-            }
-            if (prikey == null || prikey.isEmpty()) {
-                return APIResult.newFailResult(APIResult.FAIL, "prikey is required");
-            }
-            if (redeemAmount <= 0) {
-                return APIResult.newFailResult(APIResult.FAIL, "redeemAmount must be greater than 0");
-            }
-
-            byte[] fromBytes = Hex.decodeHex(fromPubkey.toCharArray());
-            if (fromBytes.length != Transaction.PUBLIC_KEY_SIZE) {
-                return APIResult.newFailResult(APIResult.FAIL,
-                        "fromPubkey must be " + Transaction.PUBLIC_KEY_SIZE + " bytes, got " + fromBytes.length);
-            }
-            byte[] toBytes = RipemdUtility.ripemd160(SHA3Utility.keccak256(fromBytes));
-
-            // 构造赎回 payload
-            Map<String, Object> redeemPayload = new LinkedHashMap<>();
-            redeemPayload.put("owner", Hex.encodeHexString(toBytes));
-            redeemPayload.put("redeemAmount", redeemAmount);
-            redeemPayload.put("action", "REDEEM");
-            byte[] payload = JsonUtils.toJson(redeemPayload).getBytes(StandardCharsets.UTF_8);
-
-            byte[] emptySig = new byte[Transaction.SIGNATURE_SIZE];
-
-            Transaction tx = new Transaction(
-                    TX_VERSION,
-                    Transaction.Type.REDEEM_STABLECOIN.ordinal(),
-                    nonce,
-                    fromBytes,
-                    DEFAULT_GAS_PRICE,
-                    redeemAmount,
-                    payload,
-                    toBytes,
-                    emptySig
-            );
-
-            // 签名
-            byte[] prikeyBytes = Hex.decodeHex(prikey.toCharArray());
-            Ed25519PrivateKey privateKey = new Ed25519PrivateKey(prikeyBytes);
-            byte[] signature = privateKey.sign(tx.getRawForSign());
-            tx.signature = signature;
-
-            if (!txPool.add(tx)) {
-                return APIResult.newFailResult(APIResult.FAIL,
-                        "REDEEM_STABLECOIN transaction was not accepted by the transaction pool: "
-                                + "the on-chain transaction was rejected");
-            }
-
-            Map<String, Object> data = new LinkedHashMap<>();
-            data.put("redeemAmount", redeemAmount);
-            data.put("status", "PENDING");
-            data.put("txHash", tx.getHashHexString());
-
-            return APIResult.newSuccess(data);
-        } catch (DecoderException e) {
-            return APIResult.newFailResult(APIResult.FAIL, "Invalid hex format: " + e.getMessage());
-        } catch (CryptoException e) {
-            return APIResult.newFailResult(APIResult.FAIL, "Signing failed: " + e.getMessage());
-        } catch (RuntimeException e) {
-            return APIResult.newFailResult(APIResult.FAIL, "Failed to redeem stablecoin: " + e.getMessage());
+        if (fromPubkey == null || fromPubkey.isEmpty()) {
+            return APIResult.newFailResult(APIResult.FAIL, "fromPubkey is required");
         }
+        if (prikey == null || prikey.isEmpty()) {
+            return APIResult.newFailResult(APIResult.FAIL, "prikey is required");
+        }
+        if (redeemAmount <= 0) {
+            return APIResult.newFailResult(APIResult.FAIL, "redeemAmount must be greater than 0");
+        }
+
+        // 支付扩展（0x10–0x1a）保留未启用：不再构造 REDEEM_STABLECOIN 交易。
+        return APIResult.paymentExtensionNotEnabled();
     }
 
     /**

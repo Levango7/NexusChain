@@ -2,6 +2,8 @@ package org.nexus.controller;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -90,7 +92,7 @@ public class BridgeController {
                     "amount " + amount + " exceeds single transaction limit " + singleTxLimit);
         }
 
-        return bridgeService.lock(pubkey, targetChain, recipient, amount, prikey, nonce);
+        return respond(bridgeService.lock(pubkey, targetChain, recipient, amount, prikey, nonce));
     }
 
     /**
@@ -125,9 +127,9 @@ public class BridgeController {
         long amount = amountObj != null ? Long.parseLong(amountObj.toString()) : 0L;
 
         if (pubkeys != null && !pubkeys.isEmpty()) {
-            return bridgeService.mint(bridgeTxId, sourceChain, recipient, amount, pubkeys, signatures);
+            return respond(bridgeService.mint(bridgeTxId, sourceChain, recipient, amount, pubkeys, signatures));
         }
-        return bridgeService.mint(bridgeTxId, sourceChain, recipient, amount, signatures);
+        return respond(bridgeService.mint(bridgeTxId, sourceChain, recipient, amount, signatures));
     }
 
     /**
@@ -161,7 +163,15 @@ public class BridgeController {
 
         long amount = amountObj != null ? Long.parseLong(amountObj.toString()) : 0L;
 
-        return bridgeService.burn(pubkey, targetChain, amount, prikey, nonce, bridgeTxId);
+        return respond(bridgeService.burn(pubkey, targetChain, amount, prikey, nonce, bridgeTxId));
+    }
+
+    /** 支付扩展未启用时返回 HTTP 501；其余结果保持原响应（含入参校验失败）。 */
+    private static Object respond(APIResult result) {
+        if (result.getCode() == APIResult.PAYMENT_EXTENSION_NOT_ENABLED) {
+            return ResponseEntity.status(HttpStatus.NOT_IMPLEMENTED).body(result);
+        }
+        return result;
     }
 
     /**
