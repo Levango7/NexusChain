@@ -58,7 +58,7 @@
 | 2026-11-09 | 建立方向锚点草案，待招标/客户口径填充 | 全 lane 优先级 | `[待确认]` | 本文档 |
 | `[待确认]` | A lane（`0x10`–`0x1a`）是否启动、owner | 共识/支付扩展 | orchestrator | AGENTS/board |
 | `[待确认]` | settlement confirmation 404 写侧归属 | 清结算验收 | orchestrator | board `20261108-1110` |
-| `[待确认]` | #522 P0 处置路径 | 资金安全 | orchestrator+核心 lane | #522 |
+| 2026-11-10 | #522 P0 处置路径：已修复合入，无需接管 | 资金安全 | orchestrator+核心 lane | #520（已合）；master `nexus-core/.../validate/TransactionCheck.java:62-75` 类型白名单 + `MerkleRule.java:297-298` 默认真拒绝 + `CoinbaseRule.java:73-74` 手续费守恒三件套在位 |
 
 ## 6. 使用规则
 
