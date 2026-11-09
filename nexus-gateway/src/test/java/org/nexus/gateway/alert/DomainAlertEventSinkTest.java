@@ -4,7 +4,13 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.nexus.gateway.apiversion.ApiVersionDeprecatedEvent;
+import org.nexus.gateway.apiversion.ApiVersionPolicy;
 import org.nexus.gateway.event.AccountLinkageFailedEvent;
+import org.nexus.gateway.escrow.EscrowStatus;
+import org.nexus.gateway.escrow.EscrowStatusChangedEvent;
+import org.nexus.gateway.escrow.PreAuthStatus;
+import org.nexus.gateway.escrow.PreAuthStatusChangedEvent;
 import org.nexus.gateway.sla.SlaBreachEvent;
 import org.nexus.gateway.sla.SlaMeasurement;
 import org.nexus.gateway.sla.SlaTarget;
@@ -152,6 +158,50 @@ class DomainAlertEventSinkTest {
         DomainAlertEventSink solo = new DomainAlertEventSink(eventRepository, List.of());
         assertDoesNotThrow(() -> solo.onAccountLinkageFailed(linkageFailed()));
         verify(eventRepository, times(1)).save(any(AlertEvent.class));
+    }
+
+    @Test
+    @DisplayName("API 版本治理：SUNSET/RETIRED → WARN，DEPRECATED → INFO，文案含版本号")
+    void apiVersionDeprecatedSeverityFollowsStatus() {
+        ApiVersionPolicy sunsetPolicy = new ApiVersionPolicy();
+        sunsetPolicy.setVersion("v1");
+        sunsetPolicy.setStatus(ApiVersionPolicy.VersionStatus.SUNSET);
+        sink.onApiVersionDeprecated(new ApiVersionDeprecatedEvent(this, sunsetPolicy));
+        AlertEvent sunset = captureSaved();
+        assertEquals(DomainAlertEventSink.RULE_API_VERSION_DEPRECATED, sunset.getRuleName());
+        assertEquals(AlertRule.Severity.WARN, sunset.getSeverity());
+        assertTrue(sunset.getMessage().contains("v1"), sunset.getMessage());
+        assertTrue(sunset.getMessage().contains("SUNSET"), sunset.getMessage());
+
+        ApiVersionPolicy deprecatedPolicy = new ApiVersionPolicy();
+        deprecatedPolicy.setVersion("v2");
+        deprecatedPolicy.setStatus(ApiVersionPolicy.VersionStatus.DEPRECATED);
+        sink.onApiVersionDeprecated(new ApiVersionDeprecatedEvent(this, deprecatedPolicy));
+        AlertEvent deprecated = captureSaved();
+        assertEquals(AlertRule.Severity.INFO, deprecated.getSeverity());
+        assertTrue(deprecated.getMessage().contains("v2"), deprecated.getMessage());
+    }
+
+    @Test
+    @DisplayName("担保/预授权状态变更 → INFO 留痕，文案含单号与迁移")
+    void escrowAndPreAuthStatusChangesRaiseInfoAlerts() {
+        sink.onEscrowStatusChanged(new EscrowStatusChangedEvent(
+                this, 1L, "ORD-1", 9L, "ESC-1",
+                EscrowStatus.FUNDED, EscrowStatus.RELEASED));
+        AlertEvent escrow = captureSaved();
+        assertEquals(DomainAlertEventSink.RULE_ESCROW_STATUS, escrow.getRuleName());
+        assertEquals(AlertRule.Severity.INFO, escrow.getSeverity());
+        assertTrue(escrow.getMessage().contains("ESC-1"), escrow.getMessage());
+        assertTrue(escrow.getMessage().contains("FUNDED→RELEASED"), escrow.getMessage());
+
+        sink.onPreAuthStatusChanged(new PreAuthStatusChangedEvent(
+                this, 2L, "ORD-2", 9L, "PA-1",
+                PreAuthStatus.AUTHORIZED, PreAuthStatus.CAPTURED));
+        AlertEvent preauth = captureSaved();
+        assertEquals(DomainAlertEventSink.RULE_PREAUTH_STATUS, preauth.getRuleName());
+        assertEquals(AlertRule.Severity.INFO, preauth.getSeverity());
+        assertTrue(preauth.getMessage().contains("PA-1"), preauth.getMessage());
+        assertTrue(preauth.getMessage().contains("AUTHORIZED→CAPTURED"), preauth.getMessage());
     }
 
     private AlertEvent captureSaved() {

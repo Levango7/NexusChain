@@ -1,6 +1,10 @@
 package org.nexus.gateway.alert;
 
+import org.nexus.gateway.apiversion.ApiVersionDeprecatedEvent;
+import org.nexus.gateway.apiversion.ApiVersionPolicy;
 import org.nexus.gateway.event.AccountLinkageFailedEvent;
+import org.nexus.gateway.escrow.EscrowStatusChangedEvent;
+import org.nexus.gateway.escrow.PreAuthStatusChangedEvent;
 import org.nexus.gateway.sla.SlaBreachEvent;
 import org.nexus.gateway.sla.SlaMeasurement;
 import org.nexus.gateway.sla.SlaTarget;
@@ -29,6 +33,14 @@ import java.util.List;
  *   <li>{@link SlaBreachEvent}（{@code SlaMonitorService:68} 发布）——SLA 未达标，
  *       此前<b>无接收方</b>。</li>
  * </ul>
+ *
+ * <p>2026-11-10 扩围（PLAN-084 孤儿事件处置，见 {@code config/event-wiring-exemptions.txt}）：
+ * 通知/治理侧的三个孤儿事件 {@link ApiVersionDeprecatedEvent}/{@link EscrowStatusChangedEvent}/
+ * {@link PreAuthStatusChangedEvent} 同样"发布了但全仓零消费者"，复用本桥接同一出口，
+ * ruleName 同样带 {@code domain-} 前缀。资金侧的 {@code OrderReversedEvent}/
+ * {@code OrderVoidedEvent} 与"死监听" {@code ClearingBatchCompletedEvent} 涉及重复动账
+ * （{@code DefaultClearingEngine.batchClear} 已贷记商户余额，gateway 侧
+ * {@code creditOnClearing} 会再记一次），不接本桥接，待资金语义裁决后再定接线位置。</p>
  *
  * <h3>设计取舍</h3>
  * <ul>
@@ -64,6 +76,12 @@ public class DomainAlertEventSink {
     public static final String RULE_DUNNING = "domain-dunning-notification";
     /** SLA 未达标。 */
     public static final String RULE_SLA_BREACH = "domain-sla-breach";
+    /** API 版本治理状态变更（废弃/日落/退役）。 */
+    public static final String RULE_API_VERSION_DEPRECATED = "domain-api-version-deprecated";
+    /** 担保交易状态变更。 */
+    public static final String RULE_ESCROW_STATUS = "domain-escrow-status-changed";
+    /** 预授权状态变更。 */
+    public static final String RULE_PREAUTH_STATUS = "domain-preauth-status-changed";
 
     private final AlertEventRepository eventRepository;
     private final List<AlertNotifier> notifiers;
@@ -144,6 +162,54 @@ public class DomainAlertEventSink {
                         targetName,
                         measuredText,
                         targetText),
+                event);
+    }
+
+    /**
+     * API 版本进入废弃/日落/退役：DEPRECATED 留痕，SUNSET/RETIRED 升 WARN
+     * （客户端不迁移将分别拿到 410/404，需要排查窗口）。
+     */
+    @EventListener
+    public void onApiVersionDeprecated(ApiVersionDeprecatedEvent event) {
+        ApiVersionPolicy policy = event.getPolicy();
+        ApiVersionPolicy.VersionStatus status = policy == null ? null : policy.getStatus();
+        AlertRule.Severity severity =
+                (status == ApiVersionPolicy.VersionStatus.SUNSET
+                        || status == ApiVersionPolicy.VersionStatus.RETIRED)
+                        ? AlertRule.Severity.WARN
+                        : AlertRule.Severity.INFO;
+        emit(RULE_API_VERSION_DEPRECATED,
+                "api.version.deprecated",
+                severity,
+                String.format("API版本状态变更 version=%s status=%s",
+                        policy == null ? "?" : policy.getVersion(), status),
+                event);
+    }
+
+    /**
+     * 担保交易状态变更：资金托管流转留痕（INFO，仅记录不升级——
+     * 正常流转同样触发，升级规则由运维按 ruleName 另行配置）。
+     */
+    @EventListener
+    public void onEscrowStatusChanged(EscrowStatusChangedEvent event) {
+        emit(RULE_ESCROW_STATUS,
+                "escrow.status.changed",
+                AlertRule.Severity.INFO,
+                String.format("担保交易状态变更 escrowNo=%s %s→%s",
+                        event.getEscrowNo(), event.getFromStatus(), event.getToStatus()),
+                event);
+    }
+
+    /**
+     * 预授权状态变更：同担保交易，留痕级 INFO。
+     */
+    @EventListener
+    public void onPreAuthStatusChanged(PreAuthStatusChangedEvent event) {
+        emit(RULE_PREAUTH_STATUS,
+                "preauth.status.changed",
+                AlertRule.Severity.INFO,
+                String.format("预授权状态变更 preauthNo=%s %s→%s",
+                        event.getPreauthNo(), event.getFromStatus(), event.getToStatus()),
                 event);
     }
 
