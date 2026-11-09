@@ -67,17 +67,51 @@ jobs:
         run: bash scripts/security/trivy-fetch-diagnostics.sh gate
 
       - name: 安装固定版本 Trivy（v0.76.2）
-        id: trivy-setup
         # 与后续 trivy-action step 共用同一个二进制；版本锁定，不用浮动 tag。
-        uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514  # v0.2.6
-        with:
-          version: v0.76.2
-          cache: false
+        # 2026-11-09 硬化（板 0349 同签名复发处置）：去 setup-trivy action——其内部
+        # 「Install Trivy binary」步曾 found version 后静默 exit 1（~11.5s），改为
+        # pinned 直链下载 + 校验和核对 + 有界重试（仿本文件 docker build 步先例）。
+        # 更新策略：随依赖升级一并更新，需安全负责人审批。
+        id: trivy-fetch
+        env:
+          TRIVY_VERSION: "0.76.2"
+        run: |
+          set -euo pipefail
+          BASE="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}"
+          TGZ="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          SUM="trivy_${TRIVY_VERSION}_checksums.txt"
+          DIR="${RUNNER_TEMP}/trivy-pinned"
+          mkdir -p "$DIR"
+          for attempt in 1 2 3; do
+            if curl -fsSL --retry 3 --retry-delay 5 --retry-connrefused -o "$DIR/$TGZ" "$BASE/$TGZ" \
+               && curl -fsSL --retry 3 --retry-delay 5 --retry-connrefused -o "$DIR/$SUM" "$BASE/$SUM"; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::Trivy v${TRIVY_VERSION} 直链下载连续 3 次失败——判定为取数链路故障"
+              exit 1
+            fi
+            echo "::warning::Trivy 下载第 ${attempt} 次失败（疑似链路抖动），15s 后重试"
+            sleep 15
+          done
+          EXPECTED=$(awk -v t="$TGZ" '$2 == t {print $1}' "$DIR/$SUM")
+          ACTUAL=$(sha256sum "$DIR/$TGZ" | awk '{print $1}')
+          if [ -z "$EXPECTED" ]; then
+            echo "::error::校验和表中未找到 $TGZ 条目"
+            exit 1
+          fi
+          if [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "::error::Trivy 校验和不匹配（期望 $EXPECTED，实际 $ACTUAL）"
+            exit 1
+          fi
+          tar -xzf "$DIR/$TGZ" -C "$DIR"
+          echo "$DIR" >> "$GITHUB_PATH"
+          "$DIR/trivy" --version
 
       - name: 安装失败时复采 Trivy 端点证据（不掩盖原始失败）
         # setup-trivy 失败时只会吐 `crit unable to find 'v0.76.2'` 或直接 exit 1，
         # 不打印 HTTP 状态和 curl 错误。用同一份探针复采，把 rc/stderr 留下。
-        if: failure() && steps.trivy-setup.outcome == 'failure'
+        if: failure() && steps.trivy-fetch.outcome == 'failure'
         run: bash scripts/security/trivy-fetch-diagnostics.sh diagnose
 
       - name: 刷新 Trivy 漏洞库并断言新鲜度（超过 7 天直接判红）
@@ -305,14 +339,49 @@ jobs:
         run: bash scripts/security/trivy-fetch-diagnostics.sh gate
 
       - name: 安装固定版本 Trivy（v0.76.2）
-        id: trivy-setup
-        uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514  # v0.2.6
-        with:
-          version: v0.76.2
-          cache: false
+        # 本 job 直接用 trivy 下 DB；版本锁定，不用浮动 tag。
+        # 2026-11-09 硬化（板 0349 同签名复发处置）：去 setup-trivy action——其内部
+        # 「Install Trivy binary」步曾 found version 后静默 exit 1（~11.5s），改为
+        # pinned 直链下载 + 校验和核对 + 有界重试（仿本文件 docker build 步先例）。
+        # 更新策略：随依赖升级一并更新，需安全负责人审批。
+        id: trivy-fetch
+        env:
+          TRIVY_VERSION: "0.76.2"
+        run: |
+          set -euo pipefail
+          BASE="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}"
+          TGZ="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          SUM="trivy_${TRIVY_VERSION}_checksums.txt"
+          DIR="${RUNNER_TEMP}/trivy-pinned"
+          mkdir -p "$DIR"
+          for attempt in 1 2 3; do
+            if curl -fsSL --retry 3 --retry-delay 5 --retry-connrefused -o "$DIR/$TGZ" "$BASE/$TGZ" \
+               && curl -fsSL --retry 3 --retry-delay 5 --retry-connrefused -o "$DIR/$SUM" "$BASE/$SUM"; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::Trivy v${TRIVY_VERSION} 直链下载连续 3 次失败——判定为取数链路故障"
+              exit 1
+            fi
+            echo "::warning::Trivy 下载第 ${attempt} 次失败（疑似链路抖动），15s 后重试"
+            sleep 15
+          done
+          EXPECTED=$(awk -v t="$TGZ" '$2 == t {print $1}' "$DIR/$SUM")
+          ACTUAL=$(sha256sum "$DIR/$TGZ" | awk '{print $1}')
+          if [ -z "$EXPECTED" ]; then
+            echo "::error::校验和表中未找到 $TGZ 条目"
+            exit 1
+          fi
+          if [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "::error::Trivy 校验和不匹配（期望 $EXPECTED，实际 $ACTUAL）"
+            exit 1
+          fi
+          tar -xzf "$DIR/$TGZ" -C "$DIR"
+          echo "$DIR" >> "$GITHUB_PATH"
+          "$DIR/trivy" --version
 
       - name: 安装失败时复采 Trivy 端点证据（不掩盖原始失败）
-        if: failure() && steps.trivy-setup.outcome == 'failure'
+        if: failure() && steps.trivy-fetch.outcome == 'failure'
         run: bash scripts/security/trivy-fetch-diagnostics.sh diagnose
 
       - name: Setup Python
@@ -390,17 +459,51 @@ jobs:
         run: bash scripts/security/trivy-fetch-diagnostics.sh gate
 
       - name: 安装固定版本 Trivy（v0.76.2）
-        id: trivy-setup
         # 与后续 trivy-action step 共用同一个二进制；版本锁定，不用浮动 tag。
-        uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514  # v0.2.6
-        with:
-          version: v0.76.2
-          cache: false
+        # 2026-11-09 硬化（板 0349 同签名复发处置）：去 setup-trivy action——其内部
+        # 「Install Trivy binary」步曾 found version 后静默 exit 1（~11.5s），改为
+        # pinned 直链下载 + 校验和核对 + 有界重试（仿本文件 docker build 步先例）。
+        # 更新策略：随依赖升级一并更新，需安全负责人审批。
+        id: trivy-fetch
+        env:
+          TRIVY_VERSION: "0.76.2"
+        run: |
+          set -euo pipefail
+          BASE="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}"
+          TGZ="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          SUM="trivy_${TRIVY_VERSION}_checksums.txt"
+          DIR="${RUNNER_TEMP}/trivy-pinned"
+          mkdir -p "$DIR"
+          for attempt in 1 2 3; do
+            if curl -fsSL --retry 3 --retry-delay 5 --retry-connrefused -o "$DIR/$TGZ" "$BASE/$TGZ" \
+               && curl -fsSL --retry 3 --retry-delay 5 --retry-connrefused -o "$DIR/$SUM" "$BASE/$SUM"; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::Trivy v${TRIVY_VERSION} 直链下载连续 3 次失败——判定为取数链路故障"
+              exit 1
+            fi
+            echo "::warning::Trivy 下载第 ${attempt} 次失败（疑似链路抖动），15s 后重试"
+            sleep 15
+          done
+          EXPECTED=$(awk -v t="$TGZ" '$2 == t {print $1}' "$DIR/$SUM")
+          ACTUAL=$(sha256sum "$DIR/$TGZ" | awk '{print $1}')
+          if [ -z "$EXPECTED" ]; then
+            echo "::error::校验和表中未找到 $TGZ 条目"
+            exit 1
+          fi
+          if [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "::error::Trivy 校验和不匹配（期望 $EXPECTED，实际 $ACTUAL）"
+            exit 1
+          fi
+          tar -xzf "$DIR/$TGZ" -C "$DIR"
+          echo "$DIR" >> "$GITHUB_PATH"
+          "$DIR/trivy" --version
 
       - name: 安装失败时复采 Trivy 端点证据（不掩盖原始失败）
         # setup-trivy 失败时只会吐 `crit unable to find 'v0.76.2'` 或直接 exit 1，
         # 不打印 HTTP 状态和 curl 错误。用同一份探针复采，把 rc/stderr 留下。
-        if: failure() && steps.trivy-setup.outcome == 'failure'
+        if: failure() && steps.trivy-fetch.outcome == 'failure'
         run: bash scripts/security/trivy-fetch-diagnostics.sh diagnose
 
       - name: 下载共享 Trivy 漏洞库（prep 产出，全 run 仅下载一次）
