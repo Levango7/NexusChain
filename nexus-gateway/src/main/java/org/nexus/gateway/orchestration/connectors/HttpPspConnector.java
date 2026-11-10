@@ -116,7 +116,9 @@ public class HttpPspConnector implements PaymentConnector {
         }
         if (!hasCredentials()) {
             log.error("HTTP PSP [{}] apiKey 缺失且 dry-run 已关闭，拒绝创建支付（fail-closed）", id);
-            return ConnectorPaymentResult.fail("PSP [" + id + "] misconfigured: apiKey missing and dry-run disabled");
+            return ConnectorPaymentResult.fail(
+                    "PSP [" + id + "] misconfigured: apiKey missing and dry-run disabled",
+                    FailureKind.CONFIG);
         }
 
         try {
@@ -141,10 +143,12 @@ public class HttpPspConnector implements PaymentConnector {
             return ConnectorPaymentResult.ok(connectorPaymentId, mapped);
         } catch (RestClientException e) {
             log.error("HTTP PSP [{}] createPayment failed: {}", id, e.getMessage());
-            return ConnectorPaymentResult.fail("PSP error: " + e.getMessage());
+            return ConnectorPaymentResult.fail("PSP error: " + e.getMessage(),
+                    ConnectorFailureClassifier.classify(e));
         } catch (RuntimeException e) {
             log.error("HTTP PSP [{}] createPayment unexpected error: {}", id, e.getMessage());
-            return ConnectorPaymentResult.fail("PSP error: " + e.getMessage());
+            return ConnectorPaymentResult.fail("PSP error: " + e.getMessage(),
+                    ConnectorFailureClassifier.classify(e));
         }
     }
 

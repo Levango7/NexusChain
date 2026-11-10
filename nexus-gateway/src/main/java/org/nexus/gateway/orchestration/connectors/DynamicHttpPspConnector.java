@@ -2,10 +2,12 @@ package org.nexus.gateway.orchestration.connectors;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.nexus.gateway.orchestration.connector.ConnectorFailureClassifier;
 import org.nexus.gateway.orchestration.connector.ConnectorHealth;
 import org.nexus.gateway.orchestration.connector.ConnectorPaymentRequest;
 import org.nexus.gateway.orchestration.connector.ConnectorPaymentResult;
 import org.nexus.gateway.orchestration.connector.ConnectorRefundResult;
+import org.nexus.gateway.orchestration.connector.FailureKind;
 import org.nexus.gateway.orchestration.connector.PaymentConnector;
 import org.nexus.gateway.orchestration.connector.PaymentStatus;
 import org.nexus.gateway.orchestration.settlement.FinalityPolicy;
@@ -117,7 +119,8 @@ public class DynamicHttpPspConnector implements PaymentConnector {
             HttpResponse<String> resp = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
             if (resp.statusCode() < 200 || resp.statusCode() >= 300) {
                 return ConnectorPaymentResult.fail(
-                        "PSP [" + id + "] create returned HTTP " + resp.statusCode());
+                        "PSP [" + id + "] create returned HTTP " + resp.statusCode(),
+                        ConnectorFailureClassifier.classifyHttpStatus(resp.statusCode()));
             }
             JsonNode node = MAPPER.readTree(resp.body());
             String connectorPaymentId = node.path("id").asText("");
@@ -130,7 +133,8 @@ public class DynamicHttpPspConnector implements PaymentConnector {
             return ConnectorPaymentResult.ok(connectorPaymentId, status);
         } catch (Exception e) {
             log.error("Dynamic HTTP PSP [{}] createPayment failed: {}", id, e.getMessage());
-            return ConnectorPaymentResult.fail("PSP error: " + e.getMessage());
+            return ConnectorPaymentResult.fail("PSP error: " + e.getMessage(),
+                    ConnectorFailureClassifier.classify(e));
         }
     }
 
