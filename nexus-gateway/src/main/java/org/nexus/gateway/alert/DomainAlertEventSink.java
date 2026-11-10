@@ -2,6 +2,7 @@ package org.nexus.gateway.alert;
 
 import org.nexus.gateway.apiversion.ApiVersionDeprecatedEvent;
 import org.nexus.gateway.apiversion.ApiVersionPolicy;
+import org.nexus.gateway.clearing.ClearingBatchCompletedEvent;
 import org.nexus.gateway.event.AccountLinkageFailedEvent;
 import org.nexus.gateway.escrow.EscrowStatusChangedEvent;
 import org.nexus.gateway.escrow.PreAuthStatusChangedEvent;
@@ -38,9 +39,16 @@ import java.util.List;
  * 通知/治理侧的三个孤儿事件 {@link ApiVersionDeprecatedEvent}/{@link EscrowStatusChangedEvent}/
  * {@link PreAuthStatusChangedEvent} 同样"发布了但全仓零消费者"，复用本桥接同一出口，
  * ruleName 同样带 {@code domain-} 前缀。资金侧的 {@code OrderReversedEvent}/
- * {@code OrderVoidedEvent} 与"死监听" {@code ClearingBatchCompletedEvent} 涉及重复动账
- * （{@code DefaultClearingEngine.batchClear} 已贷记商户余额，gateway 侧
- * {@code creditOnClearing} 会再记一次），不接本桥接，待资金语义裁决后再定接线位置。</p>
+ * {@code OrderVoidedEvent} 涉及重复动账（{@code DefaultClearingEngine.batchClear} 已贷记
+ * 商户余额，gateway 侧 {@code creditOnClearing} 会再记一次），不接本桥接，接消费者或删除
+ * 仍 open（豁免账复核日 2026-12-15）。</p>
+ *
+ * <p>2026-11-10 资金语义裁决（板面 20261110-1800 Q1/Q2）：{@link ClearingBatchCompletedEvent}
+ * 按单一记账源原则接入本桥接——发布点已裁定为 {@code SettlementScheduler.settle()} 的
+ * {@code batchClear} 返回 SETTLED 分支（记账既成事实之后），本类消费者只读留痕
+ * （INFO 级），不做任何 credit/book/冲正动作；原死监听链
+ * （{@code ClearingSettlementListener}/{@code ClearingSettlementService}/
+ * {@code ClearingRetryScheduler}）已删，{@code creditOnClearing} 永不接线（I3）。</p>
  *
  * <h3>设计取舍</h3>
  * <ul>
@@ -82,6 +90,8 @@ public class DomainAlertEventSink {
     public static final String RULE_ESCROW_STATUS = "domain-escrow-status-changed";
     /** 预授权状态变更。 */
     public static final String RULE_PREAUTH_STATUS = "domain-preauth-status-changed";
+    /** 清算批次完成（既成事实通知，只读留痕）。 */
+    public static final String RULE_CLEARING_BATCH_COMPLETED = "domain-clearing-batch-completed";
 
     private final AlertEventRepository eventRepository;
     private final List<AlertNotifier> notifiers;
@@ -210,6 +220,23 @@ public class DomainAlertEventSink {
                 AlertRule.Severity.INFO,
                 String.format("预授权状态变更 preauthNo=%s %s→%s",
                         event.getPreauthNo(), event.getFromStatus(), event.getToStatus()),
+                event);
+    }
+
+    /**
+     * 清算批次完成：权威路径 batchClear 记账完毕的既成事实留痕（INFO，正常流转级）。
+     *
+     * <p>只读：消费者体内禁止任何 {@code credit}/{@code book}/冲正动作
+     * （板面 20261110-1800 裁决 Q1/Q2，不变量 I1）。</p>
+     */
+    @EventListener
+    public void onClearingBatchCompleted(ClearingBatchCompletedEvent event) {
+        emit(RULE_CLEARING_BATCH_COMPLETED,
+                "clearing.batch.completed",
+                AlertRule.Severity.INFO,
+                String.format("清算批次完成[通知] batchNo=%s orders=%d netAmount=%s completedAt=%s",
+                        event.getBatchNo(), event.getOrderCount(), event.getNetAmount(),
+                        event.getCompletedAt()),
                 event);
     }
 
