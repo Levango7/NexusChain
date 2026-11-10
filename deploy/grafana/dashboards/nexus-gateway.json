@@ -909,7 +909,7 @@
         },
         "overrides": []
       },
-      "description": "来源：org.nexus.gateway.observability.PaymentMetrics（nexus.orders.created 等，Prometheus 命名转换为下划线 + _total 后缀）。",
+      "description": "来源：org.nexus.gateway.observability.PaymentMetrics（7 个 meter，#577 已全接线）。注意命名不总是「点换下划线 + _total」：OpenMetrics 保留 _created 给创建时间戳序列，故 nexus.orders.created 实际导出为 nexus_orders_total（见 PaymentMetricsTest 抓取断言）。",
       "options": {
         "legend": {
           "showLegend": true,
@@ -928,7 +928,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum(rate(nexus_orders_created_total{job=~\".*nexus-gateway.*\"}[$__rate_interval]))",
+          "expr": "sum(rate(nexus_orders_total{job=~\".*nexus-gateway.*\"}[$__rate_interval]))",
           "refId": "A",
           "legendFormat": "订单创建"
         },

@@ -52,8 +52,15 @@ SEVERITY_RANK = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4, "UNKNOWN": 0}
 # 日期就以退出码 2 全体拒收」。
 VALIDITY_DAYS = 90
 
-# kind 取值：default（普通条目）/ not-applicable（该二元组无修复版）/ shaded_vendored
-KINDS = ("default", "not-applicable", "shaded_vendored")
+# kind 取值：default（普通条目）/ not-applicable（该二元组无修复版）/ shaded_vendored /
+#            pending_base_rebuild（上游已发修复版，但**尚无包含该修复版的已发布基础镜像**）
+KINDS = ("default", "not-applicable", "shaded_vendored", "pending_base_rebuild")
+# 防自续锚点只对正式基线生效：fixture 的 addedAt 是合成值（跨闰年/跨月末等用例
+# 需要任意日期），不锚定；CI 三处调用传的都是这个规范路径。
+CANONICAL_BASELINE = "config/trivy-baseline.json"
+
+# pending_base_rebuild 是**有界**例外：只允许 14 天，到期即判红，必须重新取证。
+PENDING_VALIDITY_DAYS = 14
 SHADED_EVIDENCE_FIELDS = (
     "jar_path",
     "jar_sha256",
@@ -242,9 +249,26 @@ def load_baseline(path: str) -> tuple[dict[tuple[str, str], dict], list[str]]:
         fixable = str(entry.get("fixable") or "none").strip()
         if kind == "not-applicable":
             fixable = "not-applicable"
-        if fixable not in ("none", "not-applicable"):
-            errors.append(f"{where} fixable 只能是 none / not-applicable，实际：{fixable}")
+        allowed_fixable = ("none", "not-applicable", "upstream-fixed")
+        if fixable not in allowed_fixable:
+            errors.append(
+                f"{where} fixable 只能是 {' / '.join(allowed_fixable)}，实际：{fixable}"
+            )
             fixable = "none"
+        # pending_base_rebuild 必须显式声明"上游已有修复版"，且必须带证据：
+        # 没有证据就不该存在这条豁免（防止把它当成普通"加基线"的通道）。
+        if kind == "pending_base_rebuild":
+            if fixable != "upstream-fixed":
+                errors.append(
+                    f"{where} kind=pending_base_rebuild 必须 fixable=upstream-fixed（实际：{fixable}）"
+                )
+            # 直接读 entry，**不要**用下面的 evidence 局部变量：那行在本块之后才赋值，
+            # 引用在前 ⇒ Python 视为局部变量提前引用（条目排第一时 UnboundLocalError 崩溃；
+            # 否则沿用上一条的 evidence 静默放过 —— 2026-11-08 复核发现并修正）。
+            if not str(entry.get("evidence") or "").strip():
+                errors.append(
+                    f"{where} kind=pending_base_rebuild 必须填写 evidence（证明当前无包含该修复版的已发布镜像）"
+                )
 
         evidence = entry.get("evidence")
         if kind == "shaded_vendored":
@@ -270,11 +294,25 @@ def load_baseline(path: str) -> tuple[dict[tuple[str, str], dict], list[str]]:
             except ValueError:
                 errors.append(f"{where} addedAt 不是 ISO 日期（YYYY-MM-DD）：{added_raw}")
 
+        # 防自续锚点（只对正式基线 config/trivy-baseline.json 生效）：addedAt 不再信
+        # 作者自填——与该条目在基线文件里**首次出现**的提交日比对，不一致直接拒收
+        # （进 errors ⇒ exit 2）。封死的洞：同时改 addedAt 与 expires 即可无限续期
+        # （2026-11-08 复核发现）。取不到 git 历史（shallow clone / 文件未跟踪）时
+        # 返回 None，只跳过不判红；CI 侧另以 fetch-depth: 0 保证历史可得。
+        if added and os.path.abspath(path) == os.path.abspath(CANONICAL_BASELINE):
+            first_seen = _first_seen_date(path, vuln_id)
+            if first_seen and first_seen != added.isoformat():
+                errors.append(
+                    f"{where} addedAt={added.isoformat()} 与该条目首次出现的提交日 {first_seen}"
+                    f" 不一致（防自续：addedAt 以 git 首次出现日为准，不信作者自填）"
+                )
+
         if expires and added:
-            expected = added + dt.timedelta(days=VALIDITY_DAYS)
+            validity_days = PENDING_VALIDITY_DAYS if kind == "pending_base_rebuild" else VALIDITY_DAYS
+            expected = added + dt.timedelta(days=validity_days)
             if expires != expected:
                 errors.append(
-                    f"{where} expires={expires} 与 addedAt={added} + {VALIDITY_DAYS} 天 = {expected} 不一致"
+                    f"{where} expires={expires} 与 addedAt={added} + {validity_days} 天 = {expected} 不一致"
                     f"（有效期只按登记日起算，与运行当天无关；超出或缩短都必须重新取证）"
                 )
 
@@ -311,6 +349,29 @@ def _serialize_finding(finding: dict, entry: dict | None = None) -> dict:
         data["expires"] = entry["expires"].isoformat() if entry["expires"] else None
         data["evidence"] = entry["evidence"]
     return data
+
+
+def _first_seen_date(baseline_path, vuln_id):
+    """该 CVE 在基线文件里**首次出现**的提交日期（YYYY-MM-DD），取不到返回 None。
+
+    用途：把 `addedAt` 从「作者自填」变成「git 可核事实」——
+    否则只要同时改 addedAt 与 expires 就能无限续期（2026-11-08 复核发现）。
+    取不到历史（浅克隆 / 无 git）返回 None，由调用方降级为 warning，绝不因此判红。
+    """
+    try:
+        import subprocess  # 局部导入：不依赖模块头部 import 块的具体写法
+        out = subprocess.run(
+            ["git", "log", "-S", vuln_id, "--format=%as", "--", baseline_path],
+            capture_output=True, text=True, timeout=20,
+        )
+    except Exception:
+        return None
+    if out.returncode != 0:
+        return None
+    dates = [ln.strip() for ln in out.stdout.splitlines() if ln.strip()]
+    if not dates:
+        return None
+    return dates[-1]  # 最早一次（log 是倒序）
 
 
 def _age_days(today: dt.date, added: dt.date) -> int:
@@ -425,6 +486,7 @@ def gate(findings: list[dict], baseline: dict[tuple[str, str], dict], today: dt.
     expired = []
     policy = []
     shaded = []
+    pending_rebuild: list[tuple[dict, dict]] = []
     nofix: list[tuple[dict, dict]] = []
 
     for finding in findings:
@@ -442,6 +504,13 @@ def gate(findings: list[dict], baseline: dict[tuple[str, str], dict], today: dt.
                     expired.append((finding, entry))
                 else:
                     shaded.append((finding, entry))
+            elif entry["kind"] == "pending_base_rebuild":
+                # 有界例外：上游修复版已发布、但**尚无包含它的基础镜像**（已按 digest 实证）。
+                # 只放行到 expires（登记日 + 14 天）；到期即走 expired → 判红。
+                if entry["expires"] and today > entry["expires"]:
+                    expired.append((finding, entry))
+                else:
+                    pending_rebuild.append((finding, entry))
             else:
                 policy.append((finding, entry))
             continue
@@ -513,6 +582,18 @@ def gate(findings: list[dict], baseline: dict[tuple[str, str], dict], today: dt.
             f"声明依赖已解析到修复版；到期 {entry['expires']}"
         )
 
+    for finding, entry in pending_rebuild:
+        fixed = ", ".join(sorted(finding["fixedVersions"]))
+        print(
+            f"[PENDING-REBUILD] {finding['id']} / {finding['package']} 上游已发布修复版 {fixed}，"
+            f"但尚无包含该修复版的已发布基础镜像；到期 {entry['expires']}（到期即判红）"
+        )
+        print(
+            f"::warning title=Trivy 待基础镜像重建::"
+            f"{finding['id']} / {finding['package']} 修复版 {fixed} 未随镜像发布，"
+            f"已登记待重建（到期 {entry['expires']}）"
+        )
+
     for finding, entry in nofix:
         print(
             f"[NOFIX] {finding['id']} / {finding['package']} 无修复版（Trivy 未给出 FixedVersion），"
@@ -553,6 +634,7 @@ def gate(findings: list[dict], baseline: dict[tuple[str, str], dict], today: dt.
             "expired": len(expired),
             "policy": len(policy),
             "shaded": len(shaded),
+            "pendingRebuild": len(pending_rebuild),
             "nofix": len(nofix),
             "stale": len(stale),
             "staleAged": len(stale_aged),
@@ -561,6 +643,7 @@ def gate(findings: list[dict], baseline: dict[tuple[str, str], dict], today: dt.
         "expired": [dict(_serialize_finding(f), expires=entry["expires"].isoformat()) for f, entry in expired],
         "policy": [_serialize_finding(f) for f, _ in policy],
         "shaded": [_serialize_finding(f, entry) for f, entry in shaded],
+        "pendingRebuild": [_serialize_finding(f, entry) for f, entry in pending_rebuild],
         "nofix": [_serialize_finding(f, entry) for f, entry in nofix],
         "stale": [_serialize_entry(e, today) for e in stale],
         "staleAged": [_serialize_entry(e, today) for e in stale_aged],

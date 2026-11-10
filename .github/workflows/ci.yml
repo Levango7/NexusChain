@@ -108,6 +108,18 @@ jobs:
       - name: 打包一致性检查（jar 排除配置 → 容器必须另行提供）
         run: python scripts/check-packaging-consistency.py
 
+      # ddl-auto:update 扩散门禁（审计 C1，2026-11-10 新增）
+      # 背景：nexus-oracle 是全仓唯一 ddl-auto:update 模块（接口骨架，README 已
+      # 诚实声明，ADR-001 政策下降级为一致性问题）。本门只防**扩散**——
+      # 任何新模块/新 profile 把 ddl-auto 设为 update 即红；oracle 侧将来真
+      # 要做 schema 演进时应改走 Flyway/liquibase，本门届时同步更新 allowed 集。
+      # 自带射程：scripts/check-ddl-auto-gate.py --selftest 用 8 个合成样本钉住
+      # 解析器（属性行精确匹配，注释行/等号行/子串误判均不计入）。
+      - name: ddl-auto 扩散门禁
+        run: |
+          python scripts/check-ddl-auto-gate.py --selftest
+          python scripts/check-ddl-auto-gate.py
+
       # 版本口径一致性（2026-09-28 新增）
       # 背景：版本号漂移已发生三次——README 头注停在 2.50.0；v2.50.2 发版时
       # version.properties 仍为 2.50.0 导致 jar 名错位；2026-09-17 审计发现
@@ -130,6 +142,17 @@ jobs:
         run: |
           python scripts/check-scheduler-lock.py --selftest
           python scripts/check-scheduler-lock.py
+
+      # 事件接线门禁（2026-11-09 新增，PLAN-084 P1 report-only）
+      # 背景：审计 A4/B8/B9 是「发布但无人消费」的孤儿事件；反向的死监听器同样是缺陷。
+      # 本门禁在 nexus-gateway/src/main/java 上断言发布↔监听双向闭合（父类派发语义），
+      # 豁免账 config/event-wiring-exemptions.txt（理由必填）。先 --selftest 钉住解析器，
+      # 防「空判绿」。P1 只报告不阻断（continue-on-error），豁免账稳定后转 --strict。
+      - name: 事件接线门禁（发布↔监听双向闭合，先报告后严判）
+        continue-on-error: true
+        run: |
+          python scripts/check-event-wiring.py --selftest
+          python scripts/check-event-wiring.py
 
       # ============================================================
       # 迁移版本号棘轮门禁（2026-10-18 新增）
@@ -513,6 +536,105 @@ jobs:
             --tests "org.nexus.bridge.security.ReplayProtectionTest" \
             --tests "org.nexus.bridge.safety.DefaultInsuranceFundTest" \
             --no-daemon
+
+      # Java/Gradle 依赖许可清单导出（板 20261105-0502 / 脚本头注详述设计取舍）。
+      # 语义与 `Trivy 豁免时效复核`、`check-trivyignore-staleness.py` 一致：
+      #   红 = **导出/合成没跑成**（载体坏了），漂移与覆盖缺口只 ::warning::（报告制）。
+      #   这样"别人新增了依赖还没刷新清单"不会在别人的 PR 上判红，但机制失效不会静默。
+      # 位置刻意放在 Java 测试与回归之后：同一 job 内 runtimeClasspath 已解析过，
+      # 这几次调用只读本地缓存，不重复下载依赖。
+      # included build 的导出走**两条路各试一次**（顺序有意）：
+      #   ① `-p <目录>`：init script 一定作用于被调起的那个构建 ⇒ 确定性最高；
+      #      前提是该构建独立跑也能解析依赖——已核：这 6 个 included build 的
+      #      settings.gradle / build.gradle 里**没有任何 `org.nexus:` 或跨构建 project(...) 依赖**
+      #      （grep 实测），各自带 pluginManagement/repositories，独立构建树可自洽解析。
+      #   ② composite 任务路径 `:名字:exportJavaDependencies`：与本 job 第 9 步
+      #      `:nexus-settlement:check` 同一条已被 CI 验证过的寻址方式，作为兜底——
+      #      它成立与否取决于「init script 是否也应用到 composite 内的 included build」，
+      #      这一点 Gradle 文档未承诺，故不作为唯一路径。
+      # 两条都失败才计入 MISSING，并由下方"覆盖核对"点名；**不判红**（报告制）。
+      # 根构建那一次调用失败仍判红（红=载体坏），但先做**有界重试**：
+      # 只对**载体类抖动**（镜像 5xx / 网络超时）有效；脚本自身的确定性错误重试结果不变
+      # （#513 的 id.name 事故即此类），因此重试日志**不得默认归因于镜像/网络**。
+      - name: 导出 Java 依赖清单并与已提交清单比对（报告制）
+        run: |
+          set -e
+          run_txn() {
+            local n=0
+            until "$@"; do
+              n=$((n + 1))
+              if [ "$n" -ge 2 ]; then
+                return 1
+              fi
+              echo "::warning::导出调用第 $n 次失败（请按上方 Gradle 原始报错定位；不默认归因镜像/网络），重试同一命令"
+              sleep 20
+            done
+          }
+          # INIT 必须绝对路径：-p <included build> 调起时 Gradle 会把相对路径的
+          # init script 解析到那个构建树的目录下（实测报 "does not exist"），
+          # 六棵 included build 全军覆没，只剩 composite 兜底一条路。
+          INIT="$PWD/scripts/java-deps-export.init.gradle"
+          OUT="$PWD/build/java-deps"
+          rm -rf "$OUT" && mkdir -p "$OUT"
+          run_txn ./gradlew --no-daemon --init-script "$INIT" \
+            -Dnexus.javaDepsOut="$OUT" exportJavaDependencies
+          MISSING=""
+          for b in nexus-settlement nexus-compliance nexus-analytics \
+                   nexus-oracle nexus-consortium nexus-api-gateway; do
+            if ./gradlew --no-daemon -p "$b" --init-script "$INIT" \
+                 -Dnexus.javaDepsOut="$OUT" exportJavaDependencies; then
+              echo "::notice::$b 经独立构建树（-p）导出成功"
+            elif ./gradlew --no-daemon --init-script "$INIT" \
+                 -Dnexus.javaDepsOut="$OUT" ":$b:exportJavaDependencies"; then
+              echo "::notice::$b 经 composite 任务路径导出成功（-p 单跑失败，已兜底）"
+            else
+              MISSING="$MISSING $b"
+              echo "::warning::$b 两条寻址都失败" \
+                   "⇒ 该构建树的依赖不会进清单（Java 覆盖不完整，非误报漂移）"
+            fi
+          done
+          python3 scripts/java-deps-collect.py merge --from "$OUT" \
+            --out build/java-dependencies-fresh.json
+          python3 - "$OUT" "$MISSING" <<'PY'
+          # 覆盖核对：清单必须真的看到 7 个构建树，否则把缺口显式打出来。
+          # 为什么单列一步：merge 只说"合成成功"，说不出"少了哪棵构建"——
+          # 而"少一棵构建"恰好是最像"已覆盖"的失效形状。
+          import glob, json, os, sys
+          out, missing = sys.argv[1], sys.argv[2].split()
+          seen = set()
+          for p in glob.glob(os.path.join(out, '*.json')):
+              try:
+                  seen.add(json.load(open(p, encoding='utf-8')).get('build') or '?')
+              except Exception as e:
+                  print('::warning::分片不可读 %s: %s' % (p, e))
+          want = {'nexus', 'nexus-settlement', 'nexus-compliance', 'nexus-analytics',
+                  'nexus-oracle', 'consortium', 'nexus-api-gateway'}
+          absent = sorted(want - seen)
+          print('构建树覆盖：%d/%d；已见 %s' % (len(seen & want), len(want), sorted(seen)))
+          if absent:
+              print('::warning::缺构建树 %s%s ⇒ 清单不完整，bootstrap 前必须补齐'
+                    % (absent, ('；任务未命中：' + ' '.join(missing)) if missing else ''))
+          PY
+          if [ -f scripts/java-dependencies.json ]; then
+            python3 scripts/java-deps-collect.py diff \
+              --committed scripts/java-dependencies.json \
+              --fresh build/java-dependencies-fresh.json \
+              || echo "::warning::清单比对脚本本身跑失败（不是漂移）"
+          else
+            echo "::warning::已提交清单 scripts/java-dependencies.json 尚不存在" \
+                 "⇒ Java 腿仍是「未覆盖」；本次导出件就是 bootstrap 的输入" \
+                 "(artifact: java-dependencies-export)"
+          fi
+
+      - name: 上传 Java 依赖清单导出件（bootstrap / 取证）
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: java-dependencies-export
+          path: |
+            build/java-deps/
+            build/java-dependencies-fresh.json
+          retention-days: 14
 
       # 短期项 #5（2026-09-17）：explorer 前端进入 CI 门禁。
       # 此前 10 个 vitest 测试文件（93 用例）没有任何 CI job 执行——
@@ -931,6 +1053,22 @@ jobs:
 
       # kind 3 节点集群：StatefulSet 反亲和（podAntiAffinity hard）要求
       # 3 副本可调度到不同 Node——3 worker 验证该约束在真实拓扑下成立
+      - name: 探测 kind 发布资产可达性（只定位失败原因，不改判定口径）
+        # 2026-11-08 incident：本 job 在 08:51Z 6s 内失败，唯一线索是
+        # `sha256sum: 'standard input': no properly formatted checksum lines found`
+        # ——被喂给 sha256sum 的根本不是校验和（典型是 403/429 的 HTML 响应体）。
+        # helm/kind-action 内部用 curl -sL，状态码被吞掉；装 kind 也没有重试。
+        run: |
+          BASE="https://github.com/kubernetes-sigs/kind/releases/download/v0.31.0"
+          for asset in kind-linux-amd64 kind-linux-amd64.sha256sum; do
+            code=$(curl -sSL -o /dev/null -w '%{http_code}' --retry 3 --retry-all-errors "$BASE/$asset") || code="curl-failed"
+            echo "kind 资产探测: $asset http=$code url=$BASE/$asset"
+            if [ "$code" != "200" ]; then
+              echo "::error::下载失败 http=$code url=$BASE/$asset（helm/kind-action 复用同一资产）"
+              exit 1
+            fi
+          done
+
       - name: Create kind cluster (3 workers)
         uses: helm/kind-action@v1
         with:

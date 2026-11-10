@@ -352,7 +352,7 @@ impl DriverInner {
     /// 解码失败 fail-closed；keyshare 与 incomplete 同时缺失属正常首跑。
     fn load_persisted_shares(&mut self, sid: &str, ctx: &StorageCtx) -> eyre::Result<bool> {
         let mut restored = false;
-        let ks = crate::persistence::load_cggmp_blob(sid, "keyshare", &ctx.base_dir, &ctx.key)?;
+        let ks = crate::persistence::load_cggmp_blob(sid, "keyshare", &ctx.base_dir, Some(ctx))?;
         if let Some((_, plaintext)) = ks {
             let share = crate::cggmp::decode_key_share(&plaintext)
                 .map_err(|e| eyre::eyre!("persisted keyshare invalid: {e}"))?;
@@ -363,7 +363,7 @@ impl DriverInner {
                 .map_err(|e| eyre::eyre!("registry lock: {e}"))?;
             restored = true;
         }
-        let inc = crate::persistence::load_cggmp_blob(sid, "incomplete", &ctx.base_dir, &ctx.key)?;
+        let inc = crate::persistence::load_cggmp_blob(sid, "incomplete", &ctx.base_dir, Some(ctx))?;
         if let Some((_, plaintext)) = inc {
             let core = crate::cggmp::decode_incomplete(&plaintext)
                 .map_err(|e| eyre::eyre!("persisted incomplete share invalid: {e}"))?;
@@ -400,7 +400,8 @@ impl DriverInner {
             };
         }
         if let Some(ctx) = self.storage.clone() {
-            let ks = crate::persistence::load_cggmp_blob(sid, "keyshare", &ctx.base_dir, &ctx.key);
+            let ks =
+                crate::persistence::load_cggmp_blob(sid, "keyshare", &ctx.base_dir, Some(&ctx));
             match ks {
                 Err(e) => return Self::err(format!("start_aux {sid}: restore: {e}")),
                 Ok(Some((_, plaintext))) => match crate::cggmp::decode_key_share(&plaintext) {
@@ -640,8 +641,12 @@ impl DriverInner {
         };
         if !have_key_share {
             if let Some(ctx) = self.storage.clone() {
-                match crate::persistence::load_cggmp_blob(sid, "keyshare", &ctx.base_dir, &ctx.key)
-                {
+                match crate::persistence::load_cggmp_blob(
+                    sid,
+                    "keyshare",
+                    &ctx.base_dir,
+                    Some(&ctx),
+                ) {
                     Err(e) => return Self::err(format!("start_sign {sid}: restore: {e}")),
                     Ok(Some((_, plaintext))) => match crate::cggmp::decode_key_share(&plaintext) {
                         Ok(share) => {

@@ -103,6 +103,22 @@ nexus:
     skip-confirmation: true
   consortium:
     skip-confirmation: true
+  # 3DS（2026-11-08 审计修复 B2）：base 已改为默认 false，dev 显式打开模拟挑战，
+  # 否则本地/DAST 的 3DS 流程会因"无真实 ACS"而失败。
+  3ds:
+    simulated-challenge-enabled: true
+  # === 结算开关（2026-11-07 审计修复）：dev 档显式关闭 ===
+  # base application.yml 是 `enabled: ${NEX_SETTLEMENT_ENABLED:true}`，dev 档此前未覆盖，
+  # 于是 SettlementPlatformAddressGuard 启动期 fail-closed 直接抛：
+  #   IllegalStateException: 结算已启用，但平台出款地址未配置：请设置配置项
+  #   nexus.settlement.platform-address（环境变量 NEX_SETTLEMENT_PLATFORM_ADDRESS）…
+  # ⇒ 裸 `bootRun`（不传任何 env）**根本起不来**；只有 docker-compose 传
+  #   NEX_SETTLEMENT_ENABLED=false 才能起（见 docker-compose.yml 该服务 environment）。
+  # 语义与 compose 保持一致：dev/DAST 不做真实结算，故显式关闭——
+  # 而不是填一个占位出款地址（占位地址会把"本地看起来能结算"的假象留在环境里）。
+  # 需要本地演练结算时：显式传 NEX_SETTLEMENT_ENABLED=true 并提供真实热钱包地址。
+  settlement:
+    enabled: false
   # Dev/DAST 环境无下游服务（signing-service, wallet-service, chain node），
   # 自定义 HealthIndicator 探测这些服务会报 DOWN → /actuator/health 返回 503。
   # 禁用下游健康指标，仅保留标准健康指标（ping, db, diskSpace）。

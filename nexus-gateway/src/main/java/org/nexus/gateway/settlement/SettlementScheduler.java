@@ -1,16 +1,19 @@
 package org.nexus.gateway.settlement;
 
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
+import org.nexus.gateway.clearing.ClearingBatchCompletedEvent;
 import org.nexus.settlement.clearing.ClearingEngine;
 import org.nexus.settlement.clearing.ClearingOrder;
 import org.nexus.settlement.clearing.SettlementBatch;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 
@@ -38,13 +41,16 @@ public class SettlementScheduler {
 
     private final SettlementEventCollector eventCollector;
     private final ClearingEngine clearingEngine;
+    private final ApplicationEventPublisher eventPublisher;
     private final boolean settlementEnabled;
 
     public SettlementScheduler(SettlementEventCollector eventCollector,
                                 ClearingEngine clearingEngine,
+                                ApplicationEventPublisher eventPublisher,
                                 @Value("${nexus.settlement.enabled:true}") boolean settlementEnabled) {
         this.eventCollector = eventCollector;
         this.clearingEngine = clearingEngine;
+        this.eventPublisher = eventPublisher;
         this.settlementEnabled = settlementEnabled;
     }
 
@@ -82,6 +88,11 @@ public class SettlementScheduler {
             if (result != null && result.getStatus() == SettlementBatch.BatchStatus.SETTLED) {
                 log.info("Settlement completed: batchNo={}, orders={}, netAmount={}",
                         result.getBatchNo(), orders.size(), result.getSettlementAmount());
+                // 板面 20261110-1800 裁决 Q1：记账既成事实的通知（I2——发布在全部
+                // bookSettlement 提交之后）。消费者只读不记账；本事件不是记账指令。
+                eventPublisher.publishEvent(new ClearingBatchCompletedEvent(
+                        this, result.getBatchNo(), orders.size(),
+                        result.getSettlementAmount(), LocalDateTime.now()));
             } else {
                 log.warn("Settlement batch not fully settled: batchNo={}, status={}",
                         batch.getBatchNo(), result != null ? result.getStatus() : "null");

@@ -150,6 +150,18 @@ class OrchestrationE2ETest {
                 .andExpect(jsonPath("$.total").value(org.hamcrest.Matchers.greaterThanOrEqualTo(1)));
     }
 
+    @Test
+    @org.junit.jupiter.api.Order(15)
+    @DisplayName("Payment with txHash gets a settlement confirmation record (D3 写侧接线)")
+    void paymentWithTxHashGetsSettlementConfirmationRecord() throws Exception {
+        mockMvc.perform(get("/api/v1/settlement-confirmations/" + paymentId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.paymentId").value(paymentId))
+                .andExpect(jsonPath("$.status").value("PENDING"))
+                .andExpect(jsonPath("$.txHash").value(
+                        org.hamcrest.Matchers.startsWith("mock_tx_")));
+    }
+
     // === Routing Rules ===
 
     @Test

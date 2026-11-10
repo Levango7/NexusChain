@@ -51,7 +51,8 @@ pub struct PeerConfig {
 /// `storage_key_version` 标识当前加密所用密钥版本号。新文件用当前版本加密，
 /// 旧文件由 persistence 模块根据文件头中记录的版本号选择对应密钥解密。
 /// 多密钥映射 `storage_keys` 支持"旧密钥解密旧文件、新密钥加密新文件"的过渡期
-/// （TODO: 完整多密钥支持待实现，当前仅单密钥 + 版本号记录）。
+/// （由 `apply_storage_key_to_env` 逐版导出为 `MPC_STORAGE_KEY_V{ver}`，
+/// persistence 模块按文件头版本号选密钥）。
 ///
 /// # 密钥来源（低10）
 /// `storage_key_source` 控制 `storage_key` 的读取来源：
@@ -92,13 +93,10 @@ pub struct PartyConfig {
     pub storage_key_version: u32,
     /// 中12: 多密钥映射（版本号 → hex 编码密钥），支持密钥轮换过渡期。
     ///
-    /// 解密时根据文件头版本号从此映射查找对应密钥；若映射中无该版本，
-    /// 回退到 `storage_key`（单密钥模式，向后兼容）。
+    /// 启动时由 `apply_storage_key_to_env` 逐版导出为环境变量
+    /// `MPC_STORAGE_KEY_V{ver}`；persistence 模块按文件头版本号查专属密钥，
+    /// 未配置时回退 `MPC_STORAGE_KEY`（单密钥模式，向后兼容）。
     /// 默认为空 HashMap（单密钥模式）。
-    ///
-    /// TODO: 完整多密钥支持待实现——当前 persistence 模块仅记录版本号到文件头，
-    /// 解密时仍使用 `storage_key`（单密钥）。完整实现需 persistence 模块根据版本号
-    /// 从此映射选择密钥，并支持旧文件用旧密钥解密、新文件用新密钥加密。
     #[serde(default)]
     pub storage_keys: HashMap<u32, String>,
     /// 低10: storage_key 读取来源。
@@ -397,7 +395,9 @@ impl PartyConfig {
         self.storage_key_version
     }
 
-    /// 将 storage_key 设置到环境变量 `MPC_STORAGE_KEY`（供 persistence 模块读取）。
+    /// 将 storage_key 设置到环境变量 `MPC_STORAGE_KEY`（供 persistence 模块读取），
+    /// 并把 `storage_keys` 多密钥映射逐版导出为 `MPC_STORAGE_KEY_V{ver}`
+    /// （供 persistence 模块按文件头版本号选密钥解密旧文件）。
     ///
     /// 分布式模式下，storage_key 来自配置文件（或环境变量/KMS，低10）；此方法在启动时
     /// 将解析后的值同步到 `MPC_STORAGE_KEY` 环境变量，保持 persistence 模块的
@@ -408,7 +408,9 @@ impl PartyConfig {
     /// `std::env::set_var` 在多线程环境下是 unsafe 的（可能引起其他线程的
     /// `std::env::var` 数据竞争），但启动阶段单线程调用是安全的。
     pub fn apply_storage_key_to_env(&self) -> eyre::Result<()> {
-        let key = self.resolve_storage_key()?;
+        // 中12: 当前版密钥优先取 storage_keys 映射（映射有当前版即用映射值），
+        // 与 persistence 模块按版本号选密钥的语义同源（resolve_storage_key_for_version）。
+        let key = self.resolve_storage_key_for_version(self.storage_key_version)?;
         // SAFETY: 仅在 main 启动阶段单线程调用，未 spawn 任何工作线程。
         // persistence 模块后续在多线程 gRPC 处理中只读 `std::env::var`（只读安全）。
         unsafe {
@@ -418,12 +420,21 @@ impl PartyConfig {
                 "MPC_STORAGE_KEY_VERSION",
                 self.storage_key_version.to_string(),
             );
+            // 中12: 多密钥映射逐版导出为 MPC_STORAGE_KEY_V{ver}，供 persistence
+            // 模块按文件头版本号选密钥解密旧文件（轮换过渡期：旧密钥解旧文件、
+            // 新密钥加密新文件）。hex 格式/长度已在 validate 校验，此处原样透传。
+            for (ver, key_hex) in &self.storage_keys {
+                std::env::set_var(format!("MPC_STORAGE_KEY_V{ver}"), key_hex);
+            }
         }
         tracing::info!(
             version = self.storage_key_version,
+            rotated_versions = ?self.storage_keys.keys().copied().collect::<Vec<_>>(),
             source = %self.storage_key_source,
-            "中12+低10: storage_key applied to MPC_STORAGE_KEY env var (version {}, source '{}')",
+            "中12+低10: storage_key applied to MPC_STORAGE_KEY env var \
+             (version {}, {} rotated key(s) exported as MPC_STORAGE_KEY_V{{ver}}, source '{}')",
             self.storage_key_version,
+            self.storage_keys.len(),
             self.storage_key_source
         );
         Ok(())
@@ -640,6 +651,70 @@ mod tests {
         // 非当前版本且不在 storage_keys 中：应失败
         let err = config.resolve_storage_key_for_version(99).unwrap_err();
         assert!(err.to_string().contains("no storage_key for version 99"));
+    }
+
+    /// 中12: apply_storage_key_to_env 除 MPC_STORAGE_KEY(_VERSION) 外，
+    /// 还把 storage_keys 映射逐版导出为 MPC_STORAGE_KEY_V{ver}，
+    /// 且 MPC_STORAGE_KEY 取当前版密钥（映射优先）。
+    #[test]
+    #[serial_test::serial]
+    fn apply_storage_key_to_env_exports_per_version_keys() {
+        let json = r#"{
+            "party_index": 0,
+            "party_id": "party-0",
+            "listen_addr": "0.0.0.0:50051",
+            "peers": [],
+            "storage_key": "4242424242424242424242424242424242424242424242424242424242424242",
+            "storage_key_version": 2,
+            "storage_keys": {
+                "1": "3131313131313131313131313131313131313131313131313131313131313131",
+                "2": "3232323232323232323232323232323232323232323232323232323232323232"
+            },
+            "tls_cert": "/etc/mpc/tls/party-0.crt",
+            "tls_key": "/etc/mpc/tls/party-0.key",
+            "tls_ca": "/etc/mpc/tls/ca.crt"
+        }"#;
+        let config: PartyConfig = serde_json::from_str(json).expect("parse");
+        config.validate().expect("validate");
+
+        // 保存并恢复四个环境变量（进程级 env，串行测试）
+        let prev = (
+            std::env::var("MPC_STORAGE_KEY").ok(),
+            std::env::var("MPC_STORAGE_KEY_VERSION").ok(),
+            std::env::var("MPC_STORAGE_KEY_V1").ok(),
+            std::env::var("MPC_STORAGE_KEY_V2").ok(),
+        );
+        config.apply_storage_key_to_env().expect("apply");
+
+        assert_eq!(
+            std::env::var("MPC_STORAGE_KEY").ok().as_deref(),
+            Some("3232323232323232323232323232323232323232323232323232323232323232"),
+            "current version (2) key from storage_keys map"
+        );
+        assert_eq!(
+            std::env::var("MPC_STORAGE_KEY_VERSION").ok().as_deref(),
+            Some("2")
+        );
+        assert_eq!(
+            std::env::var("MPC_STORAGE_KEY_V1").ok().as_deref(),
+            Some("3131313131313131313131313131313131313131313131313131313131313131")
+        );
+        assert_eq!(
+            std::env::var("MPC_STORAGE_KEY_V2").ok().as_deref(),
+            Some("3232323232323232323232323232323232323232323232323232323232323232")
+        );
+
+        let restore = |name: &str, prev: Option<String>| {
+            // SAFETY: 串行测试内调用。
+            match prev {
+                Some(v) => unsafe { std::env::set_var(name, v) },
+                None => unsafe { std::env::remove_var(name) },
+            }
+        };
+        restore("MPC_STORAGE_KEY", prev.0);
+        restore("MPC_STORAGE_KEY_VERSION", prev.1);
+        restore("MPC_STORAGE_KEY_V1", prev.2);
+        restore("MPC_STORAGE_KEY_V2", prev.3);
     }
 
     // ===== 低10: storage_key 支持 KMS/环境变量 =====
