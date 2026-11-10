@@ -1,10 +1,11 @@
 # 事件接线豁免账（PLAN-084 断言 A）
 # 格式：orphan|dead <简单类名> # 理由（必填；理由为空 = 配置错误 exit 2）
-# 下列 6 条均为 2026-11-09 本门禁首轮实跑发现（当时 0 豁免、6 条全红），逐条附证据与处置方向；
-# 到期未处置即升级板面红项。复核日期写进行内。
-orphan ApiVersionDeprecatedEvent # 2026-11-09 首轮发现：ApiVersionDeprecationService 同文件变量形式发布，类 javadoc 承诺下游监听器据此触发告警通知、文档更新、商户邮件等响应动作，但全仓 nexus-gateway/src/main/java 无任何 @EventListener 以该类或其超类（除 ApplicationEvent 外）为首参；发布点自身已 log.info 兜底。处置待产品裁决：接消费者，或按审计 #565 哲学删除事件与发布点（不留「看起来有响应」的假象）。复核日期 2026-12-15。
-orphan EscrowStatusChangedEvent # 2026-11-09 首轮发现：EscrowServiceImpl 变量形式发布（extends PaymentEvent），javadoc 承诺供下游模块（清算、对账、通知等）消费，全仓无对应监听；发布点自身已 log.info。处置同上（接消费者或删除）。复核日期 2026-12-15。
-orphan PreAuthStatusChangedEvent # 2026-11-09 首轮发现：PreAuthServiceImpl 变量形式发布（extends PaymentEvent），javadoc 承诺下游消费，全仓无对应监听；发布点自身已 log.info。处置同上。复核日期 2026-12-15。
-orphan OrderReversedEvent # 2026-11-09 首轮发现：ReversalService 变量形式发布（extends PaymentEvent），javadoc 明言消费方为清算模块（冲正后生成反向清算记录）、对账模块、通知模块等，全仓无对应监听。处置同上。复核日期 2026-12-15。
-orphan OrderVoidedEvent # 2026-11-09 首轮发现：VoidService 变量形式发布（extends PaymentEvent），javadoc 口径同 OrderReversedEvent，全仓无对应监听。处置同上。复核日期 2026-12-15。
+# 首轮（2026-11-09）实跑发现 6 条（当时 0 豁免、6 条全红），逐条附证据与处置方向。
+# 2026-11-10 处置：ApiVersionDeprecatedEvent / EscrowStatusChangedEvent /
+# PreAuthStatusChangedEvent 三条经用户裁决"有用就留着完善"，已接入
+# DomainAlertEventSink（ruleName 带 domain- 前缀，与阈值规则区分；落库+扇出
+# 同 AlertEngine 出口），本账移除对应 3 条。剩余 3 条到期未处置即升级板面红项。
+# 复核日期写进行内。
+orphan OrderReversedEvent # 2026-11-09 首轮发现：ReversalService 变量形式发布（extends PaymentEvent），javadoc 明言消费方为清算模块（冲正后生成反向清算记录）、对账模块、通知模块等，全仓无对应监听。处置方向：资金语义（冲正是否生成反向清算记录、接哪条账）待裁决后再接线，接错位置会重复动账；接消费者或删除二选一。复核日期 2026-12-15。
+orphan OrderVoidedEvent # 2026-11-09 首轮发现：VoidService 变量形式发布（extends PaymentEvent），javadoc 口径同 OrderReversedEvent，全仓无对应监听。处置方向：资金语义裁决同 OrderReversedEvent。复核日期 2026-12-15。
 dead ClearingBatchCompletedEvent # 2026-11-09 首轮发现：ClearingSettlementListener 监听后调 processClearingBatch，但全仓无任何发布点；ClearingRetryScheduler 类注释实证「生产侧唯一调用者 ClearingSettlementListener 只调 processClearingBatch」⇒ 清算入账在生产实际从不触发（资金路径，比死代码更严重）。处置：另立修复 PR 先定「批次完成」语义与发布点再接线，接错位置会重复动账；本门禁 report-only 期间暂不判红。复核日期 2026-11-21（最紧）。
