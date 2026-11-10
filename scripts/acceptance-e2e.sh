@@ -16,7 +16,11 @@
 #
 # 用法：
 #   NEX_API_KEY=xxx bash scripts/acceptance-e2e.sh
-#   NEX_GATEWAY_URL=http://localhost:8080 NEX_SIGNING_SECRET=xxx NEX_API_KEY=xxx bash scripts/acceptance-e2e.sh
+#   NEX_GATEWAY_URL=http://localhost:8080 NEX_SIGNING_SECRET=xxx \
+#     NEX_API_KEY=xxx NEX_MERCHANT_ID=1 bash scripts/acceptance-e2e.sh
+#
+# 注：NEX_MERCHANT_ID 未传时会尝试从响应回填 merchantId；支付响应实际不含该字段，
+#     因此对账步骤需要显式传入，否则记 SKIP（SKIP 不等于通过）。
 #
 # 退出码：0 全通过；1 有步骤失败；2 前置缺失
 set -uo pipefail
@@ -28,6 +32,7 @@ AMOUNT="${NEX_AMOUNT:-100}"
 CURRENCY="${NEX_CURRENCY:-NEX}"
 PAYER="${NEX_PAYER_ADDRESS:-}"
 PAYEE="${NEX_PAYEE_ADDRESS:-}"
+MERCHANT_ID="${NEX_MERCHANT_ID:-}"
 REPORT="${NEX_ACCEPTANCE_REPORT:-acceptance-report.md}"
 
 if [ -z "$API_KEY" ]; then
@@ -125,13 +130,17 @@ if [ -n "$PAYMENT_ID" ]; then
   call GET "/api/v1/settlement-confirmations/$PAYMENT_ID"
   case "$RESP_CODE" in
     200) record "settlement confirmation" "$RESP_CODE" PASS "paymentId=$PAYMENT_ID" ;;
-    404) record "settlement confirmation" "$RESP_CODE" FAIL "无结算记录（支付可能未走到结算腿）" ;;
+    404) record "settlement confirmation" "$RESP_CODE" FAIL "无确认记录：initiateConfirmation 无生产调用（写侧未接线），非支付未到结算腿" ;;
     *)   record "settlement confirmation" "$RESP_CODE" FAIL "$(printf '%s' "$RESP_BODY" | head -c 160)" ;;
   esac
 fi
 
-# 4) 对账差异（merchantId 由 API Key 解析；本脚本不假设具体值，用 payments 响应回填）
-MERCHANT_ID="$(json_get merchantId merchant_id | head -1)"
+# 4) 对账差异
+# 支付响应不含 merchantId（PaymentOrchestrationController.toResponse() 的键集合里没有），
+# 因此优先用调用方显式传入的 NEX_MERCHANT_ID；未传才尝试从响应回填。
+if [ -z "$MERCHANT_ID" ]; then
+  MERCHANT_ID="$(json_get merchantId merchant_id | head -1)"
+fi
 if [ -n "$MERCHANT_ID" ]; then
   call GET "/api/v1/reconciliation/discrepancies/$MERCHANT_ID"
   if [ "$RESP_CODE" = "200" ]; then
@@ -140,7 +149,7 @@ if [ -n "$MERCHANT_ID" ]; then
     record "reconciliation query" "$RESP_CODE" FAIL "$(printf '%s' "$RESP_BODY" | head -c 160)"
   fi
 else
-  record "reconciliation query" "-" SKIP "响应未含 merchantId，需人工指定"
+  record "reconciliation query" "-" SKIP "未提供 NEX_MERCHANT_ID，且响应不含 merchantId"
 fi
 
 # ---------- 报告 ----------

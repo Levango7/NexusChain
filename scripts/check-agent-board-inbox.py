@@ -14,7 +14,7 @@
       · 留言可选 `ack_required: true` + `expires: <ISO-8601>`；
       · 签收 = 另一条**署名不同**的留言在 `refs:` 里写 `- board: <该 id>`
         （沿用 §2.2 既有口径：真正生效的是后来留言的引用关系）；
-      · 逾期未签收的 P0/P1 必读项 ⇒ CI 红；其余只列清单，不阻断。
+      · 逾期未签收且收件方含 agent 车道的 P0/P1 必读项 ⇒ CI 红；其余只列清单，不阻断。
 
 口径
     A. 阻断（exit 1）
@@ -23,10 +23,15 @@
           `ack_required` 非布尔 / `ack_required: true` 但缺 `expires` 或不可解析 /
           `expires` 早于 `created`
        A2 逾期未签收：`ack_required: true` 且 `status: open` 且 `priority` ∈ {P0,P1}
-          且 `expires` 已过且无任何他人署名留言引用其 id
+          且 `expires` 已过且无任何他人署名留言引用其 id，
+          **且 `to:` 里至少有一个 agent 车道**（nex/zcode/qoder CN/TRAE 宝/eng-review/
+          codearts agent/orchestrator，或通配 `all`）
     B. 只报告（不影响退出码）
        B1 逾期但优先级为 P2 ⇒ 警告（阻断会放大成「为一条知会卡住全仓合并」）
        B2 各 owner 名下仍开放的留言清单（收件箱）
+       B3 逾期未签收但 `to:` 全为非车道身份（如 ops）⇒ 警告。签收谓词要求署名不同，
+          但收件方里没有一条 agent 车道，结构上永远没人能「代表收件方」签收；
+          此时按 A2 阻断等于为一条人类专属通知冻结全仓合并（2026-11-06-0512 实测形态）。
     C. 棘轮
        历史遗留的结构性错误记在 `scripts/agent-board-baseline.txt`，
        **只应收缩，不得增长**；新增结构性错误一律阻断。
@@ -64,6 +69,21 @@ LF = chr(10)
 
 REQUIRED_FIELDS = ('id', 'owner', 'to', 'type', 'priority', 'created')
 BLOCKING_PRIORITIES = ('P0', 'P1')
+AGENT_LANES = ('nex', 'zcode', 'qoder CN', 'TRAE 宝', 'eng-review', 'codearts agent',
+               'orchestrator')
+
+
+def to_set_of(raw):
+    """解析 `to:` 字段为集合。容忍 `ops` / `"qoder CN"` / `[a, b]` / `[all]` 四种写法。"""
+    value = clean(str(raw or ''))
+    if value.startswith('[') and value.endswith(']'):
+        value = value[1:-1]
+    return {part.strip().strip('"\'') for part in value.split(',') if part.strip()}
+
+
+def reachable_by_agent(raw_to) -> bool:
+    targets = to_set_of(raw_to)
+    return 'all' in targets or bool(targets & set(AGENT_LANES))
 
 
 def parse_front_matter(text: str):
@@ -233,7 +253,11 @@ def scan(board_dir: str, now: dt.datetime):
                 'refs 里写 `- board: %s`' % (msg['expires'].isoformat(), msg['owner'],
                                             msg['to'], _id))
         if msg['priority'] in BLOCKING_PRIORITIES:
-            errors.append(('overdue-unacked', _id, line))
+            if not reachable_by_agent(msg['to']):
+                warnings.append(('overdue-unacked-unreachable', _id,
+                                  line + '（收件方无 agent 车道，结构上无人能签 ⇒ 降级警告）'))
+            else:
+                errors.append(('overdue-unacked', _id, line))
         else:
             warnings.append(('overdue-unacked-p2', _id, line))
 
@@ -294,15 +318,16 @@ def selftest() -> int:
     hour = dt.timedelta(hours=1)
 
     def item(owner, type_='通知', priority='P2', status='open', expires=None,
-             ack_required=False, refs=(), created=base_created, id_override=None):
+             ack_required=False, refs=(), created=base_created, id_override=None,
+             to='nex'):
         return dict(owner=owner, type=type_, priority=priority, status=status, expires=expires,
                     ack_required=ack_required, refs=list(refs), created=created,
-                    id_override=id_override)
+                    id_override=id_override, to=to)
 
     def write_file(path, fname, spec):
         _id = spec['id_override'] or fname[:-3]
         lines = ['---', 'id: %s' % _id, 'owner: "%s"' % spec['owner'],
-                 'from: "%s"' % spec['owner'], 'to: owner-2', 'type: %s' % spec['type'],
+                 'from: "%s"' % spec['owner'], 'to: %s' % spec['to'], 'type: %s' % spec['type'],
                  'priority: %s' % spec['priority'], 'status: %s' % spec['status'],
                  'created: %s' % spec['created'].isoformat()]
         if spec['ack_required']:
@@ -348,6 +373,12 @@ def selftest() -> int:
                                         ack_required=True, status='done')}),
         ('T12 无 front-matter ⇒ 红', 1, {
             '20261031-1400-n.md': None}),
+        ('T13 收件方全为非车道身份（ops）⇒ 降级警告不红', 0, {
+            '20261031-1500-o.md': item('owner-1', '请求', 'P1', expires=now - hour,
+                                       ack_required=True, to='ops')}),
+        ('T14 收件方混合车道+非车道 ⇒ 仍红', 1, {
+            '20261031-1600-p.md': item('owner-1', '请求', 'P1', expires=now - hour,
+                                       ack_required=True, to='[ops, nex]')}),
     ]
 
     failures = 0
@@ -423,9 +454,16 @@ def main() -> int:
                 print('  - [%s] %s ⇒ %s' % (kind, item_id, msg))
         print()
 
-    if warnings:
-        print('⚠️ 逾期但非必读（P2）%d 条：' % len(warnings))
-        for kind, item_id, msg in warnings:
+    p2_warn = [w for w in warnings if w[0] == 'overdue-unacked-p2']
+    unreach_warn = [w for w in warnings if w[0] == 'overdue-unacked-unreachable']
+    if p2_warn:
+        print('⚠️ 逾期但非必读（P2）%d 条：' % len(p2_warn))
+        for _kind, item_id, msg in p2_warn:
+            print('  - %s ⇒ %s' % (item_id, msg))
+        print()
+    if unreach_warn:
+        print('⚠️ 逾期未签收但收件方无 agent 车道（结构性无人可签）%d 条：' % len(unreach_warn))
+        for _kind, item_id, msg in unreach_warn:
             print('  - %s ⇒ %s' % (item_id, msg))
         print()
 

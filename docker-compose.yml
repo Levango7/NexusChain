@@ -255,7 +255,7 @@ services:
     build:
       context: .
       dockerfile: nexus-explorer/Dockerfile
-    container_name: nexus-explorer
+    container_name: ${NEX_CONTAINER_PREFIX:-nexus}-explorer
     ports:
       - '127.0.0.1:3001:3000'
     environment:
@@ -281,7 +281,7 @@ services:
   # 版本对齐设计文档 §4.1：SCA 2025.1.0.0 内置 Nacos Client 3.1.1（server 3.1.2 同系列稳定版）。
   nacos:
     image: nacos/nacos-server:v3.1.2
-    container_name: nexus-nacos
+    container_name: ${NEX_CONTAINER_PREFIX:-nexus}-nacos
     ports:
       - '8848:8848'    # Nacos HTTP API + 控制台
       - '9848:9848'    # Nacos 2.x gRPC 端口（客户端必需，client ≥ 2.0 通过 gRPC 注册）
@@ -327,7 +327,7 @@ services:
   # 版本对齐设计文档 §4.1：SCA 2023.0.1.0 内置 Sentinel 1.8.8。
   sentinel-dashboard:
     image: bladex/sentinel-dashboard:1.8.8
-    container_name: nexus-sentinel-dashboard
+    container_name: ${NEX_CONTAINER_PREFIX:-nexus}-sentinel-dashboard
     ports:
       - '8858:8080'    # 对外 8858 → 容器内 Sentinel Dashboard 默认 8080
     environment:
@@ -354,7 +354,7 @@ services:
   # 版本对齐设计文档 §4.2.1：与 SCA 2025.1.0.0 seata-spring-boot-starter 2.5.0 兼容。
   seata-server:
     image: apache/seata-server:2.5.0
-    container_name: nexus-seata-server
+    container_name: ${NEX_CONTAINER_PREFIX:-nexus}-seata-server
     ports:
       - '8091:8091'    # Seata Server TC 端口（client 通过此端口注册分支事务）
       - '7091:7091'    # Seata Server Web 控制台
@@ -389,7 +389,7 @@ services:
   # 设计文档 §4.3.4：4 服务通过 zipkin-reporter-brave HTTP POST 上报至 /api/v2/spans。
   zipkin:
     image: openzipkin/zipkin:3.4
-    container_name: nexus-zipkin
+    container_name: ${NEX_CONTAINER_PREFIX:-nexus}-zipkin
     ports:
       - '9411:9411'    # Zipkin API + UI
     environment:
@@ -430,7 +430,7 @@ services:
       # 与其余服务（nexus-gateway 等）及 CI（context: . + file: ./mpc-engine/Dockerfile）一致。
       context: .
       dockerfile: mpc-engine/Dockerfile
-    container_name: nexus-mpc-engine-0
+    container_name: ${NEX_CONTAINER_PREFIX:-nexus}-mpc-engine-0
     ports:
       - '127.0.0.1:50051:50051'    # gRPC，仅本机访问（容器间用服务名 mpc-engine-0:50051）
     environment:
@@ -466,7 +466,7 @@ services:
       # 与其余服务（nexus-gateway 等）及 CI（context: . + file: ./mpc-engine/Dockerfile）一致。
       context: .
       dockerfile: mpc-engine/Dockerfile
-    container_name: nexus-mpc-engine-1
+    container_name: ${NEX_CONTAINER_PREFIX:-nexus}-mpc-engine-1
     ports:
       - '127.0.0.1:50052:50051'    # 宿主机 50052 → 容器内 50051
     environment:
@@ -502,7 +502,7 @@ services:
       # 与其余服务（nexus-gateway 等）及 CI（context: . + file: ./mpc-engine/Dockerfile）一致。
       context: .
       dockerfile: mpc-engine/Dockerfile
-    container_name: nexus-mpc-engine-2
+    container_name: ${NEX_CONTAINER_PREFIX:-nexus}-mpc-engine-2
     ports:
       - '127.0.0.1:50053:50051'    # 宿主机 50053 → 容器内 50051
     environment:
@@ -537,7 +537,7 @@ services:
   # 使用：docker-compose up -d l1-hardhat
   l1-hardhat:
     image: node:20-alpine
-    container_name: nexus-l1-hardhat
+    container_name: ${NEX_CONTAINER_PREFIX:-nexus}-l1-hardhat
     working_dir: /app
     command: sh -c "npm install --no-audit --no-fund && npx hardhat node --hostname 0.0.0.0"
     ports:
@@ -600,7 +600,7 @@ services:
   #       数据落在命名卷 pg-dev-data（与 prod compose 的 pgdata 隔离）；docker compose down 不删卷。
   nexus-pgsql:
     image: postgres:16-alpine
-    container_name: nexus-pgsql
+    container_name: ${NEX_CONTAINER_PREFIX:-nexus}-pgsql
     ports:
       - '127.0.0.1:55432:5432'
     environment:

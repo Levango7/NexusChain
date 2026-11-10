@@ -1,7 +1,10 @@
 package org.nexus.gateway.security.encryption;
 
+import io.micrometer.core.instrument.Timer;
+import org.nexus.gateway.security.audit.SecurityMetricsRecorder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import javax.crypto.Cipher;
@@ -40,6 +43,22 @@ public class EncryptionService {
 
     private final SecureRandom secureRandom;
 
+    /**
+     * 业务指标（可空）：单元测试可直接 {@code new EncryptionService()}，不强制注入。
+     *
+     * <p>2026-11-08 接线前，{@code SecurityMetricsRecorder} 的两个加密 meter
+     * 在全仓没有任何真实调用点 —— {@code getEncryptionLatencyTimer()} 无调用方，
+     * {@code recordEncryptionOperation()} 的唯一 grep 命中是
+     * {@code SecurityAuditService} 里**同名不同类**的审计方法。属"注册了没人喂"
+     * 缺陷：{@code /actuator/prometheus} 能看到序列，值恒为 0。</p>
+     */
+    private SecurityMetricsRecorder securityMetricsRecorder;
+
+    @Autowired(required = false)
+    public void setSecurityMetricsRecorder(SecurityMetricsRecorder securityMetricsRecorder) {
+        this.securityMetricsRecorder = securityMetricsRecorder;
+    }
+
     public EncryptionService() throws Exception {
         this.secureRandom = SecureRandom.getInstanceStrong();
     }
@@ -63,6 +82,7 @@ public class EncryptionService {
         if (plaintext == null) {
             return null;
         }
+        Timer.Sample sample = startMetricsSample();
         try {
             byte[] iv = new byte[GCM_IV_LENGTH];
             secureRandom.nextBytes(iv);
@@ -78,6 +98,8 @@ public class EncryptionService {
         } catch (Exception e) {
             log.error("字段加密失败 — fail-closed", e);
             throw new EncryptionException("ENCRYPTION_KEY_UNAVAILABLE", "字段加密失败", e);
+        } finally {
+            stopMetricsSample(sample);
         }
     }
 
@@ -98,6 +120,7 @@ public class EncryptionService {
         if (ciphertext == null || iv == null) {
             return null;
         }
+        Timer.Sample sample = startMetricsSample();
         try {
             Cipher cipher = Cipher.getInstance(TRANSFORMATION);
             GCMParameterSpec spec = new GCMParameterSpec(GCM_TAG_LENGTH, iv);
@@ -109,7 +132,36 @@ public class EncryptionService {
         } catch (Exception e) {
             log.warn("认证降级：数据完整性验证失败 — fail-closed，拒绝返回数据", e);
             throw new EncryptionException("DATA_INTEGRITY_VIOLATION", "数据完整性验证失败", e);
+        } finally {
+            stopMetricsSample(sample);
         }
+    }
+
+    /**
+     * 业务指标采样起点。未注入 recorder（纯单测）时返回 {@code null}，调用方无副作用。
+     */
+    private Timer.Sample startMetricsSample() {
+        return securityMetricsRecorder == null ? null : Timer.start();
+    }
+
+    /**
+     * 结束采样并计一次加密/解密操作。
+     *
+     * <p><b>口径</b>：计入所有**已完成的尝试**（成功与失败都算）—— 这是
+     * {@code nexus_encryption_operations_total} 的字面语义「操作总数」。
+     * 因此本计数器不能直接当成功率分母；失败率目前**没有**独立 meter
+     * （见 {@code docs/ops/slo.md} 的缺口清单），需要时应新增
+     * {@code nexus_encryption_failures_total}，而不是在本计数器上做减法。</p>
+     *
+     * <p>{@link #decryptFromBase64} 委托给 {@link #decrypt}，**只**在 {@code decrypt}
+     * 内计数，避免一次 Base64 解密被计两次。</p>
+     */
+    private void stopMetricsSample(Timer.Sample sample) {
+        if (sample == null || securityMetricsRecorder == null) {
+            return;
+        }
+        sample.stop(securityMetricsRecorder.getEncryptionLatencyTimer());
+        securityMetricsRecorder.recordEncryptionOperation();
     }
 
     /**

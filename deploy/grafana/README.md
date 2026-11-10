@@ -7,7 +7,7 @@
 | 文件 | UID | 对应服务 | 面板数 | 关键指标 |
 | --- | --- | --- | --- | --- |
 | `dashboards/nexus-overview.json` | `nexus-overview` | 全部服务总览 | 20 | `up`、`http_server_requests_seconds_count/_sum/_bucket`、`jvm_memory_*`、`jvm_gc_pause_seconds_sum`、`nexuschain_block_height`、`ALERTS` |
-| `dashboards/nexus-gateway.json` | `nexus-gateway` | nexus-gateway（8080） | 24 | 上述通用指标 + `nexus_orders_created_total` / `nexus_payments_confirmed_total` / `nexus_payments_failed_total` / `nexus_refunds_issued_total` / `nexus_webhooks_delivered_total` / `nexus_webhooks_failed_total` / `nexus_payment_latency_seconds_*` |
+| `dashboards/nexus-gateway.json` | `nexus-gateway` | nexus-gateway（8080） | 24 | 上述通用指标 + `nexus_orders_total` / `nexus_payments_confirmed_total` / `nexus_payments_failed_total` / `nexus_refunds_issued_total` / `nexus_webhooks_delivered_total` / `nexus_webhooks_failed_total` / `nexus_payment_latency_seconds_*` |
 | `dashboards/nexus-api-gateway.json` | `nexus-api-gateway` | nexus-api-gateway（8085） | 21 | HTTP/JVM/容器通用指标（无自定义业务指标） |
 | `dashboards/nexus-wallet-service.json` | `nexus-wallet-service` | nexus-wallet-service（8083） | 21 | HTTP/JVM/容器通用指标（无自定义业务指标） |
 | `dashboards/nexus-signing-service.json` | `nexus-signing-service` | nexus-signing-service（8082） | 21 | HTTP/JVM/容器通用指标（无自定义业务指标） |
@@ -79,7 +79,7 @@ Grafana UI → `Dashboards` → `New` → `Import` → 上传 JSON → 选择数
 | `jvm_memory_used_bytes` / `jvm_memory_committed_bytes` / `jvm_memory_max_bytes`（label `area=heap/nonheap`、`id`） | Micrometer JVM 默认指标；`deploy/k8s/50-prometheus-rules.yaml` 的 `JvmHeapUsageHigh` 用 `jvm_memory_used_bytes{area="heap"}` / `jvm_memory_max_bytes{area="heap"}` |
 | `jvm_gc_pause_seconds_sum/_count`（label `cause`、`action`） | 同上；`JvmGcTimeHigh` 告警引用 `jvm_gc_pause_seconds_sum` |
 | `jvm_threads_live_threads` / `jvm_threads_peak_threads` / `jvm_threads_daemon_threads` | Micrometer JVM 默认指标 |
-| `nexus_orders_created_total`、`nexus_payments_confirmed_total`、`nexus_payments_failed_total`、`nexus_refunds_issued_total`、`nexus_webhooks_delivered_total`、`nexus_webhooks_failed_total`、`nexus_payment_latency_seconds_sum/_count/_max` | `nexus-gateway/src/main/java/org/nexus/gateway/observability/PaymentMetrics.java`：`Counter.builder("nexus.orders.created")` 等、`Timer.builder("nexus.payment.latency")`。PrometheusNamingConvention 将句点/驼峰转下划线并追加 `_total`/`_seconds` |
+| `nexus_orders_total`、`nexus_payments_confirmed_total`、`nexus_payments_failed_total`、`nexus_refunds_issued_total`、`nexus_webhooks_delivered_total`、`nexus_webhooks_failed_total`、`nexus_payment_latency_seconds_sum/_count/_max` | `nexus-gateway/src/main/java/org/nexus/gateway/observability/PaymentMetrics.java`：`Counter.builder("nexus.orders.created")` 等、`Timer.builder("nexus.payment.latency")`。PrometheusNamingConvention 将句点/驼峰转下划线并追加 `_total`/`_seconds`；**例外**：OpenMetrics 保留 `_created` 后缀（创建时间戳），导出时被剥离 ⇒ `nexus.orders.created` 实际导出为 `nexus_orders_total`（2026-11-07 实测抓取文本确认；此前本表与面板都写 `nexus_orders_created_total`，该序列不存在） |
 | `nexuschain_block_height` | `nexus-core/nexus-core/src/main/java/org/nexus/metrics/CoreMetricsConfig.java`：`Gauge.builder("nexuschain_block_height")`（StateDB bestBlock）。`deploy/k8s/50-prometheus-rules.yaml` 的 `BlockchainCoreStalled` 告警引用 |
 | `up` | Prometheus 抓取目标自带；`ServiceDown` / `SeataTcDown` 告警引用 |
 | `ALERTS` | Prometheus 内置告警状态指标（规则加载后才存在） |

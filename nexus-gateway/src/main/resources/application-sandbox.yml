@@ -69,6 +69,10 @@ nexus:
   consortium:
     rpc-url: http://localhost:8080
     skip-confirmation: true
+  # 3DS（2026-11-08 审计修复 B2）：base 改为默认 false 后，sandbox 显式保留模拟挑战
+  # —— 集成测试（@ActiveProfiles("sandbox")）依赖它走通 3DS 分支。
+  3ds:
+    simulated-challenge-enabled: true
   exchange-wallet:
     base-url: http://localhost:8081
     # Sandbox-only: fake platform pubkey so refund/settlement signing paths are exercised.

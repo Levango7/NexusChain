@@ -6,14 +6,14 @@
   - PLAN-012 审核方案 A（拆分验证路径 + 状态重放，2026-08-14 审核通过）——A-1 止血已上线，A-2/A-3 未实施
   - 批次⑥ 路线文档 `docs/audit/2026-10-19-nexus-core-narrative-reality-routes.md` §4（欺诈证明锚定未完成）、§5（支付扩展链路被门禁拒绝，2026-10-20 修正）
   - 批次⑥ 第 7 项 DB schema 版本化基建（本专项 Phase 0，已交付）
-- **目标**：把三条彼此依赖的"叙事-现实"缺口收敛为一条链路——**区块接受 → 状态执行（重放）→ merkle 重建校验 → 失败回滚/拉黑 → 持久化与对账**，使同步节点可持续同步与确认、支付扩展交易端到端生效、欺诈证明状态重启不丢失。
+- **目标**：把三条彼此依赖的"叙事-现实"缺口收敛为一条链路——**区块接受 → 状态执行（重放）→ merkle 重建校验 → 失败回滚/拉黑 → 持久化与对账**，使同步节点可持续同步与确认、支付扩展口径与实现一致（2026-11：13 个写端点保留未启用，返回 HTTP 501 + code 5010）、欺诈证明状态重启不丢失。
 
 ## 一、范围合并论证（为什么一次设计）
 
 | 来源 | 缺口 | 依赖的公共链路 |
 |---|---|---|
 | PLAN-012 A-2/A-3 | 同步节点"写链 → 状态重放 → merkle 校验 → 回滚"未接线 | 写链后的状态执行与校验 |
-| 批次⑥ §5 | `0x10–0x1a` 支付扩展"类型/单规则预检存在、完整链路被门禁拒绝"（`processTransaction` 生产无调用点） | 区块接受后的交易执行入口（需独立共识变更） |
+| 批次⑥ §5 | `0x10–0x1a` 支付扩展"类型/单规则预检存在、写端点保留未启用（501/5010）"（`processTransaction` 生产无调用点） | 区块接受后的交易执行入口（需独立共识变更） |
 | 批次⑥ §4 | 欺诈证明"机制真实、锚定未完成"（原：状态内存态 + L1 交互默认模拟；状态已持久化——Phase 4） | 执行结果的状态持久化与外部锚定 |
 
 三者共同点是**同一条状态执行链路的三个消费方**：A-2/A-3 需要"按区块重放交易"的执行入口；支付扩展需要"区块接受路径调用执行器"的接线；欺诈证明需要"执行结果/批次状态的持久化"。分开实施会三次改动同一路径（`PendingBlocksManager` / `StateDB` / `MerkleTreeManager`），存在反复回归风险——**合并立项、一次设计、分期交付**。
@@ -23,7 +23,7 @@
 - **同步写链路径**：`PendingBlocksManager` 接收块轻校验（A-1 止血已上线：merkle 校验失败明确 WARN + 块入缓存，PLAN-012 实施记录 5a6e7fa）。
 - **状态执行引擎存在**（PLAN-012 A-2 深挖修正）：`StateDB.applyTransactions` / `getAccountUnsafe`（按需重放）完整存在——缺口不是"引擎缺失"，而是**接线缺失**。
 - **merkle 对账链路的实现语义（Phase 1 实施期修正）**：`MerkleHandler` 的 GET_TREE_NODES/TREE_NODES 对账对象是**块体交易树**（按 `block.body` 交易哈希构建、按索引替换交易）——不是账户状态树；账户状态链路的真实实现是确认路径 `StateDB.writeBlock → NewBestBlockEvent → StatetreeUpdate`（Phase 1 已收敛到 `StateReplayManager`）。同步路径写链前的 merkle 校验失败（PLAN-011/012 死锁根因）语义不变：本地状态未重放至校验高度时的时序问题（A-1 已改为"延后 + 明确日志 + 继续写链"）。
-- **支付扩展（2026-10-20 Phase 3 修正）**：类型定义齐备（`core/account/Transaction.java:130-141`，CHANNEL_OPEN 0x10 … SUBSCRIPTION_AUTH 0x1a）；`BasicRule` 有单规则预检（`BasicRule.java:187-205`）；`PaymentTransactionProcessor.processTransaction` 分发 0x10–0x18 有逻辑、0x19/0x1a 仅日志（`:161-170`），**但 `processTransaction` 生产无任何调用点**。更重要的是：完整区块/RPC 路径先经 `AccountRule` 的 `TransactionFormatCheck`，其 `type<=15` 门禁（`TransactionCheck.java:119-125`）会以 `Type check error` 拒绝 0x10–0x1a——**当前不可上链**，不是"上链后不执行"。
+- **支付扩展（2026-10-20 Phase 3 修正）**：类型定义齐备（`core/account/Transaction.java:130-141`，CHANNEL_OPEN 0x10 … SUBSCRIPTION_AUTH 0x1a）；`BasicRule` 有单规则预检（`BasicRule.java:187-205`）；`PaymentTransactionProcessor.processTransaction` 分发 0x10–0x18 有逻辑、0x19/0x1a 仅日志（`:161-170`），**但 `processTransaction` 生产无任何调用点**。2026-11（B-2）已把 13 个写端点收口为 HTTP 501 + code 5010（保留路由与方法签名，节点不构造、不签名、不广播此类交易）；链上类型门禁是否接受 0x10–0x1a 以共识层为准（见 #520，白名单细节不属本专项）。
 - **欺诈证明**：单步二分证明 + 挑战窗 + challenge bond + 罚没奖励 + 多挑战者冲突解决（first-valid-wins）实现完整；批次/挑战/bond 状态已 PG 持久化（Phase 4，`JdbcFraudProofStateStore`，store=`l2_fraud_state`）；**但** L1 侧 `DefaultL2BridgeContract` 默认注入内存模拟客户端（`real-l1-enabled=false`，:26），且桥的存款/提款/已提交根仍为进程内存（见 §八 Phase 4/5 边界）。
 
 ## 三、目标架构
@@ -34,8 +34,8 @@
    ├─► 状态执行器 StateReplayManager（新建）
    │     1. 取新增区块（增量，不重放全链）
    │     2. 重放交易 → MerkleRule.validateMerkle（等同 StateDB.applyTransactions 语义，StateDB 写锁内）
-   │     3. 支付扩展交易 → 不接线（Phase 3 决定：0x10–0x1a 受 type<=15 门禁拒绝；
-   │        执行接线/validate-only 属独立共识变更，不在本专项"无共识变更"范围内）
+   │     3. 支付扩展交易 → 不接线（Phase 3 决定；2026-11 B-2 已把 13 个写端点收口为 501/5010，
+   │        节点不构造此类交易；执行接线/validate-only 属独立共识变更，不在本专项范围内）
    │     4. 状态根重算（Block.calculateMerkleState；MerkleTreeManager 仍为块体交易树对账缓存）
    │     5. 事后校验 merkle 状态根 vs 区块声明（MerkleRule.verifyStateRoots）
    │           ├─ 一致 → 确认推进（best 更新条件）
@@ -60,7 +60,7 @@
 | **Phase 0**（已交付） | DB schema 版本化基建（`SchemaMeta` + LevelDB `__meta/schema_version` + `docs/db-schema-versioning.md`）——支撑后续阶段的状态持久化迁移 | 1–2d | 单测三分支 + 政策文档 |
 | **Phase 1**（已交付，2026-10-19，见 §八） | `StateReplayManager` 核心（A-2）：确认路径重放 → 账户/孵化状态持久化 → 状态根重算校验（`MerkleRule.verifyStateRoots` 提取）；观察位不阻断 | 2–3d | ✅ 单测：重放后状态根与出块方一致；块体不完整根不一致复现（10/10） |
 | **Phase 2**（已交付，2026-10-20，见 §八） | 事后校验 + 回滚（A-3）：`StateRootMismatchHandler` 异步处置；`observe`（默认）/`rollback` 可配；最终化护栏 + 对端溯源拉黑 | 1–2d | ✅ 单测 19/19：observe 不处置 / rollback 回滚+清理+拉黑 / 最终化拒绝 / 幂等 |
-| **Phase 3**（已交付，2026-10-20，见 §八） | 支付扩展口径固化（Option A，不改共识）：修正"验证已上链"表述；显式标注 0x10–0x1a 被 `TransactionFormatCheck` 的 `type<=15` 门禁拒绝（`Type check error`）、`processTransaction` 生产无调用点、0x19/0x1a 仅日志；补门禁回归测试。真正的"区块接受但不执行"validate-only 属独立共识变更，不在本期 | 0.5–1d | ✅ 门禁测试：0x19/0x1a → `Type check error`；0x0f 不因类型被拒 |
+| **Phase 3**（已交付，2026-10-20，见 §八） | 支付扩展口径固化（Option A，不改共识）：修正"验证已上链"表述；显式标注 0x10–0x1a 被 `TransactionFormatCheck` 的 `type<=15` 门禁拒绝（`Type check error`）、`processTransaction` 生产无调用点、0x19/0x1a 仅日志；补门禁回归测试。真正的"区块接受但不执行"validate-only 属独立共识变更，不在本期（2026-11 更新：B-2 已把 13 个写端点收口为 HTTP 501 + 5010，节点不构造此类交易；链上类型门禁以共识层为准，见 #520） | 0.5–1d | ✅ 门禁测试：0x19/0x1a → `Type check error`；0x0f 不因类型被拒 |
 | **Phase 4**（持久化面已交付 2026-10-20；real-L1 面未交付，见 §八） | 欺诈证明锚定：批次/挑战状态持久化（PG 单存储决策——不做 LevelDB、不双写）+ `real-l1-enabled=true` 真机链路 | 2–3d | ✅ 进程重启后批次/挑战状态不丢失（11 用例）；❌ 真机 L1 交互未验证（转后续专项） |
 | **Phase 5**（已交付，2026-10-20，见 §八） | 双节点连续验证（两个真实节点进程 + 容器化 PG）：持续同步 + 确认不中断（PLAN-011/012 死锁根除）；状态根对账一致 | 1d | ✅ 30 分钟长跑 A/B/PG 高度 3546 一致、ERROR 0、replay mismatch 0、finality 2000/2000 FINALIZED；边界：real-L1 未覆盖 |
 
@@ -73,7 +73,7 @@
 | 状态重放性能（同步全链重执行） | 仅新增区块重放；已有链状态持久化（PLAN-012 决策） |
 | 重放与出块并发竞争 | 重放持 StateDB 写锁（复用既有 readWriteLock） |
 | 恶意链状态错误延迟发现 | 重放后校验 merkle state；失败回滚 + 拉黑（PLAN-012 决策） |
-| 支付扩展"假接线"引入共识回归 | 本期不接 `processTransaction`、不放宽 `type<=15` 门禁（放宽会让未执行交易给 coinbase 加费、且状态根不可见）；只做口径/注释/门禁测试；真正的 validate-only 走独立共识变更 |
+| 支付扩展"假接线"引入共识回归 | 本期不接 `processTransaction`、不改链上类型门禁（是否接受 0x10–0x1a 以共识层为准，见 #520；放宽会让未执行交易给 coinbase 加费、且状态根不可见）；B-2 已把 13 个写端点收口为 501/5010；真正的 validate-only 走独立共识变更 |
 | 真机环境不稳定（Docker/P2P 时序） | 复用 PLAN-012 环境处置经验；验证脚本化，失败可重放 |
 
 ## 六、对外口径（与 README/ARCHITECTURE 注记联动）
@@ -81,7 +81,7 @@
 本专项交付前，README / ARCHITECTURE 对以下两点的口径为（2026-10 起）：
 
 1. **Optimistic 路线**：欺诈证明机制真实；批次/挑战/bond 状态已 PG 持久化（Phase 4，2026-10-20），但 L1 交互默认内存模拟（`real-l1-enabled=false`）——"锚定到真实 L1 状态"未完成；Phase 5 仅覆盖双节点共识/同步，real-L1 真机验证仍未交付。
-2. **支付扩展（0x10–0x1a）**：仅有类型定义与 `BasicRule` 单规则预检；完整区块/RPC 路径被 `TransactionCheck.TransactionFormatCheck` 的 `type<=15` 门禁拒绝（`Type check error`），**当前不可上链**。`processTransaction` 生产无调用点；0x19/0x1a 分支仅日志、无状态写入。
+2. **支付扩展（0x10–0x1a）**：仅有类型定义与 `BasicRule` 单规则预检；13 个写端点保留路由与方法签名但**保留未启用**——有效请求返回 HTTP 501 + code 5010，入参校验失败优先返回 5000（RPC broadcast 缺参为 4001），节点不构造、不签名、不广播此类交易。链上类型门禁是否接受 0x10–0x1a 以共识层为准（见 #520）。`processTransaction` 生产无调用点；0x19/0x1a 分支仅日志、无状态写入。
 
 各阶段交付后同步回填本节与 README/ARCHITECTURE 表述（**交付即收敛，不留口径漂移**）。
 
@@ -210,7 +210,8 @@
 - 口径修正（Option A，不改共识）：README / ARCHITECTURE / 本文件 / 审计路线文档 / CHANGELOG
   统一为"0x10–0x1a 仅有类型定义与 `BasicRule` 单规则预检；完整区块/RPC 路径被
   `TransactionCheck.TransactionFormatCheck` 的 `type<=15` 门禁拒绝（`Type check error`），
-  当前不可上链"。
+  当前不可上链"。（**历史记录**；2026-11-06 更新：B-2 已把 13 个写端点收口为 HTTP 501 + code 5010，
+  节点不构造此类交易；链上类型门禁是否接受 0x10–0x1a 以共识层为准，见 #520。）
 - 代码边界注释：`TransactionCheck` 门禁、`BasicRule` 单规则预检、`PaymentTransactionProcessor`
   0x19/0x1a 仅日志分支、SDK `TxUtils.CreateRawSubscriptionAuthTransaction`、Gateway
   订阅授权注释（实际是 0 金额普通转账，不是 0x1a）。

@@ -54,9 +54,14 @@ function readNavTargets(): string[] {
   return targets;
 }
 
-/** 路由的静态路径段（去掉 `:param` 与空段）。 */
+/**
+ * 路由的静态路径段（去掉 `:param`、空段、以及兜底通配 `*`）。
+ *
+ * `*` 是 catch-all：它**不该**有导航入口（它就是"没有任何入口通向它"时才有用），
+ * 故从静态段里排除 —— 否则下面的「每条路由都要有入口」会把兜底路由判成不可达。
+ */
 function staticSegments(path: string): string[] {
-  return path.split("/").filter((s) => s && !s.startsWith(":"));
+  return path.split("/").filter((s) => s && !s.startsWith(":") && s !== "*");
 }
 
 describe("路由可达性", () => {
@@ -65,6 +70,16 @@ describe("路由可达性", () => {
 
   it("App.tsx 应该声明了路由", () => {
     expect(routes.length).toBeGreaterThan(0);
+  });
+
+  it('必须声明兜底路由 path="*"（否则未匹配路径渲染 null ⇒ 白屏）', () => {
+    // 2026-11-07 审计发现 B10：App.tsx 曾有 11 条路由却没有兜底 —— 任意未匹配路径
+    // 下 React Router 渲染 null，`<div id="root">` 保持空 ⇒ **纯白屏**
+    // （实测 bodyHtmlLen=80、rootChildCount=0、bodyTextLen=0）。
+    // 且本仓没有承载导航的布局路由（首页自己渲染导航、其它页渲染「返回」链接），
+    // 所以未匹配时用户既看不到导航也看不到返回，被完全困在白屏里。
+    // 本断言把兜底钉住，防止将来被误删。
+    expect(routes).toContain("*");
   });
 
   it("每条非根路由都应该至少有一个导航入口", () => {

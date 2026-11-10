@@ -51,6 +51,40 @@ public class ReconciliationAdjustmentService {
     @Value("${reconciliation.adjustment.auto-approve-threshold:1000}")
     private BigDecimal autoApproveThreshold;
 
+    /**
+     * 日上限闸是否生效（2026-11-08 新增）。
+     *
+     * <p><b>默认 false</b>：三档判据照常计算、打日志、累加指标，但**不改变任何行为**
+     * （该自动审批的照常自动审批并动账）。只有显式置 true 才会把超限单转
+     * {@code PENDING_APPROVAL} 且不调用 {@code executeAdjustment}。
+     * 本次上线只做观测，因此默认 false 是硬要求。</p>
+     */
+    @Value("${reconciliation.adjustment.daily-limits.enforce:false}")
+    private boolean enforceDailyLimits;
+
+    /**
+     * 每商户当日 {@code AUTO_APPROVED} 笔数上限（默认 5）。
+     *
+     * <p>≤0 视为未配置、不参与拦截——与补偿侧同口径，避免"默认 0 导致全部拒绝"。</p>
+     */
+    @Value("${reconciliation.adjustment.daily-max-count:5}")
+    private int dailyMaxCount;
+
+    /** 每商户当日 {@code AUTO_APPROVED} 累计金额上限（默认 3000）。≤0 / null 视为未配置。 */
+    @Value("${reconciliation.adjustment.daily-max-total:3000}")
+    private BigDecimal dailyMaxTotal;
+
+    /** 超限观测指标名（enforce=false 期间也照常累加，供切 true 前建立基线）。 */
+    private static final String OVER_LIMIT_COUNTER = "nexus_reconciliation_adjustment_over_limit_total";
+
+    /** 观测指标注册表（可空：非 Spring 上下文 / 单测未注入时静默降级）。 */
+    private io.micrometer.core.instrument.MeterRegistry meterRegistry;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setMeterRegistry(io.micrometer.core.instrument.MeterRegistry meterRegistry) {
+        this.meterRegistry = meterRegistry;
+    }
+
     private final ReconciliationAdjustmentRepository adjustmentRepository;
     private final AccountService accountService;
     private final ApplicationEventPublisher eventPublisher;
@@ -161,13 +195,28 @@ public class ReconciliationAdjustmentService {
 
             // 金额 ≤ 阈值：自动审批
             if (adjustmentAmount.compareTo(autoApproveThreshold) <= 0) {
-                adjustment.setApprovalStatus(ApprovalStatus.AUTO_APPROVED);
-                adjustment = adjustmentRepository.save(adjustment);
-                log.info("自动审批通过调整记录: id={}, merchantId={}, amount={}, type={}",
-                        adjustment.getId(), merchantId, adjustmentAmount, adjustmentType);
+                // 新增日上限判据（2026-11-08）：笔数 / 当日累计。判定与观测恒执行；
+                // 是否拦截只看 enforceDailyLimits（默认 false ⇒ 行为与改动前完全一致）。
+                DailyLimitCheck limitCheck = checkDailyAutoApproveLimits(merchantId, adjustmentAmount);
 
-                // 自动审批的记录立即执行资金调整
-                executeAdjustment(adjustment);
+                if (limitCheck.overLimit() && enforceDailyLimits) {
+                    // 超限且闸已开 → 复用既有 PENDING_APPROVAL，不调用 executeAdjustment。
+                    adjustment.setApprovalStatus(ApprovalStatus.PENDING_APPROVAL);
+                    adjustment = adjustmentRepository.save(adjustment);
+                    log.warn("调账日上限超限，转人工审批（enforce=true）: id={}, merchantId={}, amount={}, "
+                            + "当日 AUTO_APPROVED 笔数={}, 当日累计={}{}",
+                            adjustment.getId(), merchantId, adjustmentAmount,
+                            limitCheck.dayCount(), limitCheck.dayTotal().toPlainString(),
+                            limitCheck.queryFailed() ? "（查询失败，按超限 fail-closed）" : "");
+                } else {
+                    adjustment.setApprovalStatus(ApprovalStatus.AUTO_APPROVED);
+                    adjustment = adjustmentRepository.save(adjustment);
+                    log.info("自动审批通过调整记录: id={}, merchantId={}, amount={}, type={}",
+                            adjustment.getId(), merchantId, adjustmentAmount, adjustmentType);
+
+                    // 自动审批的记录立即执行资金调整
+                    executeAdjustment(adjustment);
+                }
             } else {
                 adjustment.setApprovalStatus(ApprovalStatus.PENDING_APPROVAL);
                 adjustment = adjustmentRepository.save(adjustment);
@@ -399,6 +448,92 @@ public class ReconciliationAdjustmentService {
     // --- 内部方法 ---
 
     /**
+     * 计算并记录"该商户当日自动调账"日上限判据（2026-11-08 新增）。
+     *
+     * <p>口径与补偿侧一致：
+     * <ul>
+     *   <li>只统计 {@code approval_status = AUTO_APPROVED}；PENDING_APPROVAL / APPROVED / REJECTED 不占额度；</li>
+     *   <li>自然日区间 {@code [今日 00:00, 明日 00:00)}，左闭右开；</li>
+     *   <li>查询异常按超限处理（fail-closed）——<b>有意选择</b>：宁可转人工，也不在"算不清额度"时自动动账。</li>
+     * </ul>
+     * </p>
+     *
+     * <p>本方法只负责判定与观测；是否拦截由调用方按 {@link #enforceDailyLimits} 决定。
+     * 注意这是<b>近似闸</b>：计数与写入之间存在竞态（两个事务可能同时读到"未超限"）。</p>
+     */
+    private DailyLimitCheck checkDailyAutoApproveLimits(Long merchantId, BigDecimal currentAmount) {
+        LocalDateTime dayStart = LocalDateTime.now().toLocalDate().atStartOfDay();
+        List<ReconciliationAdjustment> today;
+        try {
+            today = adjustmentRepository.findByMerchantIdAndApprovalStatusAndCreatedAtBetween(
+                    merchantId, ApprovalStatus.AUTO_APPROVED, dayStart, dayStart.plusDays(1));
+        } catch (RuntimeException e) {
+            log.error("对账自动调账日上限查询失败，按超限处理（fail-closed，有意选择：宁转人工不自动动账）: "
+                            + "merchantId={}, 本笔金额={}, error={}",
+                    merchantId, currentAmount, e.getMessage(), e);
+            return new DailyLimitCheck(0, BigDecimal.ZERO, false, false, true);
+        }
+
+        int dayCount = today == null ? 0 : today.size();
+        BigDecimal dayTotal = today == null ? BigDecimal.ZERO : today.stream()
+                .map(r -> r.getAmount() == null ? BigDecimal.ZERO : r.getAmount())
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        boolean countOver = dailyMaxCount > 0 && dayCount >= dailyMaxCount;
+        boolean totalOver = dailyMaxTotal != null && dailyMaxTotal.signum() > 0
+                && dayTotal.add(currentAmount).compareTo(dailyMaxTotal) > 0;
+
+        if (countOver || totalOver) {
+            // 观测要求：直接回答"若开闸，哪些商户会被拦、拦在哪一条"。
+            log.warn("对账自动调账日上限命中（enforce={}，{}）: merchantId={}, 本笔金额={}, "
+                            + "当日 AUTO_APPROVED 笔数={}（上限 {}）, 当日累计={} + 本笔={}（上限 {}）, 命中=[{}]",
+                    enforceDailyLimits,
+                    enforceDailyLimits ? "转 PENDING_APPROVAL" : "行为不变，仅观测",
+                    merchantId, currentAmount,
+                    dayCount, dailyMaxCount,
+                    dayTotal.toPlainString(), dayTotal.add(currentAmount).toPlainString(),
+                    dailyMaxTotal == null ? "未配置" : dailyMaxTotal.toPlainString(),
+                    describeReasons(countOver, totalOver));
+            // enforce=false 期间也累加，切 true 前即有基线。
+            if (countOver) {
+                incrementOverLimit("count");
+            }
+            if (totalOver) {
+                incrementOverLimit("total");
+            }
+        }
+
+        return new DailyLimitCheck(dayCount, dayTotal, countOver, totalOver, false);
+    }
+
+    private String describeReasons(boolean countOver, boolean totalOver) {
+        if (countOver && totalOver) {
+            return "count,total";
+        }
+        return countOver ? "count" : "total";
+    }
+
+    /** 指标累加：MeterRegistry 未注入或注册失败时静默降级，绝不影响资金主流程。 */
+    private void incrementOverLimit(String reason) {
+        if (meterRegistry == null) {
+            return;
+        }
+        try {
+            meterRegistry.counter(OVER_LIMIT_COUNTER, "reason", reason).increment();
+        } catch (RuntimeException e) {
+            log.debug("调账日上限指标累加失败（静默降级）: reason={}, error={}", reason, e.getMessage());
+        }
+    }
+
+    /** 日上限判据结果（内部值对象，不对外暴露）。 */
+    private record DailyLimitCheck(int dayCount, BigDecimal dayTotal,
+                                   boolean countOver, boolean totalOver, boolean queryFailed) {
+        boolean overLimit() {
+            return queryFailed || countOver || totalOver;
+        }
+    }
+
+    /**
      * 根据差错类型确定调整方向。
      *
      * <p>映射规则：
@@ -494,5 +629,20 @@ public class ReconciliationAdjustmentService {
      */
     void setAutoApproveThreshold(BigDecimal autoApproveThreshold) {
         this.autoApproveThreshold = autoApproveThreshold;
+    }
+
+    /** 日上限闸开关（测试用）。 */
+    void setEnforceDailyLimits(boolean enforceDailyLimits) {
+        this.enforceDailyLimits = enforceDailyLimits;
+    }
+
+    /** 当日自动调账笔数上限（测试用）。 */
+    void setDailyMaxCount(int dailyMaxCount) {
+        this.dailyMaxCount = dailyMaxCount;
+    }
+
+    /** 当日自动调账累计金额上限（测试用）。 */
+    void setDailyMaxTotal(BigDecimal dailyMaxTotal) {
+        this.dailyMaxTotal = dailyMaxTotal;
     }
 }
