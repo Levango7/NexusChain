@@ -262,6 +262,7 @@ public class TxUtils extends Thread {
      * Construct a raw channel-open transaction.
      * fastjson {@code new JSONObject()}/{@code JSON.toJSONString} → Jackson
      * {@code JsonUtils.createObjectNode()}/{@code JsonUtils.toJson}.
+     * <p>仅编码：0x10 属支付扩展保留类型（0x10–0x1a）。节点完整区块/RPC 路径受 {@code TransactionCheck#isConsensusEnabledType} 白名单门禁拒绝（0x10–0x1a 不在共识白名单，报 {@code Type check error}），本方法产出的 raw hex <b>不可上链</b>；仅用于离线编码/签名测试。</p>
      */
     public static String CreateRawChannelOpenTransaction(String fromPubkeyStr, String counterpartyPubkeyHashStr, BigDecimal fundingAmount, Long lockTimeBlocks, Long nonce) {
         try {
@@ -286,6 +287,9 @@ public class TxUtils extends Thread {
         }
     }
 
+    /**
+     * <p>仅编码：0x12 属支付扩展保留类型（0x10–0x1a）。节点完整区块/RPC 路径受 {@code TransactionCheck#isConsensusEnabledType} 白名单门禁拒绝（0x10–0x1a 不在共识白名单，报 {@code Type check error}），本方法产出的 raw hex <b>不可上链</b>；仅用于离线编码/签名测试。</p>
+     */
     public static String CreateRawChannelCloseTransaction(String fromPubkeyStr, String channelId, BigDecimal finalBalance1, BigDecimal finalBalance2, String sig1, String sig2, Long nonce) {
         try {
             byte[] version = new byte[]{0x01};
@@ -315,6 +319,7 @@ public class TxUtils extends Thread {
     /**
      * Construct a raw batch-transfer transaction.
      * fastjson {@code List<JSONObject>} → Jackson {@code List<ObjectNode>}.
+     * <p>仅编码：0x13 属支付扩展保留类型（0x10–0x1a）。节点完整区块/RPC 路径受 {@code TransactionCheck#isConsensusEnabledType} 白名单门禁拒绝（0x10–0x1a 不在共识白名单，报 {@code Type check error}），本方法产出的 raw hex <b>不可上链</b>；仅用于离线编码/签名测试。</p>
      */
     public static String CreateRawBatchTransferTransaction(String fromPubkeyStr, List<ObjectNode> recipients, Long nonce) {
         try {
@@ -338,6 +343,9 @@ public class TxUtils extends Thread {
         }
     }
 
+    /**
+     * <p>仅编码：0x14 属支付扩展保留类型（0x10–0x1a）。节点完整区块/RPC 路径受 {@code TransactionCheck#isConsensusEnabledType} 白名单门禁拒绝（0x10–0x1a 不在共识白名单，报 {@code Type check error}），本方法产出的 raw hex <b>不可上链</b>；仅用于离线编码/签名测试。</p>
+     */
     public static String CreateRawMintStableCoinTransaction(String fromPubkeyStr, BigDecimal collateralAmount, BigDecimal mintAmount, Long nonce) {
         try {
             byte[] version = new byte[]{0x01};
@@ -361,6 +369,9 @@ public class TxUtils extends Thread {
         }
     }
 
+    /**
+     * <p>仅编码：0x15 属支付扩展保留类型（0x10–0x1a）。节点完整区块/RPC 路径受 {@code TransactionCheck#isConsensusEnabledType} 白名单门禁拒绝（0x10–0x1a 不在共识白名单，报 {@code Type check error}），本方法产出的 raw hex <b>不可上链</b>；仅用于离线编码/签名测试。</p>
+     */
     public static String CreateRawRedeemStableCoinTransaction(String fromPubkeyStr, BigDecimal redeemAmount, Long nonce) {
         try {
             byte[] version = new byte[]{0x01};
@@ -380,6 +391,9 @@ public class TxUtils extends Thread {
         }
     }
 
+    /**
+     * <p>仅编码：0x16 属支付扩展保留类型（0x10–0x1a）。节点完整区块/RPC 路径受 {@code TransactionCheck#isConsensusEnabledType} 白名单门禁拒绝（0x10–0x1a 不在共识白名单，报 {@code Type check error}），本方法产出的 raw hex <b>不可上链</b>；仅用于离线编码/签名测试。</p>
+     */
     public static String CreateRawBridgeLockTransaction(String fromPubkeyStr, String targetChain, String recipient, BigDecimal amount, Long nonce) {
         try {
             byte[] version = new byte[]{0x01};
@@ -632,6 +646,9 @@ public class TxUtils extends Thread {
         }
     }
 
+    /**
+     * <p>仅本地构造 + 签名，不广播。对应 0x10 交易不可上链（见 {@link #CreateRawChannelOpenTransaction}）；返回 txHash/traninfo，<b>不是</b>链上受理结果。</p>
+     */
     public static ObjectNode ClientToChannelOpen(String fromPubkeyStr, String counterpartyPubkeyHashStr, BigDecimal fundingAmount, Long lockTimeBlocks, String prikeyStr, Long nonce) {
         try {
             String RawTransactionHex = CreateRawChannelOpenTransaction(fromPubkeyStr, counterpartyPubkeyHashStr, fundingAmount, lockTimeBlocks, nonce);
@@ -648,6 +665,9 @@ public class TxUtils extends Thread {
         }
     }
 
+    /**
+     * <p>仅本地构造 + 签名，不广播。对应 0x13 交易不可上链（见 {@link #CreateRawBatchTransferTransaction}）；返回 txHash/traninfo，<b>不是</b>链上受理结果。</p>
+     */
     public static ObjectNode ClientToBatchTransfer(String fromPubkeyStr, List<ObjectNode> recipients, String prikeyStr, Long nonce) {
         try {
             String RawTransactionHex = CreateRawBatchTransferTransaction(fromPubkeyStr, recipients, nonce);
@@ -664,6 +684,9 @@ public class TxUtils extends Thread {
         }
     }
 
+    /**
+     * <p>仅本地构造 + 签名，不广播。对应 0x14 交易不可上链（见 {@link #CreateRawMintStableCoinTransaction}）；返回 txHash/traninfo，<b>不是</b>链上受理结果。</p>
+     */
     public static ObjectNode ClientToMintStableCoin(String fromPubkeyStr, BigDecimal collateralAmount, BigDecimal mintAmount, String prikeyStr, Long nonce) {
         try {
             String RawTransactionHex = CreateRawMintStableCoinTransaction(fromPubkeyStr, collateralAmount, mintAmount, nonce);
@@ -680,6 +703,9 @@ public class TxUtils extends Thread {
         }
     }
 
+    /**
+     * <p>仅本地构造 + 签名，不广播。对应 0x16 交易不可上链（见 {@link #CreateRawBridgeLockTransaction}）；返回 txHash/traninfo，<b>不是</b>链上受理结果。</p>
+     */
     public static ObjectNode ClientToBridgeLock(String fromPubkeyStr, String targetChain, String recipient, BigDecimal amount, String prikeyStr, Long nonce) {
         try {
             String RawTransactionHex = CreateRawBridgeLockTransaction(fromPubkeyStr, targetChain, recipient, amount, nonce);
@@ -696,6 +722,9 @@ public class TxUtils extends Thread {
         }
     }
 
+    /**
+     * <p>仅本地构造 + 签名，不广播。对应 0x1a 交易不可上链（见 {@link #CreateRawSubscriptionAuthTransaction}）；返回 txHash/traninfo，<b>不是</b>链上受理结果。</p>
+     */
     public static ObjectNode ClientToSubscriptionAuth(String fromPubkeyStr, String merchantPubkeyHash, BigDecimal maxAmount, Long intervalBlocks, Long duration, String prikeyStr, Long nonce) {
         try {
             String RawTransactionHex = CreateRawSubscriptionAuthTransaction(fromPubkeyStr, merchantPubkeyHash, maxAmount, intervalBlocks, duration, nonce);
@@ -906,6 +935,9 @@ public class TxUtils extends Thread {
     // fastjson JSONObject → Jackson ObjectNode
     // signedTx.getString("data") → signedTx.get("data").asText()
 
+    /**
+     * <p>调用节点写端点（{@code POST /channel/open}）。支付扩展属「保留未启用」：按 B 裁决写端点返回 501 或 5010（B-2 铺开见 PR #523），铺开完成前不保证拒绝语义已生效；本方法<b>不构成功能可用承诺</b>。</p>
+     */
     public static ObjectNode openChannel(String fromPubkey, String toPubkeyHash, BigDecimal amount,
                                          Long lockTime, String prikey, Long nonce, String nodeUrl) {
         try {
@@ -935,6 +967,9 @@ public class TxUtils extends Thread {
         }
     }
 
+    /**
+     * <p>调用节点写端点（{@code POST /batch/transfer}）。支付扩展属「保留未启用」：按 B 裁决写端点返回 501 或 5010（B-2 铺开见 PR #523），铺开完成前不保证拒绝语义已生效；本方法<b>不构成功能可用承诺</b>。</p>
+     */
     public static ObjectNode batchTransfer(String fromPubkey, List<ObjectNode> recipients,
                                            String prikey, Long nonce, String nodeUrl) {
         try {
@@ -962,6 +997,9 @@ public class TxUtils extends Thread {
         }
     }
 
+    /**
+     * <p>调用节点写端点（{@code POST /stablecoin/mint}）。支付扩展属「保留未启用」：按 B 裁决写端点返回 501 或 5010（B-2 铺开见 PR #523），铺开完成前不保证拒绝语义已生效；本方法<b>不构成功能可用承诺</b>。</p>
+     */
     public static ObjectNode mintStableCoin(String fromPubkey, BigDecimal collateral, BigDecimal mintAmount,
                                             String prikey, Long nonce, String nodeUrl) {
         try {
@@ -990,6 +1028,9 @@ public class TxUtils extends Thread {
         }
     }
 
+    /**
+     * <p>调用节点写端点（{@code POST /bridge/lock}）。支付扩展属「保留未启用」：按 B 裁决写端点返回 501 或 5010（B-2 铺开见 PR #523），铺开完成前不保证拒绝语义已生效；本方法<b>不构成功能可用承诺</b>。</p>
+     */
     public static ObjectNode bridgeLock(String fromPubkey, String targetChain, String recipient,
                                         BigDecimal amount, String prikey, Long nonce, String nodeUrl) {
         try {
@@ -1019,21 +1060,33 @@ public class TxUtils extends Thread {
         }
     }
 
+    /**
+     * <p>调用节点读端点（GET /channel/state/{channelId}）。支付扩展未启用时返回稳定错误码 {@code 5010}，不返回模拟状态；空/占位结果不可当作链上真值。</p>
+     */
     public static ObjectNode getChannelState(String channelId, String nodeUrl) {
         String url = nodeUrl.replaceAll("/+$", "") + "/channel/state/" + channelId;
         return httpGetJson(url);
     }
 
+    /**
+     * <p>调用节点读端点（GET /stablecoin/collateral/{address}）。支付扩展未启用时返回稳定错误码 {@code 5010}，不返回模拟状态；空/占位结果不可当作链上真值。</p>
+     */
     public static ObjectNode getCollateralRatio(String address, String nodeUrl) {
         String url = nodeUrl.replaceAll("/+$", "") + "/stablecoin/collateral/" + address;
         return httpGetJson(url);
     }
 
+    /**
+     * <p>调用节点读端点（GET /bridge/status/{txHash}）。支付扩展未启用时返回稳定错误码 {@code 5010}，不返回模拟状态；空/占位结果不可当作链上真值。</p>
+     */
     public static ObjectNode getBridgeStatus(String txHash, String nodeUrl) {
         String url = nodeUrl.replaceAll("/+$", "") + "/bridge/status/" + txHash;
         return httpGetJson(url);
     }
 
+    /**
+     * <p>调用节点读端点（GET /batch/status/{txHash}）。支付扩展未启用时返回稳定错误码 {@code 5010}，不返回模拟状态；空/占位结果不可当作链上真值。</p>
+     */
     public static ObjectNode getBatchStatus(String txHash, String nodeUrl) {
         String url = nodeUrl.replaceAll("/+$", "") + "/batch/status/" + txHash;
         return httpGetJson(url);
