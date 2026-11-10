@@ -158,11 +158,11 @@ git grep -n "orderCreated()\|paymentConfirmed()\|paymentFailed()\|refundIssued()
 | 项 | 内容 |
 |---|---|
 | SLI | 支付成功率、下单吞吐、Webhook 投递成功率、支付端到端延迟 |
-| PromQL | 支付成功率：`sum(rate(nexus_payments_confirmed_total[5m])) / clamp_min(sum(rate(nexus_payments_confirmed_total[5m])) + sum(rate(nexus_payments_failed_total[5m])), 1)`；下单吞吐：`sum(rate(nexus_orders_total[5m]))` ⚠ 不是 `nexus_orders_created_total`；延迟（与 panel 13–16 一致）：`sum(rate(nexus_payment_latency_seconds_sum[5m])) / clamp_min(sum(rate(nexus_payment_latency_seconds_count[5m])), 1)`，峰值 `max(nexus_payment_latency_seconds_max)`。⚠ `PaymentMetrics` 的 Timer 未开 `publishPercentileHistogram()`，**没有 `_bucket` 序列，不能用 `histogram_quantile`** |
+| PromQL | 支付成功率：`sum(rate(nexus_payments_confirmed_total[5m])) / clamp_min(sum(rate(nexus_payments_confirmed_total[5m])) + sum(rate(nexus_payments_failed_total[5m])), 1)`；下单吞吐：`sum(rate(nexus_orders_total[5m]))` ⚠ 不是 `nexus_orders_created_total`；延迟（与 panel 13–16 一致）：`sum(rate(nexus_payment_latency_seconds_sum[5m])) / clamp_min(sum(rate(nexus_payment_latency_seconds_count[5m])), 1)`，峰值 `max(nexus_payment_latency_seconds_max)`。⚠ `PaymentMetricsTest` 的裸 registry 抓取文本只断言 `_count` / `_sum` / `_max`；`_bucket` 是否导出取决于生产全局 histogram 配置，**未验证**，故此处不用 `histogram_quantile` |
 | 采集位置 | nexus-gateway `:8080/actuator/prometheus` |
 | 已用于 | `deploy/grafana/dashboards/nexus-gateway.json` panel 13–16 |
 | 阈值 | `待定（业务决策）` |
-| 局限 | `paymentFailed()` 只在 FAILED 终态计数，`refundIssued()` 只在 `RefundStatus.COMPLETED` 计数；`paymentLatencySince()` 在 `createdAt` 为 null 或时间在未来时**跳过样本**，绝不记 0 ⇒ 低流量期延迟样本可能不足；且 Timer 未发布直方图桶，无法给出服务端分位数 |
+| 局限 | `paymentFailed()` 只在 FAILED 终态计数，`refundIssued()` 只在 `RefundStatus.COMPLETED` 计数；`paymentLatencySince()` 在 `createdAt` 为 null 或时间在未来时**跳过样本**，绝不记 0 ⇒ 低流量期延迟样本可能不足；服务端分位数需依赖 `_bucket`，本仓尚无生产抓取文本验证，故不列入 SLI |
 
 ---
 
@@ -221,6 +221,6 @@ git grep -n "orderCreated()\|paymentConfirmed()\|paymentFailed()\|refundIssued()
 ## 七、已知局限
 
 1. **本文的 PromQL 一条都没在真实 Prometheus 上跑过**——本机无集群。语法按 `deploy/grafana/dashboards/` 里已入库的表达式对齐，但**没有执行证据**。
-2. **`nexus_payment_latency_seconds_max` 已有抓取断言覆盖**：`PaymentMetricsTest` 用 `registry.scrape()` 逐条断言 `nexus_payment_latency_seconds_count` / `_sum` / `_max` 存在（面板的「最慢一次」格依赖 `_max`）。但 Timer 未开 `publishPercentileHistogram()`，**不导出 `_bucket`**，所以不要写 `histogram_quantile` 类查询。
+2. **`nexus_payment_latency_seconds_max` 已有抓取断言覆盖**：`PaymentMetricsTest` 用 `registry.scrape()` 逐条断言 `nexus_payment_latency_seconds_count` / `_sum` / `_max` 存在（面板的「最慢一次」格依赖 `_max`）。但 `PaymentMetrics` 的 Timer 未显式调用 `publishPercentileHistogram()`，且该测试用裸 `PrometheusMeterRegistry` 抓取、未断言 `_bucket`；生产是否导出桶序列取决于 `MANAGEMENT_METRICS_DISTRIBUTION_PERCENTILES_HISTOGRAM`（`deploy/monitoring/micrometer-config.yaml:68` 为 `true`），**待生产抓取文本验证**。本文暂不写 `histogram_quantile` 类查询。
 3. **没有 SLO 计算管线**：仓库里没有 recording rules / SLO 计算 Job，第三节的表达式需要人肉在 Grafana 里看。要做成"自动算达标率"，需新增 recording rules 与一个周期任务——目前不存在。
 4. **`deploy/grafana/dashboards/` 与 `deploy/monitoring/grafana-dashboards/` 两套面板并存**，前者有效、后者废弃。挂错目录会得到一片空白，且不会报错。
