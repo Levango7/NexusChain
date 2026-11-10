@@ -5,9 +5,30 @@ import io.micrometer.core.instrument.Timer;
 import io.micrometer.core.instrument.Counter;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
+import java.time.LocalDateTime;
+
 /**
  * B3: Custom business metrics for NexusChain Gateway.
  * Exposes payment funnel, latency, and error metrics to Prometheus via Actuator.
+ *
+ * <h2>本类的指标必须「有人喂」</h2>
+ *
+ * <p>本类只负责 <b>注册</b> 指标；注册不等于有数据。2026-11-07 审计曾发现本类
+ * 注册的 7 个 meter <b>全仓零调用点</b>：因为注册发生在 {@code @Component} 的
+ * 构造器里，{@code /actuator/prometheus} 能看到这些序列、值恒为 0——比「没有指标」
+ * 更危险，因为面板看起来是通的。<b>该缺陷已由 #577 修复</b>：7 个 meter 在
+ * {@code OrderServiceImpl} / {@code PaymentServiceImpl} /
+ * {@code WebhookDeliveryService} 接线，并有 {@code PaymentMetricsTest} 抓取断言与
+ * {@code PaymentServiceImplConfirmBindingTest} 绑定断言。</p>
+ *
+ * <p>同类缺陷在本仓已有先例：{@code nexus_3ds_auth_total} 曾在
+ * {@code SecurityMetricsRecorder} 里「注册后从来没人喂过，此前恒为 0」，
+ * 后由 {@code ThreeDsAuthCompletedObserver} 补上调用点修复；该类剩余的
+ * 两个加密 meter 由 #584 补齐。</p>
+ *
+ * <p>因此：<b>新增 meter 时，同一 PR 内必须同时给出调用点，并同步更新
+ * {@code docs/ops/slo.md}</b>；SLO 口径与指标名以该文为准。</p>
  */
 @Component
 public class PaymentMetrics {
@@ -21,6 +42,11 @@ public class PaymentMetrics {
     private final Timer paymentLatency;
 
     public PaymentMetrics(MeterRegistry registry) {
+        // ⚠ 导出名不总是「注册名把点换成下划线再加 _total」：
+        //   OpenMetrics 把 `_created` 保留给「创建时间戳」序列，Prometheus 客户端
+        //   在导出时剥掉这个后缀 ⇒ nexus.orders.created 实际导出为 **nexus_orders_total**。
+        //   2026-11-07 实测抓取文本确认；此前 Grafana 面板查 nexus_orders_created_total，
+        //   该序列不存在 ⇒ 面板恒空。改名/新增 meter 前先看 PaymentMetricsTest 的抓取断言。
         this.ordersCreated = Counter.builder("nexus.orders.created")
                 .description("Total orders created").register(registry);
         this.paymentsConfirmed = Counter.builder("nexus.payments.confirmed")
@@ -44,4 +70,25 @@ public class PaymentMetrics {
     public void webhookDelivered() { webhookDelivered.increment(); }
     public void webhookFailed() { webhookFailed.increment(); }
     public Timer getPaymentLatency() { return paymentLatency; }
+
+    /**
+     * 记录「下单 → 支付确认」的端到端耗时。
+     *
+     * <p><b>口径（与 {@code ThreeDsAuthCompletedObserver} 一致：采不到就跳过，绝不记 0）</b>：
+     * {@code createdAt} 为 null（兼容构造器/测试环境造出的订单没有该字段）或
+     * 时间在未来（时钟回拨）时 <b>不记录任何样本</b>。把缺失写成 0 秒会让
+     * p50/p95 看起来存在——那正是本类此前被诟病的「面板有值但值是假的」。</p>
+     *
+     * @param createdAt 订单创建时间；null 表示无法确定，跳过
+     */
+    public void paymentLatencySince(LocalDateTime createdAt) {
+        if (createdAt == null) {
+            return;
+        }
+        Duration elapsed = Duration.between(createdAt, LocalDateTime.now());
+        if (elapsed.isNegative()) {
+            return;
+        }
+        paymentLatency.record(elapsed);
+    }
 }

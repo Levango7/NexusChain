@@ -4,7 +4,8 @@
 //!   * 配置来源：`--config <path>` 命令行参数或 `MPC_CONFIG_PATH` 环境变量，
 //!     指向 JSON 格式的 `PartyConfig` 文件。
 //!   * gRPC 强制 mTLS：Server 端加载 TLS 证书 + 要求客户端证书（`tls_authority_root`）。
-//!   * 私钥份额本地加密存储：`MPC_STORAGE_KEY` 从配置文件 `storage_key` 字段读取。
+//!   * 私钥份额本地加密存储：`MPC_STORAGE_KEY` 由 `apply_storage_key_to_env`
+//!     从配置同步（`storage_key` 字段或 `storage_keys` 映射的当前版；中12）。
 //!
 //! **GG20 退役后（PLAN-001-R2）**：CGGMP21 是唯一门限签名路径；GG20 时代的
 //! 协调器转发模式（`is_coordinator`/`forward_tls_config`）随 `Dkg`/`Sign`

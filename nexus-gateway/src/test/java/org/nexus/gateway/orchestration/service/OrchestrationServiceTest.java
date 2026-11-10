@@ -16,6 +16,7 @@ import org.nexus.gateway.orchestration.routing.RoutingContext;
 import org.nexus.gateway.orchestration.routing.RoutingDecision;
 import org.nexus.gateway.orchestration.routing.RoutingEngine;
 import org.nexus.gateway.orchestration.routing.ai.MetricsCollector;
+import org.nexus.gateway.orchestration.settlement.ChainSettlementConfirmationService;
 import org.nexus.gateway.risk.PaymentRequest;
 import org.nexus.gateway.risk.PaymentRiskService;
 import org.nexus.gateway.risk.RiskDecision;
@@ -48,6 +49,7 @@ class OrchestrationServiceTest {
     @Mock private PaymentRiskService riskService;
     @Mock private MetricsCollector metricsCollector;
     @Mock private ApplicationEventPublisher applicationEventPublisher;
+    @Mock private ChainSettlementConfirmationService settlementConfirmationService;
 
     private OrchestrationService service;
 
@@ -55,7 +57,7 @@ class OrchestrationServiceTest {
     void setUp() {
         service = new OrchestrationService(repo, routingEngine, connectorRegistry,
                 idempotencyStore, webhookDispatcher, riskService, null, metricsCollector,
-                applicationEventPublisher);
+                applicationEventPublisher, settlementConfirmationService);
         // P1-1（2026-10-12）配套改动：createPayment 现在必须**先原子占位**才走渠道。
         // 本类的 store 是 mock，putIfAbsent 语义未定义 ⇒ 默认返回 false 会被判成
         // "他人在途"而对 req-3 抛 IllegalStateException（409）。这里让占位默认放行；
@@ -211,6 +213,65 @@ class OrchestrationServiceTest {
 
         assertEquals(OrchPaymentStatus.PROCESSING, result.getStatus());
         assertNull(result.getConfirmedAt());
+    }
+
+    @Test
+    @DisplayName("createPayment: 链上支付拿到 txHash -> 以业务 paymentId 触发结算确认创建")
+    void createPayment_chainSuccessInitiatesSettlementConfirmation() {
+        when(riskService.evaluatePayment(any())).thenReturn(RiskDecision.APPROVED);
+        PaymentConnector connector = mock(PaymentConnector.class);
+        when(connector.getId()).thenReturn("chain");
+        when(connector.createPayment(any())).thenReturn(
+                ConnectorPaymentResult.ok("c-1", PaymentStatus.PROCESSING, "0xTx"));
+        when(routingEngine.resolveDetailed(any())).thenReturn(w16(List.of(connector)));
+        when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        OrchestratedPayment result = service.createPayment(100L, 1000, "NEX", "d",
+                null, null, null, null);
+
+        assertEquals(OrchPaymentStatus.PROCESSING, result.getStatus());
+        ArgumentCaptor<String> paymentIdCaptor = ArgumentCaptor.forClass(String.class);
+        verify(settlementConfirmationService).initiateConfirmation(paymentIdCaptor.capture(), eq("0xTx"));
+        assertEquals(result.getId(), paymentIdCaptor.getValue());
+    }
+
+    @Test
+    @DisplayName("createPayment: 法币渠道无 txHash -> 不触发结算确认（fail-closed 口径不变）")
+    void createPayment_fiatSuccessWithoutTxHashDoesNotInitiateConfirmation() {
+        when(riskService.evaluatePayment(any())).thenReturn(RiskDecision.APPROVED);
+        PaymentConnector connector = mock(PaymentConnector.class);
+        when(connector.getId()).thenReturn("stripe");
+        when(connector.createPayment(any())).thenReturn(
+                ConnectorPaymentResult.ok("c-1", PaymentStatus.SUCCEEDED, null));
+        when(routingEngine.resolveDetailed(any())).thenReturn(w16(List.of(connector)));
+        when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        OrchestratedPayment result = service.createPayment(100L, 1000, "NEX", "d",
+                null, null, null, null);
+
+        assertEquals(OrchPaymentStatus.SUCCEEDED, result.getStatus());
+        verifyNoInteractions(settlementConfirmationService);
+    }
+
+    @Test
+    @DisplayName("createPayment: 结算确认创建抛异常 -> 只告警，支付主路径不受影响")
+    void createPayment_confirmationInitiationFailureDoesNotBlockPayment() {
+        when(riskService.evaluatePayment(any())).thenReturn(RiskDecision.APPROVED);
+        PaymentConnector connector = mock(PaymentConnector.class);
+        when(connector.getId()).thenReturn("chain");
+        when(connector.createPayment(any())).thenReturn(
+                ConnectorPaymentResult.ok("c-1", PaymentStatus.SUCCEEDED, "0xTx"));
+        when(routingEngine.resolveDetailed(any())).thenReturn(w16(List.of(connector)));
+        when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        doThrow(new RuntimeException("db down")).when(settlementConfirmationService)
+                .initiateConfirmation(anyString(), anyString());
+
+        OrchestratedPayment result = service.createPayment(100L, 1000, "NEX", "d",
+                null, null, null, null);
+
+        assertEquals(OrchPaymentStatus.SUCCEEDED, result.getStatus());
+        assertNotNull(result.getConfirmedAt());
+        assertEquals("0xTx", result.getTransactionHash());
     }
 
     // === createPayment: failover ===

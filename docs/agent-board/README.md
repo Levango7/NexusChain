@@ -179,6 +179,7 @@ expires: 2026-11-02T12:00:00+08:00     # ack_required: true 时【必填】，�
 | 判定 | 结果 |
 |---|---|
 | `ack_required: true` + `status: open` + `priority` ∈ {P0,P1} + `expires` 已过 + 无人签收 | ❌ **CI 红**（阻断合并） |
+| 同上但 `to:` 里没有任何 agent 车道（见下） | ⚠️ 只打印（`overdue-unacked-unreachable`）：收件方结构上无人能签，不该冻结全仓 |
 | 同上但 `priority: P2` | ⚠️ 只打印（一条知会不该卡住全仓） |
 | 缺 `expires` / `expires` 早于 `created` / `id` 与文件名不符 / `created` 在未来 / 无 front-matter | ❌ 结构性错误（新增即红） |
 | 门禁上线前已存在的历史缺口 | 记入 `scripts/agent-board-baseline.txt`，**只准收缩** |
@@ -196,6 +197,11 @@ expires: 2026-11-02T12:00:00+08:00     # ack_required: true 时【必填】，�
   全仓 PR 共用同一 GitHub 账号，通知无法按 Agent 路由，这也是不做 dispatcher 的原因。
 - **签收是自愿动作**：`to:` 的人不回引用 ⇒ 红的是全仓合并，需要有人推动或改判；
   这是刻意选择——只有把成本摊到所有合并上，签收才会真的发生。
+- **agent 车道判定**：门禁把 `to:` 与车道名单（nex / zcode / qoder CN / TRAE 宝 /
+  eng-review / codearts agent / orchestrator，或通配 `all`）取交集来判定「是否有人能签」。
+  `to:` 全是非车道身份（如 `ops`）的 P0/P1 逾期项只警告不阻断——签收谓词要求署名不同，
+  非车道收件方结构上永远签不了，阻断等于为一条人类专属通知冻结全仓合并（2026-11-06-0512
+  实测形态）；混合写法（`[ops, nex]`）仍按可到达处理。
 - **front-matter 解析是本仓 YAML 子集**（`k: v`、`k: [a,b]`、`refs:` 下的 `- x: y`），
   不依赖 PyYAML；写非常规 YAML 可能被忽略，脚本会用结构错误报出来而不是静默跳过。
 

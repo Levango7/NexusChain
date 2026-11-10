@@ -81,6 +81,19 @@ public class WebhookDeliveryService {
     /** Step 3：Webhook 投递最终性阈值，默认 OPTIMISTIC（向后兼容）。 */
     private final String finalityThreshold;
 
+    /**
+     * 业务指标（2026-11-07 接线）。
+     *
+     * <p>setter 注入且可选：本类有两个构造器（容器用 + 测试用），加构造参数
+     * 会同时改动两处并波及全部既有测试；指标是纯旁路观测，不该改变依赖契约。</p>
+     */
+    private org.nexus.gateway.observability.PaymentMetrics paymentMetrics;
+
+    @Autowired(required = false)
+    public void setPaymentMetrics(org.nexus.gateway.observability.PaymentMetrics paymentMetrics) {
+        this.paymentMetrics = paymentMetrics;
+    }
+
     @Autowired
     public WebhookDeliveryService(
             WebhookDeliveryRepository repository,
@@ -286,6 +299,12 @@ public class WebhookDeliveryService {
                     record.setDeliveredAt(Instant.now());
                     record.setLastError(null);
                     record = repository.save(record);
+                    // 业务指标：按「投递记录」计数，不按「支付」计数——
+                    // 同一笔支付的多次重投（replay）各自成功会各计一次，这是有意的：
+                    // 该指标衡量的是投递通道健康度，不是支付笔数。
+                    if (paymentMetrics != null) {
+                        paymentMetrics.webhookDelivered();
+                    }
                     log.info("Webhook delivered: deliveryId={}, paymentId={}, attempt={}",
                             record.getDeliveryId(), record.getPaymentId(), attempt + 1);
                     return record;
@@ -320,6 +339,12 @@ public class WebhookDeliveryService {
         record.setDeadLetteredAt(Instant.now());
         record.setLastError(lastError);
         record = repository.save(record);
+
+        // 业务指标：只有「重试耗尽进死信」才计失败——中间某次尝试失败不计，
+        // 否则一次成功的重试会产生 1 次成功 + N 次失败，成功率被系统性压低。
+        if (paymentMetrics != null) {
+            paymentMetrics.webhookFailed();
+        }
 
         DeadLetterMessage dlqMessage = DeadLetterMessage.fromRecord(record, lastError);
         try {

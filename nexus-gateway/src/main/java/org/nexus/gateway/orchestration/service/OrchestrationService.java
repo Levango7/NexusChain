@@ -9,6 +9,7 @@ import org.nexus.gateway.orchestration.routing.RoutingContext;
 import org.nexus.gateway.orchestration.routing.RoutingDecision;
 import org.nexus.gateway.orchestration.routing.RoutingEngine;
 import org.nexus.gateway.orchestration.routing.ai.MetricsCollector;
+import org.nexus.gateway.orchestration.settlement.ChainSettlementConfirmationService;
 import org.nexus.gateway.risk.PaymentRequest;
 import org.nexus.gateway.risk.PaymentRiskService;
 import org.nexus.gateway.risk.RiskDecision;
@@ -63,6 +64,8 @@ public class OrchestrationService {
     private final MetricsCollector metricsCollector;
     /** Spring 事件发布器。支付成功后发布 {@link PaymentCompletedEvent}，nexus-analytics 异步采集。 */
     private final ApplicationEventPublisher applicationEventPublisher;
+    /** 链上结算确认服务（可选）。支付拿到链上 txHash 后触发确认记录创建；null 时 no-op。 */
+    private final ChainSettlementConfirmationService settlementConfirmationService;
 
     @Autowired
     public OrchestrationService(OrchestratedPaymentRepository repo,
@@ -73,7 +76,8 @@ public class OrchestrationService {
                                 PaymentRiskService riskService,
                                 Tracer tracer,
                                 @Autowired(required = false) MetricsCollector metricsCollector,
-                                ApplicationEventPublisher applicationEventPublisher) {
+                                ApplicationEventPublisher applicationEventPublisher,
+                                @Autowired(required = false) ChainSettlementConfirmationService settlementConfirmationService) {
         this.repo = repo;
         this.routingEngine = routingEngine;
         this.connectorRegistry = connectorRegistry;
@@ -83,6 +87,7 @@ public class OrchestrationService {
         this.tracer = tracer;
         this.metricsCollector = metricsCollector;
         this.applicationEventPublisher = applicationEventPublisher;
+        this.settlementConfirmationService = settlementConfirmationService;
     }
 
     /**
@@ -95,7 +100,7 @@ public class OrchestrationService {
                                 OrchestrationWebhookDispatcher webhookDispatcher,
                                 PaymentRiskService riskService) {
         this(repo, routingEngine, connectorRegistry, idempotencyStore,
-                webhookDispatcher, riskService, null, null, null);
+                webhookDispatcher, riskService, null, null, null, null);
     }
 
     /**
@@ -109,7 +114,7 @@ public class OrchestrationService {
                                 PaymentRiskService riskService,
                                 Tracer tracer) {
         this(repo, routingEngine, connectorRegistry, idempotencyStore,
-                webhookDispatcher, riskService, tracer, null, null);
+                webhookDispatcher, riskService, tracer, null, null, null);
     }
 
     // P1（2026-09-17 修复）：此处**不得**标注 @Transactional。
@@ -334,6 +339,8 @@ public class OrchestrationService {
                         routingEngine.recordRouteOutcome(routeDecisionId, true);
                         publishPaymentCompleted(payment, result.getTransactionHash(),
                                 result.getLatencyMs(), result.getCostBps());
+                        // 链上 txHash 非空才触发：法币渠道无链上交易，fail-closed 口径不变
+                        initiateSettlementConfirmation(paymentId, result.getTransactionHash());
                         rootSpan.attr("payment.connector.id", connector.getId())
                                 .attr("payment.status", payment.getStatus().name())
                                 .attr("payment.connector.latency_ms", result.getLatencyMs())
@@ -453,6 +460,27 @@ public class OrchestrationService {
             metricsCollector.record(connectorId, success, latencyMs, costBps);
         } catch (RuntimeException e) {
             log.warn("MetricsCollector.record failed for {}: {}", connectorId, e.getMessage());
+        }
+    }
+
+    /**
+     * 支付成功后触发链上结算确认（写侧接线，板 20261108-1110 的 D3 验收阻塞）。
+     *
+     * <p>只在拿到链上交易哈希时触发——法币渠道没有链上 tx，不产生确认记录。
+     * 幂等由 {@code ChainSettlementConfirmationService.existsByPaymentId} 保证
+     * （同 paymentId 重复调用返回既有记录），故连接器 failover 重试与 webhook
+     * 重放均安全。整体旁路：确认记录是观测/对账能力，创建失败只告警，
+     * 绝不阻断支付主路径。</p>
+     */
+    private void initiateSettlementConfirmation(String paymentId, String txHash) {
+        if (txHash == null || txHash.isBlank() || settlementConfirmationService == null) {
+            return;
+        }
+        try {
+            settlementConfirmationService.initiateConfirmation(paymentId, txHash);
+        } catch (RuntimeException e) {
+            log.warn("Settlement confirmation initiation failed for payment {}: {}",
+                    paymentId, e.getMessage());
         }
     }
 

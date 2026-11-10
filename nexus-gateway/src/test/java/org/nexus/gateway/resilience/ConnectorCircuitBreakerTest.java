@@ -1,6 +1,7 @@
 package org.nexus.gateway.resilience;
 
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker.Metrics;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -14,6 +15,11 @@ class ConnectorCircuitBreakerTest {
 
     private ConnectorCircuitBreakerConfig config;
     private ConnectorCircuitBreaker circuitBreaker;
+
+    // 模拟 PSP 拒绝的真实异常：recordFailure 必须保留调用方传入的异常类型，
+    // 不得像旧实现那样内部 new 一个 RuntimeException 把真实原因抹掉
+    private static final IllegalArgumentException PSP_DECLINED =
+            new IllegalArgumentException("psp declined");
 
     @BeforeEach
     void setUp() {
@@ -37,7 +43,7 @@ class ConnectorCircuitBreakerTest {
                 "未创建的 connector 状态应为 DISABLED");
 
         // 触发创建
-        circuitBreaker.getOrCreate("chain");
+        circuitBreaker.getOrCreate("chain", "chain");
         state = circuitBreaker.getConnectorState("chain");
         assertEquals(CircuitBreaker.State.CLOSED, state,
                 "新创建的熔断器应为 CLOSED");
@@ -46,12 +52,12 @@ class ConnectorCircuitBreakerTest {
     @Test
     @DisplayName("连续失败达到阈值后状态转换为 OPEN")
     void consecutiveFailures_openCircuit() {
-        circuitBreaker.getOrCreate("stripe");
+        circuitBreaker.getOrCreate("stripe", "stripe");
 
         // slidingWindowSize=4, minimumNumberOfCalls=2, failureRateThreshold=50%
         // 2次失败 + 0次成功 = 100% 失败率 > 50% → OPEN
-        circuitBreaker.recordFailure("stripe");
-        circuitBreaker.recordFailure("stripe");
+        circuitBreaker.recordFailure("stripe", 300_000_000L, PSP_DECLINED);
+        circuitBreaker.recordFailure("stripe", 300_000_000L, PSP_DECLINED);
 
         assertEquals(CircuitBreaker.State.OPEN, circuitBreaker.getConnectorState("stripe"),
                 "连续失败后熔断器应为 OPEN");
@@ -60,10 +66,10 @@ class ConnectorCircuitBreakerTest {
     @Test
     @DisplayName("成功调用保持 CLOSED 状态")
     void successCall_staysClosed() {
-        circuitBreaker.getOrCreate("consortium");
+        circuitBreaker.getOrCreate("consortium", "consortium");
 
-        circuitBreaker.recordSuccess("consortium");
-        circuitBreaker.recordSuccess("consortium");
+        circuitBreaker.recordSuccess("consortium", 50_000_000L);
+        circuitBreaker.recordSuccess("consortium", 50_000_000L);
 
         assertEquals(CircuitBreaker.State.CLOSED, circuitBreaker.getConnectorState("consortium"),
                 "成功调用后熔断器应保持 CLOSED");
@@ -79,11 +85,11 @@ class ConnectorCircuitBreakerTest {
         stripeProps.setMinimumNumberOfCalls(2);
         config.getInstances().put("stripe", stripeProps);
 
-        circuitBreaker.getOrCreate("stripe");
+        circuitBreaker.getOrCreate("stripe", "stripe");
 
         // 1成功 + 1失败 = 50% 失败率 < 60% → CLOSED
-        circuitBreaker.recordSuccess("stripe");
-        circuitBreaker.recordFailure("stripe");
+        circuitBreaker.recordSuccess("stripe", 10_000_000L);
+        circuitBreaker.recordFailure("stripe", 300_000_000L, PSP_DECLINED);
 
         assertEquals(CircuitBreaker.State.CLOSED, circuitBreaker.getConnectorState("stripe"),
                 "失败率低于阈值时应保持 CLOSED");
@@ -92,12 +98,12 @@ class ConnectorCircuitBreakerTest {
     @Test
     @DisplayName("isCircuitOpen 正确判断熔断状态")
     void isCircuitOpen_correctStatus() {
-        circuitBreaker.getOrCreate("chain");
+        circuitBreaker.getOrCreate("chain", "chain");
         assertFalse(circuitBreaker.isCircuitOpen("chain"),
                 "CLOSED 状态时 isCircuitOpen 应为 false");
 
-        circuitBreaker.recordFailure("chain");
-        circuitBreaker.recordFailure("chain");
+        circuitBreaker.recordFailure("chain", 300_000_000L, PSP_DECLINED);
+        circuitBreaker.recordFailure("chain", 300_000_000L, PSP_DECLINED);
 
         assertTrue(circuitBreaker.isCircuitOpen("chain"),
                 "OPEN 状态时 isCircuitOpen 应为 true");
@@ -106,11 +112,11 @@ class ConnectorCircuitBreakerTest {
     @Test
     @DisplayName("reset 将熔断器强制恢复到 CLOSED")
     void reset_returnsToClosed() {
-        circuitBreaker.getOrCreate("chain");
+        circuitBreaker.getOrCreate("chain", "chain");
 
         // 触发熔断
-        circuitBreaker.recordFailure("chain");
-        circuitBreaker.recordFailure("chain");
+        circuitBreaker.recordFailure("chain", 300_000_000L, PSP_DECLINED);
+        circuitBreaker.recordFailure("chain", 300_000_000L, PSP_DECLINED);
         assertEquals(CircuitBreaker.State.OPEN, circuitBreaker.getConnectorState("chain"));
 
         // 重置
@@ -120,11 +126,11 @@ class ConnectorCircuitBreakerTest {
     }
 
     @Test
-    @DisplayName("getRegisteredConnectors 返回所有已注册的 connector 类型")
+    @DisplayName("getRegisteredConnectors 返回所有已注册的 connector 实例标识")
     void getRegisteredConnectors_returnsAll() {
-        circuitBreaker.getOrCreate("chain");
-        circuitBreaker.getOrCreate("stripe");
-        circuitBreaker.getOrCreate("consortium");
+        circuitBreaker.getOrCreate("chain", "chain");
+        circuitBreaker.getOrCreate("stripe", "stripe");
+        circuitBreaker.getOrCreate("consortium", "consortium");
 
         assertTrue(circuitBreaker.getRegisteredConnectors().contains("chain"));
         assertTrue(circuitBreaker.getRegisteredConnectors().contains("stripe"));
@@ -153,5 +159,51 @@ class ConnectorCircuitBreakerTest {
         ConnectorCircuitBreakerConfig.CircuitBreakerProperties effective = config.getEffectiveConfig("unknown_connector");
         assertEquals(50f, effective.getFailureRateThreshold(), "默认 failureRateThreshold 应为 50");
         assertEquals(1, effective.getWaitDurationInOpenState().getSeconds(), "默认 waitDuration 应为 1s（setUp 中修改）");
+    }
+
+    @Test
+    @DisplayName("同类型不同 id 的 connector 独立分桶，互不牵连")
+    void sameTypeDifferentIds_independentBuckets() {
+        // 两个同为 stripe 类型的 PSP 实例：a 熔断不得牵连 b
+        circuitBreaker.getOrCreate("psp-a", "stripe");
+        circuitBreaker.getOrCreate("psp-b", "stripe");
+
+        circuitBreaker.recordFailure("psp-a", 300_000_000L, PSP_DECLINED);
+        circuitBreaker.recordFailure("psp-a", 300_000_000L, PSP_DECLINED);
+
+        assertEquals(CircuitBreaker.State.OPEN, circuitBreaker.getConnectorState("psp-a"),
+                "psp-a 连续失败后应为 OPEN");
+        assertEquals(CircuitBreaker.State.CLOSED, circuitBreaker.getConnectorState("psp-b"),
+                "同类型的 psp-b 不应被 psp-a 牵连");
+    }
+
+    @Test
+    @DisplayName("record 传真实耗时与真实异常，null cause 被拒收")
+    void record_callsCarryRealDurationAndCause() {
+        circuitBreaker.getOrCreate("stripe", "stripe");
+
+        circuitBreaker.recordSuccess("stripe", 150_000_000L);
+        circuitBreaker.recordFailure("stripe", 300_000_000L, PSP_DECLINED);
+
+        Metrics metrics = circuitBreaker.getCircuitBreaker("stripe").getMetrics();
+        assertEquals(1, metrics.getNumberOfSuccessfulCalls(), "成功数应为 1");
+        assertEquals(1, metrics.getNumberOfFailedCalls(), "失败数应为 1");
+
+        assertThrows(NullPointerException.class,
+                () -> circuitBreaker.recordFailure("stripe", 10_000_000L, null),
+                "cause 为 null 应被拒收，不得把空指针传进 Resilience4j");
+    }
+
+    @Test
+    @DisplayName("对未创建的 connector 调 record 不自动建桶")
+    void record_unknownId_noBucketCreated() {
+        circuitBreaker.recordSuccess("ghost", 10_000_000L);
+        circuitBreaker.recordFailure("ghost", 10_000_000L, PSP_DECLINED);
+
+        assertEquals(CircuitBreaker.State.DISABLED, circuitBreaker.getConnectorState("ghost"),
+                "未创建的 connector 状态应为 DISABLED");
+        assertNull(circuitBreaker.getCircuitBreaker("ghost"), "record 不应自动创建熔断器");
+        assertFalse(circuitBreaker.getRegisteredConnectors().contains("ghost"),
+                "getRegisteredConnectors 不应包含未创建的 connector");
     }
 }

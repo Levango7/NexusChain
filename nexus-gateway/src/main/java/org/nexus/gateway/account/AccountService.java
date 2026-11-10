@@ -556,7 +556,11 @@ public class AccountService {
     /**
      * 清算入账 — 清算结算后商户余额增加。
      *
-     * <p>由清算模块在完成清算后调用，使用 {@link AccountOperationType#CLEARING_SETTLE} 操作类型。
+     * <p><b>不变量 I3（板面 20261110-1800 裁决）：本方法永不接线。</b>
+     * 权威记账源是 nexus-settlement 清算引擎命令路径（{@code DefaultClearingEngine.batchClear}
+     * → {@code ledger.bookSettlement}）；本方法是历史平行第二记账源的唯一残留，
+     * 2026-11-10 起生产调用方为零（死监听链 ClearingSettlementService 已按裁决删除）。
+     * 任何接线需求必须先回答「记账源是哪个方法（文件:行号）」（I4），答不出即驳回。
      * clearingOrderId 作为幂等键（reference），确保同一清算订单不重复入账。
      * 账户冻结时拒绝入账。</p>
      *

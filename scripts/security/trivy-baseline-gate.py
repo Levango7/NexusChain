@@ -55,6 +55,9 @@ VALIDITY_DAYS = 90
 # kind 取值：default（普通条目）/ not-applicable（该二元组无修复版）/ shaded_vendored /
 #            pending_base_rebuild（上游已发修复版，但**尚无包含该修复版的已发布基础镜像**）
 KINDS = ("default", "not-applicable", "shaded_vendored", "pending_base_rebuild")
+# 防自续锚点只对正式基线生效：fixture 的 addedAt 是合成值（跨闰年/跨月末等用例
+# 需要任意日期），不锚定；CI 三处调用传的都是这个规范路径。
+CANONICAL_BASELINE = "config/trivy-baseline.json"
 
 # pending_base_rebuild 是**有界**例外：只允许 14 天，到期即判红，必须重新取证。
 PENDING_VALIDITY_DAYS = 14
@@ -291,6 +294,19 @@ def load_baseline(path: str) -> tuple[dict[tuple[str, str], dict], list[str]]:
             except ValueError:
                 errors.append(f"{where} addedAt 不是 ISO 日期（YYYY-MM-DD）：{added_raw}")
 
+        # 防自续锚点（只对正式基线 config/trivy-baseline.json 生效）：addedAt 不再信
+        # 作者自填——与该条目在基线文件里**首次出现**的提交日比对，不一致直接拒收
+        # （进 errors ⇒ exit 2）。封死的洞：同时改 addedAt 与 expires 即可无限续期
+        # （2026-11-08 复核发现）。取不到 git 历史（shallow clone / 文件未跟踪）时
+        # 返回 None，只跳过不判红；CI 侧另以 fetch-depth: 0 保证历史可得。
+        if added and os.path.abspath(path) == os.path.abspath(CANONICAL_BASELINE):
+            first_seen = _first_seen_date(path, vuln_id)
+            if first_seen and first_seen != added.isoformat():
+                errors.append(
+                    f"{where} addedAt={added.isoformat()} 与该条目首次出现的提交日 {first_seen}"
+                    f" 不一致（防自续：addedAt 以 git 首次出现日为准，不信作者自填）"
+                )
+
         if expires and added:
             validity_days = PENDING_VALIDITY_DAYS if kind == "pending_base_rebuild" else VALIDITY_DAYS
             expected = added + dt.timedelta(days=validity_days)
@@ -333,6 +349,29 @@ def _serialize_finding(finding: dict, entry: dict | None = None) -> dict:
         data["expires"] = entry["expires"].isoformat() if entry["expires"] else None
         data["evidence"] = entry["evidence"]
     return data
+
+
+def _first_seen_date(baseline_path, vuln_id):
+    """该 CVE 在基线文件里**首次出现**的提交日期（YYYY-MM-DD），取不到返回 None。
+
+    用途：把 `addedAt` 从「作者自填」变成「git 可核事实」——
+    否则只要同时改 addedAt 与 expires 就能无限续期（2026-11-08 复核发现）。
+    取不到历史（浅克隆 / 无 git）返回 None，由调用方降级为 warning，绝不因此判红。
+    """
+    try:
+        import subprocess  # 局部导入：不依赖模块头部 import 块的具体写法
+        out = subprocess.run(
+            ["git", "log", "-S", vuln_id, "--format=%as", "--", baseline_path],
+            capture_output=True, text=True, timeout=20,
+        )
+    except Exception:
+        return None
+    if out.returncode != 0:
+        return None
+    dates = [ln.strip() for ln in out.stdout.splitlines() if ln.strip()]
+    if not dates:
+        return None
+    return dates[-1]  # 最早一次（log 是倒序）
 
 
 def _age_days(today: dt.date, added: dt.date) -> int:

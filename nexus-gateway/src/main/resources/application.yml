@@ -176,6 +176,24 @@ shedlock:
   lock-at-most-for: PT4M
   lock-at-least-for: PT1M
 
+# === 对账自动调账上限（2026-11-08 显式声明） ===
+# 服务读取的是**无 nexus 前缀**的 reconciliation.adjustment.*（既有 @Value 路径），
+# 而补偿侧读取的是 nexus.reconciliation.compensation.*（见下方 nexus 段）。
+# 两段命名不一致是既有现状；本次不擅自改前缀（改前缀会静默忽略运维已有的
+# RECONCILIATION_ADJUSTMENT_* 覆盖），只把调账侧键显式化，做到运维可见、可覆盖。
+reconciliation:
+  adjustment:
+    # 单笔自动审批金额上限（> 此值走 PENDING_APPROVAL，既有行为，不变）
+    auto-approve-threshold: 1000
+    # 每商户当日 AUTO_APPROVED 笔数上限（本次新增；≤0 视为未配置、不参与拦截）
+    daily-max-count: 5
+    # 每商户当日 AUTO_APPROVED 累计金额上限（本次新增；≤0 视为未配置、不参与拦截）
+    daily-max-total: 3000
+    daily-limits:
+      # 闸门开关：false = 只判定 + 打日志 + 累加指标，行为完全不变（默认）；
+      # true = 超限转既有 PENDING_APPROVAL，不调用 executeAdjustment。
+      enforce: false
+
 # NexusChain Gateway configuration
 nexus:
   actuator:
@@ -198,6 +216,15 @@ nexus:
     # 末尾的 ':' 只把「未设置」映射为空串，便于 enabled=false 时无地址启动；
     # 它不是地址默认值——enabled=true 时空串会被启动守卫直接拒绝。
     platform-address: ${NEX_SETTLEMENT_PLATFORM_ADDRESS:}
+
+  # === 3DS 模拟挑战（2026-11-08 审计修复 B2）===
+  # 此前 ThreeDsServer 的 @Value 默认是 true，且**全仓 yml 零配置面** —— 生产若未显式设置
+  # 就走"模拟 Challenge"，而该类 javadoc 自述「生产环境必须设置为 false 并对接真实 ACS」
+  # （CWE-287 类：认证强度被静默降级）。
+  # 现改为：base 默认 false（安全默认），dev / sandbox 档显式置 true（本地与集成测试需要模拟）。
+  # 对接真实 ACS 之前，**不要**在 prod 侧打开此键。
+  3ds:
+    simulated-challenge-enabled: ${NEXUS_3DS_SIMULATED_CHALLENGE_ENABLED:false}
 
   # === 任务 #26：运维管理 API 配置 ===
   # OpsController / OpsService 的行为开关与缓存/线程池监控参数

@@ -18,27 +18,13 @@
 
 package org.nexus.service;
 
-import org.nexus.consensus.pos.Validator;
-import org.nexus.consensus.pos.ValidatorRegistry;
-import org.nexus.keystore.util.JsonUtils;
-import org.apache.commons.codec.DecoderException;
-import org.apache.commons.codec.binary.Hex;
 import org.nexus.ApiResult.APIResult;
-import org.nexus.core.account.Transaction;
-import org.nexus.core.TransactionPool;
-import org.nexus.core.payment.BridgeTransaction;
-import org.nexus.crypto.CryptoException;
-import org.nexus.crypto.ed25519.Ed25519PrivateKey;
-import org.nexus.crypto.ed25519.Ed25519PublicKey;
-import org.nexus.keystore.crypto.RipemdUtility;
 import org.nexus.keystore.crypto.SHA3Utility;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -47,23 +33,18 @@ import java.util.Map;
  * 跨链桥业务服务。
  *
  * <p>负责 NEX 跨链桥的锁定（{@code BRIDGE_LOCK}）、铸造（{@code BRIDGE_MINT}）、
- * 销毁（{@code BRIDGE_BURN}）交易构造与提交。跨链流程为：源链锁定 ->
- * 目标链铸造，反向流程为：目标链销毁 -> 源链解锁。</p>
+ * 销毁（{@code BRIDGE_BURN}）路由。跨链流程为：源链锁定 -> 目标链铸造，
+ * 反向流程为：目标链销毁 -> 源链解锁。</p>
  *
- * <p>锁定和销毁交易由发起方使用私钥签名；铸造交易由验证人提供多签
- * （签名列表嵌入 payload），交易本身的 signature 字段使用占位零签名。</p>
+ * <p>支付扩展类型（0x10–0x1a）当前保留未启用：写路由保留、入参校验保留，
+ * 但不再构造任何扩展类型交易，统一返回
+ * {@link APIResult#PAYMENT_EXTENSION_NOT_ENABLED}。</p>
  *
  * @author nexus-core
  * @since 1.0
  */
 @Component
 public class BridgeService {
-
-    /** 交易版本号，固定为 1。 */
-    private static final int TX_VERSION = Transaction.DEFAULT_TRANSACTION_VERSION;
-
-    /** 默认 gasPrice，按最小单位计费。 */
-    private static final long DEFAULT_GAS_PRICE = 1L;
 
     /** 默认验证人签名数量阈值。 */
     @Value("${nexus.bridge.min-validators:3}")
@@ -81,32 +62,14 @@ public class BridgeService {
     @Value("${nexus.bridge.daily-limit:10000000000}")
     private long dailyLimit;
 
-    @Autowired
-    private TransactionPool txPool;
-
-    /**
-     * 验证人注册中心（可选注入），用于旧版 mint 签名列表的公钥归属解析。
-     * {@code required=false} 以兼容无 Spring 上下文的单元测试。
-     */
-    @Autowired(required = false)
-    private ValidatorRegistry validatorRegistry;
-
-    /**
-     * 桥验证人公钥白名单（逗号分隔 hex），与 {@code BridgeRule} 同名配置对齐，
-     * 作为旧版 mint 公钥解析的候选来源之一。
-     */
-    @Value("${nexus.bridge.validator-pubkeys:}")
-    private String validatorPubkeysConfig;
-
     /** BRIDGE_MINT 消息哈希域分隔前缀（防止跨消息类型重放）。 */
     private static final String MINT_MSG_HASH_DOMAIN = "NEXUS-BRIDGE-MINT-v1";
 
     /**
      * 锁定资产。
      *
-     * <p>在源链上锁定 NEX 代币，为跨链转账做准备。构造
-     * {@link BridgeTransaction} 对象并调用 {@link BridgeTransaction#lock()}，
-     * 随后构造 {@code BRIDGE_LOCK} 类型交易并提交到交易池。</p>
+     * <p>支付扩展类型（0x10–0x1a）保留未启用：保留路由与入参校验，
+     * 但不再构造 {@code BRIDGE_LOCK} 交易。</p>
      *
      * @param fromPubkey  锁定发起方公钥（十六进制字符串，32 字节）
      * @param targetChain 目标链标识
@@ -114,96 +77,32 @@ public class BridgeService {
      * @param amount       锁定金额（NEX 最小单位）
      * @param prikey       发起方私钥（十六进制字符串，32 字节）
      * @param nonce        交易 nonce
-     * @return 统一响应结果，data 中包含 bridgeTxId 等
+     * @return 统一响应结果；支付扩展未启用时返回 {@link APIResult#PAYMENT_EXTENSION_NOT_ENABLED}
      */
     public APIResult lock(String fromPubkey, String targetChain, String recipient,
                           long amount, String prikey, long nonce) {
-        try {
-            if (fromPubkey == null || fromPubkey.isEmpty()) {
-                return APIResult.newFailResult(APIResult.FAIL, "fromPubkey is required");
-            }
-            if (targetChain == null || targetChain.isEmpty()) {
-                return APIResult.newFailResult(APIResult.FAIL, "targetChain is required");
-            }
-            if (recipient == null || recipient.isEmpty()) {
-                return APIResult.newFailResult(APIResult.FAIL, "recipient is required");
-            }
-            if (amount <= 0) {
-                return APIResult.newFailResult(APIResult.FAIL, "amount must be greater than 0");
-            }
-            if (amount > singleTxLimit) {
-                return APIResult.newFailResult(APIResult.FAIL,
-                        "amount " + amount + " exceeds single transaction limit " + singleTxLimit);
-            }
-            if (prikey == null || prikey.isEmpty()) {
-                return APIResult.newFailResult(APIResult.FAIL, "prikey is required");
-            }
-
-            // v2.3.0 生命周期键统一：桥交易 ID 改为确定性语义键，
-            // 与 PaymentTransactionProcessor.processBridgeLock 的
-            // computeLockKey(from, targetChain, recipient, amount) 完全一致——
-            // 服务端返回的 bridgeTxId 即链上唯一生命周期记录 ID，
-            // 此前的 "br_" + 毫秒时间戳随机 ID 与链上记录无法关联。
-            String bridgeTxId = org.nexus.core.payment.BridgeLifecycleReplayGuard.computeLockKey(
-                    fromPubkey.toLowerCase(java.util.Locale.ROOT), targetChain, recipient, amount);
-            long timelockExpiry = System.currentTimeMillis() / 1000 + timelockDuration;
-            BridgeTransaction bridgeTx = new BridgeTransaction(
-                    bridgeTxId, "NEX", targetChain, amount, recipient, minValidators, timelockExpiry);
-            bridgeTx.lock();
-
-            byte[] fromBytes = Hex.decodeHex(fromPubkey.toCharArray());
-            if (fromBytes.length != Transaction.PUBLIC_KEY_SIZE) {
-                return APIResult.newFailResult(APIResult.FAIL,
-                        "fromPubkey must be " + Transaction.PUBLIC_KEY_SIZE + " bytes, got " + fromBytes.length);
-            }
-            byte[] toBytes = RipemdUtility.ripemd160(SHA3Utility.keccak256(fromBytes));
-
-            byte[] payload = bridgeTx.toJson().getBytes(StandardCharsets.UTF_8);
-            byte[] emptySig = new byte[Transaction.SIGNATURE_SIZE];
-
-            Transaction tx = new Transaction(
-                    TX_VERSION,
-                    Transaction.Type.BRIDGE_LOCK.ordinal(),
-                    nonce,
-                    fromBytes,
-                    DEFAULT_GAS_PRICE,
-                    amount,
-                    payload,
-                    toBytes,
-                    emptySig
-            );
-
-            // 签名
-            byte[] prikeyBytes = Hex.decodeHex(prikey.toCharArray());
-            Ed25519PrivateKey privateKey = new Ed25519PrivateKey(prikeyBytes);
-            byte[] signature = privateKey.sign(tx.getRawForSign());
-            tx.signature = signature;
-
-            if (!txPool.add(tx)) {
-                return APIResult.newFailResult(APIResult.FAIL,
-                        "BRIDGE_LOCK transaction was not accepted by the transaction pool: "
-                                + "the on-chain transaction was rejected");
-            }
-
-            Map<String, Object> data = new LinkedHashMap<>();
-            data.put("bridgeTxId", bridgeTxId);
-            data.put("from", fromPubkey);
-            data.put("amount", amount);
-            data.put("targetChain", targetChain);
-            data.put("recipient", recipient);
-            data.put("state", bridgeTx.getState().name());
-            data.put("txHash", tx.getHashHexString());
-
-            return APIResult.newSuccess(data);
-        } catch (DecoderException e) {
-            return APIResult.newFailResult(APIResult.FAIL, "Invalid hex format: " + e.getMessage());
-        } catch (IllegalStateException | IllegalArgumentException e) {
-            return APIResult.newFailResult(APIResult.FAIL, "Lock validation failed: " + e.getMessage());
-        } catch (CryptoException e) {
-            return APIResult.newFailResult(APIResult.FAIL, "Signing failed: " + e.getMessage());
-        } catch (RuntimeException e) {
-            return APIResult.newFailResult(APIResult.FAIL, "Failed to lock assets: " + e.getMessage());
+        if (fromPubkey == null || fromPubkey.isEmpty()) {
+            return APIResult.newFailResult(APIResult.FAIL, "fromPubkey is required");
         }
+        if (targetChain == null || targetChain.isEmpty()) {
+            return APIResult.newFailResult(APIResult.FAIL, "targetChain is required");
+        }
+        if (recipient == null || recipient.isEmpty()) {
+            return APIResult.newFailResult(APIResult.FAIL, "recipient is required");
+        }
+        if (amount <= 0) {
+            return APIResult.newFailResult(APIResult.FAIL, "amount must be greater than 0");
+        }
+        if (amount > singleTxLimit) {
+            return APIResult.newFailResult(APIResult.FAIL,
+                    "amount " + amount + " exceeds single transaction limit " + singleTxLimit);
+        }
+        if (prikey == null || prikey.isEmpty()) {
+            return APIResult.newFailResult(APIResult.FAIL, "prikey is required");
+        }
+
+        // 支付扩展（0x10–0x1a）保留未启用：不再构造 BRIDGE_LOCK 交易。
+        return APIResult.paymentExtensionNotEnabled();
     }
 
     /**
@@ -267,82 +166,27 @@ public class BridgeService {
     }
 
     /**
-     * 在目标链上铸造资产（显式时间锁版本，包可见供单元测试构造确定性 payload）。
+     * 在目标链上铸造资产（显式时间锁版本，保留签名供兼容调用）。
+     *
+     * <p>支付扩展类型（0x10–0x1a）保留未启用：保留入参校验，
+     * 但不再组装多签 payload、不再构造 {@code BRIDGE_MINT} 交易。</p>
      */
     APIResult mint(String bridgeTxId, String sourceChain, String recipient,
                    long amount, long timelockExpiry,
                    List<String> validatorPubkeys, List<String> validatorSignatures) {
-        try {
-            APIResult validation = validateMintRequest(bridgeTxId, recipient, amount, validatorSignatures);
-            if (validation != null) {
-                return validation;
-            }
-            if (validatorPubkeys == null || validatorPubkeys.size() != validatorSignatures.size()) {
-                return APIResult.newFailResult(APIResult.FAIL,
-                        "validator pubkeys (" + (validatorPubkeys == null ? 0 : validatorPubkeys.size())
-                                + ") must pair one-to-one with signatures ("
-                                + validatorSignatures.size() + ")");
-            }
-
-            byte[] messageHash = computeMintMessageHash(
-                    bridgeTxId, sourceChain, recipient, amount, timelockExpiry);
-
-            int n = validatorSignatures.size();
-            byte[][] pubkeyBytes = new byte[n][];
-            byte[][] sigBytes = new byte[n][];
-            for (int i = 0; i < n; i++) {
-                try {
-                    pubkeyBytes[i] = Hex.decodeHex(validatorPubkeys.get(i).toCharArray());
-                    sigBytes[i] = Hex.decodeHex(validatorSignatures.get(i).toCharArray());
-                } catch (DecoderException e) {
-                    return APIResult.newFailResult(APIResult.FAIL,
-                            "invalid validator pubkey/signature hex at index " + i + ": " + e.getMessage());
-                }
-                if (pubkeyBytes[i].length != Transaction.PUBLIC_KEY_SIZE) {
-                    return APIResult.newFailResult(APIResult.FAIL,
-                            "validator pubkey at index " + i + " must be "
-                                    + Transaction.PUBLIC_KEY_SIZE + " bytes, got " + pubkeyBytes[i].length);
-                }
-                if (sigBytes[i].length != Transaction.SIGNATURE_SIZE) {
-                    return APIResult.newFailResult(APIResult.FAIL,
-                            "validator signature at index " + i + " must be "
-                                    + Transaction.SIGNATURE_SIZE + " bytes, got " + sigBytes[i].length);
-                }
-                // fail-closed：提交前逐签名预验签，避免无效多签入池后被链上规则拒绝
-                try {
-                    if (!new Ed25519PublicKey(pubkeyBytes[i]).verify(messageHash, sigBytes[i])) {
-                        return APIResult.newFailResult(APIResult.FAIL,
-                                "validator signature at index " + i
-                                        + " does not verify against its pubkey and messageHash");
-                    }
-                } catch (RuntimeException e) {
-                    return APIResult.newFailResult(APIResult.FAIL,
-                            "signature pre-verification error at index " + i + ": " + e.getMessage());
-                }
-            }
-
-            // v1.9.4 格式：[8B timelock][1B sigCount][32B messageHash][N×(32B pubkey + 64B sig)]
-            // v2.3.0：追加 [2B idLen][bridgeTxId] 尾部，显式携带生命周期统一 ID，
-            // 使目标链铸造直接命中源链锁定创建的同一 BridgeTransaction 记录。
-            byte[] idBytes = bridgeTxId.getBytes(StandardCharsets.UTF_8);
-            ByteBuffer payloadBuf = ByteBuffer.allocate(
-                    8 + 1 + 32 + n * (Transaction.PUBLIC_KEY_SIZE + Transaction.SIGNATURE_SIZE)
-                            + org.nexus.core.payment.BridgePayloadCodec.TRAILER_OVERHEAD + idBytes.length);
-            payloadBuf.putLong(timelockExpiry);
-            payloadBuf.put((byte) n);
-            payloadBuf.put(messageHash);
-            for (int i = 0; i < n; i++) {
-                payloadBuf.put(pubkeyBytes[i]);
-                payloadBuf.put(sigBytes[i]);
-            }
-            payloadBuf.putShort((short) idBytes.length);
-            payloadBuf.put(idBytes);
-
-            return submitMintTransaction(bridgeTxId, sourceChain, recipient, amount,
-                    payloadBuf.array(), n);
-        } catch (RuntimeException e) {
-            return APIResult.newFailResult(APIResult.FAIL, "Failed to mint bridge assets: " + e.getMessage());
+        APIResult validation = validateMintRequest(bridgeTxId, recipient, amount, validatorSignatures);
+        if (validation != null) {
+            return validation;
         }
+        if (validatorPubkeys == null || validatorPubkeys.size() != validatorSignatures.size()) {
+            return APIResult.newFailResult(APIResult.FAIL,
+                    "validator pubkeys (" + (validatorPubkeys == null ? 0 : validatorPubkeys.size())
+                            + ") must pair one-to-one with signatures ("
+                            + validatorSignatures.size() + ")");
+        }
+
+        // 支付扩展（0x10–0x1a）保留未启用：不再构造 BRIDGE_MINT 交易。
+        return APIResult.paymentExtensionNotEnabled();
     }
 
     /**
@@ -368,85 +212,8 @@ public class BridgeService {
             return validation;
         }
 
-        long timelockExpiry = System.currentTimeMillis() / 1000 + timelockDuration;
-        byte[] messageHash = computeMintMessageHash(
-                bridgeTxId, sourceChain, recipient, amount, timelockExpiry);
-
-        List<String> candidatePubkeys = collectCandidateValidatorPubkeys();
-        if (candidatePubkeys.isEmpty()) {
-            return APIResult.newFailResult(APIResult.FAIL,
-                    "cannot resolve validator public keys (no ValidatorRegistry active validators "
-                            + "and nexus.bridge.validator-pubkeys unset); use mint(...) with explicit "
-                            + "validatorPubkeys list");
-        }
-
-        List<String> resolvedPubkeys = new ArrayList<>();
-        for (String sigHex : validatorSignatures) {
-            byte[] sig;
-            try {
-                sig = Hex.decodeHex(sigHex.toCharArray());
-            } catch (DecoderException e) {
-                return APIResult.newFailResult(APIResult.FAIL,
-                        "invalid validator signature hex: " + e.getMessage());
-            }
-            String matched = null;
-            for (String candidateHex : candidatePubkeys) {
-                try {
-                    byte[] candidate = Hex.decodeHex(candidateHex.toCharArray());
-                    if (candidate.length == Transaction.PUBLIC_KEY_SIZE
-                            && sig.length == Transaction.SIGNATURE_SIZE
-                            && new Ed25519PublicKey(candidate).verify(messageHash, sig)) {
-                        matched = candidateHex;
-                        break;
-                    }
-                } catch (DecoderException | RuntimeException ignored) {
-                    // 候选公钥格式异常则跳过
-                }
-            }
-            if (matched == null) {
-                return APIResult.newFailResult(APIResult.FAIL,
-                        "signature could not be attributed to any registered validator pubkey; "
-                                + "use mint(...) with explicit validatorPubkeys list");
-            }
-            resolvedPubkeys.add(matched);
-        }
-
-        return mint(bridgeTxId, sourceChain, recipient, amount,
-                timelockExpiry, resolvedPubkeys, validatorSignatures);
-    }
-
-    /**
-     * 收集候选验证人公钥（小写 hex）：注册中心活跃验证人 ∪ 配置白名单。
-     */
-    private List<String> collectCandidateValidatorPubkeys() {
-        List<String> candidates = new ArrayList<>();
-        if (validatorRegistry != null) {
-            try {
-                for (Validator v : validatorRegistry.getActiveValidators()) {
-                    if (v != null && v.getPublicKey() != null && !v.getPublicKey().isEmpty()) {
-                        candidates.add(stripHexPrefix(v.getPublicKey()).toLowerCase());
-                    }
-                }
-            } catch (RuntimeException ignored) {
-                // 注册中心读取失败时仅使用配置白名单
-            }
-        }
-        if (validatorPubkeysConfig != null && !validatorPubkeysConfig.isEmpty()) {
-            for (String token : validatorPubkeysConfig.split(",")) {
-                String trimmed = token.trim();
-                if (!trimmed.isEmpty()) {
-                    candidates.add(stripHexPrefix(trimmed).toLowerCase());
-                }
-            }
-        }
-        return candidates;
-    }
-
-    private static String stripHexPrefix(String hex) {
-        if (hex == null) {
-            return "";
-        }
-        return (hex.startsWith("0x") || hex.startsWith("0X")) ? hex.substring(2) : hex;
+        // 支付扩展（0x10–0x1a）保留未启用：不再解析验证人公钥、不再构造 BRIDGE_MINT 交易。
+        return APIResult.paymentExtensionNotEnabled();
     }
 
     /**
@@ -473,74 +240,17 @@ public class BridgeService {
     }
 
     /**
-     * 解析收款人并提交 BRIDGE_MINT 交易到交易池。
-     */
-    private APIResult submitMintTransaction(String bridgeTxId, String sourceChain,
-                                            String recipient, long amount,
-                                            byte[] payload, int sigCount) {
-        // tx.to 填充真实 recipient（processBridgeMint 用 pubKeyHashToHex(tx.to) 作为收款人）
-        byte[] recipientHash;
-        try {
-            byte[] recipientBytes = Hex.decodeHex(recipient.toCharArray());
-            // recipient 可能是完整 pubkey（64 hex=32B）或 pubkeyHash（40 hex=20B）
-            if (recipientBytes.length == Transaction.PUBLIC_KEY_SIZE) {
-                recipientHash = RipemdUtility.ripemd160(SHA3Utility.keccak256(recipientBytes));
-            } else if (recipientBytes.length == Transaction.PUBLIC_KEY_HASH_SIZE) {
-                recipientHash = recipientBytes;
-            } else {
-                return APIResult.newFailResult(APIResult.FAIL,
-                        "recipient must be pubkey (64 hex) or pubkeyHash (40 hex), got "
-                                + recipientBytes.length + " bytes");
-            }
-        } catch (RuntimeException | DecoderException e) {
-            return APIResult.newFailResult(APIResult.FAIL, "invalid recipient hex: " + e.getMessage());
-        }
-
-        byte[] placeholderFrom = new byte[Transaction.PUBLIC_KEY_SIZE];
-        byte[] emptySig = new byte[Transaction.SIGNATURE_SIZE];
-
-        Transaction tx = new Transaction(
-                TX_VERSION,
-                Transaction.Type.BRIDGE_MINT.ordinal(),
-                0L,
-                placeholderFrom,
-                DEFAULT_GAS_PRICE,
-                amount,
-                payload,
-                recipientHash,
-                emptySig
-        );
-
-        if (!txPool.add(tx)) {
-            return APIResult.newFailResult(APIResult.FAIL,
-                    "BRIDGE_MINT rejected by transaction pool: payment extension transactions "
-                            + "(0x10-0x1a) cannot be included in a block");
-        }
-
-        Map<String, Object> data = new LinkedHashMap<>();
-        data.put("bridgeTxId", bridgeTxId);
-        data.put("amount", amount);
-        data.put("recipient", recipient);
-        data.put("sourceChain", sourceChain);
-        data.put("sigCount", sigCount);
-        data.put("state", BridgeTransaction.State.MINTED.name());
-        data.put("txHash", tx.getHashHexString());
-
-        return APIResult.newSuccess(data);
-    }
-
-    /**
      * 销毁目标链上的资产。
      *
-     * <p>在目标链上销毁跨链铸造的资产，为反向解锁做准备。
-     * 构造 {@code BRIDGE_BURN} 类型交易并提交到交易池。</p>
+     * <p>支付扩展类型（0x10–0x1a）保留未启用：保留路由与入参校验，
+     * 但不再构造 {@code BRIDGE_BURN} 交易。</p>
      *
      * @param fromPubkey  销毁发起方公钥（十六进制字符串，32 字节）
      * @param targetChain 目标链标识
      * @param amount      销毁金额
      * @param prikey      发起方私钥（十六进制字符串，32 字节）
      * @param nonce       交易 nonce
-     * @return 统一响应结果，data 中包含销毁结果
+     * @return 统一响应结果；支付扩展未启用时返回 {@link APIResult#PAYMENT_EXTENSION_NOT_ENABLED}
      */
     public APIResult burn(String fromPubkey, String targetChain, long amount,
                           String prikey, long nonce) {
@@ -568,79 +278,18 @@ public class BridgeService {
      */
     public APIResult burn(String fromPubkey, String targetChain, long amount,
                           String prikey, long nonce, String bridgeTxId) {
-        try {
-            if (fromPubkey == null || fromPubkey.isEmpty()) {
-                return APIResult.newFailResult(APIResult.FAIL, "fromPubkey is required");
-            }
-            if (amount <= 0) {
-                return APIResult.newFailResult(APIResult.FAIL, "amount must be greater than 0");
-            }
-            if (prikey == null || prikey.isEmpty()) {
-                return APIResult.newFailResult(APIResult.FAIL, "prikey is required");
-            }
-
-            byte[] fromBytes = Hex.decodeHex(fromPubkey.toCharArray());
-            if (fromBytes.length != Transaction.PUBLIC_KEY_SIZE) {
-                return APIResult.newFailResult(APIResult.FAIL,
-                        "fromPubkey must be " + Transaction.PUBLIC_KEY_SIZE + " bytes, got " + fromBytes.length);
-            }
-            byte[] toBytes = RipemdUtility.ripemd160(SHA3Utility.keccak256(fromBytes));
-
-            // PLAN-004 同类修复：burn payload 改二进制格式（对齐 BridgeRule 解析约定）：
-            // 前 8 字节 = 时间戳，第 9 字节 = 签名数。burn 为单用户自签（tx.signature
-            // 由 Ed25519 验签），非验证人多签——签名数填 0，BridgeRule 不再要求多签。
-            // v2.3.0：bridgeTxId 非空时追加 [2B idLen][bridgeTxId] 尾部。
-            byte[] payload;
-            if (bridgeTxId != null && !bridgeTxId.isEmpty()) {
-                payload = org.nexus.core.payment.BridgePayloadCodec.buildBurnPayload(
-                        System.currentTimeMillis() / 1000, 0, bridgeTxId);
-            } else {
-                ByteBuffer payloadBuf = ByteBuffer.allocate(8 + 1);
-                payloadBuf.putLong(System.currentTimeMillis() / 1000);
-                payloadBuf.put((byte) 0);
-                payload = payloadBuf.array();
-            }
-
-            byte[] emptySig = new byte[Transaction.SIGNATURE_SIZE];
-
-            Transaction tx = new Transaction(
-                    TX_VERSION,
-                    Transaction.Type.BRIDGE_BURN.ordinal(),
-                    nonce,
-                    fromBytes,
-                    DEFAULT_GAS_PRICE,
-                    amount,
-                    payload,
-                    toBytes,
-                    emptySig
-            );
-
-            // 签名
-            byte[] prikeyBytes = Hex.decodeHex(prikey.toCharArray());
-            Ed25519PrivateKey privateKey = new Ed25519PrivateKey(prikeyBytes);
-            byte[] signature = privateKey.sign(tx.getRawForSign());
-            tx.signature = signature;
-
-            if (!txPool.add(tx)) {
-                return APIResult.newFailResult(APIResult.FAIL,
-                        "BRIDGE_BURN transaction was not accepted by the transaction pool: "
-                                + "the on-chain transaction was rejected");
-            }
-
-            Map<String, Object> data = new LinkedHashMap<>();
-            data.put("amount", amount);
-            data.put("targetChain", targetChain);
-            data.put("state", BridgeTransaction.State.BURNED.name());
-            data.put("txHash", tx.getHashHexString());
-
-            return APIResult.newSuccess(data);
-        } catch (DecoderException e) {
-            return APIResult.newFailResult(APIResult.FAIL, "Invalid hex format: " + e.getMessage());
-        } catch (CryptoException e) {
-            return APIResult.newFailResult(APIResult.FAIL, "Signing failed: " + e.getMessage());
-        } catch (RuntimeException e) {
-            return APIResult.newFailResult(APIResult.FAIL, "Failed to burn bridge assets: " + e.getMessage());
+        if (fromPubkey == null || fromPubkey.isEmpty()) {
+            return APIResult.newFailResult(APIResult.FAIL, "fromPubkey is required");
         }
+        if (amount <= 0) {
+            return APIResult.newFailResult(APIResult.FAIL, "amount must be greater than 0");
+        }
+        if (prikey == null || prikey.isEmpty()) {
+            return APIResult.newFailResult(APIResult.FAIL, "prikey is required");
+        }
+
+        // 支付扩展（0x10–0x1a）保留未启用：不再构造 BRIDGE_BURN 交易。
+        return APIResult.paymentExtensionNotEnabled();
     }
 
     /**

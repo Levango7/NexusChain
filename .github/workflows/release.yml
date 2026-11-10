@@ -599,6 +599,8 @@ jobs:
     steps:
       - name: Checkout 代码
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: 下载本模块 digest 清单
         uses: actions/download-artifact@v7

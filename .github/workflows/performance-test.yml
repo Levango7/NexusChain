@@ -157,9 +157,19 @@ jobs:
         # GitHub releases 直装二进制（无 gpg keyserver 依赖）。
         run: |
           K6_VERSION="v0.54.0"
-          curl -sL --retry 3 --fail \
-            "https://github.com/grafana/k6/releases/download/${K6_VERSION}/k6-${K6_VERSION}-linux-amd64.tar.gz" \
-            -o /tmp/k6.tar.gz
+          K6_URL="https://github.com/grafana/k6/releases/download/${K6_VERSION}/k6-${K6_VERSION}-linux-amd64.tar.gz"
+          # 2026-11-08 incident：下载 GitHub release 资产失败时只有 `exit 22`，
+          # 状态码全丢（无法区分 403/429/5xx）。这里把 http_code 与最终 URL
+          # 一并打出，失败时用 ::error:: 指名——不改判定口径，只让失败自证。
+          if diag=$(curl -fSL --retry 3 --retry-all-errors \
+                -w 'http=%{http_code} url=%{url_effective}' \
+                "$K6_URL" -o /tmp/k6.tar.gz); then
+            echo "k6 下载成功: $diag"
+          else
+            rc=$?
+            echo "::error::下载失败 k6 rc=$rc ${diag:-（无诊断输出：连接/DNS 层已断）}"
+            exit 1
+          fi
           tar -xzf /tmp/k6.tar.gz -C /tmp
           sudo install -m 0755 /tmp/k6-${K6_VERSION}-linux-amd64/k6 /usr/local/bin/k6
           k6 version
@@ -268,9 +278,19 @@ jobs:
         # 2026-09-10 修复：同 smoke-test——gpg keyserver 不可达，改 GitHub releases 直装
         run: |
           K6_VERSION="v0.54.0"
-          curl -sL --retry 3 --fail \
-            "https://github.com/grafana/k6/releases/download/${K6_VERSION}/k6-${K6_VERSION}-linux-amd64.tar.gz" \
-            -o /tmp/k6.tar.gz
+          K6_URL="https://github.com/grafana/k6/releases/download/${K6_VERSION}/k6-${K6_VERSION}-linux-amd64.tar.gz"
+          # 2026-11-08 incident：下载 GitHub release 资产失败时只有 `exit 22`，
+          # 状态码全丢（无法区分 403/429/5xx）。这里把 http_code 与最终 URL
+          # 一并打出，失败时用 ::error:: 指名——不改判定口径，只让失败自证。
+          if diag=$(curl -fSL --retry 3 --retry-all-errors \
+                -w 'http=%{http_code} url=%{url_effective}' \
+                "$K6_URL" -o /tmp/k6.tar.gz); then
+            echo "k6 下载成功: $diag"
+          else
+            rc=$?
+            echo "::error::下载失败 k6 rc=$rc ${diag:-（无诊断输出：连接/DNS 层已断）}"
+            exit 1
+          fi
           tar -xzf /tmp/k6.tar.gz -C /tmp
           sudo install -m 0755 /tmp/k6-${K6_VERSION}-linux-amd64/k6 /usr/local/bin/k6
           k6 version
@@ -358,9 +378,19 @@ jobs:
       - name: 安装 k6
         run: |
           K6_VERSION="v0.54.0"
-          curl -sL --retry 3 --fail \
-            "https://github.com/grafana/k6/releases/download/${K6_VERSION}/k6-${K6_VERSION}-linux-amd64.tar.gz" \
-            -o /tmp/k6.tar.gz
+          K6_URL="https://github.com/grafana/k6/releases/download/${K6_VERSION}/k6-${K6_VERSION}-linux-amd64.tar.gz"
+          # 2026-11-08 incident：下载 GitHub release 资产失败时只有 `exit 22`，
+          # 状态码全丢（无法区分 403/429/5xx）。这里把 http_code 与最终 URL
+          # 一并打出，失败时用 ::error:: 指名——不改判定口径，只让失败自证。
+          if diag=$(curl -fSL --retry 3 --retry-all-errors \
+                -w 'http=%{http_code} url=%{url_effective}' \
+                "$K6_URL" -o /tmp/k6.tar.gz); then
+            echo "k6 下载成功: $diag"
+          else
+            rc=$?
+            echo "::error::下载失败 k6 rc=$rc ${diag:-（无诊断输出：连接/DNS 层已断）}"
+            exit 1
+          fi
           tar -xzf /tmp/k6.tar.gz -C /tmp
           sudo install -m 0755 /tmp/k6-${K6_VERSION}-linux-amd64/k6 /usr/local/bin/k6
           k6 version

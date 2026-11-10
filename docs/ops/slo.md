@@ -17,49 +17,51 @@
 | JVM（堆 / GC / 线程） | ✅ 能 | Micrometer 默认 JVM binder |
 | 容器资源（CPU / 内存 / 重启） | ✅ 能 | kube-state-metrics / cAdvisor |
 | 链（块高 / 最终性 / 投票 / 持久化） | ✅ 能 | `nexuschain_block_height`、`nexus_finality_*`、`nexus_block_*` |
-| 安全（重放拦截 / 密码验证 / 3DS / KEK） | ✅ 大部分能 | `SecurityMetricsRecorder`，9 个 meter 中 7 个已接线 |
-| **支付业务漏斗（下单 / 成功 / 失败 / 退款 / Webhook）** | ❌ **不能** | `PaymentMetrics` 7 个 meter **零调用点**（见 §2.1） |
+| 安全（重放拦截 / 密码验证 / 3DS / KEK） | ✅ 能 | `SecurityMetricsRecorder` 9 个 meter 已全部接线（#584 补齐 encrypt/decrypt 两件） |
+| **支付业务漏斗（下单 / 成功 / 失败 / 退款 / Webhook）** | ✅ 能 | `PaymentMetrics` 7 个 meter 已由 #577 全接线（见 §2.1）；下单指标导出名是 `nexus_orders_total`，不是 `nexus_orders_created_total` |
 | 结算确认耗时 / 对账差错率 / 桥接金额 / 风控触发 / MPC 签名耗时 | ❌ 不能 | 全仓无对应指标注册 |
 
-**一句话**：**基础设施与链的 SLO 今天就能立；资金业务的 SLO 今天立不起来**——不是阈值没定，是分子分母都没有。
+**一句话**：**基础设施、链与支付漏斗的 SLO 今天就能立**（阈值仍待业务决策）；**结算 / 对账 / 桥接 / 风控 / MPC 签名仍立不起来**——这些指标全仓未注册，分子分母都没有。
 
 ---
 
-## 二、两个必须先修的事实
+## 二、曾经必须先修、现已修复的事实（保留作审计记录）
 
-### 2.1 `PaymentMetrics` 注册了 7 个指标，但没有任何地方调用
+### 2.1 `PaymentMetrics` 7 个指标曾零调用点，已由 #577 全接线
 
-`nexus-gateway/src/main/java/org/nexus/gateway/observability/PaymentMetrics.java:23-38` 用 `MeterRegistry` 注册了 7 个 meter：
+`nexus-gateway/src/main/java/org/nexus/gateway/observability/PaymentMetrics.java` 的构造器用 `MeterRegistry` 注册了 7 个 meter：
 
-| 指标（Prometheus 名） | 注册处 | 调用点 |
-|---|---|---|
-| `nexus_orders_created_total` | `:24` | **0** |
-| `nexus_payments_confirmed_total` | `:26` | **0** |
-| `nexus_payments_failed_total` | `:28` | **0** |
-| `nexus_refunds_issued_total` | `:30` | **0** |
-| `nexus_webhooks_delivered_total` | `:32` | **0** |
-| `nexus_webhooks_failed_total` | `:34` | **0** |
-| `nexus_payment_latency_seconds`（Timer） | `:36` | **0** |
+| 指标（Prometheus 实际导出名） | 接线点（#577） |
+|---|---|
+| `nexus_orders_total` ⚠ 不是 `nexus_orders_created_total` | `OrderServiceImpl` → `orderCreated()` |
+| `nexus_payments_confirmed_total` | `PaymentServiceImpl.recordPaymentConfirmed` → `paymentConfirmed()` |
+| `nexus_payments_failed_total` | `PaymentServiceImpl.recordPaymentFailed` → `paymentFailed()`（仅 FAILED 终态） |
+| `nexus_refunds_issued_total` | `PaymentServiceImpl` 退款分支 → `refundIssued()`（仅 `RefundStatus.COMPLETED`） |
+| `nexus_webhooks_delivered_total` | `WebhookDeliveryService` → `webhookDelivered()` |
+| `nexus_webhooks_failed_total` | `WebhookDeliveryService` → `webhookFailed()` |
+| `nexus_payment_latency_seconds`（Timer） | `PaymentServiceImpl.recordPaymentConfirmed` → `paymentLatencySince(order.getCreatedAt())` |
 
-复现（两条命令都返回空）：
+修复前的复现（#576 时两条命令都返回空；#577 后不再为空，保留作审计记录）：
 
 ```bash
 # ① 除自身文件外，全仓有没有引用 PaymentMetrics 这个类型？
 git grep -n "PaymentMetrics" -- '*.java' | grep -v "observability/PaymentMetrics.java"
-#   → 只有 SecurityMetricsRecorder.java:15 的一行 javadoc 注释，没有注入点
+#   → #576 时：只有 SecurityMetricsRecorder.java:15 的一行 javadoc 注释，没有注入点
+#   → #577 后：命中 OrderServiceImpl / PaymentServiceImpl / WebhookDeliveryService 及两个测试
 
 # ② 有没有任何地方调用它的方法？
-git grep -n "orderCreated()\|paymentConfirmed()\|paymentFailed()\|refundIssued()\|webhookDelivered()\|webhookFailed()\|getPaymentLatency" -- '*.java'
-#   → 只命中 PaymentMetrics.java 自身的 40-46 行（方法定义）
+git grep -n "orderCreated()\|paymentConfirmed()\|paymentFailed()\|refundIssued()\|webhookDelivered()\|webhookFailed()" -- '*.java'
+#   → #576 时：只命中 PaymentMetrics.java 自身的方法定义
+#   → #577 后：命中上表 7 个接线点
 ```
 
-**后果**：因为 `PaymentMetrics` 是 `@Component` 且构造器注入 `MeterRegistry`，这些 meter **在启动时会被注册**，所以 `/actuator/prometheus` 里**能看到它们，值恒为 0**。这不是"面板没数据"，是"面板永远显示 0"——比没有指标更危险，因为看起来是通的。
+**修复前的后果**：因为 `PaymentMetrics` 是 `@Component` 且构造器注入 `MeterRegistry`，这些 meter 在启动时会被注册，所以 `/actuator/prometheus` 里能看到它们、值恒为 0——不是"面板没数据"，是"面板永远显示 0"。**#577 接线后这一条不再成立**；`@Autowired(required = false)` setter 注入 + 判空跳过，保证指标类缺席时业务路径不受影响。
 
-`deploy/grafana/dashboards/nexus-gateway.json` 的业务面板引用的正是这批名字（`nexus_orders_created_total` / `nexus_payments_confirmed_total` / `nexus_payments_failed_total` / `nexus_refunds_issued_total` / `nexus_webhooks_delivered_total` / `nexus_webhooks_failed_total` / `nexus_payment_latency_seconds_*`），所以**这些面板结构上恒为 0**。
+`deploy/grafana/dashboards/nexus-gateway.json` panel 13–16 的业务面板引用这批名字，#577 已把首条 expr 从不存在的 `nexus_orders_created_total` 改为 `nexus_orders_total`（OpenMetrics 把 `_created` 保留给创建时间戳序列，故 `nexus.orders.created` 这个 counter 实际导出为 `nexus_orders_total`，见 `PaymentMetricsTest` 抓取断言）；其余 expr 保持。**接线后面板不再恒为 0**，但阈值仍未定（见第六节）。
 
-**这不是新问题，而且已有先例可循**：`ThreeDsAuthCompletedObserver` 的 javadoc 记录了同一缺陷——`nexus_3ds_auth_total` "在 `SecurityMetricsRecorder` 里注册后从来没人喂过，此前恒为 0"，后来通过加观察者修好了。`PaymentMetrics` 走的是同一条老路，只是还没人修。
+**这不是新问题，而且已有先例可循**：`ThreeDsAuthCompletedObserver` 的 javadoc 记录了同一缺陷——`nexus_3ds_auth_total` "在 `SecurityMetricsRecorder` 里注册后从来没人喂过，此前恒为 0"，后来通过加观察者修好了。`PaymentMetrics` 走的正是同一条老路，最终由 #577 以完全相同的方式补齐。
 
-### 2.2 安全指标 9 个里还有 2 个是死的
+### 2.2 安全指标 9 个里曾有 2 个是死的（#584 已补齐）
 
 `SecurityMetricsRecorder`（`nexus-gateway/src/main/java/org/nexus/gateway/security/audit/SecurityMetricsRecorder.java`）注册 9 个 meter，接线情况：
 
@@ -72,10 +74,10 @@ git grep -n "orderCreated()\|paymentConfirmed()\|paymentFailed()\|refundIssued()
 | `nexus_password_locks_total` | `PaymentPasswordService.java:209` | ✅ |
 | `nexus_kek_version` | `KeyRotationScheduler.java:189,209` | ✅ |
 | `nexus_key_rotation_progress` | `KeyRotationScheduler.java:164` | ✅ |
-| `nexus_encryption_operations_total` | — | ❌ **0 调用** |
-| `nexus_encryption_latency_seconds` | — | ❌ **0 调用** |
+| `nexus_encryption_operations_total` | 加解密工具类出口（#584） | ✅ |
+| `nexus_encryption_latency_seconds` | 加解密工具类出口（#584） | ✅ |
 
-`recordEncryptionOperation()` 与 `getEncryptionLatencyTimer()` 全仓无调用点（`git grep "\.recordEncryptionOperation("` 只命中 `SecurityAuditServiceTest` 里**另一个类**的同名方法）。
+`recordEncryptionOperation()` 与 `getEncryptionLatencyTimer()` 在 #576 时全仓无调用点（`git grep "\.recordEncryptionOperation("` 只命中 `SecurityAuditServiceTest` 里**另一个类**的同名方法）；#584 已在加解密出口补上调用点。该段保留作审计记录。
 
 ---
 
@@ -92,7 +94,7 @@ git grep -n "orderCreated()\|paymentConfirmed()\|paymentFailed()\|refundIssued()
 | 采集位置 | 各服务 `/actuator/prometheus`（需 `Authorization: Bearer $NEXUS_METRICS_TOKEN`） |
 | 已用于 | `deploy/grafana/dashboards/nexus-gateway.json`（错误率面板） |
 | 阈值 | `待定（业务决策）` |
-| 局限 | **只反映网关自己的 HTTP 层**。一次「返回 200 但支付没成」不算失败——这正是 §2.1 的缺口 |
+| 局限 | **只反映网关自己的 HTTP 层**。一次「返回 200 但支付没成」不算失败——要覆盖这类业务失败，须改用 §3.8 的支付漏斗 SLI |
 
 ### 3.2 API 延迟
 
@@ -151,25 +153,30 @@ git grep -n "orderCreated()\|paymentConfirmed()\|paymentFailed()\|refundIssued()
 | 采集位置 | nexus-gateway `:8080/actuator/prometheus` |
 | 阈值 | `待定（业务决策）`；**这不是"越低越好"的可用性指标**——重放拦截持续 > 0 意味着有人在打你的签名协议，属安全事件而非性能退化 |
 
+### 3.8 支付漏斗（#577 接线后可测）
+
+| 项 | 内容 |
+|---|---|
+| SLI | 支付成功率、下单吞吐、Webhook 投递成功率、支付端到端延迟 |
+| PromQL | 支付成功率：`sum(rate(nexus_payments_confirmed_total[5m])) / clamp_min(sum(rate(nexus_payments_confirmed_total[5m])) + sum(rate(nexus_payments_failed_total[5m])), 1)`；下单吞吐：`sum(rate(nexus_orders_total[5m]))` ⚠ 不是 `nexus_orders_created_total`；延迟（与 panel 13–16 一致）：`sum(rate(nexus_payment_latency_seconds_sum[5m])) / clamp_min(sum(rate(nexus_payment_latency_seconds_count[5m])), 1)`，峰值 `max(nexus_payment_latency_seconds_max)`。⚠ `PaymentMetricsTest` 的裸 registry 抓取文本只断言 `_count` / `_sum` / `_max`；`_bucket` 是否导出取决于生产全局 histogram 配置，**未验证**，故此处不用 `histogram_quantile` |
+| 采集位置 | nexus-gateway `:8080/actuator/prometheus` |
+| 已用于 | `deploy/grafana/dashboards/nexus-gateway.json` panel 13–16 |
+| 阈值 | `待定（业务决策）` |
+| 局限 | `paymentFailed()` 只在 FAILED 终态计数，`refundIssued()` 只在 `RefundStatus.COMPLETED` 计数；`paymentLatencySince()` 在 `createdAt` 为 null 或时间在未来时**跳过样本**，绝不记 0 ⇒ 低流量期延迟样本可能不足；服务端分位数需依赖 `_bucket`，本仓尚无生产抓取文本验证，故不列入 SLI |
+
 ---
 
-## 四、立不起来的 SLO（指标不存在）
+## 四、立不起来的 SLO（指标不存在 / 未注册）
 
-要立这些 SLO，**先补埋点**。清单与建议落点：
+要立这些 SLO，**先补埋点**。**支付漏斗 6 项与加密 2 项已由 #577 / #584 修复并移入 §3.8，不再属本节**；下表只保留仍无对应指标注册的部分。
 
 | 想要的 SLO | 缺什么指标 | 建议落点（现有类） |
 |---|---|---|
-| 支付成功率 | `nexus_payments_confirmed_total` / `nexus_payments_failed_total` 有名字无数据 | `PaymentOrchestrationController.createPayment` 成功/失败分支各加一次 `paymentConfirmed()` / `paymentFailed()` |
-| 下单吞吐 | `nexus_orders_created_total` 恒 0 | 同上，下单成功后 `orderCreated()` |
-| 支付端到端延迟 | `nexus_payment_latency_seconds` 无样本 | 用 `metrics.getPaymentLatency().record(Duration)` 包住「下单→确认」路径 |
-| Webhook 投递成功率 | `nexus_webhooks_delivered_total` / `nexus_webhooks_failed_total` 恒 0 | Webhook 投递器成功/失败回调 |
-| 退款成功率 | `nexus_refunds_issued_total` 恒 0 | 退款服务成功分支 |
 | 结算确认耗时 | 无 `nexus_chain_block_confirmation_seconds`（全仓未注册） | `ChainSettlementConfirmationController` 路径 |
 | 对账差错率 | 无指标 | `DiscrepancyResolutionController` 路径 |
 | 桥接金额 / 延迟 | `nexus_bridge_*` **全仓未注册** | `nexus-bridge` 侧新增 MeterRegistry |
 | 风控触发率 | `nexus_risk_*` **全仓未注册** | 风控引擎出口 |
 | MPC 签名耗时 / 成功率 | mpc-engine（Rust）只暴露容器指标 | mpc-engine 侧新增 Prometheus exporter |
-| 加密操作量 / 延迟 | `nexus_encryption_operations_total` / `nexus_encryption_latency_seconds` 已注册但 0 调用 | 加解密工具类出口调用 `recordEncryptionOperation()` |
 
 > **注意 `nexus_bridge_*` / `nexus_risk_*` 的位置**：`deploy/monitoring/grafana-dashboards/` 下的 5 个面板引用这些名字，但该目录已整体标注**废弃**（`deploy/monitoring/grafana-dashboards/README.md` 开头即写「这批 dashboard 是在"文档约定指标名"假想下编写的，而这些指标名从未在代码中注册」）。**不要**拿那批面板当"指标已经有了"的证据，也不要再挂进 Grafana。
 
@@ -196,7 +203,7 @@ git grep -n "orderCreated()\|paymentConfirmed()\|paymentFailed()\|refundIssued()
 
 ## 六、SLO 台账模板（填法）
 
-阈值由业务 owner 填；**填之前先确认「分子分母都真实存在」**（第三节可测、第四节不可测）。
+阈值由业务 owner 填；**填之前先确认「分子分母都真实存在」**（第三节可测、第四节不可测）。支付漏斗在 #577 接线后已归入第三节，不再属第四节。
 
 | SLO | SLI（PromQL） | 目标 | 测量窗口 | 错误预算 | owner | 数据可用？ |
 |---|---|---|---|---|---|---|
@@ -204,7 +211,7 @@ git grep -n "orderCreated()\|paymentConfirmed()\|paymentFailed()\|refundIssued()
 | 网关延迟 p95 | §3.2 | 待定 | 30d | 待定 | | ✅ |
 | 出块连续性 | §3.3 | 待定 | 30d | 待定 | | ✅ |
 | 最终性滞后 | §3.4 | 待定 | 30d | 待定 | | ✅ |
-| 支付成功率 | 需先补 §4 埋点 | — | — | — | | ❌ |
+| 支付成功率 | §3.8 | 待定 | 30d | 待定 | | ✅ |
 | 结算时效 | 需先补 §4 埋点 | — | — | — | | ❌ |
 
 **「错误预算」为什么必须和阈值一起定**：只写"99.9%"而不写"这个月已经烧掉多少、烧完了怎么办"，SLO 就只是一句口号。烧完之后的动作（停止发版？降级非核心功能？）同样属业务决策。
@@ -214,6 +221,6 @@ git grep -n "orderCreated()\|paymentConfirmed()\|paymentFailed()\|refundIssued()
 ## 七、已知局限
 
 1. **本文的 PromQL 一条都没在真实 Prometheus 上跑过**——本机无集群。语法按 `deploy/grafana/dashboards/` 里已入库的表达式对齐，但**没有执行证据**。
-2. **`nexus_payment_latency_seconds_max` 是否真的有序列未核实**：Micrometer 的 Timer 在 Prometheus 下通常输出 `_count` / `_sum` / `_max`，但本仓没有实测抓取文本可对。若面板该格为空，先查这个。
+2. **`nexus_payment_latency_seconds_max` 已有抓取断言覆盖**：`PaymentMetricsTest` 用 `registry.scrape()` 逐条断言 `nexus_payment_latency_seconds_count` / `_sum` / `_max` 存在（面板的「最慢一次」格依赖 `_max`）。但 `PaymentMetrics` 的 Timer 未显式调用 `publishPercentileHistogram()`，且该测试用裸 `PrometheusMeterRegistry` 抓取、未断言 `_bucket`；生产是否导出桶序列取决于 `MANAGEMENT_METRICS_DISTRIBUTION_PERCENTILES_HISTOGRAM`（`deploy/monitoring/micrometer-config.yaml:68` 为 `true`），**待生产抓取文本验证**。本文暂不写 `histogram_quantile` 类查询。
 3. **没有 SLO 计算管线**：仓库里没有 recording rules / SLO 计算 Job，第三节的表达式需要人肉在 Grafana 里看。要做成"自动算达标率"，需新增 recording rules 与一个周期任务——目前不存在。
 4. **`deploy/grafana/dashboards/` 与 `deploy/monitoring/grafana-dashboards/` 两套面板并存**，前者有效、后者废弃。挂错目录会得到一片空白，且不会报错。

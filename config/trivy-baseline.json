@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "updatedAt": "2026-11-08",
-  "policy": "只允许登记『上游确实无修复版』的 HIGH/CRITICAL，并按 **(CVE 编号, 包名) 二元组**严格匹配（2026-11-06 修正：此前按纯 CVE 编号匹配，A 包里的豁免会顺带豁免 B 包里的同一条 CVE）。package 必填且必须是 Trivy 报出的精确 PkgName，为空或含通配符（* / ? / any / all）会被 trivy-baseline-gate.py 直接拒收（退出码 2）。Trivy 报出 FixedVersion 的一律拒收；fixable=not-applicable 也只在该二元组本身无修复版时成立，且最长 90 天（普通条目最长 180 天）。唯一例外是 kind=shaded_vendored：有修复版但命中来自第三方 jar 的内嵌（relocated）副本、本仓库无法替换，必须填齐四件套 evidence（jar_path / jar_sha256 / vulnerable_copy+shaded_prefix / declared_dependency_fixed+upstream_max_version），最长同样 90 天，且命中时门禁必须打印 [SHADED] 并计入 [PASS] 的例外条数。每条必须有 id/package/reason/expires，缺到期日同样拒收；到期后再次命中即判红。有效期上限与到期判定一律按 **UTC 日期**计算（CI runner 就是 UTC，本机东八区比 UTC 早 8 小时；按本地日期算会在 CI 上多算 1 天而被拒收）。即『本机到期日 <= 今天(本地) + N』不等价，请按 UTC 留 1 天余量。 2026-11-08 新增一个**有界**例外 kind=pending_base_rebuild：上游已发布 FixedVersion、但经 digest 实证**尚无包含该修复版的已发布基础镜像**时可以登记，必须 fixable=upstream-fixed 且带 evidence（证明无更新镜像），有效期**固定 14 天**，到期即判红；命中时打印 [PENDING-REBUILD] 与 ::warning，不计入阻断。",
+  "policy": "只允许登记『上游确实无修复版』的 HIGH/CRITICAL，并按 **(CVE 编号, 包名) 二元组**严格匹配（2026-11-06 修正：此前按纯 CVE 编号匹配，A 包里的豁免会顺带豁免 B 包里的同一条 CVE）。package 必填且必须是 Trivy 报出的精确 PkgName，为空或含通配符（* / ? / any / all）会被 trivy-baseline-gate.py 直接拒收（退出码 2）。Trivy 报出 FixedVersion 的一律拒收；fixable=not-applicable 也只在该二元组本身无修复版时成立，且最长 90 天（普通条目最长 180 天）。唯一例外是 kind=shaded_vendored：有修复版但命中来自第三方 jar 的内嵌（relocated）副本、本仓库无法替换，必须填齐四件套 evidence（jar_path / jar_sha256 / vulnerable_copy+shaded_prefix / declared_dependency_fixed+upstream_max_version），最长同样 90 天，且命中时门禁必须打印 [SHADED] 并计入 [PASS] 的例外条数。每条必须有 id/package/reason/expires，缺到期日同样拒收；到期后再次命中即判红。有效期上限与到期判定一律按 **UTC 日期**计算（CI runner 就是 UTC，本机东八区比 UTC 早 8 小时；按本地日期算会在 CI 上多算 1 天而被拒收）。即『本机到期日 <= 今天(本地) + N』不等价，请按 UTC 留 1 天余量。 2026-11-08 新增一个**有界**例外 kind=pending_base_rebuild：上游已发布 FixedVersion、但经 digest 实证**尚无包含该修复版的已发布基础镜像**时可以登记，必须 fixable=upstream-fixed 且带 evidence（证明无更新镜像），有效期**固定 14 天**，到期即判红；命中时打印 [PENDING-REBUILD] 与 ::warning，不计入阻断。 2026-11-08 起 addedAt 不再可自填续期：门禁以 git 中该条目**首次出现**的提交日为锚点（git log -S），与填写的 addedAt 不一致即拒收（退出码 2）。",
   "entries": [
     {
       "id": "CVE-2026-113351",
@@ -79,8 +79,8 @@
       "scope": "os",
       "reason": "Debian 13 的 zlib1g 已发布修复版 1:1.3.dfsg+really1.3.1-1+deb13u1（Trivy DB 2026-11-07T12:52Z 起可见），但 distroless 尚无包含该修复版的已发布镜像；解压入口只处理内部可信归档，不接受用户上传压缩包",
       "fixable": "upstream-fixed",
-      "expires": "2026-11-22",
-      "addedAt": "2026-11-08",
+      "expires": "2026-11-20",
+      "addedAt": "2026-11-06",
       "evidence": "复核方式（2026-11-08 实测，镜像源 m.daocloud.io，与 gcr.io/distroless 同 tag 解析）：A) docker buildx imagetools inspect m.daocloud.io/gcr.io/distroless/java17-debian13:nonroot ⇒ Digest: sha256:97c47f913d6cbdf67e657c139e8765510bfb87eb345e25e25745ae98f70dfcb3（与仓库 pin 逐字相同）；B) 同上 cc-debian13:nonroot ⇒ sha256:08476c244888bfb425bae1ae4dd7c17f093e972aab8426883d97f3c6f280f7c1（亦相同）。⇒ 2026-11-08 当日无任何包含修复版 1:1.3.dfsg+really1.3.1-1+deb13u1 的已发布基础镜像。14 天后复核：重跑 A/B，若任一 digest 已变 ⇒ bump pin + 删除本条目；若仍未变 ⇒ 重新取证并另投一条，不得改日期续期。",
       "kind": "pending_base_rebuild"
     },
@@ -110,8 +110,8 @@
       "scope": "os",
       "reason": "Debian 13 的 zlib1g 已发布修复版 1:1.3.dfsg+really1.3.1-1+deb13u1（Trivy DB 2026-11-07T12:52Z 起可见），但 distroless 尚无包含该修复版的已发布镜像；解压入口只处理内部可信归档，不接受用户上传压缩包",
       "fixable": "upstream-fixed",
-      "expires": "2026-11-22",
-      "addedAt": "2026-11-08",
+      "expires": "2026-11-20",
+      "addedAt": "2026-11-06",
       "evidence": "复核方式（2026-11-08 实测，镜像源 m.daocloud.io，与 gcr.io/distroless 同 tag 解析）：A) docker buildx imagetools inspect m.daocloud.io/gcr.io/distroless/java17-debian13:nonroot ⇒ Digest: sha256:97c47f913d6cbdf67e657c139e8765510bfb87eb345e25e25745ae98f70dfcb3（与仓库 pin 逐字相同）；B) 同上 cc-debian13:nonroot ⇒ sha256:08476c244888bfb425bae1ae4dd7c17f093e972aab8426883d97f3c6f280f7c1（亦相同）。⇒ 2026-11-08 当日无任何包含修复版 1:1.3.dfsg+really1.3.1-1+deb13u1 的已发布基础镜像。14 天后复核：重跑 A/B，若任一 digest 已变 ⇒ bump pin + 删除本条目；若仍未变 ⇒ 重新取证并另投一条，不得改日期续期。",
       "kind": "pending_base_rebuild"
     },

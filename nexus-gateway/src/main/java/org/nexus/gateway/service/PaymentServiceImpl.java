@@ -36,6 +36,7 @@ import org.nexus.gateway.event.PaymentConfirmedEvent;
 import org.nexus.gateway.security.KeyManager;
 import org.nexus.gateway.event.RefundCompletedEvent;
 import org.nexus.gateway.model.OrderStateMachine;
+import org.nexus.gateway.observability.PaymentMetrics;
 import org.nexus.gateway.orchestration.settlement.FinalityService;
 import org.nexus.gateway.model.FinalityStatus;
 import org.nexus.gateway.execution.ExecutionRequest;
@@ -115,6 +116,46 @@ public class PaymentServiceImpl implements PaymentService {
     public void setSigningApprovalExecutionService(
             SigningApprovalExecutionService signingApprovalExecutionService) {
         this.signingApprovalExecutionService = signingApprovalExecutionService;
+    }
+
+    /**
+     * 业务指标（2026-11-07 接线）。
+     *
+     * <p>setter 注入且可选，与 {@link #setAuditLogService} 同一理由：本类有多个
+     * 兼容构造器被测试直接调用，指标是纯旁路观测，不该改变依赖契约。</p>
+     */
+    private PaymentMetrics paymentMetrics;
+
+    @Autowired(required = false)
+    public void setPaymentMetrics(PaymentMetrics paymentMetrics) {
+        this.paymentMetrics = paymentMetrics;
+    }
+
+    /**
+     * 计一次「支付确认成功」，并记录「下单 → 确认」的端到端耗时。
+     *
+     * <p>只在订单真正进入 PAID 时调用；对已 PAID 订单的重复确认在方法开头就
+     * 提前返回（幂等），因此不会重复计数——这是本指标能当成功率分子用的前提。</p>
+     */
+    private void recordPaymentConfirmed(PaymentOrder order) {
+        if (paymentMetrics == null) {
+            return;
+        }
+        paymentMetrics.paymentConfirmed();
+        paymentMetrics.paymentLatencySince(order == null ? null : order.getCreatedAt());
+    }
+
+    /**
+     * 计一次「支付确认终态失败」。
+     *
+     * <p>口径：只统计<b>把订单推进到 FAILED 终态</b>的路径。链上尚未确认
+     * （{@code "Transaction not yet confirmed on chain"}）属于可重试的中间态，
+     * 不计入——否则重试会把它放大成失败率。</p>
+     */
+    private void recordPaymentFailed() {
+        if (paymentMetrics != null) {
+            paymentMetrics.paymentFailed();
+        }
     }
 
     /** Micrometer Tracer：P3-T5 业务 span 注入。可为 null（测试环境降级 no-op）。 */
@@ -312,6 +353,7 @@ public class PaymentServiceImpl implements PaymentService {
                 confirmSpan.attr("payment.status", "FAILED")
                         .attr("tx.binding.check", "INVALID_HASH")
                         .error(null);
+                recordPaymentFailed();
                 return PaymentResult.failed(order.getOrderNo(),
                         "Transaction does not match order: amount or recipient mismatch");
             }
@@ -340,6 +382,7 @@ public class PaymentServiceImpl implements PaymentService {
                 confirmSpan.attr("payment.status", "FAILED")
                         .attr("tx.binding.check", "DUPLICATE_TX_HASH")
                         .error(null);
+                recordPaymentFailed();
                 return PaymentResult.failed(order.getOrderNo(),
                         "Transaction hash already bound to another order");
             }
@@ -363,6 +406,7 @@ public class PaymentServiceImpl implements PaymentService {
                     confirmSpan.attr("payment.status", "FAILED")
                             .attr("tx.binding.check", "AMOUNT_MISMATCH")
                             .error(null);
+                    recordPaymentFailed();
                     return PaymentResult.failed(order.getOrderNo(),
                             "Transaction amount does not match order");
                 }
@@ -382,6 +426,7 @@ public class PaymentServiceImpl implements PaymentService {
                         confirmSpan.attr("payment.status", "FAILED")
                                 .attr("tx.binding.check", "RECIPIENT_MISMATCH")
                                 .error(null);
+                        recordPaymentFailed();
                         return PaymentResult.failed(order.getOrderNo(),
                                 "Transaction recipient does not match order payee");
                     }
@@ -428,6 +473,7 @@ public class PaymentServiceImpl implements PaymentService {
                 confirmSpan.attr("payment.status", "FAILED")
                         .attr("aml.blocked", true)
                         .error(null);
+                recordPaymentFailed();
                 return PaymentResult.failed(order.getOrderNo(), "Payment blocked by compliance screening");
             }
 
@@ -471,6 +517,7 @@ public class PaymentServiceImpl implements PaymentService {
                     // 重新加载以返回已确认订单的最新状态与 txHash
                     PaymentOrder confirmedOrder = orderRepository.findById(orderId).orElse(order);
                     tccConfirmSpan.attr("payment.status", "PAID").success();
+                    recordPaymentConfirmed(confirmedOrder);
                     return PaymentResult.success(
                             confirmedOrder.getOrderNo(),
                             confirmedOrder.getChainTxHash() != null
@@ -478,6 +525,7 @@ public class PaymentServiceImpl implements PaymentService {
                             confirmedOrder.getPaidAt());
                 } else {
                     tccConfirmSpan.attr("payment.status", "FAILED").error(null);
+                    recordPaymentFailed();
                     return PaymentResult.failed(order.getOrderNo(),
                             "Payment confirmation failed in TCC transaction");
                 }
@@ -532,6 +580,7 @@ public class PaymentServiceImpl implements PaymentService {
                         "PAYMENT_CONFIRMED", null);
             }
 
+            recordPaymentConfirmed(order);
             return PaymentResult.success(order.getOrderNo(), chainTxHash, order.getPaidAt());
         }
     }
@@ -687,6 +736,12 @@ public class PaymentServiceImpl implements PaymentService {
 
                         // Publish event only for genuinely completed refunds
                         if (saved.getStatus() == Refund.RefundStatus.COMPLETED) {
+                            // 业务指标：只在资金真正转出（COMPLETED）时计一次。
+                            // AWAITING_APPROVAL / RECONCILIATION_NEEDED / FAILED 都不算「已退款」——
+                            // 尤其 RECONCILIATION_NEEDED 是「可能已出款但不可核对」，计入会虚高。
+                            if (paymentMetrics != null) {
+                                paymentMetrics.refundIssued();
+                            }
                             eventPublisher.publishEvent(new RefundCompletedEvent(
                                     this, latestOrder.getId(), latestOrder.getOrderNo(),
                                     latestOrder.getMerchantId(),

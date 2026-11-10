@@ -102,7 +102,16 @@ jobs:
       - name: Install yq
         # 2026-10-11 韧性：curl 加内建重试，吸收发布站瞬时抖动。
         run: |
-          curl -sSL --retry 3 --retry-delay 5 --retry-connrefused -o /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          # 2026-11-08：原写法无 -f，404/429 的响应体会被当成 yq 二进制装下去；
+          # 这里先拿到状态码，失败时直接指名，而不是等到 yq --version 才炸。
+          URL="https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64"
+          code=$(curl -sSL --retry 3 --retry-delay 5 --retry-all-errors --retry-connrefused \
+            -w '%{http_code}' -o /usr/local/bin/yq "$URL") || code="curl-failed"
+          echo "yq 下载: http=$code url=$URL"
+          if [ "$code" != "200" ]; then
+            echo "::error::下载失败 http=$code url=$URL"
+            exit 1
+          fi
           chmod +x /usr/local/bin/yq
           yq --version
 
@@ -112,7 +121,15 @@ jobs:
           # 无裸二进制资产名；此前下载裸名得到 404 页面，mv 后执行报 exit 127 command not found。
           # 固定版本 v0.8.0 保证可复现（与下载策略一致，升级需显式改版本号）。
           KUBECONFORM_VER=v0.8.0
-          curl -sSL --retry 3 --retry-delay 5 --retry-connrefused -o /tmp/kubeconform.tar.gz "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VER}/kubeconform-linux-amd64.tar.gz"
+          KC_URL="https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VER}/kubeconform-linux-amd64.tar.gz"
+          # 2026-11-08：把 http_code/最终 URL 打出，避免再出现「tar 解不开」这种二手症状。
+          code=$(curl -sSL --retry 3 --retry-delay 5 --retry-all-errors --retry-connrefused \
+            -w '%{http_code}' -o /tmp/kubeconform.tar.gz "$KC_URL") || code="curl-failed"
+          echo "kubeconform 下载: http=$code url=$KC_URL"
+          if [ "$code" != "200" ]; then
+            echo "::error::下载失败 http=$code url=$KC_URL"
+            exit 1
+          fi
           tar -xzf /tmp/kubeconform.tar.gz -C /tmp kubeconform
           sudo mv /tmp/kubeconform /usr/local/bin/
           kubeconform -v
@@ -341,15 +358,19 @@ jobs:
           PROM_VERSION=3.15.1
           PROM_SHA256=6a726885328ad9efebbf36e876ce2fb6225468a71fd1e7ce3ba666d5f4d97a84
           PROM_TGZ="$RUNNER_TEMP/prometheus-${PROM_VERSION}.linux-amd64.tar.gz"
+          URL="https://github.com/prometheus/prometheus/releases/download/v${PROM_VERSION}/prometheus-${PROM_VERSION}.linux-amd64.tar.gz"
           for attempt in 1 2 3; do
-            if curl -sSLf --retry 3 --retry-delay 5 -o "$PROM_TGZ" \
-              "https://github.com/prometheus/prometheus/releases/download/v${PROM_VERSION}/prometheus-${PROM_VERSION}.linux-amd64.tar.gz"; then
+            if diag=$(curl -sSLf --retry 3 --retry-delay 5 --retry-all-errors -o "$PROM_TGZ" \
+              -w 'http=%{http_code} url=%{url_effective}' "$URL"); then
+              echo "promtool 下载成功: $diag"
               break
+            else
+              rc=$?
+              echo "::warning::promtool 下载第 ${attempt} 次失败 rc=$rc ${diag:-（无诊断输出：连接/DNS 层已断）}"
+              sleep 15
             fi
-            echo "::warning::promtool 下载第 ${attempt} 次失败，15s 后重试"
-            sleep 15
           done
-          [ -s "$PROM_TGZ" ] || { echo "::error::promtool 下载连续失败"; exit 1; }
+          [ -s "$PROM_TGZ" ] || { echo "::error::promtool 下载连续失败（http/url 见上方最后一条诊断）"; exit 1; }
           echo "${PROM_SHA256}  ${PROM_TGZ}" | sha256sum -c -
           tar -xzf "$PROM_TGZ" -C "$RUNNER_TEMP"
           PROMTOOL="$RUNNER_TEMP/prometheus-${PROM_VERSION}.linux-amd64/promtool"
@@ -773,7 +794,14 @@ jobs:
         run: |
           # amtool 随 alertmanager 发布；固定 0.27.x 与 kube-prometheus-stack 依赖版本对齐
           AM_VER=0.27.0
-          curl -sSL -o /tmp/amtool.tar.gz "https://github.com/prometheus/alertmanager/releases/download/v${AM_VER}/alertmanager-${AM_VER}.linux-amd64.tar.gz"
+          AM_URL="https://github.com/prometheus/alertmanager/releases/download/v${AM_VER}/alertmanager-${AM_VER}.linux-amd64.tar.gz"
+          # 2026-11-08：原写法无 -f，错误页会被当成 tar 包；先取状态码再落盘。
+          code=$(curl -sSL --retry 3 --retry-all-errors -w '%{http_code}' -o /tmp/amtool.tar.gz "$AM_URL") || code="curl-failed"
+          echo "amtool 下载: http=$code url=$AM_URL"
+          if [ "$code" != "200" ]; then
+            echo "::error::下载失败 http=$code url=$AM_URL"
+            exit 1
+          fi
           tar -xzf /tmp/amtool.tar.gz -C /tmp
           sudo mv "/tmp/alertmanager-${AM_VER}.linux-amd64/amtool" /usr/local/bin/
           amtool --version

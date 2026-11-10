@@ -41,7 +41,8 @@ import static org.mockito.Mockito.when;
  *
  * <p><b>当前可达性（不夸大的部分）</b>：本仓唯一写 {@code recordType=SETTLEMENT_TRANSFER} 的地方
  * 就是 {@code SettlementTransferService:76}，而它在同一方法内把状态推到 BOOKED/FAILED（:102/:109）；
- * {@code ClearingSettlementService:121} 写的是 {@code CLEARING}。也就是说<b>今天的扫描集恒空、
+ * {@code ClearingSettlementService:121} 写的是 {@code CLEARING}（该服务类已于
+ * 2026-11-10 按板面 20261110-1800 裁决删除，此处为审计留痕）。也就是说<b>今天的扫描集恒空、
  * 这条路径不可达</b>。所以本 PR 修的是"埋着的雷"，不是"正在漏钱"——
  * 可达性判定见 PR 描述，这里用测试钉住的是"一旦有指令写入（运维插入或将来接上真实生产者）不得重复出账"。</p>
  *
