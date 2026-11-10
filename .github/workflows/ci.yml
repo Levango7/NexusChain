@@ -108,6 +108,18 @@ jobs:
       - name: 打包一致性检查（jar 排除配置 → 容器必须另行提供）
         run: python scripts/check-packaging-consistency.py
 
+      # ddl-auto:update 扩散门禁（审计 C1，2026-11-10 新增）
+      # 背景：nexus-oracle 是全仓唯一 ddl-auto:update 模块（接口骨架，README 已
+      # 诚实声明，ADR-001 政策下降级为一致性问题）。本门只防**扩散**——
+      # 任何新模块/新 profile 把 ddl-auto 设为 update 即红；oracle 侧将来真
+      # 要做 schema 演进时应改走 Flyway/liquibase，本门届时同步更新 allowed 集。
+      # 自带射程：scripts/check-ddl-auto-gate.py --selftest 用 8 个合成样本钉住
+      # 解析器（属性行精确匹配，注释行/等号行/子串误判均不计入）。
+      - name: ddl-auto 扩散门禁
+        run: |
+          python scripts/check-ddl-auto-gate.py --selftest
+          python scripts/check-ddl-auto-gate.py
+
       # 版本口径一致性（2026-09-28 新增）
       # 背景：版本号漂移已发生三次——README 头注停在 2.50.0；v2.50.2 发版时
       # version.properties 仍为 2.50.0 导致 jar 名错位；2026-09-17 审计发现

@@ -1,0 +1,25 @@
+# =============================================================================
+# nexus-api-gateway 生产环境配置（审计 A2 收口，2026-11-10）
+# =============================================================================
+# 激活方式：SPRING_PROFILES_ACTIVE=prod
+#   （docker-compose.prod.yml / deploy/helm/charts/nexus-api-gateway /
+#     deploy/k8s/00-namespace-config.yml 均已注入，本文件在 prod 必然加载）
+#
+# 审计 A2（production-readiness-audit-2026-11-07 §二）：base 的
+#   nexus.api-gateway.auth.legacy-headers-enabled / signature-legacy-enabled
+# 默认 true（兼容期），而本模块此前**没有 prod profile 文件** ⇒ 生产默认接受
+# 旧 X-Nexus-* 头与 v1（无分隔符拼接）签名，兼容期从未结束。
+#
+# 收口证据（2026-11-10 实测）：仓内旧头零生产方 —— git grep 旧 X-Nexus-* 头
+# 仅命中 AuthenticationFilter 自身与其测试；全部在途客户端
+# （demo/run-demo.js / WebConfig / WebhookController / DeveloperPortalService /
+# PaymentEventListener）均发 X-NexusChain-* 新头。反向测试在位
+# （AuthenticationFilterTest:389 断言 =false 时必须拒绝）。
+#
+# 确需兼容旧客户端时用 env 临时打开，并记录迁移计划：
+#   NEX_AUTH_LEGACY_HEADERS=true / NEX_SIGNATURE_LEGACY_ENABLED=true
+nexus:
+  api-gateway:
+    auth:
+      legacy-headers-enabled: ${NEX_AUTH_LEGACY_HEADERS:false}
+      signature-legacy-enabled: ${NEX_SIGNATURE_LEGACY_ENABLED:false}

@@ -244,6 +244,27 @@ B3（compose 硬编码 container_name）、B4（0 回滚脚本）、C1（nexus-o
    ⇒ 本条**不与之冲突**，也**不代其认领**。
 4. 因此 §十 的 M1–M4 处置**只做注释/注解级**（#580），**不做删除**：删除属破坏性 API 变更，
    且与 nex 的交付面存在交接关系（清理类变更宜在其交付验收跑通后再立单独立项）。
+5. **A2 / B2 / B1（文档侧）已由 #588（`410496dc`）收口**（nexus-gateway 模块）：prod 显式
+   `signature-legacy-enabled: false`；3DS `simulated-challenge-enabled` base 默认改 false、
+   dev/sandbox 显式 true；B1 当时处置为 values-prod 注释化（默认值未动，理由为
+   `RedisReplayNonceStore` fail-closed 权衡）+ helm 注入示例。
+6. **2026-11-10 本批收口（审计 §九 剩余项）**：
+   - **A2 补齐 nexus-api-gateway 侧**：新增 `nexus-api-gateway/src/main/resources/application-prod.yml`
+     显式 `legacy-headers-enabled: false` / `signature-legacy-enabled: false`（该模块此前**无**
+     prod profile 文件；旧 `X-Nexus-*` 头仓内零生产方——仅 `AuthenticationFilter` 自身与其测试引用，
+     在途客户端 `demo/run-demo.js` / `WebConfig` / `WebhookController` / `DeveloperPortalService` /
+     `PaymentEventListener` 均发 `X-NexusChain-*` 新头；反向测试 `AuthenticationFilterTest:389`
+     断言 `=false` 时必须拒绝）。
+   - **B1 收口**：`deploy/helm/values-prod.yaml` `nexus-gateway.extraEnv` 显式
+     `NEXUS_REPLAY_STORE: "redis"`（本文件是多副本 prod 渲染源，replicaCount=3；fail-closed
+     权衡与前置条件写入同段注释）。
+   - **B4**：`consortium/application.yml` 「可回滚」自述订正为「受控、可审计」+ 真实回滚口径
+     （本模块迁移集破坏性 DDL 实测 grep 零命中；PG 侧高危迁移回滚脚本
+     `migrations/pg/001-finality-quarantine-invalid-checkpoint-hash.rollback.sql` 1 个）。
+   - **C1**：新增 `scripts/check-ddl-auto-gate.py`（property 行精确匹配 + 8 例自测 + allowed 集
+     = `nexus-gateway/application-dev.yml` 与 `nexus-oracle/application.yml`），ci.yml 代码卫生段
+     接线；变异探针（在途新模块置 `ddl-auto: update`）实测红、移除后复绿。
+7. **本批后仍未处置**：B3（compose 硬编码 `container_name`）、C4（同族架构断言）。
 
 ---
 
