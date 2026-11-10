@@ -10,7 +10,9 @@ import java.math.BigDecimal;
  * <p>继承 {@link PaymentEvent}，复用 orderId/orderNo/merchantId 基础字段，
  * 额外携带撤销编号和撤销后商户余额信息。</p>
  *
- * <p>消费方：清算模块（撤销后不再参与清算）、对账模块、通知模块等。</p>
+ * <p>消费方：对账模块、通知模块等（只读）。本事件是作废请求已受理的通知，
+ * <b>不代表钱已动</b>；当前无冲正记账能力，清算模块不据此做任何资金动作
+ * （板面 20261110-1800 裁决 Q3；冲正记账属产品缺口，单独立项）。</p>
  */
 public class OrderVoidedEvent extends PaymentEvent {
 

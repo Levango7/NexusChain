@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.nexus.gateway.apiversion.ApiVersionDeprecatedEvent;
 import org.nexus.gateway.apiversion.ApiVersionPolicy;
+import org.nexus.gateway.clearing.ClearingBatchCompletedEvent;
 import org.nexus.gateway.event.AccountLinkageFailedEvent;
 import org.nexus.gateway.escrow.EscrowStatus;
 import org.nexus.gateway.escrow.EscrowStatusChangedEvent;
@@ -16,6 +17,7 @@ import org.nexus.gateway.sla.SlaMeasurement;
 import org.nexus.gateway.sla.SlaTarget;
 import org.nexus.gateway.subscription.DunningNotificationEvent;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -202,6 +204,24 @@ class DomainAlertEventSinkTest {
         assertEquals(AlertRule.Severity.INFO, preauth.getSeverity());
         assertTrue(preauth.getMessage().contains("PA-1"), preauth.getMessage());
         assertTrue(preauth.getMessage().contains("AUTHORIZED→CAPTURED"), preauth.getMessage());
+    }
+
+    @Test
+    @DisplayName("清算批次完成 → INFO 留痕，文案含批次号/订单数/净额（只读通知，不记账）")
+    void clearingBatchCompletedRaisesInfoAlert() {
+        sink.onClearingBatchCompleted(new ClearingBatchCompletedEvent(
+                this, "BATCH-77", 3, new BigDecimal("250.00"), LocalDateTime.now()));
+
+        AlertEvent ev = captureSaved();
+        assertEquals(DomainAlertEventSink.RULE_CLEARING_BATCH_COMPLETED, ev.getRuleName());
+        assertEquals(AlertRule.Severity.INFO, ev.getSeverity());
+        assertEquals("clearing.batch.completed", ev.getMetricName());
+        assertTrue(ev.getMessage().contains("BATCH-77"), ev.getMessage());
+        assertTrue(ev.getMessage().contains("orders=3"), ev.getMessage());
+        assertTrue(ev.getMessage().contains("250.00"), ev.getMessage());
+
+        verify(emailNotifier).notify(ev);
+        verify(webhookNotifier).notify(ev);
     }
 
     private AlertEvent captureSaved() {

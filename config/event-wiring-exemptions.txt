@@ -4,8 +4,13 @@
 # 2026-11-10 处置：ApiVersionDeprecatedEvent / EscrowStatusChangedEvent /
 # PreAuthStatusChangedEvent 三条经用户裁决"有用就留着完善"，已接入
 # DomainAlertEventSink（ruleName 带 domain- 前缀，与阈值规则区分；落库+扇出
-# 同 AlertEngine 出口），本账移除对应 3 条。剩余 3 条到期未处置即升级板面红项。
+# 同 AlertEngine 出口），本账移除对应 3 条。2026-11-10 按裁决 20261110-1800 再移除
+# dead 行 1 条（ClearingBatchCompletedEvent 已接线）。剩余 2 条到期未处置即升级板面红项。
 # 复核日期写进行内。
-orphan OrderReversedEvent # 2026-11-09 首轮发现：ReversalService 变量形式发布（extends PaymentEvent），javadoc 明言消费方为清算模块（冲正后生成反向清算记录）、对账模块、通知模块等，全仓无对应监听。处置方向：资金语义（冲正是否生成反向清算记录、接哪条账）待裁决后再接线，接错位置会重复动账；接消费者或删除二选一。复核日期 2026-12-15。
-orphan OrderVoidedEvent # 2026-11-09 首轮发现：VoidService 变量形式发布（extends PaymentEvent），javadoc 口径同 OrderReversedEvent，全仓无对应监听。处置方向：资金语义裁决同 OrderReversedEvent。复核日期 2026-12-15。
-dead ClearingBatchCompletedEvent # 2026-11-09 首轮发现：ClearingSettlementListener 监听后调 processClearingBatch，但全仓无任何发布点；ClearingRetryScheduler 类注释实证「生产侧唯一调用者 ClearingSettlementListener 只调 processClearingBatch」⇒ 清算入账在生产实际从不触发（资金路径，比死代码更严重）。处置：另立修复 PR 先定「批次完成」语义与发布点再接线，接错位置会重复动账；本门禁 report-only 期间暂不判红。复核日期 2026-11-21（最紧）。
+orphan OrderReversedEvent # 2026-11-09 首轮发现：ReversalService 变量形式发布（extends PaymentEvent），全仓无对应监听。2026-11-10 裁决 Q3：javadoc 超前承诺（「清算模块消费后生成反向清算记录」）已改为「通知性质，无自动冲正记账」；冲正记账能力不存在（DefaultClearingEngine:207 注释）。处置方向：接消费者或删除二选一，只读消费落点待定义。复核日期 2026-12-15。
+orphan OrderVoidedEvent # 2026-11-09 首轮发现：VoidService 变量形式发布（extends PaymentEvent），全仓无对应监听。2026-11-10 裁决 Q3：javadoc 口径同 OrderReversedEvent 已改「通知性质，无自动冲正记账」。处置方向：接消费者或删除二选一，只读消费落点待定义。复核日期 2026-12-15。
+# 2026-11-10 处置（板面 20261110-1800 裁决 Q1/Q2）：ClearingBatchCompletedEvent 已按
+# 「单一记账源」原则接线——发布点 SettlementScheduler.settle() 的 batchClear 返回
+# SETTLED 分支（记账既成事实之后），消费者 DomainAlertEventSink 只读留痕（INFO），
+# 死监听链 ClearingSettlementListener/Service/RetryScheduler 已删，
+# creditOnClearing 永不接线（I3）。本 dead 行移除。

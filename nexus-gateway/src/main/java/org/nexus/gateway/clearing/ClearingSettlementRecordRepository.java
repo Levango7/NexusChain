@@ -68,10 +68,12 @@ public interface ClearingSettlementRecordRepository extends JpaRepository<Cleari
      * （划拨记录由 {@code SettlementTransferService#executeSettlementTransfer}
      * 用同一个 batchNo 落库）。任何"按批次重试动账"的逻辑都必须先用本方法按
      * {@code recordType} 收窄 —— 详见
-     * {@code ClearingSettlementService#retryFailedRecords} 的修复说明。</p>
+     * {@code SettlementTransferService} 各 execute* 方法与本方法名的修复说明
+     * （2026-11-10 起原清算入账重试链已按板面 20261110-1800 裁决删除，本方法只为
+     * 划拨/调账/核销等活记录类型服务）。</p>
      *
      * @param batchNo       清算批次编号
-     * @param recordType    记录类型（用 {@code ClearingSettlementService.RECORD_TYPE_*} 常量）
+     * @param recordType    记录类型（字符串字面量，如 {@code "SETTLEMENT_TRANSFER"}）
      * @param bookingStatus 入账状态
      * @return 清算结算记录列表
      */
