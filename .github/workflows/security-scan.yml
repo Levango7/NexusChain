@@ -399,20 +399,26 @@ jobs:
             --fingerprint-out "$GITHUB_WORKSPACE/trivy-db-fingerprint.json"
 
       - name: 打包共享库 DB
+        # retention 7 天 = DB 新鲜度预算（--max-age-days 7）：超过 7 天的 DB
+        # 本就会被腿内新鲜度断言判红，保留期再长只是让「重跑失败项」下载到
+        # 一个必判红的陈旧库，毫无收益；7 天是重跑窗口的实际可用上限，
+        # 也与腿指纹 artifact（retention-days: 7）同口径。
+        # 2026-11-09 #617 通知：原 1 天使「只重跑失败 job」在 24h 后永久失效。
         uses: actions/upload-artifact@v7
         with:
           name: trivy-db-shared
           path: .cache/trivy/db
-          retention-days: 1
+          retention-days: 7
 
       - name: 打包共享库指纹
         # 单独一个 artifact：download-artifact 会按 artifact 根目录展开，
         # 把 DB 与指纹分开传，落盘路径才是确定性的。
+        # 保留期与 trivy-db-shared 同为 7 天（同寿命窗口，见上一打包步注释）。
         uses: actions/upload-artifact@v7
         with:
           name: trivy-db-fingerprint
           path: trivy-db-fingerprint.json
-          retention-days: 1
+          retention-days: 7
 
   # ============================================================
   # 2-0b. 门禁脚本单测（**PR 流程内真跑**，2026-11-07）
@@ -540,16 +546,27 @@ jobs:
         run: bash scripts/security/trivy-fetch-diagnostics.sh diagnose
 
       - name: 下载共享 Trivy 漏洞库（prep 产出，全 run 仅下载一次）
+        id: dldb
         uses: actions/download-artifact@v7
         with:
           name: trivy-db-shared
           path: ${{ github.workspace }}/.cache/trivy/db
 
       - name: 下载共享库指纹
+        id: dlfp
         uses: actions/download-artifact@v7
         with:
           name: trivy-db-fingerprint
           path: ${{ github.workspace }}
+
+      - name: 共享库 artifact 缺失时明确归因（不掩盖原始失败）
+        # gh run rerun --failed 只重跑失败腿；prep 已成功则不重跑、不重传，
+        # artifact 过保留期后下载必失败，日志首行形如
+        # 「Artifact not found for name: trivy-db-shared」且全文零 CVE 行。
+        # 此处把该形态与「基线差分判红」区分开；处置=整条 run 重跑（不带 --failed）或新开 PR。
+        if: failure() && (steps.dldb.outcome == 'failure' || steps.dlfp.outcome == 'failure')
+        run: |
+          echo "::error title=共享 Trivy DB artifact 缺失（非基线差分问题）::trivy-db-shared / trivy-db-fingerprint 过保留期或该 run 从未成功产出；重跑失败项不会重跑 prep，故下载必失败。本失败与漏洞基线差分无关，请整条 run 重跑或新开 PR。"
 
       - name: 断言共享库新鲜度 + 复核 prep 指纹（不一致判红）
         # 本腿必须自己再断言一次新鲜度：共享 artifact 不等于「免检」。
@@ -756,7 +773,7 @@ jobs:
 
           # ③ 有腿执行则沿用 E1 口径：任一腿非 success 即红。
           if [ "$SCAN_RESULT" != "success" ]; then
-            echo "::error title=镜像基线门禁未通过::trivy-docker-scan 结果=$SCAN_RESULT（$SCOPE_COUNT 腿）；请查看失败腿的『基线差分门禁』步骤输出（新增项/到期项/有修复版却登记豁免）"
+            echo "::error title=镜像基线门禁未通过::trivy-docker-scan 结果=$SCAN_RESULT（$SCOPE_COUNT 腿）；请查看失败腿的『基线差分门禁』步骤输出（新增项/到期项/有修复版却登记豁免）；若腿内先报『共享 Trivy DB artifact 缺失』，系 prep artifact 过保留期，与基线差分无关，需整条 run 重跑"
             exit 1
           fi
           echo "::notice::镜像基线门禁通过（$SCOPE_COUNT 腿全部 success；范围：$SCOPE_REASON）"
