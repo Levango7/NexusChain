@@ -64,7 +64,9 @@ java -jar nexus-gateway/build/libs/nexus-gateway-*.jar \
 ```
 
 sandbox 无链、无真实热钱包地址，因此显式 `NEX_SETTLEMENT_ENABLED=false`。
-**代价**：结算腿不执行 ⇒ 不会产生链上交易哈希，也不会创建结算确认记录。
+**代价**：真实结算腿不执行 ⇒ 不产生**真实链上**交易哈希。
+注意：mock 连接器仍会返回一个 txHash，故**结算确认记录会被创建**（状态 PENDING），
+第 3 步实测为 200（§1.4、§6.2）——这只证明写侧接线与查询面可用，**不证明发生真实链上转账**。
 
 ### 1.3 准备一个 VERIFIED 商户（sandbox 无预置）
 
@@ -93,19 +95,23 @@ curl -sS -X POST "$GW/api/v1/merchants/<id>/api-keys" -H "Authorization: Bearer 
 > **H2 内存库**：sandbox 用 `jdbc:h2:mem:nexus_sandbox`，**gateway 重启即清空**。
 > 重启后必须重新走 a~d，旧 API Key 会返回 `40101 Invalid or revoked API key`。
 
-### 1.4 结算确认写入点当前未接线（P1 缺口，非本 lane）
+### 1.4 结算确认写侧已接线（2026-11-10，#637）
 
-即使打开结算，第 3 步仍然会 404。2026-11-08 实测确认：
+**历史（2026-11-08）**：当时第 3 步恒 404——`ChainSettlementConfirmationService.initiateConfirmation`
+（`ChainSettlementConfirmationService.java:88`）是唯一创建确认记录的方法，但 `src/main` 下零调用，
+Controller 只有 `GET /{paymentId}`、`GET`（列表）、`POST /{paymentId}/retry`，没有创建端点。
+该缺口已上报（板 `20261108-1110`）。
 
-- `ChainSettlementConfirmationService.initiateConfirmation(paymentId, txHash)`
-  （`ChainSettlementConfirmationService.java:88`）是**唯一**创建确认记录的方法；
-- 该方法在 `src/main` 下**零调用**，只有 `ChainSettlementConfirmationServiceTest` 调用；
-- `ChainSettlementConfirmationController` 只提供 `GET /{paymentId}`、`GET`（列表）、
-  `POST /{paymentId}/retry`，**没有创建端点**；`retry` 也要求记录已存在。
+**现状（master `4d96da86`）**：写侧已接线，实测第 3 步 **200 PASS**（见 §6.2）：
 
-⇒ `GET /api/v1/settlement-confirmations/{paymentId}` 对任何真实支付**恒 404**。
-这不是验收脚本的断言写错，而是结算确认的**写侧未接线**。已按板规上报
-gateway/settlement lane，本 runbook 只如实记录，不改产品代码。
+- `OrchestrationService.java:480` 在支付成功后调用
+  `settlementConfirmationService.initiateConfirmation(paymentId, txHash)`；
+- 触发条件：`txHash` 非空（法币渠道无链上 tx ⇒ 不产生确认记录）；
+- 幂等：`ChainSettlementConfirmationService.existsByPaymentId`，同 paymentId 重复调用返回既有记录；
+- 整体旁路：创建失败只告警，不阻断支付主路径。
+
+⇒ `GET /api/v1/settlement-confirmations/{paymentId}` 对**拿到链上 txHash 的支付**返回 200。
+sandbox 的 mock 连接器会返回 txHash，故第 3 步可实测通过；**这不代表发生真实链上转账**。
 
 ## 2. 用法
 
@@ -162,7 +168,7 @@ NXC2|<len>:<ts>|<len>:<nonce>|<len>:<method>|<len>:<path>|<len>:<body>|
 | 40107 | 签名不匹配 | canonical 字段或 secret 不一致 |
 | 40108 | 拒绝了 v1 签名 | 必须用 `v2:` 前缀 |
 | 401 | API Key 无效 | 商户不存在或未 VERIFIED |
-| 404（结算确认） | 无确认记录 | 写侧未接线（§1.4）：`initiateConfirmation` 无生产调用；即使结算开启也不会创建 |
+| 404（结算确认） | 无确认记录 | 该支付**未拿到链上 txHash**（法币渠道，或连接器未返回 txHash）⇒ 写侧不触发（§1.4）；网关未起/端口错也会 404 |
 
 ## 5. 已知限制（诚实声明）
 
@@ -170,11 +176,14 @@ NXC2|<len>:<ts>|<len>:<nonce>|<len>:<method>|<len>:<path>|<len>:<body>|
 - **sandbox 无预置商户**：首次运行必须先准备 API Key，否则 `exit 2`；且**重启即失效**（H2 内存库）。
 - **`bootRun` 不可用**：只能 `bootJar` + `java -jar`（§1.1，Tracer 只在 bootJar 类路径）。
 - **sandbox 默认关闭结算**：不会产生链上交易哈希，见 §1.2。
-- **结算确认写侧未接线**：第 3 步恒 404，见 §1.4；这是 P1 缺口，不是脚本问题，已上报 gateway lane。
+- **结算确认写侧已接线**（#637）：拿到链上 txHash 的支付会创建确认记录，第 3 步实测 200（§1.4、§6.2）；
+  仍**不含真实链上转账**——sandbox 为 mock 连接器返回的 txHash。
 - **对账查询需要显式 `NEX_MERCHANT_ID`**：支付响应不含该字段；未传时该步记为 `SKIP`，不等于通过。
 - 本 runbook 与脚本的签名实现已用 Python 独立实现交叉验证（canonical 与 HMAC 均一致）；端到端已在**本机 sandbox** 实跑（见 §6）。
 
-## 6. 实测记录（2026-11-08）
+## 6. 实测记录
+
+### 6.1 2026-11-08（写侧未接线时期，历史留档）
 
 环境：Windows + JDK 17.0.20.8；`nexus-gateway-2.77.0.jar`，sandbox profile，
 H2 内存库，端口 18080；客户端 Git Bash + curl + openssl。
@@ -199,3 +208,23 @@ H2 内存库，端口 18080；客户端 Git Bash + curl + openssl。
    （`PaymentOrchestrationController.toResponse()` 的键集合里没有），
    因此脚本改为接受显式 `NEX_MERCHANT_ID`；实测 `200 PASS`，
    未传时仍记 `SKIP`，不把 `SKIP` 当通过。
+
+### 6.2 2026-11-11（当前 master `4d96da86`，写侧接线后）
+
+环境：Windows + JDK 17.0.20.8；`nexus-gateway-2.77.0.jar`（`bootJar` 构建），sandbox profile，
+H2 内存库，端口 8080；客户端 Git Bash + curl + openssl。
+商户准备（同一实例内完成）：注册 `201` → verify `200` → api-key `201`。
+
+| 步骤 | HTTP | 判定 | 说明 |
+|---|---|---|---|
+| create payment | 201 | PASS | `id=pay_0c0c1d3acc984ba3a2a9d2da8b2c2ae9` |
+| query payment | 200 | PASS | 与创建返回的 id 一致 |
+| settlement confirmation | 200 | PASS | 写侧已接线（§1.4），mock 连接器给出 txHash |
+| reconciliation query | 200 | PASS | `merchantId=1`（显式 `NEX_MERCHANT_ID`） |
+
+**结果：PASS 4 / FAIL 0**（脚本 `SCRIPT_RC=0`）。
+
+边界：仍是 sandbox + H2 内存库 + mock 连接器，**无真实链上转账、无真实 L1/多机**；
+`bootJar` 以 `-Xmx512m` 低内存构建（当时本机可用内存不足约 1.6GB，
+`./gradlew :nexus-gateway:bootJar --no-daemon --no-watch-fs --no-configuration-cache
+-Dorg.gradle.jvmargs="-Xmx700m -XX:MaxMetaspaceSize=384m"` 可在低内存下完成）。
