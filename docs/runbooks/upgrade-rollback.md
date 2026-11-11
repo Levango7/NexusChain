@@ -346,3 +346,78 @@ git grep -iE 'add (column )?.*not null' -- '*/db/migration/*.sql' | grep -vi def
 [ ] 升级后五条验证全过
 [ ] 24 条告警在升级后 30 分钟内无新增 firing
 ```
+---
+
+## 十一、应用层升级/回滚本机演练记录（2026-11-11 实跑）
+
+> 目的：把第七节「应用层回滚」从「按事实推导」变成**一次可复现的实跑**。
+> 演练脚本：`scripts/upgrade-rollback-drill.sh`（仓库内，可复现）。
+> **边界（重要）**：本演练只覆盖**应用层**（单进程 gateway + 文件型 H2），
+> 不覆盖 `helm rollback` / `kubectl rollout undo` / 快照恢复（需要集群，见第九节 3）；
+> **不回滚数据库迁移**（第八节结论：加性 DDL，无需回退）；
+> **不涉及共识变更**（第一节：共识变更不能靠回滚补救）。
+
+### 11.1 怎么复现
+
+```bash
+# 1) 准备两个版本的 jar（旧 / 新）
+git worktree add ../wt-old v2.76.0
+(cd ../wt-old && ./gradlew :nexus-gateway:bootJar -x test)     # ⇒ ../wt-old/nexus-gateway/build/libs/nexus-gateway-2.76.0.jar
+./gradlew :nexus-gateway:bootJar -x test                        # ⇒ nexus-gateway/build/libs/nexus-gateway-2.77.0.jar
+
+# 2) 演练（约 6~8 分钟：三次启动 + 三次端到端）
+bash scripts/upgrade-rollback-drill.sh ../wt-old/nexus-gateway/build/libs/nexus-gateway-2.76.0.jar \
+                                          nexus-gateway/build/libs/nexus-gateway-2.77.0.jar
+```
+
+脚本做什么：用 sandbox 档 + **文件型 H2**（覆写 `--spring.datasource.url` 与
+`--spring.jpa.hibernate.ddl-auto=update`，否则 sandbox 的 `create-drop` 会在每次启动重建表）
+起旧版本 → 建商户/API Key → 端到端下单 → **停旧起新（=升级）** → 端到端下单 +
+**直查旧支付/旧商户** → **停新起旧（=回滚）** → 端到端下单 + 直查旧支付/旧商户。
+
+### 11.2 2026-11-11 实测结果（本机，JDK 17）
+
+| 阶段 | 检查项 | 结果 | 证据 |
+|---|---|---|---|
+| 1 | 旧版本（v2.76.0）启动 | PASS | 已监听（`health` HTTP 503，见 11.3 说明） |
+| 1 | 商户准备 | PASS | `merchantId=1`，API Key 由旧版本签发 |
+| 1 | 旧版本下单→查询 | PASS | `paymentId=pay_2526087f0ee144c591ca3d11065ca576` |
+| 2 | 新版本（v2.77.0）启动 | PASS | 同一个数据目录，已监听 |
+| 2 | 新版本下单→查询 | PASS | `paymentId=pay_eb7757837fbb48edb7a2a010949f9095` |
+| 2 | **升级后旧支付仍可查** | PASS | `GET /api/v1/payments/pay_2526… ⇒ 200` |
+| 2 | **升级后旧商户仍可查** | PASS | `GET /api/v1/merchants/1 ⇒ 200` |
+| 3 | 回滚到旧版本启动 | PASS | 同一个数据目录，已监听 |
+| 3 | 回滚后下单→查询 | PASS | `paymentId=pay_0ced3c71f0cb402fadfb695e3a32fdad` |
+| 3 | **回滚后旧支付仍可查** | PASS | `GET /api/v1/payments/pay_2526… ⇒ 200` |
+| 3 | **回滚后旧商户仍可查** | PASS | `GET /api/v1/merchants/1 ⇒ 200` |
+
+**合计 PASS 11 / FAIL 0，脚本退出码 0。**
+
+可信度（为什么这几行不只是「起了进程」）：
+
+- **API Key 跨版本仍可用**：阶段 2/3 的端到端跑通用的 Key 是**阶段 1 由 v2.76.0 签发**的
+  ⇒ 旧版本写入的 Key 行，新版本认、回滚后继续认；
+- **旧支付记录跨版本仍可查**：用与 `scripts/acceptance-e2e.sh` 逐字节一致的 `canonicalV2`
+  签名去 GET，阶段 1 创建的 id 在升级后与回滚后都返回 200。
+
+### 11.3 判据与已知口径（不要误读）
+
+1. **「已监听」≠ `health=UP`**：sandbox 档的 `/actuator/health` 会因下游指标
+   （Redis 等，沙箱未起依赖）返回 **503 DOWN**，但进程本身已就绪。
+   判据是「健康端点有 HTTP 响应」，脚本如实记录状态码。
+   若要判 `UP`，用 dev 档（`scripts/smoke-dev-boot.sh`，已关下游指标）。
+2. **旧版本的端到端报告是 3 PASS / 1 FAIL**：v2.76.0 尚未含结算确认写侧（#637 在 master），
+   `settlement confirmation` 为 404。本演练只断言 create/query 两步，**未**把 404 当通过。
+3. **沙箱红利不涵盖真实环境**：仍是 sandbox profile + H2 文件库 + mock 连接器 ⇒
+   不证明真实链上转账、真实 DB、多副本。
+4. **`JWT_SECRET` 必须显式传入**：缺省时网关启动期随机生成，外部自签 ADMIN token 会 403。
+5. **JDK ≥17 必须**：Spring Boot 4 的 class 文件版本 61，Java 8/11 直接 UnsupportedClassVersionError；
+   脚本会校验并给出可用 `NEX_DRILL_JAVA` 指定。
+
+### 11.4 对第七节的映射
+
+| 第七节步骤 | 本演练覆盖 | 说明 |
+|---|---|---|
+| 7.1 应用层回滚（改回 tag 再起） | **已演练**（单进程形态） | 集群下的 `helm rollback` / `rollout undo` 仍未演练（第九节 3） |
+| 7.2 数据库不回滚 | 与演练一致 | 阶段 2/3 的表结构未回退，旧代码忽略新列/新表即通过验证 |
+| 7.3 链数据不可回滚 | 不涉及 | 本演练无链 |

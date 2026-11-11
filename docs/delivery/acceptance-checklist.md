@@ -68,7 +68,8 @@ bash scripts/doctor.sh          # 体检汇总；--json 额外产出机器可读
 |---|---|---|---|---|
 | C-01 | 结算出款地址下发（`NEX_SETTLEMENT_PLATFORM_ADDRESS`） | ops | 注入位已在（#486），**值待填** | 未配置时启动即 fail-closed（`SettlementPlatformAddressGuard`） |
 | C-02 | prod 结算开关（`NEX_SETTLEMENT_ENABLED`） | ops | compose 已显式传值 | dev/sandbox 默认关闭 |
-| C-03 | 升级/回滚演练（staging） | ops | runbook 在 `docs/runbooks/upgrade-rollback.md` | **仓库侧未实跑**（无 staging 环境）；沙箱可复现部分见 demo runbook §6 |
+| C-03 | 升级/回滚演练 | ops | **仓内沙盒演练已实跑**：`scripts/upgrade-rollback-drill.sh`（2026-11-11，v2.76.0→v2.77.0→回滚，**PASS 11 / FAIL 0**，见 `docs/runbooks/upgrade-rollback.md` §十一） | **staging/集群路径仍未演练**（`helm rollback` / `rollout undo` 需集群）；
+      运行手册 §九 3 已同步订正 |
 | C-04 | 备份与恢复演练 | ops | 脚本在 `scripts/` 与 `docs/deploy/` | 生产通路结构性阻塞见板 `20261110-1844` |
 | C-05 | 多副本 CAS / ShedLock 观察 | ops | 代码侧已具备（副本数 3 的渲染源 `deploy/helm/values-prod.yaml`） | 需真实部署环境观察数据 |
 | C-06 | 监控告警阈值落地 | ops/eng-review | SLO 草案在 `docs/ops/slo.md` | **阈值留空为业务决策**，未虚构数字 |
