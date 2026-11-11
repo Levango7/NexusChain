@@ -2,6 +2,7 @@ package org.nexus.gateway.resilience;
 
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker.Metrics;
+import org.nexus.gateway.orchestration.connector.FailureKind;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -205,5 +206,36 @@ class ConnectorCircuitBreakerTest {
         assertNull(circuitBreaker.getCircuitBreaker("ghost"), "record 不应自动创建熔断器");
         assertFalse(circuitBreaker.getRegisteredConnectors().contains("ghost"),
                 "getRegisteredConnectors 不应包含未创建的 connector");
+    }
+
+    // === recordClassifiedFailure：仅 UNAVAILABLE 计入（板 20261110-1511 裁决 ③）===
+
+    @Test
+    @DisplayName("recordClassifiedFailure: UNAVAILABLE 计入失败并可达 OPEN")
+    void recordClassifiedFailure_unavailableCountsTowardOpen() {
+        circuitBreaker.getOrCreate("stripe", "stripe");
+
+        circuitBreaker.recordClassifiedFailure("stripe", 300_000_000L, FailureKind.UNAVAILABLE);
+        circuitBreaker.recordClassifiedFailure("stripe", 300_000_000L, FailureKind.UNAVAILABLE);
+
+        assertEquals(CircuitBreaker.State.OPEN, circuitBreaker.getConnectorState("stripe"),
+                "UNAVAILABLE 是唯一计入熔断的分类，连续两次应达阈值打开");
+    }
+
+    @Test
+    @DisplayName("recordClassifiedFailure: DECLINE/CONFIG/null 一律不计入，熔断器保持 CLOSED")
+    void recordClassifiedFailure_nonUnavailableNeverOpens() {
+        circuitBreaker.getOrCreate("stripe", "stripe");
+
+        for (int i = 0; i < 10; i++) {
+            circuitBreaker.recordClassifiedFailure("stripe", 300_000_000L, FailureKind.DECLINE);
+            circuitBreaker.recordClassifiedFailure("stripe", 300_000_000L, FailureKind.CONFIG);
+            circuitBreaker.recordClassifiedFailure("stripe", 300_000_000L, null);
+        }
+
+        assertEquals(CircuitBreaker.State.CLOSED, circuitBreaker.getConnectorState("stripe"),
+                "连续业务拒绝/配置错误/无分类都不得熔掉健康通道（资金路径硬规则）");
+        assertEquals(0, circuitBreaker.getCircuitBreaker("stripe").getMetrics().getNumberOfFailedCalls(),
+                "不计入的失败不得进入 Resilience4j 滑动窗口");
     }
 }

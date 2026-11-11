@@ -82,7 +82,7 @@ class RoutingEngineWave16Test {
         when(registry.get("pricey")).thenReturn(Optional.of(pricey));
 
         RoutingEngine engine = new RoutingEngine(registry, cfg, null, null,
-                multiObjective, null, null, null, null, null, properties);
+                multiObjective, null, null, null, null, null, properties, null);
         engine.addRule(new RoutingRule("multi", "multi rule", java.util.Map.of("currency", "USD"),
                 RoutingStrategy.MULTI_OBJECTIVE, List.of("pricey", "cheap"), 20));
 
@@ -120,7 +120,7 @@ class RoutingEngineWave16Test {
         when(registry.get("pricey")).thenReturn(Optional.of(pricey));
 
         RoutingEngine engine = new RoutingEngine(registry, cfg, null, null,
-                multiObjective, null, null, null, null, null, properties);
+                multiObjective, null, null, null, null, null, properties, null);
         RoutingRule pinnedRule = new RoutingRule("pinned", "pinned rule",
                 java.util.Map.of("currency", "USD"),
                 RoutingStrategy.MULTI_OBJECTIVE, List.of("pricey", "cheap"), 20);
@@ -141,7 +141,7 @@ class RoutingEngineWave16Test {
         when(registry.get("pricey")).thenReturn(Optional.of(pricey));
 
         RoutingEngine engine = new RoutingEngine(registry, cfg, null, null,
-                null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null);
         engine.addRule(new RoutingRule("multi", "multi rule", java.util.Map.of("currency", "USD"),
                 RoutingStrategy.MULTI_OBJECTIVE, List.of("pricey", "cheap"), 20));
 
@@ -169,7 +169,7 @@ class RoutingEngineWave16Test {
         when(registry.get("mock")).thenReturn(Optional.of(mock));
 
         RoutingEngine engine = new RoutingEngine(registry, cfg, null, null,
-                null, auditService, null, null, null, null, syncProps);
+                null, auditService, null, null, null, null, syncProps, null);
 
         // 非支付链路（paymentId=null）→ 不落审计
         engine.resolveDetailed(RoutingContext.ofPayment(null, null, java.math.BigDecimal.valueOf(1000), "NEX", null));
@@ -215,7 +215,7 @@ class RoutingEngineWave16Test {
                 eq(7L), eq("only"), any(), eq("NEX"));
 
         RoutingEngine engine = new RoutingEngine(registry, cfg, null, null,
-                null, null, null, null, spyService, null, properties);
+                null, null, null, null, spyService, null, properties, null);
         engine.addRule(new RoutingRule("single", "single rule", java.util.Map.of("currency", "NEX"),
                 RoutingStrategy.PRIORITY, List.of("only"), 20));
 
@@ -238,7 +238,7 @@ class RoutingEngineWave16Test {
         when(registry.get("b")).thenReturn(Optional.of(b));
 
         RoutingEngine engine = new RoutingEngine(registry, cfg, null, null,
-                null, null, experimentService, null, null, null, properties);
+                null, null, experimentService, null, null, null, properties, null);
         engine.addRule(new RoutingRule("ab", "ab rule", java.util.Map.of("currency", "NEX"),
                 RoutingStrategy.PRIORITY, List.of("a", "b"), 20));
 

@@ -17,6 +17,7 @@ import org.nexus.gateway.orchestration.routing.RoutingDecision;
 import org.nexus.gateway.orchestration.routing.RoutingEngine;
 import org.nexus.gateway.orchestration.routing.ai.MetricsCollector;
 import org.nexus.gateway.orchestration.settlement.ChainSettlementConfirmationService;
+import org.nexus.gateway.resilience.ConnectorCircuitBreaker;
 import org.nexus.gateway.risk.PaymentRequest;
 import org.nexus.gateway.risk.PaymentRiskService;
 import org.nexus.gateway.risk.RiskDecision;
@@ -25,6 +26,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 
+import java.net.SocketTimeoutException;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -50,6 +52,7 @@ class OrchestrationServiceTest {
     @Mock private MetricsCollector metricsCollector;
     @Mock private ApplicationEventPublisher applicationEventPublisher;
     @Mock private ChainSettlementConfirmationService settlementConfirmationService;
+    @Mock private ConnectorCircuitBreaker circuitBreaker;
 
     private OrchestrationService service;
 
@@ -57,7 +60,7 @@ class OrchestrationServiceTest {
     void setUp() {
         service = new OrchestrationService(repo, routingEngine, connectorRegistry,
                 idempotencyStore, webhookDispatcher, riskService, null, metricsCollector,
-                applicationEventPublisher, settlementConfirmationService);
+                applicationEventPublisher, settlementConfirmationService, null);
         // P1-1（2026-10-12）配套改动：createPayment 现在必须**先原子占位**才走渠道。
         // 本类的 store 是 mock，putIfAbsent 语义未定义 ⇒ 默认返回 false 会被判成
         // "他人在途"而对 req-3 抛 IllegalStateException（409）。这里让占位默认放行；
@@ -697,5 +700,95 @@ class OrchestrationServiceTest {
         assertNull(captor.getValue().getPayerAddress());
         assertNull(captor.getValue().getPayeeAddress());
         assertNull(result.getPayeeAddress());
+    }
+
+    // === ③ 裁决（板 20261110-1511）接线：失败分类喂回熔断器 ===
+
+    private OrchestrationService serviceWithBreaker() {
+        return new OrchestrationService(repo, routingEngine, connectorRegistry,
+                idempotencyStore, webhookDispatcher, riskService, null, metricsCollector,
+                applicationEventPublisher, settlementConfirmationService, circuitBreaker);
+    }
+
+    @Test
+    @DisplayName("createPayment: 渠道返回 DECLINE -> 熔断器收到 DECLINE 分类（不计失败由熔断器侧保证）")
+    void createPayment_declineResult_feedsDeclineClassification() {
+        when(riskService.evaluatePayment(any())).thenReturn(RiskDecision.APPROVED);
+        PaymentConnector c1 = mock(PaymentConnector.class);
+        when(c1.getId()).thenReturn("chain");
+        when(c1.createPayment(any())).thenReturn(
+                ConnectorPaymentResult.fail("psp declined", FailureKind.DECLINE));
+        when(routingEngine.resolveDetailed(any())).thenReturn(w16(List.of(c1)));
+        when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        OrchestratedPayment result = serviceWithBreaker().createPayment(100L, 1000, "NEX", "d",
+                null, null, null, null);
+
+        assertEquals(OrchPaymentStatus.FAILED, result.getStatus());
+        verify(circuitBreaker).recordClassifiedFailure(eq("chain"), anyLong(), eq(FailureKind.DECLINE));
+    }
+
+    @Test
+    @DisplayName("createPayment: 渠道返回 UNAVAILABLE -> 熔断器收到 UNAVAILABLE 分类")
+    void createPayment_unavailableResult_feedsUnavailableClassification() {
+        when(riskService.evaluatePayment(any())).thenReturn(RiskDecision.APPROVED);
+        PaymentConnector c1 = mock(PaymentConnector.class);
+        when(c1.getId()).thenReturn("chain");
+        when(c1.createPayment(any())).thenReturn(
+                ConnectorPaymentResult.fail("timeout", FailureKind.UNAVAILABLE));
+        when(routingEngine.resolveDetailed(any())).thenReturn(w16(List.of(c1)));
+        when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        OrchestratedPayment result = serviceWithBreaker().createPayment(100L, 1000, "NEX", "d",
+                null, null, null, null);
+
+        assertEquals(OrchPaymentStatus.FAILED, result.getStatus());
+        verify(circuitBreaker).recordClassifiedFailure(eq("chain"), anyLong(), eq(FailureKind.UNAVAILABLE));
+    }
+
+    @Test
+    @DisplayName("createPayment: 渠道抛基础设施异常 -> 真实异常对象按 UNAVAILABLE 计入熔断")
+    void createPayment_infraException_passesRealExceptionToBreaker() {
+        when(riskService.evaluatePayment(any())).thenReturn(RiskDecision.APPROVED);
+        PaymentConnector c1 = mock(PaymentConnector.class);
+        when(c1.getId()).thenReturn("chain");
+        SocketTimeoutException timeout = new SocketTimeoutException("read timed out");
+        RuntimeException infra = new RuntimeException("connector read timed out", timeout);
+        when(c1.createPayment(any())).thenThrow(infra);
+        PaymentConnector c2 = mock(PaymentConnector.class);
+        when(c2.getId()).thenReturn("consortium");
+        when(c2.createPayment(any())).thenReturn(
+                ConnectorPaymentResult.ok("c-2", PaymentStatus.SUCCEEDED, "0xTx2"));
+        when(routingEngine.resolveDetailed(any())).thenReturn(w16(List.of(c1, c2)));
+        when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        OrchestratedPayment result = serviceWithBreaker().createPayment(100L, 1000, "NEX", "d",
+                null, null, null, null);
+
+        assertEquals(OrchPaymentStatus.SUCCEEDED, result.getStatus());
+        verify(circuitBreaker).recordFailure(eq("chain"), anyLong(), same(infra));
+        verify(circuitBreaker, never()).recordClassifiedFailure(anyString(), anyLong(), any());
+    }
+
+    @Test
+    @DisplayName("createPayment: 渠道抛非基础设施异常 -> 不计入熔断（误分类保护）")
+    void createPayment_nonInfraException_notCountedByBreaker() {
+        when(riskService.evaluatePayment(any())).thenReturn(RiskDecision.APPROVED);
+        PaymentConnector c1 = mock(PaymentConnector.class);
+        when(c1.getId()).thenReturn("chain");
+        when(c1.createPayment(any())).thenThrow(new IllegalArgumentException("psp declined"));
+        PaymentConnector c2 = mock(PaymentConnector.class);
+        when(c2.getId()).thenReturn("consortium");
+        when(c2.createPayment(any())).thenReturn(
+                ConnectorPaymentResult.ok("c-2", PaymentStatus.SUCCEEDED, "0xTx2"));
+        when(routingEngine.resolveDetailed(any())).thenReturn(w16(List.of(c1, c2)));
+        when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        OrchestratedPayment result = serviceWithBreaker().createPayment(100L, 1000, "NEX", "d",
+                null, null, null, null);
+
+        assertEquals(OrchPaymentStatus.SUCCEEDED, result.getStatus());
+        verify(circuitBreaker, never()).recordFailure(anyString(), anyLong(), any());
+        verify(circuitBreaker, never()).recordClassifiedFailure(anyString(), anyLong(), any());
     }
 }
