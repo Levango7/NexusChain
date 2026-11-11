@@ -6,7 +6,10 @@ import org.junit.jupiter.api.Test;
 import org.nexus.gateway.config.GatewayConfig;
 import org.nexus.gateway.orchestration.connector.ConnectorRegistry;
 import org.nexus.gateway.orchestration.connector.PaymentConnector;
+import org.nexus.gateway.resilience.ConnectorCircuitBreaker;
+import org.nexus.gateway.resilience.ConnectorCircuitBreakerConfig;
 
+import java.net.SocketTimeoutException;
 import java.util.List;
 import java.util.Optional;
 
@@ -302,5 +305,55 @@ class RoutingEngineTest {
 
         List<PaymentConnector> result = engine.resolve("USD", 1000, "ghost");
         assertEquals(1, result.size());
+    }
+
+    // === ③ 裁决（板 20261110-1511）接线：熔断 OPEN 通道快否决 ===
+
+    /** 真实熔断器 + 低阈值配置，把指定 connector 喂到 OPEN 态。 */
+    private ConnectorCircuitBreaker breakerWithOpen(String openConnectorId) {
+        ConnectorCircuitBreakerConfig cbConfig = new ConnectorCircuitBreakerConfig();
+        ConnectorCircuitBreakerConfig.CircuitBreakerProperties props = cbConfig.getDefaultConfig();
+        props.setFailureRateThreshold(50f);
+        props.setSlidingWindowSize(4);
+        props.setMinimumNumberOfCalls(2);
+        props.setWaitDurationInOpenState(java.time.Duration.ofSeconds(1));
+        ConnectorCircuitBreaker cb = new ConnectorCircuitBreaker(cbConfig);
+        cb.getOrCreate(openConnectorId, "chain");
+        SocketTimeoutException timeout = new SocketTimeoutException("read timed out");
+        cb.recordFailure(openConnectorId, 300_000_000L, timeout);
+        cb.recordFailure(openConnectorId, 300_000_000L, timeout);
+        return cb;
+    }
+
+    @Test
+    @DisplayName("resolve: 显式指定的 connector 熔断 OPEN -> 快否决，fallback 到健康通道")
+    void resolve_explicitOpenCircuit_fallbackToHealthy() {
+        PaymentConnector chain = mockConnector("chain", true, 5, "NEX");
+        PaymentConnector mock = mockConnector("mock", true, 0);
+        when(registry.get("chain")).thenReturn(Optional.of(chain));
+        when(registry.getActiveForCurrency("NEX")).thenReturn(List.of(chain, mock));
+        RoutingEngine engine = new RoutingEngine(registry, cfg, null, null, null, null,
+                null, null, null, null, null, breakerWithOpen("chain"));
+
+        List<PaymentConnector> result = engine.resolve("NEX", 1000, "chain");
+        assertEquals(1, result.size());
+        assertEquals("mock", result.get(0).getId(),
+                "显式通道熔断 OPEN 时不得放进候选，应落到健康备选");
+    }
+
+    @Test
+    @DisplayName("resolve: 规则候选中熔断 OPEN 的通道被快否决，不进决策结果")
+    void resolve_ruleCandidateOpenCircuit_excludedFromDecision() {
+        PaymentConnector chain = mockConnector("chain", true, 5, "NEX");
+        PaymentConnector mock = mockConnector("mock", true, 0);
+        when(registry.get("chain")).thenReturn(Optional.of(chain));
+        when(registry.get("mock")).thenReturn(Optional.of(mock));
+        RoutingEngine engine = new RoutingEngine(registry, cfg, null, null, null, null,
+                null, null, null, null, null, breakerWithOpen("chain"));
+
+        List<PaymentConnector> result = engine.resolve("NEX", 1000, null);
+        assertEquals(1, result.size());
+        assertEquals("mock", result.get(0).getId(),
+                "default-nex 候选 [chain, mock] 中 chain 熔断 OPEN 应被剔除");
     }
 }

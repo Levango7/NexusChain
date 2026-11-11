@@ -12,6 +12,7 @@ import org.nexus.gateway.orchestration.routing.experiment.RoutingExperimentServi
 import org.nexus.gateway.orchestration.routing.fallback.FallbackRouteService;
 import org.nexus.gateway.orchestration.routing.profile.MerchantRoutingProfileService;
 import org.nexus.gateway.orchestration.routing.strategy.MultiObjectiveRoutingService;
+import org.nexus.gateway.resilience.ConnectorCircuitBreaker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -76,14 +77,19 @@ public class RoutingEngine {
     private final MerchantRoutingProfileService profileService;
     /** Wave 16 配置（nullable，纯测试场景）。 */
     private final RoutingWave16Properties wave16Properties;
+    /**
+     * Connector 级熔断器（可选，nullable）。接线后候选生成时快否决熔断 OPEN 的通道
+     * （板 20261110-1511 裁决 ③ 第 2 步）；null 时退化为不过滤的旧行为。
+     */
+    private final ConnectorCircuitBreaker circuitBreaker;
 
     public RoutingEngine(ConnectorRegistry registry, GatewayConfig gatewayConfig) {
-        this(registry, gatewayConfig, null, null, null, null, null, null, null, null, null);
+        this(registry, gatewayConfig, null, null, null, null, null, null, null, null, null, null);
     }
 
     public RoutingEngine(ConnectorRegistry registry, GatewayConfig gatewayConfig,
                          AbTestRouter abTestRouter) {
-        this(registry, gatewayConfig, abTestRouter, null, null, null, null, null, null, null, null);
+        this(registry, gatewayConfig, abTestRouter, null, null, null, null, null, null, null, null, null);
     }
 
     /**
@@ -97,11 +103,11 @@ public class RoutingEngine {
     public RoutingEngine(ConnectorRegistry registry, GatewayConfig gatewayConfig,
                          AbTestRouter abTestRouter, RoutingRuleEntityRepository ruleRepository) {
         this(registry, gatewayConfig, abTestRouter, ruleRepository,
-                null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null);
     }
 
     /**
-     * Spring 装配构造器（Wave 16 完整形态，11 参）。
+     * Spring 装配构造器（Wave 16 完整形态，12 参）。
      *
      * <p>Wave 16 各协作方均为 optional 注入——对应模块的 Bean 缺失
      * （测试环境/后续裁剪）时传 null，引擎自动退化为 Wave 15 行为。</p>
@@ -120,7 +126,8 @@ public class RoutingEngine {
                          @Autowired(required = false) org.nexus.gateway.orchestration.routing.monitor.RoutingMonitorService routingMonitorService,
                          @Autowired(required = false) FallbackRouteService fallbackRouteService,
                          @Autowired(required = false) MerchantRoutingProfileService profileService,
-                         @Autowired(required = false) RoutingWave16Properties wave16Properties) {
+                         @Autowired(required = false) RoutingWave16Properties wave16Properties,
+                         @Autowired(required = false) ConnectorCircuitBreaker circuitBreaker) {
         this.registry = registry;
         this.gatewayConfig = gatewayConfig;
         this.abTestRouter = abTestRouter;
@@ -132,6 +139,7 @@ public class RoutingEngine {
         this.fallbackRouteService = fallbackRouteService;
         this.profileService = profileService;
         this.wave16Properties = wave16Properties;
+        this.circuitBreaker = circuitBreaker;
         initRules(abTestRouter, ruleRepository);
     }
 
@@ -243,6 +251,7 @@ public class RoutingEngine {
         if (preferredConnector != null && !preferredConnector.isBlank()) {
             List<PaymentConnector> explicit = registry.get(preferredConnector)
                     .filter(PaymentConnector::isActive)
+                    .filter(c -> !circuitOpen(c.getId()))
                     .map(List::of)
                     .orElseGet(() -> fallbackConnectors(currency));
             return finish(ctx, "explicit", "EXPLICIT", List.of(preferredConnector),
@@ -294,6 +303,11 @@ public class RoutingEngine {
                 log.warn("Experiment assignment failed, keeping rule result: {}", e.getMessage());
             }
         }
+
+        // ③ 裁决（板 20261110-1511）接线：候选生成后、决策返回前快否决——
+        // 熔断 OPEN/FORCED_OPEN 的通道不进候选，硬故障 PSP 不再每笔被打一遍。
+        // 审计口径：candidates 保留否决前清单，decisionIds 为否决后结果，否决可追溯。
+        ruleResult = excludeOpenCircuits(ruleResult);
 
         return finish(effectiveCtx, resolution.ruleId(), strategy, candidateIds, scores,
                 ruleResult, experimentId, abGroup);
@@ -520,7 +534,29 @@ public class RoutingEngine {
     private List<PaymentConnector> fallbackConnectors(String currency) {
         List<PaymentConnector> active = registry.getActiveForCurrency(currency);
         if (active.isEmpty()) active = registry.getActive();
-        return active;
+        return excludeOpenCircuits(active);
+    }
+
+    /** 该 connector 的熔断器是否 OPEN/FORCED_OPEN（无 breaker 或读状态异常时恒 false）。 */
+    private boolean circuitOpen(String connectorId) {
+        try {
+            return circuitBreaker != null && circuitBreaker.isCircuitOpen(connectorId);
+        } catch (RuntimeException e) {
+            // fail-open：熔断器自身故障不得阻断支付，保留候选交给单次超时兜底
+            log.warn("Circuit breaker state read failed for {}, keeping connector: {}",
+                    connectorId, e.getMessage());
+            return false;
+        }
+    }
+
+    /** 快否决：剔除熔断 OPEN 的通道；breaker 缺失时原样返回（Wave 15 行为）。 */
+    private List<PaymentConnector> excludeOpenCircuits(List<PaymentConnector> candidates) {
+        if (circuitBreaker == null) {
+            return candidates;
+        }
+        return candidates.stream()
+                .filter(c -> !circuitOpen(c.getId()))
+                .collect(Collectors.toList());
     }
 
     // === Rule management ===

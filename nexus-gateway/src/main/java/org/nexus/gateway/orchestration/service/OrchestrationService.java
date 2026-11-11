@@ -10,6 +10,7 @@ import org.nexus.gateway.orchestration.routing.RoutingDecision;
 import org.nexus.gateway.orchestration.routing.RoutingEngine;
 import org.nexus.gateway.orchestration.routing.ai.MetricsCollector;
 import org.nexus.gateway.orchestration.settlement.ChainSettlementConfirmationService;
+import org.nexus.gateway.resilience.ConnectorCircuitBreaker;
 import org.nexus.gateway.risk.PaymentRequest;
 import org.nexus.gateway.risk.PaymentRiskService;
 import org.nexus.gateway.risk.RiskDecision;
@@ -66,6 +67,12 @@ public class OrchestrationService {
     private final ApplicationEventPublisher applicationEventPublisher;
     /** 链上结算确认服务（可选）。支付拿到链上 txHash 后触发确认记录创建；null 时 no-op。 */
     private final ChainSettlementConfirmationService settlementConfirmationService;
+    /**
+     * Connector 级熔断器（可选，null 时全部计数 no-op）。仅 {@link FailureKind#UNAVAILABLE}
+     * 计入失败（板 20261110-1511 裁决 ③ 第 2 步）；DECLINE/CONFIG 不计，避免业务拒绝
+     * 误熔健康通道。
+     */
+    private final ConnectorCircuitBreaker circuitBreaker;
 
     @Autowired
     public OrchestrationService(OrchestratedPaymentRepository repo,
@@ -77,7 +84,8 @@ public class OrchestrationService {
                                 Tracer tracer,
                                 @Autowired(required = false) MetricsCollector metricsCollector,
                                 ApplicationEventPublisher applicationEventPublisher,
-                                @Autowired(required = false) ChainSettlementConfirmationService settlementConfirmationService) {
+                                @Autowired(required = false) ChainSettlementConfirmationService settlementConfirmationService,
+                                @Autowired(required = false) ConnectorCircuitBreaker circuitBreaker) {
         this.repo = repo;
         this.routingEngine = routingEngine;
         this.connectorRegistry = connectorRegistry;
@@ -88,6 +96,7 @@ public class OrchestrationService {
         this.metricsCollector = metricsCollector;
         this.applicationEventPublisher = applicationEventPublisher;
         this.settlementConfirmationService = settlementConfirmationService;
+        this.circuitBreaker = circuitBreaker;
     }
 
     /**
@@ -100,7 +109,7 @@ public class OrchestrationService {
                                 OrchestrationWebhookDispatcher webhookDispatcher,
                                 PaymentRiskService riskService) {
         this(repo, routingEngine, connectorRegistry, idempotencyStore,
-                webhookDispatcher, riskService, null, null, null, null);
+                webhookDispatcher, riskService, null, null, null, null, null);
     }
 
     /**
@@ -114,7 +123,7 @@ public class OrchestrationService {
                                 PaymentRiskService riskService,
                                 Tracer tracer) {
         this(repo, routingEngine, connectorRegistry, idempotencyStore,
-                webhookDispatcher, riskService, tracer, null, null, null);
+                webhookDispatcher, riskService, tracer, null, null, null, null);
     }
 
     // P1（2026-09-17 修复）：此处**不得**标注 @Transactional。
@@ -300,17 +309,20 @@ public class OrchestrationService {
                     try {
                         result = connector.createPayment(req);
                     } catch (RuntimeException e) {
-                        long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - t0);
+                        long elapsedNanos = System.nanoTime() - t0;
+                        long elapsedMs = TimeUnit.NANOSECONDS.toMillis(elapsedNanos);
                         log.error("Connector {} threw exception for payment {}: {}",
                                 connector.getId(), paymentId, e.getMessage());
                         // 异常也喂给 AI 路由（成本 = 0，延迟 = 已耗时）
                         recordConnectorOutcome(connector.getId(), false, elapsedMs, 0);
+                        recordBreakerOnException(connector.getId(), elapsedNanos, e);
                         connSpan.attr("payment.connector.latency_ms", elapsedMs)
                                 .attr("payment.connector.error", e.getMessage())
                                 .error(e);
                         continue;
                     }
-                    long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - t0);
+                    long elapsedNanos = System.nanoTime() - t0;
+                    long elapsedMs = TimeUnit.NANOSECONDS.toMillis(elapsedNanos);
                     if (result.getLatencyMs() <= 0) {
                         result.setLatencyMs(elapsedMs);
                     }
@@ -336,6 +348,7 @@ public class OrchestrationService {
                                 paymentId, connector.getId(), result.getStatus(),
                                 result.getLatencyMs(), result.getCostBps());
                         recordConnectorOutcome(connector.getId(), true, result.getLatencyMs(), result.getCostBps());
+                        recordBreakerSuccess(connector.getId(), elapsedNanos);
                         routingEngine.recordRouteOutcome(routeDecisionId, true);
                         publishPaymentCompleted(payment, result.getTransactionHash(),
                                 result.getLatencyMs(), result.getCostBps());
@@ -353,6 +366,7 @@ public class OrchestrationService {
                     log.warn("Connector {} rejected payment {}: {}",
                             connector.getId(), paymentId, result.getErrorMessage());
                     recordConnectorOutcome(connector.getId(), false, result.getLatencyMs(), result.getCostBps());
+                    recordBreakerOnFailure(connector.getId(), elapsedNanos, result);
                     connSpan.attr("payment.connector.error", result.getErrorMessage());
                 }
             }
@@ -460,6 +474,41 @@ public class OrchestrationService {
             metricsCollector.record(connectorId, success, latencyMs, costBps);
         } catch (RuntimeException e) {
             log.warn("MetricsCollector.record failed for {}: {}", connectorId, e.getMessage());
+        }
+    }
+
+    /**
+     * 熔断计数（已分类失败结果）：仅 UNAVAILABLE 计入，DECLINE/CONFIG 不计
+     * （连续业务拒绝不得熔掉健康通道）。breaker 缺失/异常时 no-op。
+     */
+    private void recordBreakerOnFailure(String connectorId, long durationNanos, ConnectorPaymentResult result) {
+        if (circuitBreaker == null) return;
+        try {
+            circuitBreaker.recordClassifiedFailure(connectorId, durationNanos, result.getFailureKind());
+        } catch (RuntimeException e) {
+            log.warn("Circuit breaker failure recording failed for {}: {}", connectorId, e.getMessage());
+        }
+    }
+
+    /** 熔断计数（异常路径）：异常经结构化分类，仅 UNAVAILABLE 计入；真实异常入事件流。 */
+    private void recordBreakerOnException(String connectorId, long durationNanos, RuntimeException e) {
+        if (circuitBreaker == null) return;
+        try {
+            if (FailureKind.countsAsBreakerFailure(ConnectorFailureClassifier.classify(e))) {
+                circuitBreaker.recordFailure(connectorId, durationNanos, e);
+            }
+        } catch (RuntimeException ex) {
+            log.warn("Circuit breaker failure recording failed for {}: {}", connectorId, ex.getMessage());
+        }
+    }
+
+    /** 熔断计数（成功）：喂回滑动窗口，OPEN 到期后半开试探靠它恢复 CLOSED。breaker 缺失/异常时 no-op。 */
+    private void recordBreakerSuccess(String connectorId, long durationNanos) {
+        if (circuitBreaker == null) return;
+        try {
+            circuitBreaker.recordSuccess(connectorId, durationNanos);
+        } catch (RuntimeException e) {
+            log.warn("Circuit breaker success recording failed for {}: {}", connectorId, e.getMessage());
         }
     }
 
