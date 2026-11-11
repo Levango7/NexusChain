@@ -162,11 +162,25 @@ curl -sS -H "Authorization: Bearer $NEXUS_METRICS_TOKEN" http://127.0.0.1:8080/a
 
 ---
 
-## 6. 升级/回滚（**本机未实测**，仅给口径）
+## 6. 升级/回滚（**本机已实跑**，应用层）
 
-- 口径与步骤：`docs/runbooks/upgrade-rollback.md`；
-- 本演示**不含**回滚实跑：staging/生产演练需部署环境与 ops 参与（见验收清单 C-03）；
-- 沙箱可做的最小验证：停进程 → 用旧 jar 重启 → `/actuator/health` 恢复（`bootJar` 产物留档即可）。
+口径见 `docs/runbooks/upgrade-rollback.md`（尤其第一节「共识变更」判据与第七节三条路径）。
+2026-11-11 本机实跑的应用层演练（沙盒，**不含集群**）：
+
+```bash
+# 准备两个版本 jar（旧 v2.76.0 / 新 master）后：
+bash scripts/upgrade-rollback-drill.sh ../wt-old/nexus-gateway/build/libs/nexus-gateway-2.76.0.jar \
+                                          nexus-gateway/build/libs/nexus-gateway-2.77.0.jar
+```
+
+**实测结果：PASS 11 / FAIL 0**——旧版本（v2.76.0）可下单查询；升级到新版本后
+「旧支付 / 旧商户」仍可查（Key 由旧版本签发、仍被新版认可）；回滚到旧版本后同样如此。
+
+> 三个必须讲清的口径：
+> ① 只覆盖**应用层**（单进程 jar + 文件型 H2）；`helm rollback` / `kubectl rollout undo` 需集群，未演练；
+> ② 数据库迁移**不回滚**（加性 DDL，旧代码忽略新表/新列即通过）；
+> ③ 判据是「健康端点有 HTTP 响应」——sandbox 的 `/actuator/health` 因 Redis 等下游指标返回
+> **503**，不是 `UP`（要判 UP 用 `smoke-dev-boot.sh` 的 dev 档）。
 
 ---
 
