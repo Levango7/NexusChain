@@ -62,8 +62,6 @@
       {"id":"error_rate_sla","name":"错误率SLA","x":850,"y":80,"category":1,"symbolSize":32,"itemStyle":{"color":"#2980b9"}},
 
       {"id":"circuit_breaker","name":"CircuitBreaker","x":1100,"y":200,"category":2,"symbolSize":44,"itemStyle":{"color":"#e67e22"}},
-      {"id":"fallback_router","name":"FallbackRouter","x":1280,"y":200,"category":2,"symbolSize":44,"itemStyle":{"color":"#e67e22"}},
-      {"id":"backup_connector","name":"备选Connector","x":1460,"y":200,"category":2,"symbolSize":44,"itemStyle":{"color":"#e67e22"}},
 
       {"id":"config_mgmt","name":"配置管理","x":150,"y":450,"category":3,"symbolSize":32,"itemStyle":{"color":"#27ae60"}},
       {"id":"cache_mgmt","name":"缓存管理","x":300,"y":450,"category":3,"symbolSize":32,"itemStyle":{"color":"#27ae60"}},
@@ -88,9 +86,6 @@
       {"source":"sla_monitor","target":"latency_sla","label":{"show":true,"formatter":"监控","fontSize":9,"color":"#2980b9"}},
       {"source":"sla_monitor","target":"throughput_sla","label":{"show":true,"formatter":"监控","fontSize":9,"color":"#2980b9"}},
       {"source":"sla_monitor","target":"error_rate_sla","label":{"show":true,"formatter":"监控","fontSize":9,"color":"#2980b9"}},
-
-      {"source":"circuit_breaker","target":"fallback_router","label":{"show":true,"formatter":"触发","fontSize":9,"color":"#e67e22"}},
-      {"source":"fallback_router","target":"backup_connector","label":{"show":true,"formatter":"路由","fontSize":9,"color":"#e67e22"}},
 
       {"source":"sla_monitor","target":"alert_engine","label":{"show":true,"formatter":"超阈值告警","fontSize":9,"color":"#c0392b"},"lineStyle":{"type":"dashed","width":2}},
       {"source":"circuit_breaker","target":"alert_engine","label":{"show":true,"formatter":"熔断告警","fontSize":9,"color":"#c0392b"},"lineStyle":{"type":"dashed","width":2}},

@@ -23,7 +23,7 @@ import java.util.concurrent.TimeUnit;
  * （{@link ConnectorCircuitBreakerConfig#getEffectiveConfig(String)}）。
  * 分桶键与配置键分离：同类型的多个实例（如动态 PSP）各自独立熔断，互不牵连。
  * 支持状态转换 CLOSED → OPEN → HALF_OPEN → CLOSED。
- * 熔断时由 {@link FallbackRouter} 自动路由到备选 Connector。</p>
+ * 熔断状态由编排层 failover 循环消费，候选生成时跳过已熔断 Connector。</p>
  *
  * <p>使用 {@link CircuitBreakerRegistry} 管理多个熔断器实例，
  * 配置来源于 {@link ConnectorCircuitBreakerConfig}，支持按 connector 类型独立覆盖。</p>
@@ -182,7 +182,7 @@ public class ConnectorCircuitBreaker {
     }
 
     /**
-     * 获取底层 CircuitBreakerRegistry（供 {@link ResilienceMetrics} 注册指标使用）。
+     * 获取底层 CircuitBreakerRegistry 实例。
      *
      * @return CircuitBreakerRegistry 实例
      */
