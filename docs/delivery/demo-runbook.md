@@ -18,7 +18,7 @@
 | Python | 3.9+（体检脚本用） | `python --version` |
 | Git | 任意近期版本 | `git --version` |
 | 内存 | **≥4GB 可用**（Gradle daemon 默认 `-Xmx2g`，见 `gradle.properties`） | 内存不足时用 §0.1 低内存参数 |
-| 端口 | 8080 空闲 | `netstat -ano | grep :8080` |
+| 端口 | 8080 空闲 | `netstat -ano \| grep :8080` |
 | 目录 | 仓库根（脚本需找到 `gradlew`） | `pwd` |
 
 > 脚本会自行定位仓库根，`scripts/doctor.sh` / `scripts/acceptance-e2e.sh` 可从任意目录调用。
@@ -149,16 +149,38 @@ bash scripts/doctor.sh            # 汇总；--json 额外产出机器可读结�
 
 ---
 
-## 5. 指标与告警面（3 分钟，需指标 token）
+## 5. 指标与告警面（3 分钟）
+
+指标端点是 **fail-closed**：未配 token 直接 503，配了但没带/带错一律 401，只有正确 Bearer 才 200。
 
 ```bash
-curl -sS -H "Authorization: Bearer $NEXUS_METRICS_TOKEN" http://127.0.0.1:8080/actuator/prometheus | head -n 20
+# 启动网关时显式给一个指标 token（本地自设即可；生产由 ops 提供）
+JWT_SECRET='<≥32 字节随机串>' \
+NEXUS_METRICS_TOKEN='<自设 token>' \
+NEX_SETTLEMENT_ENABLED=false \
+java -jar nexus-gateway/build/libs/nexus-gateway-*.jar \
+  --spring.profiles.active=sandbox --server.port=8080
+
+# ① 不带 token（期望 401）
+curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/actuator/prometheus
+# ② 错 token（期望 401）
+curl -sS -o /dev/null -w '%{http_code}\n' -H 'Authorization: Bearer wrong' http://127.0.0.1:8080/actuator/prometheus
+# ③ 正确 token（期望 200）
+curl -sS -H 'Authorization: Bearer <自设 token>' http://127.0.0.1:8080/actuator/prometheus > prom.txt
+grep -c '^nexus_' prom.txt          # 指标行数
+grep -oE '^nexus_[a-z0-9_]+' prom.txt | sort -u   # 指标名清单
 ```
 
-**期望**：能看到 `nexus_*` 指标（PaymentMetrics 7 个 meter 已接线，见 #577）。
-口径与 token 配置见 `docs/runbooks/metrics-auth.md`；阈值见 `docs/ops/slo.md`（阈值留空为业务决策）。
+**2026-11-11 实测**：① 401 ② 401 ③ 200；导出 **22** 个 `nexus_*` 指标，其中 PaymentMetrics 的
+7 个 meter 全部在——`nexus_orders_total`、`nexus_payments_confirmed_total`、
+`nexus_payments_failed_total`、`nexus_refunds_issued_total`、`nexus_webhooks_delivered_total`、
+`nexus_webhooks_failed_total`、`nexus_payment_latency_seconds_{count,sum,max}`。
 
-> 本步在本次演示中**未实测**（需要指标 token），如实标注。
+> **别被导出名骗**：注册名 `nexus.orders.created` 实际导出为 **`nexus_orders_total`**
+> （OpenMetrics 保留 `_created` 给创建时间戳，Prometheus 导出时剥掉）。
+> Grafana 面板必须查**导出名**，否则面板恒空（#577 已修过一次面板里的错名）。
+>
+> 口径与 token 配置见 `docs/runbooks/metrics-auth.md`；告警阈值见 `docs/ops/slo.md`（阈值留空为业务决策）。
 
 ---
 
@@ -212,4 +234,4 @@ bash scripts/upgrade-rollback-drill.sh ../wt-old/nexus-gateway/build/libs/nexus-
 | `40106` | nonce 重放 | 每次换新 nonce |
 | `401` | API Key 无效或商户非 VERIFIED | 重走 §2（**网关重启后必须重来**） |
 | 第 4 步记 `SKIP` | 未传 `NEX_MERCHANT_ID` | 显式传 `NEX_MERCHANT_ID=1` |
-| 端口 8080 被占 | 残留进程 | `netstat -ano | grep :8080` 找 PID 后结束 |
+| 端口 8080 被占 | 残留进程 | `netstat -ano \| grep :8080` 找 PID 后结束 |
