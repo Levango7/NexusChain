@@ -45,7 +45,8 @@ bash scripts/doctor.sh          # 体检汇总；--json 额外产出机器可读
 | A-12 | 留言板签收门禁（无逾期未签收必读项） | `python scripts/check-agent-board-inbox.py` | rc=0 | **PASS** | `[待确认]` |
 | A-13 | 共享主树板面卫生（无「写了没提交」的留言） | `bash scripts/check-main-tree-board-hygiene.sh` | rc=0 | **PASS** | `[待确认]` |
 | A-14 | MPC 分层策略 | `bash scripts/check-mpc-tier-policy.sh` | rc=0 | **PASS** | `[待确认]` |
-| A-15 | **私有化交付包可生成** | `bash scripts/build-delivery-bundle.sh --out <dir>` | 产出 chart 包 + `images.lock` + `dependencies.lock` + `manifest.json` + `SHA256SUMS` | **PASS**（2026-11-12 实测：chart `nexus-chain-2.77.0.tgz` + **19** 个镜像清单 + 校验和；`--with-images` 因本机 Docker daemon 未起记 SKIP） | 安装 SOP 见 `docs/delivery/offline-install.md`；SBOM/CVE 报告**未附**（见该文 §10） |
+| A-15 | **私有化交付包可生成** | `bash scripts/build-delivery-bundle.sh --out <dir> [--with-jars] [--with-images]` | 产出 chart 包 + `jars/` + `scripts/` + `evidence/` + `images.lock` + `jars.lock` + `dependencies.lock` + `manifest.json` + `SHA256SUMS` | **PASS**（2026-11-12 实测：chart `nexus-chain-2.77.0.tgz` + **19** 镜像 + **1** jar + **105** 脚本 + **7** 份证据 + 校验和；缺 5 个模块 jar 与镜像 tar 记 SKIP） | 安装 SOP 见 `docs/delivery/offline-install.md`；SBOM/CVE 报告**未附**（见该文 §10） |
+| A-16 | **离线整链演练**（只用包内资产） | `bash scripts/ops/offline-drill.sh <交付包目录> [--old-jar <旧.jar>]` | 校验和 → 包内体检 → 包内 jar 起服务 → 商户 → 端到端 → 升级/回滚 | **PASS 6 / FAIL 0 / SKIP 0**（2026-11-12 实测：包内 doctor PASS 2/SKIP 12，端到端 **4 PASS**，升级回滚 **11 PASS**） | 真断网未模拟；compose/helm 安装路径未覆盖（无 Docker） |
 
 ---
 

@@ -50,6 +50,7 @@
 | 指标面 fail-closed + 可取 | `/actuator/prometheus`：无 token 401 / 错 token 401 / 正确 token 200；22 个 `nexus_*`；PaymentMetrics 7 个 meter 导出名全对 | 本地自设 token；生产 token 由 ops 提供 |
 | 升级/回滚应用层实跑 | `scripts/upgrade-rollback-drill.sh` ⇒ PASS 11 / FAIL 0（v2.76.0 → v2.77.0 → 回滚，旧支付/旧商户跨版本仍可查） | 只覆盖应用层；集群路径未演练 |
 | 私有化交付包 | `scripts/build-delivery-bundle.sh` ⇒ chart 包 + **19** 个镜像清单 + 依赖清单 + `SHA256SUMS`（2026-11-12 实测） | 安装 SOP 见 `docs/delivery/offline-install.md`；**未附 SBOM/CVE 报告**；断网机整链未实测 |
+| 离线交付整链自证 | `scripts/ops/offline-drill.sh` ⇒ **PASS 6 / FAIL 0 / SKIP 0**（只用包内 jar + 包内脚本：校验和 → 体检 → 起服务 → 商户 → 端到端 4 PASS → 升级回滚 11 PASS） | 真断网未模拟；compose/helm 安装路径未覆盖（无 Docker） |
 
 ## 3. 当前能力基线（供映射，不等于验收通过）
 
@@ -89,6 +90,7 @@
 | 2026-11-12 | 指标面 fail-closed 与 7 个 meter 导出名**实测通过**（401/401/200，22 个 `nexus_*`） | 可观测性 | 复跑实测 | 清单 B-07/B-08 |
 | 2026-11-12 | 建立「可验证项现状」口径（A 14 / B 8 / C 6），**不等招标条款**先固化可验证部分 | 全 lane 优先级 | nex（本文档维护） | 本文档 §2.1；明细见验收清单 |
 | 2026-11-12 | **私有化交付包**落地：交付包按「自包含」设计，同时提供可被运维平台纳管的输入；**不绑定任何特定平台** | 交付形态 | nex（工程侧实现） | `scripts/build-delivery-bundle.sh`；`docs/delivery/offline-install.md` §0 |
+| 2026-11-12 | **离线交付整链自证**通过（PASS 6 / FAIL 0 / SKIP 0）：证明「交付包 = 不装 Gradle、不联网也能起、能自证、能升级回滚」 | 交付形态 | nex（本机实测） | `scripts/ops/offline-drill.sh` |
 | 2026-11-10 | #522 P0 处置路径：已修复合入，无需接管 | 资金安全 | orchestrator+核心 lane | #520（已合）；master `nexus-core/.../validate/TransactionCheck.java:62-75` 类型白名单 + `MerkleRule.java:297-298` 默认真拒绝 + `CoinbaseRule.java:73-74` 手续费守恒三件套在位 |
 
 ## 6. 使用规则

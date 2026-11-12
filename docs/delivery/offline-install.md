@@ -28,13 +28,42 @@
 ```
 delivery-bundle-<时间戳>/
 ├── charts/nexus-chain-2.77.0.tgz   # helm umbrella chart（8 个子 chart，含 nexus-core / mpc-engine）
-├── images.lock                      # 镜像清单（image<TAB>来源路径），19 条
-├── dependencies.lock                # 机器可读依赖清单（版本 / JDK / Gradle / 清单路径 / 自检入口）
-├── helm-render.yaml                 # 以 values-prod 渲染出的**实际** manifests（可读实际参数）
-├── manifest.json                    # 交付清单（版本、提交、镜像、SKIP 项）
-├── SHA256SUMS                       # 逐文件校验和
-└── images/*.tar                     # 仅当生成时加了 --with-images 且本地已有镜像
+├── jars/nexus-gateway-*.jar        # 预构建 jar（--with-jars）——裸进程安装路径，**不需源码与 Gradle**
+├── scripts/                        # 全量自检/验收/演练/纳管入口（105 个）——交付方拿到包即可自证
+├── evidence/                       # LICENSE/NOTICE + .trivyignore + 安全基线 + 依赖清单（7 份）
+├── images/*.tar                    # 镜像 tar（仅 --with-images 且本地已有镜像）
+├── .env.prod.example               # 19 个强制变量模板（根级，交付方填值）
+├── docker-compose.prod.yml         # compose 路径清单（根级）
+├── images.lock                     # 镜像清单（image<TAB>来源），19 条
+├── jars.lock                       # jar 清单（jar<TAB>模块<TAB>sha256）
+├── dependencies.lock               # 机器可读依赖清单（版本/JDK/清单入口/镜像/jar）
+├── helm-render.yaml                # 以 values-prod 渲染出的**实际** manifests
+├── manifest.json                   # 交付清单（版本、提交、镜像、SKIP 项）
+└── SHA256SUMS                      # 逐文件校验和
 ```
+
+> **为什么必须带 `jars/`**：`docker-compose.prod.yml` 里 nexus-* 服务全是 `build:`（**从源码构建**），
+> 离线客户机若没有源码树 + Gradle/Rust 缓存就装不出来 ⇒ 交付包必须给**预构建产物**。
+> 这也是「jar 裸进程路径」存在的原因（§4.3）。
+>
+> **为什么必须带 `evidence/`**：私有化交付必问「许可怎么声明、你们豁免了什么漏洞」——
+> LICENSE/NOTICE 与 `.trivyignore`/基线必须在包里，不能只在仓库里。
+
+## 1.1 交付包生成
+
+```bash
+# 只出 chart + 清单 + 校验和（不需要 Docker）
+bash scripts/build-delivery-bundle.sh --out /tmp/delivery-bundle
+
+# 连预构建 jar 一起出（需要本机已构建过 jar）
+bash scripts/build-delivery-bundle.sh --out /tmp/delivery-bundle --with-jars
+
+# 连镜像 tar 一起出（需要本机已有这些镜像；脚本不联网）
+bash scripts/build-delivery-bundle.sh --out /tmp/delivery-bundle --with-images --with-jars
+```
+
+生成后会打印产物清单与 **SKIP 项**（如「本地缺 N 个镜像 ⇒ 离线包不完整」）——
+**SKIP 不等于通过**，必须按清单补齐后再交付。
 
 ## 2. 在有网环境生成
 
@@ -57,6 +86,32 @@ sha256sum -c SHA256SUMS        # 逐文件比对；任一 mismatch 即停止
 ```
 
 整目录拷贝到目标环境（tar/zip 均可，注意 `images/` 可能很大：8 个 nexuschain 镜像 + 基础设施镜像）。
+
+## 2.1 离线整链演练（发包前在本机自证，2026-11-12 实测全绿）
+
+```bash
+bash scripts/ops/offline-drill.sh /tmp/delivery-bundle \
+  [--old-jar <上一版本.jar>]      # 给了才会跑升级/回滚那一段
+```
+
+它只用**包里的 jar + 包里的脚本**走完整链路：
+
+| 步骤 | 实测（2026-11-12，包 v2.77.0 + v2.76.0 旧 jar） |
+|---|---|
+| `SHA256SUMS` 逐文件校验 | **PASS** |
+| 包内 `doctor.sh` 体检 | **PASS**（PASS 2 / FAIL 0 / SKIP 12；SKIP 的是**依赖源码树**的项） |
+| 包内 jar 起 gateway | **PASS**（已监听） |
+| 商户准备 | **PASS** |
+| 包内端到端验收 | **PASS 4 / FAIL 0** |
+| 包内升级/回滚演练 | **PASS 11 / FAIL 0** |
+| 合计 | **PASS 6 / FAIL 0 / SKIP 0** |
+
+> **包内 doctor 为什么大部分是 SKIP**：版本口径/卫生棘轮/调度锁/事件接线/ddl-auto 等检查需要
+> **源码树与 git 历史**，交付包里没有 ⇒ 记 SKIP（缺前置），不是 FAIL。
+> 完整体检请在源码环境跑 `scripts/doctor.sh`（本机实测 PASS 12 / FAIL 0 / SKIP 2）。
+
+> **这条演练没覆盖什么**：**真断网**未模拟（脚本本身不联网，但宿主机网络未断）——
+> 需交付方在真断网机复测；compose/helm 安装路径也未覆盖（本机 Docker daemon 不可用）。
 
 ## 4. 离线安装（形态 A）
 
@@ -89,6 +144,26 @@ docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
 ```
 
 > compose 路径的镜像来自 `images.lock` 的 `compose:` 来源行；helm 路径来自 `helm:` 来源行。
+
+### 4.3 裸进程路径（jar，客户机无 Docker / 无 Gradle）
+
+适用：客户机没有容器运行时，或不便离线构建镜像。交付包里的 `jars/` 就是为这条路径准备的。
+
+```bash
+# 1) 起网关（文件型 H2，便于重启留存；生产换 MySQL/PG 的连接串）
+JWT_SECRET='<≥32 字节随机串>' NEX_SETTLEMENT_ENABLED=false \
+java -jar jars/nexus-gateway-2.77.0.jar \
+  --spring.profiles.active=sandbox --server.port=8080 \
+  --spring.jpa.hibernate.ddl-auto=update \
+  --spring.datasource.url='jdbc:h2:file:/var/lib/nexus/gateway;MODE=MySQL'
+
+# 2) 体检与验收都直接用包内脚本
+bash scripts/doctor.sh
+NEX_API_KEY=<key> NEX_MERCHANT_ID=<id> bash scripts/acceptance-e2e.sh
+```
+
+> 这条路径在本机已整链实测（§2.1：**PASS 6 / FAIL 0 / SKIP 0**）。
+> 注意 `JWT_SECRET` 必须显式给：缺省时网关启动期随机生成，外部自签 ADMIN token 会 403。
 
 ## 5. 装完先体检（不要跳这一步）
 
@@ -135,9 +210,14 @@ curl -H "Authorization: Bearer $NEXUS_METRICS_TOKEN" http://<host>:<port>/actuat
 ## 10. 本包的已知缺口（诚实标注）
 
 1. **不产出 SBOM / CVE 状态**：仓库侧有 Trivy 门禁与基线（`config/trivy-baseline.json`），
-   但交付包**未附**逐镜像漏洞报告——需要的话由交付方在有网侧跑扫描并随包提供。
+   交付包会带上**豁免账与基线**（`evidence/`），但**不带逐镜像漏洞报告**——
+   需要的话由交付方在有网侧跑扫描后随包提供。
 2. **不包含外部依赖**：PostgreSQL/MySQL、Redis、Nacos/Sentinel/Seata/Zipkin 不在包内，
    需按 §4.1 前提自行准备（这是有意为之：把数据库选型留给客户，不绑架）。
 3. **不保证形态 B 的平台侧实现**：本包只提供输入，纳管逻辑属平台侧。
-4. **未在真实离线环境端到端验证**：本包生成流程已本机实测（chart 打包 + 19 镜像清单 + 校验和），
-   但「断网机从 bundle 起栈」整链未实测——需交付方环境配合，属 §8 同类待办。
+4. **真断网机未实测**：交付包生成 + **jar 裸进程整链**已在本机实测（§2.1，PASS 6 / FAIL 0 / SKIP 0），
+   但「宿主机完全断网」与「compose/helm 安装路径」两段**未实测**——
+   前者需交付方断网环境，后者需 Docker（本机 daemon 不可用）。
+5. **其他模块的 jar 未随包**：本地只构建了 `nexus-gateway` 一个 jar，
+   其余 5 个模块（core / signing / wallet / bridge / api-gateway）在生成时记 SKIP；
+   发包前需在构建机补齐（`./gradlew :nexus-core:bootJar …`）后重新生成包。
