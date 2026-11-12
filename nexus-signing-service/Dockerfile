@@ -86,8 +86,8 @@ RUN mkdir -p /var/log/nexus /app/leveldb /app/mpc-keyshares && \
 # === Stage 2: runtime (distroless nonroot) ===
 # gcr.io/distroless/java17-debian13:nonroot 默认用户 nonroot (UID=65532)
 # 无 shell / 无 curl / 无包管理器，攻击面最小，满足非 root 要求
-# 固定 digest（2026-11-06 取自 master run 42176885852 的 BuildKit 解析）；构建阶段 gradle 与运行阶段 distroless 必须成对升级，避免 GLIBC 不匹配。
-FROM gcr.io/distroless/java17-debian13:nonroot@sha256:97c47f913d6cbdf67e657c139e8765510bfb87eb345e25e25745ae98f70dfcb3
+# 固定 digest（2026-11-06 首钉，取自 master run 42176885852 的 BuildKit 解析；2026-11-12 上游重建 bump：97c47f91…→a854d828…，zlib1g 修复版随入，证据见 PR）；构建阶段 gradle 与运行阶段 distroless 必须成对升级，避免 GLIBC 不匹配。
+FROM gcr.io/distroless/java17-debian13:nonroot@sha256:a854d8286918eedbb5a7bc63b4a7fba18efa2926d31ec243a23fc3a70f4ce089
 WORKDIR /app
 COPY --from=builder /workspace/app.jar app.jar
 # 预建目录（属主 nonroot；详见 dir-builder 阶段注释）

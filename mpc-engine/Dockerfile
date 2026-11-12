@@ -60,7 +60,8 @@ RUN mkdir -p /app/runtime-dirs/app/data/sessions \
 # 运行阶段 cc-debian13 与构建阶段 rust:1.88-debian13 必须成对升级：glibc 版本
 # 只允许「运行镜像 >= 构建镜像」，单独升运行镜像勿降级构建链，单独升构建链勿降级运行镜像，
 # 否则运行时报 GLIBC_x.y not found。
-FROM gcr.io/distroless/cc-debian13:latest@sha256:58e12be899275afaa05f1b03051ab19037ed7f252528e57a3a9ad7e220a62578
+# 2026-11-12 上游重建 bump：cc:latest 58e12be8…→e1f5543d…（zlib1g 修复版随入，证据见 PR）。
+FROM gcr.io/distroless/cc-debian13:latest@sha256:e1f5543d45a2cd7c02a5b43dda5f0ff30729b4832113759d01ed39b0b152cddb
 
 # REQ-20 非 root：保持迁移前的 UID/GID 1000（原 `USER mpc` 同一数字），
 # 避免 compose 侧挂载属主假设变化。distroless 无 useradd，进程按数字 UID
