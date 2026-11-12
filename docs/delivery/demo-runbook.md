@@ -222,14 +222,20 @@ images: 合计 19 个（见 images.lock）
 PASS/产物清单 + SHA256SUMS
 ```
 
-包内：`charts/nexus-chain-*.tgz`、`images.lock`（19 个镜像 + 来源路径）、
-`dependencies.lock`（版本/JDK/清单入口）、`helm-render.yaml`（实际渲染结果）、
+包内：`charts/nexus-chain-*.tgz`、`jars/`（预构建 jar）、`scripts/`（全量自检/验收/演练/纳管入口）、
+`evidence/`（LICENSE/NOTICE + 安全基线 + 依赖清单）、`.env.prod.example`、`docker-compose.prod.yml`、
+`images.lock`（19 个镜像 + 来源路径）、`jars.lock`、`dependencies.lock`、`helm-render.yaml`、
 `manifest.json`、`SHA256SUMS`。
 
 > 交付方拿包后按 `docs/delivery/offline-install.md` 走：校验和 → 导入镜像 →
-> 填 19 个强制变量 → `helm install` → `doctor.sh` 体检 → 端到端验收。
+> 填 19 个强制变量 → `helm install`（或用 `jars/` 走裸进程路径）→ `doctor.sh` 体检 → 端到端验收。
 >
-> 要连镜像一起出（需本机已有这些镜像，脚本不联网）：加 `--with-images`。
+> 要连镜像一起出（需本机已有这些镜像，脚本不联网）：加 `--with-images`；
+> 要连预构建 jar 一起出：加 `--with-jars`。
+>
+> **发包前先自证一次**（只用包内资产）：
+> `bash scripts/ops/offline-drill.sh <交付包目录> [--old-jar <旧.jar>]`
+> → 2026-11-12 实测 **PASS 6 / FAIL 0 / SKIP 0**。
 
 ## 8. 时间预算（30 分钟）
 

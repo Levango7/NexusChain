@@ -89,6 +89,24 @@ case "$ACTION" in
     emit false "$rc" "升级/回滚演练未全绿"; exit 1
     ;;
 
+  compose-up|compose-down)
+    if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
+      emit false 2 "docker 不可用（未安装或 daemon 未起）⇒ 平台侧 svc 任务无法执行容器编排"
+      exit 2
+    fi
+    env_file="${NEX_ENV_FILE:-$ROOT/.env.prod}"
+    if [ ! -f "$env_file" ]; then
+      emit false 2 "缺 env 文件：$env_file（复制 .env.prod.example 并填值）"
+      exit 2
+    fi
+    sub="up"; [ "$ACTION" = "compose-down" ] && sub="down"
+    echo "== nc-task: $ACTION =="
+    docker compose -f "$ROOT/docker-compose.prod.yml" --env-file "$env_file" "$sub" -d 2>&1 | tail -n 20
+    rc="${PIPESTATUS[0]}"
+    if [ "$rc" -eq 0 ]; then emit true 0 "compose $sub 完成"; exit 0; fi
+    emit false "$rc" "compose $sub 失败"; exit 1
+    ;;
+
   status)
     detail='{}'
     code=""

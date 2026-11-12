@@ -73,6 +73,14 @@ have() { command -v "$1" >/dev/null 2>&1; }
 PY=""
 if have python3; then PY="python3"; elif have python; then PY="python"; fi
 
+# 源码树依赖项：这些检查要在**仓库/源码环境**里跑才有意义。
+# 在「交付包」这类只含产物与脚本的目录里跑时，它们必然红——那是缺前置，不是缺陷 ⇒ 记 SKIP。
+SRC_REQUIRED_IDS="version-consistency code-hygiene packaging scheduler-lock event-wiring \
+ddl-auto-gate license-headers license-policy migration-ratchet board-inbox main-tree-hygiene \
+mpc-tier-policy trivyignore-staleness"
+HAVE_SRC=0
+if git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1; then HAVE_SRC=1; fi
+
 want() { # want <id>：无 --only 则一律要；有 --only 则只跑列出的
   [ -z "$ONLY_IDS" ] && return 0
   case " $ONLY_IDS " in *" $1 "*) return 0 ;; *) return 1 ;; esac
@@ -90,6 +98,24 @@ record() { # record <id> <status> <label> <note> <logfile> <seconds>
 run() { # run <id> <label> <cmd...>
   id="$1"; label="$2"; shift 2
   want "$id" || return 0
+  # 缺源码树 ⇒ 该项 SKIP（不是 FAIL）：交付包里没有源码/版本文件，跑它必然红
+  if [ "$HAVE_SRC" -eq 0 ]; then
+    case " $SRC_REQUIRED_IDS " in
+      *" $id "*) record "$id" SKIP "$label" "需源码树（交付包/裁剪环境内不可用）" "-" "0s"; return 0 ;;
+    esac
+  fi
+  # 缺脚本 ⇒ SKIP（缺前置），不是 FAIL：交付包/裁剪检出里脚本可能不在
+  local a
+  for a in "$@"; do
+    case "$a" in
+      *.py|*.sh)
+        if [ ! -f "$a" ]; then
+          record "$id" SKIP "$label" "脚本缺失：$a" "-" "0s"
+          return 0
+        fi
+        ;;
+    esac
+  done
   log="$LOG_DIR/$id.log"
   t0="$(date +%s)"
   "$@" >"$log" 2>&1

@@ -30,13 +30,15 @@ cd "$ROOT" || exit 2
 
 OUT=""
 WITH_IMAGES=0
+WITH_JARS=0
 COMPOSE_ONLY=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --out) shift; OUT="$1" ;;
     --with-images) WITH_IMAGES=1 ;;
+    --with-jars) WITH_JARS=1 ;;
     --compose-images) COMPOSE_ONLY=1 ;;
-    -h|--help) sed -n '20,40p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help) sed -n '22,44p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "未知参数：$1（--help）" >&2; exit 2 ;;
   esac
   shift
@@ -44,7 +46,7 @@ done
 
 TS="$(date +%Y%m%d-%H%M%S)"
 [ -z "$OUT" ] && OUT="$ROOT/build/delivery-bundle-$TS"
-mkdir -p "$OUT/charts" "$OUT/images" || { echo "无法创建输出目录 $OUT" >&2; exit 2; }
+mkdir -p "$OUT/charts" "$OUT/images" "$OUT/jars" "$OUT/scripts" "$OUT/evidence" || { echo "无法创建输出目录 $OUT" >&2; exit 2; }
 
 CHART_DIR="$ROOT/deploy/helm"
 COMPOSE_FILE="$ROOT/docker-compose.prod.yml"
@@ -150,7 +152,75 @@ DEP_FILE="$OUT/dependencies.lock"
 } > "$DEP_FILE"
 
 # ---------------------------------------------------------------------------
-# 4. 可选：镜像 tar
+# 4. 预构建 jar（--with-jars）
+# ---------------------------------------------------------------------------
+# 为什么必须带 jar：docker-compose.prod.yml 里 nexus-* 服务全是 `build:`（从源码构建），
+# 离线客户机若没有源码树 + Gradle/Rust 缓存就装不出来 ⇒ 交付包必须给**预构建产物**。
+JAR_FILE="$OUT/jars.lock"
+: > "$JAR_FILE"
+if [ "$WITH_JARS" -eq 1 ]; then
+  N_JAR=0
+  for j in nexus-gateway nexus-core nexus-signing-service nexus-wallet-service \
+           nexus-bridge nexus-api-gateway; do
+    src="$(ls -1 "$ROOT/$j/build/libs/"*.jar 2>/dev/null | grep -v -- '-sources\.jar$' | grep -v -- '-javadoc\.jar$' | head -1)"
+    if [ -z "$src" ]; then
+      skip "$j 无预构建 jar（先 ./gradlew :$j:bootJar）"
+      continue
+    fi
+    cp "$src" "$OUT/jars/" 2>/dev/null || continue
+    printf '%s\t%s\t%s\n' "$(basename "$src")" "$j" "$(sha256sum "$src" | awk '{print $1}')" >> "$JAR_FILE"
+    N_JAR=$((N_JAR + 1))
+  done
+  echo "jars: 导出 $N_JAR 个预构建 jar（见 jars.lock）"
+  [ "$N_JAR" -eq 0 ] && skip "未找到任何预构建 jar ⇒ 交付包不含裸进程安装路径"
+else
+  skip "未指定 --with-jars ⇒ 交付包不含预构建 jar（离线机需自备源码+Gradle 缓存）"
+fi
+
+# 依赖清单补记 jar 段（jar 在上一步才采集）
+{
+  echo ""
+  echo "# jar<TAB>module<TAB>sha256"
+  cat "$JAR_FILE" 2>/dev/null
+} >> "$DEP_FILE"
+
+# ---------------------------------------------------------------------------
+# 5. 验收脚本 + 许可证/安全证据（始终随包）
+# ---------------------------------------------------------------------------
+# scripts/：交付方拿到包即可自证（体检 / 端到端 / 升级回滚演练 / 纳管任务入口 / 全部自检脚本）
+# （整目录带过去：doctor.sh 会跑 14 项自检，缺脚本会记 SKIP，但交付方拿到全量才有体检价值）
+if [ -d "$ROOT/scripts" ]; then
+  (cd "$ROOT" && find scripts -type f ! -path '*/__pycache__/*' ! -name '*.pyc' -print0) \
+    | while IFS= read -r -d '' f; do
+        mkdir -p "$OUT/$(dirname "$f")" 2>/dev/null
+        cp "$ROOT/$f" "$OUT/$f" 2>/dev/null
+      done
+fi
+N_SCRIPTS="$(find "$OUT/scripts" -type f 2>/dev/null | wc -l | tr -d ' ')"
+echo "scripts: 随包脚本 $N_SCRIPTS 个（含全部自检脚本与纳管入口）"
+
+# 根级交付件：env 模板 + compose 清单（交付方要照着填；prod-env 自检也靠它们）
+for f in .env.prod.example docker-compose.prod.yml; do
+  [ -f "$ROOT/$f" ] && cp "$ROOT/$f" "$OUT/$f" 2>/dev/null
+done
+
+# evidence/：许可证声明 + 已知风险/豁免账 + 依赖清单
+# （私有化交付必问「你们豁免了什么、许可怎么声明」——这些必须在包里，不能只在仓库里）
+for e in LICENSE NOTICE .trivyignore \
+         nexus-core/LICENSE \
+         config/trivy-baseline.json \
+         config/dependency-check-baseline.json \
+         scripts/java-dependencies.json; do
+  if [ -f "$ROOT/$e" ]; then
+    mkdir -p "$OUT/evidence/$(dirname "$e")" 2>/dev/null
+    cp "$ROOT/$e" "$OUT/evidence/$e" 2>/dev/null
+  fi
+done
+N_EVID="$(find "$OUT/evidence" -type f 2>/dev/null | wc -l | tr -d ' ')"
+echo "evidence: 许可证/安全基线/依赖清单 $N_EVID 份"
+
+# ---------------------------------------------------------------------------
+# 6. 可选：镜像 tar
 # ---------------------------------------------------------------------------
 if [ "$WITH_IMAGES" -eq 1 ]; then
   if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
@@ -195,7 +265,7 @@ MANIFEST="$OUT/manifest.json"
   done < "$IMAGES_FILE"
   printf '\n  ],\n'
   printf '  "imageCount": %s,\n' "$N_IMAGES"
-  printf '  "contains": ["charts", "images.lock", "dependencies.lock", "manifest.json", "SHA256SUMS", "helm-render.yaml"],\n'
+  printf '  "contains": ["charts", "scripts", "evidence", "images.lock", "dependencies.lock", "manifest.json", "SHA256SUMS", "helm-render.yaml"],\n'
   printf '  "skips": [\n'
   first=1
   printf '%b' "$SKIPS" | while IFS= read -r line; do
