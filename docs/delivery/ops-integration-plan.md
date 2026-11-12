@@ -108,6 +108,48 @@
 | 平台侧下发任务、采集日志指标、演练编排 | 运维平台 | 需对方按 §3 契约接入，**本仓不改对方代码** |
 | 跨仓联调排期与环境 | orchestrator | **待指派单点 owner**（本条请求） |
 
+### 8.1 跨仓接入包（给未来 owner 的可执行清单，无需重新推导）
+
+**平台侧需要做的（以 OpsMesh 公开 API 为例）**
+
+```bash
+# ① 设备纳管
+POST /api/v1/devices/{id}/provision
+
+# ② 下发任务（body 字段与其 api-reference.md 一致）
+POST /api/v1/tasks
+{ "agentID": "a-xxx", "type": "shell",
+  "command": "bash scripts/ops/nc-task.sh doctor",
+  "maxRetries": 3, "approvalRequired": false }
+
+# ③ 批量下发（多台设备同一动作）
+POST /api/v1/tasks/batch
+{ "targets": ["a-001","a-002"], "type": "shell", "command": "bash scripts/ops/nc-task.sh status" }
+```
+
+| 任务类型 | 命令 | 期望回执 |
+|---|---|---|
+| shell | `bash scripts/ops/nc-task.sh doctor` | `{"action":"doctor","ok":true,"exitCode":0,...}` |
+| shell | `bash scripts/ops/nc-task.sh env-check` / `version` | `ok=true` |
+| shell | `bash scripts/ops/nc-task.sh status` | `ok=true` 且 `detail.healthHttp != "000"` |
+| shell | `bash scripts/ops/nc-task.sh acceptance`（需注入 `NEX_API_KEY`/`NEX_MERCHANT_ID`） | `ok=true` |
+| shell | `bash scripts/ops/nc-task.sh upgrade-drill <旧.jar> <新.jar>` | `ok=true` |
+| shell / service | `bash scripts/ops/nc-task.sh compose-up` / `compose-down`（需 Docker + `.env.prod`） | `ok=true`；docker 不可用时 `exitCode=2` + 明确原因 |
+
+**NexusChain 侧要提供给平台的东西**：交付包（`charts/`、`images.lock`、`jars/`、`scripts/`、`evidence/`）+
+`.env.prod.example`（19 个强制变量）+ 上面这份动作表。
+
+**联调验收**：按 §7 的 J1~J4（J4 是底线：不依赖平台也能交付）。
+
+**跨仓协作方式（按对方仓的板规，非我臆造）**：
+
+- OpsMesh 仓的并发协调板规（`docs/COORDINATION-BOARD.md`）规定：唯一活日志是 `docs/CLAIMS.md`，
+  `docs/INBOX-<线名>.md` 只收**定向**消息，线名册为 `kilo / workbuddy / qoder / ZCode / trae`；
+  历史 `INBOX-LEVANGO.md` 是**只读档案**。
+- ⇒ **`nex` 不在对方线名册内**，我方**不自投**（新建 `INBOX-NEX.md` 等于在对方仓插入一条未登记的线，
+  可能触发其 `scripts/coord-gate.py` 门禁）；正确路径是**由编排者指派对方线内 owner**，
+  由该 owner 在其线内按协议 CLAIM/接入。
+
 ## 9. 边界
 
 - 本方案**不要求**任何特定平台：契约（§3）是平台中立的，换平台只需重写「谁调谁」；
