@@ -265,6 +265,17 @@ B3（compose 硬编码 container_name）、B4（0 回滚脚本）、C1（nexus-o
      = `nexus-gateway/application-dev.yml` 与 `nexus-oracle/application.yml`），ci.yml 代码卫生段
      接线；变异探针（在途新模块置 `ddl-auto: update`）实测红、移除后复绿。
 7. **本批后仍未处置**：B3（compose 硬编码 `container_name`）、C4（同族架构断言）。
+8. **2026-11-12 补记（qoder CN）：B3 / C4 均已闭，本条即最终口径**：
+   - **B3**（compose 硬编码 `container_name`）：#591（`c4a49863`）将 `docker-compose.yml` 10 处
+     `container_name:` 全改为 `${NEX_CONTAINER_PREFIX:-nexus}-*`（默认值不变，同仓多 worktree
+     并存跑栈不再互斥）；2026-11-12 对 origin/master 实测 `git grep container_name -- docker-compose.yml`
+     10/10 参数化、0 硬编码。
+   - **C4**（同族架构断言）：#611（`04839164`）落地事件接线门禁（PLAN-084 断言 A）：
+     `scripts/check-event-wiring.py` 发布点↔监听点双向静态闭合 + `config/event-wiring-exemptions.txt`
+     豁免账（首轮 6 条 → 处置后 2 条在账，到期未处置升级板面红项）+ ci.yml 接线；#629 / #642
+     按豁免账继续完成接线。
+   至此 §九 末尾「仍待处置」行所列七项（A2/B1/B2/B3/B4/C1/C4）全部有合入 PR；该行与条目 7 的
+   「仍未处置」口径自此过时，以本条为准（原文保留作历史快照）。
 
 ---
 
