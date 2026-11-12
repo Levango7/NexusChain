@@ -218,7 +218,7 @@ Blockchain is the foundational settlement layer — not the product itself. On t
 | `sla` | SLA/SLO 监控（4 种 SLA 类型 + 报告 + 仪表盘） | Wave 5 |
 | `logging` | 结构化日志增强（JSON + 脱敏 + 采样 + MDC） | Wave 5 |
 | `resilience` | 熔断降级（ConnectorCircuitBreaker） | Wave 5 |
-| `fallback` | 降级路由（FallbackRouter） | Wave 5 |
+| `fallback` | Feign 客户端降级兜底（Bridge/Signing/WalletMgmt 三下游 fallback + 3 个 fallback factory） | Wave 5 |
 | `apikey` | API Key 生命周期（创建/轮换/撤销/验证 + 权限范围） | Wave 6 |
 | `webhook` | Webhook 订阅管理（事件过滤 + 签名密钥 + 订阅配置） | Wave 6 |
 | `developer` | 开发者门户（API 文档 + 代码示例 + SDK + 测试场景） | Wave 6 |
