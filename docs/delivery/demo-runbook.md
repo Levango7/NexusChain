@@ -206,7 +206,32 @@ bash scripts/upgrade-rollback-drill.sh ../wt-old/nexus-gateway/build/libs/nexus-
 
 ---
 
-## 7. 时间预算（30 分钟）
+## 7. 生成私有化交付包（2 分钟，给客户的那一份）
+
+```bash
+bash scripts/build-delivery-bundle.sh --out /tmp/delivery-bundle
+```
+
+**期望输出**（2026-11-12 实测）：
+
+```
+版本(chart/app): 2.77.0 / 2.77.0
+chart: 已打包 charts/nexus-chain-2.77.0.tgz
+images: helm 路径已渲染（10 处 image 声明）
+images: 合计 19 个（见 images.lock）
+PASS/产物清单 + SHA256SUMS
+```
+
+包内：`charts/nexus-chain-*.tgz`、`images.lock`（19 个镜像 + 来源路径）、
+`dependencies.lock`（版本/JDK/清单入口）、`helm-render.yaml`（实际渲染结果）、
+`manifest.json`、`SHA256SUMS`。
+
+> 交付方拿包后按 `docs/delivery/offline-install.md` 走：校验和 → 导入镜像 →
+> 填 19 个强制变量 → `helm install` → `doctor.sh` 体检 → 端到端验收。
+>
+> 要连镜像一起出（需本机已有这些镜像，脚本不联网）：加 `--with-images`。
+
+## 8. 时间预算（30 分钟）
 
 | 阶段 | 用时 | 累计 |
 |---|---|---|
@@ -216,14 +241,15 @@ bash scripts/upgrade-rollback-drill.sh ../wt-old/nexus-gateway/build/libs/nexus-
 | 端到端验收 | 3 min | 23 |
 | 体检 | 2 min | 25 |
 | 指标/告警 | 3 min | 28 |
-| 收尾（停网关、归档报告） | 2 min | 30 |
+| 交付包生成（可选，给客户那份） | 2 min | 30 |
+| 收尾（停网关、归档报告） | 2 min | 32 |
 
 > 实测参考（2026-11-11，本机）：构建 3m04s（低内存参数）、网关启动 37s、商户准备 <1min、
 > 端到端验收 <30s、体检约 15s（12 项）。
 
 ---
 
-## 8. 排障速查
+## 9. 排障速查
 
 | 现象 | 原因 | 处置 |
 |---|---|---|

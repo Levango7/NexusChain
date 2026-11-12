@@ -45,6 +45,7 @@ bash scripts/doctor.sh          # 体检汇总；--json 额外产出机器可读
 | A-12 | 留言板签收门禁（无逾期未签收必读项） | `python scripts/check-agent-board-inbox.py` | rc=0 | **PASS** | `[待确认]` |
 | A-13 | 共享主树板面卫生（无「写了没提交」的留言） | `bash scripts/check-main-tree-board-hygiene.sh` | rc=0 | **PASS** | `[待确认]` |
 | A-14 | MPC 分层策略 | `bash scripts/check-mpc-tier-policy.sh` | rc=0 | **PASS** | `[待确认]` |
+| A-15 | **私有化交付包可生成** | `bash scripts/build-delivery-bundle.sh --out <dir>` | 产出 chart 包 + `images.lock` + `dependencies.lock` + `manifest.json` + `SHA256SUMS` | **PASS**（2026-11-12 实测：chart `nexus-chain-2.77.0.tgz` + **19** 个镜像清单 + 校验和；`--with-images` 因本机 Docker daemon 未起记 SKIP） | 安装 SOP 见 `docs/delivery/offline-install.md`；SBOM/CVE 报告**未附**（见该文 §10） |
 
 ---
 
