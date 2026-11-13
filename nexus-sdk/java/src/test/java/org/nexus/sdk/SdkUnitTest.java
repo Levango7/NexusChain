@@ -160,7 +160,7 @@ class SdkUnitTest {
         }
 
         @Test
-        @DisplayName("fromMnemonic() throws UnsupportedOperationException (not yet implemented)")
+        @DisplayName("fromMnemonic() throws UnsupportedOperationException (not implemented by design; use wallet-service)")
         void fromMnemonicThrowsUnsupported() {
             Wallet wallet = new Wallet(rpc, "testnet");
             assertThrows(UnsupportedOperationException.class, () ->

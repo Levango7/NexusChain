@@ -23,8 +23,9 @@ public class EmailAlertNotifier implements AlertNotifier {
 
     @Override
     public void notify(AlertEvent event) {
-        // 占位实现：当前仅记录日志，后续接入 SMTP 后补全邮件发送逻辑
-        log.info("EMAIL ALERT to [{}] rule={} metric={} value={} threshold={} severity={} message={}",
+        // 占位实现（默认关闭；仅 nexus.alert.email.enabled=true 时装配）：只记录日志、未真实发送。
+        // 日志前缀显式标注 log-only，避免运行侧把本行误读为「邮件已发出」。
+        log.info("EMAIL ALERT (log-only 占位，未真实发送) to [{}] rule={} metric={} value={} threshold={} severity={} message={}",
                 recipients,
                 event.getRuleName(),
                 event.getMetricName(),

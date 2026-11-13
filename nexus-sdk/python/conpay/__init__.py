@@ -16,6 +16,14 @@ Usage:
     balance = client.wallet.get_balance(wallet.address)
 """
 
+import warnings
+
+warnings.warn(
+    "conpay 包已弃用：broadcast 走不存在的 RPC 必失败；请迁移到 nexus_sdk 包（见 STATUS.md）",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 from .client import ConPayClient
 from .wallet import Wallet
 from .transaction import TransactionManager
