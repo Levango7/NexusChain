@@ -92,6 +92,7 @@
 | 2026-11-12 | **私有化交付包**落地：交付包按「自包含」设计，同时提供可被运维平台纳管的输入；**不绑定任何特定平台** | 交付形态 | nex（工程侧实现） | `scripts/build-delivery-bundle.sh`；`docs/delivery/offline-install.md` §0 |
 | 2026-11-12 | **交付形态工程默认**：A 自包含为默认、B 平台纳管为增量选项，**切换成本 ≈ 0**；商务 3 问待答 | 交付形态 | nex（工程默认）／商务待确认 | `docs/product/delivery-form-decision.md` |
 | 2026-11-12 | **离线交付整链自证**通过（PASS 6 / FAIL 0 / SKIP 0）：证明「交付包 = 不装 Gradle、不联网也能起、能自证、能升级回滚」 | 交付形态 | nex（本机实测） | `scripts/ops/offline-drill.sh` |
+| 2026-11-13 | 商务 3 问**暂不答** ⇒ 按工程默认 **A** 继续；跨仓联调**暂不立项、各做各的**（接入包留档备用） | 交付形态 | 编排者口径（经 nex 记录） | `docs/product/delivery-form-decision.md` §7 |
 | 2026-11-10 | #522 P0 处置路径：已修复合入，无需接管 | 资金安全 | orchestrator+核心 lane | #520（已合）；master `nexus-core/.../validate/TransactionCheck.java:62-75` 类型白名单 + `MerkleRule.java:297-298` 默认真拒绝 + `CoinbaseRule.java:73-74` 手续费守恒三件套在位 |
 
 ## 6. 使用规则
