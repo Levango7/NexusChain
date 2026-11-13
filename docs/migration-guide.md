@@ -14,17 +14,17 @@
 > `nexus-wallet-service`（8 支，最高 V8）、`nexus-consortium`（1 支，最高 V1）。
 > 升级/回滚流程见 [`docs/runbooks/upgrade-rollback.md`](runbooks/upgrade-rollback.md)。
 
-## 当前版本 v2.77.0
+## 当前版本 v2.78.0
 
-> 版本依据：`build.gradle` 中 `version = '2.77.0'`、`version.properties` 的 `versionNumber='2.77.0'`、`CHANGELOG.md` 最新**已发布**条目 `[2.77.0] - 2026-11-05`，三者一致（由 `scripts/check-version-consistency.sh` 断言）。
+> 版本依据：`build.gradle` 中 `version = '2.78.0'`、`version.properties` 的 `versionNumber='2.78.0'`、`CHANGELOG.md` 最新**已发布**条目 `[2.78.0] - 2026-11-13`，三者一致（由 `scripts/check-version-consistency.sh` 断言）。
 
-**迁移基线**（master @ v2.77.0）：V1–V66、V71、V81–V98、V103–V110，共 93 支脚本。其中 V67–V70、V72–V80 为历史上从未分配的保留号段；V99–V102 为号段空洞，永久保留不填（见[迁移版本号分配规则](#迁移版本号分配规则)与[迁移脚本清单](#迁移脚本清单)）。
+**迁移基线**（master @ v2.78.0）：V1–V66、V71、V81–V98、V103–V110，共 93 支脚本。其中 V67–V70、V72–V80 为历史上从未分配的保留号段；V99–V102 为号段空洞，永久保留不填（见[迁移版本号分配规则](#迁移版本号分配规则)与[迁移脚本清单](#迁移脚本清单)）。
 
 **下一可用迁移版本号：V111+**（master 现最高号为 V110，见[迁移脚本清单](#迁移脚本清单)与[号段沿革说明](#号段沿革说明)）。
 
 ### 通用升级步骤
 
-1. **拉取目标版本代码**：`git checkout v2.77.0`（或合并对应分支）。
+1. **拉取目标版本代码**：`git checkout v2.78.0`（或合并对应分支）。
 2. **编译验证**：`./gradlew assemble -x test`，确认 BUILD SUCCESSFUL。
 3. **启动服务**：`./gradlew :nexus-gateway:bootRun`，Flyway 会在启动时自动检测并执行未应用的增量 migration。
 4. **验证迁移结果**：查询 Flyway 历史表，确认新增版本均已执行且 `success` 为真：
@@ -76,7 +76,7 @@
 
 ## 迁移脚本清单
 
-截至 v2.77.0，清单与 `nexus-gateway/src/main/resources/db/migration/` 实际文件一一对应（共 93 支）。
+截至 v2.78.0，清单与 `nexus-gateway/src/main/resources/db/migration/` 实际文件一一对应（共 93 支）。
 
 | 版本 | 脚本 | 说明 |
 |------|------|------|
