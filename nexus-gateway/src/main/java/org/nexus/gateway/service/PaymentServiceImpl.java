@@ -359,8 +359,12 @@ public class PaymentServiceImpl implements PaymentService {
             }
             if (gatewayConfig.getChain().isSkipConfirmation()) {
                 // skip-confirmation fallback（任何 >=16 字符字符串都被当作已确认）仅限开发模式。
-                // 生产环境必须设置 nexus.chain.skip-confirmation=false，否则攻击者可凭虚假 txHash
-                // 确认任意订单。此处仅记录警告，完整防护依赖后续接入的交易详情校验（见上方 TODO）。
+                // 生产环境必须设置 nexus.chain.skip-confirmation=false，否则伪造 txHash 会跳过链上
+                // 确认这一道防线。注意：下方 P0-5 的交易详情校验（金额/收款人）在 skip-confirmation
+                // 下仍会执行，但链节点不返回交易详情时同样会降级为长度+唯一性——两道防线都不应
+                // 依赖开发档语义。
+                // （2026-11-13 修订：旧注释「见上方 TODO」已过时——该校验即下方 getTransaction 分支，
+                //   早已实现。）
                 log.warn("SECURITY: skip-confirmation=true detected in confirmPayment; orderNo={}, txHash={}. "
                         + "This accepts any well-formed txHash as confirmed. "
                         + "MUST be disabled in production (nexus.chain.skip-confirmation=false).",

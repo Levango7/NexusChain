@@ -50,8 +50,19 @@ public class Wallet {
         return new WalletInfo(address, privateKey, publicKey);
     }
 
+    /**
+     * Mnemonic import is intentionally not implemented（三端 SDK 统一口径）。
+     *
+     * <p>助记词导入与派生不在本 SDK 做（密钥管理集中于 nexus-wallet-service——与 TS/Python
+     * 两端同款设计与文档口径，见 {@code nexus-sdk/common/docs/API.md}）。请改用
+     * wallet-service API，或先用其派生出私钥后走 {@link #fromPrivateKey(String)}。</p>
+     *
+     * @throws UnsupportedOperationException always（设计性不支持，非待办缺口）
+     */
     public WalletInfo fromMnemonic(String mnemonic, String path) {
-        throw new UnsupportedOperationException("Mnemonic import not yet implemented");
+        throw new UnsupportedOperationException(
+                "Mnemonic import is not implemented by design; use nexus-wallet-service for "
+                        + "mnemonic/key management, or import a derived private key via fromPrivateKey()");
     }
 
     public BigInteger getBalance(String address) {
