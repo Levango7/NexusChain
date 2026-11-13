@@ -241,7 +241,7 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
 - **Rust `mpc-engine`**：CGGMP21（LFDT-Lockness `cggmp21` 0.6.3，Kudelski 审计）实现**真实 t-of-n 门限 ECDSA**（keygen → aux_info（Paillier）→ sign，产出可被标准 secp256k1 验证的签名）；驱动线程 actor 模型，协议消息经协调器**字节管道**中转（协调器不理解、不落盘、不修改消息，不含任何份额）。
 - **Java MPC 传输层**：`GrpcMpcTransportStub` + `MpcTransportGrpcServer` 实现**真实 gRPC over HTTP/2** 传输，支持 P2P 消息路由。
 - **份额隔离（诚实声明，2026-10-08）**：CGGMP21 路径下各引擎进程独立持有份额（NXC1 信封 AES-256-GCM 加密落盘），signing-service 不持有任何份额；GG20 时代「全部 n 方份额驻留同一进程、协调器可跨方提取任意份额」的缺陷**随该路径代码一并消失**——不再是「访问控制靠单进程信任边界」。
-  **残余诚实声明**：`cggmp-enabled=false`（dev/默认/staging 现状）时没有真实引擎，冷钱包走 FROZEN skeleton 记账（占位份额、非真实签名）；份额的 ZK 范围证明校验未接入 Java 聚合层（`MpcSignatureAggregator` TODO，依赖最终 ECDSA 整体验签兜底）；落盘密钥轮换未实现版本化（`load_storage_key_for_version` 当前忽略版本号，单密钥运行）。
+  **残余诚实声明**：`cggmp-enabled=false`（dev/默认/staging 现状）时没有真实引擎，冷钱包走 FROZEN skeleton 记账（占位份额、非真实签名）；份额的 ZK 范围证明校验未接入 Java 聚合层（`MpcSignatureAggregator` TODO，依赖最终 ECDSA 整体验签兜底）；落盘密钥轮换已带版本化（#604，2026-11-08：`load_cggmp_blob` 按信封文件头版本号选密钥；`MPC_STORAGE_KEY_V{ver}` 优先、缺失回退 `MPC_STORAGE_KEY`；轮换不再假支持）。
 - **编译状态**：已完成编译验证（`mpc-engine/target/release/mpc-engine` 产物存在；README 早期"未编译"声明过时，2026-08-27 核实）。
 - **传输安全**：gRPC mTLS 已实现（MPC-P0-02 修复，use-plaintext 默认 false）。
 
