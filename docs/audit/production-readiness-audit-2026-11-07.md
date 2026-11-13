@@ -244,6 +244,38 @@ B3（compose 硬编码 container_name）、B4（0 回滚脚本）、C1（nexus-o
    ⇒ 本条**不与之冲突**，也**不代其认领**。
 4. 因此 §十 的 M1–M4 处置**只做注释/注解级**（#580），**不做删除**：删除属破坏性 API 变更，
    且与 nex 的交付面存在交接关系（清理类变更宜在其交付验收跑通后再立单独立项）。
+5. **A2 / B2 / B1（文档侧）已由 #588（`410496dc`）收口**（nexus-gateway 模块）：prod 显式
+   `signature-legacy-enabled: false`；3DS `simulated-challenge-enabled` base 默认改 false、
+   dev/sandbox 显式 true；B1 当时处置为 values-prod 注释化（默认值未动，理由为
+   `RedisReplayNonceStore` fail-closed 权衡）+ helm 注入示例。
+6. **2026-11-10 本批收口（审计 §九 剩余项）**：
+   - **A2 补齐 nexus-api-gateway 侧**：新增 `nexus-api-gateway/src/main/resources/application-prod.yml`
+     显式 `legacy-headers-enabled: false` / `signature-legacy-enabled: false`（该模块此前**无**
+     prod profile 文件；旧 `X-Nexus-*` 头仓内零生产方——仅 `AuthenticationFilter` 自身与其测试引用，
+     在途客户端 `demo/run-demo.js` / `WebConfig` / `WebhookController` / `DeveloperPortalService` /
+     `PaymentEventListener` 均发 `X-NexusChain-*` 新头；反向测试 `AuthenticationFilterTest:389`
+     断言 `=false` 时必须拒绝）。
+   - **B1 收口**：`deploy/helm/values-prod.yaml` `nexus-gateway.extraEnv` 显式
+     `NEXUS_REPLAY_STORE: "redis"`（本文件是多副本 prod 渲染源，replicaCount=3；fail-closed
+     权衡与前置条件写入同段注释）。
+   - **B4**：`consortium/application.yml` 「可回滚」自述订正为「受控、可审计」+ 真实回滚口径
+     （本模块迁移集破坏性 DDL 实测 grep 零命中；PG 侧高危迁移回滚脚本
+     `migrations/pg/001-finality-quarantine-invalid-checkpoint-hash.rollback.sql` 1 个）。
+   - **C1**：新增 `scripts/check-ddl-auto-gate.py`（property 行精确匹配 + 8 例自测 + allowed 集
+     = `nexus-gateway/application-dev.yml` 与 `nexus-oracle/application.yml`），ci.yml 代码卫生段
+     接线；变异探针（在途新模块置 `ddl-auto: update`）实测红、移除后复绿。
+7. **本批后仍未处置**：B3（compose 硬编码 `container_name`）、C4（同族架构断言）。
+8. **2026-11-12 补记（qoder CN）：B3 / C4 均已闭，本条即最终口径**：
+   - **B3**（compose 硬编码 `container_name`）：#591（`c4a49863`）将 `docker-compose.yml` 10 处
+     `container_name:` 全改为 `${NEX_CONTAINER_PREFIX:-nexus}-*`（默认值不变，同仓多 worktree
+     并存跑栈不再互斥）；2026-11-12 对 origin/master 实测 `git grep container_name -- docker-compose.yml`
+     10/10 参数化、0 硬编码。
+   - **C4**（同族架构断言）：#611（`04839164`）落地事件接线门禁（PLAN-084 断言 A）：
+     `scripts/check-event-wiring.py` 发布点↔监听点双向静态闭合 + `config/event-wiring-exemptions.txt`
+     豁免账（首轮 6 条 → 处置后 2 条在账，到期未处置升级板面红项）+ ci.yml 接线；#629 / #642
+     按豁免账继续完成接线。
+   至此 §九 末尾「仍待处置」行所列七项（A2/B1/B2/B3/B4/C1/C4）全部有合入 PR；该行与条目 7 的
+   「仍未处置」口径自此过时，以本条为准（原文保留作历史快照）。
 
 ---
 

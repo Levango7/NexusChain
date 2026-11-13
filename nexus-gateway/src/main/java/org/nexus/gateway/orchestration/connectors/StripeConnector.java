@@ -88,7 +88,7 @@ public class StripeConnector implements PaymentConnector {
         }
         if (!hasCredentials()) {
             log.error("[Stripe] api-key 缺失且 dry-run 已关闭，拒绝创建支付（fail-closed）");
-            return ConnectorPaymentResult.fail(CREDENTIALS_MISSING);
+            return ConnectorPaymentResult.fail(CREDENTIALS_MISSING, FailureKind.CONFIG);
         }
 
         try {
@@ -113,7 +113,8 @@ public class StripeConnector implements PaymentConnector {
             return ConnectorPaymentResult.fail("Stripe returned empty response");
         } catch (RuntimeException e) {
             log.error("[Stripe] createPayment failed: {}", e.getMessage());
-            return ConnectorPaymentResult.fail("Stripe error: " + e.getMessage());
+            return ConnectorPaymentResult.fail("Stripe error: " + e.getMessage(),
+                    ConnectorFailureClassifier.classify(e));
         }
     }
 

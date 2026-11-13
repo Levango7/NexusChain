@@ -14,17 +14,21 @@ import java.time.LocalDateTime;
  *
  * <h2>本类的指标必须「有人喂」</h2>
  *
- * <p>本类只负责 <b>注册</b> 指标；注册不等于有数据。2026-11-07 审计发现本类
+ * <p>本类只负责 <b>注册</b> 指标；注册不等于有数据。2026-11-07 审计曾发现本类
  * 注册的 7 个 meter <b>全仓零调用点</b>：因为注册发生在 {@code @Component} 的
- * 构造器里，{@code /actuator/prometheus} <b>能看到这些序列、值恒为 0</b>——
- * 比「没有指标」更危险，因为面板看起来是通的。</p>
+ * 构造器里，{@code /actuator/prometheus} 能看到这些序列、值恒为 0——比「没有指标」
+ * 更危险，因为面板看起来是通的。<b>该缺陷已由 #577 修复</b>：7 个 meter 在
+ * {@code OrderServiceImpl} / {@code PaymentServiceImpl} /
+ * {@code WebhookDeliveryService} 接线，并有 {@code PaymentMetricsTest} 抓取断言与
+ * {@code PaymentServiceImplConfirmBindingTest} 绑定断言。</p>
  *
  * <p>同类缺陷在本仓已有先例：{@code nexus_3ds_auth_total} 曾在
  * {@code SecurityMetricsRecorder} 里「注册后从来没人喂过，此前恒为 0」，
- * 后由 {@code ThreeDsAuthCompletedObserver} 补上调用点修复。</p>
+ * 后由 {@code ThreeDsAuthCompletedObserver} 补上调用点修复；该类剩余的
+ * 两个加密 meter 由 #584 补齐。</p>
  *
- * <p>因此：<b>新增 meter 时，同一 PR 内必须同时给出调用点</b>；
- * 调用点分布见 {@code docs/ops/slo.md} 的「立不起来的 SLO」一节。</p>
+ * <p>因此：<b>新增 meter 时，同一 PR 内必须同时给出调用点，并同步更新
+ * {@code docs/ops/slo.md}</b>；SLO 口径与指标名以该文为准。</p>
  */
 @Component
 public class PaymentMetrics {

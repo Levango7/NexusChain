@@ -30,6 +30,11 @@ public class ConnectorPaymentResult {
     private SubmissionStatus submissionStatus;
     /** 最终性状态（OPTIMISTIC/FINALIZING/FINALIZED/UNKNOWN），默认 OPTIMISTIC。 */
     private FinalityStatus finalityStatus;
+    /**
+     * 失败分类（仅失败时有意义）。缺省 {@link FailureKind#DECLINE}：
+     * 分不清时不计入熔断，避免误伤活着的收款通道。
+     */
+    private FailureKind failureKind;
 
     public static ConnectorPaymentResult ok(String connectorPaymentId, PaymentStatus status) {
         ConnectorPaymentResult r = new ConnectorPaymentResult();
@@ -47,13 +52,25 @@ public class ConnectorPaymentResult {
         return r;
     }
 
+    /**
+     * 失败结果，分类缺省 {@link FailureKind#DECLINE}（不熔断）。
+     * 只有能给出结构化分类的调用点才应使用 {@link #fail(String, FailureKind)}。
+     */
     public static ConnectorPaymentResult fail(String errorMessage) {
+        return fail(errorMessage, FailureKind.DECLINE);
+    }
+
+    /**
+     * 带失败分类的结果。{@code failureKind} 为 null 时按 {@link FailureKind#DECLINE} 处理。
+     */
+    public static ConnectorPaymentResult fail(String errorMessage, FailureKind failureKind) {
         ConnectorPaymentResult r = new ConnectorPaymentResult();
         r.success = false;
         r.status = PaymentStatus.FAILED;
         r.errorMessage = errorMessage;
         r.submissionStatus = SubmissionStatus.REJECTED;
         r.finalityStatus = FinalityStatus.UNKNOWN;
+        r.failureKind = failureKind == null ? FailureKind.DECLINE : failureKind;
         return r;
     }
 
@@ -109,4 +126,14 @@ public class ConnectorPaymentResult {
     public void setSubmissionStatus(SubmissionStatus submissionStatus) { this.submissionStatus = submissionStatus; }
     public FinalityStatus getFinalityStatus() { return finalityStatus; }
     public void setFinalityStatus(FinalityStatus finalityStatus) { this.finalityStatus = finalityStatus; }
+
+    /** 失败分类；未设置时返回 {@link FailureKind#DECLINE}（不计入熔断）。 */
+    public FailureKind getFailureKind() {
+        return failureKind == null ? FailureKind.DECLINE : failureKind;
+    }
+
+    /** 设置失败分类；传 null 等价于 {@link FailureKind#DECLINE}。 */
+    public void setFailureKind(FailureKind failureKind) {
+        this.failureKind = failureKind == null ? FailureKind.DECLINE : failureKind;
+    }
 }

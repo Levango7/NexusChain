@@ -584,13 +584,15 @@ nexus:
     batch-size: 100
 
   # === 任务 #29：Connector 级熔断降级增强 ===
-  # 细粒度熔断策略配置 + 降级路由 + Connector 级熔断器。
+  # 细粒度熔断策略配置 + Connector 级熔断器。
   # 与现有 resilience4j: 节共存：resilience4j 管理对链节点的 HTTP 调用，
-  # 此处管理 Connector（支付通道）级别的熔断与降级路由。
+  # 此处管理 Connector（支付通道）级别的熔断。
   resilience:
     # Connector 级熔断器配置：默认参数 + 按 connector 类型独立覆盖
+    # （键名与 ConnectorCircuitBreakerConfig.defaultConfig 松弛绑定对齐——
+    # 此前写 default: 实际不绑定，2026-11-11 接线时修正）
     connector:
-      default:
+      default-config:
         failure-rate-threshold: 50
         wait-duration-in-open-state: 30s
         sliding-window-size: 10
@@ -601,17 +603,6 @@ nexus:
           wait-duration-in-open-state: 60s
         consortium:
           failure-rate-threshold: 40
-        stripe:
-          failure-rate-threshold: 60
-          wait-duration-in-open-state: 20s
-    # 降级路由策略：主 Connector 熔断时按列表顺序选择备选 Connector
-    fallback:
-      chain: ["consortium", "mock"]
-      consortium: ["chain", "mock"]
-      stripe: ["adyen", "http_psp", "mock"]
-      adyen: ["stripe", "http_psp", "mock"]
-      wechat: ["alipay", "http_psp", "mock"]
-      alipay: ["wechat", "http_psp", "mock"]
 
   # === 任务 #27：SLA/SLO 监控配置 ===
   # SlaMonitorService 定时从 MeterRegistry 读取指标数据，按 SlaTarget 定义计算

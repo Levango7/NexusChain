@@ -3,6 +3,7 @@ package org.nexus.gateway.resilience;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
+import org.nexus.gateway.orchestration.connector.FailureKind;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -22,7 +23,7 @@ import java.util.concurrent.TimeUnit;
  * （{@link ConnectorCircuitBreakerConfig#getEffectiveConfig(String)}）。
  * 分桶键与配置键分离：同类型的多个实例（如动态 PSP）各自独立熔断，互不牵连。
  * 支持状态转换 CLOSED → OPEN → HALF_OPEN → CLOSED。
- * 熔断时由 {@link FallbackRouter} 自动路由到备选 Connector。</p>
+ * 熔断状态由编排层 failover 循环消费，候选生成时跳过已熔断 Connector。</p>
  *
  * <p>使用 {@link CircuitBreakerRegistry} 管理多个熔断器实例，
  * 配置来源于 {@link ConnectorCircuitBreakerConfig}，支持按 connector 类型独立覆盖。</p>
@@ -144,6 +145,21 @@ public class ConnectorCircuitBreaker {
     }
 
     /**
+     * 记录一次已分类的失败结果（支付路径专用，板 20261110-1511 裁决 ③ 接线）。
+     *
+     * <p>仅 {@link FailureKind#UNAVAILABLE} 计入熔断失败；DECLINE / CONFIG / null
+     * 一律不计（见 {@link FailureKind} 的资金路径硬规则：连续业务拒绝不得熔掉
+     * 健康通道）。支付结果路径没有真实异常对象，Resilience4j 事件流要求非 null
+     * throwable，故以分类合成 cause。</p>
+     */
+    public void recordClassifiedFailure(String connectorId, long durationNanos, FailureKind kind) {
+        if (!FailureKind.countsAsBreakerFailure(kind)) {
+            return;
+        }
+        recordFailure(connectorId, durationNanos, new ClassifiedFailureException(kind));
+    }
+
+    /**
      * 重置指定 connector 的熔断器到 CLOSED 状态（强制恢复）。
      *
      * @param connectorId connector 实例标识（分桶键）
@@ -166,7 +182,7 @@ public class ConnectorCircuitBreaker {
     }
 
     /**
-     * 获取底层 CircuitBreakerRegistry（供 {@link ResilienceMetrics} 注册指标使用）。
+     * 获取底层 CircuitBreakerRegistry 实例。
      *
      * @return CircuitBreakerRegistry 实例
      */
@@ -182,5 +198,22 @@ public class ConnectorCircuitBreaker {
      */
     public CircuitBreaker getCircuitBreaker(String connectorId) {
         return circuitBreakers.get(connectorId);
+    }
+
+    /**
+     * 支付结果路径已分类失败的合成 cause（该路径无真实异常对象）。
+     * 仅进入 Resilience4j 事件流，供运维追溯熔断触发原因，不作他用。
+     */
+    public static final class ClassifiedFailureException extends RuntimeException {
+        private final FailureKind kind;
+
+        ClassifiedFailureException(FailureKind kind) {
+            super("Connector call failed (classified " + kind + ")");
+            this.kind = kind;
+        }
+
+        public FailureKind kind() {
+            return kind;
+        }
     }
 }

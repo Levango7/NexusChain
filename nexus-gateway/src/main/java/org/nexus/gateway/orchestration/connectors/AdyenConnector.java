@@ -82,7 +82,7 @@ public class AdyenConnector implements PaymentConnector {
         }
         if (!hasCredentials()) {
             log.error("[Adyen] api-key 缺失且 dry-run 已关闭，拒绝创建支付（fail-closed）");
-            return ConnectorPaymentResult.fail(CREDENTIALS_MISSING);
+            return ConnectorPaymentResult.fail(CREDENTIALS_MISSING, FailureKind.CONFIG);
         }
 
         try {
@@ -108,7 +108,8 @@ public class AdyenConnector implements PaymentConnector {
             return ConnectorPaymentResult.fail("Adyen returned empty response");
         } catch (RuntimeException e) {
             log.error("[Adyen] createPayment failed: {}", e.getMessage());
-            return ConnectorPaymentResult.fail("Adyen error: " + e.getMessage());
+            return ConnectorPaymentResult.fail("Adyen error: " + e.getMessage(),
+                    ConnectorFailureClassifier.classify(e));
         }
     }
 

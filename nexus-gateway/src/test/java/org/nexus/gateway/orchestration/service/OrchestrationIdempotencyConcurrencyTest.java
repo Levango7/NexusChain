@@ -93,7 +93,7 @@ class OrchestrationIdempotencyConcurrencyTest {
 
         service = new OrchestrationService(repo, routingEngine, mock(ConnectorRegistry.class),
                 store, mock(OrchestrationWebhookDispatcher.class), riskService, null,
-                mock(MetricsCollector.class), mock(ApplicationEventPublisher.class));
+                mock(MetricsCollector.class), mock(ApplicationEventPublisher.class), null, null);
     }
 
     @Test

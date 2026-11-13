@@ -183,7 +183,8 @@ public class ConsortiumConnector implements PaymentConnector {
             return ConnectorPaymentResult.ok(connectorId, PaymentStatus.PROCESSING, txHash);
         } catch (RuntimeException e) {
             log.error("Consortium payment failed: {}", e.getMessage());
-            return ConnectorPaymentResult.fail("Consortium settlement error: " + e.getMessage());
+            return ConnectorPaymentResult.fail("Consortium settlement error: " + e.getMessage(),
+                    ConnectorFailureClassifier.classify(e));
         }
     }
 

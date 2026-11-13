@@ -217,8 +217,8 @@ Blockchain is the foundational settlement layer — not the product itself. On t
 | `ops` | 运维管理 API（配置/缓存/线程池/连接池/监控） | Wave 5 |
 | `sla` | SLA/SLO 监控（4 种 SLA 类型 + 报告 + 仪表盘） | Wave 5 |
 | `logging` | 结构化日志增强（JSON + 脱敏 + 采样 + MDC） | Wave 5 |
-| `resilience` | 熔断降级（ConnectorCircuitBreaker + ResilienceMetrics） | Wave 5 |
-| `fallback` | 降级路由（FallbackRouter） | Wave 5 |
+| `resilience` | 熔断降级（ConnectorCircuitBreaker） | Wave 5 |
+| `fallback` | Feign 客户端降级兜底（Bridge/Signing/WalletMgmt 三下游 fallback + 3 个 fallback factory） | Wave 5 |
 | `apikey` | API Key 生命周期（创建/轮换/撤销/验证 + 权限范围） | Wave 6 |
 | `webhook` | Webhook 订阅管理（事件过滤 + 签名密钥 + 订阅配置） | Wave 6 |
 | `developer` | 开发者门户（API 文档 + 代码示例 + SDK + 测试场景） | Wave 6 |
@@ -273,7 +273,7 @@ Blockchain is the foundational settlement layer — not the product itself. On t
 - **运维管理 API**（Wave 5）：OpsController（配置/缓存/线程池/连接池/系统监控）（`ops` 包）
 - **SLA/SLO 监控**（Wave 5）：SlaTarget + SlaMonitorService + SlaReportService（4 种 SLA 类型 + 报告生成 + 仪表盘）（`sla` 包）
 - **结构化日志增强**（Wave 5）：SensitiveDataFilter + LogSamplingFilter + BusinessLogContext（JSON 格式 + 敏感脱敏 + 采样 + MDC 上下文）（`logging` 包）
-- **熔断降级增强**（Wave 5）：ConnectorCircuitBreaker + FallbackRouter + ResilienceMetrics（Connector 级熔断 + 降级路由 + 指标暴露）（`resilience` + `fallback` 包）
+- **熔断降级增强**（Wave 5）：ConnectorCircuitBreaker（Connector 级熔断）（`resilience` 包）
 - **API Key 生命周期管理**（Wave 6）：ApiKey + ApiKeyService（创建/轮换/撤销/验证 + 权限范围）+ ApiKeyController（`apikey` 包）
 - **Webhook 订阅管理**（Wave 6）：WebhookSubscription + WebhookSubscriptionService + Controller（事件类型过滤 + 签名密钥 + 订阅配置）（`webhook` 包）
 - **开发者门户 API**（Wave 6）：DeveloperPortalService + DeveloperPortalController（API 文档元数据 + 代码示例 + SDK 信息 + 测试场景）（`developer` 包）

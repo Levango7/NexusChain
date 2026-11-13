@@ -16,7 +16,11 @@ spring:
     show-sql: true # enable jpa sql logs
 
   # === REQ-21：引入 Flyway 数据库迁移管理 ===
-  # 替代 Hibernate ddl-auto 进行 schema 演进管理，确保生产环境 schema 受控、可审计、可回滚。
+  # 替代 Hibernate ddl-auto 进行 schema 演进管理，确保生产环境 schema 受控、可审计。
+  # 回滚口径（审计 B4，2026-11-10 订正原「可回滚」自述）：本模块迁移集全量为
+  # 增量建表/加列/种子数据，破坏性 DDL（DROP/DELETE/TRUNCATE）实测 grep 零命中，
+  # 回滚以备份恢复兜底；PG 侧 finality/quarantine 高危迁移另有专用回滚脚本
+  # migrations/pg/001-finality-quarantine-invalid-checkpoint-hash.rollback.sql。
   # baselineOnMigrate=true：对已存在 schema 的数据库建立 baseline，避免与既有 schema 冲突。
   flyway:
     enabled: true

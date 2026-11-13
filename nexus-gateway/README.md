@@ -112,7 +112,7 @@ SDK 对外提供 Java / TypeScript / Python / Go 四语言接入。
 | 风控与限额 | `/api/v1/risk/*`、`/api/v1/limits` | 风控事件（`events`）；账户联动（`link`）；余额告警（`balance-alert`）；限额 |
 | 支付安全 | `/api/v1/security/*` | 3DS（`3ds`）；支付密码（`payment-password`）；加密与重放保护端点 |
 | 签名审批 | `/api/v1/signing/approvals` | 大额签名多签决策的网关入口（ADMIN + 调用者 JWT 透传；审批人角色与白名单由 signing-service 判定） |
-| 运维可观测 | `/api/v1/alerts`、`/api/v1/ops`、`/api/v1/sla`、`/api/v1/resilience` | 告警；运维；SLA；熔断指标 |
+| 运维可观测 | `/api/v1/alerts`、`/api/v1/ops`、`/api/v1/sla` | 告警；运维；SLA |
 | 商户服务 | `/api/v1/merchants/{id}/dashboard`、`/api/v1/onboarding`、`/api/v1/qr`、`/api/v1/split`、`/api/v1/escrow`、`/api/v1/voidreversal`、`/api/v1/sandbox`、`/api/sandbox/*` | 仪表盘；入驻；扫码；分账；担保/预授权；撤销冲正；沙箱工具（`/api/sandbox/{health,config-check,callback-simulator}` 不在 API Key 拦截范围） |
 | 开放平台治理 | `/api/v1/api-keys`、`/api/v1/api-version`、`/api/v1/data-exports`、`/api/v1/developer` | Key 管理；版本策略；数据导出；开发者门户 |
 | v2 版本 | `/api/v2/orders`、`/api/v2/payments`、`/api/v2/merchants`、`/api/v2/tenants` | v2 订单/支付/商户/租户 |

@@ -60,12 +60,59 @@ jobs:
           # shallow clone 下取不到历史会静默跳过 ⇒ 必须全量历史（146 commits，成本忽略不计）
           fetch-depth: 0
 
+      - name: 探测 Trivy 安装路径的真实端点（只定位失败原因，不改判定口径）
+        # 端点以 install.sh 源码为准（见 scripts/security/trivy-fetch-diagnostics.sh 头注释）：
+        # github.com 的 release 页（需响应体含 "tag_name":"）+ get.trivy.dev 资产 + github.com 校验和。
+        # 不访问 api.github.com——install.sh 从不访问它，打那里测不到真实失败路径。
+        run: bash scripts/security/trivy-fetch-diagnostics.sh gate
+
       - name: 安装固定版本 Trivy（v0.76.2）
         # 与后续 trivy-action step 共用同一个二进制；版本锁定，不用浮动 tag。
-        uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514  # v0.2.6
-        with:
-          version: v0.76.2
-          cache: false
+        # 2026-11-09 硬化（板 0349 同签名复发处置）：去 setup-trivy action——其内部
+        # 「Install Trivy binary」步曾 found version 后静默 exit 1（~11.5s），改为
+        # pinned 直链下载 + 校验和核对 + 有界重试（仿本文件 docker build 步先例）。
+        # 更新策略：随依赖升级一并更新，需安全负责人审批。
+        id: trivy-fetch
+        env:
+          TRIVY_VERSION: "0.76.2"
+        run: |
+          set -euo pipefail
+          BASE="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}"
+          TGZ="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          SUM="trivy_${TRIVY_VERSION}_checksums.txt"
+          DIR="${RUNNER_TEMP}/trivy-pinned"
+          mkdir -p "$DIR"
+          for attempt in 1 2 3; do
+            if curl -fsSL --retry 3 --retry-delay 5 --retry-connrefused -o "$DIR/$TGZ" "$BASE/$TGZ" \
+               && curl -fsSL --retry 3 --retry-delay 5 --retry-connrefused -o "$DIR/$SUM" "$BASE/$SUM"; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::Trivy v${TRIVY_VERSION} 直链下载连续 3 次失败——判定为取数链路故障"
+              exit 1
+            fi
+            echo "::warning::Trivy 下载第 ${attempt} 次失败（疑似链路抖动），15s 后重试"
+            sleep 15
+          done
+          EXPECTED=$(awk -v t="$TGZ" '$2 == t {print $1}' "$DIR/$SUM")
+          ACTUAL=$(sha256sum "$DIR/$TGZ" | awk '{print $1}')
+          if [ -z "$EXPECTED" ]; then
+            echo "::error::校验和表中未找到 $TGZ 条目"
+            exit 1
+          fi
+          if [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "::error::Trivy 校验和不匹配（期望 $EXPECTED，实际 $ACTUAL）"
+            exit 1
+          fi
+          tar -xzf "$DIR/$TGZ" -C "$DIR"
+          echo "$DIR" >> "$GITHUB_PATH"
+          "$DIR/trivy" --version
+
+      - name: 安装失败时复采 Trivy 端点证据（不掩盖原始失败）
+        # setup-trivy 失败时只会吐 `crit unable to find 'v0.76.2'` 或直接 exit 1，
+        # 不打印 HTTP 状态和 curl 错误。用同一份探针复采，把 rc/stderr 留下。
+        if: failure() && steps.trivy-fetch.outcome == 'failure'
+        run: bash scripts/security/trivy-fetch-diagnostics.sh diagnose
 
       - name: 刷新 Trivy 漏洞库并断言新鲜度（超过 7 天直接判红）
         # 失明必须以红灯表现：每次运行都强制下载最新 DB，并读出 UpdatedAt/Version。
@@ -285,11 +332,57 @@ jobs:
       - name: Checkout 代码
         uses: actions/checkout@v5
 
+      - name: 探测 Trivy 安装路径的真实端点（只定位失败原因，不改判定口径）
+        # 端点以 install.sh 源码为准（见 scripts/security/trivy-fetch-diagnostics.sh 头注释）：
+        # github.com 的 release 页（需响应体含 "tag_name":"）+ get.trivy.dev 资产 + github.com 校验和。
+        # 不访问 api.github.com——install.sh 从不访问它，打那里测不到真实失败路径。
+        run: bash scripts/security/trivy-fetch-diagnostics.sh gate
+
       - name: 安装固定版本 Trivy（v0.76.2）
-        uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514  # v0.2.6
-        with:
-          version: v0.76.2
-          cache: false
+        # 本 job 直接用 trivy 下 DB；版本锁定，不用浮动 tag。
+        # 2026-11-09 硬化（板 0349 同签名复发处置）：去 setup-trivy action——其内部
+        # 「Install Trivy binary」步曾 found version 后静默 exit 1（~11.5s），改为
+        # pinned 直链下载 + 校验和核对 + 有界重试（仿本文件 docker build 步先例）。
+        # 更新策略：随依赖升级一并更新，需安全负责人审批。
+        id: trivy-fetch
+        env:
+          TRIVY_VERSION: "0.76.2"
+        run: |
+          set -euo pipefail
+          BASE="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}"
+          TGZ="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          SUM="trivy_${TRIVY_VERSION}_checksums.txt"
+          DIR="${RUNNER_TEMP}/trivy-pinned"
+          mkdir -p "$DIR"
+          for attempt in 1 2 3; do
+            if curl -fsSL --retry 3 --retry-delay 5 --retry-connrefused -o "$DIR/$TGZ" "$BASE/$TGZ" \
+               && curl -fsSL --retry 3 --retry-delay 5 --retry-connrefused -o "$DIR/$SUM" "$BASE/$SUM"; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::Trivy v${TRIVY_VERSION} 直链下载连续 3 次失败——判定为取数链路故障"
+              exit 1
+            fi
+            echo "::warning::Trivy 下载第 ${attempt} 次失败（疑似链路抖动），15s 后重试"
+            sleep 15
+          done
+          EXPECTED=$(awk -v t="$TGZ" '$2 == t {print $1}' "$DIR/$SUM")
+          ACTUAL=$(sha256sum "$DIR/$TGZ" | awk '{print $1}')
+          if [ -z "$EXPECTED" ]; then
+            echo "::error::校验和表中未找到 $TGZ 条目"
+            exit 1
+          fi
+          if [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "::error::Trivy 校验和不匹配（期望 $EXPECTED，实际 $ACTUAL）"
+            exit 1
+          fi
+          tar -xzf "$DIR/$TGZ" -C "$DIR"
+          echo "$DIR" >> "$GITHUB_PATH"
+          "$DIR/trivy" --version
+
+      - name: 安装失败时复采 Trivy 端点证据（不掩盖原始失败）
+        if: failure() && steps.trivy-fetch.outcome == 'failure'
+        run: bash scripts/security/trivy-fetch-diagnostics.sh diagnose
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -306,20 +399,59 @@ jobs:
             --fingerprint-out "$GITHUB_WORKSPACE/trivy-db-fingerprint.json"
 
       - name: 打包共享库 DB
+        # retention 7 天 = DB 新鲜度预算（--max-age-days 7）：超过 7 天的 DB
+        # 本就会被腿内新鲜度断言判红，保留期再长只是让「重跑失败项」下载到
+        # 一个必判红的陈旧库，毫无收益；7 天是重跑窗口的实际可用上限，
+        # 也与腿指纹 artifact（retention-days: 7）同口径。
+        # 2026-11-09 #617 通知：原 1 天使「只重跑失败 job」在 24h 后永久失效。
         uses: actions/upload-artifact@v7
         with:
           name: trivy-db-shared
           path: .cache/trivy/db
-          retention-days: 1
+          retention-days: 7
 
       - name: 打包共享库指纹
         # 单独一个 artifact：download-artifact 会按 artifact 根目录展开，
         # 把 DB 与指纹分开传，落盘路径才是确定性的。
+        # 保留期与 trivy-db-shared 同为 7 天（同寿命窗口，见上一打包步注释）。
         uses: actions/upload-artifact@v7
         with:
           name: trivy-db-fingerprint
           path: trivy-db-fingerprint.json
-          retention-days: 1
+          retention-days: 7
+
+  # ============================================================
+  # 2-0b. 门禁脚本单测（**PR 流程内真跑**，2026-11-07）
+  # ------------------------------------------------------------
+  # 背景：`scripts/security/test_trivy_baseline_gate.py` 与
+  # `test_trivy_db_consistency.py` 早已存在，但只被注释提到、从未在任何
+  # workflow 里执行 —— 即「断言逻辑本身没有回归保护」。本 job 把它们接进
+  # PR 流程：脚本/基线判定口径一旦被改坏，先在单测里红，而不是等到 13 腿
+  # 扫描或聚合 job 上用真实镜像来发现。
+  # 只跑单测（不装 trivy、不下载 DB、不构建镜像），耗时秒级。
+  # ============================================================
+  trivy-gate-unit-tests:
+    timeout-minutes: 5
+    name: Trivy Gate Unit Tests
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
+      - name: 单测 trivy-baseline-gate（fixture 回归）
+        # 退出码 1 = 有用例失败；脚本自身打印 [PASS]/[FAIL] 明细。
+        run: python3 scripts/security/test_trivy_baseline_gate.py
+
+      - name: 单测 trivy-db-consistency（同源绿 / 异源红 / 缺腿红）
+        run: python3 scripts/security/test_trivy_db_consistency.py
 
   # 2. Trivy Docker 镜像扫描（**我方构建产物 → PR 阻断路径**）
   # -----------------------------------------------------------------------------
@@ -359,24 +491,82 @@ jobs:
           # 同 trivy-fs-scan：门禁的 addedAt 防自续锚点需要全量 git 历史
           fetch-depth: 0
 
+      - name: 探测 Trivy 安装路径的真实端点（只定位失败原因，不改判定口径）
+        # 端点以 install.sh 源码为准（见 scripts/security/trivy-fetch-diagnostics.sh 头注释）：
+        # github.com 的 release 页（需响应体含 "tag_name":"）+ get.trivy.dev 资产 + github.com 校验和。
+        # 不访问 api.github.com——install.sh 从不访问它，打那里测不到真实失败路径。
+        run: bash scripts/security/trivy-fetch-diagnostics.sh gate
+
       - name: 安装固定版本 Trivy（v0.76.2）
         # 与后续 trivy-action step 共用同一个二进制；版本锁定，不用浮动 tag。
-        uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514  # v0.2.6
-        with:
-          version: v0.76.2
-          cache: false
+        # 2026-11-09 硬化（板 0349 同签名复发处置）：去 setup-trivy action——其内部
+        # 「Install Trivy binary」步曾 found version 后静默 exit 1（~11.5s），改为
+        # pinned 直链下载 + 校验和核对 + 有界重试（仿本文件 docker build 步先例）。
+        # 更新策略：随依赖升级一并更新，需安全负责人审批。
+        id: trivy-fetch
+        env:
+          TRIVY_VERSION: "0.76.2"
+        run: |
+          set -euo pipefail
+          BASE="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}"
+          TGZ="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          SUM="trivy_${TRIVY_VERSION}_checksums.txt"
+          DIR="${RUNNER_TEMP}/trivy-pinned"
+          mkdir -p "$DIR"
+          for attempt in 1 2 3; do
+            if curl -fsSL --retry 3 --retry-delay 5 --retry-connrefused -o "$DIR/$TGZ" "$BASE/$TGZ" \
+               && curl -fsSL --retry 3 --retry-delay 5 --retry-connrefused -o "$DIR/$SUM" "$BASE/$SUM"; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::Trivy v${TRIVY_VERSION} 直链下载连续 3 次失败——判定为取数链路故障"
+              exit 1
+            fi
+            echo "::warning::Trivy 下载第 ${attempt} 次失败（疑似链路抖动），15s 后重试"
+            sleep 15
+          done
+          EXPECTED=$(awk -v t="$TGZ" '$2 == t {print $1}' "$DIR/$SUM")
+          ACTUAL=$(sha256sum "$DIR/$TGZ" | awk '{print $1}')
+          if [ -z "$EXPECTED" ]; then
+            echo "::error::校验和表中未找到 $TGZ 条目"
+            exit 1
+          fi
+          if [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "::error::Trivy 校验和不匹配（期望 $EXPECTED，实际 $ACTUAL）"
+            exit 1
+          fi
+          tar -xzf "$DIR/$TGZ" -C "$DIR"
+          echo "$DIR" >> "$GITHUB_PATH"
+          "$DIR/trivy" --version
+
+      - name: 安装失败时复采 Trivy 端点证据（不掩盖原始失败）
+        # setup-trivy 失败时只会吐 `crit unable to find 'v0.76.2'` 或直接 exit 1，
+        # 不打印 HTTP 状态和 curl 错误。用同一份探针复采，把 rc/stderr 留下。
+        if: failure() && steps.trivy-fetch.outcome == 'failure'
+        run: bash scripts/security/trivy-fetch-diagnostics.sh diagnose
 
       - name: 下载共享 Trivy 漏洞库（prep 产出，全 run 仅下载一次）
+        id: dldb
         uses: actions/download-artifact@v7
         with:
           name: trivy-db-shared
           path: ${{ github.workspace }}/.cache/trivy/db
 
       - name: 下载共享库指纹
+        id: dlfp
         uses: actions/download-artifact@v7
         with:
           name: trivy-db-fingerprint
           path: ${{ github.workspace }}
+
+      - name: 共享库 artifact 缺失时明确归因（不掩盖原始失败）
+        # gh run rerun --failed 只重跑失败腿；prep 已成功则不重跑、不重传，
+        # artifact 过保留期后下载必失败，日志首行形如
+        # 「Artifact not found for name: trivy-db-shared」且全文零 CVE 行。
+        # 此处把该形态与「基线差分判红」区分开；处置=整条 run 重跑（不带 --failed）或新开 PR。
+        if: failure() && (steps.dldb.outcome == 'failure' || steps.dlfp.outcome == 'failure')
+        run: |
+          echo "::error title=共享 Trivy DB artifact 缺失（非基线差分问题）::trivy-db-shared / trivy-db-fingerprint 过保留期或该 run 从未成功产出；重跑失败项不会重跑 prep，故下载必失败。本失败与漏洞基线差分无关，请整条 run 重跑或新开 PR。"
 
       - name: 断言共享库新鲜度 + 复核 prep 指纹（不一致判红）
         # 本腿必须自己再断言一次新鲜度：共享 artifact 不等于「免检」。
@@ -523,6 +713,9 @@ jobs:
   # 只对 pull_request 生效（push/cron 也有 13 腿结论，但那条路径不需要"必需检查"）。
   # 若本 job 未能稳定通过，就不启用为必需检查——替代方案见 trivy-upstream-watch
   # 与 docs/security-sla.md 的说明。
+  # 2026-11-07：本 job 的 `pull_request` 条件使「13 腿同一份库」只在 PR 校验，
+  # push 到 master 的真实产物反而没校验 → 另加 `trivy-db-consistency`（非 PR 路径），
+  # 复用同一个 trivy-db-consistency.py 与同一句 [DB-AGG]。
   # ============================================================
   trivy-image-baseline-gate:
     timeout-minutes: 5
@@ -580,7 +773,7 @@ jobs:
 
           # ③ 有腿执行则沿用 E1 口径：任一腿非 success 即红。
           if [ "$SCAN_RESULT" != "success" ]; then
-            echo "::error title=镜像基线门禁未通过::trivy-docker-scan 结果=$SCAN_RESULT（$SCOPE_COUNT 腿）；请查看失败腿的『基线差分门禁』步骤输出（新增项/到期项/有修复版却登记豁免）"
+            echo "::error title=镜像基线门禁未通过::trivy-docker-scan 结果=$SCAN_RESULT（$SCOPE_COUNT 腿）；请查看失败腿的『基线差分门禁』步骤输出（新增项/到期项/有修复版却登记豁免）；若腿内先报『共享 Trivy DB artifact 缺失』，系 prep artifact 过保留期，与基线差分无关，需整条 run 重跑"
             exit 1
           fi
           echo "::notice::镜像基线门禁通过（$SCOPE_COUNT 腿全部 success；范围：$SCOPE_REASON）"
@@ -597,6 +790,92 @@ jobs:
         # 回答「这 N 条腿是不是在同一份库上判断的」：任何一条腿的 DB 与其
         # 他腿不同（或指纹 artifact 缺失），本 job 直接红。
         if: needs.trivy-docker-scan.result == 'success'
+        run: |
+          python3 scripts/security/trivy-db-consistency.py \
+            --dir leg-fingerprints \
+            --expected-count "${{ needs.image-scan-scope.outputs.count }}"
+
+  # ============================================================
+  # 2a-2. 13 腿 DB 指纹一致性校验（**push / cron / dispatch 路径**，2026-11-07）
+  # ------------------------------------------------------------
+  # 缺陷：`trivy-image-baseline-gate` 的 if 是
+  # `github.event_name == 'pull_request'`，于是「13 条腿是不是在同一份库上
+  # 判断的」这条不变量只在 PR 上校验；真正落地到 master 的 push run 反而
+  # 不做指纹一致性比对 —— 与「证据行指向的库不是实际用的库」同类：校验点
+  # 放在了不决定产物的地方。
+  # 本 job 补上非 PR 路径：同一份 artifact、同一个脚本、同一句 [DB-AGG]。
+  # 与 PR 聚合 job 的差别：不承担「必需检查」语义，只回答「13 腿是否同库」；
+  # 腿因基线判红时**仍会执行**（指纹 artifact 在门禁步之前已上传），
+  # 这样红灯的 run 里也能核到「红结论是不是建立在同一份库上」。
+  # prep 失败 → 全部腿 skipped → 本 job 必须红并逐条列出被跳过的腿
+  # （绝不允许 skipped 被当成 success）。
+  # ============================================================
+  trivy-db-consistency:
+    timeout-minutes: 5
+    name: Trivy DB Consistency (13 legs)
+    if: always() && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read   # 下载各腿 DB 指纹 artifact
+    needs: [image-scan-scope, trivy-db-prep, trivy-docker-scan]
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
+      - name: 前置断言（范围计算 / 共享库准备）
+        env:
+          MODULES: ${{ needs.image-scan-scope.outputs.modules }}
+        run: |
+          SCOPE_RESULT="${{ needs.image-scan-scope.result }}"
+          SCOPE_REASON="${{ needs.image-scan-scope.outputs.reason }}"
+          SCOPE_COUNT="${{ needs.image-scan-scope.outputs.count }}"
+          PREP_RESULT="${{ needs.trivy-db-prep.result }}"
+          SCAN_RESULT="${{ needs.trivy-docker-scan.result }}"
+
+          echo "范围判定：$SCOPE_REASON（模块数 $SCOPE_COUNT）"
+          echo "共享库准备结果：$PREP_RESULT"
+          echo "矩阵汇总结果：$SCAN_RESULT（非 success 时本 job 仍做指纹比对，红因由各腿自述）"
+
+          # ① 范围计算失败绝不能当成「无相关改动」放行。
+          if [ "$SCOPE_RESULT" != "success" ]; then
+            echo "::error title=镜像范围计算失败::image-scan-scope 结果=$SCOPE_RESULT；无法确定腿数，按失败处理"
+            exit 1
+          fi
+
+          # ② push/cron/dispatch 一律 13 腿全量，0 腿只可能来自范围脚本回归 → 记录后按通过（无指纹可比）。
+          if [ "$SCOPE_COUNT" = "0" ]; then
+            echo "::notice title=无镜像腿::本次未命中任何镜像输入（$SCOPE_REASON），无指纹可比对；按通过处理"
+            exit 0
+          fi
+
+          # ③ 共享库准备失败 → 所有腿 skipped，必须红并列出被跳过的腿。
+          if [ "$PREP_RESULT" != "success" ]; then
+            echo "::error title=共享 Trivy DB 准备失败::trivy-db-prep 结果=$PREP_RESULT；全部镜像腿被跳过，无法校验同库"
+            echo "被跳过的腿（$SCOPE_COUNT 条）："
+            echo "$MODULES" | python3 -c "import json,sys; [print('  - ' + m) for m in json.load(sys.stdin)]"
+            exit 1
+          fi
+
+      - name: 下载各腿 DB 指纹
+        # 指纹 artifact 在每腿的门禁步之前上传 → 即使某腿判红，指纹仍在。
+        # continue-on-error：artifact 全缺时由下一步（腿数不一致）给出明确红因，
+        # 而不是在这里以 download-artifact 的通用错误中断。
+        if: needs.image-scan-scope.outputs.count != '0'
+        continue-on-error: true
+        uses: actions/download-artifact@v7
+        with:
+          pattern: trivy-db-leg-fingerprint-*
+          path: leg-fingerprints
+          merge-multiple: true
+
+      - name: 校验各腿 DB 指纹一致（不一致/缺腿判红）
+        if: needs.image-scan-scope.outputs.count != '0'
         run: |
           python3 scripts/security/trivy-db-consistency.py \
             --dir leg-fingerprints \

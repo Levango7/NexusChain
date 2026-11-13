@@ -207,7 +207,8 @@ public class WeChatPayConnector implements PaymentConnector {
             return ConnectorPaymentResult.fail("WeChat Pay returned empty response");
         } catch (Exception e) {
             log.error("[WeChat] createPayment failed: {}", e.getMessage());
-            return ConnectorPaymentResult.fail("WeChat Pay error: " + e.getMessage());
+            return ConnectorPaymentResult.fail("WeChat Pay error: " + e.getMessage(),
+                    ConnectorFailureClassifier.classify(e));
         }
     }
 

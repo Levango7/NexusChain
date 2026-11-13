@@ -37,6 +37,13 @@ import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
  *       PaymentEventListener（event 包）注入 AccountService（account 包）联动余额变更。
  *       该循环依赖为业务必要的跨层联动：账户余额变更需发布事件通知下游（清算/对账/分账），
  *       支付事件监听器需调用账户服务联动余额增减。后续可通过引入领域事件接口或消息总线重构消除。</li>
+ *   <li><b>orchestration ↔ resilience：</b>OrchestrationService / RoutingEngine（orchestration 包）
+ *       注入 ConnectorCircuitBreaker、测试夹具 breakerWithOpen 构造 ConnectorCircuitBreakerConfig
+ *       （resilience 包）做候选快否决与失败计数；ConnectorCircuitBreaker（含内部类
+ *       ClassifiedFailureException）与 ConnectorCircuitBreakerTest 依赖 FailureKind
+ *       （orchestration.connector 包）做异常分类。该循环依赖为业务必要的跨层联动：熔断是编排链路
+ *       的横切关注点，失败分类枚举归属 connector 域。正向按包豁免、反向钉在 FailureKind；
+ *       后续可通过将 FailureKind 下沉到独立分类包或引入领域接口重构消除，当前阶段予以豁免。</li>
  * </ul>
  */
 @AnalyzeClasses(packages = "org.nexus.gateway")
@@ -80,6 +87,21 @@ public class ArchitectureRulesTest {
             DescribedPredicate.describe("resides in event package",
                     javaClass -> javaClass.getPackageName().startsWith("org.nexus.gateway.event"));
 
+    /** 谓词：匹配 orchestration 包下的所有类（含 routing / service / connector 等子包） */
+    private static final DescribedPredicate<JavaClass> IS_IN_ORCHESTRATION_PACKAGE =
+            DescribedPredicate.describe("resides in orchestration package",
+                    javaClass -> javaClass.getPackageName().startsWith("org.nexus.gateway.orchestration"));
+
+    /** 谓词：匹配 resilience 包下的所有类（含 ConnectorCircuitBreaker / ConnectorCircuitBreakerConfig） */
+    private static final DescribedPredicate<JavaClass> IS_IN_RESILIENCE_PACKAGE =
+            DescribedPredicate.describe("resides in resilience package",
+                    javaClass -> javaClass.getPackageName().startsWith("org.nexus.gateway.resilience"));
+
+    /** 谓词：匹配 orchestration.connector 包中的 FailureKind（异常分类枚举） */
+    private static final DescribedPredicate<JavaClass> IS_FAILURE_KIND =
+            DescribedPredicate.describe("is FailureKind",
+                    javaClass -> "org.nexus.gateway.orchestration.connector.FailureKind".equals(javaClass.getName()));
+
     // 分层依赖：controller → service → repository，切片内不得存在循环依赖。
     // 以下 ignoreDependency 用于豁免已知的、设计上可接受的循环依赖（详见类级注释）：
     //   1) apiversion ↔ controller：OpenApiV2ConsistencyTest（测试）反射引用 v2 Controller，仅测试代码层面。
@@ -108,7 +130,15 @@ public class ArchitectureRulesTest {
         // 该循环依赖为业务必要的跨层联动：账户余额变更需发布事件通知下游，支付事件监听器需调用
         // 账户服务联动余额增减。后续可通过引入领域事件接口或消息总线重构消除。
         .ignoreDependency(IS_ACCOUNT_BALANCE_CHANGED_EVENT, IS_IN_EVENT_PACKAGE)
-        .ignoreDependency(IS_PAYMENT_EVENT_LISTENER, IS_IN_ACCOUNT_PACKAGE);
+        .ignoreDependency(IS_PAYMENT_EVENT_LISTENER, IS_IN_ACCOUNT_PACKAGE)
+        // 豁免 4：orchestration ↔ resilience — 正向：OrchestrationService / RoutingEngine 注入
+        // ConnectorCircuitBreaker、RoutingEngineTest.breakerWithOpen 构造 ConnectorCircuitBreakerConfig
+        // （resilience 包）做候选快否决与计失败；反向：ConnectorCircuitBreaker（含内部类
+        // ClassifiedFailureException）与 ConnectorCircuitBreakerTest 依赖 FailureKind
+        // （orchestration.connector 包）做异常分类。业务必要的跨层联动；正向按包豁免、反向钉在
+        // FailureKind——resilience 若再依赖 orchestration 其他类仍会被本规则拦下。详见类级注释。
+        .ignoreDependency(IS_IN_ORCHESTRATION_PACKAGE, IS_IN_RESILIENCE_PACKAGE)
+        .ignoreDependency(IS_IN_RESILIENCE_PACKAGE, IS_FAILURE_KIND);
 
     // controller 不应直接访问 repository（必须经 service 层中转）
     @ArchTest

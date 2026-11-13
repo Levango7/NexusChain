@@ -4,15 +4,16 @@
 
 - 起步 **4 条** critical/warning（设计稿 PLAN-002 §3.2）；2026-09-07 起 5 条、
   2026-09-09 起 11 条、2026-10-26 起 15 条 + PLAN-045 最终性 2 条 +
-  PLAN-052 弃权 1 条 = 18 条；2026-11-04 起 **24 条**（PLAN-066 拒绝计数 +2、
-  PLAN-073 最终性 outbox +4；单一真源 = `deploy/k8s/50-prometheus-rules.yaml`）
+  PLAN-052 弃权 1 条 = 18 条；2026-11-04 起 24 条（PLAN-066 拒绝计数 +2、
+  PLAN-073 最终性 outbox +4）；2026-11-09 起 **25 条**（20261105-0003 裁决⑤
+  调账日上限观测 +1；单一真源 = `deploy/k8s/50-prometheus-rules.yaml`）
 - 以 `kube_*` 通用 metrics 为主；`nexuschain_block_height` / `jvm_*` /
   `container_*` 等已确认真实注册或集群开箱即有的指标为辅——**规则只允许引用
   真实存在的指标**（2026-09-09 整合时退役了 11 条引用幽灵指标名的 legacy 告警）
 - `for:` 必填——避免抖动误报（链停/资源类 5-10min；在线类 1min）
 - 告警标签统一（severity + component + service）
 
-## 24 条告警（2026-09-07 +1 链停告警；2026-09-09 告警真值整合 +6；2026-10-18 批次③ runbook 补全；2026-10-26 PLAN-040 区块持久化 +4；2026-10-27 PLAN-045 最终性 +2、PLAN-052 弃权风险 +1；2026-11-02 PLAN-066 拒绝计数 +2；2026-11-04 PLAN-073 最终性 outbox +4）
+## 25 条告警（2026-09-07 +1 链停告警；2026-09-09 告警真值整合 +6；2026-10-18 批次③ runbook 补全；2026-10-26 PLAN-040 区块持久化 +4；2026-10-27 PLAN-045 最终性 +2、PLAN-052 弃权风险 +1；2026-11-02 PLAN-066 拒绝计数 +2；2026-11-04 PLAN-073 最终性 outbox +4；2026-11-09 0003 裁决⑤ 调账日上限观测 +1）
 
 | 名称 | 级别 | 触发条件 | 含义 |
 |---|---|---|---|
@@ -40,6 +41,7 @@
 | FinalityOutboxBacklog | warning | `nexus_finality_outbox_database_pending > 0` 持续 10min | 持久化 outbox 持续积压 |
 | FinalityOutboxMemoryBacklog | warning | `nexus_finality_outbox_pending > 0` 持续 10min | 内存补写队列持续积压（不依赖 DB 可读） |
 | FinalityOutboxUnreadable | warning | `nexus_finality_outbox_database_readable == 0` 持续 5min | outbox 已装配但读不到数据库 |
+| ReconciliationAdjustmentOverLimit | warning | `increase(nexus_reconciliation_adjustment_over_limit_total[10m]) > 0` 持续 5min | 自动调账命中日上限（enforce=false 观测期的先行信号） |
 
 后 6 条的排障手册见下方“新增 6 条告警排障手册”章节（2026-10-18 批次③ 补全）。
 
@@ -333,6 +335,33 @@ unknown-proposer defer 达到阈值（5 次/同一高度）** 时就亮，而结
   `databaseReadable` 与 `databasePending`
 - **处置**：优先恢复 PG 连接，恢复后确认 `databaseReadable=1` 且
   `databasePending` 归零
+
+## 对账自动调账日上限 1 条告警排障手册（20261105-0003 裁决⑤ · 2026-11-09）
+
+指标由 `org.nexus.gateway.reconciliation.link.ReconciliationAdjustmentService`
+注册（nexus-gateway，Micrometer counter），判定见 `checkDailyAutoApproveLimits`：
+自然日内 AUTO_APPROVED 笔数 ≥ `daily-max-count` 或累计金额 + 本笔 >
+`daily-max-total` 即命中；`enforce=false`（当前默认，#562 硬要求）期间只记不拦、
+超限也照常动账，counter 照样累加 ⇒ 本条是「若开闸会被拦」的先行信号与化整为零
+试探的可见性，不是资金损失信号。
+
+### ReconciliationAdjustmentOverLimit（warning · component=reconciliation）
+
+- **触发**：`increase(nexus_reconciliation_adjustment_over_limit_total[10m]) > 0`
+  持续 5min
+- **含义**：10 分钟窗口内有自动调账命中日上限（当前默认 5 笔 / 3000 元，
+  `reconciliation.adjustment.daily-limits.*`；reason=count 为笔数超、
+  reason=total 为金额超）。单商户「化整为零」试探或对账差异堆积都会表现为本条
+- **排查**：
+  ```bash
+  kubectl -n nexus logs <gateway-pod> | grep "对账自动调账日上限命中"
+  ```
+  日志行含 merchantId / 当日笔数 / 当日累计 / 命中原因；结合对账差异来源
+  （渠道侧差错还是重复调账）判断形态
+- **处置**：确认是否异常；若需止血，切
+  `reconciliation.adjustment.daily-limits.enforce=true`（同类事件即转
+  PENDING_APPROVAL 不动账，工单会堆积）或下调 5 笔 / 3000 元阈值；分渠道阈值
+  暂缓（无客户数据，0003 裁决③）
 
 ## 后续升级路径（gRPC 错误率）
 
