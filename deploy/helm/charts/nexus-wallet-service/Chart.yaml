@@ -2,8 +2,8 @@ apiVersion: v2
 name: nexus-wallet-service
 description: NexusChain 钱包服务（Spring Boot）
 type: application
-version: 2.77.0
-appVersion: "2.77.0"
+version: 2.78.0
+appVersion: "2.78.0"
 keywords:
   - blockchain
   - wallet
