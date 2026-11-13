@@ -185,8 +185,8 @@ fn cggmp_threshold_e2e_3_of_3_keygen_2_sign() {
     });
 
     // ---------- Phase 3: 合成完整 KeyShare ----------
-    for i in 0..n {
-        let reply = cluster.nodes[i]
+    for (i, node) in cluster.nodes.iter().enumerate() {
+        let reply = node
             .call(DriverCommand::AssembleShare {
                 session_id: sid.into(),
             })
