@@ -83,6 +83,7 @@
 ## #27 当前缺口清单（最终性故障注入剩余矩阵）
 
 **口径**：只从 #27 原单元格里「仍未做 / 未覆盖 / 边界」的表述提取，**不新增事项、不改变进度**；状态一律按原文事实判断，时间基线为最后一个切片 `PLAN-074`（2026-11-04）。勾选 = 该缺口已闭环（闭环时请在「治理记录」补一行证据）。
+**分档与 ROI**：13 未勾条目的「本机/虚拟化边界/物理机/生产」四档分类与波次排序，见 [`docs/audit/verification-gap-roi-2026-11-14.md`](audit/verification-gap-roi-2026-11-14.md)（2026-11-14，zcode；只分档不实施，认领走板面）。
 **原文**：13 段切片叙事 + 1 段 `PLAN-041` 附记逐字归档于 [`roadmap-unresolved-archive-27-finality.md`](roadmap-unresolved-archive-27-finality.md)。
 
 ### A. 故障注入矩阵（共识 / 最终性）
@@ -177,6 +178,7 @@
 | 2026-11-07 | **PLAN-080：REST 形态 P2P 合批测试时序抖动去时序化**（qoder CN `20261106-0022` 交回 nexus-core lane）：`RPCClientBatchingTest` 等待改用信号量（替 `verify(timeout)`）、窗口 80ms→2000ms、折叠用例冲刷由合批上限计数触发；折叠覆盖加强（同内容、不同实例） | 只改测试、零生产代码；本地基线 7/7 绿、压测 26/26 绿；反向对照（去重键改实例身份）精确红在 `[同一笔不应重复上线] Expected size: 1 but was: 2`，还原后绿 | `docs/plan/PLAN-080-rpcclient-batching-test-flaky.md` |
 | 2026-11-07 | **PLAN-081：gRPC 形态 P2P 合批测试时序抖动去时序化 + 批内折叠路径覆盖修复**（PLAN-080 交付留言单列的遗留项）：`TransactionHandlerBatchingTest` 窗口 80/300ms→2000ms、等待上界同步放大、折叠用例改由合批上限（计数）触发冲刷、两处 `Thread.sleep` 掩盖改 `verify(after(300).times(1))` | 只改测试、零生产代码；实测复现 2 处红（`Expected size: 1 but was: 2`、`[窗口未到期前不应广播] Expecting empty but was: [...]`）；基线 5/5 绿、压测 62/62 绿；反向对照（去掉批内 `LinkedHashSet`）精确红在 `[同一事务不应重复广播] Expected size: 1 but was: 2`，而**改前同一对照仍绿**（证明原用例没覆盖批内折叠路径），还原后绿 | `docs/plan/PLAN-081-transactionhandler-batching-test-flaky.md` |
 | 2026-11-13 | **v2.0.0 TODO 三条核销一条（zcode 缝补批）**：FundSweep 冷钱包多签已修（P0 2026-10-11：无审批面 fail-closed + 审批面双校验）；Subscription/DID 两条维持未做（如实保留） | `DefaultFundSweepService.transferToCold()`；下方「v2.0.0 TODO 治理记录」同步勾选 |
+| 2026-11-14 | **#27 缺口分档与 ROI 清单建立（zcode）**：13 未勾（A 组 9 + B 组 4）逐条按「本机/虚拟化边界/物理机/生产」四档分类 + 三波次排序；附邻近进行项（PLAN-057 第九轮近闭、#25 Phase B 工具链入库、nex 断网机复测、#547/#548 上游追踪）；口径更正「17 总表 vs 13 剩余」 | `docs/audit/verification-gap-roi-2026-11-14.md`；只分档不实施 |
 
 ## PLAN-007（单 proposer 协调）
 
