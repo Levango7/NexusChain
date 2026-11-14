@@ -101,7 +101,7 @@
 
 ### B. 可观测性 / 告警 / 容量
 
-- [ ] **真实集群告警未触发**（promtool、本机 Prometheus + Alertmanager 三进程均非真实集群） —— 未开始。`PLAN-066`、`PLAN-067`、`PLAN-068`、`PLAN-073`、`PLAN-074`
+- [x] **真实集群告警未触发** → **kind 真集群端到端已交付（2026-11-14，zcode）**：25 条 nexus 规则原样装载，合成指标源 firing → Alertmanager 路由 → webhook sink 2xx，三层证据与复现命令见 [docs/runbooks/kind-alert-drill.md](../runbooks/kind-alert-drill.md)。**边界**：单节点虚拟化边界 + 合成指标源 + 演练 sink（非 Slack/邮件真实渠道）；**生产集群实际触发仍待环境**（生产当前不存在）。`PLAN-066`、`PLAN-067`、`PLAN-068`、`PLAN-073`、`PLAN-074`
 - [x] **`/actuator/prometheus` 目前没有鉴权**（原文只证「抓取可达、标签可见」，不是「暴露面已加固」） —— **已闭环（2026-11-05）**：PLAN-075 全仓 Bearer 鉴权（#458 `d24ab1db`）、PLAN-076 本地真实链路演练 + runbook（#470 `ac6a316a`）、PLAN-077 双 token 零空窗轮换（#480 `cd237063`）。`PLAN-068`
 - [ ] **真实攻击形态未演练**（合成拒绝不代表真实攻击） —— 未开始。`PLAN-068`
 - [ ] **Prometheus 服务端存储 / 查询成本基准（容量规划）未做** —— 未开始。`PLAN-070`、`PLAN-074`
@@ -179,6 +179,7 @@
 | 2026-11-07 | **PLAN-081：gRPC 形态 P2P 合批测试时序抖动去时序化 + 批内折叠路径覆盖修复**（PLAN-080 交付留言单列的遗留项）：`TransactionHandlerBatchingTest` 窗口 80/300ms→2000ms、等待上界同步放大、折叠用例改由合批上限（计数）触发冲刷、两处 `Thread.sleep` 掩盖改 `verify(after(300).times(1))` | 只改测试、零生产代码；实测复现 2 处红（`Expected size: 1 but was: 2`、`[窗口未到期前不应广播] Expecting empty but was: [...]`）；基线 5/5 绿、压测 62/62 绿；反向对照（去掉批内 `LinkedHashSet`）精确红在 `[同一事务不应重复广播] Expected size: 1 but was: 2`，而**改前同一对照仍绿**（证明原用例没覆盖批内折叠路径），还原后绿 | `docs/plan/PLAN-081-transactionhandler-batching-test-flaky.md` |
 | 2026-11-13 | **v2.0.0 TODO 三条核销一条（zcode 缝补批）**：FundSweep 冷钱包多签已修（P0 2026-10-11：无审批面 fail-closed + 审批面双校验）；Subscription/DID 两条维持未做（如实保留） | `DefaultFundSweepService.transferToCold()`；下方「v2.0.0 TODO 治理记录」同步勾选 |
 | 2026-11-14 | **#27 缺口分档与 ROI 清单建立（zcode）**：13 未勾（A 组 9 + B 组 4）逐条按「本机/虚拟化边界/物理机/生产」四档分类 + 三波次排序；附邻近进行项（PLAN-057 第九轮近闭、#25 Phase B 工具链入库、nex 断网机复测、#547/#548 上游追踪）；口径更正「17 总表 vs 13 剩余」 | `docs/audit/verification-gap-roi-2026-11-14.md`；只分档不实施 |
+| 2026-11-15 | **B-11 交付：kind 告警端到端演练（zcode，Wave 1 首件）**：25 条 nexus 规则真集群装载，合成源 firing→AM 路由→webhook 2xx 三层证据原文入库；10 类本机环境坑逐条内化进一键脚本（幂等/离线图表/镜像源/secret 键名/等待策略/Content-Type 严判/405 收据） | assets=`deploy/monitoring/kind-alert-drill/*`、`deploy/scripts/kind-alert-drill.sh`、`docs/runbooks/kind-alert-drill.md`；边界=单节点/合成源/非生产 |
 
 ## PLAN-007（单 proposer 协调）
 

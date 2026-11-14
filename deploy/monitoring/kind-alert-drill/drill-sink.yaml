@@ -1,0 +1,73 @@
+# 演练 webhook 接收端：Alertmanager → POST /alert → 返回 200 并落 access log（证据面）。
+# 注：nginx 静态站对 POST 默认 405（AM 会重试不止）——这里用极简 server 块把
+# /alert 显式接成 200「收据」，保证端到端以 2xx 收束。
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: drill-sink-conf
+  namespace: monitoring
+data:
+  default.conf: |
+    server {
+      listen 80;
+      location = /alert {
+        return 200 "alert received\n";
+        add_header Content-Type text/plain;
+      }
+      location / {
+        root /usr/share/nginx/html;
+        index index.html;
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: drill-sink
+  namespace: monitoring
+  labels:
+    app: drill-sink
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: drill-sink
+  template:
+    metadata:
+      labels:
+        app: drill-sink
+    spec:
+      containers:
+        - name: sink
+          image: nginx:1.27-alpine
+          ports:
+            - containerPort: 80
+          volumeMounts:
+            - name: conf
+              mountPath: /etc/nginx/conf.d
+          resources:
+            requests:
+              memory: 16Mi
+              cpu: 10m
+            limits:
+              memory: 64Mi
+              cpu: 100m
+      volumes:
+        - name: conf
+          configMap:
+            name: drill-sink-conf
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: drill-sink
+  namespace: monitoring
+  labels:
+    app: drill-sink
+spec:
+  selector:
+    app: drill-sink
+  ports:
+    - name: web
+      port: 80
+      targetPort: 80
