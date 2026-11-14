@@ -77,26 +77,15 @@ CVE-2026-118370
 # 复核确认事项仍在我名下、列位判据与 11-03 两条同型；本条为一线取证后的落地）。
 CVE-2026-113351
 
-# 2026-11-05 Trivy DB 增补：zlib1g 1:1.3.dfsg+really1.3.1-1+b1 新增 1 项
-# （CVE-2026-76844，gzwrite 失败写后陈旧指针导致堆缓冲区溢出，HIGH）——
-# 上游 zlib 修复仅存在于未发布 commit（df84af25，2026-10-28 修入 main），
-# **无已发布修复版本**：OSV 记录 affected 1.2.11–1.3.2、last_affected 1.3.2，
-# Trivy Fixed 列为空、status=affected，豁免依据与本源文件处置原则一致
-# （仅豁免上游无可用修复版本项）。本条同时落在两条基础镜像线上：
-# distroless/java17-debian13（10 个 Java 模块）与 distroless/cc-debian13
-# （mpc-engine / zk-groth16）。
-# 暴露面论证：漏洞路径是 zlib 的 gz* 流式文件 API（gzopen/gzwrite + 失败
-# write() 后未重置 strm.next_in）——Java 侧 java.util.zip 只走
-# deflate/inflate，不触达 gz*；Rust 侧经 grep 实证 mpc-engine 与
-# zk-groth16-service 的 Cargo.toml 与 src 均无 flate2/gz 依赖与调用，
-# 即两个服务同样不进入 gz* 调用面。待上游发布修复版本并随 Debian /
-# 基础镜像滚入后移除本条（trivyignore-staleness job 时效复核覆盖）。
-# 取证：PR #502 / #503 的 PR-light java17-debian13 与 cc-debian13 两腿
-# 同报本条（run 41985424452，job 127105009587 / 127105009767，OS 层
-# Total: 1，Installed 1:1.3.dfsg+really1.3.1-1+b1、Fixed 空）；OSV
-# CVE-2026-76844（GHSA-g84c-rxfj-3j2c，CWE-787，CVSS 4.0 AC:H）。
-# 板面知会：20261105-1525-zcode-notice-zlib-cve-2026-76844。
-CVE-2026-76844
+# 2026-11-14 条目移除（已解决）：DSA-6613-1 发布修复版
+# 1:1.3.dfsg+really1.3.1-1+deb13u1（trixie-security）；上游 distroless 三处 tag
+# 已重建（java17-debian13:nonroot 97c47f91…→a854d828…、cc-debian13:latest
+# 58e12be8…→e1f5543d…、cc-debian13:nonroot 08476c24…→cc66d222…，逐字比对），
+# 本仓 10 个 Java 模块 + mpc-engine + zk-groth16-service pin 已 bump 重出
+# （#645 / #664，同批 trivy-baseline 两条 pending 条目已注销）；#664 的 14 条
+# 镜像扫描腿在「移除全部 zlib 豁免」下全绿 ⇒ 12 个受影响镜像复扫归零；
+# v2.78.0 归版口 c883c157 已含新 pin（已发版即带修复）。原豁免依据失效，条目移除。
+# 历史留档：PR #502/#503（run 41985424452）；板 20261105-1525。关联 issue #548。
 
 # --- debian:bookworm-slim（Rust 模块镜像）---
 # ⚠ 本节作用域已于 2026-10-01 整体下线：mpc-engine/Dockerfile:51 与
