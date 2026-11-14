@@ -9,7 +9,7 @@
 > 不完成即配置，任何被 approve 的 release run 的 `Deploy to Production` 腿替客户跑的是真实部署，
 > 含共识变更内容的版本（v2.78.0 起）会对上线节点造成不可逆动作。
 
-## 前置五项（缺一不可）
+## 前置项（共五项 + v2.77.0 特定前置；缺一不可）
 
 ### 前置 1 · 部署状态声明（谁先确认）
 
@@ -23,6 +23,13 @@
   - 窗口时间、参与方（各验证/出块节点）、切换顺序（或同时）、回滚方案与回滚触发条件；
   - 负责协调人姓名；参与升级的节点对白名单变更（`0x04–0x08` / `0x10–0x1a`）已逐个知会；
 - 纯缺陷修复版本（无共识内容）可豁免本项，但须在工单中显式写明「无共识内容」并附证据链接（CHANGELOG 节）。
+
+### 前置 2.1 · v2.77.0 特定前置（仅此版本）
+
+- `v2.77.0` 归版即引入 **`SettlementPlatformAddressGuard` 启动期 fail-fast**（归版 `#496`，tag 2026-11-05，「结算地址启动 fail-fast」）——fork 点与共识无关，但前置刚性的一样；
+- 当前 `deploy/helm/values-prod.yaml:69` 仍为 `CHANGE_ME_PLATFORM_SETTLEMENT_ADDRESS` 占位符，结算默认开启；
+- 任何 v2.77.0 部署前**必须**显式注入真实 `NEX_SETTLEMENT_PLATFORM_ADDRESS`（或显式 `NEX_SETTLEMENT_ENABLED=false`）——否则**启动即失败**（fail-fast，非降级故障）；
+- `v2.78.0` 起 prod compose 的 `NEX_SETTLEMENT_ENABLED` 透传真空补口已入版（`#510` / 归版 `#685`），**无需本条**——v2.78.0 的部署前置是前置 2（共识窗口）与前置 3（链史 pre-scan）。
 
 ### 前置 3 · 客户侧链史 pre-scan
 
