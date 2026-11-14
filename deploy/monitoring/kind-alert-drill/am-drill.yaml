@@ -1,0 +1,14 @@
+# 演练用 Alertmanager 配置（直补给 secret，绕开 chart 默认 config 与自定义合并产生的
+# route.receiver="null" 怪癖——2026-11-14 实测：合并结果含默认 inhibit_rules 与
+# 未定义接收器 "null"，operator 报 "undefined receiver \"null\" used in route" 而拒绝收敛）。
+route:
+  receiver: drill-sink
+  group_by: ["alertname", "severity"]
+  group_wait: 5s
+  group_interval: 30s
+  repeat_interval: 2m
+receivers:
+  - name: drill-sink
+    webhook_configs:
+      - url: http://drill-sink.monitoring.svc.cluster.local/alert
+        send_resolved: false

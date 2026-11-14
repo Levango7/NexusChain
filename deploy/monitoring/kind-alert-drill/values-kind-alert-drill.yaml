@@ -1,0 +1,81 @@
+# ============================================================================
+# B-11 演练专用：kube-prometheus-stack 最小 values（kind 单节点集群）
+# ============================================================================
+# 与生产 values（deploy/monitoring/kube-prometheus-stack-values.yaml）的区别：
+#   单副本 / 无 PVC（emptyDir）/ 无 Grafana / 无 Ingress / 不装载内置 defaultRules /
+#   Alertmanager 接收器 = 演练 webhook sink（drill-sink）；评估与抓取 15s（生产 30s）。
+# 用途：验证 nexus 规则（deploy/k8s/50-prometheus-rules.yaml **原样**）在真实集群内
+# 完成「抓取 → 评估 → firing → Alertmanager → webhook 通知」全链路。
+# 使用：deploy/scripts/kind-alert-drill.sh up
+# ============================================================================
+defaultRules:
+  create: false
+
+# 镜像源覆盖（受限网络实测，2026-11-14）：
+#   本机/演练网络下 quay.io 可达；registry.k8s.io 的外部拉取被断
+#   （asia-east1-docker.pkg.dev i/o timeout）——kube-state-metrics 实测卡住 7h+。
+#   经 m.daocloud.io 镜像两处 registry.k8s.io 来源（其余镜像保持原样）。
+kube-state-metrics:
+  image:
+    # 注意：该子 chart 的镜像为 registry/repository 两段拼接——两段都要改，
+    # 只改 repository 会渲染成「registry.k8s.io/m.daocloud.io/...」的无效引用
+    # （2026-11-14 实踩）。
+    registry: m.daocloud.io
+    repository: registry.k8s.io/kube-state-metrics/kube-state-metrics
+
+prometheusOperator:
+  # 演练关闭 admission webhooks（显著提速且少一个外部镜像依赖；告警端到端链路不经过
+  # webhook 准入）。生产 values 保持开启——此处仅在演练 values 生效。
+  admissionWebhooks:
+    enabled: false
+    patch:
+      enabled: false
+
+prometheus:
+  prometheusSpec:
+    replicas: 1
+    evaluationInterval: 15s
+    scrapeInterval: 15s
+    retention: 2h
+    serviceMonitorSelectorNilUsesHelmValues: false
+    serviceMonitorSelector:
+      matchLabels:
+        release: kube-prometheus-stack
+    ruleSelectorNilUsesHelmValues: false
+    ruleSelector:
+      matchLabels:
+        release: kube-prometheus-stack
+    resources:
+      requests:
+        memory: 512Mi
+        cpu: 200m
+      limits:
+        memory: 1Gi
+        cpu: "1"
+
+alertmanager:
+  enabled: true
+  alertmanagerSpec:
+    replicas: 1
+    resources:
+      requests:
+        memory: 128Mi
+        cpu: 50m
+      limits:
+        memory: 256Mi
+        cpu: 200m
+  config:
+    route:
+      receiver: drill-sink
+      group_by: ["alertname", "severity"]
+      group_wait: 5s
+      group_interval: 30s
+      repeat_interval: 2m
+    receivers:
+      - name: drill-sink
+        webhook_configs:
+          - url: http://drill-sink.monitoring.svc.cluster.local/alert
+            send_resolved: false
+
+grafana:
+  enabled: false

@@ -34,7 +34,7 @@
 
 | # | 条目 | 现状态 | 档 | 补法要点 / 前置 |
 |---|---|---|---|---|
-| B-11 | 真实集群告警未触发（promtool/本机三进程非真实集群） | 未开始 | **T1（建议最高 ROI）** | 仓内有 `deploy/kind/`（kind 资产）＋ `deploy/monitoring/kube-prometheus-stack-values.yaml` ⇒ kind 里装 kube-prometheus-stack，把已验表达式（PLAN-064 promtool 38 用例/18 告警）推到**端到端 firing→Alertmanager 路由/通知**；闭环「表达式已验、链路未验」最后一环；产出沿用 PLAN-083 runbook 模式 |
+| B-11 | 真实集群告警未触发（promtool/本机三进程非真实集群） | **✅ 已交付（2026-11-14）** | **T1（建议最高 ROI）** | 仓内有 `deploy/kind/`（kind 资产）＋ `deploy/monitoring/kube-prometheus-stack-values.yaml` ⇒ kind 里装 kube-prometheus-stack，把已验表达式（PLAN-064 promtool 38 用例/18 告警）推到**端到端 firing→Alertmanager 路由/通知**；闭环「表达式已验、链路未验」最后一环；产出沿用 PLAN-083 runbook 模式。**已交付**：三层证据与 10 类环境坑见 `docs/runbooks/kind-alert-drill.md` |
 | B-13 | 真实攻击形态未演练（合成拒绝≠真实攻击） | 未开始 | T1 子集 / T4 完整 | 本机可补子集：以真实攻击载荷（越权/重放/畸形交易）打 API 层的合成演练；完整红队=预算/外部 |
 | B-14 | Prometheus 服务端存储/查询成本基准（容量规划） | 未开始 | **T1** | 高基数前提已被 PLAN-070 证伪（序列上限 28 与流量无关）⇒ 本项降为「成本曲线」：k6 持续负载 + 低基数下存储增长/查询延迟采样；规模有限、本机可行 |
 | B-15 | outbox 指标 30s 采样滞后 | 部分完成 | T1 可选（accepted） | 最坏发现时延已量化 ≤11m30s 并入 runbook；**机制不改是既定口径**（PLAN-073 决策）——除非产品要求收紧，否则维持登记、不作为行动项 |
@@ -52,7 +52,7 @@
 
 - **Wave 1（T1，建议 1–2 周内打包，几乎零外部依赖）**：
   1. PLAN-057 第九轮收官（近闭件，先问 finality lane 归属）；
-  2. **B-11 kind 告警端到端**（把已验表达式推到真链路，闭环最大观测缺口）；
+  2. **B-11 kind 告警端到端**（把已验表达式推到真链路，闭环最大观测缺口）——**2026-11-14 已交付 ✓**；
   3. A-5 崩溃存活量化；
   4. A-6 legacy 未签名数据 enforce 分支；
   5. B-14 成本曲线。

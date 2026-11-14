@@ -1,0 +1,89 @@
+# 静态合成指标源：只为在真集群里触发 nexus 规则（表达式语义已由 promtool 验证，PLAN-064；
+# 本演练补的是「真集群运行时链路」这一层）。两个靶标：
+#   nexus_finality_abstain_risk == 1  → BlockAdoptionAbstainRisk（for: 5m）
+#   nexus_block_outbox_readable == 0  → BlockOutboxUnreadable（for: 5m）
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: drill-metrics
+  namespace: monitoring
+data:
+  metrics: |
+    nexus_finality_abstain_risk 1
+    nexus_block_outbox_readable 0
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: drill-metrics
+  namespace: monitoring
+  labels:
+    app: drill-metrics
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: drill-metrics
+  template:
+    metadata:
+      labels:
+        app: drill-metrics
+    spec:
+      containers:
+        - name: metrics
+          image: nginx:1.27-alpine
+          ports:
+            - containerPort: 80
+          volumeMounts:
+            - name: content
+              mountPath: /usr/share/nginx/html
+          resources:
+            requests:
+              memory: 16Mi
+              cpu: 10m
+            limits:
+              memory: 64Mi
+              cpu: 100m
+      volumes:
+        - name: content
+          configMap:
+            name: drill-metrics
+            items:
+              # 用 .txt 后缀落盘：nginx 默认 mime.types 将 txt 映射为 text/plain，
+              # 满足 Prometheus v3 对抓取 Content-Type 的严判（无后缀会以
+              # application/octet-stream 供出而被拒——operator 0.95.2 的 CRD
+              # 又不支持 fallbackScrapeProtocol 字段，2026-11-14 实测两路取此）。
+              - key: metrics
+                path: metrics.txt
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: drill-metrics
+  namespace: monitoring
+  labels:
+    app: drill-metrics
+spec:
+  selector:
+    app: drill-metrics
+  ports:
+    - name: web
+      port: 80
+      targetPort: 80
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: drill-metrics
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+    app: drill-metrics
+spec:
+  selector:
+    matchLabels:
+      app: drill-metrics
+  endpoints:
+    - port: web
+      path: /metrics.txt
+      interval: 15s
