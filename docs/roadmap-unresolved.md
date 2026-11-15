@@ -180,6 +180,7 @@
 | 2026-11-13 | **v2.0.0 TODO 三条核销一条（zcode 缝补批）**：FundSweep 冷钱包多签已修（P0 2026-10-11：无审批面 fail-closed + 审批面双校验）；Subscription/DID 两条维持未做（如实保留） | `DefaultFundSweepService.transferToCold()`；下方「v2.0.0 TODO 治理记录」同步勾选 |
 | 2026-11-14 | **#27 缺口分档与 ROI 清单建立（zcode）**：13 未勾（A 组 9 + B 组 4）逐条按「本机/虚拟化边界/物理机/生产」四档分类 + 三波次排序；附邻近进行项（PLAN-057 第九轮近闭、#25 Phase B 工具链入库、nex 断网机复测、#547/#548 上游追踪）；口径更正「17 总表 vs 13 剩余」 | `docs/audit/verification-gap-roi-2026-11-14.md`；只分档不实施 |
 | 2026-11-15 | **B-11 交付：kind 告警端到端演练（zcode，Wave 1 首件）**：25 条 nexus 规则真集群装载，合成源 firing→AM 路由→webhook 2xx 三层证据原文入库；10 类本机环境坑逐条内化进一键脚本（幂等/离线图表/镜像源/secret 键名/等待策略/Content-Type 严判/405 收据） | assets=`deploy/monitoring/kind-alert-drill/*`、`deploy/scripts/kind-alert-drill.sh`、`docs/runbooks/kind-alert-drill.md`；边界=单节点/合成源/非生产 |
+| 2026-11-15 | **PLAN-057 收官（zcode，Wave 1 首件）**：当前 master 复测一轮 **0 遗漏**（A/D/E 679/679/679、337 个 epoch 行全等、追平 96s；空漏 244 票 > 单轮上限）；048b 同脚本 on/off 合流（off 未追平、缺 71 行、窗口滑动机制逐请求证据）；负向测试第 21 例（PR #705，变异两向翻红）；§七/§八 台账刷新——**2026-10-28「不宣称闭环」行至此闭账** | `docs/plan/PLAN-057-anti-entropy-paging.md` §5.14；板 `20261115-0650`（认领）/`20261115-1055-zcode-plan057-closure-delivered`（通告） |
 
 ## PLAN-007（单 proposer 协调）
 
