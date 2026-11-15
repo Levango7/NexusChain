@@ -871,6 +871,86 @@ class FinalityVoteSyncPagingTest {
         }
     }
 
+    /**
+     * PLAN-057 §七 清单补项（负向边界，第 21 例）：**宽限期不足 ⇒ 假终止**。
+     *
+     * <p>§六 边界：「终止判据依赖宽限期内是否见到游标处新数据 ⇒ 宽限期必须
+     * 大于 P2P 往返，否则假终止」。本例把"响应往返"拉到宽限期之外
+     * （页与标记全部扣住不投递），钉住该边界的最小形态：</p>
+     *
+     * <ul>
+     *   <li>第 15 处的 3 个无标记宽限 tick 闸门走满后，legacy 宽限终止生效
+     *       ⇒ 第 4 条请求换 margin 形态（cursor=false），而此时对端 150 票
+     *       全部在途、一票未搬——<b>假终止</b>；</li>
+     *   <li>续点保留：终止不回到地板（{@code nextSyncCursorEpoch} 停在原游标），
+     *       冷却后下一 tick 从续点重启爬升（本例冷却置 0 便于观察；
+     *       生产缺省 60s ⇒ 一次假终止的代价是一个冷却周期）。</li>
+     * </ul>
+     *
+     * <p>生产口径：缺省 grace=5000ms、tick=30s ⇒ 假终止需要连续约 90s
+     * 对端无任何响应才发生，正常 P2P 往返远小于它。若未来把终止改为
+     * "等对端显式确认"而不再依赖宽限，本测试应随该行为变更一并复审
+     * （翻红即提醒），不得悄悄放宽。</p>
+     */
+    @Test
+    void insufficientGraceCausesFalseTermination() {
+        // 对端 A 有 150 票；B 空库。A→B 方向全部扣住：模拟"响应往返 > 宽限期"。
+        for (long epoch = 1; epoch <= 150; epoch++) {
+            gadgetA.submitVote(vote("v1", epoch, CP1));
+        }
+
+        FinalityVoteBroadcaster[] nodes = new FinalityVoteBroadcaster[2];
+        final List<byte[]> heldPages = new CopyOnWriteArrayList<>();
+        nodes[0] = newNode(gadgetA, relayingPeer(heldPages::add));
+        final List<byte[]> bRequests = new CopyOnWriteArrayList<>();
+        nodes[1] = newNode(gadgetB, relayingPeer(p -> {
+            if (FinalityVoteSyncCodec.isSyncPayload(p)) {
+                bRequests.add(p);
+            }
+            nodes[0].onVoteReceived(p);
+        }));
+        nodes[1].setAntiEntropyPagingEnabled(true);
+        nodes[1].setAntiEntropyMarginEpochs(0L);
+        // 宽限 0 < 任何真实往返；响应全扣住 ⇒ 宽限永远"不足"。
+        nodes[1].setAntiEntropyPagingGraceMs(0L);
+        // 冷却置 0：观察"续点重启"动作本身；生产缺省 60s 是它的真实代价。
+        nodes[1].setAntiEntropyPagingCooldownMs(0L);
+
+        // tick 1..3：B 三轮原地重传 from=0（第 15 处闸门内，不得终止）。
+        for (int i = 0; i < 3; i++) {
+            nodes[1].scheduledVoteAntiEntropy();
+        }
+        // tick 4：3 个无标记宽限 tick 走满 ⇒ legacy 宽限终止生效（假终止）。
+        nodes[1].scheduledVoteAntiEntropy();
+        // tick 5：冷却已过 ⇒ 从保留的续点重启爬升。
+        nodes[1].scheduledVoteAntiEntropy();
+
+        assertTrue(!heldPages.isEmpty(), "对端必须真的回了页（全部在途）");
+        long heldVotes = heldPages.stream()
+                .filter(p -> !FinalityVoteSyncCodec.isResponsePayload(p))
+                .count();
+        assertTrue(heldVotes >= 150,
+                "对端确有 150 票在途（这是'假'终止的证明），实际在途 " + heldVotes);
+        assertEquals(0, allVotes(storeB).size(),
+                "宽限不足期一票都不该到（响应全部在途）");
+
+        assertTrue(bRequests.size() >= 5, "应有 5 条请求，实际 " + bRequests.size());
+        for (int i = 0; i < 3; i++) {
+            FinalityVoteSyncCodec.SyncRequest q = FinalityVoteSyncCodec.decode(bRequests.get(i));
+            assertTrue(q != null && q.cursor() && q.fromEpoch() == 0L,
+                    "第 " + (i + 1) + " 轮必须是原地重传（cursor=true, from=0），实际 " + q);
+        }
+        FinalityVoteSyncCodec.SyncRequest fourth =
+                FinalityVoteSyncCodec.decode(bRequests.get(3));
+        assertFalse(fourth.cursor(),
+                "第 15 处闸门走满后宽限不足 ⇒ 假终止：第 4 条请求必须已换 margin 形态"
+                        + "（若此断言翻红，说明终止改由对端确认驱动——见类注，需复审）");
+        FinalityVoteSyncCodec.SyncRequest fifth =
+                FinalityVoteSyncCodec.decode(bRequests.get(4));
+        assertTrue(fifth.cursor() && fifth.fromEpoch() == 0L,
+                "终止后必须从保留的续点重启爬升（不是回到地板或别的起点），实际 " + fifth);
+    }
+
 
     // ---------- helpers ----------
 
