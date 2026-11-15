@@ -182,6 +182,7 @@
 | 2026-11-15 | **B-11 交付：kind 告警端到端演练（zcode，Wave 1 首件）**：25 条 nexus 规则真集群装载，合成源 firing→AM 路由→webhook 2xx 三层证据原文入库；10 类本机环境坑逐条内化进一键脚本（幂等/离线图表/镜像源/secret 键名/等待策略/Content-Type 严判/405 收据） | assets=`deploy/monitoring/kind-alert-drill/*`、`deploy/scripts/kind-alert-drill.sh`、`docs/runbooks/kind-alert-drill.md`；边界=单节点/合成源/非生产 |
 | 2026-11-15 | **PLAN-057 收官（zcode，Wave 1 首件）**：当前 master 复测一轮 **0 遗漏**（A/D/E 679/679/679、337 个 epoch 行全等、追平 96s；空漏 244 票 > 单轮上限）；048b 同脚本 on/off 合流（off 未追平、缺 71 行、窗口滑动机制逐请求证据）；负向测试第 21 例（PR #705，变异两向翻红）；§七/§八 台账刷新——**2026-10-28「不宣称闭环」行至此闭账** | `docs/plan/PLAN-057-anti-entropy-paging.md` §5.14；板 `20261115-0650`（认领）/`20261115-1055-zcode-plan057-closure-delivered`（通告） |
 | 2026-11-15 | **A-5 崩溃存活量化交付（zcode，Wave 1 第三件）**：单节点库整体不可用 + 窗内强杀实测——提交先行停摆（队列空载 local=0/received=1）⇒ 该窗净丢失 **0**；重启按块重放**补投迟到票**（120..164 共 45 张），三方终态 490/490/490 全等、中段缺失 0。§五.1「崩溃仍丢票」适用面收窄为「提交仍进行且 outbox 不可写」窗口 | `docs/plan/PLAN-018-finality-persistence.md` §4.4；板 `20261115-1250-zcode-a5-crash-boundary-delivered` |
+| 2026-11-15 | **A-6 交付（zcode，Wave 1 第四件）**：legacy 老行（无 `signed_payload`）× `enforce=true` 全表回放实测——接收端 `DROP_UNSIGNED` 拒收（每 30s tick 重复告警）+ 对端成员面无老行；compat 对照放行并注册（且哑值行进入 proposer 轮转＝兼容模式实害可见）；两臂 finality 视图 50/100% vs 33/67/100% 反色 | `docs/plan/PLAN-001-signature-extension.md` §八「老行」补测；板 `20261115-1555-zcode-a6-legacy-enforce-delivered` |
 
 ## PLAN-007（单 proposer 协调）
 

@@ -249,3 +249,41 @@ T1 A=810/B=349（链路未断）→ C 恢复 60s 内追平 **C=827 = A=827（ALI
 
 **边界**：B 落后（339 vs 800）仍为本环境 grpc 追块速率边界（与签名无关，同 §七）；
 本次仅在测试床显式开启 enforce，**默认值未改变（仍 false）**；不声称覆盖物理多机。
+
+---
+
+### enforce=true 的「老行」分支实测（A-6，2026-11-15，zcode）
+
+> 上面的三节点实测覆盖「全部行都有 `signed_payload`」。本节补 ROI 清单 A-6：
+> **升级前老行（`signed_payload IS NULL`）在 enforce 下的语义**——即本文档
+> 「启用条件 = 存量行完成自宣补齐」这条剩余边的落地形态。拓扑：A（库中人工种入
+> 一行 legacy 老行）+ B（独立 PG 的晚加入节点；B 库不共享该行，老行到 B 的唯一
+> 通道 = A 的全表回放）。两臂（enforce / compat）同一脚本、只切开关。
+
+**enforce 臂**：
+
+| 层 | 证据 |
+|---|---|
+| A 构建 | `Validator-set full-table replay sent: 3 validators (2 signed payloads verbatim, 1 legacy rebuilt)`——老行退化为无签名重建 |
+| B 验签面 | `Validator-set message dropped (DROP_UNSIGNED): address=legacyV1Address0001, detail=no signature (enforce mode)`；**每 30s 拉取 tick 重复一条**（3 tick=3 条，即告警噪声形态）；同批签名行 ACCEPT 一次、重投被重放护栏幂等丢弃（`nonce <= lastSeen`） |
+| B 成员面 | 库终态 = {A, B}——**legacy 行 0** |
+
+**compat 臂（enforce=false，对照）**：
+
+| 层 | 证据 |
+|---|---|
+| B 验签面 | 首个 tick：`Validator registered: legacyV1Address0001 stake=1000` + `Validator-set add: address=legacyV1Address0001 registered=true (via P2P)`；后续 tick 幂等（`registered=false`，`Register rejected: already exists`）；**`DROP_UNSIGNED = 0`** |
+| B 成员面 | 库终态 = {A, B, **legacy**}——`legacy in a6b = 1` |
+| 实害可见 | B 的 proposer 轮转**把哑值 legacy 选成了 height 16 的 proposer**（`Selected proposer legacyV1Address0001 at height 16`）——无签钥空位 proposer，该高度只能空转/视图变更 |
+
+**registry 不一致的实态**：enforce 下 B 只认 {A,B}，finality progress 记 50%/100%；
+compat 下 B 认 {A,B,legacy}、与 A 一致记 33%/67%/100%。即「老行未补齐 × enforce」
+的直接后果 = 账本视图分叉（非共识分叉；但 proposer/权重口径不一致）。
+
+**通道注记**：本钻同时观测到 A→B grpc 推送的方向性抖动（同 §七 的 walled-garden
+环境问题，非签名切片缺陷）；REST 拉取通道（`SyncClient.syncValidatorSet`，30s）
+为确定性兜底——两臂的 legacy 到达 B 均由该通道完成，**且与 grpc 走完全同一条
+验签/注册路径**（`onValidatorSetPayload → handleValidatorSet`）。
+
+**边界**：单机同内核虚拟化；legacy 行为人工种入（地址/公钥为哑值，语义只依赖
+「无签名」这一性质）；默认值未改变（仍 false）。
