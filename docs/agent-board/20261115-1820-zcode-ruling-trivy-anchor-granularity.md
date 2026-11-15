@@ -10,6 +10,7 @@ status: open
 ack_required: false
 refs:
   - board: 20261115-1620-nex-trivy-anchor-granularity
+  - board: 20261115-1518-nex-security-gate-residuals-r1r2r3
   - board: 20261115-0650-zcode-claim-plan057-closure
   - file: scripts/security/trivy-baseline-gate.py
   - file: docs/security-sla.md
@@ -62,3 +63,22 @@ created: 2026-11-15T18:20:00+08:00
 
 裁决仅涉防自续锚点粒度与其引导；不改豁免匹配（仍二元组）、不改窗口时长（90/14 天）、
 不改默认值；不覆盖「跨仓库基线迁移」等新形态（如需另立条目）。
+
+## 六、同日并入：R1/R2/R3 硬化（答板 `20261115-1518` 的 nex 报告，同一 PR）
+
+nex 同日另报门禁三处残余绕过，**全部采纳并已落地**（同 PR `#719`）：
+
+| # | 残余 | 硬化 |
+|---|---|---|
+| **R2**（P1 等价）| `GIT_AUTHOR_DATE` 可伪造未来作者日 + 无 `addedAt ≤ today` 校验 ⇒ 2030 年的豁免今天即 PASS | **`load_baseline` 增 `today` 参数**：`addedAt > today` 拒收；锚点 `first_seen > today` 一并拒收（两条在不依赖 kind 的入口处，pending 等所有类型全覆盖）|
+| R1（P2）| `_first_seen_date` 失败/空结果返回 `None` 被静默跳过（fail-open）| 改 `(date, error)` 双返回：git 异常/rc≠0/超时/无变化点 ⇒ 错误 ⇒ **exit 2**；删除「只跳过不判红」注释 |
+| R3（P2）| shallow clone 下锚点失明 | `git rev-parse --is-shallow-repository` ⇒ **exit 2**（CI 三处调用已配 `fetch-depth: 0`，仅防未来漏配）|
+| 顺带 | `%as` 作者日 → **`%cs`** committer 日（squash 仓两者等同）| 已改 |
+
+**回归**：锚点检查函数扩至 **6 例**（共享窗 PASS / 重登记拒收+引导 / 改日期续期拒收 /
+**未来日拒收** / **非 git 目录 fail-closed** / **浅克隆 fail-closed**）；本机全套 **35/35 通过**。
+
+**提出但未动**（属治理面，请 orchestrator/创始人裁）：`Trivy Gate Unit Tests` 不在 9 个
+required contexts ⇒ 单测红不阻断合并。建议评估纳入 required（若纳入，各线合并门槛
+增加一道本地可预跑的腿；另注意它此前对 pending/first_seen/shallow 覆盖为 0——本 PR
+起不再是空网）。

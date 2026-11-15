@@ -193,7 +193,7 @@ def _shaded_evidence_rejection(evidence) -> str | None:
     return None
 
 
-def load_baseline(path: str) -> tuple[dict[tuple[str, str], dict], list[str]]:
+def load_baseline(path: str, today: dt.date | None = None) -> tuple[dict[tuple[str, str], dict], list[str]]:
     """读取并校验基线；任何不合规条目都进 errors（调用方以退出码 2 拒收）。"""
     errors: list[str] = []
     try:
@@ -297,11 +297,26 @@ def load_baseline(path: str) -> tuple[dict[tuple[str, str], dict], list[str]]:
         # 防自续锚点（只对正式基线 config/trivy-baseline.json 生效）：addedAt 不再信
         # 作者自填——与该条目在基线文件里**首次出现**的提交日比对，不一致直接拒收
         # （进 errors ⇒ exit 2）。封死的洞：同时改 addedAt 与 expires 即可无限续期
-        # （2026-11-08 复核发现）。取不到 git 历史（shallow clone / 文件未跟踪）时
-        # 返回 None，只跳过不判红；CI 侧另以 fetch-depth: 0 保证历史可得。
+        # （2026-11-08 复核发现）。
+        # 2026-11-15（nex 报告 R2）：git 作者日可被 GIT_AUTHOR_DATE 伪造 ⇒ 未来日锚点
+        # 会与未来日 addedAt 互相匹配而放行 ⇒ 两条日期都不得晚于 today。
+        if added and today and added > today:
+            errors.append(
+                f"{where} addedAt={added.isoformat()} 晚于今天（{today.isoformat()}）——"
+                f"豁免日期不得在未来（否则可伪造未来提交日期自证并长期有效）"
+            )
+        # 2026-11-15（nex 报告 R1/R3）：锚点核验改 fail-closed——浅克隆 / git 不可用 /
+        # 历史无变化点一律判红（exit 2）；旧行为"取不到只跳过"与伪造日期组合会出假绿。
         if added and os.path.abspath(path) == os.path.abspath(CANONICAL_BASELINE):
-            first_seen = _first_seen_date(path, vuln_id)
-            if first_seen and first_seen != added.isoformat():
+            first_seen, anchor_err = _first_seen_date(path, vuln_id)
+            if anchor_err:
+                errors.append(f"{where} 防自续锚点不可核（fail-closed）：{anchor_err}")
+            elif first_seen and today and first_seen > today.isoformat():
+                errors.append(
+                    f"{where} 锚点（首次出现日 {first_seen}）晚于今天（{today.isoformat()}）——"
+                    f"提交日期疑似伪造，拒收"
+                )
+            elif first_seen and first_seen != added.isoformat():
                 errors.append(
                     f"{where} addedAt={added.isoformat()} 与该条目首次出现的提交日 {first_seen}"
                     f" 不一致（防自续：addedAt 以 git 首次出现日为准，不信作者自填；"
@@ -354,27 +369,41 @@ def _serialize_finding(finding: dict, entry: dict | None = None) -> dict:
     return data
 
 
-def _first_seen_date(baseline_path, vuln_id):
-    """该 CVE 在基线文件里**首次出现**的提交日期（YYYY-MM-DD），取不到返回 None。
+def _first_seen_date(baseline_path, vuln_id) -> tuple[str | None, str | None]:
+    """该 CVE 在基线文件里**首次出现**的提交日期（YYYY-MM-DD）；fail-closed 版本。
+
+    返回 (date_str | None, error | None)——error 非空即由调用方判红（exit 2）。
 
     用途：把 `addedAt` 从「作者自填」变成「git 可核事实」——
     否则只要同时改 addedAt 与 expires 就能无限续期（2026-11-08 复核发现）。
-    取不到历史（浅克隆 / 无 git）返回 None，由调用方降级为 warning，绝不因此判红。
+
+    2026-11-15（nex 报告 R1/R3）硬化：
+    - 改用 **committer 日**（%cs，落地时刻；squash 仓与作者日等同）；
+    - 浅克隆（`--is-shallow-repository`）⇒ 历史不完整，直接错误（CI 须 fetch-depth: 0）；
+    - git 调用失败 / 超时 / 历史中无变化点（文件未提交、路径不在本仓）⇒ 错误。
+      旧行为"取不到只跳过"已废除：它与伪造日期组合会产出假绿（本地跑未提交的
+      基线时请先提交再验，或按 CI 结论为准）。
     """
     try:
         import subprocess  # 局部导入：不依赖模块头部 import 块的具体写法
-        out = subprocess.run(
-            ["git", "log", "-S", vuln_id, "--format=%as", "--", baseline_path],
+        shallow = subprocess.run(
+            ["git", "rev-parse", "--is-shallow-repository"],
             capture_output=True, text=True, timeout=20,
         )
-    except Exception:
-        return None
+        if shallow.returncode == 0 and shallow.stdout.strip() == "true":
+            return None, "仓库为浅克隆（shallow）——历史不完整，锚点无法核验（CI 须 fetch-depth: 0；本地可 git fetch --unshallow 解开）"
+        out = subprocess.run(
+            ["git", "log", "-S", vuln_id, "--format=%cs", "--", baseline_path],
+            capture_output=True, text=True, timeout=20,
+        )
+    except Exception as e:  # 局部导入/子进程的所有异常都转为可判红的错误（fail-closed）
+        return None, f"git 调用异常：{e}"
     if out.returncode != 0:
-        return None
+        return None, f"git log 失败（rc={out.returncode}）：{out.stderr.strip()[:200]}"
     dates = [ln.strip() for ln in out.stdout.splitlines() if ln.strip()]
     if not dates:
-        return None
-    return dates[-1]  # 最早一次（log 是倒序）
+        return None, "git 历史中找不到该 CVE 的变化点（基线可能未提交，或路径不在本仓）"
+    return dates[-1], None  # 最早一次（log 是倒序）
 
 
 def _age_days(today: dt.date, added: dt.date) -> int:
@@ -729,7 +758,7 @@ def main() -> int:
     today = dt.date.fromisoformat(args.today) if args.today else dt.datetime.now(dt.timezone.utc).date()
     threshold_rank = SEVERITY_RANK[args.min_severity]
 
-    baseline, baseline_errors = load_baseline(args.baseline)
+    baseline, baseline_errors = load_baseline(args.baseline, today)
     findings, report_errors = collect_findings(args.report, threshold_rank)
 
     errors = baseline_errors + report_errors

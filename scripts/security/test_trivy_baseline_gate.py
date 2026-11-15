@@ -464,12 +464,15 @@ def check_anchor_shared_window() -> tuple[bool, str]:
                 encoding="utf-8",
             )
 
-        def run_gate() -> subprocess.CompletedProcess:
+        def run_gate_at(cwd: str) -> subprocess.CompletedProcess:
             return subprocess.run(
                 [sys.executable, GATE, "--baseline", "config/trivy-baseline.json",
                  "--report", fixture_report, "--today", "2026-11-06"],
-                cwd=repo, capture_output=True, text=True, encoding="utf-8",
+                cwd=cwd, capture_output=True, text=True, encoding="utf-8",
             )
+
+        def run_gate() -> subprocess.CompletedProcess:
+            return run_gate_at(repo)
 
         # commit1（2026-09-01）：CVE-2026-113351 在 libexpat1 上首次登记
         write_baseline([make_entry("libexpat1", "2026-09-01", "2026-11-30")])
@@ -502,6 +505,51 @@ def check_anchor_shared_window() -> tuple[bool, str]:
         r = run_gate()
         if r.returncode != 2 or "不一致" not in (r.stdout + r.stderr):
             problems.append(f"改日期续期应判红（退出码 2），实际 {r.returncode}")
+
+        # 用例 4（R2，nex 2026-11-15）：未来日 addedAt → 拒收（防伪造未来提交日期自证）
+        write_baseline([make_entry("libexpat1", "2030-01-01", "2030-04-01")])
+        r = run_gate()
+        if r.returncode != 2 or "不得在未来" not in (r.stdout + r.stderr):
+            problems.append(f"未来日 addedAt 应判红（退出码 2），实际 {r.returncode}")
+
+        # 用例 5（R1）：cwd 不在 git 仓内 ⇒ 锚点不可核 ⇒ fail-closed 判红（不再静默跳过）
+        nogit = os.path.join(root, "nogit")
+        if not nogit.startswith(root + os.sep):
+            problems.append("nogit 路径越出临时根")
+        else:
+            nogit_cfg = os.path.join(nogit, "config")
+            os.makedirs(nogit_cfg)
+            pathlib.Path(os.path.join(nogit_cfg, "trivy-baseline.json")).write_text(
+                json.dumps({"schemaVersion": 1, "entries": [
+                    make_entry("libexpat1", "2026-09-01", "2026-11-30")]}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            r = run_gate_at(nogit)
+            if r.returncode != 2 or "锚点不可核" not in (r.stdout + r.stderr):
+                problems.append(f"非 git 目录应 fail-closed 判红（退出码 2），实际 {r.returncode}")
+
+        # 用例 6（R3）：浅克隆 ⇒ 锚点不可核 ⇒ fail-closed（CI 须 fetch-depth: 0）
+        shallow_repo = os.path.join(root, "shallow")
+        if not shallow_repo.startswith(root + os.sep):
+            problems.append("shallow 路径越出临时根")
+        else:
+            clone = subprocess.run(
+                ["git", "clone", "--depth", "1", "--quiet",
+                 "file:///" + repo.replace("\\", "/"), shallow_repo],
+                capture_output=True, text=True, cwd=root,
+            )
+            if clone.returncode != 0:
+                problems.append(f"浅克隆构造失败：{clone.stderr.strip()[:200]}")
+            else:
+                sh_cfg = os.path.join(shallow_repo, "config")
+                pathlib.Path(os.path.join(sh_cfg, "trivy-baseline.json")).write_text(
+                    json.dumps({"schemaVersion": 1, "entries": [
+                        make_entry("libexpat1", "2026-09-01", "2026-11-30")]}, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                r = run_gate_at(shallow_repo)
+                if r.returncode != 2 or "浅克隆" not in (r.stdout + r.stderr):
+                    problems.append(f"浅克隆应 fail-closed 判红（退出码 2），实际 {r.returncode}")
 
     return (not problems), "；".join(problems)
 
