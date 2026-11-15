@@ -304,7 +304,10 @@ def load_baseline(path: str) -> tuple[dict[tuple[str, str], dict], list[str]]:
             if first_seen and first_seen != added.isoformat():
                 errors.append(
                     f"{where} addedAt={added.isoformat()} 与该条目首次出现的提交日 {first_seen}"
-                    f" 不一致（防自续：addedAt 以 git 首次出现日为准，不信作者自填）"
+                    f" 不一致（防自续：addedAt 以 git 首次出现日为准，不信作者自填；"
+                    f"豁免窗口按 CVE 全包共享——同一 CVE 中途新增的包请沿用 addedAt={first_seen}、"
+                    f"expires={first_seen}+90 天（与第一个包同一窗口）；该窗口已过期则只能修复，"
+                    f"不可换包/改日期续期）"
                 )
 
         if expires and added:

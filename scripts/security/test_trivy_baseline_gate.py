@@ -406,6 +406,106 @@ def check_db_identity() -> tuple[bool, str]:
     return (not problems), "；".join(problems)
 
 
+def check_anchor_shared_window() -> tuple[bool, str]:
+    """防自续锚点 × 共享窗回归（板 20261115-1620 裁决）：
+
+    1) 同一 CVE 的第二个包，**沿用锚点**（addedAt=首次出现日、expires=首次出现日+90）
+       必须放行（共享同一窗口）；
+    2) 同一第二个包按「今天」重登记必须拒收（退出码 2），且错误信息给出正确形式
+       （防"静默不可达"把合法需求误读成 blocker）；
+    3) 同一元组整体改日期续期必须拒收（防自续核心）。
+
+    注：锚点比对基于相对路径（config/trivy-baseline.json）与进程 CWD——本用例把
+    cwd 放进临时 git 仓内才会真正触发锚点检查（否则静默跳过，产生假绿）。
+    临时路径全部由字面量拼接、realpath 规范化并做 containment 校验（安全基线）。
+    """
+    import pathlib
+
+    problems: list[str] = []
+    fixture_report = os.path.join(FIXTURES, "report-known-only.json")  # CVE-2026-113351 / libexpat1
+    with tempfile.TemporaryDirectory() as tmp:
+        root = os.path.realpath(tmp)
+        repo = os.path.realpath(os.path.join(root, "repo"))
+        if not repo.startswith(root + os.sep):
+            return False, "临时仓路径越出临时根（containment 校验失败）"
+        cfg_dir = os.path.join(repo, "config")
+        baseline_abs = os.path.join(cfg_dir, "trivy-baseline.json")
+        if not baseline_abs.startswith(repo + os.sep):
+            return False, "基线路径越出临时仓（containment 校验失败）"
+        os.makedirs(cfg_dir)
+
+        def git(*args: str, date: str = "2026-09-01") -> None:
+            env = {
+                **os.environ,
+                "GIT_AUTHOR_DATE": f"{date}T12:00:00",
+                "GIT_COMMITTER_DATE": f"{date}T12:00:00",
+            }
+            r = subprocess.run(["git", *args], cwd=repo, env=env, capture_output=True, text=True)
+            if r.returncode != 0:
+                problems.append(f"git {args[0]} 失败：{r.stderr.strip()[:200]}")
+
+        git("init", "-q")
+        git("config", "user.email", "t@t")
+        git("config", "user.name", "t")
+
+        def make_entry(pkg: str, added: str, expires: str) -> dict:
+            return {
+                "id": "CVE-2026-113351", "package": pkg, "scope": "os",
+                "reason": "anchor-drill", "fixable": "none",
+                "expires": expires, "addedAt": added, "evidence": "anchor-drill",
+            }
+
+        def write_baseline(entries: list[dict]) -> None:
+            if not baseline_abs.startswith(repo + os.sep):
+                problems.append("写前 containment 校验失败")
+                return
+            pathlib.Path(baseline_abs).write_text(
+                json.dumps({"schemaVersion": 1, "entries": entries}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+        def run_gate() -> subprocess.CompletedProcess:
+            return subprocess.run(
+                [sys.executable, GATE, "--baseline", "config/trivy-baseline.json",
+                 "--report", fixture_report, "--today", "2026-11-06"],
+                cwd=repo, capture_output=True, text=True, encoding="utf-8",
+            )
+
+        # commit1（2026-09-01）：CVE-2026-113351 在 libexpat1 上首次登记
+        write_baseline([make_entry("libexpat1", "2026-09-01", "2026-11-30")])
+        git("add", "-A")
+        git("commit", "-q", "-m", "c1")
+
+        # 用例 1：第二个包沿用锚点 → 放行（工作树未提交也已可测：锚点来自 CVE 历史）
+        write_baseline([
+            make_entry("libexpat1", "2026-09-01", "2026-11-30"),
+            make_entry("pkg-second", "2026-09-01", "2026-11-30"),
+        ])
+        r = run_gate()
+        if r.returncode != 0 or "不一致" in (r.stdout + r.stderr):
+            problems.append(f"共享窗第二包应放行，实际退出码 {r.returncode}")
+
+        # 用例 2：第二个包按今天重登记 → 拒收，且带正确形式引导
+        write_baseline([
+            make_entry("libexpat1", "2026-09-01", "2026-11-30"),
+            make_entry("pkg-second", "2026-11-06", "2027-02-04"),
+        ])
+        r = run_gate()
+        out = r.stdout + r.stderr
+        if r.returncode != 2 or "不一致" not in out:
+            problems.append(f"重登记第二包应判红（退出码 2），实际 {r.returncode}")
+        if "共享" not in out or "沿用" not in out:
+            problems.append("拒收信息未给出共享窗正确形式（引导缺失）")
+
+        # 用例 3：同一元组整体改日期续期 → 拒收
+        write_baseline([make_entry("libexpat1", "2026-11-06", "2027-02-04")])
+        r = run_gate()
+        if r.returncode != 2 or "不一致" not in (r.stdout + r.stderr):
+            problems.append(f"改日期续期应判红（退出码 2），实际 {r.returncode}")
+
+    return (not problems), "；".join(problems)
+
+
 def main() -> int:
     failures = 0
     total = 0
@@ -453,6 +553,13 @@ def main() -> int:
     total += 1
     ok, reason = check_db_identity()
     print(f"[{'PASS' if ok else 'FAIL'}] DB 身份绑定（报告/指纹/实际库不一致必须判红）")
+    if not ok:
+        failures += 1
+        print(f"  {reason}")
+
+    total += 1
+    ok, reason = check_anchor_shared_window()
+    print(f"[{'PASS' if ok else 'FAIL'}] 防自续锚点 × 共享窗（第二包沿用锚点放行 / 重登记拒收且带引导 / 改日期续期拒收）")
     if not ok:
         failures += 1
         print(f"  {reason}")
