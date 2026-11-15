@@ -2,8 +2,10 @@ name: NexusChain Release & Deploy
 
 # ============================================================================
 # REQ-03 / T03：tag-based 发布与部署 workflow
-# 触发：推送 v*.*.* 格式的 git tag
-# 流程：build-images → github-release → helm-publish → deploy-staging → deploy-prod
+# 触发（push tag）：build-images → github-release → helm-publish → deploy-staging（恒 warning-skip）
+# prod 部署：**tag 不创建**，仅 workflow_dispatch + deploy_prod=true + target_version 显式触发
+#            （environment `production` 审批保护；2026-11-15 路径 I：KUBE_CONFIG_PROD 未配置且 prod 从未部署过，
+#            此前两个 waiting run 永久挂着却永远没事——详见板面 `20261115-2118-nex-notice-prod-deploy-optin`）
 # prod 部署需 GitHub environment protection（production 环境 required reviewer，
 # 2026-10-02 配置：单人仓库现状配 1 人 Levango7，第二维护者加入后补至 2 人）
 # ============================================================================
@@ -12,13 +14,20 @@ on:
   push:
     tags:
       - 'v*.*.*'
-  # 手动触发：两种用途，由 dry_run 区分
+  # 手动触发：两种用途，由 dry_run 区分 + 一个 prod 部署开关
   #   · dry_run=true  → **试跑发布链路**：构建并推送镜像到 :dryrun 标签，
   #                     不创建 GitHub Release、不发 Helm chart、不部署。
   #                     用于在正式打 tag 前验证 build-images 能真正跑通
   #                     （2026-09-22 新增：该链路此前从未成功过，
   #                      仅做静态校验不足以证明可用）。
   #   · dry_run=false → 回滚流程（Task 284），需填 target_version 等。
+  #   · deploy_prod=true 且 target_version 非空 → **显式执行一次 prod 部署**（需在 environment `production`
+  #                     上重新审批）——这是 prod 部署**唯一**入口。tag push **不再创建** prod 部署 job：
+  #                     此前 tag push 一律创建需要审批的 job，而 KUBE_CONFIG_PROD 至今未配置，
+  #                     使两个 waiting run 永远挂着却永远没事（等待的语义残缺）。
+  #                     触发方式：GitHub → Actions → "NexusChain Release & Deploy" → Run workflow
+  #                     → dry_run 保持 false → deploy_prod 勾选 true → target_version 填写 "v2.78.0" 这类
+  #                     已发布的 tag → 变更并等待 environment `production` 审批。
   workflow_dispatch:
     inputs:
       dry_run:
@@ -26,8 +35,13 @@ on:
         required: false
         type: boolean
         default: false
+      deploy_prod:
+        description: '显式执行一次 prod 部署（仅当此项为 true 且 target_version 非空才创建需审批的部署 job）'
+        required: false
+        type: boolean
+        default: false
       target_version:
-        description: '回滚目标版本号（git tag，如 v2.2.1）；dry_run=true 时忽略'
+        description: '回滚目标版本 / prod 部署目标版本（git tag，如 v2.78.0）；dry_run=true 时忽略'
         required: false
         type: string
       environment:
@@ -389,21 +403,38 @@ jobs:
             --wait --timeout 10m
 
   # ============================================================
-  # 5. 部署至 prod 环境（需 GitHub environment protection approval）
+  # 5. 部署至 prod 环境（需 GitHub environment protection approval）——
+  #    **仅显式触发**（workflow_dispatch + deploy_prod=true + target_version 非空）：
+  #    tag push **不再创建**该 job（2026-11-15 路径 I 落板）。
   # ============================================================
   deploy-prod:
     timeout-minutes: 30  # 同上
     name: Deploy to Production
-    if: github.event_name == 'push' && !inputs.dry_run
-    needs: deploy-staging
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy_prod && inputs.target_version != ''
     runs-on: ubuntu-24.04
     # environment: production 触发 GitHub environment protection
     # required reviewer 已配置（2026-10-02：1 人 Levango7，can_admins_bypass=true
     # 保留紧急通道；单人仓库不启用 prevent_self_review 否则无人可批）
     environment: production
     steps:
-      - name: Checkout 代码
+      - name: 校验部署目标（target_version 必须为已发布的 Release tag vX.Y.Z）
+        id: target
+        run: |
+          ver="${{ inputs.target_version }}"
+          case "$ver" in
+            v*.*.*) ;;
+            *) echo "::error::target_version 格式必须为 vX.Y.Z（如 v2.78.0）"; exit 1 ;;
+          esac
+          gh api "repos/${{ github.repository }}/releases/tags/$ver" --jq .tag_name 2>/dev/null \
+            || { echo "::error::目标 $ver 不是已发布的 Release tag（GitHub Release 缺失则 chart 与镜像无法校验）"; exit 1; }
+          echo "tag=$ver" >> "$GITHUB_OUTPUT"
+          echo "num=${ver#v}" >> "$GITHUB_OUTPUT"
+          echo ">>> 准备部署目标：$ver → chart ${ver#v}"
+
+      - name: Checkout 代码（检出指定版本 tag）
         uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.target.outputs.tag }}
 
       # 2026-09-22：与 deploy-staging 同策略 —— 未配置凭据则跳过并告警，
       # 不把一个"尚未配置"的状态渲染成"部署失败"。
@@ -432,11 +463,10 @@ jobs:
       - name: Helm upgrade --install（prod）
         if: steps.creds.outputs.configured == 'true'
         run: |
-          CHART_VERSION="${{ github.ref_name }}"
-          CHART_VERSION_NUM="${CHART_VERSION#v}"
-          # P0 审计修复：镜像 tag 与发布版本联动（覆盖 values-prod.yaml 钉死的 2.1.0）。
-          # 镜像 tag 使用 build-images 推送的 ${{ github.ref_name }}（含 v 前缀）。
-          IMAGE_TAG="${CHART_VERSION}"
+          CHART_VERSION_NUM="${{ steps.target.outputs.num }}"
+          # 镜像 tag 使用该 Release 发布的 ${{ steps.target.outputs.tag }}（含 v 前缀）。
+          IMAGE_TAG="${{ steps.target.outputs.tag }}"
+          echo ">>> Deploying to prod: chart ${CHART_VERSION_NUM}, image tag ${IMAGE_TAG}"
           helm upgrade --install nexuschain deploy/helm/ \
             --namespace nexus-prod \
             --create-namespace \
