@@ -6,7 +6,7 @@
 - **评估日期**：2026-08-09
 - **评估人**：DevOps 工程师
 - **关联 ADR**：[ADR-026-nacos-ha-decision](./adr/ADR-026-nacos-ha-decision.md)
-- **关联任务**：P3-T1（Istio 服务网格已部署）
+- **关联任务**：P3-T1（Istio 服务网格**配置已入库，部署未验证**）
 
 ---
 
@@ -18,7 +18,7 @@ NexusChain 在 v2.0.0 Phase 3（架构演进）阶段已完成以下基础设施
 
 | 组件 | 状态 | 部署位置 |
 |------|------|----------|
-| Istio 服务网格 | 已部署（P3-T1） | `deploy/istio/` |
+| Istio 服务网格 | **配置已入库，部署未验证**（P3-T1） | `deploy/istio/`（未接入任何 CI 或 Helm 渲染链） |
 | Nacos 配置中心 | 单节点（开发用） | `docker-compose.yml` |
 | 4 个核心服务 | 全部接入 Nacos | gateway / bridge / signing-service / wallet-service |
 
@@ -34,7 +34,7 @@ NexusChain 在 v2.0.0 Phase 3（架构演进）阶段已完成以下基础设施
 ### 1.3 评估触发因素
 
 1. **生产化需求**：Nacos 单节点无法满足生产 SLA（单点故障）
-2. **Istio 共存问题**：Istio 已接管流量管理，需评估 Nacos 在新架构下的定位
+2. **Istio 共存问题**：Istio 设计上接管流量管理（**配置已入库，部署未验证**），需评估 Nacos 在新架构下的定位
 3. **K8s 原生化趋势**：Phase 3 推进 K8s 原生集成，需评估是否将配置中心一并迁移
 
 ### 1.4 Nacos 当前承担的核心能力
