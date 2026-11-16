@@ -11,6 +11,7 @@
  *   GET  /api/contracts       — 获取已部署合约列表
  *   GET  /api/contracts/:addr — 获取合约详情
  *   GET  /api/node/status     — 获取节点状态
+ *   GET  /api/events/head     — 链头 SSE 实时推送（event: init/head）
  *   GET  /api/crosschain      — 获取跨链交易列表
  *
  * 静态资源（2026-10-12 新增）：当 `FRONTEND_DIR` 指向已构建的前端产物时，
@@ -23,6 +24,7 @@ import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { NexusChainRpcClient } from "./rpc.js";
+import { HeadBroadcaster, type HeadEvent } from "./headStream.js";
 
 /** 服务监听端口 */
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
@@ -230,6 +232,54 @@ app.get("/api/node/status", async (_req: Request, res: Response) => {
     console.error("获取节点状态失败:", err);
     res.status(500).json({ error: "获取节点状态失败" });
   }
+});
+
+// ---- 链头 SSE 实时通道（桶 A6 后端件，2026-11-17） ----
+
+/**
+ * 链头广播器：单实例轮询节点、变化才广播。
+ * 不管多少浏览器订阅，节点侧始终只有一条轮询流。
+ */
+const headBroadcaster = new HeadBroadcaster(rpcClient);
+
+/**
+ * GET /api/events/head — Server-Sent Events 链头推送
+ *
+ * 事件流：
+ *   event: head        data: {"height":N,"hash":"0x…","ts":…}   链头变化
+ *   event: init        data: 同上                                接入时的当前链头（可能暂无）
+ *   （注释行以 `: ` 开头，每 15s 一条，供代理/浏览器保活）
+ *
+ * 断线由浏览器 EventSource 自动重连；前端仍有 10s 轮询兜底，
+ * 两条通路并存（SSE 正常时前端可跳过冗余拉取）。
+ */
+app.get("/api/events/head", (req: Request, res: Response) => {
+  // SSE 需要禁用缓冲 + 保持连接；`text/event-stream` 是规范规定的 MIME
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+  res.flushHeaders?.();
+
+  const send = (event: string, data: unknown) => {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+
+  // 接入即发当前链头（可能为 null：节点尚未应答过 —— 前端据此保持既有轮询）
+  send("init", headBroadcaster.currentHead());
+
+  const unsubscribe = headBroadcaster.subscribe((e: HeadEvent) => send("head", e));
+
+  // 保活注释：每 15s 一条 `: ping`，防中间层空闲超时断链
+  const keepalive = setInterval(() => res.write(": ping\n\n"), 15_000);
+  if (typeof keepalive === "object" && "unref" in keepalive) keepalive.unref();
+
+  req.on("close", () => {
+    clearInterval(keepalive);
+    unsubscribe();
+  });
 });
 
 // ---- 路由：跨链交易 ----
