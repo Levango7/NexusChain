@@ -44,10 +44,15 @@ public class ConnectorInflightMetrics {
 
     public ConnectorInflightMetrics(List<PaymentConnector> connectors, MeterRegistry registry) {
         for (PaymentConnector c : connectors) {
+            String id = c.getId();
+            if (id == null) {
+                log.warn("Skipping payment connector with null id (class={})", c.getClass().getName());
+                continue;
+            }
             AtomicInteger gauge = new AtomicInteger();
-            inFlight.put(c.getId(), gauge);
+            inFlight.put(id, gauge);
             Gauge.builder(METRIC, gauge, AtomicInteger::get)
-                    .tag("connector", c.getId())
+                    .tag("connector", id)
                     .description("连接器在途调用计数（实时值）")
                     .register(registry);
         }
