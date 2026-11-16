@@ -277,3 +277,42 @@ Checking rules.yaml
 - **真实集群告警演练**：用合成流量触发 `FinalityVoteRejected`，验证
   Alertmanager 路由与通知。
 - **物理多机/网络分区矩阵**：本切片不覆盖，仍属 #27 的剩余项。
+
+## 七、A-7 交付（2026-11-16，zcode）：规范检查点语义审计（链接口落地）
+
+> §五.2 / §六 挂账的「epoch 窗口/规范检查点语义校验（需要链接口提供"哪个块是规范检查点"）」
+> 由本节闭环。**注意边界**：本节只提供**事实源与核验入口**；「最终性入口是否拒收跨 epoch
+> 重放」仍是协议层改动，**不在本切片** ⇒ §五.2 的「不得声称已防跨 epoch 重放」表述**保持有效**。
+
+**实现（只读：不写库 / 不投票 / 不改内存态）**
+
+- `FinalityCheckpointAuditor`：枚举库内 `finality_checkpoints` 的全部 `(epoch, hash)` **行**，
+  **逐行**判定：
+  1. `HEIGHT_OUT_OF_RANGE`：规范高度 `epoch × epochLength` 超出链头或无块（配置错位/跨分支残留的典型形态）；
+  2. `HASH_MISMATCH`：该高度规范块哈希与库内哈希**逐字节不等**（带 stored/canonical 双证据）；
+  3. `EPOCH_GAP`：**内部空洞**——`[1, maxRecordedInChain)` 间缺记录行；尾随未最终化
+     单列 `finalityLagEpochs`（PLAN-047 实测基线 lag≈2，属正常，不算缺口）；
+  4. `UNKNOWN`：无库/无链/异常（fail-visible，绝不静默放过）。
+- `GET /consensus/finality/checkpoints/audit`（只读 JSON）。**安全白名单必须登记**
+  （`WebSecurityConfig.LOCAL_ONLY_PUBLIC_PATHS`）：漏配的现场形态 = **401**（本演习当场踩到，
+  是 PLAN-032「新增 /consensus/* 端点必须同步白名单」纪律的又一次复现）；白名单测试已双钉
+  （必须放行 + 父/子路径不得被顺手放行）。
+- `FinalityCoordinator.getGadget()`：只读访问器，让审计与主流程**共用同一视图**，避免两处逻辑漂移。
+
+**真 PG 实测矩阵**（单节点 JVM + 容器 PG；epochLength=2；每形态篡改后**重启**再审计）
+
+| 形态 | 注入 | 审计结论 |
+|---|---|---|
+| 健康链 | — | `OK`（7 检查点逐条与规范块哈希匹配） |
+| 篡改哈希 | UPDATE 某 epoch 哈希为 deadbeef… + 重启 | **自愈 + 残留行被点名**：启动扫描据票重建正确行（同 epoch 两行）⇒ `HASH_MISMATCH=1`（`stored=deadbeef… canonical=364f36…`） |
+| 越界 epoch | INSERT (99999, …) + 重启 | `HEIGHT_OUT_OF_RANGE=1`（`height=199998 > head=22`） |
+| 只删检查点行 | DELETE 行 + 重启 | `OK`——**派生数据自愈**（票是真相源，行被重新推导；已写成正面断言） |
+| 删票 + 删行 | DELETE votes+row + 重启 | `EPOCH_GAP=1`（`interior gap … below the highest recorded epoch 14`）——真数据丢失不可自愈 |
+
+**被演习修掉的两处判据缺陷（方法论）**
+1. 早期版本按 epoch 合并哈希、**任一匹配即 OK** ⇒ 真 PG 实测的 deadbeef 残留行被静默放过 ⇒ 改**逐行判定**；
+2. 早期版本把**尾随滞后**（正常 lag≈2）当缺口 ⇒ 改只报内部空洞，尾随量单列。
+
+**边界**：只比对「本地库 × 本地规范链」；不做跨节点比对（anti-entropy 职责）、不重算权重
+（`FinalityGadget` 入口已验签计权）、不校验票数关系；审计读**当前视图**（启动加载的投影），
+运行中直接改库不改变已加载视图——真实故障形态（配置错位/跨分支残留）在**重启自检**时体现。

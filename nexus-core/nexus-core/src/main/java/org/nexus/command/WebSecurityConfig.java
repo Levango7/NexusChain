@@ -51,6 +51,12 @@ public class WebSecurityConfig implements WebMvcConfigurer {
             "/consensus/block-outbox",
             "/consensus/block-writer",
             "/consensus/finality",
+            // A-7（2026-11-16）：最终性检查点语义审计是**只读**端点，用途包含
+            // "升级窗口前后取证 / 换 epoch-length 后自检 / 分支切换后复核"——
+            // 这些场景下运维脚本与探针都从本机或容器内直连，必须免鉴权。
+            // 漏加的现场形态已实测：401（本端点 2026-11-16 演习中踩到，正是
+            // PLAN-032 那条纪律的又一次复现）。
+            "/consensus/finality/checkpoints/audit",
             "/consensus/validator-set",
             "/consensus/catch-up",
             "/NexusChainCore/*"
