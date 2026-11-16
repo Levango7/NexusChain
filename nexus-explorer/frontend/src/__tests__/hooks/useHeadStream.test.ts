@@ -228,4 +228,18 @@ describe("useHeadStream", () => {
     });
     expect(MockEventSource.instances).toHaveLength(1);
   });
+
+  it("环境无 EventSource（jsdom/旧浏览器）时优雅降级：不抛错、connected 恒 false、不重试", async () => {
+    vi.unstubAllGlobals();
+    // jsdom 本身没有 EventSource；stub 后再撤掉即模拟"未定义"环境
+    const { result } = renderHook(() => useHeadStream());
+    expect(result.current.head).toBeNull();
+    expect(result.current.connected).toBe(false);
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    // 不重试、不崩溃——HomePage 的 10s 轮询兜底通路接管
+    expect(result.current.connected).toBe(false);
+    expect(result.current.head).toBeNull();
+  });
 });

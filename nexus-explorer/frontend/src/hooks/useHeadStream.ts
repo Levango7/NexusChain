@@ -70,6 +70,13 @@ export function useHeadStream(url: string = "/api/events/head") {
 
     const open = () => {
       if (disposed) return;
+      // 环境降级：无 EventSource（旧浏览器 / jsdom 等非浏览器测试环境）时不
+      // 订阅、不重试——connected 恒 false，HomePage 走原 10s 轮询兜底通路。
+      // 之前未防护导致渲染 HomePage 的既有测试套件在 CI jsdom 下 ReferenceError。
+      if (typeof EventSource === "undefined") {
+        setConnected(false);
+        return;
+      }
       const es = new EventSource(url);
       esRef.current = es;
 
