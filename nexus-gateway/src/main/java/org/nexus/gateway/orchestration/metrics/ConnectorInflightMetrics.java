@@ -1,4 +1,4 @@
-package org.nexus.gateway.observability;
+package org.nexus.gateway.orchestration.metrics;
 
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;

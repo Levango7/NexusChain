@@ -1,7 +1,7 @@
 package org.nexus.gateway.orchestration.service;
 
 import org.nexus.analytics.event.PaymentCompletedEvent;
-import org.nexus.gateway.observability.ConnectorInflightMetrics;
+import org.nexus.gateway.orchestration.metrics.ConnectorInflightMetrics;
 import org.nexus.gateway.orchestration.connector.*;
 import org.nexus.gateway.orchestration.model.OrchPaymentStatus;
 import org.nexus.gateway.orchestration.model.OrchestratedPayment;
