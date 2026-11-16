@@ -239,6 +239,60 @@ class FinalityCheckpointAuditorTest {
         assertEquals(6L, report.get("finalityLagEpochs"));
     }
 
+    // ==================== A-1 真实分区钻交叉发现（2026-11-16） ====================
+
+    @Test
+    void healthyNodeSlightlyBehindIsNotReportedAsFailure() {
+        // A-1 真实分区钻实测（WSL 三节点 + iptables 按 UID 切出向）：治愈后节点 D 健康
+        // （其自身 lag=1），但审计报 FAIL —— 两行都落在**尾随窗口**内：
+        //   行 epoch=88（高 176）超链头 175（epoch 存在、高度没解析）
+        //   行 epoch=87（高 174）在链头内但规范块尚未可解析
+        // 审计要抓的是**陈旧/外来/损坏**行，不是「追块追到一半」⇒ 必须只报信息态。
+        // 这里按 EPOCH_LEN=4 复刻该形态：head=33 ⇒ headEpoch=9；行记到 epoch 9；
+        // 规范块只到 epoch 7（高 28）⇒ epoch 8 缺块、epoch 9 超链头，两行都在尾随窗口。
+        for (long epoch = 1; epoch <= 9; epoch++) {
+            byte[] hash = (epoch <= 7) ? canon(epoch * EPOCH_LEN, (int) epoch) : fixedHash((int) epoch);
+            store.markFinalized(epoch, hash);
+        }
+
+        FinalityCheckpointAuditor auditor = new FinalityCheckpointAuditor(gadget, chain, EPOCH_LEN);
+        Map<String, Object> report = auditor.audit(33L);
+
+        assertEquals("OK", report.get("verdict"),
+                "健康但略落后的节点不得判 FAIL（A-1 实测误报）：" + report);
+        @SuppressWarnings("unchecked")
+        Map<FinalityCheckpointAuditor.Verdict, Integer> tally =
+                (Map<FinalityCheckpointAuditor.Verdict, Integer>) report.get("tally");
+        assertEquals(0, tally.get(FinalityCheckpointAuditor.Verdict.HEIGHT_OUT_OF_RANGE),
+                "尾随窗口内的高度未解析不得计入 HEIGHT_OUT_OF_RANGE");
+        assertEquals(2, tally.get(FinalityCheckpointAuditor.Verdict.TRAILING_LAG),
+                "两行尾随（epoch 8 缺块 + epoch 9 超链头）应报 TRAILING_LAG 信息态");
+    }
+
+    @Test
+    void rowForEpochAboveHeadEpochIsAlwaysAnOutOfRangeFailure() {
+        // 反向判据（防「尾随窗口」开太大变成漏报口子）：行为**链上都还不存在的 epoch**
+        // 记了检查点（epoch > headEpoch）永远算异常——这正是原始动机用例
+        // （epochBeyondHeadIsReportedAsOutOfRange）的语义，收紧后不得被窗口放过。
+        // head=20 ⇒ headEpoch=5；行记到 epoch 9 ⇒ epoch 6/7/8/9 全部 > headEpoch。
+        for (long epoch = 1; epoch <= 9; epoch++) {
+            canon(epoch * EPOCH_LEN, (int) epoch);
+            store.markFinalized(epoch, fixedHash((int) epoch));
+        }
+
+        FinalityCheckpointAuditor auditor = new FinalityCheckpointAuditor(gadget, chain, EPOCH_LEN);
+        Map<String, Object> report = auditor.audit(20L);
+
+        assertEquals("FAIL", report.get("verdict"), "epoch 超过 headEpoch 的行必须判红");
+        @SuppressWarnings("unchecked")
+        Map<FinalityCheckpointAuditor.Verdict, Integer> tally =
+                (Map<FinalityCheckpointAuditor.Verdict, Integer>) report.get("tally");
+        assertEquals(4, tally.get(FinalityCheckpointAuditor.Verdict.HEIGHT_OUT_OF_RANGE),
+                "epoch 6/7/8/9 四行都在链上不存在，全部计入 HEIGHT_OUT_OF_RANGE");
+        assertEquals(0, tally.get(FinalityCheckpointAuditor.Verdict.TRAILING_LAG),
+                "超过 headEpoch 的行不得被当成尾随");
+    }
+
     private void injectRegistryIntoStaking(StakingService target, ValidatorRegistry targetRegistry) {
         try {
             var field = StakingServiceImpl.class.getDeclaredField("validatorRegistry");

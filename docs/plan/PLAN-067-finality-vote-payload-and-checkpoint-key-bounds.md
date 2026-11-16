@@ -316,3 +316,37 @@ Checking rules.yaml
 **边界**：只比对「本地库 × 本地规范链」；不做跨节点比对（anti-entropy 职责）、不重算权重
 （`FinalityGadget` 入口已验签计权）、不校验票数关系；审计读**当前视图**（启动加载的投影），
 运行中直接改库不改变已加载视图——真实故障形态（配置错位/跨分支残留）在**重启自检**时体现。
+
+### 7.4 补记（2026-11-16，A-1 真实分区钻交叉发现）：第三处判据缺陷——尾随维度上的误报
+
+A-1（真实网络分区，WSL 内核内三节点 + iptables 按 UID 切出向）**治愈末态**上，审计端点
+把**健康但略落后**的节点 D 判成 `FAIL`：
+
+```
+D: verdict=FAIL head=175 lagEpochs=1 maxRecordedEpoch=88 maxRecordedInChain=87
+   row: epoch=88 height=176 HEIGHT_OUT_OF_RANGE  "…is outside the chain (head=175)"
+   row: epoch=87 height=174 HEIGHT_OUT_OF_RANGE  "no canonical block at height 174"
+```
+
+两行都落在**尾随窗口**内（D 只是追块追到一半：自身 lag=1）。这与 §七 第 2 处缺陷同源——
+**「只算内部空洞」的设计没有同步到高度维**：epoch 维已经原谅尾随，高度维没有。
+
+**修法**：新增信息态 `TRAILING_LAG`，判别式
+
+> `trailing = epoch > trailingFloor && epoch ≤ headEpoch`，
+> 其中 `trailingFloor = maxRecordedEpoch − (finalityLagEpochs + 1)`。
+
+- 窗口内且 `epoch ≤ headEpoch`（该 epoch 在链上确实存在，只是高度/块还没解析）⇒ 只报
+  `TRAILING_LAG`（信息态，**不计入 FAIL**），明细文案写清「node still catching up」；
+- **`epoch > headEpoch`（为链上还不存在的 epoch 记了检查点）永远判 `HEIGHT_OUT_OF_RANGE`**
+  ——这条守住原始动机用例（配置错位/跨分支残留）的语义，防「窗口开太大」变成漏报口子。
+
+**回归**：`FinalityCheckpointAuditorTest` 新增 2 例——`healthyNodeSlightlyBehindIsNotReportedAsFailure`
+（复刻 D 的形态：head=33/记录到 epoch 9/规范块只到 28 ⇒ 期待 `OK` 且 `TRAILING_LAG=2`、`HEIGHT_OUT_OF_RANGE=0`）
+与 `rowForEpochAboveHeadEpochIsAlwaysAnOutOfRangeFailure`（head=20 ⇒ headEpoch=5，行记到 9
+⇒ epoch 6/7/8/9 四行全判红、`TRAILING_LAG=0`）。**审计器测试 9/9 绿**（含原有 7 例，其中
+`epochBeyondHeadIsReportedAsOutOfRange` 的原始语义未被削弱）。
+
+**口径影响**：判「审计 FAIL」的责任边界更准了——审计抓**陈旧/外来/损坏**行，
+不抓「追块追到一半」；因此**分区/追块期间的 FAIL 不再需要人工排除**。
+`HEIGHT_OUT_OF_RANGE` 的语义收窄为「epoch 超出链头 epoch，或内部 epoch 的高度解析不到规范块」。
