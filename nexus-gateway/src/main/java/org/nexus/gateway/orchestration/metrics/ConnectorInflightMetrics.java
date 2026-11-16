@@ -59,24 +59,33 @@ public class ConnectorInflightMetrics {
         log.info("ConnectorInflightMetrics bound {} connector(s)", inFlight.size());
     }
 
-    /** 一次调用进入连接器时调用。 */
+    /** 一次调用进入连接器时调用。未知/null id 安全降级为 no-op。 */
     public void start(String connectorId) {
+        if (connectorId == null) {
+            return;
+        }
         AtomicInteger g = inFlight.get(connectorId);
         if (g != null) {
             g.incrementAndGet();
         }
     }
 
-    /** 调用结束（无论成功/异常/超时）时调用。异常路径也要保证减 1。 */
+    /** 调用结束（无论成功/异常/超时）时调用。异常路径也要保证减 1。未知/null id 安全降级为 no-op。 */
     public void end(String connectorId) {
+        if (connectorId == null) {
+            return;
+        }
         AtomicInteger g = inFlight.get(connectorId);
         if (g != null) {
             g.decrementAndGet();
         }
     }
 
-    /** 当前在该连接器上跑的调用数。 */
+    /** 当前在该连接器上跑的调用数。未知/null id 返回 0。 */
     public int current(String connectorId) {
+        if (connectorId == null) {
+            return 0;
+        }
         AtomicInteger g = inFlight.get(connectorId);
         return g == null ? 0 : g.get();
     }
