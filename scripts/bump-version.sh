@@ -50,6 +50,17 @@ sed -i.bak "s/^    version = '[0-9]*\.[0-9]*\.[0-9]*'/    version = '${NEW_VERSI
 # 已不存在于 build.gradle（死代码，空匹配静默通过），移除以免误导。
 rm -f build.gradle.bak
 
+# 1b. 子模块 Spring Boot 模块 version（2026-11-16）：8 个子模块曾钉在 2.30.0 跨多个
+#     版本无人测出——门禁已齐但 bump 脚本继续遗漏，下一次归版必须一起升。
+SUB_MODULES="nexus-api-gateway nexus-bridge nexus-wallet-service nexus-signing-service nexus-settlement nexus-oracle nexus-analytics nexus-compliance"
+for mod in $SUB_MODULES; do
+  f="$mod/build.gradle"
+  if [ -f "$f" ]; then
+    sed -i.bak "s/^version[[:space:]]*=[[:space:]]*'[0-9]*\.[0-9]*\.[0-9]*'/version = '${NEW_VERSION}'/" "$f"
+    rm -f "$f.bak"
+  fi
+done
+
 # 2. deploy/k8s/*.yml 镜像 tag
 echo "[2/8] 更新 deploy/k8s/*.yml 镜像 tag ..."
 for f in deploy/k8s/*.yml; do
