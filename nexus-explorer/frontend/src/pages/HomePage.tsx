@@ -15,6 +15,7 @@ import type { BlockInfo, TransactionInfo, ChainStatus } from "../types";
 import { ErrorState, Loading } from "../components/ui";
 import { displayErrorMessage } from "../utils/displayError";
 import { formatRelativeTime } from "../utils/time";
+import { useHeadStream } from "../hooks/useHeadStream";
 import { PageHeader } from "../components/layout/PageHeader";
 
 /**
@@ -40,6 +41,11 @@ const HomePage: React.FC = () => {
   // 会用旧数据覆盖新一轮已渲染的新数据。请求序号保证只有最新一轮响应
   // 才更新 state。
   const fetchSeq = useRef(0);
+  // 桶 A6：链头 SSE 通道。健康时由 head 事件驱动列表刷新并跳过 10s 轮询；
+  // 断开时 connected=false，useEffect 自动回退到原轮询形态。
+  const { head, connected: sseHealthy } = useHeadStream();
+  // 只在链头高度变化时刷列表（init 事件/重复同高事件不触发）
+  const lastRefreshHeight = useRef<number | null>(null);
 
   const fetchData = useCallback(async () => {
     const seq = ++fetchSeq.current;
@@ -79,15 +85,30 @@ const HomePage: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 桶 A6：SSE head 事件驱动刷新——高度变化才拉列表，且仅当 SSE 通路健康
+  useEffect(() => {
+    if (!sseHealthy || head === null) return;
+    if (lastRefreshHeight.current === head.height) return;
+    lastRefreshHeight.current = head.height;
+    fetchData();
+  }, [head, sseHealthy, fetchData]);
+
   useEffect(() => {
     fetchData();
     // 审计 B6：失败时不要把 10s 高频轮询一直保持 —— 对不可达的后端每轮打 3 个
     // 端点持续施压，对用户却毫无收益。进入错误态后退避到 60s，恢复后自动回 10s。
     // （client.ts 自己的注释也点过「10s 轮询会堆积请求」，当时只补了 8s 超时。）
+    // 桶 A6（2026-11-17）：SSE 通路健康时跳过整轮拉取（head 事件已带最新高度，
+    // 区块/交易列表由 SSE 回调触发刷新），只保留 status 轻探针确认节点活着。
+    // SSE 断开时回到原 10s/60s 轮询形态，页面行为与 A6 之前完全一致。
+    if (sseHealthy) {
+      api.getStatus().catch(() => null);
+      return;
+    }
     const intervalMs = error ? 60_000 : 10_000;
     const iv = setInterval(fetchData, intervalMs);
     return () => clearInterval(iv);
-  }, [fetchData, error]);
+  }, [fetchData, error, sseHealthy]);
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
