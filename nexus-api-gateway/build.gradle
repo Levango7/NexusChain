@@ -45,7 +45,7 @@ ext['jackson-2-bom.version'] = '2.21.7'
 ext['jackson-bom.version'] = '3.1.7'
 
 group = 'org.nexus'
-version = '2.78.0'
+version = '2.78.1'
 
 java {
     sourceCompatibility = 17
