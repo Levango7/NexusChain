@@ -436,17 +436,18 @@ jobs:
         with:
           ref: ${{ steps.target.outputs.tag }}
 
-      # 2026-09-22：与 deploy-staging 同策略 —— 未配置凭据则跳过并告警，
-      # 不把一个"尚未配置"的状态渲染成"部署失败"。
-      - name: 检查部署凭据是否配置
+      # 2026-11-16：fail-closed —— prod 部署是显式 dispatch + environment 审批后的
+      #  deliberate 动作，缺凭据必须让 job 红，不能"跳过还显示成功"。
+      # 旧行为（warning + configured=false，后续步骤全跳过而 job 绿）会产出
+      # "审批通过、绿灯、实际未部署"的假象（X3 的 CI 结构成因）。
+      - name: 检查部署凭据是否配置（fail-closed）
         id: creds
         run: |
           if [ -z "${{ secrets.KUBE_CONFIG_PROD }}" ]; then
-            echo "::warning::未配置 secrets.KUBE_CONFIG_PROD —— 跳过 prod 部署（发布产物已产出，仅未部署）。"
-            echo "configured=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "configured=true" >> "$GITHUB_OUTPUT"
+            echo "::error::未配置 secrets.KUBE_CONFIG_PROD —— prod 部署已显式触发并通过审批，缺凭据必须失败，不得静默跳过。"
+            exit 1
           fi
+          echo "configured=true" >> "$GITHUB_OUTPUT"
 
       - name: Setup Helm
         if: steps.creds.outputs.configured == 'true'
