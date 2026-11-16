@@ -354,11 +354,35 @@ jobs:
       # 报 "Kubernetes cluster unreachable"（空 kubeconfig → helm 连 localhost:8080），
       # 使发布流水线恒红、掩盖真实问题。
       # 语义区分：**未配置 → 跳过并告警**（不是失败）；**已配置但部署失败 → 仍然失败**。
+      #
+      # 2026-11-17 补充（结构性事实，别再重新推导一遍）：
+      #   `deploy-staging` 与 `deploy-prod` 由**互斥事件**触发 —— 前者
+      #   `github.event_name == 'push'`（tag push），后者 `'workflow_dispatch'`。
+      #   ⇒ staging 在任何一次运行里都**不可能**为 prod 提供门禁，这与 `needs:` 无关。
+      #   反向验证：若给 deploy-prod 加 `needs: [deploy-staging]`，因 prod 只在
+      #   workflow_dispatch 触发、此时 staging 的 `if` 为假会被 skip，而 GitHub 对
+      #   「依赖被 skip」的 job 默认也 skip ⇒ **prod 将永远不执行**；改成
+      #   `if: always()` 又能绕过 staging 失败，同样不成门禁。
+      #   ⇒ prod 之前的唯一门禁是 GitHub environment `production` 的 required
+      #   reviewer（人工审批），不是 staging。
+      #   因此本步骤的正确做法是**让跳过可见**（写进 job summary），而不是改成失败 ——
+      #   改成失败会回到 2026-09-22 之前「每次发布恒红」的老问题。
       - name: 检查部署凭据是否配置
         id: creds
         run: |
           if [ -z "${{ secrets.KUBE_CONFIG_STAGING }}" ]; then
             echo "::warning::未配置 secrets.KUBE_CONFIG_STAGING —— 跳过 staging 部署（发布产物已产出，仅未部署）。配置该 secret 后自动恢复部署。"
+            # 只写 ::warning:: 会被折叠在日志里，run summary 上看起来仍是「发布成功」。
+            # 写进 summary，让「本次发布没部署到 staging」出现在人真正会看的页面上。
+            {
+              echo "## ⚠️ 本次发布未部署到 staging"
+              echo ""
+              echo "未配置 \`secrets.KUBE_CONFIG_STAGING\`，本 job 只产出发布产物、**没有部署任何东西**。"
+              echo ""
+              echo "job 显示绿色是因为「跳过」被记为成功，**不代表 staging 已验证**。"
+              echo "需要 staging 验证时请先配置该 secret；若长期无 staging 集群，应视为本仓不具备 staging 环节，"
+              echo "而不是把这一步当成 prod 之前的一道门。"
+            } >> "$GITHUB_STEP_SUMMARY"
             echo "configured=false" >> "$GITHUB_OUTPUT"
           else
             echo "configured=true" >> "$GITHUB_OUTPUT"
