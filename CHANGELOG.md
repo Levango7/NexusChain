@@ -2,6 +2,63 @@
 
 本文件记录 NexusChain 各版本的变更。
 
+## [2.78.1] - 2026-11-16
+
+> **发布性质**：**补丁版本**；不含 P0 共识变更，升级**无需协调窗口**——按
+> 常规滚动迁移（values-prod.yaml / docker-compose.prod.yml 加版本即可）即可
+> 在同一维护窗口完成。请在 `bin/` 检出 `v2.78.1` 后运行实际迁移并在各节点
+> 上线后验 `scripts/acceptance-e2e.sh`。
+
+### 语义变更（流水线 / 配置行为，不涉及业务逻辑）
+
+**生产部署不再随 tag 触发。** 此前 v2.77.0 / v2.78.0 两个 `Release & Deploy`
+运行常年停在 `production` 等待审批（本仓 `KUBE_CONFIG_PROD` 从未下发，审批流
+转 skip+warning）。为了避免「未实际启用的审批坏等」继续累积，tag 发布今后只
+推送镜像 + 默认跳过任何 prod 部署；要执行 prod 部署，请用 **workflow_dispatch
++ `deploy_prod=true` + `target_version=vX.Y.Z`**，走 environment `production`
+审批。指定 tag 必须已经过 GitHub Release（已由 release.yml 校验）、chart
+元数据版本一致。详情见 `.github/workflows/release.yml` 中 `Deploy to Production`。
+
+> **另注意**：`deploy-staging` 步骤保留原行为（KUBE_CONFIG_STAGING 未配置
+> 时自动 skip+warning）。
+
+### 安全（Trivy 基线门禁加固）
+
+**commit `ea0876a4` 合入锚点硬化（#719 Trivy Gate 收口）**：
+- `scripts/security/trivy-baseline-gate.py` 修复「作者日漂移」绕过（2026-11-07
+  实测 `++` 格式 → `--format` 一处 `%as` 可为未来值而被 `addedAt` 双重前提绕过
+  ——对 `--git-log-pretty=%ai` 加 `today` 下界判断，而非 day=catch-all；基本
+  对齐 `first-seen` 语义）；
+- **R 系列族**：R2 未来日拒收；R1 `fail-closed`；R3 `--depth 1` 增强（同时挡住
+  `--show-current` 漏）；修复 6 个新增用例，全部随测试框架 `trivy-baseline-gate.py`
+  自动阻断；
+- `.trivyignore` 删除过期项 `CVE-2026-76844`（2026-11-12 已由 #664 pin bump 注销）；
+- 以上改动**只强化门禁、不改写任何部署产物**；运行时生产不需重启。
+
+### 维护 / 流程 / 交付
+
+- **#716**（`ci(release): Deploy Prod dispatch-only`）；
+- **#718**（观测 / 演练收口与验收清单 Wave 1 完成项）；
+- **#720**（灰度 / 金丝雀 runbook + `scripts/ops/canary-gate.sh`）；
+- **#693**（`.trivyignore` 注销 `CVE-2026-76844`；Debian DSA-6613-1）；
+- **#722**（子模块 version 归一到 `2.78.0`）——8 个 Spring Boot 子模块 `version`
+  此前自 v2.77.0 钉在 `2.30.0`，本次与主产物一齐归一，delivery-bundle 输出的 jar
+  文件名收口；
+- **version consistency gate 新增「断言 9」**（子模块 `version` 必须与根一致；漂移即
+  `fail`）+ **bump-version.sh 同步**子模块版本——`bump-version.sh 2.78.1` 会把
+  子模块全部一并至 2.78.1；
+- **migration-guide 当前版本** → v2.78.1；迁移基线**不变**（仍为 93 支脚本；本版
+  无新 migration）。
+
+### 已知约束（继续有效）
+
+- **CVE-2026-115506**（`os-no-fix`）：libexpat1，Debian trixie **无可用修复**
+  （`<no-dsa>`，仅 forky/sid 2.10.0-1）；继续走 `trivy-baseline.json` 登记
+  （fixable:none，到期 2027-02-04）；详情见 `security-sla.md`。
+- **CVE-2026-85091**（zlib1g）已于 2026-11-12 Google 重发 distroless + pin bump
+  修复（DSA-6613-1 → 1:1.3.dfsg+really1.3.1-1+deb13u1），本版 Trivy 全绿；
+  详情见 `docs/security/` 实装。
+
 ## [2.78.0] - 2026-11-13
 
 > 发布口径：以 master 分支保护的必需检查为准；本版含 **P0 共识变更**（见首条），

@@ -142,4 +142,25 @@ for cf in deploy/helm/Chart.yaml deploy/helm/charts/*/Chart.yaml; do
 done
 echo "deploy/helm Chart 元数据版本 = $GRADLE_VERSION（umbrella + 子 chart）"
 
+# 断言 9（2026-11-16 补）：子模块 `version = 'X.Y.Z'` 必须与根 GRADLE_VERSION 一致。
+# 背景：nexus-api-gateway / nexus-bridge / nexus-analytics 等 8 个 Spring Boot 子模块
+# 自 v2.77.0 起就钉在 '2.30.0'——bump-version.sh 只改根不 touch 子模块，
+# delivery bundle 里各模块 jar 的文件名全部带着历史号（v2.78.0 交付包里就用了
+# `nexus-api-gateway-2.30.0.jar` / `nexus-bridge-2.30.0.jar`……），与发布协调的
+# 全部其他产物不一致。该漂移被真实交付演练暴露后本次批次连带归一。
+SUB_MODULES="nexus-api-gateway nexus-bridge nexus-wallet-service nexus-signing-service nexus-settlement nexus-oracle nexus-analytics nexus-compliance"
+BAD_SUB=""
+for mod in $SUB_MODULES; do
+    f="$mod/build.gradle"
+    [ -f "$f" ] || { BAD_SUB="$BAD_SUB$f（缺失） "; continue; }
+    v=$(grep -E "^[[:space:]]*version[[:space:]]*=" "$f" | head -1 | sed -E "s/.*version[[:space:]]*=[[:space:]]*'([^']*)'.*/\1/" | tr -d '\r' || true)
+    if [ "$v" != "$GRADLE_VERSION" ]; then
+        BAD_SUB="$BAD_SUB$mod(version=$v) "
+    fi
+done
+if [ -n "$BAD_SUB" ]; then
+    fail "子模块版本漂移：${BAD_SUB} != $GRADLE_VERSION —— 跑 bash scripts/bump-version.sh $GRADLE_VERSION 或手工归一"
+fi
+echo "子模块 version = $GRADLE_VERSION（$SUB_MODULES）"
+
 echo "OK: 版本口径一致 ($GRADLE_VERSION)"

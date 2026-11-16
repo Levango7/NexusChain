@@ -11,7 +11,7 @@ plugins {
 apply from: "${rootDir}/../gradle/composite-spotbugs.gradle"
 
 group = 'org.nexus'
-version = '2.30.0'
+version = '2.78.1'
 
 java {
     sourceCompatibility = 17
