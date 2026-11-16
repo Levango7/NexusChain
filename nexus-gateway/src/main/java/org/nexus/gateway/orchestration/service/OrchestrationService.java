@@ -12,6 +12,7 @@ import org.nexus.gateway.orchestration.routing.RoutingEngine;
 import org.nexus.gateway.orchestration.routing.ai.MetricsCollector;
 import org.nexus.gateway.orchestration.settlement.ChainSettlementConfirmationService;
 import org.nexus.gateway.resilience.ConnectorCircuitBreaker;
+import org.nexus.gateway.resilience.ConnectorRateLimiter;
 import org.nexus.gateway.risk.PaymentRequest;
 import org.nexus.gateway.risk.PaymentRiskService;
 import org.nexus.gateway.risk.RiskDecision;
@@ -31,6 +32,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Core orchestration service: creates payments, routes to connectors, handles failover.
@@ -76,6 +78,10 @@ public class OrchestrationService {
     private final ConnectorCircuitBreaker circuitBreaker;
     /** 连接器在途并发计数（A5：gateway 生产代码此前零计数；null 时降级为 no-op）。 */
     private final ConnectorInflightMetrics inflightMetrics;
+    /** 出口限流器（默认关闭；null / disabled 时恒放行）。拒绝走 failover，不进熔断。 */
+    private final ConnectorRateLimiter rateLimiter;
+    /** 限流拒绝累计（进程生命周期；监控用，详见 slo 口径后续登记）。 */
+    private final AtomicLong rateLimitDenied = new AtomicLong();
 
     @Autowired
     public OrchestrationService(OrchestratedPaymentRepository repo,
@@ -89,7 +95,8 @@ public class OrchestrationService {
                                 ApplicationEventPublisher applicationEventPublisher,
                                 @Autowired(required = false) ChainSettlementConfirmationService settlementConfirmationService,
                                 @Autowired(required = false) ConnectorCircuitBreaker circuitBreaker,
-                                @Autowired(required = false) ConnectorInflightMetrics inflightMetrics) {
+                                @Autowired(required = false) ConnectorInflightMetrics inflightMetrics,
+                                @Autowired(required = false) ConnectorRateLimiter rateLimiter) {
         this.repo = repo;
         this.routingEngine = routingEngine;
         this.connectorRegistry = connectorRegistry;
@@ -102,6 +109,7 @@ public class OrchestrationService {
         this.settlementConfirmationService = settlementConfirmationService;
         this.circuitBreaker = circuitBreaker;
         this.inflightMetrics = inflightMetrics;
+        this.rateLimiter = rateLimiter;
     }
 
     /**
@@ -114,7 +122,7 @@ public class OrchestrationService {
                                 OrchestrationWebhookDispatcher webhookDispatcher,
                                 PaymentRiskService riskService) {
         this(repo, routingEngine, connectorRegistry, idempotencyStore,
-                webhookDispatcher, riskService, null, null, null, null, null, null);
+                webhookDispatcher, riskService, null, null, null, null, null, null, null);
     }
 
     /**
@@ -128,7 +136,7 @@ public class OrchestrationService {
                                 PaymentRiskService riskService,
                                 Tracer tracer) {
         this(repo, routingEngine, connectorRegistry, idempotencyStore,
-                webhookDispatcher, riskService, tracer, null, null, null, null, null);
+                webhookDispatcher, riskService, tracer, null, null, null, null, null, null);
     }
 
     // P1（2026-09-17 修复）：此处**不得**标注 @Transactional。
@@ -304,6 +312,21 @@ public class OrchestrationService {
             req.setPayerAddress(payerAddress);
             req.setPayeeAddress(payeeAddress);
             for (PaymentConnector connector : connectors) {
+                // 出口限流（2026-11-17）：默认关闭；开启且本周期配额用尽时跳过该
+                // connector 走 failover。语义与 DECLINE 同级：不进熔断器（本地节流
+                // ≠ 渠道不可用）、不喂 AI 路由（连接器未被真调）、留 span 审计属性。
+                if (rateLimiter != null
+                        && !rateLimiter.tryAcquire(connector.getId(), connector.getType())) {
+                    log.warn("Connector {} rate-limited for payment {}, trying next",
+                            connector.getId(), paymentId);
+                    rateLimitDenied.incrementAndGet();
+                    try (BusinessSpan rlSpan = BusinessSpan.start(tracer, "payment.connector.ratelimited")
+                            .attr("payment.id", paymentId)
+                            .attr("payment.connector.id", connector.getId())) {
+                        // span 仅作审计轨迹；无内容事件
+                    }
+                    continue;
+                }
                 // P3-T5：连接器提交 span（payment.connector.submit）
                 try (BusinessSpan connSpan = BusinessSpan.start(tracer, "payment.connector.submit")
                         .attr("payment.id", paymentId)

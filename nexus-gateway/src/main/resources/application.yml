@@ -603,6 +603,18 @@ nexus:
           wait-duration-in-open-state: 60s
         consortium:
           failure-rate-threshold: 40
+    # Connector 出口限流（2026-11-17）：默认关闭（enabled 不写 = false）。
+    # 仅在确认渠道有真实出口配额（PSP 合同限速）时显式打开：
+    #   connector-rate-limit:
+    #     enabled: true
+    #     default-config:
+    #       limit-for-period: 50
+    #       limit-refresh-period: 1s
+    #     instances:
+    #       stripe:
+    #         limit-for-period: 20
+    # 语义：配额用尽 → 编排层跳过该 connector 走 failover（同 DECLINE，
+    # 不进熔断器、不喂 AI 路由——本地节流不代表渠道健康状态）。
 
   # === 任务 #27：SLA/SLO 监控配置 ===
   # SlaMonitorService 定时从 MeterRegistry 读取指标数据，按 SlaTarget 定义计算
