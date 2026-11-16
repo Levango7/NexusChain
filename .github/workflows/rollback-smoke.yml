@@ -1,0 +1,123 @@
+name: K8s Rollback Smoke (kind)
+
+# 目的：在零成本 GitHub Actions 上验证回滚预案中最关键、但从未演练过的两条
+# 集群路径 —— `helm rollback` 与 `kubectl rollout undo`。
+# 2026-11-16：X2 阻塞项（docs/drill-records/ 0 文件）的自动化补位。
+#
+# 范围边界（必须一起读）：
+#   - 本 job 只验证 Helm/K8s 回滚机制（revision 创建、rollback、Pod 恢复、
+#     rollout undo），不验证 NexusChain 业务镜像、数据库迁移回滚、链快照恢复、
+#     资金语义 —— 那些需要真实集群与生产库，见 docs/runbooks/upgrade-rollback.md:268。
+#   - 使用无状态 nginx chart 作载体：回滚机制与业务无关，用它可以把 job 控制在
+#     3-5 分钟，且不依赖 build-and-test（后者 30-40 分钟）。
+#   - 本 job 不是 required context，不阻断合并；它产出的是可复跑的演练记录，
+#     不是"已部署证明"。真实部署收据（X3）仍需常驻集群。
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [master]
+    paths:
+      - '.github/workflows/rollback-smoke.yml'
+      - 'docs/runbooks/upgrade-rollback.md'
+      - 'scripts/ops/canary-gate.sh'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  rollback-smoke:
+    name: Helm rollback + kubectl rollout undo on kind
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v5
+
+      # 与 ci.yml:1056 同款探测：helm/kind-action 内部 curl -sL 吞状态码，
+      # 2026-11-08 曾因 403 HTML 被当 checksum 喂给 sha256sum 而秒失败。
+      - name: 探测 kind 发布资产可达性
+        run: |
+          BASE="https://github.com/kubernetes-sigs/kind/releases/download/v0.31.0"
+          for asset in kind-linux-amd64 kind-linux-amd64.sha256sum; do
+            code=$(curl -sSL -o /dev/null -w '%{http_code}' --retry 3 --retry-all-errors "$BASE/$asset") || code="curl-failed"
+            echo "kind 资产探测: $asset http=$code"
+            if [ "$code" != "200" ]; then
+              echo "::error::下载失败 http=$code url=$BASE/$asset"
+              exit 1
+            fi
+          done
+
+      # 单节点即可验证 helm revision / rollback；不用 ci.yml 的 4 节点 config
+      # （那是为 mpc-engine StatefulSet 反亲和准备的，本 job 无需）。
+      - name: Create kind cluster (single node)
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: rollback-smoke
+          node_image: kindest/node:v1.31.0
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v5
+        with:
+          version: 'v3.14.0'
+
+      - name: Install v1 release
+        run: |
+          helm repo add bitnami https://charts.bitnami.com/bitnami
+          helm repo update
+          helm install rb bitnami/nginx \
+            --namespace rollback-smoke --create-namespace \
+            --version 18.1.0 \
+            --set replicaCount=1 \
+            --wait --timeout 180s
+          kubectl -n rollback-smoke rollout status deploy/rb-nginx --timeout=180s
+          helm -n rollback-smoke history rb
+
+      - name: Upgrade to v2 (create revision 2)
+        run: |
+          helm upgrade rb bitnami/nginx \
+            --namespace rollback-smoke \
+            --version 18.1.0 \
+            --set replicaCount=2 \
+            --wait --timeout 180s
+          kubectl -n rollback-smoke rollout status deploy/rb-nginx --timeout=180s
+          echo "=== history after upgrade ==="
+          helm -n rollback-smoke history rb
+          helm -n rollback-smoke history rb | grep -q '^2[[:space:]]' \
+            || { echo "::error::未产生 revision 2"; exit 1; }
+          REPLICAS=$(kubectl -n rollback-smoke get deploy rb-nginx -o jsonpath='{.spec.replicas}')
+          echo "upgrade 后副本数=$REPLICAS（期望 2）"
+          [ "$REPLICAS" = "2" ] || { echo "::error::upgrade 后副本数不是 2，实际 $REPLICAS"; exit 1; }
+
+      - name: Helm rollback to revision 1
+        run: |
+          helm -n rollback-smoke rollback rb 1 --wait --timeout 180s
+          kubectl -n rollback-smoke rollout status deploy/rb-nginx --timeout=180s
+          REPLICAS=$(kubectl -n rollback-smoke get deploy rb-nginx -o jsonpath='{.spec.replicas}')
+          echo "rollback 后副本数=$REPLICAS（期望 1）"
+          [ "$REPLICAS" = "1" ] || { echo "::error::helm rollback 未恢复 revision 1 的副本数"; exit 1; }
+          echo "=== history after rollback ==="
+          helm -n rollback-smoke history rb
+          helm -n rollback-smoke history rb | grep -q '^3[[:space:]]' \
+            || { echo "::error::rollback 应产生新 revision 3"; exit 1; }
+
+      - name: kubectl rollout undo (redeploy then undo)
+        run: |
+          helm upgrade rb bitnami/nginx \
+            --namespace rollback-smoke --version 18.1.0 \
+            --set replicaCount=2 --wait --timeout 180s
+          kubectl -n rollback-smoke rollout status deploy/rb-nginx --timeout=180s
+          kubectl -n rollback-smoke rollout history deploy/rb-nginx
+          kubectl -n rollback-smoke rollout undo deploy/rb-nginx
+          kubectl -n rollback-smoke rollout status deploy/rb-nginx --timeout=180s
+          REPLICAS=$(kubectl -n rollback-smoke get deploy rb-nginx -o jsonpath='{.spec.replicas}')
+          echo "rollout undo 后副本数=$REPLICAS（期望 1）"
+          [ "$REPLICAS" = "1" ] || { echo "::error::kubectl rollout undo 未生效"; exit 1; }
+
+      - name: Dump cluster state on failure
+        if: failure()
+        run: |
+          kubectl -n rollback-smoke get all,pvc -o wide || true
+          helm -n rollback-smoke history rb || true
+          kubectl -n rollback-smoke logs -l app.kubernetes.io/name=nginx --tail=50 || true
