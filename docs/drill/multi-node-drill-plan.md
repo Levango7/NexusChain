@@ -74,6 +74,43 @@ Tier-2 主机角色：
   5. 分区窗结束时 `nexus_finality_vote_rejected_total{reason}` 无 `checkpoint_limit_exceeded` / `payload_too_large` 洪水（对 PLAN-067 K=4 上限与 2048B 载荷上限的实证价值验证）。
 - **失败判据**：A/B 停摆；C 在分区内假最终化；恢复后缺口不闭合（对照 PLAN-025 实验关闭补票时的历史 0 恢复）。
 
+#### S2 执行结果（2026-11-16，zcode；Tier-2 = WSL 内核内三节点）
+
+- **执行形态**：WSL Ubuntu-24.04 内 3 节点（各 1000 自报质押）+ WSL 原生 PG16@5433（三独立库）
+  + **iptables 链只挂 OUTPUT**、用 `-m owner --uid-owner` **按进程 UID** 切出向；
+  节点各以独立 UID（1003/1004/1005）运行，root 探针不受影响。
+- **为什么不用另两种手法**：Windows 侧建防火墙规则需管理员（本机实测 `Access is denied`）
+  且 loopback 通常豁免；Tier-1 `docker network disconnect` 需先构建应用镜像（本机无既有镜像）。
+- **装置 v1 缺陷（诚实记录，首轮数据作废）**：三节点在同一 netns 内 ⇒ 按**端口**写的
+  `DROP` 规则是**主机级**的——把 A/D 的端口对所有进程都切了（连 root 探针都断）、
+  **A↔D 之间也互断** ⇒ 那一轮根本不是分区实验。v2 改用 owner 匹配（发送侧切断双向即可）。
+
+| 阶段 | 观测 | 判据 |
+|---|---|---|
+| P0 基线 | 三方 `voted/total` 交替 2000/3000、3000/3000；f 31→41 @ h=66→86；lag≈2 | 基线正常 ✓ |
+| P1 隔离 E | **多数侧 A+D**：f 41→63、lag 恒 2、`voted=2000/3000=66.7%` ⇒ **继续最终化**；**少数派 E**：**f 冻结在 41**（120s 零增长）、lag 单调 2→3→…→11、`voted` 恒 `1000/3000=33%` ⇒ **不能最终化** | 活性 ✓ / 安全性 ✓ |
+| P2 治愈 | E 先**回滚**自己分叉出的 18 块（h 107→94）再追平（+30s 三方同 h=141）；末态 f=88、lag=2；**88 个共同 epoch、哈希不一致 0**；`validators_synced` 三方各 3 | 追平+无分叉 ✓ |
+
+- **判据逐条对账（对照上面 5 条候选判据）**：
+  1. 「C 不出块不最终化」→ **半成立，措辞须更正**：C **不能最终化** ✓（f 冻结、33% 永不过 2/3）；
+     但 **C 仍在出块** ✗（h 88→106，+18 块/120s，同期 A/D +43）——少数派按本地链头继续出块是既定行为，
+     **最终性才是保护点**；判据应写成「不出最终化（允许出块）」。
+  2. A/B 继续出块与最终化 ✓（见 P1）。
+  3. 「最终性视图不被伪造票污染」→ **部分验证**：本钻未采 `nexus_finality_vote_rejected_total{reason}`
+     指标；替代证据=A-7 审计端点三方 tally `HASH_MISMATCH=0` 且 verdict OK（D 的 FAIL 系审计器误报，见下）。
+     ⇒ 指标口径仍欠一次采样。
+  4. 恢复后追平与缺口闭合 ✓（见 P2；另观察到**少数派回滚**是闭合的必要步骤）。
+  5. 「rejected_total 无 `checkpoint_limit_exceeded`/`payload_too_large` 洪水」→ **未采样**（同第 3 条）。
+- **交叉发现（A-7 ← A-1）**：治愈末态，**健康但略落后**的节点 D 被审计器判 `FAIL`
+  （`head=175`、记录到 `epoch 88`、`lag=1` ⇒ 2 行 `HEIGHT_OUT_OF_RANGE`：epoch 88 高度超链头、
+  epoch 87 高度无规范块）。定性=**审计器误报**（健康节点追块追到一半天然如此）⇒ 已修：
+  新增信息态 `TRAILING_LAG`，判别式 `epoch > trailingFloor(最新 lag+1 个已记录 epoch) && epoch <= headEpoch`；
+  「行为链上还不存在的 epoch 记了检查点」（`epoch > headEpoch`）**仍判红**（原始语义保住）；
+  2 例回归（健康略落后→OK / 超 headEpoch→FAIL），审计器测试 9/9 绿。详见 PLAN-067 §七补记。
+- **边界**：同机 WSL 内核内（**真内核级 iptables 切断**，但仍单内核、非跨物理机）；
+  未验证「等权 3 节点下 {A} vs {D,E} 双向分裂」中 {D,E} 一侧仍可最终化的既定 2f+1 边界；
+  未采 `/actuator/prometheus`（第 3/5 条判据欠采样）；钻机资产在仓外（`F:/Agent/opencode/workspace/`），未入库。
+
 ### S3 PG 主备切换（#28 收口的第一步）
 
 - **前置**：PG-C 配为 PG-A 的同步流复制备（`synchronous_commit=remote_apply` 或 `remote_write`，由 nex/ops 定）。

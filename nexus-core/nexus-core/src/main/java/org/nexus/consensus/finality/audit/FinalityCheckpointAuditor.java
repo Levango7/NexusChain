@@ -50,6 +50,16 @@ public class FinalityCheckpointAuditor {
 
     public enum Verdict {
         OK,
+        /**
+         * 尾随窗口内的行：链头/规范索引还在追（**信息项，不计失败**）。
+         *
+         * <p>成因（A-1 真实分区钻实测，2026-11-16）：健康但**略落后**的节点
+         * （如 head=175、已记录到 epoch 88 而最近高度尚未解析）会出现
+         * 「高度超出链头」或「该高度暂无规范块」——两行都落在最新
+         * {@code finalityLagEpochs + 1} 个 epoch 内。此时判 FAIL 是**误报**：
+         * 审计要抓的是<b>陈旧/外来/损坏</b>行，不是「追块追到一半」。</p>
+         */
+        TRAILING_LAG,
         /** 规范高度超出链头或无块（配置错位 / 跨分支残留的典型形态）。 */
         HEIGHT_OUT_OF_RANGE,
         /** 规范块哈希与库内检查点哈希不一致。 */
@@ -133,6 +143,9 @@ public class FinalityCheckpointAuditor {
         java.util.Set<Long> recordedEpochs = new java.util.TreeSet<>();
         long maxRecordedInChain = 0L;
         long maxAnyRecorded = 0L;
+        // 第一遍：先算出尾随窗口所需的三个量——已记录的最大 epoch、链内可解析的最大 epoch、
+        // 以及天然滞后（epoch 数）。**必须两遍**：尾随窗口依赖 maxAnyRecorded，而它只能在
+        // 扫完才知道（A-1 真实分区钻实测暴露的误报就出在这里）。
         for (Map.Entry<Long, String> e : rows) {
             if (processed >= MAX_CHECKS_PER_AUDIT) {
                 break;
@@ -144,7 +157,23 @@ public class FinalityCheckpointAuditor {
                 maxRecordedInChain = Math.max(maxRecordedInChain, epoch);
             }
             recordedEpochs.add(epoch);
-            Check c = checkOne(epoch, e.getValue(), headHeight);
+        }
+        long headEpoch0 = headHeight <= 0 ? 0L : (headHeight - 1) / epochLength + 1;
+        long finalityLag0 = Math.max(0L, headEpoch0 - maxRecordedInChain);
+        // 尾随窗口 = 最新 (滞后 + 1) 个已记录 epoch：滞后 L 个未最终化 + 当前正在最终化的那一个。
+        // 但窗口内的行**还必须满足 epoch ≤ headEpoch**（该 epoch 在链上确实存在）才算尾随：
+        //   * epoch ≤ headEpoch 且高度未解析 ⇒ 健康节点追块追到一半（A-1 分区钻实测），
+        //     只报信息态 TRAILING_LAG；
+        //   * epoch > headEpoch ⇒「为链上都还不存在的 epoch 记了检查点」= 配置错位/跨分支
+        //     残留的典型形态，**永远判 HEIGHT_OUT_OF_RANGE**（这条判别式同时保住了
+        //     epochBeyondHeadIsReportedAsOutOfRange 的原始语义）。
+        long trailingFloor = maxAnyRecorded - (finalityLag0 + 1);
+
+        // 第二遍：逐行核对（尾随行带 trailing 标记）
+        for (Map.Entry<Long, String> e : rows) {
+            long epoch = e.getKey();
+            boolean trailing = epoch > trailingFloor && epoch <= headEpoch0;
+            Check c = checkOne(epoch, e.getValue(), headHeight, trailing);
             checks.add(c);
             tally.merge(c.verdict(), 1, Integer::sum);
         }
@@ -153,7 +182,7 @@ public class FinalityCheckpointAuditor {
         // PLAN-047 实测基线 lag≈2），尾随未最终化属正常，不能算缺号。
         // 因此：只在 [1, maxRecordedInChain) 区间找没有记录行的 epoch；
         // 尾随差（headEpoch − maxRecordedInChain）单独作为 finalityLagEpochs 报告（信息项）。
-        long headEpoch = headHeight <= 0 ? 0L : (headHeight - 1) / epochLength + 1;
+        long headEpoch = headEpoch0;
         long gapCount = 0L;
         for (long epoch = 1; epoch < maxRecordedInChain && epoch <= MAX_CHECKS_PER_AUDIT; epoch++) {
             if (recordedEpochs.contains(epoch)) {
@@ -165,7 +194,7 @@ public class FinalityCheckpointAuditor {
                             + maxRecordedInChain));
             tally.merge(Verdict.EPOCH_GAP, 1, Integer::sum);
         }
-        long finalityLag = Math.max(0L, headEpoch - maxRecordedInChain);
+        long finalityLag = finalityLag0;
 
         int failures = tally.getOrDefault(Verdict.HASH_MISMATCH, 0)
                 + tally.getOrDefault(Verdict.HEIGHT_OUT_OF_RANGE, 0)
@@ -188,11 +217,22 @@ public class FinalityCheckpointAuditor {
         return report;
     }
 
-    /** 核对单条库内检查点记录（逐行，不做任何 epoch 级合并）。 */
-    private Check checkOne(long epoch, String storedHash, long headHeight) {
+    /**
+     * 核对单条库内检查点记录（逐行，不做任何 epoch 级合并）。
+     *
+     * @param trailing 该行是否落在尾随窗口内（最新 lag+1 个已记录 epoch）——窗口内的
+     *                 「高度超链头 / 该高度暂无规范块」只报 {@link Verdict#TRAILING_LAG}
+     *                 （信息态），因为健康节点追块追到一半时天然如此（A-1 分区钻实测）。
+     */
+    private Check checkOne(long epoch, String storedHash, long headHeight, boolean trailing) {
         long height = epoch * epochLength;
         try {
             if (height <= 0 || height > headHeight) {
+                if (trailing) {
+                    return new Check(epoch, height, storedHash, null, Verdict.TRAILING_LAG,
+                            "trailing: height " + height + " beyond head " + headHeight
+                                    + " (node still catching up; informational only)");
+                }
                 return new Check(epoch, height, storedHash, null, Verdict.HEIGHT_OUT_OF_RANGE,
                         "epoch " + epoch + " × epochLength " + epochLength + " = height " + height
                                 + " is outside the chain (head=" + headHeight + ")");
@@ -203,6 +243,11 @@ public class FinalityCheckpointAuditor {
             }
             Block b = chain.getCanonicalBlock(height);
             if (b == null || b.getHash() == null) {
+                if (trailing) {
+                    return new Check(epoch, height, storedHash, null, Verdict.TRAILING_LAG,
+                            "trailing: canonical block at height " + height
+                                    + " not yet resolvable (node still catching up; informational only)");
+                }
                 return new Check(epoch, height, storedHash, null, Verdict.HEIGHT_OUT_OF_RANGE,
                         "no canonical block at height " + height);
             }
