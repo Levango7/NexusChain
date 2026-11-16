@@ -4,7 +4,7 @@
 - **决策人**：DevOps 工程师，依据 Phase 3 用户授权「自行决策并执行」
 - **关联任务**：P3-T6（配置中心迁移评估与执行）
 - **关联文档**：[config-migration-assessment.md](../config-migration-assessment.md)
-- **前置条件**：P3-T1（Istio 服务网格已部署）
+- **前置条件**：P3-T1（Istio 服务网格**配置已入库，集群部署未验证**——见 §1.1 与 [deploy/istio/README.md](../../deploy/istio/README.md)）
 
 ---
 
@@ -16,13 +16,13 @@ NexusChain v2.0.0 Phase 3（架构演进）推进中，配置中心面临演进�
 
 - **配置中心**：Nacos 单节点（仅适用于开发环境）
 - **服务发现**：Nacos（4 个核心服务全部接入）
-- **Istio**：已部署（P3-T1），接管流量管理
+- **Istio**：**配置已入库，集群部署未验证**（`deploy/istio/` 10 个清单文件未被任何 CI workflow 引用，`deploy/helm/` 中零 `istio` 引用；集群实际外部入口是 Nginx Ingress，见 `deploy/k8s/10-gateway.yml:126`）。**本文以下所有「Istio 已接管流量」类表述均指设计意图，不代表集群现状。**
 - **4 个核心服务**：nexus-gateway / nexus-bridge / nexus-signing-service / nexus-wallet-service
 
 ### 1.2 触发因素
 
 1. **生产化需求**：Nacos 单节点无法满足生产 SLA（单点故障 → 集群不可用 → 4 服务全部失联）
-2. **Istio 共存**：Istio 已接管流量管理，需明确 Nacos 在新架构下的定位
+2. **Istio 共存**：Istio 设计上接管流量管理（**配置已入库，部署未验证**），需明确 Nacos 在新架构下的定位
 3. **K8s 原生化趋势**：Phase 3 推进 K8s 原生集成，需评估是否将配置中心一并迁移到 ConfigMap
 
 ### 1.3 Nacos 当前承担的核心能力

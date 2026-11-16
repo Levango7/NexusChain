@@ -2,6 +2,24 @@
 
 > Phase 3 架构演进 · P3-T1 · K8s 集群安装 Istio 服务网格
 
+> [!WARNING]
+> **本目录的清单未接入任何部署流水线，集群内是否部署未经验证。**
+>
+> 截至 2026-11-16 在 `master` 上的实测：
+>
+> - `.github/workflows/` 中 `istio` **零命中** —— 没有任何 workflow 执行 `istioctl` / `kubectl apply -f deploy/istio` / 访问 `istio-system`；
+> - `deploy/helm/` 中 `istio` **零命中** —— 本目录不属于 Helm 渲染链，`helm install` 不会带上这些清单；
+> - 集群实际外部入口是 **Nginx Ingress**（`deploy/k8s/10-gateway.yml:126`，`ingressClassName: nginx` + cert-manager），不是 `ingress-gateway.yaml` 里的 Istio Ingress Gateway。
+>
+> **已知阻断项（金丝雀在此目录下不可用）**：`destinationrules.yaml:71-75` 的 `stable` subset 以
+> `app.kubernetes.io/version: v1` 选择 Pod，但 7 个 chart 的 `values.yaml` 均为 `podLabels: {}`，
+> 且 `charts/*/templates/deployment.yaml` 的 Pod 模板标签里没有 `version` 键（`version` 只挂在 Deployment 自身的 metadata 上）。
+> 即使装上 Istio，`stable` / `canary` subset 也会匹配到 **0 个 Pod**，`virtualservices.yaml:50-59` 的 90/10 切流不会生效。
+>
+> 按比例切流量的真实做法与当前结论见 [`docs/runbooks/canary-rollout.md`](../../docs/runbooks/canary-rollout.md)（该手册明确写了本仓没有 ingress / service mesh）。
+>
+> 下文各章描述的是**设计意图**与**落地前置条件**，不是集群现状。
+
 ## 第1章 概述
 
 ### 1.1 目标
