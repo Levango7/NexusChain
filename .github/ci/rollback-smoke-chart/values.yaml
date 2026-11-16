@@ -1,0 +1,11 @@
+# 副本数：v1=1、v2=2，用于断言 helm rollback 把 revision 1 的 spec 恢复回来。
+replicaCount: 1
+
+# 容器镜像。CI 里会先 `docker pull` + `kind load docker-image`，
+# 配合 imagePullPolicy=IfNotPresent ⇒ Pod 启动不依赖外网。
+image: nginx:alpine
+
+# Pod 模板标记。**必须随每次 upgrade 变化**，否则不会产生新的 ReplicaSet：
+# `kubectl rollout undo` 只回退 .spec.template，副本数不在模板里，
+# 单改 replicaCount 的 upgrade 不会留下可回退的版本。
+revisionMarker: v1

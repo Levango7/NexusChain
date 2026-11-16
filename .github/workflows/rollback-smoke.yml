@@ -8,10 +8,22 @@ name: K8s Rollback Smoke (kind)
 #   - 本 job 只验证 Helm/K8s 回滚机制（revision 创建、rollback、Pod 恢复、
 #     rollout undo），不验证 NexusChain 业务镜像、数据库迁移回滚、链快照恢复、
 #     资金语义 —— 那些需要真实集群与生产库，见 docs/runbooks/upgrade-rollback.md:268。
-#   - 使用无状态 nginx chart 作载体：回滚机制与业务无关，用它可以把 job 控制在
-#     3-5 分钟，且不依赖 build-and-test（后者 30-40 分钟）。
+#   - 使用 .github/ci/rollback-smoke-chart/ 这个最小无状态 chart 作载体：
+#     回滚机制与业务无关，用它可把 job 控制在 3-5 分钟，且不依赖
+#     build-and-test（后者 30-40 分钟）。
 #   - 本 job 不是 required context，不阻断合并；它产出的是可复跑的演练记录，
 #     不是"已部署证明"。真实部署收据（X3）仍需常驻集群。
+#
+# 2026-11-16 首跑失败的修正（run 43890723838）：
+#   1) 原用 bitnami/nginx 18.1.0 + `--wait --timeout 180s`，Pod 启动时才从
+#      Docker Hub 拉镜像，超时失败：`client rate limiter Wait returned an error:
+#      context deadline exceeded`。改为**本地 chart + 预拉镜像 kind load**，
+#      Pod 启动零外网依赖。
+#   2) 更关键的设计缺陷：原 upgrade 只 `--set replicaCount=2`，而副本数**不在
+#      Pod 模板里**，不会产生新 ReplicaSet ⇒ `rollout history` 只有一条 ⇒
+#      `kubectl rollout undo` 无版可退（该步骤形同虚设）。现改为同时改
+#      `revisionMarker`（注入 Pod 模板 annotation），保证每次 upgrade 都产生
+#      新 ReplicaSet；undo 后断言 marker 回到升级前的值。
 
 on:
   workflow_dispatch:
@@ -19,6 +31,7 @@ on:
     branches: [master]
     paths:
       - '.github/workflows/rollback-smoke.yml'
+      - '.github/ci/rollback-smoke-chart/**'
       - 'docs/runbooks/upgrade-rollback.md'
       - 'scripts/ops/canary-gate.sh'
 
@@ -31,6 +44,9 @@ jobs:
     name: Helm rollback + kubectl rollout undo on kind
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    env:
+      NS: rollback-smoke
+      DEPLOY: rb-smoke
     steps:
       - name: Checkout 代码
         uses: actions/checkout@v5
@@ -62,62 +78,99 @@ jobs:
         with:
           version: 'v3.14.0'
 
+      # 把镜像预先塞进节点 ⇒ Pod 启动不再访问 Docker Hub（首跑就是死在这里）
+      - name: 预拉镜像并载入 kind 节点
+        run: |
+          set -euo pipefail
+          docker pull nginx:alpine
+          # kind load 失败自身即非零退出；镜像是否真的可用由下游 `--wait` 证明
+          # （缺镜像会 ImagePullBackOff ⇒ rollout 超时 ⇒ job 失败），不另做探测。
+          kind load docker-image nginx:alpine --name rollback-smoke
+
+      - name: 校验 chart 可渲染（lint + template）
+        run: |
+          set -euo pipefail
+          helm lint .github/ci/rollback-smoke-chart
+          helm template rb .github/ci/rollback-smoke-chart -n "$NS" \
+            --set replicaCount=1 --set revisionMarker=v1 > /dev/null
+
       - name: Install v1 release
         run: |
-          helm repo add bitnami https://charts.bitnami.com/bitnami
-          helm repo update
-          helm install rb bitnami/nginx \
-            --namespace rollback-smoke --create-namespace \
-            --version 18.1.0 \
-            --set replicaCount=1 \
-            --wait --timeout 180s
-          kubectl -n rollback-smoke rollout status deploy/rb-nginx --timeout=180s
-          helm -n rollback-smoke history rb
+          set -euo pipefail
+          helm install rb .github/ci/rollback-smoke-chart \
+            --namespace "$NS" --create-namespace \
+            --set replicaCount=1 --set revisionMarker=v1 \
+            --wait --timeout 300s
+          kubectl -n "$NS" rollout status "deploy/$DEPLOY" --timeout=300s
+          helm -n "$NS" history rb
+          kubectl -n "$NS" get pods -o wide
 
-      - name: Upgrade to v2 (create revision 2)
+      - name: Upgrade to v2 (revision 2, 副本 2, 模板标记 v2)
         run: |
-          helm upgrade rb bitnami/nginx \
-            --namespace rollback-smoke \
-            --version 18.1.0 \
-            --set replicaCount=2 \
-            --wait --timeout 180s
-          kubectl -n rollback-smoke rollout status deploy/rb-nginx --timeout=180s
-          echo "=== history after upgrade ==="
-          helm -n rollback-smoke history rb
-          helm -n rollback-smoke history rb | grep -q '^2[[:space:]]' \
+          set -euo pipefail
+          helm upgrade rb .github/ci/rollback-smoke-chart \
+            --namespace "$NS" \
+            --set replicaCount=2 --set revisionMarker=v2 \
+            --wait --timeout 300s
+          kubectl -n "$NS" rollout status "deploy/$DEPLOY" --timeout=300s
+          HIST=$(helm -n "$NS" history rb)
+          echo "$HIST"
+          # 不用 `helm history | grep -q`：pipefail 下 grep 命中即退出会让 helm 吃
+          # SIGPIPE，整条管道被判失败（假红）。here-string 没有这个副作用。
+          grep -q '^2[[:space:]]' <<< "$HIST" \
             || { echo "::error::未产生 revision 2"; exit 1; }
-          REPLICAS=$(kubectl -n rollback-smoke get deploy rb-nginx -o jsonpath='{.spec.replicas}')
-          echo "upgrade 后副本数=$REPLICAS（期望 2）"
-          [ "$REPLICAS" = "2" ] || { echo "::error::upgrade 后副本数不是 2，实际 $REPLICAS"; exit 1; }
+          R=$(kubectl -n "$NS" get "deploy/$DEPLOY" -o jsonpath='{.spec.replicas}')
+          M=$(kubectl -n "$NS" get "deploy/$DEPLOY" -o jsonpath='{.spec.template.metadata.annotations.smokemarker}')
+          echo "upgrade 后 replicas=$R marker=$M（期望 2 / v2）"
+          [ "$R" = "2" ] || { echo "::error::upgrade 后副本数不是 2，实际 $R"; exit 1; }
+          [ "$M" = "v2" ] || { echo "::error::upgrade 后 Pod 模板标记不是 v2，实际 $M"; exit 1; }
 
       - name: Helm rollback to revision 1
         run: |
-          helm -n rollback-smoke rollback rb 1 --wait --timeout 180s
-          kubectl -n rollback-smoke rollout status deploy/rb-nginx --timeout=180s
-          REPLICAS=$(kubectl -n rollback-smoke get deploy rb-nginx -o jsonpath='{.spec.replicas}')
-          echo "rollback 后副本数=$REPLICAS（期望 1）"
-          [ "$REPLICAS" = "1" ] || { echo "::error::helm rollback 未恢复 revision 1 的副本数"; exit 1; }
+          set -euo pipefail
+          helm -n "$NS" rollback rb 1 --wait --timeout 300s
+          kubectl -n "$NS" rollout status "deploy/$DEPLOY" --timeout=300s
+          R=$(kubectl -n "$NS" get "deploy/$DEPLOY" -o jsonpath='{.spec.replicas}')
+          M=$(kubectl -n "$NS" get "deploy/$DEPLOY" -o jsonpath='{.spec.template.metadata.annotations.smokemarker}')
+          echo "rollback 后 replicas=$R marker=$M（期望 1 / v1）"
+          [ "$R" = "1" ] || { echo "::error::helm rollback 未恢复 revision 1 的副本数，实际 $R"; exit 1; }
+          [ "$M" = "v1" ] || { echo "::error::helm rollback 未恢复 revision 1 的 Pod 模板，实际 $M"; exit 1; }
           echo "=== history after rollback ==="
-          helm -n rollback-smoke history rb
-          helm -n rollback-smoke history rb | grep -q '^3[[:space:]]' \
+          HIST=$(helm -n "$NS" history rb)
+          echo "$HIST"
+          grep -q '^3[[:space:]]' <<< "$HIST" \
             || { echo "::error::rollback 应产生新 revision 3"; exit 1; }
 
-      - name: kubectl rollout undo (redeploy then undo)
+      - name: kubectl rollout undo
         run: |
-          helm upgrade rb bitnami/nginx \
-            --namespace rollback-smoke --version 18.1.0 \
-            --set replicaCount=2 --wait --timeout 180s
-          kubectl -n rollback-smoke rollout status deploy/rb-nginx --timeout=180s
-          kubectl -n rollback-smoke rollout history deploy/rb-nginx
-          kubectl -n rollback-smoke rollout undo deploy/rb-nginx
-          kubectl -n rollback-smoke rollout status deploy/rb-nginx --timeout=180s
-          REPLICAS=$(kubectl -n rollback-smoke get deploy rb-nginx -o jsonpath='{.spec.replicas}')
-          echo "rollout undo 后副本数=$REPLICAS（期望 1）"
-          [ "$REPLICAS" = "1" ] || { echo "::error::kubectl rollout undo 未生效"; exit 1; }
+          set -euo pipefail
+          # 记下 undo 前的模板标记，undo 后必须原样回到这个值
+          BEFORE=$(kubectl -n "$NS" get "deploy/$DEPLOY" -o jsonpath='{.spec.template.metadata.annotations.smokemarker}')
+          echo "undo 前 marker=$BEFORE"
+
+          # 再升一次并改模板标记 ⇒ 产生新 ReplicaSet，rollout history 才有可回退的上一版
+          helm upgrade rb .github/ci/rollback-smoke-chart \
+            --namespace "$NS" \
+            --set replicaCount=2 --set revisionMarker=v3 \
+            --wait --timeout 300s
+          kubectl -n "$NS" rollout status "deploy/$DEPLOY" --timeout=300s
+          kubectl -n "$NS" rollout history "deploy/$DEPLOY"
+          M3=$(kubectl -n "$NS" get "deploy/$DEPLOY" -o jsonpath='{.spec.template.metadata.annotations.smokemarker}')
+          echo "upgrade 后 marker=$M3（期望 v3）"
+          [ "$M3" = "v3" ] || { echo "::error::upgrade 未产生新模板，marker=$M3"; exit 1; }
+
+          kubectl -n "$NS" rollout undo "deploy/$DEPLOY"
+          kubectl -n "$NS" rollout status "deploy/$DEPLOY" --timeout=300s
+          AFTER=$(kubectl -n "$NS" get "deploy/$DEPLOY" -o jsonpath='{.spec.template.metadata.annotations.smokemarker}')
+          echo "undo 后 marker=$AFTER（期望回到 $BEFORE）"
+          [ "$AFTER" = "$BEFORE" ] \
+            || { echo "::error::kubectl rollout undo 未回退 Pod 模板：期望 $BEFORE，实际 $AFTER"; exit 1; }
 
       - name: Dump cluster state on failure
         if: failure()
         run: |
-          kubectl -n rollback-smoke get all,pvc -o wide || true
-          helm -n rollback-smoke history rb || true
-          kubectl -n rollback-smoke logs -l app.kubernetes.io/name=nginx --tail=50 || true
+          kubectl -n "$NS" get all -o wide || true
+          kubectl -n "$NS" describe pods || true
+          kubectl -n "$NS" logs -l app.kubernetes.io/name=rollback-smoke --tail=50 || true
+          helm -n "$NS" history rb || true
+          helm -n "$NS" get values rb || true
