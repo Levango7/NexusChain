@@ -16,7 +16,7 @@ NexusChain v2.0.0 Phase 3（架构演进）推进中，配置中心面临演进�
 
 - **配置中心**：Nacos 单节点（仅适用于开发环境）
 - **服务发现**：Nacos（4 个核心服务全部接入）
-- **Istio**：**配置已入库，集群部署未验证**（`deploy/istio/` 10 个清单文件未被任何 CI workflow 引用，`deploy/helm/` 中零 `istio` 引用；集群实际外部入口是 Nginx Ingress，见 `deploy/k8s/10-gateway.yml:126`）。**本文以下所有「Istio 已接管流量」类表述均指设计意图，不代表集群现状。**
+- **Istio**：**配置已入库，集群部署未验证**（`deploy/istio/` 的 9 个 YAML 清单（另有 1 份 README）未被任何 CI workflow 引用，`deploy/helm/` 中零 `istio` 引用；集群实际外部入口是 Nginx Ingress，见 `deploy/k8s/10-gateway.yml:126`）。**本文以下所有「Istio 已接管流量」类表述均指设计意图，不代表集群现状。**
 - **4 个核心服务**：nexus-gateway / nexus-bridge / nexus-signing-service / nexus-wallet-service
 
 ### 1.2 触发因素
