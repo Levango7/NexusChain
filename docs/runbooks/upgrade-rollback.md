@@ -266,6 +266,11 @@ docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
 **回滚顺序 = 升级顺序的逆序**：`api-gateway` → `gateway` → `bridge`/`wallet` → `signing`（+ mpc-engine）→ `core`。
 
 > `helm rollback` 只回退 chart 与镜像，**不回退数据库**——见 7.2。
+>
+> 这两条集群路径（`helm rollback` / `kubectl rollout undo`）**已有自动化演练**：
+> 见 [`docs/drill-records/2026-11-16-k8s-rollback-kind.md`](../drill-records/2026-11-16-k8s-rollback-kind.md)
+> （kind 环境，实测断言 `replicas` 与 Pod 模板 annotation 双条件回退）。
+> 注意该演练**只验证机制**，不覆盖业务镜像、数据库与快照恢复。
 
 ### 7.2 数据库（默认不需要回滚）
 
@@ -326,7 +331,7 @@ git grep -iE 'add (column )?.*not null' -- '*/db/migration/*.sql' | grep -vi def
 
 1. **历史区块交易类型扫描工具不存在**（第一节）——涉及交易类型门禁的升级，扫历史区块这一步目前只能手工重放。
 2. **端到端资金链路验收脚本未合入 master**（第五节）——「服务活着」与「能收款」之间没有自动断言。
-3. **没有回滚演练记录**——本文第七节的三条路径（`helm rollback` / `rollout undo` / 快照恢复）**【未演练】**，本机无集群。
+3. **回滚演练只覆盖两条集群路径，快照恢复仍未演练**——`helm rollback` 与 `kubectl rollout undo` 已由 CI 自动化冒烟在 kind 上实测通过（[演练记录](../drill-records/2026-11-16-k8s-rollback-kind.md)，run 43896648804）；但那是**机制演练**：不覆盖 NexusChain 业务镜像、不覆盖数据库、不覆盖快照恢复，也不能替代真实集群上的演练。**7.3 的快照恢复路径仍是【未演练】**。
 4. **`docs/migration-guide.md` 只覆盖 `nexus-gateway` 一个目录**——另外 4 个数据源的迁移没有任何逐支说明。
 5. **逐支逆向语句缺失**——除 V12 / V18 两支外，其余迁移没有回滚脚本。
 
@@ -418,6 +423,6 @@ bash scripts/upgrade-rollback-drill.sh ../wt-old/nexus-gateway/build/libs/nexus-
 
 | 第七节步骤 | 本演练覆盖 | 说明 |
 |---|---|---|
-| 7.1 应用层回滚（改回 tag 再起） | **已演练**（单进程形态） | 集群下的 `helm rollback` / `rollout undo` 仍未演练（第九节 3） |
+| 7.1 应用层回滚（改回 tag 再起） | **已演练**（单进程形态 + 集群机制） | 集群下的 `helm rollback` / `rollout undo` 已由 kind 冒烟覆盖（[演练记录](../drill-records/2026-11-16-k8s-rollback-kind.md)），但仅验证机制，未验证业务镜像（第九节 3） |
 | 7.2 数据库不回滚 | 与演练一致 | 阶段 2/3 的表结构未回退，旧代码忽略新列/新表即通过验证 |
 | 7.3 链数据不可回滚 | 不涉及 | 本演练无链 |
