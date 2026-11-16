@@ -159,3 +159,102 @@ P3 最终性冻结后，A 的 `latestVotedEpoch` 跌出 8-epoch 回溯窗 ⇒
 - 采样粒度 15s（P1/P3）/60s（P2）：瞬态抖动可能落在采样间隙；
 - 补票"丢失 29"是在**本拓扑参数**（epochLength=2、3s 出块、5s anti-entropy、
   50 epoch 回看）下的一次测量，不是通用常数；换参数需重测。
+
+## 六、A-2 补测（2026-11-16，zcode）：女巫/临时键稀释的量化 + 治理缺口确认
+
+> §四.4 判定「治理动作（注册表死项回收/密钥稳定性强制）另立」。本节给这块缺口补上
+> **可量化的事实底座**：自注册零门槛 + 自报质押时，稀释门限的代价有多低、
+> **死项是否跨重启持久**（决定威胁模型的复制度）。
+> 本节仍是**量化取证**，不给治理方案拍板（产品决策，见 §六.4 选项清单）。
+
+### 6.1 已坐实的机制（代码级复核，2026-11-16）
+
+- `ValidatorNodeBootstrapper`：`@ConditionalOnProperty(nexus.consensus.mode=pos)`；
+  `nexus.finality.self-register` 默认 **true**、`nexus.finality.self-stake` 默认 **1000**。
+  监听 `ApplicationReadyEvent` ⇒ 取引擎签名钥推导本节点验证人地址 ⇒
+  `validatorRegistry.register(address, pubHex, selfStake, 0.1)` ⇒
+  `stakingService.seedStake(address, selfStake)` ⇒ 签名广播 + **10s/30s/60s 三次重发** +
+  写入共享表 `validators_synced`（供重启后全量重放）。**全路径无审批/治理白名单**。
+- `ValidatorRegistry.register`（`ValidatorRegistry.java:111`）仅四道闸：空地址 / 重复地址 /
+  **集合满 100**（`DEFAULT_MAX_VALIDATORS`）/ **质押 < minStake**（`DEFAULT_MIN_STAKE=1000`）。
+  **没有「是否经治理许可」这道**；且默认 minStake(1000) 恰等于默认 self-stake(1000)
+  ⇒ 出厂配置下自报质押**等值通过**。
+- `ValidatorRegistry.unregister`（:140）只 `setStatus(INACTIVE)`——条目仍在表内。
+  `FinalityGadget.computeTotalWeight()` 按 `getActiveValidators()` 累加，
+  故 INACTIVE 不计权重；但**进程被杀＝什么都没调用**，条目连 INACTIVE 都不是，
+  权重照计。
+- 对端收到 ADD 广播（`SyncManager.java:550-556`）**先 `seedStake` 再 `register`**
+  ⇒ 一个已经死掉的临时键，其 1000 权重照样进入**其它诚实节点**的总权重。
+
+### 6.2 演练实测（2026-11-16，三段判据）
+
+拓扑：3 个诚实验证人 A/D/E（各自报 1000）+ N 个**临时 sybil 进程**（起来即自注册、
+广播后立刻被杀）；epochLength=2、block-interval=2s、round-robin proposer、每节点独立 PG。
+
+| 阶段 | 集合构成 | votedWeight/totalWeight | 最终性 | 证据 |
+|---|---|---|---|---|
+| PHASE 0 基线 | 3 诚实 | 2000/3000、3000/3000 交替（=66.7%/100%） | **正常推进**：f=64→71 @ h=146，lag=2 | `20261116-…`（见板） |
+| PHASE 1 +1 死项 R1 | 3 诚实 + 1 死 | 3000/4000 = **75%** | **仍在最终化**：f=82→88；但已见出块 slot 空转（`voted=1000/4000` 那一刻＝轮到死项当出块人）与一次 30s 停摆 | R1.log：`Self-registered as validator: address=ZdTao2tgPx… stake=1000` |
+| PHASE 2 +第 2 个死项 R2 | 3 诚实 + 2 死 | 3000/5000 = **60%** | **最终性冻结**：见下 | R2.log：`Self-registered as validator: address=fwLxvrGU2s… stake=1000` |
+
+PHASE 2 的冻结形态（12 次 10s 采样，全同）：
+
+- `finalizedCheckpoints` **恒为 140**（120s 内零增长），而链继续出块 **h=289→305（+16 块）**；
+- `finalityLag` **单调 3→4→5→6→8→8→9→10→11**（2 分钟内 +8 epoch）；
+- 逐 epoch 进度降到 `25%/75%/25%/25%/20%/20%`（2/3 门限永不可达）。
+
+**攻击成本量化**：一个 JVM 进程跑约 **50 秒**即可完成自注册 + 签名广播 ⇒
+**永久**获得 1000 的分母权重；**两个**进程（约 100 秒）就让 3×1000 的诚实集跌破 2/3。
+不需要链上资金、不需要治理许可、不需要真实质押证明（self-stake 是配置值）。
+这正是 §四.4「重启换钥 ⇒ 注册表混入第 4 验证人 ⇒ 2/3 门限永不可达」的同一根因，
+本节把它从「偶遇」变成「可复现、可按成本计数」。
+
+### 6.3 死项是否持久（决定威胁模型复制度）
+
+- 杀掉 sybil 进程后**无人回收**：`unregister` 没有任何自动调用方（进程死亡不触发）；
+- **库里持久**：PHASE 1 后 `nexuschain_a2a.validators_synced` = **4 行**（3 诚实 + R1）；
+  PHASE 2 后 = **5 行**（R1 + R2 都在）。摘录地址前缀：
+  `mRCg6sK3Et|aKURTTsKzh|ZdTao2tgPx|nv3gC5mGzF|fwLxvrGU2s`；
+- **跨重启持久**：杀掉 A 再冷启，A.log 连续打印
+  `Validator-set full-table replay sent: 4 validators (4 signed payloads verbatim, 0 legacy rebuilt)`，
+  重启后 `voted=2000/4000`（R1 权重仍在分母里）；
+- ⇒ 一次稀释是**永久性**的：不靠外部清理/换库，权重分母不会自己回去。
+
+### 6.4 检测面：已有什么、时延多少（不新增代码）
+
+- `FinalityStalled`（`deploy/k8s/50-prometheus-rules.yaml`）`for: 10m`
+  （同文件测试钉住：9m 不报、12m 报）⇒ 本演练 120s 的冻结**在观测窗内不会触发**；
+  最快可见时延 ≈ **10 分钟**；
+- `nexus_finality_lag` 单调增长（3→11 / 120s）本机可观测，但 Prometheus 侧
+  **没有 lag 增长类告警**（PLAN-048 只做了「水位冻结」这一种）；
+- runbook 对 `abstain-risk` 的描述已预写「多余/僵死验证人会抬高总权重」，
+  并给了对账手段（`GET /consensus/validator-set` 回放地址对账），
+  但缺「如何发现」的操作化步骤；
+- B-11（kind 告警端到端）已于 2026-11-14 交付 ⇒ 若后续要加/标定告警，
+  **链路本身不再是缺口**，缺的只是判据。
+
+### 6.5 治理缺口（登记，不拍板）
+
+与 §四.4 同根的四个缺口（按可复现性排序）：
+
+1. **自注册无治理闸**：任何进程（不需要资金/许可）可把自身写入验证人集合并广播全网；
+2. **无死项回收**：进程死亡 ≠ 条目失效，集合永不收缩（本轮实测 100 秒造成永久冻结）；
+3. **minStake 是自报值**：质押无链上资金/锁定证明，`1000` 是配置文件里的一个数；
+4. **无密钥稳定性约束**：换钥重启即新增条目（§四.4 Run 1 发现，本节给出量化后果）。
+
+处置选项（**产品决策，本件不拍板**）：
+(a) `self-register` 默认关 + 白名单准入；(b) liveness 心跳 + 死项降权/回收；
+(c) 质押改为可验证形态（链上锁定/治理多签）；(d) 只文档化 + 靠告警兜底。
+任一项都超出「验证切片」范畴，按 §四.4 归属另立。
+
+### 6.6 边界（勿夸大）
+
+- 本机同内核 3+1 进程 + 三独立 PG；sybil 是**同机另起进程**，不是跨机器伪造身份；
+- round-robin proposer：死项占 slot 的代价依赖 proposer 策略，换策略需重测；
+- 75%/60% 两个门限点只在本拓扑参数（epochLength=2、block-interval=2s、3 个诚实×1000）
+  下成立，不是通用常数；诚实集规模变化会整体平移；
+- **未测**：真实私钥泄露（持有者主动作恶投票，属另一形态——那是伪造票而非稀释分母）
+  与长程攻击（需历史链重写，现实性低，按 ROI 清单只登记蓝图不投入）；
+- **未测**：anti-entropy 是否会给死项「补票」或复活其条目——本轮未观察到此形态，
+  不宣称其无；
+- 本件**不含任何产品代码改动**；治理选项见 §6.5，均待产品决策。
