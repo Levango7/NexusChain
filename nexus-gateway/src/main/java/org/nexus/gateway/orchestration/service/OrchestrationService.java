@@ -1,6 +1,7 @@
 package org.nexus.gateway.orchestration.service;
 
 import org.nexus.analytics.event.PaymentCompletedEvent;
+import org.nexus.gateway.orchestration.metrics.ConnectorInflightMetrics;
 import org.nexus.gateway.orchestration.connector.*;
 import org.nexus.gateway.orchestration.model.OrchPaymentStatus;
 import org.nexus.gateway.orchestration.model.OrchestratedPayment;
@@ -73,6 +74,8 @@ public class OrchestrationService {
      * 误熔健康通道。
      */
     private final ConnectorCircuitBreaker circuitBreaker;
+    /** 连接器在途并发计数（A5：gateway 生产代码此前零计数；null 时降级为 no-op）。 */
+    private final ConnectorInflightMetrics inflightMetrics;
 
     @Autowired
     public OrchestrationService(OrchestratedPaymentRepository repo,
@@ -85,7 +88,8 @@ public class OrchestrationService {
                                 @Autowired(required = false) MetricsCollector metricsCollector,
                                 ApplicationEventPublisher applicationEventPublisher,
                                 @Autowired(required = false) ChainSettlementConfirmationService settlementConfirmationService,
-                                @Autowired(required = false) ConnectorCircuitBreaker circuitBreaker) {
+                                @Autowired(required = false) ConnectorCircuitBreaker circuitBreaker,
+                                @Autowired(required = false) ConnectorInflightMetrics inflightMetrics) {
         this.repo = repo;
         this.routingEngine = routingEngine;
         this.connectorRegistry = connectorRegistry;
@@ -97,6 +101,7 @@ public class OrchestrationService {
         this.applicationEventPublisher = applicationEventPublisher;
         this.settlementConfirmationService = settlementConfirmationService;
         this.circuitBreaker = circuitBreaker;
+        this.inflightMetrics = inflightMetrics;
     }
 
     /**
@@ -109,7 +114,7 @@ public class OrchestrationService {
                                 OrchestrationWebhookDispatcher webhookDispatcher,
                                 PaymentRiskService riskService) {
         this(repo, routingEngine, connectorRegistry, idempotencyStore,
-                webhookDispatcher, riskService, null, null, null, null, null);
+                webhookDispatcher, riskService, null, null, null, null, null, null);
     }
 
     /**
@@ -123,7 +128,7 @@ public class OrchestrationService {
                                 PaymentRiskService riskService,
                                 Tracer tracer) {
         this(repo, routingEngine, connectorRegistry, idempotencyStore,
-                webhookDispatcher, riskService, tracer, null, null, null, null);
+                webhookDispatcher, riskService, tracer, null, null, null, null, null);
     }
 
     // P1（2026-09-17 修复）：此处**不得**标注 @Transactional。
@@ -306,6 +311,9 @@ public class OrchestrationService {
                     // 外层兜底计时（connector 自身可能未回填 latencyMs）
                     long t0 = System.nanoTime();
                     ConnectorPaymentResult result;
+                    if (inflightMetrics != null) {
+                        inflightMetrics.start(connector.getId());
+                    }
                     try {
                         result = connector.createPayment(req);
                     } catch (RuntimeException e) {
@@ -320,6 +328,10 @@ public class OrchestrationService {
                                 .attr("payment.connector.error", e.getMessage())
                                 .error(e);
                         continue;
+                    } finally {
+                        if (inflightMetrics != null) {
+                            inflightMetrics.end(connector.getId());
+                        }
                     }
                     long elapsedNanos = System.nanoTime() - t0;
                     long elapsedMs = TimeUnit.NANOSECONDS.toMillis(elapsedNanos);

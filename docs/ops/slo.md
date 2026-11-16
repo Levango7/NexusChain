@@ -164,6 +164,18 @@ git grep -n "orderCreated()\|paymentConfirmed()\|paymentFailed()\|refundIssued()
 | 阈值 | `待定（业务决策）` |
 | 局限 | `paymentFailed()` 只在 FAILED 终态计数，`refundIssued()` 只在 `RefundStatus.COMPLETED` 计数；`paymentLatencySince()` 在 `createdAt` 为 null 或时间在未来时**跳过样本**，绝不记 0 ⇒ 低流量期延迟样本可能不足；服务端分位数需依赖 `_bucket`，本仓尚无生产抓取文本验证，故不列入 SLI |
 
+### 3.9 连接器在途调用（A5 2026-11-16）
+
+| 项 | 内容 |
+|---|---|
+| SLI | 路由到各连接器后内部挂账的在途请求数（Gauge，非 counter） |
+| 指标名 | `nexus.gateway.connector.inflight{connector="<id>"}` （Micrometer → OpenMetrics 把 `.` 映射为 `_`；同 §3.1 的 `http_server_requests_seconds_*` 口径） |
+| PromQL | `max by (connector) (nexus_gateway_connector_inflight)` —— 监控是否被异常长尾打满（例如一个连接器后端慢 300s，队列永远满）。不用于告警阈值（各连接器价格模型不同，无统一合理上限） |
+| 采集位置 | nexus-gateway `:8080/actuator/prometheus`；`/actuator/health` 探测侧不变 |
+| 已用于 | 暂无面板；导出名按 Micrometer 默认假定，**未抓取文本实测**（待真 Prometheus 验证后补本文） |
+| 阈值 | `待定（业务决策）`——每个连接器的"合理峰值"取决于其自身出口限流/SLA/单笔成本，不在本文下手拍 |
+| 局限 | 计数只跟 createPayment 一次往返；refund / queryStatus / settle 路径**未计**（A5 最小落地；若后续发现路由对查询类也需要并发护栏，扩展到对应调用点即可）；管线"配了但没人喂"场景：漏减（wrapper 在异常发生后延迟递减）会导致指标虚高 |
+
 ---
 
 ## 四、立不起来的 SLO（指标不存在 / 未注册）
