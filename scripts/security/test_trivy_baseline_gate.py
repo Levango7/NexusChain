@@ -554,6 +554,93 @@ def check_anchor_shared_window() -> tuple[bool, str]:
     return (not problems), "；".join(problems)
 
 
+def check_pending_base_rebuild() -> tuple[bool, str]:
+    """pending_base_rebuild 有界例外（14 天）—— 三处独立约束逐条回归。
+
+    该 kind 是「上游已发修复版、但尚无包含该修复版的已发布基础镜像」的唯一通道，
+    因此在 trivy-baseline-gate.py 里被三处独立约束同时卡住：
+      :260-264  fixable 必须为 upstream-fixed（否则与普通「加基线」无异）
+      :268-271  evidence 必填（证明当前确实没有可用的已发布镜像）
+      :329-335  有效期 14 天而非 90 天（有界，到期必须重新取证）
+    本用例逐条钉住，防止任一处被静默放宽 —— #719 之后这是唯一没有专例的分支。
+
+    基线写在临时目录（不是 config/trivy-baseline.json）⇒ 按 :310 的判定，
+    防自续锚点不生效，本用例因此不依赖 git 历史，可离线跑。
+    """
+    import datetime as dt
+    import pathlib
+
+    problems: list[str] = []
+    fixture_report = os.path.join(FIXTURES, "report-known-only.json")  # CVE-2026-113351 / libexpat1（无修复版）
+    added = dt.date(2026, 10, 30)
+    good_expires = (added + dt.timedelta(days=14)).isoformat()   # 2026-11-13
+    over_expires = (added + dt.timedelta(days=90)).isoformat()   # 2027-01-28
+
+    def entry(**over) -> dict:
+        base = {
+            "id": "CVE-2026-113351",
+            "package": "libexpat1",
+            "scope": "os",
+            "kind": "pending_base_rebuild",
+            "reason": "上游已发 2.7.2，但基础镜像尚未重建，暂无包含该修复版的已发布镜像",
+            "fixable": "upstream-fixed",
+            "expires": good_expires,
+            "addedAt": added.isoformat(),
+            "evidence": "debian:12-slim 2026-10-28 构建版内 libexpat1 仍为 2.5.0-1+deb12u1（< 2.7.2）",
+        }
+        base.update(over)
+        return base
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = os.path.realpath(tmp)
+        baseline_abs = os.path.realpath(os.path.join(root, "baseline.json"))
+        if not baseline_abs.startswith(root + os.sep):
+            return False, "临时基线路径越出临时根（containment 校验失败）"
+
+        def run_case(entries: list[dict]) -> subprocess.CompletedProcess:
+            pathlib.Path(baseline_abs).write_text(
+                json.dumps({"schemaVersion": 1, "entries": entries}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            return subprocess.run(
+                [sys.executable, GATE, "--baseline", baseline_abs,
+                 "--report", fixture_report, "--today", "2026-11-06"],
+                capture_output=True, text=True, encoding="utf-8",
+            )
+
+        # 1) 合规条目必须放行 —— 否则这个 kind 事实上不可用，会逼人退回普通基线
+        r = run_case([entry()])
+        if r.returncode != 0:
+            problems.append(
+                f"合规 pending_base_rebuild 应放行（退出码 0），实际 {r.returncode}："
+                f"{(r.stdout + r.stderr).strip()[:300]}"
+            )
+
+        # 2) 有效期按 90 天算 ⇒ 拒收，且提示必须落在 14 天（有界窗口）
+        r = run_case([entry(expires=over_expires)])
+        out = r.stdout + r.stderr
+        if r.returncode != 2 or "14 天" not in out:
+            problems.append(
+                f"pending_base_rebuild 用 90 天有效期应判红（退出码 2）并提示 14 天，实际 {r.returncode}"
+            )
+
+        # 3) fixable 不是 upstream-fixed ⇒ 拒收（防把它当成普通「加基线」通道）
+        r = run_case([entry(fixable="none")])
+        if r.returncode != 2 or "upstream-fixed" not in (r.stdout + r.stderr):
+            problems.append(
+                f"fixable=none 应判红（退出码 2）并提示 upstream-fixed，实际 {r.returncode}"
+            )
+
+        # 4) evidence 为空 ⇒ 拒收（没有证据就不该存在这条豁免）
+        r = run_case([entry(evidence="")])
+        if r.returncode != 2 or "evidence" not in (r.stdout + r.stderr):
+            problems.append(
+                f"缺 evidence 应判红（退出码 2），实际 {r.returncode}"
+            )
+
+    return (not problems), "；".join(problems)
+
+
 def main() -> int:
     failures = 0
     total = 0
@@ -601,6 +688,13 @@ def main() -> int:
     total += 1
     ok, reason = check_db_identity()
     print(f"[{'PASS' if ok else 'FAIL'}] DB 身份绑定（报告/指纹/实际库不一致必须判红）")
+    if not ok:
+        failures += 1
+        print(f"  {reason}")
+
+    total += 1
+    ok, reason = check_pending_base_rebuild()
+    print(f"[{'PASS' if ok else 'FAIL'}] pending_base_rebuild 有界例外（14 天 / fixable=upstream-fixed / evidence 必填）")
     if not ok:
         failures += 1
         print(f"  {reason}")
