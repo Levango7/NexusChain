@@ -1,0 +1,8 @@
+apiVersion: v2
+name: rollback-smoke
+description: >-
+  回滚冒烟专用最小 chart。不承载任何业务，只用来验证
+  helm rollback / kubectl rollout undo 的机制是否真的有效。
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
