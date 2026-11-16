@@ -349,6 +349,17 @@ public class FinalityCoordinator {
     }
 
     /**
+     * 最终性收集器（只读，供审计端点等旁路观察使用）。
+     *
+     * <p>暴露 gadget 而不是复制它的判定逻辑，是为了让「检查点语义审计」
+     * （{@code FinalityCheckpointAuditor}）用**同一套**库与内存视图核对，
+     * 不会因两处实现漂移而产生"审计绿、实际红"的假象。</p>
+     */
+    public FinalityGadget getGadget() {
+        return gadget;
+    }
+
+    /**
      * 给定高度的最终性视图快照（PLAN-044；只读内存，不查库）。
      *
      * <p><b>为什么不能只看"当前高度的 epoch"</b>：链高在绝大多数时刻**不是** epoch

@@ -50,6 +50,20 @@ class WebSecurityConfigWhitelistTest {
     }
 
     @Test
+    @DisplayName("只读审计端点 /consensus/finality/checkpoints/audit 免鉴权（A-7，2026-11-16 实测 401）")
+    void finalityCheckpointAuditIsPublic() {
+        // 该端点的用途（升级前后取证 / 换 epoch-length 自检 / 分支切换复核）都在
+        // 本机或容器内由脚本直连；漏加白名单的现场形态是 401——A-7 演习当场踩到。
+        assertTrue(isPublic("/consensus/finality/checkpoints/audit"),
+                "审计端点漏出白名单会 401，运维脚本拿不到复核结果");
+        // 钉住匹配语义：它不能被 /consensus/finality 的前缀"顺带"放行（Ant 精确匹配本就如此），
+        // 也不能因为新增它而顺手放行同级其它路径。
+        assertFalse(isPublic("/consensus/finality/checkpoints"),
+                "父路径不得被顺手放行（证明是精确条目而非前缀通配）");
+        assertFalse(isPublic("/consensus/finality/checkpoints/audit/extra"));
+    }
+
+    @Test
     @DisplayName("旧 RPC 前缀交由 RpcInterceptor 管，仍在免 local-only 名单内")
     void legacyRpcPrefixStaysExcluded() {
         assertTrue(isPublic("/NexusChainCore/getBlock"));

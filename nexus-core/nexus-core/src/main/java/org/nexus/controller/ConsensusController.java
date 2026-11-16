@@ -257,9 +257,40 @@ public class ConsensusController {
         return codec.encode(data);
     }
 
+    /**
+     * 最终性检查点语义审计（A-7 / roadmap #27「epoch 窗口 / 规范检查点语义校验」）。
+     *
+     * <p>只读：枚举本地库内已最终化的 {@code (epoch, checkpoint_hash)}，逐条与
+     * <b>规范高度 {@code epoch × epoch-length} 的块哈希</b>比对，回答一个此前
+     * 无人核过的问题——「库里记下的检查点，是不是链上真的那个块」。</p>
+     *
+     * <p>判定：{@code OK} / {@code HASH_MISMATCH} / {@code HEIGHT_OUT_OF_RANGE}（配置错位、
+     * 跨分支残留的典型形态）/ {@code EPOCH_GAP} / {@code UNKNOWN}（无库可核，fail-visible）。
+     * 常用于：升级窗口前后取证、节点换 {@code epoch-length} 配置后自检、分支切换后复核。</p>
+     */
+    @GetMapping(value = "/consensus/finality/checkpoints/audit", produces = "application/json")
+    public Object auditFinalityCheckpoints() {
+        long height = chainHeadProvider.currentHeader().nHeight;
+        if (finalityCoordinator == null) {
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("enabled", false);
+            data.put("verdict", org.nexus.consensus.finality.audit.FinalityCheckpointAuditor.Verdict.UNKNOWN.name());
+            data.put("detail", "finality coordinator not wired (non-pos topology)");
+            data.put("height", height);
+            return codec.encode(data);
+        }
+        org.nexus.consensus.finality.audit.FinalityCheckpointAuditor auditor =
+                new org.nexus.consensus.finality.audit.FinalityCheckpointAuditor(
+                        finalityCoordinator.getGadget(),
+                        bc,
+                        finalityCoordinator.getEpochLength());
+        Map<String, Object> data = new LinkedHashMap<>(auditor.audit(height));
+        data.put("enabled", true);
+        return codec.encode(data);
+    }
+
     @PostMapping(value = "/consensus/status", produces = "application/json")
-    public Object handleStatus(@RequestBody byte[] body, HttpServletRequest request) {
-        Block header = chainHeadProvider.currentHeader();
+    public Object handleStatus(@RequestBody byte[] body, HttpServletRequest request) {        Block header = chainHeadProvider.currentHeader();
         Status status = codec.decode(body, Status.class);
         if (status == null) {
             logger.error("invalid request accepted from " + request.getRemoteAddr());
