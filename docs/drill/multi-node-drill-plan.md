@@ -109,7 +109,32 @@ Tier-2 主机角色：
   2 例回归（健康略落后→OK / 超 headEpoch→FAIL），审计器测试 9/9 绿。详见 PLAN-067 §七补记。
 - **边界**：同机 WSL 内核内（**真内核级 iptables 切断**，但仍单内核、非跨物理机）；
   未验证「等权 3 节点下 {A} vs {D,E} 双向分裂」中 {D,E} 一侧仍可最终化的既定 2f+1 边界；
-  未采 `/actuator/prometheus`（第 3/5 条判据欠采样）；钻机资产在仓外（`F:/Agent/opencode/workspace/`），未入库。
+  钻机资产已入库：`scripts/drill/a1-wsl-partition-drill.sh`（自定位仓根、无凭据字面量、含 `--help` 头注）。
+
+#### S2 指标补采样与运行计数（2026-11-17 补，zcode）
+
+- **判据 3/5 收口（`nexus_finality_vote_rejected_total{reason}`）**：分区与治愈全程，
+  三方该指标**没有任何 reason 序列**——按 Micrometer 语义「计数器首增才出现序列」，
+  这等价于**零拒收**（比「没有伪造类 reason」更强）。单节点探针另证抓取通路可用
+  （带 token 拿到 31 条 `nexus_*`、`nexus_finality_*` 系列齐；无 token/坏 token 均 401）。
+  **⚠️ 抓取前提**：`ActuatorPrometheusAuthFilter` 在**未配 token 时 fail-closed 回 503**
+  （既定设计，非缺陷）⇒ 演练须给节点配 `NEXUS_METRICS_TOKEN` 并带 `Authorization: Bearer` 抓取，
+  否则会误读成「端点坏了」。另：**计数器不出现在输出里 ≠ 指标坏**，先看别的 `nexus_*` 系列是否存在。
+- **运行计数（同一钻机、同一参数）**：**v2 与 v4 两次独立复现均干净**
+  （P1：多数侧 66.7% 续最终化 / 少数派 f 冻结且 lag 单调增；P2：追平 + 三方哈希零分歧）；
+  v1 因装置缺陷作废（见上）；**v3 记录到一次环境级异常，见下**。
+- **v3 观察登记（待复现，不宣称产品缺陷）**：v3 中节点 D 的链头**冻在 36**、
+  反复把 tip 块塞进 orphans pool（`blocks received start from 171 stop at 171` → `add block at height = 171 to orphans pool` 循环），
+  且该轮治愈后 A/E 的 `voted` 只 1000/3000、f 停在 71–72、lag 单调 11→20。
+  对照：v4 同参数下 A/D **两节点都有** blocks→orphans（274/49 与 188/99），
+  D 只比 A 多且落后 5 块、**未卡死** ⇒ orphans 本身是环境常态（乱序到达），
+  v3 的「深缺口补不回」是更重的形态。**判定**：属本机已知的 P2P 退化类（历史两次同型），
+  **不据此宣称产品缺陷**；要定性需专门复现（配方：单节点置于远超同步窗的落后位，
+  观察 orphans 池是否积压不排空 + 是否只收到 tip 推送）。
+- **本次补采样对 A-7 的顺带回验**：v3 的 D（深卡死）被审计判 **56 行 `HEIGHT_OUT_OF_RANGE`（FAIL）**，
+  v4 的 D（轻微 holes）判 3 行、而 A/E `verdict=OK` ⇒ 新判别式
+  （`epoch > trailingFloor && epoch ≤ headEpoch` 才算尾随）在真实数据上**既不再误报健康落后节点、
+  也不放过深度卡死节点**。
 
 ### S3 PG 主备切换（#28 收口的第一步）
 
@@ -180,6 +205,7 @@ evidence/<run-id>/                     # run-id = YYYYmmdd-HHMM-tierN
 | `drill-node-up.sh` | 单节点拉起（复用 dev-cluster-3nodes 参数形状） | ✓ | docker 变体 | ssh 变体 |
 | `drill-evidence.sh` | 快照采集（timeline/metrics/finality/pg） | ✓ | ✓ | ✓ |
 | `drill-scenarios.sh` | 场景执行器（s1..s5 子命令 + `all`） | s1/s5 可跑 | s1/s2/s5 | 全（s3 需 PG 备） |
+| **`a1-wsl-partition-drill.sh`** | **S2 网络分区的 Tier-2 实现（WSL/Linux 内核内，按进程 UID 切出向）** | ✗（Linux 专属） | ✗（用 docker 时见上表） | **✓ 已实跑（见 §S2 执行结果）** |
 
 骨架粒度：Tier-0 的 S1 端到端可跑（本机自测用）；Tier-1/2 的执行适配层以 `--dry-run` 验证编排正确性（注入命令打印不执行），等资源到位后去掉开关。
 
