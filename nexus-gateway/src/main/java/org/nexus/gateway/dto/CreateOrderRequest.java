@@ -31,7 +31,18 @@ public class CreateOrderRequest {
     @NotBlank(message = "notifyUrl must not be blank")
     private String notifyUrl;
 
-    /** Optional order expiry in minutes (defaults to gateway config). */
+    /**
+     * Optional order expiry in minutes (defaults to gateway config).
+     *
+     * <p>{@code @Min(1)}：0/负数会落到 {@code LocalDateTime.now().plusMinutes(0/-n)}
+     * ⇒ 生成一个「出生即过期」的订单，不是有效请求（B-13 载荷电池实测：修复前
+     * 负值被静默接受）。上界不设：那是策略数字（产品决策），此处只堵形态错误。</p>
+     *
+     * <p>{@link StrictIntegerDeserializer}：拒绝 {@code 3.5} 这类小数被 Jackson
+     * 静默截断成 {@code 3}（实测修复前返回 201，调用方无从知晓时长被改）。</p>
+     */
+    @Min(value = 1, message = "expiryMinutes must be a positive number of minutes")
+    @tools.jackson.databind.annotation.JsonDeserialize(using = StrictIntegerDeserializer.class)
     private Integer expiryMinutes;
 
     /** Idempotency key to prevent duplicate order creation. */
