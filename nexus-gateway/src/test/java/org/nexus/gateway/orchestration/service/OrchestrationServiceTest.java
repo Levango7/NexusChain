@@ -60,7 +60,7 @@ class OrchestrationServiceTest {
     void setUp() {
         service = new OrchestrationService(repo, routingEngine, connectorRegistry,
                 idempotencyStore, webhookDispatcher, riskService, null, metricsCollector,
-                applicationEventPublisher, settlementConfirmationService, null);
+                applicationEventPublisher, settlementConfirmationService, null, null);
         // P1-1（2026-10-12）配套改动：createPayment 现在必须**先原子占位**才走渠道。
         // 本类的 store 是 mock，putIfAbsent 语义未定义 ⇒ 默认返回 false 会被判成
         // "他人在途"而对 req-3 抛 IllegalStateException（409）。这里让占位默认放行；
@@ -707,7 +707,7 @@ class OrchestrationServiceTest {
     private OrchestrationService serviceWithBreaker() {
         return new OrchestrationService(repo, routingEngine, connectorRegistry,
                 idempotencyStore, webhookDispatcher, riskService, null, metricsCollector,
-                applicationEventPublisher, settlementConfirmationService, circuitBreaker);
+                applicationEventPublisher, settlementConfirmationService, circuitBreaker, null);
     }
 
     @Test
