@@ -211,6 +211,10 @@ evidence/<run-id>/                     # run-id = YYYYmmdd-HHMM-tierN
 
 ## 7. 资源需求（给 ops/创始人）
 
+> **2026-11-17 决策（用户）**：本机 kind 集群是**本机虚拟化边界的权宜手段、择时拆除**；
+> 真集群验证**优先走云厂商 / 平台提供的环境** ⇒ 本节的资源口径已整理为申请单
+> **`docs/drill/cloud-environment-request.md`**（缺口→环境映射、最小规格、时长口径、执行路径与拆除清单）。
+
 - Tier-2 最小：3 台 VM（2C4G 起，Ubuntu 22.04+，互通内网，可 iptables）或 3 台物理机；
 - PG 流复制备（S3）：PG-C 预装同版本 PG（与 PG-A 同大版本，仓内开发用 16.x）；
 - 出网：拉镜像/gradle 依赖（首跑）；之后可纯内网；
