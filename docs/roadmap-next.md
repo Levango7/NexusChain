@@ -30,8 +30,8 @@
 | A2 | ⚠️ 代码侧全就绪（#419）；剩部署三件：下发 `NEX_WALLET_PLATFORM_PUBKEY`、prod 置 `NEXUS_SIGNING_BUSINESS_APPROVAL_ENABLED=true`、开闸后 3 副本观察 CAS/ShedLock（不变） |
 | A3 | ✅ 实质闭环（形式签收欠）：0003 五问已裁决，⑤ 超限观测告警已实施（#620 `adb3c6b5`）；口径不再阻塞 |
 | A4 | ✅ 已完成 |
-| A5 | ⬜ 仍未做（2026-11-13 复核：gateway 生产代码零「连接器在途并发计数」实现） |
-| A6 | 🟡 六数据面已接真实核心 RPC；2026-11-13 复核前端仍无实时通道（`WebSocket/EventSource/subscribe` 零命中），10s 轮询与图表缺口不变 |
+| A5 | ✅ 已完成（#731 实现 + #739 单测与调用点守卫，2026-11-17；指标口径见 docs/ops/slo.md §3.9） |
+| A6 | 🟡 大头已补（#740，2026-11-17）：链头 SSE 实时通道上线（后端 HeadBroadcaster + GET /api/events/head，前端 useHeadStream 事件驱动刷新、断线回退轮询）；剩图表与 OrchestrationDashboard/WithdrawalApprovals 实时化未动 |
 
 ---
 
