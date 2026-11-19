@@ -8,7 +8,11 @@ import type {
 } from "../types";
 import { AUTH_HEADERS, buildAuthHeaders, isProtectedPath } from "./auth";
 
-const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:3000";
+// 默认同源相对路径：Vite 开发时由 proxy 转到 BFF，生产由 BFF 同源托管 dist。
+// 不再默认硬编码 http://localhost:3000——那会在 index.html 的 CSP `connect-src 'self' https:` 下
+// 直接把页面自己的 API 调用拦掉（真浏览器实测复现）。需要跨源时显式设 VITE_API_BASE，
+// 并在 CSP/部署白名单中同步声明。
+const API_BASE = import.meta.env.VITE_API_BASE ?? "";
 const GATEWAY_BASE = import.meta.env.VITE_GATEWAY_BASE ?? "http://localhost:8080";
 
 export class ApiError extends Error {

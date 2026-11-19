@@ -150,8 +150,13 @@
    `JdbcFinalityStateStore` 已装配，`finality_votes` / `finality_checkpoints` 落 PG；
    双节点强制重启后旧 epoch 仍 `FINALIZED`、权重 `2000/2000`。详见
    [PLAN-015](PLAN-015-finality-persistence-resilience.md)。仍保留的边界是
-   多副本缓存一致性、网络分区/PG 故障注入与 real-L1 未验证。
-3. 未做网络分区、拜占庭节点、PG 故障注入；节点强制重启已由 PLAN-015 Phase 6A 覆盖；未写逐块状态根全量对账脚本，
+   多副本缓存一致性、PG 故障注入与 real-L1 未验证。
+   **网络分区已补（2026-11-16 A-1，PR #733）**：WSL 内核内三节点 + iptables 按进程 UID 切出向
+   （真内核级切断）——隔离 E 后多数侧 `voted=2000/3000=66.7%` 继续最终化，
+   少数派 `f` 冻结在 41（120s 零增长、lag 单调 2→11）；治愈后 E 回滚自己分叉的 18 块再追平，
+   88 个共同 epoch 哈希不一致 0。详见 `docs/drill/multi-node-drill-plan.md` §S2 执行结果节。
+   剩余边界：**PG 故障注入/多副本缓存一致性/real-L1 仍未验证**；A-2 已另交付女巫稀释量化（PLAN-047 §六）。
+3. ~~未做网络分区~~（已由 A-1/#733 交付，见上）；拜占庭节点其余输入与 PG 故障注入未做；节点强制重启已由 PLAN-015 Phase 6A 覆盖；未写逐块状态根全量对账脚本，
    以 `state replay mismatch=0` + 最终性 checkpoint 一致作为验收证据。
 4. 未覆盖桥经济链路（存款/提款/根提交）与 `Web3jL1ContractClient` 真实调用路径。
 
