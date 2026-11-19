@@ -160,11 +160,18 @@ JAR_FILE="$OUT/jars.lock"
 : > "$JAR_FILE"
 if [ "$WITH_JARS" -eq 1 ]; then
   N_JAR=0
-  for j in nexus-gateway nexus-core nexus-signing-service nexus-wallet-service \
-           nexus-bridge nexus-api-gateway; do
-    src="$(ls -1 "$ROOT/$j/build/libs/"*.jar 2>/dev/null | grep -v -- '-sources\.jar$' | grep -v -- '-javadoc\.jar$' | head -1)"
+  for j in nexus-gateway nexus-api-gateway nexus-core nexus-bridge \
+           nexus-wallet-service nexus-signing-service nexus-settlement \
+           nexus-analytics nexus-compliance nexus-oracle; do
+    # 统一 jar 搜索：monorepo 嵌套布局（nexus-core/nexus-core/）也兼容
+    src=""
+    for base in "$ROOT/$j/build/libs" "$ROOT/$j/$j/build/libs" "$ROOT/$j/build/libs/"; do
+      [ -d "$base" ] || continue
+      src="$(ls -1 "$base"/*.jar 2>/dev/null | grep -v -- '-sources\.jar$' | grep -v -- '-javadoc\.jar$' | sort -V | tail -1)"
+      [ -n "$src" ] && break
+    done
     if [ -z "$src" ]; then
-      skip "$j 无预构建 jar（先 ./gradlew :$j:bootJar）"
+      skip "$j 无预构建 jar（先 ./gradlew :$j:bootJar 或 :$j:fatJar）"
       continue
     fi
     cp "$src" "$OUT/jars/" 2>/dev/null || continue
