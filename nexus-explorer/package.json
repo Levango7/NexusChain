@@ -9,6 +9,8 @@
   ],
   "scripts": {
     "dev": "npm run dev --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "e2e": "npm run e2e --workspace @nexus/explorer-frontend",
     "build": "npm run build --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
     "dev:frontend": "npm run dev --workspace @nexus/explorer-frontend",

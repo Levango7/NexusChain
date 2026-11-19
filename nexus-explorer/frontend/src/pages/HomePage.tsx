@@ -140,7 +140,9 @@ const HomePage: React.FC = () => {
           <span className="text-lg font-bold text-accent">NexusChain</span>
           <span className="text-xs text-muted font-mono">Explorer</span>
         </div>
-        <div className="flex items-center gap-4">
+        {/* 移动视口实测：8 个导航图标在 390px 下会超出页头 22px；
+            hidden sm:inline 只藏文字不藏图标。允许换行而非隐藏入口，桌面布局不变。 */}
+        <div className="flex items-center gap-4 flex-wrap justify-end">
           {status && (
             // 响应式补丁（质量审查 B6）：窄屏隐藏链状态细节（sm:）防挤压 logo 区。
             //

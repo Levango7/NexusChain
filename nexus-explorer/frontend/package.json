@@ -13,6 +13,7 @@
     "format:check": "prettier --check \"src/**/*.{ts,tsx,css,json}\" \"*.{js,ts,json}\"",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
+    "e2e": "npm run build && playwright test",
     "verify:build": "node scripts/verify-build-artifacts.mjs",
     "verify:contrast": "node scripts/verify-contrast.mjs",
     "check": "npm run format:check && npm run lint && npm run test && npm run build && npm run verify:build && npm run verify:contrast"
@@ -26,6 +27,7 @@
     "react-router-dom": "^6.26.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.56.1",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.6",

@@ -32,16 +32,18 @@ import java.util.concurrent.LinkedBlockingQueue;
  *   <li>最后重试时间</li>
  * </ul>
  *
- * <p>激活条件：{@code nexus.webhook.dlq.store=kafka}（默认），
+ * <p>激活条件：{@code nexus.webhook.dlq.store=kafka}（**生产显式 opt-in**；
+ * 默认 {@code memory}，无 broker 也走内存 fail-safe）。
  * 测试环境可通过 {@code nexus.webhook.dlq.store=memory} 切换为内存实现
  * （{@link InMemoryDeadLetterQueueService}），避免依赖 Kafka broker。
+ * 本 bean 仅在 store=kafka 时创建（{@code matchIfMissing=false}）。
  *
  * <p>Kafka topic 配置见 {@code deploy/kafka/kafka-topics.yaml}（P3-T4 已部署）。
  *
  * @since Phase 4 - P4-T5 Webhook 重试与死信队列增强
  */
 @Service
-@ConditionalOnProperty(prefix = "nexus.webhook.dlq", name = "store", havingValue = "kafka", matchIfMissing = true)
+@ConditionalOnProperty(prefix = "nexus.webhook.dlq", name = "store", havingValue = "kafka", matchIfMissing = false)
 public class DeadLetterQueueService implements DeadLetterSender {
 
     private static final Logger log = LoggerFactory.getLogger(DeadLetterQueueService.class);

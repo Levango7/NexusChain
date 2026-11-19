@@ -18,7 +18,7 @@
 |---|---|
 | 根许可为 Apache-2.0 | `LICENSE:1-3`（`Apache License / Version 2.0, January 2004`） |
 | 但 `nexus-core` 携带 LGPL-3.0 全文 | `nexus-core/LICENSE:1-4`（`GNU LESSER GENERAL PUBLIC LICENSE / Version 3, 29 June 2007` / `Copyright (c) [2016] [ <ether.camp> ]`） |
-| 且 166 个 Java 源文件带 LGPL-3.0-or-later 文件头 | `grep -rl "GNU Lesser General Public License" --include=*.java` = 166（`nexus-core/nexus-core/src` 162 + `nexus-consortium/consortium/src` 4）；示例：`nexus-core/nexus-core/src/main/java/org/nexus/core/BlockChainOptional.java:1-17` |
+| 且 170 个 Java 源文件带 LGPL-3.0-or-later 文件头（2026-11-19 复核更新） | 按 `pathlib.Path.rglob('*.java')` 逐文件读文件头实测：`nexus-core/nexus-core/src` 166 + `nexus-consortium/consortium/src` 4；示例：`nexus-core/nexus-core/src/main/java/org/nexus/core/BlockChainOptional.java:1-17` |
 | 且源码含上游项目名 `java-nexuscore` | 163 个 `.java` 文件命中（同上示例 `:3`） |
 | README 曾仅声明 Apache-2.0，且对"派生自 LGPL 项目"零披露 | 修复前 `README.md` 许可证章节只有 `[Apache License 2.0](LICENSE)`；全仓搜索 `LGPL` / `fork` / `衍生` / `java-nexuscore` 在 README/PRD/ARCHITECTURE 均无命中 |
 
@@ -54,7 +54,7 @@ nexus-consortium/consortium/src/
 | 路径 | 许可 | 依据 |
 |---|---|---|
 | 根 `LICENSE` | Apache-2.0 文本；不覆盖更具体的文件/组件声明 | 根许可 |
-| `nexus-core/nexus-core/src/` 中匹配文件头的 162 个 Java 文件 | LGPL-3.0-or-later 文件头 | 文件头 + `nexus-core/LICENSE`；不据此判整个目录 |
+| `nexus-core/nexus-core/src/` 中匹配文件头的 166 个 Java 文件（2026-11-19 复核更新） | LGPL-3.0-or-later 文件头 | 文件头 + `nexus-core/LICENSE`；不据此判整个目录 |
 | `nexus-consortium/consortium/src/` 中匹配文件头的 4 个 Java 文件 | LGPL-3.0-or-later 文件头 | 保留声明，来源/结合关系待核实 |
 | `mpc-engine` | 本地包声明 Apache-2.0，**依赖树已无 GPL/AGPL 系 crate**（2026-10-08 GG20 退役后，见 §5 第一条）；**但 cggmp21 链路含 LGPL-3.0+ 弱传染**（`rug`/`gmp-mpfr-sys`，义务见 §5） | `Cargo.toml` + `Cargo.lock`（许可经 `scripts/check-license-policy.py` 于 crates.io 核实）；唯一密码学栈 `cggmp21` 为 MIT OR Apache-2.0 |
 | `nexus-explorer`（根/前端/后端）、`nexus-devtools`、TS SDK | MIT 组件声明 | 各 `package.json`；与根许可不同不必然冲突 |

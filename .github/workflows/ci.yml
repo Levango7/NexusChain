@@ -303,6 +303,21 @@ jobs:
         working-directory: nexus-explorer/backend
         run: npm run build
 
+      # 真 HTTP 集成：起真 BFF + 可控 core RPC，验证 BFF 与节点的真实调用链。
+      - name: BFF integration tests (real HTTP)
+        working-directory: nexus-explorer/backend
+        run: npm test
+
+      # 真浏览器验收：真实 dist + BFF + Chromium。补「前端几何/交互」而非只 jsdom。
+      # 本机用已安装 Chrome，CI 用 Playwright 自带 Chromium（config 按 CI 自动切换）。
+      - name: Explorer browser acceptance (Playwright)
+        working-directory: nexus-explorer/frontend
+        env:
+          CI: 'true'
+        run: |
+          npx playwright install --with-deps chromium
+          npx playwright test
+
   # ============================================================
   # 构建 & 测试 & 覆盖率
   # ============================================================

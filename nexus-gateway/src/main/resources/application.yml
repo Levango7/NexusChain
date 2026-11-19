@@ -420,9 +420,13 @@ nexus:
     # true（生产迁移完成后）：仅接受 v2（v1 可无限重放，不具新鲜度）。
     require-v2: ${NEXUS_WEBHOOK_REQUIRE_V2:false}
     # === P4-T5：Webhook 重试与死信队列增强 ===
-    # 死信队列存储：kafka（生产，默认）| memory（测试/无 Kafka broker 环境）
+    # 死信队列存储：memory（默认，fail-safe）| kafka（生产显式 opt-in）。
+    # 原默认 kafka + 装配 matchIfMissing=true ⇒ 裸跑无 Kafka 也会选中 Kafka 实现，
+    # 首次死信投递才阻塞/失败（fail-open，且「未投递成功」极易被日志淹没）。
+    # 生产确需持久化 DLQ 时显式 NEXUS_WEBHOOK_DLQ_STORE=kafka 注入；
+    # 未配属性时不再隐式回退 Kafka。
     dlq:
-      store: kafka
+      store: ${NEXUS_WEBHOOK_DLQ_STORE:memory}
       # 是否等待 Kafka ack 后返回（测试环境可关闭）
       wait-for-ack: true
     # === P0-3a：PSP Webhook 验签容差 ===

@@ -256,7 +256,7 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
 ### L2 Rollup（v2.0.0-rc1 真实化）
 
 - **Optimistic 路线**：欺诈证明单步验证为真实逻辑（批次/挑战/bond 状态已 PG 持久化——`JdbcFraudProofStateStore`，重启不丢失；L1 交互默认内存模拟 `real-l1-enabled=false`——"锚定到真实 L1 状态"未完成；Phase 5 仅覆盖双节点共识/同步，real-L1 真机验证仍未交付，桥的存款/提款/已提交根仍为内存态，见"状态执行接线"专项 [PLAN-014](docs/plan/PLAN-014-state-execution-wiring.md)）。
-- **ZK 路线**：依赖上述 Schnorr 证明系统，不具备 ZK 安全属性。
+- **ZK 路线**：**默认真实 Groth16 远程服务**（`zk-groth16-service`，Rust arkworks/BN254 配对验证，fail-closed）；**仅当未配置远程服务时**回落本地 Schnorr，且该降级路径不具备通用电路 ZK 安全属性（不得把降级路径当成默认实现来宣称）。halo2 / Plonk 后端仍冻结。
 - **支付扩展（0x10–0x1a，保留未启用）**：类型枚举、`GAS_TABLE` 与 `BasicRule` 单规则预检已存在，但**不构造也不上链**——B-2 已收口 13 个写端点，保留路由与方法签名，有效请求统一返回 `HTTP 501` + `code 5010`（`Payment extension (0x10-0x1a) is reserved but not enabled`），入参校验失败优先返回 `5000`（RPC broadcast 缺参为 `4001`）；读端点返回 `5010`。链上类型门禁不接受 0x10–0x1a（白名单细节以共识层为准，见 #520）。`PaymentTransactionProcessor.processTransaction` 生产无调用点；0x19/0x1a（DID 注册、订阅授权）分支仅日志、无状态写入。裁决见 `docs/decision-payment-extension-onchain.md`，执行接线仍未完成（见 [PLAN-014](docs/plan/PLAN-014-state-execution-wiring.md)）。
 - **L2-L1 真实化**：Hardhat L1 测试环境 + `L2Bridge.sol` Solidity 合约已就绪，但端到端测试因 Hardhat EDR 不兼容跳过（未完成真实 L1 节点验证）。
 
@@ -297,7 +297,7 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-pg-down.ps1
 - **nexus-core L2 ZK 证明系统**：**已解冻**（方案 C 已实现：`zk-groth16-service`（Rust arkworks，BN254 配对验证）+ Java fail-closed 对接；本地 Schnorr 仅作未配置远程服务时的降级路径）
 - **nexus-core L2 L1 合约交互**：**条件解冻**（Hardhat 环境就绪，EDR 兼容性待解决）
 - **nexus-oracle 治理执行**：**已解冻**（GOV-P0-01 事件源白名单 + 审计日志持久化已修复）
-- **halo2 / Plonk 后端**：**仍冻结**，降级为 Groth16（实际 Schnorr）
+- **halo2 / Plonk 后端**：**仍冻结**；当前默认走方案 C 的 **Groth16 远程服务**（fail-closed），本地 Schnorr 仅作降级路径（不具备通用电路 ZK 安全属性）
 
 ADR-001 状态：**Resolved**（2026-08-10）。
 
