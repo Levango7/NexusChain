@@ -1,3 +1,26 @@
+// 2026-11-19：included build 的 pluginManagement 不继承根构建；此前未声明 repositories 时
+// 插件解析落回 gradlePluginPortal 单仓库，容器内（无 ~/.gradle 缓存）构建 spring-boot 插件时
+// 其传递依赖（buildpack-platform / loader-tools 等仅存于 Maven Central）必 404。
+// 与根 settings.gradle 同口径补齐。
+pluginManagement {
+    repositories {
+        gradlePluginPortal()
+        mavenCentral()
+        maven {
+            name = 'aliyunPublic'
+            url = 'https://maven.aliyun.com/nexus/content/groups/public/'
+        }
+        maven {
+            name = 'tencentPublic'
+            url = 'https://mirrors.cloud.tencent.com/nexus/repository/maven-public/'
+        }
+        maven {
+            name = 'huaweiPublic'
+            url = 'https://repo.huaweicloud.com/repository/maven/'
+        }
+    }
+}
+
 rootProject.name = 'consortium'
 include 'common'
 include 'consortium'
