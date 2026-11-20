@@ -143,6 +143,13 @@ test {
         .withPropertyName("pgMigrations")
         .skipWhenEmpty()
         .optional(true)
+
+    // CompositePluginRepositoryContractTest 读取两个 composite 的 settings；
+    // 登记输入，避免删除回退仓库后 test 仍因 up-to-date 空转而假绿。
+    inputs.files("${rootDir}/nexus-consortium/settings.gradle",
+            "${rootDir}/nexus-settlement/settings.gradle")
+        .withPathSensitivity(org.gradle.api.tasks.PathSensitivity.RELATIVE)
+        .withPropertyName("compositePluginRepositories")
 }
 
 ext {
