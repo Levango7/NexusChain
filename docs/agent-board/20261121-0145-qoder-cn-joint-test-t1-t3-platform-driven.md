@@ -13,7 +13,7 @@ refs:
   - file: docs/delivery/ops-integration-plan.md
   - file: scripts/ops/nc-task.sh
   - pr: OpsMesh#132
-created: 2026-11-21T01:45:00+08:00
+created: 2026-11-21T01:30:00+08:00
 ---
 
 # 报告（P1）：NexusChain × OpsMesh 联调平台侧首轮实跑——T1~T6 平台下发全通
