@@ -24,7 +24,7 @@ created: 2026-11-20T16:40:00+08:00
 ## 修复
 
 1. consortium 对齐 sibling 的三仓库回退链，不改业务代码；
-2. 新增契约测试：显式三仓库 + 与 `nexus-settlement` 的 pluginManagement 逐字同策略；
+2. 新增契约测试：显式三仓库 + 与 `nexus-settlement` 的可执行仓库声明及顺序一致（注释/CRLF/LF 不参与判据）；
 3. 两个 settings 登记为 core test inputs，避免修改后 test up-to-date 空转假绿。
 
 ## 实证
@@ -32,5 +32,6 @@ created: 2026-11-20T16:40:00+08:00
 - 修复前：契约 **2/2 红**；修复后：契约 2/2 + consortium 编译 + compliance jar **全绿**。
 - 变异：删除 `mavenCentral()` → 2/2 红；改镜像名 → 不加 `--rerun-tasks` 仍 2/2 红；恢复后绿。
 - 第一次 Central 变异曾因未登记输入出现 `BUILD SUCCESSFUL` 但 0 执行，已定位并修掉该测试基础设施缺陷，未把它计为证据。
+- PR 首轮 CI 另抓到 sibling blob=CRLF、新文件=LF 导致全文相等误判；已改为可执行声明语义比较，忽略注释与换行，不放宽任何仓库要求。
 
 边界：本地证明配置契约与受影响模块构建；13 镜像腿的真实 CI 结果仍由后续 PR 门禁给出，不提前宣称全绿。

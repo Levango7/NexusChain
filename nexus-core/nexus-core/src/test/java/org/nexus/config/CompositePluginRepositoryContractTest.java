@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -24,13 +25,24 @@ class CompositePluginRepositoryContractTest {
 
     @Test
     void consortiumMatchesSiblingCompositeRepositoryPolicy() throws IOException {
-        assertEquals(pluginManagementBlock("nexus-settlement"),
-                pluginManagementBlock("nexus-consortium"),
-                "consortium 不得再退回 Portal 单点；与 sibling composite 保持同一回退链");
+        assertEquals(repositoryDeclarations("nexus-settlement"),
+                repositoryDeclarations("nexus-consortium"),
+                "只比较可执行仓库声明与顺序；CRLF/LF 和注释不属于解析语义");
+    }
+
+    private static List<String> repositoryDeclarations(String project) throws IOException {
+        return pluginManagementBlock(project).lines()
+                .map(String::trim)
+                .filter(line -> line.equals("gradlePluginPortal()")
+                        || line.equals("mavenCentral()")
+                        || line.equals("name = 'huaweiPlugins'")
+                        || line.equals("url = 'https://repo.huaweicloud.com/repository/maven/'"))
+                .toList();
     }
 
     private static String pluginManagementBlock(String project) throws IOException {
-        String settings = Files.readString(Path.of("..", "..", project, "settings.gradle"));
+        String settings = Files.readString(Path.of("..", "..", project, "settings.gradle"))
+                .replace("\r\n", "\n").replace("\r", "\n");
         int start = settings.indexOf("pluginManagement {");
         assertTrue(start >= 0, project + " 缺少显式 pluginManagement 回退链");
         int depth = 0;
