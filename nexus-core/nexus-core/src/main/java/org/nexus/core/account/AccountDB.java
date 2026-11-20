@@ -172,7 +172,8 @@ public class AccountDB {
 
     public int[] insertAccountList(List<Object[]> Object) {
         try {
-            String sql = "insert into account(id,blockheight,pubkeyhash,nonce,balance,incubatecost,mortgage,vote) VALUES(?,?,?,?,?,?,?,?) on conflict(id) do nothing";
+            // 不指定 conflict target：PostgreSQL 与 H2 PostgreSQL 兼容模式均可执行。
+            String sql = "insert into account(id,blockheight,pubkeyhash,nonce,balance,incubatecost,mortgage,vote) VALUES(?,?,?,?,?,?,?,?) on conflict do nothing";
             return tmpl.batchUpdate(sql, Object);
         } catch (RuntimeException e) {
             logger.error("AccountDB.{} failed: {}", e, e.getMessage());

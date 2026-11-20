@@ -3,6 +3,8 @@ import { render, screen, waitFor, cleanup } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import "../../i18n";
+import { api } from "../../api/client";
+import { RPC_BLOCK } from "../fixtures/backend";
 
 /**
  * 区块浏览器页面级测试。
@@ -61,6 +63,44 @@ describe("HomePage", () => {
       expect(document.body.textContent).toMatch(/1[,.]?234/);
     });
     expectNoUndefinedLeak();
+  });
+
+  it("链头陈旧时显示非实时，不再用 SSE 健康冒充出块活性", async () => {
+    vi.mocked(api.getBlocks).mockResolvedValueOnce([
+      {
+        ...RPC_BLOCK,
+        transactions: [...RPC_BLOCK.transactions],
+        timestamp: Math.floor(Date.now() / 1000) - 86_400,
+      },
+    ]);
+    const HomePage = (await import("../../pages/HomePage")).default;
+    render(
+      <MemoryRouter>
+        <HomePage />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("非实时")).toBeInTheDocument();
+    expect(screen.queryByText("实时", { exact: true })).not.toBeInTheDocument();
+  });
+
+  it("最近 60 秒内有链头时才显示实时", async () => {
+    vi.mocked(api.getBlocks).mockResolvedValueOnce([
+      {
+        ...RPC_BLOCK,
+        transactions: [...RPC_BLOCK.transactions],
+        timestamp: Math.floor(Date.now() / 1000) - 5,
+      },
+    ]);
+    const HomePage = (await import("../../pages/HomePage")).default;
+    render(
+      <MemoryRouter>
+        <HomePage />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("实时", { exact: true })).toBeInTheDocument();
+    expect(screen.queryByText("非实时")).not.toBeInTheDocument();
   });
 
   it("应该展示区块与交易列表，并提供 /orchestration 入口", async () => {

@@ -299,7 +299,7 @@ const WithdrawalApprovalsPage: React.FC = () => {
               </span>
             }
             subtitle={t("approvals.connectSubtitle")}
-            className="max-w-2xl"
+            className="max-w-2xl mx-auto"
           >
             <form onSubmit={handleConnect} className="space-y-4">
               <div>

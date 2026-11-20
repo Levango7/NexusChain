@@ -130,7 +130,9 @@ describe("未配置连接时", () => {
     window.sessionStorage.removeItem(JWT_KEY);
     stubReads();
     await renderPage();
-    expect(screen.getByText("连接托管钱包服务")).toBeInTheDocument();
+    const title = screen.getByText("连接托管钱包服务");
+    expect(title).toBeInTheDocument();
+    expect(title.closest('[class*="max-w-2xl"]')).toHaveClass("mx-auto");
     expect(m.listPendingWithdrawals).not.toHaveBeenCalled();
   });
 

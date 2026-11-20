@@ -56,7 +56,7 @@ public class TenantApiKeyInterceptor implements HandlerInterceptor {
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response,
                              Object handler) throws Exception {
-        if (!tenantEnabled) {
+        if (!tenantEnabled || "OPTIONS".equalsIgnoreCase(request.getMethod())) {
             return true;
         }
         String apiKey = request.getHeader(TENANT_API_KEY_HEADER);

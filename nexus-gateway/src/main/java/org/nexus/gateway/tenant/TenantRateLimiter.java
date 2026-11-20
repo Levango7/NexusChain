@@ -92,7 +92,7 @@ public class TenantRateLimiter implements HandlerInterceptor {
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response,
                              Object handler) throws Exception {
-        if (!tenantEnabled) {
+        if (!tenantEnabled || "OPTIONS".equalsIgnoreCase(request.getMethod())) {
             return true;
         }
         Tenant tenant = (Tenant) request.getAttribute(TENANT_ATTR);

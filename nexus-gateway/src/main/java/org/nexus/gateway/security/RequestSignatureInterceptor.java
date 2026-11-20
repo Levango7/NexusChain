@@ -131,6 +131,10 @@ public class RequestSignatureInterceptor implements HandlerInterceptor {
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
+        // 浏览器 CORS 预检不会带 HMAC/nonce，且不会调用业务方法。
+        if ("OPTIONS".equalsIgnoreCase(request.getMethod())) {
+            return true;
+        }
         String timestamp = request.getHeader(TIMESTAMP_HEADER);
         String nonce = request.getHeader(NONCE_HEADER);
         String signature = request.getHeader(SIGNATURE_HEADER);

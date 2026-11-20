@@ -76,6 +76,8 @@ public class DefaultOnChainExecutionChannel implements OnChainExecutionChannel {
 
     /** requestId → 已执行结果，用于幂等控制 */
     private final ConcurrentMap<String, TransactionResult> idempotentCache = new ConcurrentHashMap<>();
+    /** 本进程实际签发的模拟交易；未知 SIMULATED- 前缀不得仅凭字符串形状确认成功。 */
+    private final ConcurrentMap<String, TransactionResult> simulatedResultsByHash = new ConcurrentHashMap<>();
 
     public DefaultOnChainExecutionChannel(ChainRpcClient chainRpcClient,
                                           SigningApprovalExecutionService approvalExecutionService,
@@ -143,9 +145,14 @@ public class DefaultOnChainExecutionChannel implements OnChainExecutionChannel {
         if (txHash == null || txHash.isEmpty()) {
             return TransactionResult.failure("txHash is null or empty", false);
         }
-        // 模拟交易哈希直接返回 SUCCESS
         if (txHash.startsWith(SIMULATED_PREFIX)) {
-            return TransactionResult.success(txHash, gatewayConfig.getChain().getConfirmations(), true);
+            TransactionResult issued = simulatedResultsByHash.get(txHash);
+            if (issued != null) {
+                return issued;
+            }
+            // 前缀只是命名空间，不是存在性证明。进程重启后也无法辨认旧模拟哈希，
+            // 此时保守返回 PENDING，绝不能把任意伪造字符串确认成 SUCCESS。
+            return TransactionResult.pending(txHash, 0, true);
         }
         try {
             boolean confirmed = chainRpcClient.isTransactionConfirmed(txHash);
@@ -204,7 +211,9 @@ public class DefaultOnChainExecutionChannel implements OnChainExecutionChannel {
         int confirmations = gatewayConfig.getChain().getConfirmations();
         log.info("executeSandbox: type={}, requestId={}, txHash={}",
                 request.getType(), request.getRequestId(), txHash);
-        return TransactionResult.success(txHash, confirmations, true);
+        TransactionResult result = TransactionResult.success(txHash, confirmations, true);
+        simulatedResultsByHash.put(txHash, result);
+        return result;
     }
 
     /**

@@ -97,9 +97,10 @@ explorer 子 chart，`deploy/k8s/` 也没有对应静态清单（两者必须同
 |----------|--------|------|
 | `PORT` | `3000` | BFF 监听端口 |
 | `NEXUS_RPC_URL` | `http://localhost:19585/rpc` | nexus-core JSON-RPC 地址；容器内需改为服务名 |
+| `NEXUS_RPC_TOKEN` | 空 | core 启用 `nexus.localonly` 或 incubate RPC 鉴权时，经 secret 注入对应 `token` 请求头；prod 必填、不得写入源码或镜像 |
 | `FRONTEND_DIR` | `<repo>/frontend/dist` | 前端产物目录；不存在则**只提供 API**（不阻断启动） |
 | `CORS_ALLOWED_ORIGINS` | `http://localhost:5173` | 逗号分隔白名单；同源部署下前端走相对路径，无需放行自身 |
-| `VITE_API_BASE` | 开发态 `http://localhost:3000` | **构建期**变量；镜像内构建时置空串 → 请求走相对路径（同源） |
+| `VITE_API_BASE` | 空（同源相对 `/api`） | **构建期**变量；仅在 BFF 与前端确实跨源部署时显式设置 |
 
 ## 许可证
 

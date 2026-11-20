@@ -49,6 +49,7 @@
     "height": "Height",
     "peers": "Peers",
     "live": "Live",
+    "stale": "Not live",
     "txns": "txns",
     "viewBlock": "View block #{{height}}",
     "viewTx": "View transaction {{hash}}",

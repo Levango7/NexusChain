@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Link } from "react-router-dom";
 import { ArrowLeft, Eye, EyeOff, CheckCircle2, AlertCircle, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -47,6 +47,16 @@ const Settings: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   // 清除凭证是破坏性操作（清空后需重新输入 API Key/Secret），故加二次确认。
   const [confirmClearOpen, setConfirmClearOpen] = useState<boolean>(false);
+  const savedTimerRef = useRef<number | null>(null);
+  const clearSavedTimer = useCallback(() => {
+    if (savedTimerRef.current !== null) {
+      window.clearTimeout(savedTimerRef.current);
+      savedTimerRef.current = null;
+    }
+  }, []);
+
+  // 卸载后不再触碰 state；重复保存也只保留最后一次提示的定时器。
+  useEffect(() => clearSavedTimer, [clearSavedTimer]);
 
   // 初始化输入框：显示当前已存储的凭证（apiKey 明文，secret 用占位符）
   useEffect(() => {
@@ -59,6 +69,7 @@ const Settings: React.FC = () => {
   const handleSave = useCallback(
     (e: React.FormEvent) => {
       e.preventDefault();
+      clearSavedTimer();
       setError(null);
       setSaved(false);
 
@@ -86,13 +97,16 @@ const Settings: React.FC = () => {
       try {
         setCredentials(trimmedKey, finalSecret);
         setSaved(true);
-        // 3 秒后清除成功提示
-        window.setTimeout(() => setSaved(false), 3000);
+        // 3 秒后清除成功提示；保存句柄以便重复保存与卸载时取消。
+        savedTimerRef.current = window.setTimeout(() => {
+          setSaved(false);
+          savedTimerRef.current = null;
+        }, 3000);
       } catch (err) {
         setError(err instanceof Error ? err.message : t("settings.errSaveFailed"));
       }
     },
-    [keyInput, secretInput, secretIsPlaceholder, apiSecret, setCredentials, t],
+    [keyInput, secretInput, secretIsPlaceholder, apiSecret, setCredentials, t, clearSavedTimer],
   );
 
   /**
@@ -100,6 +114,7 @@ const Settings: React.FC = () => {
    * 破坏性操作加二次确认：清空后必须重新输入 API Key/Secret 才能恢复认证。
    */
   const handleClearConfirmed = useCallback(() => {
+    clearSavedTimer();
     clearCredentials();
     setKeyInput("");
     setSecretInput("");
@@ -107,7 +122,7 @@ const Settings: React.FC = () => {
     setSaved(false);
     setError(null);
     setConfirmClearOpen(false);
-  }, [clearCredentials]);
+  }, [clearCredentials, clearSavedTimer]);
 
   const handleSecretFocus = useCallback(() => {
     // 用户聚焦 secret 输入框时，若处于占位符状态则清空等待重新输入

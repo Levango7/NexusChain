@@ -244,11 +244,25 @@ class DefaultOnChainExecutionChannelTest {
     }
 
     @Test
-    @DisplayName("queryStatus: SIMULATED- 前缀 -> SUCCESS")
-    void queryStatus_simulated() {
-        TransactionResult result = newChannel().queryStatus("SIMULATED-abc");
+    @DisplayName("queryStatus: 本进程实际签发的 SIMULATED- 哈希 -> SUCCESS")
+    void queryStatus_issuedSimulated() {
+        cfg.getExchangeWallet().setPlatformPubkey("");
+        DefaultOnChainExecutionChannel channel = newChannel();
+        TransactionResult executed = channel.execute(validRequest(null));
+
+        TransactionResult result = channel.queryStatus(executed.getTxHash());
         assertTrue(result.isSuccess());
         assertTrue(result.isSimulated());
+    }
+
+    @Test
+    @DisplayName("queryStatus: 未签发的 SIMULATED- 伪造哈希不得确认成功")
+    void queryStatus_unknownSimulatedIsNotSuccessful() {
+        TransactionResult result = newChannel().queryStatus("SIMULATED-unissued");
+        assertFalse(result.isSuccess());
+        assertEquals(TransactionResult.Status.PENDING_CONFIRMATION, result.getStatus());
+        assertTrue(result.isSimulated());
+        verifyNoInteractions(chainRpcClient);
     }
 
     @Test

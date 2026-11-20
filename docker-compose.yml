@@ -86,6 +86,8 @@ services:
       # local profile + 指向 compose 网络内的 nexus-pgsql（用户/库与该服务
       # POSTGRES_* 环境一致，见下方 nexus-pgsql 定义）。
       - SPRING_PROFILES_ACTIVE=local
+      # 仅 dev：core 只绑定宿主 loopback，BFF 走可信 compose 网络；生产保持 localonly 鉴权
+      - LOCALONLY=false
       - SPRING_DATASOURCE_URL=jdbc:postgresql://nexus-pgsql:5432/nexuschain
       - SPRING_DATASOURCE_USERNAME=nexus
       - SPRING_DATASOURCE_PASSWORD=nexus123
@@ -261,6 +263,8 @@ services:
     environment:
       # 容器内 core 的地址是服务名（默认 localhost:19585 会指向容器自身，链数据恒不可达）
       - NEXUS_RPC_URL=http://nexus-core:19585/rpc
+      # localonly/incubate 开启时由部署环境注入；仓库不保存可用令牌
+      - NEXUS_RPC_TOKEN=${NEXUS_RPC_TOKEN:-}
       # 同源托管下前端走相对路径 /api/**，无需 CORS；白名单仅保留 Vite dev server
       - CORS_ALLOWED_ORIGINS=http://localhost:5173
     depends_on:

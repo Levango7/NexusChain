@@ -177,6 +177,43 @@ describe("数据渲染", () => {
     expect(screen.getByText("ACTIVE")).toBeInTheDocument();
   });
 
+  it("三张数据表都有纵向滚动区与吸顶表头，长表不遮挡数据", async () => {
+    requestMock.mockResolvedValue({
+      ...FULL,
+      anomalyMonitor: {
+        hasAlert: true,
+        alertLevel: "NEGATIVE_BALANCE",
+        anomalyCount: 1,
+        anomalies: [
+          {
+            txNo: "TX-BAD",
+            operationType: "REFUND",
+            amount: 500,
+            balanceAfter: -20,
+            createdAt: "2026-10-24T11:00:00",
+          },
+        ],
+      },
+    });
+    await renderPage();
+    await screen.findByText("REFUND");
+
+    const tables = document.querySelectorAll("table");
+    expect(tables).toHaveLength(3);
+    tables.forEach((table) => {
+      expect(table.parentElement).toHaveClass("max-h-96", "overflow-auto");
+    });
+    const heads = document.querySelectorAll("thead");
+    expect(heads).toHaveLength(3);
+    heads.forEach((head) => {
+      expect(head.className).toContain("[&_th]:sticky");
+      expect(head.className).toContain("[&_th]:top-0");
+      expect(head.className).toContain("[&_th]:z-10");
+      expect(head.className).toContain("[&_th]:bg-surface");
+    });
+    expect(document.querySelectorAll("thead th")).toHaveLength(14);
+  });
+
   it("请求路径不带 merchantId（服务端按 API Key 推导）", async () => {
     requestMock.mockResolvedValue(FULL);
     await renderPage();

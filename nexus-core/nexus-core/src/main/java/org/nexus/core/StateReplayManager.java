@@ -14,6 +14,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationContext;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -30,8 +31,9 @@ import java.util.concurrent.atomic.AtomicLong;
  * <ul>
  *   <li>重放引擎复用 {@link MerkleRule#validateMerkle}（与出块方
  *       {@code Miner} 生成 {@code hashMerkleState} 用的是同一套执行逻辑）；</li>
- *   <li>持久化语义与旧 {@code StatetreeUpdate} 完全一致：
- *       {@code accountDB.insertAccountList} / {@code incubatorDB.insertIncubatorList}；</li>
+ *   <li>持久化复用 {@code accountDB.insertAccountList} /
+ *       {@code incubatorDB.insertIncubatorList}，两类状态在同一事务中写入；
+ *       任一失败整体回滚，不留下只写了一半的重放状态；</li>
  *   <li><b>Phase 2 处置接线</b>：重放后状态根不一致时发布
  *       {@link StateRootMismatchEvent}，由 {@code StateRootMismatchHandler}
  *       按 {@code nexus.core.state-root-mismatch.action} 处置
@@ -70,6 +72,7 @@ public class StateReplayManager {
      * @throws InvalidProtocolBufferException 交易负载解析失败
      * @throws DecoderException               Hex 解码失败
      */
+    @Transactional(rollbackFor = Exception.class)
     public ReplayResult replayBlock(Block block) throws InvalidProtocolBufferException, DecoderException {
         Map<String, Object> merklemap = merkleRule.validateMerkle(block.body, block.nHeight);
         @SuppressWarnings("unchecked")
