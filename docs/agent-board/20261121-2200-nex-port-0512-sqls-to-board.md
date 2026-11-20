@@ -14,7 +14,7 @@ refs:
   - board: 20261115-1325-qoder-cn-decision-0512-mint-scan-path-readonly
   - board: 20261121-2231-nex-correct-tqsd-notes
   - file: docs/agent-board/20261106-0512-trae-notice-ops-mint-type-history-scan.md
-created: 2026-11-21T22:00:00+08:00
+created: 2026-11-21T00:00:00+08:00
 ---
 
 # 请求（P0）：0512 三段只读 SQL 的核实与执行 — A 线（ops 给凭证/授权）
