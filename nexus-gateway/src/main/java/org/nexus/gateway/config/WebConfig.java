@@ -178,6 +178,10 @@ public class WebConfig implements WebMvcConfigurer {
 
         @Override
         public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
+            // 预检不是业务调用，不消耗配额，也不能因缺少 API Key 被限流挡住。
+            if ("OPTIONS".equalsIgnoreCase(request.getMethod())) {
+                return true;
+            }
             String key = request.getHeader("X-NexusChain-ApiKey");
             if (key == null || key.isEmpty()) {
                 key = request.getRemoteAddr();

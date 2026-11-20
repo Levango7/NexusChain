@@ -49,6 +49,7 @@
     "height": "高度",
     "peers": "节点数",
     "live": "实时",
+    "stale": "非实时",
     "txns": "笔交易",
     "viewBlock": "查看区块 #{{height}}",
     "viewTx": "查看交易 {{hash}}",

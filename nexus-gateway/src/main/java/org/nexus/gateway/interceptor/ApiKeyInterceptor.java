@@ -32,6 +32,10 @@ public class ApiKeyInterceptor implements HandlerInterceptor {
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
+        // CORS 预检不携带业务凭据；它只协商跨源能力，不执行资金业务。
+        if ("OPTIONS".equalsIgnoreCase(request.getMethod())) {
+            return true;
+        }
         String apiKey = request.getHeader(API_KEY_HEADER);
 
         if (apiKey == null || apiKey.isEmpty()) {

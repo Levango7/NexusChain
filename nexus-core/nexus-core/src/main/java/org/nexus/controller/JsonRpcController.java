@@ -125,9 +125,11 @@ public class JsonRpcController {
                     ? (ArrayNode) req.get("params") : MAPPER.createArrayNode();
 
             Object result = dispatch(method, params);
-            if (result instanceof ObjectNode) {
-                response.set("error", (ObjectNode) result); // 已是 error 信封
+            if (isErrorEnvelope(result)) {
+                response.set("error", (ObjectNode) result);
             } else {
+                // 区块、交易、合约详情等成功结果同样是 ObjectNode，不能按 Java 类型
+                // 误判为错误；JSON-RPC 的方向由 error 信封自身的契约字段决定。
                 response.set("result", MAPPER.valueToTree(result));
             }
         } catch (RuntimeException | JsonProcessingException e) {
@@ -730,6 +732,14 @@ public class JsonRpcController {
         } catch (RuntimeException e) {
             return def;
         }
+    }
+
+    /** 仅 dispatcher 内部错误信封含数值 code + 文本 message；业务成功对象原样放进 result。 */
+    private boolean isErrorEnvelope(Object result) {
+        if (!(result instanceof ObjectNode node)) {
+            return false;
+        }
+        return node.path("code").isIntegralNumber() && node.path("message").isTextual();
     }
 
     private ObjectNode error(int code, String message, long id) {

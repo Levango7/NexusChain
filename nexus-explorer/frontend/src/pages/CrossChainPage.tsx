@@ -77,8 +77,13 @@ const CrossChainPage: React.FC = () => {
             {t("crosschain.title")}
           </span>
         </div>
-        <Button variant="ghost" size="sm" onClick={() => setRefreshSeq((n) => n + 1)}>
-          <RefreshCw size={14} aria-hidden="true" />
+        <Button
+          variant="ghost"
+          size="sm"
+          leadingIcon={<RefreshCw size={14} aria-hidden="true" />}
+          loading={loading}
+          onClick={() => setRefreshSeq((n) => n + 1)}
+        >
           {t("common.refresh")}
         </Button>
       </PageHeader>

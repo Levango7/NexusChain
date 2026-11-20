@@ -100,11 +100,12 @@ public class IncubatorDB {
 
     public int[] insertIncubatorList(List<Object[]> Object) {
         try {
-            String sql = "insert into incubator_state(id,share_pubkeyhash,pubkeyhash,txid_issue,height,cost,interest_amount,share_amount,last_blockheight_interest,last_blockheight_share) VALUES(?,?,?,?,?,?,?,?,?,?) on conflict(id) do nothing";
+            String sql = "insert into incubator_state(id,share_pubkeyhash,pubkeyhash,txid_issue,height,cost,interest_amount,share_amount,last_blockheight_interest,last_blockheight_share) VALUES(?,?,?,?,?,?,?,?,?,?) on conflict do nothing";
             return tmpl.batchUpdate(sql, Object);
         } catch (RuntimeException e) {
-            log.error("IncubatorDB: uncaught exception", e);
-            return null;
+            // 状态重放与账户写共用事务；吞掉异常会让账户半提交而调用方仍以为成功。
+            log.error("IncubatorDB.insertIncubatorList failed", e);
+            throw new IllegalStateException("IncubatorDB.insertIncubatorList failed", e);
         }
     }
 

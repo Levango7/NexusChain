@@ -90,13 +90,17 @@ interface JsonRpcResponse<T> {
  */
 export class NexusChainRpcClient {
   private readonly url: string;
+  private readonly token?: string;
   private requestId: number = 0;
 
   /** 单次 RPC 调用超时（毫秒）。见 call() 中的说明。 */
   private static readonly REQUEST_TIMEOUT_MS = 8_000;
 
-  constructor(url: string) {
+  constructor(url: string, token: string | undefined = process.env.NEXUS_RPC_TOKEN) {
     this.url = url;
+    // core 的 localonly / incubate RPC 均读取 token 请求头。令牌只从部署环境
+    // 注入；未配置时保持匿名，由 core 按其 fail-closed 策略明确拒绝。
+    this.token = token?.trim() || undefined;
   }
 
   /**
@@ -116,9 +120,13 @@ export class NexusChainRpcClient {
     // P1（2026-09-17 修复）：原实现无超时 —— core 侧挂起时该请求会无限期占用
     // 连接与事件循环，BFF 的并发能力被逐条耗尽，最终整体不可用（且前端表现为
     // 永久 Loading）。8s 对同集群 RPC 足够宽裕。
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (this.token) {
+      headers.token = this.token;
+    }
     const res = await fetch(this.url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify(reqBody),
       signal: AbortSignal.timeout(NexusChainRpcClient.REQUEST_TIMEOUT_MS),
     });

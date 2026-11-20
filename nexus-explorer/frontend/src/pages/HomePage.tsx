@@ -120,6 +120,10 @@ const HomePage: React.FC = () => {
   };
 
   const formatTime = (ts: number) => formatRelativeTime(ts, i18n.language);
+  // SSE 通路健康不等于链仍在出块。只有拿到最近 60s 内的链头才宣称实时；
+  // 无块数据或链头陈旧时显示非实时，避免「28 天前的块 + 绿色 Live」。
+  const headAgeSeconds = blocks[0] ? Math.floor(Date.now() / 1000) - blocks[0].timestamp : null;
+  const chainLive = headAgeSeconds !== null && headAgeSeconds <= 60;
 
   return (
     <div className="min-h-screen bg-bg text-fg">
@@ -157,9 +161,13 @@ const HomePage: React.FC = () => {
                 {t("home.height")}:{" "}
                 <span className="text-fg font-mono">{status.latestHeight.toLocaleString()}</span>
               </span>
-              <span className="flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse" />
-                {t("home.live")}
+              <span className="flex items-center gap-1" role="status">
+                <span
+                  className={`w-1.5 h-1.5 rounded-full ${
+                    chainLive ? "bg-success animate-pulse" : "bg-warn"
+                  }`}
+                />
+                {t(chainLive ? "home.live" : "home.stale")}
               </span>
             </div>
           )}

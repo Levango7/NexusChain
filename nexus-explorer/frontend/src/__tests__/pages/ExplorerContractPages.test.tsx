@@ -203,6 +203,32 @@ describe("CrossChainPage", () => {
     expectNoUndefinedLeak();
   });
 
+  it("手动刷新期间按钮禁用并标记 busy，完成后恢复", async () => {
+    const CrossChainPage = (await import("../../pages/CrossChainPage")).default;
+    render(
+      <MemoryRouter>
+        <CrossChainPage />
+      </MemoryRouter>,
+    );
+    await screen.findByText("xchain-0001");
+    let finishRefresh!: (value: (typeof CROSSCHAIN_TX)[]) => void;
+    mocked.getCrossChain.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishRefresh = resolve;
+        }),
+    );
+
+    const refresh = screen.getByRole("button", { name: "刷新" });
+    await userEvent.click(refresh);
+    expect(refresh).toBeDisabled();
+    expect(refresh).toHaveAttribute("aria-busy", "true");
+
+    finishRefresh([CROSSCHAIN_TX]);
+    await waitFor(() => expect(refresh).toBeEnabled());
+    expect(refresh).not.toHaveAttribute("aria-busy");
+  });
+
   it("未知状态不应崩溃：回落 neutral 标签与原始状态值", async () => {
     // core 侧状态枚举扩展时（前端未同步），旧前端仍须可用 —— 这属于契约演进
     // 的正常路径，不是异常路径，故显式断言回退行为。

@@ -242,9 +242,9 @@ const FundDashboardPage: React.FC = () => {
               {(anomaly.anomalies ?? []).length === 0 ? (
                 <p className="text-muted text-sm">{t("fund.anomalyEmpty")}</p>
               ) : (
-                <div className="overflow-x-auto">
+                <div className="max-h-96 overflow-auto">
                   <table className="w-full text-sm">
-                    <thead>
+                    <thead className="[&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-surface [&_th]:shadow-[inset_0_-1px_0_var(--border-soft)]">
                       <tr className="text-xs text-muted text-left">
                         <th className="py-2 pr-4 font-medium">{t("fund.colTime")}</th>
                         <th className="py-2 pr-4 font-medium">{t("fund.colType")}</th>
@@ -282,9 +282,9 @@ const FundDashboardPage: React.FC = () => {
               {trend.length === 0 ? (
                 <p className="text-muted text-sm">{t("fund.noTrend")}</p>
               ) : (
-                <div className="overflow-x-auto">
+                <div className="max-h-96 overflow-auto">
                   <table className="w-full text-sm">
-                    <thead>
+                    <thead className="[&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-surface [&_th]:shadow-[inset_0_-1px_0_var(--border-soft)]">
                       <tr className="text-xs text-muted text-left">
                         <th className="py-2 pr-4 font-medium">{t("fund.trendDate")}</th>
                         <th className="py-2 pr-4 font-medium text-right">
@@ -322,9 +322,9 @@ const FundDashboardPage: React.FC = () => {
               {recent.length === 0 ? (
                 <p className="text-muted text-sm">{t("fund.noRecent")}</p>
               ) : (
-                <div className="overflow-x-auto">
+                <div className="max-h-96 overflow-auto">
                   <table className="w-full text-sm">
-                    <thead>
+                    <thead className="[&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-surface [&_th]:shadow-[inset_0_-1px_0_var(--border-soft)]">
                       <tr className="text-xs text-muted text-left">
                         <th className="py-2 pr-4 font-medium">{t("fund.colTime")}</th>
                         <th className="py-2 pr-4 font-medium">{t("fund.colType")}</th>
