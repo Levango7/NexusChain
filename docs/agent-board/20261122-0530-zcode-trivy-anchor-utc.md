@@ -20,6 +20,6 @@ created: 2026-11-22T05:30:00+08:00
 - 修复：`_first_seen_date` 改用 `%cI`，同时返回 local_date 与 utc_date。
   addedAt 一致性继续按既有本地日；「是否未来提交」统一使用 UTC 日。
 - canonical 的 addedAt 未来校验也由 anchor UTC 日负责；非 canonical fixture 保留 addedAt 未来校验。
-- 不改漏洞豁免范围，不延长 pending_base_rebuild 窗口：addedAt=2026-11-22（本地首次出现日），expires=2026-12-06。
+- 不改漏洞豁免范围，保持 pending_base_rebuild 固定 14 天规则：addedAt=2026-11-22（本地首次出现日，UTC 校验日=2026-11-21），expires=2026-12-06。
 
 验证：门禁自测 **37/37**；实际报告与 addedAt/anchor 校验均 PASS。该修复针对门禁自身时区缺陷，不表示漏洞消失。
