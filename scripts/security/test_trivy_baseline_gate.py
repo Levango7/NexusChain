@@ -641,6 +641,47 @@ def check_pending_base_rebuild() -> tuple[bool, str]:
     return (not problems), "；".join(problems)
 
 
+def check_first_seen_utc() -> tuple[bool, str]:
+    """本地次日、UTC 当日也必须得到同一个首次出现日，不能把提交判成未来。"""
+    import importlib.util
+    import pathlib
+
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = os.path.realpath(tmp)
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True)
+        config_dir = os.path.join(repo, "config")
+        os.makedirs(config_dir)
+        baseline = os.path.join(config_dir, "trivy-baseline.json")
+        pathlib.Path(baseline).write_text(
+            json.dumps({"schemaVersion": 1, "entries": [{"id": "CVE-2026-124709"}]}),
+            encoding="utf-8",
+        )
+        env = {
+            **os.environ,
+            "GIT_AUTHOR_DATE": "2026-11-22T02:00:00+08:00",
+            "GIT_COMMITTER_DATE": "2026-11-22T02:00:00+08:00",
+        }
+        subprocess.run(["git", "add", "-A"], cwd=repo, env=env, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "utc-boundary"], cwd=repo, env=env, check=True)
+
+        spec = importlib.util.spec_from_file_location("baseline_gate", GATE)
+        if spec is None or spec.loader is None:
+            return False, "无法加载 baseline gate 模块"
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        previous_cwd = os.getcwd()
+        try:
+            os.chdir(repo)
+            local_seen, utc_seen, error = module._first_seen_date(baseline, "CVE-2026-124709")
+        finally:
+            os.chdir(previous_cwd)
+        if error or local_seen != "2026-11-22" or utc_seen != "2026-11-21":
+            return False, f"UTC 归一化失败：local={local_seen}, utc={utc_seen}, error={error}"
+    return True, ""
+
+
 def main() -> int:
     failures = 0
     total = 0
@@ -702,6 +743,13 @@ def main() -> int:
     total += 1
     ok, reason = check_anchor_shared_window()
     print(f"[{'PASS' if ok else 'FAIL'}] 防自续锚点 × 共享窗（第二包沿用锚点放行 / 重登记拒收且带引导 / 改日期续期拒收）")
+    if not ok:
+        failures += 1
+        print(f"  {reason}")
+
+    total += 1
+    ok, reason = check_first_seen_utc()
+    print(f"[{'PASS' if ok else 'FAIL'}] 首次出现日按 UTC 归一化（本地次日=UTC 当日，不误判未来）")
     if not ok:
         failures += 1
         print(f"  {reason}")

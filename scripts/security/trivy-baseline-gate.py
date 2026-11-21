@@ -300,30 +300,38 @@ def load_baseline(path: str, today: dt.date | None = None) -> tuple[dict[tuple[s
         # （2026-11-08 复核发现）。
         # 2026-11-15（nex 报告 R2）：git 作者日可被 GIT_AUTHOR_DATE 伪造 ⇒ 未来日锚点
         # 会与未来日 addedAt 互相匹配而放行 ⇒ 两条日期都不得晚于 today。
-        if added and today and added > today:
+        if added and today and added > today and os.path.abspath(path) != os.path.abspath(CANONICAL_BASELINE):
             errors.append(
                 f"{where} addedAt={added.isoformat()} 晚于今天（{today.isoformat()}）——"
                 f"豁免日期不得在未来（否则可伪造未来提交日期自证并长期有效）"
             )
+        # canonical 的 addedAt 使用 committer 本地日，未来与否统一由下方
+        # first_seen_utc 判定；不能拿本地日与 UTC today 直接比较。
         # 2026-11-15（nex 报告 R1/R3）：锚点核验改 fail-closed——浅克隆 / git 不可用 /
         # 历史无变化点一律判红（exit 2）；旧行为"取不到只跳过"与伪造日期组合会出假绿。
         if added and os.path.abspath(path) == os.path.abspath(CANONICAL_BASELINE):
-            first_seen, anchor_err = _first_seen_date(path, vuln_id)
+            first_seen, first_seen_utc, anchor_err = _first_seen_date(path, vuln_id)
             if anchor_err:
                 errors.append(f"{where} 防自续锚点不可核（fail-closed）：{anchor_err}")
-            elif first_seen and today and first_seen > today.isoformat():
+            elif first_seen_utc and today and first_seen_utc > today.isoformat():
                 errors.append(
-                    f"{where} 锚点（首次出现日 {first_seen}）晚于今天（{today.isoformat()}）——"
-                    f"提交日期疑似伪造，拒收"
+                    f"{where} 锚点（UTC 首次出现日 {first_seen_utc}）晚于今天（{today.isoformat()}）——"
+                    f"豁免日期不得在未来（提交日期疑似伪造，拒收）"
                 )
             elif first_seen and first_seen != added.isoformat():
-                errors.append(
-                    f"{where} addedAt={added.isoformat()} 与该条目首次出现的提交日 {first_seen}"
-                    f" 不一致（防自续：addedAt 以 git 首次出现日为准，不信作者自填；"
-                    f"豁免窗口按 CVE 全包共享——同一 CVE 中途新增的包请沿用 addedAt={first_seen}、"
-                    f"expires={first_seen}+90 天（与第一个包同一窗口）；该窗口已过期则只能修复，"
-                    f"不可换包/改日期续期）"
-                )
+                if today and added > today:
+                    errors.append(
+                        f"{where} addedAt={added.isoformat()} 晚于今天（{today.isoformat()}）——"
+                        f"豁免日期不得在未来（提交日期疑似伪造，拒收）"
+                    )
+                else:
+                    errors.append(
+                        f"{where} addedAt={added.isoformat()} 与该条目首次出现的提交日 {first_seen}"
+                        f" 不一致（防自续：addedAt 以 git 首次出现日为准，不信作者自填；"
+                        f"豁免窗口按 CVE 全包共享——同一 CVE 中途新增的包请沿用 addedAt={first_seen}、"
+                        f"expires={first_seen}+90 天（与第一个包同一窗口）；该窗口已过期则只能修复，"
+                        f"不可换包/改日期续期）"
+                    )
 
         if expires and added:
             validity_days = PENDING_VALIDITY_DAYS if kind == "pending_base_rebuild" else VALIDITY_DAYS
@@ -369,16 +377,18 @@ def _serialize_finding(finding: dict, entry: dict | None = None) -> dict:
     return data
 
 
-def _first_seen_date(baseline_path, vuln_id) -> tuple[str | None, str | None]:
-    """该 CVE 在基线文件里**首次出现**的提交日期（YYYY-MM-DD）；fail-closed 版本。
+def _first_seen_date(baseline_path, vuln_id) -> tuple[str | None, str | None, str | None]:
+    """该 CVE 在基线文件里**首次出现**的本地提交日与 UTC 提交日；fail-closed 版本。
 
-    返回 (date_str | None, error | None)——error 非空即由调用方判红（exit 2）。
+    返回 (local_date_str | None, utc_date_str | None, error | None)。
+    local_date_str 用于 addedAt 一致性；utc_date_str 只用于未来提交校验。
 
     用途：把 `addedAt` 从「作者自填」变成「git 可核事实」——
     否则只要同时改 addedAt 与 expires 就能无限续期（2026-11-08 复核发现）。
 
     2026-11-15（nex 报告 R1/R3）硬化：
-    - 改用 **committer 日**（%cs，落地时刻；squash 仓与作者日等同）；
+    - 使用 **committer 时间戳（%cI）同时保留本地日与 UTC 日**：addedAt 继续按既有 `%cs`
+      本地日校验，只有「是否未来提交」使用 UTC 日，避免两套语义互相污染；
     - 浅克隆（`--is-shallow-repository`）⇒ 历史不完整，直接错误（CI 须 fetch-depth: 0）；
     - git 调用失败 / 超时 / 历史中无变化点（文件未提交、路径不在本仓）⇒ 错误。
       旧行为"取不到只跳过"已废除：它与伪造日期组合会产出假绿（本地跑未提交的
@@ -391,19 +401,26 @@ def _first_seen_date(baseline_path, vuln_id) -> tuple[str | None, str | None]:
             capture_output=True, text=True, timeout=20,
         )
         if shallow.returncode == 0 and shallow.stdout.strip() == "true":
-            return None, "仓库为浅克隆（shallow）——历史不完整，锚点无法核验（CI 须 fetch-depth: 0；本地可 git fetch --unshallow 解开）"
+            return None, None, "仓库为浅克隆（shallow）——历史不完整，锚点无法核验（CI 须 fetch-depth: 0；本地可 git fetch --unshallow 解开）"
         out = subprocess.run(
-            ["git", "log", "-S", vuln_id, "--format=%cs", "--", baseline_path],
+            ["git", "log", "-S", vuln_id, "--format=%cI", "--", baseline_path],
             capture_output=True, text=True, timeout=20,
         )
     except Exception as e:  # 局部导入/子进程的所有异常都转为可判红的错误（fail-closed）
-        return None, f"git 调用异常：{e}"
+        return None, None, f"git 调用异常：{e}"
     if out.returncode != 0:
-        return None, f"git log 失败（rc={out.returncode}）：{out.stderr.strip()[:200]}"
-    dates = [ln.strip() for ln in out.stdout.splitlines() if ln.strip()]
-    if not dates:
-        return None, "git 历史中找不到该 CVE 的变化点（基线可能未提交，或路径不在本仓）"
-    return dates[-1], None  # 最早一次（log 是倒序）
+        return None, None, f"git log 失败（rc={out.returncode}）：{out.stderr.strip()[:200]}"
+    timestamps = [ln.strip() for ln in out.stdout.splitlines() if ln.strip()]
+    if not timestamps:
+        return None, None, "git 历史中找不到该 CVE 的变化点（基线可能未提交，或路径不在本仓）"
+    try:
+        parsed = dt.datetime.fromisoformat(timestamps[-1])
+    except ValueError:
+        return None, None, f"首次出现时间戳无法按 ISO 8601 解析：{timestamps[-1]}"
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    # 最早一次（log 是倒序）：本地日用于 addedAt 一致性，UTC 日用于未来提交校验。
+    return parsed.strftime("%Y-%m-%d"), parsed.astimezone(dt.timezone.utc).date().isoformat(), None
 
 
 def _age_days(today: dt.date, added: dt.date) -> int:
