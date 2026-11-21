@@ -152,6 +152,22 @@ const OrchestrationDashboard: React.FC = () => {
     connectors: t("orchestration.tabConnectors"),
     rules: t("orchestration.tabRules"),
   };
+  const onTabKeyDown = (
+    event: React.KeyboardEvent<HTMLButtonElement>,
+    tabName: (typeof TABS)[number],
+  ) => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const current = TABS.indexOf(tabName);
+    const next =
+      event.key === "Home"
+        ? 0
+        : event.key === "End"
+          ? TABS.length - 1
+          : (current + (event.key === "ArrowRight" ? 1 : -1) + TABS.length) % TABS.length;
+    setTab(TABS[next]);
+    document.getElementById(`orchestration-tab-${TABS[next]}`)?.focus();
+  };
 
   return (
     <div className="min-h-screen bg-bg text-fg">
@@ -172,10 +188,14 @@ const OrchestrationDashboard: React.FC = () => {
           {TABS.map((tabName) => (
             <button
               key={tabName}
+              id={`orchestration-tab-${tabName}`}
               type="button"
               role="tab"
               aria-selected={tab === tabName}
+              aria-controls={`orchestration-panel-${tabName}`}
+              tabIndex={tab === tabName ? 0 : -1}
               onClick={() => setTab(tabName)}
+              onKeyDown={(event) => onTabKeyDown(event, tabName)}
               className={`px-3 py-1.5 rounded-sm text-xs font-medium transition-colors duration-base ease-standard focus:outline-none focus-visible:shadow-focus ${
                 tab === tabName
                   ? "bg-accent-solid text-accent-on"
@@ -220,7 +240,12 @@ const OrchestrationDashboard: React.FC = () => {
         )}
 
         {!loading && tab === "payments" && (
-          <div className="space-y-2">
+          <div
+            id="orchestration-panel-payments"
+            role="tabpanel"
+            aria-labelledby="orchestration-tab-payments"
+            className="space-y-2"
+          >
             <h2 className="text-sm font-semibold text-fg-2 uppercase tracking-caps mb-3">
               {t("orchestration.recentPayments")}
             </h2>
@@ -253,7 +278,12 @@ const OrchestrationDashboard: React.FC = () => {
         )}
 
         {!loading && tab === "connectors" && (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div
+            id="orchestration-panel-connectors"
+            role="tabpanel"
+            aria-labelledby="orchestration-tab-connectors"
+            className="grid grid-cols-1 md:grid-cols-2 gap-4"
+          >
             <h2 className="text-sm font-semibold text-fg-2 uppercase tracking-caps col-span-full mb-1">
               {t("orchestration.connectors")}
             </h2>
@@ -289,7 +319,12 @@ const OrchestrationDashboard: React.FC = () => {
         )}
 
         {!loading && tab === "rules" && (
-          <div className="space-y-2">
+          <div
+            id="orchestration-panel-rules"
+            role="tabpanel"
+            aria-labelledby="orchestration-tab-rules"
+            className="space-y-2"
+          >
             <h2 className="text-sm font-semibold text-fg-2 uppercase tracking-caps mb-3">
               {t("orchestration.routingRules")}
             </h2>

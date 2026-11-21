@@ -109,7 +109,6 @@ const BlockDetailPage: React.FC = () => {
       <div className="mt-4 flex gap-2">
         <button
           onClick={() => navigate(`/block/${block.height - 1}`)}
-          aria-label={t("block.prevBlock")}
           disabled={block.height <= 0}
           className="inline-flex items-center gap-1 text-xs px-3 py-1.5 bg-surface-2 border border-border rounded-sm text-fg-2 hover:border-accent hover:text-accent transition-colors duration-base ease-standard focus:outline-none focus-visible:shadow-focus disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-border disabled:hover:text-fg-2"
         >
@@ -118,7 +117,6 @@ const BlockDetailPage: React.FC = () => {
         </button>
         <button
           onClick={() => navigate(`/block/${block.height + 1}`)}
-          aria-label={t("block.nextBlock")}
           className="inline-flex items-center gap-1 text-xs px-3 py-1.5 bg-surface-2 border border-border rounded-sm text-fg-2 hover:border-accent hover:text-accent transition-colors duration-base ease-standard focus:outline-none focus-visible:shadow-focus"
         >
           {t("block.next")}

@@ -64,7 +64,7 @@ describe("ContractsPage", () => {
     await waitFor(() => {
       expect(screen.getByText("NEXcontractAddress")).toBeInTheDocument();
     });
-    const link = screen.getByRole("link", { name: /查看合约/ });
+    const link = screen.getByRole("link", { name: /NEXcontractAddress/ });
     expect(link).toHaveAttribute("href", "/contracts/NEXcontractAddress");
     expect(document.body.textContent).toContain("NEXcreatorAddress");
     expectNoUndefinedLeak();

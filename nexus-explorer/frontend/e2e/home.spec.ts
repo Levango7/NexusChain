@@ -255,6 +255,10 @@ test("资金看板：三张长表实际滚动后表头仍钉在各自容器顶�
 
   for (let i = 0; i < 3; i++) {
     const container = tables.nth(i).locator("..");
+    await container.focus();
+    await expect(container).toBeFocused();
+    await page.keyboard.press("PageDown");
+    await expect.poll(() => container.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
     await container.evaluate((el) => {
       el.scrollTop = el.scrollHeight;
     });
@@ -354,6 +358,16 @@ test("支付编排：未配置时先引导，配置后支付/连接器/规则真
   await expect(page.getByText("Chain Sandbox")).toBeVisible();
   await page.getByRole("tab", { name: "规则" }).click();
   await expect(page.getByText("Priority Rule")).toBeVisible();
+  const paymentsTab = page.getByRole("tab", { name: "支付" });
+  await paymentsTab.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByRole("tab", { name: "连接器" })).toBeFocused();
+  await expect(page.getByRole("tab", { name: "连接器" })).toHaveAttribute("aria-selected", "true");
+  await page.keyboard.press("End");
+  await expect(page.getByRole("tab", { name: "规则" })).toBeFocused();
+  await page.keyboard.press("Home");
+  await expect(paymentsTab).toBeFocused();
+  await expect(paymentsTab).toHaveAttribute("aria-selected", "true");
   await expectMobileNoOverflow(page);
 });
 
@@ -415,4 +429,116 @@ test("404：未知路由有明确空态与回首页出口", async ({ page }) => 
   await expect(page.getByRole("heading", { name: "页面不存在" })).toBeVisible();
   await expect(page.getByRole("link", { name: "返回首页" })).toHaveAttribute("href", "/");
   await expectMobileNoOverflow(page);
+});
+
+test("合约页：加载、空态、错误、重试四态都可辨且可恢复", async ({ page }) => {
+  let release!: () => void;
+  await page.route("**/api/contracts", async (route) => {
+    await new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await route.fulfill({
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify([
+        {
+          address: "0xcontract",
+          creator: "0xcreator",
+          codeHash: "0xcode",
+          wasmCode: "0061736d",
+          createdAt: 1_700_000_000,
+        },
+      ]),
+    });
+  });
+  await page.goto("/contracts", { waitUntil: "domcontentloaded" });
+  await expect(page.getByText("加载合约中...")).toBeVisible();
+  await expect.poll(() => release !== undefined).toBe(true);
+  release();
+  await expect(page.getByText("0xcontract")).toBeVisible();
+  await page.unroute("**/api/contracts");
+
+  await page.route("**/api/contracts", async (route) => {
+    await route.fulfill({
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+      body: "[]",
+    });
+  });
+  await page.goto("/contracts");
+  await expect(page.getByText("暂无已部署合约")).toBeVisible();
+  await page.unroute("**/api/contracts");
+
+  await page.route("**/api/contracts", async (route) => {
+    await route.fulfill({
+      status: 500,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ error: "加载合约失败" }),
+    });
+  });
+  await page.goto("/contracts");
+  await expect(page.getByRole("alert")).toContainText("加载合约失败");
+  await page.unroute("**/api/contracts");
+  await page.getByRole("button", { name: "重试" }).click();
+  await expect(page.getByText("0xcontract")).toBeVisible();
+});
+
+test("支付编排：401 与 500 分别映射，旧数据不会残留", async ({ page }) => {
+  let failureStatus = 401;
+  await page.route("http://localhost:8080/**", async (route) => {
+    const request = route.request();
+    if (request.method() === "OPTIONS") {
+      await route.fulfill({ status: 200, headers: CORS_HEADERS, body: "" });
+      return;
+    }
+    await route.fulfill({
+      status: failureStatus,
+      headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        code: failureStatus,
+        message: failureStatus === 401 ? "Missing API key" : "服务异常",
+      }),
+    });
+  });
+  await saveTestCredentials(page);
+  await page.goto("/orchestration");
+  await expect(page.getByText("需要商户认证 — 请在设置中配置 API Key")).toBeVisible();
+  failureStatus = 500;
+  await page.goto("/orchestration");
+  await expect(page.locator("main")).toContainText("请求失败 (500): 服务异常");
+  await expect(page.locator("main")).not.toContainText("pay-e2e-1");
+});
+
+test("提现审批：401 与 403 明确分流且可重取", async ({ page }) => {
+  let failureStatus = 401;
+  await page.route("http://localhost:8083/**", async (route) => {
+    const request = route.request();
+    if (request.method() === "OPTIONS") {
+      await route.fulfill({ status: 200, headers: CORS_HEADERS, body: "" });
+      return;
+    }
+    await route.fulfill({
+      status: failureStatus,
+      headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+      body: JSON.stringify({ message: failureStatus === 401 ? "expired" : "denied" }),
+    });
+  });
+  await page.goto("/wallet/approvals");
+  await page.locator("#wallet-jwt").fill(randomUUID());
+  await page.getByRole("button", { name: "连接", exact: true }).click();
+  await expect(page.getByText("JWT 无效或已过期——请重新配置")).toBeVisible();
+  failureStatus = 403;
+  await page.getByRole("button", { name: "刷新" }).click();
+  await expect(page.getByText("当前 JWT 角色不足（审批需要 APPROVER）")).toBeVisible();
+});
+
+test("清除凭证弹窗：Escape 关闭并把焦点还给触发按钮", async ({ page }) => {
+  await saveTestCredentials(page);
+  const clear = page.getByRole("button", { name: "清除凭证" });
+  await clear.focus();
+  await clear.click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(clear).toBeFocused();
 });

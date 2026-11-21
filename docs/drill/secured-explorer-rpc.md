@@ -6,7 +6,8 @@
 
 1. core 在 `LOCALONLY=true` 下拒绝无 token 的 JSON-RPC；
 2. BFF 使用同一组临时配置签发的 JWT 调用 core，并返回真实节点状态；
-3. 使用隔离 compose 项目、动态宿主端口和临时密钥，结束后自动删除容器与数据卷。
+3. 重启 core 后再次进入鉴权就绪态，并连续 5 次读取 BFF 状态，验证恢复而非一次性启动；
+4. 使用隔离 compose 项目、动态宿主端口和临时密钥，结束后自动删除容器与数据卷。
 
 本钻机不使用生产凭证，也不连接真实资金网关。
 
@@ -23,6 +24,7 @@ python -I scripts/drill/secured_explorer_rpc.py
 ```text
 PASS: direct core RPC without token returns 401
 PASS: BFF to secured core RPC returns 200 (latestHeight=0)
+PASS: core restart recovers with five consecutive BFF reads
 PASS: isolated compose project and ephemeral credentials will be removed
 ```
 
@@ -45,4 +47,4 @@ PASS: isolated compose project and ephemeral credentials will be removed
 
 ## 本轮实证
 
-2026-11-21 在 Windows + Docker Desktop 上通过上述两条判据，隔离资源已清理。真实浏览器另有 `frontend/e2e/home.spec.ts` 的 10 条用例；第三方 gateway/wallet 数据均为 HTTP 层合成，不冒充外部生产联调。
+2026-11-21 在 Windows + Docker Desktop 上通过上述判据，隔离资源已清理。2026-11-22 又通过 core 重启后连续 5 次 BFF 读取的恢复判据；这只是恢复验证，不是长期 SLA。真实浏览器另有 `frontend/e2e/home.spec.ts` 与 `accessibility.spec.ts` 的 17 条用例；第三方 gateway/wallet 数据均为 HTTP 层合成，不冒充外部生产联调。

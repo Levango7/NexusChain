@@ -128,6 +128,16 @@ def wait_bff(port, deadline_seconds=180):
     raise RuntimeError("BFF did not become healthy")
 
 
+def assert_node_status(bff_port):
+    status, body = loopback_request(bff_port, "/api/node/status")
+    if status != 200:
+        raise RuntimeError(f"BFF secured RPC failed: HTTP {status}, body={body[:500]}")
+    node = json.loads(body)
+    if not isinstance(node.get("latestHeight"), int) or not isinstance(node.get("latestHash"), str):
+        raise RuntimeError(f"unexpected node status shape: {body[:500]}")
+    return node["latestHeight"]
+
+
 def main():
     global RPC_TOKEN
     RPC_TOKEN = make_jwt()
@@ -159,13 +169,15 @@ def main():
         compose(env, "run", "-d", "--name", f"{PROJECT}-bff", "--no-deps",
                 "-p", f"127.0.0.1:{bff_port}:3000", "-e", "NEXUS_RPC_TOKEN", "nexus-explorer")
         wait_bff(bff_port)
-        status, body = loopback_request(bff_port, "/api/node/status")
-        if status != 200:
-            raise RuntimeError(f"BFF secured RPC failed: HTTP {status}, body={body[:500]}")
-        node = json.loads(body)
-        if not isinstance(node.get("latestHeight"), int) or not isinstance(node.get("latestHash"), str):
-            raise RuntimeError(f"unexpected node status shape: {body[:500]}")
-        print(f"PASS: BFF to secured core RPC returns 200 (latestHeight={node['latestHeight']})")
+        latest_height = assert_node_status(bff_port)
+        print(f"PASS: BFF to secured core RPC returns 200 (latestHeight={latest_height})")
+        run(["docker", "restart", f"{PROJECT}-core"], env, timeout=120)
+        wait_core(core_port)
+        wait_bff(bff_port)
+        for _ in range(5):
+            assert_node_status(bff_port)
+            time.sleep(1)
+        print("PASS: core restart recovers with five consecutive BFF reads")
         print("PASS: isolated compose project and ephemeral credentials will be removed")
     except Exception:
         try:
