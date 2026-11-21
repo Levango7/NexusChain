@@ -1,5 +1,5 @@
 ---
-id: 20261122-0800-zcode-interaction-reliability
+id: 20261122-0130-zcode-interaction-reliability
 owner: zcode
 from: zcode
 to: [orchestrator, ops]
@@ -12,7 +12,7 @@ refs:
   - file: docs/audit/interaction-reliability-2026-11-22.md
   - file: nexus-explorer/frontend/e2e/accessibility.spec.ts
   - file: nexus-core/nexus-core/src/test/java/org/nexus/core/StateReplayManagerPostgresTest.java
-created: 2026-11-22T08:00:00+08:00
+created: 2026-11-22T01:30:00+08:00
 ---
 
 # 通告（P1）：全交互/可访问性与本地恢复验证收口
