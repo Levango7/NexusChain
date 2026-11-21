@@ -132,7 +132,6 @@ const HomePage: React.FC = () => {
           className="flex items-center gap-2 cursor-pointer"
           role="button"
           tabIndex={0}
-          aria-label={t("home.backHome")}
           onClick={() => navigate("/")}
           onKeyDown={(e) => {
             if (e.key === "Enter" || e.key === " ") {
@@ -273,7 +272,6 @@ const HomePage: React.FC = () => {
                 key={block.height}
                 role="button"
                 tabIndex={0}
-                aria-label={t("home.viewBlock", { height: block.height })}
                 onClick={() => navigate(`/block/${block.height}`)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" || e.key === " ") {
@@ -317,7 +315,6 @@ const HomePage: React.FC = () => {
                 key={tx.txHash}
                 role="button"
                 tabIndex={0}
-                aria-label={t("home.viewTx", { hash: tx.txHash })}
                 onClick={() => navigate(`/tx/${tx.txHash}`)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" || e.key === " ") {

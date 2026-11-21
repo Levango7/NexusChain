@@ -86,7 +86,6 @@ const ContractsPage: React.FC = () => {
             <Link
               key={contract.address}
               to={`/contracts/${contract.address}`}
-              aria-label={t("contracts.view", { address: contract.address })}
               className="block bg-surface border border-border rounded-lg px-4 py-3 hover:border-accent hover:bg-surface-2 transition-colors duration-base ease-standard focus:outline-none focus-visible:shadow-focus"
             >
               <div className="flex items-center justify-between gap-3">

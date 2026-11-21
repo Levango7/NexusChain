@@ -202,6 +202,9 @@ describe("数据渲染", () => {
     expect(tables).toHaveLength(3);
     tables.forEach((table) => {
       expect(table.parentElement).toHaveClass("max-h-96", "overflow-auto");
+      expect(table.parentElement).toHaveAttribute("tabindex", "0");
+      expect(table.parentElement).toHaveAttribute("role", "region");
+      expect(table.parentElement?.getAttribute("aria-label")).toBeTruthy();
     });
     const heads = document.querySelectorAll("thead");
     expect(heads).toHaveLength(3);

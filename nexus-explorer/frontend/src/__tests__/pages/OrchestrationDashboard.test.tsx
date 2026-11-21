@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { render, screen, waitFor, cleanup } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { MemoryRouter } from "react-router-dom";
+import userEvent from "@testing-library/user-event";
 import "../../i18n";
 
 /**
@@ -103,6 +104,41 @@ describe("OrchestrationDashboard", () => {
     // 页签文案应为 i18n 中文（此前硬编码英文 Payments/Connectors/Rules）
     expect(tabs.map((t) => t.textContent)).toEqual(["支付", "连接器", "规则"]);
     expect(tabs[0]).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("页签支持方向键/Home/End 与 roving tabindex", async () => {
+    authState.apiKey = "k".repeat(8);
+    authState.apiSecret = "s".repeat(16);
+    authState.isAuthenticated = true;
+    const fx = await import("../fixtures/backend");
+    requestMock.mockImplementation(async (path: string) => {
+      if (path.startsWith("/api/v1/payments?")) return fx.ORCH_PAYMENT_LIST;
+      if (path.includes("/connectors")) return [fx.ORCH_CONNECTOR];
+      if (path.includes("/routing-rules")) return [fx.ORCH_RULE];
+      throw new Error("unexpected path " + path);
+    });
+    const Dashboard = (await import("../../pages/OrchestrationDashboard")).default;
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+
+    const payments = await screen.findByRole("tab", { name: "支付" });
+    const connectors = screen.getByRole("tab", { name: "连接器" });
+    const rules = screen.getByRole("tab", { name: "规则" });
+    payments.focus();
+    await userEvent.keyboard("{ArrowRight}");
+    expect(connectors).toHaveFocus();
+    expect(connectors).toHaveAttribute("aria-selected", "true");
+    expect(payments).toHaveAttribute("tabindex", "-1");
+    expect(connectors).toHaveAttribute("tabindex", "0");
+    await userEvent.keyboard("{End}");
+    expect(rules).toHaveFocus();
+    expect(rules).toHaveAttribute("aria-selected", "true");
+    await userEvent.keyboard("{Home}");
+    expect(payments).toHaveFocus();
+    expect(payments).toHaveAttribute("aria-selected", "true");
   });
 
   it("请求路径不应包含服务端已忽略的 merchantId 参数", async () => {

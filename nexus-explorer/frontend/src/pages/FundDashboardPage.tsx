@@ -242,7 +242,12 @@ const FundDashboardPage: React.FC = () => {
               {(anomaly.anomalies ?? []).length === 0 ? (
                 <p className="text-muted text-sm">{t("fund.anomalyEmpty")}</p>
               ) : (
-                <div className="max-h-96 overflow-auto">
+                <div
+                  className="max-h-96 overflow-auto"
+                  tabIndex={0}
+                  role="region"
+                  aria-label={t("fund.anomaly")}
+                >
                   <table className="w-full text-sm">
                     <thead className="[&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-surface [&_th]:shadow-[inset_0_-1px_0_var(--border-soft)]">
                       <tr className="text-xs text-muted text-left">
@@ -282,7 +287,12 @@ const FundDashboardPage: React.FC = () => {
               {trend.length === 0 ? (
                 <p className="text-muted text-sm">{t("fund.noTrend")}</p>
               ) : (
-                <div className="max-h-96 overflow-auto">
+                <div
+                  className="max-h-96 overflow-auto"
+                  tabIndex={0}
+                  role="region"
+                  aria-label={t("fund.trend")}
+                >
                   <table className="w-full text-sm">
                     <thead className="[&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-surface [&_th]:shadow-[inset_0_-1px_0_var(--border-soft)]">
                       <tr className="text-xs text-muted text-left">
@@ -322,7 +332,12 @@ const FundDashboardPage: React.FC = () => {
               {recent.length === 0 ? (
                 <p className="text-muted text-sm">{t("fund.noRecent")}</p>
               ) : (
-                <div className="max-h-96 overflow-auto">
+                <div
+                  className="max-h-96 overflow-auto"
+                  tabIndex={0}
+                  role="region"
+                  aria-label={t("fund.recent")}
+                >
                   <table className="w-full text-sm">
                     <thead className="[&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-surface [&_th]:shadow-[inset_0_-1px_0_var(--border-soft)]">
                       <tr className="text-xs text-muted text-left">

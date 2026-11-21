@@ -15,6 +15,7 @@ import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.context.ApplicationContext;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.jdbc.datasource.DataSourceUtils;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.annotation.AnnotationTransactionAttributeSource;
@@ -22,6 +23,7 @@ import org.springframework.transaction.interceptor.TransactionInterceptor;
 import org.testcontainers.DockerClientFactory;
 import org.testcontainers.containers.PostgreSQLContainer;
 
+import java.sql.SQLException;
 import java.util.List;
 import java.util.Map;
 
@@ -43,6 +45,7 @@ class StateReplayManagerPostgresTest {
     private StateReplayManager replayManager;
     private MerkleRule merkleRule;
     private Block block;
+    private boolean stopAfterAccountWrite;
 
     @BeforeAll
     static void startPostgres() {
@@ -67,6 +70,7 @@ class StateReplayManagerPostgresTest {
 
     @BeforeEach
     void setUp() throws Exception {
+        stopAfterAccountWrite = false;
         jdbc.execute("drop table if exists account");
         jdbc.execute("drop table if exists incubator_state");
         jdbc.execute("""
@@ -96,11 +100,39 @@ class StateReplayManagerPostgresTest {
                 )
                 """);
 
-        AccountDB accountDB = new AccountDB();
+        merkleRule = mock(MerkleRule.class);
+        replayManager = newReplayManager();
+
+        block = new Block();
+        block.nHeight = 10L;
+        block.body = List.of();
+        Account account = new Account(10L, new byte[20], 1L, 100L, 0L, 0L, 0L);
+        Incubator incubator = new Incubator(new byte[20], new byte[20], new byte[32],
+                10L, 5L, 0L, 0L, 0L, 0L);
+        when(merkleRule.validateMerkle(block.body, block.nHeight)).thenReturn(Map.of(
+                "account", List.of(account),
+                "incubator", List.of(incubator)));
+    }
+
+    private StateReplayManager newReplayManager() {
+        AccountDB accountDB = new AccountDB() {
+            @Override
+            public int[] insertAccountList(List<Object[]> rows) {
+                int[] written = super.insertAccountList(rows);
+                if (stopAfterAccountWrite) {
+                    try {
+                        // 关闭当前事务连接，模拟首表写后真实 JDBC 断连；不破坏 PG schema。
+                        DataSourceUtils.getConnection(dataSource).close();
+                    } catch (SQLException error) {
+                        throw new IllegalStateException(error);
+                    }
+                }
+                return written;
+            }
+        };
         IncubatorDB incubatorDB = new IncubatorDB();
         ReflectionTestUtils.setField(accountDB, "tmpl", jdbc);
         ReflectionTestUtils.setField(incubatorDB, "tmpl", jdbc);
-        merkleRule = mock(MerkleRule.class);
 
         StateReplayManager target = new StateReplayManager();
         ReflectionTestUtils.setField(target, "merkleRule", merkleRule);
@@ -114,17 +146,7 @@ class StateReplayManagerPostgresTest {
         ProxyFactory proxyFactory = new ProxyFactory(target);
         proxyFactory.setProxyTargetClass(true);
         proxyFactory.addAdvice(transactionInterceptor);
-        replayManager = (StateReplayManager) proxyFactory.getProxy();
-
-        block = new Block();
-        block.nHeight = 10L;
-        block.body = List.of();
-        Account account = new Account(10L, new byte[20], 1L, 100L, 0L, 0L, 0L);
-        Incubator incubator = new Incubator(new byte[20], new byte[20], new byte[32],
-                10L, 5L, 0L, 0L, 0L, 0L);
-        when(merkleRule.validateMerkle(block.body, block.nHeight)).thenReturn(Map.of(
-                "account", List.of(account),
-                "incubator", List.of(incubator)));
+        return (StateReplayManager) proxyFactory.getProxy();
     }
 
     @Test
@@ -135,6 +157,42 @@ class StateReplayManagerPostgresTest {
 
         assertEquals(0, jdbc.queryForObject("select count(*) from account", Integer.class),
                 "真实 PostgreSQL 下第二表失败也必须回滚首表");
+    }
+
+    @Test
+    void databaseOutageRollsBackAndRecoversOnPostgres() throws Exception {
+        when(merkleRule.verifyStateRoots(eq(block), anyList(), anyList())).thenReturn(Result.SUCCESS);
+        stopAfterAccountWrite = true;
+
+        // 断库时业务写失败与 JDBC rollback 失败都属于 fail-closed；后者由
+        // TransactionSystemException 包装，不能误要求只有一种异常类型。
+        assertThrows(RuntimeException.class, () -> replayManager.replayBlock(block));
+
+        // 恢复请求改由新事务管理器执行，不能复用已断开的事务上下文。
+        stopAfterAccountWrite = false;
+        replayManager = newReplayManager();
+        awaitPostgresReady();
+        assertEquals(0, jdbc.queryForObject("select count(*) from account", Integer.class),
+                "首表写后断库也不得留下半提交");
+        StateReplayManager.ReplayResult recovered = replayManager.replayBlock(block);
+        assertTrue(recovered.isVerified());
+        assertEquals(1, jdbc.queryForObject("select count(*) from account", Integer.class));
+        assertEquals(1, jdbc.queryForObject("select count(*) from incubator_state", Integer.class));
+    }
+
+    private static void awaitPostgresReady() throws InterruptedException {
+        long deadline = System.currentTimeMillis() + 30_000L;
+        while (true) {
+            try {
+                jdbc.queryForObject("select 1", Integer.class);
+                return;
+            } catch (RuntimeException error) {
+                if (System.currentTimeMillis() >= deadline) {
+                    throw error;
+                }
+                Thread.sleep(100L);
+            }
+        }
     }
 
     @Test
