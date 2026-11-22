@@ -29,7 +29,7 @@ import java.util.List;
  *   <li>启动时从 {@code nexus.security.jwt.secret} 读取共享密钥（与
  *       signing-service 同一 {@code JWT_SECRET} 环境变量）</li>
  *   <li>每次 Feign 调用前，签发一个短期 JWT（subject={@code nexus-gateway},
- *       roles={@code SIGNING_SERVICE}, TTL=5min），写入
+ *       roles={@code SIGNING_SERVICE,READ}, TTL=5min），写入
  *       {@code Authorization: Bearer <jwt>} 头</li>
  *   <li>token 短期 + 每次新生成，避免长期 token 泄露风险；HS256 签名开销
  *       可忽略（~微秒级）</li>
@@ -40,7 +40,7 @@ import java.util.List;
  *   <li>{@code nexus.security.jwt.secret}：共享密钥，生产环境通过
  *       {@code JWT_SECRET} 环境变量注入</li>
  *   <li>{@code nexus.security.jwt.service-roles}：服务间 token 的角色列表，
- *       默认 {@code SIGNING_SERVICE}（与 signing-service TxController
+ *       默认 {@code SIGNING_SERVICE,READ}（与 signing-service TxController
  *       {@code @PreAuthorize} 匹配）</li>
  *   <li>{@code nexus.security.jwt.ttl-millis}：token TTL，默认 300000（5 分钟）</li>
  * </ul>

@@ -112,6 +112,11 @@ master 631357a（PR #8 Boot4 兼容批）合并后，Security Scan 出现 3 个�
   本 ADR 自己写明是 Boot4 批的最终验收标尺，此前只验到"编译 + 启动"层。
   若某次会话真跑过演练，请把结果补成 09-14 之后的增量报告并在本行标注，
   别只改这里的划线状态。
+- **2026-11-23 增量复核**：本机隔离 Docker 已交付第 1/2/4 项——Nacos 注册表非空、
+  gateway→signing 真实 Feign capability=UP、init.sh v3 鉴权/发布/读回/幂等通过；工具链已入库。
+  第 3 项（无 emptyDir workaround）与第 5 项（seed-perf + k6）未在本轮重跑，完整 Phase B
+  仍为**部分完成**，不是 kind/staging/prod 验收。证据见
+  `docs/audit/feign-nacos-auth-remediation-2026-11-23.md`。
 
 ## 2. 四标准审核裁决
 

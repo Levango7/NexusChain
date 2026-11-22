@@ -14,6 +14,7 @@
 #      ${NEX_NACOS_NAMESPACE:dev}——旧脚本发 public 是服务读不到的死配置）
 #   4. 发布 Seata Server 配置（seataServer.properties, group=SEATA_GROUP, ns=public）
 #   5. 发布各微服务私有配置占位（dev+test）
+#   另：admin 引导与登录先于 namespace/config，后续请求携带 Bearer accessToken
 #
 # 用法：
 #   ./nacos-config/init.sh [NACOS_SERVER]
@@ -70,23 +71,27 @@ done
 echo "[2/5] 创建 namespace..."
 ns_exists() {
   curl -sf "${AUTH[@]}" "${BASE}/nacos/v3/admin/core/namespace/list" 2>/dev/null \
-    | grep -q "\"namespace\":\"${1}\""
+    | grep -Eq "\"namespace\"[[:space:]]*:[[:space:]]*\"${1}\""
 }
 create_namespace() {
-  local id="$1" name="$2" desc="$3"
+  local id="$1" name="$2" desc="$3" code
   if ns_exists "${id}"; then
     echo "  namespace ${id} 已存在，跳过"
     return
   fi
-  # POST 容忍重复报错（并发/幂等），以最终 list 结果为准
-  curl -s -X POST "${AUTH[@]}" "${BASE}/nacos/v3/admin/core/namespace" \
+  # POST 容忍重复报错（并发/幂等），以最终 list 结果为准；保留 HTTP 状态便于归因。
+  code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${AUTH[@]}" \
+    "${BASE}/nacos/v3/admin/core/namespace" \
     --data-urlencode "namespaceId=${id}" \
     --data-urlencode "namespaceName=${name}" \
-    --data-urlencode "namespaceDesc=${desc}" >/dev/null || true
+    --data-urlencode "namespaceDesc=${desc}")
   if ns_exists "${id}"; then
     echo "  namespace ${id} (${name}) 创建成功"
   else
-    echo "  [ERROR] namespace ${id} 创建失败"
+    echo "  [ERROR] namespace ${id} 创建失败（POST http=${code}）"
+    echo "  [ERROR] namespace list 读回："
+    curl -sS "${AUTH[@]}" "${BASE}/nacos/v3/admin/core/namespace/list" || true
+    echo
     exit 1
   fi
 }
@@ -109,16 +114,44 @@ bootstrap_auth_user() {
   fi
   curl -s -X POST "${AUTH[@]}" "${BASE}/nacos/v3/auth/user/admin" \
     --data-urlencode "password=${NACOS_ADMIN_PASSWORD}" >/dev/null || true
-  echo "  admin 用户(nacos) 初始化完成"
+  echo "  admin 引导请求已发送（待登录校验）"
 }
+
+login_auth_user() {
+  local auth_enabled response token
+  auth_enabled=$(curl -sf "${AUTH[@]}" "${BASE}/nacos/v3/admin/core/state" 2>/dev/null \
+    | grep -o '"auth_enabled":"true"' || true)
+  if [ -z "${auth_enabled}" ]; then
+    echo "  Nacos 鉴权未启用，跳过登录"
+    return
+  fi
+  # 每次运行都登录：既验证引导/既有口令真实可用，也避免 admin 创建后鉴权传播竞态。
+  if ! response=$(curl -sf -X POST "${AUTH[@]}" "${BASE}/nacos/v3/auth/user/login" \
+      --data-urlencode "username=nacos" \
+      --data-urlencode "password=${NACOS_ADMIN_PASSWORD}"); then
+    echo "  [ERROR] Nacos admin 登录失败；初始化中止（不发布任何配置）"
+    exit 1
+  fi
+  token=$(printf '%s' "${response}" \
+    | sed -n 's/.*"accessToken"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+  if [ -z "${token}" ]; then
+    echo "  [ERROR] Nacos 登录响应缺少 accessToken"
+    exit 1
+  fi
+  AUTH+=(-H "Authorization: Bearer ${token}")
+  echo "  Nacos admin 登录校验通过（token 不打印）"
+}
+
+# 2b. 鉴权用户引导必须先于 namespace/config：Nacos 启动早期可能短暂允许匿名
+#     请求，鉴权链就绪后未引导用户会返回 403「User not found」。旧顺序把 namespace
+#     放在前面，因而同一启动脚本会随请求落在哪个窗口而随机失败。
+echo "[2b/5] 鉴权用户引导与登录（先于 namespace/config）..."
+bootstrap_auth_user
+login_auth_user
 
 create_namespace "dev"  "开发环境" "NexusChain 开发环境命名空间"
 create_namespace "test" "测试环境" "NexusChain 测试环境命名空间"
 # prod 使用默认 public namespace，不单独创建
-
-# 2b. 鉴权用户引导（幂等；客户端 gRPC 注册需要用户名/密码）
-echo "[2b/5] 鉴权用户引导..."
-bootstrap_auth_user
 
 # 3-5. 配置发布（v3 admin API：config 走 /admin/cs/*（cs=config service），
 #      namespace 走 /admin/core/*；v3 参数名 groupName/namespaceId 与 v1 的
@@ -193,5 +226,5 @@ done
 echo "=========================================="
 echo " Nacos 初始化完成"
 echo "   控制台: http://${NACOS_SERVER}/nacos"
-echo "   默认账号: nacos / nacos（开发环境已关闭鉴权）"
+echo "   客户端账号: nacos（口令由 NACOS_ADMIN_PASSWORD 注入，不打印）"
 echo "=========================================="

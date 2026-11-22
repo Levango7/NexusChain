@@ -353,6 +353,9 @@ jobs:
         with:
           python-version: '3.14'
 
+      - name: Nacos init auth contract (synthetic)
+        run: python3 nacos-config/test_init_auth.py
+
       - name: Ensure gradlew is LF
         run: |
           sed -i 's/\r$//' gradlew
