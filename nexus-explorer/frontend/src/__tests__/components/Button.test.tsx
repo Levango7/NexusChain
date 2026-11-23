@@ -83,6 +83,13 @@ describe("Button 组件", () => {
     expect(btn.className).toContain("text-fg");
   });
 
+  it("颜色切换不得渐变，避免 hover 中间帧跌破 WCAG 对比度", () => {
+    render(<Button variant="ghost">Ghost</Button>);
+    const btn = screen.getByRole("button", { name: "Ghost" });
+    expect(btn.className).toContain("transition-shadow");
+    expect(btn.className).not.toContain("transition-colors");
+  });
+
   // ── 尺寸（触摸目标）──
 
   it("sm 尺寸为 36px（满足 WCAG 2.2 SC 2.5.8 AA 的 24px）", () => {

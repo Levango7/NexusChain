@@ -197,6 +197,7 @@
 | 2026-11-23 | **#25 本机 Nacos/Feign 切片交付（zcode）**：修默认服务 token 缺 READ 与 Nacos 初始化鉴权顺序/假成功；真实 Docker 双服务注册、匿名/legacy-only 403、READ 200、gateway signing=UP；合成 Nacos 门接 CI，顺序变异红、还原绿。kind、无 emptyDir、seed-perf+k6 未重跑，Phase B 保持部分完成 | `docs/audit/feign-nacos-auth-remediation-2026-11-23.md`；`docs/drill/feign-capability-discovery.md`；板 `20261123-0425-zcode-feign-nacos-auth` |
 | 2026-11-23 | **#25 本机剩余项收口（zcode）**：修验签 `@Value` 键错位、seed 全局/商户密钥错配与 discovery 双网卡不可达；无挂载启动通过，seed+k6 最终 143/143 业务成功、572/572 检查、HTTP 失败 0、max 22.96ms，PS1 等价通过。五项本机 Docker 切片全完成；kind/staging/prod/real-L1/容量与真实资金仍未闭环 | `docs/audit/phaseb-local-completion-2026-11-23.md`；`docs/drill/perf-business-smoke.md`；板 `20261123-0926-zcode-phaseb-local-completion` |
 | 2026-11-23 | **#27 证据对账（zcode）**：新增勾选 A-1 真实分区、PLAN-057 游标补票、A-7 检查点语义、B-14 成本曲线；A-2/A-5/A-6 只更新部分完成与未关闭边界。长程/私钥泄露、异常写窗、历史库迁移、物理多机/生产执行不勾选 | 各条内嵌 PLAN/演练证据；板 `20261123-0945-zcode-roadmap-evidence-sync` |
+| 2026-11-23 | **post-merge 可访问性真缺陷修复（zcode）**：settings ghost hover 颜色渐变中间帧对比度 4.15<4.5，Button 改 transition-shadow；组件禁颜色渐变 + 亮色 hover axe/computed-style 判据，frontend 222/222、浏览器 17/17 | `docs/audit/settings-hover-contrast-2026-11-23.md`；板 `20261123-1245-zcode-settings-hover-contrast` |
 
 ## PLAN-007（单 proposer 协调）
 

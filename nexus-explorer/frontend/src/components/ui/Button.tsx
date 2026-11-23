@@ -21,6 +21,7 @@ import { Loader2 } from "lucide-react";
  * 对比度（2026-09-16 审查 P1 修复）：primary 与 danger 改用语义实底 token，
  * 使「按钮文字 on 按钮底」在两种主题下均 ≥4.5:1。此前 danger 用硬编码
  * `text-white` 配暗色主题的 `--danger(#F87171)`，实测仅 2.77:1。
+ * 2026-11-23：颜色 hover 改为即时切换（仅阴影过渡），避免渐变中间帧低于 4.5:1。
  */
 export type ButtonVariant = "primary" | "secondary" | "danger" | "ghost";
 export type ButtonSize = "sm" | "md" | "lg";
@@ -74,7 +75,8 @@ export const Button: React.FC<ButtonProps> = ({
 }) => {
   const classes = [
     "inline-flex items-center justify-center font-medium",
-    "transition-colors duration-base ease-standard",
+    // 不对文字/背景色做插值：渐变中间帧可能跌破 WCAG AA，仅保留阴影过渡。
+    "transition-shadow duration-base ease-standard",
     "focus:outline-none focus-visible:outline-none",
     "disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none",
     VARIANT_CLASS[variant],
