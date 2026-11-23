@@ -114,9 +114,11 @@ master 631357a（PR #8 Boot4 兼容批）合并后，Security Scan 出现 3 个�
   别只改这里的划线状态。
 - **2026-11-23 增量复核**：本机隔离 Docker 已交付第 1/2/4 项——Nacos 注册表非空、
   gateway→signing 真实 Feign capability=UP、init.sh v3 鉴权/发布/读回/幂等通过；工具链已入库。
-  第 3 项（无 emptyDir workaround）与第 5 项（seed-perf + k6）未在本轮重跑，完整 Phase B
-  仍为**部分完成**，不是 kind/staging/prod 验收。证据见
-  `docs/audit/feign-nacos-auth-remediation-2026-11-23.md`。
+  同日续跑又完成第 3 项（gateway/signing 无 logs/leveldb 挂载仍启动）与第 5 项
+  （seed-perf + 真实 k6 payment-create 全阈值通过），至此五项**本机 Docker 切片**均完成；
+  完整 kind Phase B 仍未闭环，不是 staging/prod 验收。证据见
+  `docs/audit/feign-nacos-auth-remediation-2026-11-23.md` 与
+  `docs/audit/phaseb-local-completion-2026-11-23.md`。
 
 ## 2. 四标准审核裁决
 

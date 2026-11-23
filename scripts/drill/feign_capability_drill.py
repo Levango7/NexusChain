@@ -179,6 +179,15 @@ def wait_gateway_component(port, expected, deadline_seconds=300):
     raise RuntimeError(f"gateway signingServiceHealth did not become {expected}: {last}")
 
 
+def assert_mounts_absent(env, container, forbidden):
+    output = run(["docker", "inspect", container], env, timeout=30)
+    mounts = json.loads(output)[0].get("Mounts") or []
+    destinations = {mount.get("Destination") for mount in mounts}
+    present = destinations & set(forbidden)
+    if present:
+        raise RuntimeError(f"container {container} has forbidden mounts: {sorted(present)}")
+
+
 def assert_container_env(env, container, expected):
     output = run(["docker", "inspect", "--format", "{{json .Config.Env}}", container], env, timeout=30)
     actual = {}
@@ -260,6 +269,7 @@ def main():
             "-e", "NEX_MPC_ENGINE_DISTRIBUTED=false", "-e", "NEX_MPC_ENGINE_CGGMP_ENABLED=false",
             "nexus-signing-service",
         )
+        assert_mounts_absent(env, f"{PROJECT}-signing", ("/app/logs", "/var/log/nexus", "/app/leveldb"))
         assert_container_env(env, f"{PROJECT}-signing", {
             "NEX_NACOS_USERNAME": "nacos",
             "NEX_NACOS_PASSWORD": NACOS_ADMIN_PASSWORD,
@@ -296,6 +306,8 @@ def main():
             "-e", "NEX_NACOS_ENABLED=true", "-e", "NEXUS_HEALTH_DOWNSTREAM_INDICATORS_ENABLED=true",
             "nexus-gateway",
         )
+        assert_mounts_absent(env, f"{PROJECT}-gateway", ("/app/logs", "/var/log/nexus", "/app/leveldb"))
+        print("PASS: gateway/signing start without log or LevelDB mounts", flush=True)
         assert_container_env(env, f"{PROJECT}-gateway", {
             "NEX_NACOS_USERNAME": "nacos",
             "NEX_NACOS_PASSWORD": NACOS_ADMIN_PASSWORD,

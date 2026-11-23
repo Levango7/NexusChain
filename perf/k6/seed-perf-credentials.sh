@@ -1,11 +1,18 @@
 #!/usr/bin/env bash
 # NexusChain k6 压测凭证自助签发（10g）——seed-perf-credentials.ps1 的 bash 等价实现
-# 用法：./seed-perf-credentials.sh [GATEWAY_BASE] [JWT_SECRET]
-# 仅限本地 dev / 演练环境（密钥默认值与 docker-compose.yml 10g 批一致）
+# 用法：./seed-perf-credentials.sh [GATEWAY_BASE] [JWT_SECRET] [REQUEST_SIGNING_SECRET]
+# 第三个参数也可由 NEXUS_REQUEST_SIGNING_SECRET 提供。k6 验签使用服务端全局
+# request-signing-secret，不是 api-keys 返回且仅存哈希的商户 secret。
+# 仅限本地 dev / 演练环境（JWT 默认值与 docker-compose.yml 10g 批一致）
 set -euo pipefail
 
 GATEWAY_BASE="${1:-http://localhost:8080}"
 JWT_SECRET="${2:-nexus-dev-only-jwt-secret-0123456789abcdef}"
+REQUEST_SIGNING_SECRET="${3:-${NEXUS_REQUEST_SIGNING_SECRET:-}}"
+if [ -z "${REQUEST_SIGNING_SECRET}" ]; then
+  echo "[ERROR] 缺少全局验签密钥：请传第三个参数或设置 NEXUS_REQUEST_SIGNING_SECRET"
+  exit 1
+fi
 
 b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
 
@@ -43,8 +50,8 @@ echo "[4/4] API 凭证签发完成（merchantId=${id}）"
 echo
 echo "==================== k6 凭证（妥善保管，仅此一次） ===================="
 echo "API_KEY        : ${api_key}"
-echo "SIGNING_SECRET : ${secret}"
+echo "SIGNING_SECRET : ${REQUEST_SIGNING_SECRET}"
 echo
 echo "k6 即用命令："
-echo "  k6 run -e BASE_URL_GATEWAY=${GATEWAY_BASE} -e API_KEY=${api_key} -e SIGNING_SECRET=${secret} perf/k6/payment-create.js"
+echo "  k6 run -e BASE_URL_GATEWAY=${GATEWAY_BASE} -e API_KEY=${api_key} -e SIGNING_SECRET=${REQUEST_SIGNING_SECRET} perf/k6/payment-create.js"
 echo "======================================================================"

@@ -70,6 +70,11 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+    # discovery 参与者必须共享两张网络：signing 双网卡可能广告 nexus-net 地址，
+    # 只在 default 的 gateway/Nacos 会遇到「注册成功但 Feign 不可达」。
+    networks:
+      - default
+      - nexus-net
 
   nexus-core:
     # 2026-08-29：与 nexus-gateway 一致，Java 模块 Dockerfile 需 repo 根上下文
@@ -219,6 +224,9 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+    networks:
+      - default
+      - nexus-net
 
   nexus-bridge:
     # 2026-08-29：与 nexus-gateway 一致，Java 模块 Dockerfile 需 repo 根上下文
@@ -247,6 +255,9 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+    networks:
+      - default
+      - nexus-net
 
   # === 区块浏览器（对外展示面） ===
   # 2026-10-12 新增：explorer 此前只有源码（两个 Node workspace），既无 Dockerfile
@@ -323,6 +334,9 @@ services:
       timeout: 5s
       retries: 10
       start_period: 30s
+    networks:
+      - default
+      - nexus-net
     restart: unless-stopped
 
   # === 熔断 / 限流控制台 ===
