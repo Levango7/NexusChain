@@ -153,7 +153,7 @@ public class ChannelManager {
             }
 
             // 获取当前 nonce，新 update 的 nonce 应为当前 nonce + 1
-            long newNonce = channel.getNonce() + 1;
+            long newNonce = Math.addExact(channel.getNonce(), 1L);
 
             ChannelUpdate update = new ChannelUpdate(
                     channelId, newNonce, balance1, balance2, sig1, sig2,
@@ -241,8 +241,8 @@ public class ChannelManager {
             long currentBalance2 = channel.getBalance2();
 
             // 计算新余额
-            long newBalance1 = currentBalance1 - amountFrom1To2;
-            long newBalance2 = currentBalance2 + amountFrom1To2;
+            long newBalance1 = Math.subtractExact(currentBalance1, amountFrom1To2);
+            long newBalance2 = Math.addExact(currentBalance2, amountFrom1To2);
 
             if (newBalance1 < 0) {
                 throw new IllegalArgumentException(
@@ -250,7 +250,7 @@ public class ChannelManager {
                                 + ", payment=" + amountFrom1To2);
             }
 
-            long newNonce = channel.getNonce() + 1;
+            long newNonce = Math.addExact(channel.getNonce(), 1L);
             ChannelUpdate update = new ChannelUpdate(
                     channelId, newNonce, newBalance1, newBalance2,
                     null, null, System.currentTimeMillis()

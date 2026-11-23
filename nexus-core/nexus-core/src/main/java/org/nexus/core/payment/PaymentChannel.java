@@ -350,8 +350,8 @@ public class PaymentChannel {
             throw new IllegalArgumentException(
                     "Nonce must increase: newNonce=" + newNonce + ", current=" + this.nonce);
         }
-        long oldTotal = this.balance1 + this.balance2;
-        long newTotal = newBalance1 + newBalance2;
+        long oldTotal = Math.addExact(this.balance1, this.balance2);
+        long newTotal = Math.addExact(newBalance1, newBalance2);
         if (oldTotal != newTotal) {
             throw new IllegalArgumentException(
                     "Balance conservation violated: oldTotal=" + oldTotal + ", newTotal=" + newTotal);

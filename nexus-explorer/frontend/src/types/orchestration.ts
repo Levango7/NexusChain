@@ -31,7 +31,7 @@ export type OrchestrationPaymentStatus =
 export interface OrchestratedPaymentDto {
   id: string;
   status: OrchestrationPaymentStatus;
-  amount: number;
+  amount: number | string;
   currency: string;
   description: string | null;
   /** 实际承接该笔支付的连接器 id。 */

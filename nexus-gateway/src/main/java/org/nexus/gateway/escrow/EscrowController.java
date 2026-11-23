@@ -369,7 +369,8 @@ public class EscrowController {
             return (BigDecimal) value;
         }
         if (value instanceof Number) {
-            return BigDecimal.valueOf(((Number) value).doubleValue());
+            // Number 的字符串形式保留 BigInteger/BigDecimal 的完整精度，避免先经 double 舍入。
+            return new BigDecimal(value.toString());
         }
         return new BigDecimal(value.toString());
     }

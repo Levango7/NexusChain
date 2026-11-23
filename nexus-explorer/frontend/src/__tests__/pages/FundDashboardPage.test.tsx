@@ -217,6 +217,23 @@ describe("数据渲染", () => {
     expect(document.querySelectorAll("thead th")).toHaveLength(14);
   });
 
+  it("超过 JS 安全整数的字符串金额不得被二次舍入", async () => {
+    requestMock.mockResolvedValue({
+      ...FULL,
+      fundOverview: { ...FULL.fundOverview, balance: "9007199254740993" },
+      recentTransactions: [
+        {
+          ...FULL.recentTransactions[0],
+          amount: "9007199254740993",
+          balanceAfter: "9007199254740993",
+        },
+      ],
+    });
+    await renderPage();
+    expect(screen.getAllByText("9007199254740993").length).toBeGreaterThan(0);
+    expect(screen.queryByText(/9007199254740992/)).not.toBeInTheDocument();
+  });
+
   it("请求路径不带 merchantId（服务端按 API Key 推导）", async () => {
     requestMock.mockResolvedValue(FULL);
     await renderPage();
