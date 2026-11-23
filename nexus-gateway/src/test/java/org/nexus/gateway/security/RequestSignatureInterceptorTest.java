@@ -5,8 +5,10 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.util.ContentCachingRequestWrapper;
 
 import java.io.IOException;
@@ -163,6 +165,38 @@ class RequestSignatureInterceptorTest {
         MockHttpServletResponse resp = new MockHttpServletResponse();
         assertFalse(noSecret.preHandle(req, resp, null));
         assertEquals(401, resp.getStatus());
+    }
+
+    @Test
+    @DisplayName("@Value: 标准 kebab-case 配置键可解析")
+    void kebabCaseProperty_resolved() {
+        new ApplicationContextRunner()
+                .withUserConfiguration(RequestSignatureInterceptor.class)
+                .withPropertyValues("nexus.security.request-signing-secret=" + SECRET)
+                .run(context -> assertEquals(SECRET, ReflectionTestUtils.getField(
+                        context.getBean(RequestSignatureInterceptor.class), "signingSecret")));
+    }
+
+    @Test
+    @DisplayName("@Value: 旧 camelCase 配置键保留兼容回退")
+    void legacyCamelCaseProperty_resolved() {
+        new ApplicationContextRunner()
+                .withUserConfiguration(RequestSignatureInterceptor.class)
+                .withPropertyValues("nexus.security.requestSigningSecret=" + SECRET)
+                .run(context -> assertEquals(SECRET, ReflectionTestUtils.getField(
+                        context.getBean(RequestSignatureInterceptor.class), "signingSecret")));
+    }
+
+    @Test
+    @DisplayName("@Value: 标准 kebab-case 优先于旧 camelCase")
+    void kebabCaseProperty_takesPrecedence() {
+        new ApplicationContextRunner()
+                .withUserConfiguration(RequestSignatureInterceptor.class)
+                .withPropertyValues(
+                        "nexus.security.request-signing-secret=" + SECRET,
+                        "nexus.security.requestSigningSecret=legacy-other-value")
+                .run(context -> assertEquals(SECRET, ReflectionTestUtils.getField(
+                        context.getBean(RequestSignatureInterceptor.class), "signingSecret")));
     }
 
     @Test

@@ -118,10 +118,10 @@ k6 version
 1. **请求体必须 `JSON.stringify`** 后同时用于 HMAC 签名与发送——对象直传会被 k6
    当 form 编码（首跑 100% 被拒的根因）；
 2. **验签全局密钥**：dev profile 默认空 = fail-closed 全拒（401/40105）。
-   用 `JAVA_TOOL_OPTIONS=-Dnexus.security.requestSigningSecret=<值>` 注入
-   （**系统属性精确命中**，绕开 camelCase `@Value` 与 kebab yml 键的绑定歧义——
-   `NEXUS_REQUEST_SIGNING_SECRET` env 形式实测未被解析到）；k6 侧同值作 SIGNING_SECRET
-   （**非** seed 脚本输出的商户级密钥——验签只认全局密钥）；
+   用 `NEXUS_REQUEST_SIGNING_SECRET=<值>` 注入；interceptor 已修为标准 kebab 键优先、
+   旧 camelCase 兼容回退，因此 env 与 `JAVA_TOOL_OPTIONS=-Dnexus.security.requestSigningSecret=<值>`
+   均可使用（后者保留给既有 capacity 配方）。k6 侧同值作 SIGNING_SECRET
+   （**非** api-keys 返回的商户级密钥——验签只认全局密钥）；
 3. **商户限流**：dev 的 `InMemoryRateLimiter` 硬编码 300 次/分钟/API key（=5 rps）。
    阶梯压测必须多 key 轮换：`seed-multi-keys.ps1` 批量签发（本基线用 40 把），
    `capacity.js` 按 `__VU` 轮换并在 buildAuthHeaders 后覆写 `X-NexusChain-ApiKey`
@@ -137,12 +137,17 @@ secrets 配齐后 dispatch `mode=capacity`（工具链已就绪）。
 
 ### 3.1 准备凭据
 
+可用 seed 脚本完成 register → ADMIN verify → api-keys。第三参数或
+`NEXUS_REQUEST_SIGNING_SECRET` 必须提供服务端**全局验签密钥**；脚本输出的 k6
+`SIGNING_SECRET` 使用该值，而不是 api-keys 返回的商户 secret（后者仅存哈希，不参与当前
+HMAC 验签）。完整低负载业务冒烟可直接运行 `python3 scripts/drill/perf_business_drill.py`。
+
 所有脚本通过 k6 `-e` 环境变量注入凭据，**不硬编码**。最小必填项：
 
 | 变量 | 说明 | 示例 |
 | --- | --- | --- |
 | `API_KEY` | 商户 API Key（对应 `X-NexusChain-ApiKey`） | `perf-test-api-key` |
-| `SIGNING_SECRET` | 请求签名密钥（对应 `nexus.security.requestSigningSecret`） | `perf-test-signing-secret` |
+| `SIGNING_SECRET` | 全局请求签名密钥（对应 `nexus.security.request-signing-secret`；旧 camelCase 兼容） | 从安全环境注入，勿写仓库 |
 | `BASE_URL_GATEWAY` | 网关地址 | `http://localhost:8080` |
 | `BASE_URL_BRIDGE` | 桥服务地址 | `http://localhost:8084` |
 

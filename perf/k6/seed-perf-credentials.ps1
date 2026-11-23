@@ -7,7 +7,7 @@
 # 用同一密钥离线签发 ADMIN token 后走三连端点，输出 k6 -e 即用命令。
 #
 # 用法：
-#   .\seed-perf-credentials.ps1 [-GatewayBase http://localhost:8080] [-JwtSecret <dev密钥>]
+#   .\seed-perf-credentials.ps1 [-GatewayBase http://localhost:8080] [-JwtSecret <dev密钥>] [-RequestSigningSecret <全局验签密钥>]
 #
 # 仅限本地 dev / 演练环境。生产严禁使用本脚本（生产密钥经 SealedSecret 注入，
 # 不应出现已知默认值）。
@@ -15,8 +15,14 @@
 param(
     [string]$GatewayBase = "http://localhost:8080",
     # 与 docker-compose.yml 的 JWT_SECRET 默认值一致（可被 NEX_DEV_JWT_SECRET 覆盖）
-    [string]$JwtSecret = "nexus-dev-only-jwt-secret-0123456789abcdef"
+    [string]$JwtSecret = "nexus-dev-only-jwt-secret-0123456789abcdef",
+    # k6 验签使用服务端全局 request-signing-secret，不是 api-keys 返回的商户 secret。
+    [string]$RequestSigningSecret = $env:NEXUS_REQUEST_SIGNING_SECRET
 )
+
+if ([string]::IsNullOrWhiteSpace($RequestSigningSecret)) {
+    throw "缺少全局验签密钥：请传 -RequestSigningSecret 或设置 NEXUS_REQUEST_SIGNING_SECRET"
+}
 
 $ErrorActionPreference = "Stop"
 
@@ -66,8 +72,8 @@ Write-Host "[4/4] API 凭证签发完成（merchantId=$($merchant.id)）"
 Write-Host ""
 Write-Host "==================== k6 凭证（妥善保管，仅此一次） ===================="
 Write-Host "API_KEY        : $($keyPair.apiKey)"
-Write-Host "SIGNING_SECRET : $($keyPair.secret)"
+Write-Host "SIGNING_SECRET : $RequestSigningSecret"
 Write-Host ""
 Write-Host "k6 即用命令："
-Write-Host "  k6 run -e BASE_URL_GATEWAY=$GatewayBase -e API_KEY=$($keyPair.apiKey) -e SIGNING_SECRET=$($keyPair.secret) perf/k6/payment-create.js"
+Write-Host "  k6 run -e BASE_URL_GATEWAY=$GatewayBase -e API_KEY=$($keyPair.apiKey) -e SIGNING_SECRET=$RequestSigningSecret perf/k6/payment-create.js"
 Write-Host "======================================================================"

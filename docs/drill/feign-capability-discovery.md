@@ -24,6 +24,8 @@ python3 scripts/drill/feign_capability_drill.py
 4. 匿名 capability 请求为 403。
 5. `SIGNING_SERVICE` 单独角色为 403；加入 `READ` 后为 200 / statusCode=2000。
 6. `/actuator/health` 的 signing 组件为 **UP**，证明 gateway 经 Feign 服务名调用成功。
+7. gateway/signing 的 mounts 均不含 `/app/logs`、`/var/log/nexus`、`/app/leveldb`，
+   服务仍正常启动，证明不依赖 emptyDir workaround。
 
 整体 `/actuator/health` 可能因本演练刻意不启动 core 或其它 connector 而为 DOWN；判据只取
 signing 组件，不能拿整体状态替代该组件，也不能把其它 connector 的 DOWN 写成 Feign 失败。
@@ -40,6 +42,7 @@ DOWN。修复后的代码应使用默认 `--expect up`，不要期待它继续�
 ## 环境与安全实现
 
 - Nacos 初始化在 Nacos 容器内执行，使用镜像自带 bash/curl；不依赖宿主 Git Bash/WSL。
+- Nacos/gateway/signing 同时连接 default 与 `nexus-net`，避免双网卡广告另一网络的不可达 IP。
 - Nacos auth token 使用标准 Base64；admin 密码含大小写字母和数字；JWT/KEK 均由随机源生成。
 - 容器内凭据断言不输出值；诊断日志对本次生成的秘密做脱敏。
 - Nacos 初始化先完成 admin 引导与登录，再在后续 admin API 请求中携带 Bearer accessToken。

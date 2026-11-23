@@ -36,7 +36,8 @@ import java.nio.charset.StandardCharsets;
  * </ul></p>
  *
  * <p>The signing secret is a server-side shared secret configured via
- * {@code nexus.security.requestSigningSecret}. The per-merchant API secret is stored
+ * {@code nexus.security.request-signing-secret}（旧 camelCase 键保留兼容回退）。
+ * The per-merchant API secret is stored
  * only as a SHA-256 hash in the database and therefore cannot be used to recompute an
  * HMAC; a shared secret is the supported key source for request signing.</p>
  */
@@ -76,7 +77,7 @@ public class RequestSignatureInterceptor implements HandlerInterceptor {
      */
     private final SecurityMetricsRecorder replayMetrics;
 
-    public RequestSignatureInterceptor(@Value("${nexus.security.requestSigningSecret:}") String signingSecret) {
+    public RequestSignatureInterceptor(@Value("${nexus.security.request-signing-secret:${nexus.security.requestSigningSecret:}}") String signingSecret) {
         this(signingSecret, true, 180000L, 16);
     }
 
@@ -114,7 +115,7 @@ public class RequestSignatureInterceptor implements HandlerInterceptor {
      */
     @org.springframework.beans.factory.annotation.Autowired
     public RequestSignatureInterceptor(
-            @Value("${nexus.security.requestSigningSecret:}") String signingSecret,
+            @Value("${nexus.security.request-signing-secret:${nexus.security.requestSigningSecret:}}") String signingSecret,
             @Value("${nexus.security.signature-legacy-enabled:true}") boolean legacySignatureEnabled,
             @Value("${nexus.security.replay-window-ms:180000}") long replayWindowMs,
             @Value("${nexus.security.nonce-min-length-bytes:16}") int nonceMinLengthBytes,
