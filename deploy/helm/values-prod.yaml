@@ -217,6 +217,8 @@ nexus-api-gateway:
     tag: v2.78.1
 
 nexus-core:
+  # 显式声明 consensus 节点数为 4（与 chart 默认 replicaCount 一致）。此前靠隐式继承，改动任何 chart 默认值的服务都会静默改变共识节点数。要改此值须同步评审团队 BOOTSTRAPS。
+  replicaCount: 4
   image:
     tag: v2.78.1
 
