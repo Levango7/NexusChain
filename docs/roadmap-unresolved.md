@@ -88,13 +88,13 @@
 
 ### A. 故障注入矩阵（共识 / 最终性）
 
-- [ ] **真实网络分区未测** —— 未开始。`PLAN-025`（仍未做）、`PLAN-065`（本切片未覆盖）、`PLAN-074`（仍未做）
-- [ ] **完整拜占庭矩阵其余输入（女巫 / 长程 / 私钥泄露）未测** —— 未开始。`PLAN-065`、`PLAN-074`
+- [x] **真实网络分区未测** —— **已闭环（2026-11-16/17，A-1）**：WSL 三 JVM 按 UID 切出向的真实 iptables 分区；多数侧 `2000/3000=66.7%` 继续最终化，少数派冻结，治愈后回滚 18 个分叉块并 reconverge，88 个共同 epoch 哈希不一致 0。边界=WSL 单机多 UID，不是物理多机房。证据=`docs/drill/multi-node-drill-plan.md` §S2、`scripts/drill/a1-wsl-partition-drill.sh`。
+- [ ] **完整拜占庭矩阵其余输入（女巫 / 长程 / 私钥泄露）未测** —— **部分完成（2026-11-16，A-2）**：女巫/临时键稀释已量化，两个死项使 `3000/5000=60% < 2/3`，最终性冻结而链继续出块，且死项跨重启持久；**长程攻击与私钥泄露仍未测**，故不勾销。证据=`docs/plan/PLAN-047-multivalidator-lag-and-anti-entropy-boundary.md` §六。
 - [ ] **物理多机 / 真实机房未测**（现有实测均为同内核单机或虚拟化边界） —— 未开始。`PLAN-041`、`PLAN-065`、`PLAN-066`、`PLAN-068`、`PLAN-070`、`PLAN-072`、`PLAN-074`
-- [ ] **补票回看窗外的远古 epoch 不补**（默认回看 50 epoch；`PLAN-025` 实验 1..18 区间补不回） —— 未开始。`PLAN-025`
-- [ ] **数据库整体不可用时只剩内存队列兜底，进程崩溃仍丢票** —— 部分完成（内存兜底已有，崩溃存活未覆盖）。`PLAN-025`
-- [ ] **迁移前老数据没有签名**（历史票无法验签） —— 未开始。`PLAN-025`
-- [ ] **epoch 窗口 / 规范检查点语义校验未做**（需链接口） —— 未开始。`PLAN-067`
+- [x] **补票回看窗外的远古 epoch 不补**（默认回看 50 epoch；`PLAN-025` 实验 1..18 区间补不回） —— **已闭环（2026-11-15，PLAN-057）**：游标式分页从缺口地板续传，避免 `DESC LIMIT N` 永远只拿最新 N 条；当前 master 复测 A/D/E=679/679/679、337 epoch 行全等、桶 35/35、追平 96s，合成空漏 244 票（>单轮上限 200）零遗漏。`on/off` 对照中 off 未追平且缺 71 行，证明判别有双向性。证据=`docs/plan/PLAN-057-anti-entropy-paging.md` §5.14、负向第 21 例。
+- [ ] **数据库整体不可用时只剩内存队列兜底，进程崩溃仍丢票** —— **部分完成（2026-11-15，A-5）**：真实停库 90s + 窗内强杀中，提交先行停摆，测得净丢失 0；重启按块重放补投 45 张迟到票，三方终态 490/490/490。**未覆盖的「提交仍进行且 outbox 不可写」窗口仍可能丢票，故不勾销**。证据=`docs/plan/PLAN-018-finality-persistence.md` §4.4。
+- [ ] **迁移前老数据没有签名**（历史票无法验签） —— **行为边界已实测（2026-11-15，A-6），但不能补签历史数据**：`enforce=true` 全表回放对无 `signed_payload` 老行返回 `DROP_UNSIGNED`；compat 会放行并让哑值进入 proposer 轮转，风险已量化。灰度策略与真历史库迁移仍待治理，故不勾销。证据=`docs/plan/PLAN-001-signature-extension.md` §八「老行」补测。
+- [x] **epoch 窗口 / 规范检查点语义校验未做**（需链接口） —— **已闭环（2026-11-16，A-7）**：`GET /consensus/finality/checkpoints/audit` 只读逐行审计，覆盖 `HASH_MISMATCH` / `HEIGHT_OUT_OF_RANGE` / 内部 `EPOCH_GAP`，尾随滞后单列 `TRAILING_LAG`；真 PG 五形态实测与 9 项测试通过。`epoch > headEpoch` 仍判红，不放宽规则。证据=`docs/plan/PLAN-067-finality-vote-payload-and-checkpoint-key-bounds.md` §七。
 - [ ] **历史短哈希行未全量清洗**（只丢弃、不建索引、不占配额；`PLAN-071` 起改为隔离表） —— 部分完成（隔离演练完成，生产库未执行）。`PLAN-067`、`PLAN-071`
 - [ ] **脏行迁移未在生产库执行** —— 部分完成（仅 H2 / 迁移演练）。`PLAN-071`
 - [x] **outbox 脏票「不变毒丸」依赖 `submitVote` 对非法哈希正常拒绝而非抛异常** —— **已闭环（2026-11-05）**：H2 门禁（`FinalityOutboxDirtyVoteContainmentTest`）+ 真实 PG 复核（正确小写 origin 的脏行处理一次即被拒并移除，`outbox=0/votes=0`）；并修复 legacy/手工 origin 大小写导致 `removePendingVote`/`markPendingVoteFailure` 静默 0 行的问题（PLAN-079：大小写不敏感匹配 + 0 行 WARN）。`PLAN-072`
@@ -104,7 +104,7 @@
 - [x] **真实集群告警未触发** → **kind 真集群端到端已交付（2026-11-14，zcode）**：25 条 nexus 规则原样装载，合成指标源 firing → Alertmanager 路由 → webhook sink 2xx，三层证据与复现命令见 [docs/runbooks/kind-alert-drill.md](../runbooks/kind-alert-drill.md)。**边界**：单节点虚拟化边界 + 合成指标源 + 演练 sink（非 Slack/邮件真实渠道）；**生产集群实际触发仍待环境**（生产当前不存在）。`PLAN-066`、`PLAN-067`、`PLAN-068`、`PLAN-073`、`PLAN-074`
 - [x] **`/actuator/prometheus` 目前没有鉴权**（原文只证「抓取可达、标签可见」，不是「暴露面已加固」） —— **已闭环（2026-11-05）**：PLAN-075 全仓 Bearer 鉴权（#458 `d24ab1db`）、PLAN-076 本地真实链路演练 + runbook（#470 `ac6a316a`）、PLAN-077 双 token 零空窗轮换（#480 `cd237063`）。`PLAN-068`
 - [ ] **真实攻击形态未演练**（合成拒绝不代表真实攻击） —— 未开始。`PLAN-068`
-- [ ] **Prometheus 服务端存储 / 查询成本基准（容量规划）未做** —— 未开始。`PLAN-070`、`PLAN-074`
+- [x] **Prometheus 服务端存储 / 查询成本基准（容量规划）未做** —— **已闭环（2026-11-15，B-14）**：kind+kps 两量级实测，2975 序列 @15s 约 93.5MB/天/副本；低基数约 510rps，高基数约 236rps，p99≤187ms@16 并发（含 port-forward）。边界=单节点虚拟化与客户端一跳，不是生产容量承诺。证据=`docs/plan/PLAN-070-scrape-cost-and-sparse-series.md` §七。
 - [ ] **outbox 指标 30s 采样滞后**（告警发现延迟） —— 部分完成（指标与告警已交付，采样延迟仍在）。**2026-11-08 已量化最坏发现时延**：仓库基线 30s 采样 + 30s 抓取 + 30s 评估 + `for:10m` ⇒ ≤11m30s 进入 firing、≤12m 通知（见 `docs/runbooks/local-monitoring-drill.md` §十）。采样机制本身未改，故不勾销。`PLAN-073`
 - [x] **监控栈实验脚本与日志留在仓库外**（验证资产未入库、不可复现） —— **已闭环（2026-11-07）**：步骤、参数、预期观测已固化为 `docs/runbooks/local-monitoring-drill.md`（PLAN-083）；原始日志、webhook 落盘与一次性脚本按既有纪律仍留仓库外（有意，不是缺口）。`PLAN-074`
 - [x] **生产 scrape 间隔与实验参数（15s scrape + 30s 采样）可能有差异** —— **已收口（2026-11-08）**：仓库基线确定为 **30s scrape / 30s 评估**（`deploy/monitoring/kube-prometheus-stack-values.yaml:51-53`），演练口径为 15s/30s（`docs/runbooks/local-monitoring-drill.md:19`）；两者分开表述、不再互相引用。生产实际值由部署方覆盖，**仓库内无法核实**，因此不宣称「生产 = 30s」，只要求引用时注明口径。`PLAN-074`
@@ -196,6 +196,7 @@
 | 2026-11-15 | **B-14 交付（zcode，Wave 1 收官件）**：kind+kps 两量级点成本曲线——存储：2975 序列 @15s ≈ **93.5 MB/天**（≈31 KB/序列/天 ≈ 5.5 B/样本；低基数稳态低于 du 分辨率）；查询：低基数 ~510 rps / p50 4–31ms vs 高基数 ~236 rps / p50 12–64ms、p99 ≤187ms@16 并发（含 port-forward 一跳）；容量要点=数千序列百 MB/天/副本、30 天 ~5GB 量级 | `docs/plan/PLAN-070-scrape-cost-and-sparse-series.md` §七补测；板 `20261115-1730-zcode-b14-cost-curve-delivered` |
 | 2026-11-23 | **#25 本机 Nacos/Feign 切片交付（zcode）**：修默认服务 token 缺 READ 与 Nacos 初始化鉴权顺序/假成功；真实 Docker 双服务注册、匿名/legacy-only 403、READ 200、gateway signing=UP；合成 Nacos 门接 CI，顺序变异红、还原绿。kind、无 emptyDir、seed-perf+k6 未重跑，Phase B 保持部分完成 | `docs/audit/feign-nacos-auth-remediation-2026-11-23.md`；`docs/drill/feign-capability-discovery.md`；板 `20261123-0425-zcode-feign-nacos-auth` |
 | 2026-11-23 | **#25 本机剩余项收口（zcode）**：修验签 `@Value` 键错位、seed 全局/商户密钥错配与 discovery 双网卡不可达；无挂载启动通过，seed+k6 最终 143/143 业务成功、572/572 检查、HTTP 失败 0、max 22.96ms，PS1 等价通过。五项本机 Docker 切片全完成；kind/staging/prod/real-L1/容量与真实资金仍未闭环 | `docs/audit/phaseb-local-completion-2026-11-23.md`；`docs/drill/perf-business-smoke.md`；板 `20261123-0926-zcode-phaseb-local-completion` |
+| 2026-11-23 | **#27 证据对账（zcode）**：新增勾选 A-1 真实分区、PLAN-057 游标补票、A-7 检查点语义、B-14 成本曲线；A-2/A-5/A-6 只更新部分完成与未关闭边界。长程/私钥泄露、异常写窗、历史库迁移、物理多机/生产执行不勾选 | 各条内嵌 PLAN/演练证据；板 `20261123-0945-zcode-roadmap-evidence-sync` |
 
 ## PLAN-007（单 proposer 协调）
 
