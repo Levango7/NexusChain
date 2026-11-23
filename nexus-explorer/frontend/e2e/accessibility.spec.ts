@@ -259,4 +259,11 @@ test("设置页亮色主题 axe WCAG A/AA 零违规", async ({ page }) => {
   await page.getByRole("button", { name: "亮色" }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   await expectNoViolations(page, "WCAG violations on light settings");
+  const darkThemeButton = page.getByRole("button", { name: "暗色" });
+  await darkThemeButton.hover();
+  await expectNoViolations(page, "WCAG violations on light settings ghost hover");
+  const transitionProperty = await darkThemeButton.evaluate(
+    (element) => getComputedStyle(element).transitionProperty,
+  );
+  expect(transitionProperty).not.toContain("color");
 });
