@@ -453,6 +453,9 @@ jobs:
       - name: 单测 trivy-db-consistency（同源绿 / 异源红 / 缺腿红）
         run: python3 scripts/security/test_trivy_db_consistency.py
 
+      - name: 单测 trivy-to-issues（创建后记录形状 / 同轮 CVE 去重）
+        run: python3 scripts/security/test_trivy_to_issues.py
+
   # 2. Trivy Docker 镜像扫描（**我方构建产物 → PR 阻断路径**）
   # -----------------------------------------------------------------------------
   # 2026-11-06（E1）语义修正：本 job 原先 `if: github.event_name != 'pull_request'`，
