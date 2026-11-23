@@ -208,6 +208,26 @@ jobs:
           python scripts/check-agent-board-inbox.py --selftest
           python scripts/check-agent-board-inbox.py --summary "$GITHUB_STEP_SUMMARY"
 
+
+      # ============================================================
+      # Trivy 门禁脚本单测（2026-11-24 新增；回归保护前移到 required 路径）
+      # ------------------------------------------------------------
+      # 背景：scripts/security/test_trivy_baseline_gate.py 与
+      # test_trivy_db_consistency.py 是门禁判定逻辑自身的回归测试。
+      # 此前只在 security-scan.yml 的独立 job `Trivy Gate Unit Tests` 里跑，
+      # 而该 context 不在 branch protection required 列表 —— 改坏门禁脚本
+      # 的单测会红，但 PR 仍可合并（报告制，不阻断）。
+      #
+      # 按本 job 既有先例（留言板签收门禁，:197-200）挂靠到 required context
+      # `Code Hygiene (ratchet gate)`：落地当天即阻断，无需动分支保护设置。
+      # 原独立 job 保留作报告，不删除、不改其 if 逻辑；此处只增加 required 路径。
+      # 用 `python`（非 python3）与本 job 其余 step 及 setup-python@3.14 口径一致。
+      # ============================================================
+      - name: Trivy 门禁脚本单测（挂靠 required context，改坏门禁即阻断）
+        run: |
+          python scripts/security/test_trivy_baseline_gate.py
+          python scripts/security/test_trivy_db_consistency.py
+
   # ============================================================
   # Explorer 前端门禁（2026-09-16 审查新增）
   # ------------------------------------------------------------
