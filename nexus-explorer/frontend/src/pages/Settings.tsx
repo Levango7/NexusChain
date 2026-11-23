@@ -137,7 +137,7 @@ const Settings: React.FC = () => {
       <PageHeader maxWidth="max-w-4xl" innerClassName="gap-4">
         <Link
           to="/"
-          className="flex items-center gap-1 text-accent hover:text-accent-hover text-sm transition-colors duration-base ease-standard focus:outline-none focus-visible:shadow-focus"
+          className="flex items-center gap-1 text-accent hover:text-accent-hover text-sm focus:outline-none focus-visible:shadow-focus"
         >
           <ArrowLeft size={14} />
           {t("settings.back")}
