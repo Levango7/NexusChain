@@ -105,6 +105,16 @@
       "evidence": "OpenSSL secadv 20261117 CVE-2026-124709 → 3.5.10（计划 2026-12-01）；Debian trixie Packages 2026-11-21=3.5.9-1~deb13u1 且 tracker=vulnerable；mpc-engine/zk-groth16-service Cargo 无 openssl-sys/QUIC，TLS=rustls/ring，gRPC/HTTP 不走 QUIC；cc-debian13 含修复版镜像尚不存在"
     },
     {
+      "id": "CVE-2026-107494",
+      "package": "libssl3t64",
+      "scope": "os",
+      "reason": "OpenSSL QUIC 重传帧导致内存无界排队；当前 Debian 13.8 与 distroless 最新 digest 仍为 3.5.9-1~deb13u1 且无 FixedVersion。mpc-engine 与 zk-groth16-service 的实际 ELF 依赖不加载 libssl，Cargo 依赖也无 openssl-sys/QUIC，故该远程 QUIC 路径不可达；保留 issue #771 跟踪，出现修复版或接入 OpenSSL/QUIC 时必须立即重评",
+      "fixable": "none",
+      "expires": "2027-02-22",
+      "addedAt": "2026-11-24",
+      "evidence": "本机 Trivy 0.76.2 实扫 cc-debian13 latest@sha256:dac90a25ffe03ebaace90cda886b081e61ab6cd77ac47eda51f7bcc15c320765 与 nonroot@sha256:532c7a94f9e96ba9db75eb9388f4227751131c7cb0a411d1a8521af4096135de：Debian 13.8、InstalledVersion=3.5.9-1~deb13u1、FixedVersion 为空；两服务 Cargo.lock 检索 openssl-sys/quinn/quiche/QUIC 零命中；GHCR 实际运行镜像 ELF loader --list 仅 libgcc_s/libm/libc，无 libssl；跟踪 #771"
+    },
+    {
       "id": "CVE-2026-102554",
       "package": "com.google.guava:guava",
       "scope": "app",
