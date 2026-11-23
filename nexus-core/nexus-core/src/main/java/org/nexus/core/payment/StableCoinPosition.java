@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.nio.charset.StandardCharsets;
 
 /**
@@ -162,11 +164,13 @@ public class StableCoinPosition {
             throw new IllegalArgumentException("Minimum ratio must be positive: " + minRatio);
         }
 
-        long newCollateral = collateralAmount + collateral;
-        long newMinted = mintedAmount + mintAmount;
+        long newCollateral = Math.addExact(collateralAmount, collateral);
+        long newMinted = Math.addExact(mintedAmount, mintAmount);
 
-        // 按价格 1 计算抵押率
-        int ratio = (int) (newCollateral * 100L / newMinted);
+        // 按价格 1 计算抵押率；BigDecimal 防止 long 乘法溢出。
+        int ratio = ratioToInt(
+                BigDecimal.valueOf(newCollateral).multiply(BigDecimal.valueOf(100L)),
+                BigDecimal.valueOf(newMinted));
         if (ratio < minRatio) {
             throw new IllegalStateException(
                     "Collateral ratio " + ratio + "% is below minimum " + minRatio + "%");
@@ -176,8 +180,12 @@ public class StableCoinPosition {
         this.mintedAmount = newMinted;
         this.collateralRatio = ratio;
 
-        // 清算价格 = minRatio * mintedAmount / (collateralAmount * 100)
-        this.liquidationPrice = (long) ((double) minRatio * newMinted / ((double) newCollateral * 100.0));
+        // 清算价格 = minRatio * mintedAmount / (collateralAmount * 100)，保持向下取整且不使用 double。
+        this.liquidationPrice = BigDecimal.valueOf(minRatio)
+                .multiply(BigDecimal.valueOf(newMinted))
+                .divide(BigDecimal.valueOf(newCollateral).multiply(BigDecimal.valueOf(100L)),
+                        0, RoundingMode.DOWN)
+                .longValueExact();
 
         this.state = State.HEALTHY;
     }
@@ -211,7 +219,9 @@ public class StableCoinPosition {
         long newMinted = mintedAmount - redeemAmount;
         if (newMinted > 0 && collateralRatio > 0) {
             // 新抵押率 = 旧抵押率 * 旧mintedAmount / 新mintedAmount
-            collateralRatio = (int) ((long) collateralRatio * mintedAmount / newMinted);
+            collateralRatio = ratioToInt(
+                    BigDecimal.valueOf(collateralRatio).multiply(BigDecimal.valueOf(mintedAmount)),
+                    BigDecimal.valueOf(newMinted));
         } else if (newMinted == 0) {
             // 债务全部清偿，抵押率无穷大
             collateralRatio = Integer.MAX_VALUE;
@@ -240,11 +250,14 @@ public class StableCoinPosition {
             throw new IllegalArgumentException("Collateral amount must be positive: " + amount);
         }
 
+        long newCollateral = Math.addExact(collateralAmount, amount);
         if (collateralAmount > 0 && collateralRatio > 0) {
             // 新抵押率 = 旧抵押率 * 新collateralAmount / 旧collateralAmount
-            collateralRatio = (int) ((long) collateralRatio * (collateralAmount + amount) / collateralAmount);
+            collateralRatio = ratioToInt(
+                    BigDecimal.valueOf(collateralRatio).multiply(BigDecimal.valueOf(newCollateral)),
+                    BigDecimal.valueOf(collateralAmount));
         }
-        collateralAmount += amount;
+        collateralAmount = newCollateral;
     }
 
     /**
@@ -299,7 +312,10 @@ public class StableCoinPosition {
         }
 
         // 从抵押物中扣除惩罚
-        collateralAmount = collateralAmount * (100 - penaltyPct) / 100;
+        collateralAmount = BigDecimal.valueOf(collateralAmount)
+                .multiply(BigDecimal.valueOf(100 - penaltyPct))
+                .divide(BigDecimal.valueOf(100), 0, RoundingMode.DOWN)
+                .longValueExact();
         state = State.LIQUIDATED;
     }
 
@@ -340,14 +356,11 @@ public class StableCoinPosition {
         if (mintedAmount == 0) {
             return Integer.MAX_VALUE;
         }
-        long ratio = collateralAmount * currentPrice * 100L / mintedAmount;
-        if (ratio > Integer.MAX_VALUE) {
-            return Integer.MAX_VALUE;
-        }
-        if (ratio < 0) {
-            return 0;
-        }
-        return (int) ratio;
+        return ratioToInt(
+                BigDecimal.valueOf(collateralAmount)
+                        .multiply(BigDecimal.valueOf(currentPrice))
+                        .multiply(BigDecimal.valueOf(100L)),
+                BigDecimal.valueOf(mintedAmount));
     }
 
     /**
@@ -357,7 +370,7 @@ public class StableCoinPosition {
      * @return 抵押物价值 = collateralAmount * currentPrice
      */
     public long getCollateralValue(long currentPrice) {
-        return collateralAmount * currentPrice;
+        return Math.multiplyExact(collateralAmount, currentPrice);
     }
 
     /**
@@ -403,6 +416,18 @@ public class StableCoinPosition {
         } catch (IOException e) {
             throw new UncheckedIOException("Failed to deserialize StableCoinPosition", e);
         }
+    }
+
+    /** 将无界比例计算向下取整后限制到 int 正范围，避免 long/int 回绕。 */
+    private static int ratioToInt(BigDecimal numerator, BigDecimal denominator) {
+        BigDecimal ratio = numerator.divide(denominator, 0, RoundingMode.DOWN);
+        if (ratio.signum() < 0) {
+            return 0;
+        }
+        if (ratio.compareTo(BigDecimal.valueOf(Integer.MAX_VALUE)) > 0) {
+            return Integer.MAX_VALUE;
+        }
+        return ratio.intValue();
     }
 
     // ==================== Getter / Setter ====================

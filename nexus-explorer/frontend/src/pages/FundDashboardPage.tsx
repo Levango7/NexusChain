@@ -91,10 +91,11 @@ const FundDashboardPage: React.FC = () => {
     load();
   }, [load]);
 
-  /** 金额：后端 BigDecimal 序列化为 number，也可能缺字段；统一成可读串。 */
+  /** 金额：字符串保留原始精度；number 才按 locale 格式化，避免超过 2^53 后二次舍入。 */
   const fmtAmount = (v: unknown): string => {
     if (v === null || v === undefined || v === "") return "—";
-    const n = typeof v === "number" ? v : Number(v);
+    if (typeof v === "string") return v;
+    const n = Number(v);
     if (!Number.isFinite(n)) return String(v);
     return n.toLocaleString(i18n.language);
   };
