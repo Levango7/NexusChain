@@ -266,6 +266,53 @@ class OrchestrationE2ETest {
 
     @Test
     @org.junit.jupiter.api.Order(41)
+    @DisplayName("Reject an oversized description before it reaches the database")
+    void rejectOversizedDescription() throws Exception {
+        mockMvc.perform(post("/api/v1/payments")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"amount\":1,\"currency\":\"NEX\",\"description\":\""
+                        + "x".repeat(513)
+                        + "\",\"request_id\":\"oversized-description\","
+                        + "\"routing\":{\"preferred_connector\":\"mock\"}}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(40000))
+                .andExpect(jsonPath("$.message").value("description must not exceed 512 characters"));
+    }
+
+    @Test
+    @org.junit.jupiter.api.Order(42)
+    @DisplayName("Reject every oversized text field before it reaches its database column")
+    void rejectOversizedPersistedTextFields() throws Exception {
+        java.util.Map<String, Integer> limits = new java.util.LinkedHashMap<>();
+        limits.put("currency", 16);
+        limits.put("notify_url", 512);
+        limits.put("metadata", 1024);
+        limits.put("request_id", 128);
+        limits.put("payer_address", 128);
+        limits.put("payee_address", 128);
+        for (var limit : limits.entrySet()) {
+            String field = limit.getKey();
+            String value = "x".repeat(limit.getValue() + 1);
+            String currency = field.equals("currency") ? value : "NEX";
+            String requestId = field.equals("request_id") ? value : "oversized-" + field;
+            String extra = switch (field) {
+                case "currency", "request_id" -> "";
+                default -> ",\"" + field + "\":\"" + value + "\"";
+            };
+            mockMvc.perform(post("/api/v1/payments")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content("{\"amount\":1,\"currency\":\"" + currency + "\",\"request_id\":\""
+                            + requestId + "\"" + extra
+                            + ",\"routing\":{\"preferred_connector\":\"mock\"}}"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value(40000))
+                    .andExpect(jsonPath("$.message").value(
+                            field + " must not exceed " + limit.getValue() + " characters"));
+        }
+    }
+
+    @Test
+    @org.junit.jupiter.api.Order(43)
     @DisplayName("Return 404 for non-existent payment")
     void notFoundPayment() throws Exception {
         mockMvc.perform(get("/api/v1/payments/pay_nonexistent123"))
