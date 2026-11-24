@@ -70,20 +70,33 @@ public class PaymentOrchestrationController {
 
     // === Payment CRUD ===
 
+    private static String requireMaxLength(String field, String value, int maxLength) {
+        if (value != null && value.length() > maxLength) {
+            throw new IllegalArgumentException(field + " must not exceed " + maxLength + " characters");
+        }
+        return value;
+    }
+
     @PostMapping
     public ResponseEntity<Map<String, Object>> createPayment(@RequestBody Map<String, Object> body,
                                                                HttpServletRequest httpRequest) {
         Long merchantId = ownershipGuard.requireMerchantId(httpRequest);
         long amount = Long.parseLong(String.valueOf(body.get("amount")));
-        String currency = String.valueOf(body.getOrDefault("currency", "NEX"));
-        String description = String.valueOf(body.getOrDefault("description", ""));
-        String notifyUrl = body.containsKey("notify_url") ? String.valueOf(body.get("notify_url")) : null;
-        String metadata = body.containsKey("metadata") ? String.valueOf(body.get("metadata")) : null;
-        String requestId = body.containsKey("request_id") ? String.valueOf(body.get("request_id")) : null;
+        String currency = requireMaxLength("currency", String.valueOf(body.getOrDefault("currency", "NEX")), 16);
+        String description = requireMaxLength(
+                "description", String.valueOf(body.getOrDefault("description", "")), 512);
+        String notifyUrl = requireMaxLength(
+                "notify_url", body.containsKey("notify_url") ? String.valueOf(body.get("notify_url")) : null, 512);
+        String metadata = requireMaxLength(
+                "metadata", body.containsKey("metadata") ? String.valueOf(body.get("metadata")) : null, 1024);
+        String requestId = requireMaxLength(
+                "request_id", body.containsKey("request_id") ? String.valueOf(body.get("request_id")) : null, 128);
         // P0 修复（2026-10-09）：链上支付必需的两端地址。此前完全没被读取，
         // 导致 chain/consortium 连接器永远拿不到收款地址（必失败后静默落到 mock）。
-        String payerAddress = body.containsKey("payer_address") ? String.valueOf(body.get("payer_address")) : null;
-        String payeeAddress = body.containsKey("payee_address") ? String.valueOf(body.get("payee_address")) : null;
+        String payerAddress = requireMaxLength(
+                "payer_address", body.containsKey("payer_address") ? String.valueOf(body.get("payer_address")) : null, 128);
+        String payeeAddress = requireMaxLength(
+                "payee_address", body.containsKey("payee_address") ? String.valueOf(body.get("payee_address")) : null, 128);
 
         String preferredConnector = null;
         if (body.containsKey("routing")) {

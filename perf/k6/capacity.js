@@ -28,7 +28,7 @@
 
 import http from "k6/http";
 import { check, sleep } from "k6";
-import { Rate, Trend } from "k6/metrics";
+import { Counter, Rate, Trend } from "k6/metrics";
 
 import { buildAuthHeaders, assertCredentials } from "./utils/auth.js";
 import { paymentCreateBody } from "./utils/data.js";
@@ -63,22 +63,38 @@ function buildStages() {
 
 const bizSuccessRate = new Rate("biz_success_rate");
 const capacityLatency = new Trend("capacity_req_latency", true);
+const status2xx = new Counter("capacity_status_2xx");
+const status429 = new Counter("capacity_status_429");
+const status5xx = new Counter("capacity_status_5xx");
+const statusOther = new Counter("capacity_status_other");
 
 // ---------------------------------------------------------------------------
 // k6 options
 // ---------------------------------------------------------------------------
 export const options = {
+  // 默认只导出 p(90)/p(95)；容量画像还必须保留 p(99)。
+  summaryTrendStats: ["avg", "min", "med", "max", "p(90)", "p(95)", "p(99)"],
   tags: { scenario: "capacity", service: "nexus-gateway" },
 
   scenarios: {
-    capacity: {
-      executor: "ramping-arrival-rate",
-      startRate: START_RPS,
-      timeUnit: "1s",
-      preAllocatedVUs: parseInt(__ENV.CAP_PRE_ALLOC_VUS || "100", 10),
-      maxVUs: parseInt(__ENV.CAP_MAX_VUS || "400", 10),
-      stages: buildStages(),
-    },
+    capacity: __ENV.CAP_SINGLE_LEVEL === "true"
+      ? {
+          // 单级画像：每次进程只测一个 RPS，summary 不混入爬升/降载请求。
+          executor: "constant-arrival-rate",
+          rate: START_RPS,
+          timeUnit: "1s",
+          duration: STEP_DURATION,
+          preAllocatedVUs: parseInt(__ENV.CAP_PRE_ALLOC_VUS || "100", 10),
+          maxVUs: parseInt(__ENV.CAP_MAX_VUS || "400", 10),
+        }
+      : {
+          executor: "ramping-arrival-rate",
+          startRate: START_RPS,
+          timeUnit: "1s",
+          preAllocatedVUs: parseInt(__ENV.CAP_PRE_ALLOC_VUS || "100", 10),
+          maxVUs: parseInt(__ENV.CAP_MAX_VUS || "400", 10),
+          stages: buildStages(),
+        },
   },
 
   // 宽松护栏：容量画像允许过载劣化；只挡「系统性崩坏」（错误率>10%）
@@ -98,17 +114,11 @@ export function setup() {
   assertCredentials();
 }
 
-// 多密钥轮换（2026-10-03）：dev 的 InMemoryRateLimiter 为 300 次/分钟/API key
-// 硬编码——单 key 仅 5 rps，容量阶梯必须跨多 key 摊薄。API_KEYS 为逗号分隔的
-// 密钥列表（seed-multi-keys.ps1 批量签发）；签名 canonical 不含 API key，
-// 故可对 buildAuthHeaders 产出的头安全覆写 X-NexusChain-ApiKey。
-// 未提供 API_KEYS 时退化单 key（env API_KEY）。
+// 多密钥轮换：dev 的 InMemoryRateLimiter 为 300 次/分钟/API key，单 key 仅 5 rps。
+// 逐请求随机轮换而不是按 VU 固定：低延迟时少量 VU 即可供满 RPS，按 VU 固定会只
+// 使用少数 key，把客户端 key 分布偏斜误判成服务端容量上限。签名 canonical 不含
+// API key，故可安全覆写请求头。未提供 API_KEYS 时退化单 key（env API_KEY）。
 const API_KEYS = (__ENV.API_KEYS || "").split(",").filter((s) => s.length > 0);
-const MY_API_KEY = API_KEYS.length > 0 ? API_KEYS[useIndex(__VU, API_KEYS.length)] : "";
-
-function useIndex(vu, len) {
-  return ((vu - 1) % len + len) % len;
-}
 
 export default function () {
   // 请求格式严格镜像 payment-create.js：body 必须 JSON.stringify 后
@@ -116,14 +126,19 @@ export default function () {
   // 首跑由此 100% 请求被拒，修正后重跑）。
   const bodyStr = JSON.stringify(paymentCreateBody());
   const headers = buildAuthHeaders("POST", ENDPOINT, bodyStr);
-  if (MY_API_KEY) {
-    headers["X-NexusChain-ApiKey"] = MY_API_KEY;
+  if (API_KEYS.length > 0) {
+    headers["X-NexusChain-ApiKey"] = API_KEYS[Math.floor(Math.random() * API_KEYS.length)];
   }
   const res = http.post(`${BASE_URL}${ENDPOINT}`, bodyStr, {
     headers: headers,
     timeout: TIMEOUT_MS,
     tags: { name: "capacity_payment_create" },
   });
+
+  if (res.status >= 200 && res.status < 400) status2xx.add(1);
+  else if (res.status === 429) status429.add(1);
+  else if (res.status >= 500) status5xx.add(1);
+  else statusOther.add(1);
 
   const ok = res.status >= 200 && res.status < 300;
   check(res, {
