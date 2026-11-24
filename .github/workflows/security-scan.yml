@@ -466,9 +466,10 @@ jobs:
   # 成本：每腿 3 次扫描（SARIF/分诊/门禁），13 腿并行，观测峰值 5.5 → ~7 min。
   # ============================================================
   trivy-docker-scan:
-    # 2026-11-24：冷 Gradle 配置实测可超过 18 min；nexus-core/api-gateway 在构建步
-    # 跑满 30 min 被系统取消（并非扫描或编译错误）。给冷缓存+三次扫描保留有界余量。
-    timeout-minutes: 45
+    # 2026-11-24：冷缓存下 api-gateway 的 Gradle 配置约 16 min、编译等约 28 min；
+    # 镜像构建+三次扫描+基线门禁全成功后，job 仍在 45m02s 被系统取消（job 138150663579）。
+    # 60 min 是按完整冷构建实测设置的有界余量，不改变任何测试或扫描判据。
+    timeout-minutes: 60
     name: Trivy Docker Image Scan (${{ matrix.module }})
     runs-on: ubuntu-24.04
     permissions:
