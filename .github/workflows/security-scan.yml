@@ -453,6 +453,9 @@ jobs:
       - name: 单测 trivy-db-consistency（同源绿 / 异源红 / 缺腿红）
         run: python3 scripts/security/test_trivy_db_consistency.py
 
+      - name: 单测 trivy-to-issues（创建后记录形状 / 同轮 CVE 去重）
+        run: python3 scripts/security/test_trivy_to_issues.py
+
   # 2. Trivy Docker 镜像扫描（**我方构建产物 → PR 阻断路径**）
   # -----------------------------------------------------------------------------
   # 2026-11-06（E1）语义修正：本 job 原先 `if: github.event_name != 'pull_request'`，
@@ -463,7 +466,9 @@ jobs:
   # 成本：每腿 3 次扫描（SARIF/分诊/门禁），13 腿并行，观测峰值 5.5 → ~7 min。
   # ============================================================
   trivy-docker-scan:
-    timeout-minutes: 30  # 观测峰值 5.5 min（2 扫描/腿）；新增门禁扫描后约 7 min，余量充足
+    # 2026-11-24：冷 Gradle 配置实测可超过 18 min；nexus-core/api-gateway 在构建步
+    # 跑满 30 min 被系统取消（并非扫描或编译错误）。给冷缓存+三次扫描保留有界余量。
+    timeout-minutes: 45
     name: Trivy Docker Image Scan (${{ matrix.module }})
     runs-on: ubuntu-24.04
     permissions:

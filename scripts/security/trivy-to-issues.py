@@ -373,7 +373,9 @@ def main():
         if issue_num:
             print(f"  [CREATED] #{issue_num}: {title}")
             created += 1
-            existing[title] = issue_num
+            # existing 与 list_existing_issues 的返回契约一致，必须是 issue record；
+            # 同轮后续包若共享 CVE，也能通过正文匹配去重，而不是重复建单。
+            existing.append({"number": issue_num, "title": title, "body": body})
         else:
             print(f"  [FAILED] {title}")
             failed += 1
