@@ -154,7 +154,7 @@ public class Miner implements ApplicationListener {
         List<Incubator> incubatorList = (List<Incubator>) merklemap.get("incubator");
         // hash merkle root
         block.hashMerkleRoot = Block.calculateMerkleRoot(block.body);
-        block.hashMerkleState = Block.calculateMerkleState(accountList);
+        block.hashMerkleState = merkleRule.calculateStateRoot(accountList, block.nHeight);
         block.hashMerkleIncubate = Block.calculateMerkleIncubate(incubatorList);
         peningTransPool.updatePool(newTranList, 1, block.nHeight);
         return block;

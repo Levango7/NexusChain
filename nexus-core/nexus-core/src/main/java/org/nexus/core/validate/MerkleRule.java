@@ -33,6 +33,7 @@ import org.nexus.keystore.crypto.RipemdUtility;
 import org.nexus.keystore.crypto.SHA3Utility;
 import org.nexus.protobuf.tcp.command.HatchModel;
 import org.nexus.core.NexusChainBlockChain;
+import org.nexus.core.StateCommitment;
 import org.nexus.core.account.Account;
 import org.nexus.core.account.AccountDB;
 import org.nexus.core.account.AccountStoreUnavailableException;
@@ -74,10 +75,18 @@ public class MerkleRule implements BlockRule {
 
     private static final JSONEncodeDecoder codec = new JSONEncodeDecoder();
 
-    private boolean validateIncubator;
+    private final boolean validateIncubator;
+    private final StateCommitment stateCommitment;
 
-    public MerkleRule(@Value("${node-character}") String character) {
+    @Autowired
+    public MerkleRule(@Value("${node-character}") String character, StateCommitment stateCommitment) {
         this.validateIncubator = !character.equals("exchange");
+        this.stateCommitment = stateCommitment;
+    }
+
+    /** Compatibility constructor for isolated tests: preserve legacy-only roots. */
+    public MerkleRule(String character) {
+        this(character, StateCommitment.disabled());
     }
 
     @Override
@@ -104,6 +113,11 @@ public class MerkleRule implements BlockRule {
         }
     }
 
+    /** Select the legacy or V2 account-state root for this block height. */
+    public byte[] calculateStateRoot(List<Account> accounts, long blockHeight) {
+        return stateCommitment.calculateMerkleState(accounts, blockHeight);
+    }
+
     /**
      * 重放后状态根校验（PLAN-014 Phase 1 提取）。
      *
@@ -117,8 +131,9 @@ public class MerkleRule implements BlockRule {
      * 与 validateBlock 一致。</p>
      */
     public Result verifyStateRoots(Block block, List<Account> accountList, List<Incubator> incubatorList) {
-        if (!org.bouncycastle.util.Arrays.areEqual(block.hashMerkleState, Block.calculateMerkleState(accountList))) {
-            return Result.Error("merkle state validate fail " + new String(codec.encodeBlock(block)) + " " + Hex.encodeHexString(block.hashMerkleState) + " " + Hex.encodeHexString(Block.calculateMerkleState(accountList)));
+        byte[] expectedStateRoot = calculateStateRoot(accountList, block.nHeight);
+        if (!org.bouncycastle.util.Arrays.areEqual(block.hashMerkleState, expectedStateRoot)) {
+            return Result.Error("merkle state validate fail " + new String(codec.encodeBlock(block)) + " " + Hex.encodeHexString(block.hashMerkleState) + " " + Hex.encodeHexString(expectedStateRoot));
         }
         // 交易所不校验孵化状态
         if (!validateIncubator) {

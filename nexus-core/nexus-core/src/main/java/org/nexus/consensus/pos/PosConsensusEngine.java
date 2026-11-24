@@ -551,7 +551,7 @@ public class PosConsensusEngine implements PosConsensus {
         List<Account> accountList = (List<Account>) merklemap.get("account");
         @SuppressWarnings("unchecked")
         List<Incubator> incubatorList = (List<Incubator>) merklemap.get("incubator");
-        block.hashMerkleState = Block.calculateMerkleState(accountList);
+        block.hashMerkleState = merkleRule.calculateStateRoot(accountList, height);
         block.hashMerkleIncubate = Block.calculateMerkleIncubate(incubatorList);
 
         return block;
