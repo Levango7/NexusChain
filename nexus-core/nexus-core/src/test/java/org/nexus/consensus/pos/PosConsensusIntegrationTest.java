@@ -8,6 +8,7 @@ import org.nexus.consensus.pow.EconomicModel;
 import org.nexus.consensus.pow.PackageMiner;
 import org.nexus.core.Block;
 import org.nexus.core.NexusChainBlockChain;
+import org.nexus.core.StateCommitment;
 import org.nexus.core.account.Account;
 import org.nexus.core.account.Transaction;
 import org.nexus.core.validate.MerkleRule;
@@ -29,11 +30,13 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.anyLong;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -152,6 +155,8 @@ public class PosConsensusIntegrationTest {
         when(merkleRule.validateMerkle(any(), anyLong()))
                 .thenReturn(Map.of("account", Collections.emptyList(),
                         "incubator", Collections.emptyList()));
+        when(merkleRule.calculateStateRoot(any(), anyLong()))
+                .thenAnswer(invocation -> Block.calculateMerkleState(invocation.getArgument(0)));
         doNothing().when(applicationContext).publishEvent(any(ApplicationEvent.class));
 
         // 注册本节点为验证人：地址由引擎公钥推导，公钥与签名密钥对应，
@@ -263,6 +268,23 @@ public class PosConsensusIntegrationTest {
         assertArrayEquals(Block.calculateMerkleState(List.of(account)), block.hashMerkleState,
                 "区块状态根必须由交易重放结果计算");
         assertFalse(isAllZeroes(block.hashMerkleState), "有账户状态时状态根不应为零");
+    }
+
+    @Test
+    public void testProposeDelegatesStateRootToActivatedPolicy() throws Exception {
+        Account account = new Account(101, new byte[Transaction.PUBLIC_KEY_HASH_SIZE], 0, 0, 0, 0, 0);
+        when(merkleRule.validateMerkle(any(), anyLong()))
+                .thenReturn(Map.of("account", List.of(account), "incubator", List.of()));
+        byte[] activatedRoot = new byte[Block.HASH_SIZE];
+        activatedRoot[0] = StateCommitment.VERSION;
+        when(merkleRule.calculateStateRoot(List.of(account), 101L)).thenReturn(activatedRoot);
+        when(stateDB.getBestBlock()).thenReturn(buildParentBlock(100));
+
+        Block block = engine.propose();
+
+        assertNotNull(block, "propose 应成功");
+        assertSame(activatedRoot, block.hashMerkleState);
+        verify(merkleRule).calculateStateRoot(List.of(account), 101L);
     }
 
     // ==================== 测试场景 2: validate 校验链完整 ====================
