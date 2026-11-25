@@ -1433,10 +1433,13 @@ jobs:
         # Rust 多阶段构建耗时较长，单独放宽 timeout（wrapper 下载 + cargo 全量编译）。
         # core/bridge 在 master c3261611 的冷 Gradle 配置阶段等待约 18 min，首次
         # build/push 均恰好跑满默认 20 min 被系统取消；给到 40 min 有界余量。
+        # api-gateway 在 master f9f31bab 同型 20 min 取消（job 138911660487），同口径处理。
         include:
           - module: nexus-core
             timeout-minutes: 40
           - module: nexus-bridge
+            timeout-minutes: 40
+          - module: nexus-api-gateway
             timeout-minutes: 40
           - module: mpc-engine
             timeout-minutes: 25
