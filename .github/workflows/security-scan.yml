@@ -459,6 +459,9 @@ jobs:
       - name: 单测 scan-image 准备（master 复用产物 / PR 构建 / 输入边界）
         run: python3 scripts/security/test_prepare_scan_image.py
 
+      - name: 单测 published-artifact-ready（CI 就绪 / 发布失败 / 超时）
+        run: python3 scripts/security/test_wait_published_images.py
+
   # 2. Trivy Docker 镜像扫描（**我方构建产物 → PR 阻断路径**）
   # -----------------------------------------------------------------------------
   # 2026-11-06（E1）语义修正：本 job 原先 `if: github.event_name != 'pull_request'`，
@@ -467,6 +470,31 @@ jobs:
   # 并由 `trivy-image-baseline-gate` 聚合 job 作为唯一的候选必需检查。
   # 上游浮动镜像（node:24-alpine 本体）已从 PR 门禁移出 → 见 `trivy-upstream-watch`。
   # 成本：每腿 3 次扫描（SARIF/分诊/门禁），13 腿并行，观测峰值 5.5 → ~7 min。
+  # ============================================================
+  # Master 发布就绪门：Security 与 CI 独立启动，必须先确认同一 SHA 的
+  # 13 个 Build & Push 全部成功，避免在镜像尚未发布时盲等 manifest。
+  # PR 不发布镜像，故本 job 跳过，扫描矩阵按本地构建继续。
+  # ============================================================
+  published-artifact-ready:
+    timeout-minutes: 100
+    name: Published Artifact Ready
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    needs: [image-scan-scope]
+    if: github.event_name != 'pull_request' && needs.image-scan-scope.outputs.count != '0'
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
+      - name: 等待 CI 全部 13 个镜像发布成功
+        run: python3 scripts/security/wait_published_images.py --repository "Levango7/NexusChain" --sha "$GITHUB_SHA"
+
   # ============================================================
   trivy-docker-scan:
     # 2026-11-24：冷缓存下 api-gateway 的 Gradle 配置约 16 min、编译等约 28 min；
@@ -486,8 +514,8 @@ jobs:
     # 0 腿时整个 job 跳过，聚合 job 会把它转成 success（必需检查不能变 skipped）。
     # 共享库方案：prep 失败 → 本 job 整片 skipped；聚合 job 会把 skipped 判红
     # 并列出被跳过的腿，因此 skipped 不会被当成 success。
-    needs: [image-scan-scope, trivy-db-prep]
-    if: needs.image-scan-scope.outputs.count != '0' && needs.trivy-db-prep.result == 'success'
+    needs: [image-scan-scope, trivy-db-prep, published-artifact-ready]
+    if: needs.image-scan-scope.outputs.count != '0' && needs.trivy-db-prep.result == 'success' && (needs.published-artifact-ready.result == 'success' || needs.published-artifact-ready.result == 'skipped')
     strategy:
       fail-fast: false
       matrix:
