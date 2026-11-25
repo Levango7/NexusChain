@@ -267,3 +267,15 @@ test("设置页亮色主题 axe WCAG A/AA 零违规", async ({ page }) => {
   );
   expect(transitionProperty).not.toContain("color");
 });
+
+test("设置页系统亮色首屏：返回链接无颜色过渡", async ({ page }) => {
+  await page.emulateMedia({ colorScheme: "light" });
+  await page.goto("/settings");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  const backLink = page.getByRole("link", { name: "返回" });
+  await expect(backLink).toBeVisible();
+  const transitionProperty = await backLink.evaluate(
+    (element) => getComputedStyle(element).transitionProperty,
+  );
+  expect(transitionProperty).not.toContain("color");
+});
