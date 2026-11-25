@@ -471,8 +471,9 @@ jobs:
   trivy-docker-scan:
     # 2026-11-24：冷缓存下 api-gateway 的 Gradle 配置约 16 min、编译等约 28 min；
     # 镜像构建+三次扫描+基线门禁全成功后，job 仍在 45m02s 被系统取消（job 138150663579）。
-    # 60 min 是按完整冷构建实测设置的有界余量，不改变任何测试或扫描判据。
-    timeout-minutes: 60
+    # PR 首轮冷构建按 signing-service 60min 取消实测保留 90min 有界上限；
+    # BuildKit type=gha 持久缓存跨 job/run 复用，后续不再重复冷编译。master 不构建。
+    timeout-minutes: 90
     name: Trivy Docker Image Scan (${{ matrix.module }})
     runs-on: ubuntu-24.04
     permissions:
@@ -593,6 +594,10 @@ jobs:
           path: db-fingerprint-${{ matrix.module }}.json
           retention-days: 7
 
+      - name: Setup BuildKit for PR cache
+        if: github.event_name == 'pull_request'
+        uses: docker/setup-buildx-action@v3
+
       - name: 准备扫描镜像（master 复用已发布产物 / PR 本地构建）
         # 所有模块统一用 repo 根目录作构建上下文（-f 指定 Dockerfile 路径）。
         # Java 模块需根级 gradlew/build.gradle/project() 依赖；
@@ -605,8 +610,9 @@ jobs:
         # 无关，属基础设施抖动，却会污染「红 = 代码问题」这一信号。
         # master 直接拉取 CI 已按 commit SHA 发布的 GHCR 镜像，避免重复冷编译，
         # 并让扫描对象与实际发布产物一致；镜像未就绪时仅做有界等待，不重复构建。
-        # PR 没有已发布镜像，保留本地构建与 3 次有界重试。实现及 fake-docker 回归
-        # 见 scripts/security/prepare_scan_image.sh 与 test_prepare_scan_image.py。
+        # PR 没有已发布镜像，保留本地构建与 3 次有界重试，并通过 BuildKit
+        # type=gha 缓存复用 Docker/Gradle 层；ignore-error 只容忍缓存服务故障，
+        # 不会跳过镜像构建或后续 Trivy 扫描。实现及 fake-docker 回归见同名单元测试。
         run: |
           # Outer retry removed; the helper owns bounded pull/build retries.
           if bash scripts/security/prepare_scan_image.sh "${{ matrix.module }}"; then #${{ matrix.module }}/Dockerfile .; then

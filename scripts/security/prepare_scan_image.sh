@@ -20,8 +20,12 @@ if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
     echo "build wait seconds must be 0..60" >&2
     exit 2
   fi
+  CACHE_SCOPE="security-scan-$MODULE"
   for attempt in 1 2 3; do
-    if "$DOCKER_BIN" build -t "$MODULE:scan" -f "./$MODULE/Dockerfile" .; then
+    if "$DOCKER_BIN" buildx build --load -t "$MODULE:scan" \
+        --cache-from "type=gha,scope=$CACHE_SCOPE" \
+        --cache-to "type=gha,mode=max,scope=$CACHE_SCOPE,ignore-error=true" \
+        -f "./$MODULE/Dockerfile" .; then
       echo "Local PR scan image built on attempt $attempt"
       exit 0
     fi

@@ -94,13 +94,15 @@ class PrepareScanImageTest(unittest.TestCase):
 
         self.assertEqual(result, 0)
         self.assertEqual(len(calls), 2)
-        self.assertTrue(all(call.startswith("build ") for call in calls))
+        self.assertTrue(all(call.startswith("buildx build ") for call in calls))
+        self.assertTrue(all("type=gha" in call for call in calls))
 
     def test_pr_does_not_pull_published_image(self):
         result, calls, _ = self.run_helper(event="pull_request")
 
         self.assertEqual(result, 0)
-        self.assertEqual(calls[0], "build -t nexus-bridge:scan -f ./nexus-bridge/Dockerfile .")
+        self.assertTrue(calls[0].startswith("buildx build --load -t nexus-bridge:scan"))
+        self.assertIn("type=gha", calls[0])
 
     def test_invalid_inputs_do_not_invoke_docker(self):
         for kwargs in (
