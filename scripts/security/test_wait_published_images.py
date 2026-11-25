@@ -2,6 +2,7 @@
 """Tests for the explicit CI publication readiness gate."""
 
 import importlib.util
+import os
 from pathlib import Path
 import unittest
 
@@ -78,6 +79,18 @@ class WaitPublishedImagesTest(unittest.TestCase):
                 fetch=lambda _: run_payload({"id": 9, "name": "NexusChain Security Scan"}),
                 sleeper=lambda _: None, max_attempts=2, wait_seconds=0,
             )
+
+    def test_token_from_actions_environment_is_used(self):
+        previous = os.environ.get("GH_TOKEN")
+        os.environ["GH_TOKEN"] = "unit-test-token"
+        try:
+            self.assertEqual(wait_published_images.request_headers()["Authorization"],
+                             "Bearer unit-test-token")
+        finally:
+            if previous is None:
+                os.environ.pop("GH_TOKEN", None)
+            else:
+                os.environ["GH_TOKEN"] = previous
 
     def test_invalid_inputs_do_not_fetch(self):
         for repository, sha in (("bad", SHA), ("owner/repository", "abc")):

@@ -2,10 +2,13 @@
 """Wait until the CI workflow has published every required image for this SHA."""
 
 import argparse
+import base64
 import ipaddress
 import json
+import os
 import re
 import socket
+import subprocess
 import sys
 import time
 import urllib.parse
@@ -41,12 +44,30 @@ def validate_public_github_url(url):
             raise ValueError("private, loopback, link-local, or reserved API addresses are forbidden")
 
 
+def request_headers():
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": "nexuschain-scan-ready"}
+    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    if not token:
+        result = subprocess.run(
+            ["git", "config", "--get", "http.https://github.com/.extraheader"],
+            shell=False, capture_output=True, text=True, timeout=10, check=False,
+        )
+        if result.returncode == 0:
+            try:
+                basic = result.stdout.strip().split()[-1]
+                decoded = base64.b64decode(basic).decode("utf-8")
+                if decoded.startswith("x-access-token:"):
+                    token = decoded.split(":", 1)[1]
+            except (ValueError, UnicodeDecodeError):
+                pass
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    return headers
+
+
 def fetch_json(url):
     validate_public_github_url(url)
-    request = urllib.request.Request(
-        url,
-        headers={"Accept": "application/vnd.github+json", "User-Agent": "nexuschain-scan-ready"},
-    )
+    request = urllib.request.Request(url, headers=request_headers())
     with urllib.request.build_opener(RejectRedirects()).open(request, timeout=30) as response:
         return json.load(response)
 
