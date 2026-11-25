@@ -39,11 +39,11 @@ if [[ ! "${GITHUB_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
   echo "published scans require a full lowercase commit SHA" >&2
   exit 2
 fi
-ATTEMPTS="${SCAN_PULL_ATTEMPTS:-60}"
+ATTEMPTS="${SCAN_PULL_ATTEMPTS:-120}"
 WAIT_SECONDS="${SCAN_WAIT_SECONDS:-30}"
-if [[ ! "$ATTEMPTS" =~ ^[0-9]+$ || "$ATTEMPTS" -lt 1 || "$ATTEMPTS" -gt 60 \
+if [[ ! "$ATTEMPTS" =~ ^[0-9]+$ || "$ATTEMPTS" -lt 1 || "$ATTEMPTS" -gt 120 \
       || ! "$WAIT_SECONDS" =~ ^[0-9]+$ || "$WAIT_SECONDS" -gt 60 ]]; then
-  echo "pull attempts must be 1..60 and wait seconds must be 0..60" >&2
+  echo "pull attempts must be 1..120 and wait seconds must be 0..60" >&2
   exit 2
 fi
 IMAGE="ghcr.io/$IMAGE_PREFIX/$MODULE:$GITHUB_SHA"
@@ -54,7 +54,7 @@ for attempt in $(seq 1 "$ATTEMPTS"); do
     echo "Scanning published artifact $IMAGE"
     exit 0
   fi
-  if [[ "$attempt" -lt 60 ]]; then
+  if [[ "$attempt" -lt "$ATTEMPTS" ]]; then
     echo "published image not ready ($attempt/$ATTEMPTS); waiting ${WAIT_SECONDS}s"
     sleep "$WAIT_SECONDS"
   fi
