@@ -43,25 +43,15 @@ RUN mkdir -p /app/runtime-dirs/app/data/sessions \
              /app/runtime-dirs/home/mpc/sessions
 
 # === 运行阶段 ===
-# 2026-11-02：debian:trixie-slim → gcr.io/distroless/cc-debian13。
-# 动机：trixie-slim 自带 apt / util-linux / perl / ncurses / libsqlite3-0 等整层
-# 系统包，每轮 Trivy DB 更新都可能冒出「无修复版」的 HIGH，只能逐条写
-# .trivyignore（2026-11 的 libsqlite3-0 CVE-2026-119373/119586 即此类：
-# Installed = Candidate = 3.46.1-7+deb13u2，且 purge 会经 util-linux PreDepends
-# 连锁移除 essential 包）。换成 distroless 后 OS 层只剩
-#   libc6 / libssl3t64 / libzstd1 / zlib1g（base）
-#   + libgcc-s1 / libstdc++6 / libgomp1 / gcc-14-base（cc）
-# 没有 shell、包管理器与 apt 元数据，CVE 面与攻击面同步收窄。
-# 兼容性取证（2026-11-02，GHCR 现网镜像内二进制 ldd）：NEEDED 仅
-# libgcc_s.so.1 / libm.so.6 / libc.so.6 + ld-linux —— cc-debian13 全覆盖；
-# gmp/mpfr 由 gmp-mpfr-sys 静态编入，不产生动态依赖。
-# TLS 走 rustls/ring（纯 Rust，Cargo.lock 无 openssl-sys），不依赖系统 libssl。
-# 固定 digest（2026-11-06 取自 master run 42176885852 的 BuildKit 解析）；
-# 运行阶段 cc-debian13 与构建阶段 rust:1.88-debian13 必须成对升级：glibc 版本
-# 只允许「运行镜像 >= 构建镜像」，单独升运行镜像勿降级构建链，单独升构建链勿降级运行镜像，
-# 否则运行时报 GLIBC_x.y not found。
-# 2026-11-12 上游重建 bump：cc:latest 58e12be8…→e1f5543d…（zlib1g 修复版随入，证据见 PR）。
-FROM gcr.io/distroless/cc-debian13:latest@sha256:e1f5543d45a2cd7c02a5b43dda5f0ff30729b4832113759d01ed39b0b152cddb
+# 2026-11-25：cc-debian13 → static-debian13 + 显式最小动态运行集。
+# 现网二进制 NEEDED 仅 libgcc_s.so.1 / libm.so.6 / libc.so.6 + ld-linux；
+# gmp/mpfr 静态编入，TLS 走 rustls/ring，不需要系统 libssl/libzstd。
+# 加载器与三项动态库从同一 builder 复制，glibc 版本与编译环境严格一致。
+# 运行面只保留证书/时区与必要文件，不再携带未使用的 OpenSSL/libzstd。
+FROM gcr.io/distroless/static-debian13:latest@sha256:4c2cd1dee442c9a99924a378c7c126fac8fef14771579ef567c3f2bdd7a5122a
+ENV LD_LIBRARY_PATH=/runtime-libs
+COPY --from=builder /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 /lib64/ld-linux-x86-64.so.2
+COPY --from=builder /usr/lib/x86_64-linux-gnu/libc.so.6 /usr/lib/x86_64-linux-gnu/libm.so.6 /usr/lib/x86_64-linux-gnu/libgcc_s.so.1 /runtime-libs/
 
 # REQ-20 非 root：保持迁移前的 UID/GID 1000（原 `USER mpc` 同一数字），
 # 避免 compose 侧挂载属主假设变化。distroless 无 useradd，进程按数字 UID
