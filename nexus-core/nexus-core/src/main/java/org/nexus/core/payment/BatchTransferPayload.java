@@ -228,7 +228,7 @@ public class BatchTransferPayload {
         long total = 0;
         for (TransferItem item : items) {
             if (item != null) {
-                total += item.getAmount();
+                total = Math.addExact(total, item.getAmount());
             }
         }
         return total;

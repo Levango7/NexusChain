@@ -157,6 +157,8 @@ public class PosConsensusIntegrationTest {
                         "incubator", Collections.emptyList()));
         when(merkleRule.calculateStateRoot(any(), anyLong()))
                 .thenAnswer(invocation -> Block.calculateMerkleState(invocation.getArgument(0)));
+        when(merkleRule.calculateStateRoot(any(), any(), anyLong()))
+                .thenAnswer(invocation -> Block.calculateMerkleState(invocation.getArgument(0)));
         doNothing().when(applicationContext).publishEvent(any(ApplicationEvent.class));
 
         // 注册本节点为验证人：地址由引擎公钥推导，公钥与签名密钥对应，
@@ -277,14 +279,33 @@ public class PosConsensusIntegrationTest {
                 .thenReturn(Map.of("account", List.of(account), "incubator", List.of()));
         byte[] activatedRoot = new byte[Block.HASH_SIZE];
         activatedRoot[0] = StateCommitment.VERSION;
-        when(merkleRule.calculateStateRoot(List.of(account), 101L)).thenReturn(activatedRoot);
+        when(merkleRule.calculateStateRoot(List.of(account), Collections.emptyList(), 101L))
+                .thenReturn(activatedRoot);
         when(stateDB.getBestBlock()).thenReturn(buildParentBlock(100));
 
         Block block = engine.propose();
 
         assertNotNull(block, "propose 应成功");
         assertSame(activatedRoot, block.hashMerkleState);
-        verify(merkleRule).calculateStateRoot(List.of(account), 101L);
+        verify(merkleRule).calculateStateRoot(List.of(account), Collections.emptyList(), 101L);
+    }
+
+    @Test
+    public void testBatchBlockCoinbaseUsesExecutedFeeExactlyOnce() throws Exception {
+        Transaction batch = Transaction.createEmpty();
+        batch.type = Transaction.Type.BATCH_TRANSFER.ordinal();
+        batch.gasPrice = 1;
+        when(packageMiner.TransferCheck(any(byte[].class), anyLong(), any(Block.class)))
+                .thenReturn(List.of(batch));
+        when(merkleRule.validateMerkle(any(), anyLong()))
+                .thenReturn(Map.of("account", Collections.emptyList(), "incubator", Collections.emptyList(),
+                        "payment", Collections.emptyList(), "executedFee", 50_000L));
+        when(stateDB.getBestBlock()).thenReturn(buildParentBlock(100));
+
+        Block block = engine.propose();
+
+        assertNotNull(block, "propose 应成功");
+        assertEquals(20L * EconomicModel.NEX + 50_000L, block.body.get(0).amount);
     }
 
     // ==================== 测试场景 2: validate 校验链完整 ====================

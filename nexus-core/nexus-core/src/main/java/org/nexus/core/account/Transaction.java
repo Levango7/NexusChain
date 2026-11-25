@@ -335,6 +335,12 @@ public class Transaction {
         return gasPrice * GAS_TABLE[type];
     }
 
+    /** Exact fee for consensus execution; overflow must reject rather than wrap. */
+    @JsonIgnore
+    public long getFeeExact() {
+        return Math.multiplyExact(gasPrice, GAS_TABLE[type]);
+    }
+
     @JsonIgnore
     public int getdays() {
         try {

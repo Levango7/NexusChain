@@ -131,6 +131,8 @@ public class Miner implements ApplicationListener {
         // 校验官方孵化余额
         List<Transaction> newTranList = officialIncubateBalanceRule.validateTransaction(notWrittern);
         Set<String> payloads = new HashSet<>();
+        boolean hasBatchTransfer = newTranList.stream()
+                .anyMatch(tx -> tx.type == Transaction.Type.BATCH_TRANSFER.ordinal());
         for (Transaction tx : newTranList) {
             boolean isExit = tx.type == Transaction.Type.EXIT_VOTE.ordinal() || tx.type == Transaction.Type.EXIT_MORTGAGE.ordinal();
             if(isExit && tx.payload !=null && payloads.contains(Hex.encodeHexString(tx.payload))){
@@ -142,7 +144,9 @@ public class Miner implements ApplicationListener {
             if(isExit && tx.payload !=null){
                 payloads.add(Hex.encodeHexString(tx.payload));
             }
-            block.body.get(0).amount += tx.getFee();
+            if (!hasBatchTransfer) {
+                block.body.get(0).amount += tx.getFee();
+            }
             block.body.add(tx);
         }
         block.body.get(0).setHashCache(
@@ -152,9 +156,13 @@ public class Miner implements ApplicationListener {
         Map<String, Object> merklemap = merkleRule.validateMerkle(block.body, block.nHeight);
         List<Account> accountList = (List<Account>) merklemap.get("account");
         List<Incubator> incubatorList = (List<Incubator>) merklemap.get("incubator");
+        List<PaymentStateEntry> paymentStates = (List<PaymentStateEntry>) merklemap.getOrDefault("payment", List.of());
+        if (hasBatchTransfer) {
+            block.body.get(0).amount += ((Number) merklemap.get("executedFee")).longValue();
+        }
         // hash merkle root
         block.hashMerkleRoot = Block.calculateMerkleRoot(block.body);
-        block.hashMerkleState = merkleRule.calculateStateRoot(accountList, block.nHeight);
+        block.hashMerkleState = merkleRule.calculateStateRoot(accountList, paymentStates, block.nHeight);
         block.hashMerkleIncubate = Block.calculateMerkleIncubate(incubatorList);
         peningTransPool.updatePool(newTranList, 1, block.nHeight);
         return block;

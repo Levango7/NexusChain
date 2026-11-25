@@ -161,7 +161,7 @@ class StateReplayManagerPostgresTest {
 
     @Test
     void databaseOutageRollsBackAndRecoversOnPostgres() throws Exception {
-        when(merkleRule.verifyStateRoots(eq(block), anyList(), anyList())).thenReturn(Result.SUCCESS);
+        when(merkleRule.verifyStateRoots(eq(block), anyList(), anyList(), anyList())).thenReturn(Result.SUCCESS);
         stopAfterAccountWrite = true;
 
         // 断库时业务写失败与 JDBC rollback 失败都属于 fail-closed；后者由
@@ -197,7 +197,7 @@ class StateReplayManagerPostgresTest {
 
     @Test
     void successfulReplayCommitsBothStoresOnPostgres() throws Exception {
-        when(merkleRule.verifyStateRoots(eq(block), anyList(), anyList())).thenReturn(Result.SUCCESS);
+        when(merkleRule.verifyStateRoots(eq(block), anyList(), anyList(), anyList())).thenReturn(Result.SUCCESS);
 
         StateReplayManager.ReplayResult result = replayManager.replayBlock(block);
 

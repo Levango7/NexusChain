@@ -116,7 +116,7 @@ class StateReplayManagerTransactionTest {
 
     @Test
     void successfulReplayCommitsBothStores() throws Exception {
-        when(merkleRule.verifyStateRoots(eq(block), anyList(), anyList())).thenReturn(Result.SUCCESS);
+        when(merkleRule.verifyStateRoots(eq(block), anyList(), anyList(), anyList())).thenReturn(Result.SUCCESS);
 
         StateReplayManager.ReplayResult result = replayManager.replayBlock(block);
 
