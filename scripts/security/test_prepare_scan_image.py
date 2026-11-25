@@ -61,7 +61,7 @@ class PrepareScanImageTest(unittest.TestCase):
         result = subprocess.run(
             [BASH, SCRIPT.as_posix(), module], shell=False, env=env,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, encoding="utf-8", errors="replace", timeout=10, check=False,
+            text=True, encoding="utf-8", errors="replace", timeout=60, check=False,
         )
         calls = self.calls.read_text(encoding="utf-8").splitlines()
         return result.returncode, calls, result.stdout
@@ -89,6 +89,13 @@ class PrepareScanImageTest(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertIn("rather than rebuilding a different artifact", output)
 
+    def test_wait_boundary_uses_configured_attempt_limit(self):
+        outcomes = ",".join(["1"] * 60 + ["0", "0", "0"])
+        result, _, output = self.run_helper(outcomes=outcomes, attempts="61")
+
+        self.assertEqual(result, 0)
+        self.assertEqual(output.count("published image not ready"), 60)
+
     def test_pr_keeps_bounded_local_build_retry(self):
         result, calls, _ = self.run_helper(event="pull_request", outcomes="1,0")
 
@@ -109,6 +116,7 @@ class PrepareScanImageTest(unittest.TestCase):
             {"module": "../bridge"},
             {"sha": "abc"},
             {"attempts": "0"},
+            {"attempts": "121"},
         ):
             result, calls, _ = self.run_helper(**kwargs)
             self.assertEqual(result, 2)
