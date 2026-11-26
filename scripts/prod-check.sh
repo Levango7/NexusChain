@@ -14,7 +14,10 @@ else
 fi
 
 ENV_FILE="${NEX_ENV_FILE:-$ROOT/.env.prod}"
-"$PY" scripts/prod_prepare.py check --root "$ROOT" --env-file "$ENV_FILE" "$@"
+CERTS_DIR="${NEX_CERTS_DIR:-$ROOT/mpc-certs}"
+CONFIG_DIR="${NEX_CONFIG_DIR:-$ROOT/mpc-certs/config-prod}"
+"$PY" scripts/prod_prepare.py check --root "$ROOT" --env-file "$ENV_FILE" \
+  --certs-dir "$CERTS_DIR" --config-dir "$CONFIG_DIR" "$@"
 
 if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
   docker compose -f "$ROOT/docker-compose.prod.yml" --env-file "$ENV_FILE" config --quiet
