@@ -187,7 +187,7 @@ NEX_API_KEY=<key> NEX_MERCHANT_ID=<id> bash scripts/acceptance-e2e.sh
 
 ```bash
 curl -H "Authorization: Bearer $NEXUS_METRICS_TOKEN" http://<host>:<port>/actuator/prometheus
-# 期望：200 + nexus_* 指标（22 个）；无 token / 错 token 一律 401（fail-closed）
+# 期望：200 + nexus_* 指标（22 个）；服务端未配置 token 时 503，缺失或错误 Bearer token 时 401（fail-closed）
 ```
 
 ## 8. 升级 / 回滚
