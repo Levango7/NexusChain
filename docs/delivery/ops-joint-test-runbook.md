@@ -9,9 +9,10 @@
 > `docs/delivery/ops-integration-plan.md` §3~§8.1（契约 / 任务清单 / 执行顺序 / 判据 / 接入包）、
 > `scripts/ops/nc-task.sh`（被纳管统一入口）、`docs/delivery/offline-install.md`（交付包与 SOP）。
 >
-> **诚实边界**：联调**尚未实跑**（本手册是开跑清单，不是结果记录）；jar 裸进程整链已实测
-> PASS 6 / FAIL 0 / SKIP 0（SOP §2.1），镜像 tar 路径**未入整链实测**（SOP §10-4、
-> 板 `20261113-2021` 事实 5），联调顺带补测并记入本手册 §9 记录表。
+> **首轮结果**：qoder CN 已用 OpsMesh 公开 REST API 在本机完成 T1–T6 平台下发，
+> 结果与 task ID 见板 `20261121-0145-qoder-cn-joint-test-t1-t3-platform-driven`；T7、J2 与 J4
+> 本轮未验证。历史 T4 的 HTTP 503 只证明进程可达，按当前健康判据不算通过。jar 裸进程整链
+> PASS 6 / FAIL 0 / SKIP 0；镜像 tar 路径仍未入整链实测（§8）。
 
 ---
 
@@ -28,7 +29,7 @@
 
 | 事项 | 判据 | 机器不足时的失败形态 |
 |---|---|---|
-| Docker | `docker info` 成功（compose-up 动作内置同一自检） | `nc-task.sh compose-up` 回执 `exitCode=2` + `docker 不可用（未安装或 daemon 未起）` |
+| Docker（仅 compose / tar / T7 路径） | `docker info` 成功（compose-up 动作内置同一自检） | `nc-task.sh compose-up` 回执 `exitCode=2` + `docker 不可用（未安装或 daemon 未起）` |
 | 内存 | 板 `20261113-2021` 口径 **≥8GB 可用**（1640 §四-2）；接入包 §5 另记官方 L3 需 ~16GB（两套栈同机），取宽 | 无脚本判据，起栈前 `free -h` / 任务管理器人工确认 |
 | 镜像 | 能拉 `ghcr.io/levango7/nexuschain/*`，或改用离线包 `docker load` | 拉取失败按 SOP §9 排查（核对 `images.lock` 19 条） |
 | 连通性 | 控制面 ↔ 纳管设备（agent）可达；验证接口不依赖外网 | gRPC 通道不通属对方侧环境，按其文档排查，本仓不改对方代码 |
@@ -58,7 +59,7 @@ docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
 ```
 
 - 镜像清单 `images.lock` 19 条（compose 路径取 `compose:` 来源行）；
-- **本路径未入整链实测**（SOP §10-4）：本次联调即为补测场景，结果记入 §9 记录表后再对外宣称。
+- **本路径未入整链实测**（SOP §10-4）：后续 tar 路径联调按 §8 补记，填齐前不对外宣称。
 
 ### 2.3 消费方式 B：客户环境禁容器（jar 裸进程主路径，非回退）
 
@@ -104,13 +105,13 @@ POST /api/v1/tasks
   "maxRetries": 3, "approvalRequired": false }
 
 # ③ 批量下发
-POST /api/v1/tasks/batch
-{ "targets": ["a-001","a-002"], "type": "shell", "command": "bash scripts/ops/nc-task.sh status" }
+POST /api/v1/tasks/batch-exec
+{ "deviceIDs": ["a-001","a-002"], "taskType": "shell", "command": "bash scripts/ops/nc-task.sh status" }
 ```
 
 **回执契约（C2）**：stdout **最后一行**是单行 JSON
 `{"action","ok","exitCode","reason","ts","elapsedMs","detail"}`；退出码 `0/1/2`
-（0=PASS，1=动作跑过但不通过，2=用法/环境不满足）。平台侧按 JSON 解析并采集，不解析中文日志。
+（0=PASS，1=动作跑过但不通过，2=用法/环境不满足）。当前 OpsMesh 只原文透传 stdout/stderr；末行 JSON 结构化解析尚未接线。
 
 ---
 
@@ -121,13 +122,13 @@ POST /api/v1/tasks/batch
 | T1 体检 | `bash scripts/ops/nc-task.sh doctor` | `ok=true`，`FAIL=0` | stdout 尾部 40 行；SKIP 项看说明 |
 | T2 变量 | `bash scripts/ops/nc-task.sh env-check` | `ok=true` | `FAIL: 缺少以下强制变量` |
 | T3 版本 | `bash scripts/ops/nc-task.sh version` | `ok=true` | 版本口径漂移清单 |
-| T4 探针 | `bash scripts/ops/nc-task.sh status` | `ok=true` 且 `detail.healthHttp != "000"` | 先起栈；`NEX_GATEWAY_URL` 默认 `http://127.0.0.1:8080` |
+| T4 探针 | `bash scripts/ops/nc-task.sh status` | `ok=true` 且 `detail.healthHttp` 为 2xx；503 判失败 | 先起栈；`NEX_GATEWAY_URL` 默认 `http://127.0.0.1:8080` |
 | T5 验收 | `bash scripts/ops/nc-task.sh acceptance` | `ok=true`；缺 Key 应得 `exitCode=2` + 明确 `reason` | J1 要求失败也可读——恰好用它验证 |
 | T6 演练 | `bash scripts/ops/nc-task.sh upgrade-drill <旧.jar> <新.jar>` | `ok=true`（应用层 PASS 11 / FAIL 0 口径） | 两个 jar 路径与版本 |
-| T7 启停 | `bash scripts/ops/nc-task.sh compose-up` / `compose-down`（或平台 svc 任务等价） | `ok=true`；docker/env 缺失应得 `exitCode=2` | `NEX_ENV_FILE`（默认 `.env.prod`） |
+| T7 启停 | shell 调用 `nc-task.sh compose-up` / `compose-down`；Linux service 需对应 systemd unit | `ok=true`；docker/env 缺失应得 `exitCode=2` | `NEX_ENV_FILE`（默认 `.env.prod`） |
 
-> T7 若平台不支持容器编排 svc 语义 ⇒ 用 shell 任务包一层调用 `nc-task.sh compose-up` 即可
-> （接入包 §4 已预留此退化路径）。T1~T6 零改对方代码可下发。
+> OpsMesh 的 service 任务是 `systemctl` 语义，不是 Docker Compose。Windows agent 用 shell 调用
+> `nc-task.sh` 的退化路径；Linux service 语义仍未验证。T1~T6 零改对方代码可下发。
 
 ---
 
@@ -138,7 +139,7 @@ curl -sS http://<host>:8080/actuator/health
 curl -sS -H "Authorization: Bearer $NEXUS_METRICS_TOKEN" http://<host>:8080/actuator/prometheus
 ```
 
-- 期望 200 + `nexus_*` 指标（22 个）；无 token / 错 token 一律 401（fail-closed，SOP §7）；
+- 期望 200 + `nexus_*` 指标（22 个）；服务端未配置 token 时 503，缺失或错误 Bearer token 时 401；
 - 日志：平台侧采集 NexusChain stdout（`nc-task.sh` 不打印任何凭据）。
 
 ---
@@ -147,12 +148,13 @@ curl -sS -H "Authorization: Bearer $NEXUS_METRICS_TOKEN" http://<host>:8080/actu
 
 | # | 判据 | 留档物 |
 |---|---|---|
-| J1 | T1~T6 由平台 shell 任务驱动，回执均 `ok=true`；失败动作给出可读 `reason`（T5 缺 Key ⇒ exit 2） | 每步回执 JSON 原文 |
+| J1 | T1~T6 由平台 shell 任务驱动，回执均 `ok=true`（T4 必须 health 2xx）；失败动作给出可读 `reason`（T5 缺 Key ⇒ exit 2） | 每步回执 JSON 原文 |
 | J2 | 平台侧采集到 stdout 日志与 `nexus_*` 指标（带 token） | 平台侧截图/日志查询链接 |
 | J3 | 升级/回滚演练由**平台任务编排**完成（非本机手工） | T6 两次回执 + 平台任务 ID |
 | J4 | **不依赖平台也能交付**：单独 compose/helm 起栈回归 `scripts/doctor.sh` + `scripts/acceptance-e2e.sh` | 两条回归的回执 |
 
-> J4 是底线：联调是「多一条路」，不是「换一条路」。
+> J4 是底线：联调是「多一条路」，不是「换一条路」。历史首轮 T4 回执为 `503 + ok=true`，
+> 是旧 `status` 判据的假绿；当前脚本已修为仅 2xx 成功，复跑时不得把该历史回执当健康通过。
 
 ---
 

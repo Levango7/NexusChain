@@ -100,8 +100,10 @@ case "$ACTION" in
       exit 2
     fi
     sub="up"; [ "$ACTION" = "compose-down" ] && sub="down"
+    compose_args=(compose -f "$ROOT/docker-compose.prod.yml" --env-file "$env_file" "$sub")
+    [ "$ACTION" = "compose-up" ] && compose_args+=(-d)
     echo "== nc-task: $ACTION =="
-    docker compose -f "$ROOT/docker-compose.prod.yml" --env-file "$env_file" "$sub" -d 2>&1 | tail -n 20
+    docker "${compose_args[@]}" 2>&1 | tail -n 20
     rc="${PIPESTATUS[0]}"
     if [ "$rc" -eq 0 ]; then emit true 0 "compose $sub 完成"; exit 0; fi
     emit false "$rc" "compose $sub 失败"; exit 1
@@ -123,7 +125,8 @@ case "$ACTION" in
     echo "  health=$health  version=${ver:-unknown}  sha=$sha"
     case "$code" in
       000|"") emit false 1 "服务不可达" "$detail"; exit 1 ;;
-      *) emit true 0 "服务可达（health HTTP $code）" "$detail"; exit 0 ;;
+      2??) emit true 0 "服务健康（health HTTP $code）" "$detail"; exit 0 ;;
+      *) emit false 1 "服务不健康（health HTTP $code）" "$detail"; exit 1 ;;
     esac
     ;;
 
