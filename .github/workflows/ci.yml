@@ -1405,10 +1405,10 @@ jobs:
     # 残缺镜像集前进（fail-fast: false 已保证并行互不阻断；单个失败整体红）。
     # GHCR 组织包创建权限此前已修（packages: write + 镜像 tag 小写化），
     # 剩余失败属真实构建问题，应阻断而非静默。
-    # Java 冷 Gradle 配置实测可超过 18min，wallet 曾在 20min 整被取消且后续重试未执行；
-    # 默认 60min 是有界上限，不把一次冷启动抖动误报为三次实际构建失败。
+    # wallet 在 20min 与 60min 均在冷 Gradle 阶段被取消；与 PR 镜像构建同口径，
+    # 非 Rust 腿保留 90min 冷启动上限，并以 BuildKit 持久缓存消除后续重复冷解析。
     # Rust 模块多阶段构建通过 matrix.include 单独设上限。
-    timeout-minutes: ${{ matrix.timeout-minutes || 60 }}
+    timeout-minutes: ${{ matrix.timeout-minutes || 90 }}
     env:
       REGISTRY: ghcr.io
       # IMAGE_PREFIX 已移除：github.repository 含大写（Levango7/NexusChain），
@@ -1435,17 +1435,9 @@ jobs:
           # 2026-10-12 新增：区块浏览器镜像（Express BFF 同源托管前端产物）。
           # 仅 master push 触发（本 job 的 if 条件），不影响 PR 检查集。
           - nexus-explorer
-        # Rust 多阶段构建耗时较长，单独放宽 timeout（wrapper 下载 + cargo 全量编译）。
-        # core/bridge 在 master c3261611 的冷 Gradle 配置阶段等待约 18 min，首次
-        # build/push 均恰好跑满默认 20 min 被系统取消；给到 40 min 有界余量。
-        # api-gateway 在 master f9f31bab 同型 20 min 取消（job 138911660487），同口径处理。
+        # Java 不再保留 40min 的模块特例，统一走上面的 90min 冷启动上限。
+        # Rust 多阶段构建单独限时（wrapper 下载 + cargo 全量编译）。
         include:
-          - module: nexus-core
-            timeout-minutes: 40
-          - module: nexus-bridge
-            timeout-minutes: 40
-          - module: nexus-api-gateway
-            timeout-minutes: 40
           - module: mpc-engine
             timeout-minutes: 25
           - module: zk-groth16-service
@@ -1453,6 +1445,9 @@ jobs:
     steps:
       - name: Checkout 代码
         uses: actions/checkout@v5
+
+      - name: Setup BuildKit for persistent master cache
+        uses: docker/setup-buildx-action@v3
 
       - name: Compute lowercase image prefix
         id: img_prefix
@@ -1501,6 +1496,10 @@ jobs:
           context: .
           file: ./${{ matrix.module }}/Dockerfile
           push: true
+          # 与 PR 扫描构建同族：mode=max 连同 Gradle cache mount 一起导出。
+          # 共享 scope 只影响命中率；缓存服务失败被容忍，但镜像构建/推送绝不跳过。
+          cache-from: type=gha,scope=nexuschain-master
+          cache-to: type=gha,mode=max,scope=nexuschain-master,ignore-error=true
           tags: |
             ${{ env.REGISTRY }}/${{ steps.img_prefix.outputs.prefix }}/${{ matrix.module }}:latest
             ${{ env.REGISTRY }}/${{ steps.img_prefix.outputs.prefix }}/${{ matrix.module }}:${{ github.sha }}
@@ -1518,6 +1517,10 @@ jobs:
           context: .
           file: ./${{ matrix.module }}/Dockerfile
           push: true
+          # 与 PR 扫描构建同族：mode=max 连同 Gradle cache mount 一起导出。
+          # 共享 scope 只影响命中率；缓存服务失败被容忍，但镜像构建/推送绝不跳过。
+          cache-from: type=gha,scope=nexuschain-master
+          cache-to: type=gha,mode=max,scope=nexuschain-master,ignore-error=true
           tags: |
             ${{ env.REGISTRY }}/${{ steps.img_prefix.outputs.prefix }}/${{ matrix.module }}:latest
             ${{ env.REGISTRY }}/${{ steps.img_prefix.outputs.prefix }}/${{ matrix.module }}:${{ github.sha }}
@@ -1535,6 +1538,10 @@ jobs:
           context: .
           file: ./${{ matrix.module }}/Dockerfile
           push: true
+          # 与 PR 扫描构建同族：mode=max 连同 Gradle cache mount 一起导出。
+          # 共享 scope 只影响命中率；缓存服务失败被容忍，但镜像构建/推送绝不跳过。
+          cache-from: type=gha,scope=nexuschain-master
+          cache-to: type=gha,mode=max,scope=nexuschain-master,ignore-error=true
           tags: |
             ${{ env.REGISTRY }}/${{ steps.img_prefix.outputs.prefix }}/${{ matrix.module }}:latest
             ${{ env.REGISTRY }}/${{ steps.img_prefix.outputs.prefix }}/${{ matrix.module }}:${{ github.sha }}

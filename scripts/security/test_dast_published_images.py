@@ -14,6 +14,13 @@ COMPOSE = ROOT / "docker-compose.dast.yml"
 class DastPublishedImagesTest(unittest.TestCase):
     @staticmethod
     def assert_contract(workflow: str, compose: str) -> None:
+        if "  published-artifact-ready:\n" not in workflow:
+            raise AssertionError("publication readiness job is missing")
+        ready = workflow.split("  published-artifact-ready:\n", 1)[1].split(
+            "\n  trivy-docker-scan:", 1
+        )[0]
+        if "timeout-minutes: 310" not in ready:
+            raise AssertionError("publication readiness lacks its bounded 310-minute budget")
         if "  dast-zap-baseline:\n" not in workflow:
             raise AssertionError("DAST job is missing")
         job = workflow.split("  dast-zap-baseline:\n", 1)[1].split(
@@ -43,6 +50,7 @@ class DastPublishedImagesTest(unittest.TestCase):
         workflow = WORKFLOW.read_text(encoding="utf-8")
         compose = COMPOSE.read_text(encoding="utf-8")
         mutations = (
+            ("timeout-minutes: 310", "timeout-minutes: 100", workflow, compose),
             ("needs: [published-artifact-ready]", "needs: []", workflow, compose),
             (
                 "prepare_scan_image.sh nexus-core",
@@ -83,15 +91,27 @@ class DastPublishedImagesTest(unittest.TestCase):
 
     @staticmethod
     def assert_ci_contract(workflow: str) -> None:
+        if "  docker-build:\n" not in workflow:
+            raise AssertionError("Docker publication job is missing")
+        job = workflow.split("  docker-build:\n", 1)[1]
         required_fragments = (
-            "matrix.timeout-minutes || 60",
+            "matrix.timeout-minutes || 90",
+            "uses: docker/setup-buildx-action@v3",
+            "cache-from: type=gha,scope=nexuschain-master",
+            "cache-to: type=gha,mode=max,scope=nexuschain-master,ignore-error=true",
             "裁决（至少一次成功才绿）",
             "cancelled/skipped 不代表实际执行过三次重试",
         )
         for fragment in required_fragments:
-            if fragment not in workflow:
+            if fragment not in job:
                 raise AssertionError(f"missing CI contract: {fragment}")
-        if "docker build/push 连续 3 次失败" in workflow:
+        if job.count("cache-from: type=gha,scope=nexuschain-master") != 3:
+            raise AssertionError("all three publication attempts must read the same cache")
+        if job.count("cache-to: type=gha,mode=max,scope=nexuschain-master,ignore-error=true") != 3:
+            raise AssertionError("all three publication attempts must export the same cache")
+        if "timeout-minutes: 40" in job:
+            raise AssertionError("a Java module still overrides the 90-minute cold-build budget")
+        if "docker build/push 连续 3 次失败" in job:
             raise AssertionError("cancelled attempts are still misreported as three failures")
 
     def test_ci_timeout_and_cancelled_verdict_contract(self) -> None:
@@ -100,7 +120,12 @@ class DastPublishedImagesTest(unittest.TestCase):
     def test_ci_contract_mutation_battery(self) -> None:
         workflow = CI_WORKFLOW.read_text(encoding="utf-8")
         for old, new in (
-            ("matrix.timeout-minutes || 60", "matrix.timeout-minutes || 20"),
+            ("matrix.timeout-minutes || 90", "matrix.timeout-minutes || 60"),
+            ("uses: docker/setup-buildx-action@v3", "uses: docker/setup-buildx-action@v2"),
+            (
+                "cache-from: type=gha,scope=nexuschain-master",
+                "cache-from: type=local,src=/missing",
+            ),
             ("裁决（至少一次成功才绿）", "裁决（三次皆失败才红）"),
             (
                 "cancelled/skipped 不代表实际执行过三次重试",

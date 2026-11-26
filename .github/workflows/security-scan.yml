@@ -479,7 +479,9 @@ jobs:
   # PR 不发布镜像，故本 job 跳过，扫描矩阵按本地构建继续。
   # ============================================================
   published-artifact-ready:
-    timeout-minutes: 100
+    # 11 条非 Rust 腿 max-parallel=4，冷启动最坏三批 × 90min；等待脚本另限
+    # 600 × 30s = 300min，本 job 310min 只留收尾余量，不是常规耗时目标。
+    timeout-minutes: 310
     name: Published Artifact Ready
     runs-on: ubuntu-24.04
     permissions:
