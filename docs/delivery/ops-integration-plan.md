@@ -133,7 +133,7 @@ POST /api/v1/tasks/batch-exec
 | shell | `bash scripts/ops/nc-task.sh status` | `ok=true` 且 `detail.healthHttp` 为 2xx；503 判失败 |
 | shell | `bash scripts/ops/nc-task.sh acceptance`（需注入 `NEX_API_KEY`/`NEX_MERCHANT_ID`） | `ok=true` |
 | shell | `bash scripts/ops/nc-task.sh upgrade-drill <旧.jar> <新.jar>` | `ok=true` |
-| shell / service | `bash scripts/ops/nc-task.sh compose-up` / `compose-down`（需 Docker + `.env.prod`） | `ok=true`；docker 不可用时 `exitCode=2` + 明确原因 |
+| shell | `bash scripts/ops/nc-task.sh compose-up` / `compose-down`（需 Docker + `.env.prod`） | `ok=true`；docker 不可用时 `exitCode=2` + 明确原因 |
 
 **NexusChain 侧要提供给平台的东西**：交付包（`charts/`、`images.lock`、`jars/`、`scripts/`、`evidence/`）+
 `.env.prod.example`（19 个强制变量）+ 上面这份动作表。
