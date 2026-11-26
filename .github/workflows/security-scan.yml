@@ -462,6 +462,9 @@ jobs:
       - name: 单测 published-artifact-ready（CI 就绪 / 发布失败 / 超时）
         run: python3 scripts/security/test_wait_published_images.py
 
+      - name: 单测 DAST 同 SHA 制品复用（禁重建 / 依赖门 / 变异电池）
+        run: python3 scripts/security/test_dast_published_images.py
+
   # 2. Trivy Docker 镜像扫描（**我方构建产物 → PR 阻断路径**）
   # -----------------------------------------------------------------------------
   # 2026-11-06（E1）语义修正：本 job 原先 `if: github.event_name != 'pull_request'`，
@@ -1644,8 +1647,11 @@ jobs:
   # docs/dependency-check-update-policy.md 的 ⚠ 块）。
   # ============================================================
   dast-zap-baseline:
-    timeout-minutes: 25  # 观测峰值 7.7 min
-    if: github.event_name != 'pull_request'  # PR 不跑（需构建镜像/起栈，成本高）
+    # 不再重复冷编译 core/gateway：先等同 SHA 的 13 个镜像发布完成，再只拉取本 job
+    # 需要的两个制品。30min 只覆盖拉取、起栈和 ZAP，发布等待由上游独立计时。
+    timeout-minutes: 30
+    needs: [published-artifact-ready]
+    if: github.event_name != 'pull_request'  # PR 不跑（无同 SHA 已发布镜像）
     name: DAST - OWASP ZAP Baseline (gateway)
     runs-on: ubuntu-24.04
     permissions:
@@ -1658,6 +1664,14 @@ jobs:
       - name: Checkout 代码
         uses: actions/checkout@v5
 
+      - name: 复用当前提交已发布的 core/gateway 镜像
+        run: |
+          # published-artifact-ready 已确认同一 GITHUB_SHA 的 13 条发布腿全部成功；
+          # 此处单次拉取即可，失败就报错，不在 DAST 内重建或再次长时间等待。
+          SCAN_PULL_ATTEMPTS=1 SCAN_WAIT_SECONDS=0 bash scripts/security/prepare_scan_image.sh nexus-core
+          SCAN_PULL_ATTEMPTS=1 SCAN_WAIT_SECONDS=0 bash scripts/security/prepare_scan_image.sh nexus-gateway
+          docker image inspect nexus-core:scan nexus-gateway:scan > /dev/null
+
       - name: 启动依赖并诊断容器状态
         run: |
           # Docker Compose override: docker-compose.dast.yml 设置 SERVER_PORT=8080
@@ -1669,7 +1683,7 @@ jobs:
           # docker-compose.yml 中 gateway depends_on 未含 seata-server，
           # 需显式启动否则 gateway 报 can not connect to 127.0.0.1:8091
           $COMPOSE up -d seata-server 2>&1 || true
-          $COMPOSE up -d nexus-gateway 2>&1 || true
+          $COMPOSE up -d --no-build nexus-gateway 2>&1 || true
           sleep 10
 
           # 诊断：检查每个关键容器状态
