@@ -18,6 +18,8 @@
 #   acceptance    端到端验收（scripts/acceptance-e2e.sh）——需 NEX_API_KEY / NEX_MERCHANT_ID
 #   upgrade-drill 升级/回滚演练（scripts/upgrade-rollback-drill.sh）——需两个 jar
 #   env-check     prod env 强制变量清单自检（scripts/check-prod-env.sh）
+#   prod-prepare  生成 .env.prod、MPC mTLS 证书与生产 PartyConfig（不启动服务）
+#   prod-check    只读预检环境/JWT/证书/配置/compose 渲染（不启动服务）
 #   version       版本口径自检（scripts/check-version-consistency.sh）
 #   status        轻量状态：健康端点 + 版本 + 关键环境变量是否就位（不改任何状态）
 #
@@ -34,6 +36,14 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT" || exit 2
 
+if command -v python3 >/dev/null 2>&1; then
+  PY=python3
+elif command -v python >/dev/null 2>&1; then
+  PY=python
+else
+  PY=""
+fi
+
 ACTION="${1:-}"
 [ $# -gt 0 ] && shift
 
@@ -47,7 +57,7 @@ emit() { # emit <ok:true|false> <exitCode> <reason> [detail-json]
 }
 
 usage() {
-  sed -n '20,45p' "${BASH_SOURCE[0]}"
+  sed -n '16,32p' "${BASH_SOURCE[0]}"
   exit 2
 }
 
@@ -63,6 +73,23 @@ case "$ACTION" in
     rc="${PIPESTATUS[0]}"
     if [ "$rc" -eq 0 ]; then emit true 0 "PASS"; exit 0; fi
     emit false "$rc" "自检未通过（详见上方输出）"; exit 1
+    ;;
+
+  prod-prepare|prod-check)
+    case "$ACTION" in
+      prod-prepare) cmd=(bash scripts/prod-prepare.sh) ;;
+      prod-check)    cmd=(bash scripts/prod-check.sh) ;;
+    esac
+    echo "== nc-task: $ACTION =="
+    "${cmd[@]}" 2>&1 | tail -n 60
+    rc="${PIPESTATUS[0]}"
+    if [ "$rc" -eq 0 ]; then emit true 0 "PASS"; exit 0; fi
+    if [ "$rc" -eq 2 ]; then
+      emit false 2 "production preparation 前置不满足（详见上方输出）"
+      exit 2
+    fi
+    emit false 1 "production preparation 未通过（详见上方输出）"
+    exit 1
     ;;
 
   acceptance)
@@ -90,14 +117,37 @@ case "$ACTION" in
     ;;
 
   compose-up|compose-down)
+    if [ "$ACTION" = "compose-up" ]; then
+      echo "== nc-task: compose-up 资源门禁 =="
+      if [ -z "$PY" ]; then
+        emit false 2 "缺 python3/python，无法执行起栈资源门禁"
+        exit 2
+      fi
+      "$PY" scripts/start_gate.py --json 2>&1 | tail -n 5
+      rc="${PIPESTATUS[0]}"
+      if [ "$rc" -ne 0 ]; then
+        emit false "$rc" "资源门禁未满足（内存/Docker 条件未同时具备），拒绝起栈"
+        exit "$rc"
+      fi
+    fi
     if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
       emit false 2 "docker 不可用（未安装或 daemon 未起）⇒ 平台侧 svc 任务无法执行容器编排"
       exit 2
     fi
     env_file="${NEX_ENV_FILE:-$ROOT/.env.prod}"
     if [ ! -f "$env_file" ]; then
-      emit false 2 "缺 env 文件：$env_file（复制 .env.prod.example 并填值）"
+      emit false 2 "缺 env 文件；先执行 nc-task.sh prod-prepare（不会启动服务）"
       exit 2
+    fi
+    if [ "$ACTION" = "compose-up" ]; then
+      echo "== nc-task: compose-up preflight =="
+      NEX_ENV_FILE="$env_file" bash scripts/prod-check.sh 2>&1 | tail -n 60
+      rc="${PIPESTATUS[0]}"
+      if [ "$rc" -ne 0 ]; then
+        code=1; [ "$rc" -eq 2 ] && code=2
+        emit false "$code" "production preparation 预检未通过，拒绝启动"
+        exit "$code"
+      fi
     fi
     sub="up"; [ "$ACTION" = "compose-down" ] && sub="down"
     compose_args=(compose -f "$ROOT/docker-compose.prod.yml" --env-file "$env_file" "$sub")

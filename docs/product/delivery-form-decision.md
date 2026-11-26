@@ -43,7 +43,7 @@
 | # | 平台侧需具备 | NexusChain 侧对应物 |
 |---|---|---|
 | 1 | 按 `images.lock` 导入/拉取镜像（离线 tar 或镜像仓库） | `images.lock`（19 条，含来源路径） |
-| 2 | 安装 `charts/nexus-chain-<ver>.tgz` 并注入参数 | chart 包 + `dependencies.lock` + `.env.prod.example`（19 个强制变量） |
+| 2 | 安装 `charts/nexus-chain-<ver>.tgz` 并注入参数 | chart 包 + `dependencies.lock` + `.env.prod.example`（22 个强制变量） |
 | 3 | 探活 | `GET /actuator/health`（HTTP 503 只证明进程可达；健康通过必须 HTTP 2xx。sandbox 的 503 通常是下游指标缺失） |
 | 4 | 指标采集 | `GET /actuator/prometheus`（**Bearer token**；服务端未配置 token 时 503，缺失或错误 Bearer token 时 401） |
 | 5 | 日志采集 | stdout（应用日志全走 stdout） |

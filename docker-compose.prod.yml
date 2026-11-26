@@ -163,12 +163,13 @@ services:
       - NEX_MPC_ENGINE_ENDPOINTS=mpc-engine-0:50051,mpc-engine-1:50051,mpc-engine-2:50051
       # mTLS 证书路径（生产通过 Secret / 挂载卷注入）
       - NEX_MPC_ENGINE_TLS_TRUST_CERT=/etc/mpc/certs/ca/CA.pem
-      - NEX_MPC_ENGINE_TLS_CLIENT_CERT=/etc/mpc/certs/node-A/cert.pem
-      - NEX_MPC_ENGINE_TLS_CLIENT_KEY=/etc/mpc/certs/node-A/key.pem
+      # 签名服务使用独立客户端身份，避免与 UID 1000 的 MPC 节点私钥互相授权。
+      - NEX_MPC_ENGINE_TLS_CLIENT_CERT=/etc/mpc/certs/client-signing/cert.pem
+      - NEX_MPC_ENGINE_TLS_CLIENT_KEY=/etc/mpc/certs/client-signing/key.pem
       # === 2026-10-08：GG20 退役后本栈同为全分布式 CGGMP21（与 helm prod 同口径）===
       # 前置：三引擎以 PartyConfig 装配（scripts/gen-mpc-engine-configs.sh
-      # --layout compose-prod 生成 ./mpc-certs/config-prod/nodeN.json，其中含
-      # 份额落盘密钥）+ 每钱包跑过 DKG 仪式（scripts/mpc-wallet-ceremony.py）。
+      # --layout compose-prod 生成 ./mpc-certs/config-prod/nodeN.json；主钥仅从
+      # NEXUS_MPC_STORAGE_KEY 读取，配置不含明文密钥）+ 每钱包跑过 DKG 仪式。
       - NEX_MPC_ENGINE_DISTRIBUTED=true
       - NEX_MPC_ENGINE_CGGMP_ENABLED=true
       - NEX_MPC_ENGINE_CGGMP_SIGNERS=0,1
@@ -181,7 +182,9 @@ services:
       # 2026-10-18 补：与 gateway 共享（跨服务 JWT 验签）。
       - JWT_SECRET=${JWT_SECRET:?prod 必需：与 gateway 共享（跨服务 JWT 验签）}
     volumes:
-      - mpc-certs:/etc/mpc/certs:ro
+      - ./mpc-certs/ca/CA.pem:/etc/mpc/certs/ca/CA.pem:ro
+      - ./mpc-certs/client-signing/cert.pem:/etc/mpc/certs/client-signing/cert.pem:ro
+      - ./mpc-certs/client-signing/key.pem:/etc/mpc/certs/client-signing/key.pem:ro
     depends_on:
       nexus-core:
         condition: service_healthy
@@ -378,6 +381,7 @@ services:
       - MPC_PARTY_ID=party-0
       - MPC_PEERS=party-1@mpc-engine-1:50051,party-2@mpc-engine-2:50051
       - MPC_STORAGE_KEY=${MPC_STORAGE_KEY:?prod 必需：禁止占位默认值}
+      - NEXUS_MPC_STORAGE_KEY=${MPC_STORAGE_KEY:?prod 必需：PartyConfig env 主钥来源}
       - MPC_AUTH_TOKEN=${MPC_AUTH_TOKEN:?prod 必需：禁止占位默认值}
       - MPC_REQUIRE_AUTH=true
       # 2026-10-08：PartyConfig 为唯一装配源（真 mTLS + 身份/peers）；
@@ -386,7 +390,9 @@ services:
       - MPC_ENGINE_SESSION_DIR=/app/data/sessions
     volumes:
       - ./mpc-certs/config-prod/node0.json:/app/config/node.json:ro
-      - mpc-certs:/etc/mpc/certs:ro
+      - ./mpc-certs/ca/CA.pem:/etc/mpc/certs/ca/CA.pem:ro
+      - ./mpc-certs/node-A/cert.pem:/etc/mpc/certs/node-A/cert.pem:ro
+      - ./mpc-certs/node-A/key.pem:/etc/mpc/certs/node-A/key.pem:ro
       - mpc-engine-0-data:/app/data
     depends_on:
       nexus-core:
@@ -424,6 +430,7 @@ services:
       - MPC_PARTY_ID=party-1
       - MPC_PEERS=party-0@mpc-engine-0:50051,party-2@mpc-engine-2:50051
       - MPC_STORAGE_KEY=${MPC_STORAGE_KEY:?prod 必需：禁止占位默认值}
+      - NEXUS_MPC_STORAGE_KEY=${MPC_STORAGE_KEY:?prod 必需：PartyConfig env 主钥来源}
       - MPC_AUTH_TOKEN=${MPC_AUTH_TOKEN:?prod 必需：禁止占位默认值}
       - MPC_REQUIRE_AUTH=true
       # 2026-10-08：PartyConfig 为唯一装配源（真 mTLS + 身份/peers）；
@@ -432,7 +439,9 @@ services:
       - MPC_ENGINE_SESSION_DIR=/app/data/sessions
     volumes:
       - ./mpc-certs/config-prod/node1.json:/app/config/node.json:ro
-      - mpc-certs:/etc/mpc/certs:ro
+      - ./mpc-certs/ca/CA.pem:/etc/mpc/certs/ca/CA.pem:ro
+      - ./mpc-certs/node-B/cert.pem:/etc/mpc/certs/node-B/cert.pem:ro
+      - ./mpc-certs/node-B/key.pem:/etc/mpc/certs/node-B/key.pem:ro
       - mpc-engine-1-data:/app/data
     depends_on:
       nexus-core:
@@ -466,6 +475,7 @@ services:
       - MPC_PARTY_ID=party-2
       - MPC_PEERS=party-0@mpc-engine-0:50051,party-1@mpc-engine-1:50051
       - MPC_STORAGE_KEY=${MPC_STORAGE_KEY:?prod 必需：禁止占位默认值}
+      - NEXUS_MPC_STORAGE_KEY=${MPC_STORAGE_KEY:?prod 必需：PartyConfig env 主钥来源}
       - MPC_AUTH_TOKEN=${MPC_AUTH_TOKEN:?prod 必需：禁止占位默认值}
       - MPC_REQUIRE_AUTH=true
       # 2026-10-08：PartyConfig 为唯一装配源（真 mTLS + 身份/peers）；
@@ -474,7 +484,9 @@ services:
       - MPC_ENGINE_SESSION_DIR=/app/data/sessions
     volumes:
       - ./mpc-certs/config-prod/node2.json:/app/config/node.json:ro
-      - mpc-certs:/etc/mpc/certs:ro
+      - ./mpc-certs/ca/CA.pem:/etc/mpc/certs/ca/CA.pem:ro
+      - ./mpc-certs/node-C/cert.pem:/etc/mpc/certs/node-C/cert.pem:ro
+      - ./mpc-certs/node-C/key.pem:/etc/mpc/certs/node-C/key.pem:ro
       - mpc-engine-2-data:/app/data
     depends_on:
       nexus-core:
@@ -850,11 +862,10 @@ volumes:
   zk-groth16-setup:
   prometheus-data:
   grafana-data:
-  # P0-1 Task 239: MPC 3 节点独立数据卷 + 共享证书卷
+  # P0-1 Task 239: MPC 3 节点独立数据卷；证书由宿主按最小权限 bind mount 注入
   mpc-engine-0-data:
   mpc-engine-1-data:
   mpc-engine-2-data:
-  mpc-certs:
 
 secrets:
   nexus-metrics-token:

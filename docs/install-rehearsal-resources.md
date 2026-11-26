@@ -66,15 +66,17 @@
 
 1. 建库：`docker start nex-mysql-test`（本会话建的预演实例）；
    或对新实例执行 `deploy/config/init-mysql-dbs.sh`（五库 + 最小权限账号）。
-2. compose 全栈：`docker compose -f docker-compose.prod.yml --env-file .env.prod up -d`
-   （需 17 个必填变量，清单见 `.env.prod.example`）。
-3. 判据（缺一不可）：
+2. 先 `bash scripts/prod-prepare.sh` 生成 22 个必填变量与 MPC 证书/配置，再
+   `bash scripts/prod-check.sh` 只读预检；两者都不启动服务。已有合法 `.env.prod` 不覆盖。
+3. compose 全栈：`bash scripts/ops/nc-task.sh compose-up`
+   （清单见 `.env.prod.example`；POSIX 主机须让 UID 1000 可读 MPC 私钥/生产配置、UID 65532 可读签名客户端私钥）。
+4. 判据（缺一不可）：
    - 各服务 `/actuator/health`（Java）与 `/health`（explorer）= **UP**
    - gateway Flyway 迁到 **V97**、wallet 迁到 **V4**（`flyway_schema_history` 核对）
    - `GET /api/v1/compliance/sanction-list/imports` 可返回台账（v2.72.0 新增）
    - explorer `/`、`/crosschain`、`/contracts` 三个深链 200
-4. MPC（L2+）：`bash scripts/gen-mpc-engine-configs.sh --layout compose-prod`
-   → `python scripts/mpc-wallet-ceremony.py --sign-probe`（仪式 + 验签探针）
-5. K8s（L3）：`kind create cluster` → `helm install`（`deploy/helm/charts/*`）
+5. MPC（L2+）：仪式与验签探针 `python scripts/mpc-wallet-ceremony.py --sign-probe`
+   （生产 PartyConfig 已由上一步生成，主钥仅经 `NEXUS_MPC_STORAGE_KEY` 注入）。
+6. K8s（L3）：`kind create cluster` → `helm install`（`deploy/helm/charts/*`）
    → SealedSecret 生产密钥路径（参考 `deploy/k8s/SECRET-MANAGEMENT.md`）
-6. 收尾：把每一步的**判据输出**贴进预演报告（安装预演的交付物是"证据"，不是"跑过了"）。
+7. 收尾：把每一步的**判据输出**贴进预演报告（安装预演的交付物是"证据"，不是"跑过了"）。

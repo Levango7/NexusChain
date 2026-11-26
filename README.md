@@ -60,6 +60,22 @@ docker-compose up -d
 
 启动网关 + 链节点 + 签名服务 + 钱包服务 + 桥，以及 Nacos / Sentinel / Seata / Zipkin 基础设施。
 
+### 生产 Compose 准备（不启动服务）
+
+```bash
+bash scripts/prod-prepare.sh   # 生成 .env.prod、MPC mTLS 证书与生产 PartyConfig
+bash scripts/prod-check.sh     # 只读预检；Docker 可用时额外渲染 compose config
+```
+
+- 覆盖 `docker-compose.prod.yml` 全部 **22 个强制变量**；已有合法 `.env.prod` 不覆盖。
+- `NEXUS_RPC_TOKEN` 为 core 可验的 HS256 JWT，默认有效期 90 天；到期前 24 小时预检开始拒绝。
+- 生产 PartyConfig 不保存主钥明文，引擎从 `NEXUS_MPC_STORAGE_KEY` 读取；CA 私钥不挂载。
+- 三个 MPC 节点使用 `node-A/B/C`，签名服务使用独立 `client-signing` 证书，不共用节点私钥。
+- POSIX 主机须让 MPC 容器 UID 1000 可读节点私钥和生产配置、让签名服务 UID 65532 可读独立客户端私钥，预检会核验属主；
+  若镜像运行 UID 改版，可用 `NEXUS_MPC_RUNTIME_UID` / `NEXUS_SIGNING_RUNTIME_UID` 覆盖预检预期值（默认 1000 / 65532）。
+  Windows 的 mode 位不能证明 ACL，生产部署应在 POSIX 主机复核。
+- 纳管入口为 `bash scripts/ops/nc-task.sh prod-prepare|prod-check`；`compose-up` 先过起栈资源门禁（可用内存≥12GB 且 Docker 可用，任一不满足即拒绝起栈），再跑 production 预检，预检失败即拒绝启动。
+
 ### 本地联调（容器化 Postgres + 原生 core）
 
 core 的持久化层绑定 Postgres 方言，真机联调的正确姿势是 **Docker 起 Postgres、core 走 local profile 原生运行**。一键脚本会自检 Docker 引擎（未启动时自动拉起 Docker Desktop）并幂等保证 `127.0.0.1:55432` 上有健康的 PG（已有健康容器则复用，不重复创建）：

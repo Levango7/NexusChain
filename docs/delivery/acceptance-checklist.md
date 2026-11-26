@@ -32,7 +32,7 @@ bash scripts/doctor.sh          # 体检汇总；--json 额外产出机器可读
 | ID | 验收项 | 命令 | 期望 | 2026-11-11 实测 | 招标条款 |
 |---|---|---|---|---|---|
 | A-01 | 版本口径一致（build.gradle / version.properties / README / CHANGELOG 四处） | `bash scripts/check-version-consistency.sh` | rc=0 | **PASS** | `[待确认]` |
-| A-02 | prod env 强制变量清单与 compose 一致 | `bash scripts/check-prod-env.sh` | rc=0，输出 `OK: .env.prod.example 覆盖全部 19 个强制变量` | **PASS** | `[待确认]` |
+| A-02 | prod env 强制变量清单与 compose 一致 | `bash scripts/check-prod-env.sh` | rc=0，输出 `OK: .env.prod.example 覆盖全部 22 个强制变量` | **PASS** | `[待确认]` |
 | A-03 | 许可头与许可声明一致（LGPL 分模块声明） | `bash scripts/check-license-headers.sh` | rc=0 | **PASS** | `[待确认]` |
 | A-04 | 代码卫生棘轮（无新增违规） | `python scripts/check-code-hygiene.py` | rc=0 | **PASS** | `[待确认]` |
 | A-05 | 打包一致性（产物/版本口径） | `python scripts/check-packaging-consistency.py` | rc=0 | **PASS** | `[待确认]` |
