@@ -17,27 +17,14 @@ RUN cargo build --release
 RUN mkdir -p -m 0700 /src/runtime-dirs/setup
 
 # === 运行阶段 ===
-# 2026-11-02：debian:trixie-slim → gcr.io/distroless/cc-debian13。
-# 动机与兼容性取证见 mpc-engine/Dockerfile 同批注释（2026-11-02 对 GHCR 现网
-# 镜像内二进制 ldd：NEEDED 仅 libgcc_s.so.1 / libm.so.6 / libc.so.6 +
-# ld-linux，cc-debian13 全覆盖）。trixie-slim 的 apt/util-linux/libsqlite3-0
-# 等整层 OS 包随之消失，不再逐条豁免 OS CVE。
-# 2026-11-02（其后）：cc-debian13 → cc-debian13:nonroot（UID/GID 65532）。
-# 降权唯一的硬约束是 /setup 持久化卷：旧镜像无 USER（root），既有命名卷里的
-# <fingerprint>/ 目录是 0700 root，直接切 nonroot 会让升级后的进程读不到 pk.bin。
-# 故配套一次**幂等属主迁移**：两个 compose 文件里的 zk-groth16-setup-init
-# （busybox:1.36.1-musl，`chown -R 65532:65532 /setup`），zk 以
-# service_completed_successfully 等它成功退出才启动。全新部署不依赖该迁移：
-# 镜像内 /setup 已归 65532，命名卷首次挂载会复制镜像内属主。
-# GROTH16_EXTERNAL_SETUP_DIR 挂载（仪式产出，只读）需确保对 65532 可读。
-# 固定 digest（2026-11-06 首钉，取自 master run 42176885852 的 BuildKit 解析）；
-# 2026-11-11 实测上游重建 bump：08476c24…→cc66d222…（m.daocloud.io 与 gcr.io 同 tag
-# 解析、digest 逐字比对；对应 config/trivy-baseline.json 两条 pending_base_rebuild
-# 条目复核协议之 B 项——cc:nonroot 已重建，java17:nonroot 与 cc:latest 未重建）。
-# 运行阶段 cc-debian13:nonroot 与构建阶段 rust:1.85-slim 必须成对升级：glibc 版本
-# 只允许「运行镜像 >= 构建镜像」，单独升运行镜像勿降级构建链，单独升构建链勿降级运行镜像，
-# 否则运行时报 GLIBC_x.y not found。
-FROM gcr.io/distroless/cc-debian13:nonroot@sha256:cc66d222f0a7ec996b78a99fe76a969bc80b539a5016ad866c14d1949bc6d0ab
+# 2026-11-25：cc-debian13 → static-debian13:nonroot + 显式最小动态运行集。
+# 现网二进制 NEEDED 仅 libgcc_s.so.1 / libm.so.6 / libc.so.6 + ld-linux；
+# 加载器与三项动态库从同一 builder 复制，glibc 版本与编译环境严格一致。
+# UID/GID 65532 与 /setup 属主约定不变；未使用的 OpenSSL/libzstd 不再进入运行面。
+FROM gcr.io/distroless/static-debian13:nonroot@sha256:8ce6dd87e9823c5b48dcfb2c8604714ccb351ce59607327bcc4957448da279b5
+ENV LD_LIBRARY_PATH=/runtime-libs
+COPY --from=build /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 /lib64/ld-linux-x86-64.so.2
+COPY --from=build /usr/lib/x86_64-linux-gnu/libc.so.6 /usr/lib/x86_64-linux-gnu/libm.so.6 /usr/lib/x86_64-linux-gnu/libgcc_s.so.1 /runtime-libs/
 
 COPY --from=build /src/zk-groth16-service/target/release/zk-groth16-service /usr/local/bin/zk-groth16-service
 # busybox 静态二进制（~1.2MB，无动态依赖）：仅用于 compose healthcheck（nc -z）。
