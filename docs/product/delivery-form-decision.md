@@ -2,7 +2,7 @@
 
 > **性质**：工程侧决策备忘，供编排者/商务在一句话内拍板。工程默认已定并落地；
 > 商务侧确认只影响「是否同时推 B」，**不影响已交付能力**。
-> **日期**：2026-11-12 ｜ **决策人**：nex（工程默认）｜ **待确认人**：orchestrator / 商务
+> **日期**：2026-11-12 ｜ **最近更新**：2026-11-26（纳入 2026-11-21 首轮联调证据） ｜ **决策人**：nex（工程默认）｜ **待确认人**：orchestrator / 商务
 
 ---
 
@@ -15,7 +15,7 @@
 - 同时提供 B 需要的**全部输入**：helm chart、`images.lock`、`scripts/`（含纳管入口与 JSON 回执）、
   探针（`/actuator/health`）、指标（`/actuator/prometheus`，Bearer token）、stdout 日志。
 
-⇒ **A 已就绪，B 只差平台侧消费**；两个形态共用同一份交付物，不需要重做。
+⇒ **A 已就绪；B 的首轮 shell 任务链路已实跑**。C2 结构化回执、J2 应用指标与 T7/J4 仍未收口；两个形态共用同一份交付物，不需要重做。
 
 ## 2. 为什么不把 B 定成默认
 
@@ -44,8 +44,8 @@
 |---|---|---|
 | 1 | 按 `images.lock` 导入/拉取镜像（离线 tar 或镜像仓库） | `images.lock`（19 条，含来源路径） |
 | 2 | 安装 `charts/nexus-chain-<ver>.tgz` 并注入参数 | chart 包 + `dependencies.lock` + `.env.prod.example`（19 个强制变量） |
-| 3 | 探活 | `GET /actuator/health`（sandbox 返回 503 是「下游指标缺失」，不是进程挂） |
-| 4 | 指标采集 | `GET /actuator/prometheus`（**Bearer token**，无/错 token 一律 401） |
+| 3 | 探活 | `GET /actuator/health`（HTTP 503 只证明进程可达；健康通过必须 HTTP 2xx。sandbox 的 503 通常是下游指标缺失） |
+| 4 | 指标采集 | `GET /actuator/prometheus`（**Bearer token**；服务端未配置 token 时 503，缺失或错误 Bearer token 时 401） |
 | 5 | 日志采集 | stdout（应用日志全走 stdout） |
 | 6 | 任务下发（安装/体检/验收/升级/回滚） | `bash scripts/ops/nc-task.sh <action>`，回执=单行 JSON，退出码 0/1/2 |
 
@@ -63,16 +63,16 @@ B 是**多一条路**，不是**换一条路**。
 |---|---|
 | **Q1**（客户是否已有/指定运维平台） | **是** —— 平台 = OpsMesh（同组织自建），角色**二分钉死**：OpsMesh 是**纳管控制台**（形态 B 的平台侧），**非运行时基座**（链/网关/清结算/签名/钱包/桥均由 NexusChain 自带）。本答案按 §3 原文（控制台义）作答；工程默认 A 不受影响 |
 | **Q2**（客户环境是否允许导入第三方镜像） | **双出** —— 出包方式改为双出：`--with-images --with-jars` 同趟打包（`scripts/build-delivery-bundle.sh` 两 flag 独立；`docs/delivery/offline-install.md` 已有同趟先例）。**宣称只覆盖已实测路径**：jar 裸进程整链本机 PASS 6 / FAIL 0 / SKIP 0；**镜像 tar 随包但未入整链实测**（缺 Docker 环境，如实不宣称） |
-| **Q3**（交付验收方式） | **联调做** ——「暂缓」转「重启（受限）」。前置两项，**均不代办**：① OpsMesh 线内 owner 指定（对方名册 kilo/workbuddy/qoder/ZCode/trae，**由用户指派**；nex 不在册，不自投其名册线）；② 可跑环境（Docker 可用 + ≥8GB 可用内存 + 镜像源或离线包；**nex 本机 Docker daemon 未起、可用内存 <1GB，如实**）。联调资产就绪：`scripts/ops/nc-task.sh`（#670）+ 联调方案 §8.1（#666/#674） |
+| **Q3**（交付验收方式） | **联调做** ——「暂缓」转「重启（受限）」。原前置为①用户指派 OpsMesh 线内 owner；②可跑环境（Docker + ≥8GB 可用内存 + 镜像源或离线包）。**2026-11-21 执行更新**：qoder CN 已用本地 OpsMesh controlplane + Windows agent 完成 T1–T6，证据见板 `20261121-0145-qoder-cn-joint-test-t1-t3-platform-driven`；历史 T4 的 `503 + ok=true` 按当前判据只证明可达，T7/J2/J4 未验证。 |
 | 工程默认 | **A 不变**（双出只是打包组合，切换成本 ≈ 0） |
-| 我方剩余力气 | ① 其余 5 个模块 jar 补齐 + **双出重出交付包**；② SBOM/CVE 报告随包；③ 断网机整链复测；④ **镜像 tar 整链实测**（并入联调或下次断网机复测） |
+| 我方剩余力气 | ① 其余 5 个模块 jar 补齐 + **双出重出交付包**；② SBOM/CVE 报告随包；③ 断网机整链复测；④ **镜像 tar 整链实测**（并入联调或下次断网机复测）；⑤ 联调剩余 T7/J2/J4（首轮 T1–T6 已跑） |
 | 跨仓纪律 | 不动对方仓、不自投其名册线；联调由编排者协调、nex 按指派执行 |
 
-> 未宣称联调已跑、未宣称镜像 tar 路径已验证、未宣称 OpsMesh owner 已指定——补齐前按"未实测"引用。
+> 首轮 T1–T6 已有板帖与可核对的 task ID / agent 事件；未宣称 T7、J2、J4 已通过，未宣称镜像 tar 路径已验证，未宣称后续复跑 owner 已指定——补齐前按“未验证”引用。
 
 ## 8. 边界
 
 - 本文只定**工程默认**与**可选项**，不代商务拍板、不代编排者指派 OpsMesh 线内 owner（Q3 联调前置 ① 仍由用户指定）；
 - 文中所有事实均可复现（见 `docs/delivery/offline-install.md` §2.1、`scripts/ops/offline-drill.sh`、
   `docs/delivery/acceptance-checklist.md` A-15/A-16）；
-- 未宣称真断网机或 compose/helm 安装路径已验证（无 Docker、未断网）。
+- 未宣称真断网机或 compose/helm 安装路径已验证（本轮未起 Docker、未断网）。

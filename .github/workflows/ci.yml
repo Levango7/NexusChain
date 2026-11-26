@@ -228,6 +228,9 @@ jobs:
           python scripts/security/test_trivy_baseline_gate.py
           python scripts/security/test_trivy_db_consistency.py
 
+      - name: 运维任务入口回归测试（健康判定与 compose 参数）
+        run: python scripts/ops/test_nc_task.py
+
   # ============================================================
   # Explorer 前端门禁（2026-09-16 审查新增）
   # ------------------------------------------------------------
