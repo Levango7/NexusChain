@@ -45,6 +45,7 @@ class ProdPrepareTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
+        (ROOT / "build").mkdir(parents=True, exist_ok=True)
         cls.temp = tempfile.TemporaryDirectory(prefix="nexus-prod-prepare-", dir=ROOT / "build")
         cls.work = Path(cls.temp.name)
         cls.env_file = cls.work / ".env.prod"

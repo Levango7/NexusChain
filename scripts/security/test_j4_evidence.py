@@ -26,6 +26,7 @@ def abs_posix_path(path: Path) -> str:
 
 class J4EvidenceTests(unittest.TestCase):
     def setUp(self) -> None:
+        (ROOT / "build").mkdir(parents=True, exist_ok=True)
         self.tmp = tempfile.TemporaryDirectory(prefix="nexus-j4-ev-", dir=ROOT / "build")
         self.dir = Path(self.tmp.name)
 

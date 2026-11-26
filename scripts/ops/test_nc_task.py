@@ -36,6 +36,7 @@ class PreparedEnvironment:
     """合法生产环境夹具：env + MPC 证书 + 三方拓扑配置。"""
 
     def __init__(self) -> None:
+        (ROOT / "build").mkdir(parents=True, exist_ok=True)
         self.temp = tempfile.TemporaryDirectory(prefix="nexus-nc-task-", dir=ROOT / "build")
         self.work = Path(self.temp.name)
         self.env_file = self.work / ".env.prod"
