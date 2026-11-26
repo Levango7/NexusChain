@@ -520,7 +520,9 @@ jobs:
     # 共享库方案：prep 失败 → 本 job 整片 skipped；聚合 job 会把 skipped 判红
     # 并列出被跳过的腿，因此 skipped 不会被当成 success。
     needs: [image-scan-scope, trivy-db-prep, published-artifact-ready]
-    if: needs.image-scan-scope.outputs.count != '0' && needs.trivy-db-prep.result == 'success' && (needs.published-artifact-ready.result == 'success' || needs.published-artifact-ready.result == 'skipped')
+    # PR 的 published-artifact-ready 刻意 skipped；没有 always() 时 needs 跳过传播
+    # 会先于下面的结果判断跳过整个矩阵（#793 实测：scope=13 仍只有占位 job）。
+    if: always() && needs.image-scan-scope.outputs.count != '0' && needs.trivy-db-prep.result == 'success' && (needs.published-artifact-ready.result == 'success' || needs.published-artifact-ready.result == 'skipped')
     strategy:
       fail-fast: false
       matrix:
@@ -812,11 +814,16 @@ jobs:
             exit 1
           fi
 
-          # ② 无相关改动 → 矩阵整体跳过，本 job **必须**给出 success。
-          #    必需检查若变 skipped/missing，所有不涉及镜像的 PR 都会被卡成 pending。
-          if [ "$SCAN_RESULT" = "skipped" ]; then
+          # ② 只有「零模块 + skipped」才是合法的无相关改动。
+          #    #793 实测 scope=13 时矩阵仍被 needs 跳过传播压成占位 job；
+          #    当时这里不看 COUNT 直接 exit 0，形成假绿，必须显式 fail-closed。
+          if [ "$SCAN_RESULT" = "skipped" ] && [ "$SCOPE_COUNT" = "0" ]; then
             echo "::notice title=镜像基线门禁（no relevant changes）::本次 PR 未命中任何镜像输入（$SCOPE_REASON），跳过构建与扫描；按通过处理"
             exit 0
+          fi
+          if [ "$SCAN_RESULT" = "skipped" ]; then
+            echo "::error title=非零镜像范围未执行任何扫描::image-scan-scope 判定 $SCOPE_COUNT 腿，但 trivy-docker-scan=skipped；这是矩阵/needs 接线异常，不是无相关改动，禁止放行"
+            exit 1
           fi
 
           # ③ 有腿执行则沿用 E1 口径：任一腿非 success 即红。

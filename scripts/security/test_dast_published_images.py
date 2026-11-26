@@ -138,5 +138,44 @@ class DastPublishedImagesTest(unittest.TestCase):
                     self.assert_ci_contract(workflow.replace(old, new))
 
 
+    @staticmethod
+    def assert_pr_image_gate_contract(workflow: str) -> None:
+        scan = workflow.split("  trivy-docker-scan:\n", 1)[1].split(
+            "\n  trivy-image-baseline-gate:", 1
+        )[0]
+        if "if: always() && needs.image-scan-scope.outputs.count != '0'" not in scan:
+            raise AssertionError("a skipped publication-ready job can still suppress the PR matrix")
+        gate = workflow.split("  trivy-image-baseline-gate:\n", 1)[1].split(
+            "\n  trivy-db-consistency:", 1
+        )[0]
+        if 'if [ "$SCAN_RESULT" = "skipped" ] && [ "$SCOPE_COUNT" = "0" ]; then' not in gate:
+            raise AssertionError("only a zero-module scope may treat a skipped matrix as success")
+        if 'if [ "$SCAN_RESULT" = "skipped" ]; then' not in gate:
+            raise AssertionError("a skipped non-empty matrix must have an explicit failure branch")
+        if "非零镜像范围未执行任何扫描" not in gate:
+            raise AssertionError("the non-empty skipped-matrix failure must name the defect")
+
+    def test_pr_image_scan_gate_contract(self) -> None:
+        self.assert_pr_image_gate_contract(WORKFLOW.read_text(encoding="utf-8"))
+
+    def test_pr_image_scan_gate_mutation_battery(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        for old, new in (
+            (
+                "if: always() && needs.image-scan-scope.outputs.count != '0'",
+                "if: needs.image-scan-scope.outputs.count != '0'",
+            ),
+            (
+                'if [ "$SCAN_RESULT" = "skipped" ] && [ "$SCOPE_COUNT" = "0" ]; then',
+                'if [ "$SCAN_RESULT" = "skipped" ]; then',
+            ),
+            ("非零镜像范围未执行任何扫描", "镜像基线门禁"),
+        ):
+            with self.subTest(mutation=old):
+                self.assertTrue(old in workflow, f"mutation anchor is absent: {old}")
+                with self.assertRaises(AssertionError):
+                    self.assert_pr_image_gate_contract(workflow.replace(old, new))
+
+
 if __name__ == "__main__":
     unittest.main()
