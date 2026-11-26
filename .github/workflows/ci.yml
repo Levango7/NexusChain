@@ -1405,8 +1405,10 @@ jobs:
     # 残缺镜像集前进（fail-fast: false 已保证并行互不阻断；单个失败整体红）。
     # GHCR 组织包创建权限此前已修（packages: write + 镜像 tag 小写化），
     # 剩余失败属真实构建问题，应阻断而非静默。
-    # Rust 模块多阶段构建耗时较长，通过 matrix.include 放宽至 25min
-    timeout-minutes: ${{ matrix.timeout-minutes || 20 }}
+    # Java 冷 Gradle 配置实测可超过 18min，wallet 曾在 20min 整被取消且后续重试未执行；
+    # 默认 60min 是有界上限，不把一次冷启动抖动误报为三次实际构建失败。
+    # Rust 模块多阶段构建通过 matrix.include 单独设上限。
+    timeout-minutes: ${{ matrix.timeout-minutes || 60 }}
     env:
       REGISTRY: ghcr.io
       # IMAGE_PREFIX 已移除：github.repository 含大写（Levango7/NexusChain），
@@ -1483,7 +1485,7 @@ jobs:
       # GHCR/ECR 中转。仓库当前 secrets 只有 NVD_API_KEY，故本 PR 不引入
       # "凭据存在才启用"的空跑步骤（CI 里永不执行的断言等于没有断言）。
       #
-      # 语义不变量：三条 attempt 全失败才判红（下方裁决步骤），**不挂
+      # 语义不变量：至少一条 attempt 成功才判绿（下方裁决步骤），**不挂
       # continue-on-error** —— 该 job 在 B2 审计时已特意摘掉 continue-on-error，
       # 就是为了不让 master 带着残缺镜像集前进（见上方注释）。三步 `with:`
       # 必须逐字一致，改动时三处一起改。
@@ -1537,9 +1539,10 @@ jobs:
             ${{ env.REGISTRY }}/${{ steps.img_prefix.outputs.prefix }}/${{ matrix.module }}:latest
             ${{ env.REGISTRY }}/${{ steps.img_prefix.outputs.prefix }}/${{ matrix.module }}:${{ github.sha }}
 
-      # 裁决：三个 outcome 里有一个 success 才算成；全败必须判红。
+      # 裁决：三个 outcome 里有一个 success 才算成；其余情况必须判红。
+      # cancelled/skipped 不等于实际执行过一次失败重试，错误文案必须保留这个区别。
       # 用 outcome（真实结果）而不是 conclusion（被 continue-on-error 洗成 success）。
-      - name: 裁决（三次皆失败才红）
+      - name: 裁决（至少一次成功才绿）
         if: always()
         run: |
           ok=0
@@ -1550,5 +1553,5 @@ jobs:
             echo "镜像构建推送成功（attempt1=${{ steps.push1.outcome }} attempt2=${{ steps.push2.outcome }} attempt3=${{ steps.push3.outcome }}）"
             exit 0
           fi
-          echo "::error::docker build/push 连续 3 次失败（attempt1=${{ steps.push1.outcome }} attempt2=${{ steps.push2.outcome }} attempt3=${{ steps.push3.outcome }}）。若三次都是 429 Too Many Requests，则属 Docker Hub 匿名配额耗尽而非代码问题 —— 处置：给 docker.io 配访问凭据（认证额度按账号计），或把 busybox/gradle/rust/debian/node 等基础镜像改经 GHCR/ECR 中转。"
+          echo "::error::docker build/push 未成功（attempt1=${{ steps.push1.outcome }} attempt2=${{ steps.push2.outcome }} attempt3=${{ steps.push3.outcome }}；cancelled/skipped 不代表实际执行过三次重试）。若实际失败均为 429 Too Many Requests，则属 Docker Hub 匿名配额耗尽而非代码问题 —— 处置：给 docker.io 配访问凭据（认证额度按账号计），或把 busybox/gradle/rust/debian/node 等基础镜像改经 GHCR/ECR 中转。"
           exit 1

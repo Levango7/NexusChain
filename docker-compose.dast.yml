@@ -8,11 +8,15 @@
 #     any remote config.
 #
 # Usage in CI:
-#   docker compose -f docker-compose.yml -f docker-compose.dast.yml up -d nexus-gateway
+#   docker compose -f docker-compose.yml -f docker-compose.dast.yml up -d --no-build nexus-gateway
+#   （先运行 prepare_scan_image.sh 准备 nexus-core:scan / nexus-gateway:scan）
 #
 # This file is NOT used by local development or production deployments.
 services:
   nexus-gateway:
+    # CI 由 prepare_scan_image.sh 将当前 GITHUB_SHA 的 GHCR 制品标成这个本地名；
+    # workflow 使用 --no-build，缺失时 fail-closed，绝不重建另一份制品。
+    image: nexus-gateway:scan
     environment:
       - SERVER_PORT=8080
       # 2026-09-22：DAST 环境关闭 Nacos 服务发现与注册。
@@ -24,3 +28,7 @@ services:
       # 重试上，8080 始终不监听，健康检查 180s 超时 → DAST 从未真正扫描。
       # 该开关仅作用于本 override 文件，不影响 dev / prod。
       - NEX_NACOS_ENABLED=false
+
+  nexus-core:
+    # 与 gateway 一样，只能使用当前提交已发布并由 helper 校验过的镜像。
+    image: nexus-core:scan
