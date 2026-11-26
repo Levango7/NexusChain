@@ -73,13 +73,13 @@ def fetch_json(url):
 
 
 def wait_for_images(repository, sha, fetch=fetch_json, sleeper=time.sleep,
-                    max_attempts=180, wait_seconds=30):
+                    max_attempts=600, wait_seconds=30):
     if not REPOSITORY.fullmatch(repository):
         raise ValueError("invalid owner/repository")
     if not SHA.fullmatch(sha):
         raise ValueError("a full lowercase commit SHA is required")
-    if max_attempts < 1 or max_attempts > 180 or not 0 <= wait_seconds <= 60:
-        raise ValueError("attempts must be 1..180 and wait seconds must be 0..60")
+    if max_attempts < 1 or max_attempts > 600 or not 0 <= wait_seconds <= 60:
+        raise ValueError("attempts must be 1..600 and wait seconds must be 0..60")
 
     run_url = f"https://api.github.com/repos/{repository}/actions/runs?head_sha={sha}&event=push&per_page=100"
     for attempt in range(1, max_attempts + 1):
@@ -112,7 +112,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--repository", required=True)
     parser.add_argument("--sha", required=True)
-    parser.add_argument("--attempts", type=int, default=180)
+    parser.add_argument("--attempts", type=int, default=600)
     parser.add_argument("--wait-seconds", type=int, default=30)
     args = parser.parse_args()
     try:

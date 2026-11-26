@@ -56,8 +56,8 @@ COPY nexus-wallet-service ./nexus-wallet-service
 # 构建 fat jar：wallet-service bootJar enabled (archiveClassifier='')
 # 跳过测试与 jacoco 报告，加速构建
 RUN --mount=type=cache,target=/root/.gradle,sharing=locked \
-    ./gradlew :nexus-wallet-service:bootJar --no-daemon -x test \
-    || { echo "[retry] 首次构建失败（疑似 Maven Central 瞬时抖动），30s 后重试一次"; sleep 30; ./gradlew :nexus-wallet-service:bootJar --no-daemon -x test; }
+    ./gradlew :nexus-wallet-service:bootJar --no-daemon -x test --info \
+    || { echo "[retry] 首次构建失败（疑似 Maven Central 瞬时抖动），30s 后重试一次"; sleep 30; ./gradlew :nexus-wallet-service:bootJar --no-daemon -x test --info; }
 
 # 提取 fat jar（排除 *-plain.jar 普通 jar，wallet-service jar.archiveClassifier='plain'）
 RUN find /workspace/nexus-wallet-service/build/libs -name '*.jar' ! -name '*-plain.jar' \

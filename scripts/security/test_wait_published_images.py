@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Tests for the explicit CI publication readiness gate."""
 
+import contextlib
 import importlib.util
+import io
 import os
 from pathlib import Path
 import unittest
@@ -91,6 +93,29 @@ class WaitPublishedImagesTest(unittest.TestCase):
                 os.environ.pop("GH_TOKEN", None)
             else:
                 os.environ["GH_TOKEN"] = previous
+
+    def test_600_attempt_budget_is_allowed_and_still_bounded(self):
+        calls = []
+
+        def fetch(url):
+            calls.append(url)
+            return run_payload(None)
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaises(TimeoutError):
+                wait_published_images.wait_for_images(
+                    "owner/repository", SHA, fetch=fetch, sleeper=lambda _: None,
+                    max_attempts=600, wait_seconds=0,
+                )
+        self.assertEqual(len(calls), 600)
+
+    def test_attempts_above_600_are_rejected_without_fetch(self):
+        with self.assertRaises(ValueError):
+            wait_published_images.wait_for_images(
+                "owner/repository", SHA,
+                fetch=lambda _: (_ for _ in ()).throw(AssertionError),
+                max_attempts=601, wait_seconds=0,
+            )
 
     def test_invalid_inputs_do_not_fetch(self):
         for repository, sha in (("bad", SHA), ("owner/repository", "abc")):
