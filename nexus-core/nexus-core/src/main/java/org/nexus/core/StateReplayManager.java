@@ -2,6 +2,7 @@ package org.nexus.core;
 
 import com.google.protobuf.InvalidProtocolBufferException;
 import org.apache.commons.codec.DecoderException;
+import org.nexus.core.PaymentStateEntry;
 import org.nexus.core.account.Account;
 import org.nexus.core.account.AccountDB;
 import org.nexus.core.event.StateRootMismatchEvent;
@@ -79,6 +80,8 @@ public class StateReplayManager {
         List<Account> accountList = (List<Account>) merklemap.get("account");
         @SuppressWarnings("unchecked")
         List<Incubator> incubatorList = (List<Incubator>) merklemap.get("incubator");
+        @SuppressWarnings("unchecked")
+        List<PaymentStateEntry> paymentStates = (List<PaymentStateEntry>) merklemap.getOrDefault("payment", List.of());
 
         List<Object[]> accountRows = new ArrayList<>(accountList.size());
         for (Account account : accountList) {
@@ -100,7 +103,7 @@ public class StateReplayManager {
         accountDB.insertAccountList(accountRows);
         incubatorDB.insertIncubatorList(incubatorRows);
 
-        Result verify = merkleRule.verifyStateRoots(block, accountList, incubatorList);
+        Result verify = merkleRule.verifyStateRoots(block, accountList, incubatorList, paymentStates);
         replayedBlocks.incrementAndGet();
 
         if (!verify.isSuccess()) {

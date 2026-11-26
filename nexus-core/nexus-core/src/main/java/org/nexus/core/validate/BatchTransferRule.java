@@ -89,7 +89,7 @@ public class BatchTransferRule implements TransactionRule {
                 return Result.Error("BATCH_TRANSFER: amount at index " + i + " must be greater than 0");
             }
 
-            totalAmount += item.getAmount();
+            totalAmount = Math.addExact(totalAmount, item.getAmount());
         }
 
         // 验证总金额不超过上限

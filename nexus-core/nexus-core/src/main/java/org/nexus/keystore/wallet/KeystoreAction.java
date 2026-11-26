@@ -310,9 +310,9 @@ public class KeystoreAction {
      */
     public static int verifyAddress(String address){
         byte[] r5 = Base58Utility.decode(address);
-//        ResultSupport ar = new ResultSupport();
-        if(!address.startsWith("1")){//地址不是以"1"开头
-            return  -1;
+        // 版本号属于解码后的首字节；Base58 首字符不是版本号，合法地址可不以 '1' 开头。
+        if (r5.length != 25 || r5[0] != 1) {
+            return -1;
         }
         byte[] r3 = SHA3Utility.keccak256(SHA3Utility.keccak256(KeystoreAction.addressToPubkeyHash(address)));
         byte[] b4 = ByteUtil.bytearraycopy(r3,0,4);

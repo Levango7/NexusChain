@@ -33,7 +33,10 @@ import org.nexus.keystore.crypto.RipemdUtility;
 import org.nexus.keystore.crypto.SHA3Utility;
 import org.nexus.protobuf.tcp.command.HatchModel;
 import org.nexus.core.NexusChainBlockChain;
+import org.nexus.core.PaymentExecutionResult;
+import org.nexus.core.PaymentStateEntry;
 import org.nexus.core.StateCommitment;
+import org.nexus.core.payment.PaymentExecutionKernel;
 import org.nexus.core.account.Account;
 import org.nexus.core.account.AccountDB;
 import org.nexus.core.account.AccountStoreUnavailableException;
@@ -77,11 +80,18 @@ public class MerkleRule implements BlockRule {
 
     private final boolean validateIncubator;
     private final StateCommitment stateCommitment;
+    private final PaymentExecutionKernel paymentExecutionKernel;
 
     @Autowired
-    public MerkleRule(@Value("${node-character}") String character, StateCommitment stateCommitment) {
+    public MerkleRule(@Value("${node-character}") String character, StateCommitment stateCommitment,
+                      PaymentExecutionKernel paymentExecutionKernel) {
         this.validateIncubator = !character.equals("exchange");
         this.stateCommitment = stateCommitment;
+        this.paymentExecutionKernel = paymentExecutionKernel;
+    }
+
+    public MerkleRule(String character, StateCommitment stateCommitment) {
+        this(character, stateCommitment, new PaymentExecutionKernel());
     }
 
     /** Compatibility constructor for isolated tests: preserve legacy-only roots. */
@@ -99,7 +109,8 @@ public class MerkleRule implements BlockRule {
             Map<String, Object> merklemap = validateMerkle(block.body, block.nHeight);
             List<Account> accountList = (List<Account>) merklemap.get("account");
             List<Incubator> incubatorList = (List<Incubator>) merklemap.get("incubator");
-            return verifyStateRoots(block, accountList, incubatorList);
+            List<PaymentStateEntry> paymentStates = (List<PaymentStateEntry>) merklemap.getOrDefault("payment", List.of());
+            return verifyStateRoots(block, accountList, incubatorList, paymentStates);
         } catch (AccountStoreUnavailableException e) {
             // 不把存储故障降级成普通校验失败；由 PendingBlocksManager 识别并
             // 进入重试队列，避免同步路径静默丢块。
@@ -115,7 +126,13 @@ public class MerkleRule implements BlockRule {
 
     /** Select the legacy or V2 account-state root for this block height. */
     public byte[] calculateStateRoot(List<Account> accounts, long blockHeight) {
-        return stateCommitment.calculateMerkleState(accounts, blockHeight);
+        return calculateStateRoot(accounts, List.of(), blockHeight);
+    }
+
+    /** Select the legacy, V2, or V3 root for this block height. */
+    public byte[] calculateStateRoot(
+            List<Account> accounts, List<PaymentStateEntry> paymentStates, long blockHeight) {
+        return stateCommitment.calculateMerkleState(accounts, paymentStates, blockHeight);
     }
 
     /**
@@ -131,7 +148,12 @@ public class MerkleRule implements BlockRule {
      * 与 validateBlock 一致。</p>
      */
     public Result verifyStateRoots(Block block, List<Account> accountList, List<Incubator> incubatorList) {
-        byte[] expectedStateRoot = calculateStateRoot(accountList, block.nHeight);
+        return verifyStateRoots(block, accountList, incubatorList, List.of());
+    }
+
+    public Result verifyStateRoots(Block block, List<Account> accountList, List<Incubator> incubatorList,
+                                   List<PaymentStateEntry> paymentStates) {
+        byte[] expectedStateRoot = calculateStateRoot(accountList, paymentStates, block.nHeight);
         if (!org.bouncycastle.util.Arrays.areEqual(block.hashMerkleState, expectedStateRoot)) {
             return Result.Error("merkle state validate fail " + new String(codec.encodeBlock(block)) + " " + Hex.encodeHexString(block.hashMerkleState) + " " + Hex.encodeHexString(expectedStateRoot));
         }
@@ -148,6 +170,8 @@ public class MerkleRule implements BlockRule {
     public Map<String, Object> validateMerkle(List<Transaction> transactionList, long nowheight) throws InvalidProtocolBufferException, DecoderException {
         Map<String, Account> accmap = new HashMap<>();
         Map<String, Incubator> incumap = new HashMap<>();
+        List<PaymentStateEntry> paymentStates = new ArrayList<>();
+        long executedFees = 0L;
         Account totalaccount = accountDB.selectaccount(IncubatorAddress.resultpubhash());
         if (totalaccount == null) {
             // 总账户是链上状态的一部分；缺失说明状态未初始化或数据库返回不完整，
@@ -309,6 +333,26 @@ public class MerkleRule implements BlockRule {
                     List<Account> celMortgageList = UpdateCancelMortgage(tran, fromaccount, toaccount, nowheight, frompubhash);
                     celMortgageList.stream().forEach(a -> accmap.put(Hex.encodeHexString(a.getPubkeyHash()), a));
                     break;
+                case 0x13:
+                    if (!stateCommitment.isV3Active(nowheight)) {
+                        throw new IllegalArgumentException("payment extension is not active at height " + nowheight);
+                    }
+                    frompubhash = RipemdUtility.ripemd160(SHA3Utility.keccak256(tran.from));
+                    if (accmap.containsKey(Hex.encodeHexString(frompubhash))) {
+                        fromaccount = accmap.get(Hex.encodeHexString(frompubhash));
+                    } else {
+                        fromaccount = accountDB.selectaccount(frompubhash);
+                    }
+                    PaymentExecutionResult execution = paymentExecutionKernel.executeBatchTransfer(
+                            tran, fromaccount,
+                            hash -> {
+                                String key = Hex.encodeHexString(hash);
+                                return accmap.containsKey(key) ? accmap.get(key) : accountDB.selectaccount(hash);
+                            }, nowheight);
+                    execution.getAccounts().forEach(account ->
+                            accmap.put(Hex.encodeHexString(account.getPubkeyHash()), account));
+                    paymentStates.addAll(execution.getPaymentStates());
+                    break;
                 default:
                     // 未知类型必须显式拒绝（P0 修复，2026-11-06）：此前的静默 no-op
                     // 会让"有交易、无状态变更"的区块通过状态根校验——手续费被计入
@@ -319,6 +363,7 @@ public class MerkleRule implements BlockRule {
                                     ? " (consensus whitelist / replay branch mismatch)"
                                     : " (type not enabled)"));
             }
+            executedFees = Math.addExact(executedFees, tran.getFeeExact());
         }
         if (isdisplay) {
             totalaccount.setBalance(totalbalance);
@@ -339,6 +384,8 @@ public class MerkleRule implements BlockRule {
         Map<String, Object> result = new HashMap<>();
         result.put("account", accountList);
         result.put("incubator", incubatorList);
+        result.put("payment", paymentStates);
+        result.put("executedFee", executedFees);
         return result;
     }
 

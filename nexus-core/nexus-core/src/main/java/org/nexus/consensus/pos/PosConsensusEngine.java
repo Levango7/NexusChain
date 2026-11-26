@@ -7,6 +7,7 @@ import org.nexus.consensus.pow.EconomicModel;
 import org.nexus.consensus.pow.PackageMiner;
 import org.nexus.core.Block;
 import org.nexus.core.NexusChainBlockChain;
+import org.nexus.core.PaymentStateEntry;
 import org.nexus.core.account.Account;
 import org.nexus.core.account.AccountStoreUnavailableException;
 import org.nexus.core.account.Transaction;
@@ -533,9 +534,13 @@ public class PosConsensusEngine implements PosConsensus {
             packed = new ArrayList<>();
         }
 
-        // 累加手续费到 coinbase
+        boolean hasBatchTransfer = packed.stream()
+                .anyMatch(tx -> tx.type == Transaction.Type.BATCH_TRANSFER.ordinal());
+        // 含 BATCH 时以实际执行手续费为准；其他区块保持原累加逻辑。
         for (Transaction tx : packed) {
-            coinbase.amount += tx.getFee();
+            if (!hasBatchTransfer) {
+                coinbase.amount += tx.getFee();
+            }
             block.body.add(tx);
         }
 
@@ -551,7 +556,11 @@ public class PosConsensusEngine implements PosConsensus {
         List<Account> accountList = (List<Account>) merklemap.get("account");
         @SuppressWarnings("unchecked")
         List<Incubator> incubatorList = (List<Incubator>) merklemap.get("incubator");
-        block.hashMerkleState = merkleRule.calculateStateRoot(accountList, height);
+        List<PaymentStateEntry> paymentStates = (List<PaymentStateEntry>) merklemap.getOrDefault("payment", List.of());
+        if (hasBatchTransfer) {
+            coinbase.amount += ((Number) merklemap.get("executedFee")).longValue();
+        }
+        block.hashMerkleState = merkleRule.calculateStateRoot(accountList, paymentStates, height);
         block.hashMerkleIncubate = Block.calculateMerkleIncubate(incubatorList);
 
         return block;

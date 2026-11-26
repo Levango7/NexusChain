@@ -11,38 +11,62 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Versioned, deterministic account-state commitment (ADR-037). */
+/** Versioned, deterministic account and payment-state commitment (ADR-037/038). */
 @Component
 public class StateCommitment {
 
     public static final byte VERSION = 0x02;
+    public static final byte PAYMENT_VERSION = 0x03;
     public static final long DISABLED_ACTIVATION_HEIGHT = Long.MAX_VALUE;
 
     private final long activationHeight;
+    private final long paymentActivationHeight;
 
     @Autowired
     public StateCommitment(
             @Value("${nexus.core.state-commitment-v2.activation-height:9223372036854775807}")
-            long activationHeight) {
-        if (activationHeight < 0) {
-            throw new IllegalArgumentException("state commitment activation height must be non-negative");
+            long activationHeight,
+            @Value("${nexus.payment.extension.activation-height:9223372036854775807}")
+            long paymentActivationHeight) {
+        if (activationHeight < 0 || paymentActivationHeight < 0) {
+            throw new IllegalArgumentException("activation heights must be non-negative");
         }
         this.activationHeight = activationHeight;
+        this.paymentActivationHeight = paymentActivationHeight;
+    }
+
+    /** Compatibility constructor: V2 may activate independently, V3 stays disabled. */
+    public StateCommitment(long activationHeight) {
+        this(activationHeight, DISABLED_ACTIVATION_HEIGHT);
     }
 
     /** Test/compatibility constructor for the legacy-only behavior. */
     public static StateCommitment disabled() {
-        return new StateCommitment(DISABLED_ACTIVATION_HEIGHT);
+        return new StateCommitment(DISABLED_ACTIVATION_HEIGHT, DISABLED_ACTIVATION_HEIGHT);
     }
 
     public boolean isV2Active(long blockHeight) {
         return activationHeight != DISABLED_ACTIVATION_HEIGHT && blockHeight >= activationHeight;
     }
 
+    public boolean isV3Active(long blockHeight) {
+        return paymentActivationHeight != DISABLED_ACTIVATION_HEIGHT
+                && blockHeight >= paymentActivationHeight;
+    }
+
     public byte[] calculateMerkleState(List<Account> accounts, long blockHeight) {
+        return calculateMerkleState(accounts, List.of(), blockHeight);
+    }
+
+    public byte[] calculateMerkleState(
+            List<Account> accounts, List<PaymentStateEntry> paymentStates, long blockHeight) {
+        if (isV3Active(blockHeight)) {
+            return calculateV3(accounts, paymentStates);
+        }
         return isV2Active(blockHeight)
                 ? calculateV2(accounts)
                 : Block.calculateMerkleState(accounts);
@@ -76,6 +100,43 @@ public class StateCommitment {
         }
     }
 
+    /** Build the canonical payment substate root described by ADR-038. */
+    public static byte[] calculatePaymentRoot(List<PaymentStateEntry> paymentStates) {
+        if (paymentStates == null) {
+            throw new IllegalArgumentException("payment states must not be null");
+        }
+        if (paymentStates.isEmpty()) {
+            return SHA3Utility.keccak256(new byte[]{PAYMENT_VERSION});
+        }
+
+        List<PaymentStateEntry> sorted = new ArrayList<>(paymentStates);
+        sorted.sort(StateCommitment::comparePaymentStates);
+        List<String> leaves = new ArrayList<>(sorted.size());
+        PaymentStateEntry previous = null;
+        for (PaymentStateEntry entry : sorted) {
+            if (previous != null && previous.getKind() == entry.getKind()
+                    && previous.getId().equals(entry.getId())) {
+                throw new IllegalArgumentException("duplicate payment state entry");
+            }
+            leaves.add(Hex.encodeHexString(entry.encode()));
+            previous = entry;
+        }
+        try {
+            return Hex.decodeHex(new MerkleTree(leaves).getRoot().getHash().toCharArray());
+        } catch (RuntimeException | DecoderException e) {
+            throw new IllegalArgumentException("could not calculate payment state commitment", e);
+        }
+    }
+
+    /** Domain-separated V3 commitment over both accounts and payment substate. */
+    public static byte[] calculateV3(
+            List<Account> accounts, List<PaymentStateEntry> paymentStates) {
+        return SHA3Utility.keccak256(ByteUtil.merge(
+                new byte[]{PAYMENT_VERSION},
+                calculateV2(accounts),
+                calculatePaymentRoot(paymentStates)));
+    }
+
     static byte[] encodeAccountV2(Account account) {
         if (account == null || account.getPubkeyHash() == null) {
             throw new IllegalArgumentException("account and pubkeyHash must not be null");
@@ -106,5 +167,18 @@ public class StateCommitment {
             throw new IllegalArgumentException("account and pubkeyHash must not be null");
         }
         return java.util.Arrays.compareUnsigned(left.getPubkeyHash(), right.getPubkeyHash());
+    }
+
+    private static int comparePaymentStates(PaymentStateEntry left, PaymentStateEntry right) {
+        if (left == null || right == null) {
+            throw new IllegalArgumentException("payment state entry must not be null");
+        }
+        int kind = Integer.compare(left.getKind().getCode(), right.getKind().getCode());
+        if (kind != 0) {
+            return kind;
+        }
+        return java.util.Arrays.compareUnsigned(
+                left.getId().getBytes(StandardCharsets.UTF_8),
+                right.getId().getBytes(StandardCharsets.UTF_8));
     }
 }
