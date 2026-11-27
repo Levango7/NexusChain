@@ -80,6 +80,15 @@ class J4EvidenceTests(unittest.TestCase):
         self.assertIn("06-acceptance", summary["skip"])
         self.assertNotIn("06-acceptance", summary["pass"])
 
+    def runtime_env(self) -> dict[str, str]:
+        env = dict(os.environ)
+        if os.name != "nt":
+            # CI runner 属主 UID 未必是 1000；夹具显式对齐当前用户，
+            # 生产默认 1000 仍由 test_prod_prepare 守护。
+            env["NEXUS_MPC_RUNTIME_UID"] = str(os.getuid())
+            env["NEXUS_SIGNING_RUNTIME_UID"] = str(os.getuid())
+        return env
+
     def test_no_start_mode_does_not_start_services(self) -> None:
         managed = self.dir / "managed"
         managed.mkdir()
@@ -89,6 +98,7 @@ class J4EvidenceTests(unittest.TestCase):
         prepare = subprocess.run(
             [BASH, "scripts/ops/nc-task.sh", "prod-prepare"],
             cwd=managed,
+            env=self.runtime_env(),
             capture_output=True,
             text=True,
             check=False,
@@ -104,6 +114,7 @@ class J4EvidenceTests(unittest.TestCase):
                 "1",
             ],
             cwd=managed,
+            env=self.runtime_env(),
             capture_output=True,
             text=True,
             check=False,
