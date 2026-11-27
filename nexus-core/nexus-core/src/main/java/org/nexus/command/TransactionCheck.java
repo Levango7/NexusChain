@@ -21,16 +21,20 @@ import org.apache.commons.codec.binary.Hex;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.nexus.ApiResult.APIResult;
 import org.nexus.consensus.pow.EconomicModel;
+import org.nexus.core.Block;
 import org.nexus.core.NexusChainBlockChain;
+import org.nexus.core.StateCommitment;
 import org.nexus.core.account.Account;
 import org.nexus.core.account.AccountDB;
 import org.nexus.core.account.Transaction;
 import org.nexus.core.incubator.Incubator;
 import org.nexus.core.incubator.IncubatorDB;
 import org.nexus.core.incubator.RateTable;
+import org.nexus.core.payment.BatchTransferPayload;
 import org.nexus.crypto.ed25519.Ed25519PublicKey;
 import org.nexus.db.StateDB;
 import org.nexus.encoding.BigEndian;
@@ -43,6 +47,7 @@ import org.nexus.util.ByteUtil;
 
 import java.math.BigDecimal;
 import java.util.Arrays;
+import java.util.List;
 
 @Component
 public class TransactionCheck {
@@ -66,13 +71,17 @@ public class TransactionCheck {
      * {@code 0x00–0x03}（coinbase / 转账 / 投票 / 存证）与 {@code 0x09–0x0f}
      * （孵化 / 提取利息与分享 / 提取本金 / 撤回投票 / 抵押 / 撤回抵押）。</p>
      *
-     * <p>{@code 0x04–0x08}（多签转账 / 资产定义 / 原子交换）与 {@code 0x10–0x1a}
-     * （支付扩展）没有执行分支。放行会让手续费计入 coinbase 而从不从发送方扣款，
-     * 且状态根不承诺余额，属于不可检测的无限增发（P0 #522）。这套白名单同时被
-     * {@code CoinbaseRule} 用来交叉校验"计入 coinbase 的手续费确实扣过款"。</p>
+     * <p>{@code 0x04–0x08} 与其他支付扩展仍无完整执行分支，必须拒绝。
+     * {@code BATCH_TRANSFER} 仅在精确高度的重载中、V3 已激活时额外放行；
+     * 这个静态方法仍表示旧类型集合，供旧路径与手续费守恒交叉校验。</p>
      */
     public static boolean isConsensusEnabledType(int type) {
         return (type >= 0x00 && type <= 0x03) || (type >= 0x09 && type <= 0x0f);
+    }
+
+    private boolean isBatchTransferActive(int type, long blockHeight) {
+        return type == Transaction.Type.BATCH_TRANSFER.ordinal()
+                && stateCommitment != null && stateCommitment.isV3Active(blockHeight);
     }
 
     @Autowired
@@ -93,7 +102,33 @@ public class TransactionCheck {
     @Autowired
     RateTable rateTable;
 
+    @Autowired
+    StateCommitment stateCommitment;
+
+    @Value("${nexus.payment.batch.max-recipients:100}")
+    private int maxBatchRecipients = 100;
+
+    @Value("${nexus.payment.batch.max-total-amount:100000000000}")
+    private long maxBatchTotalAmount = 100_000_000_000L;
+
+    /** Admission uses the next block height; historical validation must use the exact-height overload. */
     public APIResult TransactionFormatCheck(byte[] transfer) {
+        try {
+            long nextHeight = 0;
+            if (stateDB != null) {
+                Block best = stateDB.getBestBlock();
+                if (best != null) {
+                    nextHeight = Math.addExact(best.nHeight, 1L);
+                }
+            }
+            return TransactionFormatCheck(transfer, nextHeight);
+        } catch (RuntimeException e) {
+            return APIResult.newFailed("Exception error");
+        }
+    }
+
+    /** Validate a transaction against the consensus rules active at {@code blockHeight}. */
+    public APIResult TransactionFormatCheck(byte[] transfer, long blockHeight) {
         APIResult apiResult = new APIResult();
         try {
             //version
@@ -129,14 +164,10 @@ public class TransactionCheck {
             //gas
             long gas = 0;
             // 共识门禁（P0 修复，2026-11-06）：显式白名单取代旧的 15>=type>=0 区间判断。
-            // 只有 0x00–0x03 与 0x09–0x0f 在状态重放（MerkleRule / PackageMiner /
-            // AccountRule）中有"余额校验 + 扣手续费 + 写状态"的完整分支。0x04–0x08
-            // （多签转账/资产定义/原子交换）与 0x10–0x1a（支付扩展）只有类型定义、
-            // 没有执行路径：一旦放行，手续费会被 Miner 计入 coinbase 却从不从发送方
-            // 扣款，而状态根只承诺账户 ID+高度、不承诺余额，形成不可检测的无限增发
-            // （详见 P0 #522）。新增类型必须同时补齐重放与扣款分支后才能加入白名单；
-            // 放宽此处属于共识变更，必须独立升级，不能随业务开关调整。
-            if (isConsensusEnabledType(type[0])) {
+            // 旧类型保持原白名单。BATCH_TRANSFER 只有在调用方给出的精确高度
+            // 已激活 V3 时放行；其余扩展类型仍一律拒绝。无参 RPC 路径传下一区块
+            // 高度，AccountRule 传被验证区块自身高度，禁止用当前高度追溯改写历史。
+            if (isConsensusEnabledType(type[0]) || isBatchTransferActive(type[0], blockHeight)) {
                 gas = Transaction.GAS_TABLE[type[0]];
             } else {
                 apiResult.setCode(5000);
@@ -178,7 +209,7 @@ public class TransactionCheck {
                 }
             }
             //fromaddress
-            boolean verifyfrom = (KeystoreAction.verifyAddress(KeystoreAction.pubkeyHashToAddress(frompubhash, (byte) 0x00)) == 0);
+            boolean verifyfrom = (KeystoreAction.verifyAddress(KeystoreAction.pubkeyHashToAddress(frompubhash, (byte) 0x01)) == 0);
             if (!verifyfrom) {
                 apiResult.setCode(5000);
                 apiResult.setMessage("From format check error");
@@ -192,7 +223,7 @@ public class TransactionCheck {
                     return apiResult;
                 }
             } else {//非存证
-                boolean verifyto = (KeystoreAction.verifyAddress(KeystoreAction.pubkeyHashToAddress(topubkeyhash, (byte) 0x00)) == 0);
+                boolean verifyto = (KeystoreAction.verifyAddress(KeystoreAction.pubkeyHashToAddress(topubkeyhash, (byte) 0x01)) == 0);
                 if (!verifyto) {
                     apiResult.setCode(5000);
                     apiResult.setMessage("To format check error");
@@ -213,6 +244,28 @@ public class TransactionCheck {
             if (length > 0) {
                 tranlast = ByteUtil.bytearraycopy(tranlast, 4, tranlast.length - 4);
                 byte[] Payload = ByteUtil.bytearraycopy(tranlast, 0, length);
+                if (type[0] == Transaction.Type.BATCH_TRANSFER.ordinal()) {
+                    try {
+                        List<BatchTransferPayload.TransferItem> items = BatchTransferPayload.parse(Payload);
+                        BatchTransferPayload.validate(items, maxBatchRecipients, maxBatchTotalAmount);
+                        if (amount != BatchTransferPayload.getTotalAmount(items)) {
+                            apiResult.setCode(5000);
+                            apiResult.setMessage("Batch amount does not match payload total");
+                            return apiResult;
+                        }
+                        for (BatchTransferPayload.TransferItem item : items) {
+                            if (KeystoreAction.verifyAddress(item.getAddress()) != 0) {
+                                apiResult.setCode(5000);
+                                apiResult.setMessage("Batch recipient format check error");
+                                return apiResult;
+                            }
+                        }
+                    } catch (RuntimeException e) {
+                        apiResult.setCode(5000);
+                        apiResult.setMessage("Batch payload check error: " + e.getMessage());
+                        return apiResult;
+                    }
+                }
                 date = ByteUtil.merge(date, Payload);
             }
             //sigcheck

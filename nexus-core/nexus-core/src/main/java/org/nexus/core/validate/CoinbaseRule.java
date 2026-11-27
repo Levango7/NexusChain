@@ -24,6 +24,7 @@ import org.nexus.consensus.pow.EconomicModel;
 import org.nexus.db.StateDB;
 import org.nexus.util.Arrays;
 import org.nexus.core.Block;
+import org.nexus.core.StateCommitment;
 import org.nexus.core.account.Transaction;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -37,6 +38,9 @@ public class CoinbaseRule implements BlockRule, TransactionRule {
 
     @Autowired
     private EconomicModel economicModel;
+
+    @Autowired
+    private StateCommitment stateCommitment;
 
     public CoinbaseRule() {
     }
@@ -74,16 +78,19 @@ public class CoinbaseRule implements BlockRule, TransactionRule {
             // 发送方扣过款。只有共识白名单内的类型会在状态重放中扣手续费；其余类型
             // 会被 Miner 计入 coinbase 却不产生任何扣款，等于凭空增发。这里独立复算
             // 一遍"会产生扣款"的类型集合，与 TransactionCheck 的类型门禁交叉校验。
-            if (!TransactionCheck.isConsensusEnabledType(tx.type)) {
+            boolean batchDebitsFee = tx.type == Transaction.Type.BATCH_TRANSFER.ordinal()
+                    && stateCommitment != null && stateCommitment.isV3Active(block.nHeight);
+            if (!TransactionCheck.isConsensusEnabledType(tx.type) && !batchDebitsFee) {
                 return Result.Error("fee conservation violated: transaction type 0x"
                         + Hex.encodeHexString(new byte[]{(byte) tx.type})
                         + " does not debit a fee (type not enabled)");
             }
-            fees += tx.getFee();
+            fees = Math.addExact(fees, tx.getFeeExact());
         }
 
         // check amount = consensus amount + fees
-        if (coinbase.amount != economicModel.getConsensusRewardAtHeight(block.nHeight) + fees) {
+        if (coinbase.amount != Math.addExact(
+                economicModel.getConsensusRewardAtHeight(block.nHeight), fees)) {
             return Result.Error("amount not equals to consensus reward plus fees");
         }
         return Result.SUCCESS;

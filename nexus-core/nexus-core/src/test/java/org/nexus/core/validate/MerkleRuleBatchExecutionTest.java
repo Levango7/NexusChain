@@ -66,6 +66,72 @@ class MerkleRuleBatchExecutionTest {
         assertThrows(IllegalArgumentException.class, () -> rule.validateMerkle(List.of(tx), 100));
     }
 
+    @Test
+    void mixedLegacyAndBatchBlockPreservesBothAccountingPathsAndFees() throws Exception {
+        Transaction batch = batchTx();
+        batch.nonce = 3;
+        Account sender = sender(batch);
+        sender.setBalance(200_000);
+        Transaction legacy = Transaction.createEmpty();
+        legacy.type = Transaction.Type.TRANSFER.ordinal();
+        legacy.from = batch.from;
+        legacy.to = hash(4);
+        legacy.nonce = 2;
+        legacy.gasPrice = 1;
+        legacy.amount = 5;
+        MerkleRule rule = rule(100, 100, sender);
+
+        Map<String, Object> replay = rule.validateMerkle(List.of(legacy, batch), 100);
+        @SuppressWarnings("unchecked")
+        List<Account> accounts = (List<Account>) replay.get("account");
+
+        assertEquals(99_965, find(accounts, sender.getPubkeyHash()).getBalance());
+        assertEquals(5, find(accounts, hash(4)).getBalance());
+        assertEquals(10, find(accounts, hash(2)).getBalance());
+        assertEquals(20, find(accounts, hash(3)).getBalance());
+        assertEquals(3, find(accounts, sender.getPubkeyHash()).getNonce());
+        assertEquals(100_000L, ((Number) replay.get("executedFee")).longValue());
+    }
+
+    @Test
+    void rollbackRestoresLegacyRootAndReplayReproducesV3Root() throws Exception {
+        Transaction batch = batchTx();
+        MerkleRule rule = rule(100, 100, sender(batch));
+
+        Map<String, Object> pre = rule.validateMerkle(List.of(), 99);
+        @SuppressWarnings("unchecked")
+        List<Account> preAccounts = (List<Account>) pre.get("account");
+        @SuppressWarnings("unchecked")
+        List<PaymentStateEntry> prePayments = (List<PaymentStateEntry>) pre.get("payment");
+        byte[] legacyRoot = rule.calculateStateRoot(preAccounts, prePayments, 99);
+
+        Map<String, Object> post = rule.validateMerkle(List.of(batch), 100);
+        @SuppressWarnings("unchecked")
+        List<Account> postAccounts = (List<Account>) post.get("account");
+        @SuppressWarnings("unchecked")
+        List<PaymentStateEntry> postPayments = (List<PaymentStateEntry>) post.get("payment");
+        byte[] v3Root = rule.calculateStateRoot(postAccounts, postPayments, 100);
+        assertFalse(Arrays.equals(legacyRoot, v3Root));
+
+        assertThrows(IllegalArgumentException.class,
+                () -> rule.validateMerkle(List.of(batch), 99));
+        Map<String, Object> rollback = rule.validateMerkle(List.of(), 99);
+        @SuppressWarnings("unchecked")
+        List<Account> rollbackAccounts = (List<Account>) rollback.get("account");
+        @SuppressWarnings("unchecked")
+        List<PaymentStateEntry> rollbackPayments = (List<PaymentStateEntry>) rollback.get("payment");
+        assertArrayEquals(legacyRoot,
+                rule.calculateStateRoot(rollbackAccounts, rollbackPayments, 99));
+
+        Map<String, Object> replayed = rule.validateMerkle(List.of(batch), 100);
+        @SuppressWarnings("unchecked")
+        List<Account> replayedAccounts = (List<Account>) replayed.get("account");
+        @SuppressWarnings("unchecked")
+        List<PaymentStateEntry> replayedPayments = (List<PaymentStateEntry>) replayed.get("payment");
+        assertArrayEquals(v3Root,
+                rule.calculateStateRoot(replayedAccounts, replayedPayments, 100));
+    }
+
     private static MerkleRule rule(long stateHeight, long paymentHeight, Account sender) {
         AccountDB accountDB = mock(AccountDB.class);
         when(accountDB.selectaccount(any())).thenAnswer(invocation -> {

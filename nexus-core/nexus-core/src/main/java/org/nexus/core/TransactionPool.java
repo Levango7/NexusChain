@@ -19,6 +19,8 @@
 package org.nexus.core;
 
 import org.nexus.core.account.Transaction;
+import org.nexus.db.StateDB;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.*;
@@ -43,6 +45,12 @@ public class TransactionPool {
     private PriorityQueue<Transaction> pq;
     private Set<String> indices;
 
+    @Autowired
+    StateCommitment stateCommitment;
+
+    @Autowired
+    StateDB stateDB;
+
     public TransactionPool() {
         this.pq = new PriorityQueue<>(1000, new TransactionComparator());
         // B-13 修复：使用 ConcurrentHashMap.newKeySet() 替代 HashSet，
@@ -57,7 +65,7 @@ public class TransactionPool {
      * <p>拒绝永远不可能通过区块校验的交易，避免调用方在交易不可能上链时仍以成功语义返回：</p>
      * <ul>
      *   <li>全零 {@code from} 或空/全零签名（{@code SignatureRule} 必然验签失败）；</li>
-     *   <li>0x10–0x1a 支付扩展类型（{@code TransactionCheck} 的 {@code type <= 15} 门禁必然拒绝）。</li>
+     *   <li>除激活后的 BATCH_TRANSFER 外，其余 0x10–0x1a 支付扩展类型。</li>
      * </ul>
      * <p>COINBASE 为共识层生成的系统交易，无 from/签名，白名单放行。</p>
      *
@@ -90,7 +98,7 @@ public class TransactionPool {
     /**
      * 入池前静态守卫：只做与链上校验等价的快速判定，不验签。
      */
-    private static boolean isAdmissible(Transaction tx) {
+    private boolean isAdmissible(Transaction tx) {
         if (tx == null) {
             return false;
         }
@@ -98,9 +106,20 @@ public class TransactionPool {
         if (tx.type == Transaction.Type.COINBASE.ordinal()) {
             return true;
         }
-        // 支付扩展类型当前无法通过 TransactionCheck 的类型门禁，入池只会成为死账
         if (tx.isPaymentExtensionType()) {
-            return false;
+            if (tx.type != Transaction.Type.BATCH_TRANSFER.ordinal() || stateCommitment == null) {
+                return false;
+            }
+            long nextHeight = 0;
+            if (stateDB != null) {
+                Block best = stateDB.getBestBlock();
+                if (best != null) {
+                    nextHeight = Math.addExact(best.nHeight, 1L);
+                }
+            }
+            if (!stateCommitment.isV3Active(nextHeight)) {
+                return false;
+            }
         }
         return !isAllZero(tx.from) && !isAllZero(tx.signature);
     }

@@ -29,6 +29,7 @@ import org.nexus.encoding.JSONEncodeDecoder;
 import org.nexus.core.Block;
 import org.nexus.core.account.Account;
 import org.nexus.core.account.Transaction;
+import org.nexus.core.payment.BatchTransferPayload;
 import org.nexus.core.incubator.Incubator;
 import org.hibernate.validator.HibernateValidator;
 import org.slf4j.Logger;
@@ -151,13 +152,19 @@ public class BasicRule implements BlockRule, TransactionRule {
             }
         }
 
-        // 批量转账基本验证
+        // 批量转账基本验证：amount 与 payload 总额的契约同 ADR-038 和原子内核一致。
         if (transaction.type == Transaction.Type.BATCH_TRANSFER.ordinal()) {
             if (!transaction.hasPayload()) {
                 return Result.Error("batch transfer must have payload");
             }
-            if (transaction.amount != 0) {
-                return Result.Error("batch transfer amount field must be zero (amounts in payload)");
+            try {
+                long total = BatchTransferPayload.getTotalAmount(
+                        BatchTransferPayload.parse(transaction.payload));
+                if (transaction.amount != total) {
+                    return Result.Error("batch transfer amount does not match payload total");
+                }
+            } catch (RuntimeException e) {
+                return Result.Error("batch transfer payload is invalid: " + e.getMessage());
             }
         }
 
@@ -182,8 +189,8 @@ public class BasicRule implements BlockRule, TransactionRule {
         }
 
         // 注意（PLAN-014 Phase 3）：以下仅是 BasicRule 的单规则预检，不代表可上链。
-        // 完整区块/RPC 路径会被 AccountRule → TransactionCheck.TransactionFormatCheck
-        // 的 type<=15 门禁以 "Type check error" 拒绝（0x10–0x1a 当前不可上链）。
+        // 完整区块/RPC 仍由 AccountRule → TransactionCheck.TransactionFormatCheck
+        // 按精确高度裁决；当前只有激活后的 BATCH_TRANSFER 可以放行。
         // DID 身份注册基本验证
         if (transaction.type == Transaction.Type.IDENTITY_REGISTER.ordinal()) {
             if (transaction.amount < 0) {

@@ -155,14 +155,14 @@ public class PaymentFlowIntegrationTest {
      */
     @Test
     public void testBatchTransferFlow() {
-        // 构造 BATCH_TRANSFER 交易（amount=0，金额在 payload 中）
+        // 构造 BATCH_TRANSFER 交易（amount=3000，与 payload 总额一致）
         Transaction tx = new Transaction(
                 1,
                 Transaction.Type.BATCH_TRANSFER.ordinal(),
                 3L,
                 FROM_PUBKEY,
                 100000L,
-                0L,
+                3000L,
                 BATCH_TRANSFER_PAYLOAD,
                 TO_PUBKEY_HASH,
                 SIGNATURE
