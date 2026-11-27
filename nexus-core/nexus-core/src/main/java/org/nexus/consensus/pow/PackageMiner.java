@@ -6,9 +6,12 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.nexus.core.Block;
 import org.nexus.core.NexusChainBlockChain;
+import org.nexus.core.PaymentExecutionResult;
+import org.nexus.core.StateCommitment;
 import org.nexus.core.account.Account;
 import org.nexus.core.account.Transaction;
 import org.nexus.core.incubator.Incubator;
+import org.nexus.core.payment.PaymentExecutionKernel;
 import org.nexus.core.validate.MerkleRule;
 import org.nexus.db.AccountState;
 import org.nexus.db.StateDB;
@@ -33,6 +36,12 @@ public class PackageMiner {
 
     @Autowired
     MerkleRule merkleRule;
+
+    @Autowired
+    StateCommitment stateCommitment;
+
+    @Autowired
+    PaymentExecutionKernel paymentExecutionKernel;
 
 
     public List<Transaction> TransferCheck(byte[] parenthash, long height, Block block) throws DecoderException {
@@ -132,6 +141,39 @@ public class PackageMiner {
                             accountStateMap.put(Hex.encodeHexString(transaction.to), tovoteaccountState);
                         }
                         break;
+                    case 19://BATCH_TRANSFER：激活后使用与重放一致的原子执行
+                        if (stateCommitment == null || paymentExecutionKernel == null
+                                || !stateCommitment.isV3Active(height)) {
+                            removemap.put(new String(entry.getKey()), transaction.nonce);
+                            state = true;
+                            break;
+                        }
+                        try {
+                            PaymentExecutionResult execution = paymentExecutionKernel.executeBatchTransfer(
+                                    transaction, fromaccount, hash -> {
+                                        String lookupKey = Hex.encodeHexString(hash);
+                                        AccountState current = accountStateMap.get(lookupKey);
+                                        if (current != null) {
+                                            return current.getAccount();
+                                        }
+                                        AccountState persisted = stateDB.getAccount(parenthash, hash);
+                                        return persisted == null ? null : persisted.getAccount();
+                                    }, height);
+                            for (Account changed : execution.getAccounts()) {
+                                String changedKey = Hex.encodeHexString(changed.getPubkeyHash());
+                                AccountState changedState = accountStateMap.get(changedKey);
+                                if (changedState == null) {
+                                    changedState = new AccountState(changed, new HashMap<>(), new HashMap<>());
+                                } else {
+                                    changedState.setAccount(changed);
+                                }
+                                accountStateMap.put(changedKey, changedState);
+                            }
+                        } catch (RuntimeException e) {
+                            removemap.put(new String(entry.getKey()), transaction.nonce);
+                            state = true;
+                        }
+                        break;
                     case 3://存证事务,只需要扣除手续费
                     case 9://孵化事务
                     case 10://提取利息
@@ -173,6 +215,11 @@ public class PackageMiner {
                             accountState.setInterestMap(map);
                         }
                         accountStateMap.put(publicKeyHash, accountState);
+                        break;
+                    default:
+                        // 未实现确定性执行的类型绝不能“只打包、不记账”。
+                        removemap.put(new String(entry.getKey()), transaction.nonce);
+                        state = true;
                         break;
                 }
                 if (state) {

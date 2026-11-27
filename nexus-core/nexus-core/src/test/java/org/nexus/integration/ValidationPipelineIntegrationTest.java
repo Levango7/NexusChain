@@ -143,18 +143,18 @@ public class ValidationPipelineIntegrationTest {
     // ==================== BATCH_TRANSFER 验证 ====================
 
     /**
-     * 测试正确的 BATCH_TRANSFER（有 payload, amount=0）验证通过。
+     * 测试正确的 BATCH_TRANSFER（amount=payload 总额）验证通过。
      */
     @Test
     public void testValidBatchTransfer() {
-        // 构造正确的 BATCH_TRANSFER 交易：有 payload，amount=0
+        // 构造正确的 BATCH_TRANSFER 交易：amount 与 payload 总额 3000 一致
         Transaction tx = new Transaction(
                 1,
                 Transaction.Type.BATCH_TRANSFER.ordinal(),
                 1L,
                 FROM_PUBKEY,
                 100000L,
-                0L,
+                3000L,
                 BATCH_TRANSFER_PAYLOAD,
                 TO_PUBKEY_HASH,
                 SIGNATURE
@@ -167,11 +167,11 @@ public class ValidationPipelineIntegrationTest {
     }
 
     /**
-     * 测试 BATCH_TRANSFER amount!=0 验证失败。
+     * 测试 BATCH_TRANSFER amount 与 payload 总额不一致时验证失败。
      */
     @Test
     public void testInvalidBatchTransferWithAmount() {
-        // 构造 amount!=0 的 BATCH_TRANSFER 交易
+        // payload 总额为 3000，但 amount 错写为 1000
         Transaction tx = new Transaction(
                 1,
                 Transaction.Type.BATCH_TRANSFER.ordinal(),
@@ -186,7 +186,7 @@ public class ValidationPipelineIntegrationTest {
 
         // 验证失败
         Result result = basicRule.validateTransaction(tx);
-        assertFalse(result.isSuccess(), "amount!=0 的 BATCH_TRANSFER 验证应失败");
+        assertFalse(result.isSuccess(), "amount 与 payload 总额不一致的 BATCH_TRANSFER 验证应失败");
     }
 
     // ==================== MINT_STABLECOIN 验证 ====================

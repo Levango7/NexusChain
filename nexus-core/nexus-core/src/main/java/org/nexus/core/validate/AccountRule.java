@@ -26,12 +26,14 @@ import org.nexus.consensus.pow.PackageMiner;
 import org.nexus.core.Block;
 import org.nexus.core.WhitelistTransaction;
 import org.nexus.core.NexusChainBlockChain;
+import org.nexus.core.PaymentExecutionResult;
 import org.nexus.core.account.Account;
 import org.nexus.core.account.AccountDB;
 import org.nexus.core.account.Transaction;
 import org.nexus.core.incubator.Incubator;
 import org.nexus.core.incubator.IncubatorDB;
 import org.nexus.core.incubator.RateTable;
+import org.nexus.core.payment.PaymentExecutionKernel;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.nexus.db.AccountState;
@@ -81,6 +83,9 @@ public class AccountRule implements BlockRule {
 
     @Autowired
     WhitelistTransaction whitelistTransaction;
+
+    @Autowired
+    PaymentExecutionKernel paymentExecutionKernel;
 
     private boolean validateIncubator;
 
@@ -149,7 +154,7 @@ public class AccountRule implements BlockRule {
                 // 校验事务
                 if (tx.type != Transaction.Type.COINBASE.ordinal()) {
                     //校验格式
-                    APIResult apiResult = transactionCheck.TransactionFormatCheck(tx.toRPCBytes());
+                    APIResult apiResult = transactionCheck.TransactionFormatCheck(tx.toRPCBytes(), block.nHeight);
                     if (apiResult.getCode() == 5000) {
                         peningTransPool.removeOne(publichash, tx.nonce);
                         return Result.Error("Transaction validation failed ," + Hex.encodeHexString(tx.getHash()) + ":" + apiResult.getMessage());
@@ -241,6 +246,37 @@ public class AccountRule implements BlockRule {
                         if (cancelAccountList.containsKey("fromaccount")) {
                             accountState.setAccount(cancelAccountList.get("fromaccount"));
                             map.put(publichash, accountState);
+                        }
+                    } else if (tx.type == Transaction.Type.BATCH_TRANSFER.ordinal()) {
+                        if (paymentExecutionKernel == null) {
+                            peningTransPool.removeOne(publichash, tx.nonce);
+                            return Result.Error("Transaction validation failed: payment execution is unavailable");
+                        }
+                        final PaymentExecutionResult execution;
+                        try {
+                            execution = paymentExecutionKernel.executeBatchTransfer(tx, account, hash -> {
+                                String key = Hex.encodeHexString(hash);
+                                AccountState current = map.get(key);
+                                if (current != null) {
+                                    return current.getAccount();
+                                }
+                                AccountState persisted = stateDB.getAccount(parenthash, hash);
+                                return persisted == null ? null : persisted.getAccount();
+                            }, block.nHeight);
+                        } catch (RuntimeException e) {
+                            peningTransPool.removeOne(publichash, tx.nonce);
+                            return Result.Error("Transaction validation failed ," + Hex.encodeHexString(tx.getHash())
+                                    + ": " + e.getMessage());
+                        }
+                        for (Account changed : execution.getAccounts()) {
+                            String key = Hex.encodeHexString(changed.getPubkeyHash());
+                            AccountState changedState = map.get(key);
+                            if (changedState == null) {
+                                changedState = new AccountState(changed, new HashMap<>(), new HashMap<>());
+                            } else {
+                                changedState.setAccount(changed);
+                            }
+                            map.put(key, changedState);
                         }
                     } else {//其他事务
                         Account otheraccount = packageMiner.UpdateOtherAccount(account, tx);

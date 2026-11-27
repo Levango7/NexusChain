@@ -52,6 +52,13 @@ class PaymentExtensionBlockGateTest {
     }
 
     @Test
+    void rejectsBlockWithBatchBeforeActivation() {
+        Result result = accountRule.validateBlock(block(Transaction.Type.BATCH_TRANSFER.ordinal()));
+        assertFalse(result.isSuccess());
+        assertTrue(result.getMessage().contains("Type check error"), result.getMessage());
+    }
+
+    @Test
     void rejectsBlockWithIdentityRegister() {
         Result result = accountRule.validateBlock(block(Transaction.Type.IDENTITY_REGISTER.ordinal()));
         assertFalse(result.isSuccess());
