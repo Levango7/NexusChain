@@ -67,12 +67,18 @@ class PreparedEnvironment:
 
     @property
     def env(self) -> dict[str, str]:
-        return {
+        env = {
             "NEX_ENV_FILE": str(self.env_file),
             "NEX_CERTS_DIR": posix_arg(self.certs),
             "NEX_CONFIG_DIR": posix_arg(self.configs),
             "NEX_MIN_AVAILABLE_RAM_MB": "1",
         }
+        if os.name != "nt":
+            # CI runner 的属主 UID 未必是 1000；显式对齐当前用户，
+            # 生产默认 1000 仍由 test_prod_prepare 守护。
+            env["NEXUS_MPC_RUNTIME_UID"] = str(os.getuid())
+            env["NEXUS_SIGNING_RUNTIME_UID"] = str(os.getuid())
+        return env
 
     def cleanup(self) -> None:
         self.temp.cleanup()
