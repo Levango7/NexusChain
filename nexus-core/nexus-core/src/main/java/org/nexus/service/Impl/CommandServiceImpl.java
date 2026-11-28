@@ -107,6 +107,8 @@ public class CommandServiceImpl implements CommandService {
                 return apiResult;
             }
             adoptTransPool.add(Collections.singletonList(tran));
+            apiResult.setCode(APIResult.SUCCESS);
+            apiResult.setMessage("SUCCESS");
             apiResult.setData(tran);
         } catch (RuntimeException e) {
             apiResult.setCode(5000);

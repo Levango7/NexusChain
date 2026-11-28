@@ -1,14 +1,26 @@
 package org.nexus.sdk.wallet;
 
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.apache.commons.codec.binary.Hex;
 import org.junit.jupiter.api.Test;
+import org.nexus.ApiResult.APIResult;
+import org.nexus.command.Configuration;
+import org.nexus.command.TransactionCheck;
+import org.nexus.core.StateCommitment;
+import org.nexus.core.account.Transaction;
+import org.nexus.core.payment.BatchTransferPayload;
+import org.nexus.crypto.ed25519.Ed25519;
+import org.nexus.crypto.ed25519.Ed25519KeyPair;
+import org.nexus.keystore.wallet.KeystoreAction;
 
+import java.lang.reflect.Field;
 import java.math.BigDecimal;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -161,20 +173,28 @@ class TxUtilsTest {
     }
 
     @Test
-    void createRawBatchTransferTransaction_validInputs_shouldReturnHex() {
+    void createRawBatchTransferTransaction_validInputs_shouldMatchConsensusEncoding() throws Exception {
         ObjectNode recipient = new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode();
-        recipient.put("to", TO_PUBKEY_HASH);
+        recipient.put("address", address(2));
         recipient.put("amount", 100);
         String hex = TxUtils.CreateRawBatchTransferTransaction(FROM_PUBKEY, List.of(recipient), NONCE);
+
         assertNotNull(hex);
         assertFalse(hex.isEmpty());
+        String signed = TxUtils.signRawBasicTransaction(hex,
+                "0000000000000000000000000000000000000000000000000000000000000001");
+        Transaction tx = Transaction.fromRPCBytes(Hex.decodeHex(signed.toCharArray()));
+        assertEquals(Transaction.Type.BATCH_TRANSFER.ordinal(), tx.type);
+        assertEquals(100L, tx.amount);
+        assertEquals(NONCE + 1, tx.nonce);
+        assertEquals(100L, BatchTransferPayload.getTotalAmount(BatchTransferPayload.parse(tx.payload)));
+        assertEquals(address(2), BatchTransferPayload.parse(tx.payload).get(0).getAddress());
     }
 
     @Test
-    void createRawBatchTransferTransaction_emptyRecipients_shouldReturnHex() {
+    void createRawBatchTransferTransaction_emptyRecipients_shouldReturnEmpty() {
         String hex = TxUtils.CreateRawBatchTransferTransaction(FROM_PUBKEY, List.of(), NONCE);
-        assertNotNull(hex);
-        assertFalse(hex.isEmpty());
+        assertEquals("", hex);
     }
 
     @Test
@@ -338,10 +358,11 @@ class TxUtilsTest {
     void clientToBatchTransfer_validInputs_shouldReturnNode() {
         String prikey = "0000000000000000000000000000000000000000000000000000000000000001";
         ObjectNode recipient = new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode();
-        recipient.put("to", TO_PUBKEY_HASH);
+        recipient.put("address", address(2));
         recipient.put("amount", 100);
         ObjectNode result = TxUtils.ClientToBatchTransfer(FROM_PUBKEY, List.of(recipient), prikey, NONCE);
         assertNotNull(result);
+        assertFalse(result.isEmpty());
     }
 
     @Test
@@ -424,6 +445,74 @@ class TxUtilsTest {
         ObjectNode result = TxUtils.bridgeLock(
                 FROM_PUBKEY, "ethereum", "0xrecipient", AMOUNT, prikey, NONCE, "http://localhost:9999");
         assertNotNull(result);
+    }
+
+    @Test
+    void clientToBatchTransferProducesConsensusValidSignedTransaction() throws Exception {
+        Ed25519KeyPair sender = Ed25519.generateKeyPair();
+        Ed25519KeyPair recipient = Ed25519.generateKeyPair();
+        String fromPubkey = Hex.encodeHexString(sender.getPublicKey().getEncoded());
+        String prikey = Hex.encodeHexString(sender.getPrivateKey().getEncoded());
+        String recipientAddress = KeystoreAction.pubkeyToAddress(
+                recipient.getPublicKey().getEncoded(), (byte) 1);
+        ObjectNode item = new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode();
+        item.put("address", recipientAddress);
+        item.put("amount", 100);
+
+        ObjectNode signed = TxUtils.ClientToBatchTransfer(fromPubkey, List.of(item), prikey, NONCE);
+        TransactionCheck check = checker(100);
+        APIResult result = check.TransactionFormatCheck(
+                Hex.decodeHex(signed.get("message").asText().toCharArray()), 100);
+        assertEquals(APIResult.SUCCESS, result.getCode(), result.getMessage());
+
+        ObjectNode request = TxUtils.buildBatchTransferRequest(
+                fromPubkey, List.of(item), signed.get("message").asText(), NONCE);
+        assertFalse(request.has("prikey"));
+        assertEquals(fromPubkey, request.get("fromPubkey").asText());
+        assertEquals(recipientAddress, request.get("items").get(0).get("address").asText());
+        assertEquals(signed.get("message").asText(), request.get("traninfo").asText());
+    }
+
+    @Test
+    void publicNodeUrlRejectsLocalReservedAndUnsafeDestinations() {
+        for (String url : List.of(
+                "http://localhost:19585", "http://127.0.0.1", "http://10.0.0.1",
+                "http://192.168.1.1", "http://169.254.1.1", "http://100.64.0.1",
+                "http://192.0.2.1", "http://[::1]", "ftp://example.com",
+                "https://user:password@example.com", "https://example.com/path?x=1")) {
+            assertThrows(IllegalArgumentException.class,
+                    () -> TxUtils.requirePublicNodeUrl(url), url);
+        }
+        assertEquals("https://1.1.1.1", TxUtils.requirePublicNodeUrl("https://1.1.1.1/"));
+    }
+
+    private static TransactionCheck checker(long activation) throws Exception {
+        TransactionCheck check = new TransactionCheck();
+        Configuration configuration = new Configuration();
+        configuration.setMin_procedurefee(0);
+        setField(check, "configuration", configuration);
+        setField(check, "stateCommitment",
+                new StateCommitment(StateCommitment.DISABLED_ACTIVATION_HEIGHT, activation));
+        return check;
+    }
+
+    private static void setField(Object target, String name, Object value) throws Exception {
+        Field field = target.getClass().getDeclaredField(name);
+        field.setAccessible(true);
+        field.set(target, value);
+    }
+
+    private static String address(int seed) {
+        byte[] pub = new byte[Transaction.PUBLIC_KEY_SIZE];
+        java.util.Arrays.fill(pub, (byte) seed);
+        return KeystoreAction.pubkeyToAddress(pub, (byte) 1);
+    }
+
+    @Test
+    void batchStatusRejectsMalformedHashBeforeAnyNetworkCall() {
+        ObjectNode result = TxUtils.getBatchStatus("not-a-hash", "https://1.1.1.1");
+        assertFalse(result.path("success").asBoolean(true));
+        assertTrue(result.get("error").asText().contains("64"));
     }
 
     @Test

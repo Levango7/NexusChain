@@ -4,7 +4,7 @@ import "@testing-library/jest-dom";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import "../../i18n";
 import { api } from "../../api/client";
-import { RPC_BLOCK } from "../fixtures/backend";
+import { RPC_BLOCK, RPC_TRANSACTION } from "../fixtures/backend";
 
 /**
  * 区块浏览器页面级测试。
@@ -163,6 +163,46 @@ describe("TxDetailPage", () => {
     expect(text, "不应出现「手续费」行").not.toContain("手续费");
     expect(text, "不应出现「随机数」行").not.toContain("随机数");
     expect(text, "不应出现「类型」行").not.toContain("类型");
+    expectNoUndefinedLeak();
+  });
+
+  it("BATCH_TRANSFER 应显示后端增量字段与真实收款项", async () => {
+    const payload = new TextEncoder().encode(
+      JSON.stringify({
+        total_count: 2,
+        total_amount: 30,
+        items: [
+          { address: "NEXrecipient2", amount: 10 },
+          { address: "NEXrecipient3", amount: 20 },
+        ],
+      }),
+    );
+    const data = Array.from(payload, (byte) => byte.toString(16).padStart(2, "0")).join("");
+    vi.mocked(api.getTransaction).mockResolvedValueOnce({
+      ...RPC_TRANSACTION,
+      type: 19,
+      typeName: "BATCH_TRANSFER",
+      fee: "50000",
+      nonce: "2",
+      amount: "30",
+      data,
+    });
+    const TxDetailPage = (await import("../../pages/TxDetailPage")).default;
+    render(
+      <MemoryRouter initialEntries={["/tx/batch"]}>
+        <Routes>
+          <Route path="/tx/:hash" element={<TxDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("BATCH_TRANSFER")).toBeInTheDocument();
+    expect(screen.getByText("收款项")).toBeInTheDocument();
+    expect(screen.getByText("NEXrecipient2")).toBeInTheDocument();
+    expect(screen.getByText("NEXrecipient3")).toBeInTheDocument();
+    expect(screen.getByText("10 NEX")).toBeInTheDocument();
+    expect(screen.getByText("20 NEX")).toBeInTheDocument();
+    expect(screen.getByText("50000 NEX")).toBeInTheDocument();
     expectNoUndefinedLeak();
   });
 });

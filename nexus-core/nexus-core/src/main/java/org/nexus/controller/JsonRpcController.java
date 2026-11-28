@@ -350,6 +350,12 @@ public class JsonRpcController {
         }
         n.put("timestamp", ts);
         n.put("data", (tx.payload != null) ? Hex.encodeHexString(tx.payload) : null);
+        if (tx.type == Transaction.Type.BATCH_TRANSFER.ordinal()) {
+            n.put("type", tx.type);
+            n.put("typeName", "BATCH_TRANSFER");
+            n.put("fee", String.valueOf(tx.getFeeExact()));
+            n.put("nonce", String.valueOf(tx.nonce));
+        }
         return n;
     }
 

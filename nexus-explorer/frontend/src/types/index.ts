@@ -76,6 +76,11 @@ export interface TransactionInfo {
   timestamp: number;
   /** 十六进制编码的交易负载；无负载时为 null。 */
   data: string | null;
+  /** BATCH_TRANSFER 的可选增量字段；旧交易不返回。 */
+  type?: number;
+  typeName?: string;
+  fee?: string;
+  nonce?: string;
 }
 
 /**

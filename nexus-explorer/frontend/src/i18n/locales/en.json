@@ -161,6 +161,7 @@
     "amount": "Amount",
     "fee": "Fee",
     "nonce": "Nonce",
+    "recipients": "Recipients",
     "timestamp": "Timestamp"
   },
   "address": {

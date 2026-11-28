@@ -15,88 +15,219 @@
  * You should have received a copy of the GNU Lesser General Public License
  * along with the java-nexuscore. If not, see <http://www.gnu.org/licenses/>.
  */
-
 package org.nexus.service;
 
+import org.apache.commons.codec.DecoderException;
+import org.apache.commons.codec.binary.Hex;
 import org.nexus.ApiResult.APIResult;
+import org.nexus.core.Block;
+import org.nexus.core.NexusChainBlockChain;
+import org.nexus.core.StateCommitment;
+import org.nexus.core.account.Transaction;
 import org.nexus.core.payment.BatchTransferPayload;
 import org.nexus.core.payment.BatchTransferPayload.TransferItem;
+import org.nexus.crypto.ed25519.Ed25519PrivateKey;
+import org.nexus.db.StateDB;
+import org.nexus.keystore.wallet.KeystoreAction;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
+import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
-/**
- * 批量转账业务服务。
- *
- * <p>支付扩展类型（0x10–0x1a）当前保留未启用：批量转账路由保留、
- * 入参校验保留，但不再构造 {@code BATCH_TRANSFER} 交易，统一返回
- * {@link APIResult#PAYMENT_EXTENSION_NOT_ENABLED}。</p>
- *
- * @author nexus-core
- * @since 1.0
- */
+/** Real BATCH_TRANSFER signing, admission, and confirmed-state queries. */
 @Component
 public class BatchTransferService {
 
-    /** 最大收款人数量。 */
-    private static final int MAX_RECIPIENTS = 256;
+    private static final int MAX_RECIPIENTS = 100;
+    private static final long MAX_TOTAL_AMOUNT = 100_000_000_000L;
 
-    /** 最大总金额（NEX 最小单位）。 */
-    private static final long MAX_TOTAL_AMOUNT = Long.MAX_VALUE;
+    @Autowired
+    CommandService commandService;
 
-    /**
-     * 提交批量转账交易。
-     *
-     * <p>支付扩展类型（0x10–0x1a）保留未启用：保留路由与入参校验，
-     * 但不再构造 {@code BATCH_TRANSFER} 交易。</p>
-     *
-     * @param fromPubkey 发起方公钥（十六进制字符串，32 字节）
-     * @param recipients 收款人列表，每项包含 address 和 amount
-     * @param prikey     发起方私钥（十六进制字符串，32 字节）
-     * @param nonce      交易 nonce
-     * @return 统一响应结果；支付扩展未启用时返回 {@link APIResult#PAYMENT_EXTENSION_NOT_ENABLED}
-     */
+    @Autowired
+    StateCommitment stateCommitment;
+
+    @Autowired
+    StateDB stateDB;
+
+    @Autowired
+    NexusChainBlockChain nexusBlockChain;
+
+    /** Build and sign a BATCH transaction locally, then submit it for real admission. */
     public APIResult batchTransfer(String fromPubkey, List<TransferItem> recipients,
                                    String prikey, long nonce) {
+        APIResult validation = validateSubmission(fromPubkey, recipients, nonce);
+        if (validation != null) {
+            return validation;
+        }
+        if (prikey == null || prikey.isEmpty()) {
+            return APIResult.newFailResult(APIResult.FAIL, "prikey is required");
+        }
+        if (!isActiveForAdmission()) {
+            return APIResult.paymentExtensionNotEnabled();
+        }
+        try {
+            byte[] from = Hex.decodeHex(fromPubkey.toCharArray());
+            byte[] privateKey = Hex.decodeHex(prikey.toCharArray());
+            if (from.length != Transaction.PUBLIC_KEY_SIZE || privateKey.length != 32) {
+                return APIResult.newFailResult(APIResult.FAIL, "invalid key length");
+            }
+            Transaction tx = Transaction.createEmpty();
+            tx.type = Transaction.Type.BATCH_TRANSFER.ordinal();
+            tx.nonce = Math.addExact(nonce, 1L);
+            tx.from = from;
+            tx.gasPrice = 1L;
+            tx.amount = BatchTransferPayload.getTotalAmount(recipients);
+            tx.payload = BatchTransferPayload.build(recipients);
+            tx.to = new byte[Transaction.PUBLIC_KEY_HASH_SIZE];
+            tx.signature = new Ed25519PrivateKey(privateKey).sign(tx.getRawForSign());
+            return submitSignedBatch(fromPubkey, recipients,
+                    Hex.encodeHexString(tx.toRPCBytes()), nonce);
+        } catch (RuntimeException | DecoderException e) {
+            return APIResult.newFailResult(APIResult.FAIL, "Failed to build batch transfer: " + e.getMessage());
+        }
+    }
+
+    /** Submit an SDK-signed BATCH transaction without transmitting the private key. */
+    public APIResult submitSignedBatch(String fromPubkey, List<TransferItem> recipients,
+                                       String traninfo, long nonce) {
+        APIResult validation = validateSubmission(fromPubkey, recipients, nonce);
+        if (validation != null) {
+            return validation;
+        }
+        if (traninfo == null || traninfo.isEmpty()) {
+            return APIResult.newFailResult(APIResult.FAIL, "traninfo is required");
+        }
+        if (!isActiveForAdmission()) {
+            return APIResult.paymentExtensionNotEnabled();
+        }
+        try {
+            for (TransferItem item : recipients) {
+                if (KeystoreAction.verifyAddress(item.getAddress()) != 0) {
+                    return APIResult.newFailResult(APIResult.FAIL, "invalid recipient address");
+                }
+            }
+            byte[] raw = Hex.decodeHex(traninfo.toCharArray());
+            Transaction tx = Transaction.fromRPCBytes(raw);
+            if (tx.type != Transaction.Type.BATCH_TRANSFER.ordinal()) {
+                return APIResult.newFailResult(APIResult.FAIL, "transaction is not BATCH_TRANSFER");
+            }
+            if (!Arrays.equals(tx.from, Hex.decodeHex(fromPubkey.toCharArray()))) {
+                return APIResult.newFailResult(APIResult.FAIL, "signed sender does not match fromPubkey");
+            }
+            if (tx.nonce != Math.addExact(nonce, 1L)) {
+                return APIResult.newFailResult(APIResult.FAIL, "signed nonce does not match request");
+            }
+            if (tx.amount != BatchTransferPayload.getTotalAmount(recipients)
+                    || !Arrays.equals(tx.payload, BatchTransferPayload.build(recipients))) {
+                return APIResult.newFailResult(APIResult.FAIL, "signed recipients or amount do not match request");
+            }
+            if (!Arrays.equals(tx.to, new byte[Transaction.PUBLIC_KEY_HASH_SIZE])) {
+                return APIResult.newFailResult(APIResult.FAIL, "batch transfer to field must be empty");
+            }
+            if (commandService == null) {
+                return APIResult.newFailResult(APIResult.FAIL, "admission service is unavailable");
+            }
+            APIResult accepted = commandService.verifyTransfer(raw);
+            if (accepted == null) {
+                return APIResult.newFailResult(APIResult.FAIL, "admission returned no result");
+            }
+            if (accepted.getCode() != APIResult.SUCCESS) {
+                return accepted;
+            }
+            APIResult result = APIResult.newSuccess(submissionData(tx));
+            result.setMessage("SUCCESS");
+            return result;
+        } catch (RuntimeException | DecoderException e) {
+            return APIResult.newFailResult(APIResult.FAIL, "Failed to submit batch transfer: " + e.getMessage());
+        }
+    }
+
+    /** Read a confirmed BATCH transaction and its canonical effects from the chain. */
+    public APIResult getBatchStatus(String txHash) {
+        if (txHash == null || txHash.isEmpty()) {
+            return APIResult.newFailResult(APIResult.FAIL, "txHash is required");
+        }
+        if (!isActiveForAdmission()) {
+            return APIResult.paymentExtensionNotEnabled();
+        }
+        try {
+            String normalized = txHash.startsWith("0x") ? txHash.substring(2) : txHash;
+            if (normalized.length() != 64) {
+                return APIResult.newFailResult(APIResult.FAIL, "txHash must contain 32 bytes");
+            }
+            if (nexusBlockChain == null) {
+                return APIResult.newFailResult(APIResult.FAIL, "chain query service is unavailable");
+            }
+            Transaction tx = nexusBlockChain.getTransaction(Hex.decodeHex(normalized.toCharArray()));
+            if (tx == null) {
+                return APIResult.newFailResult(APIResult.FAIL, "Batch transfer not found");
+            }
+            if (tx.type != Transaction.Type.BATCH_TRANSFER.ordinal()) {
+                return APIResult.newFailResult(APIResult.FAIL, "transaction is not BATCH_TRANSFER");
+            }
+            if (!stateCommitment.isV3Active(tx.height)) {
+                return APIResult.paymentExtensionNotEnabled();
+            }
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("status", "CONFIRMED");
+            data.put("height", tx.height);
+            data.put("txHash", tx.getHashHexString());
+            data.put("totalAmount", tx.amount);
+            data.put("fee", tx.getFeeExact());
+            data.put("nonce", tx.nonce);
+            data.put("items", BatchTransferPayload.parse(tx.payload));
+            APIResult result = APIResult.newSuccess(data);
+            result.setMessage("SUCCESS");
+            return result;
+        } catch (RuntimeException | DecoderException e) {
+            return APIResult.newFailResult(APIResult.FAIL,
+                    "Failed to query batch transfer status: " + e.getMessage());
+        }
+    }
+
+    private APIResult validateSubmission(String fromPubkey, List<TransferItem> recipients, long nonce) {
         if (fromPubkey == null || fromPubkey.isEmpty()) {
             return APIResult.newFailResult(APIResult.FAIL, "fromPubkey is required");
         }
         if (recipients == null || recipients.isEmpty()) {
             return APIResult.newFailResult(APIResult.FAIL, "recipients must not be empty");
         }
-        if (prikey == null || prikey.isEmpty()) {
-            return APIResult.newFailResult(APIResult.FAIL, "prikey is required");
+        if (nonce < 0) {
+            return APIResult.newFailResult(APIResult.FAIL, "nonce must be non-negative");
         }
-
         try {
             BatchTransferPayload.validate(recipients, MAX_RECIPIENTS, MAX_TOTAL_AMOUNT);
+            return null;
         } catch (IllegalArgumentException e) {
             return APIResult.newFailResult(APIResult.FAIL, "Validation failed: " + e.getMessage());
         }
-
-        // 支付扩展（0x10–0x1a）保留未启用：不再构造 BATCH_TRANSFER 交易。
-        return APIResult.paymentExtensionNotEnabled();
     }
 
-    /**
-     * 查询批量转账状态。
-     *
-     * <p>支付扩展类型当前保留未启用，本接口固定返回
-     * {@link APIResult#PAYMENT_EXTENSION_NOT_ENABLED}，不再返回模拟 PENDING/UNKNOWN 状态。</p>
-     *
-     * @param txHash 交易哈希（十六进制字符串）
-     * @return 统一响应结果；支付扩展未启用时返回 {@link APIResult#PAYMENT_EXTENSION_NOT_ENABLED}
-     */
-    public APIResult getBatchStatus(String txHash) {
-        try {
-            if (txHash == null || txHash.isEmpty()) {
-                return APIResult.newFailResult(APIResult.FAIL, "txHash is required");
-            }
-
-            // 支付扩展（0x10–0x1a）保留未启用：不再返回模拟批量转账状态。
-            return APIResult.paymentExtensionNotEnabled();
-        } catch (RuntimeException e) {
-            return APIResult.newFailResult(APIResult.FAIL, "Failed to query batch transfer status: " + e.getMessage());
+    private boolean isActiveForAdmission() {
+        if (stateCommitment == null) {
+            return false;
         }
+        long nextHeight = 0;
+        if (stateDB != null) {
+            Block best = stateDB.getBestBlock();
+            if (best != null) {
+                nextHeight = Math.addExact(best.nHeight, 1L);
+            }
+        }
+        return stateCommitment.isV3Active(nextHeight);
+    }
+
+    private static Map<String, Object> submissionData(Transaction tx) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("txHash", tx.getHashHexString());
+        data.put("traninfo", Hex.encodeHexString(tx.toRPCBytes()));
+        data.put("totalAmount", tx.amount);
+        data.put("nonce", tx.nonce);
+        data.put("fee", tx.getFeeExact());
+        return data;
     }
 }
