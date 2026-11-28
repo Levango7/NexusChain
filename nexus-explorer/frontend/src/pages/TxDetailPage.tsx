@@ -7,6 +7,7 @@ import { DetailPageLayout, Badge, type BadgeTone } from "../components/ui";
 import { displayErrorMessage } from "../utils/displayError";
 import { orDash } from "../utils/value";
 import { formatAbsoluteTime } from "../utils/time";
+import { parseBatchTransferItems } from "../utils/batchTransfer";
 
 /**
  * TxDetailPage — 交易详情页。
@@ -63,11 +64,10 @@ const TxDetailPage: React.FC = () => {
 
   const statusTone: BadgeTone =
     tx.status === "success" ? "success" : tx.status === "failed" ? "danger" : "warning";
+  const batchItems = tx.typeName === "BATCH_TRANSFER" ? parseBatchTransferItems(tx.data) : [];
 
-  // 字段与后端 toRpcTransaction 严格对齐（2026-09-16 审查 P0/P1 修复）：
-  // 已移除 type / typeName / fee / nonce —— core 的 JSON-RPC 桥接不返回这些字段。
-  // 此前 `{tx.fee} NEX` 因 React 把 undefined 渲染为空串，页面显示为
-  // 「手续费 NEX」（数值空白），用户无法区分「手续费为 0」与「字段缺失」。
+  // 字段与后端 toRpcTransaction 严格对齐：type/typeName/fee/nonce 只作为
+  // BATCH_TRANSFER 的可选增量出现；旧交易缺失时仍不渲染空标签。
   const rows: [string, React.ReactNode][] = [
     [t("tx.txHash"), <code className="break-all text-xs text-fg">{orDash(tx.txHash)}</code>],
     [
@@ -108,6 +108,9 @@ const TxDetailPage: React.FC = () => {
       </Link>,
     ],
     [t("tx.amount"), <span className="text-success font-medium">{orDash(tx.amount)} NEX</span>],
+    ...(tx.typeName ? [[t("tx.type"), tx.typeName] as [string, React.ReactNode]] : []),
+    ...(tx.fee !== undefined ? [[t("tx.fee"), `${tx.fee} NEX`] as [string, React.ReactNode]] : []),
+    ...(tx.nonce !== undefined ? [[t("tx.nonce"), tx.nonce] as [string, React.ReactNode]] : []),
     [t("tx.timestamp"), formatAbsoluteTime(tx.timestamp, i18n.language)],
   ];
 
@@ -125,6 +128,22 @@ const TxDetailPage: React.FC = () => {
           </div>
         ))}
       </div>
+      {batchItems.length > 0 && (
+        <section className="mt-4 bg-surface border border-border rounded-lg px-5 py-4">
+          <h2 className="text-sm font-medium text-fg mb-3">{t("tx.recipients")}</h2>
+          <ul className="divide-y divide-border-soft">
+            {batchItems.map((item, index) => (
+              <li
+                key={`${index}-${item.address}`}
+                className="py-2 flex flex-col gap-1 sm:flex-row sm:justify-between"
+              >
+                <code className="break-all text-xs text-fg">{item.address}</code>
+                <span className="text-success font-medium">{item.amount} NEX</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
     </DetailPageLayout>
   );
 };

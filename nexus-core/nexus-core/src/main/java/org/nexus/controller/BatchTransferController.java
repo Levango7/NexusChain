@@ -69,9 +69,75 @@ public class BatchTransferController {
      * @param txHash 交易哈希（URL 路径参数，十六进制字符串）
      * @return 统一响应格式，data 中包含交易状态信息
      */
+    /**
+     * JSON variant: SDK sends its locally signed traninfo, so the private key never
+     * appears in a URL. Direct callers may instead use the legacy prikey flow.
+     */
+    @PostMapping("/transfer/v2")
+    public Object batchTransferV2(@RequestBody BatchTransferRequest request) {
+        if (request == null) {
+            return APIResult.newFailResult(APIResult.FAIL, "request is required");
+        }
+        if (request.getTraninfo() != null && !request.getTraninfo().isEmpty()) {
+            return respond(batchTransferService.submitSignedBatch(
+                    request.getFromPubkey(), request.getItems(), request.getTraninfo(), request.getNonce()));
+        }
+        return respond(batchTransferService.batchTransfer(
+                request.getFromPubkey(), request.getItems(), request.getPrikey(), request.getNonce()));
+    }
+
     @GetMapping("/status/{txHash}")
     public Object getBatchStatus(@PathVariable("txHash") String txHash) {
         return batchTransferService.getBatchStatus(txHash);
+    }
+
+    /** JSON request for the additive v2 endpoint. */
+    public static class BatchTransferRequest {
+        private String fromPubkey;
+        private String prikey;
+        private String traninfo;
+        private long nonce;
+        private List<TransferItem> items;
+
+        public String getFromPubkey() {
+            return fromPubkey;
+        }
+
+        public void setFromPubkey(String fromPubkey) {
+            this.fromPubkey = fromPubkey;
+        }
+
+        public String getPrikey() {
+            return prikey;
+        }
+
+        public void setPrikey(String prikey) {
+            this.prikey = prikey;
+        }
+
+        public String getTraninfo() {
+            return traninfo;
+        }
+
+        public void setTraninfo(String traninfo) {
+            this.traninfo = traninfo;
+        }
+
+        public long getNonce() {
+            return nonce;
+        }
+
+        public void setNonce(long nonce) {
+            this.nonce = nonce;
+        }
+
+        public List<TransferItem> getItems() {
+            return items;
+        }
+
+        public void setItems(List<TransferItem> items) {
+            this.items = items;
+        }
     }
 
     /**

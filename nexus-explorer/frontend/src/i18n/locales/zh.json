@@ -161,6 +161,7 @@
     "amount": "金额",
     "fee": "手续费",
     "nonce": "随机数",
+    "recipients": "收款项",
     "timestamp": "时间戳"
   },
   "address": {

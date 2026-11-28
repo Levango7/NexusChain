@@ -6,6 +6,7 @@ import com.google.protobuf.ByteString;
 import org.apache.commons.codec.binary.Hex;
 import org.nexus.ApiResult.APIResult;
 import org.nexus.core.account.Transaction;
+import org.nexus.core.payment.BatchTransferPayload;
 import org.nexus.crypto.ed25519.Ed25519PrivateKey;
 import org.nexus.encoding.BigEndian;
 import org.nexus.keystore.crypto.SHA3Utility;
@@ -20,9 +21,12 @@ import java.io.*;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.net.HttpURLConnection;
+import java.net.InetAddress;
+import java.net.URI;
 import java.net.URL;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.*;
 
@@ -319,21 +323,22 @@ public class TxUtils extends Thread {
     /**
      * Construct a raw batch-transfer transaction.
      * fastjson {@code List<JSONObject>} → Jackson {@code List<ObjectNode>}.
-     * <p>仅编码：0x13 属支付扩展保留类型（0x10–0x1a）。节点完整区块/RPC 路径受 {@code TransactionCheck#isConsensusEnabledType} 白名单门禁拒绝（0x10–0x1a 不在共识白名单，报 {@code Type check error}），本方法产出的 raw hex <b>不可上链</b>；仅用于离线编码/签名测试。</p>
+     * <p>0x13 仅在支付扩展激活高度后可上链。amount 与 payload 总额一致，
+     * items 使用共识规范编码；激活前节点仍会按类型门禁拒绝。</p>
      */
     public static String CreateRawBatchTransferTransaction(String fromPubkeyStr, List<ObjectNode> recipients, Long nonce) {
         try {
+            List<BatchTransferPayload.TransferItem> items = normalizeBatchRecipients(recipients);
+            BatchTransferPayload.validate(items, 100, 100_000_000_000L);
             byte[] version = new byte[]{0x01};
             byte[] type = new byte[]{0x13};
-            byte[] nonece = BigEndian.encodeUint64(nonce + 1);
+            byte[] nonece = BigEndian.encodeUint64(Math.addExact(nonce, 1L));
             byte[] fromPubkeyHash = Hex.decodeHex(fromPubkeyStr.toCharArray());
             byte[] gasPrice = ByteUtil.longToBytes(obtainServiceCharge(50000L, serviceCharge));
-            byte[] Amount = ByteUtil.longToBytes(0);
+            byte[] Amount = ByteUtil.longToBytes(BatchTransferPayload.getTotalAmount(items));
             byte[] signull = new byte[64];
             byte[] toPubkeyHash = new byte[20];
-            ObjectNode payloadObj = JsonUtils.createObjectNode();
-            payloadObj.set("recipients", JsonUtils.MAPPER.valueToTree(recipients));
-            byte[] payload = JsonUtils.toJson(payloadObj).getBytes("UTF-8");
+            byte[] payload = BatchTransferPayload.build(items);
             byte[] payloadleng = BigEndian.encodeUint32(payload.length);
             byte[] allPayload = ByteUtil.merge(payloadleng, payload);
             byte[] RawTransaction = ByteUtil.merge(version, type, nonece, fromPubkeyHash, gasPrice, Amount, signull, toPubkeyHash, allPayload);
@@ -341,6 +346,23 @@ public class TxUtils extends Thread {
         } catch (Exception e) {
             return "";
         }
+    }
+
+    private static List<BatchTransferPayload.TransferItem> normalizeBatchRecipients(
+            List<ObjectNode> recipients) {
+        List<BatchTransferPayload.TransferItem> items = new ArrayList<>();
+        if (recipients == null) {
+            return items;
+        }
+        for (ObjectNode recipient : recipients) {
+            String address = recipient.path("address").asText(null);
+            if (address == null) {
+                // Backward compatibility for the old SDK field name; new callers use address.
+                address = recipient.path("to").asText(null);
+            }
+            items.add(new BatchTransferPayload.TransferItem(address, recipient.path("amount").asLong()));
+        }
+        return items;
     }
 
     /**
@@ -666,7 +688,7 @@ public class TxUtils extends Thread {
     }
 
     /**
-     * <p>仅本地构造 + 签名，不广播。对应 0x13 交易不可上链（见 {@link #CreateRawBatchTransferTransaction}）；返回 txHash/traninfo，<b>不是</b>链上受理结果。</p>
+     * <p>本地构造 + 真实签名，不广播。返回 txHash/traninfo；链上受理结果以节点响应为准。</p>
      */
     public static ObjectNode ClientToBatchTransfer(String fromPubkeyStr, List<ObjectNode> recipients, String prikeyStr, Long nonce) {
         try {
@@ -816,6 +838,63 @@ public class TxUtils extends Thread {
         return divide.longValue();
     }
 
+    static ObjectNode buildBatchTransferRequest(String fromPubkey, List<ObjectNode> recipients,
+                                                String traninfo, long nonce) {
+        ObjectNode requestBody = JsonUtils.createObjectNode();
+        requestBody.put("traninfo", traninfo);
+        requestBody.put("fromPubkey", fromPubkey);
+        requestBody.set("items", JsonUtils.MAPPER.valueToTree(normalizeBatchRecipients(recipients)));
+        requestBody.put("nonce", nonce);
+        return requestBody;
+    }
+
+    static String requirePublicNodeUrl(String nodeUrl) {
+        try {
+            URI uri = URI.create(nodeUrl);
+            String scheme = uri.getScheme();
+            if (!("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme))
+                    || uri.getHost() == null || uri.getRawUserInfo() != null
+                    || uri.getRawQuery() != null || uri.getRawFragment() != null) {
+                throw new IllegalArgumentException("nodeUrl must be a public HTTP(S) origin without user-info, query, or fragment");
+            }
+            for (InetAddress address : InetAddress.getAllByName(uri.getHost())) {
+                if (isForbiddenAddress(address)) {
+                    throw new IllegalArgumentException("nodeUrl resolves to a private, local, or reserved address");
+                }
+            }
+            return nodeUrl.replaceAll("/+$", "");
+        } catch (IllegalArgumentException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalArgumentException("nodeUrl is invalid or cannot be resolved", e);
+        }
+    }
+
+    private static boolean isForbiddenAddress(InetAddress address) {
+        if (address.isAnyLocalAddress() || address.isLoopbackAddress()
+                || address.isLinkLocalAddress() || address.isSiteLocalAddress()
+                || address.isMulticastAddress()) {
+            return true;
+        }
+        byte[] bytes = address.getAddress();
+        int first = bytes[0] & 0xff;
+        int second = bytes[1] & 0xff;
+        int third = bytes[2] & 0xff;
+        int fourth = bytes[3] & 0xff;
+        if (bytes.length == 4) {
+            return first == 0 || first >= 224
+                    || (first == 100 && second >= 64 && second <= 127)
+                    || (first == 192 && second == 0 && third == 0)
+                    || (first == 192 && second == 0 && third == 2)
+                    || (first == 198 && (second == 18 || second == 19))
+                    || (first == 198 && second == 51 && third == 100)
+                    || (first == 203 && second == 0 && third == 113);
+        }
+        return (first & 0xfe) == 0xfc
+                || (first == 0xfe && (second & 0xc0) == 0x80)
+                || (first == 0x20 && second == 0x01 && third == 0x0d && fourth == 0xb8);
+    }
+
     // ==================== HTTP helpers ====================
     // fastjson JSON.parseObject → Jackson JsonUtils.readTree
     // JSONObject → ObjectNode
@@ -829,6 +908,7 @@ public class TxUtils extends Thread {
         try {
             URL url = new URL(urlStr);
             conn = (HttpURLConnection) url.openConnection();
+            conn.setInstanceFollowRedirects(false);
             conn.setRequestMethod("POST");
             conn.setRequestProperty("Accept", "application/json");
             conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
@@ -889,6 +969,7 @@ public class TxUtils extends Thread {
         try {
             URL url = new URL(urlStr);
             conn = (HttpURLConnection) url.openConnection();
+            conn.setInstanceFollowRedirects(false);
             conn.setRequestMethod("GET");
             conn.setRequestProperty("Accept", "application/json");
             conn.setRequestProperty("Connection", "Keep-Alive");
@@ -968,7 +1049,8 @@ public class TxUtils extends Thread {
     }
 
     /**
-     * <p>调用节点写端点（{@code POST /batch/transfer}）。支付扩展属「保留未启用」：按 B 裁决写端点返回 501 或 5010（B-2 铺开见 PR #523），铺开完成前不保证拒绝语义已生效；本方法<b>不构成功能可用承诺</b>。</p>
+     * <p>调用节点写端点（{@code POST /batch/transfer/v2}）。SDK 本地签名后只发送
+     * traninfo，不发送私钥；激活前节点仍返回 5010。</p>
      */
     public static ObjectNode batchTransfer(String fromPubkey, List<ObjectNode> recipients,
                                            String prikey, Long nonce, String nodeUrl) {
@@ -980,14 +1062,10 @@ public class TxUtils extends Thread {
                 error.put("success", false);
                 return error;
             }
-            ObjectNode requestBody = JsonUtils.createObjectNode();
-            requestBody.put("txHash", signedTx.get("data").asText());
-            requestBody.put("traninfo", signedTx.get("message").asText());
-            requestBody.put("fromPubkey", fromPubkey);
-            requestBody.set("recipients", JsonUtils.MAPPER.valueToTree(recipients));
-            requestBody.put("nonce", nonce);
+            ObjectNode requestBody = buildBatchTransferRequest(
+                    fromPubkey, recipients, signedTx.get("message").asText(), nonce);
 
-            String url = nodeUrl.replaceAll("/+$", "") + "/batch/transfer";
+            String url = requirePublicNodeUrl(nodeUrl) + "/batch/transfer/v2";
             return httpPostJson(url, requestBody.toString());
         } catch (Exception e) {
             ObjectNode error = JsonUtils.createObjectNode();
@@ -1085,11 +1163,23 @@ public class TxUtils extends Thread {
     }
 
     /**
-     * <p>调用节点读端点（GET /batch/status/{txHash}）。支付扩展未启用时返回稳定错误码 {@code 5010}，不返回模拟状态；空/占位结果不可当作链上真值。</p>
+     * <p>调用节点读端点（GET /batch/status/{txHash}）。激活后返回链上确认状态，
+     * 未启用返回 5010；空/占位结果不可当作链上真值。</p>
      */
     public static ObjectNode getBatchStatus(String txHash, String nodeUrl) {
-        String url = nodeUrl.replaceAll("/+$", "") + "/batch/status/" + txHash;
-        return httpGetJson(url);
+        try {
+            String normalized = txHash != null && txHash.startsWith("0x") ? txHash.substring(2) : txHash;
+            if (normalized == null || !normalized.matches("[0-9a-fA-F]{64}")) {
+                throw new IllegalArgumentException("txHash must contain exactly 64 hexadecimal characters");
+            }
+            String url = requirePublicNodeUrl(nodeUrl) + "/batch/status/" + normalized;
+            return httpGetJson(url);
+        } catch (Exception e) {
+            ObjectNode error = JsonUtils.createObjectNode();
+            error.put("error", e.getMessage());
+            error.put("success", false);
+            return error;
+        }
     }
 
     /**
