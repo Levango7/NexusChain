@@ -29,10 +29,10 @@
 delivery-bundle-<时间戳>/
 ├── charts/nexus-chain-2.77.0.tgz   # helm umbrella chart（8 个子 chart，含 nexus-core / mpc-engine）
 ├── jars/nexus-gateway-*.jar        # 预构建 jar（--with-jars）——裸进程安装路径，**不需源码与 Gradle**
-├── scripts/                        # 全量自检/验收/演练/纳管入口（105 个）——交付方拿到包即可自证
+├── scripts/                        # 全量自检/验收/演练/纳管入口（数量以生成回执为准）——交付方拿到包即可自证
 ├── evidence/                       # LICENSE/NOTICE + .trivyignore + 安全基线 + 依赖清单（7 份）
 ├── images/*.tar                    # 镜像 tar（仅 --with-images 且本地已有镜像）
-├── .env.prod.example               # 19 个强制变量模板（根级，交付方填值）
+├── .env.prod.example               # 22 个强制变量模板（生成器只写本机 .env.prod）
 ├── docker-compose.prod.yml         # compose 路径清单（根级）
 ├── images.lock                     # 镜像清单（image<TAB>来源），19 条
 ├── jars.lock                       # jar 清单（jar<TAB>模块<TAB>sha256）
@@ -124,10 +124,9 @@ Nacos / Sentinel / Seata / Zipkin / PostgreSQL(或 MySQL) / Redis。
 # 1) 导入镜像（离线环境）
 for f in images/*.tar; do docker load -i "$f"; done
 
-# 2) 参数：19 个强制变量（清单见 .env.prod.example，compose 里是 ${VAR:?} 形式）
-cp .env.prod.example .env.prod     # 由交付方填值（地址、密钥、token）
-#    校验清单一致性（交付方本机即可跑）
-bash scripts/check-prod-env.sh
+# 2) 参数：22 个强制变量（清单见 .env.prod.example，compose 里是 ${VAR:?} 形式）
+bash scripts/prod-prepare.sh     # Python 3 + OpenSSL；生成环境与 MPC 证书/配置，不启动服务
+bash scripts/prod-check.sh       # 完整只读预检；Docker 不可用时跳过 compose 渲染
 
 # 3) 安装
 helm upgrade --install nexus-chain ./charts/nexus-chain-2.77.0.tgz \
@@ -138,12 +137,15 @@ helm upgrade --install nexus-chain ./charts/nexus-chain-2.77.0.tgz \
 ### 4.2 Compose 路径（单机/演示）
 
 ```bash
-cp .env.prod.example .env.prod && 填值
-bash scripts/check-prod-env.sh
-docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
+bash scripts/prod-prepare.sh
+bash scripts/prod-check.sh
+bash scripts/ops/nc-task.sh compose-up   # 纳管启动；预检失败即拒绝
 ```
 
-> compose 路径的镜像来自 `images.lock` 的 `compose:` 来源行；helm 路径来自 `helm:` 来源行。
+> `prod-prepare` 只创建文件，不覆盖已有合法环境；生成的 RPC JWT 默认 90 天。
+> Compose 只挂载 CA 公证书、各 MPC 节点自己的证书/私钥，以及签名服务独立 `client-signing` 证书/私钥，不挂载 CA 私钥。
+> POSIX 主机需保证 UID 1000 可读 MPC 私钥与生产配置、UID 65532 可读签名客户端私钥（预检会拒绝属主不符）；
+> 镜像 UID 改版可用 `NEXUS_MPC_RUNTIME_UID` / `NEXUS_SIGNING_RUNTIME_UID` 覆盖。Windows mode 位不代表 ACL。compose 路径的镜像来自 `images.lock` 的 `compose:` 来源行；helm 路径来自 `helm:` 来源行。
 
 ### 4.3 裸进程路径（jar，客户机无 Docker / 无 Gradle）
 

@@ -228,7 +228,7 @@ PASS/产物清单 + SHA256SUMS
 `manifest.json`、`SHA256SUMS`。
 
 > 交付方拿包后按 `docs/delivery/offline-install.md` 走：校验和 → 导入镜像 →
-> 填 19 个强制变量 → `helm install`（或用 `jars/` 走裸进程路径）→ `doctor.sh` 体检 → 端到端验收。
+> 填 22 个强制变量 → `helm install`（或用 `jars/` 走裸进程路径）→ `doctor.sh` 体检 → 端到端验收。
 >
 > 要连镜像一起出（需本机已有这些镜像，脚本不联网）：加 `--with-images`；
 > 要连预构建 jar 一起出：加 `--with-jars`。

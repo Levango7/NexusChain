@@ -73,7 +73,7 @@
 | 首轮平台链路 | ✅ qoder CN 已用本地 OpsMesh controlplane + Windows agent 完成 T1–T6；证据见板 `20261121-0145-qoder-cn-joint-test-t1-t3-platform-driven` |
 | T7 | ⏳ Windows agent 仅 shell；Linux `systemctl` service 语义未验证 |
 | J2 | ⏳ 日志路由已有，NexusChain 应用 Prometheus target / Bearer 注入未配置 |
-| J4 | ⏳ 本轮未重新回归独立 compose / helm 交付路径 |
+| J4 | ⏳ 本轮未重新回归独立 compose / helm 交付路径；起栈资源门禁与证据收集器已就位（见 `scripts/ops/j4-evidence.sh`） |
 | 完整复跑 | 本轮不重复首轮联调；如需复跑，先过资源门并使用本地临时凭据 / H2 沙箱 |
 
 ## 6. 联调执行顺序（建议）
@@ -136,7 +136,7 @@ POST /api/v1/tasks/batch-exec
 | shell | `bash scripts/ops/nc-task.sh compose-up` / `compose-down`（需 Docker + `.env.prod`） | `ok=true`；docker 不可用时 `exitCode=2` + 明确原因 |
 
 **NexusChain 侧要提供给平台的东西**：交付包（`charts/`、`images.lock`、`jars/`、`scripts/`、`evidence/`）+
-`.env.prod.example`（19 个强制变量）+ 上面这份动作表。
+`.env.prod.example`（22 个强制变量）+ 上面这份动作表。
 
 **联调验收**：按 §7 的 J1~J4（J4 是底线：不依赖平台也能交付）。
 

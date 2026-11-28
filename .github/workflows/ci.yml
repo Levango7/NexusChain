@@ -231,6 +231,14 @@ jobs:
       - name: 运维任务入口回归测试（健康判定与 compose 参数）
         run: python scripts/ops/test_nc_task.py
 
+      # 生产环境/MPC 准备流程挂在同一 required context：生成器、JWT 契约、
+      # 证书链/SAN/EKU、三方拓扑、幂等与拒绝覆盖任一回归都直接阻断合并。
+      - name: 生产环境与 MPC 准备流程回归（挂靠 required context）
+        run: |
+          python scripts/security/test_prod_prepare.py
+          python scripts/security/test_start_gate.py
+          python scripts/security/test_j4_evidence.py
+
   # ============================================================
   # Explorer 前端门禁（2026-09-16 审查新增）
   # ------------------------------------------------------------

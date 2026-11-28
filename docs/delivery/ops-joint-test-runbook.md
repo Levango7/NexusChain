@@ -55,7 +55,9 @@ bash scripts/build-delivery-bundle.sh --out /tmp/delivery-bundle --with-images -
 ```bash
 cd delivery-bundle && sha256sum -c SHA256SUMS          # 任一 mismatch 即停止
 for f in images/*.tar; do docker load -i "$f"; done     # 逐镜像导入
-docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
+bash scripts/prod-prepare.sh                           # 环境 + MPC 证书/配置，不启动
+bash scripts/prod-check.sh                             # 完整预检
+bash scripts/ops/nc-task.sh compose-up                # 纳管启动；预检失败即拒绝
 ```
 
 - 镜像清单 `images.lock` 19 条（compose 路径取 `compose:` 来源行）；
@@ -83,12 +85,23 @@ NEX_API_KEY=<key> NEX_MERCHANT_ID=<id> bash scripts/acceptance-e2e.sh
 ## 3. NexusChain 栈装配后的强制变量
 
 ```bash
-cp .env.prod.example .env.prod   # 19 个强制变量模板，逐项填值
-bash scripts/check-prod-env.sh   # 断言清单覆盖 compose 全部 ${VAR:?}；不通过即停止
+bash scripts/ops/nc-task.sh prod-prepare   # 22 个强制变量 + MPC 证书/配置；不启动服务
+bash scripts/ops/nc-task.sh prod-check      # 环境/JWT/证书/拓扑/compose 只读预检
+bash scripts/check-prod-env.sh              # 仅断言模板覆盖 compose 全部 ${VAR:?}
 ```
 
-- `nc-task.sh env-check` 即上述脚本的纳管化入口；
-- 端到端验收另需 `NEX_API_KEY`（VERIFIED 商户）/ `NEX_MERCHANT_ID`（demo-runbook §2）。
+- `prod-prepare` 对应 `scripts/prod-prepare.sh`；已有合法 `.env.prod` 只校验、不覆盖。
+- `NEXUS_RPC_TOKEN` 是按 `NEXUS_JWT_APP_ID + NEXUS_JWT_APP_SECRET` 签发的 HS256 JWT，默认 90 天；
+  预检拒绝剩余有效期不足 24 小时的 token。轮换须同步替换 App ID、App Secret、RPC Token 三项。
+- MPC 生产配置不写存储主钥；引擎从 `NEXUS_MPC_STORAGE_KEY` 读取。CA 私钥不挂载进容器。
+- 三个 MPC 节点使用 `node-A/B/C`，签名服务使用独立 `client-signing` 客户端证书。
+- POSIX 部署主机须保证容器 UID 1000 可读三份节点私钥与 `config-prod/node*.json`：
+  `chown 1000:1000 mpc-certs/node-{A,B,C}/key.pem mpc-certs/config-prod/node*.json`；
+  并保证签名服务 UID 65532 可读 `mpc-certs/client-signing/key.pem`：
+  `chown 65532:65532 mpc-certs/client-signing/key.pem`。预检会拒绝属主不符。
+  镜像 UID 改版可用 `NEXUS_MPC_RUNTIME_UID` / `NEXUS_SIGNING_RUNTIME_UID` 覆盖；
+  Windows mode 位不代表 ACL，生产仍在 POSIX 主机复核。
+- `nc-task.sh env-check` 仅保留上述模板清单检查；端到端验收另需 `NEX_API_KEY`（VERIFIED 商户）/ `NEX_MERCHANT_ID`（demo-runbook §2）。
 
 ---
 
@@ -120,7 +133,7 @@ POST /api/v1/tasks/batch-exec
 | 步骤 | 平台下发命令 | 期望回执 | 失败先看 |
 |---|---|---|---|
 | T1 体检 | `bash scripts/ops/nc-task.sh doctor` | `ok=true`，`FAIL=0` | stdout 尾部 40 行；SKIP 项看说明 |
-| T2 变量 | `bash scripts/ops/nc-task.sh env-check` | `ok=true` | `FAIL: 缺少以下强制变量` |
+| T2 变量 | `bash scripts/ops/nc-task.sh env-check` / `prod-check` | `ok=true` | 模板缺项看 `check-prod-env.sh`；JWT/证书/拓扑看 `prod-check` |
 | T3 版本 | `bash scripts/ops/nc-task.sh version` | `ok=true` | 版本口径漂移清单 |
 | T4 探针 | `bash scripts/ops/nc-task.sh status` | `ok=true` 且 `detail.healthHttp` 为 2xx；503 判失败 | 先起栈；`NEX_GATEWAY_URL` 默认 `http://127.0.0.1:8080` |
 | T5 验收 | `bash scripts/ops/nc-task.sh acceptance` | `ok=true`；缺 Key 应得 `exitCode=2` + 明确 `reason` | J1 要求失败也可读——恰好用它验证 |
@@ -151,10 +164,24 @@ curl -sS -H "Authorization: Bearer $NEXUS_METRICS_TOKEN" http://<host>:8080/actu
 | J1 | T1~T6 由平台 shell 任务驱动，回执均 `ok=true`（T4 必须 health 2xx）；失败动作给出可读 `reason`（T5 缺 Key ⇒ exit 2） | 每步回执 JSON 原文 |
 | J2 | 平台侧采集到 stdout 日志与 `nexus_*` 指标（带 token） | 平台侧截图/日志查询链接 |
 | J3 | 升级/回滚演练由**平台任务编排**完成（非本机手工） | T6 两次回执 + 平台任务 ID |
-| J4 | **不依赖平台也能交付**：单独 compose/helm 起栈回归 `scripts/doctor.sh` + `scripts/acceptance-e2e.sh` | 两条回归的回执 |
+| J4 | **不依赖平台也能交付**：资源门禁（内存≥12GB 且 Docker 可用）通过后，单独 compose/helm 起栈回归 `scripts/doctor.sh` + `scripts/acceptance-e2e.sh` | 两条回归的回执 + 起栈前资源门禁回执 |
 
 > J4 是底线：联调是「多一条路」，不是「换一条路」。历史首轮 T4 回执为 `503 + ok=true`，
 > 是旧 `status` 判据的假绿；当前脚本已修为仅 2xx 成功，复跑时不得把该历史回执当健康通过。
+
+### 7.1 J4 证据协议（#786）
+
+- 起栈前先跑 `bash scripts/ops/nc-task.sh compose-up`：资源门禁（`scripts/start_gate.py`）
+  与 production 预检（`scripts/prod-check.sh`）任一失败即拒绝起栈（fail-closed）。
+- 证据收集用 `bash scripts/ops/j4-evidence.sh <证据目录>`；`--no-start` 只跑只读段
+  （环境快照、资源门禁、production 预检），不启动任何服务。
+- 每一步保存原始 stdout/stderr（`.out`）与 nc-task 回执（`.json`），末尾生成
+  `summary.json`；`SKIP` 单独列示且**不计为 PASS**，必检项缺失即整体 FAIL。
+- 保存**原始** stdout、stderr、退出码、健康检查与验收回执；SKIP 单独列示且**不计为 PASS**。
+- 记录版本、提交（`git rev-parse HEAD`）与运行环境（主机/内存/Docker 版本）。
+- 独立停机后验证测试端口已释放，且未停止或修改无关容器/进程。
+- 合成值 compose parse **不再**被表述为 J4 运行证明；真实起栈、健康检查与回归缺一不可。
+- 未验证项如实标注：生产级 MPC、多副本、数据库迁移回退与真实资金路径（本单不要求执行真实资金操作）。
 
 ---
 
@@ -176,7 +203,8 @@ SOP §10-4 标注「真断网机未实测 / compose·helm 路径未实测」。�
 ## 9. 失败分诊与边界
 
 - **exit 2**（用法/环境不满足）：先看 `reason`——缺 `NEX_API_KEY` / docker 不可用 / 缺 env 文件 /
-  缺 `upgrade-drill` 两参数；补齐后原任务重下发即可（动作幂等或只读）。
+  缺 `upgrade-drill` 两参数 / 起栈资源门禁未满足（内存不足或内存探测失败）；
+  补齐后原任务重下发即可（动作幂等或只读）。
 - **exit 1**（动作已跑但不通过）：看 stdout 尾部（doctor 40 行 / 演练 60 行）；
   自检类失败按对应 runbook（`docs/runbooks/*.md`）处置。
 - **边界**：不改对方仓、不自投对方名册线、不把「等对方」写成「我方进度」；
